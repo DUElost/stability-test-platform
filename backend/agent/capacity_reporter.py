@@ -13,13 +13,20 @@ def compute_capacity(
     total_devices: int,
     system_stats: dict,
     mount_status: dict,
+    adb_server_conflict: bool = False,
 ) -> dict:
     """返回 {"capacity": {...}, "health": {...}}。
 
     total_devices — 本 host 上报的设备总数（含离线/不健康），用于判断 adb 全死。
     有效槽位 = min(空闲设备数, 主机健康状态)，不再受 max_concurrent_jobs 限制。
     """
-    health = _compute_health(system_stats, mount_status, online_healthy_devices, total_devices)
+    health = _compute_health(
+        system_stats,
+        mount_status,
+        online_healthy_devices,
+        total_devices,
+        adb_server_conflict=adb_server_conflict,
+    )
     health_limit = _compute_health_limit(
         system_stats, mount_status,
         online_healthy_devices, total_devices,
@@ -65,11 +72,12 @@ def _compute_health(
     mount_status: dict,
     online_healthy_devices: int,
     total_devices: int,
+    adb_server_conflict: bool = False,
 ) -> dict:
     """产出结构化 health 快照。
 
-    阈值与 _compute_health_limit 完全一致。Phase 3c 只产出 HEALTHY / UNSCHEDULABLE。
-    DEGRADED 是前端预留状态，留给后续增加 warning 阈值（如 CPU>80）。
+    阈值与 _compute_health_limit 完全一致（blocking reason → UNSCHEDULABLE）；
+    warning 级 reason（如 adb_multiple_servers）只进 DEGRADED，不打闸。
     """
     reasons: List[str] = []
     cpu = system_stats.get("cpu_load", 0)
@@ -88,6 +96,8 @@ def _compute_health(
         reasons.append("mount_failed")
     if adb_dead:
         reasons.append("adb_low_healthy_devices")
+    if adb_server_conflict:
+        reasons.append("adb_multiple_servers")
 
     if cpu > 90 or ram > 95 or disk > 95 or not mount_ok or adb_dead:
         status = "UNSCHEDULABLE"

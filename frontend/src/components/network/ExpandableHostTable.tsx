@@ -97,6 +97,7 @@ const REASON_LABELS: Record<string, string> = {
   disk_high: '磁盘过高',
   mount_failed: '挂载失败',
   adb_low_healthy_devices: '无健康设备',
+  adb_multiple_servers: 'ADB 多 server 冲突',
 };
 
 const AGENT_SYNC_LABELS: Record<AgentCodeSyncStatus, string> = {

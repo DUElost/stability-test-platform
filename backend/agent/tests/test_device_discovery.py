@@ -1,3 +1,5 @@
+import os
+import signal
 import subprocess
 from unittest.mock import patch
 
@@ -48,6 +50,177 @@ def test_discover_devices_success(adb_path: str, completed_process_factory):
 def test_discover_devices_returns_empty_on_exception(adb_path: str):
     with patch.object(device_module.subprocess, "run", side_effect=RuntimeError("adb failed")):
         assert device_module.discover_devices(adb_path) == []
+
+
+def test_get_adb_server_port_default(monkeypatch):
+    monkeypatch.delenv("ANDROID_ADB_SERVER_PORT", raising=False)
+    assert device_module.get_adb_server_port() == 5037
+
+
+def test_get_adb_server_port_from_env(monkeypatch):
+    monkeypatch.setenv("ANDROID_ADB_SERVER_PORT", "5039")
+    assert device_module.get_adb_server_port() == 5039
+
+
+def test_get_adb_server_port_invalid_falls_back(monkeypatch):
+    monkeypatch.setenv("ANDROID_ADB_SERVER_PORT", "not-a-port")
+    assert device_module.get_adb_server_port() == 5037
+
+
+def test_list_adb_fork_servers_parses_ports(completed_process_factory):
+    stdout = (
+        "962318 1000 adb -L tcp:5039 fork-server server --reply-fd 4\n"
+        "962551 1000 adb -L tcp:5037 fork-server server --reply-fd 4\n"
+        "999999 1000 /usr/bin/adb devices -l\n"
+        "1234 1000 /usr/bin/adb -P 5555 fork-server server --reply-fd 4\n"
+        "not-a-pid line\n"
+    )
+    cp = completed_process_factory(stdout=stdout)
+
+    with patch.object(device_module.subprocess, "run", return_value=cp) as mock_run:
+        servers = device_module.list_adb_fork_servers()
+
+    assert servers == [
+        {"pid": 962318, "uid": 1000, "port": 5039, "cmdline": "adb -L tcp:5039 fork-server server --reply-fd 4"},
+        {"pid": 962551, "uid": 1000, "port": 5037, "cmdline": "adb -L tcp:5037 fork-server server --reply-fd 4"},
+        {"pid": 1234, "uid": 1000, "port": 5555, "cmdline": "/usr/bin/adb -P 5555 fork-server server --reply-fd 4"},
+    ]
+    mock_run.assert_called_once_with(
+        ["ps", "-eo", "pid=,uid=,args="],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def _fork_server(pid: int, port: int, uid: int | None = None) -> dict:
+    return {
+        "pid": pid,
+        "uid": uid if uid is not None else os.geteuid(),
+        "port": port,
+        "cmdline": f"adb -L tcp:{port} fork-server server",
+    }
+
+
+def test_ensure_single_adb_server_skipped_in_static_mode(monkeypatch):
+    monkeypatch.setenv("STP_STATIC_DEVICE_SERIALS", "SERIAL-1,SERIAL-2")
+    with patch.object(
+        device_module,
+        "list_adb_fork_servers",
+        return_value=[_fork_server(111, 5039)],
+    ) as mock_list:
+        with patch.object(device_module.subprocess, "run") as mock_run:
+            result = device_module.ensure_single_adb_server(port=5037)
+
+    assert result["skipped"] is True
+    assert result["killed"] == []
+    mock_list.assert_called_once()
+    mock_run.assert_not_called()
+
+
+def test_ensure_single_adb_server_kills_foreign_and_restarts_target(
+    adb_path, completed_process_factory
+):
+    ok = completed_process_factory(returncode=0)
+    servers = [_fork_server(111, 5039), _fork_server(222, 5037)]
+
+    with patch.object(device_module, "list_adb_fork_servers", return_value=servers):
+        with patch.object(device_module.subprocess, "run", return_value=ok) as mock_run:
+            result = device_module.ensure_single_adb_server(adb_path, port=5037)
+
+    assert [server["port"] for server in result["killed"]] == [5039]
+    assert result["started"] is True
+    assert mock_run.call_count == 2
+
+    kill_call = mock_run.call_args_list[0]
+    assert kill_call.args[0] == [adb_path, "kill-server"]
+    assert kill_call.kwargs["env"]["ANDROID_ADB_SERVER_PORT"] == "5039"
+
+    start_call = mock_run.call_args_list[1]
+    assert start_call.args[0] == [adb_path, "start-server"]
+    assert start_call.kwargs["env"]["ANDROID_ADB_SERVER_PORT"] == "5037"
+
+
+def test_ensure_single_adb_server_restarts_when_target_missing(
+    adb_path, completed_process_factory
+):
+    ok = completed_process_factory(returncode=0)
+    with patch.object(
+        device_module,
+        "list_adb_fork_servers",
+        return_value=[_fork_server(111, 5039)],
+    ):
+        with patch.object(device_module.subprocess, "run", return_value=ok) as mock_run:
+            result = device_module.ensure_single_adb_server(adb_path, port=5037)
+
+    assert [server["port"] for server in result["killed"]] == [5039]
+    assert result["started"] is True
+    assert mock_run.call_count == 2
+
+
+def test_ensure_single_adb_server_noop_when_only_target(adb_path):
+    with patch.object(
+        device_module,
+        "list_adb_fork_servers",
+        return_value=[_fork_server(222, 5037)],
+    ):
+        with patch.object(device_module.subprocess, "run") as mock_run:
+            result = device_module.ensure_single_adb_server(adb_path, port=5037)
+
+    assert result["killed"] == []
+    assert result["started"] is True
+    mock_run.assert_not_called()
+
+
+def test_ensure_single_adb_server_skips_other_user_server(
+    adb_path, completed_process_factory
+):
+    other_uid = os.geteuid() + 1_000_000
+    ok = completed_process_factory(returncode=0)
+    with patch.object(
+        device_module,
+        "list_adb_fork_servers",
+        return_value=[_fork_server(111, 5039, uid=other_uid)],
+    ):
+        with patch.object(device_module.subprocess, "run", return_value=ok) as mock_run:
+            result = device_module.ensure_single_adb_server(adb_path, port=5037)
+
+    assert result["killed"] == []
+    assert result["started"] is True
+    mock_run.assert_called_once()  # 只启动目标端口 server，不杀他用户进程
+
+
+def test_ensure_single_adb_server_falls_back_to_sigterm(
+    adb_path, completed_process_factory
+):
+    failed = completed_process_factory(returncode=1, stderr="cannot kill")
+    with patch.object(
+        device_module,
+        "list_adb_fork_servers",
+        return_value=[_fork_server(111, 5039), _fork_server(222, 5037)],
+    ):
+        with patch.object(device_module.subprocess, "run", return_value=failed):
+            with patch.object(device_module.os, "kill") as mock_kill:
+                result = device_module.ensure_single_adb_server(adb_path, port=5037)
+
+    assert [server["port"] for server in result["killed"]] == [5039]
+    mock_kill.assert_called_once_with(111, signal.SIGTERM)
+
+
+def test_cli_repair_uses_ensure_single_adb_server(capsys):
+    with patch.object(
+        device_module,
+        "ensure_single_adb_server",
+        return_value={
+            "port": 5037,
+            "servers": [],
+            "killed": [],
+            "started": True,
+            "skipped": False,
+        },
+    ):
+        assert device_module.main(["repair"]) == 0
+    assert "target adb server ready" in capsys.readouterr().out
 
 
 def test_collect_device_info_success(adb_path: str, serial: str, completed_process_factory):

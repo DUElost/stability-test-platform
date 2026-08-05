@@ -24,6 +24,7 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.adb_wrapper import AdbWrapper
     from agent.api_client import fetch_pending_jobs, sync_recovery
+    from agent import device_discovery
     from agent.aee.paths import get_aee_local_root
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
@@ -48,6 +49,7 @@ if __name__ == "__main__" and __package__ is None:
 else:
     from .adb_wrapper import AdbWrapper
     from .api_client import fetch_pending_jobs, sync_recovery
+    from . import device_discovery
     from .aee.paths import get_aee_local_root
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
@@ -421,6 +423,27 @@ def _reload_runtime_env(env_file: Path | None = None) -> bool:
     return loaded
 
 
+def _ensure_adb_server_on_startup(adb_path: str) -> bool:
+    """Reconcile ADB fork-servers to the Agent's configured port.
+
+    启动与 reload_config 共用：清理非目标端口的游离 daemon 并重启目标端口
+    server，让全部 USB 设备重新注册。失败不阻塞启动/热更新，由心跳健康检查
+    （adb_multiple_servers / device 数）兜底告警。
+    """
+    try:
+        result = device_discovery.ensure_single_adb_server(adb_path)
+        logger.info(
+            "adb_server_reconciled port=%s killed_ports=%s started=%s skipped=%s",
+            result.get("port"),
+            [server.get("port") for server in result.get("killed", [])],
+            result.get("started"),
+            result.get("skipped"),
+        )
+        return True
+    except Exception as exc:
+        logger.error("adb_server_reconcile_failed: %s", exc)
+        return False
+
 def run_recovery_sync_if_needed(
     local_db: Any,
     api_url: str,
@@ -528,6 +551,7 @@ def main() -> None:
     )
 
     adb = AdbWrapper(adb_path=adb_path)
+    _ensure_adb_server_on_startup(adb_path)
     # 启动 WebSocket 客户端（best-effort，失败时降级到 HTTP）
     agent_secret = os.getenv("AGENT_SECRET", "")
     sio_client = AgentSocketIOClient(api_url, host_id, agent_secret)
@@ -720,15 +744,17 @@ def main() -> None:
             logger.info("control_upload_events_triggered plan_run=%d dirs=%d", plan_run_id, len(event_dir_names))
         elif command == "reload_config":
             env_reloaded = _reload_runtime_env()
+            adb_reconciled = _ensure_adb_server_on_startup(adb_path)
             ScanRunner.instance().configure(force=True)
             UploadManager.instance().configure(force=True)
             operation_cap = operation_scheduler.reload_from_env()
             runner_ok = ScanRunner.instance().is_configured()
             uploader_ok = UploadManager.instance().is_configured()
             logger.info(
-                "control_reload_config_done env_reloaded=%s scan_runner=%s upload_manager=%s "
+                "control_reload_config_done env_reloaded=%s adb_reconciled=%s "
+                "scan_runner=%s upload_manager=%s "
                 "max_concurrent_operations=%d",
-                env_reloaded, runner_ok, uploader_ok, operation_cap,
+                env_reloaded, adb_reconciled, runner_ok, uploader_ok, operation_cap,
             )
         else:
             logger.warning("unknown_control_command: %s", command)

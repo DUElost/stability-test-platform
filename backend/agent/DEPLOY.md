@@ -301,6 +301,36 @@ agentctl health  # 应显示 "端口: 5039" 和 "已识别设备: N 台"
 ANDROID_ADB_SERVER_PORT=5039 adb devices
 ```
 
+**多 ADB server 并存（生产 Linux host，非 WSL 专属）**：同一 host 上同时存在多个
+`adb fork-server server`（监听不同端口）时，Linux 每台 USB 设备只能注册到一个 ADB
+server，设备会被拆分（如 5037=10 + 5039=6），Agent 只上报默认端口看到的那部分，
+控制面 `online_healthy_devices` 会低于实际 USB 手机数。常见诱因是 SSH 排查时手动
+执行过 `adb kill-server` / `adb start-server`，与 Agent 未协调。
+
+```bash
+# 检测：列出本用户所有 adb fork-server 及端口
+pgrep -u "$(id -u)" -af 'adb.*fork-server server'
+
+# 对照：单端口设备数应等于 lsusb 手机数（VID/PID 按实际机型）
+adb devices -l | awk 'NR>1 && NF {n++} END {print n+0}'
+lsusb -d 19d2:1352 | wc -l
+
+# 修复：收敛到 Agent 配置端口（默认 5037；agentctl 复用同一套 Python 逻辑）
+agentctl repair-adb
+
+# 手动等价操作（仅 adb daemon，不重启 Agent）
+adb -P 5037 kill-server
+adb -P 5039 kill-server   # 按上面检测到的实际端口逐个执行
+ANDROID_ADB_SERVER_PORT=5037 adb start-server
+adb devices -l | awk 'NR>1 && NF {n++} END {print n+0}'
+```
+
+Agent 侧防护：启动与 `reload_config` 时自动收敛到 `ANDROID_ADB_SERVER_PORT`
+（未配置则 5037）；运行期检测到多 server 时心跳 health 置
+`DEGRADED`（reason=`adb_multiple_servers`），默认只告警不自动杀 server；
+设置 `STP_ADB_AUTO_REPAIR=1` 且无活动 Job 时可自动收敛（冷却间隔
+`STP_ADB_REPAIR_COOLDOWN_SECONDS`，默认 300s）。
+
 ### Job 卡在 PENDING（设备租约残留）
 
 Job 异常终止后可能遗留 ACTIVE 租约（`device_leases.status = 'ACTIVE'`），导致后续 Job 无法被 claim。

@@ -23,6 +23,7 @@ health_check() {
     local exit_code=0
     local env_file="${INSTALL_DIR}/.env"
     local API_URL=""
+    local ADB_PORT=""
 
     echo -e "${BLUE}健康检查:${NC}"
     echo ""
@@ -45,6 +46,7 @@ health_check() {
         echo -e "  配置文件: ${GREEN}存在${NC}"
         API_URL="$(grep "^API_URL=" "$env_file" 2>/dev/null | cut -d= -f2- || true)"
         HOST_ID="$(grep "^HOST_ID=" "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+        ADB_PORT="$(grep "^ANDROID_ADB_SERVER_PORT=" "$env_file" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
         [ -n "$API_URL" ] && echo "    API_URL: $API_URL"
         [ -n "$HOST_ID" ] && echo "    HOST_ID: $HOST_ID"
     else
@@ -59,6 +61,10 @@ health_check() {
         exit_code=1
     fi
 
+    if [ -z "$ADB_PORT" ]; then
+        ADB_PORT="5037"
+    fi
+
     if adb version >/dev/null 2>&1; then
         echo -e "  ADB: ${GREEN}可用${NC} ($(adb version | sed -n '1p'))"
     else
@@ -66,8 +72,38 @@ health_check() {
     fi
 
     if command -v adb >/dev/null 2>&1; then
-        devices="$(adb devices 2>/dev/null | awk 'NR > 1 && NF {count++} END {print count + 0}')"
-        echo -e "  已识别设备: ${GREEN}${devices} 台${NC}"
+        devices="$(ANDROID_ADB_SERVER_PORT="$ADB_PORT" adb devices 2>/dev/null | awk 'NR > 1 && NF {count++} END {print count + 0}')"
+        echo -e "  已识别设备: ${GREEN}${devices} 台${NC} (ADB 端口 ${ADB_PORT})"
+    fi
+
+    # #160: 多 ADB fork-server 并存会把 USB 设备拆分到不同 server
+    if command -v pgrep >/dev/null 2>&1; then
+        local server_ports=""
+        local server_conflict=0
+        while IFS= read -r proc_line; do
+            [ -z "$proc_line" ] && continue
+            local proc_port=""
+            proc_port="$(printf '%s\n' "$proc_line" | sed -n 's/.*-L tcp:\([0-9][0-9]*\).*/\1/p')"
+            if [ -z "$proc_port" ]; then
+                proc_port="$(printf '%s\n' "$proc_line" | sed -n 's/.*-P \([0-9][0-9]*\).*/\1/p')"
+            fi
+            [ -z "$proc_port" ] && proc_port="?"
+            server_ports="${server_ports:+$server_ports, }$proc_port"
+            if [ "$proc_port" != "$ADB_PORT" ]; then
+                server_conflict=1
+            fi
+        done < <(pgrep -u "$(id -u)" -af 'adb.*fork-server server' || true)
+
+        if [ -n "$server_ports" ]; then
+            if [ "$server_conflict" -eq 1 ]; then
+                echo -e "  ADB server: ${RED}冲突${NC} (期望 ${ADB_PORT}，实际: ${server_ports})"
+                exit_code=1
+            else
+                echo -e "  ADB server: ${GREEN}单一${NC} (端口: ${server_ports})"
+            fi
+        else
+            echo -e "  ADB server: ${YELLOW}未运行${NC}"
+        fi
     fi
 
     if [ -z "$API_URL" ]; then
@@ -83,18 +119,29 @@ health_check() {
     return "$exit_code"
 }
 
+repair_adb() {
+    if [ ! -x "${INSTALL_DIR}/venv/bin/python" ]; then
+        echo "Agent venv 不存在: ${INSTALL_DIR}/venv/bin/python" >&2
+        return 1
+    fi
+    (
+        cd "$INSTALL_DIR" && "${INSTALL_DIR}/venv/bin/python" -m agent.device_discovery repair
+    )
+}
+
 restart_service() {
     sudo systemctl restart "$SERVICE_NAME"
 }
 
 main() {
     if [ $# -lt 1 ]; then
-        echo "Usage: agentctl <health|restart>" >&2
+        echo "Usage: agentctl <health|repair-adb|restart>" >&2
         exit 2
     fi
 
     case "$1" in
         health) health_check ;;
+        repair-adb) repair_adb ;;
         restart) restart_service ;;
         *) echo "Unknown: $1" >&2; exit 2 ;;
     esac

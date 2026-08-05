@@ -14,10 +14,10 @@ try:
     # 从真正的定义处导入 —— 否则 main.py 里那行「未使用」的 import 会被
     # lint 清掉,测试随之崩塌(2026-07 就这么炸过一次)。
     from backend.agent.api_client import complete_run
-    from backend.agent.main import HeartbeatThread
+    from backend.agent.main import HeartbeatThread, _ensure_adb_server_on_startup
 except ModuleNotFoundError:
     from agent.api_client import complete_run
-    from agent.main import HeartbeatThread
+    from agent.main import HeartbeatThread, _ensure_adb_server_on_startup
 
 
 class TestAgentMain(unittest.TestCase):
@@ -315,6 +315,33 @@ class TestStartupAeeStateMigration(unittest.TestCase):
             conn.close()
             if db_path.exists():
                 db_path.unlink()
+
+
+class TestAdbServerStartupReconcile(unittest.TestCase):
+    """#160: 启动与 reload_config 共用同一收敛 helper，失败不阻塞启动。"""
+
+    @patch("backend.agent.main.device_discovery")
+    def test_startup_reconcile_calls_ensure_single_adb_server(self, mock_dd):
+        mock_dd.ensure_single_adb_server.return_value = {
+            "port": 5037,
+            "servers": [],
+            "killed": [{"pid": 111, "port": 5039}],
+            "started": True,
+            "skipped": False,
+        }
+
+        ok = _ensure_adb_server_on_startup("adb")
+
+        self.assertTrue(ok)
+        mock_dd.ensure_single_adb_server.assert_called_once_with("adb")
+
+    @patch("backend.agent.main.device_discovery")
+    def test_startup_reconcile_failure_does_not_raise(self, mock_dd):
+        mock_dd.ensure_single_adb_server.side_effect = RuntimeError("adb boom")
+
+        ok = _ensure_adb_server_on_startup("adb")
+
+        self.assertFalse(ok)
 
 
 if __name__ == "__main__":

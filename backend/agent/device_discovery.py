@@ -3,7 +3,10 @@
 """
 import logging
 import os
+import re
+import signal
 import subprocess
+import sys
 from typing import Dict, List, Any, Optional, Tuple
 
 from .device_platform import PLATFORM_UNKNOWN, detect_device_platform
@@ -11,6 +14,11 @@ from .device_platform import PLATFORM_UNKNOWN, detect_device_platform
 logger = logging.getLogger(__name__)
 
 _STATIC_DEVICE_SERIALS_ENV = "STP_STATIC_DEVICE_SERIALS"
+_ADB_SERVER_PORT_ENV = "ANDROID_ADB_SERVER_PORT"
+_DEFAULT_ADB_SERVER_PORT = 5037
+_ADB_FORK_SERVER_LINE_RE = re.compile(r"^\s*(\d+)\s+(\d+)\s+(.+)$")
+_ADB_FORK_SERVER_ARGS_RE = re.compile(r"\bfork-server\s+server\b")
+_ADB_PORT_RE = re.compile(r"(?:-L\s+tcp:(\d+)|-P\s+(\d+))")
 
 
 def _static_device_serials() -> list[str]:
@@ -23,6 +31,200 @@ def _static_device_serials() -> list[str]:
     if not raw:
         return []
     return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+def get_adb_server_port() -> int:
+    """Return the ADB server port Agent should own (env or default 5037)."""
+    raw = os.getenv(_ADB_SERVER_PORT_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_ADB_SERVER_PORT
+    try:
+        port = int(raw)
+    except ValueError:
+        logger.warning(
+            "adb_server_port_invalid value=%r using_default=%d",
+            raw, _DEFAULT_ADB_SERVER_PORT,
+        )
+        return _DEFAULT_ADB_SERVER_PORT
+    if not 1 <= port <= 65535:
+        logger.warning(
+            "adb_server_port_out_of_range value=%d using_default=%d",
+            port, _DEFAULT_ADB_SERVER_PORT,
+        )
+        return _DEFAULT_ADB_SERVER_PORT
+    return port
+
+
+def _parse_fork_server_line(line: str) -> Optional[Dict[str, Any]]:
+    """Parse one `ps -eo pid=,uid=,args=` line into an adb fork-server record."""
+    match = _ADB_FORK_SERVER_LINE_RE.match(line)
+    if not match:
+        return None
+    pid_str, uid_str, args = match.groups()
+    if not _ADB_FORK_SERVER_ARGS_RE.search(args):
+        return None
+    argv0 = args.split(maxsplit=1)[0] if args.split(maxsplit=1) else ""
+    if not os.path.basename(argv0).startswith("adb"):
+        return None
+    port_match = _ADB_PORT_RE.search(args)
+    port = int(port_match.group(1) or port_match.group(2)) if port_match else None
+    return {
+        "pid": int(pid_str),
+        "uid": int(uid_str),
+        "port": port,
+        "cmdline": args,
+    }
+
+
+def list_adb_fork_servers() -> List[Dict[str, Any]]:
+    """Enumerate running adb fork-server daemons (all users, detection only)."""
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,uid=,args="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning(f"adb_fork_server_scan_failed: {exc}")
+        return []
+
+    servers = []
+    for line in result.stdout.splitlines():
+        server = _parse_fork_server_line(line)
+        if server is not None:
+            servers.append(server)
+    if servers:
+        logger.debug(
+            "adb_fork_servers_found ports=%s",
+            [s.get("port") for s in servers],
+        )
+    return servers
+
+
+def _kill_adb_server(server: Dict[str, Any], adb_path: str) -> bool:
+    """Gracefully kill one adb fork-server; falls back to SIGTERM on the pid."""
+    port = server.get("port")
+    if port is not None:
+        env = dict(os.environ)
+        env[_ADB_SERVER_PORT_ENV] = str(port)
+        try:
+            result = subprocess.run(
+                [adb_path, "kill-server"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+            )
+            if result.returncode == 0:
+                logger.info(
+                    "adb_server_killed pid=%s port=%s",
+                    server.get("pid"), port,
+                )
+                return True
+            logger.warning(
+                "adb_kill_server_failed pid=%s port=%s rc=%s stderr=%s",
+                server.get("pid"), port, result.returncode, result.stderr.strip(),
+            )
+        except Exception as exc:
+            logger.warning(
+                "adb_kill_server_exception pid=%s port=%s error=%s",
+                server.get("pid"), port, exc,
+            )
+
+    try:
+        os.kill(int(server["pid"]), signal.SIGTERM)
+        logger.warning(
+            "adb_server_sigterm_fallback pid=%s port=%s",
+            server.get("pid"), server.get("port"),
+        )
+        return True
+    except ProcessLookupError:
+        logger.info("adb_server_already_gone pid=%s", server.get("pid"))
+        return True
+    except OSError as exc:
+        logger.warning(
+            "adb_server_sigterm_failed pid=%s error=%s",
+            server.get("pid"), exc,
+        )
+        return False
+
+
+def _start_adb_server(adb_path: str, port: int) -> bool:
+    """Start (or attach to) the ADB server on the desired port."""
+    env = dict(os.environ)
+    env[_ADB_SERVER_PORT_ENV] = str(port)
+    try:
+        result = subprocess.run(
+            [adb_path, "start-server"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+        if result.returncode == 0:
+            logger.info("adb_server_started port=%s", port)
+            return True
+        logger.warning(
+            "adb_start_server_failed port=%s rc=%s stderr=%s",
+            port, result.returncode, result.stderr.strip(),
+        )
+        return False
+    except Exception as exc:
+        logger.warning("adb_start_server_exception port=%s error=%s", port, exc)
+        return False
+
+
+def ensure_single_adb_server(
+    adb_path: str = "adb",
+    port: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Converge the host to a single ADB server on the Agent's configured port.
+
+    Linux 上每台 USB 设备只能注册到一个 ADB server；多个 fork-server 并存会把
+    设备拆分（如 5037=10 + 5039=6）。此函数先清理非目标端口的 daemon，再确保
+    目标端口 server 存活并重新枚举全部 USB 设备。
+
+    STP_STATIC_DEVICE_SERIALS 模式（开发/冒烟）下直接 no-op，不碰真实 adb。
+    """
+    desired_port = port or get_adb_server_port()
+    result = {
+        "port": desired_port,
+        "servers": list_adb_fork_servers(),
+        "killed": [],
+        "started": False,
+        "skipped": False,
+    }
+    if _static_device_serials():
+        result["skipped"] = True
+        logger.info(
+            "adb_server_reconcile_skipped static_devices_mode port=%s",
+            desired_port,
+        )
+        return result
+
+    current_uid = os.geteuid()
+    has_target_server = any(
+        server.get("port") == desired_port for server in result["servers"]
+    )
+    for server in result["servers"]:
+        if server.get("port") == desired_port:
+            continue
+        if server.get("uid") != current_uid:
+            logger.warning(
+                "adb_server_other_user pid=%s port=%s uid=%s cannot_reconcile",
+                server.get("pid"), server.get("port"), server.get("uid"),
+            )
+            continue
+        if _kill_adb_server(server, adb_path):
+            result["killed"].append(server)
+
+    if result["killed"] or not has_target_server:
+        result["started"] = _start_adb_server(adb_path, desired_port)
+    else:
+        result["started"] = True
+        logger.info("adb_server_already_single port=%s", desired_port)
+    return result
 
 
 def discover_devices(adb_path: str = "adb") -> List[Dict[str, Any]]:
@@ -321,3 +523,82 @@ def _ping_with_fallback(adb_path: str, serial: str, target: str, fallback: Optio
             return latency
 
     return None
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """CLI for inspecting/reconciling ADB fork-server daemons (agentctl 复用)."""
+    import argparse
+    import json
+
+    def _emit(text: str) -> None:
+        sys.stdout.write(text + "\n")
+
+    parser = argparse.ArgumentParser(
+        prog="python -m agent.device_discovery",
+        description="Inspect/reconcile ADB fork-server daemons on this host.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    inspect_parser = subparsers.add_parser(
+        "inspect", help="list running adb fork-server daemons"
+    )
+    inspect_parser.add_argument("--json", action="store_true", help="output JSON")
+
+    repair_parser = subparsers.add_parser(
+        "repair", help="kill foreign adb fork-servers and ensure configured server"
+    )
+    repair_parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="desired adb server port (default: ANDROID_ADB_SERVER_PORT or 5037)",
+    )
+    repair_parser.add_argument("--json", action="store_true", help="output JSON")
+
+    args = parser.parse_args(argv)
+
+    if args.command == "inspect":
+        servers = list_adb_fork_servers()
+        if args.json:
+            _emit(json.dumps(servers, indent=2))
+        elif not servers:
+            _emit("no adb fork-server daemons")
+        else:
+            for server in servers:
+                _emit(
+                    "pid={pid} uid={uid} port={port} {cmdline}".format(
+                        pid=server["pid"],
+                        uid=server["uid"],
+                        port=server.get("port") or "-",
+                        cmdline=server["cmdline"],
+                    )
+                )
+        return 0
+
+    if args.command == "repair":
+        result = ensure_single_adb_server(port=args.port)
+        if args.json:
+            _emit(json.dumps(result, indent=2, default=str))
+        else:
+            _emit(f"desired port: {result['port']}")
+            _emit(f"adb fork-servers: {len(result['servers'])}")
+            if result.get("skipped"):
+                _emit("skipped: STP_STATIC_DEVICE_SERIALS mode")
+            for server in result.get("killed", []):
+                _emit(
+                    "killed: pid={pid} port={port}".format(
+                        pid=server["pid"], port=server.get("port")
+                    )
+                )
+            if result.get("started"):
+                _emit("target adb server ready")
+            else:
+                _emit("target adb server NOT ready")
+                return 1
+        return 0
+
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

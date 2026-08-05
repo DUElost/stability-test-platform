@@ -6,6 +6,7 @@
 import logging
 import os
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from . import device_discovery
@@ -81,6 +82,10 @@ class HeartbeatThread:
         self._latest_devices: List[Dict[str, Any]] = []
         self._last_adb_connected_by_serial: Dict[str, bool] = {}
         self._pending_reconnected_serials: List[str] = []
+        self._last_adb_repair_at: float = 0.0
+        self._adb_repair_cooldown: float = float(
+            os.getenv("STP_ADB_REPAIR_COOLDOWN_SECONDS", "300")
+        )
         self._devices_lock = threading.Lock()
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
@@ -215,6 +220,46 @@ class HeartbeatThread:
 
         active_count = self._get_active_job_count() if self._get_active_job_count else 0
         active_device_count = self._get_active_device_count() if self._get_active_device_count else 0
+
+        # #160: 多 ADB fork-server 并存会把 USB 设备拆分，Agent 只能看到默认端口
+        # 那部分。这里只检测并告警（默认不自动杀 server，避免打断在跑 Job）；
+        # STP_ADB_AUTO_REPAIR=1 且无活动 Job 时按冷却间隔自动收敛。
+        adb_server_conflict = False
+        conflicting_ports: List[Optional[int]] = []
+        try:
+            desired_port = device_discovery.get_adb_server_port()
+            for server in device_discovery.list_adb_fork_servers():
+                if server.get("port") != desired_port:
+                    conflicting_ports.append(server.get("port"))
+            adb_server_conflict = bool(conflicting_ports)
+            if adb_server_conflict:
+                logger.warning(
+                    "adb_multiple_servers detected conflicting_ports=%s desired_port=%s",
+                    conflicting_ports, desired_port,
+                )
+        except Exception as exc:
+            logger.debug("adb_server_conflict_detect_failed: %s", exc)
+
+        if (
+            adb_server_conflict
+            and os.getenv("STP_ADB_AUTO_REPAIR", "0") == "1"
+            and active_count == 0
+        ):
+            now = time.monotonic()
+            if now - self._last_adb_repair_at >= self._adb_repair_cooldown:
+                try:
+                    repair_result = device_discovery.ensure_single_adb_server(
+                        self._adb_path
+                    )
+                    self._last_adb_repair_at = now
+                    logger.info(
+                        "adb_auto_repair_done killed_ports=%s started=%s",
+                        [server.get("port") for server in repair_result.get("killed", [])],
+                        repair_result.get("started"),
+                    )
+                except Exception as exc:
+                    logger.warning("adb_auto_repair_failed: %s", exc)
+
         online_healthy = sum(
             1 for d in devices_list
             if d.get("adb_connected") is True
@@ -229,6 +274,7 @@ class HeartbeatThread:
             total_devices=total_devices,
             system_stats=system_stats,
             mount_status=mount_status,
+            adb_server_conflict=adb_server_conflict,
         )
 
         with self._capacity_lock:

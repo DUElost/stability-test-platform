@@ -119,3 +119,39 @@ def test_device_limit_reduces_slots():
     assert result["health"]["status"] == "UNSCHEDULABLE"
     assert "adb_low_healthy_devices" in result["health"]["reasons"]
     assert result["capacity"]["effective_slots"] == 0
+
+
+# ── #160: 多 ADB server 冲突 → DEGRADED 但不打闸 ──────────────────────────────
+
+def test_adb_server_conflict_degrades_without_blocking():
+    result = compute_capacity(
+        active_job_count=1,
+        active_device_count=1,
+        online_healthy_devices=8,
+        total_devices=10,
+        system_stats=_healthy_system_stats(),
+        mount_status=_healthy_mount_status(),
+        adb_server_conflict=True,
+    )
+    health = result["health"]
+    assert health["status"] == "DEGRADED"
+    assert "adb_multiple_servers" in health["reasons"]
+    # warning 级 reason 不打闸：可见设备仍可调度
+    assert result["capacity"]["effective_slots"] == 7
+
+
+def test_adb_server_conflict_with_blocking_reason_still_unschedulable():
+    stats = {"cpu_load": 95, "ram_usage": 50, "disk_usage": {"usage_percent": 40}}
+    result = compute_capacity(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=5,
+        total_devices=5,
+        system_stats=stats,
+        mount_status=_healthy_mount_status(),
+        adb_server_conflict=True,
+    )
+    assert result["health"]["status"] == "UNSCHEDULABLE"
+    assert "adb_multiple_servers" in result["health"]["reasons"]
+    assert "cpu_high" in result["health"]["reasons"]
+    assert result["capacity"]["effective_slots"] == 0
