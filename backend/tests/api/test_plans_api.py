@@ -725,3 +725,79 @@ class TestPlanRunWifiChoice:
             headers=auth_headers,
         )
         assert resp.status_code == 400, resp.text
+
+
+def _ensure_script(db_session, name: str, version: str) -> None:
+    from backend.models.script import Script
+
+    existing = db_session.query(Script).filter(
+        Script.name == name, Script.version == version
+    ).first()
+    if existing:
+        return
+    db_session.add(Script(
+        name=name,
+        script_type="python",
+        version=version,
+        nfs_path=f"/nfs/scripts/{name}/{version}",
+        content_sha256="2" * 64,
+        is_active=True,
+        default_params={},
+        param_schema={},
+    ))
+    db_session.commit()
+
+
+class TestStallRequiresProgressScript:
+    """#136：stall_seconds>0 时脚本版本必须已知支持 PROGRESS。"""
+
+    def test_create_rejects_stall_on_legacy_script(
+        self, client, auth_headers, sample_script,
+    ):
+        steps = _minimal_steps()
+        steps[0]["stall_seconds"] = 120
+        resp = client.post("/api/v1/plans", json={
+            "name": _uniq("plan"),
+            "steps": steps,
+        }, headers=auth_headers)
+        assert resp.status_code == 422, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "STALL_REQUIRES_PROGRESS_SCRIPT"
+        assert detail["steps"] == ["check_device:1.0.0"]
+
+    def test_create_accepts_stall_on_progress_capable_script(
+        self, client, auth_headers, db_session,
+    ):
+        _ensure_script(db_session, "monkey_setup", "v2.3.3")
+        steps = [{
+            "step_key": "init_0",
+            "script_name": "monkey_setup",
+            "script_version": "v2.3.3",
+            "stage": "init",
+            "sort_order": 0,
+            "timeout_seconds": 300,
+            "stall_seconds": 120,
+        }]
+        resp = client.post("/api/v1/plans", json={
+            "name": _uniq("plan"),
+            "steps": steps,
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["data"]["steps"][0]["stall_seconds"] == 120
+
+    def test_update_rejects_stall_on_legacy_script(
+        self, client, auth_headers, sample_script,
+    ):
+        create = client.post("/api/v1/plans", json={
+            "name": _uniq("plan"),
+            "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        steps = _minimal_steps()
+        steps[0]["stall_seconds"] = 120
+        resp = client.put(f"/api/v1/plans/{plan_id}", json={
+            "steps": steps,
+        }, headers=auth_headers)
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"]["code"] == "STALL_REQUIRES_PROGRESS_SCRIPT"

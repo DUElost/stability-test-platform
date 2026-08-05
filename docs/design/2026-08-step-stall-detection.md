@@ -51,6 +51,17 @@
 判定精度：墙钟与停滞钟都受主线程 1s 轮询影响，触发时间 ≈ 阈值 ±1s（原
 `communicate(timeout=…)` 的墙钟是准点触发，换成轮询后边界上最多晚 ~1s）。
 
+### #147 收口说明（2026-08-05）
+
+- **PROGRESS 行首约束**：实现按 `line.lstrip()` 后匹配前缀，脚本带前导空白
+  （缩进 / 日志前缀）也能刷新停滞钟；协议仍建议从行首输出，不带前导空白。
+- **8MiB 捕获上限**：已有集成测试覆盖——单流输出超限后截断、继续读管道不
+  阻塞、子进程正常退出，并打 `step_output_capture_limit_reached` 告警。
+- **Windows 残留 daemon reader**：Windows 管道不可 `select`，阻塞
+  `readline` reader 在 join 超时后被放弃，daemon 线程随进程退出消亡。生产
+  Agent 跑 Linux，风险低；如需 Windows 联调，应另行评估非阻塞 reader 或
+  进程级隔离。
+
 ## 3. `PROGRESS` 打戳协议（阶段 2 启用，阶段 1 已解析）
 
 脚本在长耗时操作期间自愿往 **stderr** 打：
