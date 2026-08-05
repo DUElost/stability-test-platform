@@ -604,6 +604,14 @@ def main() -> None:
             agent_secret=agent_secret,
             host_id=str(host_id),
             agent_instance_id=agent_instance_id,
+            # #97: 登记前 promote 到共享根（控制面只认共享路径）。仅显式配置
+            # STP_AEE_NFS_ROOT / STP_WATCHER_NFS_BASE_DIR 才启用；未配置则
+            # 保持原行为（LOCAL 直发，由控制面校验拒绝）。
+            aee_shared_root=(
+                os.getenv("STP_AEE_NFS_ROOT")
+                or os.getenv("STP_WATCHER_NFS_BASE_DIR")
+                or ""
+            ).strip(),
         )
         ArtifactUploader.instance().start()
         logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
