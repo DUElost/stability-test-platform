@@ -443,7 +443,7 @@ def execute_hot_update(
                 logger.error("hot_update_remote_failed exit=%d stderr=%s", exit_code, err_text[:500])
                 return {
                     "ok": False,
-                    "message": f"Remote script failed (exit={exit_code}): {err_text[:300]}",
+                    "message": f"Remote script failed (exit={exit_code})",
                     "duration_ms": int((time.monotonic() - t0) * 1000),
                     "deps_refreshed": deps_refreshed,
                     "env_keys_synced": env_keys_synced,

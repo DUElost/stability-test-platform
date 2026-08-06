@@ -258,12 +258,16 @@ def build_merge_argv(
 ) -> Tuple[List[str], Optional[Path]]:
     """构建 merge 子进程 argv；必要时回退 -merge_files。"""
     if scan_tool_supports_merge_files_list(tool):
-        listfile = Path(tempfile.mktemp(
+        with tempfile.NamedTemporaryFile(
+            "w",
             suffix=".txt",
             prefix="merge_list_",
             dir=str(Path(tempfile.gettempdir())),
-        ))
-        listfile.write_text("\n".join(org_files), encoding="utf-8")
+            delete=False,
+            encoding="utf-8",
+        ) as f:
+            f.write("\n".join(org_files))
+            listfile = Path(f.name)
         argv = [tool["python"], tool["script"], "-merge_files_list", str(listfile)] + side_argv
         return argv, listfile
 

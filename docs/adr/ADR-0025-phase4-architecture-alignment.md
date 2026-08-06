@@ -155,9 +155,10 @@ HDD 1TB: /mnt/hdd/aee_events/{folder_name}/{serial}/
 
 ```
 {cifs_root}/
-  jobs/{job_id}/                        ← JobArtifact 文件（watcher puller
-    AEE/                                 默认落点 + LOCAL promote，#97/#172）
-    <epoch_ms>_<filename>
+  jobs/{job_id}/                        ← JobArtifact 文件
+    <promoted_filename>                 LOCAL promote（#97/#172）
+    AEE/                                watcher puller 默认落点
+      <epoch_ms>_<filename>
 
   devices/{相对路径}/                   ← AEE 事件目录（两类来源）
     {plan_run_id}/{dirname}/            ← upload_manager 按需上送

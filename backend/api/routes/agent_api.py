@@ -880,6 +880,7 @@ class _StepStatusIn(BaseModel):
     exit_code: Optional[int] = None
     error_message: Optional[str] = None
     metadata: Optional[dict] = None
+    trace_event_id: Optional[str] = None
     fencing_token: str
 
 
@@ -1782,6 +1783,22 @@ async def update_job_step_status(
 ):
     """Update a single step status — upserted as StepTrace."""
     from backend.services.reconciler import reconcile_step_traces
+    trace_event_id = (payload.trace_event_id or "").strip()
+    if not trace_event_id:
+        # 单步 status 端点没有独立批次 id：用载荷内容派生稳定 id，
+        # 同一逻辑迁移（如 RUNNING→FAILED）各自幂等，重试不重复插入。
+        metadata_json = (
+            json.dumps(payload.metadata, sort_keys=True, default=str)
+            if payload.metadata else ""
+        )
+        digest = hashlib.sha256(
+            (
+                f"{job_id}\0{step_id}\0{payload.status}\0"
+                f"{payload.started_at or ''}\0{payload.exit_code or ''}\0"
+                f"{payload.error_message or ''}\0{metadata_json}"
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+        trace_event_id = f"status:{digest}"
     trace = {
         "job_id": job_id,
         "step_id": step_id,
@@ -1791,6 +1808,7 @@ async def update_job_step_status(
         "exit_code": payload.exit_code,
         "metadata": payload.metadata,
         "error_message": payload.error_message,
+        "trace_event_id": trace_event_id,
         "original_ts": payload.started_at or datetime.now(timezone.utc).isoformat(),
     }
     job = await db.get(JobInstance, job_id)
