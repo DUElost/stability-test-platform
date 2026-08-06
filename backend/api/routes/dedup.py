@@ -196,10 +196,12 @@ async def start_jira_run(
             raise HTTPException(status_code=400, detail="a file is required (.xls/.xlsx) for source=upload")
         raw_name = (file.filename or "").strip()
         safe_name = Path(raw_name).name
-        if not safe_name or Path(safe_name).suffix.lower() not in {".xls", ".xlsx"}:
+        raw_suffix = Path(safe_name).suffix.lower()
+        if not safe_name or raw_suffix not in {".xls", ".xlsx"}:
             raise HTTPException(status_code=400, detail="file must be .xls/.xlsx")
+        ext = ".xlsx" if raw_suffix == ".xlsx" else ".xls"
         work_root = _work_dir().resolve()
-        stored_name = f"{vendor}_{stage}_{uuid.uuid4().hex}{Path(safe_name).suffix.lower()}"
+        stored_name = f"{vendor}_{stage}_{uuid.uuid4().hex}{ext}"
         dest = (work_root / stored_name).resolve()
         if not dest.is_relative_to(work_root):
             raise HTTPException(status_code=400, detail="invalid upload filename")

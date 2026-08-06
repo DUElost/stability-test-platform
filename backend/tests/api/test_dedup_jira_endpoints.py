@@ -159,6 +159,19 @@ class TestStartJiraRun:
         assert not any(".." in str(a) for a in argv)
         assert any(str(a).endswith(".xls") and "evil" not in str(a) for a in argv)
 
+    def test_upload_rejects_unsupported_extension(
+        self, client, auth_headers, monkeypatch
+    ):
+        _set_vendor_env(monkeypatch)
+        resp = client.post(
+            "/api/v1/jira/runs",
+            data={"vendor": "transsion", "stage": "upload_list", "dry_run": "true"},
+            files={"file": ("list.txt", b"fake", "text/plain")},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+        assert "file must be .xls/.xlsx" in resp.json()["detail"]
+
 
 class TestGetJiraRunStatus:
     """GET /api/v1/jira/runs/{console_run_id}"""
