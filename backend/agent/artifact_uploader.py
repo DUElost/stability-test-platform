@@ -30,6 +30,11 @@ from typing import Any, Dict, Optional
 
 import requests
 
+try:
+    from backend.agent.aee.paths import resolve_artifact_promote_dir
+except ImportError:
+    from agent.aee.paths import resolve_artifact_promote_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -367,8 +372,9 @@ class ArtifactUploader:
         - 未配置共享根（aee_shared_root 为空）→ 保持原行为：直发，由控制面
           校验拒绝 LOCAL（回归契约不变）。
         - uri 已在共享根 → 放行，不改。
-        - 本地文件 → copy 到 ``{root}/jobs/{job_id}/{name}``，成功则改写
-          storage_uri；目标已存在则复用（幂等友好）。
+        - 本地文件 → copy 到 ``{root}/jobs/{job_id}/{name}``（统一路径助手
+          ``resolve_artifact_promote_dir``，#172），成功则改写 storage_uri；
+          目标已存在则复用（幂等友好）。
         - 目录 / 不存在 / copy 失败 → **丢弃**（promote_failed++），绝不把
           LOCAL 发给控制面。
 
@@ -389,7 +395,7 @@ class ArtifactUploader:
                     job.job_id, job.storage_uri,
                 )
                 return False
-            dest_dir = shared_root / "jobs" / str(job.job_id)
+            dest_dir = resolve_artifact_promote_dir(shared_root, job.job_id)
             dest = dest_dir / src.name
             if not dest.exists():
                 dest_dir.mkdir(parents=True, exist_ok=True)

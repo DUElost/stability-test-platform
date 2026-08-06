@@ -1276,6 +1276,8 @@ class PipelineEngine:
                 status,
                 output=result.skip_reason if result.skipped else (result.output or None),
                 error_message=result.error_message if not result.success else None,
+                exit_code=result.exit_code,
+                metadata=result.metadata or None,
                 retry_attempt=retry_attempt,
             )
 
@@ -1455,6 +1457,8 @@ class PipelineEngine:
         status: str,
         output: Optional[str] = None,
         error_message: Optional[str] = None,
+        exit_code: Optional[int] = None,
+        metadata: Optional[dict] = None,
         retry_attempt: int = 0,
     ) -> None:
         """Send step_trace via MQ (local_db → StepTraceUploader HTTP batch)."""
@@ -1475,6 +1479,8 @@ class PipelineEngine:
                 status=status,
                 output=output,
                 error_message=error_message,
+                exit_code=exit_code,
+                metadata=metadata,
                 fencing_token=self._fencing_token,
                 trace_event_id=trace_event_id,
             )

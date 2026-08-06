@@ -113,3 +113,41 @@ def get_or_create_run_date_stamp(state_store: Any, job_id: int) -> str:
     stamp = datetime.now().strftime("%m%d")
     state_store.set_state(key, stamp)
     return stamp
+
+
+# ── 15.4 共享根路径约定（#172 统一入口）────────────────────────────────────
+#
+# 对象族分两类，避免继续用"哪段代码写哪里"的方式散落：
+#   - JobArtifact 文件（watcher puller 默认落点 + LOCAL promote）→ jobs/{job_id}/
+#   - AEE 事件目录（upload_manager / HddSpillMonitor）→ devices/{相对路径}/
+# 控制面 download 与 dedup extract 分别消费这两族；任何一端改布局都必须改这里。
+
+
+def resolve_artifact_promote_dir(shared_root: Path | str, job_id: int) -> Path:
+    """LOCAL artifact promote 目标：``{shared_root}/jobs/{job_id}/``（#97/#172）。"""
+    return Path(shared_root) / "jobs" / str(int(job_id))
+
+
+def resolve_puller_artifact_dir(
+    nfs_base_dir: Path | str,
+    job_id: int,
+    category: str,
+) -> Path:
+    """Watcher LogPuller 默认落盘目录：``{nfs_base}/jobs/{job_id}/{category}/``。"""
+    return Path(nfs_base_dir) / "jobs" / str(int(job_id)) / category
+
+
+def resolve_upload_devices_dir(nfs_root: Path | str, plan_run_id: int) -> Path:
+    """UploadManager 事件目录上送目标：``{nfs_root}/devices/{plan_run_id}/``。"""
+    return Path(nfs_root) / "devices" / str(int(plan_run_id))
+
+
+def resolve_spill_devices_dest(
+    cifs_root: Path | str,
+    hdd_root: Path | str,
+    local_event_dir: Path | str,
+) -> Path:
+    """HddSpillMonitor 上送目标：``{cifs_root}/devices/{hdd 相对路径}``。"""
+    local = Path(local_event_dir).resolve()
+    rel = local.relative_to(Path(hdd_root).resolve())
+    return Path(cifs_root) / "devices" / rel

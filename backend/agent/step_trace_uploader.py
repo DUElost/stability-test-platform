@@ -15,6 +15,7 @@ Phase B (Phase 4): MQ XADD removed; Uploader becomes the sole upload path.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -316,6 +317,11 @@ def _to_payload(trace: Dict[str, Any]) -> Dict[str, Any]:
         "status": trace.get("status", ""),
         "output": trace.get("output"),
         "error_message": trace.get("error_message"),
+        "exit_code": trace.get("exit_code"),
+        "metadata": (
+            json.loads(trace["metadata"])
+            if trace.get("metadata") else None
+        ),
         "original_ts": trace.get("original_ts"),
         "fencing_token": trace.get("fencing_token", ""),
         # Older servers ignore this extra field; the cutover schema can use it

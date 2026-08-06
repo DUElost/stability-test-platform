@@ -62,12 +62,15 @@ def progress_script(db_session):
             version="v2.3.3",
             nfs_path="/nfs/scripts/monkey_setup/v2.3.3",
             content_sha256="2" * 64,
+            capabilities=["progress_stamps"],
             is_active=True,
             default_params={},
             param_schema={},
         )
-        db_session.add(row)
-        db_session.commit()
+    else:
+        row.capabilities = ["progress_stamps"]
+    db_session.add(row)
+    db_session.commit()
     return row
 
 

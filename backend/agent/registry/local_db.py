@@ -191,6 +191,15 @@ class LocalDB:
                 "ALTER TABLE step_trace_cache "
                 "ADD COLUMN trace_event_id TEXT NOT NULL DEFAULT ''"
             )
+        # #173: 步骤退出码 + 元数据（timeout_kind 等）随 trace 上送控制面。
+        if "exit_code" not in columns:
+            self._conn.execute(
+                "ALTER TABLE step_trace_cache ADD COLUMN exit_code INTEGER"
+            )
+        if "metadata" not in columns:
+            self._conn.execute(
+                "ALTER TABLE step_trace_cache ADD COLUMN metadata TEXT"
+            )
         self._conn.execute(
             "UPDATE step_trace_cache "
             "SET trace_event_id = 'legacy:' || id "
@@ -220,6 +229,8 @@ class LocalDB:
                 status         TEXT    NOT NULL,
                 output         TEXT,
                 error_message  TEXT,
+                exit_code      INTEGER,
+                metadata       TEXT,
                 original_ts    TEXT    NOT NULL,
                 fencing_token  TEXT    NOT NULL DEFAULT '',
                 trace_event_id TEXT    NOT NULL,
@@ -231,12 +242,14 @@ class LocalDB:
             );
             INSERT INTO step_trace_cache_v2 (
                 id, job_id, step_id, stage, event_type, status, output,
-                error_message, original_ts, fencing_token, trace_event_id,
+                error_message, exit_code, metadata, original_ts,
+                fencing_token, trace_event_id,
                 attempts, last_error, dead_letter, acked
             )
             SELECT
                 id, job_id, step_id, stage, event_type, status, output,
-                error_message, original_ts, fencing_token, trace_event_id,
+                error_message, exit_code, metadata, original_ts,
+                fencing_token, trace_event_id,
                 attempts, last_error, dead_letter, acked
             FROM step_trace_cache;
             DROP TABLE step_trace_cache;
@@ -316,6 +329,8 @@ class LocalDB:
         status: str,
         output: Optional[str] = None,
         error_message: Optional[str] = None,
+        exit_code: Optional[int] = None,
+        metadata: Optional[dict] = None,
         original_ts: Optional[datetime] = None,
         fencing_token: str = "",
         trace_event_id: str = "",
@@ -325,14 +340,19 @@ class LocalDB:
         stable_event_id = trace_event_id or (
             f"legacy:{job_id}:{stage}:{step_id}:{event_type}"
         )
+        metadata_json = (
+            json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+            if metadata else None
+        )
         with self._lock:
             with self._conn:
                 cursor = self._conn.execute(
                     """
                     INSERT OR IGNORE INTO step_trace_cache
                     (job_id, step_id, stage, event_type, status, output,
-                     error_message, original_ts, fencing_token, trace_event_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     error_message, exit_code, metadata, original_ts,
+                     fencing_token, trace_event_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         job_id,
@@ -342,6 +362,8 @@ class LocalDB:
                         status,
                         output,
                         error_message,
+                        exit_code,
+                        metadata_json,
                         ts,
                         fencing_token,
                         stable_event_id,

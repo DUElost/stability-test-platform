@@ -102,6 +102,10 @@ class StepTrace(Base):
     event_type    = Column(String(32), nullable=False)
     output        = Column(Text)
     error_message = Column(Text)
+    # #173: 步骤退出码与元数据（如 timeout_kind=stall/wall_clock），
+    # Agent StepResult → step_trace → 控制面/前端全程透传。
+    exit_code     = Column(Integer, nullable=True)
+    step_metadata = Column("step_metadata", JSONB, nullable=True)
     trace_event_id = Column(
         String(256), nullable=False, default=lambda: uuid4().hex,
     )

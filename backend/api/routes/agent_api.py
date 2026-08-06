@@ -266,6 +266,8 @@ class StepTraceIn(BaseModel):
     status: str = ""
     output: Optional[str] = None
     error_message: Optional[str] = None
+    exit_code: Optional[int] = None
+    metadata: Optional[dict] = None
     original_ts: Optional[str] = None
     trace_event_id: Optional[str] = None
     fencing_token: str
@@ -877,6 +879,7 @@ class _StepStatusIn(BaseModel):
     finished_at: Optional[str] = None
     exit_code: Optional[int] = None
     error_message: Optional[str] = None
+    metadata: Optional[dict] = None
     fencing_token: str
 
 
@@ -1785,6 +1788,8 @@ async def update_job_step_status(
         "stage": "execute",
         "event_type": "status_update",
         "status": payload.status,
+        "exit_code": payload.exit_code,
+        "metadata": payload.metadata,
         "error_message": payload.error_message,
         "original_ts": payload.started_at or datetime.now(timezone.utc).isoformat(),
     }

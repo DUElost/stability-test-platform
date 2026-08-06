@@ -47,6 +47,8 @@ async def reconcile_step_traces(
                 status=t.get("status", ""),
                 output=t.get("output"),
                 error_message=t.get("error_message"),
+                exit_code=t.get("exit_code"),
+                step_metadata=t.get("metadata"),
                 trace_event_id=trace_event_id,
                 original_ts=_parse_ts(t.get("original_ts")),
                 created_at=datetime.now(timezone.utc),

@@ -24,7 +24,7 @@ except ImportError:
     from agent.aee.event_dirs import find_event_dir_under_root, is_event_dir_basename
 
 try:
-    from backend.agent.aee.paths import get_aee_nfs_root
+    from backend.agent.aee.paths import get_aee_nfs_root, resolve_upload_devices_dir
 except ImportError:
     def get_aee_nfs_root() -> "Path":
         import os as _os
@@ -36,6 +36,8 @@ except ImportError:
         if nfs:
             return Path(nfs) / "sonic_tinno"
         return Path("/mnt/hdd/aee_events")
+
+    from agent.aee.paths import resolve_upload_devices_dir
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +152,7 @@ class UploadManager:
 
         count = 0
         base_src = Path(source_root)
-        base_dst = Path(self._nfs_root) / "devices" / str(plan_run_id)
+        base_dst = resolve_upload_devices_dir(self._nfs_root, plan_run_id)
 
         for dirname in event_dir_names:
             if not is_event_dir_basename(dirname):

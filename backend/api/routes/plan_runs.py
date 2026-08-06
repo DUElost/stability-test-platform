@@ -231,7 +231,8 @@ def _step_out(t: StepTrace) -> StepTraceOut:
     return StepTraceOut(
         id=t.id, job_id=t.job_id, step_id=t.step_id, stage=t.stage,
         event_type=t.event_type, status=t.status, output=t.output,
-        error_message=t.error_message,
+        error_message=t.error_message, exit_code=t.exit_code,
+        metadata=t.step_metadata,
         original_ts=_iso(t.original_ts) or "",
         created_at=_iso(t.created_at) or "",
     )
@@ -1469,13 +1470,25 @@ def get_plan_run_events(
                 title = f"{t.stage}.{t.step_id} 失败"
                 evt_severity = "err"
                 evt_stage = t.stage if t.stage in {"init", "patrol", "teardown"} else "system"
+            description = (t.error_message or "")[:512]
+            # #173: 把超时区分透传到前端事件流（exit 124/125 + timeout_kind）。
+            timeout_kind = (
+                (t.step_metadata or {}).get("timeout_kind")
+                if isinstance(t.step_metadata, dict) else None
+            )
+            if t.exit_code in (124, 125) or timeout_kind:
+                suffix = f"[exit={t.exit_code}"
+                if timeout_kind:
+                    suffix += f", timeout_kind={timeout_kind}"
+                suffix += "]"
+                description = f"{description} {suffix}".strip()[:512]
             events.append(EventOut(
                 ts=_iso(t.original_ts) or "",
                 stage=evt_stage,
                 severity=evt_severity,
                 category="step",
                 title=title,
-                description=(t.error_message or "")[:512],
+                description=description,
                 job_id=t.job_id,
                 device_id=dev_id,
                 device_serial=devices_by_id.get(dev_id) if dev_id else None,

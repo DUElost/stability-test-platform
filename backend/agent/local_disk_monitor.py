@@ -21,6 +21,11 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+try:
+    from backend.agent.aee.paths import resolve_spill_devices_dest
+except ImportError:
+    from agent.aee.paths import resolve_spill_devices_dest
+
 
 logger = logging.getLogger(__name__)
 
@@ -185,11 +190,11 @@ class HddSpillMonitor:
         mtime, local_dir = candidates[0]
 
         try:
-            rel = local_dir.relative_to(hdd)
+            cifs_dir = resolve_spill_devices_dest(
+                self._cifs_root, self._hdd_root, local_dir,
+            )
         except ValueError:
             return 0
-
-        cifs_dir = Path(self._cifs_root) / "devices" / rel
 
         if cifs_dir.exists():
             shutil.rmtree(str(cifs_dir), ignore_errors=True)

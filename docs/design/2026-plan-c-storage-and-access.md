@@ -86,7 +86,13 @@ flowchart TB
 |----|-----|
 | 共享 | `//172.21.15.4/jxtinno/sonic_tinno` |
 | Agent env | `STP_AEE_CIFS_ROOT`（HddSpill 与 Sprint 4 upload 使用） |
-| 内容 | `dedup/`（xls）、`devices/{相对路径}`（事件目录）；**无** `archives/{job}/run_log_bundle` |
+| 内容 | `dedup/`（xls）、`devices/{相对路径}`（事件目录）、`jobs/{job_id}/`（JobArtifact 文件，puller/promote）；**无** `archives/{job}/run_log_bundle` |
+
+> **路径约定（#172）**：JobArtifact 文件统一走 `jobs/{job_id}/`，事件目录走
+> `devices/{相对路径}`（upload_manager 为 `{plan_run_id}/{dirname}`，HddSpill
+> 为 HDD 相对路径 `{folder_name}/{serial}/...`）。统一入口在
+> `backend/agent/aee/paths.py`，任何一端改布局都必须改助手并跑
+> `backend/agent/tests/test_aee_paths.py`。
 
 ---
 

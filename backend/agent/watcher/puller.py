@@ -40,6 +40,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+try:
+    from backend.agent.aee.paths import resolve_puller_artifact_dir
+except ImportError:
+    from agent.aee.paths import resolve_puller_artifact_dir
+
 from .sources import WatcherEvent
 
 logger = logging.getLogger(__name__)
@@ -397,9 +402,9 @@ class LogPuller:
             return self._sonic_output_dir / subdir / f"{epoch_ms}_{safe_name}"
 
         return (
-            self._nfs_base_dir
-            / "jobs" / str(self._job_id)
-            / event.category
+            resolve_puller_artifact_dir(
+                self._nfs_base_dir, self._job_id, event.category,
+            )
             / f"{epoch_ms}_{safe_name}"
         )
 
