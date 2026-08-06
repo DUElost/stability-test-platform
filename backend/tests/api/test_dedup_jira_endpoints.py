@@ -157,7 +157,7 @@ class TestStartJiraRun:
         assert resp.status_code == 200, resp.text
         argv = mock_run_console.start.call_args.kwargs.get("cmd", [])
         assert not any(".." in str(a) for a in argv)
-        assert any("evil.xls" in str(a) for a in argv)
+        assert any(str(a).endswith(".xls") and "evil" not in str(a) for a in argv)
 
 
 class TestGetJiraRunStatus:

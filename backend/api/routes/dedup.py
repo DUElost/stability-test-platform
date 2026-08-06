@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -198,7 +199,8 @@ async def start_jira_run(
         if not safe_name or Path(safe_name).suffix.lower() not in {".xls", ".xlsx"}:
             raise HTTPException(status_code=400, detail="file must be .xls/.xlsx")
         work_root = _work_dir().resolve()
-        dest = (work_root / f"{vendor}_{stage}_{safe_name}").resolve()
+        stored_name = f"{vendor}_{stage}_{uuid.uuid4().hex}{Path(safe_name).suffix.lower()}"
+        dest = (work_root / stored_name).resolve()
         if not dest.is_relative_to(work_root):
             raise HTTPException(status_code=400, detail="invalid upload filename")
         dest.write_bytes(await file.read())
