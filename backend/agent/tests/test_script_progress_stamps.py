@@ -1,6 +1,10 @@
-"""monkey_setup v2.3.3 的 PROGRESS 打戳（#115 阶段 2 / #133 / #138 / #139 / #140）。
+"""monkey_setup v2.3.4 的 PROGRESS 打戳与 `_pump_lines` 捕获上限
+（#115 阶段 2 / #133 / #138 / #139 / #140 / #147 收尾）。
 
 用**假 adb 可执行**验证 `adb_push_progress` / `_dd_with_progress`，不碰真设备。
+
+v2.3.4 相对 v2.3.3 仅增 `_pump_lines` 8MiB 两流合计捕获上限（#147），
+打戳行为相同（capabilities.json 声明一致，白名单同步登记），故钉到最新版。
 
 关键背景（真机实测 2026-08-03）：
   1. adb push 在非 TTY 下**不输出**进度行 —— 解析输出打戳无效；
@@ -13,6 +17,7 @@
 import importlib.util
 import hashlib
 import json
+import logging
 import subprocess
 import sys
 import textwrap
@@ -20,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.3"
+_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.4"
 
 
 def _load_module(name: str, path: Path):
@@ -38,9 +43,9 @@ def _load_module(name: str, path: Path):
 
 
 # monkey_setup 模块级 `from _adb import ...`，必须先把 _adb 放进 sys.modules
-_adb = _load_module("_adb_v233", _SCRIPT_DIR / "_adb.py")
+_adb = _load_module("_adb_v234", _SCRIPT_DIR / "_adb.py")
 sys.modules["_adb"] = _adb
-monkey_setup = _load_module("monkey_setup_v233", _SCRIPT_DIR / "monkey_setup.py")
+monkey_setup = _load_module("monkey_setup_v234", _SCRIPT_DIR / "monkey_setup.py")
 
 
 @pytest.fixture
@@ -378,3 +383,97 @@ class TestRealWiringAndIsolation:
         _adb.adb_push_progress(str(a), str(d2), timeout=60, on_progress=None)
         assert d1.read_bytes() == a.read_bytes()
         assert d2.read_bytes() == a.read_bytes()
+
+
+class TestPumpLinesCaptureLimit:
+    """#147 收尾：脚本侧 `_pump_lines` 8MiB 捕获上限直接单测。
+
+    引擎侧同款防护（pipeline_engine._MAX_CAPTURED_CHARS）已有
+    test_step_stall_detection.py 覆盖；v2.3.4 为脚本侧补上同款保护后，
+    这里是它的契约验证：
+      - 两流合计超过 _MAX_CAPTURED_CHARS 后停止收集，但**继续读取**
+        ——用 >64KB（管道缓冲）的输出证明子进程不被写阻塞（能正常写完退出）；
+      - on_line 回调不受上限影响——PROGRESS 打戳不能因内存上限丢失；
+      - 首次截断只打一条 warning。
+    """
+
+    @staticmethod
+    def _spawn_spew(
+        tmp_path: Path, stdout_lines: int, stderr_lines: int
+    ) -> subprocess.Popen:
+        """子进程：向两流各写 N 行 1KB 后退出（单流 100KB > 64KB 管道缓冲）。"""
+        script = tmp_path / "spew.py"
+        script.write_text(textwrap.dedent(f"""\
+            import sys
+            line = b"x" * 1024 + b"\\n"
+            for _ in range({stdout_lines}):
+                sys.stdout.buffer.write(line)
+            for _ in range({stderr_lines}):
+                sys.stderr.buffer.write(line)
+            sys.stdout.flush()
+            sys.stderr.flush()
+        """))
+        return subprocess.Popen(
+            [sys.executable, str(script)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def _pump(self, proc: subprocess.Popen, seen: list, caplog) -> list[str]:
+        try:
+            with caplog.at_level(logging.WARNING):
+                return _adb._pump_lines(proc, timeout=30, on_line=seen.append)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+
+    @staticmethod
+    def _capture_warnings(caplog) -> list:
+        return [
+            r for r in caplog.records
+            if "pump_lines_capture_limit_reached" in r.message
+        ]
+
+    def test_truncates_at_cap_but_callback_sees_all_lines(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """超限截断 + 回调不丢 + 管道不被阻塞（子进程能写完退出）。"""
+        monkeypatch.setattr(_adb, "_MAX_CAPTURED_CHARS", 2048)
+        proc = self._spawn_spew(tmp_path, stdout_lines=100, stderr_lines=0)
+        seen: list[str] = []
+        collected = self._pump(proc, seen, caplog)
+        assert proc.poll() is not None, "管道未被持续读取，子进程被写阻塞"
+        # 每行 1025 字符（1KB + \n）、上限 2KB → 恰收 2 行，第 3 行起丢弃
+        assert len(collected) == 2
+        assert sum(len(line) for line in collected) == 2050
+        assert len(seen) == 100, "on_line 必须收到全部行（PROGRESS 打戳不丢）"
+        assert len(self._capture_warnings(caplog)) == 1, "首次截断只打一条 warning"
+
+    def test_cap_is_aggregate_across_both_streams(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """上限是两流**合计**：stdout+stderr 各一半时总数仍只收 ~2 行。"""
+        monkeypatch.setattr(_adb, "_MAX_CAPTURED_CHARS", 2048)
+        proc = self._spawn_spew(tmp_path, stdout_lines=100, stderr_lines=100)
+        seen: list[str] = []
+        collected = self._pump(proc, seen, caplog)
+        assert proc.poll() is not None, "管道未被持续读取，子进程被写阻塞"
+        total = sum(len(line) for line in collected)
+        # 两 reader 线程共享 captured_chars，跨线程存在单行越界竞态，
+        # 允许最多越界一行（1025）；但绝不允许按流各收 2 行（4100）
+        assert 2050 <= total <= 2050 + 1025, total
+        assert len(seen) == 200, "on_line 必须收到全部行"
+        assert len(self._capture_warnings(caplog)) == 1
+
+    def test_under_cap_collects_all_without_warning(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setattr(_adb, "_MAX_CAPTURED_CHARS", 1024 * 1024)
+        proc = self._spawn_spew(tmp_path, stdout_lines=3, stderr_lines=2)
+        seen: list[str] = []
+        collected = self._pump(proc, seen, caplog)
+        assert len(collected) == 5
+        assert len(seen) == 5
+        assert self._capture_warnings(caplog) == []
