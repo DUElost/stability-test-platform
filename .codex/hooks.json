@@ -5,14 +5,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd frontend && npx tsc --noEmit",
-            "commandWindows": "Set-Location \"frontend\"; npx tsc --noEmit",
+            "command": "cd frontend && npx tsc --noEmit --incremental --tsBuildInfoFile .tsbuildinfo",
+            "commandWindows": "Set-Location \"frontend\"; npx tsc --noEmit --incremental --tsBuildInfoFile .tsbuildinfo",
             "statusMessage": "TypeScript type check...",
             "timeout": 60
           },
           {
             "type": "command",
-            "command": "python -m compileall backend/ -q",
+            "command": "python3 -m compileall backend/ -q",
             "commandWindows": "python -m compileall backend/ -q",
             "statusMessage": "Python syntax check...",
             "timeout": 60
@@ -26,8 +26,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd frontend && npx tsc --noEmit",
-            "commandWindows": "Set-Location \"frontend\"; npx tsc --noEmit",
+            "command": "cd frontend && npx tsc --noEmit --incremental --tsBuildInfoFile .tsbuildinfo",
+            "commandWindows": "Set-Location \"frontend\"; npx tsc --noEmit --incremental --tsBuildInfoFile .tsbuildinfo",
             "statusMessage": "TypeScript check before applying changes...",
             "timeout": 60
           }
