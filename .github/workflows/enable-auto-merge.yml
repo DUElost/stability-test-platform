@@ -35,3 +35,57 @@ jobs:
           if [ "$method" != "MERGE" ]; then
             gh pr merge "$PR_URL" --auto --merge
           fi
+
+  fallback-approval:
+    # CodeRabbit 被 rate limit 挡住时排除 CodeRabbit：由 github-actions[bot]
+    # 提交 APPROVE，合入仍由 required checks + auto-merge 把关。
+    # CodeRabbit 明确 CHANGES_REQUESTED 时绝不绕过。
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Fallback approval on CodeRabbit rate limit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          latest_state="$(
+            gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+              --jq '[.[] | select(.user.login == "coderabbitai")][-1].state // ""'
+          )"
+          if [ "$latest_state" = "APPROVED" ]; then
+            echo "CodeRabbit already approved; nothing to do"
+            exit 0
+          fi
+          if [ "$latest_state" = "CHANGES_REQUESTED" ]; then
+            echo "CodeRabbit explicitly requested changes; fallback skipped"
+            exit 0
+          fi
+
+          # 等 CodeRabbit 在该 commit 上留下状态（最多 5 分钟），再判定是否 rate limited。
+          desc=""
+          for _ in $(seq 1 30); do
+            desc="$(
+              gh api "repos/$REPO_OWNER/$REPO_NAME/commits/$HEAD_SHA/status" \
+                --jq '[.statuses[] | select(.context == "CodeRabbit")][0].description // ""'
+            )"
+            [ -n "$desc" ] && break
+            sleep 10
+          done
+          if [ -z "$desc" ]; then
+            echo "No CodeRabbit status yet; fail closed"
+            exit 0
+          fi
+          if ! printf '%s' "$desc" | grep -qi 'rate.limit'; then
+            echo "CodeRabbit not rate-limited: $desc; fallback skipped"
+            exit 0
+          fi
+
+          echo "CodeRabbit rate limited: $desc; submitting fallback approval"
+          gh api -X POST "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+            -f event=APPROVE \
+            -f body="CodeRabbit 当前被 rate limit 挡住（$desc），按仓库策略降级为自动批准；合入仍由 required checks + auto-merge 把关。"
