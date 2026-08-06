@@ -12,6 +12,7 @@
       "properties": {
         "timeout_seconds": { "type": "integer", "minimum": 1 },
         "barrier_timeout_seconds": { "type": "integer", "minimum": 1 },
+        "barrier_max_wait_seconds": { "type": "integer", "minimum": 1 },
         "init": { "$ref": "#/$defs/required_steps" },
         "patrol": {
           "type": "object",

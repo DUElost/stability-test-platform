@@ -44,6 +44,9 @@ class Plan(Base):
     # 而 init 受 permit cap 串行化 ⇒ 约 (ceil(N/C)−1)×T。含长耗时前置步骤
     # （自动刷机等）的 Plan 必须显式抬高，否则先做完的设备会被慢同伴连坐。
     barrier_timeout_seconds = Column(Integer, nullable=True)
+    # #174: progress-aware barrier 绝对硬顶（从首次等待起算，NULL = 不设上限）。
+    # 滑动窗 barrier_timeout_seconds 管「全体停滞」，本字段管「总等待时长」。
+    barrier_max_wait_seconds = Column(Integer, nullable=True)
     auto_archive_interval_seconds = Column(Integer, nullable=True)
     next_plan_id      = Column(Integer, ForeignKey("plan.id"), nullable=True)
     watcher_policy    = Column(JSONB, nullable=True)

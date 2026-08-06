@@ -1061,6 +1061,9 @@ class PipelineEngine:
             return not (self._is_lock_lost() or self._canceled)
         timeout = self._resolve_barrier_timeout()
         deadline = time.monotonic() + timeout
+        entered_at = time.monotonic()
+        max_wait = self._barrier_max_wait_seconds
+        renewal_count = 0
         coord = self._coordinator
         prh_id = self._plan_run_host_id
         assert coord is not None and prh_id is not None
@@ -1071,11 +1074,26 @@ class PipelineEngine:
             # 本身就是误判。只有所有 peer 都停滞才启动现有超时钟。
             if self._peers_are_progressing(coord):
                 deadline = time.monotonic() + timeout
-            remaining = deadline - time.monotonic()
+                renewal_count += 1
+            now = time.monotonic()
+            # #174: 绝对硬顶（如配置）与滑动窗取更早者。
+            absolute_deadline = (
+                entered_at + float(max_wait) if max_wait is not None else None
+            )
+            if absolute_deadline is not None:
+                remaining = min(deadline, absolute_deadline) - now
+            else:
+                remaining = deadline - now
             if remaining <= 0:
+                reason = "barrier_max_wait" if (
+                    absolute_deadline is not None and now >= absolute_deadline
+                ) else "barrier_timeout"
                 logger.error(
-                    "barrier_timeout run=%d prh=%s next=%s timeout=%.0fs",
+                    "barrier_timeout run=%d prh=%s next=%s timeout=%.0fs "
+                    "max_wait=%s elapsed=%.1fs renewals=%d reason=%s peers=%s",
                     self._run_id, prh_id, next_phase, timeout,
+                    max_wait, now - entered_at, renewal_count, reason,
+                    self._peer_state_snapshot(coord),
                 )
                 return False
             if coord.wait_barrier(prh_id, timeout=min(5.0, remaining)):
@@ -1084,6 +1102,20 @@ class PipelineEngine:
                     self._run_id, prh_id, next_phase,
                 )
                 return not (self._is_lock_lost() or self._canceled)
+
+    def _peer_state_snapshot(self, coord) -> str:
+        """#174: 硬顶/超时日志附 peer 状态快照，便于从现象反推等待原因。"""
+        try:
+            peers = coord.peers_of(self._run_id)
+            parts = []
+            for p in peers:
+                parts.append(
+                    f"{getattr(p, 'device_serial', '?')}:"
+                    f"{getattr(p, 'execution_state', '?')}"
+                )
+            return ",".join(parts) or "(none)"
+        except Exception:
+            return "(snapshot failed)"
     def _run_step_with_permit(
         self,
         phase: str,
@@ -1528,6 +1560,8 @@ class PipelineEngine:
         # Plan 级 barrier 超时（#117）。必须在进 init 之前取好：等待方在
         # _await_phase_barrier 里已经拿不到 lifecycle。
         self._barrier_timeout_seconds = lifecycle.get("barrier_timeout_seconds")
+        # #174: barrier 绝对硬顶（从首次进入等待起算；None = 不设上限）。
+        self._barrier_max_wait_seconds = lifecycle.get("barrier_max_wait_seconds")
         init_def = lifecycle["init"]
         patrol_def = lifecycle.get("patrol")
         teardown_def = lifecycle["teardown"]

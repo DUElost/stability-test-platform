@@ -260,6 +260,26 @@ class TestStallSecondsPipeline:
         ok, errors = validate_pipeline_def({"lifecycle": lc})
         assert ok, errors
 
+    def test_max_wait_flows_into_lifecycle_and_snapshot(self):
+        """#174: barrier_max_wait_seconds 随计划写入 lifecycle 与快照。"""
+        plan = _plan(barrier_max_wait_seconds=900)
+        lc = build_lifecycle_from_steps(plan, [_step()], _META)
+        assert lc["barrier_max_wait_seconds"] == 900
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+        snap = build_plan_snapshot(plan, [_step()], _META, 0.05)
+        assert snap["plan"]["barrier_max_wait_seconds"] == 900
+        lc2 = build_lifecycle_from_snapshot(snap)
+        assert lc2["barrier_max_wait_seconds"] == 900
+        assert validate_pipeline_def({"lifecycle": lc2})[0]
+
+    def test_null_max_wait_is_not_written(self):
+        """#174: 未配置时整键不写（Agent 保持无硬顶的 #117 行为）。"""
+        lc = build_lifecycle_from_steps(_plan(), [_step()], _META)
+        assert "barrier_max_wait_seconds" not in lc
+        assert validate_pipeline_def({"lifecycle": lc})[0]
+
     def test_patrol_stage_carries_stall_seconds(self):
         lc = build_lifecycle_from_steps(
             _plan(patrol_interval_seconds=60),
@@ -311,6 +331,30 @@ class TestStallSecondsApi:
     def test_create_and_read_back(self, client, auth_headers, sample_script, progress_script):
         plan = self._create(client, auth_headers, 120)
         assert plan["steps"][0]["stall_seconds"] == 120
+
+    def test_barrier_max_wait_roundtrip_and_clear(
+        self, client, auth_headers, sample_script,
+    ):
+        """#174: barrier_max_wait_seconds 创建/读回/清空往返。"""
+        resp = client.post("/api/v1/plans", json={
+            "name": "max-wait-roundtrip",
+            "steps": [{
+                "step_key": "check_device", "script_name": "check_device",
+                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "timeout_seconds": 30, "retry": 0, "enabled": True,
+            }],
+            "barrier_max_wait_seconds": 900,
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        pid = resp.json()["data"]["id"]
+        got = client.get(f"/api/v1/plans/{pid}", headers=auth_headers).json()["data"]
+        assert got["barrier_max_wait_seconds"] == 900
+
+        up = client.put(f"/api/v1/plans/{pid}", json={
+            "barrier_max_wait_seconds": None,
+        }, headers=auth_headers)
+        assert up.status_code == 200, up.text
+        assert up.json()["data"]["barrier_max_wait_seconds"] is None
 
     def test_omitted_defaults_to_null(self, client, auth_headers, sample_script):
         resp = client.post("/api/v1/plans", json={

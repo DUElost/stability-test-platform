@@ -115,10 +115,17 @@ class _BarrierEngine(_Engine):
     覆盖内部依赖：barrier 总启用、非最后到达、不锁丢失不取消。
     """
 
-    def __init__(self, run_id: int, prh_id: int, timeout: float):
+    def __init__(
+        self,
+        run_id: int,
+        prh_id: int,
+        timeout: float,
+        max_wait: float | None = None,
+    ):
         super().__init__(run_id)
         self._plan_run_host_id = prh_id
         self._barrier_timeout_seconds = timeout
+        self._barrier_max_wait_seconds = max_wait
         self._coordinator = self  # peers_of / wait_barrier 指向自己
         self._canceled = False
         self._peers = []
@@ -147,6 +154,7 @@ class _BarrierEngine(_Engine):
     _peers_are_progressing = PipelineEngine._peers_are_progressing
     _resolve_barrier_timeout = PipelineEngine._resolve_barrier_timeout
     _await_phase_barrier = PipelineEngine._await_phase_barrier
+    _peer_state_snapshot = PipelineEngine._peer_state_snapshot
 
 
 def _peer(coord, job_id, prh_id, state, progress_ts=None):
@@ -218,5 +226,45 @@ class TestBarrierRenewal:
             assert not thread.is_alive(), "停滞 peer 应在原 timeout 后返回"
             assert result == [False]
             assert eng._wait_calls >= 1
+        finally:
+            _time.sleep = real_sleep
+
+    def test_max_wait_hard_limit_fires_despite_renewal(self):
+        """#174: 配 barrier_max_wait_seconds 后，peer 持续推进也不能越过硬顶。"""
+        import threading
+        import time as _time
+
+        coord = _coord()
+        # 滑动窗 0.2s 会被 peer 推进无限续期；绝对硬顶 0.3s 必须先到。
+        eng = _BarrierEngine(run_id=1, prh_id=10, timeout=0.2, max_wait=0.3)
+        peer_view = _peer(coord, 2, 10, "EXECUTING_STEP", progress_ts=_NOW.isoformat())
+        eng._peers = [peer_view]
+
+        def _refresh():
+            coord.register_job(2, prh_id=10).update(
+                state="EXECUTING_STEP",
+                progress_ts=datetime.now(timezone.utc).isoformat(),
+            )
+
+        result: list = []
+        started = _time.monotonic()
+
+        def _run():
+            result.append(eng._await_phase_barrier("PATROL"))
+
+        real_sleep = _time.sleep
+        _time.sleep = lambda s: real_sleep(0.001)
+        try:
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+            # 持续推进 peer，直到硬顶把 barrier 打断
+            for _ in range(200):
+                _refresh()
+                _time.sleep(0.01)
+            thread.join(timeout=3)
+            elapsed = _time.monotonic() - started
+            assert not thread.is_alive(), "绝对硬顶必须打断续期"
+            assert result == [False], result
+            assert elapsed < 3.0, f"硬顶应远早于无限续期: {elapsed:.2f}s"
         finally:
             _time.sleep = real_sleep

@@ -80,6 +80,8 @@ class PlanCreate(BaseModel):
     # 含长耗时前置步骤的计划必须抬高：只有先到者在等，预算要覆盖同 host 的
     # init 落差 ≈ (ceil(设备数/permit_cap) − 1) × 单设备 init 耗时。
     barrier_timeout_seconds: Optional[int] = Field(default=None, ge=1)
+    # #174: barrier 绝对硬顶（从首次等待起算；None = 不设上限，保持 #117 行为）
+    barrier_max_wait_seconds: Optional[int] = Field(default=None, ge=1)
     auto_archive_interval_seconds: Optional[int] = Field(default=None, ge=1)
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
@@ -99,6 +101,8 @@ class PlanUpdate(BaseModel):
     # 含长耗时前置步骤的计划必须抬高：只有先到者在等，预算要覆盖同 host 的
     # init 落差 ≈ (ceil(设备数/permit_cap) − 1) × 单设备 init 耗时。
     barrier_timeout_seconds: Optional[int] = Field(default=None, ge=1)
+    # #174: 同 PlanCreate
+    barrier_max_wait_seconds: Optional[int] = Field(default=None, ge=1)
     auto_archive_interval_seconds: Optional[int] = Field(default=None, ge=1)
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
@@ -130,6 +134,7 @@ class PlanOut(BaseModel):
     patrol_interval_seconds: Optional[int] = None
     timeout_seconds: Optional[int] = None
     barrier_timeout_seconds: Optional[int] = None
+    barrier_max_wait_seconds: Optional[int] = None
     auto_archive_interval_seconds: Optional[int] = None
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
@@ -292,6 +297,7 @@ def _assemble_lifecycle_for_validation(
     patrol_interval_seconds: int | None,
     timeout_seconds: int | None,
     barrier_timeout_seconds: int | None = None,
+    barrier_max_wait_seconds: int | None = None,
 ) -> dict:
     """ADR-0020 §2：从 PlanStep 行 + 直列字段组装 lifecycle，仅用于 ``validate_pipeline_def``。
 
@@ -324,6 +330,8 @@ def _assemble_lifecycle_for_validation(
         lifecycle["timeout_seconds"] = timeout_seconds
     if barrier_timeout_seconds is not None:
         lifecycle["barrier_timeout_seconds"] = barrier_timeout_seconds
+    if barrier_max_wait_seconds is not None:
+        lifecycle["barrier_max_wait_seconds"] = barrier_max_wait_seconds
     # 停滞钟是逐步骤的,不配就整键不写 —— 否则 NULL 会让 schema 拒掉
     for step_def in lifecycle.get("init", []) + lifecycle.get("teardown", []):
         s = next((x for x in steps if x.step_key == step_def["step_id"]), None)
@@ -343,6 +351,7 @@ def _validate_assembled_lifecycle(
     patrol_interval_seconds: int | None,
     timeout_seconds: int | None,
     barrier_timeout_seconds: int | None = None,
+    barrier_max_wait_seconds: int | None = None,
 ) -> None:
     """先组装、再用统一的 pipeline_validator 校验。"""
     has_patrol_steps = any(
@@ -361,7 +370,8 @@ def _validate_assembled_lifecycle(
             },
         )
     lifecycle = _assemble_lifecycle_for_validation(
-        steps, patrol_interval_seconds, timeout_seconds, barrier_timeout_seconds
+        steps, patrol_interval_seconds, timeout_seconds, barrier_timeout_seconds,
+        barrier_max_wait_seconds,
     )
     is_valid, errors = validate_pipeline_def({"lifecycle": lifecycle})
     if not is_valid:
@@ -380,6 +390,7 @@ def _plan_out(plan: Plan, steps: list) -> PlanOut:
         patrol_interval_seconds=plan.patrol_interval_seconds,
         timeout_seconds=plan.timeout_seconds,
         barrier_timeout_seconds=plan.barrier_timeout_seconds,
+        barrier_max_wait_seconds=plan.barrier_max_wait_seconds,
         auto_archive_interval_seconds=plan.auto_archive_interval_seconds,
         next_plan_id=plan.next_plan_id,
         watcher_policy=plan.watcher_policy,
@@ -461,7 +472,7 @@ def create_plan(
     _validate_no_legacy_aee_scripts(payload.steps)
     _validate_assembled_lifecycle(
         payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds,
-        payload.barrier_timeout_seconds,
+        payload.barrier_timeout_seconds, payload.barrier_max_wait_seconds,
     )
     _validate_plan_dag(db, None, payload.next_plan_id)
     _validate_script_refs(db, payload.steps)
@@ -475,6 +486,7 @@ def create_plan(
         patrol_interval_seconds=payload.patrol_interval_seconds,
         timeout_seconds=payload.timeout_seconds,
         barrier_timeout_seconds=payload.barrier_timeout_seconds,
+        barrier_max_wait_seconds=payload.barrier_max_wait_seconds,
         auto_archive_interval_seconds=payload.auto_archive_interval_seconds,
         next_plan_id=payload.next_plan_id,
         watcher_policy=payload.watcher_policy,
@@ -574,6 +586,8 @@ def update_plan(
         plan.timeout_seconds = payload.timeout_seconds
     if "barrier_timeout_seconds" in fields_set:
         plan.barrier_timeout_seconds = payload.barrier_timeout_seconds
+    if "barrier_max_wait_seconds" in fields_set:
+        plan.barrier_max_wait_seconds = payload.barrier_max_wait_seconds
     if "auto_archive_interval_seconds" in fields_set:
         plan.auto_archive_interval_seconds = payload.auto_archive_interval_seconds
     if payload.watcher_policy is not None:
@@ -596,6 +610,7 @@ def update_plan(
             plan.patrol_interval_seconds,
             plan.timeout_seconds,
             plan.barrier_timeout_seconds,
+            plan.barrier_max_wait_seconds,
         )
         db.execute(text("DELETE FROM plan_step WHERE plan_id = :pid"), {"pid": plan_id})
         now = datetime.now(timezone.utc)
