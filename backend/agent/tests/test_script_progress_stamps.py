@@ -1,10 +1,11 @@
-"""monkey_setup v2.3.4 的 PROGRESS 打戳与 `_pump_lines` 捕获上限
+"""monkey_setup v2.3.5 的 PROGRESS 打戳与 `_pump_lines` 捕获上限
 （#115 阶段 2 / #133 / #138 / #139 / #140 / #147 收尾）。
 
 用**假 adb 可执行**验证 `adb_push_progress` / `_dd_with_progress`，不碰真设备。
 
-v2.3.4 相对 v2.3.3 仅增 `_pump_lines` 8MiB 两流合计捕获上限（#147），
-打戳行为相同（capabilities.json 声明一致，白名单同步登记），故钉到最新版。
+v2.3.5 相对 v2.3.4：`_pump_lines` 改为原子预留剩余容量，单行或并发两流
+都不再越过 `_MAX_CAPTURED_CHARS`（#182）。打戳行为不变，
+capabilities.json 声明一致。
 
 关键背景（真机实测 2026-08-03）：
   1. adb push 在非 TTY 下**不输出**进度行 —— 解析输出打戳无效；
@@ -25,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.4"
+_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.5"
 
 
 def _load_module(name: str, path: Path):
@@ -43,9 +44,9 @@ def _load_module(name: str, path: Path):
 
 
 # monkey_setup 模块级 `from _adb import ...`，必须先把 _adb 放进 sys.modules
-_adb = _load_module("_adb_v234", _SCRIPT_DIR / "_adb.py")
+_adb = _load_module("_adb_v235", _SCRIPT_DIR / "_adb.py")
 sys.modules["_adb"] = _adb
-monkey_setup = _load_module("monkey_setup_v234", _SCRIPT_DIR / "monkey_setup.py")
+monkey_setup = _load_module("monkey_setup_v235", _SCRIPT_DIR / "monkey_setup.py")
 
 
 @pytest.fixture
@@ -389,8 +390,8 @@ class TestPumpLinesCaptureLimit:
     """#147 收尾：脚本侧 `_pump_lines` 8MiB 捕获上限直接单测。
 
     引擎侧同款防护（pipeline_engine._MAX_CAPTURED_CHARS）已有
-    test_step_stall_detection.py 覆盖；v2.3.4 为脚本侧补上同款保护后，
-    这里是它的契约验证：
+    test_step_stall_detection.py 覆盖；v2.3.5 在脚本侧把该保护收口为
+    原子预留容量，这里是它的契约验证：
       - 两流合计超过 _MAX_CAPTURED_CHARS 后停止收集，但**继续读取**
         ——用 >64KB（管道缓冲）的输出证明子进程不被写阻塞（能正常写完退出）；
       - on_line 回调不受上限影响——PROGRESS 打戳不能因内存上限丢失；
@@ -445,9 +446,10 @@ class TestPumpLinesCaptureLimit:
         seen: list[str] = []
         collected = self._pump(proc, seen, caplog)
         assert proc.poll() is not None, "管道未被持续读取，子进程被写阻塞"
-        # 每行 1025 字符（1KB + \n）、上限 2KB → 恰收 2 行，第 3 行起丢弃
+        # 每行 1025 字符（1KB + \n）、上限 2KB → 第 1 行完整，第 2 行按剩余
+        # 容量截断，第 3 行起丢弃；收集内容不得超过上限
         assert len(collected) == 2
-        assert sum(len(line) for line in collected) == 2050
+        assert sum(len(line) for line in collected) <= _adb._MAX_CAPTURED_CHARS
         assert len(seen) == 100, "on_line 必须收到全部行（PROGRESS 打戳不丢）"
         assert len(self._capture_warnings(caplog)) == 1, "首次截断只打一条 warning"
 
@@ -461,9 +463,8 @@ class TestPumpLinesCaptureLimit:
         collected = self._pump(proc, seen, caplog)
         assert proc.poll() is not None, "管道未被持续读取，子进程被写阻塞"
         total = sum(len(line) for line in collected)
-        # 两 reader 线程共享 captured_chars，跨线程存在单行越界竞态，
-        # 允许最多越界一行（1025）；但绝不允许按流各收 2 行（4100）
-        assert 2050 <= total <= 2050 + 1025, total
+        # 两 reader 线程通过锁共享 captured_chars，任何时刻都不允许越界
+        assert total <= _adb._MAX_CAPTURED_CHARS, total
         assert len(seen) == 200, "on_line 必须收到全部行"
         assert len(self._capture_warnings(caplog)) == 1
 

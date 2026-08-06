@@ -161,6 +161,7 @@ def test_repo_catalog_parity_after_scan(db_session: Session):
     # 保留显式锚点，防止阈值规则本身被误改。
     assert script_supports_progress(db_session, "monkey_setup", "2.3.1")
     assert script_supports_progress(db_session, "monkey_setup", "2.3.4")
+    assert script_supports_progress(db_session, "monkey_setup", "2.3.5")
     assert script_supports_progress(db_session, "flash_firmware", "1.1.0")
     assert not script_supports_progress(db_session, "monkey_setup", "2.2.0")
     assert not script_supports_progress(db_session, "monkey_setup", "2.3.0")
