@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import List
 
@@ -31,6 +32,13 @@ def _extract_pipeline_def(data: dict) -> dict:
     if isinstance(lifecycle, dict):
         return {"lifecycle": lifecycle}
     return data
+
+
+_TEMPLATE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def _is_safe_template_name(name: str) -> bool:
+    return bool(_TEMPLATE_NAME_RE.fullmatch(name or ""))
 
 
 def _load_template(path: Path) -> PipelineTemplateOut:
@@ -70,7 +78,7 @@ def get_pipeline_template(
     _current_user: User = Depends(get_current_active_user),
 ):
     """Get a specific pipeline template by name."""
-    if _is_hidden_template_name(name):
+    if _is_hidden_template_name(name) or not _is_safe_template_name(name):
         raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
     path = TEMPLATES_DIR / f"{name}.json"
     if not path.exists():

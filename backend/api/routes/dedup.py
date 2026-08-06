@@ -193,10 +193,17 @@ async def start_jira_run(
     if source == "upload":
         if file is None or not (file.filename or "").strip():
             raise HTTPException(status_code=400, detail="a file is required (.xls/.xlsx) for source=upload")
-        dest = (_work_dir() / f"{vendor}_{stage}_{file.filename}").resolve()
+        raw_name = (file.filename or "").strip()
+        safe_name = Path(raw_name).name
+        if not safe_name or Path(safe_name).suffix.lower() not in {".xls", ".xlsx"}:
+            raise HTTPException(status_code=400, detail="file must be .xls/.xlsx")
+        work_root = _work_dir().resolve()
+        dest = (work_root / f"{vendor}_{stage}_{safe_name}").resolve()
+        if not dest.is_relative_to(work_root):
+            raise HTTPException(status_code=400, detail="invalid upload filename")
         dest.write_bytes(await file.read())
         input_xls = str(dest)
-        input_source_label = file.filename or "upload"
+        input_source_label = safe_name
     else:  # source == "plan_run"
         if artifact_id is None:
             raise HTTPException(status_code=400, detail="artifact_id is required for source=plan_run")
