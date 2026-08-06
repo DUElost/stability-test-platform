@@ -8,9 +8,9 @@ tone_instructions: |
   CSRF/鉴权边界、密钥泄漏、权限逃逸；风格类 nitpick 降级或跳过。
 reviews:
   profile: assertive
-  # 开启 request-changes workflow：无未解决评论且 pre-merge checks 全过时，
-  # CodeRabbit 自动提交 APPROVE，满足 main 分支保护的 1 个 approving review，
-  # 使常规 PR 合入无人值守；有阻塞意见时仍 request changes 挡合入。
+  # request_changes_workflow：仅当可操作的 CodeRabbit 评论已解决且没有失败的
+  # CodeRabbit pre-merge check 时自动提交 APPROVE。它不代表所有人工评论或
+  # GitHub required status checks 已完成，也不改变 main 分支保护的审批要求。
   request_changes_workflow: true
   path_instructions:
     - path: "backend/**"
