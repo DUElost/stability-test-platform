@@ -4,6 +4,11 @@ on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
 
+# 同一 PR 的并发运行只保留最新一个，避免重复写操作。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 # 不给整个 workflow 写权限；enable-auto-merge job 单独声明最小写权限。
 permissions:
   {}
@@ -66,18 +71,21 @@ jobs:
             exit 0
           fi
 
-          # 等 CodeRabbit 在该 commit 上留下状态（最多 5 分钟），再判定是否 rate limited。
+          # 等 CodeRabbit 在该 commit 上的状态落定（最多 15 分钟）：
+          # in progress → 继续等；rate limited / completed / 其他 → 停止轮询。
           desc=""
-          for _ in $(seq 1 30); do
+          for _ in $(seq 1 90); do
             desc="$(
               gh api "repos/$REPO_OWNER/$REPO_NAME/commits/$HEAD_SHA/status" \
                 --jq '[.statuses[] | select(.context == "CodeRabbit")][0].description // ""'
             )"
-            [ -n "$desc" ] && break
+            if [ -n "$desc" ] && ! printf '%s' "$desc" | grep -qi 'in.progress'; then
+              break
+            fi
             sleep 10
           done
-          if [ -z "$desc" ]; then
-            echo "No CodeRabbit status yet; fail closed"
+          if [ -z "$desc" ] || printf '%s' "$desc" | grep -qi 'in.progress'; then
+            echo "CodeRabbit status never settled; fail closed"
             exit 0
           fi
           if ! printf '%s' "$desc" | grep -qi 'rate.limit'; then
