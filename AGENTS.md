@@ -49,7 +49,7 @@ CI 有阻塞式门禁；本地钩子需一次性启用：`git config core.hooksP
 | 场景 | 做法 |
 |------|------|
 | 日常改码验证 | 优先 `pytest backend/agent/tests/`（不连 PG，~30s） |
-| 必须跑 `backend/tests/` | 使用 **Docker testcontainers**（`conftest.py` 自动起临时 `postgres:16` 容器），**不要**把 `TEST_DATABASE_URL` 指到 `stp_dev` 或任何生产库名 |
+| 必须跑 `backend/tests/` | 使用 **Docker testcontainers**（`conftest.py` 自动起临时 `postgres:16` 容器），**不要**把 `TEST_DATABASE_URL` 指到 `stp_dev`（docker-compose 开发栈容器库名，本机 PG 无此库）或任何生产库名 |
 | 迁移试验 | 禁止对生产库执行 `alembic upgrade` 试跑；在开发机/CI 或容器内验证 |
 | 手工 API 冒烟 | 可连生产控制面，但避免破坏性写操作 |
 
@@ -64,7 +64,7 @@ CI 有阻塞式门禁；本地钩子需一次性启用：`git config core.hooksP
 **禁止示例**（会在生产数据上建表/清库/跑用例）：
 
 ```bash
-# ❌ 切勿在生产机这样跑后端测试
+# ❌ 切勿在生产机这样跑后端测试（stp_dev 是 docker-compose 容器库名，本机 PG 无此库）
 export TEST_DATABASE_URL=postgresql+psycopg://...@127.0.0.1:5432/stp_dev
 pytest backend/tests/
 ```

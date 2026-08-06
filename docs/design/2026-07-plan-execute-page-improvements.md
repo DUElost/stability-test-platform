@@ -396,7 +396,7 @@ URL query（P1 完整落地；A 至少支持 `plan` / `devices` / `view`）：
 
 1. `cd frontend && npx vitest run src/pages/execution/PlanExecutePage.test.tsx src/components/execution/plan-execute/`
 2. `cd frontend && npx tsc --noEmit && npm run build`
-3. 无后端变更则不必跑 `backend/tests/`；禁止把 `TEST_DATABASE_URL` 指本机 `stp_dev`
+3. 无后端变更则不必跑 `backend/tests/`；禁止把 `TEST_DATABASE_URL` 指本机 `stp_dev`（docker-compose 容器库名，本机 PG 无此库）
 
 **手工 / 真实环境**：
 
