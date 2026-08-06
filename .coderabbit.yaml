@@ -1,0 +1,25 @@
+# CodeRabbit review tuning: assertive volume + security-focused instructions.
+# reviews.profile only supports quiet | chill | assertive (no security profile).
+# See https://docs.coderabbit.ai/reference/configuration
+
+language: zh-CN
+tone_instructions: |
+  聚焦安全与正确性：优先指出路径穿越、注入、不安全的临时文件/解压、
+  CSRF/鉴权边界、密钥泄漏、权限逃逸；风格类 nitpick 降级或跳过。
+reviews:
+  profile: assertive
+  path_instructions:
+    - path: "backend/**"
+      instructions: |
+        按 OWASP 视角审查：文件路径必须限制在受控根目录、上传文件名必须
+        消毒、临时文件用安全 API、DB 迁移必须可回滚且不碰生产数据。
+    - path: "backend/agent/**"
+      instructions: |
+        重点看子进程执行、adb/ssh 命令拼接、NFS/CIFS 路径构造、超时与
+        并发回收，避免路径穿越与命令注入。
+    - path: "backend/alembic/**"
+      instructions: |
+        迁移必须幂等、SQL 语法先自测、不直连生产库、不回填敏感数据。
+    - path: "frontend/src/**"
+      instructions: |
+        重点看 XSS、危险 URL/iframe、客户端密钥与 token 泄漏。

@@ -38,6 +38,7 @@ from backend.api.routes.agent_api import (
     _OutboxEntry,
     _RecoverySyncIn,
     _RunCompleteIn,
+    _StepStatusIn,
     _agent_version_is_supported,
     _claim_jobs_for_host,
     ClaimRequest,
@@ -50,6 +51,7 @@ from backend.api.routes.agent_api import (
     job_heartbeat,
     recovery_sync,
     update_job_status,
+    update_job_step_status,
     upload_step_traces,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal
@@ -1073,6 +1075,67 @@ async def test_upload_step_traces_failed_event_keeps_job_running(stage: str):
                 _=None,
             )
         assert extend_result.error is None
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_update_job_step_status_preserves_later_transition_fields():
+    """#175 CodeRabbit: 单步 status 的多次迁移必须各自保留 exit_code/metadata。
+
+    trace_event_id 未显式提供时按载荷派生稳定 id，RUNNING 与 FAILED 是
+    两条独立 trace；FAILED 的 exit_code=125 / timeout_kind 不能被唯一约束吃掉。
+    """
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lock_and_lease(seed)
+    try:
+        async with AsyncSessionLocal() as async_db:
+            running = await update_job_step_status(
+                job_id=seed["job_id"],
+                step_id="flash",
+                payload=_StepStatusIn(
+                    status="RUNNING",
+                    started_at="2026-08-06T07:00:00+00:00",
+                    fencing_token=token,
+                ),
+                db=async_db,
+                _=None,
+            )
+            failed = await update_job_step_status(
+                job_id=seed["job_id"],
+                step_id="flash",
+                payload=_StepStatusIn(
+                    status="FAILED",
+                    started_at="2026-08-06T07:01:00+00:00",
+                    exit_code=125,
+                    error_message="script stalled after 1s",
+                    metadata={"timeout_kind": "stall"},
+                    fencing_token=token,
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert running.error is None
+        assert failed.error is None
+
+        db = SessionLocal()
+        try:
+            traces = (
+                db.query(StepTrace)
+                .filter(
+                    StepTrace.job_id == seed["job_id"],
+                    StepTrace.step_id == "flash",
+                )
+                .order_by(StepTrace.original_ts)
+                .all()
+            )
+            assert len(traces) == 2
+            assert [t.status for t in traces] == ["RUNNING", "FAILED"]
+            failed_trace = traces[1]
+            assert failed_trace.exit_code == 125
+            assert failed_trace.step_metadata == {"timeout_kind": "stall"}
+        finally:
+            db.close()
     finally:
         _cleanup_seed(seed)
 
