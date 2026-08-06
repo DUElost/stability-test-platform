@@ -89,3 +89,16 @@ def test_get_pipeline_template_rejects_legacy_alias_even_if_file_exists(tmp_path
         pipeline_routes.get_pipeline_template("monkey_aee_patrol")
 
     assert excinfo.value.status_code == 404
+
+
+def test_get_pipeline_template_rejects_path_traversal_like_names(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_routes, "TEMPLATES_DIR", tmp_path)
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "b.json").write_text(
+        json.dumps({"description": "Nested", "lifecycle": {"init": []}}),
+        encoding="utf-8",
+    )
+    for name in ("..", "../secret", "a/b", "a\\b", "bad name"):
+        with pytest.raises(HTTPException) as excinfo:
+            pipeline_routes.get_pipeline_template(name)
+        assert excinfo.value.status_code == 404
