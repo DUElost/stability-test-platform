@@ -3,13 +3,15 @@ name: Enable auto-merge
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
 
 # 同一 PR 的并发运行只保留最新一个，避免重复写操作。
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-# 不给整个 workflow 写权限；enable-auto-merge job 单独声明最小写权限。
+# 不给整个 workflow 写权限；各 job 单独声明最小权限。
 permissions:
   {}
 
@@ -41,40 +43,60 @@ jobs:
             gh pr merge "$PR_URL" --auto --merge
           fi
 
-  fallback-approval:
-    # CodeRabbit 被 rate limit 挡住时排除 CodeRabbit：由 github-actions[bot]
-    # 提交 APPROVE，合入仍由 required checks + auto-merge 把关。
-    # CodeRabbit 明确 CHANGES_REQUESTED 时绝不绕过。
+  code-rabbit-gate:
+    # 准入门禁：CodeRabbit APPROVED → success；CHANGES_REQUESTED → failure；
+    # rate limited → success（按仓库策略排除 CodeRabbit，由 required checks 把关）；
+    # 其他状态 → pending/failure，fail-closed。
     if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write
+      pull-requests: read
+      statuses: write
     steps:
-      - name: Fallback approval on CodeRabbit rate limit
+      - name: Set code-rabbit-gate status
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          latest_state="$(
+          set_status() {
+            local state="$1" desc="$2"
+            gh api -X POST "repos/$REPO_OWNER/$REPO_NAME/statuses/$HEAD_SHA" \
+              -f state="$state" -f context=code-rabbit-gate -f description="$desc" >/dev/null
+          }
+          latest_state() {
             gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
               --jq '[.[] | select(.user.login == "coderabbitai")][-1].state // ""'
-          )"
-          if [ "$latest_state" = "APPROVED" ]; then
-            echo "CodeRabbit already approved; nothing to do"
-            exit 0
-          fi
-          if [ "$latest_state" = "CHANGES_REQUESTED" ]; then
-            echo "CodeRabbit explicitly requested changes; fallback skipped"
+          }
+
+          # 评审提交事件：直接按最新 review 状态定门禁。
+          if [ "$EVENT_NAME" = "pull_request_review" ]; then
+            state="$(latest_state)"
+            case "$state" in
+              APPROVED) set_status success "CodeRabbit approved" ;;
+              CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
+              *) set_status pending "CodeRabbit review pending" ;;
+            esac
             exit 0
           fi
 
-          # 等 CodeRabbit 在该 commit 上的状态落定（最多 15 分钟）：
+          state="$(latest_state)"
+          if [ "$state" = "CHANGES_REQUESTED" ]; then
+            set_status failure "CodeRabbit requested changes"
+            exit 0
+          fi
+          if [ "$state" = "APPROVED" ]; then
+            set_status success "CodeRabbit approved"
+            exit 0
+          fi
+
+          # 等 CodeRabbit 在该 commit 上的状态落定（最多 10 分钟）：
           # in progress → 继续等；rate limited / completed / 其他 → 停止轮询。
           desc=""
-          for _ in $(seq 1 90); do
+          for _ in $(seq 1 60); do
             desc="$(
               gh api "repos/$REPO_OWNER/$REPO_NAME/commits/$HEAD_SHA/status" \
                 --jq '[.statuses[] | select(.context == "CodeRabbit")][0].description // ""'
@@ -85,15 +107,17 @@ jobs:
             sleep 10
           done
           if [ -z "$desc" ] || printf '%s' "$desc" | grep -qi 'in.progress'; then
-            echo "CodeRabbit status never settled; fail closed"
+            set_status pending "Waiting for CodeRabbit review or rate-limit decision"
             exit 0
           fi
-          if ! printf '%s' "$desc" | grep -qi 'rate.limit'; then
-            echo "CodeRabbit not rate-limited: $desc; fallback skipped"
+          if printf '%s' "$desc" | grep -qi 'rate.limit'; then
+            set_status success "CodeRabbit rate limited; required checks gate merge"
             exit 0
           fi
 
-          echo "CodeRabbit rate limited: $desc; submitting fallback approval"
-          gh api -X POST "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-            -f event=APPROVE \
-            -f body="CodeRabbit 当前被 rate limit 挡住（$desc），按仓库策略降级为自动批准；合入仍由 required checks + auto-merge 把关。"
+          state="$(latest_state)"
+          case "$state" in
+            APPROVED) set_status success "CodeRabbit approved" ;;
+            CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
+            *) set_status failure "CodeRabbit review unexpected state: $state" ;;
+          esac
