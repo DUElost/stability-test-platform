@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -13,10 +15,16 @@ from sqlalchemy.orm import Session
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.script import Script
 
+logger = logging.getLogger(__name__)
+
 _SUPPORTED_SUFFIXES = {
     ".py": "python",
     ".sh": "shell",
 }
+
+_CAPABILITIES_FILE = "capabilities.json"
+
+
 @dataclass
 class ScriptScanResult:
     created: int = 0
@@ -97,6 +105,36 @@ def support_files_manifest(version_dir: Path, entry: Path) -> dict[str, str]:
     return manifest
 
 
+def read_capabilities(version_dir: Path) -> list[str]:
+    """Read ``capabilities.json`` from a version directory (e.g. ``progress_stamps``).
+
+    Missing or malformed metadata is treated as "no capabilities" — a version
+    that declares nothing must not pass capability-gated validation. Only
+    non-empty strings are kept and returned sorted for stable comparisons.
+    """
+    meta = version_dir / _CAPABILITIES_FILE
+    if not meta.is_file():
+        return []
+    try:
+        data = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning(
+            "script_capabilities_metadata_unreadable dir=%s",
+            version_dir,
+        )
+        return []
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("capabilities")
+    if not isinstance(raw, list):
+        return []
+    return sorted({
+        str(cap).strip()
+        for cap in raw
+        if isinstance(cap, str) and cap.strip()
+    })
+
+
 def _is_under_root(path: str, root: Path) -> bool:
     try:
         Path(path).resolve().relative_to(root)
@@ -160,6 +198,7 @@ def scan_script_root(
         seen_keys.add(key)
         content_sha256 = sha256_file(entry)
         support_manifest = support_files_manifest(entry.parent, entry)
+        capabilities = read_capabilities(entry.parent)
         existing = existing_by_key.get(key)
 
         if existing is None:
@@ -172,6 +211,7 @@ def scan_script_root(
                 nfs_path=_runtime_path(root_path, entry, runtime_root),
                 content_sha256=content_sha256,
                 support_files_manifest=support_manifest,
+                capabilities=capabilities,
                 param_schema={},
                 default_params={},
                 is_active=True,
@@ -182,9 +222,11 @@ def scan_script_root(
             continue
 
         stored_manifest = dict(existing.support_files_manifest or {})
+        stored_capabilities = list(existing.capabilities or [])
         entry_changed = existing.content_sha256 != content_sha256
         support_changed = stored_manifest != support_manifest
-        if entry_changed or support_changed:
+        capabilities_changed = stored_capabilities != capabilities
+        if entry_changed or support_changed or capabilities_changed:
             if (
                 not force_rebaseline
                 and not entry_changed
@@ -197,17 +239,35 @@ def scan_script_root(
                 existing.updated_at = now
                 result.skipped += 1
                 continue
+            if (
+                not force_rebaseline
+                and not entry_changed
+                and not support_changed
+                and not stored_capabilities
+                and capabilities
+            ):
+                # First scan after capability metadata shipped: backfill
+                # silently instead of treating the new column as a conflict.
+                existing.capabilities = capabilities
+                existing.updated_at = now
+                result.skipped += 1
+                continue
             if not force_rebaseline:
                 result.conflicts.append({"name": name, "version": version})
                 continue
-            result.rebaselined.append({
+            rebaseline_entry = {
                 "name": name,
                 "version": version,
                 "old_sha256": existing.content_sha256 or "",
                 "new_sha256": content_sha256,
-            })
+            }
+            if capabilities_changed:
+                rebaseline_entry["old_capabilities"] = stored_capabilities
+                rebaseline_entry["new_capabilities"] = capabilities
+            result.rebaselined.append(rebaseline_entry)
             existing.content_sha256 = content_sha256
             existing.support_files_manifest = support_manifest
+            existing.capabilities = capabilities
             existing.nfs_path = _runtime_path(root_path, entry, runtime_root)
             existing.is_active = True
             existing.updated_at = now

@@ -74,6 +74,8 @@ class StepTraceWriter:
         status: str,
         output: Optional[str] = None,
         error_message: Optional[str] = None,
+        exit_code: Optional[int] = None,
+        metadata: Optional[dict] = None,
         fencing_token: str = "",
         trace_event_id: str = "",
     ) -> Optional[int]:
@@ -90,6 +92,8 @@ class StepTraceWriter:
                     status=status,
                     output=output,
                     error_message=error_message,
+                    exit_code=exit_code,
+                    metadata=metadata,
                     original_ts=_dt.fromisoformat(ts.replace("Z", "+00:00")),
                     fencing_token=fencing_token,
                     trace_event_id=trace_event_id,

@@ -37,6 +37,8 @@ class StepTraceOut(BaseModel):
     status: str
     output: Optional[str] = None
     error_message: Optional[str] = None
+    exit_code: Optional[int] = None
+    metadata: Optional[dict] = None
     original_ts: str
     created_at: str
 

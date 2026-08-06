@@ -17,7 +17,7 @@ import pytest
 import requests
 
 from backend.agent.registry.local_db import LocalDB
-from backend.agent.step_trace_uploader import StepTraceUploader
+from backend.agent.step_trace_uploader import StepTraceUploader, _to_payload
 
 
 # ── LocalDB schema + helpers ───────────────────────────────────────────────
@@ -41,6 +41,8 @@ def test_step_trace_cache_schema_includes_attempts_columns(local_db):
     assert "attempts" in cols
     assert "last_error" in cols
     assert "dead_letter" in cols
+    assert "exit_code" in cols
+    assert "metadata" in cols
 
 
 def test_ensure_step_trace_schema_is_idempotent(local_db):
@@ -57,8 +59,28 @@ def test_ensure_step_trace_schema_is_idempotent(local_db):
             ).fetchall()
         }
         assert {"attempts", "last_error", "dead_letter"} <= cols
+        assert {"exit_code", "metadata"} <= cols
     finally:
         db2.close()
+
+
+def test_step_trace_roundtrip_preserves_exit_code_and_metadata(local_db):
+    tid = local_db.save_step_trace(
+        job_id=7,
+        step_id="flash",
+        stage="init",
+        event_type="FAILED",
+        status="FAILED",
+        error_message="script stalled",
+        exit_code=125,
+        metadata={"timeout_kind": "stall"},
+    )
+    rows = local_db.get_unacked_traces()
+    assert [r["id"] for r in rows] == [tid]
+
+    payload = _to_payload(rows[0])
+    assert payload["exit_code"] == 125
+    assert payload["metadata"] == {"timeout_kind": "stall"}
 
 
 def test_bump_step_trace_attempt_returns_new_count(local_db):

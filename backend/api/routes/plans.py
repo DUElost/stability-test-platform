@@ -214,19 +214,22 @@ def _validate_script_refs(db: Session, steps: list[PlanStepIn]) -> None:
         )
 
 
-def _validate_stall_seconds_capability(steps: list[PlanStepIn]) -> None:
+def _validate_stall_seconds_capability(
+    steps: list[PlanStepIn],
+    db: Session,
+) -> None:
     """#136: ``stall_seconds > 0`` 要求脚本版本已接入 PROGRESS 打戳。
 
     停滞钟只认 stderr 的 PROGRESS 戳；引用旧版脚本（如 monkey_setup v2.2.0
-    及更早）时打开停滞钟会在长静默段误杀。白名单见
-    ``backend/services/script_progress_capability.py``。
+    及更早）时打开停滞钟会在长静默段误杀。能力来自 script 表
+    ``capabilities`` 列（#171，由版本目录 capabilities.json 登记）。
     """
     unsafe = sorted({
         f"{s.script_name}:{s.script_version}"
         for s in steps
         if s.stall_seconds is not None
         and s.stall_seconds > 0
-        and not script_supports_progress(s.script_name, s.script_version)
+        and not script_supports_progress(db, s.script_name, s.script_version)
     })
     if unsafe:
         raise HTTPException(
@@ -462,7 +465,7 @@ def create_plan(
     )
     _validate_plan_dag(db, None, payload.next_plan_id)
     _validate_script_refs(db, payload.steps)
-    _validate_stall_seconds_capability(payload.steps)
+    _validate_stall_seconds_capability(payload.steps, db)
 
     now = datetime.now(timezone.utc)
     plan = Plan(
@@ -587,7 +590,7 @@ def update_plan(
     if payload.steps is not None:
         _validate_no_legacy_aee_scripts(payload.steps)
         _validate_script_refs(db, payload.steps)
-        _validate_stall_seconds_capability(payload.steps)
+        _validate_stall_seconds_capability(payload.steps, db)
         _validate_assembled_lifecycle(
             payload.steps,
             plan.patrol_interval_seconds,

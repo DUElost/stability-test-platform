@@ -1029,6 +1029,8 @@ async def test_upload_step_traces_failed_event_keeps_job_running(stage: str):
                         event_type="FAILED",
                         status="FAILED",
                         error_message=f"{stage} replay failure",
+                        exit_code=125,
+                        metadata={"timeout_kind": "stall"},
                         fencing_token=token,
                     )
                 ],
@@ -1058,6 +1060,8 @@ async def test_upload_step_traces_failed_event_keeps_job_running(stage: str):
             assert trace is not None
             assert trace.stage == stage
             assert trace.error_message == f"{stage} replay failure"
+            assert trace.exit_code == 125
+            assert trace.step_metadata == {"timeout_kind": "stall"}
         finally:
             db.close()
 

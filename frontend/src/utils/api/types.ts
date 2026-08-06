@@ -725,6 +725,8 @@ export interface StepTrace {
   status: string;
   output?: string | null;
   error_message?: string | null;
+  exit_code?: number | null;
+  metadata?: Record<string, unknown> | null;
   original_ts: string;
   created_at: string;
 }

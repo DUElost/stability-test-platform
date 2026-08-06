@@ -108,7 +108,14 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 | **A**（高） | ANR ≥ 10 / JE ≥ 3 / NE ≥ 2 / Java ≥ 3 |
 | **B**（低） | 其余非零 |
 
-**NFS 路径约定**（控制面与 Agent 共用）：`{STP_AEE_NFS_ROOT}/dedup/{run_id}/`（扫描报告）+ `devices/{run_id}/`（事件目录）+ `jira/{run_id}/`（extract 输出）。
+**NFS 路径约定**（控制面与 Agent 共用，统一入口见 `backend/agent/aee/paths.py`，#172）：
+
+| 对象族 | 布局 |
+|--------|------|
+| JobArtifact 文件（watcher puller 默认落点 + LOCAL promote） | `{root}/jobs/{job_id}/` |
+| 事件目录（upload_manager 上送） | `{root}/devices/{plan_run_id}/` |
+| 事件目录（HddSpillMonitor 溢出） | `{root}/devices/{hdd 相对路径}/` |
+| 扫描报告 / extract 输出 | `{root}/dedup/{run_id}/`、`{root}/jira/{run_id}/` |
 
 ## Agent 子系统细则（按需加载）
 

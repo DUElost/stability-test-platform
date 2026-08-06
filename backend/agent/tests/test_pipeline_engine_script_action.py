@@ -231,10 +231,12 @@ def test_pipeline_engine_script_stall_returns_125(tmp_path):
         tmp_path / "silent_sleep.py",
         "import time\ntime.sleep(30)\n",
     )
+    mq = FakeMQ()
     engine = PipelineEngine(
         adb=SimpleNamespace(adb_path=sys.executable),
         serial="SERIAL001",
         run_id=42,
+        mq_producer=mq,
         script_registry=FakeScriptRegistry(script),
     )
 
@@ -254,6 +256,13 @@ def test_pipeline_engine_script_stall_returns_125(tmp_path):
     assert result.exit_code == 125
     assert "stalled" in result.error_message
     assert result.metadata == {"timeout_kind": "stall"}
+    failed_traces = [
+        t for t in mq.traces
+        if t.get("event_type") == "FAILED"
+    ]
+    assert failed_traces
+    assert failed_traces[-1]["exit_code"] == 125
+    assert failed_traces[-1]["metadata"] == {"timeout_kind": "stall"}
 
 
 def test_pipeline_engine_rejects_windows_batch_script_action():

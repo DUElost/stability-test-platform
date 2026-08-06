@@ -779,6 +779,52 @@ class TestEventsEndpoint:
         for e in patrol_failures:
             assert "patrol" in e["stage"] or "init" in e["stage"]
 
+    def test_events_step_failure_exposes_timeout_kind_and_exit_code(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """#173: 停滞超时（exit 125 + timeout_kind=stall）要在前端事件里可见。"""
+        cur_run = chain_setup["current_run"]
+        j2 = chain_setup["job_running"]
+        db_session.add(StepTrace(
+            job_id=j2.id,
+            step_id="flash_timeout",
+            stage="init",
+            event_type="FAILED",
+            status="FAILED",
+            error_message="script stalled after 1s",
+            exit_code=125,
+            step_metadata={"timeout_kind": "stall"},
+            original_ts=_now() - timedelta(seconds=20),
+        ))
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/events", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        events = resp.json()["data"]["events"]
+        timeout_events = [
+            e for e in events
+            if e["category"] == "step"
+            and "flash_timeout" in e["title"]
+        ]
+        assert len(timeout_events) == 1
+        assert "[exit=125, timeout_kind=stall]" in timeout_events[0]["description"]
+
+        jobs_resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/jobs", headers=auth_headers,
+        )
+        assert jobs_resp.status_code == 200
+        job_rows = jobs_resp.json()["data"]
+        job_row = next(j for j in job_rows if j["id"] == j2.id)
+        trace_rows = job_row.get("step_traces") or []
+        timeout_trace = next(
+            t for t in trace_rows
+            if t["step_id"] == "flash_timeout"
+        )
+        assert timeout_trace["exit_code"] == 125
+        assert timeout_trace["metadata"] == {"timeout_kind": "stall"}
+
 
 # ---------------------------------------------------------------------------
 # /devices

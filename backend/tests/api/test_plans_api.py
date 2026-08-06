@@ -727,13 +727,22 @@ class TestPlanRunWifiChoice:
         assert resp.status_code == 400, resp.text
 
 
-def _ensure_script(db_session, name: str, version: str) -> None:
+def _ensure_script(
+    db_session,
+    name: str,
+    version: str,
+    *,
+    capabilities=None,
+) -> None:
     from backend.models.script import Script
 
     existing = db_session.query(Script).filter(
         Script.name == name, Script.version == version
     ).first()
     if existing:
+        if capabilities is not None:
+            existing.capabilities = capabilities
+            db_session.commit()
         return
     db_session.add(Script(
         name=name,
@@ -741,6 +750,7 @@ def _ensure_script(db_session, name: str, version: str) -> None:
         version=version,
         nfs_path=f"/nfs/scripts/{name}/{version}",
         content_sha256="2" * 64,
+        capabilities=capabilities or [],
         is_active=True,
         default_params={},
         param_schema={},
@@ -768,7 +778,10 @@ class TestStallRequiresProgressScript:
     def test_create_accepts_stall_on_progress_capable_script(
         self, client, auth_headers, db_session,
     ):
-        _ensure_script(db_session, "monkey_setup", "v2.3.3")
+        _ensure_script(
+            db_session, "monkey_setup", "v2.3.3",
+            capabilities=["progress_stamps"],
+        )
         steps = [{
             "step_key": "init_0",
             "script_name": "monkey_setup",

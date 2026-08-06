@@ -83,6 +83,9 @@ class ScriptCreate(BaseModel):
     content_sha256: str
     param_schema: Dict[str, Any] = Field(default_factory=dict)
     default_params: Dict[str, Any] = Field(default_factory=dict)
+    # #171: 脚本能力元数据（如 ["progress_stamps"]）。生产以 scan 登记的
+    # capabilities.json 为真源；此字段供手动登记/展示，scan 后会被覆盖。
+    capabilities: List[str] = Field(default_factory=list)
     is_active: bool = True
     description: Optional[str] = None
 
@@ -108,6 +111,7 @@ class ScriptUpdate(BaseModel):
     content_sha256: Optional[str] = None
     param_schema: Optional[Dict[str, Any]] = None
     default_params: Optional[Dict[str, Any]] = None
+    capabilities: Optional[List[str]] = None
     is_active: Optional[bool] = None
     description: Optional[str] = None
 
@@ -133,6 +137,7 @@ class ScriptOut(BaseModel):
     version: str
     nfs_path: str
     content_sha256: str
+    capabilities: List[str]
     param_schema: Dict[str, Any]
     default_params: Dict[str, Any]
     is_active: bool
@@ -162,6 +167,7 @@ def _script_out(script: Script) -> ScriptOut:
         version=script.version,
         nfs_path=script.nfs_path,
         content_sha256=script.content_sha256,
+        capabilities=list(script.capabilities or []),
         param_schema=script.param_schema or {},
         default_params=script.default_params or {},
         is_active=script.is_active,
@@ -389,6 +395,7 @@ def create_script(
         version=payload.version,
         nfs_path=payload.nfs_path,
         content_sha256=payload.content_sha256,
+        capabilities=payload.capabilities,
         param_schema=payload.param_schema,
         default_params=payload.default_params,
         is_active=payload.is_active,
@@ -481,6 +488,7 @@ def update_script(
         "version",
         "nfs_path",
         "content_sha256",
+        "capabilities",
         "param_schema",
         "default_params",
         "is_active",

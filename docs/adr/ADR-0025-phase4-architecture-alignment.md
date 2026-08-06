@@ -155,12 +155,17 @@ HDD 1TB: /mnt/hdd/aee_events/{folder_name}/{serial}/
 
 ```
 {cifs_root}/
-  devices/{folder_name}/{serial}/      ← 从 Agent 上送的 AEE 事件目录
+  jobs/{job_id}/                        ← JobArtifact 文件（watcher puller
+    AEE/                                 默认落点 + LOCAL promote，#97/#172）
+    <epoch_ms>_<filename>
+
+  devices/{相对路径}/                   ← AEE 事件目录（两类来源）
+    {plan_run_id}/{dirname}/            ← upload_manager 按需上送
+    {folder_name}/{serial}/             ← HddSpillMonitor 溢出上送
     aee_exp/{ts}_{db_path}/
       __exp_main.txt / main.dbg
       mobilelog/
       bugreport/
-    vendor_aee_exp/（同上）
 
   dedup/{plan_run_id}/{host_id}/       ← 各节点 scan 产物
     Result_*_20260618_1400.xls         ← 增量（保留历史）
@@ -237,7 +242,7 @@ start_log_scan.py -merge_files agentA_org.xls agentB_org.xls -side shanghai -mer
 
 **逻辑**：
 1. 读 `Result_MergeFiles.xls` 的 Path 列（`__exp_main.txt` 路径）
-2. 按 Path 定位到 15.4 上已上送的事件目录 `{cifs_root}/devices/{folder_name}/{serial}/aee_exp/{ts}_{db_path}/`
+2. 按 Path 定位到 15.4 上已上送的事件目录 `{cifs_root}/devices/{相对路径}/aee_exp/{ts}_{db_path}/`
 3. 复制该事件目录（含 AEE 原始文件 + mobilelog/ + bugreport/）到提单目录
 4. 开发通过 CIFS 只读访问提单目录
 
