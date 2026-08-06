@@ -752,7 +752,20 @@ def main() -> None:
             logger.info("control_upload_events_triggered plan_run=%d dirs=%d", plan_run_id, len(event_dir_names))
         elif command == "reload_config":
             env_reloaded = _reload_runtime_env()
-            adb_reconciled = _ensure_adb_server_on_startup(adb_path)
+            with _active_jobs_lock:
+                active_count = len(_active_job_ids)
+            if active_count == 0:
+                adb_reconciled = _ensure_adb_server_on_startup(adb_path)
+            else:
+                # 对齐心跳自动修复语义（heartbeat_thread.py 要求 active_count==0）：
+                # 收敛 ADB 会重启目标端口 server、全量重注册 USB，运行中 job 的
+                # adb 会话会被打断。活跃期间跳过，留待无 job 窗口或 Agent 重启生效。
+                adb_reconciled = False
+                logger.warning(
+                    "control_reload_config_skip_adb_reconcile active=%d "
+                    "— 活跃作业期间跳过 ADB 收敛",
+                    active_count,
+                )
             ScanRunner.instance().configure(force=True)
             UploadManager.instance().configure(force=True)
             operation_cap = operation_scheduler.reload_from_env()

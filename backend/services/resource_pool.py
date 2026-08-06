@@ -19,7 +19,13 @@ from backend.models.resource_pool import ResourceAllocation, ResourcePool
 
 logger = logging.getLogger(__name__)
 
-ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+# 与 plan_dispatcher_sync.ACTIVE_JOB_STATUSES 保持一致：UNKNOWN grace 期内
+# 仍占用资源，池负载/容量须纳入（#154 对齐收口）
+ACTIVE_JOB_STATUSES = (
+    JobStatus.PENDING.value,
+    JobStatus.RUNNING.value,
+    JobStatus.UNKNOWN.value,
+)
 
 
 class AllocationError(Exception):

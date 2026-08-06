@@ -21,7 +21,13 @@ from backend.models.plan_run import PlanRun
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
 
-_ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+# 与 plan_dispatcher_sync.ACTIVE_JOB_STATUSES 保持一致：UNKNOWN grace 期内
+# 仍占用设备，active-by-device 视图须纳入（#154 对齐收口）
+_ACTIVE_JOB_STATUSES = (
+    JobStatus.PENDING.value,
+    JobStatus.RUNNING.value,
+    JobStatus.UNKNOWN.value,
+)
 
 
 def _visible_plan_id(plan_id: int | None, hidden_plan_ids_set: set[int]) -> int | None:
