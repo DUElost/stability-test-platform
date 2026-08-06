@@ -30,7 +30,7 @@ def _ensure_script(db, name: str, version: str, capabilities=None):
 
 class TestScriptProgressCapability:
     def test_known_capable_versions(self, db_session):
-        for version in ("2.3.1", "2.3.2", "2.3.3", "2.3.4"):
+        for version in ("2.3.1", "2.3.2", "2.3.3", "2.3.4", "2.3.5"):
             _ensure_script(db_session, "monkey_setup", version, ["progress_stamps"])
         _ensure_script(db_session, "flash_firmware", "1.1.0", ["progress_stamps"])
 
@@ -38,6 +38,7 @@ class TestScriptProgressCapability:
         assert script_supports_progress(db_session, "monkey_setup", "v2.3.2")
         assert script_supports_progress(db_session, "monkey_setup", "2.3.3")
         assert script_supports_progress(db_session, "monkey_setup", "v2.3.4")
+        assert script_supports_progress(db_session, "monkey_setup", "2.3.5")
         assert script_supports_progress(db_session, "flash_firmware", "1.1.0")
 
     def test_legacy_and_unknown_versions_are_not_capable(self, db_session):
