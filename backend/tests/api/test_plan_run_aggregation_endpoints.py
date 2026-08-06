@@ -796,6 +796,27 @@ class TestEventsEndpoint:
             step_metadata={"timeout_kind": "stall"},
             original_ts=_now() - timedelta(seconds=20),
         ))
+        db_session.add(StepTrace(
+            job_id=j2.id,
+            step_id="patrol_timeout_kind_only",
+            stage="patrol",
+            event_type="FAILED",
+            status="FAILED",
+            error_message="stalled without exit",
+            step_metadata={"timeout_kind": "stall"},
+            original_ts=_now() - timedelta(seconds=15),
+        ))
+        db_session.add(StepTrace(
+            job_id=j2.id,
+            step_id="long_error_timeout",
+            stage="teardown",
+            event_type="FAILED",
+            status="FAILED",
+            error_message="x" * 600,
+            exit_code=124,
+            step_metadata={"timeout_kind": "wall_clock"},
+            original_ts=_now() - timedelta(seconds=10),
+        ))
         db_session.commit()
 
         resp = client.get(
@@ -810,6 +831,24 @@ class TestEventsEndpoint:
         ]
         assert len(timeout_events) == 1
         assert "[exit=125, timeout_kind=stall]" in timeout_events[0]["description"]
+
+        kind_only_events = [
+            e for e in events
+            if e["category"] == "step"
+            and "patrol_timeout_kind_only" in e["title"]
+        ]
+        assert len(kind_only_events) == 1
+        assert "[timeout_kind=stall]" in kind_only_events[0]["description"]
+        assert "exit=None" not in kind_only_events[0]["description"]
+
+        long_error_events = [
+            e for e in events
+            if e["category"] == "step"
+            and "long_error_timeout" in e["title"]
+        ]
+        assert len(long_error_events) == 1
+        assert "[exit=124, timeout_kind=wall_clock]" in long_error_events[0]["description"]
+        assert len(long_error_events[0]["description"]) <= 512
 
         jobs_resp = client.get(
             f"/api/v1/plan-runs/{cur_run.id}/jobs", headers=auth_headers,
