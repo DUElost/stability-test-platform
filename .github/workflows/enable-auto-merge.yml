@@ -48,9 +48,10 @@ jobs:
           fi
 
   merge-gate:
-    # 准入门禁：CodeRabbit APPROVED → success；CHANGES_REQUESTED → failure；
-    # rate limited → success（按仓库策略排除 CodeRabbit，由 required checks 把关）；
-    # 其他状态 → pending/failure，fail-closed。
+    # 准入门禁：CodeRabbit 对当前 head 的 APPROVED → success；CHANGES_REQUESTED →
+    # failure（跨 commit 保持阻断，COMMENTED/DISMISSED 不清除）；rate limited →
+    # success（按仓库策略排除 CodeRabbit，由 required checks 把关）；其他状态 →
+    # pending/failure，fail-closed。
     # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
     # status 同名，造成 required check 来源歧义。
     if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
@@ -169,18 +170,18 @@ jobs:
             exit 0
           fi
 
-          # 非评审事件：先按决策链判断。存在未清除的 request changes 必须阻断，
-          # 有 APPROVED 则放行（无需再等 commit status）。
+          # 非评审事件：先按决策链判断。存在未清除的 request changes 必须阻断
+          # （跨 commit 持久，COMMENTED/DISMISSED 不清除）。
+          # APPROVED 不在此处放行：auto_incremental_review 关闭后，旧 commit 的
+          # APPROVED 不代表新 head 已审查，必须由下方按 commit_id == HEAD_SHA
+          # 过滤的 latest_review 判定，避免旧批准跨提交放行。
           decision_state="$(decision_latest | jq -r .state)"
           if [ "$decision_state" = "CHANGES_REQUESTED" ]; then
             set_status failure "CodeRabbit requested changes"
             exit 0
           fi
-          if [ "$decision_state" = "APPROVED" ]; then
-            set_status success "CodeRabbit approved"
-            exit 0
-          fi
 
+          # HEAD 绑定：只有 CodeRabbit 对当前 head commit 的 APPROVED 才放行。
           state="$(latest_review | jq -r .state)"
           if [ "$state" = "CHANGES_REQUESTED" ]; then
             set_status failure "CodeRabbit requested changes"
