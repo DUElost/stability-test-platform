@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# 同一 PR/分支连续 push 时只保留最新一轮完整 CI，避免旧 commit 的
+# backend-test/frontend-check/build 全部跑完浪费 Actions 并发与分钟。
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend-test:
     runs-on: ubuntu-latest
