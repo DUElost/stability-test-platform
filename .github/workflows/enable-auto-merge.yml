@@ -66,22 +66,42 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
+
           set_status() {
             local state="$1" desc="$2"
             gh api -X POST "repos/$REPO_OWNER/$REPO_NAME/statuses/$HEAD_SHA" \
               -f state="$state" -f context=code-rabbit-gate -f description="$desc" >/dev/null
           }
           latest_review() {
-            # REST 登录名是 coderabbitai[bot]，用前缀匹配；分页取全量，并只取
-            # commit_id 等于当前 HEAD 的评审，避免旧 commit 的 APPROVED 污染门禁。
-            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-              | jq -c --arg head_sha "$HEAD_SHA" \
-                  '[.[][] | select((.user.login // "") | startswith("coderabbitai")) | select(.commit_id == $head_sha)] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
+            local out
+            out="$(
+              gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+                | jq -c --arg head_sha "$HEAD_SHA" \
+                    '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha)] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
+            )" || {
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            }
+            printf '%s' "$out"
+          }
+          review_by_id() {
+            # 评审事件专用：精确匹配 REVIEW_ID 且 commit_id 等于当前 HEAD 的评审。
+            local out
+            out="$(
+              gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+                | jq -c --arg head_sha "$HEAD_SHA" --arg id "$REVIEW_ID" \
+                    '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha and ((.id // 0) | tostring) == $id)] | .[0] | {id: (.id // 0), state: (.state // "")}'
+            )" || {
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            }
+            printf '%s' "$out"
           }
 
           # 评审提交事件：仅处理 CodeRabbit 的评审；人工评审事件直接跳过。
           if [ "$EVENT_NAME" = "pull_request_review" ]; then
-            if ! printf '%s' "$REVIEW_AUTHOR" | grep -qi '^coderabbitai'; then
+            if [ "$REVIEW_AUTHOR" != "coderabbitai[bot]" ] && [ "$REVIEW_AUTHOR" != "coderabbitai" ]; then
               echo "Review by ${REVIEW_AUTHOR:-unknown}; merge-gate skipped"
               exit 0
             fi
@@ -90,7 +110,7 @@ jobs:
             state=""
             id=""
             for _ in $(seq 1 12); do
-              review_json="$(latest_review)"
+              review_json="$(review_by_id)"
               id="$(printf '%s' "$review_json" | jq -r .id)"
               state="$(printf '%s' "$review_json" | jq -r .state)"
               [ "$id" = "$REVIEW_ID" ] && break
