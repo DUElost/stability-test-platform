@@ -217,6 +217,10 @@ def build_lifecycle_from_steps(
     barrier_timeout = getattr(plan, "barrier_timeout_seconds", None)
     if barrier_timeout is not None:
         lifecycle["barrier_timeout_seconds"] = barrier_timeout
+    # #174: barrier 绝对硬顶随计划走。NULL 时不写入（Agent 保持无硬顶行为）。
+    barrier_max_wait = getattr(plan, "barrier_max_wait_seconds", None)
+    if barrier_max_wait is not None:
+        lifecycle["barrier_max_wait_seconds"] = barrier_max_wait
 
     return lifecycle
 
@@ -280,6 +284,10 @@ def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
     barrier_timeout = plan_data.get("barrier_timeout_seconds")
     if barrier_timeout is not None:
         lifecycle["barrier_timeout_seconds"] = barrier_timeout
+    # #174: 快照路径同样带绝对硬顶。
+    barrier_max_wait = plan_data.get("barrier_max_wait_seconds")
+    if barrier_max_wait is not None:
+        lifecycle["barrier_max_wait_seconds"] = barrier_max_wait
     return lifecycle
 
 
@@ -411,6 +419,7 @@ def build_plan_snapshot(
             "patrol_interval_seconds": plan.patrol_interval_seconds,
             "timeout_seconds": plan.timeout_seconds,
             "barrier_timeout_seconds": plan.barrier_timeout_seconds,
+            "barrier_max_wait_seconds": plan.barrier_max_wait_seconds,
             "auto_archive_interval_seconds": plan.auto_archive_interval_seconds,
             "next_plan_id": plan.next_plan_id,
             "watcher_policy": plan.watcher_policy or {},

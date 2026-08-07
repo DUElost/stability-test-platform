@@ -804,6 +804,12 @@ export interface Plan {
    * 含自动刷机等长耗时前置步骤的计划必须抬高。
    */
   barrier_timeout_seconds?: number | null;
+  /**
+   * #174: barrier 绝对硬顶（秒）。null = 不设上限（#117 续期行为）。
+   * 从首次进入 barrier 等待起算，与 barrier_timeout_seconds（全体停滞
+   * 滑动兜底）取更早者。
+   */
+  barrier_max_wait_seconds?: number | null;
   auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
@@ -826,6 +832,8 @@ export interface PlanCreate {
    * 含自动刷机等长耗时前置步骤的计划必须抬高。
    */
   barrier_timeout_seconds?: number | null;
+  /** #174: barrier 绝对硬顶（秒）。null = 不设上限。 */
+  barrier_max_wait_seconds?: number | null;
   auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
@@ -845,6 +853,8 @@ export interface PlanUpdate {
    * 含自动刷机等长耗时前置步骤的计划必须抬高。
    */
   barrier_timeout_seconds?: number | null;
+  /** #174: barrier 绝对硬顶（秒）。null = 不设上限。 */
+  barrier_max_wait_seconds?: number | null;
   auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
