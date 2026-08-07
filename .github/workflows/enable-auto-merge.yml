@@ -120,6 +120,23 @@ jobs:
               set_status pending "CodeRabbit review pending"
               exit 0
             fi
+            # 最终守卫：cancel-in-progress 是异步取消，旧运行仍可能在取消完成前
+            # 写状态。写入前确认 REVIEW_ID 仍是该 HEAD 上最新的 CodeRabbit 评审，
+            # 且本运行未被更新的运行取代；否则退出，由新运行写状态。
+            latest="$(latest_review)"
+            latest_id="$(printf '%s' "$latest" | jq -r .id)"
+            if [ "$latest_id" != "0" ] && [ "$latest_id" != "$REVIEW_ID" ]; then
+              echo "Newer review $latest_id supersedes $REVIEW_ID; skip status write"
+              exit 0
+            fi
+            newest_run_id="$(
+              gh api "repos/$REPO_OWNER/$REPO_NAME/actions/runs?head_sha=$HEAD_SHA&per_page=5" \
+                --jq '[.workflow_runs[]][0].id // 0'
+            )"
+            if [ "$newest_run_id" != "0" ] && [ "$newest_run_id" != "$GITHUB_RUN_ID" ]; then
+              echo "Superseded by newer run $newest_run_id; skip status write"
+              exit 0
+            fi
             case "$state" in
               APPROVED) set_status success "CodeRabbit approved" ;;
               CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
