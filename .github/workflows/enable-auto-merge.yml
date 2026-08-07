@@ -52,6 +52,8 @@ jobs:
     # CHANGES_REQUESTED → failure；rate limited → 仅当该 PR 从未收到过
     # CHANGES_REQUESTED 才放行（有阻断历史则保持 failure）；其他状态 →
     # pending/failure，fail-closed。
+    # auto_incremental_review 关闭后，push 事件会出现 “Review skipped / paused”
+    # 的常态状态，门禁写 pending 等待显式 @coderabbitai review，而不是失败。
     # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
     # status 同名，造成 required check 来源歧义。
     if: github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
@@ -201,7 +203,8 @@ jobs:
           fi
 
           # 等 CodeRabbit 在该 commit 上的状态落定（最多 10 分钟）：
-          # queued / in progress → 继续等；rate limited / completed / 其他 → 停止轮询。
+          # queued / in progress → 继续等；rate limited / skipped / paused /
+          # completed / 其他 → 停止轮询。
           desc=""
           for _ in $(seq 1 60); do
             desc="$(
@@ -225,8 +228,18 @@ jobs:
             fi
             exit 0
           fi
+          if printf '%s' "$desc" | grep -qiE 'skipped|paused'; then
+            set_status pending "CodeRabbit review not auto-triggered; @coderabbitai review required"
+            exit 0
+          fi
 
-          set_status failure "CodeRabbit review unexpected state: $desc"
+          # 落定后再次按 HEAD 决策判断：COMMENTED 中间态/无终态评审 → pending。
+          head_state="$(head_decision | jq -r .state)"
+          case "$head_state" in
+            APPROVED) set_status success "CodeRabbit approved" ;;
+            CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
+            *) set_status pending "CodeRabbit review completed without terminal decision" ;;
+          esac
 
   post-merge-full-ci:
     # auto-merge 的 merge commit 由 GitHub 内部凭据推送，on: push 的 CI 不会触发
