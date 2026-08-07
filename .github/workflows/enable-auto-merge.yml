@@ -98,6 +98,19 @@ jobs:
             }
             printf '%s' "$out"
           }
+          decision_latest() {
+            # 决策链：只取 APPROVED / CHANGES_REQUESTED（COMMENTED/DISMISSED 不改变
+            # 阻断状态），取 ID 最大的那条，与 GitHub 平台的 request-changes 语义一致。
+            local out
+            out="$(
+              gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+                | jq -c '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
+            )" || {
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            }
+            printf '%s' "$out"
+          }
 
           # 评审提交事件：仅处理 CodeRabbit 的评审；人工评审事件直接跳过。
           if [ "$EVENT_NAME" = "pull_request_review" ]; then
@@ -140,8 +153,27 @@ jobs:
             case "$state" in
               APPROVED) set_status success "CodeRabbit approved" ;;
               CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
-              *) set_status pending "CodeRabbit review pending" ;;
+              *)
+                decision_state="$(decision_latest | jq -r .state)"
+                if [ "$decision_state" = "CHANGES_REQUESTED" ]; then
+                  set_status failure "CodeRabbit requested changes"
+                else
+                  set_status pending "CodeRabbit review pending"
+                fi
+                ;;
             esac
+            exit 0
+          fi
+
+          # 非评审事件：先按决策链判断。存在未清除的 request changes 必须阻断，
+          # 有 APPROVED 则放行（无需再等 commit status）。
+          decision_state="$(decision_latest | jq -r .state)"
+          if [ "$decision_state" = "CHANGES_REQUESTED" ]; then
+            set_status failure "CodeRabbit requested changes"
+            exit 0
+          fi
+          if [ "$decision_state" = "APPROVED" ]; then
+            set_status success "CodeRabbit approved"
             exit 0
           fi
 
