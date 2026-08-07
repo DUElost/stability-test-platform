@@ -12,6 +12,13 @@ reviews:
   # CodeRabbit pre-merge check 时自动提交 APPROVE。它不代表所有人工评论或
   # GitHub required status checks 已完成，也不改变 main 分支保护的审批要求。
   request_changes_workflow: true
+  auto_review:
+    enabled: true
+    # 增量审查关闭：每个 PR 只在打开/触发时自动全量审查一次，后续 push 不再
+    # 自动复评。多 commit 迭代会快速挤爆 Pro Plus 每小时审查配额；修复后的
+    # 复评改为显式触发（PR 评论 @coderabbitai review），由变更代理在推送修复
+    # 后执行，兼顾无人值守合入与配额占用。
+    auto_incremental_review: false
   path_instructions:
     - path: "backend/**"
       instructions: |

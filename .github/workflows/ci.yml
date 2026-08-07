@@ -10,8 +10,17 @@ on:
 permissions:
   contents: read
 
+# 同一 PR/分支连续 push 时只保留最新一轮完整 CI，避免旧 commit 的
+# backend-test/frontend-check/build 全部跑完浪费 Actions 并发与分钟。
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend-test:
+    # 全量 job：仅在 push main / workflow_dispatch 时运行。
+    # PR 只跑下方轻量 job（lint / pr-typecheck / pr-compileall / pr-agent-tests）。
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -33,8 +42,8 @@ jobs:
       DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
       TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - name: Install dependencies
@@ -63,10 +72,11 @@ jobs:
         run: python -m pytest tests/ -v
 
   frontend-check:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
       - name: Install dependencies
@@ -89,14 +99,15 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           # 脚本版本不可变门禁要跟 base ref 做三点 diff,浅克隆拿不到 merge-base
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
@@ -136,11 +147,69 @@ jobs:
           python tools/dev/check-script-version-immutability.py \
             --base "origin/${{ github.base_ref || github.ref_name }}"
 
+  # ── PR 轻量检查 ──────────────────────────────────────────────────────────
+  # pull_request 只跑 lint（上方，两边都跑）+ 下面三个轻量 job；
+  # 全量 backend-test/frontend-check/docker-build 仅 push main 后兜底。
+  # 风险：PR 合入前不再跑 PG 套件 / vitest / docker build，
+  # 由合入 main 后的全量兜底；若要“合并前全量”应改用 Merge Queue。
+  pr-agent-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      # 部分 agent 测试模块 import 时会解析 DATABASE_URL，但不会真正连接；
+      # 与全量 backend-test 保持一致的环境可避免收集期 RuntimeError。
+      TESTING: "1"
+      JWT_SECRET_KEY: "ci-test-secret-key"
+      DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
+      TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r backend/requirements-dev.txt
+      - name: Run agent tests
+        run: python -m pytest backend/agent/tests/ -q
+
+  pr-typecheck:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: TypeScript check
+        working-directory: frontend
+        run: npm run type-check
+
+  pr-compileall:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Compile check
+        run: python -m compileall -q backend/ tools/ scripts/
+
   docker-build:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     needs: [backend-test, frontend-check]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build backend image
         run: docker build -f Dockerfile.backend -t stability-backend .
       - name: Build frontend image
