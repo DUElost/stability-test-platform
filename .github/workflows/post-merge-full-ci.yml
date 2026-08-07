@@ -5,6 +5,9 @@ name: Post-merge full CI
 # CodeQL 的 “Push on main” run 仍会为 merge commit 运行，这里在其完成后
 # dispatch 全量 CI（backend-test / frontend-check / docker-build），
 # 恢复“合入后全量兜底”。
+# 设计目标：验证当前 main 尖端。dispatch 时若 main 已前进（多 PR 连续合入），
+# 验证的是最新尖端而非触发本次 workflow_run 的那个 merge commit；这正是
+# “合入后全量兜底”的预期行为——不允许 main 停留在未全量验证的状态。
 on:
   workflow_run:
     workflows: [CodeQL]
@@ -12,13 +15,15 @@ on:
     branches: [main]
 
 permissions:
-  actions: write
-  contents: read
+  {}
 
 jobs:
   dispatch-full-ci:
     if: github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
     steps:
       - name: Dispatch full CI on main
         env:
