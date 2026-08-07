@@ -1,0 +1,29 @@
+name: Post-merge full CI
+
+# auto-merge 的 merge commit 由 GitHub 内部凭据推送，on: push 与
+# pull_request.closed 的 workflow 触发都会被抑制（GITHUB_TOKEN 级联限制）。
+# CodeQL 的 “Push on main” run 仍会为 merge commit 运行，这里在其完成后
+# dispatch 全量 CI（backend-test / frontend-check / docker-build），
+# 恢复“合入后全量兜底”。
+on:
+  workflow_run:
+    workflows: [CodeQL]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch-full-ci:
+    if: github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch full CI on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          gh workflow run ci.yml --ref main -R "$REPO_OWNER/$REPO_NAME"
