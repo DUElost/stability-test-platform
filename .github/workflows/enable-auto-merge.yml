@@ -201,19 +201,19 @@ jobs:
           fi
 
           # 等 CodeRabbit 在该 commit 上的状态落定（最多 10 分钟）：
-          # in progress → 继续等；rate limited / completed / 其他 → 停止轮询。
+          # queued / in progress → 继续等；rate limited / completed / 其他 → 停止轮询。
           desc=""
           for _ in $(seq 1 60); do
             desc="$(
               gh api "repos/$REPO_OWNER/$REPO_NAME/commits/$HEAD_SHA/status" \
                 --jq '[.statuses[] | select(.context == "CodeRabbit")][0].description // ""'
             )"
-            if [ -n "$desc" ] && ! printf '%s' "$desc" | grep -qi 'in.progress'; then
+            if [ -n "$desc" ] && ! printf '%s' "$desc" | grep -qiE 'queued|in.progress'; then
               break
             fi
             sleep 10
           done
-          if [ -z "$desc" ] || printf '%s' "$desc" | grep -qi 'in.progress'; then
+          if [ -z "$desc" ] || printf '%s' "$desc" | grep -qiE 'queued|in.progress'; then
             set_status pending "Waiting for CodeRabbit review or rate-limit decision"
             exit 0
           fi
