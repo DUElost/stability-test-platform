@@ -28,10 +28,13 @@ async def test_scan_task_polls_until_all_hosts_registered():
     ]
     mock_db.close = MagicMock()
 
+    scan_sync = MagicMock()
     poll_count = 0
 
     async def fake_to_thread(fn, *a, **kw):
         nonlocal poll_count
+        if fn is not scan_sync:
+            return None
         poll_count += 1
         return "1" if poll_count == 1 else "2"
 
@@ -40,7 +43,8 @@ async def test_scan_task_polls_until_all_hosts_registered():
 
     with patch("backend.core.database.SessionLocal", return_value=mock_db), \
          patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()), \
-         patch("backend.services.dedup_scan.run_scan_sync"):
+         patch("backend.services.dedup_scan.run_scan_sync", scan_sync), \
+         patch("backend.services.dedup_scan.record_scan_archive_state", MagicMock()):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
@@ -62,20 +66,23 @@ async def test_scan_task_breaks_on_all_registered_first_poll():
     ]
     mock_db.close = MagicMock()
 
+    scan_sync = MagicMock()
     to_thread = AsyncMock(return_value="2")
     saq_tasks.asyncio_sleep = AsyncMock()
     saq_tasks.asyncio_to_thread = to_thread
 
     with patch("backend.core.database.SessionLocal", return_value=mock_db), \
          patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()), \
-         patch("backend.services.dedup_scan.run_scan_sync"):
+         patch("backend.services.dedup_scan.run_scan_sync", scan_sync), \
+         patch("backend.services.dedup_scan.record_scan_archive_state", MagicMock()):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
              patch("saq.Job", MagicMock()):
             await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
-    assert to_thread.call_count == 1
+    poll_calls = [c for c in to_thread.await_args_list if c.args[0] is scan_sync]
+    assert len(poll_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -102,6 +109,82 @@ async def test_scan_task_no_hosts_triggered_skips_poll():
             await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
     to_thread.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scan_task_records_zero_artifacts_after_poll_exhausted(caplog):
+    """A fleet-wide agent scan failure must not end as a silent SUCCESS."""
+    from backend.tasks import saq_tasks
+
+    mock_db = MagicMock()
+    mock_db.execute.return_value.all.return_value = [("host-1", "ONLINE")]
+    mock_db.close = MagicMock()
+
+    scan_sync = MagicMock()
+    record_archive = MagicMock()
+
+    async def fake_to_thread(fn, *a, **kw):
+        if fn is scan_sync:
+            return ""
+        return fn(*a, **kw)
+
+    saq_tasks.asyncio_sleep = AsyncMock()
+    saq_tasks.asyncio_to_thread = AsyncMock(side_effect=fake_to_thread)
+
+    with caplog.at_level("ERROR"), \
+         patch("backend.core.database.SessionLocal", return_value=mock_db), \
+         patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()), \
+         patch("backend.services.dedup_scan.run_scan_sync", scan_sync), \
+         patch("backend.services.dedup_scan.record_scan_archive_state", record_archive):
+        mock_queue = MagicMock()
+        mock_queue.enqueue = AsyncMock()
+        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+             patch("saq.Job", MagicMock()):
+            await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
+
+    assert "saq_scan_no_artifacts plan_run=42" in caplog.text
+    record_archive.assert_called_once_with(
+        42, hosts_triggered=1, artifacts_registered=0
+    )
+
+
+@pytest.mark.asyncio
+async def test_scan_task_counts_final_registration_attempt():
+    """The post-poll retry registers artifacts, so it must update the count."""
+    from backend.tasks import saq_tasks
+
+    mock_db = MagicMock()
+    mock_db.execute.return_value.all.return_value = [("host-1", "ONLINE")]
+    mock_db.close = MagicMock()
+
+    scan_sync = MagicMock()
+    record_archive = MagicMock()
+    calls = 0
+
+    async def fake_to_thread(fn, *a, **kw):
+        nonlocal calls
+        if fn is not scan_sync:
+            return fn(*a, **kw)
+        calls += 1
+        # Nothing during the poll window; the artifact lands just after it.
+        return "" if calls <= 30 else "1"
+
+    saq_tasks.asyncio_sleep = AsyncMock()
+    saq_tasks.asyncio_to_thread = AsyncMock(side_effect=fake_to_thread)
+
+    with patch("backend.core.database.SessionLocal", return_value=mock_db), \
+         patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()), \
+         patch("backend.services.dedup_scan.run_scan_sync", scan_sync), \
+         patch("backend.services.dedup_scan.record_scan_archive_state", record_archive):
+        mock_queue = MagicMock()
+        mock_queue.enqueue = AsyncMock()
+        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+             patch("saq.Job", MagicMock()):
+            await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
+
+    record_archive.assert_called_once_with(
+        42, hosts_triggered=1, artifacts_registered=1
+    )
 
 
 # ---------------------------------------------------------------------------

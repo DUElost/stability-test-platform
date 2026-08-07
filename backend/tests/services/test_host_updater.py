@@ -5,6 +5,7 @@ from backend.services.agent_env_sync import hot_update_env_overrides
 from backend.services.host_updater import (
     _build_remote_script,
     _parse_deps_refreshed,
+    _parse_env_paths_missing,
     _parse_env_synced,
     get_agent_code_version,
 )
@@ -95,6 +96,40 @@ def test_parse_env_synced_reads_sentinel():
     ]
     assert _parse_env_synced("STP_ENV_SYNCED=\nOK") == []
     assert _parse_env_synced("no sentinel") == []
+
+
+def test_parse_env_paths_missing_reads_sentinel():
+    missing = {"STP_DEDUP_SCAN_SCRIPT": "/home/debian13/a,b/start_log_scan.py"}
+    payload = base64.b64encode(json.dumps(missing).encode()).decode()
+    out = f"STP_ENV_SYNCED=STP_DEDUP_SCAN_SCRIPT\nSTP_ENV_PATH_MISSING={payload}\nOK"
+
+    assert _parse_env_paths_missing(out) == missing
+    assert _parse_env_paths_missing("STP_ENV_PATH_MISSING=\nOK") == {}
+    assert _parse_env_paths_missing("no sentinel") == {}
+    assert _parse_env_paths_missing("STP_ENV_PATH_MISSING=not-base64!!") == {}
+
+
+def test_build_remote_script_verifies_agent_path_keys(monkeypatch):
+    monkeypatch.setenv(
+        "STP_AGENT_DEDUP_SCAN_SCRIPT", "/mnt/stp-aee/tools/Start-Log-Scan/start_log_scan.py"
+    )
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        tar_path="/tmp/stp-agent-update.tar.gz",
+        user="android",
+        group="android",
+    )
+
+    for line in script.splitlines():
+        if line.startswith('ENV_PATH_KEYS_B64="'):
+            payload = line.split('"')[1]
+            break
+    else:
+        raise AssertionError("ENV_PATH_KEYS_B64 not injected")
+
+    assert "STP_DEDUP_SCAN_SCRIPT" in json.loads(base64.b64decode(payload).decode())
+    assert "STP_ENV_PATH_MISSING=" in script
 
 
 def test_get_agent_code_version_returns_short_hash():

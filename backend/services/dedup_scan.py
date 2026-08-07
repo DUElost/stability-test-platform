@@ -113,6 +113,41 @@ def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
         db.close()
 
 
+def record_scan_archive_state(
+    plan_run_id: int, *, hosts_triggered: int, artifacts_registered: int
+) -> None:
+    """记录本轮 scan 的产物计数到 ``PlanRun.run_context['archive']``。
+
+    下发了 host 却零产物意味着这次执行没有任何报表，而 PlanRun 仍可能是
+    SUCCESS —— 落到 run_context 是为了让该状态经 API 可见，而不是只剩一行
+    Agent 本地日志（#118 同源）。
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from backend.core.database import SessionLocal
+    from backend.models.plan_run import PlanRun
+
+    db = SessionLocal()
+    try:
+        pr = db.get(PlanRun, plan_run_id)
+        if pr is None:
+            return
+        run_ctx = dict(pr.run_context or {})
+        run_ctx["archive"] = {
+            "hosts_triggered": hosts_triggered,
+            "scan_artifacts_registered": artifacts_registered,
+        }
+        pr.run_context = run_ctx
+        flag_modified(pr, "run_context")
+        db.commit()
+    except Exception:
+        # Bookkeeping must not abort the scan → upload → merge chain.
+        db.rollback()
+        logger.exception("scan_archive_state_write_failed plan_run=%d", plan_run_id)
+    finally:
+        db.close()
+
+
 def run_merge_sync(plan_run_id: int) -> str:
     """同步执行 merge（-merge_files 或 -merge_files_list，视工具能力）。
 

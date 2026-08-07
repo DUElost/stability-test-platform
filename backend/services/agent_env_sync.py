@@ -6,6 +6,10 @@ paths are never overwritten.
 
 Control plane operators set fleet defaults once (backend ``.env``); each
 ``POST .../hot-update`` propagates those values plus install-dir-derived paths.
+
+Keys the control plane also consumes itself must not be synced verbatim when
+the two roles need different values — those go through ``STP_AGENT_``-prefixed
+source names instead (see ``_AGENT_SCOPED_ENV_KEYS``).
 """
 
 from __future__ import annotations
@@ -33,19 +37,41 @@ PROTECTED_ENV_KEYS: frozenset[str] = frozenset(
 )
 
 # Fleet-wide keys: synced when the control plane has a non-empty value.
+# Only keys whose correct value is identical on the control plane and on every
+# agent belong here.
 _FLEET_ENV_KEYS: tuple[str, ...] = (
     "STP_AEE_NFS_ROOT",
     "STP_AEE_CIFS_ROOT",
     "STP_AEE_LOCAL_ROOT",
-    "STP_NFS_ROOT",
-    "STP_DEDUP_SCAN_PYTHON",
-    "STP_DEDUP_SCAN_SCRIPT",
     "STP_DEDUP_SCAN_TAG",
     "STP_DEDUP_AUTO_SCAN",
-    "PIP_INDEX_URL",
     "LOG_LEVEL",
     "STP_WATCHER_ENABLED",
-    "STP_AGENT_PIP_INDEX_URL",
+)
+
+# Agent-scoped keys: the control plane holds the *agent-side* value under a
+# ``STP_AGENT_``-prefixed name, which hot-update writes to the unprefixed key.
+# Required wherever both roles read the same key name but need different values
+# — the scan tool lives at a different path on the control plane than on the
+# agents, so syncing the control plane's own value breaks every agent.
+_AGENT_SCOPED_ENV_KEYS: dict[str, str] = {
+    "STP_AGENT_PIP_INDEX_URL": "PIP_INDEX_URL",
+    "STP_AGENT_DEDUP_SCAN_PYTHON": "STP_DEDUP_SCAN_PYTHON",
+    "STP_AGENT_DEDUP_SCAN_SCRIPT": "STP_DEDUP_SCAN_SCRIPT",
+    "STP_AGENT_NFS_ROOT": "STP_NFS_ROOT",
+}
+
+# Synced keys whose value must be an existing path on the agent. Verified
+# after the .env merge so a misconfigured fleet default surfaces at push time
+# instead of as a silently empty archive several runs later.
+AGENT_PATH_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "STP_AEE_LOCAL_ROOT",
+        "STP_AEE_NFS_ROOT",
+        "STP_DEDUP_SCAN_PYTHON",
+        "STP_DEDUP_SCAN_SCRIPT",
+        "STP_NFS_ROOT",
+    }
 )
 
 
@@ -68,18 +94,17 @@ def _fleet_env_overrides_from_control_plane() -> dict[str, str]:
         if val:
             overrides[key] = val
 
-    # Legacy alias used by some agent scripts; mirror NFS root when configured.
-    nfs_root = (
-        os.getenv("STP_NFS_ROOT", "").strip()
-        or os.getenv("STP_AEE_NFS_ROOT", "").strip()
-    )
-    if nfs_root:
-        overrides.setdefault("STP_NFS_ROOT", nfs_root)
-        overrides.setdefault("STP_AEE_NFS_ROOT", nfs_root)
+    for source_key, agent_key in _AGENT_SCOPED_ENV_KEYS.items():
+        val = os.getenv(source_key, "").strip()
+        if val:
+            overrides[agent_key] = val
 
-    pip_index = os.getenv("STP_AGENT_PIP_INDEX_URL", "").strip()
-    if pip_index:
-        overrides.setdefault("PIP_INDEX_URL", pip_index)
+    # Legacy alias used by some agent scripts. Falls back to the shared AEE
+    # root, which is mounted at the same path on every agent — never to the
+    # control plane's own STP_NFS_ROOT, which is machine-local.
+    aee_nfs_root = os.getenv("STP_AEE_NFS_ROOT", "").strip()
+    if aee_nfs_root:
+        overrides.setdefault("STP_NFS_ROOT", aee_nfs_root)
 
     return overrides
 
@@ -96,6 +121,13 @@ def hot_update_env_overrides(
         overrides.pop(key, None)
 
     return overrides
+
+
+def agent_path_keys_to_verify(overrides: dict[str, str]) -> list[str]:
+    """Keys in ``overrides`` whose values must exist on the agent filesystem."""
+    return sorted(
+        key for key, val in overrides.items() if key in AGENT_PATH_ENV_KEYS and val
+    )
 
 
 def merge_env_overrides(

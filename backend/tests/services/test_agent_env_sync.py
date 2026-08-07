@@ -1,5 +1,6 @@
 from backend.services.agent_env_sync import (
     PROTECTED_ENV_KEYS,
+    agent_path_keys_to_verify,
     hot_update_env_overrides,
     merge_env_overrides,
 )
@@ -27,6 +28,64 @@ def test_hot_update_env_overrides_includes_fleet_keys_from_control_plane(monkeyp
     assert overrides["STP_AEE_NFS_ROOT"] == "/mnt/nfs/aee_events"
     assert overrides["STP_NFS_ROOT"] == "/mnt/nfs/aee_events"
     assert overrides["LOG_LEVEL"] == "DEBUG"
+
+
+def test_control_plane_scan_tool_paths_are_not_synced_to_agents(monkeypatch):
+    """The scan tool sits elsewhere on the agents; syncing the control plane's
+    own path made every agent scan fail instantly (runs 124-129)."""
+    monkeypatch.setenv("STP_DEDUP_SCAN_PYTHON", "/home/debian13/Start-Log-Scan/venv/bin/python")
+    monkeypatch.setenv("STP_DEDUP_SCAN_SCRIPT", "/home/debian13/Start-Log-Scan/start_log_scan.py")
+    monkeypatch.delenv("STP_AGENT_DEDUP_SCAN_PYTHON", raising=False)
+    monkeypatch.delenv("STP_AGENT_DEDUP_SCAN_SCRIPT", raising=False)
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert "STP_DEDUP_SCAN_PYTHON" not in overrides
+    assert "STP_DEDUP_SCAN_SCRIPT" not in overrides
+
+
+def test_agent_scoped_keys_are_written_to_unprefixed_agent_keys(monkeypatch):
+    monkeypatch.setenv("STP_DEDUP_SCAN_PYTHON", "/home/debian13/Start-Log-Scan/venv/bin/python")
+    monkeypatch.setenv(
+        "STP_AGENT_DEDUP_SCAN_PYTHON", "/mnt/stp-aee/tools/Start-Log-Scan/venv/bin/python"
+    )
+    monkeypatch.setenv(
+        "STP_AGENT_DEDUP_SCAN_SCRIPT", "/mnt/stp-aee/tools/Start-Log-Scan/start_log_scan.py"
+    )
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert overrides["STP_DEDUP_SCAN_PYTHON"] == (
+        "/mnt/stp-aee/tools/Start-Log-Scan/venv/bin/python"
+    )
+    assert overrides["STP_DEDUP_SCAN_SCRIPT"] == (
+        "/mnt/stp-aee/tools/Start-Log-Scan/start_log_scan.py"
+    )
+    assert "STP_AGENT_DEDUP_SCAN_PYTHON" not in overrides
+
+
+def test_control_plane_nfs_root_never_leaks_to_agents(monkeypatch):
+    monkeypatch.setenv("STP_NFS_ROOT", "/home/debian13/stability-test-platform/storage/nfs")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/stp-aee")
+    monkeypatch.delenv("STP_AGENT_NFS_ROOT", raising=False)
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert overrides["STP_NFS_ROOT"] == "/mnt/stp-aee"
+
+
+def test_agent_path_keys_to_verify_covers_synced_paths(monkeypatch):
+    monkeypatch.setenv(
+        "STP_AGENT_DEDUP_SCAN_SCRIPT", "/mnt/stp-aee/tools/Start-Log-Scan/start_log_scan.py"
+    )
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/stp-aee")
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+    keys = agent_path_keys_to_verify(overrides)
+
+    assert "STP_DEDUP_SCAN_SCRIPT" in keys
+    assert "STP_AEE_NFS_ROOT" in keys
+    assert "LOG_DIR" not in keys
 
 
 def test_hot_update_env_overrides_never_includes_protected_keys(monkeypatch):

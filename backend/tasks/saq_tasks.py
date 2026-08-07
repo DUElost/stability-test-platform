@@ -156,7 +156,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         raise
 
     if triggered:
-        from backend.services.dedup_scan import run_scan_sync
+        from backend.services.dedup_scan import record_scan_archive_state, run_scan_sync
 
         _SCAN_POLL_INTERVAL = 10
         _SCAN_POLL_MAX_WAIT = 300
@@ -177,11 +177,27 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             )
 
         if registered == 0:
-            await asyncio_to_thread(run_scan_sync, plan_run_id)
+            n_final = await asyncio_to_thread(run_scan_sync, plan_run_id)
+            if n_final:
+                registered += int(n_final)
 
         logger.info(
             "saq_scan_registered plan_run=%d artifacts=%d/%d waited=%ds",
             plan_run_id, registered, n_triggered, elapsed,
+        )
+
+        # Agent-side scan failures only log locally, so a fleet-wide
+        # misconfiguration otherwise ends as a SUCCESS run with no report at all.
+        if registered == 0:
+            logger.error(
+                "saq_scan_no_artifacts plan_run=%d hosts_triggered=%d waited=%ds",
+                plan_run_id, n_triggered, elapsed,
+            )
+        await asyncio_to_thread(
+            record_scan_archive_state,
+            plan_run_id,
+            hosts_triggered=n_triggered,
+            artifacts_registered=registered,
         )
 
     from backend.tasks.saq_worker import get_queue
