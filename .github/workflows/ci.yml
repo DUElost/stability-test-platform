@@ -154,6 +154,13 @@ jobs:
   pr-agent-tests:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    env:
+      # 部分 agent 测试模块 import 时会解析 DATABASE_URL，但不会真正连接；
+      # 与全量 backend-test 保持一致的环境可避免收集期 RuntimeError。
+      TESTING: "1"
+      JWT_SECRET_KEY: "ci-test-secret-key"
+      DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
+      TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
