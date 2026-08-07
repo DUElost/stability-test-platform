@@ -48,15 +48,16 @@ jobs:
           fi
 
   merge-gate:
-    # 准入门禁：CodeRabbit 对当前 head 的 APPROVED → success；CHANGES_REQUESTED →
-    # failure（跨 commit 保持阻断，COMMENTED/DISMISSED 不清除）；rate limited →
-    # success（按仓库策略排除 CodeRabbit，由 required checks 把关）；其他状态 →
+    # 准入门禁：CodeRabbit 对当前 head 的 APPROVED → success；对当前 head 的
+    # CHANGES_REQUESTED → failure；rate limited → 仅当该 PR 从未收到过
+    # CHANGES_REQUESTED 才放行（有阻断历史则保持 failure）；其他状态 →
     # pending/failure，fail-closed。
     # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
     # status 同名，造成 required check 来源歧义。
     if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       pull-requests: read
       statuses: write
     steps:
@@ -103,13 +104,29 @@ jobs:
             }
             printf '%s' "$out"
           }
-          decision_latest() {
-            # 决策链：只取 APPROVED / CHANGES_REQUESTED（COMMENTED/DISMISSED 不改变
-            # 阻断状态），取 ID 最大的那条，与 GitHub 平台的 request-changes 语义一致。
+          head_decision() {
+            # HEAD 绑定决策：只取 CodeRabbit 对当前 head commit 的
+            # APPROVED / CHANGES_REQUESTED（COMMENTED/DISMISSED 不构成决策），
+            # 取 ID 最大的那条。关闭增量审查后，旧 commit 的批准不能放行新 head。
             local out
             out="$(
               gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-                | jq -c '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
+                | jq -c --arg head_sha "$HEAD_SHA" \
+                    '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
+            )" || {
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            }
+            printf '%s' "$out"
+          }
+          ever_requested_changes() {
+            # 历史阻断记录：该 PR 是否收到过 CodeRabbit 的 CHANGES_REQUESTED
+            # （跨所有 commit）。仅用于 rate-limit 分支：有阻断历史时即使限流
+            # 也不放行，避免“限流即排除”吞掉真实评审意见。
+            local out
+            out="$(
+              gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+                | jq -c '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.state == "CHANGES_REQUESTED")] | length > 0'
             )" || {
               set_status pending "CodeRabbit gate query failed"
               exit 0
@@ -148,7 +165,7 @@ jobs:
               exit 0
             fi
             newest_run_id="$(
-              gh api "repos/$REPO_OWNER/$REPO_NAME/actions/runs?head_sha=$HEAD_SHA&per_page=5" \
+              gh api "repos/$REPO_OWNER/$REPO_NAME/actions/runs?head_sha=$HEAD_SHA&per_page=5&workflow_id=enable-auto-merge.yml" \
                 --jq '[.workflow_runs[]][0].id // 0'
             )"
             if [ "$newest_run_id" != "0" ] && [ "$newest_run_id" != "$GITHUB_RUN_ID" ]; then
@@ -159,35 +176,26 @@ jobs:
               APPROVED) set_status success "CodeRabbit approved" ;;
               CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
               *)
-                decision_state="$(decision_latest | jq -r .state)"
-                if [ "$decision_state" = "CHANGES_REQUESTED" ]; then
-                  set_status failure "CodeRabbit requested changes"
-                else
-                  set_status pending "CodeRabbit review pending"
-                fi
+                # COMMENTED 等非终态评审不清除既有 head 决策。
+                head_state="$(head_decision | jq -r .state)"
+                case "$head_state" in
+                  APPROVED) set_status success "CodeRabbit approved" ;;
+                  CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
+                  *) set_status pending "CodeRabbit review pending" ;;
+                esac
                 ;;
             esac
             exit 0
           fi
 
-          # 非评审事件：先按决策链判断。存在未清除的 request changes 必须阻断
-          # （跨 commit 持久，COMMENTED/DISMISSED 不清除）。
-          # APPROVED 不在此处放行：auto_incremental_review 关闭后，旧 commit 的
-          # APPROVED 不代表新 head 已审查，必须由下方按 commit_id == HEAD_SHA
-          # 过滤的 latest_review 判定，避免旧批准跨提交放行。
-          decision_state="$(decision_latest | jq -r .state)"
-          if [ "$decision_state" = "CHANGES_REQUESTED" ]; then
+          # 非评审事件：HEAD 绑定决策决定门禁。旧 commit 的终态决策不参与，
+          # 需 CodeRabbit 对当前 head 复评后才能放行或阻断。
+          head_state="$(head_decision | jq -r .state)"
+          if [ "$head_state" = "CHANGES_REQUESTED" ]; then
             set_status failure "CodeRabbit requested changes"
             exit 0
           fi
-
-          # HEAD 绑定：只有 CodeRabbit 对当前 head commit 的 APPROVED 才放行。
-          state="$(latest_review | jq -r .state)"
-          if [ "$state" = "CHANGES_REQUESTED" ]; then
-            set_status failure "CodeRabbit requested changes"
-            exit 0
-          fi
-          if [ "$state" = "APPROVED" ]; then
+          if [ "$head_state" = "APPROVED" ]; then
             set_status success "CodeRabbit approved"
             exit 0
           fi
@@ -210,13 +218,12 @@ jobs:
             exit 0
           fi
           if printf '%s' "$desc" | grep -qi 'rate.limit'; then
-            set_status success "CodeRabbit rate limited; required checks gate merge"
+            if [ "$(ever_requested_changes)" = "true" ]; then
+              set_status failure "CodeRabbit requested changes (rate limited; not excluded)"
+            else
+              set_status success "CodeRabbit rate limited; required checks gate merge"
+            fi
             exit 0
           fi
 
-          state="$(latest_review | jq -r .state)"
-          case "$state" in
-            APPROVED) set_status success "CodeRabbit approved" ;;
-            CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
-            *) set_status failure "CodeRabbit review unexpected state: $state" ;;
-          esac
+          set_status failure "CodeRabbit review unexpected state: $desc"
