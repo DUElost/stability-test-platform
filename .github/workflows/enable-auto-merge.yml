@@ -60,6 +60,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
           REVIEW_ID: ${{ github.event.review.id }}
+          REVIEW_AUTHOR: ${{ github.event.review.user.login }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -71,23 +72,34 @@ jobs:
               -f state="$state" -f context=code-rabbit-gate -f description="$desc" >/dev/null
           }
           latest_review() {
-            gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-              --jq '[.[] | select(.user.login == "coderabbitai")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
+            # REST 登录名是 coderabbitai[bot]，用前缀匹配；分页取全量，并只取
+            # commit_id 等于当前 HEAD 的评审，避免旧 commit 的 APPROVED 污染门禁。
+            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+              | jq -c --arg head_sha "$HEAD_SHA" \
+                  '[.[][] | select((.user.login // "") | startswith("coderabbitai")) | select(.commit_id == $head_sha)] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
           }
 
-          # 评审提交事件：REST 可能稍后才能看到刚提交的 review，按 review id 对齐
-          # 并最多重试 60 秒，避免把 CHANGES_REQUESTED 误判为 pending。
+          # 评审提交事件：仅处理 CodeRabbit 的评审；人工评审事件直接跳过。
           if [ "$EVENT_NAME" = "pull_request_review" ]; then
+            if ! printf '%s' "$REVIEW_AUTHOR" | grep -qi '^coderabbitai'; then
+              echo "Review by ${REVIEW_AUTHOR:-unknown}; merge-gate skipped"
+              exit 0
+            fi
+            # REST 可能稍后才能看到刚提交的评审；仅当 id 与 REVIEW_ID 对齐才结束
+            # 重试（最多 60 秒），避免旧评审状态提前结束循环导致误写 success。
             state=""
+            id=""
             for _ in $(seq 1 12); do
               review_json="$(latest_review)"
               id="$(printf '%s' "$review_json" | jq -r .id)"
               state="$(printf '%s' "$review_json" | jq -r .state)"
-              if [ "$id" = "$REVIEW_ID" ] || [ "$state" = "APPROVED" ] || [ "$state" = "CHANGES_REQUESTED" ]; then
-                break
-              fi
+              [ "$id" = "$REVIEW_ID" ] && break
               sleep 5
             done
+            if [ "$id" != "$REVIEW_ID" ]; then
+              set_status pending "CodeRabbit review pending"
+              exit 0
+            fi
             case "$state" in
               APPROVED) set_status success "CodeRabbit approved" ;;
               CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
