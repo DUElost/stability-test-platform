@@ -149,6 +149,7 @@ See `backend/.env.example` and `backend/agent/.env.example` for full list.
 - Production Agent needs `AGENT_SECRET` env for SocketIO auth.
 - `ORMBaseModel` (`backend/api/schemas/base.py`) auto-serializes datetime to ISO-UTC via `field_serializer(when_used="json")`.
 - **PR 合入**：仓库已开启 Auto-merge；`.github/workflows/enable-auto-merge.yml` 自动给同仓库非 draft PR 挂 auto-merge（merge commit，fork PR 不启用），并维护 `code-rabbit-gate` 状态作为准入门禁：CodeRabbit APPROVED → 通过；CHANGES_REQUESTED → 阻断；rate limited → 视为排除 CodeRabbit，由 required checks 把关合入；其余状态 fail-closed。不要手动点 Merge。
+- **CI 分层（2026-08-07）**：PR 只跑轻量 job（lint / pr-typecheck / pr-compileall / pr-agent-tests）；全量 backend-test（PG + pytest）、frontend-check（vitest + build）、docker-build 仅在 push main 与 workflow_dispatch 运行。PR 合入前不跑 PG/vitest/docker，风险由合入后全量兜底；需要“合并前全量校验”时应引入 Merge Queue。
 
 ## Documentation
 

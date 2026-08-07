@@ -82,10 +82,12 @@ class HeartbeatThread:
         self._latest_devices: List[Dict[str, Any]] = []
         self._last_adb_connected_by_serial: Dict[str, bool] = {}
         self._pending_reconnected_serials: List[str] = []
-        self._last_adb_repair_at: float = 0.0
         self._adb_repair_cooldown: float = float(
             os.getenv("STP_ADB_REPAIR_COOLDOWN_SECONDS", "300")
         )
+        # 初始化为 -cooldown：fresh 进程的 time.monotonic() 可能小于冷却值
+        # （新启动的 runner/host 前几分钟），否则首次自动修复会被错误抑制。
+        self._last_adb_repair_at: float = -self._adb_repair_cooldown
         self._devices_lock = threading.Lock()
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
