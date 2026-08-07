@@ -9,6 +9,14 @@ on:
     - cron: "*/15 * * * *"
   workflow_dispatch:
 
+# schedule 与 workflow_dispatch 共享同一并发组：避免同时执行重复检查；
+# cancel-in-progress: false 保留正在运行的任务，不做取消。
+concurrency:
+  group: main-ci-backstop
+  cancel-in-progress: false
+
+# actions: write 用于 gh workflow run 创建 workflow dispatch；
+# contents: read 用于读取 main 的 SHA 与 CI 运行信息。
 permissions:
   {}
 
@@ -28,7 +36,7 @@ jobs:
           main_sha="$(gh api "repos/$REPO/commits/main" --jq .sha)"
           has_run="$(
             gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$main_sha&per_page=20" \
-              --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "push") | select(.conclusion != null or .status == "in_progress")] | length > 0'
+              --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "push") | select(.status != "completed" or .conclusion != null)] | length > 0'
           )"
           if [ "$has_run" = "false" ]; then
             echo "No full CI run for main tip $main_sha; dispatching"
