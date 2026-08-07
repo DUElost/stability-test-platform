@@ -4,11 +4,9 @@ on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize, closed]
   pull_request_review:
-    # 只监听 submitted：CodeRabbit 的 edited/dismissed 常与 submitted 成对
-    # 触发，产生 cancelled+success 重复运行。dismissed 当前无人手动撤销
-    # CodeRabbit 评审，先不监听；以后若要支持“撤销即放行”，需先补
-    # DISMISSED 决策链再恢复该触发。
-    types: [submitted]
+    # submitted + dismissed：撤销评审必须触发门禁重算，否则旧 APPROVED 会
+    # 残留 success。成对触发产生的多余运行由 concurrency + 最终守卫收敛。
+    types: [submitted, dismissed]
 
 # 同一 PR 的并发运行只保留最新一个，避免重复写操作。
 concurrency:
@@ -108,13 +106,14 @@ jobs:
           }
           head_decision() {
             # HEAD 绑定决策：只取 CodeRabbit 对当前 head commit 的
-            # APPROVED / CHANGES_REQUESTED（COMMENTED/DISMISSED 不构成决策），
-            # 取 ID 最大的那条。关闭增量审查后，旧 commit 的批准不能放行新 head。
+            # APPROVED / CHANGES_REQUESTED / DISMISSED（COMMENTED 不构成决策），
+            # 取 ID 最大的那条。DISMISSED 视为清除性终态：撤销后即使更早存在
+            # APPROVED 也不放行。关闭增量审查后，旧 commit 的批准不能放行新 head。
             local out
             out="$(
               gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
                 | jq -c --arg head_sha "$HEAD_SHA" \
-                    '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
+                    '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
             )" || {
               set_status pending "CodeRabbit gate query failed"
               exit 0
@@ -167,9 +166,12 @@ jobs:
               exit 0
             fi
             newest_run_id="$(
-              gh api "repos/$REPO_OWNER/$REPO_NAME/actions/runs?head_sha=$HEAD_SHA&per_page=5&workflow_id=enable-auto-merge.yml" \
+              gh api "repos/$REPO_OWNER/$REPO_NAME/actions/workflows/enable-auto-merge.yml/runs?head_sha=$HEAD_SHA&per_page=1" \
                 --jq '[.workflow_runs[]][0].id // 0'
-            )"
+            )" || {
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            }
             if [ "$newest_run_id" != "0" ] && [ "$newest_run_id" != "$GITHUB_RUN_ID" ]; then
               echo "Superseded by newer run $newest_run_id; skip status write"
               exit 0
@@ -183,6 +185,7 @@ jobs:
                 case "$head_state" in
                   APPROVED) set_status success "CodeRabbit approved" ;;
                   CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
+                  DISMISSED) set_status pending "CodeRabbit review dismissed" ;;
                   *) set_status pending "CodeRabbit review pending" ;;
                 esac
                 ;;
@@ -238,6 +241,7 @@ jobs:
           case "$head_state" in
             APPROVED) set_status success "CodeRabbit approved" ;;
             CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
+            DISMISSED) set_status pending "CodeRabbit review dismissed" ;;
             *) set_status pending "CodeRabbit review completed without terminal decision" ;;
           esac
 
