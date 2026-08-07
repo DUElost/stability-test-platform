@@ -187,6 +187,54 @@ async def test_scan_task_counts_final_registration_attempt():
     )
 
 
+@pytest.mark.asyncio
+async def test_scan_task_final_scan_runs_on_partial_registration():
+    """A partially-registered run must still get the post-poll retry.
+
+    Gating the retry on ``registered == 0`` stranded any ``_org.xls`` that
+    landed inside the last poll interval: never registered, never merged.
+    """
+    from backend.tasks import saq_tasks
+
+    mock_db = MagicMock()
+    mock_db.execute.return_value.all.return_value = [
+        ("host-1", "ONLINE"),
+        ("host-2", "ONLINE"),
+    ]
+    mock_db.close = MagicMock()
+
+    scan_sync = MagicMock()
+    record_archive = MagicMock()
+    calls = 0
+
+    async def fake_to_thread(fn, *a, **kw):
+        nonlocal calls
+        if fn is not scan_sync:
+            return fn(*a, **kw)
+        calls += 1
+        # host-1 lands immediately; host-2 only after the poll window closes.
+        if calls == 1:
+            return "1"
+        return "" if calls <= 30 else "1"
+
+    saq_tasks.asyncio_sleep = AsyncMock()
+    saq_tasks.asyncio_to_thread = AsyncMock(side_effect=fake_to_thread)
+
+    with patch("backend.core.database.SessionLocal", return_value=mock_db), \
+         patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()), \
+         patch("backend.services.dedup_scan.run_scan_sync", scan_sync), \
+         patch("backend.services.dedup_scan.record_scan_archive_state", record_archive):
+        mock_queue = MagicMock()
+        mock_queue.enqueue = AsyncMock()
+        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+             patch("saq.Job", MagicMock()):
+            await saq_tasks.scan_task({}, plan_run_id=43, is_final=True)
+
+    record_archive.assert_called_once_with(
+        43, hosts_triggered=2, artifacts_registered=2
+    )
+
+
 # ---------------------------------------------------------------------------
 # merge_task → extract_task chain
 # ---------------------------------------------------------------------------

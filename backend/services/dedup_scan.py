@@ -121,24 +121,36 @@ def record_scan_archive_state(
     下发了 host 却零产物意味着这次执行没有任何报表，而 PlanRun 仍可能是
     SUCCESS —— 落到 run_context 是为了让该状态经 API 可见，而不是只剩一行
     Agent 本地日志（#118 同源）。
+
+    写入走库端 ``jsonb_set`` 而非读改写整个 ``run_context``：这里是独立会话，
+    而 abort / dispatch_state 可能在同一时刻更新同一行，整体写回会把它们抹掉。
     """
-    from sqlalchemy.orm.attributes import flag_modified
+    import json
+
+    from sqlalchemy import text
 
     from backend.core.database import SessionLocal
-    from backend.models.plan_run import PlanRun
 
     db = SessionLocal()
     try:
-        pr = db.get(PlanRun, plan_run_id)
-        if pr is None:
-            return
-        run_ctx = dict(pr.run_context or {})
-        run_ctx["archive"] = {
-            "hosts_triggered": hosts_triggered,
-            "scan_artifacts_registered": artifacts_registered,
-        }
-        pr.run_context = run_ctx
-        flag_modified(pr, "run_context")
+        db.execute(
+            text(
+                "UPDATE plan_run "
+                "SET run_context = jsonb_set("
+                "  COALESCE(run_context, '{}'::jsonb), '{archive}', CAST(:archive AS jsonb), true"
+                ") "
+                "WHERE id = :run_id"
+            ),
+            {
+                "run_id": plan_run_id,
+                "archive": json.dumps(
+                    {
+                        "hosts_triggered": hosts_triggered,
+                        "scan_artifacts_registered": artifacts_registered,
+                    }
+                ),
+            },
+        )
         db.commit()
     except Exception:
         # Bookkeeping must not abort the scan → upload → merge chain.

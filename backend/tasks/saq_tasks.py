@@ -176,7 +176,9 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
                 plan_run_id, elapsed, registered, n_triggered,
             )
 
-        if registered == 0:
+        # Poll exhausted with some hosts still missing: retry once so an _org.xls
+        # that landed inside the last interval still gets registered and merged.
+        if registered < n_triggered:
             n_final = await asyncio_to_thread(run_scan_sync, plan_run_id)
             if n_final:
                 registered += int(n_final)
