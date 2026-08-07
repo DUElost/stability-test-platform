@@ -1,0 +1,38 @@
+name: Main CI backstop
+
+# auto-merge 的 merge commit 由 GitHub 内部凭据推送，on: push、pull_request.closed
+# 与 workflow_run 的触发都会被 GITHUB_TOKEN 级联限制抑制（实测均不触发）。
+# 定时兜底：每 15 分钟检查 main 尖端是否已有全量 CI（workflow_dispatch / push），
+# 没有就显式 dispatch ci.yml。workflow_dispatch 是显式触发，不受级联限制。
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  {}
+
+jobs:
+  dispatch-unverified:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch full CI if main tip unverified
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "repos/$REPO/commits/main" --jq .sha)"
+          has_run="$(
+            gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$main_sha&per_page=20" \
+              --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "push") | select(.conclusion != null or .status == "in_progress")] | length > 0'
+          )"
+          if [ "$has_run" = "false" ]; then
+            echo "No full CI run for main tip $main_sha; dispatching"
+            gh workflow run ci.yml --ref main -R "$REPO"
+          else
+            echo "Full CI already present for $main_sha"
+          fi
