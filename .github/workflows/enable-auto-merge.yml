@@ -4,7 +4,11 @@ on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
   pull_request_review:
-    types: [submitted, edited, dismissed]
+    # 只监听 submitted：CodeRabbit 的 edited/dismissed 常与 submitted 成对
+    # 触发，产生 cancelled+success 重复运行。dismissed 当前无人手动撤销
+    # CodeRabbit 评审，先不监听；以后若要支持“撤销即放行”，需先补
+    # DISMISSED 决策链再恢复该触发。
+    types: [submitted]
 
 # 同一 PR 的并发运行只保留最新一个，避免重复写操作。
 concurrency:
