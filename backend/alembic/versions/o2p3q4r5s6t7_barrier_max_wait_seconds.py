@@ -12,6 +12,7 @@ _await_phase_barrier 起算的绝对上限（NULL = 保持现行为，不设硬�
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 revision = "o2p3q4r5s6t7"
 down_revision = "n1o2p3q4r5s6"
@@ -20,11 +21,17 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "plan",
-        sa.Column("barrier_max_wait_seconds", sa.Integer(), nullable=True),
-    )
+    bind = op.get_bind()
+    columns = {c["name"] for c in inspect(bind).get_columns("plan")}
+    if "barrier_max_wait_seconds" not in columns:
+        op.add_column(
+            "plan",
+            sa.Column("barrier_max_wait_seconds", sa.Integer(), nullable=True),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("plan", "barrier_max_wait_seconds")
+    bind = op.get_bind()
+    columns = {c["name"] for c in inspect(bind).get_columns("plan")}
+    if "barrier_max_wait_seconds" in columns:
+        op.drop_column("plan", "barrier_max_wait_seconds")

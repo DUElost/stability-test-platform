@@ -226,6 +226,7 @@ class TestBarrierRenewal:
             assert not thread.is_alive(), "停滞 peer 应在原 timeout 后返回"
             assert result == [False]
             assert eng._wait_calls >= 1
+            assert eng._barrier_failure_reason == "barrier_timeout"
         finally:
             _time.sleep = real_sleep
 
@@ -266,5 +267,6 @@ class TestBarrierRenewal:
             assert not thread.is_alive(), "绝对硬顶必须打断续期"
             assert result == [False], result
             assert elapsed < 3.0, f"硬顶应远早于无限续期: {elapsed:.2f}s"
+            assert eng._barrier_failure_reason == "barrier_max_wait"
         finally:
             _time.sleep = real_sleep

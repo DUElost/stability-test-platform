@@ -1041,7 +1041,12 @@ class PipelineEngine:
 
         Sets WAITING_BARRIER while waiting (Coordinator heartbeat clock).
         Returns False on abort / lease-lost / timeout.
+        On False, ``self._barrier_failure_reason`` carries the cause
+        (``barrier_max_wait`` / ``barrier_timeout`` / ``abort``) so the caller
+        can map timeouts to FAILED instead of collapsing everything to ABORTED
+        (#174 review).
         """
+        self._barrier_failure_reason = None
         if not self._barrier_enabled():
             # A single-device PlanRunHost (or an emergency barrier rollback)
             # has no peers to wait for, but the host-level phase still crossed
@@ -1054,6 +1059,7 @@ class PipelineEngine:
         if self._is_lock_lost() or self._canceled:
             # Count toward barrier so peers are not stuck on an aborted job.
             self._arrive_phase_barrier(next_phase)
+            self._barrier_failure_reason = "abort"
             return False
         self._update_execution_state("WAITING_BARRIER")
         is_last = self._arrive_phase_barrier(next_phase)
@@ -1069,6 +1075,7 @@ class PipelineEngine:
         assert coord is not None and prh_id is not None
         while True:
             if self._is_lock_lost() or self._canceled:
+                self._barrier_failure_reason = "abort"
                 return False
             # #117:peer 还在推进就续期——barrier 因为同伴"还在干活"而超时
             # 本身就是误判。只有所有 peer 都停滞才启动现有超时钟。
@@ -1095,6 +1102,7 @@ class PipelineEngine:
                     max_wait, now - entered_at, renewal_count, reason,
                     self._peer_state_snapshot(coord),
                 )
+                self._barrier_failure_reason = reason
                 return False
             if coord.wait_barrier(prh_id, timeout=min(5.0, remaining)):
                 logger.info(
@@ -1640,11 +1648,19 @@ class PipelineEngine:
                 else:
                     barrier_ok = self._await_phase_barrier("PATROL")
                 if not barrier_ok:
-                    termination_reason = "abort"
-                    lifecycle_error = "phase barrier aborted or timed out"
+                    barrier_reason = getattr(
+                        self, "_barrier_failure_reason", "barrier_timeout"
+                    )
+                    if barrier_reason in ("barrier_max_wait", "barrier_timeout"):
+                        # #174 review: 超时是失败不是取消——终态必须 FAILED。
+                        termination_reason = "barrier_timeout"
+                        lifecycle_error = f"phase barrier failed: {barrier_reason}"
+                    else:
+                        termination_reason = "abort"
+                        lifecycle_error = "phase barrier aborted or lease lost"
                     logger.error(
-                        "[Lifecycle] run=%d — INIT→PATROL barrier failed",
-                        self._run_id,
+                        "[Lifecycle] run=%d — INIT→PATROL barrier failed reason=%s",
+                        self._run_id, barrier_reason,
                     )
                 else:
                     # ── Phase 2: Patrol loop (only if init succeeded) ──
@@ -1681,6 +1697,7 @@ class PipelineEngine:
             mq_status = "ABORTED"
         else:
             mq_status = "FAILED"
+        assert mq_status in ("COMPLETED", "FAILED", "ABORTED"), mq_status
 
         self._report_job_status_mq(
             mq_status,
