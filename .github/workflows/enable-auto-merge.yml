@@ -43,10 +43,12 @@ jobs:
             gh pr merge "$PR_URL" --auto --merge
           fi
 
-  code-rabbit-gate:
+  merge-gate:
     # 准入门禁：CodeRabbit APPROVED → success；CHANGES_REQUESTED → failure；
     # rate limited → success（按仓库策略排除 CodeRabbit，由 required checks 把关）；
     # 其他状态 → pending/failure，fail-closed。
+    # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
+    # status 同名，造成 required check 来源歧义。
     if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
     permissions:
@@ -57,6 +59,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
+          REVIEW_ID: ${{ github.event.review.id }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -67,14 +70,24 @@ jobs:
             gh api -X POST "repos/$REPO_OWNER/$REPO_NAME/statuses/$HEAD_SHA" \
               -f state="$state" -f context=code-rabbit-gate -f description="$desc" >/dev/null
           }
-          latest_state() {
+          latest_review() {
             gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-              --jq '[.[] | select(.user.login == "coderabbitai")][-1].state // ""'
+              --jq '[.[] | select(.user.login == "coderabbitai")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
           }
 
-          # 评审提交事件：直接按最新 review 状态定门禁。
+          # 评审提交事件：REST 可能稍后才能看到刚提交的 review，按 review id 对齐
+          # 并最多重试 60 秒，避免把 CHANGES_REQUESTED 误判为 pending。
           if [ "$EVENT_NAME" = "pull_request_review" ]; then
-            state="$(latest_state)"
+            state=""
+            for _ in $(seq 1 12); do
+              review_json="$(latest_review)"
+              id="$(printf '%s' "$review_json" | jq -r .id)"
+              state="$(printf '%s' "$review_json" | jq -r .state)"
+              if [ "$id" = "$REVIEW_ID" ] || [ "$state" = "APPROVED" ] || [ "$state" = "CHANGES_REQUESTED" ]; then
+                break
+              fi
+              sleep 5
+            done
             case "$state" in
               APPROVED) set_status success "CodeRabbit approved" ;;
               CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
@@ -83,7 +96,7 @@ jobs:
             exit 0
           fi
 
-          state="$(latest_state)"
+          state="$(latest_review | jq -r .state)"
           if [ "$state" = "CHANGES_REQUESTED" ]; then
             set_status failure "CodeRabbit requested changes"
             exit 0
@@ -115,7 +128,7 @@ jobs:
             exit 0
           fi
 
-          state="$(latest_state)"
+          state="$(latest_review | jq -r .state)"
           case "$state" in
             APPROVED) set_status success "CodeRabbit approved" ;;
             CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
