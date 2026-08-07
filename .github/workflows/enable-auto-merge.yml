@@ -80,59 +80,31 @@ jobs:
               -f state="$state" -f context=code-rabbit-gate -f description="$desc" >/dev/null
           }
           latest_review() {
-            local out
-            out="$(
-              gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-                | jq -c --arg head_sha "$HEAD_SHA" \
-                    '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha)] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
-            )" || {
-              set_status pending "CodeRabbit gate query failed"
-              exit 0
-            }
-            printf '%s' "$out"
+            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+              | jq -c --arg head_sha "$HEAD_SHA" \
+                  '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha)] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
           }
           review_by_id() {
             # 评审事件专用：精确匹配 REVIEW_ID 且 commit_id 等于当前 HEAD 的评审。
-            local out
-            out="$(
-              gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-                | jq -c --arg head_sha "$HEAD_SHA" --arg id "$REVIEW_ID" \
-                    '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha and ((.id // 0) | tostring) == $id)] | .[0] | {id: (.id // 0), state: (.state // "")}'
-            )" || {
-              set_status pending "CodeRabbit gate query failed"
-              exit 0
-            }
-            printf '%s' "$out"
+            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+              | jq -c --arg head_sha "$HEAD_SHA" --arg id "$REVIEW_ID" \
+                  '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha and ((.id // 0) | tostring) == $id)] | .[0] | {id: (.id // 0), state: (.state // "")}'
           }
           head_decision() {
             # HEAD 绑定决策：只取 CodeRabbit 对当前 head commit 的
             # APPROVED / CHANGES_REQUESTED / DISMISSED（COMMENTED 不构成决策），
             # 取 ID 最大的那条。DISMISSED 视为清除性终态：撤销后即使更早存在
             # APPROVED 也不放行。关闭增量审查后，旧 commit 的批准不能放行新 head。
-            local out
-            out="$(
-              gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-                | jq -c --arg head_sha "$HEAD_SHA" \
-                    '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
-            )" || {
-              set_status pending "CodeRabbit gate query failed"
-              exit 0
-            }
-            printf '%s' "$out"
+            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+              | jq -c --arg head_sha "$HEAD_SHA" \
+                  '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
           }
           ever_requested_changes() {
             # 历史阻断记录：该 PR 是否收到过 CodeRabbit 的 CHANGES_REQUESTED
             # （跨所有 commit）。仅用于 rate-limit 分支：有阻断历史时即使限流
             # 也不放行，避免“限流即排除”吞掉真实评审意见。
-            local out
-            out="$(
-              gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-                | jq -c '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.state == "CHANGES_REQUESTED")] | length > 0'
-            )" || {
-              set_status pending "CodeRabbit gate query failed"
-              exit 0
-            }
-            printf '%s' "$out"
+            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+              | jq -c '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.state == "CHANGES_REQUESTED")] | length > 0'
           }
 
           # 评审提交事件：仅处理 CodeRabbit 的评审；人工评审事件直接跳过。
@@ -146,7 +118,10 @@ jobs:
             state=""
             id=""
             for _ in $(seq 1 12); do
-              review_json="$(review_by_id)"
+              if ! review_json="$(review_by_id)"; then
+                set_status pending "CodeRabbit gate query failed"
+                exit 0
+              fi
               id="$(printf '%s' "$review_json" | jq -r .id)"
               state="$(printf '%s' "$review_json" | jq -r .state)"
               [ "$id" = "$REVIEW_ID" ] && break
@@ -159,7 +134,10 @@ jobs:
             # 最终守卫：cancel-in-progress 是异步取消，旧运行仍可能在取消完成前
             # 写状态。写入前确认 REVIEW_ID 仍是该 HEAD 上最新的 CodeRabbit 评审，
             # 且本运行未被更新的运行取代；否则退出，由新运行写状态。
-            latest="$(latest_review)"
+            if ! latest="$(latest_review)"; then
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            fi
             latest_id="$(printf '%s' "$latest" | jq -r .id)"
             if [ "$latest_id" != "0" ] && [ "$latest_id" != "$REVIEW_ID" ]; then
               echo "Newer review $latest_id supersedes $REVIEW_ID; skip status write"
@@ -181,7 +159,11 @@ jobs:
               CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
               *)
                 # COMMENTED 等非终态评审不清除既有 head 决策。
-                head_state="$(head_decision | jq -r .state)"
+                if ! head_json="$(head_decision)"; then
+                  set_status pending "CodeRabbit gate query failed"
+                  exit 0
+                fi
+                head_state="$(printf '%s' "$head_json" | jq -r .state)"
                 case "$head_state" in
                   APPROVED) set_status success "CodeRabbit approved" ;;
                   CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
@@ -195,7 +177,11 @@ jobs:
 
           # 非评审事件：HEAD 绑定决策决定门禁。旧 commit 的终态决策不参与，
           # 需 CodeRabbit 对当前 head 复评后才能放行或阻断。
-          head_state="$(head_decision | jq -r .state)"
+          if ! head_json="$(head_decision)"; then
+            set_status pending "CodeRabbit gate query failed"
+            exit 0
+          fi
+          head_state="$(printf '%s' "$head_json" | jq -r .state)"
           if [ "$head_state" = "CHANGES_REQUESTED" ]; then
             set_status failure "CodeRabbit requested changes"
             exit 0
@@ -224,7 +210,11 @@ jobs:
             exit 0
           fi
           if printf '%s' "$desc" | grep -qi 'rate.limit'; then
-            if [ "$(ever_requested_changes)" = "true" ]; then
+            if ! ever="$(ever_requested_changes)"; then
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            fi
+            if [ "$ever" = "true" ]; then
               set_status failure "CodeRabbit requested changes (rate limited; not excluded)"
             else
               set_status success "CodeRabbit rate limited; required checks gate merge"
@@ -237,7 +227,11 @@ jobs:
           fi
 
           # 落定后再次按 HEAD 决策判断：COMMENTED 中间态/无终态评审 → pending。
-          head_state="$(head_decision | jq -r .state)"
+          if ! head_json="$(head_decision)"; then
+            set_status pending "CodeRabbit gate query failed"
+            exit 0
+          fi
+          head_state="$(printf '%s' "$head_json" | jq -r .state)"
           case "$head_state" in
             APPROVED) set_status success "CodeRabbit approved" ;;
             CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
