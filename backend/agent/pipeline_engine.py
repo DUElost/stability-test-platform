@@ -1064,7 +1064,10 @@ class PipelineEngine:
         self._update_execution_state("WAITING_BARRIER")
         is_last = self._arrive_phase_barrier(next_phase)
         if is_last:
-            return not (self._is_lock_lost() or self._canceled)
+            ok = not (self._is_lock_lost() or self._canceled)
+            if not ok:
+                self._barrier_failure_reason = "abort"
+            return ok
         timeout = self._resolve_barrier_timeout()
         deadline = time.monotonic() + timeout
         entered_at = time.monotonic()
@@ -1109,7 +1112,10 @@ class PipelineEngine:
                     "barrier_released run=%d prh=%s → %s",
                     self._run_id, prh_id, next_phase,
                 )
-                return not (self._is_lock_lost() or self._canceled)
+                ok = not (self._is_lock_lost() or self._canceled)
+                if not ok:
+                    self._barrier_failure_reason = "abort"
+                return ok
 
     def _peer_state_snapshot(self, coord) -> str:
         """#174: 硬顶/超时日志附 peer 状态快照，便于从现象反推等待原因。"""

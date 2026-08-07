@@ -253,20 +253,16 @@ class TestBarrierRenewal:
         def _run():
             result.append(eng._await_phase_barrier("PATROL"))
 
-        real_sleep = _time.sleep
-        _time.sleep = lambda s: real_sleep(0.001)
-        try:
-            thread = threading.Thread(target=_run, daemon=True)
-            thread.start()
-            # 持续推进 peer，直到硬顶把 barrier 打断
-            for _ in range(200):
-                _refresh()
-                _time.sleep(0.01)
-            thread.join(timeout=3)
-            elapsed = _time.monotonic() - started
-            assert not thread.is_alive(), "绝对硬顶必须打断续期"
-            assert result == [False], result
-            assert elapsed < 3.0, f"硬顶应远早于无限续期: {elapsed:.2f}s"
-            assert eng._barrier_failure_reason == "barrier_max_wait"
-        finally:
-            _time.sleep = real_sleep
+        # 用真实时间推进 peer：至少 0.4s，确保越过滑动窗 0.2s 且硬顶 0.3s
+        # 之后仍在推进——否则压缩时钟会让测试可能先踩到普通超时（#174 review）。
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        for _ in range(40):
+            _refresh()
+            _time.sleep(0.01)
+        thread.join(timeout=3)
+        elapsed = _time.monotonic() - started
+        assert not thread.is_alive(), "绝对硬顶必须打断续期"
+        assert result == [False], result
+        assert 0.3 <= elapsed < 1.0, f"硬顶应约 0.3s 触发: {elapsed:.2f}s"
+        assert eng._barrier_failure_reason == "barrier_max_wait"
