@@ -2,13 +2,11 @@ name: Enable auto-merge
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize, closed]
   pull_request_review:
-    # 只监听 submitted：CodeRabbit 的 edited/dismissed 常与 submitted 成对
-    # 触发，产生 cancelled+success 重复运行。dismissed 当前无人手动撤销
-    # CodeRabbit 评审，先不监听；以后若要支持“撤销即放行”，需先补
-    # DISMISSED 决策链再恢复该触发。
-    types: [submitted]
+    # submitted + dismissed：撤销评审必须触发门禁重算，否则旧 APPROVED 会
+    # 残留 success。成对触发产生的多余运行由 concurrency + 最终守卫收敛。
+    types: [submitted, dismissed]
 
 # 同一 PR 的并发运行只保留最新一个，避免重复写操作。
 concurrency:
@@ -22,7 +20,7 @@ permissions:
 jobs:
   enable-auto-merge:
     # 仅同仓库、非 draft PR：fork PR 的 GITHUB_TOKEN 只读，且不应获得自动合入能力。
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    if: github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
     # gh pr merge --auto --merge 需要 PR 与 base 分支的写权限，job 内按需授予。
     permissions:
@@ -47,13 +45,19 @@ jobs:
             gh pr merge "$PR_URL" --auto --merge
           fi
 
-  code-rabbit-gate:
-    # 准入门禁：CodeRabbit APPROVED → success；CHANGES_REQUESTED → failure；
-    # rate limited → success（按仓库策略排除 CodeRabbit，由 required checks 把关）；
-    # 其他状态 → pending/failure，fail-closed。
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+  merge-gate:
+    # 准入门禁：CodeRabbit 对当前 head 的 APPROVED → success；对当前 head 的
+    # CHANGES_REQUESTED → failure；rate limited → 仅当该 PR 从未收到过
+    # CHANGES_REQUESTED 才放行（有阻断历史则保持 failure）；其他状态 →
+    # pending/failure，fail-closed。
+    # auto_incremental_review 关闭后，push 事件会出现 “Review skipped / paused”
+    # 的常态状态，门禁写 pending 等待显式 @coderabbitai review，而不是失败。
+    # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
+    # status 同名，造成 required check 来源歧义。
+    if: github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       pull-requests: read
       statuses: write
     steps:
@@ -61,67 +65,194 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
+          REVIEW_ID: ${{ github.event.review.id }}
+          REVIEW_AUTHOR: ${{ github.event.review.user.login }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
+
           set_status() {
             local state="$1" desc="$2"
             gh api -X POST "repos/$REPO_OWNER/$REPO_NAME/statuses/$HEAD_SHA" \
               -f state="$state" -f context=code-rabbit-gate -f description="$desc" >/dev/null
           }
-          latest_state() {
-            gh api "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-              --jq '[.[] | select(.user.login == "coderabbitai")][-1].state // ""'
+          latest_review() {
+            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+              | jq -c --arg head_sha "$HEAD_SHA" \
+                  '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha)] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
+          }
+          review_by_id() {
+            # 评审事件专用：精确匹配 REVIEW_ID 且 commit_id 等于当前 HEAD 的评审。
+            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+              | jq -c --arg head_sha "$HEAD_SHA" --arg id "$REVIEW_ID" \
+                  '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha and ((.id // 0) | tostring) == $id)] | .[0] | {id: (.id // 0), state: (.state // "")}'
+          }
+          head_decision() {
+            # HEAD 绑定决策：只取 CodeRabbit 对当前 head commit 的
+            # APPROVED / CHANGES_REQUESTED / DISMISSED（COMMENTED 不构成决策），
+            # 取 ID 最大的那条。DISMISSED 视为清除性终态：撤销后即使更早存在
+            # APPROVED 也不放行。关闭增量审查后，旧 commit 的批准不能放行新 head。
+            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+              | jq -c --arg head_sha "$HEAD_SHA" \
+                  '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
+          }
+          ever_requested_changes() {
+            # 历史阻断记录：该 PR 是否收到过 CodeRabbit 的 CHANGES_REQUESTED
+            # （跨所有 commit）。仅用于 rate-limit 分支：有阻断历史时即使限流
+            # 也不放行，避免“限流即排除”吞掉真实评审意见。
+            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+              | jq -c '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.state == "CHANGES_REQUESTED")] | length > 0'
           }
 
-          # 评审提交事件：直接按最新 review 状态定门禁。
+          # 评审提交事件：仅处理 CodeRabbit 的评审；人工评审事件直接跳过。
           if [ "$EVENT_NAME" = "pull_request_review" ]; then
-            state="$(latest_state)"
+            if [ "$REVIEW_AUTHOR" != "coderabbitai[bot]" ] && [ "$REVIEW_AUTHOR" != "coderabbitai" ]; then
+              echo "Review by ${REVIEW_AUTHOR:-unknown}; merge-gate skipped"
+              exit 0
+            fi
+            # REST 可能稍后才能看到刚提交的评审；仅当 id 与 REVIEW_ID 对齐才结束
+            # 重试（最多 60 秒），避免旧评审状态提前结束循环导致误写 success。
+            state=""
+            id=""
+            for _ in $(seq 1 12); do
+              if ! review_json="$(review_by_id)"; then
+                set_status pending "CodeRabbit gate query failed"
+                exit 0
+              fi
+              id="$(printf '%s' "$review_json" | jq -r .id)"
+              state="$(printf '%s' "$review_json" | jq -r .state)"
+              [ "$id" = "$REVIEW_ID" ] && break
+              sleep 5
+            done
+            if [ "$id" != "$REVIEW_ID" ]; then
+              set_status pending "CodeRabbit review pending"
+              exit 0
+            fi
+            # 最终守卫：cancel-in-progress 是异步取消，旧运行仍可能在取消完成前
+            # 写状态。写入前确认 REVIEW_ID 仍是该 HEAD 上最新的 CodeRabbit 评审，
+            # 且本运行未被更新的运行取代；否则退出，由新运行写状态。
+            if ! latest="$(latest_review)"; then
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            fi
+            latest_id="$(printf '%s' "$latest" | jq -r .id)"
+            if [ "$latest_id" != "0" ] && [ "$latest_id" != "$REVIEW_ID" ]; then
+              echo "Newer review $latest_id supersedes $REVIEW_ID; skip status write"
+              exit 0
+            fi
+            newest_run_id="$(
+              gh api "repos/$REPO_OWNER/$REPO_NAME/actions/workflows/enable-auto-merge.yml/runs?head_sha=$HEAD_SHA&per_page=1" \
+                --jq '[.workflow_runs[]][0].id // 0'
+            )" || {
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            }
+            if [ "$newest_run_id" != "0" ] && [ "$newest_run_id" != "$GITHUB_RUN_ID" ]; then
+              echo "Superseded by newer run $newest_run_id; skip status write"
+              exit 0
+            fi
             case "$state" in
               APPROVED) set_status success "CodeRabbit approved" ;;
               CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
-              *) set_status pending "CodeRabbit review pending" ;;
+              *)
+                # COMMENTED 等非终态评审不清除既有 head 决策。
+                if ! head_json="$(head_decision)"; then
+                  set_status pending "CodeRabbit gate query failed"
+                  exit 0
+                fi
+                head_state="$(printf '%s' "$head_json" | jq -r .state)"
+                case "$head_state" in
+                  APPROVED) set_status success "CodeRabbit approved" ;;
+                  CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
+                  DISMISSED) set_status pending "CodeRabbit review dismissed" ;;
+                  *) set_status pending "CodeRabbit review pending" ;;
+                esac
+                ;;
             esac
             exit 0
           fi
 
-          state="$(latest_state)"
-          if [ "$state" = "CHANGES_REQUESTED" ]; then
+          # 非评审事件：HEAD 绑定决策决定门禁。旧 commit 的终态决策不参与，
+          # 需 CodeRabbit 对当前 head 复评后才能放行或阻断。
+          if ! head_json="$(head_decision)"; then
+            set_status pending "CodeRabbit gate query failed"
+            exit 0
+          fi
+          head_state="$(printf '%s' "$head_json" | jq -r .state)"
+          if [ "$head_state" = "CHANGES_REQUESTED" ]; then
             set_status failure "CodeRabbit requested changes"
             exit 0
           fi
-          if [ "$state" = "APPROVED" ]; then
+          if [ "$head_state" = "APPROVED" ]; then
             set_status success "CodeRabbit approved"
             exit 0
           fi
 
           # 等 CodeRabbit 在该 commit 上的状态落定（最多 10 分钟）：
-          # in progress → 继续等；rate limited / completed / 其他 → 停止轮询。
+          # queued / in progress → 继续等；rate limited / skipped / paused /
+          # completed / 其他 → 停止轮询。
           desc=""
           for _ in $(seq 1 60); do
             desc="$(
               gh api "repos/$REPO_OWNER/$REPO_NAME/commits/$HEAD_SHA/status" \
                 --jq '[.statuses[] | select(.context == "CodeRabbit")][0].description // ""'
             )"
-            if [ -n "$desc" ] && ! printf '%s' "$desc" | grep -qi 'in.progress'; then
+            if [ -n "$desc" ] && ! printf '%s' "$desc" | grep -qiE 'queued|in.progress'; then
               break
             fi
             sleep 10
           done
-          if [ -z "$desc" ] || printf '%s' "$desc" | grep -qi 'in.progress'; then
+          if [ -z "$desc" ] || printf '%s' "$desc" | grep -qiE 'queued|in.progress'; then
             set_status pending "Waiting for CodeRabbit review or rate-limit decision"
             exit 0
           fi
           if printf '%s' "$desc" | grep -qi 'rate.limit'; then
-            set_status success "CodeRabbit rate limited; required checks gate merge"
+            if ! ever="$(ever_requested_changes)"; then
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            fi
+            if [ "$ever" = "true" ]; then
+              set_status failure "CodeRabbit requested changes (rate limited; not excluded)"
+            else
+              set_status success "CodeRabbit rate limited; required checks gate merge"
+            fi
+            exit 0
+          fi
+          if printf '%s' "$desc" | grep -qiE 'skipped|paused'; then
+            set_status pending "CodeRabbit review not auto-triggered; @coderabbitai review required"
             exit 0
           fi
 
-          state="$(latest_state)"
-          case "$state" in
+          # 落定后再次按 HEAD 决策判断：COMMENTED 中间态/无终态评审 → pending。
+          if ! head_json="$(head_decision)"; then
+            set_status pending "CodeRabbit gate query failed"
+            exit 0
+          fi
+          head_state="$(printf '%s' "$head_json" | jq -r .state)"
+          case "$head_state" in
             APPROVED) set_status success "CodeRabbit approved" ;;
             CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
-            *) set_status failure "CodeRabbit review unexpected state: $state" ;;
+            DISMISSED) set_status pending "CodeRabbit review dismissed" ;;
+            *) set_status pending "CodeRabbit review completed without terminal decision" ;;
           esac
+
+  post-merge-full-ci:
+    # auto-merge 的 merge commit 由 GitHub 内部凭据推送，on: push 的 CI 不会触发
+    # （GITHUB_TOKEN 相关推送被抑制）。PR 合入后显式 dispatch 全量 CI（backend-test /
+    # frontend-check / docker-build），恢复“合入后全量兜底”。
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch full CI on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          gh workflow run ci.yml --ref main -R "$REPO_OWNER/$REPO_NAME"
