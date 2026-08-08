@@ -8,6 +8,7 @@ and keyword arguments that were passed at enqueue time.
 
 import logging
 import asyncio
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,10 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
 
     logger.info("saq_scan_start plan_run=%d final=%s", plan_run_id, is_final)
 
+    # Watermark for this round's completeness check, taken before scan_now goes
+    # out: artifacts registered earlier belong to a previous incremental round.
+    round_started_at = datetime.now(timezone.utc)
+
     try:
         triggered, skipped = await asyncio.to_thread(_query_hosts_for_scan, plan_run_id)
         for host_id in triggered:
@@ -168,10 +173,11 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         registered = 0
         hosts_done = 0
         n_triggered = len(triggered)
-        # Completeness is counted per host and scoped to this round's triggered
-        # set: each host uploads 2 matching files, and incremental scans reuse the
-        # plan_run_id, so neither a file count nor a run-wide host count means
-        # "every host we just asked has delivered".
+        # Completeness is counted per host, scoped to this round's triggered set,
+        # and bounded below by round_started_at: each host uploads 2 matching
+        # files, and incremental scans reuse the plan_run_id, so neither a file
+        # count nor a run-wide host count nor a host's earlier-round artifacts
+        # mean "every host we just asked has delivered this time".
         while elapsed < _SCAN_POLL_MAX_WAIT:
             await asyncio_sleep(_SCAN_POLL_INTERVAL)
             elapsed += _SCAN_POLL_INTERVAL
@@ -179,7 +185,8 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             if n_new:
                 registered += int(n_new)
             hosts_done = await asyncio_to_thread(
-                count_hosts_with_scan_artifacts, plan_run_id, triggered
+                count_hosts_with_scan_artifacts, plan_run_id, triggered,
+                since=round_started_at,
             )
             if hosts_done >= n_triggered:
                 break
@@ -195,7 +202,8 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             if n_final:
                 registered += int(n_final)
                 hosts_done = await asyncio_to_thread(
-                    count_hosts_with_scan_artifacts, plan_run_id, triggered
+                    count_hosts_with_scan_artifacts, plan_run_id, triggered,
+                    since=round_started_at,
                 )
 
         logger.info(

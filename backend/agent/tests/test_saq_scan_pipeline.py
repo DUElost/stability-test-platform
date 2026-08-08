@@ -159,6 +159,55 @@ async def test_scan_task_ignores_stale_artifacts_of_untriggered_hosts(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_scan_task_ignores_same_hosts_previous_round_artifacts(monkeypatch):
+    """A host's earlier-round artifacts must not satisfy this round.
+
+    Incremental scans reuse the ``plan_run_id``, so host-a can already have
+    artifacts from a previous round and be triggered again. Counting without the
+    ``since`` watermark makes the very first check read 1/1 and break before
+    host-a's new upload lands — merging last round's stale report.
+    """
+    from backend.tasks import saq_tasks
+
+    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    polls = 0
+    # (host_id, created_at) rows already in plan_run_artifact for this run.
+    stale = datetime(2026, 8, 8, 6, 0, tzinfo=timezone.utc)
+    rows = [("host-a", stale)]
+
+    async def fake_to_thread(fn, *a, **kw):
+        nonlocal polls
+        if fn is scan_sync:
+            polls += 1
+            if polls == 2:
+                rows.append(("host-a", datetime.now(timezone.utc)))
+                return "2"
+            return ""
+        if fn is hosts_done:
+            _run_id, host_ids = a
+            since = kw["since"]
+            return len({
+                h for h, created in rows if h in set(host_ids) and created >= since
+            })
+        return fn(*a, **kw)
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock()
+    with _scan_task_env(
+        saq_tasks, monkeypatch, _host_rows_db([("host-a", "ONLINE")]),
+        to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
+        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+    ):
+        await saq_tasks.scan_task({}, plan_run_id=46, is_final=True)
+
+    # Did not accept host-a's stale row on the first check.
+    assert polls == 2
+    record_archive.assert_called_once_with(
+        46, hosts_triggered=1, artifacts_registered=2, hosts_with_artifacts=1
+    )
+
+
+@pytest.mark.asyncio
 async def test_scan_task_breaks_on_all_registered_first_poll(monkeypatch):
     """scan_task breaks immediately if all hosts delivered in the first poll."""
     from backend.tasks import saq_tasks

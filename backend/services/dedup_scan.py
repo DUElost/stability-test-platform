@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -113,18 +114,24 @@ def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
         db.close()
 
 
-def count_hosts_with_scan_artifacts(plan_run_id: int, host_ids: Sequence[str]) -> int:
-    """``host_ids`` 中已登记 scan 产物的**去重 host 数**。
+def count_hosts_with_scan_artifacts(
+    plan_run_id: int, host_ids: Sequence[str], *, since: datetime
+) -> int:
+    """``host_ids`` 中**本轮**已登记 scan 产物的去重 host 数。
 
-    两处都必须收窄，否则完备性判定会误报「齐了」：
+    三个维度都必须收窄，否则完备性判定会误报「齐了」，后果都一样：慢的 host 漏出
+    合并，或者合并的是过期报告。
 
     - 按 **host** 而非文件数：``_register_scan_artifacts_from_nfs`` 返回文件数，而
       每台 host 上送 2 个匹配文件（``_org.xls`` 与 ``_org_dedup_org_*.xls``），拿它
       跟 host 数比会让「一台上送完毕」冒充「全部齐了」。
-    - 限定在本轮 ``host_ids`` 内：增量扫描复用同一个 ``plan_run_id``，上一轮别的
-      host 留下的产物会顶替本轮触发 host 的名额 —— 例如本轮只触发 host-b，而
-      host-a 的旧产物已在表里，全局计数即为 1，轮询会在首检就跳出，host-b 的新
-      产物赶不上这轮 merge。
+    - 限定在本轮 ``host_ids`` 内：本轮只触发 host-b 时，host-a 的旧产物会顶替
+      host-b 的名额。
+    - 限定在本轮**水位线** ``since`` 之后：增量扫描复用同一个 ``plan_run_id``，所以
+      同一台 host 上一轮留下的产物会在本轮首检就计数，轮询立刻跳出，该 host 这轮的
+      新产物赶不上 merge。``since`` 取下发 ``scan_now`` 之前的时刻；``created_at``
+      与它同为 backend 进程侧 UTC 时间（模型是 Python default，不是库端 now()），
+      不存在时钟偏差。
     """
     if not host_ids:
         return 0
@@ -140,6 +147,7 @@ def count_hosts_with_scan_artifacts(plan_run_id: int, host_ids: Sequence[str]) -
                     PlanRunArtifact.plan_run_id == plan_run_id,
                     PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
                     PlanRunArtifact.host_id.in_(list(host_ids)),
+                    PlanRunArtifact.created_at >= since,
                 )
             ).scalar()
             or 0
