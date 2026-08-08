@@ -47,9 +47,8 @@ jobs:
 
   merge-gate:
     # 准入门禁：CodeRabbit 对当前 head 的 APPROVED → success；对当前 head 的
-    # CHANGES_REQUESTED → failure；rate limited → 仅当该 PR 从未收到过
-    # CHANGES_REQUESTED 才放行（有阻断历史则保持 failure）；其他状态 →
-    # pending/failure，fail-closed。
+    # CHANGES_REQUESTED → failure；rate limited → success（限流时由 required checks
+    # 把关，不再叠加 CodeRabbit 阻断）；其他状态 → pending/failure，fail-closed。
     # auto_incremental_review 关闭后，push 事件会出现 “Review skipped / paused”
     # 的常态状态，门禁写 pending 等待显式 @coderabbitai review，而不是失败。
     # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
@@ -98,13 +97,6 @@ jobs:
             gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
               | jq -c --arg head_sha "$HEAD_SHA" \
                   '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
-          }
-          ever_requested_changes() {
-            # 历史阻断记录：该 PR 是否收到过 CodeRabbit 的 CHANGES_REQUESTED
-            # （跨所有 commit）。仅用于 rate-limit 分支：有阻断历史时即使限流
-            # 也不放行，避免“限流即排除”吞掉真实评审意见。
-            gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
-              | jq -c '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.state == "CHANGES_REQUESTED")] | length > 0'
           }
 
           # 评审提交事件：仅处理 CodeRabbit 的评审；人工评审事件直接跳过。
@@ -210,15 +202,7 @@ jobs:
             exit 0
           fi
           if printf '%s' "$desc" | grep -qi 'rate.limit'; then
-            if ! ever="$(ever_requested_changes)"; then
-              set_status pending "CodeRabbit gate query failed"
-              exit 0
-            fi
-            if [ "$ever" = "true" ]; then
-              set_status failure "CodeRabbit requested changes (rate limited; not excluded)"
-            else
-              set_status success "CodeRabbit rate limited; required checks gate merge"
-            fi
+            set_status success "CodeRabbit rate limited; required checks gate merge"
             exit 0
           fi
           if printf '%s' "$desc" | grep -qiE 'skipped|paused'; then
