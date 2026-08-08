@@ -113,6 +113,52 @@ async def test_scan_task_does_not_break_on_one_host_worth_of_files(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scan_task_ignores_stale_artifacts_of_untriggered_hosts(monkeypatch):
+    """Coverage must be scoped to this round's triggered hosts.
+
+    Incremental scans reuse the ``plan_run_id``, so a run-wide host count lets a
+    previous round's artifacts fill the quota: here host-a already has artifacts
+    but is offline, and only host-b was triggered. Counting run-wide would give
+    1/1 and break on the first check before host-b uploaded anything.
+    """
+    from backend.tasks import saq_tasks
+
+    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    polls = 0
+    registered_hosts = {"host-a"}  # stale, from an earlier scan of the same run
+
+    async def fake_to_thread(fn, *a, **kw):
+        nonlocal polls
+        if fn is scan_sync:
+            polls += 1
+            if polls == 2:
+                registered_hosts.add("host-b")
+                return "2"
+            return ""
+        if fn is hosts_done:
+            # Mirrors the real query: intersect with the host_ids it was given,
+            # so forgetting to pass ``triggered`` fails this test.
+            _run_id, host_ids = a
+            return len(registered_hosts & set(host_ids))
+        return fn(*a, **kw)
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock()
+    with _scan_task_env(
+        saq_tasks, monkeypatch, _host_rows_db([("host-a", "OFFLINE"), ("host-b", "ONLINE")]),
+        to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
+        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+    ):
+        await saq_tasks.scan_task({}, plan_run_id=45, is_final=True)
+
+    # Kept polling past the first check instead of accepting host-a's leftovers.
+    assert polls == 2
+    record_archive.assert_called_once_with(
+        45, hosts_triggered=1, artifacts_registered=2, hosts_with_artifacts=1
+    )
+
+
+@pytest.mark.asyncio
 async def test_scan_task_breaks_on_all_registered_first_poll(monkeypatch):
     """scan_task breaks immediately if all hosts delivered in the first poll."""
     from backend.tasks import saq_tasks

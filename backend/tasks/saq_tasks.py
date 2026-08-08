@@ -168,16 +168,19 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         registered = 0
         hosts_done = 0
         n_triggered = len(triggered)
-        # Completeness is per host, not per file: each host uploads 2 matching
-        # files, so comparing the file count against the host count lets one
-        # finished host pass for "all done" and drops the slower ones.
+        # Completeness is counted per host and scoped to this round's triggered
+        # set: each host uploads 2 matching files, and incremental scans reuse the
+        # plan_run_id, so neither a file count nor a run-wide host count means
+        # "every host we just asked has delivered".
         while elapsed < _SCAN_POLL_MAX_WAIT:
             await asyncio_sleep(_SCAN_POLL_INTERVAL)
             elapsed += _SCAN_POLL_INTERVAL
             n_new = await asyncio_to_thread(run_scan_sync, plan_run_id)
             if n_new:
                 registered += int(n_new)
-            hosts_done = await asyncio_to_thread(count_hosts_with_scan_artifacts, plan_run_id)
+            hosts_done = await asyncio_to_thread(
+                count_hosts_with_scan_artifacts, plan_run_id, triggered
+            )
             if hosts_done >= n_triggered:
                 break
             logger.info(
@@ -192,7 +195,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             if n_final:
                 registered += int(n_final)
                 hosts_done = await asyncio_to_thread(
-                    count_hosts_with_scan_artifacts, plan_run_id
+                    count_hosts_with_scan_artifacts, plan_run_id, triggered
                 )
 
         logger.info(

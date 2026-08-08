@@ -12,7 +12,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -113,13 +113,22 @@ def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
         db.close()
 
 
-def count_hosts_with_scan_artifacts(plan_run_id: int) -> int:
-    """已登记 scan 产物的**去重 host 数**。
+def count_hosts_with_scan_artifacts(plan_run_id: int, host_ids: Sequence[str]) -> int:
+    """``host_ids`` 中已登记 scan 产物的**去重 host 数**。
 
-    轮询完备性只能按 host 判定：``_register_scan_artifacts_from_nfs`` 返回的是
-    文件数，而每台 host 上送 2 个匹配文件（``_org.xls`` 与 ``_org_dedup_org_*.xls``），
-    拿它跟 host 数比会让「一台上送完毕」冒充「全部齐了」，慢的 host 直接被漏出合并。
+    两处都必须收窄，否则完备性判定会误报「齐了」：
+
+    - 按 **host** 而非文件数：``_register_scan_artifacts_from_nfs`` 返回文件数，而
+      每台 host 上送 2 个匹配文件（``_org.xls`` 与 ``_org_dedup_org_*.xls``），拿它
+      跟 host 数比会让「一台上送完毕」冒充「全部齐了」。
+    - 限定在本轮 ``host_ids`` 内：增量扫描复用同一个 ``plan_run_id``，上一轮别的
+      host 留下的产物会顶替本轮触发 host 的名额 —— 例如本轮只触发 host-b，而
+      host-a 的旧产物已在表里，全局计数即为 1，轮询会在首检就跳出，host-b 的新
+      产物赶不上这轮 merge。
     """
+    if not host_ids:
+        return 0
+
     from backend.core.database import SessionLocal
     from sqlalchemy import distinct, func
 
@@ -130,7 +139,7 @@ def count_hosts_with_scan_artifacts(plan_run_id: int) -> int:
                 select(func.count(distinct(PlanRunArtifact.host_id))).where(
                     PlanRunArtifact.plan_run_id == plan_run_id,
                     PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
-                    PlanRunArtifact.host_id.isnot(None),
+                    PlanRunArtifact.host_id.in_(list(host_ids)),
                 )
             ).scalar()
             or 0
