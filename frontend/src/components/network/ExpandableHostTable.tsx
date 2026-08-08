@@ -19,7 +19,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { resourceUsageBgClass, resourceUsageTextClass } from '@/design-system/tokens';
-import { formatBytesFromGb, formatDurationSeconds, formatLocalTime, parseIsoToDate } from '@/utils/format';
+import { formatBytesFromGb, formatDateTimeFull, formatDurationSeconds, formatLocalTime, parseIsoToDate } from '@/utils/format';
 
 export interface HostResources {
   cpu_load: number;
@@ -732,7 +732,7 @@ export function ExpandableHostTable({
                                     <div className="flex justify-between text-xs gap-2">
                                       <span className="text-muted-foreground shrink-0">部署时间</span>
                                       <span className="font-mono text-foreground truncate">
-                                        {formatLocalTime(host.agent_code_deployed_at)}
+                                        {formatDateTimeFull(host.agent_code_deployed_at)}
                                       </span>
                                     </div>
                                   )}
