@@ -5,6 +5,12 @@ name: Main CI backstop
 # 定时兜底：每天一次（UTC 18:00 = 本地凌晨 02:00）检查 main 尖端是否已有全量 CI
 # （workflow_dispatch / push），没有就显式 dispatch ci.yml。workflow_dispatch 是
 # 显式触发，不受级联限制。PR 阶段保持轻量检查，main 全量统一每天验证一次。
+#
+# 全量 CI 结束后追加远端分支清理：
+# - 仓库已开启 "Automatically delete head branches"，但 auto-merge 合入的 PR
+#   不会触发该自动删除（GitHub 已知行为），需要每日兜底；
+# - 仅在 main 全量 CI conclusion == success 时删除「base=main、已合并、head
+#   分支仍存在」的远端分支；CI 失败/取消/超时则跳过清理（分支保留到下次 PASS）。
 on:
   schedule:
     - cron: "0 18 * * *"
@@ -16,32 +22,162 @@ concurrency:
   group: main-ci-backstop
   cancel-in-progress: false
 
-# actions: write 用于 gh workflow run 创建 workflow dispatch；
-# contents: read 用于读取 main 的 SHA 与 CI 运行信息。
+# 不给整个 workflow 写权限；各 job 单独声明最小权限。
 permissions:
   {}
 
 jobs:
-  dispatch-unverified:
+  verify-and-cleanup:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
+    # actions: write —— gh workflow run / 读取运行状态；
+    # contents: write —— 删除远端分支 ref；
+    # pull-requests: read —— 列出已合并 PR 的 head 分支。
     permissions:
       actions: write
-      contents: read
+      contents: write
+      pull-requests: read
     steps:
-      - name: Dispatch full CI if main tip unverified
+      - name: Ensure full CI run for main tip
+        id: ensure
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           main_sha="$(gh api "repos/$REPO/commits/main" --jq .sha)"
-          has_run="$(
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
+
+          # 复用已存在/进行中的运行；都不满足才 dispatch。
+          run_id="$(
             gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$main_sha&per_page=20" \
-              --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "push") | select(.status != "completed" or .conclusion != null)] | length > 0'
+              --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "push") | select(.status != "completed" or .conclusion != null)][0].id // 0'
           )"
-          if [ "$has_run" = "false" ]; then
+          if [ "$run_id" = "0" ]; then
             echo "No full CI run for main tip $main_sha; dispatching"
             gh workflow run ci.yml --ref main -R "$REPO"
-          else
-            echo "Full CI already present for $main_sha"
+            # dispatch 创建有延迟，轮询等待运行出现（最多 10 分钟）
+            for _ in $(seq 1 60); do
+              run_id="$(
+                gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$main_sha&event=workflow_dispatch&per_page=5" \
+                  --jq '[.workflow_runs[]][0].id // 0'
+              )"
+              [ "$run_id" != "0" ] && break
+              sleep 10
+            done
           fi
+          if [ "$run_id" = "0" ]; then
+            echo "Dispatched full CI run did not appear within 10 minutes" >&2
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Using full CI run $run_id for main tip $main_sha"
+
+      - name: Wait for full CI to complete
+        id: wait
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.ensure.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          status=""
+          conclusion=""
+          # 最多等 3 小时（180 次 × 60s）；全量 CI 含 backend/frontend/docker
+          for _ in $(seq 1 180); do
+            run_json="$(gh api "repos/$REPO/actions/runs/$RUN_ID")"
+            status="$(printf '%s' "$run_json" | jq -r '.status')"
+            conclusion="$(printf '%s' "$run_json" | jq -r '.conclusion // ""')"
+            [ "$status" = "completed" ] && break
+            sleep 60
+          done
+          if [ "$status" != "completed" ]; then
+            echo "Full CI run $RUN_ID did not complete within 3 hours" >&2
+            exit 1
+          fi
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+          echo "Full CI run $RUN_ID conclusion: $conclusion"
+          if [ "$conclusion" != "success" ]; then
+            echo "Main full CI did not pass; merged-branch cleanup skipped"
+            exit 1
+          fi
+
+      - name: Delete merged head branches after PASS
+        if: steps.wait.outputs.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # ensure 步骤确认过的 main SHA；清理前会重读当前 main，
+          # 若已前进则放弃本次清理（避免基于旧快照删除分支）。
+          MAIN_SHA: ${{ steps.ensure.outputs.main_sha }}
+        run: |
+          set -euo pipefail
+
+          current_main_sha="$(gh api "repos/$REPO/commits/main" --jq .sha)"
+          if [ "$current_main_sha" != "$MAIN_SHA" ]; then
+            echo "main advanced ($MAIN_SHA -> $current_main_sha); merged-branch cleanup skipped"
+            exit 0
+          fi
+
+          default_branch="$(gh api "repos/$REPO" --jq .default_branch)"
+          protected_branches="$(
+            gh api --paginate "repos/$REPO/branches?protected=true&per_page=100" \
+              | jq -s -r '.[][].name' | sort -u
+          )"
+          open_heads="$(
+            gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
+              | jq -s -r --arg repo "$REPO" '.[][] | select(.head.repo.full_name == $repo) | .head.ref' | sort -u
+          )"
+          remote_refs="$(
+            gh api --paginate "repos/$REPO/git/refs/heads?per_page=100" \
+              | jq -s -r '.[][].ref' | sort -u
+          )"
+          merged_heads="$(
+            gh api --paginate "repos/$REPO/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=100" \
+              | jq -s -r --arg repo "$REPO" '.[][] | select(.merged_at != null) | select(.head.repo.full_name == $repo) | .head.ref' | sort -u
+          )"
+
+          deleted=0
+          skipped=0
+          for branch in $merged_heads; do
+            [ -n "$branch" ] || continue
+            if [ "$branch" = "$default_branch" ]; then
+              echo "skip default branch: $branch"
+              skipped=$((skipped + 1)); continue
+            fi
+            if printf '%s\n' "$protected_branches" | grep -Fxq -- "$branch"; then
+              echo "skip protected branch: $branch"
+              skipped=$((skipped + 1)); continue
+            fi
+            if printf '%s\n' "$open_heads" | grep -Fxq -- "$branch"; then
+              echo "skip branch with open PR: $branch"
+              skipped=$((skipped + 1)); continue
+            fi
+            if ! printf '%s' "$branch" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
+              echo "skip branch with unsafe characters: $branch"
+              skipped=$((skipped + 1)); continue
+            fi
+            if ! printf '%s\n' "$remote_refs" | grep -Fxq -- "refs/heads/$branch"; then
+              echo "remote ref already gone, skip: $branch"
+              skipped=$((skipped + 1)); continue
+            fi
+            # 快照只是快速路径；删除前按当前分支重查 open PR，
+            # 避免清理期间该分支刚被新 PR 复用导致误删。
+            open_count="$(
+              gh api graphql \
+                -f query='query($owner:String!,$repo:String!,$branch:String!){repository(owner:$owner,name:$repo){pullRequests(states:OPEN,headRefName:$branch,first:1){totalCount}}}' \
+                -F owner="${REPO%/*}" -F repo="${REPO#*/}" -F branch="$branch" \
+                --jq '.data.repository.pullRequests.totalCount'
+            )"
+            if [ "$open_count" != "0" ]; then
+              echo "skip branch with open PR (re-checked): $branch"
+              skipped=$((skipped + 1)); continue
+            fi
+            if ! gh api -X DELETE "repos/$REPO/git/refs/heads/$branch" >/dev/null; then
+              echo "delete failed, skip: $branch"
+              skipped=$((skipped + 1)); continue
+            fi
+            echo "deleted merged branch: $branch"
+            deleted=$((deleted + 1))
+          done
+          echo "cleanup done: deleted=$deleted skipped=$skipped"
