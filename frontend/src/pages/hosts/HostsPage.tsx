@@ -30,6 +30,16 @@ function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+/** 把批处理返回的 id 对齐回列表里的原始类型，避免 number/string 对不上勾选。 */
+function resolveSelectedHostId(
+  id: string | number,
+  hostList: Host[],
+): string | number {
+  const key = String(id);
+  const found = hostList.find((host) => String(host.id) === key);
+  return found ? found.id : key;
+}
+
 export default function HostsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedHostIds, setSelectedHostIds] = useState<Set<string | number>>(new Set());
@@ -468,10 +478,24 @@ export default function HostsPage() {
       ).length;
       const checkFailed = precheck.skipped.filter((item) => item.reason === 'precheck_failed').length;
 
+      const skippedSeeds = precheck.skipped.map((item) => ({
+        hostId: item.id,
+        label: item.label,
+        error: BULK_HOT_UPDATE_SKIP_LABEL[item.reason],
+      }));
+
       if (precheck.eligible.length === 0) {
         toast.info(
           `没有可安全热更新的主机：活跃 Job ${activeJobs} 台，离线/未安装 ${unavailable} 台，预检失败 ${checkFailed} 台`,
         );
+        const skippedOnly = await startHotUpdateBatch([], { skipped: skippedSeeds });
+        if (skippedOnly) {
+          setSelectedHostIds(
+            new Set(
+              skippedOnly.skipped.map((item) => resolveSelectedHostId(item.hostId, hosts ?? [])),
+            ),
+          );
+        }
         return;
       }
 
@@ -489,11 +513,7 @@ export default function HostsPage() {
       const result = await startHotUpdateBatch(
         precheck.eligible.map((item) => ({ hostId: item.id, label: item.label })),
         {
-          skipped: precheck.skipped.map((item) => ({
-            hostId: item.id,
-            label: item.label,
-            error: BULK_HOT_UPDATE_SKIP_LABEL[item.reason],
-          })),
+          skipped: skippedSeeds,
           onProgress: (completed, total) =>
             setBulkHotUpdateProgress({ phase: 'updating', completed, total }),
         },
@@ -503,11 +523,8 @@ export default function HostsPage() {
         return;
       }
       const remainingIds = new Set<string | number>([
-        ...precheck.skipped.map((item) => item.id),
-        ...result.skipped
-          .filter((item) => item.httpStatus === 409)
-          .map((item) => item.hostId),
-        ...result.failed.map((item) => item.hostId),
+        ...result.skipped.map((item) => resolveSelectedHostId(item.hostId, hosts ?? [])),
+        ...result.failed.map((item) => resolveSelectedHostId(item.hostId, hosts ?? [])),
       ]);
       setSelectedHostIds(remainingIds);
       queryClient.invalidateQueries({ queryKey: hostKeys.list() });
