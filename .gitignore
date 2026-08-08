@@ -13,6 +13,7 @@ __pycache__/
 *.egg-info/
 dist/
 dist-prod/
+dist-prod.bak-*/
 build/
 venv/
 env/
