@@ -1,12 +1,13 @@
 /**
- * 主机运维操作编排：单台/批量安装共用，前端并发闸门（默认 2）。
- * 闸门语义：同时最多 N 台 ansible 在跑（trigger 后轮询至终态才释放槽位）。
- * 热更新批量不在此 hook（须先 SAQ 化）。
+ * 主机运维操作编排：单台/批量安装与热更新共用，前端并发闸门（默认 2）。
+ * 闸门语义：同时最多 N 台在跑（安装：trigger 后轮询至终态才释放槽位；
+ * 热更新：同步 SSH，请求返回即终态，暂无 RunConsole 实时日志）。
  */
 import { useCallback, useRef, useState } from 'react';
 import { api } from '@/utils/api';
+import type { HotUpdateResult } from '@/utils/api/hosts';
 
-export type HostOpKind = 'install' | 'reinstall';
+export type HostOpKind = 'install' | 'reinstall' | 'hot_update';
 export type HostOpStatus =
   | 'pending'
   | 'running'
@@ -27,14 +28,35 @@ export interface HostOpTarget {
   hostId: string | number;
   label: string;
   agentInstalled?: boolean;
+  abortRunningJobs?: boolean;
 }
 
 export interface HostOpTerminalEvent {
   hostId: string;
   label: string;
+  kind: HostOpKind;
   ok: boolean;
   status: string;
   error?: string;
+}
+
+export interface HotUpdateSkippedSeed {
+  hostId: string | number;
+  label: string;
+  error: string;
+}
+
+export interface HotUpdateBatchResult {
+  succeeded: Array<{ hostId: string; label: string; result: HotUpdateResult }>;
+  failed: Array<{ hostId: string; label: string; error: string; httpStatus?: number }>;
+  skipped: Array<{
+    hostId: string;
+    label: string;
+    error: string;
+    httpStatus?: number;
+    retryAfterSeconds?: number;
+    activeJobCount?: number;
+  }>;
 }
 
 const DEFAULT_CONCURRENCY = 2;
@@ -52,6 +74,38 @@ function extractErrorMessage(err: unknown): string {
     return String((detail as { message?: string }).message);
   }
   return ax?.message ?? '未知错误';
+}
+
+function extractHttpStatus(err: unknown): number | undefined {
+  const ax = err as { response?: { status?: number } };
+  return typeof ax?.response?.status === 'number' ? ax.response.status : undefined;
+}
+
+function extractHotUpdateConflict(err: unknown): {
+  message: string;
+  retryAfterSeconds?: number;
+  activeJobCount?: number;
+} | null {
+  if (extractHttpStatus(err) !== 409) return null;
+  const ax = err as { response?: { data?: { detail?: unknown } } };
+  const detail = ax?.response?.data?.detail;
+  if (typeof detail === 'string') {
+    return { message: extractErrorMessage(err) };
+  }
+  if (detail && typeof detail === 'object' && detail !== null) {
+    const d = detail as {
+      message?: string;
+      retry_after_seconds?: number;
+      active_jobs?: unknown[];
+    };
+    return {
+      message: typeof d.message === 'string' ? d.message : extractErrorMessage(err),
+      retryAfterSeconds:
+        typeof d.retry_after_seconds === 'number' ? d.retry_after_seconds : undefined,
+      activeJobCount: Array.isArray(d.active_jobs) ? d.active_jobs.length : undefined,
+    };
+  }
+  return { message: extractErrorMessage(err) };
 }
 
 function extract409ConsoleId(err: unknown): string | null {
@@ -165,6 +219,7 @@ export function useHostOperations(opts?: {
       onTerminalRef.current?.({
         hostId: item.hostId,
         label: item.label,
+        kind: item.kind,
         ok,
         status,
         error,
@@ -266,6 +321,106 @@ export function useHostOperations(opts?: {
     [concurrency, emitTerminal, pollMs, updateOp],
   );
 
+  const startHotUpdateBatch = useCallback(
+    async (
+      targets: HostOpTarget[],
+      opts?: {
+        skipped?: HotUpdateSkippedSeed[];
+        onProgress?: (completed: number, total: number) => void;
+      },
+    ): Promise<HotUpdateBatchResult | null> => {
+      if (runningRef.current) return null;
+      if (!targets.length && !opts?.skipped?.length) {
+        return { succeeded: [], failed: [], skipped: [] };
+      }
+      runningRef.current = true;
+      terminalNotifiedRef.current = new Set();
+
+      const skippedSeed: HostOpItem[] = (opts?.skipped ?? []).map((s) => ({
+        hostId: String(s.hostId),
+        label: s.label,
+        kind: 'hot_update',
+        status: 'skipped',
+        error: s.error,
+      }));
+      const initial: HostOpItem[] = [
+        ...skippedSeed,
+        ...targets.map((t) => ({
+          hostId: String(t.hostId),
+          label: t.label,
+          kind: 'hot_update' as const,
+          status: 'pending' as const,
+        })),
+      ];
+      setOps(initial);
+      setPanelOpen(true);
+
+      const succeeded: HotUpdateBatchResult['succeeded'] = [];
+      const failed: HotUpdateBatchResult['failed'] = [];
+      const skipped: HotUpdateBatchResult['skipped'] = skippedSeed.map((s) => ({
+        hostId: s.hostId,
+        label: s.label,
+        error: s.error ?? '',
+      }));
+      let completed = 0;
+
+      try {
+        if (targets.length === 0) return { succeeded, failed, skipped };
+
+        await mapPool(targets, concurrency, async (target) => {
+          const hostId = String(target.hostId);
+          const item: HostOpItem = {
+            hostId,
+            label: target.label,
+            kind: 'hot_update',
+            status: 'running',
+          };
+          updateOp(hostId, { status: 'running' });
+          try {
+            const result = await api.hotUpdate.trigger(target.hostId, {
+              abortRunningJobs: Boolean(target.abortRunningJobs),
+            });
+            updateOp(hostId, { status: 'success' });
+            succeeded.push({ hostId, label: target.label, result });
+            emitTerminal({ ...item, status: 'success' }, true, 'SUCCESS');
+          } catch (err) {
+            const conflict = extractHotUpdateConflict(err);
+            if (conflict) {
+              updateOp(hostId, { status: 'skipped', error: conflict.message });
+              skipped.push({
+                hostId,
+                label: target.label,
+                error: conflict.message,
+                httpStatus: 409,
+                retryAfterSeconds: conflict.retryAfterSeconds,
+                activeJobCount: conflict.activeJobCount,
+              });
+              emitTerminal({ ...item, status: 'skipped' }, false, 'SKIPPED', conflict.message);
+            } else {
+              const message = extractErrorMessage(err);
+              updateOp(hostId, { status: 'failed', error: message });
+              failed.push({
+                hostId,
+                label: target.label,
+                error: message,
+                httpStatus: extractHttpStatus(err),
+              });
+              emitTerminal({ ...item, status: 'failed' }, false, 'FAILED', message);
+            }
+          } finally {
+            completed += 1;
+            opts?.onProgress?.(completed, targets.length);
+          }
+        });
+      } finally {
+        runningRef.current = false;
+      }
+
+      return { succeeded, failed, skipped };
+    },
+    [concurrency, emitTerminal, updateOp],
+  );
+
   const closePanel = useCallback(() => {
     setPanelOpen(false);
   }, []);
@@ -286,14 +441,30 @@ export function useHostOperations(opts?: {
     [ops],
   );
 
+  const isHostOpBusy = useCallback(
+    (hostId: string | number, kind: HostOpKind | HostOpKind[]) => {
+      const id = String(hostId);
+      const kinds = Array.isArray(kind) ? kind : [kind];
+      return ops.some(
+        (op) =>
+          op.hostId === id &&
+          kinds.includes(op.kind) &&
+          (op.status === 'pending' || op.status === 'running'),
+      );
+    },
+    [ops],
+  );
+
   return {
     ops,
     panelOpen,
     setPanelOpen,
     startInstallBatch,
+    startHotUpdateBatch,
     markTerminal,
     closePanel,
     clearOps,
     isHostBusy,
+    isHostOpBusy,
   };
 }

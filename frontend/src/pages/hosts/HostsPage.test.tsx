@@ -5,6 +5,11 @@ import { MemoryRouter } from 'react-router-dom';
 
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn().mockResolvedValue(true),
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+  },
 }));
 
 const mockHostsList = vi.fn().mockResolvedValue({ items: [], total: 0 });
@@ -18,6 +23,7 @@ vi.mock('../../utils/api', async (importOriginal) => {
     api: {
     hosts: {
       list: (...args: unknown[]) => mockHostsList(...args),
+      getDetail: vi.fn(),
       create: vi.fn().mockResolvedValue({}),
       update: vi.fn().mockResolvedValue({}),
       delete: vi.fn().mockResolvedValue({}),
@@ -58,13 +64,8 @@ vi.mock('../../utils/api', async (importOriginal) => {
   };
 });
 
-// Mock toast
-vi.mock('../../components/ui/toast', () => ({
-  useToast: () => ({
-    success: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-  }),
+vi.mock('@/hooks/useToast', () => ({
+  useToast: () => mocks.toast,
 }));
 
 // Mock confirm
@@ -82,18 +83,34 @@ vi.mock('../../hooks/useAuthSession', () => ({
 vi.mock('../../components/network/ExpandableHostTable', () => ({
   ExpandableHostTable: ({
     hosts,
+    selectedIds,
+    onSelectionChange,
     onWatcherAdminStateChange,
   }: {
     hosts: any[];
+    selectedIds?: Set<string | number>;
+    onSelectionChange?: (ids: Set<string | number>) => void;
     onWatcherAdminStateChange?: (hostId: string | number, nextActive: boolean) => void;
   }) => (
     <div data-testid="host-table">
+      {onSelectionChange && (
+        <button
+          type="button"
+          data-testid="select-all-hosts"
+          onClick={() => onSelectionChange(new Set(hosts.map((h: any) => h.id)))}
+        >
+          select-all
+        </button>
+      )}
       {hosts.map((h: any) => (
         <div key={h.id} data-testid={`host-row-${h.id}`}>
           <span>{h.name}</span>
           <span>{h.ip}</span>
           <span>{h.status}</span>
           <span data-testid={`device-count-${h.id}`}>{h.device_count ?? 0}</span>
+          <span data-testid={`host-selected-${h.id}`}>
+            {selectedIds?.has(h.id) ? 'yes' : 'no'}
+          </span>
           <span>{h.watcher_admin_active !== false ? '已激活' : '未激活'}</span>
           {onWatcherAdminStateChange && (
             <button
@@ -134,6 +151,8 @@ describe('HostsPage', () => {
     mockHostsList.mockResolvedValue({ items: [], total: 0 });
     const { api } = await import('../../utils/api');
     (api.planRuns.list as any).mockResolvedValue([]);
+    (api.hosts.getDetail as any).mockReset();
+    (api.hotUpdate.trigger as any).mockReset().mockResolvedValue({ ok: true, message: 'ok' });
   });
 
   it('renders host rows when react-query cache already holds Host[]', async () => {
@@ -347,6 +366,137 @@ describe('HostsPage', () => {
       expect(api.hosts.updateWatcherAdminState).toHaveBeenCalledWith('host-1', {
         watcher_admin_active: false,
       }),
+    );
+  });
+
+  it('opens progress panel when bulk precheck skips every selected host', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({
+      items: [
+        { id: 1, name: 'n1', ip: '10.0.0.1', status: 'ONLINE', extra: {}, agent_installed: true },
+        { id: 2, name: 'n2', ip: '10.0.0.2', status: 'ONLINE', extra: {}, agent_installed: true },
+      ],
+      total: 2,
+    });
+    (api.hosts.getDetail as any).mockImplementation(async (id: number) => ({
+      id,
+      name: `n${id}`,
+      ip: `10.0.0.${id}`,
+      status: 'ONLINE',
+      extra: {},
+      agent_installed: true,
+      active_job_count: 1,
+    }));
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByText('n1');
+    fireEvent.click(screen.getByTestId('select-all-hosts'));
+    fireEvent.click(screen.getByTestId('host-bulk-hot-update'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('host-operation-panel')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('host-op-row-1')).toHaveTextContent('存在活跃 Job');
+    expect(screen.getByTestId('host-op-row-2')).toHaveTextContent('存在活跃 Job');
+    expect(mocks.toast.info).toHaveBeenCalledWith(expect.stringContaining('没有可安全热更新的主机'));
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(screen.getByTestId('host-selected-1')).toHaveTextContent('yes');
+    expect(screen.getByTestId('host-selected-2')).toHaveTextContent('yes');
+  });
+
+  it('keeps numeric failed and 409 hosts selected after mixed bulk hot-update', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({
+      items: [
+        { id: 1, name: 'n1', ip: '10.0.0.1', status: 'ONLINE', extra: {}, agent_installed: true },
+        { id: 2, name: 'n2', ip: '10.0.0.2', status: 'ONLINE', extra: {}, agent_installed: true },
+        { id: 3, name: 'n3', ip: '10.0.0.3', status: 'ONLINE', extra: {}, agent_installed: true },
+      ],
+      total: 3,
+    });
+    (api.hosts.getDetail as any).mockImplementation(async (id: number) => ({
+      id,
+      name: `n${id}`,
+      ip: `10.0.0.${id}`,
+      status: 'ONLINE',
+      extra: {},
+      agent_installed: true,
+      active_job_count: id === 3 ? 1 : 0,
+    }));
+    (api.hotUpdate.trigger as any).mockImplementation(async (id: number | string) => {
+      if (Number(id) === 2) {
+        throw {
+          response: {
+            status: 409,
+            data: { detail: { message: 'Host has active jobs', active_jobs: [{ id: 9 }] } },
+          },
+        };
+      }
+      return { ok: true, host_id: Number(id), message: 'ok', deps_refreshed: false };
+    });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByText('n1');
+    fireEvent.click(screen.getByTestId('select-all-hosts'));
+    fireEvent.click(screen.getByTestId('host-bulk-hot-update'));
+
+    await waitFor(() => {
+      expect(mocks.confirm).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('host-operation-panel')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('host-op-row-1')).toHaveTextContent('成功');
+    expect(screen.getByTestId('host-op-row-2')).toHaveTextContent('跳过');
+    expect(screen.getByTestId('host-op-row-3')).toHaveTextContent('存在活跃 Job');
+    expect(screen.getByTestId('host-selected-1')).toHaveTextContent('no');
+    expect(screen.getByTestId('host-selected-2')).toHaveTextContent('yes');
+    expect(screen.getByTestId('host-selected-3')).toHaveTextContent('yes');
+    expect(mocks.toast.success).toHaveBeenCalledWith(
+      expect.stringContaining('成功 1 台，跳过 2 台，失败 0 台'),
+    );
+  });
+
+  it('toasts bulk hot-update failure and keeps the numeric failed host selected', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({
+      items: [
+        { id: 10, name: 'n10', ip: '10.0.0.10', status: 'ONLINE', extra: {}, agent_installed: true },
+        { id: 11, name: 'n11', ip: '10.0.0.11', status: 'ONLINE', extra: {}, agent_installed: true },
+      ],
+      total: 2,
+    });
+    (api.hosts.getDetail as any).mockImplementation(async (id: number) => ({
+      id,
+      name: `n${id}`,
+      ip: `10.0.0.${id}`,
+      status: 'ONLINE',
+      extra: {},
+      agent_installed: true,
+      active_job_count: 0,
+    }));
+    (api.hotUpdate.trigger as any)
+      .mockResolvedValueOnce({ ok: true, host_id: 10, message: 'ok' })
+      .mockRejectedValueOnce({ response: { status: 502, data: { detail: 'ssh failed' } } });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByText('n10');
+    fireEvent.click(screen.getByTestId('select-all-hosts'));
+    fireEvent.click(screen.getByTestId('host-bulk-hot-update'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('host-op-row-11')).toHaveTextContent('失败');
+    });
+    expect(screen.getByTestId('host-selected-10')).toHaveTextContent('no');
+    expect(screen.getByTestId('host-selected-11')).toHaveTextContent('yes');
+    expect(mocks.toast.error).toHaveBeenCalledWith(
+      expect.stringContaining('成功 1 台，跳过 0 台，失败 1 台'),
     );
   });
 });

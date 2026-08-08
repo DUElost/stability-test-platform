@@ -6,6 +6,7 @@ import {
   ChevronsUpDown,
   Download,
   Loader2,
+  RotateCw,
   X,
 } from 'lucide-react';
 import {
@@ -96,13 +97,17 @@ export default function HostOperationPanel({
     let running = 0;
     let success = 0;
     let failed = 0;
+    let skipped = 0;
     for (const op of ops) {
       if (op.status === 'pending' || op.status === 'running') running += 1;
       else if (op.status === 'success') success += 1;
       else if (op.status === 'failed') failed += 1;
+      else if (op.status === 'skipped') skipped += 1;
     }
-    return { running, success, failed };
+    return { running, success, failed, skipped };
   }, [ops]);
+
+  const isHotUpdateBatch = ops.length > 0 && ops.every((op) => op.kind === 'hot_update');
 
   const autoExpanded = useMemo(() => {
     const auto = new Set<string>();
@@ -114,7 +119,11 @@ export default function HostOperationPanel({
     if (auto.size === 0) {
       const withConsole = ops.find((o) => o.consoleRunId);
       if (withConsole) auto.add(withConsole.hostId);
-      else if (ops[0]) auto.add(ops[0].hostId);
+      else {
+        const active = ops.find((o) => o.status === 'running' || o.status === 'pending');
+        if (active) auto.add(active.hostId);
+        else if (ops[0]) auto.add(ops[0].hostId);
+      }
     }
     // 自动模式最多展开 2 个，减轻首屏压力；用户可「全部展开」
     if (auto.size > 2) {
@@ -137,7 +146,11 @@ export default function HostOperationPanel({
   const collapseAll = () => setExpanded(new Set());
   const expandAll = () => {
     setExpanded(
-      new Set(ops.filter((o) => o.consoleRunId || o.status === 'running').map((o) => o.hostId)),
+      new Set(
+        ops
+          .filter((o) => o.consoleRunId || o.status === 'running' || o.status === 'pending')
+          .map((o) => o.hostId),
+      ),
     );
   };
 
@@ -150,8 +163,12 @@ export default function HostOperationPanel({
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Download className="h-4 w-4" />
-            主机操作进度
+            {isHotUpdateBatch ? (
+              <RotateCw className="h-4 w-4" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+            {isHotUpdateBatch ? '热更新进度' : '主机操作进度'}
           </DialogTitle>
           <DialogDescription asChild>
             <div className={cn('flex flex-wrap items-center gap-3 text-sm', TEXT.subtitle)}>
@@ -164,6 +181,11 @@ export default function HostOperationPanel({
               <span>
                 失败 <b className="font-mono text-foreground">{summary.failed}</b>
               </span>
+              {summary.skipped > 0 && (
+                <span>
+                  跳过 <b className="font-mono text-foreground">{summary.skipped}</b>
+                </span>
+              )}
               <span className="ml-auto flex gap-1">
                 <Button
                   type="button"
@@ -214,7 +236,11 @@ export default function HostOperationPanel({
                   )}
                   <span className="font-medium">{op.label}</span>
                   <span className={cn('text-[11px]', TEXT.subtle)}>
-                    {op.kind === 'reinstall' ? '重新安装' : '首次安装'}
+                    {op.kind === 'hot_update'
+                      ? '热更新'
+                      : op.kind === 'reinstall'
+                        ? '重新安装'
+                        : '首次安装'}
                   </span>
                   {(op.status === 'pending' || op.status === 'running') && (
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -249,6 +275,17 @@ export default function HostOperationPanel({
                   </div>
                 )}
 
+                {isOpen && !op.consoleRunId && op.status === 'pending' && (
+                  <div
+                    className={cn(
+                      'flex items-center gap-2 border-t px-3 py-6 text-xs',
+                      TEXT.subtitle,
+                    )}
+                  >
+                    排队等待…
+                  </div>
+                )}
+
                 {isOpen && !op.consoleRunId && op.status === 'running' && (
                   <div
                     className={cn(
@@ -257,7 +294,7 @@ export default function HostOperationPanel({
                     )}
                   >
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    正在启动安装…
+                    {op.kind === 'hot_update' ? '正在热更新…' : '正在启动安装…'}
                   </div>
                 )}
               </div>

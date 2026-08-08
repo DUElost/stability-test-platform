@@ -1,12 +1,15 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useHostOperations } from '@/hooks/useHostOperations';
+import { useHostOperations, type HotUpdateBatchResult } from '@/hooks/useHostOperations';
 
 vi.mock('@/utils/api', () => ({
   api: {
     agentInstall: {
       trigger: vi.fn(),
       status: vi.fn(),
+    },
+    hotUpdate: {
+      trigger: vi.fn(),
     },
   },
 }));
@@ -17,6 +20,7 @@ describe('useHostOperations', () => {
   beforeEach(() => {
     vi.mocked(api.agentInstall.trigger).mockReset();
     vi.mocked(api.agentInstall.status).mockReset();
+    vi.mocked(api.hotUpdate.trigger).mockReset();
   });
 
   afterEach(() => {
@@ -144,6 +148,113 @@ describe('useHostOperations', () => {
     expect(result.current.ops[0].status).toBe('failed');
     expect(onTerminal).toHaveBeenCalledWith(
       expect.objectContaining({ hostId: 'y', ok: false, status: 'FAILED' }),
+    );
+  });
+
+  it('opens panel and tracks per-host hot-update progress', async () => {
+    vi.mocked(api.hotUpdate.trigger)
+      .mockResolvedValueOnce({
+        ok: true,
+        host_id: 1,
+        message: 'ok',
+        deps_refreshed: true,
+        code_version: 'abc1234',
+      })
+      .mockRejectedValueOnce({
+        response: { status: 502, data: { detail: 'ssh failed' } },
+      });
+
+    const onTerminal = vi.fn();
+    const onProgress = vi.fn();
+    const { result } = renderHook(() =>
+      useHostOperations({ concurrency: 1, onTerminal }),
+    );
+
+    const captured: { batch: HotUpdateBatchResult | null } = { batch: null };
+    await act(async () => {
+      captured.batch = await result.current.startHotUpdateBatch(
+        [
+          { hostId: 'a', label: 'host-a' },
+          { hostId: 'b', label: 'host-b' },
+        ],
+        {
+          skipped: [{ hostId: 'c', label: 'host-c', error: '存在活跃 Job' }],
+          onProgress,
+        },
+      );
+    });
+
+    expect(result.current.panelOpen).toBe(true);
+    expect(result.current.ops).toEqual(expect.arrayContaining([
+      expect.objectContaining({ hostId: 'c', kind: 'hot_update', status: 'skipped' }),
+      expect.objectContaining({ hostId: 'a', kind: 'hot_update', status: 'success' }),
+      expect.objectContaining({ hostId: 'b', kind: 'hot_update', status: 'failed', error: 'ssh failed' }),
+    ]));
+    expect(captured.batch?.succeeded).toHaveLength(1);
+    expect(captured.batch?.failed).toHaveLength(1);
+    expect(captured.batch?.skipped).toHaveLength(1);
+    expect(onProgress).toHaveBeenCalledWith(1, 2);
+    expect(onProgress).toHaveBeenCalledWith(2, 2);
+    expect(onTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: 'a', kind: 'hot_update', ok: true }),
+    );
+    expect(api.hotUpdate.trigger).toHaveBeenNthCalledWith(1, 'a', { abortRunningJobs: false });
+  });
+
+  it('passes abortRunningJobs and treats 409 as skipped conflict', async () => {
+    vi.mocked(api.hotUpdate.trigger).mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            message: 'Host has active jobs',
+            active_jobs: [{ id: 1 }, { id: 2 }],
+            retry_after_seconds: 12,
+          },
+        },
+      },
+    });
+
+    const { result } = renderHook(() => useHostOperations({ concurrency: 1 }));
+
+    const captured: { batch: HotUpdateBatchResult | null } = { batch: null };
+    await act(async () => {
+      captured.batch = await result.current.startHotUpdateBatch([
+        { hostId: 'h1', label: 'host-1', abortRunningJobs: true },
+      ]);
+    });
+
+    expect(api.hotUpdate.trigger).toHaveBeenCalledWith('h1', { abortRunningJobs: true });
+    expect(result.current.ops[0].status).toBe('skipped');
+    expect(captured.batch?.skipped[0]).toEqual(expect.objectContaining({
+      hostId: 'h1',
+      httpStatus: 409,
+      activeJobCount: 2,
+      retryAfterSeconds: 12,
+    }));
+  });
+
+  it('uses backend string detail for 409 conflicts', async () => {
+    vi.mocked(api.hotUpdate.trigger).mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: { detail: 'Host is OFFLINE, hot-update requires ONLINE status' },
+      },
+    });
+
+    const { result } = renderHook(() => useHostOperations({ concurrency: 1 }));
+    const captured: { batch: HotUpdateBatchResult | null } = { batch: null };
+    await act(async () => {
+      captured.batch = await result.current.startHotUpdateBatch([
+        { hostId: 'h2', label: 'host-2' },
+      ]);
+    });
+
+    expect(result.current.ops[0].error).toBe(
+      'Host is OFFLINE, hot-update requires ONLINE status',
+    );
+    expect(captured.batch?.skipped[0]?.error).toBe(
+      'Host is OFFLINE, hot-update requires ONLINE status',
     );
   });
 });
