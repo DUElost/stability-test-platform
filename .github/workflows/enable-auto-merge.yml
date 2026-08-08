@@ -47,10 +47,10 @@ jobs:
 
   merge-gate:
     # 准入门禁：CodeRabbit 对当前 head 的 APPROVED → success；对当前 head 的
-    # CHANGES_REQUESTED → failure；rate limited → success（限流时由 required checks
-    # 把关，不再叠加 CodeRabbit 阻断）；其他状态 → pending/failure，fail-closed。
-    # auto_incremental_review 关闭后，push 事件会出现 “Review skipped / paused”
-    # 的常态状态，门禁写 pending 等待显式 @coderabbitai review，而不是失败。
+    # CHANGES_REQUESTED → failure；rate limited / skipped / paused → success（由
+    # required checks 把关，不再叠加 CodeRabbit 阻断）；其他状态 → pending/failure，
+    # fail-closed。auto_incremental_review 关闭后 push 常出现 skipped/paused，
+    # 属预期常态而非合入阻断项。
     # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
     # status 同名，造成 required check 来源歧义。
     if: github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
@@ -206,7 +206,7 @@ jobs:
             exit 0
           fi
           if printf '%s' "$desc" | grep -qiE 'skipped|paused'; then
-            set_status pending "CodeRabbit review not auto-triggered; @coderabbitai review required"
+            set_status success "CodeRabbit review skipped; required checks gate merge"
             exit 0
           fi
 
