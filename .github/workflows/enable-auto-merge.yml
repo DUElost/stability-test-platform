@@ -48,7 +48,9 @@ jobs:
   merge-gate:
     # 准入门禁：CodeRabbit 对当前 head 的 APPROVED → success；对当前 head 的
     # CHANGES_REQUESTED → failure；rate limited / skipped / paused → success（由
-    # required checks 把关，不再叠加 CodeRabbit 阻断）；其他状态 → pending/failure，
+    # required checks 把关，不再叠加 CodeRabbit 阻断）；dependabot[bot] PR 若
+    # 无 CodeRabbit 终态决策也放行（实测 bot PR 不触发 CodeRabbit 审查，否则
+    # code-rabbit-gate 会永久 pending 卡死自动合入）；其他状态 → pending/failure，
     # fail-closed。auto_incremental_review 关闭后 push 常出现 skipped/paused，
     # 属预期常态而非合入阻断项。
     # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
@@ -69,6 +71,7 @@ jobs:
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
@@ -197,6 +200,25 @@ jobs:
             fi
             sleep 10
           done
+
+          # Dependabot 安全/版本更新 PR：CodeRabbit 通常不审查 bot PR（实测 head
+          # 上无任何 CodeRabbit status/check）。只要没有 CHANGES_REQUESTED 终态
+          # 决策就放行，由 CI/CodeQL 等 required checks 把关，避免 code-rabbit-gate
+          # 永久 pending。若 CodeRabbit 真的 request changes，仍按失败处理。
+          if [ "${PR_AUTHOR:-}" = "dependabot[bot]" ]; then
+            if ! head_json="$(head_decision)"; then
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            fi
+            head_state="$(printf '%s' "$head_json" | jq -r .state)"
+            if [ "$head_state" = "CHANGES_REQUESTED" ]; then
+              set_status failure "CodeRabbit requested changes"
+              exit 0
+            fi
+            set_status success "Dependabot PR; required checks gate merge"
+            exit 0
+          fi
+
           if [ -z "$desc" ] || printf '%s' "$desc" | grep -qiE 'queued|in.progress'; then
             set_status pending "Waiting for CodeRabbit review or rate-limit decision"
             exit 0
