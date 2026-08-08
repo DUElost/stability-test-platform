@@ -23,6 +23,31 @@ def test_event_dir_basename_from_path_compact():
     ) == "2026_0629_174940_206_db.74.ANR"
 
 
+def test_parse_event_dir_names_from_xls_filters_foreign_serial(tmp_path):
+    xlwt = pytest.importorskip("xlwt")
+    xls_path = tmp_path / "org.xls"
+    book = xlwt.Workbook()
+    sheet = book.add_sheet("Sheet1")
+    sheet.write(0, 0, "Path")
+    sheet.write(0, 1, "Detail")
+    sheet.write(
+        1, 0,
+        "/hdd/V551A_0808_MonkeyAEEinfo/0000NX2622000670/2026_0808_010203_001_db.00.ANR/__exp_main.txt",
+    )
+    sheet.write(1, 1, "Device_id: 0000NX2622000670\nver")
+    sheet.write(
+        2, 0,
+        "/hdd/V551A_0808_MonkeyAEEinfo/0000NX2622000662/2026_0808_010203_002_db.00.ANR/__exp_main.txt",
+    )
+    sheet.write(2, 1, "Device_id: 0000NX2622000662\nver")
+    book.save(str(xls_path))
+
+    names = parse_event_dir_names_from_xls(
+        xls_path, allowed_serials=["0000NX2622000670"],
+    )
+    assert names == {"2026_0808_010203_001_db.00.ANR"}
+
+
 def test_parse_event_dir_names_from_xls_reads_path_column(tmp_path):
     xlwt = pytest.importorskip("xlwt")
     xls_path = tmp_path / "merge.xls"
@@ -84,7 +109,7 @@ def test_collect_upload_event_dir_names_unions_signal_and_scan(
     sheet.write(0, 0, "Path")
     sheet.write(
         1, 0,
-        "/mnt/hdd/aee/f/serial/2026_0629_004958_550_db.72.JE/__exp_main.txt",
+        f"/mnt/hdd/aee/f/{sample_device.serial}/2026_0629_004958_550_db.72.JE/__exp_main.txt",
     )
     book.save(str(scan_xls))
 

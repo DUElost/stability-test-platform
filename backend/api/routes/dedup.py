@@ -351,25 +351,30 @@ async def trigger_scan(
 ):
     """手动触发/重跑 scan：向各 ONLINE agent 下发 scan_now SocketIO 指令。
 
-    Agent 本地执行 start_log_scan -dedup_org → UploadManager 上送 _org.xls 到 NFS。
-    终态自动触发走 SAQ scan_task，本端点用于手动重跑。
+    设备名单是整个 PlanRun（可跨多 host）；每台 Agent 用同一份 serial 列表
+    扫本地 HDD，Merge 再汇总。终态自动触发走 SAQ scan_task，本端点用于手动重跑。
     """
     from backend.models.job import JobInstance
-    from backend.models.host import Host
     from backend.models.plan_run import PlanRun
     from backend.realtime.socketio_server import emit_agent_control
+    from backend.services.plan_run_scan_scope import (
+        build_scan_now_payload,
+        iter_plan_run_scan_hosts,
+    )
 
     pr = db.get(PlanRun, run_id)
     if pr is None:
         raise HTTPException(status_code=404, detail="plan run not found")
 
-    host_rows = (
-        db.query(JobInstance.host_id, Host.status)
-        .join(Host, Host.id == JobInstance.host_id)
+    has_jobs = (
+        db.query(JobInstance.id)
         .filter(JobInstance.plan_run_id == run_id)
-        .distinct()
-        .all()
+        .first()
     )
+    if not has_jobs:
+        raise HTTPException(status_code=400, detail="no jobs found for this plan run")
+
+    host_rows = iter_plan_run_scan_hosts(db, run_id)
     if not host_rows:
         raise HTTPException(status_code=400, detail="no jobs found for this plan run")
 
@@ -379,7 +384,7 @@ async def trigger_scan(
         if host_status == "ONLINE":
             await emit_agent_control(
                 host_id, "scan_now",
-                payload={"plan_run_id": run_id, "is_final": is_final},
+                payload=build_scan_now_payload(db, run_id, host_id, is_final=is_final),
             )
             triggered.append(host_id)
         else:
