@@ -98,7 +98,10 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
   - 先用 `scan_tool_supports_merge_files_list()` 跑一次 `start_log_scan.py -h` 探测能力（结果进程内缓存）。支持则写临时清单文件走 `-merge_files_list {listfile}`；
   - 不支持才回退 `-merge_files {全部 org_files 展开}`，且此路径有 30000 字符的 argv 上限（`_WIN_MERGE_ARGV_CHAR_LIMIT`），超限直接 `RuntimeError` 要求升级扫描工具 —— **host 规模上来后回退路径会先撞这堵墙**。
   - `-side` 由 `STP_DEDUP_SCAN_TAG` 决定：tag 含 `factory`（大小写不敏感）→ `-side factory`，否则 `-side shanghai`（默认）。
-- **SAQ 链**（`backend/tasks/saq_tasks.py:scan_task`）：`scan_task` → `upload_task` → `merge_task`；`scan_task` 会先轮询 NFS 上所有 host 的产物，齐了才 enqueue 后继。
+- **SAQ 链**（`backend/tasks/saq_tasks.py:scan_task`）：`scan_task` → `upload_task` → `merge_task`。`scan_task` 轮询 NFS 上各 host 的产物**最多 300s**，等齐即提前跳出，等不齐也照样 enqueue 后继 —— 不是「齐了才 enqueue」。这是有意的：为一台慢/坏 host 扣住整轮，等于把「部分报表」换成「零报表」，而零报表正是这条链路要消灭的形态。缺口靠日志与 `PlanRun.run_context.archive` 显性化，不靠拦住后继：
+  - 完备性由 `dedup_scan.count_hosts_with_scan_artifacts(run_id, triggered, since=...)` 判定，三个维度都必须收窄：按 **host 去重**而非产物文件数（每台 host 上送 2 个 `*_org*.xls`，拿文件数跟 host 数比会让「一台上送完毕」冒充「全部齐了」）；**限定在本轮 triggered 集合内**（增量扫描复用同一 `plan_run_id`，上轮别的 host 的旧产物会顶替本轮触发 host 的名额）；且**限定在 `since` 水位线之后**（同一台 host 上一轮留下的产物会在本轮首检就计数，合并过期报告）。`since` 取下发 `scan_now` 之前的时刻。三种误判的后果相同：慢的 host 被漏出合并，或合并的是过期报告。
+  - 零产物记 `saq_scan_no_artifacts`（ERROR），部分产物记 `saq_scan_partial_artifacts`（WARNING）；两者都写 `run_context.archive`（`hosts_triggered` / `hosts_with_artifacts` / `scan_artifacts_registered`）。否则 Agent 侧扫描失败只有本地一条 WARNING，PlanRun 照报 SUCCESS 却没有任何报表。
+- **hot-update 的 env 同步分级**（`backend/services/agent_env_sync.py`）：控制面自己也读的键**不能**原样下发。`STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` / `STP_NFS_ROOT` 在两个角色上的正确值不同，必须经 `STP_AGENT_` 前缀的源键映射；`_FLEET_ENV_KEYS` 只放两边同值的键。推送后远端会校验 `AGENT_PATH_ENV_KEYS` 的值在 Agent 上确实存在，缺失项经 `env_paths_missing` 回传并记 ERROR。
 - **reload_config**（路由 `backend/api/routes/dedup.py` 的 `POST /api/v1/plan-runs/hosts/{host_id}/reload-config`）：经 `emit_agent_control` 下发 SocketIO `reload_config` 命令，让 Agent 重读安装目录 `.env` 并热刷新运行时配置，无需重启进程。Agent 侧实际刷新的三样见 `backend/agent/CLAUDE.md`。
 - **风险评级**（`backend/services/report_service.py:aggregate_risk_summary_from_signals`）：从 `job_log_signal.extra->>'event_subtype'` 聚合，按 `_RISK_RATING_RULES` 定级：
 
@@ -129,8 +132,9 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 | Var | Where | Purpose |
 |-----|-------|---------|
 | `STP_AEE_NFS_ROOT` | Backend + Agent | NFS/CIFS root for dedup/devices/jira (shared path) |
-| `STP_DEDUP_SCAN_PYTHON` | Backend + Agent | Python interpreter for scan tool |
-| `STP_DEDUP_SCAN_SCRIPT` | Backend + Agent | `start_log_scan.py` path (on NFS/CIFS share) |
+| `STP_DEDUP_SCAN_PYTHON` | Backend + Agent | Python interpreter for scan tool — **值按角色不同**，见下 |
+| `STP_DEDUP_SCAN_SCRIPT` | Backend + Agent | `start_log_scan.py` path — **值按角色不同**，见下 |
+| `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | Backend only | Agent 侧的 scan 工具路径，hot-update 写进 Agent 的无前缀键 |
 | `STP_AEE_LOCAL_ROOT` | Agent | HDD root for AEE events (e.g. `/mnt/hdd/aee_events`) |
 | `STP_SCRIPT_ROOT` | Backend | Script catalog scan source (must set in dev) |
 | `STP_WATCHER_ENABLED` | Agent | Watcher subsystem gate (default `true`) |

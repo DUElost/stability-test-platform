@@ -8,6 +8,7 @@ and keyword arguments that were passed at enqueue time.
 
 import logging
 import asyncio
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,10 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
 
     logger.info("saq_scan_start plan_run=%d final=%s", plan_run_id, is_final)
 
+    # Watermark for this round's completeness check, taken before scan_now goes
+    # out: artifacts registered earlier belong to a previous incremental round.
+    round_started_at = datetime.now(timezone.utc)
+
     try:
         triggered, skipped = await asyncio.to_thread(_query_hosts_for_scan, plan_run_id)
         for host_id in triggered:
@@ -156,32 +161,77 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         raise
 
     if triggered:
-        from backend.services.dedup_scan import run_scan_sync
+        from backend.services.dedup_scan import (
+            count_hosts_with_scan_artifacts,
+            record_scan_archive_state,
+            run_scan_sync,
+        )
 
         _SCAN_POLL_INTERVAL = 10
         _SCAN_POLL_MAX_WAIT = 300
         elapsed = 0
         registered = 0
+        hosts_done = 0
         n_triggered = len(triggered)
+        # Completeness is counted per host, scoped to this round's triggered set,
+        # and bounded below by round_started_at: each host uploads 2 matching
+        # files, and incremental scans reuse the plan_run_id, so neither a file
+        # count nor a run-wide host count nor a host's earlier-round artifacts
+        # mean "every host we just asked has delivered this time".
         while elapsed < _SCAN_POLL_MAX_WAIT:
             await asyncio_sleep(_SCAN_POLL_INTERVAL)
             elapsed += _SCAN_POLL_INTERVAL
             n_new = await asyncio_to_thread(run_scan_sync, plan_run_id)
             if n_new:
                 registered += int(n_new)
-            if registered >= n_triggered:
+            hosts_done = await asyncio_to_thread(
+                count_hosts_with_scan_artifacts, plan_run_id, triggered,
+                since=round_started_at,
+            )
+            if hosts_done >= n_triggered:
                 break
             logger.info(
-                "saq_scan_poll plan_run=%d elapsed=%ds registered=%d/%d",
-                plan_run_id, elapsed, registered, n_triggered,
+                "saq_scan_poll plan_run=%d elapsed=%ds hosts=%d/%d artifacts=%d",
+                plan_run_id, elapsed, hosts_done, n_triggered, registered,
             )
 
-        if registered == 0:
-            await asyncio_to_thread(run_scan_sync, plan_run_id)
+        # Poll exhausted with some hosts still missing: retry once so an _org.xls
+        # that landed inside the last interval still gets registered and merged.
+        if hosts_done < n_triggered:
+            n_final = await asyncio_to_thread(run_scan_sync, plan_run_id)
+            if n_final:
+                registered += int(n_final)
+                hosts_done = await asyncio_to_thread(
+                    count_hosts_with_scan_artifacts, plan_run_id, triggered,
+                    since=round_started_at,
+                )
 
         logger.info(
-            "saq_scan_registered plan_run=%d artifacts=%d/%d waited=%ds",
-            plan_run_id, registered, n_triggered, elapsed,
+            "saq_scan_registered plan_run=%d hosts=%d/%d artifacts=%d waited=%ds",
+            plan_run_id, hosts_done, n_triggered, registered, elapsed,
+        )
+
+        # Agent-side scan failures only log locally, so a fleet-wide
+        # misconfiguration otherwise ends as a SUCCESS run with no report at all.
+        if hosts_done == 0:
+            logger.error(
+                "saq_scan_no_artifacts plan_run=%d hosts_triggered=%d waited=%ds",
+                plan_run_id, n_triggered, elapsed,
+            )
+        elif hosts_done < n_triggered:
+            # Deliberately still chained: a report covering the hosts that did
+            # deliver beats no report at all, which is the failure mode this
+            # whole path exists to remove. The shortfall has to be loud instead.
+            logger.warning(
+                "saq_scan_partial_artifacts plan_run=%d hosts=%d/%d waited=%ds",
+                plan_run_id, hosts_done, n_triggered, elapsed,
+            )
+        await asyncio_to_thread(
+            record_scan_archive_state,
+            plan_run_id,
+            hosts_triggered=n_triggered,
+            artifacts_registered=registered,
+            hosts_with_artifacts=hosts_done,
         )
 
     from backend.tasks.saq_worker import get_queue

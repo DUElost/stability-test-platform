@@ -85,3 +85,58 @@ def test_run_merge_sync_raises_when_subprocess_stderr_has_error(tmp_path):
          patch("backend.services.dedup_scan.subprocess.run", return_value=proc):
         with pytest.raises(RuntimeError, match="merge subprocess reported errors"):
             ds.run_merge_sync(99)
+
+
+def test_count_hosts_with_scan_artifacts_scopes_to_since_watermark(
+    db_session, sample_plan_run,
+):
+    """Earlier-round artifacts for the same host must not satisfy this round.
+
+    Incremental scans reuse the same plan_run_id; without the ``since`` filter,
+    host-a's stale row makes the first poll read 1/1 and break before host-a's
+    new upload lands.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    run_id = sample_plan_run.id
+    stale_at = datetime(2026, 8, 8, 6, 0, tzinfo=timezone.utc)
+    fresh_at = datetime(2026, 8, 8, 7, 0, tzinfo=timezone.utc)
+    watermark = datetime(2026, 8, 8, 6, 30, tzinfo=timezone.utc)
+
+    db_session.add(
+        PlanRunArtifact(
+            plan_run_id=run_id,
+            host_id="host-a",
+            storage_uri="/tmp/stale_org.xls",
+            artifact_type=ds.ARTIFACT_TYPE_SCAN,
+            size_bytes=100,
+            created_at=stale_at,
+        )
+    )
+    db_session.add(
+        PlanRunArtifact(
+            plan_run_id=run_id,
+            host_id="host-a",
+            storage_uri="/tmp/fresh_org.xls",
+            artifact_type=ds.ARTIFACT_TYPE_SCAN,
+            size_bytes=100,
+            created_at=fresh_at,
+        )
+    )
+    db_session.commit()
+
+    # Stale row alone does not count once the watermark is past it.
+    assert ds.count_hosts_with_scan_artifacts(run_id, ["host-a"], since=watermark) == 1
+    assert ds.count_hosts_with_scan_artifacts(run_id, ["host-a"], since=fresh_at) == 1
+    assert ds.count_hosts_with_scan_artifacts(
+        run_id, ["host-a"], since=fresh_at + timedelta(seconds=1)
+    ) == 0
+
+    # Only the stale row exists before watermark — this is the re-trigger case.
+    db_session.query(PlanRunArtifact).filter(
+        PlanRunArtifact.storage_uri == "/tmp/fresh_org.xls"
+    ).delete()
+    db_session.commit()
+    assert ds.count_hosts_with_scan_artifacts(run_id, ["host-a"], since=watermark) == 0

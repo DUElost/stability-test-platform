@@ -11,8 +11,9 @@ import os
 import re
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -109,6 +110,100 @@ def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
         n = _register_scan_artifacts_from_nfs(db, plan_run_id, dedup_dir)
         logger.info("scan_artifacts_registered plan_run=%d count=%d", plan_run_id, n)
         return str(n) if n else ""
+    finally:
+        db.close()
+
+
+def count_hosts_with_scan_artifacts(
+    plan_run_id: int, host_ids: Sequence[str], *, since: datetime
+) -> int:
+    """``host_ids`` 中**本轮**已登记 scan 产物的去重 host 数。
+
+    三个维度都必须收窄，否则完备性判定会误报「齐了」，后果都一样：慢的 host 漏出
+    合并，或者合并的是过期报告。
+
+    - 按 **host** 而非文件数：``_register_scan_artifacts_from_nfs`` 返回文件数，而
+      每台 host 上送 2 个匹配文件（``_org.xls`` 与 ``_org_dedup_org_*.xls``），拿它
+      跟 host 数比会让「一台上送完毕」冒充「全部齐了」。
+    - 限定在本轮 ``host_ids`` 内：本轮只触发 host-b 时，host-a 的旧产物会顶替
+      host-b 的名额。
+    - 限定在本轮**水位线** ``since`` 之后：增量扫描复用同一个 ``plan_run_id``，所以
+      同一台 host 上一轮留下的产物会在本轮首检就计数，轮询立刻跳出，该 host 这轮的
+      新产物赶不上 merge。``since`` 取下发 ``scan_now`` 之前的时刻；``created_at``
+      与它同为 backend 进程侧 UTC 时间（模型是 Python default，不是库端 now()），
+      不存在时钟偏差。
+    """
+    if not host_ids:
+        return 0
+
+    from backend.core.database import SessionLocal
+    from sqlalchemy import distinct, func
+
+    db = SessionLocal()
+    try:
+        return int(
+            db.execute(
+                select(func.count(distinct(PlanRunArtifact.host_id))).where(
+                    PlanRunArtifact.plan_run_id == plan_run_id,
+                    PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
+                    PlanRunArtifact.host_id.in_(list(host_ids)),
+                    PlanRunArtifact.created_at >= since,
+                )
+            ).scalar()
+            or 0
+        )
+    finally:
+        db.close()
+
+
+def record_scan_archive_state(
+    plan_run_id: int,
+    *,
+    hosts_triggered: int,
+    artifacts_registered: int,
+    hosts_with_artifacts: int,
+) -> None:
+    """记录本轮 scan 的产物计数到 ``PlanRun.run_context['archive']``。
+
+    下发了 host 却零产物意味着这次执行没有任何报表，而 PlanRun 仍可能是
+    SUCCESS —— 落到 run_context 是为了让该状态经 API 可见，而不是只剩一行
+    Agent 本地日志（#118 同源）。
+
+    写入走库端 ``jsonb_set`` 而非读改写整个 ``run_context``：这里是独立会话，
+    而 abort / dispatch_state 可能在同一时刻更新同一行，整体写回会把它们抹掉。
+    """
+    import json
+
+    from sqlalchemy import text
+
+    from backend.core.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                "UPDATE plan_run "
+                "SET run_context = jsonb_set("
+                "  COALESCE(run_context, '{}'::jsonb), '{archive}', CAST(:archive AS jsonb), true"
+                ") "
+                "WHERE id = :run_id"
+            ),
+            {
+                "run_id": plan_run_id,
+                "archive": json.dumps(
+                    {
+                        "hosts_triggered": hosts_triggered,
+                        "scan_artifacts_registered": artifacts_registered,
+                        "hosts_with_artifacts": hosts_with_artifacts,
+                    }
+                ),
+            },
+        )
+        db.commit()
+    except Exception:
+        # Bookkeeping must not abort the scan → upload → merge chain.
+        db.rollback()
+        logger.exception("scan_archive_state_write_failed plan_run=%d", plan_run_id)
     finally:
         db.close()
 

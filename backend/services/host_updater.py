@@ -19,7 +19,10 @@ import time
 from pathlib import Path
 
 from backend.core.ssh_security import create_ssh_client
-from backend.services.agent_env_sync import hot_update_env_overrides
+from backend.services.agent_env_sync import (
+    agent_path_keys_to_verify,
+    hot_update_env_overrides,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +126,7 @@ TAR_PATH="{tar_path}"
 SYNC_AGENT_SECRET="{sync_agent_secret}"
 AGENT_SECRET_B64="{agent_secret_b64}"
 ENV_OVERRIDES_B64="{env_overrides_b64}"
+ENV_PATH_KEYS_B64="{env_path_keys_b64}"
 export PIP_INDEX_URL="{pip_index_url}"
 
 if [ ! -d "$INSTALL_DIR" ]; then
@@ -196,7 +200,7 @@ env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
 PY
 fi
 
-sudo INSTALL_DIR="$INSTALL_DIR" ENV_OVERRIDES_B64="$ENV_OVERRIDES_B64" python3 - <<'PY'
+sudo INSTALL_DIR="$INSTALL_DIR" ENV_OVERRIDES_B64="$ENV_OVERRIDES_B64" ENV_PATH_KEYS_B64="$ENV_PATH_KEYS_B64" python3 - <<'PY'
 import base64
 import json
 import os
@@ -205,8 +209,10 @@ import sys
 
 env_path = pathlib.Path(os.environ["INSTALL_DIR"]) / ".env"
 overrides = json.loads(base64.b64decode(os.environ["ENV_OVERRIDES_B64"]).decode("utf-8"))
+path_keys = json.loads(base64.b64decode(os.environ["ENV_PATH_KEYS_B64"]).decode("utf-8"))
 if not overrides:
     print("STP_ENV_SYNCED=")
+    print("STP_ENV_PATH_MISSING=")
     raise SystemExit(0)
 
 if not env_path.exists():
@@ -239,6 +245,15 @@ for key, val in overrides.items():
 
 env_path.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")
 print("STP_ENV_SYNCED=" + ",".join(sorted(updated_keys)))
+
+missing = {{
+    key: overrides[key]
+    for key in sorted(path_keys)
+    if key in overrides and not os.path.exists(overrides[key])
+}}
+print("STP_ENV_PATH_MISSING=" + base64.b64encode(
+    json.dumps(missing, sort_keys=True).encode("utf-8")
+).decode("ascii"))
 PY
 
 # Fix ownership
@@ -295,6 +310,9 @@ def _build_remote_script(
     env_overrides_b64 = base64.b64encode(
         json.dumps(env_overrides, sort_keys=True).encode("utf-8")
     ).decode("ascii")
+    env_path_keys_b64 = base64.b64encode(
+        json.dumps(agent_path_keys_to_verify(env_overrides)).encode("utf-8")
+    ).decode("ascii")
 
     return _REMOTE_SCRIPT.format(
         install_dir=install_dir,
@@ -303,6 +321,7 @@ def _build_remote_script(
         sync_agent_secret="1" if sync_agent_secret else "0",
         agent_secret_b64=agent_secret_b64,
         env_overrides_b64=env_overrides_b64,
+        env_path_keys_b64=env_path_keys_b64,
         user=user,
         group=group,
         pip_index_url=pip_index_url,
@@ -349,6 +368,29 @@ def _parse_env_synced(stdout_text: str) -> list[str]:
     return []
 
 
+def _parse_env_paths_missing(stdout_text: str) -> dict[str, str]:
+    """Extract synced .env keys whose value does not exist on the agent.
+
+    The remote script base64-encodes the payload so paths containing the
+    delimiter characters cannot garble the diagnostic.
+    """
+    for line in reversed(stdout_text.splitlines()):
+        line = line.strip()
+        if line.startswith("STP_ENV_PATH_MISSING="):
+            raw = line.split("=", 1)[1].strip()
+            if not raw:
+                return {}
+            try:
+                decoded = json.loads(base64.b64decode(raw).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                logger.warning("hot_update_env_path_payload_unparsable raw=%s", raw[:120])
+                return {}
+            if not isinstance(decoded, dict):
+                return {}
+            return {str(k): str(v) for k, v in decoded.items()}
+    return {}
+
+
 def get_agent_code_version() -> str:
     """Return the short git HEAD of the agent source tree, or '' if unavailable."""
     import subprocess
@@ -385,7 +427,8 @@ def execute_hot_update(
     """Execute a hot-update on a remote Linux host.
 
     Returns a dict with keys: ok, host_id (str), message, duration_ms,
-    deps_refreshed (bool), env_keys_synced (list[str]), code_version (str).
+    deps_refreshed (bool), env_keys_synced (list[str]),
+    env_paths_missing (dict[str, str]), code_version (str).
     Raises no exceptions — failures are captured in the returned dict.
     """
     import paramiko
@@ -438,6 +481,7 @@ def execute_hot_update(
 
             deps_refreshed = _parse_deps_refreshed(out_text)
             env_keys_synced = _parse_env_synced(out_text)
+            env_paths_missing = _parse_env_paths_missing(out_text)
 
             if exit_code != 0:
                 logger.error("hot_update_remote_failed exit=%d stderr=%s", exit_code, err_text[:500])
@@ -447,8 +491,15 @@ def execute_hot_update(
                     "duration_ms": int((time.monotonic() - t0) * 1000),
                     "deps_refreshed": deps_refreshed,
                     "env_keys_synced": env_keys_synced,
+                    "env_paths_missing": env_paths_missing,
                     "code_version": code_version,
                 }
+
+            if env_paths_missing:
+                logger.error(
+                    "hot_update_env_paths_missing host=%s missing=%s",
+                    host_ip, env_paths_missing,
+                )
 
             msg = out_text.strip().split("\n")[-1] if out_text.strip() else "OK"
             logger.info(
@@ -461,6 +512,7 @@ def execute_hot_update(
                 "duration_ms": int((time.monotonic() - t0) * 1000),
                 "deps_refreshed": deps_refreshed,
                 "env_keys_synced": env_keys_synced,
+                "env_paths_missing": env_paths_missing,
                 "code_version": code_version,
             }
 
@@ -477,6 +529,7 @@ def execute_hot_update(
             "duration_ms": int((time.monotonic() - t0) * 1000),
             "deps_refreshed": False,
             "env_keys_synced": [],
+            "env_paths_missing": {},
             "code_version": code_version,
         }
 
@@ -489,6 +542,7 @@ def execute_hot_update(
             "duration_ms": int((time.monotonic() - t0) * 1000),
             "deps_refreshed": False,
             "env_keys_synced": [],
+            "env_paths_missing": {},
             "code_version": code_version,
         }
 
@@ -500,5 +554,6 @@ def execute_hot_update(
             "duration_ms": int((time.monotonic() - t0) * 1000),
             "deps_refreshed": False,
             "env_keys_synced": [],
+            "env_paths_missing": {},
             "code_version": code_version,
         }

@@ -745,6 +745,7 @@ def host_hot_update(
             "ok": bool(result.get("ok")),
             "deps_refreshed": bool(result.get("deps_refreshed")),
             "env_keys_synced": result.get("env_keys_synced", []),
+            "env_paths_missing": result.get("env_paths_missing", {}),
             "code_version": result.get("code_version", ""),
             "duration_ms": result.get("duration_ms"),
             "message": result.get("message", ""),
@@ -767,6 +768,7 @@ def host_hot_update(
         "duration_ms": result.get("duration_ms"),
         "deps_refreshed": result.get("deps_refreshed", False),
         "env_keys_synced": result.get("env_keys_synced", []),
+        "env_paths_missing": result.get("env_paths_missing", {}),
         "code_version": result.get("code_version", ""),
         "abort_summary": aborted_summary,
     }
