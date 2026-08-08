@@ -156,50 +156,71 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         raise
 
     if triggered:
-        from backend.services.dedup_scan import record_scan_archive_state, run_scan_sync
+        from backend.services.dedup_scan import (
+            count_hosts_with_scan_artifacts,
+            record_scan_archive_state,
+            run_scan_sync,
+        )
 
         _SCAN_POLL_INTERVAL = 10
         _SCAN_POLL_MAX_WAIT = 300
         elapsed = 0
         registered = 0
+        hosts_done = 0
         n_triggered = len(triggered)
+        # Completeness is per host, not per file: each host uploads 2 matching
+        # files, so comparing the file count against the host count lets one
+        # finished host pass for "all done" and drops the slower ones.
         while elapsed < _SCAN_POLL_MAX_WAIT:
             await asyncio_sleep(_SCAN_POLL_INTERVAL)
             elapsed += _SCAN_POLL_INTERVAL
             n_new = await asyncio_to_thread(run_scan_sync, plan_run_id)
             if n_new:
                 registered += int(n_new)
-            if registered >= n_triggered:
+            hosts_done = await asyncio_to_thread(count_hosts_with_scan_artifacts, plan_run_id)
+            if hosts_done >= n_triggered:
                 break
             logger.info(
-                "saq_scan_poll plan_run=%d elapsed=%ds registered=%d/%d",
-                plan_run_id, elapsed, registered, n_triggered,
+                "saq_scan_poll plan_run=%d elapsed=%ds hosts=%d/%d artifacts=%d",
+                plan_run_id, elapsed, hosts_done, n_triggered, registered,
             )
 
         # Poll exhausted with some hosts still missing: retry once so an _org.xls
         # that landed inside the last interval still gets registered and merged.
-        if registered < n_triggered:
+        if hosts_done < n_triggered:
             n_final = await asyncio_to_thread(run_scan_sync, plan_run_id)
             if n_final:
                 registered += int(n_final)
+                hosts_done = await asyncio_to_thread(
+                    count_hosts_with_scan_artifacts, plan_run_id
+                )
 
         logger.info(
-            "saq_scan_registered plan_run=%d artifacts=%d/%d waited=%ds",
-            plan_run_id, registered, n_triggered, elapsed,
+            "saq_scan_registered plan_run=%d hosts=%d/%d artifacts=%d waited=%ds",
+            plan_run_id, hosts_done, n_triggered, registered, elapsed,
         )
 
         # Agent-side scan failures only log locally, so a fleet-wide
         # misconfiguration otherwise ends as a SUCCESS run with no report at all.
-        if registered == 0:
+        if hosts_done == 0:
             logger.error(
                 "saq_scan_no_artifacts plan_run=%d hosts_triggered=%d waited=%ds",
                 plan_run_id, n_triggered, elapsed,
+            )
+        elif hosts_done < n_triggered:
+            # Deliberately still chained: a report covering the hosts that did
+            # deliver beats no report at all, which is the failure mode this
+            # whole path exists to remove. The shortfall has to be loud instead.
+            logger.warning(
+                "saq_scan_partial_artifacts plan_run=%d hosts=%d/%d waited=%ds",
+                plan_run_id, hosts_done, n_triggered, elapsed,
             )
         await asyncio_to_thread(
             record_scan_archive_state,
             plan_run_id,
             hosts_triggered=n_triggered,
             artifacts_registered=registered,
+            hosts_with_artifacts=hosts_done,
         )
 
     from backend.tasks.saq_worker import get_queue

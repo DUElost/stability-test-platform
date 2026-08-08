@@ -113,8 +113,38 @@ def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
         db.close()
 
 
+def count_hosts_with_scan_artifacts(plan_run_id: int) -> int:
+    """已登记 scan 产物的**去重 host 数**。
+
+    轮询完备性只能按 host 判定：``_register_scan_artifacts_from_nfs`` 返回的是
+    文件数，而每台 host 上送 2 个匹配文件（``_org.xls`` 与 ``_org_dedup_org_*.xls``），
+    拿它跟 host 数比会让「一台上送完毕」冒充「全部齐了」，慢的 host 直接被漏出合并。
+    """
+    from backend.core.database import SessionLocal
+    from sqlalchemy import distinct, func
+
+    db = SessionLocal()
+    try:
+        return int(
+            db.execute(
+                select(func.count(distinct(PlanRunArtifact.host_id))).where(
+                    PlanRunArtifact.plan_run_id == plan_run_id,
+                    PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
+                    PlanRunArtifact.host_id.isnot(None),
+                )
+            ).scalar()
+            or 0
+        )
+    finally:
+        db.close()
+
+
 def record_scan_archive_state(
-    plan_run_id: int, *, hosts_triggered: int, artifacts_registered: int
+    plan_run_id: int,
+    *,
+    hosts_triggered: int,
+    artifacts_registered: int,
+    hosts_with_artifacts: int,
 ) -> None:
     """记录本轮 scan 的产物计数到 ``PlanRun.run_context['archive']``。
 
@@ -147,6 +177,7 @@ def record_scan_archive_state(
                     {
                         "hosts_triggered": hosts_triggered,
                         "scan_artifacts_registered": artifacts_registered,
+                        "hosts_with_artifacts": hosts_with_artifacts,
                     }
                 ),
             },
