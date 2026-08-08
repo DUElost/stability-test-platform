@@ -100,6 +100,36 @@ describe('HostOperationPanel', () => {
     expect(screen.getByTestId('mock-live-console-con-2')).toBeInTheDocument();
   });
 
+  it('shows hot-update title, kind label, and skipped count', () => {
+    render(
+      <HostOperationPanel
+        open
+        ops={[
+          {
+            hostId: 'h3',
+            label: '172.21.8.87',
+            kind: 'hot_update',
+            status: 'running',
+          },
+          {
+            hostId: 'h4',
+            label: '172.21.8.88',
+            kind: 'hot_update',
+            status: 'skipped',
+            error: '存在活跃 Job',
+          },
+        ]}
+        onClose={vi.fn()}
+        onTerminalStatus={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('热更新进度')).toBeInTheDocument();
+    expect(screen.getByTestId('host-op-row-h3')).toHaveTextContent('热更新');
+    expect(screen.getByTestId('host-op-row-h4')).toHaveTextContent('跳过');
+    expect(screen.getByText('存在活跃 Job')).toBeInTheDocument();
+    expect(screen.getByText('正在热更新…')).toBeInTheDocument();
+  });
+
   it('calls onClose', () => {
     const onClose = vi.fn();
     render(

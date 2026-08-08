@@ -20,7 +20,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SKELETON_BLOCK, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
-import { executeBulkHotUpdate, precheckBulkHotUpdate } from './bulkHotUpdate';
+import { BULK_HOT_UPDATE_SKIP_LABEL, precheckBulkHotUpdate } from './bulkHotUpdate';
 
 function asNumber(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -101,12 +101,20 @@ export default function HostsPage() {
     panelOpen: opPanelOpen,
     setPanelOpen: setOpPanelOpen,
     startInstallBatch,
+    startHotUpdateBatch,
     markTerminal,
     closePanel,
-    isHostBusy,
+    isHostOpBusy,
   } = useHostOperations({
     concurrency: 2,
     onTerminal: (ev) => {
+      if (ev.kind === 'hot_update') {
+        if (ev.ok) {
+          queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+          queryClient.invalidateQueries({ queryKey: ['host-detail', ev.hostId] });
+        }
+        return;
+      }
       if (ev.ok) {
         toast.success(`主机 ${ev.label} Agent 安装完成`);
         queryClient.invalidateQueries({ queryKey: hostKeys.list() });
@@ -118,7 +126,6 @@ export default function HostsPage() {
     },
   });
 
-  const [hotUpdatingHostId, setHotUpdatingHostId] = useState<number | string | null>(null);
   const [pendingHotUpdateHostId, setPendingHotUpdateHostId] = useState<
     number | string | null
   >(null);
@@ -152,49 +159,6 @@ export default function HostsPage() {
     },
   });
 
-  const hotUpdateMutation = useMutation({
-    mutationFn: (vars: { hostId: number | string; abortRunningJobs: boolean }) =>
-      api.hotUpdate.trigger(vars.hostId, { abortRunningJobs: vars.abortRunningJobs }),
-    onSuccess: (data, vars) => {
-      const depNote = data.deps_refreshed
-        ? ' (依赖已刷新)'
-        : ' (依赖未变)';
-      const verNote = data.code_version ? ` @${data.code_version}` : '';
-      toast.success(
-        vars.abortRunningJobs
-          ? `主机 ${vars.hostId} 已中止活跃 Job 并完成热更新${depNote}${verNote}`
-          : `主机 ${vars.hostId} 热更新完成${depNote}${verNote}`,
-      );
-      setHotUpdatingHostId(null);
-      setPendingHotUpdateHostId(null);
-      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
-      queryClient.invalidateQueries({ queryKey: ['host-detail', vars.hostId] });
-    },
-    onError: (error: unknown, vars) => {
-      // 409 with active_jobs surfaces here when the user (or our default
-      // path) requested a hot-update without abort_running_jobs.  The dialog
-      // itself prevents this by enforcing the toggle before enabling
-      // confirm, but the mutation is still defensive for direct API misuse.
-      const apiErr = toApiError(error);
-      const detail = apiErr.details;
-      if (apiErr.status === 409 && detail && Array.isArray(detail.active_jobs)) {
-        toast.error(
-          `主机 ${vars.hostId} 仍有 ${(detail.active_jobs as unknown[]).length} 个活跃 Job — 请勾选「中止并热更新」`,
-        );
-        // Re-open the dialog so the user can opt into the abort path.
-        setPendingHotUpdateHostId(vars.hostId);
-        setPendingRetryAfter(
-          typeof detail.retry_after_seconds === 'number'
-            ? detail.retry_after_seconds
-            : undefined,
-        );
-      } else {
-        toast.error(`热更新失败: ${apiErr.message}`);
-      }
-      setHotUpdatingHostId(null);
-    },
-  });
-
   const handleHotUpdate = (hostId: number | string) => {
     if (bulkHotUpdateProgress) {
       toast.info('安全批量热更新正在执行，请等待完成');
@@ -203,12 +167,44 @@ export default function HostsPage() {
     setPendingHotUpdateHostId(hostId);
   };
 
-  const handleHotUpdateConfirm = (
+  const handleHotUpdateConfirm = async (
     hostId: number | string,
     opts: { abortRunningJobs: boolean },
   ) => {
-    setHotUpdatingHostId(hostId);
-    hotUpdateMutation.mutate({ hostId, abortRunningJobs: opts.abortRunningJobs });
+    const host = hosts?.find((item: Host) => item.id === hostId);
+    const label = host?.name ?? host?.ip ?? String(hostId);
+    setPendingHotUpdateHostId(null);
+    const result = await startHotUpdateBatch([
+      { hostId, label, abortRunningJobs: opts.abortRunningJobs },
+    ]);
+    if (!result) {
+      toast.info('已有主机操作进行中，请等待完成后再热更新');
+      return;
+    }
+    const conflict = result.skipped.find((item) => item.httpStatus === 409);
+    if (conflict) {
+      toast.error(
+        conflict.activeJobCount
+          ? `主机 ${label} 仍有 ${conflict.activeJobCount} 个活跃 Job — 请勾选「中止并热更新」`
+          : `主机 ${label} 热更新被拒绝: ${conflict.error}`,
+      );
+      setPendingHotUpdateHostId(hostId);
+      setPendingRetryAfter(conflict.retryAfterSeconds);
+      return;
+    }
+    if (result.failed[0]) {
+      toast.error(`主机 ${label} 热更新失败: ${result.failed[0].error}`);
+      return;
+    }
+    const data = result.succeeded[0]?.result;
+    if (!data) return;
+    const depNote = data.deps_refreshed ? ' (依赖已刷新)' : ' (依赖未变)';
+    const verNote = data.code_version ? ` @${data.code_version}` : '';
+    toast.success(
+      opts.abortRunningJobs
+        ? `主机 ${label} 已中止活跃 Job 并完成热更新${depNote}${verNote}`
+        : `主机 ${label} 热更新完成${depNote}${verNote}`,
+    );
   };
 
   const handleInstallTerminalStatus = (hostId: string, status: string) => {
@@ -426,8 +422,14 @@ export default function HostsPage() {
   }, [selectedHostIds, hosts]);
 
   const installPending = hostOps.some(
-    (op) => op.status === 'pending' || op.status === 'running',
+    (op) =>
+      (op.kind === 'install' || op.kind === 'reinstall') &&
+      (op.status === 'pending' || op.status === 'running'),
   );
+  const hotUpdateOpPending = hostOps.some(
+    (op) => op.kind === 'hot_update' && (op.status === 'pending' || op.status === 'running'),
+  );
+  const hotUpdatePanelOps = hostOps.some((op) => op.kind === 'hot_update');
 
   const handleSelectedHotUpdate = async () => {
     if (selectedHostIds.size === 0 || bulkHotUpdateProgress) return;
@@ -482,21 +484,34 @@ export default function HostsPage() {
       if (!ok) return;
 
       setBulkHotUpdateProgress({ phase: 'updating', completed: 0, total: precheck.eligible.length });
-      const result = await executeBulkHotUpdate(
-        precheck.eligible,
-        (id) => api.hotUpdate.trigger(id),
-        (completed, total) => setBulkHotUpdateProgress({ phase: 'updating', completed, total }),
+      const result = await startHotUpdateBatch(
+        precheck.eligible.map((item) => ({ hostId: item.id, label: item.label })),
+        {
+          skipped: precheck.skipped.map((item) => ({
+            hostId: item.id,
+            label: item.label,
+            error: BULK_HOT_UPDATE_SKIP_LABEL[item.reason],
+          })),
+          onProgress: (completed, total) =>
+            setBulkHotUpdateProgress({ phase: 'updating', completed, total }),
+        },
       );
+      if (!result) {
+        toast.info('已有主机操作进行中，请等待完成后再热更新');
+        return;
+      }
       const remainingIds = new Set<string | number>([
         ...precheck.skipped.map((item) => item.id),
-        ...result.skipped.map((item) => item.id),
-        ...result.failed.map((item) => item.id),
+        ...result.skipped
+          .filter((item) => item.httpStatus === 409)
+          .map((item) => item.hostId),
+        ...result.failed.map((item) => item.hostId),
       ]);
       setSelectedHostIds(remainingIds);
       queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       queryClient.invalidateQueries({ queryKey: ['host-detail'] });
 
-      const skippedCount = precheck.skipped.length + result.skipped.length;
+      const skippedCount = result.skipped.length;
       const summary = `安全批量热更新完成：成功 ${result.succeeded.length} 台，跳过 ${skippedCount} 台，失败 ${result.failed.length} 台`;
       if (result.failed.length > 0) toast.error(summary);
       else toast.success(summary);
@@ -558,10 +573,7 @@ export default function HostsPage() {
   }
 
   return (
-    <PageContainer
-      width="full"
-      className={selectedHostIds.size > 0 ? 'pb-28' : undefined}
-    >
+    <PageContainer width="full">
       <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
 
       <div className="flex items-center justify-end gap-2 py-2">
@@ -571,10 +583,10 @@ export default function HostsPage() {
             data-testid="host-op-panel-reopen"
             onClick={() => setOpPanelOpen(true)}
           >
-            安装进度
-            {installPending
+            {hotUpdatePanelOps ? '热更新进度' : '安装进度'}
+            {installPending || hotUpdateOpPending
               ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
-              : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败)`}
+              : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
           </Button>
         )}
         {isAdmin && (
@@ -591,11 +603,13 @@ export default function HostsPage() {
           hosts={tableData}
           onHotUpdate={isAdmin ? handleHotUpdate : undefined}
           isHotUpdating={(hostId: string | number) =>
-            (hotUpdateMutation.isPending && hotUpdatingHostId === hostId) ||
+            isHostOpBusy(hostId, 'hot_update') ||
             (bulkHotUpdateProgress != null && selectedHostIds.has(hostId))
           }
           onInstall={isAdmin ? handleInstall : undefined}
-          isInstalling={(hostId: string | number) => isHostBusy(hostId)}
+          isInstalling={(hostId: string | number) =>
+            isHostOpBusy(hostId, ['install', 'reinstall'])
+          }
           onEdit={isAdmin ? handleEdit : undefined}
           onDelete={isAdmin ? handleDelete : undefined}
           isDeleting={(hostId: string | number) => deleteMutation.isPending && deleteMutation.variables === hostId}
@@ -625,11 +639,13 @@ export default function HostsPage() {
         <HostBulkActionBar
           counts={bulkCounts}
           isAdmin={isAdmin}
-          installPending={installPending}
-          hotUpdatePending={bulkHotUpdateProgress != null}
+          installPending={installPending || hotUpdateOpPending}
+          hotUpdatePending={bulkHotUpdateProgress != null || hotUpdateOpPending || installPending}
           hotUpdateProgressLabel={bulkHotUpdateProgress
             ? `${bulkHotUpdateProgress.phase === 'checking' ? '预检' : '热更新'} ${bulkHotUpdateProgress.completed}/${bulkHotUpdateProgress.total}`
-            : undefined}
+            : hotUpdateOpPending
+              ? `热更新 ${hostOps.filter((o) => o.kind === 'hot_update' && o.status === 'success').length}/${hostOps.filter((o) => o.kind === 'hot_update' && o.status !== 'skipped').length}`
+              : undefined}
           onInstall={handleBulkInstall}
           onHotUpdate={handleSelectedHotUpdate}
           onDelete={handleBulkDelete}
@@ -657,10 +673,10 @@ export default function HostsPage() {
       <HostHotUpdateConfirmDialog
         hostId={pendingHotUpdateHostId}
         onClose={() => {
-          if (!hotUpdateMutation.isPending) setPendingHotUpdateHostId(null);
+          if (!hotUpdateOpPending) setPendingHotUpdateHostId(null);
         }}
         onConfirm={handleHotUpdateConfirm}
-        isHotUpdatePending={hotUpdateMutation.isPending}
+        isHotUpdatePending={hotUpdateOpPending}
         retryAfterSeconds={pendingRetryAfter}
       />
 

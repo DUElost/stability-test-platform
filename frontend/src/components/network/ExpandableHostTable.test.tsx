@@ -101,6 +101,26 @@ describe('ExpandableHostTable', () => {
     expect(screen.queryByText('Agent 版本')).not.toBeInTheDocument();
   });
 
+  it('adds bottom spacer when hosts are selected so the bulk bar does not cover the last row', () => {
+    const { rerender } = render(
+      <ExpandableHostTable
+        hosts={[host]}
+        selectedIds={new Set()}
+        onSelectionChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('host-table-selection-spacer')).not.toBeInTheDocument();
+
+    rerender(
+      <ExpandableHostTable
+        hosts={[host]}
+        selectedIds={new Set([host.id])}
+        onSelectionChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('host-table-selection-spacer')).toHaveClass('h-40');
+  });
+
   it('shows partial selection and highlights selected rows', () => {
     const secondHost: HostTableData = {
       ...host,

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Host } from '@/utils/api/types';
-import { executeBulkHotUpdate, precheckBulkHotUpdate } from './bulkHotUpdate';
+import {
+  BULK_HOT_UPDATE_SKIP_LABEL,
+  executeBulkHotUpdate,
+  precheckBulkHotUpdate,
+} from './bulkHotUpdate';
 
 const target = (id: number) => ({ id, label: `host-${id}` });
 const detail = (overrides: Partial<Host> = {}): Host => ({
@@ -18,6 +22,11 @@ const detail = (overrides: Partial<Host> = {}): Host => ({
 });
 
 describe('bulk hot update helpers', () => {
+  it('exposes Chinese skip labels for the progress panel', () => {
+    expect(BULK_HOT_UPDATE_SKIP_LABEL.active_jobs).toBe('存在活跃 Job');
+    expect(BULK_HOT_UPDATE_SKIP_LABEL.offline).toBe('主机离线');
+  });
+
   it('only marks online installed hosts without active jobs as eligible', async () => {
     const getDetail = vi.fn(async (id: string | number) => {
       if (id === 2) return detail({ active_job_count: 1 });

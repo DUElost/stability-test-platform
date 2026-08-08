@@ -851,6 +851,15 @@ export function ExpandableHostTable({
             {hosts.length === 0 ? '暂无主机' : '没有符合当前筛选条件的主机'}
           </div>
         )}
+
+        {/* 全选后底部悬浮操作条会挡住最后一行；用真实占位撑开滚动，避免与 PageContainer lg:p-8 抢 padding */}
+        {selectable && selectedIds && selectedIds.size > 0 && (
+          <div
+            data-testid="host-table-selection-spacer"
+            aria-hidden
+            className="h-40 shrink-0"
+          />
+        )}
       </div>
     </TooltipProvider>
   );

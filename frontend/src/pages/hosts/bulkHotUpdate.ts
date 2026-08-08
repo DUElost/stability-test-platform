@@ -18,6 +18,14 @@ export interface BulkHotUpdateSkipped extends BulkHotUpdateTarget {
   reason: BulkHotUpdateSkipReason;
 }
 
+export const BULK_HOT_UPDATE_SKIP_LABEL: Record<BulkHotUpdateSkipReason, string> = {
+  offline: '主机离线',
+  not_installed: '未安装 Agent',
+  active_jobs: '存在活跃 Job',
+  precheck_failed: '预检失败',
+  state_changed: '执行期间状态已变化',
+};
+
 async function mapConcurrent<T>(
   items: T[],
   concurrency: number,
