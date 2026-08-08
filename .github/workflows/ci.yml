@@ -1,10 +1,11 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  # main 全量 CI 仅由 main-ci-backstop 每天定时（UTC 18:00）dispatch 触发；
+  # 不保留 push main 触发——auto-merge 的 push 会被级联限制抑制，手动合入的
+  # push 又会造成「合入即全量」的随机运行。workflow_dispatch 仅定时任务使用。
   workflow_dispatch:
 
 permissions:
