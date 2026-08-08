@@ -56,6 +56,22 @@ describe('ExpandableHostTable', () => {
     expect(screen.getByRole('columnheader', { name: '磁盘' })).toHaveClass('hidden', '2xl:table-cell');
   });
 
+  it('shows deployment time with full date in expanded Agent section', () => {
+    const deployedHost: HostTableData = {
+      ...host,
+      agent_code_deployed: 'def5678',
+      agent_code_deployed_at: '2026-08-06T03:36:31.714551+00:00',
+    };
+    render(<ExpandableHostTable hosts={[deployedHost]} />);
+
+    fireEvent.click(screen.getByText(deployedHost.name));
+
+    expect(screen.getByText('部署时间')).toBeInTheDocument();
+    const deployedAt = screen.getByText((content) => content.includes('2026') && content.includes('08') && content.includes('36'));
+    expect(deployedAt.textContent).toMatch(/2026/);
+    expect(deployedAt.textContent).not.toMatch(/^\d{2}:\d{2}:\d{2}$/);
+  });
+
   it('keeps Watcher management and full Agent details in the expanded row', () => {
     const onWatcherAdminStateChange = vi.fn();
     render(
