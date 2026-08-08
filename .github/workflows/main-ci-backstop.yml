@@ -2,11 +2,12 @@ name: Main CI backstop
 
 # auto-merge 的 merge commit 由 GitHub 内部凭据推送，on: push、pull_request.closed
 # 与 workflow_run 的触发都会被 GITHUB_TOKEN 级联限制抑制（实测均不触发）。
-# 定时兜底：每 15 分钟检查 main 尖端是否已有全量 CI（workflow_dispatch / push），
-# 没有就显式 dispatch ci.yml。workflow_dispatch 是显式触发，不受级联限制。
+# 定时兜底：每天一次（UTC 18:00 = 本地凌晨 02:00）检查 main 尖端是否已有全量 CI
+# （workflow_dispatch / push），没有就显式 dispatch ci.yml。workflow_dispatch 是
+# 显式触发，不受级联限制。PR 阶段保持轻量检查，main 全量统一每天验证一次。
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "0 18 * * *"
   workflow_dispatch:
 
 # schedule 与 workflow_dispatch 共享同一并发组：避免同时执行重复检查；
