@@ -64,7 +64,7 @@ vi.mock('../../utils/api', async (importOriginal) => {
   };
 });
 
-vi.mock('../../hooks/useToast', () => ({
+vi.mock('@/hooks/useToast', () => ({
   useToast: () => mocks.toast,
 }));
 
