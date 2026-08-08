@@ -106,17 +106,17 @@ describe('HostOperationPanel', () => {
         open
         ops={[
           {
-            hostId: 'h3',
-            label: '172.21.8.87',
-            kind: 'hot_update',
-            status: 'running',
-          },
-          {
             hostId: 'h4',
             label: '172.21.8.88',
             kind: 'hot_update',
             status: 'skipped',
             error: '存在活跃 Job',
+          },
+          {
+            hostId: 'h3',
+            label: '172.21.8.87',
+            kind: 'hot_update',
+            status: 'running',
           },
         ]}
         onClose={vi.fn()}

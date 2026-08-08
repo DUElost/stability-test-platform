@@ -119,7 +119,11 @@ export default function HostOperationPanel({
     if (auto.size === 0) {
       const withConsole = ops.find((o) => o.consoleRunId);
       if (withConsole) auto.add(withConsole.hostId);
-      else if (ops[0]) auto.add(ops[0].hostId);
+      else {
+        const active = ops.find((o) => o.status === 'running' || o.status === 'pending');
+        if (active) auto.add(active.hostId);
+        else if (ops[0]) auto.add(ops[0].hostId);
+      }
     }
     // 自动模式最多展开 2 个，减轻首屏压力；用户可「全部展开」
     if (auto.size > 2) {
@@ -142,7 +146,11 @@ export default function HostOperationPanel({
   const collapseAll = () => setExpanded(new Set());
   const expandAll = () => {
     setExpanded(
-      new Set(ops.filter((o) => o.consoleRunId || o.status === 'running').map((o) => o.hostId)),
+      new Set(
+        ops
+          .filter((o) => o.consoleRunId || o.status === 'running' || o.status === 'pending')
+          .map((o) => o.hostId),
+      ),
     );
   };
 

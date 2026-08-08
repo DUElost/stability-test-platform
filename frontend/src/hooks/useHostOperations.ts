@@ -89,6 +89,9 @@ function extractHotUpdateConflict(err: unknown): {
   if (extractHttpStatus(err) !== 409) return null;
   const ax = err as { response?: { data?: { detail?: unknown } } };
   const detail = ax?.response?.data?.detail;
+  if (typeof detail === 'string') {
+    return { message: extractErrorMessage(err) };
+  }
   if (detail && typeof detail === 'object' && detail !== null) {
     const d = detail as {
       message?: string;
@@ -96,13 +99,13 @@ function extractHotUpdateConflict(err: unknown): {
       active_jobs?: unknown[];
     };
     return {
-      message: typeof d.message === 'string' ? d.message : '主机状态冲突',
+      message: typeof d.message === 'string' ? d.message : extractErrorMessage(err),
       retryAfterSeconds:
         typeof d.retry_after_seconds === 'number' ? d.retry_after_seconds : undefined,
       activeJobCount: Array.isArray(d.active_jobs) ? d.active_jobs.length : undefined,
     };
   }
-  return { message: '主机状态冲突' };
+  return { message: extractErrorMessage(err) };
 }
 
 function extract409ConsoleId(err: unknown): string | null {

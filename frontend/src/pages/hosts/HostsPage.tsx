@@ -164,6 +164,7 @@ export default function HostsPage() {
       toast.info('安全批量热更新正在执行，请等待完成');
       return;
     }
+    setPendingRetryAfter(undefined);
     setPendingHotUpdateHostId(hostId);
   };
 
@@ -174,6 +175,7 @@ export default function HostsPage() {
     const host = hosts?.find((item: Host) => item.id === hostId);
     const label = host?.name ?? host?.ip ?? String(hostId);
     setPendingHotUpdateHostId(null);
+    setPendingRetryAfter(undefined);
     const result = await startHotUpdateBatch([
       { hostId, label, abortRunningJobs: opts.abortRunningJobs },
     ]);

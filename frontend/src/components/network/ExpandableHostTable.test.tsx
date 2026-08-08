@@ -119,6 +119,15 @@ describe('ExpandableHostTable', () => {
       />,
     );
     expect(screen.getByTestId('host-table-selection-spacer')).toHaveClass('h-40');
+
+    rerender(
+      <ExpandableHostTable
+        hosts={[host]}
+        selectedIds={new Set()}
+        onSelectionChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('host-table-selection-spacer')).not.toBeInTheDocument();
   });
 
   it('shows partial selection and highlights selected rows', () => {

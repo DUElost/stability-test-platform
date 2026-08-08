@@ -1,6 +1,4 @@
 import type { Host } from '@/utils/api/types';
-import type { HotUpdateResult } from '@/utils/api/hosts';
-import { toApiError } from '@/utils/api';
 
 export interface BulkHotUpdateTarget {
   id: string | number;
@@ -72,37 +70,4 @@ export async function precheckBulkHotUpdate(
   });
 
   return { eligible, skipped };
-}
-
-export async function executeBulkHotUpdate(
-  targets: BulkHotUpdateTarget[],
-  trigger: (id: string | number) => Promise<HotUpdateResult>,
-  onProgress?: (completed: number, total: number) => void,
-): Promise<{
-  succeeded: BulkHotUpdateTarget[];
-  failed: BulkHotUpdateTarget[];
-  skipped: BulkHotUpdateSkipped[];
-}> {
-  const succeeded: BulkHotUpdateTarget[] = [];
-  const failed: BulkHotUpdateTarget[] = [];
-  const skipped: BulkHotUpdateSkipped[] = [];
-  let completed = 0;
-
-  await mapConcurrent(targets, 2, async (target) => {
-    try {
-      await trigger(target.id);
-      succeeded.push(target);
-    } catch (error: unknown) {
-      if (toApiError(error).status === 409) {
-        skipped.push({ ...target, reason: 'state_changed' });
-      } else {
-        failed.push(target);
-      }
-    } finally {
-      completed += 1;
-      onProgress?.(completed, targets.length);
-    }
-  });
-
-  return { succeeded, failed, skipped };
 }

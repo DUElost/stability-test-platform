@@ -233,4 +233,28 @@ describe('useHostOperations', () => {
       retryAfterSeconds: 12,
     }));
   });
+
+  it('uses backend string detail for 409 conflicts', async () => {
+    vi.mocked(api.hotUpdate.trigger).mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: { detail: 'Host is OFFLINE, hot-update requires ONLINE status' },
+      },
+    });
+
+    const { result } = renderHook(() => useHostOperations({ concurrency: 1 }));
+    const captured: { batch: HotUpdateBatchResult | null } = { batch: null };
+    await act(async () => {
+      captured.batch = await result.current.startHotUpdateBatch([
+        { hostId: 'h2', label: 'host-2' },
+      ]);
+    });
+
+    expect(result.current.ops[0].error).toBe(
+      'Host is OFFLINE, hot-update requires ONLINE status',
+    );
+    expect(captured.batch?.skipped[0]?.error).toBe(
+      'Host is OFFLINE, hot-update requires ONLINE status',
+    );
+  });
 });
