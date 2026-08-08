@@ -3,19 +3,25 @@
 主扫描包装 start_log_scan.py -m 0（AEE_TNE，扫 hdd_root，同步 subprocess.run），
 产物 _org.xls 在 hdd_root 下；UploadManager（Task 2）负责上送到控制面 NFS。
 `-dedup_org` 仅在 `run_dedup_org()` 中作为对已产出 _org.xls 的二次去重调用，非主扫描模式。
+
+有 ``device_serials`` 时只扫这些 serial 的 `{folder}/{serial}/`（可选
+``run_date_stamps`` 再收口到 job 启动日的 MonkeyAEEinfo 目录）。名单是**整个
+PlanRun 的设备集合**（可跨多 host）；本 Agent 只在本地 HDD 上找命中的目录，
+其它 host 的设备由对应 Agent 扫，控制面 Merge 再汇总。
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 try:
     from backend.agent.aee.paths import get_aee_local_root
@@ -40,6 +46,8 @@ class _ScanJob:
     plan_run_id: int
     host_id: str
     is_final: bool
+    device_serials: tuple[str, ...] = ()
+    run_date_stamps: tuple[str, ...] = ()
 
 
 class ScanRunner:
@@ -80,9 +88,27 @@ class ScanRunner:
         cls._host_scan_semaphore = threading.Semaphore(1)
 
     @classmethod
-    def enqueue_scan_now(cls, plan_run_id: int, host_id: str, *, is_final: bool) -> None:
+    def enqueue_scan_now(
+        cls,
+        plan_run_id: int,
+        host_id: str,
+        *,
+        is_final: bool,
+        device_serials: Sequence[str] | None = None,
+        run_date_stamps: Sequence[str] | None = None,
+    ) -> None:
         """Queue scan_now; coalesce duplicate plan_run_id entries (keep latest)."""
-        job = _ScanJob(plan_run_id=plan_run_id, host_id=host_id, is_final=is_final)
+        try:
+            from backend.agent.aee.scan_scope import normalize_str_list
+        except ImportError:
+            from agent.aee.scan_scope import normalize_str_list
+        job = _ScanJob(
+            plan_run_id=plan_run_id,
+            host_id=host_id,
+            is_final=is_final,
+            device_serials=tuple(normalize_str_list(device_serials)),
+            run_date_stamps=tuple(normalize_str_list(run_date_stamps)),
+        )
         with cls._queue_lock:
             if plan_run_id in cls._pending:
                 cls._pending[plan_run_id] = job
@@ -141,13 +167,23 @@ class ScanRunner:
         cls._host_scan_semaphore.acquire(blocking=True)
         try:
             cls.instance().run_scan_and_upload(
-                job.plan_run_id, job.host_id, is_final=job.is_final,
+                job.plan_run_id,
+                job.host_id,
+                is_final=job.is_final,
+                device_serials=job.device_serials,
+                run_date_stamps=job.run_date_stamps,
             )
         finally:
             cls._host_scan_semaphore.release()
 
     def run_scan_and_upload(
-        self, plan_run_id: int, host_id: str, *, is_final: bool,
+        self,
+        plan_run_id: int,
+        host_id: str,
+        *,
+        is_final: bool,
+        device_serials: Sequence[str] = (),
+        run_date_stamps: Sequence[str] = (),
     ) -> None:
         if not self.is_configured():
             logger.warning("control_scan_now_skip_runner_not_configured")
@@ -156,6 +192,8 @@ class ScanRunner:
             plan_run_id=plan_run_id,
             host_id=host_id,
             is_final=is_final,
+            device_serials=device_serials,
+            run_date_stamps=run_date_stamps,
         )
         if not org_xls:
             logger.warning("control_scan_now_scan_failed plan_run=%d", plan_run_id)
@@ -209,12 +247,14 @@ class ScanRunner:
     def is_configured(self) -> bool:
         return self._configured
 
-    def _build_argv(self, *, is_final: bool = False) -> List[str]:
+    def _build_argv(
+        self, *, is_final: bool = False, scan_root: str | None = None,
+    ) -> List[str]:
         argv = [
             self._scan_tool_python,
             self._scan_tool_script,
             "-m", "0",
-            "-d", self._hdd_root,
+            "-d", scan_root or self._hdd_root,
             "-side",
             self._side,
         ]
@@ -222,8 +262,34 @@ class ScanRunner:
             argv.append("-end")
         return argv
 
+    def _prepare_scan_root(
+        self,
+        plan_run_id: int,
+        device_serials: Sequence[str],
+        run_date_stamps: Sequence[str],
+    ) -> str:
+        if not device_serials:
+            return self._hdd_root
+        try:
+            from backend.agent.aee.scan_scope import build_scoped_scan_root, normalize_str_list
+        except ImportError:
+            from agent.aee.scan_scope import build_scoped_scan_root, normalize_str_list
+        serials = normalize_str_list(device_serials)
+        stamps = normalize_str_list(run_date_stamps)
+        staging = Path(self._hdd_root) / ".stp-scan" / str(plan_run_id)
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        build_scoped_scan_root(Path(self._hdd_root), staging, serials, stamps)
+        return str(staging)
+
     def run_local_scan(
-        self, plan_run_id: int, host_id: str, *, is_final: bool = False
+        self,
+        plan_run_id: int,
+        host_id: str,
+        *,
+        is_final: bool = False,
+        device_serials: Sequence[str] = (),
+        run_date_stamps: Sequence[str] = (),
     ) -> Optional[str]:
         if not self._configured:
             logger.warning(
@@ -232,12 +298,14 @@ class ScanRunner:
             )
             return None
 
+        scan_root = self._prepare_scan_root(plan_run_id, device_serials, run_date_stamps)
         scan_start = time.time()
-        argv = self._build_argv(is_final=is_final)
+        argv = self._build_argv(is_final=is_final, scan_root=scan_root)
         cwd = str(Path(self._scan_tool_script).parent)
         logger.info(
-            "scan_runner_start plan_run=%d host=%s final=%s argv=%s",
-            plan_run_id, host_id, is_final, argv,
+            "scan_runner_start plan_run=%d host=%s final=%s serials=%s stamps=%s argv=%s",
+            plan_run_id, host_id, is_final, list(device_serials),
+            list(run_date_stamps), argv,
         )
         try:
             result = subprocess.run(
@@ -262,16 +330,16 @@ class ScanRunner:
             )
             return None
 
-        hdd = Path(self._hdd_root)
-        all_candidates = list(hdd.glob("**/Result_*_org.xls"))
+        search_root = Path(scan_root)
+        all_candidates = list(search_root.glob("**/Result_*_org.xls"))
         fresh = [
             c for c in all_candidates
             if c.stat().st_mtime >= scan_start - 1
         ]
         if not fresh:
             logger.warning(
-                "scan_runner_no_fresh_org_xls plan_run=%d host=%s hdd_root=%s total_candidates=%d",
-                plan_run_id, host_id, self._hdd_root, len(all_candidates),
+                "scan_runner_no_fresh_org_xls plan_run=%d host=%s scan_root=%s total_candidates=%d",
+                plan_run_id, host_id, scan_root, len(all_candidates),
             )
             return None
 

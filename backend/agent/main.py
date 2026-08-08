@@ -726,9 +726,18 @@ def main() -> None:
                 return
 
             ScanRunner.enqueue_scan_now(
-                int(plan_run_id), host_id, is_final=is_final,
+                int(plan_run_id),
+                host_id,
+                is_final=is_final,
+                device_serials=payload.get("device_serials") or [],
+                run_date_stamps=payload.get("run_date_stamps") or [],
             )
-            logger.info("control_scan_now_triggered plan_run=%d final=%s", plan_run_id, is_final)
+            logger.info(
+                "control_scan_now_triggered plan_run=%d final=%s serials=%s stamps=%s",
+                plan_run_id, is_final,
+                payload.get("device_serials") or [],
+                payload.get("run_date_stamps") or [],
+            )
         elif command == "upload_events":
             plan_run_id = payload.get("plan_run_id")
             event_dir_names = payload.get("event_dir_names", [])
