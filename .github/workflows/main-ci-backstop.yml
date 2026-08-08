@@ -107,8 +107,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          # ensure 步骤确认过的 main SHA；清理前会重读当前 main，
+          # 若已前进则放弃本次清理（避免基于旧快照删除分支）。
+          MAIN_SHA: ${{ steps.ensure.outputs.main_sha }}
         run: |
           set -euo pipefail
+
+          current_main_sha="$(gh api "repos/$REPO/commits/main" --jq .sha)"
+          if [ "$current_main_sha" != "$MAIN_SHA" ]; then
+            echo "main advanced ($MAIN_SHA -> $current_main_sha); merged-branch cleanup skipped"
+            exit 0
+          fi
 
           default_branch="$(gh api "repos/$REPO" --jq .default_branch)"
           protected_branches="$(
@@ -150,6 +159,18 @@ jobs:
             fi
             if ! printf '%s\n' "$remote_refs" | grep -Fxq -- "refs/heads/$branch"; then
               echo "remote ref already gone, skip: $branch"
+              skipped=$((skipped + 1)); continue
+            fi
+            # 快照只是快速路径；删除前按当前分支重查 open PR，
+            # 避免清理期间该分支刚被新 PR 复用导致误删。
+            open_count="$(
+              gh api graphql \
+                -f query='query($owner:String!,$repo:String!,$branch:String!){repository(owner:$owner,name:$repo){pullRequests(states:OPEN,headRefName:$branch,first:1){totalCount}}}' \
+                -F owner="${REPO%/*}" -F repo="${REPO#*/}" -F branch="$branch" \
+                --jq '.data.repository.pullRequests.totalCount'
+            )"
+            if [ "$open_count" != "0" ]; then
+              echo "skip branch with open PR (re-checked): $branch"
               skipped=$((skipped + 1)); continue
             fi
             if ! gh api -X DELETE "repos/$REPO/git/refs/heads/$branch" >/dev/null; then
