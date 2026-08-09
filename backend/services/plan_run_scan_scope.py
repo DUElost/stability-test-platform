@@ -32,6 +32,16 @@ def run_date_stamp_from_started_at(started_at: datetime | None) -> str | None:
     return dt.astimezone(_SHANGHAI).strftime("%m%d")
 
 
+def _is_safe_serial(serial: str) -> bool:
+    if not serial or serial.strip() != serial:
+        return False
+    if serial in (".", "..") or ".." in serial:
+        return False
+    if "/" in serial or "\\" in serial:
+        return False
+    return True
+
+
 def _dedupe(items: Iterable[str | None]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -58,16 +68,22 @@ def load_plan_run_device_serials(db: Session, plan_run_id: int) -> list[str]:
         .join(PlanRunTargetDevice, PlanRunTargetDevice.device_id == Device.id)
         .where(PlanRunTargetDevice.plan_run_id == plan_run_id)
     ).scalars().all()
-    return _dedupe([*job_serials, *target_serials])
+    return [s for s in _dedupe([*job_serials, *target_serials]) if _is_safe_serial(s)]
 
 
 def load_plan_run_scan_scope(db: Session, plan_run_id: int) -> tuple[list[str], list[str]]:
-    """PlanRun-wide serials + union of all job-start MMDD stamps."""
+    """PlanRun-wide serials + union of all job-start MMDD stamps.
+
+    Empty stamps with a non-empty serial list would scan every date folder
+    for those devices. Fall back to today's Shanghai MMDD only.
+    """
     serials = load_plan_run_device_serials(db, plan_run_id)
     started_rows = db.execute(
         select(JobInstance.started_at).where(JobInstance.plan_run_id == plan_run_id)
     ).scalars().all()
     stamps = _dedupe(run_date_stamp_from_started_at(ts) for ts in started_rows)
+    if serials and not stamps:
+        stamps = [datetime.now(_SHANGHAI).strftime("%m%d")]
     return serials, stamps
 
 
@@ -135,7 +151,7 @@ def xls_row_matches_serials(
     """Keep a scan/merge xls row if Path or Detail Device_id hits a serial."""
     serial_list = [s for s in serials if s]
     if not serial_list:
-        return True
+        return False
     parts = {p for p in (path or "").replace("\\", "/").split("/") if p}
     if any(serial in parts for serial in serial_list):
         return True

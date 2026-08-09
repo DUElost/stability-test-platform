@@ -16,6 +16,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from collections import OrderedDict
@@ -267,7 +268,7 @@ class ScanRunner:
         plan_run_id: int,
         device_serials: Sequence[str],
         run_date_stamps: Sequence[str],
-    ) -> str:
+    ) -> Optional[str]:
         if not device_serials:
             return self._hdd_root
         try:
@@ -276,11 +277,48 @@ class ScanRunner:
             from agent.aee.scan_scope import build_scoped_scan_root, normalize_str_list
         serials = normalize_str_list(device_serials)
         stamps = normalize_str_list(run_date_stamps)
-        staging = Path(self._hdd_root) / ".stp-scan" / str(plan_run_id)
-        if staging.exists():
-            shutil.rmtree(staging, ignore_errors=True)
-        build_scoped_scan_root(Path(self._hdd_root), staging, serials, stamps)
-        return str(staging)
+        if not serials:
+            logger.warning(
+                "scan_runner_unsafe_serials plan_run=%d raw=%s",
+                plan_run_id, list(device_serials),
+            )
+            return None
+        hdd = Path(self._hdd_root)
+        try:
+            if hdd.is_symlink() or not hdd.is_dir():
+                logger.warning("scan_runner_hdd_unsafe plan_run=%d hdd=%s", plan_run_id, hdd)
+                return None
+            parent = hdd / ".stp-scan"
+            if parent.exists() and (parent.is_symlink() or not parent.is_dir()):
+                logger.warning(
+                    "scan_runner_staging_parent_unsafe plan_run=%d parent=%s",
+                    plan_run_id, parent,
+                )
+                return None
+            parent.mkdir(parents=True, exist_ok=True)
+            prefix = f"pr{plan_run_id}-"
+            for old in parent.glob(f"{prefix}*"):
+                if old.is_symlink() or not old.is_dir():
+                    logger.warning(
+                        "scan_runner_staging_stale_unsafe plan_run=%d path=%s",
+                        plan_run_id, old,
+                    )
+                    return None
+                shutil.rmtree(old)
+            staging = Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent)))
+            try:
+                staging.resolve().relative_to(parent.resolve())
+                build_scoped_scan_root(hdd, staging, serials, stamps)
+            except (OSError, ValueError):
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+            return str(staging)
+        except (OSError, ValueError):
+            logger.warning(
+                "scan_runner_prepare_failed plan_run=%d hdd=%s",
+                plan_run_id, hdd, exc_info=True,
+            )
+            return None
 
     def run_local_scan(
         self,
@@ -299,6 +337,12 @@ class ScanRunner:
             return None
 
         scan_root = self._prepare_scan_root(plan_run_id, device_serials, run_date_stamps)
+        if scan_root is None:
+            logger.warning(
+                "scan_runner_skip_bad_scan_root plan_run=%d host=%s",
+                plan_run_id, host_id,
+            )
+            return None
         scan_start = time.time()
         argv = self._build_argv(is_final=is_final, scan_root=scan_root)
         cwd = str(Path(self._scan_tool_script).parent)

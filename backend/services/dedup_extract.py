@@ -29,8 +29,8 @@ def parse_event_dir_names_from_xls(
 ) -> set[str]:
     """Read merge/scan xls Path column → event directory basenames.
 
-    When ``allowed_serials`` is set, keep only rows whose Path component or
-    Detail ``Device_id`` belongs to this PlanRun's devices.
+    ``allowed_serials=None`` keeps every row. A provided list (including empty)
+    keeps only matching PlanRun devices; empty means no xls rows.
     """
     names: set[str] = set()
     if not xls_path.is_file():
@@ -62,7 +62,12 @@ def parse_event_dir_names_from_xls(
         )
         if path_col is None:
             return names
-        serials = [s for s in (allowed_serials or []) if s]
+        if allowed_serials is None:
+            serials: list[str] | None = None
+        else:
+            serials = [s for s in allowed_serials if s]
+            if not serials:
+                return names
         for row in range(1, sheet.nrows):
             raw = sheet.cell_value(row, path_col)
             if raw is None or str(raw).strip() == "":
@@ -71,7 +76,7 @@ def parse_event_dir_names_from_xls(
             detail = ""
             if detail_col is not None:
                 detail = str(sheet.cell_value(row, detail_col) or "")
-            if serials and not xls_row_matches_serials(path, detail, serials):
+            if serials is not None and not xls_row_matches_serials(path, detail, serials):
                 continue
             name = event_dir_basename_from_path(path)
             if name:
@@ -126,7 +131,7 @@ def collect_upload_event_dir_names(db: Session, plan_run_id: int) -> list[str]:
         if not row.storage_uri:
             continue
         names |= parse_event_dir_names_from_xls(
-            Path(row.storage_uri), allowed_serials=serials or None,
+            Path(row.storage_uri), allowed_serials=serials,
         )
 
     return sorted(names)

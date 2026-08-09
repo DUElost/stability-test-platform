@@ -72,6 +72,10 @@ class TestScanEndpoint:
         body = resp.json()["data"]
         assert str(sample_host.id) in body["triggered_hosts"]
         assert body["skipped_offline"] == []
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%m%d")
         mock_emit.assert_awaited_once_with(
             str(sample_host.id),
             "scan_now",
@@ -79,7 +83,7 @@ class TestScanEndpoint:
                 "plan_run_id": sample_plan_run.id,
                 "is_final": False,
                 "device_serials": [sample_device.serial],
-                "run_date_stamps": [],
+                "run_date_stamps": [today],
             },
         )
 

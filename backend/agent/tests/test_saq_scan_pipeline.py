@@ -17,15 +17,32 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _host_rows_db(rows):
-    mock_db = MagicMock()
-    mock_db.execute.return_value.all.return_value = rows
-    mock_db.close = MagicMock()
-    return mock_db
+def _query_hosts_from_rows(rows):
+    """Stand-in for ``_query_hosts_for_scan`` → ``(triggered, skipped)``."""
+
+    def _query(plan_run_id: int, is_final: bool = False):
+        triggered = []
+        skipped = []
+        for host_id, status in rows:
+            if status == "ONLINE":
+                triggered.append((
+                    host_id,
+                    {
+                        "plan_run_id": plan_run_id,
+                        "is_final": is_final,
+                        "device_serials": [],
+                        "run_date_stamps": [],
+                    },
+                ))
+            else:
+                skipped.append(host_id)
+        return triggered, skipped
+
+    return _query
 
 
 @contextlib.contextmanager
-def _scan_task_env(saq_tasks, monkeypatch, mock_db, *, to_thread, scan_sync,
+def _scan_task_env(saq_tasks, monkeypatch, host_rows, *, to_thread, scan_sync,
                    hosts_done, record_archive, queue):
     """Patch stack shared by the scan_task poll tests.
 
@@ -35,8 +52,10 @@ def _scan_task_env(saq_tasks, monkeypatch, mock_db, *, to_thread, scan_sync,
     """
     monkeypatch.setattr(saq_tasks, "asyncio_sleep", AsyncMock())
     monkeypatch.setattr(saq_tasks, "asyncio_to_thread", to_thread)
-    with patch("backend.core.database.SessionLocal", return_value=mock_db), \
-         patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()), \
+    monkeypatch.setattr(
+        saq_tasks, "_query_hosts_for_scan", _query_hosts_from_rows(host_rows),
+    )
+    with patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()), \
          patch("backend.services.dedup_scan.run_scan_sync", scan_sync), \
          patch("backend.services.dedup_scan.count_hosts_with_scan_artifacts", hosts_done), \
          patch("backend.services.dedup_scan.record_scan_archive_state", record_archive), \
@@ -66,7 +85,7 @@ async def test_scan_task_polls_until_all_hosts_registered(monkeypatch):
     queue = MagicMock()
     queue.enqueue = AsyncMock()
     with _scan_task_env(
-        saq_tasks, monkeypatch, _host_rows_db([("host-1", "ONLINE"), ("host-2", "ONLINE")]),
+        saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
         hosts_done=hosts_done, record_archive=record_archive, queue=queue,
     ):
@@ -102,7 +121,7 @@ async def test_scan_task_does_not_break_on_one_host_worth_of_files(monkeypatch):
     queue = MagicMock()
     queue.enqueue = AsyncMock()
     with _scan_task_env(
-        saq_tasks, monkeypatch, _host_rows_db([("host-1", "ONLINE"), ("host-2", "ONLINE")]),
+        saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
         hosts_done=hosts_done, record_archive=record_archive, queue=queue,
     ):
@@ -145,7 +164,7 @@ async def test_scan_task_ignores_stale_artifacts_of_untriggered_hosts(monkeypatc
     queue = MagicMock()
     queue.enqueue = AsyncMock()
     with _scan_task_env(
-        saq_tasks, monkeypatch, _host_rows_db([("host-a", "OFFLINE"), ("host-b", "ONLINE")]),
+        saq_tasks, monkeypatch, [("host-a", "OFFLINE"), ("host-b", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
         hosts_done=hosts_done, record_archive=record_archive, queue=queue,
     ):
@@ -194,7 +213,7 @@ async def test_scan_task_ignores_same_hosts_previous_round_artifacts(monkeypatch
     queue = MagicMock()
     queue.enqueue = AsyncMock()
     with _scan_task_env(
-        saq_tasks, monkeypatch, _host_rows_db([("host-a", "ONLINE")]),
+        saq_tasks, monkeypatch, [("host-a", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
         hosts_done=hosts_done, record_archive=record_archive, queue=queue,
     ):
@@ -225,7 +244,7 @@ async def test_scan_task_breaks_on_all_registered_first_poll(monkeypatch):
     queue = MagicMock()
     queue.enqueue = AsyncMock()
     with _scan_task_env(
-        saq_tasks, monkeypatch, _host_rows_db([("host-1", "ONLINE"), ("host-2", "ONLINE")]),
+        saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=to_thread, scan_sync=scan_sync,
         hosts_done=hosts_done, record_archive=record_archive, queue=queue,
     ):
@@ -243,9 +262,12 @@ async def test_scan_task_no_hosts_triggered_skips_poll(monkeypatch):
     to_thread = AsyncMock(return_value="1")
     monkeypatch.setattr(saq_tasks, "asyncio_sleep", AsyncMock())
     monkeypatch.setattr(saq_tasks, "asyncio_to_thread", to_thread)
+    monkeypatch.setattr(
+        saq_tasks, "_query_hosts_for_scan",
+        lambda _plan_run_id, is_final=False: ([], ["host-1"]),
+    )
 
-    with patch("backend.core.database.SessionLocal", return_value=_host_rows_db([("host-1", "OFFLINE")])), \
-         patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()):
+    with patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
@@ -272,7 +294,7 @@ async def test_scan_task_records_zero_artifacts_after_poll_exhausted(monkeypatch
     queue = MagicMock()
     queue.enqueue = AsyncMock()
     with caplog.at_level("ERROR"), _scan_task_env(
-        saq_tasks, monkeypatch, _host_rows_db([("host-1", "ONLINE")]),
+        saq_tasks, monkeypatch, [("host-1", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
         hosts_done=hosts_done, record_archive=record_archive, queue=queue,
     ):
@@ -305,7 +327,7 @@ async def test_scan_task_counts_final_registration_attempt(monkeypatch):
     queue = MagicMock()
     queue.enqueue = AsyncMock()
     with _scan_task_env(
-        saq_tasks, monkeypatch, _host_rows_db([("host-1", "ONLINE")]),
+        saq_tasks, monkeypatch, [("host-1", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
         hosts_done=hosts_done, record_archive=record_archive, queue=queue,
     ):
@@ -343,7 +365,7 @@ async def test_scan_task_final_scan_runs_on_partial_coverage(monkeypatch):
     queue = MagicMock()
     queue.enqueue = AsyncMock()
     with _scan_task_env(
-        saq_tasks, monkeypatch, _host_rows_db([("host-1", "ONLINE"), ("host-2", "ONLINE")]),
+        saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
         hosts_done=hosts_done, record_archive=record_archive, queue=queue,
     ):
@@ -380,7 +402,7 @@ async def test_scan_task_chains_on_partial_coverage_with_warning(monkeypatch, ca
     queue = MagicMock()
     queue.enqueue = AsyncMock()
     with caplog.at_level("WARNING"), _scan_task_env(
-        saq_tasks, monkeypatch, _host_rows_db([("host-1", "ONLINE"), ("host-2", "ONLINE")]),
+        saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
         hosts_done=hosts_done, record_archive=record_archive, queue=queue,
     ) as job_cls:
@@ -556,7 +578,7 @@ async def test_scan_task_enqueues_upload_and_merge_only(monkeypatch):
     queue = MagicMock()
     queue.enqueue = AsyncMock()
     with _scan_task_env(
-        saq_tasks, monkeypatch, _host_rows_db([("host-1", "ONLINE")]),
+        saq_tasks, monkeypatch, [("host-1", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
         hosts_done=hosts_done, record_archive=record_archive, queue=queue,
     ) as mock_job_cls:

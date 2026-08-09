@@ -48,6 +48,21 @@ def test_parse_event_dir_names_from_xls_filters_foreign_serial(tmp_path):
     assert names == {"2026_0808_010203_001_db.00.ANR"}
 
 
+def test_parse_event_dir_names_from_xls_empty_serials_keeps_none(tmp_path):
+    xlwt = pytest.importorskip("xlwt")
+    xls_path = tmp_path / "org.xls"
+    book = xlwt.Workbook()
+    sheet = book.add_sheet("Sheet1")
+    sheet.write(0, 0, "Path")
+    sheet.write(
+        1, 0,
+        "/hdd/f/0000NX2622000670/2026_0808_010203_001_db.00.ANR/__exp_main.txt",
+    )
+    book.save(str(xls_path))
+
+    assert parse_event_dir_names_from_xls(xls_path, allowed_serials=[]) == set()
+
+
 def test_parse_event_dir_names_from_xls_reads_path_column(tmp_path):
     xlwt = pytest.importorskip("xlwt")
     xls_path = tmp_path / "merge.xls"

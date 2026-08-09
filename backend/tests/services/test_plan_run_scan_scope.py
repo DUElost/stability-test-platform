@@ -10,6 +10,7 @@ from backend.services.plan_run_scan_scope import (
     build_scan_now_payload,
     iter_plan_run_scan_hosts,
     load_plan_run_device_serials,
+    load_plan_run_scan_scope,
     run_date_stamp_from_started_at,
     xls_row_matches_serials,
 )
@@ -121,3 +122,24 @@ def test_xls_row_matches_serials_path_or_detail():
         "Device_id: 0000NX2622000662\nver",
         serials,
     )
+    assert not xls_row_matches_serials(
+        "/hdd/f/0000NX2622000670/db.00.ANR/__exp_main.txt", "", [],
+    )
+
+
+def test_scan_scope_falls_back_to_today_when_started_at_missing(
+    db_session, sample_plan_run, sample_plan, sample_device, sample_host,
+):
+    db_session.add(JobInstance(
+        plan_run_id=sample_plan_run.id,
+        plan_id=sample_plan.id,
+        device_id=sample_device.id,
+        host_id=sample_host.id,
+        status=JobStatus.COMPLETED.value,
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+    ))
+    db_session.commit()
+
+    serials, stamps = load_plan_run_scan_scope(db_session, sample_plan_run.id)
+    assert serials == [sample_device.serial]
+    assert stamps == [datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%m%d")]

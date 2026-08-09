@@ -15,6 +15,17 @@ from typing import Iterable, Sequence
 logger = logging.getLogger(__name__)
 
 
+def is_safe_path_token(value: str) -> bool:
+    """Reject empty / absolute / traversal tokens used as serial or MMDD."""
+    if not value or value.strip() != value:
+        return False
+    if value in (".", "..") or ".." in value:
+        return False
+    if "/" in value or "\\" in value or os.sep in value:
+        return False
+    return not os.path.isabs(value)
+
+
 def normalize_str_list(value: object) -> list[str]:
     """Coerce SocketIO / argv payload into a de-duplicated str list."""
     if value is None:
@@ -29,7 +40,7 @@ def normalize_str_list(value: object) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for item in items:
-        if item not in seen:
+        if item not in seen and is_safe_path_token(item):
             seen.add(item)
             out.append(item)
     return out
@@ -49,15 +60,19 @@ def iter_serial_scan_dirs(
 ) -> list[Path]:
     """Existing `{folder}/{serial}` dirs matching serials (and optional MMDD)."""
     root = Path(hdd_root)
-    serial_set = [s for s in serials if s]
-    stamp_set = [s for s in stamps if s]
-    if not root.is_dir() or not serial_set:
+    try:
+        root_resolved = root.resolve()
+    except OSError:
+        return []
+    serial_set = [s for s in serials if is_safe_path_token(s)]
+    stamp_set = [s for s in stamps if is_safe_path_token(s)]
+    if root.is_symlink() or not root.is_dir() or not serial_set:
         return []
 
     matched: list[Path] = []
     try:
         for folder in sorted(root.iterdir()):
-            if not folder.is_dir() or folder.name.startswith("."):
+            if folder.is_symlink() or not folder.is_dir() or folder.name.startswith("."):
                 continue
             if stamp_set and not any(
                 folder_matches_run_date_stamp(folder.name, stamp)
@@ -66,8 +81,16 @@ def iter_serial_scan_dirs(
                 continue
             for serial in serial_set:
                 serial_dir = folder / serial
-                if serial_dir.is_dir():
-                    matched.append(serial_dir)
+                if serial_dir.is_symlink() or not serial_dir.is_dir():
+                    continue
+                try:
+                    resolved = serial_dir.resolve()
+                    resolved.relative_to(root_resolved)
+                except (OSError, ValueError):
+                    continue
+                if resolved.parent.name != folder.name or resolved.name != serial:
+                    continue
+                matched.append(serial_dir)
     except OSError:
         logger.warning("iter_serial_scan_dirs_failed root=%s", root, exc_info=True)
         return []
