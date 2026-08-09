@@ -102,7 +102,7 @@ def execute_pipeline_run(
         "error_code": None,
         "error_message": result.error_message,
         "log_summary": None,
-        # ADR-0025 方案 C: 运行日志不再上送 15.4，Agent 本地保留。
+        # ADR-0025 方案 C: 运行日志不再上送中心存储，Agent 本地保留。
         # 实时查看：SocketIO → 控制面 log_writer；事后取证：SSH POST /api/v1/agent/logs。
         "artifact": None,
     }

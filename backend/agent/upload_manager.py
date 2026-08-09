@@ -1,4 +1,4 @@
-"""UploadManager — Agent 按需上送（scan 报告 + 事件目录）到 15.4 CIFS share。
+"""UploadManager — Agent 按需上送（scan 报告 + 事件目录）到中心存储（CIFS）。
 
 ADR-0025 Sprint 4 Task 2: Agent 侧文件上送管理器。
     - upload_scan_report: 将 ScanRunner 产出的 _org.xls 复制到 CIFS dedup/ 目录

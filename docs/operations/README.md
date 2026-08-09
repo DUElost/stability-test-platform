@@ -76,10 +76,12 @@ Agent 新增 env（部署时写入 `/opt/stability-test-agent/.env`）：
 
 | 变量 | 说明 |
 |------|------|
-| `STP_AEE_LOCAL_ROOT` | HDD AEE 根 |
-| `STP_AEE_CIFS_ROOT` | 15.4 CIFS 挂载 |
+| `STP_AEE_LOCAL_ROOT` | Agent HDD AEE 根 |
+| `STP_AEE_NFS_ROOT` | **中心存储（CIFS）** 挂载点主键 |
+| `STP_AEE_CIFS_ROOT` | CIFS 挂载点（spill 可选；空则回落 NFS_ROOT） |
 
-设计详述：[`design/2026-plan-c-storage-and-access.md`](../design/2026-plan-c-storage-and-access.md)
+设计详述：[`design/2026-plan-c-storage-and-access.md`](../design/2026-plan-c-storage-and-access.md)  
+角色/别称：[`design/2026-storage-roles-and-aliases.md`](../design/2026-storage-roles-and-aliases.md)
 
 ---
 

@@ -1301,7 +1301,7 @@ class TestWatcherSummaryEndpoint:
     def test_download_run_log_bundle_returns_409(
         self, client, auth_headers, chain_setup, db_session,
     ):
-        """方案 C: run_log_bundle 运行日志不再上送 15.4；
+        """方案 C: run_log_bundle 运行日志不再上送中心存储；
         download 端点返 409 指引控制面实时日志或 SSH 取证。"""
         cur_run = chain_setup["current_run"]
         job = (

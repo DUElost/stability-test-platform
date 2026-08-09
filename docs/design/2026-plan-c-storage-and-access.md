@@ -4,7 +4,10 @@
 - **日期**：2026-06-21
 - **PRD**：[2026-plan-c-storage-and-archive.md](../prd/2026-plan-c-storage-and-archive.md)
 - **ADR**：[ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)、[ADR-0018](../adr/ADR-0018-infrastructure-layer-framework-adoption.md)
+- **角色/别称（权威）**：[2026-storage-roles-and-aliases.md](./2026-storage-roles-and-aliases.md)
 - **历史实施计划（已归档）**：[2026-06-20-sprint2-watcher-hdd-logarchiver.md](../archive/sprints/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md)
+
+> **部署注记（2026-08-09）**：正文「15.4 CIFS」= **中心存储角色**（ADR 目标态 / 上一代盘）。口头 **CIFS = NFS = 中心存储**（同一台分享）。STP 生产中心存储 **过渡**挂在控制面同机 `//172.21.8.202/jxtinno/sonic_tinno`；控制面 IP 永远 8.202。目标迁到 15.4 或 9.4。侧栏「文件服务器」是控制面健康页，不是中心存储。`STP_NFS_ROOT` 与 `STP_AEE_NFS_ROOT` 同角色（CP 拿它拼 `/scripts` 是误用）。
 
 ---
 
@@ -23,7 +26,7 @@ flowchart TB
     LA["LogArchiver: SSD prune"]
     HS["HddSpillMonitor"]
   end
-  subgraph CIFS["15.4 CIFS sonic_tinno"]
+  subgraph CIFS["中心存储 (CIFS) sonic_tinno"]
     DEDUP["dedup/ 汇总 xls"]
     DEV["devices/ 事件目录"]
   end
@@ -80,12 +83,14 @@ flowchart TB
 
 > **2026-06-17 废弃**：原 Agent HTTP `:8900`（`run_log_server`）已移除；产品未接入且与 SSH 通路重叠。
 
-### 2.3 15.4 CIFS（上送目标）
+### 2.3 中心存储（CIFS，上送目标）
 
 | 项 | 值 |
 |----|-----|
-| 共享 | `//172.21.15.4/jxtinno/sonic_tinno` |
-| Agent env | `STP_AEE_CIFS_ROOT`（HddSpill 与 Sprint 4 upload 使用） |
+| 角色 | **中心存储（CIFS / NFS）**；口头「CIFS / NFS / 15.4」均指此角色 |
+| 当前 UNC（过渡） | `//172.21.8.202/jxtinno/sonic_tinno`（与控制面同机） |
+| 目标 UNC | `//172.21.15.4/jxtinno/sonic_tinno` 或 `//172.21.9.4/...`（控制面仍留 8.202） |
+| 挂载点 env | **主键** `STP_AEE_NFS_ROOT`（控制面 merge/extract + Agent upload）；`STP_AEE_CIFS_ROOT` 仅 spill 可选，空则回落 NFS_ROOT |
 | 内容 | `dedup/`（xls）、`devices/{相对路径}`（事件目录）、`jobs/{job_id}/`（JobArtifact 文件，puller/promote）；**无** `archives/{job}/run_log_bundle` |
 
 > **路径约定（#172）**：JobArtifact 文件统一走 `jobs/{job_id}/`，事件目录走
@@ -204,3 +209,4 @@ HDD 满：**HddSpillMonitor** 溢出最旧事件 → `15.4/devices/`。
 |------|------|
 | 2026-06-21 | 初版：Sprint 2 设计 + Sprint 3/4 断层清单 |
 | 2026-06-17 | 废弃 Agent `run_log_server`（`:8900`）；运行日志改为实时控制面 + 事后 SSH |
+| 2026-08-09 | 部署注记：CIFS 过渡在 8.202；「15.4」为目标角色外号；§2.3 与别称文档对齐 |

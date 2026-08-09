@@ -87,9 +87,9 @@ def _register_scan_artifacts_from_nfs(
 
 
 def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
-    """扫描 15.4 CIFS dedup/{plan_run_id}/ 目录，注册已上送的 *_org.xls 产物。
+    """扫描中心存储（CIFS）dedup/{plan_run_id}/ 目录，注册已上送的 *_org.xls 产物。
 
-    Agent 已通过 scan_now → run_local_scan → UploadManager 上送文件到 NFS。
+    Agent 已通过 scan_now → run_local_scan → UploadManager 上送文件到中心存储。
     本函数仅做文件发现 + DB 注册，不再调 subprocess / RunConsole。
     返回注册产物数（字符串化），空串表示无新产物。
     """

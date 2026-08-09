@@ -1,6 +1,6 @@
 # 环境变量参考
 
-> **最后更新**：2026-07-15  
+> **最后更新**：2026-08-09  
 > 模板权威源：`backend/.env.example`、`backend/agent/.env.example`、根目录 `.env.server.example`。  
 > 本文只整理**常用/易踩坑**变量；完整清单以 example 文件为准。
 
@@ -32,9 +32,13 @@
 | `STP_PLAN_ADMISSION_QUEUE_ENABLED` | `1`=V2 准入队列；默认 `1`。设为 `0` 会停用新派发（不会恢复已移除的 legacy inline dispatch）；存量 QUEUED 仍 drain。灰度见 [`../operations/adr-0026-admission-and-scale-gray-rollout.md`](../operations/adr-0026-admission-and-scale-gray-rollout.md)；`/health` 暴露 `admission_queue_*` |
 | `STP_SCRIPT_ROOT` | 脚本扫描根；**开发必须**设为 `<repo>/backend/agent/scripts` |
 | `STP_SCRIPT_RUNTIME_ROOT` | 扫描机 ≠ 运行机时 Agent 侧脚本根 |
-| `STP_NFS_ROOT` / `STP_AEE_NFS_ROOT` | 共享存储（方案 C：汇总/dedup，不含运行日志唯一副本） |
+| `STP_NFS_ROOT` | **NFS = CIFS = 中心存储**。此键与 `STP_AEE_NFS_ROOT` 同角色；Agent 经 `STP_AGENT_NFS_ROOT` 映射，未设则 hot-update 回落到 `STP_AEE_NFS_ROOT`。控制面仍误用作 `${STP_NFS_ROOT}/scripts` 默认根（应设 `STP_SCRIPT_ROOT`） |
+| `STP_AEE_NFS_ROOT` | **中心存储（CIFS）** 本机挂载点（主键）。控制面 + Agent 指向同一 UNC，路径字符串可不同 |
+| `STP_AEE_CIFS_ROOT` | CIFS 挂载点（spill 可选）；空则回落 `STP_AEE_NFS_ROOT`。upload 读的是 NFS_ROOT |
+| `STP_FILE_SERVER_ADDRESS` | 共享存储健康页上的**控制面**展示 IP（现 8.202）。**不是** CIFS 根 / UNC |
 | `STP_AEE_LOCAL_ROOT` | Agent HDD AEE 根（控制面文档化；实际 Agent 侧读取） |
-| `STP_DEDUP_*` | scan/merge 工具解释器与脚本路径（见方案 C 设计） |
+| `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | 扫描工具；**同名两角色两套值**（控制面 merge vs Agent scan） |
+| `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：hot-update 写成 Agent 的无前缀 `STP_DEDUP_SCAN_*` |
 | `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` | Compose 开发初始化管理员；**禁止**用于生产默认值 |
 
 ### Agent 协议门禁
@@ -77,7 +81,7 @@
 | `STP_WATCHER_ENABLED` | Watcher 子系统开关（默认 `true`） |
 | `STP_STEP_LOG_STREAM` | `1`=pipeline 日志经 SocketIO 批推送；`0`=保持 no-op（ADR-0026 P2-2） |
 | `STP_LOG_BATCH_MAX_LINES` / `STP_LOG_BATCH_FLUSH_MS` | step_log 批大小与定时 flush（默认 50 / 200） |
-| `STP_AEE_CIFS_ROOT` / `STP_AEE_NFS_ROOT` | 15.4 上送 / dedup 共享根（按部署） |
+| `STP_AEE_CIFS_ROOT` / `STP_AEE_NFS_ROOT` | **中心存储（CIFS）** 挂载点（主键 NFS_ROOT；CIFS_ROOT 可选 spill）。过渡 UNC 在 8.202，目标 15.4/9.4 |
 
 热更新会附带控制面 `pipeline_schema.json` 与 Agent `VERSION`（code revision）。  
 热更新还会**行级合并**舰队级 `.env` 键（安装布局路径 + 控制面 `backend/.env` 中非空的 `STP_*` 等）；`HOST_ID`、`API_URL`、`ANDROID_ADB_SERVER_PORT` 等 per-host 键不同步。见 [`../operations/agent-version-and-hot-update.md`](../operations/agent-version-and-hot-update.md)。
@@ -100,5 +104,6 @@
 ## 5. 相关文档
 
 - 方案 C 存储：[../design/2026-plan-c-storage-and-access.md](../design/2026-plan-c-storage-and-access.md)
+- 存储角色与别称：[../design/2026-storage-roles-and-aliases.md](../design/2026-storage-roles-and-aliases.md)
 - 执行协议：[../design/07-execution-protocol.md](../design/07-execution-protocol.md)
 - 生产清单：[../production-minimum-deployment-checklist.md](../production-minimum-deployment-checklist.md)

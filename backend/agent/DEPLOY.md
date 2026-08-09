@@ -453,12 +453,14 @@ done
 
 ## 方案 C 存储与环境变量（ADR-0025）
 
-> 详述：[`docs/design/2026-plan-c-storage-and-access.md`](../../docs/design/2026-plan-c-storage-and-access.md)
+> 详述：[`docs/design/2026-plan-c-storage-and-access.md`](../../docs/design/2026-plan-c-storage-and-access.md)  
+> 角色/别称：[`docs/design/2026-storage-roles-and-aliases.md`](../../docs/design/2026-storage-roles-and-aliases.md)
 
 | 变量 | 默认值 / 说明 |
 |------|----------------|
 | `STP_AEE_LOCAL_ROOT` | AEE 设备日志 HDD 第一落点（默认 `/mnt/hdd/aee_events`） |
-| `STP_AEE_CIFS_ROOT` | 15.4 CIFS 挂载根（HDD 溢出上送、Sprint 4 按需上送） |
+| `STP_AEE_NFS_ROOT` | **中心存储（CIFS）** 挂载点主键（upload / dedup） |
+| `STP_AEE_CIFS_ROOT` | CIFS 挂载点（HDD 溢出 spill；空则回落 NFS_ROOT） |
 | `STP_WATCHER_AEE_SUBDIR_LAYOUT` | 默认 `stp`（`mobilelog/`、`bugreport/`）；`correlated` 为旧布局 |
 
 **行为变更**：

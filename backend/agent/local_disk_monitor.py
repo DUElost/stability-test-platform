@@ -1,8 +1,8 @@
-"""HddSpillMonitor — Agent HDD 溢出监控 + 上送 15.4（ADR-0025 方案 C Sprint 2）。
+"""HddSpillMonitor — Agent HDD 溢出监控 + 上送中心存储（ADR-0025 方案 C Sprint 2）。
 
 职责：
     - interval 后台线程读取 HDD（hdd_root 所在盘）使用率
-    - 使用率 ≥ spill_threshold_pct → 找最旧 AEE 事件目录，上送到 15.4 CIFS
+    - 使用率 ≥ spill_threshold_pct → 找最旧 AEE 事件目录，上送到中心存储（CIFS）
       {cifs_root}/devices/{folder_name}/{serial}/ 后 prune 本地
     - 循环直至回落到 target_pct 或无更多可上送目录
     - 永不删除活跃 job 关联的事件目录（保守：只按 mtime 排序，跳过近期的）

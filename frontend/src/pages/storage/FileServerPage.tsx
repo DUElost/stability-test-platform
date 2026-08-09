@@ -210,7 +210,7 @@ export default function FileServerPage() {
   if (query.isError) {
     return (
       <PageContainer className="space-y-6">
-        <PageHeader title="文件服务器" subtitle="NFS 存储与主机负载" action={refreshAction} />
+        <PageHeader title="文件服务器" subtitle="控制面负载与中心存储挂载" action={refreshAction} />
         <ErrorState title="文件服务器状态加载失败" onRetry={() => query.refetch()} />
       </PageContainer>
     );
@@ -220,7 +220,7 @@ export default function FileServerPage() {
     <PageContainer className="space-y-6">
       <PageHeader
         title="文件服务器"
-        subtitle={data ? `${data.server.address} · ${data.storage.path}` : 'NFS 存储与主机负载'}
+        subtitle={data ? `${data.server.address} · ${data.storage.path}` : '控制面负载与中心存储挂载'}
         action={refreshAction}
       />
 
@@ -373,7 +373,7 @@ export default function FileServerPage() {
                 <TableRow>
                   <TableHead>主机</TableHead>
                   <TableHead>Agent</TableHead>
-                  <TableHead>NFS</TableHead>
+                  <TableHead>挂载</TableHead>
                   <TableHead className="text-right">最近心跳</TableHead>
                 </TableRow>
               </TableHeader>

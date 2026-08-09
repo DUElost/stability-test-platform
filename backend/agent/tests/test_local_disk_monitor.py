@@ -1,4 +1,4 @@
-"""HddSpillMonitor 单元测试（ADR-0025 方案 C — HDD 溢出上送 15.4）。"""
+"""HddSpillMonitor 单元测试（ADR-0025 方案 C — HDD 溢出上送中心存储）。"""
 
 from __future__ import annotations
 

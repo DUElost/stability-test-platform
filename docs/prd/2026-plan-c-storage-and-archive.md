@@ -6,6 +6,8 @@
 - **跟踪**：[GitHub #32](https://github.com/DUElost/stability-test-platform/issues/32)
 - **关联 ADR**：[ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)、[ADR-0018](../adr/ADR-0018-infrastructure-layer-framework-adoption.md)
 
+> **Living（2026-08-09）**：正文「15.4 / 15.4 CIFS」= **中心存储角色**（目标态）。口头 CIFS/NFS 都指此角色。现网过渡 UNC 在控制面同机 8.202。别称对照：[2026-storage-roles-and-aliases.md](../design/2026-storage-roles-and-aliases.md)。
+
 ---
 
 ## 1. 背景与问题

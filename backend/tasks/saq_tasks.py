@@ -311,7 +311,7 @@ def _query_hosts_for_upload(plan_run_id: int) -> tuple[set[str], list[tuple[str,
 async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
     """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 upload_events SocketIO 指令。
 
-    Agent 端收到后扫描本地 HDD 事件目录并上送到 15.4 CIFS devices/。
+    Agent 端收到后扫描本地 HDD 事件目录并上送到中心存储（CIFS）devices/。
     仅对已有 scan_result_xls 的 host 下发（有 scan 产物才有事件可上送）。
     """
     from backend.realtime.socketio_server import emit_agent_control

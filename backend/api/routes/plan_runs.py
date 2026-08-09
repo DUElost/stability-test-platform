@@ -2882,7 +2882,7 @@ def download_job_artifact(
     if artifact is None or artifact.job_id != job_id:
         raise HTTPException(status_code=404, detail="artifact not found for this job")
 
-    # 方案 C: run_log_bundle 运行日志不再上送 15.4。
+    # 方案 C: run_log_bundle 运行日志不再上送中心存储。
     # 已有历史注册数据仍返回 409（历史产物不再可代理下载）。
     if artifact.artifact_type == "run_log_bundle":
         raise HTTPException(

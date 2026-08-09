@@ -1,6 +1,6 @@
 # 稳定性测试平台 — 文档中心
 
-> **最后更新**：2026-07-15  
+> **最后更新**：2026-08-09  
 > 本目录为项目**权威文档**入口。冲突时以**代码与测试**为准，并回写此处。  
 > 根目录 [`README.md`](../README.md) 只保留产品概述与快速入口；细则在本树子文档。
 
@@ -15,6 +15,7 @@
 | 查环境变量 | [`development/environment-variables.md`](./development/environment-variables.md) |
 | 查测试怎么跑 / 生产机禁区 | [`development/testing.md`](./development/testing.md) |
 | 理解系统架构 | [`design/00-system-overview.md`](./design/00-system-overview.md) |
+| 查存储角色 / CIFS / NFS / 文件服务器页别称 | [`design/2026-storage-roles-and-aliases.md`](./design/2026-storage-roles-and-aliases.md) |
 | 理解 Plan 执行主链路 | [`design/01-execution-pipeline.md`](./design/01-execution-pipeline.md) |
 | 查执行协议硬契约 | [`design/07-execution-protocol.md`](./design/07-execution-protocol.md) |
 | 查后端 / 前端 / Agent | [`design/02`](./design/02-backend.md) · [`03`](./design/03-frontend.md) · [`04`](./design/04-agent.md) |

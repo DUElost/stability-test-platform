@@ -131,7 +131,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 
 | Var | Where | Purpose |
 |-----|-------|---------|
-| `STP_AEE_NFS_ROOT` | Backend + Agent | NFS/CIFS root for dedup/devices/jira (shared path) |
+| `STP_AEE_NFS_ROOT` | Backend + Agent | **中心存储（CIFS）** 挂载点主键（dedup/devices/jira）；过渡 UNC 在 8.202 |
 | `STP_DEDUP_SCAN_PYTHON` | Backend + Agent | Python interpreter for scan tool — **值按角色不同**，见下 |
 | `STP_DEDUP_SCAN_SCRIPT` | Backend + Agent | `start_log_scan.py` path — **值按角色不同**，见下 |
 | `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | Backend only | Agent 侧的 scan 工具路径，hot-update 写进 Agent 的无前缀键 |
@@ -141,7 +141,8 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 | `STP_DEDUP_AUTO_SCAN` | Backend | Terminal auto-dedup trigger (default `1`) |
 | `AUTO_ARCHIVE_POLL_INTERVAL_SECONDS` | Backend | auto_archive_sweep interval (default 120) |
 
-See `backend/.env.example` and `backend/agent/.env.example` for full list.
+See `backend/.env.example` and `backend/agent/.env.example` for full list.  
+角色/别称（口头 CIFS/NFS = 中心存储 ≠ 控制面 ≠ 健康页）：[`docs/design/2026-storage-roles-and-aliases.md`](docs/design/2026-storage-roles-and-aliases.md)。
 
 ## Key conventions
 

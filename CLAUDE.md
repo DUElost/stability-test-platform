@@ -54,9 +54,9 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 |------|------|------|
 | Agent SSD | 运行日志（唯一副本） | `logs/runs/{job_id}/` |
 | Agent HDD | AEE + mobilelog + bugreport | `STP_AEE_LOCAL_ROOT`（默认 `/mnt/hdd/aee_events`） |
-| 15.4 CIFS | 汇总 xls、按需事件、HDD 溢出 | `STP_AEE_CIFS_ROOT`；**不含**运行日志 |
+| 中心存储（CIFS / NFS） | 汇总 xls、按需事件、HDD 溢出；**不含**运行日志 | 挂载点 `STP_AEE_NFS_ROOT`（spill 可选 `STP_AEE_CIFS_ROOT`）。过渡 UNC 在 8.202；「15.4」是角色外号/目标。口头 CIFS/NFS 都指此角色 |
 
-**已取消（勿依赖）**：运行日志上送 15.4、`run_log_bundle` JobArtifact、patrol cycle `snapshots/`。
+角色/别称：[docs/design/2026-storage-roles-and-aliases.md](docs/design/2026-storage-roles-and-aliases.md)。**已取消（勿依赖）**：运行日志上送 CIFS、`run_log_bundle` JobArtifact、patrol cycle `snapshots/`。
 
 ---
 

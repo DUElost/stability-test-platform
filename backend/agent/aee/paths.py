@@ -38,7 +38,7 @@ def resolve_bugreport_subdir() -> str:
 
 
 def get_aee_nfs_root() -> Path:
-    """控制面 15.4 CIFS/NFS 上送根路径（方案 C；`upload_manager.py` 用作 dedup/devices 上送目标）。
+    """中心存储（CIFS）上送根路径（方案 C；`upload_manager.py` 用作 dedup/devices 上送目标）。
 
     priority: STP_AEE_NFS_ROOT > STP_WATCHER_NFS_BASE_DIR > STP_NFS_ROOT/sonic_tinno
     > /mnt/hdd/aee_events（无 CIFS 配置时的本地兜底，非预期生产路径）。
