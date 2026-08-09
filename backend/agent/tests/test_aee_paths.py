@@ -3,7 +3,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
-from zoneinfo import ZoneInfo
 
 from backend.agent.aee.paths import (
     get_or_create_run_date_stamp,
@@ -25,14 +24,35 @@ def test_shanghai_mmdd_ignores_host_local_tz():
     assert shanghai_mmdd(before_cst_midnight) == "0808"
 
 
-def test_get_or_create_run_date_stamp_persists_and_uses_shanghai():
+def test_get_or_create_run_date_stamp_persists_and_uses_shanghai(monkeypatch):
     store = MagicMock()
     store.get_state.return_value = ""
+    # 固定时钟，避免测试恰好跨 Asia/Shanghai 午夜时断言漂移。
+    monkeypatch.setattr(
+        "backend.agent.aee.paths.shanghai_mmdd",
+        lambda now=None: "0809",
+    )
     stamp = get_or_create_run_date_stamp(store, 42)
-    assert stamp == datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%m%d")
-    store.set_state.assert_called_once_with("aee:42:run_date_stamp", stamp)
+    assert stamp == "0809"
+    store.set_state.assert_called_once_with("aee:42:run_date_stamp", "0809")
     store.get_state.return_value = "0808"
     assert get_or_create_run_date_stamp(store, 42) == "0808"
+
+
+def test_get_or_create_run_date_stamp_prefers_authoritative_value():
+    """控制面派生 stamp 是权威值：即使无已存值也直接持久化并返回。"""
+    store = MagicMock()
+    store.get_state.return_value = ""
+    assert get_or_create_run_date_stamp(store, 42, run_date_stamp="0810") == "0810"
+    store.set_state.assert_called_once_with("aee:42:run_date_stamp", "0810")
+
+
+def test_get_or_create_run_date_stamp_overwrites_stale_local_fallback():
+    """Agent 本地回退先写入的旧 stamp 会被权威值覆盖，避免 MMDD 漂移。"""
+    store = MagicMock()
+    store.get_state.return_value = "0809"
+    assert get_or_create_run_date_stamp(store, 42, run_date_stamp="0810") == "0810"
+    assert store.set_state.call_args.args == ("aee:42:run_date_stamp", "0810")
 
 
 def test_artifact_promote_dir_is_jobs_job_id():

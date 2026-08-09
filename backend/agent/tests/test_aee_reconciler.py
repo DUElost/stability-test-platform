@@ -179,6 +179,32 @@ def test_tick_once_no_new_returns_zero(monkeypatch):
     assert emitter.calls == []
 
 
+def test_tick_forwards_run_date_stamp_to_process_device_logs(monkeypatch):
+    """AeeDbHistoryReconciler 的 run_date_stamp 必须透传给 process_device_logs。"""
+    captured: Dict[str, Any] = {}
+
+    def _capture(*, run_date_stamp=None, **_):
+        captured["run_date_stamp"] = run_date_stamp
+        return ProcessResult(pulled=0)
+
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.process_device_logs",
+        _capture,
+    )
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=_FakeEmitter(),
+        state_store=_MemStore(),
+        serial="SX",
+        job_id=902,
+        host_id="HOST",
+        baseline_snapshot_enabled=False,
+        run_date_stamp="0810",
+        shell_fn=lambda cmd, timeout: "a\nb",
+    )
+    rec.tick_once()
+    assert captured.get("run_date_stamp") == "0810"
+
+
 def test_tick_once_new_entries_emits_with_extra(monkeypatch):
     """单轮 2 个新条目: emitter 收到 2 次 emit,各项 extra 字段齐全。"""
     emitter = _FakeEmitter()

@@ -40,6 +40,20 @@ from .watcher.contracts import ContractViolation, validate_claim_payload
 logger = logging.getLogger(__name__)
 
 
+def _parse_optional_iso(value: Any) -> Optional[datetime]:
+    """解析 claim payload 可选 started_at；缺失/非法返回 None 而非抛异常。"""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        logger.warning("job_payload_started_at_unparseable value=%r", value)
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 class JobStartupError(Exception):
     """JobSession 启动阶段硬失败。调用方应把 Job 标记 FAILED。"""
 
@@ -108,6 +122,7 @@ class JobSession:
         self._device_id   = int(self._payload["device_id"])
         self._serial      = self._payload["device_serial"]
         self._host_id     = host_id
+        self._started_at  = _parse_optional_iso(self._payload.get("started_at"))
         self._log_dir     = log_dir
         self._lock_reg    = lock_register
         self._lock_dereg  = lock_deregister
@@ -337,8 +352,13 @@ class JobSession:
             return
 
         try:
-            from .aee.paths import get_aee_local_root
+            from .aee.paths import get_aee_local_root, shanghai_mmdd
             local_root = get_aee_local_root()
+            run_date_stamp = (
+                shanghai_mmdd(self._started_at)
+                if self._started_at is not None
+                else None
+            )
             self._reconciler = AeeDbHistoryReconciler(
                 signal_emitter=self._handle.impl.emitter,
                 state_store=self._manager.get_dep("local_db"),
@@ -347,6 +367,7 @@ class JobSession:
                 host_id=self._host_id,
                 adb_path=self._manager.get_dep("adb_path") or "adb",
                 local_root=local_root,
+                run_date_stamp=run_date_stamp,
             )
             started = self._reconciler.start()
             if not started:

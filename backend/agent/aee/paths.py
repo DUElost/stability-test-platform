@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -115,10 +118,27 @@ def shanghai_mmdd(now: datetime | None = None) -> str:
     return dt.astimezone(_SHANGHAI).strftime("%m%d")
 
 
-def get_or_create_run_date_stamp(state_store: Any, job_id: int) -> str:
-    """Persist MMDD stamp per job (Asia/Shanghai, not the Agent host TZ)."""
+def get_or_create_run_date_stamp(
+    state_store: Any,
+    job_id: int,
+    run_date_stamp: Optional[str] = None,
+) -> str:
+    """Persist MMDD stamp per job (Asia/Shanghai, not the Agent host TZ).
+
+    ``run_date_stamp`` 非空时视为权威值（来自控制面 job started_at，与
+    plan_run_scan_scope 同一时钟）：直接持久化并返回，覆盖可能已在 Agent
+    本地回退写入的旧值，避免跨午夜后 AEE 目录 MMDD 与控制面扫描范围漂移。
+    """
     key = f"aee:{job_id}:run_date_stamp"
     existing = state_store.get_state(key, "")
+    if run_date_stamp:
+        if existing and existing != run_date_stamp:
+            logger.warning(
+                "aee_run_date_stamp_replaced job=%d old=%s new=%s",
+                job_id, existing, run_date_stamp,
+            )
+        state_store.set_state(key, run_date_stamp)
+        return run_date_stamp
     if existing:
         return existing
     stamp = shanghai_mmdd()

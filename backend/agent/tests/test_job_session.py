@@ -30,7 +30,10 @@ from backend.agent.aee.reconciler import ReconcilerStats
 # Fixtures & helpers
 # ----------------------------------------------------------------------
 
-def _make_payload(watcher_policy: Dict[str, Any] | None = None) -> Dict[str, Any]:
+def _make_payload(
+    watcher_policy: Dict[str, Any] | None = None,
+    started_at: datetime | None = None,
+) -> Dict[str, Any]:
     """最小合法 claim payload（契约必需字段齐全）。"""
     payload: Dict[str, Any] = {
         "id": 101,
@@ -42,6 +45,8 @@ def _make_payload(watcher_policy: Dict[str, Any] | None = None) -> Dict[str, Any
     }
     if watcher_policy is not None:
         payload["watcher_policy"] = watcher_policy
+    if started_at is not None:
+        payload["started_at"] = started_at.isoformat()
     return payload
 
 
@@ -465,6 +470,68 @@ def test_reconciler_uses_get_aee_local_root(lock_tracker, patch_manager, monkeyp
 
     assert session._reconciler is not None
     assert captured.get("local_root") == hdd
+
+    session.__exit__(None, None, None)
+
+
+def test_reconciler_gets_run_date_stamp_from_payload_started_at(
+    lock_tracker, patch_manager, monkeypatch, tmp_path,
+):
+    """JobSession 用 claim payload 的 started_at 派生 Shanghai MMDD 传入 reconciler。"""
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "1")
+    monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_HOSTS", raising=False)
+
+    hdd = tmp_path / "hdd"
+    hdd.mkdir()
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(hdd))
+
+    class _FakeImpl:
+        def __init__(self):
+            self._aee_reconciler_active = False
+            self.emitter = object()
+
+        def set_aee_reconciler_active(self, active: bool) -> None:
+            self._aee_reconciler_active = bool(active)
+
+    impl = _FakeImpl()
+    captured: dict = {}
+
+    class _CaptureReconciler:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def start(self):
+            return True
+
+    class _MgrWithDeps(_FakeManager):
+        def get_dep(self, key, default=None):
+            return {
+                "nfs_base_dir": "/mnt/cifs/should-not-use",
+                "local_db": object(),
+                "adb_path": "adb",
+            }.get(key, default)
+
+    patch_manager(_MgrWithDeps(mode="ok", capability="inotifyd_root"))
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.AeeDbHistoryReconciler", _CaptureReconciler,
+    )
+
+    # 2026-08-08 16:30 UTC = 2026-08-09 00:30 Asia/Shanghai → MMDD 0809
+    session = JobSession(
+        job_payload=_make_payload(
+            started_at=datetime(2026, 8, 8, 16, 30, tzinfo=timezone.utc),
+        ),
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
+    )
+    session.__enter__()
+    session._handle.impl = impl
+    session._maybe_start_aee_reconciler()
+
+    assert session._reconciler is not None
+    assert captured.get("run_date_stamp") == "0809"
 
     session.__exit__(None, None, None)
 
