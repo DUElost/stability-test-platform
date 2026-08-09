@@ -389,22 +389,29 @@ async def archive_plan_run_logs_endpoint(
 
     经 SocketIO control 向各 ONLINE host 的 Agent 下发:
       - archive_now: Agent 端 daemon 线程跑 scan_once(grace_seconds=0)，严格跳过 active Job。
-      - scan_now: Agent 端 daemon 线程跑 start_log_scan -dedup_org → UploadManager 上送 NFS。
+      - scan_now: 向本 PlanRun 涉及的全部 host 下发同一份设备 serial 列表
+        （可跨主机），Agent 只扫本地 HDD 上命中的 `{folder}/{serial}/`。
     归档和 scan 均为异步——返回「已触发」，前端应轮询/refetch。
     """
     from backend.realtime.socketio_server import emit_agent_control
+    from backend.services.plan_run_scan_scope import (
+        build_scan_now_payload,
+        iter_plan_run_scan_hosts,
+    )
 
     pr = db.get(PlanRun, run_id)
     if pr is None:
         raise HTTPException(status_code=404, detail="plan run not found")
 
-    host_rows = (
-        db.query(JobInstance.host_id, Host.status)
-        .join(Host, Host.id == JobInstance.host_id)
+    has_jobs = (
+        db.query(JobInstance.id)
         .filter(JobInstance.plan_run_id == run_id)
-        .distinct()
-        .all()
+        .first()
     )
+    if not has_jobs:
+        raise HTTPException(status_code=400, detail="no jobs found for this plan run")
+
+    host_rows = iter_plan_run_scan_hosts(db, run_id)
     if not host_rows:
         raise HTTPException(status_code=400, detail="no jobs found for this plan run")
 
@@ -418,7 +425,7 @@ async def archive_plan_run_logs_endpoint(
             )
             await emit_agent_control(
                 host_id, "scan_now",
-                payload={"plan_run_id": run_id, "is_final": False},
+                payload=build_scan_now_payload(db, run_id, host_id, is_final=False),
             )
             triggered.append(host_id)
         else:

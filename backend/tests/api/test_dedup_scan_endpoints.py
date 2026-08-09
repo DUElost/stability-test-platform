@@ -72,11 +72,80 @@ class TestScanEndpoint:
         body = resp.json()["data"]
         assert str(sample_host.id) in body["triggered_hosts"]
         assert body["skipped_offline"] == []
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%m%d")
         mock_emit.assert_awaited_once_with(
             str(sample_host.id),
             "scan_now",
-            payload={"plan_run_id": sample_plan_run.id, "is_final": False},
+            payload={
+                "plan_run_id": sample_plan_run.id,
+                "is_final": False,
+                "device_serials": [sample_device.serial],
+                "run_date_stamps": [today],
+            },
         )
+
+    def test_scan_sends_full_plan_run_serials_to_each_host(
+        self, client, auth_headers, db_session,
+        sample_plan_run, sample_plan, sample_device, sample_host,
+    ):
+        from datetime import datetime, timezone
+
+        from backend.models.enums import HostStatus, JobStatus
+        from backend.models.host import Device, Host
+        from backend.models.job import JobInstance
+
+        host_b = Host(
+            id="201",
+            hostname="test-host-201",
+            name="test-host-b",
+            ip="172.21.15.201",
+            ip_address="172.21.15.201",
+            status=HostStatus.ONLINE.value,
+            last_heartbeat=datetime.now(timezone.utc),
+        )
+        device_b = Device(serial="test-device-b", host_id=host_b.id, status="ONLINE")
+        db_session.add_all([host_b, device_b])
+        db_session.flush()
+        db_session.add_all([
+            JobInstance(
+                plan_run_id=sample_plan_run.id,
+                plan_id=sample_plan.id,
+                device_id=sample_device.id,
+                host_id=sample_host.id,
+                status=JobStatus.COMPLETED.value,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            ),
+            JobInstance(
+                plan_run_id=sample_plan_run.id,
+                plan_id=sample_plan.id,
+                device_id=device_b.id,
+                host_id=host_b.id,
+                status=JobStatus.COMPLETED.value,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            ),
+        ])
+        db_session.commit()
+
+        with patch(
+            "backend.realtime.socketio_server.emit_agent_control",
+            new=AsyncMock(),
+        ) as mock_emit:
+            resp = client.post(
+                f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/scan",
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()["data"]
+        assert set(body["triggered_hosts"]) == {str(sample_host.id), str(host_b.id)}
+        assert mock_emit.await_count == 2
+        payloads = [call.kwargs["payload"] for call in mock_emit.call_args_list]
+        expected = {sample_device.serial, device_b.serial}
+        assert all(set(p["device_serials"]) == expected for p in payloads)
+        assert payloads[0]["device_serials"] == payloads[1]["device_serials"]
 
     def test_scan_skips_offline_hosts(
         self, client, auth_headers, db_session,

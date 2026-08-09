@@ -154,12 +154,18 @@ def test_enqueue_coalesces_same_plan_run():
     with patch.object(ScanRunner, "_ensure_worker"):
         ScanRunner.enqueue_scan_now(55, "host-1", is_final=False)
         ScanRunner.enqueue_scan_now(55, "host-1", is_final=False)
-        ScanRunner.enqueue_scan_now(55, "host-1", is_final=True)
+        ScanRunner.enqueue_scan_now(
+            55, "host-1", is_final=True,
+            device_serials=["0000NX2622000670"],
+            run_date_stamps=["0808"],
+        )
         assert ScanRunner.pending_count() == 1
         job = ScanRunner._dequeue_next()
         assert job is not None
         assert job.plan_run_id == 55
         assert job.is_final is True
+        assert job.device_serials == ("0000NX2622000670",)
+        assert job.run_date_stamps == ("0808",)
 
 
 def test_enqueue_fifo_preserves_distinct_plan_runs():
@@ -179,7 +185,9 @@ def test_worker_runs_queued_job_after_active_scan():
     executed: list[tuple[int, bool]] = []
     gate = threading.Event()
 
-    def slow_scan(self, plan_run_id: int, host_id: str, *, is_final: bool = False):
+    def slow_scan(
+        self, plan_run_id: int, host_id: str, *, is_final: bool = False, **_kwargs,
+    ):
         executed.append((plan_run_id, is_final))
         if len(executed) == 1:
             gate.wait(timeout=2)
@@ -241,6 +249,64 @@ def test_run_dedup_org_calls_dedup_org(tmp_path):
     assert "-dedup_org" in called_argv
     assert str(org_xls) in called_argv
     assert "-side" in called_argv
+
+
+def test_run_local_scan_scopes_to_plan_run_serials_and_stamp(tmp_path):
+    r = _make_runner()
+    hdd = tmp_path / "hdd"
+    keep = (
+        hdd / "V551A_0808_MonkeyAEEinfo" / "0000NX2622000670"
+        / "2026_0808_010203_001_db.00.ANR"
+    )
+    other_dev = (
+        hdd / "V551A_0808_MonkeyAEEinfo" / "0000NX2622000662"
+        / "2026_0808_010203_002_db.00.ANR"
+    )
+    old_day = (
+        hdd / "V551A_0731_MonkeyAEEinfo" / "0000NX2622000670"
+        / "2026_0731_010203_001_db.00.ANR"
+    )
+    keep.mkdir(parents=True)
+    other_dev.mkdir(parents=True)
+    old_day.mkdir(parents=True)
+    (keep / "ZZ_INTERNAL").write_text("keep")
+    (other_dev / "ZZ_INTERNAL").write_text("other")
+    (old_day / "ZZ_INTERNAL").write_text("old")
+    r._hdd_root = str(hdd)
+
+    def fake_run(argv, **_kwargs):
+        scan_d = Path(argv[argv.index("-d") + 1])
+        (scan_d / "Result_shanghai_org.xls").write_text("fake")
+        return _completed(stdout="done")
+
+    with patch("backend.agent.scan_runner.subprocess.run", side_effect=fake_run) as mock_run:
+        result = r.run_local_scan(
+            42,
+            "host-1",
+            device_serials=["0000NX2622000670"],
+            run_date_stamps=["0808"],
+        )
+
+    assert result is not None
+    called_argv = mock_run.call_args[0][0]
+    staging = Path(called_argv[called_argv.index("-d") + 1])
+    assert staging.parent == hdd / ".stp-scan"
+    assert staging.name.startswith("pr42-")
+    assert (staging / keep.relative_to(hdd) / "ZZ_INTERNAL").is_file()
+    assert not (staging / "V551A_0808_MonkeyAEEinfo" / "0000NX2622000662").exists()
+    assert not (staging / "V551A_0731_MonkeyAEEinfo").exists()
+
+
+def test_run_local_scan_fails_closed_on_unsafe_serials(tmp_path):
+    r = _make_runner()
+    r._hdd_root = str(tmp_path / "hdd")
+    Path(r._hdd_root).mkdir()
+    with patch("backend.agent.scan_runner.subprocess.run") as mock_run:
+        result = r.run_local_scan(
+            42, "host-1", device_serials=["../etc", "/abs"],
+        )
+    assert result is None
+    mock_run.assert_not_called()
 
 
 def test_run_dedup_org_tool_failure():

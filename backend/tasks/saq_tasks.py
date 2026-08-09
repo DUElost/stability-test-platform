@@ -101,31 +101,36 @@ async def plan_admission_task(ctx: dict, *, plan_run_id: int, attempt_id: str) -
     await _impl(ctx, plan_run_id=plan_run_id, attempt_id=attempt_id)
 
 
-def _query_hosts_for_scan(plan_run_id: int) -> tuple[list[str], list[str]]:
-    """同步查询 scan_task 所需的 host 列表，由 asyncio.to_thread 调用。"""
+def _query_hosts_for_scan(
+    plan_run_id: int, is_final: bool = False,
+) -> tuple[list[tuple[str, dict]], list[str]]:
+    """同步查询 scan_task 所需的 host + scan_now payload，由 asyncio.to_thread 调用。
+
+    下发对象是本 PlanRun 涉及的全部 host；每台收到同一份跨主机设备名单。
+    """
     from backend.core.database import SessionLocal
-    from backend.models.job import JobInstance
-    from backend.models.host import Host
-    from sqlalchemy import select, distinct
+    from backend.services.plan_run_scan_scope import (
+        build_scan_now_payload,
+        iter_plan_run_scan_hosts,
+    )
 
     db = SessionLocal()
     try:
-        host_rows = db.execute(
-            select(distinct(JobInstance.host_id), Host.status)
-            .join(Host, Host.id == JobInstance.host_id)
-            .where(JobInstance.plan_run_id == plan_run_id)
-        ).all()
+        triggered: list[tuple[str, dict]] = []
+        skipped: list[str] = []
+        for host_id, host_status in iter_plan_run_scan_hosts(db, plan_run_id):
+            if host_status == "ONLINE":
+                triggered.append((
+                    host_id,
+                    build_scan_now_payload(
+                        db, plan_run_id, host_id, is_final=is_final,
+                    ),
+                ))
+            else:
+                skipped.append(host_id)
+        return triggered, skipped
     finally:
         db.close()
-
-    triggered: list[str] = []
-    skipped: list[str] = []
-    for host_id, host_status in host_rows:
-        if host_status == "ONLINE":
-            triggered.append(host_id)
-        else:
-            skipped.append(host_id)
-    return triggered, skipped
 
 
 async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> None:
@@ -145,12 +150,12 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
     round_started_at = datetime.now(timezone.utc)
 
     try:
-        triggered, skipped = await asyncio.to_thread(_query_hosts_for_scan, plan_run_id)
-        for host_id in triggered:
-            await emit_agent_control(
-                host_id, "scan_now",
-                payload={"plan_run_id": plan_run_id, "is_final": is_final},
-            )
+        triggered_rows, skipped = await asyncio.to_thread(
+            _query_hosts_for_scan, plan_run_id, is_final,
+        )
+        triggered = [host_id for host_id, _payload in triggered_rows]
+        for host_id, payload in triggered_rows:
+            await emit_agent_control(host_id, "scan_now", payload=payload)
 
         logger.info(
             "saq_scan_dispatched plan_run=%d triggered=%d skipped=%d",

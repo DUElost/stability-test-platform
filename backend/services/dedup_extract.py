@@ -22,8 +22,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def parse_event_dir_names_from_xls(xls_path: Path) -> set[str]:
-    """Read merge/scan xls Path column → event directory basenames."""
+def parse_event_dir_names_from_xls(
+    xls_path: Path,
+    *,
+    allowed_serials: list[str] | None = None,
+) -> set[str]:
+    """Read merge/scan xls Path column → event directory basenames.
+
+    ``allowed_serials=None`` keeps every row. A provided list (including empty)
+    keeps only matching PlanRun devices; empty means no xls rows.
+    """
     names: set[str] = set()
     if not xls_path.is_file():
         return names
@@ -34,6 +42,8 @@ def parse_event_dir_names_from_xls(xls_path: Path) -> set[str]:
         return names
 
     try:
+        from backend.services.plan_run_scan_scope import xls_row_matches_serials
+
         book = xlrd.open_workbook(str(xls_path))
         sheet = book.sheet_by_index(0)
         if sheet.nrows < 2 or sheet.ncols < 1:
@@ -41,17 +51,34 @@ def parse_event_dir_names_from_xls(xls_path: Path) -> set[str]:
         headers = [
             str(sheet.cell_value(0, col)).strip() for col in range(sheet.ncols)
         ]
+        lower = [h.lower() for h in headers]
         path_col = next(
-            (idx for idx, header in enumerate(headers) if header.lower() == "path"),
+            (idx for idx, header in enumerate(lower) if header == "path"),
+            None,
+        )
+        detail_col = next(
+            (idx for idx, header in enumerate(lower) if header == "detail"),
             None,
         )
         if path_col is None:
             return names
+        if allowed_serials is None:
+            serials: list[str] | None = None
+        else:
+            serials = [s for s in allowed_serials if s]
+            if not serials:
+                return names
         for row in range(1, sheet.nrows):
             raw = sheet.cell_value(row, path_col)
             if raw is None or str(raw).strip() == "":
                 continue
-            name = event_dir_basename_from_path(str(raw))
+            path = str(raw)
+            detail = ""
+            if detail_col is not None:
+                detail = str(sheet.cell_value(row, detail_col) or "")
+            if serials is not None and not xls_row_matches_serials(path, detail, serials):
+                continue
+            name = event_dir_basename_from_path(path)
             if name:
                 names.add(name)
     except Exception:
@@ -89,7 +116,10 @@ def collect_event_dir_names_from_log_signals(db: Session, plan_run_id: int) -> s
 
 def collect_upload_event_dir_names(db: Session, plan_run_id: int) -> list[str]:
     """ADR-0025: union JobLogSignal paths + scan xls Path rows for upload."""
+    from backend.services.plan_run_scan_scope import load_plan_run_device_serials
+
     names = collect_event_dir_names_from_log_signals(db, plan_run_id)
+    serials = load_plan_run_device_serials(db, plan_run_id)
 
     scan_rows = db.execute(
         select(PlanRunArtifact).where(
@@ -100,7 +130,9 @@ def collect_upload_event_dir_names(db: Session, plan_run_id: int) -> list[str]:
     for row in scan_rows:
         if not row.storage_uri:
             continue
-        names |= parse_event_dir_names_from_xls(Path(row.storage_uri))
+        names |= parse_event_dir_names_from_xls(
+            Path(row.storage_uri), allowed_serials=serials,
+        )
 
     return sorted(names)
 
