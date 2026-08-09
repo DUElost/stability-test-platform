@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
+
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 def _aee_subdir_layout() -> str:
@@ -104,13 +107,21 @@ def resolve_sonic_output_dir_for_job(
     return out
 
 
+def shanghai_mmdd(now: datetime | None = None) -> str:
+    """MMDD in Asia/Shanghai — same clock as control-plane scan_now stamps."""
+    dt = now or datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_SHANGHAI).strftime("%m%d")
+
+
 def get_or_create_run_date_stamp(state_store: Any, job_id: int) -> str:
-    """Persist MMDD stamp per job (aligned with monolithic argv[1])."""
+    """Persist MMDD stamp per job (Asia/Shanghai, not the Agent host TZ)."""
     key = f"aee:{job_id}:run_date_stamp"
     existing = state_store.get_state(key, "")
     if existing:
         return existing
-    stamp = datetime.now().strftime("%m%d")
+    stamp = shanghai_mmdd()
     state_store.set_state(key, stamp)
     return stamp
 

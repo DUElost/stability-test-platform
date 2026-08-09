@@ -1,13 +1,38 @@
 """#172 — 15.4 共享根路径约定统一助手。"""
 
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
+from zoneinfo import ZoneInfo
 
 from backend.agent.aee.paths import (
+    get_or_create_run_date_stamp,
     resolve_artifact_promote_dir,
     resolve_puller_artifact_dir,
     resolve_spill_devices_dest,
     resolve_upload_devices_dir,
+    shanghai_mmdd,
 )
+
+
+def test_shanghai_mmdd_ignores_host_local_tz():
+    # 2026-08-09 00:30 CST == 2026-08-08 09:30 PDT / 16:30 UTC previous day.
+    utc = datetime(2026, 8, 8, 16, 30, tzinfo=timezone.utc)
+    assert shanghai_mmdd(utc) == "0809"
+    pdt_naive_as_utc = datetime(2026, 8, 9, 6, 30, tzinfo=timezone.utc)  # 14:30 CST
+    assert shanghai_mmdd(pdt_naive_as_utc) == "0809"
+    before_cst_midnight = datetime(2026, 8, 8, 15, 59, tzinfo=timezone.utc)  # 23:59 CST
+    assert shanghai_mmdd(before_cst_midnight) == "0808"
+
+
+def test_get_or_create_run_date_stamp_persists_and_uses_shanghai():
+    store = MagicMock()
+    store.get_state.return_value = ""
+    stamp = get_or_create_run_date_stamp(store, 42)
+    assert stamp == datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%m%d")
+    store.set_state.assert_called_once_with("aee:42:run_date_stamp", stamp)
+    store.get_state.return_value = "0808"
+    assert get_or_create_run_date_stamp(store, 42) == "0808"
 
 
 def test_artifact_promote_dir_is_jobs_job_id():
