@@ -42,6 +42,10 @@ class JobClaimPayload(TypedDict, total=False):
     plan_id:       int
     watcher_policy:    Optional[Dict[str, Any]]    # 覆盖 WatcherPolicy 默认
     device_lease_expires_at: Optional[str]          # ISO8601
+    # claim 时控制面写入的 job.started_at（ISO8601 UTC）。Agent 用其派生
+    # AEE run_date_stamp（Asia/Shanghai MMDD），与 plan_run_scan_scope
+    # 的扫描范围同源，避免回退到 Agent 本机当前日期导致目录漂移。
+    started_at:        Optional[str]
 
 
 REQUIRED_CLAIM_FIELDS: tuple[str, ...] = (

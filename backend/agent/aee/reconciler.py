@@ -298,6 +298,7 @@ class AeeDbHistoryReconciler:
         host_id: str,
         adb_path: str = "adb",
         local_root: Optional[Path] = None,
+        run_date_stamp: Optional[str] = None,
         baseline_interval_seconds: Optional[float] = None,
         burst_interval_seconds: Optional[float] = None,
         burst_rounds: Optional[int] = None,
@@ -315,6 +316,7 @@ class AeeDbHistoryReconciler:
         self._host_id = str(host_id)
         self._adb_path = str(adb_path)
         self._local_root = Path(local_root) if local_root else None
+        self._run_date_stamp = run_date_stamp
 
         self._baseline = (
             baseline_interval_seconds
@@ -586,6 +588,7 @@ class AeeDbHistoryReconciler:
             adb_path=self._adb_path,
             config=self._cfg,
             local_root=self._local_root,
+            run_date_stamp=self._run_date_stamp,
             on_new_entry=_on_runtime_entry,
             shell_fn=self._shell_fn,
             pull_fn=self._pull_fn,
@@ -656,6 +659,7 @@ class AeeDbHistoryReconciler:
             adb_path=self._adb_path,
             config=baseline_cfg,
             local_root=self._local_root,
+            run_date_stamp=self._run_date_stamp,
             on_new_entry=_on_baseline_entry,
             shell_fn=self._shell_fn,
             pull_fn=self._pull_fn,

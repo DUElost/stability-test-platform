@@ -25,7 +25,7 @@ _SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 def run_date_stamp_from_started_at(started_at: datetime | None) -> str | None:
-    """Agent folder stamp is local MMDD (`get_or_create_run_date_stamp`)."""
+    """Agent folder stamp is Asia/Shanghai MMDD (`get_or_create_run_date_stamp`)."""
     if started_at is None:
         return None
     dt = started_at if started_at.tzinfo else started_at.replace(tzinfo=timezone.utc)

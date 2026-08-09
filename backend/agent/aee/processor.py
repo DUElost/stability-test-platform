@@ -109,7 +109,11 @@ def process_device_logs(
         else None
     )
 
-    stamp = run_date_stamp or get_or_create_run_date_stamp(state_store, job_id)
+    # 权威 stamp（控制面 started_at 派生）也要持久化，避免后续 LogPuller /
+    # 其他 job 路径读到 Agent 本地回退值导致 MMDD 漂移。
+    stamp = get_or_create_run_date_stamp(
+        state_store, job_id, run_date_stamp=run_date_stamp,
+    )
     folder_name = get_aee_log_folder_name(
         getprop=make_getprop_from_shell(lambda cmd, timeout: shell_fn(cmd, timeout) or ""),
         run_date_stamp=stamp,

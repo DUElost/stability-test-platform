@@ -212,6 +212,7 @@ async def _build_recovery_job_payload(
         "pipeline_def": job.pipeline_def,
         "watcher_policy": watcher_policy,
         "fencing_token": fencing_token,
+        "started_at": _iso_or_none(job.started_at),
         # ADR-0026 §3 (Step 5a): execution_state MUST ride in the frozen
         # resume payload — without it a recovered PATROL_SLEEP job would be
         # judged with the EXECUTING_STEP clock and vice versa.
@@ -250,6 +251,8 @@ class JobOut(BaseModel):
     # ADR-0026 barrier: expected peer count on this PlanRunHost (INIT→PATROL).
     # Prefer total_job_count; fall back to device_count at claim time.
     plan_run_host_total_job_count: Optional[int] = None
+    # claim 时写入的 job.started_at；Agent 用于派生 AEE run_date_stamp。
+    started_at: Optional[str] = None
 
 
 class JobStatusUpdate(BaseModel):
@@ -686,6 +689,7 @@ async def claim_jobs(
                 fencing_token=fencing_token_map[j.id],
                 plan_run_host_id=prh_info[0] if prh_info else None,
                 plan_run_host_total_job_count=prh_info[1] if prh_info else None,
+                started_at=_iso_or_none(j.started_at),
             )
         )
     return ok(out)

@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from backend.agent.aee.paths import shanghai_mmdd
 from backend.models.enums import HostStatus, JobStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
@@ -21,6 +22,17 @@ def test_run_date_stamp_uses_shanghai_mmdd():
     assert run_date_stamp_from_started_at(started) == "0808"
     utc = datetime(2026, 8, 8, 13, 0, tzinfo=timezone.utc)
     assert run_date_stamp_from_started_at(utc) == "0808"
+
+
+def test_run_date_stamp_alignment_across_shanghai_midnight():
+    """控制面 scan 范围与 Agent AEE 目录使用同一 Shanghai MMDD，跨午夜不漂移。"""
+    cases = [
+        datetime(2026, 8, 8, 15, 59, tzinfo=timezone.utc),  # 23:59 CST → 0808
+        datetime(2026, 8, 8, 16, 0, tzinfo=timezone.utc),   # 00:00 CST → 0809
+        datetime(2026, 8, 8, 16, 30, tzinfo=timezone.utc),  # 00:30 CST → 0809
+    ]
+    for dt in cases:
+        assert run_date_stamp_from_started_at(dt) == shanghai_mmdd(dt)
 
 
 def test_build_scan_now_payload_includes_serials_and_stamp(
