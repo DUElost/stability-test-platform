@@ -69,14 +69,10 @@ def get_memory_usage() -> float:
 
 
 def get_disk_usage(path: str = '/') -> Dict[str, Any]:
-    """
-    获取磁盘使用率
+    """读取 ``path`` 所在盘使用率。
 
-    Args:
-        path: 检查的路径
-
-    Returns:
-        包含使用率的字典
+    读盘失败时 ``usage_percent`` 为 ``None``（不要填 ``0.0`` —— HddSpill 会
+    把 0% 当成磁盘健康而跳过溢出）。
     """
     try:
         usage = shutil.disk_usage(path)
@@ -92,12 +88,12 @@ def get_disk_usage(path: str = '/') -> Dict[str, Any]:
             "usage_percent": round(usage_percent, 2),
         }
     except Exception as e:
-        logger.warning(f"get_disk_usage_failed: {e}")
+        logger.warning("get_disk_usage_failed path=%s error=%s", path, e)
         return {
-            "total_gb": 0,
-            "used_gb": 0,
-            "free_gb": 0,
-            "usage_percent": 0.0,
+            "total_gb": None,
+            "used_gb": None,
+            "free_gb": None,
+            "usage_percent": None,
         }
 
 

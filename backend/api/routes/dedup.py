@@ -495,7 +495,9 @@ def trigger_extract(
     if extracted == -1:
         raise HTTPException(status_code=409, detail="no merge result available, run merge first")
 
-    nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
+    from backend.core.storage_root import resolve_shared_storage_root
+
+    nfs_root = resolve_shared_storage_root()
     if extracted == -2 or not nfs_root:
         raise HTTPException(status_code=503, detail="NFS root not configured (STP_AEE_NFS_ROOT)")
 

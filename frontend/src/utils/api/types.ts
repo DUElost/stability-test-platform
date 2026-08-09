@@ -36,7 +36,7 @@ export interface Host {
     reasons: string[];
     cpu_load: number;
     ram_usage: number;
-    disk_usage: number;
+    disk_usage: number | null;
     mount_ok: boolean;
     adb_ok: boolean;
   };
@@ -381,7 +381,7 @@ export interface DashboardHostResourcePoint {
   ip: string;
   cpu_load: number;
   ram_usage: number;
-  disk_usage: number;
+  disk_usage: number | null;
 }
 
 export interface DashboardSummary {

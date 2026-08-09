@@ -50,7 +50,7 @@ class HddSpillMonitor:
         self._configured = False
         self._spill_cycles = 0
         self._spilled_total = 0
-        self._last_usage_pct: float = 0.0
+        self._last_usage_pct: Optional[float] = None
         self._metrics_lock = threading.Lock()
 
     @classmethod
@@ -136,7 +136,8 @@ class HddSpillMonitor:
             return 0
         usage_pct = self._current_usage_pct()
         with self._metrics_lock:
-            self._last_usage_pct = usage_pct if usage_pct is not None else 0.0
+            if usage_pct is not None:
+                self._last_usage_pct = usage_pct
         if usage_pct is None:
             logger.warning("hdd_usage_unavailable — skipping spill check")
             return 0
@@ -232,15 +233,33 @@ class HddSpillMonitor:
     def _current_usage_pct(self) -> Optional[float]:
         try:
             info = self._disk_usage_fn(self._hdd_root)
-            return float(info.get("usage_percent", 0.0))
         except Exception:
             logger.exception("hdd_usage_read_failed root=%s", self._hdd_root)
+            return None
+        if not isinstance(info, dict):
+            logger.warning(
+                "hdd_usage_invalid_type root=%s type=%s",
+                self._hdd_root, type(info).__name__,
+            )
+            return None
+        raw = info.get("usage_percent")
+        if raw is None:
+            logger.warning("hdd_usage_percent_missing root=%s", self._hdd_root)
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            logger.warning(
+                "hdd_usage_percent_invalid root=%s value=%r",
+                self._hdd_root, raw,
+            )
             return None
 
     def snapshot_metrics(self) -> Dict[str, Any]:
         with self._metrics_lock:
+            last = self._last_usage_pct
             return {
-                "local_disk_usage_pct": round(self._last_usage_pct, 1),
+                "local_disk_usage_pct": round(last, 1) if last is not None else None,
                 "spill_cycles": self._spill_cycles,
                 "spill_threshold_pct": self._threshold_pct,
                 "spilled_total": self._spilled_total,

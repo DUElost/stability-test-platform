@@ -57,7 +57,7 @@ flowchart TB
 |----|-----|
 | 默认根 | `/mnt/hdd/aee_events` |
 | 解析函数 | `get_aee_local_root()`（`backend/agent/aee/paths.py`） |
-| 优先级 | `STP_AEE_LOCAL_ROOT` > `STP_AEE_NFS_ROOT` > `STP_WATCHER_NFS_BASE_DIR` > `STP_NFS_ROOT/sonic_tinno` > 默认 |
+| 优先级 | 只认 `STP_AEE_LOCAL_ROOT`；未设则 `/mnt/hdd/aee_events`。**不**回落到中心存储键 |
 
 事件目录布局（默认 `stp`）：
 
@@ -90,7 +90,7 @@ flowchart TB
 | 角色 | **中心存储（CIFS / NFS）**；口头「CIFS / NFS / 15.4」均指此角色 |
 | 当前 UNC（过渡） | `//172.21.8.202/jxtinno/sonic_tinno`（与控制面同机） |
 | 目标 UNC | `//172.21.15.4/jxtinno/sonic_tinno` 或 `//172.21.9.4/...`（控制面仍留 8.202） |
-| 挂载点 env | **主键** `STP_AEE_NFS_ROOT`（控制面 merge/extract + Agent upload）；`STP_AEE_CIFS_ROOT` 仅 spill 可选，空则回落 NFS_ROOT |
+| 挂载点 env | **主键** `STP_AEE_NFS_ROOT`（upload / spill / merge / extract / 健康页同一把钥匙）。`STP_WATCHER_NFS_BASE_DIR` / `STP_AEE_CIFS_ROOT` 仅弃用别名（未设主键时回落） |
 | 内容 | `dedup/`（xls）、`devices/{相对路径}`（事件目录）、`jobs/{job_id}/`（JobArtifact 文件，puller/promote）；**无** `archives/{job}/run_log_bundle` |
 
 > **路径约定（#172）**：JobArtifact 文件统一走 `jobs/{job_id}/`，事件目录走
@@ -107,13 +107,13 @@ flowchart TB
 
 - **删除**：`_do_archive`、`snapshot_active_job`、`run_log_bundle` 注册、NFS `nfs_base_dir`、cycle 快照回调。
 - **保留**：`_iter_job_dirs`、`scan_once`、grace、跳过 ACTIVE job。
-- **`archive_now`**（SocketIO）：`scan_once(grace_seconds=0)`，仅 prune，非 tar。
+- **`archive_now`**（SocketIO）：请求 `scan_once(grace_seconds=0)`，仅 prune，非 tar。有效 grace 下限 **300s**（P4-2：active_ids 漏记时不删刚启动 Job 的 SSD 日志）。
 
 ### 3.2 HddSpillMonitor（`local_disk_monitor.py`）
 
 - 监控 **HDD** 使用率（非 SSD）。
 - 超阈：按 mtime 找最旧**事件目录**（`__exp_main.txt` / `main.dbg` 启发式）→ `copytree` 到 `{cifs_root}/devices/{rel}` → 本地 prune。
-- **待加固**：读盘失败应返回 `None` 并跳过 spill（勿返回 `0.0`）。
+- 读盘失败返回 `None` 并跳过 spill（勿返回 `0.0`）——P1-1 已修。
 
 ### 3.3 启动耦合（已知债）
 

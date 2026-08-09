@@ -25,6 +25,20 @@ router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
 logger = logging.getLogger(__name__)
 
 
+def _disk_usage_percent_from_extra(extra: dict) -> Optional[float]:
+    """Heartbeat extra.disk_usage.usage_percent；读盘失败为 None（不是 0%）。"""
+    blob = extra.get("disk_usage")
+    if not isinstance(blob, dict):
+        return None
+    raw = blob.get("usage_percent")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -226,7 +240,7 @@ class DashboardHostResourcePoint(BaseModel):
     ip: str
     cpu_load: float
     ram_usage: float
-    disk_usage: float
+    disk_usage: Optional[float] = None
 
 
 class DashboardSummaryResponse(BaseModel):
@@ -301,10 +315,11 @@ def get_dashboard_summary(
             extra = raw
         cpu = float(extra.get("cpu_load") or 0)
         ram = float(extra.get("ram_usage") or 0)
-        disk = float((extra.get("disk_usage") or {}).get("usage_percent") or 0)
+        disk = _disk_usage_percent_from_extra(extra)
         cpu_values.append(cpu)
         ram_values.append(ram)
-        disk_values.append(disk)
+        if disk is not None:
+            disk_values.append(disk)
         if row.ip:
             resource_points.append({
                 "ip": row.ip,
@@ -328,7 +343,7 @@ def get_dashboard_summary(
             degraded=host_degraded,
             avg_cpu_load=round(sum(cpu_values) / host_total, 2) if host_total else 0.0,
             avg_ram_usage=round(sum(ram_values) / host_total, 2) if host_total else 0.0,
-            avg_disk_usage=round(sum(disk_values) / host_total, 2) if host_total else 0.0,
+            avg_disk_usage=round(sum(disk_values) / len(disk_values), 2) if disk_values else 0.0,
             online_rate=round(host_online / host_total, 4) if host_total else 0.0,
         ),
         devices=DashboardDeviceSummary(

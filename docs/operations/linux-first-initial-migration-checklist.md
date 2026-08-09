@@ -102,8 +102,8 @@
    - 短期：部署时显式执行 `alembic upgrade head`
    - 中期：迁移从 service 启动钩子中独立出来
 26. 明确外部依赖落点：
-   - `STP_AEE_NFS_ROOT`
-   - `STP_AEE_CIFS_ROOT`
+   - `STP_AEE_NFS_ROOT`（中心存储挂载主键）
+   - `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR`（弃用别名，仅主键未设时回落）
    - `STP_DEDUP_SCAN_SCRIPT`
    - `STP_DEDUP_SCAN_PYTHON`
 27. 确认 Linux 控制平面可访问相关共享存储和 scan 工具。

@@ -161,7 +161,7 @@ def test_get_aee_log_folder_name():
 
 
 def test_process_device_logs_incremental(tmp_path, monkeypatch):
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     store = _MemStore()
     line = "/data/aee_exp/db.01,CRASH,pkg,_,_,_,_,_,com.app,2026-05-27 10:15:22.123"
     history = line + "\n"
@@ -222,7 +222,7 @@ def test_format_timestamp_for_filename():
 
 def test_process_logs_strict_verify_rejects_dir_without_dbg(tmp_path, monkeypatch):
     """T0.5-1 P0-#1: pull 后目录无 .dbg 文件 → strict verify 失败 → pull_verify_failed 错误。"""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     store = _MemStore()
     line = "/data/aee_exp/db.99,CRASH,pkg,_,_,_,_,_,com.bad,2026-05-27 10:15:22.123"
 
@@ -268,7 +268,7 @@ def test_process_logs_strict_verify_rejects_dir_without_dbg(tmp_path, monkeypatc
 
 def test_process_logs_mobilelog_uses_stp_subdir_default(tmp_path, monkeypatch):
     """ADR-0025 D3: mobilelog 落在事件目录(local_target_dir)内的 mobilelog/ 子目录。"""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     monkeypatch.delenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", raising=False)
     store = _MemStore()
     line = "/data/aee_exp/db.01,CRASH,pkg,_,_,_,_,_,com.app,2026-05-27 10:15:22.123"
@@ -382,7 +382,7 @@ def _setup_pdl_stubs(monkeypatch, history_line: str):
 
 def test_process_device_logs_on_new_entry_called(tmp_path, monkeypatch):
     """on_new_entry 回调:pull 成功时被调用一次,payload 字段完整;第二次同 line 不再触发。"""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     store = _MemStore()
     line = "/data/aee_exp/db.42,Java (JE),pkg,_,_,_,_,_,com.example.app,2026-05-28 10:15:22.123"
     _setup_pdl_stubs(monkeypatch, line)
@@ -424,7 +424,7 @@ def test_process_device_logs_on_new_entry_called(tmp_path, monkeypatch):
 
 def test_process_device_logs_on_new_entry_exception_swallowed(tmp_path, monkeypatch):
     """on_new_entry 抛异常时:主流程不崩,pulled 依旧 +1,line 被标记 processed。"""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     store = _MemStore()
     line = "/data/aee_exp/db.77,CRASH,pkg,_,_,_,_,_,com.boom.app,2026-05-28 10:15:22.123"
     _setup_pdl_stubs(monkeypatch, line)
@@ -451,7 +451,7 @@ def test_process_device_logs_on_new_entry_exception_swallowed(tmp_path, monkeypa
 
 def test_process_device_logs_prioritizes_newer_entries_when_backlog_exists(tmp_path, monkeypatch):
     """backlog 存在时应优先处理更新的 db_history 条目,避免 fresh AEE 排到最后。"""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     store = _MemStore()
     lines = [
         "/data/aee_exp/db.01,CRASH,pkg,_,_,_,_,_,com.old,2026-05-28 10:00:00.000",
@@ -484,7 +484,7 @@ def test_process_device_logs_prioritizes_newer_entries_when_backlog_exists(tmp_p
 
 def test_process_device_logs_emits_when_local_aee_dir_already_exists(tmp_path, monkeypatch):
     """目录已落盘但当前 run 未 processed 时,仍应回调并纳入当前 run。"""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     store = _MemStore()
     line = "/data/aee_exp/db.55,CRASH,pkg,_,_,_,_,_,com.reuse.app,2026-06-01 19:20:00.123"
     _setup_pdl_stubs(monkeypatch, line)
@@ -526,7 +526,7 @@ def test_process_device_logs_emits_when_local_aee_dir_already_exists(tmp_path, m
 
 def test_process_device_logs_enriches_from_local_exp_main(tmp_path, monkeypatch):
     """本地 AEE 目录已有 __exp_main.txt 时,应回填 subtype 和 package。"""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     store = _MemStore()
     line = "/data/aee_exp/db.66,CRASH,pkg,_,_,_,_,_,unknown,2026-06-01 20:20:00.123"
     _setup_pdl_stubs(monkeypatch, line)
@@ -578,7 +578,7 @@ def test_process_device_logs_enriches_from_local_exp_main(tmp_path, monkeypatch)
 
 def test_process_device_logs_persists_processed_before_side_effects(tmp_path, monkeypatch):
     """执行 mobilelog 副作用前,processed/pending 状态应已落盘。"""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     store = _MemStore()
     line = "/data/aee_exp/db.88,CRASH,pkg,_,_,_,_,_,com.persist.app,2026-05-28 10:15:22.123"
     _setup_pdl_stubs(monkeypatch, line)
@@ -614,7 +614,7 @@ def test_process_device_logs_exports_on_existing_dir_when_side_exports_missing(
     tmp_path, monkeypatch,
 ):
     """AEE 目录已落盘但缺 mobilelog/bugreport 时,仍应触发首次关联导出。"""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     store = _MemStore()
     line = "/data/aee_exp/db.77,Native (NE),pkg,_,_,_,_,_,com.app,2026-06-30 10:08:55.000"
     _setup_pdl_stubs(monkeypatch, line)
@@ -668,7 +668,7 @@ def test_process_device_logs_skips_side_exports_when_already_present(
     tmp_path, monkeypatch,
 ):
     """mobilelog/bugreport 已存在时不重复导出。"""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     store = _MemStore()
     line = "/data/aee_exp/db.88,CRASH,pkg,_,_,_,_,_,com.app,2026-06-30 11:00:00.000"
     _setup_pdl_stubs(monkeypatch, line)
@@ -736,6 +736,18 @@ def test_get_aee_local_root_default_is_hdd(monkeypatch):
     monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
     monkeypatch.delenv("STP_WATCHER_NFS_BASE_DIR", raising=False)
     monkeypatch.delenv("STP_NFS_ROOT", raising=False)
+    assert get_aee_local_root() == Path("/mnt/hdd/aee_events")
+
+
+def test_get_aee_local_root_ignores_central_storage_keys(monkeypatch):
+    """HDD 第一落点不得回落到中心存储键。"""
+    from backend.agent.aee.paths import get_aee_local_root
+
+    monkeypatch.delenv("STP_AEE_LOCAL_ROOT", raising=False)
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/stp-aee")
+    monkeypatch.setenv("STP_WATCHER_NFS_BASE_DIR", "/mnt/watcher")
+    monkeypatch.setenv("STP_AEE_CIFS_ROOT", "/mnt/cifs")
+    monkeypatch.setenv("STP_NFS_ROOT", "/mnt/storage")
     assert get_aee_local_root() == Path("/mnt/hdd/aee_events")
 
 

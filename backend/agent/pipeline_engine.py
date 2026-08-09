@@ -661,7 +661,14 @@ class PipelineEngine:
         self._api_url = api_url
         self._agent_secret = agent_secret
         self._adb_path = getattr(adb, "adb_path", os.getenv("ADB_PATH", "adb"))
-        self._nfs_root = nfs_root if nfs_root is not None else os.getenv("STP_NFS_ROOT", "")
+        if nfs_root is not None:
+            self._nfs_root = nfs_root
+        else:
+            try:
+                from .aee.paths import resolve_shared_storage_root
+            except ImportError:
+                from agent.aee.paths import resolve_shared_storage_root
+            self._nfs_root = resolve_shared_storage_root()
         self._is_aborted = is_aborted
         self._fencing_token = fencing_token or ""  # ADR-0019 Phase 2b
         self._patrol_heartbeat = patrol_heartbeat_uploader  # ADR-0022

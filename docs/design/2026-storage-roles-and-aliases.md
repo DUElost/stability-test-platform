@@ -26,7 +26,7 @@
 
 **文件服务器 / File Server** = 控制面 admin **共享存储健康页**（`/storage`），不是一台机器、不是角色 4。
 
-带 NFS/CIFS 的**存储类 env**（`STP_AEE_NFS_ROOT`、`STP_AEE_CIFS_ROOT`、`STP_WATCHER_NFS_BASE_DIR`、Agent 上的 `STP_NFS_ROOT`）**都应**指向角色 4 的本机挂载点。控制面把 `STP_NFS_ROOT` 当成 `${STP_NFS_ROOT}/scripts` 默认根，是误用，不是「NFS 另有一义」。
+带 NFS/CIFS 的**存储类 env**都应指向角色 4。主键 **`STP_AEE_NFS_ROOT`**；`STP_WATCHER_NFS_BASE_DIR` / `STP_AEE_CIFS_ROOT` 为弃用别名。控制面脚本根必须设 **`STP_SCRIPT_ROOT`**，不得再用 `STP_NFS_ROOT/scripts`。
 
 ---
 
@@ -61,7 +61,7 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | 推荐名 | 类型 | 例子（当前过渡） | 谁用 |
 |--------|------|------------------|------|
 | **分享身份（UNC）** | 网络身份 | `//172.21.8.202/jxtinno/sonic_tinno` | fstab / `mount`；程序**不读** |
-| **共享根（挂载点）** | 本机路径 | `/mnt/nfs/aee_events`、`/home/android/aee-nfs` | `STP_AEE_NFS_ROOT`（spill 可选 `STP_AEE_CIFS_ROOT`） |
+| **共享根（挂载点）** | 本机路径 | `/mnt/nfs/aee_events`、`/home/android/aee-nfs` | `STP_AEE_NFS_ROOT` |
 
 20 台 Agent + 控制面的挂载路径字符串可以不同，必须指向**同一个 UNC**。  
 切盘 = 改 UNC 主机 + remount；挂载点路径能不改就不改。
@@ -105,10 +105,9 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | 中心存储 | **CIFS**、**NFS**、中心日志服务器、L2、归档盘、sonic_tinno、`jxtinno` | 控制面、健康页 |
 | 15.4 / 15.4 CIFS | 角色外号 / ADR 目标态 | 「现网 UNC 已在 15.4」 |
 | `STP_AEE_NFS_ROOT` | 共享根主键（键名带 NFS，指向的就是中心存储挂载点） | `STP_FILE_SERVER_ADDRESS` |
-| `STP_AEE_CIFS_ROOT` | spill 可选挂载；空则回落 `STP_AEE_NFS_ROOT` | 第二块盘；upload 实际读 `STP_AEE_NFS_ROOT` |
-| `STP_WATCHER_NFS_BASE_DIR` | 旧别名 → `STP_AEE_NFS_ROOT` | 新角色 |
-| `STP_NFS_ROOT` | 键名即中心存储；Agent 上 hot-update 已回落到 `STP_AEE_NFS_ROOT`。控制面误用作 `${STP_NFS_ROOT}/scripts` 默认根（应 `STP_SCRIPT_ROOT`） | 第三块「脚本盘」；与 CIFS 不同的角色 |
-| `STP_AGENT_NFS_ROOT` | 控制面 env → 写成 Agent 的 `STP_NFS_ROOT`（= 中心存储挂载） | 第三块盘 |
+| `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | 弃用别名 → `STP_AEE_NFS_ROOT` | 第二块盘 |
+| `STP_NFS_ROOT` | Agent 上 hot-update 镜像 `STP_AEE_NFS_ROOT`（旧脚本 env）。控制面本机值不下发；脚本扫描用 `STP_SCRIPT_ROOT` | 独立脚本盘 |
+| `STP_AGENT_NFS_ROOT` | **已停用**（不再映射） | 第三块盘 |
 
 子目录（角色 4 的内容，不是角色）：`devices/`、`dedup/`、`jira/{plan_run_id}/`、`jobs/{job_id}/`。
 
@@ -172,8 +171,8 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | `STP_FILE_SERVER_ADDRESS` | 健康页 → 控制面展示 IP | IP（现 8.202，切盘**不改**） |
 | `STP_AEE_LOCAL_ROOT` | Agent HDD | 本机路径 |
 | `STP_AEE_NFS_ROOT` | **中心存储** 挂载点（主键） | 本机路径；控制面与 Agent 指向同一 UNC |
-| `STP_AEE_CIFS_ROOT` | 中心存储挂载点（spill 可选） | 同盘则留空 |
-| `STP_NFS_ROOT` | **中心存储**（与 `STP_AEE_NFS_ROOT` 同角色；待并）。CP 误用作脚本默认根 | 本机路径；Agent 已回落到 `STP_AEE_NFS_ROOT` |
+| `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | 弃用别名（主键未设时回落） | 同盘路径或留空 |
+| `STP_NFS_ROOT` | Agent 脚本 env 镜像中心存储挂载；CP 本机值不下发 | 本机路径 |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | 扫描工具（本角色路径） | 控制面 = merge；Agent = scan |
 | `STP_AGENT_DEDUP_SCAN_*` | 控制面持有的 **Agent 侧**扫描工具路径 | hot-update 源键 |
 | `STP_AEE_SHARE_ADDRESS` / `_UNC` | **尚未落地**；#205 切盘时给健康页 B 栏 | CIFS 机 IP / UNC |
@@ -203,4 +202,5 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | 2026-08-09 | 初版：九角色 + CIFS=中心存储 + 健康页≠CIFS + 8.202 过渡 / 15.4·9.4 目标 + #205 |
 | 2026-08-09 | 口头 **NFS = 中心存储**（与 CIFS 同角色）；`STP_NFS_ROOT` 仅作历史键名，不简称「NFS」 |
 | 2026-08-09 | 锁死 **NFS = CIFS = 中心存储**（同一台分享）。`STP_NFS_ROOT` 不是第二种 NFS，是同角色键的误用（CP 脚本默认根） |
+| 2026-08-09 | 落地：HDD 不再回落中心存储；挂载点只认 `STP_AEE_NFS_ROOT`（WATCHER/CIFS 别名一层）；强制 `STP_SCRIPT_ROOT`；停 `STP_AGENT_NFS_ROOT` |
 | 2026-08-09 | 活文档/UI/docstring 对齐：overview §6、健康页副标题、env 注释、上送路径注释；ADR 历史正文仍靠 Living 注记 |

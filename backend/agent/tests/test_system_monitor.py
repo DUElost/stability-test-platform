@@ -110,15 +110,15 @@ def test_get_disk_usage_handles_zero_total(disk_usage_type):
     }
 
 
-def test_get_disk_usage_returns_zero_dict_on_exception():
+def test_get_disk_usage_returns_none_percent_on_exception():
     with patch.object(monitor_module.shutil, "disk_usage", side_effect=OSError("disk error")):
         result = monitor_module.get_disk_usage("/")
 
     assert result == {
-        "total_gb": 0,
-        "used_gb": 0,
-        "free_gb": 0,
-        "usage_percent": 0.0,
+        "total_gb": None,
+        "used_gb": None,
+        "free_gb": None,
+        "usage_percent": None,
     }
 
 

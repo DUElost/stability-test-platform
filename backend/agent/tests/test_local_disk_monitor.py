@@ -96,4 +96,31 @@ def test_usage_read_failure_skips_spill(tmp_path):
 
     assert n == 0
     metrics = mon.snapshot_metrics()
-    assert metrics["local_disk_usage_pct"] == 0.0
+    assert metrics["local_disk_usage_pct"] is None
+
+
+@pytest.mark.parametrize(
+    "disk_info",
+    [
+        {"total_gb": None, "used_gb": None, "free_gb": None, "usage_percent": None},
+        {"total_gb": 0, "used_gb": 0, "free_gb": 0},
+        {"usage_percent": "n/a"},
+        "not-a-dict",
+    ],
+)
+def test_unusable_usage_percent_skips_spill(tmp_path, disk_info):
+    """get_disk_usage 失败形态 / 缺 key / 非法值都不得当成 0% 健康而跳过 spill。"""
+    cifs = tmp_path / "cifs"
+    cifs.mkdir()
+    disk_fn = MagicMock(return_value=disk_info)
+    mon = HddSpillMonitor.instance().configure(
+        hdd_root=str(tmp_path),
+        cifs_root=str(cifs),
+        spill_threshold_pct=80.0,
+        disk_usage_fn=disk_fn,
+    )
+
+    n = mon.check_once()
+
+    assert n == 0
+    assert mon.snapshot_metrics()["local_disk_usage_pct"] is None

@@ -254,6 +254,7 @@ class TestExtractEndpoint:
 
         monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
         monkeypatch.delenv("STP_WATCHER_NFS_BASE_DIR", raising=False)
+        monkeypatch.delenv("STP_AEE_CIFS_ROOT", raising=False)
         resp = client.post(
             f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/extract",
             headers=auth_headers,

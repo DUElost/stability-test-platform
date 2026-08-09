@@ -16,6 +16,10 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# P4-2: archive_now 也会请求 grace=0。若 get_active_jobs() 漏掉刚启动的 Job，
+# 0s 会立刻 rmtree 其 SSD 日志。mtime 未满此时长的目录一律不 prune。
+MIN_GRACE_SECONDS = 300.0
+
 
 class LogArchiver:
     """进程级单例；由 Agent main.py configure + start。"""
@@ -65,7 +69,7 @@ class LogArchiver:
         self._db = local_db
         self._run_log_dir = Path(run_log_dir)
         self._interval = max(60.0, float(interval_seconds))
-        self._grace_seconds = max(0.0, float(grace_seconds))
+        self._grace_seconds = max(MIN_GRACE_SECONDS, float(grace_seconds))
         self._configured = True
         logger.info(
             "log_archiver_configured run_log_dir=%s interval=%.0fs grace=%.0fs",
@@ -103,10 +107,20 @@ class LogArchiver:
             self._stop_evt.wait(self._interval)
 
     def scan_once(self, *, grace_seconds: float | None = None) -> int:
-        """扫描并 prune 所有已完成且过 grace 的非活跃 Job 目录。返回 prune 数。"""
+        """扫描并 prune 所有已完成且过 grace 的非活跃 Job 目录。返回 prune 数。
+
+        ``grace_seconds``（含 archive_now 的 0）低于 ``MIN_GRACE_SECONDS`` 时抬到下限，
+        避免 active_ids 漏记时误删刚启动 Job 的 SSD 日志。
+        """
         if not self._configured or self._db is None:
             return 0
-        effective_grace = self._grace_seconds if grace_seconds is None else grace_seconds
+        requested = self._grace_seconds if grace_seconds is None else float(grace_seconds)
+        effective_grace = max(MIN_GRACE_SECONDS, requested)
+        if effective_grace > requested:
+            logger.warning(
+                "log_archiver_grace_clamped requested=%.0fs effective=%.0fs min=%.0fs",
+                requested, effective_grace, MIN_GRACE_SECONDS,
+            )
         pruned = 0
         now = self._now()
         active_ids = self._active_job_ids()
@@ -177,5 +191,6 @@ def collect_archive_heartbeat_metrics() -> Optional[Dict[str, Any]]:
 
 __all__ = [
     "LogArchiver",
+    "MIN_GRACE_SECONDS",
     "collect_archive_heartbeat_metrics",
 ]

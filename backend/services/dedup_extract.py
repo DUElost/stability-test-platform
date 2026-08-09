@@ -161,8 +161,7 @@ def run_extract_sync(plan_run_id: int) -> int:
       -1    no merge artifact
       -2    NFS root not configured
     """
-    import os
-
+    from backend.core.storage_root import resolve_shared_storage_root
     from backend.core.database import SessionLocal
 
     db = SessionLocal()
@@ -177,9 +176,7 @@ def run_extract_sync(plan_run_id: int) -> int:
             logger.warning("dedup_extract_skip_no_merge plan_run=%d", plan_run_id)
             return -1
 
-        nfs_root = os.getenv(
-            "STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")
-        ).strip()
+        nfs_root = resolve_shared_storage_root()
         if not nfs_root:
             logger.warning("dedup_extract_skip_no_nfs plan_run=%d", plan_run_id)
             return -2

@@ -2302,7 +2302,7 @@ async def ingest_artifact(
             code="INVALID_ARTIFACT_PATH",
             message=(
                 "artifact path is invalid or outside the allowed root "
-                f"(STP_NFS_ROOT/STP_WATCHER_NFS_BASE_DIR): {exc}"
+                f"(STP_AEE_NFS_ROOT): {exc}"
             ),
         )
 

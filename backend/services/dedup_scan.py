@@ -97,7 +97,9 @@ def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
 
     db = SessionLocal()
     try:
-        nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
+        from backend.core.storage_root import resolve_shared_storage_root
+
+        nfs_root = resolve_shared_storage_root()
         if not nfs_root:
             logger.warning("scan_skip_nfs_root_not_set plan_run=%d", plan_run_id)
             return ""

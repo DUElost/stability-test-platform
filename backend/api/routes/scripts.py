@@ -6,7 +6,6 @@ import logging
 import os
 import secrets
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -147,10 +146,18 @@ class ScriptOut(BaseModel):
 
 
 def _script_root() -> str:
-    explicit = os.getenv("STP_SCRIPT_ROOT")
+    explicit = (os.getenv("STP_SCRIPT_ROOT") or "").strip()
     if explicit:
         return explicit
-    return str(Path(os.getenv("STP_NFS_ROOT", "/mnt/storage/test-platform")) / "scripts")
+    raise_api_http_error(
+        status_code=503,
+        code="SCRIPT_ROOT_NOT_CONFIGURED",
+        message=(
+            "STP_SCRIPT_ROOT is not set; script catalog refuses to default to "
+            "STP_NFS_ROOT/scripts (that key is 中心存储, not the script tree)"
+        ),
+    )
+    raise AssertionError("unreachable")
 
 
 def _script_runtime_root() -> str | None:

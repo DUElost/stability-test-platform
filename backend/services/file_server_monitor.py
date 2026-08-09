@@ -204,7 +204,9 @@ def _require_shared_root() -> Path:
     须指向与 Agent 共享的同一挂载，**路径字符串可与各 Agent 的 MOUNT_POINTS 不同**
     （mount 统计按"任一 ok=True"识别，见 _host_mount_summary）。
     """
-    raw = os.getenv("STP_AEE_NFS_ROOT", "").strip()
+    from backend.core.storage_root import resolve_shared_storage_root
+
+    raw = resolve_shared_storage_root()
     if not raw:
         raise RuntimeError(
             "STP_AEE_NFS_ROOT is not set; the file-server dashboard refuses to "

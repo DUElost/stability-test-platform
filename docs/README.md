@@ -26,6 +26,7 @@
 | 查上线清单 | [`operations/README.md`](./operations/README.md) |
 | 查架构不变量摘要 | 根目录 [`CLAUDE.md`](../CLAUDE.md) |
 | 查哪些旧文档可删除 | [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md) |
+| 查设备日志流转审查 / DoD | [`reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md) |
 
 ---
 
@@ -42,6 +43,7 @@ docs/
 ├── acceptance/               ← 验收矩阵
 ├── development/              ← 本地开发、测试、env
 ├── operations/               ← 部署、联调、运维索引
+├── reviews/                  ← Living 审查（缺陷/DoD，不替代 design/）
 ├── archive/                  ← 历史文档
 └── …
 ```

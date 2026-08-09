@@ -74,6 +74,17 @@ def test_control_plane_nfs_root_never_leaks_to_agents(monkeypatch):
     assert overrides["STP_NFS_ROOT"] == "/mnt/stp-aee"
 
 
+def test_agent_nfs_root_source_key_is_ignored(monkeypatch):
+    """STP_AGENT_NFS_ROOT 不再是独立中心存储坐标；脚本 env 只镜像 STP_AEE_NFS_ROOT。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/stp-aee")
+    monkeypatch.setenv("STP_AGENT_NFS_ROOT", "/somewhere/else")
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert overrides["STP_NFS_ROOT"] == "/mnt/stp-aee"
+    assert "STP_AGENT_NFS_ROOT" not in overrides
+
+
 def test_agent_path_keys_to_verify_covers_synced_paths(monkeypatch):
     monkeypatch.setenv(
         "STP_AGENT_DEDUP_SCAN_SCRIPT", "/mnt/stp-aee/tools/Start-Log-Scan/start_log_scan.py"

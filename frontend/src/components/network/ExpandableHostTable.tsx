@@ -26,7 +26,7 @@ export interface HostResources {
   cpu_cores?: number;
   ram_usage: number;
   ram_total_gb?: number;
-  disk_usage: number;
+  disk_usage: number | null;
   disk_total_gb?: number;
   temperature?: number;
   uptime_seconds?: number;
@@ -91,10 +91,16 @@ function getProgressColor(percentage: number): string {
   return resourceUsageBgClass(percentage);
 }
 
+function formatUsagePercent(value: number | null | undefined, digits = 0): string {
+  if (value == null || !Number.isFinite(value)) return '未知';
+  return `${value.toFixed(digits)}%`;
+}
+
 const REASON_LABELS: Record<string, string> = {
   cpu_high: 'CPU 过高',
   ram_high: '内存过高',
   disk_high: '磁盘过高',
+  disk_unknown: '磁盘未知',
   mount_failed: '挂载失败',
   adb_low_healthy_devices: '无健康设备',
   adb_multiple_servers: 'ADB 多 server 冲突',
@@ -440,8 +446,13 @@ export function ExpandableHostTable({
                             ].map(([label, value]) => (
                               <div key={String(label)} className="text-center">
                                 <div className="text-[10px] text-muted-foreground">{label}</div>
-                                <div className={cn('font-mono text-[11px]', getResourceColor(Number(value)))}>
-                                  {Number(value).toFixed(0)}%
+                                <div className={cn(
+                                  'font-mono text-[11px]',
+                                  typeof value === 'number'
+                                    ? getResourceColor(value)
+                                    : 'text-muted-foreground',
+                                )}>
+                                  {formatUsagePercent(typeof value === 'number' ? value : null)}
                                 </div>
                               </div>
                             ))}
@@ -484,16 +495,20 @@ export function ExpandableHostTable({
                       </TableCell>
                       <TableCell className="hidden p-3 2xl:table-cell">
                         {host.resources && host.status === 'ONLINE' ? (
-                          <div className="flex items-center gap-2">
-                            <Progress
-                              value={host.resources.disk_usage}
-                              className="h-2 w-16"
-                              indicatorClassName={getProgressColor(host.resources.disk_usage)}
-                            />
-                            <span className={cn('text-xs font-mono', getResourceColor(host.resources.disk_usage))}>
-                              {host.resources.disk_usage.toFixed(0)}%
-                            </span>
-                          </div>
+                          host.resources.disk_usage == null ? (
+                            <span className="text-xs font-mono text-muted-foreground">未知</span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <Progress
+                                value={host.resources.disk_usage}
+                                className="h-2 w-16"
+                                indicatorClassName={getProgressColor(host.resources.disk_usage)}
+                              />
+                              <span className={cn('text-xs font-mono', getResourceColor(host.resources.disk_usage))}>
+                                {host.resources.disk_usage.toFixed(0)}%
+                              </span>
+                            </div>
+                          )
                         ) : (
                           <span className="text-muted-foreground/40">-</span>
                         )}
@@ -680,8 +695,13 @@ export function ExpandableHostTable({
                                 <div className="space-y-1">
                                   <div className="flex justify-between text-xs">
                                     <span className="text-muted-foreground">使用率</span>
-                                    <span className={cn('font-mono', getResourceColor(host.resources.disk_usage))}>
-                                      {host.resources.disk_usage.toFixed(1)}%
+                                    <span className={cn(
+                                      'font-mono',
+                                      host.resources.disk_usage == null
+                                        ? 'text-muted-foreground'
+                                        : getResourceColor(host.resources.disk_usage),
+                                    )}>
+                                      {formatUsagePercent(host.resources.disk_usage, 1)}
                                     </span>
                                   </div>
                                   {host.resources.disk_total_gb && (

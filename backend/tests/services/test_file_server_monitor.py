@@ -108,6 +108,8 @@ def test_collect_file_server_overview_requires_shared_root(monkeypatch, tmp_path
     防止误对错路径永远生成 STORAGE_NOT_MOUNTED（见 #4 合入评审）。
     """
     monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
+    monkeypatch.delenv("STP_WATCHER_NFS_BASE_DIR", raising=False)
+    monkeypatch.delenv("STP_AEE_CIFS_ROOT", raising=False)
     with pytest.raises(RuntimeError, match="STP_AEE_NFS_ROOT is not set"):
         monitor.collect_file_server_overview([], hours=1)
 

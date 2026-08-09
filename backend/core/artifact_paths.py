@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-DEFAULT_STP_NFS_ROOT = "/mnt/storage/test-platform"
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
@@ -20,7 +18,7 @@ class ArtifactPathSchemeError(ArtifactPathError):
 
 
 class ArtifactPathOutsideRootError(ArtifactPathError):
-    """Raised when a local artifact path escapes STP_NFS_ROOT."""
+    """Raised when a local artifact path escapes the shared storage root."""
 
 
 class ArtifactPathNotFoundError(ArtifactPathError):
@@ -28,23 +26,22 @@ class ArtifactPathNotFoundError(ArtifactPathError):
 
 
 def get_stp_nfs_root() -> Path:
-    return Path(os.getenv("STP_NFS_ROOT", DEFAULT_STP_NFS_ROOT)).resolve(strict=False)
+    """Deprecated alias: shared storage root (STP_AEE_NFS_ROOT)."""
+    from backend.core.storage_root import resolve_shared_storage_root
+
+    raw = resolve_shared_storage_root()
+    if not raw:
+        raise ArtifactPathError("STP_AEE_NFS_ROOT is not configured")
+    return Path(raw).resolve(strict=False)
 
 
 def get_local_artifact_roots() -> tuple[Path, ...]:
-    roots: list[Path] = []
-    for raw_root in (
-        os.getenv("STP_NFS_ROOT", DEFAULT_STP_NFS_ROOT),
-        os.getenv("STP_WATCHER_NFS_BASE_DIR", ""),
-        os.getenv("STP_AEE_NFS_ROOT", ""),
-    ):
-        raw_root = (raw_root or "").strip()
-        if not raw_root:
-            continue
-        resolved_root = Path(raw_root).resolve(strict=False)
-        if resolved_root not in roots:
-            roots.append(resolved_root)
-    return tuple(roots)
+    from backend.core.storage_root import resolve_shared_storage_root
+
+    raw = resolve_shared_storage_root()
+    if not raw:
+        return ()
+    return (Path(raw).resolve(strict=False),)
 
 
 def coerce_local_artifact_path(storage_uri: str) -> Path:
@@ -57,10 +54,12 @@ def coerce_local_artifact_path(storage_uri: str) -> Path:
 def resolve_local_artifact_path(storage_uri: str, *, must_exist: bool = False) -> Path:
     resolved_path = coerce_local_artifact_path(storage_uri)
     allowed_roots = get_local_artifact_roots()
+    if not allowed_roots:
+        raise ArtifactPathError("STP_AEE_NFS_ROOT is not configured")
     if not any(resolved_path.is_relative_to(root) for root in allowed_roots):
         raise ArtifactPathOutsideRootError(
-            "artifact path must stay under STP_NFS_ROOT or "
-            f"STP_WATCHER_NFS_BASE_DIR: {', '.join(str(root) for root in allowed_roots)}"
+            "artifact path must stay under STP_AEE_NFS_ROOT: "
+            f"{', '.join(str(root) for root in allowed_roots)}"
         )
 
     if must_exist and (not resolved_path.exists() or not resolved_path.is_file()):

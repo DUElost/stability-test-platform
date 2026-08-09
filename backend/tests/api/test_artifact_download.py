@@ -20,7 +20,7 @@ class TestArtifactDownloadTarget(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             artifact_path = Path(temp_dir) / "run-1.tar.gz"
             artifact_path.write_text("dummy", encoding="utf-8")
-            with patch.dict("os.environ", {"STP_NFS_ROOT": temp_dir}):
+            with patch.dict("os.environ", {"STP_AEE_NFS_ROOT": temp_dir}):
                 target = _artifact_download_target(f"file://{artifact_path}")
                 self.assertEqual(target["kind"], "local")
                 self.assertEqual(Path(target["path"]), artifact_path)
@@ -34,7 +34,7 @@ class TestArtifactDownloadTarget(unittest.TestCase):
     def test_missing_file_raises_404(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             missing = Path(temp_dir) / "not-exist-xyz.tar.gz"
-            with patch.dict("os.environ", {"STP_NFS_ROOT": temp_dir}):
+            with patch.dict("os.environ", {"STP_AEE_NFS_ROOT": temp_dir}):
                 with self.assertRaises(HTTPException) as ctx:
                     _artifact_download_target(f"file://{missing}")
                 self.assertEqual(ctx.exception.status_code, 404)
@@ -43,7 +43,7 @@ class TestArtifactDownloadTarget(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root_dir, tempfile.TemporaryDirectory() as outside_dir:
             artifact_path = Path(outside_dir) / "run-1.tar.gz"
             artifact_path.write_text("dummy", encoding="utf-8")
-            with patch.dict("os.environ", {"STP_NFS_ROOT": root_dir}):
+            with patch.dict("os.environ", {"STP_AEE_NFS_ROOT": root_dir}):
                 with self.assertRaises(HTTPException) as ctx:
                     _artifact_download_target(f"file://{artifact_path}")
                 self.assertEqual(ctx.exception.status_code, 400)

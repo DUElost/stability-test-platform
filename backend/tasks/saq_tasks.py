@@ -404,12 +404,12 @@ async def _wait_for_upload_task(plan_run_id: int) -> bool:
 
 def _count_devices_event_dirs_sync(plan_run_id: int) -> int:
     """统计 NFS devices/{plan_run_id}/ 下时间戳事件目录数。"""
-    import os
     from pathlib import Path
 
     from backend.agent.aee.event_dirs import is_event_dir_basename
+    from backend.core.storage_root import resolve_shared_storage_root
 
-    nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
+    nfs_root = resolve_shared_storage_root()
     if not nfs_root:
         return 0
     devices_dir = Path(nfs_root) / "devices" / str(plan_run_id)

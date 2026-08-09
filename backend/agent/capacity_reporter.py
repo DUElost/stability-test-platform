@@ -3,7 +3,20 @@
 纯函数，无 IO，不依赖外部状态。由 HeartbeatThread._tick 同步调用。
 """
 
-from typing import List
+from typing import List, Optional
+
+
+def _disk_usage_percent(system_stats: dict) -> Optional[float]:
+    blob = system_stats.get("disk_usage")
+    if not isinstance(blob, dict):
+        return None
+    raw = blob.get("usage_percent")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def compute_capacity(
@@ -58,11 +71,11 @@ def _compute_health_limit(
     """
     cpu = system_stats.get("cpu_load", 0)
     ram = system_stats.get("ram_usage", 0)
-    disk = system_stats.get("disk_usage", {}).get("usage_percent", 0)
+    disk = _disk_usage_percent(system_stats)
     mount_ok = all(m.get("ok", False) for m in mount_status.values()) if mount_status else True
     adb_all_dead = online_healthy_devices == 0 and total_devices > 0
 
-    if cpu > 90 or ram > 95 or disk > 95 or not mount_ok or adb_all_dead:
+    if cpu > 90 or ram > 95 or disk is None or disk > 95 or not mount_ok or adb_all_dead:
         return 0
     return 10_000  # effectively unlimited — real limit is free device count
 
@@ -82,7 +95,7 @@ def _compute_health(
     reasons: List[str] = []
     cpu = system_stats.get("cpu_load", 0)
     ram = system_stats.get("ram_usage", 0)
-    disk = system_stats.get("disk_usage", {}).get("usage_percent", 0)
+    disk = _disk_usage_percent(system_stats)
     mount_ok = all(m.get("ok", False) for m in mount_status.values()) if mount_status else True
     adb_dead = online_healthy_devices == 0 and total_devices > 0
 
@@ -90,7 +103,9 @@ def _compute_health(
         reasons.append("cpu_high")
     if ram > 95:
         reasons.append("ram_high")
-    if disk > 95:
+    if disk is None:
+        reasons.append("disk_unknown")
+    elif disk > 95:
         reasons.append("disk_high")
     if not mount_ok:
         reasons.append("mount_failed")
@@ -99,7 +114,7 @@ def _compute_health(
     if adb_server_conflict:
         reasons.append("adb_multiple_servers")
 
-    if cpu > 90 or ram > 95 or disk > 95 or not mount_ok or adb_dead:
+    if cpu > 90 or ram > 95 or disk is None or disk > 95 or not mount_ok or adb_dead:
         status = "UNSCHEDULABLE"
     elif reasons:
         status = "DEGRADED"

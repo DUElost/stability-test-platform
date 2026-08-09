@@ -24,18 +24,19 @@ except ImportError:
     from agent.aee.event_dirs import find_event_dir_under_root, is_event_dir_basename
 
 try:
-    from backend.agent.aee.paths import get_aee_nfs_root, resolve_upload_devices_dir
+    from backend.agent.aee.paths import resolve_shared_storage_root, resolve_upload_devices_dir
 except ImportError:
-    def get_aee_nfs_root() -> "Path":
-        import os as _os
-        for k in ("STP_AEE_NFS_ROOT", "STP_WATCHER_NFS_BASE_DIR"):
-            v = (_os.getenv(k) or "").strip()
-            if v:
-                return Path(v)
-        nfs = (_os.getenv("STP_NFS_ROOT") or "").strip()
-        if nfs:
-            return Path(nfs) / "sonic_tinno"
-        return Path("/mnt/hdd/aee_events")
+    import os as _os
+
+    def resolve_shared_storage_root() -> str:
+        primary = (_os.getenv("STP_AEE_NFS_ROOT") or "").strip()
+        if primary:
+            return primary
+        for alias in ("STP_WATCHER_NFS_BASE_DIR", "STP_AEE_CIFS_ROOT"):
+            raw = (_os.getenv(alias) or "").strip()
+            if raw:
+                return raw
+        return ""
 
     from agent.aee.paths import resolve_upload_devices_dir
 
@@ -68,7 +69,7 @@ class UploadManager:
         if self._configured and not force:
             logger.warning("upload_manager_reconfigure_ignored")
             return
-        resolved = nfs_root or str(get_aee_nfs_root())
+        resolved = (nfs_root or resolve_shared_storage_root()).strip()
         self._nfs_root = resolved
         self._configured = bool(self._nfs_root)
         logger.info(
