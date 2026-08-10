@@ -184,13 +184,11 @@ class HddSpillMonitor:
         return spilled
 
     def _ssd_spill_disabled(self) -> bool:
-        ssd_root = (os.getenv("STP_AEE_SSD_FALLBACK_ROOT") or "").strip()
-        if not ssd_root:
-            return False
         try:
-            return Path(ssd_root).resolve() == Path(self._hdd_root).resolve()
-        except OSError:
-            return False
+            from .aee.paths import is_ssd_fallback_root
+        except ImportError:
+            from agent.aee.paths import is_ssd_fallback_root
+        return is_ssd_fallback_root(self._hdd_root)
 
     def _spill_via_event_uploader(self) -> int:
         try:

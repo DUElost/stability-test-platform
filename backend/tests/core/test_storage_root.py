@@ -12,7 +12,10 @@ from backend.core.artifact_paths import (
     resolve_device_event_remote_path,
     resolve_local_artifact_path,
 )
-from backend.core.storage_root import resolve_shared_storage_root as core_resolve
+from backend.core.storage_root import (
+    resolve_legacy_shared_storage_root,
+    resolve_shared_storage_root as core_resolve,
+)
 from backend.agent.aee.paths import resolve_shared_storage_root as agent_resolve
 
 
@@ -81,3 +84,10 @@ def test_resolve_device_event_remote_path_scoped_to_plan_run(monkeypatch, tmp_pa
 
     with pytest.raises(ArtifactPathOutsideRootError):
         resolve_device_event_remote_path(str(foreign), plan_run_id=42)
+
+
+def test_resolve_legacy_shared_storage_root(monkeypatch):
+    monkeypatch.delenv("STP_AEE_NFS_ROOT_LEGACY", raising=False)
+    assert resolve_legacy_shared_storage_root() == ""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT_LEGACY", "/mnt/legacy-nfs")
+    assert resolve_legacy_shared_storage_root() == "/mnt/legacy-nfs"

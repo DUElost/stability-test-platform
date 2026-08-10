@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from backend.models.device_log_event import DeviceLogEvent
@@ -60,3 +60,26 @@ def list_remote_paths_for_extract(db: Session, plan_run_id: int) -> list[str]:
         )
     ).scalars().all()
     return [str(p) for p in rows if p]
+
+
+def mark_events_archived(
+    db: Session,
+    plan_run_id: int,
+    remote_paths: Sequence[str],
+) -> int:
+    """extract 成功后把 REMOTE 事件标为 ARCHIVED。"""
+    paths = [str(p) for p in remote_paths if p]
+    if not paths:
+        return 0
+    now = datetime.now(timezone.utc)
+    result = db.execute(
+        update(DeviceLogEvent)
+        .where(
+            DeviceLogEvent.plan_run_id == plan_run_id,
+            DeviceLogEvent.state == EventState.REMOTE.value,
+            DeviceLogEvent.remote_path.in_(paths),
+        )
+        .values(state=EventState.ARCHIVED.value, updated_at=now)
+    )
+    db.commit()
+    return int(result.rowcount or 0)

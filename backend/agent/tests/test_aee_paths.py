@@ -9,6 +9,7 @@ import pytest
 from backend.agent.aee.paths import (
     get_aee_nfs_root,
     get_or_create_run_date_stamp,
+    is_ssd_fallback_root,
     resolve_artifact_promote_dir,
     resolve_puller_artifact_dir,
     resolve_shared_storage_root,
@@ -131,6 +132,7 @@ def test_resolve_path_under_aee_local_rejects_escape(tmp_path, monkeypatch):
     root = tmp_path / "aee"
     root.mkdir()
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(root))
+    monkeypatch.setattr("backend.agent.aee.paths._is_writable_hdd_root", lambda p: True)
     inside = root / "event"
     inside.mkdir()
     assert resolve_path_under_aee_local(str(inside)) == inside.resolve()
@@ -144,3 +146,11 @@ def test_resolve_shared_storage_root_ignores_stp_nfs_root(monkeypatch):
     assert resolve_shared_storage_root() == ""
     with pytest.raises(RuntimeError, match="STP_AEE_NFS_ROOT is not set"):
         get_aee_nfs_root()
+
+
+def test_is_ssd_fallback_root_matches_env(monkeypatch, tmp_path):
+    ssd = tmp_path / "ssd-aee"
+    ssd.mkdir()
+    monkeypatch.setenv("STP_AEE_SSD_FALLBACK_ROOT", str(ssd))
+    assert is_ssd_fallback_root(ssd) is True
+    assert is_ssd_fallback_root(tmp_path / "other") is False

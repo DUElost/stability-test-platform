@@ -112,6 +112,9 @@ class DeviceLogWatcher:
         aee_reconciler_active: bool = False,
         fencing_token: str = "test:fencing",
         agent_instance_id: str = "test-agent",
+        plan_run_id: Optional[int] = None,
+        api_url: str = "",
+        agent_secret: str = "",
     ) -> None:
         self._adb_path = str(adb_path)
         self._host_id = str(host_id)
@@ -127,6 +130,9 @@ class DeviceLogWatcher:
         self._aee_reconciler_active = bool(aee_reconciler_active)
         self._fencing_token = str(fencing_token)
         self._agent_instance_id = str(agent_instance_id)
+        self._plan_run_id = plan_run_id
+        self._api_url = str(api_url or "")
+        self._agent_secret = str(agent_secret or "")
 
         # SignalEmitter：持久化 → outbox（OutboxDrainer 异步上送）
         self._emitter = SignalEmitter(
@@ -388,7 +394,10 @@ class DeviceLogWatcher:
         ArtifactUploader 仍照常上送。ANR/MOBILELOG 不会走 puller 路径,不受影响。
         """
         if self._should_emit_inotifyd(event):
-            self._safe_emit(event, enrichment=enrichment)
+            seq_no = self._safe_emit(event, enrichment=enrichment)
+            self._maybe_register_device_log_event(event, enrichment, seq_no=seq_no)
+        else:
+            self._maybe_register_device_log_event(event, enrichment, seq_no=None)
         self._maybe_submit_artifact(event, enrichment)
 
     def _maybe_submit_artifact(
@@ -448,15 +457,16 @@ class DeviceLogWatcher:
         event: WatcherEvent,
         *,
         enrichment: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> Optional[int]:
         """统一 emit 出口：吞 ContractViolation 不打断后续；其它异常上冒。
 
         enrichment 可选；若提供则透传 artifact_uri / sha256 / size_bytes / first_lines。
+        返回分配的 seq_no；契约违规时返回 None。
         """
         enrichment = enrichment or {}
         is_aee = event.category in ("AEE", "VENDOR_AEE")
         try:
-            self._emitter.emit(
+            seq_no = self._emitter.emit(
                 category=event.category,
                 source="inotifyd",
                 path_on_device=event.full_path,
@@ -471,18 +481,138 @@ class DeviceLogWatcher:
                     "device_log_watcher_emit_fallback serial=%s job=%d cat=%s file=%s",
                     self._serial, self._job_id, event.category, event.filename,
                 )
+            return seq_no
         except ContractViolation as exc:
             self._extra_dropped += 1
             logger.warning(
                 "device_log_watcher_contract_violation serial=%s job=%d cat=%s file=%s err=%s",
                 self._serial, self._job_id, event.category, event.filename, exc,
             )
+            return None
         except Exception:
             self._extra_dropped += 1
             logger.exception(
                 "device_log_watcher_emit_failed serial=%s job=%d cat=%s file=%s",
                 self._serial, self._job_id, event.category, event.filename,
             )
+            return None
+
+    def _maybe_register_device_log_event(
+        self,
+        event: WatcherEvent,
+        enrichment: Dict[str, Any],
+        *,
+        seq_no: Optional[int],
+    ) -> None:
+        """inotifyd 路径：reconciler 未接管时注册 DeviceLogEvent（ADR-0028）。"""
+        if not self._should_emit_inotifyd(event):
+            return
+        if event.category not in ("AEE", "VENDOR_AEE"):
+            return
+        try:
+            from ..aee.device_log_event_client import DeviceLogEventClient
+            from ..aee.paths import PathOutsideRootError, resolve_path_under_aee_local
+            from ..device_platform import detect_device_platform
+        except ImportError:
+            from agent.aee.device_log_event_client import DeviceLogEventClient
+            from agent.aee.paths import PathOutsideRootError, resolve_path_under_aee_local
+            from agent.device_platform import detect_device_platform
+
+        client = DeviceLogEventClient.from_env(
+            api_url=self._api_url,
+            agent_secret=self._agent_secret,
+            host_id=self._host_id,
+        )
+        if client is None:
+            return
+
+        artifact_uri = enrichment.get("artifact_uri")
+        detected_at = event.detected_at
+        platform = detect_device_platform(self._adb_path, self._serial)
+
+        if not artifact_uri:
+            if seq_no is None:
+                return
+            event_id = client.create_pull_failed_event(
+                serial=self._serial,
+                platform=platform,
+                event_type=event.category,
+                event_subtype=None,
+                detected_at=detected_at,
+                device_timestamp=None,
+                plan_run_id=self._plan_run_id,
+                job_id=self._job_id,
+                link_signal_seq_no=seq_no,
+            )
+            if not event_id:
+                logger.info(
+                    "device_log_watcher_pull_failed_fallback_signal_only serial=%s job=%d",
+                    self._serial, self._job_id,
+                )
+            return
+
+        try:
+            local_path = resolve_path_under_aee_local(str(artifact_uri))
+        except PathOutsideRootError:
+            return
+        if not local_path.is_dir():
+            return
+
+        meta_event_type = event.category
+        subtype = None
+        try:
+            from ..aee.collector import get_collector_for_platform
+        except ImportError:
+            from agent.aee.collector import get_collector_for_platform
+        collector = get_collector_for_platform(platform)
+        if collector is not None:
+            try:
+                meta = collector.parse_metadata(local_path)
+                meta_event_type = meta.event_type or meta_event_type
+                subtype = meta.event_subtype
+            except Exception:
+                logger.debug(
+                    "device_log_watcher_collector_metadata_fallback serial=%s",
+                    self._serial,
+                    exc_info=True,
+                )
+
+        event_id = client.create_local_event(
+            serial=self._serial,
+            platform=platform,
+            event_type=meta_event_type,
+            event_subtype=subtype,
+            detected_at=detected_at,
+            device_timestamp=None,
+            local_path=local_path,
+            plan_run_id=self._plan_run_id,
+            job_id=self._job_id,
+            link_signal_seq_no=seq_no,
+            size_bytes=client.dir_size_bytes(local_path),
+        )
+        if not event_id:
+            logger.info(
+                "device_log_watcher_device_log_event_fallback_signal_only serial=%s job=%d",
+                self._serial, self._job_id,
+            )
+            return
+
+        try:
+            from ..event_uploader import EventUploader
+        except ImportError:
+            from agent.event_uploader import EventUploader
+        if EventUploader.is_enabled():
+            EventUploader.instance().enqueue_local_event(event={
+                "id": event_id,
+                "local_path": str(local_path),
+                "serial": self._serial,
+                "platform": platform,
+                "event_type": meta_event_type,
+                "detected_at": detected_at.isoformat(),
+                "plan_run_id": self._plan_run_id,
+                "job_id": self._job_id,
+                "host_id": self._host_id,
+            })
 
     def _build_subscribed_paths(self) -> Dict[str, List[str]]:
         """根据 probe_result 过滤出可订阅的分类 → 路径列表。

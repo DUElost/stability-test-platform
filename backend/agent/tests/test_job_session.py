@@ -75,10 +75,11 @@ class _FakeManager:
         log_dir: str,
         policy: WatcherPolicy,
         fencing_token: str = "",
+        plan_run_id: Optional[int] = None,
     ) -> WatcherHandle:
         self.started.append({
             "host_id": host_id, "serial": serial, "job_id": job_id,
-            "log_dir": log_dir,
+            "log_dir": log_dir, "plan_run_id": plan_run_id,
         })
         if self.mode == "fail_unavail":
             raise WatcherStartError("probe failed all categories", code="probe_failed")

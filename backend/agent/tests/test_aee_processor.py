@@ -733,10 +733,30 @@ def test_get_aee_local_root_default_is_hdd(monkeypatch):
     from backend.agent.aee.paths import get_aee_local_root
 
     monkeypatch.delenv("STP_AEE_LOCAL_ROOT", raising=False)
+    monkeypatch.delenv("STP_AEE_SSD_FALLBACK_ROOT", raising=False)
     monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
     monkeypatch.delenv("STP_WATCHER_NFS_BASE_DIR", raising=False)
     monkeypatch.delenv("STP_NFS_ROOT", raising=False)
+    monkeypatch.setattr(
+        "backend.agent.aee.paths._default_ssd_fallback_root",
+        lambda: Path("/unwritable/ssd-fallback"),
+    )
+    monkeypatch.setattr(
+        "backend.agent.aee.paths._is_writable_hdd_root",
+        lambda p: str(p) == "/mnt/hdd/aee_events",
+    )
     assert get_aee_local_root() == Path("/mnt/hdd/aee_events")
+
+
+def test_get_aee_local_root_ssd_fallback_when_hdd_unusable(monkeypatch, tmp_path):
+    from backend.agent.aee.paths import get_aee_local_root
+
+    monkeypatch.delenv("STP_AEE_LOCAL_ROOT", raising=False)
+    ssd = tmp_path / "ssd-aee"
+    ssd.mkdir()
+    monkeypatch.setenv("STP_AEE_SSD_FALLBACK_ROOT", str(ssd))
+    monkeypatch.setattr("backend.agent.aee.paths._is_writable_hdd_root", lambda _p: False)
+    assert get_aee_local_root() == ssd
 
 
 def test_get_aee_local_root_ignores_central_storage_keys(monkeypatch):
@@ -744,10 +764,19 @@ def test_get_aee_local_root_ignores_central_storage_keys(monkeypatch):
     from backend.agent.aee.paths import get_aee_local_root
 
     monkeypatch.delenv("STP_AEE_LOCAL_ROOT", raising=False)
+    monkeypatch.delenv("STP_AEE_SSD_FALLBACK_ROOT", raising=False)
     monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/stp-aee")
     monkeypatch.setenv("STP_WATCHER_NFS_BASE_DIR", "/mnt/watcher")
     monkeypatch.setenv("STP_AEE_CIFS_ROOT", "/mnt/cifs")
     monkeypatch.setenv("STP_NFS_ROOT", "/mnt/storage")
+    monkeypatch.setattr(
+        "backend.agent.aee.paths._default_ssd_fallback_root",
+        lambda: Path("/unwritable/ssd-fallback"),
+    )
+    monkeypatch.setattr(
+        "backend.agent.aee.paths._is_writable_hdd_root",
+        lambda p: str(p) == "/mnt/hdd/aee_events",
+    )
     assert get_aee_local_root() == Path("/mnt/hdd/aee_events")
 
 

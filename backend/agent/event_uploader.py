@@ -10,6 +10,7 @@ import hashlib
 import logging
 import os
 import queue
+import shutil
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -216,6 +217,7 @@ class EventUploader:
             remote_path = str(dst)
             checksum = self._dir_sha256(dst)
             self._patch_state(job, state="REMOTE", remote_path=remote_path, checksum=checksum)
+            self._maybe_prune_local(job, remote_path=remote_path)
             return
 
         self._patch_state(job, state="UPLOADING")
@@ -223,6 +225,7 @@ class EventUploader:
             UploadManager._copytree_safe(str(src), str(dst))
             checksum = self._dir_sha256(dst)
             self._patch_state(job, state="REMOTE", remote_path=str(dst), checksum=checksum)
+            self._maybe_prune_local(job, remote_path=str(dst))
             logger.info("event_uploader_ok event_id=%s dest=%s", job.event_id, dst)
         except Exception:
             logger.exception("event_uploader_failed event_id=%s attempt=%d", job.event_id, job.attempt)
@@ -269,6 +272,47 @@ class EventUploader:
                 )
         except Exception:
             logger.exception("event_uploader_patch_error event_id=%s", job.event_id)
+
+    def _maybe_prune_local(self, job: _UploadJob, *, remote_path: str) -> None:
+        """上送成功后可选删除本地目录并回写 PRUNED（``STP_EVENT_UPLOADER_PRUNE_LOCAL=1``）。"""
+        if os.getenv("STP_EVENT_UPLOADER_PRUNE_LOCAL", "0").strip().lower() not in (
+            "1", "true", "yes",
+        ):
+            return
+        try:
+            src = resolve_path_under_aee_local(job.local_path)
+        except PathOutsideRootError:
+            return
+        if not src.exists():
+            return
+        try:
+            shutil.rmtree(src)
+        except Exception:
+            logger.exception("event_uploader_prune_failed event_id=%s path=%s", job.event_id, src)
+            return
+        try:
+            from .aee.device_log_event_client import DeviceLogEventClient
+        except ImportError:
+            from agent.aee.device_log_event_client import DeviceLogEventClient
+        client = DeviceLogEventClient.from_env(
+            api_url=self._api_url,
+            agent_secret=self._agent_secret,
+            host_id=self._host_id,
+        )
+        if client is None:
+            return
+        client.patch_event_state(
+            event_id=job.event_id,
+            state="PRUNED",
+            serial=job.serial,
+            platform=job.platform,
+            event_type=job.event_type,
+            detected_at=job.detected_at,
+            local_path=job.local_path,
+            plan_run_id=job.plan_run_id,
+            job_id=job.job_id,
+            remote_path=remote_path,
+        )
 
     def _recover_pending(self) -> None:
         if not self._configured:

@@ -27,6 +27,7 @@ def test_enqueue_skipped_when_disabled():
 def test_upload_one_marks_remote(tmp_path, monkeypatch):
     monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "1")
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._is_writable_hdd_root", lambda p: True)
     src = tmp_path / "event_dir"
     src.mkdir()
     (src / "a.txt").write_text("hello", encoding="utf-8")
@@ -74,6 +75,7 @@ def test_upload_one_marks_remote(tmp_path, monkeypatch):
 def test_upload_one_rejects_path_outside_local_root(tmp_path, monkeypatch):
     monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "1")
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path / "aee"))
+    monkeypatch.setattr("backend.agent.aee.paths._is_writable_hdd_root", lambda p: True)
     (tmp_path / "aee").mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
