@@ -100,17 +100,6 @@ def _is_writable_hdd_root(path: Path) -> bool:
     return True
 
 
-def _is_writable_local_root(path: Path) -> bool:
-    """显式 ``STP_AEE_LOCAL_ROOT``：只要求可写（测试/特殊部署可落在 tmpfs）。"""
-    try:
-        resolved = path.resolve(strict=False)
-    except OSError:
-        return False
-    if not resolved.exists():
-        return False
-    return os.access(resolved, os.W_OK)
-
-
 _ssd_fallback_logged = False
 
 
@@ -128,7 +117,7 @@ def get_aee_local_root() -> Path:
     configured = (os.getenv("STP_AEE_LOCAL_ROOT") or "").strip()
     if configured:
         candidate = Path(configured)
-        if _is_writable_local_root(candidate):
+        if _is_writable_hdd_root(candidate):
             return candidate
         logger.warning("aee_local_root_unusable path=%s", configured)
 
@@ -147,7 +136,7 @@ def get_aee_local_root() -> Path:
     default_hdd = Path(_AEE_LOCAL_ROOT_DEFAULT)
     if _is_writable_hdd_root(default_hdd):
         return default_hdd
-    return ssd
+    return default_hdd
 
 
 def is_ssd_fallback_root(path: Path | str) -> bool:

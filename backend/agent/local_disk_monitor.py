@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import shutil
 import threading
 from pathlib import Path

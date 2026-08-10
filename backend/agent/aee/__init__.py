@@ -17,6 +17,7 @@ __all__ = [
     "process_device_logs",
     "get_aee_nfs_root",
     "get_aee_local_root",
+    "is_ssd_fallback_root",
     "resolve_device_output_dir",
     "resolve_shared_storage_root",
 ]

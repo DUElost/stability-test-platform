@@ -793,14 +793,6 @@ class AeeDbHistoryReconciler:
                 event_subtype=event_subtype,
                 aee_ts_utc=aee_ts_utc,
             )
-            if not output_subdir and self._device_log_client is not None:
-                self._register_pull_failed_device_log_event(
-                    detected_at=detected_at,
-                    event_type=event_type,
-                    event_subtype=event_subtype,
-                    aee_ts_utc=aee_ts_utc,
-                    seq_no=seq_no,
-                )
             logger.debug(
                 "aee_reconciler_emit serial=%s job=%d cat=%s pkg=%s subtype=%s",
                 self._serial, self._job_id, category,
@@ -834,10 +826,15 @@ class AeeDbHistoryReconciler:
         if self._device_log_client is None:
             return
         output_subdir = payload.get("output_subdir")
-        if not output_subdir:
-            return
-        local_path = Path(str(output_subdir))
-        if not local_path.is_dir():
+        local_path = Path(str(output_subdir)) if output_subdir else None
+        if local_path is None or not local_path.is_dir():
+            self._register_pull_failed_device_log_event(
+                detected_at=detected_at,
+                event_type=event_type,
+                event_subtype=event_subtype,
+                aee_ts_utc=aee_ts_utc,
+                seq_no=seq_no,
+            )
             return
 
         subtype = event_subtype

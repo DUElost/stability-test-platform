@@ -21,6 +21,7 @@ import requests
 try:
     from backend.agent.aee.paths import (
         PathOutsideRootError,
+        get_aee_local_root,
         get_aee_nfs_root,
         resolve_path_under_aee_local,
         resolve_upload_devices_dir,
@@ -29,6 +30,7 @@ try:
 except ImportError:
     from agent.aee.paths import (
         PathOutsideRootError,
+        get_aee_local_root,
         get_aee_nfs_root,
         resolve_path_under_aee_local,
         resolve_upload_devices_dir,
@@ -215,10 +217,20 @@ class EventUploader:
 
         if dst.exists():
             remote_path = str(dst)
-            checksum = self._dir_sha256(dst)
-            self._patch_state(job, state="REMOTE", remote_path=remote_path, checksum=checksum)
-            self._maybe_prune_local(job, remote_path=remote_path)
-            return
+            dst_checksum = self._dir_sha256(dst)
+            src_checksum = self._dir_sha256(src)
+            if dst_checksum != src_checksum:
+                logger.warning(
+                    "event_uploader_remote_mismatch event_id=%s dest=%s — re-uploading",
+                    job.event_id, dst,
+                )
+                shutil.rmtree(dst, ignore_errors=True)
+            else:
+                self._patch_state(
+                    job, state="REMOTE", remote_path=remote_path, checksum=dst_checksum,
+                )
+                self._maybe_prune_local(job, remote_path=remote_path)
+                return
 
         self._patch_state(job, state="UPLOADING")
         try:
@@ -283,12 +295,14 @@ class EventUploader:
             src = resolve_path_under_aee_local(job.local_path)
         except PathOutsideRootError:
             return
-        if not src.exists():
+        local_root = get_aee_local_root().resolve(strict=False)
+        if not src.is_dir() or src == local_root:
+            logger.warning(
+                "event_uploader_prune_refused event_id=%s path=%s",
+                job.event_id, src,
+            )
             return
-        try:
-            shutil.rmtree(src)
-        except Exception:
-            logger.exception("event_uploader_prune_failed event_id=%s path=%s", job.event_id, src)
+        if not src.exists():
             return
         try:
             from .aee.device_log_event_client import DeviceLogEventClient
@@ -301,7 +315,7 @@ class EventUploader:
         )
         if client is None:
             return
-        client.patch_event_state(
+        if not client.patch_event_state(
             event_id=job.event_id,
             state="PRUNED",
             serial=job.serial,
@@ -312,7 +326,12 @@ class EventUploader:
             plan_run_id=job.plan_run_id,
             job_id=job.job_id,
             remote_path=remote_path,
-        )
+        ):
+            return
+        try:
+            shutil.rmtree(src)
+        except Exception:
+            logger.exception("event_uploader_prune_failed event_id=%s path=%s", job.event_id, src)
 
     def _recover_pending(self) -> None:
         if not self._configured:

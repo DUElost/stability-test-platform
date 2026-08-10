@@ -25,6 +25,12 @@ from backend.agent.aee.paths import resolve_device_output_dir
 from backend.agent.aee.timestamp import format_timestamp_for_filename, parse_timestamp
 
 
+@pytest.fixture(autouse=True)
+def _aee_local_root_non_tmpfs(monkeypatch):
+    """tmp_path 常在 tmpfs 上；显式 STP_AEE_LOCAL_ROOT 测试需绕过挂载类型探测。"""
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+
+
 class _MemStore:
     def __init__(self) -> None:
         self._data: dict[str, str] = {}

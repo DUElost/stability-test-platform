@@ -132,7 +132,7 @@ def test_resolve_path_under_aee_local_rejects_escape(tmp_path, monkeypatch):
     root = tmp_path / "aee"
     root.mkdir()
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(root))
-    monkeypatch.setattr("backend.agent.aee.paths._is_writable_hdd_root", lambda p: True)
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
     inside = root / "event"
     inside.mkdir()
     assert resolve_path_under_aee_local(str(inside)) == inside.resolve()

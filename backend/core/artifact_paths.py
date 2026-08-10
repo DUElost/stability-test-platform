@@ -124,6 +124,44 @@ def copytree_under_root(src: Path, dest: Path, *, root: Path) -> None:
     shutil.copytree(str(resolved), str(dest))
 
 
+def resolve_extract_event_src(
+    raw: str,
+    *,
+    nfs_root: str,
+    legacy_root: str,
+    plan_run_id: int,
+) -> tuple[Path, Path] | None:
+    """Locate an event directory on primary or legacy storage (D8).
+
+    Returns ``(src, devices_scope_root)`` when a validated directory exists.
+    """
+    from backend.core.storage_root import resolve_legacy_shared_storage_root
+
+    _reject_path_traversal(raw)
+    rel_name = Path(raw).name
+    if not rel_name or rel_name in (".", ".."):
+        return None
+
+    legacy = legacy_root or resolve_legacy_shared_storage_root()
+    roots = [nfs_root]
+    if legacy and legacy != nfs_root:
+        roots.append(legacy)
+
+    for root in roots:
+        if not root:
+            continue
+        devices_root = (Path(root) / "devices" / str(int(plan_run_id))).resolve(strict=False)
+        try:
+            candidate = (devices_root / rel_name).resolve(strict=False)
+        except OSError:
+            continue
+        if not candidate.is_relative_to(devices_root):
+            continue
+        if candidate.is_dir():
+            return candidate, devices_root
+    return None
+
+
 def _coerce_local_path(raw: str) -> Path:
     _reject_path_traversal(raw)
     if _WINDOWS_DRIVE_PATH_RE.match(raw) or raw.startswith("\\\\"):

@@ -91,3 +91,26 @@ def test_resolve_legacy_shared_storage_root(monkeypatch):
     assert resolve_legacy_shared_storage_root() == ""
     monkeypatch.setenv("STP_AEE_NFS_ROOT_LEGACY", "/mnt/legacy-nfs")
     assert resolve_legacy_shared_storage_root() == "/mnt/legacy-nfs"
+
+
+def test_resolve_extract_event_src_legacy_root(monkeypatch, tmp_path):
+    primary = tmp_path / "primary"
+    legacy = tmp_path / "legacy"
+    event_name = "ke_event_001"
+    legacy_src = legacy / "devices" / "42" / event_name
+    legacy_src.mkdir(parents=True)
+    (legacy_src / "a.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT_LEGACY", str(legacy))
+
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    located = resolve_extract_event_src(
+        f"/old/mount/devices/42/{event_name}",
+        nfs_root=str(primary),
+        legacy_root=str(legacy),
+        plan_run_id=42,
+    )
+    assert located is not None
+    src, devices_root = located
+    assert src == legacy_src.resolve()
+    assert devices_root == (legacy / "devices" / "42").resolve()

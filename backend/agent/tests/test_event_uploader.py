@@ -27,7 +27,7 @@ def test_enqueue_skipped_when_disabled():
 def test_upload_one_marks_remote(tmp_path, monkeypatch):
     monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "1")
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
-    monkeypatch.setattr("backend.agent.aee.paths._is_writable_hdd_root", lambda p: True)
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
     src = tmp_path / "event_dir"
     src.mkdir()
     (src / "a.txt").write_text("hello", encoding="utf-8")
@@ -75,7 +75,7 @@ def test_upload_one_marks_remote(tmp_path, monkeypatch):
 def test_upload_one_rejects_path_outside_local_root(tmp_path, monkeypatch):
     monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "1")
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path / "aee"))
-    monkeypatch.setattr("backend.agent.aee.paths._is_writable_hdd_root", lambda p: True)
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
     (tmp_path / "aee").mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -100,3 +100,70 @@ def test_upload_one_rejects_path_outside_local_root(tmp_path, monkeypatch):
             host_id="host-1",
         ))
     mock_post.assert_not_called()
+
+
+def test_prune_local_skipped_when_flag_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "1")
+    monkeypatch.delenv("STP_EVENT_UPLOADER_PRUNE_LOCAL", raising=False)
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    src = tmp_path / "event_dir"
+    src.mkdir()
+    up = EventUploader.instance()
+    up.configure(api_url="http://x", agent_secret="s", host_id="h1", nfs_root=str(tmp_path / "nfs"))
+    job = _UploadJob(
+        event_id="e1", local_path=str(src), plan_run_id=1, serial="d", platform="MTK",
+        event_type="KE", detected_at="2026-08-09T10:00:00+00:00", host_id="h1",
+    )
+    with patch("backend.agent.event_uploader.shutil.rmtree") as mock_rm:
+        up._maybe_prune_local(job, remote_path="/nfs/devices/1/event_dir")
+    mock_rm.assert_not_called()
+    assert src.is_dir()
+
+
+def test_prune_local_deletes_and_patches_pruned(tmp_path, monkeypatch):
+    monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "1")
+    monkeypatch.setenv("STP_EVENT_UPLOADER_PRUNE_LOCAL", "1")
+    monkeypatch.setenv("STP_DEVICE_LOG_EVENT_ENABLED", "1")
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    src = tmp_path / "event_dir"
+    src.mkdir()
+    up = EventUploader.instance()
+    up.configure(api_url="http://127.0.0.1:8000", agent_secret="secret", host_id="h1", nfs_root=str(tmp_path / "nfs"))
+    posted = []
+
+    def fake_post(url, **kwargs):
+        posted.append(kwargs.get("json"))
+        resp = MagicMock()
+        resp.status_code = 200
+        return resp
+
+    job = _UploadJob(
+        event_id="e1", local_path=str(src), plan_run_id=1, serial="d", platform="MTK",
+        event_type="KE", detected_at="2026-08-09T10:00:00+00:00", host_id="h1",
+    )
+    with patch("backend.agent.event_uploader.requests.post", side_effect=fake_post):
+        up._maybe_prune_local(job, remote_path="/nfs/devices/1/event_dir")
+    assert not src.exists()
+    assert posted[-1]["events"][0]["state"] == "PRUNED"
+
+
+def test_prune_local_refuses_aee_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("STP_EVENT_UPLOADER_PRUNE_LOCAL", "1")
+    monkeypatch.setenv("STP_DEVICE_LOG_EVENT_ENABLED", "1")
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    up = EventUploader.instance()
+    up.configure(api_url="http://127.0.0.1:8000", agent_secret="secret", host_id="h1", nfs_root=str(tmp_path / "nfs"))
+    job = _UploadJob(
+        event_id="e1", local_path=str(tmp_path), plan_run_id=1, serial="d", platform="MTK",
+        event_type="KE", detected_at="2026-08-09T10:00:00+00:00", host_id="h1",
+    )
+    with patch("backend.agent.event_uploader.shutil.rmtree") as mock_rm, patch(
+        "backend.agent.event_uploader.requests.post",
+    ) as mock_post:
+        up._maybe_prune_local(job, remote_path="/nfs/devices/1/x")
+    mock_rm.assert_not_called()
+    mock_post.assert_not_called()
+    assert tmp_path.is_dir()

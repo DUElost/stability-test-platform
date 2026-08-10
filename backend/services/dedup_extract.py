@@ -29,27 +29,6 @@ def _storage_roots_for_extract(primary: str, legacy: str) -> list[str]:
     return roots
 
 
-def _resolve_existing_remote_dir(
-    src: Path,
-    *,
-    nfs_root: str,
-    legacy_root: str,
-    plan_run_id: int,
-) -> Path | None:
-    """Return *src* if present; else try the same relative path under legacy root (D8)."""
-    if src.is_dir():
-        return src
-    if not legacy_root:
-        return None
-    devices_base = Path(nfs_root) / "devices" / str(plan_run_id)
-    try:
-        rel = src.relative_to(devices_base)
-    except ValueError:
-        return None
-    alt = (Path(legacy_root) / "devices" / str(plan_run_id) / rel).resolve(strict=False)
-    return alt if alt.is_dir() else None
-
-
 def parse_event_dir_names_from_xls(
     xls_path: Path,
     *,
@@ -220,107 +199,111 @@ def run_extract_sync(plan_run_id: int) -> int:
             mark_events_archived,
         )
 
-        remote_path_rows: list[tuple[str, Path]] = []
+        remote_path_rows: list[tuple[str, Path, Path]] = []
         if continuous_event_upload_enabled():
-            from backend.core.artifact_paths import ArtifactPathError, resolve_device_event_remote_path
+            from backend.core.artifact_paths import (
+                ArtifactPathError,
+                resolve_extract_event_src,
+            )
 
             for raw in list_remote_paths_for_extract(db, plan_run_id):
-                try:
-                    resolved = resolve_device_event_remote_path(
-                        raw,
-                        plan_run_id=plan_run_id,
-                        must_exist=False,
-                    )
-                except ArtifactPathError:
-                    logger.warning(
-                        "dedup_extract_skip_unsafe_remote plan_run=%d path=%s",
-                        plan_run_id, raw,
-                    )
-                    continue
-                src = _resolve_existing_remote_dir(
-                    resolved,
+                located = resolve_extract_event_src(
+                    raw,
                     nfs_root=nfs_root,
                     legacy_root=legacy_root,
                     plan_run_id=plan_run_id,
                 )
-                if src is not None:
-                    remote_path_rows.append((raw, src))
+                if located is None:
+                    logger.debug(
+                        "dedup_extract_skip_missing_remote plan_run=%d path=%s",
+                        plan_run_id, raw,
+                    )
+                    continue
+                src, devices_root = located
+                remote_path_rows.append((raw, src, devices_root))
 
         jira_dir = Path(nfs_root) / "jira" / str(plan_run_id)
         jira_dir.mkdir(parents=True, exist_ok=True)
 
         extracted = 0
         archived_remote_paths: list[str] = []
-        if remote_path_rows:
-            from backend.core.artifact_paths import copytree_validated_event_dir
+        extracted_dest_names: set[str] = set()
+        from backend.core.artifact_paths import ArtifactPathError, copytree_under_root
 
-            for raw, src in remote_path_rows:
-                dest = jira_dir / src.name
-                if dest.exists():
-                    continue
-                try:
-                    copytree_validated_event_dir(src, dest, plan_run_id=plan_run_id)
-                    extracted += 1
-                    archived_remote_paths.append(raw)
-                except ArtifactPathError:
-                    logger.warning(
-                        "dedup_extract_skip_unsafe_remote plan_run=%d path=%s",
-                        plan_run_id, raw,
-                    )
-                except Exception:
-                    logger.exception(
-                        "dedup_extract_remote_dir_failed plan_run=%d dir=%s",
-                        plan_run_id, src,
-                    )
-        else:
-            from backend.core.artifact_paths import ArtifactPathError, copytree_under_root
+        for raw, src, devices_root in remote_path_rows:
+            dest_name = src.name
+            if dest_name in extracted_dest_names:
+                continue
+            dest = jira_dir / dest_name
+            if dest.exists():
+                extracted_dest_names.add(dest_name)
+                continue
+            try:
+                copytree_under_root(src, dest, root=devices_root)
+                extracted += 1
+                extracted_dest_names.add(dest_name)
+                archived_remote_paths.append(raw)
+            except ArtifactPathError:
+                logger.warning(
+                    "dedup_extract_skip_unsafe_remote plan_run=%d path=%s",
+                    plan_run_id, raw,
+                )
+            except Exception:
+                logger.exception(
+                    "dedup_extract_remote_dir_failed plan_run=%d dir=%s",
+                    plan_run_id, src,
+                )
 
-            for name in sorted(target_names):
-                if not name or ".." in name or name.startswith(("/", "\\")):
-                    logger.warning(
-                        "dedup_extract_skip_unsafe_name plan_run=%d name=%r",
-                        plan_run_id, name,
-                    )
-                    continue
-                src = None
-                devices_root = None
-                for root in _storage_roots_for_extract(nfs_root, legacy_root):
-                    devices_dir = Path(root) / "devices" / str(plan_run_id)
-                    try:
-                        devices_root = devices_dir.resolve(strict=False)
-                        candidate = (devices_dir / name).resolve(strict=False)
-                    except OSError:
-                        continue
-                    if not candidate.is_relative_to(devices_root):
-                        logger.warning(
-                            "dedup_extract_skip_outside_devices plan_run=%d path=%s",
-                            plan_run_id, candidate,
-                        )
-                        continue
-                    if candidate.is_dir():
-                        src = candidate
-                        break
-                if src is None:
-                    logger.debug(
-                        "dedup_extract_skip_missing plan_run=%d name=%s", plan_run_id, name,
-                    )
-                    continue
-                dest = jira_dir / name
-                if dest.exists():
-                    continue
+        for name in sorted(target_names):
+            if name in extracted_dest_names:
+                continue
+            if not name or ".." in name or name.startswith(("/", "\\")):
+                logger.warning(
+                    "dedup_extract_skip_unsafe_name plan_run=%d name=%r",
+                    plan_run_id, name,
+                )
+                continue
+            src = None
+            devices_root = None
+            for root in _storage_roots_for_extract(nfs_root, legacy_root):
+                devices_dir = Path(root) / "devices" / str(plan_run_id)
                 try:
-                    copytree_under_root(src, dest, root=devices_root)
-                    extracted += 1
-                except ArtifactPathError:
+                    devices_root = devices_dir.resolve(strict=False)
+                    candidate = (devices_dir / name).resolve(strict=False)
+                except OSError:
+                    continue
+                if not candidate.is_relative_to(devices_root):
                     logger.warning(
                         "dedup_extract_skip_outside_devices plan_run=%d path=%s",
-                        plan_run_id, src,
+                        plan_run_id, candidate,
                     )
-                except Exception:
-                    logger.exception(
-                        "dedup_extract_event_dir_failed plan_run=%d dir=%s",
-                        plan_run_id, src,
-                    )
+                    continue
+                if candidate.is_dir():
+                    src = candidate
+                    break
+            if src is None:
+                logger.debug(
+                    "dedup_extract_skip_missing plan_run=%d name=%s", plan_run_id, name,
+                )
+                continue
+            dest = jira_dir / name
+            if dest.exists():
+                extracted_dest_names.add(name)
+                continue
+            try:
+                copytree_under_root(src, dest, root=devices_root)
+                extracted += 1
+                extracted_dest_names.add(name)
+            except ArtifactPathError:
+                logger.warning(
+                    "dedup_extract_skip_outside_devices plan_run=%d path=%s",
+                    plan_run_id, src,
+                )
+            except Exception:
+                logger.exception(
+                    "dedup_extract_event_dir_failed plan_run=%d dir=%s",
+                    plan_run_id, src,
+                )
 
         if archived_remote_paths:
             mark_events_archived(db, plan_run_id, archived_remote_paths)

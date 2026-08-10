@@ -396,8 +396,6 @@ class DeviceLogWatcher:
         if self._should_emit_inotifyd(event):
             seq_no = self._safe_emit(event, enrichment=enrichment)
             self._maybe_register_device_log_event(event, enrichment, seq_no=seq_no)
-        else:
-            self._maybe_register_device_log_event(event, enrichment, seq_no=None)
         self._maybe_submit_artifact(event, enrichment)
 
     def _maybe_submit_artifact(
@@ -458,10 +456,7 @@ class DeviceLogWatcher:
         *,
         enrichment: Optional[Dict[str, Any]] = None,
     ) -> Optional[int]:
-        """统一 emit 出口：吞 ContractViolation 不打断后续；其它异常上冒。
-
-        enrichment 可选；若提供则透传 artifact_uri / sha256 / size_bytes / first_lines。
-        返回分配的 seq_no；契约违规时返回 None。
+        """统一 emit 出口：吞 ContractViolation 与其它异常，返回 seq_no 或 None。
         """
         enrichment = enrichment or {}
         is_aee = event.category in ("AEE", "VENDOR_AEE")

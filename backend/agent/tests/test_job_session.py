@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -192,6 +192,42 @@ def test_enter_starts_watcher_and_records_summary(lock_tracker, patch_manager):
     assert 101 not in lock_tracker.active_jobs
     assert 42 not in lock_tracker.active_devices
     assert "wch-101" in fake.stopped
+
+
+def test_job_session_passes_plan_run_id_to_manager(lock_tracker, patch_manager):
+    fake = patch_manager(_FakeManager(mode="ok", capability="stub"))
+    payload = _make_payload()
+    payload["plan_run_id"] = 77
+
+    session = JobSession(
+        job_payload=payload,
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
+    )
+    session.__enter__()
+    session.__exit__(None, None, None)
+
+    assert fake.started[0]["plan_run_id"] == 77
+
+
+def test_job_session_invalid_plan_run_id_passes_none(lock_tracker, patch_manager):
+    fake = patch_manager(_FakeManager(mode="ok", capability="stub"))
+    payload = _make_payload()
+    payload["plan_run_id"] = "not-a-number"
+
+    session = JobSession(
+        job_payload=payload,
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
+    )
+    session.__enter__()
+    session.__exit__(None, None, None)
+
+    assert fake.started[0]["plan_run_id"] is None
 
 
 def test_enter_watcher_fail_with_degraded_continues(lock_tracker, patch_manager):
@@ -424,6 +460,7 @@ def test_reconciler_uses_get_aee_local_root(lock_tracker, patch_manager, monkeyp
     hdd = tmp_path / "hdd"
     hdd.mkdir()
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(hdd))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
 
     class _FakeImpl:
         def __init__(self):
