@@ -22,7 +22,7 @@ class TestDashboardSummary:
             "degraded": 0,
             "avg_cpu_load": 0.0,
             "avg_ram_usage": 0.0,
-            "avg_disk_usage": 0.0,
+            "avg_disk_usage": None,
             "online_rate": 0.0,
         }
         assert data["devices"] == {
@@ -84,6 +84,8 @@ class TestDashboardSummary:
         assert data["hosts"]["total"] == 1
         assert data["hosts"]["online"] == 1
         assert data["hosts"]["avg_cpu_load"] == 12.5
+        assert data["hosts"]["avg_disk_usage"] == 77.7
+        assert data["host_resources"][0]["disk_usage"] == 77.7
         assert data["devices"]["total"] == 3
         assert data["devices"]["idle"] == 1
         assert data["devices"]["testing"] == 1
@@ -92,6 +94,29 @@ class TestDashboardSummary:
         assert data["devices"]["high_temp"] == 2
         assert data["alerts"]["total"] == 4
         assert data["host_resources"][0]["ip"] == "172.21.15.100"
+
+    def test_dashboard_summary_unknown_disk_avg_is_null(
+        self, client, auth_headers, db_session, sample_host,
+    ):
+        """全员磁盘未知时 avg_disk_usage 为 null，不得回退成 0.0。"""
+        sample_host.status = HostStatus.ONLINE.value
+        sample_host.last_heartbeat = datetime.now(timezone.utc)
+        sample_host.extra = {
+            "cpu_load": 12.5,
+            "ram_usage": 48.0,
+            "disk_usage": {"usage_percent": None},
+        }
+        db_session.commit()
+
+        response = client.get("/api/v1/stats/dashboard-summary", headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["hosts"]["total"] == 1
+        assert data["hosts"]["avg_cpu_load"] == 12.5
+        assert data["hosts"]["avg_ram_usage"] == 48.0
+        assert data["hosts"]["avg_disk_usage"] is None
+        assert data["host_resources"][0]["disk_usage"] is None
 
     def test_null_battery_not_counted_as_low(self, client, auth_headers, db_session, sample_host):
         """回归: NULL 电量不应被误算为低电量告警"""

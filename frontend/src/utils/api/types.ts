@@ -356,7 +356,7 @@ export interface DashboardHostSummary {
   degraded: number;
   avg_cpu_load: number;
   avg_ram_usage: number;
-  avg_disk_usage: number;
+  avg_disk_usage: number | null;
   online_rate: number;
 }
 

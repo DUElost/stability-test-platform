@@ -219,7 +219,7 @@ class DashboardHostSummary(BaseModel):
     degraded: int
     avg_cpu_load: float
     avg_ram_usage: float
-    avg_disk_usage: float
+    avg_disk_usage: Optional[float] = None
     online_rate: float
 
 
@@ -347,7 +347,9 @@ def get_dashboard_summary(
             degraded=host_degraded,
             avg_cpu_load=round(sum(cpu_values) / host_total, 2) if host_total else 0.0,
             avg_ram_usage=round(sum(ram_values) / host_total, 2) if host_total else 0.0,
-            avg_disk_usage=round(sum(disk_values) / len(disk_values), 2) if disk_values else 0.0,
+            avg_disk_usage=(
+                round(sum(disk_values) / len(disk_values), 2) if disk_values else None
+            ),
             online_rate=round(host_online / host_total, 4) if host_total else 0.0,
         ),
         devices=DashboardDeviceSummary(
