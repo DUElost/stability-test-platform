@@ -211,6 +211,8 @@ def run_extract_sync(plan_run_id: int) -> int:
 
         extracted = 0
         if remote_paths:
+            from backend.core.artifact_paths import copytree_validated_event_dir
+
             for src in remote_paths:
                 if not src.is_dir():
                     logger.debug(
@@ -222,14 +224,21 @@ def run_extract_sync(plan_run_id: int) -> int:
                 if dest.exists():
                     continue
                 try:
-                    shutil.copytree(str(src), str(dest))
+                    copytree_validated_event_dir(src, dest, plan_run_id=plan_run_id)
                     extracted += 1
+                except ArtifactPathError:
+                    logger.warning(
+                        "dedup_extract_skip_unsafe_remote plan_run=%d path=%s",
+                        plan_run_id, src,
+                    )
                 except Exception:
                     logger.exception(
                         "dedup_extract_remote_dir_failed plan_run=%d dir=%s",
                         plan_run_id, src,
                     )
         else:
+            from backend.core.artifact_paths import ArtifactPathError, copytree_under_root
+
             for name in sorted(target_names):
                 if not name or ".." in name or name.startswith(("/", "\\")):
                     logger.warning(
@@ -260,8 +269,13 @@ def run_extract_sync(plan_run_id: int) -> int:
                 if dest.exists():
                     continue
                 try:
-                    shutil.copytree(str(src), str(dest))
+                    copytree_under_root(src, dest, root=devices_root)
                     extracted += 1
+                except ArtifactPathError:
+                    logger.warning(
+                        "dedup_extract_skip_outside_devices plan_run=%d path=%s",
+                        plan_run_id, src,
+                    )
                 except Exception:
                     logger.exception(
                         "dedup_extract_event_dir_failed plan_run=%d dir=%s",
