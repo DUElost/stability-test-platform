@@ -22,7 +22,11 @@ from backend.api.response import ApiResponse, ok
 from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.audit import record_audit_async
-from backend.core.artifact_paths import ArtifactPathError, resolve_local_artifact_path
+from backend.core.artifact_paths import (
+    ArtifactPathError,
+    resolve_device_event_remote_path,
+    resolve_local_artifact_path,
+)
 from backend.core.database import get_async_db
 from backend.core.metrics import (
     claim_lease_failed_total,
@@ -2233,11 +2237,21 @@ def _parse_iso_dt(value: str, field: str) -> datetime:
         ) from exc
 
 
-def _validated_remote_path(raw: Optional[str]) -> Optional[str]:
+def _validated_remote_path(
+    raw: Optional[str],
+    *,
+    plan_run_id: Optional[int] = None,
+    event_id: Optional[str] = None,
+) -> Optional[str]:
     if not raw:
         return None
     try:
-        return str(resolve_local_artifact_path(raw, must_exist=False))
+        return str(resolve_device_event_remote_path(
+            raw,
+            plan_run_id=plan_run_id,
+            event_id=event_id,
+            must_exist=False,
+        ))
     except ArtifactPathError as exc:
         raise HTTPException(
             status_code=400,
@@ -2309,7 +2323,14 @@ async def ingest_device_log_events(
                     detail=f"device_log_event host_id mismatch: {ev.host_id!r} != {row.host_id!r}",
                 )
             row.state = ev.state
-            row.remote_path = _validated_remote_path(ev.remote_path)
+            effective_plan_run = (
+                ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
+            )
+            row.remote_path = _validated_remote_path(
+                ev.remote_path,
+                plan_run_id=effective_plan_run,
+                event_id=None if effective_plan_run is not None else str(row.id),
+            )
             row.checksum = ev.checksum
             row.size_bytes = ev.size_bytes
             row.plan_run_id = ev.plan_run_id
@@ -2325,7 +2346,10 @@ async def ingest_device_log_events(
                 device_timestamp=device_ts,
                 state=ev.state,
                 local_path=ev.local_path,
-                remote_path=_validated_remote_path(ev.remote_path),
+                remote_path=_validated_remote_path(
+                    ev.remote_path,
+                    plan_run_id=ev.plan_run_id,
+                ),
                 size_bytes=ev.size_bytes,
                 checksum=ev.checksum,
                 plan_run_id=ev.plan_run_id,

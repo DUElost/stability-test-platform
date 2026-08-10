@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 
 from backend.api.routes.stats import _disk_usage_percent_from_extra
-from backend.core.artifact_paths import ArtifactPathError, get_stp_nfs_root, resolve_local_artifact_path
+from backend.core.artifact_paths import (
+    ArtifactPathError,
+    ArtifactPathOutsideRootError,
+    get_stp_nfs_root,
+    resolve_device_event_remote_path,
+    resolve_local_artifact_path,
+)
 from backend.core.storage_root import resolve_shared_storage_root as core_resolve
 from backend.agent.aee.paths import resolve_shared_storage_root as agent_resolve
 
@@ -60,3 +66,18 @@ def test_artifact_path_unconfigured_is_explicit(monkeypatch, tmp_path):
         get_stp_nfs_root()
     with pytest.raises(ArtifactPathError, match="STP_AEE_NFS_ROOT is not configured"):
         resolve_local_artifact_path(str(tmp_path / "job.bin"))
+
+
+def test_resolve_device_event_remote_path_scoped_to_plan_run(monkeypatch, tmp_path):
+    nfs = tmp_path / "nfs"
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    allowed = nfs / "devices" / "42" / "ke_001"
+    allowed.mkdir(parents=True)
+    foreign = nfs / "devices" / "99" / "ke_002"
+    foreign.mkdir(parents=True)
+
+    resolved = resolve_device_event_remote_path(str(allowed), plan_run_id=42)
+    assert resolved == allowed.resolve()
+
+    with pytest.raises(ArtifactPathOutsideRootError):
+        resolve_device_event_remote_path(str(foreign), plan_run_id=42)

@@ -89,11 +89,14 @@ class DeviceLogEventClient:
             logger.exception("device_log_event_create_error path=%s", local_path)
             return None
 
-    def list_events(self, *, state: str) -> List[Dict[str, Any]]:
+    def list_events(self, *, state: str, limit: int | None = 1) -> List[Dict[str, Any]]:
         try:
+            params: Dict[str, Any] = {"host_id": self.host_id, "state": state}
+            if limit is not None:
+                params["limit"] = limit
             resp = requests.get(
                 f"{self.api_url}/api/v1/agent/device-log-events",
-                params={"host_id": self.host_id, "state": state, "limit": 1},
+                params=params,
                 headers=self._headers(),
                 timeout=self.timeout,
             )

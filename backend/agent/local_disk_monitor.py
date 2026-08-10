@@ -209,21 +209,21 @@ class HddSpillMonitor:
         )
         if client is None:
             return 0
-        events = client.list_events(state="LOCAL")
+        events = client.list_events(state="LOCAL", limit=50)
         if not events:
             return 0
-        oldest = events[0]
-        event_id = str(oldest.get("id") or "")
-        if event_id and event_id in self._spill_enqueued_ids:
-            return 0
-        if EventUploader.instance().enqueue_local_event(event=oldest):
-            if event_id:
-                self._spill_enqueued_ids.add(event_id)
-            logger.info(
-                "hdd_spill_enqueue_event_uploader event_id=%s path=%s",
-                oldest.get("id"), oldest.get("local_path"),
-            )
-            return 1
+        for candidate in events:
+            event_id = str(candidate.get("id") or "")
+            if event_id and event_id in self._spill_enqueued_ids:
+                continue
+            if EventUploader.instance().enqueue_local_event(event=candidate):
+                if event_id:
+                    self._spill_enqueued_ids.add(event_id)
+                logger.info(
+                    "hdd_spill_enqueue_event_uploader event_id=%s path=%s",
+                    candidate.get("id"), candidate.get("local_path"),
+                )
+                return 1
         return 0
 
     def _spill_oldest_event_dir(self) -> int:

@@ -67,6 +67,36 @@ def resolve_local_artifact_path(storage_uri: str, *, must_exist: bool = False) -
     return resolved_path
 
 
+def resolve_device_event_remote_path(
+    storage_uri: str,
+    *,
+    plan_run_id: int | None = None,
+    event_id: str | None = None,
+    must_exist: bool = False,
+) -> Path:
+    """Validate a DeviceLogEvent ``remote_path`` under ``devices/`` scope."""
+    resolved_path = resolve_local_artifact_path(storage_uri, must_exist=must_exist)
+    devices_root = (get_stp_nfs_root() / "devices").resolve(strict=False)
+    if not resolved_path.is_relative_to(devices_root):
+        raise ArtifactPathOutsideRootError(
+            "device log remote path must stay under devices/: "
+            f"{resolved_path}"
+        )
+    if plan_run_id is not None:
+        scope = (devices_root / str(plan_run_id)).resolve(strict=False)
+        if not resolved_path.is_relative_to(scope):
+            raise ArtifactPathOutsideRootError(
+                f"device log remote path must stay under {scope}: {resolved_path}"
+            )
+    elif event_id:
+        scope = (devices_root / "unassigned" / event_id).resolve(strict=False)
+        if not resolved_path.is_relative_to(scope):
+            raise ArtifactPathOutsideRootError(
+                f"device log remote path must stay under {scope}: {resolved_path}"
+            )
+    return resolved_path
+
+
 def _coerce_local_path(raw: str) -> Path:
     if _WINDOWS_DRIVE_PATH_RE.match(raw) or raw.startswith("\\\\"):
         return Path(raw)

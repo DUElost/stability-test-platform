@@ -189,11 +189,15 @@ def run_extract_sync(plan_run_id: int) -> int:
 
         remote_paths: list[Path] = []
         if continuous_event_upload_enabled():
-            from backend.core.artifact_paths import ArtifactPathError, resolve_local_artifact_path
+            from backend.core.artifact_paths import ArtifactPathError, resolve_device_event_remote_path
 
             for raw in list_remote_paths_for_extract(db, plan_run_id):
                 try:
-                    remote_paths.append(resolve_local_artifact_path(raw, must_exist=False))
+                    remote_paths.append(resolve_device_event_remote_path(
+                        raw,
+                        plan_run_id=plan_run_id,
+                        must_exist=False,
+                    ))
                 except ArtifactPathError:
                     logger.warning(
                         "dedup_extract_skip_unsafe_remote plan_run=%d path=%s",
