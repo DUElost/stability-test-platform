@@ -32,7 +32,7 @@ ADR-0025（方案 C 存储）建立了三层存储漏斗（Agent HDD → CIFS �
 | `event_type` / `event_subtype` | KE / NE / JE / ANR / HWT / SWT（从 ZZ_INTERNAL 或平台等价格式解析） |
 | `detected_at` | Reconciler 发现时间（控制面时钟，非设备时钟——ADR-0025 已知坑） |
 | `device_timestamp` | 设备侧时间戳（可空） |
-| `state` | `DETECTED → LOCAL → UPLOADING → REMOTE → ARCHIVED → PRUNED`（状态机，非文件系统探测） |
+| `state` | `DETECTED` / `LOCAL` / `UPLOADING` / `REMOTE` / `ARCHIVED` / `PRUNED` / `PULL_FAILED` / `UPLOAD_FAILED`（状态机，非文件系统探测） |
 | `local_path` | HDD/SSD 路径 |
 | `remote_path` | CIFS 路径（上送完成后设置，可空） |
 | `size_bytes` / `checksum` | 上送校验 |
@@ -41,18 +41,24 @@ ADR-0025（方案 C 存储）建立了三层存储漏斗（Agent HDD → CIFS �
 
 状态转换：
 
-```
+```text
 DETECTED ──(adb pull 完成)──→ LOCAL
   │                             │
   └── pull 失败 → PULL_FAILED   ├──(开始上传)──→ UPLOADING ──(copytree + checksum OK)──→ REMOTE
-                                │                    │
-                                └──(磁盘压力大)       └── 失败 → UPLOAD_FAILED（可重试）
-                                    HddSpill 走
-                                    同一上传通道
+       │                        │                    │
+       └── 可重试 → DETECTED    └── HddSpill         └── 失败 → UPLOAD_FAILED
+                                    走同一上传通道         │
+                                                     ├── 退避重试 → UPLOADING
+                                                     └── 放弃后本地 prune → PRUNED
 
 REMOTE ──(被 PlanRun extract 引用)──→ ARCHIVED
 LOCAL / REMOTE / ARCHIVED ──(本地 prune)──→ PRUNED
 ```
+
+失败态后继：
+
+- **`PULL_FAILED`**：无 `local_path`，不入 EventUploader。Collector 可按同一 trigger 重试 → `DETECTED`；放弃则保持 `PULL_FAILED`。
+- **`UPLOAD_FAILED`**：本地副本仍在。EventUploader 退避重试 → `UPLOADING`；放弃后仅 prune 本地 → `PRUNED`（中心无副本）。HddSpill 只选 `state=LOCAL`（不含 `UPLOADING`）。
 
 与现有表的关联：
 - `job_log_signal` 表新增 `device_log_event_id` 外键（可空，`SET NULL` on delete——替代当前 `CASCADE`）
@@ -100,13 +106,15 @@ class PlatformCollector(Protocol):
 
 ### D5：L1 存储降级（无 HDD → SSD）
 
-`get_aee_local_root()` 在现有 fallback 链最后一环前插入 SSD probe：
+`get_aee_local_root()` 只解析 **Agent 本机** HDD/SSD，不回落中心存储键：
 
-```
+```text
 STP_AEE_LOCAL_ROOT → (os.access(W_OK) + /proc/mounts 非 tmpfs?)
   → STP_AEE_SSD_FALLBACK_ROOT（默认 {LOG_DIR}/aee_events）
-  → STP_AEE_NFS_ROOT → … → /mnt/hdd/aee_events
+  → /mnt/hdd/aee_events
 ```
+
+NFS/CIFS（`STP_AEE_NFS_ROOT`）只用于显式上送、汇总、按需事件或 HDD 溢出，不作为本地日志回退。
 
 - HddSpill 在 SSD 模式下自动禁用（spill 阈值仅对 HDD 有意义；SSD 满靠 LogArchiver grace pruning）
 - 探测失败记 `aee_local_root_ssd_fallback`

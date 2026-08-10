@@ -62,7 +62,9 @@ describe('ExpandableHostTable', () => {
       resources: { ...host.resources!, disk_usage: null },
     };
     render(<ExpandableHostTable hosts={[unknownDisk]} />);
-    expect(screen.getAllByText('未知').length).toBeGreaterThan(0);
+    const diskCells = screen.getAllByTestId('host-disk-usage');
+    expect(diskCells.length).toBeGreaterThan(0);
+    expect(diskCells.every((el) => el.textContent === '未知')).toBe(true);
   });
 
   it('shows deployment time with full date in expanded Agent section', () => {

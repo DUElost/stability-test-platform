@@ -1,5 +1,8 @@
 # Stability Test Platform 完整项目审查报告（修订版）
 
+> **历史快照，不是当前事实源。** 本文保留 2026-08-09 当时的审查结论，不随代码更新。
+> 现行权威：Living 审查 [`DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./DEVICE_LOG_FLOW_REVIEW_2026-08-09.md)、[`ADR-0028`](../adr/ADR-0028-device-log-event-and-continuous-upload.md)、代码与测试。
+
 **审查日期**: 2026-08-09  
 **审查范围**: 代码库、GitHub 仓库、文档、架构一致性、测试覆盖  
 **当前分支**: fix/agent-shanghai-run-date-stamp  

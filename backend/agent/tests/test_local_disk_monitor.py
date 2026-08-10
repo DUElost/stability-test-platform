@@ -105,6 +105,10 @@ def test_usage_read_failure_skips_spill(tmp_path):
         {"total_gb": None, "used_gb": None, "free_gb": None, "usage_percent": None},
         {"total_gb": 0, "used_gb": 0, "free_gb": 0},
         {"usage_percent": "n/a"},
+        {"usage_percent": float("nan")},
+        {"usage_percent": float("inf")},
+        {"usage_percent": -1},
+        {"usage_percent": 101},
         "not-a-dict",
     ],
 )

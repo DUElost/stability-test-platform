@@ -26,7 +26,7 @@
 
 ### 0.3 三级存储漏斗
 
-```
+```text
 Android 设备 (MTK/高通/展锐)
   │  adb pull / inotifyd / Reconciler
   ▼
@@ -41,7 +41,7 @@ Android 设备 (MTK/高通/展锐)
   │    落地设计：
   │    - get_aee_local_root() 在现有 fallback 链最后一环前插入 SSD probe：
   │      STP_AEE_LOCAL_ROOT → (挂载点可写?) → STP_AEE_SSD_FALLBACK_ROOT
-  │      → STP_AEE_NFS_ROOT → … → /mnt/hdd/aee_events
+  │      → /mnt/hdd/aee_events（不回落 STP_AEE_NFS_ROOT）
   │    - 探测方法：os.access(root, os.W_OK) + 非 tmpfs（/proc/mounts 检查
   │      fs_type 不含 tmpfs）；失败则记 aee_local_root_ssd_fallback
   │    - HddSpill 在 SSD 模式下自动禁用（spill 阈值仅对 HDD 有意义；
@@ -61,7 +61,7 @@ Android 设备 (MTK/高通/展锐)
   └── jobs/{job_id}/             ← JobArtifact 文件
 ```
 
-**⚠️ 语义对齐**：当前实现中「≥95% 溢最旧目录」≠「新事件直写中心」。后者需 DeviceLogEvent 实体 + 连续上送后才能做到。选择哪个方案须写进 ADR，本文暂记为待决策（见 §6.4 A-1/A-4）。
+**⚠️ 语义对齐**：当前实现仍是「PlanRun 终态批量上送 + HDD≥95% spill」。[`ADR-0028`](../adr/ADR-0028-device-log-event-and-continuous-upload.md) **D2 已接受**目标态：事件进入 `LOCAL` 后立即由 `EventUploader` 上送，不等待 PlanRun 终态。
 
 **为什么不是 L1 直接到 L2**：
 - 设备日志产生是**持续**的（Watcher 实时采集），上送是**批量**的（PlanRun 终态触发一次）。中间必须有 HDD 缓冲。
@@ -89,7 +89,7 @@ Android 设备 (MTK/高通/展锐)
 
 ### 0.4 平台抽象层（当前 MTK only，高通/展锐待建）
 
-```
+```text
                     ┌─────────────────────────────┐
                     │   platform probe            │
                     │   ro.soc.manufacturer        │
@@ -125,7 +125,7 @@ Android 设备 (MTK/高通/展锐)
 
 ### 0.5 MTK 平台完整触发链（当前唯一实现）
 
-```
+```text
 设备侧                                Agent 侧
 ───────                              ────────
 AEE 崩溃发生
@@ -164,7 +164,7 @@ AEE 崩溃发生
 
 ### 0.6 PlanRun 文件夹：中心日志服务器上的最终形态
 
-```
+```text
 {中心日志服务器根}/
 └── jira/{plan_run_id}/               ← ★ JIRA 提单引用的路径
     ├── merge_result_*.xls             ← 所有 host 扫描报表合并（控制面 merge_task 产出）
@@ -198,7 +198,7 @@ AEE 崩溃发生
 
 ### 0.7 磁盘空间保护层级
 
-```
+```text
 HDD 使用率
   │
   ├── < 70%  正常：所有日志写 HDD，等待 PlanRun 终态触发上送
@@ -229,7 +229,7 @@ HDD 使用率
 
 ### 链路 1：Job 运行日志
 
-```
+```text
 pipeline_engine 写磁盘
   └→ Agent SSD: logs/runs/{job_id}/
        ├→ [实时] SocketIO step_log → 控制面 log_writer → UI LiveConsole
@@ -248,7 +248,7 @@ pipeline_engine 写磁盘
 
 ### 链路 2：AEE / mobilelog / bugreport
 
-```
+```text
 Watcher 路径 B（Reconciler / inotifyd）
   └→ Agent HDD: {STP_AEE_LOCAL_ROOT}/{folder_name}/{serial}/
        ├→ SignalEmitter → JobLogSignal → 控制面 DB
@@ -270,7 +270,7 @@ Watcher 路径 B（Reconciler / inotifyd）
 
 ### 链路 3：扫描报表（dedup scan → upload → merge）
 
-```
+```text
 控制面 enqueue_dedup_terminal_sync → SAQ scan_task
   ├→ emit scan_now → 各 ONLINE Agent
   │    └→ ScanRunner.run_local_scan（-m 0 -d {hdd_root}）
@@ -697,7 +697,7 @@ Watcher 路径 B（Reconciler / inotifyd）
 
 **当前链路**：
 
-```
+```text
 设备崩溃 → Watcher 拉到 HDD
   → [等待 PlanRun 跑完，可能要几小时]
   → aggregator: should_trigger_dedup(run.status)
@@ -732,7 +732,7 @@ Watcher 路径 B（Reconciler / inotifyd）
 
 ### 三个根因的关系
 
-```
+```text
 根因 1 (无事件实体)
   │
   ├──→ 没有统一 ID → 只能靠文件名/路径字符串关联 → 根因 3 (文件系统当数据库)
@@ -754,7 +754,7 @@ Watcher 路径 B（Reconciler / inotifyd）
 
 ### 6.2 目标架构（对比当前）
 
-```
+```text
 当前：
   Watcher → HDD 目录 ──[等 PlanRun 终态]──→ UploadManager → CIFS 目录
             └── HddSpill → CIFS 另一套目录（路径不兼容）
@@ -795,7 +795,7 @@ class DeviceLogEvent:
 
 **状态机**：
 
-```
+```text
 DETECTED ──(adb pull 完成)──→ LOCAL
   │                             │
   └── pull 失败 → PULL_FAILED   ├──(开始上传)──→ UPLOADING ──(copytree + checksum OK)──→ REMOTE
@@ -891,6 +891,7 @@ LOCAL / REMOTE / ARCHIVED ──(本地 prune)──→ PRUNED
 对应 §六「建议落地顺序」的阶段 0 和阶段 1。
 
 ### 阶段 0：文档 ✅ 已完成（2026-08-09）
+
 D-1～D-10 全部落地于本文 v3.0。§五+§六 决策已提取为 [`ADR-0028`](../adr/ADR-0028-device-log-event-and-continuous-upload.md)。
 
 ### 阶段 1：代码止血（3–5 天）

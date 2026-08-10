@@ -446,12 +446,15 @@ export function ExpandableHostTable({
                             ].map(([label, value]) => (
                               <div key={String(label)} className="text-center">
                                 <div className="text-[10px] text-muted-foreground">{label}</div>
-                                <div className={cn(
-                                  'font-mono text-[11px]',
-                                  typeof value === 'number'
-                                    ? getResourceColor(value)
-                                    : 'text-muted-foreground',
-                                )}>
+                                <div
+                                  data-testid={label === '磁盘' ? 'host-disk-usage' : undefined}
+                                  className={cn(
+                                    'font-mono text-[11px]',
+                                    typeof value === 'number'
+                                      ? getResourceColor(value)
+                                      : 'text-muted-foreground',
+                                  )}
+                                >
                                   {formatUsagePercent(typeof value === 'number' ? value : null)}
                                 </div>
                               </div>
@@ -496,7 +499,7 @@ export function ExpandableHostTable({
                       <TableCell className="hidden p-3 2xl:table-cell">
                         {host.resources && host.status === 'ONLINE' ? (
                           host.resources.disk_usage == null ? (
-                            <span className="text-xs font-mono text-muted-foreground">未知</span>
+                            <span data-testid="host-disk-usage" className="text-xs font-mono text-muted-foreground">未知</span>
                           ) : (
                             <div className="flex items-center gap-2">
                               <Progress
@@ -504,7 +507,10 @@ export function ExpandableHostTable({
                                 className="h-2 w-16"
                                 indicatorClassName={getProgressColor(host.resources.disk_usage)}
                               />
-                              <span className={cn('text-xs font-mono', getResourceColor(host.resources.disk_usage))}>
+                              <span
+                                data-testid="host-disk-usage"
+                                className={cn('text-xs font-mono', getResourceColor(host.resources.disk_usage))}
+                              >
                                 {host.resources.disk_usage.toFixed(0)}%
                               </span>
                             </div>

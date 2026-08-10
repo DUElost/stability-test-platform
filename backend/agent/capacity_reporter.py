@@ -3,20 +3,27 @@
 纯函数，无 IO，不依赖外部状态。由 HeartbeatThread._tick 同步调用。
 """
 
-from typing import List, Optional
+import math
+from typing import Any, List, Optional
+
+
+def _coerce_usage_percent(raw: Any) -> Optional[float]:
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or not 0.0 <= value <= 100.0:
+        return None
+    return value
 
 
 def _disk_usage_percent(system_stats: dict) -> Optional[float]:
     blob = system_stats.get("disk_usage")
     if not isinstance(blob, dict):
         return None
-    raw = blob.get("usage_percent")
-    if raw is None:
-        return None
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None
+    return _coerce_usage_percent(blob.get("usage_percent"))
 
 
 def compute_capacity(

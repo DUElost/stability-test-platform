@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import shutil
 import threading
 from pathlib import Path
@@ -247,13 +248,20 @@ class HddSpillMonitor:
             logger.warning("hdd_usage_percent_missing root=%s", self._hdd_root)
             return None
         try:
-            return float(raw)
+            value = float(raw)
         except (TypeError, ValueError):
             logger.warning(
                 "hdd_usage_percent_invalid root=%s value=%r",
                 self._hdd_root, raw,
             )
             return None
+        if not math.isfinite(value) or not 0.0 <= value <= 100.0:
+            logger.warning(
+                "hdd_usage_percent_out_of_range root=%s value=%r",
+                self._hdd_root, raw,
+            )
+            return None
+        return value
 
     def snapshot_metrics(self) -> Dict[str, Any]:
         with self._metrics_lock:

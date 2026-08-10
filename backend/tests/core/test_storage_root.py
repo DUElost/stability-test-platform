@@ -42,11 +42,16 @@ def test_disk_usage_percent_unknown_is_none():
     assert _disk_usage_percent_from_extra({"disk_usage": {}}) is None
     assert _disk_usage_percent_from_extra({"disk_usage": "n/a"}) is None
     assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": "bad"}}) is None
+    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": float("nan")}}) is None
+    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": float("inf")}}) is None
+    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": -1}}) is None
+    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": 101}}) is None
 
 
 def test_disk_usage_percent_reads_number():
     assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": 12.5}}) == 12.5
     assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": 0}}) == 0.0
+    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": 100}}) == 100.0
 
 
 def test_artifact_path_unconfigured_is_explicit(monkeypatch, tmp_path):

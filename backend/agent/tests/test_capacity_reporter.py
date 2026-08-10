@@ -81,6 +81,10 @@ def test_ram_high_unschedulable():
         {"cpu_load": 20, "ram_usage": 50, "disk_usage": {}},
         {"cpu_load": 20, "ram_usage": 50},
         {"cpu_load": 20, "ram_usage": 50, "disk_usage": "n/a"},
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": float("nan")}},
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": float("inf")}},
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": -1}},
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": 101}},
     ],
 )
 def test_disk_unknown_unschedulable(stats):
