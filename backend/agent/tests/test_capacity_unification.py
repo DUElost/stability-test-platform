@@ -66,7 +66,7 @@ def test_capacity_reporter_effective_slots_health_gate():
         active_device_count=0,
         online_healthy_devices=5,
         total_devices=5,
-        system_stats={"cpu_load": 95.0, "ram_usage": 50.0},
+        system_stats={"cpu_load": 95.0, "ram_usage": 50.0, "disk_usage": {"usage_percent": 40.0}},
         mount_status={},
     )
     assert result["capacity"]["effective_slots"] == 0
@@ -81,7 +81,7 @@ def test_capacity_reporter_effective_slots_normal():
         active_device_count=1,
         online_healthy_devices=8,
         total_devices=10,
-        system_stats={"cpu_load": 30.0, "ram_usage": 40.0},
+        system_stats={"cpu_load": 30.0, "ram_usage": 40.0, "disk_usage": {"usage_percent": 40.0}},
         mount_status={"/mnt/hdd": {"ok": True, "usage_percent": 50.0}},
     )
     assert result["capacity"]["effective_slots"] == 7  # 8 - 1 = 7 free

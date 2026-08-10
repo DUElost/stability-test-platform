@@ -3,6 +3,7 @@
 max_concurrent_jobs removed — capacity is now gated by free device count and health only.
 """
 
+import pytest
 
 from backend.agent.capacity_reporter import compute_capacity
 
@@ -72,6 +73,34 @@ def test_ram_high_unschedulable():
 
 
 # ── Test 4: disk high → UNSCHEDULABLE ────────────────────────────────────────
+
+@pytest.mark.parametrize(
+    "stats",
+    [
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": None}},
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": {}},
+        {"cpu_load": 20, "ram_usage": 50},
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": "n/a"},
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": float("nan")}},
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": float("inf")}},
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": -1}},
+        {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": 101}},
+    ],
+)
+def test_disk_unknown_unschedulable(stats):
+    result = compute_capacity(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=5,
+        total_devices=5,
+        system_stats=stats,
+        mount_status=_healthy_mount_status(),
+    )
+    assert result["health"]["status"] == "UNSCHEDULABLE"
+    assert "disk_unknown" in result["health"]["reasons"]
+    assert result["health"]["disk_usage"] is None
+    assert result["capacity"]["effective_slots"] == 0
+
 
 def test_disk_high_unschedulable():
     stats = {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": 97}}

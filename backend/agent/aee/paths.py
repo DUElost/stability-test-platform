@@ -12,6 +12,55 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger(__name__)
 
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
+_AEE_LOCAL_ROOT_DEFAULT = "/mnt/hdd/aee_events"
+_shared_root_alias_warned: set[str] = set()
+
+
+def resolve_shared_storage_root() -> str:
+    """中心存储本机挂载点（NFS = CIFS = 同一台分享）。未配置返回空串。
+
+    主键 ``STP_AEE_NFS_ROOT``。``STP_WATCHER_NFS_BASE_DIR`` /
+    ``STP_AEE_CIFS_ROOT`` 仅作弃用别名（未设主键时回落，并打一次 WARNING）。
+    不回落到 ``STP_NFS_ROOT`` 或 HDD。
+
+    控制面请用 ``backend.core.storage_root.resolve_shared_storage_root``
+    （避免 core → agent.aee）。此处副本供 Agent 独立安装使用，语义须保持一致。
+    """
+    primary = (os.getenv("STP_AEE_NFS_ROOT") or "").strip()
+    if primary:
+        return primary
+    for alias in ("STP_WATCHER_NFS_BASE_DIR", "STP_AEE_CIFS_ROOT"):
+        raw = (os.getenv(alias) or "").strip()
+        if not raw:
+            continue
+        if alias not in _shared_root_alias_warned:
+            _shared_root_alias_warned.add(alias)
+            logger.warning(
+                "shared_storage_root_alias_deprecated alias=%s use=STP_AEE_NFS_ROOT",
+                alias,
+            )
+        return raw
+    return ""
+
+
+def get_aee_nfs_root() -> Path:
+    """中心存储挂载点。未设 ``STP_AEE_NFS_ROOT``（且无弃用别名）时抛错。"""
+    raw = resolve_shared_storage_root()
+    if not raw:
+        raise RuntimeError("STP_AEE_NFS_ROOT is not set")
+    return Path(raw)
+
+
+def get_aee_local_root() -> Path:
+    """Agent 本地 HDD 根 — AEE 设备日志第一落点。
+
+    只认 ``STP_AEE_LOCAL_ROOT``；未设则 ``/mnt/hdd/aee_events``。
+    不回落到中心存储键（``STP_AEE_NFS_ROOT`` / CIFS / WATCHER / ``STP_NFS_ROOT``）。
+    """
+    raw = (os.getenv("STP_AEE_LOCAL_ROOT") or "").strip()
+    if raw:
+        return Path(raw)
+    return Path(_AEE_LOCAL_ROOT_DEFAULT)
 
 
 def _aee_subdir_layout() -> str:
@@ -35,38 +84,6 @@ def resolve_bugreport_subdir() -> str:
     回退旧布局 `correlated_bugreports/`。
     """
     return "correlated_bugreports" if _aee_subdir_layout() == "correlated" else "bugreport"
-
-
-def get_aee_nfs_root() -> Path:
-    """中心存储（CIFS）上送根路径（方案 C；`upload_manager.py` 用作 dedup/devices 上送目标）。
-
-    priority: STP_AEE_NFS_ROOT > STP_WATCHER_NFS_BASE_DIR > STP_NFS_ROOT/sonic_tinno
-    > /mnt/hdd/aee_events（无 CIFS 配置时的本地兜底，非预期生产路径）。
-    """
-    for env_key in ("STP_AEE_NFS_ROOT", "STP_WATCHER_NFS_BASE_DIR"):
-        raw = (os.getenv(env_key) or "").strip()
-        if raw:
-            return Path(raw)
-    nfs_root = (os.getenv("STP_NFS_ROOT") or "").strip()
-    if nfs_root:
-        return Path(nfs_root) / "sonic_tinno"
-    return Path("/mnt/hdd/aee_events")
-
-
-def get_aee_local_root() -> Path:
-    """Agent 本地 HDD 根 — AEE 设备日志第一落点。
-
-    priority: STP_AEE_LOCAL_ROOT > STP_AEE_NFS_ROOT > STP_WATCHER_NFS_BASE_DIR > STP_NFS_ROOT/sonic_tinno
-    > /mnt/hdd/aee_events（方案 C 默认）。
-    """
-    for env_key in ("STP_AEE_LOCAL_ROOT", "STP_AEE_NFS_ROOT", "STP_WATCHER_NFS_BASE_DIR"):
-        raw = (os.getenv(env_key) or "").strip()
-        if raw:
-            return Path(raw)
-    nfs_root = (os.getenv("STP_NFS_ROOT") or "").strip()
-    if nfs_root:
-        return Path(nfs_root) / "sonic_tinno"
-    return Path("/mnt/hdd/aee_events")
 
 
 def resolve_device_output_dir(

@@ -18,7 +18,7 @@ interface HostResourceChartProps {
     ip: string | null;
     cpu_load: number;
     ram_usage: number;
-    disk_usage: number;
+    disk_usage: number | null;
   }>;
   isLoading?: boolean;
 }
@@ -29,7 +29,7 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
       name: host.ip?.split('.').pop() || host.ip || 'unknown',
       cpu: host.cpu_load,
       ram: host.ram_usage,
-      disk: host.disk_usage,
+      disk: host.disk_usage ?? 0,
     }));
   }, [hosts]);
 

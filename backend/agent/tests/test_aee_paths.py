@@ -4,10 +4,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from backend.agent.aee.paths import (
+    get_aee_nfs_root,
     get_or_create_run_date_stamp,
     resolve_artifact_promote_dir,
     resolve_puller_artifact_dir,
+    resolve_shared_storage_root,
     resolve_spill_devices_dest,
     resolve_upload_devices_dir,
     shanghai_mmdd,
@@ -89,3 +93,41 @@ def test_spill_devices_dest_rejects_path_outside_hdd(tmp_path: Path):
     except ValueError:
         return
     raise AssertionError("expected ValueError for path outside hdd root")
+
+
+def _clear_share_env(monkeypatch):
+    for key in (
+        "STP_AEE_NFS_ROOT",
+        "STP_WATCHER_NFS_BASE_DIR",
+        "STP_AEE_CIFS_ROOT",
+        "STP_NFS_ROOT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_resolve_shared_storage_root_primary_wins(monkeypatch):
+    _clear_share_env(monkeypatch)
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/stp-aee")
+    monkeypatch.setenv("STP_WATCHER_NFS_BASE_DIR", "/mnt/watcher")
+    monkeypatch.setenv("STP_AEE_CIFS_ROOT", "/mnt/cifs")
+    assert resolve_shared_storage_root() == "/mnt/stp-aee"
+
+
+def test_resolve_shared_storage_root_watcher_alias(monkeypatch):
+    _clear_share_env(monkeypatch)
+    monkeypatch.setenv("STP_WATCHER_NFS_BASE_DIR", "/mnt/watcher")
+    assert resolve_shared_storage_root() == "/mnt/watcher"
+
+
+def test_resolve_shared_storage_root_cifs_alias(monkeypatch):
+    _clear_share_env(monkeypatch)
+    monkeypatch.setenv("STP_AEE_CIFS_ROOT", "/mnt/cifs")
+    assert resolve_shared_storage_root() == "/mnt/cifs"
+
+
+def test_resolve_shared_storage_root_ignores_stp_nfs_root(monkeypatch):
+    _clear_share_env(monkeypatch)
+    monkeypatch.setenv("STP_NFS_ROOT", "/mnt/storage")
+    assert resolve_shared_storage_root() == ""
+    with pytest.raises(RuntimeError, match="STP_AEE_NFS_ROOT is not set"):
+        get_aee_nfs_root()

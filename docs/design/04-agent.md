@@ -120,7 +120,7 @@ DeviceLogWatcher
 | `AGENT_SECRET` | SocketIO 认证（生产必设） |
 | `STP_WATCHER_ENABLED` | Watcher 总开关 |
 | `STP_AEE_LOCAL_ROOT` | HDD AEE 根（默认 `/mnt/hdd/aee_events`） |
-| `STP_AEE_CIFS_ROOT` | 上送 15.4 挂载点 |
+| `STP_AEE_NFS_ROOT` | 中心存储挂载点（upload / spill） |
 | `ANDROID_ADB_SERVER_PORT` | WSL 联调：5039 |
 
 ---

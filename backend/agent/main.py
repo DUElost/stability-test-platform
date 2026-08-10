@@ -25,7 +25,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.adb_wrapper import AdbWrapper
     from agent.api_client import fetch_pending_jobs, sync_recovery
     from agent import device_discovery
-    from agent.aee.paths import get_aee_local_root
+    from agent.aee.paths import get_aee_local_root, resolve_shared_storage_root
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
@@ -50,7 +50,7 @@ else:
     from .adb_wrapper import AdbWrapper
     from .api_client import fetch_pending_jobs, sync_recovery
     from . import device_discovery
-    from .aee.paths import get_aee_local_root
+    from .aee.paths import get_aee_local_root, resolve_shared_storage_root
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs
@@ -574,11 +574,8 @@ def main() -> None:
     # Device Log Watcher 子系统（全局或 Plan 默认开启时 configure）
     log_signal_drainer: Optional[OutboxDrainer] = None
     if watcher_subsystem_enabled():
-        # 5B1 + D1：LogPuller NFS 根（空串 = 禁用 puller，仅记元数据）
-        nfs_base_dir = (
-            os.getenv("STP_WATCHER_NFS_BASE_DIR", "")
-            or os.getenv("STP_AEE_NFS_ROOT", "")
-        )
+        # 5B1 + D1：LogPuller 中心存储根（空串 = 禁用 puller，仅记元数据）
+        nfs_base_dir = resolve_shared_storage_root()
         LogWatcherManager.instance().configure(
             adb=adb,
             adb_path=adb_path,          # InotifydSource.Popen 需要 adb 二进制路径
@@ -604,14 +601,9 @@ def main() -> None:
             agent_secret=agent_secret,
             host_id=str(host_id),
             agent_instance_id=agent_instance_id,
-            # #97: 登记前 promote 到共享根（控制面只认共享路径）。仅显式配置
-            # STP_AEE_NFS_ROOT / STP_WATCHER_NFS_BASE_DIR 才启用；未配置则
-            # 保持原行为（LOCAL 直发，由控制面校验拒绝）。
-            aee_shared_root=(
-                os.getenv("STP_AEE_NFS_ROOT")
-                or os.getenv("STP_WATCHER_NFS_BASE_DIR")
-                or ""
-            ).strip(),
+            # #97: 登记前 promote 到共享根（控制面只认共享路径）。
+            # 仅 STP_AEE_NFS_ROOT（及弃用别名）才启用；未配置则 LOCAL 直发。
+            aee_shared_root=resolve_shared_storage_root(),
         )
         ArtifactUploader.instance().start()
         logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
@@ -626,11 +618,7 @@ def main() -> None:
         ScanRunner.instance().configure()
         UploadManager.instance().configure()
         hdd_root = str(get_aee_local_root())
-        cifs_root = (
-            os.getenv("STP_AEE_CIFS_ROOT", "")
-            or os.getenv("STP_AEE_NFS_ROOT", "")
-            or os.getenv("STP_WATCHER_NFS_BASE_DIR", "")
-        )
+        cifs_root = resolve_shared_storage_root()
         if cifs_root:
             LocalDiskMonitor.instance().configure(
                 hdd_root=hdd_root,
@@ -715,7 +703,10 @@ def main() -> None:
                     target=lambda: arch.scan_once(grace_seconds=0.0),
                     name="archive-now", daemon=True,
                 ).start()
-                logger.info("control_archive_now triggered by backend — scanning with grace=0")
+                logger.info(
+                    "control_archive_now triggered by backend — scan_once(grace=0) "
+                    "clamped to min grace floor",
+                )
             else:
                 logger.warning("control_archive_now_skipped: archiver not configured")
         elif command == "scan_now":

@@ -30,11 +30,11 @@
 | `STP_LOG_RATE_LIMIT_BASE` / `_MIN` | 控制面建议每 host `step_log` 行速率（随设备数收紧；ADR-0026 P2-2） |
 | `STP_COUNTER_RECONCILE_INTERVAL_SECONDS` | O(1) 计数器对账 sweep 周期（默认 300） |
 | `STP_PLAN_ADMISSION_QUEUE_ENABLED` | `1`=V2 准入队列；默认 `1`。设为 `0` 会停用新派发（不会恢复已移除的 legacy inline dispatch）；存量 QUEUED 仍 drain。灰度见 [`../operations/adr-0026-admission-and-scale-gray-rollout.md`](../operations/adr-0026-admission-and-scale-gray-rollout.md)；`/health` 暴露 `admission_queue_*` |
-| `STP_SCRIPT_ROOT` | 脚本扫描根；**开发必须**设为 `<repo>/backend/agent/scripts` |
+| `STP_SCRIPT_ROOT` | 脚本扫描根；**必须显式设置**（未设 scan 返回 503，不再回落到 `STP_NFS_ROOT/scripts`）。开发：`<repo>/backend/agent/scripts` |
 | `STP_SCRIPT_RUNTIME_ROOT` | 扫描机 ≠ 运行机时 Agent 侧脚本根 |
-| `STP_NFS_ROOT` | **NFS = CIFS = 中心存储**。此键与 `STP_AEE_NFS_ROOT` 同角色；Agent 经 `STP_AGENT_NFS_ROOT` 映射，未设则 hot-update 回落到 `STP_AEE_NFS_ROOT`。控制面仍误用作 `${STP_NFS_ROOT}/scripts` 默认根（应设 `STP_SCRIPT_ROOT`） |
-| `STP_AEE_NFS_ROOT` | **中心存储（CIFS）** 本机挂载点（主键）。控制面 + Agent 指向同一 UNC，路径字符串可不同 |
-| `STP_AEE_CIFS_ROOT` | CIFS 挂载点（spill 可选）；空则回落 `STP_AEE_NFS_ROOT`。upload 读的是 NFS_ROOT |
+| `STP_NFS_ROOT` | Agent 上由 hot-update **镜像** `STP_AEE_NFS_ROOT`（旧脚本仍读此名）。控制面本机值**不下发**，也不再当脚本默认根 |
+| `STP_AEE_NFS_ROOT` | **中心存储** 本机挂载点（主键）。控制面 + Agent 指向同一 UNC，路径字符串可不同 |
+| `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | 弃用别名；仅当主键未设时回落，并打 WARNING |
 | `STP_FILE_SERVER_ADDRESS` | 共享存储健康页上的**控制面**展示 IP（现 8.202）。**不是** CIFS 根 / UNC |
 | `STP_AEE_LOCAL_ROOT` | Agent HDD AEE 根（控制面文档化；实际 Agent 侧读取） |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | 扫描工具；**同名两角色两套值**（控制面 merge vs Agent scan） |
@@ -81,7 +81,7 @@
 | `STP_WATCHER_ENABLED` | Watcher 子系统开关（默认 `true`） |
 | `STP_STEP_LOG_STREAM` | `1`=pipeline 日志经 SocketIO 批推送；`0`=保持 no-op（ADR-0026 P2-2） |
 | `STP_LOG_BATCH_MAX_LINES` / `STP_LOG_BATCH_FLUSH_MS` | step_log 批大小与定时 flush（默认 50 / 200） |
-| `STP_AEE_CIFS_ROOT` / `STP_AEE_NFS_ROOT` | **中心存储（CIFS）** 挂载点（主键 NFS_ROOT；CIFS_ROOT 可选 spill）。过渡 UNC 在 8.202，目标 15.4/9.4 |
+| `STP_AEE_NFS_ROOT` | **中心存储** 挂载点主键（upload / spill / merge 同一把）。过渡 UNC 在 8.202，目标 15.4/9.4 |
 
 热更新会附带控制面 `pipeline_schema.json` 与 Agent `VERSION`（code revision）。  
 热更新还会**行级合并**舰队级 `.env` 键（安装布局路径 + 控制面 `backend/.env` 中非空的 `STP_*` 等）；`HOST_ID`、`API_URL`、`ANDROID_ADB_SERVER_PORT` 等 per-host 键不同步。见 [`../operations/agent-version-and-hot-update.md`](../operations/agent-version-and-hot-update.md)。

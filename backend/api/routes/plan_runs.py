@@ -385,10 +385,11 @@ async def archive_plan_run_logs_endpoint(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """ADR-0025 S2: 手动触发该 PlanRun 涉及 host 的运行日志立即归档(grace=0) + scan。
+    """ADR-0025 S2: 手动触发该 PlanRun 涉及 host 的运行日志立即归档 + scan。
 
     经 SocketIO control 向各 ONLINE host 的 Agent 下发:
-      - archive_now: Agent 端 daemon 线程跑 scan_once(grace_seconds=0)，严格跳过 active Job。
+      - archive_now: Agent ``scan_once(grace_seconds=0)``；实际仍受 ``MIN_GRACE_SECONDS``
+        （300s）下限约束，并跳过 active Job，防止刚启动 Job 被误 prune。
       - scan_now: 向本 PlanRun 涉及的全部 host 下发同一份设备 serial 列表
         （可跨主机），Agent 只扫本地 HDD 上命中的 `{folder}/{serial}/`。
     归档和 scan 均为异步——返回「已触发」，前端应轮询/refetch。

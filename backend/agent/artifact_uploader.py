@@ -366,7 +366,7 @@ class ArtifactUploader:
 
         ADR-0025 方案 C：Agent 把 AEE 产物拉到 HDD（STP_AEE_LOCAL_ROOT），
         但 JobArtifact 登记 URI 必须落在控制面可读的共享根
-        （STP_AEE_NFS_ROOT / STP_WATCHER_NFS_BASE_DIR）下——控制面读不到
+        （STP_AEE_NFS_ROOT）下——控制面读不到
         HDD，放行 LOCAL 只会把 400 变成静默 404。
 
         - 未配置共享根（aee_shared_root 为空）→ 保持原行为：直发，由控制面

@@ -41,7 +41,6 @@ PROTECTED_ENV_KEYS: frozenset[str] = frozenset(
 # agent belong here.
 _FLEET_ENV_KEYS: tuple[str, ...] = (
     "STP_AEE_NFS_ROOT",
-    "STP_AEE_CIFS_ROOT",
     "STP_AEE_LOCAL_ROOT",
     "STP_DEDUP_SCAN_TAG",
     "STP_DEDUP_AUTO_SCAN",
@@ -58,7 +57,6 @@ _AGENT_SCOPED_ENV_KEYS: dict[str, str] = {
     "STP_AGENT_PIP_INDEX_URL": "PIP_INDEX_URL",
     "STP_AGENT_DEDUP_SCAN_PYTHON": "STP_DEDUP_SCAN_PYTHON",
     "STP_AGENT_DEDUP_SCAN_SCRIPT": "STP_DEDUP_SCAN_SCRIPT",
-    "STP_AGENT_NFS_ROOT": "STP_NFS_ROOT",
 }
 
 # Synced keys whose value must be an existing path on the agent. Verified
@@ -99,9 +97,8 @@ def _fleet_env_overrides_from_control_plane() -> dict[str, str]:
         if val:
             overrides[agent_key] = val
 
-    # Legacy alias used by some agent scripts. Falls back to the shared AEE
-    # root, which is mounted at the same path on every agent — never to the
-    # control plane's own STP_NFS_ROOT, which is machine-local.
+    # Legacy script env: subprocesses still read STP_NFS_ROOT. Mirror the
+    # 中心存储 mount — never the control plane's own STP_NFS_ROOT.
     aee_nfs_root = os.getenv("STP_AEE_NFS_ROOT", "").strip()
     if aee_nfs_root:
         overrides.setdefault("STP_NFS_ROOT", aee_nfs_root)

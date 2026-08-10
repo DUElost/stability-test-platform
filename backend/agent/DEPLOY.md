@@ -459,8 +459,7 @@ done
 | 变量 | 默认值 / 说明 |
 |------|----------------|
 | `STP_AEE_LOCAL_ROOT` | AEE 设备日志 HDD 第一落点（默认 `/mnt/hdd/aee_events`） |
-| `STP_AEE_NFS_ROOT` | **中心存储（CIFS）** 挂载点主键（upload / dedup） |
-| `STP_AEE_CIFS_ROOT` | CIFS 挂载点（HDD 溢出 spill；空则回落 NFS_ROOT） |
+| `STP_AEE_NFS_ROOT` | **中心存储（CIFS）** 挂载点主键（upload / spill / dedup） |
 | `STP_WATCHER_AEE_SUBDIR_LAYOUT` | 默认 `stp`（`mobilelog/`、`bugreport/`）；`correlated` 为旧布局 |
 
 **行为变更**：

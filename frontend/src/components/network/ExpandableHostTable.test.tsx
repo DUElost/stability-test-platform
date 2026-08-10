@@ -56,6 +56,17 @@ describe('ExpandableHostTable', () => {
     expect(screen.getByRole('columnheader', { name: '磁盘' })).toHaveClass('hidden', '2xl:table-cell');
   });
 
+  it('shows 未知 when disk usage is unavailable', () => {
+    const unknownDisk: HostTableData = {
+      ...host,
+      resources: { ...host.resources!, disk_usage: null },
+    };
+    render(<ExpandableHostTable hosts={[unknownDisk]} />);
+    const diskCells = screen.getAllByTestId('host-disk-usage');
+    expect(diskCells.length).toBeGreaterThan(0);
+    expect(diskCells.every((el) => el.textContent === '未知')).toBe(true);
+  });
+
   it('shows deployment time with full date in expanded Agent section', () => {
     const deployedHost: HostTableData = {
       ...host,

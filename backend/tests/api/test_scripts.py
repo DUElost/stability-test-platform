@@ -558,6 +558,17 @@ def test_list_script_categories_hides_legacy_aee_only_categories(
     assert "device" in categories
 
 
+def test_script_scan_requires_script_root(client, monkeypatch, admin_headers):
+    monkeypatch.delenv("STP_SCRIPT_ROOT", raising=False)
+    monkeypatch.setenv("STP_NFS_ROOT", "/mnt/storage/test-platform")
+
+    resp = client.post("/api/v1/scripts/scan", headers=admin_headers)
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert detail["code"] == "SCRIPT_ROOT_NOT_CONFIGURED"
+
+
 def test_script_scan_missing_root_returns_structured_error(
     client, monkeypatch, admin_headers, tmp_path
 ):

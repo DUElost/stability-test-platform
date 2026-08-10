@@ -54,7 +54,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 |------|------|------|
 | Agent SSD | 运行日志（唯一副本） | `logs/runs/{job_id}/` |
 | Agent HDD | AEE + mobilelog + bugreport | `STP_AEE_LOCAL_ROOT`（默认 `/mnt/hdd/aee_events`） |
-| 中心存储（CIFS / NFS） | 汇总 xls、按需事件、HDD 溢出；**不含**运行日志 | 挂载点 `STP_AEE_NFS_ROOT`（spill 可选 `STP_AEE_CIFS_ROOT`）。过渡 UNC 在 8.202；「15.4」是角色外号/目标。口头 CIFS/NFS 都指此角色 |
+| 中心存储（CIFS / NFS） | 汇总 xls、按需事件、HDD 溢出；**不含**运行日志 | 挂载点 `STP_AEE_NFS_ROOT`。过渡 UNC 在 8.202；「15.4」是角色外号/目标。口头 CIFS/NFS 都指此角色 |
 
 角色/别称：[docs/design/2026-storage-roles-and-aliases.md](docs/design/2026-storage-roles-and-aliases.md)。**已取消（勿依赖）**：运行日志上送 CIFS、`run_log_bundle` JobArtifact、patrol cycle `snapshots/`。
 
@@ -82,7 +82,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 
 | 变量 | 开发值 | 说明 |
 |------|--------|------|
-| `STP_SCRIPT_ROOT` | `<repo>/backend/agent/scripts` | **必须覆盖**，默认值指向生产 NFS |
+| `STP_SCRIPT_ROOT` | `<repo>/backend/agent/scripts` | **必须显式设置**；未设不再回落到 `STP_NFS_ROOT/scripts` |
 | `STP_SCRIPT_RUNTIME_ROOT` | WSL 联调配 `/opt/stability-test-agent/scripts` | 扫描机≠运行机时须设 |
 | `ANDROID_ADB_SERVER_PORT` | WSL Agent 必须 `5039` | 忘配则心跳正常但设备数为 0 |
 | `DATABASE_URL` | `postgresql+asyncpg://...` | 同步驱动去掉 `+asyncpg` → `postgresql://...` |

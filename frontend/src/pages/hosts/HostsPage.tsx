@@ -383,7 +383,7 @@ export default function HostsPage() {
           cpu_cores: optionalNumber(extra.cpu_cores),
           ram_usage: asNumber(extra.ram_usage),
           ram_total_gb: optionalNumber(extra.ram_total_gb),
-          disk_usage: asNumber(diskInfo.usage_percent),
+          disk_usage: optionalNumber(diskInfo.usage_percent) ?? null,
           disk_total_gb: optionalNumber(diskInfo.total_gb),
           temperature: optionalNumber(extra.temperature),
           uptime_seconds: optionalNumber(extra.uptime_seconds),

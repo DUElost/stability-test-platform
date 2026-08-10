@@ -50,6 +50,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **开发** | [`development/`](./development/) | 本地环境、**env 表**、测试约定 |
 | **运维** | [`operations/`](./operations/) + runbook | 部署、Agent 版本、联调、监控 |
 | **不变量摘要** | [`../CLAUDE.md`](../CLAUDE.md) | 架构不变量、关键约定、状态机摘要 |
+| **Living 审查** | [`reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md) | 设备日志流转框架 + 缺陷/DoD/落地顺序（v3.0，阶段 0 ✅）；前一版快照 [`reviews/PROJECT_REVIEW_2026-08-09_previous.md`](./reviews/PROJECT_REVIEW_2026-08-09_previous.md) |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
 
@@ -102,5 +103,6 @@ operations/README.md → production-minimum-deployment-checklist.md
 ## 权威 vs 归档
 
 - **权威**：本树 `design/` · `development/` · `operations/` · `adr/` · `prd/` · `acceptance/`，及根 `AGENTS.md` / `CLAUDE.md` 摘要  
+- **Living 审查**：`reviews/`（缺陷/DoD/落地顺序；不替代 `design/`）  
 - **归档**：`archive/`（不新增规范）  
 - **过时处理**：见 [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
