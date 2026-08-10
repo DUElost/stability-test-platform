@@ -71,7 +71,7 @@ export default function Dashboard() {
     degraded: 0,
     avg_cpu_load: 0,
     avg_ram_usage: 0,
-    avg_disk_usage: 0,
+    avg_disk_usage: null,
     online_rate: 0,
   };
 
