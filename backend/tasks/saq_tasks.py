@@ -251,7 +251,11 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
 
     try:
         queue = get_queue()
-        merge_kwargs = {"plan_run_id": plan_run_id, "scan_round_id": scan_round_id}
+        merge_kwargs = {
+            "plan_run_id": plan_run_id,
+            "scan_round_id": scan_round_id,
+            "round_started_at": round_started_at.isoformat(),
+        }
         if continuous_event_upload_enabled():
             await queue.enqueue(
                 SaqJob(
@@ -513,14 +517,35 @@ async def _wait_for_devices_on_nfs(plan_run_id: int) -> int:
     return 0
 
 
-async def merge_task(ctx: dict, *, plan_run_id: int, scan_round_id: str | None = None) -> None:
+async def merge_task(
+    ctx: dict,
+    *,
+    plan_run_id: int,
+    scan_round_id: str | None = None,
+    round_started_at: str | None = None,
+) -> None:
     """ADR-0025 Sprint 4: 归档-2 集中合并（-merge_files 各 agent _org.xls）。"""
     from backend.services.dedup_scan import run_merge_sync
     from backend.services.device_log_event import continuous_event_upload_enabled
 
+    round_dt = None
+    if round_started_at:
+        try:
+            round_dt = datetime.fromisoformat(round_started_at.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning(
+                "saq_merge_invalid_round_started_at plan_run=%d value=%r",
+                plan_run_id, round_started_at,
+            )
+
     logger.info("saq_merge_start plan_run=%d round=%s", plan_run_id, scan_round_id)
     try:
-        result = await asyncio.to_thread(run_merge_sync, plan_run_id, scan_round_id=scan_round_id)
+        result = await asyncio.to_thread(
+            run_merge_sync,
+            plan_run_id,
+            scan_round_id=scan_round_id,
+            round_started_at=round_dt,
+        )
     except Exception:
         logger.exception("saq_merge_failed plan_run=%d", plan_run_id)
         raise

@@ -26,6 +26,7 @@ def test_enqueue_skipped_when_disabled():
 
 def test_upload_one_marks_remote(tmp_path, monkeypatch):
     monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "1")
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     src = tmp_path / "event_dir"
     src.mkdir()
     (src / "a.txt").write_text("hello", encoding="utf-8")
@@ -68,3 +69,32 @@ def test_upload_one_marks_remote(tmp_path, monkeypatch):
     finally:
         for p in patches:
             p.stop()
+
+
+def test_upload_one_rejects_path_outside_local_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "1")
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path / "aee"))
+    (tmp_path / "aee").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    up = EventUploader.instance()
+    up.configure(
+        api_url="http://127.0.0.1:8000",
+        agent_secret="secret",
+        host_id="host-1",
+        nfs_root=str(tmp_path / "nfs"),
+    )
+
+    with patch("backend.agent.event_uploader.requests.post") as mock_post:
+        up._upload_one(_UploadJob(
+            event_id="00000000-0000-0000-0000-000000000002",
+            local_path=str(outside),
+            plan_run_id=1,
+            serial="dev1",
+            platform="MTK",
+            event_type="KE",
+            detected_at="2026-08-09T10:00:00+00:00",
+            host_id="host-1",
+        ))
+    mock_post.assert_not_called()

@@ -189,9 +189,19 @@ def run_extract_sync(plan_run_id: int) -> int:
 
         remote_paths: list[Path] = []
         if continuous_event_upload_enabled():
-            remote_paths = [Path(p) for p in list_remote_paths_for_extract(db, plan_run_id)]
+            from backend.core.artifact_paths import ArtifactPathError, resolve_local_artifact_path
+
+            for raw in list_remote_paths_for_extract(db, plan_run_id):
+                try:
+                    remote_paths.append(resolve_local_artifact_path(raw, must_exist=False))
+                except ArtifactPathError:
+                    logger.warning(
+                        "dedup_extract_skip_unsafe_remote plan_run=%d path=%s",
+                        plan_run_id, raw,
+                    )
 
         devices_dir = Path(nfs_root) / "devices" / str(plan_run_id)
+        devices_root = devices_dir.resolve(strict=False)
         jira_dir = Path(nfs_root) / "jira" / str(plan_run_id)
         jira_dir.mkdir(parents=True, exist_ok=True)
 
@@ -217,7 +227,26 @@ def run_extract_sync(plan_run_id: int) -> int:
                     )
         else:
             for name in sorted(target_names):
-                src = devices_dir / name
+                if not name or ".." in name or name.startswith(("/", "\\")):
+                    logger.warning(
+                        "dedup_extract_skip_unsafe_name plan_run=%d name=%r",
+                        plan_run_id, name,
+                    )
+                    continue
+                try:
+                    src = (devices_dir / name).resolve(strict=False)
+                except OSError:
+                    logger.debug(
+                        "dedup_extract_skip_unresolvable plan_run=%d name=%s",
+                        plan_run_id, name,
+                    )
+                    continue
+                if not src.is_relative_to(devices_root):
+                    logger.warning(
+                        "dedup_extract_skip_outside_devices plan_run=%d path=%s",
+                        plan_run_id, src,
+                    )
+                    continue
                 if not src.is_dir():
                     logger.debug(
                         "dedup_extract_skip_missing plan_run=%d name=%s", plan_run_id, name,

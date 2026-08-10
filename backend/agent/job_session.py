@@ -375,7 +375,14 @@ class JobSession:
             platform_collector = get_collector_for_platform(platform)
             plan_run_id = self._payload.get("plan_run_id")
             if plan_run_id is not None:
-                plan_run_id = int(plan_run_id)
+                try:
+                    plan_run_id = int(plan_run_id)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "aee_reconciler_invalid_plan_run_id job=%s value=%r",
+                        self._job_id, plan_run_id,
+                    )
+                    plan_run_id = None
 
             self._reconciler = AeeDbHistoryReconciler(
                 signal_emitter=self._handle.impl.emitter,

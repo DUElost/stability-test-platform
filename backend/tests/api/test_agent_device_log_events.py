@@ -177,7 +177,7 @@ async def test_device_log_events_create_and_update():
             detected_at=datetime.now(timezone.utc).isoformat(),
             state=EventState.REMOTE.value,
             local_path="/mnt/hdd/aee_events/dev/ke_001",
-            remote_path="/mnt/nfs/devices/1/ke_001",
+            remote_path="/mnt/stp-aee/devices/1/ke_001",
             checksum="abc123",
             host_id=seed["host_id"],
         )

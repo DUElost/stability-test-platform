@@ -57,6 +57,7 @@ class HddSpillMonitor:
         self._api_url = ""
         self._agent_secret = ""
         self._host_id = ""
+        self._spill_enqueued_ids: set[str] = set()
 
     @classmethod
     def instance(cls) -> "HddSpillMonitor":
@@ -161,6 +162,7 @@ class HddSpillMonitor:
             "hdd_high_usage usage=%.1f%% threshold=%.1f%% → 触发溢出上送",
             usage_pct, self._threshold_pct,
         )
+        self._spill_enqueued_ids.clear()
         spilled = 0
         for _ in range(self._MAX_SPILL_PER_CYCLE):
             n = self._spill_oldest_event_dir()
@@ -211,7 +213,12 @@ class HddSpillMonitor:
         if not events:
             return 0
         oldest = events[0]
+        event_id = str(oldest.get("id") or "")
+        if event_id and event_id in self._spill_enqueued_ids:
+            return 0
         if EventUploader.instance().enqueue_local_event(event=oldest):
+            if event_id:
+                self._spill_enqueued_ids.add(event_id)
             logger.info(
                 "hdd_spill_enqueue_event_uploader event_id=%s path=%s",
                 oldest.get("id"), oldest.get("local_path"),

@@ -18,10 +18,20 @@ from typing import Any, Dict, Optional
 import requests
 
 try:
-    from backend.agent.aee.paths import get_aee_nfs_root, resolve_upload_devices_dir
+    from backend.agent.aee.paths import (
+        PathOutsideRootError,
+        get_aee_nfs_root,
+        resolve_path_under_aee_local,
+        resolve_upload_devices_dir,
+    )
     from backend.agent.upload_manager import UploadManager
 except ImportError:
-    from agent.aee.paths import get_aee_nfs_root, resolve_upload_devices_dir
+    from agent.aee.paths import (
+        PathOutsideRootError,
+        get_aee_nfs_root,
+        resolve_path_under_aee_local,
+        resolve_upload_devices_dir,
+    )
     from agent.upload_manager import UploadManager
 
 logger = logging.getLogger(__name__)
@@ -184,7 +194,14 @@ class EventUploader:
             self._upload_one(job)
 
     def _upload_one(self, job: _UploadJob) -> None:
-        src = Path(job.local_path)
+        try:
+            src = resolve_path_under_aee_local(job.local_path)
+        except PathOutsideRootError:
+            logger.warning(
+                "event_uploader_unsafe_local_path event_id=%s path=%s",
+                job.event_id, job.local_path,
+            )
+            return
         if not src.is_dir():
             logger.warning("event_uploader_missing_local event_id=%s path=%s", job.event_id, src)
             return

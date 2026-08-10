@@ -63,6 +63,22 @@ def get_aee_local_root() -> Path:
     return Path(_AEE_LOCAL_ROOT_DEFAULT)
 
 
+class PathOutsideRootError(ValueError):
+    """Raised when a path escapes the configured AEE local root."""
+
+
+def resolve_path_under_aee_local(raw: str) -> Path:
+    """Resolve *raw* under ``get_aee_local_root()``; reject ``..`` / symlink escape."""
+    root = get_aee_local_root().resolve(strict=False)
+    try:
+        resolved = Path(raw).expanduser().resolve(strict=False)
+    except OSError as exc:
+        raise PathOutsideRootError(str(raw)) from exc
+    if not resolved.is_relative_to(root):
+        raise PathOutsideRootError(f"{resolved} is not under {root}")
+    return resolved
+
+
 def _aee_subdir_layout() -> str:
     """D3: 子目录布局开关。`stp`(默认,ADR-0025 事件目录聚合) / `correlated`(逃生口,对齐 monolith 旧布局)。"""
     return (os.environ.get("STP_WATCHER_AEE_SUBDIR_LAYOUT", "stp") or "").strip().lower()

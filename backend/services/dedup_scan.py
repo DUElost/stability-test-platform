@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from backend.models.plan_run_artifact import PlanRunArtifact
@@ -68,9 +68,6 @@ def _register_scan_artifacts_from_nfs(
             )
         ).scalar_one_or_none()
         if existing:
-            if scan_round_id and existing.scan_round_id != scan_round_id:
-                existing.scan_round_id = scan_round_id
-                count += 1
             continue
 
         m = _HOST_PREFIX_RE.match(xls.name)
@@ -221,7 +218,12 @@ def record_scan_archive_state(
         db.close()
 
 
-def run_merge_sync(plan_run_id: int, *, scan_round_id: str | None = None) -> str:
+def run_merge_sync(
+    plan_run_id: int,
+    *,
+    scan_round_id: str | None = None,
+    round_started_at: datetime | None = None,
+) -> str:
     """同步执行 merge（-merge_files 或 -merge_files_list，视工具能力）。
 
     阻塞等待子进程完成，校验 merge_result/ 出现新产物目录，返回 "ok" 或空串。
@@ -231,7 +233,11 @@ def run_merge_sync(plan_run_id: int, *, scan_round_id: str | None = None) -> str
         logger.warning("merge_skip_tool_not_configured plan_run=%d", plan_run_id)
         return ""
 
-    org_files = _load_org_files_for_merge(plan_run_id, scan_round_id=scan_round_id)
+    org_files = _load_org_files_for_merge(
+        plan_run_id,
+        scan_round_id=scan_round_id,
+        round_started_at=round_started_at,
+    )
     if not org_files:
         logger.warning("merge_skip_no_org_files plan_run=%d", plan_run_id)
         return ""
@@ -327,9 +333,33 @@ def _load_org_files_for_merge(
             PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
         )
         if scan_round_id:
-            stmt = stmt.where(PlanRunArtifact.scan_round_id == scan_round_id)
+            legacy_floor = round_started_at
+            if legacy_floor is None:
+                try:
+                    legacy_floor = datetime.fromisoformat(scan_round_id.replace("Z", "+00:00"))
+                except ValueError:
+                    logger.warning(
+                        "merge_org_files_invalid_scan_round_id plan_run=%d id=%s",
+                        plan_run_id, scan_round_id,
+                    )
+                    return []
+            stmt = stmt.where(
+                or_(
+                    PlanRunArtifact.scan_round_id == scan_round_id,
+                    and_(
+                        PlanRunArtifact.scan_round_id.is_(None),
+                        PlanRunArtifact.created_at >= legacy_floor,
+                    ),
+                )
+            )
         elif round_started_at is not None:
             stmt = stmt.where(PlanRunArtifact.created_at >= round_started_at)
+        else:
+            logger.warning(
+                "merge_org_files_no_round_filter plan_run=%d — refusing to load all history",
+                plan_run_id,
+            )
+            return []
         rows = db.execute(stmt).all()
         return [r[0] for r in rows if "_org.xls" in r[0]]
     finally:

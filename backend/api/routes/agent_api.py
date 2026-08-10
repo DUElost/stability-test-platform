@@ -2233,6 +2233,18 @@ def _parse_iso_dt(value: str, field: str) -> datetime:
         ) from exc
 
 
+def _validated_remote_path(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    try:
+        return str(resolve_local_artifact_path(raw, must_exist=False))
+    except ArtifactPathError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"device_log_event.remote_path invalid: {exc}",
+        ) from exc
+
+
 @router.post("/device-log-events", response_model=ApiResponse[dict])
 async def ingest_device_log_events(
     payload: DeviceLogEventBatchIn,
@@ -2297,7 +2309,7 @@ async def ingest_device_log_events(
                     detail=f"device_log_event host_id mismatch: {ev.host_id!r} != {row.host_id!r}",
                 )
             row.state = ev.state
-            row.remote_path = ev.remote_path
+            row.remote_path = _validated_remote_path(ev.remote_path)
             row.checksum = ev.checksum
             row.size_bytes = ev.size_bytes
             row.plan_run_id = ev.plan_run_id
@@ -2313,7 +2325,7 @@ async def ingest_device_log_events(
                 device_timestamp=device_ts,
                 state=ev.state,
                 local_path=ev.local_path,
-                remote_path=ev.remote_path,
+                remote_path=_validated_remote_path(ev.remote_path),
                 size_bytes=ev.size_bytes,
                 checksum=ev.checksum,
                 plan_run_id=ev.plan_run_id,
