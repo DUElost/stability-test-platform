@@ -136,3 +136,22 @@ def test_resolve_extract_event_src_rejects_plan_run_symlink_escape(tmp_path):
         legacy_root="",
         plan_run_id=42,
     ) is None
+
+
+def test_resolve_extract_event_src_rejects_cross_plan_run_symlink(tmp_path):
+    nfs = tmp_path / "nfs"
+    event_name = "ev1"
+    devices = nfs / "devices"
+    real_run = devices / "99" / event_name
+    real_run.mkdir(parents=True)
+    (real_run / "a.txt").write_text("x", encoding="utf-8")
+    (devices / "42").symlink_to(devices / "99", target_is_directory=True)
+
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    assert resolve_extract_event_src(
+        event_name,
+        nfs_root=str(nfs),
+        legacy_root="",
+        plan_run_id=42,
+    ) is None

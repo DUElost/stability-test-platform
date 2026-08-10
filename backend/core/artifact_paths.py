@@ -136,7 +136,11 @@ def _plan_run_devices_scope(storage_root: str, plan_run_id: int) -> Path | None:
         link_target = plan_run_entry.resolve(strict=False)
         if not link_target.is_relative_to(devices_parent_real):
             return None
+        if link_target.name != str(int(plan_run_id)):
+            return None
     plan_run_scope = (devices_parent_real / str(int(plan_run_id))).resolve(strict=False)
+    if plan_run_scope.name != str(int(plan_run_id)):
+        return None
     if not plan_run_scope.is_relative_to(devices_parent_real):
         return None
     return plan_run_scope
