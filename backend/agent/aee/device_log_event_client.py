@@ -30,7 +30,7 @@ class DeviceLogEventClient:
 
     @classmethod
     def from_env(cls, *, api_url: str, agent_secret: str, host_id: str) -> Optional["DeviceLogEventClient"]:
-        if not _env_truthy("STP_DEVICE_LOG_EVENT_ENABLED", default=True):
+        if not _env_truthy("STP_DEVICE_LOG_EVENT_ENABLED", default=False):
             return None
         if not api_url or not agent_secret or not host_id:
             return None
@@ -93,7 +93,7 @@ class DeviceLogEventClient:
         try:
             resp = requests.get(
                 f"{self.api_url}/api/v1/agent/device-log-events",
-                params={"host_id": self.host_id, "state": state},
+                params={"host_id": self.host_id, "state": state, "limit": 1},
                 headers=self._headers(),
                 timeout=self.timeout,
             )

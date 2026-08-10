@@ -211,7 +211,7 @@ class HddSpillMonitor:
         if not events:
             return 0
         oldest = events[0]
-        if EventUploader.instance().enqueue_local_event(oldest):
+        if EventUploader.instance().enqueue_local_event(event=oldest):
             logger.info(
                 "hdd_spill_enqueue_event_uploader event_id=%s path=%s",
                 oldest.get("id"), oldest.get("local_path"),

@@ -2274,6 +2274,11 @@ async def ingest_device_log_events(
             job = await db.get(JobInstance, ev.job_id)
             if job is None:
                 raise HTTPException(status_code=404, detail=f"job {ev.job_id} not found")
+            if job.host_id and job.host_id != ev.host_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"device_log_event.host_id {ev.host_id!r} does not match job host {job.host_id!r}",
+                )
 
         if ev.id:
             try:
@@ -2286,6 +2291,11 @@ async def ingest_device_log_events(
             row = await db.get(DeviceLogEvent, event_id)
             if row is None:
                 raise HTTPException(status_code=404, detail=f"device_log_event {ev.id} not found")
+            if row.host_id != ev.host_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"device_log_event host_id mismatch: {ev.host_id!r} != {row.host_id!r}",
+                )
             row.state = ev.state
             row.remote_path = ev.remote_path
             row.checksum = ev.checksum
@@ -2337,10 +2347,11 @@ async def ingest_device_log_events(
 async def list_device_log_events(
     host_id: str,
     state: Optional[str] = None,
+    limit: Optional[int] = None,
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
 ):
-    """Agent 重启恢复：按 host + 可选 state 拉取待处理事件 id 列表。"""
+    """Agent 重启恢复：按 host + 可选 state 拉取待处理事件（``detected_at`` 升序）。"""
     stmt = select(DeviceLogEvent).where(DeviceLogEvent.host_id == host_id)
     if state:
         states = [s.strip() for s in state.split(",") if s.strip()]
@@ -2349,7 +2360,13 @@ async def list_device_log_events(
             raise HTTPException(status_code=400, detail=f"invalid state filter: {invalid}")
         stmt = stmt.where(DeviceLogEvent.state.in_(states))
 
-    rows = (await db.execute(stmt.order_by(DeviceLogEvent.detected_at.asc()))).scalars().all()
+    stmt = stmt.order_by(DeviceLogEvent.detected_at.asc())
+    if limit is not None:
+        if limit < 1:
+            raise HTTPException(status_code=400, detail="limit must be >= 1")
+        stmt = stmt.limit(limit)
+
+    rows = (await db.execute(stmt)).scalars().all()
     return ok({
         "events": [
             {

@@ -68,6 +68,9 @@ def _register_scan_artifacts_from_nfs(
             )
         ).scalar_one_or_none()
         if existing:
+            if scan_round_id and existing.scan_round_id != scan_round_id:
+                existing.scan_round_id = scan_round_id
+                count += 1
             continue
 
         m = _HOST_PREFIX_RE.match(xls.name)

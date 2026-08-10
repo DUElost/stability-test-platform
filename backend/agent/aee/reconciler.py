@@ -868,7 +868,7 @@ class AeeDbHistoryReconciler:
             from agent.event_uploader import EventUploader
 
         if EventUploader.is_enabled():
-            EventUploader.instance().enqueue_local_event({
+            EventUploader.instance().enqueue_local_event(event={
                 "id": event_id,
                 "local_path": str(local_path),
                 "serial": self._serial,

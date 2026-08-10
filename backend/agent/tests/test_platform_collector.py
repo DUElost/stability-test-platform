@@ -1,7 +1,5 @@
 """PlatformCollector unit tests."""
 
-from pathlib import Path
-
 from backend.agent.aee.collector import get_collector_for_platform
 from backend.agent.aee.collectors.mtk import MtkPlatformCollector
 

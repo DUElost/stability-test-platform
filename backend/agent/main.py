@@ -785,9 +785,11 @@ def main() -> None:
                 )
             ScanRunner.instance().configure(force=True)
             UploadManager.instance().configure(force=True)
+            reloaded_api_url = (os.getenv("API_URL") or api_url).rstrip("/")
+            reloaded_agent_secret = os.getenv("AGENT_SECRET") or agent_secret
             EventUploader.instance().configure(
-                api_url=api_url,
-                agent_secret=agent_secret,
+                api_url=reloaded_api_url,
+                agent_secret=reloaded_agent_secret,
                 host_id=str(host_id),
                 force=True,
             )
