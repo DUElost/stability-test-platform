@@ -125,6 +125,19 @@ def test_resolve_shared_storage_root_cifs_alias(monkeypatch):
     assert resolve_shared_storage_root() == "/mnt/cifs"
 
 
+def test_resolve_path_under_aee_local_rejects_escape(tmp_path, monkeypatch):
+    from backend.agent.aee.paths import PathOutsideRootError, resolve_path_under_aee_local
+
+    root = tmp_path / "aee"
+    root.mkdir()
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(root))
+    inside = root / "event"
+    inside.mkdir()
+    assert resolve_path_under_aee_local(str(inside)) == inside.resolve()
+    with pytest.raises(PathOutsideRootError):
+        resolve_path_under_aee_local(str(tmp_path / "outside"))
+
+
 def test_resolve_shared_storage_root_ignores_stp_nfs_root(monkeypatch):
     _clear_share_env(monkeypatch)
     monkeypatch.setenv("STP_NFS_ROOT", "/mnt/storage")

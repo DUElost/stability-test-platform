@@ -182,29 +182,105 @@ def run_extract_sync(plan_run_id: int) -> int:
             return -2
 
         target_names = collect_extract_event_dir_names(db, plan_run_id)
+        from backend.services.device_log_event import (
+            continuous_event_upload_enabled,
+            list_remote_paths_for_extract,
+        )
+
+        remote_paths: list[Path] = []
+        if continuous_event_upload_enabled():
+            from backend.core.artifact_paths import ArtifactPathError, resolve_device_event_remote_path
+
+            for raw in list_remote_paths_for_extract(db, plan_run_id):
+                try:
+                    remote_paths.append(resolve_device_event_remote_path(
+                        raw,
+                        plan_run_id=plan_run_id,
+                        must_exist=False,
+                    ))
+                except ArtifactPathError:
+                    logger.warning(
+                        "dedup_extract_skip_unsafe_remote plan_run=%d path=%s",
+                        plan_run_id, raw,
+                    )
+
         devices_dir = Path(nfs_root) / "devices" / str(plan_run_id)
+        devices_root = devices_dir.resolve(strict=False)
         jira_dir = Path(nfs_root) / "jira" / str(plan_run_id)
         jira_dir.mkdir(parents=True, exist_ok=True)
 
         extracted = 0
-        for name in sorted(target_names):
-            src = devices_dir / name
-            if not src.is_dir():
-                logger.debug(
-                    "dedup_extract_skip_missing plan_run=%d name=%s", plan_run_id, name,
-                )
-                continue
-            dest = jira_dir / name
-            if dest.exists():
-                continue
-            try:
-                shutil.copytree(str(src), str(dest))
-                extracted += 1
-            except Exception:
-                logger.exception(
-                    "dedup_extract_event_dir_failed plan_run=%d dir=%s",
-                    plan_run_id, src,
-                )
+        if remote_paths:
+            from backend.core.artifact_paths import copytree_validated_event_dir
+
+            for src in remote_paths:
+                if not src.is_dir():
+                    logger.debug(
+                        "dedup_extract_skip_missing_remote plan_run=%d path=%s",
+                        plan_run_id, src,
+                    )
+                    continue
+                dest = jira_dir / src.name
+                if dest.exists():
+                    continue
+                try:
+                    copytree_validated_event_dir(src, dest, plan_run_id=plan_run_id)
+                    extracted += 1
+                except ArtifactPathError:
+                    logger.warning(
+                        "dedup_extract_skip_unsafe_remote plan_run=%d path=%s",
+                        plan_run_id, src,
+                    )
+                except Exception:
+                    logger.exception(
+                        "dedup_extract_remote_dir_failed plan_run=%d dir=%s",
+                        plan_run_id, src,
+                    )
+        else:
+            from backend.core.artifact_paths import ArtifactPathError, copytree_under_root
+
+            for name in sorted(target_names):
+                if not name or ".." in name or name.startswith(("/", "\\")):
+                    logger.warning(
+                        "dedup_extract_skip_unsafe_name plan_run=%d name=%r",
+                        plan_run_id, name,
+                    )
+                    continue
+                try:
+                    src = (devices_dir / name).resolve(strict=False)
+                except OSError:
+                    logger.debug(
+                        "dedup_extract_skip_unresolvable plan_run=%d name=%s",
+                        plan_run_id, name,
+                    )
+                    continue
+                if not src.is_relative_to(devices_root):
+                    logger.warning(
+                        "dedup_extract_skip_outside_devices plan_run=%d path=%s",
+                        plan_run_id, src,
+                    )
+                    continue
+                if not src.is_dir():
+                    logger.debug(
+                        "dedup_extract_skip_missing plan_run=%d name=%s", plan_run_id, name,
+                    )
+                    continue
+                dest = jira_dir / name
+                if dest.exists():
+                    continue
+                try:
+                    copytree_under_root(src, dest, root=devices_root)
+                    extracted += 1
+                except ArtifactPathError:
+                    logger.warning(
+                        "dedup_extract_skip_outside_devices plan_run=%d path=%s",
+                        plan_run_id, src,
+                    )
+                except Exception:
+                    logger.exception(
+                        "dedup_extract_event_dir_failed plan_run=%d dir=%s",
+                        plan_run_id, src,
+                    )
 
         for row in merge_rows:
             merge_xls = Path(row.storage_uri)

@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from backend.models.plan_run_artifact import PlanRunArtifact
@@ -52,7 +52,7 @@ _HOST_PREFIX_RE = re.compile(r"^([A-Za-z0-9_-]+?)_")
 
 
 def _register_scan_artifacts_from_nfs(
-    db: Session, plan_run_id: int, dedup_dir: Path
+    db: Session, plan_run_id: int, dedup_dir: Path, *, scan_round_id: str | None = None,
 ) -> int:
     """扫 dedup_dir 取 *_org.xls → 提取 host_id → 写 plan_run_artifact。
 
@@ -79,6 +79,7 @@ def _register_scan_artifacts_from_nfs(
             storage_uri=str(xls),
             artifact_type=ARTIFACT_TYPE_SCAN,
             size_bytes=size,
+            scan_round_id=scan_round_id,
         ))
         count += 1
     if count:
@@ -86,7 +87,12 @@ def _register_scan_artifacts_from_nfs(
     return count
 
 
-def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
+def run_scan_sync(
+    plan_run_id: int,
+    *,
+    is_final: bool = False,
+    scan_round_id: str | None = None,
+) -> str:
     """扫描中心存储（CIFS）dedup/{plan_run_id}/ 目录，注册已上送的 *_org.xls 产物。
 
     Agent 已通过 scan_now → run_local_scan → UploadManager 上送文件到中心存储。
@@ -109,7 +115,9 @@ def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
             logger.warning("scan_skip_dedup_dir_missing plan_run=%d dir=%s", plan_run_id, dedup_dir)
             return ""
 
-        n = _register_scan_artifacts_from_nfs(db, plan_run_id, dedup_dir)
+        n = _register_scan_artifacts_from_nfs(
+            db, plan_run_id, dedup_dir, scan_round_id=scan_round_id,
+        )
         logger.info("scan_artifacts_registered plan_run=%d count=%d", plan_run_id, n)
         return str(n) if n else ""
     finally:
@@ -210,7 +218,12 @@ def record_scan_archive_state(
         db.close()
 
 
-def run_merge_sync(plan_run_id: int) -> str:
+def run_merge_sync(
+    plan_run_id: int,
+    *,
+    scan_round_id: str | None = None,
+    round_started_at: datetime | None = None,
+) -> str:
     """同步执行 merge（-merge_files 或 -merge_files_list，视工具能力）。
 
     阻塞等待子进程完成，校验 merge_result/ 出现新产物目录，返回 "ok" 或空串。
@@ -220,7 +233,11 @@ def run_merge_sync(plan_run_id: int) -> str:
         logger.warning("merge_skip_tool_not_configured plan_run=%d", plan_run_id)
         return ""
 
-    org_files = _load_org_files_for_merge(plan_run_id)
+    org_files = _load_org_files_for_merge(
+        plan_run_id,
+        scan_round_id=scan_round_id,
+        round_started_at=round_started_at,
+    )
     if not org_files:
         logger.warning("merge_skip_no_org_files plan_run=%d", plan_run_id)
         return ""
@@ -301,17 +318,49 @@ def run_merge_sync(plan_run_id: int) -> str:
     return "ok"
 
 
-def _load_org_files_for_merge(plan_run_id: int) -> list[str]:
+def _load_org_files_for_merge(
+    plan_run_id: int,
+    *,
+    scan_round_id: str | None = None,
+    round_started_at: datetime | None = None,
+) -> list[str]:
     from backend.core.database import SessionLocal
 
     db = SessionLocal()
     try:
-        rows = db.execute(
-            select(PlanRunArtifact.storage_uri).where(
-                PlanRunArtifact.plan_run_id == plan_run_id,
-                PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
+        stmt = select(PlanRunArtifact.storage_uri).where(
+            PlanRunArtifact.plan_run_id == plan_run_id,
+            PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
+        )
+        if scan_round_id:
+            legacy_floor = round_started_at
+            if legacy_floor is None:
+                try:
+                    legacy_floor = datetime.fromisoformat(scan_round_id.replace("Z", "+00:00"))
+                except ValueError:
+                    logger.warning(
+                        "merge_org_files_invalid_scan_round_id plan_run=%d id=%s",
+                        plan_run_id, scan_round_id,
+                    )
+                    return []
+            stmt = stmt.where(
+                or_(
+                    PlanRunArtifact.scan_round_id == scan_round_id,
+                    and_(
+                        PlanRunArtifact.scan_round_id.is_(None),
+                        PlanRunArtifact.created_at >= legacy_floor,
+                    ),
+                )
             )
-        ).all()
+        elif round_started_at is not None:
+            stmt = stmt.where(PlanRunArtifact.created_at >= round_started_at)
+        else:
+            logger.warning(
+                "merge_org_files_no_round_filter plan_run=%d — refusing to load all history",
+                plan_run_id,
+            )
+            return []
+        rows = db.execute(stmt).all()
         return [r[0] for r in rows if "_org.xls" in r[0]]
     finally:
         db.close()

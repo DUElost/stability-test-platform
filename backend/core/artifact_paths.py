@@ -67,7 +67,65 @@ def resolve_local_artifact_path(storage_uri: str, *, must_exist: bool = False) -
     return resolved_path
 
 
+def resolve_device_event_remote_path(
+    storage_uri: str,
+    *,
+    plan_run_id: int | None = None,
+    event_id: str | None = None,
+    must_exist: bool = False,
+) -> Path:
+    """Validate a DeviceLogEvent ``remote_path`` under ``devices/`` scope."""
+    resolved_path = resolve_local_artifact_path(storage_uri, must_exist=must_exist)
+    devices_root = (get_stp_nfs_root() / "devices").resolve(strict=False)
+    if not resolved_path.is_relative_to(devices_root):
+        raise ArtifactPathOutsideRootError(
+            "device log remote path must stay under devices/: "
+            f"{resolved_path}"
+        )
+    if plan_run_id is not None:
+        scope = (devices_root / str(plan_run_id)).resolve(strict=False)
+        if not resolved_path.is_relative_to(scope):
+            raise ArtifactPathOutsideRootError(
+                f"device log remote path must stay under {scope}: {resolved_path}"
+            )
+    elif event_id:
+        scope = (devices_root / "unassigned" / event_id).resolve(strict=False)
+        if not resolved_path.is_relative_to(scope):
+            raise ArtifactPathOutsideRootError(
+                f"device log remote path must stay under {scope}: {resolved_path}"
+            )
+    return resolved_path
+
+
+def _reject_path_traversal(raw: str) -> None:
+    if "\0" in raw or ".." in Path(raw).parts:
+        raise ArtifactPathError("path traversal not allowed")
+
+
+def copytree_validated_event_dir(src: Path, dest: Path, *, plan_run_id: int) -> None:
+    """Copy a device event directory after scope validation (ADR-0028)."""
+    import shutil
+
+    resolve_device_event_remote_path(str(src), plan_run_id=plan_run_id, must_exist=False)
+    shutil.copytree(str(src), str(dest))
+
+
+def copytree_under_root(src: Path, dest: Path, *, root: Path) -> None:
+    """Copy a directory tree only when *src* resolves under *root*."""
+    import shutil
+
+    try:
+        resolved = src.resolve(strict=False)
+    except OSError as exc:
+        raise ArtifactPathOutsideRootError(str(src)) from exc
+    root_resolved = root.resolve(strict=False)
+    if not resolved.is_relative_to(root_resolved):
+        raise ArtifactPathOutsideRootError(f"{resolved} is not under {root_resolved}")
+    shutil.copytree(str(resolved), str(dest))
+
+
 def _coerce_local_path(raw: str) -> Path:
+    _reject_path_traversal(raw)
     if _WINDOWS_DRIVE_PATH_RE.match(raw) or raw.startswith("\\\\"):
         return Path(raw)
 

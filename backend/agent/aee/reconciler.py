@@ -308,6 +308,10 @@ class AeeDbHistoryReconciler:
         shell_fn: Optional[Callable[[str, int], Optional[str]]] = None,
         baseline_snapshot_enabled: bool = True,
         baseline_chunk_size: Optional[int] = None,
+        plan_run_id: Optional[int] = None,
+        platform: str = "MTK",
+        device_log_client: Any = None,
+        platform_collector: Any = None,
     ) -> None:
         self._emitter = signal_emitter
         self._state_store = state_store
@@ -317,6 +321,10 @@ class AeeDbHistoryReconciler:
         self._adb_path = str(adb_path)
         self._local_root = Path(local_root) if local_root else None
         self._run_date_stamp = run_date_stamp
+        self._plan_run_id = int(plan_run_id) if plan_run_id is not None else None
+        self._platform = str(platform or "MTK")
+        self._device_log_client = device_log_client
+        self._platform_collector = platform_collector
 
         self._baseline = (
             baseline_interval_seconds
@@ -768,7 +776,7 @@ class AeeDbHistoryReconciler:
                 "entry_origin": entry_origin,
             }
 
-            self._emitter.emit(
+            seq_no = self._emitter.emit(
                 category=category,
                 source="reconciler",
                 path_on_device=db_path,
@@ -777,6 +785,14 @@ class AeeDbHistoryReconciler:
                 extra=extra,
             )
             self.stats.signals_emitted += 1
+            self._register_device_log_event(
+                payload,
+                seq_no=seq_no,
+                detected_at=detected_at,
+                event_type=event_type,
+                event_subtype=event_subtype,
+                aee_ts_utc=aee_ts_utc,
+            )
             logger.debug(
                 "aee_reconciler_emit serial=%s job=%d cat=%s pkg=%s subtype=%s",
                 self._serial, self._job_id, category,
@@ -794,6 +810,78 @@ class AeeDbHistoryReconciler:
             logger.exception(
                 "aee_reconciler_emit_failed serial=%s job=%d payload=%s",
                 self._serial, self._job_id, payload,
+            )
+
+    def _register_device_log_event(
+        self,
+        payload: Dict[str, Any],
+        *,
+        seq_no: int,
+        detected_at: datetime,
+        event_type: str,
+        event_subtype: str,
+        aee_ts_utc: Optional[datetime],
+    ) -> None:
+        """写入 DeviceLogEvent 并可选入队连续上送。"""
+        if self._device_log_client is None:
+            return
+        output_subdir = payload.get("output_subdir")
+        if not output_subdir:
+            return
+        local_path = Path(str(output_subdir))
+        if not local_path.is_dir():
+            return
+
+        subtype = event_subtype
+        meta_event_type = event_type
+        if self._platform_collector is not None:
+            try:
+                meta = self._platform_collector.parse_metadata(local_path)
+                meta_event_type = meta.event_type or meta_event_type
+                subtype = meta.event_subtype or subtype
+            except Exception:
+                logger.debug(
+                    "aee_reconciler_collector_metadata_fallback serial=%s",
+                    self._serial,
+                    exc_info=True,
+                )
+
+        event_id = self._device_log_client.create_local_event(
+            serial=self._serial,
+            platform=self._platform,
+            event_type=meta_event_type,
+            event_subtype=subtype or None,
+            detected_at=detected_at,
+            device_timestamp=aee_ts_utc,
+            local_path=local_path,
+            plan_run_id=self._plan_run_id,
+            job_id=self._job_id,
+            link_signal_seq_no=seq_no,
+            size_bytes=self._device_log_client.dir_size_bytes(local_path),
+        )
+        if not event_id:
+            return
+
+        try:
+            from ..event_uploader import EventUploader
+        except ImportError:
+            from agent.event_uploader import EventUploader
+
+        if EventUploader.is_enabled():
+            EventUploader.instance().enqueue_local_event(event={
+                "id": event_id,
+                "local_path": str(local_path),
+                "serial": self._serial,
+                "platform": self._platform,
+                "event_type": meta_event_type,
+                "detected_at": detected_at.isoformat(),
+                "plan_run_id": self._plan_run_id,
+                "job_id": self._job_id,
+                "host_id": self._host_id,
+            })
+            logger.debug(
+                "aee_reconciler_device_log_event_enqueued serial=%s event_id=%s",
+                self._serial, event_id,
             )
 
     def _emit_rollback_signal(self) -> None:
