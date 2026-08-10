@@ -157,20 +157,52 @@ def is_ssd_fallback_root(path: Path | str) -> bool:
     return resolved == ssd
 
 
+def iter_aee_local_root_candidates() -> list[Path]:
+    """D5 链上所有可能的事件本地根（用于校验已创建事件的 ``local_path``）。"""
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(path: Path) -> None:
+        try:
+            key = str(path.resolve(strict=False))
+        except OSError:
+            return
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(Path(key))
+
+    configured = (os.getenv("STP_AEE_LOCAL_ROOT") or "").strip()
+    if configured:
+        _add(Path(configured))
+    ssd_env = (os.getenv("STP_AEE_SSD_FALLBACK_ROOT") or "").strip()
+    _add(Path(ssd_env) if ssd_env else _default_ssd_fallback_root())
+    _add(Path(_AEE_LOCAL_ROOT_DEFAULT))
+    return candidates
+
+
 class PathOutsideRootError(ValueError):
     """Raised when a path escapes the configured AEE local root."""
 
 
-def resolve_path_under_aee_local(raw: str) -> Path:
-    """Resolve *raw* under ``get_aee_local_root()``; reject ``..`` / symlink escape."""
-    root = get_aee_local_root().resolve(strict=False)
+def resolve_path_under_aee_local(raw: str, *, root: Path | None = None) -> Path:
+    """Resolve *raw* under an AEE local root; reject ``..`` / symlink escape.
+
+    未指定 *root* 时，在 D5 候选根链中匹配（事件创建后根切换仍可校验）。
+    """
     try:
         resolved = Path(raw).expanduser().resolve(strict=False)
     except OSError as exc:
         raise PathOutsideRootError(str(raw)) from exc
-    if not resolved.is_relative_to(root):
-        raise PathOutsideRootError(f"{resolved} is not under {root}")
-    return resolved
+    if root is not None:
+        root_resolved = root.resolve(strict=False)
+        if not resolved.is_relative_to(root_resolved):
+            raise PathOutsideRootError(f"{resolved} is not under {root_resolved}")
+        return resolved
+    for candidate in iter_aee_local_root_candidates():
+        if resolved.is_relative_to(candidate):
+            return resolved
+    raise PathOutsideRootError(f"{resolved} is not under any configured AEE local root")
 
 
 def _aee_subdir_layout() -> str:

@@ -114,3 +114,25 @@ def test_resolve_extract_event_src_legacy_root(monkeypatch, tmp_path):
     src, devices_root = located
     assert src == legacy_src.resolve()
     assert devices_root == (legacy / "devices" / "42").resolve()
+
+
+def test_resolve_extract_event_src_rejects_plan_run_symlink_escape(tmp_path):
+    nfs = tmp_path / "nfs"
+    outside = tmp_path / "outside"
+    event_name = "ev1"
+    outside_event = outside / event_name
+    outside_event.mkdir(parents=True)
+    (outside_event / "a.txt").write_text("x", encoding="utf-8")
+
+    devices = nfs / "devices"
+    devices.mkdir(parents=True)
+    (devices / "42").symlink_to(outside, target_is_directory=True)
+
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    assert resolve_extract_event_src(
+        event_name,
+        nfs_root=str(nfs),
+        legacy_root="",
+        plan_run_id=42,
+    ) is None

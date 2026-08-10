@@ -154,3 +154,22 @@ def test_is_ssd_fallback_root_matches_env(monkeypatch, tmp_path):
     monkeypatch.setenv("STP_AEE_SSD_FALLBACK_ROOT", str(ssd))
     assert is_ssd_fallback_root(ssd) is True
     assert is_ssd_fallback_root(tmp_path / "other") is False
+
+
+def test_resolve_path_under_aee_local_matches_any_d5_candidate(monkeypatch, tmp_path):
+    from backend.agent.aee.paths import PathOutsideRootError, resolve_path_under_aee_local
+
+    hdd = tmp_path / "hdd"
+    ssd = tmp_path / "ssd"
+    hdd.mkdir()
+    ssd.mkdir()
+    event = hdd / "folder" / "SERIAL" / "event"
+    event.mkdir(parents=True)
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(hdd))
+    monkeypatch.setenv("STP_AEE_SSD_FALLBACK_ROOT", str(ssd))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    # 模拟运行时根已切到 SSD，但事件目录仍在 HDD 上
+    monkeypatch.setattr("backend.agent.aee.paths.get_aee_local_root", lambda: ssd)
+    assert resolve_path_under_aee_local(str(event)) == event.resolve()
+    with pytest.raises(PathOutsideRootError):
+        resolve_path_under_aee_local(str(tmp_path / "outside"))

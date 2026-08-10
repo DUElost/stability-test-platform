@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -230,29 +231,38 @@ def run_extract_sync(plan_run_id: int) -> int:
         extracted_dest_names: set[str] = set()
         from backend.core.artifact_paths import ArtifactPathError, copytree_under_root
 
+        by_dest: dict[str, list[tuple[str, Path, Path]]] = defaultdict(list)
         for raw, src, devices_root in remote_path_rows:
-            dest_name = src.name
+            by_dest[src.name].append((raw, src, devices_root))
+
+        for dest_name, rows in by_dest.items():
+            raw_paths = [item[0] for item in rows]
+            src, devices_root = rows[0][1], rows[0][2]
             if dest_name in extracted_dest_names:
+                archived_remote_paths.extend(raw_paths)
                 continue
             dest = jira_dir / dest_name
             if dest.exists():
                 extracted_dest_names.add(dest_name)
+                archived_remote_paths.extend(raw_paths)
                 continue
             try:
                 copytree_under_root(src, dest, root=devices_root)
                 extracted += 1
                 extracted_dest_names.add(dest_name)
-                archived_remote_paths.append(raw)
+                archived_remote_paths.extend(raw_paths)
             except ArtifactPathError:
                 logger.warning(
-                    "dedup_extract_skip_unsafe_remote plan_run=%d path=%s",
-                    plan_run_id, raw,
+                    "dedup_extract_skip_unsafe_remote plan_run=%d paths=%s",
+                    plan_run_id, raw_paths,
                 )
             except Exception:
                 logger.exception(
                     "dedup_extract_remote_dir_failed plan_run=%d dir=%s",
                     plan_run_id, src,
                 )
+
+        from backend.core.artifact_paths import resolve_extract_event_src
 
         for name in sorted(target_names):
             if name in extracted_dest_names:
@@ -263,29 +273,18 @@ def run_extract_sync(plan_run_id: int) -> int:
                     plan_run_id, name,
                 )
                 continue
-            src = None
-            devices_root = None
-            for root in _storage_roots_for_extract(nfs_root, legacy_root):
-                devices_dir = Path(root) / "devices" / str(plan_run_id)
-                try:
-                    devices_root = devices_dir.resolve(strict=False)
-                    candidate = (devices_dir / name).resolve(strict=False)
-                except OSError:
-                    continue
-                if not candidate.is_relative_to(devices_root):
-                    logger.warning(
-                        "dedup_extract_skip_outside_devices plan_run=%d path=%s",
-                        plan_run_id, candidate,
-                    )
-                    continue
-                if candidate.is_dir():
-                    src = candidate
-                    break
-            if src is None:
+            located = resolve_extract_event_src(
+                name,
+                nfs_root=nfs_root,
+                legacy_root=legacy_root,
+                plan_run_id=plan_run_id,
+            )
+            if located is None:
                 logger.debug(
                     "dedup_extract_skip_missing plan_run=%d name=%s", plan_run_id, name,
                 )
                 continue
+            src, devices_root = located
             dest = jira_dir / name
             if dest.exists():
                 extracted_dest_names.add(name)

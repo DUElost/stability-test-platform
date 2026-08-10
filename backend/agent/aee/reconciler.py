@@ -56,7 +56,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 from ..watcher.contracts import ContractViolation
 from .db_history import load_processed_lines, save_processed_lines, state_key
-from .paths import get_aee_local_root
+from .paths import PathOutsideRootError, get_aee_local_root, resolve_path_under_aee_local
 from .processor import ProcessConfig, process_device_logs
 from .state_migration import WATCHER_AEE_STATE_PREFIX
 from .timestamp import parse_timestamp, to_utc
@@ -826,8 +826,31 @@ class AeeDbHistoryReconciler:
         if self._device_log_client is None:
             return
         output_subdir = payload.get("output_subdir")
-        local_path = Path(str(output_subdir)) if output_subdir else None
-        if local_path is None or not local_path.is_dir():
+        if not output_subdir:
+            self._register_pull_failed_device_log_event(
+                detected_at=detected_at,
+                event_type=event_type,
+                event_subtype=event_subtype,
+                aee_ts_utc=aee_ts_utc,
+                seq_no=seq_no,
+            )
+            return
+        try:
+            local_path = resolve_path_under_aee_local(str(output_subdir))
+        except PathOutsideRootError:
+            logger.warning(
+                "aee_reconciler_local_path_outside_root serial=%s job=%d path=%s",
+                self._serial, self._job_id, output_subdir,
+            )
+            self._register_pull_failed_device_log_event(
+                detected_at=detected_at,
+                event_type=event_type,
+                event_subtype=event_subtype,
+                aee_ts_utc=aee_ts_utc,
+                seq_no=seq_no,
+            )
+            return
+        if not local_path.is_dir():
             self._register_pull_failed_device_log_event(
                 detected_at=detected_at,
                 event_type=event_type,

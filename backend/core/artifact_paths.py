@@ -114,14 +114,32 @@ def copytree_under_root(src: Path, dest: Path, *, root: Path) -> None:
     """Copy a directory tree only when *src* resolves under *root*."""
     import shutil
 
+    root_resolved = root.resolve(strict=False)
     try:
         resolved = src.resolve(strict=False)
     except OSError as exc:
         raise ArtifactPathOutsideRootError(str(src)) from exc
-    root_resolved = root.resolve(strict=False)
     if not resolved.is_relative_to(root_resolved):
         raise ArtifactPathOutsideRootError(f"{resolved} is not under {root_resolved}")
     shutil.copytree(str(resolved), str(dest))
+
+
+def _plan_run_devices_scope(storage_root: str, plan_run_id: int) -> Path | None:
+    """Canonical ``devices/{plan_run_id}/`` scope; reject plan_run symlink escape."""
+    storage = Path(storage_root).resolve(strict=False)
+    devices_parent = storage / "devices"
+    if not devices_parent.is_dir():
+        return None
+    devices_parent_real = devices_parent.resolve(strict=False)
+    plan_run_entry = devices_parent / str(int(plan_run_id))
+    if plan_run_entry.is_symlink():
+        link_target = plan_run_entry.resolve(strict=False)
+        if not link_target.is_relative_to(devices_parent_real):
+            return None
+    plan_run_scope = (devices_parent_real / str(int(plan_run_id))).resolve(strict=False)
+    if not plan_run_scope.is_relative_to(devices_parent_real):
+        return None
+    return plan_run_scope
 
 
 def resolve_extract_event_src(
@@ -150,15 +168,19 @@ def resolve_extract_event_src(
     for root in roots:
         if not root:
             continue
-        devices_root = (Path(root) / "devices" / str(int(plan_run_id))).resolve(strict=False)
+        plan_run_scope = _plan_run_devices_scope(root, plan_run_id)
+        if plan_run_scope is None:
+            continue
+        candidate_entry = plan_run_scope / rel_name
+        if not candidate_entry.is_dir():
+            continue
         try:
-            candidate = (devices_root / rel_name).resolve(strict=False)
+            candidate_real = candidate_entry.resolve(strict=False)
         except OSError:
             continue
-        if not candidate.is_relative_to(devices_root):
+        if not candidate_real.is_relative_to(plan_run_scope):
             continue
-        if candidate.is_dir():
-            return candidate, devices_root
+        return candidate_real, plan_run_scope
     return None
 
 
