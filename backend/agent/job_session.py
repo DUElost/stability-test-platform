@@ -353,21 +353,43 @@ class JobSession:
 
         try:
             from .aee.paths import get_aee_local_root, shanghai_mmdd
+            from .aee.device_log_event_client import DeviceLogEventClient
+            from .aee.collector import get_collector_for_platform
+            from .device_platform import detect_device_platform
+
             local_root = get_aee_local_root()
             run_date_stamp = (
                 shanghai_mmdd(self._started_at)
                 if self._started_at is not None
                 else None
             )
+            adb_path = self._manager.get_dep("adb_path") or "adb"
+            platform = detect_device_platform(adb_path, self._serial)
+            api_url = self._manager.get_dep("api_url") or ""
+            agent_secret = self._manager.get_dep("agent_secret") or ""
+            device_log_client = DeviceLogEventClient.from_env(
+                api_url=api_url,
+                agent_secret=agent_secret,
+                host_id=self._host_id,
+            )
+            platform_collector = get_collector_for_platform(platform)
+            plan_run_id = self._payload.get("plan_run_id")
+            if plan_run_id is not None:
+                plan_run_id = int(plan_run_id)
+
             self._reconciler = AeeDbHistoryReconciler(
                 signal_emitter=self._handle.impl.emitter,
                 state_store=self._manager.get_dep("local_db"),
                 serial=self._serial,
                 job_id=self._job_id,
                 host_id=self._host_id,
-                adb_path=self._manager.get_dep("adb_path") or "adb",
+                adb_path=adb_path,
                 local_root=local_root,
                 run_date_stamp=run_date_stamp,
+                plan_run_id=plan_run_id,
+                platform=platform,
+                device_log_client=device_log_client,
+                platform_collector=platform_collector,
             )
             started = self._reconciler.start()
             if not started:

@@ -34,9 +34,11 @@ class PlanRunArtifact(Base):
     storage_uri   = Column(String(512), nullable=False)
     artifact_type = Column(String(64), nullable=False, default="scan_result_xls")
     size_bytes    = Column(BigInteger)
+    scan_round_id = Column(String(64), nullable=True)
     created_at    = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint("plan_run_id", "storage_uri", name="uq_plan_run_artifact_run_storage"),
         Index("idx_plan_run_artifact_run", "plan_run_id"),
+        Index("idx_plan_run_artifact_run_round", "plan_run_id", "scan_round_id"),
     )

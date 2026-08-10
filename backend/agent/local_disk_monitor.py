@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import shutil
 import threading
 from pathlib import Path
@@ -53,6 +54,9 @@ class HddSpillMonitor:
         self._spilled_total = 0
         self._last_usage_pct: Optional[float] = None
         self._metrics_lock = threading.Lock()
+        self._api_url = ""
+        self._agent_secret = ""
+        self._host_id = ""
 
     @classmethod
     def instance(cls) -> "HddSpillMonitor":
@@ -81,6 +85,9 @@ class HddSpillMonitor:
         spill_threshold_pct: float = 95.0,
         target_pct: float = 70.0,
         disk_usage_fn=None,
+        api_url: str = "",
+        agent_secret: str = "",
+        host_id: str = "",
     ) -> "HddSpillMonitor":
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("configure() after start() is not allowed")
@@ -95,6 +102,9 @@ class HddSpillMonitor:
             from .system_monitor import get_disk_usage
             self._disk_usage_fn = get_disk_usage
         self._configured = True
+        self._api_url = api_url
+        self._agent_secret = agent_secret
+        self._host_id = host_id
         logger.info(
             "hdd_spill_monitor_configured hdd=%s cifs=%s interval=%.0fs threshold=%.0f%% target=%.0f%%",
             self._hdd_root, self._cifs_root, self._interval,
@@ -132,8 +142,11 @@ class HddSpillMonitor:
             self._stop_evt.wait(self._interval)
 
     def check_once(self) -> int:
-        """检查 HDD 水位；超阈则上送最旧事件目录到 15.4 后 prune。返回上送目录数。"""
+        """检查 HDD 水位；超阈则上送最旧事件目录到中心存储后 prune。返回上送目录数。"""
         if not self._configured or not self._cifs_root:
+            return 0
+        if self._ssd_spill_disabled():
+            logger.debug("hdd_spill_skipped_ssd_mode hdd=%s", self._hdd_root)
             return 0
         usage_pct = self._current_usage_pct()
         with self._metrics_lock:
@@ -168,8 +181,49 @@ class HddSpillMonitor:
             logger.info("hdd_spill_done dirs=%d", spilled)
         return spilled
 
+    def _ssd_spill_disabled(self) -> bool:
+        ssd_root = (os.getenv("STP_AEE_SSD_FALLBACK_ROOT") or "").strip()
+        if not ssd_root:
+            return False
+        try:
+            return Path(ssd_root).resolve() == Path(self._hdd_root).resolve()
+        except OSError:
+            return False
+
+    def _spill_via_event_uploader(self) -> int:
+        try:
+            from .event_uploader import EventUploader
+            from .aee.device_log_event_client import DeviceLogEventClient
+        except ImportError:
+            from agent.event_uploader import EventUploader
+            from agent.aee.device_log_event_client import DeviceLogEventClient
+
+        if not EventUploader.is_enabled():
+            return 0
+        client = DeviceLogEventClient.from_env(
+            api_url=self._api_url,
+            agent_secret=self._agent_secret,
+            host_id=self._host_id,
+        )
+        if client is None:
+            return 0
+        events = client.list_events(state="LOCAL")
+        if not events:
+            return 0
+        oldest = events[0]
+        if EventUploader.instance().enqueue_local_event(oldest):
+            logger.info(
+                "hdd_spill_enqueue_event_uploader event_id=%s path=%s",
+                oldest.get("id"), oldest.get("local_path"),
+            )
+            return 1
+        return 0
+
     def _spill_oldest_event_dir(self) -> int:
         """找最旧事件目录，上送到 CIFS 后 prune 本地。返回 1 或 0。"""
+        if self._spill_via_event_uploader():
+            return 1
+
         hdd = Path(self._hdd_root)
         if not hdd.is_dir():
             return 0

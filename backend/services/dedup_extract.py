@@ -182,29 +182,58 @@ def run_extract_sync(plan_run_id: int) -> int:
             return -2
 
         target_names = collect_extract_event_dir_names(db, plan_run_id)
+        from backend.services.device_log_event import (
+            continuous_event_upload_enabled,
+            list_remote_paths_for_extract,
+        )
+
+        remote_paths: list[Path] = []
+        if continuous_event_upload_enabled():
+            remote_paths = [Path(p) for p in list_remote_paths_for_extract(db, plan_run_id)]
+
         devices_dir = Path(nfs_root) / "devices" / str(plan_run_id)
         jira_dir = Path(nfs_root) / "jira" / str(plan_run_id)
         jira_dir.mkdir(parents=True, exist_ok=True)
 
         extracted = 0
-        for name in sorted(target_names):
-            src = devices_dir / name
-            if not src.is_dir():
-                logger.debug(
-                    "dedup_extract_skip_missing plan_run=%d name=%s", plan_run_id, name,
-                )
-                continue
-            dest = jira_dir / name
-            if dest.exists():
-                continue
-            try:
-                shutil.copytree(str(src), str(dest))
-                extracted += 1
-            except Exception:
-                logger.exception(
-                    "dedup_extract_event_dir_failed plan_run=%d dir=%s",
-                    plan_run_id, src,
-                )
+        if remote_paths:
+            for src in remote_paths:
+                if not src.is_dir():
+                    logger.debug(
+                        "dedup_extract_skip_missing_remote plan_run=%d path=%s",
+                        plan_run_id, src,
+                    )
+                    continue
+                dest = jira_dir / src.name
+                if dest.exists():
+                    continue
+                try:
+                    shutil.copytree(str(src), str(dest))
+                    extracted += 1
+                except Exception:
+                    logger.exception(
+                        "dedup_extract_remote_dir_failed plan_run=%d dir=%s",
+                        plan_run_id, src,
+                    )
+        else:
+            for name in sorted(target_names):
+                src = devices_dir / name
+                if not src.is_dir():
+                    logger.debug(
+                        "dedup_extract_skip_missing plan_run=%d name=%s", plan_run_id, name,
+                    )
+                    continue
+                dest = jira_dir / name
+                if dest.exists():
+                    continue
+                try:
+                    shutil.copytree(str(src), str(dest))
+                    extracted += 1
+                except Exception:
+                    logger.exception(
+                        "dedup_extract_event_dir_failed plan_run=%d dir=%s",
+                        plan_run_id, src,
+                    )
 
         for row in merge_rows:
             merge_xls = Path(row.storage_uri)

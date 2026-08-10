@@ -48,3 +48,16 @@ class LeaseStatus(str, Enum):
     ACTIVE   = "ACTIVE"
     RELEASED = "RELEASED"
     EXPIRED  = "EXPIRED"
+
+
+class EventState(str, Enum):
+    """DeviceLogEvent lifecycle (ADR-0028 D1)."""
+
+    DETECTED       = "DETECTED"
+    PULL_FAILED    = "PULL_FAILED"
+    LOCAL          = "LOCAL"
+    UPLOADING      = "UPLOADING"
+    UPLOAD_FAILED  = "UPLOAD_FAILED"
+    REMOTE         = "REMOTE"
+    ARCHIVED       = "ARCHIVED"
+    PRUNED         = "PRUNED"

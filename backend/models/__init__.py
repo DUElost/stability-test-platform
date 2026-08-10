@@ -1,7 +1,8 @@
-from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
+from backend.models.enums import DeviceStatus, EventState, HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.action_template import ActionTemplate
 from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease
+from backend.models.device_log_event import DeviceLogEvent
 from backend.models.host import Device, Host
 from backend.models.job import JobArtifact, JobInstance, StepTrace
 from backend.models.jira_run import JiraRun
@@ -23,6 +24,8 @@ __all__ = [
     "ActionTemplate",
     "Device",
     "DeviceLease",
+    "DeviceLogEvent",
+    "EventState",
     "EventType",
     "Host",
     "HostStatus",

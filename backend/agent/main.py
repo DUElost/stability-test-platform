@@ -31,6 +31,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.config import BASE_DIR, ensure_dirs
     from agent.log_archiver import LogArchiver, collect_archive_heartbeat_metrics
     from agent.scan_runner import ScanRunner
+    from agent.event_uploader import EventUploader
     from agent.upload_manager import UploadManager
     from agent.local_disk_monitor import LocalDiskMonitor
     from agent.heartbeat_thread import HeartbeatThread
@@ -56,6 +57,7 @@ else:
     from .config import BASE_DIR, ensure_dirs
     from .log_archiver import LogArchiver, collect_archive_heartbeat_metrics
     from .scan_runner import ScanRunner
+    from .event_uploader import EventUploader
     from .upload_manager import UploadManager
     from .local_disk_monitor import LocalDiskMonitor
     from .heartbeat_thread import HeartbeatThread
@@ -617,6 +619,12 @@ def main() -> None:
         logger.info("log_archiver=started")
         ScanRunner.instance().configure()
         UploadManager.instance().configure()
+        EventUploader.instance().configure(
+            api_url=api_url,
+            agent_secret=agent_secret,
+            host_id=str(host_id),
+        )
+        EventUploader.instance().start()
         hdd_root = str(get_aee_local_root())
         cifs_root = resolve_shared_storage_root()
         if cifs_root:
@@ -626,6 +634,9 @@ def main() -> None:
                 interval_seconds=float(os.getenv("STP_LOCAL_DISK_MONITOR_INTERVAL_SECONDS", "300")),
                 spill_threshold_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_THRESHOLD", "80")),
                 target_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_TARGET", "70")),
+                api_url=api_url,
+                agent_secret=agent_secret,
+                host_id=str(host_id),
             ).start()
             logger.info("hdd_spill_monitor=started hdd=%s cifs=%s", hdd_root, cifs_root)
         else:
@@ -730,6 +741,12 @@ def main() -> None:
                 payload.get("run_date_stamps") or [],
             )
         elif command == "upload_events":
+            if EventUploader.is_enabled():
+                logger.info(
+                    "control_upload_events_skipped_continuous_uploader plan_run=%s",
+                    payload.get("plan_run_id"),
+                )
+                return
             plan_run_id = payload.get("plan_run_id")
             event_dir_names = payload.get("event_dir_names", [])
             if not plan_run_id:
@@ -768,6 +785,13 @@ def main() -> None:
                 )
             ScanRunner.instance().configure(force=True)
             UploadManager.instance().configure(force=True)
+            EventUploader.instance().configure(
+                api_url=api_url,
+                agent_secret=agent_secret,
+                host_id=str(host_id),
+                force=True,
+            )
+            EventUploader.instance().start()
             operation_cap = operation_scheduler.reload_from_env()
             runner_ok = ScanRunner.instance().is_configured()
             uploader_ok = UploadManager.instance().is_configured()

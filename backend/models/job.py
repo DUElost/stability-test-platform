@@ -166,8 +166,13 @@ class JobLogSignal(Base):
     __tablename__ = "job_log_signal"
 
     id             = Column(BigInteger, primary_key=True)
-    job_id         = Column(Integer, ForeignKey("job_instance.id", ondelete="CASCADE"), nullable=False)
+    job_id         = Column(Integer, ForeignKey("job_instance.id", ondelete="SET NULL"), nullable=True)
     host_id        = Column(String(64), ForeignKey("host.id", ondelete="CASCADE"), nullable=False)
+    device_log_event_id = Column(
+        "device_log_event_id",
+        ForeignKey("device_log_event.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     device_serial  = Column(String(128), nullable=False)
     seq_no         = Column(BigInteger, nullable=False)
     category       = Column(String(32), nullable=False)   # ANR | AEE | VENDOR_AEE | MOBILELOG
@@ -182,6 +187,11 @@ class JobLogSignal(Base):
     extra          = Column(JSONB)
 
     job = relationship("JobInstance", foreign_keys=[job_id], back_populates="log_signals")
+    device_log_event = relationship(
+        "DeviceLogEvent",
+        foreign_keys=[device_log_event_id],
+        back_populates="log_signals",
+    )
 
     __table_args__ = (
         UniqueConstraint("job_id", "seq_no", name="uq_job_log_signal_job_seq"),

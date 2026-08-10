@@ -3,6 +3,8 @@
 Authentication: X-Agent-Secret header (compared to AGENT_SECRET env var).
 """
 
+from uuid import UUID
+
 import json
 import hashlib
 import logging
@@ -31,7 +33,8 @@ from backend.core.metrics import (
     record_reconciler_skip_unchanged,
     record_watcher_capability,
 )
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
+from backend.models.device_log_event import DeviceLogEvent
+from backend.models.enums import EventState, HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
@@ -2192,6 +2195,180 @@ async def ingest_log_signals(
             logger.debug("broadcast_watcher_signal_failed", exc_info=True)
 
     return ok({"inserted": len(inserted_rows), "total": len(payload.signals)})
+
+
+_VALID_EVENT_STATES = {s.value for s in EventState}
+
+
+class DeviceLogEventIn(BaseModel):
+    id: Optional[str] = None
+    serial: str
+    platform: str
+    event_type: str
+    event_subtype: Optional[str] = None
+    detected_at: str
+    device_timestamp: Optional[str] = None
+    state: str
+    local_path: str
+    remote_path: Optional[str] = None
+    size_bytes: Optional[int] = None
+    checksum: Optional[str] = None
+    plan_run_id: Optional[int] = None
+    host_id: str
+    job_id: Optional[int] = None
+    link_signal_seq_no: Optional[int] = None
+
+
+class DeviceLogEventBatchIn(BaseModel):
+    events: List[DeviceLogEventIn]
+
+
+def _parse_iso_dt(value: str, field: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"device_log_event.{field} invalid ISO8601: {value}",
+        ) from exc
+
+
+@router.post("/device-log-events", response_model=ApiResponse[dict])
+async def ingest_device_log_events(
+    payload: DeviceLogEventBatchIn,
+    db: AsyncSession = Depends(get_async_db),
+    _=Depends(_verify_agent),
+):
+    """批量创建或更新 DeviceLogEvent（ADR-0028 D1）。
+
+    提供 ``id`` 时按主键更新 ``state`` / ``remote_path`` / ``checksum`` 等字段；
+    未提供 ``id`` 时插入新行。可选 ``link_signal_seq_no`` 将对应
+    ``(job_id, seq_no)`` 的 ``job_log_signal.device_log_event_id`` 关联到本事件。
+    """
+    if not payload.events:
+        return ok({"upserted": 0, "total": 0})
+
+    upserted = 0
+    event_ids: List[str] = []
+    now = datetime.now(timezone.utc)
+
+    for ev in payload.events:
+        if ev.state not in _VALID_EVENT_STATES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"device_log_event.state invalid: {ev.state}",
+            )
+
+        detected_dt = _parse_iso_dt(ev.detected_at, "detected_at")
+        device_ts = (
+            _parse_iso_dt(ev.device_timestamp, "device_timestamp")
+            if ev.device_timestamp
+            else None
+        )
+
+        host = await db.get(Host, ev.host_id)
+        if host is None:
+            raise HTTPException(status_code=404, detail=f"host {ev.host_id} not found")
+
+        if ev.job_id is not None:
+            job = await db.get(JobInstance, ev.job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"job {ev.job_id} not found")
+
+        if ev.id:
+            try:
+                event_id = UUID(ev.id)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"device_log_event.id invalid UUID: {ev.id}",
+                ) from exc
+            row = await db.get(DeviceLogEvent, event_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail=f"device_log_event {ev.id} not found")
+            row.state = ev.state
+            row.remote_path = ev.remote_path
+            row.checksum = ev.checksum
+            row.size_bytes = ev.size_bytes
+            row.plan_run_id = ev.plan_run_id
+            row.updated_at = now
+            event_id = row.id
+        else:
+            row = DeviceLogEvent(
+                serial=ev.serial,
+                platform=ev.platform,
+                event_type=ev.event_type,
+                event_subtype=ev.event_subtype,
+                detected_at=detected_dt,
+                device_timestamp=device_ts,
+                state=ev.state,
+                local_path=ev.local_path,
+                remote_path=ev.remote_path,
+                size_bytes=ev.size_bytes,
+                checksum=ev.checksum,
+                plan_run_id=ev.plan_run_id,
+                host_id=ev.host_id,
+                job_id=ev.job_id,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(row)
+            await db.flush()
+            event_id = row.id
+
+        if ev.link_signal_seq_no is not None and ev.job_id is not None:
+            await db.execute(
+                update(JobLogSignal)
+                .where(
+                    JobLogSignal.job_id == ev.job_id,
+                    JobLogSignal.seq_no == ev.link_signal_seq_no,
+                )
+                .values(device_log_event_id=event_id)
+            )
+
+        upserted += 1
+        event_ids.append(str(event_id))
+
+    await db.commit()
+    return ok({"upserted": upserted, "total": len(payload.events), "event_ids": event_ids})
+
+
+@router.get("/device-log-events", response_model=ApiResponse[dict])
+async def list_device_log_events(
+    host_id: str,
+    state: Optional[str] = None,
+    db: AsyncSession = Depends(get_async_db),
+    _=Depends(_verify_agent),
+):
+    """Agent 重启恢复：按 host + 可选 state 拉取待处理事件 id 列表。"""
+    stmt = select(DeviceLogEvent).where(DeviceLogEvent.host_id == host_id)
+    if state:
+        states = [s.strip() for s in state.split(",") if s.strip()]
+        invalid = [s for s in states if s not in _VALID_EVENT_STATES]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"invalid state filter: {invalid}")
+        stmt = stmt.where(DeviceLogEvent.state.in_(states))
+
+    rows = (await db.execute(stmt.order_by(DeviceLogEvent.detected_at.asc()))).scalars().all()
+    return ok({
+        "events": [
+            {
+                "id": str(r.id),
+                "state": r.state,
+                "local_path": r.local_path,
+                "remote_path": r.remote_path,
+                "serial": r.serial,
+                "platform": r.platform,
+                "event_type": r.event_type,
+                "detected_at": r.detected_at.isoformat(),
+                "plan_run_id": r.plan_run_id,
+                "job_id": r.job_id,
+                "host_id": r.host_id,
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    })
 
 
 async def _get_backpressure() -> Optional[int]:
