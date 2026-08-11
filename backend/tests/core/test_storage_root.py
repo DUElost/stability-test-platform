@@ -157,7 +157,7 @@ def test_resolve_extract_event_src_rejects_cross_plan_run_symlink(tmp_path):
     ) is None
 
 
-def test_copytree_under_root_rejects_nested_symlink_escape(tmp_path):
+def test_copytree_under_root_rejects_nested_symlink(tmp_path):
     root = tmp_path / "devices" / "42"
     event = root / "ev1"
     outside = tmp_path / "outside"
@@ -170,3 +170,38 @@ def test_copytree_under_root_rejects_nested_symlink_escape(tmp_path):
 
     with pytest.raises(ArtifactPathOutsideRootError):
         copytree_under_root(event, tmp_path / "dest", root=root)
+
+
+def test_resolve_extract_event_src_rejects_symlink_event_dir(tmp_path):
+    nfs = tmp_path / "nfs"
+    scope = nfs / "devices" / "42"
+    ev2 = scope / "ev2"
+    ev2.mkdir(parents=True)
+    (ev2 / "a.txt").write_text("x", encoding="utf-8")
+    (scope / "ev1").symlink_to(ev2, target_is_directory=True)
+
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    assert resolve_extract_event_src(
+        "ev1", nfs_root=str(nfs), legacy_root="", plan_run_id=42,
+    ) is None
+    located = resolve_extract_event_src(
+        "ev2", nfs_root=str(nfs), legacy_root="", plan_run_id=42,
+    )
+    assert located is not None
+
+
+def test_resolve_extract_event_src_rejects_nested_relative_symlink(tmp_path):
+    nfs = tmp_path / "nfs"
+    scope = nfs / "devices" / "42"
+    ev1 = scope / "ev1"
+    ev2 = scope / "ev2"
+    ev1.mkdir(parents=True)
+    ev2.mkdir(parents=True)
+    (ev1 / "nested").symlink_to("../ev2")
+
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    assert resolve_extract_event_src(
+        "ev1", nfs_root=str(nfs), legacy_root="", plan_run_id=42,
+    ) is None

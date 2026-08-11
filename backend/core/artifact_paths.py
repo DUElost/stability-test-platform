@@ -110,20 +110,11 @@ def copytree_validated_event_dir(src: Path, dest: Path, *, plan_run_id: int) -> 
     shutil.copytree(str(src), str(dest))
 
 
-def _reject_nested_symlink_escape(src: Path, root: Path) -> None:
-    """Reject symlinks under *src* whose targets escape *root*."""
-    root_resolved = root.resolve(strict=False)
+def _reject_nested_symlinks(src: Path) -> None:
+    """Reject any symlink under *src* (event dirs must be plain directory trees)."""
     for entry in src.rglob("*"):
-        if not entry.is_symlink():
-            continue
-        try:
-            target = entry.resolve(strict=False)
-        except OSError as exc:
-            raise ArtifactPathOutsideRootError(str(entry)) from exc
-        if not target.is_relative_to(root_resolved):
-            raise ArtifactPathOutsideRootError(
-                f"{entry} symlink target {target} escapes {root_resolved}"
-            )
+        if entry.is_symlink():
+            raise ArtifactPathOutsideRootError(f"symlink not allowed under event dir: {entry}")
 
 
 def copytree_under_root(src: Path, dest: Path, *, root: Path) -> None:
@@ -137,7 +128,7 @@ def copytree_under_root(src: Path, dest: Path, *, root: Path) -> None:
         raise ArtifactPathOutsideRootError(str(src)) from exc
     if not resolved.is_relative_to(root_resolved):
         raise ArtifactPathOutsideRootError(f"{resolved} is not under {root_resolved}")
-    _reject_nested_symlink_escape(resolved, root_resolved)
+    _reject_nested_symlinks(resolved)
     shutil.copytree(str(resolved), str(dest))
 
 
@@ -191,13 +182,21 @@ def resolve_extract_event_src(
         if plan_run_scope is None:
             continue
         candidate_entry = plan_run_scope / rel_name
+        if candidate_entry.is_symlink():
+            continue
         if not candidate_entry.is_dir():
             continue
         try:
             candidate_real = candidate_entry.resolve(strict=False)
         except OSError:
             continue
+        if candidate_real.name != rel_name:
+            continue
         if not candidate_real.is_relative_to(plan_run_scope):
+            continue
+        try:
+            _reject_nested_symlinks(candidate_entry)
+        except ArtifactPathOutsideRootError:
             continue
         return candidate_real, plan_run_scope
     return None
