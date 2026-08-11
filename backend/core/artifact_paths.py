@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_SAFE_PATH_COMPONENT_RE = re.compile(r"^[^/\\\0]+$")
 _DIR_OPEN_FLAGS = (
     os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 )
@@ -108,6 +109,23 @@ def _reject_path_traversal(raw: str) -> None:
         raise ArtifactPathError("path traversal not allowed")
 
 
+def _validate_path_component(part: str) -> None:
+    if not part or part in (".", "..") or not _SAFE_PATH_COMPONENT_RE.match(part):
+        raise ArtifactPathOutsideRootError(f"unsafe path component: {part!r}")
+
+
+def path_under_root(root: Path, *parts: str) -> Path:
+    """Build a path under *root* after validating each component."""
+    for part in parts:
+        _validate_path_component(part)
+    dest = root.joinpath(*parts)
+    root_resolved = root.resolve(strict=False)
+    dest_resolved = dest.resolve(strict=False)
+    if not dest_resolved.is_relative_to(root_resolved):
+        raise ArtifactPathOutsideRootError(f"{dest} is not under {root}")
+    return dest
+
+
 def copytree_validated_event_dir(src: Path, dest: Path, *, plan_run_id: int) -> None:
     """Copy a device event directory after scope validation (ADR-0028)."""
     import shutil
@@ -123,7 +141,13 @@ def _reject_nested_symlinks(src: Path) -> None:
             raise ArtifactPathOutsideRootError(f"symlink not allowed under event dir: {entry}")
 
 
-def _open_dir_nofollow(path: Path) -> int:
+def _open_dir_nofollow(path: Path, *, contained_in: Path) -> int:
+    if path.is_symlink():
+        raise ArtifactPathOutsideRootError(f"symlink not allowed: {path}")
+    resolved = path.resolve(strict=False)
+    container = contained_in.resolve(strict=False)
+    if not resolved.is_relative_to(container):
+        raise ArtifactPathOutsideRootError(f"{resolved} is not under {container}")
     try:
         return os.open(path, _DIR_OPEN_FLAGS)
     except OSError as exc:
@@ -135,6 +159,7 @@ def _open_dir_at(parent_fd: int, rel: Path) -> int:
         return os.dup(parent_fd)
     fd = os.dup(parent_fd)
     for part in rel.parts:
+        _validate_path_component(part)
         try:
             next_fd = os.open(part, _DIR_OPEN_FLAGS, dir_fd=fd)
         except OSError as exc:
@@ -184,6 +209,7 @@ def _open_new_dir_at(parent_fd: int, rel: Path) -> int:
         raise ArtifactPathOutsideRootError("empty destination path")
     fd = os.dup(parent_fd)
     for part in rel.parts[:-1]:
+        _validate_path_component(part)
         try:
             next_fd = os.open(part, _DIR_OPEN_FLAGS, dir_fd=fd)
         except OSError as exc:
@@ -192,6 +218,7 @@ def _open_new_dir_at(parent_fd: int, rel: Path) -> int:
         os.close(fd)
         fd = next_fd
     leaf = rel.parts[-1]
+    _validate_path_component(leaf)
     try:
         os.mkdir(leaf, mode=0o755, dir_fd=fd)
     except FileExistsError as exc:
@@ -208,6 +235,7 @@ def _open_new_dir_at(parent_fd: int, rel: Path) -> int:
 
 def _copytree_fd_at(src_fd: int, dest_fd: int, dest_path: Path) -> None:
     for name in os.listdir(src_fd):
+        _validate_path_component(name)
         try:
             entry_mode = os.lstat(name, dir_fd=src_fd)
         except OSError as exc:
@@ -264,10 +292,14 @@ def copytree_under_root(
         ) from exc
     if dest_rel.is_absolute() or ".." in dest_rel.parts:
         raise ArtifactPathOutsideRootError(f"{dest} is not under {dest_root}")
+    for part in dest_rel.parts:
+        _validate_path_component(part)
 
     src_rel = resolved.relative_to(root_resolved)
-    root_fd = _open_dir_nofollow(root_resolved)
-    dest_root_fd = _open_dir_nofollow(dest_root)
+    for part in src_rel.parts:
+        _validate_path_component(part)
+    root_fd = _open_dir_nofollow(root_resolved, contained_in=root_resolved)
+    dest_root_fd = _open_dir_nofollow(dest_root, contained_in=dest_root)
     try:
         src_fd = _open_dir_at(root_fd, src_rel)
         try:

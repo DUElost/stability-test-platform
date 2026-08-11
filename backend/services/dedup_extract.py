@@ -229,7 +229,7 @@ def run_extract_sync(plan_run_id: int) -> int:
         extracted = 0
         archived_remote_paths: list[str] = []
         extracted_dest_names: set[str] = set()
-        from backend.core.artifact_paths import ArtifactPathError, copytree_under_root
+        from backend.core.artifact_paths import ArtifactPathError, copytree_under_root, path_under_root
 
         by_dest: dict[str, list[tuple[str, Path, Path]]] = defaultdict(list)
         for raw, src, devices_root in remote_path_rows:
@@ -241,7 +241,7 @@ def run_extract_sync(plan_run_id: int) -> int:
             if dest_name in extracted_dest_names:
                 archived_remote_paths.extend(raw_paths)
                 continue
-            dest = jira_dir / dest_name
+            dest = path_under_root(jira_dir, dest_name)
             if dest.exists():
                 extracted_dest_names.add(dest_name)
                 archived_remote_paths.extend(raw_paths)
@@ -285,7 +285,14 @@ def run_extract_sync(plan_run_id: int) -> int:
                 )
                 continue
             src, devices_root = located
-            dest = jira_dir / name
+            try:
+                dest = path_under_root(jira_dir, name)
+            except ArtifactPathError:
+                logger.warning(
+                    "dedup_extract_skip_unsafe_name plan_run=%d name=%r",
+                    plan_run_id, name,
+                )
+                continue
             if dest.exists():
                 extracted_dest_names.add(name)
                 continue
@@ -311,7 +318,14 @@ def run_extract_sync(plan_run_id: int) -> int:
             merge_xls = Path(row.storage_uri)
             if not merge_xls.is_file():
                 continue
-            dest = jira_dir / merge_xls.name
+            try:
+                dest = path_under_root(jira_dir, merge_xls.name)
+            except ArtifactPathError:
+                logger.warning(
+                    "dedup_extract_skip_unsafe_merge_name plan_run=%d name=%r",
+                    plan_run_id, merge_xls.name,
+                )
+                continue
             if dest.exists():
                 continue
             try:
