@@ -130,17 +130,28 @@ def _open_dir_nofollow(path: Path) -> int:
         raise ArtifactPathOutsideRootError(str(path)) from exc
 
 
-def _open_dir_at(parent_fd: int, rel: Path, *, root_fd: int) -> int:
-    fd = parent_fd
+def _open_dir_at(parent_fd: int, rel: Path) -> int:
+    if not rel.parts:
+        return os.dup(parent_fd)
+    fd = os.dup(parent_fd)
     for part in rel.parts:
         try:
             next_fd = os.open(part, _DIR_OPEN_FLAGS, dir_fd=fd)
         except OSError as exc:
-            raise ArtifactPathOutsideRootError(str(rel)) from exc
-        if fd != root_fd:
             os.close(fd)
+            raise ArtifactPathOutsideRootError(str(rel)) from exc
+        os.close(fd)
         fd = next_fd
     return fd
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(fd, remaining)
+        if written <= 0:
+            raise OSError("failed to write artifact data")
+        remaining = remaining[written:]
 
 
 def _copy_file_at(src_fd: int, name: str, dest_fd: int) -> None:
@@ -160,11 +171,39 @@ def _copy_file_at(src_fd: int, name: str, dest_fd: int) -> None:
                 chunk = os.read(rfd, 1024 * 1024)
                 if not chunk:
                     break
-                os.write(wfd, chunk)
+                _write_all(wfd, chunk)
         finally:
             os.close(wfd)
     finally:
         os.close(rfd)
+
+
+def _open_new_dir_at(parent_fd: int, rel: Path) -> int:
+    """Create and open a new leaf directory under *parent_fd* using O_NOFOLLOW."""
+    if not rel.parts:
+        raise ArtifactPathOutsideRootError("empty destination path")
+    fd = os.dup(parent_fd)
+    for part in rel.parts[:-1]:
+        try:
+            next_fd = os.open(part, _DIR_OPEN_FLAGS, dir_fd=fd)
+        except OSError as exc:
+            os.close(fd)
+            raise ArtifactPathOutsideRootError(str(rel)) from exc
+        os.close(fd)
+        fd = next_fd
+    leaf = rel.parts[-1]
+    try:
+        os.mkdir(leaf, mode=0o755, dir_fd=fd)
+    except FileExistsError as exc:
+        os.close(fd)
+        raise FileExistsError(f"destination already exists: {leaf}") from exc
+    try:
+        leaf_fd = os.open(leaf, _DIR_OPEN_FLAGS, dir_fd=fd)
+    except OSError as exc:
+        os.close(fd)
+        raise ArtifactPathOutsideRootError(str(rel)) from exc
+    os.close(fd)
+    return leaf_fd
 
 
 def _copytree_fd_at(src_fd: int, dest_fd: int, dest_path: Path) -> None:
@@ -194,20 +233,22 @@ def _copytree_fd_at(src_fd: int, dest_fd: int, dest_path: Path) -> None:
             )
 
 
-def _copytree_fd_under_root(src_fd: int, dest: Path) -> None:
-    if dest.exists():
-        raise FileExistsError(f"destination already exists: {dest}")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    os.mkdir(dest)
-    dest_fd = _open_dir_nofollow(dest)
+def _copytree_fd_to_dest(src_fd: int, dest_root_fd: int, dest_rel: Path) -> None:
+    dest_fd = _open_new_dir_at(dest_root_fd, dest_rel)
     try:
-        _copytree_fd_at(src_fd, dest_fd, dest)
+        _copytree_fd_at(src_fd, dest_fd, Path(*dest_rel.parts))
     finally:
         os.close(dest_fd)
 
 
-def copytree_under_root(src: Path, dest: Path, *, root: Path) -> None:
-    """Copy a directory tree only when *src* resolves under *root*."""
+def copytree_under_root(
+    src: Path,
+    dest: Path,
+    *,
+    root: Path,
+    dest_root: Path,
+) -> None:
+    """Copy a directory tree when *src* and *dest* stay under their roots."""
     root_resolved = root.resolve(strict=False)
     try:
         resolved = src.resolve(strict=False)
@@ -215,17 +256,27 @@ def copytree_under_root(src: Path, dest: Path, *, root: Path) -> None:
         raise ArtifactPathOutsideRootError(str(src)) from exc
     if not resolved.is_relative_to(root_resolved):
         raise ArtifactPathOutsideRootError(f"{resolved} is not under {root_resolved}")
-
-    rel = resolved.relative_to(root_resolved)
-    root_fd = _open_dir_nofollow(root_resolved)
     try:
-        src_fd = _open_dir_at(root_fd, rel, root_fd=root_fd)
+        dest_rel = dest.relative_to(dest_root)
+    except ValueError as exc:
+        raise ArtifactPathOutsideRootError(
+            f"{dest} is not under {dest_root}"
+        ) from exc
+    if dest_rel.is_absolute() or ".." in dest_rel.parts:
+        raise ArtifactPathOutsideRootError(f"{dest} is not under {dest_root}")
+
+    src_rel = resolved.relative_to(root_resolved)
+    root_fd = _open_dir_nofollow(root_resolved)
+    dest_root_fd = _open_dir_nofollow(dest_root)
+    try:
+        src_fd = _open_dir_at(root_fd, src_rel)
         try:
-            _copytree_fd_under_root(src_fd, dest)
+            _copytree_fd_to_dest(src_fd, dest_root_fd, dest_rel)
         finally:
             os.close(src_fd)
     finally:
         os.close(root_fd)
+        os.close(dest_root_fd)
 
 
 def _plan_run_devices_scope(storage_root: str, plan_run_id: int) -> Path | None:

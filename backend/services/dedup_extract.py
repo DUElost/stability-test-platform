@@ -247,7 +247,7 @@ def run_extract_sync(plan_run_id: int) -> int:
                 archived_remote_paths.extend(raw_paths)
                 continue
             try:
-                copytree_under_root(src, dest, root=devices_root)
+                copytree_under_root(src, dest, root=devices_root, dest_root=jira_dir)
                 extracted += 1
                 extracted_dest_names.add(dest_name)
                 archived_remote_paths.extend(raw_paths)
@@ -290,7 +290,7 @@ def run_extract_sync(plan_run_id: int) -> int:
                 extracted_dest_names.add(name)
                 continue
             try:
-                copytree_under_root(src, dest, root=devices_root)
+                copytree_under_root(src, dest, root=devices_root, dest_root=jira_dir)
                 extracted += 1
                 extracted_dest_names.add(name)
             except ArtifactPathError:

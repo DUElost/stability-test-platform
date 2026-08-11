@@ -165,11 +165,13 @@ def test_copytree_under_root_rejects_nested_symlink(tmp_path):
     (outside / "secret.txt").write_text("x", encoding="utf-8")
     event.mkdir(parents=True)
     (event / "nested").symlink_to(outside)
+    dest_root = tmp_path / "jira"
+    dest_root.mkdir()
 
     from backend.core.artifact_paths import ArtifactPathOutsideRootError, copytree_under_root
 
     with pytest.raises(ArtifactPathOutsideRootError):
-        copytree_under_root(event, tmp_path / "dest", root=root)
+        copytree_under_root(event, dest_root / "ev1", root=root, dest_root=dest_root)
 
 
 def test_copytree_under_root_copies_tree(tmp_path):
@@ -180,11 +182,13 @@ def test_copytree_under_root_copies_tree(tmp_path):
     sub = event / "sub"
     sub.mkdir()
     (sub / "b.txt").write_text("world", encoding="utf-8")
+    dest_root = tmp_path / "jira"
+    dest_root.mkdir()
 
     from backend.core.artifact_paths import copytree_under_root
 
-    dest = tmp_path / "dest"
-    copytree_under_root(event, dest, root=root)
+    dest = dest_root / "ev1"
+    copytree_under_root(event, dest, root=root, dest_root=dest_root)
     assert (dest / "a.txt").read_text(encoding="utf-8") == "hello"
     assert (dest / "sub" / "b.txt").read_text(encoding="utf-8") == "world"
 
@@ -199,6 +203,8 @@ def test_copytree_under_root_rejects_symlink_source(tmp_path):
     (outside / "secret.txt").write_text("x", encoding="utf-8")
     event.mkdir(parents=True)
     (event / "safe.txt").write_text("ok", encoding="utf-8")
+    dest_root = tmp_path / "jira"
+    dest_root.mkdir()
 
     real_event = root / "ev1_real"
     shutil.move(event, real_event)
@@ -207,7 +213,60 @@ def test_copytree_under_root_rejects_symlink_source(tmp_path):
     from backend.core.artifact_paths import ArtifactPathOutsideRootError, copytree_under_root
 
     with pytest.raises(ArtifactPathOutsideRootError):
-        copytree_under_root(event, tmp_path / "dest", root=root)
+        copytree_under_root(event, dest_root / "ev1", root=root, dest_root=dest_root)
+
+
+def test_copytree_under_root_src_equals_root(tmp_path):
+    root = tmp_path / "devices" / "42"
+    root.mkdir(parents=True)
+    (root / "a.txt").write_text("x", encoding="utf-8")
+    dest_root = tmp_path / "jira"
+    dest_root.mkdir()
+
+    from backend.core.artifact_paths import copytree_under_root
+
+    dest = dest_root / "snapshot"
+    copytree_under_root(root, dest, root=root, dest_root=dest_root)
+    assert (dest / "a.txt").read_text(encoding="utf-8") == "x"
+
+
+def test_copytree_under_root_fails_missing_src_component(tmp_path):
+    root = tmp_path / "devices" / "42"
+    root.mkdir(parents=True)
+    dest_root = tmp_path / "jira"
+    dest_root.mkdir()
+
+    from backend.core.artifact_paths import ArtifactPathOutsideRootError, copytree_under_root
+
+    with pytest.raises(ArtifactPathOutsideRootError):
+        copytree_under_root(
+            root / "missing" / "ev1",
+            dest_root / "ev1",
+            root=root,
+            dest_root=dest_root,
+        )
+
+
+def test_copytree_under_root_rejects_dest_root_symlink(tmp_path):
+    root = tmp_path / "devices" / "42"
+    event = root / "ev1"
+    event.mkdir(parents=True)
+    (event / "a.txt").write_text("x", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    jira = tmp_path / "jira"
+    jira.mkdir()
+    (jira / "42").symlink_to(outside, target_is_directory=True)
+
+    from backend.core.artifact_paths import ArtifactPathOutsideRootError, copytree_under_root
+
+    with pytest.raises(ArtifactPathOutsideRootError):
+        copytree_under_root(
+            event,
+            jira / "42" / "ev1",
+            root=root,
+            dest_root=jira / "42",
+        )
 
 
 def test_resolve_extract_event_src_rejects_symlink_event_dir(tmp_path):
