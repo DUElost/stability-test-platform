@@ -172,6 +172,44 @@ def test_copytree_under_root_rejects_nested_symlink(tmp_path):
         copytree_under_root(event, tmp_path / "dest", root=root)
 
 
+def test_copytree_under_root_copies_tree(tmp_path):
+    root = tmp_path / "devices" / "42"
+    event = root / "ev1"
+    event.mkdir(parents=True)
+    (event / "a.txt").write_text("hello", encoding="utf-8")
+    sub = event / "sub"
+    sub.mkdir()
+    (sub / "b.txt").write_text("world", encoding="utf-8")
+
+    from backend.core.artifact_paths import copytree_under_root
+
+    dest = tmp_path / "dest"
+    copytree_under_root(event, dest, root=root)
+    assert (dest / "a.txt").read_text(encoding="utf-8") == "hello"
+    assert (dest / "sub" / "b.txt").read_text(encoding="utf-8") == "world"
+
+
+def test_copytree_under_root_rejects_symlink_source(tmp_path):
+    import shutil
+
+    root = tmp_path / "devices" / "42"
+    event = root / "ev1"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("x", encoding="utf-8")
+    event.mkdir(parents=True)
+    (event / "safe.txt").write_text("ok", encoding="utf-8")
+
+    real_event = root / "ev1_real"
+    shutil.move(event, real_event)
+    event.symlink_to(outside, target_is_directory=True)
+
+    from backend.core.artifact_paths import ArtifactPathOutsideRootError, copytree_under_root
+
+    with pytest.raises(ArtifactPathOutsideRootError):
+        copytree_under_root(event, tmp_path / "dest", root=root)
+
+
 def test_resolve_extract_event_src_rejects_symlink_event_dir(tmp_path):
     nfs = tmp_path / "nfs"
     scope = nfs / "devices" / "42"
