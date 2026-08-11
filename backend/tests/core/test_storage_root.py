@@ -12,7 +12,10 @@ from backend.core.artifact_paths import (
     resolve_device_event_remote_path,
     resolve_local_artifact_path,
 )
-from backend.core.storage_root import resolve_shared_storage_root as core_resolve
+from backend.core.storage_root import (
+    resolve_legacy_shared_storage_root,
+    resolve_shared_storage_root as core_resolve,
+)
 from backend.agent.aee.paths import resolve_shared_storage_root as agent_resolve
 
 
@@ -81,3 +84,221 @@ def test_resolve_device_event_remote_path_scoped_to_plan_run(monkeypatch, tmp_pa
 
     with pytest.raises(ArtifactPathOutsideRootError):
         resolve_device_event_remote_path(str(foreign), plan_run_id=42)
+
+
+def test_resolve_legacy_shared_storage_root(monkeypatch):
+    monkeypatch.delenv("STP_AEE_NFS_ROOT_LEGACY", raising=False)
+    assert resolve_legacy_shared_storage_root() == ""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT_LEGACY", "/mnt/legacy-nfs")
+    assert resolve_legacy_shared_storage_root() == "/mnt/legacy-nfs"
+
+
+def test_resolve_extract_event_src_legacy_root(monkeypatch, tmp_path):
+    primary = tmp_path / "primary"
+    legacy = tmp_path / "legacy"
+    event_name = "ke_event_001"
+    legacy_src = legacy / "devices" / "42" / event_name
+    legacy_src.mkdir(parents=True)
+    (legacy_src / "a.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT_LEGACY", str(legacy))
+
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    located = resolve_extract_event_src(
+        f"/old/mount/devices/42/{event_name}",
+        nfs_root=str(primary),
+        legacy_root=str(legacy),
+        plan_run_id=42,
+    )
+    assert located is not None
+    src, devices_root = located
+    assert src == legacy_src.resolve()
+    assert devices_root == (legacy / "devices" / "42").resolve()
+
+
+def test_resolve_extract_event_src_rejects_plan_run_symlink_escape(tmp_path):
+    nfs = tmp_path / "nfs"
+    outside = tmp_path / "outside"
+    event_name = "ev1"
+    outside_event = outside / event_name
+    outside_event.mkdir(parents=True)
+    (outside_event / "a.txt").write_text("x", encoding="utf-8")
+
+    devices = nfs / "devices"
+    devices.mkdir(parents=True)
+    (devices / "42").symlink_to(outside, target_is_directory=True)
+
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    assert resolve_extract_event_src(
+        event_name,
+        nfs_root=str(nfs),
+        legacy_root="",
+        plan_run_id=42,
+    ) is None
+
+
+def test_resolve_extract_event_src_rejects_cross_plan_run_symlink(tmp_path):
+    nfs = tmp_path / "nfs"
+    event_name = "ev1"
+    devices = nfs / "devices"
+    real_run = devices / "99" / event_name
+    real_run.mkdir(parents=True)
+    (real_run / "a.txt").write_text("x", encoding="utf-8")
+    (devices / "42").symlink_to(devices / "99", target_is_directory=True)
+
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    assert resolve_extract_event_src(
+        event_name,
+        nfs_root=str(nfs),
+        legacy_root="",
+        plan_run_id=42,
+    ) is None
+
+
+def test_copytree_under_root_rejects_nested_symlink(tmp_path):
+    root = tmp_path / "devices" / "42"
+    event = root / "ev1"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("x", encoding="utf-8")
+    event.mkdir(parents=True)
+    (event / "nested").symlink_to(outside)
+    dest_root = tmp_path / "jira"
+    dest_root.mkdir()
+
+    from backend.core.artifact_paths import ArtifactPathOutsideRootError, copytree_under_root
+
+    with pytest.raises(ArtifactPathOutsideRootError):
+        copytree_under_root(event, dest_root / "ev1", root=root, dest_root=dest_root)
+
+
+def test_copytree_under_root_copies_tree(tmp_path):
+    root = tmp_path / "devices" / "42"
+    event = root / "ev1"
+    event.mkdir(parents=True)
+    (event / "a.txt").write_text("hello", encoding="utf-8")
+    sub = event / "sub"
+    sub.mkdir()
+    (sub / "b.txt").write_text("world", encoding="utf-8")
+    dest_root = tmp_path / "jira"
+    dest_root.mkdir()
+
+    from backend.core.artifact_paths import copytree_under_root
+
+    dest = dest_root / "ev1"
+    copytree_under_root(event, dest, root=root, dest_root=dest_root)
+    assert (dest / "a.txt").read_text(encoding="utf-8") == "hello"
+    assert (dest / "sub" / "b.txt").read_text(encoding="utf-8") == "world"
+
+
+def test_copytree_under_root_rejects_symlink_source(tmp_path):
+    import shutil
+
+    root = tmp_path / "devices" / "42"
+    event = root / "ev1"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("x", encoding="utf-8")
+    event.mkdir(parents=True)
+    (event / "safe.txt").write_text("ok", encoding="utf-8")
+    dest_root = tmp_path / "jira"
+    dest_root.mkdir()
+
+    real_event = root / "ev1_real"
+    shutil.move(event, real_event)
+    event.symlink_to(outside, target_is_directory=True)
+
+    from backend.core.artifact_paths import ArtifactPathOutsideRootError, copytree_under_root
+
+    with pytest.raises(ArtifactPathOutsideRootError):
+        copytree_under_root(event, dest_root / "ev1", root=root, dest_root=dest_root)
+
+
+def test_copytree_under_root_src_equals_root(tmp_path):
+    root = tmp_path / "devices" / "42"
+    root.mkdir(parents=True)
+    (root / "a.txt").write_text("x", encoding="utf-8")
+    dest_root = tmp_path / "jira"
+    dest_root.mkdir()
+
+    from backend.core.artifact_paths import copytree_under_root
+
+    dest = dest_root / "snapshot"
+    copytree_under_root(root, dest, root=root, dest_root=dest_root)
+    assert (dest / "a.txt").read_text(encoding="utf-8") == "x"
+
+
+def test_copytree_under_root_fails_missing_src_component(tmp_path):
+    root = tmp_path / "devices" / "42"
+    root.mkdir(parents=True)
+    dest_root = tmp_path / "jira"
+    dest_root.mkdir()
+
+    from backend.core.artifact_paths import ArtifactPathOutsideRootError, copytree_under_root
+
+    with pytest.raises(ArtifactPathOutsideRootError):
+        copytree_under_root(
+            root / "missing" / "ev1",
+            dest_root / "ev1",
+            root=root,
+            dest_root=dest_root,
+        )
+
+
+def test_copytree_under_root_rejects_dest_root_symlink(tmp_path):
+    root = tmp_path / "devices" / "42"
+    event = root / "ev1"
+    event.mkdir(parents=True)
+    (event / "a.txt").write_text("x", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    jira = tmp_path / "jira"
+    jira.mkdir()
+    (jira / "42").symlink_to(outside, target_is_directory=True)
+
+    from backend.core.artifact_paths import ArtifactPathOutsideRootError, copytree_under_root
+
+    with pytest.raises(ArtifactPathOutsideRootError):
+        copytree_under_root(
+            event,
+            jira / "42" / "ev1",
+            root=root,
+            dest_root=jira / "42",
+        )
+
+
+def test_resolve_extract_event_src_rejects_symlink_event_dir(tmp_path):
+    nfs = tmp_path / "nfs"
+    scope = nfs / "devices" / "42"
+    ev2 = scope / "ev2"
+    ev2.mkdir(parents=True)
+    (ev2 / "a.txt").write_text("x", encoding="utf-8")
+    (scope / "ev1").symlink_to(ev2, target_is_directory=True)
+
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    assert resolve_extract_event_src(
+        "ev1", nfs_root=str(nfs), legacy_root="", plan_run_id=42,
+    ) is None
+    located = resolve_extract_event_src(
+        "ev2", nfs_root=str(nfs), legacy_root="", plan_run_id=42,
+    )
+    assert located is not None
+
+
+def test_resolve_extract_event_src_rejects_nested_relative_symlink(tmp_path):
+    nfs = tmp_path / "nfs"
+    scope = nfs / "devices" / "42"
+    ev1 = scope / "ev1"
+    ev2 = scope / "ev2"
+    ev1.mkdir(parents=True)
+    ev2.mkdir(parents=True)
+    (ev1 / "nested").symlink_to("../ev2")
+
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    assert resolve_extract_event_src(
+        "ev1", nfs_root=str(nfs), legacy_root="", plan_run_id=42,
+    ) is None

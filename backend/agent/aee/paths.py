@@ -51,32 +51,158 @@ def get_aee_nfs_root() -> Path:
     return Path(raw)
 
 
-def get_aee_local_root() -> Path:
-    """Agent 本地 HDD 根 — AEE 设备日志第一落点。
+def _default_ssd_fallback_root() -> Path:
+    try:
+        from backend.agent.config import LOG_DIR
+    except ImportError:
+        from agent.config import LOG_DIR
+    return LOG_DIR / "aee_events"
 
-    只认 ``STP_AEE_LOCAL_ROOT``；未设则 ``/mnt/hdd/aee_events``。
-    不回落到中心存储键（``STP_AEE_NFS_ROOT`` / CIFS / WATCHER / ``STP_NFS_ROOT``）。
+
+def _mount_fstype_for_path(path: Path) -> Optional[str]:
+    """Return fstype for the longest matching mount point in /proc/mounts."""
+    try:
+        resolved = path.resolve(strict=False)
+        mounts_text = Path("/proc/mounts").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    best_mount = ""
+    best_fstype: Optional[str] = None
+    resolved_str = str(resolved)
+    for line in mounts_text.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mount_point = parts[1].replace("\\040", " ")
+        fstype = parts[2]
+        mp = mount_point.rstrip("/") or "/"
+        if resolved == Path(mount_point) or resolved_str.startswith(mp + "/") or (
+            mp == "/" and resolved_str.startswith("/")
+        ):
+            if len(mount_point) >= len(best_mount):
+                best_mount = mount_point
+                best_fstype = fstype
+    return best_fstype
+
+
+def _is_writable_hdd_root(path: Path) -> bool:
+    """HDD 候选根：存在、可写，且挂载类型不是 tmpfs（ADR-0028 D5）。"""
+    try:
+        resolved = path.resolve(strict=False)
+    except OSError:
+        return False
+    if not resolved.exists():
+        return False
+    if not os.access(resolved, os.W_OK):
+        return False
+    if _mount_fstype_for_path(resolved) == "tmpfs":
+        return False
+    return True
+
+
+_ssd_fallback_logged = False
+
+
+def get_aee_local_root() -> Path:
+    """Agent 本地 HDD/SSD 根 — AEE 设备日志第一落点（ADR-0028 D5）。
+
+    解析链（不回落中心存储键）::
+
+        STP_AEE_LOCAL_ROOT（可写且非 tmpfs）
+          → STP_AEE_SSD_FALLBACK_ROOT 或 {LOG_DIR}/aee_events
+          → /mnt/hdd/aee_events
     """
-    raw = (os.getenv("STP_AEE_LOCAL_ROOT") or "").strip()
-    if raw:
-        return Path(raw)
-    return Path(_AEE_LOCAL_ROOT_DEFAULT)
+    global _ssd_fallback_logged
+
+    configured = (os.getenv("STP_AEE_LOCAL_ROOT") or "").strip()
+    if configured:
+        candidate = Path(configured)
+        if _is_writable_hdd_root(candidate):
+            return candidate
+        logger.warning("aee_local_root_unusable path=%s", configured)
+
+    ssd_env = (os.getenv("STP_AEE_SSD_FALLBACK_ROOT") or "").strip()
+    ssd = Path(ssd_env) if ssd_env else _default_ssd_fallback_root()
+    try:
+        ssd.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    if os.access(ssd, os.W_OK):
+        if not _ssd_fallback_logged:
+            _ssd_fallback_logged = True
+            logger.info("aee_local_root_ssd_fallback path=%s", ssd)
+        return ssd
+
+    default_hdd = Path(_AEE_LOCAL_ROOT_DEFAULT)
+    if _is_writable_hdd_root(default_hdd):
+        return default_hdd
+    return default_hdd
+
+
+def is_ssd_fallback_root(path: Path | str) -> bool:
+    """True when *path* is the configured SSD fallback root (disables HddSpill)."""
+    try:
+        resolved = Path(path).resolve(strict=False)
+    except OSError:
+        return False
+    ssd_env = (os.getenv("STP_AEE_SSD_FALLBACK_ROOT") or "").strip()
+    try:
+        ssd = (
+            Path(ssd_env).resolve(strict=False)
+            if ssd_env
+            else _default_ssd_fallback_root().resolve(strict=False)
+        )
+    except OSError:
+        return False
+    return resolved == ssd
+
+
+def iter_aee_local_root_candidates() -> list[Path]:
+    """D5 链上所有可能的事件本地根（用于校验已创建事件的 ``local_path``）。"""
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(path: Path) -> None:
+        try:
+            key = str(path.resolve(strict=False))
+        except OSError:
+            return
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(Path(key))
+
+    configured = (os.getenv("STP_AEE_LOCAL_ROOT") or "").strip()
+    if configured:
+        _add(Path(configured))
+    ssd_env = (os.getenv("STP_AEE_SSD_FALLBACK_ROOT") or "").strip()
+    _add(Path(ssd_env) if ssd_env else _default_ssd_fallback_root())
+    _add(Path(_AEE_LOCAL_ROOT_DEFAULT))
+    return candidates
 
 
 class PathOutsideRootError(ValueError):
     """Raised when a path escapes the configured AEE local root."""
 
 
-def resolve_path_under_aee_local(raw: str) -> Path:
-    """Resolve *raw* under ``get_aee_local_root()``; reject ``..`` / symlink escape."""
-    root = get_aee_local_root().resolve(strict=False)
+def resolve_path_under_aee_local(raw: str, *, root: Path | None = None) -> Path:
+    """Resolve *raw* under an AEE local root; reject ``..`` / symlink escape.
+
+    未指定 *root* 时，在 D5 候选根链中匹配（事件创建后根切换仍可校验）。
+    """
     try:
         resolved = Path(raw).expanduser().resolve(strict=False)
     except OSError as exc:
         raise PathOutsideRootError(str(raw)) from exc
-    if not resolved.is_relative_to(root):
-        raise PathOutsideRootError(f"{resolved} is not under {root}")
-    return resolved
+    if root is not None:
+        root_resolved = root.resolve(strict=False)
+        if not resolved.is_relative_to(root_resolved):
+            raise PathOutsideRootError(f"{resolved} is not under {root_resolved}")
+        return resolved
+    for candidate in iter_aee_local_root_candidates():
+        if resolved.is_relative_to(candidate):
+            return resolved
+    raise PathOutsideRootError(f"{resolved} is not under any configured AEE local root")
 
 
 def _aee_subdir_layout() -> str:

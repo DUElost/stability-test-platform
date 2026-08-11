@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List
+from typing import Any, List, Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -96,6 +96,9 @@ class _StubWatcher:
     aee_reconciler_active: bool = False
     fencing_token: str = ""
     agent_instance_id: str = ""
+    plan_run_id: Optional[int] = None
+    api_url: str = ""
+    agent_secret: str = ""
 
     def __post_init__(self):
         self.start_called = False

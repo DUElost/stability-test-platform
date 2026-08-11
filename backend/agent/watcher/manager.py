@@ -185,6 +185,7 @@ class LogWatcherManager:
         log_dir: str,
         policy: WatcherPolicy,
         fencing_token: str,
+        plan_run_id: Optional[int] = None,
     ) -> WatcherHandle:
         """启动一个 DeviceLogWatcher（5A 真实现）。
 
@@ -300,6 +301,9 @@ class LogWatcherManager:
                 aee_reconciler_active=aee_reconciler_active,
                 fencing_token=fencing_token,
                 agent_instance_id=str(self._deps.get("agent_instance_id") or ""),
+                plan_run_id=plan_run_id,
+                api_url=str(self._deps.get("api_url") or ""),
+                agent_secret=str(self._deps.get("agent_secret") or ""),
             )
             # 5B1：若配置了 NFS 根目录，且实盘 inotifyd 能力可用，则注入 LogPuller
             # 为 AEE / VENDOR_AEE 事件异步拉 crash 文件并富化 envelope

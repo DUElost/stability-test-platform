@@ -150,6 +150,16 @@ class JobSession:
             self._dev_reg(self._device_id)
 
         # 2. 启动 Watcher（契约：默认关联，不可绕过）
+        plan_run_id_raw = self._payload.get("plan_run_id")
+        plan_run_id: Optional[int] = None
+        if plan_run_id_raw is not None:
+            try:
+                plan_run_id = int(plan_run_id_raw)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "job_session_invalid_plan_run_id job=%s value=%r",
+                    self._job_id, plan_run_id_raw,
+                )
         try:
             self._handle = self._manager.start(
                 host_id=self._host_id,
@@ -158,6 +168,7 @@ class JobSession:
                 log_dir=self._log_dir,
                 policy=self._policy,
                 fencing_token=str(self._payload["fencing_token"]),
+                plan_run_id=plan_run_id,
             )
             self._summary.watcher_id         = self._handle.watcher_id
             self._summary.watcher_started_at = self._handle.started_at

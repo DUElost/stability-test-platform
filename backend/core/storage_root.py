@@ -37,3 +37,8 @@ def resolve_shared_storage_root() -> str:
             )
         return raw
     return ""
+
+
+def resolve_legacy_shared_storage_root() -> str:
+    """存储切换窗口内的旧中心存储根（ADR-0028 D8）。未配置返回空串。"""
+    return (os.getenv("STP_AEE_NFS_ROOT_LEGACY") or "").strip()
