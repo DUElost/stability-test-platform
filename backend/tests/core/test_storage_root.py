@@ -155,3 +155,18 @@ def test_resolve_extract_event_src_rejects_cross_plan_run_symlink(tmp_path):
         legacy_root="",
         plan_run_id=42,
     ) is None
+
+
+def test_copytree_under_root_rejects_nested_symlink_escape(tmp_path):
+    root = tmp_path / "devices" / "42"
+    event = root / "ev1"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("x", encoding="utf-8")
+    event.mkdir(parents=True)
+    (event / "nested").symlink_to(outside)
+
+    from backend.core.artifact_paths import ArtifactPathOutsideRootError, copytree_under_root
+
+    with pytest.raises(ArtifactPathOutsideRootError):
+        copytree_under_root(event, tmp_path / "dest", root=root)

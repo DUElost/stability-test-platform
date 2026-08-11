@@ -110,6 +110,22 @@ def copytree_validated_event_dir(src: Path, dest: Path, *, plan_run_id: int) -> 
     shutil.copytree(str(src), str(dest))
 
 
+def _reject_nested_symlink_escape(src: Path, root: Path) -> None:
+    """Reject symlinks under *src* whose targets escape *root*."""
+    root_resolved = root.resolve(strict=False)
+    for entry in src.rglob("*"):
+        if not entry.is_symlink():
+            continue
+        try:
+            target = entry.resolve(strict=False)
+        except OSError as exc:
+            raise ArtifactPathOutsideRootError(str(entry)) from exc
+        if not target.is_relative_to(root_resolved):
+            raise ArtifactPathOutsideRootError(
+                f"{entry} symlink target {target} escapes {root_resolved}"
+            )
+
+
 def copytree_under_root(src: Path, dest: Path, *, root: Path) -> None:
     """Copy a directory tree only when *src* resolves under *root*."""
     import shutil
@@ -121,6 +137,7 @@ def copytree_under_root(src: Path, dest: Path, *, root: Path) -> None:
         raise ArtifactPathOutsideRootError(str(src)) from exc
     if not resolved.is_relative_to(root_resolved):
         raise ArtifactPathOutsideRootError(f"{resolved} is not under {root_resolved}")
+    _reject_nested_symlink_escape(resolved, root_resolved)
     shutil.copytree(str(resolved), str(dest))
 
 
@@ -133,12 +150,10 @@ def _plan_run_devices_scope(storage_root: str, plan_run_id: int) -> Path | None:
     devices_parent_real = devices_parent.resolve(strict=False)
     plan_run_entry = devices_parent / str(int(plan_run_id))
     if plan_run_entry.is_symlink():
-        link_target = plan_run_entry.resolve(strict=False)
-        if not link_target.is_relative_to(devices_parent_real):
-            return None
-        if link_target.name != str(int(plan_run_id)):
-            return None
+        return None
     plan_run_scope = (devices_parent_real / str(int(plan_run_id))).resolve(strict=False)
+    if plan_run_scope.parent != devices_parent_real:
+        return None
     if plan_run_scope.name != str(int(plan_run_id)):
         return None
     if not plan_run_scope.is_relative_to(devices_parent_real):

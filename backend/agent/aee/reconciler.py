@@ -836,7 +836,12 @@ class AeeDbHistoryReconciler:
             )
             return
         try:
-            local_path = resolve_path_under_aee_local(str(output_subdir))
+            if self._local_root is not None:
+                local_path = resolve_path_under_aee_local(
+                    str(output_subdir), root=self._local_root,
+                )
+            else:
+                local_path = resolve_path_under_aee_local(str(output_subdir))
         except PathOutsideRootError:
             logger.warning(
                 "aee_reconciler_local_path_outside_root serial=%s job=%d path=%s",
