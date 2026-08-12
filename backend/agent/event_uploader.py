@@ -48,6 +48,11 @@ def _event_uploader_enabled() -> bool:
     return os.getenv("STP_EVENT_UPLOADER_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 
 
+def _event_uploader_continuous() -> bool:
+    """ADR-0028 方案 A：0=仅上传 UPLOAD_PENDING（过滤模型）；1=上传全部 LOCAL（全量模型）。"""
+    return os.getenv("STP_EVENT_UPLOADER_CONTINUOUS", "1").strip().lower() in ("1", "true", "yes")
+
+
 @dataclass
 class _UploadJob:
     event_id: str
@@ -126,6 +131,8 @@ class EventUploader:
         return self._configured
 
     def start(self) -> None:
+        # ADR-0028 方案 A：EventUploader 在两种模式下都启动——continuous=1 上传 LOCAL，
+        # continuous=0 仅上传 UPLOAD_PENDING。仅当 ENABLED=0 时完全关闭。
         if not self._configured or not _event_uploader_enabled():
             logger.info("event_uploader_start_skipped enabled=%s configured=%s",
                         _event_uploader_enabled(), self._configured)
@@ -156,8 +163,11 @@ class EventUploader:
             self._dispatcher.join(timeout=timeout)
 
     def enqueue_local_event(self, *, event: Dict[str, Any]) -> bool:
-        """将 LOCAL 事件入队。``event`` 须含 id/local_path/detected_at 等字段。"""
+        """将事件入队。ADR-0028 方案 A：continuous=1 接受 LOCAL；continuous=0 静默丢弃（仅 UPLOAD_PENDING 经 _recover_pending 入队）。"""
         if not _event_uploader_enabled() or not self._configured:
+            return False
+        if not _event_uploader_continuous():
+            # Plan A: Reconciler 不自动入队；upload_task 标记 UPLOAD_PENDING 后经 _recover_pending 轮询入队
             return False
         job = _UploadJob(
             event_id=str(event["id"]),
@@ -354,11 +364,13 @@ class EventUploader:
         if not self._configured:
             return
         try:
+            # ADR-0028 方案 A：continuous=1 上传全部 LOCAL；continuous=0 仅上传 UPLOAD_PENDING
+            _states = "LOCAL,UPLOADING,UPLOAD_FAILED" if _event_uploader_continuous() else "UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
             resp = requests.get(
                 f"{self._api_url}/api/v1/agent/device-log-events",
                 params={
                     "host_id": self._host_id,
-                    "state": "LOCAL,UPLOADING,UPLOAD_FAILED",
+                    "state": _states,
                 },
                 headers={"X-Agent-Secret": self._agent_secret},
                 timeout=15.0,

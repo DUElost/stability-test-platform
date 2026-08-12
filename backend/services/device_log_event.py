@@ -37,12 +37,30 @@ _ASSOCIATE_GRACE = timedelta(minutes=30)
 
 
 def count_pending_upload_events(db: Session, plan_run_id: int) -> int:
-    """plan_run 下尚未到达 REMOTE/ARCHIVED/PRUNED 的事件数。"""
+    """plan_run 下尚未完成上送的事件数。
+
+    ADR-0028 方案 A（STP_EVENT_UPLOADER_CONTINUOUS=0）：仅计数 UPLOAD_PENDING / UPLOADING / UPLOAD_FAILED。
+    LOCAL 是「有意不传」（未被 scan xls 引用），不阻塞 merge。
+    连续上送模式（默认）：计数所有非 REMOTE/ARCHIVED/PRUNED。
+    """
+    import os
+    _continuous = os.getenv("STP_EVENT_UPLOADER_CONTINUOUS", "1").strip().lower() in ("1", "true", "yes")
+    if _continuous:
+        return int(
+            db.execute(
+                select(func.count(DeviceLogEvent.id)).where(
+                    DeviceLogEvent.plan_run_id == plan_run_id,
+                    DeviceLogEvent.state.notin_(_REMOTE_STATES),
+                )
+            ).scalar()
+            or 0
+        )
+    _IN_FLIGHT = {"UPLOAD_PENDING", "UPLOADING", "UPLOAD_FAILED"}
     return int(
         db.execute(
             select(func.count(DeviceLogEvent.id)).where(
                 DeviceLogEvent.plan_run_id == plan_run_id,
-                DeviceLogEvent.state.notin_(_REMOTE_STATES),
+                DeviceLogEvent.state.in_(_IN_FLIGHT),
             )
         ).scalar()
         or 0

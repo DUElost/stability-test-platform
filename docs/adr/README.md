@@ -76,7 +76,7 @@
 | [ADR-0025](./ADR-0025-phase4-architecture-alignment.md) | Phase 4 架构对齐（方案 C：存储三级 + Agent 归档闭环） | Accepted | P2 | M4 | 已实现（Sprint 1–4，见 [DOC-MAP](../DOC-MAP.md) / acceptance） |
 | [ADR-0026](./ADR-0026-plan-execution-scaling.md) | 大规模化测试计划执行架构（PlanRun 准入队列 + 四层调度 + 控制面减负） | Accepted | P0 | M5 | P0–P2 已收口（含 Step 5b / barrier / terminalization / step_log 批量化 / 索引与指标）；待定清单 v1 已回填；P3 → ADR-0027 |
 | [ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md) | 控制面水平扩展（Leader Election + 多实例） | Accepted | P2 | M6 | P3-1..P3-3 已落地（opt-in 多实例）；默认单实例零变化 |
-| [ADR-0028](./ADR-0028-device-log-event-and-continuous-upload.md) | 设备日志事件实体 + 连续上送 + 存储路径收敛 | Accepted | P1 | 阶段 3 | D1–D8 已定；阶段 1 止血部分落地（P2-5/P1-1/P4-2 已修）；阶段 3 重构全面实施 |
+| [ADR-0028](./ADR-0028-device-log-event-and-continuous-upload.md) | 设备日志事件实体 + PlanRun FAILED 触发上送 + 存储路径收敛（方案 A，2026-08-12 修订） | Accepted | P1 | 阶段 3 | D1–D9 已定；保留 ADR-0025 过滤模型；EventUploader 仅追踪不上传；阶段 3 重构待实施 |
 
 ## Proposed 里程碑看板（2026 上半年）
 

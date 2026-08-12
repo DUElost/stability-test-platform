@@ -52,6 +52,8 @@ _FLEET_ENV_KEYS: tuple[str, ...] = (
     # Unset on the control plane → not pushed (agents keep local value).
     "STP_DEVICE_LOG_EVENT_ENABLED",
     "STP_EVENT_UPLOADER_ENABLED",
+    # ADR-0028 方案 A：0=仅上传 UPLOAD_PENDING（过滤模型）；1=上传全部 LOCAL（全量模型）
+    "STP_EVENT_UPLOADER_CONTINUOUS",
 )
 
 # Agent-scoped keys: the control plane holds the *agent-side* value under a

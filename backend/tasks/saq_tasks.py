@@ -244,12 +244,23 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
 
     try:
         queue = get_queue()
+        await queue.enqueue(
+            SaqJob(
+                function="upload_task",
+                kwargs={"plan_run_id": plan_run_id},
+                key=f"upload:{plan_run_id}",
+                timeout=600,
+                retries=2,
+                retry_delay=10.0,
+                retry_backoff=True,
+            )
+        )
         merge_kwargs = {
             "plan_run_id": plan_run_id,
             "scan_round_id": scan_round_id,
             "round_started_at": round_started_at.isoformat(),
         }
-        logger.info("saq_scan_enqueue_merge plan_run=%d", plan_run_id)
+        logger.info("saq_scan_enqueue_upload_and_merge plan_run=%d", plan_run_id)
         await queue.enqueue(
             SaqJob(
                 function="merge_task",
@@ -265,6 +276,58 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         logger.error("saq_scan_enqueue_followup_failed plan_run=%d: %s", plan_run_id, e)
 
     logger.info("saq_scan_done plan_run=%d", plan_run_id)
+
+
+async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
+    """ADR-0028 方案 A：scan 后标记有效事件为 UPLOAD_PENDING，由 Agent EventUploader 上送。
+
+    只上送 scan xls Path 列引用的有效事件（过滤模型——CIFS 只收精选子集）。
+    EventUploader 轮询 state=UPLOAD_PENDING 的事件并执行 copytree。
+    """
+    from backend.core.database import SessionLocal
+    from backend.services.dedup_extract import collect_upload_event_dir_names
+
+    logger.info("saq_upload_start plan_run=%d", plan_run_id)
+
+    try:
+        def _mark() -> int:
+            db = SessionLocal()
+            try:
+                event_dir_names = collect_upload_event_dir_names(db, plan_run_id)
+                if not event_dir_names:
+                    logger.info("saq_upload_no_event_dirs plan_run=%d", plan_run_id)
+                    return 0
+
+                # Build LIKE patterns from dir basenames
+                from sqlalchemy import text as sa_text
+                patterns = [f"%/{d}" for d in event_dir_names]
+                clauses = " OR ".join(["device_log_event.local_path LIKE :p%d" % i for i in range(len(patterns))])
+                params = {"p%d" % i: p for i, p in enumerate(patterns)}
+
+                result = db.execute(
+                    sa_text(
+                        f"UPDATE device_log_event SET state = 'UPLOAD_PENDING', "
+                        f"updated_at = now() "
+                        f"WHERE state = 'LOCAL' AND plan_run_id = :pid AND ({clauses})"
+                    ),
+                    {"pid": plan_run_id, **params},
+                )
+                db.commit()
+                marked = result.rowcount
+                logger.info(
+                    "saq_upload_marked plan_run=%d marked=%d dirs=%d",
+                    plan_run_id, marked, len(event_dir_names),
+                )
+                return marked
+            finally:
+                db.close()
+
+        marked = await asyncio_to_thread(_mark)
+    except Exception:
+        logger.exception("saq_upload_failed plan_run=%d", plan_run_id)
+        raise
+
+    logger.info("saq_upload_done plan_run=%d marked=%d", plan_run_id, marked)
 
 
 async def _enqueue_extract_task(plan_run_id: int) -> None:

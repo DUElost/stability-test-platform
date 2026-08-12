@@ -8,6 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from backend.agent.aee.event_dirs import event_dir_basename_from_path
 from backend.models.plan_run_artifact import PlanRunArtifact
@@ -228,7 +229,34 @@ def run_extract_sync(plan_run_id: int) -> int:
         db.close()
 
 
+def collect_upload_event_dir_names(db: Session, plan_run_id: int) -> list[str]:
+    """ADR-0028 方案 A：从 scan xls Path 列提取事件目录名（过滤模型——只上送 scan 引用的有效事件）。
+
+    不再 union JobLogSignal 路径（#213 Track B 已废弃 basename union）。
+    """
+    from backend.services.plan_run_scan_scope import load_plan_run_device_serials
+
+    serials = load_plan_run_device_serials(db, plan_run_id)
+    names: set[str] = set()
+
+    scan_rows = db.execute(
+        select(PlanRunArtifact).where(
+            PlanRunArtifact.plan_run_id == plan_run_id,
+            PlanRunArtifact.artifact_type == "scan_result_xls",
+        )
+    ).scalars().all()
+    for row in scan_rows:
+        if not row.storage_uri:
+            continue
+        names |= parse_event_dir_names_from_xls(
+            Path(row.storage_uri), allowed_serials=serials,
+        )
+
+    return sorted(names)
+
+
 __all__ = [
+    "collect_upload_event_dir_names",
     "parse_event_dir_names_from_xls",
     "run_extract_sync",
 ]

@@ -519,11 +519,15 @@ def _register_merge_artifacts(db: Session, plan_run_id: int, merge_dir: Path) ->
 # ── 终态触发 helpers（供 aggregator / aggregator_sync 调用）─────────────
 
 _DEDUP_AUTO_ENV = "STP_DEDUP_AUTO_SCAN"
-_DEDUP_AUTO_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS"}
+_DEDUP_AUTO_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS", "FAILED"}
 
 
 def should_trigger_dedup(run_status: str) -> bool:
-    """Auto-scan successful runs; failed/aborted runs require confirmation."""
+    """ADR-0028 方案 A：SUCCESS/PARTIAL_SUCCESS/FAILED 均触发 scan→upload。
+
+    FAILED 只走到 upload（事件到达 CIFS），merge/extract 靠 SAQ 任务门禁
+    自然跳过（scan xls 不足或质量差时 merge 返回空）。
+    """
     if os.getenv(_DEDUP_AUTO_ENV, "1") != "1":
         return False
     return run_status in _DEDUP_AUTO_STATUSES
