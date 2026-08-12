@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
-from sqlalchemy import bindparam, func, select, text, update
+from sqlalchemy import bindparam, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.enums import EventState
+from backend.models.job import JobInstance
+from backend.models.plan_run import PlanRun
+
+logger = logging.getLogger(__name__)
 
 
 def continuous_event_upload_enabled() -> bool:
@@ -19,6 +24,9 @@ def continuous_event_upload_enabled() -> bool:
 
 
 _REMOTE_STATES = (EventState.REMOTE.value, EventState.ARCHIVED.value)
+
+# Clock skew / late upload grace around PlanRun window for unassigned attach (#213 B3).
+_ASSOCIATE_GRACE = timedelta(minutes=30)
 
 
 def count_pending_upload_events(db: Session, plan_run_id: int) -> int:
@@ -61,6 +69,69 @@ def list_remote_paths_for_extract(db: Session, plan_run_id: int) -> list[str]:
         )
     ).scalars().all()
     return [str(p) for p in rows if p]
+
+
+def associate_unassigned_events_to_plan_run(db: Session, plan_run_id: int) -> int:
+    """Attach ``plan_run_id IS NULL`` events to this PlanRun (#213 B3).
+
+    Two paths (OR):
+    1. ``job_id`` belongs to a JobInstance of this PlanRun (strong).
+    2. ``serial`` ∈ PlanRun devices and ``detected_at`` within
+       ``[started_at - grace, (ended_at or now) + grace]``.
+
+    Does not move NFS paths; ``remote_path`` may stay under
+    ``devices/unassigned/{event_id}/`` — extract still copies via that path.
+    """
+    from backend.services.plan_run_scan_scope import load_plan_run_device_serials
+
+    plan_run = db.get(PlanRun, plan_run_id)
+    if plan_run is None:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    started = plan_run.started_at or now
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    ended = plan_run.ended_at or now
+    if ended.tzinfo is None:
+        ended = ended.replace(tzinfo=timezone.utc)
+    window_start = started - _ASSOCIATE_GRACE
+    window_end = ended + _ASSOCIATE_GRACE
+
+    serials = load_plan_run_device_serials(db, plan_run_id)
+    job_ids = db.execute(
+        select(JobInstance.id).where(JobInstance.plan_run_id == plan_run_id)
+    ).scalars().all()
+    job_ids = [int(j) for j in job_ids]
+
+    clauses = []
+    if job_ids:
+        clauses.append(DeviceLogEvent.job_id.in_(job_ids))
+    if serials:
+        clauses.append(
+            (DeviceLogEvent.serial.in_(serials))
+            & (DeviceLogEvent.detected_at >= window_start)
+            & (DeviceLogEvent.detected_at <= window_end)
+        )
+    if not clauses:
+        return 0
+
+    result = db.execute(
+        update(DeviceLogEvent)
+        .where(
+            DeviceLogEvent.plan_run_id.is_(None),
+            or_(*clauses),
+        )
+        .values(plan_run_id=plan_run_id, updated_at=now)
+    )
+    db.commit()
+    n = int(result.rowcount or 0)
+    if n:
+        logger.info(
+            "device_log_event_associated plan_run=%d count=%d",
+            plan_run_id, n,
+        )
+    return n
 
 
 def mark_events_archived(

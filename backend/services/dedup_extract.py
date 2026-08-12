@@ -1,4 +1,4 @@
-"""ADR-0025 归档-3: event directory discovery and selective extract."""
+"""ADR-0025 归档-3 / ADR-0028 Track B: DLE-backed extract (+ merge xls copy)."""
 
 from __future__ import annotations
 
@@ -6,27 +6,13 @@ import logging
 import shutil
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from backend.agent.aee.event_dirs import (
-    event_dir_basename_from_path,
-    is_event_dir_basename,
-)
+from backend.agent.aee.event_dirs import event_dir_basename_from_path
 from backend.models.plan_run_artifact import PlanRunArtifact
 
-if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
-
 logger = logging.getLogger(__name__)
-
-
-def _storage_roots_for_extract(primary: str, legacy: str) -> list[str]:
-    roots = [primary]
-    if legacy and legacy != primary:
-        roots.append(legacy)
-    return roots
 
 
 def parse_event_dir_names_from_xls(
@@ -35,6 +21,8 @@ def parse_event_dir_names_from_xls(
     allowed_serials: list[str] | None = None,
 ) -> set[str]:
     """Read merge/scan xls Path column → event directory basenames.
+
+    Kept for scan-scope / tooling; extract no longer uses this (#213 B2).
 
     ``allowed_serials=None`` keeps every row. A provided list (including empty)
     keeps only matching PlanRun devices; empty means no xls rows.
@@ -93,24 +81,11 @@ def parse_event_dir_names_from_xls(
     return names
 
 
-def collect_extract_event_dir_names(db: Session, plan_run_id: int) -> set[str]:
-    """ADR-0025 归档-3: event dirs referenced by merge Result xls only."""
-    names: set[str] = set()
-    merge_rows = db.execute(
-        select(PlanRunArtifact).where(
-            PlanRunArtifact.plan_run_id == plan_run_id,
-            PlanRunArtifact.artifact_type == "merge_result_xls",
-        )
-    ).scalars().all()
-    for row in merge_rows:
-        if not row.storage_uri:
-            continue
-        names |= parse_event_dir_names_from_xls(Path(row.storage_uri))
-    return names
-
-
 def run_extract_sync(plan_run_id: int) -> int:
-    """Copy merge-referenced event dirs + merge xls → jira/{plan_run_id}/.
+    """Copy DLE REMOTE/ARCHIVED event dirs + merge xls → jira/{plan_run_id}/.
+
+    Event discovery is **only** ``list_remote_paths_for_extract`` (#213 B1).
+    Merge xls Path columns are not used to find event directories.
 
     Returns:
       >= 0  number of items copied
@@ -122,6 +97,14 @@ def run_extract_sync(plan_run_id: int) -> int:
 
     db = SessionLocal()
     try:
+        from backend.services.device_log_event import (
+            associate_unassigned_events_to_plan_run,
+            list_remote_paths_for_extract,
+            mark_events_archived,
+        )
+
+        associate_unassigned_events_to_plan_run(db, plan_run_id)
+
         merge_rows = db.execute(
             select(PlanRunArtifact).where(
                 PlanRunArtifact.plan_run_id == plan_run_id,
@@ -141,14 +124,11 @@ def run_extract_sync(plan_run_id: int) -> int:
 
         legacy_root = resolve_legacy_shared_storage_root()
 
-        target_names = collect_extract_event_dir_names(db, plan_run_id)
         from backend.core.artifact_paths import (
             ArtifactPathError,
+            copytree_under_root,
+            path_under_root,
             resolve_extract_event_src,
-        )
-        from backend.services.device_log_event import (
-            list_remote_paths_for_extract,
-            mark_events_archived,
         )
 
         remote_path_rows: list[tuple[str, Path, Path]] = []
@@ -174,7 +154,6 @@ def run_extract_sync(plan_run_id: int) -> int:
         extracted = 0
         archived_remote_paths: list[str] = []
         extracted_dest_names: set[str] = set()
-        from backend.core.artifact_paths import copytree_under_root, path_under_root
 
         by_dest: dict[str, list[tuple[str, Path, Path]]] = defaultdict(list)
         for raw, src, devices_root in remote_path_rows:
@@ -207,53 +186,6 @@ def run_extract_sync(plan_run_id: int) -> int:
                     plan_run_id, src,
                 )
 
-        for name in sorted(target_names):
-            if name in extracted_dest_names:
-                continue
-            if not name or ".." in name or name.startswith(("/", "\\")):
-                logger.warning(
-                    "dedup_extract_skip_unsafe_name plan_run=%d name=%r",
-                    plan_run_id, name,
-                )
-                continue
-            located = resolve_extract_event_src(
-                name,
-                nfs_root=nfs_root,
-                legacy_root=legacy_root,
-                plan_run_id=plan_run_id,
-            )
-            if located is None:
-                logger.debug(
-                    "dedup_extract_skip_missing plan_run=%d name=%s", plan_run_id, name,
-                )
-                continue
-            src, devices_root = located
-            try:
-                dest = path_under_root(jira_dir, name)
-            except ArtifactPathError:
-                logger.warning(
-                    "dedup_extract_skip_unsafe_name plan_run=%d name=%r",
-                    plan_run_id, name,
-                )
-                continue
-            if dest.exists():
-                extracted_dest_names.add(name)
-                continue
-            try:
-                copytree_under_root(src, dest, root=devices_root, dest_root=jira_dir)
-                extracted += 1
-                extracted_dest_names.add(name)
-            except ArtifactPathError:
-                logger.warning(
-                    "dedup_extract_skip_outside_devices plan_run=%d path=%s",
-                    plan_run_id, src,
-                )
-            except Exception:
-                logger.exception(
-                    "dedup_extract_event_dir_failed plan_run=%d dir=%s",
-                    plan_run_id, src,
-                )
-
         if archived_remote_paths:
             mark_events_archived(db, plan_run_id, archived_remote_paths)
 
@@ -281,8 +213,8 @@ def run_extract_sync(plan_run_id: int) -> int:
                 )
 
         logger.info(
-            "dedup_extract_done plan_run=%d extracted=%d targets=%d",
-            plan_run_id, extracted, len(target_names),
+            "dedup_extract_done plan_run=%d extracted=%d remote_paths=%d",
+            plan_run_id, extracted, len(remote_path_rows),
         )
         return extracted
     finally:
@@ -290,8 +222,6 @@ def run_extract_sync(plan_run_id: int) -> int:
 
 
 __all__ = [
-    "collect_extract_event_dir_names",
-    "is_event_dir_basename",
     "parse_event_dir_names_from_xls",
     "run_extract_sync",
 ]
