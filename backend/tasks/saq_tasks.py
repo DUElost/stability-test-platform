@@ -257,6 +257,11 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             "round_started_at": round_started_at.isoformat(),
         }
         if continuous_event_upload_enabled():
+            # #213 cutover: EventUploader already pushed events; skip PlanRun
+            # upload_task. merge_task waits on device_log_event REMOTE/ARCHIVED.
+            logger.info(
+                "saq_scan_skip_upload_continuous plan_run=%d", plan_run_id,
+            )
             await queue.enqueue(
                 SaqJob(
                     function="merge_task",

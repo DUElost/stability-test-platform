@@ -49,6 +49,10 @@ Hosts 有 DLE 落库：`8.103` / `8.143` / `8.192` / `8.195` / `9.124` / `9.6`�
 说明：Reconciler 在岗时 inotifyd 不单独写 DLE（有意去重）；本趟 DLE 来自 Reconciler。  
 历史 28 条 ARCHIVED **不回填**类型 / 关联。
 
+**#213 切断结论（同趟）**：生产已开 `STP_EVENT_UPLOADER_ENABLED=1`，`scan_task` 只 enqueue `merge_task`（不 enqueue `upload_task`）。  
+`devices/199/` 目录时间戳 **11:22–11:26**（Job 进行中 EventUploader），早于 **11:33** scan/merge artifact → 事件上送不依赖旧 PlanRun `upload_task`。  
+`jira/199/` extract 完整。功能上新链路已可替代旧上送；剩余工作是删死代码 / 收口默认（#213 Tracks）。
+
 ### 2.3 签字时库存（2026-08-12）
 
 ```text
@@ -82,8 +86,8 @@ with signal_seq_no / linked signals: 6
 
 | Issue | 状态 |
 |-------|------|
-| #213 | 旧 PlanRun 触发上送双轨删除 — **未做**（约 2 周后再开） |
-| #217 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` / HddSpill — **未压测** |
+| #213 | 旧 PlanRun 触发上送：连续上送开启时 **已切断** `upload_task` enqueue（生产 `STP_EVENT_UPLOADER_ENABLED=1`）；删死代码与默认单轨见 issue 剩余 Track |
+| #217 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` / HddSpill — **未压测**（非替代旧上送前置） |
 | #220 / #73 | 阶段 4：UNISOC/QCOM 仅入口；非 MTK 跳过扫描 |
 | inotifyd 独占写 DLE | Reconciler 在岗时 inotifyd 路径被抑制；未单独做「关 Reconciler 只走 inotifyd」E2E |
 
