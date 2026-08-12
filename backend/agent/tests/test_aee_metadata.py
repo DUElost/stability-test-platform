@@ -25,6 +25,14 @@ def test_core_module_reexports_agent_functions():
         core_metadata.infer_aee_subtype_from_paths
         is agent_metadata.infer_aee_subtype_from_paths
     )
+    assert (
+        core_metadata.resolve_device_log_event_type
+        is agent_metadata.resolve_device_log_event_type
+    )
+    assert (
+        core_metadata.is_placeholder_dle_event_type
+        is agent_metadata.is_placeholder_dle_event_type
+    )
 
 
 def _write_exp_main(tmp_path, content: str) -> None:
@@ -189,3 +197,34 @@ def test_zz_internal_missing_returns_empty(metadata_mod, tmp_path):
     result = metadata_mod.parse_exp_main_summary(tmp_path)
 
     assert result == {}
+
+
+def test_resolve_dle_type_prefers_concrete_over_unknown(metadata_mod):
+    assert metadata_mod.resolve_device_log_event_type("UNKNOWN", "JE") == "JE"
+    assert metadata_mod.resolve_device_log_event_type("CRASH", "ANR") == "ANR"
+    assert metadata_mod.resolve_device_log_event_type("AEE", "NE") == "NE"
+
+
+def test_resolve_dle_type_falls_back_to_path(metadata_mod, tmp_path):
+    event_dir = tmp_path / "db.00.JE"
+    event_dir.mkdir()
+    assert (
+        metadata_mod.resolve_device_log_event_type(
+            "UNKNOWN",
+            "其他",
+            paths=(str(event_dir),),
+        )
+        == "JE"
+    )
+
+
+def test_resolve_dle_type_unknown_when_no_clues(metadata_mod, tmp_path):
+    event_dir = tmp_path / "db.99.misc"
+    event_dir.mkdir()
+    assert (
+        metadata_mod.resolve_device_log_event_type(
+            "UNKNOWN",
+            paths=(str(event_dir),),
+        )
+        == "UNKNOWN"
+    )

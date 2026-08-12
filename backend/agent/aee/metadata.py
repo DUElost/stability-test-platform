@@ -82,6 +82,39 @@ def infer_aee_subtype_from_paths(*paths: str) -> Optional[str]:
     return None
 
 
+_PLACEHOLDER_DLE_EVENT_TYPES = frozenset(
+    {"", "UNKNOWN", "CRASH", "AEE", "VENDOR_AEE", "其他"},
+)
+
+
+def is_placeholder_dle_event_type(value: str | None) -> bool:
+    return (value or "").strip().upper() in _PLACEHOLDER_DLE_EVENT_TYPES
+
+
+def resolve_device_log_event_type(
+    *candidates: str | None,
+    paths: tuple[str, ...] = (),
+) -> str:
+    """Pick a concrete DeviceLogEvent type (JE/ANR/NE/…) over placeholders.
+
+    ``parse_exp_main_summary`` usually only yields ``event_subtype``; the MTK
+    collector used to fall back to ``"UNKNOWN"``, which is truthy and clobbered
+    reconciler/watcher types (#215).
+    """
+    for candidate in candidates:
+        token = (candidate or "").strip()
+        if token and not is_placeholder_dle_event_type(token):
+            return token
+    inferred = infer_aee_subtype_from_paths(*paths)
+    if inferred:
+        return inferred
+    for candidate in candidates:
+        token = (candidate or "").strip()
+        if token:
+            return token
+    return "UNKNOWN"
+
+
 def parse_exp_main_summary(entry_dir: Path) -> dict[str, str]:
     zz_summary = _parse_zz_internal(entry_dir)
     if zz_summary:

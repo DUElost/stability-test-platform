@@ -57,6 +57,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from ..watcher.contracts import ContractViolation
 from .db_history import load_processed_lines, save_processed_lines, state_key
 from .paths import PathOutsideRootError, get_aee_local_root, resolve_path_under_aee_local
+from .metadata import resolve_device_log_event_type
 from .processor import ProcessConfig, process_device_logs
 from .state_migration import WATCHER_AEE_STATE_PREFIX
 from .timestamp import parse_timestamp, to_utc
@@ -825,6 +826,7 @@ class AeeDbHistoryReconciler:
         """写入 DeviceLogEvent 并可选入队连续上送。"""
         if self._device_log_client is None:
             return
+        event_type = resolve_device_log_event_type(event_type, event_subtype)
         output_subdir = payload.get("output_subdir")
         if not output_subdir:
             self._register_pull_failed_device_log_event(
@@ -866,11 +868,11 @@ class AeeDbHistoryReconciler:
             return
 
         subtype = event_subtype
-        meta_event_type = event_type
+        parsed_type = None
         if self._platform_collector is not None:
             try:
                 meta = self._platform_collector.parse_metadata(local_path)
-                meta_event_type = meta.event_type or meta_event_type
+                parsed_type = meta.event_type
                 subtype = meta.event_subtype or subtype
             except Exception:
                 logger.debug(
@@ -878,6 +880,12 @@ class AeeDbHistoryReconciler:
                     self._serial,
                     exc_info=True,
                 )
+        meta_event_type = resolve_device_log_event_type(
+            parsed_type,
+            subtype,
+            event_type,
+            paths=(str(local_path),),
+        )
 
         event_id = self._device_log_client.create_local_event(
             serial=self._serial,

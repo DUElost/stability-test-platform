@@ -7,16 +7,20 @@ agent 运行时不得依赖 backend.core);backend 侧消费方经由本模块导
 
 from backend.agent.aee.metadata import (
     infer_aee_subtype_from_paths,
+    is_placeholder_dle_event_type,
     normalize_aee_event_type,
     normalize_aee_subtype,
     normalize_package_name,
     parse_exp_main_summary,
+    resolve_device_log_event_type,
 )
 
 __all__ = [
     "infer_aee_subtype_from_paths",
+    "is_placeholder_dle_event_type",
     "normalize_aee_event_type",
     "normalize_aee_subtype",
     "normalize_package_name",
     "parse_exp_main_summary",
+    "resolve_device_log_event_type",
 ]
