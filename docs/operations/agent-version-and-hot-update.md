@@ -50,7 +50,8 @@ Host UI（`ExpandableHostTable`）展示协议版本、code sync 徽章与相对
 | 类别 | 键 | 值来源 |
 |------|-----|--------|
 | 安装布局 | `AGENT_INSTALL_DIR`、`AIMONKEY_RESOURCE_DIR`、`LOG_DIR`、`PYTHONPATH` | `$INSTALL_DIR` 派生 |
-| 舰队默认 | `STP_AEE_NFS_ROOT`、`STP_DEDUP_*`、`LOG_LEVEL`、`PIP_INDEX_URL`、`STP_DEVICE_LOG_EVENT_ENABLED`、`STP_EVENT_UPLOADER_ENABLED` 等 | 控制面进程环境（`.env.backend` / systemd `EnvironmentFile`）非空时下发 |
+| 舰队默认（两边同值） | `STP_AEE_NFS_ROOT`、`STP_AEE_LOCAL_ROOT`、`STP_DEDUP_SCAN_TAG`、`STP_DEDUP_AUTO_SCAN`、`LOG_LEVEL`、`STP_WATCHER_ENABLED`、`STP_DEVICE_LOG_EVENT_ENABLED`、`STP_EVENT_UPLOADER_ENABLED` | 控制面进程环境非空时原样下发 |
+| Agent 映射键 | Agent 的 `STP_DEDUP_SCAN_PYTHON` / `STP_DEDUP_SCAN_SCRIPT`、`PIP_INDEX_URL` | 分别来自控制面 `STP_AGENT_DEDUP_SCAN_*`、`STP_AGENT_PIP_INDEX_URL`（控制面本机路径**不**原样下发） |
 
 实现：`backend/services/agent_env_sync.py`（allowlist + 行级 merge）。  
 响应字段 `env_keys_synced` 列出本次已对齐的键。

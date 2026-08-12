@@ -45,6 +45,17 @@ def test_dle_uploader_flags_omitted_when_unset_on_control_plane(monkeypatch):
     assert "STP_EVENT_UPLOADER_ENABLED" not in overrides
 
 
+def test_dle_uploader_flags_propagate_explicit_zero(monkeypatch):
+    """Explicit \"0\" is a real fleet value — must disable agents, not be skipped."""
+    monkeypatch.setenv("STP_DEVICE_LOG_EVENT_ENABLED", "0")
+    monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "0")
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert overrides["STP_DEVICE_LOG_EVENT_ENABLED"] == "0"
+    assert overrides["STP_EVENT_UPLOADER_ENABLED"] == "0"
+
+
 def test_control_plane_scan_tool_paths_are_not_synced_to_agents(monkeypatch):
     """The scan tool sits elsewhere on the agents; syncing the control plane's
     own path made every agent scan fail instantly (runs 124-129)."""
