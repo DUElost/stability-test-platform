@@ -93,6 +93,16 @@ def run_extract_sync(plan_run_id: int) -> int:
       -1    no merge artifact
       -2    NFS root not configured
     """
+    # CodeQL py/path-injection (#70): all callers pass an int (FastAPI path
+    # param / SAQ task), but normalize defensively before any DB query or path
+    # construction so a stray string can never reach jira/ as a traversal.
+    from backend.core.artifact_paths import ArtifactPathError
+
+    try:
+        plan_run_id = int(plan_run_id)
+    except (TypeError, ValueError) as exc:
+        raise ArtifactPathError(f"invalid plan_run_id: {plan_run_id!r}") from exc
+
     from backend.core.storage_root import resolve_shared_storage_root
     from backend.core.database import SessionLocal
 
@@ -126,7 +136,6 @@ def run_extract_sync(plan_run_id: int) -> int:
         legacy_root = resolve_legacy_shared_storage_root()
 
         from backend.core.artifact_paths import (
-            ArtifactPathError,
             copytree_under_root,
             path_under_root,
             resolve_extract_event_src,
@@ -156,7 +165,7 @@ def run_extract_sync(plan_run_id: int) -> int:
             src, devices_root = located
             remote_path_rows.append((raw, src, devices_root))
 
-        jira_dir = Path(nfs_root) / "jira" / str(plan_run_id)
+        jira_dir = path_under_root(Path(nfs_root) / "jira", str(plan_run_id))
         jira_dir.mkdir(parents=True, exist_ok=True)
 
         extracted = 0
