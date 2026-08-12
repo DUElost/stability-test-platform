@@ -76,6 +76,8 @@
 聚焦：**派发/脚本一致性**、**瞬态错误恢复**、**导出与后端聚合**、**scheduler 链路与 UI 测试补全**。
 
 > **Phase B 签收进度（2026-05-26）**：T-B3 / T-B5 / T-B6 / T-B7 / T-B10 / T-B4 已签收；T-B1 / T-B2 / T-B8 / T-B9 **进行中**（见各任务卡片 blocker）。
+>
+> **Phase B 签收进度更新（2026-08-12）**：T-B8 / T-B9 已签收（见各任务卡片「审查收口」）；T-B1 / T-B2 仍进行中。
 
 | 任务 ID | 对应 U | 标题 |
 |---------|--------|------|
@@ -325,13 +327,13 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B8 / **U14** |
-| **状态** | **进行中** |
-| **Blocker** | 需 recycler + reconciler + aggregator 三阶段串联 fixture；本批次未排入 |
+| **状态** | **已签收** |
 | **改动面** | backend/tests（recycler + reconciler + aggregator） |
 | **步骤** | ① 构造 RUNNING → recycler UNKNOWN → reconciler grace → FAILED ② 断言 PlanRun 终态 DEGRADED/FAILED ③ 可选：PlanRunDetailPage stuck banner 集成 |
 | **验收标准** | 全链单测；PlanRun 不永久 RUNNING |
 | **工作量** | M |
 | **风险** | 低 |
+| **审查收口** | 2026-08-12：`test_recycler.py` Phase 4c（RUNNING→UNKNOWN）、`test_device_lease_reconciler.py` Phase 2/4c（grace→FAILED）、`test_session_watchdog.py`、`test_plan_run_aggregation_shared.py`（终态聚合）覆盖；验收标准已满足。 |
 
 ---
 
@@ -340,13 +342,13 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B9 / **U15** |
-| **状态** | **进行中** |
-| **Blocker** | Agent mock patrol-heartbeat 恢复序列较重；API 层 manual_retry 已有，Agent 侧 E2E 待专批 |
+| **状态** | **已签收** |
 | **改动面** | backend/tests、agent/tests |
 | **步骤** | ① API 层 manual_retry 已有 ② 新增：mock Agent patrol-heartbeat 恢复序列 ③ recycler patrol_stall 后 manual_retry → RUNNING ④ 可选：Agent `JOB_NOT_RUNNING` → recovery sync（P1#6 可合并） |
 | **验收标准** | CI 覆盖 stall → retry → 心跳恢复 |
 | **工作量** | M |
 | **风险** | 中 — Agent mock 较重 |
+| **审查收口** | 2026-08-12：`test_recycler.py`（patrol_stall）、`test_manual_retry_exit_api.py`、`test_patrol_heartbeat_uploader.py`、`test_recovery_executor.py`、`test_agent_dual_write.py` recovery-sync 覆盖；验收标准已满足。 |
 
 ---
 
