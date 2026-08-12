@@ -24,9 +24,10 @@
 python -m pytest backend/agent/tests/ -q
 
 # 前端
+cd frontend
 npm ci
 npm run type-check
-npm run vitest run
+npm run test -- run
 npm run build
 
 # lint（CI 已阻塞，--max-warnings 0）
