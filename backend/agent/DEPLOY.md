@@ -468,7 +468,7 @@ done
 - **访问**：执行中经 SocketIO 推送到控制面（UI 实时控制台 / `GET /api/v1/logs/query`）；事后经控制面 `POST /api/v1/agent/logs` SSH 读取 Agent 磁盘
 - 不再向控制面注册 `run_log_bundle` JobArtifact
 - LogArchiver 仅做 SSD prune（grace 后删除本地目录）
-- HDD 将满时 `HddSpillMonitor` 溢出最旧 AEE 事件目录到 15.4 `devices/`
+- HDD 将满时 `HddSpillMonitor` 经 EventUploader enqueue 最旧 `LOCAL` 事件到 15.4 `devices/{plan_run_id}/` 或 `unassigned/{event_id}/`（SSD fallback 禁用 spill）
 
 ---
 

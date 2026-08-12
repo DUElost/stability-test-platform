@@ -309,7 +309,8 @@ def get_or_create_run_date_stamp(
 #
 # 对象族分两类，避免继续用"哪段代码写哪里"的方式散落：
 #   - JobArtifact 文件（watcher puller 默认落点 + LOCAL promote）→ jobs/{job_id}/
-#   - AEE 事件目录（upload_manager / HddSpillMonitor）→ devices/{相对路径}/
+#   - AEE 事件目录（EventUploader / DLE；含 HddSpill enqueue）→
+#     devices/{plan_run_id}/ 或 devices/unassigned/{event_id}/
 # 控制面 download 与 dedup extract 分别消费这两族；任何一端改布局都必须改这里。
 
 
@@ -328,16 +329,5 @@ def resolve_puller_artifact_dir(
 
 
 def resolve_upload_devices_dir(nfs_root: Path | str, plan_run_id: int) -> Path:
-    """UploadManager 事件目录上送目标：``{nfs_root}/devices/{plan_run_id}/``。"""
+    """UploadManager / EventUploader 事件目录上送目标：``{nfs_root}/devices/{plan_run_id}/``。"""
     return Path(nfs_root) / "devices" / str(int(plan_run_id))
-
-
-def resolve_spill_devices_dest(
-    cifs_root: Path | str,
-    hdd_root: Path | str,
-    local_event_dir: Path | str,
-) -> Path:
-    """HddSpillMonitor 上送目标：``{cifs_root}/devices/{hdd 相对路径}``。"""
-    local = Path(local_event_dir).resolve()
-    rel = local.relative_to(Path(hdd_root).resolve())
-    return Path(cifs_root) / "devices" / rel

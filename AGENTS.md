@@ -118,8 +118,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 | 对象族 | 布局 |
 |--------|------|
 | JobArtifact 文件（watcher puller 默认落点 + LOCAL promote） | `{root}/jobs/{job_id}/` |
-| 事件目录（EventUploader / DLE 上送） | `{root}/devices/{plan_run_id}/` |
-| 事件目录（HddSpillMonitor 溢出） | `{root}/devices/{hdd 相对路径}/` |
+| 事件目录（EventUploader / DLE 上送，含 HddSpill enqueue） | `{root}/devices/{plan_run_id}/` 或 `{root}/devices/unassigned/{event_id}/` |
 | 扫描报告 / extract 输出 | `{root}/dedup/{run_id}/`、`{root}/jira/{run_id}/` |
 
 ## Agent 子系统细则（按需加载）

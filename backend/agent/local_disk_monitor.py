@@ -1,31 +1,21 @@
-"""HddSpillMonitor — Agent HDD 溢出监控 + 上送中心存储（ADR-0025 方案 C Sprint 2）。
+"""HddSpillMonitor — Agent HDD 溢出监控（ADR-0025 / ADR-0028）。
 
 职责：
     - interval 后台线程读取 HDD（hdd_root 所在盘）使用率
-    - 使用率 ≥ spill_threshold_pct → 找最旧 AEE 事件目录，上送到中心存储（CIFS）
-      {cifs_root}/devices/{folder_name}/{serial}/ 后 prune 本地
-    - 循环直至回落到 target_pct 或无更多可上送目录
-    - 永不删除活跃 job 关联的事件目录（保守：只按 mtime 排序，跳过近期的）
-
-设计取舍：
-    - 上送走 shutil.copytree（安全忽略 NFS/CIFS copystat EPERM）
-    - 上送成功后才 prune 本地（不丢数据）
-    - 无更多事件目录仍超阈 → 仅告警，不死循环
+    - 使用率 ≥ spill_threshold_pct → 查 DB ``state=LOCAL`` 最旧事件，
+      经 EventUploader enqueue（与常规连续上送同一 queue）
+    - EventUploader 落盘路径为 ``devices/{plan_run_id}/`` 或
+      ``unassigned/{event_id}/``（不再 rglob + copytree 到 legacy 相对路径）
+    - 循环直至回落到 target_pct 或无可 enqueue 的 LOCAL 事件
+    - SSD fallback root 下禁用 spill（``is_ssd_fallback_root``）
 """
 
 from __future__ import annotations
 
 import logging
 import math
-import shutil
 import threading
-from pathlib import Path
 from typing import Any, Dict, Optional
-
-try:
-    from backend.agent.aee.paths import resolve_spill_devices_dest
-except ImportError:
-    from agent.aee.paths import resolve_spill_devices_dest
 
 
 logger = logging.getLogger(__name__)
@@ -142,7 +132,7 @@ class HddSpillMonitor:
             self._stop_evt.wait(self._interval)
 
     def check_once(self) -> int:
-        """检查 HDD 水位；超阈则上送最旧事件目录到中心存储后 prune。返回上送目录数。"""
+        """检查 HDD 水位；超阈则经 EventUploader enqueue 最旧 LOCAL 事件。返回 enqueue 数。"""
         if not self._configured or not self._cifs_root:
             return 0
         if self._ssd_spill_disabled():
@@ -190,6 +180,7 @@ class HddSpillMonitor:
         return is_ssd_fallback_root(self._hdd_root)
 
     def _spill_via_event_uploader(self) -> int:
+        """Enqueue one LOCAL DeviceLogEvent via EventUploader (#213 C1)."""
         try:
             from .event_uploader import EventUploader
             from .aee.device_log_event_client import DeviceLogEventClient
@@ -198,6 +189,7 @@ class HddSpillMonitor:
             from agent.aee.device_log_event_client import DeviceLogEventClient
 
         if not EventUploader.is_enabled():
+            logger.warning("hdd_spill_skipped_uploader_disabled")
             return 0
         client = DeviceLogEventClient.from_env(
             api_url=self._api_url,
@@ -205,6 +197,7 @@ class HddSpillMonitor:
             host_id=self._host_id,
         )
         if client is None:
+            logger.warning("hdd_spill_skipped_dle_client_unavailable")
             return 0
         events = client.list_events(state="LOCAL", limit=50)
         if not events:
@@ -224,70 +217,12 @@ class HddSpillMonitor:
         return 0
 
     def _spill_oldest_event_dir(self) -> int:
-        """找最旧事件目录，上送到 CIFS 后 prune 本地。返回 1 或 0。"""
-        if self._spill_via_event_uploader():
-            return 1
-
-        hdd = Path(self._hdd_root)
-        if not hdd.is_dir():
+        """Enqueue one LOCAL event via EventUploader. Returns 1 or 0 (#213 C1)."""
+        if not self._spill_via_event_uploader():
             return 0
-
-        candidates = []
-        for entry in hdd.rglob("*"):
-            if not entry.is_dir():
-                continue
-            try:
-                if (entry / "__exp_main.txt").exists() or (entry / "main.dbg").exists():
-                    mtime = entry.stat().st_mtime
-                    candidates.append((mtime, entry))
-            except OSError:
-                continue
-
-        if not candidates:
-            return 0
-
-        candidates.sort(key=lambda t: t[0])
-        mtime, local_dir = candidates[0]
-
-        try:
-            cifs_dir = resolve_spill_devices_dest(
-                self._cifs_root, self._hdd_root, local_dir,
-            )
-        except ValueError:
-            return 0
-
-        if cifs_dir.exists():
-            shutil.rmtree(str(cifs_dir), ignore_errors=True)
-
-        try:
-            self._copytree_safe(str(local_dir), str(cifs_dir))
-        except Exception:
-            logger.exception("hdd_spill_copy_failed %s → %s", local_dir, cifs_dir)
-            return 0
-
-        if not cifs_dir.exists():
-            logger.error("hdd_spill_copy_verify_failed %s", cifs_dir)
-            return 0
-
-        shutil.rmtree(str(local_dir), ignore_errors=True)
         with self._metrics_lock:
             self._spilled_total += 1
-        logger.info("hdd_spill_oldest %s → %s", local_dir, cifs_dir)
         return 1
-
-    @staticmethod
-    def _copytree_safe(src: str, dst: str) -> None:
-        """copytree ignoring copystat EPERM on NFS/CIFS mounts."""
-        src_path = Path(src)
-        dst_path = Path(dst)
-        dst_path.mkdir(parents=True, exist_ok=True)
-        for entry in src_path.rglob("*"):
-            rel = entry.relative_to(src_path)
-            target = dst_path / rel
-            if entry.is_dir():
-                target.mkdir(parents=True, exist_ok=True)
-            elif entry.is_file():
-                shutil.copyfile(str(entry), str(target))
 
     def _current_usage_pct(self) -> Optional[float]:
         try:
