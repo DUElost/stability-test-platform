@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 项目文档中心
+    url: https://github.com/DUElost/stability-test-platform/blob/main/docs/README.md
+    about: 先查文档中心，确认是否已有说明或设计。
