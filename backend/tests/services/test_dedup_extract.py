@@ -136,6 +136,14 @@ def test_run_extract_sync_uses_dle_remote_paths_only(
     assert (jira / "Result_MergeFiles.xls").is_file()
 
 
+def test_run_extract_sync_rejects_non_integer_plan_run_id(db_session):
+    """CodeQL #70: plan_run_id must normalize to an int before path construction."""
+    from backend.core.artifact_paths import ArtifactPathError
+
+    with pytest.raises(ArtifactPathError):
+        run_extract_sync("1/../../outside")  # type: ignore[arg-type]
+
+
 def test_associate_unassigned_by_job_then_extract(
     db_session,
     sample_plan_run,
