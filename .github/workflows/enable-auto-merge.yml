@@ -46,13 +46,13 @@ jobs:
           fi
 
   merge-gate:
-    # 准入门禁：CodeRabbit 对当前 head 的 APPROVED → success；对当前 head 的
-    # CHANGES_REQUESTED → failure；rate limited / skipped / paused → success（由
-    # required checks 把关，不再叠加 CodeRabbit 阻断）；dependabot[bot] PR 若
-    # 无 CodeRabbit 终态决策也放行（实测 bot PR 不触发 CodeRabbit 审查，否则
-    # code-rabbit-gate 会永久 pending 卡死自动合入）；其他状态 → pending/failure，
-    # fail-closed。auto_incremental_review 关闭后 push 常出现 skipped/paused，
-    # 属预期常态而非合入阻断项。
+    # best-effort 参考门禁：CodeRabbit 对当前 head 的 APPROVED → success；对当前
+    # head 的 CHANGES_REQUESTED → failure；rate limited / skipped / paused / 当前
+    # head 无决策 → success（由 required checks 把关，CodeRabbit 不因配额/不可用
+    # 阻塞合入）；dependabot[bot] PR 若无 CodeRabbit 终态决策也放行（实测 bot PR
+    # 不触发 CodeRabbit 审查，否则 code-rabbit-gate 会永久 pending 卡死自动合入）。
+    # auto_incremental_review 关闭后 push 常出现 skipped/paused，属预期常态而非
+    # 合入阻断项；旧 commit 的 CHANGES_REQUESTED 不作为当前 head 的阻断决策。
     # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
     # status 同名，造成 required check 来源歧义。
     if: github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
