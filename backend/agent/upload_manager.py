@@ -18,18 +18,8 @@ from typing import Optional
 
 try:
     from backend.agent.aee.paths import resolve_shared_storage_root
-except ImportError:
-    import os as _os
-
-    def resolve_shared_storage_root() -> str:
-        primary = (_os.getenv("STP_AEE_NFS_ROOT") or "").strip()
-        if primary:
-            return primary
-        for alias in ("STP_WATCHER_NFS_BASE_DIR", "STP_AEE_CIFS_ROOT"):
-            raw = (_os.getenv(alias) or "").strip()
-            if raw:
-                return raw
-        return ""
+except ImportError:  # Agent install layout (no ``backend.`` package)
+    from agent.aee.paths import resolve_shared_storage_root
 
 logger = logging.getLogger(__name__)
 

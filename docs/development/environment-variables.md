@@ -33,10 +33,10 @@
 | `STP_SCRIPT_ROOT` | 脚本扫描根；**必须显式设置**（未设 scan 返回 503，不再回落到 `STP_NFS_ROOT/scripts`）。开发：`<repo>/backend/agent/scripts` |
 | `STP_SCRIPT_RUNTIME_ROOT` | 扫描机 ≠ 运行机时 Agent 侧脚本根 |
 | `STP_NFS_ROOT` | Agent 上由 hot-update **镜像** `STP_AEE_NFS_ROOT`（旧脚本仍读此名）。控制面本机值**不下发**，也不再当脚本默认根 |
-| `STP_AEE_NFS_ROOT` | **中心存储** 本机挂载点（主键）。控制面 + Agent 指向同一 UNC，路径字符串可不同 |
-| `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | 弃用别名；仅当主键未设时回落，并打 WARNING |
+| `STP_AEE_NFS_ROOT` | **中心存储** 本机挂载点（**唯一文档化主键**）。控制面 + Agent 指向同一分享；路径字符串可不同 |
+| `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | **弃用别名**（计划删除，#213 E1）：仅当主键未设时回落并打 WARNING；新部署勿再配置 |
 | `STP_FILE_SERVER_ADDRESS` | 共享存储健康页上的**控制面**展示 IP（现 8.202）。**不是** CIFS 根 / UNC |
-| `STP_AEE_LOCAL_ROOT` | Agent HDD AEE 根（控制面文档化；实际 Agent 侧读取） |
+| `STP_AEE_LOCAL_ROOT` | Agent **本机** L1 AEE 根（按机配置；hot-update **不下发**，见 #235） |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | 扫描工具；**同名两角色两套值**（控制面 merge vs Agent scan） |
 | `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：hot-update 写成 Agent 的无前缀 `STP_DEDUP_SCAN_*` |
 | `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` | Compose 开发初始化管理员；**禁止**用于生产默认值 |

@@ -1183,6 +1183,30 @@ export interface PlanRunEventsPayload {
   };
 }
 
+/** GET /api/v1/log-signals/orphans — admin (#213 D3) */
+export interface OrphanLogSignal {
+  id: number;
+  host_id: string;
+  device_serial: string;
+  seq_no: number;
+  category: string;
+  source: string;
+  path_on_device: string;
+  artifact_uri?: string | null;
+  detected_at?: string | null;
+  received_at?: string | null;
+  device_log_event_id?: string | null;
+  extra?: Record<string, unknown> | null;
+}
+
+export interface OrphanLogSignalList {
+  items: OrphanLogSignal[];
+  total: number;
+  skip: number;
+  limit: number;
+  excluding_call_sites: string[];
+}
+
 export type DeviceUiStatus =
   | 'completed'
   | 'running'

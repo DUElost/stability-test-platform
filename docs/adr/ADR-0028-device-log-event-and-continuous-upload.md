@@ -64,6 +64,24 @@ LOCAL / REMOTE / ARCHIVED ──(本地 prune)──→ PRUNED
 - `job_log_signal` 表新增 `device_log_event_id` 外键（可空，`SET NULL` on delete——替代当前 `CASCADE`）
 - `JobLogSignal.job_id` 的 `ondelete` 从 `CASCADE` 改为 `SET NULL`（删 job 不丢事件记录）
 
+### 实体职责（#213 Track D）
+
+| 实体 | 职责 | 非职责 |
+|------|------|--------|
+| **`device_log_event`** | 上送 / extract / HddSpill 的**唯一权威**：`remote_path`、state 机、PlanRun 关联 | 不替代 watcher UI 计数（可空关联 signal） |
+| **`job_log_signal`** | PlanRun **观测/汇总**：watcher-summary、风险评级、`extra.nfs_path` 去重展示 | **不**驱动 upload/extract 事件发现（#213 A/B 已删 basename union） |
+
+`extra.nfs_path` 仅服务观测聚合；extract 只读 `list_remote_paths_for_extract`（DLE `remote_path`）。
+
+#### Orphan signal（`job_id IS NULL`，#212 P1-7）
+
+删 Job 后 signal 保留但脱离 PlanRun。下列调用故意用 `job_id.in_(plan_run_jobs)`，**不会**计入 orphan：
+
+- `GET /plan-runs/{id}/watcher-summary` 及 AEE breakdown / event timeline
+- `report_service.aggregate_risk_summary_from_signals`
+
+运维清单：`GET /api/v1/log-signals/orphans`（admin）。策略：保留供审计；上送/extract 仍以关联的 `device_log_event`（若有）为准。前端 PlanRun 详情**不**展示 orphan（有意）。
+
 ### D2：设备日志上送与 PlanRun 生命周期解耦（连续上送）
 
 **当前**：上送仅在 PlanRun 终态（SUCCESS/PARTIAL_SUCCESS）触发，`should_trigger_dedup` 门控 → `scan_task → upload_task`。

@@ -157,11 +157,19 @@ class JobArtifact(Base):
 
 
 class JobLogSignal(Base):
-    """Watcher 采集的异常事件（ANR/AEE/VENDOR_AEE/MOBILELOG 等）的权威存储。
+    """Watcher 采集的异常事件（ANR/AEE/VENDOR_AEE/MOBILELOG 等）的观测/汇总行。
+
+    ADR-0028 / #213 Track D：``device_log_event`` 是上送与 extract 的权威实体；
+    本表保留 PlanRun watcher-summary / 风险评级等观测聚合，不驱动
+    scan→merge→extract 事件发现。
 
     字段契约见 backend/agent/watcher/contracts.py LogSignalEnvelope。
     幂等键：(job_id, seq_no) —— OutboxDrainer 按此键去重，重复 POST 不重复插入。
     Agent 通过 POST /api/v1/agent/log-signals 批量上送。
+
+    ``job_id`` 可为 NULL（删 Job 后 SET NULL）。PlanRun 聚合查询用
+    ``job_id.in_(plan_run_jobs)``，会故意排除 orphan；运维清单见
+    ``GET /api/v1/log-signals/orphans``。
     """
     __tablename__ = "job_log_signal"
 
