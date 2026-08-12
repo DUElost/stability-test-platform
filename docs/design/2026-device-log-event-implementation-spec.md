@@ -256,9 +256,11 @@ class PlatformCollector(Protocol):
 
 `STP_WATCHER_AEE_RECONCILE_PLATFORMS`（默认 `MTK`）决定启动哪个 Collector；`UNKNOWN` 仍放行 MTK Collector。
 
-### 5.4 存根
+### 5.4 存根（#220）
 
-`UnisocCollector` / `QcomCollector`：`detect` 返回 False；其余 `raise NotImplementedError`。
+`UnisocCollector` / `QcomCollector`：`detect` 返回 False；`parse_metadata` 抛
+`CollectorError`。生产白名单默认仅 `MTK`——**勿**把 `STP_WATCHER_AEE_RECONCILE_PLATFORMS`
+扩成含 UNISOC/QCOM 冒充扫描。真采集仍见 #73（延期，不阻塞主线）。
 
 ---
 

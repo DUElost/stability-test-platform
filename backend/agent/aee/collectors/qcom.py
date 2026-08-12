@@ -1,4 +1,4 @@
-"""QCOM PlatformCollector stub — detect only (#73)."""
+"""QCOM PlatformCollector stub — entry only (#220); real collect deferred (#73)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""UNISOC PlatformCollector stub — detect only (#73)."""
+"""UNISOC PlatformCollector stub — entry only (#220); real collect deferred (#73)."""
 
 from __future__ import annotations
 

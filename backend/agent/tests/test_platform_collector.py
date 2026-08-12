@@ -1,7 +1,13 @@
 """PlatformCollector unit tests."""
 
-from backend.agent.aee.collector import get_collector_for_platform
+from pathlib import Path
+
+import pytest
+
+from backend.agent.aee.collector import CollectorError, get_collector_for_platform
 from backend.agent.aee.collectors.mtk import MtkPlatformCollector
+from backend.agent.aee.collectors.qcom import QcomPlatformCollector
+from backend.agent.aee.collectors.unisoc import UnisocPlatformCollector
 
 
 def test_get_collector_mtk():
@@ -12,6 +18,24 @@ def test_get_collector_mtk():
 def test_get_collector_unknown_falls_back_to_mtk():
     collector = get_collector_for_platform("UNKNOWN")
     assert isinstance(collector, MtkPlatformCollector)
+
+
+def test_get_collector_unisoc_is_stub_only():
+    """#220: keep UNISOC entry; do not implement collect/parse."""
+    collector = get_collector_for_platform("UNISOC")
+    assert isinstance(collector, UnisocPlatformCollector)
+    assert collector.detect(lambda *_a, **_k: "unused", "serial") is False
+    with pytest.raises(CollectorError, match="UNISOC"):
+        collector.parse_metadata(Path("/tmp/no-such-event"))
+
+
+def test_get_collector_qcom_is_stub_only():
+    """#220: keep QCOM entry; do not implement collect/parse."""
+    collector = get_collector_for_platform("QCOM")
+    assert isinstance(collector, QcomPlatformCollector)
+    assert collector.detect(lambda *_a, **_k: "unused", "serial") is False
+    with pytest.raises(CollectorError, match="QCOM"):
+        collector.parse_metadata(Path("/tmp/no-such-event"))
 
 
 def test_mtk_parse_metadata_from_exp_main(tmp_path):

@@ -101,7 +101,9 @@ class PlatformCollector(Protocol):
 ```
 
 - MTK 实现从现有 Reconciler 逻辑抽离（`db_history` sha256 对比 + `ZZ_INTERNAL` 解析）
-- UNISOC / QCOM 各一个 issue + 验收用例
+- UNISOC / QCOM：**入口保留、采集不实现**（#220；真采集延期见 #73）。Stub
+  `detect→False` / `parse_metadata` 抛 `CollectorError`；默认白名单仅 `MTK`，
+  有对应设备时 `aee_reconciler_skipped_platform` 跳过。禁止误开白名单冒充扫描。
 - 目录布局和上送路径**不感知平台差异**
 
 ### D5：L1 存储降级（无 HDD → SSD）
@@ -171,7 +173,7 @@ NFS/CIFS（`STP_AEE_NFS_ROOT`）只用于显式上送、汇总、按需事件或
 | 1（止血） | P0-1 短期（extract 双根遍历 spill 路径）+ P0-3（merge `since` 过滤）+ P2-6（文档同步）+ P2-2a（handler 顺序） | 3–5 天 |
 | 2（可观测） | API 暴露 `run_context.archive` + 前端 N/M host + PlanRun 零产物降级 | 1–2 天 |
 | **3（重构）** | **D1–D8 全面实施**：DeviceLogEvent 表 + 连续上送 + PlatformCollector + 文件系统查询迁移 | ~3 周 |
-| 4（平台+运维） | UNISOC/QCOM Collector + 存储切换 SOP + 清理保留策略 | 按排期 |
+| 4（平台入口+运维） | **Collector 入口锁定**（UNISOC/QCOM stub，生产只扫 MTK，#220）；存储切换 SOP + 清理保留策略（#213/#217 另排） | 入口已决策；运维项按观察窗 |
 
 ## 相关
 
