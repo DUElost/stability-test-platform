@@ -160,6 +160,7 @@ async def test_device_log_events_create_and_update():
             assert len(rows) == 1
             event_id = rows[0].id
             assert rows[0].state == EventState.LOCAL.value
+            assert rows[0].signal_seq_no == 7
 
             sig = db.query(JobLogSignal).filter(
                 JobLogSignal.job_id == seed["job_id"],
@@ -198,5 +199,69 @@ async def test_device_log_events_create_and_update():
             )
         assert listed.data["total"] == 1
         assert listed.data["events"][0]["state"] == EventState.REMOTE.value
+    finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_device_log_event_links_when_signal_arrives_later():
+    """#214: DLE ingest before job_log_signal; reverse-link on late signal."""
+    from backend.services.device_log_event import link_signals_to_device_log_events
+
+    seed = _seed_host_job()
+    try:
+        create_ev = DeviceLogEventIn(
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="JE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.LOCAL.value,
+            local_path="/mnt/hdd/aee_events/dev/je_001",
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+            link_signal_seq_no=3,
+        )
+        async with AsyncSessionLocal() as db:
+            r1 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[create_ev]),
+                db=db,
+                _=None,
+            )
+        assert r1.data["upserted"] == 1
+        event_id = r1.data["event_ids"][0]
+
+        db = SessionLocal()
+        try:
+            sig = JobLogSignal(
+                job_id=seed["job_id"],
+                host_id=seed["host_id"],
+                device_serial=seed["serial"],
+                seq_no=3,
+                category="AEE",
+                source="reconciler",
+                path_on_device="/data/aee_exp/db_history",
+                detected_at=datetime.now(timezone.utc),
+                received_at=datetime.now(timezone.utc),
+            )
+            db.add(sig)
+            db.commit()
+            assert sig.device_log_event_id is None
+        finally:
+            db.close()
+
+        async with AsyncSessionLocal() as db:
+            await link_signals_to_device_log_events(db, [seed["job_id"]])
+            await db.commit()
+
+        db = SessionLocal()
+        try:
+            sig = db.query(JobLogSignal).filter(
+                JobLogSignal.job_id == seed["job_id"],
+                JobLogSignal.seq_no == 3,
+            ).one()
+            assert str(sig.device_log_event_id) == event_id
+        finally:
+            db.close()
     finally:
         _cleanup(seed)

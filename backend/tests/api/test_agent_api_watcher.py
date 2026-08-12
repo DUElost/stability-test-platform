@@ -588,6 +588,61 @@ def _make_signal(job_id: int, device_serial: str, host_id: str, seq_no: int, **o
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_log_signals_reverse_links_device_log_event():
+    """#214: DLE ingest first; /log-signals reverse-links device_log_event_id."""
+    from backend.models.device_log_event import DeviceLogEvent
+    from backend.models.enums import EventState
+
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
+    now = datetime.now(timezone.utc)
+    db = SessionLocal()
+    try:
+        dle = DeviceLogEvent(
+            serial=seed["device_serial"],
+            platform="MTK",
+            event_type="ANR",
+            detected_at=now,
+            state=EventState.LOCAL.value,
+            local_path="/mnt/hdd/aee_events/dev/anr_001",
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+            signal_seq_no=9,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(dle)
+        db.commit()
+        event_id = dle.id
+    finally:
+        db.close()
+
+    sig = _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=9)
+    try:
+        async with AsyncSessionLocal() as async_db:
+            r = await ingest_log_signals(
+                payload=LogSignalBatchIn(signals=[sig]),
+                db=async_db,
+                _=None,
+            )
+        assert r.error is None
+        assert r.data["inserted"] == 1
+
+        db = SessionLocal()
+        try:
+            row = db.query(JobLogSignal).filter(
+                JobLogSignal.job_id == seed["job_id"],
+                JobLogSignal.seq_no == 9,
+            ).one()
+            assert row.device_log_event_id == event_id
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_log_signals_inserts_unique_per_seq_no():
     """同 (job_id, seq_no) 重复上送只入库一次（ON CONFLICT DO NOTHING）。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)

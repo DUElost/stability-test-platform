@@ -2155,6 +2155,10 @@ async def ingest_log_signals(
             .values(log_signal_count=JobInstance.log_signal_count + count)
         )
 
+    from backend.services.device_log_event import link_signals_to_device_log_events
+
+    await link_signals_to_device_log_events(db, [s.job_id for s in payload.signals])
+
     await db.commit()
 
     # ── Prometheus 埋点:仅对实际入库的 signal 计数(冲突丢弃的不计) ──
@@ -2355,6 +2359,7 @@ async def ingest_device_log_events(
                 plan_run_id=ev.plan_run_id,
                 host_id=ev.host_id,
                 job_id=ev.job_id,
+                signal_seq_no=ev.link_signal_seq_no,
                 created_at=now,
                 updated_at=now,
             )
@@ -2362,18 +2367,18 @@ async def ingest_device_log_events(
             await db.flush()
             event_id = row.id
 
-        if ev.link_signal_seq_no is not None and ev.job_id is not None:
-            await db.execute(
-                update(JobLogSignal)
-                .where(
-                    JobLogSignal.job_id == ev.job_id,
-                    JobLogSignal.seq_no == ev.link_signal_seq_no,
-                )
-                .values(device_log_event_id=event_id)
-            )
+        if ev.link_signal_seq_no is not None:
+            row.signal_seq_no = ev.link_signal_seq_no
 
         upserted += 1
         event_ids.append(str(event_id))
+
+    from backend.services.device_log_event import link_signals_to_device_log_events
+
+    await link_signals_to_device_log_events(
+        db,
+        [ev.job_id for ev in payload.events if ev.job_id is not None],
+    )
 
     await db.commit()
     return ok({"upserted": upserted, "total": len(payload.events), "event_ids": event_ids})
