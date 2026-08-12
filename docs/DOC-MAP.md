@@ -98,6 +98,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`acceptance/2026-plan-c-sprint2-3.md`](./acceptance/2026-plan-c-sprint2-3.md) | 方案 C Sprint 2/3 验收 |
 | [`acceptance/2026-plan-c-sprint4.md`](./acceptance/2026-plan-c-sprint4.md) | 方案 C Sprint 4 自动化验收矩阵 |
 | [`acceptance/2026-plan-c-sprint4-real-device.md`](./acceptance/2026-plan-c-sprint4-real-device.md) | 方案 C Sprint 4 真机联调记录 |
+| [`acceptance/2026-08-adr-0028-phase3-mtk-signoff.md`](./acceptance/2026-08-adr-0028-phase3-mtk-signoff.md) | ADR-0028 阶段 3 MTK DLE + EventUploader 签字 |
 
 ---
 
