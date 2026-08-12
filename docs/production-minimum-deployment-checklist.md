@@ -332,7 +332,7 @@ curl -v --max-time 5 http://<控制平面IP>/api/v1/hosts
 
 1. 停止 WSL 内旧服务：
 ```bash
-./stop-backend-wsl.sh
+pkill -f "uvicorn backend.main:app" || true
 sudo systemctl stop stability-test-agent
 ```
 2. 在主 Linux Host 启动后端与 Nginx。

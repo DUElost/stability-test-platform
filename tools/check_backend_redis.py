@@ -89,7 +89,7 @@ async def check_redis_or_explain(
         return (
             False,
             "Redis preflight failed for {}: {}\n"
-            "If you use local Docker Redis, run .\\start-redis.bat first.\n"
+            "If you use local Docker Redis, run `docker compose up -d redis` first.\n"
             "For pure API debugging only, use STP_SKIP_INFRA_CHECK=1 in a non-production shell.".format(
                 redis_url,
                 exc,

@@ -53,13 +53,6 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 cd frontend && npm install && npm run dev
 ```
 
-### 兼容入口：Windows 批处理脚本
-
-```bash
-start-backend.bat
-start-frontend-windows.bat
-```
-
 ### 必配 env（开发）
 
 完整变量表见 [`environment-variables.md`](./environment-variables.md)。

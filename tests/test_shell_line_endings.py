@@ -3,9 +3,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SHELL_SCRIPTS = [
-    "start-backend-wsl.sh",
-    "start-frontend-wsl.sh",
-    "stop-backend-wsl.sh",
     "backend/agent/agentctl.sh",
     "backend/agent/install_agent.sh",
 ]
