@@ -740,33 +740,6 @@ def main() -> None:
                 payload.get("device_serials") or [],
                 payload.get("run_date_stamps") or [],
             )
-        elif command == "upload_events":
-            if EventUploader.is_enabled():
-                logger.info(
-                    "control_upload_events_skipped_continuous_uploader plan_run=%s",
-                    payload.get("plan_run_id"),
-                )
-                return
-            plan_run_id = payload.get("plan_run_id")
-            event_dir_names = payload.get("event_dir_names", [])
-            if not plan_run_id:
-                logger.warning("control_upload_events_missing_plan_run_id")
-                return
-
-            def _upload_events():
-                uploader = UploadManager.instance()
-                if not uploader.is_configured():
-                    logger.warning("control_upload_events_skip_not_configured")
-                    return
-                hdd_root = get_aee_local_root()
-                n = uploader.upload_event_dirs(int(plan_run_id), event_dir_names, str(hdd_root))
-                logger.info("control_upload_events_done plan_run=%d copied=%d", plan_run_id, n)
-
-            threading.Thread(
-                target=_upload_events,
-                name="upload-events", daemon=True,
-            ).start()
-            logger.info("control_upload_events_triggered plan_run=%d dirs=%d", plan_run_id, len(event_dir_names))
         elif command == "reload_config":
             env_reloaded = _reload_runtime_env()
             with _active_jobs_lock:

@@ -115,13 +115,9 @@ PlanRun 终态
        ├→ poll NFS dedup/{plan_run_id}/ (10s × 30 = 300s max)
        │    等待 registered >= len(triggered_host_ids) 或超时
        ├→ run_scan_sync → PlanRunArtifact(scan_result_xls) 注册 DB
-       ├→ enqueue upload_task ─────────────────────────────┐
-       │    └→ emit upload_events → Agent upload_event_dirs │ 并行
-       │         → NFS devices/{run_id}/                    │
-       └→ enqueue merge_task ───────────────────────────────┘
+       └→ enqueue merge_task
             ├→ run_merge_sync → PlanRunArtifact(merge_result_xls) 注册 DB
-            ├→ poll upload:{run_id} SAQ job 至 complete/failed/aborted
-            ├→ poll NFS devices/{run_id}/ 直至出现时间戳事件目录（10s × 30 = 300s max）
+            ├→ poll device_log_event 直至 REMOTE/ARCHIVED（best-effort）
             └→ enqueue extract_task
                  └→ copy devices/ + merge xls → jira/{run_id}/
 ```
@@ -130,14 +126,13 @@ PlanRun 终态
 
 | 步骤 | 依赖 | 路径 | 说明 |
 |------|------|------|------|
-| scan_task | — | 入口 | 链式入口，poll 完成后 enqueue upload + merge |
-| upload_task | scan_task 完成 | `devices/{run_id}/` | 与 merge_task 可并行（读/写不同 NFS 子目录） |
+| scan_task | — | 入口 | poll 完成后 enqueue merge |
 | merge_task | scan_task 完成 | `dedup/{run_id}/` | 读 scan 产物 _org.xls，产出 merge xls |
-| extract_task | upload_task **与** merge_task 均完成 | `devices/` → `jira/{run_id}/` | merge 成功后 poll `upload:{run_id}` SAQ job + poll NFS `devices/`；任一超时仍 enqueue extract（best-effort） |
-| merge_task SAQ timeout | — | — | `_MERGE_TASK_SAQ_TIMEOUT` = 300 + 660 + 300 + 120s，覆盖子进程与两轮 poll |
+| extract_task | merge_task 完成 | `devices/` → `jira/{run_id}/` | merge 成功后 poll DLE REMOTE/ARCHIVED；超时仍 enqueue extract（best-effort） |
+| merge_task SAQ timeout | — | — | `_MERGE_TASK_SAQ_TIMEOUT` = 300 + 660 + 120s，覆盖 merge 子进程与 DLE poll |
 
 - **多 host**：`scan_task` poll 等待所有 triggered host 的 artifact 或超时
-- **Agent 上送**：`upload_scan_report` 与 `upload_event_dirs` 由 Agent daemon thread 分别执行
+- **Agent 上送**：`upload_scan_report`（scan xls）；事件目录由 EventUploader 连续上送
 
 ### 五触发场景
 

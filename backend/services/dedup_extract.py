@@ -14,7 +14,6 @@ from backend.agent.aee.event_dirs import (
     event_dir_basename_from_path,
     is_event_dir_basename,
 )
-from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan_run_artifact import PlanRunArtifact
 
 if TYPE_CHECKING:
@@ -94,57 +93,6 @@ def parse_event_dir_names_from_xls(
     return names
 
 
-def collect_event_dir_names_from_log_signals(db: Session, plan_run_id: int) -> set[str]:
-    """Collect event basenames from JobLogSignal nfs_path / artifact_uri."""
-    job_ids = db.execute(
-        select(JobInstance.id).where(JobInstance.plan_run_id == plan_run_id)
-    ).scalars().all()
-    if not job_ids:
-        return set()
-
-    names: set[str] = set()
-    signals = db.execute(
-        select(JobLogSignal).where(JobLogSignal.job_id.in_(job_ids))
-    ).scalars().all()
-    for signal in signals:
-        for raw in (signal.artifact_uri, signal.path_on_device):
-            if not raw:
-                continue
-            name = event_dir_basename_from_path(str(raw))
-            if name:
-                names.add(name)
-        extra = signal.extra if isinstance(signal.extra, dict) else {}
-        nfs_path = extra.get("nfs_path")
-        if nfs_path:
-            name = event_dir_basename_from_path(str(nfs_path))
-            if name:
-                names.add(name)
-    return names
-
-
-def collect_upload_event_dir_names(db: Session, plan_run_id: int) -> list[str]:
-    """ADR-0025: union JobLogSignal paths + scan xls Path rows for upload."""
-    from backend.services.plan_run_scan_scope import load_plan_run_device_serials
-
-    names = collect_event_dir_names_from_log_signals(db, plan_run_id)
-    serials = load_plan_run_device_serials(db, plan_run_id)
-
-    scan_rows = db.execute(
-        select(PlanRunArtifact).where(
-            PlanRunArtifact.plan_run_id == plan_run_id,
-            PlanRunArtifact.artifact_type == "scan_result_xls",
-        )
-    ).scalars().all()
-    for row in scan_rows:
-        if not row.storage_uri:
-            continue
-        names |= parse_event_dir_names_from_xls(
-            Path(row.storage_uri), allowed_serials=serials,
-        )
-
-    return sorted(names)
-
-
 def collect_extract_event_dir_names(db: Session, plan_run_id: int) -> set[str]:
     """ADR-0025 归档-3: event dirs referenced by merge Result xls only."""
     names: set[str] = set()
@@ -194,34 +142,31 @@ def run_extract_sync(plan_run_id: int) -> int:
         legacy_root = resolve_legacy_shared_storage_root()
 
         target_names = collect_extract_event_dir_names(db, plan_run_id)
+        from backend.core.artifact_paths import (
+            ArtifactPathError,
+            resolve_extract_event_src,
+        )
         from backend.services.device_log_event import (
-            continuous_event_upload_enabled,
             list_remote_paths_for_extract,
             mark_events_archived,
         )
 
         remote_path_rows: list[tuple[str, Path, Path]] = []
-        if continuous_event_upload_enabled():
-            from backend.core.artifact_paths import (
-                ArtifactPathError,
-                resolve_extract_event_src,
+        for raw in list_remote_paths_for_extract(db, plan_run_id):
+            located = resolve_extract_event_src(
+                raw,
+                nfs_root=nfs_root,
+                legacy_root=legacy_root,
+                plan_run_id=plan_run_id,
             )
-
-            for raw in list_remote_paths_for_extract(db, plan_run_id):
-                located = resolve_extract_event_src(
-                    raw,
-                    nfs_root=nfs_root,
-                    legacy_root=legacy_root,
-                    plan_run_id=plan_run_id,
+            if located is None:
+                logger.debug(
+                    "dedup_extract_skip_missing_remote plan_run=%d path=%s",
+                    plan_run_id, raw,
                 )
-                if located is None:
-                    logger.debug(
-                        "dedup_extract_skip_missing_remote plan_run=%d path=%s",
-                        plan_run_id, raw,
-                    )
-                    continue
-                src, devices_root = located
-                remote_path_rows.append((raw, src, devices_root))
+                continue
+            src, devices_root = located
+            remote_path_rows.append((raw, src, devices_root))
 
         jira_dir = Path(nfs_root) / "jira" / str(plan_run_id)
         jira_dir.mkdir(parents=True, exist_ok=True)
@@ -229,7 +174,7 @@ def run_extract_sync(plan_run_id: int) -> int:
         extracted = 0
         archived_remote_paths: list[str] = []
         extracted_dest_names: set[str] = set()
-        from backend.core.artifact_paths import ArtifactPathError, copytree_under_root, path_under_root
+        from backend.core.artifact_paths import copytree_under_root, path_under_root
 
         by_dest: dict[str, list[tuple[str, Path, Path]]] = defaultdict(list)
         for raw, src, devices_root in remote_path_rows:
@@ -261,8 +206,6 @@ def run_extract_sync(plan_run_id: int) -> int:
                     "dedup_extract_remote_dir_failed plan_run=%d dir=%s",
                     plan_run_id, src,
                 )
-
-        from backend.core.artifact_paths import resolve_extract_event_src
 
         for name in sorted(target_names):
             if name in extracted_dest_names:
@@ -348,7 +291,6 @@ def run_extract_sync(plan_run_id: int) -> int:
 
 __all__ = [
     "collect_extract_event_dir_names",
-    "collect_upload_event_dir_names",
     "is_event_dir_basename",
     "parse_event_dir_names_from_xls",
     "run_extract_sync",
