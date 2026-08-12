@@ -22,12 +22,38 @@ def test_hot_update_env_overrides_includes_fleet_keys_from_control_plane(monkeyp
     monkeypatch.delenv("STP_NFS_ROOT", raising=False)
     monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/nfs/aee_events")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("STP_DEVICE_LOG_EVENT_ENABLED", "1")
+    monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "1")
 
     overrides = hot_update_env_overrides("/opt/stability-test-agent")
 
     assert overrides["STP_AEE_NFS_ROOT"] == "/mnt/nfs/aee_events"
     assert overrides["STP_NFS_ROOT"] == "/mnt/nfs/aee_events"
     assert overrides["LOG_LEVEL"] == "DEBUG"
+    assert overrides["STP_DEVICE_LOG_EVENT_ENABLED"] == "1"
+    assert overrides["STP_EVENT_UPLOADER_ENABLED"] == "1"
+
+
+def test_dle_uploader_flags_omitted_when_unset_on_control_plane(monkeypatch):
+    """Empty control-plane values must not clobber per-host gray flags (#218)."""
+    monkeypatch.delenv("STP_DEVICE_LOG_EVENT_ENABLED", raising=False)
+    monkeypatch.delenv("STP_EVENT_UPLOADER_ENABLED", raising=False)
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert "STP_DEVICE_LOG_EVENT_ENABLED" not in overrides
+    assert "STP_EVENT_UPLOADER_ENABLED" not in overrides
+
+
+def test_dle_uploader_flags_propagate_explicit_zero(monkeypatch):
+    """Explicit \"0\" is a real fleet value — must disable agents, not be skipped."""
+    monkeypatch.setenv("STP_DEVICE_LOG_EVENT_ENABLED", "0")
+    monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "0")
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert overrides["STP_DEVICE_LOG_EVENT_ENABLED"] == "0"
+    assert overrides["STP_EVENT_UPLOADER_ENABLED"] == "0"
 
 
 def test_control_plane_scan_tool_paths_are_not_synced_to_agents(monkeypatch):

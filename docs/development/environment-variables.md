@@ -79,6 +79,7 @@
 | `ADB_PATH` / `ANDROID_ADB_SERVER_PORT` | WSL 联调端口须 `5039` |
 | `STP_AEE_LOCAL_ROOT` | HDD AEE（默认 `/mnt/hdd/aee_events`） |
 | `STP_WATCHER_ENABLED` | Watcher 子系统开关（默认 `true`） |
+| `STP_DEVICE_LOG_EVENT_ENABLED` / `STP_EVENT_UPLOADER_ENABLED` | ADR-0028 DLE + 连续上送；控制面非空值经 hot-update fleet 同步（#218） |
 | `STP_STEP_LOG_STREAM` | `1`=pipeline 日志经 SocketIO 批推送；`0`=保持 no-op（ADR-0026 P2-2） |
 | `STP_LOG_BATCH_MAX_LINES` / `STP_LOG_BATCH_FLUSH_MS` | step_log 批大小与定时 flush（默认 50 / 200） |
 | `STP_AEE_NFS_ROOT` | **中心存储** 挂载点主键（upload / spill / merge 同一把）。过渡 UNC 在 8.202，目标 15.4/9.4 |

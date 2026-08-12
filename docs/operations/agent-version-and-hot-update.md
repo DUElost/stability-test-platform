@@ -50,10 +50,17 @@ Host UI（`ExpandableHostTable`）展示协议版本、code sync 徽章与相对
 | 类别 | 键 | 值来源 |
 |------|-----|--------|
 | 安装布局 | `AGENT_INSTALL_DIR`、`AIMONKEY_RESOURCE_DIR`、`LOG_DIR`、`PYTHONPATH` | `$INSTALL_DIR` 派生 |
-| 舰队默认 | `STP_AEE_NFS_ROOT`、`STP_DEDUP_*`、`LOG_LEVEL`、`PIP_INDEX_URL` 等 | 控制面进程环境（backend `.env`）非空时下发 |
+| 舰队默认（两边同值） | `STP_AEE_NFS_ROOT`、`STP_AEE_LOCAL_ROOT`、`STP_DEDUP_SCAN_TAG`、`STP_DEDUP_AUTO_SCAN`、`LOG_LEVEL`、`STP_WATCHER_ENABLED`、`STP_DEVICE_LOG_EVENT_ENABLED`、`STP_EVENT_UPLOADER_ENABLED` | 控制面进程环境非空时原样下发 |
+| Agent 映射键 | Agent 的 `STP_DEDUP_SCAN_PYTHON` / `STP_DEDUP_SCAN_SCRIPT`、`PIP_INDEX_URL` | 分别来自控制面 `STP_AGENT_DEDUP_SCAN_*`、`STP_AGENT_PIP_INDEX_URL`（控制面本机路径**不**原样下发） |
 
 实现：`backend/services/agent_env_sync.py`（allowlist + 行级 merge）。  
 响应字段 `env_keys_synced` 列出本次已对齐的键。
+
+**顺序（#218，避免 Wave 3 竞态）**：
+
+1. 远端脚本**先**行级合并 `$INSTALL_DIR/.env`，**再** `systemctl restart` —— 一次成功的 hot-update 重启后进程已读到新 flag，无需再 `reload_config`。  
+2. 若只改 `.env`、不走 hot-update：先确认文件已写入，再发 `reload_config`。  
+3. **不要**在 hot-update 尚未返回成功时抢先 `reload_config`（曾出现 restart 后立刻 reload 读到旧/空 flag → `event_uploader_configured enabled=False`）。  
 
 UI：主机管理页单机「热更新」；浮动批量栏仅允许 **选中一台 ONLINE** 主机触发热更新（批量安装仍支持多台）。  
 CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_agent.yml`。

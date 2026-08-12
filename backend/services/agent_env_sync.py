@@ -46,6 +46,10 @@ _FLEET_ENV_KEYS: tuple[str, ...] = (
     "STP_DEDUP_AUTO_SCAN",
     "LOG_LEVEL",
     "STP_WATCHER_ENABLED",
+    # ADR-0028: same value on control plane and every agent (#218).
+    # Unset on the control plane → not pushed (agents keep local value).
+    "STP_DEVICE_LOG_EVENT_ENABLED",
+    "STP_EVENT_UPLOADER_ENABLED",
 )
 
 # Agent-scoped keys: the control plane holds the *agent-side* value under a
