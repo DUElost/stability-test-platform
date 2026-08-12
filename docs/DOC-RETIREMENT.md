@@ -1,6 +1,6 @@
 # 文档退役与归档清单
 
-> **最后更新**：2026-07-17（第四批次）  
+> **最后更新**：2026-08-12（第五批次）  
 > 目的：标记**已完成迁移**或**一次性**文档，便于后续删除或移入 `docs/archive/`，避免与权威文档双轨。
 
 **操作前**：确认内容已并入 `docs/design/`、`docs/acceptance/`、`CLAUDE.md` 摘要或 ADR。
@@ -40,7 +40,7 @@
 | ~~`docs/superpowers/plans/2026-05-15-code-review-fixes.md`~~ | **已删除**（git history） |
 | ~~`docs/plans/watcher-consolidate-aee-2026-05-27*.md`~~ → `archive/plans/` | `design/04-agent.md` |
 
-`docs/superpowers/` 仅保留 [`README.md`](./superpowers/README.md) 重定向说明。
+`docs/superpowers/` 重定向 stub 已随第五批次删除。
 
 ---
 
@@ -103,7 +103,7 @@
 | ~~`docs/superpowers/plans/2026-06-23-sprint4-1-p1-hardening.md`~~ → `archive/sprints/plans/` | Sprint 4 P1 加固任务单 | `design/06-realtime-and-background.md`、`acceptance/2026-plan-c-sprint4.md` |
 | ~~`docs/ops/adr-0023-c1-audit.sql`~~、~~`docs/ops/audit-results/*`~~ → `archive/ops/` | 一次性上线审计资产 | `operations/README.md` |
 | ~~`docs/host-connectivity-verification.md`~~ → `archive/` | 2026-01 主机连通性实施记录 | `operations/README.md`、`wsl-linux-agent-setup.md` |
-| `docs/stp-spec/CLAUDE.md` | 已是极简重定向入口，暂保留 | `archive/stp-spec-pre-adr0020/` |
+| ~~`docs/stp-spec/CLAUDE.md`~~ | 极简重定向入口已完成使命，随第五批次删除 | `archive/stp-spec-pre-adr0020/` |
 | `docs/architecture/non-adr20-followups.md` | 仍有未完成路由拆分债务，保留并刷新措辞 | GitHub Issues / 代码 |
 | ~~根 `openspec/`~~ | 删除重定向 stub（内容早已在 `archive/openspec/`） | `docs/archive/openspec/` |
 
