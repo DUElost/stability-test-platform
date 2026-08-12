@@ -112,7 +112,10 @@ def _cleanup(seed: dict) -> None:
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_device_log_events_create_and_update():
+async def test_device_log_events_create_and_update(monkeypatch, tmp_path):
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
     seed = _seed_host_job()
     try:
         db = SessionLocal()
@@ -170,6 +173,7 @@ async def test_device_log_events_create_and_update():
         finally:
             db.close()
 
+        remote_path = str(nfs / "devices" / str(seed["plan_run_id"]) / "ke_001")
         update_ev = DeviceLogEventIn(
             id=str(event_id),
             serial=seed["serial"],
@@ -178,9 +182,10 @@ async def test_device_log_events_create_and_update():
             detected_at=datetime.now(timezone.utc).isoformat(),
             state=EventState.REMOTE.value,
             local_path="/mnt/hdd/aee_events/dev/ke_001",
-            remote_path="/mnt/stp-aee/devices/1/ke_001",
+            remote_path=remote_path,
             checksum="abc123",
             host_id=seed["host_id"],
+            plan_run_id=seed["plan_run_id"],
         )
         async with AsyncSessionLocal() as db:
             r2 = await ingest_device_log_events(
