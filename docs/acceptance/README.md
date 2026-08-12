@@ -7,6 +7,7 @@
 | [2026-plan-c-sprint4.md](./2026-plan-c-sprint4.md) | 方案 C Sprint 4 自动化验收矩阵 |
 | [2026-plan-c-sprint4-real-device.md](./2026-plan-c-sprint4-real-device.md) | 方案 C Sprint 4 真机联调记录 |
 | [2026-07-aee-reconciler-mtk-signoff.md](./2026-07-aee-reconciler-mtk-signoff.md) | #72 AEE Reconciler MTK 实机端到端验收 |
+| [2026-08-adr-0028-phase3-mtk-signoff.md](./2026-08-adr-0028-phase3-mtk-signoff.md) | ADR-0028 阶段 3 MTK DeviceLogEvent + EventUploader 签字 |
 
 手工步骤详见 [`preprod-drill-runbook.md`](../preprod-drill-runbook.md)。
 
