@@ -551,6 +551,7 @@ SAQ_FUNCTIONS = [
     precheck_and_dispatch_task,
     plan_admission_task,
     scan_task,
+    upload_task,
     merge_task,
     extract_task,
     install_agent_task,
