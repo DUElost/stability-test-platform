@@ -83,6 +83,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`development/environment-variables.md`](./development/environment-variables.md) | env 详表（含超时与版本门禁） |
 | [`development/testing.md`](./development/testing.md) | pytest / vitest / 生产机禁区 |
 | [`operations/agent-version-and-hot-update.md`](./operations/agent-version-and-hot-update.md) | 滚动升级与 code revision |
+| [`operations/adr-0028-prune-local-and-spill-gray.md`](./operations/adr-0028-prune-local-and-spill-gray.md) | #217 PRUNE_LOCAL / HddSpill 单机灰度 |
 | [`operations/README.md`](./operations/README.md) | 运维索引 |
 | [`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md) | 生产最小部署 |
 
