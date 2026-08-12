@@ -125,6 +125,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 纯 Agent 侧实现，只在改对应目录时加载：
 
 - **AEE 崩溃检测链**（Reconciler / inotifyd 双路径、ZZ_INTERNAL 解析、监测目录）→ `backend/agent/aee/CLAUDE.md`
+  - **#220**：生产只扫 MTK；UNISOC/QCOM 保留 stub 入口、默认跳过；勿扩白名单
 - **ScanRunner / UploadManager**（`start_log_scan.py` 的非显然参数、自动发现规则、`reload_config`）→ `backend/agent/CLAUDE.md`
 
 ## Key env vars

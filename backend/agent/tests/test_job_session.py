@@ -696,7 +696,7 @@ def test_reconciler_starts_on_unknown_platform(lock_tracker, patch_manager, monk
 
 
 def test_reconciler_platform_allowlist_is_configurable(lock_tracker, patch_manager, monkeypatch):
-    """运维逃生阀:STP_WATCHER_AEE_RECONCILE_PLATFORMS 可放开非 MTK 平台。"""
+    """逃生阀仅测门禁可配置；生产勿扩白名单至 UNISOC/QCOM（#220 stub-only）。"""
     monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_PLATFORMS", "MTK,UNISOC")
     session = _platform_session(
         lock_tracker, patch_manager, monkeypatch, "UNISOC", _OkReconciler,
