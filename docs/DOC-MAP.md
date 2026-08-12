@@ -1,6 +1,6 @@
 # 文档地图（Documentation Map）
 
-> **最后更新**：2026-08-09  
+> **最后更新**：2026-08-12  
 > **文档中心**：[`README.md`](./README.md)  
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
