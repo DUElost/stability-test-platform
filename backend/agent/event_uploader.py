@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 _MAX_CONCURRENT = 2
 _MAX_RETRIES = 5
 _RETRY_FAILED_INTERVAL = 600.0
+# ADR-0028 方案 A：UPLOAD_PENDING 事件由控制面 upload_task 在 PlanRun 终态后标记，
+# Agent 侧需周期轮询（一次性启动轮询会错过后续标记）。
+_RECOVER_POLL_INTERVAL = 30.0
 
 
 def _event_uploader_enabled() -> bool:
@@ -363,37 +366,43 @@ class EventUploader:
             )
 
     def _recover_pending(self) -> None:
-        if not self._configured:
-            return
-        try:
-            # ADR-0028 方案 A：continuous=1 上传全部 LOCAL；continuous=0 仅上传 UPLOAD_PENDING
-            _states = "LOCAL,UPLOADING,UPLOAD_FAILED" if _event_uploader_continuous() else "UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
-            resp = requests.get(
-                f"{self._api_url}/api/v1/agent/device-log-events",
-                params={
-                    "host_id": self._host_id,
-                    "state": _states,
-                },
-                headers={"X-Agent-Secret": self._agent_secret},
-                timeout=15.0,
-            )
-            if resp.status_code >= 400:
-                logger.warning("event_uploader_recover_failed status=%s", resp.status_code)
-                return
-            for item in resp.json().get("data", {}).get("events", []):
-                self.enqueue_local_event(event={
-                    "id": item["id"],
-                    "local_path": item["local_path"],
-                    "host_id": item.get("host_id", self._host_id),
-                    "serial": item.get("serial", ""),
-                    "platform": item.get("platform", "UNKNOWN"),
-                    "event_type": item.get("event_type", "UNKNOWN"),
-                    "detected_at": item.get("detected_at", ""),
-                    "plan_run_id": item.get("plan_run_id"),
-                    "job_id": item.get("job_id"),
-                })
-        except Exception:
-            logger.exception("event_uploader_recover_error")
+        """周期轮询待上传事件并入队。
+
+        continuous=1：轮询 LOCAL/UPLOADING/UPLOAD_FAILED（恢复中断的上传）。
+        continuous=0：轮询 UPLOAD_PENDING/UPLOADING/UPLOAD_FAILED（upload_task 标记后上送）。
+        """
+        while not self._stop_evt.wait(_RECOVER_POLL_INTERVAL):
+            if not self._configured:
+                continue
+            try:
+                # ADR-0028 方案 A：continuous=1 上传全部 LOCAL；continuous=0 仅上传 UPLOAD_PENDING
+                _states = "LOCAL,UPLOADING,UPLOAD_FAILED" if _event_uploader_continuous() else "UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
+                resp = requests.get(
+                    f"{self._api_url}/api/v1/agent/device-log-events",
+                    params={
+                        "host_id": self._host_id,
+                        "state": _states,
+                    },
+                    headers={"X-Agent-Secret": self._agent_secret},
+                    timeout=15.0,
+                )
+                if resp.status_code >= 400:
+                    logger.warning("event_uploader_recover_failed status=%s", resp.status_code)
+                    continue
+                for item in resp.json().get("data", {}).get("events", []):
+                    self.enqueue_local_event(event={
+                        "id": item["id"],
+                        "local_path": item["local_path"],
+                        "host_id": item.get("host_id", self._host_id),
+                        "serial": item.get("serial", ""),
+                        "platform": item.get("platform", "UNKNOWN"),
+                        "event_type": item.get("event_type", "UNKNOWN"),
+                        "detected_at": item.get("detected_at", ""),
+                        "plan_run_id": item.get("plan_run_id"),
+                        "job_id": item.get("job_id"),
+                    }, force=True)
+            except Exception:
+                logger.exception("event_uploader_recover_error")
 
     def _retry_failed_loop(self) -> None:
         while not self._stop_evt.wait(_RETRY_FAILED_INTERVAL):
@@ -419,7 +428,7 @@ class EventUploader:
                         "detected_at": item.get("detected_at", ""),
                         "plan_run_id": item.get("plan_run_id"),
                         "job_id": item.get("job_id"),
-                    })
+                    }, force=True)
             except Exception:
                 logger.exception("event_uploader_retry_scan_error")
 
