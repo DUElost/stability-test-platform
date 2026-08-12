@@ -37,7 +37,7 @@
 | `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | **弃用别名**（计划删除，#213 E1）：仅当主键未设时回落并打 WARNING；新部署勿再配置 |
 | `STP_FILE_SERVER_ADDRESS` | 共享存储健康页上的**控制面**展示 IP（现 8.202）。**不是** CIFS 根 / UNC |
 | `STP_AEE_LOCAL_ROOT` | Agent **本机** L1 AEE 根（按机配置；hot-update **不下发**，见 #235） |
-| `STP_EVENT_UPLOADER_PRUNE_LOCAL` | Agent only。上送成功后删本机事件目录并标 `PRUNED`（**默认 0**）。**禁止** fleet 同步（#217）。风险：CIFS 事后不可读时本地已无副本。灰度：单机改 Agent `.env` + `reload_config` |
+| `STP_EVENT_UPLOADER_PRUNE_LOCAL` | Agent only。上送成功后删本机事件目录并标 `PRUNED`（**默认 0**）。**禁止** fleet 同步（#217）：hot-update 仅下发 `_FLEET_ENV_KEYS` allowlist（`hot_update_env_overrides()`），本键不在列表中，控制面误设也不会进 payload。风险：CIFS 事后不可读时本地已无副本。灰度：单机改 Agent `.env` + `reload_config` |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | 扫描工具；**同名两角色两套值**（控制面 merge vs Agent scan） |
 | `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：hot-update 写成 Agent 的无前缀 `STP_DEDUP_SCAN_*` |
 | `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` | Compose 开发初始化管理员；**禁止**用于生产默认值 |

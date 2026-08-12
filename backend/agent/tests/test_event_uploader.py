@@ -149,6 +149,34 @@ def test_prune_local_deletes_and_patches_pruned(tmp_path, monkeypatch):
     assert posted[-1]["events"][0]["state"] == "PRUNED"
 
 
+def test_prune_local_rmtree_failure_does_not_patch_pruned(tmp_path, monkeypatch):
+    """#217: state=PRUNED only after local delete succeeds."""
+    monkeypatch.setenv("STP_EVENT_UPLOADER_PRUNE_LOCAL", "1")
+    monkeypatch.setenv("STP_DEVICE_LOG_EVENT_ENABLED", "1")
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    src = tmp_path / "event_dir"
+    src.mkdir()
+    up = EventUploader.instance()
+    up.configure(
+        api_url="http://127.0.0.1:8000",
+        agent_secret="secret",
+        host_id="h1",
+        nfs_root=str(tmp_path / "nfs"),
+    )
+    job = _UploadJob(
+        event_id="e1", local_path=str(src), plan_run_id=1, serial="d", platform="MTK",
+        event_type="KE", detected_at="2026-08-09T10:00:00+00:00", host_id="h1",
+    )
+    with patch(
+        "backend.agent.event_uploader.shutil.rmtree",
+        side_effect=OSError("busy"),
+    ), patch("backend.agent.event_uploader.requests.post") as mock_post:
+        up._maybe_prune_local(job, remote_path="/nfs/devices/1/event_dir")
+    mock_post.assert_not_called()
+    assert src.is_dir()
+
+
 def test_prune_local_refuses_aee_root(tmp_path, monkeypatch):
     monkeypatch.setenv("STP_EVENT_UPLOADER_PRUNE_LOCAL", "1")
     monkeypatch.setenv("STP_DEVICE_LOG_EVENT_ENABLED", "1")
