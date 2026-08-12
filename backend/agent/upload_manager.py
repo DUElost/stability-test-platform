@@ -1,13 +1,11 @@
-"""UploadManager — Agent 按需上送（scan 报告 + 事件目录）到中心存储（CIFS）。
+"""UploadManager — Agent 按需上送 scan 报告到中心存储（CIFS）。
 
-ADR-0025 Sprint 4 Task 2: Agent 侧文件上送管理器。
+ADR-0025 Sprint 4 Task 2: Agent 侧 scan xls 上送管理器。
     - upload_scan_report: 将 ScanRunner 产出的 _org.xls 复制到 CIFS dedup/ 目录
-    - upload_event_dirs: 将 AEE 事件目录复制到 CIFS devices/ 目录
     - 进程级单例，configure 保护，_reset_for_tests
 
 路径约定：
     dedup/{plan_run_id}/        — scan reports (org.xls files)
-    devices/{plan_run_id}/      — event directories (aee_db_* dirs)
 """
 
 from __future__ import annotations
@@ -16,15 +14,10 @@ import logging
 import shutil
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 try:
-    from backend.agent.aee.event_dirs import find_event_dir_under_root, is_event_dir_basename
-except ImportError:
-    from agent.aee.event_dirs import find_event_dir_under_root, is_event_dir_basename
-
-try:
-    from backend.agent.aee.paths import resolve_shared_storage_root, resolve_upload_devices_dir
+    from backend.agent.aee.paths import resolve_shared_storage_root
 except ImportError:
     import os as _os
 
@@ -38,13 +31,11 @@ except ImportError:
                 return raw
         return ""
 
-    from agent.aee.paths import resolve_upload_devices_dir
-
 logger = logging.getLogger(__name__)
 
 
 class UploadManager:
-    """进程级单例；Agent 启动时 configure，按需调用 upload_*。"""
+    """进程级单例；Agent 启动时 configure，按需调用 upload_scan_report。"""
 
     _instance: Optional["UploadManager"] = None
     _instance_lock = threading.Lock()
@@ -125,79 +116,13 @@ class UploadManager:
         )
         return str(dest_path)
 
-    def upload_event_dirs(
-        self,
-        plan_run_id: int,
-        event_dir_names: List[str],
-        source_root: str,
-    ) -> int:
-        """Copy event directories → {nfs_root}/devices/{plan_run_id}/{dirname}/.
-
-        ADR-0025: only explicit ``event_dir_names`` from control plane (JobLogSignal
-        + scan xls Path). Empty list → no upload (no HDD-wide auto-discovery).
-        Resolves nested ``{folder}/{serial}/{dirname}`` under ``source_root``.
-        """
-        if not self._configured:
-            logger.warning(
-                "upload_event_dirs_skip_not_configured plan_run=%d",
-                plan_run_id,
-            )
-            return 0
-
-        if not event_dir_names:
-            logger.info(
-                "upload_event_dirs_skip_empty plan_run=%d reason=no_event_dir_names",
-                plan_run_id,
-            )
-            return 0
-
-        count = 0
-        base_src = Path(source_root)
-        base_dst = resolve_upload_devices_dir(self._nfs_root, plan_run_id)
-
-        for dirname in event_dir_names:
-            if not is_event_dir_basename(dirname):
-                logger.warning(
-                    "upload_event_dirs_skip_invalid_name plan_run=%d dir=%s",
-                    plan_run_id, dirname,
-                )
-                continue
-
-            src_dir = find_event_dir_under_root(base_src, dirname)
-            dst_dir = base_dst / dirname
-
-            if src_dir is None:
-                logger.warning(
-                    "upload_event_dirs_source_missing plan_run=%d dir=%s",
-                    plan_run_id, dirname,
-                )
-                continue
-
-            if dst_dir.exists():
-                logger.info(
-                    "upload_event_dirs_dest_exists_skip plan_run=%d dir=%s",
-                    plan_run_id, dirname,
-                )
-                continue
-
-            try:
-                self._copytree_safe(str(src_dir), str(dst_dir))
-                count += 1
-            except Exception:
-                logger.exception(
-                    "upload_event_dirs_copy_failed plan_run=%d dir=%s",
-                    plan_run_id, dirname,
-                )
-
-        logger.info(
-            "upload_event_dirs_done plan_run=%d copied=%d total=%d",
-            plan_run_id, count, len(event_dir_names),
-        )
-        return count
-
     @staticmethod
     def _copytree_safe(src: str, dst: str) -> None:
-        """copytree ignoring copystat EPERM on NFS/CIFS mounts."""
+        """copytree ignoring copystat EPERM on NFS/CIFS mounts.
+
+        Shared by EventUploader (event dir promote). Kept after #213 Track A
+        removed ``upload_event_dirs``.
+        """
         src_path = Path(src)
         dst_path = Path(dst)
         dst_path.mkdir(parents=True, exist_ok=True)

@@ -2,12 +2,10 @@
 
 覆盖面：
   1. upload_scan_report copies _org.xls to dedup
-  2. upload_event_dirs copies event dirs to devices
-  3. not configured → None/0
-  4. source missing → skip/None
-  5. dest already exists → skip
-  6. configure env fallback
-  7. reconfigure rejected
+  2. not configured → None
+  3. source missing → skip/None
+  4. configure env fallback
+  5. reconfigure rejected
 """
 
 from __future__ import annotations
@@ -54,34 +52,11 @@ def test_upload_scan_report_copies_org_xls_to_dedup(tmp_path):
     assert "42" in str(dest)
 
 
-def test_upload_event_dirs_copies_to_devices(tmp_path):
-    nfs = tmp_path / "nfs"
-    nfs.mkdir()
-    m = _make_manager(str(nfs))
-
-    src_root = tmp_path / "events"
-    src_root.mkdir()
-    event_dir = src_root / "2026-06-22_12-00-00_db.01"
-    event_dir.mkdir()
-    (event_dir / "main.dbg").write_text("dbg")
-    (event_dir / "mobilelog").mkdir()
-    (event_dir / "mobilelog" / "log.txt").write_text("log")
-
-    count = m.upload_event_dirs(42, ["2026-06-22_12-00-00_db.01"], str(src_root))
-
-    assert count == 1
-    dest_dir = nfs / "devices" / "42" / "2026-06-22_12-00-00_db.01"
-    assert dest_dir.is_dir()
-    assert (dest_dir / "main.dbg").read_text() == "dbg"
-    assert (dest_dir / "mobilelog" / "log.txt").read_text() == "log"
-
-
 def test_upload_manager_not_configured(tmp_path):
     m = UploadManager.instance()
     assert not m.is_configured()
 
     assert m.upload_scan_report(1, "h", "/fake/path.xls") is None
-    assert m.upload_event_dirs(1, ["dir"], "/fake/root") == 0
 
 
 def test_upload_scan_report_source_missing(tmp_path):
@@ -91,37 +66,6 @@ def test_upload_scan_report_source_missing(tmp_path):
 
     result = m.upload_scan_report(1, "host-1", "/nonexistent/file.xls")
     assert result is None
-
-
-def test_upload_event_dirs_dest_already_exists(tmp_path):
-    nfs = tmp_path / "nfs"
-    nfs.mkdir()
-    m = _make_manager(str(nfs))
-
-    src_root = tmp_path / "events"
-    src_root.mkdir()
-    event_dir = src_root / "2026-06-22_12-00-00_db.existing"
-    event_dir.mkdir()
-    (event_dir / "main.dbg").write_text("old")
-
-    dest_dir = nfs / "devices" / "42" / "2026-06-22_12-00-00_db.existing"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    (dest_dir / "placeholder.txt").write_text("already-here")
-
-    count = m.upload_event_dirs(42, ["2026-06-22_12-00-00_db.existing"], str(src_root))
-
-    assert count == 0
-    assert (dest_dir / "placeholder.txt").read_text() == "already-here"
-    assert not (dest_dir / "main.dbg").exists()
-
-
-def test_upload_event_dirs_source_missing_skipped(tmp_path):
-    nfs = tmp_path / "nfs"
-    nfs.mkdir()
-    m = _make_manager(str(nfs))
-
-    count = m.upload_event_dirs(1, ["nonexistent_dir"], str(tmp_path / "nope"))
-    assert count == 0
 
 
 def test_configure_env_fallback(monkeypatch, tmp_path):
@@ -140,27 +84,6 @@ def test_configure_rejected_if_already_configured(tmp_path):
     assert m._nfs_root == first_root
 
 
-def test_upload_event_dirs_multiple_some_fail(tmp_path):
-    nfs = tmp_path / "nfs"
-    nfs.mkdir()
-    m = _make_manager(str(nfs))
-
-    src_root = tmp_path / "events"
-    src_root.mkdir()
-    ok_dir = src_root / "2026-06-22_12-00-00_db.ok"
-    ok_dir.mkdir()
-    (ok_dir / "main.dbg").write_text("ok")
-
-    count = m.upload_event_dirs(
-        42,
-        ["2026-06-22_12-00-00_db.ok", "2026-06-22_13-00-00_db.missing"],
-        str(src_root),
-    )
-
-    assert count == 1
-    assert (nfs / "devices" / "42" / "2026-06-22_12-00-00_db.ok" / "main.dbg").exists()
-
-
 def test_upload_scan_report_copies_subdirs(tmp_path):
     nfs = tmp_path / "nfs"
     nfs.mkdir()
@@ -176,44 +99,6 @@ def test_upload_scan_report_copies_subdirs(tmp_path):
     dest = Path(result)
     assert dest.name == "host-abc_Result_shanghai_org.xls"
     assert "dedup" in str(dest) and "99" in str(dest)
-
-
-def test_upload_event_dirs_empty_list_returns_zero(tmp_path):
-    nfs = tmp_path / "nfs"
-    nfs.mkdir()
-    m = _make_manager(str(nfs))
-
-    src_root = tmp_path / "events"
-    src_root.mkdir()
-    good = src_root / "2026-06-23_14-30-00_db.01"
-    good.mkdir()
-    (good / "main.dbg").write_text("ok")
-
-    count = m.upload_event_dirs(42, [], str(src_root))
-
-    assert count == 0
-    assert not (nfs / "devices" / "42").exists()
-
-
-def test_upload_event_dirs_resolves_nested_source(tmp_path):
-    nfs = tmp_path / "nfs"
-    nfs.mkdir()
-    m = _make_manager(str(nfs))
-
-    src_root = tmp_path / "events"
-    event = src_root / "folder" / "serial" / "2026_0629_002306_121_db.71.JE"
-    event.mkdir(parents=True)
-    (event / "ZZ_INTERNAL").write_text("x", encoding="utf-8")
-
-    count = m.upload_event_dirs(
-        42, ["2026_0629_002306_121_db.71.JE"], str(src_root),
-    )
-
-    assert count == 1
-    dest = nfs / "devices" / "42" / "2026_0629_002306_121_db.71.JE"
-    assert dest.is_dir()
-    assert (dest / "ZZ_INTERNAL").read_text(encoding="utf-8") == "x"
-    assert not (dest / "main.dbg").exists()
 
 
 def test_configure_force_overrides_existing(tmp_path):

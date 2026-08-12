@@ -17,14 +17,9 @@ asyncio_to_thread = asyncio.to_thread
 
 _MERGE_SYNC_TIMEOUT = 300
 _UPLOAD_WAIT_INTERVAL = 5
-_UPLOAD_WAIT_MAX = 660  # upload_task SAQ timeout=600，留余量
-_DEVICES_POLL_INTERVAL = 10
-_DEVICES_POLL_MAX = 300
-_TERMINAL_SAQ_STATUSES = frozenset({"complete", "failed", "aborted"})
-# merge 子进程 + upload SAQ poll + devices NFS poll + 余量
-_MERGE_TASK_SAQ_TIMEOUT = (
-    _MERGE_SYNC_TIMEOUT + _UPLOAD_WAIT_MAX + _DEVICES_POLL_MAX + 120
-)
+_UPLOAD_WAIT_MAX = 660  # DLE pending poll budget (merge_task waits on REMOTE/ARCHIVED)
+# merge 子进程 + DLE wait + 余量
+_MERGE_TASK_SAQ_TIMEOUT = _MERGE_SYNC_TIMEOUT + _UPLOAD_WAIT_MAX + 120
 
 
 async def post_completion_task(ctx: dict, *, job_id: int) -> None:
@@ -134,12 +129,12 @@ def _query_hosts_for_scan(
 
 
 async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> None:
-    """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 scan_now → 轮询 NFS → 注册 DB → 串行 enqueue upload + merge。
+    """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 scan_now → 轮询 NFS → 注册 DB → enqueue merge。
 
     1. emit scan_now to each ONLINE agent
     2. poll NFS dedup/{plan_run_id}/ for *_org.xls files (max 300s)
     3. call run_scan_sync to register artifacts in plan_run_artifact
-    4. enqueue upload_task and merge_task (merge_task chains extract_task on success)
+    4. enqueue merge_task (merge_task chains extract_task on success; events via EventUploader/DLE)
     """
     from backend.realtime.socketio_server import emit_agent_control
 
@@ -247,8 +242,6 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
     from backend.tasks.saq_worker import get_queue
     from saq import Job as SaqJob
 
-    from backend.services.device_log_event import continuous_event_upload_enabled
-
     try:
         queue = get_queue()
         merge_kwargs = {
@@ -256,140 +249,26 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             "scan_round_id": scan_round_id,
             "round_started_at": round_started_at.isoformat(),
         }
-        if continuous_event_upload_enabled():
-            # #213 cutover: EventUploader already pushed events; skip PlanRun
-            # upload_task. merge_task waits on device_log_event REMOTE/ARCHIVED.
-            logger.info(
-                "saq_scan_skip_upload_continuous plan_run=%d", plan_run_id,
+        logger.info("saq_scan_enqueue_merge plan_run=%d", plan_run_id)
+        await queue.enqueue(
+            SaqJob(
+                function="merge_task",
+                kwargs=merge_kwargs,
+                key=f"merge:{plan_run_id}",
+                timeout=_MERGE_TASK_SAQ_TIMEOUT,
+                retries=2,
+                retry_delay=10.0,
+                retry_backoff=True,
             )
-            await queue.enqueue(
-                SaqJob(
-                    function="merge_task",
-                    kwargs=merge_kwargs,
-                    key=f"merge:{plan_run_id}",
-                    timeout=_MERGE_TASK_SAQ_TIMEOUT,
-                    retries=2,
-                    retry_delay=10.0,
-                    retry_backoff=True,
-                )
-            )
-        else:
-            await queue.enqueue(
-                SaqJob(
-                    function="upload_task",
-                    kwargs={"plan_run_id": plan_run_id},
-                    key=f"upload:{plan_run_id}",
-                    timeout=600,
-                    retries=2,
-                    retry_delay=10.0,
-                    retry_backoff=True,
-                )
-            )
-            await queue.enqueue(
-                SaqJob(
-                    function="merge_task",
-                    kwargs=merge_kwargs,
-                    key=f"merge:{plan_run_id}",
-                    timeout=_MERGE_TASK_SAQ_TIMEOUT,
-                    retries=2,
-                    retry_delay=10.0,
-                    retry_backoff=True,
-                )
-            )
+        )
     except Exception as e:
         logger.error("saq_scan_enqueue_followup_failed plan_run=%d: %s", plan_run_id, e)
 
     logger.info("saq_scan_done plan_run=%d", plan_run_id)
 
 
-def _query_hosts_for_upload(plan_run_id: int) -> tuple[set[str], list[tuple[str, str]], list[str]]:
-    """同步查询 upload_task 所需 host 列表与 event_dir_names。
-
-    返回 (hosts_with_scan, host_rows, event_dir_names)。
-    """
-    from backend.core.database import SessionLocal
-    from backend.models.job import JobInstance
-    from backend.models.plan_run_artifact import PlanRunArtifact
-    from backend.models.host import Host
-    from backend.services.dedup_extract import collect_upload_event_dir_names
-    from sqlalchemy import select, distinct
-
-    db = SessionLocal()
-    try:
-        scan_rows = db.execute(
-            select(PlanRunArtifact.host_id)
-            .where(
-                PlanRunArtifact.plan_run_id == plan_run_id,
-                PlanRunArtifact.artifact_type == "scan_result_xls",
-            )
-        ).scalars().all()
-        hosts_with_scan = set(scan_rows)
-
-        host_rows = db.execute(
-            select(distinct(JobInstance.host_id), Host.status)
-            .join(Host, Host.id == JobInstance.host_id)
-            .where(JobInstance.plan_run_id == plan_run_id)
-        ).all()
-
-        event_dir_names = collect_upload_event_dir_names(db, plan_run_id)
-    finally:
-        db.close()
-
-    return hosts_with_scan, host_rows, event_dir_names
-
-
-async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
-    """ADR-0025 Sprint 4 / ADR-0028: PlanRun 触发上送或确认连续上送已完成。"""
-    from backend.services.device_log_event import continuous_event_upload_enabled
-
-    if continuous_event_upload_enabled():
-        logger.info("saq_upload_start_continuous plan_run=%d", plan_run_id)
-        ready = await _wait_for_remote_device_log_events(plan_run_id)
-        if not ready:
-            logger.warning("saq_upload_continuous_timeout plan_run=%d", plan_run_id)
-        logger.info("saq_upload_done_continuous plan_run=%d ready=%s", plan_run_id, ready)
-        return
-
-    from backend.realtime.socketio_server import emit_agent_control
-
-    logger.info("saq_upload_start plan_run=%d", plan_run_id)
-
-    try:
-        hosts_with_scan, host_rows, event_dir_names = await asyncio.to_thread(
-            _query_hosts_for_upload, plan_run_id,
-        )
-        triggered: list[str] = []
-        skipped: list[str] = []
-        for host_id, host_status in host_rows:
-            if host_status != "ONLINE":
-                skipped.append(host_id)
-                continue
-            if host_id not in hosts_with_scan:
-                skipped.append(host_id)
-                continue
-
-            await emit_agent_control(
-                host_id, "upload_events",
-                payload={
-                    "plan_run_id": plan_run_id,
-                    "event_dir_names": event_dir_names,
-                },
-            )
-            triggered.append(host_id)
-
-        logger.info(
-            "saq_upload_dispatched plan_run=%d triggered=%d skipped=%d event_dirs=%d",
-            plan_run_id, len(triggered), len(skipped), len(event_dir_names),
-        )
-    except Exception:
-        logger.exception("saq_upload_failed plan_run=%d", plan_run_id)
-        raise
-
-    logger.info("saq_upload_done plan_run=%d", plan_run_id)
-
-
 async def _enqueue_extract_task(plan_run_id: int) -> None:
-    """enqueue extract_task（§9 时序：extract 依赖 upload + merge 均完成）。"""
+    """enqueue extract_task（merge 成功后等待 DLE REMOTE，再链式 extract）。"""
     from backend.tasks.saq_worker import get_queue
     from saq import Job as SaqJob
 
@@ -448,80 +327,6 @@ async def _count_remote_device_log_events(plan_run_id: int) -> int:
     return await asyncio_to_thread(_count)
 
 
-async def _wait_for_upload_task(plan_run_id: int) -> bool:
-    """poll upload:{plan_run_id} SAQ job 直至终态；超时返回 False（仍允许 best-effort extract）。"""
-    from backend.tasks.saq_worker import get_saq_job_state_sync
-
-    key = f"upload:{plan_run_id}"
-    elapsed = 0
-    while elapsed < _UPLOAD_WAIT_MAX:
-        state = await asyncio_to_thread(get_saq_job_state_sync, key)
-        if state is not None:
-            status = state.get("status")
-            if status in _TERMINAL_SAQ_STATUSES:
-                logger.info(
-                    "saq_merge_upload_ready plan_run=%d upload_status=%s waited=%ds",
-                    plan_run_id, status, elapsed,
-                )
-                return True
-            logger.info(
-                "saq_merge_upload_wait plan_run=%d upload_status=%s elapsed=%ds",
-                plan_run_id, status, elapsed,
-            )
-        await asyncio_sleep(_UPLOAD_WAIT_INTERVAL)
-        elapsed += _UPLOAD_WAIT_INTERVAL
-
-    logger.warning(
-        "saq_merge_upload_wait_timeout plan_run=%d waited=%ds",
-        plan_run_id, elapsed,
-    )
-    return False
-
-
-def _count_devices_event_dirs_sync(plan_run_id: int) -> int:
-    """统计 NFS devices/{plan_run_id}/ 下时间戳事件目录数。"""
-    from pathlib import Path
-
-    from backend.agent.aee.event_dirs import is_event_dir_basename
-    from backend.core.storage_root import resolve_shared_storage_root
-
-    nfs_root = resolve_shared_storage_root()
-    if not nfs_root:
-        return 0
-    devices_dir = Path(nfs_root) / "devices" / str(plan_run_id)
-    if not devices_dir.is_dir():
-        return 0
-    return sum(
-        1 for p in devices_dir.iterdir()
-        if p.is_dir() and is_event_dir_basename(p.name)
-    )
-
-
-async def _wait_for_devices_on_nfs(plan_run_id: int) -> int:
-    """poll NFS devices/{plan_run_id}/ 直至出现事件目录；超时返回 0（best-effort extract）。"""
-    elapsed = 0
-    while elapsed < _DEVICES_POLL_MAX:
-        count = await asyncio_to_thread(_count_devices_event_dirs_sync, plan_run_id)
-        if count > 0:
-            logger.info(
-                "saq_merge_devices_ready plan_run=%d dirs=%d waited=%ds",
-                plan_run_id, count, elapsed,
-            )
-            return count
-        logger.info(
-            "saq_merge_devices_wait plan_run=%d elapsed=%ds",
-            plan_run_id, elapsed,
-        )
-        await asyncio_sleep(_DEVICES_POLL_INTERVAL)
-        elapsed += _DEVICES_POLL_INTERVAL
-
-    logger.warning(
-        "saq_merge_devices_wait_timeout plan_run=%d waited=%ds",
-        plan_run_id, elapsed,
-    )
-    return 0
-
-
 async def merge_task(
     ctx: dict,
     *,
@@ -531,7 +336,6 @@ async def merge_task(
 ) -> None:
     """ADR-0025 Sprint 4: 归档-2 集中合并（-merge_files 各 agent _org.xls）。"""
     from backend.services.dedup_scan import run_merge_sync
-    from backend.services.device_log_event import continuous_event_upload_enabled
 
     round_dt = None
     if round_started_at:
@@ -563,20 +367,14 @@ async def merge_task(
         )
         return
 
-    if continuous_event_upload_enabled():
-        upload_ready = await _wait_for_remote_device_log_events(plan_run_id)
-    else:
-        upload_ready = await _wait_for_upload_task(plan_run_id)
+    upload_ready = await _wait_for_remote_device_log_events(plan_run_id)
     if not upload_ready:
         logger.warning(
             "saq_merge_extract_best_effort plan_run=%d reason=upload_not_ready",
             plan_run_id,
         )
 
-    if continuous_event_upload_enabled():
-        n_devices = await _count_remote_device_log_events(plan_run_id)
-    else:
-        n_devices = await _wait_for_devices_on_nfs(plan_run_id)
+    n_devices = await _count_remote_device_log_events(plan_run_id)
     if n_devices == 0:
         logger.warning(
             "saq_merge_extract_best_effort plan_run=%d reason=devices_empty_or_timeout",
@@ -689,7 +487,6 @@ SAQ_FUNCTIONS = [
     precheck_and_dispatch_task,
     plan_admission_task,
     scan_task,
-    upload_task,
     merge_task,
     extract_task,
     install_agent_task,
