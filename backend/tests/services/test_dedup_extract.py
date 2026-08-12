@@ -331,7 +331,7 @@ def test_resolve_extract_event_src_accepts_unassigned_absolute(tmp_path):
     assert scope == (nfs / "devices").resolve()
 
 
-def test_resolve_extract_event_src_rejects_traversal_without_raising(tmp_path: Path) -> None:
+def test_resolve_extract_event_src_rejects_traversal_without_raising(tmp_path) -> None:
     """Bad DLE remote_path must return None, not abort the whole extract."""
     from backend.core.artifact_paths import resolve_extract_event_src
 
