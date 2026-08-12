@@ -105,7 +105,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
   - 零产物记 `saq_scan_no_artifacts`（ERROR），部分产物记 `saq_scan_partial_artifacts`（WARNING）；两者都写 `run_context.archive`（`hosts_triggered` / `hosts_with_artifacts` / `scan_artifacts_registered`）。否则 Agent 侧扫描失败只有本地一条 WARNING，PlanRun 照报 SUCCESS 却没有任何报表。
 - **hot-update 的 env 同步分级**（`backend/services/agent_env_sync.py`）：控制面自己也读的键**不能**原样下发。`STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` 必须经 `STP_AGENT_` 前缀的源键映射；Agent 的 `STP_NFS_ROOT` 由 `STP_AEE_NFS_ROOT` 镜像（旧脚本 env），不下发控制面本机 `STP_NFS_ROOT`。`_FLEET_ENV_KEYS` 只放两边同值的键（含 `STP_DEVICE_LOG_EVENT_ENABLED` / `STP_EVENT_UPLOADER_ENABLED`，#218）。推送后远端会校验 `AGENT_PATH_ENV_KEYS` 的值在 Agent 上确实存在，缺失项经 `env_paths_missing` 回传并记 ERROR。hot-update 远端脚本**先合并 `.env` 再 restart**；勿在 hot-update 未返回前抢 `reload_config`。
 - **reload_config**（路由 `backend/api/routes/dedup.py` 的 `POST /api/v1/plan-runs/hosts/{host_id}/reload-config`）：经 `emit_agent_control` 下发 SocketIO `reload_config` 命令，让 Agent 重读安装目录 `.env` 并热刷新运行时配置，无需重启进程。Agent 侧实际刷新的三样见 `backend/agent/CLAUDE.md`。
-- **风险评级**（`backend/services/report_service.py:aggregate_risk_summary_from_signals`）：从 `job_log_signal.extra->>'event_subtype'` 聚合，按 `_RISK_RATING_RULES` 定级：
+- **风险评级**（`backend/services/report_service.py:aggregate_risk_summary_from_signals`）：从 `job_log_signal.extra->>'event_subtype'` 聚合（**观测层**；上送/extract 权威是 `device_log_event`，见 ADR-0028 §实体职责），按 `_RISK_RATING_RULES` 定级：
 
 | 级别 | 触发条件 |
 |------|---------|
@@ -113,13 +113,17 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 | **A**（高） | ANR ≥ 10 / JE ≥ 3 / NE ≥ 2 / Java ≥ 3 |
 | **B**（低） | 其余非零 |
 
-**NFS 路径约定**（控制面与 Agent 共用，统一入口见 `backend/agent/aee/paths.py`，#172）：
+**NFS 路径约定**（控制面与 Agent 共用，统一入口见 `backend/agent/aee/paths.py` / `backend/core/storage_root.py`，#172）：
 
 | 对象族 | 布局 |
 |--------|------|
 | JobArtifact 文件（watcher puller 默认落点 + LOCAL promote） | `{root}/jobs/{job_id}/` |
 | 事件目录（EventUploader / DLE 上送，含 HddSpill enqueue） | `{root}/devices/{plan_run_id}/` 或 `{root}/devices/unassigned/{event_id}/` |
 | 扫描报告 / extract 输出 | `{root}/dedup/{run_id}/`、`{root}/jira/{run_id}/` |
+
+中心存储根：**只配置 `STP_AEE_NFS_ROOT`**（`STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` 为弃用回落，计划删除）。`STP_AEE_LOCAL_ROOT` 为按机 L1 路径，hot-update **不**覆盖（#235）。
+
+`job_id IS NULL` 的 orphan `job_log_signal`：不进 PlanRun watcher-summary；admin 清单 `GET /api/v1/log-signals/orphans`。
 
 ## Agent 子系统细则（按需加载）
 
@@ -134,6 +138,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 | Var | Where | Purpose |
 |-----|-------|---------|
 | `STP_AEE_NFS_ROOT` | Backend + Agent | **中心存储（CIFS）** 挂载点主键（dedup/devices/jira）；过渡 UNC 在 8.202 |
+| `STP_AEE_LOCAL_ROOT` | Agent only | 本机 L1 AEE 根；**按机配置**，hot-update 不下发（#235） |
 | `STP_DEDUP_SCAN_PYTHON` | Backend + Agent | Python interpreter for scan tool — **值按角色不同**，见下 |
 | `STP_DEDUP_SCAN_SCRIPT` | Backend + Agent | `start_log_scan.py` path — **值按角色不同**，见下 |
 | `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | Backend only | Agent 侧的 scan 工具路径，hot-update 写进 Agent 的无前缀键 |

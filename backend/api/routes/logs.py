@@ -14,7 +14,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from backend.api.schemas import AgentLogOut, AgentLogQuery
-from backend.api.routes.auth import get_current_active_user, User, verify_agent_secret
+from backend.api.schemas.agent import OrphanLogSignalListOut, OrphanLogSignalOut
+from backend.api.routes.auth import get_current_active_user, require_admin, User, verify_agent_secret
+from backend.api.response import ApiResponse, ok
 from backend.core.database import get_db
 from backend.core.ssh_security import (
     LOG_FILE_NOT_FOUND_MARKER,
@@ -26,7 +28,11 @@ from backend.core.ssh_security import (
 )
 from backend.models.host import Host
 from backend.services.host_updater import _resolve_ssh_creds
-
+from backend.services.job_log_signal import (
+    ORPHAN_EXCLUDING_CALL_SITES,
+    count_orphan_log_signals,
+    list_orphan_log_signals,
+)
 router = APIRouter(prefix="/api/v1", tags=["logs"])
 logger = logging.getLogger(__name__)
 
@@ -46,6 +52,36 @@ def _read_log_file(path) -> List[str]:
 _LOG_RE = re.compile(
     r"^(?P<ts>\S+)\s+\[(?P<level>\w+)\](?:\s+\[(?P<step_id>[^\]]*)\])?\s+(?P<msg>.*)$"
 )
+
+
+# ── Orphan JobLogSignal (#213 D3 / #212 P1-7) ─────────────────────────────────
+
+
+@router.get(
+    "/log-signals/orphans",
+    response_model=ApiResponse[OrphanLogSignalListOut],
+)
+def list_orphan_job_log_signals(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(require_admin),
+):
+    """List ``job_log_signal`` rows with ``job_id IS NULL`` (admin).
+
+    PlanRun watcher-summary / risk aggregation intentionally exclude these
+    rows. Upload/extract authority is ``device_log_event``, not this table.
+    """
+    total = count_orphan_log_signals(db)
+    rows = list_orphan_log_signals(db, skip=skip, limit=limit)
+    payload = OrphanLogSignalListOut(
+        items=[OrphanLogSignalOut.model_validate(r) for r in rows],
+        total=total,
+        skip=skip,
+        limit=limit,
+        excluding_call_sites=list(ORPHAN_EXCLUDING_CALL_SITES),
+    )
+    return ok(payload)
 
 
 # ── Runtime Log Query ─────────────────────────────────────────────────────────

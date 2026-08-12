@@ -17,6 +17,7 @@ from backend.api.schemas.run import (
 )
 from backend.api.schemas.agent import (
     AgentLogQuery, AgentLogOut,
+    OrphanLogSignalOut, OrphanLogSignalListOut,
 )
 from backend.api.schemas.notification import (
     NotificationChannelCreate, NotificationChannelUpdate, NotificationChannelOut,
@@ -117,6 +118,8 @@ __all__ = [
     "RunRiskSummaryOut",
     "AgentLogQuery",
     "AgentLogOut",
+    "OrphanLogSignalOut",
+    "OrphanLogSignalListOut",
     "NotificationChannelCreate",
     "NotificationChannelUpdate",
     "NotificationChannelOut",
