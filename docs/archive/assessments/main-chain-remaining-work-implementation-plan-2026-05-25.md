@@ -329,11 +329,11 @@
 | **ID / U** | T-B8 / **U14** |
 | **状态** | **已签收** |
 | **改动面** | backend/tests（recycler + reconciler + aggregator） |
-| **步骤** | ① 构造 RUNNING → recycler UNKNOWN → reconciler grace → FAILED ② 断言 PlanRun 终态 DEGRADED/FAILED ③ 可选：PlanRunDetailPage stuck banner 集成 |
+| **步骤** | ① 构造 RUNNING → recycler UNKNOWN → reconciler grace → FAILED ② 断言 PlanRun 终态 SUCCESS / PARTIAL_SUCCESS / FAILED（DEGRADED 仅作历史终态兼容，不再新产生） ③ 可选：PlanRunDetailPage stuck banner 集成 |
 | **验收标准** | 全链单测；PlanRun 不永久 RUNNING |
 | **工作量** | M |
 | **风险** | 低 |
-| **审查收口** | 2026-08-12：`test_recycler.py` Phase 4c（RUNNING→UNKNOWN）、`test_device_lease_reconciler.py` Phase 2/4c（grace→FAILED）、`test_session_watchdog.py`、`test_plan_run_aggregation_shared.py`（终态聚合）覆盖；验收标准已满足。 |
+| **审查收口** | 2026-08-12：`test_recycler.py` Phase 4c（RUNNING→UNKNOWN）、`test_device_lease_reconciler.py` Phase 2/4c（grace→FAILED）、`test_session_watchdog.py`、`test_plan_run_aggregation_shared.py`（终态聚合）、`test_plan_run_state_machine.py`（DEGRADED 仅历史兼容，不再新产生）覆盖；验收标准已满足。 |
 
 ---
 
