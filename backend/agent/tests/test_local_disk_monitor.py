@@ -84,7 +84,7 @@ def test_above_threshold_enqueues_via_event_uploader(tmp_path, monkeypatch):
 
     assert n == 1
     client.list_events.assert_called_with(state="LOCAL", limit=50)
-    uploader.enqueue_local_event.assert_called_once_with(event=event)
+    uploader.enqueue_local_event.assert_called_once_with(event=event, force=True)
     assert list(cifs.rglob("*")) == []  # no direct copytree into cifs
     assert mon.snapshot_metrics()["spilled_total"] == 1
 

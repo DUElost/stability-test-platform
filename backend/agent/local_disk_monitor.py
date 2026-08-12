@@ -206,7 +206,7 @@ class HddSpillMonitor:
             event_id = str(candidate.get("id") or "")
             if event_id and event_id in self._spill_enqueued_ids:
                 continue
-            if EventUploader.instance().enqueue_local_event(event=candidate):
+            if EventUploader.instance().enqueue_local_event(event=candidate, force=True):
                 if event_id:
                     self._spill_enqueued_ids.add(event_id)
                 logger.info(

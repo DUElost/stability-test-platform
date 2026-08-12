@@ -162,11 +162,13 @@ class EventUploader:
         if self._dispatcher is not None:
             self._dispatcher.join(timeout=timeout)
 
-    def enqueue_local_event(self, *, event: Dict[str, Any]) -> bool:
-        """将事件入队。ADR-0028 方案 A：continuous=1 接受 LOCAL；continuous=0 静默丢弃（仅 UPLOAD_PENDING 经 _recover_pending 入队）。"""
+    def enqueue_local_event(self, *, event: Dict[str, Any], force: bool = False) -> bool:
+        """将事件入队。ADR-0028 方案 A：continuous=1 接受 LOCAL；continuous=0 默认拒绝
+        （仅 UPLOAD_PENDING 经 _recover_pending 入队）。``force=True`` 用于 HddSpill——
+        磁盘压力溢出不受过滤模型限制，必须始终可上送。"""
         if not _event_uploader_enabled() or not self._configured:
             return False
-        if not _event_uploader_continuous():
+        if not _event_uploader_continuous() and not force:
             # Plan A: Reconciler 不自动入队；upload_task 标记 UPLOAD_PENDING 后经 _recover_pending 轮询入队
             return False
         job = _UploadJob(

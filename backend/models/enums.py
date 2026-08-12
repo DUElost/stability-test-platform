@@ -56,6 +56,7 @@ class EventState(str, Enum):
     DETECTED       = "DETECTED"
     PULL_FAILED    = "PULL_FAILED"
     LOCAL          = "LOCAL"
+    UPLOAD_PENDING = "UPLOAD_PENDING"  # 方案 A：scan xls 引用后标记，等待 EventUploader 上送
     UPLOADING      = "UPLOADING"
     UPLOAD_FAILED  = "UPLOAD_FAILED"
     REMOTE         = "REMOTE"
