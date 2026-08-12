@@ -50,6 +50,8 @@ class DeviceLogEvent(Base):
         ForeignKey("job_instance.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Agent outbox seq_no; used to reverse-link job_log_signal after late ingest (#214).
+    signal_seq_no = Column(BigInteger, nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -76,4 +78,5 @@ class DeviceLogEvent(Base):
         Index("idx_device_log_event_host_state_detected", "host_id", "state", "detected_at"),
         Index("idx_device_log_event_serial_detected", "serial", "detected_at"),
         Index("idx_device_log_event_state_updated", "state", "updated_at"),
+        Index("idx_device_log_event_job_signal_seq", "job_id", "signal_seq_no"),
     )

@@ -6,7 +6,8 @@ import os
 from datetime import datetime, timezone
 from typing import Sequence
 
-from sqlalchemy import func, select, update
+from sqlalchemy import bindparam, func, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.models.device_log_event import DeviceLogEvent
@@ -83,3 +84,28 @@ def mark_events_archived(
     )
     db.commit()
     return int(result.rowcount or 0)
+
+
+_LINK_SIGNAL_SQL = text(
+    """
+    UPDATE job_log_signal AS s
+       SET device_log_event_id = e.id
+      FROM device_log_event AS e
+     WHERE s.job_id = e.job_id
+       AND s.seq_no = e.signal_seq_no
+       AND s.device_log_event_id IS NULL
+       AND e.signal_seq_no IS NOT NULL
+       AND e.job_id IN :job_ids
+    """
+).bindparams(bindparam("job_ids", expanding=True))
+
+
+async def link_signals_to_device_log_events(
+    db: AsyncSession,
+    job_ids: Sequence[int],
+) -> None:
+    """Attach job_log_signal.device_log_event_id when DLE landed first (#214)."""
+    ids = sorted({int(jid) for jid in job_ids if jid is not None})
+    if not ids:
+        return
+    await db.execute(_LINK_SIGNAL_SQL, {"job_ids": ids})
