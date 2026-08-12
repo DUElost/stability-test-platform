@@ -557,13 +557,16 @@ class DeviceLogWatcher:
         subtype = None
         try:
             from ..aee.collector import get_collector_for_platform
+            from ..aee.metadata import resolve_device_log_event_type
         except ImportError:
             from agent.aee.collector import get_collector_for_platform
+            from agent.aee.metadata import resolve_device_log_event_type
         collector = get_collector_for_platform(platform)
+        parsed_type = None
         if collector is not None:
             try:
                 meta = collector.parse_metadata(local_path)
-                meta_event_type = meta.event_type or meta_event_type
+                parsed_type = meta.event_type
                 subtype = meta.event_subtype
             except Exception:
                 logger.debug(
@@ -571,6 +574,12 @@ class DeviceLogWatcher:
                     self._serial,
                     exc_info=True,
                 )
+        meta_event_type = resolve_device_log_event_type(
+            parsed_type,
+            subtype,
+            event.category,
+            paths=(str(local_path),),
+        )
 
         event_id = client.create_local_event(
             serial=self._serial,

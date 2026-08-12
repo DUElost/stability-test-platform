@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..collector import EventMetadata
-from ..metadata import infer_aee_subtype_from_paths, normalize_package_name, parse_exp_main_summary
+from ..metadata import (
+    infer_aee_subtype_from_paths,
+    normalize_package_name,
+    parse_exp_main_summary,
+    resolve_device_log_event_type,
+)
 
 
 class MtkPlatformCollector:
@@ -26,7 +31,11 @@ class MtkPlatformCollector:
         pkg = normalize_package_name(
             summary.get("package_name") or summary.get("current_process") or "",
         )
-        event_type = summary.get("event_type") or "UNKNOWN"
+        event_type = resolve_device_log_event_type(
+            summary.get("event_type"),
+            subtype,
+            paths=(str(event_dir),),
+        )
         return EventMetadata(
             event_type=str(event_type),
             event_subtype=subtype or None,
