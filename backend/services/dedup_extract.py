@@ -133,12 +133,19 @@ def run_extract_sync(plan_run_id: int) -> int:
 
         remote_path_rows: list[tuple[str, Path, Path]] = []
         for raw in list_remote_paths_for_extract(db, plan_run_id):
-            located = resolve_extract_event_src(
-                raw,
-                nfs_root=nfs_root,
-                legacy_root=legacy_root,
-                plan_run_id=plan_run_id,
-            )
+            try:
+                located = resolve_extract_event_src(
+                    raw,
+                    nfs_root=nfs_root,
+                    legacy_root=legacy_root,
+                    plan_run_id=plan_run_id,
+                )
+            except ArtifactPathError:
+                logger.warning(
+                    "dedup_extract_skip_bad_remote plan_run=%d path=%s",
+                    plan_run_id, raw,
+                )
+                continue
             if located is None:
                 logger.debug(
                     "dedup_extract_skip_missing_remote plan_run=%d path=%s",

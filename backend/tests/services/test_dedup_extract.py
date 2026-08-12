@@ -190,6 +190,127 @@ def test_associate_unassigned_by_job_then_extract(
     assert (jira / "2026_0803_db.02.NE" / "main.dbg").read_text(encoding="utf-8") == "ne"
 
 
+def test_associate_skips_unassigned_with_foreign_job_id(
+    db_session,
+    sample_plan_run,
+    sample_plan,
+    sample_host,
+    sample_device,
+):
+    """Serial+time fallback must not steal events whose job_id is another PlanRun."""
+    from backend.models.enums import JobStatus
+    from backend.models.job import JobInstance
+    from backend.models.plan_run import PlanRun
+
+    now = datetime.now(timezone.utc)
+    sample_plan_run.started_at = now
+    # Serials come from this PlanRun's jobs; COMPLETED avoids uq_job_active_per_device.
+    db_session.add(JobInstance(
+        plan_run_id=sample_plan_run.id,
+        plan_id=sample_plan.id,
+        device_id=sample_device.id,
+        host_id=sample_host.id,
+        status=JobStatus.COMPLETED.value,
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        started_at=now,
+        ended_at=now,
+    ))
+
+    other_run = PlanRun(
+        plan_id=sample_plan.id,
+        status="RUNNING",
+        failure_threshold=sample_plan.failure_threshold,
+        plan_snapshot={"name": sample_plan.name, "plan_id": sample_plan.id},
+        run_type="MANUAL",
+        triggered_by="test-other",
+        started_at=now,
+    )
+    db_session.add(other_run)
+    db_session.flush()
+    other_job = JobInstance(
+        plan_run_id=other_run.id,
+        plan_id=sample_plan.id,
+        device_id=sample_device.id,
+        host_id=sample_host.id,
+        status=JobStatus.COMPLETED.value,
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        started_at=now,
+        ended_at=now,
+    )
+    db_session.add(other_job)
+    db_session.flush()
+
+    event_id = uuid4()
+    db_session.add(DeviceLogEvent(
+        id=event_id,
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="ANR",
+        detected_at=now,
+        state=EventState.REMOTE.value,
+        local_path="/tmp/local",
+        remote_path="/tmp/remote",
+        plan_run_id=None,
+        host_id=sample_host.id,
+        job_id=other_job.id,
+    ))
+    db_session.commit()
+
+    n = associate_unassigned_events_to_plan_run(db_session, sample_plan_run.id)
+    assert n == 0
+    db_session.expire_all()
+    row = db_session.get(DeviceLogEvent, event_id)
+    assert row is not None
+    assert row.plan_run_id is None
+
+
+def test_associate_serial_fallback_when_job_id_null(
+    db_session,
+    sample_plan_run,
+    sample_plan,
+    sample_device,
+    sample_host,
+):
+    """job_id IS NULL + serial in PlanRun window still associates."""
+    from backend.models.enums import JobStatus
+    from backend.models.job import JobInstance
+
+    now = datetime.now(timezone.utc)
+    sample_plan_run.started_at = now
+    db_session.add(JobInstance(
+        plan_run_id=sample_plan_run.id,
+        plan_id=sample_plan.id,
+        device_id=sample_device.id,
+        host_id=sample_host.id,
+        status=JobStatus.COMPLETED.value,
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        started_at=now,
+        ended_at=now,
+    ))
+    event_id = uuid4()
+    db_session.add(DeviceLogEvent(
+        id=event_id,
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="ANR",
+        detected_at=now,
+        state=EventState.REMOTE.value,
+        local_path="/tmp/local",
+        remote_path="/tmp/remote",
+        plan_run_id=None,
+        host_id=sample_host.id,
+        job_id=None,
+    ))
+    db_session.commit()
+
+    n = associate_unassigned_events_to_plan_run(db_session, sample_plan_run.id)
+    assert n == 1
+    db_session.expire_all()
+    row = db_session.get(DeviceLogEvent, event_id)
+    assert row is not None
+    assert row.plan_run_id == sample_plan_run.id
+
+
 def test_resolve_extract_event_src_accepts_unassigned_absolute(tmp_path):
     from backend.core.artifact_paths import resolve_extract_event_src
 
@@ -208,3 +329,30 @@ def test_resolve_extract_event_src_accepts_unassigned_absolute(tmp_path):
     src, scope = located
     assert src == event_dir.resolve()
     assert scope == (nfs / "devices").resolve()
+
+
+def test_resolve_extract_event_src_rejects_traversal_without_raising(tmp_path: Path) -> None:
+    """Bad DLE remote_path must return None, not abort the whole extract."""
+    from backend.core.artifact_paths import resolve_extract_event_src
+
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+
+    assert (
+        resolve_extract_event_src(
+            "../etc/passwd",
+            nfs_root=str(nfs),
+            legacy_root="",
+            plan_run_id=1,
+        )
+        is None
+    )
+    assert (
+        resolve_extract_event_src(
+            "devices/1/../../etc/passwd",
+            nfs_root=str(nfs),
+            legacy_root="",
+            plan_run_id=1,
+        )
+        is None
+    )

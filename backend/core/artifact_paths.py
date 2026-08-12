@@ -348,7 +348,11 @@ def resolve_extract_event_src(
     """
     from backend.core.storage_root import resolve_legacy_shared_storage_root
 
-    _reject_path_traversal(raw)
+    # Invalid DLE remote_path must not abort the whole PlanRun extract (#230 review).
+    try:
+        _reject_path_traversal(raw)
+    except ArtifactPathError:
+        return None
 
     legacy = legacy_root or resolve_legacy_shared_storage_root()
     roots = [nfs_root]

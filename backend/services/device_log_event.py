@@ -76,8 +76,10 @@ def associate_unassigned_events_to_plan_run(db: Session, plan_run_id: int) -> in
 
     Two paths (OR):
     1. ``job_id`` belongs to a JobInstance of this PlanRun (strong).
-    2. ``serial`` ∈ PlanRun devices and ``detected_at`` within
-       ``[started_at - grace, (ended_at or now) + grace]``.
+    2. ``job_id IS NULL`` and ``serial`` ∈ PlanRun devices and ``detected_at``
+       within ``[started_at - grace, (ended_at or now) + grace]``.
+       Serial fallback must not steal events whose ``job_id`` belongs to
+       another PlanRun (#230 review).
 
     Does not move NFS paths; ``remote_path`` may stay under
     ``devices/unassigned/{event_id}/`` — extract still copies via that path.
@@ -109,7 +111,8 @@ def associate_unassigned_events_to_plan_run(db: Session, plan_run_id: int) -> in
         clauses.append(DeviceLogEvent.job_id.in_(job_ids))
     if serials:
         clauses.append(
-            (DeviceLogEvent.serial.in_(serials))
+            DeviceLogEvent.job_id.is_(None)
+            & (DeviceLogEvent.serial.in_(serials))
             & (DeviceLogEvent.detected_at >= window_start)
             & (DeviceLogEvent.detected_at <= window_end)
         )
