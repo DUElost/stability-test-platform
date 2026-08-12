@@ -48,6 +48,9 @@ docker compose up --build
 ```bash
 pip install -r backend/requirements.txt
 cd backend && python -m alembic upgrade head && cd ..
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+
+# 仅本地调试需要时显式开启热重载（勿用于真机/生产）
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
 cd frontend && npm install && npm run dev
