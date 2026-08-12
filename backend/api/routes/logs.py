@@ -33,6 +33,7 @@ from backend.services.job_log_signal import (
     count_orphan_log_signals,
     list_orphan_log_signals,
 )
+
 router = APIRouter(prefix="/api/v1", tags=["logs"])
 logger = logging.getLogger(__name__)
 
