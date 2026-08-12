@@ -49,9 +49,10 @@ Hosts 有 DLE 落库：`8.103` / `8.143` / `8.192` / `8.195` / `9.124` / `9.6`�
 说明：Reconciler 在岗时 inotifyd 不单独写 DLE（有意去重）；本趟 DLE 来自 Reconciler。  
 历史 28 条 ARCHIVED **不回填**类型 / 关联。
 
-**#213 切断结论（同趟）**：生产已开 `STP_EVENT_UPLOADER_ENABLED=1`，`scan_task` 只 enqueue `merge_task`（不 enqueue `upload_task`）。  
-`devices/199/` 目录时间戳 **11:22–11:26**（Job 进行中 EventUploader），早于 **11:33** scan/merge artifact → 事件上送不依赖旧 PlanRun `upload_task`。  
-`jira/199/` extract 完整。功能上新链路已可替代旧上送；剩余工作是删死代码 / 收口默认（#213 Tracks）。
+**#213 切断结论（#199 + 复验 #200）**：生产已开 `STP_EVENT_UPLOADER_ENABLED=1`，`scan_task` 只 enqueue `merge_task`（不 enqueue `upload_task`）。  
+- **#199**：`devices/199/` 于 **11:22–11:26**（Job 中 EventUploader），早于 **11:33** scan/merge；`jira/199/` extract 完整。  
+- **#200**（2026-08-12 复验，`note=213-cutover-reconfirm`）：**SUCCESS**；DLE **7** 条 typed（ANR×3/JE×1/NE×3）+ signal 7/7 → `REMOTE` 后 `ARCHIVED`；`devices/200/` + `jira/200/` 齐全。  
+功能上新链路已可替代旧 PlanRun 上送；剩余工作是删死代码 / 收口默认（#213 Tracks）。
 
 ### 2.3 签字时库存（2026-08-12）
 
