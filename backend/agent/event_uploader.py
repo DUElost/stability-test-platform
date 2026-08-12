@@ -286,7 +286,11 @@ class EventUploader:
             logger.exception("event_uploader_patch_error event_id=%s", job.event_id)
 
     def _maybe_prune_local(self, job: _UploadJob, *, remote_path: str) -> None:
-        """上送成功后可选删除本地目录并回写 PRUNED（``STP_EVENT_UPLOADER_PRUNE_LOCAL=1``）。"""
+        """上送成功后可选删除本地目录并回写 PRUNED（``STP_EVENT_UPLOADER_PRUNE_LOCAL=1``）。
+
+        Order (#217 / CodeRabbit): ``rmtree`` first; patch ``PRUNED`` only after
+        local delete succeeds so ``state=PRUNED`` always means local is gone.
+        """
         if os.getenv("STP_EVENT_UPLOADER_PRUNE_LOCAL", "0").strip().lower() not in (
             "1", "true", "yes",
         ):
@@ -305,6 +309,14 @@ class EventUploader:
         if not src.exists():
             return
         try:
+            shutil.rmtree(src)
+        except Exception:
+            logger.exception(
+                "event_uploader_prune_failed event_id=%s path=%s — leave state unchanged",
+                job.event_id, src,
+            )
+            return
+        try:
             from .aee.device_log_event_client import DeviceLogEventClient
         except ImportError:
             from agent.aee.device_log_event_client import DeviceLogEventClient
@@ -314,6 +326,11 @@ class EventUploader:
             host_id=self._host_id,
         )
         if client is None:
+            logger.warning(
+                "event_uploader_prune_patch_skipped_no_client event_id=%s "
+                "(local already deleted)",
+                job.event_id,
+            )
             return
         if not client.patch_event_state(
             event_id=job.event_id,
@@ -327,11 +344,11 @@ class EventUploader:
             job_id=job.job_id,
             remote_path=remote_path,
         ):
-            return
-        try:
-            shutil.rmtree(src)
-        except Exception:
-            logger.exception("event_uploader_prune_failed event_id=%s path=%s", job.event_id, src)
+            logger.warning(
+                "event_uploader_prune_patch_failed event_id=%s "
+                "(local already deleted; remote_path still extractable)",
+                job.event_id,
+            )
 
     def _recover_pending(self) -> None:
         if not self._configured:

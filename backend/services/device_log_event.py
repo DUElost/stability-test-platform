@@ -23,14 +23,21 @@ def continuous_event_upload_enabled() -> bool:
     return os.getenv("STP_EVENT_UPLOADER_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 
 
-_REMOTE_STATES = (EventState.REMOTE.value, EventState.ARCHIVED.value)
+# Upload-complete / extractable: CIFS ``remote_path`` is authoritative.
+# Include PRUNED — ``STP_EVENT_UPLOADER_PRUNE_LOCAL`` patches REMOTE→PRUNED
+# right after copy (#217); extract must still discover those remote_path dirs.
+_REMOTE_STATES = (
+    EventState.REMOTE.value,
+    EventState.ARCHIVED.value,
+    EventState.PRUNED.value,
+)
 
 # Clock skew / late upload grace around PlanRun window for unassigned attach (#213 B3).
 _ASSOCIATE_GRACE = timedelta(minutes=30)
 
 
 def count_pending_upload_events(db: Session, plan_run_id: int) -> int:
-    """plan_run 下尚未到达 REMOTE/ARCHIVED 的事件数。"""
+    """plan_run 下尚未到达 REMOTE/ARCHIVED/PRUNED 的事件数。"""
     return int(
         db.execute(
             select(func.count(DeviceLogEvent.id)).where(
@@ -142,7 +149,11 @@ def mark_events_archived(
     plan_run_id: int,
     remote_paths: Sequence[str],
 ) -> int:
-    """extract 成功后把 REMOTE 事件标为 ARCHIVED。"""
+    """extract 成功后把仍为 REMOTE 的事件标为 ARCHIVED。
+
+    Already-``PRUNED`` rows (local deleted after upload) keep ``PRUNED``;
+    their ``remote_path`` remains extractable via ``list_remote_paths_for_extract``.
+    """
     paths = [str(p) for p in remote_paths if p]
     if not paths:
         return 0

@@ -129,6 +129,8 @@ def test_hot_update_env_overrides_never_includes_protected_keys(monkeypatch):
     monkeypatch.setenv("HOST_ID", "must-not-sync")
     monkeypatch.setenv("API_URL", "http://evil.example")
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", "/mnt/hdd/aee_events")
+    # Even if set on the control plane, PRUNE_LOCAL must never enter fleet payload (#217).
+    monkeypatch.setenv("STP_EVENT_UPLOADER_PRUNE_LOCAL", "1")
 
     overrides = hot_update_env_overrides()
 
@@ -136,6 +138,7 @@ def test_hot_update_env_overrides_never_includes_protected_keys(monkeypatch):
     assert "API_URL" not in overrides
     # Per-host L1 path — dual-disk vs SSD-only fleets must not share one value.
     assert "STP_AEE_LOCAL_ROOT" not in overrides
+    assert "STP_EVENT_UPLOADER_PRUNE_LOCAL" not in overrides
 
 
 def test_merge_env_overrides_replaces_existing_key():
