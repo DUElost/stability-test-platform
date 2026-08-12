@@ -42,14 +42,31 @@ def _query_hosts_from_rows(rows):
 
 
 @contextlib.contextmanager
-def _scan_task_env(saq_tasks, monkeypatch, host_rows, *, to_thread, scan_sync,
-                   hosts_done, record_archive, queue):
+def _scan_task_env(
+    saq_tasks,
+    monkeypatch,
+    host_rows,
+    *,
+    to_thread,
+    scan_sync,
+    hosts_done,
+    record_archive,
+    queue,
+    continuous_upload: bool = False,
+):
     """Patch stack shared by the scan_task poll tests.
 
     ``asyncio_sleep`` / ``asyncio_to_thread`` go through ``monkeypatch`` so the
     module-level attributes are restored after each test instead of leaking a
     fake sleep into every later test in the session.
+
+    Default ``continuous_upload=False`` pins the legacy PlanRun upload enqueue
+    path so ambient ``STP_EVENT_UPLOADER_ENABLED=1`` (production) cannot flip
+    assertions. Pass ``continuous_upload=True`` to lock the #213 cutover path.
     """
+    monkeypatch.setenv(
+        "STP_EVENT_UPLOADER_ENABLED", "1" if continuous_upload else "0",
+    )
     monkeypatch.setattr(saq_tasks, "asyncio_sleep", AsyncMock())
     monkeypatch.setattr(saq_tasks, "asyncio_to_thread", to_thread)
     monkeypatch.setattr(
@@ -423,50 +440,6 @@ async def test_scan_task_chains_on_partial_coverage_with_warning(monkeypatch, ca
 
 
 @pytest.mark.asyncio
-async def test_merge_task_enqueues_extract_on_success():
-    """merge_task should wait for upload + devices then enqueue extract_task."""
-    from backend.tasks import saq_tasks
-
-    wait_upload = AsyncMock(return_value=True)
-    wait_devices = AsyncMock(return_value=2)
-    with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
-         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload), \
-         patch.object(saq_tasks, "_wait_for_devices_on_nfs", wait_devices):
-        mock_queue = MagicMock()
-        mock_queue.enqueue = AsyncMock()
-        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
-             patch("saq.Job") as mock_job_cls:
-            await saq_tasks.merge_task({}, plan_run_id=42)
-
-    wait_upload.assert_awaited_once_with(42)
-    wait_devices.assert_awaited_once_with(42)
-    mock_job_cls.assert_called_once()
-    assert mock_job_cls.call_args.kwargs["function"] == "extract_task"
-    mock_queue.enqueue.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_merge_task_skips_extract_when_merge_skipped():
-    """merge_task should not wait or enqueue extract when merge skipped."""
-    from backend.tasks import saq_tasks
-
-    wait_upload = AsyncMock()
-    wait_devices = AsyncMock()
-    with patch("asyncio.to_thread", new=AsyncMock(return_value="")), \
-         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload), \
-         patch.object(saq_tasks, "_wait_for_devices_on_nfs", wait_devices):
-        mock_queue = MagicMock()
-        mock_queue.enqueue = AsyncMock()
-        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
-             patch("saq.Job", MagicMock()):
-            await saq_tasks.merge_task({}, plan_run_id=42)
-
-    wait_upload.assert_not_awaited()
-    wait_devices.assert_not_awaited()
-    mock_queue.enqueue.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_wait_for_upload_task_polls_until_complete():
     """_wait_for_upload_task returns True once upload SAQ job reaches terminal state."""
     from backend.tasks import saq_tasks
@@ -588,6 +561,110 @@ async def test_scan_task_enqueues_upload_and_merge_only(monkeypatch):
     functions = [c.kwargs["function"] for c in mock_job_cls.call_args_list]
     assert functions == ["upload_task", "merge_task"]
     assert "extract_task" not in functions
+
+
+@pytest.mark.asyncio
+async def test_scan_task_skips_upload_when_continuous_enabled(monkeypatch, caplog):
+    """#213: STP_EVENT_UPLOADER_ENABLED → enqueue merge only (cutover)."""
+    from backend.tasks import saq_tasks
+
+    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+
+    async def fake_to_thread(fn, *a, **kw):
+        if fn is scan_sync:
+            return "2"
+        if fn is hosts_done:
+            return 1
+        return fn(*a, **kw)
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock()
+    with caplog.at_level("INFO"), _scan_task_env(
+        saq_tasks, monkeypatch, [("host-1", "ONLINE")],
+        to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
+        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        continuous_upload=True,
+    ) as mock_job_cls:
+        await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
+
+    functions = [c.kwargs["function"] for c in mock_job_cls.call_args_list]
+    assert functions == ["merge_task"]
+    assert "saq_scan_skip_upload_continuous plan_run=42" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_merge_task_waits_on_device_log_events_when_continuous(monkeypatch):
+    """#213 continuous path: merge waits on DLE REMOTE, not upload_task SAQ job."""
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "1")
+    wait_remote = AsyncMock(return_value=True)
+    count_remote = AsyncMock(return_value=3)
+    wait_upload = AsyncMock()
+    wait_devices = AsyncMock()
+    with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
+         patch.object(saq_tasks, "_wait_for_remote_device_log_events", wait_remote), \
+         patch.object(saq_tasks, "_count_remote_device_log_events", count_remote), \
+         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload), \
+         patch.object(saq_tasks, "_wait_for_devices_on_nfs", wait_devices):
+        mock_queue = MagicMock()
+        mock_queue.enqueue = AsyncMock()
+        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+             patch("saq.Job") as mock_job_cls:
+            await saq_tasks.merge_task({}, plan_run_id=42)
+
+    wait_remote.assert_awaited_once_with(42)
+    count_remote.assert_awaited_once_with(42)
+    wait_upload.assert_not_awaited()
+    wait_devices.assert_not_awaited()
+    assert mock_job_cls.call_args.kwargs["function"] == "extract_task"
+
+
+@pytest.mark.asyncio
+async def test_merge_task_enqueues_extract_on_success(monkeypatch):
+    """merge_task should wait for upload + devices then enqueue extract_task."""
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "0")
+    wait_upload = AsyncMock(return_value=True)
+    wait_devices = AsyncMock(return_value=2)
+    with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
+         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload), \
+         patch.object(saq_tasks, "_wait_for_devices_on_nfs", wait_devices):
+        mock_queue = MagicMock()
+        mock_queue.enqueue = AsyncMock()
+        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+             patch("saq.Job") as mock_job_cls:
+            await saq_tasks.merge_task({}, plan_run_id=42)
+
+    wait_upload.assert_awaited_once_with(42)
+    wait_devices.assert_awaited_once_with(42)
+    mock_job_cls.assert_called_once()
+    assert mock_job_cls.call_args.kwargs["function"] == "extract_task"
+    mock_queue.enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_merge_task_skips_extract_when_merge_skipped(monkeypatch):
+    """merge_task should not wait or enqueue extract when merge skipped."""
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_EVENT_UPLOADER_ENABLED", "0")
+    wait_upload = AsyncMock()
+    wait_devices = AsyncMock()
+    with patch("asyncio.to_thread", new=AsyncMock(return_value="")), \
+         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload), \
+         patch.object(saq_tasks, "_wait_for_devices_on_nfs", wait_devices):
+        mock_queue = MagicMock()
+        mock_queue.enqueue = AsyncMock()
+        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+             patch("saq.Job") as mock_job_cls:
+            await saq_tasks.merge_task({}, plan_run_id=42)
+
+    wait_upload.assert_not_awaited()
+    wait_devices.assert_not_awaited()
+    mock_job_cls.assert_not_called()
+    mock_queue.enqueue.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
