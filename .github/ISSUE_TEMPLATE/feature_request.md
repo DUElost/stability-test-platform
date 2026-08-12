@@ -25,6 +25,8 @@ assignees: ""
 - [ ] 测试覆盖（单元 / 集成 / 前端）
 - [ ] 文档 / env / 部署模板已同步
 - [ ] 协议或状态机变更时更新对应 design 文档
+- [ ] 新功能按 `PRD/Epic → ADR → design/ → acceptance/` 落账（如适用）
+- [ ] 验收矩阵或 acceptance 记录已补充（如适用）
 
 ## 测试计划
 
