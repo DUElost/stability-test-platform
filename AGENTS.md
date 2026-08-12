@@ -38,7 +38,9 @@ ruff 暂未开 `UP`(pyupgrade) 族——全量 2239 处纯风格改写
 （先按文件整体空行率判定是否被污染，只动空行，并以 AST 比对保证语义不变）。
 CI 有阻塞式门禁；本地钩子需一次性启用：`git config core.hooksPath .githooks`。
 
-**start-backend.bat** runs `alembic upgrade head` then uvicorn. Set `STP_BACKEND_RELOAD=1` for hot reload (default off — real device safety).
+**本地启动**：根目录 Windows/WSL 启动脚本已移除；本地开发统一走
+`docs/development/local-development.md`（Compose 或手动命令）。后端手动启动
+默认不带 `--reload`（real device safety），显式需要热重载时再加。
 
 **Verification order**: agent tests → tsc → build → (backend tests if PG available).
 

@@ -330,9 +330,9 @@ curl -v --max-time 5 http://<控制平面IP>/api/v1/hosts
 
 ## 6. 迁移切换步骤（WSL -> 主 Linux Host）
 
-1. 停止 WSL 内旧服务：
+1. 停止 WSL 内旧服务（以下命令在 WSL 内执行，勿在主 Linux Host 执行）：
 ```bash
-./stop-backend-wsl.sh
+pkill -f "uvicorn backend.main:app" || true
 sudo systemctl stop stability-test-agent
 ```
 2. 在主 Linux Host 启动后端与 Nginx。
