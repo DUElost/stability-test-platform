@@ -423,7 +423,7 @@ async def test_scan_task_chains_on_partial_coverage_with_warning(monkeypatch, ca
         44, hosts_triggered=2, artifacts_registered=2, hosts_with_artifacts=1
     )
     functions = [c.kwargs["function"] for c in job_cls.call_args_list]
-    assert functions == ["merge_task"]
+    assert functions == ["upload_task", "merge_task"]
 
 
 # ---------------------------------------------------------------------------
@@ -441,8 +441,8 @@ def test_scan_task_merge_job_timeout_covers_poll_budget():
 
 
 @pytest.mark.asyncio
-async def test_scan_task_enqueues_merge_only(monkeypatch):
-    """scan_task should enqueue merge_task only (extract chained from merge)."""
+async def test_scan_task_enqueues_upload_then_merge(monkeypatch):
+    """scan_task enqueues upload_task then merge_task (extract chained from merge)."""
     from backend.tasks import saq_tasks
 
     scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
@@ -463,15 +463,15 @@ async def test_scan_task_enqueues_merge_only(monkeypatch):
     ) as mock_job_cls:
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
-    assert mock_job_cls.call_count == 1
+    assert mock_job_cls.call_count == 2
     functions = [c.kwargs["function"] for c in mock_job_cls.call_args_list]
-    assert functions == ["merge_task"]
+    assert functions == ["upload_task", "merge_task"]
     assert "extract_task" not in functions
 
 
 @pytest.mark.asyncio
-async def test_scan_task_enqueues_merge_only_logs(monkeypatch, caplog):
-    """#213 Track A: scan_task always enqueues merge only."""
+async def test_scan_task_enqueues_upload_and_merge_logs(monkeypatch, caplog):
+    """#213 Track A: scan_task logs the upload+merge follow-up chain."""
     from backend.tasks import saq_tasks
 
     scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
@@ -493,8 +493,8 @@ async def test_scan_task_enqueues_merge_only_logs(monkeypatch, caplog):
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
     functions = [c.kwargs["function"] for c in mock_job_cls.call_args_list]
-    assert functions == ["merge_task"]
-    assert "saq_scan_enqueue_merge plan_run=42" in caplog.text
+    assert functions == ["upload_task", "merge_task"]
+    assert "saq_scan_enqueue_upload_and_merge plan_run=42" in caplog.text
 
 
 @pytest.mark.asyncio

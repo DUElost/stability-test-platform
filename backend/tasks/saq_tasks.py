@@ -134,7 +134,8 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
     1. emit scan_now to each ONLINE agent
     2. poll NFS dedup/{plan_run_id}/ for *_org.xls files (max 300s)
     3. call run_scan_sync to register artifacts in plan_run_artifact
-    4. enqueue merge_task (merge_task chains extract_task on success; events via EventUploader/DLE)
+    4. enqueue upload_task then merge_task (merge_task chains extract_task on
+       success; events via EventUploader/DLE)
     """
     from backend.realtime.socketio_server import emit_agent_control
 
