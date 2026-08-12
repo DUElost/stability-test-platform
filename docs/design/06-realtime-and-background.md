@@ -128,7 +128,7 @@ PlanRun 终态
 |------|------|------|------|
 | scan_task | — | 入口 | poll 完成后 enqueue merge |
 | merge_task | scan_task 完成 | `dedup/{run_id}/` | 读 scan 产物 _org.xls，产出 merge xls |
-| extract_task | merge_task 完成 | `devices/` → `jira/{run_id}/` | merge 成功后 poll DLE REMOTE/ARCHIVED；超时仍 enqueue extract（best-effort） |
+| extract_task | merge_task 完成 | `devices/` → `jira/{run_id}/` | 仅按 DLE `remote_path` 打包（#213 B）；merge 成功后 poll DLE REMOTE/ARCHIVED；超时仍 enqueue extract（best-effort） |
 | merge_task SAQ timeout | — | — | `_MERGE_TASK_SAQ_TIMEOUT` = 300 + 660 + 120s，覆盖 merge 子进程与 DLE poll |
 
 - **多 host**：`scan_task` poll 等待所有 triggered host 的 artifact 或超时

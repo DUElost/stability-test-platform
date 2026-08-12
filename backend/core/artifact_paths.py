@@ -341,12 +341,17 @@ def resolve_extract_event_src(
     """Locate an event directory on primary or legacy storage (D8).
 
     Returns ``(src, devices_scope_root)`` when a validated directory exists.
+
+    Resolution order (#213 B3):
+    1. Absolute ``remote_path`` under ``{root}/devices/`` (incl. ``unassigned/``).
+    2. Basename under ``{root}/devices/{plan_run_id}/`` (legacy / basename-only).
     """
     from backend.core.storage_root import resolve_legacy_shared_storage_root
 
-    _reject_path_traversal(raw)
-    rel_name = Path(raw).name
-    if not rel_name or rel_name in (".", ".."):
+    # Invalid DLE remote_path must not abort the whole PlanRun extract (#230 review).
+    try:
+        _reject_path_traversal(raw)
+    except ArtifactPathError:
         return None
 
     legacy = legacy_root or resolve_legacy_shared_storage_root()
@@ -354,11 +359,41 @@ def resolve_extract_event_src(
     if legacy and legacy != nfs_root:
         roots.append(legacy)
 
+    raw_path = Path(raw)
     for root in roots:
         if not root:
             continue
+        try:
+            devices_parent = (Path(root) / "devices").resolve(strict=False)
+        except OSError:
+            continue
+        if not devices_parent.is_dir():
+            continue
+
+        # Absolute remote_path under devices/ (plan_run or unassigned).
+        if raw_path.is_absolute():
+            try:
+                candidate_real = raw_path.resolve(strict=False)
+            except OSError:
+                candidate_real = None
+            if (
+                candidate_real is not None
+                and candidate_real.is_dir()
+                and not candidate_real.is_symlink()
+                and candidate_real.is_relative_to(devices_parent)
+            ):
+                try:
+                    _reject_nested_symlinks(candidate_real)
+                except ArtifactPathOutsideRootError:
+                    pass
+                else:
+                    return candidate_real, devices_parent
+
         plan_run_scope = _plan_run_devices_scope(root, plan_run_id)
         if plan_run_scope is None:
+            continue
+        rel_name = raw_path.name
+        if not rel_name or rel_name in (".", ".."):
             continue
         candidate_entry = plan_run_scope / rel_name
         if candidate_entry.is_symlink():

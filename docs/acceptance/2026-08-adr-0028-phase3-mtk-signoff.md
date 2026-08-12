@@ -87,7 +87,7 @@ with signal_seq_no / linked signals: 6
 
 | Issue | 状态 |
 |-------|------|
-| #213 | Track A 完成：`upload_task` / PlanRun `upload_events` 路径已删；事件仅 EventUploader + DLE |
+| #213 | Track A 完成（#228）；Track B：extract 仅 DLE + unassigned 事后关联（进行中） |
 | #217 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` / HddSpill — **未压测**（非替代旧上送前置） |
 | #220 / #73 | 阶段 4：UNISOC/QCOM 仅入口；非 MTK 跳过扫描 |
 | inotifyd 独占写 DLE | Reconciler 在岗时 inotifyd 路径被抑制；未单独做「关 Reconciler 只走 inotifyd」E2E |
