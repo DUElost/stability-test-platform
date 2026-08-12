@@ -116,5 +116,23 @@ class UploadManager:
         )
         return str(dest_path)
 
+    @staticmethod
+    def _copytree_safe(src: str, dst: str) -> None:
+        """copytree ignoring copystat EPERM on NFS/CIFS mounts.
+
+        Shared by EventUploader (event dir promote). Kept after #213 Track A
+        removed ``upload_event_dirs``.
+        """
+        src_path = Path(src)
+        dst_path = Path(dst)
+        dst_path.mkdir(parents=True, exist_ok=True)
+        for entry in src_path.rglob("*"):
+            rel = entry.relative_to(src_path)
+            target = dst_path / rel
+            if entry.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif entry.is_file():
+                shutil.copyfile(str(entry), str(target))
+
 
 __all__ = ["UploadManager"]
