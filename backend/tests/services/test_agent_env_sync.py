@@ -128,11 +128,14 @@ def test_agent_path_keys_to_verify_covers_synced_paths(monkeypatch):
 def test_hot_update_env_overrides_never_includes_protected_keys(monkeypatch):
     monkeypatch.setenv("HOST_ID", "must-not-sync")
     monkeypatch.setenv("API_URL", "http://evil.example")
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", "/mnt/hdd/aee_events")
 
     overrides = hot_update_env_overrides()
 
     assert "HOST_ID" not in overrides
     assert "API_URL" not in overrides
+    # Per-host L1 path — dual-disk vs SSD-only fleets must not share one value.
+    assert "STP_AEE_LOCAL_ROOT" not in overrides
 
 
 def test_merge_env_overrides_replaces_existing_key():

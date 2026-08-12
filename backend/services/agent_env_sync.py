@@ -33,6 +33,9 @@ PROTECTED_ENV_KEYS: frozenset[str] = frozenset(
         "MOUNT_POINTS",
         "AGENT_SECRET",
         "STP_STATIC_DEVICE_SERIALS",
+        # Machine-local L1 path (NVMe+HDD hosts → /mnt/hdd/aee_events;
+        # SSD-only / single-disk hosts differ). Never fleet-overwrite.
+        "STP_AEE_LOCAL_ROOT",
     }
 )
 
@@ -41,7 +44,6 @@ PROTECTED_ENV_KEYS: frozenset[str] = frozenset(
 # agent belong here.
 _FLEET_ENV_KEYS: tuple[str, ...] = (
     "STP_AEE_NFS_ROOT",
-    "STP_AEE_LOCAL_ROOT",
     "STP_DEDUP_SCAN_TAG",
     "STP_DEDUP_AUTO_SCAN",
     "LOG_LEVEL",
