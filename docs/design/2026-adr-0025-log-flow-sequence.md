@@ -15,7 +15,7 @@
 
 | 层 | 内容 | 上中心？ |
 |----|------|----------|
-| 手机 `/data/aee_exp` 等 | 设备侧原始崩溃 | 否。只经 ADB pull |
+| 手机 `/data/aee_exp` + `/data/vendor/aee_exp` | 设备侧原始崩溃（ANR 含于 aee_exp，**不监测 `/data/anr`**） | 否。只经 ADB pull |
 | Agent SSD `logs/runs/{job_id}/` | 运行日志 | **永不**上中心；终态 grace 后 LogArchiver prune |
 | Agent HDD `STP_AEE_LOCAL_ROOT` | AEE + mobilelog + bugreport（第一落点） | 仅通道 A 或 B |
 | 中心 CIFS `STP_AEE_NFS_ROOT` | 汇总 xls + 按需事件 + 溢出事件 | 交付副本 |
@@ -66,8 +66,8 @@ sequenceDiagram
         CP->>Scan: scan 增量
     end
 
-    Scan->>HDD: start_log_scan 扫本地事件
-    Scan->>CIFS: 上送 Result_*_org.xls<br/>→ dedup/{plan_run_id}/{host_id}/
+    Scan->>HDD: start_log_scan.py -m 0 -d {hdd_root} -side {side}<br/>（AEE_TNE，非 -dedup_org）
+    Scan->>CIFS: 上送 Result_*_org.xls<br/>→ dedup/{plan_run_id}/{host_id}_Result_*_org.xls（平铺）
     CP->>CP: upload_task：scan 引用 → 标记 UPLOAD_PENDING
     EU->>CP: 30s 轮询拉取 UPLOAD_PENDING
     EU->>CIFS: copytree（只取报告命中的事件目录）<br/>→ devices/{plan_run_id}/{dirname}/
@@ -86,7 +86,7 @@ sequenceDiagram
         else ≥ 95%
             Spill->>HDD: 取最旧事件目录
             Spill->>EU: enqueue(force=True)
-            EU->>CIFS: copy → devices/…<br/>有 plan_run → devices/{plan_run_id}/<br/>否则 unassigned/{event_id}/
+            EU->>CIFS: copy → devices/…<br/>有 plan_run → devices/{plan_run_id}/{dirname}/<br/>否则 devices/unassigned/{event_id}/{dirname}/
             Spill->>HDD: 上送成功后 prune 本地<br/>直到 ≤ target（默认 70%）<br/>或没有可溢出目录
         end
     end
@@ -126,12 +126,12 @@ sequenceDiagram
 | Agent 事件（第一落点） | `{HDD}/{folder}/{serial}/aee_exp/{ts}_{db}/`（含 `mobilelog/`、`bugreport/`） |
 | 按需事件 | `{CIFS}/devices/{plan_run_id}/{dirname}/` |
 | 溢出事件 | 有 `plan_run_id` 同上；否则 `{CIFS}/devices/unassigned/{event_id}/{dirname}/` |
-| 各 host scan | `{CIFS}/dedup/{plan_run_id}/{host_id}/` |
+| 各 host scan | `{CIFS}/dedup/{plan_run_id}/{host_id}_Result_*_org.xls`（平铺，非 host 子目录） |
 | merge | `{CIFS}/dedup/{plan_run_id}/merge/`（或现网 `jira/` 旁的 merge 产物，以控制面 `dedup_scan` 为准） |
 | 提单/extract | `{CIFS}/jira/{plan_run_id}/` |
 | 运行日志 | Agent SSD `logs/runs/{job_id}/` only |
 
-溢出 **不要** 再写 ADR-0025 初稿的 `{folder}/{serial}/` 作为 CIFS 终态——那条路径 extract 扫不到（审查 P0-1）。产品规则仍是「超 95% 上送后 prune」；CIFS 落点用 `devices/{plan_run_id}/` 或 `unassigned/{id}/`。
+溢出 **不要** 再写 ADR-0025 初稿的 `{folder}/{serial}/` 作为 CIFS 终态——那条路径 extract 扫不到（审查 P0-1）。产品规则仍是「超 95% 上送后 prune」；CIFS 落点用 `devices/{plan_run_id}/{dirname}/` 或 `devices/unassigned/{event_id}/{dirname}/`。
 
 ---
 
@@ -151,6 +151,8 @@ sequenceDiagram
 
 - 设备日志第一落点 = Agent HDD。pull 完成即可停。
 - 上送事件目录仅当：(A) 本轮 scan 报告 Path/db 命中，或 (B) 该 host HDD usage ≥ `STP_LOCAL_DISK_SPILL_THRESHOLD`（生产 95）。
+- scan 命令契约：`start_log_scan.py -m 0 -d {hdd_root} -side {side}`（AEE_TNE，非 `-dedup_org`——后者仅对已产 xls 二次去重）；`Result_*_org.xls` 先产在 HDD，再平铺上送 `dedup/{run}/{host_id}_…`。
+- 报告驱动的 `event_dir_names` 校验（通道 A/B 共用）：只接受 HDD 根目录下一级目录；拒绝绝对路径、`..`、路径分隔符与符号链接逃逸；basename 匹配 `YYYY-MM-DD_HH-MM-SS_*`；`realpath` 必须仍在 HDD 根内。
 - 通道 A 上送成功后 **保留** 本地目录。
 - 通道 B 上送成功后 **必须** `rmtree` 本地该事件目录（腾盘）。失败则保持本地、可重试；不得先删后传。
 - 通道 B 循环直到 usage ≤ `STP_LOCAL_DISK_SPILL_TARGET`（默认 70）或没有可溢出候选。
@@ -178,7 +180,7 @@ sequenceDiagram
 
 五触发之一到达
   → Agent scan 本地 HDD
-  → CIFS: 报告 → dedup/{plan_run_id}/{host_id}/
+  → CIFS: 报告 → dedup/{plan_run_id}/{host_id}_Result_*_org.xls（平铺）
   → 解析报告命中的 dirname/db
   → 仅这些目录 copy → devices/{plan_run_id}/
   → 未命中：不动本地、不上 CIFS
@@ -189,7 +191,7 @@ HDD usage < 95%
 
 HDD usage ≥ 95%
   → 选最旧、非活跃、已完整的事件目录
-  → copy 到 devices/{plan_run_id}/ 或 unassigned/{event_id}/
+  → copy 到 devices/{plan_run_id}/{dirname}/ 或 devices/unassigned/{event_id}/{dirname}/
   → checksum/存在性确认成功
   → rmtree 本地
   → 重复直到 ≤ target 或无候选
@@ -219,8 +221,8 @@ sequenceDiagram
     Note over Scan,CIFS: CHANNEL_A on-demand only
 
     SAQ->>Scan: scan_now (trigger 1..5)
-    Scan->>HDD: start_log_scan.py -d HDD
-    Scan->>CIFS: put Result_*_org.xls → dedup/{run}/{host}/
+    Scan->>HDD: start_log_scan.py -m 0 -d HDD -side {side}（AEE_TNE；-dedup_org 仅二次去重）
+    Scan->>CIFS: put Result_*_org.xls → dedup/{run}/{host_id}_Result_*_org.xls（平铺）
     Scan->>Scan: event_dir_names = rows in xls Path/db
     loop each name in event_dir_names ONLY
         Scan->>CIFS: copytree HDD event → devices/{run}/{dirname}/
@@ -239,7 +241,7 @@ sequenceDiagram
         else usage_pct >= 95
             loop until usage<=70 or no candidate
                 Spill->>HDD: pick oldest complete event dir<br/>skip active job / in-progress scan
-                Spill->>CIFS: copytree → devices/{run}/ or unassigned/{id}/
+                Spill->>CIFS: copytree → devices/{run}/{dirname}/ or devices/unassigned/{event_id}/{dirname}/
                 Spill->>HDD: rmtree local AFTER copy OK
                 Spill->>DLE: optional PRUNED (means local gone, remote exists)
             end
@@ -262,7 +264,7 @@ sequenceDiagram
 ### 4.6 验收（Agent 改完后应能证明）
 
 1. HDD 用量 7%、无五触发：CIFS `devices/{run}/` **不应**出现本轮新 pull 的未入报告事件。
-2. 五触发后：`dedup/{run}/{host}/` 有 xls；`devices/{run}/` **仅**含 xls 命中的 dirname。
+2. 五触发后：`dedup/{run}/{host_id}_Result_*_org.xls` 有 xls；`devices/{run}/` **仅**含 xls 命中的 dirname。
 3. 人为把 spill 阈值降到当前 df 以下：最旧事件出现在 CIFS，**且**本地目录消失；用量下降或打出无候选告警。
 4. 阈值恢复 95% 后，未满盘时不再 prune。
 5. `jira/{run}/` 能看到已上送事件；未上送的不在 jira。
