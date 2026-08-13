@@ -69,6 +69,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`05-data-model.md`](./design/05-data-model.md) | ORM 与表关系 |
 | [`06-realtime-and-background.md`](./design/06-realtime-and-background.md) | SocketIO、APScheduler、SAQ |
 | [`2026-plan-c-storage-and-access.md`](./design/2026-plan-c-storage-and-access.md) | 方案 C 存储与访问 |
+| [`2026-adr-0025-log-flow-sequence.md`](./design/2026-adr-0025-log-flow-sequence.md) | 设备日志流转时序（上送规则=ADR-0025；含给人读 / 给其他 Agent 的两版图） |
 | [`2026-storage-roles-and-aliases.md`](./design/2026-storage-roles-and-aliases.md) | 存储/部署角色与别称（CIFS/NFS=中心存储；文件服务器页≠中心存储） |
 | [`2026-device-log-event-implementation-spec.md`](./design/2026-device-log-event-implementation-spec.md) | DeviceLogEvent 阶段 3 实现规格（ADR-0028 D1–D8） |
 | [`2026-07-plan-execute-page-improvements.md`](./design/2026-07-plan-execute-page-improvements.md) | Plan 执行页：Phase1–6 + §7 已落地；**§8 V2 选机工作台/驾驶舱实现方案** |
