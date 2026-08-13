@@ -51,7 +51,7 @@ Hosts 有 DLE 落库：`8.103` / `8.143` / `8.192` / `8.195` / `9.124` / `9.6`�
 
 **#213 Track A（2026-08-12）**：`upload_task` / `upload_events` / `upload_event_dirs` 已删除；`scan_task` 只 enqueue `merge_task`；事件上送仅 EventUploader + DLE。
 
-> **同日 方案 A 修订（bce5177）已恢复 `upload_task`**：`scan_task` → `upload_task`（按 scan xls 标记 `UPLOAD_PENDING`）→ `merge_task`；EventUploader 保留 copytree 作为 Agent 侧唯一执行者（`STP_EVENT_UPLOADER_CONTINUOUS=0` 默认过滤模型）。上一行 Track A 的「已删除 / 只 enqueue merge」是当日早晨的中间态，勿当现状。
+> **同日 方案 A 修订（bce5177）已恢复 `upload_task`**：`scan_task` → `upload_task`（按 scan xls 标记 `UPLOAD_PENDING`）→ `merge_task`；EventUploader 保留 copytree 作为 Agent 侧唯一执行者（`STP_EVENT_UPLOADER_CONTINUOUS=0` 默认过滤模型）。部分 host 覆盖仍可交付：记 `saq_scan_partial_artifacts` WARNING + `PlanRun.run_context.archive`，继续 enqueue upload/merge（成功 host 的报表保留）。上一行 Track A 的「已删除 / 只 enqueue merge」是当日早晨的中间态，勿当现状。
 - **#199**：`devices/199/` 于 **11:22–11:26**（Job 中 EventUploader），早于 **11:33** scan/merge；`jira/199/` extract 完整。  
 - **#200**（2026-08-12 复验，`note=213-cutover-reconfirm`）：**SUCCESS**；DLE **7** 条 typed（ANR×3/JE×1/NE×3）+ signal 7/7 → `REMOTE` 后 `ARCHIVED`；`devices/200/` + `jira/200/` 齐全。  
 功能上新链路已可替代旧 PlanRun 上送；剩余工作是删死代码 / 收口默认（#213 Tracks）。

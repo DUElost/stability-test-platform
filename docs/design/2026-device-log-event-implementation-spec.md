@@ -136,7 +136,12 @@ enqueue(event_id)
 
 ### 2.4 Agent 重启恢复
 
-启动时 `SELECT id FROM device_log_event WHERE host_id=? AND state IN ('LOCAL','UPLOADING','UPLOAD_FAILED')`（Agent 本地缓存最近 id 列表，或由控制面 API `GET ...?host_id=&state=` 拉取）→ 重新入队。
+启动即周期轮询由 `_recover_pending` 执行（`_RECOVER_POLL_INTERVAL` 30s）：
+
+- `CONTINUOUS=0`（默认）：只恢复 `UPLOAD_PENDING`（upload_task 已筛选的子集），外加 `UPLOADING` / `UPLOAD_FAILED` 的中断残留；
+- `CONTINUOUS=1`：恢复 `LOCAL`（立即全量上送）以及 `UPLOADING` / `UPLOAD_FAILED`。
+
+`UPLOAD_FAILED` 按 2.3 的退避与 10 分钟重扫规则处理。
 
 ### 2.5 Feature flag
 

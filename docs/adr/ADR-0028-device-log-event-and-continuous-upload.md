@@ -51,7 +51,7 @@ ADR-0028 初版（2026-08-09）选择了**翻转存储模型**——所有事件
 | `event_type` / `event_subtype` | KE / NE / JE / ANR / HWT / SWT（从 ZZ_INTERNAL 或平台等价格式解析） |
 | `detected_at` | Reconciler 发现时间（控制面时钟） |
 | `device_timestamp` | 设备侧时间戳（可空） |
-| `state` | `DETECTED → LOCAL → REMOTE → ARCHIVED → PRUNED`（+ `PULL_FAILED` / `UPLOAD_FAILED`） |
+| `state` | `DETECTED → LOCAL → UPLOAD_PENDING → REMOTE → ARCHIVED → PRUNED`（+ `PULL_FAILED` / `UPLOAD_FAILED`） |
 | `local_path` | HDD/SSD 路径 |
 | `remote_path` | CIFS 路径（`upload_task` 或 HddSpill 完成后设置，可空） |
 | `size_bytes` / `checksum` | 上送校验 |
@@ -63,16 +63,18 @@ ADR-0028 初版（2026-08-09）选择了**翻转存储模型**——所有事件
 ```text
 DETECTED ──(adb pull 完成)──→ LOCAL
   │                             │
-  └── pull 失败 → PULL_FAILED   ├──(PlanRun scan 引用 → upload_task 标记 UPLOAD_PENDING)──→ REMOTE
-                                │         │
-                                │         └── PRUNE_LOCAL=1 → rmtree 本地 → PRUNED
+  └── pull 失败 → PULL_FAILED   ├──(PlanRun scan 引用)─→ upload_task 标记 ─→ UPLOAD_PENDING
+                                │                          │
+                                │                          └─→ EventUploader（30s 轮询）copytree + checksum ─→ REMOTE
+                                │                                                       │
+                                │                                                       └── PRUNE_LOCAL=1 → rmtree 本地 → PRUNED
                                 │
                                 └──(未被 scan 引用)──→ 保持 LOCAL
                                       │
-                                      └── HDD ≥95% → HddSpill copytree → REMOTE
+                                      └── HDD ≥95% → HddSpill → EventUploader(force=True) copytree → REMOTE
 ```
 
-`REMOTE` 仅由两个路径写入：`upload_task`（PlanRun 触发，scan 筛选）或 HddSpill（磁盘压力溢出）。默认**不存在「连续上送全量」路径**（`STP_EVENT_UPLOADER_CONTINUOUS=1` 逃生阀除外）。
+`REMOTE` 仅由 **EventUploader** 写入（copytree + checksum 完成后）；其来源是 `upload_task` 标记的 `UPLOAD_PENDING`（PlanRun 触发，scan 筛选）或 HddSpill（磁盘压力溢出，`force=True`）。`upload_task` 本身不写 `REMOTE`，只做 `LOCAL → UPLOAD_PENDING` 标记。默认**不存在「连续上送全量」路径**（`STP_EVENT_UPLOADER_CONTINUOUS=1` 逃生阀除外）。
 
 失败态：
 - `PULL_FAILED`：无 `local_path`。Collector 可按同一 trigger 重试 → `DETECTED`。
