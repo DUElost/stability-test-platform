@@ -6,13 +6,13 @@
 
 当前 Linux agent host 的运维方式以 `backend/agent/install_agent.sh` 和 `backend/agent/sync_agent.sh` 为主，首次部署、热更新、批量重启、状态检查主要依赖人工执行脚本、`ssh` 和 `systemctl`。仓库中虽然已有 `tools/ansible/ansible.cfg`、`tools/ansible/inventory.ini` 和 `tools/ansible/ssh_key.yml`，但目前仅覆盖基础连通性与 SSH 公钥分发，没有形成完整的批量部署与运维闭环。
 
-本次目标是引入 Ansible 作为 Linux agent host 的统一运维入口，替代“手工脚本 + 手工登录目标机”的模式，并以 `172.21.10.36` 作为单机实验对象，逐步扩展到 `linux_hosts`。
+本次目标是引入 Ansible 作为 Linux agent host 的统一运维入口，替代“手工脚本 + 手工登录目标机”的模式，并以 `203.0.113.36` 作为单机实验对象，逐步扩展到 `linux_hosts`。
 
 ## 目标
 
 - 使用 Ansible 统一接管 Linux agent host 的首次部署、热更新、批量重启和状态检查。
 - 保持现有 `inventory.ini` 的主机清单模型，连接用户继续使用 `android`，通过免密 `sudo/become` 提权执行安装、同步和服务管理。
-- Phase A 先在 `172.21.10.36` 跑通完整闭环。
+- Phase A 先在 `203.0.113.36` 跑通完整闭环。
 - Phase B 再把当前脚本运维逐步原生迁移到 Ansible roles/tasks。
 - 允许统一默认配置，同时允许个别主机通过 `host_vars` 覆盖差异参数。
 
@@ -36,7 +36,7 @@
 ### 当前 Ansible 基础
 
 - `tools/ansible/ansible.cfg` 已设置默认 inventory 为 `./inventory.ini`，并关闭 host key checking。
-- `tools/ansible/inventory.ini` 已维护 `linux_hosts` 分组，并包含实验机 `172.21.10.36`。
+- `tools/ansible/inventory.ini` 已维护 `linux_hosts` 分组，并包含实验机 `203.0.113.36`。
 - 已验证以下命令可正常执行，说明 Ansible 到目标主机的基础连通性成立：
 
 ```bash
@@ -56,14 +56,14 @@ wsl bash -lc 'cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=
 
 ### Phase A：单机跑通 Ansible 运维闭环
 
-目标主机为 `172.21.10.36`，范围包括：
+目标主机为 `203.0.113.36`，范围包括：
 
 - 首次部署
 - 热更新
 - 服务重启与状态管理
 - 健康检查与诊断输出
 
-该阶段允许复用现有 `install_agent.sh` 和 `sync_agent.sh` 的核心能力，但禁止继续依赖人工 SSH 登录和手工输入。所有运维动作必须通过 `tools/ansible/` 下的 playbook 触发，且支持 `--limit 172.21.10.36`。
+该阶段允许复用现有 `install_agent.sh` 和 `sync_agent.sh` 的核心能力，但禁止继续依赖人工 SSH 登录和手工输入。所有运维动作必须通过 `tools/ansible/` 下的 playbook 触发，且支持 `--limit 203.0.113.36`。
 
 ### Phase B：原生迁移到 Ansible
 
@@ -80,7 +80,7 @@ wsl bash -lc 'cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=
 
 ### Phase C：批量化扩展
 
-当 `172.21.10.36` 试点稳定后，扩展到 `linux_hosts`：
+当 `203.0.113.36` 试点稳定后，扩展到 `linux_hosts`：
 
 - 批量部署
 - 批量热更新
@@ -100,7 +100,7 @@ tools/ansible/
 ├── group_vars/
 │   └── linux_hosts.yml
 ├── host_vars/
-│   └── 172.21.10.36.yml
+│   └── 203.0.113.36.yml
 ├── playbooks/
 │   ├── install_agent.yml
 │   ├── update_agent.yml
@@ -154,7 +154,7 @@ tools/ansible/
 - `agent_log_level`
 - `agent_health_log_tail_lines`
 
-### host_vars/172.21.10.36.yml
+### host_vars/203.0.113.36.yml
 
 存放实验机差异项，例如：
 
@@ -217,7 +217,7 @@ Phase A 的实现策略：
 调用方式通过变量 `agent_service_action` 指定，例如：
 
 ```bash
-ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=restart
+ansible-playbook playbooks/service_agent.yml --limit 203.0.113.36 -e agent_service_action=restart
 ```
 
 设计原则：
@@ -250,31 +250,31 @@ ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_servi
 
 ```bash
 cd /mnt/f/stability-test-platform/ssh
-ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit 172.21.10.36
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit 203.0.113.36
 ```
 
 ### 单机热更新
 
 ```bash
 cd /mnt/f/stability-test-platform/ssh
-ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit 172.21.10.36
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit 203.0.113.36
 ```
 
 ### 单机服务重启
 
 ```bash
 cd /mnt/f/stability-test-platform/ssh
-ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=restart
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 203.0.113.36 -e agent_service_action=restart
 ```
 
 ### 单机状态检查
 
 ```bash
 cd /mnt/f/stability-test-platform/ssh
-ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 172.21.10.36
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 203.0.113.36
 ```
 
-后续批量执行时，仅需将 `--limit 172.21.10.36` 替换为目标主机组或主机子集。
+后续批量执行时，仅需将 `--limit 203.0.113.36` 替换为目标主机组或主机子集。
 
 ## 失败处理与回退策略
 
@@ -310,7 +310,7 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 
 
 ### Phase A 验收
 
-以 `172.21.10.36` 为实验机，以下项目全部通过：
+以 `203.0.113.36` 为实验机，以下项目全部通过：
 
 - `install_agent.yml` 可以完成首次部署。
 - `update_agent.yml` 可以完成热更新，且不覆盖 `.env`。
@@ -323,7 +323,7 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 
 - 首次部署不再依赖 `install_agent.sh`。
 - 热更新不再依赖 `sync_agent.sh`。
 - `.env` 改由模板化生成。
-- 原生 Ansible 任务仍支持单机 `--limit 172.21.10.36` 验证。
+- 原生 Ansible 任务仍支持单机 `--limit 203.0.113.36` 验证。
 - 单机稳定后再扩展到 `linux_hosts` 批量执行。
 
 ## 风险与控制点
@@ -335,4 +335,4 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 
 
 ## 结论
 
-本方案采用“先单机跑通，再原生迁移”的路径，以最小风险完成 Linux agent host 从自编写脚本运维到 Ansible 运维的替代。Phase A 先在 `172.21.10.36` 上建立首次部署、热更新、服务管理和状态检查的闭环；Phase B 再逐步将安装和同步逻辑迁移为原生 Ansible 任务；Phase C 扩展到 `linux_hosts` 批量执行。该路径兼顾现网稳定性、迁移可诊断性和后续批量运维能力。
+本方案采用“先单机跑通，再原生迁移”的路径，以最小风险完成 Linux agent host 从自编写脚本运维到 Ansible 运维的替代。Phase A 先在 `203.0.113.36` 上建立首次部署、热更新、服务管理和状态检查的闭环；Phase B 再逐步将安装和同步逻辑迁移为原生 Ansible 任务；Phase C 扩展到 `linux_hosts` 批量执行。该路径兼顾现网稳定性、迁移可诊断性和后续批量运维能力。

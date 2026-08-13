@@ -87,6 +87,20 @@ def test_run_merge_sync_raises_when_subprocess_stderr_has_error(tmp_path):
             ds.run_merge_sync(99)
 
 
+def test_run_merge_sync_skips_failed_plan_run(db_session, sample_plan_run):
+    """ADR-0028 D2: FAILED PlanRun must not merge even with scan artifacts present."""
+    from backend.models.enums import PlanRunStatus
+
+    sample_plan_run.status = PlanRunStatus.FAILED.value
+    db_session.commit()
+
+    def _must_not_resolve_tool():
+        raise AssertionError("merge tool must not be resolved for a FAILED PlanRun")
+
+    with patch.object(ds, "resolve_scan_tool", side_effect=_must_not_resolve_tool):
+        assert ds.run_merge_sync(sample_plan_run.id) == ""
+
+
 def test_count_hosts_with_scan_artifacts_scopes_to_since_watermark(
     db_session, sample_plan_run,
 ):

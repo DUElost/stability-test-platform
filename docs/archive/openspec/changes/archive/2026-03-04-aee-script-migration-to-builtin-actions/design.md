@@ -466,7 +466,7 @@ for run in stale_runs:
 
 资源文件通过以下方式分发到 Agent 主机：
 
-1. **NFS 挂载**（当前方案）：Agent 主机已挂载 `172.21.15.4` 中央存储，`push_resources` 的 `local` 路径直接指向挂载目录
+1. **NFS 挂载**（当前方案）：Agent 主机已挂载 `192.0.2.4` 中央存储，`push_resources` 的 `local` 路径直接指向挂载目录
 2. **Tool 分发机制**（未来）：将资源打包为 Tool，由 `ToolRegistry.resolve()` 自动同步版本
 3. **安装脚本**：`install_agent.sh` 在部署时将资源复制到 `/opt/stability-test-agent/resources/`
 

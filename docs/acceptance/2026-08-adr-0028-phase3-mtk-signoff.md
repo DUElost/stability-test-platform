@@ -19,7 +19,7 @@
 | 表 / migration | `device_log_event`；生产 alembic head `q4r5s6t7u8v9`（含 `signal_seq_no`，#214 / PR #221） |
 | 控制面 flag | `.env.backend`：`STP_EVENT_UPLOADER_ENABLED=1`、`STP_DEVICE_LOG_EVENT_ENABLED=1` |
 | Agent flag 同步 | #218 / PR #224：两 key 进 `_FLEET_ENV_KEYS`；hot-update 先合并 `.env` 再 restart |
-| 灰度 → 全舰队 | 阶段 3 灰度：16 台 MTK host + pilot `172-21-8-87`；#218 后 20 台均双开（含原无 flag 的 `8.116` / `9.126` / `9.127`） |
+| 灰度 → 全舰队 | 阶段 3 灰度：16 台 MTK host + pilot `192-0-2-87`；#218 后 20 台均双开（含原无 flag 的 `8.116` / `9.126` / `9.127`） |
 | Agent revision | `be4f31a`（#218）含 #215 `resolve_device_log_event_type` |
 | 观察脚本 | `tools/dev/monitor-device-log-events.py`（只读） |
 
@@ -39,7 +39,7 @@ Hosts 有 DLE 落库：`8.103` / `8.143` / `8.192` / `8.195` / `9.124` / `9.6`�
 
 | 项 | 值 |
 |----|-----|
-| Host / device | `172-21-8-143` / `0000NX2622000488`（ELA-LX2 `mt6768`） |
+| Host / device | `192-0-2-143` / `0000NX2622000488`（ELA-LX2 `mt6768`） |
 | Plan / PlanRun / Job | Plan `dle-e2e-216-aee-trigger` (#7) / **#199 SUCCESS** / **#2729 COMPLETED** |
 | Trigger | `aee_signal_trigger` → `success=true`，`db_path=/data/aee_exp/db.02.NE` |
 | DLE | **6** 条 `ARCHIVED`；`event_type` = ANR×3 / JE×1 / NE×2 |
@@ -50,6 +50,8 @@ Hosts 有 DLE 落库：`8.103` / `8.143` / `8.192` / `8.195` / `9.124` / `9.6`�
 历史 28 条 ARCHIVED **不回填**类型 / 关联。
 
 **#213 Track A（2026-08-12）**：`upload_task` / `upload_events` / `upload_event_dirs` 已删除；`scan_task` 只 enqueue `merge_task`；事件上送仅 EventUploader + DLE。
+
+> **同日 方案 A 修订（bce5177）已恢复 `upload_task`**：`scan_task` → `upload_task`（按 scan xls 标记 `UPLOAD_PENDING`）→ `merge_task`；EventUploader 保留 copytree 作为 Agent 侧唯一执行者（`STP_EVENT_UPLOADER_CONTINUOUS=0` 默认过滤模型）。部分 host 覆盖仍可交付：记 `saq_scan_partial_artifacts` WARNING + `PlanRun.run_context.archive`，继续 enqueue upload/merge（成功 host 的报表保留）。上一行 Track A 的「已删除 / 只 enqueue merge」是当日早晨的中间态，勿当现状。
 - **#199**：`devices/199/` 于 **11:22–11:26**（Job 中 EventUploader），早于 **11:33** scan/merge；`jira/199/` extract 完整。  
 - **#200**（2026-08-12 复验，`note=213-cutover-reconfirm`）：**SUCCESS**；DLE **7** 条 typed（ANR×3/JE×1/NE×3）+ signal 7/7 → `REMOTE` 后 `ARCHIVED`；`devices/200/` + `jira/200/` 齐全。  
 功能上新链路已可替代旧 PlanRun 上送；剩余工作是删死代码 / 收口默认（#213 Tracks）。

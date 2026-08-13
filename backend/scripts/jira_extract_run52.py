@@ -7,7 +7,9 @@ from pathlib import Path
 
 import httpx
 
-BASE = "http://172.21.10.25:8000"
+BASE = os.getenv("STP_EXTRACT_BACKEND", "")
+if not BASE:
+    raise SystemExit("STP_EXTRACT_BACKEND required (no built-in default address)")
 ORIGIN = os.getenv("STP_SMOKE_ORIGIN", "http://localhost:5173")
 RUN_ID = 52
 NFS = Path(r"Y:\sonic_tinno")

@@ -129,7 +129,7 @@ def _query_hosts_for_scan(
 
 
 async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> None:
-    """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 scan_now → 轮询 NFS → 注册 DB → enqueue merge。
+    """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 scan_now → 轮询 NFS → 注册 DB → enqueue upload_task → enqueue merge_task。
 
     1. emit scan_now to each ONLINE agent
     2. poll NFS dedup/{plan_run_id}/ for *_org.xls files (max 300s)

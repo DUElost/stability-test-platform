@@ -4,7 +4,7 @@
 Usage (from repo root)::
 
     ./venv/bin/python tools/dev/monitor-device-log-events.py
-    ./venv/bin/python tools/dev/monitor-device-log-events.py --host-id 172-21-8-143
+    ./venv/bin/python tools/dev/monitor-device-log-events.py --host-id 192-0-2-143
     ./venv/bin/python tools/dev/monitor-device-log-events.py --plan-run-id 199 --limit 10
 
 Resolves ``DATABASE_URL`` from ambient env first, then repo-root ``.env.backend``

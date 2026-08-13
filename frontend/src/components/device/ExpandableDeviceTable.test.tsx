@@ -9,7 +9,7 @@ const devices = [
     model: 'Model A',
     status: 'idle' as const,
     build_display_id: 'build-a',
-    host_name: '172.21.10.36',
+    host_name: '203.0.113.36',
     last_seen: '2026-05-09T18:00:00+08:00',
     battery_level: 75,
     temperature: 42.5,
@@ -93,7 +93,7 @@ describe('ExpandableDeviceTable', () => {
         model: 'Model B',
         build_display_id: 'build-b',
         host_id: 10,
-        host_name: '172.21.9.116',
+        host_name: '198.51.100.116',
       },
       {
         ...devices[0],
@@ -102,7 +102,7 @@ describe('ExpandableDeviceTable', () => {
         model: 'Model A',
         build_display_id: 'build-a',
         host_id: 10,
-        host_name: '172.21.9.116',
+        host_name: '198.51.100.116',
       },
     ];
     render(

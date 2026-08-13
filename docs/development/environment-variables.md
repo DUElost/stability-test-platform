@@ -74,7 +74,7 @@
 | 变量 | 说明 |
 |------|------|
 | `API_URL` | 控制平面地址 |
-| `HOST_ID` | 须与 DB `host.id` 对齐（不可为 `0`；推荐 `172.21.9.6` → `172-21-9-6`） |
+| `HOST_ID` | 须与 DB `host.id` 对齐（不可为 `0`；推荐 `198.51.100.6` → `198-51-100-6`） |
 | `AGENT_SECRET` | 与控制平面一致 |
 | `POLL_INTERVAL` | claim 轮询间隔（秒） |
 | `ADB_PATH` / `ANDROID_ADB_SERVER_PORT` | WSL 联调端口须 `5039` |

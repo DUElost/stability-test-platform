@@ -210,8 +210,8 @@ def sample_host(db_session):
         id="101",
         hostname="test-host-101",
         name="test-host",
-        ip="172.21.15.100",
-        ip_address="172.21.15.100",
+        ip="192.0.2.100",
+        ip_address="192.0.2.100",
         status=HostStatus.ONLINE.value,
         last_heartbeat=datetime.now(timezone.utc),
     )
@@ -227,8 +227,8 @@ def sample_offline_host(db_session):
         id="102",
         hostname="test-host-102",
         name="test-host-offline",
-        ip="172.21.15.101",
-        ip_address="172.21.15.101",
+        ip="192.0.2.101",
+        ip_address="192.0.2.101",
         status=HostStatus.OFFLINE.value,
         last_heartbeat=datetime.now(timezone.utc) - timedelta(minutes=10),
     )
@@ -244,8 +244,8 @@ def sample_host_expired(db_session):
         id="103",
         hostname="test-host-103",
         name="test-host-expired",
-        ip="172.21.15.102",
-        ip_address="172.21.15.102",
+        ip="192.0.2.102",
+        ip_address="192.0.2.102",
         status=HostStatus.ONLINE.value,
         last_heartbeat=datetime.now(timezone.utc) - timedelta(seconds=400),
     )

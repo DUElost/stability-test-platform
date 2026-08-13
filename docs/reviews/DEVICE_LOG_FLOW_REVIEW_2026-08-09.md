@@ -54,7 +54,7 @@ Android 设备 (MTK/高通/展锐)
        │
        ▼
 [L2] 中心日志服务器 CIFS ── 集中存储 + 合并汇总
-  //172.21.8.202/jxtinno/sonic_tinno/
+  //192.0.2.202/jxtinno/sonic_tinno/
   ├── devices/{plan_run_id}/     ← 设备事件目录（仅 upload 路径；spill 路径见 P0-1）
   ├── dedup/{plan_run_id}/       ← 各 host 扫描 xls
   ├── jira/{plan_run_id}/        ← extract 汇总产物（JIRA 提单引用此路径）
@@ -69,8 +69,8 @@ Android 设备 (MTK/高通/展锐)
 - 即使 CIFS 断网，HDD 上的日志不丢；CIFS 恢复后下一次 PlanRun 触发上送补全。
 
 **中心日志服务器地址可切换**：
-- 当前生产（过渡，与控制面同机）：`//172.21.8.202/jxtinno/sonic_tinno`（挂载点 `STP_AEE_NFS_ROOT`；spill 同主键）
-- 目标迁移：`//172.21.15.4/...` 或 `//172.21.9.4/...`（控制面 IP 仍为 8.202；`STP_FILE_SERVER_ADDRESS` **不改**）
+- 当前生产（过渡，与控制面同机）：`//192.0.2.202/jxtinno/sonic_tinno`（挂载点 `STP_AEE_NFS_ROOT`；spill 同主键）
+- 目标迁移：`//192.0.2.4/...` 或 `//198.51.100.4/...`（控制面 IP 仍为 8.202；`STP_FILE_SERVER_ADDRESS` **不改**）
 - 切换方式：修改所有 Agent 与控制面的 `STP_AEE_NFS_ROOT`，通过 `batch_hot_update` 推送，**不需要改代码**（须 remount）。
 - 切换注意事项：新旧服务器并行期间，upload 和 spill 可能写到不同目标；extract 阶段从旧服务器读不到新上送的数据。建议切换窗口内暂停 PlanRun 触发。
 

@@ -27,7 +27,7 @@ backend log: admission_failed plan_run=108 reason=script_verify_failed
 
 ### 2.1 三方哈希比对
 
-在 host `172.21.9.132` 上比对 Plan 2 引用的 7 个脚本：
+在 host `198.51.100.132` 上比对 Plan 2 引用的 7 个脚本：
 
 | 脚本 | DB `content_sha256` | 控制面本地 | 实机 | 判定 |
 |------|--------------------|-----------|------|------|
@@ -153,7 +153,7 @@ monkey_test v1.1.0     push_resources v1.0.0  stop_aimonkey v1.0.0
 
 复扫确认稳定：`created=0 skipped=28 conflicts=0 rebaselined=0`。
 
-**派发恢复验证** —— PlanRun 109（Plan 2，单设备 44 @ `172-21-9-132`）：
+**派发恢复验证** —— PlanRun 109（Plan 2，单设备 44 @ `198-51-100-132`）：
 
 | 指标 | 事故中（PlanRun 108） | 修复后（PlanRun 109） |
 |------|----------------------|----------------------|

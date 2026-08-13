@@ -587,7 +587,7 @@ class WatcherSummaryOut(BaseModel):
 
 | 项 | 值 |
 |----|-----|
-| Host | `auto-fdaf1d55e319` / `172.21.10.36` |
+| Host | `auto-fdaf1d55e319` / `203.0.113.36` |
 | 设备 | `device_id=63`，`serial=11914404BG102162` |
 | Plan 模板 | `monkey_aee_patrol.json` v2（Watcher-only），patrol 仅 `monkey_check` |
 | Plan（API 加速） | **Plan #2**（`aee-dual-write-10.36-*`）：**2026-05-30** 经 API 改为 Watcher-only（patrol 仅 `monkey_check`，`watcher_policy.enabled=true`） |

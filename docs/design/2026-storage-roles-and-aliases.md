@@ -14,7 +14,7 @@
 |---|--------|--------|
 | 1 | **设备** | Android 被测机 |
 | 2 | **Agent host** | 跑 Agent 的 Linux 机（约 20 台） |
-| 3 | **控制面** | FastAPI / Dashboard / SAQ，生产 **永远** `172.21.8.202` |
+| 3 | **控制面** | FastAPI / Dashboard / SAQ，生产 **永远** `192.0.2.202` |
 | 4 | **中心存储（CIFS / NFS）** | 日志分享盘：`devices/` `dedup/` `jira/` `jobs/` |
 | 5 | **PG** | 业务库（元数据，不是日志文件） |
 | 6 | **Redis** | 仅 SAQ broker（+ 可选 SocketIO adapter） |
@@ -34,12 +34,12 @@
 
 ```text
 当前（过渡，流程调通）
-  控制面 8.202  ──同机──  中心存储（CIFS/NFS）//172.21.8.202/jxtinno/sonic_tinno
+  控制面 8.202  ──同机──  中心存储（CIFS/NFS）//192.0.2.202/jxtinno/sonic_tinno
   Agent ×20     ──mount──┘
 
 目标
   控制面 8.202          （不迁）
-  中心存储（CIFS/NFS）  //172.21.9.4/... 或 //172.21.15.4/...
+  中心存储（CIFS/NFS）  //198.51.100.4/... 或 //192.0.2.4/...
   Agent ×20 + 控制面    ──mount 新 UNC──┘
 ```
 
@@ -60,7 +60,7 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 
 | 推荐名 | 类型 | 例子（当前过渡） | 谁用 |
 |--------|------|------------------|------|
-| **分享身份（UNC）** | 网络身份 | `//172.21.8.202/jxtinno/sonic_tinno` | fstab / `mount`；程序**不读** |
+| **分享身份（UNC）** | 网络身份 | `//192.0.2.202/jxtinno/sonic_tinno` | fstab / `mount`；程序**不读** |
 | **共享根（挂载点）** | 本机路径 | `/mnt/nfs/aee_events`、`/home/android/aee-nfs` | `STP_AEE_NFS_ROOT` |
 
 20 台 Agent + 控制面的挂载路径字符串可以不同，必须指向**同一个 UNC**。  

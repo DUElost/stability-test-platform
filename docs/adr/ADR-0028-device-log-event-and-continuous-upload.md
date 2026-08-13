@@ -51,7 +51,7 @@ ADR-0028 初版（2026-08-09）选择了**翻转存储模型**——所有事件
 | `event_type` / `event_subtype` | KE / NE / JE / ANR / HWT / SWT（从 ZZ_INTERNAL 或平台等价格式解析） |
 | `detected_at` | Reconciler 发现时间（控制面时钟） |
 | `device_timestamp` | 设备侧时间戳（可空） |
-| `state` | `DETECTED → LOCAL → REMOTE → ARCHIVED → PRUNED`（+ `PULL_FAILED` / `UPLOAD_FAILED`） |
+| `state` | `DETECTED → LOCAL → UPLOAD_PENDING → REMOTE → ARCHIVED → PRUNED`（+ `PULL_FAILED` / `UPLOAD_FAILED`） |
 | `local_path` | HDD/SSD 路径 |
 | `remote_path` | CIFS 路径（`upload_task` 或 HddSpill 完成后设置，可空） |
 | `size_bytes` / `checksum` | 上送校验 |
@@ -63,16 +63,18 @@ ADR-0028 初版（2026-08-09）选择了**翻转存储模型**——所有事件
 ```text
 DETECTED ──(adb pull 完成)──→ LOCAL
   │                             │
-  └── pull 失败 → PULL_FAILED   ├──(PlanRun scan 引用 + upload_task copytree)──→ REMOTE
-                                │         │
-                                │         └── PRUNE_LOCAL=1 → rmtree 本地 → PRUNED
+  └── pull 失败 → PULL_FAILED   ├──(PlanRun scan 引用)─→ upload_task 标记 ─→ UPLOAD_PENDING
+                                │                          │
+                                │                          └─→ EventUploader（30s 轮询）copytree + checksum ─→ REMOTE
+                                │                                                       │
+                                │                                                       └── PRUNE_LOCAL=1 → rmtree 本地 → PRUNED
                                 │
                                 └──(未被 scan 引用)──→ 保持 LOCAL
                                       │
-                                      └── HDD ≥95% → HddSpill copytree → REMOTE
+                                      └── HDD ≥95% → HddSpill → EventUploader(force=True) copytree → REMOTE
 ```
 
-`REMOTE` 仅由两个路径写入：`upload_task`（PlanRun 触发，scan 筛选）或 HddSpill（磁盘压力溢出）。**不存在「连续上送全量」路径。**
+`REMOTE` 仅由 **EventUploader** 写入（copytree + checksum 完成后）；其来源是 `upload_task` 标记的 `UPLOAD_PENDING`（PlanRun 触发，scan 筛选）或 HddSpill（磁盘压力溢出，`force=True`）。`upload_task` 本身不写 `REMOTE`，只做 `LOCAL → UPLOAD_PENDING` 标记。默认**不存在「连续上送全量」路径**（`STP_EVENT_UPLOADER_CONTINUOUS=1` 逃生阀除外）。
 
 失败态：
 - `PULL_FAILED`：无 `local_path`。Collector 可按同一 trigger 重试 → `DETECTED`。
@@ -109,7 +111,7 @@ scan_task → scan_now → poll → register artifacts → enqueue upload_task�
 
 `upload_task` 从 scan xls 的 Path 列提取事件目录名——正是「只上送有效子集」的过滤逻辑。`collect_upload_event_dir_names` 保留。
 
-**EventUploader 职责收窄**：保留为 DLE 状态追踪服务（写 DLE 行 + state 更新），**不执行 copytree 到 CIFS**。`remote_path` 由 `upload_task` 或 HddSpill 填充。
+**EventUploader = Agent 侧唯一执行者**：30s 轮询拉取 `UPLOAD_PENDING`，执行 copytree 到 CIFS 并回写 `REMOTE`（含重试/checksum/PRUNE）。`upload_task`（控制面）只做 DB 标记，不执行文件拷贝。
 
 **auto_archive_sweep**（`cron_scheduler.py`）：仅 Plan 配置了 `auto_archive_interval_seconds` 时触发。`_AUTO_FINAL_STATUSES` 加 `FAILED`（可选——FAILED 在终态时已由路径①处理，定时扫可做兜底）。
 
@@ -166,7 +168,7 @@ extract 双根遍历：
 ### 负面
 
 - PlanRun FAILED 时 scan 可能产不出足够的 xls（取决于失败发生在哪个阶段）——merge 门禁自然跳过，但事件可能因无 xls 引用而不被上传
-- EventUploader 的 copytree 逻辑已实现但需回退——代码需移除
+- EventUploader 的 copytree 逻辑保留（执行者定位，不回退）；`CONTINUOUS=1` 仅作为逃生阀模式
 - #213 已删除的 `upload_task` enqueue 需还原
 - `JobLogSignal.job_id` 的 `CASCADE → SET NULL` 需 migration
 
@@ -209,7 +211,7 @@ extract 双根遍历：
 **fleet 配置**（20 台 Agent，代码版本 `1fb8e2a`）：
 - `STP_EVENT_UPLOADER_ENABLED=1`（EventUploader 运行）
 - `STP_EVENT_UPLOADER_CONTINUOUS=0`（过滤模型——仅上送 `UPLOAD_PENDING`）
-- `STP_EVENT_UPLOADER_PRUNE_LOCAL=1`（仅灰机 `172-21-8-143`，fleet 未开）
+- `STP_EVENT_UPLOADER_PRUNE_LOCAL=1`（仅灰机 `192-0-2-143`，fleet 未开）
 
 **灰机验证**（PlanRun #209，Plan 7 / device 19 / host 8.143）：
 - 10 条 DLE：`LOCAL → UPLOAD_PENDING（upload_task 01:03:43）→ REMOTE → ARCHIVED(1)/PRUNED(8)/REMOTE(1)`

@@ -41,8 +41,8 @@ generate_unique_host_id http://control-plane "{ip_addr}"
 
 def test_generator_reuses_existing_host_id_for_same_ip():
     result = _run_generator(
-        '[{"id":"legacy-host-id","ip":"172.21.9.6"}]',
-        "172.21.9.6",
+        '[{"id":"legacy-host-id","ip":"198.51.100.6"}]',
+        "198.51.100.6",
     )
     assert result == "legacy-host-id"
 
@@ -50,14 +50,14 @@ def test_generator_reuses_existing_host_id_for_same_ip():
 def test_generator_keeps_ip_id_when_response_is_not_a_host_list():
     result = _run_generator(
         '{"detail":"Not authenticated"}',
-        "172.21.9.6",
+        "198.51.100.6",
     )
-    assert result == "172-21-9-6"
+    assert result == "198-51-100-6"
 
 
 def test_generator_suffixes_id_owned_by_different_ip():
     result = _run_generator(
-        '[{"id":"172-21-9-6","ip":"172.21.9.99"}]',
-        "172.21.9.6",
+        '[{"id":"198-51-100-6","ip":"198.51.100.99"}]',
+        "198.51.100.6",
     )
-    assert re.fullmatch(r"172-21-9-6-[0-9a-f]{4}", result)
+    assert re.fullmatch(r"198-51-100-6-[0-9a-f]{4}", result)

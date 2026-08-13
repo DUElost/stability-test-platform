@@ -65,7 +65,7 @@ def _is_auto_register_sentinel(host_id: str) -> bool:
 
 
 def _allocate_host_id(ip: Optional[str], db: Session) -> str:
-    """为自动注册主机生成可读 Host ID（IPv4 → 点转横杠，如 172-21-9-6）。"""
+    """为自动注册主机生成可读 Host ID（IPv4 → 点转横杠，如 198-51-100-6）。"""
     return allocate_host_id(
         ip,
         exists=lambda candidate: db.get(Host, candidate) is not None,

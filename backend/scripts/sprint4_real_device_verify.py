@@ -1,12 +1,12 @@
 """Sprint 4 真机验收：10.36 三设备 PlanRun + dedup 管道。
 
 基于 seed_and_smoke.py，扩展为：
-  - 指定 host（默认 auto-fdaf1d55e319 / 172.21.10.36）下全部 ONLINE 设备扇出
+  - 指定 host（--host-id / STP_SMOKE_HOST_ID）下全部 ONLINE 设备扇出
   - 主链 smoke → watcher-summary → dedup scan/merge 状态轮询
 
 示例：
     set STP_ADMIN_PASSWORD=<password>
-    set STP_SMOKE_ORIGIN=http://172.21.10.25:5173
+    set STP_SMOKE_ORIGIN=http://203.0.113.25:5173
     python backend/scripts/sprint4_real_device_verify.py
     python backend/scripts/sprint4_real_device_verify.py --no-hot-update --patrol-interval 30
     python backend/scripts/sprint4_real_device_verify.py --skip-run --plan-run-id 49
@@ -45,9 +45,8 @@ from seed_and_smoke import (  # noqa: E402
     warn,
 )
 
-DEFAULT_HOST_ID = "auto-fdaf1d55e319"
-DEFAULT_HOST_IP = "172.21.10.36"
-PROD_BACKEND = "http://172.21.10.25:8000"
+DEFAULT_HOST_ID = os.getenv("STP_SMOKE_HOST_ID", "")
+PROD_BACKEND = ""
 
 
 def resolve_host_devices(
@@ -205,7 +204,7 @@ def main() -> None:
     env_file = load_repo_dotenv()
 
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--backend", default=os.getenv("STP_VERIFY_BACKEND", PROD_BACKEND))
+    p.add_argument("--backend", default=os.getenv("STP_VERIFY_BACKEND") or PROD_BACKEND)
     p.add_argument("--username", default=os.getenv("STP_ADMIN_USER", "admin"))
     p.add_argument("--password", default=os.getenv("STP_ADMIN_PASSWORD"))
     p.add_argument("--origin", default=default_smoke_origin())
@@ -229,6 +228,10 @@ def main() -> None:
             "需要 STP_ADMIN_PASSWORD 或 --password。"
             f"（checked {env_file}）"
         )
+    if not args.backend:
+        die("需要 STP_VERIFY_BACKEND 或 --backend（脚本不再内置默认地址）")
+    if not args.host_id:
+        die("需要 STP_SMOKE_HOST_ID 或 --host-id")
 
     client = APIClient(args.backend, origin=args.origin)
     plan_run_id: Optional[int] = args.plan_run_id
