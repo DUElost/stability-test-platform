@@ -177,7 +177,7 @@ export function ExpandableDeviceTable({
   }, [devices, statusFilter, hostFilter, modelFilter, versionFilter, debouncedSearch]);
 
   // Reset to page 1 when filter or search changes
-  const pageResetKey = `${statusFilter}|${hostFilter}|${modelFilter}|${versionFilter}|${debouncedSearch}`;
+  const pageResetKey = JSON.stringify([statusFilter, hostFilter, modelFilter, versionFilter, debouncedSearch]);
   const [prevPageResetKey, setPrevPageResetKey] = useState(pageResetKey);
   if (prevPageResetKey !== pageResetKey) {
     setPrevPageResetKey(pageResetKey);

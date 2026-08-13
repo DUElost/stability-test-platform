@@ -471,7 +471,7 @@ export default function PlanExecutePage() {
     setDeviceTotal(filteredDevices.length);
   }, [filteredDevices.length, setDeviceTotal]);
 
-  const devicePageResetKey = [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly].join('|');
+  const devicePageResetKey = JSON.stringify([deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly]);
   const [prevDevicePageResetKey, setPrevDevicePageResetKey] = useState(devicePageResetKey);
   if (prevDevicePageResetKey !== devicePageResetKey) {
     setPrevDevicePageResetKey(devicePageResetKey);
