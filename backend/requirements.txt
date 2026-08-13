@@ -5,41 +5,41 @@
 #
 # 版本仍是区间约束。真正的可复现构建靠 requirements.lock(见该文件抬头)。
 
-fastapi>=0.104.0,<1.0
-uvicorn[standard]>=0.24.0,<1.0
-sqlalchemy[asyncio]>=2.0.0,<3.0
-pydantic>=2.0.0,<3.0
-python-multipart>=0.0.6
-python-dotenv>=1.0.0
-requests>=2.31.0,<3.0
-aiohttp>=3.9.0,<4.0
-paramiko>=3.4.0,<4.0
-asyncssh>=2.14.0,<3.0
-psutil>=5.9.0,<6.0
-prometheus-client>=0.19.0,<1.0
-PyJWT>=2.10.0,<3.0
+fastapi>=0.141.1,<1.0
+uvicorn[standard]>=0.52.1,<1.0
+sqlalchemy[asyncio]>=2.0.51,<3.0
+pydantic>=2.13.4,<3.0
+python-multipart>=0.0.32
+python-dotenv>=1.2.2
+requests>=2.34.2,<3.0
+aiohttp>=3.14.3,<4.0
+paramiko>=5.0.0,<6.0
+asyncssh>=2.24.0,<3.0
+psutil>=7.2.2,<8.0
+prometheus-client>=0.26.0,<1.0
+PyJWT>=2.13.0,<3.0
 # 与 pyasn1-modules(如 google-auth 依赖)兼容，避免解析到过低版本 0.4.8
-pyasn1>=0.6.1,<0.7
+pyasn1>=0.6.4,<0.7
 passlib>=1.7.4,<2.0
-bcrypt>=4.0.0,<5.0
-croniter>=2.0.0,<3.0
+bcrypt>=5.0.0,<6.0
+croniter>=6.2.4,<7.0
 # psycopg3 (psycopg[binary]) 有预编译 wheel，无需编译
-psycopg[binary]>=3.1.0
+psycopg[binary]>=3.3.4
 # asyncpg for async PostgreSQL
-asyncpg>=0.29.0,<1.0
+asyncpg>=0.31.0,<1.0
 # sqlite async driver for local quick tests
-aiosqlite>=0.20.0,<1.0
+aiosqlite>=0.22.1,<1.0
 # Redis async client
-redis[asyncio]>=5.0.0,<6.0
+redis[asyncio]>=8.1.0,<9.0
 # Alembic for DB migrations
-alembic>=1.13.0,<2.0
+alembic>=1.19.1,<2.0
 # jsonschema for pipeline_def validation
-jsonschema>=4.20.0,<5.0
+jsonschema>=4.26.0,<5.0
 # ADR-0018: Infrastructure framework adoption
-apscheduler>=4.0.0a5,<5.0
-saq[redis]>=0.12.0,<1.0
-python-socketio>=5.11.0,<6.0
+apscheduler>=4.0.0a6,<5.0
+saq[redis]>=0.26.4,<1.0
+python-socketio>=5.16.4,<6.0
 # backend/scripts/ 下的冒烟与审计脚本使用(随镜像分发)
-httpx>=0.25.0,<1.0
+httpx>=0.28.1,<1.0
 # dedup 汇总 xls 解析
-xlrd>=2.0.1,<3.0
+xlrd>=2.0.2,<3.0
