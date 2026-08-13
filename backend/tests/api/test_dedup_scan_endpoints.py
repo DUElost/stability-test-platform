@@ -212,16 +212,32 @@ class TestMergeEndpoint:
     ):
         """ADR-0028 D2: FAILED 立即 409，不先做 scan artifact / tool 预检。"""
         from backend.models.enums import PlanRunStatus
+        from backend.models.plan_run_artifact import PlanRunArtifact
+        from unittest.mock import MagicMock, patch
 
+        db_session.add(PlanRunArtifact(
+            plan_run_id=sample_plan_run.id,
+            host_id="host-1",
+            storage_uri="/tmp/fake_scan.xls",
+            artifact_type="scan_result_xls",
+            size_bytes=100,
+        ))
         sample_plan_run.status = PlanRunStatus.FAILED.value
         db_session.commit()
-        resp = client.post(
-            f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/merge",
-            json={},
-            headers=auth_headers,
-        )
+
+        resolve_tool = MagicMock()
+        merge_sync = MagicMock()
+        with patch("backend.services.dedup_scan.resolve_scan_tool", resolve_tool), \
+             patch("backend.services.dedup_scan.run_merge_sync", merge_sync):
+            resp = client.post(
+                f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/merge",
+                json={},
+                headers=auth_headers,
+            )
         assert resp.status_code == 409
         assert "FAILED" in resp.json()["detail"]
+        resolve_tool.assert_not_called()
+        merge_sync.assert_not_called()
 
     def test_merge_env_unset_returns_503(self, client, auth_headers, monkeypatch, sample_plan_run, db_session):
         from backend.models.plan_run_artifact import PlanRunArtifact
