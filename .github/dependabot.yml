@@ -2,6 +2,9 @@ version: 2
 updates:
   - package-ecosystem: pip
     directory: "/backend"
+    # increase: 只抬区间下限、不动上限 —— redis 维持 <6.0，避免与 saq[redis]
+    # (<8) 冲突；Dependabot 对 pip 的默认策略是 widen，会把 <6.0 扩成 <9.0。
+    versioning-strategy: increase
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
