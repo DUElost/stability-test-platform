@@ -48,7 +48,7 @@ def _patch_file_server_deps(monkeypatch, tmp_path):
         "_mount_details",
         lambda _path: {"mounted": True, "source": "/dev/sda1", "filesystem": "ext4"},
     )
-    monkeypatch.setattr(monitor, "_export_targets", lambda _path: ["192.0.2.0/23"])
+    monkeypatch.setattr(monitor, "_export_targets", lambda _path: ["192.0.2.0/24", "198.51.100.0/24"])
     monkeypatch.setattr(monitor, "_PrometheusClient", _FakePrometheus)
 
 

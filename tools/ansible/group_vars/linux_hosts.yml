@@ -7,7 +7,9 @@ agent_status_require_active: true
 
 # Agent 回连控制平面 Nginx 入口（:80），不直连 backend loopback :8000。
 # UI/CLI 触发安装时可用 -e agent_api_url=... 临时覆盖。
-agent_api_url: "http://192.0.2.202"
+# 本文件不再内置任何地址默认值：部署/更新必须通过 -e agent_api_url 或
+# vault 提供真实控制面地址，否则 install_agent.sh 会因 API_URL 为空而失败。
+agent_api_url: ""
 agent_install_dir: "/opt/stability-test-agent"
 agent_service_name: "stability-test-agent"
 agent_remote_tmp_dir: "/tmp/stability-test-agent-ansible"

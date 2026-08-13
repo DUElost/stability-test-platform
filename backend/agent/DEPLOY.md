@@ -115,7 +115,7 @@ sudo nano /opt/stability-test-agent/.env
 # 服务器地址（必填）
 # - 远程 Linux 主机：使用 Linux 控制平面的固定域名或固定 IP
 # - WSL 环境（同机开发联调）：使用 127.0.0.1（安装脚本自动检测并设置）
-API_URL=http://203.0.113.5:8000
+API_URL=http://<CONTROL_PLANE_IP>:8000
 
 # 主机 ID（推荐 IPv4 点转横杠，须与后端 hosts.id 一致）
 HOST_ID=198-51-100-6
@@ -417,7 +417,7 @@ sudo userdel stability-test
 
 HOSTS=("192.168.1.101" "192.168.1.102" "192.168.1.103")
 AGENT_SRC="backend/agent"
-API_URL="http://203.0.113.5:8000"
+API_URL="http://<CONTROL_PLANE_IP>:8000"
 
 for HOST in "${HOSTS[@]}"; do
     echo "部署到 $HOST..."

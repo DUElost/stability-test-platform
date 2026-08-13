@@ -8,7 +8,9 @@ from pathlib import Path
 
 import httpx
 
-BASE = os.getenv("STP_VERIFY_BACKEND", "http://203.0.113.25:8000")
+BASE = os.getenv("STP_VERIFY_BACKEND", "")
+if not BASE:
+    raise SystemExit("STP_VERIFY_BACKEND required (no built-in default address)")
 ORIGIN = os.getenv("STP_SMOKE_ORIGIN", "http://localhost:5173")
 SAMPLE_XLS = Path(
     r"Y:\sonic_tinno\jira\52"

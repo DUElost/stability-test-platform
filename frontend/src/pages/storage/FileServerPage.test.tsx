@@ -57,7 +57,7 @@ const overview: FileServerOverview = {
   nfs: {
     service_ready: true,
     exported: true,
-    export_targets: ['192.0.2.0/23'],
+    export_targets: ['192.0.2.0/24', '198.51.100.0/24'],
     server_threads: 16,
     requests_per_second: 1.5,
     rpc_errors_per_second: 0,
@@ -107,7 +107,7 @@ describe('FileServerPage', () => {
     expect(await screen.findByText('916 GiB')).toBeInTheDocument();
     expect(screen.getByText('1/1')).toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
-    expect(screen.getByText('192.0.2.0/23')).toBeInTheDocument();
+    expect(screen.getByText('192.0.2.0/24, 198.51.100.0/24')).toBeInTheDocument();
     expect(screen.getByText('已挂载')).toBeInTheDocument();
   });
 });
