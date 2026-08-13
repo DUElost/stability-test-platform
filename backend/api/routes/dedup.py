@@ -454,6 +454,16 @@ async def trigger_merge(
     _user: User = Depends(get_current_active_user),
 ):
     """手动触发集中合并（-merge_files 各 agent _org.xls）。"""
+    from backend.models.enums import PlanRunStatus
+    from backend.models.plan_run import PlanRun
+
+    run = db.get(PlanRun, run_id)
+    if run is not None and run.status == PlanRunStatus.FAILED.value:
+        raise HTTPException(
+            status_code=409,
+            detail="PlanRun FAILED：按 ADR-0028 D2 不执行 merge/extract",
+        )
+
     from backend.models.plan_run_artifact import PlanRunArtifact
     from sqlalchemy import select
 
@@ -475,20 +485,6 @@ async def trigger_merge(
     import asyncio
     result = await asyncio.to_thread(run_merge_sync, run_id)
     if not result:
-        from backend.core.database import SessionLocal
-        from backend.models.enums import PlanRunStatus
-        from backend.models.plan_run import PlanRun
-
-        db = SessionLocal()
-        try:
-            run = db.get(PlanRun, run_id)
-        finally:
-            db.close()
-        if run is not None and run.status == PlanRunStatus.FAILED.value:
-            raise HTTPException(
-                status_code=409,
-                detail="PlanRun FAILED：按 ADR-0028 D2 不执行 merge/extract",
-            )
         raise HTTPException(status_code=500, detail="merge failed (no _org.xls?)")
     return ok({"status": "ok", "plan_run_id": run_id})
 

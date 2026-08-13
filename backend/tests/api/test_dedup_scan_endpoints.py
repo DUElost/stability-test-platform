@@ -207,6 +207,22 @@ class TestMergeEndpoint:
         assert resp.status_code == 409
         assert "scan first" in resp.json()["detail"].lower()
 
+    def test_failed_plan_run_returns_409_before_any_precheck(
+        self, client, auth_headers, db_session, sample_plan_run,
+    ):
+        """ADR-0028 D2: FAILED 立即 409，不先做 scan artifact / tool 预检。"""
+        from backend.models.enums import PlanRunStatus
+
+        sample_plan_run.status = PlanRunStatus.FAILED.value
+        db_session.commit()
+        resp = client.post(
+            f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/merge",
+            json={},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 409
+        assert "FAILED" in resp.json()["detail"]
+
     def test_merge_env_unset_returns_503(self, client, auth_headers, monkeypatch, sample_plan_run, db_session):
         from backend.models.plan_run_artifact import PlanRunArtifact
 
