@@ -30,6 +30,8 @@ jobs:
   verify-and-cleanup:
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    outputs:
+      ci_conclusion: ${{ steps.wait.outputs.conclusion }}
     # actions: write —— gh workflow run / 读取运行状态；
     # contents: write —— 删除远端分支 ref；
     # pull-requests: read —— 列出已合并 PR 的 head 分支。
@@ -167,8 +169,12 @@ jobs:
               gh api graphql \
                 -f query='query($owner:String!,$repo:String!,$branch:String!){repository(owner:$owner,name:$repo){pullRequests(states:OPEN,headRefName:$branch,first:1){totalCount}}}' \
                 -F owner="${REPO%/*}" -F repo="${REPO#*/}" -F branch="$branch" \
-                --jq '.data.repository.pullRequests.totalCount'
+                --jq '.data.repository.pullRequests.totalCount' 2>/dev/null || echo ''
             )"
+            if [ -z "$open_count" ]; then
+              echo "skip branch with open-PR recheck failed: $branch"
+              skipped=$((skipped + 1)); continue
+            fi
             if [ "$open_count" != "0" ]; then
               echo "skip branch with open PR (re-checked): $branch"
               skipped=$((skipped + 1)); continue
@@ -186,7 +192,7 @@ jobs:
     # 夜间全量 CI 失败时开 issue（同 label 的 open issue 复用、只追加评论，
     # 避免每晚刷屏）。零外部依赖：GITHUB_TOKEN 直接开 issue，失败进入 GitHub
     # 通知流。恢复后由 notify-recovery 自动关闭。
-    if: failure()
+    if: always() && !cancelled() && needs.verify-and-cleanup.outputs.ci_conclusion != 'success'
     needs: [verify-and-cleanup]
     runs-on: ubuntu-latest
     permissions:
@@ -199,11 +205,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh label create "ci/backstop-failed" --color d73a4a \
+          gh label create "ci/backstop-failed" --repo "$REPO" --color d73a4a \
             --description "Main CI backstop failed (auto issue)" || true
           existing="$(
-            gh issue list --repo "$REPO" --label "ci/backstop-failed" \
-              --state open --limit 1 --json number --jq '.[0].number // ""'
+            gh api --paginate \
+              "repos/$REPO/issues?labels=ci%2Fbackstop-failed&state=open" \
+              --jq '.[].number' | head -n 1
           )"
           body="主 CI 兜底检查失败：${RUN_URL}
 
@@ -219,7 +226,7 @@ jobs:
 
   notify-recovery:
     # 全量 CI 恢复通过后自动关闭 failure issue（已与仓库所有者确认该行为）。
-    if: success()
+    if: always() && !cancelled() && needs.verify-and-cleanup.outputs.ci_conclusion == 'success'
     needs: [verify-and-cleanup]
     runs-on: ubuntu-latest
     permissions:
@@ -233,10 +240,19 @@ jobs:
         run: |
           set -euo pipefail
           numbers="$(
-            gh issue list --repo "$REPO" --label "ci/backstop-failed" \
-              --state open --limit 10 --json number --jq '.[].number'
+            gh api --paginate \
+              "repos/$REPO/issues?labels=ci%2Fbackstop-failed&state=open" \
+              --jq '.[].number'
           )"
+          failures=0
           for n in $numbers; do
-            gh issue close "$n" --repo "$REPO" \
-              --comment "主 CI 已恢复通过（${RUN_URL}），自动关闭。"
+            if ! gh issue close "$n" --repo "$REPO" \
+                 --comment "主 CI 已恢复通过（${RUN_URL}），自动关闭。"; then
+              echo "close failed: $n"
+              failures=$((failures + 1))
+            fi
           done
+          if [ "$failures" -gt 0 ]; then
+            echo "failed to close $failures issue(s)" >&2
+            exit 1
+          fi
