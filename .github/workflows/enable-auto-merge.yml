@@ -19,8 +19,10 @@ permissions:
 
 jobs:
   enable-auto-merge:
-    # 仅同仓库、非 draft PR：fork PR 的 GITHUB_TOKEN 只读，且不应获得自动合入能力。
-    if: github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    # 仅同仓库、非 draft PR：fork PR 的 GITHUB_TOKEN 只读，且不应获得自动合入
+    # 能力。frontend-major 的 Dependabot PR（react 19 / tailwind 4 / eslint 10
+    # 等迁移）不挂 auto-merge，交由人工评审后再合入。
+    if: github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name && !startsWith(github.event.pull_request.head.ref, 'dependabot/npm_and_yarn/frontend/frontend-major-')
     runs-on: ubuntu-latest
     # gh pr merge --auto --merge 需要 PR 与 base 分支的写权限，job 内按需授予。
     permissions:
