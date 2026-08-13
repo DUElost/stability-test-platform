@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { X, UserPlus, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { User } from '@/utils/api';
@@ -26,7 +26,12 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
 
   const isEditMode = !!editUser;
 
-  useEffect(() => {
+  const [prevModal, setPrevModal] = useState<{ open: boolean; editing: typeof editUser }>({
+    open: isOpen,
+    editing: editUser,
+  });
+  if (prevModal.open !== isOpen || prevModal.editing !== editUser) {
+    setPrevModal({ open: isOpen, editing: editUser });
     if (isOpen) {
       if (editUser) {
         setFormData({
@@ -40,7 +45,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
       }
       setErrors({});
     }
-  }, [isOpen, editUser]);
+  }
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};

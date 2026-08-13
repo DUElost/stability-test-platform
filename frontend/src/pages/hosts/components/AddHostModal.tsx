@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { X, Server, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { STATUS_TEXT_COLORS } from '@/design-system/colors';
@@ -32,7 +32,12 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  useEffect(() => {
+  const [prevModal, setPrevModal] = useState<{ open: boolean; editing: typeof editingHost }>({
+    open: isOpen,
+    editing: editingHost,
+  });
+  if (prevModal.open !== isOpen || prevModal.editing !== editingHost) {
+    setPrevModal({ open: isOpen, editing: editingHost });
     if (isOpen) {
       if (editingHost) {
         setFormData({
@@ -47,7 +52,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
       }
       setErrors({});
     }
-  }, [isOpen, editingHost]);
+  }
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};

@@ -37,9 +37,8 @@ export default tseslint.config(
 
       // react-hooks v7 的编译器级规则一次性暴露 64+ 处存量（set-state-in-effect /
       // refs / purity 等），与本 majors 迁移解耦：先显式关闭并另开 issue 分批修复，
-      // 避免把依赖升级 PR 膨胀成行为改造。第一批（#260）：除 set-state-in-effect
-      // 外全部恢复；set-state-in-effect（36 处）仍 off，待表单重置模式统一后开启。
-      'react-hooks/set-state-in-effect': 'off',
+      // 避免把依赖升级 PR 膨胀成行为改造。第一批已恢复 refs/purity/immutability/
+      // preserve-manual-memoization；本批恢复 set-state-in-effect。
       // incompatible-library：@tanstack/react-virtual 返回不可 memoize 的函数，
       // 编译器无法优化（非代码缺陷），保持 off（#260 记录）。
       'react-hooks/incompatible-library': 'off',

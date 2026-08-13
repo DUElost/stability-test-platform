@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api, toApiError, NotificationChannel, AlertRule } from '@/utils/api';
@@ -59,12 +59,10 @@ export default function NotificationsPage() {
   });
   const hasLogs = (logsCountQ.data ?? 0) > 0;
 
-  useEffect(() => {
-    if (!tabAutoDetected && !searchParams.get('tab') && hasLogs) {
-      setTab('logs');
-      setTabAutoDetected(true);
-    }
-  }, [hasLogs, tabAutoDetected, searchParams]);
+  if (!tabAutoDetected && !searchParams.get('tab') && hasLogs) {
+    setTab('logs');
+    setTabAutoDetected(true);
+  }
 
   // Channel form
   const [showChannelForm, setShowChannelForm] = useState(false);

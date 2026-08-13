@@ -66,6 +66,7 @@ export default function SchedulesPage() {
   }, [loadSchedules, loadPlans, toast]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 拉取 effect 的同步 loading 置位
     loadAll();
   }, [loadAll]);
 

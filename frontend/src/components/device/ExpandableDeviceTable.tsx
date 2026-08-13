@@ -130,17 +130,21 @@ export function ExpandableDeviceTable({
     [devicesInHostScope],
   );
 
-  useEffect(() => {
+  const [prevModelOptions, setPrevModelOptions] = useState(modelOptions);
+  if (prevModelOptions !== modelOptions) {
+    setPrevModelOptions(modelOptions);
     if (modelFilter !== 'all' && !modelOptions.includes(modelFilter)) {
       setModelFilter('all');
     }
-  }, [modelFilter, modelOptions]);
+  }
 
-  useEffect(() => {
+  const [prevVersionOptions, setPrevVersionOptions] = useState(versionOptions);
+  if (prevVersionOptions !== versionOptions) {
+    setPrevVersionOptions(versionOptions);
     if (versionFilter !== 'all' && !versionOptions.includes(versionFilter)) {
       setVersionFilter('all');
     }
-  }, [versionFilter, versionOptions]);
+  }
 
   const toggleRow = (id: number) => {
     const newExpanded = new Set(expandedRows);
@@ -173,9 +177,12 @@ export function ExpandableDeviceTable({
   }, [devices, statusFilter, hostFilter, modelFilter, versionFilter, debouncedSearch]);
 
   // Reset to page 1 when filter or search changes
-  useEffect(() => {
+  const pageResetKey = JSON.stringify([statusFilter, hostFilter, modelFilter, versionFilter, debouncedSearch]);
+  const [prevPageResetKey, setPrevPageResetKey] = useState(pageResetKey);
+  if (prevPageResetKey !== pageResetKey) {
+    setPrevPageResetKey(pageResetKey);
     setCurrentPage(1);
-  }, [statusFilter, hostFilter, modelFilter, versionFilter, debouncedSearch]);
+  }
 
   const totalPages = Math.ceil(filteredDevices.length / pageSize);
   const paginatedDevices = filteredDevices.slice(

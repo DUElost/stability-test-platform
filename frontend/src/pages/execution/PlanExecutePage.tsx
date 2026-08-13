@@ -306,9 +306,12 @@ export default function PlanExecutePage() {
     [selectedDeviceIds],
   );
 
-  useEffect(() => {
+  const previewResetKey = `${selectedPlanId}|${selectedDeviceIdsKey}`;
+  const [prevPreviewResetKey, setPrevPreviewResetKey] = useState(previewResetKey);
+  if (prevPreviewResetKey !== previewResetKey) {
+    setPrevPreviewResetKey(previewResetKey);
     setPreview(null);
-  }, [selectedPlanId, selectedDeviceIdsKey]);
+  }
 
   const { data: duplicateMatch = null } = useQuery({
     queryKey: [
@@ -468,13 +471,17 @@ export default function PlanExecutePage() {
     setDeviceTotal(filteredDevices.length);
   }, [filteredDevices.length, setDeviceTotal]);
 
-  useEffect(() => {
+  const devicePageResetKey = JSON.stringify([deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly]);
+  const [prevDevicePageResetKey, setPrevDevicePageResetKey] = useState(devicePageResetKey);
+  if (prevDevicePageResetKey !== devicePageResetKey) {
+    setPrevDevicePageResetKey(devicePageResetKey);
     goToDevicePage(1);
-  }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly, goToDevicePage]);
+  }
 
   useEffect(() => { lastClickedIndexRef.current = null; }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 设备集剪枝 + 用户提示，需在 effect 中做
     setSelectedDeviceIds(prev => {
       const removedIds = Array.from(prev).filter(id => !schedulableDeviceIds.has(id));
       if (removedIds.length === 0) return prev;
@@ -514,6 +521,7 @@ export default function PlanExecutePage() {
     // 复跑预填（?devices=1,2,3）：URL 优先
     const raw = prefillDevices;
     if (raw != null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 复跑预填只消费一次，消费后置 null
       setPrefillDevices(null);
       draftConsumedRef.current = true;
       const wantedIds = [...new Set(
@@ -578,6 +586,7 @@ export default function PlanExecutePage() {
   // 步骤 ≥2 时若已无选中样机，退回样机选择
   useEffect(() => {
     if (phase === 'dispatch' && selectedDevices.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 状态联动 + 用户提示，需在 effect 中做
       setPhase('select');
       toast.info('已无选中样机，已返回样机选择');
     }

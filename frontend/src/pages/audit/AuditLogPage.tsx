@@ -58,7 +58,10 @@ export default function AuditLogPage() {
     }
   }, [page, filters]);
 
-  useEffect(() => { loadLogs(); }, [loadLogs]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 拉取 effect 的同步 loading/分页置位
+    loadLogs();
+  }, [loadLogs]);
 
   return (
     <PageContainer width="list">

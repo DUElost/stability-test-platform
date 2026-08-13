@@ -50,6 +50,7 @@ export function useRealtimeDashboard(wsUrl: string) {
 
   useEffect(() => {
     if (!lastMessage) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 外部事件同步渲染状态
     setLastUpdateTime(new Date());
 
     switch (lastMessage.type) {

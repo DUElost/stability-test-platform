@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Smartphone } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
@@ -116,13 +116,15 @@ export default function DevicesPage() {
     ].filter(Boolean).join(' · ');
   }, [selectedDevices]);
 
-  useEffect(() => {
+  const [prevFormattedDevices, setPrevFormattedDevices] = useState(formattedDevices);
+  if (prevFormattedDevices !== formattedDevices) {
+    setPrevFormattedDevices(formattedDevices);
     const availableIds = new Set(formattedDevices.map((device) => device.id));
     setSelectedDeviceIds((previous) => {
       const next = new Set(Array.from(previous).filter((id) => availableIds.has(id)));
       return next.size === previous.size ? previous : next;
     });
-  }, [formattedDevices]);
+  }
 
   const handleFilteredDevicesChange = useCallback((nextDevices: DeviceTableData[]) => {
     setFilteredDevices(nextDevices);

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useNavigate, useBeforeUnload } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/useToast';
@@ -74,7 +74,9 @@ export function usePlanEditForm(planId: number | null) {
     staleTime: 60_000,
   });
 
-  useEffect(() => {
+  const [prevPlanState, setPrevPlanState] = useState<{ plan: typeof plan; isNew: boolean } | null>(null);
+  if (prevPlanState?.plan !== plan || prevPlanState?.isNew !== isNew) {
+    setPrevPlanState({ plan, isNew });
     if (plan && !isNew) {
       setName(plan.name);
       setDescription(plan.description || '');
@@ -93,9 +95,6 @@ export function usePlanEditForm(planId: number | null) {
         }),
       );
     }
-  }, [plan, isNew]);
-
-  useEffect(() => {
     if (isNew) {
       setOrigSnapshot(
         snapshot({
@@ -107,7 +106,7 @@ export function usePlanEditForm(planId: number | null) {
         }),
       );
     }
-  }, [isNew]);
+  }
 
   const currentSnapshot = useMemo(
     () => snapshot({ name, description, failureThreshold, nextPlanId, lifecycle }),

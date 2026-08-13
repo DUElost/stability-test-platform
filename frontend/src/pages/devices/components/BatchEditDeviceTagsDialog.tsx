@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Tags } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -32,12 +32,15 @@ export function BatchEditDeviceTagsDialog({
   const [tagInput, setTagInput] = useState('');
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    if (!isOpen) return;
-    setOperation('add');
-    setTagInput('');
-    setError('');
-  }, [isOpen]);
+  const [prevOpen, setPrevOpen] = useState(isOpen);
+  if (prevOpen !== isOpen) {
+    setPrevOpen(isOpen);
+    if (isOpen) {
+      setOperation('add');
+      setTagInput('');
+      setError('');
+    }
+  }
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();

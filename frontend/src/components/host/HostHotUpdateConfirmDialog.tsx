@@ -37,6 +37,8 @@ interface Props {
   retryAfterSeconds?: number;
 }
 
+const RETRY_INIT = Symbol('retry-init');
+
 function fmtTime(ts?: string | null): string {
   return formatTimeLabel(ts ?? null);
 }
@@ -89,14 +91,21 @@ export default function HostHotUpdateConfirmDialog({
 }: Props) {
   const [abortChecked, setAbortChecked] = useState(false);
   const [countdown, setCountdown] = useState(0);
+  const [prevHostId, setPrevHostId] = useState(hostId);
+  if (prevHostId !== hostId) {
+    setPrevHostId(hostId);
+    setAbortChecked(false);
+  }
+  const retry = retryAfterSeconds ?? null;
+  const [prevRetryAfter, setPrevRetryAfter] = useState<number | null | symbol>(RETRY_INIT);
+  if (prevRetryAfter !== retry) {
+    setPrevRetryAfter(retry);
+    setCountdown(retry && retry > 0 ? retry : 0);
+  }
 
   // Live countdown for retry_after_seconds
   useEffect(() => {
-    if (!retryAfterSeconds || retryAfterSeconds <= 0) {
-      setCountdown(0);
-      return;
-    }
-    setCountdown(retryAfterSeconds);
+    if (!retryAfterSeconds || retryAfterSeconds <= 0) return;
     const t = setInterval(() => {
       setCountdown((n) => {
         const next = n - 1;
@@ -118,11 +127,6 @@ export default function HostHotUpdateConfirmDialog({
     staleTime: 0,
     refetchOnMount: 'always',
   });
-
-  // Reset the abort opt-in every time the dialog opens for a different host.
-  useEffect(() => {
-    setAbortChecked(false);
-  }, [hostId]);
 
   const open = hostId != null;
   const detail = detailQ.data;
