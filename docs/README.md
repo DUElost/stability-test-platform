@@ -16,6 +16,7 @@
 | 查测试怎么跑 / 生产机禁区 | [`development/testing.md`](./development/testing.md) |
 | 理解系统架构 | [`design/00-system-overview.md`](./design/00-system-overview.md) |
 | 查存储角色 / CIFS / NFS / 文件服务器页别称 | [`design/2026-storage-roles-and-aliases.md`](./design/2026-storage-roles-and-aliases.md) |
+| 查设备日志上送时序（ADR-0025） | [`design/2026-adr-0025-log-flow-sequence.md`](./design/2026-adr-0025-log-flow-sequence.md) |
 | 理解 Plan 执行主链路 | [`design/01-execution-pipeline.md`](./design/01-execution-pipeline.md) |
 | 查执行协议硬契约 | [`design/07-execution-protocol.md`](./design/07-execution-protocol.md) |
 | 查后端 / 前端 / Agent | [`design/02`](./design/02-backend.md) · [`03`](./design/03-frontend.md) · [`04`](./design/04-agent.md) |
