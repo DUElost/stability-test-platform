@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -149,9 +149,11 @@ export default function DispatchGateCard({
   // Re-sync whenever allHealthy flips (a recovered gate auto-collapses, a newly
   // failed gate auto-expands); within a health state the user's toggle sticks.
   const [expanded, setExpanded] = useState(!allHealthy);
-  useEffect(() => {
+  const [prevAllHealthy, setPrevAllHealthy] = useState(allHealthy);
+  if (prevAllHealthy !== allHealthy) {
+    setPrevAllHealthy(allHealthy);
     setExpanded(!allHealthy);
-  }, [allHealthy]);
+  }
 
   // Count total scripts
   const totalScriptCount = useMemo(

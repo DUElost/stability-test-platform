@@ -368,6 +368,7 @@ export function useSocketIO<T = unknown>(
 
     // Ensure socket is created
     _getDashSocket();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 订阅 effect 的初始状态同步
     setConnectionStatus(_dashStatus);
 
     return () => {

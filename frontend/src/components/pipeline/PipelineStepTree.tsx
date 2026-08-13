@@ -164,15 +164,18 @@ export function PipelineStepTree({
 }: PipelineStepTreeProps) {
   const [localSteps, setLocalSteps] = useState<RunStep[]>(initialSteps);
 
-  useEffect(() => {
+  const [prevInitialSteps, setPrevInitialSteps] = useState(initialSteps);
+  if (prevInitialSteps !== initialSteps) {
+    setPrevInitialSteps(initialSteps);
     setLocalSteps(initialSteps);
-  }, [initialSteps]);
+  }
 
-  useEffect(() => {
-    if (!stepUpdates || stepUpdates.length === 0) return;
+  const [prevStepUpdates, setPrevStepUpdates] = useState<typeof stepUpdates | null>(null);
+  if (prevStepUpdates !== stepUpdates) {
+    setPrevStepUpdates(stepUpdates);
     setLocalSteps((prev) => {
       const updated = [...prev];
-      for (const upd of stepUpdates) {
+      for (const upd of stepUpdates ?? []) {
         const idx = updated.findIndex((s) => s.id === upd.step_id);
         if (idx >= 0) {
           updated[idx] = {
@@ -187,13 +190,15 @@ export function PipelineStepTree({
       }
       return updated;
     });
-  }, [stepUpdates]);
+  }
 
   const phases = useMemo(() => groupByPhase(localSteps), [localSteps]);
 
   const [expandedPhases, setExpandedPhases] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
+  const [prevExpandSteps, setPrevExpandSteps] = useState<RunStep[] | null>(null);
+  if (prevExpandSteps !== localSteps) {
+    setPrevExpandSteps(localSteps);
     const newExpanded = new Set<string>();
     for (const phase of phases) {
       if (hasRunningStep(phase)) {
@@ -208,7 +213,7 @@ export function PipelineStepTree({
       else newExpanded.add(phases[0].name);
     }
     setExpandedPhases(newExpanded);
-  }, [localSteps, phases]);
+  }
 
   const [, setTick] = useState(0);
   const hasRunning = localSteps.some((s) => s.status === 'RUNNING');

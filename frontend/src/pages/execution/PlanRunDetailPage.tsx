@@ -132,6 +132,7 @@ export default function PlanRunDetailPage() {
     if (!finalArchiveReady) return;
     if (sessionStorage.getItem(finalArchivePromptedKey)) return;
     sessionStorage.setItem(finalArchivePromptedKey, '1');
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 一次性归档提示（sessionStorage 防重）
     setFinalArchiveOpen(true);
   }, [runQ.data, finalArchivePromptedKey, finalArchiveReady]);
 

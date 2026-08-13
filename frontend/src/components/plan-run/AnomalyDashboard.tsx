@@ -188,9 +188,11 @@ function PackageRankingDrawer({
   const [drawerPage, setDrawerPage] = useState(0);
   const DRAWER_PAGE_SIZE = 20;
 
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (prevOpen !== open) {
+    setPrevOpen(open);
     if (open) setDrawerPage(0);
-  }, [open]);
+  }
 
   useEffect(() => {
     if (!open) return;

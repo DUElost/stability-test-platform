@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/useToast';
 import { api, type ScriptEntry } from '@/utils/api';
@@ -23,16 +23,20 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
   const [description, setDescription] = useState('');
   const [parseError, setParseError] = useState('');
 
-  useEffect(() => {
-    if (!open || !script) return;
-    setVersion('');
-    setNfsPath('');
-    setContentSha256('');
-    setDefaultParamsText('');
-    setParamSchemaText('');
-    setDescription('');
-    setParseError('');
-  }, [script, open]);
+  const resetKey = `${open}|${script?.id ?? ''}`;
+  const [prevResetKey, setPrevResetKey] = useState(resetKey);
+  if (prevResetKey !== resetKey) {
+    setPrevResetKey(resetKey);
+    if (open && script) {
+      setVersion('');
+      setNfsPath('');
+      setContentSha256('');
+      setDefaultParamsText('');
+      setParamSchemaText('');
+      setDescription('');
+      setParseError('');
+    }
+  }
 
   if (!open || !script) return null;
 

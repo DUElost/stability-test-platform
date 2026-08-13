@@ -51,9 +51,17 @@ export default function JiraSubmitPanel() {
     return () => { cancelled = true; };
   }, [source]);
 
+  const artifactQueryKey = `${source}|${planRunId}`;
+  const [prevArtifactQueryKey, setPrevArtifactQueryKey] = useState(artifactQueryKey);
+  if (prevArtifactQueryKey !== artifactQueryKey) {
+    setPrevArtifactQueryKey(artifactQueryKey);
+    if (source !== 'plan_run' || planRunId === '') setArtifacts([]);
+  }
+
   useEffect(() => {
-    if (source !== 'plan_run' || planRunId === '') { setArtifacts([]); return; }
+    if (source !== 'plan_run' || planRunId === '') return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 拉取 effect 的同步 loading 置位
     setLoadingArtifacts(true);
     api.planRuns.getDedupStatus(planRunId).then(res => {
       if (cancelled) return;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { X, Smartphone, Loader2, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { FORM, MODAL } from '@/design-system';
@@ -20,12 +20,14 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(isOpen);
+  if (prevOpen !== isOpen) {
+    setPrevOpen(isOpen);
     if (isOpen) {
       setFormData({ serial: '', model: '', host_id: '', tags: '' });
       setErrors({});
     }
-  }, [isOpen]);
+  }
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};

@@ -52,6 +52,11 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   const [status, setStatus] = useState('RUNNING');
   const [issueCount, setIssueCount] = useState(0);
   const [termReady, setTermReady] = useState(false);
+  const [prevConsoleRunId, setPrevConsoleRunId] = useState(consoleRunId);
+  if (prevConsoleRunId !== consoleRunId) {
+    setPrevConsoleRunId(consoleRunId);
+    setTermReady(false);
+  }
 
   const tallyIssues = (lines: string[]) => {
     if (!enableIssueCount) return;
@@ -88,13 +93,9 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [consoleRunId, enableIssueCount]);
 
-  // consoleRunId 变化时重置 ready，等待 XTerminal 重新 open
-  useEffect(() => {
-    setTermReady(false);
-  }, [consoleRunId]);
-
   useEffect(() => {
     if (!termReady) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 启动异步回填流；同步重置属于流的初始化
     return replayFromStart();
   }, [termReady, replayFromStart]);
 

@@ -37,25 +37,23 @@ export const LogViewer: React.FC<{ wsUrl: string }> = ({ wsUrl }) => {
   const [levelFilter, setLevelFilter] = useState<string>('ALL');
   const [autoScroll, setAutoScroll] = useState(true);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const { lastMessage } = useWebSocket<LogEntry | ProgressPayload>(wsUrl);
-
-  useEffect(() => {
-    if (!lastMessage) return;
-
-    if (lastMessage.type === 'LOG') {
-      const payload = lastMessage.payload as LogEntry;
-      if (payload?.message) {
-        setLogs((prev) => [...prev.slice(-1000), payload]);
+  useWebSocket<LogEntry | ProgressPayload>(wsUrl, {
+    onMessage: (lastMessage) => {
+      if (lastMessage.type === 'LOG') {
+        const payload = lastMessage.payload as LogEntry;
+        if (payload?.message) {
+          setLogs((prev) => [...prev.slice(-1000), payload]);
+        }
       }
-    }
 
-    if (lastMessage.type === 'PROGRESS') {
-      const payload = lastMessage.payload as ProgressPayload;
-      if (typeof payload?.progress === 'number') {
-        setProgress(Math.max(0, Math.min(100, payload.progress)));
+      if (lastMessage.type === 'PROGRESS') {
+        const payload = lastMessage.payload as ProgressPayload;
+        if (typeof payload?.progress === 'number') {
+          setProgress(Math.max(0, Math.min(100, payload.progress)));
+        }
       }
-    }
-  }, [lastMessage]);
+    },
+  });
 
   useEffect(() => {
     if (autoScroll && bottomRef.current) {

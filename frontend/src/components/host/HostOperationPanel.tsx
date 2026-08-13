@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -73,25 +73,23 @@ export default function HostOperationPanel({
   /** 一旦拿到 consoleRunId 就挂载 LiveConsole，折叠仅 CSS 隐藏，避免再展开空白 */
   const [mountedConsoles, setMountedConsoles] = useState<Set<string>>(() => new Set());
 
-  useEffect(() => {
-    setMountedConsoles((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const op of ops) {
-        if (op.consoleRunId && !next.has(op.hostId)) {
-          next.add(op.hostId);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [ops]);
+  const nextMounted = new Set(mountedConsoles);
+  let mountedChanged = false;
+  for (const op of ops) {
+    if (op.consoleRunId && !nextMounted.has(op.hostId)) {
+      nextMounted.add(op.hostId);
+      mountedChanged = true;
+    }
+  }
+  if (mountedChanged) setMountedConsoles(nextMounted);
 
   // 新一批操作时恢复自动展开
   const opsKey = ops.map((o) => o.hostId).join(',');
-  useEffect(() => {
+  const [prevOpsKey, setPrevOpsKey] = useState(opsKey);
+  if (prevOpsKey !== opsKey) {
+    setPrevOpsKey(opsKey);
     setExpanded(null);
-  }, [opsKey]);
+  }
 
   const summary = useMemo(() => {
     let running = 0;

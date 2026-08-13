@@ -82,24 +82,20 @@ export function DeviceMonitorPanel({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<SortBy>('status');
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-
-  // WebSocket for real-time updates
-  const { lastMessage, connectionStatus } = useWebSocket(wsUrl || '', {
-    enabled: !!wsUrl && autoRefresh,
-    reconnectConfig: STABLE_RECONNECT_CONFIG,
-  });
-
-  // Update devices when initialDevices change
-  useEffect(() => {
+  const [prevInitialDevices, setPrevInitialDevices] = useState(initialDevices);
+  if (prevInitialDevices !== initialDevices) {
+    setPrevInitialDevices(initialDevices);
     setDevices(initialDevices.map(d => ({ ...d, lastUpdate: new Date() })));
     setLastUpdate(new Date());
-  }, [initialDevices]);
+  }
 
-  // Handle WebSocket messages
-  useEffect(() => {
-    if (lastMessage) {
+  // WebSocket for real-time updates
+  const { connectionStatus } = useWebSocket(wsUrl || '', {
+    enabled: !!wsUrl && autoRefresh,
+    reconnectConfig: STABLE_RECONNECT_CONFIG,
+    onMessage: (message) => {
       try {
-        const data = lastMessage as DeviceUpdateMessage;
+        const data = message as DeviceUpdateMessage;
         const payload = data.payload;
         if (data.type === 'DEVICE_UPDATE' && payload) {
           setDevices(prev => {
@@ -116,8 +112,8 @@ export function DeviceMonitorPanel({
       } catch {
         // Ignore invalid messages
       }
-    }
-  }, [lastMessage]);
+    },
+  });
 
   // Check for stale devices
   useEffect(() => {

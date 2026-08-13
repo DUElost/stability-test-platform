@@ -33,9 +33,11 @@ export function DeviceToolbar({
     return () => clearTimeout(timer);
   }, [localFilterText, onFilterTextChange]);
 
-  useEffect(() => {
+  const [prevFilterText, setPrevFilterText] = useState(filterText);
+  if (prevFilterText !== filterText) {
+    setPrevFilterText(filterText);
     setLocalFilterText(filterText);
-  }, [filterText]);
+  }
 
   const handleClearFilter = useCallback(() => {
     setLocalFilterText('');
