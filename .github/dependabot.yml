@@ -41,6 +41,11 @@ updates:
       # update-types 限定只作用于版本更新，安全更新不受影响。
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # jsdom 30 依赖 undici 7，需要 Node 22+（CI/本地为 Node 20）；锁在 26.x，
+      # 等 CI 升 Node 22 后再放开 major。
+      - dependency-name: "jsdom"
+        versions: [">=27.0"]
+        update-types: ["version-update:semver-major"]
     groups:
       # minor/patch 走自动合入；major（react 19 / tailwind 4 / eslint 10
       # 等迁移）单独成 PR，人工评审。

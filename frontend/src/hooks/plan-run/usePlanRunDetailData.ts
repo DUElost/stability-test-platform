@@ -40,7 +40,11 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     queryKey: planRunKeys.detail(id),
     queryFn: () => api.planRuns.get(id),
     enabled: !!id,
-    refetchInterval: (data) => planRunRefetchInterval(data, isPlanRunTerminal(data?.status)),
+    refetchInterval: (query) =>
+      planRunRefetchInterval(
+        query.state.data,
+        isPlanRunTerminal(query.state.data?.status),
+      ),
   });
 
   const isTerminal = isPlanRunTerminal(runQ.data?.status);

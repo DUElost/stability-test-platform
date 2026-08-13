@@ -273,7 +273,7 @@ export function useHostOperations(opts?: {
       try {
         await mapPool(initial, concurrency, async (item) => {
           updateOp(item.hostId, { status: 'running' });
-          let consoleRunId: string | null = null;
+          let consoleRunId: string | null;
           try {
             const res = await api.agentInstall.trigger(item.hostId);
             consoleRunId = res.console_run_id;

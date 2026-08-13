@@ -110,7 +110,7 @@ export default function WifiPage() {
     }
   }
 
-  const pending = createMutation.isLoading || updateMutation.isLoading;
+  const pending = createMutation.isPending || updateMutation.isPending;
 
   const handleDeletePool = async (pool: ResourcePoolLoad) => {
     const ok = await confirmDialog({
