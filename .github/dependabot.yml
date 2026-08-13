@@ -6,19 +6,25 @@ updates:
       interval: weekly
     open-pull-requests-limit: 10
     ignore:
-      # 这些包刻意封顶在旧大版本：saq[redis] 要求 redis<8，其余是生产代码
-      # 尚未适配的新大版本。Dependabot 的 pip widen 策略会扩过上限，必须
-      # 显式忽略，否则会复现 #242 的 ResolutionImpossible。
+      # 这些包在 requirements.txt 里刻意封顶（redis<6.0 另受 saq[redis]<8
+      # 约束）。ignore 下限与 manifest 上限对齐，防止 Dependabot 的 pip
+      # widen 策略扩过封顶（#242 的 ResolutionImpossible 即由此而来）；
+      # update-types 限定为 semver-major 版本更新，安全更新 PR 不受影响。
       - dependency-name: "redis"
-        versions: [">=8.0"]
+        versions: [">=6.0"]
+        update-types: ["version-update:semver-major"]
       - dependency-name: "paramiko"
-        versions: [">=5.0"]
+        versions: [">=4.0"]
+        update-types: ["version-update:semver-major"]
       - dependency-name: "psutil"
-        versions: [">=7.0"]
+        versions: [">=6.0"]
+        update-types: ["version-update:semver-major"]
       - dependency-name: "bcrypt"
         versions: [">=5.0"]
+        update-types: ["version-update:semver-major"]
       - dependency-name: "croniter"
         versions: [">=3.0"]
+        update-types: ["version-update:semver-major"]
     groups:
       python-deps:
         patterns:
