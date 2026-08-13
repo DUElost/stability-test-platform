@@ -2,12 +2,23 @@ version: 2
 updates:
   - package-ecosystem: pip
     directory: "/backend"
-    # increase: 只抬区间下限、不动上限 —— redis 维持 <6.0，避免与 saq[redis]
-    # (<8) 冲突；Dependabot 对 pip 的默认策略是 widen，会把 <6.0 扩成 <9.0。
-    versioning-strategy: increase
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    ignore:
+      # 这些包刻意封顶在旧大版本：saq[redis] 要求 redis<8，其余是生产代码
+      # 尚未适配的新大版本。Dependabot 的 pip widen 策略会扩过上限，必须
+      # 显式忽略，否则会复现 #242 的 ResolutionImpossible。
+      - dependency-name: "redis"
+        versions: [">=8.0"]
+      - dependency-name: "paramiko"
+        versions: [">=5.0"]
+      - dependency-name: "psutil"
+        versions: [">=7.0"]
+      - dependency-name: "bcrypt"
+        versions: [">=5.0"]
+      - dependency-name: "croniter"
+        versions: [">=3.0"]
     groups:
       python-deps:
         patterns:
