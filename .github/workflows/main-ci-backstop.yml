@@ -181,3 +181,62 @@ jobs:
             deleted=$((deleted + 1))
           done
           echo "cleanup done: deleted=$deleted skipped=$skipped"
+
+  notify-failure:
+    # 夜间全量 CI 失败时开 issue（同 label 的 open issue 复用、只追加评论，
+    # 避免每晚刷屏）。零外部依赖：GITHUB_TOKEN 直接开 issue，失败进入 GitHub
+    # 通知流。恢复后由 notify-recovery 自动关闭。
+    if: failure()
+    needs: [verify-and-cleanup]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Create or comment failure issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create "ci/backstop-failed" --color d73a4a \
+            --description "Main CI backstop failed (auto issue)" || true
+          existing="$(
+            gh issue list --repo "$REPO" --label "ci/backstop-failed" \
+              --state open --limit 1 --json number --jq '.[0].number // ""'
+          )"
+          body="主 CI 兜底检查失败：${RUN_URL}
+
+          main 全量 CI（backend-test / frontend-check / docker-build）未通过，
+          合并分支清理已跳过。修复后下一次全量通过会由本工作流自动关闭此 issue。"
+          if [ -z "$existing" ]; then
+            gh issue create --repo "$REPO" \
+              --title "Main CI backstop failed" \
+              --label "ci/backstop-failed" --body "$body"
+          else
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+          fi
+
+  notify-recovery:
+    # 全量 CI 恢复通过后自动关闭 failure issue（已与仓库所有者确认该行为）。
+    if: success()
+    needs: [verify-and-cleanup]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Close failure issue on recovery
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          numbers="$(
+            gh issue list --repo "$REPO" --label "ci/backstop-failed" \
+              --state open --limit 10 --json number --jq '.[].number'
+          )"
+          for n in $numbers; do
+            gh issue close "$n" --repo "$REPO" \
+              --comment "主 CI 已恢复通过（${RUN_URL}），自动关闭。"
+          done
