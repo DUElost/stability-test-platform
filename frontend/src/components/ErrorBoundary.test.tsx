@@ -64,7 +64,7 @@ describe('ErrorBoundary', () => {
       <ErrorBoundary>
         <ThrowChild
           error={new Error(
-            'Failed to fetch dynamically imported module: http://172.21.8.202/assets/PlanListPage-CiyN-NnY.js'
+            'Failed to fetch dynamically imported module: http://172.21.15.253/assets/PlanListPage-CiyN-NnY.js'
           )}
         />
       </ErrorBoundary>

@@ -39,7 +39,7 @@
 | PostgreSQL | 5432 | 唯一生产库 |
 | Redis | 6379 | SAQ 任务队列 |
 
-**网络**：控制面生产 `172.21.8.202`（不迁）。**中心存储（CIFS / NFS，同一台分享）** 过渡期与控制面同机（`//172.21.8.202/jxtinno/sonic_tinno`）；目标独立盘 `172.21.15.4` 或 `172.21.9.4`。角色/别称见 [`2026-storage-roles-and-aliases.md`](./2026-storage-roles-and-aliases.md)。
+**网络**：控制面生产 `172.21.15.253`（2026-08-13 整机由 `172.21.8.202` 迁入）。**中心存储（CIFS / NFS，同一台分享）** 过渡期与控制面同机（`//172.21.15.253/jxtinno/sonic_tinno`）；目标独立盘 `172.21.15.4` 或 `172.21.9.4`。角色/别称见 [`2026-storage-roles-and-aliases.md`](./2026-storage-roles-and-aliases.md)。
 
 ---
 
@@ -90,7 +90,7 @@ StepTrace / JobArtifact / JobLogSignal（运行时数据）
 |------|------|
 | Agent SSD | 运行日志 `logs/runs/{job_id}/` |
 | Agent HDD | AEE 事件目录（第一落点） |
-| 中心存储（CIFS / NFS） | 汇总 xls、按需事件、HDD 溢出；**不含**全量运行日志。挂载点 `STP_AEE_NFS_ROOT`；过渡 UNC 在 8.202，「15.4」为角色外号/目标 |
+| 中心存储（CIFS / NFS） | 汇总 xls、按需事件、HDD 溢出；**不含**全量运行日志。挂载点 `STP_AEE_NFS_ROOT`；过渡 UNC 在 15.253，「15.4」为角色外号/目标 |
 
 完整设计：[`2026-plan-c-storage-and-access.md`](./2026-plan-c-storage-and-access.md)。角色/别称：[`2026-storage-roles-and-aliases.md`](./2026-storage-roles-and-aliases.md)。
 

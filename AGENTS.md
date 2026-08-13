@@ -137,7 +137,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 
 | Var | Where | Purpose |
 |-----|-------|---------|
-| `STP_AEE_NFS_ROOT` | Backend + Agent | **中心存储（CIFS）** 挂载点主键（dedup/devices/jira）；过渡 UNC 在 8.202 |
+| `STP_AEE_NFS_ROOT` | Backend + Agent | **中心存储（CIFS）** 挂载点主键（dedup/devices/jira）；过渡 UNC 在控制面同机 15.253 |
 | `STP_AEE_LOCAL_ROOT` | Agent only | 本机 L1 AEE 根；**按机配置**，hot-update 不下发（#235） |
 | `STP_DEDUP_SCAN_PYTHON` | Backend + Agent | Python interpreter for scan tool — **值按角色不同**，见下 |
 | `STP_DEDUP_SCAN_SCRIPT` | Backend + Agent | `start_log_scan.py` path — **值按角色不同**，见下 |

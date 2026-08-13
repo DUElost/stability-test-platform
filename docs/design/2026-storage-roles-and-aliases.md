@@ -1,6 +1,6 @@
 # 存储与部署角色：统一语义（别称对照）
 
-- **状态**：Living（2026-08-09）
+- **状态**：Living（2026-08-13）
 - **目的**：角色、别称、env、IP 一一对应；冲突时以本文 + 代码为准
 - **关联**：ADR-0025、[方案 C 存储](./2026-plan-c-storage-and-access.md)、[#205](https://github.com/DUElost/stability-test-platform/issues/205)（健康页双目标，切盘前冻结）
 
@@ -14,7 +14,7 @@
 |---|--------|--------|
 | 1 | **设备** | Android 被测机 |
 | 2 | **Agent host** | 跑 Agent 的 Linux 机（约 20 台） |
-| 3 | **控制面** | FastAPI / Dashboard / SAQ，生产 **永远** `172.21.8.202` |
+| 3 | **控制面** | FastAPI / Dashboard / SAQ，生产现 `172.21.15.253`（2026-08-13 整机由 8.202 迁入） |
 | 4 | **中心存储（CIFS / NFS）** | 日志分享盘：`devices/` `dedup/` `jira/` `jobs/` |
 | 5 | **PG** | 业务库（元数据，不是日志文件） |
 | 6 | **Redis** | 仅 SAQ broker（+ 可选 SocketIO adapter） |
@@ -34,18 +34,19 @@
 
 ```text
 当前（过渡，流程调通）
-  控制面 8.202  ──同机──  中心存储（CIFS/NFS）//172.21.8.202/jxtinno/sonic_tinno
+  控制面 15.253 ──同机──  中心存储（CIFS/NFS）//172.21.15.253/jxtinno/sonic_tinno
   Agent ×20     ──mount──┘
 
 目标
-  控制面 8.202          （不迁）
+  控制面 15.253        （8.202 已退役）
   中心存储（CIFS/NFS）  //172.21.9.4/... 或 //172.21.15.4/...
   Agent ×20 + 控制面    ──mount 新 UNC──┘
 ```
 
 | IP / 外号 | 现在 | 切盘后 |
 |-----------|------|--------|
-| **8.202** | 控制面；CIFS **碰巧同机** | **只**控制面 |
+| **15.253** | 控制面；CIFS **碰巧同机** | **只**控制面 |
+| **8.202** | 已退役（2026-08-13 前为控制面） | 不再指任何角色 |
 | **15.4** | ADR / 方案 C 里中心存储的**角色外号 / 目标盘**（上一代已用过），**不是** STP 此刻挂载 | 候选 CIFS 机 |
 | **9.4** | 预计独立日志盘 | 候选 CIFS 机 |
 | Agent `9.x` | Agent host | 仍是 Agent；**不要**和「CIFS 迁 9.4」混称 |
@@ -60,7 +61,7 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 
 | 推荐名 | 类型 | 例子（当前过渡） | 谁用 |
 |--------|------|------------------|------|
-| **分享身份（UNC）** | 网络身份 | `//172.21.8.202/jxtinno/sonic_tinno` | fstab / `mount`；程序**不读** |
+| **分享身份（UNC）** | 网络身份 | `//172.21.15.253/jxtinno/sonic_tinno` | fstab / `mount`；程序**不读** |
 | **共享根（挂载点）** | 本机路径 | `/mnt/nfs/aee_events`、`/home/android/aee-nfs` | `STP_AEE_NFS_ROOT` |
 
 20 台 Agent + 控制面的挂载路径字符串可以不同，必须指向**同一个 UNC**。  
@@ -92,7 +93,7 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 
 | 推荐名 | 合法别称 | 不要当成 |
 |--------|----------|----------|
-| 控制面 | 控制平面、backend、FastAPI、**8.202**（不迁） | CIFS（仅过渡期同机） |
+| 控制面 | 控制平面、backend、FastAPI、**15.253**（8.202 已退役） | CIFS（仅过渡期同机） |
 | Dashboard | React、前端 | 整台控制面机 / CIFS |
 | `.env.backend` | 生产唯一 env 源 | `backend/.env`（本地开发覆盖） |
 | `logs/console` | `STP_RUN_CONSOLE_LOG_ROOT`、RunConsole | `/tmp`、CIFS |
@@ -141,9 +142,9 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 |--------|----------|------|
 | 共享存储健康页 | 文件服务器、File Server、`/storage`、`FileServerPage`、`GET /api/v1/stats/file-server` | 控制面 admin UI，**盯** CIFS + 控制面负载 |
 | `STP_FILE_SERVER_ADDRESS` | 健康页上**控制面**展示 IP | **不是** UNC，不是挂载点，不是 CIFS |
-| Prometheus | `/metrics`、`STP_PROMETHEUS_URL`、`job=file-server` | 现刮 8.202 |
+| Prometheus | `/metrics`、`STP_PROMETHEUS_URL`、`job=file-server` | 现刮 15.253 |
 
-切盘后健康页应变为**双目标**（保留 8.202 + 增加 CIFS 机），见 [#205](https://github.com/DUElost/stability-test-platform/issues/205)。**当前冻结**，CIFS 仍在 8.202 时不要做。
+切盘后健康页应变为**双目标**（保留 15.253 + 增加 CIFS 机），见 [#205](https://github.com/DUElost/stability-test-platform/issues/205)。**当前冻结**，CIFS 仍在控制面同机（15.253）时不要做。
 
 ---
 
@@ -151,7 +152,8 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 
 | 别称 | 常被当成 | 实际 |
 |------|----------|------|
-| 8.202 | CIFS 或控制面（含糊） | **控制面**；过渡期 CIFS 同机 |
+| 15.253 | CIFS 或控制面（含糊） | **控制面**；过渡期 CIFS 同机 |
+| 8.202 | CIFS 或控制面（含糊） | **已退役**；2026-08-13 前是控制面 |
 | 15.4 | 现网 CIFS | 中心存储**外号/目标** |
 | 9.4 | Agent 网段 | CIFS **候选机** |
 | NFS / CIFS | 两种协议、两台机器 | **都是中心存储（同一角色、同一台分享）** |
@@ -168,7 +170,7 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | 键 | 角色 | 类型 |
 |----|------|------|
 | `API_URL` | Agent → 控制面 | URL |
-| `STP_FILE_SERVER_ADDRESS` | 健康页 → 控制面展示 IP | IP（现 8.202，切盘**不改**） |
+| `STP_FILE_SERVER_ADDRESS` | 健康页 → 控制面展示 IP | IP（现 15.253，切盘**不改**） |
 | `STP_AEE_LOCAL_ROOT` | Agent HDD | 本机路径 |
 | `STP_AEE_NFS_ROOT` | **中心存储** 挂载点（主键） | 本机路径；控制面与 Agent 指向同一 UNC |
 | `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | 弃用别名（主键未设时回落） | 同盘路径或留空 |
@@ -183,11 +185,11 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 
 ## 7. 共享存储健康页（切盘后，#205）
 
-页永远挂在控制面。CIFS 迁离 8.202 后拆成：
+页永远挂在控制面。CIFS 迁离 15.253 后拆成：
 
 | 栏 | 盯谁 | 要点 |
 |----|------|------|
-| A | 控制面 8.202 | CPU/内存/本机是否已 **客户端挂载** CIFS；`STP_FILE_SERVER_ADDRESS` 不变 |
+| A | 控制面 15.253 | CPU/内存/本机是否已 **客户端挂载** CIFS；`STP_FILE_SERVER_ADDRESS` 不变 |
 | B | 中心存储（CIFS）9.4 或 15.4 | 容量 + **服务端** nfsd/export；须刮存储机 Prometheus |
 | C | Agent 挂载合规 | 心跳 `mount_status`，挂在 B 下 |
 
@@ -200,6 +202,7 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | 日期 | 变更 |
 |------|------|
 | 2026-08-09 | 初版：九角色 + CIFS=中心存储 + 健康页≠CIFS + 8.202 过渡 / 15.4·9.4 目标 + #205 |
+| 2026-08-13 | 控制面整机由 8.202 迁至 15.253；同机过渡 CIFS UNC 与健康页展示 IP 跟随；「控制面不迁」断言作废 |
 | 2026-08-09 | 口头 **NFS = 中心存储**（与 CIFS 同角色）；`STP_NFS_ROOT` 仅作历史键名，不简称「NFS」 |
 | 2026-08-09 | 锁死 **NFS = CIFS = 中心存储**（同一台分享）。`STP_NFS_ROOT` 不是第二种 NFS，是同角色键的误用（CP 脚本默认根） |
 | 2026-08-09 | 落地：HDD 不再回落中心存储；挂载点只认 `STP_AEE_NFS_ROOT`（WATCHER/CIFS 别名一层）；强制 `STP_SCRIPT_ROOT`；停 `STP_AGENT_NFS_ROOT` |

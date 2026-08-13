@@ -42,7 +42,7 @@ def _host(host_id: str, mount_entries: dict | None):
 
 def _patch_file_server_deps(monkeypatch, tmp_path):
     monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
-    monkeypatch.setenv("STP_FILE_SERVER_ADDRESS", "172.21.8.202")
+    monkeypatch.setenv("STP_FILE_SERVER_ADDRESS", "172.21.15.253")
     monkeypatch.setattr(
         monitor,
         "_mount_details",
@@ -127,13 +127,13 @@ def test_server_address_prefers_env_without_touching_dns(monkeypatch):
     参数立即求值，env 设了也照样解析一次 —— 每请求一次多余的阻塞查询。这里让
     gethostbyname 直接爆炸，能返回说明它没被调用。
     """
-    monkeypatch.setenv("STP_FILE_SERVER_ADDRESS", "172.21.8.202")
+    monkeypatch.setenv("STP_FILE_SERVER_ADDRESS", "172.21.15.253")
 
     def _explode(_host):
         raise AssertionError("env 已配置时不应触发 DNS 解析")
 
     monkeypatch.setattr(monitor.socket, "gethostbyname", _explode)
-    assert monitor._server_address() == "172.21.8.202"
+    assert monitor._server_address() == "172.21.15.253"
 
 
 def test_server_address_survives_unresolvable_hostname(monkeypatch):
