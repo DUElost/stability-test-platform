@@ -2,12 +2,29 @@ version: 2
 updates:
   - package-ecosystem: pip
     directory: "/backend"
-    # increase: 只抬区间下限、不动上限 —— redis 维持 <6.0，避免与 saq[redis]
-    # (<8) 冲突；Dependabot 对 pip 的默认策略是 widen，会把 <6.0 扩成 <9.0。
-    versioning-strategy: increase
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    ignore:
+      # 这些包在 requirements.txt 里刻意封顶（redis<6.0 另受 saq[redis]<8
+      # 约束）。ignore 下限与 manifest 上限对齐，防止 Dependabot 的 pip
+      # widen 策略扩过封顶（#242 的 ResolutionImpossible 即由此而来）；
+      # update-types 限定为 semver-major 版本更新，安全更新 PR 不受影响。
+      - dependency-name: "redis"
+        versions: [">=6.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "paramiko"
+        versions: [">=4.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "psutil"
+        versions: [">=6.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "bcrypt"
+        versions: [">=5.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "croniter"
+        versions: [">=3.0"]
+        update-types: ["version-update:semver-major"]
     groups:
       python-deps:
         patterns:
