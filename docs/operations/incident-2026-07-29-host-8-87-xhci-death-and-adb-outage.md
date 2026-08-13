@@ -1,7 +1,7 @@
-# 2026-07-29 172.21.8.87 xHCI 主控死亡与 ADB 全空复盘
+# 2026-07-29 192.0.2.87 xHCI 主控死亡与 ADB 全空复盘
 
 > **状态**：USB 子系统已恢复（2026-08-05 11:06 xHCI driver unbind/rebind，**未整机 reboot**）。恢复后暴露双 ADB server 设备拆分问题，见 [GitHub #160](https://github.com/DUElost/stability-test-platform/issues/160)（与本次 xHCI 事故**不同根因**）。
-> **影响范围**：单台 Agent host（`172.21.8.87`，Dell OptiPlex 3090，Service Tag B3G64R3），约 **7 天**内该 host 上全部 USB 设备对内核不可见，`adb devices` 恒为空，Agent 上报 `online_healthy_devices=0`。控制面与其他 host 无影响；该 host 历史设备记录仍保留在 DB（17 条 OFFLINE，`last_seen` 停在 2026-07-29）。
+> **影响范围**：单台 Agent host（`192.0.2.87`，Dell OptiPlex 3090，Service Tag B3G64R3），约 **7 天**内该 host 上全部 USB 设备对内核不可见，`adb devices` 恒为空，Agent 上报 `online_healthy_devices=0`。控制面与其他 host 无影响；该 host 历史设备记录仍保留在 DB（17 条 OFFLINE，`last_seen` 停在 2026-07-29）。
 > **关联**：[9.126 硬挂事故](./incident-2026-07-28-host-9-126-hard-hang-and-bios-upgrade.md) §4.2（本机属 **C 组出厂 BIOS**）、[GitHub #160](https://github.com/DUElost/stability-test-platform/issues/160)（恢复后的 ADB 多 server 拆分）。
 
 ---
@@ -58,14 +58,14 @@ Hub 型号为级联 `0bda:0411`（Generic 4-Port USB 3.1 Hub）+ `0bda:5411`（R
 
 ---
 
-## 3. 已执行的处置措施（仅作用于 172.21.8.87）
+## 3. 已执行的处置措施（仅作用于 192.0.2.87）
 
 ### 3.1 xHCI driver unbind / rebind（2026-08-05，首选）
 
 **目标**：在不 reboot 的前提下重新初始化 xHCI 主控，恢复 USB 枚举。
 
 ```bash
-# 在 172.21.8.87 上，需 root
+# 在 192.0.2.87 上，需 root
 sudo sh -c 'echo 0000:00:14.0 > /sys/bus/pci/drivers/xhci_hcd/unbind'
 sleep 2
 sudo sh -c 'echo 0000:00:14.0 > /sys/bus/pci/drivers/xhci_hcd/bind'
@@ -105,7 +105,7 @@ adb start-server
 
 | IP | 机型 | BIOS | 备注 |
 |----|------|------|------|
-| 172.21.8.87 | OptiPlex 3090 | **2.4.0**（2022-04-09） | ⚠ 出厂 BIOS，**C 组高风险**；`fwupd` 未安装 |
+| 192.0.2.87 | OptiPlex 3090 | **2.4.0**（2022-04-09） | ⚠ 出厂 BIOS，**C 组高风险**；`fwupd` 未安装 |
 
 与 9.126（7090，已升 BIOS 1.42.0 + watchdog/EEE 加固）不同，**8.87 尚未落地 §3 任一加固项**。长期在线 + 老 BIOS + 多 USB Hub 级联，与本次 xHCI 死亡模式一致（子系统级失效，非整机硬挂）。
 

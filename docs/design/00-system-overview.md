@@ -39,7 +39,7 @@
 | PostgreSQL | 5432 | 唯一生产库 |
 | Redis | 6379 | SAQ 任务队列 |
 
-**网络**：控制面生产 `172.21.8.202`（不迁）。**中心存储（CIFS / NFS，同一台分享）** 过渡期与控制面同机（`//172.21.8.202/jxtinno/sonic_tinno`）；目标独立盘 `172.21.15.4` 或 `172.21.9.4`。角色/别称见 [`2026-storage-roles-and-aliases.md`](./2026-storage-roles-and-aliases.md)。
+**网络**：控制面生产 `192.0.2.202`（不迁）。**中心存储（CIFS / NFS，同一台分享）** 过渡期与控制面同机（`//192.0.2.202/jxtinno/sonic_tinno`）；目标独立盘 `192.0.2.4` 或 `198.51.100.4`。角色/别称见 [`2026-storage-roles-and-aliases.md`](./2026-storage-roles-and-aliases.md)。
 
 ---
 

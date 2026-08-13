@@ -101,8 +101,8 @@ class TestScanEndpoint:
             id="201",
             hostname="test-host-201",
             name="test-host-b",
-            ip="172.21.15.201",
-            ip_address="172.21.15.201",
+            ip="192.0.2.201",
+            ip_address="192.0.2.201",
             status=HostStatus.ONLINE.value,
             last_heartbeat=datetime.now(timezone.utc),
         )

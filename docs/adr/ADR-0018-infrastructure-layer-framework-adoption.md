@@ -449,4 +449,4 @@ Watcher 子系统有**两条并行 AEE 拉取路径**，拉取范围不同：
 
 - **ADR-0025**（2026-06-18 修订）：D3 表拉取行改为「路径 B 默认开」+ D4 归档三阶段重定义。本 ADR 的 Watcher 日志类型契约（第 4 条）+ 存储结构改造是 ADR-0025 归档-1 搬运 + 归档-3 分类提取的前提。
 - **ADR-0025 Sprint 2**：路径 B 默认开（`reconciler.py:151`）+ 存储结构改造（`processor.py` / `mobilelog.py` / `bugreport.py` 输出路径下沉到事件目录）的具体实现计划。
-- 上一代工具参考：`MonkeyAEEinfo_260523.py`（`device_paths` / `bugreport` / `mobilelog_filter` 配置项 + CIFS 挂载 `//172.21.15.4/jxtinno/sonic_tinno`）。
+- 上一代工具参考：`MonkeyAEEinfo_260523.py`（`device_paths` / `bugreport` / `mobilelog_filter` 配置项 + CIFS 挂载 `//192.0.2.4/jxtinno/sonic_tinno`）。

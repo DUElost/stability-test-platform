@@ -19,7 +19,7 @@ class ResourcePool(Base):
     # config = {
     #     "ssid": "LabWiFi-2.4G",
     #     "password": "secret",
-    #     "router_ip": "172.21.15.1",
+    #     "router_ip": "192.0.2.1",
     #     "band": "2.4g" | "5g",
     # }
     max_concurrent_devices = Column(Integer, nullable=False, default=30)

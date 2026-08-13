@@ -191,7 +191,7 @@ export default function WifiPage() {
                 <input
                   value={form.config_router_ip}
                   onChange={(e) => setForm({ ...form, config_router_ip: e.target.value })}
-                  placeholder="172.21.15.1"
+                  placeholder="192.0.2.1"
                   className={FORM.input}
                 />
               </div>

@@ -267,8 +267,8 @@ describe('HostsPage', () => {
   it('renders host table when hosts exist', async () => {
     mockHostsList.mockResolvedValue({
       items: [
-        { id: 1, name: 'Worker-01', ip: '172.21.15.10', status: 'ONLINE', extra: {}, mount_status: {} },
-        { id: 2, name: 'Worker-02', ip: '172.21.15.11', status: 'OFFLINE', extra: {}, mount_status: {} },
+        { id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} },
+        { id: 2, name: 'Worker-02', ip: '192.0.2.11', status: 'OFFLINE', extra: {}, mount_status: {} },
       ],
       total: 2,
     });
@@ -289,7 +289,7 @@ describe('HostsPage', () => {
         {
           id: 'host-1',
           name: 'Worker-01',
-          ip: '172.21.15.10',
+          ip: '192.0.2.10',
           status: 'ONLINE',
           extra: {},
           mount_status: {},
@@ -311,9 +311,9 @@ describe('HostsPage', () => {
     mockHostsList.mockResolvedValue({
       items: [
         {
-          id: '172-21-8-87',
-          name: '172.21.8.87',
-          ip: '172.21.8.87',
+          id: '192-0-2-87',
+          name: '192.0.2.87',
+          ip: '192.0.2.87',
           status: 'ONLINE',
           extra: {},
           mount_status: {},
@@ -331,8 +331,8 @@ describe('HostsPage', () => {
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
-    await screen.findByTestId('device-count-172-21-8-87');
-    expect(screen.getByTestId('device-count-172-21-8-87')).toHaveTextContent('0');
+    await screen.findByTestId('device-count-192-0-2-87');
+    expect(screen.getByTestId('device-count-192-0-2-87')).toHaveTextContent('0');
   });
 
   it('deactivates watcher admin state after confirmation', async () => {
@@ -342,7 +342,7 @@ describe('HostsPage', () => {
         {
           id: 'host-1',
           name: 'Worker-01',
-          ip: '172.21.15.10',
+          ip: '192.0.2.10',
           status: 'ONLINE',
           extra: {},
           mount_status: {},

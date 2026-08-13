@@ -3,8 +3,8 @@ import { rangeSelectIds, sortDevicesStable } from './planExecuteSelection';
 import type { ReadinessDevice } from '@/utils/planExecuteReadiness';
 
 const hosts = new Map([
-  ['h2', { ip: '172.21.8.192' }],
-  ['h1', { ip: '172.21.8.143' }],
+  ['h2', { ip: '192.0.2.192' }],
+  ['h1', { ip: '192.0.2.143' }],
 ]);
 
 function d(partial: Partial<ReadinessDevice> & { id: number; serial: string }): ReadinessDevice {

@@ -64,7 +64,7 @@ describe('evaluateCapacityOverflow', () => {
         { id: 2, serial: 'B', host_id: 'h1', status: 'ONLINE' },
         { id: 3, serial: 'C', host_id: 'h1', status: 'ONLINE' },
       ],
-      [{ id: 'h1', ip: '172.21.8.143', capacity: { effective_slots: 2, active_jobs: 1 } }],
+      [{ id: 'h1', ip: '192.0.2.143', capacity: { effective_slots: 2, active_jobs: 1 } }],
     );
     expect(warnings).toHaveLength(1);
     expect(warnings[0].selected).toBe(3);
@@ -78,7 +78,7 @@ describe('evaluateCapacityOverflow', () => {
         { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE' },
         { id: 2, serial: 'B', host_id: 'h1', status: 'ONLINE' },
       ],
-      [{ id: 'h1', ip: '172.21.8.143', capacity: { effective_slots: 2 } }],
+      [{ id: 'h1', ip: '192.0.2.143', capacity: { effective_slots: 2 } }],
     );
     expect(warnings).toEqual([]);
   });
@@ -89,7 +89,7 @@ describe('evaluateCapacityOverflow', () => {
         { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE' },
         { id: 2, serial: 'B', host_id: 'h1', status: 'ONLINE' },
       ],
-      [{ id: 'h1', ip: '172.21.8.143', capacity: { active_jobs: 3 } }],
+      [{ id: 'h1', ip: '192.0.2.143', capacity: { active_jobs: 3 } }],
     );
     expect(warnings).toEqual([]);
   });
@@ -122,8 +122,8 @@ describe('buildCapacityPlan', () => {
         { id: 3, serial: 'C', host_id: 'h2', status: 'ONLINE' },
       ],
       [
-        { id: 'h1', ip: '172.21.8.10', capacity: { effective_slots: 1 } },
-        { id: 'h2', ip: '172.21.8.11', capacity: { effective_slots: 3 } },
+        { id: 'h1', ip: '192.0.2.10', capacity: { effective_slots: 1 } },
+        { id: 'h2', ip: '192.0.2.11', capacity: { effective_slots: 3 } },
       ],
     );
 
@@ -148,14 +148,14 @@ describe('buildCapacityPlan', () => {
 describe('compareNodeEntries', () => {
   it('sorts IPv4 labels numerically by octet', () => {
     const nodes = [
-      { id: 'h3', label: '172.21.9.124' },
-      { id: 'h1', label: '172.21.8.103' },
-      { id: 'h2', label: '172.21.9.6' },
+      { id: 'h3', label: '198.51.100.124' },
+      { id: 'h1', label: '192.0.2.103' },
+      { id: 'h2', label: '198.51.100.6' },
     ];
     expect(nodes.sort(compareNodeEntries).map(n => n.label)).toEqual([
-      '172.21.8.103',
-      '172.21.9.6',
-      '172.21.9.124',
+      '192.0.2.103',
+      '198.51.100.6',
+      '198.51.100.124',
     ]);
   });
 
@@ -163,7 +163,7 @@ describe('compareNodeEntries', () => {
     const nodes = [
       { id: 'unassigned', label: '未分配节点' },
       { id: 'h2', label: 'lab-node' },
-      { id: 'h1', label: '172.21.8.103' },
+      { id: 'h1', label: '192.0.2.103' },
     ];
     expect(nodes.sort(compareNodeEntries).map(n => n.id)).toEqual(['h1', 'h2', 'unassigned']);
   });

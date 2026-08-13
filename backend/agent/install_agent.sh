@@ -185,7 +185,7 @@ fi
 # 7. 创建 .env 文件
 echo_info "创建配置文件..."
 
-# 函数：基于节点 IPv4 生成可读 HOST_ID（172.21.9.6 → 172-21-9-6）
+# 函数：基于节点 IPv4 生成可读 HOST_ID（198.51.100.6 → 198-51-100-6）
 # 若该 ID 被其他 IP 占用则追加短后缀；同 IP 复用已有 ID。
 # 无可用 IPv4 时回退 auto-<hex>。
 generate_unique_host_id() {
@@ -258,15 +258,19 @@ else:
 
 # 提示用户输入 API_URL
 # WSL 环境检测：WSL 中 Agent 访问同机开发后端应使用 127.0.0.1
-DEFAULT_API_URL="http://172.21.10.15:8000"
+DEFAULT_API_URL=""
 if grep -qi microsoft /proc/version 2>/dev/null; then
     DEFAULT_API_URL="http://127.0.0.1:8000"
     echo_warn "检测到 WSL 环境，默认使用 127.0.0.1 访问同机 Windows 后端"
 fi
 
-echo_info "请输入中心服务器的 API 地址 (默认: $DEFAULT_API_URL)"
+echo_info "请输入中心服务器的 API 地址${DEFAULT_API_URL:+ (默认: $DEFAULT_API_URL)}"
 read -r -p "API_URL: " api_url_input
 API_URL="${api_url_input:-$DEFAULT_API_URL}"
+if [ -z "$API_URL" ]; then
+    echo_error "API_URL 不能为空：部署必须提供真实控制面地址（脚本不再内置默认值）"
+    exit 1
+fi
 
 # 获取本机信息用于生成唯一标识
 HOSTNAME=$(hostname)

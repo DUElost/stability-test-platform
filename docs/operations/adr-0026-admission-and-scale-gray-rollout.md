@@ -149,7 +149,7 @@ STP_AGENT_SID_REGISTRY=0
 | 2026-07-22 | 库存 / 阶梯 | **ONLINE host=20**（device ONLINE≈41）；`achieved_tier=below_44_current_20`——**未达** ADR-0019/0026 的 44→60→100 |
 | 2026-07-22 | API 冒烟（复测） | 7/7：idle PlanRun34 `QUEUED→RUNNING` **1.01s**；BUSY 竞争 PlanRun36 保持 `QUEUED`、未 FAILED；QUEUED abort 可终态；7 host 并发 PlanRun37–43 **5.29s** 全入 RUNNING |
 | 2026-07-22 | 窗口指标 | queue-latency：本窗 count=10、sum≈17.4s（含并发票）；extend-batch `renewed=24`（成功率按 outcome 仅见 renewed）；O(1) aggregation path=counters ×9、sum≈0.4ms；单 host 12-job 跑窗内 **UNKNOWN=0**（误杀代理） |
-| 2026-07-22 | 单 host 并行+串行 | host `172-21-9-131`（Agent `ops.max=5` matched `e12bd4a`）：PlanRun44/45 各 **12 device 同时 RUNNING** → **并行成立**。控制面采样 **未捕获** `EXECUTING_STEP`/`WAITING_EXECUTION_SLOT`（密采样 250ms 仍无）→ **permit 串行未在本窗用子状态直接证伪/证实**；心跳已暴露 `extra.operations.max=5`。证据：`/tmp/adr0026-dense-permit-20260722.json` |
+| 2026-07-22 | 单 host 并行+串行 | host `198-51-100-131`（Agent `ops.max=5` matched `e12bd4a`）：PlanRun44/45 各 **12 device 同时 RUNNING** → **并行成立**。控制面采样 **未捕获** `EXECUTING_STEP`/`WAITING_EXECUTION_SLOT`（密采样 250ms 仍无）→ **permit 串行未在本窗用子状态直接证伪/证实**；心跳已暴露 `extra.operations.max=5`。证据：`/tmp/adr0026-dense-permit-20260722.json` |
 | 2026-07-22 | Barrier 实机异常 | 12/12 job 进入 `WAITING_BARRIER` 后 **未推进 PATROL**（`plan_run_host.phase` 仍 null，观察 ≥45s）；属 INIT→PATROL barrier 接线实机缺陷，需另开修复。与「长跑并行」正交，但阻塞 patrol 阶段 permit 风暴观测 |
 | 2026-07-22 | 多实例 | **仍暂缓**（单 uvicorn；Redis adapter / sid registry=false） |
 | 2026-07-22 | 复测准入冒烟 | `/health` 三者 true；idle PlanRun `QUEUED→RUNNING` ≤5s；BUSY→`QUEUED`+`DEVICE_BUSY` 未 FAILED；QUEUED abort → **FAILED**（合同如此，非 CANCELLED）；7 host 并发入场全过。证据：`/tmp/adr0026-validation-20260722c.json` |
@@ -159,16 +159,16 @@ STP_AGENT_SID_REGISTRY=0
 | 2026-07-22 | 阶梯 | ONLINE host **仍=20** → `below_44_current_20`；无法宣称 44/60/100 |
 | 2026-07-22 | 窗口指标（复测） | queue-latency / extend-batch / aggregation 有增量；dense SQL 窗 **UNKNOWN=0** |
 | 2026-07-22 | 单 host 并行（SQL） | PlanRun79：10 device → `RUNNING` 并发 → **并行 PASS**。证据：`/tmp/adr0026-metrics-sql-probe.json` |
-| 2026-07-22 | 单 host 串行 permit | prometheus `slots_held{172-21-9-131}` 全程 peak=0（INIT 窗 ~15s）；`ops.max=5` 有配置。**串行竞争未直接证实**（步骤过快或 held 未在心跳节拍内暴露） |
+| 2026-07-22 | 单 host 串行 permit | prometheus `slots_held{198-51-100-131}` 全程 peak=0（INIT 窗 ~15s）；`ops.max=5` 有配置。**串行竞争未直接证实**（步骤过快或 held 未在心跳节拍内暴露） |
 | 2026-07-22 | Barrier 复现 | PlanRun79：10/10 `WAITING_BARRIER` 卡住；进程内 10 线程 barrier 单测 PASS → 疑 Agent 侧 peer 计数/多实例视图，非纯算法错误 |
 | 2026-07-22 | 可观测性缺口 | `JobInstanceOut` 原先**不含** `execution_state`，API 采样天然失明；已补字段（需重启 uvicorn）。此前「API 看到 WAITING_BARRIER」实为 SQL/DB 路径 |
 | 2026-07-22 | 晚间复测 round3 | `/health` 准入三者 true；idle PlanRun66 `QUEUED→RUNNING` **5.04s**；BUSY 竞争 PlanRun68 保持 `QUEUED`；7 host 并发 PlanRun69–75 全 `RUNNING`（**33.16s**，偏慢）；证据：`/tmp/adr0026-validation-20260722-round3.json` |
 | 2026-07-22 | 晚间窗口指标 | queue-latency count=10 sum≈178.8s avg≈17.9s（含多 host 并发）；extend-batch renewed=22 **成功率 1.0**；aggregation counters ×9 avg≈0.04ms；unknown=0 |
-| 2026-07-22 | 单 host 并行（晚间） | PlanRun80：host `172-21-9-131` **12/12 RUNNING** → **并行 PASS**。证据：`/tmp/adr0026-dense-permit-20260722-r3c.json` |
+| 2026-07-22 | 单 host 并行（晚间） | PlanRun80：host `198-51-100-131` **12/12 RUNNING** → **并行 PASS**。证据：`/tmp/adr0026-dense-permit-20260722-r3c.json` |
 | 2026-07-22 | 单 host 串行（晚间） | Prometheus `slots_held` + host `extra.operations.held/waiting` 全程 peak=0；`ops.max=5` 仍在心跳。**串行竞争仍未直接证实**。证据：`/tmp/adr0026-dense-permit-20260722-r3d.json` |
 | 2026-07-22 | 阶梯 / 多实例 | ONLINE host **仍=20** → `below_44_current_20`；多实例 **仍暂缓** |
 | 2026-07-22 | 设计确认结论 | **并行（长跑）已实机成立**；**串行（permit cap）仅有配置/代码证据，缺 live held>0**；**INIT→PATROL barrier 实机卡住（待修）**——阻塞 patrol 阶段 permit 风暴观测 |
-| 2026-07-22 | Barrier + permit 收口复测 | 修复后 PlanRun92（host `172-21-9-131`，14 devices）：`QUEUED→RUNNING=4.09s`；14/14 完成 cycle 1 并进入 `PATROL`，PRH `phase=PATROL`；`peak_held=5`、`peak_waiting=9`、`acquired_total=42`、`queued_total=32`；UNKNOWN=0。证据：`/tmp/adr0026-barrier-permit-closeout-20260722.json` |
+| 2026-07-22 | Barrier + permit 收口复测 | 修复后 PlanRun92（host `198-51-100-131`，14 devices）：`QUEUED→RUNNING=4.09s`；14/14 完成 cycle 1 并进入 `PATROL`，PRH `phase=PATROL`；`peak_held=5`、`peak_waiting=9`、`acquired_total=42`、`queued_total=32`；UNKNOWN=0。证据：`/tmp/adr0026-barrier-permit-closeout-20260722.json` |
 | 2026-07-22 | 收口清理 | PlanRun92 为有意中止，最终 run status=`FAILED`（现有 abort 合同）；14/14 jobs=`ABORTED`、`terminal_job_count=14`、UNKNOWN=0，6.04s 内完成清理。该状态不计作业务失败样本。 |
 | 2026-07-22 | 当前验收判定 | **Staging 准入冒烟通过；单 host 长跑并行通过；瞬时脚本/ADB 串行 cap=5 已有 live 竞争证据；Barrier 已通过。44→60→100 仍因库存阻塞（20 ONLINE host / 41 ONLINE device）；多实例仍因单 uvicorn + adapter/registry=false 暂缓。** |
 | 2026-07-23 | 44-device 灰度 | PlanRun97，11 host / 44 device：排队延迟 **2.70s**；44/44 进入 RUNNING，全部 host ADMITTED，Barrier 推进到 PATROL，FAILED/UNKNOWN=0；观察完成后显式 abort，44/44 ABORTED。 |

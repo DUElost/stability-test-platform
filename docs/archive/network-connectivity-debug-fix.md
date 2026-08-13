@@ -271,14 +271,14 @@ Network: online (24.874ms)  ← 绿色，显示延迟
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Windows 主机 (172.21.10.x)                                  │
+│ Windows 主机 (203.0.113.x)                                  │
 │ ├── FastAPI 后端 :8000                                      │
 │ └── React 前端    :5173  ← 每 5 秒轮询 /api/v1/devices      │
 └─────────────────────────────────────────────────────────────┘
                           ▲ HTTP 心跳 (每 5 秒)
                           │
 ┌─────────────────────────────────────────────────────────────┐
-│ Linux Agent 主机 (172.21.15.*)                              │
+│ Linux Agent 主机 (192.0.2.*)                              │
 │ ├── Python Agent                                            │
 │ ├── ping 223.5.5.5 (主) → 解析延迟                         │
 │ └── ADB → Android 设备                                      │
@@ -301,9 +301,9 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 
 ```bash
 # 同步代码
-scp backend/agent/device_discovery.py android@172.21.15.1:/opt/stability-test-agent/backend/agent/
-scp backend/agent/main.py android@172.21.15.1:/opt/stability-test-agent/backend/agent/
-scp backend/agent/heartbeat.py android@172.21.15.1:/opt/stability-test-agent/backend/agent/
+scp backend/agent/device_discovery.py android@192.0.2.1:/opt/stability-test-agent/backend/agent/
+scp backend/agent/main.py android@192.0.2.1:/opt/stability-test-agent/backend/agent/
+scp backend/agent/heartbeat.py android@192.0.2.1:/opt/stability-test-agent/backend/agent/
 
 # 重启服务
 sudo systemctl restart stability-agent

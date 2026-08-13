@@ -76,7 +76,7 @@ cd "$REPO_ROOT/tools/ansible"
 覆盖规则：
 
 - 默认值放在 `group_vars/linux_hosts.yml`
-- 当前不再保留 `172.21.10.36` 的单独 `host_vars`
+- 当前不再保留 `203.0.113.36` 的单独 `host_vars`
 - 开发环境临时切换 API 地址时，优先使用 `-e agent_api_url=...` 覆盖，不必改文件
 
 生产与预发布默认约束：
@@ -152,31 +152,31 @@ cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible -i invento
 ### 单机首次部署
 
 ```bash
-cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit 172.21.10.36
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit 203.0.113.36
 ```
 
 ### 单机热更新
 
 ```bash
-cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit 172.21.10.36
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit 203.0.113.36
 ```
 
 ### 单机状态检查
 
 ```bash
-cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 172.21.10.36
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 203.0.113.36
 ```
 
 ### 单机重启服务
 
 ```bash
-cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=restart
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 203.0.113.36 -e agent_service_action=restart
 ```
 
 ### 单机查看服务状态
 
 ```bash
-cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=status
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 203.0.113.36 -e agent_service_action=status
 ```
 
 ### 批量首次部署
@@ -206,17 +206,17 @@ cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook p
 ### 只操作部分主机
 
 ```bash
-cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit "172.21.10.36,172.21.15.7,172.21.15.2"
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit "203.0.113.36,192.0.2.7,192.0.2.2"
 ```
 
 ## 7. 开发环境 IP 变化时的标准流程
 
 开发环境下平台 IP 可能变化。当前推荐做法不是重装所有 agent，而是临时覆盖 `agent_api_url` 并批量热更新。
 
-示例：平台地址变为 `172.21.10.13`
+示例：平台地址变为 `203.0.113.13`
 
 ```bash
-cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml -e agent_api_url=http://172.21.10.13:8000
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml -e agent_api_url=http://203.0.113.13:8000
 ```
 
 更新后立即批量检查：

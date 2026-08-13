@@ -93,7 +93,7 @@ class TestDashboardSummary:
         assert data["devices"]["low_battery"] == 2
         assert data["devices"]["high_temp"] == 2
         assert data["alerts"]["total"] == 4
-        assert data["host_resources"][0]["ip"] == "172.21.15.100"
+        assert data["host_resources"][0]["ip"] == "192.0.2.100"
 
     def test_dashboard_summary_unknown_disk_avg_is_null(
         self, client, auth_headers, db_session, sample_host,

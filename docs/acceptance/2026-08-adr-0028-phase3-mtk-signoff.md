@@ -19,7 +19,7 @@
 | 表 / migration | `device_log_event`；生产 alembic head `q4r5s6t7u8v9`（含 `signal_seq_no`，#214 / PR #221） |
 | 控制面 flag | `.env.backend`：`STP_EVENT_UPLOADER_ENABLED=1`、`STP_DEVICE_LOG_EVENT_ENABLED=1` |
 | Agent flag 同步 | #218 / PR #224：两 key 进 `_FLEET_ENV_KEYS`；hot-update 先合并 `.env` 再 restart |
-| 灰度 → 全舰队 | 阶段 3 灰度：16 台 MTK host + pilot `172-21-8-87`；#218 后 20 台均双开（含原无 flag 的 `8.116` / `9.126` / `9.127`） |
+| 灰度 → 全舰队 | 阶段 3 灰度：16 台 MTK host + pilot `192-0-2-87`；#218 后 20 台均双开（含原无 flag 的 `8.116` / `9.126` / `9.127`） |
 | Agent revision | `be4f31a`（#218）含 #215 `resolve_device_log_event_type` |
 | 观察脚本 | `tools/dev/monitor-device-log-events.py`（只读） |
 
@@ -39,7 +39,7 @@ Hosts 有 DLE 落库：`8.103` / `8.143` / `8.192` / `8.195` / `9.124` / `9.6`�
 
 | 项 | 值 |
 |----|-----|
-| Host / device | `172-21-8-143` / `0000NX2622000488`（ELA-LX2 `mt6768`） |
+| Host / device | `192-0-2-143` / `0000NX2622000488`（ELA-LX2 `mt6768`） |
 | Plan / PlanRun / Job | Plan `dle-e2e-216-aee-trigger` (#7) / **#199 SUCCESS** / **#2729 COMPLETED** |
 | Trigger | `aee_signal_trigger` → `success=true`，`db_path=/data/aee_exp/db.02.NE` |
 | DLE | **6** 条 `ARCHIVED`；`event_type` = ANR×3 / JE×1 / NE×2 |

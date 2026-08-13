@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx
 
-BACKEND = os.getenv("STP_AUDIT_BACKEND", "http://172.21.10.25:8000")
+BACKEND = os.getenv("STP_AUDIT_BACKEND", "")
 ENV_FILE = Path(os.getenv("STP_AUDIT_ENV_FILE", Path(__file__).resolve().parents[1] / ".env"))
 PLACEHOLDER_PATTERNS = (
     "change-me",
@@ -126,6 +126,9 @@ def probe_backend(base: str) -> dict:
 
 
 def main() -> None:
+    if not BACKEND:
+        print("ERROR: STP_AUDIT_BACKEND required (no built-in default address)")
+        raise SystemExit(2)
     env = load_env(ENV_FILE)
     print("=== Stage A audit ===")
     print(f"env_file: {ENV_FILE} ({'found' if env else 'missing/empty'})")
