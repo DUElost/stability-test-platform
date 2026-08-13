@@ -34,15 +34,8 @@ export default function PlanStepInspector({
   onUpdateStep,
   readOnly,
 }: PlanStepInspectorProps) {
-  const scriptName = useMemo(
-    () => (step?.action?.startsWith('script:') ? step.action.slice(7) : (step?.action ?? '')),
-    [step?.action],
-  );
-
-  const matchedScript = useMemo(
-    () => scripts.find(s => s.name === scriptName && s.version === step?.version) ?? null,
-    [scripts, scriptName, step?.version],
-  );
+  const scriptName = step?.action?.startsWith('script:') ? step.action.slice(7) : (step?.action ?? '');
+  const matchedScript = scripts.find(s => s.name === scriptName && s.version === step?.version) ?? null;
 
   const versionsForName = useMemo(
     () => scripts.filter(s => s.name === scriptName).sort((a, b) => b.version.localeCompare(a.version)),

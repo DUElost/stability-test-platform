@@ -46,7 +46,9 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   const seqRef = useRef(0);
   const issueKeysRef = useRef<Set<string>>(new Set());
   const onStatusChangeRef = useRef(onStatusChange);
-  onStatusChangeRef.current = onStatusChange;
+  useEffect(() => {
+    onStatusChangeRef.current = onStatusChange;
+  }, [onStatusChange]);
   const [status, setStatus] = useState('RUNNING');
   const [issueCount, setIssueCount] = useState(0);
   const [termReady, setTermReady] = useState(false);

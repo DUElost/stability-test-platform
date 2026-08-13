@@ -121,11 +121,13 @@ export default function PlanExecutePage() {
   const [phase, setPhase] = useState<ExecutePhase>('plan');
   const [nodeSearch, setNodeSearch] = useState('');
   const [planSearch, setPlanSearch] = useState('');
-  // 复跑预填（?devices=1,2,3，来自 PlanRun 详情「复跑」）：只消费一次
-  const prefillDevicesRef = useRef<string | null>(searchParams.get('devices'));
+  // 复跑预填（?devices=1,2,3，来自 PlanRun 详情「复跑」）：只消费一次（lazy initializer 等价于旧 ref 模式）
+  const [prefillDevices, setPrefillDevices] = useState<string | null>(
+    () => searchParams.get('devices'),
+  );
 
   // 恢复优先级：URL 筛选参数 >（?devices= 时默认空筛选）> 草稿
-  const hasUrlDevices = prefillDevicesRef.current != null;
+  const hasUrlDevices = prefillDevices != null;
   const hasUrlFilters = hasFilterQueryParams(searchParams);
   const urlFilterState = parsePlanExecuteFilterParams(searchParams);
   const [view, setView] = useState<DeviceViewMode>(() => (
@@ -510,9 +512,9 @@ export default function PlanExecutePage() {
     };
 
     // 复跑预填（?devices=1,2,3）：URL 优先
-    const raw = prefillDevicesRef.current;
+    const raw = prefillDevices;
     if (raw != null) {
-      prefillDevicesRef.current = null;
+      setPrefillDevices(null);
       draftConsumedRef.current = true;
       const wantedIds = [...new Set(
         raw.split(',').map(Number).filter(n => Number.isInteger(n) && n > 0),
@@ -549,6 +551,9 @@ export default function PlanExecutePage() {
     } else if (draft.phase === 'select' && selectedPlan && executableStepCount > 0) {
       setPhase('select');
     }
+    // prefillDevices 有意不进依赖：仅在首次加载完成后消费一次（消费后置 null），
+    // 否则置 null 会二次触发本 effect 并重走草稿恢复。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [devLoading, plansLoading, allDevices, selectedPlan, executableStepCount, toast, initialDraft, draftConsumedRef, searchParams]);
 
   // 筛选 / 视图写入 URL（replace，保留 plan/devices）；与草稿并行
@@ -908,9 +913,11 @@ export default function PlanExecutePage() {
         ? selectedSchedulableDeviceIds.length === 0
         : (previewing || submitting || !selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed);
 
-  primaryActionRef.current = runPrimaryAction;
-  selectAllFilteredRef.current = selectAllFiltered;
-  primaryDisabledRef.current = primaryDisabled;
+  useEffect(() => {
+    primaryActionRef.current = runPrimaryAction;
+    selectAllFilteredRef.current = selectAllFiltered;
+    primaryDisabledRef.current = primaryDisabled;
+  });
 
   // P5：Enter = 主 CTA；Ctrl/⌘+A = 全选当前筛选结果（限选机舞台）
   useEffect(() => {

@@ -194,6 +194,7 @@ function DeviceTable({
   onSelect?: (d: DeviceMatrixItem) => void;
   highlightJobId?: number | null;
 }) {
+  // eslint-disable-next-line react-hooks/purity -- 渲染期时间戳仅用于卡死高亮派生，无副作用（#260 待统一 tick 状态）
   const now = Date.now();
   const rowRefs = useRef<Map<number, HTMLTableRowElement | null>>(new Map());
 

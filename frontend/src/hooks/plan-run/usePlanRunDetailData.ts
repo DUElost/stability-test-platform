@@ -211,6 +211,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
 
   const stuckJobs = useMemo(() => {
     if (isTerminal || !devicesQ.data?.devices?.length) return [];
+    // eslint-disable-next-line react-hooks/purity -- 渲染期时间戳仅用于卡死判定派生（#260 待统一 tick 状态）
     const now = Date.now();
     return devicesQ.data.devices.filter((d) => isJobStuck(d, now));
   }, [devicesQ.data, isTerminal]);

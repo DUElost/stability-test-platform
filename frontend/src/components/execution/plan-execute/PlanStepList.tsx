@@ -20,7 +20,12 @@ export function PlanStepList({ steps, scriptParamsByKey }: PlanStepListProps) {
     );
   }
 
-  let globalIndex = 0;
+  // 全局步序号（跨 stage 连续）：用 reduce 派生偏移，不在 render 内改可变计数。
+  const stageOffsets: Record<string, number> = {};
+  groups.reduce((nextIndex, group) => {
+    stageOffsets[group.stage] = nextIndex;
+    return nextIndex + group.steps.length;
+  }, 1);
 
   return (
     <div className="max-h-72 overflow-y-auto" data-testid="plan-step-list">
@@ -38,9 +43,8 @@ export function PlanStepList({ steps, scriptParamsByKey }: PlanStepListProps) {
             <span className={cn('text-[11px]', TEXT.subtitle)}>{group.steps.length} 步</span>
           </div>
           <div className="divide-y">
-            {group.steps.map((step) => {
-              globalIndex += 1;
-              const index = globalIndex;
+            {group.steps.map((step, stepIdx) => {
+              const index = (stageOffsets[group.stage] ?? 1) + stepIdx;
               const paramsKey = step.script_name && step.script_version
                 ? `${step.script_name}@${step.script_version}`
                 : '';

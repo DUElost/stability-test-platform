@@ -1,5 +1,6 @@
 import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
+import { useRef } from 'react';
 import {
   PIPELINE_EDITOR,
   PIPELINE_PHASE_HEAD,
@@ -92,6 +93,7 @@ export default function PlanCanvas({
   scripts,
   readOnly,
 }: PlanCanvasProps) {
+  const duplicateSeqRef = useRef(0);
   const totalSteps =
     (lifecycle.lifecycle.init?.length ?? 0) +
     (lifecycle.lifecycle.patrol?.steps?.length ?? 0) +
@@ -125,7 +127,7 @@ export default function PlanCanvas({
     const baseId = base.step_id || `${phase}_${index}`;
     const copy: PipelineStep = {
       ...base,
-      step_id: `${baseId}_copy_${Math.random().toString(36).slice(2, 5)}`,
+      step_id: `${baseId}_copy_${(duplicateSeqRef.current += 1)}`,
     };
     steps.splice(index + 1, 0, copy);
     onLifecycleChange(setPhaseSteps(lifecycle, phase, steps));

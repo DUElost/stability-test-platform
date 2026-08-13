@@ -87,6 +87,7 @@ export default function DispatchGateCard({
   onRetryDispatch,
   isRetrying = false,
   retryable,
+  // eslint-disable-next-line react-hooks/purity -- 默认时间戳仅用于判定展示，测试可注入；渲染期调用无副作用
   nowMs = Date.now(),
 }: Props & { nowMs?: number }) {
   const dispatchOnly = !precheck;
