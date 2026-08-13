@@ -35,7 +35,7 @@
 | `STP_NFS_ROOT` | Agent 上由 hot-update **镜像** `STP_AEE_NFS_ROOT`（旧脚本仍读此名）。控制面本机值**不下发**，也不再当脚本默认根 |
 | `STP_AEE_NFS_ROOT` | **中心存储** 本机挂载点（**唯一文档化主键**）。控制面 + Agent 指向同一分享；路径字符串可不同 |
 | `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | **弃用别名**（计划删除，#213 E1）：仅当主键未设时回落并打 WARNING；新部署勿再配置 |
-| `STP_FILE_SERVER_ADDRESS` | 共享存储健康页上的**控制面**展示 IP（现 15.253）。**不是** CIFS 根 / UNC |
+| `STP_FILE_SERVER_ADDRESS` | 共享存储健康页上的**控制面**展示 IP（现 8.202）。**不是** CIFS 根 / UNC |
 | `STP_AEE_LOCAL_ROOT` | Agent **本机** L1 AEE 根（按机配置；hot-update **不下发**，见 #235） |
 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` | Agent only。上送成功后删本机事件目录并标 `PRUNED`（**默认 0**）。**禁止** fleet 同步（#217）：hot-update 仅下发 `_FLEET_ENV_KEYS` allowlist（`hot_update_env_overrides()`），本键不在列表中，控制面误设也不会进 payload。风险：CIFS 事后不可读时本地已无副本。灰度：单机改 Agent `.env` + `reload_config` |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | 扫描工具；**同名两角色两套值**（控制面 merge vs Agent scan） |
@@ -85,7 +85,7 @@
 | `STP_LOCAL_DISK_SPILL_THRESHOLD` / `_TARGET` | HddSpill 触发/回落水位（%）；改阈值须**重启** Agent（configure 后不可热改） |
 | `STP_STEP_LOG_STREAM` | `1`=pipeline 日志经 SocketIO 批推送；`0`=保持 no-op（ADR-0026 P2-2） |
 | `STP_LOG_BATCH_MAX_LINES` / `STP_LOG_BATCH_FLUSH_MS` | step_log 批大小与定时 flush（默认 50 / 200） |
-| `STP_AEE_NFS_ROOT` | **中心存储** 挂载点主键（upload / spill / merge 同一把）。过渡 UNC 在 15.253，目标 15.4/9.4 |
+| `STP_AEE_NFS_ROOT` | **中心存储** 挂载点主键（upload / spill / merge 同一把）。过渡 UNC 在 8.202，目标 15.4/9.4 |
 
 热更新会附带控制面 `pipeline_schema.json` 与 Agent `VERSION`（code revision）。  
 热更新还会**行级合并**舰队级 `.env` 键（安装布局路径 + 控制面 `backend/.env` 中非空的 `STP_*` 等）；`HOST_ID`、`API_URL`、`ANDROID_ADB_SERVER_PORT` 等 per-host 键不同步。见 [`../operations/agent-version-and-hot-update.md`](../operations/agent-version-and-hot-update.md)。

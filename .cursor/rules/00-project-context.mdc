@@ -34,6 +34,6 @@ alwaysApply: true
 |----|------|
 | Agent SSD | 运行日志唯一副本 `logs/runs/{job_id}/` |
 | Agent HDD | AEE/mobilelog/bugreport（`STP_AEE_LOCAL_ROOT`） |
-| 中心存储（CIFS / NFS） | 汇总 xls、按需事件、HDD 溢出 — **不含运行日志**（挂载点 `STP_AEE_NFS_ROOT`；过渡在 15.253，「15.4」为目标外号） |
+| 中心存储（CIFS / NFS） | 汇总 xls、按需事件、HDD 溢出 — **不含运行日志**（挂载点 `STP_AEE_NFS_ROOT`；过渡在 8.202，「15.4」为目标外号） |
 
 别称：[docs/design/2026-storage-roles-and-aliases.md](docs/design/2026-storage-roles-and-aliases.md)。已取消：运行日志上送 CIFS、`run_log_bundle` JobArtifact、patrol `snapshots/`。

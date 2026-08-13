@@ -25,7 +25,7 @@ const overview: FileServerOverview = {
   status: 'healthy',
   server: {
     hostname: 'debian13',
-    address: '172.21.15.253',
+    address: '172.21.8.202',
     cpu_count: 20,
     uptime_seconds: 172800,
   },
