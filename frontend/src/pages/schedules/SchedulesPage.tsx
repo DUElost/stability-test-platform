@@ -13,7 +13,7 @@ import { formatDateTimeFull } from '@/utils/format';
 
 interface ScheduleForm {
   name: string;
-  cron_expression: string;
+  cron_expr: string;
   plan_id: string;
   device_ids: string;
   enabled: boolean;
@@ -21,7 +21,7 @@ interface ScheduleForm {
 
 const DEFAULT_FORM: ScheduleForm = {
   name: '',
-  cron_expression: '0 2 * * *',
+  cron_expr: '0 2 * * *',
   plan_id: '',
   device_ids: '',
   enabled: true,
@@ -86,7 +86,7 @@ export default function SchedulesPage() {
 
       const payload: TaskScheduleCreatePayload = {
         name: form.name,
-        cron_expression: form.cron_expression,
+        cron_expr: form.cron_expr,
         enabled: form.enabled,
         plan_id: planId,
         device_ids: deviceIds,
@@ -146,7 +146,7 @@ export default function SchedulesPage() {
     setEditing(s);
     setForm({
       name: s.name,
-      cron_expression: s.cron_expression,
+      cron_expr: s.cron_expr,
       plan_id: s.plan_id ? String(s.plan_id) : '',
       device_ids: (s.device_ids || []).join(','),
       enabled: s.enabled,
@@ -203,8 +203,8 @@ export default function SchedulesPage() {
             <div>
               <label className={cn('block text-sm font-medium mb-1', TEXT.body)}>Cron 表达式</label>
               <CronExpressionInput
-                value={form.cron_expression}
-                onChange={(v) => setForm({ ...form, cron_expression: v })}
+                value={form.cron_expr}
+                onChange={(v) => setForm({ ...form, cron_expr: v })}
               />
             </div>
             <div>
@@ -276,7 +276,7 @@ export default function SchedulesPage() {
               {schedules.map((s) => (
                 <tr key={s.id} className="border-b hover:bg-muted/30">
                   <td className={cn('px-4 py-3 font-medium', TEXT.heading)}>{s.name}</td>
-                  <td className={cn('px-4 py-3 font-mono', TEXT.subtitle)}>{s.cron_expression}</td>
+                  <td className={cn('px-4 py-3 font-mono', TEXT.subtitle)}>{s.cron_expr}</td>
                   <td className={cn('px-4 py-3', TEXT.subtitle)}>
                     Plan #{s.plan_id} ({(s.device_ids || []).length} devices)
                   </td>

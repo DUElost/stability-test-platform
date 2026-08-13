@@ -562,7 +562,7 @@ export interface UnreadCountResponse {
 export interface TaskSchedule {
   id: number;
   name: string;
-  cron_expression: string;
+  cron_expr: string;
   plan_id: number;
   device_ids?: number[] | null;
   enabled: boolean;
@@ -574,7 +574,7 @@ export interface TaskSchedule {
 
 export interface TaskScheduleCreatePayload {
   name: string;
-  cron_expression: string;
+  cron_expr: string;
   enabled?: boolean;
   plan_id: number;
   device_ids?: number[];
@@ -582,7 +582,7 @@ export interface TaskScheduleCreatePayload {
 
 export interface TaskScheduleUpdatePayload {
   name?: string;
-  cron_expression?: string;
+  cron_expr?: string;
   enabled?: boolean;
   plan_id?: number;
   device_ids?: number[];
