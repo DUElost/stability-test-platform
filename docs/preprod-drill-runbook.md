@@ -31,7 +31,7 @@ sudo apt update
 sudo apt install -y python3 python3-venv python3-pip nginx curl
 ```
 
-Node 20（nvm）：
+Node 22（nvm）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash

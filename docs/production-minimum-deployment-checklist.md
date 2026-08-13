@@ -40,7 +40,7 @@
 sudo apt update
 sudo apt install -y python3 python3-venv python3-pip nginx postgresql redis-server nodejs npm rsync curl
 ```
-- 安装 Node.js 20（推荐 nvm）：
+- 安装 Node.js 22（推荐 nvm）：
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 source ~/.nvm/nvm.sh
