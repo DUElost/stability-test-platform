@@ -66,7 +66,7 @@ Linux 宿主机 systemd + Nginx + PostgreSQL + Redis（**不用**根目录 Compo
 
 | 组件 | 要求 |
 |------|------|
-| 控制平面 | Python 3.10+（推荐 3.11），PostgreSQL，Redis，Node.js 20+ |
+| 控制平面 | Python 3.10+（推荐 3.11），PostgreSQL，Redis，Node.js 22+ |
 | Agent | Linux，Python 3.10+，ADB |
 
 环境变量完整表见 [`docs/development/environment-variables.md`](./docs/development/environment-variables.md)（含 `STP_AGENT_MIN_VERSION`、超时、方案 C 路径）。模板：`backend/.env.example`、`backend/agent/.env.example`。
