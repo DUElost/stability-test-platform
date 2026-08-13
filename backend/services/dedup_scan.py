@@ -227,7 +227,23 @@ def run_merge_sync(
     """同步执行 merge（-merge_files 或 -merge_files_list，视工具能力）。
 
     阻塞等待子进程完成，校验 merge_result/ 出现新产物目录，返回 "ok" 或空串。
+
+    ADR-0028 D2：PlanRun ``FAILED``（含 abort）不 merge——即使已有 scan artifact
+    也不执行，显式门禁优先于「scan xls 不足自然跳过」。
     """
+    from backend.core.database import SessionLocal
+    from backend.models.enums import PlanRunStatus
+    from backend.models.plan_run import PlanRun
+
+    db = SessionLocal()
+    try:
+        run = db.get(PlanRun, plan_run_id)
+    finally:
+        db.close()
+    if run is not None and run.status == PlanRunStatus.FAILED.value:
+        logger.info("merge_skip_failed_plan_run plan_run=%d", plan_run_id)
+        return ""
+
     tool = resolve_scan_tool()
     if tool is None:
         logger.warning("merge_skip_tool_not_configured plan_run=%d", plan_run_id)
