@@ -3,7 +3,7 @@
  * 闸门语义：同时最多 N 台在跑（安装：trigger 后轮询至终态才释放槽位；
  * 热更新：同步 SSH，请求返回即终态，暂无 RunConsole 实时日志）。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '@/utils/api';
 import type { HotUpdateResult } from '@/utils/api/hosts';
 
@@ -198,7 +198,7 @@ export function useHostOperations(opts?: {
   const concurrency = opts?.concurrency ?? DEFAULT_CONCURRENCY;
   const pollMs = opts?.pollMs ?? DEFAULT_POLL_MS;
   const onTerminalRef = useRef(opts?.onTerminal);
-  useEffect(() => {
+  useLayoutEffect(() => {
     onTerminalRef.current = opts?.onTerminal;
   }, [opts?.onTerminal]);
 
@@ -231,7 +231,7 @@ export function useHostOperations(opts?: {
   );
 
   const opsRef = useRef(ops);
-  useEffect(() => {
+  useLayoutEffect(() => {
     opsRef.current = ops;
   }, [ops]);
 

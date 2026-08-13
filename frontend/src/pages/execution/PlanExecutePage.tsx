@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -913,7 +913,7 @@ export default function PlanExecutePage() {
         ? selectedSchedulableDeviceIds.length === 0
         : (previewing || submitting || !selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     primaryActionRef.current = runPrimaryAction;
     selectAllFilteredRef.current = selectAllFiltered;
     primaryDisabledRef.current = primaryDisabled;

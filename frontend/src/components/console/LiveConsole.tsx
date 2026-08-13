@@ -4,7 +4,7 @@
  * 注意：日志回放必须在 XTerminal onReady 之后执行，否则折叠再展开时
  * termRef 尚未就绪，writeLines 会被静默丢弃 → 空白终端。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { XTerminal, type XTerminalHandle } from '@/components/log/XTerminal';
 import { useSocketIO } from '@/hooks/useSocketIO';
 import { dedup } from '@/utils/api/dedup';
@@ -46,7 +46,7 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   const seqRef = useRef(0);
   const issueKeysRef = useRef<Set<string>>(new Set());
   const onStatusChangeRef = useRef(onStatusChange);
-  useEffect(() => {
+  useLayoutEffect(() => {
     onStatusChangeRef.current = onStatusChange;
   }, [onStatusChange]);
   const [status, setStatus] = useState('RUNNING');

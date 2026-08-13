@@ -1,6 +1,5 @@
 import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
-import { useRef } from 'react';
 import {
   PIPELINE_EDITOR,
   PIPELINE_PHASE_HEAD,
@@ -93,7 +92,6 @@ export default function PlanCanvas({
   scripts,
   readOnly,
 }: PlanCanvasProps) {
-  const duplicateSeqRef = useRef(0);
   const totalSteps =
     (lifecycle.lifecycle.init?.length ?? 0) +
     (lifecycle.lifecycle.patrol?.steps?.length ?? 0) +
@@ -125,9 +123,19 @@ export default function PlanCanvas({
     const base = steps[index];
     if (!base) return;
     const baseId = base.step_id || `${phase}_${index}`;
+    // 扫描全部 phase 的既有 step_id，副本号递增直到未占用（remount 不撞旧 ID）。
+    const existingIds = new Set(
+      (['init', 'patrol', 'teardown'] as PipelinePhase[]).flatMap((p) =>
+        getPhaseSteps(lifecycle, p)
+          .map((s) => s.step_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    let copySeq = 1;
+    while (existingIds.has(`${baseId}_copy_${copySeq}`)) copySeq += 1;
     const copy: PipelineStep = {
       ...base,
-      step_id: `${baseId}_copy_${(duplicateSeqRef.current += 1)}`,
+      step_id: `${baseId}_copy_${copySeq}`,
     };
     steps.splice(index + 1, 0, copy);
     onLifecycleChange(setPhaseSteps(lifecycle, phase, steps));
