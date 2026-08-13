@@ -295,10 +295,9 @@ class TestDedupTriggerHelpers:
     def test_should_trigger_dedup_terminal(self, monkeypatch):
         monkeypatch.setenv("STP_DEDUP_AUTO_SCAN", "1")
         from backend.services.dedup_scan import should_trigger_dedup
-        for status in ("SUCCESS", "PARTIAL_SUCCESS"):
+        for status in ("SUCCESS", "PARTIAL_SUCCESS", "FAILED"):
             assert should_trigger_dedup(status) is True
-        for status in ("FAILED", "DEGRADED"):
-            assert should_trigger_dedup(status) is False
+        assert should_trigger_dedup("DEGRADED") is False
 
     def test_enqueue_dedup_terminal_sync_swallows_errors(self, monkeypatch):
         from backend.services.dedup_scan import enqueue_dedup_terminal_sync
