@@ -22,14 +22,14 @@ vi.mock('@/components/console/LiveConsole', () => ({
 const ops: HostOpItem[] = [
   {
     hostId: 'h1',
-    label: '172.21.8.103',
+    label: '192.0.2.103',
     kind: 'install',
     status: 'running',
     consoleRunId: 'con-1',
   },
   {
     hostId: 'h2',
-    label: '172.21.8.116',
+    label: '192.0.2.116',
     kind: 'reinstall',
     status: 'success',
     consoleRunId: 'con-2',
@@ -47,8 +47,8 @@ describe('HostOperationPanel', () => {
       />,
     );
     expect(screen.getByTestId('host-operation-panel')).toBeInTheDocument();
-    expect(screen.getByText('172.21.8.103')).toBeInTheDocument();
-    expect(screen.getByText('172.21.8.116')).toBeInTheDocument();
+    expect(screen.getByText('192.0.2.103')).toBeInTheDocument();
+    expect(screen.getByText('192.0.2.116')).toBeInTheDocument();
     expect(screen.getByText('首次安装')).toBeInTheDocument();
     expect(screen.getByText('重新安装')).toBeInTheDocument();
   });
@@ -107,14 +107,14 @@ describe('HostOperationPanel', () => {
         ops={[
           {
             hostId: 'h4',
-            label: '172.21.8.88',
+            label: '192.0.2.88',
             kind: 'hot_update',
             status: 'skipped',
             error: '存在活跃 Job',
           },
           {
             hostId: 'h3',
-            label: '172.21.8.87',
+            label: '192.0.2.87',
             kind: 'hot_update',
             status: 'running',
           },

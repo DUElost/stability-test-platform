@@ -16,11 +16,11 @@
 
 ## Post-merge 验收清单（同一轮）
 
-灰度 host 固定 **`172-21-8-143`**（双盘 `STP_AEE_LOCAL_ROOT=/mnt/hdd/aee_events`）。
+灰度 host 固定 **`192-0-2-143`**（双盘 `STP_AEE_LOCAL_ROOT=/mnt/hdd/aee_events`）。
 
 1. **合入后** `git checkout main && pull`，**重启控制面** `stability-backend`（加载 `PRUNED` extractable 修复）。
 2. **仅**在该 host Agent `.env` 设 `STP_EVENT_UPLOADER_PRUNE_LOCAL=1`（勿写 `.env.backend` / fleet）。
-3. `POST /api/v1/plan-runs/hosts/172-21-8-143/reload-config`。
+3. `POST /api/v1/plan-runs/hosts/192-0-2-143/reload-config`。
 4. **Spill 注入**：临时 `STP_LOCAL_DISK_SPILL_THRESHOLD` 低于当前 `df` 已用% + 短 interval，**重启 Agent**；注入/确保一条 `LOCAL` DLE；确认日志 `hdd_spill_enqueue_event_uploader`，`remote_path` 为 `devices/{plan_run_id}/` 或 `unassigned/{id}/`；恢复阈值 95 并重启。
 5. **Prune Plan**：跑一轮带 AEE 的 Plan（如 plan 7 / device 19）；确认新事件 `state=PRUNED`、本机 `local_path` 目录已删、CIFS `remote_path` 在、`jira/{plan_run_id}/` extract 齐全。
 6. **非目标 host**：抽查另一台 `.env` **无** `PRUNE_LOCAL=1`（或显式 `0`）。

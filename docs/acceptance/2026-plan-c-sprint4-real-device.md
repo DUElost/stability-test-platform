@@ -16,9 +16,9 @@
 | 项 | 值 |
 |----|-----|
 | 后端版本 | `c7a38c7`（终验时）；Agent 未热更新（`--no-hot-update`） |
-| 后端地址 | `http://172.21.10.25:8000` |
+| 后端地址 | `http://203.0.113.25:8000` |
 | Agent Host ID | `auto-fdaf1d55e319` |
-| Agent IP | `172.21.10.36` |
+| Agent IP | `203.0.113.36` |
 | 设备序列号 | `11914404BG100577`, `11914404BG102162`, `121512542H004524` |
 | NFS/CIFS 挂载点 | `Y:\sonic_tinno` (控制面) / Agent 侧同路径挂载 |
 | scan tool 路径 | `stability_Start-Log-Scan_20260615/start_log_scan.py`（15.4 CIFS） |
@@ -496,7 +496,7 @@ ls -la {nfs_root}/jira/{plan_run_id}/
 | 项 | 值 |
 |----|-----|
 | Host ID | `auto-fdaf1d55e319` |
-| Host IP | `172.21.10.36` |
+| Host IP | `203.0.113.36` |
 | Host 状态 | ONLINE |
 | 设备 1 | ID=99, serial=`11914404BG100577` |
 | 设备 2 | ID=63, serial=`11914404BG102162` |

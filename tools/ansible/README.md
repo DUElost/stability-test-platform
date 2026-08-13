@@ -78,29 +78,29 @@ wsl bash -lc 'cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=
 ### 单机状态检查
 
 ```bash
-ansible-playbook playbooks/check_agent.yml --limit 172.21.10.36
+ansible-playbook playbooks/check_agent.yml --limit 203.0.113.36
 ```
 
 Windows / WSL 兼容执行：
 
 ```bash
-wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 172.21.10.36"
+wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 203.0.113.36"
 ```
 
 ### 单机服务管理
 
 ```bash
 # 重启
-ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=restart
+ansible-playbook playbooks/service_agent.yml --limit 203.0.113.36 -e agent_service_action=restart
 
 # 启动
-ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=start
+ansible-playbook playbooks/service_agent.yml --limit 203.0.113.36 -e agent_service_action=start
 
 # 停止
-ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=stop
+ansible-playbook playbooks/service_agent.yml --limit 203.0.113.36 -e agent_service_action=stop
 
 # 查看状态
-ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=status
+ansible-playbook playbooks/service_agent.yml --limit 203.0.113.36 -e agent_service_action=status
 ```
 
 ## 首次部署
@@ -108,13 +108,13 @@ ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_servi
 ### 单机首次部署
 
 ```bash
-ansible-playbook playbooks/install_agent.yml --limit 172.21.10.36
+ansible-playbook playbooks/install_agent.yml --limit 203.0.113.36
 ```
 
 Windows / WSL 兼容执行：
 
 ```bash
-wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit 172.21.10.36"
+wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit 203.0.113.36"
 ```
 
 部署完成后，playbook 会自动验证：
@@ -161,13 +161,13 @@ wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=
 ### 单机热更新
 
 ```bash
-ansible-playbook playbooks/update_agent.yml --limit 172.21.10.36
+ansible-playbook playbooks/update_agent.yml --limit 203.0.113.36
 ```
 
 从 Windows 终端直接执行：
 
 ```bash
-wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit 172.21.10.36"
+wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit 203.0.113.36"
 ```
 
 ### 自动回滚机制
@@ -206,20 +206,20 @@ playbook 会自动执行 rescue：
 
 ```bash
 ansible-playbook playbooks/update_agent.yml \
-  -e agent_api_url=http://172.21.10.13:8000 \
+  -e agent_api_url=http://203.0.113.13:8000 \
   --limit agent_canary
 
 ansible-playbook playbooks/check_agent.yml --limit agent_canary
 
 ansible-playbook playbooks/update_agent.yml \
-  -e agent_api_url=http://172.21.10.13:8000 \
+  -e agent_api_url=http://203.0.113.13:8000 \
   --limit agent_prod
 ```
 
 ### 全量切换
 
 ```bash
-ansible-playbook playbooks/update_agent.yml -e agent_api_url=http://172.21.10.13:8000
+ansible-playbook playbooks/update_agent.yml -e agent_api_url=http://203.0.113.13:8000
 ansible-playbook playbooks/check_agent.yml
 ```
 

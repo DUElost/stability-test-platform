@@ -34,7 +34,7 @@ vi.mock('@/utils/api', () => ({
           error: 0,
         },
         host_resources: [
-          { ip: '172.21.10.36', cpu_load: 0.36, ram_usage: 23.87, disk_usage: 8.07 },
+          { ip: '203.0.113.36', cpu_load: 0.36, ram_usage: 23.87, disk_usage: 8.07 },
         ],
       }),
       activity: vi.fn().mockResolvedValue({ points: [], hours: 24 }),

@@ -209,7 +209,7 @@ extract 双根遍历：
 **fleet 配置**（20 台 Agent，代码版本 `1fb8e2a`）：
 - `STP_EVENT_UPLOADER_ENABLED=1`（EventUploader 运行）
 - `STP_EVENT_UPLOADER_CONTINUOUS=0`（过滤模型——仅上送 `UPLOAD_PENDING`）
-- `STP_EVENT_UPLOADER_PRUNE_LOCAL=1`（仅灰机 `172-21-8-143`，fleet 未开）
+- `STP_EVENT_UPLOADER_PRUNE_LOCAL=1`（仅灰机 `192-0-2-143`，fleet 未开）
 
 **灰机验证**（PlanRun #209，Plan 7 / device 19 / host 8.143）：
 - 10 条 DLE：`LOCAL → UPLOAD_PENDING（upload_task 01:03:43）→ REMOTE → ARCHIVED(1)/PRUNED(8)/REMOTE(1)`

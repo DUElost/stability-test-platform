@@ -25,7 +25,7 @@ const overview: FileServerOverview = {
   status: 'healthy',
   server: {
     hostname: 'debian13',
-    address: '172.21.8.202',
+    address: '192.0.2.202',
     cpu_count: 20,
     uptime_seconds: 172800,
   },
@@ -57,7 +57,7 @@ const overview: FileServerOverview = {
   nfs: {
     service_ready: true,
     exported: true,
-    export_targets: ['172.21.8.0/23'],
+    export_targets: ['192.0.2.0/23'],
     server_threads: 16,
     requests_per_second: 1.5,
     rpc_errors_per_second: 0,
@@ -70,8 +70,8 @@ const overview: FileServerOverview = {
     failed: 0,
     unreported: 0,
     items: [{
-      host_id: '172-21-9-124',
-      ip: '172.21.9.124',
+      host_id: '198-51-100-124',
+      ip: '198.51.100.124',
       status: 'ONLINE',
       mounted: true,
       last_heartbeat: '2026-07-27T13:29:58Z',
@@ -107,7 +107,7 @@ describe('FileServerPage', () => {
     expect(await screen.findByText('916 GiB')).toBeInTheDocument();
     expect(screen.getByText('1/1')).toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
-    expect(screen.getByText('172.21.8.0/23')).toBeInTheDocument();
+    expect(screen.getByText('192.0.2.0/23')).toBeInTheDocument();
     expect(screen.getByText('已挂载')).toBeInTheDocument();
   });
 });

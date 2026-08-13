@@ -8,7 +8,7 @@
 - 标签：架构, Watcher, 无人值守闭环, 日志归档, 去重, 水平扩展, 部署策略
 - 关联：ADR-0018 (Watcher), ADR-0011 (可观测)
 
-> **Living 部署注记（2026-08-09）**：文中「15.4 / 15.4 CIFS」= **中心存储角色**（目标态 / 上一代盘）。口头 **CIFS = NFS = 中心存储**（同一台分享）。STP 生产中心存储 **过渡**挂在控制面同机 `172.21.8.202`；控制面 IP 不迁。目标独立盘 15.4 或 9.4。侧栏「文件服务器」是控制面健康页，不是中心存储。`STP_NFS_ROOT` 与 `STP_AEE_NFS_ROOT` 同角色。别称对照：[2026-storage-roles-and-aliases.md](../design/2026-storage-roles-and-aliases.md)；切盘后健康页双目标 [#205](https://github.com/DUElost/stability-test-platform/issues/205)（当前冻结）。
+> **Living 部署注记（2026-08-09）**：文中「15.4 / 15.4 CIFS」= **中心存储角色**（目标态 / 上一代盘）。口头 **CIFS = NFS = 中心存储**（同一台分享）。STP 生产中心存储 **过渡**挂在控制面同机 `192.0.2.202`；控制面 IP 不迁。目标独立盘 15.4 或 9.4。侧栏「文件服务器」是控制面健康页，不是中心存储。`STP_NFS_ROOT` 与 `STP_AEE_NFS_ROOT` 同角色。别称对照：[2026-storage-roles-and-aliases.md](../design/2026-storage-roles-and-aliases.md)；切盘后健康页双目标 [#205](https://github.com/DUElost/stability-test-platform/issues/205)（当前冻结）。
 
 ## 背景
 
@@ -18,7 +18,7 @@
 
 1. **部署形态**：同一局域网下一台控制平面（Windows 开发 / Linux 生产）+ 多 Agent 节点，只面向单 React Dashboard
 2. **多实例需求**：平台需先在实际项目中跑顺，成熟后再考虑多控制平面或多 worker
-3. **日志管理**：Loki 集中日志不契合——Agent 本地 SSD 256GB 存运行日志 + HDD 1TB 存设备日志，15.4 中心日志服务器 14TB（CIFS 共享 `//172.21.15.4/jxtinno/sonic_tinno`）仅存汇总报告与按需上送的事件；设备日志先落 Agent 本地 HDD，scan 在 Agent 本地执行，按需上送报告中 db 对应事件到 15.4；本地 HDD 达阈值后溢出上送
+3. **日志管理**：Loki 集中日志不契合——Agent 本地 SSD 256GB 存运行日志 + HDD 1TB 存设备日志，15.4 中心日志服务器 14TB（CIFS 共享 `//192.0.2.4/jxtinno/sonic_tinno`）仅存汇总报告与按需上送的事件；设备日志先落 Agent 本地 HDD，scan 在 Agent 本地执行，按需上送报告中 db 对应事件到 15.4；本地 HDD 达阈值后溢出上送
 4. **Watcher 定位**：应在 Agent 侧完成完整闭环（检测→拉取→分析→归档），控制平面只做定时拉取和聚合展示
 
 ### 长跑稳定性测试需求（2026-06-18 补充）
@@ -74,7 +74,7 @@
 **15.4 中心日志归档服务器**（2026-06-20 修订，从「全量归档」改为「按需上送」）：
 
 - **定位**：提单后开发访问的集中日志存储，非 Loki 式实时检索
-- **形态**：现有 CIFS 共享 `//172.21.15.4/jxtinno/sonic_tinno`（上一代工具已用），Agent 通过本地 CIFS 挂载点写入，开发通过同一共享只读访问
+- **形态**：现有 CIFS 共享 `//192.0.2.4/jxtinno/sonic_tinno`（上一代工具已用），Agent 通过本地 CIFS 挂载点写入，开发通过同一共享只读访问
 - **存储内容**（仅三类，不含运行日志）：
   1. 各节点汇总报告（`Result_*_org.xls` / `Result_*_final.xls` / `Result_MergeFiles.xls`）
   2. 汇总报告中 db 对应的事件目录（AEE 原始文件 + mobilelog/ + bugreport/）

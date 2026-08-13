@@ -15,10 +15,10 @@
 
 ## 环境背景
 
-- **网络配置**：所有 Linux 主机在 172.21.15.* 网段
-- **中心存储服务器**：172.21.15.4（8GB RAM，12TB 存储空间）
+- **网络配置**：所有 Linux 主机在 192.0.2.* 网段
+- **中心存储服务器**：192.0.2.4（8GB RAM，12TB 存储空间）
 - **其他 Linux 主机**：多台（每台 8GB RAM，256GB 存储）
-- **挂载关系**：所有 Linux 主机挂载到 172.21.15.4
+- **挂载关系**：所有 Linux 主机挂载到 192.0.2.4
 - **SSH 服务**：所有 Linux 主机已安装 SSH
 - **访问方式**：Windows 设备通过 Xshell/Xftp 访问
 
@@ -246,7 +246,7 @@ logger = logging.getLogger(__name__)
 class NetworkDiscovery:
     """网络主机发现器"""
 
-    def __init__(self, subnet: str = "172.21.15.0/24", port: int = 22):
+    def __init__(self, subnet: str = "192.0.2.0/24", port: int = 22):
         self.subnet = subnet
         self.port = port
 
@@ -367,10 +367,10 @@ class HeartbeatSender:
 
     def _get_local_ip(self) -> str:
         """获取本机 IP 地址"""
-        # 获取 172.21.15.* 网段的 IP
+        # 获取 192.0.2.* 网段的 IP
         for iface, addrs in psutil.net_if_addrs().items():
             for addr in addrs:
-                if addr.family == 2 and addr.address.startswith("172.21.15"):
+                if addr.family == 2 and addr.address.startswith("192.0.2"):
                     return addr.address
         return "unknown"
 ```
@@ -518,7 +518,7 @@ class MountChecker:
             )
 
     def check_central_storage(self) -> MountCheckResult:
-        """检查中心存储服务器挂载（172.21.15.4）"""
+        """检查中心存储服务器挂载（192.0.2.4）"""
         # 假设挂载到 /mnt/central-storage
         return self.check("/mnt/central-storage")
 ```
@@ -863,7 +863,7 @@ class TestConnectivity:
         """测试 SSH 连接成功场景"""
         verifier = SSHVerifier(timeout=10)
         result = verifier.verify(
-            host="172.21.15.4",
+            host="192.0.2.4",
             username="testuser",
             key_path="/path/to/key"
         )
@@ -874,7 +874,7 @@ class TestConnectivity:
         """测试 SSH 认证失败"""
         verifier = SSHVerifier(timeout=5)
         result = verifier.verify(
-            host="172.21.15.4",
+            host="192.0.2.4",
             username="wronguser",
             password="wrongpass"
         )
@@ -884,10 +884,10 @@ class TestConnectivity:
     @pytest.mark.asyncio
     async def test_network_discovery(self):
         """测试子网主机发现"""
-        discovery = NetworkDiscovery(subnet="172.21.15.0/24")
+        discovery = NetworkDiscovery(subnet="192.0.2.0/24")
         hosts = await discovery.discover_hosts(concurrent_limit=50)
         assert len(hosts) > 0
-        assert "172.21.15.4" in hosts
+        assert "192.0.2.4" in hosts
 
     def test_mount_check(self):
         """测试挂载点检查"""

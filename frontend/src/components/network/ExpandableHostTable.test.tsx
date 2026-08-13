@@ -5,7 +5,7 @@ import { ExpandableHostTable, type HostTableData } from './ExpandableHostTable';
 const host: HostTableData = {
   id: 1,
   name: '上海执行机-01',
-  ip: '172.21.8.31',
+  ip: '192.0.2.31',
   status: 'ONLINE',
   watcher_admin_active: true,
   agent_installed: true,
@@ -146,7 +146,7 @@ describe('ExpandableHostTable', () => {
       ...host,
       id: 2,
       name: '上海执行机-02',
-      ip: '172.21.8.32',
+      ip: '192.0.2.32',
     };
     render(
       <ExpandableHostTable
@@ -169,7 +169,7 @@ describe('ExpandableHostTable', () => {
       ...host,
       id: 2,
       name: '上海执行机-02',
-      ip: '172.21.8.32',
+      ip: '192.0.2.32',
       status: 'OFFLINE',
       agent_installed: false,
       resources: undefined,
@@ -178,7 +178,7 @@ describe('ExpandableHostTable', () => {
       ...host,
       id: 3,
       name: '上海执行机-03',
-      ip: '172.21.8.33',
+      ip: '192.0.2.33',
       status: 'DEGRADED',
     };
     render(<ExpandableHostTable hosts={[host, offlineHost, degradedHost]} />);

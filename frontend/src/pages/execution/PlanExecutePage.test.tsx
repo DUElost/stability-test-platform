@@ -365,8 +365,8 @@ describe('PlanExecutePage', () => {
   it('shows occupancy links in all-nodes view via active-by-device API', async () => {
     renderPage({
       hosts: [
-        { id: 'h1', ip: '172.21.8.143', status: 'ONLINE' },
-        { id: 'h2', ip: '172.21.8.192', status: 'ONLINE' },
+        { id: 'h1', ip: '192.0.2.143', status: 'ONLINE' },
+        { id: 'h2', ip: '192.0.2.192', status: 'ONLINE' },
       ],
       devices: [
         { id: 1, serial: 'DEV-FREE', host_id: 'h1', status: 'ONLINE' },
@@ -385,7 +385,7 @@ describe('PlanExecutePage', () => {
     renderPage({
       hosts: [{
         id: 'h1',
-        ip: '172.21.8.143',
+        ip: '192.0.2.143',
         status: 'ONLINE',
         capacity: {
           active_jobs: 1,
@@ -415,7 +415,7 @@ describe('PlanExecutePage', () => {
     renderPage({
       hosts: [{
         id: 'h1',
-        ip: '172.21.8.143',
+        ip: '192.0.2.143',
         status: 'ONLINE',
         capacity: { active_jobs: 0, active_devices: 0, online_healthy_devices: 2 },
       }],
@@ -556,7 +556,7 @@ describe('PlanExecutePage', () => {
 
   it('marks blocked minimap tiles with pattern legend and locate aria-label', async () => {
     renderPage({
-      hosts: [{ id: 'h1', ip: '172.21.8.143', status: 'OFFLINE' }],
+      hosts: [{ id: 'h1', ip: '192.0.2.143', status: 'OFFLINE' }],
       devices: [{
         id: 1,
         serial: 'DEV-BLOCK',
@@ -710,8 +710,8 @@ describe('PlanExecutePage', () => {
   it('sorts node sidebar by numeric IP with unassigned last', async () => {
     renderPage({
       hosts: [
-        { id: 'h2', ip: '172.21.9.124', name: null, status: 'ONLINE' },
-        { id: 'h1', ip: '172.21.8.103', name: null, status: 'ONLINE' },
+        { id: 'h2', ip: '198.51.100.124', name: null, status: 'ONLINE' },
+        { id: 'h1', ip: '192.0.2.103', name: null, status: 'ONLINE' },
       ],
       devices: [
         { id: 1, serial: 'A-1', host_id: 'h2', status: 'ONLINE' },
@@ -726,7 +726,7 @@ describe('PlanExecutePage', () => {
     const nodeLabels = screen.getAllByRole('button')
       .map(button => button.querySelector('.font-mono')?.textContent ?? '')
       .filter(Boolean);
-    expect(nodeLabels).toEqual(['172.21.8.103', '172.21.9.124', '未分配节点']);
+    expect(nodeLabels).toEqual(['192.0.2.103', '198.51.100.124', '未分配节点']);
   });
 
   it('restores draft selection and step after a remount', async () => {
@@ -851,7 +851,7 @@ describe('PlanExecutePage', () => {
 
   it('shows the host node column in the device table', async () => {
     renderPage({
-      hosts: [{ id: 'h1', ip: '172.21.8.103', name: null, status: 'ONLINE' }],
+      hosts: [{ id: 'h1', ip: '192.0.2.103', name: null, status: 'ONLINE' }],
       devices: [
         { id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' },
         { id: 2, serial: 'DEV-2', host_id: null, status: 'ONLINE' },
@@ -860,7 +860,7 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     expect(await screen.findByRole('columnheader', { name: '节点' })).toBeInTheDocument();
-    expect(screen.getByRole('cell', { name: '172.21.8.103' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: '192.0.2.103' })).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: '未分配节点' })).toBeInTheDocument();
   });
 

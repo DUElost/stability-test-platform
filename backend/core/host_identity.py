@@ -8,7 +8,7 @@ from typing import Callable, Optional
 
 
 def ip_to_host_id(ip: Optional[str]) -> Optional[str]:
-    """Map IPv4 ``172.21.9.6`` → ``172-21-9-6``.
+    """Map IPv4 ``198.51.100.6`` → ``198-51-100-6``.
 
     Returns ``None`` when *ip* is missing or not a usable IPv4 address so
     callers can fall back to an opaque id. IPv6 is intentionally not mapped
@@ -33,7 +33,7 @@ def allocate_host_id(
     """Allocate a unique host id, preferring the IP-derived form.
 
     *exists* returns True when a candidate id is already taken. On collision,
-    a short suffix is appended (``172-21-9-6-a1b2``). Without a usable IPv4,
+    a short suffix is appended (``198-51-100-6-a1b2``). Without a usable IPv4,
     falls back to ``auto-<12 hex>``.
     """
     base = ip_to_host_id(ip)

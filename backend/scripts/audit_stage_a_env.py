@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx
 
-BACKEND = os.getenv("STP_AUDIT_BACKEND", "http://172.21.10.25:8000")
+BACKEND = os.getenv("STP_AUDIT_BACKEND", "http://203.0.113.25:8000")
 ENV_FILE = Path(os.getenv("STP_AUDIT_ENV_FILE", Path(__file__).resolve().parents[1] / ".env"))
 PLACEHOLDER_PATTERNS = (
     "change-me",

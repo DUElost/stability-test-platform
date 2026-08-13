@@ -1,12 +1,12 @@
 """Sprint 4 真机验收：10.36 三设备 PlanRun + dedup 管道。
 
 基于 seed_and_smoke.py，扩展为：
-  - 指定 host（默认 auto-fdaf1d55e319 / 172.21.10.36）下全部 ONLINE 设备扇出
+  - 指定 host（默认 auto-fdaf1d55e319 / 203.0.113.36）下全部 ONLINE 设备扇出
   - 主链 smoke → watcher-summary → dedup scan/merge 状态轮询
 
 示例：
     set STP_ADMIN_PASSWORD=<password>
-    set STP_SMOKE_ORIGIN=http://172.21.10.25:5173
+    set STP_SMOKE_ORIGIN=http://203.0.113.25:5173
     python backend/scripts/sprint4_real_device_verify.py
     python backend/scripts/sprint4_real_device_verify.py --no-hot-update --patrol-interval 30
     python backend/scripts/sprint4_real_device_verify.py --skip-run --plan-run-id 49
@@ -46,8 +46,8 @@ from seed_and_smoke import (  # noqa: E402
 )
 
 DEFAULT_HOST_ID = "auto-fdaf1d55e319"
-DEFAULT_HOST_IP = "172.21.10.36"
-PROD_BACKEND = "http://172.21.10.25:8000"
+DEFAULT_HOST_IP = "203.0.113.36"
+PROD_BACKEND = "http://203.0.113.25:8000"
 
 
 def resolve_host_devices(

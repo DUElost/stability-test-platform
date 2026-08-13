@@ -51,8 +51,8 @@ class TestHeartbeat:
             id="104",
             hostname="test-host-104",
             name="test-host-b",
-            ip="172.21.15.104",
-            ip_address="172.21.15.104",
+            ip="192.0.2.104",
+            ip_address="192.0.2.104",
             status=HostStatus.ONLINE.value,
         )
         db_session.add(host_b)
@@ -68,7 +68,7 @@ class TestHeartbeat:
         )
         assert response.status_code == 200, response.text
         db_session.refresh(host_b)
-        assert host_b.ip == "172.21.15.104"  # 保留旧 IP，不被占用方覆盖
+        assert host_b.ip == "192.0.2.104"  # 保留旧 IP，不被占用方覆盖
 
     def test_heartbeat_updates_script_catalog_version_and_reports_outdated(
         self, client, sample_host, db_session
@@ -191,7 +191,7 @@ class TestHeartbeat:
             json={
                 "host_id": 0,
                 "status": "ONLINE",
-                "host": {"ip": "172.21.10.36"},
+                "host": {"ip": "203.0.113.36"},
             },
         )
 
@@ -205,7 +205,7 @@ class TestHeartbeat:
         assert second_host_id != "0"
         assert first_host_id != second_host_id
         assert first_host_id == "198-18-0-1"
-        assert second_host_id == "172-21-10-36"
+        assert second_host_id == "203-0-113-36"
 
     def test_heartbeat_updates_existing_host_ip_from_payload(self, client, sample_host, db_session):
         """Test heartbeat refreshes displayed host IP when agent reports a new address"""
@@ -214,15 +214,15 @@ class TestHeartbeat:
             json={
                 "host_id": sample_host.id,
                 "status": "ONLINE",
-                "host": {"ip": "172.21.10.36"},
+                "host": {"ip": "203.0.113.36"},
             },
         )
 
         assert response.status_code == 200
 
         db_session.refresh(sample_host)
-        assert sample_host.ip == "172.21.10.36"
-        assert sample_host.ip_address == "172.21.10.36"
+        assert sample_host.ip == "203.0.113.36"
+        assert sample_host.ip_address == "203.0.113.36"
 
     def test_heartbeat_with_devices(self, client, sample_host):
         """Test heartbeat with device information"""

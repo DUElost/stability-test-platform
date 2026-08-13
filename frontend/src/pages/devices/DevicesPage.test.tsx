@@ -70,7 +70,7 @@ describe('DevicesPage', () => {
           id: 1,
           serial: 'TEST-SERIAL',
           model: 'TestModel',
-          host_id: '172-21-9-123',
+          host_id: '198-51-100-123',
           status: 'ONLINE',
           tags: [],
           last_seen: '2026-08-05T18:00:00+08:00',
@@ -80,9 +80,9 @@ describe('DevicesPage', () => {
     });
     mockFetchHostList.mockResolvedValue([
       {
-        id: '172-21-9-123',
-        name: '172.21.9.123',
-        ip: '172.21.9.123',
+        id: '198-51-100-123',
+        name: '198.51.100.123',
+        ip: '198.51.100.123',
         ssh_user: 'android',
         status: 'ONLINE',
         extra: {},
@@ -99,7 +99,7 @@ describe('DevicesPage', () => {
     await waitFor(() => {
       const row = screen.getByText('TEST-SERIAL').closest('tr');
       expect(row).not.toBeNull();
-      expect(within(row as HTMLElement).getByText('172.21.9.123')).toBeInTheDocument();
+      expect(within(row as HTMLElement).getByText('198.51.100.123')).toBeInTheDocument();
     });
   });
 });
