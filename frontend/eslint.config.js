@@ -1,12 +1,8 @@
-// ESLint 9 flat config.
+// ESLint flat config（ESLint 10）。
 //
-// 现状:仓库此前从未跑过 lint,存量告警数以百计。CI 里以 continue-on-error
-// 方式运行(见 .github/workflows/ci.yml),先让信号可见、不阻塞合入;
-// 存量收敛后再把 continue-on-error 摘掉。
-//
-// 规则取向:只保留"能指向真实缺陷"的项(未使用变量、hooks 依赖、
-// 意外的 any 扩散),纯风格项一律关掉 —— 没有 formatter 的前提下,
-// 风格规则只会制造噪音。
+// 规则取向：只保留「能指向真实缺陷」的项（未使用变量、hooks 依赖、
+// 意外的 any 扩散），纯风格项一律关掉。CI 以 --max-warnings 0 阻塞
+// （ci.yml §lint），本地与 CI 结果一致。
 import js from '@eslint/js';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
@@ -38,6 +34,16 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+
+      // react-hooks v7 的编译器级规则一次性暴露 64+ 处存量（set-state-in-effect /
+      // refs / purity 等），与本 majors 迁移解耦：先显式关闭并另开 issue 分批修复，
+      // 避免把依赖升级 PR 膨胀成行为改造。
+      'react-hooks/set-state-in-effect': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/purity': 'off',
+      'react-hooks/incompatible-library': 'off',
+      'react-hooks/immutability': 'off',
+      'react-hooks/preserve-manual-memoization': 'off',
 
       // 未使用的变量/导入 —— 死代码信号,`_` 前缀表示刻意忽略
       '@typescript-eslint/no-unused-vars': [
