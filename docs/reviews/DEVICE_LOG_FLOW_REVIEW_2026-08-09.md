@@ -957,8 +957,8 @@ D-1～D-10 全部落地于本文 v3.0。§五+§六 决策已提取为 [`ADR-002
 | **0** | 文档 | ✅ 已完成（2026-08-09） | D-1～D-10 + §4.5 + §八 + §九（本文 v3.0）；决策见 [`ADR-0028`](../adr/ADR-0028-device-log-event-and-continuous-upload.md) |
 | **1** | 止血 | 3–5 天 | P1-1(已修) + P4-2(已修) + P0-1(短期) + P0-3 + P1-2 + P2-6 + P2-2a |
 | **2** | 可观测 | 1–2 天 | P1-3 + P3-1～P3-4 |
-| **3** | 重构 | ~3 周 | A-1～A-11 + P0-2(状态机替代) + 删阶段 1 短期补丁 |
-| **4** | 平台+运维 | 按排期 | A-8(UNISOC/QCOM) + O-1～O-7 + 平台 issue 验收 |
+| **3** | 重构 | ~2 周 | **✅ 方案 A 生产生效（2026-08-13）**——D1（DLE 表）+ D2（FAILED 触发 + upload_task 恢复）+ D3（UPLOAD_PENDING 状态追踪）；灰机 PlanRun #209 全链路验证通过（10 条 DLE：LOCAL→UPLOAD_PENDING→REMOTE→ARCHIVED/PRUNED）。剩余：P0-2（HddSpill 状态机替代）、P0-1（extract 双根）、旧代码清理 |
+| **4** | 平台+运维 | 按排期 | A-8(UNISOC/QCOM) + O-1～O-7 + PRUNE_LOCAL fleet 决策（#217 灰机已验） |
 
 ---
 

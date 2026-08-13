@@ -191,19 +191,37 @@ extract 双根遍历：
 
 ### 分阶段落地
 
-| 阶段 | 内容 | 时间 |
-|------|------|------|
-| 1（止血） | P0-1（extract 双根）+ P0-3（merge since）+ P2-6（文档同步）+ P2-2a（handler 顺序） | 3–5 天 |
-| 2（可观测） | API 暴露 `run_context.archive` + 前端 N/M host | 1–2 天 |
-| **3（重构）** | **方案 A 实施**：D1（DLE 表）+ D2（FAILED 触发 + 恢复 upload_task）+ D3（状态追踪）+ D4–D9 | ~2 周 |
-| 4（平台入口+运维） | UNISOC/QCOM stub + 存储切换 SOP + PRUNE_LOCAL fleet 决策 | 按观察窗 |
+| 阶段 | 内容 | 时间 | 状态 |
+|------|------|------|------|
+| 1（止血） | P0-1（extract 双根）+ P0-3（merge since）+ P2-6（文档同步）+ P2-2a（handler 顺序） | 3–5 天 | P2-6 已落地（`resolve_shared_storage_root()`）；其余按排期 |
+| 2（可观测） | API 暴露 `run_context.archive` + 前端 N/M host | 1–2 天 | 待排期 |
+| **3（重构）** | **方案 A 实施**：D1（DLE 表）+ D2（FAILED 触发 + 恢复 upload_task）+ D3（状态追踪）+ D4–D9 | ~2 周 | **✅ 生产生效（2026-08-13）** |
+| 4（平台入口+运维） | UNISOC/QCOM stub + 存储切换 SOP + PRUNE_LOCAL fleet 决策 | 按观察窗 | UNISOC/QCOM stub 已锁定（#220）；PRUNE_LOCAL 灰机验证通过（#217），fleet 待决策 |
+
+### 方案 A 生产实施记录（2026-08-13）
+
+**代码**（main 提交序列）：
+- `bce5177`：`_AUTO_STATUSES` 加 `FAILED`；恢复 `collect_upload_event_dir_names`（仅 scan xls，不再 union signal）；新增 `upload_task`（标记 `UPLOAD_PENDING`）；`count_pending_upload_events` 按 `STP_EVENT_UPLOADER_CONTINUOUS` 区分
+- `6da21d0`：`EventState.UPLOAD_PENDING` 入枚举；HddSpill `force=True` 绕过过滤模型
+- `a085656`：`upload_task` 注册进 `SAQ_FUNCTIONS`（漏注册导致 worker 不认识函数）
+- `1fb8e2a`：Agent `_recover_pending` 一次性 → 30s 周期轮询；recover/retry 入队 `force=True`（修复 Plan A 下 self-gate）
+
+**fleet 配置**（20 台 Agent，代码版本 `1fb8e2a`）：
+- `STP_EVENT_UPLOADER_ENABLED=1`（EventUploader 运行）
+- `STP_EVENT_UPLOADER_CONTINUOUS=0`（过滤模型——仅上送 `UPLOAD_PENDING`）
+- `STP_EVENT_UPLOADER_PRUNE_LOCAL=1`（仅灰机 `172-21-8-143`，fleet 未开）
+
+**灰机验证**（PlanRun #209，Plan 7 / device 19 / host 8.143）：
+- 10 条 DLE：`LOCAL → UPLOAD_PENDING（upload_task 01:03:43）→ REMOTE → ARCHIVED(1)/PRUNED(8)/REMOTE(1)`
+- CIFS：`devices/209/` 9 目录、`jira/209/` 9 项、`dedup/209/` 2 文件
+- 灰机 HDD 从 55GB 降至 49GB（净回收）
 
 ## 相关
 
 - 审查报告：[`DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](../reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md)（v3.0）
-- 方案 A 讨论记录：本 ADR 2026-08-12 修订
+- 方案 A 讨论记录：本 ADR 2026-08-12 修订；生产实施 2026-08-13
 - ADR-0025（方案 C 存储与访问）
 - ADR-0026（Plan 执行扩容）
 - Issue #73（展锐异常采集）
-- Issue #213（旧上送双轨删除——upload_task 需恢复）
+- Issue #213（旧上送双轨删除——upload_task 已恢复）
 - Issue #217（PRUNE_LOCAL 灰度）
