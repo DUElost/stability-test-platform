@@ -36,10 +36,10 @@ updates:
       interval: weekly
     open-pull-requests-limit: 10
     ignore:
-      # typescript-eslint 8.x 的 peer 上限是 typescript<6.1；TS 6/7 的大
-      # 版本更新需人工迁移，安全更新不受影响（#243 的 ERESOLVE 根因）。
+      # typescript-eslint 8.x 的 peer 上限是 typescript<6.1；TS 的
+      # semver-major 版本更新需人工迁移（#243 的 ERESOLVE 根因）。
+      # update-types 限定只作用于版本更新，安全更新不受影响。
       - dependency-name: "typescript"
-        versions: [">=6.0"]
         update-types: ["version-update:semver-major"]
     groups:
       # minor/patch 走自动合入；major（react 19 / tailwind 4 / eslint 10
