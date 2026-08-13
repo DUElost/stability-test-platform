@@ -15,7 +15,7 @@
 | 2 | 专题 1 续 | `job_log_signal.device_log_event_id` + `job_id SET NULL` + `scan_round_id` | 步骤 1 |
 | 3 | 专题 1 续 | Agent `POST /api/v1/agent/device-log-events`（upsert + state 转换） | 步骤 1 |
 | 4 | 专题 5（MTK） | `PlatformCollector` 协议 + Reconciler 写入 `DeviceLogEvent` | 步骤 3 |
-| 5 | 专题 2 | `EventUploader` 连续上送 + feature flag | 步骤 4 |
+| 5 | 专题 2 | `EventUploader` 执行者 + 模式开关（`CONTINUOUS`） | 步骤 4 |
 | 6 | 专题 3 | `HddSpillMonitor` 改查 DB | 步骤 5 |
 | 7 | 专题 4 | SAQ scan/upload/merge/extract 链 | 步骤 5 |
 | 8 | 专题 6 | 灰度验证 + 旧路径删除 | 步骤 7 |
@@ -105,9 +105,9 @@ class EventState(str, Enum):
 
 ---
 
-## 专题 2：连续上送 `EventUploader`
+## 专题 2：EventUploader 执行者与模式开关
 
-**结论**：Agent 进程内单队列 + 最多 2 个并发 copytree worker；`LOCAL` 入队后立即上送，不等待 PlanRun 终态。
+**结论**：EventUploader 是 Agent 侧唯一 copytree 执行者（单队列 + 2 slot + 重试/checksum/PRUNE）。默认 `CONTINUOUS=0`：只拉取 `upload_task` 标记的 `UPLOAD_PENDING`（过滤模型）；`CONTINUOUS=1` 是逃生阀：`LOCAL` 入队后立即全量上送，不等待 PlanRun 终态。
 
 ### 2.1 线程模型
 
@@ -136,23 +136,27 @@ enqueue(event_id)
 
 ### 2.4 Agent 重启恢复
 
-启动时 `SELECT id FROM device_log_event WHERE host_id=? AND state IN ('LOCAL','UPLOADING','UPLOAD_FAILED')`（Agent 本地缓存最近 id 列表，或由控制面 API `GET ...?host_id=&state=` 拉取）→ 重新入队。
+启动即周期轮询由 `_recover_pending` 执行（`_RECOVER_POLL_INTERVAL` 30s）：
+
+- `CONTINUOUS=0`（默认）：只恢复 `UPLOAD_PENDING`（upload_task 已筛选的子集），外加 `UPLOADING` / `UPLOAD_FAILED` 的中断残留；
+- `CONTINUOUS=1`：恢复 `LOCAL`（立即全量上送）以及 `UPLOADING` / `UPLOAD_FAILED`。
+
+`UPLOAD_FAILED` 按 2.3 的退避与 10 分钟重扫规则处理。
 
 ### 2.5 Feature flag
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `STP_EVENT_UPLOADER_ENABLED` | `0` | `1` 启用连续上送；`0` 走旧 PlanRun 触发路径 |
+| `STP_EVENT_UPLOADER_ENABLED` | `1` | EventUploader 运行（Agent 侧执行者） |
+| `STP_EVENT_UPLOADER_CONTINUOUS` | `0` | `0` 过滤模型（仅拉 `UPLOAD_PENDING`）；`1` 逃生阀（全量上送） |
 
-回滚：设 `0` + `reload_config`，无需重启。
-
-### 2.6 新旧路径并存
+### 2.6 模式与回滚
 
 | 问题 | 策略 |
 |------|------|
-| 双上传 | flag=1 时 `upload_event_dirs` SocketIO 命令 no-op（Agent 侧短路）；flag=0 时不创建 `DeviceLogEvent` 上送任务 |
-| 旧路径删除 | 全舰队 flag=1 稳定 2 周后（约 2026-09-01 目标）删除 `collect_upload_event_dir_names` + `upload_task` emit |
-| 过渡期 | 4 周 |
+| 默认模式 | `CONTINUOUS=0`：EventUploader 只拉 `upload_task` 标记的 `UPLOAD_PENDING` |
+| 逃生阀 | `CONTINUOUS=1`：`LOCAL` 全量入队（无 PlanRun 纯采集等场景） |
+| 回滚 | 改 env + `reload_config`，无需重启 |
 
 ---
 
@@ -185,14 +189,14 @@ enqueue(event_id)
 
 ## 专题 4：scan/upload/merge/extract SAQ 链
 
-**结论**：scan 只产 xls；upload 变「确认 REMOTE」；merge 按 `scan_round_id` 过滤；extract 查 DB。
+**结论**：scan 只产 xls；`upload_task` 按 scan xls 标记 `UPLOAD_PENDING`（EventUploader 拉取执行）；merge 按 `scan_round_id` 过滤；extract 查 DB。
 
 ### 4.1 各 task 对照
 
 | Task | 改前 | 改后 |
 |------|------|------|
-| `scan_task` | 发 scan + poll artifact + enqueue upload | 只发 scan + poll；写 `scan_round_id`；直接 enqueue merge（跳过 upload_task） |
-| `upload_task` | emit `upload_events` 等 Agent | 轮询 `device_log_event.state=REMOTE`（超时 30min 记 WARNING） |
+| `scan_task` | 发 scan + poll artifact + enqueue upload | 只发 scan + poll；写 `scan_round_id`；enqueue upload_task 后 enqueue merge |
+| `upload_task` | emit `upload_events` 等 Agent | 标记 scan 引用事件 `LOCAL → UPLOAD_PENDING`；EventUploader 30s 拉取执行 copytree |
 | `merge_task` | `_load_org_files_for_merge` 全量 | 仅 `scan_round_id = 本轮` 或 `created_at >= round_started_at` |
 | `extract_task` | `collect_upload_event_dir_names` | `SELECT remote_path FROM device_log_event WHERE plan_run_id=? AND state IN (...)` |
 
@@ -285,7 +289,7 @@ class PlatformCollector(Protocol):
 | MTK 采集 | 专题 5 MTK Collector + 专题 1 API |
 | L1 降级 | ADR D5 `get_aee_local_root` SSD（已部分落地）+ 专题 3 禁用 spill |
 | L2 溢出 | 专题 3 + 专题 2 上送 |
-| 连续上送 | 专题 2；5min 内 `REMOTE` |
+| 过滤上送 | 专题 2；`UPLOAD_PENDING` 后 5min 内 `REMOTE` |
 | PlanRun 汇总 | 专题 4 scan/merge/extract |
 | 部分 host 失败 | 专题 4 `run_context.archive`（阶段 2 可观测） |
 | 增量 scan | 专题 1 `scan_round_id` + 专题 4 merge 过滤 |

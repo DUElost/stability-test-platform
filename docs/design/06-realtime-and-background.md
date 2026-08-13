@@ -115,6 +115,8 @@ PlanRun 终态
        ├→ poll NFS dedup/{plan_run_id}/ (10s × 30 = 300s max)
        │    等待 registered >= len(triggered_host_ids) 或超时
        ├→ run_scan_sync → PlanRunArtifact(scan_result_xls) 注册 DB
+       ├→ enqueue upload_task（控制面：scan 引用事件 LOCAL → UPLOAD_PENDING）
+       │     └→ EventUploader（Agent，30s 轮询）copytree → REMOTE
        └→ enqueue merge_task
             ├→ run_merge_sync → PlanRunArtifact(merge_result_xls) 注册 DB
             ├→ poll device_log_event 直至 REMOTE/ARCHIVED（best-effort）
@@ -126,21 +128,21 @@ PlanRun 终态
 
 | 步骤 | 依赖 | 路径 | 说明 |
 |------|------|------|------|
-| scan_task | — | 入口 | poll 完成后 enqueue merge |
+| scan_task | — | 入口 | poll 完成后 enqueue upload_task 再 enqueue merge |
 | merge_task | scan_task 完成 | `dedup/{run_id}/` | 读 scan 产物 _org.xls，产出 merge xls |
 | extract_task | merge_task 完成 | `devices/` → `jira/{run_id}/` | 仅按 DLE `remote_path` 打包（#213 B）；merge 成功后 poll DLE REMOTE/ARCHIVED；超时仍 enqueue extract（best-effort） |
 | merge_task SAQ timeout | — | — | `_MERGE_TASK_SAQ_TIMEOUT` = 300 + 660 + 120s，覆盖 merge 子进程与 DLE poll |
 
 - **多 host**：`scan_task` poll 等待所有 triggered host 的 artifact 或超时
-- **Agent 上送**：`upload_scan_report`（scan xls）；事件目录由 EventUploader 连续上送
+- **Agent 上送**：`upload_scan_report`（scan xls）；事件目录由 EventUploader 拉取 `UPLOAD_PENDING` 执行 copytree（`STP_EVENT_UPLOADER_CONTINUOUS=1` 时改为全量上送）
 
 ### 五触发场景
 
 | # | 场景 | is_final | 触发方式 | 说明 |
 |---|------|----------|---------|------|
 | 1 | 终态自动 | True | aggregator enqueue | PlanRun 终态自动触发 |
-| 2 | abort | True | 前端确认后 enqueue | 用户 abort → FAILED；scan/merge 自动，仅 extract 需确认 |
-| 3 | FAILED/DEGRADED | True | 前端确认后 enqueue | 中断/失败；scan/merge 自动，仅 extract 需确认 |
+| 2 | abort | True | 前端确认后 enqueue | 用户 abort → FAILED；scan/upload 自动，merge/extract 跳过（ADR-0028 D2） |
+| 3 | FAILED/DEGRADED | True | 前端确认后 enqueue | 中断/失败；scan/upload 自动，merge/extract 跳过（ADR-0028 D2） |
 | 4 | 手动归档 | True | POST /archive | 同时触发 archive_now + scan_now |
 | 5 | 自动归档间隔 | RUNNING：增量 False；终态：仅首次 True | `auto_archive_sweep` 周期（默认 120s） | 见下节 |
 
