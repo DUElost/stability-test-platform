@@ -7,7 +7,7 @@
 - **角色/别称（权威）**：[2026-storage-roles-and-aliases.md](./2026-storage-roles-and-aliases.md)
 - **历史实施计划（已归档）**：[2026-06-20-sprint2-watcher-hdd-logarchiver.md](../archive/sprints/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md)
 
-> **部署注记（2026-08-13）**：正文「15.4 CIFS」= **中心存储角色**（ADR 目标态 / 上一代盘）。口头 **CIFS = NFS = 中心存储**（同一台分享）。STP 生产中心存储 **过渡**挂在控制面同机 `//172.21.15.253/jxtinno/sonic_tinno`（2026-08-13 起控制面 IP 由 8.202 变更，其余不变）。目标迁到 15.4 或 9.4。侧栏「文件服务器」是控制面健康页，不是中心存储。`STP_NFS_ROOT` 与 `STP_AEE_NFS_ROOT` 同角色（CP 拿它拼 `/scripts` 是误用）。
+> **部署注记（2026-08-13）**：正文「15.4 CIFS」= **中心存储角色**（ADR 目标态 / 上一代盘）。口头 **CIFS = NFS = 中心存储**（同一台分享）。STP 生产中心存储 **过渡**挂在控制面同机 `//172.21.15.253/jxtinno/sonic_tinno`（2026-08-13 整机由 8.202 迁入）。目标迁到 15.4 或 9.4。侧栏「文件服务器」是控制面健康页，不是中心存储。`STP_NFS_ROOT` 与 `STP_AEE_NFS_ROOT` 同角色（CP 拿它拼 `/scripts` 是误用）。
 
 ---
 
@@ -210,4 +210,4 @@ HDD 满：**HddSpillMonitor** 溢出最旧事件 → `15.4/devices/`。
 | 2026-06-21 | 初版：Sprint 2 设计 + Sprint 3/4 断层清单 |
 | 2026-06-17 | 废弃 Agent `run_log_server`（`:8900`）；运行日志改为实时控制面 + 事后 SSH |
 | 2026-08-09 | 部署注记：CIFS 过渡在 8.202；「15.4」为目标角色外号；§2.3 与别称文档对齐 |
-| 2026-08-13 | 控制面 IP 由 8.202 改为 15.253（仅 IP 变更）；过渡 UNC 与部署注记同步 |
+| 2026-08-13 | 控制面整机由 8.202 迁至 15.253；过渡 UNC 与部署注记同步 |

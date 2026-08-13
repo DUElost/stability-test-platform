@@ -8,7 +8,7 @@
 - 标签：架构, Watcher, 无人值守闭环, 日志归档, 去重, 水平扩展, 部署策略
 - 关联：ADR-0018 (Watcher), ADR-0011 (可观测)
 
-> **Living 部署注记（2026-08-13）**：文中「15.4 / 15.4 CIFS」= **中心存储角色**（目标态 / 上一代盘）。口头 **CIFS = NFS = 中心存储**（同一台分享）。STP 生产中心存储 **过渡**挂在控制面同机 `172.21.15.253`（2026-08-13 起控制面 IP 由 8.202 变更，其余不变）。目标独立盘 15.4 或 9.4。侧栏「文件服务器」是控制面健康页，不是中心存储。`STP_NFS_ROOT` 与 `STP_AEE_NFS_ROOT` 同角色。别称对照：[2026-storage-roles-and-aliases.md](../design/2026-storage-roles-and-aliases.md)；切盘后健康页双目标 [#205](https://github.com/DUElost/stability-test-platform/issues/205)（当前冻结）。
+> **Living 部署注记（2026-08-13）**：文中「15.4 / 15.4 CIFS」= **中心存储角色**（目标态 / 上一代盘）。口头 **CIFS = NFS = 中心存储**（同一台分享）。STP 生产中心存储 **过渡**挂在控制面同机 `172.21.15.253`（2026-08-13 整机由 8.202 迁入，原「控制面 IP 不迁」断言作废）。目标独立盘 15.4 或 9.4。侧栏「文件服务器」是控制面健康页，不是中心存储。`STP_NFS_ROOT` 与 `STP_AEE_NFS_ROOT` 同角色。别称对照：[2026-storage-roles-and-aliases.md](../design/2026-storage-roles-and-aliases.md)；切盘后健康页双目标 [#205](https://github.com/DUElost/stability-test-platform/issues/205)（当前冻结）。
 
 ## 背景
 
