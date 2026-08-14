@@ -116,6 +116,18 @@ def test_split_panels_when_share_address_and_storage_job_configured(tmp_path, mo
     assert any('job="file-server"' in q for q in fake.queries)
 
 
+def test_share_address_equal_to_control_plane_stays_co_located(tmp_path, monkeypatch):
+    fake = _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.202")
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    assert result["storage_server"]["same_source"] is True
+    assert result["storage_server"]["monitoring"]["prometheus_available"] is True
+    assert "STORAGE_METRICS_UNAVAILABLE" not in {a["code"] for a in result["alerts"]}
+    assert any('job="file-server"' in q for q in fake.queries)
+
+
 def test_split_without_storage_job_reports_missing_storage_metrics(tmp_path, monkeypatch):
     _patch_file_server_deps(monkeypatch, tmp_path)
     monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.204")
@@ -126,6 +138,14 @@ def test_split_without_storage_job_reports_missing_storage_metrics(tmp_path, mon
     assert result["storage_server"]["monitoring"]["prometheus_available"] is False
     assert result["storage_server"]["system"]["cpu_usage_pct"] is None
     assert {"STORAGE_METRICS_UNAVAILABLE"} <= {a["code"] for a in result["alerts"]}
+
+
+def test_finite_float_rejects_nan_and_inf():
+    assert monitor._finite_float("NaN") is None
+    assert monitor._finite_float("+Inf") is None
+    assert monitor._finite_float("-Inf") is None
+    assert monitor._finite_float("1.5") == 1.5
+    assert monitor._finite_float("not-a-number") is None
 
 
 def test_host_mount_summary_counts_any_ok_flag_as_mounted():

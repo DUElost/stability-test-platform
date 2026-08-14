@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import shutil
@@ -93,6 +94,20 @@ def _round_opt(value: float | None) -> float | None:
     return round(float(value), 2) if value is not None else None
 
 
+def _finite_float(raw: Any) -> float | None:
+    """Parse a Prometheus numeric value, rejecting NaN / ±Inf as None.
+
+    The Prometheus HTTP API encodes NaN / +Inf / -Inf as JSON strings; ``float``
+    happily accepts them, but they would poison ``int()`` conversions and the
+    response JSON (strict serializers reject non-finite numbers).
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
 class _PrometheusClient:
     def __init__(self) -> None:
         self._base_url = os.getenv("STP_PROMETHEUS_URL", _PROMETHEUS_URL_DEFAULT).rstrip("/")
@@ -115,7 +130,7 @@ class _PrometheusClient:
         if not result:
             return None
         try:
-            return float(result[0]["value"][1])
+            return _finite_float(result[0]["value"][1])
         except (KeyError, IndexError, TypeError, ValueError):
             return None
 
@@ -130,7 +145,11 @@ class _PrometheusClient:
         points: list[dict[str, Any]] = []
         for raw_ts, raw_value in result[0].get("values") or []:
             try:
-                points.append({"timestamp": float(raw_ts), "value": round(float(raw_value), 3)})
+                timestamp = _finite_float(raw_ts)
+                value = _finite_float(raw_value)
+                if timestamp is None or value is None:
+                    continue
+                points.append({"timestamp": timestamp, "value": round(value, 3)})
             except (TypeError, ValueError):
                 continue
         return points
@@ -258,10 +277,11 @@ def _panel_jobs() -> tuple[str, str | None, str]:
     )
     control = _safe_prom_label(control_raw, _NODE_JOB_DEFAULT)
     share_addr = os.getenv("STP_AEE_SHARE_ADDRESS", "").strip()
+    co_located = (not share_addr) or share_addr == _server_address()
     storage_raw = os.getenv("STP_STORAGE_NODE_JOB", "").strip()
     if storage_raw:
         storage: str | None = _safe_prom_label(storage_raw, control)
-    elif share_addr:
+    elif not co_located:
         storage = None
     else:
         storage = control

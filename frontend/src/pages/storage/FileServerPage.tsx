@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
@@ -213,7 +213,7 @@ function NodeHeader({
   title: string;
   node: FileServerNodeIdentity;
   monitoring: FileServerNodeMonitoring;
-  trailing?: React.ReactNode;
+  trailing?: ReactNode;
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
@@ -234,17 +234,20 @@ function NodeHeader({
 function SystemLoadSection({
   system,
   node,
+  idPrefix,
 }: {
   system: FileServerNodeSystem;
   node: FileServerNodeIdentity;
+  idPrefix: string;
 }) {
   const cpu = system.cpu_usage_pct;
   const memory = system.memory_usage_pct;
+  const titleId = `${idPrefix}-load-title`;
   return (
-    <section className="border-y py-4" aria-labelledby="server-load-title">
+    <section className="border-y py-4" aria-labelledby={titleId}>
       <div className="mb-4 flex items-center gap-2">
         <Cpu className={cn('h-4 w-4', TEXT.subtitle)} />
-        <h2 id="server-load-title" className={cn('text-sm font-semibold', TEXT.heading)}>主机负载</h2>
+        <h2 id={titleId} className={cn('text-sm font-semibold', TEXT.heading)}>主机负载</h2>
       </div>
       <div className="space-y-4">
         <div>
@@ -278,12 +281,19 @@ function SystemLoadSection({
   );
 }
 
-function ClientMountSection({ mount }: { mount: FileServerClientMount }) {
+function ClientMountSection({
+  mount,
+  idPrefix,
+}: {
+  mount: FileServerClientMount;
+  idPrefix: string;
+}) {
+  const titleId = `${idPrefix}-client-mount-title`;
   return (
-    <section className="border-y py-4" aria-labelledby="client-mount-title">
+    <section className="border-y py-4" aria-labelledby={titleId}>
       <div className="mb-4 flex items-center gap-2">
         <HardDrive className={cn('h-4 w-4', TEXT.subtitle)} />
-        <h2 id="client-mount-title" className={cn('text-sm font-semibold', TEXT.heading)}>客户端挂载</h2>
+        <h2 id={titleId} className={cn('text-sm font-semibold', TEXT.heading)}>客户端挂载</h2>
       </div>
       <dl className="divide-y text-sm">
         <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>挂载路径</dt><dd className="font-mono text-xs">{mount.path}</dd></div>
@@ -334,12 +344,19 @@ function StorageMetricCards({
   );
 }
 
-function NfsSection({ nfs }: { nfs: FileServerNfs }) {
+function NfsSection({
+  nfs,
+  idPrefix,
+}: {
+  nfs: FileServerNfs;
+  idPrefix: string;
+}) {
+  const titleId = `${idPrefix}-nfs-service-title`;
   return (
-    <section className="border-y py-4" aria-labelledby="nfs-service-title">
+    <section className="border-y py-4" aria-labelledby={titleId}>
       <div className="mb-4 flex items-center gap-2">
         <Network className={cn('h-4 w-4', TEXT.subtitle)} />
-        <h2 id="nfs-service-title" className={cn('text-sm font-semibold', TEXT.heading)}>NFS 服务</h2>
+        <h2 id={titleId} className={cn('text-sm font-semibold', TEXT.heading)}>NFS 服务</h2>
       </div>
       <dl className="divide-y text-sm">
         <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>服务状态</dt><dd>{nfs.service_ready ? <Badge variant="success">运行中</Badge> : <Badge variant="destructive">异常</Badge>}</dd></div>
@@ -439,8 +456,8 @@ export default function FileServerPage() {
                 monitoring={data.control_plane.monitoring}
               />
               <div className="space-y-4 px-4">
-                <SystemLoadSection system={data.control_plane.system} node={data.control_plane.node} />
-                <ClientMountSection mount={data.control_plane.client_mount} />
+                <SystemLoadSection system={data.control_plane.system} node={data.control_plane.node} idPrefix="control-plane" />
+                <ClientMountSection mount={data.control_plane.client_mount} idPrefix="control-plane" />
               </div>
             </div>
 
@@ -461,8 +478,8 @@ export default function FileServerPage() {
                   nfs={data.storage_server.nfs}
                   agents={data.agents}
                 />
-                <NfsSection nfs={data.storage_server.nfs} />
-                <SystemLoadSection system={data.storage_server.system} node={data.storage_server.node} />
+                <NfsSection nfs={data.storage_server.nfs} idPrefix="storage-server" />
+                <SystemLoadSection system={data.storage_server.system} node={data.storage_server.node} idPrefix="storage-server" />
               </div>
             </div>
           </div>
