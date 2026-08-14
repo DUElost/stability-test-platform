@@ -343,15 +343,17 @@ def _device_log_disk_summary(hosts: list[Any]) -> dict[str, Any]:
     critical = 0
     for host in hosts:
         raw = (getattr(host, "extra", None) or {}).get("disk_usage_aee") or {}
-        if raw.get("usage_percent") is None:
+        usage = _finite_float(raw.get("usage_percent"))
+        total_gb = _finite_float(raw.get("total_gb"))
+        used_gb = _finite_float(raw.get("used_gb"))
+        free_gb = _finite_float(raw.get("free_gb"))
+        if usage is None or total_gb is None or used_gb is None or free_gb is None:
             continue
-        try:
-            usage = float(raw["usage_percent"])
-            total_bytes = int(round(float(raw["total_gb"]) * _GIB))
-            used_bytes = int(round(float(raw["used_gb"]) * _GIB))
-            available_bytes = int(round(float(raw["free_gb"]) * _GIB))
-        except (TypeError, ValueError, KeyError):
+        if usage < 0.0 or usage > 100.0:
             continue
+        total_bytes = int(round(total_gb * _GIB))
+        used_bytes = int(round(used_gb * _GIB))
+        available_bytes = int(round(free_gb * _GIB))
         reported += 1
         if usage >= _DEVICE_LOG_DISK_CRITICAL_PCT:
             critical += 1
