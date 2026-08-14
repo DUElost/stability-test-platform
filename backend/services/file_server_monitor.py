@@ -35,6 +35,9 @@ _STORAGE_PANEL_KEYS = frozenset({
     "network_receive", "network_transmit", "cpu_count", "boot_time",
     "nfs_requests", "nfs_errors", "nfs_stale", "nfs_threads", "nfs_connections",
 })
+_GIB = 1024 ** 3
+_DEVICE_LOG_DISK_WARNING_PCT = 90.0
+_DEVICE_LOG_DISK_CRITICAL_PCT = 95.0
 
 
 def _unescape_mountinfo(value: str) -> str:
@@ -328,7 +331,55 @@ def _run_queries(
     return current, None
 
 
+def _device_log_disk_summary(hosts: list[Any]) -> dict[str, Any]:
+    """Aggregate per-host ``extra.disk_usage_aee`` (#273).
+
+    只统计已上报 usage_percent 的 host；未上报不计入 warning/critical，也不进
+    列表（老 Agent 无该字段，页面显示「未上报」由 total-reported 表达）。
+    """
+    items: list[dict[str, Any]] = []
+    reported = 0
+    warning = 0
+    critical = 0
+    for host in hosts:
+        raw = (getattr(host, "extra", None) or {}).get("disk_usage_aee") or {}
+        if raw.get("usage_percent") is None:
+            continue
+        try:
+            usage = float(raw["usage_percent"])
+            total_bytes = int(round(float(raw["total_gb"]) * _GIB))
+            used_bytes = int(round(float(raw["used_gb"]) * _GIB))
+            available_bytes = int(round(float(raw["free_gb"]) * _GIB))
+        except (TypeError, ValueError, KeyError):
+            continue
+        reported += 1
+        if usage >= _DEVICE_LOG_DISK_CRITICAL_PCT:
+            critical += 1
+        elif usage >= _DEVICE_LOG_DISK_WARNING_PCT:
+            warning += 1
+        heartbeat = getattr(host, "last_heartbeat", None)
+        items.append({
+            "host_id": str(getattr(host, "id", "")),
+            "ip": getattr(host, "ip", None) or getattr(host, "ip_address", None),
+            "path": str(raw.get("path") or ""),
+            "total_bytes": total_bytes,
+            "used_bytes": used_bytes,
+            "available_bytes": available_bytes,
+            "usage_percent": round(usage, 2),
+            "last_heartbeat": heartbeat.isoformat() if heartbeat else None,
+        })
+    items.sort(key=lambda item: item["ip"] or item["host_id"])
+    return {
+        "total": len(hosts),
+        "reported": reported,
+        "warning": warning,
+        "critical": critical,
+        "items": items,
+    }
+
+
 def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dict[str, Any]:
+    hosts = list(hosts)
     root = _require_shared_root()
     mount = _mount_details(root)
     exports = _export_targets(root)
@@ -536,6 +587,7 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
     }
 
     agents = _host_mount_summary(hosts)
+    device_log_disks = _device_log_disk_summary(hosts)
     alerts: list[dict[str, str]] = []
     if not mount["mounted"]:
         alerts.append({"severity": "critical", "code": "STORAGE_NOT_MOUNTED", "message": f"{root} is not mounted"})
@@ -555,6 +607,18 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
             "code": "AGENT_MOUNT_INCOMPLETE",
             "message": f'{agents["mounted"]}/{agents["total"]} active Agents report the NFS mount',
         })
+    if device_log_disks["critical"]:
+        alerts.append({
+            "severity": "critical",
+            "code": "DEVICE_LOG_DISK_CRITICAL",
+            "message": f'{device_log_disks["critical"]} hosts have device-log disk usage >= 95%',
+        })
+    elif device_log_disks["warning"]:
+        alerts.append({
+            "severity": "warning",
+            "code": "DEVICE_LOG_DISK_WARNING",
+            "message": f'{device_log_disks["warning"]} hosts have device-log disk usage >= 90%',
+        })
 
     status = "critical" if any(item["severity"] == "critical" for item in alerts) else (
         "warning" if alerts else "healthy"
@@ -566,6 +630,7 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
         "control_plane": control_panel,
         "storage_server": storage_panel,
         "agents": agents,
+        "device_log_disks": device_log_disks,
         "history": history,
         "alerts": alerts,
     }

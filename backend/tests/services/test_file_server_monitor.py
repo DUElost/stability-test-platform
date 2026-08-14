@@ -37,7 +37,7 @@ class _FakePrometheus:
         return "storage-host" if label == "nodename" else None
 
 
-def _host(host_id: str, mount_entries: dict | None):
+def _host(host_id: str, mount_entries: dict | None, extra: dict | None = None):
     """mount_entries: 其中 key 是该 Agent 自己的 MOUNT_POINTS 路径字符串
     （与控制面 STP_AEE_NFS_ROOT 不保证相同）。None 表示 host 上报空 mount_status。
     """
@@ -48,6 +48,7 @@ def _host(host_id: str, mount_entries: dict | None):
         status="ONLINE",
         mount_status=mount_entries if mount_entries is not None else {},
         last_heartbeat=datetime.now(timezone.utc),
+        extra=extra if extra is not None else {},
     )
 
 
@@ -138,6 +139,34 @@ def test_split_without_storage_job_reports_missing_storage_metrics(tmp_path, mon
     assert result["storage_server"]["monitoring"]["prometheus_available"] is False
     assert result["storage_server"]["system"]["cpu_usage_pct"] is None
     assert {"STORAGE_METRICS_UNAVAILABLE"} <= {a["code"] for a in result["alerts"]}
+
+
+def test_device_log_disk_summary_and_threshold_alerts(tmp_path, monkeypatch):
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    hosts = [
+        _host("h1", None, extra={"disk_usage_aee": {
+            "path": "/mnt/hdd/aee_events", "total_gb": 900.0, "used_gb": 90.0,
+            "free_gb": 810.0, "usage_percent": 10.0,
+        }}),
+        _host("h2", None, extra={"disk_usage_aee": {
+            "path": "/data/hdd/aee_events", "total_gb": 900.0, "used_gb": 860.4,
+            "free_gb": 39.6, "usage_percent": 95.6,
+        }}),
+        _host("h3", None),  # 老 Agent：未上报该字段
+    ]
+
+    result = monitor.collect_file_server_overview(hosts, hours=1)
+    summary = result["device_log_disks"]
+
+    assert summary["total"] == 3
+    assert summary["reported"] == 2
+    assert summary["warning"] == 0
+    assert summary["critical"] == 1
+    assert [item["host_id"] for item in summary["items"]] == ["h1", "h2"]
+    assert summary["items"][1]["usage_percent"] == 95.6
+    assert summary["items"][1]["total_bytes"] == int(round(900.0 * 1024 ** 3))
+    assert result["status"] == "critical"
+    assert "DEVICE_LOG_DISK_CRITICAL" in {a["code"] for a in result["alerts"]}
 
 
 def test_invalid_storage_job_name_is_rejected_not_fallen_back(tmp_path, monkeypatch):

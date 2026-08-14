@@ -659,6 +659,14 @@ class TestFileServerOverview:
                     "mounted": True, "last_heartbeat": "2026-07-28T00:00:00+00:00",
                 }],
             },
+            "device_log_disks": {
+                "total": 1, "reported": 1, "warning": 0, "critical": 0,
+                "items": [{
+                    "host_id": "h1", "ip": "10.0.0.1", "path": "/mnt/hdd/aee_events",
+                    "total_bytes": 1000, "used_bytes": 100, "available_bytes": 900,
+                    "usage_percent": 10.0, "last_heartbeat": "2026-07-28T00:00:00+00:00",
+                }],
+            },
             "history": {
                 "hours": 6, "capacity_usage_pct": [], "cpu_usage_pct": [],
                 "memory_usage_pct": [], "nfs_requests_per_second": [],
@@ -677,3 +685,4 @@ class TestFileServerOverview:
         assert data["storage_server"]["disk"]["path"] == "/mnt/nfs/aee_events"
         assert data["storage_server"]["same_source"] is True
         assert data["agents"]["mounted"] == 1
+        assert data["device_log_disks"]["reported"] == 1
