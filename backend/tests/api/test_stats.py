@@ -612,25 +612,45 @@ class TestFileServerOverview:
         overview = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "status": "healthy",
-            "server": {"hostname": "h", "address": "1.2.3.4", "cpu_count": 4, "uptime_seconds": 100.0},
-            "storage": {
-                "path": "/mnt/nfs/aee_events", "source": "/dev/sda1", "filesystem": "ext4",
-                "mounted": True, "backend_write_access": True,
-                "total_bytes": 100, "used_bytes": 10, "available_bytes": 90, "used_pct": 10.0,
-                "inode_total": 200, "inode_used": 20, "inode_available": 180, "inode_used_pct": 10.0,
+            "control_plane": {
+                "node": {"hostname": "h", "address": "1.2.3.4", "cpu_count": 4, "uptime_seconds": 100.0},
+                "system": {
+                    "cpu_usage_pct": 5.0, "memory_usage_pct": 40.0, "memory_total_bytes": 1024,
+                    "load1": 0.5,
+                    "disk_read_bytes_per_second": None,
+                    "disk_write_bytes_per_second": None,
+                    "network_receive_bytes_per_second": None,
+                    "network_transmit_bytes_per_second": None,
+                },
+                "client_mount": {
+                    "path": "/mnt/nfs/aee_events", "source": "/dev/sda1", "filesystem": "ext4",
+                    "mounted": True, "backend_write_access": True,
+                },
+                "monitoring": {"prometheus_available": True, "error": None},
             },
-            "system": {
-                "cpu_usage_pct": 5.0, "memory_usage_pct": 40.0, "memory_total_bytes": 1024,
-                "load1": 0.5,
-                "disk_read_bytes_per_second": None,
-                "disk_write_bytes_per_second": None,
-                "network_receive_bytes_per_second": None,
-                "network_transmit_bytes_per_second": None,
-            },
-            "nfs": {
-                "service_ready": True, "exported": True, "export_targets": ["10.0.0.0/8"],
-                "server_threads": 16, "requests_per_second": 1.5,
-                "rpc_errors_per_second": 0.0, "stale_file_handles_total": 0, "connections_total": 5,
+            "storage_server": {
+                "node": {"hostname": "h", "address": "1.2.3.4", "cpu_count": 4, "uptime_seconds": 100.0},
+                "same_source": True,
+                "system": {
+                    "cpu_usage_pct": 5.0, "memory_usage_pct": 40.0, "memory_total_bytes": 1024,
+                    "load1": 0.5,
+                    "disk_read_bytes_per_second": None,
+                    "disk_write_bytes_per_second": None,
+                    "network_receive_bytes_per_second": None,
+                    "network_transmit_bytes_per_second": None,
+                },
+                "disk": {
+                    "path": "/mnt/nfs/aee_events", "source": "/dev/sda1", "filesystem": "ext4",
+                    "mounted": True, "backend_write_access": True,
+                    "total_bytes": 100, "used_bytes": 10, "available_bytes": 90, "used_pct": 10.0,
+                    "inode_total": 200, "inode_used": 20, "inode_available": 180, "inode_used_pct": 10.0,
+                },
+                "nfs": {
+                    "service_ready": True, "exported": True, "export_targets": ["10.0.0.0/8"],
+                    "server_threads": 16, "requests_per_second": 1.5,
+                    "rpc_errors_per_second": 0.0, "stale_file_handles_total": 0, "connections_total": 5,
+                },
+                "monitoring": {"prometheus_available": True, "error": None},
             },
             "agents": {
                 "total": 1, "mounted": 1, "failed": 0, "unreported": 0,
@@ -643,7 +663,6 @@ class TestFileServerOverview:
                 "hours": 6, "capacity_usage_pct": [], "cpu_usage_pct": [],
                 "memory_usage_pct": [], "nfs_requests_per_second": [],
             },
-            "monitoring": {"prometheus_available": True, "error": None},
             "alerts": [],
         }
         monkeypatch.setattr(
@@ -655,5 +674,6 @@ class TestFileServerOverview:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
-        assert data["storage"]["path"] == "/mnt/nfs/aee_events"
+        assert data["storage_server"]["disk"]["path"] == "/mnt/nfs/aee_events"
+        assert data["storage_server"]["same_source"] is True
         assert data["agents"]["mounted"] == 1

@@ -38,7 +38,16 @@ import { CHART_COLORS, STATUS_TEXT_COLORS } from '@/design-system/colors';
 import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
-import type { FileServerMetricPoint, FileServerOverview } from '@/utils/api/types';
+import type {
+  FileServerClientMount,
+  FileServerMetricPoint,
+  FileServerNodeIdentity,
+  FileServerNodeMonitoring,
+  FileServerNodeSystem,
+  FileServerNfs,
+  FileServerOverview,
+  FileServerStorage,
+} from '@/utils/api/types';
 
 function formatBytes(value: number | null | undefined, rate = false): string {
   if (value == null || !Number.isFinite(value)) return '—';
@@ -80,7 +89,8 @@ function statusBadge(status: FileServerOverview['status']) {
   return <Badge variant="destructive">异常</Badge>;
 }
 
-function metricTone(value: number, warning: number, critical: number): string {
+function metricTone(value: number | null, warning: number, critical: number): string {
+  if (value == null) return STATUS_TEXT_COLORS.muted;
   if (value >= critical) return STATUS_TEXT_COLORS.error;
   if (value >= warning) return STATUS_TEXT_COLORS.warning;
   return STATUS_TEXT_COLORS.success;
@@ -179,11 +189,168 @@ function LoadingState() {
 const alertText: Record<string, string> = {
   STORAGE_NOT_MOUNTED: '存储盘未挂载',
   NFS_EXPORT_MISSING: 'NFS export 缺失',
-  METRICS_UNAVAILABLE: '监控指标暂不可用',
+  METRICS_UNAVAILABLE: '控制面监控指标暂不可用',
+  STORAGE_METRICS_UNAVAILABLE: '存储机监控指标暂不可用',
   CAPACITY_CRITICAL: '存储容量超过 90%',
   CAPACITY_WARNING: '存储容量超过 80%',
   AGENT_MOUNT_INCOMPLETE: '部分 Agent 尚未确认共享挂载',
 };
+
+function MonitoringBadge({ monitoring }: { monitoring: FileServerNodeMonitoring }) {
+  return monitoring.prometheus_available ? (
+    <Badge variant="success">Prometheus 在线</Badge>
+  ) : (
+    <Badge variant="destructive">Prometheus 不可用</Badge>
+  );
+}
+
+function NodeHeader({
+  title,
+  node,
+  monitoring,
+  trailing,
+}: {
+  title: string;
+  node: FileServerNodeIdentity;
+  monitoring: FileServerNodeMonitoring;
+  trailing?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+      <div>
+        <h2 className={cn('text-sm font-semibold', TEXT.heading)}>{title}</h2>
+        <p className={cn('mt-0.5 text-xs', TEXT.caption)}>
+          {node.hostname} · {node.address}
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        {trailing}
+        <MonitoringBadge monitoring={monitoring} />
+      </div>
+    </div>
+  );
+}
+
+function SystemLoadSection({
+  system,
+  node,
+}: {
+  system: FileServerNodeSystem;
+  node: FileServerNodeIdentity;
+}) {
+  const cpu = system.cpu_usage_pct;
+  const memory = system.memory_usage_pct;
+  return (
+    <section className="border-y py-4" aria-labelledby="server-load-title">
+      <div className="mb-4 flex items-center gap-2">
+        <Cpu className={cn('h-4 w-4', TEXT.subtitle)} />
+        <h2 id="server-load-title" className={cn('text-sm font-semibold', TEXT.heading)}>主机负载</h2>
+      </div>
+      <div className="space-y-4">
+        <div>
+          <div className="mb-1.5 flex justify-between text-xs">
+            <span className={TEXT.subtitle}>CPU</span>
+            <span className={metricTone(cpu, 75, 90)}>{cpu != null ? cpu.toFixed(1) : '—'}%</span>
+          </div>
+          <Progress value={cpu ?? 0} />
+        </div>
+        <div>
+          <div className="mb-1.5 flex justify-between text-xs">
+            <span className={TEXT.subtitle}>内存</span>
+            <span className={metricTone(memory, 80, 90)}>{memory != null ? memory.toFixed(1) : '—'}%</span>
+          </div>
+          <Progress value={memory ?? 0} />
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-xs sm:grid-cols-4">
+          <div><div className={TEXT.caption}>Load 1m</div><div className="mt-1 font-mono">{system.load1 != null ? system.load1.toFixed(2) : '—'}</div></div>
+          <div><div className={TEXT.caption}>CPU 核心</div><div className="mt-1 font-mono">{node.cpu_count ?? '—'}</div></div>
+          <div><div className={TEXT.caption}>总内存</div><div className="mt-1 font-mono">{formatBytes(system.memory_total_bytes)}</div></div>
+          <div><div className={TEXT.caption}>运行时间</div><div className="mt-1 font-mono">{formatUptime(node.uptime_seconds)}</div></div>
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 border-t pt-3 text-xs sm:grid-cols-4">
+          <div><div className={TEXT.caption}>磁盘读取</div><div className="mt-1 font-mono">{formatBytes(system.disk_read_bytes_per_second, true)}</div></div>
+          <div><div className={TEXT.caption}>磁盘写入</div><div className="mt-1 font-mono">{formatBytes(system.disk_write_bytes_per_second, true)}</div></div>
+          <div><div className={TEXT.caption}>网络接收</div><div className="mt-1 font-mono">{formatBytes(system.network_receive_bytes_per_second, true)}</div></div>
+          <div><div className={TEXT.caption}>网络发送</div><div className="mt-1 font-mono">{formatBytes(system.network_transmit_bytes_per_second, true)}</div></div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ClientMountSection({ mount }: { mount: FileServerClientMount }) {
+  return (
+    <section className="border-y py-4" aria-labelledby="client-mount-title">
+      <div className="mb-4 flex items-center gap-2">
+        <HardDrive className={cn('h-4 w-4', TEXT.subtitle)} />
+        <h2 id="client-mount-title" className={cn('text-sm font-semibold', TEXT.heading)}>客户端挂载</h2>
+      </div>
+      <dl className="divide-y text-sm">
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>挂载路径</dt><dd className="font-mono text-xs">{mount.path}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>源</dt><dd className="font-mono text-xs">{[mount.source, mount.filesystem].filter(Boolean).join(' · ') || '—'}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>挂载状态</dt><dd>{mount.mounted ? <Badge variant="success">已挂载</Badge> : <Badge variant="destructive">未挂载</Badge>}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>写权限</dt><dd>{mount.backend_write_access ? <Badge variant="success">可写</Badge> : <Badge variant="destructive">不可写</Badge>}</dd></div>
+      </dl>
+    </section>
+  );
+}
+
+function StorageMetricCards({
+  disk,
+  nfs,
+  agents,
+}: {
+  disk: FileServerStorage;
+  nfs: FileServerNfs;
+  agents: FileServerOverview['agents'];
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <MetricCard
+        icon={HardDrive}
+        label="可用容量"
+        value={formatBytes(disk.available_bytes)}
+        detail={`总计 ${formatBytes(disk.total_bytes)}`}
+      />
+      <MetricCard
+        icon={Database}
+        label="存储使用率"
+        value={`${disk.used_pct.toFixed(1)}%`}
+        detail={`inode ${disk.inode_used_pct.toFixed(1)}%`}
+      />
+      <MetricCard
+        icon={Activity}
+        label="NFS 请求"
+        value={formatRate(nfs.requests_per_second)}
+        detail={`累计连接 ${nfs.connections_total ?? '—'}`}
+      />
+      <MetricCard
+        icon={Server}
+        label="Agent 挂载"
+        value={`${agents.mounted}/${agents.total}`}
+        detail={`异常 ${agents.failed} · 未上报 ${agents.unreported}`}
+      />
+    </div>
+  );
+}
+
+function NfsSection({ nfs }: { nfs: FileServerNfs }) {
+  return (
+    <section className="border-y py-4" aria-labelledby="nfs-service-title">
+      <div className="mb-4 flex items-center gap-2">
+        <Network className={cn('h-4 w-4', TEXT.subtitle)} />
+        <h2 id="nfs-service-title" className={cn('text-sm font-semibold', TEXT.heading)}>NFS 服务</h2>
+      </div>
+      <dl className="divide-y text-sm">
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>服务状态</dt><dd>{nfs.service_ready ? <Badge variant="success">运行中</Badge> : <Badge variant="destructive">异常</Badge>}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>Export</dt><dd className="font-mono text-xs">{nfs.export_targets.join(', ') || '—'}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>服务线程</dt><dd className="font-mono">{nfs.server_threads ?? '—'}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>RPC 错误</dt><dd className={cn('font-mono', (nfs.rpc_errors_per_second ?? 0) > 0 && 'text-destructive')}>{formatRate(nfs.rpc_errors_per_second)}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>Stale handle</dt><dd className={cn('font-mono', (nfs.stale_file_handles_total ?? 0) > 0 && 'text-destructive')}>{nfs.stale_file_handles_total ?? '—'}</dd></div>
+      </dl>
+    </section>
+  );
+}
 
 export default function FileServerPage() {
   const query = useQuery({
@@ -210,7 +377,7 @@ export default function FileServerPage() {
   if (query.isError) {
     return (
       <PageContainer className="space-y-6">
-        <PageHeader title="文件服务器" subtitle="控制面负载与中心存储挂载" action={refreshAction} />
+        <PageHeader title="文件服务器" subtitle="控制面与中心存储" action={refreshAction} />
         <ErrorState title="文件服务器状态加载失败" onRetry={() => query.refetch()} />
       </PageContainer>
     );
@@ -220,7 +387,11 @@ export default function FileServerPage() {
     <PageContainer className="space-y-6">
       <PageHeader
         title="文件服务器"
-        subtitle={data ? `${data.server.address} · ${data.storage.path}` : '控制面负载与中心存储挂载'}
+        subtitle={
+          data
+            ? `${data.control_plane.node.address}（控制面） · ${data.storage_server.node.address}（存储机）`
+            : '控制面与中心存储'
+        }
         action={refreshAction}
       />
 
@@ -233,12 +404,10 @@ export default function FileServerPage() {
               ) : (
                 <AlertTriangle className={cn('h-5 w-5', data.status === 'critical' ? 'text-destructive' : 'text-warning')} />
               )}
-              <span className={cn('text-sm font-medium', TEXT.heading)}>{data.server.hostname}</span>
+              <span className={cn('text-sm font-medium', TEXT.heading)}>共享存储健康</span>
               {statusBadge(data.status)}
             </div>
             <div className={cn('text-xs', TEXT.caption)}>
-              {data.monitoring.prometheus_available ? 'Prometheus 在线' : 'Prometheus 不可用'}
-              <span className="mx-2">·</span>
               更新于 {formatTime(data.generated_at)}
             </div>
           </div>
@@ -262,31 +431,40 @@ export default function FileServerPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <MetricCard
-              icon={HardDrive}
-              label="可用容量"
-              value={formatBytes(data.storage.available_bytes)}
-              detail={`总计 ${formatBytes(data.storage.total_bytes)}`}
-            />
-            <MetricCard
-              icon={Database}
-              label="存储使用率"
-              value={`${data.storage.used_pct.toFixed(1)}%`}
-              detail={`inode ${data.storage.inode_used_pct.toFixed(1)}%`}
-            />
-            <MetricCard
-              icon={Activity}
-              label="NFS 请求"
-              value={formatRate(data.nfs.requests_per_second)}
-              detail={`累计连接 ${data.nfs.connections_total}`}
-            />
-            <MetricCard
-              icon={Server}
-              label="Agent 挂载"
-              value={`${data.agents.mounted}/${data.agents.total}`}
-              detail={`异常 ${data.agents.failed} · 未上报 ${data.agents.unreported}`}
-            />
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <div className="rounded-md border">
+              <NodeHeader
+                title="控制面"
+                node={data.control_plane.node}
+                monitoring={data.control_plane.monitoring}
+              />
+              <div className="space-y-4 px-4">
+                <SystemLoadSection system={data.control_plane.system} node={data.control_plane.node} />
+                <ClientMountSection mount={data.control_plane.client_mount} />
+              </div>
+            </div>
+
+            <div className="rounded-md border">
+              <NodeHeader
+                title="中心存储机"
+                node={data.storage_server.node}
+                monitoring={data.storage_server.monitoring}
+                trailing={
+                  data.storage_server.same_source ? (
+                    <Badge variant="outline">与控制面同机</Badge>
+                  ) : null
+                }
+              />
+              <div className="space-y-4 px-4">
+                <StorageMetricCards
+                  disk={data.storage_server.disk}
+                  nfs={data.storage_server.nfs}
+                  agents={data.agents}
+                />
+                <NfsSection nfs={data.storage_server.nfs} />
+                <SystemLoadSection system={data.storage_server.system} node={data.storage_server.node} />
+              </div>
+            </div>
           </div>
 
           <section className="rounded-md border" aria-labelledby="capacity-trend-title">
@@ -306,63 +484,11 @@ export default function FileServerPage() {
             </div>
           </section>
 
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <section className="border-y py-4" aria-labelledby="server-load-title">
-              <div className="mb-4 flex items-center gap-2">
-                <Cpu className={cn('h-4 w-4', TEXT.subtitle)} />
-                <h2 id="server-load-title" className={cn('text-sm font-semibold', TEXT.heading)}>主机负载</h2>
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <div className="mb-1.5 flex justify-between text-xs">
-                    <span className={TEXT.subtitle}>CPU</span>
-                    <span className={metricTone(data.system.cpu_usage_pct, 75, 90)}>{data.system.cpu_usage_pct.toFixed(1)}%</span>
-                  </div>
-                  <Progress value={data.system.cpu_usage_pct} />
-                </div>
-                <div>
-                  <div className="mb-1.5 flex justify-between text-xs">
-                    <span className={TEXT.subtitle}>内存</span>
-                    <span className={metricTone(data.system.memory_usage_pct, 80, 90)}>{data.system.memory_usage_pct.toFixed(1)}%</span>
-                  </div>
-                  <Progress value={data.system.memory_usage_pct} />
-                </div>
-                <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-xs sm:grid-cols-4">
-                  <div><div className={TEXT.caption}>Load 1m</div><div className="mt-1 font-mono">{data.system.load1.toFixed(2)}</div></div>
-                  <div><div className={TEXT.caption}>CPU 核心</div><div className="mt-1 font-mono">{data.server.cpu_count}</div></div>
-                  <div><div className={TEXT.caption}>总内存</div><div className="mt-1 font-mono">{formatBytes(data.system.memory_total_bytes)}</div></div>
-                  <div><div className={TEXT.caption}>运行时间</div><div className="mt-1 font-mono">{formatUptime(data.server.uptime_seconds)}</div></div>
-                </div>
-                <div className="grid grid-cols-2 gap-x-6 gap-y-3 border-t pt-3 text-xs sm:grid-cols-4">
-                  <div><div className={TEXT.caption}>磁盘读取</div><div className="mt-1 font-mono">{formatBytes(data.system.disk_read_bytes_per_second, true)}</div></div>
-                  <div><div className={TEXT.caption}>磁盘写入</div><div className="mt-1 font-mono">{formatBytes(data.system.disk_write_bytes_per_second, true)}</div></div>
-                  <div><div className={TEXT.caption}>网络接收</div><div className="mt-1 font-mono">{formatBytes(data.system.network_receive_bytes_per_second, true)}</div></div>
-                  <div><div className={TEXT.caption}>网络发送</div><div className="mt-1 font-mono">{formatBytes(data.system.network_transmit_bytes_per_second, true)}</div></div>
-                </div>
-              </div>
-            </section>
-
-            <section className="border-y py-4" aria-labelledby="nfs-service-title">
-              <div className="mb-4 flex items-center gap-2">
-                <Network className={cn('h-4 w-4', TEXT.subtitle)} />
-                <h2 id="nfs-service-title" className={cn('text-sm font-semibold', TEXT.heading)}>NFS 服务</h2>
-              </div>
-              <dl className="divide-y text-sm">
-                <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>服务状态</dt><dd>{data.nfs.service_ready ? <Badge variant="success">运行中</Badge> : <Badge variant="destructive">异常</Badge>}</dd></div>
-                <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>本地挂载</dt><dd className="font-mono text-xs">{data.storage.source ?? '—'} · {data.storage.filesystem ?? '—'}</dd></div>
-                <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>Export</dt><dd className="font-mono text-xs">{data.nfs.export_targets.join(', ') || '—'}</dd></div>
-                <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>服务线程</dt><dd className="font-mono">{data.nfs.server_threads}</dd></div>
-                <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>RPC 错误</dt><dd className={cn('font-mono', (data.nfs.rpc_errors_per_second ?? 0) > 0 && 'text-destructive')}>{formatRate(data.nfs.rpc_errors_per_second)}</dd></div>
-                <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>Stale handle</dt><dd className={cn('font-mono', data.nfs.stale_file_handles_total > 0 && 'text-destructive')}>{data.nfs.stale_file_handles_total}</dd></div>
-              </dl>
-            </section>
-          </div>
-
           <section className="rounded-md border" aria-labelledby="agent-mount-title">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
               <div>
                 <h2 id="agent-mount-title" className={cn('text-sm font-semibold', TEXT.heading)}>Agent 挂载状态</h2>
-                <p className={cn('mt-0.5 text-xs', TEXT.caption)}>{data.storage.path}</p>
+                <p className={cn('mt-0.5 text-xs', TEXT.caption)}>{data.storage_server.disk.path}</p>
               </div>
               <div className="w-48">
                 <Progress value={data.agents.mounted} max={Math.max(1, data.agents.total)} indicatorClassName="bg-success" />

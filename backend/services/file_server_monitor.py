@@ -25,6 +25,16 @@ _MOUNTINFO_ESCAPES = {
     r"\134": "\\",
 }
 
+_CONTROL_PANEL_KEYS = frozenset({
+    "up", "cpu", "memory", "load1", "disk_read", "disk_write",
+    "network_receive", "network_transmit",
+})
+_STORAGE_PANEL_KEYS = frozenset({
+    "up", "cpu", "memory", "mem_total", "load1", "disk_read", "disk_write",
+    "network_receive", "network_transmit", "cpu_count", "boot_time",
+    "nfs_requests", "nfs_errors", "nfs_stale", "nfs_threads", "nfs_connections",
+})
+
 
 def _unescape_mountinfo(value: str) -> str:
     for encoded, decoded in _MOUNTINFO_ESCAPES.items():
@@ -79,6 +89,10 @@ def _prom_string(value: str) -> str:
     return value.replace("\\", r"\\").replace('"', r'\"')
 
 
+def _round_opt(value: float | None) -> float | None:
+    return round(float(value), 2) if value is not None else None
+
+
 class _PrometheusClient:
     def __init__(self) -> None:
         self._base_url = os.getenv("STP_PROMETHEUS_URL", _PROMETHEUS_URL_DEFAULT).rstrip("/")
@@ -120,6 +134,15 @@ class _PrometheusClient:
             except (TypeError, ValueError):
                 continue
         return points
+
+    def label(self, query: str, label: str) -> str | None:
+        """Return one label value from the first instant-vector sample, or None."""
+        data = self._get("/api/v1/query", {"query": query})
+        result = data.get("result") or []
+        if not result:
+            return None
+        value = result[0].get("metric", {}).get(label)
+        return value if isinstance(value, str) else None
 
 
 def _block_device(source: str | None) -> str | None:
@@ -218,6 +241,72 @@ def _require_shared_root() -> Path:
     return Path(raw)
 
 
+def _panel_jobs() -> tuple[str, str | None, str]:
+    """Resolve Prometheus job labels for the two health-page panels.
+
+    - control job: ``STP_CONTROL_PLANE_NODE_JOB`` (new) with
+      ``STP_FILE_SERVER_NODE_JOB`` / ``file-server`` as legacy fallback.
+    - storage job: ``STP_STORAGE_NODE_JOB``. When unset and no share address is
+      configured (co-located transition) it reuses the control job; when the
+      share has moved away but no storage job is given it returns None so the
+      storage panel reports missing metrics instead of silently scraping the
+      wrong machine (see #205).
+    """
+    control_raw = (
+        os.getenv("STP_CONTROL_PLANE_NODE_JOB", "").strip()
+        or os.getenv("STP_FILE_SERVER_NODE_JOB", _NODE_JOB_DEFAULT).strip()
+    )
+    control = _safe_prom_label(control_raw, _NODE_JOB_DEFAULT)
+    share_addr = os.getenv("STP_AEE_SHARE_ADDRESS", "").strip()
+    storage_raw = os.getenv("STP_STORAGE_NODE_JOB", "").strip()
+    if storage_raw:
+        storage: str | None = _safe_prom_label(storage_raw, control)
+    elif share_addr:
+        storage = None
+    else:
+        storage = control
+    return control, storage, share_addr
+
+
+def _node_current_queries(job: str, device_selector: str | None) -> dict[str, str]:
+    """PromQL instant queries for one machine's node exporter."""
+    selector = f'job="{job}"'
+    disk_sel = device_selector or selector
+    return {
+        "up": f"up{{{selector}}}",
+        "cpu": f'100 * (1 - avg(rate(node_cpu_seconds_total{{{selector},mode="idle"}}[5m])))',
+        "memory": f"100 * (1 - node_memory_MemAvailable_bytes{{{selector}}} / node_memory_MemTotal_bytes{{{selector}}})",
+        "mem_total": f"node_memory_MemTotal_bytes{{{selector}}}",
+        "load1": f"node_load1{{{selector}}}",
+        "disk_read": f"sum(rate(node_disk_read_bytes_total{{{disk_sel}}}[5m]))",
+        "disk_write": f"sum(rate(node_disk_written_bytes_total{{{disk_sel}}}[5m]))",
+        "network_receive": f'sum(rate(node_network_receive_bytes_total{{{selector},device!~"lo|docker.*|br-.*|veth.*"}}[5m]))',
+        "network_transmit": f'sum(rate(node_network_transmit_bytes_total{{{selector},device!~"lo|docker.*|br-.*|veth.*"}}[5m]))',
+        "cpu_count": f'count(node_cpu_seconds_total{{{selector},mode="idle"}})',
+        "boot_time": f"node_boot_time_seconds{{{selector}}}",
+        "nfs_requests": f"sum(rate(node_nfsd_requests_total{{{selector}}}[5m]))",
+        "nfs_errors": f"sum(rate(node_nfsd_rpc_errors_total{{{selector}}}[5m]))",
+        "nfs_stale": f"node_nfsd_file_handles_stale_total{{{selector}}}",
+        "nfs_threads": f"node_nfsd_server_threads{{{selector}}}",
+        "nfs_connections": f"node_nfsd_connections_total{{{selector}}}",
+    }
+
+
+def _run_queries(
+    prom: _PrometheusClient,
+    queries: dict[str, str],
+) -> tuple[dict[str, float | None], str | None]:
+    current: dict[str, float | None] = {}
+    try:
+        for key, query in queries.items():
+            current[key] = prom.scalar(query)
+    except (httpx.HTTPError, KeyError, RuntimeError, ValueError) as exc:
+        error = type(exc).__name__
+        logger.warning("file_server_prometheus_query_failed error=%s", error)
+        return current, error
+    return current, None
+
+
 def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dict[str, Any]:
     root = _require_shared_root()
     mount = _mount_details(root)
@@ -235,89 +324,206 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
         inode_available = stat.f_favail
         inode_used = max(0, inode_total - inode_available)
 
-    job = _safe_prom_label(os.getenv("STP_FILE_SERVER_NODE_JOB", _NODE_JOB_DEFAULT), _NODE_JOB_DEFAULT)
-    selector = f'job="{job}"'
-    mount_selector = f'{selector},mountpoint="{_prom_string(str(root))}"'
-    device = _block_device(mount.get("source"))
-    device_selector = f'{selector},device="{_prom_string(device)}"' if device else selector
+    control_job, storage_job, share_addr = _panel_jobs()
+    control_addr = _server_address()
+    storage_addr = share_addr or control_addr
+    same_source = (not share_addr) or share_addr == control_addr
 
-    current: dict[str, float | None] = {
-        "up": None,
-        "cpu": None,
-        "memory": None,
-        "load1": None,
-        "disk_read": None,
-        "disk_write": None,
-        "network_receive": None,
-        "network_transmit": None,
-        "nfs_requests": None,
-        "nfs_errors": None,
-        "nfs_stale": None,
-        "nfs_threads": None,
-        "nfs_connections": None,
-    }
-    history = {
+    control_selector = f'job="{control_job}"'
+    mount_selector = f'{control_selector},mountpoint="{_prom_string(str(root))}"'
+    device = _block_device(mount.get("source"))
+    device_selector = f'{control_selector},device="{_prom_string(device)}"' if device else None
+
+    history: dict[str, Any] = {
         "hours": hours,
         "capacity_usage_pct": [],
         "cpu_usage_pct": [],
         "memory_usage_pct": [],
         "nfs_requests_per_second": [],
     }
-    prometheus_error: str | None = None
+
     prom = _PrometheusClient()
     try:
-        queries = {
-            "up": f"up{{{selector}}}",
-            "cpu": f'100 * (1 - avg(rate(node_cpu_seconds_total{{{selector},mode="idle"}}[5m])))',
-            "memory": f"100 * (1 - node_memory_MemAvailable_bytes{{{selector}}} / node_memory_MemTotal_bytes{{{selector}}})",
-            "load1": f"node_load1{{{selector}}}",
-            "disk_read": f"rate(node_disk_read_bytes_total{{{device_selector}}}[5m])",
-            "disk_write": f"rate(node_disk_written_bytes_total{{{device_selector}}}[5m])",
-            "network_receive": f'sum(rate(node_network_receive_bytes_total{{{selector},device!~"lo|docker.*|br-.*|veth.*"}}[5m]))',
-            "network_transmit": f'sum(rate(node_network_transmit_bytes_total{{{selector},device!~"lo|docker.*|br-.*|veth.*"}}[5m]))',
-            "nfs_requests": f"sum(rate(node_nfsd_requests_total{{{selector}}}[5m]))",
-            "nfs_errors": f"sum(rate(node_nfsd_rpc_errors_total{{{selector}}}[5m]))",
-            "nfs_stale": f"node_nfsd_file_handles_stale_total{{{selector}}}",
-            "nfs_threads": f"node_nfsd_server_threads{{{selector}}}",
-            "nfs_connections": f"node_nfsd_connections_total{{{selector}}}",
+        control_queries = {
+            key: query
+            for key, query in _node_current_queries(control_job, device_selector).items()
+            if key in _CONTROL_PANEL_KEYS
         }
-        for key, query in queries.items():
-            current[key] = prom.scalar(query)
+        control_current, control_error = _run_queries(prom, control_queries)
+
+        storage_current: dict[str, float | None] = {}
+        storage_error: str | None = None
+        storage_hostname: str | None = None
+        if storage_job:
+            storage_queries = {
+                key: query
+                for key, query in _node_current_queries(storage_job, None).items()
+                if key in _STORAGE_PANEL_KEYS
+            }
+            storage_current, storage_error = _run_queries(prom, storage_queries)
+            if not storage_error:
+                try:
+                    storage_hostname = prom.label(
+                        f'node_uname_info{{job="{storage_job}"}}', "nodename"
+                    )
+                except (httpx.HTTPError, KeyError, RuntimeError, ValueError):
+                    storage_hostname = None
 
         end = datetime.now(timezone.utc).timestamp()
         start = end - hours * 3600
         step = max(60, hours * 3600 // 72)
         range_queries = {
-            "capacity_usage_pct": f"100 * (1 - node_filesystem_avail_bytes{{{mount_selector}}} / node_filesystem_size_bytes{{{mount_selector}}})",
-            "cpu_usage_pct": queries["cpu"],
-            "memory_usage_pct": queries["memory"],
-            "nfs_requests_per_second": queries["nfs_requests"],
+            "capacity_usage_pct": (
+                f"100 * (1 - node_filesystem_avail_bytes{{{mount_selector}}} / "
+                f"node_filesystem_size_bytes{{{mount_selector}}})"
+            ),
+            "cpu_usage_pct": control_queries["cpu"],
+            "memory_usage_pct": control_queries["memory"],
+            "nfs_requests_per_second": (
+                f"sum(rate(node_nfsd_requests_total{{{control_selector}}}[5m]))"
+            ),
         }
-        for key, query in range_queries.items():
-            history[key] = prom.range(query, start=start, end=end, step=step)
-    except (httpx.HTTPError, KeyError, RuntimeError, ValueError) as exc:
-        prometheus_error = type(exc).__name__
-        logger.warning("file_server_prometheus_query_failed error=%s", prometheus_error)
+        try:
+            for key, query in range_queries.items():
+                history[key] = prom.range(query, start=start, end=end, step=step)
+        except (httpx.HTTPError, KeyError, RuntimeError, ValueError) as exc:
+            logger.warning("file_server_history_query_failed error=%s", type(exc).__name__)
     finally:
         prom.close()
 
     memory = psutil.virtual_memory()
-    cpu_usage = current["cpu"] if current["cpu"] is not None else psutil.cpu_percent(interval=None)
-    memory_usage = current["memory"] if current["memory"] is not None else memory.percent
-    load1 = current["load1"] if current["load1"] is not None else os.getloadavg()[0]
-    agents = _host_mount_summary(hosts)
-    prometheus_available = current["up"] == 1
-    service_ready = bool(exports) and (current["nfs_threads"] or 0) > 0
+    cpu_usage = control_current.get("cpu")
+    if cpu_usage is None:
+        cpu_usage = psutil.cpu_percent(interval=None)
+    memory_usage = control_current.get("memory")
+    if memory_usage is None:
+        memory_usage = memory.percent
+    load1 = control_current.get("load1")
+    if load1 is None:
+        load1 = os.getloadavg()[0]
+    try:
+        local_uptime = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+    except (OSError, ValueError, IndexError):
+        local_uptime = None
+
     used_pct = round(used_bytes / total_bytes * 100, 2) if total_bytes else 0.0
     inode_used_pct = round(inode_used / inode_total * 100, 2) if inode_total else 0.0
+    backend_write_access = root.exists() and os.access(root, os.W_OK)
 
+    now = datetime.now(timezone.utc).timestamp()
+    storage_boot = storage_current.get("boot_time")
+    storage_cpu_count = (
+        int(storage_current["cpu_count"])
+        if storage_current.get("cpu_count") is not None
+        else None
+    )
+    storage_threads = (
+        int(storage_current["nfs_threads"])
+        if storage_current.get("nfs_threads") is not None
+        else None
+    )
+
+    control_panel = {
+        "node": {
+            "hostname": socket.gethostname(),
+            "address": control_addr,
+            "cpu_count": os.cpu_count() or 0,
+            "uptime_seconds": local_uptime,
+        },
+        "system": {
+            "cpu_usage_pct": round(float(cpu_usage), 2),
+            "memory_usage_pct": round(float(memory_usage), 2),
+            "memory_total_bytes": memory.total,
+            "load1": round(float(load1), 2),
+            "disk_read_bytes_per_second": control_current.get("disk_read"),
+            "disk_write_bytes_per_second": control_current.get("disk_write"),
+            "network_receive_bytes_per_second": control_current.get("network_receive"),
+            "network_transmit_bytes_per_second": control_current.get("network_transmit"),
+        },
+        "client_mount": {
+            "path": str(root),
+            "source": mount["source"],
+            "filesystem": mount["filesystem"],
+            "mounted": mount["mounted"],
+            "backend_write_access": backend_write_access,
+        },
+        "monitoring": {
+            "prometheus_available": control_current.get("up") == 1,
+            "error": control_error,
+        },
+    }
+    storage_panel = {
+        "node": {
+            "hostname": storage_hostname
+            or (socket.gethostname() if same_source else storage_addr),
+            "address": storage_addr,
+            "cpu_count": storage_cpu_count,
+            "uptime_seconds": (now - storage_boot) if storage_boot is not None else None,
+        },
+        "same_source": same_source,
+        "system": {
+            "cpu_usage_pct": _round_opt(storage_current.get("cpu")),
+            "memory_usage_pct": _round_opt(storage_current.get("memory")),
+            "memory_total_bytes": (
+                int(storage_current["mem_total"])
+                if storage_current.get("mem_total") is not None
+                else None
+            ),
+            "load1": _round_opt(storage_current.get("load1")),
+            "disk_read_bytes_per_second": storage_current.get("disk_read"),
+            "disk_write_bytes_per_second": storage_current.get("disk_write"),
+            "network_receive_bytes_per_second": storage_current.get("network_receive"),
+            "network_transmit_bytes_per_second": storage_current.get("network_transmit"),
+        },
+        "disk": {
+            "path": str(root),
+            "source": mount["source"],
+            "filesystem": mount["filesystem"],
+            "mounted": mount["mounted"],
+            "backend_write_access": backend_write_access,
+            "total_bytes": total_bytes,
+            "used_bytes": used_bytes,
+            "available_bytes": available_bytes,
+            "used_pct": used_pct,
+            "inode_total": inode_total,
+            "inode_used": inode_used,
+            "inode_available": inode_available,
+            "inode_used_pct": inode_used_pct,
+        },
+        "nfs": {
+            "service_ready": bool(exports) and (storage_threads or 0) > 0,
+            "exported": bool(exports),
+            "export_targets": exports,
+            "server_threads": storage_threads,
+            "requests_per_second": storage_current.get("nfs_requests"),
+            "rpc_errors_per_second": storage_current.get("nfs_errors"),
+            "stale_file_handles_total": (
+                int(storage_current["nfs_stale"])
+                if storage_current.get("nfs_stale") is not None
+                else None
+            ),
+            "connections_total": (
+                int(storage_current["nfs_connections"])
+                if storage_current.get("nfs_connections") is not None
+                else None
+            ),
+        },
+        "monitoring": {
+            "prometheus_available": storage_current.get("up") == 1,
+            "error": storage_error,
+        },
+    }
+
+    agents = _host_mount_summary(hosts)
     alerts: list[dict[str, str]] = []
     if not mount["mounted"]:
         alerts.append({"severity": "critical", "code": "STORAGE_NOT_MOUNTED", "message": f"{root} is not mounted"})
     if not exports:
         alerts.append({"severity": "critical", "code": "NFS_EXPORT_MISSING", "message": f"{root} is not exported"})
-    if not prometheus_available:
-        alerts.append({"severity": "warning", "code": "METRICS_UNAVAILABLE", "message": "File-server metrics are unavailable"})
+    if control_panel["monitoring"]["prometheus_available"] is False:
+        alerts.append({"severity": "warning", "code": "METRICS_UNAVAILABLE", "message": "Control-plane metrics are unavailable"})
+    if storage_panel["monitoring"]["prometheus_available"] is False:
+        alerts.append({"severity": "warning", "code": "STORAGE_METRICS_UNAVAILABLE", "message": "Storage-server metrics are unavailable"})
     if used_pct >= 90:
         alerts.append({"severity": "critical", "code": "CAPACITY_CRITICAL", "message": f"Storage usage is {used_pct:.1f}%"})
     elif used_pct >= 80:
@@ -332,60 +538,13 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
     status = "critical" if any(item["severity"] == "critical" for item in alerts) else (
         "warning" if alerts else "healthy"
     )
-    try:
-        uptime_seconds = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
-    except (OSError, ValueError, IndexError):
-        uptime_seconds = None
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "status": status,
-        "server": {
-            "hostname": socket.gethostname(),
-            "address": _server_address(),
-            "cpu_count": os.cpu_count() or 0,
-            "uptime_seconds": uptime_seconds,
-        },
-        "storage": {
-            "path": str(root),
-            "source": mount["source"],
-            "filesystem": mount["filesystem"],
-            "mounted": mount["mounted"],
-            "backend_write_access": root.exists() and os.access(root, os.W_OK),
-            "total_bytes": total_bytes,
-            "used_bytes": used_bytes,
-            "available_bytes": available_bytes,
-            "used_pct": used_pct,
-            "inode_total": inode_total,
-            "inode_used": inode_used,
-            "inode_available": inode_available,
-            "inode_used_pct": inode_used_pct,
-        },
-        "system": {
-            "cpu_usage_pct": round(float(cpu_usage), 2),
-            "memory_usage_pct": round(float(memory_usage), 2),
-            "memory_total_bytes": memory.total,
-            "load1": round(float(load1), 2),
-            "disk_read_bytes_per_second": current["disk_read"],
-            "disk_write_bytes_per_second": current["disk_write"],
-            "network_receive_bytes_per_second": current["network_receive"],
-            "network_transmit_bytes_per_second": current["network_transmit"],
-        },
-        "nfs": {
-            "service_ready": service_ready,
-            "exported": bool(exports),
-            "export_targets": exports,
-            "server_threads": int(current["nfs_threads"] or 0),
-            "requests_per_second": current["nfs_requests"],
-            "rpc_errors_per_second": current["nfs_errors"],
-            "stale_file_handles_total": int(current["nfs_stale"] or 0),
-            "connections_total": int(current["nfs_connections"] or 0),
-        },
+        "control_plane": control_panel,
+        "storage_server": storage_panel,
         "agents": agents,
         "history": history,
-        "monitoring": {
-            "prometheus_available": prometheus_available,
-            "error": prometheus_error,
-        },
         "alerts": alerts,
     }
