@@ -6,9 +6,11 @@ Class: process
 ## Decision
 
 单人项目的第一资源是注意力。CI/流程设计的第一约束：**合并路径上的阻塞
-检查保持 ~2 分钟内**（当前 lint / pr-typecheck / pr-compileall /
-pr-agent-tests 全绿即 auto-merge）；任何引入等待或分心（要惦记、要切回
-来看结果）的检查一律放异步路径（夜间批量全量 CI 兜底）。
+检查保持 ~2 分钟内**（当前 required checks 为 lint / CodeQL / pr-typecheck
+/ pr-compileall / pr-agent-tests，全绿即 auto-merge；`code-rabbit-gate`
+同为 required check，由 merge-gate 写状态但语义是 best-effort——仅当
+CodeRabbit 对当前 head 给出终态决策时构成阻断）；任何引入等待或分心
+（要惦记、要切回来看结果）的检查一律放异步路径（夜间批量全量 CI 兜底）。
 
 不得为「合并前验证」加长合入等待。据此否决过：
 
