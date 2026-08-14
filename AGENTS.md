@@ -10,7 +10,7 @@
 | 测试（含 `./scripts/run_pytest.sh`、DB 前置、`python -m pytest` 的坑） | [`docs/development/testing.md`](docs/development/testing.md) |
 | Lint 实际调用参数 | `.github/workflows/ci.yml` §lint（`ruff check backend/ tools/ scripts/`）；规则取向见 `ruff.toml` 抬头注释 |
 | 前端 script 名 | `frontend/package.json` |
-| 门禁矩阵（本地=CI 单入口） | `python scripts/run_gates.py check:quick\|pr\|full`（清单 `--list`） |
+| 本地门禁矩阵（CI 调用后续接入） | `python scripts/run_gates.py check:quick\|pr\|full`（清单 `--list`） |
 
 本文只保留**推导不出来**的部分：依赖三件套分工、lint 现状与取舍、空行注入污染、生产机调试约束、Test quirks。
 
@@ -169,7 +169,7 @@ See `backend/.env.example` and `backend/agent/.env.example` for full list.
 - **PR 合入**：仓库已开启 Auto-merge；`.github/workflows/enable-auto-merge.yml` 自动给同仓库非 draft PR 挂 auto-merge（merge commit，fork PR 不启用），并维护 `code-rabbit-gate` 状态作为 **best-effort 参考门禁**：仅当 CodeRabbit 对**当前 head** 有明确终态决策时生效——APPROVED → 通过；CHANGES_REQUESTED → 阻断；skipped / rate limited / paused / 无当前 head 决策 → 不阻断，由 lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests 等稳定 required checks 把关合入。不要手动点 Merge。
 - **CodeRabbit 复评（参考意见）**：CodeRabbit 因配额限制实际使用不稳定，定位为参考而非硬门禁。`.coderabbit.yaml` 已关 `auto_incremental_review`，push 修复后不会自动复评；需要它对当前 head 给出新结论时，在 PR 评论 `@coderabbitai review` 显式触发。旧 commit 上的 CHANGES_REQUESTED 不构成当前 head 的阻断决策；其不可用（rate limit / skipped）时不阻塞 auto-merge。
 - **CI 分层（2026-08-07）**：PR 只跑轻量 job（lint / pr-typecheck / pr-compileall / pr-agent-tests）；全量 backend-test（PG + pytest）、frontend-check（vitest + build）、docker-build 仅在 push main、workflow_dispatch 或 post-merge 兜底运行。auto-merge 的 merge commit 不触发 on: push / closed / workflow_run（GITHUB_TOKEN 级联限制），由 `main-ci-backstop.yml` 每 15 分钟检查 main 尖端是否已有全量 CI、没有则显式 dispatch；`enable-auto-merge.yml` 的 closed 事件 job 仅覆盖手动合入。PR 合入前不跑 PG/vitest/docker，风险由合入后全量兜底；需要“合并前全量校验”时应引入 Merge Queue。
-- **全量 CI 失败通知（2026-08-13）**：`main-ci-backstop.yml` 失败会自动开 `ci/backstop-failed` issue（同 label 去重、只追加评论），恢复通过后自动关闭；Dependabot npm 拆为 `frontend-patch-minor`（自动合入）与 `frontend-major`（人工评审）两组，typescript 的 semver-major 更新被 ignore（typescript-eslint 8.x peer 上限 <6.1）。
+- **全量 CI 失败通知（2026-08-13）**：`main-ci-backstop.yml` 失败会自动开 `ci/backstop-failed` issue（同 label 去重、只追加评论），恢复通过后自动关闭；Dependabot npm 拆为 `frontend-patch-minor`（自动合入）与 `frontend-major`（人工评审）两组，typescript 的 semver-major 更新被 ignore（typescript-eslint 8.x peer 上限 <6.1）；`github_actions` 生态更新同样**排除 auto-merge、人工评审**（供应链考虑）。
 - **文档只写现状，不写变迁**：常驻文档里不出现「之前/现在/已移除」式编年叙事；变更史归 commit / PR / Agent Note。AGENTS.md 是常驻命令清单，事故与取舍搬进 `docs/notes/` 后只留一行链接。
 
 ## Documentation

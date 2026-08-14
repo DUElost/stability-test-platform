@@ -25,13 +25,16 @@ docs/notes/
 文件名：`yyyy-mm-dd-主题.md`。日期 = 主题首次提出的日期；考证不到时
 用记录创建日（正文中注明原始事件日期）。
 
-## 头部（前 4 行固定，顺序不变）
+## 头部（结构固定，顺序不变）
 
 ```
 # 主题
+
 Status: proposed | implemented | rejected
 Class: feature | bug-fix | simplification | architecture | process | testing
 ```
+
+标题后必须保留一个空行（markdownlint MD022）。
 
 ## 正文四节
 

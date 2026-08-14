@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""STP 质量门禁单一入口：本地与 CI 共用同一矩阵。
+"""STP 质量门禁单一入口：本地矩阵先行，CI 侧后续逐 job 接入对应 profile。
 
 用法:
     python scripts/run_gates.py check:quick    # 最快一轮（纯静态，含 knip）
-    python scripts/run_gates.py check:pr       # 推送前默认：与 PR CI 逐项一致
+    python scripts/run_gates.py check:pr       # 推送前默认：与 PR CI 现有检查逐项重叠
     python scripts/run_gates.py check:full     # 夜间全量：与 main 全量 CI 一致
     python scripts/run_gates.py --list
 
@@ -13,7 +13,7 @@
 - 每个 gate 顺序执行，失败即停（单人场景默认合理）。
 - 用 `python -m` 形式调用（ruff/pytest），保证落到当前解释器的工具链，
   规避「裸 pytest 落到另一套解释器」的历史坑。
-- CI 侧后续逐 job 把 run: 行替换为本脚本的对应 profile；
+- CI 侧尚未调用本脚本（接入见 docs/notes/process/2026-08-14-repo-gate-runner.md）；
   脚本不可变门禁的 base 由环境变量 STP_GATE_BASE_REF 覆盖（CI 用 PR base）。
 """
 from __future__ import annotations
@@ -27,8 +27,10 @@ FRONTEND = os.path.join(ROOT, "frontend")
 PY = sys.executable  # 用当前解释器跑 -m，规避 PATH 落到别的 python
 BASE_REF = os.environ.get("STP_GATE_BASE_REF", "origin/main")
 
-# 部分 agent 测试模块 import 时会解析 DATABASE_URL，但不会真正连接；
-# 与全量 backend-test 保持一致的环境可避免收集期 RuntimeError。
+# 仅 agent-tests 使用：部分 agent 测试模块 import 时会解析 DATABASE_URL，
+# 但不会真正连接；与全量 backend-test 保持一致的环境可避免收集期 RuntimeError。
+# PG 门禁（backend-tests / integration）不传 env：本地由 conftest 走
+# testcontainers 隔离库（或本地配置），CI 侧由 job 级 env 自行设置。
 AGENT_TEST_ENV = {
     "TESTING": "1",
     "JWT_SECRET_KEY": "ci-test-secret-key",
@@ -85,7 +87,7 @@ GATES = {
     "backend-tests": (
         f"{PY} -m pytest backend/tests/ -v",
         ROOT,
-        AGENT_TEST_ENV,
+        None,
     ),
     "integration": (
         f"{PY} -m pytest "
@@ -94,7 +96,7 @@ GATES = {
         "backend/tests/integration/test_plan_chain_e2e.py "
         "backend/tests/test_seed_and_smoke.py -v",
         ROOT,
-        AGENT_TEST_ENV,
+        None,
     ),
     "repo-tests": (
         f"{PY} -m pytest tests/ -v",
