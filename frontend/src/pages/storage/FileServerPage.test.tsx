@@ -107,6 +107,22 @@ const overview: FileServerOverview = {
       last_heartbeat: '2026-07-27T13:29:58Z',
     }],
   },
+  device_log_disks: {
+    total: 1,
+    reported: 1,
+    warning: 0,
+    critical: 0,
+    items: [{
+      host_id: '198-51-100-124',
+      ip: '198.51.100.124',
+      path: '/mnt/hdd/aee_events',
+      total_bytes: 966367641600,
+      used_bytes: 10737418240,
+      available_bytes: 955630223360,
+      usage_percent: 1.1,
+      last_heartbeat: '2026-07-27T13:29:58Z',
+    }],
+  },
   history: {
     hours: 6,
     capacity_usage_pct: [{ timestamp: 1785158998, value: 0.1 }],
@@ -140,5 +156,7 @@ describe('FileServerPage', () => {
     expect(screen.getAllByText('已挂载').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('与控制面同机')).toBeInTheDocument();
     expect(screen.getAllByText('debian13 · 192.0.2.202').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('/mnt/hdd/aee_events')).toBeInTheDocument();
+    expect(screen.getByText('1.1%')).toBeInTheDocument();
   });
 });
