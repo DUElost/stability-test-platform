@@ -448,6 +448,12 @@ export default function FileServerPage() {
             </div>
           )}
 
+          <StorageMetricCards
+            disk={data.storage_server.disk}
+            nfs={data.storage_server.nfs}
+            agents={data.agents}
+          />
+
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
             <div className="rounded-md border">
               <NodeHeader
@@ -473,11 +479,6 @@ export default function FileServerPage() {
                 }
               />
               <div className="space-y-4 px-4">
-                <StorageMetricCards
-                  disk={data.storage_server.disk}
-                  nfs={data.storage_server.nfs}
-                  agents={data.agents}
-                />
                 <NfsSection nfs={data.storage_server.nfs} idPrefix="storage-server" />
                 <SystemLoadSection system={data.storage_server.system} node={data.storage_server.node} idPrefix="storage-server" />
               </div>
