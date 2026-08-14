@@ -13,9 +13,11 @@ on:
   # 本 workflow 自写的 code-rabbit-gate status 不会自我触发。
   status:
 
-# 同一 PR（status 事件下按 commit）的并发运行只保留最新一个，避免重复写操作。
+# 并发键统一按 HEAD sha（PR 事件取 head.sha，status 事件取 commit sha）：
+# 同一 head 的所有事件共享一个组，避免 PR 事件 run 与 status 事件 run
+# 分组不同而互相竞写状态（#268 CR 意见）。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.sha }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.event.sha }}
   cancel-in-progress: true
 
 # 不给整个 workflow 写权限；各 job 单独声明最小权限。
@@ -126,6 +128,34 @@ jobs:
               | jq -c --arg head_sha "$HEAD_SHA" \
                   '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
           }
+          guard_before_success() {
+            # 所有非评审 success 写入前的最终并发守卫（#268 CR 意见）：
+            # 前面任何查询之后都可能落入新的 CHANGES_REQUESTED 评审，或同一
+            # head 已有更新的 run 在写状态；cancel-in-progress 是异步的，
+            # 旧 run 不得覆盖新状态。查询失败一律写 pending 而非静默退出
+            # （set -e 下终止会残留旧 success 放行）。
+            local state newest_run_id head_json
+            if ! head_json="$(head_decision)"; then
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            fi
+            state="$(printf '%s' "$head_json" | jq -r .state)"
+            if [ "$state" = "CHANGES_REQUESTED" ]; then
+              set_status failure "CodeRabbit requested changes"
+              exit 0
+            fi
+            newest_run_id="$(
+              gh api "repos/$REPO_OWNER/$REPO_NAME/actions/workflows/enable-auto-merge.yml/runs?head_sha=$HEAD_SHA&per_page=1" \
+                --jq '[.workflow_runs[]][0].id // 0'
+            )" || {
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            }
+            if [ "$newest_run_id" != "0" ] && [ "$newest_run_id" != "$GITHUB_RUN_ID" ]; then
+              echo "Superseded by newer run $newest_run_id; skip status write"
+              exit 0
+            fi
+          }
 
           # 评审提交事件：仅处理 CodeRabbit 的评审；人工评审事件直接跳过。
           if [ "$EVENT_NAME" = "pull_request_review" ]; then
@@ -231,15 +261,7 @@ jobs:
           # 决策就放行，由 CI/CodeQL 等 required checks 把关，避免 code-rabbit-gate
           # 永久 pending。若 CodeRabbit 真的 request changes，仍按失败处理。
           if [ "${PR_AUTHOR:-}" = "dependabot[bot]" ]; then
-            if ! head_json="$(head_decision)"; then
-              set_status pending "CodeRabbit gate query failed"
-              exit 0
-            fi
-            head_state="$(printf '%s' "$head_json" | jq -r .state)"
-            if [ "$head_state" = "CHANGES_REQUESTED" ]; then
-              set_status failure "CodeRabbit requested changes"
-              exit 0
-            fi
+            guard_before_success
             set_status success "Dependabot PR; required checks gate merge"
             exit 0
           fi
@@ -249,6 +271,7 @@ jobs:
             exit 0
           fi
           if printf '%s' "$desc" | grep -qi 'rate.limit'; then
+            guard_before_success
             set_status success "CodeRabbit rate limited; required checks gate merge"
             exit 0
           fi
@@ -277,29 +300,8 @@ jobs:
               set_status pending "CodeRabbit re-review pending after requested changes"
               exit 0
             fi
-            # 写 success 前的最终并发守卫（#268 CR 意见）：prior_cr 查询之后
-            # 可能已落入新的 CHANGES_REQUESTED 评审，或同一 head 已有更新的
-            # run 在写状态；cancel-in-progress 是异步的，旧 run 不得覆盖。
-            if ! head_json="$(head_decision)"; then
-              set_status pending "CodeRabbit gate query failed"
-              exit 0
-            fi
-            head_state="$(printf '%s' "$head_json" | jq -r .state)"
-            if [ "$head_state" = "CHANGES_REQUESTED" ]; then
-              set_status failure "CodeRabbit requested changes"
-              exit 0
-            fi
-            newest_run_id="$(
-              gh api "repos/$REPO_OWNER/$REPO_NAME/actions/workflows/enable-auto-merge.yml/runs?head_sha=$HEAD_SHA&per_page=1" \
-                --jq '[.workflow_runs[]][0].id // 0'
-            )" || {
-              set_status pending "CodeRabbit gate query failed"
-              exit 0
-            }
-            if [ "$newest_run_id" != "0" ] && [ "$newest_run_id" != "$GITHUB_RUN_ID" ]; then
-              echo "Superseded by newer run $newest_run_id; skip status write"
-              exit 0
-            fi
+            # 统一最终守卫：重查当前 head 终态 + 最新 run，被取代则退出不写。
+            guard_before_success
             set_status success "CodeRabbit review skipped; required checks gate merge"
             exit 0
           fi
@@ -311,7 +313,7 @@ jobs:
           fi
           head_state="$(printf '%s' "$head_json" | jq -r .state)"
           case "$head_state" in
-            APPROVED) set_status success "CodeRabbit approved" ;;
+            APPROVED) guard_before_success; set_status success "CodeRabbit approved" ;;
             CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
             DISMISSED) set_status pending "CodeRabbit review dismissed" ;;
             *) set_status pending "CodeRabbit review completed without terminal decision" ;;
