@@ -349,6 +349,8 @@ def _device_log_disk_summary(hosts: list[Any]) -> dict[str, Any]:
         free_gb = _finite_float(raw.get("free_gb"))
         if usage is None or total_gb is None or used_gb is None or free_gb is None:
             continue
+        if usage < 0.0 or usage > 100.0:
+            continue
         total_bytes = int(round(total_gb * _GIB))
         used_bytes = int(round(used_gb * _GIB))
         available_bytes = int(round(free_gb * _GIB))
