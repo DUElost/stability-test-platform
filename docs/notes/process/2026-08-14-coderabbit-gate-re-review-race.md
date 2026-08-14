@@ -55,6 +55,19 @@ CHANGES_REQUESTED → failure；无终态 → pending；仅历史与当前 head 
   由 review 事件写终态；status 路径（CR 仅发 commit status 的场景）待
   下一个 rate limited 实例验证。
 
+## 五轮拉锯的两个收口（同日）
+
+#268 自身经历五轮复评：R1/R2 抓出真问题（隔离库 env、竞态、并发键），
+R3/R4 各只剩一条文档措辞级意见——「一条 nit → 整轮阻断」的循环无收敛点。
+据此两个收口：
+
+1. **path_filters**：`.coderabbit.yaml` 排除 `docs/**` 与根 `*.md`，纯文档
+   PR 不再送审，消除文档 nit 循环；代码路径（backend / frontend / workflows）
+   仍正常送审。
+2. **逃生阀执行**：dismiss 三条旧 head 上的 CHANGES_REQUESTED（全部意见已
+   修复或附理由驳回），push 触发重评估后合入——语义诚实：CR 意见全处理，
+   仅未对终版点头，符合其 best-effort 定位。
+
 ## Revisit
 
 若 CodeRabbit 配额政策变化导致「复评永不落定」常态化，重新评估逃生阀的
