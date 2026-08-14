@@ -7,10 +7,17 @@ on:
     # submitted + dismissed：撤销评审必须触发门禁重算，否则旧 APPROVED 会
     # 残留 success。成对触发产生的多余运行由 concurrency + 最终守卫收敛。
     types: [submitted, dismissed]
+  # status：CodeRabbit 的 commit status 变化（如 rate limited 落地）不伴随
+  # review 事件，但没有它，gate 写 pending 后（复评排队中）若只有 CR 的
+  # status 变化，pending 将永远停留。job 级 if 只放行 CodeRabbit context，
+  # 本 workflow 自写的 code-rabbit-gate status 不会自我触发。
+  status:
 
-# 同一 PR 的并发运行只保留最新一个，避免重复写操作。
+# 并发键统一按 HEAD sha（PR 事件取 head.sha，status 事件取 commit sha）：
+# 同一 head 的所有事件共享一个组，避免 PR 事件 run 与 status 事件 run
+# 分组不同而互相竞写状态（#268 CR 意见）。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.event.sha }}
   cancel-in-progress: true
 
 # 不给整个 workflow 写权限；各 job 单独声明最小权限。
@@ -59,7 +66,9 @@ jobs:
     # 合入阻断项；旧 commit 的 CHANGES_REQUESTED 不作为当前 head 的阻断决策。
     # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
     # status 同名，造成 required check 来源歧义。
-    if: github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    # 非 status 事件沿用 PR 条件；status 事件仅 CodeRabbit context 放行
+    # （否则每次 commit status 更新都会触发一次运行）。
+    if: (github.event_name != 'status' && github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name) || (github.event_name == 'status' && github.event.context == 'CodeRabbit')
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -74,11 +83,25 @@ jobs:
           REVIEW_AUTHOR: ${{ github.event.review.user.login }}
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.sha }}
         run: |
           set -euo pipefail
+
+          # status 事件：CodeRabbit 的 commit status 变化（rate limited /
+          # skipped / completed 等）不伴随 review 事件，从这里重算 gate。
+          # commit → open PR 反查；无 open PR 或查询失败则退出不写状态。
+          if [ "$EVENT_NAME" = "status" ]; then
+            PR_NUMBER="$(
+              gh api "repos/$REPO_OWNER/$REPO_NAME/commits/$HEAD_SHA/pulls" \
+                --jq '[.[] | select(.state == "open")][0].number // 0'
+            )" || { echo "PR lookup failed; skip"; exit 0; }
+            if [ "$PR_NUMBER" = "0" ]; then
+              echo "No open PR for $HEAD_SHA; skip"
+              exit 0
+            fi
+          fi
 
           set_status() {
             local state="$1" desc="$2"
@@ -104,6 +127,34 @@ jobs:
             gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
               | jq -c --arg head_sha "$HEAD_SHA" \
                   '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.commit_id == $head_sha) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")] | sort_by(.id) | .[-1] | {id: (.id // 0), state: (.state // "")}'
+          }
+          guard_before_success() {
+            # 所有非评审 success 写入前的最终并发守卫（#268 CR 意见）：
+            # 前面任何查询之后都可能落入新的 CHANGES_REQUESTED 评审，或同一
+            # head 已有更新的 run 在写状态；cancel-in-progress 是异步的，
+            # 旧 run 不得覆盖新状态。查询失败一律写 pending 而非静默退出
+            # （set -e 下终止会残留旧 success 放行）。
+            local state newest_run_id head_json
+            if ! head_json="$(head_decision)"; then
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            fi
+            state="$(printf '%s' "$head_json" | jq -r .state)"
+            if [ "$state" = "CHANGES_REQUESTED" ]; then
+              set_status failure "CodeRabbit requested changes"
+              exit 0
+            fi
+            newest_run_id="$(
+              gh api "repos/$REPO_OWNER/$REPO_NAME/actions/workflows/enable-auto-merge.yml/runs?head_sha=$HEAD_SHA&per_page=1" \
+                --jq '[.workflow_runs[]][0].id // 0'
+            )" || {
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            }
+            if [ "$newest_run_id" != "0" ] && [ "$newest_run_id" != "$GITHUB_RUN_ID" ]; then
+              echo "Superseded by newer run $newest_run_id; skip status write"
+              exit 0
+            fi
           }
 
           # 评审提交事件：仅处理 CodeRabbit 的评审；人工评审事件直接跳过。
@@ -210,15 +261,7 @@ jobs:
           # 决策就放行，由 CI/CodeQL 等 required checks 把关，避免 code-rabbit-gate
           # 永久 pending。若 CodeRabbit 真的 request changes，仍按失败处理。
           if [ "${PR_AUTHOR:-}" = "dependabot[bot]" ]; then
-            if ! head_json="$(head_decision)"; then
-              set_status pending "CodeRabbit gate query failed"
-              exit 0
-            fi
-            head_state="$(printf '%s' "$head_json" | jq -r .state)"
-            if [ "$head_state" = "CHANGES_REQUESTED" ]; then
-              set_status failure "CodeRabbit requested changes"
-              exit 0
-            fi
+            guard_before_success
             set_status success "Dependabot PR; required checks gate merge"
             exit 0
           fi
@@ -228,10 +271,37 @@ jobs:
             exit 0
           fi
           if printf '%s' "$desc" | grep -qi 'rate.limit'; then
+            guard_before_success
             set_status success "CodeRabbit rate limited; required checks gate merge"
             exit 0
           fi
+          # skipped / paused 通常放行（配额/不可用不阻塞）。但若本 PR 历史上有
+          # 未撤销的 CodeRabbit CHANGES_REQUESTED（任意 commit），说明存在待复评
+          # 状态：此时 skipped 可能只是「手动复评还在排队」（#267 实测：复评落定
+          # 前 gate 已按 skipped 放行，合入 5 分钟后 CR 才给出终态）。此类 PR 必须
+          # 等 CR 对当前 head 给出终态（review 事件会写 gate）或明确 rate limited
+          # 才放行，skipped/paused 一律 pending。
+          # 逃生阀：dismiss 旧 review（state 不再是 CHANGES_REQUESTED）后，任意
+          # pull_request 事件重跑本路径会**重新评估**（并非无条件放行）：当前
+          # head 仍有 CHANGES_REQUESTED → failure；无终态 → pending；仅历史与
+          # 当前 head 都干净且状态 skipped/paused 时才 success。CR 的 commit
+          # status 变化（rate limited 等）经 status 事件同样重算本路径。
           if printf '%s' "$desc" | grep -qiE 'skipped|paused'; then
+            # 查询失败必须写 pending 而非静默退出：set -e 下 gh/jq 失败会让
+            # 步骤直接终止，已存在的旧 success 会继续放行（#268 CR 意见）。
+            if ! prior_cr="$(
+              gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+                | jq '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.state == "CHANGES_REQUESTED")] | length'
+            )"; then
+              set_status pending "CodeRabbit gate query failed"
+              exit 0
+            fi
+            if [ "$prior_cr" != "0" ]; then
+              set_status pending "CodeRabbit re-review pending after requested changes"
+              exit 0
+            fi
+            # 统一最终守卫：重查当前 head 终态 + 最新 run，被取代则退出不写。
+            guard_before_success
             set_status success "CodeRabbit review skipped; required checks gate merge"
             exit 0
           fi
@@ -243,7 +313,7 @@ jobs:
           fi
           head_state="$(printf '%s' "$head_json" | jq -r .state)"
           case "$head_state" in
-            APPROVED) set_status success "CodeRabbit approved" ;;
+            APPROVED) guard_before_success; set_status success "CodeRabbit approved" ;;
             CHANGES_REQUESTED) set_status failure "CodeRabbit requested changes" ;;
             DISMISSED) set_status pending "CodeRabbit review dismissed" ;;
             *) set_status pending "CodeRabbit review completed without terminal decision" ;;

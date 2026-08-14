@@ -14,9 +14,11 @@ actions 仍按 SHA 固定，由 Dependabot 自动跟进安全/版本更新。两
 合入路径不同：
 
 - **github_actions 更新**：**排除 auto-merge、人工评审**。轻量门禁对
-  action 内容零检测力，而 enable-auto-merge / backstop 的 job 持有
-  contents/pull-requests/issues 写权限，投毒 release 经自动合入即可拿到
-  这些权限；人工看一行 SHA diff 成本近零（#267 CodeRabbit 评审意见）。
+  action 内容零检测力，而 enable-auto-merge 的 job 持有 contents /
+  pull-requests 写权限、backstop 的 verify-and-cleanup job 持有 actions /
+  contents 写权限与 pull-requests 读权限、notify job 持有 issues 写权限
+  ——投毒 release 经自动合入即可在对应 job 运行时拿到这些权限；人工看一行
+  SHA diff 成本近零（#267 CodeRabbit 评审意见）。
 - pip / npm 更新：过现有轻量门禁后 auto-merge，夜间全量 CI 再复验。
 
 ## Alternatives
