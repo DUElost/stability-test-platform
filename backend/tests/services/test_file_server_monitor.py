@@ -8,22 +8,33 @@ from backend.services import file_server_monitor as monitor
 
 
 class _FakePrometheus:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
     def close(self) -> None:
         pass
 
     def scalar(self, query: str) -> float:
+        self.queries.append(query)
         if query.startswith("up{"):
             return 1.0
-        if "server_threads" in query:
+        if "node_nfsd_server_threads" in query:
             return 16.0
-        if "connections_total" in query:
+        if "node_nfsd_connections_total" in query:
             return 3.0
-        if "stale_file_handles" in query or "rpc_errors" in query:
+        if "stale_file_handles" in query or "node_nfsd_rpc_errors" in query:
             return 0.0
+        if "node_boot_time_seconds" in query:
+            return 1700000000.0
+        if "count(node_cpu_seconds_total" in query or "node_memory_MemTotal_bytes" in query:
+            return 8.0
         return 1.5
 
     def range(self, query: str, *, start: float, end: float, step: int):
         return [{"timestamp": start, "value": 1.0}, {"timestamp": end, "value": 2.0}]
+
+    def label(self, query: str, label: str) -> str | None:
+        return "storage-host" if label == "nodename" else None
 
 
 def _host(host_id: str, mount_entries: dict | None):
@@ -40,16 +51,21 @@ def _host(host_id: str, mount_entries: dict | None):
     )
 
 
-def _patch_file_server_deps(monkeypatch, tmp_path):
+def _patch_file_server_deps(monkeypatch, tmp_path) -> _FakePrometheus:
     monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
     monkeypatch.setenv("STP_FILE_SERVER_ADDRESS", "192.0.2.202")
+    monkeypatch.delenv("STP_AEE_SHARE_ADDRESS", raising=False)
+    monkeypatch.delenv("STP_STORAGE_NODE_JOB", raising=False)
+    monkeypatch.delenv("STP_CONTROL_PLANE_NODE_JOB", raising=False)
     monkeypatch.setattr(
         monitor,
         "_mount_details",
         lambda _path: {"mounted": True, "source": "/dev/sda1", "filesystem": "ext4"},
     )
     monkeypatch.setattr(monitor, "_export_targets", lambda _path: ["192.0.2.0/24", "198.51.100.0/24"])
-    monkeypatch.setattr(monitor, "_PrometheusClient", _FakePrometheus)
+    fake = _FakePrometheus()
+    monkeypatch.setattr(monitor, "_PrometheusClient", lambda: fake)
+    return fake
 
 
 def test_file_server_overview_reports_capacity_nfs_and_agent_mounts(tmp_path, monkeypatch):
@@ -63,11 +79,15 @@ def test_file_server_overview_reports_capacity_nfs_and_agent_mounts(tmp_path, mo
         hours=1,
     )
 
-    assert result["storage"]["mounted"] is True
-    assert result["storage"]["source"] == "/dev/sda1"
-    assert result["storage"]["total_bytes"] > 0
-    assert result["nfs"]["service_ready"] is True
-    assert result["nfs"]["server_threads"] == 16
+    assert result["storage_server"]["same_source"] is True
+    assert result["control_plane"]["client_mount"]["mounted"] is True
+    assert result["control_plane"]["client_mount"]["source"] == "/dev/sda1"
+    assert result["storage_server"]["disk"]["mounted"] is True
+    assert result["storage_server"]["disk"]["total_bytes"] > 0
+    assert result["storage_server"]["nfs"]["service_ready"] is True
+    assert result["storage_server"]["nfs"]["server_threads"] == 16
+    assert result["control_plane"]["system"]["cpu_usage_pct"] == 1.5
+    assert result["storage_server"]["system"]["cpu_usage_pct"] == 1.5
     # Agent mount key 与控制面 str(root) 字串不同，但只要任一 ok=True 即视为已挂
     assert result["agents"] == {
         "total": 2,
@@ -79,6 +99,66 @@ def test_file_server_overview_reports_capacity_nfs_and_agent_mounts(tmp_path, mo
     assert result["status"] == "warning"
     assert {alert["code"] for alert in result["alerts"]} == {"AGENT_MOUNT_INCOMPLETE"}
     assert len(result["history"]["capacity_usage_pct"]) == 2
+
+
+def test_split_panels_when_share_address_and_storage_job_configured(tmp_path, monkeypatch):
+    fake = _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.204")
+    monkeypatch.setenv("STP_STORAGE_NODE_JOB", "storage-server")
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    assert result["storage_server"]["same_source"] is False
+    assert result["storage_server"]["node"]["address"] == "192.0.2.204"
+    assert result["storage_server"]["node"]["hostname"] == "storage-host"
+    assert result["storage_server"]["monitoring"]["prometheus_available"] is True
+    assert any('job="storage-server"' in q for q in fake.queries)
+    assert any('job="file-server"' in q for q in fake.queries)
+
+
+def test_share_address_equal_to_control_plane_stays_co_located(tmp_path, monkeypatch):
+    fake = _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.202")
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    assert result["storage_server"]["same_source"] is True
+    assert result["storage_server"]["monitoring"]["prometheus_available"] is True
+    assert "STORAGE_METRICS_UNAVAILABLE" not in {a["code"] for a in result["alerts"]}
+    assert any('job="file-server"' in q for q in fake.queries)
+
+
+def test_split_without_storage_job_reports_missing_storage_metrics(tmp_path, monkeypatch):
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.204")
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    assert result["storage_server"]["same_source"] is False
+    assert result["storage_server"]["monitoring"]["prometheus_available"] is False
+    assert result["storage_server"]["system"]["cpu_usage_pct"] is None
+    assert {"STORAGE_METRICS_UNAVAILABLE"} <= {a["code"] for a in result["alerts"]}
+
+
+def test_invalid_storage_job_name_is_rejected_not_fallen_back(tmp_path, monkeypatch):
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.204")
+    monkeypatch.setenv("STP_STORAGE_NODE_JOB", "bad job name")
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    assert result["storage_server"]["same_source"] is False
+    assert result["storage_server"]["monitoring"]["prometheus_available"] is False
+    assert result["storage_server"]["system"]["cpu_usage_pct"] is None
+    assert {"STORAGE_METRICS_UNAVAILABLE"} <= {a["code"] for a in result["alerts"]}
+
+
+def test_finite_float_rejects_nan_and_inf():
+    assert monitor._finite_float("NaN") is None
+    assert monitor._finite_float("+Inf") is None
+    assert monitor._finite_float("-Inf") is None
+    assert monitor._finite_float("1.5") == 1.5
+    assert monitor._finite_float("not-a-number") is None
 
 
 def test_host_mount_summary_counts_any_ok_flag_as_mounted():

@@ -398,50 +398,85 @@ export interface FileServerMetricPoint {
   value: number;
 }
 
+export interface FileServerNodeIdentity {
+  hostname: string;
+  address: string;
+  cpu_count: number | null;
+  uptime_seconds: number | null;
+}
+
+export interface FileServerNodeMonitoring {
+  prometheus_available: boolean;
+  error: string | null;
+}
+
+export interface FileServerClientMount {
+  path: string;
+  source: string | null;
+  filesystem: string | null;
+  mounted: boolean;
+  backend_write_access: boolean;
+}
+
+export interface FileServerNodeSystem {
+  cpu_usage_pct: number | null;
+  memory_usage_pct: number | null;
+  memory_total_bytes: number | null;
+  load1: number | null;
+  disk_read_bytes_per_second: number | null;
+  disk_write_bytes_per_second: number | null;
+  network_receive_bytes_per_second: number | null;
+  network_transmit_bytes_per_second: number | null;
+}
+
+export interface FileServerStorage {
+  path: string;
+  source: string | null;
+  filesystem: string | null;
+  mounted: boolean;
+  backend_write_access: boolean;
+  total_bytes: number;
+  used_bytes: number;
+  available_bytes: number;
+  used_pct: number;
+  inode_total: number;
+  inode_used: number;
+  inode_available: number;
+  inode_used_pct: number;
+}
+
+export interface FileServerNfs {
+  service_ready: boolean;
+  exported: boolean;
+  export_targets: string[];
+  server_threads: number | null;
+  requests_per_second: number | null;
+  rpc_errors_per_second: number | null;
+  stale_file_handles_total: number | null;
+  connections_total: number | null;
+}
+
+export interface FileServerControlPlanePanel {
+  node: FileServerNodeIdentity;
+  system: FileServerNodeSystem;
+  client_mount: FileServerClientMount;
+  monitoring: FileServerNodeMonitoring;
+}
+
+export interface FileServerStoragePanel {
+  node: FileServerNodeIdentity;
+  same_source: boolean;
+  system: FileServerNodeSystem;
+  disk: FileServerStorage;
+  nfs: FileServerNfs;
+  monitoring: FileServerNodeMonitoring;
+}
+
 export interface FileServerOverview {
   generated_at: string;
   status: 'healthy' | 'warning' | 'critical';
-  server: {
-    hostname: string;
-    address: string;
-    cpu_count: number;
-    uptime_seconds: number | null;
-  };
-  storage: {
-    path: string;
-    source: string | null;
-    filesystem: string | null;
-    mounted: boolean;
-    backend_write_access: boolean;
-    total_bytes: number;
-    used_bytes: number;
-    available_bytes: number;
-    used_pct: number;
-    inode_total: number;
-    inode_used: number;
-    inode_available: number;
-    inode_used_pct: number;
-  };
-  system: {
-    cpu_usage_pct: number;
-    memory_usage_pct: number;
-    memory_total_bytes: number;
-    load1: number;
-    disk_read_bytes_per_second: number | null;
-    disk_write_bytes_per_second: number | null;
-    network_receive_bytes_per_second: number | null;
-    network_transmit_bytes_per_second: number | null;
-  };
-  nfs: {
-    service_ready: boolean;
-    exported: boolean;
-    export_targets: string[];
-    server_threads: number;
-    requests_per_second: number | null;
-    rpc_errors_per_second: number | null;
-    stale_file_handles_total: number;
-    connections_total: number;
-  };
+  control_plane: FileServerControlPlanePanel;
+  storage_server: FileServerStoragePanel;
   agents: {
     total: number;
     mounted: number;
@@ -461,10 +496,6 @@ export interface FileServerOverview {
     cpu_usage_pct: FileServerMetricPoint[];
     memory_usage_pct: FileServerMetricPoint[];
     nfs_requests_per_second: FileServerMetricPoint[];
-  };
-  monitoring: {
-    prometheus_available: boolean;
-    error: string | null;
   };
   alerts: Array<{
     severity: 'warning' | 'critical';

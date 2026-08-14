@@ -23,46 +23,76 @@ vi.mock('recharts', () => ({
 const overview: FileServerOverview = {
   generated_at: '2026-07-27T13:30:00Z',
   status: 'healthy',
-  server: {
-    hostname: 'debian13',
-    address: '192.0.2.202',
-    cpu_count: 20,
-    uptime_seconds: 172800,
+  control_plane: {
+    node: {
+      hostname: 'debian13',
+      address: '192.0.2.202',
+      cpu_count: 20,
+      uptime_seconds: 172800,
+    },
+    system: {
+      cpu_usage_pct: 12.3,
+      memory_usage_pct: 42.1,
+      memory_total_bytes: 24875495424,
+      load1: 1.2,
+      disk_read_bytes_per_second: 1024,
+      disk_write_bytes_per_second: 2048,
+      network_receive_bytes_per_second: 4096,
+      network_transmit_bytes_per_second: 8192,
+    },
+    client_mount: {
+      path: '/mnt/stp-aee',
+      source: '/dev/sda1',
+      filesystem: 'ext4',
+      mounted: true,
+      backend_write_access: true,
+    },
+    monitoring: { prometheus_available: true, error: null },
   },
-  storage: {
-    path: '/mnt/stp-aee',
-    source: '/dev/sda1',
-    filesystem: 'ext4',
-    mounted: true,
-    backend_write_access: true,
-    total_bytes: 983349346304,
-    used_bytes: 2142208,
-    available_bytes: 983230406656,
-    used_pct: 0.1,
-    inode_total: 61054976,
-    inode_used: 16,
-    inode_available: 61054960,
-    inode_used_pct: 0.1,
-  },
-  system: {
-    cpu_usage_pct: 12.3,
-    memory_usage_pct: 42.1,
-    memory_total_bytes: 24875495424,
-    load1: 1.2,
-    disk_read_bytes_per_second: 1024,
-    disk_write_bytes_per_second: 2048,
-    network_receive_bytes_per_second: 4096,
-    network_transmit_bytes_per_second: 8192,
-  },
-  nfs: {
-    service_ready: true,
-    exported: true,
-    export_targets: ['192.0.2.0/24', '198.51.100.0/24'],
-    server_threads: 16,
-    requests_per_second: 1.5,
-    rpc_errors_per_second: 0,
-    stale_file_handles_total: 0,
-    connections_total: 45,
+  storage_server: {
+    node: {
+      hostname: 'debian13',
+      address: '192.0.2.202',
+      cpu_count: 20,
+      uptime_seconds: 172800,
+    },
+    same_source: true,
+    system: {
+      cpu_usage_pct: 12.3,
+      memory_usage_pct: 42.1,
+      memory_total_bytes: 24875495424,
+      load1: 1.2,
+      disk_read_bytes_per_second: 1024,
+      disk_write_bytes_per_second: 2048,
+      network_receive_bytes_per_second: 4096,
+      network_transmit_bytes_per_second: 8192,
+    },
+    disk: {
+      path: '/mnt/stp-aee',
+      source: '/dev/sda1',
+      filesystem: 'ext4',
+      mounted: true,
+      backend_write_access: true,
+      total_bytes: 983349346304,
+      used_bytes: 2142208,
+      available_bytes: 983230406656,
+      used_pct: 0.1,
+      inode_total: 61054976,
+      inode_used: 16,
+      inode_available: 61054960,
+      inode_used_pct: 0.1,
+    },
+    nfs: {
+      service_ready: true,
+      exported: true,
+      export_targets: ['192.0.2.0/24', '198.51.100.0/24'],
+      server_threads: 16,
+      requests_per_second: 1.5,
+      rpc_errors_per_second: 0,
+      stale_file_handles_total: 0,
+      connections_total: 45,
+    },
+    monitoring: { prometheus_available: true, error: null },
   },
   agents: {
     total: 1,
@@ -84,7 +114,6 @@ const overview: FileServerOverview = {
     memory_usage_pct: [{ timestamp: 1785158998, value: 42.1 }],
     nfs_requests_per_second: [{ timestamp: 1785158998, value: 1.5 }],
   },
-  monitoring: { prometheus_available: true, error: null },
   alerts: [],
 };
 
@@ -108,6 +137,8 @@ describe('FileServerPage', () => {
     expect(screen.getByText('1/1')).toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
     expect(screen.getByText('192.0.2.0/24, 198.51.100.0/24')).toBeInTheDocument();
-    expect(screen.getByText('已挂载')).toBeInTheDocument();
+    expect(screen.getAllByText('已挂载').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('与控制面同机')).toBeInTheDocument();
+    expect(screen.getAllByText('debian13 · 192.0.2.202').length).toBeGreaterThanOrEqual(2);
   });
 });
