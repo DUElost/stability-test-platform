@@ -194,6 +194,8 @@ const alertText: Record<string, string> = {
   CAPACITY_CRITICAL: '存储容量超过 90%',
   CAPACITY_WARNING: '存储容量超过 80%',
   AGENT_MOUNT_INCOMPLETE: '部分 Agent 尚未确认共享挂载',
+  DEVICE_LOG_DISK_CRITICAL: '设备日志盘超过 95%',
+  DEVICE_LOG_DISK_WARNING: '设备日志盘超过 90%',
 };
 
 function MonitoringBadge({ monitoring }: { monitoring: FileServerNodeMonitoring }) {
@@ -365,6 +367,62 @@ function NfsSection({
         <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>RPC 错误</dt><dd className={cn('font-mono', (nfs.rpc_errors_per_second ?? 0) > 0 && 'text-destructive')}>{formatRate(nfs.rpc_errors_per_second)}</dd></div>
         <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>Stale handle</dt><dd className={cn('font-mono', (nfs.stale_file_handles_total ?? 0) > 0 && 'text-destructive')}>{nfs.stale_file_handles_total ?? '—'}</dd></div>
       </dl>
+    </section>
+  );
+}
+
+function DeviceLogDiskSection({ data }: { data: FileServerOverview['device_log_disks'] }) {
+  return (
+    <section className="rounded-md border" aria-labelledby="device-log-disk-title">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+        <div>
+          <h2 id="device-log-disk-title" className={cn('text-sm font-semibold', TEXT.heading)}>设备日志磁盘（按 host）</h2>
+          <p className={cn('mt-0.5 text-xs', TEXT.caption)}>
+            STP_AEE_LOCAL_ROOT 所在盘 · 上报 {data.reported}/{data.total}
+            {data.warning + data.critical > 0 && ` · 告警 ${data.warning + data.critical}`}
+          </p>
+        </div>
+      </div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>主机</TableHead>
+            <TableHead>路径</TableHead>
+            <TableHead>总容量</TableHead>
+            <TableHead>已用</TableHead>
+            <TableHead className="w-40">使用率</TableHead>
+            <TableHead className="text-right">最近心跳</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {data.items.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={6} className="text-center text-muted-foreground">暂无已上报的 host</TableCell>
+            </TableRow>
+          ) : data.items.map((host) => (
+            <TableRow key={host.host_id}>
+              <TableCell className="font-mono text-xs">{host.ip ?? host.host_id}</TableCell>
+              <TableCell className="font-mono text-xs">{host.path || '—'}</TableCell>
+              <TableCell className="font-mono text-xs">{formatBytes(host.total_bytes)}</TableCell>
+              <TableCell className="font-mono text-xs">{formatBytes(host.used_bytes)}</TableCell>
+              <TableCell>
+                <div className="flex items-center gap-2">
+                  <Progress
+                    value={host.usage_percent}
+                    indicatorClassName={
+                      host.usage_percent >= 95 ? 'bg-destructive' : host.usage_percent >= 90 ? 'bg-warning' : 'bg-success'
+                    }
+                  />
+                  <span className={cn('font-mono text-xs', metricTone(host.usage_percent, 90, 95))}>
+                    {host.usage_percent.toFixed(1)}%
+                  </span>
+                </div>
+              </TableCell>
+              <TableCell className="text-right font-mono text-xs">{formatTime(host.last_heartbeat)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </section>
   );
 }
@@ -541,6 +599,8 @@ export default function FileServerPage() {
               </TableBody>
             </Table>
           </section>
+
+          <DeviceLogDiskSection data={data.device_log_disks} />
         </>
       )}
     </PageContainer>

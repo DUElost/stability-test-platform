@@ -472,6 +472,17 @@ export interface FileServerStoragePanel {
   monitoring: FileServerNodeMonitoring;
 }
 
+export interface FileServerDeviceLogDisk {
+  host_id: string;
+  ip: string | null;
+  path: string;
+  total_bytes: number;
+  used_bytes: number;
+  available_bytes: number;
+  usage_percent: number;
+  last_heartbeat: string | null;
+}
+
 export interface FileServerOverview {
   generated_at: string;
   status: 'healthy' | 'warning' | 'critical';
@@ -489,6 +500,13 @@ export interface FileServerOverview {
       mounted: boolean | null;
       last_heartbeat: string | null;
     }>;
+  };
+  device_log_disks: {
+    total: number;
+    reported: number;
+    warning: number;
+    critical: number;
+    items: FileServerDeviceLogDisk[];
   };
   history: {
     hours: number;
