@@ -256,7 +256,7 @@ class DashboardSummaryResponse(BaseModel):
 
 @router.get("/file-server", response_model=FileServerOverview)
 def get_file_server_overview(
-    hours: int = Query(6, ge=1, le=24),
+    hours: int = Query(6, ge=1, le=168),
     db: Session = Depends(get_db),
     _current_user: User = Depends(require_admin),
 ):
