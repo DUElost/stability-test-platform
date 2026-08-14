@@ -122,6 +122,27 @@ class FileServerAgentSummary(BaseModel):
     items: list[FileServerAgentMount]
 
 
+class DeviceLogDisk(BaseModel):
+    """Per-host device-log disk (STP_AEE_LOCAL_ROOT's filesystem) water level."""
+
+    host_id: str
+    ip: Optional[str] = None
+    path: str
+    total_bytes: int
+    used_bytes: int
+    available_bytes: int
+    usage_percent: float
+    last_heartbeat: Optional[datetime] = None
+
+
+class DeviceLogDiskSummary(BaseModel):
+    total: int
+    reported: int
+    warning: int
+    critical: int
+    items: list[DeviceLogDisk]
+
+
 class FileServerAlert(BaseModel):
     severity: Literal["warning", "critical"]
     code: str
@@ -134,5 +155,6 @@ class FileServerOverview(BaseModel):
     control_plane: ControlPlanePanel
     storage_server: StorageServerPanel
     agents: FileServerAgentSummary
+    device_log_disks: DeviceLogDiskSummary
     history: FileServerHistory
     alerts: list[FileServerAlert]
