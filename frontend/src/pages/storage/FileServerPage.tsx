@@ -371,15 +371,24 @@ function NfsSection({
   );
 }
 
-function DeviceLogDiskSection({ data }: { data: FileServerOverview['device_log_disks'] }) {
+function AgentStatusSection({
+  agents,
+  disks,
+}: {
+  agents: FileServerOverview['agents'];
+  disks: FileServerOverview['device_log_disks'];
+}) {
+  const diskByHost = new Map(disks.items.map((item) => [item.host_id, item]));
+  const warningCount = disks.warning + disks.critical;
   return (
-    <section className="rounded-md border" aria-labelledby="device-log-disk-title">
+    <section className="rounded-md border" aria-labelledby="agent-status-title">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
         <div>
-          <h2 id="device-log-disk-title" className={cn('text-sm font-semibold', TEXT.heading)}>设备日志磁盘（按 host）</h2>
+          <h2 id="agent-status-title" className={cn('text-sm font-semibold', TEXT.heading)}>Agent 状态（挂载与设备日志盘）</h2>
           <p className={cn('mt-0.5 text-xs', TEXT.caption)}>
-            STP_AEE_LOCAL_ROOT 所在盘 · 上报 {data.reported}/{data.total}
-            {data.warning + data.critical > 0 && ` · 告警 ${data.warning + data.critical}`}
+            中心存储挂载 {agents.mounted}/{agents.total}
+            {' · 设备日志盘上报 '}{disks.reported}/{disks.total}
+            {warningCount > 0 && ` · 告警 ${warningCount}`}
           </p>
         </div>
       </div>
@@ -387,40 +396,59 @@ function DeviceLogDiskSection({ data }: { data: FileServerOverview['device_log_d
         <TableHeader>
           <TableRow>
             <TableHead>主机</TableHead>
-            <TableHead>路径</TableHead>
-            <TableHead>总容量</TableHead>
-            <TableHead>已用</TableHead>
-            <TableHead className="w-40">使用率</TableHead>
+            <TableHead>Agent</TableHead>
+            <TableHead>中心存储挂载</TableHead>
+            <TableHead>设备日志盘</TableHead>
+            <TableHead>已用 / 总容量</TableHead>
+            <TableHead className="w-36">使用率</TableHead>
             <TableHead className="text-right">最近心跳</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {data.items.length === 0 ? (
+          {agents.items.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={6} className="text-center text-muted-foreground">暂无已上报的 host</TableCell>
+              <TableCell colSpan={7} className="text-center text-muted-foreground">暂无在线 host</TableCell>
             </TableRow>
-          ) : data.items.map((host) => (
-            <TableRow key={host.host_id}>
-              <TableCell className="font-mono text-xs">{host.ip ?? host.host_id}</TableCell>
-              <TableCell className="font-mono text-xs">{host.path || '—'}</TableCell>
-              <TableCell className="font-mono text-xs">{formatBytes(host.total_bytes)}</TableCell>
-              <TableCell className="font-mono text-xs">{formatBytes(host.used_bytes)}</TableCell>
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <Progress
-                    value={host.usage_percent}
-                    indicatorClassName={
-                      host.usage_percent >= 95 ? 'bg-destructive' : host.usage_percent >= 90 ? 'bg-warning' : 'bg-success'
-                    }
-                  />
-                  <span className={cn('font-mono text-xs', metricTone(host.usage_percent, 90, 95))}>
-                    {host.usage_percent.toFixed(1)}%
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell className="text-right font-mono text-xs">{formatTime(host.last_heartbeat)}</TableCell>
-            </TableRow>
-          ))}
+          ) : agents.items.map((host) => {
+            const disk = diskByHost.get(host.host_id);
+            return (
+              <TableRow key={host.host_id}>
+                <TableCell className="font-mono text-xs">{host.ip ?? host.host_id}</TableCell>
+                <TableCell><Badge variant={host.status === 'ONLINE' ? 'success' : 'secondary'}>{host.status}</Badge></TableCell>
+                <TableCell>
+                  {host.mounted === true ? (
+                    <Badge variant="success">已挂载</Badge>
+                  ) : host.mounted === false ? (
+                    <Badge variant="destructive">异常</Badge>
+                  ) : (
+                    <Badge variant="outline">未上报</Badge>
+                  )}
+                </TableCell>
+                <TableCell className="font-mono text-xs">{disk?.path || '—'}</TableCell>
+                <TableCell className="font-mono text-xs">
+                  {disk ? `${formatBytes(disk.used_bytes)} / ${formatBytes(disk.total_bytes)}` : '—'}
+                </TableCell>
+                <TableCell>
+                  {disk ? (
+                    <div className="flex items-center gap-2">
+                      <Progress
+                        value={disk.usage_percent}
+                        indicatorClassName={
+                          disk.usage_percent >= 95 ? 'bg-destructive' : disk.usage_percent >= 90 ? 'bg-warning' : 'bg-success'
+                        }
+                      />
+                      <span className={cn('font-mono text-xs', metricTone(disk.usage_percent, 90, 95))}>
+                        {disk.usage_percent.toFixed(1)}%
+                      </span>
+                    </div>
+                  ) : (
+                    <span className={cn('text-xs', TEXT.subtitle)}>未上报</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs">{formatTime(host.last_heartbeat)}</TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
     </section>
@@ -560,47 +588,7 @@ export default function FileServerPage() {
             </div>
           </section>
 
-          <section className="rounded-md border" aria-labelledby="agent-mount-title">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
-              <div>
-                <h2 id="agent-mount-title" className={cn('text-sm font-semibold', TEXT.heading)}>Agent 挂载状态</h2>
-                <p className={cn('mt-0.5 text-xs', TEXT.caption)}>{data.storage_server.disk.path}</p>
-              </div>
-              <div className="w-48">
-                <Progress value={data.agents.mounted} max={Math.max(1, data.agents.total)} indicatorClassName="bg-success" />
-              </div>
-            </div>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>主机</TableHead>
-                  <TableHead>Agent</TableHead>
-                  <TableHead>挂载</TableHead>
-                  <TableHead className="text-right">最近心跳</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.agents.items.map((host) => (
-                  <TableRow key={host.host_id}>
-                    <TableCell className="font-mono text-xs">{host.ip ?? host.host_id}</TableCell>
-                    <TableCell><Badge variant={host.status === 'ONLINE' ? 'success' : 'secondary'}>{host.status}</Badge></TableCell>
-                    <TableCell>
-                      {host.mounted === true ? (
-                        <Badge variant="success">已挂载</Badge>
-                      ) : host.mounted === false ? (
-                        <Badge variant="destructive">异常</Badge>
-                      ) : (
-                        <Badge variant="outline">未上报</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs">{formatTime(host.last_heartbeat)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </section>
-
-          <DeviceLogDiskSection data={data.device_log_disks} />
+          <AgentStatusSection agents={data.agents} disks={data.device_log_disks} />
         </>
       )}
     </PageContainer>
