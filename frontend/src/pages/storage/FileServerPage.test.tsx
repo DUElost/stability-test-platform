@@ -150,7 +150,7 @@ describe('FileServerPage', () => {
     renderPage();
 
     expect(await screen.findByText('916 GiB')).toBeInTheDocument();
-    expect(screen.getByText('1/1')).toBeInTheDocument();
+    expect(screen.getByText(/中心存储挂载 1\/1/)).toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
     expect(screen.getByText('192.0.2.0/24, 198.51.100.0/24')).toBeInTheDocument();
     expect(screen.getAllByText('已挂载').length).toBeGreaterThanOrEqual(2);
