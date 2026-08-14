@@ -1,5 +1,6 @@
 import io
 from collections import namedtuple
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -122,6 +123,44 @@ def test_get_disk_usage_returns_none_percent_on_exception():
     }
 
 
+def test_get_aee_disk_usage_reports_local_root_and_usage(disk_usage_type):
+    gb = 1024 ** 3
+    usage = disk_usage_type(total=900 * gb, used=90 * gb, free=810 * gb)
+
+    with (
+        patch("backend.agent.aee.paths.get_aee_local_root", return_value=Path("/mnt/hdd/aee_events")),
+        patch.object(monitor_module.shutil, "disk_usage", return_value=usage) as mock_disk,
+    ):
+        result = monitor_module.get_aee_disk_usage()
+
+    assert result == {
+        "total_gb": 900.0,
+        "used_gb": 90.0,
+        "free_gb": 810.0,
+        "usage_percent": 10.0,
+        "path": "/mnt/hdd/aee_events",
+    }
+    mock_disk.assert_called_once_with("/mnt/hdd/aee_events")
+
+
+def test_collect_system_stats_includes_aee_disk_usage():
+    with (
+        patch.object(monitor_module, "get_cpu_usage", return_value=1.0),
+        patch.object(monitor_module, "get_memory_usage", return_value=2.0),
+        patch.object(monitor_module, "get_disk_usage", return_value={"usage_percent": 3.0}),
+        patch.object(
+            monitor_module,
+            "get_aee_disk_usage",
+            return_value={"usage_percent": 4.0, "path": "/mnt/hdd/aee_events"},
+        ),
+        patch.object(monitor_module, "get_network_connections", return_value={"tcp_connections": 5}),
+    ):
+        stats = monitor_module.collect_system_stats()
+
+    assert stats["disk_usage"]["usage_percent"] == 3.0
+    assert stats["disk_usage_aee"] == {"usage_percent": 4.0, "path": "/mnt/hdd/aee_events"}
+
+
 def test_get_network_connections_success():
     def _open_side_effect(path, *_args, **_kwargs):
         if path == "/proc/net/snmp":
@@ -158,23 +197,29 @@ def test_get_network_connections_returns_zero_on_snmp_error():
 
 def test_collect_system_stats_aggregates_all_parts():
     fake_disk = {"total_gb": 10.0, "used_gb": 3.0, "free_gb": 7.0, "usage_percent": 30.0}
+    fake_aee_disk = {"total_gb": 9.0, "used_gb": 1.0, "free_gb": 8.0, "usage_percent": 11.0, "path": "/mnt/hdd/aee_events"}
     fake_network = {"tcp_connections": 8}
 
     cpu_mock = MagicMock(return_value=12.34)
     mem_mock = MagicMock(return_value=56.78)
     disk_mock = MagicMock(return_value=fake_disk)
+    aee_disk_mock = MagicMock(return_value=fake_aee_disk)
     net_mock = MagicMock(return_value=fake_network)
 
-    with patch.object(monitor_module, "get_cpu_usage", cpu_mock):
-        with patch.object(monitor_module, "get_memory_usage", mem_mock):
-            with patch.object(monitor_module, "get_disk_usage", disk_mock):
-                with patch.object(monitor_module, "get_network_connections", net_mock):
-                    result = monitor_module.collect_system_stats()
+    with (
+        patch.object(monitor_module, "get_cpu_usage", cpu_mock),
+        patch.object(monitor_module, "get_memory_usage", mem_mock),
+        patch.object(monitor_module, "get_disk_usage", disk_mock),
+        patch.object(monitor_module, "get_aee_disk_usage", aee_disk_mock),
+        patch.object(monitor_module, "get_network_connections", net_mock),
+    ):
+        result = monitor_module.collect_system_stats()
 
     assert result == {
         "cpu_load": 12.34,
         "ram_usage": 56.78,
         "disk_usage": fake_disk,
+        "disk_usage_aee": fake_aee_disk,
         "network": fake_network,
     }
     cpu_mock.assert_called_once_with()
