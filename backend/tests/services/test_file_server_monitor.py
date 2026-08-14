@@ -140,6 +140,19 @@ def test_split_without_storage_job_reports_missing_storage_metrics(tmp_path, mon
     assert {"STORAGE_METRICS_UNAVAILABLE"} <= {a["code"] for a in result["alerts"]}
 
 
+def test_invalid_storage_job_name_is_rejected_not_fallen_back(tmp_path, monkeypatch):
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.204")
+    monkeypatch.setenv("STP_STORAGE_NODE_JOB", "bad job name")
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    assert result["storage_server"]["same_source"] is False
+    assert result["storage_server"]["monitoring"]["prometheus_available"] is False
+    assert result["storage_server"]["system"]["cpu_usage_pct"] is None
+    assert {"STORAGE_METRICS_UNAVAILABLE"} <= {a["code"] for a in result["alerts"]}
+
+
 def test_finite_float_rejects_nan_and_inf():
     assert monitor._finite_float("NaN") is None
     assert monitor._finite_float("+Inf") is None

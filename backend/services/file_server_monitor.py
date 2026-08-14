@@ -280,7 +280,8 @@ def _panel_jobs() -> tuple[str, str | None, str]:
     co_located = (not share_addr) or share_addr == _server_address()
     storage_raw = os.getenv("STP_STORAGE_NODE_JOB", "").strip()
     if storage_raw:
-        storage: str | None = _safe_prom_label(storage_raw, control)
+        # 非法 job 名不得回退到控制面 job：来源错了比没有更糟（假分源，见 #205）。
+        storage: str | None = _safe_prom_label(storage_raw, "") or None
     elif not co_located:
         storage = None
     else:
