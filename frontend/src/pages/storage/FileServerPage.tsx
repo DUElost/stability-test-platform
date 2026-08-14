@@ -388,7 +388,7 @@ function AgentStatusSection({
           <p className={cn('mt-0.5 text-xs', TEXT.caption)}>
             中心存储挂载 {agents.mounted}/{agents.total}
             {' · 设备日志盘上报 '}{disks.reported}/{disks.total}
-            {warningCount > 0 && ` · 告警 ${warningCount}`}
+            {` · 告警 ${warningCount}`}
           </p>
         </div>
       </div>
