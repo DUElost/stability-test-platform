@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import '@fontsource-variable/noto-sans-sc';
 import './index.css';
 import { registerAuthFailureHandler } from './utils/api';
 import { clearAppQueryCache } from './components/QueryProvider';
