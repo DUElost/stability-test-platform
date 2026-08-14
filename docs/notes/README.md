@@ -16,7 +16,7 @@
 
 ## 布局
 
-```
+```text
 docs/notes/
   feature/ bug-fix/ simplification/ architecture/ process/ testing/
   archived/          # 冻结区，只读
@@ -27,7 +27,7 @@ docs/notes/
 
 ## 头部（结构固定，顺序不变）
 
-```
+```markdown
 # 主题
 
 Status: proposed | implemented | rejected
@@ -38,7 +38,7 @@ Class: feature | bug-fix | simplification | architecture | process | testing
 
 ## 正文四节
 
-```
+```text
 ## Decision         决定了什么（写现状与事实，不写叙事）
 ## Alternatives     放弃的备选 + 代价
 ## Verification     验证手段（测试名 / 命令 / 门禁）

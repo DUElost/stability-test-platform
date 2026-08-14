@@ -231,7 +231,23 @@ jobs:
             set_status success "CodeRabbit rate limited; required checks gate merge"
             exit 0
           fi
+          # skipped / paused 通常放行（配额/不可用不阻塞）。但若本 PR 历史上有
+          # 未撤销的 CodeRabbit CHANGES_REQUESTED（任意 commit），说明存在待复评
+          # 状态：此时 skipped 可能只是「手动复评还在排队」（#267 实测：复评落定
+          # 前 gate 已按 skipped 放行，合入 5 分钟后 CR 才给出终态）。此类 PR 必须
+          # 等 CR 对当前 head 给出终态（review 事件会写 gate）或明确 rate limited
+          # 才放行，skipped/paused 一律 pending。
+          # 逃生阀：dismiss 旧 review（state 不再是 CHANGES_REQUESTED）后任意
+          # pull_request 事件（如改个 label）重跑本路径即放行。
           if printf '%s' "$desc" | grep -qiE 'skipped|paused'; then
+            prior_cr="$(
+              gh api --paginate --slurp "repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+                | jq '[.[][] | select(.user.login == "coderabbitai[bot]" or .user.login == "coderabbitai") | select(.state == "CHANGES_REQUESTED")] | length'
+            )"
+            if [ "$prior_cr" != "0" ]; then
+              set_status pending "CodeRabbit re-review pending after requested changes"
+              exit 0
+            fi
             set_status success "CodeRabbit review skipped; required checks gate merge"
             exit 0
           fi
