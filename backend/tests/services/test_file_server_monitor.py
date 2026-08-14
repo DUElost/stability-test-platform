@@ -152,13 +152,17 @@ def test_device_log_disk_summary_and_threshold_alerts(tmp_path, monkeypatch):
             "path": "/data/hdd/aee_events", "total_gb": 900.0, "used_gb": 860.4,
             "free_gb": 39.6, "usage_percent": 95.6,
         }}),
+        _host("h-nan", None, extra={"disk_usage_aee": {
+            "path": "/data/hdd/aee_events", "total_gb": "Inf", "used_gb": 0.0,
+            "free_gb": 0.0, "usage_percent": "NaN",
+        }}),
         _host("h3", None),  # 老 Agent：未上报该字段
     ]
 
     result = monitor.collect_file_server_overview(hosts, hours=1)
     summary = result["device_log_disks"]
 
-    assert summary["total"] == 3
+    assert summary["total"] == 4
     assert summary["reported"] == 2
     assert summary["warning"] == 0
     assert summary["critical"] == 1
