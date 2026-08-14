@@ -3,7 +3,11 @@ updates:
   - package-ecosystem: pip
     directory: "/backend"
     schedule:
-      interval: weekly
+      interval: cron
+      cronjob: "0 4 * * *"
+      timezone: Asia/Shanghai
+    cooldown:
+      default-days: 30
     open-pull-requests-limit: 10
     ignore:
       # 这些包在 requirements.txt 里刻意封顶（redis<6.0 另受 saq[redis]<8
@@ -33,7 +37,11 @@ updates:
   - package-ecosystem: npm
     directory: "/frontend"
     schedule:
-      interval: weekly
+      interval: cron
+      cronjob: "0 4 * * *"
+      timezone: Asia/Shanghai
+    cooldown:
+      default-days: 30
     open-pull-requests-limit: 10
     ignore:
       # typescript-eslint 8.x 的 peer 上限是 typescript<6.1；TS 的
@@ -52,3 +60,17 @@ updates:
         patterns:
           - "*"
         update-types: ["major"]
+
+  # actions 仍按 SHA 固定；本生态让 Dependabot 自动跟进安全/版本更新，
+  # 更新 PR **排除 auto-merge、人工评审**（enable-auto-merge.yml 按分支前缀
+  # 排除：轻量门禁对 action 内容零检测力，job 级写权限放大投毒后果）。
+  # cooldown 官方语义：同一依赖 PR 合并/关闭后 30 天内不再开新的版本更新
+  # PR；安全更新不受 cooldown 约束。
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: cron
+      cronjob: "0 4 * * *"
+      timezone: Asia/Shanghai
+    cooldown:
+      default-days: 30

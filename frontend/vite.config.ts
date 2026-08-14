@@ -34,9 +34,6 @@ function manualChunks(id: string): string | undefined {
   if (id.includes('/node_modules/date-fns/')) {
     return 'vendor-date-fns';
   }
-  if (id.includes('/node_modules/@dnd-kit/')) {
-    return 'vendor-dnd';
-  }
   return undefined;
 }
 
