@@ -97,6 +97,22 @@ def get_disk_usage(path: str = '/') -> Dict[str, Any]:
         }
 
 
+def get_aee_disk_usage() -> Dict[str, Any]:
+    """设备日志盘（``STP_AEE_LOCAL_ROOT`` 所在文件系统）使用率。
+
+    与系统盘 ``disk_usage`` 分开上报：``/storage`` 健康页按 host 展示这块盘
+    （#273），阈值口径与 HddSpill（95%）对齐。返回里带 ``path``，因为各 host
+    的本地根落点不同（``/data/hdd`` / ``/mnt/hdd`` / 系统盘），控制面需要知道
+    每台上报的是哪个路径。
+    """
+    from .aee.paths import get_aee_local_root
+
+    root = str(get_aee_local_root())
+    info = get_disk_usage(root)
+    info["path"] = root
+    return info
+
+
 def get_network_connections() -> Dict[str, int]:
     """
     获取网络连接统计
@@ -132,5 +148,6 @@ def collect_system_stats() -> Dict[str, Any]:
         "cpu_load": get_cpu_usage(),
         "ram_usage": get_memory_usage(),
         "disk_usage": get_disk_usage('/'),
+        "disk_usage_aee": get_aee_disk_usage(),
         "network": get_network_connections(),
     }
