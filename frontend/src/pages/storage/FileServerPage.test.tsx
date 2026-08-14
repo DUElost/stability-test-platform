@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileServerOverview } from '@/utils/api/types';
 import FileServerPage from './FileServerPage';
 
@@ -145,6 +146,10 @@ function renderPage() {
 }
 
 describe('FileServerPage', () => {
+  beforeEach(() => {
+    mocks.fileServer.mockReset();
+  });
+
   it('renders capacity, NFS health, and Agent mount compliance', async () => {
     mocks.fileServer.mockResolvedValueOnce(overview);
     renderPage();
@@ -158,5 +163,37 @@ describe('FileServerPage', () => {
     expect(screen.getAllByText('debian13 · 192.0.2.202').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('/mnt/hdd/aee_events')).toBeInTheDocument();
     expect(screen.getByText('1.1%')).toBeInTheDocument();
+  });
+
+  it('switches history range and refetches with the selected hours', async () => {
+    mocks.fileServer.mockResolvedValue(overview);
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByText('916 GiB')).toBeInTheDocument();
+    expect(mocks.fileServer).toHaveBeenCalledWith(6);
+
+    await user.click(screen.getByRole('button', { name: '24H' }));
+    await waitFor(() => expect(mocks.fileServer).toHaveBeenCalledWith(24));
+
+    await user.click(screen.getByRole('button', { name: '7D' }));
+    await waitFor(() => expect(mocks.fileServer).toHaveBeenCalledWith(168));
+  });
+
+  it('switches between control-plane and storage-server panels', async () => {
+    mocks.fileServer.mockResolvedValueOnce(overview);
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText('916 GiB');
+    const controlPanel = document.getElementById('panel-control-plane');
+    const storagePanel = document.getElementById('panel-storage-server');
+    expect(controlPanel).not.toBeNull();
+    expect(storagePanel).not.toBeNull();
+    expect(storagePanel).toHaveAttribute('hidden');
+
+    await user.click(screen.getByRole('tab', { name: '中心存储机' }));
+    expect(storagePanel).not.toHaveAttribute('hidden');
+    expect(controlPanel).toHaveAttribute('hidden');
   });
 });

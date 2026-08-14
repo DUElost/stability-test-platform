@@ -1,5 +1,5 @@
-import { useMemo, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo, useState, type ReactNode } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   Activity,
   AlertTriangle,
@@ -7,9 +7,9 @@ import {
   Cpu,
   Database,
   HardDrive,
-  Layers,
   Network,
   RefreshCw,
+  Server,
 } from 'lucide-react';
 import {
   Line,
@@ -35,7 +35,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { CHART_COLORS, STATUS_TEXT_COLORS } from '@/design-system/colors';
-import { TEXT } from '@/design-system/tokens';
+import { tabLinkClass, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
 import type {
@@ -43,10 +43,19 @@ import type {
   FileServerMetricPoint,
   FileServerNodeIdentity,
   FileServerNodeMonitoring,
+  FileServerNodeSystem,
   FileServerNfs,
   FileServerOverview,
   FileServerStorage,
 } from '@/utils/api/types';
+
+const HISTORY_RANGES = [
+  { hours: 6, label: '6H' },
+  { hours: 24, label: '24H' },
+  { hours: 168, label: '7D' },
+] as const;
+
+type PanelKey = 'control-plane' | 'storage-server';
 
 function formatBytes(value: number | null | undefined, rate = false): string {
   if (value == null || !Number.isFinite(value)) return '—';
@@ -64,6 +73,13 @@ function formatBytes(value: number | null | undefined, rate = false): string {
 function formatRate(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—';
   return `${value < 10 ? value.toFixed(2) : value.toFixed(1)}/s`;
+}
+
+function formatUptime(value: number | null): string {
+  if (value == null) return '—';
+  const days = Math.floor(value / 86400);
+  const hours = Math.floor((value % 86400) / 3600);
+  return days > 0 ? `${days} 天 ${hours} 小时` : `${hours} 小时`;
 }
 
 function formatTime(value: string | null): string {
@@ -88,17 +104,15 @@ function metricTone(value: number | null, warning: number, critical: number): st
   return STATUS_TEXT_COLORS.success;
 }
 
-function KpiCard({
+function MetricCard({
   icon: Icon,
   label,
   value,
-  valueTone,
   detail,
 }: {
   icon: typeof HardDrive;
   label: string;
   value: string;
-  valueTone?: string;
   detail: string;
 }) {
   return (
@@ -106,7 +120,7 @@ function KpiCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className={cn('text-xs', TEXT.caption)}>{label}</div>
-          <div className={cn('mt-2 truncate text-xl font-semibold', valueTone ?? TEXT.heading)}>{value}</div>
+          <div className={cn('mt-2 truncate text-xl font-semibold', TEXT.heading)}>{value}</div>
           <div className={cn('mt-1 truncate text-xs', TEXT.subtitle)}>{detail}</div>
         </div>
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted">
@@ -117,23 +131,32 @@ function KpiCard({
   );
 }
 
-function mergeHistory(data: FileServerOverview['history']): Array<{
+type ChartPoint = {
   timestamp: number;
-  capacity: number;
-}> {
-  const points = new Map<number, number>();
-  (data.capacity_usage_pct as FileServerMetricPoint[]).forEach((point) => {
-    points.set(point.timestamp, point.value);
-  });
-  return [...points.entries()]
-    .map(([timestamp, capacity]) => ({ timestamp, capacity }))
-    .sort((a, b) => a.timestamp - b.timestamp);
+  capacity?: number;
+  cpu?: number;
+  memory?: number;
+};
+
+function mergeHistory(data: FileServerOverview['history']): ChartPoint[] {
+  const points = new Map<number, ChartPoint>();
+  const add = (series: FileServerMetricPoint[], key: keyof Omit<ChartPoint, 'timestamp'>) => {
+    series.forEach((point) => {
+      const current = points.get(point.timestamp) ?? { timestamp: point.timestamp };
+      current[key] = point.value;
+      points.set(point.timestamp, current);
+    });
+  };
+  add(data.capacity_usage_pct, 'capacity');
+  add(data.cpu_usage_pct, 'cpu');
+  add(data.memory_usage_pct, 'memory');
+  return [...points.values()].sort((a, b) => a.timestamp - b.timestamp);
 }
 
 function CapacityChart({ data }: { data: FileServerOverview['history'] }) {
   const points = useMemo(() => mergeHistory(data), [data]);
   return (
-    <div className="h-56 w-full" data-testid="file-server-history-chart">
+    <div className="h-60 w-full" data-testid="file-server-history-chart">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: -18 }}>
           <XAxis
@@ -145,16 +168,14 @@ function CapacityChart({ data }: { data: FileServerOverview['history'] }) {
           <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} tick={{ fontSize: 11 }} />
           <Tooltip
             labelFormatter={(value) => new Date(Number(value) * 1000).toLocaleString('zh-CN')}
-            formatter={(value) => [`${Number(value).toFixed(1)}%`, '存储使用率']}
+            formatter={(value, name) => [
+              `${Number(value).toFixed(1)}%`,
+              name === 'capacity' ? '存储' : name === 'cpu' ? 'CPU' : '内存',
+            ]}
           />
-          <Line
-            type="monotone"
-            dataKey="capacity"
-            stroke={CHART_COLORS.warning}
-            dot={false}
-            strokeWidth={2}
-            connectNulls
-          />
+          <Line type="monotone" dataKey="capacity" stroke={CHART_COLORS.warning} dot={false} strokeWidth={2} connectNulls />
+          <Line type="monotone" dataKey="cpu" stroke={CHART_COLORS.primary} dot={false} strokeWidth={1.5} connectNulls />
+          <Line type="monotone" dataKey="memory" stroke={CHART_COLORS.success} dot={false} strokeWidth={1.5} connectNulls />
         </LineChart>
       </ResponsiveContainer>
     </div>
@@ -164,11 +185,10 @@ function CapacityChart({ data }: { data: FileServerOverview['history'] }) {
 function LoadingState() {
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        <Skeleton className="h-64" />
-        <Skeleton className="h-64" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[0, 1, 2, 3].map((item) => <Skeleton key={item} className="h-28" />)}
       </div>
-      <Skeleton className="h-64" />
+      <Skeleton className="h-72" />
       <Skeleton className="h-80" />
     </div>
   );
@@ -221,18 +241,23 @@ function NodeHeader({
   );
 }
 
-function ControlPlaneLoadSection({
+function SystemLoadSection({
   system,
+  node,
+  idPrefix,
 }: {
-  system: FileServerOverview['control_plane']['system'];
+  system: FileServerNodeSystem;
+  node: FileServerNodeIdentity;
+  idPrefix: string;
 }) {
   const cpu = system.cpu_usage_pct;
   const memory = system.memory_usage_pct;
+  const titleId = `${idPrefix}-load-title`;
   return (
-    <section aria-labelledby="control-plane-load-title">
-      <div className="mb-3 flex items-center gap-2">
+    <section className="py-4" aria-labelledby={titleId}>
+      <div className="mb-4 flex items-center gap-2">
         <Cpu className={cn('h-4 w-4', TEXT.subtitle)} />
-        <h2 id="control-plane-load-title" className={cn('text-sm font-semibold', TEXT.heading)}>主机负载</h2>
+        <h2 id={titleId} className={cn('text-sm font-semibold', TEXT.heading)}>主机负载</h2>
       </div>
       <div className="space-y-4">
         <div>
@@ -249,99 +274,106 @@ function ControlPlaneLoadSection({
           </div>
           <Progress value={memory ?? 0} />
         </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-xs sm:grid-cols-4">
+          <div><div className={TEXT.caption}>Load 1m</div><div className="mt-1 font-mono">{system.load1 != null ? system.load1.toFixed(2) : '—'}</div></div>
+          <div><div className={TEXT.caption}>CPU 核心</div><div className="mt-1 font-mono">{node.cpu_count ?? '—'}</div></div>
+          <div><div className={TEXT.caption}>总内存</div><div className="mt-1 font-mono">{formatBytes(system.memory_total_bytes)}</div></div>
+          <div><div className={TEXT.caption}>运行时间</div><div className="mt-1 font-mono">{formatUptime(node.uptime_seconds)}</div></div>
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 border-t pt-3 text-xs sm:grid-cols-4">
+          <div><div className={TEXT.caption}>磁盘读取</div><div className="mt-1 font-mono">{formatBytes(system.disk_read_bytes_per_second, true)}</div></div>
+          <div><div className={TEXT.caption}>磁盘写入</div><div className="mt-1 font-mono">{formatBytes(system.disk_write_bytes_per_second, true)}</div></div>
+          <div><div className={TEXT.caption}>网络接收</div><div className="mt-1 font-mono">{formatBytes(system.network_receive_bytes_per_second, true)}</div></div>
+          <div><div className={TEXT.caption}>网络发送</div><div className="mt-1 font-mono">{formatBytes(system.network_transmit_bytes_per_second, true)}</div></div>
+        </div>
       </div>
     </section>
   );
 }
 
-function ClientMountSection({ mount }: { mount: FileServerClientMount }) {
+function ClientMountSection({
+  mount,
+  idPrefix,
+}: {
+  mount: FileServerClientMount;
+  idPrefix: string;
+}) {
+  const titleId = `${idPrefix}-client-mount-title`;
   return (
-    <section className="border-t pt-4" aria-labelledby="client-mount-title">
-      <div className="mb-3 flex items-center gap-2">
+    <section className="border-t py-4" aria-labelledby={titleId}>
+      <div className="mb-4 flex items-center gap-2">
         <HardDrive className={cn('h-4 w-4', TEXT.subtitle)} />
-        <h2 id="client-mount-title" className={cn('text-sm font-semibold', TEXT.heading)}>中心存储挂载</h2>
+        <h2 id={titleId} className={cn('text-sm font-semibold', TEXT.heading)}>客户端挂载</h2>
       </div>
       <dl className="divide-y text-sm">
-        <div className="flex items-center justify-between py-2">
-          <dt className={TEXT.subtitle}>挂载状态</dt>
-          <dd>{mount.mounted ? <Badge variant="success">已挂载</Badge> : <Badge variant="destructive">未挂载</Badge>}</dd>
-        </div>
-        <div className="flex items-center justify-between py-2">
-          <dt className={TEXT.subtitle}>写权限</dt>
-          <dd>{mount.backend_write_access ? <Badge variant="success">可写</Badge> : <Badge variant="destructive">不可写</Badge>}</dd>
-        </div>
-        <div className="flex items-center justify-between gap-4 py-2">
-          <dt className={cn('shrink-0', TEXT.subtitle)}>挂载路径</dt>
-          <dd className="truncate font-mono text-xs">
-            {[mount.path, [mount.source, mount.filesystem].filter(Boolean).join(' · ')].filter(Boolean).join(' ← ') || '—'}
-          </dd>
-        </div>
+        <div className="flex items-center justify-between gap-4 py-2"><dt className={cn('shrink-0', TEXT.subtitle)}>挂载路径</dt><dd className="truncate font-mono text-xs">{mount.path}</dd></div>
+        <div className="flex items-center justify-between gap-4 py-2"><dt className={cn('shrink-0', TEXT.subtitle)}>源</dt><dd className="truncate font-mono text-xs">{[mount.source, mount.filesystem].filter(Boolean).join(' · ') || '—'}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>挂载状态</dt><dd>{mount.mounted ? <Badge variant="success">已挂载</Badge> : <Badge variant="destructive">未挂载</Badge>}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>写权限</dt><dd>{mount.backend_write_access ? <Badge variant="success">可写</Badge> : <Badge variant="destructive">不可写</Badge>}</dd></div>
       </dl>
     </section>
   );
 }
 
-function StorageKpiCards({ disk, nfs }: { disk: FileServerStorage; nfs: FileServerNfs }) {
+function StorageMetricCards({
+  disk,
+  nfs,
+  agents,
+}: {
+  disk: FileServerStorage;
+  nfs: FileServerNfs;
+  agents: FileServerOverview['agents'];
+}) {
   return (
-    <div className="grid grid-cols-2 gap-3">
-      <KpiCard
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <MetricCard
         icon={HardDrive}
-        label="存储使用率"
-        value={`${disk.used_pct.toFixed(1)}%`}
-        valueTone={metricTone(disk.used_pct, 80, 90)}
-        detail={`已用 ${formatBytes(disk.used_bytes)}`}
-      />
-      <KpiCard
-        icon={Database}
         label="可用容量"
         value={formatBytes(disk.available_bytes)}
         detail={`总计 ${formatBytes(disk.total_bytes)}`}
       />
-      <KpiCard
-        icon={Layers}
-        label="inode 使用率"
-        value={`${disk.inode_used_pct.toFixed(1)}%`}
-        valueTone={metricTone(disk.inode_used_pct, 80, 90)}
-        detail={`inode ${disk.inode_used}/${disk.inode_total}`}
+      <MetricCard
+        icon={Database}
+        label="存储使用率"
+        value={`${disk.used_pct.toFixed(1)}%`}
+        detail={`inode ${disk.inode_used_pct.toFixed(1)}%`}
       />
-      <KpiCard
+      <MetricCard
         icon={Activity}
         label="NFS 请求"
         value={formatRate(nfs.requests_per_second)}
         detail={`累计连接 ${nfs.connections_total ?? '—'}`}
       />
+      <MetricCard
+        icon={Server}
+        label="Agent 挂载"
+        value={`${agents.mounted}/${agents.total}`}
+        detail={`异常 ${agents.failed} · 未上报 ${agents.unreported}`}
+      />
     </div>
   );
 }
 
-function NfsSection({ nfs }: { nfs: FileServerNfs }) {
+function NfsSection({
+  nfs,
+  idPrefix,
+}: {
+  nfs: FileServerNfs;
+  idPrefix: string;
+}) {
+  const titleId = `${idPrefix}-nfs-service-title`;
   return (
-    <section className="border-t pt-4" aria-labelledby="nfs-service-title">
-      <div className="mb-3 flex items-center gap-2">
+    <section className="border-t py-4" aria-labelledby={titleId}>
+      <div className="mb-4 flex items-center gap-2">
         <Network className={cn('h-4 w-4', TEXT.subtitle)} />
-        <h2 id="nfs-service-title" className={cn('text-sm font-semibold', TEXT.heading)}>NFS 服务</h2>
+        <h2 id={titleId} className={cn('text-sm font-semibold', TEXT.heading)}>NFS 服务</h2>
       </div>
       <dl className="divide-y text-sm">
-        <div className="flex items-center justify-between py-2">
-          <dt className={TEXT.subtitle}>服务状态</dt>
-          <dd>{nfs.service_ready ? <Badge variant="success">运行中</Badge> : <Badge variant="destructive">异常</Badge>}</dd>
-        </div>
-        <div className="flex items-center justify-between gap-4 py-2">
-          <dt className={cn('shrink-0', TEXT.subtitle)}>Export</dt>
-          <dd className="truncate text-right font-mono text-xs">{nfs.export_targets.join(', ') || '—'}</dd>
-        </div>
-        <div className="flex items-center justify-between py-2">
-          <dt className={TEXT.subtitle}>RPC 错误</dt>
-          <dd className={cn('font-mono', (nfs.rpc_errors_per_second ?? 0) > 0 && 'text-destructive')}>
-            {formatRate(nfs.rpc_errors_per_second)}
-          </dd>
-        </div>
-        <div className="flex items-center justify-between py-2">
-          <dt className={TEXT.subtitle}>Stale handle</dt>
-          <dd className={cn('font-mono', (nfs.stale_file_handles_total ?? 0) > 0 && 'text-destructive')}>
-            {nfs.stale_file_handles_total ?? '—'}
-          </dd>
-        </div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>服务状态</dt><dd>{nfs.service_ready ? <Badge variant="success">运行中</Badge> : <Badge variant="destructive">异常</Badge>}</dd></div>
+        <div className="flex items-center justify-between gap-4 py-2"><dt className={cn('shrink-0', TEXT.subtitle)}>Export</dt><dd className="truncate text-right font-mono text-xs">{nfs.export_targets.join(', ') || '—'}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>服务线程</dt><dd className="font-mono">{nfs.server_threads ?? '—'}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>RPC 错误</dt><dd className={cn('font-mono', (nfs.rpc_errors_per_second ?? 0) > 0 && 'text-destructive')}>{formatRate(nfs.rpc_errors_per_second)}</dd></div>
+        <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>Stale handle</dt><dd className={cn('font-mono', (nfs.stale_file_handles_total ?? 0) > 0 && 'text-destructive')}>{nfs.stale_file_handles_total ?? '—'}</dd></div>
       </dl>
     </section>
   );
@@ -432,10 +464,13 @@ function AgentStatusSection({
 }
 
 export default function FileServerPage() {
+  const [hours, setHours] = useState(6);
+  const [activePanel, setActivePanel] = useState<PanelKey>('control-plane');
   const query = useQuery({
-    queryKey: ['file-server-overview', 6],
-    queryFn: () => api.stats.fileServer(6),
-    refetchInterval: 15000,
+    queryKey: ['file-server-overview', hours],
+    queryFn: () => api.stats.fileServer(hours),
+    refetchInterval: hours <= 6 ? 15000 : 60000,
+    placeholderData: keepPreviousData,
   });
 
   const data = query.data;
@@ -453,7 +488,7 @@ export default function FileServerPage() {
     </Button>
   );
 
-  if (query.isError) {
+  if (query.isError && !data) {
     return (
       <PageContainer fullBleed className="space-y-6 p-4 lg:p-6">
         <PageHeader title="文件服务器" subtitle="控制面与中心存储" action={refreshAction} />
@@ -510,48 +545,117 @@ export default function FileServerPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <div className="rounded-md border">
-              <NodeHeader
-                title="控制面"
-                node={data.control_plane.node}
-                monitoring={data.control_plane.monitoring}
-              />
-              <div className="space-y-5 px-4 py-4">
-                <ControlPlaneLoadSection system={data.control_plane.system} />
-                <ClientMountSection mount={data.control_plane.client_mount} />
-              </div>
-            </div>
-
-            <div className="rounded-md border">
-              <NodeHeader
-                title="中心存储机"
-                node={data.storage_server.node}
-                monitoring={data.storage_server.monitoring}
-                trailing={
-                  data.storage_server.same_source ? (
-                    <Badge variant="outline">与控制面同机</Badge>
-                  ) : null
-                }
-              />
-              <div className="space-y-5 px-4 py-4">
-                <StorageKpiCards disk={data.storage_server.disk} nfs={data.storage_server.nfs} />
-                <NfsSection nfs={data.storage_server.nfs} />
-              </div>
-            </div>
-          </div>
-
-          <section className="rounded-md border" aria-labelledby="capacity-trend-title">
+          <section className="rounded-md border" aria-labelledby="resource-trend-title">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
               <div>
-                <h2 id="capacity-trend-title" className={cn('text-sm font-semibold', TEXT.heading)}>存储容量趋势</h2>
+                <h2 id="resource-trend-title" className={cn('text-sm font-semibold', TEXT.heading)}>资源趋势</h2>
                 <p className={cn('mt-0.5 text-xs', TEXT.caption)}>最近 {data.history.hours} 小时</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className={cn('flex gap-4 text-xs', TEXT.caption)}>
+                  <span className="text-warning">存储</span>
+                  <span className="text-primary">CPU</span>
+                  <span className="text-success">内存</span>
+                </div>
+                <div className="flex rounded-md border" role="group" aria-label="历史时间范围">
+                  {HISTORY_RANGES.map((range) => (
+                    <Button
+                      key={range.hours}
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        'rounded-none first:rounded-l-md last:rounded-r-md',
+                        hours === range.hours && 'bg-muted font-medium',
+                      )}
+                      aria-pressed={hours === range.hours}
+                      onClick={() => setHours(range.hours)}
+                    >
+                      {range.label}
+                    </Button>
+                  ))}
+                </div>
               </div>
             </div>
             <div className="p-3">
               <CapacityChart data={data.history} />
             </div>
           </section>
+
+          <div className="flex border-b" role="tablist" aria-label="节点面板">
+            <button
+              id="panel-tab-control-plane"
+              type="button"
+              role="tab"
+              aria-selected={activePanel === 'control-plane'}
+              aria-controls="panel-control-plane"
+              className={tabLinkClass(activePanel === 'control-plane')}
+              onClick={() => setActivePanel('control-plane')}
+            >
+              控制平面
+            </button>
+            <button
+              id="panel-tab-storage-server"
+              type="button"
+              role="tab"
+              aria-selected={activePanel === 'storage-server'}
+              aria-controls="panel-storage-server"
+              className={tabLinkClass(activePanel === 'storage-server')}
+              onClick={() => setActivePanel('storage-server')}
+            >
+              中心存储机
+            </button>
+          </div>
+
+          <div
+            id="panel-control-plane"
+            role="tabpanel"
+            aria-labelledby="panel-tab-control-plane"
+            hidden={activePanel !== 'control-plane'}
+          >
+            <div className="rounded-md border">
+              <NodeHeader
+                title="控制面"
+                node={data.control_plane.node}
+                monitoring={data.control_plane.monitoring}
+              />
+              <div className="space-y-4 px-4 pb-4">
+                <SystemLoadSection system={data.control_plane.system} node={data.control_plane.node} idPrefix="control-plane" />
+                <ClientMountSection mount={data.control_plane.client_mount} idPrefix="control-plane" />
+              </div>
+            </div>
+          </div>
+
+          <div
+            id="panel-storage-server"
+            role="tabpanel"
+            aria-labelledby="panel-tab-storage-server"
+            hidden={activePanel !== 'storage-server'}
+          >
+            <div className="space-y-6">
+              <StorageMetricCards
+                disk={data.storage_server.disk}
+                nfs={data.storage_server.nfs}
+                agents={data.agents}
+              />
+              <div className="rounded-md border">
+                <NodeHeader
+                  title="中心存储机"
+                  node={data.storage_server.node}
+                  monitoring={data.storage_server.monitoring}
+                  trailing={
+                    data.storage_server.same_source ? (
+                      <Badge variant="outline">与控制面同机</Badge>
+                    ) : null
+                  }
+                />
+                <div className="space-y-4 px-4 pb-4">
+                  <NfsSection nfs={data.storage_server.nfs} idPrefix="storage-server" />
+                  <SystemLoadSection system={data.storage_server.system} node={data.storage_server.node} idPrefix="storage-server" />
+                </div>
+              </div>
+            </div>
+          </div>
 
           <AgentStatusSection agents={data.agents} disks={data.device_log_disks} />
         </>

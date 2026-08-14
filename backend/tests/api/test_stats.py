@@ -673,10 +673,11 @@ class TestFileServerOverview:
             },
             "alerts": [],
         }
+        received_hours: list[int] = []
         monkeypatch.setattr(
             stats_module,
             "collect_file_server_overview",
-            lambda _hosts, *, hours=6: overview,
+            lambda _hosts, *, hours=6: received_hours.append(hours) or overview,
         )
         response = client.get("/api/v1/stats/file-server", headers=admin_headers)
         assert response.status_code == 200
@@ -686,3 +687,15 @@ class TestFileServerOverview:
         assert data["storage_server"]["same_source"] is True
         assert data["agents"]["mounted"] == 1
         assert data["device_log_disks"]["reported"] == 1
+        assert received_hours == [6]
+
+        # 7 天历史（168h）在合法范围内；169h 超出上限被参数校验拒绝。
+        response = client.get(
+            "/api/v1/stats/file-server", params={"hours": 168}, headers=admin_headers,
+        )
+        assert response.status_code == 200
+        assert received_hours[-1] == 168
+        response = client.get(
+            "/api/v1/stats/file-server", params={"hours": 169}, headers=admin_headers,
+        )
+        assert response.status_code == 422

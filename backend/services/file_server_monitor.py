@@ -445,6 +445,7 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
 
         end = datetime.now(timezone.utc).timestamp()
         start = end - hours * 3600
+        # 约 72 个采样点：6h→5m、24h→20m、168h(7d)→140m；下限 60s。
         step = max(60, hours * 3600 // 72)
         range_queries = {
             "capacity_usage_pct": (
