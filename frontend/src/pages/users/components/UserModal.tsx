@@ -61,8 +61,8 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
     if (!isEditMode) {
       if (!formData.password) {
         newErrors.password = '请输入密码';
-      } else if (formData.password.length < 6) {
-        newErrors.password = '密码至少 6 个字符';
+      } else if (formData.password.length < 8) {
+        newErrors.password = '密码至少 8 个字符';
       }
     }
 

@@ -2,11 +2,12 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, require_admin
+from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.security import get_password_hash, verify_password
 from backend.models.user import User as UserModel
@@ -17,13 +18,13 @@ router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
 class UserCreate(BaseModel):
     username: str
-    password: str
+    password: str = Field(min_length=8, max_length=128)
     role: str = "user"
 
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(default=None, min_length=8, max_length=128)
     role: Optional[str] = None
     is_active: Optional[str] = None
 
@@ -75,6 +76,7 @@ def get_user(
 @router.post("", response_model=UserOut)
 def create_user(
     payload: UserCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(require_admin),
 ):
@@ -100,6 +102,16 @@ def create_user(
     db.add(user)
     db.commit()
     db.refresh(user)
+    record_audit(
+        db,
+        action="user_created",
+        resource_type="user",
+        resource_id=user.id,
+        username=user.username,
+        user_id=user.id,
+        details={"role": payload.role, "by": current_user.username},
+        request=request,
+    )
     return user
 
 
@@ -107,6 +119,7 @@ def create_user(
 def update_user(
     user_id: int,
     payload: UserUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(require_admin),
 ):
@@ -146,12 +159,24 @@ def update_user(
 
     db.commit()
     db.refresh(user)
+    record_audit(
+        db,
+        action="user_updated",
+        resource_type="user",
+        resource_id=user.id,
+        username=user.username,
+        user_id=user.id,
+        # 只记字段名不记值:密码/角色变更的值不落审计(防明文泄漏)
+        details={"changed": sorted(k for k, v in payload.model_dump(exclude_none=True).items() if k != "password"), "by": current_user.username},
+        request=request,
+    )
     return user
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(require_admin),
 ):
@@ -168,12 +193,22 @@ def delete_user(
 
     db.delete(user)
     db.commit()
+    record_audit(
+        db,
+        action="user_deleted",
+        resource_type="user",
+        resource_id=user_id,
+        username=user.username,
+        details={"by": current_user.username},
+        request=request,
+    )
     return None
 
 
 @router.post("/{user_id}/toggle-active", response_model=UserOut)
 def toggle_user_active(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(require_admin),
 ):
@@ -191,17 +226,38 @@ def toggle_user_active(
     user.is_active = "N" if user.is_active == "Y" else "Y"
     db.commit()
     db.refresh(user)
+    record_audit(
+        db,
+        action="user_active_toggled",
+        resource_type="user",
+        resource_id=user.id,
+        username=user.username,
+        user_id=user.id,
+        details={"is_active": user.is_active, "by": current_user.username},
+        request=request,
+    )
     return user
 
 
 @router.post("/change-password", response_model=UserOut)
 def change_password(
     payload: PasswordChange,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user),
 ):
     """Change current user's password."""
     if not verify_password(payload.old_password, current_user.hashed_password):
+        record_audit(
+            db,
+            action="change_password_failed",
+            resource_type="user",
+            resource_id=current_user.id,
+            username=current_user.username,
+            user_id=current_user.id,
+            details={"reason": "incorrect_old_password"},
+            request=request,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect old password",
@@ -210,4 +266,13 @@ def change_password(
     current_user.hashed_password = get_password_hash(payload.new_password)
     db.commit()
     db.refresh(current_user)
+    record_audit(
+        db,
+        action="change_password",
+        resource_type="user",
+        resource_id=current_user.id,
+        username=current_user.username,
+        user_id=current_user.id,
+        request=request,
+    )
     return current_user

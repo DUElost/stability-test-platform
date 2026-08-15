@@ -22,8 +22,8 @@ export default function ChangePasswordPage() {
       setMessage({ type: 'error', text: '两次输入的新密码不一致' });
       return;
     }
-    if (newPassword.length < 6) {
-      setMessage({ type: 'error', text: '新密码长度不能少于6位' });
+    if (newPassword.length < 8) {
+      setMessage({ type: 'error', text: '新密码长度不能少于8位' });
       return;
     }
 

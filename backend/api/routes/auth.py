@@ -11,7 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
+from backend.core.audit import record_audit
 from backend.core.database import get_db
+from backend.core.login_lockout import locked_remaining, record_failure, record_success
 from backend.core.security import (
     ACCESS_COOKIE_NAME,
     REFRESH_COOKIE_NAME,
@@ -87,13 +89,26 @@ class TokenRefresh(BaseModel):
 
 
 def _authenticate_user(db: Session, username: str, password: str) -> User:
+    # 每账户失败锁定:连续失败达到阈值后,即使密码正确也拒绝(防定向爆破);
+    # 锁定到期或登录成功即清零。
+    remaining = locked_remaining(username)
+    if remaining:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed attempts. Retry in {remaining}s.",
+            headers={"Retry-After": str(remaining)},
+        )
+
     user = db.query(User).filter(User.username == username).first()
     if not user or not verify_password(password, user.hashed_password):
+        record_failure(username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    record_success(username)
 
     if user.is_active != "Y":
         raise HTTPException(
@@ -192,7 +207,7 @@ def require_admin(current_user: User = Depends(get_current_active_user)) -> User
 
 
 @router.post("/register", response_model=UserOut)
-def register(payload: UserCreate, db: Session = Depends(get_db)):
+def register(payload: UserCreate, request: Request, db: Session = Depends(get_db)):
     """Register a new user."""
     if not is_public_register_allowed():
         raise HTTPException(
@@ -214,30 +229,85 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    record_audit(
+        db,
+        action="register",
+        resource_type="user",
+        resource_id=user.id,
+        username=user.username,
+        user_id=user.id,
+        request=request,
+    )
     return user
 
 
 @router.post("/login", response_model=SessionOut)
 def login(
     response: Response,
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
     """Login and establish a browser session via HttpOnly cookies."""
-    user = _authenticate_user(db, form_data.username, form_data.password)
+    try:
+        user = _authenticate_user(db, form_data.username, form_data.password)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            record_audit(
+                db,
+                action="login_failed",
+                resource_type="user",
+                resource_id=form_data.username,
+                username=form_data.username,
+                details={"reason": exc.detail},
+                request=request,
+            )
+        raise
     access_token, refresh_token = _issue_token_pair(user)
     set_auth_cookies(response, access_token, refresh_token)
+    record_audit(
+        db,
+        action="login",
+        resource_type="session",
+        resource_id=user.id,
+        username=user.username,
+        user_id=user.id,
+        request=request,
+    )
     return {"ok": True}
 
 
 @router.post("/token", response_model=TokenOut)
 def issue_token(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
     """Issue bearer tokens for Swagger, scripts, and manual API clients."""
-    user = _authenticate_user(db, form_data.username, form_data.password)
+    try:
+        user = _authenticate_user(db, form_data.username, form_data.password)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            record_audit(
+                db,
+                action="token_failed",
+                resource_type="user",
+                resource_id=form_data.username,
+                username=form_data.username,
+                details={"reason": exc.detail},
+                request=request,
+            )
+        raise
     access_token, refresh_token = _issue_token_pair(user)
+    record_audit(
+        db,
+        action="token_issued",
+        resource_type="session",
+        resource_id=user.id,
+        username=user.username,
+        user_id=user.id,
+        request=request,
+    )
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -266,11 +336,26 @@ def refresh(
     jti = payload_data.get("jti")
     if jti:
         if is_revoked(db, jti):
+            record_audit(
+                db,
+                action="refresh_rejected",
+                resource_type="session",
+                resource_id=jti,
+                details={"reason": "jti_revoked"},
+                request=request,
+            )
             return _refresh_unauthorized("Invalid refresh token")
     else:
         # ADR-0024 grace 期已于 2026-06-21 结束:本提交之前签发、无 jti 的
         # refresh token 一律拒绝(黑名单机制对无 jti token 本就无效,
         # 继续放行会让存量旧 token 无限期可重放)。
+        record_audit(
+            db,
+            action="refresh_rejected",
+            resource_type="session",
+            details={"reason": "missing_jti_after_grace"},
+            request=request,
+        )
         logger.warning("refresh_token_missing_jti rejected_after_grace sub=%s", payload_data.get("sub"))
         return _refresh_unauthorized("Invalid refresh token")
 
@@ -310,6 +395,15 @@ def logout(
             if jti and exp_ts:
                 expires_at = datetime.fromtimestamp(exp_ts, tz=timezone.utc)
                 revoke(db, jti=jti, expires_at=expires_at, reason="logout")
+                record_audit(
+                    db,
+                    action="logout",
+                    resource_type="session",
+                    resource_id=jti,
+                    username=decoded.get("sub"),
+                    details={"reason": "logout"},
+                    request=request,
+                )
 
     clear_auth_cookies(response)
     return {"ok": True}

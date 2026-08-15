@@ -908,6 +908,11 @@ export interface PlanUpdate {
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
   steps?: PlanStepCreate[];
+  /**
+   * 乐观锁令牌（#268 多Worker B3）：带上加载时 Plan.updated_at；
+   * 与后端当前值不一致 → 409，防两个浏览器基于同一旧版本互相覆盖。
+   */
+  expected_updated_at?: string;
 }
 
 export type PlanRunStatus =

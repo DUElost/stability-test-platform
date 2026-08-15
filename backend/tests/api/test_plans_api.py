@@ -110,6 +110,35 @@ class TestPlanCRUD:
         assert len(updated["steps"]) == 1
         assert updated["steps"][0]["step_key"] == "new_step"
 
+    def test_update_plan_optimistic_lock_409(self, client, auth_headers, sample_script):
+        """#268 多Worker B3:携带过期 expected_updated_at 的保存必须 409。"""
+        name = _uniq("plan")
+        create = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan = create.json()["data"]
+        plan_id = plan["id"]
+        loaded_at = plan["updated_at"]
+
+        # 先做一次合法更新,把 updated_at 推走
+        first = client.put(f"/api/v1/plans/{plan_id}", json={
+            "name": f"{name}_v1", "expected_updated_at": loaded_at,
+        }, headers=auth_headers)
+        assert first.status_code == 200
+        stale = client.put(f"/api/v1/plans/{plan_id}", json={
+            "name": f"{name}_v2", "expected_updated_at": loaded_at,
+        }, headers=auth_headers)
+        assert stale.status_code == 409
+        assert "modified by another session" in stale.json()["detail"]
+
+        # 用最新 updated_at 可正常保存
+        fresh_at = first.json()["data"]["updated_at"]
+        ok_resp = client.put(f"/api/v1/plans/{plan_id}", json={
+            "name": f"{name}_v2", "expected_updated_at": fresh_at,
+        }, headers=auth_headers)
+        assert ok_resp.status_code == 200
+        assert ok_resp.json()["data"]["name"] == f"{name}_v2"
+
     def test_delete_plan(self, client, auth_headers, sample_script):
         name = _uniq("plan")
         create = client.post("/api/v1/plans", json={

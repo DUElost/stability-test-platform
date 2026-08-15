@@ -267,20 +267,27 @@ def _emit_notification_socketio(
         from backend.realtime.socketio_server import get_sio
 
         sio = get_sio()
-        payload = {
-            "id": log_id,
-            "source": source,
-            "event_type": event_type,
-            "severity": severity,
-            "title": title,
-            "message": message,
-            "created_at": created_at,
+        # 信封格式与其余 /dashboard 事件一致({type, payload, timestamp}):
+        # 前端 NotificationBell 按 msg.type 判事件,此前裸发字段导致
+        # "notification:new 广播了但前端收不到" (#268 多Worker 审计 B2)。
+        envelope = {
+            "type": "notification:new",
+            "payload": {
+                "id": log_id,
+                "source": source,
+                "event_type": event_type,
+                "severity": severity,
+                "title": title,
+                "message": message,
+                "created_at": created_at,
+            },
+            "timestamp": created_at,
         }
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(sio.emit("notification:new", payload, namespace="/dashboard"))
+            loop.create_task(sio.emit("notification:new", envelope, namespace="/dashboard"))
         except RuntimeError:
-            asyncio.run(sio.emit("notification:new", payload, namespace="/dashboard"))
+            asyncio.run(sio.emit("notification:new", envelope, namespace="/dashboard"))
     except Exception:
         logger.debug("emit_notification_socketio_failed", exc_info=True)
 

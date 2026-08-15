@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
+from backend.core.audit import record_audit
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
@@ -107,6 +108,9 @@ class PlanUpdate(BaseModel):
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     steps: Optional[List[PlanStepIn]] = None
+    # 乐观锁令牌(#268 多Worker):客户端带上加载时的 updated_at,不一致则 409,
+    # 防两个浏览器基于同一旧版本互相覆盖(last-write-wins)。
+    expected_updated_at: Optional[datetime] = None
 
 
 class PlanStepOut(BaseModel):
@@ -466,6 +470,7 @@ def _validate_plan_dag(db: Session, plan_id: int | None,
 @router.post("/plans", response_model=ApiResponse[PlanOut], status_code=201)
 def create_plan(
     payload: PlanCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
@@ -516,6 +521,18 @@ def create_plan(
     db.refresh(plan)
     steps = db.query(PlanStep).filter(PlanStep.plan_id == plan.id)\
         .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    record_audit(
+        db,
+        action="plan_created",
+        resource_type="plan",
+        resource_id=plan.id,
+        username=current_user.username if current_user else None,
+        user_id=current_user.id if current_user else None,
+        details={"name": plan.name, "step_count": len(payload.steps)},
+        request=request,
+    )
+    from backend.realtime.socketio_server import emit_plan_changed
+    emit_plan_changed(plan.id, "created")
     return ok(_plan_out(plan, steps))
 
 
@@ -564,14 +581,32 @@ def get_plan(
 def update_plan(
     plan_id: int,
     payload: PlanUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    # 行锁:两个浏览器并发 PUT 同一 Plan 时串行化,配合下面的乐观锁令牌,
+    # step 全量 DELETE+INSERT 替换不再出现"后到者覆盖先到者"的静默丢失。
+    # (SQLite 测试环境无 FOR UPDATE 语义,跳过。)
+    if not db.get_bind().dialect.name.startswith("sqlite"):
+        db.execute(text("SELECT id FROM plan WHERE id = :pid FOR UPDATE"), {"pid": plan_id})
+
     plan = db.get(Plan, plan_id)
     steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
         .order_by(PlanStep.stage, PlanStep.sort_order).all()
     _raise_if_hidden_legacy_aee_plan(plan, steps)
     _require_plan_owner_or_admin(plan, current_user)
+
+    # 乐观锁:客户端声明其编辑基于的 updated_at;不匹配 = 已被他人修改 → 409。
+    if payload.expected_updated_at is not None:
+        expected = payload.expected_updated_at
+        if expected.tzinfo is None:
+            expected = expected.replace(tzinfo=timezone.utc)
+        if plan.updated_at != expected.astimezone(timezone.utc):
+            raise HTTPException(
+                status_code=409,
+                detail="plan was modified by another session; reload and retry",
+            )
 
     if payload.name is not None:
         plan.name = payload.name
@@ -641,6 +676,19 @@ def update_plan(
     db.refresh(plan)
     steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
         .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    record_audit(
+        db,
+        action="plan_updated",
+        resource_type="plan",
+        resource_id=plan.id,
+        username=current_user.username,
+        user_id=current_user.id,
+        # 只记字段名不记值:watcher_policy 等可能含敏感配置
+        details={"changed": sorted(payload.model_fields_set - {"expected_updated_at"}), "step_count": len(steps)},
+        request=request,
+    )
+    from backend.realtime.socketio_server import emit_plan_changed
+    emit_plan_changed(plan.id, "updated")
     return ok(_plan_out(plan, steps))
 
 
@@ -687,6 +735,7 @@ def _assert_plan_deletable(db: Session, plan_id: int) -> None:
 @router.delete("/plans/{plan_id}", response_model=ApiResponse[dict])
 def delete_plan(
     plan_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
@@ -696,6 +745,7 @@ def delete_plan(
     _raise_if_hidden_legacy_aee_plan(plan, steps)
     _require_plan_owner_or_admin(plan, current_user)
     _assert_plan_deletable(db, plan_id)
+    plan_name = plan.name
 
     try:
         db.delete(plan)
@@ -707,6 +757,18 @@ def delete_plan(
             status_code=409,
             detail="cannot delete plan while related records still exist",
         ) from None
+    record_audit(
+        db,
+        action="plan_deleted",
+        resource_type="plan",
+        resource_id=plan_id,
+        username=current_user.username,
+        user_id=current_user.id,
+        details={"name": plan_name},
+        request=request,
+    )
+    from backend.realtime.socketio_server import emit_plan_changed
+    emit_plan_changed(plan_id, "deleted")
     return ok({"deleted": plan_id})
 
 

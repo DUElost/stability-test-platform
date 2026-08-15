@@ -164,12 +164,15 @@ function _getDashSocket(): Socket {
     SOCKET_EVENT_NAMES.precheckUpdate,
     SOCKET_EVENT_NAMES.runUpdate,
     SOCKET_EVENT_NAMES.reportReady,
-    SOCKET_EVENT_NAMES.jobUpdate,
     // ADR-0021 C5c — watcher 异常增量推送 (broadcast room: plan_run:{id})
     SOCKET_EVENT_NAMES.watcherSignal,
     // ADR-0025 §9 RunConsole — 控制面命令实时日志 (room: console:{id})
     SOCKET_EVENT_NAMES.consoleLog,
     SOCKET_EVENT_NAMES.consoleStatus,
+    // #268 多Worker — 通知铃铛实时通道(此前服务端广播但前端白名单缺失)
+    SOCKET_EVENT_NAMES.notificationNew,
+    // #268 多Worker — 任何浏览器改 Plan 后广播,其余端失效计划缓存
+    SOCKET_EVENT_NAMES.planChanged,
   ];
   for (const event of EVENTS) {
     socket.on(event, (data: unknown) => {
@@ -248,8 +251,9 @@ function parseWsUrl(url: string): SubscriptionConfig {
         SOCKET_EVENT_NAMES.deviceUpdate,
         SOCKET_EVENT_NAMES.runUpdate,
         SOCKET_EVENT_NAMES.reportReady,
-        SOCKET_EVENT_NAMES.jobUpdate,
         SOCKET_EVENT_NAMES.planRunStatus,
+        SOCKET_EVENT_NAMES.notificationNew,
+        SOCKET_EVENT_NAMES.planChanged,
       ],
     };
   }
@@ -302,6 +306,8 @@ function parseWsUrl(url: string): SubscriptionConfig {
         SOCKET_EVENT_NAMES.planRunStatus,
         SOCKET_EVENT_NAMES.runUpdate,
         SOCKET_EVENT_NAMES.reportReady,
+        SOCKET_EVENT_NAMES.notificationNew,
+        SOCKET_EVENT_NAMES.planChanged,
       ],
   };
 }

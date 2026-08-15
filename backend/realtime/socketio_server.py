@@ -604,6 +604,16 @@ def schedule_emit(event: str, data: Dict[str, Any], namespace: str = "/dashboard
     asyncio.run_coroutine_threadsafe(coro, _main_loop)
 
 
+def emit_plan_changed(plan_id: int, action: str) -> None:
+    """Sync-safe:任一浏览器创建/更新/删除 Plan 后广播 plan_changed,
+    其余端据此失效计划缓存(#268 多Worker B2——此前 Plan 编辑跨端陈旧最长 60s+)。"""
+    schedule_emit("plan_changed", {
+        "type": "PLAN_CHANGED",
+        "payload": {"plan_id": plan_id, "action": action},
+        "timestamp": _now_iso(),
+    })
+
+
 async def emit_agent_control(host_id: str, command: str, *, payload: Optional[Dict[str, Any]] = None) -> None:
     """向指定 host 的 Agent 下发控制指令(经 SocketIO /agent control 事件)。
 

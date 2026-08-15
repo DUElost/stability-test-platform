@@ -210,6 +210,8 @@ export function usePlanEditForm(planId: number | null) {
         timeout_seconds: lifecycle.lifecycle.timeout_seconds ?? null,
         next_plan_id: nextPlanId,
         steps: buildStepsForApi(lifecycle),
+        // 乐观锁令牌:后端据此拒绝"基于旧版本的保存"(409),防跨端互相覆盖
+        expected_updated_at: plan?.updated_at,
       };
       let saved: Plan;
       if (isNew) {
