@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.agent.event_uploader import EventUploader, _UploadJob
+from backend.agent.event_uploader import (
+    EventUploader,
+    _UploadJob,
+    _event_uploader_continuous,
+    _recover_states,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +27,24 @@ def test_enqueue_skipped_when_disabled():
     up = EventUploader.instance()
     up.configure(api_url="http://x", agent_secret="s", host_id="h1")
     assert up.enqueue_local_event(event={"id": "1", "local_path": "/tmp/x"}) is False
+
+
+def test_continuous_defaults_to_filter_model(monkeypatch):
+    """ADR-0028 方案 A：未设开关时代码默认 0（过滤模型），1 仅是逃生阀。"""
+    monkeypatch.delenv("STP_EVENT_UPLOADER_CONTINUOUS", raising=False)
+    assert _event_uploader_continuous() is False
+
+    monkeypatch.setenv("STP_EVENT_UPLOADER_CONTINUOUS", "1")
+    assert _event_uploader_continuous() is True
+
+
+def test_recover_states_cover_pending_in_both_modes(monkeypatch):
+    """过滤模型与逃生阀都必须拉取 UPLOAD_PENDING，模式切换不漏待传事件。"""
+    monkeypatch.setenv("STP_EVENT_UPLOADER_CONTINUOUS", "0")
+    assert _recover_states() == "UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
+
+    monkeypatch.setenv("STP_EVENT_UPLOADER_CONTINUOUS", "1")
+    assert _recover_states() == "LOCAL,UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
 
 
 def test_upload_one_marks_remote(tmp_path, monkeypatch):
