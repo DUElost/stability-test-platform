@@ -13,8 +13,13 @@ ADR-0028 方案 A 规定 `STP_EVENT_UPLOADER_CONTINUOUS` 默认 0
 
 - 两处代码默认改回 "0"；`count_pending_upload_events` docstring 同步
   （此前误写「连续上送模式（默认）」）。
+- 逃生阀轮询状态集从 `LOCAL/UPLOADING/UPLOAD_FAILED` 改为
+  `LOCAL/UPLOAD_PENDING/UPLOADING/UPLOAD_FAILED`：过滤模式已标记的
+  `UPLOAD_PENDING` 在切到连续模式后不能遗漏（否则控制面计数含
+  UPLOAD_PENDING、Agent 却不再拉取，merge 等至超时）。
 - `backend/.env.example` 与 `backend/agent/.env.example` 补上该键说明（默认 0）。
 - 回归测试：`_event_uploader_continuous` 默认 False；
+  `_recover_states` 两种模式均含 UPLOAD_PENDING；
   `count_pending_upload_events` 默认过滤模型（LOCAL 不计入 pending）。
 
 ## Alternatives

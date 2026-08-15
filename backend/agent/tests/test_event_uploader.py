@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.agent.event_uploader import EventUploader, _UploadJob, _event_uploader_continuous
+from backend.agent.event_uploader import (
+    EventUploader,
+    _UploadJob,
+    _event_uploader_continuous,
+    _recover_states,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +36,15 @@ def test_continuous_defaults_to_filter_model(monkeypatch):
 
     monkeypatch.setenv("STP_EVENT_UPLOADER_CONTINUOUS", "1")
     assert _event_uploader_continuous() is True
+
+
+def test_recover_states_cover_pending_in_both_modes(monkeypatch):
+    """过滤模型与逃生阀都必须拉取 UPLOAD_PENDING，模式切换不漏待传事件。"""
+    monkeypatch.setenv("STP_EVENT_UPLOADER_CONTINUOUS", "0")
+    assert _recover_states() == "UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
+
+    monkeypatch.setenv("STP_EVENT_UPLOADER_CONTINUOUS", "1")
+    assert _recover_states() == "LOCAL,UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
 
 
 def test_upload_one_marks_remote(tmp_path, monkeypatch):

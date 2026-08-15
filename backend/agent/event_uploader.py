@@ -56,6 +56,18 @@ def _event_uploader_continuous() -> bool:
     return os.getenv("STP_EVENT_UPLOADER_CONTINUOUS", "0").strip().lower() in ("1", "true", "yes")
 
 
+def _recover_states() -> str:
+    """待上传事件的轮询状态集合。
+
+    continuous=0（默认过滤模型）：UPLOAD_PENDING/UPLOADING/UPLOAD_FAILED；
+    continuous=1（逃生阀）：再并入 LOCAL（upload_task 已标记的 UPLOAD_PENDING
+    也须覆盖，模式切换后不能遗漏待传事件）。
+    """
+    if _event_uploader_continuous():
+        return "LOCAL,UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
+    return "UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
+
+
 @dataclass
 class _UploadJob:
     event_id: str
@@ -368,7 +380,8 @@ class EventUploader:
     def _recover_pending(self) -> None:
         """周期轮询待上传事件并入队。
 
-        continuous=1：轮询 LOCAL/UPLOADING/UPLOAD_FAILED（恢复中断的上传）。
+        continuous=1：轮询 LOCAL/UPLOAD_PENDING/UPLOADING/UPLOAD_FAILED
+        （全量 + 恢复中断的上传）。
         continuous=0：轮询 UPLOAD_PENDING/UPLOADING/UPLOAD_FAILED（upload_task 标记后上送）。
         """
         while not self._stop_evt.wait(_RECOVER_POLL_INTERVAL):
@@ -376,7 +389,7 @@ class EventUploader:
                 continue
             try:
                 # ADR-0028 方案 A：continuous=1 上传全部 LOCAL；continuous=0 仅上传 UPLOAD_PENDING
-                _states = "LOCAL,UPLOADING,UPLOAD_FAILED" if _event_uploader_continuous() else "UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
+                _states = _recover_states()
                 resp = requests.get(
                     f"{self._api_url}/api/v1/agent/device-log-events",
                     params={
