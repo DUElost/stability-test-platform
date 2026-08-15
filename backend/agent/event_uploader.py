@@ -53,7 +53,7 @@ def _event_uploader_enabled() -> bool:
 
 def _event_uploader_continuous() -> bool:
     """ADR-0028 方案 A：0=仅上传 UPLOAD_PENDING（过滤模型）；1=上传全部 LOCAL（全量模型）。"""
-    return os.getenv("STP_EVENT_UPLOADER_CONTINUOUS", "1").strip().lower() in ("1", "true", "yes")
+    return os.getenv("STP_EVENT_UPLOADER_CONTINUOUS", "0").strip().lower() in ("1", "true", "yes")
 
 
 @dataclass
