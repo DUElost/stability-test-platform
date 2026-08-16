@@ -26,6 +26,10 @@ export default function ChangePasswordPage() {
       setMessage({ type: 'error', text: '新密码长度不能少于8位' });
       return;
     }
+    if (newPassword.length > 128) {
+      setMessage({ type: 'error', text: '新密码长度不能超过128位' });
+      return;
+    }
 
     setLoading(true);
     try {
@@ -35,8 +39,9 @@ export default function ChangePasswordPage() {
       setNewPassword('');
       setConfirmPassword('');
     } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setMessage({ type: 'error', text: detail || '密码修改失败' });
+      // API 客户端已将 FastAPI 的 detail 数组规范化为 ApiError.message(#281 CR 意见)
+      const msg = err instanceof Error ? err.message : '密码修改失败';
+      setMessage({ type: 'error', text: msg });
     } finally {
       setLoading(false);
     }
@@ -82,6 +87,7 @@ export default function ChangePasswordPage() {
                 onChange={(e) => setNewPassword(e.target.value)}
                 required
                 minLength={8}
+                maxLength={128}
                 className={FORM.input}
               />
             </div>
@@ -93,6 +99,7 @@ export default function ChangePasswordPage() {
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
                 minLength={8}
+                maxLength={128}
                 className={FORM.input}
               />
             </div>

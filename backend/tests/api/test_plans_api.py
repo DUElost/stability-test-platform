@@ -98,6 +98,7 @@ class TestPlanCRUD:
 
         update = client.put(f"/api/v1/plans/{plan_id}", json={
             "name": f"{name}_updated",
+            "expected_updated_at": create.json()["data"]["updated_at"],
             "steps": [
                 {"step_key": "new_step", "script_name": "check_device",
                  "script_version": "1.0.0", "stage": "init", "sort_order": 0,
@@ -257,6 +258,7 @@ class TestPlanCRUD:
 
         update = client.put(f"/api/v1/plans/{plan_id}", json={
             "name": f"{name}_admin_renamed",
+            "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=admin_headers)
         assert update.status_code == 200, update.text
 
@@ -284,6 +286,7 @@ class TestPlanCRUD:
         plan_id = create.json()["data"]["id"]
         resp = client.put(f"/api/v1/plans/{plan_id}", json={
             "next_plan_id": plan_id,
+            "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
         assert resp.status_code == 422
 
@@ -366,6 +369,7 @@ class TestPlanCRUD:
 
         resp = client.put(f"/api/v1/plans/{plan_id}", json={
             "next_plan_id": legacy_plan_id,
+            "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
 
         assert resp.status_code == 404, resp.text
@@ -420,6 +424,7 @@ class TestPlanCRUD:
                  "script_version": "1.0.0", "stage": "teardown", "sort_order": 0,
                  "timeout_seconds": 30},
             ],
+            "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
 
         assert resp.status_code == 422, resp.text
@@ -840,6 +845,7 @@ class TestStallRequiresProgressScript:
         steps[0]["stall_seconds"] = 120
         resp = client.put(f"/api/v1/plans/{plan_id}", json={
             "steps": steps,
+            "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
         assert resp.status_code == 422, resp.text
         assert resp.json()["detail"]["code"] == "STALL_REQUIRES_PROGRESS_SCRIPT"

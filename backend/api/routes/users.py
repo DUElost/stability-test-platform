@@ -100,18 +100,21 @@ def create_user(
         role=payload.role,
     )
     db.add(user)
-    db.commit()
+    db.flush()
     db.refresh(user)
     record_audit(
         db,
         action="user_created",
         resource_type="user",
         resource_id=user.id,
-        username=user.username,
-        user_id=user.id,
-        details={"role": payload.role, "by": current_user.username},
+        # 审计主体 = 操作者;被操作对象在 resource_id/details
+        username=current_user.username,
+        user_id=current_user.id,
+        details={"target": user.username, "role": payload.role},
         request=request,
     )
+    # 审计与主变更同事务提交(get_db 不自动 commit,#281 CR 意见)
+    db.commit()
     return user
 
 
@@ -157,19 +160,20 @@ def update_user(
             )
         user.is_active = payload.is_active
 
-    db.commit()
-    db.refresh(user)
     record_audit(
         db,
         action="user_updated",
         resource_type="user",
         resource_id=user.id,
-        username=user.username,
-        user_id=user.id,
+        # 审计主体 = 操作者
+        username=current_user.username,
+        user_id=current_user.id,
         # 只记字段名不记值:密码/角色变更的值不落审计(防明文泄漏)
-        details={"changed": sorted(k for k, v in payload.model_dump(exclude_none=True).items() if k != "password"), "by": current_user.username},
+        details={"target": user.username, "changed": sorted(k for k, v in payload.model_dump(exclude_none=True).items() if k != "password")},
         request=request,
     )
+    db.commit()
+    db.refresh(user)
     return user
 
 
@@ -191,17 +195,19 @@ def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    db.delete(user)
-    db.commit()
     record_audit(
         db,
         action="user_deleted",
         resource_type="user",
         resource_id=user_id,
-        username=user.username,
-        details={"by": current_user.username},
+        # 审计主体 = 操作者
+        username=current_user.username,
+        user_id=current_user.id,
+        details={"target": user.username},
         request=request,
     )
+    db.delete(user)
+    db.commit()
     return None
 
 
@@ -224,18 +230,19 @@ def toggle_user_active(
         raise HTTPException(status_code=404, detail="User not found")
 
     user.is_active = "N" if user.is_active == "Y" else "Y"
-    db.commit()
-    db.refresh(user)
     record_audit(
         db,
         action="user_active_toggled",
         resource_type="user",
         resource_id=user.id,
-        username=user.username,
-        user_id=user.id,
-        details={"is_active": user.is_active, "by": current_user.username},
+        # 审计主体 = 操作者
+        username=current_user.username,
+        user_id=current_user.id,
+        details={"target": user.username, "is_active": user.is_active},
         request=request,
     )
+    db.commit()
+    db.refresh(user)
     return user
 
 
@@ -264,8 +271,6 @@ def change_password(
         )
 
     current_user.hashed_password = get_password_hash(payload.new_password)
-    db.commit()
-    db.refresh(current_user)
     record_audit(
         db,
         action="change_password",
@@ -275,4 +280,6 @@ def change_password(
         user_id=current_user.id,
         request=request,
     )
+    db.commit()
+    db.refresh(current_user)
     return current_user

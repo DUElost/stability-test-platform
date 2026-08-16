@@ -517,10 +517,6 @@ def create_plan(
             created_at=now,
         ))
 
-    db.commit()
-    db.refresh(plan)
-    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan.id)\
-        .order_by(PlanStep.stage, PlanStep.sort_order).all()
     record_audit(
         db,
         action="plan_created",
@@ -531,6 +527,11 @@ def create_plan(
         details={"name": plan.name, "step_count": len(payload.steps)},
         request=request,
     )
+    # 审计与主变更同事务提交(get_db 不自动 commit,#281 CR 意见)
+    db.commit()
+    db.refresh(plan)
+    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan.id)\
+        .order_by(PlanStep.stage, PlanStep.sort_order).all()
     from backend.realtime.socketio_server import emit_plan_changed
     emit_plan_changed(plan.id, "created")
     return ok(_plan_out(plan, steps))
@@ -597,16 +598,21 @@ def update_plan(
     _raise_if_hidden_legacy_aee_plan(plan, steps)
     _require_plan_owner_or_admin(plan, current_user)
 
-    # 乐观锁:客户端声明其编辑基于的 updated_at;不匹配 = 已被他人修改 → 409。
-    if payload.expected_updated_at is not None:
-        expected = payload.expected_updated_at
-        if expected.tzinfo is None:
-            expected = expected.replace(tzinfo=timezone.utc)
-        if plan.updated_at != expected.astimezone(timezone.utc):
-            raise HTTPException(
-                status_code=409,
-                detail="plan was modified by another session; reload and retry",
-            )
+    # 乐观锁(#281 CR 意见):expected_updated_at 为必填——缺省即拒绝,
+    # 杜绝"旧客户端不带令牌绕过并发防护"的路径。
+    if payload.expected_updated_at is None:
+        raise HTTPException(
+            status_code=422,
+            detail="expected_updated_at is required for plan updates",
+        )
+    expected = payload.expected_updated_at
+    if expected.tzinfo is None:
+        expected = expected.replace(tzinfo=timezone.utc)
+    if plan.updated_at != expected.astimezone(timezone.utc):
+        raise HTTPException(
+            status_code=409,
+            detail="plan was modified by another session; reload and retry",
+        )
 
     if payload.name is not None:
         plan.name = payload.name
@@ -672,10 +678,6 @@ def update_plan(
             plan.barrier_timeout_seconds,
         )
 
-    db.commit()
-    db.refresh(plan)
-    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
-        .order_by(PlanStep.stage, PlanStep.sort_order).all()
     record_audit(
         db,
         action="plan_updated",
@@ -684,9 +686,14 @@ def update_plan(
         username=current_user.username,
         user_id=current_user.id,
         # 只记字段名不记值:watcher_policy 等可能含敏感配置
-        details={"changed": sorted(payload.model_fields_set - {"expected_updated_at"}), "step_count": len(steps)},
+        details={"changed": sorted(payload.model_fields_set - {"expected_updated_at"}), "step_count": len(payload.steps or steps)},
         request=request,
     )
+    # 审计与主变更同事务提交(get_db 不自动 commit,#281 CR 意见)
+    db.commit()
+    db.refresh(plan)
+    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
+        .order_by(PlanStep.stage, PlanStep.sort_order).all()
     from backend.realtime.socketio_server import emit_plan_changed
     emit_plan_changed(plan.id, "updated")
     return ok(_plan_out(plan, steps))
@@ -747,16 +754,6 @@ def delete_plan(
     _assert_plan_deletable(db, plan_id)
     plan_name = plan.name
 
-    try:
-        db.delete(plan)
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        logger.exception("plan delete blocked by FK for plan_id=%s", plan_id)
-        raise HTTPException(
-            status_code=409,
-            detail="cannot delete plan while related records still exist",
-        ) from None
     record_audit(
         db,
         action="plan_deleted",
@@ -767,6 +764,16 @@ def delete_plan(
         details={"name": plan_name},
         request=request,
     )
+    try:
+        db.delete(plan)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.exception("plan delete blocked by FK for plan_id=%s", plan_id)
+        raise HTTPException(
+            status_code=409,
+            detail="cannot delete plan while related records still exist",
+        ) from None
     from backend.realtime.socketio_server import emit_plan_changed
     emit_plan_changed(plan_id, "deleted")
     return ok({"deleted": plan_id})

@@ -263,13 +263,13 @@ def _emit_notification_socketio(
 ) -> None:
     """Emit notification:new to all dashboard clients (best-effort)."""
     try:
-        import asyncio
-        from backend.realtime.socketio_server import get_sio
+        from backend.realtime.socketio_server import schedule_emit
 
-        sio = get_sio()
         # 信封格式与其余 /dashboard 事件一致({type, payload, timestamp}):
         # 前端 NotificationBell 按 msg.type 判事件,此前裸发字段导致
         # "notification:new 广播了但前端收不到" (#268 多Worker 审计 B2)。
+        # schedule_emit 走主事件循环(run_coroutine_threadsafe),可跨线程调用,
+        # 取代原先 loop.create_task/asyncio.run 的易错舞步(#281 CR 意见)。
         envelope = {
             "type": "notification:new",
             "payload": {
@@ -283,11 +283,7 @@ def _emit_notification_socketio(
             },
             "timestamp": created_at,
         }
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(sio.emit("notification:new", envelope, namespace="/dashboard"))
-        except RuntimeError:
-            asyncio.run(sio.emit("notification:new", envelope, namespace="/dashboard"))
+        schedule_emit("notification:new", envelope)
     except Exception:
         logger.debug("emit_notification_socketio_failed", exc_info=True)
 

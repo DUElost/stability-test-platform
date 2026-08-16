@@ -281,7 +281,8 @@ export function usePlanEditForm(planId: number | null) {
         cursor = nextNode;
       }
       if (cursor && cursor.id !== tail.id) {
-        await api.plans.update(cursor.id, { next_plan_id: tail.id });
+        // 乐观锁令牌必填(#281 CR 意见):基于链尾刚拉取的最新 updated_at
+        await api.plans.update(cursor.id, { next_plan_id: tail.id, expected_updated_at: cursor.updated_at });
       }
 
       queryClient.invalidateQueries({ queryKey: planKeys.allLists() });

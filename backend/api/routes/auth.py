@@ -227,7 +227,7 @@ def register(payload: UserCreate, request: Request, db: Session = Depends(get_db
         role="user",  # Force default role to prevent privilege escalation
     )
     db.add(user)
-    db.commit()
+    db.flush()
     db.refresh(user)
     record_audit(
         db,
@@ -238,6 +238,9 @@ def register(payload: UserCreate, request: Request, db: Session = Depends(get_db
         user_id=user.id,
         request=request,
     )
+    # 审计与主变更同事务提交:get_db 不自动 commit,post-commit 的审计会随
+    # 会话关闭被回滚(#281 CR 意见)。
+    db.commit()
     return user
 
 
@@ -274,6 +277,8 @@ def login(
         user_id=user.id,
         request=request,
     )
+    # _authenticate_user 已 commit(last_login),此处需再 commit 落审计
+    db.commit()
     return {"ok": True}
 
 
@@ -308,6 +313,7 @@ def issue_token(
         user_id=user.id,
         request=request,
     )
+    db.commit()
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -404,6 +410,8 @@ def logout(
                     details={"reason": "logout"},
                     request=request,
                 )
+                # 与 revoke 同事务提交审计(#281 CR 意见)
+                db.commit()
 
     clear_auth_cookies(response)
     return {"ok": True}
