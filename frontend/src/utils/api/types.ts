@@ -915,6 +915,21 @@ export interface PlanUpdate {
   expected_updated_at?: string;
 }
 
+/**
+ * 链尾追加（#281 P1）：由后端在单事务内「锁定链尾 → 校验版本 → 创建新
+ * Plan → 更新 next_plan_id」，冲突整体回滚，不再产生孤立 Plan。
+ */
+export interface PlanChainTailCreate {
+  name: string;
+  description?: string;
+  steps?: PlanStepCreate[];
+  /**
+   * 链尾版本令牌：加载链尾时的 updated_at；无法确定链尾（超出最近 200 条
+   * 窗口）时可省略，后端仍以行锁保证原子追加。
+   */
+  expected_updated_at?: string | null;
+}
+
 export type PlanRunStatus =
   | 'QUEUED'
   | 'PRECHECK'

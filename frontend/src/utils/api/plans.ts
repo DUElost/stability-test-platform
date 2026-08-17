@@ -1,6 +1,6 @@
 import apiClient from './client';
 import { unwrapApiResponse } from './client';
-import type { Plan, PlanCreate, PlanUpdate, PlanRun, PlanRunCreate, PlanRunPreview } from './types';
+import type { Plan, PlanChainTailCreate, PlanCreate, PlanUpdate, PlanRun, PlanRunCreate, PlanRunPreview } from './types';
 
 export const plans = {
   list: (skip = 0, limit = 50) =>
@@ -15,8 +15,19 @@ export const plans = {
   update: (id: number, data: PlanUpdate) =>
     unwrapApiResponse<Plan>(apiClient.put(`/plans/${id}`, data)),
 
-  delete: (id: number) =>
-    unwrapApiResponse<{ deleted: number }>(apiClient.delete(`/plans/${id}`)),
+  /**
+   * 原子链尾追加（#281 P1）：单事务内锁定链尾、校验版本、创建新 Plan、
+   * 更新 next_plan_id；版本冲突整体 409 回滚，不产生孤立 Plan。
+   */
+  appendChainTail: (id: number, data: PlanChainTailCreate) =>
+    unwrapApiResponse<Plan>(apiClient.post(`/plans/${id}/append-chain-tail`, data)),
+
+  delete: (id: number, expectedUpdatedAt?: string | null) =>
+    unwrapApiResponse<{ deleted: number }>(
+      apiClient.delete(`/plans/${id}`, {
+        params: expectedUpdatedAt ? { expected_updated_at: expectedUpdatedAt } : undefined,
+      }),
+    ),
 
   previewRun: (id: number, data: PlanRunCreate) =>
     unwrapApiResponse<PlanRunPreview>(apiClient.post(`/plans/${id}/run/preview`, data)),

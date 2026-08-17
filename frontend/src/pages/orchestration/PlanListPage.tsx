@@ -39,7 +39,7 @@ export default function PlanListPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => api.plans.delete(id),
+    mutationFn: (plan: Plan) => api.plans.delete(plan.id, plan.updated_at),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: planKeys.allLists() });
       toast.success('Plan 已删除');
@@ -61,7 +61,7 @@ export default function PlanListPage() {
       description: `确定删除 "${plan.name}"？此操作不可撤销。`,
       variant: 'destructive',
     });
-    if (ok) deleteMutation.mutate(plan.id);
+    if (ok) deleteMutation.mutate(plan);
   };
 
   const stats = useMemo(() => ({
