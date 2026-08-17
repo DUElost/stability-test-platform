@@ -5,9 +5,9 @@ from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from typing import Optional
 
+import bcrypt
 import jwt
 from jwt import InvalidTokenError
-from passlib.context import CryptContext
 from starlette.responses import Response
 
 # Security configuration
@@ -28,13 +28,16 @@ ACCESS_COOKIE_NAME = os.getenv("AUTH_ACCESS_COOKIE_NAME", "stp_access_token")
 REFRESH_COOKIE_NAME = os.getenv("AUTH_REFRESH_COOKIE_NAME", "stp_refresh_token")
 AUTH_COOKIE_PATH = os.getenv("AUTH_COOKIE_PATH", "/")
 
-# Password hashing context
-# 使用 bcrypt 并设置 truncate_error=False 以自动截断超过 72 字节的密码
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__truncate_error=False,
-)
+# 生产类环境判定:production 与 internal 都视为生产(#281 P0)。
+# internal 是既有生产部署使用的环境标识(仓库根 .env.backend 为 ENV=internal);
+# 此前护栏只认 production,导致 internal 部署绕过安全 Cookie/CSRF、注册策略
+# 与匿名 SocketIO 的全部护栏。
+PRODUCTION_LIKE_ENVS = frozenset({"production", "internal"})
+
+
+def is_production_like_env() -> bool:
+    """是否生产类环境(ENV=production 或 ENV=internal)。"""
+    return os.getenv("ENV", "").strip().lower() in PRODUCTION_LIKE_ENVS
 
 
 def is_auth_cookie_secure() -> bool:
@@ -51,22 +54,26 @@ def _get_cookie_samesite() -> str:
 def is_public_register_allowed() -> bool:
     """Whether ``POST /auth/register`` is permitted.
 
-    Blocked when ``ENV=production`` (unless ``STP_ALLOW_REGISTER=1``) or when
-    ``STP_ALLOW_REGISTER=0`` in any environment.
+    Blocked in production-like environments (``ENV=production/internal``,
+    unless ``STP_ALLOW_REGISTER=1``) or when ``STP_ALLOW_REGISTER=0`` in any
+    environment.
     """
     allow_raw = os.getenv("STP_ALLOW_REGISTER", "").strip().lower()
     if allow_raw in {"0", "false", "no", "off"}:
         return False
     if allow_raw in {"1", "true", "yes", "on"}:
         return True
-    return os.getenv("ENV", "").strip().lower() != "production"
+    return not is_production_like_env()
 
 
 def validate_production_auth_cookie_settings() -> None:
-    if os.getenv("ENV", "").strip().lower() != "production":
+    if not is_production_like_env():
         return
     if not is_auth_cookie_secure():
-        raise RuntimeError("AUTH_COOKIE_SECURE=1 required when ENV=production")
+        raise RuntimeError(
+            "AUTH_COOKIE_SECURE=1 required in production-like environments "
+            "(ENV=production/internal)"
+        )
     if _get_cookie_samesite() == "none":
         raise RuntimeError(
             "AUTH_COOKIE_SAMESITE=none is not supported in production without CSRF protection"
@@ -74,18 +81,33 @@ def validate_production_auth_cookie_settings() -> None:
     csrf_raw = os.getenv("STP_CSRF_ENABLED", "1").strip().lower()
     if csrf_raw in {"0", "false", "no", "off"}:
         raise RuntimeError(
-            "STP_CSRF_ENABLED must remain enabled when ENV=production"
+            "STP_CSRF_ENABLED must remain enabled in production-like environments"
         )
 
 
+# bcrypt 只使用前 72 字节;与旧 passlib 配置(truncate_error=False)语义一致,
+# 存量 $2b$ 哈希可直接校验。passlib 1.7.4 读取新版 bcrypt 版本号会触发
+# __about__ 缺失警告,这里直连 bcrypt 不再依赖 passlib(依赖清单暂保留
+# passlib 固定版本,待 py3.11 下重建 lock 时清理)。
+_BCRYPT_MAX_BYTES = 72
+
+
+def _bcrypt_bytes(password: str) -> bytes:
+    return password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a plain password against a hashed password."""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a plain password against a bcrypt hash."""
+    try:
+        return bcrypt.checkpw(_bcrypt_bytes(plain_password), hashed_password.encode("utf-8"))
+    except ValueError:
+        # 非法盐/哈希(如非 bcrypt 字符串)一律视为校验失败,不抛异常
+        return False
 
 
 def get_password_hash(password: str) -> str:
-    """Generate a hashed password."""
-    return pwd_context.hash(password)
+    """Generate a bcrypt password hash."""
+    return bcrypt.hashpw(_bcrypt_bytes(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.audit import record_audit
 from backend.core.database import get_db
-from backend.core.login_lockout import locked_remaining, record_failure, record_success
+from backend.core.login_lockout import AccountLocked, InvalidCredentials, guarded_attempt
 from backend.core.security import (
     ACCESS_COOKIE_NAME,
     REFRESH_COOKIE_NAME,
@@ -89,26 +89,32 @@ class TokenRefresh(BaseModel):
 
 
 def _authenticate_user(db: Session, username: str, password: str) -> User:
-    # 每账户失败锁定:连续失败达到阈值后,即使密码正确也拒绝(防定向爆破);
-    # 锁定到期或登录成功即清零。
-    remaining = locked_remaining(username)
-    if remaining:
+    # 锁定键 = 数据库账户身份(#281 P1):已注册账户用 user.id,未注册用户名
+    # 用 "unknown:<原样用户名>"。users.username 为大小写敏感普通 String,
+    # 因此不再按 username.lower() 归一——大小写不同的两个账户既不共享锁定
+    # 桶,也无法用变体拼写互相触发锁定。
+    user = db.query(User).filter(User.username == username).first()
+    lock_key = str(user.id) if user else f"unknown:{username}"
+
+    def _verify() -> bool:
+        return user is not None and verify_password(password, user.hashed_password)
+
+    try:
+        # 单锁内完成「检查锁定→密码验证→失败计数/成功清零」:并发请求无法
+        # 同时通过初始锁定检查后在同一批次越阈值试密(#281 CR Major)。
+        guarded_attempt(lock_key, _verify)
+    except AccountLocked as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Too many failed attempts. Retry in {remaining}s.",
-            headers={"Retry-After": str(remaining)},
-        )
-
-    user = db.query(User).filter(User.username == username).first()
-    if not user or not verify_password(password, user.hashed_password):
-        record_failure(username)
+            detail=f"Too many failed attempts. Retry in {exc.remaining}s.",
+            headers={"Retry-After": str(exc.remaining)},
+        ) from None
+    except InvalidCredentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    record_success(username)
+        ) from None
 
     if user.is_active != "Y":
         raise HTTPException(
@@ -265,6 +271,9 @@ def login(
                 details={"reason": exc.detail},
                 request=request,
             )
+            # 失败审计独立落库(#281 P1):get_db 不自动 commit,此处若
+            # 不提交,审计行会随异常抛出后的会话关闭整体回滚。
+            db.commit()
         raise
     access_token, refresh_token = _issue_token_pair(user)
     set_auth_cookies(response, access_token, refresh_token)
@@ -302,6 +311,8 @@ def issue_token(
                 details={"reason": exc.detail},
                 request=request,
             )
+            # 失败审计独立落库(#281 P1),同 login_failed。
+            db.commit()
         raise
     access_token, refresh_token = _issue_token_pair(user)
     record_audit(
@@ -350,6 +361,8 @@ def refresh(
                 details={"reason": "jti_revoked"},
                 request=request,
             )
+            # 拒绝路径审计独立落库(#281 P1):返回前提交,否则随会话关闭回滚。
+            db.commit()
             return _refresh_unauthorized("Invalid refresh token")
     else:
         # ADR-0024 grace 期已于 2026-06-21 结束:本提交之前签发、无 jti 的
@@ -363,6 +376,8 @@ def refresh(
             request=request,
         )
         logger.warning("refresh_token_missing_jti rejected_after_grace sub=%s", payload_data.get("sub"))
+        # 拒绝路径审计独立落库(#281 P1)。
+        db.commit()
         return _refresh_unauthorized("Invalid refresh token")
 
     username: str = payload_data.get("sub")

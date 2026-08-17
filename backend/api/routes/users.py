@@ -168,8 +168,10 @@ def update_user(
         # 审计主体 = 操作者
         username=current_user.username,
         user_id=current_user.id,
-        # 只记字段名不记值:密码/角色变更的值不落审计(防明文泄漏)
-        details={"target": user.username, "changed": sorted(k for k, v in payload.model_dump(exclude_none=True).items() if k != "password")},
+        # 只记字段名不记值:密码/角色变更的值不落审计(防明文泄漏),
+        # 但 password 字段名必须保留在 changed 里——否则仅改密时 changed
+        # 为空数组,无法证明密码发生过变更(#281 P2)。
+        details={"target": user.username, "changed": sorted(k for k, v in payload.model_dump(exclude_none=True).items())},
         request=request,
     )
     db.commit()
@@ -265,6 +267,9 @@ def change_password(
             details={"reason": "incorrect_old_password"},
             request=request,
         )
+        # 失败审计独立落库(#281 P1):get_db 不自动 commit,此处若
+        # 不提交,审计行会随异常抛出后的会话关闭整体回滚。
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect old password",
