@@ -1,7 +1,7 @@
 # ADR-0025 Sprint 1 实现计划：Watcher 无人值守续航（加固 RESUME 重挂路径）
 
 > 日期：2026-06-14
-> 关联：[ADR-0025](./adr/ADR-0025-phase4-architecture-alignment.md) D5、ADR-0018（Watcher 主线）、ADR-0019（Device Lease + Recovery Sync）
+> 关联：[ADR-0025](../../adr/ADR-0025-phase4-architecture-alignment.md) D5、ADR-0018（Watcher 主线）、ADR-0019（Device Lease + Recovery Sync）
 > 预计：3-5 天
 > 前置结论：见本文 §1（推翻了 ADR-0025 初版「独立 catchup_on_startup 重挂」设计）
 

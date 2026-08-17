@@ -265,7 +265,7 @@ async def heartbeat_loop():
 
 ## 架构约束：禁止使用 BaseTestCase
 
-> **参见 [ADR-0016](../../adr/ADR-0016-deprecate-base-test-case.md)**
+> **参见 [ADR-0016](../../../adr/ADR-0016-deprecate-base-test-case.md)**
 
 `backend/agent/test_framework.py` 中的 `BaseTestCase` **已正式废弃**，严格禁止在 Agent 任何新增代码中使用。
 
