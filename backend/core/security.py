@@ -32,7 +32,9 @@ AUTH_COOKIE_PATH = os.getenv("AUTH_COOKIE_PATH", "/")
 # 生产类环境判定:production 与 internal 都视为生产(#281 P0)。
 # internal 是既有生产部署使用的环境标识(仓库根 .env.backend 为 ENV=internal);
 # 此前护栏只认 production,导致 internal 部署绕过安全 Cookie/CSRF、注册策略
-# 与匿名 SocketIO 的全部护栏。
+# 与匿名 SocketIO 的全部护栏。唯一例外:AUTH_COOKIE_SECURE=1 强制仅限
+# ENV=production(internal = 无 TLS 内网部署,见
+# validate_production_auth_cookie_settings 注释),其余护栏两者同等强制。
 PRODUCTION_LIKE_ENVS = frozenset({"production", "internal"})
 
 
@@ -70,11 +72,15 @@ def is_public_register_allowed() -> bool:
 def validate_production_auth_cookie_settings() -> None:
     if not is_production_like_env():
         return
-    if not is_auth_cookie_secure():
-        raise RuntimeError(
-            "AUTH_COOKIE_SECURE=1 required in production-like environments "
-            "(ENV=production/internal)"
-        )
+    env = os.getenv("ENV", "").strip().lower()
+    # AUTH_COOKIE_SECURE 强制仅限 ENV=production(#281 部署决策,操作者选定):
+    # ENV=internal 是「无 TLS 内网部署」标识——Secure cookie 在纯 HTTP 下
+    # 被浏览器直接拒绝(不发送),强制它等于必然拒启且无安全收益。internal
+    # 保留其余全部生产级护栏:CSRF 强制、SameSite 取值校验与 none 拒绝、
+    # 注册默认关闭、STP_SKIP_INFRA_CHECK 禁用、SocketIO 强制认证。
+    # 上 TLS 后应将 AUTH_COOKIE_SECURE 置 1,届时再议是否收紧。
+    if env == "production" and not is_auth_cookie_secure():
+        raise RuntimeError("AUTH_COOKIE_SECURE=1 required when ENV=production")
     # 校验原始环境变量(#281 CR Minor):无效显式值不得被 _get_cookie_samesite
     # 静默回落为 lax 而通过启动校验。
     samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()

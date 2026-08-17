@@ -54,20 +54,47 @@ async def test_lifespan_requires_secure_auth_cookies_in_production(monkeypatch):
             pass
 
 
-@pytest.mark.asyncio
-async def test_lifespan_requires_secure_auth_cookies_in_internal(monkeypatch):
-    """#281 P0 缺测项:ENV=internal 与 production 同等强制安全 Cookie——
-    本机生产部署 .env.backend 即 ENV=internal + AUTH_COOKIE_SECURE=0,
-    用本代码重启会在此处 fail-closed 拒绝启动。"""
+def test_internal_allows_http_cookies_without_secure(monkeypatch):
+    """#281 部署决策(操作者选定):ENV=internal 是「无 TLS 内网部署」标识——
+    AUTH_COOKIE_SECURE=0 合法(Secure cookie 在纯 HTTP 下被浏览器拒绝,
+    强制它=必然拒启且无安全收益);其余生产级护栏仍全部强制。"""
+    from backend.core.security import validate_production_auth_cookie_settings
+
     monkeypatch.setenv("TESTING", "0")
     monkeypatch.setenv("ENV", "internal")
-    monkeypatch.setenv("AGENT_SECRET", "test-agent-secret")
     monkeypatch.setenv("AUTH_COOKIE_SECURE", "0")
     monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "lax")
+    monkeypatch.setenv("STP_CSRF_ENABLED", "1")
 
-    with pytest.raises(RuntimeError, match="AUTH_COOKIE_SECURE=1"):
-        async with lifespan(fastapi_app):
-            pass
+    validate_production_auth_cookie_settings()  # 不抛
+
+
+def test_internal_still_rejects_csrf_disabled(monkeypatch):
+    """internal 保留 CSRF 强制(#281):无 TLS 内网下关闭 CSRF 同样致命。"""
+    from backend.core.security import validate_production_auth_cookie_settings
+
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("ENV", "internal")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "lax")
+    monkeypatch.setenv("STP_CSRF_ENABLED", "0")
+
+    with pytest.raises(RuntimeError, match="STP_CSRF_ENABLED"):
+        validate_production_auth_cookie_settings()
+
+
+def test_internal_still_rejects_invalid_samesite(monkeypatch):
+    """internal 保留 SameSite 取值校验(#281 CR Minor)。"""
+    from backend.core.security import validate_production_auth_cookie_settings
+
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("ENV", "internal")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "invalid")
+    monkeypatch.setenv("STP_CSRF_ENABLED", "1")
+
+    with pytest.raises(RuntimeError, match="AUTH_COOKIE_SAMESITE"):
+        validate_production_auth_cookie_settings()
 
 
 @pytest.mark.asyncio
