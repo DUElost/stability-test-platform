@@ -3,11 +3,12 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
-from typing import Optional
+from typing import Annotated, Optional
 
 import bcrypt
 import jwt
 from jwt import InvalidTokenError
+from pydantic import AfterValidator, StringConstraints
 from starlette.responses import Response
 
 # Security configuration
@@ -74,6 +75,13 @@ def validate_production_auth_cookie_settings() -> None:
             "AUTH_COOKIE_SECURE=1 required in production-like environments "
             "(ENV=production/internal)"
         )
+    # 校验原始环境变量(#281 CR Minor):无效显式值不得被 _get_cookie_samesite
+    # 静默回落为 lax 而通过启动校验。
+    samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()
+    if samesite_raw not in {"lax", "strict", "none"}:
+        raise RuntimeError(
+            f"AUTH_COOKIE_SAMESITE={samesite_raw!r} is invalid; use lax or strict"
+        )
     if _get_cookie_samesite() == "none":
         raise RuntimeError(
             "AUTH_COOKIE_SAMESITE=none is not supported in production without CSRF protection"
@@ -93,7 +101,32 @@ _BCRYPT_MAX_BYTES = 72
 
 
 def _bcrypt_bytes(password: str) -> bytes:
+    # 保持 [:72] 切片仅作为「存量哈希/历史数据」的兼容兜底;#281 CR Major:
+    # 新密码入口(注册/建户/改密)一律经 PasswordStr 在哈希前拒绝
+    # >72 UTF-8 字节的密码,不再允许静默截断产生等价哈希。
     return password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
+
+
+def _bcrypt_compatible_password(value: str) -> str:
+    """密码入口校验(#281 CR Major):拒绝超过 72 个 UTF-8 字节的密码。
+
+    8–128 字符校验允许两个不同密码(如 71 个 ASCII + 1 个多字节字符 vs
+    72 个 ASCII)在 bcrypt 截断后产生同一输入;静默截断使「不同密码同一
+    哈希」成为可能。校验在哈希之前进行,超限走 Pydantic 422。
+    """
+    if len(value.encode("utf-8")) > _BCRYPT_MAX_BYTES:
+        raise ValueError(
+            "password must not exceed 72 bytes when UTF-8 encoded (bcrypt limit)"
+        )
+    return value
+
+
+# 所有密码入口(register / 用户 CRUD / 改密)共用的密码字段类型。
+PasswordStr = Annotated[
+    str,
+    StringConstraints(min_length=8, max_length=128),
+    AfterValidator(_bcrypt_compatible_password),
+]
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

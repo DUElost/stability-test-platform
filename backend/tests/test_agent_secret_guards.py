@@ -95,3 +95,18 @@ async def test_lifespan_rejects_csrf_disabled_in_production(monkeypatch):
     with pytest.raises(RuntimeError, match="STP_CSRF_ENABLED"):
         async with lifespan(fastapi_app):
             pass
+
+
+@pytest.mark.asyncio
+async def test_lifespan_rejects_invalid_samesite_in_production(monkeypatch):
+    """#281 CR Minor:无效 AUTH_COOKIE_SAMESITE 显式值必须使生产类环境
+    启动失败,不得被 _get_cookie_samesite 静默回落为 lax。"""
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("AGENT_SECRET", "test-agent-secret")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "1")
+    monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "invalid")
+
+    with pytest.raises(RuntimeError, match="AUTH_COOKIE_SAMESITE"):
+        async with lifespan(fastapi_app):
+            pass

@@ -166,6 +166,16 @@ def _default_admission_queue(monkeypatch):
     admission_queue.mark_queue_pump_ready(False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_lockout_state():
+    """#281:模块级登录锁定的默认实例跨测试共享,失败计数会互相污染
+    (未注册用户名共享一个桶后尤甚);每个测试前清空。"""
+    from backend.core import login_lockout
+
+    login_lockout._default._state.clear()
+    yield
+
+
 @pytest.fixture
 def client(db_session):
     """Create FastAPI test client with test database"""

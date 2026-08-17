@@ -9,14 +9,17 @@ IP 限流是横向防护，本模块是纵向防护——同一账户在失败�
 准确；一旦加多 worker，锁定量 = 配置值 × 副本数，需挪 Redis。
 
 #281 评审修复（对应 CodeRabbit Major 线程）：
-- **原子性**：``LoginLockout.guarded_attempt`` 在单把互斥锁内完成
-  「检查锁定 → 密码验证 → 失败计数/成功清零」。路由不再分三步调用，
-  并发请求无法同时越过锁定检查、在同一批次越阈值试密。
+- **原子性**：``LoginLockout.guarded_attempt`` 在账户分片锁（固定 64 片，
+  内存有界）内完成「检查锁定 → 密码验证 → 失败计数/成功清零」。路由不再
+  分三步调用，并发请求无法同时越过锁定检查、在同一批次越阈值试密；不同
+  账户落在不同分片时可并行执行 bcrypt，不再全局串行化所有登录。
 - **淘汰保护**：``_evict_if_needed`` 只淘汰未锁定条目，锁定中的账户不会
-  被用户名洪泛挤出锁定桶。
-- **身份键**：键由调用方提供（路由用数据库用户 ID；未知用户名用
-  ``unknown:<原样用户名>``），模块不再自行 ``lower()``——大小写不同的
-  两个数据库账户不再共享同一个锁定桶，也无法互相触发锁定。
+  被用户名洪泛挤出锁定桶；表满且全部在锁定中时不再插入新键（容量上限
+  真正生效）。
+- **身份键**：键由调用方提供（路由用数据库用户 ID）；未注册用户名一律
+  归入共享的 ``UNKNOWN_ACCOUNT_KEY`` 桶——``unknown:<用户名>`` 的键空间
+  由攻击者控制，逐名跟踪会被「占满跟踪表」的洪泛打穿。模块本身不归一
+  大小写，大小写不同的两个数据库账户不共享桶。
 """
 from __future__ import annotations
 
@@ -47,6 +50,15 @@ STP_LOGIN_LOCKOUT_SECONDS = _env_int("STP_LOGIN_LOCKOUT_SECONDS", 900)
 # 同时跟踪的账户上限(与 limiter.MAX_TRACKED_IPS 同理):防止攻击者轮换海量
 # 用户名把字典撑爆;超出按 LRU 淘汰最久未活动账户(#281 CR 意见)。
 MAX_TRACKED_ACCOUNTS = 10_000
+
+# 未注册用户名共用的锁定键(#281 CR Major):路由把一切查无此人的登录尝试
+# 归入这一个桶。若按 "unknown:<原样用户名>" 逐名跟踪,键空间完全由攻击者
+# 控制——先对 MAX_TRACKED_ACCOUNTS 个不同未注册名各触发锁定即可占满跟踪
+# 表,让真实账户失去锁定保护。共享桶让未知名洪泛只影响未知名,且自带
+# 枚举限速;真实账户使用各自的 user.id 桶,互不影响。
+UNKNOWN_ACCOUNT_KEY = "unknown"
+
+_STRIPE_COUNT = 64
 
 
 def _remaining_seconds(locked_until: float, now: float) -> int:
@@ -92,7 +104,10 @@ class LoginLockout:
         # key -> {"failures": [ts, ...], "locked_until": float | None}
         # OrderedDict LRU 序:最近活动的在末尾,淘汰从头部 popitem — O(1)。
         self._state: "OrderedDict[str, Dict[str, object]]" = OrderedDict()
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # 保护 _state(短临界区)
+        # guarded_attempt 的分片锁(#281 CR Major):固定 64 片,内存有界;
+        # 同 key 恒落同片,保证「检查—验证—计数」原子;不同片可并行 bcrypt。
+        self._stripes = [threading.Lock() for _ in range(_STRIPE_COUNT)]
 
     def _evict_if_needed(self, now: float) -> bool:
         """只淘汰「未锁定」的最旧条目(#281 CR Major)。
@@ -155,26 +170,29 @@ class LoginLockout:
     def guarded_attempt(self, key: str, verify: Callable[[], bool]) -> None:
         """原子执行「检查锁定 → 密码验证 → 失败计数/成功清零」。
 
-        整个流程在同一把互斥锁内完成(#281 CR Major:原实现里锁定检查、
-        密码验证、record_failure 是路由侧三段式调用,存在 TOCTOU——并发
-        请求可同时通过初始检查,再在同一批次越阈值试密)。``verify`` 在锁内
-        执行(密码校验),同账户并发登录因此串行化:后续请求在锁内重新检查
-        锁定状态,越阈值的批次只会拿到 ``AccountLocked``。
+        同账户的「检查—验证—计数」在同一把**分片锁**内完成(#281 CR Major:
+        原实现里锁定检查、密码验证、record_failure 是路由侧三段式调用,存在
+        TOCTOU——并发请求可同时通过初始检查,再在同一批次越阈值试密;
+        且全局单锁会把所有账户的登录(含 bcrypt)串行化)。``key`` 哈希到
+        64 个分片之一,同账户并发登录在分片上串行化,不同账户(不同分片)
+        可并行执行 bcrypt。分片数固定,内存有界。
 
         成功:清零失败记录;凭据错误:计数并可能触发锁定后抛
         ``InvalidCredentials``;锁定中:抛 ``AccountLocked(remaining)``。
         """
-        with self._lock:
-            now = time.time()
-            self._prune(key, now)
-            entry = self._state.get(key)
-            if entry is not None and entry.get("locked_until") is not None:
-                raise AccountLocked(_remaining_seconds(entry["locked_until"], now))
-            ok = verify()
-            if not ok:
-                self._record_failure_locked(key, now)
-                raise InvalidCredentials()
-            self._state.pop(key, None)
+        with self._stripes[hash(key) % _STRIPE_COUNT]:
+            with self._lock:
+                now = time.time()
+                self._prune(key, now)
+                entry = self._state.get(key)
+                if entry is not None and entry.get("locked_until") is not None:
+                    raise AccountLocked(_remaining_seconds(entry["locked_until"], now))
+            ok = verify()  # bcrypt 在分片锁内、状态锁外执行
+            with self._lock:
+                if not ok:
+                    self._record_failure_locked(key, now)
+                    raise InvalidCredentials()
+                self._state.pop(key, None)
 
     def locked_remaining(self, key: str) -> int:
         """>0 = 该账户还需等待的秒数（0 = 未锁定）。"""

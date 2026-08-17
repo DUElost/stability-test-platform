@@ -3,13 +3,13 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, require_admin
 from backend.core.audit import record_audit
 from backend.core.database import get_db
-from backend.core.security import get_password_hash, verify_password
+from backend.core.security import PasswordStr, get_password_hash, verify_password
 from backend.models.user import User as UserModel
 from backend.api.schemas import PaginatedResponse
 
@@ -18,13 +18,14 @@ router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
 class UserCreate(BaseModel):
     username: str
-    password: str = Field(min_length=8, max_length=128)
+    # PasswordStr:8–128 字符且 ≤72 UTF-8 字节(bcrypt 硬限制,#281 CR Major)
+    password: PasswordStr
     role: str = "user"
 
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
-    password: Optional[str] = Field(default=None, min_length=8, max_length=128)
+    password: Optional[PasswordStr] = None
     role: Optional[str] = None
     is_active: Optional[str] = None
 
@@ -42,7 +43,7 @@ class UserOut(BaseModel):
 
 class PasswordChange(BaseModel):
     old_password: str
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: PasswordStr
 
 
 @router.get("", response_model=PaginatedResponse)

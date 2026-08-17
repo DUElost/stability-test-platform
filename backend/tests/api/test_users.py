@@ -39,6 +39,16 @@ class TestCreateUser:
         )
         assert response.status_code == 422
 
+    def test_create_user_rejects_password_over_72_bytes(self, client, admin_headers):
+        """#281 CR Major:bcrypt 只使用前 72 字节——多字节字符密码不得被
+        静默截断(19 个 4 字节 emoji = 76 字节 > 72,必须 422)。"""
+        response = client.post(
+            "/api/v1/users",
+            json={"username": "bytepw", "password": "😀" * 19, "role": "user"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+
     def test_create_user_duplicate(self, client, admin_headers):
         client.post("/api/v1/users", json={"username": "dup", "password": "pass12345", "role": "user"}, headers=admin_headers)
         resp = client.post("/api/v1/users", json={"username": "dup", "password": "pass12345", "role": "user"}, headers=admin_headers)

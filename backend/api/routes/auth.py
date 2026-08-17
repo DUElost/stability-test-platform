@@ -13,10 +13,16 @@ from sqlalchemy.orm import Session
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.audit import record_audit
 from backend.core.database import get_db
-from backend.core.login_lockout import AccountLocked, InvalidCredentials, guarded_attempt
+from backend.core.login_lockout import (
+    UNKNOWN_ACCOUNT_KEY,
+    AccountLocked,
+    InvalidCredentials,
+    guarded_attempt,
+)
 from backend.core.security import (
     ACCESS_COOKIE_NAME,
     REFRESH_COOKIE_NAME,
+    PasswordStr,
     clear_auth_cookies,
     create_access_token,
     create_refresh_token,
@@ -33,6 +39,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=False)
+
+# 时序均衡用的固定 dummy 哈希(#281 CR Major):用户不存在时也执行一次
+# bcrypt,消除用户名枚举的响应时间通道。固定值避免每次 import 重新哈希。
+_TIMING_DUMMY_HASH = (
+    "$2b$12$mKmFBdE729BO8tVc8vrT..6cJv.s3MqNkxX91C/NpXaTyf2xYLCWC"
+)
 
 
 def verify_agent_secret(x_agent_secret: Optional[str] = Header(None)) -> bool:
@@ -59,7 +71,8 @@ def verify_agent_secret(x_agent_secret: Optional[str] = Header(None)) -> bool:
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=2, max_length=64)
-    password: str = Field(min_length=8, max_length=128)
+    # PasswordStr:8–128 字符且 ≤72 UTF-8 字节(bcrypt 硬限制,#281 CR Major)
+    password: PasswordStr
     # role is intentionally excluded to prevent privilege escalation
     # new users are always created with "user" role
 
@@ -89,19 +102,26 @@ class TokenRefresh(BaseModel):
 
 
 def _authenticate_user(db: Session, username: str, password: str) -> User:
-    # 锁定键 = 数据库账户身份(#281 P1):已注册账户用 user.id,未注册用户名
-    # 用 "unknown:<原样用户名>"。users.username 为大小写敏感普通 String,
-    # 因此不再按 username.lower() 归一——大小写不同的两个账户既不共享锁定
-    # 桶,也无法用变体拼写互相触发锁定。
+    # 锁定键 = 数据库账户身份(#281 P1):已注册账户用 user.id;未注册用户名
+    # 一律归入共享的 UNKNOWN_ACCOUNT_KEY 桶(#281 CR Major:按用户名逐名
+    # 跟踪的键空间由攻击者控制,可占满跟踪表让真实账户失去锁定保护)。
+    # users.username 为大小写敏感普通 String,因此锁定键不归一大小写——
+    # 大小写不同的两个账户既不共享锁定桶,也无法用变体拼写互相触发锁定。
     user = db.query(User).filter(User.username == username).first()
-    lock_key = str(user.id) if user else f"unknown:{username}"
+    lock_key = str(user.id) if user else UNKNOWN_ACCOUNT_KEY
 
     def _verify() -> bool:
-        return user is not None and verify_password(password, user.hashed_password)
+        if user is None:
+            # 时序均衡(#281 CR Major):用户不存在时也对固定 dummy 哈希做
+            # 一次 bcrypt,使「存在/不存在」两条路径计算量一致,消除用户名
+            # 枚举的响应时间通道。
+            verify_password(password, _TIMING_DUMMY_HASH)
+            return False
+        return verify_password(password, user.hashed_password)
 
     try:
-        # 单锁内完成「检查锁定→密码验证→失败计数/成功清零」:并发请求无法
-        # 同时通过初始锁定检查后在同一批次越阈值试密(#281 CR Major)。
+        # 账户分片锁内完成「检查锁定→密码验证→失败计数/成功清零」:并发
+        # 请求无法同时通过初始锁定检查后在同一批次越阈值试密(#281 CR Major)。
         guarded_attempt(lock_key, _verify)
     except AccountLocked as exc:
         raise HTTPException(
@@ -274,6 +294,18 @@ def login(
             # 失败审计独立落库(#281 P1):get_db 不自动 commit,此处若
             # 不提交,审计行会随异常抛出后的会话关闭整体回滚。
             db.commit()
+        elif exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            # 锁定命中是暴力破解的关键信号(#281 CR):此前 429 不进审计。
+            record_audit(
+                db,
+                action="login_locked",
+                resource_type="user",
+                resource_id=form_data.username,
+                username=form_data.username,
+                details={"reason": exc.detail},
+                request=request,
+            )
+            db.commit()
         raise
     access_token, refresh_token = _issue_token_pair(user)
     set_auth_cookies(response, access_token, refresh_token)
@@ -312,6 +344,18 @@ def issue_token(
                 request=request,
             )
             # 失败审计独立落库(#281 P1),同 login_failed。
+            db.commit()
+        elif exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            # 锁定命中审计(#281 CR),同 login_locked。
+            record_audit(
+                db,
+                action="token_locked",
+                resource_type="user",
+                resource_id=form_data.username,
+                username=form_data.username,
+                details={"reason": exc.detail},
+                request=request,
+            )
             db.commit()
         raise
     access_token, refresh_token = _issue_token_pair(user)
