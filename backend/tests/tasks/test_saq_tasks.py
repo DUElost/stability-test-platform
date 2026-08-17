@@ -293,7 +293,7 @@ async def test_start_saq_worker_is_idempotent(monkeypatch):
     fake_worker.start = AsyncMock()
 
     monkeypatch.setattr(mod.Queue, "from_url", lambda *args, **kwargs: fake_queue)
-    monkeypatch.setattr(mod, "Worker", lambda *args, **kwargs: fake_worker)
+    monkeypatch.setattr(mod, "ControlPlaneWorker", lambda *args, **kwargs: fake_worker)
 
     await mod.start_saq_worker()
     await mod.start_saq_worker()
@@ -334,7 +334,7 @@ async def test_start_saq_worker_recreates_queue_after_stopped_worker(monkeypatch
     await done_task
 
     monkeypatch.setattr(mod.Queue, "from_url", lambda *args, **kwargs: fake_queue)
-    monkeypatch.setattr(mod, "Worker", lambda *args, **kwargs: fake_worker)
+    monkeypatch.setattr(mod, "ControlPlaneWorker", lambda *args, **kwargs: fake_worker)
     mod._queue = old_queue
     mod._worker_task = done_task
 
