@@ -210,6 +210,8 @@ export function usePlanEditForm(planId: number | null) {
         timeout_seconds: lifecycle.lifecycle.timeout_seconds ?? null,
         next_plan_id: nextPlanId,
         steps: buildStepsForApi(lifecycle),
+        // 乐观锁令牌:后端据此拒绝"基于旧版本的保存"(409),防跨端互相覆盖
+        expected_updated_at: plan?.updated_at,
       };
       let saved: Plan;
       if (isNew) {
@@ -250,10 +252,25 @@ export function usePlanEditForm(planId: number | null) {
 
   const createChainTailPlan = async (proposedName: string) => {
     try {
-      const tail = await api.plans.create({
+      // 链尾追加改走后端原子接口(#281 P1):单事务内锁定链尾、校验版本、
+      // 创建新 Plan、更新 next_plan_id,冲突整体回滚——不再产生孤立 Plan。
+      // 链尾在最近 200 条内时携带其版本令牌;链尾不可见/超出窗口时省略,
+      // 服务端仍以行锁保证原子追加(旧实现此时会静默跳过连接)。
+      const plansList = await api.plans.list(0, 200);
+      const byId = new Map(plansList.map((p) => [p.id, p]));
+      let cursor: Plan | undefined = byId.get(planId!);
+      const seen = new Set<number>();
+      while (cursor && cursor.next_plan_id != null && !seen.has(cursor.id)) {
+        seen.add(cursor.id);
+        const nextNode = byId.get(cursor.next_plan_id);
+        if (!nextNode) break;
+        cursor = nextNode;
+      }
+      const reachedTail = cursor != null && cursor.next_plan_id == null;
+
+      const tail = await api.plans.appendChainTail(planId!, {
         name: proposedName.trim(),
         description: '',
-        failure_threshold: 0.05,
         steps: [
           {
             step_key: 'step_init_1',
@@ -266,21 +283,8 @@ export function usePlanEditForm(planId: number | null) {
             enabled: true,
           },
         ],
+        expected_updated_at: reachedTail && cursor ? cursor.updated_at : null,
       });
-
-      const plansList = await api.plans.list(0, 200);
-      const byId = new Map(plansList.map((p) => [p.id, p]));
-      let cursor: Plan | undefined = byId.get(planId!);
-      const seen = new Set<number>();
-      while (cursor && cursor.next_plan_id != null && !seen.has(cursor.id)) {
-        seen.add(cursor.id);
-        const nextNode = byId.get(cursor.next_plan_id);
-        if (!nextNode) break;
-        cursor = nextNode;
-      }
-      if (cursor && cursor.id !== tail.id) {
-        await api.plans.update(cursor.id, { next_plan_id: tail.id });
-      }
 
       queryClient.invalidateQueries({ queryKey: planKeys.allLists() });
       toast.success('已追加新 Plan');

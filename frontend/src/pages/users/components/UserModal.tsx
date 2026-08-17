@@ -61,8 +61,17 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
     if (!isEditMode) {
       if (!formData.password) {
         newErrors.password = '请输入密码';
-      } else if (formData.password.length < 6) {
-        newErrors.password = '密码至少 6 个字符';
+      } else if (formData.password.length < 8) {
+        newErrors.password = '密码至少 8 个字符';
+      } else if (formData.password.length > 128) {
+        newErrors.password = '密码不能超过 128 个字符';
+      }
+    } else if (formData.password) {
+      // 编辑模式改了密码也要过同一长度约束(#281 CR 意见)
+      if (formData.password.length < 8) {
+        newErrors.password = '密码至少 8 个字符';
+      } else if (formData.password.length > 128) {
+        newErrors.password = '密码不能超过 128 个字符';
       }
     }
 
@@ -167,7 +176,8 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
               type="password"
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              placeholder={isEditMode ? '留空表示不修改' : '至少 6 位'}
+              placeholder={isEditMode ? '留空表示不修改' : '至少 8 位'}
+              maxLength={128}
               className={fieldClass(!!errors.password)}
               disabled={isSubmitting}
             />

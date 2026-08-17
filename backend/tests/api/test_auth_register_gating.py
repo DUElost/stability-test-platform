@@ -44,3 +44,16 @@ def test_register_blocked_when_env_flag_zero(client, monkeypatch):
         json={"username": "blocked", "password": "secret123"},
     )
     assert resp.status_code == 403
+
+
+def test_register_blocked_in_internal_env(client, monkeypatch):
+    """#281 P0:internal 与 production 同等视为生产类环境,默认拒绝公开注册
+    (生产部署 .env.backend 即 ENV=internal)。"""
+    monkeypatch.delenv("STP_ALLOW_REGISTER", raising=False)
+    monkeypatch.setenv("ENV", "internal")
+    resp = client.post(
+        "/api/v1/auth/register",
+        json={"username": "internaluser", "password": "secret123"},
+    )
+    assert resp.status_code == 403
+    assert "disabled" in resp.json()["detail"].lower()

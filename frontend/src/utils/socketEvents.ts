@@ -7,10 +7,11 @@ export const SOCKET_EVENT_NAMES = {
   precheckUpdate: 'precheck_update',
   runUpdate: 'run_update',
   reportReady: 'report_ready',
-  jobUpdate: 'job_update',
   watcherSignal: 'watcher_signal',
   consoleLog: 'console_log',
   consoleStatus: 'console_status',
+  notificationNew: 'notification:new',
+  planChanged: 'plan_changed',
 } as const;
 
 export const SOCKET_MESSAGE_TYPES = {
@@ -24,6 +25,7 @@ export const SOCKET_MESSAGE_TYPES = {
   REPORT_READY: 'REPORT_READY',
   DEPLOY_UPDATE: 'DEPLOY_UPDATE',
   WATCHER_SIGNAL: 'WATCHER_SIGNAL',
+  PLAN_CHANGED: 'PLAN_CHANGED',
 } as const;
 
 export type SocketEventName = typeof SOCKET_EVENT_NAMES[keyof typeof SOCKET_EVENT_NAMES];

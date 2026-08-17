@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
+from backend.core.audit import record_audit
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
@@ -107,6 +108,23 @@ class PlanUpdate(BaseModel):
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     steps: Optional[List[PlanStepIn]] = None
+    # 乐观锁令牌(#268 多Worker):客户端带上加载时的 updated_at,不一致则 409,
+    # 防两个浏览器基于同一旧版本互相覆盖(last-write-wins)。
+    expected_updated_at: Optional[datetime] = None
+
+
+class PlanChainTailCreate(BaseModel):
+    """链尾追加(#281 P1/CR Major):创建新 Plan 并把链尾 next_plan_id 指向
+    它,在单个事务内完成——不再产生孤立 Plan。"""
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: Optional[str] = None
+    steps: List[PlanStepIn] = Field(default_factory=list)
+    # 链尾版本令牌(乐观锁):客户端加载链尾时的 updated_at,与链尾当前值
+    # 不一致则整体 409 回滚。客户端无法确定链尾(超出最近 200 条窗口)时
+    # 可省略——服务端仍以行锁串行化并发追加,不会产生孤立 Plan。
+    expected_updated_at: Optional[datetime] = None
 
 
 class PlanStepOut(BaseModel):
@@ -466,6 +484,7 @@ def _validate_plan_dag(db: Session, plan_id: int | None,
 @router.post("/plans", response_model=ApiResponse[PlanOut], status_code=201)
 def create_plan(
     payload: PlanCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
@@ -512,11 +531,181 @@ def create_plan(
             created_at=now,
         ))
 
+    record_audit(
+        db,
+        action="plan_created",
+        resource_type="plan",
+        resource_id=plan.id,
+        username=current_user.username if current_user else None,
+        user_id=current_user.id if current_user else None,
+        details={"name": plan.name, "step_count": len(payload.steps)},
+        request=request,
+    )
+    # 审计与主变更同事务提交(get_db 不自动 commit,#281 CR 意见)
     db.commit()
     db.refresh(plan)
     steps = db.query(PlanStep).filter(PlanStep.plan_id == plan.id)\
         .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    from backend.realtime.socketio_server import emit_plan_changed
+    emit_plan_changed(plan.id, "created")
     return ok(_plan_out(plan, steps))
+
+
+def _find_chain_tail(db: Session, plan_id: int) -> Plan:
+    """沿 next_plan_id 走到链尾(带环保护);目标不存在时抛 404。"""
+    seen: set[int] = set()
+    cursor = db.get(Plan, plan_id)
+    if cursor is None:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    while cursor.next_plan_id is not None and cursor.id not in seen:
+        seen.add(cursor.id)
+        nxt = db.get(Plan, cursor.next_plan_id)
+        if nxt is None:
+            # 断链(指向已删除/丢失的 Plan):停在当前节点,视为链尾
+            break
+        cursor = nxt
+    return cursor
+
+
+def _lock_chain_tail(db: Session, plan_id: int) -> Plan:
+    """锁内逐节点走到真正链尾（PostgreSQL 语义）。
+
+    #281 二轮审查 P1：不能信任加锁前读到的链尾——并发追加会让「刚读到的
+    链尾」在拿到锁时已经不是链尾。每到一个节点先 ``FOR UPDATE`` 再
+    ``db.refresh()``，锁内重新确认；``next_plan_id`` 非空则继续走到新尾并
+    加锁，直到 ``next_plan_id`` 为空。SQLite 测试环境无 FOR UPDATE 语义，
+    退化为无锁走读。
+    """
+    if db.get_bind().dialect.name.startswith("sqlite"):
+        return _find_chain_tail(db, plan_id)
+    seen: set[int] = set()
+    cursor = db.get(Plan, plan_id)
+    if cursor is None:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    while True:
+        db.execute(text("SELECT id FROM plan WHERE id = :pid FOR UPDATE"), {"pid": cursor.id})
+        db.refresh(cursor)  # 锁内重读:不信加锁前的值
+        if cursor.next_plan_id is None:
+            return cursor
+        if cursor.id in seen or cursor.next_plan_id == cursor.id:
+            # 环保护:回到已访问节点视为断链,当前节点即链尾
+            return cursor
+        seen.add(cursor.id)
+        nxt = db.get(Plan, cursor.next_plan_id)
+        if nxt is None:
+            return cursor  # 断链(指向已删除/丢失的 Plan)
+        cursor = nxt
+
+
+@router.post("/plans/{plan_id}/append-chain-tail", response_model=ApiResponse[PlanOut], status_code=201)
+def append_chain_tail(
+    plan_id: int,
+    payload: PlanChainTailCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """原子链尾追加(#281 P1/CR Major)。
+
+    在一个事务内「锁定链尾 → 校验版本 → 创建新 Plan → 更新 next_plan_id」,
+    任一校验失败整体回滚,不再产生孤立 Plan。此前前端先 POST /plans 再 PUT
+    链尾:并发客户端先改链尾时 PUT 收到 409,但新 Plan 已提交成为孤立记录;
+    链首不在最近 200 条列表时还会静默跳过连接并显示成功。
+    """
+    # 锁内走到真正链尾(#281 二轮 P1):每个节点 FOR UPDATE + refresh,
+    # 不信加锁前的值——并发追加后原"链尾"已非尾时继续走到新尾并加锁。
+    tail = _lock_chain_tail(db, plan_id)
+    tail_steps = db.query(PlanStep).filter(PlanStep.plan_id == tail.id)\
+        .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    _raise_if_hidden_legacy_aee_plan(tail, tail_steps)
+    _require_plan_owner_or_admin(tail, current_user)
+
+    # 乐观锁:令牌与「锁内确认的真正链尾」updated_at 不一致即 409,整体回滚
+    # (新 Plan 不落库)。令牌省略时(链尾超出最近 200 条窗口)仍以行锁串行化。
+    if payload.expected_updated_at is not None:
+        expected = payload.expected_updated_at
+        if expected.tzinfo is None:
+            expected = expected.replace(tzinfo=timezone.utc)
+        if tail.updated_at != expected.astimezone(timezone.utc):
+            raise HTTPException(
+                status_code=409,
+                detail="plan chain tail was modified by another session; reload and retry",
+            )
+
+    _validate_no_legacy_aee_scripts(payload.steps)
+    _validate_script_refs(db, payload.steps)
+    _validate_stall_seconds_capability(payload.steps, db)
+    _validate_assembled_lifecycle(
+        payload.steps, None, None, None, None,
+    )
+
+    now = datetime.now(timezone.utc)
+    new_plan = Plan(
+        name=payload.name,
+        description=payload.description,
+        failure_threshold=0.05,
+        patrol_interval_seconds=None,
+        timeout_seconds=None,
+        barrier_timeout_seconds=None,
+        barrier_max_wait_seconds=None,
+        auto_archive_interval_seconds=None,
+        next_plan_id=None,
+        watcher_policy=None,
+        created_by=current_user.username,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(new_plan)
+    db.flush()
+
+    for s in payload.steps:
+        db.add(PlanStep(
+            plan_id=new_plan.id,
+            step_key=s.step_key,
+            script_name=s.script_name,
+            script_version=s.script_version,
+            stage=s.stage,
+            sort_order=s.sort_order,
+            timeout_seconds=s.timeout_seconds,
+            stall_seconds=s.stall_seconds,
+            retry=s.retry,
+            enabled=s.enabled,
+            created_at=now,
+        ))
+
+    tail.next_plan_id = new_plan.id
+    tail.updated_at = now
+
+    record_audit(
+        db,
+        action="plan_created",
+        resource_type="plan",
+        resource_id=new_plan.id,
+        username=current_user.username,
+        user_id=current_user.id,
+        details={"name": new_plan.name, "step_count": len(payload.steps),
+                 "via": "append_chain_tail", "chain_tail_of": tail.id},
+        request=request,
+    )
+    record_audit(
+        db,
+        action="plan_updated",
+        resource_type="plan",
+        resource_id=tail.id,
+        username=current_user.username,
+        user_id=current_user.id,
+        details={"changed": ["next_plan_id"], "via": "append_chain_tail"},
+        request=request,
+    )
+    # 审计与主变更同事务提交:任一校验失败(409)整体回滚,新 Plan 不落库
+    db.commit()
+    db.refresh(new_plan)
+    steps = db.query(PlanStep).filter(PlanStep.plan_id == new_plan.id)\
+        .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    from backend.realtime.socketio_server import emit_plan_changed
+    emit_plan_changed(tail.id, "updated")
+    emit_plan_changed(new_plan.id, "created")
+    return ok(_plan_out(new_plan, steps))
 
 
 @router.get("/plans", response_model=ApiResponse[List[PlanOut]])
@@ -564,14 +753,37 @@ def get_plan(
 def update_plan(
     plan_id: int,
     payload: PlanUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    # 行锁:两个浏览器并发 PUT 同一 Plan 时串行化,配合下面的乐观锁令牌,
+    # step 全量 DELETE+INSERT 替换不再出现"后到者覆盖先到者"的静默丢失。
+    # (SQLite 测试环境无 FOR UPDATE 语义,跳过。)
+    if not db.get_bind().dialect.name.startswith("sqlite"):
+        db.execute(text("SELECT id FROM plan WHERE id = :pid FOR UPDATE"), {"pid": plan_id})
+
     plan = db.get(Plan, plan_id)
     steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
         .order_by(PlanStep.stage, PlanStep.sort_order).all()
     _raise_if_hidden_legacy_aee_plan(plan, steps)
     _require_plan_owner_or_admin(plan, current_user)
+
+    # 乐观锁(#281 CR 意见):expected_updated_at 为必填——缺省即拒绝,
+    # 杜绝"旧客户端不带令牌绕过并发防护"的路径。
+    if payload.expected_updated_at is None:
+        raise HTTPException(
+            status_code=422,
+            detail="expected_updated_at is required for plan updates",
+        )
+    expected = payload.expected_updated_at
+    if expected.tzinfo is None:
+        expected = expected.replace(tzinfo=timezone.utc)
+    if plan.updated_at != expected.astimezone(timezone.utc):
+        raise HTTPException(
+            status_code=409,
+            detail="plan was modified by another session; reload and retry",
+        )
 
     if payload.name is not None:
         plan.name = payload.name
@@ -637,10 +849,24 @@ def update_plan(
             plan.barrier_timeout_seconds,
         )
 
+    record_audit(
+        db,
+        action="plan_updated",
+        resource_type="plan",
+        resource_id=plan.id,
+        username=current_user.username,
+        user_id=current_user.id,
+        # 只记字段名不记值:watcher_policy 等可能含敏感配置
+        details={"changed": sorted(payload.model_fields_set - {"expected_updated_at"}), "step_count": len(payload.steps or steps)},
+        request=request,
+    )
+    # 审计与主变更同事务提交(get_db 不自动 commit,#281 CR 意见)
     db.commit()
     db.refresh(plan)
     steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
         .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    from backend.realtime.socketio_server import emit_plan_changed
+    emit_plan_changed(plan.id, "updated")
     return ok(_plan_out(plan, steps))
 
 
@@ -687,8 +913,10 @@ def _assert_plan_deletable(db: Session, plan_id: int) -> None:
 @router.delete("/plans/{plan_id}", response_model=ApiResponse[dict])
 def delete_plan(
     plan_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    expected_updated_at: Optional[datetime] = Query(default=None),
 ):
     plan = db.get(Plan, plan_id)
     steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
@@ -697,6 +925,31 @@ def delete_plan(
     _require_plan_owner_or_admin(plan, current_user)
     _assert_plan_deletable(db, plan_id)
 
+    # 删除乐观锁(#281 P2):与 update 的 expected_updated_at 对称——旧页面
+    # 不能删除已被其他客户端修改的 Plan。令牌可省略(兼容旧客户端),携带
+    # 且不匹配时 409。
+    if expected_updated_at is not None:
+        expected = expected_updated_at
+        if expected.tzinfo is None:
+            expected = expected.replace(tzinfo=timezone.utc)
+        if plan.updated_at != expected.astimezone(timezone.utc):
+            raise HTTPException(
+                status_code=409,
+                detail="plan was modified by another session; reload and retry",
+            )
+
+    plan_name = plan.name
+
+    record_audit(
+        db,
+        action="plan_deleted",
+        resource_type="plan",
+        resource_id=plan_id,
+        username=current_user.username,
+        user_id=current_user.id,
+        details={"name": plan_name},
+        request=request,
+    )
     try:
         db.delete(plan)
         db.commit()
@@ -707,6 +960,8 @@ def delete_plan(
             status_code=409,
             detail="cannot delete plan while related records still exist",
         ) from None
+    from backend.realtime.socketio_server import emit_plan_changed
+    emit_plan_changed(plan_id, "deleted")
     return ok({"deleted": plan_id})
 
 

@@ -2,13 +2,14 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, require_admin
+from backend.core.audit import record_audit
 from backend.core.database import get_db
-from backend.core.security import get_password_hash, verify_password
+from backend.core.security import PasswordStr, get_password_hash, verify_password
 from backend.models.user import User as UserModel
 from backend.api.schemas import PaginatedResponse
 
@@ -17,13 +18,14 @@ router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
 class UserCreate(BaseModel):
     username: str
-    password: str
+    # PasswordStr:8–128 字符且 ≤72 UTF-8 字节(bcrypt 硬限制,#281 CR Major)
+    password: PasswordStr
     role: str = "user"
 
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[PasswordStr] = None
     role: Optional[str] = None
     is_active: Optional[str] = None
 
@@ -41,7 +43,7 @@ class UserOut(BaseModel):
 
 class PasswordChange(BaseModel):
     old_password: str
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: PasswordStr
 
 
 @router.get("", response_model=PaginatedResponse)
@@ -75,6 +77,7 @@ def get_user(
 @router.post("", response_model=UserOut)
 def create_user(
     payload: UserCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(require_admin),
 ):
@@ -98,8 +101,21 @@ def create_user(
         role=payload.role,
     )
     db.add(user)
-    db.commit()
+    db.flush()
     db.refresh(user)
+    record_audit(
+        db,
+        action="user_created",
+        resource_type="user",
+        resource_id=user.id,
+        # 审计主体 = 操作者;被操作对象在 resource_id/details
+        username=current_user.username,
+        user_id=current_user.id,
+        details={"target": user.username, "role": payload.role},
+        request=request,
+    )
+    # 审计与主变更同事务提交(get_db 不自动 commit,#281 CR 意见)
+    db.commit()
     return user
 
 
@@ -107,6 +123,7 @@ def create_user(
 def update_user(
     user_id: int,
     payload: UserUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(require_admin),
 ):
@@ -144,6 +161,20 @@ def update_user(
             )
         user.is_active = payload.is_active
 
+    record_audit(
+        db,
+        action="user_updated",
+        resource_type="user",
+        resource_id=user.id,
+        # 审计主体 = 操作者
+        username=current_user.username,
+        user_id=current_user.id,
+        # 只记字段名不记值:密码/角色变更的值不落审计(防明文泄漏),
+        # 但 password 字段名必须保留在 changed 里——否则仅改密时 changed
+        # 为空数组,无法证明密码发生过变更(#281 P2)。
+        details={"target": user.username, "changed": sorted(k for k, v in payload.model_dump(exclude_none=True).items())},
+        request=request,
+    )
     db.commit()
     db.refresh(user)
     return user
@@ -152,6 +183,7 @@ def update_user(
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(require_admin),
 ):
@@ -166,6 +198,17 @@ def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    record_audit(
+        db,
+        action="user_deleted",
+        resource_type="user",
+        resource_id=user_id,
+        # 审计主体 = 操作者
+        username=current_user.username,
+        user_id=current_user.id,
+        details={"target": user.username},
+        request=request,
+    )
     db.delete(user)
     db.commit()
     return None
@@ -174,6 +217,7 @@ def delete_user(
 @router.post("/{user_id}/toggle-active", response_model=UserOut)
 def toggle_user_active(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(require_admin),
 ):
@@ -189,6 +233,17 @@ def toggle_user_active(
         raise HTTPException(status_code=404, detail="User not found")
 
     user.is_active = "N" if user.is_active == "Y" else "Y"
+    record_audit(
+        db,
+        action="user_active_toggled",
+        resource_type="user",
+        resource_id=user.id,
+        # 审计主体 = 操作者
+        username=current_user.username,
+        user_id=current_user.id,
+        details={"target": user.username, "is_active": user.is_active},
+        request=request,
+    )
     db.commit()
     db.refresh(user)
     return user
@@ -197,17 +252,40 @@ def toggle_user_active(
 @router.post("/change-password", response_model=UserOut)
 def change_password(
     payload: PasswordChange,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user),
 ):
     """Change current user's password."""
     if not verify_password(payload.old_password, current_user.hashed_password):
+        record_audit(
+            db,
+            action="change_password_failed",
+            resource_type="user",
+            resource_id=current_user.id,
+            username=current_user.username,
+            user_id=current_user.id,
+            details={"reason": "incorrect_old_password"},
+            request=request,
+        )
+        # 失败审计独立落库(#281 P1):get_db 不自动 commit,此处若
+        # 不提交,审计行会随异常抛出后的会话关闭整体回滚。
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect old password",
         )
 
     current_user.hashed_password = get_password_hash(payload.new_password)
+    record_audit(
+        db,
+        action="change_password",
+        resource_type="user",
+        resource_id=current_user.id,
+        username=current_user.username,
+        user_id=current_user.id,
+        request=request,
+    )
     db.commit()
     db.refresh(current_user)
     return current_user

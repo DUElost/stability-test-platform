@@ -690,7 +690,7 @@ Watcher 路径 B（Reconciler / inotifyd）
 
 **具体后果**：
 - `collect_upload_event_dir_names`（[`dedup_extract.py:117`](../../backend/services/dedup_extract.py)）用 **union(JobLogSignal 路径名 ∪ 解析 scan xls Path 列)** 拼凑事件列表——两个源各自有缺口：JobLogSignal 只有 Reconciler 发射的（inotifyd 兜底的 `extra=NULL`，永远无法通过文件名上送）；scan xls 只有扫描时 HDD 上还存在的目录（被 HddSpill 移走的扫不到）
-- `find_event_dir_under_root`（[`event_dirs.py:52`](../../backend/agent/event_dirs.py)）遍历目录树取**字典序第一个匹配**——两台设备产生同名事件目录时，第二台被静默跳过
+- `find_event_dir_under_root`（[`event_dirs.py:52`](../../backend/agent/aee/event_dirs.py)）遍历目录树取**字典序第一个匹配**——两台设备产生同名事件目录时，第二台被静默跳过
 - same-named dirs 在 `devices/{plan_run_id}/{dirname}` 扁平布局下**必然碰撞**——因为没有按 serial 组织
 
 ### 根因 2：设备日志生命周期绑定 PlanRun 生命周期 —— 日志的命运不取决于自己

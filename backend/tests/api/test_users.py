@@ -24,21 +24,40 @@ class TestCreateUser:
     def test_create_user(self, client, admin_headers):
         response = client.post(
             "/api/v1/users",
-            json={"username": "newuser", "password": "pass123", "role": "user"},
+            json={"username": "newuser", "password": "pass12345", "role": "user"},
             headers=admin_headers,
         )
         assert response.status_code == 200
         assert response.json()["username"] == "newuser"
 
+    def test_create_user_rejects_short_password(self, client, admin_headers):
+        """#281 P1:密码最低长度已改为 8,6 位密码必须 422。"""
+        response = client.post(
+            "/api/v1/users",
+            json={"username": "shortpw", "password": "pass123", "role": "user"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+
+    def test_create_user_rejects_password_over_72_bytes(self, client, admin_headers):
+        """#281 CR Major:bcrypt 只使用前 72 字节——多字节字符密码不得被
+        静默截断(19 个 4 字节 emoji = 76 字节 > 72,必须 422)。"""
+        response = client.post(
+            "/api/v1/users",
+            json={"username": "bytepw", "password": "😀" * 19, "role": "user"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 422
+
     def test_create_user_duplicate(self, client, admin_headers):
-        client.post("/api/v1/users", json={"username": "dup", "password": "pass123", "role": "user"}, headers=admin_headers)
-        resp = client.post("/api/v1/users", json={"username": "dup", "password": "pass123", "role": "user"}, headers=admin_headers)
+        client.post("/api/v1/users", json={"username": "dup", "password": "pass12345", "role": "user"}, headers=admin_headers)
+        resp = client.post("/api/v1/users", json={"username": "dup", "password": "pass12345", "role": "user"}, headers=admin_headers)
         assert resp.status_code == 400
 
 
 class TestToggleActive:
     def test_toggle_active(self, client, admin_headers):
-        r = client.post("/api/v1/users", json={"username": "toggle", "password": "pass123", "role": "user"}, headers=admin_headers)
+        r = client.post("/api/v1/users", json={"username": "toggle", "password": "pass12345", "role": "user"}, headers=admin_headers)
         uid = r.json()["id"]
         resp = client.post(f"/api/v1/users/{uid}/toggle-active", headers=admin_headers)
         assert resp.status_code == 200

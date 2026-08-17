@@ -3,7 +3,7 @@
 > 生成日期：2026-06-12（初版）| 修订日期：2026-06-13
 > 评估范围：`F:/stability-test-platform` 全仓库只读分析
 > 评估维度：能力边界 / 可观测性 / 易用性 / 准确性 / 自稳定性
-> 关联文档（已归档）：[生产就绪评估](./archive/assessments/production-readiness-assessment-2026-05-23.md)、[项目健康度与剩余工作](./archive/assessments/project-health-and-remaining-work-2026-05.md)、[主链路脆弱性分析](./archive/assessments/main-chain-fragility-analysis-2026-05-23.md)
+> 关联文档（已归档）：[生产就绪评估](production-readiness-assessment-2026-05-23.md)、[项目健康度与剩余工作](project-health-and-remaining-work-2026-05.md)、[主链路脆弱性分析](main-chain-fragility-analysis-2026-05-23.md)
 
 ### 修订说明（2026-06-13）
 
@@ -299,9 +299,9 @@ Phase 4c (Sprint 3, 2-3 天) →  控制平面拉取优化 + 前端归档状态�
 
 | 文档 | 本报告定位 |
 |------|-----------|
-| [生产就绪评估](./archive/assessments/production-readiness-assessment-2026-05-23.md) | 本报告 §4 准确性中 B1/B4 为新发现；R1/R2 在该文档中标为 P0，但代码已实现（Nginx 反代 + 读 API 鉴权），该文档该两条已过时 |
-| [项目健康度与剩余工作](./archive/assessments/project-health-and-remaining-work-2026-05.md) | 本报告 §5 自稳定性与该文档 §2 加固摘要对齐，§6 风险表与该文档 §4 待办清单互补 |
-| [主链路脆弱性分析](./archive/assessments/main-chain-fragility-analysis-2026-05-23.md) | 本报告 §7 交叉分析为该文档脆弱点提供维度化归因 |
+| [生产就绪评估](production-readiness-assessment-2026-05-23.md) | 本报告 §4 准确性中 B1/B4 为新发现；R1/R2 在该文档中标为 P0，但代码已实现（Nginx 反代 + 读 API 鉴权），该文档该两条已过时 |
+| [项目健康度与剩余工作](project-health-and-remaining-work-2026-05.md) | 本报告 §5 自稳定性与该文档 §2 加固摘要对齐，§6 风险表与该文档 §4 待办清单互补 |
+| [主链路脆弱性分析](main-chain-fragility-analysis-2026-05-23.md) | 本报告 §7 交叉分析为该文档脆弱点提供维度化归因 |
 | [主链路剩余工作实施计划](./main-chain-remaining-work-implementation-plan-2026-05-25.md) | 本报告 §8 修复路径与该文档 Phase A/B/C 排期对齐 |
 
 ---

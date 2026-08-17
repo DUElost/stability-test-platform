@@ -1,6 +1,6 @@
 # ADR-0018 实施计划：基础设施层框架引入
 
-**关联决策**：[ADR-0018](adr/ADR-0018-infrastructure-layer-framework-adoption.md)  
+**关联决策**：[ADR-0018](../../adr/ADR-0018-infrastructure-layer-framework-adoption.md)  
 **预估总工期**：10-12 工作日  
 **创建日期**：2026-04-08
 

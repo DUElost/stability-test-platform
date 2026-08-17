@@ -63,7 +63,7 @@ from backend.core.csrf import CSRFOriginMiddleware, is_csrf_enabled
 from backend.core.database import async_engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
-from backend.core.security import validate_production_auth_cookie_settings
+from backend.core.security import is_production_like_env, validate_production_auth_cookie_settings
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.state_machine import InvalidTransitionError
 from backend.scheduler.app_scheduler import create_scheduler, register_schedules
@@ -153,7 +153,7 @@ async def lifespan(app: FastAPI):
         ENABLE_INPROCESS_SAQ = os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1"
         skip_infra = (
             os.getenv("STP_SKIP_INFRA_CHECK", "0") == "1"
-            and os.getenv("ENV", "").strip().lower() != "production"
+            and not is_production_like_env()
         )
         if skip_infra:
             logger.warning(

@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { clearAppQueryCache } from '@/components/QueryProvider';
 import { useSocketIO, disconnectDashSocket } from '@/hooks/useSocketIO';
+import { useCrossClientSync } from '@/hooks/useCrossClientSync';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { UserMenu } from '@/components/ui/UserMenu';
@@ -27,6 +28,7 @@ export default function AppShell() {
   const currentUser = sessionQ.data;
   const { isConnected: dashConnected } = useSocketIO(WS_DASHBOARD_ENDPOINT);
   const { headerSlot } = useHeaderSlot();
+  useCrossClientSync();
 
   useEffect(() => {
     const checkMobile = () => {

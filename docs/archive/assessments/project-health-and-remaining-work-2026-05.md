@@ -1,7 +1,7 @@
 # 稳定性测试平台 — 项目健康度与剩余工作（整合说明）
 
 > 生成日期：2026-05-27  
-> 整合来源：[`main-chain-fragility-analysis-2026-05-23.md`](./main-chain-fragility-analysis-2026-05-23.md)、[`production-readiness-assessment-2026-05-23.md`](./production-readiness-assessment-2026-05-23.md)、[`main-chain-remaining-work-implementation-plan-2026-05-25.md`](./main-chain-remaining-work-implementation-plan-2026-05-25.md)、[`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md)  
+> 整合来源：[`main-chain-fragility-analysis-2026-05-23.md`](./main-chain-fragility-analysis-2026-05-23.md)、[`production-readiness-assessment-2026-05-23.md`](./production-readiness-assessment-2026-05-23.md)、[`main-chain-remaining-work-implementation-plan-2026-05-25.md`](./main-chain-remaining-work-implementation-plan-2026-05-25.md)、[`production-minimum-deployment-checklist.md`](../../production-minimum-deployment-checklist.md)  
 > 代码基线：主链路代码状态以 `10678ed`（Phase A）→ `2fde526`（Phase B）为准；本文整合说明提交为 `333ce147`
 
 ---
@@ -34,7 +34,7 @@
 - **安全（ADR-0024）**：HttpOnly Cookie + CSRF + refresh 黑名单；生产 Cookie guard；默认关闭公开注册（`STP_ALLOW_REGISTER`）；`/metrics` 可选 Bearer/Agent-Secret
 - **测试与 CI**：`test_main_chain_happy_path.py`、SAQ 503、PENDING timeout + SocketIO、Plan 链 E2E；`ci.yml` 的 `Main-chain integration smoke` 步骤；可选 `smoke-nightly.yml`
 - **可观测草案**：dispatch gate / precheck / patrol / CSRF / outbox 等指标；`deploy/prometheus/alerts-stability-platform.yml`（待运维部署生效）
-- **文档**：[`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md) §5 smoke、[`preprod-drill-runbook.md`](./preprod-drill-runbook.md) §4.0、README 生产要点
+- **文档**：[`production-minimum-deployment-checklist.md`](../../production-minimum-deployment-checklist.md) §5 smoke、[`preprod-drill-runbook.md`](../../preprod-drill-runbook.md) §4.0、README 生产要点
 
 ---
 
@@ -99,9 +99,9 @@
 
 | ID | 任务 | 类型 | 状态 |
 |----|------|------|------|
-| P0-O1 | 生产执行 [`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md) 全项（Nginx `/socket.io/`、`VITE_API_BASE_URL=`、HTTPS、Cookie env、Redis、单实例） | ops | ⬜ 须签字 |
+| P0-O1 | 生产执行 [`production-minimum-deployment-checklist.md`](../../production-minimum-deployment-checklist.md) 全项（Nginx `/socket.io/`、`VITE_API_BASE_URL=`、HTTPS、Cookie env、Redis、单实例） | ops | ⬜ 须签字 |
 | P0-O2 | `alembic upgrade head`（含 `revoked_refresh_token`） | ops | 模板已有 |
-| P0-O3 | 预发布真实设备 smoke：[`preprod-drill-runbook.md`](./preprod-drill-runbook.md) §4.0 + `seed_and_smoke.py` 签字表归档 | ops | CI 不代替 |
+| P0-O3 | 预发布真实设备 smoke：[`preprod-drill-runbook.md`](../../preprod-drill-runbook.md) §4.0 + `seed_and_smoke.py` 签字表归档 | ops | CI 不代替 |
 | P0-O4 | `JWT_SECRET_KEY` / `AGENT_SECRET` / `CORS_ORIGINS` 生产强配置 | ops | guard 已有 |
 | P0-C1 | 公网：读 API 全量鉴权或 Nginx IP 白名单 | code+ops | 部分（plan-runs 等已加固） |
 | P0-C2 | 公网：关闭或门控 `POST /auth/register` | code | ✅ 默认门控 env |
@@ -202,8 +202,8 @@ flowchart LR
 | [main-chain-fragility-analysis-2026-05-23.md](./main-chain-fragility-analysis-2026-05-23.md) | 脆弱点清单、P0/P1 原文、测试缺口 |
 | [main-chain-remaining-work-implementation-plan-2026-05-25.md](./main-chain-remaining-work-implementation-plan-2026-05-25.md) | U1–U18 任务卡、Phase A/B/C 排期 |
 | [production-readiness-assessment-2026-05-23.md](./production-readiness-assessment-2026-05-23.md) | 安全/运维 P0 全表、鉴权缺口 |
-| [production-minimum-deployment-checklist.md](./production-minimum-deployment-checklist.md) | 生产最小部署与 smoke |
-| [preprod-drill-runbook.md](./preprod-drill-runbook.md) | 预发布逐条验收 |
+| [production-minimum-deployment-checklist.md](../../production-minimum-deployment-checklist.md) | 生产最小部署与 smoke |
+| [preprod-drill-runbook.md](../../preprod-drill-runbook.md) | 预发布逐条验收 |
 
 ---
 

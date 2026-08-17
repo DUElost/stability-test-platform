@@ -27,7 +27,20 @@ from backend.core.security import ACCESS_COOKIE_NAME, extract_cookie_token
 
 logger = logging.getLogger(__name__)
 
-_WS_TOKEN = os.getenv("WS_TOKEN", "dev-token-12345")
+def _ws_token() -> str:
+    return os.getenv("WS_TOKEN", "")
+
+
+def _ws_token_configured() -> bool:
+    """静态口令旁路是否「显式配置」。
+
+    #281 二轮:源码默认值 ``dev-token-12345`` 不算已配置——未显式设置
+    WS_TOKEN 时共享静态口令不再被接受(否则任何部署都有一把公开的
+    万能口令,是护栏旁路)。显式设置(自定义值)才放行,生产部署须自行
+    配置(.env.backend 已配置独立值)。
+    """
+    value = _ws_token()
+    return bool(value) and value != "dev-token-12345"
 
 _sio: Optional[socketio.AsyncServer] = None
 _agent_ns: Optional["AgentNamespace"] = None
@@ -299,12 +312,16 @@ class DashboardNamespace(socketio.AsyncNamespace):
         if not token:
             token = extract_cookie_token(environ.get("HTTP_COOKIE"), ACCESS_COOKIE_NAME) or ""
 
-        if os.getenv("ENV", "").lower() == "production" and not token:
+        # 除 TESTING=1 外始终要求有效认证(#281 P0):此前仅 ENV=production
+        # 拒绝匿名连接,而生产部署实际跑 ENV=internal(.env.backend),护栏
+        # 从未生效——无 token 握手即可接入 /dashboard。TESTING=1 下保留
+        # 匿名直连供测试套件使用。
+        if os.getenv("TESTING") != "1" and not token:
             raise socketio.exceptions.ConnectionRefusedError("Authentication required")
 
         if token:
-            if token == _WS_TOKEN:
-                pass  # dev token accepted
+            if _ws_token_configured() and token == _ws_token():
+                pass  # 显式配置的静态口令(#281 二轮:源码默认值不算已配置)
             else:
                 try:
                     from backend.core.security import decode_token
@@ -602,6 +619,16 @@ def schedule_emit(event: str, data: Dict[str, Any], namespace: str = "/dashboard
         return
     coro = sio.emit(event, data, namespace=namespace, room=room)
     asyncio.run_coroutine_threadsafe(coro, _main_loop)
+
+
+def emit_plan_changed(plan_id: int, action: str) -> None:
+    """Sync-safe:任一浏览器创建/更新/删除 Plan 后广播 plan_changed,
+    其余端据此失效计划缓存(#268 多Worker B2——此前 Plan 编辑跨端陈旧最长 60s+)。"""
+    schedule_emit("plan_changed", {
+        "type": "PLAN_CHANGED",
+        "payload": {"plan_id": plan_id, "action": action},
+        "timestamp": _now_iso(),
+    })
 
 
 async def emit_agent_control(host_id: str, command: str, *, payload: Optional[Dict[str, Any]] = None) -> None:

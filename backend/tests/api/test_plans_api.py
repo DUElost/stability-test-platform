@@ -98,6 +98,7 @@ class TestPlanCRUD:
 
         update = client.put(f"/api/v1/plans/{plan_id}", json={
             "name": f"{name}_updated",
+            "expected_updated_at": create.json()["data"]["updated_at"],
             "steps": [
                 {"step_key": "new_step", "script_name": "check_device",
                  "script_version": "1.0.0", "stage": "init", "sort_order": 0,
@@ -109,6 +110,35 @@ class TestPlanCRUD:
         assert updated["name"] == f"{name}_updated"
         assert len(updated["steps"]) == 1
         assert updated["steps"][0]["step_key"] == "new_step"
+
+    def test_update_plan_optimistic_lock_409(self, client, auth_headers, sample_script):
+        """#268 多Worker B3:携带过期 expected_updated_at 的保存必须 409。"""
+        name = _uniq("plan")
+        create = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan = create.json()["data"]
+        plan_id = plan["id"]
+        loaded_at = plan["updated_at"]
+
+        # 先做一次合法更新,把 updated_at 推走
+        first = client.put(f"/api/v1/plans/{plan_id}", json={
+            "name": f"{name}_v1", "expected_updated_at": loaded_at,
+        }, headers=auth_headers)
+        assert first.status_code == 200
+        stale = client.put(f"/api/v1/plans/{plan_id}", json={
+            "name": f"{name}_v2", "expected_updated_at": loaded_at,
+        }, headers=auth_headers)
+        assert stale.status_code == 409
+        assert "modified by another session" in stale.json()["detail"]
+
+        # 用最新 updated_at 可正常保存
+        fresh_at = first.json()["data"]["updated_at"]
+        ok_resp = client.put(f"/api/v1/plans/{plan_id}", json={
+            "name": f"{name}_v2", "expected_updated_at": fresh_at,
+        }, headers=auth_headers)
+        assert ok_resp.status_code == 200
+        assert ok_resp.json()["data"]["name"] == f"{name}_v2"
 
     def test_delete_plan(self, client, auth_headers, sample_script):
         name = _uniq("plan")
@@ -183,6 +213,33 @@ class TestPlanCRUD:
         get_resp = client.get(f"/api/v1/plans/{plan_id}", headers=auth_headers)
         assert get_resp.status_code == 200
 
+    def test_delete_plan_with_stale_version_returns_409(self, client, auth_headers, sample_script):
+        """#281 P2:删除支持 expected_updated_at 版本校验——旧页面不能删除
+        已被其他客户端修改的 Plan;令牌可省略(兼容旧客户端)。"""
+        name = _uniq("plan_ver")
+        create = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        stale = client.delete(
+            f"/api/v1/plans/{plan_id}",
+            params={"expected_updated_at": "2000-01-01T00:00:00Z"},
+            headers=auth_headers,
+        )
+        assert stale.status_code == 409, stale.text
+
+        get_resp = client.get(f"/api/v1/plans/{plan_id}", headers=auth_headers)
+        assert get_resp.status_code == 200  # 版本冲突不删除
+
+        fresh = create.json()["data"]["updated_at"]
+        ok = client.delete(
+            f"/api/v1/plans/{plan_id}",
+            params={"expected_updated_at": fresh},
+            headers=auth_headers,
+        )
+        assert ok.status_code == 200, ok.text
+
     def test_update_plan_rejected_for_non_owner(self, client, auth_headers, sample_script):
         # 审计 #8: plans.py update/delete 必须拒绝非 owner 非 admin。
         from backend.core.security import create_access_token
@@ -228,6 +285,7 @@ class TestPlanCRUD:
 
         update = client.put(f"/api/v1/plans/{plan_id}", json={
             "name": f"{name}_admin_renamed",
+            "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=admin_headers)
         assert update.status_code == 200, update.text
 
@@ -255,6 +313,7 @@ class TestPlanCRUD:
         plan_id = create.json()["data"]["id"]
         resp = client.put(f"/api/v1/plans/{plan_id}", json={
             "next_plan_id": plan_id,
+            "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
         assert resp.status_code == 422
 
@@ -337,6 +396,7 @@ class TestPlanCRUD:
 
         resp = client.put(f"/api/v1/plans/{plan_id}", json={
             "next_plan_id": legacy_plan_id,
+            "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
 
         assert resp.status_code == 404, resp.text
@@ -391,6 +451,7 @@ class TestPlanCRUD:
                  "script_version": "1.0.0", "stage": "teardown", "sort_order": 0,
                  "timeout_seconds": 30},
             ],
+            "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
 
         assert resp.status_code == 422, resp.text
@@ -398,6 +459,244 @@ class TestPlanCRUD:
             "code": "LEGACY_AEE_SCRIPTS_DISABLED",
             "scripts": ["export_mobilelogs:1.0.0"],
         }
+
+
+class TestAppendChainTail:
+    """#281 P1:原子链尾追加——单事务内锁定链尾、校验版本、创建新 Plan、
+    更新 next_plan_id;冲突整体回滚,不产生孤立 Plan。"""
+
+    def _create_plan(self, client, auth_headers) -> dict:
+        name = _uniq("chain")
+        resp = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        return resp.json()["data"]
+
+    def _link(self, client, auth_headers, head: dict, tail: dict) -> None:
+        resp = client.put(f"/api/v1/plans/{head['id']}", json={
+            "next_plan_id": tail["id"],
+            "expected_updated_at": head["updated_at"],
+        }, headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+
+    def test_append_links_tail_and_returns_new_plan(self, client, auth_headers, sample_script):
+        head = self._create_plan(client, auth_headers)
+        tail = self._create_plan(client, auth_headers)
+        self._link(client, auth_headers, head, tail)
+
+        resp = client.post(
+            f"/api/v1/plans/{head['id']}/append-chain-tail",
+            json={
+                "name": _uniq("newtail"), "steps": _minimal_steps(),
+                "expected_updated_at": tail["updated_at"],
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 201, resp.text
+        new_plan = resp.json()["data"]
+        assert new_plan["next_plan_id"] is None
+
+        fresh_tail = client.get(f"/api/v1/plans/{tail['id']}", headers=auth_headers).json()["data"]
+        assert fresh_tail["next_plan_id"] == new_plan["id"]
+        # 中间节点不被改动
+        fresh_head = client.get(f"/api/v1/plans/{head['id']}", headers=auth_headers).json()["data"]
+        assert fresh_head["next_plan_id"] == tail["id"]
+
+    def test_append_walks_to_real_tail_beyond_anchor(self, client, auth_headers, sample_script):
+        """从链中间追加时,新 Plan 接在真正链尾之后,而不是接在锚点之后。"""
+        anchor = self._create_plan(client, auth_headers)
+        tail = self._create_plan(client, auth_headers)
+        self._link(client, auth_headers, anchor, tail)
+
+        resp = client.post(
+            f"/api/v1/plans/{anchor['id']}/append-chain-tail",
+            json={"name": _uniq("real_tail"), "steps": _minimal_steps()},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 201, resp.text
+        new_plan = resp.json()["data"]
+
+        fresh_tail = client.get(f"/api/v1/plans/{tail['id']}", headers=auth_headers).json()["data"]
+        assert fresh_tail["next_plan_id"] == new_plan["id"]
+        fresh_anchor = client.get(f"/api/v1/plans/{anchor['id']}", headers=auth_headers).json()["data"]
+        assert fresh_anchor["next_plan_id"] == tail["id"]
+
+    def test_append_stale_token_409_rolls_back_entirely(self, client, auth_headers, sample_script):
+        """版本令牌过期 → 409 且整体回滚:新 Plan 不落库(不再产生孤立 Plan)。"""
+        head = self._create_plan(client, auth_headers)
+
+        resp = client.post(
+            f"/api/v1/plans/{head['id']}/append-chain-tail",
+            json={
+                "name": _uniq("orphan"), "steps": _minimal_steps(),
+                "expected_updated_at": "2000-01-01T00:00:00Z",
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 409, resp.text
+
+        plans = client.get("/api/v1/plans?skip=0&limit=200", headers=auth_headers).json()["data"]
+        assert not any(p["name"].startswith("orphan_") for p in plans)
+        fresh_head = client.get(f"/api/v1/plans/{head['id']}", headers=auth_headers).json()["data"]
+        assert fresh_head["next_plan_id"] is None
+
+    def test_append_missing_plan_404(self, client, auth_headers):
+        resp = client.post(
+            "/api/v1/plans/999999/append-chain-tail",
+            json={"name": _uniq("ghost"), "steps": _minimal_steps()},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404, resp.text
+
+
+class TestAppendChainTailConcurrent:
+    """#281 二轮 P1:并发链尾追加(仅 PostgreSQL 有意义——SQLite 跳过
+    FOR UPDATE,单线程也测不到锁后重读路径)。
+
+    复现场景:两个客户端同时读到同一条旧链尾;先到者加锁、创建新 Plan、
+    提交;后到者拿到锁后若仍信任加锁前的 updated_at,乐观锁会误判通过,
+    把先到者刚连上的新 Plan 覆盖成孤立记录。
+    """
+
+    def _setup_head(self, db_session) -> tuple[Plan, int]:
+        """创建链首 Plan 与真实 admin 用户(审计 user_id 有 FK,不能伪造)。"""
+        from backend.models.user import User as UserModel
+
+        admin = UserModel(
+            username=_uniq("conc_admin"), hashed_password="unused",
+            role="admin", is_active="Y",
+        )
+        plan = Plan(name=_uniq("conc_head"))
+        db_session.add_all([admin, plan])
+        db_session.commit()
+        db_session.refresh(plan)
+        return plan, admin.id
+
+    @staticmethod
+    def _admin_user(admin_id: int):
+        from backend.models.user import User
+
+        return User(id=admin_id, username="conc-admin", role="admin", is_active="Y")
+
+    @classmethod
+    def _append(cls, anchor_id: int, token, name: str, admin_id: int) -> tuple[int, object]:
+        from backend.api.routes.plans import PlanChainTailCreate, append_chain_tail
+
+        db = SessionLocal()
+        try:
+            result = append_chain_tail(
+                anchor_id,
+                PlanChainTailCreate(
+                    name=name, steps=_minimal_steps(), expected_updated_at=token,
+                ),
+                request=None,
+                db=db,
+                current_user=cls._admin_user(admin_id),
+            )
+            db.commit()
+            return 201, result
+        except HTTPException as exc:
+            db.rollback()
+            return exc.status_code, None
+        finally:
+            db.close()
+
+    @staticmethod
+    def _chain_ids(db_session, head_id: int) -> list[int]:
+        """沿 next_plan_id 收集整条链(带环保护)。"""
+        ids: list[int] = []
+        seen: set[int] = set()
+        cur = db_session.get(Plan, head_id)
+        while cur is not None and cur.id not in seen:
+            seen.add(cur.id)
+            ids.append(cur.id)
+            if cur.next_plan_id is None:
+                break
+            nxt = db_session.get(Plan, cur.next_plan_id)
+            if nxt is None:
+                break
+            cur = nxt
+        return ids
+
+    def test_concurrent_append_stale_token_one_409_no_orphan(
+        self, db_session, sample_script,
+    ):
+        """两个客户端持同一份旧令牌并发追加:一个 201、一个 409;
+        失败方整体回滚,链上无孤立节点。"""
+        head, admin_id = self._setup_head(db_session)
+        token = head.updated_at
+        barrier = threading.Barrier(2)
+        outcomes: list[tuple[int, str]] = []
+        errors: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                barrier.wait(timeout=5)
+                name = _uniq("conc_stale")
+                status, _ = self._append(head.id, token, name, admin_id)
+                outcomes.append((status, name))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=20)
+
+        assert not any(t.is_alive() for t in threads)
+        assert errors == []
+        statuses = sorted(s for s, _ in outcomes)
+        assert statuses == [201, 409], outcomes
+
+        loser = next(name for s, name in outcomes if s == 409)
+        winner = next(name for s, name in outcomes if s == 201)
+        db_session.expire_all()
+        # 只有赢家落库(失败方整体回滚),链 = head → 唯一新 Plan,无孤立
+        assert db_session.query(Plan).filter(Plan.name == loser).count() == 0
+        chain = self._chain_ids(db_session, head.id)
+        assert len(chain) == 2
+        winner_id = db_session.query(Plan).filter(Plan.name == winner).one().id
+        assert chain[1] == winner_id
+
+    def test_concurrent_append_without_token_both_land_no_orphan(
+        self, db_session, sample_script,
+    ):
+        """省略令牌(前端链尾超窗的正式行为)并发追加:两个都成功且按序
+        连在真实链尾之后,不覆盖、不产生孤立 Plan。"""
+        head, admin_id = self._setup_head(db_session)
+        barrier = threading.Barrier(2)
+        outcomes: list[tuple[int, str]] = []
+        errors: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                barrier.wait(timeout=5)
+                name = _uniq("conc_notoken")
+                status, _ = self._append(head.id, None, name, admin_id)
+                outcomes.append((status, name))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=20)
+
+        assert not any(t.is_alive() for t in threads)
+        assert errors == []
+        assert sorted(s for s, _ in outcomes) == [201, 201], outcomes
+
+        db_session.expire_all()
+        chain = self._chain_ids(db_session, head.id)
+        assert len(chain) == 3  # head + 两个新 Plan,全部可达
+        created = {
+            p.id for p in db_session.query(Plan).filter(Plan.name.like("conc_notoken%")).all()
+        }
+        assert len(created) == 2
+        assert set(chain[1:]) == created  # 两个新 Plan 都在链上,无孤立
 
 
 class TestPlanDispatch:
@@ -811,6 +1110,7 @@ class TestStallRequiresProgressScript:
         steps[0]["stall_seconds"] = 120
         resp = client.put(f"/api/v1/plans/{plan_id}", json={
             "steps": steps,
+            "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
         assert resp.status_code == 422, resp.text
         assert resp.json()["detail"]["code"] == "STALL_REQUIRES_PROGRESS_SCRIPT"
