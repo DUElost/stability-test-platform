@@ -26,6 +26,21 @@ from backend.core.metrics import record_saq_task
 
 logger = logging.getLogger(__name__)
 
+
+class ControlPlaneWorker(Worker):
+    """控制面专用 SAQ Worker:不接管 SIGINT/SIGTERM。
+
+    停机排查(2026-08-17)根因:saq.Worker 启动时对 SIGINT/SIGTERM 执行
+    ``loop.add_signal_handler``,会**覆盖同进程 uvicorn 的 signal.signal
+    处理器**——生产(STP_ENABLE_INPROCESS_SAQ=1)下 systemd SIGTERM 只
+    触发 SAQ 停止事件,uvicorn 的 should_exit 永远不被设置,进程无限服务
+    直到 systemd 90s 后 SIGKILL(日志里从未出现 "Shutting down",停机
+    窗口内心跳仍返回 200)。本类清空 SIGNALS:停机信号所有权归 uvicorn;
+    SAQ 的优雅停止由 lifespan 收尾的 ``stop_saq_worker()`` 负责。
+    """
+
+    SIGNALS = []
+
 _SAQ_JOB_START_KEY = "_saq_metric_start"
 
 _queue: Optional[Queue] = None
@@ -185,7 +200,7 @@ async def start_saq_worker() -> None:
 
     await init_saq_producer()
 
-    _worker = Worker(
+    _worker = ControlPlaneWorker(
         _queue,
         functions=SAQ_FUNCTIONS,
         concurrency=SAQ_CONCURRENCY,
