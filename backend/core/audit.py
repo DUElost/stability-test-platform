@@ -10,9 +10,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.session import object_session
 
+from backend.core.limiter import resolve_client_ip
 from backend.models.audit import AuditLog
 
 logger = logging.getLogger(__name__)
+
+
+def _audit_client_ip(request: Optional[Request]) -> Optional[str]:
+    """审计 IP(#281 CR Major):只读受信任代理边界规范化后的结果。
+
+    直接解析 ``X-Forwarded-For`` 头会被客户端伪造——nginx 的
+    ``$proxy_add_x_forwarded_for`` 会把客户端自带的 XFF 拼在链首,
+    取最左侧即攻击者可控值。复用 limiter 的可信代理解析:对端不可信
+    时完全忽略 XFF;对端可信时从右往左取第一个非可信条目。
+    """
+    if request is None:
+        return None
+    return resolve_client_ip(
+        request.client.host if request.client else None,
+        request.headers.get("X-Forwarded-For"),
+    )
 
 
 def record_audit(
@@ -27,13 +44,7 @@ def record_audit(
     request: Optional[Request] = None,
 ) -> Optional[AuditLog]:
     """Record an audit log entry for a mutation operation."""
-    ip_address = None
-    if request:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            ip_address = forwarded.split(",")[0].strip()
-        elif request.client:
-            ip_address = request.client.host
+    ip_address = _audit_client_ip(request)
 
     # AuditLog.resource_id 是 String(64),需把整型主键(job_id / plan_run_id / ...)
     # 转字符串后再入库;PG 严格类型不会做隐式 int→varchar 转换。
@@ -99,13 +110,7 @@ async def record_audit_async(
     request: Optional[Request] = None,
 ) -> Optional[AuditLog]:
     """Record an audit entry for routes backed by AsyncSession."""
-    ip_address = None
-    if request:
-        forwarded = request.headers.get("X-Forwarded-For")
-        if forwarded:
-            ip_address = forwarded.split(",")[0].strip()
-        elif request.client:
-            ip_address = request.client.host
+    ip_address = _audit_client_ip(request)
 
     resource_id_str = None if resource_id is None else str(resource_id)
     entry = AuditLog(

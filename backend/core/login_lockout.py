@@ -190,6 +190,10 @@ class LoginLockout:
             ok = verify()  # bcrypt 在分片锁内、状态锁外执行
             with self._lock:
                 if not ok:
+                    # 验证可能跨越失败窗口边界(#281 CR Minor):用验证后的
+                    # 时间戳计数并再次 prune,过期失败不参与计数、不误锁。
+                    now = time.time()
+                    self._prune(key, now)
                     self._record_failure_locked(key, now)
                     raise InvalidCredentials()
                 self._state.pop(key, None)

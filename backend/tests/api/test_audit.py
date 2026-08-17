@@ -37,6 +37,19 @@ class TestAuditLogs:
             for item in logs["items"]
         )
 
+    def test_audit_ip_not_spoofable_via_xff(self, client, admin_headers):
+        """#281 CR Major:审计 IP 不得直接采信 X-Forwarded-For 链首
+        (客户端可伪造前置值污染审计来源),必须经可信代理解析。"""
+        resp = client.post(
+            "/api/v1/auth/login",
+            data={"username": "ghost_spoof", "password": "wrongpass123"},
+            headers={"X-Forwarded-For": "9.9.9.9, 1.2.3.4"},
+        )
+        assert resp.status_code == 401
+        logs = client.get("/api/v1/audit-logs", headers=admin_headers).json()
+        entry = next(i for i in logs["items"] if i["action"] == "login_failed")
+        assert entry["ip_address"] != "9.9.9.9"  # 伪造链首不得成为审计 IP
+
     def test_change_password_failed_audit_persists(self, client, admin_headers):
         """#281 P1:改密失败审计同样必须持久化(users.py 失败路径)。"""
         resp = client.post(
