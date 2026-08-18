@@ -160,5 +160,5 @@ frontend/src/
 
 ## 8. 测试
 
-- 76 个测试文件（`*.test.tsx` 49 + `*.test.ts` 27）分布于 `components/`、`pages/`、`utils/`
+- 77 个测试文件（`*.test.tsx` 50 + `*.test.ts` 27）分布于 `components/`、`pages/`、`utils/`
 - 见 [`development/testing.md`](../development/testing.md)
