@@ -26,6 +26,10 @@ interface Props {
 
 const PHASE_SPIN: ReadonlyArray<string> = ['verifying', 'syncing', 'reverifying'];
 
+// dispatchOnly 路径下 gate 是每渲染重建的字面量。hosts 必须指向这个模块级常量，
+// 否则每次都是新的 {}，下面 hostEntries 的 useMemo 在该路径上等于没写。
+const EMPTY_HOSTS: PrecheckState['hosts'] = {};
+
 function shortSha(sha?: string | null): string {
   if (!sha) return '—';
   return sha.length <= 8 ? sha : sha.slice(0, 8) + '…';
@@ -100,7 +104,7 @@ export default function DispatchGateCard({
           : 'verifying',
     started_at: dispatchState?.started_at ?? dispatchState?.enqueued_at ?? '',
     completed_at: dispatchState?.completed_at,
-    hosts: {},
+    hosts: EMPTY_HOSTS,
     final_result: dispatchState?.status === 'failed' ? 'failed' : null,
     errors: dispatchState?.last_error ? [dispatchState.last_error] : [],
   };
