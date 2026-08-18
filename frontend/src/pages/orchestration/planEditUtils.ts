@@ -60,6 +60,10 @@ export function rebuildLifecycleFromPlan(plan: Plan): PipelineDef {
       timeout_seconds: s.timeout_seconds ?? 30,
       retry: s.retry ?? 0,
       enabled: s.enabled !== false,
+      // 编辑器没有停滞钟输入框，但保存是整体替换 PlanStep 行：这里不读回来、
+      // buildStepsForApi 不发回去，打开 Plan 点一次保存就把它清成 NULL。
+      // 只在有值时写键，保持无停滞钟的 Plan 的 snapshot() 结果不变（脏检查依赖它）。
+      ...(s.stall_seconds != null ? { stall_seconds: s.stall_seconds } : {}),
     };
     if (s.stage === 'init') init.push(stepDef);
     else if (s.stage === 'patrol') patrol.push(stepDef);
@@ -92,6 +96,7 @@ export function buildStepsForApi(lifecycle: PipelineDef): PlanStepCreate[] {
         stage: phase,
         sort_order: i,
         timeout_seconds: s.timeout_seconds ?? null,
+        stall_seconds: s.stall_seconds ?? null,
         retry: s.retry ?? 0,
         enabled: s.enabled !== false,
       });

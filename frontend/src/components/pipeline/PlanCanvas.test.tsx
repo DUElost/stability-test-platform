@@ -182,7 +182,7 @@ describe('PlanCanvas', () => {
       expect(screen.getByText('收尾清理 · 0 Steps')).toBeInTheDocument();
     });
 
-    it('step 行剥掉 script: 前缀、归一化 v 前缀、标注禁用与无限超时', () => {
+    it('step 行剥掉 script: 前缀、归一化 v 前缀、标注禁用与缺省超时', () => {
       render(
         <Harness
           lifecycle={{
@@ -207,7 +207,39 @@ describe('PlanCanvas', () => {
       // version 已带 v 时不再重复成 vv3.1
       expect(within(row).getByText('v3.1')).toBeInTheDocument();
       expect(within(row).getByText('已禁用')).toBeInTheDocument();
+      // 缺省 ≠ 不限：引擎会回落到 300s，显示成 ∞ 是读反了
+      expect(within(row).getByText('默认')).toBeInTheDocument();
+      expect(within(row).queryByText('∞')).not.toBeInTheDocument();
+    });
+
+    it('超时 0 显示为 ∞（契约里 0 = 不限）', () => {
+      render(
+        <Harness
+          lifecycle={{
+            lifecycle: {
+              init: [makeStep({ step_id: 'x', action: 'script:soak', timeout_seconds: 0 })],
+              teardown: [],
+            },
+          }}
+        />,
+      );
+      const row = rowOf('soak');
       expect(within(row).getByText('∞')).toBeInTheDocument();
+      expect(within(row).queryByText('0s')).not.toBeInTheDocument();
+    });
+
+    it('正数超时按秒展示', () => {
+      render(
+        <Harness
+          lifecycle={{
+            lifecycle: {
+              init: [makeStep({ step_id: 'x', action: 'script:soak', timeout_seconds: 600 })],
+              teardown: [],
+            },
+          }}
+        />,
+      );
+      expect(within(rowOf('soak')).getByText('600s')).toBeInTheDocument();
     });
 
     it('nextPlanName 存在时展示链式提示，isCurrentEditing 展示当前编辑徽标', () => {

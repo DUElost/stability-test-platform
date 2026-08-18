@@ -99,9 +99,13 @@ def _resolve_step_wall_clock(step: Dict[str, Any]) -> Optional[float]:
     negative here is far more likely a typo than an intent to disable the only
     mechanism that can reclaim a wedged step.
 
-    NOTE ``0`` is currently only reachable via the env var — ``pipeline_schema``
-    keeps ``minimum: 1`` on the step's ``timeout_seconds``, so a PlanStep cannot
-    express it. That gate opens together with the stall criterion (#115).
+    NOTE ``0`` is expressible per-step since the schema relaxed the step's
+    ``timeout_seconds`` to ``minimum: 0`` (2026-08-04). It is gated on the stall
+    criterion: ``pipeline_schema`` requires ``stall_seconds >= 1`` whenever
+    ``timeout_seconds`` is exactly ``0``, so a step can only drop its wall clock
+    if it has a working stall clock — which in turn needs ``PROGRESS`` markers
+    in the script (#115 phase 2). ``STP_STEP_WALL_CLOCK_SECONDS`` remains the
+    fleet-wide override.
     """
     raw = step.get("timeout_seconds", step.get("timeout"))
     if raw is None:

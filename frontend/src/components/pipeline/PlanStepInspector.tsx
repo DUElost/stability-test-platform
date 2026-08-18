@@ -4,6 +4,7 @@ import { ArrowUpRight, AlertTriangle } from 'lucide-react';
 import type { PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
 import { ALERT_BANNER, PIPELINE_EDITOR, STATUS_CHIP, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { formatStepTimeout, stepTimeoutHint } from './stepTiming';
 
 /* ── param_schema field descriptor ───────────────────────────────────────── */
 
@@ -457,6 +458,9 @@ interface RuntimeConfigCardProps {
 
 function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardProps) {
   const inputCls = cn('h-7 px-2 text-[12px]', PIPELINE_EDITOR.inputInline);
+  // 0 与 null 两个非常规取值光看输入框读不出语义（0 像"零秒"，空像"没设"），
+  // 各自的实际行为差 300 秒起步，所以显式把结论写在字段下面。
+  const timeoutIsSpecial = step.timeout_seconds === 0 || step.timeout_seconds == null;
 
   return (
     <Card>
@@ -470,7 +474,7 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
               type="number"
               min={1}
               value={step.timeout_seconds ?? ''}
-              placeholder="-"
+              placeholder="默认"
               disabled={readOnly}
               onChange={e => {
                 const raw = e.target.value;
@@ -495,6 +499,25 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
             />
           </FieldGroup>
         </div>
+
+        {timeoutIsSpecial && (
+          <div
+            data-testid="step-timeout-hint"
+            className={cn(
+              'flex items-start gap-1.5 px-2 py-1.5 rounded-md text-[11px]',
+              ALERT_BANNER.warning,
+            )}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>
+              超时 = <strong className="font-mono">{formatStepTimeout(step.timeout_seconds)}</strong>
+              ：{stepTimeoutHint(step.timeout_seconds)}
+              {step.timeout_seconds === 0 && (
+                <>。本编辑器不提供停滞钟字段，该值需经 API 配置后才存得下来。</>
+              )}
+            </span>
+          </div>
+        )}
 
         <div className="flex items-center justify-between py-1">
           <span className={cn('text-[10px] font-bold uppercase tracking-wide', TEXT.subtitle)}>启用步骤</span>

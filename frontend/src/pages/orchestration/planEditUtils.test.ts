@@ -132,4 +132,32 @@ describe('planEditUtils', () => {
     expect(EMPTY_LIFECYCLE.lifecycle.init).toHaveLength(1);
     expect(EMPTY_LIFECYCLE.lifecycle.init![0].action).toBe('script:check_device');
   });
+
+  // 保存是整体替换 PlanStep 行：任何编辑器不暴露的字段只要在这条往返里漏掉，
+  // 用户打开 Plan 点一次保存就会把它静默清成 NULL（生产 plan 2 / 6 中过招）。
+  describe('停滞钟往返', () => {
+    const planWithStall: Plan = {
+      ...basePlan,
+      steps: basePlan.steps!.map((s, i) =>
+        i === 0 ? { ...s, timeout_seconds: 600, stall_seconds: 120 } : s,
+      ),
+    };
+
+    it('rebuildLifecycleFromPlan 把 stall_seconds 读进 lifecycle', () => {
+      const lc = rebuildLifecycleFromPlan(planWithStall);
+      expect(lc.lifecycle.init![0].stall_seconds).toBe(120);
+    });
+
+    it('buildStepsForApi 把 stall_seconds 发回后端', () => {
+      const steps = buildStepsForApi(rebuildLifecycleFromPlan(planWithStall));
+      expect(steps.find((s) => s.step_key === 'step_init_1')?.stall_seconds).toBe(120);
+    });
+
+    it('未配停滞钟的步骤发 null，且不往 lifecycle 里塞多余键', () => {
+      const lc = rebuildLifecycleFromPlan(basePlan);
+      // 脏检查靠 JSON.stringify 快照，凭空多一个键会让所有旧 Plan 一打开就显示"已修改"
+      expect(lc.lifecycle.init![0]).not.toHaveProperty('stall_seconds');
+      expect(buildStepsForApi(lc)[0].stall_seconds).toBeNull();
+    });
+  });
 });

@@ -735,6 +735,12 @@ export interface PipelineStep {
   version?: string;
   params?: Record<string, unknown>;
   timeout_seconds: number;
+  /**
+   * 停滞钟（#115）：多久无 PROGRESS 戳算卡死。编辑器不提供输入框，但**必须**
+   * 带在这里——PlanEditPage 保存时整体替换 PlanStep 行，字段不透传就等于把
+   * 已配好的停滞钟静默清成 NULL。
+   */
+  stall_seconds?: number | null;
   retry?: number;
   enabled?: boolean;
 }

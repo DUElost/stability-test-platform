@@ -435,6 +435,42 @@ describe('PlanStepInspector', () => {
 
       expect(lastStep(onUpdateStep).step_id).toBe('init_renamed');
     });
+
+    it('编辑执行配置不会丢掉编辑器不暴露的停滞钟', () => {
+      const onUpdateStep = vi.fn();
+      render(<Harness step={makeStep({ stall_seconds: 120 })} onUpdateStep={onUpdateStep} />);
+
+      fireEvent.change(within(fieldOf('重试次数')).getByRole('spinbutton'), {
+        target: { value: '2' },
+      });
+
+      expect(lastStep(onUpdateStep).stall_seconds).toBe(120);
+    });
+  });
+
+  describe('超时语义提示', () => {
+    it('常规正数超时不出提示', () => {
+      render(<Harness step={makeStep({ timeout_seconds: 600 })} />);
+      expect(screen.queryByTestId('step-timeout-hint')).not.toBeInTheDocument();
+    });
+
+    it('0 提示为不限，并说明本编辑器存不下去', () => {
+      render(<Harness step={makeStep({ timeout_seconds: 0 })} />);
+      const hint = screen.getByTestId('step-timeout-hint');
+      expect(within(hint).getByText('∞')).toBeInTheDocument();
+      expect(hint).toHaveTextContent('不限');
+      expect(hint).toHaveTextContent('本编辑器不提供停滞钟字段');
+    });
+
+    it('缺省提示为回落默认，而不是不限', () => {
+      render(
+        <Harness step={makeStep({ timeout_seconds: undefined as unknown as number })} />,
+      );
+      const hint = screen.getByTestId('step-timeout-hint');
+      expect(within(hint).getByText('默认')).toBeInTheDocument();
+      expect(hint).toHaveTextContent('STP_STEP_WALL_CLOCK_SECONDS');
+      expect(hint).not.toHaveTextContent('本编辑器不提供停滞钟字段');
+    });
   });
 
   describe('跳转链接', () => {
