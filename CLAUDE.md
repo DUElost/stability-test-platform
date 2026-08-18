@@ -102,6 +102,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 
 | 日期 | ADR | 决策 |
 |------|-----|------|
+| 2026-08-18 | 0029 | 项目分类域与参数分层(Proposed):TestProject 单层身份 + 正交 facet(产品线/客户/平台/形态,**不建层级树**);项目粒度 = 共用同一套用例 APK + 同一批设备的最小单位(= 设备族);参数三层 `script.default_params` → `test_project.variables` → `plan_step.params_override`,派发期单跳解析、快照冻结字面值 |
 | 2026-07-16 | 0026 | 大规模化执行架构(目标态,分阶段落地中):PlanRun 准入队列 + Host OperationScheduler + 批量续租/O(1) 聚合;当前状态机不变,QUEUED/PRECHECK 待 feature flag 路径落地后生效 |
 | 2026-06-21 | 0025 | 方案 C 存储：日志留 SSD、AEE 留 HDD、CIFS 仅汇总；取消 run_log_bundle |
 | 2026-05-21 | 0024 | HttpOnly Cookie + CSRF + refresh 黑名单 + 生产 guard |
