@@ -110,7 +110,9 @@ export default function DispatchGateCard({
       ? getReadySuffix(dispatchState?.status, isTerminal)
       : null;
   const isPhaseSpinning = PHASE_SPIN.includes(gate.phase);
-  const hostEntries = Object.entries(gate.hosts);
+  // 必须 memo：下面 counts / totalScripts / allScriptsOk 三个 useMemo 都以它为依赖，
+  // 裸 Object.entries 每次渲染都换引用，会让那三个 memo 全部空转。
+  const hostEntries = useMemo(() => Object.entries(gate.hosts), [gate.hosts]);
   const totalHosts = hostEntries.length;
   const isCompactReady =
     !isTerminal &&
@@ -133,8 +135,7 @@ export default function DispatchGateCard({
     const out = { pending: 0, ok: 0, syncing: 0, synced: 0, failed: 0 };
     for (const [, h] of hostEntries) out[h.status] += 1;
     return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gate]);
+  }, [hostEntries]);
 
   // ── Collapse logic: auto-hide per-host details when all pass ──────────
   // isCompactReady: gate completely done → full compact (already implemented)

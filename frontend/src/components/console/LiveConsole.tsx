@@ -58,13 +58,15 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     setTermReady(false);
   }
 
-  const tallyIssues = (lines: string[]) => {
+  // memo 化是为了能进 replayFromStart 的依赖数组：裸函数每次渲染换引用，
+  // 会让 replayFromStart 每帧重建，进而让 termReady effect 反复重跑回放。
+  const tallyIssues = useCallback((lines: string[]) => {
     if (!enableIssueCount) return;
     for (const k of extractIssueKeys(lines)) {
       issueKeysRef.current.add(k);
     }
     setIssueCount(issueKeysRef.current.size);
-  };
+  }, [enableIssueCount]);
 
   const replayFromStart = useCallback(() => {
     let cancelled = false;
@@ -90,8 +92,7 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [consoleRunId, enableIssueCount]);
+  }, [consoleRunId, tallyIssues]);
 
   useEffect(() => {
     if (!termReady) return;
