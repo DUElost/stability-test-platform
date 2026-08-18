@@ -1,12 +1,14 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import '@fontsource-variable/noto-sans-sc';
 import './index.css';
 import { registerAuthFailureHandler } from './utils/api';
 import { clearAppQueryCache } from './components/QueryProvider';
 import { disconnectDashSocket } from './hooks/useSocketIO';
 import { registerChunkLoadRecovery } from './utils/chunkLoadRecovery';
+
+// 字体声明走异步，不挡首屏渲染；理由见 ./fonts.ts
+void import('./fonts');
 
 registerChunkLoadRecovery();
 

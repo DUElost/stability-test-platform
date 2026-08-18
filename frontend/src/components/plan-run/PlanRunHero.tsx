@@ -68,6 +68,8 @@ export default function PlanRunHero({
       ? new Date(run.ended_at).getTime()
       : (now ?? new Date()).getTime();
     return formatDurationSeconds(Math.max(0, (end - start) / 1000));
+    // tick 不在函数体内使用，是刻意多加的依赖：运行中 now 为空时靠每秒自增的
+    // tick 驱动重算，否则时长会冻在首次渲染的值上（#260 待统一 tick 状态）
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run, now, tick]);
 
@@ -87,6 +89,8 @@ export default function PlanRunHero({
     const start = new Date(run.enqueued_at).getTime();
     const end = (now ?? new Date()).getTime();
     return formatDurationSeconds(Math.max(0, (end - start) / 1000));
+    // 同上：tick 为刻意多加的每秒驱动依赖，排队等待时长需随时间自增
+    // （#260 待统一 tick 状态）
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run, now, tick, isQueuedPhase]);
 

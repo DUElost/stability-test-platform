@@ -26,6 +26,10 @@ interface Props {
 
 const PHASE_SPIN: ReadonlyArray<string> = ['verifying', 'syncing', 'reverifying'];
 
+// dispatchOnly 路径下 gate 是每渲染重建的字面量。hosts 必须指向这个模块级常量，
+// 否则每次都是新的 {}，下面 hostEntries 的 useMemo 在该路径上等于没写。
+const EMPTY_HOSTS: PrecheckState['hosts'] = {};
+
 function shortSha(sha?: string | null): string {
   if (!sha) return '—';
   return sha.length <= 8 ? sha : sha.slice(0, 8) + '…';
@@ -100,7 +104,7 @@ export default function DispatchGateCard({
           : 'verifying',
     started_at: dispatchState?.started_at ?? dispatchState?.enqueued_at ?? '',
     completed_at: dispatchState?.completed_at,
-    hosts: {},
+    hosts: EMPTY_HOSTS,
     final_result: dispatchState?.status === 'failed' ? 'failed' : null,
     errors: dispatchState?.last_error ? [dispatchState.last_error] : [],
   };
@@ -110,7 +114,9 @@ export default function DispatchGateCard({
       ? getReadySuffix(dispatchState?.status, isTerminal)
       : null;
   const isPhaseSpinning = PHASE_SPIN.includes(gate.phase);
-  const hostEntries = Object.entries(gate.hosts);
+  // 必须 memo：下面 counts / totalScripts / allScriptsOk 三个 useMemo 都以它为依赖，
+  // 裸 Object.entries 每次渲染都换引用，会让那三个 memo 全部空转。
+  const hostEntries = useMemo(() => Object.entries(gate.hosts), [gate.hosts]);
   const totalHosts = hostEntries.length;
   const isCompactReady =
     !isTerminal &&
@@ -133,8 +139,7 @@ export default function DispatchGateCard({
     const out = { pending: 0, ok: 0, syncing: 0, synced: 0, failed: 0 };
     for (const [, h] of hostEntries) out[h.status] += 1;
     return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gate]);
+  }, [hostEntries]);
 
   // ── Collapse logic: auto-hide per-host details when all pass ──────────
   // isCompactReady: gate completely done → full compact (already implemented)
