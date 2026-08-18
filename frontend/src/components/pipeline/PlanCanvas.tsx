@@ -7,6 +7,7 @@ import {
   TEXT,
 } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { formatStepTimeout, stepTimeoutHint } from './stepTiming';
 
 const PHASE_LABELS: Record<PipelinePhase, string> = {
   init: 'Init',
@@ -477,7 +478,9 @@ function StepRow({
         </div>
         <div className={cn('mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px]', TEXT.subtitle)}>
           <span className="font-mono">{step.action || '—'}</span>
-          <span>{step.timeout_seconds != null ? `${step.timeout_seconds}s` : '∞'}</span>
+          <span title={stepTimeoutHint(step.timeout_seconds)}>
+            {formatStepTimeout(step.timeout_seconds)}
+          </span>
           <span>retry {step.retry ?? 0}</span>
         </div>
       </div>
