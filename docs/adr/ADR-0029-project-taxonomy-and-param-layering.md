@@ -1,12 +1,26 @@
-# ADR-0029: 项目分类域与参数分层（TestProject + facet 分类 + 三层参数解析）
+# ADR-0029: 项目分类域（TestProject 登记簿 + facet 分类）
 
-- 状态：Proposed
+- 状态：Proposed（2026-08-18 **决策转向**，见修订记录）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-08-18
 - 决策者：平台研发组
-- 标签：项目域, 多项目并存, 参数分层, 派发门禁, 可观测性, 存储命名空间
+- 标签：项目域, 多项目并存, jira 映射, 脚本路由
 - 背景分析：[`PROJECT_TAXONOMY_REVIEW_2026-08-18.md`](../reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md)
+
+## 修订记录
+
+| 日期 | 版本 | 内容 |
+|------|------|------|
+| 2026-08-18 | v1 | 初版：D1 步骤参数覆盖 + D4 三层参数 + D5 派发门禁 + D7 存储命名空间 + D8 全局项目上下文；D1–D9 经评审全部采纳 |
+| 2026-08-18 | **v2（决策转向）** | 决策者提出「脚本端按设备指纹自行路由到执行器能否弱化项目属性」，核实后确认：开关机专项的 `backend=auto`（`/mnt/automation-toolkit/android-tools/stability_PowerCycle-Test/test-config.properties`：Z2582 无 REBOOT 时自动用 MSSV）即**单入口 + 设备能力路由**的既有先例 → **APK 差异由脚本路由吸收，R3 的「结构性阻塞」解除**。项目模型回归**登记簿**定位（知识层：客户 / 项目关系 / 形态 / jira 映射——adb 指纹读不出的部分，见背景分析 §4.1）；执行差异归脚本（路由 + step_trace 记录路由决策 + 未匹配 fail-fast）。**D1 / D4 / D5 / D7 / D8 / D9 挂起**，D6 保留 `specialty`、挂起 `applicable`；D2 新增 `jira_project_key` |
+
+**挂起语义**：被挂起决策的原文**保留不删**（记录论证历史，防兜圈子——未触发复议条件时不得重新提出已挂起机制）。复议触发条件：
+
+- 族数 > ~10，或用例 APK 适配随 build 版本漂移（脚本内路由表维护成本失控）→ 复议 D1/D4
+- 多客户权限/容量隔离升级为硬需求 → 复议 D5
+- 产物跨项目串扰成为实际问题 → 复议 D7
+- 项目数 > ~20，或需要跨页保持项目上下文的真实场景 → 复议 D8/D9
 
 ## 背景
 
@@ -29,6 +43,10 @@ MTK / 展锐 / 高通，手机 / 平板）。三类需求（详见背景分析 �
 **参数分层是先决条件**：项目模型不解决参数分化，参数分化不依赖项目模型。二者的先后顺序
 由此确定（D1 可独立先行）。
 
+> **2026-08-18 决策转向后此论断失效**（见修订记录 v2）：APK 差异改由脚本端设备指纹路由吸收，
+> 参数分层不再是 R3 的解。背景中的版本膨胀估算（15–40 个新版本）仍是「参数不可分化」的
+> 真实代价基线，但化解路径已改为脚本路由。
+
 生产现状为引入时机提供了窗口：Device 515 台、Host 34 台已达生产规模，
 而 Plan 仅 4 个且均为验证用途——迁移成本近乎为零。同时真实使用形态尚未验证，
 机制类设计保持最小（见「非目标」）。
@@ -36,6 +54,10 @@ MTK / 展锐 / 高通，手机 / 平板）。三类需求（详见背景分析 �
 ## 决策
 
 ### D1：引入步骤级参数覆盖 `plan_step.params_override`
+
+> **状态：挂起（2026-08-18）**。APK 差异已由脚本内设备指纹路由吸收（修订记录 v2）；
+> 步骤级参数覆盖的通用机制仍可能有用（非 APK 参数的计划级分化），但当前无真实使用场景，
+> 不做。触发复议：路由表维护成本失控或出现计划级参数分化需求。
 
 新增 `plan_step.params_override`（JSONB，默认 `{}`），dispatcher 按
 `script.default_params` → `params_override` 深合并生成步骤 params。
@@ -58,16 +80,17 @@ test_project
   id            PK
   project_key   unique, 不可变        HONOR-MLD / TRANSSION-X110 / ODM-DAM
   display_name                        荣耀 MLD 系列
-  storage_key   unique, 不可变        产物路径用（见 D7）
+  jira_project_key                    提交 jira 时自动带出的项目关键字（唯一硬需求，v2 新增）
+  storage_key   unique, 不可变        产物路径用（见 D7，v2 挂起后暂不建列）
 
   -- facet：正交、可空、可枚举、可组合筛选
-  product_line                        中兴产品线 / ODM产品线
+  product_line                        荣耀产品线 / ODM产品线（可空后补）
   customer                            中兴 / 传音 / 荣耀 / ODM
   platform                            MTK / UNISOC / QCOM
   form_factor                         PHONE / TABLET
 
   status        ACTIVE / ARCHIVED
-  variables     JSONB                 项目级参数（见 D4）
+  variables     JSONB                 项目级参数（见 D4，v2 挂起后暂不建列）
 ```
 
 新增归属列：`plan.project_id`、`device.project_id`（可空，NULL = 未分配/公共池）、
@@ -113,6 +136,10 @@ create / archive / facet 修改 / **`variables` 变更** / 设备归属转移。
 
 ### D4：三层参数解析
 
+> **状态：挂起（2026-08-18）**。`${project.x}` 的主要动机（用例 APK 按项目注入）已被
+> 脚本内设备指纹路由替代；`variables` 列不建。触发复议：路由表维护成本失控或出现
+> 项目级非 APK 参数需求。
+
 ```
 script.default_params        脚本级默认，版本内不可变        {"tool_dir": "/mnt/automation-toolkit/android-tools/stability_MTBF-Test"}
 test_project.variables       项目级取值                      {"mtbf_case_apk": "/mnt/.../MLD_cases_v3.apk"}
@@ -129,6 +156,11 @@ plan_snapshot                字面值，冻结                    {"tool_dir": 
 - **仅一跳**：`${project.x}` 直接取 `test_project.variables`，不支持嵌套引用或多级回退。
 
 ### D5：派发门禁与 PlanRun 快照
+
+> **状态：挂起（2026-08-18）**。项目不再承载「设备池隔离」语义——定向执行靠既有选机
+> 筛选（型号 / 软件版本 / 设备标签），无需同域校验。`plan_run` 快照仅保留 `project_id`
+> 与 `build_version`（登记/报表维度），脚本 sha 冻结（原 D5 第三段）仍建议补入快照，
+> 与项目模型无关，可独立做。触发复议：多客户权限/容量隔离升级为硬需求。
 
 派发链路（手动 / 定时 / 链式派发，以及 QUEUED → PRECHECK 再校验）统一校验：
 
@@ -168,6 +200,10 @@ plan_snapshot                字面值，冻结                    {"tool_dir": 
 
 ### D6：可观测性维度 `Plan.specialty`
 
+> **状态：保留 `specialty`，挂起 `applicable`（2026-08-18）**。「一计划一专项」已是现状，
+> `specialty` 列（低成本、Plan 列表分组高频使用）保留；`applicable` 属性匹配（新机型
+> 滞后维护 + 脚本路由已承担设备差异）挂起，不建。
+
 `plan` 增加 `specialty` 列（MTBF / 开关机 / MONKEY / …，配套字典表供下拉与聚合）。
 `Script.category`（脚本级分类）保持不变，两者是不同层级的维度。
 
@@ -196,6 +232,9 @@ Plan 编辑器按项目 facet 自动过滤候选脚本。
 
 ### D7：存储命名空间
 
+> **状态：挂起（2026-08-18）**。产物按 run 组织（`devices/{plan_run_id}` 等）当前够用，
+> 无跨项目串扰问题。触发复议：产物跨项目串扰成为实际问题。
+
 新产物统一写入项目命名空间，路径由统一入口构造（`backend/agent/aee/paths.py` /
 `backend/core/storage_root.py`，#172 既有约定），禁止各模块自行拼接：
 
@@ -223,6 +262,12 @@ DB trigger 是更强的第四层，但仓库 63 个迁移**零 trigger 先例**�
 落地前置：中心存储 merge 由仓库外工具 `start_log_scan.py` 执行，需先验证其对路径深度与命名无隐含假设。
 
 ### D8：前端信息架构 — 项目是全局上下文，不是页面筛选器
+
+> **状态：取消（2026-08-18）**。5 个项目的规模下，全局选择器 + 8 页跟随体系是过度设计；
+> 改为「**项目登记簿页 + 页面级标签/筛选**」的最小形态（见背景分析 §3.2 的替换方案）：
+> 一级导航「项目」（列表 = 卡片 + facet 筛选，详情 = 设备/计划/结果/jira），其余页面
+> 加项目标签与下拉筛选，不做跨页上下文。触发复议：项目数 > ~20 或需要跨页保持
+> 项目上下文的真实场景。下文的全局选择器设计作为该场景的实现蓝图保留。
 
 **项目选择器常驻顶栏（`AppShell` header），全局唯一。** 不在各页面各放一个项目下拉——
 项目是「当前在看哪个项目」的上下文，切换应同时改变所有页面，而非逐页重设。
@@ -275,6 +320,9 @@ DB trigger 是更强的第四层，但仓库 63 个迁移**零 trigger 先例**�
 直到 D5 门禁在提交时拒绝。设备列表缓存也必须一并失效，仅失效 `['projects']` 不够。
 
 ### D9：API 侧 `ProjectScope` 缺省语义
+
+> **状态：挂起（2026-08-18）**。随 D8 取消，API 层不做 `ProjectScope` 强制；新路由
+> 带 `project_id` 可选过滤参数即可。触发复议：与 D8 相同。
 
 D8 定义的是**前端**上下文；API 层缺 `project_id` 时的行为需独立定义，
 否则新增路由会静默退化为全量查询。
@@ -399,15 +447,15 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 
 ## 影响
 
-| 面 | 影响 |
+| 面 | 影响（v2 最小形态） |
 |----|------|
-| Schema | 新增 `test_project` + 专项字典表；`plan` 加 `project_id` / `specialty`；`plan_step` 加 `params_override`；`device` 加 `project_id`；`plan_run` 加 `project_id` / `project_storage_key` / `build_version`。全部 additive |
-| 数据迁移 | 建 Legacy 默认项目，回填 4 个存量 Plan、93 个 PlanRun、515 台设备。设备归属需按背景分析 §5 的清单人工确认 |
-| 派发路径 | `plan_dispatcher_sync` / `plan_dispatcher_core` / `admission_pump` / `plan_chain_trigger` / precheck 增加归属校验；与 `feat/multiworker-b1-b4`（B3）及 ADR-0026 准入队列改同一批文件，需排期避让 |
-| Agent | **无变更**。参数经 `plan_snapshot` → `pipeline_def` → `STP_STEP_PARAMS` 下发，Agent 侧协议不变 |
-| 前端 | `types.ts` 同步；新增「项目」一级导航 + `/projects` `/projects/:projectKey` 两条路由；顶栏全局项目选择器（URL `?project=` 为权威）；8 个业务页跟随上下文、4 类基础设施页不跟随；Plan 列表改二维分组；`useCrossClientSync` 增 `project_changed`。详见 D8 |
-| 实时 | SocketIO 新增 `project_changed` 事件；`device.project_id` 变更须广播 |
-| 存储 | 新产物路径增加 `projects/{storage_key}/` 段，旧路径只读兼容 |
+| Schema | 新增 `test_project`（含 `jira_project_key`，不含 `variables` / `storage_key`）+ 专项字典表；`plan` 加 `project_id` / `specialty`；`device` 加 `project_id`；`plan_run` 加 `project_id` / `build_version`。全部 additive |
+| 数据迁移 | 建 Legacy 默认项目，回填 4 个存量 Plan、93 个 PlanRun、515 台设备。设备归属需按背景分析 §5 的清单人工确认（M-c 分批 + dry-run 不变） |
+| 派发路径 | **无改动**——不增加归属门禁（D5 挂起）。`plan_run` 快照建议补脚本 `content_sha256` 冻结（原 D5 第三段，独立于项目模型，可与 P2 并行） |
+| Agent | **无变更**。APK 差异由脚本侧设备路由承担（`backend=auto` 模式规范化 + step_trace 记录路由决策 + 未匹配 fail-fast），属脚本目录约定，不涉平台协议 |
+| 前端 | `types.ts` 同步；新增「项目」一级导航 + `/projects` `/projects/:projectKey` 两条路由（列表 = facet 卡片筛选，详情 = 设备 / 计划 / 结果 / jira 四块）；设备页加「批量归入项目」；Plan / PlanRun / 结果页加项目标签与下拉筛选。**无全局选择器、无跨页跟随**（D8 挂起） |
+| 实时 | `device.project_id` 归属变更广播（弱化版 `project_changed`，仅设备页与项目页缓存失效） |
+| 存储 | **无**（D7 挂起） |
 | 兼容性 | `project_id` 全部可空起步，未分配项目的既有行为不变 |
 
 ### 迁移与回滚
@@ -446,32 +494,29 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 阶段划分、依赖关系与验收标准见背景分析 [§6](../reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md#6-落地顺序)
 与 [§7](../reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md#7-验收标准)。摘要：
 
-| 阶段 | 内容 | 对应决策 |
+| 阶段 | 内容（v2 最小形态） | 对应决策 |
 |------|------|----------|
-| P0 | SocketIO `on_subscribe` 按 run 归属校验（独立前置，见下） | — |
-| P1 | `plan_step.params_override` + 深合并 + schema 校验 | D1（**可独立先行**） |
-| P2 | `test_project` + facet + 归属列 + Legacy 回填 | D2 / D3 |
-| P3 | 派发门禁 + 复合外键 + PlanRun 快照字段 | D5 |
-| P4 | `test_project.variables` + `${project.x}` 派发期解析 | D4 |
-| P5 | 前端：全局项目选择器 + 「项目」导航 + 项目详情页 + 项目 × 专项矩阵 + `project_changed` 跨端同步 | **D8** / D6 |
-| P6 | Script `applicable` 属性匹配 + 编辑器过滤（参考门禁语义） | D6 |
-| P7 | 存储命名空间迁移 | D7 |
+| P1 | `test_project`（含 `jira_project_key`）+ 专项字典表 + 归属列 + Legacy 回填（M-a/M-b/M-c） | D2 / D3 / D6 |
+| P2 | 前端：项目登记簿页（列表卡片 + facet 筛选；详情 = 设备 / 计划 / 结果 / jira）+ 设备批量归入 + Plan / PlanRun / 结果页项目标签与筛选 | D8 最小形态 / D6 |
+| P3 | jira 提交自动带 `jira_project_key`（提交入口 + 映射展示） | v2 |
+| —（并行，不属本 ADR 表结构） | 脚本路由约定：入口脚本按设备能力路由 + step_trace 记录路由决策 + 未匹配 fail-fast（`backend=auto` 模式规范化） | v2 |
+| —（独立前置） | SocketIO `on_subscribe` 按 run 归属校验（既有鉴权洞，见下，与项目模型无关） | — |
 
 **独立前置项 P0（不属本 ADR 的决策范围，但必须先于 P5）**：`socketio_server.py:345` 的
 `on_subscribe` 对任意 room 字符串直接 `enter_room`，无归属校验
 （本仓 `test_dashboard_auth.py:8` 明确记录该 P0 只覆盖 `on_connect`）。
-前端做了项目上下文过滤而实时事件仍全量推送时，D6/D8 的可观测性收益会被打穿——
-用户在 A 项目页面上会收到 B 项目 run 的 `step_log`。
+前端做了项目上下文过滤而实时事件仍全量推送时，项目登记簿的可观测性收益会被打穿——
+用户在 A 项目页面上会收到 B 项目 run 的 `step_log`（且该洞不依赖项目模型：任意
+room 字符串均可订阅，v2 后依旧成立）。
 
 该项**须单独写一条 Agent Note**（`docs/notes/bug-fix/`，Class: bug-fix）记录
 「订阅侧与连接侧鉴权分离」的成因与修复边界，防止后续复议时重新论证一遍。
 
 **待定项（已收窄，2026-08-18）**：背景分析 §5 的项目清单已填写（5 个真实项目 + 1 个
 Legacy）；无跨平台族（五族均单平台：MLD/ELA/DAM/Infinix 为 MTK、Z258 为 UNISOC），
-`platform` facet 全可填。剩余 P4 实施期补充：各项目 `variables` 的用例 APK 路径
-（`${project.x}` 引用在实施期按需写入，不阻塞设计）；`product_line` facet 值建表后
-可为 NULL 后补。
-清单填写不阻塞 D1 与 D2 的设计。
+`platform` facet 全可填。剩余实施期补充：各项目用例 APK 路径——v2 后是**脚本路由表的
+输入**（入口脚本内映射，不在控制面），专项接入时提供；`product_line` facet 值建表后
+可为 NULL 后补。清单填写不阻塞 D2 的设计（v2 后 D1 已挂起）。
 
 **本 ADR 只定前端信息架构（D8），不定视觉与组件细节。** 具体布局、组件选型与交互稿
 在 P5 实施时进入 `docs/design/`（参照 `2026-07-plan-execute-page-improvements.md` 的既有形态）。

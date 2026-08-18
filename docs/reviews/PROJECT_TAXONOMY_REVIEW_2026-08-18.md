@@ -1,6 +1,6 @@
 # 项目分类域与参数分层审查
 
-- **状态**：Living v1.0
+- **状态**：Living v2.0（2026-08-18 决策转向，见 §4.1 与 §9）
 - **日期**：2026-08-18
 - **决策**：[`ADR-0029`](../adr/ADR-0029-project-taxonomy-and-param-layering.md)
 - **数据基准**：生产库只读快照（2026-08-18）
@@ -43,6 +43,12 @@
 
 **MTBF 专项**：工具路径统一为 `/mnt/automation-toolkit/android-tools/stability_MTBF-Test`，
 但其中的**用例**与**适配后打包的自动化用例 APK 逐项目不同**——大部分是一个项目对应一个 APK。
+
+### R4 — jira 问题提交需要项目关键字映射
+
+结果收取阶段（一个计划对应一个专项）已按 run 组织，但向 jira 提交问题时需要把
+「哪个项目」映射为 jira 项目关键字（如 MLD → `STABILITY-A`）。该映射是**外部系统信息，
+adb 设备指纹读不到**，必须人工维护于平台（2026-08-18 决策者确认：唯一硬需求）。
 
 ---
 
@@ -105,9 +111,9 @@
 
 | # | 能力 | 现状 | 代码位置 |
 |---|------|------|----------|
-| G1 | **步骤级参数覆盖** | **不存在**。`PlanStep` 无 params 列 | `backend/models/plan.py:81` |
-| G2 | **参数唯一来源 = script.default_params** | dispatcher 直接 `deepcopy(default_params)`；WiFi 注入是代码注释明写的**唯一**例外 | `plan_dispatcher_core.py:187,253`、例外声明见 `:349` |
-| G3 | **触发期参数覆盖** | 不存在。`PlanRunTrigger` 仅接受 `device_ids` / `note` / `wifi_pool_id` | `backend/api/routes/plans.py:165` |
+| G1 | **步骤级参数覆盖** | **不存在**。`PlanStep` 无 params 列——**v2 已由脚本端设备路由解除**（R3 不再走参数层） | `backend/models/plan.py:81` |
+| G2 | **参数唯一来源 = script.default_params** | dispatcher 直接 `deepcopy(default_params)`；WiFi 注入是代码注释明写的**唯一**例外——同上，**不再构成阻塞** | `plan_dispatcher_core.py:187,253`、例外声明见 `:349` |
+| G3 | **触发期参数覆盖** | 不存在。`PlanRunTrigger` 仅接受 `device_ids` / `note` / `wifi_pool_id`——同上 | `backend/api/routes/plans.py:165` |
 | G4 | **项目归属** | 全库 `backend/models/` 无 project/tenant 任何字段 | `plan.py` / `host.py` / `script.py` / `plan_run.py` |
 | G5 | **派发归属校验** | 拒因阶梯仅 not_found / no_host / device_offline / device_error / host_offline / active_lease / active_job | `plan_dispatcher_sync.py:58` |
 | G6 | **列表查询归属过滤** | 23 个 route 模块、185 处 `select(` 无归属过滤 | `backend/api/routes/` |
@@ -117,8 +123,9 @@
 | G10 | **扫描工具按项目区分** | 部署级进程 env，全局单值 | `dedup_scan.py:34` |
 | G11 | **Agent 脚本同步范围** | 全量拉取所有活跃脚本 | `backend/agent/registry/script_registry.py:73` |
 | G12 | **快照冻结脚本 sha** | `build_plan_snapshot` 冻结 step/params/nfs_path，**不含 sha**；sha 由 precheck 回查活表 | `plan_dispatcher_core.py:407`、`precheck/scripts.py:24` |
-| G13 | **SocketIO 订阅授权** | `on_subscribe` 对任意 room 字符串直接 `enter_room`，无归属校验 | `backend/realtime/socketio_server.py:345` |
+| G13 | **SocketIO 订阅授权** | `on_subscribe` 对任意 room 字符串直接 `enter_room`，无归属校验（独立鉴权洞，与项目模型无关，可单独修） | `backend/realtime/socketio_server.py:345` |
 | G14 | **成员/角色** | `users.role` 仅 `admin` / `user` 两值 | `backend/models/user.py:16`、`routes/users.py:92` |
+| G15 | **jira 项目关键字映射** | **不存在**（v2 新增）。提交 jira 时项目关键字靠人工记忆/查表 | 全库无 jira 相关字段 |
 
 ### 3.1 已具备、无需新建的能力
 
@@ -134,29 +141,22 @@
 
 ---
 
-### 3.2 前端页面现状与改动面
+### 3.2 前端页面现状与改动面（v2 最小形态）
 
 路由表见 `frontend/src/router/index.tsx`，侧栏六个分组见 `frontend/src/layouts/Sidebar.tsx:49-89`。
-按 ADR-0029 D8 的「业务视图 / 基础设施视图」二分标注改动面：
+v2（2026-08-18 决策转向）后 D8 的全局选择器 / 跨页跟随取消，改为**项目登记簿页 +
+页面级标签/筛选**：
 
-| 侧栏分组 | 页面 | 路由 | 上下文 | 改动 |
-|----------|------|------|--------|------|
-| （新增）**项目** | 项目列表 | `/projects` | — | **新建**：facet 列 + 设备/Plan/Run 统计 + 按 facet 分组筛选 |
-| | 项目详情 | `/projects/:projectKey` | — | **新建**：概览 / Plan / 设备 / 变量 / 结果 五 tab |
-| 概览 | 仪表盘 | `/` | 跟随 | 统计口径加项目过滤 |
-| 测试编排 | Plan 管理 | `/orchestration/plans` | 跟随 | **改造最大**：现仅名称搜索（`PlanListPage.tsx:28,50`）→ 项目 × 专项二维分组 + Plan 复制 |
-| | 执行 Plan | `/execution/plan-execute` | 跟随 + **强制** | 选机范围限定为项目归属设备；`project=all` 时禁用派发 |
-| | 执行记录 | `/execution/plan-runs*` | 跟随 | 列表过滤；详情页展示项目与 `build_version` |
-| 测试资产 | 脚本库 | `/script-management` | **不跟随** | 增 `applicable` 适用性标记展示 |
-| | WiFi 资源池 | `/wifi` | 不跟随 | 无改动 |
-| 主机与设备 | 主机集群 | `/hosts` | **不跟随** | 无改动 |
-| | 物理设备 | `/devices` | **双模式** | 默认按项目过滤；admin 切「全部设备」做归属分配 |
-| | 文件服务器 | `/storage` | **不跟随** | 无改动 |
-| 分析报告 | 测试结果 | `/results` | 跟随 | 列表与聚合加项目过滤 |
-| | 问题追踪 | `/issue-tracker` | 跟随 | 同上 |
-| 运营配置 | 定时调度 | `/schedules` | 跟随 | 列表过滤；创建时校验 Plan 与设备同项目 |
-| | 通知管理 | `/notifications` | 不跟随 | 无改动 |
-| （用户菜单） | 用户 / 操作日志 / 系统设置 | — | 不跟随 | 操作日志可选加项目维度筛选 |
+| 侧栏分组 | 页面 | 路由 | 改动 |
+|----------|------|------|------|
+| （新增）**项目** | 项目列表 | `/projects` | **新建**：facet 卡片（客户/产品线/平台/形态）+ 设备数 + jira 关键字 + 状态；按任意 facet 筛选（筛选即「关系视图」：同客户项目同现） |
+| | 项目详情 | `/projects/:projectKey` | **新建**：设备（归属列表 + 批量归入）/ 专项计划 / 最近结果 / jira 四块，**无变量 tab** |
+| 测试编排 | Plan 管理 | `/orchestration/plans` | 项目标签 + 下拉筛选（可选按专项分组，D6 `specialty` 保留）；Plan 复制可后补 |
+| | 执行记录 | `/execution/plan-runs*` | 列表项目标签 + 筛选；详情页展示项目 |
+| 主机与设备 | 物理设备 | `/devices` | 项目列 + 勾选「批量归入项目」（归属分配入口） |
+| 分析报告 | 测试结果 | `/results` | 项目标签 + 筛选 |
+| | 问题追踪 | `/issue-tracker` | 提交入口带出项目 → `jira_project_key`；展示映射 |
+| 其余页面 | — | — | **无改动**（不引入跟随/上下文体系） |
 
 全局构件：
 
@@ -175,18 +175,33 @@
 |------|------|----------|--------------|
 | **R1** 多项目管理与可观测性 | **组织 + 可观测性**（非安全隔离） | G4 / G6 / G7 / G8 / G13 | 否——但不需要数据库级强制 |
 | **R2** 不同项目不同工具脚本 | **组织维度缺失** | G7（可发现性）、无防呆 | **可以**——不同实现即不同 `script:<name>`，各自建 Plan |
-| **R3** 不同项目不同用例 APK | **结构性阻塞** | **G1 + G2 + G3** | **否** |
+| **R3** 不同项目不同用例 APK | **结构性阻塞（v1 判定）** | ~~G1 + G2 + G3~~ | **可以（v2，2026-08-18）**——脚本端设备指纹/能力路由吸收（见 §4.1） |
+| **R4** jira 提交的项目关键字映射 | **外部系统信息** | G15（映射无处存放） | **否**——adb 指纹读不到，必须人工登记于平台 |
 
-### 4.1 R3 的代价量化
+### 4.1 R3 的化解：脚本端设备路由（2026-08-18 决策转向）
 
-在 G1/G2/G3 未解除时，让不同项目使用不同 APK 的唯一路径是**逐项目新建脚本版本**
-（「版本即参数」：已存在版本的 `default_params` 422 不可变）。
+v1 判定 R3 为「结构性阻塞」（G1/G2/G3 未解除时逐项目分化只能新建脚本版本）。v2 转向：
+**APK 差异由脚本端路由吸收，不需要控制面参数分层**。
 
-按 §5 已确认的 **5 个项目** × R2/R3 涉及的 3–4 个专项脚本估算：
-**≈ 15–20 个新版本**，相对当前 38 个版本的基线接近翻倍；且每个版本是磁盘上一份完整重复的脚本文件，
-单点 bug 需修改 N 份。
+**既有先例**：`/mnt/automation-toolkit/android-tools/stability_PowerCycle-Test/test-config.properties`
+的 `backend=auto`——单入口脚本按设备能力自行选择执行器（Z2582 无 REBOOT 时自动用 MSSV，
+否则 AutoTestTool）。MTBF 专项工具按同一模式组织（一个专项目录一套入口脚本组）。
 
-**结论**：R3 的优先级高于 R1。参数分层是先决条件。
+**版本膨胀基线仍然成立**（§2.4：monkey_setup 13 版本、38 个活跃版本），但那是
+「迭代被迫复制」；逐族 APK 差异不再走版本复制路径——新族接入是**改路由表 + 新建版本**
+（比复制整份脚本好一个数量级），不是逐项目整份脚本。
+
+**路由方案的配套约定**（脚本目录契约，不涉平台协议）：
+
+1. **未匹配 fail-fast**：入口脚本对不认识指纹/能力的设备立即报明确错误（如
+   `no executor for model X in <专项> v<ver>`），不进假跑
+2. **路由决策可观测**：step_trace 记录实际使用的执行器 / APK（同一快照不同设备跑
+   不同内容，事后可追溯）
+3. **登记簿是唯一人工维护点**：客户/关系/形态/jira 映射只登记一处（§5 清单即种子
+   数据），脚本路由表与 jira 下拉都是它的投影，避免各处各写一份映射
+
+**结论（v2）**：R3 的优先级与参数分层解均不再成立；项目模型的职责收窄为登记簿
+（R1 组织 + R4 jira 映射）。
 
 ### 4.2 R1 的性质判定
 
@@ -225,13 +240,13 @@
   （MLD 的 APK 从 ELA 基础上适配）→ 按 D3 判据分两个项目。客户/平台/形态只做
   facet 分组，不合并项目。
 - `product_line` facet（客户或我方内部的产品系列组织，如「荣耀 X 系列」）未提供，
-  留空待 `variables` 维护时一并补（facet 可空，D2）；各项目 `variables` 的
-  APK 路径**暂未处理**，P4 实施时再提供。
+  留空待补（facet 可空，D2，v2 后无 `variables` 联动）；各项目 APK 路径**暂未处理**
+  ——v2 后 APK 路径是**脚本路由的输入**（脚本内映射），P4 实施时提供。
 
 **APK 路径（已知实例）**：MLD 的 MTBF 用例 APK 位于
 `/mnt/automation-toolkit/android-tools/stability_MTBF-Test/apk/` 下的
 `ReliabilityUiautomatorTest.apk` 与 `ReliabilityUiautomatorTestTest.apk`
-（两者共同构成 MLD 的 MTBF 用例，是 D4 `variables` 的示例值）。
+（两者共同构成 MLD 的 MTBF 用例，是脚本路由表的示例值）。
 
 **客户归属的辅助手段（决策者建议，已核实）**：「读设备 brand 值可获知大部分客户」——
 当前**不可用**：`device` 表无 brand 列、`extra` JSON 亦无 brand 值（2026-08-18 只读核查）。
@@ -242,26 +257,23 @@
 
 ## 6. 落地顺序
 
-| 阶段 | 内容 | 解除 | 依赖 |
+| 阶段 | 内容（v2 最小形态） | 解除 | 依赖 |
 |------|------|------|------|
-| P0 | SocketIO room 订阅按 run 归属校验 | G13 | 无（可立即独立合入）；**必须先于 P5** |
-| P1 | `plan_step.params_override` + 深合并 + `param_schema` 校验 | **G1/G2/G3** | 无（**可独立先行**） |
-| P2 | `test_project` 表 + facet 列 + `plan.project_id/specialty` + `device.project_id`；4 个存量 Plan 回填 Legacy 项目 | G4/G7 | P1 |
-| P3 | 派发门禁（含 NULL↔NULL 互斥语义）+ 复合外键 + `plan_run` 快照字段（`project_id` / `build_version` / 脚本 sha） | G5/G12 | P2 |
-| P4 | `test_project.variables` + `${project.x}` 派发期解析 | R3 完整形态 | P1+P2 |
-| P5 | 前端（见 §3.2）：顶栏项目选择器 + 「项目」导航与两条新路由 + 项目 × 专项矩阵 + `project_changed` 跨端同步 + Plan 复制 | G6/G8 | P2、**P0** |
-| P6 | Script `applicable` 属性匹配 + Plan 编辑器按项目 facet 过滤（**参考门禁**：保存放行 / precheck 仅告警） | R2 防呆 | P2 |
-| P7 | 存储命名空间 `projects/{storage_key}/…`（新产物写新路径，旧路径只读） | G9 | P2 |
+| P1 | `test_project` 表（含 `jira_project_key`，不含 `variables`/`storage_key`）+ 专项字典表 + `plan.project_id/specialty` + `device.project_id` + `plan_run.project_id/build_version`；4 个存量 Plan / 93 PlanRun / 515 设备回填 Legacy | G4 / G7 / G15 | 无 |
+| P2 | 前端（见 §3.2 v2）：项目登记簿页（列表卡片 + facet 筛选；详情 = 设备 / 计划 / 结果 / jira）+ 设备批量归入 + Plan / PlanRun / 结果页项目标签与筛选 | G6 / G8 | P1 |
+| P3 | jira 提交自动带 `jira_project_key`（问题追踪页提交入口 + 映射展示） | G15 | P1 |
+| —（并行，不属本 ADR 表结构） | 脚本路由约定：入口脚本按设备能力路由 + step_trace 记录路由决策 + 未匹配 fail-fast（`backend=auto` 模式规范化） | R3 | 无 |
+| —（独立前置） | SocketIO room 订阅按 run 归属校验（既有鉴权洞，与项目模型无关） | G13 | 无（可立即独立合入） |
 
 P1–P3 均为 additive 迁移，可独立合入、可回滚。
 
 ### 6.1 阶段间冲突与前置校验
 
-- **P2/P3 与在飞工作**：`feat/multiworker-b1-b4`（B3 Plan 并发防护）与 ADR-0026 准入队列均改
-  dispatcher / plan_run 路径，需排期避让或先合入。
-- **P7 外部依赖**：中心存储 merge 由**仓库外**工具 `start_log_scan.py` 执行
-  （`-merge_files_list` 清单文件路径，见 AGENTS.md §scan/upload/merge 契约）。加 `projects/` 层级前
-  必须先验证该工具对路径深度与命名无隐含假设。
+- **P1 与在飞工作**：`feat/multiworker-b1-b4`（B3 Plan 并发防护）与 ADR-0026 准入队列均改
+  dispatcher / plan_run 路径。v2 后本方案**不再改 dispatcher**（无门禁），冲突面大幅缩小；
+  仅 `plan_run` 加列需与在飞迁移避让。
+- **脚本路由与既有脚本**：`monkey_*` 系是单一入口、不分族，保持现状；路由约定只约束
+  新接入的专项入口脚本（MTBF / 开关机 / GPU），按专项逐个人工确认。
 - **G10/G11 不在本次范围**：扫描工具按项目区分、Agent 按需同步脚本，均待 R1 升级为安全需求或
   出现第二套报表工具后再议。
 
@@ -269,31 +281,19 @@ P1–P3 均为 additive 迁移，可独立合入、可回滚。
 
 ## 7. 验收标准
 
-| # | 标准 | 对应阶段 |
+| # | 标准（v2 最小形态） | 对应阶段 |
 |---|------|----------|
-| A1 | 同一脚本版本可在不同项目下使用不同用例 APK，**不新建脚本版本** | P1 |
-| A2 | 新增一个项目所需的脚本版本增量为 **0** | P1+P4 |
-| A3 | 参数占位符解析失败在 **Plan 保存**与 **precheck** 两处均拦截，不进入 Agent 执行 | P1+P4 |
-| A4 | `plan_snapshot` 内为解析后的**字面值**，改项目变量不改变已有 PlanRun 的 snapshot | P4 |
-| A5 | Plan.project_id 与目标设备 project_id 不一致时，在创建 Job 前拒绝 | P3 |
-| A6 | 跨项目 PlanRun 在 DB 层建不出来（复合外键） | P3 |
-| A7 | **NULL↔NULL 放行、项目↔项目放行、任何混合组合被拒**；同一次派发的设备集合必须同域 | P3 |
-| A8 | Plan 列表可按 项目 × 专项 二维分组与筛选 | P5 |
-| A9 | 任一项目详情页可回答：本项目的 Plan / 在跑 Run / 归属设备 / 变量 / 最近结果 | P5 |
-| A10 | 切换项目后**所有跟随页**同步改变；带 `?project=` 的链接在新会话中直接落到该项目 | P5 |
-| A11 | `project=all` 时执行 Plan 页派发入口禁用，不依赖提交后报错 | P5 |
-| A12 | 基础设施页（`/hosts`、`/storage`、`/script-management`）不随项目切换而过滤 | P5 |
-| A13 | 业务页在项目无数据时显示空态，**不回落到全局池** | P5 |
-| A14 | A 浏览器变更 `device.project_id` 后，B 浏览器的项目页与设备列表在无刷新的情况下同步 | P5 |
-| A15 | 用户订阅非自身可见 run 的 SocketIO room 被拒 | P0 |
-| A16 | 脚本 `applicable` 不匹配时：编辑器默认不列出、显式越过后**保存成功**、precheck 记 WARNING 且 PlanRun **照常准入** | P6 |
-| A17 | 新产物路径包含不可变项目存储键；旧路径仍可读 | P7 |
-| A18 | `storage_key` 无法经任何 API 路径被更新（反例测试断言被拒） | P2 |
-| A19 | 列表 API 缺 `project_id` 时记 `project_scope_missing` 告警；P5 后返回 400 | P2 → P5 |
-| A20 | 设备在 RUNNING 期间被转移项目：在途 Run **不中断**；同一设备的 QUEUED Run 在准入时被拒 | P3 |
-| A21 | 资源池不参与归属校验——跨项目使用同一 WiFi 池不被拒绝 | P3 |
-| A22 | `test_project` 的 create / archive / `variables` 变更均产生审计记录 | P2 |
-| A23 | M-c 设备归属回填提供 `--dry-run`，且重跑不覆盖已确认归属 | P2 |
+| B1 | 新增一个项目所需的脚本版本增量为 **0**（APK 差异进脚本路由，不新建版本） | 并行（脚本路由） |
+| B2 | 入口脚本未匹配设备执行器时 **fail-fast**：明确错误码 + step_trace 记录实际路由到的执行器 / APK | 并行（脚本路由） |
+| B3 | 项目登记簿：facet（客户 / 产品线 / 平台 / 形态）+ `jira_project_key` 一次表单可建可改，全字段可空 | P1 |
+| B4 | 设备可按项目**批量归入**（一次人工确认）；M-c 提供 `--dry-run`，重跑不覆盖已确认归属 | P1 |
+| B5 | 项目列表页可按任意 facet 筛选；同客户项目（MLD / ELA）经筛选同现（关系视图） | P2 |
+| B6 | 项目详情页可回答：本项目的归属设备 / 专项计划 / 最近结果 / jira 关键字 | P2 |
+| B7 | Plan / PlanRun / 结果页带项目标签并可按项目筛选 | P2 |
+| B8 | 问题追踪页提交 jira 时**自动带出** `jira_project_key`，无需人工记忆 | P3 |
+| B9 | `device.project_id` 变更后项目页与设备页缓存失效（B 浏览器可见，弱化版 `project_changed`） | P2 |
+| B10 | 存量 Plan / PlanRun / 设备回填 Legacy（4 / 93 / 515），未分配行为不变 | P1 |
+| B11 | `test_project` 的 create / archive / facet / jira 变更均产生审计记录 | P1 |
 
 ---
 
@@ -304,6 +304,13 @@ P1–P3 均为 additive 迁移，可独立合入、可回滚。
 D9 方法论挑战 → 最终修订与一致性扫描。
 **D1–D9 全部采纳（或修订后维持），无否决项**；ADR-0029 是否由 Proposed 推进为
 Accepted 由决策者另行确认。
+
+> **2026-08-18 决策转向（v2）覆盖了「全部采纳」**：评审定稿后，决策者提出「脚本端按设备
+> 指纹自行路由能否弱化项目属性」，经核实（§4.1）确认转向——R3 由脚本路由承担，
+> 项目模型回归登记簿。D1–D9 的逐条评审结论**保留为 v1 历史**；v2 处置为：
+> **D1 / D4 / D5 / D7 / D8 / D9 挂起、D6 保留 `specialty` 挂起 `applicable`、D2 / D3 保留
+> （D2 新增 `jira_project_key`）**。逐条状态与复议触发条件以 ADR-0029 修订记录为准，
+> 禁止在未触发复议条件时重新提出已挂起机制（防兜圈子）。
 
 ### D1 — 步骤级参数覆盖 `params_override` — **采纳**
 
@@ -411,8 +418,9 @@ Accepted 由决策者另行确认。
 
 | 项 | 状态 |
 |----|------|
-| ~~§5 项目清单填写~~ | ✅ 已完成（2026-08-18）：5 真实项目 + Legacy；剩余 `product_line` / 各项目 APK 路径为 P4 实施期补充，不阻塞设计 |
-| ADR-0029 状态 Proposed → Accepted | 待决策者确认（本记录即评审定稿依据） |
+| ~~§5 项目清单填写~~ | ✅ 已完成（2026-08-18）：5 真实项目 + Legacy；剩余 `product_line` / 各项目 APK 路径为实施期补充（v2 后 APK 路径是**脚本路由输入**，不阻塞设计） |
+| ~~v1 方案定稿~~ | ✅ 已被 **v2 决策转向**覆盖（2026-08-18）：D1/D4/D5/D7/D8/D9 挂起、D6 保留 specialty、D2 新增 `jira_project_key`；v1 评审结论保留为历史（§8） |
+| ADR-0029 状态 Proposed → Accepted | 待决策者确认（本记录 + ADR 修订记录为 v2 依据） |
 | DB trigger（storage_key 第四层） | 独立决策，不在本 ADR 范围（ADR D7 明示） |
 | ResourcePool 池归属 | 独立决策，本 ADR 显式不引入（ADR D5 明示） |
 
@@ -427,3 +435,4 @@ Accepted 由决策者另行确认。
 | 2026-08-18 | 补 A18–A23（`storage_key` 不可变、`ProjectScope` 缺省、在途转移、资源池豁免、项目审计、回填 dry-run），对应 ADR-0029 D9 与「迁移与回滚」小节 |
 | 2026-08-18 | 增 §8 D1–D9 评审结论（历轮评审定稿：全部采纳、无否决；遗留项 §5 清单填写与 ADR 状态推进） |
 | 2026-08-18 | §5 清单填写完成（决策者确认）：5 个真实项目 + Legacy；Z258/ELA 族内 APK 共用确认；Z258 形态=手机；数据基准刷新（Device 454→515、PlanRun 91→93，8-15 网段迁移后新增）；「读 brand 辅助归属」核实为当前不可用；各项目 APK 路径暂未处理 |
+| 2026-08-18 | **v2 决策转向（定稿）**：决策者质疑「脚本端按设备指纹路由能否弱化项目属性」→ 确认开关机 `backend=auto` 先例，APK 差异改由脚本路由吸收（§4.1 配套三条：fail-fast / step_trace 记录路由决策 / 登记簿唯一人工维护点）；新增 R4（jira 关键字映射，唯一硬需求）+ G15；§3.2 前端改动面重写为登记簿最小形态；§6 落地顺序收敛为 P1–P3 + 并行脚本路由 + 独立前置；§7 验收 A1–A23 → B1–B11；ADR D1/D4/D5/D7/D8/D9 挂起、D6 保留 specialty、D2 新增 `jira_project_key`（防兜圈子：挂起项的复议触发条件以 ADR 修订记录为准） |
