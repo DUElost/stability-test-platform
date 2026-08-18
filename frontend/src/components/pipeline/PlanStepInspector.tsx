@@ -152,7 +152,10 @@ function ScriptInfoCard({
 }: ScriptInfoCardProps) {
   const allActive = scripts.filter(s => s.is_active);
   const knownNames = Array.from(new Set(allActive.map(s => s.name))).sort();
-  const isUnknown = scriptName && !matchedScript;
+  // matchedScript 不过滤 is_active（参数表单仍需要停用版本的 schema 才能显示已填的值），
+  // 所以「异常」判定必须自己补上 is_active——只写 !matchedScript 的话，停用版本会被
+  // 当成正常匹配，下面 deactivatedMatch 是它的严格子集，那条提示永远不会出现。
+  const isUnknown = !!scriptName && (!matchedScript || !matchedScript.is_active);
 
   // Distinguish: version deactivated vs. completely unknown
   const deactivatedMatch = isUnknown
