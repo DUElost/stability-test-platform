@@ -36,6 +36,9 @@ emoji 区段），仅 CSS 就 101 KB / 31.5 KB gzip，占 `index.css` 的 53.7%�
 - `DispatchGateCard`：`hostEntries` 原为裸 `Object.entries(gate.hosts)`，每渲染换引用，
   致使以它为依赖的 `totalScripts` / `allScriptsOk` 两个 `useMemo` 长期空转。改为
   `useMemo(..., [gate.hosts])` 后三个 memo 同时生效，`counts` 的抑制随之消除。
+  另有一处配套前提：`precheck` 为空的 dispatchOnly 路径下 `gate` 是每渲染重建的字面量，
+  内联 `hosts: {}` 每次都是新引用，会让该 memo 在这条路径上失效——`hosts` 须指向模块级
+  `EMPTY_HOSTS` 常量。两处必须同时成立，只改其一等于没改。
 - `LiveConsole`：`tallyIssues` 包 `useCallback([enableIssueCount])`，`replayFromStart`
   依赖改为 `[consoleRunId, tallyIssues]`。两者标识变化时机与原 `[consoleRunId,
   enableIssueCount]` 完全一致，行为不变，抑制消除。
