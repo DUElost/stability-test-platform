@@ -29,7 +29,7 @@ MTK / 展锐 / 高通，手机 / 平板）。三类需求（详见背景分析 �
 **参数分层是先决条件**：项目模型不解决参数分化，参数分化不依赖项目模型。二者的先后顺序
 由此确定（D1 可独立先行）。
 
-生产现状为引入时机提供了窗口：Device 454 台、Host 34 台已达生产规模，
+生产现状为引入时机提供了窗口：Device 515 台、Host 34 台已达生产规模，
 而 Plan 仅 4 个且均为验证用途——迁移成本近乎为零。同时真实使用形态尚未验证，
 机制类设计保持最小（见「非目标」）。
 
@@ -56,13 +56,13 @@ MTK / 展锐 / 高通，手机 / 平板）。三类需求（详见背景分析 �
 ```
 test_project
   id            PK
-  project_key   unique, 不可变        ZTE-MLD / TRANSSION-X110 / HUACE-AGRI-TAB
-  display_name                        中兴 A57 系列
+  project_key   unique, 不可变        HONOR-MLD / TRANSSION-X110 / ODM-DAM
+  display_name                        荣耀 MLD 系列
   storage_key   unique, 不可变        产物路径用（见 D7）
 
   -- facet：正交、可空、可枚举、可组合筛选
   product_line                        中兴产品线 / ODM产品线
-  customer                            中兴 / 传音 / 荣耀 / 华测
+  customer                            中兴 / 传音 / 荣耀 / ODM
   platform                            MTK / UNISOC / QCOM
   form_factor                         PHONE / TABLET
 
@@ -84,7 +84,7 @@ create / archive / facet 修改 / **`variables` 变更** / 设备归属转移。
    建成树会让 `MTK` 节点在每条产品线下重复，「查所有 MTK 项目」需跨树遍历。
    而平台相关行为（#220：生产只扫 MTK，展锐/高通走 stub）是全局按平台生效的，
    不从属于任何产品线。
-2. **粒度天然不一致**。「中兴产品线」下还有多个项目，「华测农机平板」本身即一个项目。
+2. **粒度天然不一致**。「中兴产品线」下还有多个项目，「ODM 定制项目」本身即一个项目。
    树强制每层都有节点；facet 不强制——粒度由建项目的人决定，模型不介入。
 3. **视图层级需可变**。facet 正交时，前端可任意切换分组顺序（产品线×平台、平台×形态、
    客户×专项）而数据模型不动；树一旦定序，换视图即改表。
@@ -99,7 +99,8 @@ create / archive / facet 修改 / **`variables` 变更** / 设备归属转移。
 
 按此判据，生产设备的族即项目粒度：`MLD_LX2`(228) 与 `MLD_LX3`(32) 的 MTBF 用例 APK
 已确认为同一个 → 合为一个项目（**MLD**），族内变体由既有的 `device.model` 区分。
-预估项目总数 5–6，逐条确认表见背景分析 §5。
+生产已确认 **5 个真实项目 + 1 个 Legacy**（`LEGACY` 承载 6 台未识别设备与存量 Plan），
+逐条确认表见背景分析 §5（2026-08-18 已填）。
 
 推论：
 
@@ -375,7 +376,7 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 而非派发期多跳解析。D4 的 `${project.x}` 是**单跳**，与此不同。
 
 **9. 项目上下文用每页独立筛选器，不设全局选择器。**
-放弃。逐页重设上下文在 5–6 个项目 × 8 个跟随页面下即失效；且各页筛选状态互不相通时，
+放弃。逐页重设上下文在 6 个项目（5 真实 + Legacy）× 8 个跟随页面下即失效；且各页筛选状态互不相通时，
 「从 Plan 列表点进执行记录」会丢失项目，用户看到的是全量数据——隔离在体感上不成立。
 
 **10. `applicable` 做成硬阻断（不匹配即拒绝保存/派发）。**
@@ -401,7 +402,7 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 | 面 | 影响 |
 |----|------|
 | Schema | 新增 `test_project` + 专项字典表；`plan` 加 `project_id` / `specialty`；`plan_step` 加 `params_override`；`device` 加 `project_id`；`plan_run` 加 `project_id` / `project_storage_key` / `build_version`。全部 additive |
-| 数据迁移 | 建 Legacy 默认项目，回填 4 个存量 Plan、91 个 PlanRun、454 台设备。设备归属需按背景分析 §5 的清单人工确认 |
+| 数据迁移 | 建 Legacy 默认项目，回填 4 个存量 Plan、93 个 PlanRun、515 台设备。设备归属需按背景分析 §5 的清单人工确认 |
 | 派发路径 | `plan_dispatcher_sync` / `plan_dispatcher_core` / `admission_pump` / `plan_chain_trigger` / precheck 增加归属校验；与 `feat/multiworker-b1-b4`（B3）及 ADR-0026 准入队列改同一批文件，需排期避让 |
 | Agent | **无变更**。参数经 `plan_snapshot` → `pipeline_def` → `STP_STEP_PARAMS` 下发，Agent 侧协议不变 |
 | 前端 | `types.ts` 同步；新增「项目」一级导航 + `/projects` `/projects/:projectKey` 两条路由；顶栏全局项目选择器（URL `?project=` 为权威）；8 个业务页跟随上下文、4 类基础设施页不跟随；Plan 列表改二维分组；`useCrossClientSync` 增 `project_changed`。详见 D8 |
@@ -416,8 +417,8 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 | 段 | 内容 | 数据风险 |
 |----|------|----------|
 | M-a | 建表 + 建列（全部 nullable / 有 server_default），无回填、无读路径 | 无 |
-| M-b | 建 Legacy 默认项目，回填 `plan.project_id` / `plan_run.project_id`（4 + 91 行） | 低，可重跑 |
-| M-c | `device.project_id` 按背景分析 §5 清单**逐批**回填（454 行，分族） | 需人工确认，**不自动推断** |
+| M-b | 建 Legacy 默认项目，回填 `plan.project_id` / `plan_run.project_id`（4 + 93 行） | 低，可重跑 |
+| M-c | `device.project_id` 按背景分析 §5 清单**逐批**回填（515 行，分族） | 需人工确认，**不自动推断** |
 | M-d | 打开读路径与门禁（feature flag） | 行为变更点 |
 
 **约束：**
@@ -425,7 +426,7 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 - **幂等可重跑**：回填以「目标列为 NULL」为条件，重跑不覆盖已确认的归属；
   Legacy 项目按 `project_key` 幂等 upsert
 - **dry-run 必备**：M-c 提供 `--dry-run` 输出「将把哪些设备划入哪个项目」的清单，
-  确认后再执行。454 台设备的归属错划需要逐台人工纠正，成本远高于一次预演
+  确认后再执行。515 台设备的归属错划需要逐台人工纠正，成本远高于一次预演
 - **不自动推断归属**：不得按 `device.model` 前缀或 `platform` 自动分配项目。
   族与项目的映射由 §5 清单人工确认——`MLD_LX2`/`MLD_LX3` 共用 APK 是**业务事实**，
   不是能从机型字符串推导的规律
@@ -465,8 +466,11 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 该项**须单独写一条 Agent Note**（`docs/notes/bug-fix/`，Class: bug-fix）记录
 「订阅侧与连接侧鉴权分离」的成因与修复边界，防止后续复议时重新论证一遍。
 
-**待定项**：背景分析 §5 的项目清单需逐条填写，用以确定项目总行数、各项目 `variables` 的
-APK 路径，以及是否存在跨平台族（若有，该项目 `platform` facet 置空，见 D2）。
+**待定项（已收窄，2026-08-18）**：背景分析 §5 的项目清单已填写（5 个真实项目 + 1 个
+Legacy）；无跨平台族（五族均单平台：MLD/ELA/DAM/Infinix 为 MTK、Z258 为 UNISOC），
+`platform` facet 全可填。剩余 P4 实施期补充：各项目 `variables` 的用例 APK 路径
+（`${project.x}` 引用在实施期按需写入，不阻塞设计）；`product_line` facet 值建表后
+可为 NULL 后补。
 清单填写不阻塞 D1 与 D2 的设计。
 
 **本 ADR 只定前端信息架构（D8），不定视觉与组件细节。** 具体布局、组件选型与交互稿
