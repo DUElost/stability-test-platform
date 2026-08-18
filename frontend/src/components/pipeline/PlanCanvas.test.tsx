@@ -51,6 +51,17 @@ const BASE_LIFECYCLE: PipelineDef = {
   },
 };
 
+/**
+ * 契约里 step.timeout_seconds 是 **required integer / minimum 0**
+ * （`backend/schemas/pipeline_schema.json` §step），null 不合法 ——「不限」编码为 0。
+ * 但 StepRow 对 null 有兜底渲染，覆盖的是 schema 收紧前落库的老 Plan（pipeline_def
+ * 是 JSONB，历史行不会被回填）。这里用一次断言构造那种老数据。
+ *
+ * 不要据此把 types.ts 放宽成 `number | null`：编辑器一旦能产出 null，
+ * 保存时会被后端 schema 直接拒收。
+ */
+const LEGACY_NULL_TIMEOUT = null as unknown as number;
+
 interface HarnessProps {
   lifecycle?: PipelineDef;
   scripts?: ScriptEntry[];
@@ -180,7 +191,7 @@ describe('PlanCanvas', () => {
                   action: 'script:install_apk',
                   version: 'v3.1',
                   enabled: false,
-                  timeout_seconds: null as unknown as number,
+                  timeout_seconds: LEGACY_NULL_TIMEOUT,
                 }),
               ],
               teardown: [],

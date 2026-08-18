@@ -63,6 +63,19 @@ npx eslint src --max-warnings 0   # 0
 
 新增 93 个用例，全套 561 个用例无回归。三个新测试文件均不连网络：`PlanCanvas` / `PlanStepInspector` 是纯受控组件直接渲染，`NotificationsPage` 只 mock `api.notifications` 与两个 hook，`toApiError` 保留真实实现（要验后端 `detail` 能原样透到 toast）。
 
+## 顺带记一个未修的显示问题
+
+契约里 step `timeout_seconds` 是 required integer / minimum 0，**「不限」编码为 0**
+（`backend/schemas/pipeline_schema.json` §step，且 0 额外要求 `stall_seconds ≥ 1`）。
+但 `StepRow` 判的是 `!= null`，于是配成「不限」的步骤在画布上显示 `0s` 而不是 `∞`——
+`∞` 那条分支只有 schema 收紧前落库的老 Plan（`pipeline_def` 是 JSONB，历史行不回填）
+才走得到。本次只用测试把两条分支都钉住，显示语义要不要改另议：改成把 0 也渲染成 `∞`
+会影响所有 Plan 的读法，不该搭在补测试的 PR 里。
+
+同理，**不要**把 `types.ts` 的 `timeout_seconds` 放宽成 `number | null`。编辑器一旦
+能产出 null，保存时会被后端 schema 直接拒收——测试里那个 `LEGACY_NULL_TIMEOUT`
+是为覆盖老数据显式构造的，不是契约。
+
 ## 何时重议
 
 - 三个组件任一被拆分时——测试断言的是行为不是结构，拆分后应当原样通过；通不过说明拆分改了行为。

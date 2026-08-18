@@ -417,6 +417,18 @@ describe('NotificationsPage', () => {
 
       await waitFor(() => expect(mocks.notifications.deleteRule).toHaveBeenCalledWith(10));
     });
+
+    it('取消确认则不删除规则', async () => {
+      setData({ channels: [CHANNEL_WEBHOOK], rules: [RULE] });
+      mocks.confirm.mockResolvedValue(false);
+      renderPage('/notifications?tab=rules');
+      await screen.findByText('失败即通知');
+
+      fireEvent.click(screen.getByLabelText('删除规则 失败即通知'));
+
+      await waitFor(() => expect(mocks.confirm).toHaveBeenCalled());
+      expect(mocks.notifications.deleteRule).not.toHaveBeenCalled();
+    });
   });
 
   describe('通知记录', () => {
