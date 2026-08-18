@@ -44,7 +44,9 @@ const BASE_LIFECYCLE: PipelineDef = {
   lifecycle: {
     init: [makeStep({ step_id: 'init_a' }), makeStep({ step_id: 'init_b' })],
     patrol: {
-      interval_seconds: 120,
+      // 刻意与 Harness 传入的 patrolIntervalSeconds(120) 取不同值：副标题读的是 prop，
+      // 两边同值的话组件读错了源也照样绿。
+      interval_seconds: 999,
       steps: [makeStep({ step_id: 'patrol_a' })],
     },
     teardown: [makeStep({ step_id: 'td_a' })],
@@ -159,7 +161,7 @@ describe('PlanCanvas', () => {
       expect(screen.getByText('Patrol')).toBeInTheDocument();
       expect(screen.getByText('Teardown')).toBeInTheDocument();
       expect(screen.getByText('一次性初始化 · 2 Steps')).toBeInTheDocument();
-      // patrol 副标题用的是 props 上的间隔，不是 lifecycle.patrol.interval_seconds
+      // patrol 副标题用的是 props 上的间隔，不是 lifecycle.patrol.interval_seconds(999)
       expect(screen.getByText('↻ 每 120s 循环 · 1 Step')).toBeInTheDocument();
       expect(screen.getByText('收尾清理 · 1 Step')).toBeInTheDocument();
     });
@@ -266,13 +268,13 @@ describe('PlanCanvas', () => {
       expect(patrol?.steps).toHaveLength(1);
     });
 
-    it('已有 patrol 时保留原间隔', () => {
+    it('已有 patrol 时保留 lifecycle 里的原间隔，不被 prop 覆盖', () => {
       const onLifecycleChange = vi.fn();
       render(<Harness onLifecycleChange={onLifecycleChange} />);
 
       fireEvent.click(screen.getByText('+ 添加 Patrol 步骤'));
 
-      expect(lastLifecycle(onLifecycleChange).lifecycle.patrol?.interval_seconds).toBe(120);
+      expect(lastLifecycle(onLifecycleChange).lifecycle.patrol?.interval_seconds).toBe(999);
     });
   });
 
@@ -554,7 +556,9 @@ describe('PlanCanvas', () => {
     it('名称与 meta 输入不可编辑', () => {
       render(<Harness readOnly />);
       expect(screen.getByDisplayValue('冒烟计划')).toHaveAttribute('readonly');
+      expect(screen.getByPlaceholderText('Plan 描述（可选）')).toHaveAttribute('readonly');
       expect(screen.getByPlaceholderText('不开启')).toBeDisabled();
+      expect(screen.getByDisplayValue('0.2')).toBeDisabled();
       expect(screen.getByPlaceholderText('不限')).toBeDisabled();
     });
 
