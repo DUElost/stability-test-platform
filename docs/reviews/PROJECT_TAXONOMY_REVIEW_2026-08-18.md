@@ -292,7 +292,7 @@ P1–P3 均为 additive 迁移，可独立合入、可回滚。
 | B7 | Plan / PlanRun / 结果页带项目标签并可按项目筛选 | P2 |
 | B8 | 问题追踪页提交 jira 时**自动带出** `jira_project_key`，无需人工记忆 | P3 |
 | B9 | `device.project_id` 变更后项目页与设备页缓存失效（B 浏览器可见，弱化版 `project_changed`） | P2 |
-| B10 | 存量 Plan / PlanRun / 设备回填 Legacy（4 / 93 / 515），未分配行为不变 | P1 |
+| B10 | 存量 Plan / PlanRun / 设备回填 Legacy（4 / 93 / 515），未分配（NULL）行为不变；**迁移完成标准 = `device.project_id` 无 NULL**（NULL 仅迁移窗口瞬态，非「公共池」域） | P1 |
 | B11 | `test_project` 的 create / archive / facet / jira 变更均产生审计记录 | P1 |
 
 ---
@@ -436,3 +436,4 @@ Accepted 由决策者另行确认。
 | 2026-08-18 | 增 §8 D1–D9 评审结论（历轮评审定稿：全部采纳、无否决；遗留项 §5 清单填写与 ADR 状态推进） |
 | 2026-08-18 | §5 清单填写完成（决策者确认）：5 个真实项目 + Legacy；Z258/ELA 族内 APK 共用确认；Z258 形态=手机；数据基准刷新（Device 454→515、PlanRun 91→93，8-15 网段迁移后新增）；「读 brand 辅助归属」核实为当前不可用；各项目 APK 路径暂未处理 |
 | 2026-08-18 | **v2 决策转向（定稿）**：决策者质疑「脚本端按设备指纹路由能否弱化项目属性」→ 确认开关机 `backend=auto` 先例，APK 差异改由脚本路由吸收（§4.1 配套三条：fail-fast / step_trace 记录路由决策 / 登记簿唯一人工维护点）；新增 R4（jira 关键字映射，唯一硬需求）+ G15；§3.2 前端改动面重写为登记簿最小形态；§6 落地顺序收敛为 P1–P3 + 并行脚本路由 + 独立前置；§7 验收 A1–A23 → B1–B11；ADR D1/D4/D5/D7/D8/D9 挂起、D6 保留 specialty、D2 新增 `jira_project_key`（防兜圈子：挂起项的复议触发条件以 ADR 修订记录为准） |
+| 2026-08-18 | v2.1（审查确认 F1–F6）：LEGACY 为真实项目行、NULL 降级迁移瞬态（M-c 完成标准 = 无 NULL；删「公共池」）；全链路统一 `project_key`；D2 facet 理由替换为 MLD/ELA 已核实论据；D4 挂起注记补 APK 数组类型；`applicable` 示例改真实组合；`storage_key` 挂起期间不建、复议时由 `project_key` 派生。详见 ADR 修订记录 v2.1 |

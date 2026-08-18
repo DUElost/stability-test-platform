@@ -14,6 +14,7 @@
 |------|------|------|
 | 2026-08-18 | v1 | 初版：D1 步骤参数覆盖 + D4 三层参数 + D5 派发门禁 + D7 存储命名空间 + D8 全局项目上下文；D1–D9 经评审全部采纳 |
 | 2026-08-18 | **v2（决策转向）** | 决策者提出「脚本端按设备指纹自行路由到执行器能否弱化项目属性」，核实后确认：开关机专项的 `backend=auto`（`/mnt/automation-toolkit/android-tools/stability_PowerCycle-Test/test-config.properties`：Z2582 无 REBOOT 时自动用 MSSV）即**单入口 + 设备能力路由**的既有先例 → **APK 差异由脚本路由吸收，R3 的「结构性阻塞」解除**。项目模型回归**登记簿**定位（知识层：客户 / 项目关系 / 形态 / jira 映射——adb 指纹读不出的部分，见背景分析 §4.1）；执行差异归脚本（路由 + step_trace 记录路由决策 + 未匹配 fail-fast）。**D1 / D4 / D5 / D7 / D8 / D9 挂起**，D6 保留 `specialty`、挂起 `applicable`；D2 新增 `jira_project_key` |
+| 2026-08-18 | v2.1（审查确认 F1–F6） | ①**LEGACY vs NULL 二义**（F1）：定稿 LEGACY 为真实项目行，NULL 降级为**迁移期瞬态**——M-c 完成标准 = 回填后 `device.project_id` 无 NULL（509 台入 5 项目 + 6 台入 LEGACY），D2 删「公共池」表述；②**参数名统一**（F2）：URL / API / 日志 / 审计全链路 `project_key`，数字 id 只留 DB 外键（可追溯性论证只有 key 成立）；③**D2 facet 理由重写**（F3）：原理由 1、2（「中兴/ODM 均同时存在 MTK 与展锐」「产品线下多项目」）被 §5 证伪，替换为已核实论据——MLD/ELA 同客户、同平台、同形态但 APK 不同必须分两项目，树在第一层分不开；④**variables 值类型**（F4）：挂起注记补真实 APK 数组值与「按原类型代入」语义；⑤**applicable 示例**（F5）改真实组合 `{"platform":["MTK"],"customer":["荣耀"]}`；⑥**key 双列**（F6）：`storage_key` 挂起期间不建，复议 D7 时由 `project_key` 派生（字符集 `[a-z0-9-]`），`project_key` 一经对外使用即不可变 |
 
 **挂起语义**：被挂起决策的原文**保留不删**（记录论证历史，防兜圈子——未触发复议条件时不得重新提出已挂起机制）。复议触发条件：
 
@@ -93,7 +94,8 @@ test_project
   variables     JSONB                 项目级参数（见 D4，v2 挂起后暂不建列）
 ```
 
-新增归属列：`plan.project_id`、`device.project_id`（可空，NULL = 未分配/公共池）、
+新增归属列：`plan.project_id`、`device.project_id`（可空，NULL = **迁移期瞬态**，
+迁移完成后归零——不存在「公共池」域，未识别设备归 `LEGACY` 项目，见 M-c 完成标准）、
 `plan_run.project_id`。设备归属变更走审计日志（ADR-0015），不建独立归属历史表。
 
 **`test_project` 的所有变更均走 `record_audit`**（`backend/core/audit.py:35`，与 `routes/users.py` 同形）：
@@ -101,15 +103,16 @@ create / archive / facet 修改 / **`variables` 变更** / 设备归属转移。
 `variables` 尤其不可省——它直接决定下次派发的实际执行内容（用例 APK 路径），
 不审计则「谁在什么时候把 APK 换了」无从追溯，而这正是跨项目误配最可能的来源。
 
-**facet 而非层级树的三条理由**：
+**facet 而非层级树的两条理由**（v2 修订：原理由 1、2 基于「中兴/ODM 均同时存在
+MTK 与展锐、产品线下多项目」的假设，被 §5 定稿证伪——生产无跨平台族、中兴仅
+Z258 一个项目。替换为已核实事实）：
 
-1. **平台与产品线正交**。中兴产品线与 ODM 产品线下均同时存在 MTK 与展锐机型；
-   建成树会让 `MTK` 节点在每条产品线下重复，「查所有 MTK 项目」需跨树遍历。
-   而平台相关行为（#220：生产只扫 MTK，展锐/高通走 stub）是全局按平台生效的，
-   不从属于任何产品线。
-2. **粒度天然不一致**。「中兴产品线」下还有多个项目，「ODM 定制项目」本身即一个项目。
-   树强制每层都有节点；facet 不强制——粒度由建项目的人决定，模型不介入。
-3. **视图层级需可变**。facet 正交时，前端可任意切换分组顺序（产品线×平台、平台×形态、
+1. **客户 / 平台 / 形态都不能作为树的顶层节点**（§5 已确认）：MLD 与 ELA 同属荣耀、
+   同 MTK、同手机形态，但用例 APK 不同（MLD 的 APK 从 ELA 基础上适配）→ **必须分两个
+   项目**。树要求每层节点互斥归属，第一层无论按客户、平台还是形态都分不开这两个项目；
+   facet 天然可以——两行、facet 全同、`project_key` 不同。而平台相关行为（#220：
+   生产只扫 MTK，展锐/高通走 stub）是全局按平台生效的，不从属于任何产品线。
+2. **视图层级需可变**。facet 正交时，前端可任意切换分组顺序（产品线×平台、平台×形态、
    客户×专项）而数据模型不动；树一旦定序，换视图即改表。
 
 **`test_project.platform` 只用于筛选、分组与展示，不用于行为判定。**
@@ -138,7 +141,9 @@ create / archive / facet 修改 / **`variables` 变更** / 设备归属转移。
 
 > **状态：挂起（2026-08-18）**。`${project.x}` 的主要动机（用例 APK 按项目注入）已被
 > 脚本内设备指纹路由替代；`variables` 列不建。触发复议：路由表维护成本失控或出现
-> 项目级非 APK 参数需求。
+> 项目级非 APK 参数需求。**F4 注**：示例中 `MLD_cases_v3.apk` 为起草占位符，§5 已核实
+> 真实值为**两个 APK**（`ReliabilityUiautomatorTest.apk` + `ReliabilityUiautomatorTestTest.apk`）——
+> 复议时 `${project.x}` 须按原类型代入（值支持标量与数组，不做字符串拼接）。
 
 ```
 script.default_params        脚本级默认，版本内不可变        {"tool_dir": "/mnt/automation-toolkit/android-tools/stability_MTBF-Test"}
@@ -213,7 +218,8 @@ plan_snapshot                字面值，冻结                    {"tool_dir": 
 
 **R2（同一专项、不同项目用不同工具脚本）不引入新机制**：不同实现即不同 `script:<name>`，
 各自建 Plan，由 `specialty` 提供跨项目聚合视图。防呆通过**属性匹配**实现——
-Script 增加 `applicable` 元数据（如 `{"platform": ["MTK"], "customer": ["中兴"]}`），
+Script 增加 `applicable` 元数据（如 `{"platform": ["MTK"], "customer": ["荣耀"]}`——§5
+已核实的真实组合，MLD/ELA 均为 MTK+荣耀），
 Plan 编辑器按项目 facet 自动过滤候选脚本。
 不建 `project_script_binding` 绑定表：新增脚本需逐项目绑定的维护成本，在快速迭代下不可持续。
 
@@ -246,6 +252,9 @@ Plan 编辑器按项目 facet 自动过滤候选脚本。
 ```
 
 `storage_key` 一经创建即不可变——它已写入历史产物路径，改名会使历史产物失联。
+**v2 补充（F6）**：`project_key` 同时是 URL 路径段与 UI 展示标识，一经对外使用即不可变
+（改展示名走 `display_name`，不换 key）；`storage_key` 挂起期间不建列，复议 D7 时由
+`project_key` 派生一次（字符集限 `[a-z0-9-]`，进文件路径与跨 Windows 扫描工具）。
 **不可变由三层保证，DB unique 只解决唯一性、不解决可变性**：
 
 1. **DB**：`UNIQUE` 约束（防重复，非防改）
@@ -322,7 +331,8 @@ DB trigger 是更强的第四层，但仓库 63 个迁移**零 trigger 先例**�
 ### D9：API 侧 `ProjectScope` 缺省语义
 
 > **状态：挂起（2026-08-18）**。随 D8 取消，API 层不做 `ProjectScope` 强制；新路由
-> 带 `project_id` 可选过滤参数即可。触发复议：与 D8 相同。
+> 带 `project_key` 可选过滤参数即可（key 进 URL / 日志 / 审计可读，数字 id 只留
+> DB 外键——可追溯性论证只有 key 成立）。触发复议：与 D8 相同。
 
 D8 定义的是**前端**上下文；API 层缺 `project_id` 时的行为需独立定义，
 否则新增路由会静默退化为全量查询。
@@ -466,7 +476,7 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 |----|------|----------|
 | M-a | 建表 + 建列（全部 nullable / 有 server_default），无回填、无读路径 | 无 |
 | M-b | 建 Legacy 默认项目，回填 `plan.project_id` / `plan_run.project_id`（4 + 93 行） | 低，可重跑 |
-| M-c | `device.project_id` 按背景分析 §5 清单**逐批**回填（515 行，分族） | 需人工确认，**不自动推断** |
+| M-c | `device.project_id` 按背景分析 §5 清单**逐批**回填（515 行，分族）；**完成标准：回填后无 NULL**（509 台入 5 个真实项目 + 6 台未识别设备入 LEGACY） | 需人工确认，**不自动推断** |
 | M-d | 打开读路径与门禁（feature flag） | 行为变更点 |
 
 **约束：**
