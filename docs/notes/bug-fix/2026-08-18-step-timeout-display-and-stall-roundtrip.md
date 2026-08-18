@@ -28,10 +28,20 @@ Inspector 另加一条提示条：值为 `0` 或缺省时把结论直接写出�
 框读不出这两种取值背后差着 300 秒起步的行为。
 
 `0` 的提示额外点明「本编辑器存不下去」：schema 要求 `timeout_seconds == 0` 时
-必须同时有 `stall_seconds >= 1`，而编辑器不提供停滞钟输入框。此前的行为是清空
-超时框 → 静默写入 0 → 保存时收一条原始 jsonschema 报错。现在至少能看懂为什么。
+必须同时有 `stall_seconds >= 1`，而编辑器不提供停滞钟输入框。
 
-### 2. 保存不再清掉停滞钟（本次真正紧急的那条）
+### 2. 清空超时输入框不再静默写 0
+
+从编辑器存得下去的取值只有 `>= 1` 的整数：`0` 缺停滞钟被条件约束拒，`null` 被
+`_assemble_lifecycle_for_validation` 原样传给 schema 的 `type: integer` 拒。而
+原逻辑 `raw === '' ? 0 : ...` 把「清空」直接写成 `0`——用户要到保存时才收到一条
+原始 jsonschema 报错。
+
+改成用 draft 承接编辑中的原始文本：**空值只是不提交**，失焦回落到最后一次提交的
+值。不把空折算成默认值，是因为那样输入框会立刻跳成 `30`，接着输入就拼成
+`306` / `3060`。
+
+### 3. 保存不再清掉停滞钟（本次真正紧急的那条）
 
 查生产库时发现的：`buildStepsForApi` 不发 `stall_seconds`、
 `rebuildLifecycleFromPlan` 也不读它，而 Plan 保存是**整体替换 PlanStep 行**——
@@ -48,7 +58,7 @@ plan 6 | 验证-短时patrol-自然SUCCESS    | monkey_setup | timeout 600 | sta
 rebuild 读回、build 发回。**只在有值时写键**——凭空多一个键会让所有旧 Plan
 一打开就被 `snapshot()` 判成"已修改"。
 
-### 3. 后端一处过期注释
+### 4. 后端一处过期注释
 
 `_resolve_step_wall_clock` 的 docstring 还写着「schema keeps minimum: 1，
 所以 PlanStep 无法表达 0」，但 2026-08-04 step 级已放到 `minimum: 0`（改由
@@ -72,7 +82,7 @@ rebuild 读回、build 发回。**只在有值时写键**——凭空多一个�
 
 ```bash
 cd frontend
-npx vitest run                     # 78 files / 577 tests passed
+npx vitest run                     # 78 files / 580 tests passed
 npx tsc --noEmit                   # 0
 npx eslint src --max-warnings 0    # 0
 
@@ -80,9 +90,9 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/agent/tests/ -q   # 1025 pas
 ruff check backend/agent/pipeline_engine.py                          # clean
 ```
 
-新增 15 个用例：`stepTiming` 的三态格式化与提示文案 6 个、画布行的
+新增 18 个用例：`stepTiming` 的三态格式化与提示文案 6 个、画布行的
 `∞ / 默认 / ns` 三态 3 个、Inspector 提示条 3 个 + 停滞钟不丢 1 个、
-`planEditUtils` 停滞钟往返 3 个（含"不凭空加键"那条，护的是脏检查）。
+`planEditUtils` 停滞钟往返 3 个（含"不凭空加键"那条，护的是脏检查）、超时输入框空值不落库 3 个。
 
 生产数据核实用只读 SELECT（`plan_step` 的 timeout / stall 分布），未做任何写操作。
 

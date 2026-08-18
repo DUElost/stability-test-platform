@@ -377,15 +377,44 @@ describe('PlanStepInspector', () => {
     it('超时留空记 0（不限），其余按下限 1 夹取', () => {
       const onUpdateStep = vi.fn();
       render(<Harness onUpdateStep={onUpdateStep} />);
-      const input = within(fieldOf('超时 (秒)')).getByRole('spinbutton');
-
-      fireEvent.change(input, { target: { value: '' } });
-      expect(lastStep(onUpdateStep).timeout_seconds).toBe(0);
 
       fireEvent.change(within(fieldOf('超时 (秒)')).getByRole('spinbutton'), {
         target: { value: '-5' },
       });
       expect(lastStep(onUpdateStep).timeout_seconds).toBe(1);
+    });
+
+    it('清空超时不落库——0 与 null 都存不进后端，此前会静默写 0', () => {
+      const onUpdateStep = vi.fn();
+      render(<Harness onUpdateStep={onUpdateStep} />);
+      const input = within(fieldOf('超时 (秒)')).getByRole('spinbutton');
+
+      fireEvent.change(input, { target: { value: '' } });
+
+      expect(onUpdateStep).not.toHaveBeenCalled();
+      // 编辑期允许显示为空，不强行折算成默认值（否则接着输入会拼成 306）
+      expect(input).toHaveValue(null);
+    });
+
+    it('清空后重新输入按新值提交', () => {
+      const onUpdateStep = vi.fn();
+      render(<Harness onUpdateStep={onUpdateStep} />);
+      const input = within(fieldOf('超时 (秒)')).getByRole('spinbutton');
+
+      fireEvent.change(input, { target: { value: '' } });
+      fireEvent.change(input, { target: { value: '600' } });
+
+      expect(lastStep(onUpdateStep).timeout_seconds).toBe(600);
+    });
+
+    it('留空失焦后回落到最后一次提交的值', () => {
+      render(<Harness step={makeStep({ timeout_seconds: 45 })} />);
+      const input = within(fieldOf('超时 (秒)')).getByRole('spinbutton');
+
+      fireEvent.change(input, { target: { value: '' } });
+      fireEvent.blur(input);
+
+      expect(input).toHaveValue(45);
     });
 
     it('超时填 0 落回默认 30 秒（想要不限须清空输入框）', () => {

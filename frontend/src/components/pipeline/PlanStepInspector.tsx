@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, AlertTriangle } from 'lucide-react';
 import type { PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
@@ -450,6 +450,50 @@ function ParamFieldRow({ fieldKey, field, value, onChange, disabled }: ParamFiel
   );
 }
 
+/**
+ * 超时输入框：编辑期允许「空」，但**不把空落库**。
+ *
+ * 从编辑器存得下去的取值只有 `>= 1` 的整数——`0` 要求同时配 `stall_seconds >= 1`
+ * （本面板不暴露该字段），`null` 会被 `_assemble_lifecycle_for_validation` 原样
+ * 传给 schema 的 `type: integer` 拒掉。此前清空输入框会静默写入 `0`，用户直到
+ * 保存才收到一条原始 jsonschema 报错。
+ *
+ * 用 draft 承接编辑中的原始文本，是为了让「清空再重输」这套动作正常：直接把空
+ * 折算成某个默认值会让输入框立刻跳成 `30`，接着输入就变成 `306` / `3060`。
+ * 空值只是不提交，失焦后回落到最后一次提交的值。
+ */
+function TimeoutInput({
+  step,
+  onUpdateStep,
+  readOnly,
+  className,
+}: {
+  step: PipelineStep;
+  onUpdateStep: (next: PipelineStep) => void;
+  readOnly?: boolean;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  return (
+    <input
+      type="number"
+      min={1}
+      value={draft ?? step.timeout_seconds ?? ''}
+      placeholder="默认"
+      disabled={readOnly}
+      onChange={e => {
+        const raw = e.target.value;
+        setDraft(raw);
+        if (raw === '') return;
+        onUpdateStep({ ...step, timeout_seconds: Math.max(1, parseInt(raw, 10) || 30) });
+      }}
+      onBlur={() => setDraft(null)}
+      className={className}
+    />
+  );
+}
+
 interface RuntimeConfigCardProps {
   step: PipelineStep;
   onUpdateStep: (next: PipelineStep) => void;
@@ -470,17 +514,10 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
       <CardBody>
         <div className="grid grid-cols-2 gap-1.5">
           <FieldGroup label="超时 (秒)">
-            <input
-              type="number"
-              min={1}
-              value={step.timeout_seconds ?? ''}
-              placeholder="默认"
-              disabled={readOnly}
-              onChange={e => {
-                const raw = e.target.value;
-                const next = raw === '' ? 0 : Math.max(1, parseInt(raw, 10) || 30);
-                onUpdateStep({ ...step, timeout_seconds: next });
-              }}
+            <TimeoutInput
+              step={step}
+              onUpdateStep={onUpdateStep}
+              readOnly={readOnly}
               className={inputCls}
             />
           </FieldGroup>
