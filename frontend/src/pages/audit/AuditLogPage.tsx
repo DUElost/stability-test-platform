@@ -3,6 +3,7 @@ import { api } from '@/utils/api';
 import { Loader2, Shield } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
@@ -127,11 +128,11 @@ export default function AuditLogPage() {
           <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.subtitle)} />
         </div>
       ) : error ? null : logs.length === 0 ? (
-        <div className={cn(PANEL.root, 'p-12 text-center')}>
-          <Shield className={cn('w-12 h-12 mx-auto mb-3', TEXT.subtle)} />
-          <h3 className={cn('text-lg font-medium mb-2', TEXT.heading)}>暂无审计记录</h3>
-          <p className={cn('text-sm', TEXT.subtitle)}>操作日志将在此处记录</p>
-        </div>
+        <EmptyState
+          title="暂无审计记录"
+          description="操作日志将在此处记录"
+          icon={<Shield />}
+        />
       ) : (
         <>
           <div className={cn(PANEL.root, 'overflow-hidden')}>

@@ -56,7 +56,7 @@ export default function PlanStepInspector({
 
       <div className="flex-1 min-h-0 overflow-y-auto p-2.5 flex flex-col gap-2 [&>*]:shrink-0 custom-scrollbar">
         {!step ? (
-          <EmptyState />
+          <StepEmptyState />
         ) : (
           <>
             <ScriptInfoCard
@@ -123,7 +123,7 @@ export default function PlanStepInspector({
   );
 }
 
-function EmptyState() {
+function StepEmptyState() {
   return (
     <div className={cn('m-1 px-3 py-6 rounded-md', PIPELINE_EDITOR.emptyState)}>
       <div className={cn('font-medium mb-1', TEXT.body)}>未选择步骤</div>

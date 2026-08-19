@@ -6,6 +6,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  TableEmptyRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import type { User } from '@/utils/api';
@@ -38,11 +39,7 @@ export function UserTable({ users, currentUserId, onEdit, onDelete, onToggleActi
         </TableHeader>
         <TableBody>
           {users.length === 0 ? (
-            <TableRow>
-              <TableCell colSpan={7} className={cn('text-center py-8', TEXT.subtitle)}>
-                暂无用户
-              </TableCell>
-            </TableRow>
+            <TableEmptyRow colSpan={7}>暂无用户</TableEmptyRow>
           ) : (
             users.map((user) => (
               <TableRow key={user.id}>
