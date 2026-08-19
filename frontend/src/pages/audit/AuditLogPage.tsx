@@ -98,16 +98,24 @@ export default function AuditLogPage() {
           <option value="start">启动</option>
           <option value="cancel">取消</option>
         </select>
-        <Input
-          type="datetime-local"
-          value={filters.start_time}
-          onChange={(e) => { setFilters({ ...filters, start_time: e.target.value }); setPage(0); }}
-        />
-        <Input
-          type="datetime-local"
-          value={filters.end_time}
-          onChange={(e) => { setFilters({ ...filters, end_time: e.target.value }); setPage(0); }}
-        />
+        <label className="flex items-center gap-2">
+          <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>开始时间</span>
+          <Input
+            type="datetime-local"
+            className="w-52"
+            value={filters.start_time}
+            onChange={(e) => { setFilters({ ...filters, start_time: e.target.value }); setPage(0); }}
+          />
+        </label>
+        <label className="flex items-center gap-2">
+          <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>结束时间</span>
+          <Input
+            type="datetime-local"
+            className="w-52"
+            value={filters.end_time}
+            onChange={(e) => { setFilters({ ...filters, end_time: e.target.value }); setPage(0); }}
+          />
+        </label>
       </div>
 
       {error && !loading && (

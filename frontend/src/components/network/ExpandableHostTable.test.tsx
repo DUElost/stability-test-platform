@@ -56,6 +56,13 @@ describe('ExpandableHostTable', () => {
     expect(screen.getByRole('columnheader', { name: '磁盘' })).toHaveClass('hidden', '2xl:table-cell');
   });
 
+  it('renders the ip subtitle only when it differs from the host name', () => {
+    const ipNamedHost: HostTableData = { ...host, name: host.ip };
+    render(<ExpandableHostTable hosts={[ipNamedHost]} />);
+
+    expect(screen.getAllByText(host.ip)).toHaveLength(1);
+  });
+
   it('shows 未知 when disk usage is unavailable', () => {
     const unknownDisk: HostTableData = {
       ...host,
