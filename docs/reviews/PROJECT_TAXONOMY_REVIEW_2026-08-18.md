@@ -123,7 +123,7 @@ adb 设备指纹读不到**，必须人工维护于平台（2026-08-18 决策者
 | G10 | **扫描工具按项目区分** | 部署级进程 env，全局单值 | `dedup_scan.py:34` |
 | G11 | **Agent 脚本同步范围** | 全量拉取所有活跃脚本 | `backend/agent/registry/script_registry.py:73` |
 | G12 | **快照冻结脚本 sha** | `build_plan_snapshot` 冻结 step/params/nfs_path，**不含 sha**；sha 由 precheck 回查活表 | `plan_dispatcher_core.py:407`、`precheck/scripts.py:24` |
-| G13 | **SocketIO 订阅授权** | `on_subscribe` 对任意 room 字符串直接 `enter_room`，无归属校验（独立鉴权洞，与项目模型无关，可单独修） | `backend/realtime/socketio_server.py:345` |
+| G13 | **SocketIO 订阅（未随视图收窄 + 无校验）** | `on_subscribe` 对任意 room 字符串直接 `enter_room`，无格式/存在性校验。**定性（2026-08-19 纠正）：非越权**——REST 面本就允许任意登录用户读任意 run（`logs.py:92-109` / `plan_runs.py:265,287` 取 `current_user` 不用）；与 REST 一致。两条问题：P2 视图收窄的前置一致性（列表过滤、事件不过滤的割裂）+ 健壮性（客户端可无上限加入任意房间） | `backend/realtime/socketio_server.py:345` |
 | G14 | **成员/角色** | `users.role` 仅 `admin` / `user` 两值 | `backend/models/user.py:16`、`routes/users.py:92` |
 | G15 | **jira 项目关键字映射** | **不存在**（v2 新增）。提交 jira 时项目关键字靠人工记忆/查表 | 全库无 jira 相关字段 |
 
@@ -429,7 +429,7 @@ Accepted 由决策者另行确认。
 |----|------|
 | ~~§5 项目清单填写~~ | ✅ 已完成（2026-08-18）：5 真实项目 + Legacy；剩余 `product_line` / 各项目 APK 路径为实施期补充（v2 后 APK 路径是**脚本路由输入**，不阻塞设计） |
 | ~~v1 方案定稿~~ | ✅ 已被 **v2 决策转向**覆盖（2026-08-18）：D1/D4/D5/D7/D8/D9 挂起、D6 保留 specialty、D2 新增 `jira_project_key`；v1 评审结论保留为历史（§8） |
-| ADR-0029 状态 Proposed → Accepted | 待决策者确认（本记录 + ADR 修订记录为 v2 依据） |
+| ~~ADR-0029 状态 Proposed → Accepted~~ | ✅ 已完成（2026-08-19，v2.3）：决策者拍板 Accepted；执行顺序 A→B 主线、C（脚本路由约定）并行、D（on_subscribe）顺延至 P2 前 |
 | DB trigger（storage_key 第四层） | 独立决策，不在本 ADR 范围（ADR D7 明示） |
 | ResourcePool 池归属 | 独立决策，本 ADR 显式不引入（ADR D5 明示） |
 
@@ -447,3 +447,4 @@ Accepted 由决策者另行确认。
 | 2026-08-18 | **v2 决策转向（定稿）**：决策者质疑「脚本端按设备指纹路由能否弱化项目属性」→ 确认开关机 `backend=auto` 先例，APK 差异改由脚本路由吸收（§4.1 配套三条：fail-fast / step_trace 记录路由决策 / 登记簿唯一人工维护点）；新增 R4（jira 关键字映射，唯一硬需求）+ G15；§3.2 前端改动面重写为登记簿最小形态；§6 落地顺序收敛为 P1–P3 + 并行脚本路由 + 独立前置；§7 验收 A1–A23 → B1–B11；ADR D1/D4/D5/D7/D8/D9 挂起、D6 保留 specialty、D2 新增 `jira_project_key`（防兜圈子：挂起项的复议触发条件以 ADR 修订记录为准） |
 | 2026-08-18 | v2.1（审查确认 F1–F6）：LEGACY 为真实项目行、NULL 降级迁移瞬态（M-c 完成标准 = 无 NULL；删「公共池」）；全链路统一 `project_key`；D2 facet 理由替换为 MLD/ELA 已核实论据；D4 挂起注记补 APK 数组类型；`applicable` 示例改真实组合；`storage_key` 挂起期间不建、复议时由 `project_key` 派生。详见 ADR 修订记录 v2.1 |
 | 2026-08-19 | v2.2（审查确认·路由表住址）：**路由表位置写死 = 工具目录**（不在 `STP_SCRIPT_ROOT` 下，不受 ADR-0020 约束 → 无版本/sha/审计留痕）；配套约定 #2 升级——step_trace 记执行器 / APK **+ 路由表文件 sha256**（同快照两次 run 结果不同可归因「映射被改」+ 告警；写者不可 detect，由文件系统审计/操作规范负责）；D6 `applicable` 补复议触发条件；D5 挂起注记补「公共池已废止」。详见 ADR 修订记录 v2.2 |
+| 2026-08-19 | v2.3（定性纠正 + Accepted）：**`on_subscribe` 不再称「安全洞」**——核实 `logs.py:92-109` / `plan_runs.py:265,287` 仅验登录不验归属，实时与 REST 面一致，不构成越权；准确定性 = P2 视图收窄前置一致性（列表过滤、事件不过滤割裂）+ 健壮性（room 无格式/存在性校验），优先级从安全 P0 降为 P2 前置；**ADR-0029 状态 → Accepted**（决策者拍板，执行顺序 A→B 主线、C 并行、D 顺延）。详见 ADR 修订记录 v2.3 |

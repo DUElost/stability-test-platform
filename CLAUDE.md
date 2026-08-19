@@ -102,7 +102,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 
 | 日期 | ADR | 决策 |
 |------|-----|------|
-| 2026-08-18 | 0029 | 项目分类域(Proposed,v2 决策转向):TestProject **登记簿**定位(知识层:客户/关系/形态/jira 映射,adb 指纹读不出)+ 单层身份 + 正交 facet(产品线/客户/平台/形态,**不建层级树**);APK 差异由**脚本端设备路由**吸收(`backend=auto` 先例),原参数分层/派发门禁/存储命名空间/**全局上下文 D1/D4/D5/D7/D8/D9 挂起**(复议触发条件见 ADR 修订记录,防兜圈子);新增 `jira_project_key`(唯一硬需求);落地 P1 建表回填(4 Plan/93 PlanRun/515 Device)→ P2 登记簿页 → P3 jira 自动带关键字 |
+| 2026-08-19 | 0029 | 项目分类域(**Accepted**,v2.3 定稿):TestProject **登记簿**定位(知识层:客户/关系/形态/jira 映射,adb 指纹读不出)+ 单层身份 + 正交 facet(产品线/客户/平台/形态,**不建层级树**);APK 差异由**脚本端设备路由**吸收(`backend=auto` 先例,路由表住工具目录,step_trace 记路由表 sha256),原参数分层/派发门禁/存储命名空间/**全局上下文 D1/D4/D5/D7/D8/D9 挂起**(复议触发条件见 ADR 修订记录,防兜圈子);新增 `jira_project_key`(唯一硬需求);落地 P1 建表回填(4 Plan/93 PlanRun/515 Device,完成标准=NULL 归零)→ P2 登记簿页 → P3 jira 自动带关键字 |
 | 2026-07-16 | 0026 | 大规模化执行架构(目标态,分阶段落地中):PlanRun 准入队列 + Host OperationScheduler + 批量续租/O(1) 聚合;当前状态机不变,QUEUED/PRECHECK 待 feature flag 路径落地后生效 |
 | 2026-06-21 | 0025 | 方案 C 存储：日志留 SSD、AEE 留 HDD、CIFS 仅汇总；取消 run_log_bundle |
 | 2026-05-21 | 0024 | HttpOnly Cookie + CSRF + refresh 黑名单 + 生产 guard |

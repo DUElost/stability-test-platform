@@ -1,6 +1,6 @@
 # ADR-0029: 项目分类域（TestProject 登记簿 + facet 分类）
 
-- 状态：Proposed（2026-08-18 **决策转向**，见修订记录）
+- 状态：**Accepted**（2026-08-19 决策者拍板；历经 v1 评审 → v2 决策转向 → v2.1 → v2.2 → 定性纠正，见修订记录）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-08-18
@@ -16,6 +16,7 @@
 | 2026-08-18 | **v2（决策转向）** | 决策者提出「脚本端按设备指纹自行路由到执行器能否弱化项目属性」，核实后确认：开关机专项的 `backend=auto`（`/mnt/automation-toolkit/android-tools/stability_PowerCycle-Test/test-config.properties`：Z2582 无 REBOOT 时自动用 MSSV）即**单入口 + 设备能力路由**的既有先例 → **APK 差异由脚本路由吸收，R3 的「结构性阻塞」解除**。项目模型回归**登记簿**定位（知识层：客户 / 项目关系 / 形态 / jira 映射——adb 指纹读不出的部分，见背景分析 §4.1）；执行差异归脚本（路由 + step_trace 记录路由决策 + 未匹配 fail-fast）。**D1 / D4 / D5 / D7 / D8 / D9 挂起**，D6 保留 `specialty`、挂起 `applicable`；D2 新增 `jira_project_key` |
 | 2026-08-18 | v2.1（审查确认 F1–F6） | ①**LEGACY vs NULL 二义**（F1）：定稿 LEGACY 为真实项目行，NULL 降级为**迁移期瞬态**——M-c 完成标准 = 回填后 `device.project_id` 无 NULL（509 台入 5 项目 + 6 台入 LEGACY），D2 删「公共池」表述；②**参数名统一**（F2）：URL / API / 日志 / 审计全链路 `project_key`，数字 id 只留 DB 外键（可追溯性论证只有 key 成立）；③**D2 facet 理由重写**（F3）：原理由 1、2（「中兴/ODM 均同时存在 MTK 与展锐」「产品线下多项目」）被 §5 证伪，替换为已核实论据——MLD/ELA 同客户、同平台、同形态但 APK 不同必须分两项目，树在第一层分不开；④**variables 值类型**（F4）：挂起注记补真实 APK 数组值与「按原类型代入」语义；⑤**applicable 示例**（F5）改真实组合 `{"platform":["MTK"],"customer":["荣耀"]}`；⑥**key 双列**（F6）：`storage_key` 挂起期间不建，复议 D7 时由 `project_key` 派生（字符集 `[a-z0-9-]`），`project_key` 一经对外使用即不可变 |
 | 2026-08-19 | v2.2（审查确认·路由表住址） | **路由表位置写死 = 工具目录**（`test-config.properties` 等，随专项工具，不在 `STP_SCRIPT_ROOT` 下）——跟随先例、不受 ADR-0020 约束，因此**无版本/sha/审计留痕**；补偿：配套约定 #2 升级为「step_trace 记执行器 / APK **+ 路由表文件 sha256**」，同快照两次 run 结果不同可归因「映射被改」并告警（detect 不出写者，由文件系统审计/操作规范负责）。附带：D6 `applicable` 挂起补复议触发条件（fail-fast 频繁命中人为选错脚本）；D5 挂起注记补「原文『公共池』已由 v2.1 废止，复议时不适用」 |
+| 2026-08-19 | v2.3（定性纠正 + Accepted） | ①**`on_subscribe` 定性纠正**：原「既有鉴权洞」不准确——核实 `logs.py:92-109` / `plan_runs.py:265,287` 均 `Depends(get_current_active_user)` 取而不用，REST 面本就允许任意登录用户读任意 run（无 run 归属模型是设计如此），实时通道与 REST 面一致，**不构成越权**。准确两条：**P2 视图收窄的前置一致性**（列表按项目过滤、事件不过滤的割裂——这是必须先于 P2 的真正理由）+ **健壮性**（room 字符串零格式/存在性校验，可无上限加入任意房间）。优先级从「安全 P0」降为「P2 前置」；②**状态 Proposed → Accepted**（决策者 2026-08-19 拍板；执行顺序 A→B 主线，C 并行，D 顺延至 P2 前） |
 
 **挂起语义**：被挂起决策的原文**保留不删**（记录论证历史，防兜圈子——未触发复议条件时不得重新提出已挂起机制）。复议触发条件：
 
@@ -514,17 +515,26 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 | P2 | 前端：项目登记簿页（列表卡片 + facet 筛选；详情 = 设备 / 计划 / 结果 / jira）+ 设备批量归入 + Plan / PlanRun / 结果页项目标签与筛选 | D8 最小形态 / D6 |
 | P3 | jira 提交自动带 `jira_project_key`（提交入口 + 映射展示） | v2 |
 | —（并行，不属本 ADR 表结构） | 脚本路由约定：入口脚本按设备能力路由 + step_trace 记录路由决策 + 未匹配 fail-fast（`backend=auto` 模式规范化） | v2 |
-| —（独立前置） | SocketIO `on_subscribe` 按 run 归属校验（既有鉴权洞，见下，与项目模型无关） | — |
+| —（独立前置） | SocketIO `on_subscribe` 校验（**非安全洞**，见下；须先于 P2 视图收窄，与项目模型无关） | — |
 
-**独立前置项 P0（不属本 ADR 的决策范围，但必须先于 P5）**：`socketio_server.py:345` 的
-`on_subscribe` 对任意 room 字符串直接 `enter_room`，无归属校验
-（本仓 `test_dashboard_auth.py:8` 明确记录该 P0 只覆盖 `on_connect`）。
-前端做了项目上下文过滤而实时事件仍全量推送时，项目登记簿的可观测性收益会被打穿——
-用户在 A 项目页面上会收到 B 项目 run 的 `step_log`（且该洞不依赖项目模型：任意
-room 字符串均可订阅，v2 后依旧成立）。
+**独立前置项（不属本 ADR 的决策范围，但必须先于 P2）**：`socketio_server.py:345` 的
+`on_subscribe` 对任意 room 字符串直接 `enter_room`，无格式校验、无存在性校验
+（本仓 `test_dashboard_auth.py:8` 明确记录该前置只覆盖 `on_connect`）。
+
+**定性（2026-08-19 纠正，勿再称「安全洞」）**：`on_subscribe` 放行任意 room **不构成
+越权**——REST 面本就允许任意登录用户读任意 run 日志（`logs.py:92-109` 的
+`query_runtime_logs` 与 `plan_runs.py:265,287` 均 `Depends(get_current_active_user)`
+取而不用，无归属校验；平台无 run 归属模型是设计如此）。实时通道与 REST 面一致。
+准确的两条定性：
+
+1. **P2 前置的一致性**：登记簿页按项目筛选后，实时事件若仍全量推，出现「列表按项目
+   过滤、事件不过滤」的割裂——用户在 A 项目页面会收到 B 项目 run 的 `step_log`。
+   这是必须先于 P2 的真正理由
+2. **健壮性**：room 字符串零格式/存在性校验，客户端可无上限加入任意数量房间
 
 该项**须单独写一条 Agent Note**（`docs/notes/bug-fix/`，Class: bug-fix）记录
-「订阅侧与连接侧鉴权分离」的成因与修复边界，防止后续复议时重新论证一遍。
+「实时通道未随视图收窄 + room 无校验」的成因与修复边界，防止后续按「安全 P0」紧急度
+错排、或发现「不是洞」后整条撤掉。
 
 **待定项（已收窄，2026-08-18）**：背景分析 §5 的项目清单已填写（5 个真实项目 + 1 个
 Legacy）；无跨平台族（五族均单平台：MLD/ELA/DAM/Infinix 为 MTK、Z258 为 UNISOC），
