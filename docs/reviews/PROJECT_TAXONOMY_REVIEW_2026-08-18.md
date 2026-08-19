@@ -243,6 +243,9 @@ v1 判定 R3 为「结构性阻塞」（G1/G2/G3 未解除时逐项目分化只�
 
 - **项目总行数 = 5 个真实项目 + 1 个 Legacy**（`LEGACY` 承载 6 台未识别设备与存量 Plan
   回填，见迁移 M-b/M-c）。「预估 5–6」得到确认。
+- **台数为 2026-08-18 快照，执行时以回填脚本 `--dry-run` 输出为准**（2026-08-19 实测
+  545 台：MLD 260 / Z258 238 / ELA 20 / DAM 18 / X110 3 / 未识别 6，全部落于本表族内，
+  零清单外 model）。
 - **无跨平台族**：五族均单平台（MLD/ELA/DAM/Infinix 为 MTK，Z258 为 UNISOC），
   `platform` facet 全部可填，无需置空（D2）。
 - **同客户 ≠ 同项目**：MLD 与 ELA 同属荣耀、同 MTK、同手机形态，但用例 APK 不同
@@ -268,7 +271,7 @@ v1 判定 R3 为「结构性阻塞」（G1/G2/G3 未解除时逐项目分化只�
 
 | 阶段 | 内容（v2 最小形态） | 解除 | 依赖 |
 |------|------|------|------|
-| P1 | `test_project` 表（含 `jira_project_key`，不含 `variables`/`storage_key`）+ 专项字典表 + `plan.project_id/specialty` + `device.project_id` + `plan_run.project_id/build_version`；4 个存量 Plan / 93 PlanRun / 515 设备回填 Legacy | G4 / G7 / G15 | 无 |
+| P1 | `test_project` 表（含 `jira_project_key`，不含 `variables`/`storage_key`）+ 专项字典表 + `plan.project_id/specialty` + `device.project_id` + `plan_run.project_id/build_version`；存量 Plan / PlanRun / 设备回填 Legacy（2026-08-18 快照 4 / 93 / 515，执行以 dry-run 输出为准） | G4 / G7 / G15 | 无 |
 | P2 | 前端（见 §3.2 v2）：项目登记簿页（列表卡片 + facet 筛选；详情 = 设备 / 计划 / 结果 / jira）+ 设备批量归入 + Plan / PlanRun / 结果页项目标签与筛选 | G6 / G8 | P1 |
 | P3 | jira 提交自动带 `jira_project_key`（问题追踪页提交入口 + 映射展示） | G15 | P1 |
 | —（并行，不属本 ADR 表结构） | 脚本路由约定：入口脚本按设备能力路由 + step_trace 记录路由决策**及路由表文件 sha256** + 未匹配 fail-fast（`backend=auto` 模式规范化，v2.2 定稿路由表住工具目录） | R3 | 无 |
@@ -301,7 +304,7 @@ P1–P3 均为 additive 迁移，可独立合入、可回滚。
 | B7 | Plan / PlanRun / 结果页带项目标签并可按项目筛选 | P2 |
 | B8 | 问题追踪页提交 jira 时**自动带出** `jira_project_key`，无需人工记忆 | P3 |
 | B9 | `device.project_id` 变更后项目页与设备页缓存失效（B 浏览器可见，弱化版 `project_changed`） | P2 |
-| B10 | 存量 Plan / PlanRun / 设备回填 Legacy（4 / 93 / 515），未分配（NULL）行为不变；**迁移完成标准 = `device.project_id` 无 NULL**（NULL 仅迁移窗口瞬态，非「公共池」域） | P1 |
+| B10 | 存量 Plan / PlanRun / 设备回填 Legacy（2026-08-18 快照 4 / 93 / 515，执行以 dry-run 输出为准），未分配（NULL）行为不变；**迁移完成标准 = `device.project_id` 无 NULL**（NULL 仅迁移窗口瞬态，非「公共池」域） | P1 |
 | B11 | `test_project` 的 create / archive / facet / jira 变更均产生审计记录 | P1 |
 
 ---

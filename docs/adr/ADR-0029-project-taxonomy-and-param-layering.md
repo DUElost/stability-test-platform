@@ -471,7 +471,7 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 | 面 | 影响（v2 最小形态） |
 |----|------|
 | Schema | 新增 `test_project`（含 `jira_project_key`，不含 `variables` / `storage_key`）+ 专项字典表；`plan` 加 `project_id` / `specialty`；`device` 加 `project_id`；`plan_run` 加 `project_id` / `build_version`。全部 additive |
-| 数据迁移 | 建 Legacy 默认项目，回填 4 个存量 Plan、93 个 PlanRun、515 台设备。设备归属需按背景分析 §5 的清单人工确认（M-c 分批 + dry-run 不变） |
+| 数据迁移 | 建 Legacy 默认项目，回填存量 Plan / PlanRun / 设备（2026-08-18 快照为 4 Plan / 93 PlanRun / 515 设备；**执行台数以回填脚本 dry-run 输出为准**）。设备归属需按背景分析 §5 的清单人工确认（M-c 分批 + dry-run 不变） |
 | 派发路径 | **无改动**——不增加归属门禁（D5 挂起）。`plan_run` 快照建议补脚本 `content_sha256` 冻结（原 D5 第三段，独立于项目模型，可与 P2 并行） |
 | Agent | **无变更**。APK 差异由脚本侧设备路由承担（`backend=auto` 模式规范化 + step_trace 记录路由决策 + 未匹配 fail-fast），属脚本目录约定，不涉平台协议 |
 | 前端 | `types.ts` 同步；新增「项目」一级导航 + `/projects` `/projects/:projectKey` 两条路由（列表 = facet 卡片筛选，详情 = 设备 / 计划 / 结果 / jira 四块）；设备页加「批量归入项目」；Plan / PlanRun / 结果页加项目标签与下拉筛选。**无全局选择器、无跨页跟随**（D8 挂起） |
@@ -486,8 +486,8 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 | 段 | 内容 | 数据风险 |
 |----|------|----------|
 | M-a | 建表 + 建列（全部 nullable / 有 server_default），无回填、无读路径 | 无 |
-| M-b | 建 Legacy 默认项目，回填 `plan.project_id` / `plan_run.project_id`（4 + 93 行） | 低，可重跑 |
-| M-c | `device.project_id` 按背景分析 §5 清单**逐批**回填（515 行，分族）；**完成标准：回填后无 NULL**（509 台入 5 个真实项目 + 6 台未识别设备入 LEGACY） | 需人工确认，**不自动推断** |
+| M-b | 建 Legacy 默认项目，回填 `plan.project_id` / `plan_run.project_id`（2026-08-18 快照为 4 + 93 行；执行以 dry-run 输出为准） | 低，可重跑 |
+| M-c | `device.project_id` 按背景分析 §5 清单**逐批**回填（2026-08-18 快照 515 行，分族；执行台数以 dry-run 输出为准）；**完成标准：回填后无 NULL**（快照数：509 台入 5 个真实项目 + 6 台未识别设备入 LEGACY） | 需人工确认，**不自动推断** |
 | M-d | 打开读路径与门禁（feature flag） | 行为变更点 |
 
 **约束：**
@@ -495,7 +495,7 @@ policy 静默失效需专门反例用例证伪。若 R1 升级为安全需求，
 - **幂等可重跑**：回填以「目标列为 NULL」为条件，重跑不覆盖已确认的归属；
   Legacy 项目按 `project_key` 幂等 upsert
 - **dry-run 必备**：M-c 提供 `--dry-run` 输出「将把哪些设备划入哪个项目」的清单，
-  确认后再执行。515 台设备的归属错划需要逐台人工纠正，成本远高于一次预演
+  确认后再执行。存量设备的归属错划需要逐台人工纠正，成本远高于一次预演
 - **不自动推断归属**：不得按 `device.model` 前缀或 `platform` 自动分配项目。
   族与项目的映射由 §5 清单人工确认——`MLD_LX2`/`MLD_LX3` 共用 APK 是**业务事实**，
   不是能从机型字符串推导的规律
