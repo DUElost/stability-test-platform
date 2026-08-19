@@ -111,6 +111,25 @@ const TableCaption = React.forwardRef<
 ))
 TableCaption.displayName = "TableCaption"
 
+/**
+ * 表格已有表头、只是没有数据行时用它 —— 不要在 `<tbody>` 里放 `EmptyState`，
+ * 那是给整页用的（`py-16` + 64px 图标）。三种空态形态的分工见 `ui/empty-state.tsx`。
+ */
+const TableEmptyRow = ({
+  colSpan,
+  children = "暂无数据",
+}: {
+  colSpan: number
+  children?: React.ReactNode
+}) => (
+  <TableRow>
+    <TableCell colSpan={colSpan} className="py-8 text-center text-muted-foreground">
+      {children}
+    </TableCell>
+  </TableRow>
+)
+TableEmptyRow.displayName = "TableEmptyRow"
+
 export {
   Table,
   TableHeader,
@@ -120,4 +139,5 @@ export {
   TableRow,
   TableCell,
   TableCaption,
+  TableEmptyRow,
 }

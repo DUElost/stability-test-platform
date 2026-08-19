@@ -14,11 +14,10 @@ import { api, coerceHostList, fetchHostList, toApiError } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
 import { hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
-import { SKELETON_BLOCK, TEXT } from '@/design-system';
+import { SKELETON_BLOCK } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { BULK_HOT_UPDATE_SKIP_LABEL, precheckBulkHotUpdate } from './bulkHotUpdate';
 
@@ -616,43 +615,30 @@ export default function HostsPage() {
         )}
       </div>
 
-      {/* Host Table */}
-      {tableData.length > 0 ? (
-        <ExpandableHostTable
-          hosts={tableData}
-          onHotUpdate={isAdmin ? handleHotUpdate : undefined}
-          isHotUpdating={(hostId: string | number) =>
-            isHostOpBusy(hostId, 'hot_update') ||
-            (bulkHotUpdateProgress != null && selectedHostIds.has(hostId))
-          }
-          onInstall={isAdmin ? handleInstall : undefined}
-          isInstalling={(hostId: string | number) =>
-            isHostOpBusy(hostId, ['install', 'reinstall'])
-          }
-          onEdit={isAdmin ? handleEdit : undefined}
-          onDelete={isAdmin ? handleDelete : undefined}
-          isDeleting={(hostId: string | number) => deleteMutation.isPending && deleteMutation.variables === hostId}
-          onWatcherAdminStateChange={handleWatcherAdminStateChange}
-          isWatcherAdminStateUpdating={(hostId: string | number) =>
-            watcherAdminStateMutation.isPending && watcherAdminUpdatingHostId === hostId
-          }
-          canManageWatcherAdminState={canManageWatcherAdminState}
-          isAdmin={isAdmin}
-          selectedIds={selectedHostIds}
-          onSelectionChange={setSelectedHostIds}
-        />
-      ) : (
-        <Card className="p-12 text-center">
-          <h3 className={cn('text-lg font-medium mb-2', TEXT.heading)}>暂无主机</h3>
-          <p className={cn('text-sm mb-4', TEXT.subtitle)}>添加您的第一台主机以开始使用。</p>
-          {isAdmin && (
-            <Button onClick={() => setIsModalOpen(true)}>
-              <Plus className="w-4 h-4" />
-              添加主机
-            </Button>
-          )}
-        </Card>
-      )}
+      {/* Host Table —— tableData 为空的分支在 :567 已提前 return，此处无需再判 */}
+      <ExpandableHostTable
+        hosts={tableData}
+        onHotUpdate={isAdmin ? handleHotUpdate : undefined}
+        isHotUpdating={(hostId: string | number) =>
+          isHostOpBusy(hostId, 'hot_update') ||
+          (bulkHotUpdateProgress != null && selectedHostIds.has(hostId))
+        }
+        onInstall={isAdmin ? handleInstall : undefined}
+        isInstalling={(hostId: string | number) =>
+          isHostOpBusy(hostId, ['install', 'reinstall'])
+        }
+        onEdit={isAdmin ? handleEdit : undefined}
+        onDelete={isAdmin ? handleDelete : undefined}
+        isDeleting={(hostId: string | number) => deleteMutation.isPending && deleteMutation.variables === hostId}
+        onWatcherAdminStateChange={handleWatcherAdminStateChange}
+        isWatcherAdminStateUpdating={(hostId: string | number) =>
+          watcherAdminStateMutation.isPending && watcherAdminUpdatingHostId === hostId
+        }
+        canManageWatcherAdminState={canManageWatcherAdminState}
+        isAdmin={isAdmin}
+        selectedIds={selectedHostIds}
+        onSelectionChange={setSelectedHostIds}
+      />
 
       {isAdmin && (
         <HostBulkActionBar

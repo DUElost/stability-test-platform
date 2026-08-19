@@ -13,6 +13,7 @@ import type {
 } from '@/utils/api/types';
 import { api } from '@/utils/api';
 import { StableResponsiveContainer } from '@/components/charts/StableResponsiveContainer';
+import { InlineEmpty } from '@/components/ui/empty-state';
 import {
   ALERT_BANNER,
   aeeSubtypeChartColor,
@@ -362,12 +363,9 @@ const DonutChart = memo(function DonutChart({
 
   if (chartData.length === 0) {
     return (
-      <div
-        data-testid={chartTestId}
-        className={cn('flex h-32 items-center justify-center text-sm', TEXT.subtitle)}
-      >
+      <InlineEmpty chart testId={chartTestId}>
         当前范围内暂无细分类型数据
-      </div>
+      </InlineEmpty>
     );
   }
 
@@ -615,11 +613,11 @@ export default function AnomalyDashboard({
                   chartTestId="current-run-pie-chart"
                 />
               ) : (
-                <div className={cn('flex h-32 items-center justify-center text-sm', TEXT.subtitle)}>
+                <InlineEmpty chart>
                   {supportsOriginSplit
                     ? '当前范围内未发现新增 AEE / Vendor AEE 异常'
                     : '当前范围内未发现 AEE / Vendor AEE 异常'}
-                </div>
+                </InlineEmpty>
               )}
             </div>
 
@@ -745,9 +743,7 @@ export default function AnomalyDashboard({
                   )}
                 </div>
               ) : (
-                <div className={cn('flex h-32 items-center justify-center text-sm', TEXT.subtitle)}>
-                  当前范围内暂无异常包名数据
-                </div>
+                <InlineEmpty chart>当前范围内暂无异常包名数据</InlineEmpty>
               )}
             </div>
           </div>
@@ -782,7 +778,7 @@ export default function AnomalyDashboard({
                   </div>
                 </div>
               ) : (
-                <div className={cn('text-sm', TEXT.subtitle)}>运行开始前无遗留异常记录</div>
+                <InlineEmpty className="py-3">运行开始前无遗留异常记录</InlineEmpty>
               )
             ) : (
               <div className={cn('rounded-2xl border border-dashed bg-card/70 px-4 py-3 text-sm', TEXT.subtitle)}>

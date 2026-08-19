@@ -10,6 +10,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { Plus, Trash2, Wifi, WifiOff, Pencil, X } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
+import { InlineEmpty } from '@/components/ui/empty-state';
 import { FORM, INTERACTIVE, MODAL, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
@@ -241,9 +242,7 @@ export default function WifiPage() {
               {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
             </div>
           ) : pools.length === 0 ? (
-            <div className={cn('rounded-md border border-dashed py-10 text-center text-sm', TEXT.subtitle)}>
-              暂无 WiFi 资源池
-            </div>
+            <InlineEmpty bordered>暂无 WiFi 资源池</InlineEmpty>
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {pools.map((pool) => {

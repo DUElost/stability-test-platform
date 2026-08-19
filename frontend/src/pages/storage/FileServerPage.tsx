@@ -33,6 +33,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
+  TableEmptyRow,
 } from '@/components/ui/table';
 import { CHART_COLORS, STATUS_TEXT_COLORS } from '@/design-system/colors';
 import { tabLinkClass, TEXT } from '@/design-system/tokens';
@@ -414,9 +415,7 @@ function AgentStatusSection({
         </TableHeader>
         <TableBody>
           {agents.items.length === 0 ? (
-            <TableRow>
-              <TableCell colSpan={7} className="text-center text-muted-foreground">暂无在线 host</TableCell>
-            </TableRow>
+            <TableEmptyRow colSpan={7}>暂无在线 host</TableEmptyRow>
           ) : agents.items.map((host) => {
             const disk = diskByHost.get(host.host_id);
             return (

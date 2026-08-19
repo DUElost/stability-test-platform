@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Loader2 } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import { Plus, Loader2, Users as UsersIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -10,6 +9,7 @@ import { UserTable } from './components/UserTable';
 import { UserModal } from './components/UserModal';
 import { api, toApiError, type User } from '@/utils/api';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { EmptyState } from '@/components/ui/empty-state';
 import { InlineError } from '@/components/ui/error-state';
 import { TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
@@ -158,19 +158,17 @@ export default function UsersPage() {
           onToggleActive={handleToggleActive}
         />
       ) : (
-        <Card className="p-12 text-center">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-muted flex items-center justify-center">
-            <svg className={cn('w-8 h-8', TEXT.subtitle)} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-            </svg>
-          </div>
-          <h3 className={cn('text-lg font-medium mb-2', TEXT.heading)}>暂无用户</h3>
-          <p className={cn('text-sm mb-4', TEXT.subtitle)}>添加您的第一个用户以开始使用。</p>
-          <Button onClick={() => setIsModalOpen(true)}>
-            <Plus className="w-4 h-4" />
-            添加用户
-          </Button>
-        </Card>
+        <EmptyState
+          title="还没有用户"
+          description="添加您的第一个用户以开始使用"
+          icon={<UsersIcon />}
+          action={
+            <Button onClick={() => setIsModalOpen(true)}>
+              <Plus className="w-4 h-4" />
+              添加用户
+            </Button>
+          }
+        />
       )}
 
       {/* Add User Modal */}
