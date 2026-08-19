@@ -39,6 +39,7 @@ export type StatusBadgeKind =
   | "device-link"
   | "host"
   | "job"
+  | "job-result"
   | "plan-run"
   | "risk"
   | "priority"
@@ -88,6 +89,22 @@ const JOB: Record<string, StatusEntry> = {
   UNKNOWN: { label: "未知", variant: "secondary", Icon: HelpCircle },
 };
 
+/**
+ * Results 页运行状态。键集 = results API 出参映射的全集
+ * （backend results.py `_JOB_STATUS_TO_RUN_STATUS` 产出 QUEUED/RUNNING/
+ * FINISHED/FAILED/CANCELED）。CANCELED 用中性灰而非 destructive：
+ * 主动取消 ≠ 失败（GitHub Actions / GitLab CI 同此约定）。
+ * 后端 `_normalize_job_status` 对未识别状态原样透传，消费方应开
+ * `fallbackToRaw` 回显原文，避免运维只看到「未知」。
+ */
+const JOB_RESULT: Record<string, StatusEntry> = {
+  QUEUED: { label: "排队中", variant: "secondary", Icon: Hourglass },
+  RUNNING: { label: "运行中", variant: "info", Icon: Loader2 },
+  FINISHED: { label: "完成", variant: "success", Icon: CheckCircle2 },
+  FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
+  CANCELED: { label: "已中止", variant: "secondary", Icon: Ban },
+};
+
 const PLAN_RUN: Record<string, StatusEntry> = {
   QUEUED: { label: "排队中", variant: "secondary", Icon: Hourglass },
   PRECHECK: { label: "准入检查", variant: "info", Icon: Loader2 },
@@ -133,6 +150,7 @@ const REGISTRY: Record<StatusBadgeKind, Record<string, StatusEntry>> = {
   "device-link": DEVICE_LINK,
   host: HOST,
   job: JOB,
+  "job-result": JOB_RESULT,
   "plan-run": PLAN_RUN,
   risk: RISK,
   priority: PRIORITY,
@@ -154,16 +172,31 @@ export interface StatusBadgeProps {
   className?: string;
   /** Add `animate-spin` to the icon. Use for in-progress loaders. */
   spin?: boolean;
+  /**
+   * 未命中且状态非空时回显原文（灰色 + HelpCircle），而非「未知」。
+   * 用于后端原样透传未知状态的场景（如 results 的 `_normalize_job_status`）。
+   */
+  fallbackToRaw?: boolean;
+}
+
+export interface ResolveStatusOptions {
+  fallbackToRaw?: boolean;
 }
 
 export function resolveStatusEntry(
   kind: StatusBadgeKind,
   status: string | null | undefined,
+  { fallbackToRaw = false }: ResolveStatusOptions = {},
 ): StatusEntry {
   if (!status) return FALLBACK;
   const table = REGISTRY[kind];
   const upper = status.toUpperCase();
-  return table[upper] ?? FALLBACK;
+  const entry = table[upper];
+  if (entry) return entry;
+  if (fallbackToRaw) {
+    return { label: status, variant: FALLBACK.variant, Icon: FALLBACK.Icon };
+  }
+  return FALLBACK;
 }
 
 export function StatusBadge({
@@ -173,8 +206,9 @@ export function StatusBadge({
   size = "md",
   className,
   spin = false,
+  fallbackToRaw = false,
 }: StatusBadgeProps) {
-  const entry = resolveStatusEntry(kind, status);
+  const entry = resolveStatusEntry(kind, status, { fallbackToRaw });
   const iconSize = size === "sm" ? 10 : 12;
   const sizeCls = size === "sm" ? "px-2 py-0 text-[10px]" : "";
   return (

@@ -1,9 +1,8 @@
 import { useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
 import { StableResponsiveContainer } from './StableResponsiveContainer';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Activity } from 'lucide-react';
 import { CHART_COLORS } from '@/design-system/colors';
 
 export interface ActivityDataPoint {
@@ -16,14 +15,9 @@ export interface ActivityDataPoint {
 interface ActivityChartProps {
   data?: ActivityDataPoint[];
   isLoading?: boolean;
-  title?: string;
 }
 
-export function ActivityChart({
-  data,
-  isLoading,
-  title = '任务活动趋势',
-}: ActivityChartProps) {
+export function ActivityChart({ data, isLoading }: ActivityChartProps) {
   const chartData = useMemo(() => {
     if (!data || data.length === 0) return [];
     return data.map((p) => ({
@@ -34,11 +28,8 @@ export function ActivityChart({
 
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader className="pb-2">
-          <Skeleton className="h-5 w-32" />
-        </CardHeader>
-        <CardContent>
+      <Card className="border-none shadow-none">
+        <CardContent className="p-6">
           <Skeleton className="h-[200px] w-full" />
         </CardContent>
       </Card>
@@ -47,14 +38,8 @@ export function ActivityChart({
 
   if (chartData.length === 0) {
     return (
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <Activity size={16} className="text-muted-foreground" />
-            {title}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+      <Card className="border-none shadow-none">
+        <CardContent className="p-6">
           <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">
             暂无数据
           </div>
@@ -64,14 +49,8 @@ export function ActivityChart({
   }
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium flex items-center gap-2">
-          <Activity size={16} className="text-muted-foreground" />
-          {title}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
+    <Card className="border-none shadow-none">
+      <CardContent className="p-6">
         <StableResponsiveContainer>
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>

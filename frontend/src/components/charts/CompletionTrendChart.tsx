@@ -1,9 +1,8 @@
 import { useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
 import { StableResponsiveContainer } from './StableResponsiveContainer';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { TrendingUp } from 'lucide-react';
 import { CHART_COLORS } from '@/design-system/colors';
 
 export interface CompletionTrendPoint {
@@ -15,14 +14,9 @@ export interface CompletionTrendPoint {
 interface CompletionTrendChartProps {
   data?: CompletionTrendPoint[];
   isLoading?: boolean;
-  title?: string;
 }
 
-export function CompletionTrendChart({
-  data,
-  isLoading,
-  title = '完成趋势',
-}: CompletionTrendChartProps) {
+export function CompletionTrendChart({ data, isLoading }: CompletionTrendChartProps) {
   const chartData = useMemo(() => {
     if (!data || data.length === 0) return [];
     return data.map((p) => ({
@@ -33,11 +27,8 @@ export function CompletionTrendChart({
 
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader className="pb-2">
-          <Skeleton className="h-5 w-32" />
-        </CardHeader>
-        <CardContent>
+      <Card className="border-none shadow-none">
+        <CardContent className="p-6">
           <Skeleton className="h-[200px] w-full" />
         </CardContent>
       </Card>
@@ -46,14 +37,8 @@ export function CompletionTrendChart({
 
   if (chartData.length === 0) {
     return (
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <TrendingUp size={16} className="text-muted-foreground" />
-            {title}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+      <Card className="border-none shadow-none">
+        <CardContent className="p-6">
           <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">
             暂无数据
           </div>
@@ -63,14 +48,8 @@ export function CompletionTrendChart({
   }
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium flex items-center gap-2">
-          <TrendingUp size={16} className="text-muted-foreground" />
-          {title}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
+    <Card className="border-none shadow-none">
+      <CardContent className="p-6">
         <StableResponsiveContainer>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
