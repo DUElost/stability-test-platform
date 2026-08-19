@@ -56,10 +56,10 @@ Class: bug-fix
   （非 `plan_name_norm`），UI 列可复活；届时连同 `types.ts` 注释一起改。
 - **存量问题（本轮发现、未修，超出 §6 top1 范围）**：`useToast()` 每次渲染返回
   新对象，`SchedulesPage` 的 `loadAll`（useCallback 依赖 `toast`）随之外围重建，
-  AppShell 每次重渲染都重跑 effect——实测 3 秒内 `/schedules` 请求 150+ 次；端点
-  持续失败时叠加 `duration: Infinity`，错误 toast 无限刷屏并向上溢出 offset 区
-  （62 条堆叠时前 toast 被顶到 y=35，重新压住页头）。修法方向：`useToast` 用
-  `useMemo` 稳定返回值，或 effect 依赖去掉 `toast`。建议与 §6 第 9 位 B10
-  （错误态收敛）同轮处理。
+  拉取 effect 自持循环（`setSchedules` 无条件写新数组供血）——实测 3 秒内
+  `/schedules` 请求 150+ 次；端点持续失败时叠加 `duration: Infinity`，错误
+  toast 无限刷屏并向上溢出 offset 区（62 条堆叠时前 toast 被顶到 y=35，重新
+  压住页头）。**已由后续修复处理**：useToast 引用稳定化 + error duration 10s，
+  见 `2026-08-19-use-toast-stable-ref.md`。
 - A3 落地后（审查 §7）：`RUN_RESULT_STATUS_CHIP` 并入 `StatusBadge` 时会再动
   ResultsPage 同一张表。

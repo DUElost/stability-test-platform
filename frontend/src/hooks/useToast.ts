@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { toast as sonnerToast } from 'sonner';
 
 export interface ToastPromiseOptions<T> {
@@ -21,9 +22,12 @@ export interface ToastAPI {
 }
 
 export function useToast(): ToastAPI {
-  return {
+  // 引用必须跨渲染稳定：消费方把它放进 useCallback/useEffect 依赖数组，
+  // 每渲染新对象会让依赖链上的 effect 反复重跑（#314：SchedulesPage 曾因此
+  // 以网络往返速度无限重发请求）。回归兜底见 toast.test.tsx 引用稳定性用例。
+  return useMemo(() => ({
     success: (message: string) => sonnerToast.success(message, { duration: 3000 }),
-    error: (message: string) => sonnerToast.error(message, { duration: Infinity }),
+    error: (message: string) => sonnerToast.error(message, { duration: 10_000 }),
     info: (message: string) => sonnerToast.info(message, { duration: 4000 }),
     action: (message: string, options: ToastActionOptions) => sonnerToast.info(message, {
       duration: options.duration ?? 5000,
@@ -37,5 +41,5 @@ export function useToast(): ToastAPI {
       });
       return promise;
     },
-  };
+  }), []);
 }
