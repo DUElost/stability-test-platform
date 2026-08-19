@@ -30,6 +30,13 @@ Class: feature
   直接冲突，且未来的新 model 会被静默归入错误项目；显式清单 + 拒绝是安全的。
 - **unknown model 静默归 LEGACY**：会让完成标准「NULL 归零」假阳性——未知机型
   进 LEGACY 后再无机制发现，等 P2 前端盘点时才暴露错划。
+- **`model IS NULL → LEGACY`（审查阻断项，2026-08-19 修复）**：初版把「model 空」
+  当作未识别设备的判据自动归 LEGACY——但这同样是推断，且踩活设备：id 2/11
+  （A2WENX 前缀）当天仍在心跳，只是 ADB 报错读不出 model，恢复后会上报真实机型；
+  幂等条件 `WHERE project_id IS NULL` 使归属一旦写入永不复评，会被永久封死在
+  LEGACY。修复：**6 台按 serial 显式写进 `UNASSIGNED_SERIALS`**（§5 人工确认的
+  就是这一批具体设备），其余任何 model 空设备（新机上架未上报 / ADB 故障）按
+  「清单外」处理 → exit 2——未来触发中断而非静默封存。
 
 ## 如何验证
 
@@ -39,13 +46,22 @@ Class: feature
 - 样例数据（2 Plan / 3 PlanRun / 9 Device 覆盖全部族 + 1 空 model）：
   M-b dry-run 出计划 → 执行 → 幂等重跑 0 动作；M-c dry-run 族清单 → 执行 →
   NULL 归零 → 幂等重跑 0 台；未知 model（MYSTERY_X）dry-run 提示、执行拒绝 exit 2。
-- **生产执行**：本机 PG 即生产库——迁移与回填不在此处试跑；部署时由运维流程
-  （`alembic upgrade head` + 脚本先 `--dry-run` 核对 515 台清单再执行）完成。
+- 审查修复重验证（隔离 PG）：清单内 serial + model 空 → LEGACY；model 空但
+  serial 不在清单 → ✗ 拒绝；未知 model → ✗ 拒绝（dry-run 提示、执行 exit 2）；
+  正常族归位 + 幂等重跑 0 台 + 完成标准归零全绿。
+- **生产执行（2026-08-19 完成）**：`alembic upgrade head`（q4r5s6t7u8v9 →
+  r5s6t7u8v9w0）→ M-b（6 项目行 + 3 字典行 + 4 Plan / 94 PlanRun → LEGACY）→
+  M-c dry-run 三项对账（MLD 260 / Z258 238 / ELA 20 / DAM 18 / X110 3 / LEGACY 6，
+  无清单外，合计 545 = count(*)）→ 执行 545 台全回填，完成标准 NULL 归零；
+  幂等重跑 0 台。
 
 ## 何时重议
 
-- 生产库执行后，CLAUDE.md / ADR 决策表行的「落地 P1」标记从「进行中」翻「完成」。
+- P1（M-a/M-b/M-c）已生产执行完毕，CLAUDE.md 决策表行已翻「已生产执行」；
+  M-d（读路径与门禁）未在本轮范围，P2 前端动工前评估。
 - D1 复议（params_override 激活）时：`plan_run` 快照要补解析后字面值，
   届时 `build_version` 列与此共享迁移头，注意避让。
 - M-c 清单新增族（新 project_key）：先更新 `MODEL_TO_PROJECT` 再跑脚本，
   未知 model 拒绝机制会先拦下一批未登记机型。
+- 新机「未识别」需归 LEGACY：须**人工确认** serial 后补入 `UNASSIGNED_SERIALS`，
+  不能把「model 空」当判据（审查修复的结论）。

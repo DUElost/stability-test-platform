@@ -1,6 +1,6 @@
 """ADR-0029 P1 M-a — test_project / specialty 建表 + 归属列（全部 nullable）。
 
-DDL only，无回填、无读路径（M-b/M-c 回填在 tools/dev/backfill-project-mc.py）。
+DDL only，无回填、无读路径（M-b/M-c 回填在 tools/dev/backfill-test-project.py）。
 v2 最小形态：不含 variables（D4 挂起）/ storage_key（D7 挂起）。
 
 Revision ID: r5s6t7u8v9w0

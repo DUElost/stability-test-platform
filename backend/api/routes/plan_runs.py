@@ -82,6 +82,7 @@ from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
+from backend.models.test_project import TestProject
 from backend.services.plan_run_abort import (
     PlanRunAbortError,
     abort_plan_run,
@@ -262,6 +263,7 @@ def list_plan_runs(
     limit: int = 50,
     plan_id: Optional[int] = None,
     status: Optional[PlanRunStatus] = Query(default=None),
+    project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -270,6 +272,9 @@ def list_plan_runs(
         q = q.where(PlanRun.plan_id == plan_id)
     if status is not None:
         q = q.where(PlanRun.status == status.value)
+    if project_key is not None:
+        q = q.join(TestProject, PlanRun.project_id == TestProject.id) \
+             .where(TestProject.project_key == project_key)
     runs = db.execute(q.offset(skip).limit(limit)).scalars().all()
     plan_ids = {r.plan_id for r in runs}
     plan_names: dict[int, str] = {}

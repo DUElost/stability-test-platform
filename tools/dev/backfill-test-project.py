@@ -2,21 +2,26 @@
 
 - M-b：建 6 个项目行（5 真实 + LEGACY，按 project_key 幂等 upsert）+ 专项字典
   种子（mtbf / power-cycle / monkey）+ 回填 ``plan.project_id`` / ``plan_run.project_id``
-  （存量 4 Plan / 93 PlanRun 全归 LEGACY）。
-- M-c：``device.project_id`` 按背景分析 §5 清单逐批回填（515 台）。
-  **不自动推断**：model → 项目映射是 2026-08-18 人工确认的清单，本脚本只落库；
-  清单外 model **拒绝执行**（防漏划）。
+  （存量 Plan / PlanRun 全归 LEGACY，数量以执行时 dry-run 输出为准）。
+- M-c：``device.project_id`` 按背景分析 §5 清单逐批回填（台数**以 dry-run 输出
+  为准**，2026-08-18 快照的 515 台已随设备增减过期）。**不自动推断**：
+  model → 项目映射是 2026-08-18 人工确认的清单，本脚本只落库；清单外
+  **拒绝执行**（防漏划）——含 model 空但 serial 不在 UNASSIGNED_SERIALS 的设备
+  （新机上架未上报 / ADB 故障读不出，静默归 LEGACY 会让完成标准假归零）。
 
 约束（ADR-0029 §迁移与回滚）：
 - 幂等可重跑：回填以「目标列为 NULL」为条件，重跑不覆盖已确认的归属；
   Legacy 按 project_key upsert。
 - --dry-run 必备：输出「将把哪些行划入哪个项目」，确认后再执行。
-- M-c 完成标准：回填后 ``device.project_id`` 无 NULL（509 台入 5 项目 + 6 台入 LEGACY）。
+- M-c 完成标准：回填后 ``device.project_id`` 无 NULL。
 
 用法：
     python tools/dev/backfill-test-project.py --phase mb [--dry-run]
     python tools/dev/backfill-test-project.py --phase mc [--dry-run]
     python tools/dev/backfill-test-project.py --phase all [--dry-run]
+
+注意：--phase all --dry-run 在空库上会因项目行未建而退出（M-c 的 dry-run
+须在 mb 执行后单独跑——dry-run 不落库，all 的 dry-run 只对 mb 有意义）。
 
 DB 目标遵循 env 单一源（backend/core/env_source.resolve_database_url）：
 ambient DATABASE_URL 优先，否则仓库根 .env.backend。
@@ -47,9 +52,22 @@ PROJECTS: list[dict] = [
     {"key": "ZTE-Z258", "display": "中兴 Z258 系列", "customer": "中兴", "platform": "UNISOC", "form": "PHONE"},
     {"key": "ODM-DAM", "display": "ODM DAM 系列", "customer": "ODM", "platform": "MTK", "form": "PHONE"},
     {"key": "TRANSSION-X110", "display": "传音 X110 系列", "customer": "传音", "platform": "MTK", "form": "TABLET"},
-    # LEGACY：承载 6 台未识别设备（model 空）与存量 Plan / PlanRun 回填
+    # LEGACY：承载人工确认的未识别设备（serial 清单见下）与存量 Plan / PlanRun 回填
     {"key": "LEGACY", "display": "未分配（Legacy）", "customer": None, "platform": None, "form": None},
 ]
+
+# 人工确认的未识别设备 serial（§5，2026-08-18）：归 LEGACY 的是**这一批具体设备**，
+# 不是「所有 model 空的设备」。其余 model 空设备（新机上架未上报 / ADB 故障读不出）
+# 一律按「清单外」处理 → exit 2，中断等待人工确认——静默封存会让完成标准假归零。
+# 2026-08-19 实测 6 台（id 2/11 近期仍在心跳，A2WENX 前缀与五族不同；id 184/185/186/189 离线）。
+UNASSIGNED_SERIALS: set[str] = {
+    "A2WENX6628000097",
+    "A2WENX6628000035",
+    "178874067F000076",
+    "178894067F000019",
+    "178884067F000204",
+    "178934067F000050",
+}
 
 # model → project_key（族 = 项目粒度，D3；族内变体由 device.model 区分）
 MODEL_TO_PROJECT: dict[str, str] = {
@@ -149,40 +167,52 @@ def backfill_plan_ownership(db: Session, dry_run: bool, legacy_id: int) -> None:
 
 
 def plan_device_ownership(db: Session) -> tuple[dict[str, list], list]:
-    """M-c 计划：model → 项目 的待回填设备；返回 (目标清单, 未覆盖 model 列表)。
+    """M-c 计划：设备 → 项目 的待回填清单；返回 (目标清单, 未覆盖设备列表)。
 
-    未覆盖 model **不归 LEGACY**——未知 model 不能推断归属（不自动推断原则），
-    由人工确认后再补清单。
+    未覆盖 **不归 LEGACY**——未知归属不能推断（不自动推断原则，含 NULL model：
+    新机上架未上报 / ADB 故障读不出都可能造成 model 空，静默封存会让完成标准
+    假归零）。覆盖判定：
+    - model 非空 → 查 MODEL_TO_PROJECT，未命中 = 未覆盖；
+    - model 空 → 仅 serial 在 UNASSIGNED_SERIALS（§5 人工确认）归 LEGACY，
+      否则 = 未覆盖。
     """
     rows = db.execute(
         text("SELECT id, serial, model FROM device ORDER BY id")
     ).all()
     plan: dict[str, list] = {}
-    unknown_models: list[str] = []
+    unknown: list[tuple[str, str]] = []  # (model 或标记, serial)
     for dev_id, serial, model in rows:
         target = None
         if model:  # 非空 model 必须命中清单，否则视为未覆盖
             target = MODEL_TO_PROJECT.get(model)
             if target is None:
-                unknown_models.append(model)
+                unknown.append((model, serial))
+        elif serial in UNASSIGNED_SERIALS:
+            target = "LEGACY"  # §5 人工确认的未识别设备
         else:
-            target = "LEGACY"  # model 空 → 未识别设备，归 LEGACY（M-c 完成标准）
+            unknown.append(("<model 空>", serial))
         if target:
             plan.setdefault(target, []).append((dev_id, serial, model))
-    return plan, sorted(set(unknown_models))
+    return plan, unknown
 
 
 def backfill_device_ownership(db: Session, dry_run: bool) -> None:
     """M-c：device.project_id 逐批回填（幂等：仅 NULL 行）。"""
-    plan, unknown_models = plan_device_ownership(db)
-    if unknown_models:
-        print("[mc] 未覆盖 model（清单外，不推断归属，须人工确认）：")
-        for m in unknown_models:
-            print(f"    ✗ {m}")
+    plan, unknown = plan_device_ownership(db)
+    if unknown:
+        print("[mc] 未覆盖设备（清单外，不推断归属，须人工确认）：")
+        by_model: dict[str, list[str]] = {}
+        for marker, serial in unknown:
+            by_model.setdefault(marker, []).append(serial)
+        for marker in sorted(by_model):
+            serials = by_model[marker]
+            shown = ", ".join(serials[:5])
+            print(f"    ✗ {marker} ×{len(serials)}: {shown}"
+                  + (" …" if len(serials) > 5 else ""))
         if not dry_run:
-            print("[mc] 存在清单外 model，拒绝执行（防漏划）；确认后补入清单再跑。")
+            print("[mc] 存在清单外设备，拒绝执行（防漏划）；确认后补入清单再跑。")
             sys.exit(2)
-        print("[mc] （执行模式将拒绝并 exit 2——须先人工确认未知 model 的归属后补入清单）")
+        print("[mc] （执行模式将拒绝并 exit 2——须先人工确认归属后补入清单）")
 
     pids = project_id_by_key(db)
     print("[mc] 待回填设备清单（--dry-run 即此清单，确认后执行）:")

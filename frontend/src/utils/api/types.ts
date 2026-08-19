@@ -63,6 +63,8 @@ export interface Device {
   /** SoC platform (#73). Gates MTK-only subsystems such as the AEE Reconciler. */
   platform?: 'MTK' | 'UNISOC' | 'QCOM' | 'UNKNOWN' | null;
   host_id: string | number | null;
+  /** ADR-0029：归属项目 key（F2 口径，后端不暴露数字 project_id） */
+  project_key?: string | null;
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
   /** Authoritative backend admission decision. Legacy servers may omit it. */
   schedulable?: boolean;
@@ -672,6 +674,40 @@ export interface StructuredApiError {
 export interface ApiResponseEnvelope<T> {
   data?: T;
   error?: StructuredApiError | null;
+}
+
+// ─── 项目登记簿（ADR-0029 P2）────────────────────────────────────────────────
+
+/** 与后端 schemas/project.py ProjectOut 同步；对外一律 project_key（F2）。 */
+export interface Project {
+  project_key: string;
+  display_name: string;
+  jira_project_key: string | null;
+  product_line: string | null;
+  customer: string | null;
+  platform: string | null;
+  form_factor: string | null;
+  status: 'ACTIVE' | 'ARCHIVED';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectSummary extends Project {
+  device_count: number;
+  running_run_count: number;
+}
+
+export interface RecentProjectRun {
+  id: number;
+  status: string;
+  started_at: string;
+  ended_at: string | null;
+}
+
+export interface ProjectDetail extends ProjectSummary {
+  plan_count: number;
+  total_run_count: number;
+  recent_runs: RecentProjectRun[];
 }
 
 // ─── 编排模型类型 ──────────────────────────────────────────────────────────────
