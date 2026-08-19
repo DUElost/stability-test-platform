@@ -526,16 +526,6 @@ async def broadcast_job_log(job_id: int, log_data: Dict[str, Any]) -> None:
     await sio.emit("step_log", payload, namespace="/dashboard", room=f"job:{job_id}")
 
 
-async def broadcast_log_message(run_id: int, log_data: Dict[str, Any]) -> None:
-    """Push a LOG to subscribers of a run (legacy compat)."""
-    sio = get_sio()
-    await sio.emit("step_log", {
-        "type": "LOG",
-        "payload": log_data,
-        "timestamp": _now_iso(),
-    }, namespace="/dashboard", room=f"run:{run_id}")
-
-
 async def broadcast_run_job_update(run_id: int, job_id: int, status: str) -> None:
     """Notify frontend that a specific job's status changed."""
     sio = get_sio()
