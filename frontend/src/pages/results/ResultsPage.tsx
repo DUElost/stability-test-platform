@@ -111,7 +111,6 @@ export default function ResultsPage() {
                   <tr className="border-b text-left text-xs text-muted-foreground">
                     <th className="pb-2 pr-4">Run</th>
                     <th className="pb-2 pr-4">任务</th>
-                    <th className="pb-2 pr-4">类型</th>
                     <th className="pb-2 pr-4">状态</th>
                     <th className="pb-2 pr-4">风险</th>
                     <th className="pb-2 pr-4">时长</th>
@@ -127,11 +126,6 @@ export default function ResultsPage() {
                     >
                       <td className="py-2 pr-4 font-mono text-xs">#{run.run_id}</td>
                       <td className="max-w-[180px] truncate py-2 pr-4">{run.task_name}</td>
-                      <td className="py-2 pr-4">
-                        <span className={cn('rounded px-1.5 py-0.5 text-xs font-medium', STATUS_CHIP.muted)}>
-                          {run.task_type}
-                        </span>
-                      </td>
                       <td className="py-2 pr-4">
                         <span className={cn('rounded px-1.5 py-0.5 text-xs font-medium', RUN_RESULT_STATUS_CHIP[run.status] ?? STATUS_CHIP.muted)}>
                           {run.status}

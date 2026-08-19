@@ -384,9 +384,11 @@ export function ExpandableHostTable({
                         <div className="truncate font-medium text-foreground" title={host.name ?? ''}>
                           {host.name}
                         </div>
-                        <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={host.ip}>
-                          {host.ip}
-                        </div>
+                        {host.name !== host.ip && (
+                          <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={host.ip}>
+                            {host.ip}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell className="p-3">
                         <div className="space-y-1">
