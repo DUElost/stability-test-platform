@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell } from 'recharts';
 import { StableResponsiveContainer } from './StableResponsiveContainer';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Server } from 'lucide-react';
 import { CHART_COLORS } from '@/design-system/colors';
@@ -41,11 +41,8 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
 
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader className="pb-2">
-          <Skeleton className="h-5 w-32" />
-        </CardHeader>
-        <CardContent>
+      <Card className="border-none shadow-none">
+        <CardContent className="p-6">
           <Skeleton className="h-[200px] w-full" />
         </CardContent>
       </Card>
@@ -54,17 +51,11 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
 
   if (data.length === 0) {
     return (
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <Server size={16} className="text-muted-foreground" />
-            Host Resources
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+      <Card className="border-none shadow-none">
+        <CardContent className="p-6">
           <div className="h-[200px] flex flex-col items-center justify-center text-muted-foreground">
             <Server size={32} className="mb-2 opacity-50" />
-            <span className="text-sm">No hosts available</span>
+            <span className="text-sm">暂无主机</span>
           </div>
         </CardContent>
       </Card>
@@ -72,14 +63,8 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
   }
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium flex items-center gap-2">
-          <Server size={16} className="text-muted-foreground" />
-          Host Resources
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
+    <Card className="border-none shadow-none">
+      <CardContent className="p-6">
         <StableResponsiveContainer>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={data} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
@@ -100,7 +85,7 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
                   if (active && payload && payload.length) {
                     return (
                       <div className="bg-popover border border-border rounded-lg p-2 shadow-md">
-                        <div className="text-sm font-medium mb-1">Host {label}</div>
+                        <div className="text-sm font-medium mb-1">主机 {label}</div>
                         {payload.map((entry) => (
                           <div key={entry.name} className="flex items-center gap-2 text-xs">
                             <div

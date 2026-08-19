@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { StableResponsiveContainer } from './StableResponsiveContainer';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PieChart as PieChartIcon } from 'lucide-react';
 import { CHART_COLORS } from '@/design-system/colors';
@@ -29,11 +29,12 @@ const COLORS = {
   error: CHART_COLORS.error,
 };
 
+// 词表与 status-badge 的 device-ui 注册表一致（空闲/测试中/离线/错误）
 const LABELS = {
-  idle: 'Idle',
-  testing: 'Testing',
-  offline: 'Offline',
-  error: 'Error',
+  idle: '空闲',
+  testing: '测试中',
+  offline: '离线',
+  error: '错误',
 };
 
 export function DeviceStatusChart({ data, isLoading }: DeviceStatusChartProps) {
@@ -53,11 +54,8 @@ export function DeviceStatusChart({ data, isLoading }: DeviceStatusChartProps) {
 
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader className="pb-2">
-          <Skeleton className="h-5 w-32" />
-        </CardHeader>
-        <CardContent>
+      <Card className="border-none shadow-none">
+        <CardContent className="p-6">
           <Skeleton className="h-[200px] w-full" />
         </CardContent>
       </Card>
@@ -66,17 +64,11 @@ export function DeviceStatusChart({ data, isLoading }: DeviceStatusChartProps) {
 
   if (total === 0) {
     return (
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <PieChartIcon size={16} className="text-muted-foreground" />
-            Device Status
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+      <Card className="border-none shadow-none">
+        <CardContent className="p-6">
           <div className="h-[200px] flex flex-col items-center justify-center text-muted-foreground">
             <PieChartIcon size={32} className="mb-2 opacity-50" />
-            <span className="text-sm">No devices</span>
+            <span className="text-sm">暂无设备</span>
           </div>
         </CardContent>
       </Card>
@@ -84,14 +76,8 @@ export function DeviceStatusChart({ data, isLoading }: DeviceStatusChartProps) {
   }
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium flex items-center gap-2">
-          <PieChartIcon size={16} className="text-muted-foreground" />
-          Device Status
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
+    <Card className="border-none shadow-none">
+      <CardContent className="p-6">
         <StableResponsiveContainer>
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
@@ -131,7 +117,7 @@ export function DeviceStatusChart({ data, isLoading }: DeviceStatusChartProps) {
                           <span className="text-sm font-medium">{data.name}</span>
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          {data.value} devices ({percentage}%)
+                          {data.value} 台设备（{percentage}%）
                         </div>
                       </div>
                     );

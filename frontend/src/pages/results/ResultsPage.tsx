@@ -18,8 +18,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { formatDurationSeconds, formatLocalDateTime } from '@/utils/format';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { KPI_TONE, RUN_RESULT_STATUS_CHIP, STAT, STATUS_CHIP } from '@/design-system/tokens';
-import { cn } from '@/lib/utils';
+import { KPI_TONE, STAT } from '@/design-system/tokens';
 
 export default function ResultsPage() {
   useDocumentTitle('测试结果');
@@ -127,9 +126,7 @@ export default function ResultsPage() {
                       <td className="py-2 pr-4 font-mono text-xs">#{run.run_id}</td>
                       <td className="max-w-[180px] truncate py-2 pr-4">{run.task_name}</td>
                       <td className="py-2 pr-4">
-                        <span className={cn('rounded px-1.5 py-0.5 text-xs font-medium', RUN_RESULT_STATUS_CHIP[run.status] ?? STATUS_CHIP.muted)}>
-                          {run.status}
-                        </span>
+                        <StatusBadge kind="job-result" status={run.status} size="sm" fallbackToRaw />
                       </td>
                       <td className="py-2 pr-4">
                         <StatusBadge kind="risk" status={run.risk_level} size="sm" />

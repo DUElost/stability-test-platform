@@ -217,16 +217,6 @@ export const TOAST = {
   dismiss: 'text-muted-foreground hover:text-foreground',
 } as const;
 
-/** Results 页 Job 运行状态 Chip */
-export const RUN_RESULT_STATUS_CHIP: Record<string, string> = {
-  FINISHED: STATUS_CHIP.success,
-  FAILED: STATUS_CHIP.destructive,
-  RUNNING: STATUS_CHIP.primary,
-  DISPATCHED: STATUS_CHIP.primary,
-  QUEUED: STATUS_CHIP.muted,
-  CANCELED: STATUS_CHIP.warning,
-};
-
 /** AEE 风险等级 S/A/B 文字色 */
 export const RISK_RATING_TEXT = {
   S: 'text-destructive',

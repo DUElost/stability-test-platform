@@ -99,6 +99,50 @@ describe("StatusBadge", () => {
     expect(screen.getByText("未知")).toBeInTheDocument();
   });
 
+  it("renders job-result statuses with Chinese labels", () => {
+    render(
+      <>
+        <StatusBadge kind="job-result" status="QUEUED" />
+        <StatusBadge kind="job-result" status="RUNNING" />
+        <StatusBadge kind="job-result" status="FINISHED" />
+        <StatusBadge kind="job-result" status="FAILED" />
+        <StatusBadge kind="job-result" status="CANCELED" />
+      </>,
+    );
+    expect(screen.getByText("排队中")).toBeInTheDocument();
+    expect(screen.getByText("运行中")).toBeInTheDocument();
+    expect(screen.getByText("完成")).toBeInTheDocument();
+    expect(screen.getByText("失败")).toBeInTheDocument();
+    expect(screen.getByText("已中止")).toBeInTheDocument();
+  });
+
+  it("job-result RUNNING uses info variant to match job badge color", () => {
+    const entry = resolveStatusEntry("job-result", "RUNNING");
+    expect(entry.variant).toBe("info");
+  });
+
+  it("job-result CANCELED uses neutral secondary (cancel ≠ fail convention)", () => {
+    const entry = resolveStatusEntry("job-result", "CANCELED");
+    expect(entry.label).toBe("已中止");
+    expect(entry.variant).toBe("secondary");
+  });
+
+  it("fallbackToRaw renders raw status for unrecognized values", () => {
+    render(<StatusBadge kind="job-result" status="MAGENTA" fallbackToRaw />);
+    expect(screen.getByText("MAGENTA")).toBeInTheDocument();
+    expect(screen.queryByText("未知")).not.toBeInTheDocument();
+  });
+
+  it("fallbackToRaw keeps 未知 for empty status", () => {
+    render(<StatusBadge kind="job-result" status={null} fallbackToRaw />);
+    expect(screen.getByText("未知")).toBeInTheDocument();
+  });
+
+  it("falls back to 未知 by default without fallbackToRaw", () => {
+    render(<StatusBadge kind="job-result" status="MAGENTA" />);
+    expect(screen.getByText("未知")).toBeInTheDocument();
+  });
+
   it("falls back to 未知 for null status", () => {
     render(<StatusBadge kind="job" status={null} />);
     expect(screen.getByText("未知")).toBeInTheDocument();
