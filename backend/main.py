@@ -39,6 +39,7 @@ from backend.api.routes.logs import router as logs_router
 from backend.api.routes.metrics import router as metrics_router
 from backend.api.routes.users import router as users_router
 from backend.api.routes.results import router as results_router
+from backend.api.routes.projects import router as projects_router
 from backend.api.routes.stats import router as stats_router
 from backend.api.routes.notifications import router as notifications_router
 from backend.api.routes.audit import router as audit_router
@@ -254,6 +255,7 @@ _fastapi_app.include_router(devices_router)
 _fastapi_app.include_router(metrics_router)
 _fastapi_app.include_router(users_router)
 _fastapi_app.include_router(results_router)
+_fastapi_app.include_router(projects_router)
 _fastapi_app.include_router(stats_router)
 _fastapi_app.include_router(notifications_router)
 _fastapi_app.include_router(audit_router)

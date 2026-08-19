@@ -23,6 +23,7 @@ from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
+from backend.models.test_project import TestProject
 from backend.services.script_progress_capability import script_supports_progress
 from backend.models.resource_pool import ResourcePool
 from backend.services.plan_dispatcher_core import plan_steps_consumes_wifi
@@ -712,10 +713,15 @@ def append_chain_tail(
 def list_plans(
     skip: int = 0,
     limit: int = 50,
+    project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    plans = db.query(Plan).order_by(Plan.created_at.desc())\
+    plans = db.query(Plan)
+    if project_key:
+        plans = plans.join(TestProject, Plan.project_id == TestProject.id) \
+                     .filter(TestProject.project_key == project_key)
+    plans = plans.order_by(Plan.created_at.desc())\
         .offset(skip).limit(limit).all()
 
     if not plans:

@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.exc import ProgrammingError
@@ -18,6 +18,7 @@ from backend.core.database import get_db
 from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
+from backend.models.test_project import TestProject
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
@@ -118,6 +119,7 @@ def _parse_risk_level(log_summary: Optional[str]) -> str:
 @router.get("/summary", response_model=ResultsSummary)
 def get_results_summary(
     limit: int = Query(20, ge=1, le=100, description="Number of recent runs"),
+    project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ) -> ResultsSummary:
@@ -153,8 +155,30 @@ def get_results_summary(
     try:
         hidden_plan_ids = hidden_legacy_plan_ids(db)
 
+        # ADR-0029 P2：project_key 可选过滤（D9 挂起，缺省 = 全量）。
+        # 各查询统一经 Plan.project_id 过滤（JobInstance 无 project 列）。
+        target_project_id: Optional[int] = None
+        if project_key:
+            project = (
+                db.query(TestProject)
+                .filter(TestProject.project_key == project_key)
+                .first()
+            )
+            if project is None:
+                raise HTTPException(status_code=404, detail="project not found")
+            target_project_id = project.id
+
+        def _scope_by_project(query):
+            """按 project 过滤（若指定）；调用方须已 join Plan。"""
+            if target_project_id is not None:
+                query = query.filter(Plan.project_id == target_project_id)
+            return query
+
         # --- runs_by_status (新链路：JobInstance) ---
         status_query = db.query(JobInstance.status, func.count(JobInstance.id))
+        if target_project_id is not None:
+            status_query = status_query.join(Plan, JobInstance.plan_id == Plan.id)
+        status_query = _scope_by_project(status_query)
         if hidden_plan_ids:
             status_query = status_query.filter(JobInstance.plan_id.notin_(tuple(hidden_plan_ids)))
         status_counts = status_query.group_by(JobInstance.status).all()
@@ -181,6 +205,7 @@ def get_results_summary(
         ).join(Plan, JobInstance.plan_id == Plan.id)
         if hidden_plan_ids:
             type_query = type_query.filter(JobInstance.plan_id.notin_(tuple(hidden_plan_ids)))
+        type_query = _scope_by_project(type_query)
         type_rows = type_query.group_by(Plan.name, JobInstance.status).all()
         type_agg: Dict[str, Dict[str, int]] = {}
         for template_name, raw_status, cnt in type_rows:
@@ -196,7 +221,7 @@ def get_results_summary(
         test_type_stats = [TestTypeStat(type=t, **counts) for t, counts in sorted(type_agg.items())]
 
         # --- recent_runs (ADR-0020: Plan-based) ---
-        recent_query = (
+        recent_query = _scope_by_project(
             db.query(JobInstance, Plan.name)
             .join(Plan, JobInstance.plan_id == Plan.id)
             .order_by(JobInstance.id.desc())
@@ -241,6 +266,9 @@ def get_results_summary(
 
         # --- risk_distribution ---
         total_jobs_query = db.query(func.count(JobInstance.id))
+        if target_project_id is not None:
+            total_jobs_query = total_jobs_query.join(Plan, JobInstance.plan_id == Plan.id)
+        total_jobs_query = _scope_by_project(total_jobs_query)
         if hidden_plan_ids:
             total_jobs_query = total_jobs_query.filter(
                 JobInstance.plan_id.notin_(tuple(hidden_plan_ids))
@@ -256,6 +284,9 @@ def get_results_summary(
                     StepTrace.event_type == "RUN_COMPLETE",
                 )
             )
+            if target_project_id is not None:
+                snapshot_query = snapshot_query.join(Plan, JobInstance.plan_id == Plan.id)
+            snapshot_query = _scope_by_project(snapshot_query)
             if hidden_plan_ids:
                 snapshot_query = snapshot_query.filter(
                     JobInstance.plan_id.notin_(tuple(hidden_plan_ids))

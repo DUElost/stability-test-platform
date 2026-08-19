@@ -13,12 +13,20 @@ class DeviceCreate(BaseModel):
     tags: List[str] = Field(default_factory=list)
 
 
+class BulkProjectAssignIn(BaseModel):
+    """ADR-0029 P2 — 设备批量归入项目请求体。"""
+
+    project_key: str
+    device_ids: List[int]
+
+
 class DeviceOut(ORMBaseModel):
     id: int
     serial: str
     model: Optional[str] = None
     platform: Optional[str] = None  # #73: MTK / UNISOC / QCOM / UNKNOWN
     host_id: Optional[str] = None
+    project_key: Optional[str] = None  # ADR-0029：归属项目（F2 口径，不暴露 project_id）
     status: str
     last_seen: Optional[datetime] = None
     tags: List[str] = Field(default_factory=list)

@@ -6,13 +6,16 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import cast
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional, Union
 
 from backend.core.database import get_db
 from backend.core.audit import record_audit
 from backend.models.host import Host, Device
+from backend.models.test_project import TestProject
 from backend.api.schemas import DeviceCreate, DeviceOut, PaginatedResponse
+from backend.api.response import ApiResponse, ok
+from backend.api.schemas.device import BulkProjectAssignIn
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 
 logger = logging.getLogger(__name__)
@@ -112,17 +115,95 @@ def create_device(
     return device
 
 
+@router.post("/bulk-project", response_model=ApiResponse[List[DeviceOut]])
+def bulk_assign_project(
+    payload: BulkProjectAssignIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
+    """ADR-0029 P2 — 设备批量归入项目（admin 动作）。
+
+    - project_key 不存在 → 404；device_ids 含不存在 id → 404（整体事务，
+      防部分成功）；
+    - 每台实际变更记录一条 audit（action=assign_project，details 含
+      from/to project_key——F2：审计可读）；
+    - 幂等：已是目标项目的设备跳过（不记 audit）；
+    - 「移出项目」= 归入 LEGACY（V2 后无 NULL 公共池，NULL 仅迁移瞬态）。
+    """
+    project = (
+        db.query(TestProject)
+        .filter(TestProject.project_key == payload.project_key)
+        .first()
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    if not payload.device_ids:
+        raise HTTPException(status_code=422, detail="device_ids must not be empty")
+
+    devices = (
+        db.query(Device)
+        .filter(Device.id.in_(payload.device_ids))
+        .options(joinedload(Device.project))
+        .all()
+    )
+    if len(devices) != len(set(payload.device_ids)):
+        raise HTTPException(status_code=404, detail="one or more devices not found")
+
+    for device in devices:
+        if device.project_id == project.id:
+            continue
+        from_key = device.project.project_key if device.project else None
+        device.project_id = project.id
+        db.flush()
+        record_audit(
+            db,
+            action="assign_project",
+            resource_type="device",
+            resource_id=device.id,
+            details={
+                "project_key": project.project_key,
+                "from_project_key": from_key,
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            request=request,
+        )
+    db.commit()
+
+    items = []
+    for device in devices:
+        out = DeviceOut.model_validate(device)
+        # 整批归入同一目标；joinedload 缓存的关系在赋值后不自动失效，
+        # 直接写目标 key（不读 device.project）
+        out.project_key = project.project_key
+        items.append(out)
+    return ok(items)
+
+
+def _fill_project_key(device: Device, out) -> None:
+    """ADR-0029：DeviceOut.project_key（F2 口径，不暴露数字 project_id）。"""
+    project = device.project
+    out.project_key = project.project_key if project else None
+
+
 @router.get("", response_model=Union[List[DeviceOut], PaginatedResponse])
 def list_devices(
     request: Request,
     tags: Optional[str] = Query(None, description="Comma-separated tag filter"),
     status: Optional[str] = Query(None, description="Filter by device status (ONLINE, OFFLINE, BUSY)"),
+    project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=1200),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    query = db.query(Device).order_by(Device.last_seen.desc().nullslast())
+    query = db.query(Device).options(joinedload(Device.project)).order_by(Device.last_seen.desc().nullslast())
+
+    # ADR-0029：项目归属筛选（project_id NULL 的设备不命中——筛选 = 只显示该项目）
+    if project_key:
+        query = query.join(TestProject, Device.project_id == TestProject.id) \
+                     .filter(TestProject.project_key == project_key)
 
     # Filter by status if provided
     if status:
@@ -143,7 +224,11 @@ def list_devices(
             needs_commit = True
     if needs_commit:
         db.commit()
-    items = [DeviceOut.model_validate(d) for d in devices]
+    items = []
+    for d in devices:
+        out = DeviceOut.model_validate(d)
+        _fill_project_key(d, out)
+        items.append(out)
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return items
@@ -161,7 +246,9 @@ def get_device(
         raise HTTPException(status_code=404, detail="device not found")
     if _ensure_host_online_for_device(device):
         db.commit()
-    return device
+    out = DeviceOut.model_validate(device)
+    _fill_project_key(device, out)
+    return out
 
 
 @router.put("/{device_id}/tags", response_model=DeviceOut)
