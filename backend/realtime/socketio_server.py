@@ -15,15 +15,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import socketio
+from sqlalchemy import text
 
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
+from backend.core.database import AsyncSessionLocal
 from backend.core.metrics import record_socketio_connection
 from backend.core.security import ACCESS_COOKIE_NAME, extract_cookie_token
+from backend.services.run_console import RunConsole
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +307,39 @@ class AgentNamespace(socketio.AsyncNamespace):
 # /dashboard namespace
 # ---------------------------------------------------------------------------
 
+# ── dashboard room 校验（ADR-0029 v2.3 D）─────────────────────────────────────
+# on_subscribe 收窄：格式白名单 + 实体存在性。合法形态 = 后端 emit 端全集：
+#   job:/run:    → job_instance.id（Agent step_log 的 run_id 与 job_id 同值）
+#   plan_run:    → plan_run.id
+#   console:     → RunConsole run_id（`con-` + uuid4 hex，进程内态，终态后仍可查）
+# agent: 是 /agent namespace 内部房间（AgentNamespace 自己 enter_room），
+# dashboard 客户端订阅无意义（namespace 隔离），不入白名单。
+# 不做归属过滤：REST 面本就允许任意登录用户读任意 run，实时通道不设更严门槛
+# （G13 定性：P2 前置一致性 / 健壮性，非越权安全洞）。
+_ROOM_PATTERN = re.compile(
+    r"^(job|run|plan_run):[0-9]{1,18}$|^console:con-[0-9a-f]{1,32}$"
+)
+
+
+async def _dashboard_room_exists(kind: str, ident: str) -> bool:
+    """实体存在性校验。查询失败 fail-closed：无法证明房间有效就不放行——
+    订阅被拒只影响推流（重连会重试），不阻塞 REST 主路径。
+    """
+    if kind == "console":
+        return RunConsole.instance().status(ident) is not None
+    table = "job_instance" if kind in ("job", "run") else "plan_run"
+    try:
+        async with AsyncSessionLocal() as session:
+            row = await session.execute(
+                text(f"SELECT 1 FROM {table} WHERE id = :id"),
+                {"id": int(ident)},
+            )
+            return row.first() is not None
+    except Exception:
+        logger.exception("dashboard_subscribe_entity_check_failed kind=%s", kind)
+        return False
+
+
 class DashboardNamespace(socketio.AsyncNamespace):
     """Handles Frontend connections on /dashboard namespace."""
 
@@ -343,11 +380,24 @@ class DashboardNamespace(socketio.AsyncNamespace):
         logger.info("dashboard_sio_disconnected sid=%s", sid)
 
     async def on_subscribe(self, sid: str, data: dict):
-        """Client subscribes to specific rooms (job logs, plan runs, etc.)."""
+        """Client subscribes to specific rooms (job logs, plan runs, etc.).
+
+        ADR-0029 v2.3 D：格式白名单 + 实体存在性校验，不合法的 room 拒绝进入
+        （不 enter_room，记 WARNING）。合法形态见 ``_ROOM_PATTERN``；不存在
+        实体的房间不会收到任何 emit，订阅它只会堆积无意义 room 条目。
+        """
         room = data.get("room", "")
-        if room:
-            await self.enter_room(sid, room)
-            logger.debug("dashboard_subscribe sid=%s room=%s", sid, room)
+        if not room:
+            return
+        if _ROOM_PATTERN.fullmatch(room) is None:
+            logger.warning("dashboard_subscribe_rejected_format sid=%s room=%r", sid, room)
+            return
+        kind, ident = room.split(":", 1)
+        if not await _dashboard_room_exists(kind, ident):
+            logger.warning("dashboard_subscribe_rejected_entity sid=%s room=%r", sid, room)
+            return
+        await self.enter_room(sid, room)
+        logger.debug("dashboard_subscribe sid=%s room=%s", sid, room)
 
     async def on_unsubscribe(self, sid: str, data: dict):
         """Client unsubscribes from a room."""
