@@ -80,9 +80,14 @@ class Device(Base):
     hardware_updated_at = Column(DateTime(timezone=True), nullable=True)
     lease_generation    = Column(Integer, nullable=False, default=0)   # ADR-0019 Phase 1
     extra               = Column(JSON, default=dict, nullable=True)
+    # ADR-0029 归属（P1 M-a）：NULL = 迁移期瞬态，M-c 回填后归零（完成标准）。
+    # 迁移完成后不存在「公共池」域——未识别设备归 LEGACY 项目。
+    project_id          = Column(Integer, ForeignKey("test_project.id"), nullable=True)
 
     host = relationship("backend.models.host.Host", foreign_keys=[host_id])
+    project = relationship("backend.models.test_project.TestProject", foreign_keys=[project_id])
 
     __table_args__ = (
         Index("idx_device_host", "host_id"),
+        Index("idx_device_project", "project_id"),
     )

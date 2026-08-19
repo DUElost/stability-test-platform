@@ -48,6 +48,10 @@ class PlanRun(Base):
     run_type          = Column(String(16), nullable=False)
     run_context       = Column(JSONB, nullable=True)
     triggered_by      = Column(String(128))
+    # ADR-0029 归属（P1 M-a）：NULL = 迁移期瞬态，M-b 回填后归零（存量 run 归 Legacy）。
+    project_id        = Column(Integer, ForeignKey("test_project.id"), nullable=True)
+    # 运行期属性（D3）：由 device.build_display_id（心跳上报）取值，版本不进项目。
+    build_version     = Column(String(256), nullable=True)
     started_at        = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     ended_at          = Column(DateTime(timezone=True))
     result_summary    = Column(JSONB)
@@ -94,6 +98,7 @@ class PlanRun(Base):
         ),
         Index("idx_plan_run_plan", "plan_id"),
         Index("idx_plan_run_status", "status"),
+        Index("idx_plan_run_project", "project_id"),
         Index("idx_plan_run_parent", "parent_plan_run_id"),
         Index("idx_plan_run_root", "root_plan_run_id"),
         Index(

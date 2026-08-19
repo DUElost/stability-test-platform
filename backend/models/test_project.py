@@ -1,0 +1,77 @@
+"""TestProject + Specialty ORM — ADR-0029.
+
+TestProject 是「项目登记簿」（v2 决策转向）：身份单层 + 正交 facet
+（客户 / 平台 / 形态 / 产品线），承载 jira 项目关键字映射——adb 设备指纹
+读不到、必须人工登记于平台的知识层。执行差异由脚本端设备路由吸收，
+本表不做派发门禁（D5 挂起）。
+
+v2 最小形态：不含 ``variables``（D4 挂起）与 ``storage_key``（D7 挂起）。
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
+
+from backend.core.database import Base
+
+
+class TestProject(Base):
+    __tablename__ = "test_project"
+
+    id               = Column(Integer, primary_key=True)
+    # 一经对外使用即不可变（URL / API / 日志 / 审计全链路统一，F2）。
+    # 字符集 [a-z0-9-]；storage_key（D7）挂起期间不建，复议时由此派生。
+    project_key      = Column(String(64), nullable=False)
+    display_name     = Column(String(256), nullable=False)
+    # 提交 jira 时自动带出的项目关键字（R4 唯一硬需求）；可空起步，P3 填齐。
+    jira_project_key = Column(String(32), nullable=True)
+
+    # facet：正交、可空、可枚举、可组合筛选；不建层级树（D2 两条理由）。
+    # product_line 建表后可为 NULL 后补（§5 清单待补）。
+    product_line     = Column(String(64), nullable=True)
+    customer         = Column(String(64), nullable=True)
+    platform         = Column(String(64), nullable=True)
+    form_factor      = Column(String(32), nullable=True)
+
+    status           = Column(String(16), nullable=False, default="ACTIVE",
+                              server_default="ACTIVE")
+    created_at       = Column(DateTime(timezone=True), nullable=False,
+                              default=lambda: datetime.now(timezone.utc))
+    updated_at       = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    __table_args__ = (
+        CheckConstraint("status IN ('ACTIVE', 'ARCHIVED')",
+                        name="ck_test_project_status"),
+        UniqueConstraint("project_key", name="uq_test_project_key"),
+    )
+
+
+class Specialty(Base):
+    """Plan.specialty 的配套字典表（D6）——下拉与聚合用，与 Script.category 不同层。"""
+
+    __tablename__ = "specialty"
+
+    id           = Column(Integer, primary_key=True)
+    key          = Column(String(32), nullable=False, unique=True)
+    display_name = Column(String(64), nullable=False)
+    sort_order   = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint("key", name="uq_specialty_key"),
+        Index("idx_specialty_sort", "sort_order"),
+    )

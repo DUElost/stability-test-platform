@@ -50,6 +50,10 @@ class Plan(Base):
     auto_archive_interval_seconds = Column(Integer, nullable=True)
     next_plan_id      = Column(Integer, ForeignKey("plan.id"), nullable=True)
     watcher_policy    = Column(JSONB, nullable=True)
+    # ADR-0029 归属（P1 M-a）：NULL = 迁移期瞬态，M-b 回填后归零（Legacy 承载存量 Plan）。
+    project_id        = Column(Integer, ForeignKey("test_project.id"), nullable=True)
+    # D6：专项字典表（MTBF / 开关机 / MONKEY / …），Plan 列表按 项目×专项 二维分组。
+    specialty_id      = Column(Integer, ForeignKey("specialty.id"), nullable=True)
     created_by        = Column(String(128))
     created_at        = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at        = Column(
@@ -64,6 +68,8 @@ class Plan(Base):
                              cascade="all, delete-orphan")
     runs      = relationship("PlanRun", back_populates="plan", lazy="dynamic",
                              primaryjoin="Plan.id == foreign(PlanRun.plan_id)")
+    project   = relationship("TestProject", foreign_keys=[project_id])
+    specialty = relationship("Specialty", foreign_keys=[specialty_id])
 
     __table_args__ = (
         CheckConstraint(
@@ -75,6 +81,7 @@ class Plan(Base):
             name="ck_plan_no_self_chain",
         ),
         Index("idx_plan_next_plan", "next_plan_id"),
+        Index("idx_plan_project", "project_id"),
     )
 
 
