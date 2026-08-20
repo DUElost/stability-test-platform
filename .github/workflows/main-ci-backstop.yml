@@ -6,11 +6,13 @@ name: Main CI backstop
 # （workflow_dispatch / push），没有就显式 dispatch ci.yml。workflow_dispatch 是
 # 显式触发，不受级联限制。PR 阶段保持轻量检查，main 全量统一每天验证一次。
 #
-# 全量 CI 结束后追加远端分支清理：
-# - 仓库已开启 "Automatically delete head branches"，但 auto-merge 合入的 PR
-#   不会触发该自动删除（GitHub 已知行为），需要每日兜底；
-# - 仅在 main 全量 CI conclusion == success 时删除「base=main、已合并、head
-#   分支仍存在」的远端分支；CI 失败/取消/超时则跳过清理（分支保留到下次 PASS）。
+# 全量 CI 结束后追加 auto-merge 遗留兜底（仅 conclusion == success 时执行；
+# CI 失败/取消/超时则跳过，分支保留到下次 PASS）：
+# - 远端分支清理：仓库已开启 "Automatically delete head branches"，但
+#   auto-merge 合入的 PR 不会触发该自动删除（GitHub 已知行为）；
+# - 关联 issue 补关：auto-merge 由 github-actions[bot]（GITHUB_TOKEN）合入时，
+#   GitHub 原生「合并关联 PR 自动关闭 issue」不生效（实测 #221–#226、
+#   #324–#336 全部遗留 OPEN），需要每日兜底关闭仍 OPEN 的 closing reference。
 on:
   schedule:
     - cron: "0 18 * * *"
@@ -35,10 +37,12 @@ jobs:
     # actions: write —— gh workflow run / 读取运行状态；
     # contents: write —— 删除远端分支 ref；
     # pull-requests: read —— 列出已合并 PR 的 head 分支。
+    # issues: write —— 补关已合入 PR 的仍开放关联 issue。
     permissions:
       actions: write
       contents: write
       pull-requests: read
+      issues: write
     steps:
       - name: Ensure full CI run for main tip
         id: ensure
@@ -187,6 +191,65 @@ jobs:
             deleted=$((deleted + 1))
           done
           echo "cleanup done: deleted=$deleted skipped=$skipped"
+
+      - name: Close linked issues after PASS
+        if: steps.wait.outputs.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # ensure 步骤确认过的 main SHA；关闭前会重读当前 main，
+          # 若已前进则放弃本次关闭（避免基于旧快照处理）。
+          MAIN_SHA: ${{ steps.ensure.outputs.main_sha }}
+        run: |
+          set -euo pipefail
+
+          current_main_sha="$(gh api "repos/$REPO/commits/main" --jq .sha)"
+          if [ "$current_main_sha" != "$MAIN_SHA" ]; then
+            echo "main advanced ($MAIN_SHA -> $current_main_sha); linked-issue close skipped"
+            exit 0
+          fi
+
+          # 近 30 天合入的 PR 中，找 GitHub 已建立 closing reference 且关联
+          # issue 仍 OPEN 的项。用 closingIssuesReferences 而非正则解析 PR
+          # body：这正是 GitHub 原生自动关闭所依赖的连接，最权威。
+          since="$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          tmp="$(mktemp)"
+          trap 'rm -f "$tmp"' EXIT
+          cursor=""
+          : > "$tmp"
+          while :; do
+            page_json="$(
+              gh api graphql \
+                -f query='query($owner:String!,$repo:String!,$cursor:String){repository(owner:$owner,name:$repo){pullRequests(first:100,after:$cursor,orderBy:{field:UPDATED_AT,direction:DESC},states:MERGED){pageInfo{hasNextPage endCursor} nodes{number mergedAt closingIssuesReferences(first:10){nodes{number state}}}}}}' \
+                -F owner="${REPO%/*}" -F repo="${REPO#*/}" -F cursor="$cursor"
+            )"
+            jq -r --arg since "$since" \
+              '.data.repository.pullRequests.nodes[] as $pr | select($pr.mergedAt >= $since) | $pr.closingIssuesReferences.nodes[]? | select(.state == "OPEN") | "\(.number)\t\($pr.number)"' \
+              <<<"$page_json" >> "$tmp"
+            has_next="$(jq -r '.data.repository.pullRequests.pageInfo.hasNextPage' <<<"$page_json")"
+            cursor="$(jq -r '.data.repository.pullRequests.pageInfo.endCursor // ""' <<<"$page_json")"
+            [ "$has_next" = "true" ] || break
+          done
+
+          closed=0
+          skipped=0
+          while IFS=$'\t' read -r issue pr; do
+            [ -n "$issue" ] || continue
+            # 查询到执行之间可能已被人关闭，逐条复查避免重复关闭报错。
+            state="$(gh issue view "$issue" --repo "$REPO" --json state --jq .state)"
+            if [ "$state" != "OPEN" ]; then
+              echo "already closed, skip: issue #$issue (PR #$pr)"
+              skipped=$((skipped + 1)); continue
+            fi
+            if ! gh issue close "$issue" --repo "$REPO" \
+                 --comment "PR #$pr 已合入 main；auto-merge（github-actions[bot]）未触发 GitHub 原生 linked-issue 自动关闭，由 main-ci-backstop 每日兜底补关。"; then
+              echo "close failed, skip: issue #$issue (PR #$pr)"
+              skipped=$((skipped + 1)); continue
+            fi
+            echo "closed linked issue #$issue (PR #$pr)"
+            closed=$((closed + 1))
+          done < "$tmp"
+          echo "linked-issue close done: closed=$closed skipped=$skipped"
 
   notify-failure:
     # 夜间全量 CI 失败时开 issue（同 label 的 open issue 复用、只追加评论，
