@@ -425,7 +425,17 @@ def get_scan_status(
 ):
     """查询该 PlanRun 的 scan/merge 产物列表。"""
     from backend.models.plan_run_artifact import PlanRunArtifact
+    from backend.models.plan_run import PlanRun
     from sqlalchemy import select
+
+    run = db.get(PlanRun, run_id)
+    archive = None
+    scan_failed = False
+    if run is not None:
+        ctx = run.run_context if isinstance(run.run_context, dict) else {}
+        archive = ctx.get("archive")
+        rs = run.result_summary if isinstance(run.result_summary, dict) else {}
+        scan_failed = bool(rs.get("scan_failed"))
 
     rows = db.execute(
         select(PlanRunArtifact).where(PlanRunArtifact.plan_run_id == run_id)
@@ -444,6 +454,8 @@ def get_scan_status(
             }
             for r in rows
         ],
+        "archive": archive,
+        "scan_failed": scan_failed,
     })
 
 
