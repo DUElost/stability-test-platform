@@ -15,7 +15,8 @@ import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
-import { SKELETON_BLOCK, TEXT } from '@/design-system';
+import { TEXT } from '@/design-system';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { cn } from '@/lib/utils';
 
 const deviceStatusMap: Record<string, DeviceStatus> = {
@@ -243,10 +244,10 @@ export default function DevicesPage() {
     return (
       <PageContainer width="full">
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
-        <div className="space-y-4">
-          <div className={cn('h-32', SKELETON_BLOCK)} />
-          <div className={cn('h-64', SKELETON_BLOCK)} />
-        </div>
+        <PageSkeleton>
+          <PageSkeleton.Block size="md" />
+          <PageSkeleton.Block size="lg" />
+        </PageSkeleton>
       </PageContainer>
     );
   }

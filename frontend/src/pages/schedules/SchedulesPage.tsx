@@ -7,7 +7,8 @@ import { Plus, Trash2, Edit2, Play, Power, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
-import { INTERACTIVE, PANEL, SKELETON_BLOCK, STATUS_CHIP, TEXT } from '@/design-system';
+import { INTERACTIVE, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull } from '@/utils/format';
 
@@ -164,10 +165,10 @@ export default function SchedulesPage() {
     return (
       <PageContainer width="default">
         <PageHeader title="定时任务" subtitle="管理 Cron 定时执行的 Plan" />
-        <div className="space-y-4">
-          <div className={cn('h-32', SKELETON_BLOCK)} />
-          <div className={cn('h-64', SKELETON_BLOCK)} />
-        </div>
+        <PageSkeleton>
+          <PageSkeleton.Block size="md" />
+          <PageSkeleton.Block size="lg" />
+        </PageSkeleton>
       </PageContainer>
     );
   }

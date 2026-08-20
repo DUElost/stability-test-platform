@@ -8,7 +8,7 @@ import { api, type ScriptEntry } from '@/utils/api';
 import { Search, FileCode, Code2, Tag, RefreshCw } from 'lucide-react';
 import ScriptVersionDialog from './ScriptVersionDialog';
 import { PageContainer, PageHeader } from '@/components/layout';
-import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { STATUS_CHIP, TEXT } from '@/design-system';
@@ -90,7 +90,9 @@ export default function ScriptManagementPage() {
       </div>
 
       {isLoading ? (
-        <LoadingGrid count={2} columns={1} component={CardSkeleton} />
+        <PageSkeleton>
+          <PageSkeleton.Cards count={2} />
+        </PageSkeleton>
       ) : isError ? (
         <ErrorState
           title="加载脚本列表失败"
