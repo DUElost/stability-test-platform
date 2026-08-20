@@ -428,6 +428,20 @@ describe('PlanStepInspector', () => {
       expect(lastStep(onUpdateStep).timeout_seconds).toBe(1);
     });
 
+    it('小数点开头的输入（如 .5）parseInt 为 NaN，不提交、失焦回落原值', () => {
+      const onUpdateStep = vi.fn();
+      render(<Harness step={makeStep({ timeout_seconds: 45 })} onUpdateStep={onUpdateStep} />);
+      const input = within(fieldOf('超时 (秒)')).getByRole('spinbutton');
+
+      // ".5" 是 number input 的合法浮点文本，能到达 onChange；
+      // 旧实现 parseInt('.5') || 1 会把手滑改写成 1 秒超时落库
+      fireEvent.change(input, { target: { value: '.5' } });
+
+      expect(onUpdateStep).not.toHaveBeenCalled();
+      fireEvent.blur(input);
+      expect(input).toHaveValue(45);
+    });
+
     it('切换步骤后 TimeoutInput 草稿不跨步骤残留', () => {
       const stepA = makeStep({ step_id: 'step_a', timeout_seconds: 30 });
       const stepB = makeStep({ step_id: 'step_b', timeout_seconds: 600 });
