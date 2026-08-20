@@ -83,7 +83,8 @@
 | `ADB_PATH` / `ANDROID_ADB_SERVER_PORT` | WSL 联调端口须 `5039` |
 | `STP_AEE_LOCAL_ROOT` | HDD AEE（默认 `/mnt/hdd/aee_events`） |
 | `STP_WATCHER_ENABLED` | Watcher 子系统开关（默认 `true`） |
-| `STP_DEVICE_LOG_EVENT_ENABLED` / `STP_EVENT_UPLOADER_ENABLED` | ADR-0028 DLE + 连续上送；控制面非空值经 hot-update fleet 同步（#218） |
+| `STP_DEVICE_LOG_EVENT_ENABLED` / `STP_EVENT_UPLOADER_ENABLED` | ADR-0028 DLE + EventUploader（默认过滤模型，见下）；控制面非空值经 hot-update fleet 同步（#218） |
+| `STP_EVENT_UPLOADER_CONTINUOUS` | 方案 A：`0`=仅上传 `UPLOAD_PENDING`（过滤模型，默认）；`1`=上传全部 `LOCAL`（逃生阀） |
 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` | 上送成功后删本机目录→`PRUNED`（**默认 0**）。**勿**进 fleet（#217）；单机 `.env` + `reload_config` |
 | `STP_LOCAL_DISK_SPILL_THRESHOLD` / `_TARGET` | HddSpill 触发/回落水位（%）；改阈值须**重启** Agent（configure 后不可热改） |
 | `STP_STEP_LOG_STREAM` | `1`=pipeline 日志经 SocketIO 批推送；`0`=保持 no-op（ADR-0026 P2-2） |

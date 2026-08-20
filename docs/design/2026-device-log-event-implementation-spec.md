@@ -1,8 +1,9 @@
 # DeviceLogEvent 重构实现规格（阶段 3）
 
-> **最后更新**：2026-08-09  
+> **最后更新**：2026-08-20  
 > **决策依据**：[`ADR-0028`](../adr/ADR-0028-device-log-event-and-continuous-upload.md)（D1–D8）  
 > **背景分析**：[`DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](../reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md)（v3.0）  
+> **方案 A 修订**：以 ADR-0028 修订版为准（upload_task 筛选 + EventUploader 执行）；初版 D2「连续全量上送」已废弃。  
 > **范围**：实现细节与边界条件；不重复 ADR 决策理由。
 
 ---

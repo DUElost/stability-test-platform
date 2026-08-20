@@ -102,10 +102,10 @@ DETECTED ──(adb pull 完成)──→ LOCAL
 - FAILED 走 scan→upload（事件到达 CIFS），但不走 merge/extract（运行失败，产 jira/ 无意义）
 - merge/extract 的门禁自然阻断 FAILED：scan xls 不足 → merge 跳过 → extract 跳过
 
-**upload_task 恢复**（#213 已删除其 enqueue 链，需还原）：
+**upload_task 恢复**（方案 A 已恢复其 enqueue 链）：
 
 ```
-scan_task → scan_now → poll → register artifacts → enqueue upload_task（恢复）
+scan_task → scan_now → poll → register artifacts → enqueue upload_task
           → enqueue merge_task
 ```
 
@@ -169,8 +169,7 @@ extract 双根遍历：
 
 - PlanRun FAILED 时 scan 可能产不出足够的 xls（取决于失败发生在哪个阶段）——merge 门禁自然跳过，但事件可能因无 xls 引用而不被上传
 - EventUploader 的 copytree 逻辑保留（执行者定位，不回退）；`CONTINUOUS=1` 仅作为逃生阀模式
-- #213 已删除的 `upload_task` enqueue 需还原
-- `JobLogSignal.job_id` 的 `CASCADE → SET NULL` 需 migration
+- `JobLogSignal.job_id` 已由 `CASCADE` 改为 `SET NULL`（migration g5b6c7d8e9f0）
 
 ### 与 ADR-0028 初版（全量上送）的对比
 
