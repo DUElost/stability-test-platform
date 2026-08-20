@@ -683,3 +683,50 @@ async def emit_agent_control(host_id: str, command: str, *, payload: Optional[Di
         "payload": payload or {},
     }, namespace="/agent", room=f"agent:{host_id}")
     logger.info("emit_agent_control host_id=%s command=%s", host_id, command)
+
+
+async def call_agent_control(
+    host_id: str,
+    command: str,
+    *,
+    payload: Optional[Dict[str, Any]] = None,
+    timeout: float = 3.0,
+) -> bool:
+    """下发 control 命令并等待 Agent ack（P2-4）。
+
+    返回 True 仅表示「已送达」（Agent 侧 control handler 已收到，可能仍在
+    队列中），不代表命令执行完成。Agent 离线/超时/无本地 sid 时返回 False，
+    调用方（scan_task）据此记录缺口或重发。
+    """
+    ns = get_agent_namespace()
+    sid = ns.get_sid(host_id)
+    call_kwargs: Dict[str, Any] = {
+        "namespace": "/agent",
+        "timeout": timeout,
+    }
+    if sid:
+        call_kwargs["to"] = sid
+    else:
+        try:
+            from backend.realtime.socketio_redis import socketio_redis_adapter_enabled
+        except Exception:
+            socketio_redis_adapter_enabled = lambda: False  # type: ignore[assignment]
+        if not socketio_redis_adapter_enabled():
+            logger.warning("call_agent_control_no_sid host=%s command=%s", host_id, command)
+            return False
+        call_kwargs["room"] = f"agent:{host_id}"
+
+    sio = get_sio()
+    try:
+        ack = await sio.call(
+            "control",
+            {"command": command, "payload": payload or {}},
+            **call_kwargs,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("call_agent_control_timeout host=%s command=%s", host_id, command)
+        return False
+    except Exception as exc:
+        logger.warning("call_agent_control_failed host=%s command=%s err=%s", host_id, command, exc)
+        return False
+    return isinstance(ack, dict) and ack.get("ok") is True
