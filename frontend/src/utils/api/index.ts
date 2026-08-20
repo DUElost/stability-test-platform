@@ -33,6 +33,7 @@ export type {
   TaskSchedule, TaskScheduleCreatePayload, TaskScheduleUpdatePayload, ScheduleRunNowResult,
   PaginatedResponse,
   Project, ProjectSummary, ProjectDetail, RecentProjectRun,
+  InventoryModel, InventorySummary, ProjectModelCoverage,
   ScriptEntry,
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
   PipelineStep, PipelinePhase, PipelinePatrol, PipelineDef,

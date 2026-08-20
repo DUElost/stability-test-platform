@@ -712,6 +712,35 @@ export interface ProjectDetail extends ProjectSummary {
   recent_runs: RecentProjectRun[];
 }
 
+/** ADR-0029 P2.5a：一种 device.model 的 fleet 聚合。 */
+export interface InventoryModel {
+  model: string | null;
+  device_count: number;
+  platforms: string[];
+  /** P1 脚本灌入的 device.project_id 标签，非正式编组，不是客户/项目/机型。 */
+  backfill_project_keys: string[];
+  /** 人工填写的映射；P2.5a 恒为 []。 */
+  mapped_project_keys: string[];
+  legacy_device_count: number;
+  null_device_count: number;
+}
+
+export interface InventorySummary {
+  total_devices: number;
+  mapped_devices: number;
+  legacy_devices: number;
+  null_devices: number;
+  distinct_models: number;
+  unmapped_models: Array<string | null>;
+}
+
+/** 某回填标签当前挂着的型号（非正式映射）。 */
+export interface ProjectModelCoverage {
+  model: string | null;
+  device_count: number;
+  platforms: string[];
+}
+
 // ─── 编排模型类型 ──────────────────────────────────────────────────────────────
 
 export interface ScriptEntry {

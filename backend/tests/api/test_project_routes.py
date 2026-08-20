@@ -1,7 +1,10 @@
-"""ADR-0029 P2 — 项目登记簿 API + 列表 project_key 筛选 + 设备批量归入。
+"""ADR-0029 P2 / P2.5a — 项目登记簿 API + Fleet 事实 + 列表筛选 + 批量归入。
 
 覆盖：
 - GET /api/v1/projects（列表 + 设备数 / 在跑 Run 数聚合）
+- GET /api/v1/projects/inventory/models（fleet 按 model；回填标签 ≠ 映射）
+- GET /api/v1/projects/inventory/summary
+- GET /api/v1/projects/{project_key}/models（回填标签下 model 反查）
 - GET /api/v1/projects/{project_key}（详情计数 + 最近 Run；404）
 - POST /api/v1/devices/bulk-project（admin 归属变更 + audit 留痕 +
   幂等跳过 + 未知 key/device 拒绝 + 非 admin 403）
@@ -49,8 +52,20 @@ def project_legacy(db_session):
     return p
 
 
-def _make_device(db_session, serial: str, project: ProjectModel | None = None) -> Device:
-    device = Device(serial=serial, project_id=project.id if project else None)
+def _make_device(
+    db_session,
+    serial: str,
+    project: ProjectModel | None = None,
+    *,
+    model: str | None = None,
+    platform: str | None = None,
+) -> Device:
+    device = Device(
+        serial=serial,
+        project_id=project.id if project else None,
+        model=model,
+        platform=platform,
+    )
     db_session.add(device)
     db_session.commit()
     return device
@@ -127,6 +142,125 @@ class TestGetProject:
 
     def test_unknown_key_404(self, client, auth_headers):
         resp = client.get("/api/v1/projects/no-such-project", headers=auth_headers)
+        assert resp.status_code == 404
+
+
+class TestInventoryModels:
+    """P2.5a：Fleet 事实层。回填标签 ≠ 人工映射。"""
+
+    def test_inventory_path_not_captured_as_project_key(self, client, auth_headers):
+        resp = client.get("/api/v1/projects/inventory/models", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["data"] == []
+
+    def test_empty_fleet(self, client, auth_headers):
+        resp = client.get("/api/v1/projects/inventory/summary", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["data"] == {
+            "total_devices": 0,
+            "mapped_devices": 0,
+            "legacy_devices": 0,
+            "null_devices": 0,
+            "distinct_models": 0,
+            "unmapped_models": [],
+        }
+
+    def test_groups_by_model_backfill_is_not_mapping(
+        self, client, auth_headers, db_session, project_a, project_legacy
+    ):
+        _make_device(
+            db_session, "s-mld-1", project_a, model="MLD_LX2", platform="MTK"
+        )
+        _make_device(
+            db_session, "s-mld-2", project_a, model="MLD_LX2", platform="MTK"
+        )
+        _make_device(
+            db_session, "s-mld-3", project_a, model="MLD_LX3", platform="MTK"
+        )
+        _make_device(
+            db_session, "s-legacy", project_legacy, model="MYSTERY_X", platform="MTK"
+        )
+        _make_device(
+            db_session, "s-null", None, model="MYSTERY_X", platform="MTK"
+        )
+        _make_device(db_session, "s-blank-none", None, model=None, platform=None)
+        _make_device(db_session, "s-blank-empty", None, model="  ", platform="  ")
+
+        resp = client.get("/api/v1/projects/inventory/models", headers=auth_headers)
+        assert resp.status_code == 200
+        by_model = {row["model"]: row for row in resp.json()["data"]}
+
+        assert by_model["MLD_LX2"]["device_count"] == 2
+        assert by_model["MLD_LX2"]["platforms"] == ["MTK"]
+        assert by_model["MLD_LX2"]["backfill_project_keys"] == ["proj-a"]
+        # 人工映射未填写：P1 回填不得冒充已映射项目
+        assert by_model["MLD_LX2"]["mapped_project_keys"] == []
+        assert "project_keys" not in by_model["MLD_LX2"]
+        assert by_model["MLD_LX2"]["legacy_device_count"] == 0
+        assert by_model["MLD_LX2"]["null_device_count"] == 0
+
+        assert by_model["MLD_LX3"]["device_count"] == 1
+        assert by_model["MYSTERY_X"]["backfill_project_keys"] == ["LEGACY"]
+        assert by_model["MYSTERY_X"]["mapped_project_keys"] == []
+        assert by_model["MYSTERY_X"]["legacy_device_count"] == 1
+        assert by_model["MYSTERY_X"]["null_device_count"] == 1
+        assert by_model[None]["device_count"] == 2
+        assert by_model[None]["null_device_count"] == 2
+
+        models_in_order = [row["model"] for row in resp.json()["data"]]
+        assert models_in_order == [None, "MLD_LX2", "MYSTERY_X", "MLD_LX3"]
+
+        summary = client.get(
+            "/api/v1/projects/inventory/summary", headers=auth_headers
+        ).json()["data"]
+        assert summary["total_devices"] == 7
+        assert summary["mapped_devices"] == 3
+        assert summary["legacy_devices"] == 1
+        assert summary["null_devices"] == 3
+        assert summary["distinct_models"] == 4
+        assert set(summary["unmapped_models"]) == {None, "MYSTERY_X"}
+
+    def test_mixed_backfill_keys_on_same_model(
+        self, client, auth_headers, db_session, project_a, project_legacy
+    ):
+        _make_device(
+            db_session, "s-mix-a", project_a, model="MLD_LX2", platform="MTK"
+        )
+        _make_device(
+            db_session, "s-mix-legacy", project_legacy, model="MLD_LX2", platform="MTK"
+        )
+        resp = client.get("/api/v1/projects/inventory/models", headers=auth_headers)
+        row = resp.json()["data"][0]
+        assert row["model"] == "MLD_LX2"
+        assert row["backfill_project_keys"] == ["LEGACY", "proj-a"]
+        assert row["mapped_project_keys"] == []
+        assert row["legacy_device_count"] == 1
+        assert row["device_count"] == 2
+
+
+class TestProjectModelCoverage:
+    def test_reverse_lookup_counts_only_this_label(
+        self, client, auth_headers, db_session, project_a, project_legacy
+    ):
+        _make_device(
+            db_session, "s-cov-a1", project_a, model="MLD_LX2", platform="MTK"
+        )
+        _make_device(
+            db_session, "s-cov-a2", project_a, model="MLD_LX3", platform="MTK"
+        )
+        _make_device(
+            db_session, "s-cov-legacy", project_legacy, model="MLD_LX2", platform="MTK"
+        )
+
+        resp = client.get("/api/v1/projects/proj-a/models", headers=auth_headers)
+        assert resp.status_code == 200
+        by_model = {row["model"]: row for row in resp.json()["data"]}
+        assert by_model["MLD_LX2"]["device_count"] == 1
+        assert by_model["MLD_LX3"]["device_count"] == 1
+        assert "mapped_project_keys" not in by_model["MLD_LX2"]
+
+    def test_unknown_key_404(self, client, auth_headers):
+        resp = client.get("/api/v1/projects/no-such-project/models", headers=auth_headers)
         assert resp.status_code == 404
 
 

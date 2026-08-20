@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   listDevices: vi.fn(),
   listPlans: vi.fn(),
   resultsSummary: vi.fn(),
+  modelsOf: vi.fn(),
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -22,7 +23,7 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('@/utils/api', () => ({
   api: {
-    projects: { get: mocks.getProject },
+    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf },
     devices: { list: mocks.listDevices },
     plans: { list: mocks.listPlans },
     results: { summary: mocks.resultsSummary },
@@ -73,6 +74,9 @@ describe('ProjectDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getProject.mockResolvedValue(makeDetail());
+    mocks.modelsOf.mockResolvedValue([
+      { model: 'M1', device_count: 1, platforms: ['MTK'] },
+    ]);
     mocks.listDevices.mockResolvedValue({
       items: [{ id: 1, serial: 'S-1', model: 'M1', status: 'ONLINE', project_key: 'proj-a' }],
       total: 1,
@@ -128,11 +132,17 @@ describe('ProjectDetailPage', () => {
     // 「Plan A」同时出现在计划块与结果块 recent_runs 里——按数量断言
     expect((await screen.findAllByText('Plan A')).length).toBeGreaterThanOrEqual(2);
     expect(await screen.findByText('#1')).toBeInTheDocument();
-    // 各块都走后端 project_key 参数（不是全量再前端过滤）
+    expect(await screen.findByTestId('backfill-disclaimer')).toHaveTextContent(
+      '不能代表客户、项目或机型',
+    );
+    expect(await screen.findByTestId('hanging-models')).toHaveTextContent(
+      '当前挂在此标签下的型号：M1 (1)',
+    );
     await waitFor(() => {
       expect(mocks.listDevices).toHaveBeenCalledWith(0, 20, undefined, undefined, 'proj-a');
       expect(mocks.listPlans).toHaveBeenCalledWith(0, 20, 'proj-a');
       expect(mocks.resultsSummary).toHaveBeenCalledWith(5, 'proj-a');
+      expect(mocks.modelsOf).toHaveBeenCalledWith('proj-a');
     });
   });
 
