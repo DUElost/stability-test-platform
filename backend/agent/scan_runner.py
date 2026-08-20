@@ -157,6 +157,16 @@ class ScanRunner:
                             continue
                         cls._worker_started = False
                 return
+            if not cls.instance().is_configured():
+                # P2-2b：启动窗口内 scan_now 入队等待 configure，不再丢弃。
+                with cls._queue_lock:
+                    cls._pending[job.plan_run_id] = job
+                logger.warning(
+                    "scan_queue_defer_not_configured plan_run=%d host=%s",
+                    job.plan_run_id, job.host_id,
+                )
+                time.sleep(2.0)
+                continue
             cls._execute_job(job)
 
     @classmethod
@@ -224,7 +234,7 @@ class ScanRunner:
         scan_tool_python: str = "",
         scan_tool_script: str = "",
         hdd_root: str = "",
-        side: str = "shanghai",
+        side: Optional[str] = None,
         force: bool = False,
     ) -> None:
         if self._configured and not force:
@@ -233,6 +243,11 @@ class ScanRunner:
         self._scan_tool_python = scan_tool_python or os.getenv("STP_DEDUP_SCAN_PYTHON", "").strip()
         self._scan_tool_script = scan_tool_script or os.getenv("STP_DEDUP_SCAN_SCRIPT", "").strip()
         self._hdd_root = hdd_root or str(get_aee_local_root())
+        # P1-2：与控制面 run_merge_sync 同逻辑读 STP_DEDUP_SCAN_TAG
+        #（含 factory 大小写不敏感 → factory，否则 shanghai）；显式传 side 时优先。
+        if not side:
+            tag = os.getenv("STP_DEDUP_SCAN_TAG", "").strip().lower()
+            side = "factory" if "factory" in tag else "shanghai"
         self._side = side
         self._configured = bool(self._scan_tool_python and self._scan_tool_script)
         logger.info(
