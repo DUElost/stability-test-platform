@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from backend.api.schemas import JiraDraftOut, RunReportOut, RunStepOut
 from backend.api.routes.auth import get_current_active_user, User
+from backend.api.response import ok
 from backend.core.artifact_paths import (
     ArtifactPathError,
     ArtifactPathNotFoundError,
@@ -141,12 +142,12 @@ def get_cached_run_report(
     from backend.models.job import JobInstance
     job = db.get(JobInstance, run_id)
     if job and job.post_processed_at and job.report_json:
-        return JSONResponse(content=job.report_json)
+        return ok(job.report_json)
 
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return JSONResponse(content=jsonable_encoder(_model_to_dict(report)))
+    return ok(_model_to_dict(report))
 
 
 # ── JIRA Draft ────────────────────────────────────────────────────────────────
@@ -174,13 +175,13 @@ def get_cached_jira_draft(
     from backend.models.job import JobInstance
     job = db.get(JobInstance, run_id)
     if job and job.post_processed_at and job.jira_draft_json:
-        return JSONResponse(content=job.jira_draft_json)
+        return ok(job.jira_draft_json)
 
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
     draft = build_jira_draft(report)
-    return JSONResponse(content=jsonable_encoder(_model_to_dict(draft)))
+    return ok(_model_to_dict(draft))
 
 
 # ── Steps ─────────────────────────────────────────────────────────────────────
