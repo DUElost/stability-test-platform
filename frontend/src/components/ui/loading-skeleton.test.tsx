@@ -45,6 +45,12 @@ describe('PageSkeleton', () => {
     expect((c4.querySelector('.grid') as HTMLElement).className).toContain('xl:grid-cols-4');
   });
 
+  it('Stats 拒绝非法 count（负数/小数/非有限/超上限）', () => {
+    for (const bad of [0, -1, 2.5, NaN, Infinity, 13]) {
+      expect(() => render(<PageSkeleton.Stats count={bad} />)).toThrow(/1-12/);
+    }
+  });
+
   it('积木组合由 PageSkeleton 容器统一纵向堆叠', () => {
     const { container } = render(
       <PageSkeleton>

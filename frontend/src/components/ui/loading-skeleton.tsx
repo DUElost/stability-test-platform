@@ -71,6 +71,11 @@ PageSkeleton.Block = function Block({ size = 'md' }: { size?: keyof typeof BLOCK
 
 /** 统计卡行占位（Expandable*Table 首屏筛选卡，count=成品卡数） */
 PageSkeleton.Stats = function Stats({ count }: { count: number }) {
+  // count 是调用方硬编码的成品卡数，非用户输入；校验防超大 Array.from 分配
+  // 与手滑传错。渲染上限 12：真实页面超出时应在此加具名网格映射而非硬传。
+  if (!Number.isInteger(count) || count < 1 || count > 12) {
+    throw new Error(`PageSkeleton.Stats: count 必须是 1-12 的整数，收到 ${count}`);
+  }
   return (
     <div className={cn('grid gap-3', STATS_GRIDS[count as keyof typeof STATS_GRIDS] ?? 'grid-cols-2 md:grid-cols-3 xl:grid-cols-5')}>
       {Array.from({ length: count }).map((_, i) => (
