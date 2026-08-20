@@ -18,7 +18,7 @@ from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.models.test_project import TestProject as ProjectModel
+from backend.models.project import TestProject as ProjectModel
 
 
 @pytest.fixture

@@ -58,3 +58,8 @@
 *.db         binary
 *.sqlite     binary
 *.sqlite3    binary
+
+# --- MTBF golden fixtures: byte-level snapshots -----------------------------
+# 真实设备侧 XML 快照（CRLF、无 prolog 保证），用于钉住解析器对生产字节的
+# 行为；不做任何 EOL 归一化（-text 按原样入库）。
+backend/agent/tests/fixtures/mtbf/** -text

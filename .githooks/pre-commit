@@ -35,6 +35,12 @@ while IFS= read -r file; do
     continue
   fi
 
+  # -text 文件（.gitattributes 标记的字节级快照/夹具，如 MTBF golden XML
+  # 含 CRLF 原样入库）：EOL 归一化策略不适用，全部污染检查豁免
+  if [ "$(git check-attr text -- "$file" | awk '{print $NF}')" = "unset" ]; then
+    continue
+  fi
+
   diff_text=$(git diff --cached --unified=0 -- "$file" || true)
   [ -z "$diff_text" ] && continue
 
