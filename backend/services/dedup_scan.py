@@ -172,6 +172,7 @@ def record_scan_archive_state(
     hosts_triggered: int,
     artifacts_registered: int,
     hosts_with_artifacts: int,
+    hosts_not_acked: int = 0,
 ) -> None:
     """记录本轮 scan 的产物计数到 ``PlanRun.run_context['archive']``。
 
@@ -205,6 +206,7 @@ def record_scan_archive_state(
                         "hosts_triggered": hosts_triggered,
                         "scan_artifacts_registered": artifacts_registered,
                         "hosts_with_artifacts": hosts_with_artifacts,
+                        "hosts_not_acked": hosts_not_acked,
                     }
                 ),
             },

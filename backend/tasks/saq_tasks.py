@@ -137,7 +137,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
     4. enqueue upload_task then merge_task (merge_task chains extract_task on
        success; events via EventUploader/DLE)
     """
-    from backend.realtime.socketio_server import emit_agent_control
+    from backend.realtime.socketio_server import call_agent_control
 
     logger.info("saq_scan_start plan_run=%d final=%s", plan_run_id, is_final)
 
@@ -151,13 +151,21 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             _query_hosts_for_scan, plan_run_id, is_final,
         )
         triggered = [host_id for host_id, _payload in triggered_rows]
+        not_acked: list[str] = []
         for host_id, payload in triggered_rows:
-            await emit_agent_control(host_id, "scan_now", payload=payload)
+            acked = await call_agent_control(host_id, "scan_now", payload=payload)
+            if not acked:
+                not_acked.append(host_id)
 
         logger.info(
-            "saq_scan_dispatched plan_run=%d triggered=%d skipped=%d",
-            plan_run_id, len(triggered), len(skipped),
+            "saq_scan_dispatched plan_run=%d triggered=%d skipped=%d not_acked=%d",
+            plan_run_id, len(triggered), len(skipped), len(not_acked),
         )
+        if not_acked:
+            logger.warning(
+                "saq_scan_emit_no_ack plan_run=%d hosts=%s",
+                plan_run_id, ",".join(sorted(not_acked)),
+            )
     except Exception:
         logger.exception("saq_scan_failed plan_run=%d", plan_run_id)
         raise
@@ -238,6 +246,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             hosts_triggered=n_triggered,
             artifacts_registered=registered,
             hosts_with_artifacts=hosts_done,
+            hosts_not_acked=len(not_acked),
         )
 
     from backend.tasks.saq_worker import get_queue
