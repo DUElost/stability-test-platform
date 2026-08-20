@@ -186,19 +186,18 @@ sequenceDiagram
 五触发之一到达
   → Agent scan 本地 HDD
   → CIFS: 报告 → dedup/{plan_run_id}/{host_id}_Result_*_org.xls（平铺）
-  → 解析报告命中的 dirname/db
-  → 仅这些目录 copy → devices/{plan_run_id}/
+  → upload_task（控制面筛选）：解析报告命中的 dirname → DLE LOCAL → UPLOAD_PENDING
+  → EventUploader（Agent 30s 轮询）：copytree → devices/{plan_run_id}/ → state=REMOTE
   → 未命中：不动本地、不上 CIFS
-  → 控制面 merge → extract 只拷 CIFS 上已有事件 → jira/
+  → merge → extract 按 DLE remote_path 拷贝 → jira/；成功后 REMOTE → ARCHIVED
 
 HDD usage < 95%
   → HddSpill: no-op
 
 HDD usage ≥ 95%
-  → 选最旧、非活跃、已完整的事件目录
-  → copy 到 devices/{plan_run_id}/{dirname}/ 或 devices/unassigned/{event_id}/{dirname}/
-  → checksum/存在性确认成功
-  → rmtree 本地
+  → DeviceLogEventClient.list_events(state=LOCAL) 选最旧候选
+  → enqueue_local_event(force=True) → EventUploader copytree → REMOTE
+  → 上送成功后按 PRUNE_LOCAL 删本地（无候选仍 ≥95% 打告警）
   → 重复直到 ≤ target 或无候选
   → 无候选仍 ≥95%：打告警（hdd_still_high_no_spill_candidate），不得空转假装已腾盘
 ```
@@ -213,9 +212,10 @@ sequenceDiagram
     participant HDD as AEE_HDD
     participant DLE as device_log_event_optional
     participant Sig as log_signal_outbox
-    participant Scan as ScanRunner_UploadManager
+    participant Scan as ScanRunner
+    participant Upload as EventUploader
     participant Spill as HddSpillMonitor
-    participant SAQ as CP_SAQ_scan_merge_extract
+    participant SAQ as CP_SAQ_scan_upload_merge_extract
     participant CIFS as CIFS_STP_AEE_NFS_ROOT
 
     Phone->>Rec: new crash db under /data/aee_exp
@@ -228,14 +228,12 @@ sequenceDiagram
     SAQ->>Scan: scan_now (trigger 1..5)
     Scan->>HDD: start_log_scan.py -m 0 -d HDD -side {side}（AEE_TNE；-dedup_org 仅二次去重）
     Scan->>CIFS: put Result_*_org.xls → dedup/{run}/{host_id}_Result_*_org.xls（平铺）
-    Scan->>Scan: event_dir_names = rows in xls Path/db
-    loop each name in event_dir_names ONLY
-        Scan->>CIFS: copytree HDD event → devices/{run}/{dirname}/
-        Scan->>DLE: optional state=REMOTE remote_path=CIFS
-        Note over HDD: KEEP local copy
-    end
+    SAQ->>SAQ: upload_task：解析 xls → DLE LOCAL → UPLOAD_PENDING
+    Upload->>DLE: poll UPLOAD_PENDING（30s）
+    Upload->>CIFS: copytree → devices/{run}/{dirname}/
+    Upload->>DLE: state=REMOTE remote_path=CIFS
     SAQ->>CIFS: merge _org.xls → merge xls
-    SAQ->>CIFS: extract copy existing CIFS events → jira/{run}/
+    SAQ->>CIFS: extract copy DLE REMOTE/ARCHIVED → jira/{run}/
 
     Note over Spill,CIFS: CHANNEL_B spill independent
 
@@ -245,10 +243,11 @@ sequenceDiagram
             Spill-->>Spill: return
         else usage_pct >= 95
             loop until usage<=70 or no candidate
-                Spill->>HDD: pick oldest complete event dir<br/>skip active job / in-progress scan
-                Spill->>CIFS: copytree → devices/{run}/{dirname}/ or devices/unassigned/{event_id}/{dirname}/
-                Spill->>HDD: rmtree local AFTER copy OK
-                Spill->>DLE: optional PRUNED (means local gone, remote exists)
+                Spill->>DLE: list_events(state=LOCAL) 最旧候选
+                Spill->>Upload: enqueue_local_event(force=True)
+                Upload->>CIFS: copytree → devices/{run}/{dirname}/ or devices/unassigned/{event_id}/{dirname}/
+                Upload->>DLE: state=REMOTE
+                Upload->>HDD: PRUNE_LOCAL → rmtree local
             end
         end
     end
