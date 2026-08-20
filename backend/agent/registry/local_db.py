@@ -765,6 +765,30 @@ class LocalDB:
             })
         return result
 
+    def count_log_signal_dead_letters(self) -> int:
+        """#302: 死信总量（死信行保留在 SQLite，跨重启累计），供心跳上报。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM log_signal_outbox "
+                "WHERE dead_letter = 1"
+            ).fetchone()
+        return int(row["c"]) if row else 0
+
+    def replay_log_signal_dead_letter(self, row_id: int) -> bool:
+        """#302: 把死信行重置回待发送队列（dead_letter=0, attempts=0, acked=0）。
+
+        返回是否命中并重置；行不存在或当前不是死信状态时返回 False。
+        """
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "UPDATE log_signal_outbox SET dead_letter = 0, attempts = 0, "
+                    "acked = 0, last_error = NULL "
+                    "WHERE id = ? AND dead_letter = 1",
+                    (int(row_id),),
+                )
+        return cur.rowcount > 0
+
     def prune_acked_log_signals(self, keep_recent: int = 1000) -> int:
         """删除旧的 acked=1 且 dead_letter=0 条目,保留最近 keep_recent 条。
 
