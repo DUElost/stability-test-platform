@@ -542,7 +542,7 @@ export default function HostsPage() {
       <PageContainer width="full">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <PageSkeleton>
-          <PageSkeleton.Block size="md" />
+          <PageSkeleton.Stats count={4} />
           <PageSkeleton.Block size="lg" />
         </PageSkeleton>
       </PageContainer>
