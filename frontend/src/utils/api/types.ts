@@ -1183,6 +1183,34 @@ export interface PlanRunAbortRequest {
   acknowledged_job_ids?: number[];
 }
 
+/** #300 P3-2: merge_task 落 run_context.upload_summary 的事件上送进度。 */
+export interface RunContextUploadSummary {
+  total: number;
+  detected: number;
+  pull_failed: number;
+  local: number;
+  upload_pending: number;
+  pending: number;
+  uploading: number;
+  upload_failed: number;
+  failed: number;
+  remote: number;
+  archived: number;
+  pruned: number;
+  /** merge_task 等齐超时前的最终判定（false = 有缺口仍继续 extract）。 */
+  ready?: boolean;
+}
+
+/** #300 P3-4: run_extract_sync 落 run_context.extract 的提取完成度。 */
+export interface RunContextExtractSummary {
+  targets: number;
+  copied: number;
+  missing: number;
+  existing: number;
+  merge_xls_copied: number;
+  archived: number;
+}
+
 export interface PlanRunContext {
   precheck?: PrecheckState;
   dispatch_state?: PlanDispatchState | null;
@@ -1190,6 +1218,10 @@ export interface PlanRunContext {
   abort_requested?: PlanRunAbortRequest;
   /** Optional operator note from plan-execute (no dedicated DB column). */
   note?: string;
+  /** #300 P3-2: 上送进度（merge_task 写入）。 */
+  upload_summary?: RunContextUploadSummary;
+  /** #300 P3-4: 提取完成度（run_extract_sync 写入）。 */
+  extract?: RunContextExtractSummary;
   [key: string]: unknown;
 }
 

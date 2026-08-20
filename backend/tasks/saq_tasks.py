@@ -400,6 +400,30 @@ async def _count_remote_device_log_events(plan_run_id: int) -> int:
     return await asyncio_to_thread(_count)
 
 
+def _summarize_upload_sync(plan_run_id: int) -> dict:
+    """同步统计 plan_run 事件上送进度（供 run_context.upload_summary）。"""
+    from backend.core.database import SessionLocal
+    from backend.services.device_log_event import summarize_upload_states
+
+    db = SessionLocal()
+    try:
+        return summarize_upload_states(db, plan_run_id)
+    finally:
+        db.close()
+
+
+def _write_run_context_sync(plan_run_id: int, section: str, value: dict) -> None:
+    """同步写 PlanRun.run_context 分段（SAQ 线程池内执行）。"""
+    from backend.core.database import SessionLocal
+    from backend.services.plan_run_context import write_run_context_section
+
+    db = SessionLocal()
+    try:
+        write_run_context_section(db, plan_run_id, section, value)
+    finally:
+        db.close()
+
+
 async def merge_task(
     ctx: dict,
     *,
@@ -446,6 +470,17 @@ async def merge_task(
             "saq_merge_extract_best_effort plan_run=%d reason=upload_not_ready",
             plan_run_id,
         )
+
+    # 无论是否等齐，都把上送进度落到 run_context（#300 P3-2）：
+    # 缺口（pending/failed/LOCAL）在汇总页可见，不再只能翻日志。
+    upload_summary = await asyncio_to_thread(_summarize_upload_sync, plan_run_id)
+    upload_summary["ready"] = upload_ready
+    await asyncio_to_thread(
+        _write_run_context_sync,
+        plan_run_id,
+        "upload_summary",
+        upload_summary,
+    )
 
     n_devices = await _count_remote_device_log_events(plan_run_id)
     if n_devices == 0:
