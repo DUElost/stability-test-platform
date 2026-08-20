@@ -275,9 +275,11 @@ jobs:
             set_status pending "Waiting for CodeRabbit review or rate-limit decision"
             exit 0
           fi
-          if printf '%s' "$desc" | grep -qi 'rate.limit'; then
+          # rate limited / incremental-disabled skip：CR 不会给出当前 head 终态，
+          # 由 required checks 把关合入（#267 历史 CHANGES_REQUESTED 不阻塞此路径）。
+          if printf '%s' "$desc" | grep -qiE 'rate.limit|incremental reviews are disabled'; then
             guard_before_success
-            set_status success "CodeRabbit rate limited; required checks gate merge"
+            set_status success "CodeRabbit unavailable; required checks gate merge"
             exit 0
           fi
           # skipped / paused 通常放行（配额/不可用不阻塞）。但若本 PR 历史上有
