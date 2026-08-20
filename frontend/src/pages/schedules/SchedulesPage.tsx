@@ -303,7 +303,7 @@ export default function SchedulesPage() {
                       <button onClick={() => openEdit(s)} title="编辑" aria-label="编辑" className={cn('p-1.5 rounded', INTERACTIVE.iconButton)}>
                         <Edit2 className="w-4 h-4" />
                       </button>
-                      <button onClick={() => handleDelete(s.id)} title="删除" aria-label="删除" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-destructive')}>
+                      <button onClick={() => handleDelete(s.id)} title="删除" aria-label="删除" className={cn('p-1.5 rounded', INTERACTIVE.iconDanger)}>
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
