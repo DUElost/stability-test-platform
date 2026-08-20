@@ -194,12 +194,12 @@ enqueue(event_id)
 
 ### 4.1 各 task 对照
 
-| Task | 改前 | 改后 |
-|------|------|------|
-| `scan_task` | 发 scan + poll artifact + enqueue upload | 只发 scan + poll；写 `scan_round_id`；enqueue upload_task 后 enqueue merge |
-| `upload_task` | emit `upload_events` 等 Agent | 标记 scan 引用事件 `LOCAL → UPLOAD_PENDING`；EventUploader 30s 拉取执行 copytree |
-| `merge_task` | `_load_org_files_for_merge` 全量 | 仅 `scan_round_id = 本轮` 或 `created_at >= round_started_at` |
-| `extract_task` | `collect_upload_event_dir_names` | `SELECT remote_path FROM device_log_event WHERE plan_run_id=? AND state IN (...)` |
+| Task | 职责（现状） |
+|------|--------------|
+| `scan_task` | 发 scan + poll 产物；写 `scan_round_id`；enqueue upload_task 后 enqueue merge |
+| `upload_task` | 按 scan xls 引用标记 `LOCAL → UPLOAD_PENDING`；EventUploader 30s 轮询执行 copytree（Agent 侧唯一执行者） |
+| `merge_task` | 仅合并 `scan_round_id = 本轮` 或 `created_at >= round_started_at` 的产物 |
+| `extract_task` | `SELECT remote_path FROM device_log_event WHERE plan_run_id=? AND state IN (...)`；拷贝到 `jira/{run_id}/` |
 
 ### 4.2 `_count_devices_event_dirs_sync`
 
