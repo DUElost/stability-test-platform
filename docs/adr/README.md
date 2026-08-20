@@ -78,6 +78,7 @@
 | [ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md) | 控制面水平扩展（Leader Election + 多实例） | Accepted | P2 | M6 | P3-1..P3-3 已落地（opt-in 多实例）；默认单实例零变化 |
 | [ADR-0028](./ADR-0028-device-log-event-and-continuous-upload.md) | 设备日志事件实体 + PlanRun FAILED 触发上送 + 存储路径收敛（方案 A，2026-08-12 修订） | Accepted | P1 | 阶段 3 | D1–D9 已定；保留 ADR-0025 过滤模型；EventUploader 仅追踪不上传；阶段 3 重构待实施 |
 | [ADR-0029](./ADR-0029-project-taxonomy-and-param-layering.md) | 项目分类域（TestProject 登记簿 + facet 分类） | Accepted | P1 | M7 | v2.3 定稿：项目模型收窄为**登记簿**（客户 / 关系 / 形态 / jira 映射）；APK 差异由**脚本端设备指纹路由**吸收（`backend=auto` 先例，路由表住工具目录 + step_trace 记 sha256）。**D1/D4/D5/D7/D8/D9 与 D6 的 `applicable` 已挂起**（原文保留、各有复议触发条件，未触发前不得重提）；生效的是 D2/D3/D6 `specialty`。落地 P1–P3 最小形态。背景分析见 [reviews](../reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md) |
+| [ADR-0030](./ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（test_suite / test_case + 外部管理面） | Proposed | P0+P1 | M7 | D6 **P0 真机验收✅**（2026-08-20 PlanRun #218，见 Agent Note）；P1 实体/管理面未实施。D1–D5 决策方向已定。背景：[reviews](../reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) |
 
 ## Proposed 里程碑看板（2026 上半年）
 
@@ -89,7 +90,7 @@
 | M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
 | M5 | 2026-07 | ADR-0026 P0–P2（规模化执行正确性 + 控制面减负） |
 | M6 | 待定 | ADR-0027（控制面水平扩展；重启条件见 ADR-0025 D1） |
-| M7 | 待定 | ADR-0029（项目分类域·登记簿；D1/D4/D5/D7/D8/D9 挂起，落地 P1–P3 最小形态） |
+| M7 | 待定 | ADR-0029（项目分类域·登记簿；D1/D4/D5/D7/D8/D9 挂起，落地 P1–P3 最小形态）；ADR-0030（**P0 已验收** / P1 Proposed；0030 依赖 0029 `test_project`，不复活 0029 挂起决策） |
 
 ## 维护约定
 

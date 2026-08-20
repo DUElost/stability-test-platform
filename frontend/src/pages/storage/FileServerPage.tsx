@@ -39,6 +39,7 @@ import { CHART_COLORS, STATUS_TEXT_COLORS } from '@/design-system/colors';
 import { tabLinkClass, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
+import { formatUnixSeconds } from '@/utils/format';
 import type {
   FileServerClientMount,
   FileServerMetricPoint,
@@ -168,7 +169,7 @@ function CapacityChart({ data }: { data: FileServerOverview['history'] }) {
           />
           <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} tick={{ fontSize: 11 }} />
           <Tooltip
-            labelFormatter={(value) => new Date(Number(value) * 1000).toLocaleString('zh-CN')}
+            labelFormatter={(value) => formatUnixSeconds(Number(value))}
             formatter={(value, name) => [
               `${Number(value).toFixed(1)}%`,
               name === 'capacity' ? '存储' : name === 'cpu' ? 'CPU' : '内存',
