@@ -1,6 +1,6 @@
 # Android 设备日志流转：总体框架与实现审查
 
-> **历史文档**：本文为 2026-08-09 审查快照，含重构前/过渡态叙事（如 §八「连续上送 5min REMOTE」）。当前权威为 [ADR-0028](../adr/ADR-0028-device-log-event-and-continuous-upload.md) 方案 A（过滤模型）与 [implementation-spec](../design/2026-device-log-event-implementation-spec.md)；缺陷状态以代码与 issue 为准（#306/#307/#308 已按方案 A 落地关闭）。
+> **历史文档**：本文为 2026-08-09 审查快照，含重构前/过渡态叙事（如 §八「连续上送 5min REMOTE」）。当前权威为 [ADR-0028](../adr/ADR-0028-device-log-event-and-continuous-upload.md) 方案 A（过滤模型）与 [implementation-spec](../design/2026-device-log-event-implementation-spec.md)；缺陷状态以代码与 issue 为准（#306/#307/#308 已按方案 A 落地关闭；#300 落地 P3-2/P3-4、#302 落地 P4-4；#213 已删除 `upload_events` / `upload_event_dirs`，本文件相关链路图仅作历史快照）。
 
 **日期**：2026-08-09  
 **版本**：v3.0（文档闭环——缺陷清单 + DoD + 落地顺序 + 架构/运维补项索引；实现见 §七~§九 阶段 1~4）  
@@ -255,8 +255,8 @@ Watcher 路径 B（Reconciler / inotifyd）
   └→ Agent HDD: {STP_AEE_LOCAL_ROOT}/{folder_name}/{serial}/
        ├→ SignalEmitter → JobLogSignal → 控制面 DB
        │
-       ├→ [按需] upload_events SocketIO 命令
-       │    └→ UploadManager.upload_event_dirs
+       ├→ [按需] upload_events SocketIO 命令（#213 已删，历史快照）
+       │    └→ UploadManager.upload_event_dirs（#213 已删，历史快照）
        │         → 中心存储（CIFS）: {STP_AEE_NFS_ROOT}/devices/{plan_run_id}/{dirname}/
        │
        └→ [溢出] HddSpillMonitor（HDD 满 ≥ threshold_pct）
@@ -283,8 +283,8 @@ Watcher 路径 B（Reconciler / inotifyd）
   ├→ [控制面] poll 中心存储 dedup/{plan_run_id}/ (10s × 30 = 300s max)
   │    └→ run_scan_sync 注册 PlanRunArtifact(scan_result_xls)
   │
-  ├→ enqueue upload_task（并行 merge_task）
-  │    └→ emit upload_events → Agent upload_event_dirs
+  ├→ enqueue upload_task（标记 UPLOAD_PENDING；EventUploader 30s 轮询上送）
+  │    └→ EventUploader copytree（#213 后唯一执行者）
   │         → 中心存储（CIFS）: devices/{plan_run_id}/{dirname}/
   │
   └→ enqueue merge_task

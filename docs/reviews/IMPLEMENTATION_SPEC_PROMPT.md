@@ -54,8 +54,8 @@
 - Feature flag：env 变量名、默认值、回滚切换方式
 - 新旧上送路径并存策略：
   - 并存期间如何避免同一事件被上传两次？
-  - 旧路径（`collect_upload_event_dir_names` + `upload_event_dirs`）何时删除？
-  - 过渡期多长？
+  - 确认旧路径已删：Agent 无 `upload_events` / `upload_event_dirs`；
+    `collect_upload_event_dir_names` 仅被 upload_task（scan xls 过滤）使用
 
 ### 专题 3：HddSpill 改造
 
