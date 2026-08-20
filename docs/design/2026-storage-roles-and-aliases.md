@@ -15,7 +15,7 @@
 | 1 | **设备** | Android 被测机 |
 | 2 | **Agent host** | 跑 Agent 的 Linux 机（约 20 台） |
 | 3 | **控制面** | FastAPI / Dashboard / SAQ，生产 **永远** `192.0.2.202` |
-| 4 | **中心存储（CIFS / NFS）** | 日志分享盘：`devices/` `dedup/` `jira/` `jobs/` |
+| 4 | **中心存储（CIFS / NFS）** | 日志分享盘：`devices/` `dedup/` `jira/` `jobs/` `mtbf/` |
 | 5 | **PG** | 业务库（元数据，不是日志文件） |
 | 6 | **Redis** | 仅 SAQ broker（+ 可选 SocketIO adapter） |
 | 7 | **扫描工具** | `start_log_scan.py`（Agent scan + 控制面 merge） |
@@ -109,7 +109,9 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | `STP_NFS_ROOT` | Agent 上 hot-update 镜像 `STP_AEE_NFS_ROOT`（旧脚本 env）。控制面本机值不下发；脚本扫描用 `STP_SCRIPT_ROOT` | 独立脚本盘 |
 | `STP_AGENT_NFS_ROOT` | **已停用**（不再映射） | 第三块盘 |
 
-子目录（角色 4 的内容，不是角色）：`devices/`、`dedup/`、`jira/{plan_run_id}/`、`jobs/{job_id}/`。
+子目录（角色 4 的内容，不是角色）：`devices/`、`dedup/`、`jira/{plan_run_id}/`、`jobs/{job_id}/`、
+`mtbf/{project}/`（MTBF 清单/全局参数 + `results/{run_dir}.json`；控制面写配置、Agent 写 `results/`，见
+[P0 设计 §4.4](../design/2026-08-mtbf-p0-runner-design.md)）。
 
 ### 4.5 PG / Redis
 

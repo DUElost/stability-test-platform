@@ -1,0 +1,1395 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<runtask name="模拟老化(仿RM老化+MTBF)_Trassion_2023_8_23" times="1000" testTimeOut="259200000" takeScreenshot="true" stopWhenFail="false" taskRegressionType="0" caseRegressionType="1" testpointRegressionTimes="1">
+  <testpoint name="关闭软件商店的Wian自动更新消息提醒开关" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0141_CloseStoreWlan" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+      <attribute>
+        <arg name="wifiName" value="&#64;&#64;gWifiName" />
+        <arg name="wifiPWD" value="&#64;&#64;gWifiPwd" />
+      </attribute>
+    </testcase>
+  </testpoint>
+  <testpoint name="关闭游戏中心Wlan自动更新开关（前提：内置有游戏中心）" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0142_CloseGameWlan" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="关闭自动亮度调节" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0135_CloseBright" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="设置无锁屏" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0138_SetLock" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="打开wifi（手动输入密码）" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0139_SetWlan" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+      <attribute>
+        <arg name="wifiName" value="&#64;&#64;gWifiName" />
+        <arg name="wifiPWD" value="&#64;&#64;gWifiPwd" />
+      </attribute>
+    </testcase>
+  </testpoint>
+  <testpoint name="开启VOLTE通话功能（4G项目）" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0143_OpenVolte" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="初始化各个APP（哪些App？测试相关还是全部？）" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0144_ResetApp" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="文件创建删除压力测试(100W次)反复创建和删除1k文件" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0227_FileCreateAndDel" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="填充2000个联系人" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0145_FillContacts" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="填充10000条短信，" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0146_FillMessage" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="填充5000条通话记录。" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0147_FillCall" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="设置1个随机时间的每日闹钟。" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0148_SetClock" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="新建30个随机时间的日历日程。" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0149_AddCalendar" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开Photos，传音项目" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion" />
+      <method name="test_Photos" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开AI Gallery，传音项目" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion" />
+      <method name="test_AI_Gallery" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开VishaVideoPlayer，传音项目" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion" />
+      <method name="test_VishaVideoPlayer" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开Notebook，传音项目" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion" />
+      <method name="test_Notebook" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开电量管理，传音项目" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion" />
+      <method name="test_Power" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开Dispay，传音项目" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion" />
+      <method name="test_Display" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开Freezer，传音项目" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion" />
+      <method name="test_Freezer" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开设置应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability036_OpenAndCloseSettings" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重命名此设备" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_BluetoothModel" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开通话应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability004_OpenAndClosePhone" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="拨打112 20次，通话时间20秒，若手机插入双卡，则双卡各拨打20次。" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0156_Dial" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="新建联系人到手机" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability002_Add25Contacts" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="新建联系人调用相机拍照" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Camera048_TakePictureByContact" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="使用拨号虚拟键盘,点击虚拟键盘" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability061_EnterCharactersPhone" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="在拨号界面搜索联系人" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability062_SearchContactsPhone" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="在拨号界面查看联系人" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability063_CheckContactsPhone" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="在拨号界面新建联系人" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="CreateNewContactInTheDialingInterface" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="设置我的所有个人资料" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability064_SetMyContacts" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="查看我的个人资料" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability065_SeeContacts" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="编辑我的个人资料保存" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability066_SeeAnDalterMyPersonalData" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="删除我的个人资料" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability067_DeleteAndSeeContacts" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开信息应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability003_OpenAndCloseMessage" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="新建一条短信,输入号码，随机输入短信内容30-200字符发送短信，循环30次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0199_NewMessage" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="新建信息调用相机录像" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Camera049_CaptureVideoByMessage" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="随机输入号码，随机输入内容，保存30条草稿" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0200_RandomNewMessage" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="随机浏览短信,删除短信，循环30次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0201_RandomBrowseAndDeleteMessage" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开图库应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability018_OpenAndCloseGallery" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开天气应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability047_OpenAndCloseWeather" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开邮件应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability024_OpenAndCloseEmail" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开时钟应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability033_OpenAndCloseClock" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开日历应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability035_OpenAndCloseCalendar" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开计算器应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability042_OpenAndCloseCalculator" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="计算器清除历史记录" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability060_ClearHistoryCalculator" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开录音机应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability031_OpenAndCloseSoundRecorder" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="分别设置录音音质为高、低时录音" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_settingQuality" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开FM应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability032_OpenAndCloseFM" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开浏览器应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability001_OpenAndCloseBrowser" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进入浏览器,创建10个网页,上下滑动10次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0152_Browser" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0152_HiBrowser" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进入各主流网站youtube，Google，Facebook主页访问一级二级页面共100次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0202_EnterWebsite" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+      <attribute>
+        <arg name="wifiName" value="&#64;&#64;gWifiName" />
+        <arg name="wifiPWD" value="&#64;&#64;gWifiPwd" />
+      </attribute>
+    </testcase>
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0202_EnterWebsite_HiBrowser" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+      <attribute>
+        <arg name="wifiName" value="&#64;&#64;gWifiName" />
+        <arg name="wifiPWD" value="&#64;&#64;gWifiPwd" />
+      </attribute>
+    </testcase>
+  </testpoint>
+  <testpoint name="进入youtube，Google，Facebook等网站，随机播放一个视频，并反复拖动进度条30次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0204_EnterVideoWebsite" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+      <attribute>
+        <arg name="wifiName" value="&#64;&#64;gWifiName" />
+        <arg name="wifiPWD" value="&#64;&#64;gWifiPwd" />
+      </attribute>
+    </testcase>
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0204_EnterVideoWebsite_HiBrower" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+      <attribute>
+        <arg name="wifiName" value="&#64;&#64;gWifiName" />
+        <arg name="wifiPWD" value="&#64;&#64;gWifiPwd" />
+      </attribute>
+    </testcase>
+  </testpoint>
+  <testpoint name="浏览10个HTML5网站，每个网站浏览30个链接" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0203_EnterHTML5Website" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+      <attribute>
+        <arg name="wifiName" value="&#64;&#64;gWifiName" />
+        <arg name="wifiPWD" value="&#64;&#64;gWifiPwd" />
+      </attribute>
+    </testcase>
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0203_EnterHTML5Website_HiBrowser" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+      <attribute>
+        <arg name="wifiName" value="&#64;&#64;gWifiName" />
+        <arg name="wifiPWD" value="&#64;&#64;gWifiPwd" />
+      </attribute>
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开视频应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability037_OpenAndCloseVideo" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进出视频应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Video001_enterAndExitVideo" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="选择本地视频连续播放（播放过程中切换横竖屏）" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability038_LoopPlayCurrentVideo" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="播放暂停视频" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Video003_playAndPause" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="在视频播放界面，左右滑动快进、后退视频" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Video004_SwipeToFastForwardOrBackWord" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="从相机录制视频，从相机缩略图进入，播放录制的视频" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Video006_CaptureVideoAndPlay" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="在视频中，删除单个视频" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Video009_DeleteSignalVIdeo" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开音乐应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability020_OpenAndCloseMusic" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="循环播放音乐" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability022_PlayThirtyMinutesMusic" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进入音乐应用,反复点击进条不同位置50次，每次间隔1-3s:反复切换上一首(或下一首,随机生成)执行10次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0206_MusicClickProgressBar" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复截屏" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability043_RepeatScreenshot" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开文件管理应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability025_OpenAndCloseFilemanager" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="按大小排序，上下滑动根目录文件夹列表" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability028_SortFileBySize" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="预置一个文件夹（500M以上）。复制粘贴5次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability026_CopyAndPasteFile" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="创建测试文件夹(1次) 先创建300个文件夹，再随机选择文件夹生成1000个随机大小的文件(文件大小为1KB1024KB)" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0226_RandomFolder" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="文件夹创建删除压力测试(100W次)反复创建和删除文件夹100W次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0228_FolderCreateAndDel" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="随机读写测试(30次)创建0.5G的大女件，在大件的随机地址上读写1K大小的数据1W次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0229_RandomFile" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="顺序读写测试(100次)。用顺序写的方式生成随机大小的文件(文件大小为16MB-512MB)" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0230_SequenceFile" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开QQ 微信 淘宝 王者荣耀 Instagram，Facebook，twitter QQ音乐 Camera360应用" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability048_OpenThirdPartyApp" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="在桌面、音乐、视频、浏览器、文件管理、设置、软件商店、游戏中心、主题商店、电话本、相册、日历、搜狐新闻.等界面进行快速上下滑动50次，左右滑动20次。" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0215_QuickSwipe" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="在拍照预览界面随机点击300次，每次间隔1-3秒，切换摄像头后重复上述操作" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0181_RandomShot" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="拍照间隔1-3秒一次，拍照后预览照片，然后返回继续拍照，循环100次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0178_LoopShot" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="拍照1张，切换摄像头(切换至后量摄像头时随机调节焦距)，拍照一张，循环100次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0179_LoopShotAndMultiShot" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="拍照后预览照片，然后返回，切换摄像头，继续拍照后预览，循环100次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0180_LoopShotAndCheckPhotos" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="长按拍照键连拍20张,循环100次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0182_MultiShot" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="反复开启关闭闪光灯拍照" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability017_FlashModeToTakePicture" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="打开闪光灯拍照100张,连拍20张30次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0183_OpenFlashShotAndMultiShot" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="人像模式下拍照100次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0184_PortraitShot" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="专业模式下拍照100次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0185_MajorShot" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="后置开启滤镜拍照" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Camera027_BackCameraCaptureWithFilter" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="前置开启滤镜拍照" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Camera028_FrontCameraCaptureWithFilter" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="选择滤镜和水印,在各种滤镜水印模式下各拍照10次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0186_FilterAndWatermarkShot" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进入相机,点击贴纸，切换前量摄像头，选择滤镜和美颜，拍照50次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0192_OpenFilterAndBeautyShot" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="后置相机遍历相机主界面所有模式" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Camera037_SelectAllModeAtAutoMode" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="前置相机遍历相机主界面所有模式" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Camera038_SelectAllModeAtAutoMode" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="浏览相机相册里的文件，并删除一张图片" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability019_SelectPictureAndDelete" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进入—&gt;马上返回退出相机" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Camera023_FastEnterAndExitCamera" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进入-&gt;挂后台-&gt;再次进入" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Camera002_EnterCameraByBackGround" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="反复通过历史按键进入相机" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Camera024_EnterCameraManyTimesByRecent" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="前置摄像头录像过程中缩放焦距" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Reliability016_PinchInAndOutVideoByFront" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进入相机前后置各录制10个60s的视频。" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0151_CaptureVideo" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="开启摄像,在摄像过程中拍照50次，连续摄50次，每次10-30s." times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0189_OpenFlashTakeVideo_1" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="开闪光灯连续摄50次，每次10-30s." times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0189_OpenFlashTakeVideo_2" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="切换摄像头500次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0190_SwitchCamera" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="后置录像30分钟" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Rear_camera_video" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="前置录像30分钟" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ReliabilityOreoTest" />
+      <method name="test_Front_camera_video" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="视频编辑:进入相机,拍摄10-视频，点击编辑，添加滤镜水印等、循环10次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0213_EditVideo" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="各应用体用扫一扫调用相机50次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0191_ThirdAppUseScan" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="分别点击“照片”、“图”，切换页签200次，进入相册、点击照片，点击搜索，按最近添加、今年等提索，点击图集，点击搜索，按最近添加，今年等搜索" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0193_SwitchTab" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进“照片”界面，上下滑动，循环20次,点击照片，浏览照片界面，左右滑动，循环20次，“图集”界面同1.2操作，循环20次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0194_SwipePhotoPage" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进照片界面，选择一张照片打开，点击照片，进入编辑页面，对照片分别进行修剪、滤镜、虚化。马赛克等操作，循环执行上述操作30次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0195_PhotoEdit" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进相册,进行拼图操作，随机选择3-5张照片，随机选择模板和背景，并保存拼图，分享拼图，取消分享,循环执行上述操作30次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0196_SpellPhoto" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进“照片”界面,选择一张照片,点击删除,重复30次，进入图集界面，随机选择多张照片，点击删除，重复10次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0197_DeletePhoto" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="100张照片--删除--恢复(循环50次)。" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0198_RecoveryDeletedPhotos" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="通过下拉菜单栏(或者底部的控制栏)进行下列操作,开关飞行模式100次，每次间隔3-5s；开关移动数据100次,每次间隔3-5s；开关手电筒100次,每次间隔3-5s:开关蓝牙100次,每次间隔3-5s；开关 GPS100次,每次间隔3-5s；开关屏幕旋转50次，每次间隔3-5s。" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0205_MenuSwitchBar_Air_Mode" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0205_MenuSwitchBar_MOBILE_DATA" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0205_MenuSwitchBar_Flashlight" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0205_MenuSwitchBar_Auto_Rotate_Screen" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="下拉控制中心.点击开始录屏录屏10s.循环10次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0209_ScreenRecording" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="手机振动10次，每次持续30秒" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0216_Vibrate" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="设置中开关WIFI50次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0217_WIFISwitch" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="设置中开关蓝牙50次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0218_BTSwitch" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="设置中开关GPS50次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0219_GPSSwitch" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="测试菜单键（or后台键）、主页键、返回键各20次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0221_FunctionButton" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="测试音量+-键各20次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0222_VolumeUpAndDownButton" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="测试电源键20次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0223_PowerButton" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="进入软件商店,点击软件,点击即点即用。进入即点即用程序，随机滑动5次，循环10次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0212_PlayStore" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+      <attribute>
+        <arg name="wifiName" value="&#64;&#64;gWifiName" />
+        <arg name="wifiPWD" value="&#64;&#64;gWifiPwd" />
+      </attribute>
+    </testcase>
+  </testpoint>
+  <testpoint name="打开一本电子书.浏览电子书(向前翻500页，向后翻500页)，翻页间隔时间随机生成" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0220_RandomReader" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="执行完一轮测试后，程序随机更换壁纸和改变字体大小" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0224_ChangeWallpaperAndFontSize" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="重复打开指南针开关压力100次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0231_OpenCompass" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="初始化NFC并使其关闭，UI控制NFC的开启/关闭各50次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0232_By_Ui_Open_NFC" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="ADB下发命令控制NFC的开启/关闭各50次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0233_By_Adb_Open_NFC" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="清除后台，打开记事本并放后台，kill掉记事本后再打开，重复操作50次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0234_openNotebook" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="清除后台，打开记事本新建笔记并随机输入一段文字后保存，重复100次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0235_NoteBook_New_Note" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="记事本新建待办压测  清除后台，打开记事本新建笔记并随机输入一段文字后保存，重复100次" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0236_NoteBook_New_Construction" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="清除后台，打开记事本随机选择几个已新建的笔记进行删除；随机选择几个已有的待办进行删除" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0237_NoteBook_Random_Delete" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="记事本与camera交互" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0238_NoteBook_NewNoteTakePhoto" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="记事本与录音交互" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0239_NoteBook_NewNoteSoundRecordings" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+  <testpoint name="通话时与前台记事本记录的交互" times="1">
+    <testcase type="uiautomator2" times="1">
+      <device name="device A" />
+      <apk name="ReliabilityUiautomatorTestTest.apk" />
+      <package name="com.tinno.reliabilityuiautomatortest.test" />
+      <class name="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" />
+      <method name="test_Reliability0240_NoteBook_NewNoteAndCalling" />
+      <runner name="androidx.test.runner.AndroidJUnitRunner" />
+    </testcase>
+  </testpoint>
+</runtask>

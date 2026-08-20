@@ -52,6 +52,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **不变量摘要** | [`../CLAUDE.md`](../CLAUDE.md) | 架构不变量、关键约定、状态机摘要 |
 | **Living 审查** | [`reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md) | 设备日志流转框架 + 缺陷/DoD/落地顺序（v3.0，阶段 0 ✅）；前一版快照 [`reviews/PROJECT_REVIEW_2026-08-09_previous.md`](./reviews/PROJECT_REVIEW_2026-08-09_previous.md) |
 | **Living 审查** | [`reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md`](./reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md) | 多项目并存需求 + 生产数据基准 + 缺口核对 G1–G14 + 落地顺序（ADR-0029 背景分析） |
+| **Living 审查** | [`reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md`](./reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) | MTBF 多用例平台化研究（runtask.xml 实测 + 平台缺口 G1–G5 + 候选形态 A/B/C + 设计草图；[ADR-0030](../adr/ADR-0030-multi-case-suite-management.md) 背景分析，Proposed） |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
 
@@ -74,6 +75,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`2026-storage-roles-and-aliases.md`](./design/2026-storage-roles-and-aliases.md) | 存储/部署角色与别称（CIFS/NFS=中心存储；文件服务器页≠中心存储） |
 | [`2026-device-log-event-implementation-spec.md`](./design/2026-device-log-event-implementation-spec.md) | DeviceLogEvent 阶段 3 实现规格（ADR-0028 D1–D8） |
 | [`2026-07-plan-execute-page-improvements.md`](./design/2026-07-plan-execute-page-improvements.md) | Plan 执行页：Phase1–6 + §7 已落地；**§8 V2 选机工作台/驾驶舱实现方案** |
+| [`2026-08-mtbf-p0-runner-design.md`](./design/2026-08-mtbf-p0-runner-design.md) | MTBF 专项 P0 设计：脚本三件套契约 + realresult schema 实测 + 配置/产物通道（ADR-0030 D6 P0） |
 | [`design/mockups/plan-execute-v2/`](./design/mockups/plan-execute-v2/) | Plan Execute V2 静态预览（§8 视觉基准） |
 
 ---
@@ -86,6 +88,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`development/testing.md`](./development/testing.md) | pytest / vitest / 生产机禁区 |
 | [`operations/agent-version-and-hot-update.md`](./operations/agent-version-and-hot-update.md) | 滚动升级与 code revision |
 | [`operations/adr-0028-prune-local-and-spill-gray.md`](./operations/adr-0028-prune-local-and-spill-gray.md) | #217 PRUNE_LOCAL / HddSpill 单机灰度 |
+| [`operations/mtbf-api.md`](./operations/mtbf-api.md) | MTBF 用例管理接口说明（§1 P0 validate 定稿 / §2 P1 用例管理占位；ADR-0030） |
 | [`operations/README.md`](./operations/README.md) | 运维索引 |
 | [`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md) | 生产最小部署 |
 

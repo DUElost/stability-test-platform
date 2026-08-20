@@ -56,6 +56,26 @@ def test_dle_uploader_flags_propagate_explicit_zero(monkeypatch):
     assert overrides["STP_EVENT_UPLOADER_ENABLED"] == "0"
 
 
+def test_mtbf_expected_testpoint_count_propagates_when_set(monkeypatch):
+    """MTBF P0：套件 testpoint 期望数全 fleet 同值，随 hot-update 下发
+    （避免手工 .env 漏配 → check 无期望值只报绝对数）。"""
+    monkeypatch.setenv("STP_MTBF_EXPECTED_TESTPOINT_COUNT", "130")
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert overrides["STP_MTBF_EXPECTED_TESTPOINT_COUNT"] == "130"
+
+
+def test_mtbf_task_times_never_synced(monkeypatch):
+    """STP_MTBF_TASK_TIMES 是 host 级手工键（冒烟=1/生产=100），
+    不得进入 fleet 同步白名单，控制面即使设置也不下发。"""
+    monkeypatch.setenv("STP_MTBF_TASK_TIMES", "1")
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert "STP_MTBF_TASK_TIMES" not in overrides
+
+
 def test_control_plane_scan_tool_paths_are_not_synced_to_agents(monkeypatch):
     """The scan tool sits elsewhere on the agents; syncing the control plane's
     own path made every agent scan fail instantly (runs 124-129)."""
