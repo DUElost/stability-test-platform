@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import os
+import queue
 import signal
 import sys
 import threading
@@ -557,6 +558,14 @@ def main() -> None:
     # 启动 WebSocket 客户端（best-effort，失败时降级到 HTTP）
     agent_secret = os.getenv("AGENT_SECRET", "")
     sio_client = AgentSocketIOClient(api_url, host_id, agent_secret)
+    # P2-2a：先注册转发 handler 再 connect——启动窗口内到达的 control 命令
+    # 入队暂存，真实 handler 就绪后统一回放，不再静默丢弃。
+    _early_control_queue: "queue.Queue[dict]" = queue.Queue()
+
+    def _early_control_handler(data: dict) -> None:
+        _early_control_queue.put(data)
+
+    sio_client.set_control_handler(_early_control_handler)
     sio_client.connect()
     # Start background reconnect loop for auto-recovery on disconnect
     sio_client.start_reconnect_loop()
@@ -572,6 +581,40 @@ def main() -> None:
 
     script_registry = ScriptRegistry(local_db, api_url, agent_secret)
     script_registry.initialize()
+
+    # P2-3：scan/upload/归档/spill 不绑定 watcher 开关——各自按自身 env 门控
+    #（EventUploader.start / LocalDiskMonitor 内部都有 enabled 判断）。
+    hdd_root = str(get_aee_local_root())
+    cifs_root = resolve_shared_storage_root()
+    LogArchiver.instance().configure(
+        local_db=local_db,
+        run_log_dir=str(BASE_DIR / "logs" / "runs"),
+        interval_seconds=float(os.getenv("STP_LOG_ARCHIVE_INTERVAL_SECONDS", "3600")),
+        grace_seconds=float(os.getenv("STP_LOG_ARCHIVE_GRACE_SECONDS", "1800")),
+    ).start()
+    logger.info("log_archiver=started")
+    ScanRunner.instance().configure()
+    UploadManager.instance().configure()
+    EventUploader.instance().configure(
+        api_url=api_url,
+        agent_secret=agent_secret,
+        host_id=str(host_id),
+    )
+    EventUploader.instance().start()
+    if cifs_root:
+        LocalDiskMonitor.instance().configure(
+            hdd_root=hdd_root,
+            cifs_root=cifs_root,
+            interval_seconds=float(os.getenv("STP_LOCAL_DISK_MONITOR_INTERVAL_SECONDS", "300")),
+            spill_threshold_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_THRESHOLD", "80")),
+            target_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_TARGET", "70")),
+            api_url=api_url,
+            agent_secret=agent_secret,
+            host_id=str(host_id),
+        ).start()
+        logger.info("hdd_spill_monitor=started hdd=%s cifs=%s", hdd_root, cifs_root)
+    else:
+        logger.info("hdd_spill_monitor_skipped cifs_root_empty")
 
     # Device Log Watcher 子系统（全局或 Plan 默认开启时 configure）
     log_signal_drainer: Optional[OutboxDrainer] = None
@@ -609,38 +652,6 @@ def main() -> None:
         )
         ArtifactUploader.instance().start()
         logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
-        # ADR-0025 方案 C Sprint 2: SSD 运行日志 prune + HDD 溢出上送
-        LogArchiver.instance().configure(
-            local_db=local_db,
-            run_log_dir=str(BASE_DIR / "logs" / "runs"),
-            interval_seconds=float(os.getenv("STP_LOG_ARCHIVE_INTERVAL_SECONDS", "3600")),
-            grace_seconds=float(os.getenv("STP_LOG_ARCHIVE_GRACE_SECONDS", "1800")),
-        ).start()
-        logger.info("log_archiver=started")
-        ScanRunner.instance().configure()
-        UploadManager.instance().configure()
-        EventUploader.instance().configure(
-            api_url=api_url,
-            agent_secret=agent_secret,
-            host_id=str(host_id),
-        )
-        EventUploader.instance().start()
-        hdd_root = str(get_aee_local_root())
-        cifs_root = resolve_shared_storage_root()
-        if cifs_root:
-            LocalDiskMonitor.instance().configure(
-                hdd_root=hdd_root,
-                cifs_root=cifs_root,
-                interval_seconds=float(os.getenv("STP_LOCAL_DISK_MONITOR_INTERVAL_SECONDS", "300")),
-                spill_threshold_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_THRESHOLD", "80")),
-                target_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_TARGET", "70")),
-                api_url=api_url,
-                agent_secret=agent_secret,
-                host_id=str(host_id),
-            ).start()
-            logger.info("hdd_spill_monitor=started hdd=%s cifs=%s", hdd_root, cifs_root)
-        else:
-            logger.info("hdd_spill_monitor_skipped cifs_root_empty")
         # M4/T4-4: 清理上次进程残留的 active watcher_state(崩溃/重启脏记录)。
         # 必须在 configure(注入 local_db)之后调用。
         try:
@@ -931,6 +942,16 @@ def main() -> None:
 
     # 必须在闭包定义之后注册，避免 _handle_control 中 _deregister_active_job 引用未绑定
     sio_client.set_control_handler(_handle_control)
+    # 回放启动窗口内暂存的命令（P2-2a）
+    while True:
+        try:
+            early_data = _early_control_queue.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            _handle_control(early_data)
+        except Exception:
+            logger.exception("early_control_replay_failed command=%s", early_data.get("command"))
 
     # 启动终态 Outbox Drain 线程
     outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
