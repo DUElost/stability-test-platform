@@ -6,9 +6,9 @@
 - **文档状态**：已签字（生产交付；跳过原定 1–2 天观察期）
 - **签字日**：2026-08-12
 
-> **范围**：MTK 连续上送路径 `LOCAL → UPLOADING → REMOTE → ARCHIVED`。  
+> **范围**：MTK 过滤模型（方案 A，`STP_EVENT_UPLOADER_CONTINUOUS=0`）：`LOCAL → UPLOAD_PENDING → REMOTE → ARCHIVED/PRUNED`。  
 > UNISOC/QCOM Collector 仅留入口、不扫描（阶段 4 / #220 / #73）。  
-> 旧 PlanRun 触发上送双轨删除见 #213（**未做**）。
+> 旧 PlanRun 触发上送双轨已删除（#213 Track A CLOSED；Track B 验收见 §4 已知缺口与 #309）。
 
 ---
 
