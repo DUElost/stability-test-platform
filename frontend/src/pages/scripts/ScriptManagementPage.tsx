@@ -4,7 +4,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/useToast';
-import { api, type ScriptEntry } from '@/utils/api';
+import { api, toApiError, type ScriptEntry } from '@/utils/api';
 import { Search, FileCode, Code2, Tag, RefreshCw } from 'lucide-react';
 import ScriptVersionDialog from './ScriptVersionDialog';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -96,7 +96,7 @@ export default function ScriptManagementPage() {
       ) : isError ? (
         <ErrorState
           title="加载脚本列表失败"
-          description={(error as Error)?.message || '请检查后端服务是否正常'}
+          description={toApiError(error).message || '请检查后端服务是否正常'}
           onRetry={() => queryClient.invalidateQueries({ queryKey: ['scripts-active'] })}
         />
       ) : filtered.length === 0 ? (

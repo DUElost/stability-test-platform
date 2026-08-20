@@ -27,6 +27,13 @@ describe('PageSkeleton', () => {
     expect(container.querySelectorAll('.rounded-xl.border')).toHaveLength(3);
   });
 
+  it('Cards layout=grid 输出三列网格', () => {
+    const { container } = render(<PageSkeleton.Cards count={3} layout="grid" />);
+    const grid = container.querySelector('.grid') as HTMLElement;
+    expect(grid).toBeTruthy();
+    expect(grid.className).toContain('lg:grid-cols-3');
+  });
+
   it('List 渲染 count 条列表项占位（图标块 + 双行）', () => {
     const { container } = render(<PageSkeleton.List count={2} />);
     const items = container.querySelectorAll('.flex.items-center.gap-3.p-4');

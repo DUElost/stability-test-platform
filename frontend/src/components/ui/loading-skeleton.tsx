@@ -85,10 +85,19 @@ PageSkeleton.Stats = function Stats({ count }: { count: number }) {
   );
 };
 
-/** 卡片列表占位（原 LoadingGrid + CardSkeleton 的唯一在用组合） */
-PageSkeleton.Cards = function Cards({ count }: { count: number }) {
+/**
+ * 卡片列表占位。layout：stack = 纵向卡栈（列表页）；grid = 三列卡网格
+ * （网格卡片页，映射自原 LoadingGrid columns=3 的唯一用法）。
+ */
+PageSkeleton.Cards = function Cards({
+  count,
+  layout = 'stack',
+}: {
+  count: number;
+  layout?: 'stack' | 'grid';
+}) {
   return (
-    <div className="space-y-4">
+    <div className={layout === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4' : 'space-y-4'}>
       {Array.from({ length: count }).map((_, i) => (
         <CardSkeleton key={i} />
       ))}
