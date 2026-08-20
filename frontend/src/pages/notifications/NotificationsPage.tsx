@@ -23,7 +23,8 @@ import {
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
-import { FORM, INTERACTIVE, MODAL, SEGMENTED, SKELETON_BLOCK, STATUS_CHIP, TEXT } from '@/design-system';
+import { FORM, INTERACTIVE, MODAL, SEGMENTED, STATUS_CHIP, TEXT } from '@/design-system';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { cn } from '@/lib/utils';
 
 type TabKey = 'channels' | 'rules' | 'logs';
@@ -243,10 +244,9 @@ export default function NotificationsPage() {
       </div>
 
       {loading ? (
-        <div className="space-y-3">
-          <div className={cn(SKELETON_BLOCK, 'h-32')} />
-          <div className={cn(SKELETON_BLOCK, 'h-32')} />
-        </div>
+        <PageSkeleton>
+          <PageSkeleton.List count={2} />
+        </PageSkeleton>
       ) : tab === 'channels' ? (
         <div className="space-y-3">
           <div className="flex justify-end">
@@ -554,7 +554,7 @@ function NotificationLogsTab() {
       </div>
 
       {logsQ.isLoading ? (
-        <div className={cn(SKELETON_BLOCK, 'h-64')} />
+        <PageSkeleton.Block size="lg" />
       ) : logs.length === 0 ? (
         <EmptyState
           title="暂无通知记录"

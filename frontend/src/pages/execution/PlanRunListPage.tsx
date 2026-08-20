@@ -6,7 +6,7 @@ import { api } from '@/utils/api';
 import { planRunKeys } from '@/utils/api/queryKeys';
 import { Clock } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
-import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { ClickableCard } from '@/components/ui/clickable-card';
@@ -35,7 +35,9 @@ export default function PlanRunListPage() {
       <PageHeader title="Plan 执行记录" subtitle="查看所有 PlanRun 历史记录" />
 
       {isLoading ? (
-        <LoadingGrid count={2} columns={1} component={CardSkeleton} />
+        <PageSkeleton>
+          <PageSkeleton.Cards count={2} />
+        </PageSkeleton>
       ) : isError ? (
         <ErrorState
           title="加载执行记录失败"

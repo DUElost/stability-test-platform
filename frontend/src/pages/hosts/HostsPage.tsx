@@ -17,8 +17,7 @@ import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
-import { SKELETON_BLOCK } from '@/design-system';
-import { cn } from '@/lib/utils';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { BULK_HOT_UPDATE_SKIP_LABEL, precheckBulkHotUpdate } from './bulkHotUpdate';
 
 function asNumber(value: unknown, fallback = 0): number {
@@ -542,10 +541,10 @@ export default function HostsPage() {
     return (
       <PageContainer width="full">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
-        <div className="space-y-4">
-          <div className={cn('h-32', SKELETON_BLOCK)} />
-          <div className={cn('h-64', SKELETON_BLOCK)} />
-        </div>
+        <PageSkeleton>
+          <PageSkeleton.Block size="md" />
+          <PageSkeleton.Block size="lg" />
+        </PageSkeleton>
       </PageContainer>
     );
   }

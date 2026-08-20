@@ -9,7 +9,7 @@ import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { api, toApiError, type Plan } from '@/utils/api';
-import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { Plus, Edit, Trash2, Search, FileText, Play } from 'lucide-react';
@@ -113,7 +113,9 @@ export default function PlanListPage() {
 
       {/* List */}
       {isLoading ? (
-        <LoadingGrid count={3} columns={1} component={CardSkeleton} />
+        <PageSkeleton>
+          <PageSkeleton.Cards count={3} />
+        </PageSkeleton>
       ) : isError ? (
         <ErrorState
           title="加载 Plan 列表失败"

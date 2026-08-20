@@ -573,9 +573,6 @@ export function resourceUsageBgClass(percentage: number): string {
   return RESOURCE_USAGE.bg.ok;
 }
 
-/** 列表页骨架屏 */
-export const SKELETON_BLOCK = 'bg-muted animate-pulse rounded-lg';
-
 /** 次要工具按钮（去重报告等） */
 export const TOOL_BTN =
   'inline-flex items-center gap-1 rounded border bg-card px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50';
