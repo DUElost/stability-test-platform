@@ -82,7 +82,7 @@ from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
-from backend.models.test_project import TestProject
+from backend.models.project import TestProject
 from backend.services.plan_run_abort import (
     PlanRunAbortError,
     abort_plan_run,

@@ -19,7 +19,7 @@ from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.models.test_project import TestProject
+from backend.models.project import TestProject
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 

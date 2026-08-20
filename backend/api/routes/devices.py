@@ -12,7 +12,7 @@ from typing import List, Optional, Union
 from backend.core.database import get_db
 from backend.core.audit import record_audit
 from backend.models.host import Host, Device
-from backend.models.test_project import TestProject
+from backend.models.project import TestProject
 from backend.api.schemas import DeviceCreate, DeviceOut, PaginatedResponse
 from backend.api.response import ApiResponse, ok
 from backend.api.schemas.device import BulkProjectAssignIn
