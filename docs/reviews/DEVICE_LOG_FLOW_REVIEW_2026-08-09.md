@@ -1,5 +1,7 @@
 # Android 设备日志流转：总体框架与实现审查
 
+> **历史文档**：本文为 2026-08-09 审查快照，含重构前/过渡态叙事（如 §八「连续上送 5min REMOTE」）。当前权威为 [ADR-0028](../adr/ADR-0028-device-log-event-and-continuous-upload.md) 方案 A（过滤模型）与 [implementation-spec](../design/2026-device-log-event-implementation-spec.md)；缺陷状态以代码与 issue 为准（#306/#307/#308 已按方案 A 落地关闭）。
+
 **日期**：2026-08-09  
 **版本**：v3.0（文档闭环——缺陷清单 + DoD + 落地顺序 + 架构/运维补项索引；实现见 §七~§九 阶段 1~4）  
 **目的**：定清楚日志从哪里来、经过哪些存储层、最终落到哪里、各层之间怎么协作——作为后续平台扩展（高通/展锐）和存储切换（8.202→15.4/9.4）的基线文档。
@@ -939,7 +941,7 @@ D-1～D-10 全部落地于本文 v3.0。§五+§六 决策已提取为 [`ADR-002
 | MTK 采集 | 注入 db_history 新行 → HDD 出现事件目录 + mobilelog/bugreport → `job_log_signal` 有 `nfs_path` |
 | L1 降级 | 无 HDD 的 Agent（`os.access(W_OK)` 失败或 fs 为 tmpfs）→ 事件落 `STP_AEE_SSD_FALLBACK_ROOT`（默认 `{LOG_DIR}/aee_events`），HddSpill 自动禁用 |
 | L2 溢出 | HDD 人工填满 ≥95% → spill → 中心可见副本 → extract/jira 能引用（P0-1 闭合） |
-| 连续上送 | 事件产生后 5min 内 state=REMOTE（不等待 PlanRun 终态） |
+| 过滤模型上送 | 终态触发后（或 `CONTINUOUS=1` 逃生阀）事件经 EventUploader 上送，state 达 REMOTE |
 | PlanRun 汇总 | 2 台 Agent 各 1 设备 → 终态后 `dedup/{id}/` 有 2 host xls → merge xls → `jira/{id}/` 含两设备目录 |
 | 部分 host 失败 | 1 台 scan 失败 → UI 显示 1/2 host；`run_context.archive` 一致 |
 | 增量 scan | 同一 `plan_run_id` 两轮 scan → merge 仅含第二轮 org 文件（P0-3 闭合） |
