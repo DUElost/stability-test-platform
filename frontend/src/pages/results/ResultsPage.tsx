@@ -1,12 +1,14 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { RiskDistributionChart } from '@/components/charts/RiskDistributionChart';
 import { TestTypePassFailChart } from '@/components/charts/TestTypePassFailChart';
 import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
-import { api, type ResultsSummary } from '@/utils/api';
+import { api, toApiError, type ResultsSummary } from '@/utils/api';
 import {
   CheckCircle,
   XCircle,
@@ -17,24 +19,61 @@ import {
 import { PageContainer, PageHeader } from '@/components/layout';
 import { formatDurationSeconds, formatLocalDateTime } from '@/utils/format';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
+import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { KPI_TONE, STAT } from '@/design-system/tokens';
 
 export default function ResultsPage() {
   useDocumentTitle('测试结果');
   const navigate = useNavigate();
+  // ADR-0029：页面级项目筛选（D5 快照语义——后端按 plan_run.project_id 过滤）
+  const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
 
-  const { data, isLoading } = useQuery<ResultsSummary>({
-    queryKey: ['results-summary'],
-    queryFn: () => api.results.summary(30),
+  const { data, isLoading, isError, error, refetch } = useQuery<ResultsSummary>({
+    queryKey: ['results-summary', { projectKey: projectKey ?? null }],
+    queryFn: () => api.results.summary(30, projectKey),
     refetchInterval: 30_000,
   });
 
+  const isProject404 = isError && toApiError(error).status === 404;
   const stats = data?.runs_by_status;
+
+  if (isError) {
+    return (
+      <PageContainer width="default">
+        <PageHeader title="测试结果" subtitle="测试运行统计与风险分布概览" />
+        <ErrorState
+          // 未知项目 key：按错误态渲染（后端统一 404），不吞成空数据
+          title={isProject404 ? '项目不存在' : '加载测试结果失败'}
+          description={isProject404
+            ? `项目 "${projectKey}" 不存在，请清除筛选或核对 key`
+            : toApiError(error).message}
+          onRetry={isProject404 ? undefined : () => void refetch()}
+          action={isProject404 ? (
+            <Button variant="outline" onClick={() => setProjectKey(undefined)}>
+              清除项目筛选
+            </Button>
+          ) : undefined}
+        />
+      </PageContainer>
+    );
+  }
 
   return (
     <PageContainer width="default">
-      <PageHeader title="测试结果" subtitle="测试运行统计与风险分布概览" />
+      <PageHeader
+        title="测试结果"
+        subtitle="测试运行统计与风险分布概览"
+        action={
+          <ProjectFilterSelect
+            value={projectKey}
+            onChange={setProjectKey}
+            className="w-52"
+            testId="results-project-filter"
+          />
+        }
+      />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <DashboardStatCard
@@ -124,7 +163,12 @@ export default function ResultsPage() {
                       onClick={() => navigate(`/runs/${run.run_id}/report`)}
                     >
                       <td className="py-2 pr-4 font-mono text-xs">#{run.run_id}</td>
-                      <td className="max-w-[180px] truncate py-2 pr-4">{run.task_name}</td>
+                      <td className="max-w-[180px] truncate py-2 pr-4">
+                        <span className="flex items-center gap-1.5">
+                          <span className="truncate">{run.task_name}</span>
+                          <ProjectKeyBadge projectKey={run.project_key} />
+                        </span>
+                      </td>
                       <td className="py-2 pr-4">
                         <StatusBadge kind="job-result" status={run.status} size="sm" fallbackToRaw />
                       </td>

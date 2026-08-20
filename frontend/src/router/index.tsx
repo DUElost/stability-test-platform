@@ -33,6 +33,9 @@ const PlanRunListPage = lazy(() => import('../pages/execution/PlanRunListPage'))
 const PlanRunDetailPage = lazy(() => import('../pages/execution/PlanRunDetailPage'));
 const PlanRunLogsPage = lazy(() => import('../pages/execution/PlanRunLogsPage'));
 const ScriptManagementPage = lazy(() => import('../pages/scripts/ScriptManagementPage'));
+// ADR-0029 P2 项目登记簿
+const ProjectsPage = lazy(() => import('../pages/projects/ProjectsPage'));
+const ProjectDetailPage = lazy(() => import('../pages/projects/ProjectDetailPage'));
 
 function AuthGateLoading() {
   return (
@@ -83,6 +86,10 @@ export default function AppRouter() {
             <Route path="runs/:runId/report" element={<RunReportPage />} />
 
             <Route path="script-management" element={<ScriptManagementPage />} />
+
+            {/* ADR-0029 P2 项目登记簿（页面级筛选，无全局选择器） */}
+            <Route path="projects" element={<ProjectsPage />} />
+            <Route path="projects/:projectKey" element={<ProjectDetailPage />} />
 
             <Route path="hosts" element={<HostsPage />} />
             <Route path="devices" element={<DevicesPage />} />

@@ -251,6 +251,8 @@ class TestListFilters:
         assert resp.status_code == 200
         names = {p["name"] for p in resp.json()["data"]}
         assert names == {"plan-filt-a"}
+        # 标签字段（PR 2 前端依赖）：PlanOut.project_key 填充
+        assert resp.json()["data"][0]["project_key"] == "proj-a"
 
     def test_plan_runs_filter_by_project_key(
         self, client, auth_headers, db_session, project_a
@@ -266,6 +268,8 @@ class TestListFilters:
         assert resp.status_code == 200
         run_ids = [r["id"] for r in resp.json()["data"]]
         assert len(run_ids) == 1
+        # 标签字段（PR 2 前端依赖）：PlanRunDetailOut.project_key 填充
+        assert resp.json()["data"][0]["project_key"] == "proj-a"
 
     def test_results_summary_filter_by_project_key(
         self, client, auth_headers, db_session, project_a, sample_host
@@ -300,6 +304,8 @@ class TestListFilters:
         assert body["runs_by_status"]["total"] == 1
         assert body["runs_by_status"]["running"] == 1
         assert len(body["recent_runs"]) == 1
+        # 标签字段（PR 2 前端依赖）：RecentRun.project_key 填充
+        assert body["recent_runs"][0]["project_key"] == "proj-a"
 
     def test_results_summary_uses_plan_run_snapshot_not_plan_ownership(
         self, client, auth_headers, db_session, project_a, project_legacy, sample_host

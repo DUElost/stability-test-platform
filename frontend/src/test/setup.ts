@@ -12,3 +12,9 @@ window.ResizeObserver = ResizeObserverMock;
 
 // Mock ScrollToOptions
 window.scrollTo = vi.fn();
+
+// jsdom 缺 pointer capture + scrollIntoView（Radix Select/下拉在测试中依赖）
+Element.prototype.hasPointerCapture = () => false;
+Element.prototype.setPointerCapture = () => {};
+Element.prototype.releasePointerCapture = () => {};
+Element.prototype.scrollIntoView = () => {};

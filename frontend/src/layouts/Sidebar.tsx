@@ -19,6 +19,7 @@ import {
   BellRing,
   HardDrive,
   Wifi,
+  FolderKanban,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -49,6 +50,13 @@ const navGroups: NavGroup[] = [
     label: '概览',
     items: [
       { path: '/', label: '仪表盘', icon: LayoutDashboard },
+    ],
+  },
+  {
+    // ADR-0029 影响表：新增「项目」一级导航，置于概览与测试编排之间
+    label: '项目',
+    items: [
+      { path: '/projects', label: '项目登记簿', icon: FolderKanban },
     ],
   },
   {

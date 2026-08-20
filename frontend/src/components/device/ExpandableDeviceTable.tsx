@@ -60,6 +60,8 @@ export interface DeviceTableData {
   current_task?: string;
   last_seen?: string;
   tags?: string[];
+  /** ADR-0029：归属项目 key（F2 口径） */
+  project_key?: string | null;
 }
 
 interface ExpandableDeviceTableProps {
@@ -435,8 +437,18 @@ export function ExpandableDeviceTable({
                       <div className="truncate font-mono text-sm text-foreground" title={device.serial}>
                         {device.serial}
                       </div>
-                      <div className="mt-0.5 truncate text-xs text-muted-foreground" title={device.model ?? ''}>
-                        {device.model}
+                      <div className="mt-0.5 flex items-center gap-1.5">
+                        <span className="truncate text-xs text-muted-foreground" title={device.model ?? ''}>
+                          {device.model}
+                        </span>
+                        {device.project_key && (
+                          <span
+                            className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                            title={`归属项目 ${device.project_key}`}
+                          >
+                            {device.project_key}
+                          </span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell className="p-3 font-mono text-xs text-muted-foreground whitespace-nowrap">

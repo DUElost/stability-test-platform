@@ -8,7 +8,9 @@ import DeviceBulkActionBar from '@/components/device/DeviceBulkActionBar';
 import { AddDeviceModal } from './components/AddDeviceModal';
 import { BatchEditDeviceTagsDialog, type DeviceTagOperation } from './components/BatchEditDeviceTagsDialog';
 import { DeviceMetricsModal } from './components/DeviceMetricsModal';
-import { api, fetchHostList, toApiError } from '@/utils/api';
+import { AssignProjectDialog } from './components/AssignProjectDialog';
+import { ProjectFilterSelect } from '@/components/project/ProjectFilterSelect';
+import { api, assignDevicesToProject, fetchHostList, toApiError } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
 import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
@@ -32,14 +34,18 @@ export default function DevicesPage() {
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set());
   const [filteredDevices, setFilteredDevices] = useState<DeviceTableData[]>([]);
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
+  const [isAssignDialogOpen, setIsAssignDialogOpen] = useState(false);
+  // ADR-0029：页面级项目筛选（无全局选择器/跨页跟随，D8 挂起）。
+  // 筛选走后端 ?project_key=——未知 key 后端 404，前端按错误态渲染。
+  const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
   const queryClient = useQueryClient();
   const toast = useToast();
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
 
   const { data: devices, isLoading, error } = useQuery({
-    queryKey: deviceKeys.list(),
-    queryFn: () => api.devices.list(0, 1200).then(res => res.items),
+    queryKey: deviceKeys.list(projectKey),
+    queryFn: () => api.devices.list(0, 1200, undefined, undefined, projectKey).then(res => res.items),
     refetchInterval: 10000,
   });
 
@@ -89,6 +95,7 @@ export default function DevicesPage() {
         current_task: device.current_task?.name,
         last_seen: device.last_seen ?? undefined,
         tags: Array.isArray(device.tags) ? device.tags : [],
+        project_key: device.project_key ?? null,
       };
     });
   }, [devices, hostMap]);
@@ -240,6 +247,24 @@ export default function DevicesPage() {
     setMetricsDevice({ id: device.id, serial: device.serial });
   };
 
+  const assignProjectMutation = useMutation({
+    mutationFn: ({ targetProjectKey }: { targetProjectKey: string }) =>
+      assignDevicesToProject(targetProjectKey, Array.from(selectedDeviceIds)),
+    onSuccess: () => {
+      // 全量 + 任意筛选态的设备缓存一并失效（前缀匹配 ['devices']）
+      queryClient.invalidateQueries({ queryKey: ['devices'] });
+      // 项目卡片上的设备数/在跑数会变
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['project-devices'] });
+      setIsAssignDialogOpen(false);
+      setSelectedDeviceIds(new Set());
+      toast.success(`已归入 ${selectedDevices.length} 台设备`);
+    },
+    onError: (error: unknown) => {
+      toast.error(`归入项目失败: ${toApiError(error).message}`);
+    },
+  });
+
   if (isLoading) {
     return (
       <PageContainer width="full">
@@ -253,13 +278,22 @@ export default function DevicesPage() {
   }
 
   if (error) {
+    const isProject404 = toApiError(error).status === 404;
     return (
       <PageContainer width="full">
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <ErrorState
-          title="加载设备失败"
-          description="请检查后端服务连接"
-          onRetry={() => queryClient.invalidateQueries({ queryKey: deviceKeys.list() })}
+          // 未知项目 key：路由/筛选参数错误语义，按错误态渲染不吞成空列表
+          title={isProject404 ? '项目不存在' : '加载设备失败'}
+          description={isProject404
+            ? `项目 "${projectKey}" 不存在，请清除筛选或核对 key`
+            : '请检查后端服务连接'}
+          onRetry={isProject404 ? undefined : () => queryClient.invalidateQueries({ queryKey: deviceKeys.list(projectKey) })}
+          action={isProject404 ? (
+            <Button variant="outline" onClick={() => setProjectKey(undefined)}>
+              清除项目筛选
+            </Button>
+          ) : undefined}
         />
       </PageContainer>
     );
@@ -299,12 +333,20 @@ export default function DevicesPage() {
 
       <div className="flex items-center justify-between gap-2 py-2">
         <span className={cn('text-xs', TEXT.subtitle)}>点击设备行展开详情，勾选后可批量处理</span>
-        {isAdmin && (
-          <Button onClick={() => setIsModalOpen(true)}>
-            <Plus className="w-4 h-4" />
-            添加设备
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          <ProjectFilterSelect
+            value={projectKey}
+            onChange={setProjectKey}
+            className="w-52"
+            testId="device-project-filter"
+          />
+          {isAdmin && (
+            <Button onClick={() => setIsModalOpen(true)}>
+              <Plus className="w-4 h-4" />
+              添加设备
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Device Table */}
@@ -325,8 +367,10 @@ export default function DevicesPage() {
         statusSummary={statusSummary}
         canEditTags={isAdmin}
         tagUpdatePending={tagUpdateMutation.isPending}
+        canAssignProject={isAdmin}
         onSelectAllFiltered={handleSelectAllFiltered}
         onEditTags={() => setIsTagDialogOpen(true)}
+        onAssignProject={() => setIsAssignDialogOpen(true)}
         onCopySerials={handleCopySerials}
         onExport={handleExportSelected}
         onViewMetrics={handleViewSelectedMetrics}
@@ -348,6 +392,16 @@ export default function DevicesPage() {
         onSubmit={(operation, tags) => {
           tagUpdateMutation.mutate({ targets: selectedDevices, operation, tags });
         }}
+      />
+
+      <AssignProjectDialog
+        isOpen={isAssignDialogOpen}
+        selectedCount={selectedDevices.length}
+        isSubmitting={assignProjectMutation.isPending}
+        onClose={() => setIsAssignDialogOpen(false)}
+        onSubmit={(targetProjectKey) =>
+          assignProjectMutation.mutate({ targetProjectKey })
+        }
       />
 
       {metricsDevice && (

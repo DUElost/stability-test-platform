@@ -10,8 +10,10 @@
 export const planKeys = {
   /** Plan list queries — scoped by limit to avoid cache collision between
    *  PlanListPage (limit=100) and PlanExecutePage (limit=100).
+   *  ADR-0029：projectKey 维度（页面级筛选）。
    */
-  list: (limit: number) => ['plans', { limit }] as const,
+  list: (limit: number, projectKey?: string | null) =>
+    ['plans', { limit, projectKey: projectKey ?? null }] as const,
 
   /** Invalidation key that matches ALL plan list queries regardless of limit.
    *  react-query partial matching: ['plans'] matches ['plans', {limit: X}].
@@ -33,7 +35,8 @@ export const jobKeys = {
 } as const;
 
 export const deviceKeys = {
-  list: () => ['devices'] as const,
+  /** ADR-0029：projectKey 维度——设备页项目筛选走后端（未知 key 404 语义）。 */
+  list: (projectKey?: string | null) => ['devices', { projectKey: projectKey ?? null }] as const,
   /** 全量设备（fetchAllDevices 分页拉全）— PlanExecutePage 等需要完整设备视图的页面用。 */
   all: () => ['devices-all'] as const,
 } as const;
@@ -56,7 +59,9 @@ export const planRunKeys = {
     ['plan-run-logs', id, stage, severity, page] as const,
   /** Partial key — invalidates all log queries for a PlanRun. */
   logsByRun: (id: number) => ['plan-run-logs', id] as const,
-  list: () => ['plan-runs-list'] as const,
+  /** ADR-0029：projectKey 维度（页面级筛选）。前缀仍为 ['plan-runs-list']。 */
+  list: (projectKey?: string | null) =>
+    ['plan-runs-list', { projectKey: projectKey ?? null }] as const,
 } as const;
 
 export const dedupKeys = {
@@ -72,4 +77,14 @@ export const notificationKeys = {
 export const jobReportKeys = {
   report: (jobId: number) => ['job-report', jobId] as const,
   jiraDraft: (jobId: number) => ['job-jira-draft', jobId] as const,
+} as const;
+
+/** ADR-0029 项目登记簿 — 页面级独立筛选（无全局选择器，D8 挂起）。 */
+export const projectKeys = {
+  list: () => ['projects'] as const,
+  detail: (key: string) => ['project', key] as const,
+  /** 某项目下的设备（设备页筛选/详情页设备块共用；key 空 = 全量） */
+  devicesOf: (key: string | null | undefined) => ['project-devices', key ?? '*'] as const,
+  plansOf: (key: string | null | undefined) => ['project-plans', key ?? '*'] as const,
+  summaryOf: (key: string | null | undefined) => ['project-summary', key ?? '*'] as const,
 } as const;

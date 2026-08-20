@@ -84,6 +84,8 @@ class PlanRunDetailOut(BaseModel):
     chain_index: int = 0
     next_plan_triggered: bool = False
     plan_name: Optional[str] = None
+    # ADR-0029：归属项目（plan_run 快照，F2 口径）。Plan 改归属不影响历史 Run。
+    project_key: Optional[str] = None
     capabilities: Optional[dict] = None
     jobs: list[JobInstanceOut] = []
     # ── ADR-0026: admission-queue observability (NULL for legacy runs) ──

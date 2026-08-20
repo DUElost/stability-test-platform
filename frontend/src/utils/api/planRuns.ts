@@ -38,10 +38,11 @@ export interface ListPlanRunDevicesParams {
 }
 
 export const planRuns = {
-  list: (skip = 0, limit = 50, planId?: number, status?: PlanRunStatus) => {
+  list: (skip = 0, limit = 50, planId?: number, status?: PlanRunStatus, projectKey?: string) => {
     const params: Record<string, string | number> = { skip, limit };
     if (planId != null) params.plan_id = planId;
     if (status) params.status = status;
+    if (projectKey) params.project_key = projectKey;
     return unwrapApiResponse<PlanRun[]>(apiClient.get('/plan-runs', { params }));
   },
 

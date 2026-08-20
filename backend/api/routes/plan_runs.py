@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from sqlalchemy import and_, func, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
@@ -219,6 +219,7 @@ def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None, plan_na
         chain_index=pr.chain_index or 0,
         next_plan_triggered=bool(pr.next_plan_triggered),
         plan_name=plan_name,
+        project_key=pr.project.project_key if pr.project else None,
         capabilities=_plan_run_capabilities(pr),
         jobs=jobs or [],
         queue_reason=pr.queue_reason,
@@ -267,7 +268,7 @@ def list_plan_runs(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    q = select(PlanRun).order_by(PlanRun.started_at.desc())
+    q = select(PlanRun).options(joinedload(PlanRun.project)).order_by(PlanRun.started_at.desc())
     if plan_id is not None:
         q = q.where(PlanRun.plan_id == plan_id)
     if status is not None:

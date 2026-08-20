@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listPlans: vi.fn(),
   createPlan: vi.fn(),
   deletePlan: vi.fn(),
+  listProjects: vi.fn(),
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -26,7 +27,13 @@ vi.mock('@/utils/api', () => ({
       create: mocks.createPlan,
       delete: mocks.deletePlan,
     },
+    // ADR-0029：项目筛选下拉（ProjectFilterSelect）依赖
+    projects: { list: mocks.listProjects },
   },
+  toApiError: (error: unknown) => ({
+    message: error instanceof Error ? error.message : '请求失败',
+    status: undefined,
+  }),
 }));
 
 vi.mock('@/hooks/useToast', () => ({
@@ -55,6 +62,7 @@ describe('PlanListPage', () => {
     vi.clearAllMocks();
     mocks.listPlans.mockResolvedValue([]);
     mocks.deletePlan.mockResolvedValue({ deleted: 1 });
+    mocks.listProjects.mockResolvedValue([]);
   });
 
   it('opens the new-plan editor without creating an empty Plan', async () => {

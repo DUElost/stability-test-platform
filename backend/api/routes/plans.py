@@ -157,6 +157,8 @@ class PlanOut(BaseModel):
     auto_archive_interval_seconds: Optional[int] = None
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
+    # ADR-0029：当前归属项目（F2 口径，不暴露数字 project_id）
+    project_key: Optional[str] = None
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -413,6 +415,7 @@ def _plan_out(plan: Plan, steps: list) -> PlanOut:
         auto_archive_interval_seconds=plan.auto_archive_interval_seconds,
         next_plan_id=plan.next_plan_id,
         watcher_policy=plan.watcher_policy,
+        project_key=plan.project.project_key if plan.project else None,
         created_by=plan.created_by,
         created_at=plan.created_at,
         updated_at=plan.updated_at,

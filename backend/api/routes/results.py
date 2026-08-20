@@ -54,6 +54,8 @@ class RecentRun(BaseModel):
     task_type: str
     status: str
     risk_level: str = "UNKNOWN"
+    # ADR-0029：归属项目（plan_run 快照，F2 口径）
+    project_key: Optional[str] = None
     duration_seconds: Optional[float] = None
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
@@ -227,19 +229,20 @@ def get_results_summary(
         test_type_stats = [TestTypeStat(type=t, **counts) for t, counts in sorted(type_agg.items())]
 
         # --- recent_runs (ADR-0020: Plan-based) ---
+        # Plan join 供 name 展示；outerjoin PlanRun+TestProject 取归属 key
+        # （快照语义）；project 过滤走 _scope_by_project（filter 复用已 join 表）。
         recent_query = (
-            db.query(JobInstance, Plan.name)
+            db.query(JobInstance, Plan.name, TestProject.project_key)
             .join(Plan, JobInstance.plan_id == Plan.id)
+            .outerjoin(PlanRun, JobInstance.plan_run_id == PlanRun.id)
+            .outerjoin(TestProject, PlanRun.project_id == TestProject.id)
             .order_by(JobInstance.id.desc())
         )
-        # Plan join 供 name 展示；project 过滤走 PlanRun（快照语义）
-        if target_project_id is not None:
-            recent_query = recent_query.join(PlanRun, JobInstance.plan_run_id == PlanRun.id)
         recent_query = _scope_by_project(recent_query)
         if hidden_plan_ids:
             recent_query = recent_query.filter(JobInstance.plan_id.notin_(tuple(hidden_plan_ids)))
         recent_rows = recent_query.limit(limit).all()
-        recent_job_ids = [job.id for job, _plan_name in recent_rows]
+        recent_job_ids = [job.id for job, _plan_name, _project_key in recent_rows]
         snapshot_rows = []
         if recent_job_ids:
             snapshot_rows = (
@@ -254,7 +257,7 @@ def get_results_summary(
         snapshot_map = {int(job_id): output for job_id, output in snapshot_rows}
 
         recent_runs: List[RecentRun] = []
-        for job, plan_name in recent_rows:
+        for job, plan_name, project_key in recent_rows:
             log_summary = _extract_log_summary_from_snapshot(snapshot_map.get(job.id))
             risk = _parse_risk_level(log_summary)
             duration = None
@@ -268,6 +271,7 @@ def get_results_summary(
                     task_type=plan_name_norm,
                     status=_normalize_job_status(job.status),
                     risk_level=risk,
+                    project_key=project_key,
                     duration_seconds=duration,
                     started_at=job.started_at,
                     finished_at=job.ended_at,
