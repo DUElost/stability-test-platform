@@ -48,9 +48,13 @@ def upgrade() -> None:
     )
     keys = ", ".join(f"'{key}'" for key in _SEED_KEYS)
     op.execute(sa.text(f"UPDATE test_project SET source = 'SEED' WHERE project_key IN ({keys})"))
+    op.execute(sa.text(
+        "CREATE UNIQUE INDEX uq_test_project_key_lower ON test_project (lower(project_key))"
+    ))
 
 
 def downgrade() -> None:
+    op.execute(sa.text("DROP INDEX IF EXISTS uq_test_project_key_lower"))
     op.drop_constraint("ck_test_project_source", "test_project", type_="check")
     op.drop_column("test_project", "match_models")
     op.drop_column("test_project", "source")

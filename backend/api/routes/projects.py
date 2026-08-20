@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -301,7 +302,11 @@ def create_project(
         status="ACTIVE",
     )
     db.add(project)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="project_key already exists") from None
     record_audit(
         db,
         action="create_project",
@@ -373,6 +378,11 @@ def apply_project_map(
     preview, to_assign = _map_preview(
         db, project, payload.models, payload.reassign_conflicts
     )
+    if preview.conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail="models already mapped to another user project",
+        )
     merged = list(project.match_models or [])
     for model in preview.models:
         if model not in merged:

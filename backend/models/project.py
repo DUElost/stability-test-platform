@@ -20,6 +20,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -79,6 +80,11 @@ class TestProject(Base):
         CheckConstraint("source IN ('USER', 'SEED')",
                         name="ck_test_project_source"),
         UniqueConstraint("project_key", name="uq_test_project_key"),
+        Index(
+            "uq_test_project_key_lower",
+            text("lower(project_key)"),
+            unique=True,
+        ),
     )
 
 

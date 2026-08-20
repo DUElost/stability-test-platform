@@ -9,7 +9,7 @@
 1. `/projects` 是登记簿，不是从 ADB 推断出的客户/系列目录。
 2. Fleet 表只展示心跳可读的 `device.model` / `platform`。
 3. 下方卡片只列出 `source=USER` 的人工项目。
-4. 型号→项目必须勾选后 `match_models` 精确映射；SEED / LEGACY / NULL 不算冲突。
+4. 型号→项目必须勾选后 `match_models` 精确映射；SEED / LEGACY / NULL 不算冲突。其他 USER 项目冲突时 apply 返回 409，须 `reassign_conflicts`。
 5. `HONOR-MLD` 等六个 P1 key 留在库里只为外键，不出现在工作台。
 
 ## API

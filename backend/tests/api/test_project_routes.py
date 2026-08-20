@@ -302,6 +302,14 @@ class TestCreateProject:
         )
         assert resp.status_code == 409
 
+    def test_duplicate_case_variant_409(self, client, admin_headers, project_a):
+        resp = client.post(
+            "/api/v1/projects",
+            headers=admin_headers,
+            json={"project_key": "PROJ-A", "display_name": "Dup"},
+        )
+        assert resp.status_code == 409
+
     def test_forbidden_for_non_admin(self, client, auth_headers):
         resp = client.post(
             "/api/v1/projects",
@@ -383,23 +391,31 @@ class TestMapProject:
         assert preview["will_assign"] == 1
         assert preview["conflicts"][0]["serial"] == "s-conflict"
 
-        client.post(
+        blocked = client.post(
             "/api/v1/projects/proj-a/map/apply",
             headers=admin_headers,
             json={"models": ["MLD_LX2"]},
         )
+        assert blocked.status_code == 409
         db_session.refresh(d_conflict)
         db_session.refresh(d_free)
+        db_session.refresh(project_a)
         assert d_conflict.project_id == other.id
-        assert d_free.project_id == project_a.id
+        assert d_free.project_id is None
+        assert project_a.match_models == []
 
-        client.post(
+        applied = client.post(
             "/api/v1/projects/proj-a/map/apply",
             headers=admin_headers,
             json={"models": ["MLD_LX2"], "reassign_conflicts": True},
         )
+        assert applied.status_code == 200
         db_session.refresh(d_conflict)
+        db_session.refresh(d_free)
+        db_session.refresh(project_a)
         assert d_conflict.project_id == project_a.id
+        assert d_free.project_id == project_a.id
+        assert project_a.match_models == ["MLD_LX2"]
 
     def test_seed_project_cannot_be_mapped(
         self, client, admin_headers, project_legacy

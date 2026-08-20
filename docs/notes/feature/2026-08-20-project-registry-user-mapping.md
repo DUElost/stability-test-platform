@@ -10,8 +10,9 @@ Class: feature
 1. Fleet 事实只聚合 `device.model` / `platform`。
 2. 列表默认只返回 `source=USER` 的人工项目。P1 六个回填 key 标 `SEED`，不出现在工作台。
 3. admin 可新建项目，勾选型号后 preview/apply 写入 `match_models` 并归入设备。
-4. SEED / LEGACY / NULL 不算映射冲突；其他 USER 项目冲突默认跳过，可 `reassign_conflicts`。
-5. 不按前缀推断未知型号（ADR-0029 M-c）。D5 仍挂起。
+4. SEED / LEGACY / NULL 不算映射冲突。其他 USER 项目冲突时 **preview 仍 200，apply 返回 409**，不写 `match_models`、不改设备；勾选 `reassign_conflicts` 后再 apply。
+5. `project_key` 查重大小写不敏感，库上有 `lower(project_key)` 唯一索引。
+6. 不按前缀推断未知型号（ADR-0029 M-c）。D5 仍挂起。
 
 ## Alternatives
 
@@ -20,7 +21,7 @@ Class: feature
 | 继续展示 HONOR-MLD 并标「非正式」 | 没有填写入口时仍是假项目目录，正是用户否定的形态 |
 | 删除六个 SEED 行 | 设备/Plan/PlanRun 仍有 FK；先藏起来，归属由人工映射改写 |
 | 前缀自动建项目 | 违反 M-c「不自动推断」 |
-| 用 `device.project_id` 冒充已映射 | 把回填标签扮成业务项目 |
+| 冲突时部分写入 match_models | 规则与设备归属会分叉；apply 在冲突未解除时 409 |
 
 ## Verification
 

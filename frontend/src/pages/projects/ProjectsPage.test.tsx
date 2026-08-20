@@ -276,4 +276,39 @@ describe('ProjectsPage', () => {
       expect(mocks.mapApply).toHaveBeenCalledWith('HONOR-CAMERA', ['MLD_LX2'], false);
     });
   });
+
+  it('keeps apply disabled when preview reports conflicts', async () => {
+    const user = userEvent.setup();
+    mocks.inventoryModels.mockResolvedValue([makeInventoryRow()]);
+    mocks.mapPreview.mockResolvedValue({
+      target_project_key: 'HONOR-CAMERA',
+      models: ['MLD_LX2'],
+      will_assign: 1,
+      already_in_target: 0,
+      conflicts: [{
+        device_id: 9,
+        serial: 's-conflict',
+        model: 'MLD_LX2',
+        from_project_key: 'ODM-TABLET',
+      }],
+      unknown_models: [],
+    });
+
+    renderPage();
+    expect(await screen.findByText('MLD_LX2')).toBeInTheDocument();
+    await user.click(screen.getByTestId('inventory-model-check'));
+    await user.click(screen.getByTestId('map-models-open'));
+    await user.click(screen.getByTestId('map-preview-btn'));
+    expect(await screen.findByTestId('map-preview')).toHaveTextContent('冲突 1 台');
+    expect(screen.getByTestId('map-apply-btn')).toBeDisabled();
+    expect(mocks.mapApply).not.toHaveBeenCalled();
+  });
+
+  it('hides admin actions for non-admin users', async () => {
+    mocks.authRole = 'user';
+    renderPage();
+    expect(await screen.findByText('荣耀相机')).toBeInTheDocument();
+    expect(screen.queryByTestId('create-project-open')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('map-models-open')).not.toBeInTheDocument();
+  });
 });

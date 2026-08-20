@@ -145,7 +145,12 @@ export default function MapModelsDialog({
           <Button
             type="button"
             data-testid="map-apply-btn"
-            disabled={busy || !projectKey || !preview}
+            disabled={
+              busy
+              || !projectKey
+              || !preview
+              || (preview.conflicts.length > 0 && !reassignConflicts)
+            }
             onClick={() => {
               if (!projectKey) {
                 setError('请选择目标项目');
