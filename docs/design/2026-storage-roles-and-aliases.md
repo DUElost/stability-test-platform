@@ -192,8 +192,14 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | A | 控制面 8.202 | CPU/内存/本机是否已 **客户端挂载** CIFS；`STP_FILE_SERVER_ADDRESS` 不变 |
 | B | 中心存储（CIFS）9.4 或 15.4 | 容量 + **服务端** nfsd/export；须刮存储机 Prometheus |
 | C | Agent 挂载合规 | 心跳 `mount_status`，挂在 B 下 |
+| D | 各 host 设备日志盘（#273） | 心跳 `extra.disk_usage_aee`（`STP_AEE_LOCAL_ROOT` 所在文件系统）；`device_log_disks` 汇总 + ≥90% warning / ≥95% critical 告警，与 HddSpill 触发口径一致 |
 
 过渡期未设 `STP_AEE_SHARE_ADDRESS` 时 A/B 可同源，并标明「CIFS 与控制面同机」。
+
+设备日志盘与 `/hosts` 页的系统盘（`disk_usage('/')`）语义不同：前者是 Agent AEE/日志
+落盘（如 `/mnt/hdd`、`/home/android/aee-local`），水位直接影响 HddSpill 与
+PRUNE_LOCAL 可用余量；后者是 Linux 系统盘。两处数据分别来自心跳
+`disk_usage_aee` 与系统盘字段，不混用。
 
 ---
 
@@ -203,6 +209,7 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 |------|------|
 | 2026-08-09 | 初版：九角色 + CIFS=中心存储 + 健康页≠CIFS + 8.202 过渡 / 15.4·9.4 目标 + #205 |
 | 2026-08-09 | 口头 **NFS = 中心存储**（与 CIFS 同角色）；`STP_NFS_ROOT` 仅作历史键名，不简称「NFS」 |
+| 2026-08-20 | 健康页 §7 增 D 栏：各 host 设备日志盘水位展示（#273） |
 | 2026-08-09 | 锁死 **NFS = CIFS = 中心存储**（同一台分享）。`STP_NFS_ROOT` 不是第二种 NFS，是同角色键的误用（CP 脚本默认根） |
 | 2026-08-09 | 落地：HDD 不再回落中心存储；挂载点只认 `STP_AEE_NFS_ROOT`（WATCHER/CIFS 别名一层）；强制 `STP_SCRIPT_ROOT`；停 `STP_AGENT_NFS_ROOT` |
 | 2026-08-09 | 活文档/UI/docstring 对齐：overview §6、健康页副标题、env 注释、上送路径注释；ADR 历史正文仍靠 Living 注记 |
