@@ -117,6 +117,62 @@ def test_configure_env_fallback(monkeypatch):
     assert r._scan_tool_script == "/env/scan.py"
 
 
+def test_configure_side_reads_env_tag(monkeypatch):
+    r = ScanRunner.instance()
+
+    monkeypatch.setenv("STP_DEDUP_SCAN_TAG", "factory")
+    r.configure(scan_tool_python="/usr/bin/python3", scan_tool_script="/opt/scan/start_log_scan.py")
+    assert r._side == "factory"
+
+    ScanRunner._reset_for_tests()
+    r = ScanRunner.instance()
+    monkeypatch.setenv("STP_DEDUP_SCAN_TAG", "FACTORY")
+    r.configure(scan_tool_python="/usr/bin/python3", scan_tool_script="/opt/scan/start_log_scan.py")
+    assert r._side == "factory"
+
+    ScanRunner._reset_for_tests()
+    r = ScanRunner.instance()
+    monkeypatch.delenv("STP_DEDUP_SCAN_TAG", raising=False)
+    r.configure(scan_tool_python="/usr/bin/python3", scan_tool_script="/opt/scan/start_log_scan.py")
+    assert r._side == "shanghai"
+
+
+def test_configure_explicit_side_wins_over_env(monkeypatch):
+    monkeypatch.setenv("STP_DEDUP_SCAN_TAG", "factory")
+    r = ScanRunner.instance()
+    r.configure(
+        scan_tool_python="/usr/bin/python3",
+        scan_tool_script="/opt/scan/start_log_scan.py",
+        side="shanghai",
+    )
+    assert r._side == "shanghai"
+
+
+def test_queue_defers_until_configured(monkeypatch):
+    monkeypatch.setenv("STP_DEDUP_SCAN_PYTHON", "/usr/bin/python3")
+    monkeypatch.setenv("STP_DEDUP_SCAN_SCRIPT", "/opt/scan/start_log_scan.py")
+    executed: list[int] = []
+    monkeypatch.setattr(
+        ScanRunner,
+        "_execute_job",
+        classmethod(lambda cls, job: executed.append(job.plan_run_id)),
+    )
+
+    # 未 configure 时入队：worker 应 requeue 并等待，不执行也不丢弃
+    ScanRunner.enqueue_scan_now(71, "host-1", is_final=False)
+    time.sleep(2.5)  # worker defer 间隔 2s
+    assert ScanRunner.pending_count() == 1
+    assert executed == []
+
+    # configure 后 worker 继续消费
+    ScanRunner.instance().configure()
+    deadline = time.time() + 5
+    while not executed and time.time() < deadline:
+        time.sleep(0.1)
+    assert executed == [71]
+    assert ScanRunner.pending_count() == 0
+
+
 def test_configure_rejected_if_already_configured():
     r = _make_runner()
     first_python = r._scan_tool_python
