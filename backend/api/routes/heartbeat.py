@@ -280,6 +280,16 @@ def _process_heartbeat_with_db(
     host.extra = host_extra
 
     extra = payload.extra or {}
+    # #302: 死信总量落到 host.extra，控制面 GET /hosts/{id} 可直接看到
+    # 各 host 的历史累计死信数（Agent 心跳上报，SQLite 保留行跨重启累计）。
+    if "log_signal_dead_letter_total" in extra:
+        try:
+            host_extra["log_signal_dead_letter_total"] = int(
+                extra["log_signal_dead_letter_total"]
+            )
+            host.extra = host_extra
+        except (TypeError, ValueError):
+            pass
     if "terminal_outbox_pending" in extra:
         try:
             record_agent_outbox_pending(
