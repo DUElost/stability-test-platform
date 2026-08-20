@@ -499,9 +499,9 @@ export default function WatcherSummaryCard({
               <div>溢出 {data.archive.ops_metrics.spill_cycles}</div>
               <div>上送 {data.archive.ops_metrics.spilled_total}</div>
             </div>
-            {(data.archive.archived_jobs || data.archive.pending_jobs || data.archive.failed_jobs) ? (
+            {(data.archive.signaled_jobs || data.archive.pending_jobs || data.archive.failed_jobs) ? (
               <div className={cn('mt-1 flex items-center gap-2 text-[10px]', TEXT.subtitle)}>
-                <span className="text-success">{data.archive.archived_jobs} 归档</span>
+                <span className="text-success">{data.archive.signaled_jobs} 信号</span>
                 {data.archive.pending_jobs ? (
                   <span className="text-muted-foreground/70">{data.archive.pending_jobs} 归档中</span>
                 ) : null}

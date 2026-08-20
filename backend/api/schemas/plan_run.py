@@ -307,7 +307,7 @@ class WatcherArchiveOut(BaseModel):
     ops_metrics: WatcherAgentOpsMetrics = Field(default_factory=WatcherAgentOpsMetrics)
     scan_status: Optional[str] = None
     scan_triggered_at: Optional[str] = None
-    archived_jobs: int = 0
+    signaled_jobs: int = 0
     pending_jobs: int = 0
     failed_jobs: int = 0
 
