@@ -60,19 +60,40 @@ class TestMultipart:
 
 
 class TestJsonPathMode:
-    def test_path_mode(self, client, auth_headers, tmp_path):
+    def test_path_mode(self, client, admin_headers, tmp_path):
         target = tmp_path / "runtask.xml"
         target.write_bytes(_REAL_RUNTASK)
         resp = client.post(
             "/api/v1/mtbf/runtask/validate",
-            headers={**auth_headers, "Content-Type": "application/json"},
+            headers={**admin_headers, "Content-Type": "application/json"},
             content=json.dumps({"path": str(target)}),
         )
         assert resp.status_code == 200
         assert resp.json()["data"]["valid"] is True
 
-    def test_path_mode_picks_sibling_global(self, client, auth_headers, tmp_path):
+    def test_path_mode_picks_sibling_global(self, client, admin_headers, tmp_path):
         (tmp_path / "UiAutomatorTestData.xml").write_bytes(_REAL_GLOBAL)
+        target = tmp_path / "runtask.xml"
+        target.write_bytes(_REAL_RUNTASK)
+        resp = client.post(
+            "/api/v1/mtbf/runtask/validate",
+            headers={**admin_headers, "Content-Type": "application/json"},
+            content=json.dumps({"path": str(target)}),
+        )
+        msgs = [i["message"] for i in resp.json()["data"]["issues"] if i["code"] == "GLOBAL_REF_CUSTOM"]
+        assert any("'wifiName'" in m for m in msgs)
+
+    def test_unreadable_path_returns_400(self, client, admin_headers):
+        resp = client.post(
+            "/api/v1/mtbf/runtask/validate",
+            headers={**admin_headers, "Content-Type": "application/json"},
+            content=json.dumps({"path": "/nonexistent/mtbf/runtask.xml"}),
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "PATH_UNREADABLE"
+
+    def test_path_mode_non_admin_403(self, client, auth_headers, tmp_path):
+        """path 输入源是磁盘读原语，非 admin 一律 403（存在与否不探测）。"""
         target = tmp_path / "runtask.xml"
         target.write_bytes(_REAL_RUNTASK)
         resp = client.post(
@@ -80,17 +101,20 @@ class TestJsonPathMode:
             headers={**auth_headers, "Content-Type": "application/json"},
             content=json.dumps({"path": str(target)}),
         )
-        msgs = [i["message"] for i in resp.json()["data"]["issues"] if i["code"] == "GLOBAL_REF_CUSTOM"]
-        assert any("'wifiName'" in m for m in msgs)
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["code"] == "PATH_READ_FORBIDDEN"
 
-    def test_unreadable_path_returns_400(self, client, auth_headers):
+    def test_path_form_non_admin_403(self, client, auth_headers, tmp_path):
+        """Form 字段的 path 输入同样受 admin 门禁。"""
+        target = tmp_path / "runtask.xml"
+        target.write_bytes(_REAL_RUNTASK)
         resp = client.post(
             "/api/v1/mtbf/runtask/validate",
-            headers={**auth_headers, "Content-Type": "application/json"},
-            content=json.dumps({"path": "/nonexistent/mtbf/runtask.xml"}),
+            headers=auth_headers,
+            data={"path": str(target)},
         )
-        assert resp.status_code == 400
-        assert resp.json()["detail"]["code"] == "PATH_UNREADABLE"
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["code"] == "PATH_READ_FORBIDDEN"
 
 
 class TestPreviewConsistency:

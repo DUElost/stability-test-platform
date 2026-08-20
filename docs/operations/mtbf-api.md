@@ -13,14 +13,14 @@ POST /api/v1/mtbf/runtask/validate
 
 **用途**：上传 runtask.xml（可附 `UiAutomatorTestData.xml`）返回结构化预览与校验问题清单；外部 agent / 人工在派发前确认清单正确。
 
-**鉴权**：任意登录用户（只读校验，无写操作）；外部 agent 可用 `X-Agent-Secret` 或用户 token（双通道，见 `scripts.py:_try_verify_agent` 先例）。
+**鉴权**：multipart 上传 = 任意登录用户（只读校验，无写操作）；`path` 控制面路径输入 = **仅 admin**（该输入源是控制面磁盘读原语，非 admin 一律 403 `PATH_READ_FORBIDDEN`）。
 
 **请求**（两种输入源，P0 语义写死）：
 
 | 方式 | 内容 |
 |------|------|
 | multipart（主路径，不依赖磁盘可达性） | `file` = runtask.xml（必填）；`global` = UiAutomatorTestData.xml（可选，用于 `@@var` 引用校验） |
-| JSON（仅控制面本地可达时） | `{"path": "<控制面可达路径>"}` |
+| JSON（仅控制面本地可达时；**仅 admin**） | `{"path": "<控制面可达路径>"}` |
 
 **200 响应字段**：
 
