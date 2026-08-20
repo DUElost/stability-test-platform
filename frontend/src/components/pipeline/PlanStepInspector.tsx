@@ -461,6 +461,7 @@ function ParamFieldRow({ fieldKey, field, value, onChange, disabled }: ParamFiel
  * 用 draft 承接编辑中的原始文本，是为了让「清空再重输」这套动作正常：直接把空
  * 折算成某个默认值会让输入框立刻跳成 `30`，接着输入就变成 `306` / `3060`。
  * 空值只是不提交，失焦后回落到最后一次提交的值。
+ * 非数字输入同样不提交（`|| 1` 会把一次手滑改写成 1 秒超时），失焦一并回落。
  */
 function TimeoutInput({
   step,
@@ -486,7 +487,9 @@ function TimeoutInput({
         const raw = e.target.value;
         setDraft(raw);
         if (raw === '') return;
-        onUpdateStep({ ...step, timeout_seconds: Math.max(1, parseInt(raw, 10) || 1) });
+        const n = parseInt(raw, 10);
+        if (Number.isNaN(n)) return;
+        onUpdateStep({ ...step, timeout_seconds: Math.max(1, n) });
       }}
       onBlur={() => setDraft(null)}
       className={className}
