@@ -62,7 +62,7 @@ export default function PlanRunListPage() {
           title={isProject404 ? '项目不存在' : '加载执行记录失败'}
           description={isProject404
             ? `项目 "${projectKey}" 不存在，请清除筛选或核对 key`
-            : (error as Error)?.message || '请检查网络连接或稍后重试'}
+            : toApiError(error).message || '请检查网络连接或稍后重试'}
           onRetry={isProject404 ? undefined : () => void refetch()}
           action={isProject404 ? (
             <Button variant="outline" onClick={() => setProjectKey(undefined)}>

@@ -65,6 +65,8 @@ PROTECTED_READ_ENDPOINTS: tuple[ReadEndpointCase, ...] = (
         "/api/v1/plans/1/run/preview",
         json={"device_ids": [1]},
     ),
+    # mtbf (P0): runtask validate — 只读校验，须登录
+    ReadEndpointCase("mtbf_runtask_validate", "POST", "/api/v1/mtbf/runtask/validate", json={}),
     # plan-runs (aggregation + detail)
     ReadEndpointCase("plan_runs_list", "GET", "/api/v1/plan-runs"),
     ReadEndpointCase("plan_runs_get", "GET", "/api/v1/plan-runs/1"),

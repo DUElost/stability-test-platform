@@ -54,6 +54,11 @@ _FLEET_ENV_KEYS: tuple[str, ...] = (
     "STP_EVENT_UPLOADER_ENABLED",
     # ADR-0028 方案 A：0=仅上传 UPLOAD_PENDING（过滤模型）；1=上传全部 LOCAL（全量模型）
     "STP_EVENT_UPLOADER_CONTINUOUS",
+    # MTBF P0（ADR-0030 D6）：套件 testpoint 期望数，全 fleet 同值。
+    # 控制面设置一次，hot-update 下发；脚本侧默认 0=只报绝对数。
+    # 注意：STP_MTBF_TASK_TIMES 故意**不**在此列——冒烟期=1、生产=100，
+    # 且未来相机套件按项目分化，属 host 级手工 .env（见 mtbf-api.md）。
+    "STP_MTBF_EXPECTED_TESTPOINT_COUNT",
 )
 
 # Agent-scoped keys: the control plane holds the *agent-side* value under a

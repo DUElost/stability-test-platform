@@ -148,9 +148,14 @@ find "$TMPDIR" -type f \( -name "*.py" -o -name "*.sh" \) \
 OLD_REQ_SHA=$(sudo sha256sum "$INSTALL_DIR/agent/requirements.txt" 2>/dev/null | cut -d' ' -f1 || echo "none")
 
 # Rsync into install dir
+# NOTE: `--delete` 会删除远端 tarball 中不存在的目录——agent/resources/ 里
+# aimonkey/、flashtool/ 随 hot-update 同步，但 resources/mtbf/ 是 host 级
+# 手工布放（APK 三件套，不在仓库），必须排除，否则每次 hot-update 都会把
+# MTBF 资源清掉（2026-08-20 冒烟 #214/#216「APK 不存在」根因）。
 sudo rsync -av --delete \
     --exclude='__pycache__/' \
     --exclude='tests/' \
+    --exclude='resources/mtbf/' \
     --exclude='.env.example' \
     --exclude='install_agent.sh' \
     --exclude='agentctl.sh' \

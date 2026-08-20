@@ -32,7 +32,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { normalizeWatcherTimeScope, shouldShowDispatchGate, normalizeDispatchStateForRun } from '@/hooks/plan-run/planRunDetailUtils';
 import { usePlanRunDetailData } from '@/hooks/plan-run/usePlanRunDetailData';
 import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
-import { api } from '@/utils/api';
+import { api, toApiError } from '@/utils/api';
 import type { DeviceLinkStatus, DeviceUiStatus, WatcherTimeScope } from '@/utils/api/types';
 
 export default function PlanRunDetailPage() {
@@ -188,7 +188,7 @@ export default function PlanRunDetailPage() {
         </Button>
         <ErrorState
           title="加载 PlanRun 失败"
-          description={(runQ.error as Error)?.message || '请检查网络连接或稍后重试'}
+          description={runQ.error ? toApiError(runQ.error).message : '请检查网络连接或稍后重试'}
           onRetry={() => runQ.refetch()}
         />
       </div>
