@@ -30,7 +30,12 @@
 
 ## 2. 人读时序图
 
-（图片资产待生成；以下 Mermaid 源为当前权威图。）
+![设备日志流转时序（方案 A 过滤模型）](./assets/adr-0025-log-flow-sequence-human.png)
+
+SVG 版本：[`adr-0025-log-flow-sequence-human.svg`](./assets/adr-0025-log-flow-sequence-human.svg)。
+重新渲染：`python tools/dev/render_adr0025_sequence.py`（提取本节 Mermaid 源，
+经 mermaid-cli 生成 PNG/SVG；首次运行需网络下载 CLI + Chromium）。
+以下 Mermaid 源为当前权威图。
 
 <details>
 <summary>Mermaid 源（与上图同内容，便于改稿）</summary>
