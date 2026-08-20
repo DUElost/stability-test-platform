@@ -1,13 +1,14 @@
-"""ADR-0029 P2 / P2.5a — 项目登记簿 API + Fleet 事实 + 列表筛选 + 批量归入。
+"""ADR-0029 P2 / P2.5 — 项目登记簿 API + Fleet 事实 + 人工映射。
 
 覆盖：
-- GET /api/v1/projects（列表 + 设备数 / 在跑 Run 数聚合）
-- GET /api/v1/projects/inventory/models（fleet 按 model；回填标签 ≠ 映射）
+- GET /api/v1/projects（默认只返回 source=USER；SEED 回填标签不出现）
+- POST /api/v1/projects（admin 新建 USER 项目）
+- GET /api/v1/projects/inventory/models（fleet 按 model；mapped 只含 USER）
 - GET /api/v1/projects/inventory/summary
-- GET /api/v1/projects/{project_key}/models（回填标签下 model 反查）
-- GET /api/v1/projects/{project_key}（详情计数 + 最近 Run；404）
-- POST /api/v1/devices/bulk-project（admin 归属变更 + audit 留痕 +
-  幂等跳过 + 未知 key/device 拒绝 + 非 admin 403）
+- POST /api/v1/projects/{key}/map/preview|apply
+- GET /api/v1/projects/{project_key}/models
+- GET /api/v1/projects/{project_key}
+- POST /api/v1/devices/bulk-project
 - devices / plans / plan-runs / results 列表接口的 project_key 筛选
 
 口径（F2）：对外一律 project_key；project_id NULL 的设备不命中筛选。
@@ -32,6 +33,8 @@ def project_a(db_session):
         customer="CustA",
         platform="MTK",
         form_factor="PHONE",
+        source="USER",
+        match_models=[],
     )
     db_session.add(p)
     db_session.commit()
@@ -46,6 +49,8 @@ def project_legacy(db_session):
         customer=None,
         platform=None,
         form_factor=None,
+        source="SEED",
+        match_models=[],
     )
     db_session.add(p)
     db_session.commit()
@@ -117,9 +122,15 @@ class TestListProjects:
         by_key = {p["project_key"]: p for p in resp.json()["data"]}
         assert by_key["proj-a"]["device_count"] == 2
         assert by_key["proj-a"]["running_run_count"] == 1  # 只计 RUNNING，不计 SUCCESS
-        assert by_key["LEGACY"]["device_count"] == 0
+        assert by_key["proj-a"]["source"] == "USER"
+        assert "LEGACY" not in by_key
         # 无项目字段泄露数字 id（F2）
         assert "id" not in by_key["proj-a"]
+
+        all_resp = client.get("/api/v1/projects?source=all", headers=auth_headers)
+        assert all_resp.status_code == 200
+        all_keys = {p["project_key"] for p in all_resp.json()["data"]}
+        assert all_keys == {"proj-a", "LEGACY"}
 
 
 class TestGetProject:
@@ -146,7 +157,7 @@ class TestGetProject:
 
 
 class TestInventoryModels:
-    """P2.5a：Fleet 事实层。回填标签 ≠ 人工映射。"""
+    """P2.5：Fleet 事实层。SEED 回填不算已映射项目。"""
 
     def test_inventory_path_not_captured_as_project_key(self, client, auth_headers):
         resp = client.get("/api/v1/projects/inventory/models", headers=auth_headers)
@@ -158,14 +169,12 @@ class TestInventoryModels:
         assert resp.status_code == 200
         assert resp.json()["data"] == {
             "total_devices": 0,
-            "mapped_devices": 0,
-            "legacy_devices": 0,
-            "null_devices": 0,
+            "user_mapped_devices": 0,
             "distinct_models": 0,
             "unmapped_models": [],
         }
 
-    def test_groups_by_model_backfill_is_not_mapping(
+    def test_groups_by_model_seed_is_not_mapping(
         self, client, auth_headers, db_session, project_a, project_legacy
     ):
         _make_device(
@@ -192,20 +201,16 @@ class TestInventoryModels:
 
         assert by_model["MLD_LX2"]["device_count"] == 2
         assert by_model["MLD_LX2"]["platforms"] == ["MTK"]
-        assert by_model["MLD_LX2"]["backfill_project_keys"] == ["proj-a"]
-        # 人工映射未填写：P1 回填不得冒充已映射项目
-        assert by_model["MLD_LX2"]["mapped_project_keys"] == []
+        assert by_model["MLD_LX2"]["mapped_project_keys"] == ["proj-a"]
+        assert by_model["MLD_LX2"]["unassigned_device_count"] == 0
+        assert "backfill_project_keys" not in by_model["MLD_LX2"]
         assert "project_keys" not in by_model["MLD_LX2"]
-        assert by_model["MLD_LX2"]["legacy_device_count"] == 0
-        assert by_model["MLD_LX2"]["null_device_count"] == 0
 
         assert by_model["MLD_LX3"]["device_count"] == 1
-        assert by_model["MYSTERY_X"]["backfill_project_keys"] == ["LEGACY"]
         assert by_model["MYSTERY_X"]["mapped_project_keys"] == []
-        assert by_model["MYSTERY_X"]["legacy_device_count"] == 1
-        assert by_model["MYSTERY_X"]["null_device_count"] == 1
+        assert by_model["MYSTERY_X"]["unassigned_device_count"] == 2
         assert by_model[None]["device_count"] == 2
-        assert by_model[None]["null_device_count"] == 2
+        assert by_model[None]["unassigned_device_count"] == 2
 
         models_in_order = [row["model"] for row in resp.json()["data"]]
         assert models_in_order == [None, "MLD_LX2", "MYSTERY_X", "MLD_LX3"]
@@ -214,13 +219,11 @@ class TestInventoryModels:
             "/api/v1/projects/inventory/summary", headers=auth_headers
         ).json()["data"]
         assert summary["total_devices"] == 7
-        assert summary["mapped_devices"] == 3
-        assert summary["legacy_devices"] == 1
-        assert summary["null_devices"] == 3
+        assert summary["user_mapped_devices"] == 3
         assert summary["distinct_models"] == 4
         assert set(summary["unmapped_models"]) == {None, "MYSTERY_X"}
 
-    def test_mixed_backfill_keys_on_same_model(
+    def test_mixed_user_and_seed_on_same_model(
         self, client, auth_headers, db_session, project_a, project_legacy
     ):
         _make_device(
@@ -232,9 +235,8 @@ class TestInventoryModels:
         resp = client.get("/api/v1/projects/inventory/models", headers=auth_headers)
         row = resp.json()["data"][0]
         assert row["model"] == "MLD_LX2"
-        assert row["backfill_project_keys"] == ["LEGACY", "proj-a"]
-        assert row["mapped_project_keys"] == []
-        assert row["legacy_device_count"] == 1
+        assert row["mapped_project_keys"] == ["proj-a"]
+        assert row["unassigned_device_count"] == 1
         assert row["device_count"] == 2
 
 
@@ -262,6 +264,168 @@ class TestProjectModelCoverage:
     def test_unknown_key_404(self, client, auth_headers):
         resp = client.get("/api/v1/projects/no-such-project/models", headers=auth_headers)
         assert resp.status_code == 404
+
+
+class TestCreateProject:
+    def test_admin_creates_user_project(self, client, admin_headers, db_session):
+        resp = client.post(
+            "/api/v1/projects",
+            headers=admin_headers,
+            json={"project_key": "HONOR-CAMERA", "display_name": " 荣耀相机 "},
+        )
+        assert resp.status_code == 201
+        data = resp.json()["data"]
+        assert data["project_key"] == "HONOR-CAMERA"
+        assert data["display_name"] == "荣耀相机"
+        assert data["source"] == "USER"
+        assert data["match_models"] == []
+        audits = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "create_project")
+            .all()
+        )
+        assert len(audits) == 1
+
+    def test_reserved_seed_key_422(self, client, admin_headers):
+        resp = client.post(
+            "/api/v1/projects",
+            headers=admin_headers,
+            json={"project_key": "HONOR-MLD", "display_name": "Nope"},
+        )
+        assert resp.status_code == 422
+
+    def test_duplicate_409(self, client, admin_headers, project_a):
+        resp = client.post(
+            "/api/v1/projects",
+            headers=admin_headers,
+            json={"project_key": "proj-a", "display_name": "Dup"},
+        )
+        assert resp.status_code == 409
+
+    def test_forbidden_for_non_admin(self, client, auth_headers):
+        resp = client.post(
+            "/api/v1/projects",
+            headers=auth_headers,
+            json={"project_key": "NEW-PROJ", "display_name": "New"},
+        )
+        assert resp.status_code == 403
+
+
+class TestMapProject:
+    def test_preview_and_apply_from_seed_and_null(
+        self, client, admin_headers, db_session, project_a, project_legacy
+    ):
+        d_seed = _make_device(
+            db_session, "s-map-seed", project_legacy, model="MLD_LX2"
+        )
+        d_null = _make_device(db_session, "s-map-null", None, model="MLD_LX2")
+        d_already = _make_device(db_session, "s-map-already", project_a, model="MLD_LX2")
+
+        preview = client.post(
+            "/api/v1/projects/proj-a/map/preview",
+            headers=admin_headers,
+            json={"models": ["MLD_LX2"]},
+        )
+        assert preview.status_code == 200
+        body = preview.json()["data"]
+        assert body["will_assign"] == 2
+        assert body["already_in_target"] == 1
+        assert body["conflicts"] == []
+
+        applied = client.post(
+            "/api/v1/projects/proj-a/map/apply",
+            headers=admin_headers,
+            json={"models": ["MLD_LX2"]},
+        )
+        assert applied.status_code == 200
+        db_session.refresh(d_seed)
+        db_session.refresh(d_null)
+        db_session.refresh(d_already)
+        db_session.refresh(project_a)
+        assert d_seed.project_id == project_a.id
+        assert d_null.project_id == project_a.id
+        assert d_already.project_id == project_a.id
+        assert project_a.match_models == ["MLD_LX2"]
+
+        inventory = client.get(
+            "/api/v1/projects/inventory/models", headers=admin_headers
+        ).json()["data"][0]
+        assert inventory["mapped_project_keys"] == ["proj-a"]
+        assert inventory["unassigned_device_count"] == 0
+
+        audits = {
+            a.action
+            for a in db_session.query(AuditLog).filter(
+                AuditLog.action.in_(("assign_project", "apply_project_device_rule"))
+            )
+        }
+        assert audits == {"assign_project", "apply_project_device_rule"}
+
+    def test_user_conflict_skipped_unless_reassign(
+        self, client, admin_headers, db_session, project_a
+    ):
+        other = ProjectModel(
+            project_key="proj-b",
+            display_name="Project B",
+            source="USER",
+            match_models=[],
+        )
+        db_session.add(other)
+        db_session.commit()
+        d_conflict = _make_device(db_session, "s-conflict", other, model="MLD_LX2")
+        d_free = _make_device(db_session, "s-free", None, model="MLD_LX2")
+
+        preview = client.post(
+            "/api/v1/projects/proj-a/map/preview",
+            headers=admin_headers,
+            json={"models": ["MLD_LX2"]},
+        ).json()["data"]
+        assert preview["will_assign"] == 1
+        assert preview["conflicts"][0]["serial"] == "s-conflict"
+
+        client.post(
+            "/api/v1/projects/proj-a/map/apply",
+            headers=admin_headers,
+            json={"models": ["MLD_LX2"]},
+        )
+        db_session.refresh(d_conflict)
+        db_session.refresh(d_free)
+        assert d_conflict.project_id == other.id
+        assert d_free.project_id == project_a.id
+
+        client.post(
+            "/api/v1/projects/proj-a/map/apply",
+            headers=admin_headers,
+            json={"models": ["MLD_LX2"], "reassign_conflicts": True},
+        )
+        db_session.refresh(d_conflict)
+        assert d_conflict.project_id == project_a.id
+
+    def test_seed_project_cannot_be_mapped(
+        self, client, admin_headers, project_legacy
+    ):
+        resp = client.post(
+            "/api/v1/projects/LEGACY/map/preview",
+            headers=admin_headers,
+            json={"models": ["MLD_LX2"]},
+        )
+        assert resp.status_code == 422
+
+    def test_unknown_project_404(self, client, admin_headers):
+        resp = client.post(
+            "/api/v1/projects/nope/map/apply",
+            headers=admin_headers,
+            json={"models": ["MLD_LX2"]},
+        )
+        assert resp.status_code == 404
+
+    def test_forbidden_for_non_admin(self, client, auth_headers, project_a):
+        resp = client.post(
+            "/api/v1/projects/proj-a/map/apply",
+            headers=auth_headers,
+            json={"models": ["MLD_LX2"]},
+        )
+        assert resp.status_code == 403
 
 
 class TestBulkAssignProject:

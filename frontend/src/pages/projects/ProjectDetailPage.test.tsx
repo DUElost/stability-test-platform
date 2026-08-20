@@ -44,6 +44,8 @@ function makeDetail(overrides: Record<string, unknown> = {}) {
     platform: 'MTK',
     form_factor: 'PHONE',
     status: 'ACTIVE',
+    source: 'USER',
+    match_models: [],
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
     device_count: 1,
@@ -132,12 +134,13 @@ describe('ProjectDetailPage', () => {
     // 「Plan A」同时出现在计划块与结果块 recent_runs 里——按数量断言
     expect((await screen.findAllByText('Plan A')).length).toBeGreaterThanOrEqual(2);
     expect(await screen.findByText('#1')).toBeInTheDocument();
-    expect(await screen.findByTestId('backfill-disclaimer')).toHaveTextContent(
-      '不能代表客户、项目或机型',
+    expect(await screen.findByTestId('match-models-empty')).toHaveTextContent(
+      '尚未映射型号',
     );
     expect(await screen.findByTestId('hanging-models')).toHaveTextContent(
-      '当前挂在此标签下的型号：M1 (1)',
+      '当前归属此项目的设备型号：M1 (1)',
     );
+    expect(screen.queryByTestId('seed-disclaimer')).not.toBeInTheDocument();
     await waitFor(() => {
       expect(mocks.listDevices).toHaveBeenCalledWith(0, 20, undefined, undefined, 'proj-a');
       expect(mocks.listPlans).toHaveBeenCalledWith(0, 20, 'proj-a');
@@ -159,5 +162,18 @@ describe('ProjectDetailPage', () => {
     expect(backButton).toBeInTheDocument();
     fireEvent.click(backButton);
     expect(mocks.navigate).toHaveBeenCalledWith('/projects');
+  });
+
+  it('shows seed disclaimer when opening a backfill key by URL', async () => {
+    mocks.getProject.mockResolvedValue(makeDetail({
+      project_key: 'HONOR-MLD',
+      display_name: '荣耀 MLD 系列',
+      source: 'SEED',
+    }));
+    renderPage();
+    expect(await screen.findByTestId('seed-disclaimer')).toHaveTextContent(
+      '不能代表客户、项目或机型',
+    );
+    expect(screen.queryByTestId('match-models-empty')).not.toBeInTheDocument();
   });
 });

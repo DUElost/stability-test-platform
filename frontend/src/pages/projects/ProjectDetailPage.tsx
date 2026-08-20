@@ -109,7 +109,7 @@ export default function ProjectDetailPage() {
       <PageHeader
         title={project.display_name}
         subtitle={project.project_key}
-        breadcrumbs={[{ label: '项目编组工作台', path: '/projects' }]}
+        breadcrumbs={[{ label: '项目登记簿', path: '/projects' }]}
       />
 
       {/* 头部：facet + jira + status */}
@@ -138,22 +138,34 @@ export default function ProjectDetailPage() {
                 JIRA: 未配置
               </Badge>
             )}
-            <Badge variant="secondary" className="text-[11px] font-normal">
-              非正式回填
-            </Badge>
+            {project.source === 'SEED' ? (
+              <Badge variant="secondary" className="text-[11px] font-normal">
+                系统回填（不在工作台列出）
+              </Badge>
+            ) : null}
           </div>
-          <p className={cn('mt-3 text-xs', TEXT.subtitle)} data-testid="backfill-disclaimer">
-            这是 P1 脚本灌入的回填标签，不能代表客户、项目或机型。已映射项目需在工作台人工填写。
-          </p>
+          {project.source === 'SEED' ? (
+            <p className={cn('mt-3 text-xs', TEXT.subtitle)} data-testid="seed-disclaimer">
+              这是 P1 脚本灌入的回填标签，不能代表客户、项目或机型。请在工作台新建人工项目并映射型号。
+            </p>
+          ) : project.match_models.length > 0 ? (
+            <p className={cn('mt-3 font-mono text-xs', TEXT.subtitle)} data-testid="match-models">
+              已映射型号：{project.match_models.join(' · ')}
+            </p>
+          ) : (
+            <p className={cn('mt-3 text-xs', TEXT.subtitle)} data-testid="match-models-empty">
+              尚未映射型号。请在工作台勾选型号后填写。
+            </p>
+          )}
           {modelsQ.isLoading ? (
             <Skeleton className="mt-2 h-5 w-64" />
           ) : modelsQ.data && modelsQ.data.length > 0 ? (
             <p className={cn('mt-2 font-mono text-xs', TEXT.subtitle)} data-testid="hanging-models">
-              当前挂在此标签下的型号：{coverageSummary(modelsQ.data)}
+              当前归属此项目的设备型号：{coverageSummary(modelsQ.data)}
             </p>
           ) : (
             <p className={cn('mt-2 text-xs', TEXT.subtitle)} data-testid="hanging-models-empty">
-              当前没有设备挂在此回填标签下
+              当前没有设备归属此项目
             </p>
           )}
         </CardContent>
@@ -314,8 +326,7 @@ export default function ProjectDetailPage() {
               </p>
             ) : (
               <p data-testid="jira-placeholder">
-                尚未配置 JIRA 项目关键字。当前 6 个项目均未配置，等 P3（提交自动带关键字）开放
-                配置能力后，由管理员在此维护——在此之前如需配置请走数据库/迁移维护。
+                尚未配置 JIRA 项目关键字。P3 落地后由管理员在此维护。
               </p>
             )}
           </CardContent>

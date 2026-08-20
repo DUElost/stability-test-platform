@@ -4,12 +4,14 @@ import type {
   Device,
   InventoryModel,
   InventorySummary,
+  ProjectCreateInput,
   ProjectDetail,
+  ProjectMapPreview,
   ProjectModelCoverage,
   ProjectSummary,
 } from './types';
 
-/** ADR-0029 P2 / P2.5a — 项目登记簿 + Fleet 事实。对外一律 project_key（F2 口径）。 */
+/** ADR-0029 P2.5 — 人工项目登记簿 + Fleet 事实 + 型号映射。 */
 export const projects = {
   list: () =>
     unwrapApiResponse(
@@ -18,6 +20,10 @@ export const projects = {
   get: (projectKey: string) =>
     unwrapApiResponse(
       apiClient.get<ApiResponseEnvelope<ProjectDetail>>(`/projects/${projectKey}`),
+    ),
+  create: (payload: ProjectCreateInput) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<ProjectSummary>>('/projects', payload),
     ),
   inventoryModels: () =>
     unwrapApiResponse(
@@ -31,6 +37,20 @@ export const projects = {
     unwrapApiResponse(
       apiClient.get<ApiResponseEnvelope<ProjectModelCoverage[]>>(
         `/projects/${projectKey}/models`,
+      ),
+    ),
+  mapPreview: (projectKey: string, models: string[], reassignConflicts = false) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<ProjectMapPreview>>(
+        `/projects/${projectKey}/map/preview`,
+        { models, reassign_conflicts: reassignConflicts },
+      ),
+    ),
+  mapApply: (projectKey: string, models: string[], reassignConflicts = false) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<ProjectMapPreview>>(
+        `/projects/${projectKey}/map/apply`,
+        { models, reassign_conflicts: reassignConflicts },
       ),
     ),
 };

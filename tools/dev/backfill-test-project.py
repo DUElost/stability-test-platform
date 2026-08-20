@@ -22,6 +22,8 @@
 
 注意：--phase all --dry-run 在空库上会因项目行未建而退出（M-c 的 dry-run
 须在 mb 执行后单独跑——dry-run 不落库，all 的 dry-run 只对 mb 有意义）。
+新建的六个 key 写入 ``source=SEED``，工作台不展示；须先 ``alembic upgrade``
+到 ``t6u7v8w9x0y1``。
 
 DB 目标遵循 env 单一源（backend/core/env_source.resolve_database_url）：
 ambient DATABASE_URL 优先，否则仓库根 .env.backend。
@@ -113,8 +115,9 @@ def upsert_projects(db: Session, dry_run: bool) -> None:
         db.execute(
             text(
                 "INSERT INTO test_project (project_key, display_name, jira_project_key, "
-                "product_line, customer, platform, form_factor, status) "
-                "VALUES (:key, :display, NULL, NULL, :customer, :platform, :form, 'ACTIVE')"
+                "product_line, customer, platform, form_factor, status, source, match_models) "
+                "VALUES (:key, :display, NULL, NULL, :customer, :platform, :form, "
+                "'ACTIVE', 'SEED', '[]'::jsonb)"
             ),
             {"key": p["key"], "display": p["display"], "customer": p["customer"],
              "platform": p["platform"], "form": p["form"]},

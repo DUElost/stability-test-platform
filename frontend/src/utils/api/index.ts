@@ -34,6 +34,7 @@ export type {
   PaginatedResponse,
   Project, ProjectSummary, ProjectDetail, RecentProjectRun,
   InventoryModel, InventorySummary, ProjectModelCoverage,
+  ProjectCreateInput, ProjectMapPreview, ProjectMapConflict,
   ScriptEntry,
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
   PipelineStep, PipelinePhase, PipelinePatrol, PipelineDef,

@@ -31,7 +31,7 @@ interface AssignProjectDialogProps {
 
 /**
  * ADR-0029 P2 — 设备批量归入项目（admin 动作，后端 POST /devices/bulk-project）。
- * 幂等：已是目标项目的设备跳过；「移出项目」= 归入 LEGACY。
+ * 幂等：已是目标项目的设备跳过。下拉只含人工 USER 项目。
  */
 export function AssignProjectDialog({
   isOpen,

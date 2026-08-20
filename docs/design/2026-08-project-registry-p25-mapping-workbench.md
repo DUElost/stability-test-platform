@@ -1,45 +1,48 @@
-# ADR-0029 P2.5 设计：项目编组工作台（设备事实 + 人工映射）
+# ADR-0029 P2.5：登记簿 = Fleet 事实 + 人工项目 + 精确映射
 
 - 日期：2026-08-20
-- 状态：**P2.5a 实施中**（Fleet 只读；映射列仅人工填写）
-- 上游：[ADR-0029](../adr/ADR-0029-project-taxonomy-and-param-layering.md)
+- 状态：**现行**
+- 上游：[ADR-0029](../adr/ADR-0029-project-taxonomy-and-param-layering.md) v2.4
 
-## 0. 结论摘要
+## 0. 结论
 
-1. **问题**：`/projects` 把 P1 脚本灌入的 `HONOR-MLD` / `ZTE-Z258` 当成「已映射项目」。这些 key 只是当时方便查看设备归属的回填标签，**不能代表客户、项目或机型**。
-2. **方向**：Fleet 事实层只展示 ADB/心跳可读的 `device.model` / `platform`；**已映射项目必须人工填写**。回填标签降为非正式编组，单独列示。
-3. **P2.5a**：inventory API + 工作台事实表。`mapped_project_keys` 恒为 `[]`，UI 显示「待手动填写」。`backfill_project_keys` 展示 HONOR-MLD 等，并标明非正式。
-4. **非目标**：不复活 D5 派发门禁；v1 不用前缀/正则自动推断。
+1. `/projects` 是登记簿，不是从 ADB 推断出的客户/系列目录。
+2. Fleet 表只展示心跳可读的 `device.model` / `platform`。
+3. 下方卡片只列出 `source=USER` 的人工项目。
+4. 型号→项目必须勾选后 `match_models` 精确映射；SEED / LEGACY / NULL 不算冲突。
+5. `HONOR-MLD` 等六个 P1 key 留在库里只为外键，不出现在工作台。
 
-## 4. API（P2.5a）
+## API
 
 ```
-GET /api/v1/projects/inventory/models
+GET  /api/v1/projects                 # 默认 source=user
+POST /api/v1/projects                 # admin 新建 USER
+GET  /api/v1/projects/inventory/models
+GET  /api/v1/projects/inventory/summary
+POST /api/v1/projects/{key}/map/preview
+POST /api/v1/projects/{key}/map/apply
 ```
+
+inventory 行：
 
 ```json
 {
   "model": "MLD_LX2",
   "device_count": 260,
   "platforms": ["MTK"],
-  "backfill_project_keys": ["HONOR-MLD"],
-  "mapped_project_keys": [],
-  "legacy_device_count": 0,
-  "null_device_count": 0
+  "mapped_project_keys": ["HONOR-CAMERA"],
+  "unassigned_device_count": 12
 }
 ```
 
-- `backfill_project_keys`：当前 `device.project_id`（P1 回填）。非正式。
-- `mapped_project_keys`：人工映射；P2.5a 无规则表，恒 `[]`。
-- 静态路径 `/inventory/*` 必须注册在 `/{project_key}` 之前。
+`mapped_project_keys` 只含 USER 项目（`match_models` 或 `device.project_id`）。
 
-```
-GET /api/v1/projects/inventory/summary
-GET /api/v1/projects/{project_key}/models
-```
+静态路径 `/inventory/*` 必须注册在 `/{project_key}` 之前。
 
-后者是「当前挂在此回填标签下的型号」，不是「该项目覆盖哪些型号」。
+## 非目标
+
+不复活 D5 派发门禁；不用前缀/正则自动建项目或自动映射。
 
 ## 关联
 
-- P2.5a Agent Note：[2026-08-20-project-registry-p25a-inventory-workbench.md](../notes/feature/2026-08-20-project-registry-p25a-inventory-workbench.md)
+- Agent Note：[2026-08-20-project-registry-user-mapping.md](../notes/feature/2026-08-20-project-registry-user-mapping.md)
