@@ -8,6 +8,8 @@ import ProjectsPage from './ProjectsPage';
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   listProjects: vi.fn(),
+  inventoryModels: vi.fn(),
+  inventorySummary: vi.fn(),
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -20,7 +22,11 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('@/utils/api', () => ({
   api: {
-    projects: { list: mocks.listProjects },
+    projects: {
+      list: mocks.listProjects,
+      inventoryModels: mocks.inventoryModels,
+      inventorySummary: mocks.inventorySummary,
+    },
   },
 }));
 
@@ -41,6 +47,28 @@ function makeProject(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+function makeInventoryRow(overrides: Record<string, unknown> = {}) {
+  return {
+    model: 'MLD_LX2',
+    device_count: 2,
+    platforms: ['MTK'],
+    backfill_project_keys: ['HONOR-MLD'],
+    mapped_project_keys: [],
+    legacy_device_count: 0,
+    null_device_count: 0,
+    ...overrides,
+  };
+}
+
+const emptySummary = {
+  total_devices: 0,
+  mapped_devices: 0,
+  legacy_devices: 0,
+  null_devices: 0,
+  distinct_models: 0,
+  unmapped_models: [],
+};
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -71,6 +99,8 @@ describe('ProjectsPage', () => {
         running_run_count: 0,
       }),
     ]);
+    mocks.inventoryModels.mockResolvedValue([]);
+    mocks.inventorySummary.mockResolvedValue(emptySummary);
   });
 
   it('renders project cards with facet badges and counts', async () => {
@@ -82,7 +112,6 @@ describe('ProjectsPage', () => {
     expect(screen.getByText('平台: MTK')).toBeInTheDocument();
     expect(screen.getByText('3 台设备')).toBeInTheDocument();
     expect(screen.getByText('Legacy')).toBeInTheDocument();
-    // 顶部统计：2 项目 / 3 设备 / 1 在跑
     expect(await screen.findByText('2')).toBeInTheDocument();
   });
 
@@ -91,7 +120,6 @@ describe('ProjectsPage', () => {
     renderPage();
 
     await screen.findByText('Project A');
-    // 选客户 = CustA → LEGACY（customer 为 NULL）被过滤
     await user.click(screen.getByTestId('facet-customer'));
     await user.click(await screen.findByText('CustA'));
 
@@ -116,12 +144,12 @@ describe('ProjectsPage', () => {
     mocks.listProjects.mockResolvedValue([]);
     renderPage();
 
-    expect(await screen.findByText('暂无项目')).toBeInTheDocument();
+    expect(await screen.findByText('暂无回填标签')).toBeInTheDocument();
+    expect(screen.getByTestId('inventory-models')).toBeInTheDocument();
   });
 
   it('shows no-match state when facet filters out everything', async () => {
     const user = userEvent.setup();
-    // 组合筛选筛空：proj-a 是 CustA/MTK，选客户=CustA + 平台=QCOM → 无交集
     mocks.listProjects.mockResolvedValue([
       makeProject(),
       makeProject({
@@ -139,6 +167,60 @@ describe('ProjectsPage', () => {
     await user.click(screen.getByTestId('facet-platform'));
     await user.click(await screen.findByRole('option', { name: 'QCOM' }));
 
-    expect(await screen.findByText('没有匹配的项目')).toBeInTheDocument();
+    expect(await screen.findByText('没有匹配的回填标签')).toBeInTheDocument();
+  });
+
+  it('shows backfill keys as informal labels and mapping as pending', async () => {
+    mocks.inventoryModels.mockResolvedValue([
+      makeInventoryRow({ model: 'MLD_LX2', device_count: 260 }),
+      makeInventoryRow({ model: 'MLD_LX3', device_count: 32 }),
+      makeInventoryRow({
+        model: 'MYSTERY_X',
+        device_count: 1,
+        backfill_project_keys: ['LEGACY'],
+        legacy_device_count: 1,
+      }),
+    ]);
+    mocks.listProjects.mockResolvedValue([
+      makeProject({
+        project_key: 'HONOR-MLD',
+        display_name: '荣耀 MLD 系列',
+        device_count: 292,
+      }),
+    ]);
+
+    renderPage();
+
+    expect(await screen.findByText('MLD_LX2')).toBeInTheDocument();
+    expect(screen.getByText('MLD_LX3')).toBeInTheDocument();
+    const pending = screen.getAllByTestId('mapping-pending');
+    expect(pending.length).toBeGreaterThanOrEqual(2);
+    pending.forEach((node) => {
+      expect(node).toHaveTextContent('待手动填写');
+    });
+    expect(screen.getByText('未分配（LEGACY）')).toBeInTheDocument();
+    expect(screen.getByText('系统回填标签（非正式编组）')).toBeInTheDocument();
+    expect(screen.getAllByText('非正式回填').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('filters fleet table to unassigned models only', async () => {
+    const user = userEvent.setup();
+    mocks.inventoryModels.mockResolvedValue([
+      makeInventoryRow(),
+      makeInventoryRow({
+        model: 'MYSTERY_X',
+        device_count: 1,
+        backfill_project_keys: ['LEGACY'],
+        legacy_device_count: 1,
+      }),
+    ]);
+
+    renderPage();
+    expect(await screen.findByText('MLD_LX2')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('inventory-unassigned-only'));
+
+    expect(screen.queryByText('MLD_LX2')).not.toBeInTheDocument();
+    expect(screen.getByText('MYSTERY_X')).toBeInTheDocument();
   });
 });
