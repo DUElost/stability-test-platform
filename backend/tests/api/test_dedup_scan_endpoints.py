@@ -193,6 +193,33 @@ class TestDedupStatusEndpoint:
         body = resp.json()["data"]
         assert body["plan_run_id"] == sample_plan_run.id
         assert body["artifacts"] == []
+        assert body["archive"] is None
+        assert body["scan_failed"] is False
+
+    def test_status_includes_archive_and_scan_failed(
+        self, client, auth_headers, db_session, sample_plan_run,
+    ):
+        sample_plan_run.run_context = {
+            "archive": {
+                "hosts_triggered": 3,
+                "hosts_with_artifacts": 0,
+                "scan_artifacts_registered": 0,
+                "hosts_not_acked": 1,
+            },
+        }
+        sample_plan_run.result_summary = {"scan_failed": True}
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/status",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()["data"]
+        assert body["archive"]["hosts_triggered"] == 3
+        assert body["archive"]["hosts_with_artifacts"] == 0
+        assert body["archive"]["hosts_not_acked"] == 1
+        assert body["scan_failed"] is True
 
 
 class TestMergeEndpoint:

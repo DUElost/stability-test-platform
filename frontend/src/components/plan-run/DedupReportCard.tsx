@@ -124,6 +124,24 @@ export default function DedupReportCard({ runId }: Props) {
       </div>
 
       <div className="space-y-2 p-4">
+        {statusQ.data?.archive && (statusQ.data.archive.hosts_triggered ?? 0) > 0 && (
+          <div
+            data-testid="dedup-host-completeness"
+            className={cn(
+              'flex flex-wrap items-center gap-2 rounded border px-2 py-1 text-[11px]',
+              statusQ.data.scan_failed ? 'border-destructive/30 text-destructive' : TEXT.subtitle,
+            )}
+          >
+            <span>
+              host 完成度 {statusQ.data.archive.hosts_with_artifacts ?? 0}/
+              {statusQ.data.archive.hosts_triggered}
+            </span>
+            {statusQ.data.scan_failed && <span className="font-semibold">扫描未产生任何报表</span>}
+            {(statusQ.data.archive.hosts_not_acked ?? 0) > 0 && (
+              <span>未回执 {statusQ.data.archive.hosts_not_acked} 台</span>
+            )}
+          </div>
+        )}
         {statusQ.isLoading ? (
           <div className={cn('flex items-center gap-1.5 text-xs', TEXT.subtitle)}>
             <Loader2 className="h-3 w-3 animate-spin" /> 加载去重状态...

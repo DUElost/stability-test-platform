@@ -217,6 +217,29 @@ def record_scan_archive_state(
     finally:
         db.close()
 
+    # P1-3/P3-1：下发了 host 却零产物时，把「没有报表」显式挂到终态结果上，
+    # 供 PlanRun 详情/前端展示（终态 status 本身不变，避免状态机额外转换）。
+    if hosts_triggered > 0 and hosts_with_artifacts == 0:
+        try:
+            db2 = SessionLocal()
+            try:
+                db2.execute(
+                    text(
+                        "UPDATE plan_run "
+                        "SET result_summary = jsonb_set("
+                        "  COALESCE(result_summary, '{}'::jsonb), "
+                        "  '{scan_failed}', 'true', true"
+                        ") "
+                        "WHERE id = :run_id"
+                    ),
+                    {"run_id": plan_run_id},
+                )
+                db2.commit()
+            finally:
+                db2.close()
+        except Exception:
+            logger.exception("scan_failed_flag_write_failed plan_run=%d", plan_run_id)
+
 
 def run_merge_sync(
     plan_run_id: int,

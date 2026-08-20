@@ -132,7 +132,17 @@ export const planRuns = {
 
   // ADR-0025 Sprint 4: 归档-2/3 scan/merge/extract
   getDedupStatus: (runId: number) =>
-    unwrapApiResponse<{ plan_run_id: number; artifacts: unknown[] }>(
+    unwrapApiResponse<{
+      plan_run_id: number;
+      artifacts: unknown[];
+      archive?: {
+        hosts_triggered?: number;
+        hosts_with_artifacts?: number;
+        scan_artifacts_registered?: number;
+        hosts_not_acked?: number;
+      } | null;
+      scan_failed?: boolean;
+    }>(
       apiClient.get(`/plan-runs/${runId}/dedup/status`),
     ),
 
