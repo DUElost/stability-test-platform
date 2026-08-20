@@ -64,7 +64,7 @@ def _scan_task_env(
     monkeypatch.setattr(
         saq_tasks, "_query_hosts_for_scan", _query_hosts_from_rows(host_rows),
     )
-    with patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()), \
+    with patch("backend.realtime.socketio_server.call_agent_control", new=AsyncMock(return_value=True)), \
          patch("backend.services.dedup_scan.run_scan_sync", scan_sync), \
          patch("backend.services.dedup_scan.count_hosts_with_scan_artifacts", hosts_done), \
          patch("backend.services.dedup_scan.record_scan_archive_state", record_archive), \
@@ -182,7 +182,8 @@ async def test_scan_task_ignores_stale_artifacts_of_untriggered_hosts(monkeypatc
     # Kept polling past the first check instead of accepting host-a's leftovers.
     assert polls == 2
     record_archive.assert_called_once_with(
-        45, hosts_triggered=1, artifacts_registered=2, hosts_with_artifacts=1
+        45, hosts_triggered=1, artifacts_registered=2, hosts_with_artifacts=1,
+        hosts_not_acked=0,
     )
 
 
@@ -231,7 +232,8 @@ async def test_scan_task_ignores_same_hosts_previous_round_artifacts(monkeypatch
     # Did not accept host-a's stale row on the first check.
     assert polls == 2
     record_archive.assert_called_once_with(
-        46, hosts_triggered=1, artifacts_registered=2, hosts_with_artifacts=1
+        46, hosts_triggered=1, artifacts_registered=2, hosts_with_artifacts=1,
+        hosts_not_acked=0,
     )
 
 
@@ -276,7 +278,7 @@ async def test_scan_task_no_hosts_triggered_skips_poll(monkeypatch):
         lambda _plan_run_id, is_final=False: ([], ["host-1"]),
     )
 
-    with patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()):
+    with patch("backend.realtime.socketio_server.call_agent_control", new=AsyncMock(return_value=True)):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
@@ -311,7 +313,46 @@ async def test_scan_task_records_zero_artifacts_after_poll_exhausted(monkeypatch
 
     assert "saq_scan_no_artifacts plan_run=42" in caplog.text
     record_archive.assert_called_once_with(
-        42, hosts_triggered=1, artifacts_registered=0, hosts_with_artifacts=0
+        42, hosts_triggered=1, artifacts_registered=0, hosts_with_artifacts=0,
+        hosts_not_acked=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_scan_task_records_no_ack_hosts(monkeypatch, caplog):
+    """Agent 未回执 scan_now 的 host 记入 archive，不再静默丢失。"""
+    from backend.realtime import socketio_server
+    from backend.tasks import saq_tasks
+
+    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_calls = 0
+
+    async def fake_to_thread(fn, *a, **kw):
+        nonlocal scan_calls
+        if fn is scan_sync:
+            scan_calls += 1
+            return "1" if scan_calls == 1 else ""
+        if fn is hosts_done:
+            return 1
+        return fn(*a, **kw)
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock()
+    with caplog.at_level("WARNING"), _scan_task_env(
+        saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
+        to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
+        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+    ):
+        # 覆盖 fixture 的 ack mock：只有 host-2 回执
+        socketio_server.call_agent_control.side_effect = (
+            lambda host_id, command, **kw: host_id == "host-2"
+        )
+        await saq_tasks.scan_task({}, plan_run_id=49, is_final=True)
+
+    assert "saq_scan_emit_no_ack plan_run=49 hosts=host-1" in caplog.text
+    record_archive.assert_called_once_with(
+        49, hosts_triggered=2, artifacts_registered=1, hosts_with_artifacts=1,
+        hosts_not_acked=1,
     )
 
 
@@ -343,7 +384,8 @@ async def test_scan_task_counts_final_registration_attempt(monkeypatch):
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
     record_archive.assert_called_once_with(
-        42, hosts_triggered=1, artifacts_registered=1, hosts_with_artifacts=1
+        42, hosts_triggered=1, artifacts_registered=1, hosts_with_artifacts=1,
+        hosts_not_acked=0,
     )
 
 
@@ -381,7 +423,8 @@ async def test_scan_task_final_scan_runs_on_partial_coverage(monkeypatch):
         await saq_tasks.scan_task({}, plan_run_id=43, is_final=True)
 
     record_archive.assert_called_once_with(
-        43, hosts_triggered=2, artifacts_registered=2, hosts_with_artifacts=2
+        43, hosts_triggered=2, artifacts_registered=2, hosts_with_artifacts=2,
+        hosts_not_acked=0,
     )
 
 
@@ -420,7 +463,8 @@ async def test_scan_task_chains_on_partial_coverage_with_warning(monkeypatch, ca
     assert "saq_scan_partial_artifacts plan_run=44 hosts=1/2" in caplog.text
     assert "saq_scan_no_artifacts" not in caplog.text
     record_archive.assert_called_once_with(
-        44, hosts_triggered=2, artifacts_registered=2, hosts_with_artifacts=1
+        44, hosts_triggered=2, artifacts_registered=2, hosts_with_artifacts=1,
+        hosts_not_acked=0,
     )
     functions = [c.kwargs["function"] for c in job_cls.call_args_list]
     assert functions == ["upload_task", "merge_task"]

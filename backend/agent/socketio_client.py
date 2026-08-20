@@ -141,6 +141,10 @@ class AgentSocketIOClient:
                         self._control_handler(data)
                     except Exception as e:
                         logger.warning("sio_control_handler_error: %s", e)
+                        return {"ok": False, "error": str(e)[:200]}
+                # P2-4：返回 dict 即 SocketIO ack——控制面 scan_now 等命令据此
+                # 判断「已送达」，离线/未回执 host 不再静默丢失。
+                return {"ok": True}
 
             @sio.on("verify_scripts", namespace="/agent")
             def _on_verify_scripts(data):
