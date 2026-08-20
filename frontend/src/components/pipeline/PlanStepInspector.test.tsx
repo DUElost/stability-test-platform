@@ -417,16 +417,50 @@ describe('PlanStepInspector', () => {
       expect(input).toHaveValue(45);
     });
 
-    it('超时填 0 落回默认 30 秒（想要不限须清空输入框）', () => {
+    it('超时填 0 夹到 1，不再静默落 30', () => {
       const onUpdateStep = vi.fn();
       render(<Harness onUpdateStep={onUpdateStep} />);
 
-      // parseInt('0') 为 falsy，走 || 30 分支
       fireEvent.change(within(fieldOf('超时 (秒)')).getByRole('spinbutton'), {
         target: { value: '0' },
       });
 
-      expect(lastStep(onUpdateStep).timeout_seconds).toBe(30);
+      expect(lastStep(onUpdateStep).timeout_seconds).toBe(1);
+    });
+
+    it('切换步骤后 TimeoutInput 草稿不跨步骤残留', () => {
+      const stepA = makeStep({ step_id: 'step_a', timeout_seconds: 30 });
+      const stepB = makeStep({ step_id: 'step_b', timeout_seconds: 600 });
+      const { rerender } = render(
+        <MemoryRouter>
+          <PlanStepInspector
+            step={stepA}
+            phase="init"
+            index={0}
+            scripts={SCRIPTS}
+            onUpdateStep={() => {}}
+          />
+        </MemoryRouter>,
+      );
+
+      const input = within(fieldOf('超时 (秒)')).getByRole('spinbutton');
+      fireEvent.change(input, { target: { value: '123' } });
+      expect(input).toHaveValue(123);
+
+      // 模拟 PlanEditPage 切换选中步骤：step_id 变化 → TimeoutInput 重挂载
+      rerender(
+        <MemoryRouter>
+          <PlanStepInspector
+            step={stepB}
+            phase="init"
+            index={0}
+            scripts={SCRIPTS}
+            onUpdateStep={() => {}}
+          />
+        </MemoryRouter>,
+      );
+
+      expect(within(fieldOf('超时 (秒)')).getByRole('spinbutton')).toHaveValue(600);
     });
 
     it('重试次数夹在 0..5', () => {

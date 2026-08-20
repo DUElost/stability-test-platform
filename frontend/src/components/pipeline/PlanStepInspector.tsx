@@ -486,7 +486,7 @@ function TimeoutInput({
         const raw = e.target.value;
         setDraft(raw);
         if (raw === '') return;
-        onUpdateStep({ ...step, timeout_seconds: Math.max(1, parseInt(raw, 10) || 30) });
+        onUpdateStep({ ...step, timeout_seconds: Math.max(1, parseInt(raw, 10) || 1) });
       }}
       onBlur={() => setDraft(null)}
       className={className}
@@ -515,6 +515,7 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
         <div className="grid grid-cols-2 gap-1.5">
           <FieldGroup label="超时 (秒)">
             <TimeoutInput
+              key={step.step_id}
               step={step}
               onUpdateStep={onUpdateStep}
               readOnly={readOnly}
