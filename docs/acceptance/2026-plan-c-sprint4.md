@@ -7,6 +7,11 @@
 
 > 「自动化」列是单一事实源；本表为场景索引，步骤细节以测试代码为准。
 
+> **#213 Track A 后（2026-08-12）**：本表 AC-S4-06/07/08/10/12 涉及的
+> `upload_events` / `upload_event_dirs` 已删除，事件上送仅经 EventUploader +
+> DLE（ADR-0028 过滤模型）；相关 AC 仅作历史追溯，现状以
+> [implementation-spec](../design/2026-device-log-event-implementation-spec.md) 为准。
+
 ---
 
 ## Sprint 4 — Agent 本地 scan + 按需上送 + 控制面 merge
