@@ -9,6 +9,10 @@
 > 本文档为 Sprint 4 真机联调验证记录模板。每项检查点需填写：实际结果、证据（命令输出/截图/日志片段）、操作人、时间。
 > 验证全部通过后，作为 #30 真机签字依据，勾选验收矩阵发版勾选最后一项。
 
+> **#213 Track A 后（2026-08-12）**：AC-R-05/06 的 `upload_events` 触发步骤
+> 已由 EventUploader 30s 轮询取代（`STP_EVENT_UPLOADER_CONTINUOUS=0` 过滤模型，
+> 控制面 `upload_task` 标记 `UPLOAD_PENDING`）；本模板相关步骤仅作历史追溯。
+
 ---
 
 ## 环境信息
