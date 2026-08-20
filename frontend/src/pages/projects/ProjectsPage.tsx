@@ -130,9 +130,7 @@ export default function ProjectsPage() {
       )}
 
       {isLoading ? (
-        <PageSkeleton>
-          <PageSkeleton.Cards count={3} />
-        </PageSkeleton>
+        <PageSkeleton.Cards count={3} layout="grid" />
       ) : isError ? (
         <ErrorState
           title="加载项目失败"

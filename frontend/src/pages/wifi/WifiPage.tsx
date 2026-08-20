@@ -36,7 +36,7 @@ export default function WifiPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(FORM_INITIAL);
 
-  const { data: pools = [], isLoading, isError } = useQuery({
+  const { data: pools = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['resource-pools', 'loads'],
     queryFn: () => api.resourcePools.listLoads(),
     refetchInterval: 15000,
@@ -234,7 +234,7 @@ export default function WifiPage() {
         <CardContent>
           {isError && (
             <div className="mb-4">
-              <InlineError message="WiFi 资源池加载失败，请检查后端服务连接。" />
+              <InlineError message="WiFi 资源池加载失败，请检查后端服务连接。" onRetry={() => void refetch()} />
             </div>
           )}
           {isLoading ? (

@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<!-- 脱敏样例：结构与真机文件一致（SIM 属性合并为全局参数），值均为示例，勿用于真实环境 -->
+<TestSet name="UiAutomatorTestData" TakeScreenshot="true">
+  <SIM wifiName="example-wifi" />
+  <SIM wifiPWD="example-pass" />
+  <SIM number="13800000000" />
+  <SIM googleAccount="example@example.com" />
+  <SIM googlePWD="example-gpwd" />
+  <TestPackage appPackageName="com.tinno.reliabilityuiautomatortest.test.cases.honor" runner="androidx.test.runner.AndroidJUnitRunner">
+    <TestCase name="ImitationRM_AgeingTest">
+      <TestMethod name="test_Reliability0138_SetLock" />
+    </TestCase>
+  </TestPackage>
+</TestSet>

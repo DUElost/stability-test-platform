@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api, toApiError, NotificationChannel, AlertRule } from '@/utils/api';
+import { formatDateTimeLocale } from '@/utils/format';
 import { notificationKeys } from '@/utils/api/queryKeys';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -587,7 +588,7 @@ function NotificationLogsTab() {
                         <p className={cn('text-xs mt-1.5 whitespace-pre-wrap', TEXT.caption)}>{log.message}</p>
                       )}
                       <span className={cn('text-[10px] mt-2 block', TEXT.caption)}>
-                        {log.created_at ? new Date(log.created_at).toLocaleString('zh-CN') : ''}
+                        {formatDateTimeLocale(log.created_at, '')}
                       </span>
                     </div>
                   </div>

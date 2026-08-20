@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<!-- 构造样例：覆盖 PASS / FAILURE / ERROR / INCOMPLETE、screenshot、regression、battery、
+     多轮次（同名 testpoint 两条）、多 testcase（tests=2）与根元素 <testpoints> 计数场景 -->
+<testpoints taskname="模拟老化(仿RM老化+MTBF)_Trassion_2023_8_23" >
+  <testpoint id="0" name="关闭软件商店的Wian自动更新消息提醒开关" tests="1" failures="0" time="12345" starttime="1750000000000" endtime="1750000012345" startbattery="95" stopbattery="94" regression="0">
+    <testcase type="uiautomator2" serialnumber="MTK0001" devicename="device A" command="am instrument -w -e class com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest#test_Reliability0141_CloseStoreWlan com.tinno.reliabilityuiautomatortest.test/androidx.test.runner.AndroidJUnitRunner" package="com.tinno.reliabilityuiautomatortest.test" classname="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" name="test_Reliability0141_CloseStoreWlan" time="12345" starttime="1750000000000" endtime="1750000012345">
+    </testcase>
+  </testpoint>
+  <testpoint id="0" name="关闭软件商店的Wian自动更新消息提醒开关" tests="1" failures="1" time="9988" starttime="1750000100000" endtime="1750000109988" startbattery="94" stopbattery="93" regression="1">
+    <testcase type="uiautomator2" serialnumber="MTK0001" devicename="device A" command="am instrument -w -e class com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest#test_Reliability0141_CloseStoreWlan com.tinno.reliabilityuiautomatortest.test/androidx.test.runner.AndroidJUnitRunner" package="com.tinno.reliabilityuiautomatortest.test" classname="com.tinno.reliabilityuiautomatortest.test.cases.honor.ImitationRM_AgeingTest" name="test_Reliability0141_CloseStoreWlan" time="9988" starttime="1750000100000" endtime="1750000109988" screenshot="/sdcard/results/ScreenShots_crash/xxx.png">
+      <failure>assert failed: expected wifi dialog, got nothing
+</failure>
+    </testcase>
+  </testpoint>
+  <testpoint id="0" name="重复打开Photos，传音项目" tests="2" failures="0" time="7777" starttime="1750000200000" endtime="1750000207777" startbattery="93" stopbattery="92" regression="0">
+    <testcase type="uiautomator2" serialnumber="MTK0001" devicename="device A" command="am instrument -w -e class com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion#test_Photos com.tinno.reliabilityuiautomatortest.test/androidx.test.runner.AndroidJUnitRunner" package="com.tinno.reliabilityuiautomatortest.test" classname="com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion" name="test_Photos" time="4000" starttime="1750000200000" endtime="1750000204000">
+    </testcase>
+    <testcase type="uiautomator2" serialnumber="MTK0001" devicename="device A" command="am instrument -w -e class com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion#test_Photos com.tinno.reliabilityuiautomatortest.test/androidx.test.runner.AndroidJUnitRunner" package="com.tinno.reliabilityuiautomatortest.test" classname="com.tinno.reliabilityuiautomatortest.test.cases.honor.RelaibalityOreoTestTranssion" name="test_Photos" time="3777" starttime="1750000204000" endtime="1750000207777">
+      <error>exception during instrumentation: process crashed
+</error>
+    </testcase>
+  </testpoint>
+</testpoints>

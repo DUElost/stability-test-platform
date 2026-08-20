@@ -52,6 +52,26 @@ def test_build_remote_script_includes_allowlisted_env_overrides():
     assert decoded["AGENT_INSTALL_DIR"] == "/opt/stability-test-agent"
 
 
+def test_build_remote_script_preserves_host_local_mtbf_resources():
+    """resources/mtbf/ 是 host 级手工布放（APK 不在仓库 tarball 内），
+    rsync --delete 必须排除它，否则每次 hot-update 清空 MTBF 资源
+    （冒烟 #214/#216「APK 不存在」根因）。"""
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        tar_path="/tmp/stp-agent-update.tar.gz",
+        user="android",
+        group="android",
+    )
+
+    assert "sudo rsync -av --delete" in script
+    assert "--exclude='resources/mtbf/'" in script
+    # 排除项必须在 --delete 生效范围内（同一条 rsync 命令）
+    delete_pos = script.index("sudo rsync -av --delete")
+    exclude_pos = script.index("--exclude='resources/mtbf/'")
+    assert exclude_pos > delete_pos
+
+
 def test_build_remote_script_includes_agent_secret_update_when_enabled():
     secret = "sync-secret-1234567890"
     script = _build_remote_script(

@@ -23,7 +23,7 @@ export default function UsersPage() {
   const { data: currentUser } = useAuthSession();
 
   // Fetch users list
-  const { data: users, isLoading, error } = useQuery({
+  const { data: users, isLoading, error, refetch } = useQuery({
     queryKey: ['users'],
     queryFn: () => api.users.list(0, 200).then(res => res.items),
   });
@@ -126,10 +126,11 @@ export default function UsersPage() {
         <PageHeader title="用户管理" subtitle="管理系统用户和权限" />
         <InlineError
           message={
-            error instanceof Error
-              ? `加载用户失败：${error.message}`
+            error
+              ? `加载用户失败：${toApiError(error).message}`
               : '加载用户失败，请确认已使用管理员账号登录'
           }
+          onRetry={() => void refetch()}
         />
       </PageContainer>
     );
