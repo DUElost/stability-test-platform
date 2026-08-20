@@ -155,12 +155,11 @@ def bulk_assign_project(
             continue
         from_key = device.project.project_key if device.project else None
         device.project_id = project.id
-        db.flush()
         record_audit(
             db,
             action="assign_project",
             resource_type="device",
-            resource_id=device.id,
+            resource_id=device.id,  # id 已存在，无需 flush 取号
             details={
                 "project_key": project.project_key,
                 "from_project_key": from_key,
@@ -169,6 +168,7 @@ def bulk_assign_project(
             username=current_user.username,
             request=request,
         )
+    # 全部 UPDATE + audit 累积后单次 flush+commit（545 台批量归属不逐台往返）
     db.commit()
 
     items = []
@@ -202,6 +202,9 @@ def list_devices(
 
     # ADR-0029：项目归属筛选（project_id NULL 的设备不命中——筛选 = 只显示该项目）
     if project_key:
+        # 未知 key 一律 404（与 projects 路由同语义；防「拼错 key 静默空列表」）
+        if db.query(TestProject).filter(TestProject.project_key == project_key).first() is None:
+            raise HTTPException(status_code=404, detail="project not found")
         query = query.join(TestProject, Device.project_id == TestProject.id) \
                      .filter(TestProject.project_key == project_key)
 

@@ -719,6 +719,9 @@ def list_plans(
 ):
     plans = db.query(Plan)
     if project_key:
+        # 未知 key 一律 404（与 projects 路由同语义）
+        if db.query(TestProject).filter(TestProject.project_key == project_key).first() is None:
+            raise HTTPException(status_code=404, detail="project not found")
         plans = plans.join(TestProject, Plan.project_id == TestProject.id) \
                      .filter(TestProject.project_key == project_key)
     plans = plans.order_by(Plan.created_at.desc())\
