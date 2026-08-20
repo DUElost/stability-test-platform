@@ -84,6 +84,8 @@ class PlanRun(Base):
 
     plan = relationship("Plan", foreign_keys=[plan_id],
                         back_populates="runs")
+    # ADR-0029：归属项目（project_id 快照语义——Plan 改归属不影响历史 Run）
+    project = relationship("TestProject", foreign_keys=[project_id])
     jobs = relationship("backend.models.job.JobInstance",
                         back_populates="plan_run", lazy="dynamic")
 

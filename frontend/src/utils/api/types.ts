@@ -299,6 +299,8 @@ export interface RecentRun {
   task_type: string;
   status: string;
   risk_level: string;
+  /** ADR-0029：归属项目 key（plan_run 快照） */
+  project_key?: string | null;
   duration_seconds: number | null;
   started_at: string | null;
   finished_at: string | null;
@@ -904,6 +906,8 @@ export interface Plan {
   auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
+  /** ADR-0029：当前归属项目 key（F2 口径；标签/筛选用） */
+  project_key?: string | null;
   created_by?: string | null;
   created_at: string;
   updated_at: string;
@@ -1059,6 +1063,8 @@ export interface PlanRun {
   chain_index?: number;
   next_plan_triggered?: boolean;
   plan_name?: string | null;
+  /** ADR-0029：归属项目 key（plan_run 快照，F2 口径） */
+  project_key?: string | null;
   capabilities?: PlanRunCapabilities | null;
   /** ADR-0026 admission queue — null/absent for legacy runs. */
   queue_reason?: 'DEVICE_BUSY' | 'RESOURCE_BUSY' | 'PRIORITY_WAIT' | 'PRECHECK_STALE' | string | null;

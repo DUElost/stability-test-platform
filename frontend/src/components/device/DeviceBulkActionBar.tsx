@@ -1,4 +1,4 @@
-import { Activity, CheckCheck, Copy, Download, Tags, X } from 'lucide-react';
+import { Activity, CheckCheck, Copy, Download, FolderKanban, Tags, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface DeviceBulkActionBarProps {
@@ -8,8 +8,11 @@ interface DeviceBulkActionBarProps {
   statusSummary?: string;
   canEditTags?: boolean;
   tagUpdatePending?: boolean;
+  /** ADR-0029：批量归入项目（admin 动作，非 admin 不显示入口） */
+  canAssignProject?: boolean;
   onSelectAllFiltered: () => void;
   onEditTags: () => void;
+  onAssignProject?: () => void;
   onCopySerials: () => void;
   onExport: () => void;
   onViewMetrics: () => void;
@@ -23,8 +26,10 @@ export default function DeviceBulkActionBar({
   statusSummary,
   canEditTags = false,
   tagUpdatePending = false,
+  canAssignProject = false,
   onSelectAllFiltered,
   onEditTags,
+  onAssignProject = () => {},
   onCopySerials,
   onExport,
   onViewMetrics,
@@ -81,6 +86,19 @@ export default function DeviceBulkActionBar({
             >
               <Tags className="h-3.5 w-3.5" />
               {tagUpdatePending ? '更新中…' : '批量标签'}
+            </Button>
+          )}
+
+          {canAssignProject && (
+            <Button
+              size="sm"
+              variant="default"
+              data-testid="device-bulk-assign-project"
+              onClick={onAssignProject}
+              className="gap-1"
+            >
+              <FolderKanban className="h-3.5 w-3.5" />
+              归入项目
             </Button>
           )}
 

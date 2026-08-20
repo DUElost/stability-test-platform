@@ -2,8 +2,13 @@ import apiClient from './client';
 import type { ResultsSummary, ActivityResponse, DeviceMetricsResponse, CompletionTrendResponse, DashboardSummary, FileServerOverview, HostFailureRateResponse, PlanSuccessRateResponse, PlanRunPassRateTrendResponse } from './types';
 
 export const results = {
-  summary: (limit?: number) =>
-    apiClient.get<ResultsSummary>('/results/summary', { params: limit ? { limit } : {} }).then(r => r.data),
+  summary: (limit?: number, projectKey?: string) =>
+    apiClient.get<ResultsSummary>('/results/summary', {
+      params: {
+        ...(limit ? { limit } : {}),
+        ...(projectKey ? { project_key: projectKey } : {}),
+      },
+    }).then(r => r.data),
 };
 
 export const stats = {

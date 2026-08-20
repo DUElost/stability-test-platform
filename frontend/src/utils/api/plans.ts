@@ -3,8 +3,10 @@ import { unwrapApiResponse } from './client';
 import type { Plan, PlanChainTailCreate, PlanCreate, PlanUpdate, PlanRun, PlanRunCreate, PlanRunPreview } from './types';
 
 export const plans = {
-  list: (skip = 0, limit = 50) =>
-    unwrapApiResponse<Plan[]>(apiClient.get('/plans', { params: { skip, limit } })),
+  list: (skip = 0, limit = 50, projectKey?: string) =>
+    unwrapApiResponse<Plan[]>(apiClient.get('/plans', {
+      params: { skip, limit, ...(projectKey ? { project_key: projectKey } : {}) },
+    })),
 
   get: (id: number) =>
     unwrapApiResponse<Plan>(apiClient.get(`/plans/${id}`)),

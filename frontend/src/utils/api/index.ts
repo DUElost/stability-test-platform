@@ -9,6 +9,7 @@ export { auth } from './auth';
 export { hosts, heartbeat, hotUpdate, agentInstall, fetchHostList, coerceHostList } from './hosts';
 export { jobs } from './jobs';
 export { devices, fetchAllDevices } from './devices';
+export { projects, assignDevicesToProject } from './projects';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
 export { actionTemplates, scripts } from './tools';
@@ -31,6 +32,7 @@ export type {
   NotificationChannel, AlertRule, NotificationLog, NotificationLogsResponse, UnreadCountResponse,
   TaskSchedule, TaskScheduleCreatePayload, TaskScheduleUpdatePayload, ScheduleRunNowResult,
   PaginatedResponse,
+  Project, ProjectSummary, ProjectDetail, RecentProjectRun,
   ScriptEntry,
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
   PipelineStep, PipelinePhase, PipelinePatrol, PipelineDef,
@@ -48,6 +50,7 @@ import { auth } from './auth';
 import { hosts, heartbeat, hotUpdate, agentInstall } from './hosts';
 import { jobs } from './jobs';
 import { devices } from './devices';
+import { projects, assignDevicesToProject } from './projects';
 import { logs } from './logs';
 import { pipeline } from './pipeline';
 import { actionTemplates, scripts } from './tools';
@@ -66,6 +69,8 @@ export const api = {
   hotUpdate,
   agentInstall,
   devices,
+  projects,
+  assignDevicesToProject,
   logs,
   pipeline,
   results,

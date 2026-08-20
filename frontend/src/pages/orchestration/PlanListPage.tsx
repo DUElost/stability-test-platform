@@ -15,6 +15,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { Plus, Edit, Trash2, Search, FileText, Play } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
+import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
 import { STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatLocalDate } from '@/utils/format';
@@ -26,6 +27,8 @@ export default function PlanListPage() {
   const confirmDialog = useConfirm();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
+  // ADR-0029：页面级项目筛选（无全局选择器/跨页跟随）
+  const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
 
   const {
     data: plans,
@@ -34,9 +37,11 @@ export default function PlanListPage() {
     error,
     refetch,
   } = useQuery({
-    queryKey: planKeys.list(100),
-    queryFn: () => api.plans.list(0, 100),
+    queryKey: planKeys.list(100, projectKey),
+    queryFn: () => api.plans.list(0, 100, projectKey),
   });
+
+  const isProject404 = isError && toApiError(error).status === 404;
 
   const deleteMutation = useMutation({
     mutationFn: (plan: Plan) => api.plans.delete(plan.id, plan.updated_at),
@@ -72,7 +77,18 @@ export default function PlanListPage() {
 
   return (
     <PageContainer width="list">
-      <PageHeader title="Plan 编排" subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链" />
+      <PageHeader
+        title="Plan 编排"
+        subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链"
+        action={
+          <ProjectFilterSelect
+            value={projectKey}
+            onChange={setProjectKey}
+            className="w-52"
+            testId="plan-project-filter"
+          />
+        }
+      />
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
@@ -118,9 +134,17 @@ export default function PlanListPage() {
         </PageSkeleton>
       ) : isError ? (
         <ErrorState
-          title="加载 Plan 列表失败"
-          description={(error as Error)?.message || '请检查网络连接或稍后重试'}
-          onRetry={() => void refetch()}
+          // 未知项目 key：按错误态渲染（后端统一 404），不吞成空列表
+          title={isProject404 ? '项目不存在' : '加载 Plan 列表失败'}
+          description={isProject404
+            ? `项目 "${projectKey}" 不存在，请清除筛选或核对 key`
+            : (error as Error)?.message || '请检查网络连接或稍后重试'}
+          onRetry={isProject404 ? undefined : () => void refetch()}
+          action={isProject404 ? (
+            <Button variant="outline" onClick={() => setProjectKey(undefined)}>
+              清除项目筛选
+            </Button>
+          ) : undefined}
         />
       ) : filtered.length === 0 ? (
         search ? (
@@ -145,6 +169,7 @@ export default function PlanListPage() {
                 <div className="min-w-0 flex-1 space-y-3">
                   <div className="flex items-center gap-2">
                     <h3 className={cn('font-medium truncate', TEXT.heading)}>{plan.name}</h3>
+                    <ProjectKeyBadge projectKey={plan.project_key} />
                     {plan.next_plan_id != null && (
                       <Badge variant="info" className="text-xs px-1.5 py-0.5">链式</Badge>
                     )}
