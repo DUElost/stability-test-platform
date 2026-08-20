@@ -85,7 +85,7 @@ class Device(Base):
     project_id          = Column(Integer, ForeignKey("test_project.id"), nullable=True)
 
     host = relationship("backend.models.host.Host", foreign_keys=[host_id])
-    project = relationship("backend.models.test_project.TestProject", foreign_keys=[project_id])
+    project = relationship("backend.models.project.TestProject", foreign_keys=[project_id])
 
     __table_args__ = (
         Index("idx_device_host", "host_id"),

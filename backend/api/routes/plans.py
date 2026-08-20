@@ -23,7 +23,7 @@ from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
-from backend.models.test_project import TestProject
+from backend.models.project import TestProject
 from backend.services.script_progress_capability import script_supports_progress
 from backend.models.resource_pool import ResourcePool
 from backend.services.plan_dispatcher_core import plan_steps_consumes_wifi

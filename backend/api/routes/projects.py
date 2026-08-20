@@ -26,7 +26,7 @@ from backend.core.database import get_db
 from backend.models.host import Device
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.models.test_project import TestProject
+from backend.models.project import TestProject
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
