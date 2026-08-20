@@ -109,5 +109,5 @@ class TestRunReportFromJobChain:
         cached_response = client.get(f"/api/v1/runs/{job_id}/report/cached", headers=auth_headers)
         assert cached_response.status_code == 200
         cached_data = cached_response.json()
-        assert cached_data["run"]["id"] == job_id
-        assert cached_data["summary_metrics"]["restarts"] == 2
+        assert cached_data["data"]["run"]["id"] == job_id
+        assert cached_data["data"]["summary_metrics"]["restarts"] == 2
