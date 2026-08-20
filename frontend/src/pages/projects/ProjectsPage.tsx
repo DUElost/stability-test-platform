@@ -14,7 +14,7 @@ import {
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
-import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -130,7 +130,7 @@ export default function ProjectsPage() {
       )}
 
       {isLoading ? (
-        <LoadingGrid count={3} columns={3} component={CardSkeleton} />
+        <PageSkeleton.Cards count={3} layout="grid" />
       ) : isError ? (
         <ErrorState
           title="加载项目失败"

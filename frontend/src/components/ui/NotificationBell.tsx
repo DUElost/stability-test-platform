@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, CheckCheck, AlertTriangle, Info, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
+import { formatDateTimeLocale } from '@/utils/format';
 import { useSocketIO } from '@/hooks/useSocketIO';
 import { WS_DASHBOARD_ENDPOINT } from '@/config';
 import { BORDER, ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
@@ -136,7 +137,7 @@ export function NotificationBell() {
                         <p className={cn('text-xs mt-1 line-clamp-2', TEXT.caption)}>{log.message}</p>
                       )}
                       <span className={cn('text-[10px] mt-1', TEXT.caption)}>
-                        {log.created_at ? new Date(log.created_at).toLocaleString('zh-CN') : ''}
+                        {formatDateTimeLocale(log.created_at, '')}
                       </span>
                     </div>
                     {!log.read && <div className="w-2 h-2 rounded-full bg-primary shrink-0 mt-1.5" />}

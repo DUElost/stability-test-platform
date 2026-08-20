@@ -16,7 +16,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { api } from '@/utils/api';
+import { api, toApiError } from '@/utils/api';
 import { formatTimeLabel } from '@/utils/format';
 import { STATUS_CHIP, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
@@ -182,7 +182,7 @@ export default function HostHotUpdateConfirmDialog({
           ) : detailQ.isError ? (
             <div className={cn('flex items-center gap-2 rounded border-l-4 px-3 py-2 text-xs', 'border-destructive bg-destructive/10 text-destructive')}>
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              {(detailQ.error as Error)?.message || '拉取主机失败'}
+              {detailQ.error ? toApiError(detailQ.error).message : '拉取主机失败'}
             </div>
           ) : !hasActive ? (
             <div
