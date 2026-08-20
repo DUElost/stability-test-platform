@@ -52,6 +52,12 @@ def finish_mod():
 
 
 @pytest.fixture(scope="module")
+def finish_mod_v14():
+    """mtbf_finish v1.4.0：NFS JSON metrics 补 suite_sha256（与 init trace 闭环）。"""
+    return _load("mtbf_finish_mod_v14", "mtbf_finish/v1.4.0/mtbf_finish.py")
+
+
+@pytest.fixture(scope="module")
 def check_mod():
     return _load("mtbf_check_mod", "mtbf_check/v1.2.0/mtbf_check.py")
 
@@ -327,6 +333,52 @@ class TestPullResults:
         monkeypatch.setattr(finish_mod, "adb", fake_adb)
         _, xml_dir = finish_mod._pull_results()
         assert (xml_dir / "TESTS-RealResult-TestPoints.xml").is_file()
+
+
+# ---------------------------------------------------------------------------
+# mtbf_finish v1.4.0 suite_sha256（结果 JSON 与 init trace 闭环）
+# ---------------------------------------------------------------------------
+
+
+class TestFinishSuiteSha256:
+    def test_run_metrics_include_suite_sha256(self, finish_mod_v14, monkeypatch, tmp_path):
+        xml = b"""<testpoints taskname="t">
+  <testpoint id="0" name="a" tests="1" failures="0" time="1" starttime="0" endtime="1">
+    <testcase type="uiautomator2" classname="c" name="m" time="1" starttime="0" endtime="1"/>
+  </testpoint>
+</testpoints>"""
+        monkeypatch.setattr(finish_mod_v14, "_stop_task", lambda force=True: None)
+        monkeypatch.setattr(finish_mod_v14.time, "sleep", lambda _: None)
+
+        def fake_pull():
+            d = tmp_path / "realresult" / "R1"
+            d.mkdir(parents=True)
+            (d / "TESTS-RealResult-TestPoints.xml").write_bytes(xml)
+            return "R1", d
+
+        monkeypatch.setattr(finish_mod_v14, "_pull_results", fake_pull)
+
+        nfs = tmp_path / "nfs" / "legacy"
+        nfs.mkdir(parents=True)
+        runtask = nfs / "runtask.xml"
+        runtask.write_bytes(b"<runtask times=\"1\"/>")
+        results = tmp_path / "nfs" / "legacy" / "results"
+        monkeypatch.setattr(finish_mod_v14, "suite_dir", lambda project: nfs)
+        monkeypatch.setattr(finish_mod_v14, "results_dir", lambda project: results)
+        monkeypatch.setattr(
+            finish_mod_v14,
+            "sha256_file",
+            lambda p: "abc123" if p == runtask else "",
+        )
+
+        out = finish_mod_v14._run({"project": "legacy"})
+        assert out["metrics"]["suite_sha256"] == "abc123"
+        detail = results / "R1.json"
+        assert detail.is_file()
+        import json
+
+        body = json.loads(detail.read_text(encoding="utf-8"))
+        assert body["metrics"]["suite_sha256"] == "abc123"
 
 
 # ---------------------------------------------------------------------------

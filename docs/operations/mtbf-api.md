@@ -75,6 +75,20 @@ APK 三件套（`OfflineScriptManager.apk` + `ReliabilityUiautomatorTest.apk` + 
 **设备资格前置**：`mtbf_setup` v1.3.0 在 prefs 写入前校验 `adb root`（`id -u` 须为 0）；
 user 构建（`ro.debuggable=0`）直接 fail-fast，需 userdebug/eng 工程包。
 
+## §1.6 P0：中心存储布局与凭据警示（2026-08-20）
+
+`{STP_AEE_NFS_ROOT}/mtbf/{project}/`（生产当前 `legacy`）：
+
+| 路径 | 内容 |
+|------|------|
+| `runtask.xml` / `UiAutomatorTestData.xml` | 派发源，由工具链同步（`/mnt/automation-toolkit/android-tools/stability_MTBF-Test/config`） |
+| `results/{run_dir}.json` | `mtbf_finish` 逐条结果（P2 `test_case_result` 数据源，不扩 artifact 白名单） |
+
+> **凭据警示**：`UiAutomatorTestData.xml` 含**真实 SIM/WiFi/Google 账号凭据（明文）**，且该目录是常规运维可达路径。
+> 禁止将其内容复制进仓库 / 日志 / PR diff / Agent Note；需要夹具或示例时一律脱敏（仓库
+> `backend/agent/tests/fixtures/mtbf/` 已有脱敏样例，`.gitattributes` 标 `-text` 字节级快照）。
+> 与 AGENTS.md「只文档化位置、不复制明文」体例一致。
+
 ## §2 P1：用例集管理（占位）
 
 `test_suite` / `test_case` CRUD + import / export / validate / export-to-tool-dir（约 13 个端点）。

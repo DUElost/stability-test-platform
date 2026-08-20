@@ -54,7 +54,7 @@
   realresult 样例覆盖 PASS/FAILURE/ERROR/多轮/回归/电量。
 - API：`test_mtbf_validate.py`（9，testcontainers PG）+ 鉴权回归注册表（73）——multipart/JSON 两种输入源、401/422/400/413。
 - 平台侧修复：`test_host_updater.py`（rsync exclude 断言）+ `test_agent_env_sync.py`（EXPECTED 同步 / TASK_TIMES 不同步）。
-- 门禁：ruff 0；agent 全量 1065；相关 backend API 104。
+- 门禁：ruff 0；agent 全量 **1073**（含 v1.3.0/v1.4.0 新增用例）；相关 backend API 104。
 - 集成（生产控制面）：scan 注册 3 脚本（setup/finish v1.3.0、check v1.2.0；catalog active 语义见决定了什么 #1）；
   冒烟 Plan「MTBF-专项-冒烟-P0」(id=10) 三步（init 900s / patrol 300s+stall 600s / teardown 3600s，barrier 1800s）；
   真机冒烟 PlanRun #214~#218（见下节）。
@@ -62,7 +62,8 @@
 ## 何时重议
 
 - P1（用例实体 + suite 绑定）落地时：env 预置让位 dispatcher 注入，删除 `STP_MTBF_*` 回退。
-- 真机冒烟收尾（#218 finish JSON 落盘）后：复核 realresult schema 与解析器（设计 §6 冒烟闭环，真实 130 条样本已取回）。
+- 真机冒烟收尾（#218 finish JSON 落盘）后：复核 realresult schema 与解析器（设计 §6 冒烟闭环）——
+  ✅ 已做（38/38 逐条一致，见收尾记录）；P1 建 `test_case_result` 时以 NFS JSON 为数据源做二次抽样。
 - 若 OfflineScriptManager 新版本接线了固定 `@@` 清单 → `OSM_FIXED_REF_UNVERIFIED` 可升级为 error。
 - 若真机轮仍大量快速失败：查用例前置条件（wifi/SIM/`@@g*` 解析——validate 的 GLOBAL_REF_CUSTOM advisory 相关）。
 
@@ -84,7 +85,7 @@
 | #215（用户触发） | FAILED ~20s | **根因②**：device 1（A2WENX6628000033，MLD-LX3，`ro.debuggable=0`）user 构建无法 adb root → prefs push `rc=1`。设备资格前置不满足，非平台缺陷 |
 | #216 | FAILED ~15s | 同根因①（8-195 hot-update 后 APK 被清，当时未修复）→ 触发 rsync 修复 + 全量补布 |
 | #217 | init ✓ → patrol ✓ → abort → teardown finish ✗ | **整条 init→patrol→teardown 链路首次跑通**：setup 28s（v1.3.0 preflight、APK、prefs、RunTaskService、run_dir）；check seq=1..3 + PROGRESS + patrol-heartbeat；设备端一轮 130 testpoint 全量跑完（**全 FAILURE：`UiAutomationService ... already registered`**——设备残留 UiAutomation 连接，重启设备清除）；abort → teardown → **finish 暴露 pull 路径 bug**（`adb pull` 目录保留远端末级名 → v1.2.0 定位 `local_dir/run_dir` 缺 `realresult/` 层）→ finish **v1.3.0 修复** |
-| #218（进行中） | RUNNING | 设备已重启清 UiAutomation；finish v1.3.0 就位；setup init COMPLETED（suite_sha256=649d8d2d…，与 #217 一致） |
+| #218 | **FAILED（abort 收尾，验收通过）** | 设备重启后用例真实执行（首轮 38 条：**30 PASS / 8 FAILURE**）；abort → teardown → **finish v1.3.0 成功落盘** NFS JSON（`mtbf/legacy/results/2026.08.10_18.46.43.036.json`）；**§6 复核 0 不一致**；suite_sha256 与 #217 一致（649d8d2d…） |
 
 **关键实证（冒烟教训）**：
 
@@ -104,20 +105,27 @@
 7. **fleet 补洞脚本坑**：`while read ... | ssh` 会因 ssh 吞 stdin 只处理第一行——批量 SSH 循环用
    `for ip in $(cat ...)` 或 `ssh -n`（本 Note 两次踩坑，勿再犯）。
 
-## 冒烟收尾指引（#218）
+## 冒烟收尾记录（#218，已完成）
 
-- 监控：`/tmp/mtbf_check_{serial}.json` seq 递增 + PROGRESS；首 testpoint 判别（>2min/条=真实轮；~2.5s=快速失败轮）；
-- 判据：setup step_trace `suite_sha256`（✅ 已两次拿到）；check PROGRESS（✅）；**finish 后
-  `{STP_AEE_NFS_ROOT}/mtbf/legacy/results/{run_dir}.json` 落盘（待 #218 验证）**；
-- 收尾动作：设备端跑完（`testpoints_done=130` 或服务死亡 2 周期）→ abort → 校验 NFS JSON + teardown trace；
-- 复核：设备端原始 XML 已快照（`/tmp/mtbf_device_results/`，130 条真实样本）与 NFS JSON 比对，做 P0 设计 §6 闭环。
+按判据执行：`POST /api/v1/plan-runs/218/abort` → run 终态 FAILED（aborted=1）→ teardown 执行 →
+**finish v1.3.0 成功**（pull 路径修复生效）→ NFS `mtbf/legacy/results/2026.08.10_18.46.43.036.json` 落盘
+（`entries=38, passed=30, failed=8, error=0`）→ **§6 复核**：设备端 XML 与 JSON 逐条比对
+**38/38 顺序+状态一致**（PASS/FAILURE 派生、name join 键在真实数据上验证通过）。
+
+- 平台侧证据链：init trace `suite_sha256`（#217/#218 同值）✓；check PROGRESS + patrol-heartbeat ✓；
+  abort→teardown 协议 ✓；finish 结果落盘 ✓。**ADR-0030 D6 P0 真机验收判据全部达成。**
+- **finish v1.4.0**（收尾后新增）：metrics/JSON 补 `suite_sha256`（与 init trace 闭环，对齐设计 §3.5）；
+  Plan 10 已引用 v1.4.0，host 78 已 hot-update；后续轮次 JSON 自带 suite 关联键。
+- 已知平台行为（非缺陷）：teardown step_trace 在 job 终态后上传会被拒（`upload_rejected_ack`）——
+  收尾后 finish 的权威记录是 NFS JSON，不是 DB trace。
 
 ## 遗留（运维跟踪，按优先级）
 
-1. **`STP_MTBF_TASK_TIMES=1` 回滚**——冒烟全部收尾后执行（改回 100 或删除行，代码默认 100）。
-   清单（12 台 IP）：172.21.15.87 / .65 / .66 / .20 / .57 / .58 / .59 / .60 / .74 / .75 / .78 / .79；
-2. **冒烟 #218 收尾**：abort → finish JSON 验证 → §6 复核（真实 130 条样本）；
+1. ~~**`STP_MTBF_TASK_TIMES=1` 回滚**~~ —— ✅ **已完成**（12 台 → `=100`，.env + 进程环境双重验证，2026-08-20）；
+2. ~~**冒烟 #218 收尾**~~ —— ✅ **已完成**（abort → finish JSON → §6 复核 0 不一致，见上节）；
 3. **宿主机时钟同步**（74/75/78 等 drift/回拨，lab NTP 问题）——建议 Ops 处理，影响 patrol 周期准确性；
 4. **设备「UiAutomationService already registered」**：重启设备可清；若复现需查 OSM/test APK 的
    UiAutomation 资源释放（工具链侧，非平台）；
-5. 真机轮用例质量：若重启后仍快速失败，查测试用例前置条件（wifi/SIM/`@@g*` 引用解析）。
+5. 真机轮用例质量：首轮 38 条 30 PASS / 8 FAILURE（正常波动）；批量跑时关注失败率与失败模式分布；
+6. **代码合入**：`mtbf_finish/v1.4.0/`（suite_sha256）与本文收尾段落为 `4bbfefd` 之后的新变更，
+   随下次 commit 合入（含 Plan 10 引用 v1.4.0、host 78 已 hot-update 的部署状态）。

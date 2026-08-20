@@ -13,6 +13,7 @@
 | 日期 | 版本 | 内容 |
 |------|------|------|
 | 2026-08-19 | v1.1（评审修正） | 按评审六项必改修正：① 新增「与 ADR-0029 的关系（显式和解）」——test_suite 是 ADR-0029 非目标 ExecutionProfile 实体族的**例外子集**，不复活挂起决策；② D3 套件项目匹配改为本 ADR 自有门禁 **D3b**，不再引用挂起 D5；③ 脚本命名统一为 `mtbf_setup`/`mtbf_check`/`mtbf_finish` 三件套（monkey 先例），禁止两种命名并存；④ 补 Plan↔Suite↔plan_snapshot↔precheck 绑定说明（D2）；⑤ 优先级改双轨 P0+P1；⑥ 状态传播补齐 DOC-MAP / CLAUDE.md / 05-data-model（实施时）。**状态传播挂靠位**：ADR 头部状态行 / 正文修订记录 / reviews 对应节 / adr README 清单行 / adr README 里程碑行 / DOC-MAP Living 表 / CLAUDE.md 决策表（对齐 ADR-0029 v2.3.1 教训） |
+| 2026-08-20 | v1.2（P0 真机验收） | **D6 P0 验收信号达成**（PlanRun #217/#218，设备 395，abort→teardown→finish 协议）：init `suite_sha256` ✓、PROGRESS + patrol-heartbeat ✓、NFS JSON 落盘 + §6 复核 0 不一致 ✓。验收记录见 [Agent Note](../notes/feature/2026-08-20-mtbf-p0-scripts-and-validate.md)。ADR 整体仍为 Proposed（P1 实体/管理面未实施）。 |
 
 ## 背景
 
@@ -99,7 +100,7 @@ MTBF 专项的用例清单 `runtask.xml`（`/mnt/automation-toolkit/android-tool
 
 | 阶段 | 内容 | 验收信号 |
 |------|------|----------|
-| **P0** | `mtbf_setup`/`mtbf_check`/`mtbf_finish` 脚本组（deploy/start、轮询 + PROGRESS 打戳 + stall_seconds、stop/pull + realresult 解析）；只读预览/校验 API（输入源语义见研究 §5.5）；清单 sha256 留痕 | 一个 Plan 在真机跑通 MTBF 一轮，PlanRun 详情可见用例摘要 JSON |
+| **P0** | `mtbf_setup`/`mtbf_check`/`mtbf_finish` 脚本组（deploy/start、轮询 + PROGRESS 打戳 + stall_seconds、stop/pull + realresult 解析）；只读预览/校验 API（输入源语义见研究 §5.5）；清单 sha256 留痕 | **✅ 已验收（2026-08-20）**：PlanRun #218（abort 收尾）+ #217（整链 init→patrol→设备端 130 条）；init trace `suite_sha256`、NFS `mtbf/legacy/results/{run_dir}.json`、§6 XML↔JSON 复核通过。详见 Agent Note §冒烟收尾记录 |
 | **P1** | `test_suite`/`test_case` 表 + CRUD/import/export/validate + 审计 + CLI + 导出落工具目录 + D2 绑定与 D3b 门禁 | 外部 agent 仅凭 API/CLI 完成「导入既有 130 条 → 改 1 条 → 导出 → 派发」，全程有审计 |
 | **P2** | 前端用例管理页 + PlanRun 逐条用例结果表（`test_case_result`） | 平台页面可浏览用例集与逐条结果，无需 adb |
 
@@ -149,7 +150,7 @@ ADR-0029 非目标明确放弃版本化 ExecutionProfile 实体族（5 张表：
 
 开放问题（详见研究 §7，实施前逐项关闭；评审已定调的项目直接采纳）：
 
-1. 设备端 realresult XML 精确 schema——**已定稿**（2026-08-19 读透 `OfflineScriptManager` 反编译代码，见 [P0 设计 §2](../design/2026-08-mtbf-p0-runner-design.md)：单文件/单运行、`id` 恒 0、按轮累积、name 为 join 键、状态从 testcase 子元素派生）；真机采样复核留 P0 实施冒烟。
+1. 设备端 realresult XML 精确 schema——**已定稿 + 真机复核关闭**（反编译定稿见 [P0 设计 §2](../design/2026-08-mtbf-p0-runner-design.md)；PlanRun #218 NFS JSON vs 设备端 XML **38/38 0 不一致**，见 Agent Note §冒烟收尾记录）。
 2. 工具目录 Agent 可达性——**方案已定**（P0 设计 §4 推荐：清单/全局参数走中心存储 `{STP_AEE_NFS_ROOT}/mtbf/{project}/`，APK 走 Agent resources 目录，逐条结果写回 `mtbf/{project}/results/`）；与 PowerCycle 统一，实施 PR 对齐目录约定。
 3. 外部写权限模型：**初版写 = admin**；`X-Agent-Secret` 只读或限定 import/export，P1 评审定。
 4. `times` 覆盖链定稿：**`task_times` 仅影响 export/deploy**（渲染/部署时的覆盖参数），库内 `root_config.times` 为套件默认值。
@@ -167,6 +168,7 @@ ADR-0029 非目标明确放弃版本化 ExecutionProfile 实体族（5 张表：
 
 - 背景分析：[`docs/reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md`](../reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md)
 - **P0 设计**：[`docs/design/2026-08-mtbf-p0-runner-design.md`](../design/2026-08-mtbf-p0-runner-design.md)（脚本三件套契约 / realresult schema 实测 / 配置与产物通道）
+- **P0 验收记录**：[`docs/notes/feature/2026-08-20-mtbf-p0-scripts-and-validate.md`](../notes/feature/2026-08-20-mtbf-p0-scripts-and-validate.md)（PlanRun #214–#218、fleet 收口、closure 判据）
 - **接口运维**：[`docs/operations/mtbf-api.md`](../operations/mtbf-api.md)（§1 P0 validate / §2 P1 占位）
 - [ADR-0020](../adr/ADR-0020-plan-step-one-shot-migration.md)（脚本目录契约 / default_params 不可变）
 - [ADR-0029](../adr/ADR-0029-project-taxonomy-and-param-layering.md)（项目登记簿 / 脚本路由 / sha256 留痕补偿机制）
