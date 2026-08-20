@@ -16,9 +16,12 @@ on:
 # 并发键统一按 HEAD sha（PR 事件取 head.sha，status 事件取 commit sha）：
 # 同一 head 的所有事件共享一个组，避免 PR 事件 run 与 status 事件 run
 # 分组不同而互相竞写状态（#268 CR 意见）。
+# cancel-in-progress 刻意关闭：final guard 已保证只有最新 run 写状态，
+# 取消反而会留下「writer 被取消且无后继」的空档——2026-08-20 实测 PR head
+# 的 pull_request 运行在 3~7 秒内被取消（日志 "The operation was canceled"），
+# code-rabbit-gate 缺失，PR 全绿却 BLOCKED（#325/#326/#328/#330）。
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.event.sha }}
-  cancel-in-progress: true
 
 # 不给整个 workflow 写权限；各 job 单独声明最小权限。
 permissions:
@@ -67,7 +70,9 @@ jobs:
     # job 名刻意不用 code-rabbit-gate，避免 job check run 与 required commit
     # status 同名，造成 required check 来源歧义。
     # 非 status 事件沿用 PR 条件；status 事件仅 CodeRabbit context 放行
-    # （否则每次 commit status 更新都会触发一次运行）。
+    # （否则每次 commit status 更新都会触发一次运行）。status 事件只对
+    # 默认分支的 commit 触发，PR head 的 gate 由 pull_request / review 事件
+    # 写入——前提是这些运行不被 cancel-in-progress 取消（见并发块注释）。
     if: (github.event_name != 'status' && github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name) || (github.event_name == 'status' && github.event.context == 'CodeRabbit')
     runs-on: ubuntu-latest
     permissions:
