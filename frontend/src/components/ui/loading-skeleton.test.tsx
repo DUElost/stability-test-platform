@@ -34,6 +34,23 @@ describe('PageSkeleton', () => {
     expect(container.querySelectorAll('.h-10.w-10')).toHaveLength(2);
   });
 
+  it('Stats 渲染 count 张统计卡占位，网格随 count 匹配两表真实形态', () => {
+    const { container } = render(<PageSkeleton.Stats count={5} />);
+    expect(container.querySelectorAll('.grid > .rounded-xl')).toHaveLength(5);
+    const grid5 = container.querySelector('.grid') as HTMLElement;
+    expect(grid5.className).toContain('xl:grid-cols-5');
+
+    const { container: c4 } = render(<PageSkeleton.Stats count={4} />);
+    expect(c4.querySelectorAll('.grid > .rounded-xl')).toHaveLength(4);
+    expect((c4.querySelector('.grid') as HTMLElement).className).toContain('xl:grid-cols-4');
+  });
+
+  it('Stats 拒绝非法 count（负数/小数/非有限/超上限）', () => {
+    for (const bad of [0, -1, 2.5, NaN, Infinity, 13]) {
+      expect(() => render(<PageSkeleton.Stats count={bad} />)).toThrow(/1-12/);
+    }
+  });
+
   it('积木组合由 PageSkeleton 容器统一纵向堆叠', () => {
     const { container } = render(
       <PageSkeleton>

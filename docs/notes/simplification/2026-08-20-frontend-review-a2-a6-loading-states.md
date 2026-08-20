@@ -17,21 +17,25 @@ B7 按其 §7 前置（紧凑/舒适属产品决策，钩子「60+ host 目标�
   渠道卡列表）。**积木不开 className 口子**；count 必填且契约
   「= 成品同区实际条目数」。
 - **删除**：`LoadingGrid`（columns/component 自由度从未被用过——三页
-  全是默认组合）、`StatCardSkeleton`、`TableRowSkeleton`、`StatsGrid` +
-  `StatItem`（含 layout barrel 导出）、tokens 的 `SKELETON_BLOCK`
-  （复制粘贴的载体本身）。
-- 七页迁移：devices/hosts/schedules（Block md+lg）、notifications
-  （List 2 + 记录区 Block lg）、plan-runs/plans/scripts（Cards 2/3/2）。
+  全是默认组合）、`TableRowSkeleton`、`StatsGrid` + `StatItem`（含
+  layout barrel 导出）、tokens 的 `SKELETON_BLOCK`（复制粘贴的载体本身）。
+- **收编三个孤儿**：`CardSkeleton` → Cards 积木；`ListItemSkeleton` →
+  List 积木（Notifications 渠道卡列表）；`StatCardSkeleton` → Stats 积木
+  （**落点在子组件**：`ExpandableDeviceTable` / `ExpandableHostTable`
+  首屏的常驻筛选统计卡行——设备 5 卡、主机 4 卡，页面 loading 分支提前
+  return 时它们尚未挂载）。devices/hosts 加载态用 `Stats count + Block lg`，
+  `Block md` 仅保留给无统计行的上块（schedules）。
+- 七页迁移：devices/hosts（Stats 5/4 + Block lg）、schedules（Block
+  md+lg）、notifications（List 2 + 记录区 Block lg）、
+  plan-runs/plans/scripts（Cards 2/3/2）。
 
-## 与放行指令的偏差（须显式记录）
+## 侦察方法教训（本主题两次方向相反的失误，留档防再犯）
 
-放行时「StatCardSkeleton/ListItemSkeleton 有落点，收」的判断引用了我的
-侦察结论「Devices/Hosts 上块实为统计卡行」——**该结论错误**：两页成品
-均无统计卡行（devices 是提示行+表格，hosts 是工具栏+表格）；真正有
-统计卡的 Results/Dashboard 用 `DashboardStatCard` 自带 loading。逐条
-核实后 `StatCardSkeleton` 无任何落点，按放行者自己的约束 2（无落点即删，
-不留「以后用」）执行删除。`ListItemSkeleton` 落点（Notifications 渠道
-卡列表）核实为真，收编。
+StatCardSkeleton 的落点判断反复了两次：第一次简报说「有」（未核实），
+第二次实施时说「没有」（只 grep 了 pages/ 下两个页面文件）——统计卡行
+渲染在 `Expandable*Table` 子组件内部，页面级结论**必须沿渲染树查到
+子组件**，grep 页面文件不构成证据。同理，形状指纹断言会把当期形态锁死
+为「正确」，它锁定什么取决于侦察给它什么——指纹只防回归，不辨对错。
 
 ## Alternatives
 
@@ -62,9 +66,17 @@ B7 按其 §7 前置（紧凑/舒适属产品决策，钩子「60+ host 目标�
   不可执行**——高度保真原则的可执行域是区块级（页中段）占位；成品不
   超首屏的页（schedules Δ=282、plans Δ=223）保真自然成立，佐证测量
   方法本身有效。
+- StatCardSkeleton 收编补录（#321 后续 PR）：devices/hosts 形状指纹
+  更新为 Stats(5)×3+lg=**16** / Stats(4)×3+lg=**13**（schedules 仍 2），
+  并以成品卡数锁定（设备页 5、主机页 4 个 `aria-label^=筛选` 按钮）
+  防止骨架与子组件漂移。
 
 ## Revisit
 
+- **两条保真原则按尺度互换**（放行方复盘修正）：高度保真（可测量、
+  防下弹）只在**区块级**可执行；**页面级**高度由列表长度主导不可控，
+  结构保真（形状指纹）反而是那里唯一可执行的代理。下次再想在页面级
+  加高度断言时，先读这条。
 - `Block` 现只有 md/lg 两档；新档位需求出现时加具名变体，不开放
   className/任意高度。
 - count 契约（=成品实际条目数）靠评审与形状指纹断言把关，无 lint 强制。

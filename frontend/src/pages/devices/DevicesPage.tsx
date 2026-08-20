@@ -245,7 +245,7 @@ export default function DevicesPage() {
       <PageContainer width="full">
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <PageSkeleton>
-          <PageSkeleton.Block size="md" />
+          <PageSkeleton.Stats count={5} />
           <PageSkeleton.Block size="lg" />
         </PageSkeleton>
       </PageContainer>
