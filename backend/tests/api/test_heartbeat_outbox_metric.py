@@ -42,3 +42,26 @@ def test_heartbeat_extra_records_outbox_metrics(db_session, monkeypatch):
 
     assert ("metric-host-1", "terminal", 3) in recorded
     assert ("metric-host-1", "log_signal", 7) in recorded
+
+
+def test_heartbeat_persists_dead_letter_total(db_session):
+    """#302: log_signal 死信总量落 host.extra，控制面清单 API 可见。"""
+    host = Host(
+        id="dl-host-1",
+        hostname="dl-agent",
+        status="ONLINE",
+        last_heartbeat=datetime.now(timezone.utc),
+    )
+    db_session.add(host)
+    db_session.commit()
+
+    payload = HeartbeatIn(
+        host_id="dl-host-1",
+        status="ONLINE",
+        extra={"log_signal_dead_letter_total": 4},
+    )
+    _process_heartbeat_with_db(payload, db_session)
+    db_session.commit()
+    db_session.refresh(host)
+
+    assert host.extra["log_signal_dead_letter_total"] == 4
