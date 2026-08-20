@@ -273,6 +273,9 @@ def list_plan_runs(
     if status is not None:
         q = q.where(PlanRun.status == status.value)
     if project_key is not None:
+        # 未知 key 一律 404（与 projects 路由同语义）
+        if db.query(TestProject).filter(TestProject.project_key == project_key).first() is None:
+            raise HTTPException(status_code=404, detail="project not found")
         q = q.join(TestProject, PlanRun.project_id == TestProject.id) \
              .where(TestProject.project_key == project_key)
     runs = db.execute(q.offset(skip).limit(limit)).scalars().all()

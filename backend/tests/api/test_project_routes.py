@@ -301,10 +301,54 @@ class TestListFilters:
         assert body["runs_by_status"]["running"] == 1
         assert len(body["recent_runs"]) == 1
 
-    def test_results_summary_unknown_project_404(
+    def test_results_summary_uses_plan_run_snapshot_not_plan_ownership(
+        self, client, auth_headers, db_session, project_a, project_legacy, sample_host
+    ):
+        """D5 快照语义：Plan 改归属后，历史 Run 仍按 plan_run.project_id 过滤。
+
+        修复前按 Plan.project_id 过滤——Plan 挪到 LEGACY 后该 Run 会追溯性
+        改归属（旧实现此测试断言会翻转）。
+        """
+        from backend.models.host import Device
+
+        plan = _make_plan(db_session, "plan-snapshot", project_a)
+        run = _make_run(db_session, plan, status="SUCCESS", project=project_a)
+        # 变更 Plan 的当前归属（P2 上线后的真实操作）
+        plan.project_id = project_legacy.id
+        db_session.commit()
+        device = Device(serial="s-snapshot", host_id=sample_host.id)
+        db_session.add(device)
+        db_session.commit()
+        db_session.add(JobInstance(
+            plan_run_id=run.id, plan_id=plan.id, device_id=device.id,
+            pipeline_def={}, status="COMPLETED",
+        ))
+        db_session.commit()
+
+        # Run 快照仍在 proj-a → 该 key 下可见
+        resp_a = client.get(
+            "/api/v1/results/summary?project_key=proj-a", headers=auth_headers
+        )
+        assert resp_a.status_code == 200
+        assert resp_a.json()["runs_by_status"]["total"] == 1
+
+        # Plan 已挪走但 Run 快照不跟着变 → LEGACY 下为零
+        resp_legacy = client.get(
+            "/api/v1/results/summary?project_key=LEGACY", headers=auth_headers
+        )
+        assert resp_legacy.status_code == 200
+        assert resp_legacy.json()["runs_by_status"]["total"] == 0
+
+    def test_unknown_project_key_404_across_list_endpoints(
         self, client, auth_headers
     ):
-        resp = client.get(
-            "/api/v1/results/summary?project_key=nope", headers=auth_headers
+        """未知 key 四端点语义统一：404（key 是路径段，拼错即路由错误）。"""
+        urls = (
+            "/api/v1/devices?project_key=nope",
+            "/api/v1/plans?project_key=nope",
+            "/api/v1/plan-runs?project_key=nope",
+            "/api/v1/results/summary?project_key=nope",
         )
-        assert resp.status_code == 404
+        for url in urls:
+            resp = client.get(url, headers=auth_headers)
+            assert resp.status_code == 404, url
