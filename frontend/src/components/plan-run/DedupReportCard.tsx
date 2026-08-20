@@ -8,9 +8,14 @@ import { dedupKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
 import { PANEL, TEXT, TOOL_BTN } from '@/design-system';
 import { cn } from '@/lib/utils';
+import type { RunContextExtractSummary, RunContextUploadSummary } from '@/utils/api/types';
 
 interface Props {
   runId: number;
+  /** #300 P3-2: PlanRun.run_context.upload_summary（merge_task 落盘）。 */
+  uploadSummary?: RunContextUploadSummary | null;
+  /** #300 P3-4: PlanRun.run_context.extract（run_extract_sync 落盘）。 */
+  extractSummary?: RunContextExtractSummary | null;
 }
 
 interface ScanArtifact {
@@ -34,7 +39,7 @@ function formatSize(bytes?: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export default function DedupReportCard({ runId }: Props) {
+export default function DedupReportCard({ runId, uploadSummary, extractSummary }: Props) {
   const qc = useQueryClient();
   const toast = useToast();
 
@@ -162,6 +167,31 @@ export default function DedupReportCard({ runId }: Props) {
                 </span>
               </div>
             ))}
+          </div>
+        )}
+
+        {(uploadSummary || extractSummary) && (
+          <div className="space-y-1 border-t pt-2" data-testid="dedup-pipeline-progress">
+            {uploadSummary && (
+              <div className="flex items-center gap-2 text-[11px]" data-testid="upload-summary">
+                <span className={cn('w-12 shrink-0', TEXT.subtitle)}>上送</span>
+                <span className="text-muted-foreground/70">待上送 {uploadSummary.pending}</span>
+                <span className="text-muted-foreground/70">失败 {uploadSummary.failed}</span>
+                <span className="text-muted-foreground/70">已完成 {uploadSummary.remote}</span>
+                {uploadSummary.ready === false && (
+                  <span className="text-destructive">未等齐</span>
+                )}
+              </div>
+            )}
+            {extractSummary && (
+              <div className="flex items-center gap-2 text-[11px]" data-testid="extract-summary">
+                <span className={cn('w-12 shrink-0', TEXT.subtitle)}>提取</span>
+                <span className="text-muted-foreground/70">目标 {extractSummary.targets}</span>
+                <span className="text-muted-foreground/70">已拷贝 {extractSummary.copied}</span>
+                <span className="text-muted-foreground/70">缺失 {extractSummary.missing}</span>
+                <span className="text-muted-foreground/70">已归档 {extractSummary.archived}</span>
+              </div>
+            )}
           </div>
         )}
       </div>

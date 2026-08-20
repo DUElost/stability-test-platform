@@ -86,6 +86,51 @@ def count_remote_events(
     return int(db.execute(stmt).scalar() or 0)
 
 
+def summarize_upload_states(db: Session, plan_run_id: int) -> dict[str, int]:
+    """按 state 分组统计 plan_run 的事件上送进度（→ run_context.upload_summary）。
+
+    与 count_pending_upload_events / count_remote_events 同源：
+    ``pending`` = UPLOAD_PENDING + UPLOADING + UPLOAD_FAILED；
+    ``remote`` = REMOTE + ARCHIVED + PRUNED（可提取/已完成）；
+    LOCAL 是过滤模型下「有意不传」的事件，单独展示便于判断缺口。
+    """
+    rows = db.execute(
+        select(DeviceLogEvent.state, func.count(DeviceLogEvent.id)).where(
+            DeviceLogEvent.plan_run_id == plan_run_id,
+        ).group_by(DeviceLogEvent.state)
+    ).all()
+    by_state = {state: 0 for state in EventState}
+    total = 0
+    for state, n in rows:
+        try:
+            by_state[EventState(state)] = n
+        except ValueError:
+            continue
+        total += n
+    return {
+        "total": total,
+        "detected": by_state[EventState.DETECTED],
+        "pull_failed": by_state[EventState.PULL_FAILED],
+        "local": by_state[EventState.LOCAL],
+        "upload_pending": by_state[EventState.UPLOAD_PENDING],
+        "uploading": by_state[EventState.UPLOADING],
+        "upload_failed": by_state[EventState.UPLOAD_FAILED],
+        "failed": by_state[EventState.UPLOAD_FAILED],
+        "archived": by_state[EventState.ARCHIVED],
+        "pruned": by_state[EventState.PRUNED],
+        "pending": (
+            by_state[EventState.UPLOAD_PENDING]
+            + by_state[EventState.UPLOADING]
+            + by_state[EventState.UPLOAD_FAILED]
+        ),
+        "remote": (
+            by_state[EventState.REMOTE]
+            + by_state[EventState.ARCHIVED]
+            + by_state[EventState.PRUNED]
+        ),
+    }
+
+
 def list_remote_paths_for_extract(db: Session, plan_run_id: int) -> list[str]:
     rows = db.execute(
         select(DeviceLogEvent.remote_path).where(

@@ -31,10 +31,34 @@ _WIN_MERGE_ARGV_CHAR_LIMIT = 30_000
 _merge_files_list_supported: Optional[bool] = None
 
 
+def _read_backend_scan_tool_env() -> Tuple[str, str]:
+    """控制面专用键优先；旧无前缀键兼容回落（#295 平滑过渡）。
+
+    Agent 侧仍读无前缀 ``STP_DEDUP_SCAN_PYTHON/_SCRIPT``（hot-update 经
+    ``STP_AGENT_*`` 源键映射下发），控制面改用 ``STP_BACKEND_DEDUP_SCAN_*``
+    后不再与 Agent 共用键名，避免共用 .env 时角色混淆。
+    回落路径打 WARNING，直到生产 env 迁移完成。
+    """
+    python = os.getenv("STP_BACKEND_DEDUP_SCAN_PYTHON", "").strip()
+    script = os.getenv("STP_BACKEND_DEDUP_SCAN_SCRIPT", "").strip()
+    if python and script:
+        return python, script
+
+    legacy_python = os.getenv("STP_DEDUP_SCAN_PYTHON", "").strip()
+    legacy_script = os.getenv("STP_DEDUP_SCAN_SCRIPT", "").strip()
+    if legacy_python and legacy_script:
+        logger.warning(
+            "scan_tool_legacy_env_fallback python=%s script=%s "
+            "— migrate to STP_BACKEND_DEDUP_SCAN_* (#295)",
+            legacy_python, legacy_script,
+        )
+        return legacy_python, legacy_script
+    return "", ""
+
+
 def resolve_scan_tool() -> Optional[Dict[str, str]]:
-    """从 env 解析 scan 工具解释器 + 脚本路径。未配置返回 None。"""
-    python = os.getenv("STP_DEDUP_SCAN_PYTHON", "").strip()
-    script = os.getenv("STP_DEDUP_SCAN_SCRIPT", "").strip()
+    """从 env 解析**控制面** scan 工具解释器 + 脚本路径。未配置返回 None。"""
+    python, script = _read_backend_scan_tool_env()
     if not python or not script:
         return None
     return {"python": python, "script": script}

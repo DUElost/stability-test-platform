@@ -787,6 +787,26 @@ def main() -> None:
                 "max_concurrent_operations=%d",
                 env_reloaded, adb_reconciled, runner_ok, uploader_ok, operation_cap,
             )
+        elif command == "list_log_signal_dead_letters":
+            # #302: RPC 回传最近死信清单（经 SocketIO ack）。
+            try:
+                limit = int(payload.get("limit") or 100)
+            except (TypeError, ValueError):
+                limit = 100
+            return {
+                "dead_letters": local_db.get_log_signal_dead_letters(limit=limit),
+            }
+        elif command == "replay_log_signal_dead_letter":
+            # #302: 重置死信行重新入队（next drain tick 拉取重发）。
+            row_id = payload.get("row_id")
+            if not isinstance(row_id, int) or row_id <= 0:
+                return {"ok": False, "error": "invalid row_id"}
+            replayed = local_db.replay_log_signal_dead_letter(row_id)
+            logger.info(
+                "control_replay_log_signal_dead_letter row_id=%d replayed=%s",
+                row_id, replayed,
+            )
+            return {"ok": replayed, "row_id": row_id}
         else:
             logger.warning("unknown_control_command: %s", command)
 
@@ -828,6 +848,8 @@ def main() -> None:
         get_outbox_counts=lambda: {
             "terminal_outbox_pending": local_db.count_pending_terminals(),
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),
+            # #302: 死信总量随心跳上报（历史累计，跨 Agent 重启保留）。
+            "log_signal_dead_letter_total": local_db.count_log_signal_dead_letters(),
         },
         # ADR-0025 Sprint 2: 上报归档指标到 extra['archive']（归档禁用时回调返回 None）
         get_archive_metrics=collect_archive_heartbeat_metrics,

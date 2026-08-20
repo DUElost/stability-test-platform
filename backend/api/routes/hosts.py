@@ -906,3 +906,88 @@ def host_install_status(
         "log_path": (result or {}).get("log_path"),
         "result": result,
     }
+
+
+# ── #302: Agent log_signal 死信清单 + 重放（SocketIO RPC）─────────────
+
+
+@router.get("/{host_id}/log-signal-dead-letters")
+async def list_log_signal_dead_letters(
+    host_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    _current_user: User = Depends(require_admin),
+):
+    """拉取 Agent 本地 log_signal 死信清单（admin 只读）。
+
+    经 call_agent_rpc 同步等待 Agent ack：Agent 离线 → 503；
+    RPC 超时/传输失败 → 502。
+    """
+    from backend.realtime.socketio_server import (
+        AgentNotConnectedError,
+        AgentRpcError,
+        call_agent_rpc,
+    )
+
+    try:
+        ack = await call_agent_rpc(
+            host_id,
+            "control",
+            {
+                "command": "list_log_signal_dead_letters",
+                "payload": {"limit": limit},
+            },
+            timeout=10.0,
+        )
+    except AgentNotConnectedError as exc:
+        raise HTTPException(
+            status_code=503, detail=f"agent {host_id} not connected",
+        ) from exc
+    except AgentRpcError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"agent rpc failed: {exc}",
+        ) from exc
+    return {
+        "host_id": host_id,
+        "dead_letters": ack.get("dead_letters") or [],
+    }
+
+
+@router.post("/{host_id}/log-signal-dead-letters/{row_id}/replay")
+async def replay_log_signal_dead_letter(
+    host_id: str,
+    row_id: int,
+    _current_user: User = Depends(require_admin),
+):
+    """重置 Agent 本地死信行并重新入队发送（admin）。
+
+    行不存在或当前不是死信状态 → Agent ack ok=false → 404。
+    """
+    from backend.realtime.socketio_server import (
+        AgentNotConnectedError,
+        AgentRpcError,
+        call_agent_rpc,
+    )
+
+    try:
+        ack = await call_agent_rpc(
+            host_id,
+            "control",
+            {
+                "command": "replay_log_signal_dead_letter",
+                "payload": {"row_id": row_id},
+            },
+            timeout=10.0,
+        )
+    except AgentNotConnectedError as exc:
+        raise HTTPException(
+            status_code=503, detail=f"agent {host_id} not connected",
+        ) from exc
+    except AgentRpcError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"agent rpc failed: {exc}",
+        ) from exc
+    if not ack.get("ok"):
+        raise HTTPException(
+            status_code=404, detail=ack.get("error") or "replay failed",
+        )
+    return {"host_id": host_id, "row_id": row_id, "replayed": True}

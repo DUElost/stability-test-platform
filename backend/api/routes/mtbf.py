@@ -52,6 +52,21 @@ def _read_control_plane_path(path: str) -> bytes:
     return data
 
 
+def _ensure_admin_for_path(user: User) -> None:
+    """path 输入源是控制面磁盘读原语（后端进程可读的任意文件），仅 admin 可用。
+
+    multipart 上传不受限：内容由调用方自带，不构成读原语。
+    """
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "PATH_READ_FORBIDDEN",
+                "message": "path input requires admin role",
+            },
+        )
+
+
 def _sibling_global(path: str) -> Optional[bytes]:
     """path 输入源时尝试同目录的 UiAutomatorTestData.xml（可选，用于引用推断）。"""
     sibling = Path(path).with_name(_GLOBAL_FILENAME)
@@ -70,13 +85,14 @@ async def validate_runtask(
     global_file: Optional[UploadFile] = File(None, alias="global"),
     path: Optional[str] = Form(None),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """上传 runtask.xml（可附 UiAutomatorTestData.xml）返回结构化预览与校验问题清单。
 
     输入源（P0 语义写死，见 P0 设计 §5.1）：
     - multipart 主路径：``file``（必填）+ ``global``（可选）；
-    - JSON 备选：``{"path": "<控制面可达路径>"}``（仅控制面本地可达时）。
+    - JSON 备选：``{"path": "<控制面可达路径>"}``（仅控制面本地可达时，
+      且仅 admin——该输入源让后端读任意可达路径，属磁盘读原语）。
     """
     content: Optional[bytes] = None
     global_content: Optional[bytes] = None
@@ -96,6 +112,7 @@ async def validate_runtask(
                     detail={"code": "FILE_TOO_LARGE", "message": "global file too large"},
                 )
     elif path:
+        _ensure_admin_for_path(current_user)
         content = _read_control_plane_path(path)
         global_content = _sibling_global(path)
     else:
@@ -110,6 +127,7 @@ async def validate_runtask(
                 ) from exc
             raw_path = body.get("path") if isinstance(body, dict) else None
             if isinstance(raw_path, str) and raw_path:
+                _ensure_admin_for_path(current_user)
                 content = _read_control_plane_path(raw_path)
                 global_content = _sibling_global(raw_path)
 

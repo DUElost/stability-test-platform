@@ -44,6 +44,43 @@ def test_build_merge_argv_falls_back_to_merge_files(tmp_path):
     assert listfile is None
 
 
+def test_resolve_scan_tool_prefers_backend_keys(monkeypatch):
+    """#295: 控制面专用键优先；旧无前缀键同时存在也不使用。"""
+    monkeypatch.setenv("STP_BACKEND_DEDUP_SCAN_PYTHON", "/backend/python")
+    monkeypatch.setenv("STP_BACKEND_DEDUP_SCAN_SCRIPT", "/backend/scan.py")
+    monkeypatch.setenv("STP_DEDUP_SCAN_PYTHON", "/legacy/python")
+    monkeypatch.setenv("STP_DEDUP_SCAN_SCRIPT", "/legacy/scan.py")
+
+    assert ds.resolve_scan_tool() == {
+        "python": "/backend/python",
+        "script": "/backend/scan.py",
+    }
+
+
+def test_resolve_scan_tool_falls_back_to_legacy_with_warning(monkeypatch, caplog):
+    """#295: 旧键仅作平滑过渡，命中时打 WARNING 提示迁移。"""
+    monkeypatch.delenv("STP_BACKEND_DEDUP_SCAN_PYTHON", raising=False)
+    monkeypatch.delenv("STP_BACKEND_DEDUP_SCAN_SCRIPT", raising=False)
+    monkeypatch.setenv("STP_DEDUP_SCAN_PYTHON", "/legacy/python")
+    monkeypatch.setenv("STP_DEDUP_SCAN_SCRIPT", "/legacy/scan.py")
+
+    with caplog.at_level("WARNING"):
+        tool = ds.resolve_scan_tool()
+
+    assert tool == {"python": "/legacy/python", "script": "/legacy/scan.py"}
+    assert "scan_tool_legacy_env_fallback" in caplog.text
+
+
+def test_resolve_scan_tool_none_when_unset(monkeypatch):
+    """#295: 新旧键都未配置 → None（config-gated 503 语义不变）。"""
+    monkeypatch.delenv("STP_BACKEND_DEDUP_SCAN_PYTHON", raising=False)
+    monkeypatch.delenv("STP_BACKEND_DEDUP_SCAN_SCRIPT", raising=False)
+    monkeypatch.delenv("STP_DEDUP_SCAN_PYTHON", raising=False)
+    monkeypatch.delenv("STP_DEDUP_SCAN_SCRIPT", raising=False)
+
+    assert ds.resolve_scan_tool() is None
+
+
 def test_find_fresh_merge_output_dir_requires_new_subdir(tmp_path):
     merge_root = tmp_path / "merge_result"
     old = merge_root / "2026_06_25_21_25_13"

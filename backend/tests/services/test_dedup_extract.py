@@ -136,6 +136,123 @@ def test_run_extract_sync_uses_dle_remote_paths_only(
     assert (jira / "Result_MergeFiles.xls").is_file()
 
 
+def test_run_extract_sync_writes_run_context_extract(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#300 P3-4: extract 完成后 run_context.extract 记录 targets/copied/missing。"""
+    from backend.models.plan_run import PlanRun
+
+    nfs = tmp_path / "nfs"
+    devices = nfs / "devices" / str(sample_plan_run.id)
+    jira = nfs / "jira" / str(sample_plan_run.id)
+    keep = devices / "2026_0629_002306_121_db.71.JE"
+    keep.mkdir(parents=True)
+    (keep / "main.dbg").write_text("keep", encoding="utf-8")
+
+    merge_xls = tmp_path / "Result_MergeFiles.xls"
+    merge_xls.write_bytes(b"fake-merge-xls")
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(merge_xls),
+        artifact_type="merge_result_xls",
+        size_bytes=200,
+    ))
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="JE",
+        detected_at=datetime.now(timezone.utc),
+        state=EventState.REMOTE.value,
+        local_path=str(keep),
+        remote_path=str(keep),
+        plan_run_id=sample_plan_run.id,
+        host_id=sample_host.id,
+    ))
+    # NFS 上缺失的 remote path —— 计入 missing 缺口。
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="NE",
+        detected_at=datetime.now(timezone.utc),
+        state=EventState.REMOTE.value,
+        local_path="/tmp/local",
+        remote_path=str(devices / "missing_dir"),
+        plan_run_id=sample_plan_run.id,
+        host_id=sample_host.id,
+    ))
+    db_session.commit()
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    extracted = run_extract_sync(sample_plan_run.id)
+
+    assert extracted == 2  # keep dir + merge xls
+    assert (jira / "2026_0629_002306_121_db.71.JE" / "main.dbg").is_file()
+    db_session.expire_all()
+    pr = db_session.get(PlanRun, sample_plan_run.id)
+    summary = pr.run_context["extract"]
+    assert summary["targets"] == 2
+    assert summary["copied"] == 1
+    assert summary["missing"] == 1
+    assert summary["merge_xls_copied"] == 1
+    assert summary["archived"] == 1
+
+
+def test_summarize_upload_states_groups_by_state(
+    db_session, sample_plan_run, sample_host, sample_device,
+):
+    """#300 P3-2: upload_summary 按 state 分组，pending/remote 为聚合口径。"""
+    from backend.services.device_log_event import summarize_upload_states
+
+    now = datetime.now(timezone.utc)
+    for state in (
+        EventState.LOCAL,
+        EventState.UPLOAD_PENDING,
+        EventState.UPLOAD_FAILED,
+        EventState.REMOTE,
+        EventState.ARCHIVED,
+    ):
+        db_session.add(DeviceLogEvent(
+            id=uuid4(),
+            serial=sample_device.serial,
+            platform="MTK",
+            event_type="JE",
+            detected_at=now,
+            state=state.value,
+            local_path="/tmp/x",
+            plan_run_id=sample_plan_run.id,
+            host_id=sample_host.id,
+        ))
+    db_session.commit()
+
+    summary = summarize_upload_states(db_session, sample_plan_run.id)
+    assert summary["total"] == 5
+    assert summary["local"] == 1
+    assert summary["pending"] == 2  # UPLOAD_PENDING + UPLOAD_FAILED
+    assert summary["failed"] == 1
+    assert summary["remote"] == 2   # REMOTE + ARCHIVED
+    assert summary["archived"] == 1
+
+
+def test_write_run_context_section_preserves_existing_keys(db_session, sample_plan_run):
+    """#300: 分段写入只覆盖目标键，不动 run_context 既有内容。"""
+    from backend.models.plan_run import PlanRun
+    from backend.services.plan_run_context import write_run_context_section
+
+    sample_plan_run.run_context = {"note": "keep-me"}
+    db_session.commit()
+
+    assert write_run_context_section(
+        db_session, sample_plan_run.id, "upload_summary", {"total": 0},
+    ) is True
+    db_session.expire_all()
+    pr = db_session.get(PlanRun, sample_plan_run.id)
+    assert pr.run_context["note"] == "keep-me"
+    assert pr.run_context["upload_summary"] == {"total": 0}
+
+
 def test_run_extract_sync_rejects_non_integer_plan_run_id(db_session):
     """CodeQL #70: plan_run_id must normalize to an int before path construction."""
     from backend.core.artifact_paths import ArtifactPathError
