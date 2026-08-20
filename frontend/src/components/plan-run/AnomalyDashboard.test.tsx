@@ -112,9 +112,68 @@ describe('AnomalyDashboard', () => {
     expect(screen.getByText('本次新增 · 细分类型占比')).toBeTruthy();
     expect(screen.getByText('本次新增 · 包名榜')).toBeTruthy();
     expect(screen.getByText('运行前遗留')).toBeTruthy();
+    expect(screen.getByText('运行前遗留 · 包名榜')).toBeTruthy();
+    expect(screen.getByTestId('preexisting-pkg-com.legacy.camera')).toBeTruthy();
     expect(screen.getAllByText('com.runtime.camera').length).toBeGreaterThan(0);
     expect(screen.queryByText(/异常率/)).toBeNull();
     expect(screen.queryByText(/超阈值/)).toBeNull();
+  });
+
+  it('renders preexisting package ranking rows and toggles selection', () => {
+    render_(
+      <AnomalyDashboard
+        {...({
+          data: makeData({
+            preexisting: makeSection({
+              total_events: 4,
+              package_ranking: [
+                {
+                  package_name: 'com.preexisting.a',
+                  total_count: 3,
+                  affected_device_count: 2,
+                  latest_detected_at: null,
+                  subtype_breakdown: [{ subtype: 'NE', count: 3 }],
+                },
+                {
+                  package_name: 'com.preexisting.b',
+                  total_count: 1,
+                  affected_device_count: 1,
+                  latest_detected_at: null,
+                  subtype_breakdown: [{ subtype: 'ANR', count: 1 }],
+                },
+              ],
+            }),
+          }),
+          timeScope: 'all',
+        } as any)}
+      />,
+    );
+    const rowA = screen.getByTestId('preexisting-pkg-com.preexisting.a');
+    expect(rowA).toBeTruthy();
+    expect(screen.getByText('com.preexisting.b')).toBeTruthy();
+    fireEvent.click(rowA);
+    expect(rowA.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('opens the preexisting full package drawer', () => {
+    const ranking = Array.from({ length: 7 }, (_, i) => ({
+      package_name: `com.pkg.${i}`,
+      total_count: 7 - i,
+      affected_device_count: 1,
+      latest_detected_at: null,
+      subtype_breakdown: [{ subtype: 'NE', count: 7 - i }],
+    }));
+    render_(
+      <AnomalyDashboard
+        {...({
+          data: makeData({ preexisting: makeSection({ package_ranking: ranking }) }),
+          timeScope: 'all',
+        } as any)}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /查看全部 \(7\)/i }));
+    expect(screen.getByText(/包名榜 · 全部 \(7\)/i)).toBeTruthy();
+    expect(screen.getByText('com.pkg.6')).toBeTruthy();
   });
 
   it('renders a Recharts donut chart with legend below and center total', () => {
