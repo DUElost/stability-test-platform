@@ -40,6 +40,9 @@ export const INTERACTIVE = {
   menuItem: 'text-muted-foreground hover:bg-accent hover:text-foreground',
   iconButton: 'text-muted-foreground hover:text-foreground',
   destructiveMenu: 'text-destructive hover:bg-destructive/10',
+  /** 危险图标按钮：常驻 destructive 着色（勿退回 hover 才红——密集表格里
+   *  逐个试探恰是误点成因，且常驻是全站既成惯例），hover 只加底色反馈 */
+  iconDanger: 'text-destructive hover:bg-destructive/10',
 } as const;
 
 /** 侧栏导航 */
@@ -514,7 +517,7 @@ export const PIPELINE_EDITOR = {
   chainIdle: 'border-transparent hover:bg-accent',
   iconBtn:
     'border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed',
-  iconBtnDanger: 'hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30',
+  iconBtnDanger: 'text-destructive hover:bg-destructive/10 hover:border-destructive/30',
   linkBtn:
     'text-primary bg-primary/10 border border-dashed border-primary/25 hover:bg-primary/15',
   emptyState:

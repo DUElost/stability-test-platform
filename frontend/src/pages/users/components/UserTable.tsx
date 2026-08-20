@@ -85,7 +85,7 @@ export function UserTable({ users, currentUserId, onEdit, onDelete, onToggleActi
                         </button>
                         <button
                           onClick={() => onDelete(user.id)}
-                          className={cn('p-2 rounded transition-colors', INTERACTIVE.iconButton, 'hover:text-destructive hover:bg-destructive/10')}
+                          className={cn('p-2 rounded transition-colors', INTERACTIVE.iconDanger)}
                           title="删除用户"
                           aria-label="删除用户"
                         >

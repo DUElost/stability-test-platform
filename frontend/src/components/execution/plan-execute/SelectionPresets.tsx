@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { TEXT } from '@/design-system/tokens';
+import { INTERACTIVE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { BookmarkPlus, Trash2 } from 'lucide-react';
 import type { PlanExecutePreset } from './planExecutePresets';
@@ -114,7 +114,7 @@ export function SelectionPresets({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                className={cn('h-7 w-7', INTERACTIVE.iconDanger)}
                 aria-label={`删除方案 ${preset.name}`}
                 onClick={() => onDelete(preset.id)}
               >
