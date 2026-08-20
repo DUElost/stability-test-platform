@@ -550,7 +550,9 @@ async def test_merge_task_waits_on_device_log_events(monkeypatch):
     count_remote = AsyncMock(return_value=3)
     with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
          patch.object(saq_tasks, "_wait_for_remote_device_log_events", wait_remote), \
-         patch.object(saq_tasks, "_count_remote_device_log_events", count_remote):
+         patch.object(saq_tasks, "_count_remote_device_log_events", count_remote), \
+         patch.object(saq_tasks, "_summarize_upload_sync", return_value={"total": 0}), \
+         patch.object(saq_tasks, "_write_run_context_sync"):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
@@ -571,7 +573,9 @@ async def test_merge_task_enqueues_extract_on_success(monkeypatch):
     count_remote = AsyncMock(return_value=2)
     with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
          patch.object(saq_tasks, "_wait_for_remote_device_log_events", wait_remote), \
-         patch.object(saq_tasks, "_count_remote_device_log_events", count_remote):
+         patch.object(saq_tasks, "_count_remote_device_log_events", count_remote), \
+         patch.object(saq_tasks, "_summarize_upload_sync", return_value={"total": 0}), \
+         patch.object(saq_tasks, "_write_run_context_sync"):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \

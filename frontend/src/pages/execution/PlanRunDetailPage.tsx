@@ -332,7 +332,11 @@ export default function PlanRunDetailPage() {
               scanStatus={watcherQ.data?.archive?.scan_status}
             />
 
-            <DedupReportCard runId={id} />
+            <DedupReportCard
+              runId={id}
+              uploadSummary={runQ.data?.run_context?.upload_summary}
+              extractSummary={runQ.data?.run_context?.extract}
+            />
 
             <BusinessFlowStepper
               timeline={timelineQ.data}

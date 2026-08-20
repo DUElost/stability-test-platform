@@ -8,7 +8,7 @@
 
 > **范围**：MTK 过滤模型（方案 A，`STP_EVENT_UPLOADER_CONTINUOUS=0`）：`LOCAL → UPLOAD_PENDING → REMOTE → ARCHIVED/PRUNED`。  
 > UNISOC/QCOM Collector 仅留入口、不扫描（阶段 4 / #220 / #73）。  
-> 旧 PlanRun 触发上送双轨已删除（#213 Track A CLOSED；Track B 验收见 §4 已知缺口与 #309）。
+> 旧 PlanRun 触发上送双轨已删除（#213 Track A CLOSED；Track B 验收完成见 #309）。
 
 ---
 
@@ -54,7 +54,9 @@ Hosts 有 DLE 落库：`8.103` / `8.143` / `8.192` / `8.195` / `9.124` / `9.6`�
 > **同日 方案 A 修订（bce5177）已恢复 `upload_task`**：`scan_task` → `upload_task`（按 scan xls 标记 `UPLOAD_PENDING`）→ `merge_task`；EventUploader 保留 copytree 作为 Agent 侧唯一执行者（`STP_EVENT_UPLOADER_CONTINUOUS=0` 默认过滤模型）。部分 host 覆盖仍可交付：记 `saq_scan_partial_artifacts` WARNING + `PlanRun.run_context.archive`，继续 enqueue upload/merge（成功 host 的报表保留）。上一行 Track A 的「已删除 / 只 enqueue merge」是当日早晨的中间态，勿当现状。
 - **#199**：`devices/199/` 于 **11:22–11:26**（Job 中 EventUploader），早于 **11:33** scan/merge；`jira/199/` extract 完整。  
 - **#200**（2026-08-12 复验，`note=213-cutover-reconfirm`）：**SUCCESS**；DLE **7** 条 typed（ANR×3/JE×1/NE×3）+ signal 7/7 → `REMOTE` 后 `ARCHIVED`；`devices/200/` + `jira/200/` 齐全。  
-功能上新链路已可替代旧 PlanRun 上送；剩余工作是删死代码 / 收口默认（#213 Tracks）。
+功能上新链路已可替代旧 PlanRun 上送；#213 Track A 收口见 #311（已完成：生产代码无
+`upload_events` / `upload_event_dirs`，相关文档加历史 banner 或改现状；弃用 env 别名
+`STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` 保留至 fleet 迁移完成，#172）。
 
 ### 2.3 签字时库存（2026-08-12）
 
@@ -89,11 +91,11 @@ with signal_seq_no / linked signals: 6
 
 | Issue | 状态 |
 |-------|------|
-| #213 | Track A 完成（#228）；Track B：extract 仅 DLE + unassigned 事后关联（进行中） |
+| #213 | Track A 完成（#228）；**Track B 完成（#309）**：extract 事件发现仅 DLE `remote_path`（B1，`test_run_extract_sync_uses_dle_remote_paths_only`）；unassigned 事后关联（B3，`test_associate_unassigned_by_job_then_extract`）；FAILED 不 merge（D2，`test_run_merge_sync_skips_failed_plan_run`）。真机 inotifyd-only 兜底路径见 #310 |
 | #217 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` / HddSpill — 见 [`../operations/adr-0028-prune-local-and-spill-gray.md`](../operations/adr-0028-prune-local-and-spill-gray.md)；**勿** fleet 开 prune |
 
 | #220 / #73 | 阶段 4：UNISOC/QCOM 仅入口；非 MTK 跳过扫描 |
-| inotifyd 独占写 DLE | Reconciler 在岗时 inotifyd 路径被抑制；未单独做「关 Reconciler 只走 inotifyd」E2E |
+| inotifyd 独占写 DLE | Reconciler 在岗时 inotifyd 路径被抑制；「关 Reconciler 只走 inotifyd」自动化覆盖见 #310（`test_device_watcher_dle.py`：pull 成功 → DLE create + EventUploader enqueue；pull 失败 → pull_failed 记录；reconciler 激活 → 抑制注册）；真机 E2E 待实验室执行 |
 
 ---
 

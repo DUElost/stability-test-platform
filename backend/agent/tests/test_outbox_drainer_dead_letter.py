@@ -129,6 +129,36 @@ def test_mark_dead_letter_excludes_from_pending(db, emitter):
     assert dl[0]["last_error"] == "permanent"
 
 
+def test_count_and_replay_log_signal_dead_letters(db, emitter):
+    """#302: 死信总量可计数，replay 后重新进入待发送队列。"""
+    emitter.emit(category="ANR", source="inotifyd", path_on_device="/a")
+    emitter.emit(category="ANR", source="inotifyd", path_on_device="/b")
+    pending = db.get_pending_log_signals()
+    assert len(pending) == 2
+
+    db.mark_log_signal_dead_letter(pending[0]["id"], "cifs gone")
+    assert db.count_log_signal_dead_letters() == 1
+
+    # replay：重置 dead_letter/attempts/acked，重新进入 pending 队列
+    assert db.replay_log_signal_dead_letter(pending[0]["id"]) is True
+    assert db.count_log_signal_dead_letters() == 0
+    replayed = db.get_pending_log_signals()
+    assert [row["id"] for row in replayed] == [pending[0]["id"], pending[1]["id"]]
+    row = db._conn.execute(
+        "SELECT attempts, acked, dead_letter, last_error "
+        "FROM log_signal_outbox WHERE id = ?",
+        (pending[0]["id"],),
+    ).fetchone()
+    assert row["attempts"] == 0
+    assert row["acked"] == 0
+    assert row["dead_letter"] == 0
+    assert row["last_error"] is None
+
+    # 已非死信 / 不存在的行返回 False
+    assert db.replay_log_signal_dead_letter(pending[0]["id"]) is False
+    assert db.replay_log_signal_dead_letter(999999) is False
+
+
 def test_prune_acked_log_signals_skips_dead_letter(db, emitter):
     """prune 不删死信行；且 B3 seq_no guard 额外保留每个 job 的最高 acked-live 行。
 
