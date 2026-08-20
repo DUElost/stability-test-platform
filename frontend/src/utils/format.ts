@@ -115,6 +115,12 @@ export function formatDateTimeLocale(value?: string | null, empty = '-'): string
   return date.toLocaleString('zh-CN', { hour12: false });
 }
 
+/** Unix 秒 → 本地时间串（Recharts labelFormatter 等数值轴场景）。 */
+export function formatUnixSeconds(value?: number | null, empty = ''): string {
+  if (value == null || !Number.isFinite(value)) return empty;
+  return new Date(value * 1000).toLocaleString('zh-CN', { hour12: false });
+}
+
 /** Raw ISO display for technical timestamps (dispatch gate). */
 export function formatIsoCompact(value?: string | null, empty = '—'): string {
   if (!value) return empty;

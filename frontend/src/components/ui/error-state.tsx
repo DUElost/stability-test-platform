@@ -42,17 +42,27 @@ export function ErrorState({
 }
 
 /**
- * 内联错误提示（用于 Alert 风格）
+ * 内联错误提示（用于 Alert 风格，占位在页内局部区域）
  */
 export function InlineError({
   message = '加载失败，请检查后端服务连接',
+  onRetry,
 }: {
   message?: string;
+  onRetry?: () => void;
 }) {
   return (
     <div className="p-4 bg-destructive/10 text-destructive rounded-lg border border-destructive/20 flex items-start gap-3">
       <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
-      <p className="text-sm">{message}</p>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm">{message}</p>
+        {onRetry && (
+          <Button type="button" onClick={onRetry} variant="outline" size="sm" className="mt-2">
+            <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+            重试
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

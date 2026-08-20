@@ -106,7 +106,7 @@ export default function IssueTrackerPage() {
 
         {tab === 'drafts' && (
           <>
-            {isError && <InlineError message="JIRA 草稿列表加载失败，请检查后端服务连接。" />}
+            {isError && <InlineError message="JIRA 草稿列表加载失败，请检查后端服务连接。" onRetry={() => void refetch()} />}
 
             <Card>
               <CardHeader>

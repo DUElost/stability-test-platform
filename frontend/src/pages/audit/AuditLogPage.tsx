@@ -120,7 +120,7 @@ export default function AuditLogPage() {
       </div>
 
       {error && !loading && (
-        <InlineError message={error} />
+        <InlineError message={error} onRetry={loadLogs} />
       )}
 
       {loading ? (
