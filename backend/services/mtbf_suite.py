@@ -9,6 +9,8 @@ runtask.xml 解析与校验的**控制面侧唯一实现**；脚本侧 `_lib.py`
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -46,6 +48,9 @@ class TestcaseExec:
     runner: str = ""
     device: str = ""
     args: dict = field(default_factory=dict)   # arg name -> value（含 @@var 引用）
+    # <testcase times="N">：生产 runtask.xml 全为 1，但往返渲染必须还原，
+    # 否则导出物与设备面输入不再逐字节同构（字段置于末尾保持位置参数兼容）。
+    times: int = 1
 
 
 @dataclass(frozen=True)
@@ -133,6 +138,7 @@ def parse_runtask(content: bytes) -> RuntaskSuite:
                     runner=_attr_or_empty(tc, "runner"),
                     device=_attr_or_empty(tc, "device"),
                     args=args,
+                    times=_int_attr(tc, "times", 1),
                 )
             )
         testpoints.append(
@@ -332,3 +338,222 @@ def patch_runtask_times(content: bytes, times: int) -> bytes:
     if times <= 0:
         return content
     return _RUNTASK_TIMES_RE.sub(lambda m: f"{m.group(1)}{times}{m.group(2)}", content.decode("utf-8")).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 渲染（库 → XML 字节）— P1 设计 §6 P1a
+# ---------------------------------------------------------------------------
+#
+# 手工字符串渲染而非 ElementTree.tostring，理由是**逐字节同构**（P1 设计 §7 #6）：
+# 导出物要与 P0 已在设备上跑了多轮的输入完全一致，才能消除「设备端 OSM 对某种
+# 写法敏感」的未验证假设。ET 在四处与生产文件不同，且都不可配置：
+#   1. 行尾 LF（生产为 CRLF）；2. 属性顺序按 dict 序（JSONB 往返后不保序）；
+#   3. `@` 不转义（生产为 &#64;）；4. XML 声明写法与末尾换行。
+# 固定规范属性序 + 显式转义把这四项全部钉死，golden 判据因此收紧到**零容差**。
+_XML_DECL = "<?xml version='1.0' encoding='UTF-8' ?>"
+_EOL = "\r\n"
+
+# 生产 runtask.xml 的根属性顺序（P1 设计 §1.1 同序）；未知键排在其后按名排序，
+# 保证任何输入都渲染出确定字节。
+_RUNTASK_ATTR_ORDER = (
+    "name", "times", "testTimeOut", "takeScreenshot", "stopWhenFail",
+    "taskRegressionType", "caseRegressionType", "testpointRegressionTimes",
+)
+
+# <testcase> 子元素顺序：实测 137/137 一致（device 在首，attribute 在末）。
+_TESTCASE_CHILD_ORDER = ("device", "apk", "package", "class", "method", "runner")
+
+
+def _esc(value) -> str:
+    """XML 属性值转义。
+
+    前四项与 ET 的 `_escape_attrib` 同集合（含 `>`，生产文件里有 3 处 &gt;）；
+    末项 `@` → `&#64;` 是生产文件特征（`@@gWifiName` 存为 `&#64;&#64;gWifiName`）：
+    两种写法解析等价，但保留原写法才能逐字节同构。
+    """
+    text = str(value)
+    text = (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+    text = text.replace("\n", "&#10;").replace("\r", "&#13;").replace("\t", "&#09;")
+    return text.replace("@", "&#64;")
+
+
+def _render_attrs(attrs: dict, order: tuple = ()) -> str:
+    """按 order 优先、其余按名排序渲染属性串（确定性，不依赖 dict 序）。"""
+    known = [k for k in order if k in attrs]
+    rest = sorted(k for k in attrs if k not in order)
+    return "".join(f' {k}="{_esc(attrs[k])}"' for k in known + rest)
+
+
+def render_runtask(suite: RuntaskSuite, times: int = 0) -> bytes:
+    """渲染套件为 runtask.xml 字节（CRLF、2 空格缩进、末尾无换行）。
+
+    Args:
+        suite: 库内容构造的套件（testpoints 顺序即导出顺序）。
+        times: >0 时覆盖根 `times`（派发按需覆盖；<=0 用库内默认，与
+            `patch_runtask_times` 的「不覆盖」语义一致）。
+    """
+    root = dict(suite.root_config or {})
+    if times > 0:
+        root["times"] = str(times)
+
+    lines = [_XML_DECL, f"<runtask{_render_attrs(root, _RUNTASK_ATTR_ORDER)}>"]
+    for tp in suite.testpoints:
+        lines.append(f'  <testpoint name="{_esc(tp.name)}" times="{int(tp.times)}">')
+        for desc in tp.exec_descs:
+            lines.append(
+                f'    <testcase type="{_esc(desc.type_)}" times="{int(desc.times)}">'
+            )
+            values = {
+                "device": desc.device, "apk": desc.apk, "package": desc.package,
+                "class": desc.klass, "method": desc.method, "runner": desc.runner,
+            }
+            for tag in _TESTCASE_CHILD_ORDER:
+                lines.append(f'      <{tag} name="{_esc(values[tag])}" />')
+            if desc.args:
+                lines.append("      <attribute>")
+                for name, value in desc.args.items():
+                    lines.append(
+                        f'        <arg name="{_esc(name)}" value="{_esc(value)}" />'
+                    )
+                lines.append("      </attribute>")
+            lines.append("    </testcase>")
+        lines.append("  </testpoint>")
+    lines.append("</runtask>")
+    return _EOL.join(lines).encode("utf-8")
+
+
+def render_global(global_params: Optional[dict]) -> bytes:
+    """渲染 UiAutomatorTestData.xml 字节。
+
+    `global_params` 形状见 P1 设计 §1.1：``{"sim": {...}, "test_set_attrs": {...},
+    "test_package_ref": "<原文或 null>"}``。
+
+    注意与 runtask 的不对称：``parse_global_params`` 是**有损**的（把 N 个
+    ``<SIM/>`` 的属性合并成一个平铺 dict），因此本函数按「每属性一个 ``<SIM/>``」
+    还原——与生产文件形态一致，但不保证对任意输入逐字节往返。TestSet 根属性
+    与 TestPackage 参考块原样带出，避免导出物丢掉设备端可能依赖的
+    ``TakeScreenshot`` 等声明。
+    """
+    params = global_params or {}
+    sim = params.get("sim") or {}
+    test_set_attrs = params.get("test_set_attrs") or {}
+    package_ref = params.get("test_package_ref")
+
+    lines = [_XML_DECL, f"<TestSet{_render_attrs(test_set_attrs, ('name',))}>"]
+    for name in sim:
+        lines.append(f'  <SIM {name}="{_esc(sim[name])}" />')
+    if package_ref:
+        lines.extend(str(package_ref).splitlines())
+    lines.append("</TestSet>")
+    return _EOL.join(lines).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 库行 ↔ 套件转换（渲染与指纹共用唯一实现）
+# ---------------------------------------------------------------------------
+
+def exec_desc_to_dict(desc: TestcaseExec) -> dict:
+    """TestcaseExec → `test_case.exec_descs` JSONB 元素（键名对齐 XML 语义）。"""
+    return {
+        "type": desc.type_,
+        "apk": desc.apk,
+        "package": desc.package,
+        "class": desc.klass,
+        "method": desc.method,
+        "runner": desc.runner,
+        "device": desc.device,
+        "args": dict(desc.args),
+        "times": desc.times,
+    }
+
+
+def exec_desc_from_dict(raw: dict) -> TestcaseExec:
+    """`exec_descs` JSONB 元素 → TestcaseExec（缺省值容忍旧数据）。"""
+    raw = raw or {}
+    return TestcaseExec(
+        type_=raw.get("type") or "uiautomator2",
+        apk=raw.get("apk") or "",
+        package=raw.get("package") or "",
+        klass=raw.get("class") or "",
+        method=raw.get("method") or "",
+        runner=raw.get("runner") or "",
+        device=raw.get("device") or "",
+        args=dict(raw.get("args") or {}),
+        times=int(raw.get("times") or 1),
+    )
+
+
+def suite_from_rows(
+    *,
+    name: str,
+    root_config: Optional[dict],
+    cases: List[dict],
+    include_disabled: bool = False,
+) -> RuntaskSuite:
+    """库行构造 RuntaskSuite（导出/校验入口）。
+
+    默认只取 `enabled` 用例并按 `ordinal` 排序——**渲染产物 = 启用用例**；
+    指纹另走 `content_fingerprint`（取全量，含停用），两者刻意不同：产物只关心
+    跑什么，漂移检测关心库里任何改动。
+    """
+    rows = [c for c in cases if include_disabled or bool(c.get("enabled", True))]
+    rows.sort(key=lambda c: (int(c.get("ordinal") or 0), c.get("name") or ""))
+    return RuntaskSuite(
+        name=name,
+        root_config=dict(root_config or {}),
+        testpoints=[
+            Testpoint(
+                name=c.get("name") or "",
+                times=int(c.get("times") or 1),
+                exec_descs=[exec_desc_from_dict(d) for d in (c.get("exec_descs") or [])],
+            )
+            for c in rows
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# 库内容指纹（结构性漂移检测）— P1 设计 §2 总则 / §3.3 第 3 步
+# ---------------------------------------------------------------------------
+def content_fingerprint(
+    *,
+    root_config: Optional[dict],
+    global_params: Optional[dict],
+    cases: List[dict],
+) -> str:
+    """对库内容算规范化 sha256——「库改了没导出」由此**算出来**而非靠端点置空纪律。
+
+    入参取**库的全量内容**（含 `enabled=false` 的用例），不是渲染产物的子集：
+    这样「新增 / 删除 / 改任意字段 / 改顺序 / 停用」六条变更路径全部翻转指纹，
+    将来新增任何写端点都不可能漏（P1 设计 §2 总则）。
+
+    Args:
+        cases: ``[{name, ordinal, times, enabled, exec_descs}]``；本函数内部按
+            (ordinal, name) 排序，调用方无需保证顺序。
+    """
+    payload = {
+        "root_config": root_config or {},
+        "global_params": global_params or {},
+        "cases": sorted(
+            (
+                {
+                    "name": c.get("name") or "",
+                    "ordinal": int(c.get("ordinal") or 0),
+                    "times": int(c.get("times") or 1),
+                    "enabled": bool(c.get("enabled", True)),
+                    "exec_descs": c.get("exec_descs") or [],
+                }
+                for c in cases
+            ),
+            key=lambda c: (c["ordinal"], c["name"]),
+        ),
+    }
+    canonical = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

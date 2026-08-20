@@ -15,8 +15,12 @@ from backend.services.mtbf_suite import (
     collect_global_refs,
     parse_global_params,
     parse_runtask,
+    content_fingerprint,
     patch_runtask_times,
     preview_payload,
+    render_global,
+    render_runtask,
+    suite_from_rows,
 )
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "mtbf"
@@ -209,3 +213,129 @@ class TestPreview:
     def test_preview_none_when_unparseable(self):
         an = analyze_runtask(b"<broken")
         assert preview_payload(an) is None
+
+
+# ---------------------------------------------------------------------------
+# 渲染（golden：逐字节同构，P1 设计 §7 #6）
+# ---------------------------------------------------------------------------
+
+
+class TestRenderGolden:
+    """导出物必须与 P0 已验证的设备面输入**逐字节**相同。
+
+    这条断言的价值不在「渲染器写对了」，而在锁死四个易漂特征：CRLF 行尾、
+    `@` 的 `&#64;` 写法、根属性顺序、末尾无换行。任一项被「优化」掉，
+    设备端拿到的就是一个从未在真机上跑过的文件形态。
+    """
+
+    def test_roundtrip_is_byte_identical(self, real_runtask):
+        assert render_runtask(parse_runtask(real_runtask)) == real_runtask
+
+    def test_crlf_and_no_trailing_newline(self, real_runtask):
+        out = render_runtask(parse_runtask(real_runtask))
+        assert b"\r\n" in out
+        # 每个 LF 都必须由 CR 引导——不能混进裸 LF
+        assert out.count(b"\n") == out.count(b"\r\n")
+        assert out.endswith(b"</runtask>")
+
+    def test_at_sign_stays_numeric_ref(self, real_runtask):
+        out = render_runtask(parse_runtask(real_runtask))
+        assert b'value="&#64;&#64;gWifiName"' in out
+        assert b"@@" not in out
+
+    def test_times_override_matches_patch_semantics(self, real_runtask):
+        suite = parse_runtask(real_runtask)
+        assert b'times="777"' in render_runtask(suite, times=777)
+        # times<=0 = 不覆盖，与 patch_runtask_times 同语义
+        assert render_runtask(suite, times=0) == real_runtask
+        assert render_runtask(suite, times=-1) == real_runtask
+
+    def test_disabled_cases_excluded_from_render(self):
+        cases = [
+            {"name": "a", "ordinal": 1, "times": 1, "enabled": True, "exec_descs": []},
+            {"name": "b", "ordinal": 2, "times": 1, "enabled": False, "exec_descs": []},
+        ]
+        out = render_runtask(suite_from_rows(name="s", root_config={}, cases=cases))
+        assert b'name="a"' in out
+        assert b'name="b"' not in out
+
+
+class TestRenderGlobal:
+    def test_test_set_attrs_survive_export(self):
+        """TestSet 根属性必须带出——丢了 TakeScreenshot 就是换了个设备端没见过的文件。"""
+        out = render_global(
+            {
+                "sim": {"wifiName": "w", "wifiPWD": "p"},
+                "test_set_attrs": {"name": "UiAutomatorTestData", "TakeScreenshot": "true"},
+                "test_package_ref": None,
+            }
+        )
+        assert b'<TestSet name="UiAutomatorTestData" TakeScreenshot="true">' in out
+        assert b'<SIM wifiName="w" />' in out
+        assert out.count(b"\n") == out.count(b"\r\n")
+
+
+# ---------------------------------------------------------------------------
+# 库内容指纹（结构性漂移检测，P1 设计 §2 总则）
+# ---------------------------------------------------------------------------
+
+
+def _cases():
+    return [
+        {
+            "name": "case-a", "ordinal": 1, "times": 1, "enabled": True,
+            "exec_descs": [{"class": "C", "method": "m", "args": {"k": "v"}}],
+        },
+        {
+            "name": "case-b", "ordinal": 2, "times": 3, "enabled": True,
+            "exec_descs": [{"class": "D", "method": "n", "args": {}}],
+        },
+    ]
+
+
+def _fp(root=None, glob=None, cases=None):
+    return content_fingerprint(
+        root_config=root if root is not None else {"times": "1000"},
+        global_params=glob if glob is not None else {"sim": {"wifiName": "w"}},
+        cases=cases if cases is not None else _cases(),
+    )
+
+
+class TestContentFingerprint:
+    def test_deterministic_regardless_of_key_and_row_order(self):
+        """指纹不能受 dict 键序 / 行序影响——JSONB 往返后键序本就不保证。"""
+        base = _fp()
+        assert base == _fp(root={"times": "1000"})
+        reordered = list(reversed(_cases()))
+        assert base == _fp(cases=reordered)
+        assert base == _fp(glob={"sim": {"wifiName": "w"}})
+
+    @pytest.mark.parametrize(
+        "mutate,label",
+        [
+            (lambda cs: cs + [{"name": "new", "ordinal": 3, "times": 1,
+                               "enabled": True, "exec_descs": []}], "新增用例"),
+            (lambda cs: cs[:1], "删除用例"),
+            (lambda cs: [{**cs[0], "name": "renamed"}, cs[1]], "改名"),
+            (lambda cs: [{**cs[0], "times": 99}, cs[1]], "改 times"),
+            (lambda cs: [{**cs[0], "enabled": False}, cs[1]], "停用"),
+            (lambda cs: [{**cs[0], "exec_descs": [{"class": "X"}]}, cs[1]], "改 exec_descs"),
+            (lambda cs: [{**cs[0], "ordinal": 9}, cs[1]], "改顺序"),
+        ],
+    )
+    def test_every_case_mutation_flips_fingerprint(self, mutate, label):
+        """七条用例变更路径全部翻转——「库改了没导出」结构上不可能漏。"""
+        assert _fp(cases=mutate(_cases())) != _fp(), label
+
+    def test_suite_level_mutations_flip_fingerprint(self):
+        assert _fp(root={"times": "2000"}) != _fp()
+        assert _fp(glob={"sim": {"wifiName": "other"}}) != _fp()
+
+    def test_disabled_case_still_counted(self):
+        """指纹取全量（含停用）：改一条停用用例也要重导，产物子集口径不适用。"""
+        cs = _cases()
+        cs[1]["enabled"] = False
+        disabled_base = _fp(cases=cs)
+        cs2 = [dict(c) for c in cs]
+        cs2[1]["times"] = 42
+        assert _fp(cases=cs2) != disabled_base
