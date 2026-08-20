@@ -28,8 +28,8 @@
 | `project_id` | FK test_project 可空 | 空 = 通用套件（现 MTBF）；必填 = 项目套件（相机 MTBF，APK↔项目严格对应） |
 | `export_dir` | str 可空 | 导出目录名（`{NFS}/mtbf/{export_dir}/`）；空 → 有 `project_id` 用 project key，否则 `legacy`（兼容 P0 部署现状） |
 | `apk_binding` | JSONB 可空 | 用例 APK 文件名数组（如 `["OfflineScriptManager.apk", "ReliabilityUiautomatorTest.apk", "ReliabilityUiautomatorTestTest.apk"]`）——声明随项目严格对应；文件 sha 不存库（脚本 setup 已留 `apk_sha256[]` 痕，见 P0 设计 §3.3） |
-| `root_config` | JSONB | runtask 根属性**全量**（`times`/`testTimeOut`/`takeScreenshot`/`stopWhenFail`/`taskRegressionType`/`caseRegressionType`/`testpointRegressionTimes`/`name`）——导出渲染的权威源 |
-| `global_params` | JSONB | `{"sim": {wifiName: .., wifiPWD: .., number: .., googleAccount: ..}, "test_package_ref": "<原文或 null>"}`——SIM 属性合并（`parse_global_params` 产出）+ TestPackage 参考块原文保留（非执行依据，导出等价文件用） |
+| `root_config` | JSON | runtask 根属性**全量**（`times`/`testTimeOut`/`takeScreenshot`/`stopWhenFail`/`taskRegressionType`/`caseRegressionType`/`testpointRegressionTimes`/`name`）——导出渲染的权威源 |
+| `global_params` | JSON | `{"sim": {wifiName: .., wifiPWD: .., number: .., googleAccount: ..}, "test_set_attrs": {name: .., TakeScreenshot: ..}, "test_package_ref": "<原文或 null>"}`——SIM 属性合并（`parse_global_params` 产出）+ **TestSet 根属性**（P1a 补：不带出则导出物丢 `TakeScreenshot`，等于给设备端换了个没见过的文件）+ TestPackage 参考块原文保留 |
 | `source_sha256` | str | 导入时原始文件 sha（溯源） |
 | `exported_sha256` | str 可空 | **导出产物（磁盘文件）sha**——磁盘漂移比对键；export-to-tool-dir 成功时计算存下。库内容变更**无需置空**（库漂移走 `exported_content_sha256` 计算检测，见 §2 总则） |
 | `exported_content_sha256` | str 可空 | **导出时库内容规范化指纹**（`root_config` + `global_params` + 按 `ordinal` 有序 cases 的规范化 JSON sha，`content_fingerprint(suite)`）——库漂移比对键；export-to-tool-dir 成功时计算存下。门禁重算当前库指纹与之比对（§3.3 第 3 步）：**结构性检测**，任何新增变更路径都不可能漏 |
@@ -46,7 +46,7 @@
 | `ordinal` | int | 顺序（导出按此排序） |
 | `times` | int 默认 1 | testpoint times |
 | `enabled` | bool 默认 true | 用例启停 |
-| `exec_descs` | JSONB | 1..N 个执行描述：`[{type, apk, package, class, method, runner, device, args:{}}]`（字段对齐 `TestcaseExec`） |
+| `exec_descs` | JSON | 1..N 个执行描述：`[{type, apk, package, class, method, runner, device, args:{}, times}]`（字段对齐 `TestcaseExec`；`times` 为 P1a 补——`<testcase times="N">` 不还原就丢字节同构） |
 
 > **标识符原样保留**（研究 §5.2）：class/method 名含疑似拼写错误（`RelaibalityOreoTestTranssion`）在导入/导出全链路不得「修正」——库内就是设备端 APK 真实标识符。
 
@@ -75,6 +75,8 @@
 | `GET /api/v1/test-suites/{id}/export` | 登录 | 返回**渲染的 runtask.xml 字节**（`?times=N` 覆盖，`N<=0` 用库内默认）；`GET /api/v1/test-suites/{id}/global` 返回渲染的 UiAutomatorTestData.xml（两个消费文件各一出口） |
 | `POST /api/v1/test-suites/{id}/validate` | 登录 | 校验**库内数据**：构造 `RuntaskSuite` → 复用 `_validate_suite`（名唯一/class-method 非空/`@@var` 引用在 `global_params.sim` 有定义）→ 返回 issues（与 P0 validate 同格式） |
 | `POST /api/v1/test-suites/{id}/export-to-tool-dir` | admin | 渲染两文件 → **atomic write**（临时文件 + `os.replace`）到 `{STP_AEE_NFS_ROOT}/mtbf/{export_dir}/`；成功后更新 `exported_sha256`；**ACTIVE 引用守卫**（P1b 起，409）；审计 |
+
+**列类型（P1a 实施决定）**：`root_config` / `global_params` / `exec_descs` 用 `JSON` 而非 `JSONB`——JSONB 按「长度优先再字节序」**重排对象键**，`args` 的 `wifiPWD`(7) 会排到 `wifiName`(8) 前，导出物随即失去逐字节同构（渲染层的固定属性序救不了：arg 顺序是文档顺序）。这三列不可检索，不需要 JSONB 索引/操作符。`apk_binding` 是数组（JSONB 保序）仍用 JSONB。
 
 **导出一致性总则（结构性检测，非端点纪律）**：渲染产物由 suite 表 + test_case 行决定，改变它的变更路径**无法穷举**（新增/删除/改任意字段/import 都改产物）。因此**任何端点都不做「置空」**，两类漂移各有计算检测器（§3.3 第 3/4 步）：
 
@@ -174,7 +176,7 @@ python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 | 3 | `global_params` 编辑粒度 | 初版整 JSONB 覆盖（PUT suite）；字段级编辑留 P2 前端 |
 | 4 | 用例级编辑粒度 | `exec_descs` 整覆盖（PUT case）；单条校验复用 `_validate_suite` |
 | 5 | 通用套件导出目录 | `export_dir` 空 → `legacy`（兼容 P0 部署）；项目套件 → project key；明确后写入 operations 文档 |
-| 6 | 渲染字节保真 | **已定**：渲染器产出 `\r\n` 行尾——与 P0 已验证的设备面输入（CRLF 原字节，patch_runtask_times 字节级改写 + push）**逐字节同构**，消除「设备端工具吃 LF」的未验证假设；属性顺序不保证与源一致（ET 序，容差唯一项）；golden 判据 = **除属性序外逐字节一致（含 CRLF）** |
+| 6 | 渲染字节保真 | **已实施，零容差**：渲染器手工产字节——CRLF 行尾、`@` 保留 `&#64;` 写法、固定规范属性序、末尾无换行，与 P0 已验证的设备面输入逐字节同构。130 testpoint 生产快照 parse→render 全等（76791B），API 层 import→export 经完整 DB 往返仍全等。golden 判据 = **逐字节一致**（无容差项） |
 | 7 | `name` 唯一冲突 | 导入同名套件 upsert（按 name 匹配更新）；跨项目同名是否允许——初版不允许（name 全局唯一），分化靠 project_id 区分导出而非套件分裂 |
 
 ## 8. 修订记录
@@ -182,4 +184,5 @@ python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 | 日期 | 变更 |
 |------|------|
 | 2026-08-20 | 初版：P0 验收后 P1 衔接梳理定稿（实体/端点/绑定/门禁/CLI/里程碑） |
+| 2026-08-20 | v1.2（P1a 实施回写）：① `global_params` 补 `test_set_attrs`、`exec_descs` 补 `times`（不还原则导出物丢 TakeScreenshot / testcase times）；② 三个渲染源列定为 `JSON` 而非 `JSONB`（JSONB 重排对象键破坏字节同构）；③ §7 #6 属性序容差消除，golden 判据收紧为逐字节一致 |
 | 2026-08-20 | v1.1（评审修订）：① 导出一致性改**结构性检测**——新增 `exported_content_sha256`（库内容规范化指纹 `content_fingerprint`），门禁第 3 步计算检测库漂移，删除全部端点「置空」纪律（枚举法漏 3 条变更路径的洞：POST cases / DELETE cases / PUT case 改非 name 字段）；sha_mismatch 恢复「磁盘漂移」字面语义，两类漂移各有检测器；② 渲染器定稿产出 CRLF（与 P0 设备面输入同构），golden 容差仅剩属性序 |
