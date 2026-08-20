@@ -278,6 +278,8 @@ class TestMergeEndpoint:
         ))
         db_session.commit()
 
+        monkeypatch.delenv("STP_BACKEND_DEDUP_SCAN_PYTHON", raising=False)
+        monkeypatch.delenv("STP_BACKEND_DEDUP_SCAN_SCRIPT", raising=False)
         monkeypatch.delenv("STP_DEDUP_SCAN_PYTHON", raising=False)
         monkeypatch.delenv("STP_DEDUP_SCAN_SCRIPT", raising=False)
         resp = client.post(
