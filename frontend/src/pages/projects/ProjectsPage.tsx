@@ -21,6 +21,7 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { api } from '@/utils/api';
 import { projectKeys } from '@/utils/api/queryKeys';
 import type { ProjectSummary } from '@/utils/api/types';
+import InventoryModelsTable from './components/InventoryModelsTable';
 
 /** ADR-0029 facet：正交可组合筛选，选项从数据 distinct 提取。 */
 const FACET_FIELDS = ['customer', 'platform', 'form_factor', 'product_line'] as const;
@@ -43,13 +44,23 @@ function facetOptions(projects: ProjectSummary[], field: FacetField): string[] {
 }
 
 export default function ProjectsPage() {
-  useDocumentTitle('项目登记簿');
+  useDocumentTitle('项目编组工作台');
   const navigate = useNavigate();
   const [facetFilters, setFacetFilters] = useState<Partial<Record<FacetField, string>>>({});
 
   const { data: projects, isLoading, isError, error, refetch } = useQuery({
     queryKey: projectKeys.list(),
     queryFn: () => api.projects.list(),
+  });
+
+  const inventoryQ = useQuery({
+    queryKey: projectKeys.inventoryModels(),
+    queryFn: () => api.projects.inventoryModels(),
+  });
+
+  const summaryQ = useQuery({
+    queryKey: projectKeys.inventorySummary(),
+    queryFn: () => api.projects.inventorySummary(),
   });
 
   const filtered = useMemo(() => {
@@ -72,14 +83,16 @@ export default function ProjectsPage() {
 
   return (
     <PageContainer width="list">
-      <PageHeader title="项目登记簿" subtitle="客户 / 形态 / 平台维度的项目视图，按 facet 组合筛选" />
+      <PageHeader
+        title="项目编组工作台"
+        subtitle="上方是设备心跳可读的型号事实；已映射项目需人工填写，不由 HONOR-MLD 等回填标签推断"
+      />
 
-      {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
         <Card>
           <CardContent className="py-4 text-center">
             <p className={STAT.value}>{totals.projects}</p>
-            <p className={STAT.label}>项目总数</p>
+            <p className={STAT.label}>回填标签数</p>
           </CardContent>
         </Card>
         <Card>
@@ -96,7 +109,26 @@ export default function ProjectsPage() {
         </Card>
       </div>
 
-      {/* Facet filters */}
+      <InventoryModelsTable
+        models={inventoryQ.data}
+        summary={summaryQ.data}
+        isLoading={inventoryQ.isLoading}
+        isError={inventoryQ.isError}
+        errorMessage={(inventoryQ.error as Error)?.message}
+        onRetry={() => {
+          void inventoryQ.refetch();
+          void summaryQ.refetch();
+        }}
+      />
+
+      <div>
+        <h2 className={cn('text-sm font-medium', TEXT.heading)}>系统回填标签（非正式编组）</h2>
+        <p className={cn('mt-1 text-xs', TEXT.subtitle)}>
+          HONOR-MLD、ZTE-Z258 等来自 P1 脚本回填，方便按当时设备归属查看，
+          既不能代表一个客户，也不能代表一个项目或机型。项目映射请在上方表格「已映射项目」列人工填写（后续开放编辑）。
+        </p>
+      </div>
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {FACET_FIELDS.map((field) => (
           <Select
@@ -125,7 +157,7 @@ export default function ProjectsPage() {
       </div>
       {activeFacetCount > 0 && (
         <div className={cn('text-xs', TEXT.subtitle)}>
-          已应用 {activeFacetCount} 个 facet 筛选，命中 {filtered.length} 个项目
+          已应用 {activeFacetCount} 个 facet 筛选，命中 {filtered.length} 个回填标签
         </div>
       )}
 
@@ -133,19 +165,19 @@ export default function ProjectsPage() {
         <PageSkeleton.Cards count={3} layout="grid" />
       ) : isError ? (
         <ErrorState
-          title="加载项目失败"
+          title="加载回填标签失败"
           description={(error as Error)?.message || '请检查网络连接或稍后重试'}
           onRetry={() => void refetch()}
         />
       ) : (filtered.length === 0 && !projects?.length) ? (
         <EmptyState
-          title="暂无项目"
-          description="项目由管理员在数据维护中创建（ADR-0029 P1 已回填存量）"
+          title="暂无回填标签"
+          description="可先查看上方 Fleet 型号分布。项目编组与映射规则将在后续开放编辑"
           icon={<FolderKanban className="w-16 h-16" />}
         />
       ) : filtered.length === 0 ? (
         <EmptyState
-          title="没有匹配的项目"
+          title="没有匹配的回填标签"
           description="调整 facet 筛选条件后重试"
           icon={<Layers className="w-16 h-16" />}
         />
@@ -168,11 +200,8 @@ export default function ProjectsPage() {
                       {project.project_key}
                     </p>
                   </div>
-                  <Badge
-                    variant={project.status === 'ACTIVE' ? 'success' : 'secondary'}
-                    className="shrink-0"
-                  >
-                    {project.status === 'ACTIVE' ? '启用' : '归档'}
+                  <Badge variant="secondary" className="shrink-0 text-[11px] font-normal">
+                    非正式回填
                   </Badge>
                 </div>
 
