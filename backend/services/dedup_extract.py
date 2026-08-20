@@ -142,6 +142,7 @@ def run_extract_sync(plan_run_id: int) -> int:
         )
 
         remote_path_rows: list[tuple[str, Path, Path]] = []
+        missing_remote_paths = 0
         for raw in list_remote_paths_for_extract(db, plan_run_id):
             try:
                 located = resolve_extract_event_src(
@@ -155,12 +156,14 @@ def run_extract_sync(plan_run_id: int) -> int:
                     "dedup_extract_skip_bad_remote plan_run=%d path=%s",
                     plan_run_id, raw,
                 )
+                missing_remote_paths += 1
                 continue
             if located is None:
                 logger.debug(
                     "dedup_extract_skip_missing_remote plan_run=%d path=%s",
                     plan_run_id, raw,
                 )
+                missing_remote_paths += 1
                 continue
             src, devices_root = located
             remote_path_rows.append((raw, src, devices_root))
@@ -169,6 +172,9 @@ def run_extract_sync(plan_run_id: int) -> int:
         jira_dir.mkdir(parents=True, exist_ok=True)
 
         extracted = 0
+        event_dirs_copied = 0
+        existing_dirs = 0
+        merge_xls_copied = 0
         archived_remote_paths: list[str] = []
         extracted_dest_names: set[str] = set()
 
@@ -184,12 +190,14 @@ def run_extract_sync(plan_run_id: int) -> int:
                 continue
             dest = path_under_root(jira_dir, dest_name)
             if dest.exists():
+                existing_dirs += 1
                 extracted_dest_names.add(dest_name)
                 archived_remote_paths.extend(raw_paths)
                 continue
             try:
                 copytree_under_root(src, dest, root=devices_root, dest_root=jira_dir)
                 extracted += 1
+                event_dirs_copied += 1
                 extracted_dest_names.add(dest_name)
                 archived_remote_paths.extend(raw_paths)
             except ArtifactPathError:
@@ -223,12 +231,24 @@ def run_extract_sync(plan_run_id: int) -> int:
             try:
                 shutil.copy2(str(merge_xls), str(dest))
                 extracted += 1
+                merge_xls_copied += 1
             except Exception:
                 logger.exception(
                     "dedup_extract_merge_xls_failed plan_run=%d path=%s",
                     plan_run_id, merge_xls,
                 )
 
+        from backend.services.plan_run_context import write_run_context_section
+
+        write_run_context_section(db, plan_run_id, "extract", {
+            # 含 missing/bad 路径：targets 是发现的总数，缺口单列。
+            "targets": len(remote_path_rows) + missing_remote_paths,
+            "copied": event_dirs_copied,
+            "missing": missing_remote_paths,
+            "existing": existing_dirs,
+            "merge_xls_copied": merge_xls_copied,
+            "archived": len(archived_remote_paths),
+        })
         logger.info(
             "dedup_extract_done plan_run=%d extracted=%d remote_paths=%d",
             plan_run_id, extracted, len(remote_path_rows),
