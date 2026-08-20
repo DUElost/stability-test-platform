@@ -2157,7 +2157,7 @@ def _aggregate_run_log_archive(
 
     scan_status: Optional[str] = None
     scan_triggered_at: Optional[str] = None
-    archived_jobs = 0
+    signaled_jobs = 0
     pending_jobs = 0
     failed_jobs = 0
 
@@ -2181,7 +2181,7 @@ def _aggregate_run_log_archive(
         for jid in job_ids:
             status = job_statuses.get(jid, "")
             if jid in signal_job_ids:
-                archived_jobs += 1
+                signaled_jobs += 1
             elif status in _TERMINAL_JOB:
                 failed_jobs += 1
             else:
@@ -2227,7 +2227,7 @@ def _aggregate_run_log_archive(
         ops_metrics=ops,
         scan_status=scan_status,
         scan_triggered_at=scan_triggered_at,
-        archived_jobs=archived_jobs,
+        signaled_jobs=signaled_jobs,
         pending_jobs=pending_jobs,
         failed_jobs=failed_jobs,
     )
