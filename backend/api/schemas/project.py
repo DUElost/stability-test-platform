@@ -48,3 +48,42 @@ class ProjectDetailOut(ProjectSummaryOut):
     plan_count: int = 0
     total_run_count: int = 0
     recent_runs: List[RecentProjectRunOut] = []
+
+
+# ── ADR-0029 P2.5a：Fleet 事实（只读聚合）────────────────────────────────
+
+
+class InventoryModelOut(ORMBaseModel):
+    """一种 ``device.model`` 的 fleet 聚合。
+
+    ``backfill_project_keys`` 是 P1 脚本灌入的 ``device.project_id`` 标签
+    （HONOR-MLD 等），**不是**客户 / 项目 / 机型，也不是人工映射。
+    ``mapped_project_keys`` 才是人工填写的映射；P2.5a 无规则表，恒为 ``[]``。
+    """
+
+    model: Optional[str] = None
+    device_count: int
+    platforms: List[str]
+    backfill_project_keys: List[str]
+    mapped_project_keys: List[str] = []
+    legacy_device_count: int = 0
+    null_device_count: int = 0
+
+
+class InventorySummaryOut(ORMBaseModel):
+    """工作台顶栏：全 fleet 计数 + 完全未编入真实回填标签的 model 列表。"""
+
+    total_devices: int
+    mapped_devices: int
+    legacy_devices: int
+    null_devices: int
+    distinct_models: int
+    unmapped_models: List[Optional[str]]
+
+
+class ProjectModelCoverageOut(ORMBaseModel):
+    """某回填标签当前挂着的型号（GROUP BY device.model；非正式映射）。"""
+
+    model: Optional[str] = None
+    device_count: int
+    platforms: List[str]
