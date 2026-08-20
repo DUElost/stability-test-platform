@@ -511,6 +511,8 @@ export default function AnomalyDashboard({
 }: Props) {
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
   const [isPackageDrawerOpen, setPackageDrawerOpen] = useState(false);
+  const [selectedPreexistingPackage, setSelectedPreexistingPackage] = useState<string | null>(null);
+  const [isPreexistingDrawerOpen, setPreexistingDrawerOpen] = useState(false);
   const [crashDetailPackage, setCrashDetailPackage] = useState<string | null>(null);
 
   const crashDetailsQ = useQuery({
@@ -752,6 +754,7 @@ export default function AnomalyDashboard({
             <div className={cn('mb-4 text-sm font-semibold', TEXT.body)}>运行前遗留</div>
             {supportsOriginSplit ? (
               preexisting.total_events > 0 ? (
+                <>
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-center">
                   <DonutChart
                     items={preexistingDistribution}
@@ -777,6 +780,106 @@ export default function AnomalyDashboard({
                     />
                   </div>
                 </div>
+                <div className="mt-4">
+                  <div className={cn('mb-1 text-sm font-semibold', TEXT.heading)}>
+                    运行前遗留 · 包名榜
+                  </div>
+                  {preexisting.package_ranking.length > 0 ? (
+                    <div className="space-y-2">
+                      {preexisting.package_ranking.slice(0, 5).map((row, index) => {
+                        const active = selectedPreexistingPackage === row.package_name;
+                        const isUnknown = row.package_name === 'unknown';
+                        const dominantColor = isUnknown
+                          ? CHART_COLORS.muted
+                          : packageDominantColor(row);
+                        const rankCls = packageRankClass(index);
+
+                        return (
+                          <button
+                            key={row.package_name}
+                            type="button"
+                            aria-pressed={active}
+                            data-testid={`preexisting-pkg-${row.package_name}`}
+                            onClick={() =>
+                              setSelectedPreexistingPackage((current) =>
+                                current === row.package_name ? null : row.package_name,
+                              )
+                            }
+                            className={cn(
+                              'group flex w-full items-stretch rounded-xl border text-left transition-all duration-200',
+                              active ? PACKAGE_ROW.active
+                                : isUnknown ? PACKAGE_ROW.unknown
+                                : PACKAGE_ROW.default,
+                            )}
+                          >
+                            <div
+                              className={cn(
+                                'shrink-0 w-1 rounded-l-xl transition-all duration-200',
+                                active ? 'w-1.5' : 'group-hover:w-1.5',
+                              )}
+                              style={{ backgroundColor: dominantColor }}
+                            />
+                            <div className="flex-1 min-w-0 px-3 py-2 flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className={cn('font-mono tabular-nums', rankCls)}>
+                                    #{index + 1}
+                                  </span>
+                                  <span
+                                    className={cn(
+                                      'truncate text-sm',
+                                      isUnknown
+                                        ? cn('italic', TEXT.subtitle)
+                                        : active
+                                          ? cn('font-semibold', TEXT.heading)
+                                          : cn('font-medium', TEXT.body),
+                                    )}
+                                  >
+                                    {isUnknown ? '未知进程' : row.package_name}
+                                  </span>
+                                </div>
+                                <div className="mt-1">
+                                  <PackageSubtypeDots row={row} active={active} />
+                                </div>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <div
+                                  className={cn(
+                                    'text-lg font-bold transition-colors duration-200',
+                                    active ? TEXT.heading
+                                      : isUnknown ? TEXT.subtitle
+                                      : TEXT.body,
+                                  )}
+                                >
+                                  {row.total_count}
+                                </div>
+                                <div className={cn('text-[11px]', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
+                                  {row.affected_device_count} 台设备
+                                </div>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                      {preexisting.package_ranking.length > 5 && (
+                        <button
+                          type="button"
+                          onClick={() => setPreexistingDrawerOpen(true)}
+                          className={cn(
+                            'w-full rounded-xl border border-dashed py-2 text-xs font-medium transition',
+                            TEXT.subtitle,
+                            'hover:border-border hover:text-foreground',
+                          )}
+                        >
+                          查看全部 ({preexisting.package_ranking.length})
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <InlineEmpty chart>运行前遗留无包名数据</InlineEmpty>
+                  )}
+                </div>
+                </>
               ) : (
                 <InlineEmpty className="py-3">运行开始前无遗留异常记录</InlineEmpty>
               )
@@ -796,6 +899,13 @@ export default function AnomalyDashboard({
         rankings={currentRun.package_ranking}
         selectedPackageName={selectedPackage}
         onSelectPackage={setSelectedPackage}
+      />
+      <PackageRankingDrawer
+        open={isPreexistingDrawerOpen}
+        onClose={() => setPreexistingDrawerOpen(false)}
+        rankings={preexisting.package_ranking}
+        selectedPackageName={selectedPreexistingPackage}
+        onSelectPackage={setSelectedPreexistingPackage}
       />
     </>
   );
