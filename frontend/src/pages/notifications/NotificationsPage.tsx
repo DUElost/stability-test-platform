@@ -224,7 +224,7 @@ export default function NotificationsPage() {
   const tabBtnClass = (active: boolean) =>
     cn(
       'px-4 py-2 text-sm rounded-md transition-colors',
-      active ? 'bg-card text-foreground shadow-sm' : SEGMENTED.toggleIdle,
+      active ? SEGMENTED.toggleActive : SEGMENTED.toggleIdle,
     );
 
   return (

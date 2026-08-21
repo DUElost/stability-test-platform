@@ -182,6 +182,14 @@ export const ALERT_BANNER = {
   warning: 'border-b border-warning/25 bg-warning/10 text-warning',
 } as const;
 
+/** 独立提示盒（全边边框）：ALERT_BANNER 是卡片顶部 border-b 横幅，独立盒子用全边 */
+export const ALERT_BOX = {
+  destructive: 'border border-destructive/25 bg-destructive/10 text-destructive',
+  warning: 'border border-warning/25 bg-warning/10 text-warning',
+  info: 'border border-info/25 bg-info/10 text-info',
+  success: 'border border-success/25 bg-success/10 text-success',
+} as const;
+
 /** Watcher 异常类别左边框着色 */
 export const WATCHER_CATEGORY = {
   AEE: 'border-destructive/40 bg-destructive/5',
@@ -208,6 +216,8 @@ export const SEGMENTED = {
   itemActive: 'rounded px-2 py-0.5 bg-primary/10 text-primary',
   toggleActive: 'bg-primary/10 text-primary',
   toggleIdle: 'text-muted-foreground hover:bg-accent hover:text-foreground',
+  /** 工具条式分段（视图切换等）：active 用更强的 /15 强调 */
+  itemActiveStrong: 'bg-primary/15 font-semibold text-primary',
 } as const;
 
 /** 趋势箭头着色 */
@@ -345,51 +355,6 @@ export const EVENT_STAGE_CHIP = {
   system: 'border-border bg-muted/80 text-muted-foreground',
 } as const;
 
-/** 时间线左侧步骤节点 */
-export const TIMELINE_NODE = {
-  idle: {
-    node: 'border-border text-muted-foreground bg-card',
-    card: 'border-border bg-card',
-    badge: 'bg-muted text-muted-foreground',
-  },
-  running: {
-    node: 'border-warning text-primary-foreground bg-warning',
-    card: 'border-warning/50 bg-gradient-to-b from-warning/10 to-card ring-2 ring-warning/25',
-    badge: 'bg-warning/10 text-warning',
-  },
-  success: {
-    node: 'border-success text-success bg-success/10',
-    card: 'border-success/30 bg-success/5',
-    badge: 'bg-success/10 text-success',
-  },
-  failed: {
-    node: 'border-destructive text-destructive bg-destructive/10',
-    card: 'border-destructive/30 bg-destructive/5',
-    badge: 'bg-destructive/10 text-destructive',
-  },
-  precheck: {
-    node: 'border-info text-info bg-info/10',
-    card: 'border-info/30 bg-info/5',
-    badge: 'bg-info/10 text-info',
-    connector: 'bg-info/40',
-  },
-  skipped: {
-    node: 'border-border text-muted-foreground bg-muted',
-    card: 'border-border bg-muted/30',
-  },
-  active: 'ring-2 ring-primary shadow-md',
-  hover: 'hover:bg-accent hover:border-border hover:shadow-md',
-  connectorInit: 'bg-success/40',
-  connectorPatrol: 'bg-warning/40',
-} as const;
-
-/** 时间线右侧步骤明细行 */
-export const TIMELINE_STEP_ROW = {
-  root: 'grid grid-cols-[60px_16px_1fr_auto] items-start gap-2 border-b border-border/50 bg-primary/5 px-3 py-2.5 text-xs last:border-b-0 hover:bg-primary/10',
-  label: 'pt-0.5 text-[11px] font-semibold text-primary',
-  icon: 'h-3 w-3 text-primary/70',
-} as const;
-
 /** 分段深色选中（异常仪表盘时间范围） */
 export const SEGMENTED_DARK = {
   track: 'flex flex-wrap gap-1',
@@ -435,24 +400,6 @@ export const STEPPER_STAGE = {
   current: { border: 'border-primary/30', bg: 'bg-card', icon: 'text-primary' },
 } as const;
 
-/** PlanRun KPI 横条圆点 / 数值 */
-export const KPI_BAR_DOT = {
-  default: 'bg-muted-foreground/40',
-  warning: 'bg-warning',
-  destructive: 'bg-destructive',
-  info: 'bg-info',
-} as const;
-
-/** Plan 链节点 Chip（面包屑） */
-export const CHAIN_CHIP = {
-  pending: 'border-border bg-card text-muted-foreground',
-  current: 'border-warning/30 bg-warning/5 text-foreground ring-2 ring-warning/20',
-  success: 'border-success/30 bg-card text-success',
-  failed: 'border-destructive/30 bg-card text-destructive',
-  hover: 'hover:bg-muted/50',
-  currentTag: 'bg-warning/20 text-warning',
-} as const;
-
 /** Plan 链侧栏圆点 */
 export const CHAIN_DOT = {
   pending: 'border-dashed border-border bg-card',
@@ -460,14 +407,6 @@ export const CHAIN_DOT = {
   done: 'border-success bg-success/10',
   failed: 'border-destructive bg-destructive/10',
   connector: 'bg-border',
-} as const;
-
-/** 巡检日志事件严重度行 */
-export const PATROL_EVENT_SEVERITY = {
-  err: 'bg-destructive/10 text-destructive border-destructive/25',
-  warn: 'bg-warning/10 text-warning border-warning/25',
-  info: 'bg-card text-foreground border-border',
-  ok: 'bg-success/10 text-success border-success/25',
 } as const;
 
 /** Job 实例状态 — 任务矩阵方块 */
