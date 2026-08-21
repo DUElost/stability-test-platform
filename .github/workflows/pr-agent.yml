@@ -43,8 +43,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          config.model: deepseek/deepseek-v4-pro
-          config.fallback_models: '["deepseek/deepseek-v4-flash"]'
+          config.model: deepseek/deepseek-v4-flash
+          config.fallback_models: '[]'
           github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "review_requested"]'
           # 与 CodeRabbit 的既有约定一致：只自动 review 一次，push 后不自动复评；
           # 需要复评时在 PR 评论里用 /review 显式触发。
