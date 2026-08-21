@@ -163,7 +163,7 @@ export default function SchedulesPage() {
 
   if (loading) {
     return (
-      <PageContainer width="default">
+      <PageContainer width="content">
         <PageHeader title="定时任务" subtitle="管理 Cron 定时执行的 Plan" />
         <PageSkeleton>
           <PageSkeleton.Block size="md" />
@@ -174,7 +174,7 @@ export default function SchedulesPage() {
   }
 
   return (
-    <PageContainer width="default">
+    <PageContainer width="content">
       <PageHeader
         title="定时任务"
         subtitle="管理 Cron 定时执行的 Plan"

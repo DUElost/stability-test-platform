@@ -38,7 +38,7 @@ export default function PlanRunListPage() {
   const isProject404 = isError && toApiError(error).status === 404;
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <PageHeader
         title="Plan 执行记录"
         subtitle="查看所有 PlanRun 历史记录"

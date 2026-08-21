@@ -76,7 +76,7 @@ export default function PlanListPage() {
   }), [plans]);
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <PageHeader
         title="Plan 编排"
         subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链"

@@ -62,7 +62,7 @@ export default function ProjectDetailPage() {
 
   if (detailQ.isLoading) {
     return (
-      <PageContainer width="list">
+      <PageContainer width="content">
         <PageHeader title="项目详情" subtitle={projectKey} />
         <div className="space-y-4">
           <Skeleton className="h-24 w-full" />
@@ -76,7 +76,7 @@ export default function ProjectDetailPage() {
     const status = toApiError(detailQ.error).status;
     const isNotFound = status === 404;
     return (
-      <PageContainer width="list">
+      <PageContainer width="content">
         <PageHeader title="项目详情" subtitle={projectKey} />
         <ErrorState
           // 约束 2：未知 key 是路由错误（后端统一 404），按错误态渲染不吞成空态
@@ -105,7 +105,7 @@ export default function ProjectDetailPage() {
   const summary = summaryQ.data;
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <PageHeader
         title={project.display_name}
         subtitle={project.project_key}

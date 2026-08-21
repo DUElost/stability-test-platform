@@ -61,7 +61,7 @@ export default function IssueTrackerPage() {
   ];
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <PageHeader
         title="问题追踪"
         subtitle="上传去重报告进行批量 Jira 提单，或查看任务自动生成的草稿"

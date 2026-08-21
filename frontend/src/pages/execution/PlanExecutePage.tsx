@@ -964,7 +964,7 @@ export default function PlanExecutePage() {
 
   return (
     <PageContainer
-      fullBleed
+      width="bleed"
       scrollable={phase !== 'select'}
       className={cn(
         'min-h-0',

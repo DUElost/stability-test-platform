@@ -65,7 +65,7 @@ export default function AuditLogPage() {
   }, [loadLogs]);
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <PageHeader title="操作日志" subtitle="查看系统操作审计记录（仅管理员）" />
 
       {/* Filters */}

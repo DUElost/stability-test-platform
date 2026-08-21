@@ -124,7 +124,7 @@ export default function WifiPage() {
   };
 
   return (
-    <PageContainer width="default">
+    <PageContainer width="content">
       <PageHeader
         title="WiFi 资源池"
         subtitle="管理 WiFi 路由器池，平台按容量自动为设备分配接入点"

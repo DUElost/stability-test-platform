@@ -41,7 +41,7 @@ export default function ResultsPage() {
 
   if (isError) {
     return (
-      <PageContainer width="default">
+      <PageContainer width="content">
         <PageHeader title="测试结果" subtitle="测试运行统计与风险分布概览" />
         <ErrorState
           // 未知项目 key：按错误态渲染（后端统一 404），不吞成空数据
@@ -61,7 +61,7 @@ export default function ResultsPage() {
   }
 
   return (
-    <PageContainer width="default">
+    <PageContainer width="content">
       <PageHeader
         title="测试结果"
         subtitle="测试运行统计与风险分布概览"

@@ -94,7 +94,7 @@ export default function PlanRunLogsPage() {
   }
 
   return (
-    <PageContainer width="logs" fullBleed>
+    <PageContainer width="bleed">
       <PlanRunEventStream
         events={eventsQ.data}
         stageFilter={stageFilter}

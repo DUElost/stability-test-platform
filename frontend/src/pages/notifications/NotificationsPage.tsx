@@ -228,7 +228,7 @@ export default function NotificationsPage() {
     );
 
   return (
-    <PageContainer width="default">
+    <PageContainer width="content">
       <PageHeader title="通知管理" subtitle="配置通知渠道和告警规则" />
 
       {/* Tabs */}

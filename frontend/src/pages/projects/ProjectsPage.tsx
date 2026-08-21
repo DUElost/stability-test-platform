@@ -82,7 +82,7 @@ export default function ProjectsPage() {
   }, [projects]);
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <PageHeader
         title="项目编组工作台"
         subtitle="上方是设备心跳可读的型号事实；已映射项目需人工填写，不由 HONOR-MLD 等回填标签推断"
