@@ -96,13 +96,24 @@ export const LAYOUT = {
   pagePadding: 'p-4 lg:p-8',
   pageGap: 'space-y-6',
   pageEnter: 'page-enter',
+  /**
+   * 页面宽度四档 —— 按**内容类型**分，不按像素分。
+   * 判定树与逐页归属见 `docs/design/2026-08-21-frontend-page-shell-spec.md`。
+   *
+   *   ① 自管布局的面板/控制台 → bleed
+   *   ② 宽数据表（≥8 列或需横向滚动）→ wide
+   *   ③ 单列表单 → form
+   *   否则 → content（默认档，拿不准就用它）
+   *
+   * 不要新增第五档。旧的六档（narrow/list/default/wide/logs/full）就是靠
+   * 「这页想比那页宽 128px」繁殖出来的 —— 想加档先说清它承载什么**类型**差异。
+   */
   pageWidth: {
-    narrow: 'max-w-3xl mx-auto w-full',
-    list: 'max-w-5xl mx-auto w-full',
-    default: 'max-w-6xl mx-auto w-full',
-    wide: 'max-w-7xl mx-auto w-full',
-    logs: 'max-w-[1480px] mx-auto w-full',
-    full: 'w-full',
+    form: 'max-w-3xl mx-auto w-full',
+    content: 'max-w-6xl mx-auto w-full',
+    wide: 'w-full',
+    /** 无内边距，由页面自己的面板贴边并管理滚动 */
+    bleed: 'w-full',
   },
 } as const;
 

@@ -267,7 +267,7 @@ export default function DevicesPage() {
 
   if (isLoading) {
     return (
-      <PageContainer width="full">
+      <PageContainer width="wide">
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <PageSkeleton>
           <PageSkeleton.Stats count={5} />
@@ -280,7 +280,7 @@ export default function DevicesPage() {
   if (error) {
     const isProject404 = toApiError(error).status === 404;
     return (
-      <PageContainer width="full">
+      <PageContainer width="wide">
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <ErrorState
           // 未知项目 key：路由/筛选参数错误语义，按错误态渲染不吞成空列表
@@ -301,7 +301,7 @@ export default function DevicesPage() {
 
   if (formattedDevices.length === 0) {
     return (
-      <PageContainer width="full">
+      <PageContainer width="wide">
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <EmptyState
           title="还没有设备"
@@ -326,7 +326,7 @@ export default function DevicesPage() {
 
   return (
     <PageContainer
-      width="full"
+      width="wide"
       className={selectedDeviceIds.size > 0 ? 'pb-28' : undefined}
     >
       <PageHeader title="设备管理" subtitle="管理和监控测试设备" />

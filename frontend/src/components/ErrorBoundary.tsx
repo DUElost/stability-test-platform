@@ -1,7 +1,9 @@
 import React from 'react';
-import { SURFACE, TEXT } from '@/design-system/tokens';
+import { AlertTriangle } from 'lucide-react';
+import { SURFACE } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { ErrorState } from '@/components/ui/error-state';
 import { clearChunkRecoveryAttempt, isChunkLoadError } from '@/utils/chunkLoadRecovery';
 
 interface Props {
@@ -40,27 +42,27 @@ export class ErrorBoundary extends React.Component<Props, State> {
     const isChunkFailure = isChunkLoadError(this.state.error);
     if (this.state.hasError) {
       return (
-        <div className={cn('flex flex-col items-center justify-center min-h-screen p-8', SURFACE.page)}>
-          <div className="bg-card rounded-xl border border-border shadow-sm p-8 max-w-md w-full text-center">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-destructive/10 flex items-center justify-center">
-              <svg className="w-8 h-8 text-destructive" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-            </div>
-            <h2 className={cn('text-xl font-semibold mb-2', TEXT.heading)}>
-              {isChunkFailure ? '页面需要刷新以加载最新版本' : '页面出错了'}
-            </h2>
-            <p className={cn('text-sm mb-6', TEXT.subtitle)}>
-              {isChunkFailure
-                ? '检测到当前页面所需资源已被新版本替换。请点击下方按钮刷新，加载完成后即可正常访问。'
-                : '抱歉，页面遇到了意外错误。请尝试刷新页面。'}
-            </p>
-            {this.state.error && (
-              <pre className={cn('text-xs text-left rounded-lg p-3 mb-4 overflow-auto max-h-32 text-destructive border border-border', SURFACE.subtle)}>
-                {this.state.error.message}
-              </pre>
-            )}
-            <Button onClick={this.handleReload}>刷新页面</Button>
+        <div className={cn('flex items-center justify-center min-h-screen p-8', SURFACE.page)}>
+          <div className="w-full max-w-md">
+            <ErrorState
+              icon={<AlertTriangle className="w-8 h-8 text-destructive" />}
+              title={isChunkFailure ? '页面需要刷新以加载最新版本' : '页面出错了'}
+              description={
+                isChunkFailure
+                  ? '检测到当前页面所需资源已被新版本替换。请点击下方按钮刷新，加载完成后即可正常访问。'
+                  : '抱歉，页面遇到了意外错误。请尝试刷新页面。'
+              }
+              action={
+                <div className="space-y-3">
+                  {this.state.error && (
+                    <pre className={cn('text-xs text-left rounded-lg p-3 overflow-auto max-h-32 text-destructive border border-border', SURFACE.subtle)}>
+                      {this.state.error.message}
+                    </pre>
+                  )}
+                  <Button onClick={this.handleReload}>刷新页面</Button>
+                </div>
+              }
+            />
           </div>
         </div>
       );

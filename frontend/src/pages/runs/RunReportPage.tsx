@@ -102,7 +102,7 @@ export default function RunReportPage() {
   const counts = risk.counts || {};
 
   return (
-    <PageContainer width="default">
+    <PageContainer width="content">
       <PageHeader
         title={`Job 运行报告 #${report.run.id}`}
         subtitle={`任务: ${report.task.name} (${report.task.type})`}

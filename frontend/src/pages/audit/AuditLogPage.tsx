@@ -1,9 +1,10 @@
 import { useCallback, useState, useEffect } from 'react';
 import { api } from '@/utils/api';
-import { Loader2, Shield } from 'lucide-react';
+import { Shield } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
@@ -65,7 +66,7 @@ export default function AuditLogPage() {
   }, [loadLogs]);
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <PageHeader title="操作日志" subtitle="查看系统操作审计记录（仅管理员）" />
 
       {/* Filters */}
@@ -124,9 +125,10 @@ export default function AuditLogPage() {
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.subtitle)} />
-        </div>
+        <PageSkeleton>
+          <PageSkeleton.Block size="md" />
+          <PageSkeleton.Block size="lg" />
+        </PageSkeleton>
       ) : error ? null : logs.length === 0 ? (
         <EmptyState
           title="暂无审计记录"

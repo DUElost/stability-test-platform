@@ -64,13 +64,13 @@ describe('XTerminal', () => {
 
   it('shows search and download buttons in toolbar', () => {
     render(<XTerminal poolKey="test-2" />);
-    expect(screen.getByTitle('Search (Ctrl+F)')).toBeDefined();
-    expect(screen.getByTitle('Download Log')).toBeDefined();
+    expect(screen.getByTitle('搜索 (Ctrl+F)')).toBeDefined();
+    expect(screen.getByTitle('下载日志')).toBeDefined();
   });
 
   it('toggles search bar on search button click', () => {
     render(<XTerminal poolKey="test-3" />);
-    const searchButton = screen.getByTitle('Search (Ctrl+F)');
+    const searchButton = screen.getByTitle('搜索 (Ctrl+F)');
 
     // Search bar should not be visible initially
     expect(screen.queryByPlaceholderText('Search...')).toBeNull();

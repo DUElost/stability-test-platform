@@ -79,7 +79,7 @@ export default function PlanRunKpiGrid({ devices, currentStage, patrolCycle }: P
           label={patrolCycle != null ? `周期 #${patrolCycle}` : '当前阶段'}
           testId="kpi-stage"
         />
-        <Cell value={running} label="运行中" tone="primary" testId="kpi-running" />
+        <Cell value={running} label="运行中" tone="warning" testId="kpi-running" />
         <Cell value={completed} label="已完成" tone="success" testId="kpi-completed" />
         <Cell
           value={failed}

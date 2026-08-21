@@ -490,7 +490,7 @@ export default function FileServerPage() {
 
   if (query.isError && !data) {
     return (
-      <PageContainer fullBleed className="space-y-6 p-4 lg:p-6">
+      <PageContainer width="bleed" className="space-y-6 p-4 lg:p-6">
         <PageHeader title="文件服务器" subtitle="控制面与中心存储" action={refreshAction} />
         <ErrorState title="文件服务器状态加载失败" onRetry={() => query.refetch()} />
       </PageContainer>
@@ -498,7 +498,7 @@ export default function FileServerPage() {
   }
 
   return (
-    <PageContainer fullBleed className="space-y-6 p-4 lg:p-6">
+    <PageContainer width="bleed" className="space-y-6 p-4 lg:p-6">
       <PageHeader
         title="文件服务器"
         subtitle={

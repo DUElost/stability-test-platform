@@ -539,7 +539,7 @@ export default function HostsPage() {
 
   if (isLoading) {
     return (
-      <PageContainer width="full">
+      <PageContainer width="wide">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <PageSkeleton>
           <PageSkeleton.Stats count={4} />
@@ -551,7 +551,7 @@ export default function HostsPage() {
 
   if (error) {
     return (
-      <PageContainer width="full">
+      <PageContainer width="wide">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <ErrorState
           title="加载主机失败"
@@ -564,7 +564,7 @@ export default function HostsPage() {
 
   if (tableData.length === 0) {
     return (
-      <PageContainer width="full">
+      <PageContainer width="wide">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <EmptyState
           title="还没有主机"
@@ -590,7 +590,7 @@ export default function HostsPage() {
   }
 
   return (
-    <PageContainer width="full">
+    <PageContainer width="wide">
       <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
 
       <div className="flex items-center justify-end gap-2 py-2">

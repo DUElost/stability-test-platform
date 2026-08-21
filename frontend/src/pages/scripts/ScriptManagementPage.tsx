@@ -57,7 +57,7 @@ export default function ScriptManagementPage() {
   };
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <ScriptVersionDialog
         open={showVersionDialog}
         script={versionTarget}

@@ -38,7 +38,7 @@ export default function PlanRunListPage() {
   const isProject404 = isError && toApiError(error).status === 404;
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <PageHeader
         title="Plan 执行记录"
         subtitle="查看所有 PlanRun 历史记录"
@@ -88,7 +88,7 @@ export default function PlanRunListPage() {
                 <div className="flex items-center gap-4">
                   <span className={`font-mono text-sm ${TEXT.subtitle}`}>#{run.id}</span>
                   <StatusBadge kind="plan-run" status={run.status} size="sm" />
-                  <span className={`text-sm ${TEXT.heading}`}>
+                  <span className={`min-w-0 truncate text-sm ${TEXT.heading}`}>
                     {run.plan_name || `Plan #${run.plan_id}`}
                   </span>
                   <ProjectKeyBadge projectKey={run.project_key} />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, X, Loader2, ChevronDown, RotateCcw } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -53,6 +53,9 @@ export default function PlanRunHero({
   const [exportOpen, setExportOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [tick, setTick] = useState(0);
+  const exportBtnRef = useRef<HTMLButtonElement | null>(null);
+  /** 导出浮卡锚点：点击时测量一次入 state（渲染期读 ref.current 违反 react-hooks/refs；菜单瞬态，无需随渲染重测） */
+  const [exportPos, setExportPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const isTerminal = !!run && isPlanRunTerminal(run.status);
 
   useEffect(() => {
@@ -132,8 +135,8 @@ export default function PlanRunHero({
           >
             {isRunning && (
               <span className="relative flex h-2.5 w-2.5 shrink-0">
-                <span className="absolute inset-0 rounded-full bg-primary/60 opacity-60 animate-ping" />
-                <span className="relative h-2.5 w-2.5 rounded-full bg-primary" />
+                <span className="absolute inset-0 rounded-full bg-warning/60 opacity-60 animate-ping" />
+                <span className="relative h-2.5 w-2.5 rounded-full bg-warning" />
               </span>
             )}
             <pill.Icon
@@ -215,14 +218,19 @@ export default function PlanRunHero({
         </div>
       )}
 
-      {/* 操作按钮行 */}
+      {/* 操作按钮行 — 导出下拉用 fixed 浮出卡片（卡片 overflow-hidden 会裁掉 absolute 下拉） */}
       <div className="flex gap-1.5 px-4 pb-4">
         <div className="relative flex-1">
           <Button
             variant="outline"
             size="sm"
+            ref={exportBtnRef}
             data-testid="plan-run-export-btn"
-            onClick={() => setExportOpen((v) => !v)}
+            onClick={() => {
+              const rect = exportBtnRef.current?.getBoundingClientRect();
+              if (rect) setExportPos({ top: rect.bottom, left: rect.left, width: rect.width });
+              setExportOpen((v) => !v);
+            }}
             disabled={!run}
             className="w-full text-[11px] h-7"
           >
@@ -233,7 +241,14 @@ export default function PlanRunHero({
           {exportOpen && run && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
-              <div className={cn('absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-md border shadow-lg', SURFACE.elevated, ELEVATION.dropdown)}>
+              <div
+                className={cn(
+                  'fixed z-20 mt-1 overflow-hidden rounded-md border shadow-lg',
+                  SURFACE.elevated,
+                  ELEVATION.dropdown,
+                )}
+                style={{ top: (exportPos?.top ?? 0) + 4, left: exportPos?.left ?? 0, width: exportPos?.width ?? 160 }}
+              >
                 <button
                   type="button"
                   data-testid="plan-run-export-md"

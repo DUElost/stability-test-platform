@@ -48,7 +48,7 @@ export default function ChangePasswordPage() {
   };
 
   return (
-    <PageContainer width="narrow">
+    <PageContainer width="form">
       <PageHeader title="修改密码" subtitle="更新您的账号登录密码" />
 
       <Card className="max-w-lg">

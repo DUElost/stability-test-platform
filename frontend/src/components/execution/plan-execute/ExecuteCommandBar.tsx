@@ -28,6 +28,8 @@ interface ExecuteCommandBarProps {
   secondary?: React.ReactNode;
   /** 选机工作台：更紧凑，贴近 mockup command-bar */
   compact?: boolean;
+  /** dispatch 长页：主 CTA 随滚动吸顶，底部核对后无需滚回顶（#357） */
+  sticky?: boolean;
 }
 
 function stepChipLabel(phase: ExecutePhase, summary: ExecuteCommandBarSummary, index: number): string {
@@ -56,6 +58,7 @@ export function ExecuteCommandBar({
   onPrimary,
   secondary,
   compact = false,
+  sticky = false,
 }: ExecuteCommandBarProps) {
   const currentIdx = phaseIndex(phase);
 
@@ -64,6 +67,7 @@ export function ExecuteCommandBar({
       className={cn(
         'shrink-0 rounded-xl border bg-card shadow-sm',
         compact ? 'px-3 py-2.5' : 'px-4 py-3',
+        sticky && 'sticky top-0 z-20',
       )}
       aria-label="执行指挥条"
       data-testid="execute-command-bar"
@@ -110,7 +114,7 @@ export function ExecuteCommandBar({
               </span>
             ) : null}
             {summary.planName && !summary.showDeviceMeta ? (
-              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs">
+              <span className="min-w-0 max-w-[18rem] truncate rounded-md border bg-muted/40 px-2 py-0.5 text-xs">
                 Plan · {summary.planName}
               </span>
             ) : null}

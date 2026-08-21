@@ -7,6 +7,7 @@ import { Plus, Trash2, Edit2, Play, Power, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 import { INTERACTIVE, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { cn } from '@/lib/utils';
@@ -42,6 +43,7 @@ export default function SchedulesPage() {
   const [schedules, setSchedules] = useState<TaskSchedule[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<TaskSchedule | null>(null);
   const [form, setForm] = useState<ScheduleForm>(DEFAULT_FORM);
@@ -58,8 +60,10 @@ export default function SchedulesPage() {
 
   const loadAll = useCallback(async () => {
     try {
+      setLoadError(null);
       await Promise.all([loadSchedules(), loadPlans()]);
-    } catch {
+    } catch (err: unknown) {
+      setLoadError(toApiError(err).message);
       toast.error('加载定时任务失败');
     } finally {
       setLoading(false);
@@ -163,7 +167,7 @@ export default function SchedulesPage() {
 
   if (loading) {
     return (
-      <PageContainer width="default">
+      <PageContainer width="content">
         <PageHeader title="定时任务" subtitle="管理 Cron 定时执行的 Plan" />
         <PageSkeleton>
           <PageSkeleton.Block size="md" />
@@ -173,8 +177,30 @@ export default function SchedulesPage() {
     );
   }
 
+  if (loadError) {
+    return (
+      <PageContainer width="content">
+        <PageHeader
+          title="定时任务"
+          subtitle="管理 Cron 定时执行的 Plan"
+          action={
+            <Button onClick={loadAll} size="sm">
+              <Plus className="w-4 h-4" />
+              重试
+            </Button>
+          }
+        />
+        <ErrorState
+          title="加载定时任务失败"
+          description={loadError}
+          onRetry={loadAll}
+        />
+      </PageContainer>
+    );
+  }
+
   return (
-    <PageContainer width="default">
+    <PageContainer width="content">
       <PageHeader
         title="定时任务"
         subtitle="管理 Cron 定时执行的 Plan"

@@ -4,13 +4,13 @@ import { api } from '@/utils/api';
 import type { ResourcePool, ResourcePoolLoad } from '@/utils/api/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { Plus, Trash2, Wifi, WifiOff, Pencil, X } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
 import { InlineEmpty } from '@/components/ui/empty-state';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { FORM, INTERACTIVE, MODAL, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
@@ -124,7 +124,7 @@ export default function WifiPage() {
   };
 
   return (
-    <PageContainer width="default">
+    <PageContainer width="content">
       <PageHeader
         title="WiFi 资源池"
         subtitle="管理 WiFi 路由器池，平台按容量自动为设备分配接入点"
@@ -238,9 +238,7 @@ export default function WifiPage() {
             </div>
           )}
           {isLoading ? (
-            <div className="space-y-3">
-              {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
-            </div>
+            <PageSkeleton.Cards count={3} layout="grid" />
           ) : pools.length === 0 ? (
             <InlineEmpty bordered>暂无 WiFi 资源池</InlineEmpty>
           ) : (
