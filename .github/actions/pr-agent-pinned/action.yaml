@@ -1,0 +1,24 @@
+name: PR Agent (pinned digest)
+description: >-
+  Run the upstream The-PR-Agent/pr-agent Docker image pinned by manifest
+  digest instead of the mutable `:github_action` tag.
+inputs:
+  artifact_path:
+    description: >-
+      Path to a CI artifact file (relative to GITHUB_WORKSPACE or absolute) to
+      include as extra context in PR analysis. Leave empty to disable artifact
+      injection.
+    required: false
+    default: ""
+  artifact_instructions:
+    description: >-
+      Custom instructions telling the AI how to interpret the artifact. Leave
+      empty for a sensible default.
+    required: false
+    default: ""
+runs:
+  using: docker
+  image: docker://pragent/pr-agent@sha256:b81235c3bddc551939a1feca8926f4b6e8abcec2ae5bf4620424f8f56dd9cb93
+  env:
+    ARTIFACT_PATH: ${{ inputs.artifact_path }}
+    ARTIFACT_INSTRUCTIONS: ${{ inputs.artifact_instructions }}

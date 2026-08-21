@@ -1,0 +1,48 @@
+# PR-Agent (DeepSeek) 试点 PR review
+
+Status: implemented
+Class: process
+
+## Decision
+
+在 GitHub Actions 上试点社区开源 PR-Agent（The-PR-Agent/pr-agent v0.42.0），
+用 DeepSeek 做 PR 自动 review，定位为 **纯参考模式**：
+
+- 触发：`pull_request` 的 opened / reopened / ready_for_review /
+  review_requested，以及 PR 评论（支持 `/review`、`/describe`、`/improve`、
+  `/ask` 等手动命令）。
+- 只开 `auto_review`，显式关闭 `auto_describe` / `auto_improve`；
+  `synchronize` 不自动复评（与 CodeRabbit `auto_incremental_review=false`
+  的既有约定一致，复评走 PR 评论显式触发）。
+- 模型 `deepseek/deepseek-v4-pro`，fallback `deepseek/deepseek-v4-flash`；
+  密钥为 repo secret `DEEPSEEK_API_KEY`，经 `DEEPSEEK.KEY` 注入 LiteLLM 的
+  `DEEPSEEK_API_KEY`。
+- 通过本地 action 包装 `pragent/pr-agent:0.42.0-github_action` 的镜像
+  manifest digest（`sha256:b81235c3...`）固定版本，不跟随 `main` 或
+  mutable 的 `:github_action` tag。
+- 不新增 required check；secret 未配置时 job 直接跳过，避免每个 PR 挂红。
+- 产物是 PR 评论，不是 status check；未来若要当门禁，需仿照
+  `code-rabbit-gate` 由 workflow 包装，不在本次试点范围。
+
+## Alternatives
+
+- 自托管 GitHub App（webhook）：需要公网可达的 webhook URL，本仓库生产机
+  没有，暂不选。
+- 直接用官方 action `the-pr-agent/pr-agent@main`：其 Dockerfile 引用
+  mutable 的 `pragent/pr-agent:github_action` tag，action 代码与镜像都不
+  固定，放弃。
+- 由 CodeRabbit 承担全部 AI 审查：CodeRabbit 配额不稳定且是 required
+  best-effort 门禁；试点新增一个参考通道，不改变门禁语义。
+
+## Verification
+
+- `actionlint` 校验通过。
+- 合入后、配置 `DEEPSEEK_API_KEY` secret 的 PR 上观察评论质量与成本。
+- 无 secret 时 job skip，不影响 auto-merge 与合并路径注意力预算。
+
+## Revisit
+
+- 试点 1–2 周后评估：review 质量、DeepSeek 成本、评论噪音。
+- PR-Agent 或 DeepSeek 模型升级（v4-pro / v4-flash）时重新 pin digest。
+- 若需要 fork PR 支持或门禁语义，再评估 `pull_request_target` 与
+  GitHub App 方案。
