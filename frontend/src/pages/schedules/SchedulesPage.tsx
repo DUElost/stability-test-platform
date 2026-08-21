@@ -261,7 +261,7 @@ export default function SchedulesPage() {
           icon={<Clock className="w-16 h-16" />}
         />
       ) : (
-        <div className={cn('overflow-hidden', PANEL.root)}>
+        <div className={cn(PANEL.root, 'overflow-x-auto')}>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50">

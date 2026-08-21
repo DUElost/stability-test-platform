@@ -135,7 +135,7 @@ export default function AuditLogPage() {
         />
       ) : (
         <>
-          <div className={cn(PANEL.root, 'overflow-hidden')}>
+          <div className={cn(PANEL.root, 'overflow-x-auto')}>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/50">
