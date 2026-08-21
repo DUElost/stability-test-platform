@@ -38,7 +38,8 @@ jobs:
     steps:
       - name: Run PR Agent
         if: env.DEEPSEEK_API_KEY != ''
-        uses: ./.github/actions/pr-agent-pinned
+        # 直接以 digest 固定镜像，避免本地 action 依赖 checkout。
+        uses: docker://pragent/pr-agent@sha256:b81235c3bddc551939a1feca8926f4b6e8abcec2ae5bf4620424f8f56dd9cb93
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_API_KEY }}

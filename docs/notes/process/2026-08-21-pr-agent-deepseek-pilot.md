@@ -17,9 +17,9 @@ Class: process
 - 模型 `deepseek/deepseek-v4-pro`，fallback `deepseek/deepseek-v4-flash`；
   密钥为 repo secret `DEEPSEEK_API_KEY`，经 `DEEPSEEK.KEY` 注入 LiteLLM 的
   `DEEPSEEK_API_KEY`。
-- 通过本地 action 包装 `pragent/pr-agent:0.42.0-github_action` 的镜像
-  manifest digest（`sha256:b81235c3...`）固定版本，不跟随 `main` 或
-  mutable 的 `:github_action` tag。
+- workflow 直接用 `docker://pragent/pr-agent@sha256:b81235c3...` 固定
+  `pragent/pr-agent:0.42.0-github_action` 镜像 digest，不跟随 `main` 或
+  mutable 的 `:github_action` tag；也不依赖 checkout 本地 action 文件。
 - 不新增 required check；secret 未配置时 job 直接跳过，避免每个 PR 挂红。
 - 产物是 PR 评论，不是 status check；未来若要当门禁，需仿照
   `code-rabbit-gate` 由 workflow 包装，不在本次试点范围。
@@ -43,6 +43,8 @@ Class: process
 ## Verification
 
 - `actionlint` 校验通过。
+- 首次冒烟发现本地 action 在无 checkout 的 runner 上不可用
+  （`Can't find action.yml...`），改为 `docker://` + digest 后验证通过。
 - 合入后、配置 `DEEPSEEK_API_KEY` secret 的 PR 上观察评论质量与成本。
 - 无 secret 时 job skip，不影响 auto-merge 与合并路径注意力预算。
 
