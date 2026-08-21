@@ -54,7 +54,7 @@ Class: process
 ## Revisit
 
 - 试点 1–2 周后评估：review 质量、DeepSeek 成本、评论噪音。
-- 试点若发现 v4-flash 质量不足，可切回 `deepseek-v4-pro`（成本更高）；
-  PR-Agent 或 DeepSeek 模型升级时重新 pin digest。
+- 试点若发现 v4-flash 质量不足，可切回 `deepseek/deepseek-v4-pro`
+  （成本更高）；PR-Agent 或 DeepSeek 模型升级时重新 pin digest。
 - 若需要 fork PR 支持或门禁语义，再评估 `pull_request_target` 与
   GitHub App 方案。
