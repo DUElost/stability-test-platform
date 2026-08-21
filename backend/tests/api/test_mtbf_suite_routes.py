@@ -17,7 +17,7 @@ import pytest
 
 from backend.models.audit import AuditLog
 from backend.models.project import TestProject as ProjectModel
-from backend.models.test_suite import TestCase, TestSuite
+from backend.models.suite import TestCase, TestSuite
 
 _FIXTURES = Path(__file__).resolve().parents[2] / "agent" / "tests" / "fixtures" / "mtbf"
 

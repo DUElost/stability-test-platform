@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import User, get_current_active_user, require_admin
-from backend.api.schemas.test_suite import (
+from backend.api.schemas.suite import (
     ExportResultOut,
     TestCaseIn,
     TestCaseOut,
@@ -36,7 +36,7 @@ from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.storage_root import resolve_shared_storage_root
 from backend.models.project import TestProject
-from backend.models.test_suite import TestCase, TestSuite
+from backend.models.suite import TestCase, TestSuite
 from backend.services.mtbf_suite import (
     _validate_suite,
     content_fingerprint,
