@@ -25,7 +25,8 @@ jobs:
     # - 有 security concerns → failure 阻断；
     # - review 未完成 / 工具或 API 失败 / 输出缺失 → failure 阻断
     #   （逃生：重跑，或临时从分支保护摘除该 required check）。
-    # 未配置 DEEPSEEK_API_KEY 时跳过（fork PR 同理），避免空转。
+    # fail-closed：未配置 DEEPSEEK_API_KEY 时 PR Agent 步骤失败 → gate 红，
+    # 避免密钥缺失时门禁静默失效。fork PR 在 job 级 if 直接排除。
     env:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
     if: >-
@@ -45,7 +46,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Run PR Agent
-        if: env.DEEPSEEK_API_KEY != ''
         # 直接以 digest 固定镜像，避免本地 action 依赖 checkout。
         uses: docker://pragent/pr-agent@sha256:b81235c3bddc551939a1feca8926f4b6e8abcec2ae5bf4620424f8f56dd9cb93
         env:
@@ -65,7 +65,7 @@ jobs:
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
       - name: Evaluate PR Agent review (security gate)
-        if: github.event_name == 'pull_request' && env.DEEPSEEK_API_KEY != ''
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -94,7 +94,7 @@ jobs:
             exit 0
           fi
           if printf '%s' "$comment" | grep -qi 'Security concerns'; then
-            echo "::error::PR Agent 发现 security concerns，请处理后在 PR 评论发 /review 复评。"
+            echo "::error::PR Agent 发现 security concerns，请修复后 push 触发自动复评（synchronize），或对失败的 pr-agent-gate 检查点 rerun；/review 只更新评论、不重算门禁。"
             exit 1
           fi
           echo "::error::无法解析 PR Agent review 输出中的 security 段落；pr-agent-gate fails。"

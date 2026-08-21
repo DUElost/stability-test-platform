@@ -16,8 +16,11 @@ star）长期停摆，政策短期不会恢复。决定完整替代：
   - review 对当前 head 完成且无 security concerns → success；
   - 有 security concerns → failure 阻断（B-lite 语义：只有安全问题有否决权，
     其余 findings 仅参考，避免 AI 误报卡合入）；
-  - review 未完成 / 工具或 API 失败 / 输出缺失 → failure 阻断；逃生为重跑
-    或临时从分支保护摘除该 required check。
+  - review 未完成 / 工具或 API 失败 / 输出缺失 / `DEEPSEEK_API_KEY` 未配置
+    → failure 阻断（fail-closed）；逃生为修复后 push 自动复评、对失败检查点
+    rerun，或临时从分支保护摘除该 required check。
+- 复评路径：security concerns 阻断后，修复并 push（synchronize）即自动复评
+  并重算门禁；PR 评论 `/review` 只更新 persistent comment、不重算门禁。
 - **移除 CodeRabbit**：`enable-auto-merge.yml` 删除 merge-gate job 与
   `pull_request_review` / `status` 触发；删除 `.coderabbit.yaml`；分支保护
   required checks 换为 `pr-agent-gate`；GitHub App 由仓库管理员手动卸载。
