@@ -593,12 +593,12 @@ export default function AnomalyDashboard({
             <SummaryCard
               label="Top 包名"
               value={formatCompactValue(currentRun.top_package_name)}
-              accent={KPI_TONE.warning.value}
+              accent={currentRun.top_package_name ? KPI_TONE.warning.value : KPI_TONE.default.value}
             />
             <SummaryCard
               label="Top 类型"
               value={formatCompactValue(currentRun.top_subtype)}
-              accent={KPI_TONE.destructive.value}
+              accent={currentRun.top_subtype ? KPI_TONE.destructive.value : KPI_TONE.default.value}
             />
           </div>
 
