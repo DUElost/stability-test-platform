@@ -12,7 +12,9 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+  # 按事件类型分 group：机器人评论（如 CodeRabbit）触发的 issue_comment run
+  # 不得取消正在进行的自动 review（pull_request run）。
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:

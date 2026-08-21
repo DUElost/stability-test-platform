@@ -45,6 +45,9 @@ Class: process
 - `actionlint` 校验通过。
 - 首次冒烟发现本地 action 在无 checkout 的 runner 上不可用
   （`Can't find action.yml...`），改为 `docker://` + digest 后验证通过。
+- 再次冒烟发现 CodeRabbit 等 bot 的 PR 评论会触发 `issue_comment` run，
+  与自动 review 共用 concurrency group 时把后者取消；group 加入
+  `event_name` 维度后验证通过。
 - 合入后、配置 `DEEPSEEK_API_KEY` secret 的 PR 上观察评论质量与成本。
 - 无 secret 时 job skip，不影响 auto-merge 与合并路径注意力预算。
 
