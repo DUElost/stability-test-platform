@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { User } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SURFACE, TEXT, INTERACTIVE, ELEVATION } from '@/design-system/tokens';
@@ -55,10 +56,10 @@ export const UserMenu: React.FC<UserMenuProps> = ({ username, role, items }) => 
                 <DropdownMenuSeparator />
               ) : item.href ? (
                 <DropdownMenuItem asChild>
-                  <a href={item.href} className={className}>
+                  <Link to={item.href} className={className}>
                     {item.icon}
                     <span className="ml-2">{item.label}</span>
-                  </a>
+                  </Link>
                 </DropdownMenuItem>
               ) : (
                 <DropdownMenuItem onClick={item.onClick} className={className}>

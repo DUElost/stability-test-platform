@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, CheckCheck, AlertTriangle, Info, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -89,7 +90,7 @@ export function NotificationBell() {
 
       {open && (
         <div className={cn(
-          'absolute right-0 top-full mt-2 w-96 rounded-xl border overflow-hidden',
+          'absolute right-0 top-full mt-2 w-[min(24rem,calc(100vw-2rem))] rounded-xl border overflow-hidden',
           SURFACE.elevated,
           BORDER.default,
           ELEVATION.lg,
@@ -147,8 +148,8 @@ export function NotificationBell() {
             )}
           </div>
 
-          <a
-            href="/notifications?tab=logs"
+          <Link
+            to="/notifications?tab=logs"
             onClick={() => setOpen(false)}
             className={cn(
               'block text-center py-2.5 text-xs border-t transition-colors',
@@ -158,7 +159,7 @@ export function NotificationBell() {
             )}
           >
             查看全部通知
-          </a>
+          </Link>
         </div>
       )}
     </div>

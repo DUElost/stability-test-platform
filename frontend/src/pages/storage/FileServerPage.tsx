@@ -118,7 +118,7 @@ function MetricCard({
   detail: string;
 }) {
   return (
-    <Card className="min-w-0 rounded-md p-4 shadow-none">
+    <Card className="min-w-0 rounded-xl p-4 shadow-none">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className={cn('text-xs', TEXT.caption)}>{label}</div>
@@ -391,7 +391,7 @@ function AgentStatusSection({
   const diskByHost = new Map(disks.items.map((item) => [item.host_id, item]));
   const warningCount = disks.warning + disks.critical;
   return (
-    <section className="rounded-md border" aria-labelledby="agent-status-title">
+    <section className="rounded-xl border" aria-labelledby="agent-status-title">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
         <div>
           <h2 id="agent-status-title" className={cn('text-sm font-semibold', TEXT.heading)}>Agent 状态（挂载与设备日志盘）</h2>
@@ -545,7 +545,7 @@ export default function FileServerPage() {
             </div>
           )}
 
-          <section className="rounded-md border" aria-labelledby="resource-trend-title">
+          <section className="rounded-xl border" aria-labelledby="resource-trend-title">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
               <div>
                 <h2 id="resource-trend-title" className={cn('text-sm font-semibold', TEXT.heading)}>资源趋势</h2>

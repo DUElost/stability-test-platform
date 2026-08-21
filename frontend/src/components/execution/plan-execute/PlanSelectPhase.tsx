@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
-import { STATUS_BG_COLORS } from '@/design-system/colors';
+import { STATUS_CHIP } from '@/design-system/tokens';
 import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDurationSeconds } from '@/utils/format';
@@ -211,7 +211,7 @@ export function PlanSelectPhase({
               </div>
               {executableStepCount === 0 && (
                 <div
-                  className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${STATUS_BG_COLORS.warning}`}
+                  className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${STATUS_CHIP.warning}`}
                 >
                   <AlertCircle className="h-4 w-4" /> 此 Plan 没有已启用步骤，无法执行
                 </div>

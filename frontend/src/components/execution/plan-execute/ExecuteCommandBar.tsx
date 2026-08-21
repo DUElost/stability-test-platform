@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { TEXT } from '@/design-system/tokens';
+import { SEGMENTED, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
 import { EXECUTE_PHASES, phaseIndex, type ExecutePhase } from './types';
@@ -90,7 +90,7 @@ export function ExecuteCommandBar({
                     aria-current={active ? 'step' : undefined}
                     className={cn(
                       'rounded-lg px-2.5 py-1 text-left text-xs transition-colors',
-                      active && 'bg-primary/15 font-semibold text-primary',
+                      active && SEGMENTED.itemActiveStrong,
                       done && !active && 'bg-success/15 font-medium text-success',
                       !active && !done && 'bg-muted text-muted-foreground hover:bg-accent',
                     )}

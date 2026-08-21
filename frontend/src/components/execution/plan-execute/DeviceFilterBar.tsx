@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { TEXT } from '@/design-system/tokens';
+import { SEGMENTED, TEXT } from '@/design-system/tokens';
 import { Check, ChevronDown, X } from 'lucide-react';
 import type { ActiveFilterChip } from './planExecuteFilters';
 import type { DeviceViewMode } from './types';
@@ -95,7 +95,7 @@ export function DeviceFilterBar({
             type="button"
             className={cn(
               'h-8 px-3 text-xs',
-              view === 'matrix' ? 'bg-primary/15 font-semibold text-primary' : 'text-muted-foreground',
+              view === 'matrix' ? SEGMENTED.itemActiveStrong : 'text-muted-foreground',
             )}
             onClick={() => onViewChange('matrix')}
           >
@@ -105,7 +105,7 @@ export function DeviceFilterBar({
             type="button"
             className={cn(
               'h-8 border-l px-3 text-xs',
-              view === 'table' ? 'bg-primary/15 font-semibold text-primary' : 'text-muted-foreground',
+              view === 'table' ? SEGMENTED.itemActiveStrong : 'text-muted-foreground',
             )}
             onClick={() => onViewChange('table')}
           >

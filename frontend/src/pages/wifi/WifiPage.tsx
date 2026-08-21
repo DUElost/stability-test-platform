@@ -12,6 +12,7 @@ import { InlineError } from '@/components/ui/error-state';
 import { InlineEmpty } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { FORM, INTERACTIVE, MODAL, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { resourceUsageBgClass } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 const FORM_INITIAL = {
@@ -273,10 +274,7 @@ export default function WifiPage() {
                       </div>
                       <div className="mt-1 h-2 w-full rounded-full bg-muted">
                         <div
-                          className={cn(
-                            'h-2 rounded-full transition-all',
-                            loadPct > 80 ? 'bg-destructive' : loadPct > 50 ? 'bg-warning' : 'bg-success',
-                          )}
+                          className={cn('h-2 rounded-full transition-all', resourceUsageBgClass(loadPct))}
                           style={{ width: `${Math.min(loadPct, 100)}%` }}
                         />
                       </div>
