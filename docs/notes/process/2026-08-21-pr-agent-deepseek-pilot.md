@@ -26,6 +26,12 @@ Class: process
 
 ## Alternatives
 
+- 内网 newapi 端点（`newapi.tinno.com`，OpenAI 兼容，含 deepseek-chat /
+  gpt-5-chat 等模型）：公网 DNS 不可解析，GitHub 托管 runner 无法访问；
+  改用 self-hosted runner 需要常驻内网机器，且会与生产机（生产 PG +
+  `.env.backend` + hosts.ini）共享「执行第三方代码」的入口；转私密仓库
+  又要消耗 Actions 配额并让 CodeRabbit 免费完整审查失效。三者叠加后
+  放弃，选 DeepSeek 官方 API（公网可达、零运维）。
 - 自托管 GitHub App（webhook）：需要公网可达的 webhook URL，本仓库生产机
   没有，暂不选。
 - 直接用官方 action `the-pr-agent/pr-agent@main`：其 Dockerfile 引用
