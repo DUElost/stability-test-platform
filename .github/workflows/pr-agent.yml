@@ -1,0 +1,47 @@
+name: PR Agent (DeepSeek pilot)
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, review_requested]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: PR Agent DeepSeek review
+    # 试点为纯参考模式：不新增 required check、不碰 code-rabbit-gate。
+    # 未配置 DEEPSEEK_API_KEY 时跳过 PR Agent 步骤，避免每个 PR 都挂红叉。
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    if: >-
+      github.event.sender.type != 'Bot' &&
+      (
+        (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && github.event.issue.pull_request.draft == false)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Run PR Agent
+        if: env.DEEPSEEK_API_KEY != ''
+        uses: ./.github/actions/pr-agent-pinned
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          config.model: deepseek/deepseek-v4-pro
+          config.fallback_models: '["deepseek/deepseek-v4-flash"]'
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "review_requested"]'
+          # 与 CodeRabbit 的既有约定一致：只自动 review 一次，push 后不自动复评；
+          # 需要复评时在 PR 评论里用 /review 显式触发。
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
