@@ -12,7 +12,9 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+  # 按事件类型分 group：机器人评论（如 CodeRabbit）触发的 issue_comment run
+  # 不得取消正在进行的自动 review（pull_request run）。
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -43,8 +45,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          config.model: deepseek/deepseek-v4-pro
-          config.fallback_models: '["deepseek/deepseek-v4-flash"]'
+          config.model: deepseek/deepseek-v4-flash
+          config.fallback_models: '[]'
           github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "review_requested"]'
           # 与 CodeRabbit 的既有约定一致：只自动 review 一次，push 后不自动复评；
           # 需要复评时在 PR 评论里用 /review 显式触发。

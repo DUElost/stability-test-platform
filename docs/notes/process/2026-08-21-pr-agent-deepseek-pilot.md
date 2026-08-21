@@ -14,8 +14,8 @@ Class: process
 - 只开 `auto_review`，显式关闭 `auto_describe` / `auto_improve`；
   `synchronize` 不自动复评（与 CodeRabbit `auto_incremental_review=false`
   的既有约定一致，复评走 PR 评论显式触发）。
-- 模型 `deepseek/deepseek-v4-pro`，fallback `deepseek/deepseek-v4-flash`；
-  密钥为 repo secret `DEEPSEEK_API_KEY`，经 `DEEPSEEK.KEY` 注入 LiteLLM 的
+- 模型只使用 `deepseek/deepseek-v4-flash`（低成本档，无 fallback）；密钥为
+  repo secret `DEEPSEEK_API_KEY`，经 `DEEPSEEK.KEY` 注入 LiteLLM 的
   `DEEPSEEK_API_KEY`。
 - workflow 直接用 `docker://pragent/pr-agent@sha256:b81235c3...` 固定
   `pragent/pr-agent:0.42.0-github_action` 镜像 digest，不跟随 `main` 或
@@ -45,12 +45,16 @@ Class: process
 - `actionlint` 校验通过。
 - 首次冒烟发现本地 action 在无 checkout 的 runner 上不可用
   （`Can't find action.yml...`），改为 `docker://` + digest 后验证通过。
+- 再次冒烟发现 CodeRabbit 等 bot 的 PR 评论会触发 `issue_comment` run，
+  与自动 review 共用 concurrency group 时把后者取消；group 加入
+  `event_name` 维度后验证通过。
 - 合入后、配置 `DEEPSEEK_API_KEY` secret 的 PR 上观察评论质量与成本。
 - 无 secret 时 job skip，不影响 auto-merge 与合并路径注意力预算。
 
 ## Revisit
 
 - 试点 1–2 周后评估：review 质量、DeepSeek 成本、评论噪音。
-- PR-Agent 或 DeepSeek 模型升级（v4-pro / v4-flash）时重新 pin digest。
+- 试点若发现 v4-flash 质量不足，可切回 `deepseek-v4-pro`（成本更高）；
+  PR-Agent 或 DeepSeek 模型升级时重新 pin digest。
 - 若需要 fork PR 支持或门禁语义，再评估 `pull_request_target` 与
   GitHub App 方案。
