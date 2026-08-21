@@ -7,6 +7,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import {
   ArrowLeft,
   Download,
@@ -14,11 +15,10 @@ import {
   AlertTriangle,
   CheckCircle2,
   Info,
-  Loader2,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
-import { ALERT_BANNER, RISK_RATING_TEXT } from '@/design-system/tokens';
+import { ALERT_BANNER, PANEL, RISK_RATING_TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 const severityIcons: Record<string, React.ReactNode> = {
@@ -57,41 +57,45 @@ export default function RunReportPage() {
 
   if (!enabled) {
     return (
-      <ErrorState
-        title="无效 Job ID"
-        description="URL 中的 Job ID 无法解析"
-        action={
-          <Button variant="outline" onClick={() => navigate(-1)}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            返回
-          </Button>
-        }
-      />
+      <PageContainer width="content">
+        <ErrorState
+          title="无效 Job ID"
+          description="URL 中的 Job ID 无法解析"
+          action={
+            <Button variant="outline" onClick={() => navigate(-1)}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              返回
+            </Button>
+          }
+        />
+      </PageContainer>
     );
   }
 
   if (reportQ.isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        <span className="ml-2 text-muted-foreground">加载报告中...</span>
-      </div>
+      <PageContainer width="content">
+        <PageSkeleton>
+          <PageSkeleton.Block size="md" />
+          <PageSkeleton.Block size="lg" />
+        </PageSkeleton>
+      </PageContainer>
     );
   }
 
   if (reportQ.isError || !reportQ.data) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-4">
+      <PageContainer width="content">
         <ErrorState
           title="报告加载失败"
           description="报告数据不存在或尚未生成"
           onRetry={() => reportQ.refetch()}
         />
-        <Button variant="outline" onClick={() => navigate(-1)}>
+        <Button variant="outline" className="mt-4" onClick={() => navigate(-1)}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           返回
         </Button>
-      </div>
+      </PageContainer>
     );
   }
 
@@ -135,7 +139,7 @@ export default function RunReportPage() {
       />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="rounded-lg border p-4 space-y-2">
+        <div className={cn(PANEL.root, 'p-4 space-y-2')}>
           <h3 className="text-sm font-medium text-muted-foreground">任务信息</h3>
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
@@ -153,7 +157,7 @@ export default function RunReportPage() {
           </div>
         </div>
 
-        <div className="rounded-lg border p-4 space-y-2">
+        <div className={cn(PANEL.root, 'p-4 space-y-2')}>
           <h3 className="text-sm font-medium text-muted-foreground">执行环境</h3>
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
@@ -171,7 +175,7 @@ export default function RunReportPage() {
           </div>
         </div>
 
-        <div className="rounded-lg border p-4 space-y-2">
+        <div className={cn(PANEL.root, 'p-4 space-y-2')}>
           <h3 className="text-sm font-medium text-muted-foreground">风险摘要</h3>
           {report.report_status === 'pending_archive' && (
             <div className={cn('mb-2 rounded-md border px-3 py-2 text-xs', ALERT_BANNER.warning)}>
@@ -215,7 +219,7 @@ export default function RunReportPage() {
       </div>
 
       {report.summary_metrics && Object.keys(report.summary_metrics).length > 0 && (
-        <div className="rounded-lg border p-4 space-y-2">
+        <div className={cn(PANEL.root, 'p-4 space-y-2')}>
           <h3 className="text-sm font-medium text-muted-foreground">汇总指标</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {Object.entries(report.summary_metrics).map(([key, value]) => (
@@ -256,7 +260,7 @@ export default function RunReportPage() {
       </div>
 
       {jiraDraft && (
-        <div className="rounded-lg border p-4 space-y-3">
+        <div className={cn(PANEL.root, 'p-4 space-y-3')}>
           <button
             className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             onClick={() => setShowJira(!showJira)}

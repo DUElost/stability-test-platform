@@ -8,8 +8,16 @@ import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { INTERACTIVE, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { FORM, INTERACTIVE, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull } from '@/utils/format';
 
@@ -224,7 +232,7 @@ export default function SchedulesPage() {
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full rounded-lg border bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+                className={FORM.input}
               />
             </div>
             <div>
@@ -239,7 +247,7 @@ export default function SchedulesPage() {
               <select
                 value={form.plan_id}
                 onChange={(e) => setForm({ ...form, plan_id: e.target.value })}
-                className="w-full rounded-lg border bg-card px-3 py-2 text-sm"
+                className={FORM.select}
               >
                 <option value="">请选择 Plan</option>
                 {plans.map(p => (
@@ -254,7 +262,7 @@ export default function SchedulesPage() {
                 value={form.device_ids}
                 onChange={(e) => setForm({ ...form, device_ids: e.target.value })}
                 placeholder="例如: 1,2,3"
-                className="w-full rounded-lg border bg-card px-3 py-2 text-sm"
+                className={FORM.input}
               />
             </div>
             <div className="flex items-center gap-2">
@@ -288,37 +296,37 @@ export default function SchedulesPage() {
         />
       ) : (
         <div className={cn(PANEL.root, 'overflow-x-auto')}>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>名称</th>
-                <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>Cron</th>
-                <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>执行对象</th>
-                <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>状态</th>
-                <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>下次执行</th>
-                <th className={cn('text-right px-4 py-3 font-medium', TEXT.subtitle)}>操作</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table className="min-w-[720px]">
+            <TableHeader>
+              <TableRow className="border-b bg-muted/50">
+                <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>名称</TableHead>
+                <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>Cron</TableHead>
+                <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>执行对象</TableHead>
+                <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>状态</TableHead>
+                <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>下次执行</TableHead>
+                <TableHead className={cn('text-right px-4 py-3 font-medium', TEXT.subtitle)}>操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {schedules.map((s) => (
-                <tr key={s.id} className="border-b hover:bg-muted/30">
-                  <td className={cn('px-4 py-3 font-medium', TEXT.heading)}>{s.name}</td>
-                  <td className={cn('px-4 py-3 font-mono', TEXT.subtitle)}>{s.cron_expr}</td>
-                  <td className={cn('px-4 py-3', TEXT.subtitle)}>
+                <TableRow key={s.id} className="border-b hover:bg-muted/30">
+                  <TableCell className={cn('px-4 py-3 font-medium', TEXT.heading)}>{s.name}</TableCell>
+                  <TableCell className={cn('px-4 py-3 font-mono', TEXT.subtitle)}>{s.cron_expr}</TableCell>
+                  <TableCell className={cn('px-4 py-3', TEXT.subtitle)}>
                     Plan #{s.plan_id} ({(s.device_ids || []).length} devices)
-                  </td>
-                  <td className="px-4 py-3">
+                  </TableCell>
+                  <TableCell className="px-4 py-3">
                     <span className={cn(
                       'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
                       s.enabled ? STATUS_CHIP.success : STATUS_CHIP.muted,
                     )}>
                       {s.enabled ? '启用' : '禁用'}
                     </span>
-                  </td>
-                  <td className={cn('px-4 py-3 text-xs', TEXT.subtitle)}>
+                  </TableCell>
+                  <TableCell className={cn('px-4 py-3 text-xs', TEXT.subtitle)}>
                     {s.next_run_at ? formatDateTimeFull(s.next_run_at) : '-'}
-                  </td>
-                  <td className="px-4 py-3 text-right">
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
                       <button onClick={() => handleRunNow(s.id)} title="立即执行" aria-label="立即执行" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-primary')}>
                         <Play className="w-4 h-4" />
@@ -333,11 +341,11 @@ export default function SchedulesPage() {
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
     </PageContainer>

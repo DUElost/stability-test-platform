@@ -331,7 +331,7 @@ export default function DevicesPage() {
     >
       <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
 
-      <div className="flex items-center justify-between gap-2 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 py-2">
         <span className={cn('text-xs', TEXT.subtitle)}>点击设备行展开详情，勾选后可批量处理</span>
         <div className="flex items-center gap-2">
           <ProjectFilterSelect

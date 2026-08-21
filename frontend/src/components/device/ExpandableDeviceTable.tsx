@@ -4,6 +4,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableEmptyRow,
   TableHead,
   TableHeader,
   TableRow,
@@ -330,7 +331,7 @@ export function ExpandableDeviceTable({
             placeholder="搜索设备序列号/型号/版本/主机/标签..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className={cn('w-full pl-9', FORM.inputSm)}
+            className={cn('w-full pl-9 h-9', FORM.inputSm)}
           />
         </div>
         <select
@@ -372,7 +373,7 @@ export function ExpandableDeviceTable({
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         <Table className="min-w-[1420px]">
           <TableHeader>
-            <TableRow className="bg-muted/50 hover:bg-muted/50">
+            <TableRow className="sticky top-0 z-10 bg-muted/50 hover:bg-muted/50">
               {selectable && (
                 <TableHead className="w-10 p-3">
                   <input
@@ -536,7 +537,7 @@ export function ExpandableDeviceTable({
 
                   {/* Expanded Details */}
                   {isExpanded && (
-                    <TableRow className="bg-muted/50/50 hover:bg-muted/50/50">
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
                       <TableCell colSpan={selectable ? 11 : 10} className="p-4">
                         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                           {/* Device Info */}
@@ -663,6 +664,9 @@ export function ExpandableDeviceTable({
                 </Fragment>
               );
             })}
+            {filteredDevices.length === 0 && (
+              <TableEmptyRow colSpan={20}>未找到匹配条件的设备</TableEmptyRow>
+            )}
           </TableBody>
         </Table>
 
@@ -678,7 +682,7 @@ export function ExpandableDeviceTable({
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
                 aria-label="上一页"
-                className="p-1.5 rounded-md border border-border hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronLeft className="w-4 h-4 text-muted-foreground" />
               </button>
@@ -689,7 +693,7 @@ export function ExpandableDeviceTable({
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
                 aria-label="下一页"
-                className="p-1.5 rounded-md border border-border hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronRight className="w-4 h-4 text-muted-foreground" />
               </button>
@@ -697,11 +701,6 @@ export function ExpandableDeviceTable({
           </div>
         )}
 
-        {filteredDevices.length === 0 && (
-          <div className="p-8 text-center text-muted-foreground">
-            未找到匹配条件的设备
-          </div>
-        )}
       </div>
     </div>
   );

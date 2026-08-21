@@ -7,6 +7,21 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull } from '@/utils/format';
@@ -71,35 +86,37 @@ export default function AuditLogPage() {
 
       {/* Filters */}
       <div className="flex gap-3 flex-wrap">
-        <select
-          value={filters.resource_type}
-          onChange={(e) => { setFilters({ ...filters, resource_type: e.target.value }); setPage(0); }}
-          className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <option value="">全部资源</option>
-          <option value="plan">Plan</option>
-          <option value="tool">工具</option>
-          <option value="tool_category">工具分类</option>
-          <option value="notification_channel">通知渠道</option>
-          <option value="notification_rule">告警规则</option>
-          <option value="schedule">定时任务</option>
-          <option value="template">任务模板</option>
-          <option value="host">主机</option>
-          <option value="task">任务</option>
-        </select>
-        <select
-          value={filters.action}
-          onChange={(e) => { setFilters({ ...filters, action: e.target.value }); setPage(0); }}
-          className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <option value="">全部操作</option>
-          <option value="create">创建</option>
-          <option value="update">更新</option>
-          <option value="delete">删除</option>
-          <option value="dispatch">分发</option>
-          <option value="start">启动</option>
-          <option value="cancel">取消</option>
-        </select>
+        <Select value={filters.resource_type} onValueChange={(v) => { setFilters({ ...filters, resource_type: v }); setPage(0); }}>
+          <SelectTrigger data-testid="audit-resource-filter">
+            <SelectValue placeholder="全部资源" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">全部资源</SelectItem>
+            <SelectItem value="plan">Plan</SelectItem>
+            <SelectItem value="tool">工具</SelectItem>
+            <SelectItem value="tool_category">工具分类</SelectItem>
+            <SelectItem value="notification_channel">通知渠道</SelectItem>
+            <SelectItem value="notification_rule">告警规则</SelectItem>
+            <SelectItem value="schedule">定时任务</SelectItem>
+            <SelectItem value="template">任务模板</SelectItem>
+            <SelectItem value="host">主机</SelectItem>
+            <SelectItem value="task">任务</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={filters.action} onValueChange={(v) => { setFilters({ ...filters, action: v }); setPage(0); }}>
+          <SelectTrigger data-testid="audit-action-filter">
+            <SelectValue placeholder="全部操作" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">全部操作</SelectItem>
+            <SelectItem value="create">创建</SelectItem>
+            <SelectItem value="update">更新</SelectItem>
+            <SelectItem value="delete">删除</SelectItem>
+            <SelectItem value="dispatch">分发</SelectItem>
+            <SelectItem value="start">启动</SelectItem>
+            <SelectItem value="cancel">取消</SelectItem>
+          </SelectContent>
+        </Select>
         <label className="flex items-center gap-2">
           <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>开始时间</span>
           <Input
@@ -138,36 +155,36 @@ export default function AuditLogPage() {
       ) : (
         <>
           <div className={cn(PANEL.root, 'overflow-x-auto')}>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/50">
-                  <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>时间</th>
-                  <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>用户</th>
-                  <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>操作</th>
-                  <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>资源</th>
-                  <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>IP</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table className="min-w-[640px]">
+              <TableHeader>
+                <TableRow className="border-b border-border bg-muted/50">
+                  <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>时间</TableHead>
+                  <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>用户</TableHead>
+                  <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>操作</TableHead>
+                  <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>资源</TableHead>
+                  <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>IP</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {logs.map((log) => (
-                  <tr key={log.id} className="border-b border-border/50 hover:bg-muted/50">
-                    <td className={cn('px-4 py-3 text-xs', TEXT.subtitle)}>
+                  <TableRow key={log.id} className="border-b border-border/50 hover:bg-muted/50">
+                    <TableCell className={cn('px-4 py-3 text-xs', TEXT.subtitle)}>
                       {formatDateTimeFull(log.timestamp)}
-                    </td>
-                    <td className={cn('px-4 py-3', TEXT.body)}>{log.username || '-'}</td>
-                    <td className="px-4 py-3">
+                    </TableCell>
+                    <TableCell className={cn('px-4 py-3', TEXT.body)}>{log.username || '-'}</TableCell>
+                    <TableCell className="px-4 py-3">
                       <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', STATUS_CHIP.primary)}>
                         {log.action}
                       </span>
-                    </td>
-                    <td className={cn('px-4 py-3', TEXT.subtitle)}>
+                    </TableCell>
+                    <TableCell className={cn('px-4 py-3', TEXT.subtitle)}>
                       {log.resource_type}{log.resource_id ? ` #${log.resource_id}` : ''}
-                    </td>
-                    <td className={cn('px-4 py-3 text-xs font-mono', TEXT.subtitle)}>{log.ip_address || '-'}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell className={cn('px-4 py-3 text-xs font-mono', TEXT.subtitle)}>{log.ip_address || '-'}</TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
 
           {/* Pagination */}
