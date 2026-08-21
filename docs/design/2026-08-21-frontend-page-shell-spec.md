@@ -60,10 +60,23 @@
 `HeaderSlotContext` 接受任意 `ReactNode`，`usePlanRunHeaderSlot` 已经在里面
 放了返回链 + 页签 + 刷新按钮 —— **能力不是限制，自绘头栏没有技术上的理由。**
 
+### 页头三形态（判定表）
+
+| 形态 | 特征 | 写法 | 现例 |
+|------|------|------|------|
+| 列表页 | 标题 + 副标题 + 右上主操作 | `<PageHeader>`（页内内容区） | 20 页 |
+| 详情页 | 返回 + 页签/状态 + 刷新 | `useHeaderSlot` | `PlanRunDetailPage`、`PlanRunLogsPage` |
+| 编辑页 | 返回 + 面包屑 + 保存/执行动作 | `useHeaderSlot` | `PlanEditPage`（`usePlanEditHeaderSlot`） |
+
+**判定**：页面是否有横贯全宽的操作栏/页签？有 → slot；只有标题行 → `PageHeader`。
+保存/执行类动作必须与 AppShell 顶栏同栏 —— 用户在同一高度找到操作区。
+
 ### 唯一的例外：错误分支的逃生口
 
 查询失败时 slot 可能尚未填充，此时页面内可渲染一个返回按钮
 （现例：`PlanRunDetailPage.tsx:187`）。**它不是页头**，不构成本规则的违例。
+B 轨观察到的「返回链两份文案共存」即此例：正常态只有 slot 里的「返回执行列表」，
+页内那份只在 `runQ.isError` 分支渲染（逃生口），两个按钮不同时可见，不做去重。
 
 ### 为什么必须与宽度同轮定
 
@@ -144,11 +157,10 @@
 | 状态 | 页面 |
 |---|---|
 | 用 `PageHeader` ✓ | 20 页 |
-| 用 `useHeaderSlot` ✓ | `PlanRunDetailPage`、`PlanRunLogsPage` |
-| **违例** | `PlanEditPage` —— 自绘头栏，导致 AppShell 顶栏左侧整条留白、上下两条头栏 |
+| 用 `useHeaderSlot` ✓ | `PlanRunDetailPage`、`PlanRunLogsPage`、`PlanEditPage`（`usePlanEditHeaderSlot`） |
 
-**A8 的实际工作量是一个页面。** 审查文档记的「三种页头形态并存」高估了 ——
-另外两种里，`useHeaderSlot` 是规范内的合法用法，不是需要消灭的第三种。
+**A8 已收口（2026-08-21）。** 唯一违例 `PlanEditPage` 自绘头栏已移进 slot ——
+AppShell 顶栏左侧留白恢复为页面自身的内容空间，双头栏消除。
 
 ---
 
@@ -177,9 +189,12 @@
 
 | 项 | 原因 |
 |---|---|
-| `PlanEditPage` 纳管 + 页头移进 slot | 唯一的页头违例，独立可验，单独一轮 |
-| `PlanRunDetailPage` 纳管 | 该页有自绘左栏布局，纳入容器需目视确认不被内边距挤压 |
+| `PlanRunDetailPage` 纳管 | 该页有自绘左栏布局，纳入容器需目视确认不被内边距挤压；页头已用 slot ✓ |
 | `FileServerPage` / `PlanExecutePage` 归属 | 见 §3 末 —— 诉求是"内边距更小"，非宽度档位问题 |
+
+**已落地（2026-08-21）**：`PlanEditPage` 页头移进 slot（`usePlanEditHeaderSlot`），
+页面主体改 `PageContainer width="bleed"`（三栏自管布局 → §1 判定树①）。
+错误分支逃生口返回按钮按 §2 例外保留。
 
 ---
 
