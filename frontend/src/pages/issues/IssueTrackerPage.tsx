@@ -6,12 +6,12 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api, type JiraDraft, type PlanRun } from '@/utils/api';
-import { AlertCircle, RefreshCw, FileText } from 'lucide-react';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
 import JiraSubmitPanel from '@/components/issues/JiraSubmitPanel';
 import JiraRunHistory from '@/components/issues/JiraRunHistory';
-import { EmptyState } from '@/components/ui/empty-state';
+import { InlineEmpty } from '@/components/ui/empty-state';
 import { INTERACTIVE, TEXT, tabLinkClass } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatLocalDateTime } from '@/utils/format';
@@ -120,11 +120,7 @@ export default function IssueTrackerPage() {
                     ))}
                   </div>
                 ) : runsData?.length === 0 ? (
-                  <EmptyState
-                    title="暂无 JIRA 草稿"
-                    description="完成任务执行后会自动生成 JIRA 草稿"
-                    icon={<FileText className="w-16 h-16" />}
-                  />
+                  <InlineEmpty>暂无 JIRA 草稿 · 完成任务执行后会自动生成</InlineEmpty>
                 ) : (
                   <div className="space-y-4">
                     {runsData?.map(({ run, draft }) => {

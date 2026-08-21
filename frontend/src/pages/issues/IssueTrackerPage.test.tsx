@@ -66,7 +66,7 @@ describe('IssueTrackerPage', () => {
 
     fireEvent.click(screen.getByTestId('issue-tracker-tab-drafts'));
 
-    expect(await screen.findByText('暂无 JIRA 草稿')).toBeInTheDocument();
+    expect(await screen.findByText(/暂无 JIRA 草稿/)).toBeInTheDocument();
   });
 
   it('shows a draft row when a run has a cached JIRA draft', async () => {

@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { formatDurationSeconds, formatLocalDateTime } from '@/utils/format';
-import { EmptyState } from '@/components/ui/empty-state';
+import { InlineEmpty } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -135,13 +135,7 @@ export default function ResultsPage() {
               ))}
             </div>
           ) : !data?.recent_runs?.length ? (
-            <div className="py-8">
-              <EmptyState
-                title="暂无测试运行"
-                description="还没有执行过测试"
-                icon={<Clock className="h-12 w-12" />}
-              />
-            </div>
+            <InlineEmpty>暂无测试运行 · 还没有执行过测试</InlineEmpty>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

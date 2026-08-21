@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Loader2, Users as UsersIcon } from 'lucide-react';
+import { Plus, Users as UsersIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -10,9 +10,8 @@ import { UserModal } from './components/UserModal';
 import { api, toApiError, type User } from '@/utils/api';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
-import { InlineError } from '@/components/ui/error-state';
-import { TEXT } from '@/design-system';
-import { cn } from '@/lib/utils';
+import { ErrorState } from '@/components/ui/error-state';
+import { PageSkeleton } from '@/components/ui/loading-skeleton';
 
 export default function UsersPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -113,9 +112,10 @@ export default function UsersPage() {
     return (
       <PageContainer width="content">
         <PageHeader title="用户管理" subtitle="管理系统用户和权限" />
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.subtitle)} />
-        </div>
+        <PageSkeleton>
+          <PageSkeleton.Block size="md" />
+          <PageSkeleton.Block size="lg" />
+        </PageSkeleton>
       </PageContainer>
     );
   }
@@ -124,12 +124,9 @@ export default function UsersPage() {
     return (
       <PageContainer width="content">
         <PageHeader title="用户管理" subtitle="管理系统用户和权限" />
-        <InlineError
-          message={
-            error
-              ? `加载用户失败：${toApiError(error).message}`
-              : '加载用户失败，请确认已使用管理员账号登录'
-          }
+        <ErrorState
+          title="加载用户失败"
+          description={toApiError(error).message}
           onRetry={() => void refetch()}
         />
       </PageContainer>
