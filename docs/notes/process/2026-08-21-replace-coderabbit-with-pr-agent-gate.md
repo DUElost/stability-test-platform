@@ -21,6 +21,8 @@ star）长期停摆，政策短期不会恢复。决定完整替代：
     rerun，或临时从分支保护摘除该 required check。
 - 复评路径：security concerns 阻断后，修复并 push（synchronize）即自动复评
   并重算门禁；PR 评论 `/review` 只更新 persistent comment、不重算门禁。
+- 命令通道与门禁分离：`/review`、`/ask` 等命令由独立 `pr-agent-comment`
+  job 处理，不产生 required check，避免评论触发的成功 run 顶掉门禁。
 - **移除 CodeRabbit**：`enable-auto-merge.yml` 删除 merge-gate job 与
   `pull_request_review` / `status` 触发；删除 `.coderabbit.yaml`；分支保护
   required checks 换为 `pr-agent-gate`；GitHub App 由仓库管理员手动卸载。
