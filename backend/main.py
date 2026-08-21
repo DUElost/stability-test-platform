@@ -57,7 +57,7 @@ from backend.api.routes.dedup import scan_router as dedup_scan_router
 # P0: MTBF 工具 API（runtask.xml 预览/校验，ADR-0030 / docs/operations/mtbf-api.md）
 from backend.api.routes.mtbf import router as mtbf_router
 # P1a: MTBF 套件/用例管理面（ADR-0030 D1/D6，外部 agent REST 入口）
-from backend.api.routes.test_suites import router as test_suites_router
+from backend.api.routes.suites import router as test_suites_router
 from backend.core.agent_secret import (
     AgentSecretNotConfiguredError,
     is_agent_secret_configured,
