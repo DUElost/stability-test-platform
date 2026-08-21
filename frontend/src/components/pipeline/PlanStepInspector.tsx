@@ -114,11 +114,12 @@ export default function PlanStepInspector({
         )}
       </div>
 
-      <footer className={cn('px-3 py-2 text-[10px] leading-relaxed', PIPELINE_EDITOR.panelHeader, TEXT.subtitle)}>
-        {step
-          ? `位于 ${phase ?? '—'} #${(index ?? 0) + 1}。脚本的参数和默认值在脚本管理页面维护。`
-          : '点击中央画布的步骤可在此查看 / 编辑属性。'}
-      </footer>
+      {/* 空态引导只在 StepEmptyState 卡里说一次；无步骤时不再渲染脚注 */}
+      {step && (
+        <footer className={cn('px-3 py-2 text-[10px] leading-relaxed', PIPELINE_EDITOR.panelHeader, TEXT.subtitle)}>
+          {`位于 ${phase ?? '—'} #${(index ?? 0) + 1}。脚本的参数和默认值在脚本管理页面维护。`}
+        </footer>
+      )}
     </aside>
   );
 }

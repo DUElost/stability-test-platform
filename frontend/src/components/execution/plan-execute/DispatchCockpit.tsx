@@ -156,7 +156,7 @@ export function DispatchCockpit({
             <CardContent className="space-y-3">
               <div className="overflow-x-auto rounded-lg border">
                 <table className="w-full text-sm">
-                  <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
+                  <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
                     <tr>
                       <th className="px-3 py-2 font-medium">节点</th>
                       <th className="px-3 py-2 font-medium">本次选中</th>

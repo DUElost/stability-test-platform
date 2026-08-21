@@ -246,12 +246,10 @@ export function ExpandableHostTable({
             </div>
             <div>
               <div className="text-xl font-semibold text-foreground">{stats.total}</div>
-              <div className="text-xs text-muted-foreground">主机总数</div>
-              {stats.agentTrackable > 0 && (
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  Agent 已对齐 {stats.agentAligned}/{stats.agentTrackable}
-                </div>
-              )}
+              {/* 机队级 Agent 对齐率内联进标签行：保持四卡文本块等高（B9 基线） */}
+              <div className="text-xs text-muted-foreground">
+                主机总数{stats.agentTrackable > 0 && ` · Agent 已对齐 ${stats.agentAligned}/${stats.agentTrackable}`}
+              </div>
             </div>
           </button>
           <button

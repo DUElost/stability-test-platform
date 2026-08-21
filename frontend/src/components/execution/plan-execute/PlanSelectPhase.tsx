@@ -163,12 +163,10 @@ export function PlanSelectPhase({
       <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2.5">
           <span className="text-sm font-semibold">Plan 详情</span>
-          {selectedPlan ? (
+          {selectedPlan && (
             <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium">
               {executableStepCount} 启用 / {selectedPlan.steps?.length ?? 0}
             </span>
-          ) : (
-            <span className={cn('text-xs', TEXT.subtitle)}>选中后展示</span>
           )}
         </div>
         <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
