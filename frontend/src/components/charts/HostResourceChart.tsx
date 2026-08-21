@@ -34,9 +34,9 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
   }, [hosts]);
 
   const getBarColor = (value: number) => {
-    if (value >= 80) return CHART_COLORS.error;
-    if (value >= 60) return CHART_COLORS.warning;
-    return CHART_COLORS.primary;
+    if (value >= 90) return CHART_COLORS.error;
+    if (value >= 70) return CHART_COLORS.warning;
+    return CHART_COLORS.success;
   };
 
   if (isLoading) {
@@ -79,6 +79,7 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
                 tickLine={false}
                 tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
                 domain={[0, 100]}
+                tickFormatter={(v: number) => `${v}%`}
               />
               <Tooltip
                 content={({ active, payload, label }) => {
@@ -102,14 +103,11 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
                   return null;
                 }}
               />
-              <Bar dataKey="cpu" name="CPU" radius={[4, 4, 0, 0]} maxBarSize={30} isAnimationActive={false}>
+              <Bar dataKey="cpu" name="CPU" radius={[4, 4, 0, 0]} maxBarSize={30} isAnimationActive={false} fill={CHART_COLORS.primary} />
+              <Bar dataKey="ram" name="RAM" radius={[4, 4, 0, 0]} maxBarSize={30} isAnimationActive={false} fill={CHART_COLORS.success} />
+              <Bar dataKey="disk" name="磁盘" radius={[4, 4, 0, 0]} maxBarSize={30} isAnimationActive={false}>
                 {data.map((entry, index) => (
-                  <Cell key={`cpu-${index}`} fill={getBarColor(entry.cpu)} />
-                ))}
-              </Bar>
-              <Bar dataKey="ram" name="RAM" radius={[4, 4, 0, 0]} maxBarSize={30} isAnimationActive={false}>
-                {data.map((entry, index) => (
-                  <Cell key={`ram-${index}`} fill={getBarColor(entry.ram)} />
+                  <Cell key={`disk-${index}`} fill={getBarColor(entry.disk)} />
                 ))}
               </Bar>
             </BarChart>

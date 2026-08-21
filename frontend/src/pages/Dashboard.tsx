@@ -9,11 +9,13 @@ import {
   Smartphone,
   Wifi,
   Zap,
+  Activity,
+  TrendingUp,
 } from 'lucide-react';
 import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart, HostFailureRateChart, PlanSuccessRateChart, PlanRunPassRateTrendChart } from '@/components/charts';
 import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
 import { PageContainer, PageHeader } from '@/components/layout';
-import { Card } from '@/components/ui/card';
+import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { InlineError } from '@/components/ui/error-state';
 import { useRealtimeDashboard } from '@/hooks/useRealtimeDashboard';
@@ -131,7 +133,7 @@ export default function Dashboard() {
         <span className="ml-2">更新于: {formatTimeFromDate(lastUpdateTime)}</span>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <DashboardStatCard
           label="主机总数"
           value={hostStats.total}
@@ -226,15 +228,30 @@ export default function Dashboard() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card className="p-4">
-            <h4 className={`${CHART_SECTION.subtitle} mb-3`}>设备状态分布</h4>
+            <CardHeader className="px-0 pt-0 pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Smartphone size={16} className={CHART_SECTION.icon} />
+                设备状态分布
+              </CardTitle>
+            </CardHeader>
             {isLoading ? <Skeleton className="h-[200px] w-full" /> : <DeviceStatusChart data={deviceStatusData} />}
           </Card>
           <Card className="p-4">
-            <h4 className={`${CHART_SECTION.subtitle} mb-3`}>主机资源负载</h4>
+            <CardHeader className="px-0 pt-0 pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Server size={16} className={CHART_SECTION.icon} />
+                主机资源负载
+              </CardTitle>
+            </CardHeader>
             {isLoading ? <Skeleton className="h-[200px] w-full" /> : <HostResourceChart hosts={hostResourceData} />}
           </Card>
           <Card className="p-4">
-            <h4 className={`${CHART_SECTION.subtitle} mb-3`}>任务活动趋势 (24h)</h4>
+            <CardHeader className="px-0 pt-0 pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Activity size={16} className={CHART_SECTION.icon} />
+                任务活动趋势 (24h)
+              </CardTitle>
+            </CardHeader>
             {activityError ? (
               <InlineError message="任务活动趋势加载失败" onRetry={() => void 0} />
             ) : activityLoading ? (
@@ -244,7 +261,12 @@ export default function Dashboard() {
             )}
           </Card>
           <Card className="p-4">
-            <h4 className={`${CHART_SECTION.subtitle} mb-3`}>完成趋势 (7d)</h4>
+            <CardHeader className="px-0 pt-0 pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <TrendingUp size={16} className={CHART_SECTION.icon} />
+                完成趋势 (7d)
+              </CardTitle>
+            </CardHeader>
             {trendError ? (
               <InlineError message="完成趋势加载失败" onRetry={() => void 0} />
             ) : trendLoading ? (
@@ -273,16 +295,18 @@ export default function Dashboard() {
               isLoading={planSuccessLoading}
             />
           )}
-          {passRateTrendError ? (
-            <Card className="p-4">
-              <InlineError message="通过率趋势加载失败" onRetry={() => void 0} />
-            </Card>
-          ) : (
-            <PlanRunPassRateTrendChart
-              data={passRateTrendData?.points ?? []}
-              isLoading={passRateTrendLoading}
-            />
-          )}
+          <div className="md:col-span-2">
+            {passRateTrendError ? (
+              <Card className="p-4">
+                <InlineError message="通过率趋势加载失败" onRetry={() => void 0} />
+              </Card>
+            ) : (
+              <PlanRunPassRateTrendChart
+                data={passRateTrendData?.points ?? []}
+                isLoading={passRateTrendLoading}
+              />
+            )}
+          </div>
         </div>
       </div>
 

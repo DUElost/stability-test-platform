@@ -252,6 +252,7 @@ export default function HostsPage() {
       description: t.agentInstalled
         ? `确定重新安装主机「${t.label}」的 Agent？`
         : `确定对主机「${t.label}」执行首次安装？`,
+      variant: 'destructive',
     });
     if (!ok) return;
     await startInstallBatch(targets);
@@ -267,6 +268,7 @@ export default function HostsPage() {
     const re = targets.filter((t) => t.agentInstalled).length;
     const ok = await confirmDialog({
       description: `将对 ${targets.length} 台主机安装 Agent（首次 ${first} / 重装 ${re}，并发 2）。是否继续？`,
+      variant: 'destructive',
     });
     if (!ok) return;
     await startInstallBatch(targets);
@@ -277,6 +279,7 @@ export default function HostsPage() {
     if (selectedHostIds.size === 0) return;
     const ok = await confirmDialog({
       description: `确定删除选中的 ${selectedHostIds.size} 台主机？此操作不可恢复。`,
+      variant: 'destructive',
     });
     if (!ok) return;
     for (const id of Array.from(selectedHostIds)) {
@@ -310,6 +313,7 @@ export default function HostsPage() {
   const handleDelete = async (host: HostTableData) => {
     const ok = await confirmDialog({
       description: `确定删除主机「${host.name ?? host.id}」(${host.ip ?? '?'})？此操作不可恢复。`,
+      variant: 'destructive',
     });
     if (ok) {
       deleteMutation.mutate(host.id);

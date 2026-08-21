@@ -10,7 +10,7 @@ import { dedup, type JiraVendor, type JiraStage } from '@/utils/api/dedup';
 import { api, type PlanRun } from '@/utils/api';
 import LiveConsole from '@/components/console/LiveConsole';
 import { Button } from '@/components/ui/button';
-import { ALERT_BANNER, FORM, INTERACTIVE, STATUS_CHIP, TEXT } from '@/design-system/tokens';
+import { ALERT_BOX, FORM, INTERACTIVE, STATUS_CHIP, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatLocalDateTime } from '@/utils/format';
 
@@ -316,7 +316,7 @@ export default function JiraSubmitPanel() {
       </div>
 
       {error && (
-        <div data-testid="jira-error" className={cn('rounded border px-3 py-2 text-sm', ALERT_BANNER.destructive)}>
+        <div data-testid="jira-error" className={cn('rounded-md px-3 py-2 text-sm', ALERT_BOX.destructive)}>
           {error}
         </div>
       )}

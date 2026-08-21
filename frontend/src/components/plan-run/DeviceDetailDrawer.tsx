@@ -20,7 +20,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { ALERT_BANNER, DRAWER, TEXT } from '@/design-system';
+import { ALERT_BOX, DRAWER, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
 import type { DeviceMatrixItem, DeviceUiStatus } from '@/utils/api/types';
@@ -174,7 +174,7 @@ export default function DeviceDetailDrawer({
 
           {retryBlockedByDevice && (
             <div
-              className={cn('mb-3 rounded-lg border-l-4 border-info px-3 py-2 text-xs', ALERT_BANNER.warning)}
+              className={cn('mb-3 rounded-lg border-l-4 border-info px-3 py-2 text-xs', ALERT_BOX.warning)}
               data-testid="device-drawer-offline-hint"
             >
               <div className="font-semibold">设备 ADB 不可达</div>
@@ -237,7 +237,7 @@ export default function DeviceDetailDrawer({
           />
 
           {device.log_signal_count > 0 && (
-            <div className={cn('mt-4 rounded-lg border-l-4 border-warning px-3 py-2 text-xs', ALERT_BANNER.warning)}>
+            <div className={cn('mt-4 rounded-lg border-l-4 border-warning px-3 py-2 text-xs', ALERT_BOX.warning)}>
               <div className="font-semibold">检测到 {device.log_signal_count} 条 Watcher 异常</div>
               <p className="mt-0.5 text-xs opacity-90">
                 明细见上方"业务流时间线"事件流(stage = patrol, severity = 异常)

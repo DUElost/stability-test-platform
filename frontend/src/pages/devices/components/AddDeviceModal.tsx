@@ -1,7 +1,14 @@
 import { useState } from 'react';
-import { X, Smartphone, Loader2, Tag } from 'lucide-react';
+import { Smartphone, Loader2, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { FORM, MODAL } from '@/design-system';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { FORM } from '@/design-system';
 import { cn } from '@/lib/utils';
 
 interface AddDeviceModalProps {
@@ -64,25 +71,19 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
     cn(FORM.input, hasError && FORM.inputInvalid);
 
   return (
-    <div className={MODAL.overlay}>
-      <div className={MODAL.panel}>
-        <div className={MODAL.header}>
-          <div className="flex items-center gap-2">
+    <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
             <Smartphone className="text-primary" size={20} />
-            <h2 className={MODAL.title}>添加设备</h2>
-          </div>
-          <button
-            type="button"
-            onClick={handleClose}
-            disabled={isSubmitting}
-            className={MODAL.closeButton}
-            aria-label="关闭"
-          >
-            <X size={20} />
-          </button>
-        </div>
+            添加设备
+          </DialogTitle>
+          <DialogDescription>
+            登记新设备到资源池，序列号为必填项
+          </DialogDescription>
+        </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4 p-6">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="device-serial" className={FORM.label}>
               序列号 <span className="text-destructive">*</span>
@@ -167,7 +168,7 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
             </Button>
           </div>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

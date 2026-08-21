@@ -111,7 +111,11 @@ export function BatchEditDeviceTagsDialog({
             <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
               取消
             </Button>
-            <Button type="submit" disabled={isSubmitting}>
+            <Button
+              type="submit"
+              variant={operation === 'replace' ? 'destructive' : 'default'}
+              disabled={isSubmitting}
+            >
               {isSubmitting ? '更新中…' : '确认更新'}
             </Button>
           </DialogFooter>
