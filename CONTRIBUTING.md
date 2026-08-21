@@ -51,9 +51,9 @@ npm run lint -- --max-warnings 0
 
 ## 合入门禁
 
-- 稳定 required checks：`lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、`pr-agent-tests`。
-- CodeRabbit 是 **best-effort 参考**，不是硬门禁：仅当它对**当前 head** 有明确 APPROVED / CHANGES_REQUESTED 时生效；skipped / rate limited / 无决策时不阻断合入。
-- 需要 CodeRabbit 对当前 head 复评时，在 PR 评论 `@coderabbitai review`；不触发也不会卡合入。
+- 稳定 required checks：`lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、`pr-agent-tests`、`pr-agent-gate`。
+- `pr-agent-gate`（PR-Agent + DeepSeek v4-flash）：每次 PR / push 自动 review 一次；发现 security concerns 时阻断合入，其余意见仅作参考。
+- 需要手动复评时，在 PR 评论 `/review`（仅 OWNER / MEMBER / COLLABORATOR）。
 - PR 合入前不跑 PG 全量 / vitest / docker 全量；由 main 后置全量兜底。需要“合并前全量校验”时应引入 Merge Queue。
 
 ## 测试与 lint 纪律
