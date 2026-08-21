@@ -54,6 +54,8 @@ export default function PlanRunHero({
   const [reason, setReason] = useState('');
   const [tick, setTick] = useState(0);
   const exportBtnRef = useRef<HTMLButtonElement | null>(null);
+  /** 导出浮卡锚点：点击时测量一次入 state（渲染期读 ref.current 违反 react-hooks/refs；菜单瞬态，无需随渲染重测） */
+  const [exportPos, setExportPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const isTerminal = !!run && isPlanRunTerminal(run.status);
 
   useEffect(() => {
@@ -224,7 +226,11 @@ export default function PlanRunHero({
             size="sm"
             ref={exportBtnRef}
             data-testid="plan-run-export-btn"
-            onClick={() => setExportOpen((v) => !v)}
+            onClick={() => {
+              const rect = exportBtnRef.current?.getBoundingClientRect();
+              if (rect) setExportPos({ top: rect.bottom, left: rect.left, width: rect.width });
+              setExportOpen((v) => !v);
+            }}
             disabled={!run}
             className="w-full text-[11px] h-7"
           >
@@ -241,7 +247,7 @@ export default function PlanRunHero({
                   SURFACE.elevated,
                   ELEVATION.dropdown,
                 )}
-                style={{ top: (exportBtnRef.current?.getBoundingClientRect().bottom ?? 0) + 4, left: exportBtnRef.current?.getBoundingClientRect().left ?? 0, width: exportBtnRef.current?.getBoundingClientRect().width ?? 160 }}
+                style={{ top: (exportPos?.top ?? 0) + 4, left: exportPos?.left ?? 0, width: exportPos?.width ?? 160 }}
               >
                 <button
                   type="button"
