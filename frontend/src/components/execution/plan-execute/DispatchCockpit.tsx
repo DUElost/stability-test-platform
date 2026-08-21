@@ -135,7 +135,7 @@ export function DispatchCockpit({
             <div className={cn('flex items-center gap-1 text-xs', TEXT.subtitle)}>
               <Clock3 className="h-3.5 w-3.5" />历史墙钟参考
             </div>
-            <div className="mt-1 text-xl font-semibold">
+            <div className="mt-1 text-2xl font-semibold">
               {wallClock.averageSeconds == null
                 ? '暂无'
                 : `~${formatDurationSeconds(wallClock.averageSeconds, 'compact', '暂无')}`}

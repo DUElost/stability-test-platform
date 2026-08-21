@@ -22,10 +22,11 @@ export function DeviceWorkspace({
   return (
     <div
       className={cn(
-        'grid h-full min-h-0 flex-1 gap-3',
+        'grid h-full min-h-0 flex-1 gap-3 overflow-y-auto',
         'grid-cols-1 auto-rows-[minmax(280px,1fr)]',
-        // ≥1100px 三栏：窄轨 + 中区吃满 + 右栏已选集
-        'min-[1100px]:grid-cols-[200px_minmax(0,1fr)_280px] min-[1100px]:auto-rows-fr',
+        // ≥1100px 三栏：窄轨 + 中区吃满 + 右栏已选集；此时各栏自管滚动，grid 自身不滚。
+        // 断点以下三行最小 840px 超容器，靠 grid 自身滚动保证三块全部可达（外层 phase=select 是 overflow-hidden）
+        'min-[1100px]:grid-cols-[200px_minmax(0,1fr)_280px] min-[1100px]:auto-rows-fr min-[1100px]:overflow-visible',
         className,
       )}
       data-plan-execute-layout="three-column"

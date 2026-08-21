@@ -72,7 +72,7 @@ function MinimapTile({
           <button
             type="button"
             data-minimap-device-id={device.id}
-            aria-label={`定位已选设备 ${device.id}${blocked ? ' 阻塞' : ''}`}
+            aria-label={`定位已选设备 ${device.serial}${blocked ? ' 阻塞' : ''}`}
             onClick={() => onLocate(device.id)}
             className={cn(
               'flex h-full w-full items-center justify-center overflow-hidden rounded-sm border transition-transform hover:z-10 hover:scale-110 hover:ring-2 hover:ring-primary/40',
@@ -89,7 +89,7 @@ function MinimapTile({
           </button>
           <button
             type="button"
-            aria-label={`移除已选设备 ${device.id}`}
+            aria-label={`移除已选设备 ${device.serial}`}
             className="absolute -right-1 -top-1 z-20 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-destructive text-primary-foreground opacity-0 shadow transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
             onClick={(event) => {
               event.preventDefault();
