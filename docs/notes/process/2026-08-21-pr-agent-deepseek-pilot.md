@@ -17,15 +17,21 @@ Class: process
 - 模型 `deepseek/deepseek-v4-pro`，fallback `deepseek/deepseek-v4-flash`；
   密钥为 repo secret `DEEPSEEK_API_KEY`，经 `DEEPSEEK.KEY` 注入 LiteLLM 的
   `DEEPSEEK_API_KEY`。
-- 通过本地 action 包装 `pragent/pr-agent:0.42.0-github_action` 的镜像
-  manifest digest（`sha256:b81235c3...`）固定版本，不跟随 `main` 或
-  mutable 的 `:github_action` tag。
+- workflow 直接用 `docker://pragent/pr-agent@sha256:b81235c3...` 固定
+  `pragent/pr-agent:0.42.0-github_action` 镜像 digest，不跟随 `main` 或
+  mutable 的 `:github_action` tag；也不依赖 checkout 本地 action 文件。
 - 不新增 required check；secret 未配置时 job 直接跳过，避免每个 PR 挂红。
 - 产物是 PR 评论，不是 status check；未来若要当门禁，需仿照
   `code-rabbit-gate` 由 workflow 包装，不在本次试点范围。
 
 ## Alternatives
 
+- 内网 newapi 端点（`newapi.tinno.com`，OpenAI 兼容，含 deepseek-chat /
+  gpt-5-chat 等模型）：公网 DNS 不可解析，GitHub 托管 runner 无法访问；
+  改用 self-hosted runner 需要常驻内网机器，且会与生产机（生产 PG +
+  `.env.backend` + hosts.ini）共享「执行第三方代码」的入口；转私密仓库
+  又要消耗 Actions 配额并让 CodeRabbit 免费完整审查失效。三者叠加后
+  放弃，选 DeepSeek 官方 API（公网可达、零运维）。
 - 自托管 GitHub App（webhook）：需要公网可达的 webhook URL，本仓库生产机
   没有，暂不选。
 - 直接用官方 action `the-pr-agent/pr-agent@main`：其 Dockerfile 引用
@@ -37,6 +43,8 @@ Class: process
 ## Verification
 
 - `actionlint` 校验通过。
+- 首次冒烟发现本地 action 在无 checkout 的 runner 上不可用
+  （`Can't find action.yml...`），改为 `docker://` + digest 后验证通过。
 - 合入后、配置 `DEEPSEEK_API_KEY` secret 的 PR 上观察评论质量与成本。
 - 无 secret 时 job skip，不影响 auto-merge 与合并路径注意力预算。
 

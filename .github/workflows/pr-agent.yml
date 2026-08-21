@@ -26,14 +26,20 @@ jobs:
       github.event.sender.type != 'Bot' &&
       (
         (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
-        (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && github.event.issue.pull_request.draft == false)
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request != null &&
+          github.event.issue.pull_request.draft == false &&
+          contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+        )
       )
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Run PR Agent
         if: env.DEEPSEEK_API_KEY != ''
-        uses: ./.github/actions/pr-agent-pinned
+        # 直接以 digest 固定镜像，避免本地 action 依赖 checkout。
+        uses: docker://pragent/pr-agent@sha256:b81235c3bddc551939a1feca8926f4b6e8abcec2ae5bf4620424f8f56dd9cb93
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_API_KEY }}
