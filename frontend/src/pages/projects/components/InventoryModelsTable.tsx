@@ -22,60 +22,24 @@ import {
 import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import type { InventoryModel, InventorySummary } from '@/utils/api/types';
-import {
-  backfillLabelKeys,
-  formatModelLabel,
-  hasManualMapping,
-  unassignedDeviceCount,
-} from '../inventoryDisplay';
+import { formatModelLabel, isMapped, selectableModel } from '../inventoryDisplay';
 
 type Props = {
   models: InventoryModel[] | undefined;
   summary: InventorySummary | undefined;
+  selectedModels: string[];
+  onSelectedModelsChange: (models: string[]) => void;
   isLoading: boolean;
   isError: boolean;
   errorMessage?: string;
   onRetry: () => void;
 };
 
-function BackfillCell({ row }: { row: InventoryModel }) {
-  const keys = backfillLabelKeys(row);
-  const showLegacy = row.legacy_device_count > 0;
-  const showNull = row.null_device_count > 0;
-  if (keys.length === 0 && !showLegacy && !showNull) {
-    return <span className={TEXT.subtitle}>—</span>;
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-1">
-      {keys.map((key) => (
-        <Badge
-          key={key}
-          variant="secondary"
-          className="font-mono text-[11px] font-normal"
-          title="P1 回填标签：非正式编组，不代表客户、项目或机型"
-        >
-          {key}
-        </Badge>
-      ))}
-      {showLegacy && (
-        <Badge variant="warning" className="text-[11px] font-normal">
-          未分配（LEGACY）
-        </Badge>
-      )}
-      {showNull && (
-        <Badge variant="warning" className="text-[11px] font-normal">
-          无归属（NULL）
-        </Badge>
-      )}
-    </div>
-  );
-}
-
 function MappingCell({ row }: { row: InventoryModel }) {
-  if (!hasManualMapping(row)) {
+  if (!isMapped(row)) {
     return (
       <span className={cn('text-xs', TEXT.subtitle)} data-testid="mapping-pending">
-        待手动填写
+        未映射
       </span>
     );
   }
@@ -93,13 +57,15 @@ function MappingCell({ row }: { row: InventoryModel }) {
 export default function InventoryModelsTable({
   models,
   summary,
+  selectedModels,
+  onSelectedModelsChange,
   isLoading,
   isError,
   errorMessage,
   onRetry,
 }: Props) {
   const [platformFilter, setPlatformFilter] = useState<string | undefined>();
-  const [unassignedOnly, setUnassignedOnly] = useState(false);
+  const [unmappedOnly, setUnmappedOnly] = useState(false);
 
   const platformOptions = useMemo(() => {
     const values = new Set<string>();
@@ -112,10 +78,36 @@ export default function InventoryModelsTable({
   const filtered = useMemo(() => {
     return (models ?? []).filter((row) => {
       if (platformFilter && !row.platforms.includes(platformFilter)) return false;
-      if (unassignedOnly && unassignedDeviceCount(row) === 0) return false;
+      if (unmappedOnly && isMapped(row)) return false;
       return true;
     });
-  }, [models, platformFilter, unassignedOnly]);
+  }, [models, platformFilter, unmappedOnly]);
+
+  const selectableFiltered = filtered
+    .map(selectableModel)
+    .filter((model): model is string => model !== null);
+
+  const allFilteredSelected =
+    selectableFiltered.length > 0 &&
+    selectableFiltered.every((model) => selectedModels.includes(model));
+
+  const toggleOne = (model: string) => {
+    if (selectedModels.includes(model)) {
+      onSelectedModelsChange(selectedModels.filter((item) => item !== model));
+      return;
+    }
+    onSelectedModelsChange([...selectedModels, model]);
+  };
+
+  const toggleFiltered = () => {
+    if (allFilteredSelected) {
+      onSelectedModelsChange(
+        selectedModels.filter((model) => !selectableFiltered.includes(model)),
+      );
+      return;
+    }
+    onSelectedModelsChange(Array.from(new Set([...selectedModels, ...selectableFiltered])));
+  };
 
   return (
     <Card data-testid="inventory-models">
@@ -124,10 +116,9 @@ export default function InventoryModelsTable({
           <div>
             <CardTitle className="text-sm font-medium">Fleet 型号分布</CardTitle>
             <p className={cn('mt-1 text-xs', TEXT.subtitle)}>
-              型号 / platform 来自设备心跳。已映射项目需人工填写；HONOR-MLD、ZTE-Z258
-              等只是系统回填标签，不能代表客户、项目或机型。
+              型号 / platform 来自设备心跳。已映射项目只能人工填写，不会从 HONOR-MLD 等回填标签推断。
               {summary
-                ? ` ${summary.distinct_models} 种型号 · ${summary.legacy_devices} 台 LEGACY · ${summary.null_devices} 台无归属`
+                ? ` ${summary.distinct_models} 种型号 · ${summary.user_mapped_devices} 台已映射 · ${summary.unmapped_models.length} 种未映射`
                 : null}
             </p>
           </div>
@@ -153,17 +144,17 @@ export default function InventoryModelsTable({
             <label
               className={cn(
                 'inline-flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-lg border bg-card px-2.5 text-xs',
-                unassignedOnly && 'border-primary/40 bg-primary/10 text-primary',
+                unmappedOnly && 'border-primary/40 bg-primary/10 text-primary',
               )}
             >
               <input
                 type="checkbox"
                 className="accent-primary"
-                data-testid="inventory-unassigned-only"
-                checked={unassignedOnly}
-                onChange={(event) => setUnassignedOnly(event.target.checked)}
+                data-testid="inventory-unmapped-only"
+                checked={unmappedOnly}
+                onChange={(event) => setUnmappedOnly(event.target.checked)}
               />
-              仅未分配
+              仅未映射
             </label>
           </div>
         </div>
@@ -181,10 +172,20 @@ export default function InventoryModelsTable({
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <input
+                    type="checkbox"
+                    className="accent-primary"
+                    data-testid="inventory-select-all"
+                    checked={allFilteredSelected}
+                    disabled={selectableFiltered.length === 0}
+                    onChange={toggleFiltered}
+                    aria-label="选择当前筛选下的全部型号"
+                  />
+                </TableHead>
                 <TableHead>型号</TableHead>
                 <TableHead className="w-20">台数</TableHead>
                 <TableHead className="w-28">platform</TableHead>
-                <TableHead>回填标签（非正式）</TableHead>
                 <TableHead>已映射项目</TableHead>
               </TableRow>
             </TableHeader>
@@ -194,23 +195,35 @@ export default function InventoryModelsTable({
                   {models?.length ? '没有匹配的型号' : '暂无设备上报型号'}
                 </TableEmptyRow>
               ) : (
-                filtered.map((row) => (
-                  <TableRow key={row.model ?? '__blank__'} data-testid="inventory-model-row">
-                    <TableCell className="font-mono text-xs">
-                      {formatModelLabel(row.model)}
-                    </TableCell>
-                    <TableCell>{row.device_count}</TableCell>
-                    <TableCell className={cn('text-xs', TEXT.subtitle)}>
-                      {row.platforms.length ? row.platforms.join(', ') : '—'}
-                    </TableCell>
-                    <TableCell>
-                      <BackfillCell row={row} />
-                    </TableCell>
-                    <TableCell>
-                      <MappingCell row={row} />
-                    </TableCell>
-                  </TableRow>
-                ))
+                filtered.map((row) => {
+                  const model = selectableModel(row);
+                  const checked = model !== null && selectedModels.includes(model);
+                  return (
+                    <TableRow key={row.model ?? '__blank__'} data-testid="inventory-model-row">
+                      <TableCell>
+                        <input
+                          type="checkbox"
+                          className="accent-primary"
+                          data-testid="inventory-model-check"
+                          disabled={model === null}
+                          checked={checked}
+                          onChange={() => model && toggleOne(model)}
+                          aria-label={formatModelLabel(row.model)}
+                        />
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {formatModelLabel(row.model)}
+                      </TableCell>
+                      <TableCell>{row.device_count}</TableCell>
+                      <TableCell className={cn('text-xs', TEXT.subtitle)}>
+                        {row.platforms.length ? row.platforms.join(', ') : '—'}
+                      </TableCell>
+                      <TableCell>
+                        <MappingCell row={row} />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>

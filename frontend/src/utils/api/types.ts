@@ -690,6 +690,8 @@ export interface Project {
   platform: string | null;
   form_factor: string | null;
   status: 'ACTIVE' | 'ARCHIVED';
+  source: 'USER' | 'SEED';
+  match_models: string[];
   created_at: string;
   updated_at: string;
 }
@@ -712,33 +714,54 @@ export interface ProjectDetail extends ProjectSummary {
   recent_runs: RecentProjectRun[];
 }
 
-/** ADR-0029 P2.5a：一种 device.model 的 fleet 聚合。 */
+/** ADR-0029 P2.5：一种 device.model 的 fleet 聚合。 */
 export interface InventoryModel {
   model: string | null;
   device_count: number;
   platforms: string[];
-  /** P1 脚本灌入的 device.project_id 标签，非正式编组，不是客户/项目/机型。 */
-  backfill_project_keys: string[];
-  /** 人工填写的映射；P2.5a 恒为 []。 */
+  /** 人工 USER 项目（match_models 或 device.project_id）；不含 SEED 回填。 */
   mapped_project_keys: string[];
-  legacy_device_count: number;
-  null_device_count: number;
+  unassigned_device_count: number;
 }
 
 export interface InventorySummary {
   total_devices: number;
-  mapped_devices: number;
-  legacy_devices: number;
-  null_devices: number;
+  user_mapped_devices: number;
   distinct_models: number;
   unmapped_models: Array<string | null>;
 }
 
-/** 某回填标签当前挂着的型号（非正式映射）。 */
+/** 某项目当前挂着的设备型号。 */
 export interface ProjectModelCoverage {
   model: string | null;
   device_count: number;
   platforms: string[];
+}
+
+export interface ProjectCreateInput {
+  project_key: string;
+  display_name: string;
+  customer?: string | null;
+  platform?: string | null;
+  form_factor?: string | null;
+  product_line?: string | null;
+  jira_project_key?: string | null;
+}
+
+export interface ProjectMapConflict {
+  device_id: number;
+  serial: string;
+  model: string | null;
+  from_project_key: string;
+}
+
+export interface ProjectMapPreview {
+  target_project_key: string;
+  models: string[];
+  will_assign: number;
+  already_in_target: number;
+  conflicts: ProjectMapConflict[];
+  unknown_models: string[];
 }
 
 // ─── 编排模型类型 ──────────────────────────────────────────────────────────────

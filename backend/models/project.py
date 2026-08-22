@@ -20,12 +20,27 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.core.database import Base
 
 
+# P1 脚本灌入的 key：工作台不展示，也不算「已映射项目」。
+SEED_PROJECT_KEYS = frozenset({
+    "HONOR-MLD",
+    "HONOR-ELA",
+    "ZTE-Z258",
+    "ODM-DAM",
+    "TRANSSION-X110",
+    "LEGACY",
+})
+
+
 class TestProject(Base):
+    """项目登记簿行。source=USER 为人工项目；SEED 为 P1 回填，工作台不展示。"""
+
     __tablename__ = "test_project"
 
     id               = Column(Integer, primary_key=True)
@@ -45,6 +60,11 @@ class TestProject(Base):
 
     status           = Column(String(16), nullable=False, default="ACTIVE",
                               server_default="ACTIVE")
+    # USER = 人工登记（工作台可见）；SEED = P1 脚本回填，不是客户/项目/机型。
+    source           = Column(String(16), nullable=False, default="USER",
+                              server_default="USER")
+    # 人工映射的 device.model 精确列表；空 = 尚未填写。
+    match_models     = Column(JSONB, nullable=False, default=list)
     created_at       = Column(DateTime(timezone=True), nullable=False,
                               default=lambda: datetime.now(timezone.utc))
     updated_at       = Column(
@@ -57,7 +77,14 @@ class TestProject(Base):
     __table_args__ = (
         CheckConstraint("status IN ('ACTIVE', 'ARCHIVED')",
                         name="ck_test_project_status"),
+        CheckConstraint("source IN ('USER', 'SEED')",
+                        name="ck_test_project_source"),
         UniqueConstraint("project_key", name="uq_test_project_key"),
+        Index(
+            "uq_test_project_key_lower",
+            text("lower(project_key)"),
+            unique=True,
+        ),
     )
 
 

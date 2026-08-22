@@ -6,10 +6,15 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import List, Optional
 
+from pydantic import BaseModel, Field, field_validator
+
 from backend.api.schemas.base import ORMBaseModel
+
+_PROJECT_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
 
 
 class ProjectOut(ORMBaseModel):
@@ -21,6 +26,8 @@ class ProjectOut(ORMBaseModel):
     platform: Optional[str] = None
     form_factor: Optional[str] = None
     status: str
+    source: str = "USER"
+    match_models: List[str] = []
     created_at: datetime
     updated_at: datetime
 
@@ -50,40 +57,75 @@ class ProjectDetailOut(ProjectSummaryOut):
     recent_runs: List[RecentProjectRunOut] = []
 
 
-# ── ADR-0029 P2.5a：Fleet 事实（只读聚合）────────────────────────────────
+class ProjectCreateIn(BaseModel):
+    project_key: str = Field(min_length=1, max_length=64)
+    display_name: str = Field(min_length=1, max_length=256)
+    customer: Optional[str] = None
+    platform: Optional[str] = None
+    form_factor: Optional[str] = None
+    product_line: Optional[str] = None
+    jira_project_key: Optional[str] = None
+
+    @field_validator("project_key")
+    @classmethod
+    def normalize_project_key(cls, value: str) -> str:
+        key = value.strip()
+        if not _PROJECT_KEY_RE.match(key):
+            raise ValueError("project_key must match [A-Za-z0-9][A-Za-z0-9-]{0,62}")
+        return key
+
+    @field_validator("display_name")
+    @classmethod
+    def strip_display_name(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("display_name must not be blank")
+        return name
 
 
 class InventoryModelOut(ORMBaseModel):
     """一种 ``device.model`` 的 fleet 聚合。
 
-    ``backfill_project_keys`` 是 P1 脚本灌入的 ``device.project_id`` 标签
-    （HONOR-MLD 等），**不是**客户 / 项目 / 机型，也不是人工映射。
-    ``mapped_project_keys`` 才是人工填写的映射；P2.5a 无规则表，恒为 ``[]``。
+    ``mapped_project_keys`` 只含人工 USER 项目（``match_models`` 或
+    ``device.project_id`` 指向 USER 行）。SEED 回填标签不出现在此字段。
     """
 
     model: Optional[str] = None
     device_count: int
     platforms: List[str]
-    backfill_project_keys: List[str]
     mapped_project_keys: List[str] = []
-    legacy_device_count: int = 0
-    null_device_count: int = 0
+    unassigned_device_count: int = 0
 
 
 class InventorySummaryOut(ORMBaseModel):
-    """工作台顶栏：全 fleet 计数 + 完全未编入真实回填标签的 model 列表。"""
-
     total_devices: int
-    mapped_devices: int
-    legacy_devices: int
-    null_devices: int
+    user_mapped_devices: int
     distinct_models: int
     unmapped_models: List[Optional[str]]
 
 
 class ProjectModelCoverageOut(ORMBaseModel):
-    """某回填标签当前挂着的型号（GROUP BY device.model；非正式映射）。"""
-
     model: Optional[str] = None
     device_count: int
     platforms: List[str]
+
+
+class ProjectMapIn(BaseModel):
+    models: List[str] = Field(min_length=1)
+    reassign_conflicts: bool = False
+
+
+class ProjectMapConflictOut(BaseModel):
+    device_id: int
+    serial: str
+    model: Optional[str] = None
+    from_project_key: str
+
+
+class ProjectMapPreviewOut(BaseModel):
+    target_project_key: str
+    models: List[str]
+    will_assign: int
+    already_in_target: int
+    conflicts: List[ProjectMapConflictOut] = []
+    unknown_models: List[str] = []

@@ -272,7 +272,7 @@ v1 判定 R3 为「结构性阻塞」（G1/G2/G3 未解除时逐项目分化只�
 | 阶段 | 内容（v2 最小形态） | 解除 | 依赖 |
 |------|------|------|------|
 | P1 | `test_project` 表（含 `jira_project_key`，不含 `variables`/`storage_key`）+ 专项字典表 + `plan.project_id/specialty` + `device.project_id` + `plan_run.project_id/build_version`；存量 Plan / PlanRun / 设备回填 Legacy（2026-08-18 快照 4 / 93 / 515，执行以 dry-run 输出为准） | G4 / G7 / G15 | 无 |
-| P2 | 前端（见 §3.2 v2）：项目登记簿页（列表卡片 + facet 筛选；详情 = 设备 / 计划 / 结果 / jira）+ 设备批量归入 + Plan / PlanRun / 结果页项目标签与筛选 | G6 / G8 | P1 |
+| P2 | 前端（见 §3.2 v2）：项目登记簿页（列表卡片 + facet 筛选；详情 = 设备 / 计划 / 结果 / jira）+ 设备批量归入 + Plan / PlanRun / 结果页项目标签与筛选。**产品面只列 `source=USER`；P1 六个回填 key 不是登记簿目录**（ADR v2.4） | G6 / G8 | P1 |
 | P3 | jira 提交自动带 `jira_project_key`（问题追踪页提交入口 + 映射展示） | G15 | P1 |
 | —（并行，不属本 ADR 表结构） | 脚本路由约定：入口脚本按设备能力路由 + step_trace 记录路由决策**及路由表文件 sha256** + 未匹配 fail-fast（`backend=auto` 模式规范化，v2.2 定稿路由表住工具目录） | R3 | 无 |
 | —（独立前置，**须先于 P2**） | SocketIO room 订阅收窄 + 格式/存在性校验（**非越权**，定性见 G13：①P2 前置一致性 ②健壮性；与项目模型无关） | G13 | 无（可独立合入） |
