@@ -3,7 +3,7 @@ import { api, toApiError, type TaskSchedule, type TaskScheduleCreatePayload, typ
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { CronExpressionInput } from '@/components/schedule/CronExpressionInput';
-import { Plus, Trash2, Edit2, Play, Power, Clock } from 'lucide-react';
+import { Plus, Trash2, Edit2, Play, Power, Clock, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -193,7 +193,7 @@ export default function SchedulesPage() {
           subtitle="管理 Cron 定时执行的 Plan"
           action={
             <Button onClick={loadAll} size="sm">
-              <Plus className="w-4 h-4" />
+              <RefreshCw className="w-4 h-4" />
               重试
             </Button>
           }

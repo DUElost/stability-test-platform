@@ -14,10 +14,11 @@ import { rangeSelectIds, sortDevicesStable } from './planExecuteSelection';
 import { isSchedulable, resolveDeviceTileStatus } from './tileStatus';
 import type { DeviceTileStatus } from './types';
 
-/** 瓦片斜纹（阻塞）：经 CSS 变量走语义色，暗色主题自动适配（#356/#362） */
+/** 瓦片斜纹（阻塞）：与 blocked 底色同走 destructive——红底琥珀纹在暗色主题下
+ *  易被读成两种状态；经 CSS 变量走语义色，暗色主题自动适配（#356/#362） */
 const BLOCKED_STRIPE = {
   backgroundImage:
-    'repeating-linear-gradient(-45deg, hsl(var(--warning) / 0.55), hsl(var(--warning) / 0.55) 3px, hsl(var(--warning) / 0.35) 3px, hsl(var(--warning) / 0.35) 6px)',
+    'repeating-linear-gradient(-45deg, hsl(var(--destructive) / 0.55), hsl(var(--destructive) / 0.55) 3px, hsl(var(--destructive) / 0.35) 3px, hsl(var(--destructive) / 0.35) 6px)',
 };
 
 /**

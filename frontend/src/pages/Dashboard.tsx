@@ -36,31 +36,31 @@ export default function Dashboard() {
 
   const { lastUpdateTime } = useRealtimeDashboard(WS_DASHBOARD_ENDPOINT);
 
-  const { data: activityData, isLoading: activityLoading, error: activityError } = useQuery({
+  const { data: activityData, isLoading: activityLoading, error: activityError, refetch: refetchActivity } = useQuery({
     queryKey: ['stats-activity'],
     queryFn: () => api.stats.activity(24),
     refetchInterval: 60000,
   });
 
-  const { data: trendData, isLoading: trendLoading, error: trendError } = useQuery({
+  const { data: trendData, isLoading: trendLoading, error: trendError, refetch: refetchTrend } = useQuery({
     queryKey: ['stats-completion-trend'],
     queryFn: () => api.stats.completionTrend(7),
     refetchInterval: 60000,
   });
 
-  const { data: hostFailureData, isLoading: hostFailureLoading, error: hostFailureError } = useQuery({
+  const { data: hostFailureData, isLoading: hostFailureLoading, error: hostFailureError, refetch: refetchHostFailure } = useQuery({
     queryKey: ['stats-host-failure-rate'],
     queryFn: () => api.stats.hostFailureRate(30, 10),
     refetchInterval: 60000,
   });
 
-  const { data: planSuccessData, isLoading: planSuccessLoading, error: planSuccessError } = useQuery({
+  const { data: planSuccessData, isLoading: planSuccessLoading, error: planSuccessError, refetch: refetchPlanSuccess } = useQuery({
     queryKey: ['stats-plan-success-rate'],
     queryFn: () => api.stats.planSuccessRate(30, 10),
     refetchInterval: 60000,
   });
 
-  const { data: passRateTrendData, isLoading: passRateTrendLoading, error: passRateTrendError } = useQuery({
+  const { data: passRateTrendData, isLoading: passRateTrendLoading, error: passRateTrendError, refetch: refetchPassRateTrend } = useQuery({
     queryKey: ['stats-plan-run-pass-rate-trend'],
     queryFn: () => api.stats.planRunPassRateTrend(30),
     refetchInterval: 60000,
@@ -253,7 +253,7 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             {activityError ? (
-              <InlineError message="任务活动趋势加载失败" onRetry={() => void 0} />
+              <InlineError message="任务活动趋势加载失败" onRetry={() => void refetchActivity()} />
             ) : activityLoading ? (
               <Skeleton className="h-[200px] w-full" />
             ) : (
@@ -268,7 +268,7 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             {trendError ? (
-              <InlineError message="完成趋势加载失败" onRetry={() => void 0} />
+              <InlineError message="完成趋势加载失败" onRetry={() => void refetchTrend()} />
             ) : trendLoading ? (
               <Skeleton className="h-[200px] w-full" />
             ) : (
@@ -277,7 +277,7 @@ export default function Dashboard() {
           </Card>
           {hostFailureError ? (
             <Card className="p-4">
-              <InlineError message="主机故障率加载失败" onRetry={() => void 0} />
+              <InlineError message="主机故障率加载失败" onRetry={() => void refetchHostFailure()} />
             </Card>
           ) : (
             <HostFailureRateChart
@@ -287,7 +287,7 @@ export default function Dashboard() {
           )}
           {planSuccessError ? (
             <Card className="p-4">
-              <InlineError message="Plan 成功率加载失败" onRetry={() => void 0} />
+              <InlineError message="Plan 成功率加载失败" onRetry={() => void refetchPlanSuccess()} />
             </Card>
           ) : (
             <PlanSuccessRateChart
@@ -298,7 +298,7 @@ export default function Dashboard() {
           <div className="md:col-span-2">
             {passRateTrendError ? (
               <Card className="p-4">
-                <InlineError message="通过率趋势加载失败" onRetry={() => void 0} />
+                <InlineError message="通过率趋势加载失败" onRetry={() => void refetchPassRateTrend()} />
               </Card>
             ) : (
               <PlanRunPassRateTrendChart

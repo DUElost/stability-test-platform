@@ -54,7 +54,7 @@ export const ENTITY_STATUS_COLORS = {
   // 任务/执行状态
   execution: {
     pending: STATUS_TEXT_COLORS.muted,     // 待执行 - 灰色
-    running: STATUS_TEXT_COLORS.primary,   // 运行中 - 蓝色
+    running: STATUS_TEXT_COLORS.warning,   // 运行中 - 琥珀（与 StatusBadge 各 kind 的 RUNNING=warning 统一，#356）
     success: STATUS_TEXT_COLORS.success,   // 成功 - 绿色
     failed: STATUS_TEXT_COLORS.error,      // 失败 - 红色
     partial: STATUS_TEXT_COLORS.warning,   // 部分成功 - 橙色

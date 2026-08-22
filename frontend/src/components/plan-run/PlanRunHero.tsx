@@ -240,10 +240,10 @@ export default function PlanRunHero({
           </Button>
           {exportOpen && run && (
             <>
-              <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
+              <div className="fixed inset-0 z-20" onClick={() => setExportOpen(false)} />
               <div
                 className={cn(
-                  'fixed z-20 mt-1 overflow-hidden rounded-md border shadow-lg',
+                  'fixed z-30 mt-1 overflow-hidden rounded-md border shadow-lg',
                   SURFACE.elevated,
                   ELEVATION.dropdown,
                 )}

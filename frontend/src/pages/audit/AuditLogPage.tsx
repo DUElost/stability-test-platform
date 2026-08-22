@@ -46,9 +46,11 @@ export default function AuditLogPage() {
   const [page, setPage] = useState(0);
   const pageSize = 50;
 
+  // 哨兵值 'all' = 不过滤；Radix Select 的 SelectItem 不接受空字符串
+  // （部分版本会告警/受控异常），API 侧不带该参数即全量
   const [filters, setFilters] = useState({
-    resource_type: '',
-    action: '',
+    resource_type: 'all',
+    action: 'all',
     start_time: '',
     end_time: '',
   });
@@ -59,8 +61,8 @@ export default function AuditLogPage() {
     setError(null);
     try {
       const params: Record<string, string> = {};
-      if (filters.resource_type) params.resource_type = filters.resource_type;
-      if (filters.action) params.action = filters.action;
+      if (filters.resource_type !== 'all') params.resource_type = filters.resource_type;
+      if (filters.action !== 'all') params.action = filters.action;
       if (filters.start_time) params.start_time = filters.start_time;
       if (filters.end_time) params.end_time = filters.end_time;
       const res = await api.audit.list(page * pageSize, pageSize, params);
@@ -91,7 +93,7 @@ export default function AuditLogPage() {
             <SelectValue placeholder="全部资源" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">全部资源</SelectItem>
+            <SelectItem value="all">全部资源</SelectItem>
             <SelectItem value="plan">Plan</SelectItem>
             <SelectItem value="tool">工具</SelectItem>
             <SelectItem value="tool_category">工具分类</SelectItem>
@@ -108,7 +110,7 @@ export default function AuditLogPage() {
             <SelectValue placeholder="全部操作" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">全部操作</SelectItem>
+            <SelectItem value="all">全部操作</SelectItem>
             <SelectItem value="create">创建</SelectItem>
             <SelectItem value="update">更新</SelectItem>
             <SelectItem value="delete">删除</SelectItem>
