@@ -319,7 +319,7 @@ export function ExpandableHostTable({
             <TableHeader>
               <TableRow className="sticky top-0 z-10 bg-muted/50 hover:bg-muted/50">
                 {selectable && (
-                  <TableHead className="w-10 p-3">
+                  <TableHead className="w-10 px-3 py-2">
                     <input
                       ref={selectAllRef}
                       type="checkbox"
@@ -360,7 +360,7 @@ export function ExpandableHostTable({
                       onClick={() => toggleRow(host.id)}
                     >
                       {selectable && (
-                        <TableCell className="p-3">
+                        <TableCell className="px-3 py-1.5">
                           <input
                             type="checkbox"
                             checked={selectedIds?.has(host.id) ?? false}
@@ -371,7 +371,7 @@ export function ExpandableHostTable({
                           />
                         </TableCell>
                       )}
-                      <TableCell className="p-3">
+                      <TableCell className="px-3 py-1.5">
                         <ChevronDown
                           className={cn(
                             'w-4 h-4 text-muted-foreground transition-transform',
@@ -379,7 +379,7 @@ export function ExpandableHostTable({
                           )}
                         />
                       </TableCell>
-                      <TableCell className="max-w-[200px] p-3">
+                      <TableCell className="max-w-[200px] px-3 py-1.5">
                         <div className="truncate font-medium text-foreground" title={host.name ?? ''}>
                           {host.name}
                         </div>
@@ -389,7 +389,7 @@ export function ExpandableHostTable({
                           </div>
                         )}
                       </TableCell>
-                      <TableCell className="p-3">
+                      <TableCell className="px-3 py-1.5">
                         <div className="space-y-1">
                           <div className="flex items-center gap-1.5">
                             <StatusBadge kind="host" status={host.status} size="sm" />
@@ -418,7 +418,7 @@ export function ExpandableHostTable({
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="p-3 text-center">
+                      <TableCell className="px-3 py-1.5 text-center">
                         <div className="inline-flex items-center gap-1">
                           <span
                             className={cn(
@@ -437,7 +437,7 @@ export function ExpandableHostTable({
                           </span>
                         </div>
                       </TableCell>
-                      <TableCell className="p-3 2xl:hidden">
+                      <TableCell className="px-3 py-1.5 2xl:hidden">
                         {host.resources && host.status === 'ONLINE' ? (
                           <div className="grid min-w-[150px] grid-cols-3 gap-1.5">
                             {[
@@ -465,7 +465,7 @@ export function ExpandableHostTable({
                           <span className="text-muted-foreground/40">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="hidden p-3 2xl:table-cell">
+                      <TableCell className="hidden px-3 py-1.5 2xl:table-cell">
                         {host.resources && host.status === 'ONLINE' ? (
                           <div className="flex items-center gap-2">
                             <Progress
@@ -481,7 +481,7 @@ export function ExpandableHostTable({
                           <span className="text-muted-foreground/40">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="hidden p-3 2xl:table-cell">
+                      <TableCell className="hidden px-3 py-1.5 2xl:table-cell">
                         {host.resources && host.status === 'ONLINE' ? (
                           <div className="flex items-center gap-2">
                             <Progress
@@ -497,7 +497,7 @@ export function ExpandableHostTable({
                           <span className="text-muted-foreground/40">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="hidden p-3 2xl:table-cell">
+                      <TableCell className="hidden px-3 py-1.5 2xl:table-cell">
                         {host.resources && host.status === 'ONLINE' ? (
                           host.resources.disk_usage == null ? (
                             <span data-testid="host-disk-usage" className="text-xs font-mono text-muted-foreground">未知</span>
@@ -520,7 +520,7 @@ export function ExpandableHostTable({
                           <span className="text-muted-foreground/40">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="p-3">
+                      <TableCell className="px-3 py-1.5">
                         {host.agent_installed ? (
                           <div className="flex w-28 flex-col gap-1">
                             <span
@@ -555,7 +555,7 @@ export function ExpandableHostTable({
                           ? formatHeartbeatLabel(host.last_heartbeat)
                           : '—'}
                       </TableCell>
-                      <TableCell className="p-3 text-right">
+                      <TableCell className="px-3 py-1.5 text-right">
                         <div className="inline-flex items-center gap-1.5">
                           {host.status === 'ONLINE' && onHotUpdate ? (
                             <button
