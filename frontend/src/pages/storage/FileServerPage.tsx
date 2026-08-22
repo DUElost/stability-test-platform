@@ -549,7 +549,10 @@ export default function FileServerPage() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
               <div>
                 <h2 id="resource-trend-title" className={cn('text-sm font-semibold', TEXT.heading)}>资源趋势</h2>
-                <p className={cn('mt-0.5 text-xs', TEXT.caption)}>最近 {data.history.hours} 小时</p>
+                <p className={cn('mt-0.5 text-xs', TEXT.caption)}>
+                  最近 {hours === 168 ? '7 天' : `${hours} 小时`}
+                  {query.isPlaceholderData ? '（更新中…）' : ''}
+                </p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <div className={cn('flex gap-4 text-xs', TEXT.caption)}>
