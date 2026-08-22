@@ -137,7 +137,7 @@ export default function ProjectsPage() {
   }, [projects]);
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <PageHeader
         title="项目登记簿"
         subtitle="上方是设备心跳可读的型号事实；下方是人工创建的项目。HONOR-MLD 等回填标签不出现在本页。"

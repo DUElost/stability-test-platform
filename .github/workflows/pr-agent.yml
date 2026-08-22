@@ -1,0 +1,111 @@
+name: PR Agent (DeepSeek)
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, review_requested, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  # 按事件类型分 group：评论触发的 issue_comment run 不得取消正在进行的
+  # 自动 review（pull_request run）。
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  pr-agent-gate:
+    name: pr-agent-gate
+    # required check（替代原 code-rabbit-gate），只在 pull_request 事件上跑：
+    # - review 对当前 head 完成且无 security concerns → success；
+    # - 有 security concerns → failure 阻断；
+    # - review 未完成 / 工具或 API 失败 / 输出缺失 → failure 阻断
+    #   （fail-closed；逃生：修复后 push 自动复评，或对失败检查点 rerun，
+    #   或临时从分支保护摘除该 required check）。
+    # issue_comment 命令（/review 等）由独立非门禁 job 处理，避免评论触发的
+    # 成功 check run 顶掉/覆盖门禁（security-gate bypass）。
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Run PR Agent
+        # 直接以 digest 固定镜像，避免本地 action 依赖 checkout。
+        uses: docker://pragent/pr-agent@sha256:b81235c3bddc551939a1feca8926f4b6e8abcec2ae5bf4620424f8f56dd9cb93
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          config.model: deepseek/deepseek-v4-flash
+          config.fallback_models: '[]'
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "review_requested"]'
+          # 每次 push（含 dependabot 等 bot push）自动复评，保证当前 head 都有
+          # 门禁；复评更新同一条 persistent comment，不刷屏。v4-flash 单次调用
+          # 成本低，可接受。
+          github_action_config.handle_push_trigger: "true"
+          github_action_config.push_commands: '["/review"]'
+          github_action_config.push_trigger_ignore_bot_commits: "false"
+          github.ignore_bot_pr: "false"
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
+      - name: Evaluate PR Agent review (security gate)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # 取该 PR 最新一条 PR-Agent review 评论（persistent comment 原地更新）。
+          comment=""
+          for _ in $(seq 1 6); do
+            comment="$(
+              gh api "repos/$REPO_OWNER/$REPO_NAME/issues/$PR_NUMBER/comments?per_page=100" \
+                --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("PR Reviewer Guide"))] | last | .body // ""'
+            )" || true
+            [ -n "$comment" ] && break
+            sleep 5
+          done
+
+          if [ -z "$comment" ]; then
+            echo "::error::PR Agent review output not found; pr-agent-gate fails (rerun or check DeepSeek API)."
+            exit 1
+          fi
+          if printf '%s' "$comment" | grep -qi 'No security concerns'; then
+            echo "PR Agent review completed: no security concerns."
+            exit 0
+          fi
+          if printf '%s' "$comment" | grep -qi 'Security concerns'; then
+            echo "::error::PR Agent 发现 security concerns，请修复后 push 触发自动复评（synchronize），或对失败的 pr-agent-gate 检查点 rerun；/review 只更新评论、不重算门禁。"
+            exit 1
+          fi
+          echo "::error::无法解析 PR Agent review 输出中的 security 段落；pr-agent-gate fails。"
+          exit 1
+
+  pr-agent-comment:
+    name: pr-agent-comment
+    # 非门禁 job：处理 PR 评论里的 /review、/ask 等命令；不产生 required
+    # check，也不参与 pr-agent-gate 判定。
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.sender.type != 'Bot' &&
+      github.event.issue.pull_request != null &&
+      github.event.issue.pull_request.draft == false &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Run PR Agent
+        uses: docker://pragent/pr-agent@sha256:b81235c3bddc551939a1feca8926f4b6e8abcec2ae5bf4620424f8f56dd9cb93
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          config.model: deepseek/deepseek-v4-flash
+          config.fallback_models: '[]'
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"

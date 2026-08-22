@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { TEXT } from '@/design-system/tokens';
+import { SEGMENTED, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
 import { EXECUTE_PHASES, phaseIndex, type ExecutePhase } from './types';
@@ -28,6 +28,8 @@ interface ExecuteCommandBarProps {
   secondary?: React.ReactNode;
   /** 选机工作台：更紧凑，贴近 mockup command-bar */
   compact?: boolean;
+  /** dispatch 长页：主 CTA 随滚动吸顶，底部核对后无需滚回顶（#357） */
+  sticky?: boolean;
 }
 
 function stepChipLabel(phase: ExecutePhase, summary: ExecuteCommandBarSummary, index: number): string {
@@ -56,6 +58,7 @@ export function ExecuteCommandBar({
   onPrimary,
   secondary,
   compact = false,
+  sticky = false,
 }: ExecuteCommandBarProps) {
   const currentIdx = phaseIndex(phase);
 
@@ -64,6 +67,7 @@ export function ExecuteCommandBar({
       className={cn(
         'shrink-0 rounded-xl border bg-card shadow-sm',
         compact ? 'px-3 py-2.5' : 'px-4 py-3',
+        sticky && 'sticky top-0 z-20',
       )}
       aria-label="执行指挥条"
       data-testid="execute-command-bar"
@@ -86,7 +90,7 @@ export function ExecuteCommandBar({
                     aria-current={active ? 'step' : undefined}
                     className={cn(
                       'rounded-lg px-2.5 py-1 text-left text-xs transition-colors',
-                      active && 'bg-primary/15 font-semibold text-primary',
+                      active && SEGMENTED.itemActiveStrong,
                       done && !active && 'bg-success/15 font-medium text-success',
                       !active && !done && 'bg-muted text-muted-foreground hover:bg-accent',
                     )}
@@ -110,7 +114,7 @@ export function ExecuteCommandBar({
               </span>
             ) : null}
             {summary.planName && !summary.showDeviceMeta ? (
-              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs">
+              <span className="min-w-0 max-w-[18rem] truncate rounded-md border bg-muted/40 px-2 py-0.5 text-xs">
                 Plan · {summary.planName}
               </span>
             ) : null}

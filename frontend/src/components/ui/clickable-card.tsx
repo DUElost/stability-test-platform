@@ -38,7 +38,7 @@ export function ClickableCard({
   return (
     <Card
       className={cn(
-        'cursor-pointer hover:shadow-md transition-shadow',
+        'cursor-pointer card-hover',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2',
         className
       )}

@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, ArrowLeft, Code2, Play, Save, AlertCircle, ChevronRight } from 'lucide-react';
+import { Loader2, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -14,10 +14,11 @@ import {
 import PlanChainPanel from '@/components/pipeline/PlanChainPanel';
 import PlanCanvas from '@/components/pipeline/PlanCanvas';
 import PlanStepInspector from '@/components/pipeline/PlanStepInspector';
-import { STATUS_BG_COLORS } from '@/design-system/colors';
 import { SURFACE, TEXT, FORM } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { PageContainer } from '@/components/layout';
 import { usePlanEditForm } from './usePlanEditForm';
+import { usePlanEditHeaderSlot } from './usePlanEditHeaderSlot';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { ErrorState } from '@/components/ui/error-state';
 
@@ -27,6 +28,8 @@ export default function PlanEditPage() {
   const navigate = useNavigate();
 
   const form = usePlanEditForm(planId);
+  const headerReady = !form.planLoading && !form.planIsError && !form.dependenciesIsError;
+  usePlanEditHeaderSlot(form, headerReady);
   useDocumentTitle(form.name || (form.isNew ? '新建 Plan' : '编辑 Plan'));
 
   if (!form.isNew && form.planLoading) {
@@ -76,61 +79,8 @@ export default function PlanEditPage() {
   }
 
   return (
-    <div className="h-full flex flex-col bg-muted/40">
-      <header className="h-16 shrink-0 px-6 flex items-center justify-between gap-4 bg-card/95 backdrop-blur border-b border-border">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-muted-foreground"
-            onClick={() => navigate('/orchestration/plans')}
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </Button>
-          <div className="flex items-center gap-2 text-[13px] text-muted-foreground min-w-0">
-            <span>测试计划</span>
-            <ChevronRight className="w-3.5 h-3.5 text-border" />
-            <strong className="text-foreground font-bold text-base truncate">
-              {form.name || (form.isNew ? '新建 Plan' : '未命名 Plan')}
-            </strong>
-            {form.isDirty ? (
-              <span
-                className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_BG_COLORS.warning} border border-warning`}
-              >
-                <AlertCircle className="w-3 h-3" /> 未保存
-              </span>
-            ) : (
-              <span
-                className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_BG_COLORS.success} border border-success`}
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-success" /> 已保存
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-foreground"
-            onClick={() => form.setShowJson(true)}
-          >
-            <Code2 className="w-4 h-4 mr-1.5" />
-            查看 JSON
-          </Button>
-          <Button variant="default" size="sm" onClick={form.handleExecute} disabled={form.saving}>
-            <Play className="w-4 h-4 mr-1.5" />
-            发起测试
-          </Button>
-          <Button size="sm" onClick={form.handleSave} disabled={form.saving || !form.isDirty}>
-            <Save className="w-4 h-4 mr-1.5" />
-            {form.saving ? '保存中…' : form.isNew ? '创建' : '保存修改'}
-          </Button>
-        </div>
-      </header>
-
-      <div className="flex-1 min-h-0 grid grid-cols-1 grid-rows-1 lg:grid-cols-[260px_minmax(0,1fr)_320px] overflow-hidden">
+    <PageContainer width="bleed" className="bg-muted/40">
+      <div className="flex-1 min-h-0 grid grid-cols-1 grid-rows-1 lg:grid-cols-[260px_minmax(0,1fr)_320px] overflow-y-auto lg:overflow-hidden">
         <PlanChainPanel
           plans={form.allPlans || []}
           currentPlanId={planId}
@@ -260,6 +210,6 @@ export default function PlanEditPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

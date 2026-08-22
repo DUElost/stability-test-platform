@@ -1,9 +1,16 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { api } from '@/utils/api';
 import { DeviceMetricsChart } from '@/components/charts/DeviceMetricsChart';
-import { FORM, MODAL, TEXT } from '@/design-system';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { FORM, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
 interface DeviceMetricsModalProps {
@@ -23,34 +30,30 @@ export function DeviceMetricsModal({ isOpen, onClose, deviceId, deviceSerial }: 
     refetchInterval: 30000,
   });
 
-  if (!isOpen) return null;
-
   return (
-    <div className={MODAL.overlay}>
-      <div className={cn(MODAL.panel, 'relative max-h-[85vh] w-full max-w-2xl overflow-auto')}>
-        <div className={MODAL.header}>
-          <div>
-            <h3 className={MODAL.title}>设备指标历史</h3>
-            <p className={cn('text-sm', TEXT.subtitle)}>{deviceSerial}</p>
-          </div>
-          <div className="flex items-center gap-3">
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <div className="flex items-center justify-between gap-3 pr-8">
+            <div>
+              <DialogTitle>设备指标历史</DialogTitle>
+              <DialogDescription>{deviceSerial}</DialogDescription>
+            </div>
             <select
               value={hours}
               onChange={(e) => setHours(Number(e.target.value))}
               className={FORM.select}
+              aria-label="时间范围"
             >
               <option value={6}>最近6小时</option>
               <option value={24}>最近24小时</option>
               <option value={72}>最近3天</option>
               <option value={168}>最近7天</option>
             </select>
-            <button onClick={onClose} className={MODAL.closeButton} aria-label="关闭">
-              <X size={20} />
-            </button>
           </div>
-        </div>
+        </DialogHeader>
 
-        <div className="p-6">
+        <div>
           {isLoading ? (
             <div className="flex h-64 items-center justify-center">
               <Loader2 className={cn('h-8 w-8 animate-spin', TEXT.subtitle)} />
@@ -59,7 +62,7 @@ export function DeviceMetricsModal({ isOpen, onClose, deviceId, deviceSerial }: 
             <DeviceMetricsChart data={data?.points || []} />
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

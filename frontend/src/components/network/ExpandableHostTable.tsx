@@ -5,6 +5,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableEmptyRow,
   TableHead,
   TableHeader,
   TableRow,
@@ -246,12 +247,10 @@ export function ExpandableHostTable({
             </div>
             <div>
               <div className="text-xl font-semibold text-foreground">{stats.total}</div>
-              <div className="text-xs text-muted-foreground">主机总数</div>
-              {stats.agentTrackable > 0 && (
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  Agent 已对齐 {stats.agentAligned}/{stats.agentTrackable}
-                </div>
-              )}
+              {/* 机队级 Agent 对齐率内联进标签行：保持四卡文本块等高（B9 基线） */}
+              <div className="text-xs text-muted-foreground">
+                主机总数{stats.agentTrackable > 0 && ` · Agent 已对齐 ${stats.agentAligned}/${stats.agentTrackable}`}
+              </div>
             </div>
           </button>
           <button
@@ -318,7 +317,7 @@ export function ExpandableHostTable({
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <Table className="min-w-[720px]">
             <TableHeader>
-              <TableRow className="bg-muted/50 hover:bg-muted/50">
+              <TableRow className="sticky top-0 z-10 bg-muted/50 hover:bg-muted/50">
                 {selectable && (
                   <TableHead className="w-10 p-3">
                     <input
@@ -567,7 +566,7 @@ export function ExpandableHostTable({
                               }}
                               disabled={isHotUpdating?.(host.id)}
                               aria-label={`${host.name ?? host.id} 热更新 Agent`}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/15 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/15 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                             >
                               {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
                             </button>
@@ -638,7 +637,7 @@ export function ExpandableHostTable({
 
                     {/* Expanded Details */}
                     {isExpanded && (
-                      <TableRow className="bg-muted/50/50 hover:bg-muted/50/50">
+                      <TableRow className="bg-muted/40 hover:bg-muted/40">
                         <TableCell colSpan={selectable ? 12 : 11} className="p-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                             {/* CPU Details */}
@@ -870,15 +869,14 @@ export function ExpandableHostTable({
                   </Fragment>
                 );
               })}
+            {filteredHosts.length === 0 && (
+              <TableEmptyRow colSpan={16}>
+                {hosts.length === 0 ? '暂无主机' : '没有符合当前筛选条件的主机'}
+              </TableEmptyRow>
+            )}
             </TableBody>
           </Table>
         </div>
-
-        {filteredHosts.length === 0 && (
-          <div className="text-center py-8 text-muted-foreground text-sm">
-            {hosts.length === 0 ? '暂无主机' : '没有符合当前筛选条件的主机'}
-          </div>
-        )}
 
         {/* 全选后底部悬浮操作条会挡住最后一行；用真实占位撑开滚动，避免与 PageContainer lg:p-8 抢 padding */}
         {selectable && selectedIds && selectedIds.size > 0 && (

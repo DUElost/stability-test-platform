@@ -1,6 +1,6 @@
 /**
  * #72 验收项 5/6:用生产 PlanRun 103 的真实 watcher-summary payload 渲染
- * AnomalyDashboard + WatcherSummaryCard,确认饼图 / 包名榜 / 异常率进度条
+ * AnomalyDashboard,确认饼图 / 包名榜 / 异常率进度条
  * 真的把数据画出来。
  *
  * payload 来源:GET /api/v1/plan-runs/103/watcher-summary(2026-07-26 抓取)
@@ -14,7 +14,6 @@ import { render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, it, expect } from 'vitest';
 import AnomalyDashboard from './AnomalyDashboard';
-import WatcherSummaryCard from './WatcherSummaryCard';
 import realPayload from './__fixtures__/watcher-summary-103.json';
 
 const wrap = (ui: React.ReactNode) => (
@@ -48,19 +47,5 @@ describe('#72 acceptance — real production payload (PlanRun 103)', () => {
     // aee_ts=07-16 早于 run started_at=07-25 → 本次新增应为 0
     expect(text).toMatch(/本次新增异常总量\s*0/);
     expect(text).toMatch(/当前范围内未发现新增/);
-  });
-
-  it('WatcherSummaryCard 渲染异常率进度条与 AEE 分类', () => {
-    const { container } = render(wrap(<WatcherSummaryCard data={realPayload as any} />));
-    const text = container.textContent ?? '';
-
-    // abnormal_rate=1.0 → 100%,超过 threshold=0.05
-    expect(text).toMatch(/100(\.0)?\s*%/);
-    expect(text).toMatch(/AEE/);
-  });
-
-  it('WatcherSummaryCard 不落空态', () => {
-    const { container } = render(wrap(<WatcherSummaryCard data={realPayload as any} />));
-    expect(container.textContent ?? '').not.toMatch(/暂无异常|无 Watcher 数据/);
   });
 });

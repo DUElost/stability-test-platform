@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { TEXT } from '@/design-system/tokens';
+import { SEGMENTED, TEXT } from '@/design-system/tokens';
 import { Check, ChevronDown, X } from 'lucide-react';
 import type { ActiveFilterChip } from './planExecuteFilters';
 import type { DeviceViewMode } from './types';
@@ -95,7 +95,7 @@ export function DeviceFilterBar({
             type="button"
             className={cn(
               'h-8 px-3 text-xs',
-              view === 'matrix' ? 'bg-primary/15 font-semibold text-primary' : 'text-muted-foreground',
+              view === 'matrix' ? SEGMENTED.itemActiveStrong : 'text-muted-foreground',
             )}
             onClick={() => onViewChange('matrix')}
           >
@@ -105,7 +105,7 @@ export function DeviceFilterBar({
             type="button"
             className={cn(
               'h-8 border-l px-3 text-xs',
-              view === 'table' ? 'bg-primary/15 font-semibold text-primary' : 'text-muted-foreground',
+              view === 'table' ? SEGMENTED.itemActiveStrong : 'text-muted-foreground',
             )}
             onClick={() => onViewChange('table')}
           >
@@ -246,46 +246,43 @@ export function DeviceFilterBar({
         </div>
       </div>
 
-      {(versionChips.length > 0 || modelChips.length > 0) && (
-        <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2">
-          <span className={cn('self-center text-[11px]', TEXT.subtitle)}>快捷：</span>
-          {versionChips.map((v) => (
-            <button
-              key={`v-${v}`}
-              type="button"
-              onClick={() => onVersionChange(deviceVersionFilter === v ? 'all' : v)}
-              className={cn(
-                'h-6 rounded-md border px-2 text-xs transition-colors',
-                deviceVersionFilter === v
-                  ? 'border-primary bg-primary/15 font-medium text-primary'
-                  : 'bg-card hover:border-primary/50',
-              )}
-            >
-              {v}
-            </button>
-          ))}
-          {modelChips.map((m) => (
-            <button
-              key={`m-${m}`}
-              type="button"
-              onClick={() => onModelChange(deviceModelFilter === m ? 'all' : m)}
-              className={cn(
-                'h-6 rounded-md border px-2 text-xs transition-colors',
-                deviceModelFilter === m
-                  ? 'border-primary bg-primary/15 font-medium text-primary'
-                  : 'bg-card hover:border-primary/50',
-              )}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-      )}
-
       <div
-        className="flex flex-wrap items-center gap-1.5 px-3 py-2"
+        className="flex flex-wrap items-center gap-1.5 border-t px-3 py-1.5"
         data-testid="active-filter-chips"
       >
+        {(versionChips.length > 0 || modelChips.length > 0) && (
+          <span className={cn('self-center text-[11px]', TEXT.subtitle)}>快捷：</span>
+        )}
+        {versionChips.map((v) => (
+          <button
+            key={`v-${v}`}
+            type="button"
+            onClick={() => onVersionChange(deviceVersionFilter === v ? 'all' : v)}
+            className={cn(
+              'h-6 rounded-md border px-2 text-xs transition-colors',
+              deviceVersionFilter === v
+                ? 'border-primary bg-primary/15 font-medium text-primary'
+                : 'bg-card hover:border-primary/50',
+            )}
+          >
+            {v}
+          </button>
+        ))}
+        {modelChips.map((m) => (
+          <button
+            key={`m-${m}`}
+            type="button"
+            onClick={() => onModelChange(deviceModelFilter === m ? 'all' : m)}
+            className={cn(
+              'h-6 rounded-md border px-2 text-xs transition-colors',
+              deviceModelFilter === m
+                ? 'border-primary bg-primary/15 font-medium text-primary'
+                : 'bg-card hover:border-primary/50',
+            )}
+          >
+            {m}
+          </button>
+        ))}
         {activeFilterChips.length === 0 ? (
           <span className={cn('text-[11px]', TEXT.subtitle)}>
             无激活筛选 · 条件会写入 URL 便于分享

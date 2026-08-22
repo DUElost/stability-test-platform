@@ -55,7 +55,7 @@ export function PaginationBar({
   };
 
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex flex-wrap items-center justify-between gap-y-2">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>
           第 {page} / {totalPages} 页

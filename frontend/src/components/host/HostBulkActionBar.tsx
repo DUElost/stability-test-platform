@@ -61,7 +61,7 @@ export default function HostBulkActionBar({
       aria-live="polite"
       className="pointer-events-none fixed bottom-4 left-4 right-4 z-40 flex justify-center lg:left-60"
     >
-      <div className="pointer-events-auto flex w-full max-w-4xl flex-wrap items-center gap-3 rounded-2xl border border-border bg-card/95 px-3 py-3 shadow-xl backdrop-blur supports-[backdrop-filter]:bg-card/90 sm:px-4">
+      <div className="pointer-events-auto flex w-full max-w-5xl flex-wrap items-center gap-3 rounded-2xl border border-border bg-card/95 px-3 py-3 shadow-xl backdrop-blur supports-[backdrop-filter]:bg-card/90 sm:px-4">
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
             <CheckCheck className="h-4 w-4" />
@@ -76,7 +76,7 @@ export default function HostBulkActionBar({
           </div>
         </div>
 
-        <div className="hidden h-9 w-px bg-border sm:block" />
+        <div className="hidden h-9 w-px bg-border md:block" />
 
         {isAdmin && (
           <div className="flex flex-1 flex-wrap items-center gap-2 sm:flex-none">

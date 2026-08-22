@@ -377,7 +377,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
                 if (!showSearch) setTimeout(() => searchInputRef.current?.focus(), 50);
               }}
               className={cn('p-1 transition-colors hover:text-primary', TEXT.subtitle)}
-              title="Search (Ctrl+F)"
+              title="搜索 (Ctrl+F)"
               aria-label="搜索 (Ctrl+F)"
             >
               <Search size={14} />
@@ -385,7 +385,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
             <button
               onClick={handleDownload}
               className={cn('p-1 transition-colors hover:text-primary', TEXT.subtitle)}
-              title="Download Log"
+              title="下载日志"
               aria-label="下载日志"
             >
               <Download size={14} />
@@ -394,10 +394,10 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
               <button
                 onClick={scrollToBottom}
                 className="flex items-center gap-1 rounded bg-primary px-2 py-0.5 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
-                title="Resume auto-scroll"
+                title="恢复自动滚动"
               >
                 <ArrowDown size={12} />
-                Resume
+                恢复滚动
               </button>
             )}
           </div>

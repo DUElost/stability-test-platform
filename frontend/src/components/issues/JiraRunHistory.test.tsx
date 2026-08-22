@@ -52,7 +52,7 @@ describe('JiraRunHistory', () => {
   it('renders empty state when there are no runs', async () => {
     listRuns.mockResolvedValue([]);
     renderWithClient();
-    expect(await screen.findByText('暂无提单记录')).toBeInTheDocument();
+    expect(await screen.findByText(/暂无提单记录/)).toBeInTheDocument();
   });
 
   it('renders error state when the query fails', async () => {
@@ -89,7 +89,7 @@ describe('JiraRunHistory', () => {
   it('refetches with vendor/status filters when changed', async () => {
     listRuns.mockResolvedValue([]);
     renderWithClient();
-    await screen.findByText('暂无提单记录');
+    await screen.findByText(/暂无提单记录/);
 
     fireEvent.change(screen.getByLabelText('按厂商过滤'), { target: { value: 'tinno' } });
 

@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
-import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { InlineEmpty } from '@/components/ui/empty-state';
 import { CHART_COLORS } from '@/design-system/colors';
 
 export interface ActivityDataPoint {
@@ -40,9 +41,7 @@ export function ActivityChart({ data, isLoading }: ActivityChartProps) {
     return (
       <Card className="border-none shadow-none">
         <CardContent className="p-6">
-          <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">
-            暂无数据
-          </div>
+          <InlineEmpty chart>暂无数据</InlineEmpty>
         </CardContent>
       </Card>
     );
@@ -107,6 +106,7 @@ export function ActivityChart({ data, isLoading }: ActivityChartProps) {
               <Area
                 type="monotone"
                 dataKey="started"
+                name="启动"
                 stroke={CHART_COLORS.primary}
                 strokeWidth={2}
                 fill="url(#grad-started)"
@@ -115,6 +115,7 @@ export function ActivityChart({ data, isLoading }: ActivityChartProps) {
               <Area
                 type="monotone"
                 dataKey="completed"
+                name="完成"
                 stroke={CHART_COLORS.success}
                 strokeWidth={2}
                 fill="url(#grad-completed)"
@@ -123,10 +124,20 @@ export function ActivityChart({ data, isLoading }: ActivityChartProps) {
               <Area
                 type="monotone"
                 dataKey="failed"
+                name="失败"
                 stroke={CHART_COLORS.error}
                 strokeWidth={2}
                 fill="url(#grad-failed)"
                 isAnimationActive={false}
+              />
+              <Legend
+                verticalAlign="bottom"
+                height={30}
+                iconType="circle"
+                iconSize={8}
+                formatter={(value: string) => (
+                  <span className="text-xs text-muted-foreground">{value}</span>
+                )}
               />
             </AreaChart>
           </ResponsiveContainer>

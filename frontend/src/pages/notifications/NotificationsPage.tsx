@@ -224,11 +224,11 @@ export default function NotificationsPage() {
   const tabBtnClass = (active: boolean) =>
     cn(
       'px-4 py-2 text-sm rounded-md transition-colors',
-      active ? 'bg-card text-foreground shadow-sm' : SEGMENTED.toggleIdle,
+      active ? SEGMENTED.toggleActive : SEGMENTED.toggleIdle,
     );
 
   return (
-    <PageContainer width="default">
+    <PageContainer width="content">
       <PageHeader title="通知管理" subtitle="配置通知渠道和告警规则" />
 
       {/* Tabs */}

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ShieldAlert } from 'lucide-react';
@@ -29,10 +30,10 @@ const COLORS = {
 };
 
 const LABELS = {
-  high: 'High',
-  medium: 'Medium',
-  low: 'Low',
-  unknown: 'Unknown',
+  high: '高',
+  medium: '中',
+  low: '低',
+  unknown: '未知',
 };
 
 export function RiskDistributionChart({ data, isLoading }: RiskDistributionChartProps) {
@@ -92,19 +93,19 @@ export function RiskDistributionChart({ data, isLoading }: RiskDistributionChart
       </CardHeader>
       <CardContent>
         <div className="h-[200px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={chartData}
-                cx="50%"
-                cy="50%"
-                innerRadius={45}
-                outerRadius={70}
-                paddingAngle={2}
-                dataKey="value"
-                animationBegin={0}
-                animationDuration={800}
-              >
+          <StableResponsiveContainer>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={chartData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={45}
+                  outerRadius={70}
+                  paddingAngle={2}
+                  dataKey="value"
+                  isAnimationActive={false}
+                >
                 {chartData.map((entry, index) => (
                   <Cell
                     key={`cell-${index}`}
@@ -131,7 +132,7 @@ export function RiskDistributionChart({ data, isLoading }: RiskDistributionChart
                           <span className="text-sm font-medium">{d.name}</span>
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          {d.value} runs ({pct}%)
+                          {d.value} 次 ({pct}%)
                         </div>
                       </div>
                     );
@@ -150,6 +151,7 @@ export function RiskDistributionChart({ data, isLoading }: RiskDistributionChart
               />
             </PieChart>
           </ResponsiveContainer>
+          </StableResponsiveContainer>
         </div>
       </CardContent>
     </Card>

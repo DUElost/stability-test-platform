@@ -196,6 +196,7 @@ export default function Sidebar({
                 <button
                   type="button"
                   onClick={() => toggleGroup(group.label)}
+                  aria-expanded={!isGroupCollapsed}
                   className={cn(
                     'w-full flex items-center justify-between px-3 mb-2 text-xs font-medium uppercase tracking-wider transition-colors',
                     TEXT.caption,

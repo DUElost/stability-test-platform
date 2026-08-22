@@ -18,8 +18,16 @@ import {
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { formatDurationSeconds, formatLocalDateTime } from '@/utils/format';
-import { EmptyState } from '@/components/ui/empty-state';
+import { InlineEmpty } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { KPI_TONE, STAT } from '@/design-system/tokens';
@@ -41,7 +49,7 @@ export default function ResultsPage() {
 
   if (isError) {
     return (
-      <PageContainer width="default">
+      <PageContainer width="content">
         <PageHeader title="测试结果" subtitle="测试运行统计与风险分布概览" />
         <ErrorState
           // 未知项目 key：按错误态渲染（后端统一 404），不吞成空数据
@@ -61,7 +69,7 @@ export default function ResultsPage() {
   }
 
   return (
-    <PageContainer width="default">
+    <PageContainer width="content">
       <PageHeader
         title="测试结果"
         subtitle="测试运行统计与风险分布概览"
@@ -135,56 +143,50 @@ export default function ResultsPage() {
               ))}
             </div>
           ) : !data?.recent_runs?.length ? (
-            <div className="py-8">
-              <EmptyState
-                title="暂无测试运行"
-                description="还没有执行过测试"
-                icon={<Clock className="h-12 w-12" />}
-              />
-            </div>
+            <InlineEmpty>暂无测试运行 · 还没有执行过测试</InlineEmpty>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="pb-2 pr-4">Run</th>
-                    <th className="pb-2 pr-4">任务</th>
-                    <th className="pb-2 pr-4">状态</th>
-                    <th className="pb-2 pr-4">风险</th>
-                    <th className="pb-2 pr-4">时长</th>
-                    <th className="pb-2">开始时间</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <Table className="min-w-[640px]">
+                <TableHeader>
+                  <TableRow className="border-b text-left text-xs text-muted-foreground">
+                    <TableHead className="pb-2 pr-4">Run</TableHead>
+                    <TableHead className="pb-2 pr-4">任务</TableHead>
+                    <TableHead className="pb-2 pr-4">状态</TableHead>
+                    <TableHead className="pb-2 pr-4">风险</TableHead>
+                    <TableHead className="pb-2 pr-4">时长</TableHead>
+                    <TableHead className="pb-2">开始时间</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {data.recent_runs.map((run) => (
-                    <tr
+                    <TableRow
                       key={run.run_id}
                       className="cursor-pointer border-b transition-colors last:border-0 hover:bg-muted/50"
                       onClick={() => navigate(`/runs/${run.run_id}/report`)}
                     >
-                      <td className="py-2 pr-4 font-mono text-xs">#{run.run_id}</td>
-                      <td className="max-w-[180px] truncate py-2 pr-4">
+                      <TableCell className="py-2 pr-4 font-mono text-xs">#{run.run_id}</TableCell>
+                      <TableCell className="max-w-[180px] truncate py-2 pr-4">
                         <span className="flex items-center gap-1.5">
                           <span className="truncate">{run.task_name}</span>
                           <ProjectKeyBadge projectKey={run.project_key} />
                         </span>
-                      </td>
-                      <td className="py-2 pr-4">
+                      </TableCell>
+                      <TableCell className="py-2 pr-4">
                         <StatusBadge kind="job-result" status={run.status} size="sm" fallbackToRaw />
-                      </td>
-                      <td className="py-2 pr-4">
+                      </TableCell>
+                      <TableCell className="py-2 pr-4">
                         <StatusBadge kind="risk" status={run.risk_level} size="sm" />
-                      </td>
-                      <td className="py-2 pr-4 text-xs text-muted-foreground">
+                      </TableCell>
+                      <TableCell className="py-2 pr-4 text-xs text-muted-foreground">
                         {formatDurationSeconds(run.duration_seconds, 'precise', '-')}
-                      </td>
-                      <td className="py-2 text-xs text-muted-foreground">
+                      </TableCell>
+                      <TableCell className="py-2 text-xs text-muted-foreground">
                         {formatLocalDateTime(run.started_at)}
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           )}
         </CardContent>

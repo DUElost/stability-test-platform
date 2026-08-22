@@ -964,7 +964,7 @@ export default function PlanExecutePage() {
 
   return (
     <PageContainer
-      fullBleed
+      width="bleed"
       scrollable={phase !== 'select'}
       className={cn(
         'min-h-0',
@@ -1000,6 +1000,7 @@ export default function PlanExecutePage() {
         phase={phase}
         onPhaseChange={handlePhaseChange}
         compact={phase === 'select'}
+        sticky={phase === 'dispatch'}
         summary={{
           planName: selectedPlan?.name,
           selectedCount: selectedDevices.length,
@@ -1277,16 +1278,16 @@ export default function PlanExecutePage() {
                         </span>
                         <span className="inline-flex items-center gap-1">
                           <i
-                            className="inline-block h-2.5 w-2.5 rounded-sm"
+                            className="inline-block h-2.5 w-2.5 rounded-sm bg-destructive/70"
                             style={{
                               backgroundImage:
-                                'repeating-linear-gradient(-45deg, hsl(38 92% 50% / 0.55), hsl(38 92% 50% / 0.55) 2px, hsl(38 92% 70% / 0.35) 2px, hsl(38 92% 70% / 0.35) 4px)',
+                                'repeating-linear-gradient(-45deg, hsl(var(--warning) / 0.7), hsl(var(--warning) / 0.7) 2px, hsl(var(--warning) / 0.45) 2px, hsl(var(--warning) / 0.45) 4px)',
                             }}
                           />
                           阻塞
                         </span>
                         <span className="inline-flex items-center gap-1">
-                          <i className="inline-block h-2.5 w-2.5 rounded-sm bg-primary/55" />
+                          <i className="inline-block h-2.5 w-2.5 rounded-sm bg-warning/70" />
                           占用
                         </span>
                         <span className="inline-flex items-center gap-1">

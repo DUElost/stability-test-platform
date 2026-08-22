@@ -11,6 +11,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/status-badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { InlineEmpty } from '@/components/ui/empty-state';
@@ -62,7 +70,7 @@ export default function ProjectDetailPage() {
 
   if (detailQ.isLoading) {
     return (
-      <PageContainer width="list">
+      <PageContainer width="content">
         <PageHeader title="项目详情" subtitle={projectKey} />
         <div className="space-y-4">
           <Skeleton className="h-24 w-full" />
@@ -76,7 +84,7 @@ export default function ProjectDetailPage() {
     const status = toApiError(detailQ.error).status;
     const isNotFound = status === 404;
     return (
-      <PageContainer width="list">
+      <PageContainer width="content">
         <PageHeader title="项目详情" subtitle={projectKey} />
         <ErrorState
           // 约束 2：未知 key 是路由错误（后端统一 404），按错误态渲染不吞成空态
@@ -105,7 +113,7 @@ export default function ProjectDetailPage() {
   const summary = summaryQ.data;
 
   return (
-    <PageContainer width="list">
+    <PageContainer width="content">
       <PageHeader
         title={project.display_name}
         subtitle={project.project_key}
@@ -273,38 +281,40 @@ export default function ProjectDetailPage() {
             ) : !summary?.recent_runs?.length ? (
               <InlineEmpty>该项目暂无运行记录</InlineEmpty>
             ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="pb-2 pr-4">Run</th>
-                    <th className="pb-2 pr-4">任务</th>
-                    <th className="pb-2 pr-4">状态</th>
-                    <th className="pb-2 pr-4">风险</th>
-                    <th className="pb-2">开始时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {summary.recent_runs.map((run) => (
-                    <tr
-                      key={run.run_id}
-                      className="cursor-pointer border-b transition-colors last:border-0 hover:bg-muted/50"
-                      onClick={() => navigate(`/runs/${run.run_id}/report`)}
-                    >
-                      <td className="py-2 pr-4 font-mono text-xs">#{run.run_id}</td>
-                      <td className="max-w-[240px] truncate py-2 pr-4">{run.task_name}</td>
-                      <td className="py-2 pr-4">
-                        <StatusBadge kind="job-result" status={run.status} size="sm" fallbackToRaw />
-                      </td>
-                      <td className="py-2 pr-4">
-                        <StatusBadge kind="risk" status={run.risk_level} size="sm" />
-                      </td>
-                      <td className="py-2 text-xs text-muted-foreground">
-                        {formatLocalDateTime(run.started_at)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <Table className="min-w-[560px]">
+                  <TableHeader>
+                    <TableRow className="border-b text-left text-xs text-muted-foreground">
+                      <TableHead className="pb-2 pr-4">Run</TableHead>
+                      <TableHead className="pb-2 pr-4">任务</TableHead>
+                      <TableHead className="pb-2 pr-4">状态</TableHead>
+                      <TableHead className="pb-2 pr-4">风险</TableHead>
+                      <TableHead className="pb-2">开始时间</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {summary.recent_runs.map((run) => (
+                      <TableRow
+                        key={run.run_id}
+                        className="cursor-pointer border-b transition-colors last:border-0 hover:bg-muted/50"
+                        onClick={() => navigate(`/runs/${run.run_id}/report`)}
+                      >
+                        <TableCell className="py-2 pr-4 font-mono text-xs">#{run.run_id}</TableCell>
+                        <TableCell className="max-w-[240px] truncate py-2 pr-4">{run.task_name}</TableCell>
+                        <TableCell className="py-2 pr-4">
+                          <StatusBadge kind="job-result" status={run.status} size="sm" fallbackToRaw />
+                        </TableCell>
+                        <TableCell className="py-2 pr-4">
+                          <StatusBadge kind="risk" status={run.risk_level} size="sm" />
+                        </TableCell>
+                        <TableCell className="py-2 text-xs text-muted-foreground">
+                          {formatLocalDateTime(run.started_at)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
         </Card>

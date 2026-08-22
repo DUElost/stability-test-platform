@@ -14,10 +14,21 @@ import { rangeSelectIds, sortDevicesStable } from './planExecuteSelection';
 import { isSchedulable, resolveDeviceTileStatus } from './tileStatus';
 import type { DeviceTileStatus } from './types';
 
+/** 瓦片斜纹（阻塞）：经 CSS 变量走语义色，暗色主题自动适配（#356/#362） */
+const BLOCKED_STRIPE = {
+  backgroundImage:
+    'repeating-linear-gradient(-45deg, hsl(var(--warning) / 0.55), hsl(var(--warning) / 0.55) 3px, hsl(var(--warning) / 0.35) 3px, hsl(var(--warning) / 0.35) 6px)',
+};
+
+/**
+ * 矩阵瓦片色板 — 与设备状态语义 token 对齐（#356）：
+ * 占用 = DEVICE_STATUS_DOT.BUSY(warning)，阻塞 = destructive（与全站其余 4 处一致），
+ * 就绪 = success，离线 = muted-foreground。
+ */
 const TILE_CLS: Record<DeviceTileStatus, string> = {
   ready: 'border-transparent bg-success/75',
-  blocked: 'border-transparent bg-warning/55',
-  busy: 'border-transparent bg-primary/55',
+  blocked: 'border-transparent bg-destructive/70',
+  busy: 'border-transparent bg-warning/70',
   offline: 'border-transparent bg-muted-foreground/25',
 };
 
@@ -220,10 +231,7 @@ export function DeviceMatrix({
                                   <span
                                     aria-hidden
                                     className="pointer-events-none absolute inset-0"
-                                    style={{
-                                      backgroundImage:
-                                        'repeating-linear-gradient(-45deg, hsl(38 92% 50% / 0.55), hsl(38 92% 50% / 0.55) 3px, hsl(38 92% 70% / 0.35) 3px, hsl(38 92% 70% / 0.35) 6px)',
-                                    }}
+                                    style={BLOCKED_STRIPE}
                                   />
                                 )}
                                 {selected && (

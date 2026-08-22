@@ -50,7 +50,7 @@ export function DeviceMetricsChart({ data }: DeviceMetricsChartProps) {
             className={cn(
               'px-2.5 py-1 text-xs rounded-md transition-colors',
               activeMetric === t.key
-                ? 'bg-primary text-primary-foreground'
+                ? SEGMENTED.toggleActive
                 : cn(SEGMENTED.toggleIdle, 'bg-muted'),
             )}
           >

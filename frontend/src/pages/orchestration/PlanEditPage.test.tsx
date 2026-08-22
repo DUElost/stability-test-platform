@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanEditPage from './PlanEditPage';
+import { HeaderSlotProvider, useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { api } from '@/utils/api';
 
 const mocks = vi.hoisted(() => ({
@@ -64,19 +65,28 @@ vi.mock('@/hooks/useToast', () => ({
   }),
 }));
 
+/** 模拟 AppShell 消费 HeaderSlotContext,把页面注入的顶栏内容渲染到 DOM。 */
+function HeaderSlotOutlet() {
+  const { headerSlot } = useHeaderSlot();
+  return <div>{headerSlot}</div>;
+}
+
 function renderPage(path: string) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
 
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <QueryClientProvider client={queryClient}>
-        <Routes>
-          <Route path="/orchestration/plans/:id" element={<PlanEditPage />} />
-        </Routes>
-      </QueryClientProvider>
-    </MemoryRouter>,
+    <HeaderSlotProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <QueryClientProvider client={queryClient}>
+          <HeaderSlotOutlet />
+          <Routes>
+            <Route path="/orchestration/plans/:id" element={<PlanEditPage />} />
+          </Routes>
+        </QueryClientProvider>
+      </MemoryRouter>
+    </HeaderSlotProvider>,
   );
 }
 
@@ -198,8 +208,7 @@ describe('PlanEditPage', () => {
     renderPage('/orchestration/plans/new');
 
     await screen.findByText('新建 Plan');
-    const backBtn = screen.getAllByRole('button')[0];
-    fireEvent.click(backBtn);
+    fireEvent.click(screen.getByRole('button', { name: '返回 Plan 列表' }));
 
     expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans');
   });

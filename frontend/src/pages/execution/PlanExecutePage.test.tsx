@@ -253,7 +253,7 @@ describe('PlanExecutePage', () => {
     });
 
     await goToDeviceStep();
-    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     await screen.findByText(/预览已生成并冻结 1 台设备/);
@@ -285,7 +285,7 @@ describe('PlanExecutePage', () => {
     });
 
     await goToDeviceStep();
-    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     fireEvent.click(await screen.findByRole('button', { name: /确认发起/ }));
@@ -449,8 +449,8 @@ describe('PlanExecutePage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /全选筛选 \(2\)/ }));
     expect(screen.getByText(/已选 2 \/ 2 台可用/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/A-1/)).toBeChecked();
-    expect(screen.getByLabelText(/B-1/)).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /A-1/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /B-1/ })).toBeChecked();
   });
 
   it('formats duration and shows unset failure threshold without masking as 5%', async () => {
@@ -472,7 +472,7 @@ describe('PlanExecutePage', () => {
     expect(screen.getByText(/超时：2m 5s/)).toBeInTheDocument();
 
     await goToDeviceStep();
-    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
 
     expect(await screen.findByRole('button', { name: '编辑 Plan' })).toBeInTheDocument();
@@ -493,7 +493,7 @@ describe('PlanExecutePage', () => {
     });
 
     await goToDeviceStep();
-    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     expect(await screen.findByTestId('dispatch-cockpit')).toBeInTheDocument();
 
@@ -517,7 +517,7 @@ describe('PlanExecutePage', () => {
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
     expect(screen.getByText(/已选 1 台/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '移除已选设备 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '移除已选设备 DEV-1' }));
     expect(screen.getByText(/已选 0 台/)).toBeInTheDocument();
     expect(mocks.toast.action).toHaveBeenCalledWith(
       '已移除 1 台样机',
@@ -530,7 +530,7 @@ describe('PlanExecutePage', () => {
     await waitFor(() => {
       expect(screen.getByText(/已选 1 台/)).toBeInTheDocument();
     });
-    expect(screen.getByLabelText(/DEV-1/)).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /DEV-1/ })).toBeChecked();
   });
 
   it('locates a selected device from minimap without removing it', async () => {
@@ -546,12 +546,12 @@ describe('PlanExecutePage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'V103' }));
     expect(screen.getByTestId('active-filter-chips')).toHaveTextContent('版本:V103');
 
-    fireEvent.click(screen.getByRole('button', { name: /定位已选设备 1/ }));
+    fireEvent.click(screen.getByRole('button', { name: /定位已选设备 DEV-1/ }));
     await waitFor(() => {
       expect(mocks.toast.info).toHaveBeenCalledWith('已清除筛选以定位该样机');
     });
     expect(screen.getByText(/已选 1 台/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /定位已选设备 1/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /定位已选设备 DEV-1/ })).toBeInTheDocument();
   });
 
   it('marks blocked minimap tiles with pattern legend and locate aria-label', async () => {
@@ -570,7 +570,7 @@ describe('PlanExecutePage', () => {
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-BLOCK/));
     expect(screen.getByText(/已选阻塞（斜纹/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /定位已选设备 1 阻塞/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /定位已选设备 DEV-BLOCK 阻塞/ })).toBeInTheDocument();
   });
 
   it('serializes active filters into URL and clears via chips', async () => {
@@ -636,7 +636,7 @@ describe('PlanExecutePage', () => {
       wifiPools,
     });
     await goToDeviceStep();
-    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     await screen.findByTestId('dispatch-cockpit');
   }
@@ -685,7 +685,7 @@ describe('PlanExecutePage', () => {
     });
 
     await goToDeviceStep();
-    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
 
@@ -780,8 +780,8 @@ describe('PlanExecutePage', () => {
 
     // 切到表格核对：DEV-1 选中、DEV-2 未选（草稿 [2] 被忽略）
     fireEvent.click(screen.getByRole('button', { name: '表格' }));
-    expect(await screen.findByLabelText(/DEV-1/)).toBeChecked();
-    expect(screen.getByLabelText(/DEV-2/)).not.toBeChecked();
+    expect(await screen.findByRole('checkbox', { name: /DEV-1/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /DEV-2/ })).not.toBeChecked();
   });
 
   it('keeps URL plan authoritative while restoring draft devices', async () => {
@@ -801,7 +801,7 @@ describe('PlanExecutePage', () => {
     });
 
     // 恢复后直接落在样机选择且 DEV-1 选中（跳转守卫要求 plan=7 有效）
-    expect(await screen.findByLabelText(/DEV-1/)).toBeChecked();
+    expect(await screen.findByRole('checkbox', { name: /DEV-1/ })).toBeChecked();
     // 回到计划配置确认 URL plan=7 生效（草稿 planId=99 被忽略）
     fireEvent.click(screen.getByRole('button', { name: /Plan ·/ }));
     expect(await screen.findByText(/启用步骤/)).toBeInTheDocument();
@@ -812,7 +812,7 @@ describe('PlanExecutePage', () => {
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
     await goToDeviceStep();
-    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     await screen.findByText(/预览已生成并冻结 1 台设备/);
@@ -926,7 +926,7 @@ describe('PlanExecutePage', () => {
     });
 
     await goToDeviceStep();
-    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
 
     const note = await screen.findByLabelText(/执行备注/);
@@ -957,7 +957,7 @@ describe('PlanExecutePage', () => {
     });
 
     await goToDeviceStep();
-    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
 
@@ -1152,7 +1152,7 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByLabelText(/DEV-2/));
+    fireEvent.click(screen.getByRole('checkbox', { name: /DEV-2/ }));
 
     fireEvent.click(screen.getByRole('button', { name: /存为方案/ }));
     const dialog = await screen.findByRole('dialog');
@@ -1186,8 +1186,8 @@ describe('PlanExecutePage', () => {
     fireEvent.click(screen.getByRole('button', { name: '应用' }));
 
     expect(mocks.toast.info).toHaveBeenCalledWith(expect.stringContaining('1 台已失效并跳过'));
-    expect(screen.getByLabelText(/DEV-1/)).toBeChecked();
-    expect(screen.getByLabelText(/DEV-2/)).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /DEV-1/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /DEV-2/ })).toBeChecked();
   });
 
   it('renders select workspace as three-column shell (node | stage | selected)', async () => {
@@ -1235,9 +1235,9 @@ describe('PlanExecutePage', () => {
     (document.activeElement as HTMLElement | null)?.blur?.();
 
     fireEvent.keyDown(window, { key: 'a', ctrlKey: true });
-    expect(screen.getByLabelText(/DEV-1/)).toBeChecked();
-    expect(screen.getByLabelText(/DEV-2/)).toBeChecked();
-    expect(screen.getByLabelText(/DEV-BUSY/)).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: /DEV-1/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /DEV-2/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /DEV-BUSY/ })).toBeDisabled();
   });
 
   it('advances with Enter from plan phase when primary is enabled', async () => {

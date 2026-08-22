@@ -269,7 +269,7 @@ function PackageRankingDrawer({
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className={`font-mono tabular-nums ${rankCls}`}>
-                          #{index + 1}
+                          #{actualIndex + 1}
                         </span>
                         <span
                           className={cn(
@@ -593,12 +593,12 @@ export default function AnomalyDashboard({
             <SummaryCard
               label="Top 包名"
               value={formatCompactValue(currentRun.top_package_name)}
-              accent={KPI_TONE.warning.value}
+              accent={currentRun.top_package_name ? KPI_TONE.warning.value : KPI_TONE.default.value}
             />
             <SummaryCard
               label="Top 类型"
               value={formatCompactValue(currentRun.top_subtype)}
-              accent={KPI_TONE.destructive.value}
+              accent={currentRun.top_subtype ? KPI_TONE.destructive.value : KPI_TONE.default.value}
             />
           </div>
 
@@ -759,7 +759,7 @@ export default function AnomalyDashboard({
                   <DonutChart
                     items={preexistingDistribution}
                     total={preexistingTotal}
-                    tone={KPI_TONE.default.label}
+                    tone={KPI_TONE.default.value}
                     chartTestId="preexisting-pie-chart"
                   />
                   <div className="grid gap-3 sm:grid-cols-3">
@@ -771,12 +771,12 @@ export default function AnomalyDashboard({
                     <SummaryCard
                       label="Top 包名"
                       value={formatCompactValue(preexisting.top_package_name)}
-                      accent={KPI_TONE.default.label}
+                      accent={KPI_TONE.default.value}
                     />
                     <SummaryCard
                       label="Top 类型"
                       value={formatCompactValue(preexisting.top_subtype)}
-                      accent={KPI_TONE.default.label}
+                      accent={KPI_TONE.default.value}
                     />
                   </div>
                 </div>

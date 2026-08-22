@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BarChart3 } from 'lucide-react';
@@ -68,7 +69,8 @@ export function TestTypePassFailChart({ data, isLoading }: TestTypePassFailChart
       </CardHeader>
       <CardContent>
         <div className="h-[200px]">
-          <ResponsiveContainer width="100%" height="100%">
+          <StableResponsiveContainer>
+            <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
               <XAxis
                 dataKey="name"
@@ -115,7 +117,7 @@ export function TestTypePassFailChart({ data, isLoading }: TestTypePassFailChart
               />
               <Bar
                 dataKey="finished"
-                name="Finished"
+                name="通过"
                 stackId="a"
                 fill={CHART_COLORS.success}
                 radius={[0, 0, 0, 0]}
@@ -123,7 +125,7 @@ export function TestTypePassFailChart({ data, isLoading }: TestTypePassFailChart
               />
               <Bar
                 dataKey="failed"
-                name="Failed"
+                name="失败"
                 stackId="a"
                 fill={CHART_COLORS.error}
                 radius={[4, 4, 0, 0]}
@@ -131,6 +133,7 @@ export function TestTypePassFailChart({ data, isLoading }: TestTypePassFailChart
               />
             </BarChart>
           </ResponsiveContainer>
+          </StableResponsiveContainer>
         </div>
       </CardContent>
     </Card>

@@ -68,6 +68,8 @@ export function DeviceTablePanel({
     <div className="flex h-full min-h-0 flex-col p-3" data-testid="device-table-panel">
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
         <table className="w-full min-w-[800px] text-sm">
+          {/* bg-muted/95 是 sticky 表头的必要条件：行要从表头下面滚过去，
+              近乎不透明才不透行；勿当底色漂移改成 /50 */}
           <thead className="sticky top-0 z-10 bg-muted/95 text-left text-xs">
             <tr>
               <th className="w-10 px-3 py-2" />

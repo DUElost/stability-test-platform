@@ -11,12 +11,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import LiveConsole from '@/components/console/LiveConsole';
 import { dedup } from '@/utils/api/dedup';
-import { EmptyState } from '@/components/ui/empty-state';
+import { InlineEmpty } from '@/components/ui/empty-state';
 import { InlineError } from '@/components/ui/error-state';
 import { FORM, INTERACTIVE, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatLocalDateTime } from '@/utils/format';
-import { History } from 'lucide-react';
 
 const STATUS_VARIANT: Record<string, 'success' | 'destructive' | 'warning' | 'secondary'> = {
   SUCCESS: 'success',
@@ -80,11 +79,7 @@ export default function JiraRunHistory() {
             {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
           </div>
         ) : !runs || runs.length === 0 ? (
-          <EmptyState
-            title="暂无提单记录"
-            description="在「批量提单」页签执行后，记录会出现在这里"
-            icon={<History className="w-16 h-16" />}
-          />
+          <InlineEmpty>暂无提单记录 · 在「批量提单」页签执行后，记录会出现在这里</InlineEmpty>
         ) : (
           <div className="space-y-2">
             {runs.map(run => {

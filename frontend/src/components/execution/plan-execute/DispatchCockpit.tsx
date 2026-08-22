@@ -135,7 +135,7 @@ export function DispatchCockpit({
             <div className={cn('flex items-center gap-1 text-xs', TEXT.subtitle)}>
               <Clock3 className="h-3.5 w-3.5" />历史墙钟参考
             </div>
-            <div className="mt-1 text-xl font-semibold">
+            <div className="mt-1 text-2xl font-semibold">
               {wallClock.averageSeconds == null
                 ? '暂无'
                 : `~${formatDurationSeconds(wallClock.averageSeconds, 'compact', '暂无')}`}
@@ -156,7 +156,7 @@ export function DispatchCockpit({
             <CardContent className="space-y-3">
               <div className="overflow-x-auto rounded-lg border">
                 <table className="w-full text-sm">
-                  <thead className="bg-muted/60 text-left text-xs text-muted-foreground">
+                  <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
                     <tr>
                       <th className="px-3 py-2 font-medium">节点</th>
                       <th className="px-3 py-2 font-medium">本次选中</th>
