@@ -139,8 +139,7 @@ describe('ProjectsPage', () => {
     renderPage();
 
     await screen.findByText('荣耀相机');
-    await user.click(screen.getByTestId('facet-customer'));
-    await user.click(await screen.findByText('CustA'));
+    await user.selectOptions(screen.getByTestId('facet-customer'), 'CustA');
 
     await waitFor(() => {
       expect(screen.getByText('荣耀相机')).toBeInTheDocument();
@@ -173,10 +172,8 @@ describe('ProjectsPage', () => {
     renderPage();
 
     await screen.findByText('荣耀相机');
-    await user.click(screen.getByTestId('facet-customer'));
-    await user.click(await screen.findByRole('option', { name: 'CustA' }));
-    await user.click(screen.getByTestId('facet-platform'));
-    await user.click(await screen.findByRole('option', { name: 'QCOM' }));
+    await user.selectOptions(screen.getByTestId('facet-customer'), 'CustA');
+    await user.selectOptions(screen.getByTestId('facet-platform'), 'QCOM');
 
     expect(await screen.findByText('没有匹配的项目')).toBeInTheDocument();
   });
@@ -271,10 +268,33 @@ describe('ProjectsPage', () => {
     await user.click(screen.getByTestId('map-models-open'));
     await user.click(screen.getByTestId('map-preview-btn'));
     expect(await screen.findByTestId('map-preview')).toHaveTextContent('将归入 2 台');
+    // #376：SEED/LEGACY 直迁不进冲突列表的醒目提示（will_assign>0 即显示）
+    expect(screen.getByTestId('map-preview')).toHaveTextContent('不视为冲突');
     await user.click(screen.getByTestId('map-apply-btn'));
     await waitFor(() => {
       expect(mocks.mapApply).toHaveBeenCalledWith('HONOR-CAMERA', ['MLD_LX2'], false);
     });
+  });
+
+  it('warns when preview reports models unseen in fleet (#376)', async () => {
+    const user = userEvent.setup();
+    mocks.inventoryModels.mockResolvedValue([makeInventoryRow()]);
+    mocks.mapPreview.mockResolvedValue({
+      target_project_key: 'HONOR-CAMERA',
+      models: ['MLD_LX2', 'GHOST_MODEL'],
+      will_assign: 0,
+      already_in_target: 0,
+      conflicts: [],
+      unknown_models: ['GHOST_MODEL'],
+    });
+
+    renderPage();
+    expect(await screen.findByText('MLD_LX2')).toBeInTheDocument();
+    await user.click(screen.getByTestId('inventory-model-check'));
+    await user.click(screen.getByTestId('map-models-open'));
+    await user.click(screen.getByTestId('map-preview-btn'));
+    expect(await screen.findByTestId('map-unknown-models')).toHaveTextContent('GHOST_MODEL');
+    expect(screen.getByTestId('map-unknown-models')).toHaveTextContent('match_models');
   });
 
   it('keeps apply disabled when preview reports conflicts', async () => {

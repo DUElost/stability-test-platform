@@ -8,8 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { XTerminal, type XTerminalHandle } from '@/components/log/XTerminal';
 import { useSocketIO } from '@/hooks/useSocketIO';
 import { dedup } from '@/utils/api/dedup';
-import { STATUS_BG_COLORS } from '@/design-system/colors';
-import { PANEL, TEXT } from '@/design-system';
+import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -21,10 +20,11 @@ interface Props {
 }
 
 const STATUS_TONE: Record<string, string> = {
-  RUNNING: STATUS_BG_COLORS.primary,
-  SUCCESS: STATUS_BG_COLORS.success,
-  FAILED: STATUS_BG_COLORS.error,
-  CANCELED: STATUS_BG_COLORS.muted,
+  // RUNNING=warning：与 StatusBadge/矩阵瓦片的「运行中」琥珀统一（#356/#374）
+  RUNNING: STATUS_CHIP.warning,
+  SUCCESS: STATUS_CHIP.success,
+  FAILED: STATUS_CHIP.destructive,
+  CANCELED: STATUS_CHIP.muted,
 };
 
 const ISSUE_KEY_RE = /\b[A-Z][A-Z0-9_]{1,}-\d+\b/g;

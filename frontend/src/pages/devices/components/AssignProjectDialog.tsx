@@ -10,13 +10,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { FORM } from '@/design-system';
 import { api } from '@/utils/api';
 import { projectKeys } from '@/utils/api/queryKeys';
@@ -81,19 +74,24 @@ export function AssignProjectDialog({
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="space-y-4 py-2">
-            <Select value={projectKey} onValueChange={(v) => { setProjectKey(v); setError(''); }}>
-              <SelectTrigger data-testid="assign-project-select">
-                <SelectValue placeholder="选择目标项目" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects?.map((project) => (
-                  <SelectItem key={project.project_key} value={project.project_key}>
-                    {project.display_name}（{project.project_key}）
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <select
+              value={projectKey}
+              onChange={(e) => { setProjectKey(e.target.value); setError(''); }}
+              data-testid="assign-project-select"
+              className={FORM.select}
+            >
+              <option value="" disabled>选择目标项目</option>
+              {projects?.map((project) => (
+                <option key={project.project_key} value={project.project_key}>
+                  {project.display_name}（{project.project_key}）
+                </option>
+              ))}
+            </select>
             {error && <p className={FORM.error}>{error}</p>}
+            <p className="rounded-md bg-warning/10 px-3 py-2 text-sm text-warning" data-testid="assign-seed-notice">
+              所选 {selectedCount} 台设备的归属将改为目标项目；当前属于 SEED / LEGACY
+              项目的设备会被直接迁移，不会出现冲突确认。
+            </p>
           </div>
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={onClose} disabled={isSubmitting}>

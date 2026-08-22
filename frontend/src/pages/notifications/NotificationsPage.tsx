@@ -24,7 +24,14 @@ import {
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
-import { FORM, INTERACTIVE, MODAL, SEGMENTED, STATUS_CHIP, TEXT } from '@/design-system';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { FORM, INTERACTIVE, SEGMENTED, STATUS_CHIP, TEXT } from '@/design-system';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { cn } from '@/lib/utils';
 
@@ -383,127 +390,125 @@ export default function NotificationsPage() {
       )}
 
       {/* Channel Form Modal */}
-      {showChannelForm && (
-        <div className={MODAL.overlay}>
-          <div className="fixed inset-0" onClick={() => setShowChannelForm(false)} />
-          <div className={cn(MODAL.panelLg, 'relative')}>
-            <h3 className={cn(MODAL.title, 'mb-4')}>{editingChannel ? '编辑渠道' : '添加渠道'}</h3>
-            <div className="space-y-4">
-              <div>
-                <label className={FORM.label}>名称</label>
-                <input
-                  value={channelForm.name}
-                  onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })}
-                  className={FORM.input}
-                  placeholder="渠道名称"
-                />
-              </div>
-              <div>
-                <label className={FORM.label}>类型</label>
-                <select
-                  value={channelForm.type}
-                  onChange={(e) => setChannelForm({ ...channelForm, type: e.target.value })}
-                  className={FORM.select}
-                >
-                  <option value="WEBHOOK">Webhook</option>
-                  <option value="DINGTALK">钉钉</option>
-                  <option value="EMAIL">邮件</option>
-                </select>
-              </div>
-              <div>
-                <label className={FORM.label}>
-                  {channelForm.type === 'EMAIL' ? '收件人邮箱' : 'Webhook URL'}
-                </label>
-                <input
-                  value={channelForm.url}
-                  onChange={(e) => setChannelForm({ ...channelForm, url: e.target.value })}
-                  className={FORM.input}
-                  placeholder={channelForm.type === 'EMAIL' ? 'user@example.com' : 'https://...'}
-                />
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={channelForm.enabled}
-                  onChange={(e) => setChannelForm({ ...channelForm, enabled: e.target.checked })}
-                />
-                启用
-              </label>
+      <Dialog open={showChannelForm} onOpenChange={(open) => !open && !actionLoading && setShowChannelForm(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingChannel ? '编辑渠道' : '添加渠道'}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className={FORM.label}>名称</label>
+              <input
+                value={channelForm.name}
+                onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })}
+                className={FORM.input}
+                placeholder="渠道名称"
+              />
             </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <Button variant="outline" onClick={() => setShowChannelForm(false)}>取消</Button>
-              <Button
-                onClick={handleSaveChannel}
-                disabled={actionLoading || !channelForm.name}
+            <div>
+              <label className={FORM.label}>类型</label>
+              <select
+                value={channelForm.type}
+                onChange={(e) => setChannelForm({ ...channelForm, type: e.target.value })}
+                className={FORM.select}
               >
-                {actionLoading ? <Loader2 size={16} className="animate-spin" /> : '保存'}
-              </Button>
+                <option value="WEBHOOK">Webhook</option>
+                <option value="DINGTALK">钉钉</option>
+                <option value="EMAIL">邮件</option>
+              </select>
             </div>
+            <div>
+              <label className={FORM.label}>
+                {channelForm.type === 'EMAIL' ? '收件人邮箱' : 'Webhook URL'}
+              </label>
+              <input
+                value={channelForm.url}
+                onChange={(e) => setChannelForm({ ...channelForm, url: e.target.value })}
+                className={FORM.input}
+                placeholder={channelForm.type === 'EMAIL' ? 'user@example.com' : 'https://...'}
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={channelForm.enabled}
+                onChange={(e) => setChannelForm({ ...channelForm, enabled: e.target.checked })}
+              />
+              启用
+            </label>
           </div>
-        </div>
-      )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowChannelForm(false)}>取消</Button>
+            <Button
+              onClick={handleSaveChannel}
+              disabled={actionLoading || !channelForm.name}
+            >
+              {actionLoading ? <Loader2 size={16} className="animate-spin" /> : '保存'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Rule Form Modal */}
-      {showRuleForm && (
-        <div className={MODAL.overlay}>
-          <div className="fixed inset-0" onClick={() => setShowRuleForm(false)} />
-          <div className={cn(MODAL.panelLg, 'relative')}>
-            <h3 className={cn(MODAL.title, 'mb-4')}>{editingRule ? '编辑规则' : '添加规则'}</h3>
-            <div className="space-y-4">
-              <div>
-                <label className={FORM.label}>名称</label>
-                <input
-                  value={ruleForm.name}
-                  onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })}
-                  className={FORM.input}
-                  placeholder="规则名称"
-                />
-              </div>
-              <div>
-                <label className={FORM.label}>事件类型</label>
-                <select
-                  value={ruleForm.event_type}
-                  onChange={(e) => setRuleForm({ ...ruleForm, event_type: e.target.value })}
-                  className={FORM.select}
-                >
-                  {Object.entries(EVENT_LABELS).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={FORM.label}>通知渠道</label>
-                <select
-                  value={ruleForm.channel_id}
-                  onChange={(e) => setRuleForm({ ...ruleForm, channel_id: Number(e.target.value) })}
-                  className={FORM.select}
-                >
-                  {channels.map((ch) => (
-                    <option key={ch.id} value={ch.id}>{ch.name} ({CHANNEL_TYPE_LABELS[ch.type]})</option>
-                  ))}
-                </select>
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={ruleForm.enabled}
-                  onChange={(e) => setRuleForm({ ...ruleForm, enabled: e.target.checked })}
-                />
-                启用
-              </label>
+      <Dialog open={showRuleForm} onOpenChange={(open) => !open && !actionLoading && setShowRuleForm(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingRule ? '编辑规则' : '添加规则'}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className={FORM.label}>名称</label>
+              <input
+                value={ruleForm.name}
+                onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })}
+                className={FORM.input}
+                placeholder="规则名称"
+              />
             </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <Button variant="outline" onClick={() => setShowRuleForm(false)}>取消</Button>
-              <Button
-                onClick={handleSaveRule}
-                disabled={actionLoading || !ruleForm.name || !ruleForm.channel_id}
+            <div>
+              <label className={FORM.label}>事件类型</label>
+              <select
+                value={ruleForm.event_type}
+                onChange={(e) => setRuleForm({ ...ruleForm, event_type: e.target.value })}
+                className={FORM.select}
               >
-                {actionLoading ? <Loader2 size={16} className="animate-spin" /> : '保存'}
-              </Button>
+                {Object.entries(EVENT_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
             </div>
+            <div>
+              <label className={FORM.label}>通知渠道</label>
+              <select
+                value={ruleForm.channel_id}
+                onChange={(e) => setRuleForm({ ...ruleForm, channel_id: Number(e.target.value) })}
+                className={FORM.select}
+              >
+                {channels.map((ch) => (
+                  <option key={ch.id} value={ch.id}>{ch.name} ({CHANNEL_TYPE_LABELS[ch.type]})</option>
+                ))}
+              </select>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={ruleForm.enabled}
+                onChange={(e) => setRuleForm({ ...ruleForm, enabled: e.target.checked })}
+              />
+              启用
+            </label>
           </div>
-        </div>
-      )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRuleForm(false)}>取消</Button>
+            <Button
+              onClick={handleSaveRule}
+              disabled={actionLoading || !ruleForm.name || !ruleForm.channel_id}
+            >
+              {actionLoading ? <Loader2 size={16} className="animate-spin" /> : '保存'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </PageContainer>
   );
 }

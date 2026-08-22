@@ -1,11 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { FORM } from '@/design-system';
 import { api } from '@/utils/api';
 import { projectKeys } from '@/utils/api/queryKeys';
 
@@ -21,6 +15,7 @@ interface ProjectFilterSelectProps {
  * ADR-0029 P2 — 页面级项目筛选下拉（设备 / Plan / PlanRun / 结果页共用）。
  * 选中的 key 传后端 ?project_key= 过滤（未知 key 后端 404，页面按错误态渲染）。
  * 不做跨页跟随：页面刷新后回到「全部」，不读 URL / localStorage。
+ * B4 决议：全站下拉统一原生 <select>（Radix ui/select 已删除）。
  */
 export function ProjectFilterSelect({
   value,
@@ -34,22 +29,19 @@ export function ProjectFilterSelect({
   });
 
   return (
-    <Select
+    <select
       value={value ?? 'all'}
-      onValueChange={(v) => onChange(v === 'all' ? undefined : v)}
+      onChange={(e) => onChange(e.target.value === 'all' ? undefined : e.target.value)}
+      className={`${FORM.select} ${className ?? ''}`}
+      data-testid={testId}
     >
-      <SelectTrigger className={className} data-testid={testId}>
-        <SelectValue placeholder="全部项目" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="all">全部项目</SelectItem>
-        {projects?.map((project) => (
-          <SelectItem key={project.project_key} value={project.project_key}>
-            {project.display_name}（{project.project_key}）
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+      <option value="all">全部项目</option>
+      {projects?.map((project) => (
+        <option key={project.project_key} value={project.project_key}>
+          {project.display_name}（{project.project_key}）
+        </option>
+      ))}
+    </select>
   );
 }
 

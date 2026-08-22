@@ -9,13 +9,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { FORM } from '@/design-system';
 import type { ProjectMapPreview, ProjectSummary } from '@/utils/api/types';
 
@@ -76,22 +69,23 @@ export default function MapModelsDialog({
           {projects.length === 0 ? (
             <p className={FORM.error}>请先新建一个项目，再映射型号。</p>
           ) : (
-            <Select value={projectKey} onValueChange={(value) => {
-              setProjectKey(value);
-              setError('');
-              onInvalidatePreview();
-            }}>
-              <SelectTrigger data-testid="map-project-select">
-                <SelectValue placeholder="选择目标项目" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((project) => (
-                  <SelectItem key={project.project_key} value={project.project_key}>
-                    {project.display_name}（{project.project_key}）
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <select
+              value={projectKey}
+              onChange={(e) => {
+                setProjectKey(e.target.value);
+                setError('');
+                onInvalidatePreview();
+              }}
+              data-testid="map-project-select"
+              className={FORM.select}
+            >
+              <option value="" disabled>选择目标项目</option>
+              {projects.map((project) => (
+                <option key={project.project_key} value={project.project_key}>
+                  {project.display_name}（{project.project_key}）
+                </option>
+              ))}
+            </select>
           )}
           <label className="flex items-center gap-2 text-sm">
             <input
@@ -109,6 +103,11 @@ export default function MapModelsDialog({
           {preview ? (
             <div className="rounded-md border px-3 py-2 text-sm" data-testid="map-preview">
               <p>将归入 {preview.will_assign} 台 · 已在目标项目 {preview.already_in_target} 台</p>
+              {preview.will_assign > 0 && (
+                <p className="mt-1 text-amber-700 dark:text-warning">
+                  将改归属 {preview.will_assign} 台设备；当前属 SEED / LEGACY 项目的设备不视为冲突，会直接迁入且不出现在冲突列表。
+                </p>
+              )}
               {preview.conflicts.length > 0 ? (
                 <p className="mt-1 text-amber-700">
                   冲突 {preview.conflicts.length} 台
@@ -117,7 +116,9 @@ export default function MapModelsDialog({
                 </p>
               ) : null}
               {preview.unknown_models.length > 0 ? (
-                <p className="mt-1">未知型号：{preview.unknown_models.join('、')}</p>
+                <p className="mt-1 text-amber-700 dark:text-warning" data-testid="map-unknown-models">
+                  应用会把 {preview.unknown_models.length} 个当前 fleet 未见过的型号写入该项目的 match_models（不会被阻断）：{preview.unknown_models.join('、')}
+                </p>
               ) : null}
             </div>
           ) : null}

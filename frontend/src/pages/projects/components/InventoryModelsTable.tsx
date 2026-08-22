@@ -4,13 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ErrorState } from '@/components/ui/error-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   Table,
   TableBody,
   TableCell,
@@ -19,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { TEXT } from '@/design-system/tokens';
+import { FORM, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import type { InventoryModel, InventorySummary } from '@/utils/api/types';
 import { formatModelLabel, isMapped, selectableModel } from '../inventoryDisplay';
@@ -123,24 +116,22 @@ export default function InventoryModelsTable({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Select
+            <select
               value={platformFilter ?? 'all'}
-              onValueChange={(value) =>
-                setPlatformFilter(value === 'all' ? undefined : value)
+              onChange={(e) =>
+                setPlatformFilter(e.target.value === 'all' ? undefined : e.target.value)
               }
+              data-testid="inventory-platform"
+              className={`${FORM.selectSm} w-[140px]`}
+              aria-label="平台筛选"
             >
-              <SelectTrigger data-testid="inventory-platform" className="h-8 w-[140px]">
-                <SelectValue placeholder="平台" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部平台</SelectItem>
-                {platformOptions.map((platform) => (
-                  <SelectItem key={platform} value={platform}>
-                    {platform}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              <option value="all">全部平台</option>
+              {platformOptions.map((platform) => (
+                <option key={platform} value={platform}>
+                  {platform}
+                </option>
+              ))}
+            </select>
             <label
               className={cn(
                 'inline-flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-lg border bg-card px-2.5 text-xs',

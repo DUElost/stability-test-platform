@@ -142,8 +142,7 @@ describe('DevicesPage', () => {
     // 打开归入对话框 → 选择项目 → 确认
     await user.click(assignButton);
     expect(await screen.findByTestId('assign-project-select')).toBeInTheDocument();
-    await user.click(screen.getByTestId('assign-project-select'));
-    await user.click(await screen.findByRole('option', { name: 'Project A（proj-a）' }));
+    await user.selectOptions(screen.getByTestId('assign-project-select'), 'proj-a');
     await user.click(screen.getByTestId('assign-project-confirm'));
 
     await waitFor(() => {
