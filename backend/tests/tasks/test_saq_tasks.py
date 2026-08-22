@@ -380,3 +380,66 @@ def test_worker_task_cancelled_still_revokes_ready():
     _on_worker_task_done(cancelled)
     assert aq.is_queue_pump_ready() is False
     cancelled.exception.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# #381: upload_mark 水位线 + LIKE 转义
+# ---------------------------------------------------------------------------
+
+
+def test_escape_like_escapes_wildcards():
+    """#389: 目录名含 ``_``/``%``/``\\`` 时 LIKE 模式不得把它们当通配符。"""
+    from backend.tasks.saq_tasks import _escape_like
+
+    assert _escape_like("2026-08-13_14-30-00_db.01") == \
+        "2026-08-13\\_14-30-00\\_db.01"
+    assert _escape_like("100%_KE") == "100\\%\\_KE"
+    assert _escape_like("back\\slash") == "back\\\\slash"
+
+
+def test_markable_event_states_exclude_terminal():
+    """#381: 标记范围含 DETECTED/LOCAL（标记窗口内仍在拉取的事件），
+    排除远端终态与 PULL_FAILED。"""
+    from backend.tasks.saq_tasks import _MARKABLE_EVENT_STATES
+
+    assert set(_MARKABLE_EVENT_STATES) == {
+        "DETECTED", "LOCAL", "UPLOAD_PENDING", "UPLOADING", "UPLOAD_FAILED",
+    }
+
+
+@pytest.mark.asyncio
+async def test_wait_for_upload_mark_returns_when_round_matches(monkeypatch):
+    """本轮水位线已写入 → 立即就绪，不 sleep。"""
+    from backend.tasks import saq_tasks
+
+    pr = MagicMock()
+    pr.run_context = {"upload_mark": {"scan_round_id": "round-1", "marked": 3}}
+    db = MagicMock()
+    db.get.return_value = pr
+    db.close = MagicMock()
+    monkeypatch.setattr("backend.core.database.SessionLocal", MagicMock(return_value=db))
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr(saq_tasks, "asyncio_sleep", sleep_mock)
+
+    assert await saq_tasks._wait_for_upload_mark(1, "round-1") is True
+    sleep_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_upload_mark_times_out_on_missing_or_stale_round(monkeypatch):
+    """水位线缺失 / 是上一轮的旧值 → 超时放行（best-effort），不抛异常。"""
+    from backend.tasks import saq_tasks
+
+    pr = MagicMock()
+    pr.run_context = {"upload_mark": {"scan_round_id": "round-OLD", "marked": 9}}
+    db = MagicMock()
+    db.get.return_value = pr
+    db.close = MagicMock()
+    monkeypatch.setattr("backend.core.database.SessionLocal", MagicMock(return_value=db))
+    monkeypatch.setattr(saq_tasks, "_UPLOAD_MARK_WAIT_MAX", 1)
+    monkeypatch.setattr(saq_tasks, "_UPLOAD_WAIT_INTERVAL", 1)
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr(saq_tasks, "asyncio_sleep", sleep_mock)
+
+    assert await saq_tasks._wait_for_upload_mark(1, "round-NEW") is False
+    assert sleep_mock.await_count >= 1

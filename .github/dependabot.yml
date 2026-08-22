@@ -10,10 +10,11 @@ updates:
       default-days: 30
     open-pull-requests-limit: 10
     ignore:
-      # 这些包在 requirements.txt 里刻意封顶（redis<6.0 另受 saq[redis]<8
-      # 约束）。ignore 下限与 manifest 上限对齐，防止 Dependabot 的 pip
-      # widen 策略扩过封顶（#242 的 ResolutionImpossible 即由此而来）；
-      # update-types 限定为 semver-major 版本更新，安全更新 PR 不受影响。
+      # 所有在 requirements.txt 里刻意封顶的包（#385：只 ignore 5/27 时，
+      # 其余包 major 发布仍会被 widen 策略撑宽，重演 #242 的抖动；
+      # cooldown 只降频不治本）。ignore 下限与 manifest 上限对齐，
+      # update-types 限定为 semver-major 版本更新，安全更新 PR 不受影响
+      # （versions 静态区间会抑制对应版本的安全 PR，故两类都写）。
       - dependency-name: "redis"
         versions: [">=6.0"]
         update-types: ["version-update:semver-major"]
@@ -27,6 +28,66 @@ updates:
         versions: [">=5.0"]
         update-types: ["version-update:semver-major"]
       - dependency-name: "croniter"
+        versions: [">=3.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "saq"
+        versions: [">=1.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "fastapi"
+        versions: [">=1.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "uvicorn"
+        versions: [">=1.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "sqlalchemy"
+        versions: [">=3.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pydantic"
+        versions: [">=3.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "requests"
+        versions: [">=3.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "aiohttp"
+        versions: [">=4.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "asyncssh"
+        versions: [">=3.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "prometheus-client"
+        versions: [">=1.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pyjwt"
+        versions: [">=3.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pyasn1"
+        versions: [">=0.7"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "passlib"
+        versions: [">=2.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "asyncpg"
+        versions: [">=1.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "aiosqlite"
+        versions: [">=1.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "alembic"
+        versions: [">=2.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "jsonschema"
+        versions: [">=5.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "apscheduler"
+        versions: [">=5.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "python-socketio"
+        versions: [">=6.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "httpx"
+        versions: [">=1.0"]
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "xlrd"
         versions: [">=3.0"]
         update-types: ["version-update:semver-major"]
     groups:
