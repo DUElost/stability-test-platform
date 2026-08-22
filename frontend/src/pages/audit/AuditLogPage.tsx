@@ -8,13 +8,6 @@ import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   Table,
   TableBody,
   TableCell,
@@ -22,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { FORM, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull } from '@/utils/format';
 
@@ -46,8 +39,8 @@ export default function AuditLogPage() {
   const [page, setPage] = useState(0);
   const pageSize = 50;
 
-  // 哨兵值 'all' = 不过滤；Radix Select 的 SelectItem 不接受空字符串
-  // （部分版本会告警/受控异常），API 侧不带该参数即全量
+  // 哨兵值 'all' = 不过滤；B4 决议后全站下拉为原生 <select>，
+  // 哨兵同时避免了空字符串 value 的歧义，API 侧不带该参数即全量
   const [filters, setFilters] = useState({
     resource_type: 'all',
     action: 'all',
@@ -88,37 +81,37 @@ export default function AuditLogPage() {
 
       {/* Filters */}
       <div className="flex gap-3 flex-wrap">
-        <Select value={filters.resource_type} onValueChange={(v) => { setFilters({ ...filters, resource_type: v }); setPage(0); }}>
-          <SelectTrigger data-testid="audit-resource-filter">
-            <SelectValue placeholder="全部资源" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部资源</SelectItem>
-            <SelectItem value="plan">Plan</SelectItem>
-            <SelectItem value="tool">工具</SelectItem>
-            <SelectItem value="tool_category">工具分类</SelectItem>
-            <SelectItem value="notification_channel">通知渠道</SelectItem>
-            <SelectItem value="notification_rule">告警规则</SelectItem>
-            <SelectItem value="schedule">定时任务</SelectItem>
-            <SelectItem value="template">任务模板</SelectItem>
-            <SelectItem value="host">主机</SelectItem>
-            <SelectItem value="task">任务</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={filters.action} onValueChange={(v) => { setFilters({ ...filters, action: v }); setPage(0); }}>
-          <SelectTrigger data-testid="audit-action-filter">
-            <SelectValue placeholder="全部操作" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部操作</SelectItem>
-            <SelectItem value="create">创建</SelectItem>
-            <SelectItem value="update">更新</SelectItem>
-            <SelectItem value="delete">删除</SelectItem>
-            <SelectItem value="dispatch">分发</SelectItem>
-            <SelectItem value="start">启动</SelectItem>
-            <SelectItem value="cancel">取消</SelectItem>
-          </SelectContent>
-        </Select>
+        <select
+          value={filters.resource_type}
+          onChange={(e) => { setFilters({ ...filters, resource_type: e.target.value }); setPage(0); }}
+          className={FORM.select}
+          data-testid="audit-resource-filter"
+        >
+            <option value="all">全部资源</option>
+            <option value="plan">Plan</option>
+            <option value="tool">工具</option>
+            <option value="tool_category">工具分类</option>
+            <option value="notification_channel">通知渠道</option>
+            <option value="notification_rule">告警规则</option>
+            <option value="schedule">定时任务</option>
+            <option value="template">任务模板</option>
+            <option value="host">主机</option>
+            <option value="task">任务</option>
+        </select>
+        <select
+          value={filters.action}
+          onChange={(e) => { setFilters({ ...filters, action: e.target.value }); setPage(0); }}
+          className={FORM.select}
+          data-testid="audit-action-filter"
+        >
+            <option value="all">全部操作</option>
+            <option value="create">创建</option>
+            <option value="update">更新</option>
+            <option value="delete">删除</option>
+            <option value="dispatch">分发</option>
+            <option value="start">启动</option>
+            <option value="cancel">取消</option>
+        </select>
         <label className="flex items-center gap-2">
           <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>开始时间</span>
           <Input

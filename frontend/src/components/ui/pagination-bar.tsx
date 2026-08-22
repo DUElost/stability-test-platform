@@ -5,13 +5,7 @@ import {
   ChevronsRight,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { FORM } from '@/design-system';
 
 interface PaginationBarProps {
   page: number;
@@ -122,21 +116,18 @@ export function PaginationBar({
         </Button>
       </div>
 
-      <Select
+      <select
         value={String(pageSize)}
-        onValueChange={(v) => onChangePageSize(Number(v))}
+        onChange={(e) => onChangePageSize(Number(e.target.value))}
+        className={`${FORM.selectSm} w-24`}
+        aria-label="每页条数"
       >
-        <SelectTrigger className="w-24 h-8 text-xs">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {pageSizeOptions.map((size) => (
-            <SelectItem key={size} value={String(size)}>
-              {size} 条/页
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+        {pageSizeOptions.map((size) => (
+          <option key={size} value={String(size)}>
+            {size} 条/页
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

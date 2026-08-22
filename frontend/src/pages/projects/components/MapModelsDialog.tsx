@@ -9,13 +9,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { FORM } from '@/design-system';
 import type { ProjectMapPreview, ProjectSummary } from '@/utils/api/types';
 
@@ -76,22 +69,23 @@ export default function MapModelsDialog({
           {projects.length === 0 ? (
             <p className={FORM.error}>请先新建一个项目，再映射型号。</p>
           ) : (
-            <Select value={projectKey} onValueChange={(value) => {
-              setProjectKey(value);
-              setError('');
-              onInvalidatePreview();
-            }}>
-              <SelectTrigger data-testid="map-project-select">
-                <SelectValue placeholder="选择目标项目" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((project) => (
-                  <SelectItem key={project.project_key} value={project.project_key}>
-                    {project.display_name}（{project.project_key}）
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <select
+              value={projectKey}
+              onChange={(e) => {
+                setProjectKey(e.target.value);
+                setError('');
+                onInvalidatePreview();
+              }}
+              data-testid="map-project-select"
+              className={FORM.select}
+            >
+              <option value="" disabled>选择目标项目</option>
+              {projects.map((project) => (
+                <option key={project.project_key} value={project.project_key}>
+                  {project.display_name}（{project.project_key}）
+                </option>
+              ))}
+            </select>
           )}
           <label className="flex items-center gap-2 text-sm">
             <input

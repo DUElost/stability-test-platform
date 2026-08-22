@@ -139,8 +139,7 @@ describe('ProjectsPage', () => {
     renderPage();
 
     await screen.findByText('荣耀相机');
-    await user.click(screen.getByTestId('facet-customer'));
-    await user.click(await screen.findByText('CustA'));
+    await user.selectOptions(screen.getByTestId('facet-customer'), 'CustA');
 
     await waitFor(() => {
       expect(screen.getByText('荣耀相机')).toBeInTheDocument();
@@ -173,10 +172,8 @@ describe('ProjectsPage', () => {
     renderPage();
 
     await screen.findByText('荣耀相机');
-    await user.click(screen.getByTestId('facet-customer'));
-    await user.click(await screen.findByRole('option', { name: 'CustA' }));
-    await user.click(screen.getByTestId('facet-platform'));
-    await user.click(await screen.findByRole('option', { name: 'QCOM' }));
+    await user.selectOptions(screen.getByTestId('facet-customer'), 'CustA');
+    await user.selectOptions(screen.getByTestId('facet-platform'), 'QCOM');
 
     expect(await screen.findByText('没有匹配的项目')).toBeInTheDocument();
   });

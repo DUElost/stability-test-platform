@@ -5,18 +5,11 @@ import { FolderKanban, Layers, Plus, Link2, Smartphone, Activity } from 'lucide-
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
-import { STAT, TEXT } from '@/design-system/tokens';
+import { FORM, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -209,28 +202,26 @@ export default function ProjectsPage() {
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {FACET_FIELDS.map((field) => (
-          <Select
+          <select
             key={field}
             value={facetFilters[field] ?? 'all'}
-            onValueChange={(v) =>
+            onChange={(e) =>
               setFacetFilters((prev) => ({
                 ...prev,
-                [field]: v === 'all' ? undefined : v,
+                [field]: e.target.value === 'all' ? undefined : e.target.value,
               }))
             }
+            className={FORM.select}
+            data-testid={`facet-${field}`}
+            aria-label={`${FACET_LABEL[field]}筛选`}
           >
-            <SelectTrigger data-testid={`facet-${field}`}>
-              <SelectValue placeholder={FACET_LABEL[field]} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部{FACET_LABEL[field]}</SelectItem>
-              {facetOptions(projects ?? [], field).map((value) => (
-                <SelectItem key={value} value={value}>
-                  {value}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <option value="all">全部{FACET_LABEL[field]}</option>
+            {facetOptions(projects ?? [], field).map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
         ))}
       </div>
       {activeFacetCount > 0 && (
