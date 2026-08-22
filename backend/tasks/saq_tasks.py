@@ -403,6 +403,10 @@ async def _wait_for_upload_mark(plan_run_id: int, scan_round_id: str | None) -> 
     SUCCESS 空报表。超时则放行（best-effort，与链路既有取舍一致），
     缺口由 run_context.upload_summary 显性化。
     """
+    if scan_round_id is None:
+        # 无 round 作用域（旧触发路径/测试）——没有可匹配的水位线，直接放行。
+        return True
+
     from backend.core.database import SessionLocal
     from backend.models.plan_run import PlanRun
 
@@ -421,8 +425,13 @@ async def _wait_for_upload_mark(plan_run_id: int, scan_round_id: str | None) -> 
 
     elapsed = 0
     while elapsed < _UPLOAD_MARK_WAIT_MAX:
-        if await asyncio_to_thread(_mark_round_done):
-            return True
+        try:
+            if await asyncio_to_thread(_mark_round_done):
+                return True
+        except Exception:
+            # 水位线只是排序护栏：读库失败不得拖垮/拖住 merge_task。
+            logger.exception("saq_merge_upload_mark_read_failed plan_run=%d", plan_run_id)
+            return False
         await asyncio_sleep(_UPLOAD_WAIT_INTERVAL)
         elapsed += _UPLOAD_WAIT_INTERVAL
     return False
