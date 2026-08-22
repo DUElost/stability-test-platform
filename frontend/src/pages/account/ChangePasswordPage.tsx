@@ -4,7 +4,7 @@ import { KeyRound } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { FORM, STATUS_CHIP, TEXT } from '@/design-system/tokens';
+import { ALERT_BOX, FORM, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 export default function ChangePasswordPage() {
@@ -60,8 +60,8 @@ export default function ChangePasswordPage() {
           {message && (
             <div
               className={cn(
-                'mb-4 p-3 rounded-lg text-sm',
-                message.type === 'success' ? STATUS_CHIP.success : STATUS_CHIP.destructive,
+                'mb-4 rounded-md px-3 py-2 text-sm',
+                message.type === 'success' ? ALERT_BOX.success : ALERT_BOX.destructive,
               )}
             >
               {message.text}

@@ -11,7 +11,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { STATUS_CHIP, TEXT } from '@/design-system';
+import { INTERACTIVE, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
 export default function ScriptManagementPage() {
@@ -134,12 +134,24 @@ export default function ScriptManagementPage() {
                       <p className={cn('text-xs mt-1 truncate', TEXT.subtitle)}>{script.nfs_path}</p>
                     </div>
                     <div className="flex items-center gap-1 ml-4">
-                      <Button variant="ghost" size="sm" onClick={() => toggleJson(key)} title="参数详情" aria-label="参数详情">
+                      <button
+                        type="button"
+                        onClick={() => toggleJson(key)}
+                        title="参数详情"
+                        aria-label="参数详情"
+                        className={cn('p-1.5 rounded-md', INTERACTIVE.iconButton)}
+                      >
                         <Code2 className="w-4 h-4" />
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => { setVersionTarget(script); setShowVersionDialog(true); }} title="新建版本" aria-label="新建版本">
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setVersionTarget(script); setShowVersionDialog(true); }}
+                        title="新建版本"
+                        aria-label="新建版本"
+                        className={cn('p-1.5 rounded-md', INTERACTIVE.iconButton)}
+                      >
                         <Tag className="w-4 h-4" />
-                      </Button>
+                      </button>
                     </div>
                   </div>
 

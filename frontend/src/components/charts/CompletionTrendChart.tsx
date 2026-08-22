@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
-import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { InlineEmpty } from '@/components/ui/empty-state';
 import { CHART_COLORS } from '@/design-system/colors';
 
 export interface CompletionTrendPoint {
@@ -39,9 +40,7 @@ export function CompletionTrendChart({ data, isLoading }: CompletionTrendChartPr
     return (
       <Card className="border-none shadow-none">
         <CardContent className="p-6">
-          <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">
-            暂无数据
-          </div>
+          <InlineEmpty chart>暂无数据</InlineEmpty>
         </CardContent>
       </Card>
     );
@@ -92,6 +91,7 @@ export function CompletionTrendChart({ data, isLoading }: CompletionTrendChartPr
               <Line
                 type="monotone"
                 dataKey="passed"
+                name="通过"
                 stroke={CHART_COLORS.success}
                 strokeWidth={2}
                 dot={{ r: 3, fill: CHART_COLORS.success }}
@@ -101,11 +101,21 @@ export function CompletionTrendChart({ data, isLoading }: CompletionTrendChartPr
               <Line
                 type="monotone"
                 dataKey="failed"
+                name="失败"
                 stroke={CHART_COLORS.error}
                 strokeWidth={2}
                 dot={{ r: 3, fill: CHART_COLORS.error }}
                 activeDot={{ r: 5 }}
                 isAnimationActive={false}
+              />
+              <Legend
+                verticalAlign="bottom"
+                height={30}
+                iconType="circle"
+                iconSize={8}
+                formatter={(value: string) => (
+                  <span className="text-xs text-muted-foreground">{value}</span>
+                )}
               />
             </LineChart>
           </ResponsiveContainer>

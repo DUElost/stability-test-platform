@@ -67,7 +67,7 @@ export function CronExpressionInput({ value, onChange }: CronExpressionInputProp
       )}
 
       {showPresets && (
-        <div className={cn('grid grid-cols-2 gap-1.5 p-2 rounded-lg border', SEGMENTED.track)}>
+        <div className="grid grid-cols-2 gap-1.5 rounded-lg border border-border bg-card p-2">
           {PRESETS.map((preset) => (
             <button
               key={preset.value}
@@ -79,7 +79,7 @@ export function CronExpressionInput({ value, onChange }: CronExpressionInputProp
               className={cn(
                 'text-left px-3 py-2 rounded-md text-sm transition-colors',
                 SEGMENTED.toggleIdle,
-                value === preset.value && cn('bg-card shadow-sm', SEGMENTED.toggleActive),
+                value === preset.value && SEGMENTED.toggleActive,
               )}
             >
               <div className={cn('font-medium', TEXT.heading)}>{preset.label}</div>
