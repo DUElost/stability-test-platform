@@ -273,6 +273,9 @@ export const PANEL = {
 } as const;
 
 /** 表单控件 */
+// B4 决议（issue #371）：全站下拉的唯一形态 = 原生 <select> + FORM.select /
+// selectSm。Radix ui/select 已删除——原生在长列表（机型/项目名）下性能与
+// 可访问性更好，且是历史多数派；不要再引入第二条下拉线。
 export const FORM = {
   label: 'block text-sm font-medium text-foreground mb-1',
   hint: 'mt-1 text-xs text-muted-foreground',

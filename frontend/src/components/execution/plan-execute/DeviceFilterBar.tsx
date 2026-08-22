@@ -8,15 +8,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { SEGMENTED, TEXT } from '@/design-system/tokens';
+import { FORM, SEGMENTED, TEXT } from '@/design-system/tokens';
 import { Check, ChevronDown, X } from 'lucide-react';
 import type { ActiveFilterChip } from './planExecuteFilters';
 import type { DeviceViewMode } from './types';
@@ -154,32 +147,32 @@ export function DeviceFilterBar({
         </Button>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Select value={deviceVersionFilter} onValueChange={onVersionChange}>
-            <SelectTrigger className="h-8 w-[7.5rem] bg-card text-xs">
-              <SelectValue placeholder="版本" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部版本</SelectItem>
-              {versionOptions.map((value) => (
-                <SelectItem key={value} value={value}>
-                  {value}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={deviceModelFilter} onValueChange={onModelChange}>
-            <SelectTrigger className="h-8 w-28 bg-card text-xs">
-              <SelectValue placeholder="型号" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部型号</SelectItem>
-              {modelOptions.map((value) => (
-                <SelectItem key={value} value={value}>
-                  {value}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <select
+            value={deviceVersionFilter}
+            onChange={(e) => onVersionChange(e.target.value)}
+            className={`${FORM.selectSm} w-[7.5rem]`}
+            aria-label="版本筛选"
+          >
+            <option value="all">全部版本</option>
+            {versionOptions.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+          <select
+            value={deviceModelFilter}
+            onChange={(e) => onModelChange(e.target.value)}
+            className={`${FORM.selectSm} w-28`}
+            aria-label="型号筛选"
+          >
+            <option value="all">全部型号</option>
+            {modelOptions.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
