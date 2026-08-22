@@ -360,6 +360,7 @@ describe('HostsPage', () => {
 
     expect(mocks.confirm).toHaveBeenCalledWith({
       description: '将节点设为未激活后，只影响后续新派发任务；正在运行的任务不受影响。是否继续？',
+      variant: 'destructive',
     });
 
     await waitFor(() =>

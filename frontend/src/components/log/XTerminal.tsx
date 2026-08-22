@@ -5,6 +5,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { ArrowDown, Download, Search, X, ChevronUp, ChevronDown, Regex } from 'lucide-react';
+import { useToast } from '@/hooks/useToast';
 import { FORM, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
@@ -198,6 +199,7 @@ export interface XTerminalProps {
 
 export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
   ({ poolKey, runId, stepName, height = '500px', onReady }, ref) => {
+    const toast = useToast();
     const containerRef = useRef<HTMLDivElement>(null);
     const poolEntryRef = useRef<PoolEntry | null>(null);
     const linesBufferRef = useRef<string[]>([]);
@@ -363,7 +365,8 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    }, [runId, stepName]);
+      toast.success(`日志已下载：${name}`);
+    }, [runId, stepName, toast]);
 
     return (
       <div className={cn('dark flex flex-col overflow-hidden rounded-lg border border-border bg-background shadow-xl')} style={{ height }}>

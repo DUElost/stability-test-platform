@@ -116,9 +116,9 @@ describe("StatusBadge", () => {
     expect(screen.getByText("已中止")).toBeInTheDocument();
   });
 
-  it("job-result RUNNING uses info variant to match job badge color", () => {
+  it("job-result RUNNING uses warning variant (#356 运行中全站统一)", () => {
     const entry = resolveStatusEntry("job-result", "RUNNING");
-    expect(entry.variant).toBe("info");
+    expect(entry.variant).toBe("warning");
   });
 
   it("job-result CANCELED uses neutral secondary (cancel ≠ fail convention)", () => {
@@ -178,6 +178,6 @@ describe("StatusBadge", () => {
   it("resolveStatusEntry returns same entry as component output", () => {
     const entry = resolveStatusEntry("plan-run", "RUNNING");
     expect(entry.label).toBe("运行中");
-    expect(entry.variant).toBe("info");
+    expect(entry.variant).toBe("warning");
   });
 });

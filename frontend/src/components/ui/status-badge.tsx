@@ -82,7 +82,7 @@ const HOST: Record<string, StatusEntry> = {
 
 const JOB: Record<string, StatusEntry> = {
   PENDING: { label: "等待", variant: "secondary", Icon: Clock },
-  RUNNING: { label: "运行中", variant: "info", Icon: Loader2 },
+  RUNNING: { label: "运行中", variant: "warning", Icon: Loader2 },
   COMPLETED: { label: "完成", variant: "success", Icon: CheckCircle2 },
   FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
   ABORTED: { label: "中止", variant: "destructive", Icon: Ban },
@@ -99,7 +99,7 @@ const JOB: Record<string, StatusEntry> = {
  */
 const JOB_RESULT: Record<string, StatusEntry> = {
   QUEUED: { label: "排队中", variant: "secondary", Icon: Hourglass },
-  RUNNING: { label: "运行中", variant: "info", Icon: Loader2 },
+  RUNNING: { label: "运行中", variant: "warning", Icon: Loader2 },
   FINISHED: { label: "完成", variant: "success", Icon: CheckCircle2 },
   FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
   CANCELED: { label: "已中止", variant: "secondary", Icon: Ban },
@@ -108,7 +108,7 @@ const JOB_RESULT: Record<string, StatusEntry> = {
 const PLAN_RUN: Record<string, StatusEntry> = {
   QUEUED: { label: "排队中", variant: "secondary", Icon: Hourglass },
   PRECHECK: { label: "准入检查", variant: "info", Icon: Loader2 },
-  RUNNING: { label: "运行中", variant: "info", Icon: Loader2 },
+  RUNNING: { label: "运行中", variant: "warning", Icon: Loader2 },
   SUCCESS: { label: "成功", variant: "success", Icon: CheckCircle2 },
   PARTIAL_SUCCESS: { label: "部分成功", variant: "warning", Icon: AlertTriangle },
   FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
