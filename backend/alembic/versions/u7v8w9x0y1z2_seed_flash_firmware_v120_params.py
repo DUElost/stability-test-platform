@@ -166,7 +166,7 @@ DEFAULT_PARAMS = {
 }
 
 # sha256 of flash_firmware.py v1.2.0
-_CONTENT_SHA256 = "ce3f101a27df0681e3d3328f485125361e599fa399ce61379b82b48c545e3d9a"
+_CONTENT_SHA256 = "956086baed98a61945aba9bcaf11ba18773234ff586a1d4e6ae3575c9ce7d067"
 
 
 def upgrade() -> None:

@@ -23,6 +23,9 @@ Class: feature
   v1.0.0/v1.0.1，v1.1.0 留 active 作回滚。default_params **只含固定期望键**
   （command/boot_mode/timeout/reboot_*）——开关类键种进 default_params 会
   因「参数优先于 env」杀死 hot-update 逃生阀。
+- **skip 短路先于 da/scatter 与 flash_tool 校验**（合并 main 后回归发现）：
+  flashtool 二进制不进 git（CI/新 worktree 无），「同版本跳过」语义是"无事可做"，
+  不得因工具未部署而失败；同时修正 skip_if_current=false 时仍会短路的语义 bug。
 - 顺手修复 scan 复活 bug：`scan_script_root` 对「盘上存在且未变但
   is_active=false」的行不再翻回 true（该状态只能来自 admin deactivate 或
   seed 迁移；b7c8d9e0f1a2 停用 v1.0.0 被 scan 推翻即此 bug）。is_active

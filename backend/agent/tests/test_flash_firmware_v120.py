@@ -376,3 +376,35 @@ class TestMainWiring:
         assert payload["success"] is False
         assert "post-flash verify failed" in payload["error_message"]
         assert payload["metrics"]["route"]["decided_by"] == "params"
+
+    def test_skip_disabled_flashes_even_when_current(self, fw_root, monkeypatch, capsys):
+        """skip_if_current=false = 强制全量刷：版本相同也不许短路。"""
+        ver = fw_root / "MLD" / "8.0.1.100"
+        monkeypatch.setenv("STP_DEVICE_SERIAL", "SER1")
+        monkeypatch.setenv("STP_ADB_PATH", "adb")
+        monkeypatch.setenv("STP_STEP_PARAMS", json.dumps({
+            "firmware_dir": str(ver),
+            "skip_if_current": False,
+            "flash_tool_dir": str(fw_root),  # 存在即可，exe 由 stub 提供
+        }))
+        monkeypatch.setattr(ff, "_adb_getprop",
+                            lambda prop, adb, serial, timeout=10: "8.0.1.100")
+        monkeypatch.setattr(ff, "_acquire_host_lock", lambda on_wait_tick=None: None)
+        monkeypatch.setattr(ff, "_release_host_lock", lambda fd: None)
+        monkeypatch.setattr(ff, "_pick_flash_tool_exe", lambda tool_dir: "/bin/true")
+        monkeypatch.setattr(ff, "_reboot_into_flash_mode",
+                            lambda serial, target, adb_path, wait_seconds:
+                            {"attempted": False})
+        monkeypatch.setattr(ff, "_run_flash_tool_with_progress",
+                            lambda cmd, cwd, env, timeout, on_stage, on_percent:
+                            ("All command exec done", 0))
+        monkeypatch.setattr(ff, "_wait_device_back",
+                            lambda serial, adb_path, timeout, on_tick: True)
+        monkeypatch.setattr(ff, "_verify_after_flash",
+                            lambda route, serial, adb, wait, on_tick:
+                            (True, {"current": "8.0.1.100"}))
+
+        ff.main()
+        payload = json.loads(capsys.readouterr().out.strip())
+        assert payload["success"] is True
+        assert payload["skipped"] is False

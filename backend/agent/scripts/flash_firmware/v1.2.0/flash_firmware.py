@@ -725,36 +725,6 @@ def main() -> None:
         _output(False, error_message=route_error or "route resolution failed")
         return
 
-    da_file = route["da_file"]
-    scatter_file = route["scatter_file"]
-    firmware_dir = route["firmware_dir"]
-    if not os.path.isfile(da_file):
-        _output(False, error_message=f"da_file not found: {da_file}",
-                metrics={"route": route})
-        return
-    if not os.path.isfile(scatter_file):
-        _output(False, error_message=f"scatter_file not found: {scatter_file}",
-                metrics={"route": route})
-        return
-
-    tool_dir = _locate_flash_tool_dir(args.get("flash_tool_dir"))
-    if not os.path.isdir(tool_dir):
-        _output(False, error_message=f"flash_tool_dir not found: {tool_dir}",
-                metrics={"route": route})
-        return
-    flash_tool_exe = _pick_flash_tool_exe(tool_dir)
-    if not flash_tool_exe:
-        _output(False, error_message=f"flash_tool executable not found under {tool_dir}",
-                metrics={"route": route})
-        return
-
-    command = args.get("command") or "firmware-upgrade"
-    boot_mode = args.get("boot_mode") or "auto"
-    try:
-        timeout = int(args.get("timeout_seconds", 1200))
-    except (TypeError, ValueError):
-        timeout = 1200
-
     skip_if_current = _as_bool(
         _param_or_env(args, "skip_if_current", "STP_FLASH_SKIP_IF_CURRENT", ""),
         default=True,
@@ -763,10 +733,6 @@ def main() -> None:
         _param_or_env(args, "verify_version", "STP_FLASH_VERIFY_VERSION", ""),
         default=True,
     )
-    try:
-        verify_wait = int(args.get("verify_wait_seconds", 180))
-    except (TypeError, ValueError):
-        verify_wait = 180
 
     started_at = time.time()
     # seq 必须先于锁等待定义：锁被占用时第一次 tick 就要打戳，
@@ -774,16 +740,53 @@ def main() -> None:
     seq: list[int] = [0]
 
     # ── v1.2.0：刷前版本比对（同版本 → skipped 收场）────────────────
+    # 必须先于 da/scatter 与 flash_tool 校验：skipped 语义是"无事可做"，
+    # 不应因刷机工具未部署（flashtool 二进制不进 git，CI/新 worktree 无）
+    # 或包内个别文件缺失而失败——真要刷的设备才需要完整的包与工具。
     version_check = _precheck_version(route, serial, adb_path)
     _emit_progress(seq, stage="version-check", result=json.dumps(
         version_check, ensure_ascii=False))
-    if version_check.get("skip"):
+    if skip_if_current and version_check.get("skip"):
         _output(True, skipped=True, metrics={
             "route": route,
             "version_check": version_check,
             "duration_seconds": round(time.time() - started_at, 2),
         })
         return
+
+    da_file = route["da_file"]
+    scatter_file = route["scatter_file"]
+    firmware_dir = route["firmware_dir"]
+    if not os.path.isfile(da_file):
+        _output(False, error_message=f"da_file not found: {da_file}",
+                metrics={"route": route, "version_check": version_check})
+        return
+    if not os.path.isfile(scatter_file):
+        _output(False, error_message=f"scatter_file not found: {scatter_file}",
+                metrics={"route": route, "version_check": version_check})
+        return
+
+    tool_dir = _locate_flash_tool_dir(args.get("flash_tool_dir"))
+    if not os.path.isdir(tool_dir):
+        _output(False, error_message=f"flash_tool_dir not found: {tool_dir}",
+                metrics={"route": route, "version_check": version_check})
+        return
+    flash_tool_exe = _pick_flash_tool_exe(tool_dir)
+    if not flash_tool_exe:
+        _output(False, error_message=f"flash_tool executable not found under {tool_dir}",
+                metrics={"route": route, "version_check": version_check})
+        return
+
+    command = args.get("command") or "firmware-upgrade"
+    boot_mode = args.get("boot_mode") or "auto"
+    try:
+        timeout = int(args.get("timeout_seconds", 1200))
+    except (TypeError, ValueError):
+        timeout = 1200
+    try:
+        verify_wait = int(args.get("verify_wait_seconds", 180))
+    except (TypeError, ValueError):
+        verify_wait = 180
 
     cmd = [flash_tool_exe, "-c", command, "-d", da_file, "-s", scatter_file, "-b", boot_mode]
     subprocess_env = _build_subprocess_env(os.path.dirname(flash_tool_exe))
