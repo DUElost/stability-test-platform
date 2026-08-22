@@ -590,8 +590,8 @@ _DEDUP_AUTO_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS", "FAILED"}
 def should_trigger_dedup(run_status: str) -> bool:
     """ADR-0028 方案 A：SUCCESS/PARTIAL_SUCCESS/FAILED 均触发 scan→upload。
 
-    FAILED 只走到 upload（事件到达 CIFS），merge/extract 靠 SAQ 任务门禁
-    自然跳过（scan xls 不足或质量差时 merge 返回空）。
+    FAILED 只走到 upload（事件到达 CIFS）：手动 merge/extract 路由对 FAILED
+    返回 409；SAQ 侧 run_merge_sync 显式跳过，extract 因 merge 无产物短路。
     """
     if os.getenv(_DEDUP_AUTO_ENV, "1") != "1":
         return False

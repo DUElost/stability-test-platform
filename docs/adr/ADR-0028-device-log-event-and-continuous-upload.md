@@ -98,9 +98,12 @@ DETECTED ──(adb pull 完成)──→ LOCAL
 | PARTIAL_SUCCESS | ✅ | ✅ | ✅ | ✅ |
 | **FAILED** | ✅ | ✅ | ❌ | ❌ |
 
-- `_AUTO_STATUSES`（`dedup_scan.py:471`）加 `"FAILED"`
+- `_DEDUP_AUTO_STATUSES`（`backend/services/dedup_scan.py` 的 `should_trigger_dedup`）含 `"FAILED"`
 - FAILED 走 scan→upload（事件到达 CIFS），但不走 merge/extract（运行失败，产 jira/ 无意义）
-- merge/extract 的门禁自然阻断 FAILED：scan xls 不足 → merge 跳过 → extract 跳过
+- 门禁为显式实现（并非依赖 scan xls 不足自然跳过）：
+  - 路由层（`backend/api/routes/dedup.py` `trigger_merge` / `trigger_extract`）：FAILED PlanRun 直接 `409`（`PlanRun FAILED：按 ADR-0028 D2 不执行 merge/extract`），且先于 merge precheck
+  - SAQ 层：`run_merge_sync` 对 FAILED 显式跳过（log `merge_skip_failed_plan_run`，返回空串）
+  - extract 在 SAQ 链无独立门禁：merge 无产物 → extract 以 `-1`（no merge artifact）短路；显式拒绝仅在路由层 409
 
 **upload_task 恢复**（方案 A 已恢复其 enqueue 链）：
 
@@ -167,7 +170,7 @@ extract 双根遍历：
 
 ### 负面
 
-- PlanRun FAILED 时 scan 可能产不出足够的 xls（取决于失败发生在哪个阶段）——merge 门禁自然跳过，但事件可能因无 xls 引用而不被上传
+- PlanRun FAILED 时 scan 可能产不出足够的 xls（取决于失败发生在哪个阶段）——merge/extract 由 D2 显式门禁拒绝，但事件可能因无 xls 引用而不被上传
 - EventUploader 的 copytree 逻辑保留（执行者定位，不回退）；`CONTINUOUS=1` 仅作为逃生阀模式
 - `JobLogSignal.job_id` 已由 `CASCADE` 改为 `SET NULL`（migration g5b6c7d8e9f0）
 
