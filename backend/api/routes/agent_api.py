@@ -2246,6 +2246,7 @@ def _validated_remote_path(
     *,
     plan_run_id: Optional[int] = None,
     event_id: Optional[str] = None,
+    unassigned_fallback: bool = False,
 ) -> Optional[str]:
     if not raw:
         return None
@@ -2257,6 +2258,19 @@ def _validated_remote_path(
             must_exist=False,
         ))
     except ArtifactPathError as exc:
+        # #389: 行被 associate 到 plan_run 后，Agent 后续 patch（如 PRUNED）
+        # 仍可能带它当初上传的 devices/unassigned/{event_id}/ 旧路径——
+        # 该 scope 对本行合法（extract 按 absolute remote_path 解析），
+        # 回退接受而不是 400 丢弃状态更新。
+        if unassigned_fallback and event_id:
+            try:
+                return str(resolve_device_event_remote_path(
+                    raw,
+                    event_id=event_id,
+                    must_exist=False,
+                ))
+            except ArtifactPathError:
+                pass
         raise HTTPException(
             status_code=400,
             detail=f"device_log_event.remote_path invalid: {exc}",
@@ -2333,7 +2347,8 @@ async def ingest_device_log_events(
             row.remote_path = _validated_remote_path(
                 ev.remote_path,
                 plan_run_id=effective_plan_run,
-                event_id=None if effective_plan_run is not None else str(row.id),
+                event_id=str(row.id),
+                unassigned_fallback=True,
             )
             row.checksum = ev.checksum
             row.size_bytes = ev.size_bytes

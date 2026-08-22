@@ -10,6 +10,7 @@ from backend.services import file_server_monitor as monitor
 class _FakePrometheus:
     def __init__(self) -> None:
         self.queries: list[str] = []
+        self.range_queries: list[str] = []
 
     def close(self) -> None:
         pass
@@ -31,6 +32,7 @@ class _FakePrometheus:
         return 1.5
 
     def range(self, query: str, *, start: float, end: float, step: int):
+        self.range_queries.append(query)
         return [{"timestamp": start, "value": 1.0}, {"timestamp": end, "value": 2.0}]
 
     def label(self, query: str, label: str) -> str | None:
@@ -115,6 +117,12 @@ def test_split_panels_when_share_address_and_storage_job_configured(tmp_path, mo
     assert result["storage_server"]["monitoring"]["prometheus_available"] is True
     assert any('job="storage-server"' in q for q in fake.queries)
     assert any('job="file-server"' in q for q in fake.queries)
+    # 趋势图数据源跟随 storage 面板：CPU/内存/NFS 历史刮存储机，容量仍取
+    # 控制面客户端挂载（NFS 客户端看到的 avail/size 即服务端磁盘本身）。
+    assert any('job="storage-server"' in q for q in fake.range_queries)
+    assert any('node_nfsd_requests_total{job="storage-server"}' in q for q in fake.range_queries)
+    assert any('node_filesystem_avail_bytes{job="file-server"' in q for q in fake.range_queries)
+    assert len(result["history"]["cpu_usage_pct"]) == 2
 
 
 def test_share_address_equal_to_control_plane_stays_co_located(tmp_path, monkeypatch):
@@ -129,6 +137,41 @@ def test_share_address_equal_to_control_plane_stays_co_located(tmp_path, monkeyp
     assert any('job="file-server"' in q for q in fake.queries)
 
 
+def test_share_address_hostname_resolving_to_control_ip_stays_co_located(tmp_path, monkeypatch):
+    """STP_AEE_SHARE_ADDRESS 写主机名、STP_FILE_SERVER_ADDRESS 写 IP 时仍判同机。
+
+    回归：字面比较会误判为分源 → 右栏永远 STORAGE_METRICS_UNAVAILABLE（#205）。
+    """
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "storage.internal")
+    monkeypatch.setattr(
+        monitor.socket,
+        "gethostbyname",
+        lambda host: {"storage.internal": "192.0.2.202"}.get(host, host),
+    )
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    assert result["storage_server"]["same_source"] is True
+    assert "STORAGE_METRICS_UNAVAILABLE" not in {a["code"] for a in result["alerts"]}
+
+
+def test_share_address_unresolvable_hostname_does_not_crash(tmp_path, monkeypatch):
+    """share 地址解析失败时回落原串比较，不抛异常（同机判定为假→不可用路径）。"""
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "no-such-host")
+    monkeypatch.setattr(
+        monitor.socket,
+        "gethostbyname",
+        lambda _host: (_ for _ in ()).throw(socket.gaierror("Name or service not known")),
+    )
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    assert result["storage_server"]["same_source"] is False
+    assert {"STORAGE_METRICS_UNAVAILABLE"} <= {a["code"] for a in result["alerts"]}
+
+
 def test_split_without_storage_job_reports_missing_storage_metrics(tmp_path, monkeypatch):
     _patch_file_server_deps(monkeypatch, tmp_path)
     monkeypatch.setenv("STP_AEE_SHARE_ADDRESS", "192.0.2.204")
@@ -139,6 +182,11 @@ def test_split_without_storage_job_reports_missing_storage_metrics(tmp_path, mon
     assert result["storage_server"]["monitoring"]["prometheus_available"] is False
     assert result["storage_server"]["system"]["cpu_usage_pct"] is None
     assert {"STORAGE_METRICS_UNAVAILABLE"} <= {a["code"] for a in result["alerts"]}
+    # 分源未配 job：历史 fail-closed 留空，不刮控制面冒充存储机（#205）
+    assert result["history"]["capacity_usage_pct"] == []
+    assert result["history"]["cpu_usage_pct"] == []
+    assert result["history"]["memory_usage_pct"] == []
+    assert result["history"]["nfs_requests_per_second"] == []
 
 
 def test_device_log_disk_summary_and_threshold_alerts(tmp_path, monkeypatch):

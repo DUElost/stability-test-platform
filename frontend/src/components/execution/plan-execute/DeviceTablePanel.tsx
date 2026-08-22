@@ -1,5 +1,13 @@
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { StatusBadge } from '@/components/ui/status-badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { PaginationBar } from '@/components/ui/pagination-bar';
 import {
   Tooltip,
@@ -66,13 +74,13 @@ export function DeviceTablePanel({
 }: DeviceTablePanelProps) {
   return (
     <div className="flex h-full min-h-0 flex-col p-3" data-testid="device-table-panel">
-      <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
-        <table className="w-full min-w-[800px] text-sm">
+      <div className="min-h-0 flex-1 rounded-lg border">
+        <Table className="w-full min-w-[800px] text-sm">
           {/* bg-muted/95 是 sticky 表头的必要条件：行要从表头下面滚过去，
               近乎不透明才不透行；勿当底色漂移改成 /50 */}
-          <thead className="sticky top-0 z-10 bg-muted/95 text-left text-xs">
-            <tr>
-              <th className="w-10 px-3 py-2" />
+          <TableHeader className="text-left text-xs">
+            <TableRow className="sticky top-0 z-10 bg-muted/95 hover:bg-muted/95">
+              <TableHead className="h-auto w-10 px-3 py-2" />
               {([
                 ['serial', 'Serial'],
                 ['host', '节点'],
@@ -86,7 +94,7 @@ export function DeviceTablePanel({
                     ? ArrowUp
                     : ArrowDown;
                 return (
-                  <th key={key} className="px-3 py-2">
+                  <TableHead key={key} className="h-auto px-3 py-2">
                     <button
                       type="button"
                       className="inline-flex items-center gap-1 font-medium hover:text-foreground"
@@ -101,14 +109,14 @@ export function DeviceTablePanel({
                         )}
                       />
                     </button>
-                  </th>
+                  </TableHead>
                 );
               })}
-              <th className="px-3 py-2">状态</th>
-              <th className="px-3 py-2">预检 / 占用</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
+              <TableHead className="h-auto px-3 py-2">状态</TableHead>
+              <TableHead className="h-auto px-3 py-2">预检 / 占用</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {devices.map((device) => {
               const disabled = !isSchedulable(device);
               const row =
@@ -120,7 +128,7 @@ export function DeviceTablePanel({
                 host?.ip || host?.name || (hostId === 'unassigned' ? '未分配节点' : hostId);
               const versionText = device.build_display_id || '—';
               return (
-                <tr
+                <TableRow
                   key={device.id}
                   data-device-row-id={device.id}
                   className={cn(
@@ -131,7 +139,7 @@ export function DeviceTablePanel({
                   )}
                   onClick={() => onToggleDevice(device)}
                 >
-                  <td className="px-3 py-2">
+                  <TableCell className="px-3 py-2">
                     <input
                       aria-label={`选择 ${device.serial}`}
                       type="checkbox"
@@ -139,11 +147,11 @@ export function DeviceTablePanel({
                       disabled={disabled}
                       readOnly
                     />
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs">{device.serial}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{hostLabel}</td>
-                  <td className="px-3 py-2">{device.model || '—'}</td>
-                  <td className="max-w-[10rem] px-3 py-2">
+                  </TableCell>
+                  <TableCell className="px-3 py-2 font-mono text-xs">{device.serial}</TableCell>
+                  <TableCell className="px-3 py-2 font-mono text-xs">{hostLabel}</TableCell>
+                  <TableCell className="px-3 py-2">{device.model || '—'}</TableCell>
+                  <TableCell className="max-w-[10rem] px-3 py-2">
                     <TooltipProvider delayDuration={200}>
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -156,11 +164,11 @@ export function DeviceTablePanel({
                         </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
-                  </td>
-                  <td className="px-3 py-2">
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
                     <StatusBadge kind="device" status={device.status} size="sm" />
-                  </td>
-                  <td
+                  </TableCell>
+                  <TableCell
                     className={cn(
                       'px-3 py-2 text-xs',
                       row?.ready ? 'text-success' : row ? 'text-destructive' : TEXT.subtitle,
@@ -185,12 +193,12 @@ export function DeviceTablePanel({
                     ) : (
                       '选择后检查'
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
       {total > 0 && (
         <div className="mt-3 shrink-0">

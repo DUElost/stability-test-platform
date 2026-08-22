@@ -4,6 +4,14 @@ import type { CapacityPlanRow, ReadinessDevice } from '@/utils/planExecuteReadin
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -154,39 +162,39 @@ export function DispatchCockpit({
               <CardTitle className="text-base">按节点派发计划</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="overflow-x-auto rounded-lg border">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
-                    <tr>
-                      <th className="px-3 py-2 font-medium">节点</th>
-                      <th className="px-3 py-2 font-medium">本次选中</th>
-                      <th className="px-3 py-2 font-medium">剩余槽位</th>
-                      <th className="px-3 py-2 font-medium">容量预估</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
+              <div className="rounded-lg border">
+                <Table className="text-sm">
+                  <TableHeader className="bg-muted/50 text-left text-xs text-muted-foreground">
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="h-auto px-3 py-2">节点</TableHead>
+                      <TableHead className="h-auto px-3 py-2">本次选中</TableHead>
+                      <TableHead className="h-auto px-3 py-2">剩余槽位</TableHead>
+                      <TableHead className="h-auto px-3 py-2">容量预估</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {capacityRows.map((row) => (
-                      <tr key={row.hostId}>
-                        <td className="px-3 py-3">
+                      <TableRow key={row.hostId}>
+                        <TableCell className="px-3 py-3">
                           <div className="font-medium">{row.hostLabel}</div>
                           <div className={cn('mt-0.5 text-[11px]', TEXT.subtitle)}>
                             {row.healthStatus || '健康状态未知'}
                             {row.healthReasons.length ? ` · ${row.healthReasons.join('、')}` : ''}
                           </div>
-                        </td>
-                        <td className="px-3 py-3">{row.selected}</td>
-                        <td className="px-3 py-3">{row.effectiveSlots ?? '暂无'}</td>
-                        <td className={cn('px-3 py-3 font-medium', (row.queued ?? 0) > 0 ? 'text-warning' : 'text-success')}>
+                        </TableCell>
+                        <TableCell className="px-3 py-3">{row.selected}</TableCell>
+                        <TableCell className="px-3 py-3">{row.effectiveSlots ?? '暂无'}</TableCell>
+                        <TableCell className={cn('px-3 py-3 font-medium', (row.queued ?? 0) > 0 ? 'text-warning' : 'text-success')}>
                           {row.effectiveSlots == null
                             ? <span className={TEXT.subtitle}>槽位数据缺失，不估算</span>
                             : row.queued
                               ? `${row.immediate} 立即 · ${row.queued} 将排队`
                               : '全部立即执行'}
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
+                  </TableBody>
+                </Table>
               </div>
               <div className={cn('rounded-lg bg-muted px-3 py-2 text-xs leading-5', TEXT.subtitle)}>
                 “将排队”仅表示超过节点当前 effective_slots 的选中量，不是 PlanRun 级 QUEUED 准入，也不代表精确开跑时间。

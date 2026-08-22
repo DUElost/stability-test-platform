@@ -33,7 +33,7 @@ const TILE_CLS: Record<DeviceTileStatus, string> = {
   offline: 'border-transparent bg-muted-foreground/25',
 };
 
-const TILE_PX = 32;
+const TILE_PX = 44;
 const TILE_GAP = 4;
 const BAND_ROW_H = 28;
 const TILE_ROW_H = TILE_PX + TILE_GAP;

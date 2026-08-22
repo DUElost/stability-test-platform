@@ -206,7 +206,12 @@ class HddSpillMonitor:
             event_id = str(candidate.get("id") or "")
             if event_id and event_id in self._spill_enqueued_ids:
                 continue
-            if EventUploader.instance().enqueue_local_event(event=candidate, force=True):
+            # #382: 溢出事件上送校验后必须释放本地磁盘（prune_after_upload），
+            # 不依赖默认关闭的 STP_EVENT_UPLOADER_PRUNE_LOCAL 灰度开关 ——
+            # 否则磁盘水位持续高于阈值、压力阀失效。
+            if EventUploader.instance().enqueue_local_event(
+                event=candidate, force=True, prune_after_upload=True,
+            ):
                 if event_id:
                     self._spill_enqueued_ids.add(event_id)
                 logger.info(

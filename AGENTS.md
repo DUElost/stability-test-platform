@@ -151,6 +151,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 | `STP_AEE_LOCAL_ROOT` | Agent | HDD root for AEE events (e.g. `/mnt/hdd/aee_events`) |
 | `STP_SCRIPT_ROOT` | Backend | Script catalog scan source（**必须显式设置**；未设 scan 503） |
 | `STP_WATCHER_ENABLED` | Agent | Watcher subsystem gate (default `true`) |
+| `STP_FLASH_FIRMWARE_VERSION` / `_ROOT`、`STP_FLASH_SKIP_IF_CURRENT` / `_VERIFY_VERSION` | Backend 源键 → Agent | 刷机 fleet 键（flash_firmware ≥ v1.2.0）：版本 pin / 固件根 / 跳过与核验开关；空值不推，缺省走 `{STP_NFS_ROOT}/firmware/{family}/latest.json` |
 | `STP_DEDUP_AUTO_SCAN` | Backend | Terminal auto-dedup trigger (default `1`) |
 | `AUTO_ARCHIVE_POLL_INTERVAL_SECONDS` | Backend | auto_archive_sweep interval (default 120) |
 

@@ -45,6 +45,9 @@ _RETRY_FAILED_INTERVAL = 600.0
 # ADR-0028 方案 A：UPLOAD_PENDING 事件由控制面 upload_task 在 PlanRun 终态后标记，
 # Agent 侧需周期轮询（一次性启动轮询会错过后续标记）。
 _RECOVER_POLL_INTERVAL = 30.0
+# #380: 轮询 GET 加 limit，防止大 backlog 时每周期全量拉取。
+_RECOVER_POLL_LIMIT = 200
+_RETRY_FAILED_LIMIT = 200
 
 
 def _event_uploader_enabled() -> bool:
@@ -57,15 +60,20 @@ def _event_uploader_continuous() -> bool:
 
 
 def _recover_states() -> str:
-    """待上传事件的轮询状态集合。
+    """30s 快速轮询的状态集合（#380）。
 
-    continuous=0（默认过滤模型）：UPLOAD_PENDING/UPLOADING/UPLOAD_FAILED；
-    continuous=1（逃生阀）：再并入 LOCAL（upload_task 已标记的 UPLOAD_PENDING
-    也须覆盖，模式切换后不能遗漏待传事件）。
+    只覆盖「等待首次上送」的事件；UPLOADING/UPLOAD_FAILED 的恢复交给
+    600s 慢速循环（`_retry_failed_loop`）——快速轮询若也拉这两个状态，
+    会把在途/已达重试上限的事件反复以 attempt=0 重入队（重试上限失效、
+    CIFS 上 rmtree-vs-copy 抖动）。in-flight 去重（`_active_ids`）兜底，
+    但状态集合本身先收敛。
+
+    continuous=0（默认过滤模型）：UPLOAD_PENDING；
+    continuous=1（逃生阀）：LOCAL,UPLOAD_PENDING（模式切换不漏待传事件）。
     """
     if _event_uploader_continuous():
-        return "LOCAL,UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
-    return "UPLOAD_PENDING,UPLOADING,UPLOAD_FAILED"
+        return "LOCAL,UPLOAD_PENDING"
+    return "UPLOAD_PENDING"
 
 
 @dataclass
@@ -80,6 +88,12 @@ class _UploadJob:
     host_id: str
     job_id: Optional[int] = None
     attempt: int = 0
+    # #382: HddSpill 溢出事件上送成功后必须释放本地磁盘，不受
+    # STP_EVENT_UPLOADER_PRUNE_LOCAL（默认 0、按机灰度）约束。
+    prune_after_upload: bool = False
+    # #380: 重试 Timer 已排队（job 会回到队列）期间保留 in-flight 标记，
+    # 防止轮询循环在退避窗口内重复入队。
+    rescheduled: bool = False
 
 
 class EventUploader:
@@ -99,6 +113,10 @@ class EventUploader:
         self._slot = threading.Semaphore(_MAX_CONCURRENT)
         self._dispatcher: Optional[threading.Thread] = None
         self._retry_thread: Optional[threading.Thread] = None
+        # #380: in-flight / queued 去重 —— 同一 event_id 至多一个 job
+        # （队列中、在传、或退避重试等待中），轮询/重试/溢出三源重入队在此收敛。
+        self._active_lock = threading.Lock()
+        self._active_ids: set[str] = set()
 
     @classmethod
     def instance(cls) -> "EventUploader":
@@ -177,17 +195,28 @@ class EventUploader:
         if self._dispatcher is not None:
             self._dispatcher.join(timeout=timeout)
 
-    def enqueue_local_event(self, *, event: Dict[str, Any], force: bool = False) -> bool:
+    def enqueue_local_event(
+        self,
+        *,
+        event: Dict[str, Any],
+        force: bool = False,
+        prune_after_upload: bool = False,
+    ) -> bool:
         """将事件入队。ADR-0028 方案 A：continuous=1 接受 LOCAL；continuous=0 默认拒绝
         （仅 UPLOAD_PENDING 经 _recover_pending 入队）。``force=True`` 用于 HddSpill——
-        磁盘压力溢出不受过滤模型限制，必须始终可上送。"""
+        磁盘压力溢出不受过滤模型限制，必须始终可上送；溢出事件同时要求
+        ``prune_after_upload=True``（#382：上送校验后必须释放本地磁盘）。
+
+        #380: 同一 event_id 已在队列/在传/退避重试中时拒绝重复入队。
+        """
         if not _event_uploader_enabled() or not self._configured:
             return False
         if not _event_uploader_continuous() and not force:
             # Plan A: Reconciler 不自动入队；upload_task 标记 UPLOAD_PENDING 后经 _recover_pending 轮询入队
             return False
+        event_id = str(event["id"])
         job = _UploadJob(
-            event_id=str(event["id"]),
+            event_id=event_id,
             local_path=str(event["local_path"]),
             plan_run_id=event.get("plan_run_id"),
             serial=str(event.get("serial", "")),
@@ -196,13 +225,23 @@ class EventUploader:
             detected_at=str(event.get("detected_at", "")),
             host_id=str(event.get("host_id", self._host_id)),
             job_id=event.get("job_id"),
+            prune_after_upload=prune_after_upload,
         )
+        with self._active_lock:
+            if event_id in self._active_ids:
+                return False
+            self._active_ids.add(event_id)
         try:
             self._queue.put_nowait(job)
             return True
         except queue.Full:
+            self._forget_active(event_id)
             logger.warning("event_uploader_queue_full event_id=%s", job.event_id)
             return False
+
+    def _forget_active(self, event_id: str) -> None:
+        with self._active_lock:
+            self._active_ids.discard(event_id)
 
     def _dispatch_loop(self) -> None:
         while not self._stop_evt.is_set():
@@ -212,16 +251,28 @@ class EventUploader:
                 continue
             if job is None:
                 break
+            # #389: 拿到并发槽再起线程 —— 线程数被 _MAX_CONCURRENT 封顶，
+            # 不再每 job 一线程趴在信号量上（洪峰时最多 512 个 parked 线程）。
+            while not self._slot.acquire(timeout=1.0):
+                if self._stop_evt.is_set():
+                    self._forget_active(job.event_id)
+                    return
             threading.Thread(
-                target=self._run_upload,
+                target=self._run_upload_holding_slot,
                 args=(job,),
                 name=f"event-upload-{job.event_id[:8]}",
                 daemon=True,
             ).start()
 
-    def _run_upload(self, job: _UploadJob) -> None:
-        with self._slot:
+    def _run_upload_holding_slot(self, job: _UploadJob) -> None:
+        try:
             self._upload_one(job)
+        finally:
+            self._slot.release()
+            # 重试 Timer 排队期间保留 in-flight 标记（防止轮询在退避窗口重入队）；
+            # 其余出口（终态/异常）都释放。
+            if not job.rescheduled:
+                self._forget_active(job.event_id)
 
     def _upload_one(self, job: _UploadJob) -> None:
         try:
@@ -232,15 +283,35 @@ class EventUploader:
                 job.event_id, job.local_path,
             )
             return
-        if not src.is_dir():
-            logger.warning("event_uploader_missing_local event_id=%s path=%s", job.event_id, src)
-            return
 
         if job.plan_run_id is not None:
             dst_base = resolve_upload_devices_dir(self._nfs_root, int(job.plan_run_id))
         else:
             dst_base = Path(self._nfs_root) / "devices" / "unassigned" / job.event_id
         dst = dst_base / src.name
+
+        if not src.is_dir():
+            # #380: 本地目录缺失必须落到终态，否则 UPLOAD_PENDING 永久卡死、
+            # merge_task 每轮烧满等待预算、且被轮询无限重入队。
+            if dst.is_dir():
+                # 本地已删（prune 后 REMOTE patch 失败的竞态）而远端仍在：
+                # 信任远端副本，恢复 REMOTE 使 extract 可见。
+                logger.warning(
+                    "event_uploader_missing_local_remote_present event_id=%s dest=%s "
+                    "— trusting existing remote copy",
+                    job.event_id, dst,
+                )
+                self._patch_state(
+                    job, state="REMOTE", remote_path=str(dst),
+                    checksum=self._dir_sha256(dst),
+                )
+            else:
+                logger.warning(
+                    "event_uploader_missing_local event_id=%s path=%s — patch PULL_FAILED",
+                    job.event_id, src,
+                )
+                self._patch_state(job, state="PULL_FAILED")
+            return
 
         if dst.exists():
             remote_path = str(dst)
@@ -270,6 +341,7 @@ class EventUploader:
             logger.exception("event_uploader_failed event_id=%s attempt=%d", job.event_id, job.attempt)
             if job.attempt + 1 < _MAX_RETRIES:
                 job.attempt += 1
+                job.rescheduled = True
                 delay = min(300.0, 2.0 ** job.attempt)
                 threading.Timer(delay, lambda: self._queue.put(job)).start()
             else:
@@ -313,14 +385,21 @@ class EventUploader:
             logger.exception("event_uploader_patch_error event_id=%s", job.event_id)
 
     def _maybe_prune_local(self, job: _UploadJob, *, remote_path: str) -> None:
-        """上送成功后可选删除本地目录并回写 PRUNED（``STP_EVENT_UPLOADER_PRUNE_LOCAL=1``）。
+        """上送成功后可选删除本地目录并回写 PRUNED。
+
+        两个触发条件（#382）：
+        - ``STP_EVENT_UPLOADER_PRUNE_LOCAL=1``：按机灰度开关（#217，默认 0）；
+        - ``job.prune_after_upload``：HddSpill 溢出事件 —— 磁盘压力阀要求
+          上送校验后必须释放本地空间，不受灰度开关约束（恢复 #213 改造前
+          「验证拷贝后 rmtree」的保证）。
 
         Order (#217 / CodeRabbit): ``rmtree`` first; patch ``PRUNED`` only after
         local delete succeeds so ``state=PRUNED`` always means local is gone.
         """
-        if os.getenv("STP_EVENT_UPLOADER_PRUNE_LOCAL", "0").strip().lower() not in (
+        env_prune = os.getenv("STP_EVENT_UPLOADER_PRUNE_LOCAL", "0").strip().lower() in (
             "1", "true", "yes",
-        ):
+        )
+        if not (job.prune_after_upload or env_prune):
             return
         try:
             src = resolve_path_under_aee_local(job.local_path)
@@ -378,23 +457,24 @@ class EventUploader:
             )
 
     def _recover_pending(self) -> None:
-        """周期轮询待上传事件并入队。
+        """30s 快速轮询：把「等待首次上送」的事件入队（#380）。
 
-        continuous=1：轮询 LOCAL/UPLOAD_PENDING/UPLOADING/UPLOAD_FAILED
-        （全量 + 恢复中断的上传）。
-        continuous=0：轮询 UPLOAD_PENDING/UPLOADING/UPLOAD_FAILED（upload_task 标记后上送）。
+        continuous=1：LOCAL,UPLOAD_PENDING；continuous=0：UPLOAD_PENDING。
+        UPLOADING/UPLOAD_FAILED 的恢复（含 Agent 重启后卡在 UPLOADING 的行）
+        由 600s 的 ``_retry_failed_loop`` 承担 —— 两循环状态集不重叠，
+        重试上限才真正生效。
         """
         while not self._stop_evt.wait(_RECOVER_POLL_INTERVAL):
             if not self._configured:
                 continue
             try:
-                # ADR-0028 方案 A：continuous=1 上传全部 LOCAL；continuous=0 仅上传 UPLOAD_PENDING
                 _states = _recover_states()
                 resp = requests.get(
                     f"{self._api_url}/api/v1/agent/device-log-events",
                     params={
                         "host_id": self._host_id,
                         "state": _states,
+                        "limit": _RECOVER_POLL_LIMIT,
                     },
                     headers={"X-Agent-Secret": self._agent_secret},
                     timeout=15.0,
@@ -418,13 +498,22 @@ class EventUploader:
                 logger.exception("event_uploader_recover_error")
 
     def _retry_failed_loop(self) -> None:
+        """600s 慢速恢复：重试 UPLOAD_FAILED + 找回卡在 UPLOADING 的行（#380）。
+
+        in-flight 去重（`_active_ids`）保证正在传/退避中的事件不会被本循环
+        重复入队；只有终态失败或中断（Agent 重启）的行才会真正回到队列。
+        """
         while not self._stop_evt.wait(_RETRY_FAILED_INTERVAL):
             if not self._configured:
                 continue
             try:
                 resp = requests.get(
                     f"{self._api_url}/api/v1/agent/device-log-events",
-                    params={"host_id": self._host_id, "state": "UPLOAD_FAILED"},
+                    params={
+                        "host_id": self._host_id,
+                        "state": "UPLOAD_FAILED,UPLOADING",
+                        "limit": _RETRY_FAILED_LIMIT,
+                    },
                     headers={"X-Agent-Secret": self._agent_secret},
                     timeout=15.0,
                 )
