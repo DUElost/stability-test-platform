@@ -239,6 +239,27 @@ def _server_address() -> str:
         return hostname
 
 
+def _share_is_co_located(share_addr: str) -> bool:
+    """共享盘是否与控制面同机（IP/hostname 归一化后比较）。
+
+    直接字面比较会在「STP_AEE_SHARE_ADDRESS 写主机名、STP_FILE_SERVER_ADDRESS
+    写 IP」（或反之）时误判为分源，健康页右栏因此永远不可用（#205）。解析失败
+    回落原串比较，保证不炸；未配 share_addr 视为同机过渡期。
+    """
+    if not share_addr:
+        return True
+    try:
+        share_ip = socket.gethostbyname(share_addr)
+    except OSError:
+        share_ip = share_addr
+    local = _server_address()
+    try:
+        local_ip = socket.gethostbyname(local)
+    except OSError:
+        local_ip = local
+    return share_ip == local_ip
+
+
 def _require_shared_root() -> Path:
     """STP_AEE_NFS_ROOT 解析与门禁。
 
@@ -280,7 +301,7 @@ def _panel_jobs() -> tuple[str, str | None, str]:
     )
     control = _safe_prom_label(control_raw, _NODE_JOB_DEFAULT)
     share_addr = os.getenv("STP_AEE_SHARE_ADDRESS", "").strip()
-    co_located = (not share_addr) or share_addr == _server_address()
+    co_located = _share_is_co_located(share_addr)
     storage_raw = os.getenv("STP_STORAGE_NODE_JOB", "").strip()
     if storage_raw:
         # 非法 job 名不得回退到控制面 job：来源错了比没有更糟（假分源，见 #205）。
@@ -401,7 +422,7 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
     control_job, storage_job, share_addr = _panel_jobs()
     control_addr = _server_address()
     storage_addr = share_addr or control_addr
-    same_source = (not share_addr) or share_addr == control_addr
+    same_source = _share_is_co_located(share_addr)
 
     control_selector = f'job="{control_job}"'
     mount_selector = f'{control_selector},mountpoint="{_prom_string(str(root))}"'
@@ -447,17 +468,32 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
         start = end - hours * 3600
         # 约 72 个采样点：6h→5m、24h→20m、168h(7d)→140m；下限 60s。
         step = max(60, hours * 3600 // 72)
-        range_queries = {
-            "capacity_usage_pct": (
-                f"100 * (1 - node_filesystem_avail_bytes{{{mount_selector}}} / "
-                f"node_filesystem_size_bytes{{{mount_selector}}})"
-            ),
-            "cpu_usage_pct": control_queries["cpu"],
-            "memory_usage_pct": control_queries["memory"],
-            "nfs_requests_per_second": (
-                f"sum(rate(node_nfsd_requests_total{{{control_selector}}}[5m]))"
-            ),
-        }
+        # 趋势数据源跟随 storage 面板：分源已配 job 时刮存储机，避免把控制面
+        # 负载冒充存储机（#205）；分源未配 job 时历史留空（fail-closed），不刮
+        # 控制面。容量趋势例外——它来自控制面客户端挂载（NFS 客户端看到的
+        # avail/size 就是服务端磁盘本身），与控制面/存储机归属无关，始终按
+        # 控制面挂载点查询。
+        if storage_job:
+            history_job = storage_job
+        elif share_addr:
+            history_job = None
+        else:
+            history_job = control_job
+        range_queries: dict[str, str] = {}
+        if history_job:
+            history_selector = f'job="{history_job}"'
+            history_queries = _node_current_queries(history_job, None)
+            range_queries = {
+                "capacity_usage_pct": (
+                    f"100 * (1 - node_filesystem_avail_bytes{{{mount_selector}}} / "
+                    f"node_filesystem_size_bytes{{{mount_selector}}})"
+                ),
+                "cpu_usage_pct": history_queries["cpu"],
+                "memory_usage_pct": history_queries["memory"],
+                "nfs_requests_per_second": (
+                    f"sum(rate(node_nfsd_requests_total{{{history_selector}}}[5m]))"
+                ),
+            }
         try:
             for key, query in range_queries.items():
                 history[key] = prom.range(query, start=start, end=end, step=step)
