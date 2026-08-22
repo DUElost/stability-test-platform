@@ -141,8 +141,8 @@ PlanRun 终态
 | # | 场景 | is_final | 触发方式 | 说明 |
 |---|------|----------|---------|------|
 | 1 | 终态自动 | True | aggregator enqueue | PlanRun 终态自动触发 |
-| 2 | abort | True | 前端确认后 enqueue | 用户 abort → FAILED；scan/upload 自动，merge/extract 跳过（ADR-0028 D2） |
-| 3 | FAILED/DEGRADED | True | 前端确认后 enqueue | 中断/失败；scan/upload 自动，merge/extract 跳过（ADR-0028 D2） |
+| 2 | abort | True | 前端确认后 enqueue | 用户 abort → FAILED；scan/upload 自动，merge/extract 跳过（ADR-0028 D2；手动 merge/extract API 对 FAILED 返回 409） |
+| 3 | FAILED/DEGRADED | True | 前端确认后 enqueue | 中断/失败；scan/upload 自动，merge/extract 跳过（ADR-0028 D2；手动 merge/extract API 对 FAILED 返回 409） |
 | 4 | 手动归档 | True | POST /archive | 同时触发 archive_now + scan_now |
 | 5 | 自动归档间隔 | RUNNING：增量 False；终态：仅首次 True | `auto_archive_sweep` 周期（默认 120s） | 见下节 |
 
