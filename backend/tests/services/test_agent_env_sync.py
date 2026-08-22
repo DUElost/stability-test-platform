@@ -205,3 +205,41 @@ def test_merge_env_overrides_preserves_comments_and_blank_lines():
 
     assert new_lines[0] == ""
     assert new_lines[1] == "# keep"
+
+
+def test_flash_firmware_keys_propagate_when_set(monkeypatch):
+    """Honor 刷机自动化（flash_firmware v1.2.0）：版本 pin 与开关全 fleet
+    同值，控制面设置一次、hot-update 下发。"""
+    monkeypatch.setenv("STP_FLASH_FIRMWARE_VERSION", "8.0.1.100")
+    monkeypatch.setenv("STP_FLASH_FIRMWARE_ROOT", "/mnt/stp-aee/firmware")
+    monkeypatch.setenv("STP_FLASH_SKIP_IF_CURRENT", "false")
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert overrides["STP_FLASH_FIRMWARE_VERSION"] == "8.0.1.100"
+    assert overrides["STP_FLASH_FIRMWARE_ROOT"] == "/mnt/stp-aee/firmware"
+    assert overrides["STP_FLASH_SKIP_IF_CURRENT"] == "false"
+
+
+def test_flash_firmware_keys_omitted_when_unset(monkeypatch):
+    """空值不推：缺省版本走各族 NFS latest.json 指针，Agent 本地值保留。"""
+    for key in ("STP_FLASH_FIRMWARE_VERSION", "STP_FLASH_FIRMWARE_ROOT",
+                "STP_FLASH_SKIP_IF_CURRENT", "STP_FLASH_VERIFY_VERSION"):
+        monkeypatch.delenv(key, raising=False)
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    for key in ("STP_FLASH_FIRMWARE_VERSION", "STP_FLASH_FIRMWARE_ROOT",
+                "STP_FLASH_SKIP_IF_CURRENT", "STP_FLASH_VERIFY_VERSION"):
+        assert key not in overrides
+
+
+def test_flash_firmware_root_is_path_verified(monkeypatch):
+    """固件根是路径键：hot-update 后远端校验其存在，配错在推送时就暴露。"""
+    monkeypatch.setenv("STP_FLASH_FIRMWARE_ROOT", "/mnt/stp-aee/firmware")
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+    keys = agent_path_keys_to_verify(overrides)
+
+    assert "STP_FLASH_FIRMWARE_ROOT" in keys
+    assert "STP_FLASH_FIRMWARE_VERSION" not in keys

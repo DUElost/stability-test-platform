@@ -174,6 +174,11 @@ def scan_script_root(
     and the row is left untouched — publishing changed content requires a new
     version directory.
 
+    ``is_active`` is scan-managed in one direction only: versions missing from
+    disk are deactivated, but a row deactivated while its directory is still
+    present (admin endpoint / seed migration) is never resurrected —
+    re-activation is an explicit operator action.
+
     ``force_rebaseline=True`` is the explicit operator escape hatch for the
     case where that contract has *already* been broken upstream (e.g. a
     repo-wide mechanical rewrite edited published version directories in
@@ -273,9 +278,10 @@ def scan_script_root(
             existing.updated_at = now
             continue
 
-        if not existing.is_active:
-            existing.is_active = True
-            existing.updated_at = now
+        # A row deactivated while its directory is still on disk stays
+        # deactivated — that state only ever comes from the admin deactivate
+        # endpoint or a seed migration, and silently resurrecting it defeats
+        # those decisions. Re-activation is an explicit operator action.
         result.skipped += 1
 
     for row in existing_rows:
