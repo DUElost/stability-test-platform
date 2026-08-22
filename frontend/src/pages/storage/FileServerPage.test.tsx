@@ -172,12 +172,16 @@ describe('FileServerPage', () => {
 
     expect(await screen.findByText('916 GiB')).toBeInTheDocument();
     expect(mocks.fileServer).toHaveBeenCalledWith(6);
+    expect(screen.getByText('最近 6 小时')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '24H' }));
     await waitFor(() => expect(mocks.fileServer).toHaveBeenCalledWith(24));
 
     await user.click(screen.getByRole('button', { name: '7D' }));
     await waitFor(() => expect(mocks.fileServer).toHaveBeenCalledWith(168));
+    // 标题跟随本地选择而非返回数据：mock 数据 history.hours 仍是 6，
+    // 旧实现会在此显示「最近 6 小时」（keepPreviousData 占位数据）。
+    expect(await screen.findByText('最近 7 天')).toBeInTheDocument();
   });
 
   it('switches between control-plane and storage-server panels', async () => {
