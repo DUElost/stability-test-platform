@@ -59,6 +59,13 @@ _FLEET_ENV_KEYS: tuple[str, ...] = (
     # 注意：STP_MTBF_TASK_TIMES 故意**不**在此列——冒烟期=1、生产=100，
     # 且未来相机套件按项目分化，属 host 级手工 .env（见 mtbf-api.md）。
     "STP_MTBF_EXPECTED_TESTPOINT_COUNT",
+    # Honor 刷机自动化（flash_firmware v1.2.0，方向 A）：版本 pin 与开关，
+    # 全 fleet 同值。缺省版本由各机型族的 NFS latest.json 指针决定，
+    # 这四个键都是空值不推、显式设置才下发的逃生阀。
+    "STP_FLASH_FIRMWARE_VERSION",
+    "STP_FLASH_FIRMWARE_ROOT",
+    "STP_FLASH_SKIP_IF_CURRENT",
+    "STP_FLASH_VERIFY_VERSION",
 )
 
 # Agent-scoped keys: the control plane holds the *agent-side* value under a
@@ -82,6 +89,7 @@ AGENT_PATH_ENV_KEYS: frozenset[str] = frozenset(
         "STP_DEDUP_SCAN_PYTHON",
         "STP_DEDUP_SCAN_SCRIPT",
         "STP_NFS_ROOT",
+        "STP_FLASH_FIRMWARE_ROOT",
     }
 )
 
