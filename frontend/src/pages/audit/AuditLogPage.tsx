@@ -5,8 +5,8 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
+import { PaginationBar } from '@/components/ui/pagination-bar';
 import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -37,7 +37,7 @@ export default function AuditLogPage() {
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(50);
 
   // 哨兵值 'all' = 不过滤；B4 决议后全站下拉为原生 <select>，
   // 哨兵同时避免了空字符串 value 的歧义，API 侧不带该参数即全量
@@ -68,7 +68,7 @@ export default function AuditLogPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, filters]);
+  }, [page, filters, pageSize]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 拉取 effect 的同步 loading/分页置位
@@ -153,29 +153,29 @@ export default function AuditLogPage() {
             <Table className="min-w-[640px]">
               <TableHeader>
                 <TableRow className="border-b border-border bg-muted/50">
-                  <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>时间</TableHead>
-                  <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>用户</TableHead>
-                  <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>操作</TableHead>
-                  <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>资源</TableHead>
-                  <TableHead className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>IP</TableHead>
+                  <TableHead className={cn('text-left px-4 py-2 font-medium', TEXT.subtitle)}>时间</TableHead>
+                  <TableHead className={cn('text-left px-4 py-2 font-medium', TEXT.subtitle)}>用户</TableHead>
+                  <TableHead className={cn('text-left px-4 py-2 font-medium', TEXT.subtitle)}>操作</TableHead>
+                  <TableHead className={cn('text-left px-4 py-2 font-medium', TEXT.subtitle)}>资源</TableHead>
+                  <TableHead className={cn('text-left px-4 py-2 font-medium', TEXT.subtitle)}>IP</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {logs.map((log) => (
                   <TableRow key={log.id} className="border-b border-border/50 hover:bg-muted/50">
-                    <TableCell className={cn('px-4 py-3 text-xs', TEXT.subtitle)}>
+                    <TableCell className={cn('px-4 py-1.5 text-xs', TEXT.subtitle)}>
                       {formatDateTimeFull(log.timestamp)}
                     </TableCell>
-                    <TableCell className={cn('px-4 py-3', TEXT.body)}>{log.username || '-'}</TableCell>
-                    <TableCell className="px-4 py-3">
+                    <TableCell className={cn('px-4 py-1.5', TEXT.body)}>{log.username || '-'}</TableCell>
+                    <TableCell className="px-4 py-1.5">
                       <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', STATUS_CHIP.primary)}>
                         {log.action}
                       </span>
                     </TableCell>
-                    <TableCell className={cn('px-4 py-3', TEXT.subtitle)}>
+                    <TableCell className={cn('px-4 py-1.5', TEXT.subtitle)}>
                       {log.resource_type}{log.resource_id ? ` #${log.resource_id}` : ''}
                     </TableCell>
-                    <TableCell className={cn('px-4 py-3 text-xs font-mono', TEXT.subtitle)}>{log.ip_address || '-'}</TableCell>
+                    <TableCell className={cn('px-4 py-1.5 text-xs font-mono', TEXT.subtitle)}>{log.ip_address || '-'}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -183,28 +183,18 @@ export default function AuditLogPage() {
           </div>
 
           {/* Pagination */}
-          <div className={cn('flex items-center justify-between text-sm', TEXT.subtitle)}>
-            <span>共 {total} 条记录</span>
-            <div className="flex gap-2 items-center">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage(p => Math.max(0, p - 1))}
-                disabled={page === 0}
-              >
-                上一页
-              </Button>
-              <span className="px-3 py-1">第 {page + 1} 页</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage(p => p + 1)}
-                disabled={(page + 1) * pageSize >= total}
-              >
-                下一页
-              </Button>
-            </div>
-          </div>
+          <PaginationBar
+            page={page + 1}
+            totalPages={Math.max(1, Math.ceil(total / pageSize))}
+            total={total}
+            pageSize={pageSize}
+            canPreviousPage={page > 0}
+            canNextPage={(page + 1) * pageSize < total}
+            onGoToPage={(p) => setPage(p - 1)}
+            onNextPage={() => setPage((p) => p + 1)}
+            onPrevPage={() => setPage((p) => Math.max(0, p - 1))}
+            onChangePageSize={(size) => { setPageSize(size); setPage(0); }}
+          />
         </>
       )}
     </PageContainer>

@@ -95,6 +95,10 @@ export function ExpandableDeviceTable({
   const pageSize = 50;
   const selectable = !!onSelectionChange;
 
+  // 网络/标签列：全空时不渲染（B7——生产 515 台无 latency/tags，白占 ~15% 宽）
+  const hasNetworkData = devices.some((d) => d.network_latency != null);
+  const hasTagData = devices.some((d) => (d.tags?.length ?? 0) > 0);
+
   // 防抖搜索，减少不必要的过滤计算
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
 
@@ -375,7 +379,7 @@ export function ExpandableDeviceTable({
           <TableHeader>
             <TableRow className="sticky top-0 z-10 bg-muted/50 hover:bg-muted/50">
               {selectable && (
-                <TableHead className="w-10 p-3">
+                <TableHead className="w-10 px-3 py-2">
                   <input
                     ref={selectPageRef}
                     type="checkbox"
@@ -392,8 +396,8 @@ export function ExpandableDeviceTable({
               <TableHead className="min-w-[100px] font-medium">状态</TableHead>
               <TableHead className="min-w-[120px] font-medium">电量</TableHead>
               <TableHead className="min-w-[90px] font-medium">温度</TableHead>
-              <TableHead className="min-w-[110px] font-medium">网络</TableHead>
-              <TableHead className="min-w-[160px] font-medium">标签</TableHead>
+              {hasNetworkData && <TableHead className="min-w-[110px] font-medium">网络</TableHead>}
+              {hasTagData && <TableHead className="min-w-[160px] font-medium">标签</TableHead>}
               <TableHead className="min-w-[180px] font-medium">所属主机</TableHead>
               <TableHead className="min-w-[180px] font-medium text-right">最后活跃</TableHead>
             </TableRow>
@@ -415,7 +419,7 @@ export function ExpandableDeviceTable({
                     onClick={() => toggleRow(device.id)}
                   >
                     {selectable && (
-                      <TableCell className="p-3">
+                      <TableCell className="px-3 py-1.5">
                         <input
                           type="checkbox"
                           checked={selectedIds?.has(device.id) ?? false}
@@ -426,7 +430,7 @@ export function ExpandableDeviceTable({
                         />
                       </TableCell>
                     )}
-                    <TableCell className="p-3">
+                    <TableCell className="px-3 py-1.5">
                       <ChevronDown
                         className={cn(
                           'w-4 h-4 text-muted-foreground transition-transform',
@@ -434,7 +438,7 @@ export function ExpandableDeviceTable({
                         )}
                       />
                     </TableCell>
-                    <TableCell className="max-w-[260px] p-3">
+                    <TableCell className="max-w-[260px] px-3 py-1.5">
                       <div className="truncate font-mono text-sm text-foreground" title={device.serial}>
                         {device.serial}
                       </div>
@@ -452,13 +456,13 @@ export function ExpandableDeviceTable({
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="p-3 font-mono text-xs text-muted-foreground whitespace-nowrap">
+                    <TableCell className="px-3 py-1.5 font-mono text-xs text-muted-foreground whitespace-nowrap">
                       {device.build_display_id || '-'}
                     </TableCell>
-                    <TableCell className="p-3">
+                    <TableCell className="px-3 py-1.5">
                       <StatusBadge kind="device-ui" status={device.status} size="sm" />
                     </TableCell>
-                    <TableCell className="p-3">
+                    <TableCell className="px-3 py-1.5">
                       {device.battery_level != null ? (
                         <div className="flex items-center gap-2" title="最近一次上报电量">
                           <Progress
@@ -477,7 +481,7 @@ export function ExpandableDeviceTable({
                         <span className="text-muted-foreground/40">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="p-3">
+                    <TableCell className="px-3 py-1.5">
                       {device.temperature != null ? (
                         <span
                           className={cn('font-mono text-xs', temperatureTextClass(device.temperature))}
@@ -489,22 +493,25 @@ export function ExpandableDeviceTable({
                         <span className="text-muted-foreground/40">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="p-3">
-                      {device.network_latency != null ? (
-                        <div
-                          className={cn('flex items-center gap-1 font-mono text-xs', latencyTextClass(device.network_latency))}
-                          title="最近一次上报网络延迟"
-                        >
-                          <Wifi className="h-3.5 w-3.5" />
-                          {device.network_latency.toFixed(0)}ms
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1 text-xs text-muted-foreground/40">
-                          <WifiOff className="h-3.5 w-3.5" />—
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="p-3">
+                    {hasNetworkData && (
+                      <TableCell className="px-3 py-1.5">
+                        {device.network_latency != null ? (
+                          <div
+                            className={cn('flex items-center gap-1 font-mono text-xs', latencyTextClass(device.network_latency))}
+                            title="最近一次上报网络延迟"
+                          >
+                            <Wifi className="h-3.5 w-3.5" />
+                            {device.network_latency.toFixed(0)}ms
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1 text-xs text-muted-foreground/40">
+                            <WifiOff className="h-3.5 w-3.5" />—
+                          </div>
+                        )}
+                      </TableCell>
+                    )}
+                    {hasTagData && (
+                    <TableCell className="px-3 py-1.5">
                       {device.tags?.length ? (
                         <div className="flex max-w-[180px] items-center gap-1" title={device.tags.join(', ')}>
                           {device.tags.slice(0, 2).map((tag) => (
@@ -525,10 +532,11 @@ export function ExpandableDeviceTable({
                         <span className="text-muted-foreground/40">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="p-3 text-muted-foreground text-sm">
+                    )}
+                    <TableCell className="px-3 py-1.5 text-muted-foreground text-sm">
                       {device.host_name || '-'}
                     </TableCell>
-                    <TableCell className="p-3 text-right text-xs text-muted-foreground whitespace-nowrap">
+                    <TableCell className="px-3 py-1.5 text-right text-xs text-muted-foreground whitespace-nowrap">
                       {device.last_seen
                         ? formatDateTimeFull(device.last_seen)
                         : '-'}
