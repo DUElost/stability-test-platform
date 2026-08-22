@@ -18,6 +18,7 @@
 |------|------|
 | [`backend/agent/DEPLOY.md`](../../backend/agent/DEPLOY.md) | 安装、目录、systemd、热更新 |
 | [`agent-version-and-hot-update.md`](./agent-version-and-hot-update.md) | 协议版本门禁、code revision、滚动升级顺序 |
+| [`device-log-event-recovery.md`](./device-log-event-recovery.md) | 无 DLE 行的存量事件目录补录与重提取 |
 | [`linux-agent-ansible-runbook.md`](../linux-agent-ansible-runbook.md) | Ansible 批量 |
 | [`wsl-linux-agent-setup.md`](../wsl-linux-agent-setup.md) | WSL 联调 |
 | [`tools/ansible/README.md`](../../tools/ansible/README.md) | Playbook 说明 |

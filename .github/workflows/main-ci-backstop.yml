@@ -54,10 +54,13 @@ jobs:
           main_sha="$(gh api "repos/$REPO/commits/main" --jq .sha)"
           echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
 
-          # 复用已存在/进行中的运行；都不满足才 dispatch。
+          # 复用「进行中或已成功」的运行；已失败/取消的不复用（#384）——
+          # 否则每晚都盯着同一个失败 run 追加评论、永不重派新 CI，
+          # failure issue 无法自愈。ci.yml 无 push 触发、auto-merge commit
+          # 不触发 workflow_run，重试只能由这里显式 dispatch。
           run_id="$(
             gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$main_sha&per_page=20" \
-              --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "push") | select(.status != "completed" or .conclusion != null)][0].id // 0'
+              --jq '[.workflow_runs[] | select(.event == "workflow_dispatch" or .event == "push") | select(.status != "completed" or .conclusion == "success")][0].id // 0'
           )"
           if [ "$run_id" = "0" ]; then
             echo "No full CI run for main tip $main_sha; dispatching"
@@ -98,6 +101,9 @@ jobs:
             sleep 60
           done
           if [ "$status" != "completed" ]; then
+            # #384: 超时也要输出结论占位 —— notify-failure 门禁要求非空且非
+            # success/unknown/cancelled，空串会在 infra 错误时误开 failure issue。
+            echo "conclusion=unknown" >> "$GITHUB_OUTPUT"
             echo "Full CI run $RUN_ID did not complete within 3 hours" >&2
             exit 1
           fi
@@ -255,7 +261,16 @@ jobs:
     # 夜间全量 CI 失败时开 issue（同 label 的 open issue 复用、只追加评论，
     # 避免每晚刷屏）。零外部依赖：GITHUB_TOKEN 直接开 issue，失败进入 GitHub
     # 通知流。恢复后由 notify-recovery 自动关闭。
-    if: always() && !cancelled() && needs.verify-and-cleanup.outputs.ci_conclusion != 'success'
+    # #384: 只在「观察到真实失败结论」时通知 —— 空串（ensure/wait 步骤失败，
+    # 未观察到任何结论）与 unknown（等待超时）属基础设施问题，走本 workflow
+    # 自身的失败通知，不混进 CI 失败 issue；cancelled 是人工取消，且失败 run
+    # 次日会被重新 dispatch（ensure 步骤不复用非 success 的完成态 run），同样不开。
+    if: >-
+      always() && !cancelled() &&
+      needs.verify-and-cleanup.outputs.ci_conclusion != '' &&
+      needs.verify-and-cleanup.outputs.ci_conclusion != 'success' &&
+      needs.verify-and-cleanup.outputs.ci_conclusion != 'unknown' &&
+      needs.verify-and-cleanup.outputs.ci_conclusion != 'cancelled'
     needs: [verify-and-cleanup]
     runs-on: ubuntu-latest
     permissions:
@@ -270,10 +285,13 @@ jobs:
           set -euo pipefail
           gh label create "ci/backstop-failed" --repo "$REPO" --color d73a4a \
             --description "Main CI backstop failed (auto issue)" || true
+          # #384: REST issues 端点混返 PR（带同 label 的 PR 会被误评论/误关），
+          # select(.pull_request == null) 只留真 issue；#389: --jq 取首个，
+          # 避免 pipefail 下 head -n 1 提前关管道触发 jq SIGPIPE。
           existing="$(
             gh api --paginate \
               "repos/$REPO/issues?labels=ci%2Fbackstop-failed&state=open" \
-              --jq '.[].number' | head -n 1
+              --jq '[.[] | select(.pull_request == null)][0].number // ""'
           )"
           body="主 CI 兜底检查失败：${RUN_URL}
 
@@ -302,10 +320,11 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # #384: 同上 —— 过滤掉 PR，防止 gh issue close PATCH /issues/{n} 误关 PR。
           numbers="$(
             gh api --paginate \
               "repos/$REPO/issues?labels=ci%2Fbackstop-failed&state=open" \
-              --jq '.[].number'
+              --jq '.[] | select(.pull_request == null) | .number'
           )"
           failures=0
           for n in $numbers; do

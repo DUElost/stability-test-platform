@@ -481,3 +481,77 @@ def test_resolve_extract_event_src_rejects_traversal_without_raising(tmp_path) -
         )
         is None
     )
+
+
+def test_run_extract_sync_same_basename_only_first_row_archived(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#386: 同 basename 多行只标「真正落进 jira 的那一行」ARCHIVED。
+
+    其余行保持 REMOTE —— 盲目标 ARCHIVED 会让未拷贝目录永远进不了 jira
+    且无法靠重跑恢复（ARCHIVED 行重跑命中 dest 已存在即跳过）。
+    """
+    from backend.models.plan_run import PlanRun
+
+    nfs = tmp_path / "nfs"
+    devices = nfs / "devices" / str(sample_plan_run.id)
+    jira = nfs / "jira" / str(sample_plan_run.id)
+    name = "2026_0629_002306_121_db.71.JE"
+    primary = devices / name
+    primary.mkdir(parents=True)
+    (primary / "main.dbg").write_text("primary", encoding="utf-8")
+    # 同 basename 的第二个来源（如 unassigned 上传后补关联）
+    sibling_root = nfs / "devices" / "unassigned"
+    sibling = sibling_root / name
+    sibling.mkdir(parents=True)
+    (sibling / "main.dbg").write_text("sibling", encoding="utf-8")
+
+    merge_xls = tmp_path / "Result_MergeFiles.xls"
+    merge_xls.write_bytes(b"fake-merge-xls")
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(merge_xls),
+        artifact_type="merge_result_xls",
+        size_bytes=200,
+    ))
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="JE",
+        detected_at=datetime.now(timezone.utc),
+        state=EventState.REMOTE.value,
+        local_path=str(primary),
+        remote_path=str(primary),
+        plan_run_id=sample_plan_run.id,
+        host_id=sample_host.id,
+    ))
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="JE",
+        detected_at=datetime.now(timezone.utc),
+        state=EventState.REMOTE.value,
+        local_path=str(sibling),
+        remote_path=str(sibling),
+        plan_run_id=sample_plan_run.id,
+        host_id=sample_host.id,
+    ))
+    db_session.commit()
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    extracted = run_extract_sync(sample_plan_run.id)
+
+    assert extracted == 2  # primary dir + merge xls
+    assert (jira / name / "main.dbg").read_text(encoding="utf-8") == "primary"
+    db_session.expire_all()
+    rows = db_session.query(DeviceLogEvent).filter(
+        DeviceLogEvent.plan_run_id == sample_plan_run.id,
+    ).all()
+    by_content = {row.remote_path: row.state for row in rows}
+    assert by_content[str(primary)] == EventState.ARCHIVED.value
+    assert by_content[str(sibling)] == EventState.REMOTE.value
+    pr = db_session.get(PlanRun, sample_plan_run.id)
+    assert pr.run_context["extract"]["same_basename_left_remote"] == 1

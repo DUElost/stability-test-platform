@@ -18,8 +18,22 @@ asyncio_to_thread = asyncio.to_thread
 _MERGE_SYNC_TIMEOUT = 300
 _UPLOAD_WAIT_INTERVAL = 5
 _UPLOAD_WAIT_MAX = 660  # DLE pending poll budget (merge_task waits on REMOTE/ARCHIVED)
+# #381: merge_task 等 upload_task 标记水位线的预算（标记是快速 DB UPDATE，
+# 只需覆盖 SAQ 并发调度下 merge 先于 upload 到达的乱序窗口）。
+_UPLOAD_MARK_WAIT_MAX = 180
 # merge 子进程 + DLE wait + 余量
 _MERGE_TASK_SAQ_TIMEOUT = _MERGE_SYNC_TIMEOUT + _UPLOAD_WAIT_MAX + 120
+
+# #381: scan xls 引用事件的标记范围 —— 排除已达「远端可提取」的终态
+# （REMOTE/ARCHIVED/PRUNED，重复标记无意义）与 PULL_FAILED（本地无数据，
+# 标记后只会被 Agent 打回）。DETECTED/LOCAL 都可标记：标记窗口内仍在拉取的
+# 事件拉取完成后即待上送，不再依赖下一轮增量 scan 补标（最终轮没有下一轮）。
+_MARKABLE_EVENT_STATES = ("DETECTED", "LOCAL", "UPLOAD_PENDING", "UPLOADING", "UPLOAD_FAILED")
+
+
+def _escape_like(value: str) -> str:
+    """Escape LIKE wildcards（#389）：目录名含 ``_``/``%`` 时防误配兄弟事件。"""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 async def post_completion_task(ctx: dict, *, job_id: int) -> None:
@@ -257,7 +271,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         await queue.enqueue(
             SaqJob(
                 function="upload_task",
-                kwargs={"plan_run_id": plan_run_id},
+                kwargs={"plan_run_id": plan_run_id, "scan_round_id": scan_round_id},
                 key=f"upload:{plan_run_id}",
                 timeout=600,
                 retries=2,
@@ -288,11 +302,14 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
     logger.info("saq_scan_done plan_run=%d", plan_run_id)
 
 
-async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
+async def upload_task(ctx: dict, *, plan_run_id: int, scan_round_id: str | None = None) -> None:
     """ADR-0028 方案 A：scan 后标记有效事件为 UPLOAD_PENDING，由 Agent EventUploader 上送。
 
     只上送 scan xls Path 列引用的有效事件（过滤模型——CIFS 只收精选子集）。
     EventUploader 轮询 state=UPLOAD_PENDING 的事件并执行 copytree。
+
+    #381: 标记完成后写 ``run_context.upload_mark``（round 级水位线）——
+    merge_task 据此区分「标记前 pending==0」（乱序假就绪）与「标记后真的传完」。
     """
     from backend.core.database import SessionLocal
     from backend.services.dedup_extract import collect_upload_event_dir_names
@@ -308,17 +325,20 @@ async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
                     logger.info("saq_upload_no_event_dirs plan_run=%d", plan_run_id)
                     return 0
 
-                # Build LIKE patterns from dir basenames
+                # Build LIKE patterns from dir basenames (#389: escape wildcards)
                 from sqlalchemy import text as sa_text
-                patterns = [f"%/{d}" for d in event_dir_names]
-                clauses = " OR ".join(["device_log_event.local_path LIKE :p%d" % i for i in range(len(patterns))])
+                patterns = [f"%/{_escape_like(d)}" for d in event_dir_names]
+                clauses = " OR ".join(
+                    ["device_log_event.local_path LIKE :p%d ESCAPE '\\'" % i for i in range(len(patterns))]
+                )
                 params = {"p%d" % i: p for i, p in enumerate(patterns)}
+                state_list = ", ".join(f"'{s}'" for s in _MARKABLE_EVENT_STATES)
 
                 result = db.execute(
                     sa_text(
                         f"UPDATE device_log_event SET state = 'UPLOAD_PENDING', "
                         f"updated_at = now() "
-                        f"WHERE state = 'LOCAL' AND plan_run_id = :pid AND ({clauses})"
+                        f"WHERE state IN ({state_list}) AND plan_run_id = :pid AND ({clauses})"
                     ),
                     {"pid": plan_run_id, **params},
                 )
@@ -333,6 +353,21 @@ async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
                 db.close()
 
         marked = await asyncio_to_thread(_mark)
+
+        def _write_mark() -> None:
+            from backend.services.plan_run_context import write_run_context_section
+
+            db = SessionLocal()
+            try:
+                write_run_context_section(db, plan_run_id, "upload_mark", {
+                    "scan_round_id": scan_round_id,
+                    "marked": marked,
+                    "marked_at": datetime.now(timezone.utc).isoformat(),
+                })
+            finally:
+                db.close()
+
+        await asyncio_to_thread(_write_mark)
     except Exception:
         logger.exception("saq_upload_failed plan_run=%d", plan_run_id)
         raise
@@ -358,6 +393,39 @@ async def _enqueue_extract_task(plan_run_id: int) -> None:
         )
     )
     logger.info("saq_enqueued_extract plan_run=%d", plan_run_id)
+
+
+async def _wait_for_upload_mark(plan_run_id: int, scan_round_id: str | None) -> bool:
+    """#381: 等 upload_task 写入本轮 ``run_context.upload_mark`` 水位线。
+
+    SAQ worker 并发 10，merge_task 可能先于 upload_task 的标记 UPDATE 到达；
+    不等水位线的话 ``pending == 0`` 是「还没标」的假就绪 → 空 extract 的
+    SUCCESS 空报表。超时则放行（best-effort，与链路既有取舍一致），
+    缺口由 run_context.upload_summary 显性化。
+    """
+    from backend.core.database import SessionLocal
+    from backend.models.plan_run import PlanRun
+
+    def _mark_round_done() -> bool:
+        db = SessionLocal()
+        try:
+            pr = db.get(PlanRun, plan_run_id)
+            rc = pr.run_context if pr is not None else None
+            if isinstance(rc, dict):
+                mark = rc.get("upload_mark")
+                if isinstance(mark, dict) and mark.get("scan_round_id") == scan_round_id:
+                    return True
+            return False
+        finally:
+            db.close()
+
+    elapsed = 0
+    while elapsed < _UPLOAD_MARK_WAIT_MAX:
+        if await asyncio_to_thread(_mark_round_done):
+            return True
+        await asyncio_sleep(_UPLOAD_WAIT_INTERVAL)
+        elapsed += _UPLOAD_WAIT_INTERVAL
+    return False
 
 
 async def _wait_for_remote_device_log_events(plan_run_id: int) -> bool:
@@ -463,6 +531,14 @@ async def merge_task(
             plan_run_id, result,
         )
         return
+
+    # #381: 先等本轮标记水位线，再判定 pending——否则标记前的 pending==0
+    # 会让 merge 立即放行（空 extract 的 SUCCESS 空报表）。
+    if not await _wait_for_upload_mark(plan_run_id, scan_round_id):
+        logger.warning(
+            "saq_merge_upload_mark_timeout plan_run=%d round=%s — proceeding best-effort",
+            plan_run_id, scan_round_id,
+        )
 
     upload_ready = await _wait_for_remote_device_log_events(plan_run_id)
     if not upload_ready:

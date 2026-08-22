@@ -270,3 +270,92 @@ async def test_device_log_event_links_when_signal_arrives_later():
             db.close()
     finally:
         _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_update_accepts_legacy_unassigned_remote_path(monkeypatch, tmp_path):
+    """#389/#F7: 行被 associate 到 plan_run 后，Agent 后续 patch 仍可能带
+    它当初上传的 devices/unassigned/{event_id}/ 旧路径 —— 必须接受，
+    否则 400 丢掉状态更新（如 PRUNED）。"""
+    from fastapi import HTTPException
+
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    try:
+        create_ev = DeviceLogEventIn(
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.LOCAL.value,
+            local_path="/mnt/hdd/aee_events/dev/ke_unassigned",
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            r1 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[create_ev]),
+                db=db,
+                _=None,
+            )
+        event_id = r1.data["event_ids"][0]
+
+        # 模拟 associate：行已有 plan_run_id，Agent 带旧 unassigned 路径 patch
+        legacy_path = str(nfs / "devices" / "unassigned" / event_id / "ke_unassigned")
+        update_ev = DeviceLogEventIn(
+            id=event_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.PRUNED.value,
+            local_path="/mnt/hdd/aee_events/dev/ke_unassigned",
+            remote_path=legacy_path,
+            host_id=seed["host_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            r2 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[update_ev]),
+                db=db,
+                _=None,
+            )
+        assert r2.data["upserted"] == 1
+
+        import uuid as _uuid
+
+        db = SessionLocal()
+        try:
+            row = db.get(DeviceLogEvent, _uuid.UUID(event_id))
+            assert row.state == EventState.PRUNED.value
+            assert row.remote_path == legacy_path
+        finally:
+            db.close()
+
+        # 他行的 unassigned scope 仍必须 400（不允许越权写别的 event 目录）
+        foreign_path = str(nfs / "devices" / "unassigned" / "00000000-0000-0000-0000-000000000000" / "x")
+        bad_ev = DeviceLogEventIn(
+            id=event_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.PRUNED.value,
+            local_path="/mnt/hdd/aee_events/dev/ke_unassigned",
+            remote_path=foreign_path,
+            host_id=seed["host_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            with pytest.raises(HTTPException) as exc_info:
+                await ingest_device_log_events(
+                    DeviceLogEventBatchIn(events=[bad_ev]),
+                    db=db,
+                    _=None,
+                )
+        assert exc_info.value.status_code == 400
+    finally:
+        _cleanup(seed)

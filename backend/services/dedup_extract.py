@@ -82,6 +82,16 @@ def parse_event_dir_names_from_xls(
     return names
 
 
+def _log_same_basename_left(plan_run_id: int, dest_name: str, skipped_paths: list[str]) -> None:
+    """#386: 同 basename 但未进 jira 的行 —— WARNING 显性化，内容差异时人工复核。"""
+    if skipped_paths:
+        logger.warning(
+            "dedup_extract_same_basename_left plan_run=%d dest=%s left_remote=%s "
+            "— only the first row was archived; others stay REMOTE for manual re-extract",
+            plan_run_id, dest_name, skipped_paths,
+        )
+
+
 def run_extract_sync(plan_run_id: int) -> int:
     """Copy DLE REMOTE/ARCHIVED event dirs + merge xls → jira/{plan_run_id}/.
 
@@ -175,6 +185,7 @@ def run_extract_sync(plan_run_id: int) -> int:
         event_dirs_copied = 0
         existing_dirs = 0
         merge_xls_copied = 0
+        same_basename_left_remote = 0
         archived_remote_paths: list[str] = []
         extracted_dest_names: set[str] = set()
 
@@ -185,21 +196,30 @@ def run_extract_sync(plan_run_id: int) -> int:
         for dest_name, rows in by_dest.items():
             raw_paths = [item[0] for item in rows]
             src, devices_root = rows[0][1], rows[0][2]
+            # #386: 只把「真正落进 jira 的那一行」标 ARCHIVED。同 basename 的
+            # 其余行保持 REMOTE —— 一旦内容确有差异（理论上才可能同名），
+            # 盲目标 ARCHIVED 会让它们的目录永远进不了 jira 且无法重跑恢复。
+            markable_paths = [rows[0][0]]
             if dest_name in extracted_dest_names:
-                archived_remote_paths.extend(raw_paths)
+                archived_remote_paths.extend(markable_paths)
+                same_basename_left_remote += len(raw_paths) - len(markable_paths)
                 continue
             dest = path_under_root(jira_dir, dest_name)
             if dest.exists():
                 existing_dirs += 1
                 extracted_dest_names.add(dest_name)
-                archived_remote_paths.extend(raw_paths)
+                archived_remote_paths.extend(markable_paths)
+                same_basename_left_remote += len(raw_paths) - len(markable_paths)
+                _log_same_basename_left(plan_run_id, dest_name, raw_paths[1:])
                 continue
             try:
                 copytree_under_root(src, dest, root=devices_root, dest_root=jira_dir)
                 extracted += 1
                 event_dirs_copied += 1
                 extracted_dest_names.add(dest_name)
-                archived_remote_paths.extend(raw_paths)
+                archived_remote_paths.extend(markable_paths)
+                same_basename_left_remote += len(raw_paths) - len(markable_paths)
+                _log_same_basename_left(plan_run_id, dest_name, raw_paths[1:])
             except ArtifactPathError:
                 logger.warning(
                     "dedup_extract_skip_unsafe_remote plan_run=%d paths=%s",
@@ -248,6 +268,8 @@ def run_extract_sync(plan_run_id: int) -> int:
             "existing": existing_dirs,
             "merge_xls_copied": merge_xls_copied,
             "archived": len(archived_remote_paths),
+            # #386: 同 basename 未进 jira、保持 REMOTE 的行数（内容差异时人工复核）。
+            "same_basename_left_remote": same_basename_left_remote,
         })
         logger.info(
             "dedup_extract_done plan_run=%d extracted=%d remote_paths=%d",
