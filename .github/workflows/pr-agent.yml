@@ -40,6 +40,9 @@ jobs:
           DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           config.model: deepseek/deepseek-v4-flash
           config.fallback_models: '[]'
+          # 默认 log_level=DEBUG 会让失败排障日志膨胀到 ~50KB 且几乎全是工具内部
+          # 噪音；INFO 保留关键进度与错误，失败时可直接读日志定位。
+          config.log_level: INFO
           github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "review_requested"]'
           # 每次 push（含 dependabot 等 bot push）自动复评，保证当前 head 都有
           # 门禁；复评更新同一条 persistent comment，不刷屏。v4-flash 单次调用
@@ -106,6 +109,9 @@ jobs:
           DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           config.model: deepseek/deepseek-v4-flash
           config.fallback_models: '[]'
+          # 默认 log_level=DEBUG 会让失败排障日志膨胀到 ~50KB 且几乎全是工具内部
+          # 噪音；INFO 保留关键进度与错误，失败时可直接读日志定位。
+          config.log_level: INFO
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
