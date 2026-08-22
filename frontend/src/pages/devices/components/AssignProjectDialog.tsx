@@ -94,6 +94,10 @@ export function AssignProjectDialog({
               </SelectContent>
             </Select>
             {error && <p className={FORM.error}>{error}</p>}
+            <p className="rounded-md bg-warning/10 px-3 py-2 text-sm text-warning" data-testid="assign-seed-notice">
+              所选 {selectedCount} 台设备的归属将改为目标项目；当前属于 SEED / LEGACY
+              项目的设备会被直接迁移，不会出现冲突确认。
+            </p>
           </div>
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={onClose} disabled={isSubmitting}>

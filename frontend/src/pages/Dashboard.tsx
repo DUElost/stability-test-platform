@@ -3,7 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
+  AlertTriangle,
   BarChart3,
+  CheckCircle,
   Clock,
   Server,
   Smartphone,
@@ -277,6 +279,12 @@ export default function Dashboard() {
           </Card>
           {hostFailureError ? (
             <Card className="p-4">
+              <CardHeader className="px-0 pt-0 pb-3">
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <AlertTriangle size={16} className={CHART_SECTION.icon} />
+                  节点失败率排行 (30d)
+                </CardTitle>
+              </CardHeader>
               <InlineError message="主机故障率加载失败" onRetry={() => void refetchHostFailure()} />
             </Card>
           ) : (
@@ -287,6 +295,12 @@ export default function Dashboard() {
           )}
           {planSuccessError ? (
             <Card className="p-4">
+              <CardHeader className="px-0 pt-0 pb-3">
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <CheckCircle size={16} className={CHART_SECTION.icon} />
+                  方案成功率排行 (30d)
+                </CardTitle>
+              </CardHeader>
               <InlineError message="Plan 成功率加载失败" onRetry={() => void refetchPlanSuccess()} />
             </Card>
           ) : (
@@ -298,6 +312,12 @@ export default function Dashboard() {
           <div className="md:col-span-2">
             {passRateTrendError ? (
               <Card className="p-4">
+                <CardHeader className="px-0 pt-0 pb-3">
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    <TrendingUp size={16} className={CHART_SECTION.icon} />
+                    运行通过率趋势 (30d)
+                  </CardTitle>
+                </CardHeader>
                 <InlineError message="通过率趋势加载失败" onRetry={() => void refetchPassRateTrend()} />
               </Card>
             ) : (
@@ -307,20 +327,19 @@ export default function Dashboard() {
               />
             )}
           </div>
+          <Card className="p-4">
+            <CardHeader className="px-0 pt-0 pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Wifi size={16} className={CHART_SECTION.icon} />
+                主机在线率
+              </CardTitle>
+            </CardHeader>
+            <span className={`text-2xl font-bold ${ENTITY_STATUS_COLORS.host.online}`}>
+              {isLoading ? <Skeleton className="h-7 w-16" /> : `${(hostStats.online_rate * 100).toFixed(1)}%`}
+            </span>
+          </Card>
         </div>
       </div>
-
-      <Card className="p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Wifi className={`w-5 h-5 ${CHART_SECTION.icon}`} />
-            <span className={`text-sm font-medium ${TEXT.heading}`}>在线率</span>
-          </div>
-          <span className={`text-xl font-bold ${ENTITY_STATUS_COLORS.host.online}`}>
-            {isLoading ? <Skeleton className="h-7 w-16" /> : `${(hostStats.online_rate * 100).toFixed(1)}%`}
-          </span>
-        </div>
-      </Card>
     </PageContainer>
   );
 }
