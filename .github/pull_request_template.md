@@ -20,4 +20,4 @@
 
 - 不要直接 push main；auto-merge 已开启，不要手动点 Merge。
 - 敏感文件（`.env.backend`、`backend/.env`、`hosts.ini` 等）不得进入 diff。
-- CodeRabbit 是 best-effort 参考；需要它对当前 head 复评时评论 `@coderabbitai review`。
+- PR-Agent（DeepSeek v4-flash）自动审查每个 PR / push；security concerns 会阻断合入，其余意见仅参考；需要手动复评时评论 `/review`（仅协作者）。
