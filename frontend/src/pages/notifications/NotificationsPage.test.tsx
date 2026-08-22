@@ -330,7 +330,8 @@ describe('NotificationsPage', () => {
       fireEvent.click(screen.getByText('保存'));
 
       await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('保存失败'));
-      expect(screen.getByText('添加渠道', { selector: 'h3' })).toBeInTheDocument();
+      // Radix Dialog 迁移后标题由 DialogTitle 承载，改按对话框可访问名断言
+      expect(screen.getByRole('dialog', { name: '添加渠道' })).toBeInTheDocument();
     });
   });
 
