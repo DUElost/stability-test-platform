@@ -1,6 +1,14 @@
 import { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import { Grid3X3, List, Activity, AlertCircle } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { PANEL, SEGMENTED, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
@@ -215,24 +223,23 @@ function DeviceTable({
   );
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-[12px]">
-        <thead className={cn('bg-muted/50 text-xs font-semibold uppercase tracking-wider', TEXT.subtitle)}>
-          <tr>
-            <th className="px-3 py-2 text-left">Serial</th>
-            <th className="px-2 py-2 text-left">Host</th>
-            <th className="px-2 py-2 text-left">连接</th>
-            <th className="px-2 py-2 text-left">执行</th>
-            <th className="px-2 py-2 text-left">等待/占用</th>
-            <th className="px-2 py-2 text-left">阶段</th>
-            <th className="px-2 py-2 text-left">当前步骤</th>
-            <th className="px-2 py-2 text-right">巡检周期</th>
-            <th className="px-2 py-2 text-right">连击</th>
-            <th className="px-2 py-2 text-right">下次重试</th>
-            <th className="px-2 py-2 text-right">异常</th>
-          </tr>
-        </thead>
-        <tbody>
+    <Table className="text-[12px]">
+        <TableHeader className={cn('text-xs font-semibold uppercase tracking-wider', TEXT.subtitle)}>
+          <TableRow className="bg-muted/50 hover:bg-muted/50">
+            <TableHead className="h-auto px-3 py-2 text-left">Serial</TableHead>
+            <TableHead className="h-auto px-2 py-2 text-left">Host</TableHead>
+            <TableHead className="h-auto px-2 py-2 text-left">连接</TableHead>
+            <TableHead className="h-auto px-2 py-2 text-left">执行</TableHead>
+            <TableHead className="h-auto px-2 py-2 text-left">等待/占用</TableHead>
+            <TableHead className="h-auto px-2 py-2 text-left">阶段</TableHead>
+            <TableHead className="h-auto px-2 py-2 text-left">当前步骤</TableHead>
+            <TableHead className="h-auto px-2 py-2 text-right">巡检周期</TableHead>
+            <TableHead className="h-auto px-2 py-2 text-right">连击</TableHead>
+            <TableHead className="h-auto px-2 py-2 text-right">下次重试</TableHead>
+            <TableHead className="h-auto px-2 py-2 text-right">异常</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {devices.map((d) => {
             const failureClass =
               d.current_failure_streak >= 3
@@ -250,7 +257,7 @@ function DeviceTable({
                 : '—';
             const isHighlight = highlightJobId === d.job_id;
             return (
-              <tr
+              <TableRow
                 key={d.job_id}
                 ref={setRowRef(d.job_id)}
                 data-testid={`device-row-${d.job_id}`}
@@ -269,13 +276,13 @@ function DeviceTable({
                   isHighlight && 'bg-primary/10 ring-1 ring-primary/30',
                 )}
               >
-                <td className="px-3 py-2 font-mono text-xs">
+                <TableCell className="px-3 py-2 font-mono text-xs">
                   {d.device_serial || `Device #${d.device_id}`}
-                </td>
-                <td className={cn('px-2 py-2 font-mono text-xs', TEXT.subtitle)}>
+                </TableCell>
+                <TableCell className={cn('px-2 py-2 font-mono text-xs', TEXT.subtitle)}>
                   {d.host_id || '—'}
-                </td>
-                <td className="px-2 py-2">
+                </TableCell>
+                <TableCell className="px-2 py-2">
                   <span title={statusTooltip(d, now)}>
                     <StatusBadge
                       kind="device-link"
@@ -283,8 +290,8 @@ function DeviceTable({
                       size="sm"
                     />
                   </span>
-                </td>
-                <td className="px-2 py-2">
+                </TableCell>
+                <TableCell className="px-2 py-2">
                   <span title={statusTooltip(d, now)}>
                     <StatusBadge
                       kind="device-ui"
@@ -293,28 +300,28 @@ function DeviceTable({
                       spin={(d.job_exec_status ?? d.ui_status) === 'running'}
                     />
                   </span>
-                </td>
-                <td className={cn('px-2 py-2 text-xs', TEXT.subtitle)} data-testid={`device-wait-${d.job_id}`}>
+                </TableCell>
+                <TableCell className={cn('px-2 py-2 text-xs', TEXT.subtitle)} data-testid={`device-wait-${d.job_id}`}>
                   {waitLabel}
-                </td>
-                <td className={cn('px-2 py-2 text-xs uppercase', TEXT.subtitle)}>
+                </TableCell>
+                <TableCell className={cn('px-2 py-2 text-xs uppercase', TEXT.subtitle)}>
                   {d.current_stage}
-                </td>
-                <td className={cn('px-2 py-2 font-mono text-xs', TEXT.body)}>
+                </TableCell>
+                <TableCell className={cn('px-2 py-2 font-mono text-xs', TEXT.body)}>
                   {d.current_step || '—'}
-                </td>
-                <td className={cn('px-2 py-2 text-right font-mono text-xs', TEXT.body)}>
+                </TableCell>
+                <TableCell className={cn('px-2 py-2 text-right font-mono text-xs', TEXT.body)}>
                   #{d.patrol_cycle_count}
                   <span className="ml-1 text-[11px] text-muted-foreground/70">
                     ({d.patrol_success_cycle_count}✓ / {d.patrol_failed_cycle_count}✗)
                   </span>
-                </td>
-                <td className={`px-2 py-2 text-right font-mono text-xs ${failureClass}`}>
+                </TableCell>
+                <TableCell className={`px-2 py-2 text-right font-mono text-xs ${failureClass}`}>
                   {d.current_failure_streak > 0
                     ? `× ${d.current_failure_streak}`
                     : '—'}
-                </td>
-                <td className={cn('px-2 py-2 text-right text-xs', TEXT.subtitle)}>
+                </TableCell>
+                <TableCell className={cn('px-2 py-2 text-right text-xs', TEXT.subtitle)}>
                   {d.next_retry_at
                     ? fmtRelative(d.next_retry_at, now)
                     : d.manual_action === 'EXIT_REQUESTED'
@@ -322,20 +329,19 @@ function DeviceTable({
                     : d.manual_action === 'RETRY_NOW'
                     ? '已请求立即重试'
                     : '—'}
-                </td>
-                <td className={cn('px-2 py-2 text-right text-xs', TEXT.body)}>
+                </TableCell>
+                <TableCell className={cn('px-2 py-2 text-right text-xs', TEXT.body)}>
                   {d.log_signal_count > 0 ? (
                     <span className="text-warning">⚠ {d.log_signal_count}</span>
                   ) : (
                     '—'
                   )}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
-      </table>
-    </div>
+        </TableBody>
+      </Table>
   );
 }
 
