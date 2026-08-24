@@ -203,6 +203,7 @@ python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-24 | **v1.4（P1b 实施回写）**：§3 全部落地（#404 PR-C/D）——冻结/注入/五步门禁/#402 精确化见 [ADR-0030 v1.5](../adr/ADR-0030-multi-case-suite-management.md) 修订记录与 [Agent Note](../notes/feature/2026-08-24-suite-binding-gates.md)；实施取舍：门禁判定以活表+磁盘为基准、冻结块承担归因；注入在物化时点（WiFi 同点）而非快照；env 退役双层同批（摘 `_FLEET_ENV_KEYS` + `mtbf_check` v1.3.0 只读注入） |
 | 2026-08-24 | **v1.3（绑定机制重写）**：§3 按 ADR-0030 v1.4 重写——`plan.suite_id` 可空外键替代 plan_step.default_params 注入特例；注入不再以用户声明为前提；#402 守卫升级路径（精确匹配）；env 预置退役与 `_FLEET_ENV_KEYS` 摘除同批约束 |
 | 2026-08-20 | 初版：P0 验收后 P1 衔接梳理定稿（实体/端点/绑定/门禁/CLI/里程碑） |
 | 2026-08-20 | v1.2（P1a 实施回写）：① `global_params` 补 `test_set_attrs`、`exec_descs` 补 `times`（不还原则导出物丢 TakeScreenshot / testcase times）；② 三个渲染源列定为 `JSON` 而非 `JSONB`（JSONB 重排对象键破坏字节同构）；③ §7 #6 属性序容差消除，golden 判据收紧为逐字节一致 |

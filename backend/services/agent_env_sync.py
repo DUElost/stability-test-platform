@@ -52,11 +52,11 @@ _FLEET_ENV_KEYS: tuple[str, ...] = (
     # Unset on the control plane → not pushed (agents keep local value).
     # #287：单一开关，代码默认开；UPLOADER/CONTINUOUS 双键已删除。
     "STP_DEVICE_LOG_EVENT_ENABLED",
-    # MTBF P0（ADR-0030 D6）：套件 testpoint 期望数，全 fleet 同值。
-    # 控制面设置一次，hot-update 下发；脚本侧默认 0=只报绝对数。
-    # 注意：STP_MTBF_TASK_TIMES 故意**不**在此列——冒烟期=1、生产=100，
-    # 且未来相机套件按项目分化，属 host 级手工 .env（见 mtbf-api.md）。
-    "STP_MTBF_EXPECTED_TESTPOINT_COUNT",
+    # ADR-0030 P1b（#404 PR-D）：``STP_MTBF_EXPECTED_TESTPOINT_COUNT`` 已退役
+    # 摘除——fleet 单值旋钮在第二套套件上线当天即系统性出错。托管绑定改由
+    # dispatcher 按 plan.suite_id 自动注入 expected/project（STP_STEP_PARAMS
+    # 通道，P1 设计 §3.4）；mtbf_check v1.3.0+ 只读注入不再回落本键。
+    # STP_MTBF_TASK_TIMES / STP_MTBF_PROJECT 等 host 级手工键见 mtbf-api.md §1.5。
     # Honor 刷机自动化（flash_firmware v1.2.0，方向 A）：版本 pin 与开关，
     # 全 fleet 同值。缺省版本由各机型族的 NFS latest.json 指针决定，
     # 这四个键都是空值不推、显式设置才下发的逃生阀。
