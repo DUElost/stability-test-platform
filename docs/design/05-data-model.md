@@ -87,6 +87,13 @@
 | `task_schedule` | Cron → `plan_id` |
 | `resource_pool` | WiFi 等（`connect_wifi` 注入） |
 
+### 用例集（ADR-0030 P1a）
+
+| 表 | 说明 |
+|----|------|
+| `test_suite` | MTBF 用例集（≈ runtask.xml）：`name` 全局唯一、`project_id` 可空=通用套件、`export_dir`、`apk_binding`、`root_config`/`global_params`（JSON 保键序）、双漂移比对键 `source_sha256`/`exported_sha256`/`exported_content_sha256`、`is_active` |
+| `test_case` | 用例（粒度 = testpoint）：`suite_id` CASCADE、`(suite_id, name)` 唯一、`ordinal`、`times`、`enabled`、`exec_descs` JSON（1..N 执行描述，标识符原样保留不「修正」） |
+
 ---
 
 ## 4. 用户与安全
