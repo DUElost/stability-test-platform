@@ -94,10 +94,13 @@ def _patch_env_stack():
     return stack, mocks
 
 
-def test_inotifyd_only_pull_success_registers_dle_and_enqueues(
+def test_inotifyd_only_pull_success_registers_dle_without_enqueue(
     db, tmp_path, monkeypatch,
 ):
-    """Reconciler 未接管：inotifyd pull 成功 → DLE create + EventUploader enqueue。"""
+    """Reconciler 未接管：inotifyd pull 成功 → 仅注册 DLE（LOCAL）。
+
+    #287：过滤模型下 LOCAL 不直接入队——upload_task 标记 UPLOAD_PENDING
+    后由 EventUploader 轮询上送，watcher 不再发起恒被拒绝的入队。"""
     aee_root = tmp_path / "aee-local"
     event_dir = aee_root / "2026_0803_db.02.NE"
     event_dir.mkdir(parents=True)
@@ -125,15 +128,14 @@ def test_inotifyd_only_pull_success_registers_dle_and_enqueues(
             {"artifact_uri": str(event_dir), "size_bytes": 10},
         )
         mock_client_cls.from_env.assert_called_once()
-        mock_uploader_cls.is_enabled.assert_called()
 
     client.create_local_event.assert_called_once()
     kwargs = client.create_local_event.call_args.kwargs
     assert kwargs["local_path"] == event_dir.resolve()
     assert kwargs["job_id"] == 77
     assert kwargs["link_signal_seq_no"] is not None  # outbox 已落信号行
-    uploader.enqueue_local_event.assert_called_once()
-    assert uploader.enqueue_local_event.call_args.kwargs["event"]["id"] == "event-1"
+    # #287：LOCAL 不入队，等 upload_task 标记后由轮询消费。
+    uploader.enqueue_local_event.assert_not_called()
 
 
 def test_inotifyd_only_pull_failed_registers_pull_failed_event(db, monkeypatch):

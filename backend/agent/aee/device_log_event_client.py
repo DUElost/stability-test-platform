@@ -30,7 +30,8 @@ class DeviceLogEventClient:
 
     @classmethod
     def from_env(cls, *, api_url: str, agent_secret: str, host_id: str) -> Optional["DeviceLogEventClient"]:
-        if not _env_truthy("STP_DEVICE_LOG_EVENT_ENABLED", default=False):
+        # #287：默认开启；未配置连接参数时仍返回 None（自然 no-op）。
+        if not _env_truthy("STP_DEVICE_LOG_EVENT_ENABLED", default=True):
             return None
         if not api_url or not agent_secret or not host_id:
             return None

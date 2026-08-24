@@ -823,7 +823,7 @@ class AeeDbHistoryReconciler:
         event_subtype: str,
         aee_ts_utc: Optional[datetime],
     ) -> None:
-        """写入 DeviceLogEvent 并可选入队连续上送。"""
+        """写入 DeviceLogEvent（LOCAL；upload_task 标记后由 EventUploader 轮询上送）。"""
         if self._device_log_client is None:
             return
         event_type = resolve_device_log_event_type(event_type, event_subtype)
@@ -905,29 +905,8 @@ class AeeDbHistoryReconciler:
                 "aee_reconciler_device_log_event_fallback_signal_only serial=%s job=%d seq=%d",
                 self._serial, self._job_id, seq_no,
             )
-            return
-
-        try:
-            from ..event_uploader import EventUploader
-        except ImportError:
-            from agent.event_uploader import EventUploader
-
-        if EventUploader.is_enabled():
-            EventUploader.instance().enqueue_local_event(event={
-                "id": event_id,
-                "local_path": str(local_path),
-                "serial": self._serial,
-                "platform": self._platform,
-                "event_type": meta_event_type,
-                "detected_at": detected_at.isoformat(),
-                "plan_run_id": self._plan_run_id,
-                "job_id": self._job_id,
-                "host_id": self._host_id,
-            })
-            logger.debug(
-                "aee_reconciler_device_log_event_enqueued serial=%s event_id=%s",
-                self._serial, event_id,
-            )
+        # #287：过滤模型下 LOCAL 不直接入队——upload_task 按 scan xls 引用
+        # 标记 UPLOAD_PENDING 后由 EventUploader 轮询上送。
 
     def _register_pull_failed_device_log_event(
         self,

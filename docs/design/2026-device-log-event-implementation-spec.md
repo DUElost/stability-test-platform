@@ -148,8 +148,7 @@ enqueue(event_id)
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `STP_EVENT_UPLOADER_ENABLED` | `1` | EventUploader 运行（Agent 侧执行者） |
-| `STP_EVENT_UPLOADER_CONTINUOUS` | `0` | `0` 过滤模型（仅拉 `UPLOAD_PENDING`）；`1` 逃生阀（全量上送） |
+| `STP_DEVICE_LOG_EVENT_ENABLED` | `1` | DLE 注册 + EventUploader 单一开关（#287 合并双 flag，默认开）；过滤模型是唯一路径（`CONTINUOUS` 已删除） |
 
 ### 2.6 模式与回滚
 

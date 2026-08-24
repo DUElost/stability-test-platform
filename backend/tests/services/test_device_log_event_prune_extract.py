@@ -35,11 +35,11 @@ def test_pruned_events_count_as_upload_complete_and_list_for_extract(
     assert remote in list_remote_paths_for_extract(db_session, sample_plan_run.id)
 
 
-def test_pending_count_defaults_to_filter_model(
-    db_session, sample_plan_run, sample_host, sample_device, monkeypatch,
+def test_filter_model_excludes_local_from_pending_count(
+    db_session, sample_plan_run, sample_host, sample_device,
 ):
-    """ADR-0028 方案 A：默认过滤模型下，LOCAL（未被 upload_task 标记）不计入 pending。"""
-    monkeypatch.delenv("STP_EVENT_UPLOADER_CONTINUOUS", raising=False)
+    """ADR-0028 方案 A 过滤模型（#287：CONTINUOUS 分支已删除）：LOCAL
+    （未被 upload_task 标记）不计入 pending。"""
     db_session.add(DeviceLogEvent(
         id=uuid4(),
         serial=sample_device.serial,

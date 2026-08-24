@@ -74,7 +74,7 @@ DETECTED ──(adb pull 完成)──→ LOCAL
                                       └── HDD ≥95% → HddSpill → EventUploader(force=True) copytree → REMOTE
 ```
 
-`REMOTE` 仅由 **EventUploader** 写入（copytree + checksum 完成后）；其来源是 `upload_task` 标记的 `UPLOAD_PENDING`（PlanRun 触发，scan 筛选）或 HddSpill（磁盘压力溢出，`force=True`）。`upload_task` 本身不写 `REMOTE`，只做 `LOCAL → UPLOAD_PENDING` 标记。默认**不存在「连续上送全量」路径**（`STP_EVENT_UPLOADER_CONTINUOUS=1` 逃生阀除外）。
+`REMOTE` 仅由 **EventUploader** 写入（copytree + checksum 完成后）；其来源是 `upload_task` 标记的 `UPLOAD_PENDING`（PlanRun 触发，scan 筛选）或 HddSpill（磁盘压力溢出，`force=True`）。`upload_task` 本身不写 `REMOTE`，只做 `LOCAL → UPLOAD_PENDING` 标记。**不存在「连续上送全量」路径**——`STP_EVENT_UPLOADER_CONTINUOUS` 逃生阀已删除（#287），过滤模型是唯一路径。
 
 失败态：
 - `PULL_FAILED`：无 `local_path`。Collector 可按同一 trigger 重试 → `DETECTED`。
@@ -210,9 +210,8 @@ extract 双根遍历：
 - `a085656`：`upload_task` 注册进 `SAQ_FUNCTIONS`（漏注册导致 worker 不认识函数）
 - `1fb8e2a`：Agent `_recover_pending` 一次性 → 30s 周期轮询；recover/retry 入队 `force=True`（修复 Plan A 下 self-gate）
 
-**fleet 配置**（20 台 Agent，代码版本 `1fb8e2a`）：
-- `STP_EVENT_UPLOADER_ENABLED=1`（EventUploader 运行）
-- `STP_EVENT_UPLOADER_CONTINUOUS=0`（过滤模型——仅上送 `UPLOAD_PENDING`）
+**fleet 配置**（20 台 Agent，代码版本 `1fb8e2a`；#287 后两键合并为单一开关且代码默认开）：
+- `STP_DEVICE_LOG_EVENT_ENABLED=1`（DLE 注册 + EventUploader 运行）
 - `STP_EVENT_UPLOADER_PRUNE_LOCAL=1`（仅灰机 `192-0-2-143`，fleet 未开）
 
 **灰机验证**（PlanRun #209，Plan 7 / device 19 / host 8.143）：
