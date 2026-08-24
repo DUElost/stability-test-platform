@@ -13,7 +13,7 @@ import { UserMenu } from '@/components/ui/UserMenu';
 import { NotificationBell } from '@/components/ui/NotificationBell';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { api } from '@/utils/api';
-import { WS_DASHBOARD_ENDPOINT } from '@/config';
+import { DASHBOARD_SUBSCRIPTION } from '@/config';
 import { BORDER, ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
 
 /**
@@ -26,7 +26,7 @@ export default function AppShell() {
   const navigate = useNavigate();
   const sessionQ = useAuthSession();
   const currentUser = sessionQ.data;
-  const { isConnected: dashConnected } = useSocketIO(WS_DASHBOARD_ENDPOINT);
+  const { isConnected: dashConnected } = useSocketIO(DASHBOARD_SUBSCRIPTION);
   const { headerSlot } = useHeaderSlot();
   useCrossClientSync();
 

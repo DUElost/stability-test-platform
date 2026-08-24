@@ -55,7 +55,7 @@ vi.mock('../hooks/useRealtimeDashboard', () => ({
 }));
 
 vi.mock('../config', () => ({
-  WS_DASHBOARD_ENDPOINT: 'ws://localhost/ws/dashboard',
+  DASHBOARD_SUBSCRIPTION: 'dashboard',
 }));
 
 vi.mock('@/components/charts', () => ({

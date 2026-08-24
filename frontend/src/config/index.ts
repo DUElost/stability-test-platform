@@ -19,18 +19,6 @@ export const API_BASE_URL =
       ? 'http://localhost:8000'
       : window.location.origin;
 
-const envWsUrl = import.meta.env.VITE_WS_BASE_URL as string | undefined;
-
-export const WS_BASE_URL =
-  envWsUrl !== undefined && envWsUrl !== ''
-    ? envWsUrl
-    : isLocalhost
-      ? 'ws://localhost:8000'
-      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
-
-// WebSocket 端点 (legacy format — useSocketIO maps these to SocketIO rooms)
-export const WS_DASHBOARD_ENDPOINT = `${WS_BASE_URL}/ws/dashboard`;
-
 /** SocketIO dashboard namespace URL（空 API_BASE_URL 时走相对路径 /dashboard） */
 export function dashboardSocketUrl(): string {
   if (!envApiUrl && !isLocalhost) {
@@ -38,3 +26,9 @@ export function dashboardSocketUrl(): string {
   }
   return `${API_BASE_URL}/dashboard`;
 }
+
+/**
+ * useSocketIO 订阅描述符：dashboard 级全局事件（无 room）。
+ * SocketIO 连接本身固定走 dashboardSocketUrl()，该值仅决定订阅集。
+ */
+export const DASHBOARD_SUBSCRIPTION = 'dashboard';

@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
 import { formatDateTimeLocale } from '@/utils/format';
 import { useSocketIO } from '@/hooks/useSocketIO';
-import { WS_DASHBOARD_ENDPOINT } from '@/config';
+import { DASHBOARD_SUBSCRIPTION } from '@/config';
 import { BORDER, ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
 
 const SEVERITY_ICON = {
@@ -43,7 +43,7 @@ export function NotificationBell() {
     enabled: open,
   });
 
-  useSocketIO(WS_DASHBOARD_ENDPOINT, {
+  useSocketIO(DASHBOARD_SUBSCRIPTION, {
     onMessage: (msg) => {
       if (msg.type === 'notification:new') {
         qc.invalidateQueries({ queryKey: ['notification-unread-count'] });
