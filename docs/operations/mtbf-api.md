@@ -56,20 +56,28 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
   http://<control-plane>:8000/api/v1/mtbf/runtask/validate
 ```
 
-## §1.5 P0：Agent 侧 `STP_MTBF_*` env 通道（部署说明，2026-08-20 定稿）
+## §1.5 P0→P1b：MTBF 脚本配置通道（2026-08-24 随 ADR-0030 P1b 更新）
 
-脚本配置解析顺序 = `STP_STEP_PARAMS` > `STP_MTBF_*` env > 代码默认（`_lib.py:param_or_env`；
-平台无逐计划参数通道，ADR-0029 D1 挂起）。env 注入分两档：
+`mtbf_*` 脚本配置解析 = `STP_STEP_PARAMS` > `STP_MTBF_*` env（host 级手工）> 代码默认
+（`_lib.py:param_or_env`）。P1b 后 expected/project 两键由**托管绑定自动注入**：
+Plan 绑定套件（`plan.suite_id`）时，dispatcher 对 `mtbf_*` 步骤自动注入
+`expected_testpoint_count`（= 套件启用用例数）与 `project`（= 套件 export_dir），
+**无需任何 env 或 default_params 声明**；未绑定 Plan 行为不变。
 
 | 键 | 通道 | 说明 |
 |----|------|------|
-| `STP_MTBF_EXPECTED_TESTPOINT_COUNT` | **fleet 同步**（`_FLEET_ENV_KEYS`，控制面 `.env.backend` 设置后 hot-update 下发） | `mtbf_check` 的 `expected_per_round`（0/未配置=只报绝对数）。全 fleet 同值；套件变更时改控制面一次 + hot-update |
+| ~~`STP_MTBF_EXPECTED_TESTPOINT_COUNT`~~ | **已退役**（ADR-0030 P1b：摘出 `_FLEET_ENV_KEYS`，hot-update 不再下发） | 托管模式由注入替代。`mtbf_check` ≥v1.3.0 只读注入、不再回落本键；≤v1.2.0 旧版仍读 env——无注入时回落默认 0（只报绝对数，安全降级）。host `.env` 中历史残留行对绑定 Run 无影响（注入优先），可顺手删除 |
 | `STP_MTBF_TASK_TIMES` | **host 级手工 .env**（不在同步白名单） | 冒烟=1、生产=100（代码默认），未来相机套件按项目分化——故意不 fleet 同步。改后必须 `systemctl restart stability-test-agent.service` |
-| `STP_MTBF_PROJECT` / `STP_MTBF_AUTO_RESUME` / `STP_MTBF_INSTALL_APKS` / `STP_MTBF_RESOURCES_DIR` | host 级手工 .env（可选） | 代码默认 `legacy` / `true` / `true` / 相对 Agent 目录 |
+| `STP_MTBF_PROJECT` / `STP_MTBF_AUTO_RESUME` / `STP_MTBF_INSTALL_APKS` / `STP_MTBF_RESOURCES_DIR` | host 级手工 .env（可选） | 代码默认 `legacy` / `true` / `true` / 相对 Agent 目录；绑定套件的 Run 由注入的 `project` 覆盖 |
 
-**hot-update 对 .env 的语义**：只合并白名单键 + 安装目录派生键，**保留**非白名单行（含手工 `STP_MTBF_TASK_TIMES`）；
+**双层退役语义**（ADR-0020 版本不可变的直接推论）：控制面摘键（本层）+ 新脚本版本
+移除读取（`mtbf_check` v1.3.0）。已发布 v1.2.0 的 param_or_env 读取改不掉；
+引用它的 Plan 升级步骤版本前，行为回落为「env 缺失 → 只报绝对数」。
+
+**hot-update 对 .env 的语义**：只合并白名单键 + 安装目录派生键，**保留**非白名单行
+（含手工 `STP_MTBF_TASK_TIMES` 与退役键的历史残留行）；
 `agent/resources/mtbf/` 已加入 rsync `--exclude`（2026-08-20 修复：此前 `--delete` 每次 hot-update 清空 MTBF APK）。
-APK 三件套（`OfflineScriptManager.apk` + `ReliabilityUiautomatorTest.apk` + `ReliabilityUiautomatorTestTest.apk）
+APK 三件套（`OfflineScriptManager.apk` + `ReliabilityUiautomatorTest.apk` + `ReliabilityUiautomatorTestTest.apk`)
 放 `/opt/stability-test-agent/agent/resources/mtbf/{project}/`，带外部署，sha 与源目录一致（`/mnt/automation-toolkit/android-tools/stability_MTBF-Test/apk`）。
 
 **设备资格前置**：`mtbf_setup` v1.3.0 在 prefs 写入前校验 `adb root`（`id -u` 须为 0）；
@@ -104,7 +112,7 @@ user 构建（`ro.debuggable=0`）直接 fail-fast，需 userdebug/eng 工程包
 | POST | `/api/v1/test-suites` | 建套件；name 冲突 409；未知 `project_key` 404 |
 | GET | `/api/v1/test-suites/{id}` | 详情（含 `content_sha256` 与 `export_stale` 漂移标志） |
 | PUT | `/api/v1/test-suites/{id}` | 更新（display_name / root_config / project_key / apk_binding…） |
-| DELETE | `/api/v1/test-suites/{id}` | 软删（`is_active=false`）；引用守卫随 #404 绑定落地 |
+| DELETE | `/api/v1/test-suites/{id}` | 软删（`is_active=false`）；绑定本套件的 ACTIVE Run 在飞时 409 `SUITE_RUNS_ACTIVE`（#404 精确守卫） |
 | GET/POST | `/api/v1/test-suites/{id}/cases` | 用例列表 / 新增（suite 内重名 409） |
 | PUT/DELETE | `/api/v1/test-cases/{case_id}` | 整覆盖更新 / 删用例 |
 | POST | `/api/v1/test-suites/{id}/import` | multipart `file`=runtask.xml（可选 `global`=UiAutomatorTestData.xml），整体替换入库，记 `source_sha256` |

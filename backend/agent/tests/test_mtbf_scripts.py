@@ -62,6 +62,12 @@ def check_mod():
     return _load("mtbf_check_mod", "mtbf_check/v1.2.0/mtbf_check.py")
 
 
+@pytest.fixture(scope="module")
+def check_mod_v13():
+    """mtbf_check v1.3.0：expected 只读注入，env 预置退役（#404 PR-D）。"""
+    return _load("mtbf_check_mod_v13", "mtbf_check/v1.3.0/mtbf_check.py")
+
+
 @pytest.fixture()
 def real_runtask() -> bytes:
     return (_FIXTURES / "runtask.xml").read_bytes()
@@ -213,6 +219,44 @@ class TestCheckProgress:
         r2 = check_mod._run({})
         assert r2["success"] is True
         assert r2["progress"]["seq"] == 2
+
+
+# ---------------------------------------------------------------------------
+# mtbf_check v1.3.0 env 退役（ADR-0030 P1 设计 §3.4，#404 PR-D）
+# ---------------------------------------------------------------------------
+
+
+class TestCheckV13ParamsOnlyExpected:
+    def _patch_device_io(self, mod, monkeypatch, tmp_path, done=10):
+        monkeypatch.setattr(mod, "device_serial", lambda: "S13")
+        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
+        monkeypatch.setattr(mod, "_service_alive", lambda: True)
+        monkeypatch.setattr(mod, "_latest_run_dir", lambda: "run1")
+        monkeypatch.setattr(mod, "_count_testpoints", lambda run_dir: done)
+        monkeypatch.setattr(mod, "_log_bytes", lambda run_dir: 100)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+
+    def test_injected_param_still_wins(self, check_mod_v13, monkeypatch, tmp_path):
+        self._patch_device_io(check_mod_v13, monkeypatch, tmp_path)
+        r = check_mod_v13._run({"expected_testpoint_count": 130})
+        assert r["success"] is True
+        assert r["progress"]["expected_per_round"] == 130
+
+    def test_env_fallback_removed(self, check_mod_v13, monkeypatch, tmp_path):
+        """v1.2.0 会回落 STP_MTBF_EXPECTED_TESTPOINT_COUNT；v1.3.0 忽略之
+        （host .env 里可能残留退役前的值，不得再当基准）。"""
+        self._patch_device_io(check_mod_v13, monkeypatch, tmp_path)
+        monkeypatch.setenv("STP_MTBF_EXPECTED_TESTPOINT_COUNT", "999")
+        r = check_mod_v13._run({})
+        assert r["progress"]["expected_per_round"] == 0   # 只报绝对数
+
+    def test_missing_param_reports_absolute_only(self, check_mod_v13, monkeypatch, tmp_path):
+        """无绑定 Plan 无注入 → expected=0，脚本语义 = 只报绝对数（安全降级）。"""
+        self._patch_device_io(check_mod_v13, monkeypatch, tmp_path)
+        monkeypatch.delenv("STP_MTBF_EXPECTED_TESTPOINT_COUNT", raising=False)
+        r = check_mod_v13._run({})
+        assert r["progress"]["expected_per_round"] == 0
+        assert r["progress"]["testpoints_done"] == 10
 
 
 # ---------------------------------------------------------------------------
