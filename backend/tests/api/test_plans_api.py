@@ -547,6 +547,47 @@ class TestPlanAttribution:
         match = [r for r in rows if r["key"] == "mtbf"]
         assert match and match[0]["display_name"] == "MTBF"
 
+    def test_suite_binding_lifecycle(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        """ADR-0030 v1.4（#404 PR-B）：suite_name 绑定/改绑/解绑与输出。"""
+        from backend.models.suite import TestSuite
+
+        s1 = TestSuite(name="MTBF-bind-1", root_config={})
+        s2 = TestSuite(name="MTBF-bind-2", root_config={})
+        db_session.add_all([s1, s2])
+        db_session.commit()
+
+        create = client.post("/api/v1/plans", json={
+            "name": _uniq("plan"), "steps": _minimal_steps(),
+            "suite_name": s1.name,
+        }, headers=auth_headers)
+        assert create.status_code == 201, create.text
+        assert create.json()["data"]["suite_name"] == s1.name
+
+        # 改绑
+        upd = client.put(f"/api/v1/plans/{create.json()['data']['id']}", json={
+            "suite_name": s2.name,
+            "expected_updated_at": create.json()["data"]["updated_at"],
+        }, headers=auth_headers)
+        assert upd.status_code == 200, upd.text
+        assert upd.json()["data"]["suite_name"] == s2.name
+
+        # 显式 null 解绑 → 回到 P0 文件真源模式
+        upd2 = client.put(f"/api/v1/plans/{create.json()['data']['id']}", json={
+            "suite_name": None,
+            "expected_updated_at": upd.json()["data"]["updated_at"],
+        }, headers=auth_headers)
+        assert upd2.status_code == 200, upd2.text
+        assert upd2.json()["data"]["suite_name"] is None
+
+    def test_create_unknown_suite_404(self, client, auth_headers, sample_script):
+        resp = client.post("/api/v1/plans", json={
+            "name": _uniq("plan"), "steps": _minimal_steps(),
+            "suite_name": "no-such-suite",
+        }, headers=auth_headers)
+        assert resp.status_code == 404
+
 
 class TestAppendChainTail:
     """#281 P1:原子链尾追加——单事务内锁定链尾、校验版本、创建新 Plan、

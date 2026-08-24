@@ -970,6 +970,8 @@ export interface Plan {
   project_key?: string | null;
   /** ADR-0029 D6（#405）：专项 key（字典见 GET /specialties） */
   specialty_key?: string | null;
+  /** ADR-0030 v1.4：绑定套件名（对外引用键；null = P0 文件真源模式） */
+  suite_name?: string | null;
   created_by?: string | null;
   created_at: string;
   updated_at: string;
@@ -997,6 +999,8 @@ export interface PlanCreate {
   /** ADR-0029（#405）：归属项目/专项 key */
   project_key?: string | null;
   specialty_key?: string | null;
+  /** ADR-0030 v1.4（#404）：绑定套件名 */
+  suite_name?: string | null;
   steps?: PlanStepCreate[];
 }
 
@@ -1021,6 +1025,8 @@ export interface PlanUpdate {
   /** ADR-0029（#405）：语义随字段是否出现——显式 null = 清除归属 */
   project_key?: string | null;
   specialty_key?: string | null;
+  /** ADR-0030 v1.4：显式 null = 解绑套件（回到 P0 文件真源模式） */
+  suite_name?: string | null;
   steps?: PlanStepCreate[];
   /**
    * 乐观锁令牌（#268 多Worker B3）：带上加载时 Plan.updated_at；
