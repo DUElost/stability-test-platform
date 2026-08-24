@@ -1,8 +1,8 @@
 """ADR-0030 P1a — TestSuite / TestCase 对外 schema。
 
-套件对外键是 ``name``（外部 agent 的 ``suite_key``）；数字 id 仍出现在 URL
-（``/test-suites/{id}``），与 ADR-0029 的 project_key 口径不同——套件是配置
-实体、可重命名，稳定引用用 id，可读引用用 name。
+套件对外键是 ``name``（PlanCreate/PlanUpdate 的 ``suite_name``；数字 id 仍
+出现在 URL ``/test-suites/{id}``），与 ADR-0029 的 project_key 口径不同——
+套件是配置实体、可重命名，稳定引用用 id，可读引用用 name。
 """
 
 from __future__ import annotations

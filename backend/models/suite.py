@@ -37,8 +37,9 @@ class TestSuite(Base):
     __tablename__ = "test_suite"
 
     id                     = Column(Integer, primary_key=True)
-    # 管理键：外部 agent 以 `suite_key` 引用（plan_step.default_params）。
-    # 全局唯一——跨项目同名不允许，分化靠 project_id 区分导出目录（§7 #7）。
+    # 管理键：对外以 `name` 引用（PlanCreate/PlanUpdate 的 suite_name；
+    # plan.suite_id 为内部数字外键）。全局唯一——跨项目同名不允许，
+    # 分化靠 project_id 区分导出目录（§7 #7）。
     name                   = Column(String(128), nullable=False)
     display_name           = Column(String(256), nullable=True)
     # 空 = 通用套件（现 MTBF）；非空 = 项目套件（相机 MTBF，APK↔项目严格对应）。

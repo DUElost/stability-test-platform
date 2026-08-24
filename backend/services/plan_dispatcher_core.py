@@ -382,6 +382,35 @@ def inject_wifi_params(pipeline: dict, wifi_params: dict | None) -> dict:
     return pipeline
 
 
+def inject_suite_params(pipeline: dict, suite_params: dict | None) -> dict:
+    """ADR-0030 §3.4 — push managed-suite params into ``mtbf_*`` steps.
+
+    Second (and last) sanctioned deviation from "params are purely
+    ``default_params``" alongside :func:`inject_wifi_params`: when a Plan is
+    bound to a managed test suite, the dispatcher computes
+    ``{expected_testpoint_count, project}`` from the frozen
+    ``run_context.dispatch_suite`` and fills them into every step whose action
+    is a ``script:mtbf_*`` script — no user-declared default_params required.
+    The values flow to the device scripts through the existing
+    ``STP_STEP_PARAMS`` channel; unbound plans are untouched (env fallback in
+    the scripts still applies).
+
+    Existing values win — a plan that hardcodes either key is left alone.
+    """
+    if not suite_params:
+        return pipeline
+    for _, step in iter_lifecycle_steps(pipeline):
+        action = step.get("action") or ""
+        if not action.startswith("script:mtbf_"):
+            continue
+        params = dict(step.get("params") or {})
+        for key, value in suite_params.items():
+            if not params.get(key):
+                params[key] = value
+        step["params"] = params
+    return pipeline
+
+
 def build_preview(plan: Plan, lifecycle: dict, device_ids: list[int]) -> dict:
     steps = list(iter_lifecycle_steps({"lifecycle": lifecycle}))
     return {

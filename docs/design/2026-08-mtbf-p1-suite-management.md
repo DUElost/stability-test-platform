@@ -89,8 +89,8 @@
 
 ## 3. D2 绑定与派发门禁（P1b）
 
-> **v1.3 修订**：绑定机制从「`plan_step.default_params.suite_key` 注入特例」改为
-> **`plan.suite_id` 可空外键**（ADR-0030 v1.4）。§3 全节按外键方案表述。
+> **v1.3 重写**：绑定机制为 **`plan.suite_id` 可空外键**（ADR-0030 v1.4，
+> NULL = P0 文件真源模式不加门禁）。§3 全节按外键方案表述；旧机制叙述只留在 §8。
 
 ### 3.1 Plan ↔ Suite 绑定
 
@@ -203,7 +203,7 @@ python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 
 | 日期 | 变更 |
 |------|------|
-| 2026-08-24 | **v1.3（绑定机制重写）**：§3 按 ADR-0030 v1.4 重写——`plan.suite_id` 可空外键替代 `default_params.suite_key` 注入特例；注入不再以用户声明为前提；#402 守卫升级路径（精确匹配）；env 预置退役与 `_FLEET_ENV_KEYS` 摘除同批约束 |
+| 2026-08-24 | **v1.3（绑定机制重写）**：§3 按 ADR-0030 v1.4 重写——`plan.suite_id` 可空外键替代 plan_step.default_params 注入特例；注入不再以用户声明为前提；#402 守卫升级路径（精确匹配）；env 预置退役与 `_FLEET_ENV_KEYS` 摘除同批约束 |
 | 2026-08-20 | 初版：P0 验收后 P1 衔接梳理定稿（实体/端点/绑定/门禁/CLI/里程碑） |
 | 2026-08-20 | v1.2（P1a 实施回写）：① `global_params` 补 `test_set_attrs`、`exec_descs` 补 `times`（不还原则导出物丢 TakeScreenshot / testcase times）；② 三个渲染源列定为 `JSON` 而非 `JSONB`（JSONB 重排对象键破坏字节同构）；③ §7 #6 属性序容差消除，golden 判据收紧为逐字节一致 |
 | 2026-08-20 | v1.1（评审修订）：① 导出一致性改**结构性检测**——新增 `exported_content_sha256`（库内容规范化指纹 `content_fingerprint`），门禁第 3 步计算检测库漂移，删除全部端点「置空」纪律（枚举法漏 3 条变更路径的洞：POST cases / DELETE cases / PUT case 改非 name 字段）；sha_mismatch 恢复「磁盘漂移」字面语义，两类漂移各有检测器；② 渲染器定稿产出 CRLF（与 P0 设备面输入同构），golden 容差仅剩属性序 |
