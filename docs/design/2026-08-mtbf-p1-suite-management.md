@@ -23,7 +23,7 @@
 | 列 | 类型 | 说明 |
 |----|------|------|
 | `id` | PK | |
-| `name` | str unique 非空 | **管理键**（外部 agent 引用：`suite_key`）；导入时默认取 runtask `name`，可重命名 |
+| `name` | str unique 非空 | **管理键 / 对外引用键**（外部 agent 与 Plan 绑定均以 `name` 引用，见 §3.1 `suite_name`）；导入时默认取 runtask `name`，可重命名 |
 | `display_name` | str 可空 | 展示名 |
 | `project_id` | FK test_project 可空 | 空 = 通用套件（现 MTBF）；必填 = 项目套件（相机 MTBF，APK↔项目严格对应） |
 | `export_dir` | str 可空 | 导出目录名（`{NFS}/mtbf/{export_dir}/`）；空 → 有 `project_id` 用 project key，否则 `legacy`（兼容 P0 部署现状） |
