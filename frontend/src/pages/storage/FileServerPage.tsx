@@ -23,6 +23,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { InlineEmpty } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -106,6 +107,33 @@ function metricTone(value: number | null, warning: number, critical: number): st
   return STATUS_TEXT_COLORS.success;
 }
 
+/** 与 Agent / 控制面 API 一致：usage_percent 为 2 位小数，避免 toFixed(1) 向上取整误读。 */
+function formatUsagePercent(value: number): string {
+  return `${value.toFixed(2)}%`;
+}
+
+function isHistoryEmpty(history: FileServerOverview['history']): boolean {
+  return (
+    history.capacity_usage_pct.length === 0
+    && history.cpu_usage_pct.length === 0
+    && history.memory_usage_pct.length === 0
+    && history.nfs_requests_per_second.length === 0
+  );
+}
+
+function historyTrendEmptyMessage(data: FileServerOverview): string {
+  if (data.alerts.some((alert) => alert.code === 'STORAGE_METRICS_UNAVAILABLE')) {
+    return '分源且未配置存储机 Prometheus job，历史趋势暂不可用';
+  }
+  if (!data.control_plane.monitoring.prometheus_available) {
+    return 'Prometheus 不可用，无法加载趋势数据';
+  }
+  if (data.storage_server.monitoring.error) {
+    return '存储机指标不可用，趋势数据可能不完整';
+  }
+  return '所选时间范围内暂无趋势数据';
+}
+
 function MetricCard({
   icon: Icon,
   label,
@@ -155,8 +183,23 @@ function mergeHistory(data: FileServerOverview['history']): ChartPoint[] {
   return [...points.values()].sort((a, b) => a.timestamp - b.timestamp);
 }
 
-function CapacityChart({ data }: { data: FileServerOverview['history'] }) {
+function CapacityChart({
+  data,
+  emptyMessage,
+}: {
+  data: FileServerOverview['history'];
+  emptyMessage?: string;
+}) {
   const points = useMemo(() => mergeHistory(data), [data]);
+  if (isHistoryEmpty(data)) {
+    return (
+      <div className="h-60 w-full" data-testid="file-server-history-chart">
+        <InlineEmpty chart className="h-60">
+          {emptyMessage ?? '所选时间范围内暂无趋势数据'}
+        </InlineEmpty>
+      </div>
+    );
+  }
   return (
     <div className="h-60 w-full" data-testid="file-server-history-chart">
       <ResponsiveContainer width="100%" height="100%">
@@ -171,7 +214,7 @@ function CapacityChart({ data }: { data: FileServerOverview['history'] }) {
           <Tooltip
             labelFormatter={(value) => formatUnixSeconds(Number(value))}
             formatter={(value, name) => [
-              `${Number(value).toFixed(1)}%`,
+              formatUsagePercent(Number(value)),
               name === 'capacity' ? '存储' : name === 'cpu' ? 'CPU' : '内存',
             ]}
           />
@@ -446,7 +489,7 @@ function AgentStatusSection({
                         }
                       />
                       <span className={cn('font-mono text-xs', metricTone(disk.usage_percent, 90, 95))}>
-                        {disk.usage_percent.toFixed(1)}%
+                        {formatUsagePercent(disk.usage_percent)}
                       </span>
                     </div>
                   ) : (
@@ -581,7 +624,10 @@ export default function FileServerPage() {
               </div>
             </div>
             <div className="p-3">
-              <CapacityChart data={data.history} />
+              <CapacityChart
+                data={data.history}
+                emptyMessage={historyTrendEmptyMessage(data)}
+              />
             </div>
           </section>
 
