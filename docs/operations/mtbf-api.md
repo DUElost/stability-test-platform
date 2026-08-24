@@ -89,10 +89,55 @@ user 构建（`ro.debuggable=0`）直接 fail-fast，需 userdebug/eng 工程包
 > `backend/agent/tests/fixtures/mtbf/` 已有脱敏样例，`.gitattributes` 标 `-text` 字节级快照）。
 > 与 AGENTS.md「只文档化位置、不复制明文」体例一致。
 
-## §2 P1：用例集管理（占位）
+## §2 P1：用例集管理（已上线，随 ADR-0030 v1.3 定稿）
 
-`test_suite` / `test_case` CRUD + import / export / validate / export-to-tool-dir（约 13 个端点）。
-决策见 [ADR-0030](../adr/ADR-0030-multi-case-suite-management.md) D2/D4；端点草案见研究 §5.5；
-写权限模型（`X-Agent-Secret` 只读或限定 import/export）P1 评审定。
+`test_suite` / `test_case` 管理面 14 个端点（OpenAPI 为字段真源，本页给权限矩阵与常用流）。
 
-> **端点定稿后补本页**：curl 示例 + 权限矩阵 + 常见操作（导入既有 130 条 → 改 1 条 → 导出 → 派发，全程有审计）。
+**鉴权**：读 = 任意登录用户；写（POST/PUT/DELETE/import/export-to-tool-dir）= **仅 admin**。
+全部写操作 `record_audit`（ADR-0015）。
+
+### 端点一览
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/test-suites` | 列表（含 `export_dir` / `case_count` / `exported_sha256` / `is_active`） |
+| POST | `/api/v1/test-suites` | 建套件；name 冲突 409；未知 `project_key` 404 |
+| GET | `/api/v1/test-suites/{id}` | 详情（含 `content_sha256` 与 `export_stale` 漂移标志） |
+| PUT | `/api/v1/test-suites/{id}` | 更新（display_name / root_config / project_key / apk_binding…） |
+| DELETE | `/api/v1/test-suites/{id}` | 软删（`is_active=false`）；引用守卫随 #404 绑定落地 |
+| GET/POST | `/api/v1/test-suites/{id}/cases` | 用例列表 / 新增（suite 内重名 409） |
+| PUT/DELETE | `/api/v1/test-cases/{case_id}` | 整覆盖更新 / 删用例 |
+| POST | `/api/v1/test-suites/{id}/import` | multipart `file`=runtask.xml（可选 `global`=UiAutomatorTestData.xml），整体替换入库，记 `source_sha256` |
+| GET | `/api/v1/test-suites/{id}/export` | 渲染 runtask.xml；响应头 `X-Export-Stale: 1` = 库已改未导出 |
+| GET | `/api/v1/test-suites/{id}/global` | 渲染 UiAutomatorTestData.xml |
+| POST | `/api/v1/test-suites/{id}/validate` | 校验**库内**数据（与 §1 文件输入分工） |
+| POST | `/api/v1/test-suites/{id}/export-to-tool-dir` | admin。原子写两文件到 `{STP_AEE_NFS_ROOT}/mtbf/{export_dir}/` 并记双漂移基线 |
+
+### 关键语义
+
+- **双漂移检测器**：`export_stale` 由库内容指纹计算得出（任何写路径都不清快照列）——「库改了没导出」在 export 响应头与详情 `export_stale` 同时可见；「导出后磁盘被手改」由门禁比对 `exported_sha256` 捕获（#404 接入 precheck）。
+- **在途守卫（#402）**：存在引用 `mtbf_*` 脚本的 QUEUED/PRECHECK/RUNNING PlanRun 时，export-to-tool-dir 返回 **409 `ACTIVE_MTBF_RUNS`**（附 run id 清单）；admin 可 `?force=true` 越过（审计记 `active_guard_forced`）。长跑中途覆盖清单即换弹，默认拦截。
+- **export_dir 解析**：显式 `export_dir` > 项目 key > `legacy`（兼容 P0 部署）。
+
+### 典型闭环（ADR-0030 D6 验收信号）
+
+```bash
+# 1. 导入既有 130 条（multipart）
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  -F "file=@runtask.xml" -F "global=@UiAutomatorTestData.xml" \
+  http://<control-plane>:8000/api/v1/test-suites/$SUITE_ID/import
+
+# 2. 改 1 条用例
+curl -sS -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"tp_001","ordinal":1,"times":2,"enabled":true,
+       "exec_descs":[{"class":"C","method":"m","args":{}}]}' \
+  http://<control-plane>:8000/api/v1/test-cases/$CASE_ID
+
+# 3. 校验 + 导出落工具目录（有 MTBF 长跑在飞时此处 409）
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" \
+  http://<control-plane>:8000/api/v1/test-suites/$SUITE_ID/validate
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" \
+  "http://<control-plane>:8000/api/v1/test-suites/$SUITE_ID/export-to-tool-dir"
+```
+
+> **待办（P1c/P1b）**：CLI（`tools/` 下命名二选一后回写 ADR 修订记录）；`X-Agent-Secret` 双通道写权限；precheck 五步门禁消费 `exported_sha256`——跟踪 [#404](https://github.com/DUElost/stability-test-platform/issues/404)。

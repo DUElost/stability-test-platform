@@ -1,6 +1,6 @@
 # ADR-0030: 多用例平台化管理（test_suite / test_case + 外部管理面）
 
-- 状态：**Proposed**
+- 状态：**Accepted**（2026-08-24 推进；P0 真机验收 + P1a 实体/管理面已合入，P1b 绑定门禁与 P2 见修订记录 v1.3）
 - 优先级：**P0（专项接入主线，可先行独立交付）+ P1（多用例实体与管理面）**——见 D6
 - 目标里程碑：M7
 - 日期：2026-08-19
@@ -14,6 +14,7 @@
 |------|------|------|
 | 2026-08-19 | v1.1（评审修正） | 按评审六项必改修正：① 新增「与 ADR-0029 的关系（显式和解）」——test_suite 是 ADR-0029 非目标 ExecutionProfile 实体族的**例外子集**，不复活挂起决策；② D3 套件项目匹配改为本 ADR 自有门禁 **D3b**，不再引用挂起 D5；③ 脚本命名统一为 `mtbf_setup`/`mtbf_check`/`mtbf_finish` 三件套（monkey 先例），禁止两种命名并存；④ 补 Plan↔Suite↔plan_snapshot↔precheck 绑定说明（D2）；⑤ 优先级改双轨 P0+P1；⑥ 状态传播补齐 DOC-MAP / CLAUDE.md / 05-data-model（实施时）。**状态传播挂靠位**：ADR 头部状态行 / 正文修订记录 / reviews 对应节 / adr README 清单行 / adr README 里程碑行 / DOC-MAP Living 表 / CLAUDE.md 决策表（对齐 ADR-0029 v2.3.1 教训） |
 | 2026-08-20 | v1.2（P0 真机验收） | **D6 P0 验收信号达成**（PlanRun #217/#218，设备 395，abort→teardown→finish 协议）：init `suite_sha256` ✓、PROGRESS + patrol-heartbeat ✓、NFS JSON 落盘 + §6 复核 0 不一致 ✓。验收记录见 [Agent Note](../notes/feature/2026-08-20-mtbf-p0-scripts-and-validate.md)。ADR 整体仍为 Proposed（P1 实体/管理面未实施）。 |
+| 2026-08-24 | v1.3（状态推进 + P1a 记账） | **状态 Proposed → Accepted**：P0 已验收（v1.2）+ P1 实体/管理面已合入 main（`test_suite`/`test_case` 表、14 端点 CRUD/import/export/validate/export-to-tool-dir、全量 `record_audit`；增补双漂移检测器 `content_fingerprint` + `exported_content_sha256`——区分「库改了没导出」与「导出物被手改」，超出本文 D5 原文，属实现层增强；渲染三列用 JSON 保键序逐字节同构；原子写落地）。同批补记两项缺口修复：#401（dispatcher 冻结 `project_id`/`build_version` 快照）、#402（export-to-tool-dir 在途守卫弱版 409 + `force` 审计留痕——D2 的可先行半段，精确匹配待绑定字段）。**仍未做**：D2/D3b 绑定与 precheck 五步门禁（#404）、CLI（P1c）、P2 前端与 `test_case_result`。七挂靠位同步：本行 / 头部 / adr README 清单行 / adr README M7 行 / CLAUDE.md 决策表 / DOC-MAP / [mtbf-api.md §2](../operations/mtbf-api.md) 定稿 |
 
 ## 背景
 
@@ -144,7 +145,7 @@ ADR-0029 非目标明确放弃版本化 ExecutionProfile 实体族（5 张表：
 - **前置条件**：配置/产物通道见 [P0 设计 §4](../design/2026-08-mtbf-p0-runner-design.md)（方案已定：清单/全局参数走中心存储
   `{STP_AEE_NFS_ROOT}/mtbf/{project}/`，APK 走 Agent resources；与 PowerCycle 对齐，P0 实施 PR 登记存储角色表）。
 - **文档**：研究文档（已入库）+ 本 ADR + [`docs/operations/mtbf-api.md`](../operations/mtbf-api.md)（§1 P0 validate 定稿 /
-  §2 P1 占位）+ `docs/design/05-data-model.md`（**实施 P1 时更新**，加 test_suite/test_case 表行）。
+  §2 P1 已定稿）+ `docs/design/05-data-model.md`（**实施 P1 时更新**，加 test_suite/test_case 表行）。
 
 ## 落地与后续动作
 
@@ -169,7 +170,7 @@ ADR-0029 非目标明确放弃版本化 ExecutionProfile 实体族（5 张表：
 - 背景分析：[`docs/reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md`](../reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md)
 - **P0 设计**：[`docs/design/2026-08-mtbf-p0-runner-design.md`](../design/2026-08-mtbf-p0-runner-design.md)（脚本三件套契约 / realresult schema 实测 / 配置与产物通道）
 - **P0 验收记录**：[`docs/notes/feature/2026-08-20-mtbf-p0-scripts-and-validate.md`](../notes/feature/2026-08-20-mtbf-p0-scripts-and-validate.md)（PlanRun #214–#218、fleet 收口、closure 判据）
-- **接口运维**：[`docs/operations/mtbf-api.md`](../operations/mtbf-api.md)（§1 P0 validate / §2 P1 占位）
+- **接口运维**：[`docs/operations/mtbf-api.md`](../operations/mtbf-api.md)（§1 P0 validate / §2 P1 管理面）
 - [ADR-0020](../adr/ADR-0020-plan-step-one-shot-migration.md)（脚本目录契约 / default_params 不可变）
 - [ADR-0029](../adr/ADR-0029-project-taxonomy-and-param-layering.md)（项目登记簿 / 脚本路由 / sha256 留痕补偿机制）
 - [ADR-0015](../adr/ADR-0015-audit-log-system.md)（审计）、[ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)（方案 C 存储，8900 取消暴露）

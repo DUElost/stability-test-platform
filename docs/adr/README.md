@@ -78,7 +78,7 @@
 | [ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md) | 控制面水平扩展（Leader Election + 多实例） | Accepted | P2 | M6 | P3-1..P3-3 已落地（opt-in 多实例）；默认单实例零变化 |
 | [ADR-0028](./ADR-0028-device-log-event-and-continuous-upload.md) | 设备日志事件实体 + PlanRun FAILED 触发上送 + 存储路径收敛（方案 A，2026-08-12 修订） | Accepted | P1 | 阶段 3 | 方案 A 生产生效（2026-08-13）：upload_task=控制面长期筛选者（LOCAL→UPLOAD_PENDING），EventUploader=Agent 侧唯一执行者（copytree/重试/PRUNE）；#287：CONTINUOUS 逃生阀删除，过滤模型是唯一路径；DLE 单一开关默认开 |
 | [ADR-0029](./ADR-0029-project-taxonomy-and-param-layering.md) | 项目分类域（TestProject 登记簿 + facet 分类） | Accepted | P1 | M7 | v2.4：登记簿产品面只列人工 `USER` 项目；P1 六个回填 key 为 `SEED`，不进 `/projects`。项目模型收窄为**登记簿**（客户 / 关系 / 形态 / jira 映射）；APK 差异由**脚本端设备指纹路由**吸收（`backend=auto` 先例，路由表住工具目录 + step_trace 记 sha256）。**D1/D4/D5/D7/D8/D9 与 D6 的 `applicable` 已挂起**（原文保留、各有复议触发条件，未触发前不得重提）；生效的是 D2/D3/D6 `specialty`。落地 P1–P3 最小形态。背景分析见 [reviews](../reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md) |
-| [ADR-0030](./ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（test_suite / test_case + 外部管理面） | Proposed | P0+P1 | M7 | D6 **P0 真机验收✅**（2026-08-20 PlanRun #218，见 Agent Note）；P1 实体/管理面未实施。D1–D5 决策方向已定。背景：[reviews](../reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) |
+| [ADR-0030](./ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（test_suite / test_case + 外部管理面） | Accepted | P0+P1 | M7 | v1.3：P0 真机验收✅（PlanRun #218）+ P1a 实体/管理面✅合入（14 端点、双漂移检测器、原子写）；#401 快照 / #402 在途守卫弱版已补。**未做**：D2/D3b 绑定 + precheck 五步门禁（#404）、CLI（P1c）、P2 前端与 `test_case_result`。背景：[reviews](../reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) |
 
 ## Proposed 里程碑看板（2026 上半年）
 
@@ -90,7 +90,7 @@
 | M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
 | M5 | 2026-07 | ADR-0026 P0–P2（规模化执行正确性 + 控制面减负） |
 | M6 | 待定 | ADR-0027（控制面水平扩展；重启条件见 ADR-0025 D1） |
-| M7 | 待定 | ADR-0029（项目分类域·登记簿；D1/D4/D5/D7/D8/D9 挂起，落地 P1–P3 最小形态）；ADR-0030（**P0 已验收** / P1 Proposed；0030 依赖 0029 `test_project`，不复活 0029 挂起决策） |
+| M7 | 进行中 | ADR-0029（项目分类域·登记簿；D1/D4/D5/D7/D8/D9 挂起，落地 P1–P3 最小形态）；ADR-0030（**Accepted**：P0 ✅ / P1a ✅ / P1b 未做 #404；0030 依赖 0029 `test_project`，不复活 0029 挂起决策） |
 
 ## 维护约定
 
