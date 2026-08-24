@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, User
 from backend.core.database import get_db
-from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
@@ -156,7 +155,6 @@ def get_results_summary(
         )
 
     try:
-        hidden_plan_ids = hidden_legacy_plan_ids(db)
 
         # ADR-0029 P2：project_key 可选过滤（D9 挂起，缺省 = 全量）。
         # 过滤统一经 PlanRun.project_id——Plan.project_id 是可变当前归属，
@@ -184,8 +182,6 @@ def get_results_summary(
         if target_project_id is not None:
             status_query = status_query.join(PlanRun, JobInstance.plan_run_id == PlanRun.id)
         status_query = _scope_by_project(status_query)
-        if hidden_plan_ids:
-            status_query = status_query.filter(JobInstance.plan_id.notin_(tuple(hidden_plan_ids)))
         status_counts = status_query.group_by(JobInstance.status).all()
         runs_by_status = RunsByStatus()
         for raw_status, count in status_counts:
@@ -208,8 +204,6 @@ def get_results_summary(
             JobInstance.status,
             func.count(JobInstance.id),
         ).join(Plan, JobInstance.plan_id == Plan.id)
-        if hidden_plan_ids:
-            type_query = type_query.filter(JobInstance.plan_id.notin_(tuple(hidden_plan_ids)))
         # 按 Plan.name 分组需保留 Plan join；project 过滤额外 join PlanRun（快照语义）
         if target_project_id is not None:
             type_query = type_query.join(PlanRun, JobInstance.plan_run_id == PlanRun.id)
@@ -239,8 +233,6 @@ def get_results_summary(
             .order_by(JobInstance.id.desc())
         )
         recent_query = _scope_by_project(recent_query)
-        if hidden_plan_ids:
-            recent_query = recent_query.filter(JobInstance.plan_id.notin_(tuple(hidden_plan_ids)))
         recent_rows = recent_query.limit(limit).all()
         recent_job_ids = [job.id for job, _plan_name, _project_key in recent_rows]
         snapshot_rows = []
@@ -283,10 +275,6 @@ def get_results_summary(
         if target_project_id is not None:
             total_jobs_query = total_jobs_query.join(PlanRun, JobInstance.plan_run_id == PlanRun.id)
         total_jobs_query = _scope_by_project(total_jobs_query)
-        if hidden_plan_ids:
-            total_jobs_query = total_jobs_query.filter(
-                JobInstance.plan_id.notin_(tuple(hidden_plan_ids))
-            )
         total_jobs = int(total_jobs_query.scalar() or 0)
         risk_counts = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
         if total_jobs > 0:
@@ -301,10 +289,6 @@ def get_results_summary(
             if target_project_id is not None:
                 snapshot_query = snapshot_query.join(PlanRun, JobInstance.plan_run_id == PlanRun.id)
             snapshot_query = _scope_by_project(snapshot_query)
-            if hidden_plan_ids:
-                snapshot_query = snapshot_query.filter(
-                    JobInstance.plan_id.notin_(tuple(hidden_plan_ids))
-                )
             all_snapshot_rows = snapshot_query.all()
             seen_jobs = set()
             for job_id, output in all_snapshot_rows:

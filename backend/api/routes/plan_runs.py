@@ -78,7 +78,6 @@ from backend.core.job_timeout_config import (
     UNKNOWN_GRACE_SECONDS,
     running_heartbeat_timeout_seconds,
 )
-from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
@@ -181,7 +180,6 @@ def _plan_run_capabilities(pr: PlanRun) -> dict:
         PlanRunStatus.SUCCESS.value,
         PlanRunStatus.PARTIAL_SUCCESS.value,
         PlanRunStatus.FAILED.value,
-        PlanRunStatus.DEGRADED.value,
     }
     return {
         "abort": pr.status in (
@@ -745,7 +743,6 @@ _TERMINAL_PR_STATUSES  = {
     PlanRunStatus.SUCCESS.value,
     PlanRunStatus.PARTIAL_SUCCESS.value,
     PlanRunStatus.FAILED.value,
-    PlanRunStatus.DEGRADED.value,
 }
 
 
@@ -846,9 +843,8 @@ def get_plan_run_chain(
         tail = chain_runs[-1]
         tail_plan = db.get(Plan, tail.plan_id)
         if tail_plan and tail_plan.next_plan_id and not tail.next_plan_triggered:
-            hidden_plan_ids_set = hidden_legacy_plan_ids(db)
             next_plan = db.get(Plan, tail_plan.next_plan_id)
-            if next_plan is not None and next_plan.id not in hidden_plan_ids_set:
+            if next_plan is not None:
                 # 推断 block 原因
                 blocked = False
                 reason = None
@@ -2161,7 +2157,7 @@ def _aggregate_run_log_archive(
     pending_jobs = 0
     failed_jobs = 0
 
-    _TERMINAL_JOB = {"COMPLETED", "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED", "ABORTED"}
+    _TERMINAL_JOB = {"COMPLETED", "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "ABORTED"}
     if job_rows:
         job_ids = [r.id for r in job_rows]
         job_statuses = {r.id: r.status for r in job_rows}

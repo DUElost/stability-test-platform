@@ -556,7 +556,7 @@ class TestPrepareAndCompleteIntegration:
 
     @pytest.mark.parametrize(
         "terminal_status",
-        ["SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED"],
+        ["SUCCESS", "PARTIAL_SUCCESS", "FAILED"],
     )
     def test_complete_does_not_materialize_jobs_for_terminal_plan_run(
         self, db_session, dispatch_fixture, terminal_status,

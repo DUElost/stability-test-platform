@@ -112,7 +112,6 @@ const PLAN_RUN: Record<string, StatusEntry> = {
   SUCCESS: { label: "成功", variant: "success", Icon: CheckCircle2 },
   PARTIAL_SUCCESS: { label: "部分成功", variant: "warning", Icon: AlertTriangle },
   FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
-  DEGRADED: { label: "降级", variant: "warning", Icon: AlertTriangle },
 };
 
 const RISK: Record<string, StatusEntry> = {

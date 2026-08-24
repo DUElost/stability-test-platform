@@ -22,10 +22,9 @@ _TERMINAL_PLAN_RUN_STATUSES = {
     PlanRunStatus.SUCCESS.value,
     PlanRunStatus.PARTIAL_SUCCESS.value,
     PlanRunStatus.FAILED.value,
-    PlanRunStatus.DEGRADED.value,
 }
 
-_NOTIFY_AS_FAILED = {PlanRunStatus.FAILED, PlanRunStatus.DEGRADED}
+_NOTIFY_AS_FAILED = {PlanRunStatus.FAILED}
 
 
 def _resolve_plan_run_status(

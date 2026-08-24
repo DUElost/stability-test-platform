@@ -109,7 +109,6 @@ export const PLAN_RUN_HERO_SURFACE = {
   SUCCESS: 'border-success/25 bg-gradient-to-br from-success/10 to-card',
   PARTIAL_SUCCESS: 'border-warning/25 bg-gradient-to-br from-warning/10 to-card',
   FAILED: 'border-destructive/25 bg-gradient-to-br from-destructive/10 to-card',
-  DEGRADED: 'border-warning/30 bg-gradient-to-br from-warning/15 to-card',
 } as const;
 
 export const PLAN_RUN_HERO_BADGE = {
@@ -119,7 +118,6 @@ export const PLAN_RUN_HERO_BADGE = {
   SUCCESS: 'border-success/40 bg-card text-success',
   PARTIAL_SUCCESS: 'border-warning/40 bg-card text-warning',
   FAILED: 'border-destructive/40 bg-card text-destructive',
-  DEGRADED: 'border-warning/50 bg-card text-warning',
 } as const;
 
 /** PlanRun Topbar 状态胶囊（含 ring） */
@@ -130,7 +128,6 @@ export const PLAN_RUN_STATUS_PILL: Record<PlanRunHeroStatus, string> = {
   SUCCESS: 'bg-success/10 text-success ring-success/30',
   PARTIAL_SUCCESS: 'bg-warning/10 text-warning ring-warning/30',
   FAILED: 'bg-destructive/10 text-destructive ring-destructive/30',
-  DEGRADED: 'bg-info/10 text-info ring-info/30',
 } as const;
 
 export type PlanRunHeroStatus = keyof typeof PLAN_RUN_HERO_SURFACE;

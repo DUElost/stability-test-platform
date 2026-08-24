@@ -11,7 +11,6 @@ from typing import Any, List, Union
 from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.host_identity import allocate_host_id
-from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.core.ssh_security import (
     SshSecurityConfigError,
     encrypt_ssh_password,
@@ -94,11 +93,6 @@ def _get_syncable_agent_secret() -> str:
     return secret
 
 
-def _visible_plan_id(plan_id: int | None, hidden_plan_ids_set: set[int]) -> int | None:
-    if plan_id is None:
-        return None
-    return None if int(plan_id) in hidden_plan_ids_set else int(plan_id)
-
 
 def _derive_agent_installed(h: Host) -> tuple[bool, str | None]:
     """推断 Agent 是否曾安装成功（与 ONLINE/OFFLINE 正交）。
@@ -153,7 +147,6 @@ def _host_to_out(h: Host, *, db: Session | None = None, host_key_trust: str | No
     if db is not None:
         from backend.models.plan_run import PlanRun
 
-        hidden_plan_ids_set = hidden_legacy_plan_ids(db)
         active_jobs = (
             db.query(JobInstance)
             .filter(
@@ -184,7 +177,7 @@ def _host_to_out(h: Host, *, db: Session | None = None, host_key_trust: str | No
             HostActiveJob(
                 id=j.id,
                 plan_run_id=j.plan_run_id,
-                plan_id=_visible_plan_id(j.plan_id, hidden_plan_ids_set),
+                plan_id=j.plan_id,
                 device_id=j.device_id,
                 status=j.status,
                 started_at=j.started_at,
@@ -557,7 +550,6 @@ def host_hot_update(
     from backend.scheduler.device_lease_reconciler import _ABORT_REAPER_GRACE_SECONDS
     from backend.scheduler.app_scheduler import RECONCILER_INTERVAL
 
-    hidden_plan_ids_set = hidden_legacy_plan_ids(db)
     active_jobs_rows = (
         db.query(JobInstance)
         .filter(
@@ -588,7 +580,7 @@ def host_hot_update(
         {
             "id": j.id,
             "plan_run_id": j.plan_run_id,
-            "plan_id": _visible_plan_id(j.plan_id, hidden_plan_ids_set),
+            "plan_id": j.plan_id,
             "device_id": j.device_id,
             "status": j.status,
             "abort_pending": _job_abort_pending(j),

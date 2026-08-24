@@ -76,9 +76,9 @@ _WAITING_EXECUTION_STATES = {
 def _coordinator_heartbeats(db, jobs) -> dict[tuple[int, str], "datetime | None"]:
     """Prefetch PlanRunHost.coordinator_heartbeat_at for a recycler batch.
 
-    Keyed by (plan_run_id, host_id). Callers must treat a missing/None value
-    as "no coordinator signal" — the job is judged not-reported (see
-    ``_running_liveness_anchor``).
+    Keyed by (plan_run_id, host_id). Empty until Agent-side coordinators
+    (Step 5b) start reporting — callers must treat a missing/None value as
+    "no coordinator signal" and fall back to the legacy clock.
     """
     from backend.models.plan_run import PlanRunHost
 
@@ -113,12 +113,8 @@ def _running_liveness_anchor(job, coord_hb: dict) -> tuple["datetime | None", in
       - WAITING_EXECUTION_SLOT / PATROL_SLEEP / WAITING_BARRIER + a
         coordinator heartbeat present → per-host coordinator clock (waiting
         is legal, invariant ②; only a dead coordinator counts).
-      - Signal missing (NULL/unknown execution_state, or the state's own
-        heartbeat absent) → "not reported": anchored at dispatch time
-        (COALESCE(started_at, created_at) — never refreshed by LeaseRenewer)
-        so the job still ages out into UNKNOWN after one full window.
-        updated_at is deliberately NOT consulted: lease renewals must not be
-        able to fake liveness (#288).
+      - Anything else (NULL execution_state — legacy agents, or signals not
+        yet reported) → legacy updated_at clock, byte-for-byte the old rule.
     """
     graded_timeout = running_heartbeat_timeout_seconds(
         job,
@@ -129,23 +125,12 @@ def _running_liveness_anchor(job, coord_hb: dict) -> tuple["datetime | None", in
         exec_hb = _aware_dt(job.last_execution_heartbeat_at)
         if exec_hb is not None:
             return exec_hb, graded_timeout
-        return _not_reported_anchor(job), graded_timeout
-
-    if job.execution_state in _WAITING_EXECUTION_STATES:
+    elif job.execution_state in _WAITING_EXECUTION_STATES:
         hb = coord_hb.get((job.plan_run_id, job.host_id))
         if hb is not None:
             return hb, COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
-        return _not_reported_anchor(job), COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
 
-    # NULL / unknown execution_state — nothing ever reported.
-    return _not_reported_anchor(job), graded_timeout
-
-
-def _not_reported_anchor(job) -> "datetime | None":
-    """Dispatch-time anchor for jobs whose liveness signal never arrived."""
-    return _aware_dt(getattr(job, "started_at", None)) or _aware_dt(
-        getattr(job, "created_at", None)
-    )
+    return _aware_dt(job.updated_at), graded_timeout
 
 
 
@@ -233,8 +218,7 @@ def _collect_patrol_stall_candidates_py(db, now: datetime) -> list[tuple[JobInst
     for job in candidates:
         # ADR-0026 §3 (Step 5a.1): WAITING_EXECUTION_SLOT / WAITING_BARRIER are
         # legally idle and must never be killed by patrol stall (invariant ②).
-        # Only PATROL_SLEEP and not-yet-reported (NULL) execution_state are
-        # candidates; EXECUTING_STEP is owned by the executor clock.
+        # Only PATROL_SLEEP and legacy (NULL) execution_state are candidates.
         if (
             job.execution_state is not None
             and job.execution_state not in ("PATROL_SLEEP",)
@@ -340,12 +324,12 @@ def _build_patrol_stall_candidates_stmt(now: datetime):
             effective_anchor_expr.isnot(None),
             overdue_expr > 0,
             # ADR-0026 §3 (Step 5a.1): patrol stall only applies to PATROL_SLEEP
-            # and not-yet-reported (NULL execution_state) jobs; WAITING_* and
+            # and legacy (NULL execution_state, pre-ADR agents); WAITING_* and
             # WAITING_BARRIER are legally idle (invariant ②, operation not yet
             # started or waiting at a barrier) and must never be killed by
             # patrol stall — they are guarded by the per-state running clock.
             or_(
-                JobInstance.execution_state.is_(None),        # not reported yet
+                JobInstance.execution_state.is_(None),        # legacy agent
                 JobInstance.execution_state == "PATROL_SLEEP",
             ),
         )
@@ -443,7 +427,7 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> b
     plan_run_terminal = False
     pr = db.get(PlanRun, job.plan_run_id)
     if pr is not None and pr.status in {
-        "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+        "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
     }:
         plan_run_terminal = True
 
@@ -795,11 +779,8 @@ def recycle_once() -> None:
 
     # 2) RUNNING timeout → UNKNOWN (Phase 4c). Same batched approach.
     #    Uses graded per-job timeout when pipeline has an active patrol phase.
-    #    ADR-0026 §3 (Step 5a): per-sub-state clock selection — the execution
-    #    signals are the ONLY liveness evidence (#288). A missing signal means
-    #    "not reported": the clock falls back to dispatch time
-    #    (COALESCE(started_at, created_at)), never to updated_at — LeaseRenewer
-    #    must not be able to fake liveness.
+    #    ADR-0026 §3 (Step 5a): per-sub-state clock selection — prefer the new
+    #    liveness signals, fall back to updated_at when absent (双写迁移期).
     min_running_timeout = min(
         RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
         PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
@@ -808,47 +789,54 @@ def recycle_once() -> None:
     coordinator_prefetch_deadline = now - timedelta(
         seconds=COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
     )
-    # ── Step 5a.1: candidate SELECTION uses the same per-state clock as the
-    # verdict. Clock per branch (Python-side _running_liveness_anchor re-derives
+    # ── Step 5a.1 (reviewer): candidate SELECTION must use the same per-state
+    # clock as the verdict. Filtering on updated_at alone would hide WAITING /
+    # PATROL_SLEEP jobs whose LeaseRenewer keeps updated_at fresh while their
+    # coordinator is dead — the coordinator clock would never get a chance to
+    # run. Clock per branch (Python-side _running_liveness_anchor re-derives
     # the precise anchor for the final verdict):
-    #   NULL / unknown execution_state → COALESCE(started_at, created_at)
+    #   NULL / unknown execution_state → updated_at (legacy, byte-for-byte)
     #   EXECUTING_STEP                → last_execution_heartbeat_at
-    #                                   (fallback dispatch time when unset)
+    #                                   (fallback updated_at when unset)
     #   WAITING_* / PATROL_SLEEP     → PlanRunHost.coordinator_heartbeat_at
-    #                                   (fallback dispatch time when missing)
+    #                                   (fallback updated_at when missing)
     from backend.models.plan_run import PlanRunHost
 
-    _dispatch_anchor = func.coalesce(
-        JobInstance.started_at, JobInstance.created_at
-    )
     _known_states = _WAITING_EXECUTION_STATES | {"EXECUTING_STEP"}
     stale_clock_filter = or_(
-        # nothing ever reported → one full executor window from dispatch
+        # legacy agents / unknown values → old rule
         and_(
             or_(
                 JobInstance.execution_state.is_(None),
                 JobInstance.execution_state.notin_(list(_known_states)),
             ),
-            _dispatch_anchor < running_prefetch_deadline,
+            JobInstance.updated_at < running_prefetch_deadline,
         ),
         # executor clock
         and_(
             JobInstance.execution_state == "EXECUTING_STEP",
             func.coalesce(
-                JobInstance.last_execution_heartbeat_at, _dispatch_anchor
+                JobInstance.last_execution_heartbeat_at, JobInstance.updated_at
             ) < running_prefetch_deadline,
         ),
-        # coordinator clock (per-host); no coordinator signal → dispatch time
+        # coordinator clock (per-host); no coordinator signal yet → legacy
         and_(
             JobInstance.execution_state.in_(list(_WAITING_EXECUTION_STATES)),
-            func.coalesce(
-                PlanRunHost.coordinator_heartbeat_at, _dispatch_anchor
-            ) < coordinator_prefetch_deadline,
+            or_(
+                and_(
+                    PlanRunHost.coordinator_heartbeat_at.isnot(None),
+                    PlanRunHost.coordinator_heartbeat_at < coordinator_prefetch_deadline,
+                ),
+                and_(
+                    PlanRunHost.coordinator_heartbeat_at.is_(None),
+                    JobInstance.updated_at < running_prefetch_deadline,
+                ),
+            ),
         ),
     )
     # Keyset pagination (id > last_id), NOT re-querying the same window: jobs
     # legally skipped by their sub-state clock (e.g. WAITING with a fresh
-    # coordinator heartbeat) would otherwise reappear in
+    # coordinator heartbeat but stale updated_at) would otherwise reappear in
     # every batch and spin this loop forever. Each candidate is visited at
     # most once per recycle pass.
     last_running_id = 0

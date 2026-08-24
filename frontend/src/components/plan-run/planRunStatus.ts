@@ -12,7 +12,6 @@ export const TERMINAL_STATUSES: ReadonlyArray<PlanRunStatus> = [
   "SUCCESS",
   "PARTIAL_SUCCESS",
   "FAILED",
-  "DEGRADED",
 ];
 
 export interface PlanRunStatusPill {
@@ -27,7 +26,6 @@ export const PLAN_RUN_PILL: Record<PlanRunStatus, PlanRunStatusPill> = {
   SUCCESS: { label: "SUCCESS", Icon: CheckCircle },
   PARTIAL_SUCCESS: { label: "PARTIAL", Icon: AlertTriangle },
   FAILED: { label: "FAILED", Icon: XCircle },
-  DEGRADED: { label: "DEGRADED", Icon: AlertTriangle },
 };
 
 export function isPlanRunTerminal(status: PlanRunStatus | undefined | null): boolean {

@@ -324,7 +324,7 @@ apscheduler_job_duration = Histogram(
 plan_run_terminal_total = Counter(
     'stability_plan_run_terminal_total',
     'Total PlanRuns reaching a terminal status',
-    ['status']  # SUCCESS / PARTIAL_SUCCESS / FAILED / DEGRADED
+    ['status']  # SUCCESS / PARTIAL_SUCCESS / FAILED
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 plan_run_active = Gauge(

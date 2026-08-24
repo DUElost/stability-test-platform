@@ -770,7 +770,7 @@ async def upload_step_traces(
             await broadcast_run_job_update(job.plan_run_id, tj_id, job.status)
             pr = await db.get(PlanRun, job.plan_run_id)
             if pr is not None and pr.status in {
-                "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+                "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
             }:
                 await broadcast_plan_run_status(pr.id, pr.status)
 
@@ -1252,7 +1252,7 @@ async def complete_job(
         await broadcast_run_job_update(job.plan_run_id, job_id, job.status)
         run = await db.get(PlanRun, job.plan_run_id)
         if run is not None and run.status in {
-            "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+            "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
         }:
             await broadcast_plan_run_status(run.id, run.status)
 
@@ -1829,7 +1829,7 @@ async def update_job_step_status(
             await broadcast_run_job_update(job.plan_run_id, tj_id, job.status)
             pr = await db.get(PlanRun, job.plan_run_id)
             if pr is not None and pr.status in {
-                "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+                "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
             }:
                 await broadcast_plan_run_status(pr.id, pr.status)
 

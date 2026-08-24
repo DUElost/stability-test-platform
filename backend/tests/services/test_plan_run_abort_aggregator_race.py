@@ -107,7 +107,6 @@ def test_unknown_job_keeps_plan_run_running_and_never_degraded(
   persisted = db_session.get(type(sample_plan_run), sample_plan_run.id)
   assert applied is False
   assert persisted.status == PlanRunStatus.RUNNING.value
-  assert persisted.status != PlanRunStatus.DEGRADED.value
   assert persisted.ended_at is None
   assert persisted.result_summary is None
 
