@@ -1,8 +1,12 @@
 import apiClient from './client';
 import { unwrapApiResponse } from './client';
-import type { Plan, PlanChainTailCreate, PlanCreate, PlanUpdate, PlanRun, PlanRunCreate, PlanRunPreview } from './types';
+import type { Plan, PlanChainTailCreate, PlanCreate, PlanUpdate, PlanRun, PlanRunCreate, PlanRunPreview, Specialty } from './types';
 
 export const plans = {
+  /** ADR-0029 D6（#405）：专项字典，Plan 编辑器下拉数据源。 */
+  listSpecialties: () =>
+    unwrapApiResponse<Specialty[]>(apiClient.get('/specialties')),
+
   list: (skip = 0, limit = 50, projectKey?: string) =>
     unwrapApiResponse<Plan[]>(apiClient.get('/plans', {
       params: { skip, limit, ...(projectKey ? { project_key: projectKey } : {}) },

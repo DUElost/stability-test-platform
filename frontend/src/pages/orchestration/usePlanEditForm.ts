@@ -32,6 +32,11 @@ export function usePlanEditForm(planId: number | null) {
   const [description, setDescription] = useState('');
   const [failureThreshold, setFailureThreshold] = useState(0.05);
   const [nextPlanId, setNextPlanId] = useState<number | null>(null);
+  // ADR-0029（#405）：归属项目/专项；orig* 用于「仅变更字段进 update payload」
+  const [projectKey, setProjectKey] = useState('');
+  const [specialtyKey, setSpecialtyKey] = useState('');
+  const [origProjectKey, setOrigProjectKey] = useState('');
+  const [origSpecialtyKey, setOrigSpecialtyKey] = useState('');
   const [lifecycle, setLifecycle] = useState<PipelineDef>(EMPTY_LIFECYCLE);
   const [selectedStepKey, setSelectedStepKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -74,6 +79,18 @@ export function usePlanEditForm(planId: number | null) {
     staleTime: 60_000,
   });
 
+  // ADR-0029（#405）：归属选择的数据源。字典失败不阻塞编辑（非依赖项）。
+  const { data: projects } = useQuery({
+    queryKey: ['projects-for-plan-editor'],
+    queryFn: () => api.projects.list(),
+    staleTime: 60_000,
+  });
+  const { data: specialties } = useQuery({
+    queryKey: ['specialties'],
+    queryFn: () => api.plans.listSpecialties(),
+    staleTime: 300_000,
+  });
+
   const [prevPlanState, setPrevPlanState] = useState<{ plan: typeof plan; isNew: boolean } | null>(null);
   if (prevPlanState?.plan !== plan || prevPlanState?.isNew !== isNew) {
     setPrevPlanState({ plan, isNew });
@@ -82,6 +99,10 @@ export function usePlanEditForm(planId: number | null) {
       setDescription(plan.description || '');
       setFailureThreshold(plan.failure_threshold);
       setNextPlanId(plan.next_plan_id ?? null);
+      setProjectKey(plan.project_key || '');
+      setSpecialtyKey(plan.specialty_key || '');
+      setOrigProjectKey(plan.project_key || '');
+      setOrigSpecialtyKey(plan.specialty_key || '');
       const lc = rebuildLifecycleFromPlan(plan);
       setLifecycle(lc);
       setSelectedStepKey(null);
@@ -213,6 +234,19 @@ export function usePlanEditForm(planId: number | null) {
         // 乐观锁令牌:后端据此拒绝"基于旧版本的保存"(409),防跨端互相覆盖
         expected_updated_at: plan?.updated_at,
       };
+      // #405：归属字段只在变更时进 payload——后端 update 语义按 fields_set，
+      // 恒发会让每次无关保存都在审计里记归属变更。新建则恒带（含空=不归属）。
+      if (isNew) {
+        (payload as PlanCreate).project_key = projectKey || undefined;
+        (payload as PlanCreate).specialty_key = specialtyKey || undefined;
+      } else {
+        if (projectKey !== origProjectKey) {
+          payload.project_key = projectKey || null;
+        }
+        if (specialtyKey !== origSpecialtyKey) {
+          payload.specialty_key = specialtyKey || null;
+        }
+      }
       let saved: Plan;
       if (isNew) {
         saved = await api.plans.create(payload as PlanCreate);
@@ -377,6 +411,12 @@ export function usePlanEditForm(planId: number | null) {
     setDescription,
     failureThreshold,
     setFailureThreshold,
+    projectKey,
+    setProjectKey,
+    specialtyKey,
+    setSpecialtyKey,
+    projects,
+    specialties,
     lifecycle,
     setLifecycle,
     selectedStepKey,
