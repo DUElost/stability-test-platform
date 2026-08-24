@@ -127,5 +127,4 @@
 4. **设备「UiAutomationService already registered」**：重启设备可清；若复现需查 OSM/test APK 的
    UiAutomation 资源释放（工具链侧，非平台）；
 5. 真机轮用例质量：首轮 38 条 30 PASS / 8 FAILURE（正常波动）；批量跑时关注失败率与失败模式分布；
-6. **代码合入**：`mtbf_finish/v1.4.0/`（suite_sha256）与本文收尾段落为 `4bbfefd` 之后的新变更，
-   随下次 commit 合入（含 Plan 10 引用 v1.4.0、host 78 已 hot-update 的部署状态）。
+6. ~~**代码合入**~~ —— ✅ **已完成**（`ff69a42`：`mtbf_finish/v1.4.0` suite_sha256、ADR-0030 P0 验收勾选、本文收尾段落；Plan 10 引用 v1.4.0，host 78 已 hot-update）。
