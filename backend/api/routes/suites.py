@@ -17,7 +17,8 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
@@ -35,6 +36,9 @@ from backend.api.schemas.suite import (
 from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.storage_root import resolve_shared_storage_root
+from backend.models.enums import PlanRunStatus
+from backend.models.plan import PlanStep
+from backend.models.plan_run import PlanRun
 from backend.models.project import TestProject
 from backend.models.suite import TestCase, TestSuite
 from backend.services.mtbf_suite import (
@@ -100,6 +104,35 @@ def _resolve_export_dir(suite: TestSuite) -> str:
     if suite.project is not None:
         return suite.project.project_key
     return "legacy"
+
+
+# #402 弱版在途守卫：ACTIVE = QUEUED / PRECHECK / RUNNING。
+_ACTIVE_RUN_STATUSES = (
+    PlanRunStatus.QUEUED.value,
+    PlanRunStatus.PRECHECK.value,
+    PlanRunStatus.RUNNING.value,
+)
+
+
+def _active_mtbf_run_ids(db: Session) -> list[int]:
+    """引用 mtbf 系脚本的 ACTIVE PlanRun。
+
+    宽匹配（script_name 前缀 ``mtbf_``）而非按 export_dir 精确关联是有意的：
+    P0 消费路径由 host 级 env（STP_MTBF_PROJECT）决定读哪个目录，DB 侧无从
+    知道某个 Run 实际消费哪份文件——按目录「精确」关联是虚构的精度。在
+    #404 的 suite 绑定落地前，唯一不撒谎的相关性是「有 MTBF 长跑在飞」，
+    此时拒绝一切工具目录覆盖。绑定落地后本函数应改为按 suite 精确匹配。
+    """
+    rows = db.execute(
+        select(PlanRun.id)
+        .join(PlanStep, PlanStep.plan_id == PlanRun.plan_id)
+        .where(
+            PlanRun.status.in_(_ACTIVE_RUN_STATUSES),
+            PlanStep.script_name.like("mtbf\\_%"),
+        )
+        .distinct()
+    ).scalars().all()
+    return list(rows)
 
 
 def _suite_out(db: Session, suite: TestSuite, detail: bool = False):
@@ -515,11 +548,29 @@ def validate_suite(
 def export_to_tool_dir(
     suite_id: int,
     request: Request,
+    force: bool = Query(False, description="越过 ACTIVE MTBF 长跑守卫（审计留痕）"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
     """渲染两文件 atomic write 到中心存储消费路径，并记下两个漂移比对基线。"""
     suite = _get_suite(db, suite_id)
+
+    # #402 在途守卫：MTBF 长跑以天计，覆盖 runtask.xml 等于在跑中途换清单。
+    active_runs = _active_mtbf_run_ids(db)
+    if active_runs and not force:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ACTIVE_MTBF_RUNS",
+                "message": (
+                    "MTBF runs are in flight; exporting would swap the case "
+                    "list mid-run. Wait for them to finish or pass force=true."
+                ),
+                "plan_run_ids": sorted(active_runs)[:50],
+                "active_run_count": len(active_runs),
+            },
+        )
+
     root = resolve_shared_storage_root()
     if not root:
         raise HTTPException(
@@ -556,6 +607,8 @@ def export_to_tool_dir(
             "export_dir": _resolve_export_dir(suite),
             "exported_sha256": suite.exported_sha256,
             "testpoints": len(built.testpoints),
+            **({"active_guard_forced": True,
+                "active_run_count": len(active_runs)} if active_runs else {}),
         },
         user_id=current_user.id, username=current_user.username, request=request,
     )
