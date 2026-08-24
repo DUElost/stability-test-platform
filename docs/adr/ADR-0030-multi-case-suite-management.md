@@ -1,6 +1,6 @@
 # ADR-0030: 多用例平台化管理（test_suite / test_case + 外部管理面）
 
-- 状态：**Accepted**（2026-08-24 推进；P0 真机验收 + P1a 实体/管理面已合入，P1b 绑定门禁与 P2 见修订记录 v1.3）
+- 状态：**Accepted**（2026-08-24 推进；P0 真机验收 + P1a 实体/管理面已合入，D2 绑定机制修订见 v1.4，P1b 门禁与 P2 见修订记录）
 - 优先级：**P0（专项接入主线，可先行独立交付）+ P1（多用例实体与管理面）**——见 D6
 - 目标里程碑：M7
 - 日期：2026-08-19
@@ -15,6 +15,7 @@
 | 2026-08-19 | v1.1（评审修正） | 按评审六项必改修正：① 新增「与 ADR-0029 的关系（显式和解）」——test_suite 是 ADR-0029 非目标 ExecutionProfile 实体族的**例外子集**，不复活挂起决策；② D3 套件项目匹配改为本 ADR 自有门禁 **D3b**，不再引用挂起 D5；③ 脚本命名统一为 `mtbf_setup`/`mtbf_check`/`mtbf_finish` 三件套（monkey 先例），禁止两种命名并存；④ 补 Plan↔Suite↔plan_snapshot↔precheck 绑定说明（D2）；⑤ 优先级改双轨 P0+P1；⑥ 状态传播补齐 DOC-MAP / CLAUDE.md / 05-data-model（实施时）。**状态传播挂靠位**：ADR 头部状态行 / 正文修订记录 / reviews 对应节 / adr README 清单行 / adr README 里程碑行 / DOC-MAP Living 表 / CLAUDE.md 决策表（对齐 ADR-0029 v2.3.1 教训） |
 | 2026-08-20 | v1.2（P0 真机验收） | **D6 P0 验收信号达成**（PlanRun #217/#218，设备 395，abort→teardown→finish 协议）：init `suite_sha256` ✓、PROGRESS + patrol-heartbeat ✓、NFS JSON 落盘 + §6 复核 0 不一致 ✓。验收记录见 [Agent Note](../notes/feature/2026-08-20-mtbf-p0-scripts-and-validate.md)。ADR 整体仍为 Proposed（P1 实体/管理面未实施）。 |
 | 2026-08-24 | v1.3（状态推进 + P1a 记账） | **状态 Proposed → Accepted**：P0 已验收（v1.2）+ P1 实体/管理面已合入 main（`test_suite`/`test_case` 表、14 端点 CRUD/import/export/validate/export-to-tool-dir、全量 `record_audit`；增补双漂移检测器 `content_fingerprint` + `exported_content_sha256`——区分「库改了没导出」与「导出物被手改」，超出本文 D5 原文，属实现层增强；渲染三列用 JSON 保键序逐字节同构；原子写落地）。同批补记两项缺口修复：#401（dispatcher 冻结 `project_id`/`build_version` 快照）、#402（export-to-tool-dir 在途守卫弱版 409 + `force` 审计留痕——D2 的可先行半段，精确匹配待绑定字段）。**仍未做**：D2/D3b 绑定与 precheck 五步门禁（#404）、CLI（P1c）、P2 前端与 `test_case_result`。七挂靠位同步：本行 / 头部 / adr README 清单行 / adr README M7 行 / CLAUDE.md 决策表 / DOC-MAP / [mtbf-api.md §2](../operations/mtbf-api.md) 定稿 |
+| 2026-08-24 | v1.4（D2 绑定机制修订） | **绑定从 `plan_step.default_params.suite_key` 注入特例上移为 `plan.suite_id` 可空外键**。理由：① dispatcher 注释明示 WiFi 注入是参数逻辑**唯一例外**，`suite_key` 走 default_params 直接侵蚀该不变量；② 「一计划一专项」是 ADR-0029 D6 确认的现状，套件即 Plan 的测试内容，按 step 绑定属过度泛化；③ 外键让 precheck 直接 join 校验并获得 DB 层引用完整性；④ 可空外键天然给出双模式语义（NULL = P0 文件真源模式不加门禁 / 非空 = 托管模式五步门禁），零数据迁移；⑤ 未来 D1 复议走 params_override 的路径不被堵死（从独立列迁移比从 JSON 特例迁移成本低）。API 面以套件对外键 `name` 引用（PlanCreate/PlanUpdate 接受 `suite_name`），数字 id 只留 DB。设计文档 [P1 设计 §3](../design/2026-08-mtbf-p1-suite-management.md) 同步重写。放弃的备选：维持注入特例（侵蚀不变量）、等 D1 复议后走 params_override（相机 MTBF 前等不起，且 D1 复议条件未全触发） |
 
 ## 背景
 
@@ -56,9 +57,11 @@ MTBF 专项的用例清单 `runtask.xml`（`/mnt/automation-toolkit/android-tool
 - **export**：库 → runtask.xml 渲染（支持 `times` 覆盖、`@@全局变量` 引用保留），可选直接写入工具目录 `config/runtask.xml`（admin）。
 - **validate**：XML schema / 重复 method / `@@var` 引用完整性；APK 内 class/method 存在性离线不可验，留待运行时校验（fail-fast）。
 - 执行链**消费面不变**：脚本仍从工具目录读文件 push 设备。「管理面从改共享盘文件升级为 API/CLI，消费面不变」是平滑迁移的关键。
-- **Plan ↔ Suite 绑定**（precheck 闭环前提）：`plan_step.default_params` 显式声明 `suite_key`
-  （初版机制——与 WiFi 注入并列的注入特例；若 ADR-0029 挂起 D1 复议通过，再改走 `params_override`）；
-  派发快照 `plan_snapshot` / `plan_run.run_context` 冻结 **`suite_id` / `exported_sha256` / `apk_binding`** 三字段。
+- **Plan ↔ Suite 绑定**（precheck 闭环前提）：~~`plan_step.default_params` 显式声明 `suite_key`
+  （初版机制——与 WiFi 注入并列的注入特例；若 ADR-0029 挂起 D1 复议通过，再改走 `params_override`）~~
+  **v1.4 修订：绑定上移为 `plan.suite_id` 可空外键**（NULL = P0 文件真源模式不加门禁；
+  非空 = 托管模式全门禁）——理由见修订记录；派发快照 / `plan_run.run_context` 冻结
+  **`suite_id` / `exported_sha256` / `apk_binding`** 三字段。
 - **派发门禁（precheck 校验链）**：① suite 存在且 `is_active`；② 已导出（工具目录文件存在）；③ 磁盘文件
   sha256 与库内一致（= 库未改或已重导，「库改了没导出」在此拦截）；④ 套件 `project_id` 与目标设备项目匹配
   （D3b）。任一项失败 **fail-fast**，禁止带病派发。
