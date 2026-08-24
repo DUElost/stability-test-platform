@@ -292,7 +292,8 @@ def test_smoke_script_constants_and_argv_flags(monkeypatch):
     assert DEFAULT_DEVICE_ID is None
     assert DEFAULT_PLAN_NAME == "smoke-plan-001"
     assert "SUCCESS" in TERMINAL_STATUSES
-    assert len(TERMINAL_STATUSES) == 4
+    # #291：DEGRADED 摘除后终态域收敛为三值。
+    assert len(TERMINAL_STATUSES) == 3
     assert PASSING_STATUSES == {"SUCCESS", "PARTIAL_SUCCESS"}
 
 
