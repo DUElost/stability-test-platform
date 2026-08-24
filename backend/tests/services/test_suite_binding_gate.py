@@ -144,6 +144,32 @@ class TestPrepareFreeze:
 
         assert "dispatch_suite" not in (pr.run_context or {})
 
+    def test_unbound_mtbf_dispatch_warns_suite_unbound(
+        self, db_session, bound_fixture, caplog,
+    ):
+        """#404 第三步：派发 mtbf 系脚本且未绑定 → WARNING suite_unbound
+        （观测层信号；翻转硬拒另起小 PR）。"""
+        import logging
+
+        f = bound_fixture
+        f["plan"].suite_id = None
+        db_session.commit()
+
+        with caplog.at_level(logging.WARNING, logger="backend.services.plan_dispatcher_sync"):
+            _queued_run(db_session, f)
+
+        assert any(r.message.startswith("suite_unbound") for r in caplog.records)
+
+    def test_bound_mtbf_dispatch_no_warning(self, db_session, bound_fixture, caplog):
+        import logging
+
+        f = bound_fixture
+        with caplog.at_level(logging.WARNING, logger="backend.services.plan_dispatcher_sync"):
+            _queued_run(db_session, f)
+
+        assert not any(
+            r.message.startswith("suite_unbound") for r in caplog.records)
+
 
 # ── 五步门禁矩阵（§3.3，各一反一正）──────────────────────────────────────────
 

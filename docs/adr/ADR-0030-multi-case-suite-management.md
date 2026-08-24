@@ -1,6 +1,6 @@
 # ADR-0030: 多用例平台化管理（test_suite / test_case + 外部管理面）
 
-- 状态：**Accepted**（2026-08-24 推进；P0 真机验收 + P1a 实体/管理面 + P1b 绑定门禁已合入，D2 绑定机制见 v1.4，实施记账见修订记录；P1c CLI 与 P2 待做）
+- 状态：**Accepted**（2026-08-24 推进；P0 真机验收 + P1a 实体/管理面 + P1b 绑定门禁 + P1c CLI/文档收口已合入，D2 绑定机制见 v1.4，实施记账见修订记录；P2 前端与真机冒烟待做）
 - 优先级：**P0（专项接入主线，可先行独立交付）+ P1（多用例实体与管理面）**——见 D6
 - 目标里程碑：M7
 - 日期：2026-08-19
@@ -17,6 +17,7 @@
 | 2026-08-24 | v1.3（状态推进 + P1a 记账） | **状态 Proposed → Accepted**：P0 已验收（v1.2）+ P1 实体/管理面已合入 main（`test_suite`/`test_case` 表、14 端点 CRUD/import/export/validate/export-to-tool-dir、全量 `record_audit`；增补双漂移检测器 `content_fingerprint` + `exported_content_sha256`——区分「库改了没导出」与「导出物被手改」，超出本文 D5 原文，属实现层增强；渲染三列用 JSON 保键序逐字节同构；原子写落地）。同批补记两项缺口修复：#401（dispatcher 冻结 `project_id`/`build_version` 快照）、#402（export-to-tool-dir 在途守卫弱版 409 + `force` 审计留痕——D2 的可先行半段，精确匹配待绑定字段）。**仍未做**：D2/D3b 绑定与 precheck 五步门禁（#404）、CLI（P1c）、P2 前端与 `test_case_result`。七挂靠位同步：本行 / 头部 / adr README 清单行 / adr README M7 行 / CLAUDE.md 决策表 / DOC-MAP / [mtbf-api.md §2](../operations/mtbf-api.md) 定稿 |
 | 2026-08-24 | v1.4（D2 绑定机制修订） | **绑定从 `plan_step.default_params.suite_key` 注入特例上移为 `plan.suite_id` 可空外键**。理由：① dispatcher 注释明示 WiFi 注入是参数逻辑**唯一例外**，`suite_key` 走 default_params 直接侵蚀该不变量；② 「一计划一专项」是 ADR-0029 D6 确认的现状，套件即 Plan 的测试内容，按 step 绑定属过度泛化；③ 外键让 precheck 直接 join 校验并获得 DB 层引用完整性；④ 可空外键天然给出双模式语义（NULL = P0 文件真源模式不加门禁 / 非空 = 托管模式五步门禁），零数据迁移；⑤ 未来 D1 复议走 params_override 的路径不被堵死（从独立列迁移比从 JSON 特例迁移成本低）。API 面以套件对外键 `name` 引用（PlanCreate/PlanUpdate 接受 `suite_name`），数字 id 只留 DB。设计文档 [P1 设计 §3](../design/2026-08-mtbf-p1-suite-management.md) 同步重写。放弃的备选：维持注入特例（侵蚀不变量）、等 D1 复议后走 params_override（相机 MTBF 前等不起，且 D1 复议条件未全触发） |
 | 2026-08-24 | v1.5（P1b 实施记账 + env 退役） | **P1b 已合入**（#404 PR-C/D）：prepare 冻结 `run_context.dispatch_suite` 六字段（与 #401 同函数点）；dispatcher 对 `script:mtbf_*` 步骤自动注入 `{expected_testpoint_count, project}`（经 STP_STEP_PARAMS 通道，已有声明值优先，未绑定零变化）；admission Phase A0 挂五步门禁 `suite_verify_failed`（missing / not_exported / content_changed / sha_mismatch / project_mismatch，fail-fast、修复路径进 detail）；#402 在途守卫精确化为按 suite_id 匹配（同套件硬阻断不豁免 force，无绑定保留 force 逃生阀）。**env 预置退役双层完成**：`STP_MTBF_EXPECTED_TESTPOINT_COUNT` 摘出 `_FLEET_ENV_KEYS` + `mtbf_check` v1.3.0 只读注入（旧版回落默认 0 安全降级），mtbf-api.md §1.5 同步。门禁判定以活表+磁盘为基准、冻结块承担 D5 归因——取舍见 [Agent Note](../notes/feature/2026-08-24-suite-binding-gates.md)。**仍未做**：CLI（P1c）、P2 前端与 `test_case_result`；真机冒烟（init trace `suite_sha256` == 门禁比对 sha）随 P1c 验收一并执行 |
+| 2026-08-24 | v1.6（P1c 收口） | **CLI 定稿位置回写（D4 悬项关闭）**：[`tools/dev/mtbf-cases.py`](../../tools/dev/mtbf-cases.py)（单文件 kebab-case，对齐 `backfill-test-project.py` 先例；REST 便捷层非直连 DB——与页面同端点同权限同审计；凭据三级回退 `--token` > ambient env > `.env.backend` 约定源，明文不进输出；退出码 0/2/3）。**双模式观测层落地**：派发 mtbf 系脚本且 `plan.suite_id` 为空记 WARNING `suite_unbound`（翻转硬拒不默认启用，另起小 PR）。mtbf-api.md §2 定稿（守卫精确化语义 + CLI 小节）；05-data-model 表行已随 P1a 补齐。**D6 P1 API 面验收达成**：「导入→改 1 条→导出→export-to-tool-dir」全程审计有测试矩阵锁定（import/case PUT/export/export-to-tool-dir 各自 record_audit 断言）；绑定派发链路（冻结/注入/五步门禁/守卫）有 testcontainers 测试矩阵。**仍未做**：真机冒烟（init trace `suite_sha256` == 门禁比对 sha，需 fleet 在线窗口）；P2 前端与 `test_case_result` |
 
 ## 背景
 

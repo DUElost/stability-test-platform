@@ -123,8 +123,8 @@ user 构建（`ro.debuggable=0`）直接 fail-fast，需 userdebug/eng 工程包
 
 ### 关键语义
 
-- **双漂移检测器**：`export_stale` 由库内容指纹计算得出（任何写路径都不清快照列）——「库改了没导出」在 export 响应头与详情 `export_stale` 同时可见；「导出后磁盘被手改」由门禁比对 `exported_sha256` 捕获（#404 接入 precheck）。
-- **在途守卫（#402）**：存在引用 `mtbf_*` 脚本的 QUEUED/PRECHECK/RUNNING PlanRun 时，export-to-tool-dir 返回 **409 `ACTIVE_MTBF_RUNS`**（附 run id 清单）；admin 可 `?force=true` 越过（审计记 `active_guard_forced`）。长跑中途覆盖清单即换弹，默认拦截。
+- **双漂移检测器**：`export_stale` 由库内容指纹计算得出（任何写路径都不清快照列）——「库改了没导出」在 export 响应头与详情 `export_stale` 同时可见；「导出后磁盘被手改」由门禁比对 `exported_sha256` 捕获（precheck 五步门禁 `suite_verify_failed`，#404 PR-C）。
+- **在途守卫（#402 精确化，PR-C）**：绑定**同一套件**的 QUEUED/PRECHECK/RUNNING PlanRun → 409 `SUITE_RUNS_ACTIVE`（**force 不豁免**）；无绑定的 P0 存量 MTBF Run → 409 `ACTIVE_MTBF_RUNS`（admin 可 `?force=true` 越过，审计记 `active_guard_forced`）。跨套件并发导出互不阻塞。
 - **export_dir 解析**：显式 `export_dir` > 项目 key > `legacy`（兼容 P0 部署）。
 
 ### 典型闭环（ADR-0030 D6 验收信号）
@@ -141,11 +141,27 @@ curl -sS -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
        "exec_descs":[{"class":"C","method":"m","args":{}}]}' \
   http://<control-plane>:8000/api/v1/test-cases/$CASE_ID
 
-# 3. 校验 + 导出落工具目录（有 MTBF 长跑在飞时此处 409）
+# 3. 校验 + 导出落工具目录（绑定套件有 Run 在飞时此处硬 409）
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" \
   http://<control-plane>:8000/api/v1/test-suites/$SUITE_ID/validate
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" \
   "http://<control-plane>:8000/api/v1/test-suites/$SUITE_ID/export-to-tool-dir"
 ```
 
-> **待办（P1c/P1b）**：CLI（`tools/` 下命名二选一后回写 ADR 修订记录）；`X-Agent-Secret` 双通道写权限；precheck 五步门禁消费 `exported_sha256`——跟踪 [#404](https://github.com/DUElost/stability-test-platform/issues/404)。
+### CLI（P1c：`tools/dev/mtbf-cases.py`，走同一 REST、同一审计）
+
+```bash
+# 凭据三级回退：--token > ambient STP_ADMIN_USER/STP_ADMIN_PASSWORD > 仓库根 .env.backend；明文不进输出
+python tools/dev/mtbf-cases.py list [--project MTBF-MLD]
+python tools/dev/mtbf-cases.py show --suite MTBF-legacy [--case test_Reliability0141_CloseStoreWlan]
+python tools/dev/mtbf-cases.py import --suite MTBF-legacy --file runtask.xml [--global UiAutomatorTestData.xml]
+python tools/dev/mtbf-cases.py export --suite MTBF-legacy --out runtask.xml [--times 100]
+python tools/dev/mtbf-cases.py validate --suite MTBF-legacy
+python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy [--force]
+```
+
+退出码：0 成功 / 2 本地错误（套件或用例找不到）/ 3 远端拒绝（401/403/404/409 原样透出）。
+`--base-url` 默认 `STP_BASE_URL` 或 `http://127.0.0.1:8000`。
+
+> **待办**：`X-Agent-Secret` 双通道写权限（初版保守，开放条件见 ADR §7 #1）；真机冒烟
+> （init trace `suite_sha256` == 门禁比对 sha，ADR-0030 D6 总验收信号）。
