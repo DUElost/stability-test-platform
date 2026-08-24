@@ -291,9 +291,9 @@ export default function ProjectsPage() {
                     {project.running_run_count} 在跑
                   </span>
                 </div>
-                {project.match_models.length > 0 ? (
+                {(project.match_models ?? []).length > 0 ? (
                   <p className={cn('mt-2 font-mono text-[11px]', TEXT.subtitle)}>
-                    映射型号：{project.match_models.join(' · ')}
+                    映射型号：{(project.match_models ?? []).join(' · ')}
                   </p>
                 ) : (
                   <p className={cn('mt-2 text-[11px]', TEXT.subtitle)}>尚未映射型号</p>
