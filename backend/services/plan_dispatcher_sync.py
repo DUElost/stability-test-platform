@@ -32,12 +32,17 @@ from backend.services.plan_dispatcher_core import (
     build_preview as _build_preview,
     check_legacy_aee_script_refs as _check_legacy_aee_script_refs,
     check_script_keys_complete as _check_script_keys_complete,
+    inject_suite_params as _inject_suite_params,
     inject_wifi_params as _inject_wifi_params,
     iter_lifecycle_steps as _iter_lifecycle_steps,
     lifecycle_consumes_wifi as _lifecycle_consumes_wifi,
     lifecycle_has_connect_wifi_step as _lifecycle_has_connect_wifi_step,
     script_defaults as _script_defaults,
     snapshot_dispatch_host_watcher_admin_states,
+)
+from backend.services.suite_binding import (
+    freeze_dispatch_suite,
+    step_params_for_dispatch,
 )
 from backend.services.state_machine import PlanRunStateMachine
 
@@ -550,6 +555,13 @@ def _prepare_queued_plan_run(
         next(iter(distinct_builds)) if len(distinct_builds) == 1 else None
     )
 
+    # ADR-0030 v1.4（#404 PR-C）：托管套件绑定的准入基线。仅 plan.suite_id
+    # 非空时冻结（NULL = P0 文件真源模式，零字段零门禁）；precheck 五步门禁
+    # 以活表+磁盘判定放行，本块承担 D5 归因（同快照两次 run 结果不同可归因清单被改）。
+    frozen_suite = freeze_dispatch_suite(db, plan)
+    if frozen_suite is not None:
+        merged_run_ctx["dispatch_suite"] = frozen_suite
+
     now = datetime.now(timezone.utc)
     pr = PlanRun(
         plan_id=plan.id,
@@ -828,11 +840,18 @@ def materialize_jobs_and_allocations(
     # ONE add_all + single flush — a 1000-device plan no longer does 1000
     # round-trips while holding the PlanRun/PlanRunHost admission locks.
     jobs: list[JobInstance] = []
+    # ADR-0030 §3.4：托管套件的 mtbf_* 步骤参数注入。以 prepare 冻结的
+    # dispatch_suite 为源（快照语义——绑定事后解除不改变在途 Run 的行为）；
+    # 无冻结块的 Run（P0 存量）完全不注入，脚本侧 env 回落保持原样。
+    suite_ctx = (pr.run_context or {}).get("dispatch_suite") or {}
+    suite_params = step_params_for_dispatch(db, suite_ctx) if suite_ctx else {}
     for device_id in device_ids:
         wifi_params = wifi_allocations.get(device_id)
         resolved_pipeline = {"lifecycle": deepcopy(lifecycle)}
         if wifi_params:
             resolved_pipeline = _inject_wifi_params(resolved_pipeline, wifi_params)
+        if suite_params:
+            resolved_pipeline = _inject_suite_params(resolved_pipeline, suite_params)
 
         jobs.append(JobInstance(
             plan_run_id=pr.id,

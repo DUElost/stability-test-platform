@@ -303,12 +303,12 @@ class TestActiveRunGuard:
 
     @pytest.fixture
     def _active_run(self, db_session):
-        """带 mtbf_setup 步骤的 Plan + 指定状态的 PlanRun。"""
+        """带 mtbf_setup 步骤的 Plan + 指定状态的 PlanRun（可绑定套件）。"""
         from backend.models.plan import Plan, PlanStep
         from backend.models.plan_run import PlanRun
 
-        def _make(status: str, script_name: str = "mtbf_setup"):
-            plan = Plan(name=f"mtbf-guard-{script_name}-{status}")
+        def _make(status: str, script_name: str = "mtbf_setup", suite=None):
+            plan = Plan(name=f"mtbf-guard-{script_name}-{status}", suite=suite)
             db_session.add(plan)
             db_session.commit()
             db_session.add(PlanStep(
@@ -386,6 +386,80 @@ class TestActiveRunGuard:
         assert audit.details["active_guard_forced"] is True
         assert audit.details["active_run_count"] >= 1
         assert in_flight.id  # 引用保形
+
+
+class TestActiveRunGuardPrecision:
+    """#402 守卫精确化（ADR-0030 v1.4）：匹配键从 mtbf_ 前缀宽匹配升级为
+    plan.suite_id join——同套件在途硬阻断（force 不豁免），跨套件不互斥，
+    force 逃生阀仅对无绑定 P0 存量 Run 保留。"""
+
+    @pytest.fixture(autouse=True)
+    def _storage_root(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+        return tmp_path
+
+    @pytest.fixture
+    def _active_run(self, db_session):
+        from backend.models.plan import Plan, PlanStep
+        from backend.models.plan_run import PlanRun
+
+        def _make(status: str, suite):
+            plan = Plan(name=f"mtbf-precise-{suite.name}-{status}", suite=suite)
+            db_session.add(plan)
+            db_session.commit()
+            db_session.add(PlanStep(
+                plan_id=plan.id, step_key="init", script_name="mtbf_setup",
+                script_version="1.0.0", stage="init", sort_order=0,
+                timeout_seconds=10, retry=0,
+            ))
+            pr = PlanRun(plan_id=plan.id, status=status, run_type="MANUAL",
+                         plan_snapshot={})
+            db_session.add(pr)
+            db_session.commit()
+            return pr
+        return _make
+
+    def test_same_suite_active_run_blocks_even_with_force(
+        self, client, admin_headers, suite, real_runtask, _active_run,
+    ):
+        """绑定同一套件的 ACTIVE Run：托管模式中途换清单没有正当理由。"""
+        _active_run("RUNNING", suite)
+        client.post(f"/api/v1/test-suites/{suite.id}/import", headers=admin_headers,
+                    files={"file": ("runtask.xml", real_runtask, "application/xml")})
+        resp = client.post(
+            f"/api/v1/test-suites/{suite.id}/export-to-tool-dir?force=true",
+            headers=admin_headers)
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert detail["code"] == "SUITE_RUNS_ACTIVE"
+        assert detail["active_run_count"] >= 1
+
+    def test_cross_suite_run_does_not_block(self, client, admin_headers,
+                                            db_session, real_runtask,
+                                            _active_run):
+        other = TestSuite(name="MTBF-other", root_config={})
+        db_session.add(other)
+        db_session.commit()
+        _active_run("RUNNING", other)     # 别的套件在跑
+
+        mine = TestSuite(name="MTBF-mine", root_config={})
+        db_session.add(mine)
+        db_session.commit()
+        client.post(f"/api/v1/test-suites/{mine.id}/import", headers=admin_headers,
+                    files={"file": ("runtask.xml", real_runtask, "application/xml")})
+        resp = client.post(f"/api/v1/test-suites/{mine.id}/export-to-tool-dir",
+                           headers=admin_headers)
+        assert resp.status_code == 200    # 跨套件并发导出不再互相阻塞
+
+    def test_deactivate_blocked_by_same_suite_runs(self, client, admin_headers,
+                                                   suite, db_session,
+                                                   real_runtask, _active_run):
+        _active_run("RUNNING", suite)
+        resp = client.delete(f"/api/v1/test-suites/{suite.id}",
+                             headers=admin_headers)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "SUITE_RUNS_ACTIVE"
+
 
 
 class TestAudit:

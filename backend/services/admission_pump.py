@@ -761,6 +761,27 @@ async def plan_admission_task(ctx: dict, *, plan_run_id: int, attempt_id: str) -
             logger.info("admission_task_skip_not_owner plan_run=%d", plan_run_id)
             return
 
+        # Phase A0 — suite binding gate (ADR-0030 §3.3). DB + shared-storage
+        # only, no locks and no RPC; runs before the (much slower) script
+        # verify so a broken binding fails fast. Same fatality tier as
+        # script_verify_failed: deterministic config fault, requeue cannot fix.
+        def _suite_gate() -> None:
+            from backend.services.suite_binding import collect_suite_gate_error
+
+            with SessionLocal() as db:
+                pr = db.get(PlanRun, plan_run_id)
+                if (
+                    pr is None
+                    or pr.status != PlanRunStatus.PRECHECK.value
+                    or pr.admission_attempt_id != attempt_id
+                ):
+                    return  # lost ownership between claim and here — skip
+                error = collect_suite_gate_error(db, pr)
+            if error:
+                raise _FatalAdmission("suite_verify_failed", error)
+
+        await asyncio.to_thread(_suite_gate)
+
         # Phase A — slow ops, zero DB locks held.
         await _verify_scripts_phase(plan_run_id, host_ids)
 

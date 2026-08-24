@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
-from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
@@ -36,20 +35,23 @@ from backend.api.schemas.suite import (
 from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.storage_root import resolve_shared_storage_root
-from backend.models.enums import PlanRunStatus
-from backend.models.plan import PlanStep
-from backend.models.plan_run import PlanRun
 from backend.models.project import TestProject
 from backend.models.suite import TestCase, TestSuite
 from backend.services.mtbf_suite import (
     _validate_suite,
-    content_fingerprint,
     exec_desc_to_dict,
     parse_global_params,
     parse_runtask,
     render_global,
     render_runtask,
     suite_from_rows,
+)
+from backend.services.suite_binding import (
+    active_run_ids_bound_to_suite,
+    active_unbound_mtbf_run_ids,
+    current_content_fingerprint as _current_fingerprint,
+    resolve_export_dir as _resolve_export_dir,
+    suite_case_rows as _case_rows,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,75 +66,14 @@ _GLOBAL_NAME = "UiAutomatorTestData.xml"
 # 内部助手
 # ---------------------------------------------------------------------------
 
-def _case_rows(db: Session, suite_id: int) -> List[dict]:
-    """按 ordinal 取用例行。
-
-    显式查询而非走 ``suite.cases`` 关系：会话若配 ``expire_on_commit=False``
-    （测试 conftest 即如此），提交后已加载的集合不会失效，identity map 会把
-    过期集合喂给指纹计算——指纹一旦算在陈旧集合上，「库改了没导出」就漏检。
-    """
-    rows = (
-        db.query(TestCase)
-        .filter(TestCase.suite_id == suite_id)
-        .order_by(TestCase.ordinal, TestCase.id)
-        .all()
-    )
-    return [
-        {
-            "name": c.name,
-            "ordinal": c.ordinal,
-            "times": c.times,
-            "enabled": c.enabled,
-            "exec_descs": c.exec_descs or [],
-        }
-        for c in rows
-    ]
 
 
-def _current_fingerprint(db: Session, suite: TestSuite) -> str:
-    return content_fingerprint(
-        root_config=suite.root_config,
-        global_params=suite.global_params,
-        cases=_case_rows(db, suite.id),
-    )
 
-
-def _resolve_export_dir(suite: TestSuite) -> str:
-    """导出目录：显式 export_dir > 项目 key > ``legacy``（兼容 P0 部署现状）。"""
-    if suite.export_dir:
-        return suite.export_dir
-    if suite.project is not None:
-        return suite.project.project_key
-    return "legacy"
-
-
-# #402 弱版在途守卫：ACTIVE = QUEUED / PRECHECK / RUNNING。
-_ACTIVE_RUN_STATUSES = (
-    PlanRunStatus.QUEUED.value,
-    PlanRunStatus.PRECHECK.value,
-    PlanRunStatus.RUNNING.value,
-)
-
-
-def _active_mtbf_run_ids(db: Session) -> list[int]:
-    """引用 mtbf 系脚本的 ACTIVE PlanRun。
-
-    宽匹配（script_name 前缀 ``mtbf_``）而非按 export_dir 精确关联是有意的：
-    P0 消费路径由 host 级 env（STP_MTBF_PROJECT）决定读哪个目录，DB 侧无从
-    知道某个 Run 实际消费哪份文件——按目录「精确」关联是虚构的精度。在
-    #404 的 suite 绑定落地前，唯一不撒谎的相关性是「有 MTBF 长跑在飞」，
-    此时拒绝一切工具目录覆盖。绑定落地后本函数应改为按 suite 精确匹配。
-    """
-    rows = db.execute(
-        select(PlanRun.id)
-        .join(PlanStep, PlanStep.plan_id == PlanRun.plan_id)
-        .where(
-            PlanRun.status.in_(_ACTIVE_RUN_STATUSES),
-            PlanStep.script_name.like("mtbf\\_%"),
-        )
-        .distinct()
-    ).scalars().all()
-    return list(rows)
+# #402 在途守卫（ADR-0030 v1.4 精确化）：ACTIVE = QUEUED / PRECHECK / RUNNING。
+# 匹配键升级为 plan.suite_id——绑定套件的在途 Run 走
+# ``active_run_ids_bound_to_suite`` 精确匹配（硬阻断，force 不豁免）；无绑定的
+# P0 存量 Run 保留宽匹配兜底（``active_unbound_mtbf_run_ids``，force 可越过）。
+# 过渡语义与存在理由见 suite_binding.active_unbound_mtbf_run_ids docstring。
 
 
 def _suite_out(db: Session, suite: TestSuite, detail: bool = False):
@@ -294,8 +235,23 @@ def delete_suite(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """软删（is_active=false）。ACTIVE PlanRun 引用守卫在 P1b 随绑定字段落地。"""
+    """软删（is_active=false）。绑定本套件的 ACTIVE Run 硬阻断（同 #402 精确守卫）：
+    门禁第 1 步只拦未来准入，拦不住已在跑的 Run 被抽掉配置底座。"""
     suite = _get_suite(db, suite_id)
+    bound_runs = active_run_ids_bound_to_suite(db, suite.id)
+    if bound_runs:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SUITE_RUNS_ACTIVE",
+                "message": (
+                    "Runs bound to this suite are in flight; deactivate would "
+                    "pull the config out from under them. Wait or abort first."
+                ),
+                "plan_run_ids": sorted(bound_runs)[:50],
+                "active_run_count": len(bound_runs),
+            },
+        )
     suite.is_active = False
     record_audit(
         db, action="deactivate", resource_type="test_suite", resource_id=suite.id,
@@ -548,26 +504,47 @@ def validate_suite(
 def export_to_tool_dir(
     suite_id: int,
     request: Request,
-    force: bool = Query(False, description="越过 ACTIVE MTBF 长跑守卫（审计留痕）"),
+    force: bool = Query(
+        False,
+        description="越过无绑定 MTBF 长跑守卫（仅 P0 存量场景；审计留痕）。"
+                    "绑定同一套件的在途 Run 一律硬阻断，force 不豁免",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
     """渲染两文件 atomic write 到中心存储消费路径，并记下两个漂移比对基线。"""
     suite = _get_suite(db, suite_id)
 
-    # #402 在途守卫：MTBF 长跑以天计，覆盖 runtask.xml 等于在跑中途换清单。
-    active_runs = _active_mtbf_run_ids(db)
-    if active_runs and not force:
+    # #402 在途守卫（精确化）：MTBF 长跑以天计，覆盖 runtask.xml 等于在跑中途换清单。
+    # 两层：绑定本套件的 ACTIVE Run 硬阻断（托管模式有门禁兜底，中途换清单
+    # 没有任何正当理由）；无绑定的 P0 存量 Run 保留 force 逃生阀。
+    bound_runs = active_run_ids_bound_to_suite(db, suite.id)
+    if bound_runs:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SUITE_RUNS_ACTIVE",
+                "message": (
+                    "Runs bound to this suite are in flight; exporting would "
+                    "swap the case list mid-run. Wait for them to finish or "
+                    "abort them first (force is not honored for bound suites)."
+                ),
+                "plan_run_ids": sorted(bound_runs)[:50],
+                "active_run_count": len(bound_runs),
+            },
+        )
+    unbound_runs = active_unbound_mtbf_run_ids(db)
+    if unbound_runs and not force:
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "ACTIVE_MTBF_RUNS",
                 "message": (
-                    "MTBF runs are in flight; exporting would swap the case "
-                    "list mid-run. Wait for them to finish or pass force=true."
+                    "Unbound MTBF runs are in flight; exporting would swap the "
+                    "case list mid-run. Wait for them to finish or pass force=true."
                 ),
-                "plan_run_ids": sorted(active_runs)[:50],
-                "active_run_count": len(active_runs),
+                "plan_run_ids": sorted(unbound_runs)[:50],
+                "active_run_count": len(unbound_runs),
             },
         )
 
@@ -608,7 +585,7 @@ def export_to_tool_dir(
             "exported_sha256": suite.exported_sha256,
             "testpoints": len(built.testpoints),
             **({"active_guard_forced": True,
-                "active_run_count": len(active_runs)} if active_runs else {}),
+                "active_run_count": len(unbound_runs)} if unbound_runs else {}),
         },
         user_id=current_user.id, username=current_user.username, request=request,
     )
