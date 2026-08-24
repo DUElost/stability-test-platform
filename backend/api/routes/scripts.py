@@ -19,7 +19,7 @@ from backend.api.error_helpers import raise_api_http_error
 from backend.api.routes.auth import get_current_active_user, get_current_user, require_admin, User
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.audit import record_audit
-from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES, hidden_legacy_plan_ids
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.database import get_db
 from backend.models.enums import PlanRunStatus
 from backend.models.plan import PlanStep
@@ -257,9 +257,6 @@ def _referencing_plan_ids(db: Session, script: Script) -> list[int]:
         .distinct()
         .order_by(PlanStep.plan_id)
     )
-    hidden_plan_ids_set = hidden_legacy_plan_ids(db)
-    if hidden_plan_ids_set:
-        query = query.filter(PlanStep.plan_id.notin_(tuple(hidden_plan_ids_set)))
     rows = query.all()
     return [row.plan_id for row in rows]
 

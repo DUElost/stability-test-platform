@@ -599,24 +599,8 @@ class DeviceLogWatcher:
                 "device_log_watcher_device_log_event_fallback_signal_only serial=%s job=%d",
                 self._serial, self._job_id,
             )
-            return
-
-        try:
-            from ..event_uploader import EventUploader
-        except ImportError:
-            from agent.event_uploader import EventUploader
-        if EventUploader.is_enabled():
-            EventUploader.instance().enqueue_local_event(event={
-                "id": event_id,
-                "local_path": str(local_path),
-                "serial": self._serial,
-                "platform": platform,
-                "event_type": meta_event_type,
-                "detected_at": detected_at.isoformat(),
-                "plan_run_id": self._plan_run_id,
-                "job_id": self._job_id,
-                "host_id": self._host_id,
-            })
+        # #287：过滤模型下 LOCAL 不直接入队——upload_task 按 scan xls 引用
+        # 标记 UPLOAD_PENDING 后由 EventUploader 轮询上送。
 
     def _build_subscribed_paths(self) -> Dict[str, List[str]]:
         """根据 probe_result 过滤出可订阅的分类 → 路径列表。

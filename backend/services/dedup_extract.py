@@ -141,10 +141,6 @@ def run_extract_sync(plan_run_id: int) -> int:
             logger.warning("dedup_extract_skip_no_nfs plan_run=%d", plan_run_id)
             return -2
 
-        from backend.core.storage_root import resolve_legacy_shared_storage_root
-
-        legacy_root = resolve_legacy_shared_storage_root()
-
         from backend.core.artifact_paths import (
             copytree_under_root,
             path_under_root,
@@ -158,7 +154,6 @@ def run_extract_sync(plan_run_id: int) -> int:
                 located = resolve_extract_event_src(
                     raw,
                     nfs_root=nfs_root,
-                    legacy_root=legacy_root,
                     plan_run_id=plan_run_id,
                 )
             except ArtifactPathError:

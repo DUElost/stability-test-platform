@@ -18,7 +18,6 @@ const TERMINAL: ReadonlyArray<PlanRunStatus> = [
   'SUCCESS',
   'PARTIAL_SUCCESS',
   'FAILED',
-  'DEGRADED',
 ];
 
 /** 巡检日志页面 — 阶段/严重度过滤 + 分页事件流(多源融合)。 */

@@ -1034,8 +1034,7 @@ export type PlanRunStatus =
   | 'RUNNING'
   | 'SUCCESS'
   | 'PARTIAL_SUCCESS'
-  | 'FAILED'
-  | 'DEGRADED';
+  | 'FAILED';
 export type PlanRunType = 'MANUAL' | 'SCHEDULE' | 'CHAIN';
 
 export interface PlanDispatchState {

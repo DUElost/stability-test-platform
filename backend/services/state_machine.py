@@ -73,7 +73,6 @@ PLAN_RUN_VALID_TRANSITIONS: dict[PlanRunStatus, set[PlanRunStatus]] = {
     PlanRunStatus.FAILED: {PlanRunStatus.QUEUED},
     PlanRunStatus.SUCCESS:         set(),
     PlanRunStatus.PARTIAL_SUCCESS: set(),
-    PlanRunStatus.DEGRADED:        set(),
 }
 
 

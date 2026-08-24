@@ -1,6 +1,6 @@
 """Dedup scan/merge service — ADR-0025 Sprint 4 归档-2。
 
-各 agent 单独 scan（start_log_scan）→ 集中 merge（-merge_files）。
+各 agent 单独 scan（start_log_scan）→ 集中 merge（-merge_files_list）。
 产物（Result_*.xls）写 plan_run_artifact 表。
 config-gated：未配置 scan 工具 env 则跳过 + 503。
 """
@@ -24,9 +24,6 @@ logger = logging.getLogger(__name__)
 
 ARTIFACT_TYPE_SCAN = "scan_result_xls"
 ARTIFACT_TYPE_MERGE = "merge_result_xls"
-
-# Windows CreateProcessW argv 拼接上限（留余量给解释器/引号开销）
-_WIN_MERGE_ARGV_CHAR_LIMIT = 30_000
 
 _merge_files_list_supported: Optional[bool] = None
 
@@ -273,7 +270,7 @@ def run_merge_sync(
     scan_round_id: str | None = None,
     round_started_at: datetime | None = None,
 ) -> str:
-    """同步执行 merge（-merge_files 或 -merge_files_list，视工具能力）。
+    """同步执行 merge（-merge_files_list；工具不支持即配置错误，#291）。
 
     阻塞等待子进程完成，校验 merge_result/ 出现新产物目录，返回 "ok" 或空串。
 
@@ -467,28 +464,30 @@ def build_merge_argv(
     org_files: List[str],
     side_argv: List[str],
 ) -> Tuple[List[str], Optional[Path]]:
-    """构建 merge 子进程 argv；必要时回退 -merge_files。"""
-    if scan_tool_supports_merge_files_list(tool):
-        with tempfile.NamedTemporaryFile(
-            "w",
-            suffix=".txt",
-            prefix="merge_list_",
-            dir=str(Path(tempfile.gettempdir())),
-            delete=False,
-            encoding="utf-8",
-        ) as f:
-            f.write("\n".join(org_files))
-            listfile = Path(f.name)
-        argv = [tool["python"], tool["script"], "-merge_files_list", str(listfile)] + side_argv
-        return argv, listfile
+    """构建 merge 子进程 argv。
 
-    argv = [tool["python"], tool["script"], "-merge_files", *org_files, *side_argv]
-    if sum(len(part) for part in argv) > _WIN_MERGE_ARGV_CHAR_LIMIT:
+    #291：只走 ``-merge_files_list``。工具不支持（过旧 / 脚本缺失 / 探测
+    失败）视为配置错误直接抛错，不再静默回落展开全部 xls 的
+    ``-merge_files``——那条路有 argv 长度上限，host 规模上来必撞墙。
+    """
+    if not scan_tool_supports_merge_files_list(tool):
         raise RuntimeError(
-            f"merge argv too long ({len(org_files)} files); "
-            "upgrade scan tool for -merge_files_list or reduce org file count"
+            "scan tool does not support -merge_files_list "
+            f"(script={tool.get('script')!r}); upgrade the scan tool — "
+            "the legacy -merge_files fallback was removed (#291)"
         )
-    return argv, None
+    with tempfile.NamedTemporaryFile(
+        "w",
+        suffix=".txt",
+        prefix="merge_list_",
+        dir=str(Path(tempfile.gettempdir())),
+        delete=False,
+        encoding="utf-8",
+    ) as f:
+        f.write("\n".join(org_files))
+        listfile = Path(f.name)
+    argv = [tool["python"], tool["script"], "-merge_files_list", str(listfile)] + side_argv
+    return argv, listfile
 
 
 def merge_stderr_indicates_failure(stderr: str) -> bool:

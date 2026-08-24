@@ -6,7 +6,8 @@ Control-plane half (Agent-side production of these signals lands in 5b):
   independent signals)
 - recycler selects the liveness clock per execution_state (§3 matrix):
   EXECUTING_STEP → executor heartbeat; WAITING_*/PATROL_SLEEP → per-host
-  coordinator heartbeat; NULL/missing signals → legacy updated_at fallback
+  coordinator heartbeat; missing signal → "not reported", anchored at
+  dispatch time (#288) — updated_at is never consulted
 - recovery payload carries execution_state (frozen resume contract)
 """
 from __future__ import annotations
@@ -163,7 +164,19 @@ class TestBatchRenewalSignalIngestion:
             db.close()
 
     @pytest.mark.asyncio
-    async def test_legacy_agent_without_signals_still_renews(self, db_session, signal_fixture):
+    async def test_renewal_without_signals_still_renews(self, db_session, signal_fixture):
+        """No execution_state reported: renewal succeeds, arrival proves the
+        executor alive, and updated_at stays pinned (#288 — no legacy
+        dual-write)."""
+        stale = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, signal_fixture["job"].id)
+            job.updated_at = stale
+            db.commit()
+        finally:
+            db.close()
+
         result = await self._renew(signal_fixture)
         assert result.data.results[0].status == "renewed"
 
@@ -173,7 +186,7 @@ class TestBatchRenewalSignalIngestion:
             assert job.execution_state is None
             assert job.last_progress_at is None
             assert job.last_execution_heartbeat_at is not None
-            assert job.updated_at is not None  # legacy dual-write
+            assert job.updated_at == stale
         finally:
             db.close()
 
@@ -203,6 +216,7 @@ class TestRunningLivenessAnchor:
         base = dict(
             plan_run_id=1, host_id="h", execution_state=None,
             last_execution_heartbeat_at=None, updated_at=None,
+            started_at=None, created_at=None,
             pipeline_def={"lifecycle": {"init": [], "teardown": []}},
             last_patrol_heartbeat_at=None,
         )
@@ -227,17 +241,37 @@ class TestRunningLivenessAnchor:
         assert anchor == coord_hb
         assert timeout == COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
 
-    def test_waiting_without_coordinator_falls_back_to_updated_at(self):
+    def test_waiting_without_coordinator_is_not_reported(self):
+        """Missing coordinator signal → anchored at dispatch time, judged by
+        the coordinator window — never by updated_at (#288)."""
         stale = datetime.now(timezone.utc) - timedelta(hours=2)
-        job = self._job(execution_state="PATROL_SLEEP", updated_at=stale)
-        anchor, _timeout = _running_liveness_anchor(job, {})
-        assert anchor == stale  # legacy clock
+        started = datetime.now(timezone.utc) - timedelta(minutes=10)
+        job = self._job(
+            execution_state="PATROL_SLEEP",
+            started_at=started, created_at=started, updated_at=stale,
+        )
+        anchor, timeout = _running_liveness_anchor(job, {})
+        assert anchor == started
+        assert timeout == COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
 
-    def test_null_execution_state_is_pure_legacy(self):
-        ts = datetime.now(timezone.utc) - timedelta(seconds=30)
-        job = self._job(updated_at=ts)
+    def test_null_execution_state_is_not_reported(self):
+        """NULL execution_state → dispatch-time anchor; a fresh updated_at
+        cannot keep the job alive (#288)."""
+        fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
+        started = datetime.now(timezone.utc) - timedelta(hours=2)
+        job = self._job(updated_at=fresh, started_at=started, created_at=started)
         anchor, _timeout = _running_liveness_anchor(job, {})
-        assert anchor == ts
+        assert anchor == started
+
+    def test_executing_step_without_heartbeat_falls_back_to_dispatch_time(self):
+        fresh_updated = datetime.now(timezone.utc) - timedelta(seconds=5)
+        started = datetime.now(timezone.utc) - timedelta(hours=2)
+        job = self._job(
+            execution_state="EXECUTING_STEP",
+            updated_at=fresh_updated, started_at=started, created_at=started,
+        )
+        anchor, _timeout = _running_liveness_anchor(job, {})
+        assert anchor == started
 
 
 class TestRecyclerSubStateClocks:
@@ -299,17 +333,38 @@ class TestRecyclerSubStateClocks:
         db_session.expire_all()
         assert db_session.get(JobInstance, job.id).status == "RUNNING"
 
-    def test_legacy_job_stale_updated_at_goes_unknown(self, db_session, signal_fixture):
-        """NULL execution_state (legacy agent) → old rule byte-for-byte."""
+    def test_not_reported_job_stale_dispatch_time_goes_unknown(
+        self, db_session, signal_fixture,
+    ):
+        """NULL execution_state (signal never arrived) → dispatch-time clock:
+        stale started_at ages the job into UNKNOWN even while a renewal kept
+        updated_at fresh (#288)."""
         f = signal_fixture
         job = f["job"]
-        job.updated_at = self._stale()
+        job.started_at = self._stale()
+        job.updated_at = datetime.now(timezone.utc)  # renewal keepalive — irrelevant
         db_session.commit()
 
         recycle_once()
 
         db_session.expire_all()
         assert db_session.get(JobInstance, job.id).status == "UNKNOWN"
+
+    def test_not_reported_job_within_first_window_survives(
+        self, db_session, signal_fixture,
+    ):
+        """NULL execution_state but fresh started_at → still inside its first
+        executor window; not recycled (#288 grace for claim→first-renewal)."""
+        f = signal_fixture
+        job = f["job"]
+        job.started_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+        job.updated_at = self._stale()
+        db_session.commit()
+
+        recycle_once()
+
+        db_session.expire_all()
+        assert db_session.get(JobInstance, job.id).status == "RUNNING"
 
 
 # ── recovery payload carries execution_state ──────────────────────────────────

@@ -45,7 +45,6 @@ _WF_STATUS_TO_TASK_STATUS = {
     "SUCCESS": "COMPLETED",
     "PARTIAL_SUCCESS": "COMPLETED",
     "FAILED": "FAILED",
-    "DEGRADED": "FAILED",
 }
 
 # ---------------------------------------------------------------------------

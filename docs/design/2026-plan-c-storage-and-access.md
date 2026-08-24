@@ -90,7 +90,7 @@ flowchart TB
 | 角色 | **中心存储（CIFS / NFS）**；口头「CIFS / NFS / 15.4」均指此角色 |
 | 当前 UNC（过渡） | `//192.0.2.202/jxtinno/sonic_tinno`（与控制面同机） |
 | 目标 UNC | `//192.0.2.4/jxtinno/sonic_tinno` 或 `//198.51.100.4/...`（控制面仍留 8.202） |
-| 挂载点 env | **主键** `STP_AEE_NFS_ROOT`（upload / spill / merge / extract / 健康页同一把钥匙）。`STP_WATCHER_NFS_BASE_DIR` / `STP_AEE_CIFS_ROOT` 仅弃用别名（未设主键时回落） |
+| 挂载点 env | **主键** `STP_AEE_NFS_ROOT`（upload / spill / merge / extract / 健康页同一把钥匙）。`STP_WATCHER_NFS_BASE_DIR` / `STP_AEE_CIFS_ROOT` 别名已删除（#289），未设主键即未配置 |
 | 内容 | `dedup/`（xls）、`devices/{相对路径}`（事件目录）、`jobs/{job_id}/`（JobArtifact 文件，puller/promote）；**无** `archives/{job}/run_log_bundle` |
 
 > **路径约定（#172）**：JobArtifact 文件统一走 `jobs/{job_id}/`，事件目录走

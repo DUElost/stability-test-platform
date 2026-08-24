@@ -128,7 +128,7 @@ export default function PlanRunDetailPage() {
   useEffect(() => {
     if (!runQ.data) return;
     const status = runQ.data.status;
-    if (status !== 'FAILED' && status !== 'DEGRADED') return;
+    if (status !== 'FAILED') return;
     if (!finalArchiveReady) return;
     if (sessionStorage.getItem(finalArchivePromptedKey)) return;
     sessionStorage.setItem(finalArchivePromptedKey, '1');

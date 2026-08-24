@@ -209,7 +209,6 @@ async def test_concurrent_complete_job_no_deadlock():
                 PlanRunStatus.SUCCESS.value,
                 PlanRunStatus.PARTIAL_SUCCESS.value,
                 PlanRunStatus.FAILED.value,
-                PlanRunStatus.DEGRADED.value,
             }, f"plan_run 应进入终态,实际 {run.status}"
             assert run.status == PlanRunStatus.SUCCESS.value, (
                 f"两 job 都 COMPLETED + threshold=0 → 应为 SUCCESS,实际 {run.status}"

@@ -30,18 +30,15 @@ def test_build_merge_argv_prefers_merge_files_list_when_supported(tmp_path):
     listfile.unlink(missing_ok=True)
 
 
-def test_build_merge_argv_falls_back_to_merge_files(tmp_path):
+def test_build_merge_argv_unsupported_tool_raises(tmp_path):
+    """#291: 探测失败 = 配置错误，直接抛错；不再回落 -merge_files。"""
     org = [str(tmp_path / "a_org.xls")]
     tool = {"python": "python", "script": str(tmp_path / "start_log_scan.py")}
     (tmp_path / "start_log_scan.py").write_text("# stub", encoding="utf-8")
 
     with patch.object(ds, "scan_tool_supports_merge_files_list", return_value=False):
-        argv, listfile = ds.build_merge_argv(tool, org, ["-side", "shanghai"])
-
-    assert argv[:3] == ["python", tool["script"], "-merge_files"]
-    assert org[0] in argv
-    assert "-side" in argv
-    assert listfile is None
+        with pytest.raises(RuntimeError, match="does not support -merge_files_list"):
+            ds.build_merge_argv(tool, org, ["-side", "shanghai"])
 
 
 def test_resolve_scan_tool_prefers_backend_keys(monkeypatch):

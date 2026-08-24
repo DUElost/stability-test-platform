@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
@@ -17,10 +16,6 @@ from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 
 logger = logging.getLogger(__name__)
-
-
-def continuous_event_upload_enabled() -> bool:
-    return os.getenv("STP_EVENT_UPLOADER_ENABLED", "0").strip().lower() in ("1", "true", "yes")
 
 
 # Upload-complete / extractable: CIFS ``remote_path`` is authoritative.
@@ -39,23 +34,10 @@ _ASSOCIATE_GRACE = timedelta(minutes=30)
 def count_pending_upload_events(db: Session, plan_run_id: int) -> int:
     """plan_run 下尚未完成上送的事件数。
 
-    ADR-0028 方案 A（STP_EVENT_UPLOADER_CONTINUOUS=0，默认）：仅计数
+    ADR-0028 方案 A 过滤模型（#287：CONTINUOUS 全量分支已删除）：仅计数
     UPLOAD_PENDING / UPLOADING / UPLOAD_FAILED；LOCAL 是「有意不传」
     （未被 scan xls 引用），不阻塞 merge。
-    逃生阀（STP_EVENT_UPLOADER_CONTINUOUS=1）：计数所有非 REMOTE/ARCHIVED/PRUNED。
     """
-    import os
-    _continuous = os.getenv("STP_EVENT_UPLOADER_CONTINUOUS", "0").strip().lower() in ("1", "true", "yes")
-    if _continuous:
-        return int(
-            db.execute(
-                select(func.count(DeviceLogEvent.id)).where(
-                    DeviceLogEvent.plan_run_id == plan_run_id,
-                    DeviceLogEvent.state.notin_(_REMOTE_STATES),
-                )
-            ).scalar()
-            or 0
-        )
     _IN_FLIGHT = {"UPLOAD_PENDING", "UPLOADING", "UPLOAD_FAILED"}
     return int(
         db.execute(

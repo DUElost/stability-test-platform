@@ -166,7 +166,6 @@ def test_aggregation_only_aborted_no_failed():
     PlanRunStatus.SUCCESS.value,
     PlanRunStatus.PARTIAL_SUCCESS.value,
     PlanRunStatus.FAILED.value,
-    PlanRunStatus.DEGRADED.value,
 ])
 def test_aggregation_skipped_when_run_already_terminal(terminal_status):
     """aggregator/abort 二次重入:run.status 已落终态时不得覆写。

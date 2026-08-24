@@ -50,10 +50,8 @@ _FLEET_ENV_KEYS: tuple[str, ...] = (
     "STP_WATCHER_ENABLED",
     # ADR-0028: same value on control plane and every agent (#218).
     # Unset on the control plane → not pushed (agents keep local value).
+    # #287：单一开关，代码默认开；UPLOADER/CONTINUOUS 双键已删除。
     "STP_DEVICE_LOG_EVENT_ENABLED",
-    "STP_EVENT_UPLOADER_ENABLED",
-    # ADR-0028 方案 A：0=仅上传 UPLOAD_PENDING（过滤模型）；1=上传全部 LOCAL（全量模型）
-    "STP_EVENT_UPLOADER_CONTINUOUS",
     # MTBF P0（ADR-0030 D6）：套件 testpoint 期望数，全 fleet 同值。
     # 控制面设置一次，hot-update 下发；脚本侧默认 0=只报绝对数。
     # 注意：STP_MTBF_TASK_TIMES 故意**不**在此列——冒烟期=1、生产=100，
@@ -118,8 +116,10 @@ def _fleet_env_overrides_from_control_plane() -> dict[str, str]:
         if val:
             overrides[agent_key] = val
 
-    # Legacy script env: subprocesses still read STP_NFS_ROOT. Mirror the
-    # 中心存储 mount — never the control plane's own STP_NFS_ROOT.
+    # ``STP_NFS_ROOT`` is a *script-only* alias (#289 decision B): the pinned
+    # scripts under backend/agent/scripts/ read that name, so hot-update mirrors
+    # the 中心存储 mount into it — never the control plane's own STP_NFS_ROOT.
+    # Runtime code resolves storage exclusively via STP_AEE_NFS_ROOT.
     aee_nfs_root = os.getenv("STP_AEE_NFS_ROOT", "").strip()
     if aee_nfs_root:
         overrides.setdefault("STP_NFS_ROOT", aee_nfs_root)

@@ -230,7 +230,7 @@ def run_retention_cleanup() -> None:
             stale_runs = (
                 db.query(PlanRun)
                 .filter(
-                    PlanRun.status.in_(["SUCCESS", "FAILED", "PARTIAL_SUCCESS", "DEGRADED"]),
+                    PlanRun.status.in_(["SUCCESS", "FAILED", "PARTIAL_SUCCESS"]),
                     PlanRun.started_at < cutoff,
                 )
                 .limit(100)

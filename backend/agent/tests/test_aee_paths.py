@@ -91,16 +91,14 @@ def test_resolve_shared_storage_root_primary_wins(monkeypatch):
     assert resolve_shared_storage_root() == "/mnt/stp-aee"
 
 
-def test_resolve_shared_storage_root_watcher_alias(monkeypatch):
+def test_resolve_shared_storage_root_aliases_are_gone(monkeypatch):
+    """#289：CIFS/WATCHER 弃用别名回落已删除——未设主键即未配置。"""
     _clear_share_env(monkeypatch)
     monkeypatch.setenv("STP_WATCHER_NFS_BASE_DIR", "/mnt/watcher")
-    assert resolve_shared_storage_root() == "/mnt/watcher"
-
-
-def test_resolve_shared_storage_root_cifs_alias(monkeypatch):
-    _clear_share_env(monkeypatch)
     monkeypatch.setenv("STP_AEE_CIFS_ROOT", "/mnt/cifs")
-    assert resolve_shared_storage_root() == "/mnt/cifs"
+    assert resolve_shared_storage_root() == ""
+    with pytest.raises(RuntimeError, match="STP_AEE_NFS_ROOT is not set"):
+        get_aee_nfs_root()
 
 
 def test_resolve_path_under_aee_local_rejects_escape(tmp_path, monkeypatch):

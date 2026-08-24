@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from backend.models.enums import HostStatus
 from backend.models.host import Host, Device
 from backend.models.job import JobInstance
-from backend.models.plan import Plan, PlanStep
+from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 
 
@@ -152,70 +152,6 @@ class TestActivityStats:
         assert response.status_code == 200
         assert response.json()["hours"] == 48
 
-    def test_activity_excludes_hidden_legacy_aee_plan_jobs(
-        self, client, auth_headers, db_session, sample_device,
-    ):
-        now = datetime.now(timezone.utc)
-        hidden_plan = Plan(
-            name="Hidden Legacy Activity Plan",
-            description="",
-            failure_threshold=0.05,
-        )
-        db_session.add(hidden_plan)
-        db_session.flush()
-        db_session.add_all([
-            PlanStep(
-                plan_id=hidden_plan.id,
-                step_key="init_0",
-                script_name="check_device",
-                script_version="1.0.0",
-                stage="init",
-                sort_order=0,
-            ),
-            PlanStep(
-                plan_id=hidden_plan.id,
-                step_key="scan",
-                script_name="scan_aee",
-                script_version="1.0.0",
-                stage="patrol",
-                sort_order=1,
-            ),
-        ])
-
-        hidden_plan_run = PlanRun(
-            plan_id=hidden_plan.id,
-            status="RUNNING",
-            failure_threshold=0.05,
-            plan_snapshot={"name": hidden_plan.name, "plan_id": hidden_plan.id},
-            run_type="MANUAL",
-            triggered_by="pytest",
-        )
-        db_session.add(hidden_plan_run)
-        db_session.flush()
-
-        db_session.add(JobInstance(
-            plan_run_id=hidden_plan_run.id,
-            plan_id=hidden_plan.id,
-            device_id=sample_device.id,
-            host_id=sample_device.host_id,
-            status="COMPLETED",
-            status_reason=None,
-            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
-            started_at=now - timedelta(minutes=30),
-            ended_at=now - timedelta(minutes=29),
-            created_at=now - timedelta(minutes=30),
-            updated_at=now - timedelta(minutes=29),
-        ))
-        db_session.commit()
-
-        response = client.get("/api/v1/stats/activity", headers=auth_headers)
-        assert response.status_code == 200
-        data = response.json()
-
-        assert sum(point["started"] for point in data["points"]) == 0
-        assert sum(point["completed"] for point in data["points"]) == 0
-        assert sum(point["failed"] for point in data["points"]) == 0
-
 
 class TestCompletionTrend:
     def test_completion_trend_default(self, client, auth_headers):
@@ -229,69 +165,6 @@ class TestCompletionTrend:
         response = client.get("/api/v1/stats/completion-trend", params={"days": 14}, headers=auth_headers)
         assert response.status_code == 200
         assert response.json()["days"] == 14
-
-    def test_completion_trend_excludes_hidden_legacy_aee_plan_jobs(
-        self, client, auth_headers, db_session, sample_device,
-    ):
-        now = datetime.now(timezone.utc)
-        hidden_plan = Plan(
-            name="Hidden Legacy Completion Plan",
-            description="",
-            failure_threshold=0.05,
-        )
-        db_session.add(hidden_plan)
-        db_session.flush()
-        db_session.add_all([
-            PlanStep(
-                plan_id=hidden_plan.id,
-                step_key="init_0",
-                script_name="check_device",
-                script_version="1.0.0",
-                stage="init",
-                sort_order=0,
-            ),
-            PlanStep(
-                plan_id=hidden_plan.id,
-                step_key="export",
-                script_name="export_mobilelogs",
-                script_version="1.0.0",
-                stage="teardown",
-                sort_order=1,
-            ),
-        ])
-
-        hidden_plan_run = PlanRun(
-            plan_id=hidden_plan.id,
-            status="RUNNING",
-            failure_threshold=0.05,
-            plan_snapshot={"name": hidden_plan.name, "plan_id": hidden_plan.id},
-            run_type="MANUAL",
-            triggered_by="pytest",
-        )
-        db_session.add(hidden_plan_run)
-        db_session.flush()
-
-        db_session.add(JobInstance(
-            plan_run_id=hidden_plan_run.id,
-            plan_id=hidden_plan.id,
-            device_id=sample_device.id,
-            host_id=sample_device.host_id,
-            status="FAILED",
-            status_reason=None,
-            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
-            started_at=now - timedelta(hours=2),
-            ended_at=now - timedelta(hours=1),
-            created_at=now - timedelta(hours=2),
-            updated_at=now - timedelta(hours=1),
-        ))
-        db_session.commit()
-
-        response = client.get("/api/v1/stats/completion-trend", headers=auth_headers)
-        assert response.status_code == 200
-        data = response.json()
-
-        assert sum(point["passed"] for point in data["points"]) == 0
-        assert sum(point["failed"] for point in data["points"]) == 0
 
 
 def _make_plan_run(db_session, plan_id: str | int, *, status: str = "SUCCESS") -> "PlanRun":
@@ -400,38 +273,6 @@ class TestHostFailureRate:
         assert response.status_code == 200
         assert len(response.json()["items"]) == 2
 
-    def test_excludes_hidden_legacy_aee_plan_jobs(
-        self, client, auth_headers, db_session, sample_host, sample_device,
-    ):
-        now = datetime.now(timezone.utc)
-        hidden_plan = Plan(name="Hidden Legacy Host Plan", description="", failure_threshold=0.05)
-        db_session.add(hidden_plan)
-        db_session.flush()
-        db_session.add(PlanStep(
-            plan_id=hidden_plan.id,
-            step_key="scan",
-            script_name="scan_aee",
-            script_version="1.0.0",
-            stage="patrol",
-            sort_order=0,
-        ))
-        plan_run = _make_plan_run(db_session, hidden_plan.id)
-        db_session.add(JobInstance(
-            plan_run_id=plan_run.id,
-            plan_id=hidden_plan.id,
-            device_id=sample_device.id,
-            host_id=sample_host.id,
-            status="FAILED",
-            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
-            started_at=now - timedelta(minutes=10),
-            ended_at=now - timedelta(minutes=9),
-        ))
-        db_session.commit()
-
-        response = client.get("/api/v1/stats/host-failure-rate", headers=auth_headers)
-        assert response.status_code == 200
-        assert response.json()["items"] == []
-
 
 class TestPlanSuccessRate:
     def test_empty(self, client, auth_headers):
@@ -479,38 +320,6 @@ class TestPlanSuccessRate:
         assert items[0]["pass_rate"] == 1.0
         assert items[1]["plan_name"] == "bad-plan"
         assert items[1]["pass_rate"] == 0.0
-
-    def test_excludes_hidden_legacy_aee_plan_jobs(
-        self, client, auth_headers, db_session, sample_host, sample_device,
-    ):
-        now = datetime.now(timezone.utc)
-        hidden_plan = Plan(name="Hidden Legacy Success Plan", description="", failure_threshold=0.05)
-        db_session.add(hidden_plan)
-        db_session.flush()
-        db_session.add(PlanStep(
-            plan_id=hidden_plan.id,
-            step_key="export",
-            script_name="export_mobilelogs",
-            script_version="1.0.0",
-            stage="teardown",
-            sort_order=0,
-        ))
-        plan_run = _make_plan_run(db_session, hidden_plan.id)
-        db_session.add(JobInstance(
-            plan_run_id=plan_run.id,
-            plan_id=hidden_plan.id,
-            device_id=sample_device.id,
-            host_id=sample_host.id,
-            status="COMPLETED",
-            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
-            started_at=now - timedelta(minutes=10),
-            ended_at=now - timedelta(minutes=9),
-        ))
-        db_session.commit()
-
-        response = client.get("/api/v1/stats/plan-success-rate", headers=auth_headers)
-        assert response.status_code == 200
-        assert response.json()["items"] == []
 
 
 class TestPlanRunPassRateTrend:

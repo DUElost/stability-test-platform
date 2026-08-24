@@ -22,7 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { InlineError } from '@/components/ui/error-state';
 import { useRealtimeDashboard } from '@/hooks/useRealtimeDashboard';
 import { api } from '@/utils/api';
-import { WS_DASHBOARD_ENDPOINT } from '@/config';
+import { DASHBOARD_SUBSCRIPTION } from '@/config';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 import { CHART_SECTION, STAT, TEXT } from '@/design-system/tokens';
 import { formatTimeFromDate } from '@/utils/format';
@@ -36,7 +36,7 @@ export default function Dashboard() {
     refetchInterval: 10000,
   });
 
-  const { lastUpdateTime } = useRealtimeDashboard(WS_DASHBOARD_ENDPOINT);
+  const { lastUpdateTime } = useRealtimeDashboard(DASHBOARD_SUBSCRIPTION);
 
   const { data: activityData, isLoading: activityLoading, error: activityError, refetch: refetchActivity } = useQuery({
     queryKey: ['stats-activity'],

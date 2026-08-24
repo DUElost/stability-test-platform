@@ -56,7 +56,6 @@ class TestAdmissionTransitionMatrix:
         ("RUNNING", PlanRunStatus.PRECHECK),
         ("SUCCESS", PlanRunStatus.QUEUED),
         ("PARTIAL_SUCCESS", PlanRunStatus.QUEUED),
-        ("DEGRADED", PlanRunStatus.QUEUED),
         ("FAILED", PlanRunStatus.RUNNING),        # legacy retry removed
     ])
     def test_illegal(self, src, dst):

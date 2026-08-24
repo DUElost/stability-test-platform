@@ -287,18 +287,16 @@ def _require_shared_root() -> Path:
 def _panel_jobs() -> tuple[str, str | None, str]:
     """Resolve Prometheus job labels for the two health-page panels.
 
-    - control job: ``STP_CONTROL_PLANE_NODE_JOB`` (new) with
-      ``STP_FILE_SERVER_NODE_JOB`` / ``file-server`` as legacy fallback.
+    - control job: ``STP_CONTROL_PLANE_NODE_JOB`` (#289: the
+      ``STP_FILE_SERVER_NODE_JOB`` legacy alias is gone), default
+      ``file-server``.
     - storage job: ``STP_STORAGE_NODE_JOB``. When unset and no share address is
       configured (co-located transition) it reuses the control job; when the
       share has moved away but no storage job is given it returns None so the
       storage panel reports missing metrics instead of silently scraping the
       wrong machine (see #205).
     """
-    control_raw = (
-        os.getenv("STP_CONTROL_PLANE_NODE_JOB", "").strip()
-        or os.getenv("STP_FILE_SERVER_NODE_JOB", _NODE_JOB_DEFAULT).strip()
-    )
+    control_raw = os.getenv("STP_CONTROL_PLANE_NODE_JOB", "").strip() or _NODE_JOB_DEFAULT
     control = _safe_prom_label(control_raw, _NODE_JOB_DEFAULT)
     share_addr = os.getenv("STP_AEE_SHARE_ADDRESS", "").strip()
     co_located = _share_is_co_located(share_addr)

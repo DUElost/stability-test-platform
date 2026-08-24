@@ -604,11 +604,13 @@ async def test_extend_batch_renews_running_job():
         assert results[seed["job_id"]].status == "renewed"
         assert results[seed["job_id"]].expires_at
 
-        # RUNNING keepalive: job.updated_at bumped (recycler heartbeat guard)
+        # #288: renewal no longer bumps updated_at (no liveness meaning);
+        # arrival proof lands in last_execution_heartbeat_at instead.
         db = SessionLocal()
         try:
             job = db.get(JobInstance, seed["job_id"])
-            assert _as_utc(job.updated_at) > old_liveness
+            assert _as_utc(job.updated_at) == _as_utc(old_liveness)
+            assert job.last_execution_heartbeat_at is not None
         finally:
             db.close()
     finally:

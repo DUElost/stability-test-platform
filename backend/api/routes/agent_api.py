@@ -770,7 +770,7 @@ async def upload_step_traces(
             await broadcast_run_job_update(job.plan_run_id, tj_id, job.status)
             pr = await db.get(PlanRun, job.plan_run_id)
             if pr is not None and pr.status in {
-                "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+                "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
             }:
                 await broadcast_plan_run_status(pr.id, pr.status)
 
@@ -1252,7 +1252,7 @@ async def complete_job(
         await broadcast_run_job_update(job.plan_run_id, job_id, job.status)
         run = await db.get(PlanRun, job.plan_run_id)
         if run is not None and run.status in {
-            "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+            "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
         }:
             await broadcast_plan_run_status(run.id, run.status)
 
@@ -1538,8 +1538,9 @@ async def extend_leases_batch(
             #     waiting clock — lease renew must NOT refresh those anchors
             #     (otherwise a dead coordinator is masked by LeaseRenewer).
             #   - progress_marker.last_progress_at → last_progress_at (below)
-            # Legacy dual-write of updated_at only when execution_state is
-            # absent (old Agents); known sub-states no longer bump updated_at.
+            # updated_at is never bumped here (#288): the recycler judges
+            # liveness solely by the execution signals, so renewals must not
+            # be able to refresh a fallback clock.
             item_by_job = {it.job_id: it for it in items}
             by_state: Dict[Optional[str], list[int]] = {}
             for jid in renewed_ids:
@@ -1551,22 +1552,18 @@ async def extend_leases_batch(
                 "WAITING_EXECUTION_SLOT", "PATROL_SLEEP", "WAITING_BARRIER",
             }
             for state_val, ids in by_state.items():
-                values: Dict[str, Any] = {}
+                # Pin updated_at to itself so Column.onupdate cannot refresh
+                # it — it is no liveness signal (#288).
+                values: Dict[str, Any] = {"updated_at": JobInstance.updated_at}
                 if state_val is not None:
                     values["execution_state"] = state_val
                 if state_val in _waiting:
                     # State only — waiting liveness is PlanRunHost.coordinator_*.
-                    # Pin updated_at to itself so Column.onupdate cannot refresh
-                    # the legacy fallback clock via LeaseRenewer.
-                    values["updated_at"] = JobInstance.updated_at
-                elif state_val == "EXECUTING_STEP":
-                    values["last_execution_heartbeat_at"] = now
-                    values["updated_at"] = JobInstance.updated_at
+                    pass
                 else:
-                    # Legacy Agent (no / unknown state): keep dual-write so
-                    # recycler fallback on updated_at still works.
+                    # EXECUTING_STEP or unknown/absent state: request arrival
+                    # proves the executor process is alive (invariant ③).
                     values["last_execution_heartbeat_at"] = now
-                    values["updated_at"] = now
                 await db.execute(
                     update(JobInstance)
                     .where(
@@ -1743,28 +1740,24 @@ async def coordinator_heartbeat(
     for j in payload.jobs:
         reported = j.execution_state
         state_val = reported if reported in _VALID_EXECUTION_STATES else None
-        # ADR-0026 §3 clock discipline:
+        # ADR-0026 §3 clock discipline (#288):
         # - WAITING_*/PATROL_SLEEP: refresh waiting clock (and never EXECUTING).
         # - EXECUTING_STEP: persist state only — execution hb comes from
-        #   extend-batch; do NOT bump updated_at (legacy fallback) or the
-        #   stuck-step would get eternal life via recycler fallback.
-        # - Unknown/null state: dual-write updated_at for legacy Agents.
+        #   extend-batch.
+        # - Unknown/null state: nothing to persist.
+        # - Whenever we do write, updated_at is pinned (never bumped): the
+        #   recycler judges liveness solely by the execution signals.
         values: dict[str, Any] = {}
         if state_val is not None:
             values["execution_state"] = state_val
         if state_val in ("WAITING_EXECUTION_SLOT", "PATROL_SLEEP", "WAITING_BARRIER"):
             values["last_execution_heartbeat_at"] = now
-            # Pin so Column.onupdate does not refresh legacy updated_at.
-            values["updated_at"] = JobInstance.updated_at
-        elif state_val == "EXECUTING_STEP":
-            values["updated_at"] = JobInstance.updated_at
-        else:
-            values["updated_at"] = now
+        if not values:
+            continue
+        values["updated_at"] = JobInstance.updated_at
         ts = _parse_progress_ts(j.last_progress_at)
         if ts is not None:
             values["last_progress_at"] = ts
-        if not values:
-            continue
         await db.execute(
             update(JobInstance)
             .where(
@@ -1836,7 +1829,7 @@ async def update_job_step_status(
             await broadcast_run_job_update(job.plan_run_id, tj_id, job.status)
             pr = await db.get(PlanRun, job.plan_run_id)
             if pr is not None and pr.status in {
-                "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+                "SUCCESS", "PARTIAL_SUCCESS", "FAILED",
             }:
                 await broadcast_plan_run_status(pr.id, pr.status)
 

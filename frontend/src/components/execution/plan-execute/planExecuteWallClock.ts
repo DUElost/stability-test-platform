@@ -1,6 +1,6 @@
 import type { PlanRun } from '@/utils/api';
 
-const TERMINAL_STATUSES = new Set(['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'DEGRADED']);
+const TERMINAL_STATUSES = new Set(['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED']);
 const MIN_SAMPLES = 2;
 
 export interface WallClockEstimate {

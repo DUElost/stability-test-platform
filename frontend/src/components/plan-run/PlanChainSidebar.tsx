@@ -16,7 +16,7 @@ interface Props {
 function NodeDot({ node }: { node: ChainNode }) {
   const isPending = node.status === 'pending' || !node.plan_run_id;
   const isDone = node.status === 'SUCCESS' || node.status === 'PARTIAL_SUCCESS';
-  const isFailed = node.status === 'FAILED' || node.status === 'DEGRADED';
+  const isFailed = node.status === 'FAILED';
   const isRunning = !isPending && !isDone && !isFailed;
 
   if (isPending) {

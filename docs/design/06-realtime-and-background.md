@@ -134,7 +134,7 @@ PlanRun 终态
 | merge_task SAQ timeout | — | — | `_MERGE_TASK_SAQ_TIMEOUT` = 300 + 660 + 120s，覆盖 merge 子进程与 DLE poll |
 
 - **多 host**：`scan_task` poll 等待所有 triggered host 的 artifact 或超时
-- **Agent 上送**：`upload_scan_report`（scan xls）；事件目录由 EventUploader 拉取 `UPLOAD_PENDING` 执行 copytree（`STP_EVENT_UPLOADER_CONTINUOUS=1` 时改为全量上送）
+- **Agent 上送**：`upload_scan_report`（scan xls）；事件目录由 EventUploader 拉取 `UPLOAD_PENDING` 执行 copytree（过滤模型，#287 后无全量分支）
 
 ### 五触发场景
 

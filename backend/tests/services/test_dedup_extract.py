@@ -447,7 +447,6 @@ def test_resolve_extract_event_src_accepts_unassigned_absolute(tmp_path):
     located = resolve_extract_event_src(
         str(event_dir),
         nfs_root=str(nfs),
-        legacy_root="",
         plan_run_id=999,
     )
     assert located is not None
@@ -467,8 +466,7 @@ def test_resolve_extract_event_src_rejects_traversal_without_raising(tmp_path) -
         resolve_extract_event_src(
             "../etc/passwd",
             nfs_root=str(nfs),
-            legacy_root="",
-            plan_run_id=1,
+                plan_run_id=1,
         )
         is None
     )
@@ -476,8 +474,7 @@ def test_resolve_extract_event_src_rejects_traversal_without_raising(tmp_path) -
         resolve_extract_event_src(
             "devices/1/../../etc/passwd",
             nfs_root=str(nfs),
-            legacy_root="",
-            plan_run_id=1,
+                plan_run_id=1,
         )
         is None
     )

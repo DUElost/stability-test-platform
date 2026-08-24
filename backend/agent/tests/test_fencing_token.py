@@ -380,26 +380,29 @@ def test_run_task_wrapper_skips_watcher_when_policy_explicitly_disabled_even_if_
 # ── Test 18: LeaseRenewer skip when no token ───────────────────────────
 
 def test_lease_renewer_skips_extend_when_no_token(lease_renewer):
-    """无 fencing_token 的 job → extend_lock 直接 skip，不发 HTTP。"""
+    """无 fencing_token 的 job → batch 请求里直接排除，不发 HTTP。"""
     with patch("requests.post") as mock_post:
-        lease_renewer._extend_lock(999)  # 999 has no token registered
+        lease_renewer._extend_batch([999])  # 999 has no token registered
 
     mock_post.assert_not_called()
 
 
 def test_lease_renewer_sends_token_when_present(lease_renewer):
-    """有 fencing_token → extend_lock POST body 包含 {"fencing_token": token}。"""
+    """有 fencing_token → batch POST body 的 leases 包含 {"fencing_token": token}。"""
     lease_renewer.set_fencing_token(1, "test:token:1")
 
     with patch("requests.post") as mock_post:
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {"data": {"results": []}}
         mock_post.return_value = mock_resp
 
-        lease_renewer._extend_lock(1)
+        lease_renewer._extend_batch([1])
 
     mock_post.assert_called_once()
-    assert mock_post.call_args.kwargs["json"] == {"fencing_token": "test:token:1"}
+    body = mock_post.call_args.kwargs["json"]
+    assert body["leases"] == [{"job_id": 1, "fencing_token": "test:token:1"}]
 
 
 # ── Test 19: PipelineEngine._verify_device_lease sends fencing_token ──────────

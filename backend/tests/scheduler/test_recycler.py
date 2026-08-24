@@ -56,6 +56,7 @@ def _seed_running_job(
     patrol_cycle_count: int = 0,
     current_failure_streak: int = 0,
     execution_state: str | None = None,
+    last_execution_heartbeat_at: datetime | None = None,
 ) -> dict:
     suffix = uuid4().hex[:8]
     host_id = f"recycler-host-{suffix}"
@@ -125,6 +126,7 @@ def _seed_running_job(
             patrol_cycle_count=patrol_cycle_count,
             current_failure_streak=current_failure_streak,
             execution_state=execution_state,
+            last_execution_heartbeat_at=last_execution_heartbeat_at,
         )
         db.add(job)
         db.flush()
@@ -141,11 +143,33 @@ def _seed_running_job(
         db.close()
 
 
+def _seed_fresh_coordinator_heartbeat(seed: dict, *, at: datetime | None = None) -> None:
+    """ADR-0026 §3: give the seed a live per-host coordinator signal so the
+    WAITING/PATROL_SLEEP clock (not the dispatch-time fallback) applies."""
+    from backend.models.plan_run import PlanRunHost
+
+    db = SessionLocal()
+    try:
+        db.add(PlanRunHost(
+            plan_run_id=seed["plan_run_id"],
+            host_id=seed["host_id"],
+            coordinator_heartbeat_at=at or datetime.now(timezone.utc),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+
 def _cleanup_seed(seed: dict) -> None:
     from backend.models.audit import AuditLog
     from backend.models.device_lease import DeviceLease
+    from backend.models.plan_run import PlanRunHost
     db = SessionLocal()
     try:
+        db.query(PlanRunHost).filter(
+            PlanRunHost.plan_run_id == seed["plan_run_id"],
+            PlanRunHost.host_id == seed["host_id"],
+        ).delete()
         db.query(StepTrace).filter(StepTrace.job_id == seed["job_id"]).delete()
         db.query(AuditLog).filter(
             AuditLog.resource_type == "job_instance",
@@ -166,7 +190,12 @@ def _cleanup_seed(seed: dict) -> None:
 def test_recycler_keeps_running_job_with_recent_liveness(engine, monkeypatch):
     now = datetime.now(timezone.utc)
     old_started_at = now - timedelta(seconds=recycler.RUNNING_HEARTBEAT_TIMEOUT_SECONDS + 60)
-    seed = _seed_running_job(started_at=old_started_at, updated_at=now)
+    seed = _seed_running_job(
+        started_at=old_started_at,
+        updated_at=now,
+        execution_state="EXECUTING_STEP",
+        last_execution_heartbeat_at=now,
+    )
     monkeypatch.setattr(recycler, "_fill_deferred_post_completions", lambda db, current: 0)
     monkeypatch.setattr(recycler, "_prune_steptrace_artifacts", lambda db, current: None)
     monkeypatch.setattr(recycler, "schedule_emit", lambda *args, **kwargs: None)
@@ -707,8 +736,9 @@ def test_running_timeout_emits_unknown_socketio_not_failed(engine, monkeypatch):
 def _stale_running_seed(now: datetime, *, age_seconds: int, pipeline_def: dict | None = None) -> dict:
     """Seed a RUNNING job with patrol heartbeat aged `age_seconds` ago.
 
-    updated_at is kept fresh (now - 30s) so Pass #2 RUNNING timeout will NOT
-    trigger on this job — only Pass #2b patrol_stall is exercised.
+    execution_state stays NULL and started_at is `age_seconds + 60` old, so
+    the Pass #2 not-reported clock (dispatch time + full executor window)
+    does NOT trigger on these jobs — only Pass #2b patrol_stall is exercised.
     """
     return _seed_running_job(
         started_at=now - timedelta(seconds=age_seconds + 60),
@@ -925,7 +955,11 @@ def test_patrol_stall_detects_after_backoff_retry_window(engine, monkeypatch):
         next_retry_at=backoff_end,
         patrol_cycle_count=1,
         current_failure_streak=5,
+        # PATROL_SLEEP + live coordinator: Pass #2 must skip this job so
+        # Pass #2b's backoff-aware stall logic is what fires (#288).
+        execution_state="PATROL_SLEEP",
     )
+    _seed_fresh_coordinator_heartbeat(seed)
     _patch_recycler_neutrals(monkeypatch)
     try:
         recycler.recycle_once()
@@ -1023,7 +1057,11 @@ def test_patrol_stall_detects_first_cycle_before_first_heartbeat_after_init(engi
         updated_at=now - timedelta(seconds=30),
         pipeline_def=pipeline_def,
         last_patrol_heartbeat_at=None,
+        # PATROL_SLEEP + live coordinator: keeps Pass #2 (coordinator clock)
+        # out of the way so the first-cycle stall detection is exercised.
+        execution_state="PATROL_SLEEP",
     )
+    _seed_fresh_coordinator_heartbeat(seed)
     _seed_init_completion(
         seed["job_id"],
         step_ids=["init.prepare", "init.login"],
@@ -1073,7 +1111,12 @@ def test_patrol_stall_uses_init_completion_anchor_before_first_heartbeat(engine,
         updated_at=now - timedelta(seconds=30),
         pipeline_def=pipeline_def,
         last_patrol_heartbeat_at=None,
+        # PATROL_SLEEP + live coordinator: keeps Pass #2 (coordinator clock)
+        # out of the way so the init-completion anchor freshness is what
+        # spares this job from stall detection.
+        execution_state="PATROL_SLEEP",
     )
+    _seed_fresh_coordinator_heartbeat(seed)
     _seed_init_completion(
         seed["job_id"],
         step_ids=["init.prepare", "init.login"],
@@ -1144,7 +1187,7 @@ def test_patrol_stall_cas_no_op_when_heartbeat_raced_in(engine, monkeypatch):
 
 
 def test_patrol_stall_after_running_timeout_no_double_transition(engine, monkeypatch):
-    """updated_at < running_deadline AND last_patrol_heartbeat_at 也老化:
+    """下发时刻锚点早于 running deadline 且 last_patrol_heartbeat_at 也老化:
     Pass #2 先把 Job 标 UNKNOWN,Pass #2b 候选 SQL filter status='RUNNING' 失配 → 不入选。
     单 tick 内只发生 1 次状态变化,无 patrol_stall_detected audit。"""
     from backend.models.audit import AuditLog

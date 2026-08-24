@@ -49,7 +49,7 @@
 - **终态聚合全量加载兄弟 job**：每个 Job 终态都触发 `PlanAggregator.on_job_terminal`，它 `SELECT * FROM job_instance WHERE plan_run_id = run.id`（`backend/services/aggregator.py:46-49`）加载**全部**兄弟 job 再重算。一个 200 设备的 PlanRun，200 次终态 = 200 × 200 = 4 万行加载；60 host 并发多个大 PlanRun 时是 O(N²)。
 - **续租风暴（P0 已缓解）**：
   - *P0 已实现*：`POST /api/v1/agent/leases/extend-batch` 已上线（`backend/api/routes/agent_api.py:1306` `extend_leases_batch`），Agent `LeaseRenewer` 已改为一轮一批量请求（`backend/agent/lease_renewer.py:115-117,228-243`，分块默认 100）。1000 device 从「1000 个独立 HTTP 事务 / 60s」降为「每 host 每轮 1~N 个分块请求」。旧后端 404/405 自动回退单点端点（`lease_renewer.py:265-269`）。契约细节见 §5。
-  - *已知剩余缺口*：单点 `extend_lock` 仍只刷 `job.updated_at`（旧 Agent 回退路径）。批量路径已按子状态落库三信号，并对已知 `execution_state` **停止**双写 `updated_at`（WAITING_* 不刷执行钟；EXECUTING_STEP 只刷 `last_execution_heartbeat_at`）。遗留耦合仅限 legacy（null state）双写。
+  - *三信号即唯一判据（#288）*：批量路径按子状态落库三信号，且**任何续租写入都不再刷新 `updated_at`**（钉住防 onupdate）。recycler 只认 execution 三信号；缺信号视为未上报、锚定下发时刻。单点 `extend_lock` 仅旧 Agent 回退保留，其 `updated_at` 刷新已无存活语义。
   - *P1 目标（已落地）*：三信号拆列落库（不变量③），续租请求承载三份语义（§5）；见 `test_execution_state_signals_step5a.py`。
 - **心跳减负（P0 已收口）**：权威设备心跳仍走 `/api/v1/heartbeat`；两端点返回 `heartbeat_interval_seconds`，Agent 钳位采纳；硬件字段按 `DEVICE_SNAPSHOT_INTERVAL` 降采样。轻量 `/api/v1/agent/heartbeat` 已带同契约，供后续双通道收敛。
 - **真实指标（P0 已收口）**：queue-latency / extend-batch 成功率 / 聚合耗时 / per-host OperationScheduler 并发度 / 设备矩阵查询耗时，均已挂 Prometheus。
@@ -460,8 +460,8 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 | 批量续租逐项隔离实现有 bug，坏 item 拖累整批 | 单事务集合校验 + item 级结果隔离 + CAS UPDATE + 契约测试覆盖坏 item 混入（P0 已落地并有测试） | 回退单 job `extend_lock`（`agent_api.py:1182` 保留不删；Agent 404/405 自动回退已实现，`lease_renewer.py:265-269`） |
 | O(1) 计数器与实际 Job 数漂移（终态入口绕过计数自增） | **单一 terminalization 服务**收口全部终态入口（§6）+ 低频对账 sweep 自愈（核对 `terminal_job_count == COUNT(*)`）+ 终态事务内原子自增 + `FOR NO KEY UPDATE` 串行（`aggregator.py:36`） | 回退全量 SELECT 聚合（`aggregator.py:46-49` 保留） |
 | PRECHECK 中间态卡死（pump/SAQ/Backend 崩溃） | `precheck_started_at` + `admission_attempt_id` + reaper stale recovery 回 QUEUED（状态机章节） | reaper 关闭时人工 UPDATE 回 QUEUED（低频运维操作） |
-| execution_state 未进 recovery payload，恢复后套错超时 | §3 硬性要求纳入冻结 payload；测试覆盖 UNKNOWN→RUNNING 后各子状态超时判据 | execution_state 缺省回退到 `updated_at` 时钟（退化为现状） |
-| 三信号拆列迁移期间新旧判据并存不一致 | 迁移期双写 `updated_at` + 新列；recycler 先读新列、缺失 fallback 旧列 | 保留 `updated_at` 判据，先不删 |
+| execution_state 未进 recovery payload，恢复后套错超时 | §3 硬性要求纳入冻结 payload；测试覆盖 UNKNOWN→RUNNING 后各子状态超时判据 | execution_state 缺省按未上报处理：下发时刻锚 + 执行窗口（#288 语义） |
+| 三信号缺失时误判存活 | recycler 只认 execution 三信号：EXECUTING_STEP→执行心跳；WAITING_*/PATROL_SLEEP→协调者心跳；缺信号视为未上报，锚定下发时刻（`COALESCE(started_at, created_at)`），一个完整窗口后进 UNKNOWN（#288） | 无 —— `updated_at` 已不作存活判据，续租不再能伪装活性 |
 
 **分阶段压测**：沿用 ADR-0019 的阶梯思路（`docs/adr/ADR-0019-...:305` 的 3→10→44），扩展为 **44→60→100 host** 灰度，每档验证续租成功率、准入延迟、聚合耗时、误杀率后再进下一档。
 

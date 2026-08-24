@@ -243,8 +243,8 @@ interface SubscriptionConfig {
 function parseWsUrl(url: string): SubscriptionConfig {
   if (!url) return { room: null, events: [] };
 
-  // /ws/dashboard or just dashboard-level
-  if (url.includes('/ws/dashboard') || url.endsWith('/dashboard')) {
+  // dashboard 级订阅（DASHBOARD_SUBSCRIPTION='dashboard'；兼容历史 /ws/dashboard 描述符）
+  if (url === 'dashboard' || url.includes('/ws/dashboard') || url.endsWith('/dashboard')) {
     return {
       room: null,
       events: [

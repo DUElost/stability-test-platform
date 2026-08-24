@@ -13,38 +13,22 @@ logger = logging.getLogger(__name__)
 
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _AEE_LOCAL_ROOT_DEFAULT = "/mnt/hdd/aee_events"
-_shared_root_alias_warned: set[str] = set()
 
 
 def resolve_shared_storage_root() -> str:
     """中心存储本机挂载点（NFS = CIFS = 同一台分享）。未配置返回空串。
 
-    主键 ``STP_AEE_NFS_ROOT``。``STP_WATCHER_NFS_BASE_DIR`` /
-    ``STP_AEE_CIFS_ROOT`` 仅作弃用别名（未设主键时回落，并打一次 WARNING）。
-    不回落到 ``STP_NFS_ROOT`` 或 HDD。
+    唯一主键 ``STP_AEE_NFS_ROOT``（#289：CIFS/WATCHER 弃用别名回落已删除，
+    未设主键即视为未配置）。不回落到 ``STP_NFS_ROOT`` 或 HDD。
 
     控制面请用 ``backend.core.storage_root.resolve_shared_storage_root``
     （避免 core → agent.aee）。此处副本供 Agent 独立安装使用，语义须保持一致。
     """
-    primary = (os.getenv("STP_AEE_NFS_ROOT") or "").strip()
-    if primary:
-        return primary
-    for alias in ("STP_WATCHER_NFS_BASE_DIR", "STP_AEE_CIFS_ROOT"):
-        raw = (os.getenv(alias) or "").strip()
-        if not raw:
-            continue
-        if alias not in _shared_root_alias_warned:
-            _shared_root_alias_warned.add(alias)
-            logger.warning(
-                "shared_storage_root_alias_deprecated alias=%s use=STP_AEE_NFS_ROOT",
-                alias,
-            )
-        return raw
-    return ""
+    return (os.getenv("STP_AEE_NFS_ROOT") or "").strip()
 
 
 def get_aee_nfs_root() -> Path:
-    """中心存储挂载点。未设 ``STP_AEE_NFS_ROOT``（且无弃用别名）时抛错。"""
+    """中心存储挂载点。未设 ``STP_AEE_NFS_ROOT`` 时抛错。"""
     raw = resolve_shared_storage_root()
     if not raw:
         raise RuntimeError("STP_AEE_NFS_ROOT is not set")

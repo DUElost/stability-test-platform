@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSocketIO } from '@/hooks/useSocketIO';
-import { WS_DASHBOARD_ENDPOINT } from '@/config';
+import { DASHBOARD_SUBSCRIPTION } from '@/config';
 import { SOCKET_MESSAGE_TYPES } from '@/utils/socketEvents';
 
 /**
@@ -16,7 +16,7 @@ import { SOCKET_MESSAGE_TYPES } from '@/utils/socketEvents';
 export function useCrossClientSync() {
   const qc = useQueryClient();
 
-  useSocketIO(WS_DASHBOARD_ENDPOINT, {
+  useSocketIO(DASHBOARD_SUBSCRIPTION, {
     onMessage: (msg) => {
       if (msg.type === SOCKET_MESSAGE_TYPES.PLAN_CHANGED) {
         qc.invalidateQueries({ queryKey: ['plans'] });

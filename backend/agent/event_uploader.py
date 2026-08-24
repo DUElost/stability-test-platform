@@ -1,7 +1,9 @@
-"""EventUploader — 连续上送 DeviceLogEvent（ADR-0028 D2）。
+"""EventUploader — 上送 DeviceEvent 到中心存储（ADR-0028 D2 / 方案 A）。
 
-事件在 ``state=LOCAL`` 后入队，后台 copytree 到中心存储并回写 ``REMOTE``。
-由 ``STP_EVENT_UPLOADER_ENABLED=1`` 门控；默认关闭，与 PlanRun 触发上送并存。
+UPLOAD_PENDING 事件（控制面 upload_task 按 scan xls 引用标记）经 30s
+轮询入队，后台 copytree 到中心存储并回写 ``REMOTE``。
+由 ``STP_DEVICE_LOG_EVENT_ENABLED`` 单一开关门控，默认开启（#287）；
+未配置 api_url/agent_secret/host_id 时组件自然 no-op。
 """
 
 from __future__ import annotations
@@ -51,28 +53,31 @@ _RETRY_FAILED_LIMIT = 200
 
 
 def _event_uploader_enabled() -> bool:
-    return os.getenv("STP_EVENT_UPLOADER_ENABLED", "0").strip().lower() in ("1", "true", "yes")
+    """#287：单一开关（与 DLE 注册共用），默认开。
+
+    ``STP_DEVICE_LOG_EVENT_ENABLED=0`` 显式关闭；未配置时组件因缺
+    api_url/agent_secret/host_id 自然 no-op，默认开是安全的。
+    """
+    return _device_log_event_enabled()
 
 
-def _event_uploader_continuous() -> bool:
-    """ADR-0028 方案 A：0=仅上传 UPLOAD_PENDING（过滤模型）；1=上传全部 LOCAL（全量模型）。"""
-    return os.getenv("STP_EVENT_UPLOADER_CONTINUOUS", "0").strip().lower() in ("1", "true", "yes")
+def _device_log_event_enabled() -> bool:
+    raw = os.getenv("STP_DEVICE_LOG_EVENT_ENABLED")
+    if raw is None or raw.strip() == "":
+        return True
+    return raw.strip().lower() in ("1", "true", "yes")
 
 
 def _recover_states() -> str:
     """30s 快速轮询的状态集合（#380）。
 
-    只覆盖「等待首次上送」的事件；UPLOADING/UPLOAD_FAILED 的恢复交给
-    600s 慢速循环（`_retry_failed_loop`）——快速轮询若也拉这两个状态，
-    会把在途/已达重试上限的事件反复以 attempt=0 重入队（重试上限失效、
-    CIFS 上 rmtree-vs-copy 抖动）。in-flight 去重（`_active_ids`）兜底，
-    但状态集合本身先收敛。
-
-    continuous=0（默认过滤模型）：UPLOAD_PENDING；
-    continuous=1（逃生阀）：LOCAL,UPLOAD_PENDING（模式切换不漏待传事件）。
+    只覆盖「等待首次上送」的 UPLOAD_PENDING（方案 A 过滤模型：LOCAL 是
+    「有意不传」，未被 scan xls 引用的事件不阻塞 merge）；UPLOADING/
+    UPLOAD_FAILED 的恢复交给 600s 慢速循环（`_retry_failed_loop`）——
+    快速轮询若也拉这两个状态，会把在途/已达重试上限的事件反复以
+    attempt=0 重入队（重试上限失效、CIFS 上 rmtree-vs-copy 抖动）。
+    in-flight 去重（`_active_ids`）兜底，但状态集合本身先收敛。
     """
-    if _event_uploader_continuous():
-        return "LOCAL,UPLOAD_PENDING"
     return "UPLOAD_PENDING"
 
 
@@ -202,17 +207,20 @@ class EventUploader:
         force: bool = False,
         prune_after_upload: bool = False,
     ) -> bool:
-        """将事件入队。ADR-0028 方案 A：continuous=1 接受 LOCAL；continuous=0 默认拒绝
-        （仅 UPLOAD_PENDING 经 _recover_pending 入队）。``force=True`` 用于 HddSpill——
-        磁盘压力溢出不受过滤模型限制，必须始终可上送；溢出事件同时要求
+        """将事件入队。
+
+        #287：CONTINUOUS 全量模型已删除，只留方案 A 过滤模型——常规事件
+        由控制面 upload_task 标记 UPLOAD_PENDING 后经 ``_recover_pending``
+        轮询入队。``force=True`` 仅剩 HddSpill 溢出一路：磁盘压力不受
+        过滤模型限制，必须始终可上送；溢出事件同时要求
         ``prune_after_upload=True``（#382：上送校验后必须释放本地磁盘）。
 
         #380: 同一 event_id 已在队列/在传/退避重试中时拒绝重复入队。
         """
         if not _event_uploader_enabled() or not self._configured:
             return False
-        if not _event_uploader_continuous() and not force:
-            # Plan A: Reconciler 不自动入队；upload_task 标记 UPLOAD_PENDING 后经 _recover_pending 轮询入队
+        if not force:
+            # Plan A: LOCAL 不自动上送；upload_task 标记后经 _recover_pending 入队
             return False
         event_id = str(event["id"])
         job = _UploadJob(

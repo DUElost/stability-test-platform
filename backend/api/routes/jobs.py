@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from backend.api.routes.auth import User, get_current_active_user
 from backend.api.schemas import HostActiveJob
 from backend.core.database import get_db
-from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
@@ -30,11 +29,6 @@ _ACTIVE_JOB_STATUSES = (
 )
 
 
-def _visible_plan_id(plan_id: int | None, hidden_plan_ids_set: set[int]) -> int | None:
-    if plan_id is None:
-        return None
-    return None if plan_id in hidden_plan_ids_set else plan_id
-
 
 @router.get("/active-by-device", response_model=List[HostActiveJob])
 def list_active_jobs_by_device(
@@ -47,7 +41,6 @@ def list_active_jobs_by_device(
     so the plan-execute page can render PlanRun jump links without N+1 host detail
     fetches. Heartbeat-derived capacity remains on host list; this is occupancy only.
     """
-    hidden_plan_ids_set = hidden_legacy_plan_ids(db)
     active_jobs = (
         db.query(JobInstance)
         .filter(JobInstance.status.in_(_ACTIVE_JOB_STATUSES))
@@ -70,7 +63,7 @@ def list_active_jobs_by_device(
         HostActiveJob(
             id=j.id,
             plan_run_id=j.plan_run_id,
-            plan_id=_visible_plan_id(j.plan_id, hidden_plan_ids_set),
+            plan_id=j.plan_id,
             device_id=j.device_id,
             status=j.status,
             started_at=j.started_at,

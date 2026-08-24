@@ -12,13 +12,12 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.api.schemas.file_server import FileServerOverview
 from backend.core.database import get_db
-from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.host import Host
 from backend.services.file_server_monitor import collect_file_server_overview
 
@@ -140,12 +139,7 @@ def get_activity(
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=hours)
     dialect = db.bind.dialect.name if db.bind is not None else ""
-    hidden_plan_ids = hidden_legacy_plan_ids(db)
-    hidden_clause = ""
     params = {"since": since}
-    if hidden_plan_ids:
-        hidden_clause = " AND plan_id NOT IN :hidden_plan_ids"
-        params["hidden_plan_ids"] = tuple(hidden_plan_ids)
 
     if dialect == "postgresql":
         stmt = text("""
@@ -155,7 +149,8 @@ def get_activity(
                 COUNT(*) AS cnt
             FROM job_instance
             WHERE started_at >= :since AND started_at IS NOT NULL
-        """ + hidden_clause + """
+        """
+            """
             GROUP BY hour, status
         """)
     else:
@@ -166,11 +161,10 @@ def get_activity(
                 COUNT(*) AS cnt
             FROM job_instance
             WHERE started_at >= :since AND started_at IS NOT NULL
-        """ + hidden_clause + """
+        """
+            """
             GROUP BY hour, status
         """)
-    if hidden_plan_ids:
-        stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))
     rows = db.execute(stmt, params).fetchall()
 
     buckets: dict = {}
@@ -380,12 +374,7 @@ def get_completion_trend(
     """Daily pass/fail counts over the past N days."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
     dialect = db.bind.dialect.name if db.bind is not None else ""
-    hidden_plan_ids = hidden_legacy_plan_ids(db)
-    hidden_clause = ""
     params = {"since": since}
-    if hidden_plan_ids:
-        hidden_clause = " AND plan_id NOT IN :hidden_plan_ids"
-        params["hidden_plan_ids"] = tuple(hidden_plan_ids)
     if dialect == "postgresql":
         stmt = text("""
             SELECT
@@ -396,7 +385,8 @@ def get_completion_trend(
             WHERE ended_at >= :since
               AND ended_at IS NOT NULL
               AND status IN ('COMPLETED', 'FAILED', 'ABORTED')
-        """ + hidden_clause + """
+        """
+            """
             GROUP BY day, status
         """)
     else:
@@ -409,11 +399,10 @@ def get_completion_trend(
             WHERE ended_at >= :since
               AND ended_at IS NOT NULL
               AND status IN ('COMPLETED', 'FAILED', 'ABORTED')
-        """ + hidden_clause + """
+        """
+            """
             GROUP BY day, status
         """)
-    if hidden_plan_ids:
-        stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))
     rows = db.execute(stmt, params).fetchall()
 
     buckets: dict = {}
@@ -456,12 +445,7 @@ def get_host_failure_rate(
     _current_user: User = Depends(get_current_active_user),
 ):
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    hidden_plan_ids = hidden_legacy_plan_ids(db)
-    hidden_clause = ""
     params = {"since": since}
-    if hidden_plan_ids:
-        hidden_clause = " AND j.plan_id NOT IN :hidden_plan_ids"
-        params["hidden_plan_ids"] = tuple(hidden_plan_ids)
 
     stmt = text("""
         SELECT h.id, h.hostname, h.ip_address,
@@ -470,13 +454,12 @@ def get_host_failure_rate(
         FROM job_instance j
         JOIN host h ON j.host_id = h.id
         WHERE j.started_at >= :since
-    """ + hidden_clause + """
+    """
+            """
         GROUP BY h.id, h.hostname, h.ip_address
         HAVING COUNT(*) > 0
         ORDER BY SUM(CASE WHEN j.status IN ('FAILED', 'ABORTED') THEN 1 ELSE 0 END) * 1.0 / COUNT(*) DESC
     """)
-    if hidden_plan_ids:
-        stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))
     rows = db.execute(stmt, params).fetchall()
 
     items: list[HostFailureRateItem] = []
@@ -502,12 +485,7 @@ def get_plan_success_rate(
     _current_user: User = Depends(get_current_active_user),
 ):
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    hidden_plan_ids = hidden_legacy_plan_ids(db)
-    hidden_clause = ""
     params = {"since": since}
-    if hidden_plan_ids:
-        hidden_clause = " AND j.plan_id NOT IN :hidden_plan_ids"
-        params["hidden_plan_ids"] = tuple(hidden_plan_ids)
 
     stmt = text("""
         SELECT p.id, p.name,
@@ -517,13 +495,12 @@ def get_plan_success_rate(
         FROM job_instance j
         JOIN plan p ON j.plan_id = p.id
         WHERE j.started_at >= :since
-    """ + hidden_clause + """
+    """
+            """
         GROUP BY p.id, p.name
         HAVING COUNT(*) > 0
         ORDER BY SUM(CASE WHEN j.status = 'COMPLETED' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) DESC, total_jobs DESC
     """)
-    if hidden_plan_ids:
-        stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))
     rows = db.execute(stmt, params).fetchall()
 
     items: list[PlanSuccessRateItem] = []
