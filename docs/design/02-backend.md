@@ -18,7 +18,6 @@ backend/
 ├── scheduler/           # APScheduler 回调
 ├── tasks/               # SAQ 异步任务
 ├── realtime/            # SocketIO、日志写文件
-├── connectivity/        # SSH、挂载检查
 ├── alembic/             # 数据库迁移
 ├── agent/               # Agent 源码（与 control plane 同仓）
 └── tests/               # 控制面测试
