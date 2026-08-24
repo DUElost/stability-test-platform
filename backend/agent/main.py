@@ -736,7 +736,7 @@ def main() -> None:
             is_final = bool(payload.get("is_final", False))
             if not plan_run_id:
                 logger.warning("control_scan_now_missing_plan_run_id")
-                return
+                return {"ok": False, "error": "missing plan_run_id"}
 
             ScanRunner.enqueue_scan_now(
                 int(plan_run_id),
@@ -809,6 +809,10 @@ def main() -> None:
             return {"ok": replayed, "row_id": row_id}
         else:
             logger.warning("unknown_control_command: %s", command)
+            return {"ok": False, "error": f"unknown command: {command}"}
+        # P2-4 / #298: 单向 control（scan_now 等）须回 {"ok": true}，
+        # call_agent_control 据此判定已送达；RPC 分支已在上方显式 return。
+        return {"ok": True}
 
     # ADR-0019 Phase 1: capacity helper — thread-safe active job count
     def _get_active_job_count() -> int:
