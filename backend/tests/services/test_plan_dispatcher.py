@@ -6,6 +6,7 @@ import pytest
 from backend.models.enums import HostStatus
 from backend.models.host import Device, Host
 from backend.models.plan import Plan, PlanStep
+from backend.models.project import TestProject
 from backend.models.script import Script
 from backend.services.plan_dispatcher_sync import (
     _build_lifecycle_from_steps,
@@ -245,6 +246,97 @@ class TestDispatchPlan:
         assert preview["device_count"] == 1
         assert preview["job_count"] == 1
         assert "lifecycle" in preview
+
+
+# ── ADR-0029 project/build snapshot at prepare (#401) ───────────────────
+
+@pytest.fixture
+def _project_snapshot_fixture(db_session):
+    """Plan 归属项目 + 两台带 build_display_id 的设备（可覆盖为分歧版本）。"""
+    host = Host(id="h-snap", hostname="hsnap",
+                status=HostStatus.ONLINE.value)
+    d1 = Device(serial="S-snap-1", host_id="h-snap", status="ONLINE",
+                build_display_id="MLD-LX2-20260801")
+    d2 = Device(serial="S-snap-2", host_id="h-snap", status="ONLINE",
+                build_display_id="MLD-LX2-20260801")
+    script = Script(
+        name="check_device_snap", script_type="python", version="1.0.0",
+        nfs_path="/s/check_device_snap.py", content_sha256="abc",
+        default_params={"timeout": 30},
+    )
+    project = TestProject(project_key="SNAP-P", display_name="snapshot")
+    plan = Plan(name="dispatch-snapshot", project=project)
+    db_session.add_all([host, d1, d2, script, project, plan])
+    db_session.commit()
+    db_session.add_all([
+        PlanStep(
+            plan_id=plan.id, step_key="init_check",
+            script_name="check_device_snap", script_version="1.0.0",
+            stage="init", sort_order=0, timeout_seconds=30, retry=0,
+        ),
+        PlanStep(
+            plan_id=plan.id, step_key="td_clean",
+            script_name="check_device_snap", script_version="1.0.0",
+            stage="teardown", sort_order=0, timeout_seconds=10, retry=0,
+        ),
+    ])
+    db_session.commit()
+    return plan, d1, d2
+
+
+class TestDispatchProjectSnapshot:
+    def test_project_frozen_into_run(self, db_session, _project_snapshot_fixture):
+        """快照语义：派发时冻结 plan.project_id，Plan 事后改归属不影响历史 Run。"""
+        plan, d1, _d2 = _project_snapshot_fixture
+
+        pr = dispatch_plan_sync(
+            plan_id=plan.id, device_ids=[d1.id],
+            triggered_by="test", db=db_session,
+        )
+        assert pr.project_id == plan.project_id
+
+        other = TestProject(project_key="SNAP-Q", display_name="moved")
+        db_session.add(other)
+        plan.project = other
+        db_session.commit()
+        db_session.refresh(pr)
+        assert pr.project_id != other.id
+
+    def test_uniform_build_writes_column(self, db_session, _project_snapshot_fixture):
+        plan, d1, d2 = _project_snapshot_fixture
+
+        pr = dispatch_plan_sync(
+            plan_id=plan.id, device_ids=[d1.id, d2.id],
+            triggered_by="test", db=db_session,
+        )
+        assert pr.build_version == "MLD-LX2-20260801"
+        assert pr.run_context["device_builds"] == {
+            str(d1.id): "MLD-LX2-20260801", str(d2.id): "MLD-LX2-20260801",
+        }
+
+    def test_divergent_builds_leave_column_null(self, db_session, _project_snapshot_fixture):
+        plan, d1, d2 = _project_snapshot_fixture
+        d2.build_display_id = "MLD-LX3-20260815"
+        db_session.commit()
+
+        pr = dispatch_plan_sync(
+            plan_id=plan.id, device_ids=[d1.id, d2.id],
+            triggered_by="test", db=db_session,
+        )
+        assert pr.build_version is None
+        assert set(pr.run_context["device_builds"].values()) == {
+            "MLD-LX2-20260801", "MLD-LX3-20260815",
+        }
+
+    def test_plan_without_project_stays_null(self, db_session, _plan_fixture):
+        """存量兼容：未归属 Plan 派发出的 Run 同样 NULL，不臆造归属。"""
+        plan, device, _host = _plan_fixture
+
+        pr = dispatch_plan_sync(
+            plan_id=plan.id, device_ids=[device.id],
+            triggered_by="test", db=db_session,
+        )
+        assert pr.project_id is None
 
 
 class TestValidation:

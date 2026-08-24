@@ -534,9 +534,27 @@ def _prepare_queued_plan_run(
         # Per-device detail for UI/debug; the coarse column is queue_reason.
         merged_run_ctx["queue_blockers"] = queue_blockers
 
+    # ADR-0029（D5 挂起保留段）：project 归属与 build 版本是登记/报表维度，
+    # prepare 时从活表冻结——Plan 改归属 / 设备后续升级不影响历史 Run 归因。
+    # build_version 仅在全部设备同版本时写列；分歧/缺失走 run_context 明细。
+    build_rows = db.execute(
+        select(Device.id, Device.build_display_id).where(Device.id.in_(target_ids))
+    ).all()
+    # 键用 str(device_id)：run_context 是 JSONB，int 键经往返会变字符串，
+    # 写入端先规范化以保证内存态与落库态一致。
+    merged_run_ctx["device_builds"] = {
+        str(dev_id): build for dev_id, build in build_rows
+    }
+    distinct_builds = {b for b in merged_run_ctx["device_builds"].values() if b}
+    frozen_build_version = (
+        next(iter(distinct_builds)) if len(distinct_builds) == 1 else None
+    )
+
     now = datetime.now(timezone.utc)
     pr = PlanRun(
         plan_id=plan.id,
+        project_id=plan.project_id,
+        build_version=frozen_build_version,
         status=PlanRunStatus.QUEUED.value,
         failure_threshold=effective_threshold,
         plan_snapshot=plan_snapshot,
