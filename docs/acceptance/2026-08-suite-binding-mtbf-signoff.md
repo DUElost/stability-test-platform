@@ -3,7 +3,7 @@
 - **跟踪**：[GitHub #404](https://github.com/DUElost/stability-test-platform/issues/404)
 - **关联 ADR**：[ADR-0030](../adr/ADR-0030-multi-case-suite-management.md) v1.6（P1 设计 §3）
 - **CLI**：`tools/dev/mtbf-cases.py`（凭据约定见 AGENTS.md「Production access」）
-- **文档状态**：模板（待实跑填入实测值并在 issue 回填签字）
+- **文档状态**：**已实跑签字（2026-08-25 凌晨窗口，R1–R4 全过）**，实测值见 §4
 
 > **目标**：在一台 MTK 真机上完成「导入 → 改 1 条 → 导出 → 绑定派发」全链，
 > 证明 precheck 五步门禁、参数自动注入、#402 在途守卫与审计留痕按设计工作。
@@ -70,41 +70,53 @@ python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 ## 2. 验证步骤
 
 每步执行后填入实测值。最小负载：1 PlanRun × 1 设备。
+**2026-08-25 实跑记录**：Plan 10（MTBF-专项-冒烟-P0）绑定 suite `MTBF-legacy`(id=1)，
+Run #224 / 设备 395（AYCGNX6730000054，MLD_LX2，host 172.21.15.78）。
 
 | # | 目标 | 步骤 | 期望 | 实测 | 锚点 |
 |---|------|------|------|------|------|
-| S1 | prepare 冻结 dispatch_suite | 派发后查 `plan_run.run_context` | 六字段齐且等于套件当前基线（`exported_sha256` 与 S1.3 输出一致） | ☐ | `services/suite_binding.py` `freeze_dispatch_suite` |
-| S2 | 五步门禁放行 | 观察 PlanRun QUEUED→PRECHECK→RUNNING | 无 `suite_verify_failed`；`result_summary.reason` 为空 | ☐ | `admission_pump.plan_admission_task` Phase A0 |
-| S3 | 参数自动注入 | 查 JobInstance `pipeline_def` 的 mtbf_* 步骤 params | `expected_testpoint_count`=启用计数（130）、`project`=`legacy`；未声明的 default_params 不受影响 | ☐ | `plan_dispatcher_core.inject_suite_params` |
-| S4 | **init trace 闭环（总信号）** | 设备端 init 完成 NFS JSON 后，比对 `suite_sha256` 与门禁 `exported_sha256` | **逐字节相等** | ☐ | `mtbf_finish` v1.4.0 / P0 设计 §5.3 |
-| S5 | 审计全程 | `SELECT action FROM audit_logs WHERE resource_type='test_suite' ORDER BY id DESC LIMIT 10` | 含 `import` / `update`（case PUT）/ `export` 各 ≥1 条 | ☐ | `routes/suites.py` record_audit |
-| S6 | 守卫精确化（反向演练） | S4 通过后保持 Run RUNNING，对**同一套件**再 export-to-tool-dir | 409 `SUITE_RUNS_ACTIVE` 且 `force=true` 仍 409 | ☐ | `active_run_ids_bound_to_suite` |
-| S7 | 门禁反向（可选，推荐） | 手改中心存储 `runtask.xml` 一个字节 → 再派发一次 | PRECHECK→FAILED `suite_verify_failed` + `step=sha_mismatch`；恢复文件 | ☐ | `collect_suite_gate_error` 第 4 步 |
+| S1 | prepare 冻结 dispatch_suite | 派发后查 `plan_run.run_context` | 六字段齐且等于套件当前基线（`exported_sha256` 与 S1.3 输出一致） | ✅ #222/#224 六字段齐；frozen sha=`e782bf78…47af` == export 输出 | `services/suite_binding.py` `freeze_dispatch_suite` |
+| S2 | 五步门禁放行 | 观察 PlanRun QUEUED→PRECHECK→RUNNING | 无 `suite_verify_failed`；`result_summary.reason` 为空 | ✅ #224 RUNNING（此前 #222 因 host 支撑文件缺失 script_verify_failed，属既有 sync 缺口，见 §5） | `admission_pump.plan_admission_task` Phase A0 |
+| S3 | 参数自动注入 | 查 JobInstance `pipeline_def` 的 mtbf_* 步骤 params | `expected_testpoint_count`=启用计数、`project`=export_dir；未声明的 default_params 不受影响 | ✅ setup params = `{"project":"legacy","expected_testpoint_count":130}` | `plan_dispatcher_core.inject_suite_params` |
+| S4 | **init trace 闭环（总信号）** | abort→teardown→finish 后读 NFS JSON `metrics.suite_sha256` 与门禁 `exported_sha256` 比对 | **逐字节相等** | ✅ `results/2026.08.15_06.23.23.401.json` suite_sha256 = `e782bf7814604dce1e2246558f6b89ab08550546c7a30aaf558688f3bb7347af` == 门禁基线 | `mtbf_finish` v1.4.0 / P0 设计 §5.3 |
+| S5 | 审计全程 | `audit_logs` 按 resource_type 检索 | 含 `import` / case 更新 / `export` 各 ≥1 条 | ✅ create(247141)→import(247143)→update(test_case,247149)→export(247152)→export(247166)，另有 plan_updated(绑定)/plan_admission_failed(225) | `routes/suites.py` record_audit |
+| S6 | 守卫精确化（反向演练） | Run #224 RUNNING 期间对同一套件 export-to-tool-dir | 409 `SUITE_RUNS_ACTIVE` 且 `force=true` 仍 409 | ✅ 双向 409，plan_run_ids=[224]，force 不豁免 | `active_run_ids_bound_to_suite` |
+| S7 | 门禁反向演练 | 追加字节篡改中心存储 runtask.xml → 再派发 | PRECHECK→FAILED `suite_verify_failed` + `step=sha_mismatch`，detail 含双 sha 与修复路径 | ✅ #225 FAILED：expected=`e782bf78…` vs disk=`5e8057a3…`，remedy 提示重导；重导后 stale 清零 | `collect_suite_gate_error` 第 4 步 |
 
-> **S7 注意**：改的是中心存储文件不是库——恢复以 S1.3 重导最干净
+> **S7 注意**：改的是中心存储文件不是库——恢复以重导最干净
 > （同时刷新双基线）。S7 会产生一条 FAILED Run，属预期验收痕迹。
 
 ## 3. 验收标准
 
 | ID | 标准 | 通过判据 | 实测 |
 |----|------|----------|------|
-| R1 | 总验收信号 | S4 相等（`suite_sha256 == exported_sha256`） | ☐ |
-| R2 | 托管链路零人工 env | 全程未设置/依赖 host 的 `STP_MTBF_EXPECTED_TESTPOINT_COUNT`（注入替代） | ☐ |
-| R3 | fail-fast 语义 | S6/S7 至少一项演练通过，错误 detail 含修复路径字段 | ☐ |
-| R4 | 审计闭环 | S5 三类动作齐全；CLI 操作与页面操作在审计中不可区分 | ☐ |
+| R1 | 总验收信号 | S4 相等（`suite_sha256 == exported_sha256`） | ✅ |
+| R2 | 托管链路零人工 env | 全程未设置/依赖 host 的 `STP_MTBF_EXPECTED_TESTPOINT_COUNT`（注入替代）；hot-update 同步清单已无该键 | ✅ |
+| R3 | fail-fast 语义 | S6/S7 至少一项演练通过，错误 detail 含修复路径字段 | ✅ 两项均过 |
+| R4 | 审计闭环 | S5 三类动作齐全；CLI 操作与页面操作在审计中不可区分 | ✅ |
 
 ## 4. 实测填空
 
 ```
-日期/执行人：
-PlanRun id：            设备 serial：        host ip：
-exported_sha256：       init trace suite_sha256：
-dispatch_suite 快照：
-注入 params（setup/check）：
-S6 409 响应 code：      S7 FAILED reason/step：
-audit_logs 截图或 SQL 输出粘贴处：
-结论（R1–R4）：R1☐ R2☐ R3☐ R4☐
+日期/执行人：2026-08-25 00:15–00:35 CST / opencode（运营授权窗口）
+PlanRun id：222(脚本校验失败,暴露sync缺口) / 223(user构建fail-fast,预期) /
+            224(主验收RUNNING→abort收尾) / 225(S7反向FAILED)
+设备 serial：395 AYCGNX6730000054 (MLD_LX2)   host ip：172.21.15.78
+exported_sha256：e782bf7814604dce1e2246558f6b89ab08550546c7a30aaf558688f3bb7347af
+init trace suite_sha256：（NFS JSON metrics）同上，逐字节相等
+dispatch_suite 快照：{suite_id:1, suite_name:MTBF-legacy, exported_sha256:同上,
+                     exported_content_sha256:1343c073…, apk_binding:null, export_dir:legacy}
+注入 params（setup）：{"project":"legacy","expected_testpoint_count":130}
+S6 409 响应 code：SUITE_RUNS_ACTIVE（force 亦 409）
+S7 FAILED reason/step：suite_verify_failed / sha_mismatch
+结论（R1–R4）：R1✅ R2✅ R3✅ R4✅
 ```
 
-> 完成后：把本文件改名去掉「模板」性质并回填 issue #404 / ADR-0030 修订记录
-> （对齐 2026-07-aee-reconciler-mtk-signoff.md 先例）。
+## 5. 冒烟副产品（发现项）
+
+1. **`push_mismatched_scripts` 不推支撑文件**（#222 暴露）：轻量 sync 只推入口
+   文件 + 硬编码 `_adb.py`，manifest 中 `_lib.py` 缺失时 verify 正确报错、
+   push"成功"、reverify 仍失败 → fatal。治愈路径缺口，fallback 是整机
+   hot-update（本次即用其解锁）。修复另起小 PR。
+2. user 构建设备被 `mtbf_setup` v1.3.0 root 前置正确 fail-fast（#223）——
+   设计行为，选设备须 userdebug（P0 验收设备 395 即是）。
