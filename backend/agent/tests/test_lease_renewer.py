@@ -1,7 +1,9 @@
 """ADR-0019 Phase 3b LeaseRenewer 单元测试。
 
-11 个测试，覆盖 device_id 跟踪、409 清理回调、网络失败保留状态、
-续租循环收窄、TTL 验证、结构化日志、并发 token 清理。
+覆盖 device_id 跟踪、batch 续租（唯一路径）、逐项 lease-lost 清理、
+网络失败保留状态、TTL 验证、结构化日志。
+#291：per-job extend_lock 回退已删除——batch 404/405 视为配置错误，
+不再回落逐 Job 端点。
 """
 
 import threading
@@ -86,10 +88,11 @@ def test_clear_fencing_token_if_current_requires_matching_local_worker_token():
     assert 1 not in r._device_ids
 
 
-# ── Test 3+4: 409 triggers on_lease_lost callback + full cleanup ────────────
+# ── lease-lost teardown (shared by all renewal paths) ────────────────────────
 
-def test_409_triggers_on_lease_lost_callback():
-    """409 response → on_lease_lost called with correct (job_id, device_id)."""
+def test_lease_lost_callback_cleans_internal_state():
+    """Definitive loss → on_lease_lost called with correct (job_id, device_id)
+    and internal state fully cleaned."""
     lost_calls = []
 
     def on_lost(jid: int, did: Optional[int]):
@@ -99,60 +102,26 @@ def test_409_triggers_on_lease_lost_callback():
     r._job_ids.add(1)
     r.set_fencing_token(1, "tok-1", device_id=10)
 
-    resp_409 = MagicMock()
-    resp_409.status_code = 409
-    resp_409.raise_for_status.side_effect = requests.HTTPError(response=resp_409)
+    r._handle_lease_lost(1, "tok-1", reason="batch_stale_token", status_code="stale_token")
 
-    with patch("requests.post", return_value=resp_409):
-        r._extend_lock(1)
-
-    assert len(lost_calls) == 1
-    assert lost_calls[0] == (1, 10)
+    assert lost_calls == [(1, 10)]
     # Internal state cleaned
     assert 1 not in r._job_ids
     assert 1 not in r._fencing_tokens
     assert 1 not in r._device_ids
 
 
-def test_409_cleanup_without_callback_still_cleans_internal():
-    """No on_lease_lost callback → 409 still cleans internal state (no crash)."""
+def test_lease_lost_without_callback_still_cleans_internal():
+    """No on_lease_lost callback → teardown still cleans internal state."""
     r = _make_renewer(on_lease_lost=None)
     r._job_ids.add(1)
     r.set_fencing_token(1, "tok-1", device_id=10)
 
-    resp_409 = MagicMock()
-    resp_409.status_code = 409
-    resp_409.raise_for_status.side_effect = requests.HTTPError(response=resp_409)
-
-    with patch("requests.post", return_value=resp_409):
-        r._extend_lock(1)
+    r._handle_lease_lost(1, "tok-1", reason="batch_lease_missing", status_code="lease_missing")
 
     assert 1 not in r._job_ids
     assert 1 not in r._fencing_tokens
     assert 1 not in r._device_ids
-
-
-# ── Test 5: network failure preserves state ────────────────────────────────
-
-def test_network_failure_preserves_state():
-    """ConnectionError after all retries → state unchanged, no callback."""
-    lost_calls = []
-
-    def on_lost(jid: int, did: Optional[int]):
-        lost_calls.append((jid, did))
-
-    r = _make_renewer(on_lease_lost=on_lost)
-    r._job_ids.add(1)
-    r.set_fencing_token(1, "tok-1", device_id=10)
-
-    with patch("requests.post", side_effect=requests.ConnectionError("timeout")):
-        r._extend_lock(1)
-
-    # State preserved — network recovered next tick
-    assert 1 in r._job_ids
-    assert 1 in r._fencing_tokens
-    assert 1 in r._device_ids
-    assert len(lost_calls) == 0
 
 
 # ── Test 6: renewal loop only iterates fencing_tokens ──────────────────────
@@ -210,22 +179,21 @@ def test_ttl_validation_warns_with_large_interval(monkeypatch, caplog):
 # ── Test 9: structured logging includes agent_instance_id ───────────────────
 
 def test_structured_logging_includes_agent_instance_id(caplog):
-    """Log extra dict carries agent_instance_id."""
+    """Log extra dict carries agent_instance_id (batch renewal path)."""
     import logging
     caplog.set_level(logging.DEBUG)
 
-    r = _make_renewer(agent_instance_id="inst-deadbeef")
+    r = _make_renewer(agent_instance_id="inst-deadbeef", host_id="h-1")
     r._job_ids.add(1)
     r.set_fencing_token(1, "tok-1")
 
-    success_resp = MagicMock()
-    success_resp.raise_for_status.return_value = None
-    success_resp.json.return_value = {"expires_at": "2026-01-01T00:00:00Z"}
+    resp = _batch_resp([
+        {"job_id": 1, "status": "renewed", "expires_at": "2026-01-01T00:00:00Z"},
+    ])
 
-    with patch("requests.post", return_value=success_resp):
-        r._extend_lock(1)
+    with patch("requests.post", return_value=resp):
+        r._extend_batch([1])
 
-    # Find the lease_extended log
     found = False
     for record in caplog.records:
         if getattr(record, "msg", "") == "lease_extended":
@@ -233,10 +201,7 @@ def test_structured_logging_includes_agent_instance_id(caplog):
             assert getattr(record, "job_id", None) == 1
             found = True
             break
-    if not found:
-        # msg may differ; check via record attributes on any log from _extend_lock
-        logs = [r for r in caplog.records if hasattr(r, "agent_instance_id")]
-        assert len(logs) > 0
+    assert found
 
 
 # ── Test 10: recovery executor adapted ──────────────────────────────────────
@@ -271,73 +236,20 @@ def test_recovery_executor_accepts_lease_renewer_param():
     lease_renewer.clear_fencing_token.assert_called_once_with(1)
 
 
-# ── Test 11: token cleared concurrently → skip without HTTP ─────────────────
+# ── Test 11: token cleared concurrently → excluded from batch request ───────
 
-def test_extend_lock_skips_when_token_cleared_concurrently():
-    """Registered token → snapshot taken → token cleared by concurrent cleanup →
-    _extend_lock reads no token and skips without issuing HTTP POST."""
-    r = _make_renewer()
+def test_extend_batch_skips_when_token_cleared_concurrently():
+    """Registered token → snapshot taken → token cleared by concurrent cleanup
+    before the chunk snapshot → job not included in any HTTP request."""
+    r = _make_renewer(host_id="h-1")
     r.set_fencing_token(1, "tok-1", device_id=10)
     # Simulate concurrent cleanup by clearing token before extend
     r.clear_fencing_token(1)
 
     with patch("requests.post") as mock_post:
-        r._extend_lock(1)
+        r._extend_batch([1])
 
     mock_post.assert_not_called()
-
-
-# ── Phase 4c: 404 lease lost ──────────────────────────────────────────────────
-
-def test_404_triggers_lease_lost_cleanup():
-    """Phase 4c: 404 response → on_lease_lost called (job not found on backend)."""
-    lost_calls = []
-
-    def on_lost(jid: int, did: Optional[int]):
-        lost_calls.append((jid, did))
-
-    r = _make_renewer(on_lease_lost=on_lost)
-    r._job_ids.add(1)
-    r.set_fencing_token(1, "tok-1", device_id=10)
-
-    resp_404 = MagicMock()
-    resp_404.status_code = 404
-    resp_404.raise_for_status.side_effect = requests.HTTPError(response=resp_404)
-
-    with patch("requests.post", return_value=resp_404):
-        r._extend_lock(1)
-
-    assert len(lost_calls) == 1
-    assert lost_calls[0] == (1, 10)
-    # Internal state cleaned
-    assert 1 not in r._job_ids
-    assert 1 not in r._fencing_tokens
-    assert 1 not in r._device_ids
-
-
-def test_500_does_not_trigger_lease_lost():
-    """Phase 4c: 500/5xx → retry, no lease lost cleanup."""
-    lost_calls = []
-
-    def on_lost(jid: int, did: Optional[int]):
-        lost_calls.append((jid, did))
-
-    r = _make_renewer(on_lease_lost=on_lost)
-    r._job_ids.add(1)
-    r.set_fencing_token(1, "tok-1", device_id=10)
-
-    resp_500 = MagicMock()
-    resp_500.status_code = 500
-    resp_500.raise_for_status.side_effect = requests.HTTPError(response=resp_500)
-
-    with patch("requests.post", return_value=resp_500):
-        r._extend_lock(1)
-
-    # State preserved — 5xx is transient
-    assert len(lost_calls) == 0
-    assert 1 in r._job_ids
-    assert 1 in r._fencing_tokens
-    assert 1 in r._device_ids
 
 
 # ── P0: Host-level batch renewal ───────────────────────────────────────────────
@@ -447,8 +359,11 @@ def test_batch_network_error_preserves_all_state():
     assert lost_calls == []
 
 
-def test_batch_unsupported_falls_back_to_per_job():
-    """Old backend (404 on batch route) → permanent fallback + per-job retry now."""
+def test_batch_404_is_config_error_no_fallback(caplog):
+    """#291: batch 404/405 → config error, state intact, NO per-job fallback."""
+    import logging
+    caplog.set_level(logging.ERROR)
+
     r = _make_renewer(host_id="h-1")
     r._job_ids.add(1)
     r.set_fencing_token(1, "tok-1", device_id=10)
@@ -456,24 +371,16 @@ def test_batch_unsupported_falls_back_to_per_job():
     resp_404 = MagicMock()
     resp_404.status_code = 404
 
-    calls = {"n": 0}
-
-    def _post(url, **kwargs):
-        calls["n"] += 1
-        if "extend-batch" in url:
-            return resp_404
-        # per-job fallback call
-        ok = MagicMock()
-        ok.raise_for_status.return_value = None
-        ok.json.return_value = {"expires_at": "2026-01-01T00:00:00Z"}
-        return ok
-
-    with patch("requests.post", side_effect=_post):
+    with patch("requests.post", return_value=resp_404) as mock_post:
         r._extend_batch([1])
 
-    assert r._batch_supported is False
-    # one batch attempt + one per-job fallback
-    assert calls["n"] == 2
+    # Exactly one batch attempt; no per-job retry calls
+    assert mock_post.call_count == 1
+    errors = [rec for rec in caplog.records if rec.msg == "lease_extend_batch_endpoint_missing"]
+    assert len(errors) == 1
+    # Lease state intact — next tick retries
+    assert r._fencing_tokens == {1: "tok-1"}
+    assert not hasattr(r, "_batch_supported")
 
 
 def test_batch_chunks_large_host(monkeypatch):

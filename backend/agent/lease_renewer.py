@@ -9,7 +9,6 @@ ADR-0019 Phase 3b: LockRenewalManager 重命名为 LeaseRenewer，补齐 409 清
 import logging
 import os
 import threading
-import time
 from typing import Any, Callable, Dict, Optional, Set
 
 import requests
@@ -53,10 +52,6 @@ class LeaseRenewer:
         # One batch request renews the whole host per tick (P0 scale reduction).
         # Chunked so a large host stays under the backend's per-request cap.
         self._batch_chunk = max(int(os.getenv("AGENT_LEASE_EXTEND_BATCH_CHUNK", "100")), 1)
-        # Auto-fallback to the per-job endpoint when a backend predates
-        # /leases/extend-batch (Agents hot-update independently of the control
-        # plane, so a new Agent may talk to an old backend during rollout).
-        self._batch_supported = True
 
         # Phase 3b: validate renew_interval < lease_ttl / 2
         lease_ttl_env = int(os.getenv("AGENT_LEASE_TTL", str(_BACKEND_LEASE_TTL)))
@@ -114,26 +109,23 @@ class LeaseRenewer:
                 self._stop_event.wait(self._renewal_interval)
                 continue
 
-            if self._batch_supported and self._host_id:
-                try:
-                    self._extend_batch(token_jobs)
-                except Exception as e:
-                    logger.warning("lease_renewal_batch_tick_failed", extra={
-                        "agent_instance_id": self._agent_instance_id,
-                        "error": str(e),
-                    })
-            else:
-                for job_id in token_jobs:
-                    if self._stop_event.is_set():
-                        break
-                    try:
-                        self._extend_lock(job_id)
-                    except Exception as e:
-                        logger.warning("lease_renewal_tick_failed", extra={
-                            "agent_instance_id": self._agent_instance_id,
-                            "job_id": job_id,
-                            "error": str(e),
-                        })
+            if not self._host_id:
+                # Batch renewal is host-scoped; without host identity there is
+                # no renewal path (misconfiguration — surfaced, not hidden).
+                logger.error("lease_renewal_missing_host_id", extra={
+                    "agent_instance_id": self._agent_instance_id,
+                    "active_jobs": len(token_jobs),
+                })
+                self._stop_event.wait(self._renewal_interval)
+                continue
+
+            try:
+                self._extend_batch(token_jobs)
+            except Exception as e:
+                logger.warning("lease_renewal_batch_tick_failed", extra={
+                    "agent_instance_id": self._agent_instance_id,
+                    "error": str(e),
+                })
 
             self._stop_event.wait(self._renewal_interval)
 
@@ -277,17 +269,13 @@ class LeaseRenewer:
                     timeout=15,
                 )
                 if resp.status_code in (404, 405):
-                    # Backend predates the batch endpoint — fall back permanently
-                    # this process, retry these jobs via the per-job path now.
-                    self._batch_supported = False
-                    logger.warning("lease_extend_batch_unsupported_fallback", extra={
+                    # #291: no per-job fallback. A missing batch endpoint means
+                    # an Agent/backend version mismatch — surface it and retry
+                    # next tick; lease state stays intact.
+                    logger.error("lease_extend_batch_endpoint_missing", extra={
                         "agent_instance_id": self._agent_instance_id,
                         "status_code": resp.status_code,
                     })
-                    for jid in chunk:
-                        if self._stop_event.is_set():
-                            return
-                        self._extend_lock(jid)
                     return
                 resp.raise_for_status()
                 payload = resp.json()
@@ -317,95 +305,3 @@ class LeaseRenewer:
                         jid, sent_tokens.get(jid, ""),
                         reason=f"batch_{status}", status_code=status,
                     )
-
-    def _extend_lock(self, job_id: int) -> None:
-        with self._jobs_lock:
-            token = self._fencing_tokens.get(job_id)
-        if not token:
-            # 必须保留：renewal loop snapshot 后 token 可能被并发清理
-            logger.debug("extend_lock_skipped_no_token", extra={
-                "agent_instance_id": self._agent_instance_id,
-                "job_id": job_id,
-            })
-            return
-
-        url = f"{self._api_url}/api/v1/agent/jobs/{job_id}/extend_lock"
-        headers = {"X-Agent-Secret": self._agent_secret} if self._agent_secret else {}
-        last_error = None
-
-        for attempt in range(1, self._post_retries + 1):
-            try:
-                resp = requests.post(
-                    url, json={"fencing_token": token}, headers=headers, timeout=10,
-                )
-                resp.raise_for_status()
-                result = resp.json()
-                logger.info("lease_extended", extra={
-                    "agent_instance_id": self._agent_instance_id,
-                    "job_id": job_id,
-                    "expires_at": result.get("expires_at"),
-                })
-                return
-            except requests.HTTPError as e:
-                last_error = e
-                status = e.response.status_code if e.response is not None else None
-                if status in (409, 404):
-                    # 409: token rejected; 404: job not found — lease definitively lost
-                    with self._jobs_lock:
-                        current = self._fencing_tokens.get(job_id)
-                        if current and current != token:
-                            logger.info(
-                                "lease_lost_stale_token_ignored",
-                                extra={
-                                    "agent_instance_id": self._agent_instance_id,
-                                    "job_id": job_id,
-                                    "status_code": status,
-                                },
-                            )
-                            return
-                        self._job_ids.discard(job_id)
-                        self._fencing_tokens.pop(job_id, None)
-                        self._local_worker_tokens.pop(job_id, None)
-                        device_id = self._device_ids.pop(job_id, None)
-                    if self._on_lease_lost:
-                        self._on_lease_lost(job_id, device_id)
-                    logger.warning(
-                        "lease_lost_409" if status == 409 else "lease_lost_404",
-                        extra={
-                            "agent_instance_id": self._agent_instance_id,
-                            "job_id": job_id,
-                            "status_code": status,
-                            "reason": (
-                                "backend_rejected_token" if status == 409
-                                else "job_not_found_on_backend"
-                            ),
-                        },
-                    )
-                    return
-                logger.warning("lease_extend_http_error", extra={
-                    "agent_instance_id": self._agent_instance_id,
-                    "job_id": job_id,
-                    "attempt": attempt,
-                    "status_code": status or "unknown",
-                    "error": str(e),
-                })
-            except requests.RequestException as e:
-                last_error = e
-                logger.warning("lease_extend_network_error", extra={
-                    "agent_instance_id": self._agent_instance_id,
-                    "job_id": job_id,
-                    "attempt": attempt,
-                    "error": str(e),
-                })
-
-            if attempt < self._post_retries:
-                delay = self._post_retry_base_delay * (2 ** (attempt - 1))
-                time.sleep(delay)
-
-        # 所有重试耗尽 (non-409) — 不清理状态，网络恢复后下一 tick 继续续租
-        logger.warning("lease_extend_all_retries_exhausted", extra={
-            "agent_instance_id": self._agent_instance_id,
-            "job_id": job_id,
-            "attempts": self._post_retries,
-            "last_error": str(last_error),
-        })

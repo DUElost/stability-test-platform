@@ -333,17 +333,38 @@ class TestRecyclerSubStateClocks:
         db_session.expire_all()
         assert db_session.get(JobInstance, job.id).status == "RUNNING"
 
-    def test_legacy_job_stale_updated_at_goes_unknown(self, db_session, signal_fixture):
-        """NULL execution_state (legacy agent) → old rule byte-for-byte."""
+    def test_not_reported_job_stale_dispatch_time_goes_unknown(
+        self, db_session, signal_fixture,
+    ):
+        """NULL execution_state (signal never arrived) → dispatch-time clock:
+        stale started_at ages the job into UNKNOWN even while a renewal kept
+        updated_at fresh (#288)."""
         f = signal_fixture
         job = f["job"]
-        job.updated_at = self._stale()
+        job.started_at = self._stale()
+        job.updated_at = datetime.now(timezone.utc)  # renewal keepalive — irrelevant
         db_session.commit()
 
         recycle_once()
 
         db_session.expire_all()
         assert db_session.get(JobInstance, job.id).status == "UNKNOWN"
+
+    def test_not_reported_job_within_first_window_survives(
+        self, db_session, signal_fixture,
+    ):
+        """NULL execution_state but fresh started_at → still inside its first
+        executor window; not recycled (#288 grace for claim→first-renewal)."""
+        f = signal_fixture
+        job = f["job"]
+        job.started_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+        job.updated_at = self._stale()
+        db_session.commit()
+
+        recycle_once()
+
+        db_session.expire_all()
+        assert db_session.get(JobInstance, job.id).status == "RUNNING"
 
 
 # ── recovery payload carries execution_state ──────────────────────────────────
