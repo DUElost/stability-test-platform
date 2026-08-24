@@ -156,9 +156,9 @@ export default function ProjectDetailPage() {
             <p className={cn('mt-3 text-xs', TEXT.subtitle)} data-testid="seed-disclaimer">
               这是 P1 脚本灌入的回填标签，不能代表客户、项目或机型。请在工作台新建人工项目并映射型号。
             </p>
-          ) : project.match_models.length > 0 ? (
+          ) : (project.match_models ?? []).length > 0 ? (
             <p className={cn('mt-3 font-mono text-xs', TEXT.subtitle)} data-testid="match-models">
-              已映射型号：{project.match_models.join(' · ')}
+              已映射型号：{(project.match_models ?? []).join(' · ')}
             </p>
           ) : (
             <p className={cn('mt-3 text-xs', TEXT.subtitle)} data-testid="match-models-empty">

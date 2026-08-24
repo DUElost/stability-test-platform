@@ -691,7 +691,8 @@ export interface Project {
   form_factor: string | null;
   status: 'ACTIVE' | 'ARCHIVED';
   source: 'USER' | 'SEED';
-  match_models: string[];
+  /** 旧版后端（未部署 mapping 端点前）响应不含该字段——消费方需 ?? [] 防御。 */
+  match_models?: string[];
   created_at: string;
   updated_at: string;
 }
