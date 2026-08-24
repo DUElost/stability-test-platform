@@ -24,6 +24,7 @@ from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.project import Specialty, TestProject
+from backend.models.suite import TestSuite
 from backend.services.script_progress_capability import script_supports_progress
 from backend.models.resource_pool import ResourcePool
 from backend.services.plan_dispatcher_core import plan_steps_consumes_wifi
@@ -91,6 +92,8 @@ class PlanCreate(BaseModel):
     # ADR-0029 D2/D6（#405）：归属项目与专项，F2 口径传 key、数字 id 只留 DB 外键
     project_key: Optional[str] = None
     specialty_key: Optional[str] = None
+    # ADR-0030 v1.4（#404 PR-B）：套件绑定，对外引用键 = 套件 name
+    suite_name: Optional[str] = None
 
 
 class PlanUpdate(BaseModel):
@@ -115,6 +118,9 @@ class PlanUpdate(BaseModel):
     # ADR-0029 D2/D6（#405）：语义随 fields_set——显式传 null = 清除归属
     project_key: Optional[str] = None
     specialty_key: Optional[str] = None
+    # ADR-0030 v1.4（#404 PR-B）：同 fields_set 语义——显式 null = 解绑套件；
+    # 解绑即回到 P0 文件真源模式（PR-C 起托管门禁不再适用）
+    suite_name: Optional[str] = None
     # 乐观锁令牌(#268 多Worker):客户端带上加载时的 updated_at,不一致则 409,
     # 防两个浏览器基于同一旧版本互相覆盖(last-write-wins)。
     expected_updated_at: Optional[datetime] = None
@@ -166,6 +172,8 @@ class PlanOut(BaseModel):
     # ADR-0029：当前归属项目（F2 口径，不暴露数字 project_id）
     project_key: Optional[str] = None
     specialty_key: Optional[str] = None
+    # ADR-0030 v1.4：绑定套件（对外引用键 = name）
+    suite_name: Optional[str] = None
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -427,6 +435,16 @@ def _resolve_specialty_id(db: Session, specialty_key: Optional[str]) -> Optional
     return spec.id
 
 
+def _resolve_suite_id(db: Session, suite_name: Optional[str]) -> Optional[int]:
+    """ADR-0030 v1.4（#404 PR-B）：套件对外引用键是 name（同 suites.py 口径）。"""
+    if suite_name is None:
+        return None
+    suite = db.query(TestSuite).filter(TestSuite.name == suite_name).first()
+    if suite is None:
+        raise HTTPException(status_code=404, detail=f"suite not found: {suite_name}")
+    return suite.id
+
+
 @router.get("/specialties", response_model=ApiResponse[List[dict]])
 def list_specialties(
     db: Session = Depends(get_db),
@@ -456,6 +474,7 @@ def _plan_out(plan: Plan, steps: list) -> PlanOut:
         watcher_policy=plan.watcher_policy,
         project_key=plan.project.project_key if plan.project else None,
         specialty_key=plan.specialty.key if plan.specialty else None,
+        suite_name=plan.suite.name if plan.suite else None,
         created_by=plan.created_by,
         created_at=plan.created_at,
         updated_at=plan.updated_at,
@@ -556,6 +575,7 @@ def create_plan(
         # ADR-0029（#405）：归属在创建时写入——新 Plan 不再恒 NULL
         project_id=_resolve_project_id(db, payload.project_key),
         specialty_id=_resolve_specialty_id(db, payload.specialty_key),
+        suite_id=_resolve_suite_id(db, payload.suite_name),
         created_by=current_user.username if current_user else None,
         created_at=now,
         updated_at=now,
@@ -590,6 +610,7 @@ def create_plan(
             "step_count": len(payload.steps),
             **({"project_key": payload.project_key} if payload.project_key else {}),
             **({"specialty_key": payload.specialty_key} if payload.specialty_key else {}),
+            **({"suite_name": payload.suite_name} if payload.suite_name else {}),
         },
         request=request,
     )
@@ -871,6 +892,9 @@ def update_plan(
         plan.project_id = _resolve_project_id(db, payload.project_key)
     if "specialty_key" in fields_set:
         plan.specialty_id = _resolve_specialty_id(db, payload.specialty_key)
+    # ADR-0030 v1.4（#404 PR-B）：显式 null = 解绑，回到 P0 文件真源模式
+    if "suite_name" in fields_set:
+        plan.suite_id = _resolve_suite_id(db, payload.suite_name)
 
     # DAG validation for next_plan_id changes
     if "next_plan_id" in fields_set:

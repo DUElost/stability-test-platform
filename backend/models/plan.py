@@ -54,6 +54,9 @@ class Plan(Base):
     project_id        = Column(Integer, ForeignKey("test_project.id"), nullable=True)
     # D6：专项字典表（MTBF / 开关机 / MONKEY / …），Plan 列表按 项目×专项 二维分组。
     specialty_id      = Column(Integer, ForeignKey("specialty.id"), nullable=True)
+    # ADR-0030 v1.4（#404 PR-B）：套件绑定。NULL = P0 文件真源模式（不加门禁）；
+    # 非空 = 托管模式（precheck 五步门禁 + prepare 冻结 dispatch_suite，随 PR-C 落地）。
+    suite_id          = Column(Integer, ForeignKey("test_suite.id"), nullable=True)
     created_by        = Column(String(128))
     created_at        = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at        = Column(
@@ -70,6 +73,7 @@ class Plan(Base):
                              primaryjoin="Plan.id == foreign(PlanRun.plan_id)")
     project   = relationship("TestProject", foreign_keys=[project_id])
     specialty = relationship("Specialty", foreign_keys=[specialty_id])
+    suite     = relationship("TestSuite", foreign_keys=[suite_id])
 
     __table_args__ = (
         CheckConstraint(
@@ -82,6 +86,7 @@ class Plan(Base):
         ),
         Index("idx_plan_next_plan", "next_plan_id"),
         Index("idx_plan_project", "project_id"),
+        Index("idx_plan_suite", "suite_id"),
     )
 
 
