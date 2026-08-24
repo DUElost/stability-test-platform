@@ -23,7 +23,7 @@ from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
-from backend.models.project import TestProject
+from backend.models.project import Specialty, TestProject
 from backend.services.script_progress_capability import script_supports_progress
 from backend.models.resource_pool import ResourcePool
 from backend.services.plan_dispatcher_core import plan_steps_consumes_wifi
@@ -88,6 +88,9 @@ class PlanCreate(BaseModel):
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     steps: List[PlanStepIn] = Field(default_factory=list)
+    # ADR-0029 D2/D6（#405）：归属项目与专项，F2 口径传 key、数字 id 只留 DB 外键
+    project_key: Optional[str] = None
+    specialty_key: Optional[str] = None
 
 
 class PlanUpdate(BaseModel):
@@ -109,6 +112,9 @@ class PlanUpdate(BaseModel):
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     steps: Optional[List[PlanStepIn]] = None
+    # ADR-0029 D2/D6（#405）：语义随 fields_set——显式传 null = 清除归属
+    project_key: Optional[str] = None
+    specialty_key: Optional[str] = None
     # 乐观锁令牌(#268 多Worker):客户端带上加载时的 updated_at,不一致则 409,
     # 防两个浏览器基于同一旧版本互相覆盖(last-write-wins)。
     expected_updated_at: Optional[datetime] = None
@@ -159,6 +165,7 @@ class PlanOut(BaseModel):
     watcher_policy: Optional[dict] = None
     # ADR-0029：当前归属项目（F2 口径，不暴露数字 project_id）
     project_key: Optional[str] = None
+    specialty_key: Optional[str] = None
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -402,6 +409,38 @@ def _validate_assembled_lifecycle(
         )
 
 
+def _resolve_project_id(db: Session, project_key: Optional[str]) -> Optional[int]:
+    if project_key is None:
+        return None
+    proj = db.query(TestProject).filter(TestProject.project_key == project_key).first()
+    if proj is None:
+        raise HTTPException(status_code=404, detail=f"project not found: {project_key}")
+    return proj.id
+
+
+def _resolve_specialty_id(db: Session, specialty_key: Optional[str]) -> Optional[int]:
+    if specialty_key is None:
+        return None
+    spec = db.query(Specialty).filter(Specialty.key == specialty_key).first()
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"specialty not found: {specialty_key}")
+    return spec.id
+
+
+@router.get("/specialties", response_model=ApiResponse[List[dict]])
+def list_specialties(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """D6 专项字典（#405 接线）：Plan 编辑器下拉与列表分组的数据源。
+
+    字典是静态种子数据（mtbf / power-cycle / monkey），无写端点——变更走迁移。
+    """
+    rows = db.query(Specialty).order_by(Specialty.sort_order, Specialty.id).all()
+    return ok([{"key": r.key, "display_name": r.display_name,
+                "sort_order": r.sort_order} for r in rows])
+
+
 def _plan_out(plan: Plan, steps: list) -> PlanOut:
     return PlanOut(
         id=plan.id,
@@ -416,6 +455,7 @@ def _plan_out(plan: Plan, steps: list) -> PlanOut:
         next_plan_id=plan.next_plan_id,
         watcher_policy=plan.watcher_policy,
         project_key=plan.project.project_key if plan.project else None,
+        specialty_key=plan.specialty.key if plan.specialty else None,
         created_by=plan.created_by,
         created_at=plan.created_at,
         updated_at=plan.updated_at,
@@ -513,6 +553,9 @@ def create_plan(
         auto_archive_interval_seconds=payload.auto_archive_interval_seconds,
         next_plan_id=payload.next_plan_id,
         watcher_policy=payload.watcher_policy,
+        # ADR-0029（#405）：归属在创建时写入——新 Plan 不再恒 NULL
+        project_id=_resolve_project_id(db, payload.project_key),
+        specialty_id=_resolve_specialty_id(db, payload.specialty_key),
         created_by=current_user.username if current_user else None,
         created_at=now,
         updated_at=now,
@@ -542,7 +585,12 @@ def create_plan(
         resource_id=plan.id,
         username=current_user.username if current_user else None,
         user_id=current_user.id if current_user else None,
-        details={"name": plan.name, "step_count": len(payload.steps)},
+        details={
+            "name": plan.name,
+            "step_count": len(payload.steps),
+            **({"project_key": payload.project_key} if payload.project_key else {}),
+            **({"specialty_key": payload.specialty_key} if payload.specialty_key else {}),
+        },
         request=request,
     )
     # 审计与主变更同事务提交(get_db 不自动 commit,#281 CR 意见)
@@ -816,6 +864,13 @@ def update_plan(
         plan.auto_archive_interval_seconds = payload.auto_archive_interval_seconds
     if payload.watcher_policy is not None:
         plan.watcher_policy = payload.watcher_policy
+
+    # ADR-0029（#405）：归属变更语义随 fields_set——显式 null = 清除；
+    # 未提供的字段不动另一维。审计经下方 changed 字段名列表自然覆盖。
+    if "project_key" in fields_set:
+        plan.project_id = _resolve_project_id(db, payload.project_key)
+    if "specialty_key" in fields_set:
+        plan.specialty_id = _resolve_specialty_id(db, payload.specialty_key)
 
     # DAG validation for next_plan_id changes
     if "next_plan_id" in fields_set:
