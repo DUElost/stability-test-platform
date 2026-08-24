@@ -459,6 +459,22 @@ def prepare_plan_run(
     defaults = _script_defaults(metadata)
     lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
 
+    # #404 第三步（双模式退役观测层）：P1b 门禁落地后，派发 mtbf 系脚本但未
+    # 绑定套件 → 记 WARNING suite_unbound。P0 存量兼容期信号；一个完整运行周期
+    # 归零后可翻转硬拒（翻转动作另起小 PR，不默认启用——issue 评论口径）。
+    if plan.suite_id is None:
+        mtbf_steps = [
+            s.step_key for s in steps
+            if s.enabled is not False and s.script_name.startswith("mtbf_")
+        ]
+        if mtbf_steps:
+            logger.warning(
+                "suite_unbound plan=%d plan_name=%s mtbf_steps=%s "
+                "(expected/project fall back to host env; bind a suite to "
+                "enable managed gates)",
+                plan.id, plan.name, mtbf_steps,
+            )
+
     is_valid, errors = validate_pipeline_def({"lifecycle": lifecycle})
     if not is_valid:
         raise PlanDispatchError(
