@@ -213,7 +213,7 @@ WHERE plan_run_id = :run_id AND state IN ('REMOTE', 'ARCHIVED')
 
 ### 4.3 P0-1 双根遍历（临时）
 
-`dedup_extract.run_extract_sync` 在 `STP_AEE_NFS_ROOT_LEGACY` 存在时双根 — **阶段 3 完成后删除**，由 `remote_path` 唯一确定。
+`dedup_extract.run_extract_sync` 单根定位（`STP_AEE_NFS_ROOT_LEGACY` 双源与 `resolve_legacy_shared_storage_root` 已删除，#289），由 `remote_path` 唯一确定。
 
 ---
 

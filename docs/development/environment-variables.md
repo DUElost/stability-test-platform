@@ -32,12 +32,12 @@
 | `STP_PLAN_ADMISSION_QUEUE_ENABLED` | `1`=V2 准入队列；默认 `1`。设为 `0` 会停用新派发（不会恢复已移除的 legacy inline dispatch）；存量 QUEUED 仍 drain。灰度见 [`../operations/adr-0026-admission-and-scale-gray-rollout.md`](../operations/adr-0026-admission-and-scale-gray-rollout.md)；`/health` 暴露 `admission_queue_*` |
 | `STP_SCRIPT_ROOT` | 脚本扫描根；**必须显式设置**（未设 scan 返回 503，不再回落到 `STP_NFS_ROOT/scripts`）。开发：`<repo>/backend/agent/scripts` |
 | `STP_SCRIPT_RUNTIME_ROOT` | 扫描机 ≠ 运行机时 Agent 侧脚本根 |
-| `STP_NFS_ROOT` | Agent 上由 hot-update **镜像** `STP_AEE_NFS_ROOT`（旧脚本仍读此名）。控制面本机值**不下发**，也不再当脚本默认根 |
+| `STP_NFS_ROOT` | **脚本专用别名**（#289 钉死）：仅 `backend/agent/scripts/` 下已发布脚本读此名，hot-update 将其镜像为 `STP_AEE_NFS_ROOT` 的值；运行时代码一律解析 `STP_AEE_NFS_ROOT`。控制面本机值**不下发** |
 | `STP_AEE_NFS_ROOT` | **中心存储** 本机挂载点（**唯一文档化主键**）。控制面 + Agent 指向同一分享；路径字符串可不同 |
-| `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | **弃用别名**（计划删除，#213 E1）：仅当主键未设时回落并打 WARNING；新部署勿再配置 |
+| ~~`STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR`~~ | 已删除（#289）：唯一主键是 `STP_AEE_NFS_ROOT`，未设即视为未配置（调用方按契约报错/503） |
 | `STP_FILE_SERVER_ADDRESS` | 共享存储健康页**左栏控制面**展示 IP（现 8.202）。**不是** CIFS 根 / UNC |
 | `STP_AEE_SHARE_ADDRESS` | 健康页**右栏中心存储机**展示 IP。未设 = 与控制面同源（过渡期同机）；迁离 8.202 后必设（#205） |
-| `STP_FILE_SERVER_NODE_JOB` / `STP_CONTROL_PLANE_NODE_JOB` | 左栏控制面 node exporter 的 Prometheus job（前者为旧名回落，默认 `file-server`） |
+| `STP_CONTROL_PLANE_NODE_JOB` | 左栏控制面 node exporter 的 Prometheus job（默认 `file-server`；旧名 `STP_FILE_SERVER_NODE_JOB` 已删除，#289） |
 | `STP_STORAGE_NODE_JOB` | 右栏中心存储机 node exporter 的 Prometheus job（默认未设→同源；分源后必设，如 `storage-server`） |
 | `STP_AEE_LOCAL_ROOT` | Agent **本机** L1 AEE 根（按机配置；hot-update **不下发**，见 #235） |
 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` | Agent only。上送成功后删本机事件目录并标 `PRUNED`（**默认 0**）。**禁止** fleet 同步（#217）：hot-update 仅下发 `_FLEET_ENV_KEYS` allowlist（`hot_update_env_overrides()`），本键不在列表中，控制面误设也不会进 payload。风险：CIFS 事后不可读时本地已无副本。灰度：单机改 Agent `.env` + `reload_config` |

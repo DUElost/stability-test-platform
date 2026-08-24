@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from backend.models.host import Device
 from backend.models.job import JobInstance, StepTrace
-from backend.models.plan import Plan, PlanStep
+from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 
 

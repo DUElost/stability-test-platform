@@ -26,7 +26,7 @@
 
 **文件服务器 / File Server** = 控制面 admin **共享存储健康页**（`/storage`），不是一台机器、不是角色 4。
 
-带 NFS/CIFS 的**存储类 env**都应指向角色 4。主键 **`STP_AEE_NFS_ROOT`**；`STP_WATCHER_NFS_BASE_DIR` / `STP_AEE_CIFS_ROOT` 为弃用别名。控制面脚本根必须设 **`STP_SCRIPT_ROOT`**，不得再用 `STP_NFS_ROOT/scripts`。
+带 NFS/CIFS 的**存储类 env**都应指向角色 4。主键 **`STP_AEE_NFS_ROOT`**（唯一；#289 后弃用别名已删除）。控制面脚本根必须设 **`STP_SCRIPT_ROOT`**，不得再用 `STP_NFS_ROOT/scripts`。
 
 ---
 
@@ -105,7 +105,6 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | 中心存储 | **CIFS**、**NFS**、中心日志服务器、L2、归档盘、sonic_tinno、`jxtinno` | 控制面、健康页 |
 | 15.4 / 15.4 CIFS | 角色外号 / ADR 目标态 | 「现网 UNC 已在 15.4」 |
 | `STP_AEE_NFS_ROOT` | 共享根主键（键名带 NFS，指向的就是中心存储挂载点） | `STP_FILE_SERVER_ADDRESS` |
-| `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | 弃用别名 → `STP_AEE_NFS_ROOT` | 第二块盘 |
 | `STP_NFS_ROOT` | Agent 上 hot-update 镜像 `STP_AEE_NFS_ROOT`（旧脚本 env）。控制面本机值不下发；脚本扫描用 `STP_SCRIPT_ROOT` | 独立脚本盘 |
 | `STP_AGENT_NFS_ROOT` | **已停用**（不再映射） | 第三块盘 |
 
@@ -173,7 +172,7 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | `STP_FILE_SERVER_ADDRESS` | 健康页 → 控制面展示 IP | IP（现 8.202，切盘**不改**） |
 | `STP_AEE_LOCAL_ROOT` | Agent HDD | 本机路径 |
 | `STP_AEE_NFS_ROOT` | **中心存储** 挂载点（主键） | 本机路径；控制面与 Agent 指向同一 UNC |
-| `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | 弃用别名（主键未设时回落） | 同盘路径或留空 |
+| `STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` | 已删除（#289）——只认 `STP_AEE_NFS_ROOT` | 同盘路径或留空 |
 | `STP_NFS_ROOT` | Agent 脚本 env 镜像中心存储挂载；CP 本机值不下发 | 本机路径 |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | 扫描工具（本角色路径） | 控制面 = merge；Agent = scan |
 | `STP_AGENT_DEDUP_SCAN_*` | 控制面持有的 **Agent 侧**扫描工具路径 | hot-update 源键 |

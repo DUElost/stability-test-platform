@@ -13,7 +13,6 @@ from backend.core.artifact_paths import (
     resolve_local_artifact_path,
 )
 from backend.core.storage_root import (
-    resolve_legacy_shared_storage_root,
     resolve_shared_storage_root as core_resolve,
 )
 from backend.agent.aee.paths import resolve_shared_storage_root as agent_resolve
@@ -30,7 +29,8 @@ def _clear_share_env(monkeypatch):
 
 
 @pytest.mark.parametrize("resolver", [core_resolve, agent_resolve])
-def test_resolvers_agree_on_primary_and_aliases(monkeypatch, resolver):
+def test_resolvers_read_primary_key_only(monkeypatch, resolver):
+    """#289：唯一主键 STP_AEE_NFS_ROOT；CIFS/WATCHER 别名与 STP_NFS_ROOT 均不回落。"""
     _clear_share_env(monkeypatch)
     monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/stp-aee")
     monkeypatch.setenv("STP_AEE_CIFS_ROOT", "/mnt/cifs")
@@ -38,7 +38,11 @@ def test_resolvers_agree_on_primary_and_aliases(monkeypatch, resolver):
 
     _clear_share_env(monkeypatch)
     monkeypatch.setenv("STP_AEE_CIFS_ROOT", "/mnt/cifs")
-    assert resolver() == "/mnt/cifs"
+    assert resolver() == ""
+
+    _clear_share_env(monkeypatch)
+    monkeypatch.setenv("STP_WATCHER_NFS_BASE_DIR", "/mnt/watcher")
+    assert resolver() == ""
 
     _clear_share_env(monkeypatch)
     monkeypatch.setenv("STP_NFS_ROOT", "/mnt/storage")
@@ -86,34 +90,7 @@ def test_resolve_device_event_remote_path_scoped_to_plan_run(monkeypatch, tmp_pa
         resolve_device_event_remote_path(str(foreign), plan_run_id=42)
 
 
-def test_resolve_legacy_shared_storage_root(monkeypatch):
-    monkeypatch.delenv("STP_AEE_NFS_ROOT_LEGACY", raising=False)
-    assert resolve_legacy_shared_storage_root() == ""
-    monkeypatch.setenv("STP_AEE_NFS_ROOT_LEGACY", "/mnt/legacy-nfs")
-    assert resolve_legacy_shared_storage_root() == "/mnt/legacy-nfs"
 
-
-def test_resolve_extract_event_src_legacy_root(monkeypatch, tmp_path):
-    primary = tmp_path / "primary"
-    legacy = tmp_path / "legacy"
-    event_name = "ke_event_001"
-    legacy_src = legacy / "devices" / "42" / event_name
-    legacy_src.mkdir(parents=True)
-    (legacy_src / "a.txt").write_text("x", encoding="utf-8")
-    monkeypatch.setenv("STP_AEE_NFS_ROOT_LEGACY", str(legacy))
-
-    from backend.core.artifact_paths import resolve_extract_event_src
-
-    located = resolve_extract_event_src(
-        f"/old/mount/devices/42/{event_name}",
-        nfs_root=str(primary),
-        legacy_root=str(legacy),
-        plan_run_id=42,
-    )
-    assert located is not None
-    src, devices_root = located
-    assert src == legacy_src.resolve()
-    assert devices_root == (legacy / "devices" / "42").resolve()
 
 
 def test_resolve_extract_event_src_rejects_plan_run_symlink_escape(tmp_path):
@@ -133,7 +110,6 @@ def test_resolve_extract_event_src_rejects_plan_run_symlink_escape(tmp_path):
     assert resolve_extract_event_src(
         event_name,
         nfs_root=str(nfs),
-        legacy_root="",
         plan_run_id=42,
     ) is None
 
@@ -152,7 +128,6 @@ def test_resolve_extract_event_src_rejects_cross_plan_run_symlink(tmp_path):
     assert resolve_extract_event_src(
         event_name,
         nfs_root=str(nfs),
-        legacy_root="",
         plan_run_id=42,
     ) is None
 
@@ -280,10 +255,10 @@ def test_resolve_extract_event_src_rejects_symlink_event_dir(tmp_path):
     from backend.core.artifact_paths import resolve_extract_event_src
 
     assert resolve_extract_event_src(
-        "ev1", nfs_root=str(nfs), legacy_root="", plan_run_id=42,
+        "ev1", nfs_root=str(nfs), plan_run_id=42,
     ) is None
     located = resolve_extract_event_src(
-        "ev2", nfs_root=str(nfs), legacy_root="", plan_run_id=42,
+        "ev2", nfs_root=str(nfs), plan_run_id=42,
     )
     assert located is not None
 
@@ -300,5 +275,5 @@ def test_resolve_extract_event_src_rejects_nested_relative_symlink(tmp_path):
     from backend.core.artifact_paths import resolve_extract_event_src
 
     assert resolve_extract_event_src(
-        "ev1", nfs_root=str(nfs), legacy_root="", plan_run_id=42,
+        "ev1", nfs_root=str(nfs), plan_run_id=42,
     ) is None

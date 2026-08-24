@@ -116,8 +116,10 @@ def _fleet_env_overrides_from_control_plane() -> dict[str, str]:
         if val:
             overrides[agent_key] = val
 
-    # Legacy script env: subprocesses still read STP_NFS_ROOT. Mirror the
-    # 中心存储 mount — never the control plane's own STP_NFS_ROOT.
+    # ``STP_NFS_ROOT`` is a *script-only* alias (#289 decision B): the pinned
+    # scripts under backend/agent/scripts/ read that name, so hot-update mirrors
+    # the 中心存储 mount into it — never the control plane's own STP_NFS_ROOT.
+    # Runtime code resolves storage exclusively via STP_AEE_NFS_ROOT.
     aee_nfs_root = os.getenv("STP_AEE_NFS_ROOT", "").strip()
     if aee_nfs_root:
         overrides.setdefault("STP_NFS_ROOT", aee_nfs_root)

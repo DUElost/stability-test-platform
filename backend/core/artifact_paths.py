@@ -335,85 +335,76 @@ def resolve_extract_event_src(
     raw: str,
     *,
     nfs_root: str,
-    legacy_root: str,
     plan_run_id: int,
 ) -> tuple[Path, Path] | None:
-    """Locate an event directory on primary or legacy storage (D8).
+    """Locate an event directory on central storage.
 
     Returns ``(src, devices_scope_root)`` when a validated directory exists.
 
     Resolution order (#213 B3):
-    1. Absolute ``remote_path`` under ``{root}/devices/`` (incl. ``unassigned/``).
-    2. Basename under ``{root}/devices/{plan_run_id}/`` (legacy / basename-only).
+    1. Absolute ``remote_path`` under ``{nfs_root}/devices/`` (incl. ``unassigned/``).
+    2. Basename under ``{nfs_root}/devices/{plan_run_id}/`` (basename-only rows).
     """
-    from backend.core.storage_root import resolve_legacy_shared_storage_root
-
     # Invalid DLE remote_path must not abort the whole PlanRun extract (#230 review).
     try:
         _reject_path_traversal(raw)
     except ArtifactPathError:
         return None
 
-    legacy = legacy_root or resolve_legacy_shared_storage_root()
-    roots = [nfs_root]
-    if legacy and legacy != nfs_root:
-        roots.append(legacy)
-
+    root = nfs_root
     raw_path = Path(raw)
-    for root in roots:
-        if not root:
-            continue
-        try:
-            devices_parent = (Path(root) / "devices").resolve(strict=False)
-        except OSError:
-            continue
-        if not devices_parent.is_dir():
-            continue
+    if not root:
+        return None
+    try:
+        devices_parent = (Path(root) / "devices").resolve(strict=False)
+    except OSError:
+        return None
+    if not devices_parent.is_dir():
+        return None
 
-        # Absolute remote_path under devices/ (plan_run or unassigned).
-        if raw_path.is_absolute():
+    # Absolute remote_path under devices/ (plan_run or unassigned).
+    if raw_path.is_absolute():
+        try:
+            candidate_real = raw_path.resolve(strict=False)
+        except OSError:
+            candidate_real = None
+        if (
+            candidate_real is not None
+            and candidate_real.is_dir()
+            and not candidate_real.is_symlink()
+            and candidate_real.is_relative_to(devices_parent)
+        ):
             try:
-                candidate_real = raw_path.resolve(strict=False)
-            except OSError:
-                candidate_real = None
-            if (
-                candidate_real is not None
-                and candidate_real.is_dir()
-                and not candidate_real.is_symlink()
-                and candidate_real.is_relative_to(devices_parent)
-            ):
-                try:
-                    _reject_nested_symlinks(candidate_real)
-                except ArtifactPathOutsideRootError:
-                    pass
-                else:
-                    return candidate_real, devices_parent
+                _reject_nested_symlinks(candidate_real)
+            except ArtifactPathOutsideRootError:
+                pass
+            else:
+                return candidate_real, devices_parent
 
-        plan_run_scope = _plan_run_devices_scope(root, plan_run_id)
-        if plan_run_scope is None:
-            continue
-        rel_name = raw_path.name
-        if not rel_name or rel_name in (".", ".."):
-            continue
-        candidate_entry = plan_run_scope / rel_name
-        if candidate_entry.is_symlink():
-            continue
-        if not candidate_entry.is_dir():
-            continue
-        try:
-            candidate_real = candidate_entry.resolve(strict=False)
-        except OSError:
-            continue
-        if candidate_real.name != rel_name:
-            continue
-        if not candidate_real.is_relative_to(plan_run_scope):
-            continue
-        try:
-            _reject_nested_symlinks(candidate_entry)
-        except ArtifactPathOutsideRootError:
-            continue
-        return candidate_real, plan_run_scope
-    return None
+    plan_run_scope = _plan_run_devices_scope(root, plan_run_id)
+    if plan_run_scope is None:
+        return None
+    rel_name = raw_path.name
+    if not rel_name or rel_name in (".", ".."):
+        return None
+    candidate_entry = plan_run_scope / rel_name
+    if candidate_entry.is_symlink():
+        return None
+    if not candidate_entry.is_dir():
+        return None
+    try:
+        candidate_real = candidate_entry.resolve(strict=False)
+    except OSError:
+        return None
+    if candidate_real.name != rel_name:
+        return None
+    if not candidate_real.is_relative_to(plan_run_scope):
+        return None
+    try:
+        _reject_nested_symlinks(candidate_entry)
+    except ArtifactPathOutsideRootError:
+        return None
+    return candidate_real, plan_run_scope
 
 
 def _coerce_local_path(raw: str) -> Path:

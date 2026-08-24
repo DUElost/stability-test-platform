@@ -274,9 +274,9 @@ async def test_ingest_artifact_rejects_storage_uri_outside_nfs_root():
 
 
 @pytest.mark.asyncio
-async def test_ingest_artifact_accepts_storage_uri_under_watcher_nfs_root(monkeypatch):
-    monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
-    monkeypatch.setenv("STP_WATCHER_NFS_BASE_DIR", "/mnt/nfs/stability")
+async def test_ingest_artifact_accepts_storage_uri_under_primary_root(monkeypatch):
+    """#289：WATCHER 别名已删，watcher puller 落点统一由主键解析。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/nfs/stability")
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
     _setup_watcher_lease(seed)
     try:

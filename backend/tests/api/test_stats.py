@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from backend.models.enums import HostStatus
 from backend.models.host import Host, Device
 from backend.models.job import JobInstance
-from backend.models.plan import Plan, PlanStep
+from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 
 
