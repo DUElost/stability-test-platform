@@ -37,14 +37,12 @@ node_modules/
 venv-wsl/
 /logs/
 .claude/
+# UI 原型归档（HTML/PNG 设计稿，非规范；本地保留，移出 git 跟踪）
+docs/archive/prototypes/
 *.db-wal
 *.db-shm
 *.db-journal
-/frontend/20
-/frontend/20)
 .hypothesis/
-/nul
-/frontend/nul
 .github/prompts/
 .github/skills/
 # Codex CLI 本地状态文件（忽略除 hooks.json 外的所有内容）
