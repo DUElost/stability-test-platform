@@ -39,6 +39,14 @@ class ProjectSummaryOut(ProjectOut):
     running_run_count: int = 0
 
 
+class SpecialtyOut(ORMBaseModel):
+    """D6 专项字典行——Plan 编辑器下拉与列表分组用（#405 接线）。"""
+
+    key: str
+    display_name: str
+    sort_order: int
+
+
 class RecentProjectRunOut(ORMBaseModel):
     """详情页「最近结果」块的轻量行（明细列表走 plan-runs 接口带 project_key）。"""
 

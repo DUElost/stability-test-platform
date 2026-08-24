@@ -1,6 +1,8 @@
 """Plan CRUD + dispatch API tests — ADR-0020."""
 
 import threading
+
+import pytest
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -459,6 +461,91 @@ class TestPlanCRUD:
             "code": "LEGACY_AEE_SCRIPTS_DISABLED",
             "scripts": ["export_mobilelogs:1.0.0"],
         }
+
+
+class TestPlanAttribution:
+    """ADR-0029（#405）：create/update 写入 project/specialty，字典 API 可读。"""
+
+    @pytest.fixture
+    def _project(self, db_session):
+        from backend.models.project import TestProject
+
+        proj = TestProject(project_key=_uniq("PRJ"), display_name="attribution")
+        db_session.add(proj)
+        db_session.commit()
+        return proj
+
+    @pytest.fixture
+    def _specialty(self, db_session):
+        from backend.models.project import Specialty
+
+        spec = Specialty(key="mtbf", display_name="MTBF", sort_order=1)
+        db_session.add(spec)
+        db_session.commit()
+        return spec
+
+    def test_create_with_project_and_specialty(
+        self, client, auth_headers, sample_script, _project, _specialty,
+    ):
+        resp = client.post("/api/v1/plans", json={
+            "name": _uniq("plan"), "steps": _minimal_steps(),
+            "project_key": _project.project_key,
+            "specialty_key": "mtbf",
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        data = resp.json()["data"]
+        assert data["project_key"] == _project.project_key
+        assert data["specialty_key"] == "mtbf"
+
+    def test_create_unknown_keys_404(self, client, auth_headers, sample_script):
+        for extra in ({"project_key": "nope"}, {"specialty_key": "nope"}):
+            resp = client.post("/api/v1/plans", json={
+                "name": _uniq("plan"), "steps": _minimal_steps(), **extra,
+            }, headers=auth_headers)
+            assert resp.status_code == 404, extra
+
+    def test_update_changes_and_clears_attribution(
+        self, client, auth_headers, sample_script, db_session, _project, _specialty,
+    ):
+        from backend.models.project import TestProject
+
+        other = TestProject(project_key=_uniq("PRJ2"), display_name="other")
+        db_session.add(other)
+        db_session.commit()
+
+        create = client.post("/api/v1/plans", json={
+            "name": _uniq("plan"), "steps": _minimal_steps(),
+            "project_key": _project.project_key, "specialty_key": "mtbf",
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        # 只改 project：specialty 不受影响（fields_set 语义）
+        upd = client.put(f"/api/v1/plans/{plan_id}", json={
+            "project_key": other.project_key,
+            "expected_updated_at": create.json()["data"]["updated_at"],
+        }, headers=auth_headers)
+        assert upd.status_code == 200, upd.text
+        data = upd.json()["data"]
+        assert data["project_key"] == other.project_key
+        assert data["specialty_key"] == "mtbf"
+
+        # 显式 null = 清除
+        upd2 = client.put(f"/api/v1/plans/{plan_id}", json={
+            "project_key": None, "specialty_key": None,
+            "expected_updated_at": data["updated_at"],
+        }, headers=auth_headers)
+        assert upd2.status_code == 200, upd2.text
+        assert upd2.json()["data"]["project_key"] is None
+        assert upd2.json()["data"]["specialty_key"] is None
+
+    def test_specialties_dictionary_endpoint(
+        self, client, auth_headers, _specialty,
+    ):
+        resp = client.get("/api/v1/specialties", headers=auth_headers)
+        assert resp.status_code == 200
+        rows = resp.json()["data"]
+        match = [r for r in rows if r["key"] == "mtbf"]
+        assert match and match[0]["display_name"] == "MTBF"
 
 
 class TestAppendChainTail:

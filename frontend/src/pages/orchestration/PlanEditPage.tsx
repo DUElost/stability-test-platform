@@ -108,6 +108,12 @@ export default function PlanEditPage() {
           selectedStepKey={form.selectedStepKey}
           onSelectStep={form.setSelectedStepKey}
           scripts={form.scripts || []}
+          projectKey={form.projectKey}
+          onProjectKeyChange={form.setProjectKey}
+          specialtyKey={form.specialtyKey}
+          onSpecialtyKeyChange={form.setSpecialtyKey}
+          projects={form.projects || []}
+          specialties={form.specialties || []}
         />
 
         <PlanStepInspector

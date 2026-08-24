@@ -1,4 +1,4 @@
-import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
+import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry, ProjectSummary, Specialty } from '@/utils/api/types';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
 import {
   PIPELINE_EDITOR,
@@ -33,6 +33,13 @@ interface PlanCanvasProps {
   selectedStepKey: string | null;
   onSelectStep: (key: string | null) => void;
   scripts: ScriptEntry[];
+  /** ADR-0029（#405）：归属项目/专项选择 */
+  projectKey?: string;
+  onProjectKeyChange?: (next: string) => void;
+  specialtyKey?: string;
+  onSpecialtyKeyChange?: (next: string) => void;
+  projects?: ProjectSummary[];
+  specialties?: Specialty[];
   readOnly?: boolean;
 }
 
@@ -91,6 +98,12 @@ export default function PlanCanvas({
   selectedStepKey,
   onSelectStep,
   scripts,
+  projectKey,
+  onProjectKeyChange,
+  specialtyKey,
+  onSpecialtyKeyChange,
+  projects,
+  specialties,
   readOnly,
 }: PlanCanvasProps) {
   const totalSteps =
@@ -171,6 +184,12 @@ export default function PlanCanvas({
           totalSteps={totalSteps}
           nextPlanName={nextPlanName}
           isCurrentEditing={isCurrentEditing}
+          projectKey={projectKey}
+          onProjectKeyChange={onProjectKeyChange}
+          specialtyKey={specialtyKey}
+          onSpecialtyKeyChange={onSpecialtyKeyChange}
+          projects={projects}
+          specialties={specialties}
           readOnly={readOnly}
         />
 
@@ -211,6 +230,12 @@ interface PlanHeaderProps {
   totalSteps: number;
   nextPlanName: string | null;
   isCurrentEditing: boolean;
+  projectKey?: string;
+  onProjectKeyChange?: (next: string) => void;
+  specialtyKey?: string;
+  onSpecialtyKeyChange?: (next: string) => void;
+  projects?: ProjectSummary[];
+  specialties?: Specialty[];
   readOnly?: boolean;
 }
 
@@ -228,6 +253,12 @@ function PlanHeader({
   totalSteps,
   nextPlanName,
   isCurrentEditing,
+  projectKey,
+  onProjectKeyChange,
+  specialtyKey,
+  onSpecialtyKeyChange,
+  projects,
+  specialties,
   readOnly,
 }: PlanHeaderProps) {
   const metaInputCls = cn('h-6 px-2 text-xs', PIPELINE_EDITOR.inputInline);
@@ -261,6 +292,44 @@ function PlanHeader({
         readOnly={readOnly}
         className={cn('text-[12px]', PIPELINE_EDITOR.inputTitle, TEXT.subtitle)}
       />
+
+      {onProjectKeyChange && onSpecialtyKeyChange && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          <MetaItem label="归属项目">
+            <select
+              value={projectKey ?? ''}
+              disabled={readOnly}
+              onChange={e => onProjectKeyChange(e.target.value)}
+              className={cn('w-36', metaInputCls, 'bg-transparent')}
+              aria-label="归属项目"
+              data-testid="plan-project-select"
+            >
+              <option value="">不归属</option>
+              {(projects ?? []).map(p => (
+                <option key={p.project_key} value={p.project_key}>
+                  {p.display_name}（{p.project_key}）
+                </option>
+              ))}
+            </select>
+          </MetaItem>
+
+          <MetaItem label="专项">
+            <select
+              value={specialtyKey ?? ''}
+              disabled={readOnly}
+              onChange={e => onSpecialtyKeyChange(e.target.value)}
+              className={cn('w-28', metaInputCls, 'bg-transparent')}
+              aria-label="专项"
+              data-testid="plan-specialty-select"
+            >
+              <option value="">未指定</option>
+              {(specialties ?? []).map(s => (
+                <option key={s.key} value={s.key}>{s.display_name}</option>
+              ))}
+            </select>
+          </MetaItem>
+        </div>
+      )}
 
       <div className={cn('flex flex-wrap items-center gap-x-4 gap-y-2 text-xs', TEXT.subtitle)}>
         <MetaItem label="Patrol 间隔">

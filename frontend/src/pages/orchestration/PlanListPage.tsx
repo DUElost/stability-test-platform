@@ -170,6 +170,10 @@ export default function PlanListPage() {
                   <div className="flex items-center gap-2">
                     <h3 className={cn('font-medium truncate', TEXT.heading)}>{plan.name}</h3>
                     <ProjectKeyBadge projectKey={plan.project_key} />
+                    {/* ADR-0029 D6（#405）：专项接线——有值才显示，避免噪音 */}
+                    {plan.specialty_key && (
+                      <Badge variant="default" className="text-xs px-1.5 py-0.5">{plan.specialty_key}</Badge>
+                    )}
                     {plan.next_plan_id != null && (
                       <Badge variant="info" className="text-xs px-1.5 py-0.5">链式</Badge>
                     )}

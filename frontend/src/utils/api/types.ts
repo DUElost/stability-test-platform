@@ -691,9 +691,17 @@ export interface Project {
   form_factor: string | null;
   status: 'ACTIVE' | 'ARCHIVED';
   source: 'USER' | 'SEED';
-  match_models: string[];
+  /** 旧版后端（未部署 mapping 端点前）响应不含该字段——消费方需 ?? [] 防御。 */
+  match_models?: string[];
   created_at: string;
   updated_at: string;
+}
+
+/** ADR-0029 D6（#405）：专项字典行，与后端 Specialty 表同步。 */
+export interface Specialty {
+  key: string;
+  display_name: string;
+  sort_order: number;
 }
 
 export interface ProjectSummary extends Project {
@@ -960,6 +968,8 @@ export interface Plan {
   watcher_policy?: WatcherPolicy | null;
   /** ADR-0029：当前归属项目 key（F2 口径；标签/筛选用） */
   project_key?: string | null;
+  /** ADR-0029 D6（#405）：专项 key（字典见 GET /specialties） */
+  specialty_key?: string | null;
   created_by?: string | null;
   created_at: string;
   updated_at: string;
@@ -984,6 +994,9 @@ export interface PlanCreate {
   auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
+  /** ADR-0029（#405）：归属项目/专项 key */
+  project_key?: string | null;
+  specialty_key?: string | null;
   steps?: PlanStepCreate[];
 }
 
@@ -1005,6 +1018,9 @@ export interface PlanUpdate {
   auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
+  /** ADR-0029（#405）：语义随字段是否出现——显式 null = 清除归属 */
+  project_key?: string | null;
+  specialty_key?: string | null;
   steps?: PlanStepCreate[];
   /**
    * 乐观锁令牌（#268 多Worker B3）：带上加载时 Plan.updated_at；
