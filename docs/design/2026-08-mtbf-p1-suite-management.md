@@ -2,7 +2,7 @@
 
 - 日期：2026-08-20
 - 状态：**设计草案**（供 P1 实施 PR 引用；P1a 评审定稿后实施）
-- 上游：[ADR-0030](../adr/ADR-0030-multi-case-suite-management.md) D1–D6（Proposed；**P0 已真机验收✅**）、[研究文档](../reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) §5.1/§5.2/§5.5、[P0 设计](./2026-08-mtbf-p0-runner-design.md)（已实施）
+- 上游：[ADR-0030](../adr/ADR-0030-multi-case-suite-management.md) D1–D6（**Accepted v1.4**）、[研究文档](../reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) §5.1/§5.2/§5.5、[P0 设计](./2026-08-mtbf-p0-runner-design.md)（已实施）
 - P0 验收记录：[Agent Note](../notes/feature/2026-08-20-mtbf-p0-scripts-and-validate.md)
 
 ## 0. 结论摘要
@@ -11,7 +11,7 @@
    `project_id` 可空 = 通用套件 / 必填 = 项目套件；套件级 `apk_binding`；快照列 `source_sha256`（导入时文件）+ `exported_sha256`（导出产物文件 sha）+ `exported_content_sha256`（导出时**库内容规范化指纹**——库漂移由门禁计算检测，不靠端点置空纪律）。
 2. **API**：13 端点（研究 §5.5 草案细化定稿），挂 `/api/v1/test-suites` + `/api/v1/test-cases`；读 = 登录用户、写 = admin（初版）；**全部写操作 `record_audit`**。
 3. **复用 P0 资产**：`backend/services/mtbf_suite.py`（parse / validate / patch）全部复用，新增**渲染器**（库 → runtask.xml / UiAutomatorTestData.xml）——控制面唯一实现，与解析同文件；脚本侧 `_lib.py` 的 times patch 不变（消费面不变）。
-4. **D2 绑定**：`plan_step.default_params` 显式声明 `suite_key` → 派发时 `inject_suite_params`（`inject_wifi_params` 同构）注入三字段 + 冻结 `plan_snapshot` / `run_context`；precheck 门禁五步 fail-fast 挂 admission 既有链。
+4. **D2 绑定（v1.3 修订）**：`plan.suite_id` 可空外键（NULL = P0 文件真源模式；非空 = 托管模式）→ prepare 冻结 `run_context.dispatch_suite` + precheck 五步门禁 fail-fast 挂 admission 既有链。
 5. **导出落点 = 中心存储消费路径** `{STP_AEE_NFS_ROOT}/mtbf/{project}/`（P0 已部署，消费面不变）——「管理面从文件升级为 API，消费面不变」落地；atomic write + ACTIVE 引用守卫（依赖 P1b 冻结字段）。
 6. **CLI**：`tools/dev/mtbf-cases.py`（单文件 kebab-case，对齐 `backfill-test-project.py` 先例）——选定后回写 ADR-0030 修订记录（D4 要求）。
 7. **里程碑**：P1a 实体 + CRUD/import/export/validate + 审计 → P1b D2/D3b 绑定门禁 + 脚本侧注入（expected 替代 env）→ P1c CLI + 文档 + 状态传播。
@@ -89,27 +89,35 @@
 
 ## 3. D2 绑定与派发门禁（P1b）
 
+> **v1.3 修订**：绑定机制从「`plan_step.default_params.suite_key` 注入特例」改为
+> **`plan.suite_id` 可空外键**（ADR-0030 v1.4）。§3 全节按外键方案表述。
+
 ### 3.1 Plan ↔ Suite 绑定
 
-`plan_step.default_params` 显式声明 `suite_key`（ADR-0030 D2 初版机制，与 WiFi 注入并列的注入特例）：
-
-```json
-{"project": "mld", "suite_key": "MTBF-legacy", "task_times": 100}
-```
-
-`inject_suite_params(pipeline, suite_info)`（`plan_dispatcher_core.py` 新增，`inject_wifi_params:346` 同构）：
-遍历 lifecycle steps，action 含 `mtbf_` 且 `params.suite_key` 已声明 → 注入
-`{suite_id, suite_key, exported_sha256, apk_binding, project_key}`（**已有值优先**，与 WiFi 注入同语义）。
+- **DB**：`plan.suite_id` 可空 FK → `test_suite.id`（alembic additive，ADR-0008）+ 索引。
+  NULL = P0 文件真源模式（存量兼容，不加门禁）；非空 = 托管模式（门禁全开）。
+- **API**：`PlanCreate` / `PlanUpdate` 接受 `suite_name`（套件对外键，同 `suites.py`
+  「外部 agent 以 name 引用」口径；F2 风格——数字 id 只留 DB）；未知 name 404；
+  update 显式 `null` = 解绑。`_plan_out` 暴露 `suite_name`。
+- **修订理由**（详见 ADR-0030 v1.4）：WiFi 注入保持参数逻辑唯一例外；
+  「一计划一专项」现状下按 step 绑定过度泛化；FK 获 DB 引用完整性 + precheck 直连 join。
 
 ### 3.2 快照冻结
 
-派发时冻结到 `plan_snapshot` + `plan_run.run_context`（参考 `dispatch_host_watcher_admin_states` 模式）：
-`run_context.dispatch_suite = {suite_id, exported_sha256, apk_binding, project_key}`。
-同快照两次 run 结果不同可归因「清单被改」（D5）。
+prepare 冻结（与 #401 的 `project_id` / `build_version` 同一函数点一次写齐）：
+
+```
+run_context.dispatch_suite = {suite_id, suite_name, exported_sha256,
+                              exported_content_sha256, apk_binding, export_dir}
+```
+
+托管模式下冻结的是**准入时刻的基线指纹**——同快照两次 run 结果不同可归因
+「清单被改」（D5）；precheck 重校验以活表套件行 + 冻结基线双读（§3.3）。
 
 ### 3.3 precheck 五步门禁（fail-fast）
 
-挂 admission 既有链（`admission_pump.py` script_verify_failed 同层）：
+挂 admission 既有链（`admission_pump.py` script_verify_failed 同层），
+查找键 = `plan.suite_id`（join，无 JSON 解析）：
 
 1. suite 存在且 `is_active`（无 → `suite_verify_failed: missing`）；
 2. 已导出：`exported_sha256`/`exported_content_sha256` 非空 **且** `{NFS}/mtbf/{export_dir}/runtask.xml` 磁盘存在（无 → `suite_verify_failed: not_exported`）；
@@ -119,9 +127,21 @@
 
 任一步失败 Plan 准入 `script_verify_failed` 同层失败，**禁止带病派发**（ADR-0030 D2）。修复路径：第 3 步 → 重导（export-to-tool-dir 更新两指纹）；第 4 步 → 重导或恢复磁盘文件。
 
+**联动**：绑定落地后，#402 的在途守卫从宽匹配（`mtbf_%` 前缀 + force 逃生阀）
+升级为按 `suite_id` 精确匹配——仅当 ACTIVE Run 引用**同一套件**时 409；
+跨套件并发导出不再互相阻塞。
+
 ### 3.4 脚本侧消费（P1b）
 
-- `mtbf_setup` / `mtbf_check` 从 `STP_STEP_PARAMS` 读注入参数：`expected_testpoint_count` 由派发注入（= `test_case` 启用计数）**替代 `STP_MTBF_EXPECTED_TESTPOINT_COUNT` env 预置**（P0 设计 §3.4「P1 起删除 env 预置」）；`project` 参数语义 = 套件 `export_dir`（注入，替代手工 env）。
+- **注入不再以用户声明为前提**：dispatcher 对 lifecycle 中 action 含 `mtbf_` 的步骤，
+  在 plan.suite_id 绑定存在时自动注入 `{expected_testpoint_count, project}` 到
+  step params（经 `STP_STEP_PARAMS` 通道）——`expected_testpoint_count` =
+  `test_case` 启用计数；`project` = 套件 `export_dir`（替代 host 手工 env）。
+  无绑定的 P0 存量 Plan 行为完全不变（env 回落仍在）。
+- **env 预置退役**：`STP_MTBF_EXPECTED_TESTPOINT_COUNT` 摘出 `_FLEET_ENV_KEYS`
+  与 P1b 合入同批——fleet 单值旋钮在第二套套件上线当天即系统性出错
+  （正确性悬崖，评审 #400 #404 论据），不允许两套基准并存超过一个版本。
+  hot-update 白名单摘除 + 运维说明见 [mtbf-api.md §1.5](../operations/mtbf-api.md) 同步更新。
 - `mtbf_finish` v1.4.0 的 `suite_sha256` 已闭环（NFS 未 patch 的 runtask.xml）——P1b 后与门禁第 3 步的 `exported_sha256` 比对同一文件。
 
 ## 4. CLI（P1c）
@@ -183,6 +203,7 @@ python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 
 | 日期 | 变更 |
 |------|------|
+| 2026-08-24 | **v1.3（绑定机制重写）**：§3 按 ADR-0030 v1.4 重写——`plan.suite_id` 可空外键替代 `default_params.suite_key` 注入特例；注入不再以用户声明为前提；#402 守卫升级路径（精确匹配）；env 预置退役与 `_FLEET_ENV_KEYS` 摘除同批约束 |
 | 2026-08-20 | 初版：P0 验收后 P1 衔接梳理定稿（实体/端点/绑定/门禁/CLI/里程碑） |
 | 2026-08-20 | v1.2（P1a 实施回写）：① `global_params` 补 `test_set_attrs`、`exec_descs` 补 `times`（不还原则导出物丢 TakeScreenshot / testcase times）；② 三个渲染源列定为 `JSON` 而非 `JSONB`（JSONB 重排对象键破坏字节同构）；③ §7 #6 属性序容差消除，golden 判据收紧为逐字节一致 |
 | 2026-08-20 | v1.1（评审修订）：① 导出一致性改**结构性检测**——新增 `exported_content_sha256`（库内容规范化指纹 `content_fingerprint`），门禁第 3 步计算检测库漂移，删除全部端点「置空」纪律（枚举法漏 3 条变更路径的洞：POST cases / DELETE cases / PUT case 改非 name 字段）；sha_mismatch 恢复「磁盘漂移」字面语义，两类漂移各有检测器；② 渲染器定稿产出 CRLF（与 P0 设备面输入同构），golden 容差仅剩属性序 |
