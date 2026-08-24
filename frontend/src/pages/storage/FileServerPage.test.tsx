@@ -162,7 +162,42 @@ describe('FileServerPage', () => {
     expect(screen.getByText('与控制面同机')).toBeInTheDocument();
     expect(screen.getAllByText('debian13 · 192.0.2.202').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('/mnt/hdd/aee_events')).toBeInTheDocument();
-    expect(screen.getByText('1.1%')).toBeInTheDocument();
+    expect(screen.getByText('1.10%')).toBeInTheDocument();
+  });
+
+  it('shows inline empty state when history series are all empty', async () => {
+    mocks.fileServer.mockResolvedValueOnce({
+      ...overview,
+      alerts: [{ code: 'STORAGE_METRICS_UNAVAILABLE', severity: 'warning', message: 'missing' }],
+      history: {
+        hours: 6,
+        capacity_usage_pct: [],
+        cpu_usage_pct: [],
+        memory_usage_pct: [],
+        nfs_requests_per_second: [],
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByText('分源且未配置存储机 Prometheus job，历史趋势暂不可用')).toBeInTheDocument();
+    expect(screen.getByTestId('file-server-history-chart')).toBeInTheDocument();
+  });
+
+  it('formats device log disk usage with two decimal places', async () => {
+    mocks.fileServer.mockResolvedValueOnce({
+      ...overview,
+      device_log_disks: {
+        ...overview.device_log_disks,
+        items: [{
+          ...overview.device_log_disks.items[0],
+          usage_percent: 94.99,
+        }],
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByText('94.99%')).toBeInTheDocument();
+    expect(screen.queryByText('95.0%')).not.toBeInTheDocument();
   });
 
   it('switches history range and refetches with the selected hours', async () => {
