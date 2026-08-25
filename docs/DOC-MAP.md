@@ -82,7 +82,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`2026-08-mtbf-p0-runner-design.md`](./design/2026-08-mtbf-p0-runner-design.md) | MTBF 专项 P0 设计：脚本三件套契约 + realresult schema 实测 + 配置/产物通道（ADR-0030 D6 P0，**已验收**） |
 | [`2026-08-mtbf-p1-suite-management.md`](./design/2026-08-mtbf-p1-suite-management.md) | MTBF 专项 P1 设计：test_suite/test_case 实体 + 外部管理面 + D2/D3b 派发门禁（ADR-0030 D6 P1，P1a/P1b 已实施） |
 | [`2026-08-project-registry-p25-mapping-workbench.md`](./design/2026-08-project-registry-p25-mapping-workbench.md) | ADR-0029 P2.5：登记簿 = Fleet 事实 + 人工 USER 项目 + `match_models` 精确映射 |
-| [`2026-08-honor-flash-firmware-routing.md`](./design/2026-08-honor-flash-firmware-routing.md) | Honor 刷机 v1.2.0：固件指纹路由 + NFS manifest 布局 + 刷前/刷后版本核验（方向 A，已实施） |
+| [`2026-08-honor-flash-firmware-routing.md`](./design/2026-08-honor-flash-firmware-routing.md) | Honor 刷机：固件指纹路由 + NFS manifest 布局 + 刷前/刷后版本核验 + v1.3.0 多设备门控/重试环/环境预检（方向 A，已实施） |
 | [`design/mockups/plan-execute-v2/`](./design/mockups/plan-execute-v2/) | Plan Execute V2 静态预览（§8 视觉基准） |
 
 ---

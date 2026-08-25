@@ -206,29 +206,49 @@ def test_merge_env_overrides_preserves_comments_and_blank_lines():
 
 
 def test_flash_firmware_keys_propagate_when_set(monkeypatch):
-    """Honor 刷机自动化（flash_firmware v1.2.0）：版本 pin 与开关全 fleet
+    """Honor 刷机自动化（flash_firmware）：版本 pin 与开关全 fleet
     同值，控制面设置一次、hot-update 下发。"""
     monkeypatch.setenv("STP_FLASH_FIRMWARE_VERSION", "8.0.1.100")
     monkeypatch.setenv("STP_FLASH_FIRMWARE_ROOT", "/mnt/stp-aee/firmware")
     monkeypatch.setenv("STP_FLASH_SKIP_IF_CURRENT", "false")
+    monkeypatch.setenv("STP_FLASH_GATE_OTHER_MTK", "true")
 
     overrides = hot_update_env_overrides("/opt/stability-test-agent")
 
     assert overrides["STP_FLASH_FIRMWARE_VERSION"] == "8.0.1.100"
     assert overrides["STP_FLASH_FIRMWARE_ROOT"] == "/mnt/stp-aee/firmware"
     assert overrides["STP_FLASH_SKIP_IF_CURRENT"] == "false"
+    assert overrides["STP_FLASH_GATE_OTHER_MTK"] == "true"
+
+
+def test_flash_firmware_v130_retry_keys_propagate_when_set(monkeypatch):
+    """v1.3.0 门控/重试/预检键同样空值不推、显式设置才下发。"""
+    for key, val in (("STP_FLASH_MAX_ATTEMPTS", "3"),
+                     ("STP_FLASH_RETRY_BACKOFF", "15"),
+                     ("STP_FLASH_STRICT_ENV_CHECK", "1")):
+        monkeypatch.setenv(key, val)
+
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+
+    assert overrides["STP_FLASH_MAX_ATTEMPTS"] == "3"
+    assert overrides["STP_FLASH_RETRY_BACKOFF"] == "15"
+    assert overrides["STP_FLASH_STRICT_ENV_CHECK"] == "1"
 
 
 def test_flash_firmware_keys_omitted_when_unset(monkeypatch):
     """空值不推：缺省版本走各族 NFS latest.json 指针，Agent 本地值保留。"""
     for key in ("STP_FLASH_FIRMWARE_VERSION", "STP_FLASH_FIRMWARE_ROOT",
-                "STP_FLASH_SKIP_IF_CURRENT", "STP_FLASH_VERIFY_VERSION"):
+                "STP_FLASH_SKIP_IF_CURRENT", "STP_FLASH_VERIFY_VERSION",
+                "STP_FLASH_GATE_OTHER_MTK", "STP_FLASH_MAX_ATTEMPTS",
+                "STP_FLASH_RETRY_BACKOFF", "STP_FLASH_STRICT_ENV_CHECK"):
         monkeypatch.delenv(key, raising=False)
 
     overrides = hot_update_env_overrides("/opt/stability-test-agent")
 
     for key in ("STP_FLASH_FIRMWARE_VERSION", "STP_FLASH_FIRMWARE_ROOT",
-                "STP_FLASH_SKIP_IF_CURRENT", "STP_FLASH_VERIFY_VERSION"):
+                "STP_FLASH_SKIP_IF_CURRENT", "STP_FLASH_VERIFY_VERSION",
+                "STP_FLASH_GATE_OTHER_MTK", "STP_FLASH_MAX_ATTEMPTS",
+                "STP_FLASH_RETRY_BACKOFF", "STP_FLASH_STRICT_ENV_CHECK"):
         assert key not in overrides
 
 
