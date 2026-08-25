@@ -135,30 +135,61 @@ class TestPrepareFreeze:
         assert frozen["export_dir"] == "legacy"
 
     def test_unbound_run_has_no_dispatch_suite(self, db_session, bound_fixture):
-        """P0 存量兼容：未绑定 Plan 的 Run 不出现该字段（零行为变化）。"""
+        """P0 存量兼容：未绑定 Plan 的 Run 不出现该字段。翻转硬拒后未绑定
+        mtbf 派发已不存在，以非 mtbf 计划验证零字段不变量。"""
         f = bound_fixture
         f["plan"].suite_id = None
+        for s in db_session.query(PlanStep).filter(
+                PlanStep.plan_id == f["plan"].id).all():
+            s.script_name = "check_device"
+            s.script_version = "1.0.0"
+        db_session.add(Script(
+            name="check_device", script_type="python", version="1.0.0",
+            nfs_path="/s/check_device.py", content_sha256="x",
+            default_params={"timeout": 30},
+        ))
         db_session.commit()
 
         pr = _queued_run(db_session, f)
 
         assert "dispatch_suite" not in (pr.run_context or {})
 
-    def test_unbound_mtbf_dispatch_warns_suite_unbound(
-        self, db_session, bound_fixture, caplog,
-    ):
-        """#404 第三步：派发 mtbf 系脚本且未绑定 → WARNING suite_unbound
-        （观测层信号；翻转硬拒另起小 PR）。"""
-        import logging
+    def test_unbound_mtbf_dispatch_rejected(self, db_session, bound_fixture):
+        """ADR-0030 v1.8 翻转：派发 mtbf 系脚本且未绑定 → prepare 硬拒
+        （观测期零告警、唯一 mtbf Plan 已绑定后按 issue 口径翻转）。"""
+        import pytest as _pytest
+
+        from backend.services.plan_dispatcher_core import PlanDispatchError
 
         f = bound_fixture
         f["plan"].suite_id = None
         db_session.commit()
 
-        with caplog.at_level(logging.WARNING, logger="backend.services.plan_dispatcher_sync"):
+        with _pytest.raises(PlanDispatchError) as ei:
             _queued_run(db_session, f)
 
-        assert any(r.message.startswith("suite_unbound") for r in caplog.records)
+        assert "mtbf scripts require a bound suite" in str(ei.value)
+        detail = ei.value.detail()
+        assert detail["code"] == "SUITE_BINDING_REQUIRED"
+        assert sorted(detail["mtbf_steps"]) == ["init_setup", "td_check"]
+
+    def test_unbound_non_mtbf_plan_unaffected(self, db_session, bound_fixture):
+        """翻转只针对 mtbf 脚本：未绑定的非 mtbf 计划照常派发。"""
+        f = bound_fixture
+        f["plan"].suite_id = None
+        for s in db_session.query(PlanStep).filter(
+                PlanStep.plan_id == f["plan"].id).all():
+            s.script_name = "check_device"
+            s.script_version = "1.0.0"
+        db_session.add(Script(
+            name="check_device", script_type="python", version="1.0.0",
+            nfs_path="/s/check_device.py", content_sha256="x",
+            default_params={"timeout": 30},
+        ))
+        db_session.commit()
+
+        pr = _queued_run(db_session, f)   # 不抛即通过
+        assert pr.status == "QUEUED"
 
     def test_bound_mtbf_dispatch_no_warning(self, db_session, bound_fixture, caplog):
         import logging
@@ -302,12 +333,21 @@ class TestSuiteGateMatrix:
         assert collect_suite_gate_error(db_session, pr) is None
 
     def test_unbound_plan_never_gated(self, db_session, bound_fixture):
-        """查找键 = plan.suite_id：未绑定的 Plan 即使套件全坏也不进门禁。"""
+        """查找键 = plan.suite_id：未绑定的 Plan 即使套件全坏也不进门禁。
+
+        翻转硬拒后 prepare 不再产出未绑定 mtbf Run，直构裸 PlanRun 验证
+        门禁函数的放行分支（防御性覆盖，语义不变）。
+        """
+        from backend.models.plan_run import PlanRun
+
         f = bound_fixture
         f["suite"].is_active = False   # 套件坏掉
         f["plan"].suite_id = None      # 但 Plan 已解绑
         db_session.commit()
-        pr = _queued_run(db_session, f)
+        pr = PlanRun(plan_id=f["plan"].id, status="PRECHECK", run_type="MANUAL",
+                     plan_snapshot={}, run_context={})
+        db_session.add(pr)
+        db_session.commit()
         assert collect_suite_gate_error(db_session, pr) is None
 
 
@@ -396,14 +436,11 @@ def _iter(pipeline: dict):
 
 
 class TestInjectSuiteParams:
-    def _materialize(self, db_session, f, *, bound=True, setup_defaults=None):
+    def _materialize(self, db_session, f, *, setup_defaults=None):
         if setup_defaults is not None:
             for row in db_session.query(Script).filter(
                     Script.name == "mtbf_setup").all():
                 row.default_params = dict(setup_defaults)
-            db_session.commit()
-        if not bound:
-            f["plan"].suite_id = None
             db_session.commit()
         pr = _queued_run(db_session, f)
         claimed = claim_queued_plan_runs(db_session)
@@ -428,8 +465,37 @@ class TestInjectSuiteParams:
         assert setup["params"]["project"] == "legacy"   # 未声明的键照常注入
 
     def test_unbound_plan_not_injected(self, db_session, bound_fixture):
-        steps = self._materialize(db_session, bound_fixture, bound=False)
-        for step in steps:
+        """防御性覆盖：run_context 无 dispatch_suite 的 Run（翻转前 prepare 的
+        存量行 / 异常路径）物化时零注入——env 回落兜底语义保持。"""
+        from backend.models.plan_run import PlanRun
+        from backend.services.plan_dispatcher_sync import (
+            materialize_jobs_and_allocations,
+        )
+
+        f = bound_fixture
+        # 翻转后 prepare 已拒绝未绑定 mtbf 派发，这里绕过 prepare 直构裸
+        # PlanRun（无 dispatch_suite），只验证物化器的防御分支。
+        pr = PlanRun(plan_id=f["plan"].id, status="RUNNING", run_type="MANUAL",
+                     plan_snapshot={}, run_context={})
+        db_session.add(pr)
+        db_session.commit()
+
+        lifecycle = {
+            "init": [{
+                "step_id": "init_setup", "action": "script:mtbf_setup",
+                "version": "1.3.0", "params": {}, "retry": 0,
+            }],
+            "teardown": [],
+        }
+        materialize_jobs_and_allocations(
+            db_session, pr, lifecycle, [f["device"].id],
+            {f["device"].id: f["host"].id},
+        )
+        db_session.expire_all()
+
+        job = db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id).one()
+        for _p, step in _iter(job.pipeline_def):
             assert "expected_testpoint_count" not in step["params"]
             assert "project" not in step["params"]
 

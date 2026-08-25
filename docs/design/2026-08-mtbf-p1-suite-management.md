@@ -137,12 +137,13 @@ run_context.dispatch_suite = {suite_id, suite_name, exported_sha256,
   在 plan.suite_id 绑定存在时自动注入 `{expected_testpoint_count, project}` 到
   step params（经 `STP_STEP_PARAMS` 通道）——`expected_testpoint_count` =
   `test_case` 启用计数；`project` = 套件 `export_dir`（替代 host 手工 env）。
-  无绑定的 P0 存量 Plan 行为完全不变（env 回落仍在）。
-- **env 预置退役**：`STP_MTBF_EXPECTED_TESTPOINT_COUNT` 摘出 `_FLEET_ENV_KEYS`
-  与 P1b 合入同批——fleet 单值旋钮在第二套套件上线当天即系统性出错
-  （正确性悬崖，评审 #400 #404 论据），不允许两套基准并存超过一个版本。
-  hot-update 白名单摘除 + 运维说明见 [mtbf-api.md §1.5](../operations/mtbf-api.md) 同步更新。
-- `mtbf_finish` v1.4.0 的 `suite_sha256` 已闭环（NFS 未 patch 的 runtask.xml）——P1b 后与门禁第 3 步的 `exported_sha256` 比对同一文件。
+  **绑定对 mtbf 脚本为强制**（ADR-0030 v1.8 翻转）：未绑定 mtbf 计划在
+  preview/prepare 即以 `SUITE_BINDING_REQUIRED` 拒绝；非 mtbf 计划不受影响。
+- **env 预置退役**：`STP_MTBF_EXPECTED_TESTPOINT_COUNT` 已摘出 `_FLEET_ENV_KEYS`
+  ——fleet 单值旋钮在第二套套件上线当天即系统性出错（正确性悬崖，评审
+  #400 #404 论据）。hot-update 白名单摘除 + 运维说明见
+  [mtbf-api.md §1.5](../operations/mtbf-api.md)。
+- `mtbf_finish` v1.4.0 的 `suite_sha256` 已闭环（NFS 未 patch 的 runtask.xml）——与门禁第 4 步的 `exported_sha256` 比对同一文件（D6 冒烟已实证逐字节相等）。
 
 ## 4. CLI（P1c）
 
