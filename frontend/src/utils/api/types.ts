@@ -1035,6 +1035,20 @@ export interface PlanUpdate {
   expected_updated_at?: string;
 }
 
+/** ADR-0030：套件列表行（Plan 编辑器下拉 / 管理页）。 */
+export interface TestSuiteSummary {
+  id: number;
+  name: string;
+  display_name?: string | null;
+  project_key?: string | null;
+  case_count: number;
+  enabled_case_count: number;
+  is_active: boolean;
+  export_stale: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * 链尾追加（#281 P1）：由后端在单事务内「锁定链尾 → 校验版本 → 创建新
  * Plan → 更新 next_plan_id」，冲突整体回滚，不再产生孤立 Plan。

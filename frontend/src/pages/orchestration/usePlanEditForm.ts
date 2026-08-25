@@ -37,6 +37,9 @@ export function usePlanEditForm(planId: number | null) {
   const [specialtyKey, setSpecialtyKey] = useState('');
   const [origProjectKey, setOrigProjectKey] = useState('');
   const [origSpecialtyKey, setOrigSpecialtyKey] = useState('');
+  // ADR-0030 v1.4（#430）：套件绑定；空 = P0 文件真源模式
+  const [suiteName, setSuiteName] = useState('');
+  const [origSuiteName, setOrigSuiteName] = useState('');
   const [lifecycle, setLifecycle] = useState<PipelineDef>(EMPTY_LIFECYCLE);
   const [selectedStepKey, setSelectedStepKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -90,6 +93,12 @@ export function usePlanEditForm(planId: number | null) {
     queryFn: () => api.plans.listSpecialties(),
     staleTime: 300_000,
   });
+  // ADR-0030（#430）：套件下拉；失败不阻塞编辑（与 projects/specialties 同口径）
+  const { data: suites } = useQuery({
+    queryKey: ['suites-for-plan-editor'],
+    queryFn: () => api.suites.list({ is_active: true }),
+    staleTime: 60_000,
+  });
 
   const [prevPlanState, setPrevPlanState] = useState<{ plan: typeof plan; isNew: boolean } | null>(null);
   if (prevPlanState?.plan !== plan || prevPlanState?.isNew !== isNew) {
@@ -101,8 +110,10 @@ export function usePlanEditForm(planId: number | null) {
       setNextPlanId(plan.next_plan_id ?? null);
       setProjectKey(plan.project_key || '');
       setSpecialtyKey(plan.specialty_key || '');
+      setSuiteName(plan.suite_name || '');
       setOrigProjectKey(plan.project_key || '');
       setOrigSpecialtyKey(plan.specialty_key || '');
+      setOrigSuiteName(plan.suite_name || '');
       const lc = rebuildLifecycleFromPlan(plan);
       setLifecycle(lc);
       setSelectedStepKey(null);
@@ -239,12 +250,16 @@ export function usePlanEditForm(planId: number | null) {
       if (isNew) {
         (payload as PlanCreate).project_key = projectKey || undefined;
         (payload as PlanCreate).specialty_key = specialtyKey || undefined;
+        (payload as PlanCreate).suite_name = suiteName || undefined;
       } else {
         if (projectKey !== origProjectKey) {
           payload.project_key = projectKey || null;
         }
         if (specialtyKey !== origSpecialtyKey) {
           payload.specialty_key = specialtyKey || null;
+        }
+        if (suiteName !== origSuiteName) {
+          payload.suite_name = suiteName || null;
         }
       }
       let saved: Plan;
@@ -415,8 +430,11 @@ export function usePlanEditForm(planId: number | null) {
     setProjectKey,
     specialtyKey,
     setSpecialtyKey,
+    suiteName,
+    setSuiteName,
     projects,
     specialties,
+    suites,
     lifecycle,
     setLifecycle,
     selectedStepKey,

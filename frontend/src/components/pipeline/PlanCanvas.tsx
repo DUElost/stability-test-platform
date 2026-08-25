@@ -1,4 +1,4 @@
-import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry, ProjectSummary, Specialty } from '@/utils/api/types';
+import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry, ProjectSummary, Specialty, TestSuiteSummary } from '@/utils/api/types';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
 import {
   PIPELINE_EDITOR,
@@ -40,6 +40,10 @@ interface PlanCanvasProps {
   onSpecialtyKeyChange?: (next: string) => void;
   projects?: ProjectSummary[];
   specialties?: Specialty[];
+  /** ADR-0030 v1.4（#430）：套件绑定（空 = P0 文件真源） */
+  suiteName?: string;
+  onSuiteNameChange?: (next: string) => void;
+  suites?: TestSuiteSummary[];
   readOnly?: boolean;
 }
 
@@ -104,6 +108,9 @@ export default function PlanCanvas({
   onSpecialtyKeyChange,
   projects,
   specialties,
+  suiteName,
+  onSuiteNameChange,
+  suites,
   readOnly,
 }: PlanCanvasProps) {
   const totalSteps =
@@ -190,6 +197,9 @@ export default function PlanCanvas({
           onSpecialtyKeyChange={onSpecialtyKeyChange}
           projects={projects}
           specialties={specialties}
+          suiteName={suiteName}
+          onSuiteNameChange={onSuiteNameChange}
+          suites={suites}
           readOnly={readOnly}
         />
 
@@ -236,6 +246,9 @@ interface PlanHeaderProps {
   onSpecialtyKeyChange?: (next: string) => void;
   projects?: ProjectSummary[];
   specialties?: Specialty[];
+  suiteName?: string;
+  onSuiteNameChange?: (next: string) => void;
+  suites?: TestSuiteSummary[];
   readOnly?: boolean;
 }
 
@@ -259,9 +272,18 @@ function PlanHeader({
   onSpecialtyKeyChange,
   projects,
   specialties,
+  suiteName,
+  onSuiteNameChange,
+  suites,
   readOnly,
 }: PlanHeaderProps) {
   const metaInputCls = cn('h-6 px-2 text-xs', PIPELINE_EDITOR.inputInline);
+  const suiteOptions = suites ?? [];
+  // 当前绑定若不在活跃列表（已归档），仍展示一项以免下拉空白。
+  const suiteOptionsWithCurrent =
+    suiteName && !suiteOptions.some((s) => s.name === suiteName)
+      ? [{ name: suiteName, display_name: suiteName, id: -1 } as TestSuiteSummary, ...suiteOptions]
+      : suiteOptions;
 
   return (
     <div className={cn('px-4 py-3.5 grid gap-2.5', PIPELINE_EDITOR.card)}>
@@ -293,41 +315,67 @@ function PlanHeader({
         className={cn('text-[12px]', PIPELINE_EDITOR.inputTitle, TEXT.subtitle)}
       />
 
-      {onProjectKeyChange && onSpecialtyKeyChange && (
+      {(onProjectKeyChange || onSpecialtyKeyChange || onSuiteNameChange) && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-          <MetaItem label="归属项目">
-            <select
-              value={projectKey ?? ''}
-              disabled={readOnly}
-              onChange={e => onProjectKeyChange(e.target.value)}
-              className={cn('w-36', metaInputCls, 'bg-transparent')}
-              aria-label="归属项目"
-              data-testid="plan-project-select"
-            >
-              <option value="">不归属</option>
-              {(projects ?? []).map(p => (
-                <option key={p.project_key} value={p.project_key}>
-                  {p.display_name}（{p.project_key}）
-                </option>
-              ))}
-            </select>
-          </MetaItem>
+          {onProjectKeyChange && (
+            <MetaItem label="归属项目">
+              <select
+                value={projectKey ?? ''}
+                disabled={readOnly}
+                onChange={e => onProjectKeyChange(e.target.value)}
+                className={cn('w-36', metaInputCls, 'bg-transparent')}
+                aria-label="归属项目"
+                data-testid="plan-project-select"
+              >
+                <option value="">不归属</option>
+                {(projects ?? []).map(p => (
+                  <option key={p.project_key} value={p.project_key}>
+                    {p.display_name}（{p.project_key}）
+                  </option>
+                ))}
+              </select>
+            </MetaItem>
+          )}
 
-          <MetaItem label="专项">
-            <select
-              value={specialtyKey ?? ''}
-              disabled={readOnly}
-              onChange={e => onSpecialtyKeyChange(e.target.value)}
-              className={cn('w-28', metaInputCls, 'bg-transparent')}
-              aria-label="专项"
-              data-testid="plan-specialty-select"
-            >
-              <option value="">未指定</option>
-              {(specialties ?? []).map(s => (
-                <option key={s.key} value={s.key}>{s.display_name}</option>
-              ))}
-            </select>
-          </MetaItem>
+          {onSpecialtyKeyChange && (
+            <MetaItem label="专项">
+              <select
+                value={specialtyKey ?? ''}
+                disabled={readOnly}
+                onChange={e => onSpecialtyKeyChange(e.target.value)}
+                className={cn('w-28', metaInputCls, 'bg-transparent')}
+                aria-label="专项"
+                data-testid="plan-specialty-select"
+              >
+                <option value="">未指定</option>
+                {(specialties ?? []).map(s => (
+                  <option key={s.key} value={s.key}>{s.display_name}</option>
+                ))}
+              </select>
+            </MetaItem>
+          )}
+
+          {onSuiteNameChange && (
+            <MetaItem label="套件">
+              <select
+                value={suiteName ?? ''}
+                disabled={readOnly}
+                onChange={e => onSuiteNameChange(e.target.value)}
+                className={cn('w-40', metaInputCls, 'bg-transparent')}
+                aria-label="绑定套件"
+                data-testid="plan-suite-select"
+                title="未选 = P0 文件真源；选中后启用托管模式五步门禁"
+              >
+                <option value="">未绑定（文件真源）</option>
+                {suiteOptionsWithCurrent.map(s => (
+                  <option key={s.name} value={s.name}>
+                    {s.display_name || s.name}
+                    {s.export_stale ? ' · 导出过期' : ''}
+                  </option>
+                ))}
+              </select>
+            </MetaItem>
+          )}
         </div>
       )}
 

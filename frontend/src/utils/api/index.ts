@@ -19,6 +19,7 @@ export { users, notifications, schedules, audit } from './management';
 export { plans } from './plans';
 export { planRuns } from './planRuns';
 export { runs } from './runs';
+export { suites } from './suites';
 
 export type {
   Host, Device, Task, RunStep, TaskRun,
@@ -46,6 +47,7 @@ export type {
   PlanRunAbortRequest, PlanRunAbortResult, PlanRunCapabilities,
   JobActionCapabilities, StructuredApiError, ApiErrorCapabilities,
   HostActiveJob,
+  TestSuiteSummary,
 } from './types';
 
 import { auth } from './auth';
@@ -62,6 +64,7 @@ import { users, notifications, schedules, audit } from './management';
 import { plans } from './plans';
 import { planRuns } from './planRuns';
 import { runs } from './runs';
+import { suites } from './suites';
 
 export const api = {
   auth,
@@ -87,4 +90,5 @@ export const api = {
   plans,
   planRuns,
   runs,
+  suites,
 };
