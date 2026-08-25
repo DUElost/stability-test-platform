@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { XTerminal, type XTerminalHandle } from '@/components/log/XTerminal';
 import { useSocketIO } from '@/hooks/useSocketIO';
+import { consoleSubscription } from '@/config';
 import { dedup } from '@/utils/api/dedup';
 import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
@@ -100,7 +101,7 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     return replayFromStart();
   }, [termReady, replayFromStart]);
 
-  useSocketIO(`/ws/console/${consoleRunId}`, {
+  useSocketIO(consoleSubscription(consoleRunId), {
     onMessage: (msg: unknown) => {
       const d = msg as { run_id?: string; from_seq?: number; lines?: string[]; status?: string };
       if (!d || d.run_id !== consoleRunId) return;

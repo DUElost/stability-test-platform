@@ -32,3 +32,23 @@ export function dashboardSocketUrl(): string {
  * SocketIO 连接本身固定走 dashboardSocketUrl()，该值仅决定订阅集。
  */
 export const DASHBOARD_SUBSCRIPTION = 'dashboard';
+
+/** PlanRun 详情页：room `plan_run:{id}` */
+export function planRunSubscription(id: number | string): string {
+  return `plan_run:${id}`;
+}
+
+/** RunConsole 实时日志：room `console:{runId}` */
+export function consoleSubscription(runId: string): string {
+  return `console:${runId}`;
+}
+
+/** Job 步骤日志：room `job:{id}` */
+export function jobLogsSubscription(id: number | string): string {
+  return `job:${id}`;
+}
+
+/** 单次 run 步骤日志：room `run:{id}` */
+export function runLogsSubscription(id: number | string): string {
+  return `run:${id}`;
+}

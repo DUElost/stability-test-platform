@@ -57,7 +57,7 @@ describe('disconnectDashSocket (审计 Frontend #3)', () => {
     // simulate first hook ensuring socket
     // we cheat by calling the private helper via the public connect()
     const { renderHook } = await import('@testing-library/react');
-    const { unmount } = renderHook(() => mod.useSocketIO('/ws/dashboard'));
+    const { unmount } = renderHook(() => mod.useSocketIO('dashboard'));
 
     const created = (sioMock as any).io._created as any[];
     expect(created.length).toBe(1);
@@ -69,7 +69,7 @@ describe('disconnectDashSocket (审计 Frontend #3)', () => {
 
     // After disconnect a subsequent hook should re-create a fresh socket.
     unmount();
-    renderHook(() => mod.useSocketIO('/ws/dashboard'));
+    renderHook(() => mod.useSocketIO('dashboard'));
     expect(created.length).toBe(2);
   });
 
@@ -79,7 +79,7 @@ describe('disconnectDashSocket (审计 Frontend #3)', () => {
     const mod = await import('./useSocketIO');
     const { renderHook } = await import('@testing-library/react');
 
-    const r1 = renderHook(() => mod.useSocketIO('/ws/dashboard'));
+    const r1 = renderHook(() => mod.useSocketIO('dashboard'));
     const created = (sioMock as any).io._created as any[];
     expect(created.length).toBe(1);
     const sock = created[0];
@@ -90,7 +90,7 @@ describe('disconnectDashSocket (审计 Frontend #3)', () => {
 
     // new hook before 30s elapses cancels the idle timer
     vi.advanceTimersByTime(10_000);
-    const r2 = renderHook(() => mod.useSocketIO('/ws/dashboard'));
+    const r2 = renderHook(() => mod.useSocketIO('dashboard'));
     vi.advanceTimersByTime(25_000);
     expect(sock.disconnect).not.toHaveBeenCalled();
 
