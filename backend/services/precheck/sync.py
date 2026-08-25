@@ -103,6 +103,7 @@ def push_mismatched_scripts(
         return False, "no_ssh_credentials"
 
     pushed = 0
+    pushed_remotes: list[str] = []
     failed: list[str] = []
     client = None
     try:
@@ -139,8 +140,30 @@ def push_mismatched_scripts(
             try:
                 sftp.put(local_path, nfs_path)
                 pushed += 1
+                pushed_remotes.append(nfs_path)
             except Exception as exc:
                 failed.append(f"{script['name']}: SFTP failed: {exc}")
+
+            # 支撑文件在 agent 侧 verify 是一等契约（script_verifier 按 manifest
+            # 逐个比对，缺失/不符与入口文件同样判 mismatch）：只推入口会让
+            # reverify 原样再挂、host 永远 fatal（#404 冒烟 run #222 实证）。
+            # 因此按 manifest 逐个治愈，本地缺文件如实计入 failed。
+            for fname in sorted((script.get("support_files") or {}).keys()):
+                support_local = os.path.join(os.path.dirname(local_path), fname)
+                if not os.path.isfile(support_local):
+                    failed.append(
+                        f"{script['name']}: support file not found: {support_local}"
+                    )
+                    continue
+                support_remote = f"{remote_dir}/{fname}"
+                try:
+                    sftp.put(support_local, support_remote)
+                    pushed += 1
+                    pushed_remotes.append(support_remote)
+                except Exception as exc:
+                    failed.append(
+                        f"{script['name']}: support SFTP failed {fname}: {exc}"
+                    )
 
             local_dir = os.path.dirname(local_path)
             adb_helper = os.path.join(local_dir, "_adb.py")
@@ -153,13 +176,11 @@ def push_mismatched_scripts(
 
         sftp.close()
 
-        if pushed > 0:
+        if pushed_remotes:
             cmd_parts = []
-            for script in mismatched:
-                nfs = script.get("nfs_path", "")
-                if nfs:
-                    cmd_parts.append(f"sed -i 's/\\r$//' '{nfs}' 2>/dev/null || true")
-                    cmd_parts.append(f"chmod 755 '{nfs}' 2>/dev/null || true")
+            for remote in pushed_remotes:
+                cmd_parts.append(f"sed -i 's/\\r$//' '{remote}' 2>/dev/null || true")
+                cmd_parts.append(f"chmod 755 '{remote}' 2>/dev/null || true")
             if cmd_parts:
                 client.exec_command("; ".join(cmd_parts))
 
