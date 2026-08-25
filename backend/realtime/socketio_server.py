@@ -671,6 +671,19 @@ def emit_plan_changed(plan_id: int, action: str) -> None:
     })
 
 
+def emit_project_changed(project_id: int, action: str) -> None:
+    """Sync-safe:项目 facet / 归档 / 设备归属变更后广播 project_changed（ADR-0029 D8、#406）。
+
+    前端据此失效 projects / project / devices 缓存，避免 A 端移出设备后
+    B 端陈旧缓存一路放行到派发。
+    """
+    schedule_emit("project_changed", {
+        "type": "PROJECT_CHANGED",
+        "payload": {"project_id": project_id, "action": action},
+        "timestamp": _now_iso(),
+    })
+
+
 async def emit_agent_control(host_id: str, command: str, *, payload: Optional[Dict[str, Any]] = None) -> None:
     """向指定 host 的 Agent 下发控制指令(经 SocketIO /agent control 事件)。
 

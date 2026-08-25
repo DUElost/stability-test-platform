@@ -171,6 +171,10 @@ def bulk_assign_project(
     # 全部 UPDATE + audit 累积后单次 flush+commit（545 台批量归属不逐台往返）
     db.commit()
 
+    from backend.realtime.socketio_server import emit_project_changed
+
+    emit_project_changed(project.id, "assigned")
+
     items = []
     for device in devices:
         out = DeviceOut.model_validate(device)

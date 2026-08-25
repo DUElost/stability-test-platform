@@ -756,6 +756,15 @@ export interface ProjectCreateInput {
   jira_project_key?: string | null;
 }
 
+export interface ProjectUpdateInput {
+  display_name?: string;
+  customer?: string | null;
+  platform?: string | null;
+  form_factor?: string | null;
+  product_line?: string | null;
+  jira_project_key?: string | null;
+}
+
 export interface ProjectMapConflict {
   device_id: number;
   serial: string;

@@ -173,6 +173,8 @@ function _getDashSocket(): Socket {
     SOCKET_EVENT_NAMES.notificationNew,
     // #268 多Worker — 任何浏览器改 Plan 后广播,其余端失效计划缓存
     SOCKET_EVENT_NAMES.planChanged,
+    // #406 / ADR-0029 — 项目 facet / 归属变更后广播,其余端失效项目与设备缓存
+    SOCKET_EVENT_NAMES.projectChanged,
   ];
   for (const event of EVENTS) {
     socket.on(event, (data: unknown) => {
@@ -264,6 +266,7 @@ export function parseSubscription(url: string): SubscriptionConfig {
         SOCKET_EVENT_NAMES.planRunStatus,
         SOCKET_EVENT_NAMES.notificationNew,
         SOCKET_EVENT_NAMES.planChanged,
+        SOCKET_EVENT_NAMES.projectChanged,
       ],
     };
   }

@@ -9,6 +9,7 @@ import type {
   ProjectMapPreview,
   ProjectModelCoverage,
   ProjectSummary,
+  ProjectUpdateInput,
 } from './types';
 
 /** ADR-0029 P2.5 — 人工项目登记簿 + Fleet 事实 + 型号映射。 */
@@ -24,6 +25,19 @@ export const projects = {
   create: (payload: ProjectCreateInput) =>
     unwrapApiResponse(
       apiClient.post<ApiResponseEnvelope<ProjectSummary>>('/projects', payload),
+    ),
+  update: (projectKey: string, payload: ProjectUpdateInput) =>
+    unwrapApiResponse(
+      apiClient.put<ApiResponseEnvelope<ProjectSummary>>(
+        `/projects/${projectKey}`,
+        payload,
+      ),
+    ),
+  archive: (projectKey: string) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<ProjectSummary>>(
+        `/projects/${projectKey}/archive`,
+      ),
     ),
   inventoryModels: () =>
     unwrapApiResponse(

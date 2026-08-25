@@ -319,6 +319,131 @@ class TestCreateProject:
         assert resp.status_code == 403
 
 
+class TestUpdateAndArchiveProject:
+    """#406 — PUT facet + archive；逐字段审计；SEED 不可改。"""
+
+    def test_put_updates_facets_with_per_field_audit(
+        self, client, admin_headers, db_session, project_a
+    ):
+        resp = client.put(
+            "/api/v1/projects/proj-a",
+            headers=admin_headers,
+            json={
+                "display_name": "Project A Renamed",
+                "customer": "CustB",
+                "jira_project_key": "CAM",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["display_name"] == "Project A Renamed"
+        assert data["customer"] == "CustB"
+        assert data["jira_project_key"] == "CAM"
+        assert data["platform"] == "MTK"  # 未提交字段不动
+
+        audits = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "update_project")
+            .all()
+        )
+        by_field = {a.details["field"]: a.details for a in audits}
+        assert set(by_field) == {"display_name", "customer", "jira_project_key"}
+        assert by_field["customer"]["old"] == "CustA"
+        assert by_field["customer"]["new"] == "CustB"
+        assert by_field["jira_project_key"]["old"] is None
+        assert by_field["jira_project_key"]["new"] == "CAM"
+        assert all(a.details["project_key"] == "proj-a" for a in audits)
+
+    def test_put_clears_nullable_facet_with_null(
+        self, client, admin_headers, db_session, project_a
+    ):
+        resp = client.put(
+            "/api/v1/projects/proj-a",
+            headers=admin_headers,
+            json={"customer": None},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["customer"] is None
+        audit = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "update_project")
+            .one()
+        )
+        assert audit.details["field"] == "customer"
+        assert audit.details["old"] == "CustA"
+        assert audit.details["new"] is None
+
+    def test_put_empty_body_422(self, client, admin_headers, project_a):
+        resp = client.put(
+            "/api/v1/projects/proj-a",
+            headers=admin_headers,
+            json={},
+        )
+        assert resp.status_code == 422
+
+    def test_put_seed_project_422(self, client, admin_headers, project_legacy):
+        resp = client.put(
+            "/api/v1/projects/LEGACY",
+            headers=admin_headers,
+            json={"display_name": "Nope"},
+        )
+        assert resp.status_code == 422
+
+    def test_archive_sets_status_and_blocks_further_update(
+        self, client, admin_headers, db_session, project_a
+    ):
+        resp = client.post(
+            "/api/v1/projects/proj-a/archive",
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["status"] == "ARCHIVED"
+        audits = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "archive_project")
+            .all()
+        )
+        assert len(audits) == 1
+        assert audits[0].details["to_status"] == "ARCHIVED"
+
+        again = client.post(
+            "/api/v1/projects/proj-a/archive",
+            headers=admin_headers,
+        )
+        assert again.status_code == 409
+
+        update = client.put(
+            "/api/v1/projects/proj-a",
+            headers=admin_headers,
+            json={"display_name": "After Archive"},
+        )
+        assert update.status_code == 409
+
+    def test_archive_seed_422(self, client, admin_headers, project_legacy):
+        resp = client.post(
+            "/api/v1/projects/LEGACY/archive",
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422
+
+    def test_forbidden_for_non_admin(self, client, auth_headers, project_a):
+        assert (
+            client.put(
+                "/api/v1/projects/proj-a",
+                headers=auth_headers,
+                json={"display_name": "X"},
+            ).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                "/api/v1/projects/proj-a/archive",
+                headers=auth_headers,
+            ).status_code
+            == 403
+        )
+
+
 class TestMapProject:
     def test_preview_and_apply_from_seed_and_null(
         self, client, admin_headers, db_session, project_a, project_legacy

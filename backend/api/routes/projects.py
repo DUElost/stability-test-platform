@@ -2,6 +2,8 @@
 
 - ``GET /api/v1/projects`` — 默认只返回 ``source=USER``（人工项目）。
 - ``POST /api/v1/projects`` — admin 新建 USER 项目。
+- ``PUT /api/v1/projects/{key}`` — admin 改 facet（逐字段审计）。
+- ``POST /api/v1/projects/{key}/archive`` — admin 归档。
 - ``GET /api/v1/projects/inventory/models`` — fleet 按 model 聚合；
   ``mapped_project_keys`` 只含 USER 项目。
 - ``POST /api/v1/projects/{key}/map/preview|apply`` — 把型号映射到 USER 项目。
@@ -10,6 +12,8 @@
 """
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
@@ -29,6 +33,7 @@ from backend.api.schemas.project import (
     ProjectMapPreviewOut,
     ProjectModelCoverageOut,
     ProjectSummaryOut,
+    ProjectUpdateIn,
     RecentProjectRunOut,
 )
 from backend.core.audit import record_audit
@@ -37,6 +42,16 @@ from backend.models.host import Device
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import SEED_PROJECT_KEYS, TestProject
+from backend.realtime.socketio_server import emit_project_changed
+
+_UPDATABLE_FIELDS = (
+    "display_name",
+    "customer",
+    "platform",
+    "form_factor",
+    "product_line",
+    "jira_project_key",
+)
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
@@ -319,6 +334,7 @@ def create_project(
     )
     db.commit()
     db.refresh(project)
+    emit_project_changed(project.id, "created")
     return ok(_fill_summary(db, project))
 
 
@@ -342,6 +358,99 @@ def get_inventory_summary(
     _current_user: User = Depends(get_current_active_user),
 ):
     return ok(_inventory_summary(_load_inventory(db)))
+
+
+@router.put("/{project_key}", response_model=ApiResponse[ProjectSummaryOut])
+def update_project(
+    project_key: str,
+    payload: ProjectUpdateIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0029 D2 / #406 — facet 修改；逐字段 ``record_audit``。"""
+    project = _get_project_or_404(db, project_key)
+    _require_user_project(project)
+    if project.status == "ARCHIVED":
+        raise HTTPException(status_code=409, detail="archived project cannot be updated")
+
+    fields_set = getattr(payload, "model_fields_set", set())
+    if not fields_set:
+        raise HTTPException(status_code=422, detail="no fields to update")
+
+    changed: list[tuple[str, object, object]] = []
+    for field in _UPDATABLE_FIELDS:
+        if field not in fields_set:
+            continue
+        new_value = getattr(payload, field)
+        old_value = getattr(project, field)
+        if old_value == new_value:
+            continue
+        setattr(project, field, new_value)
+        changed.append((field, old_value, new_value))
+
+    if not changed:
+        return ok(_fill_summary(db, project))
+
+    project.updated_at = datetime.now(timezone.utc)
+    for field, old_value, new_value in changed:
+        record_audit(
+            db,
+            action="update_project",
+            resource_type="test_project",
+            resource_id=project.id,
+            details={
+                "project_key": project.project_key,
+                "field": field,
+                "old": old_value,
+                "new": new_value,
+            },
+            user_id=current_user.id,
+            username=current_user.username,
+            request=request,
+        )
+    db.commit()
+    db.refresh(project)
+    emit_project_changed(project.id, "updated")
+    return ok(_fill_summary(db, project))
+
+
+@router.post(
+    "/{project_key}/archive",
+    response_model=ApiResponse[ProjectSummaryOut],
+)
+def archive_project(
+    project_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0029 D2 / #406 — 归档（单向；SEED 回填标签不可归档）。"""
+    project = _get_project_or_404(db, project_key)
+    _require_user_project(project)
+    if project.status == "ARCHIVED":
+        raise HTTPException(status_code=409, detail="project already archived")
+
+    project.status = "ARCHIVED"
+    project.updated_at = datetime.now(timezone.utc)
+    record_audit(
+        db,
+        action="archive_project",
+        resource_type="test_project",
+        resource_id=project.id,
+        details={
+            "project_key": project.project_key,
+            "from_status": "ACTIVE",
+            "to_status": "ARCHIVED",
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
+    db.refresh(project)
+    emit_project_changed(project.id, "archived")
+    return ok(_fill_summary(db, project))
 
 
 @router.post(
@@ -420,6 +529,8 @@ def apply_project_map(
         request=request,
     )
     db.commit()
+    # 归属变更必须广播——否则 B 端陈旧缓存可一路放行到派发（ADR-0029 D8）。
+    emit_project_changed(project.id, "assigned")
     return ok(preview)
 
 

@@ -219,6 +219,25 @@ class TestExportToToolDirAndDriftDetection:
         assert detail["export_stale"] is False
         assert detail["exported_content_sha256"] == detail["content_sha256"]
 
+        # #406：消费路径旁按 sha 归档，覆盖导出时旧版可恢复
+        archive = (
+            Path(data["runtask_path"]).parent
+            / data["exported_sha256"]
+            / "runtask.xml"
+        )
+        assert archive.is_file()
+        assert archive.read_bytes() == real_runtask
+
+    def test_sha_archive_dedupes_on_reexport(self, client, admin_headers, suite,
+                                            real_runtask, _storage_root):
+        client.post(f"/api/v1/test-suites/{suite.id}/import", headers=admin_headers,
+                    files={"file": ("runtask.xml", real_runtask, "application/xml")})
+        first = self._export(client, admin_headers, suite.id).json()["data"]
+        second = self._export(client, admin_headers, suite.id).json()["data"]
+        assert first["exported_sha256"] == second["exported_sha256"]
+        archive_dir = Path(first["runtask_path"]).parent / first["exported_sha256"]
+        assert list(archive_dir.glob("runtask.xml")) == [archive_dir / "runtask.xml"]
+
     @pytest.mark.parametrize("mutate", ["add", "delete", "rename", "times",
                                         "disable", "root_config"])
     def test_any_library_change_flips_stale_without_endpoint_nulling(

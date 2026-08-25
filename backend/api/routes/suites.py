@@ -573,9 +573,21 @@ def export_to_tool_dir(
     _atomic_write(runtask_path, runtask_bytes)
     _atomic_write(global_path, global_bytes)
 
+    # #406：按 sha 归档副本——消费路径仍是 target/runtask.xml；
+    # 同 sha 再导出天然去重（覆盖同路径），覆盖消费文件时旧版可恢复。
+    suite.exported_sha256 = hashlib.sha256(runtask_bytes).hexdigest()
+    archive_dir = target / suite.exported_sha256
+    try:
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write(archive_dir / _RUNTASK_NAME, runtask_bytes)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "EXPORT_ARCHIVE_UNWRITABLE", "message": str(exc)},
+        ) from exc
+
     # 两个基线同一事务内写：先写盘后落库失败 → 门禁看列为空报 not_exported；
     # 先落库后写盘失败 → 磁盘无文件同样 not_exported。两向都 fail-closed。
-    suite.exported_sha256 = hashlib.sha256(runtask_bytes).hexdigest()
     suite.exported_content_sha256 = _current_fingerprint(db, suite)
     record_audit(
         db, action="export", resource_type="test_suite", resource_id=suite.id,
@@ -583,6 +595,7 @@ def export_to_tool_dir(
             "name": suite.name,
             "export_dir": _resolve_export_dir(suite),
             "exported_sha256": suite.exported_sha256,
+            "archive_path": str(archive_dir / _RUNTASK_NAME),
             "testpoints": len(built.testpoints),
             **({"active_guard_forced": True,
                 "active_run_count": len(unbound_runs)} if unbound_runs else {}),

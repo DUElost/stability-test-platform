@@ -91,6 +91,30 @@ class ProjectCreateIn(BaseModel):
         return name
 
 
+class ProjectUpdateIn(BaseModel):
+    """Facet 修改入参——``project_key`` 不可变（D2），不在此 schema。
+
+    未出现的字段不动；显式 ``null`` 清空可空 facet。
+    """
+
+    display_name: Optional[str] = None
+    customer: Optional[str] = None
+    platform: Optional[str] = None
+    form_factor: Optional[str] = None
+    product_line: Optional[str] = None
+    jira_project_key: Optional[str] = None
+
+    @field_validator("display_name")
+    @classmethod
+    def strip_display_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        name = value.strip()
+        if not name:
+            raise ValueError("display_name must not be blank")
+        return name
+
+
 class InventoryModelOut(ORMBaseModel):
     """一种 ``device.model`` 的 fleet 聚合。
 

@@ -12,6 +12,7 @@ export const SOCKET_EVENT_NAMES = {
   consoleStatus: 'console_status',
   notificationNew: 'notification:new',
   planChanged: 'plan_changed',
+  projectChanged: 'project_changed',
 } as const;
 
 export const SOCKET_MESSAGE_TYPES = {
@@ -26,6 +27,7 @@ export const SOCKET_MESSAGE_TYPES = {
   DEPLOY_UPDATE: 'DEPLOY_UPDATE',
   WATCHER_SIGNAL: 'WATCHER_SIGNAL',
   PLAN_CHANGED: 'PLAN_CHANGED',
+  PROJECT_CHANGED: 'PROJECT_CHANGED',
 } as const;
 
 export type SocketEventName = typeof SOCKET_EVENT_NAMES[keyof typeof SOCKET_EVENT_NAMES];
