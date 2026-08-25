@@ -89,6 +89,23 @@ jobs:
           echo "::error::无法解析 PR Agent review 输出中的 security 段落；pr-agent-gate fails。"
           exit 1
 
+      # #421 双保险：branch protection 已把 pr-agent-gate 列为 required check，但
+      # PR #399 仍在 gate failure 后被 auto-merge 合入。failure 时显式关掉
+      # auto-merge，避免 GitHub 侧竞态/漏判把失败 head 合进 main。
+      - name: Disable auto-merge on gate failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          if gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest.mergeMethod // empty' | grep -q .; then
+            echo "Gate failed with auto-merge enabled → disabling auto-merge (#421)."
+            gh pr merge "$PR_URL" --disable-auto
+          else
+            echo "Gate failed; auto-merge already disabled/absent."
+          fi
+
   pr-agent-comment:
     name: pr-agent-comment
     # 非门禁 job：处理 PR 评论里的 /review、/ask 等命令；不产生 required
