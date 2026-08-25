@@ -127,7 +127,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 | 事件目录（EventUploader / DLE 上送，含 HddSpill enqueue） | `{root}/devices/{plan_run_id}/` 或 `{root}/devices/unassigned/{event_id}/` |
 | 扫描报告 / extract 输出 | `{root}/dedup/{run_id}/`、`{root}/jira/{run_id}/` |
 
-中心存储根：**只配置 `STP_AEE_NFS_ROOT`**（`STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` 为弃用回落，计划删除）。`STP_AEE_LOCAL_ROOT` 为按机 L1 路径，hot-update **不**覆盖（#235）。
+中心存储根：**只配置 `STP_AEE_NFS_ROOT`**（`STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` 弃用回落已删除，#289）。`STP_AEE_LOCAL_ROOT` 为按机 L1 路径，hot-update **不**覆盖（#235）。
 
 `job_id IS NULL` 的 orphan `job_log_signal`：不进 PlanRun watcher-summary；admin 清单 `GET /api/v1/log-signals/orphans`。
 

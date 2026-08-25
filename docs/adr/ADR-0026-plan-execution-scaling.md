@@ -48,8 +48,8 @@
 
 - **终态聚合全量加载兄弟 job**：每个 Job 终态都触发 `PlanAggregator.on_job_terminal`，它 `SELECT * FROM job_instance WHERE plan_run_id = run.id`（`backend/services/aggregator.py:46-49`）加载**全部**兄弟 job 再重算。一个 200 设备的 PlanRun，200 次终态 = 200 × 200 = 4 万行加载；60 host 并发多个大 PlanRun 时是 O(N²)。
 - **续租风暴（P0 已缓解）**：
-  - *P0 已实现*：`POST /api/v1/agent/leases/extend-batch` 已上线（`backend/api/routes/agent_api.py:1306` `extend_leases_batch`），Agent `LeaseRenewer` 已改为一轮一批量请求（`backend/agent/lease_renewer.py:115-117,228-243`，分块默认 100）。1000 device 从「1000 个独立 HTTP 事务 / 60s」降为「每 host 每轮 1~N 个分块请求」。旧后端 404/405 自动回退单点端点（`lease_renewer.py:265-269`）。契约细节见 §5。
-  - *三信号即唯一判据（#288）*：批量路径按子状态落库三信号，且**任何续租写入都不再刷新 `updated_at`**（钉住防 onupdate）。recycler 只认 execution 三信号；缺信号视为未上报、锚定下发时刻。单点 `extend_lock` 仅旧 Agent 回退保留，其 `updated_at` 刷新已无存活语义。
+  - *P0 已实现*：`POST /api/v1/agent/leases/extend-batch` 已上线（`backend/api/routes/agent_api.py:1306` `extend_leases_batch`），Agent `LeaseRenewer` 已改为一轮一批量请求（`backend/agent/lease_renewer.py:115-117,228-243`，分块默认 100）。1000 device 从「1000 个独立 HTTP 事务 / 60s」降为「每 host 每轮 1~N 个分块请求」。契约细节见 §5。
+  - *三信号即唯一判据（#288）*：批量路径按子状态落库三信号，且**任何续租写入都不再刷新 `updated_at`**（钉住防 onupdate）。recycler 只认 execution 三信号；缺信号视为未上报、锚定下发时刻。单点 `extend_lock` 与 404/405 回退已删（#291）；`updated_at` 不作存活判据。
   - *P1 目标（已落地）*：三信号拆列落库（不变量③），续租请求承载三份语义（§5）；见 `test_execution_state_signals_step5a.py`。
 - **心跳减负（P0 已收口）**：权威设备心跳仍走 `/api/v1/heartbeat`；两端点返回 `heartbeat_interval_seconds`，Agent 钳位采纳；硬件字段按 `DEVICE_SNAPSHOT_INTERVAL` 降采样。轻量 `/api/v1/agent/heartbeat` 已带同契约，供后续双通道收敛。
 - **真实指标（P0 已收口）**：queue-latency / extend-batch 成功率 / 聚合耗时 / per-host OperationScheduler 并发度 / 设备矩阵查询耗时，均已挂 Prometheus。
@@ -64,7 +64,7 @@
 - **租约存活**：`device_leases.expires_at` / `fencing_token`（CAS renew）。
 - **执行器存活**：`last_execution_heartbeat_at`（`EXECUTING_STEP` 由 extend-batch；WAITING_* 由 Coordinator 心跳）。
 - **业务进度**：`last_progress_at`（观测；v1 不独立判杀）。
-- **遗留**：null `execution_state` 的旧 Agent 仍双写 `updated_at`；单点 `extend_lock` 回退路径仍只刷 `updated_at`。
+- **收口（#288 / #291）**：`updated_at` 已不作存活判据；缺 `execution_state` 锚定下发时刻（`COALESCE(started_at, created_at)`）；单点 `extend_lock` 与 404/405 回退已删，续租只走 batch。
 
 recycler 按 `execution_state` 选钟（`_running_liveness_anchor`）；WAITING_* 看 `PlanRunHost.coordinator_heartbeat_at`。
 
@@ -120,11 +120,11 @@ QUEUED 态的 PlanRun 只有 `plan_snapshot` + 目标设备清单，**不得**�
 
 明确拆分为三条正交信号（修复缺口④）：
 
-| 信号 | 语义 | 现状载体 | 目标载体 |
-|------|------|----------|----------|
-| **租约存活** | 设备仍被本 host 合法占用 | `lease.renewed_at` + 顺带 `job.updated_at`（`agent_api.py:1203-1208`；批量版 `:1421-1428`） | `lease.renewed_at`（已有，`device_leases`），解除与 `updated_at` 的耦合 |
-| **执行器存活** | Agent worker 进程 / 线程仍在跑本 job | 复用 `job.updated_at` | 新增 `last_execution_heartbeat_at`（拟） |
-| **业务进度** | 脚本 / patrol 周期在实际推进 | `last_patrol_heartbeat_at`（`job.py:47`，仅 patrol） | `last_progress_at`（拟） + 沿用 `last_patrol_heartbeat_at` |
+| 信号 | 语义 | 现行载体（#288 后） | 历史载体（已弃用） |
+|------|------|---------------------|-------------------|
+| **租约存活** | 设备仍被本 host 合法占用 | `lease.renewed_at` / `expires_at`（`device_leases`，extend-batch CAS） | 曾顺带刷 `job.updated_at`（单点 `extend_lock`，#291 已删） |
+| **执行器存活** | Agent worker 进程 / 线程仍在跑本 job | `last_execution_heartbeat_at`（extend-batch / Coordinator 心跳） | 曾复用 `job.updated_at` |
+| **业务进度** | 脚本 / patrol 周期在实际推进 | `last_progress_at` + `last_patrol_heartbeat_at`（观测；v1 不独立判杀） | — |
 
 三信号可**共载于同一个批量续租请求**（传输一次、语义三份，见 §5；请求 schema 的 `execution_state` / `progress_marker` 字段已在 P0 前向兼容），但落库为三列、三套超时判据。
 
@@ -187,7 +187,7 @@ RUNNING job 新增 `execution_state` 子状态列（拟），把「一个 RUNNIN
 
 ### 5. 批量续租接口契约（P0 已实现）
 
-**P0 已实现**：`POST /api/v1/agent/leases/extend-batch`（`backend/api/routes/agent_api.py:1306` `extend_leases_batch`）已上线，Agent `LeaseRenewer` 已改为一轮一批量（`backend/agent/lease_renewer.py:115-117`，批量实现 `:228-305`），取代「每 job 每 60s 单独 POST `/jobs/{id}/extend_lock`」的旧路径（单点端点 `agent_api.py:1182-1211` 保留，作为回退）。
+**P0 已实现**：`POST /api/v1/agent/leases/extend-batch`（`backend/api/routes/agent_api.py:1306` `extend_leases_batch`）已上线，Agent `LeaseRenewer` 已改为一轮一批量（`backend/agent/lease_renewer.py:115-117`，批量实现 `:228-305`），取代「每 job 每 60s 单独 POST `/jobs/{id}/extend_lock`」的旧路径（单点端点与 404/405 回退已于 #291 删除）。
 
 **请求**（已实现 schema，`agent_api.py:1232-1249`）：
 
@@ -221,10 +221,10 @@ RUNNING job 新增 `execution_state` 子状态列（拟），把「一个 RUNNIN
 - **`RETURNING` 反映真实更新**：SELECT 预分类只是快照；CAS UPDATE 的 `RETURNING` 决定最终 `renewed` 集合，UPDATE 未命中的「本应可续」item 降级为 `lease_missing`，不虚报 `renewed`（`agent_api.py:1407,1433-1444`）。
 - **最终 UPDATE 为数据库级 CAS**：`_cas_renew_leases`（`agent_api.py:1262-1304`）——tuple `(job_id, fencing_token)` 对绑定（row-value IN）+ `host_id` + `agent_instance_id`（非空时）归属校验 + `status=ACTIVE` + `expires_at > now` + `Job.status == RUNNING` join——本次评审后补齐，与本 ADR 收口同步落地（此前仅 `job_id` 集合 + ACTIVE + `expires_at > now` 守卫 UPDATE，token/归属只在前置 SELECT 校验，SELECT 与 UPDATE 之间的 token 轮转可被旧 Agent 覆写）。
 - **分块**：Agent 按块发送（默认 100，`AGENT_LEASE_EXTEND_BATCH_CHUNK`，`lease_renewer.py:53,240-243`），避免单请求 body 过大 + 单事务过长。
-- **旧后端自动回退**：批量端点返回 404/405 时 Agent 本进程永久回退单点 `extend_lock`（`lease_renewer.py:265-269`），Agent 与后端可独立升级。
+- **仅 batch 续租（#291）**：单点 `extend_lock` 与 404/405→逐 Job 回退已删除；探测失败记 error，下 tick 重试 batch。
 - **三信号前向兼容**：`execution_state` / `progress_marker` 已进请求 schema，后端接受但忽略（`agent_api.py:1235-1242`）。
 
-**已知剩余缺口**：单点 `extend_lock` 仍只刷 `updated_at`（旧 Agent 回退）。批量路径已按 `execution_state` 落库三信号，并对已知子状态停止双写 `updated_at`；WAITING_* 的存活由 Coordinator 心跳 / `PlanRunHost.coordinator_heartbeat_at` 承载。
+**收口（#288 / #291）**：续租只走 batch；批量路径按 `execution_state` 落库三信号，并对已知子状态钉住 `updated_at`（防 onupdate）；WAITING_* 的存活由 Coordinator 心跳 / `PlanRunHost.coordinator_heartbeat_at` 承载。`updated_at` 不作存活判据。
 
 **P1 目标（已落地）**：三信号共载落库——`fencing_token`（租约存活）、请求到达即执行器存活证明（`EXECUTING_STEP` / legacy → `last_execution_heartbeat_at`）、`progress_marker`（业务进度 → `last_progress_at`）。`WAITING_*` / `PATROL_SLEEP` 由 per-host Coordinator 心跳兜底（§3 矩阵）。
 
@@ -396,13 +396,13 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 | **人工重试** | `retry_plan_run_dispatch` 置 FAILED→RUNNING 重走 dispatch gate（`precheck/runner.py:317`，`state_machine.py:53-55`） | 改置 FAILED→QUEUED 入队，统一走准入流程（状态机章节） |
 | **precheck reaper** | `reconcile_stale_precheck_runs` 对 stale run `_fail_plan_run`（`precheck_reaper.py:133,93`） | 超时 PRECHECK 恢复回 QUEUED（`queue_reason=PRECHECK_STALE`），达重排上限才 FAILED（状态机章节） |
 | **claim** | `_claim_jobs_for_host`（`agent_api.py:319`）按 lease 过滤忙设备 | 基本保留；claim 只认领已 RUNNING PlanRun 的 PENDING job（现有 `PlanRun.status=='RUNNING'` 过滤 `agent_api.py:401` 天然兼容） |
-| **recycler** | `recycle_once`（`recycler.py:567`）；RUNNING 超时看 `updated_at`（`:639`）；patrol stall（`:665`） | 按 `execution_state` 选时钟（§3 矩阵）；`WAITING_EXECUTION_SLOT` 不判超时/ stall（不变量②）；RUNNING 超时改看 `last_execution_heartbeat_at` 而非 `updated_at`（不变量③）；终态置换走 terminalization 服务（§6） |
+| **recycler** | `recycle_once`；RUNNING 存活只认 execution 三信号（#288）；缺信号锚定下发时刻 | 按 `execution_state` 选时钟（§3 矩阵）；`WAITING_EXECUTION_SLOT` 不判超时/ stall（不变量②）；RUNNING 超时看 `last_execution_heartbeat_at` 而非 `updated_at`（不变量③）；终态置换走 terminalization 服务（§6） |
 | **session_watchdog** | host 心跳超时 → job UNKNOWN（`session_watchdog.py:36-73`）；UNKNOWN grace → FAILED（`:76-99`） | 保留；host 失联仍把该 host 全部 RUNNING job 转 UNKNOWN；可改用 `plan_run_host.coordinator_heartbeat_at` 做更精细的 host 存活判断；终态走 terminalization 服务（§6） |
 | **device_lease_reconciler** | `_reconcile_expired_leases`（`device_lease_reconciler.py:64`）、abort reaper（`:300`）、stale UNKNOWN（`:189`） | 保留两段式 lease 过期；lease 存活判据解耦出 `updated_at`（不变量③）后，reconciler 仍以 `lease.expires_at` 为准（`:75`），不受影响；终态走 terminalization 服务（§6） |
 | **abort** | `abort_plan_run`（`plan_runs.py:363`）写 `run_context.abort_requested`；reaper 消费（`device_lease_reconciler.py:300-386`） | QUEUED 的 PlanRun abort 直接 QUEUED→FAILED（无 Job 需回收）；PRECHECK 期间 abort 走 PRECHECK→FAILED；RUNNING 的走现有 abort reaper 路径 |
 | **aggregator** | 曾全量加载兄弟 job | **P2-1 已改**：委托 `job_terminalization`；`total_job_count>0` 时 O(1) 读五计数器；否则 fallback 全量扫 |
 | **dispatch gate / precheck** | `_drive_dispatch_gate`（`plan_precheck.py` → `precheck/*`）跨进程脚本校验 | 移到 pump 的「慢操作」阶段（§4 步骤①），**严禁**在 admission transaction 内执行 |
-| **LeaseRenewer（Agent）** | **P0 已批量**：一轮一批量 `extend-batch`（`lease_renewer.py:115-117,228-305`），404/405 自动回退单点（`:265-269`） | P1：三信号落库（§5）；`execution_state` / `progress_marker` 从「接受但忽略」转为回填三列 |
+| **LeaseRenewer（Agent）** | **仅 batch**：一轮一批量 `extend-batch`（`lease_renewer.py`）；单点 `extend_lock` / 404 回退已删（#291） | P1：三信号落库（§5）；`execution_state` / `progress_marker` 从「接受但忽略」转为回填三列 |
 | **SAQ** | `_queue` 与 worker 曾耦合于 `start_saq_worker` | **P0 已拆**：`init_saq_producer` / `start_saq_worker`；`STP_ENABLE_INPROCESS_SAQ=0` 时 producer 仍可 enqueue |
 
 ---
@@ -415,7 +415,7 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 
 **已完成（截至本修订，初版随 `d33d936` / `bb294e1` 入库，评审修复随 `64608a9` 入库，见修订记录）**：
 
-1. **批量续租 `extend-batch`**（§5）——单事务集合化、结果按 item 隔离、`RETURNING` 反映真实更新、分块、Agent 批量化 + 404/405 自动回退；缓解缺口③的续租风暴。含评审修复（`64608a9`）：**最终 UPDATE 升级为数据库级 CAS**（`_cas_renew_leases`：tuple `(job_id, fencing_token)` 绑定 + `host_id` / `agent_instance_id` 归属 + `Job.status==RUNNING` join + keepalive RUNNING guard）。
+1. **批量续租 `extend-batch`**（§5）——单事务集合化、结果按 item 隔离、`RETURNING` 反映真实更新、分块、Agent 批量化（#291 后仅 batch，无 404/405 回退）；缓解缺口③的续租风暴。含评审修复（`64608a9`）：**最终 UPDATE 升级为数据库级 CAS**（`_cas_renew_leases`：tuple `(job_id, fencing_token)` 绑定 + `host_id` / `agent_instance_id` 归属 + `Job.status==RUNNING` join + keepalive RUNNING guard）。
 2. **B4 悬挂修复**——`_validate_dispatch_devices_sync` 按 `uq_job_active_per_device` 口径补 active-job 检查（`reason=active_job`）；物化最终竞态补 `IntegrityError` 兜底（`64608a9`：回滚全部本次 Job/WiFi 分配 → 结构化 FAILED，`reason=device_conflict_at_materialization`）。P0 语义为 FAILED，P1 队列上线后改回 QUEUED（不变量④）。
 3. **三信号前向兼容**——`execution_state` / `progress_marker` 已进批量续租请求 schema（接受但忽略），P1 落库。
 
@@ -457,7 +457,7 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 |------|------|------|
 | QUEUED 引入后，历史 MANUAL 派发路径行为变化（用户期望「点了就跑」） | pump 间隔足够短（待定，建议 ≤5s）；空闲资源时 QUEUED→RUNNING 近乎瞬时 | `STP_PLAN_ADMISSION_QUEUE_ENABLED=0` 仅停用新派发并保留存量 drain-only；legacy inline dispatch 已移除，恢复派发需重新开启队列 |
 | OperationScheduler permit 上限设错，patrol 唤醒风暴打满 permit 导致 step 排队 | permit 默认 5 起步（待压测确认）；queue-latency 告警先于误杀 | permit 上限可热调（作用于 host 全局 Scheduler，调小不抢占已持有 permit，仅阻新进；`admission_batch_size_snapshot` 只是审计快照不受影响）；极端情况退回「线程池大小 = 并发」的旧语义 |
-| 批量续租逐项隔离实现有 bug，坏 item 拖累整批 | 单事务集合校验 + item 级结果隔离 + CAS UPDATE + 契约测试覆盖坏 item 混入（P0 已落地并有测试） | 回退单 job `extend_lock`（`agent_api.py:1182` 保留不删；Agent 404/405 自动回退已实现，`lease_renewer.py:265-269`） |
+| 批量续租逐项隔离实现有 bug，坏 item 拖累整批 | 单事务集合校验 + item 级结果隔离 + CAS UPDATE + 契约测试覆盖坏 item 混入（P0 已落地并有测试） | 无单点回退（#291 已删 `extend_lock`）；修复 batch 路径本身 |
 | O(1) 计数器与实际 Job 数漂移（终态入口绕过计数自增） | **单一 terminalization 服务**收口全部终态入口（§6）+ 低频对账 sweep 自愈（核对 `terminal_job_count == COUNT(*)`）+ 终态事务内原子自增 + `FOR NO KEY UPDATE` 串行（`aggregator.py:36`） | 回退全量 SELECT 聚合（`aggregator.py:46-49` 保留） |
 | PRECHECK 中间态卡死（pump/SAQ/Backend 崩溃） | `precheck_started_at` + `admission_attempt_id` + reaper stale recovery 回 QUEUED（状态机章节） | reaper 关闭时人工 UPDATE 回 QUEUED（低频运维操作） |
 | execution_state 未进 recovery payload，恢复后套错超时 | §3 硬性要求纳入冻结 payload；测试覆盖 UNKNOWN→RUNNING 后各子状态超时判据 | execution_state 缺省按未上报处理：下发时刻锚 + 执行窗口（#288 语义） |
@@ -547,3 +547,4 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 | 2026-07-20 | 目标里程碑：**M5** = 本文 P0–P2 代码收口；P3 归 **M6**。 |
 | 2026-07-25 | **单实例承载量代码层自证**（host 阶梯挂为 `capacity:inventory-bound` issue）：87-device 实测 PlanRun99 自然 SUCCESS（`pass_rate=1.0`，无 FAILED/UNKNOWN）；`plan_aggregator` O(N²) 全量 SELECT 已收口为 O(1) 计数器读五列（`aggregator_sync.py:11` → `job_terminalization.on_job_terminal_sync`）；续租风暴收口为 extend-batch chunk=100（`lease_renewer.py:231`）；admission transaction 越窗升级已加 Host→Device 行锁（`admission_pump.py:_lock_admission_resources`）；permit 仿真 5–60 device mean_wait ≪ coordinator_timeout 300s。**潜在结构性瓶颈图**：① 准入 O(1)、续租 batch、聚合 O(1) 均不在 1000-device 单进程瓶颈；② OperationScheduler permit cap 待 100/200 device 仿真（issue `capacity:code-verified`）；③ terminalization 漂移源代码审查理论=0（所有终态入口经 `job_terminalization`：`/complete`、abort reaper `plan_run_abort.py:47`、recycler pending-timeout `recycler.py:374`、session_watchdog grace→FAILED `session_watchdog.py:91`），`counter_reconcile` 用作预防性 sweep。**host 阶梯阻塞不变**：当前 20 ONLINE host / 仅 11 host 有 ONLINE device，挂为 `capacity:inventory-bound` issue 持续跟踪；不替代为 device 数。 |
 | 2026-07-30 | **host-scale 门槛拆分为 B1 / B2**（见「门槛拆分」章节）。动机：单条门槛把可用合成设备验证的 host 调度维度与只能用真机的 device 执行维度捆在一起，库存周期内 host 维度零施压，§缺口③ 的控制面单进程载荷瓶颈无法提前暴露。**拆分不降低任何一档指标要求**，且显式规定「B1 通过不构成 host-scale 整体验收」。B1 依赖仓库已有的 `STP_STATIC_DEVICE_SERIALS`（`device_discovery.py:13-25`，原为无 adb 环境的 smoke 钩子），配合 `AGENT_INSTALL_DIR` 做单机多实例状态隔离——两者均为**代码层复核结论，尚无实机数据**；B1 第一步是单机 5 实例冒烟。已知边界：`AGENT_DIR` 不随 `AGENT_INSTALL_DIR` 变，多实例共享代码时禁止热更新。 |
+| 2026-08-25 | **#288 / #291 文档同步（#420）**：全文去掉「`updated_at` 现行存活判据 / 单点 `extend_lock` 回退保留」表述；缺口④遗留、§5 已知缺口、交互矩阵 recycler/LeaseRenewer、风险回滚列改为现行事实（仅 batch；缺信号锚定下发时刻；`updated_at` 不作判据）。 |
