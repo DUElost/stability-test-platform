@@ -580,7 +580,11 @@ class TestMainGatingWiring:
         monkeypatch.delenv("STP_DEVICE_SERIAL", raising=False)
         monkeypatch.setenv("STP_ADB_PATH", "adb")
         monkeypatch.setenv("STP_STEP_PARAMS", json.dumps({
-            "firmware_dir": str(fw_ver), "skip_if_current": False,
+            "firmware_dir": str(fw_ver),
+            # 显式给出：默认路径指向 git 外的 flashtool 部署目录，
+            # CI 检出没有，缺了它会提前死在 tool_dir 校验上
+            "flash_tool_dir": str(fw_ver),
+            "skip_if_current": False,
             "verify_version": False,
         }))
         _wire_happy_path(monkeypatch, fw_ver, [("All command exec done", 0)])
