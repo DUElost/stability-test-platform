@@ -137,7 +137,7 @@ def downgrade() -> None:
     ):
         op.drop_column("plan_run", col)
 
-    # PG enum values are intentionally NOT removed: ALTER TYPE has no
-    # DROP VALUE, and rebuilding plan_run_status would rewrite plan_run.
-    # QUEUED/PRECHECK stay as harmless orphan values (nothing produces them
-    # once the columns above are gone).
+    # Enum labels QUEUED/PRECHECK are intentionally left on downgrade of *this*
+    # revision: rebuilding plan_run_status rewrites plan_run and was deferred.
+    # Physical removal of the later-retired DEGRADED label is #417
+    # (w9x0y1z2a3b4: recreate enum — PG has no DROP VALUE).
