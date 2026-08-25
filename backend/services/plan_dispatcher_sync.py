@@ -32,6 +32,7 @@ from backend.services.plan_dispatcher_core import (
     build_preview as _build_preview,
     check_legacy_aee_script_refs as _check_legacy_aee_script_refs,
     check_script_keys_complete as _check_script_keys_complete,
+    check_suite_binding_required as _check_suite_binding_required,
     inject_suite_params as _inject_suite_params,
     inject_wifi_params as _inject_wifi_params,
     iter_lifecycle_steps as _iter_lifecycle_steps,
@@ -354,6 +355,14 @@ def preview_plan_dispatch_sync(
             disabled_legacy_scripts=disabled,
         )
 
+    unbound_mtbf = _check_suite_binding_required(plan, steps)
+    if unbound_mtbf:
+        raise PlanDispatchError(
+            f"Plan {plan_id}: mtbf scripts require a bound suite at preview: "
+            f"{', '.join(unbound_mtbf)}",
+            suite_binding_required=unbound_mtbf,
+        )
+
     metadata = _fetch_script_metadata(db, steps)
     missing = _check_script_keys_complete(steps, metadata)
     if missing:
@@ -459,21 +468,17 @@ def prepare_plan_run(
     defaults = _script_defaults(metadata)
     lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
 
-    # #404 第三步（双模式退役观测层）：P1b 门禁落地后，派发 mtbf 系脚本但未
-    # 绑定套件 → 记 WARNING suite_unbound。P0 存量兼容期信号；一个完整运行周期
-    # 归零后可翻转硬拒（翻转动作另起小 PR，不默认启用——issue 评论口径）。
-    if plan.suite_id is None:
-        mtbf_steps = [
-            s.step_key for s in steps
-            if s.enabled is not False and s.script_name.startswith("mtbf_")
-        ]
-        if mtbf_steps:
-            logger.warning(
-                "suite_unbound plan=%d plan_name=%s mtbf_steps=%s "
-                "(expected/project fall back to host env; bind a suite to "
-                "enable managed gates)",
-                plan.id, plan.name, mtbf_steps,
-            )
+    # ADR-0030 v1.8（#404 翻转）：mtbf 系脚本必须绑定套件。观测期（WARNING
+    # suite_unbound，2026-08-24~25）结论为零存量未绑定流量、唯一 mtbf Plan 已
+    # 绑定，按 issue 口径翻转硬拒——P0 文件真源模式对 mtbf 脚本关闭，套件是
+    # 唯一配置通道；非 mtbf 计划不受影响。
+    unbound_mtbf = _check_suite_binding_required(plan, steps)
+    if unbound_mtbf:
+        raise PlanDispatchError(
+            f"Plan {plan_id}: mtbf scripts require a bound suite at prepare: "
+            f"{', '.join(unbound_mtbf)}",
+            suite_binding_required=unbound_mtbf,
+        )
 
     is_valid, errors = validate_pipeline_def({"lifecycle": lifecycle})
     if not is_valid:

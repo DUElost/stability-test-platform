@@ -59,10 +59,12 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 ## §1.5 P0→P1b：MTBF 脚本配置通道（2026-08-24 随 ADR-0030 P1b 更新）
 
 `mtbf_*` 脚本配置解析 = `STP_STEP_PARAMS` > `STP_MTBF_*` env（host 级手工）> 代码默认
-（`_lib.py:param_or_env`）。P1b 后 expected/project 两键由**托管绑定自动注入**：
+（`_lib.py:param_or_env`）。expected/project 两键由**托管绑定自动注入**：
 Plan 绑定套件（`plan.suite_id`）时，dispatcher 对 `mtbf_*` 步骤自动注入
 `expected_testpoint_count`（= 套件启用用例数）与 `project`（= 套件 export_dir），
-**无需任何 env 或 default_params 声明**；未绑定 Plan 行为不变。
+**无需任何 env 或 default_params 声明**。**绑定对 mtbf 脚本为强制**
+（ADR-0030 v1.8）：未绑定 mtbf 计划派发即 400 `SUITE_BINDING_REQUIRED`；
+非 mtbf 计划不受影响。
 
 | 键 | 通道 | 说明 |
 |----|------|------|

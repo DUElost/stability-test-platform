@@ -28,6 +28,7 @@ class PlanDispatchError(Exception):
         unavailable_devices: list[dict] | None = None,
         mixed_watcher_inactive_host_ids: list[str] | None = None,
         disabled_legacy_scripts: list[str] | None = None,
+        suite_binding_required: list[str] | None = None,
     ) -> None:
         super().__init__(message)
         self.missing_scripts = list(missing_scripts) if missing_scripts else None
@@ -42,12 +43,20 @@ class PlanDispatchError(Exception):
         self.disabled_legacy_scripts = (
             list(disabled_legacy_scripts) if disabled_legacy_scripts else None
         )
+        self.suite_binding_required = (
+            list(suite_binding_required) if suite_binding_required else None
+        )
 
     def detail(self) -> dict | str:
         if self.disabled_legacy_scripts:
             return {
                 "code": "LEGACY_AEE_SCRIPTS_DISABLED",
                 "scripts": self.disabled_legacy_scripts,
+            }
+        if self.suite_binding_required:
+            return {
+                "code": "SUITE_BINDING_REQUIRED",
+                "mtbf_steps": self.suite_binding_required,
             }
         if self.missing_scripts:
             return {
@@ -161,6 +170,25 @@ def check_legacy_aee_script_refs(steps: list[PlanStep]) -> list[str]:
         }
     )
     return disabled
+
+
+def check_suite_binding_required(
+    plan: Plan, steps: list[PlanStep]
+) -> list[str]:
+    """ADR-0030 v1.8：mtbf 系脚本必须绑定套件，返回未绑定的 mtbf step_key。
+
+    观测期（WARNING ``suite_unbound``）结论为零存量未绑定流量、唯一 mtbf
+    Plan 已绑定，按 issue #404 口径翻转硬拒。非 mtbf 计划不受影响；
+    P0 文件真源模式对 mtbf 脚本就此关闭（套件是唯一配置通道）。
+    """
+    if plan.suite_id is not None:
+        return []
+    return sorted(
+        step.step_key
+        for step in steps
+        if step.enabled is not False
+        and step.script_name.startswith("mtbf_")
+    )
 
 
 def build_lifecycle_from_steps(
