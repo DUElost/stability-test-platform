@@ -174,6 +174,11 @@ export default function PlanListPage() {
                     {plan.specialty_key && (
                       <Badge variant="default" className="text-xs px-1.5 py-0.5">{plan.specialty_key}</Badge>
                     )}
+                    {plan.suite_name && (
+                      <Badge variant="info" className="text-xs px-1.5 py-0.5" title="托管模式：已绑定套件">
+                        套件:{plan.suite_name}
+                      </Badge>
+                    )}
                     {plan.next_plan_id != null && (
                       <Badge variant="info" className="text-xs px-1.5 py-0.5">链式</Badge>
                     )}

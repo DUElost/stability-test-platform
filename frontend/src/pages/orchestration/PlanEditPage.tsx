@@ -114,6 +114,9 @@ export default function PlanEditPage() {
           onSpecialtyKeyChange={form.setSpecialtyKey}
           projects={form.projects || []}
           specialties={form.specialties || []}
+          suiteName={form.suiteName}
+          onSuiteNameChange={form.setSuiteName}
+          suites={form.suites || []}
         />
 
         <PlanStepInspector

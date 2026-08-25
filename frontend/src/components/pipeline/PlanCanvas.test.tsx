@@ -154,6 +154,53 @@ function lastLifecycle(spy: ReturnType<typeof vi.fn>): PipelineDef {
 }
 
 describe('PlanCanvas', () => {
+  describe('归属 / 套件元数据（#405 / #430）', () => {
+    it('渲染套件下拉并用 suite_name 回写', () => {
+      const onSuiteNameChange = vi.fn();
+      render(
+        <PlanCanvas
+          planName="p"
+          onPlanNameChange={() => {}}
+          description=""
+          onDescriptionChange={() => {}}
+          failureThreshold={0.05}
+          onFailureThresholdChange={() => {}}
+          patrolIntervalSeconds={null}
+          onPatrolIntervalChange={() => {}}
+          timeoutSeconds={null}
+          onTimeoutChange={() => {}}
+          nextPlanName={null}
+          isCurrentEditing
+          lifecycle={{ lifecycle: { init: [], teardown: [] } }}
+          onLifecycleChange={() => {}}
+          selectedStepKey={null}
+          onSelectStep={() => {}}
+          scripts={[]}
+          suiteName=""
+          onSuiteNameChange={onSuiteNameChange}
+          suites={[
+            {
+              id: 1,
+              name: 'mtbf-default',
+              display_name: 'MTBF Default',
+              case_count: 3,
+              enabled_case_count: 3,
+              is_active: true,
+              export_stale: false,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-01T00:00:00Z',
+            },
+          ]}
+        />,
+      );
+
+      const select = screen.getByTestId('plan-suite-select') as HTMLSelectElement;
+      expect(select.value).toBe('');
+      fireEvent.change(select, { target: { value: 'mtbf-default' } });
+      expect(onSuiteNameChange).toHaveBeenCalledWith('mtbf-default');
+    });
+  });
+
   describe('渲染', () => {
     it('三个 phase 各自带标题与步骤计数', () => {
       render(<Harness />);

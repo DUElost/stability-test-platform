@@ -49,6 +49,13 @@ vi.mock('@/utils/api', () => ({
       list: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      listSpecialties: vi.fn(),
+    },
+    projects: {
+      list: vi.fn(),
+    },
+    suites: {
+      list: vi.fn(),
     },
     scripts: {
       list: vi.fn(),
@@ -94,6 +101,9 @@ describe('PlanEditPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (api.plans.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.plans.listSpecialties as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.projects.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.suites.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (api.scripts.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   });
 
