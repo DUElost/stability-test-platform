@@ -232,7 +232,7 @@ function _removeEventListener(event: string, fn: (data: unknown) => void): void 
 }
 
 // ---------------------------------------------------------------------------
-// Map WS URL patterns → room + event list
+// Map subscription descriptors → room + event list
 // ---------------------------------------------------------------------------
 
 interface SubscriptionConfig {
@@ -240,11 +240,21 @@ interface SubscriptionConfig {
   events: string[];       // which events to listen for
 }
 
-function parseWsUrl(url: string): SubscriptionConfig {
+/**
+ * Parse a useSocketIO subscription descriptor.
+ *
+ * Accepted forms (no `/ws/...` legacy paths — #419):
+ * - `dashboard`                         → global dashboard events
+ * - `plan_run:{id}`                     → PlanRun detail room
+ * - `console:{runId}`                   → RunConsole live log room
+ * - `job:{id}`                          → job step-log room
+ * - `run:{id}`                          → run step-log room
+ * - `` (empty) / unknown                → no subscription
+ */
+export function parseSubscription(url: string): SubscriptionConfig {
   if (!url) return { room: null, events: [] };
 
-  // dashboard 级订阅（DASHBOARD_SUBSCRIPTION='dashboard'；兼容历史 /ws/dashboard 描述符）
-  if (url === 'dashboard' || url.includes('/ws/dashboard') || url.endsWith('/dashboard')) {
+  if (url === 'dashboard') {
     return {
       room: null,
       events: [
@@ -258,29 +268,7 @@ function parseWsUrl(url: string): SubscriptionConfig {
     };
   }
 
-  // /ws/jobs/{id}/logs
-  const jobLogsMatch = url.match(/\/ws\/jobs\/(\d+)\/logs/);
-  if (jobLogsMatch) {
-    return { room: `job:${jobLogsMatch[1]}`, events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate] };
-  }
-
-  // /ws/logs/{id}
-  const logsMatch = url.match(/\/ws\/logs\/(\d+)/);
-  if (logsMatch) {
-    return { room: `run:${logsMatch[1]}`, events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate] };
-  }
-
-  // /ws/console/{id}  — ADR-0025 §9 RunConsole 实时日志
-  const consoleMatch = url.match(/\/ws\/console\/([\w-]+)/);
-  if (consoleMatch) {
-    return {
-      room: `console:${consoleMatch[1]}`,
-      events: [SOCKET_EVENT_NAMES.consoleLog, SOCKET_EVENT_NAMES.consoleStatus],
-    };
-  }
-
-  // /ws/plan-runs/{id}
-  const planRunMatch = url.match(/\/ws\/plan-runs\/(\d+)/);
+  const planRunMatch = url.match(/^plan_run:(\d+)$/);
   if (planRunMatch) {
     return {
       room: `plan_run:${planRunMatch[1]}`,
@@ -295,21 +283,32 @@ function parseWsUrl(url: string): SubscriptionConfig {
     };
   }
 
-  // Fallback: global subscription
-  return {
-    room: null,
-      events: [
-        SOCKET_EVENT_NAMES.deviceUpdate,
-        SOCKET_EVENT_NAMES.stepLog,
-        SOCKET_EVENT_NAMES.stepUpdate,
-        SOCKET_EVENT_NAMES.jobStatus,
-        SOCKET_EVENT_NAMES.planRunStatus,
-        SOCKET_EVENT_NAMES.runUpdate,
-        SOCKET_EVENT_NAMES.reportReady,
-        SOCKET_EVENT_NAMES.notificationNew,
-        SOCKET_EVENT_NAMES.planChanged,
-      ],
-  };
+  const consoleMatch = url.match(/^console:([\w-]+)$/);
+  if (consoleMatch) {
+    return {
+      room: `console:${consoleMatch[1]}`,
+      events: [SOCKET_EVENT_NAMES.consoleLog, SOCKET_EVENT_NAMES.consoleStatus],
+    };
+  }
+
+  const jobMatch = url.match(/^job:(\d+)$/);
+  if (jobMatch) {
+    return {
+      room: `job:${jobMatch[1]}`,
+      events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate],
+    };
+  }
+
+  const runMatch = url.match(/^run:(\d+)$/);
+  if (runMatch) {
+    return {
+      room: `run:${runMatch[1]}`,
+      events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate],
+    };
+  }
+
+  // Unknown descriptor → no subscription (do not silently fall back to global).
+  return { room: null, events: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -338,10 +337,11 @@ interface UseSocketIOReturn<T = unknown> {
 }
 
 /**
- * Drop-in replacement for useWebSocket.
+ * SocketIO subscription hook.
  *
- * Accepts the same `url` parameter (legacy WS URLs like `/ws/jobs/123/logs`)
- * and automatically maps them to SocketIO room subscriptions.
+ * `url` is a subscription descriptor from `@/config`
+ * (`DASHBOARD_SUBSCRIPTION` / `planRunSubscription` / `consoleSubscription` / …),
+ * not a WebSocket path.
  */
 export function useSocketIO<T = unknown>(
   url: string,
@@ -392,7 +392,7 @@ export function useSocketIO<T = unknown>(
   useEffect(() => {
     if (!enabled || !url) return;
 
-    const config = parseWsUrl(url);
+    const config = parseSubscription(url);
 
     if (config.room) {
       _subscribeRoom(config.room);

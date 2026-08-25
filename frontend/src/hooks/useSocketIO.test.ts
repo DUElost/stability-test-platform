@@ -60,7 +60,8 @@ describe('useSocketIO — token auth', () => {
     vi.doMock('socket.io-client', () => ({ io: ioMock }));
 
     const { useSocketIO } = await import('@/hooks/useSocketIO');
-    renderHook(() => useSocketIO('/ws/dashboard'));
+    const { DASHBOARD_SUBSCRIPTION } = await import('@/config');
+    renderHook(() => useSocketIO(DASHBOARD_SUBSCRIPTION));
 
     await waitFor(() => {
       expect(ioMock).toHaveBeenCalled();
@@ -84,7 +85,8 @@ describe('useSocketIO — token auth', () => {
     vi.doMock('socket.io-client', () => ({ io: ioMock }));
 
     const { useSocketIO } = await import('@/hooks/useSocketIO');
-    renderHook(() => useSocketIO('/ws/dashboard'));
+    const { DASHBOARD_SUBSCRIPTION } = await import('@/config');
+    renderHook(() => useSocketIO(DASHBOARD_SUBSCRIPTION));
 
     // Wait for io(...) to have been called.
     await waitFor(() => {

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/useToast';
 import { useSocketIO, type SocketIOMessage } from '@/hooks/useSocketIO';
+import { planRunSubscription } from '@/config';
 import {
   isJobStuck,
   isPlanRunTerminal,
@@ -130,7 +131,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     [id, qc],
   );
 
-  useSocketIO(id ? `/ws/plan-runs/${id}` : '', {
+  useSocketIO(id ? planRunSubscription(id) : '', {
     enabled: !!id && !isTerminal,
     onMessage: onSocketMessage,
   });
