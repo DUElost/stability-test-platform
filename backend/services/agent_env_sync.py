@@ -57,13 +57,18 @@ _FLEET_ENV_KEYS: tuple[str, ...] = (
     # dispatcher 按 plan.suite_id 自动注入 expected/project（STP_STEP_PARAMS
     # 通道，P1 设计 §3.4）；mtbf_check v1.3.0+ 只读注入不再回落本键。
     # STP_MTBF_TASK_TIMES / STP_MTBF_PROJECT 等 host 级手工键见 mtbf-api.md §1.5。
-    # Honor 刷机自动化（flash_firmware v1.2.0，方向 A）：版本 pin 与开关，
+    # Honor 刷机自动化（flash_firmware，方向 A）：版本 pin 与开关，
     # 全 fleet 同值。缺省版本由各机型族的 NFS latest.json 指针决定，
-    # 这四个键都是空值不推、显式设置才下发的逃生阀。
+    # 这些键都是空值不推、显式设置才下发的逃生阀。
     "STP_FLASH_FIRMWARE_VERSION",
     "STP_FLASH_FIRMWARE_ROOT",
     "STP_FLASH_SKIP_IF_CURRENT",
     "STP_FLASH_VERIFY_VERSION",
+    # v1.3.0（多设备门控 / 重试 / 预检）：同规则，空值不推。
+    "STP_FLASH_GATE_OTHER_MTK",
+    "STP_FLASH_MAX_ATTEMPTS",
+    "STP_FLASH_RETRY_BACKOFF",
+    "STP_FLASH_STRICT_ENV_CHECK",
 )
 
 # Agent-scoped keys: the control plane holds the *agent-side* value under a

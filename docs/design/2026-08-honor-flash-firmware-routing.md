@@ -1,4 +1,4 @@
-# Honor 刷机自动化：固件指纹路由 + manifest + 版本核验（flash_firmware v1.2.0）
+# Honor 刷机自动化：固件指纹路由 + manifest + 版本核验 + 多设备门控（flash_firmware）
 
 - 日期：2026-08-22
 - 状态：**已实施**（随 `feat/honor-flash-firmware-v120` 合入）
@@ -59,7 +59,7 @@ manifest 清单**，补齐刷前版本比对（同版本跳过）与刷后版本
 存在则用于补缺 da/scatter 与提供比对版本，不存在则维持 v1.1.0 手工三参数
 行为（完全向后兼容）。
 
-## 3. 脚本行为（v1.2.0）
+## 3. 脚本行为
 
 ```
 STP_STEP_PARAMS > STP_FLASH_* env（hot-update 可同步）> 代码默认
@@ -72,9 +72,27 @@ STP_STEP_PARAMS > STP_FLASH_* env（hot-update 可同步）> 代码默认
 | 刷后核验 | `verify_version`（默认 true）：等设备回 adb（`get-state == device`，上限 `verify_wait_seconds` 默认 180s）→ 回读版本；不一致 / 等不到设备 / 回读失败 → 整步失败（重试由 `PlanStep.retry` 承接）。verify 关闭时维持 v1.1.0「枚举慢只记录」语义 |
 | 审计 | 路由决策（`decided_by`/`model`/`family`/`version`/manifest 路径）全量写 `metrics.route`，step_trace 可查；新增 PROGRESS 阶段 `version-check` / `verify-wait` / `verify` |
 
-串行机制不变：主机级 flock（`/tmp/stp-flash-firmware.lock`）+ lock-wait 打戳；
-SP Flash Tool CLI 不认序列号（绑定当下出现在 USB 的 MTK preloader 设备），
-串行保证工具不会抓错设备。udev 规则（99-ttyacms.rules）提供非 root USB 权限。
+### 3.1 多设备门控 / 重试环 / 环境预检
+
+SPFT Linux console 版 `-p <port>` 打开层损坏（扫描层能匹配、打开层不动作，
+跨工具代际一致），多设备同 host 消歧改由**门控**承担：
+
+| 参数 | 默认 | 行为 |
+|------|------|------|
+| `gate_other_mtk` | true | adb reboot **前**按 `STP_DEVICE_SERIAL` 经 sysfs 反查目标口（BROM 态无 serial，必须趁早）；把其它处于刷机态（pid ∈ {0003,2000,2001,201c,2026,3000}）的 MTK 口 `authorized=0`，普通态(2046)手机不受影响；刷完 try/finally 恢复。无 serial / 无写权限 / 非 Linux 时跳过并记录原因 |
+| `max_attempts` | 2（cap 4) | 整链路重试环（每次 = 重启 + flash_tool + 等结果）；launch 类环境错误立即终止不重试；attempt>1 先退避再重画门控（authorized 只对当前设备实例生效） |
+| `retry_backoff_seconds` | 10 | 相邻尝试间隔，负值钳 0 |
+| `strict_env_check` | false | 启动前置检：可执行位 / ldd 缺库 / adb（流程需要时）/ ttyACM 写入路径（dialout 组或 udev 0666 规则）。前三者硬失败在拿锁前短路；ttyACM 不明默认仅 WARNING，strict 升级为失败 |
+
+metrics 新增 `attempts[]` / `attempt_count` / `gating` / `env_precheck`；
+v1.2.0 全部顶层 metrics 键保留（exit_code/stdout_tail 等取最后一次尝试）。
+背景与实测证据链见
+[Agent Note](../notes/feature/2026-08-25-mtk-flash-fleet-automation.md)。
+
+主机级 flock（`/tmp/stp-flash-firmware.lock`）+ lock-wait 打戳不变：门控
+解决「工具抓错设备」，锁保证同一时刻一台 host 只有一场刷写。非 root USB
+权限由 dialout 组 + udev 规则（`KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d",
+MODE="0666"`）提供，预检会在缺失时给出修复动作。
 
 ## 4. env 键（hot-update fleet 白名单）
 
@@ -84,25 +102,31 @@ SP Flash Tool CLI 不认序列号（绑定当下出现在 USB 的 MTK preloader 
 | `STP_FLASH_FIRMWARE_VERSION` | 空（读 latest.json） | 战役级版本 pin，优先于指针文件 |
 | `STP_FLASH_SKIP_IF_CURRENT` | true | 同版本跳过开关 |
 | `STP_FLASH_VERIFY_VERSION` | true | 刷后核验开关 |
+| `STP_FLASH_GATE_OTHER_MTK` | true | 多设备门控开关（§3.1） |
+| `STP_FLASH_MAX_ATTEMPTS` | 2 | 整链路尝试次数（1..4） |
+| `STP_FLASH_RETRY_BACKOFF` | 10 | 重试间隔秒 |
+| `STP_FLASH_STRICT_ENV_CHECK` | false | 环境预检 WARNING 升级为失败 |
 
 空值不推送（Agent 本地值保留）。控制面不消费这些键（纯 Agent 侧），同值
 语义成立，进 `_FLEET_ENV_KEYS`。
 
 ## 5. 注册表
 
-- 迁移 `u7v8w9x0y1z2`：seed v1.2.0 的 param_schema/default_params（部署顺序
-  无关，`b7c8d9e0f1a2` 先例）；deactivate v1.0.0/v1.0.1，**v1.1.0 留 active
-  作回滚路径**。
+- 迁移 `a7b8c9d0e1f2`：seed v1.3.0 的 param_schema/default_params（部署顺序
+  无关）；deactivate v1.0.0/v1.0.1/v1.1.0，**v1.2.0 留 active 作回滚路径**
+  （`u7v8w9x0y1z2` 先例）。v1.2.0 由迁移 `u7v8w9x0y1z2` seed。
 - `default_params` 只含固定期望键（command/boot_mode/timeout/reboot_*）；
-  skip_if_current / verify_version / version / firmware_root **故意不进**
-  default_params——参数优先于 env，种进去会杀死 hot-update 逃生阀。
+  skip_if_current / verify_version / gate_other_mtk / max_attempts /
+  retry_backoff_seconds / strict_env_check / version / firmware_root
+  **故意不进** default_params——参数优先于 env，种进去会杀死 hot-update
+  逃生阀。
 - 配套修复：scan 的 is_active 改为单向语义（盘上缺失 → 停用；人工停用 →
   不复活），否则 seed/admin 的 deactivate 会被下次 scan 推翻（v1.0.0 重活
   的根因）。
 
 ## 6. 上线路径（运维）
 
-1. 合入后 hot-update 推 Agent 代码（20 台）→ `POST /api/v1/scripts/scan` 注册 v1.2.0。
+1. 合入后 hot-update 推 Agent 代码（20 台）→ `POST /api/v1/scripts/scan` 注册 v1.3.0。
 2. 放首个 MLD 固件包 + manifest + latest.json（§1 布局）。
 3. 按 [runbook](../operations/honor-flash-runbook.md) 建「MLD 刷机」Plan，单台真机验证后放量。
 4. ELA：固件包就位即可用（路由表已含 ELA_LX2/LX3）。
