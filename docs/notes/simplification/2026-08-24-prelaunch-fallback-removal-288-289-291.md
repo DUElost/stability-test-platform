@@ -44,5 +44,5 @@
 
 - 若未来出现真正的「旧 Agent ↔ 新控制面」滚动窗口（当前未上线、可同版本发布），
   batch 续租 404 回退与 updated_at 双写需要作为特性重新设计，而非恢复旧代码。
-- `plan_run_status` PG enum 中的 DEGRADED 值如需物理清理，等 PostgreSQL 支持
+- `plan_run_status` PG enum 中的 DEGRADED 值：#417 迁移 `w9x0y1z2a3b4` 重建 enum 物理清理（PG 无 `DROP VALUE`，需 create+cast+rename）
   `ALTER TYPE ... REMOVE VALUE` 或做 type-rebuild 迁移，与其它 enum 变更合批。
