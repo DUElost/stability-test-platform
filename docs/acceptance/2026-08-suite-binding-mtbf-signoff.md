@@ -112,6 +112,21 @@ S7 FAILED reason/step：suite_verify_failed / sha_mismatch
 结论（R1–R4）：R1✅ R2✅ R3✅ R4✅
 ```
 
+### 4.1 独立核对澄清（2026-08-25 复核采纳，防误读）
+
+1. **#224 终态为 FAILED/job ABORTED，是验收后主动 abort 收尾，非失败**：
+   init COMPLETED（exit 0）+ patrol 第 1 周期打戳后，证据采集完毕即调
+   `POST /plan-runs/224/abort`（reason=`smoke-verify-done`）走
+   abort→teardown→finish 协议。中止记录在 `audit_logs.abort_plan_run`
+   （triggered_by=stp-admin），run_context 不含 abort 字段属设计分工。
+   后人查 #224 勿按失败归因。
+2. **#222/#225 无 job 实例 = 准入层失败形态**：门禁 fail 于 job 创建之前，
+   与「准入链 fail-fast」语义吻合。#222 定性为 sync 支撑文件缺口痕迹
+   （v1.7 已披露，修复另起 PR）；#225 即 S7 演练本体。
+3. **NFS JSON 归因用 mtime 而非 run_dir 名**：`2026.08.15_06.23.23.401.json`
+   的 run_dir 来自设备端时钟（漂移约 10 天），实际写入时间 8/25 00:30
+   （冒烟时点）。跨设备时钟漂移是既有现象，勿按目录名做时间线推断。
+
 ## 5. 冒烟副产品（发现项）
 
 1. **`push_mismatched_scripts` 不推支撑文件**（#222 暴露）：轻量 sync 只推入口
