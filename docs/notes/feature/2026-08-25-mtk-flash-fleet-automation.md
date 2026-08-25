@@ -66,7 +66,8 @@ v1.2.0 全部顶层 metrics 键保留（取最后一次尝试值）；输出契�
 单测 `backend/agent/tests/test_flash_firmware_v130.py`（sysfs 树注入
 tmp_path 复刻 .87 hub 树拓扑）；seed 迁移
 `a7b8c9d0e1f2_seed_flash_firmware_v130_params.py`（deactivate v1.1.0，
-保留 v1.2.0 作回滚）。
+保留 v1.2.0 作回滚）。部署日真机回归发现路由表缺连字符机型键，由 v1.3.1
+承接（[bug-fix note](../bug-fix/2026-08-25-flash-route-table-hyphen-models.md)）。
 
 ## Alternatives
 
