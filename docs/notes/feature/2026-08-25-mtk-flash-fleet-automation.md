@@ -57,17 +57,21 @@ adb reboot 目标手机                              # 手机经过 BROM(PID 200
    OOBE 页的省电策略。SOP：adb devices 认到设备且进入 OOBE 后立即执行
    `/data/apk-repo/incoming/firmware/OOBE.bat` 中的命令跳过 OOBE 进主界面：
    ```text
-   adb -s <serial> root
    adb -s <serial> shell settings put secure user_setup_complete 1
    adb -s <serial> shell settings put global device_provisioned 1
    adb -s <serial> shell settings put system system_locales en-US
-   adb -s <serial> shell input keyevent 4
-   adb -s <serial> shell am start -a android.intent.action.MAIN \
-       -c android.intent.category.HOME
+   adb -s <serial> shell am force-stop com.google.android.setupwizard
+   adb -s <serial> shell input keyevent 224   # 唤醒
+   adb -s <serial> shell input keyevent 82    # 解锁
+   adb -s <serial> shell input keyevent 3     # HOME
    ```
+   前置条件：等 `sys.boot_completed=1` 再执行——get-state==device 在 DA
+   混合态就会放行，命令发太早会被初始化完成的 SUW 抢回前台；标志位也不会
+   让已在前台的 SUW 自行退出，必须显式 force-stop。
    批量刷机的 Plan 应把该步骤编排为 flash_firmware 之后的固定一步。
-   已平台化：`oobe_skip v1.0.0`（每条命令强制 `-s <serial>` 只打目标设备，
-   与 bat 的全 host 广播语义相反；含设备等待与回读核验）。
+   已平台化：`oobe_skip v1.1.0`（每条命令强制 `-s <serial>` 只打目标设备，
+   与 bat 的全 host 广播语义相反；含 boot_completed 门、SUW 清场、
+   标志位回读核验与 ui_focus 诊断）。
 
 落地：`flash_firmware v1.3.0`（`backend/agent/scripts/flash_firmware/v1.3.0/`）。
 四个新参数（均有 `STP_FLASH_*` env 逃生键，进 hot-update fleet 白名单，
