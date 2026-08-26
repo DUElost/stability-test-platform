@@ -86,9 +86,11 @@ class TestMainWiringDefaultNormal:
         }), encoding="utf-8")
 
         monkeypatch.setenv("STP_DEVICE_SERIAL", "SER1")
-        # 显式 firmware_dir：路由不碰真实 adb；版本比对目标取 manifest
+        # 显式 firmware_dir：路由不碰真实 adb；版本比对目标取 manifest。
+        # flash_tool_dir 同理必须显式：git 外的部署目录 CI 检出没有
         monkeypatch.setenv("STP_STEP_PARAMS", json.dumps({
             "firmware_dir": str(ver_dir),
+            "flash_tool_dir": str(ver_dir),
         }))
         seen: list = []
         monkeypatch.setattr(ff, "_precheck_environment",
