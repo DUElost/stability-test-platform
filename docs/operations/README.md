@@ -9,6 +9,7 @@
 | [`production-minimum-deployment-checklist.md`](../production-minimum-deployment-checklist.md) | 生产最小部署、env、HTTPS、冒烟 |
 | [`preprod-drill-runbook.md`](../preprod-drill-runbook.md) | 预发布逐条验收 |
 | [`acceptance/00-platform-smoke.md`](../acceptance/00-platform-smoke.md) | 验收 ID 与测试映射 |
+| [`new-specialty-onboarding-runbook.md`](./new-specialty-onboarding-runbook.md) | 新建专项 / 适配新项目：项目登记 → 脚本入库 → 建 Plan → 试运行 → 上线检查单（G21） |
 
 ---
 

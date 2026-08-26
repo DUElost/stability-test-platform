@@ -22,6 +22,7 @@
 | 查后端 / 前端 / Agent | [`design/02`](./design/02-backend.md) · [`03`](./design/03-frontend.md) · [`04`](./design/04-agent.md) |
 | 查数据模型 · 实时与后台 | [`design/05`](./design/05-data-model.md) · [`06`](./design/06-realtime-and-background.md) |
 | 查 Agent 版本门禁与热更新 | [`operations/agent-version-and-hot-update.md`](./operations/agent-version-and-hot-update.md) |
+| 查新建专项 / 适配新项目怎么做 | [`operations/new-specialty-onboarding-runbook.md`](./operations/new-specialty-onboarding-runbook.md) |
 | 查产品范围 | [`prd/00-platform-overview.md`](./prd/00-platform-overview.md) |
 | 查架构决策 | [`adr/README.md`](./adr/README.md) |
 | 查上线清单 | [`operations/README.md`](./operations/README.md) |

@@ -24,6 +24,7 @@
 | `CORS_ORIGINS` | 前端 Origin 白名单（须与浏览器访问地址完全一致） |
 | `STP_ALLOW_REGISTER` | 公开注册；生产默认关闭 |
 | `STP_METRICS_AUTH_REQUIRED` | `/metrics` 鉴权（建议生产 `1`） |
+| `STP_API_DOCS_ENABLED` | `/docs` `/redoc` `/openapi.json` 开关，缺省开；白名单 `1/true/yes/on` 为开、其余值一律关。控制面对公网开放前置 `0`（G22）；脚本客户端走 `/auth/token` bearer 不受影响 |
 | `STP_ENABLE_INPROCESS_SAQ` | `1`=进程内 SAQ Worker；`0`=仅 producer（enqueue），需外部 worker 同队列消费（ADR-0026 P0） |
 | `DEVICE_SNAPSHOT_INTERVAL` | 心跳硬件字段降采样间隔秒（默认 30） |
 | `STP_HEARTBEAT_INTERVAL_BASE` / `_MIN` / `_MAX` | 控制面建议 Agent 心跳周期（随在线设备数缓增） |
