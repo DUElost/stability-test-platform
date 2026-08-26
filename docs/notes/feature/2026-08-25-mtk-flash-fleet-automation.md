@@ -1,6 +1,8 @@
 # MTK 批量刷机链路（SPFT Linux console）——可行性结论与环境前置条件
 
-Status: implemented（flash_firmware v1.3.0）
+Status: implemented（flash_firmware v1.3.3；v1.3.0–v1.3.3 四个真机发现全部
+闭环，2026-08-26 .66 默认参数端到端验收通过：attempt 1 抓中 BROM、
+Download Succeeded @36.10MB/s、刷后核验一致、总耗时 154.55s）
 Class: feature
 
 ## Decision
@@ -47,6 +49,20 @@ adb reboot 目标手机                              # 手机经过 BROM(PID 200
    （连 unauthorized 都不显示）。手动开一次 USB 调试即持久生效（实测重启
    105s 自动在线）。根治需固件组在 prop.default 加
    `persist.sys.usb.config=adb`。
+6. **OOBE 界面静置会自动关机（2026-08-26 实测）**：刷完机后手机停在 OOBE
+   首页，长时间亮屏无操作会自行关机——表现为「手机无故掉出 adb」，实为
+   OOBE 页的省电策略。SOP：adb devices 认到设备且进入 OOBE 后立即执行
+   `/data/apk-repo/incoming/firmware/OOBE.bat` 中的命令跳过 OOBE 进主界面：
+   ```text
+   adb -s <serial> root
+   adb -s <serial> shell settings put secure user_setup_complete 1
+   adb -s <serial> shell settings put global device_provisioned 1
+   adb -s <serial> shell settings put system system_locales en-US
+   adb -s <serial> shell input keyevent 4
+   adb -s <serial> shell am start -a android.intent.action.MAIN \
+       -c android.intent.category.HOME
+   ```
+   批量刷机的 Plan 应把该步骤编排为 flash_firmware 之后的固定一步。
 
 落地：`flash_firmware v1.3.0`（`backend/agent/scripts/flash_firmware/v1.3.0/`）。
 四个新参数（均有 `STP_FLASH_*` env 逃生键，进 hot-update fleet 白名单，
