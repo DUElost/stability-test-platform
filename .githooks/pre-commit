@@ -109,6 +109,23 @@ while IFS= read -r file; do
   fi
 done <<< "$staged"
 
+# ── 检查 4:已发布脚本版本不可变(ADR-0020)──
+#
+# CI 的 check-script-version-immutability.py 是合入端兜底;这里是提交现场拦截
+# —— 手滑/AI 会话改坏已发布版本目录时秒级报错,而非等 push 后才红。
+# 只拦 HEAD 中已存在文件的修改/删除(diff-filter=MD);新建版本目录(A)是合法
+# 路径(改契约一律走新版本),不受影响。2026-07-31 ef8808e ruff --fix 原地改写
+# 致 18/27 行 script 的 DB sha 永久失配、全平台派发中断,即此规则要拦的形态。
+published_bad="$(git diff --cached --name-only --diff-filter=MD \
+  -- 'backend/agent/scripts/*/v*/*' || true)"
+if [ -n "$published_bad" ]; then
+  echo "[BLOCK] 已发布脚本版本目录内容不可变(ADR-0020):"
+  printf '%s\n' "$published_bad" | sed 's/^/        M\/D: /'
+  echo "        改脚本契约一律新建版本: POST /api/v1/scripts/{name}/versions"
+  echo "        (确属例外的逃生阀: git commit --no-verify,并需说明 rebaseline 理由)"
+  failed=1
+fi
+
 if [ "$failed" = "1" ]; then
   echo
   echo "Commit blocked by EOL / blank-line pollution guard."

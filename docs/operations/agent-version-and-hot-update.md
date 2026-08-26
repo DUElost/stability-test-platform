@@ -77,3 +77,18 @@ CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_ag
 | 校验 / schema 不一致 | 热更新是否带上 `pipeline_schema.json`（见 2026-07 host-update 修复） |
 
 环境变量细节：[../development/environment-variables.md](../development/environment-variables.md)。
+
+---
+
+## 5. 回滚与演练记录（2026-08-26 裁决）
+
+- **回滚形态**：对目标 host 重跑指向旧 code revision 的热更新（同一流程），`.env`
+  键值不动。回滚路径与本文件 §2 是同一条路——它就是「最被练过的路径」。
+- **演练策略**：部署是偶发手工动作而非持续交付，不设主动演练排期；**每次真实
+  回滚完成后在本节末尾追加一行记录**（日期 / 触发原因 / 波及 host 数 / 耗时 /
+  是否一次成功）。历史积累即演练库；出现「连续两次回滚不顺」再升级为正式演练
+  排期。
+
+| 日期 | 原因 | hosts | 耗时 | 一次成功 |
+|------|------|-------|------|----------|
+| （暂无——首次真实回滚后填写） | | | | |

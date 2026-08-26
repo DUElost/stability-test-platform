@@ -39,7 +39,8 @@ Class: feature | bug-fix | simplification | architecture | process | testing
 ## 正文四节
 
 ```text
-## Decision         决定了什么（写现状与事实，不写叙事）
+## Decision         决定了什么（写现状与事实，不写叙事；含影响面与涉及文件，
+                   使其同时充当该变更的轻量 plan 记录——见 synthesis D2）
 ## Alternatives     放弃的备选 + 代价
 ## Verification     验证手段（测试名 / 命令 / 门禁）
 ## Revisit          何时应重议（可选）

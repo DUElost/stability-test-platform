@@ -36,7 +36,11 @@ node_modules/
 *.log
 venv-wsl/
 /logs/
-.claude/
+# Claude Code：整目录本地态不入库；仅放行项目共享护栏（settings.json）与
+# skill 试点目录。settings.local.json 仍被 .claude/* 覆盖忽略。
+.claude/*
+!.claude/settings.json
+!.claude/skills/
 # UI 原型归档（HTML/PNG 设计稿，非规范；本地保留，移出 git 跟踪）
 docs/archive/prototypes/
 *.db-wal
