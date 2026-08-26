@@ -52,7 +52,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **不变量摘要** | [`../CLAUDE.md`](../CLAUDE.md) | 架构不变量、关键约定、状态机摘要 |
 | **Living 审查** | [`reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md) | 设备日志流转框架 + 缺陷/DoD/落地顺序（v3.0，阶段 0 ✅）；前一版快照 [`reviews/PROJECT_REVIEW_2026-08-09_previous.md`](./reviews/PROJECT_REVIEW_2026-08-09_previous.md) |
 | **Living 审查** | [`reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md`](./reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md) | 多项目并存需求 + 生产数据基准 + 缺口核对 G1–G14 + 落地顺序（ADR-0029 背景分析） |
-| **Living 审查** | [`reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md`](./reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) | MTBF 多用例平台化研究（runtask.xml 实测 + 平台缺口 G1–G5 + 候选形态 A/B/C + 设计草图；[ADR-0030](../adr/ADR-0030-multi-case-suite-management.md) 背景分析，Accepted v1.8） |
+| **Living 审查** | [`reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md`](./reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) | MTBF 多用例平台化研究（runtask.xml 实测 + 平台缺口 G1–G5 + 候选形态 A/B/C + 设计草图；[ADR-0030](./adr/ADR-0030-multi-case-suite-management.md) 背景分析，Accepted v1.8） |
 | **Living 审查** | [`reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_317ef8ab.md`](./reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_317ef8ab.md) | ADR-0029/0030 实现综合评审（路线图 78/48、再设计建议、差距 6 项；resume `317ef8ab`） |
 | **Living 审查** | [`reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_245a4531.md`](./reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_245a4531.md) | ADR-0029/0030 实现综合评审（落地度 ≈85%/60%、评分 8/6.5、生产库实测 + file:line 证据；resume `245a4531`） |
 | **Living 审查** | [`reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_unattributed.md`](./reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_unattributed.md) | ADR-0029/0030 实现独立评审（快照缺口 + 排期反转 + 绑定上移；来源未署名，原 `4a7c2d91` 占位已更正） |
@@ -89,6 +89,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`2026-08-mtbf-p1-suite-management.md`](./design/2026-08-mtbf-p1-suite-management.md) | MTBF 专项 P1 设计：test_suite/test_case 实体 + 外部管理面 + D2/D3b 派发门禁（ADR-0030 D6 P1，P1a/P1b 已实施） |
 | [`2026-08-project-registry-p25-mapping-workbench.md`](./design/2026-08-project-registry-p25-mapping-workbench.md) | ADR-0029 P2.5：登记簿 = Fleet 事实 + 人工 USER 项目 + `match_models` 精确映射 |
 | [`2026-08-honor-flash-firmware-routing.md`](./design/2026-08-honor-flash-firmware-routing.md) | Honor 刷机：固件指纹路由 + NFS manifest 布局 + 刷前/刷后版本核验 + v1.3.0 多设备门控/重试环/环境预检（方向 A，已实施） |
+| [`2026-08-governance-surface-protection.md`](./design/2026-08-governance-surface-protection.md) | 治理面防护两层方案：L0 结构门禁 S1–S5 + 本地护栏（pre-commit/settings deny/skill 试点）+ backstop 机械摘要 + L1 按需 evals（synthesis C-G1 落地，含校准教训与重议条件） |
 | [`design/mockups/plan-execute-v2/`](./design/mockups/plan-execute-v2/) | Plan Execute V2 静态预览（§8 视觉基准） |
 
 ---

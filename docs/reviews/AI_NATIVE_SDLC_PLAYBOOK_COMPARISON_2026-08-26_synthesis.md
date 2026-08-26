@@ -72,15 +72,19 @@
 
 ## 4. 最终行动清单
 
-| 优先级 | 行动 | 验收标准 | 对应缺口 |
-|--------|------|----------|----------|
-| **P0** | 最小 continuous evals（10–20 条契约冒烟：@import 语法、表名单数、Pydantic v2、唯一 action 类型等），挂治理面文件 paths 触发或 backstop | 治理面 PR 在无人工干预下被 eval 拦截一次故意注入的错误 | C-G1（含 D1 的守 gate 之义） |
-| **P1** | project-level Claude Code hooks deny 高危路径 | AI 会话内直改被即时拒绝；CI 门禁保留 | C-G3 |
-| **P1** | pr-agent non-security findings 修复闭环（AI 推修复分支，push 自动复评把关） | 一个含 nit 的 PR 由 AI 修复推送并通过复评合入 | C-G2 |
-| **P1** | 规划意图轻量承载（D2 形态）+ skills 化指针试点（D4 条件） | 抽查 5 个 feature PR 可定位 plan 意图；一条既有约定以 skill 形态被加载且不复制全文 | C-G6 / C-G7 部分 |
-| **P2** | backstop failure issue 附机械摘要（红灯 job + 日志摘录 + 疑似 commit）；有余力再加 `claude -p` 分诊 | 新开 issue body 含三要素 | C-G4 |
-| **P2** | DORA 近似（PR 生命周期 + backstop 失败频次）+ hot-update 回滚季度演练记录 | 月度数字一条 GitHub API 查询可得；演练记录归档 docs/operations | C-G5 |
-| **P2** | 失败测试优先约定机制化评估 | 有明确结论（采纳 hook 或显式放弃并入本页） | C-G7 |
+> 2026-08-26 逐项审计后收敛（博客前提依赖项已剔除/降级；四项待决点经用户裁决，
+> 见设计文档 [2026-08-governance-surface-protection.md](../design/2026-08-governance-surface-protection.md) §8）。
+
+| 优先级 | 行动 | 状态 | 对应缺口 |
+|--------|------|------|----------|
+| **P0** | L0 结构门禁（S1–S5 阻塞进 ci.yml lint 与 check:quick/pr）+ S6 信息行；L1 十二条契约 evals 为按需诊断（`check:gov` 手跑，不进 CI） | ✅ 已落地（门禁化前提不成立故降挂载；重议条件见 Revisit） | C-G1 |
+| P1 | 已发布脚本版本 M/D 的 pre-commit 提交现场拦截（引擎中立）+ `.claude/settings.json` 凭据写保护 | ✅ 已落地 | C-G3 |
+| P1 | 规划意图轻量承载：Agent Note Decision 节兼作轻量 plan 记录（模板半句微调）；skill 低风险试点 test-env-self-check | ✅ 已落地（用户裁决） | C-G6 / C-G7 部分 |
+| 观察 | pr-agent non-security findings 修复闭环 → 收集 1–2 月处置数据再议 | 👁 观察项（用户裁决） | C-G2 |
+| P2 | backstop failure issue 附机械摘要三要素（**砍** claude -p 分诊，扩展位保留） | ✅ 已落地 | C-G4 |
+| 不建 | DORA 近似采集——需要时按查询口径现查 | 🚫 用户裁决暂不建 | C-G5 |
+| 降级 | 回滚演练改为「真实回滚即演练」：runbook §5 追加记录表 | ✅ 已落地（用户裁决） | C-G5 |
+| 负向 | 失败测试优先机制化（C-G7）→ 并入「刻意不追」，出现「为过测改测」事故再翻案 | 🚫 正式负向决策 | C-G7 |
 
 ---
 
@@ -107,3 +111,4 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-08-26 | 初版：五稿输入收敛、canonical C-G1–C-G7 映射、D1–D5 裁决固化、「刻意不追」正式采纳、最终行动清单 |
+| 2026-08-26（晚） | 逐项审计：区分〔证〕/〔前〕依据并剔除博客前提依赖项（L1 门禁化→按需、分诊→机械摘要、C-G7→负向决策）；四项用户裁决（skill 低风险试点 / findings 观察项 / 回滚演练=真实即演练 / DORA 暂不建）；C-G1 两层方案落地，详见 `design/2026-08-governance-surface-protection.md` |
