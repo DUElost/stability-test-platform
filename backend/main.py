@@ -216,7 +216,32 @@ async def lifespan(app: FastAPI):
         await async_engine.dispose()
 
 
-_fastapi_app = FastAPI(title="Stability Test Platform", lifespan=lifespan)
+def _api_docs_enabled(raw: str | None = None) -> bool:
+    """G22: STP_API_DOCS_ENABLED 解析，缺省开启（现状行为不变）。
+
+    与 core/security.py / api/routes/metrics.py 同款白名单语义
+    （1/true/yes/on）；未设置或空串视为未配置 → 缺省开。
+    /docs、/redoc、/openapi.json 属同一暴露面：schema 本身就描述了全部
+    端点与鉴权形态，只遮 HTML 不删 openapi.json 没有意义，三者必须同开关。
+    """
+    value = ((os.getenv("STP_API_DOCS_ENABLED") if raw is None else raw) or "").strip().lower()
+    return not value or value in {"1", "true", "yes", "on"}
+
+
+_API_DOCS = _api_docs_enabled()
+if not _API_DOCS:
+    logger.info(
+        "api_docs_disabled_by_env — /docs /redoc /openapi.json are off "
+        "(STP_API_DOCS_ENABLED); bearer token flow at POST /api/v1/auth/token is unaffected"
+    )
+
+_fastapi_app = FastAPI(
+    title="Stability Test Platform",
+    lifespan=lifespan,
+    docs_url="/docs" if _API_DOCS else None,
+    redoc_url="/redoc" if _API_DOCS else None,
+    openapi_url="/openapi.json" if _API_DOCS else None,
+)
 fastapi_app = _fastapi_app  # Exposed for tests and tooling
 
 sio_server = create_sio_server()
