@@ -34,6 +34,8 @@ jobs:
     timeout-minutes: 240
     outputs:
       ci_conclusion: ${{ steps.wait.outputs.conclusion }}
+      ci_run_id: ${{ steps.ensure.outputs.run_id }}
+      main_sha: ${{ steps.ensure.outputs.main_sha }}
     # actions: write —— gh workflow run / 读取运行状态；
     # contents: write —— 删除远端分支 ref；
     # pull-requests: read —— 列出已合并 PR 的 head 分支。
@@ -281,6 +283,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CI_RUN_ID: ${{ needs.verify-and-cleanup.outputs.ci_run_id }}
+          MAIN_SHA: ${{ needs.verify-and-cleanup.outputs.main_sha }}
         run: |
           set -euo pipefail
           gh label create "ci/backstop-failed" --repo "$REPO" --color d73a4a \
@@ -293,10 +297,30 @@ jobs:
               "repos/$REPO/issues?labels=ci%2Fbackstop-failed&state=open" \
               --jq '[.[] | select(.pull_request == null)][0].number // ""'
           )"
-          body="主 CI 兜底检查失败：${RUN_URL}
-
+          # ── 机械摘要三要素（纯 GH API；有意不做 LLM 分诊，见
+          # docs/design/2026-08-governance-surface-protection.md §backstop）：
+          # ① 红灯 job + 失败步骤名；② CI run 日志链接；③ 疑似变更区间 compare。
+          ci_run_url="${{ github.server_url }}/$REPO/actions/runs/$CI_RUN_ID"
+          failed_jobs="$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID/jobs?per_page=100" \
+            --jq '[.jobs[]
+                   | select(.conclusion == "failure")
+                   | "- **\(.name)** → 失败步骤: "
+                     + ([.steps[]? | select(.conclusion == "failure") | .name] | join(", "))] | join("\n")'
+            | head -20)"
+          [ -n "$failed_jobs" ] || failed_jobs="(未取到 job 明细——疑似基础设施错误或运行已被清理)"
+          suspect_line="无（无法定位区间）"
+          parent_sha="$(gh api "repos/$REPO/commits/$MAIN_SHA" --jq '.parents[0].sha' 2>/dev/null || true)"
+          if [ -n "${parent_sha:-}" ]; then
+            suspect_line="${{ github.server_url }}/$REPO/compare/${parent_sha:0:10}...${MAIN_SHA:0:10}"
+          fi
+          body="主 CI 兜底检查失败：${ci_run_url}（兜底工作流: ${RUN_URL}）
           main 全量 CI（backend-test / frontend-check / docker-build）未通过，
-          合并分支清理已跳过。修复后下一次全量通过会由本工作流自动关闭此 issue。"
+          合并分支清理已跳过。修复后下一次全量通过会由本工作流自动关闭此 issue。
+          ### 红灯 job
+          ${failed_jobs}
+          ### 排查入口
+          - 疑似变更区间: ${suspect_line}
+          - 完整日志: ${ci_run_url}"
           if [ -z "$existing" ]; then
             gh issue create --repo "$REPO" \
               --title "Main CI backstop failed" \

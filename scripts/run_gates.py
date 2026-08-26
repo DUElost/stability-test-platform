@@ -4,6 +4,7 @@
 用法:
     python scripts/run_gates.py check:quick    # 最快一轮（纯静态，含 knip）
     python scripts/run_gates.py check:pr       # 推送前默认：与 PR CI 现有检查逐项重叠
+    python scripts/run_gates.py check:gov      # 治理面专项（结构 + 行为 evals）
     python scripts/run_gates.py check:full     # 夜间全量：与 main 全量 CI 一致
     python scripts/run_gates.py --list
 
@@ -78,6 +79,20 @@ GATES = {
         ROOT,
         None,
     ),
+    # 治理面结构门禁（synthesis C-G1 L0）：@import 行内失效等事故的确定性拦截。
+    # 纯文本检查、毫秒级；--self-test 正反样例自证见该脚本抬头。
+    "gov-surface": (
+        f"{PY} tools/dev/check_governance_surface.py --check",
+        ROOT,
+        None,
+    ),
+    # 治理面行为 evals（L1，按需诊断，不进 quick/pr——见
+    # docs/design/2026-08-governance-surface-protection.md 的挂载裁决）。
+    "gov-evals": (
+        f"{PY} tools/dev/run_gov_evals.py",
+        ROOT,
+        None,
+    ),
     "agent-tests": (
         f"{PY} -m pytest backend/agent/tests/ -q",
         ROOT,
@@ -122,11 +137,13 @@ GATES = {
 }
 
 PROFILES = {
-    "check:quick": ["ruff", "eslint", "tsc", "knip", "compileall"],
+    "check:quick": ["ruff", "eslint", "tsc", "knip", "compileall", "gov-surface"],
     "check:pr": [
         "ruff", "eslint", "tsc", "knip", "compileall",
-        "pollution", "immutability", "agent-tests",
+        "pollution", "immutability", "gov-surface", "agent-tests",
     ],
+    # 治理面专项：结构门禁 + 行为 evals（后者需 claude CLI，按需手跑）
+    "check:gov": ["gov-surface", "gov-evals"],
     "check:full": None,  # = 全部，按 GATES 顺序
 }
 

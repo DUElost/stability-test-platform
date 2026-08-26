@@ -160,6 +160,13 @@ jobs:
           python tools/dev/check-script-version-immutability.py \
             --base "origin/${{ github.base_ref || github.ref_name }}"
 
+      # 治理面结构门禁（synthesis C-G1 L0）：CLAUDE.md @import 行内失效类事故的
+      # 确定性拦截 + pr-agent 防绕过机制锚点守卫。检查器自身由 --self-test
+      # 正反样例守护；S 规则明细见 tools/dev/check_governance_surface.py 抬头。
+      - name: 治理面结构检查(C-G1 L0)
+        run: |
+          python tools/dev/check_governance_surface.py --check
+
   # ── PR 轻量检查 ──────────────────────────────────────────────────────────
   # pull_request 只跑 lint（上方，两边都跑）+ 下面四个 job（pr-agent-tests /
   # pr-backend-test / pr-typecheck / pr-compileall）；
