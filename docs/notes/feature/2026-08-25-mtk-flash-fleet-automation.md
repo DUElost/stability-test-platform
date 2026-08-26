@@ -48,7 +48,8 @@ adb reboot 目标手机                              # 手机经过 BROM(PID 200
    （MLD-LX3 V552AA 系列）build.prop 未提供默认值 → 首启 adbd 不启动
    （连 unauthorized 都不显示）。手动开一次 USB 调试即持久生效（实测重启
    105s 自动在线）。根治需固件组在 prop.default 加
-   `persist.sys.usb.config=adb`。
+   `persist.sys.usb.config=adb`——已正式立项：
+   [firmware-requests/2026-08-26](../../operations/firmware-requests/2026-08-26-persist-sys-usb-config-adb.md)。
 6. **OOBE 界面静置会自动关机（2026-08-26 实测）**：刷完机后手机停在 OOBE
    首页，长时间亮屏无操作会自行关机——表现为「手机无故掉出 adb」，实为
    OOBE 页的省电策略。SOP：adb devices 认到设备且进入 OOBE 后立即执行
@@ -63,6 +64,8 @@ adb reboot 目标手机                              # 手机经过 BROM(PID 200
        -c android.intent.category.HOME
    ```
    批量刷机的 Plan 应把该步骤编排为 flash_firmware 之后的固定一步。
+   已平台化：`oobe_skip v1.0.0`（每条命令强制 `-s <serial>` 只打目标设备，
+   与 bat 的全 host 广播语义相反；含设备等待与回读核验）。
 
 落地：`flash_firmware v1.3.0`（`backend/agent/scripts/flash_firmware/v1.3.0/`）。
 四个新参数（均有 `STP_FLASH_*` env 逃生键，进 hot-update fleet 白名单，
