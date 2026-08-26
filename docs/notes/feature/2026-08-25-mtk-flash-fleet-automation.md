@@ -43,12 +43,14 @@ adb reboot 目标手机                              # 手机经过 BROM(PID 200
      `KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", MODE="0666"`：
      否则 BROM 握手期 `Create COM File failed (EACCES)`；
    - adb server 端口按 host 探测（5037/5039 并存过），不要硬编码。
-5. **刷机后首次开机无 adb 是预期行为**：firmware-upgrade 会格式化 userdata，
-   `persist.sys.usb.config` 与 `adb_enabled` 存放于 /data 且本固件
-   （MLD-LX3 V552AA 系列）build.prop 未提供默认值 → 首启 adbd 不启动
-   （连 unauthorized 都不显示）。手动开一次 USB 调试即持久生效（实测重启
-   105s 自动在线）。根治需固件组在 prop.default 加
-   `persist.sys.usb.config=adb`——已正式立项：
+5. **刷后 adb 在线情况（2026-08-26 串行实验修正，N=2）**：当前 user_root
+   固件（MLD-LX3 V552AA 系列）刷完 firmware-upgrade 后 **adbd 随首启自动
+   在线**（~10s 内 get-state=device、boot_completed=1）——早前「连
+   unauthorized 都不显示」的记录不成立于本固件（ro.secure=0 时 adbd 不受
+   persist.sys.usb.config 约束；该结论可能来自非 root 固件样本）。真正的
+   后置问题只有一个：手机停在 OOBE 首页且静置会自行关机（见 §6）。
+   `persist.sys.usb.config=adb` 的固件组需求因此降级保留——若未来切换
+   非 root 测试固件需重新提出：
    [firmware-requests/2026-08-26](../../operations/firmware-requests/2026-08-26-persist-sys-usb-config-adb.md)。
 6. **OOBE 界面静置会自动关机（2026-08-26 实测）**：刷完机后手机停在 OOBE
    首页，长时间亮屏无操作会自行关机——表现为「手机无故掉出 adb」，实为
