@@ -1,6 +1,6 @@
 # 文档地图（Documentation Map）
 
-> **最后更新**：2026-08-12  
+> **最后更新**：2026-08-26  
 > **文档中心**：[`README.md`](./README.md)  
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
@@ -57,6 +57,12 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **Living 审查** | [`reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_245a4531.md`](./reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_245a4531.md) | ADR-0029/0030 实现综合评审（落地度 ≈85%/60%、评分 8/6.5、生产库实测 + file:line 证据；resume `245a4531`） |
 | **Living 审查** | [`reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_unattributed.md`](./reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_unattributed.md) | ADR-0029/0030 实现独立评审（快照缺口 + 排期反转 + 绑定上移；来源未署名，原 `4a7c2d91` 占位已更正） |
 | **Living 审查** | [`reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_fcd9fe46.md`](./reviews/ADR_0029_0030_IMPLEMENTATION_REVIEW_2026-08-24_fcd9fe46.md) | ADR-0029/0030 实现综合评审（独立核验评分 7.5/6.5、快照不变量主张、fleet 单值旋钮正确性悬崖、`plan.suite_id` 双模式绑定；resume `fcd9fe46`） |
+| **Living 审查** | [`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_claude-code.md`](./reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_claude-code.md) | Anthropic《AI-Native SDLC Playbook》× 本项目 CI/CD 与 AI 治理对照（15 维度矩阵 + 缺口 G1–G5 + P0/P1/P2 建议 + 多 agent 交叉分析指引；产出方 Claude Code） |
+| **Living 审查** | [`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_cursor.md`](./reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_cursor.md) | 同上题并行评审（六阶段成熟度 + Plan/Design 产物链缺口 +「刻意不追」清单 + 交叉分析指引；产出方 Cursor Agent / Auto） |
+| **Living 审查** | [`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_codebuddy.md`](./reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_codebuddy.md) | 同上题并行评审（原文双源交叉核对 + 独有 G6 机器可消费工件缺口 + §7 与 claude-code 版交叉比对；产出方 CodeBuddy） |
+| **Living 审查** | [`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_claude-code-2.md`](./reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_claude-code-2.md) | 同上题第二轮评审（三方交叉比对与裁决：G6 降级 P1、先拦截后赋能、gate 单点依赖论证 + DOC-MAP 引用完整性发现；产出方 Claude Code 第二轮） |
+| **Living 审查** | [`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_composer.md`](./reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_composer.md) | 同上题并行评审（六阶段成熟度 + 三层治理剖面 §4 + G1–G6 主题并表指引 + 与 claude-code-2「先拦截后赋能」对齐；产出方 Cursor Composer） |
+| **Living 审查** | [`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md`](./reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md) | 同上题五稿总汇（canonical C-G1–C-G7 编号映射 + 裁决固化 D1–D5 + 「刻意不追」正式采纳 + 最终行动清单 P0–P2 + 独立性折扣声明；产出方 Claude Code 综合评判轮） |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
 
