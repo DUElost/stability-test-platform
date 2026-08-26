@@ -1,7 +1,10 @@
 # 对固件组的需求：prop.default 增加 `persist.sys.usb.config=adb`
 
 - 日期：2026-08-26
-- 状态：**待固件组评估**
+- 状态：**暂缓——实测现状已满足验收标准**。2026-08-26 串行实验（N=2，
+  MLD-LX3 user_root 固件）显示 firmware-upgrade 刷完 ~10s 内 adb 自动在线
+  （ro.secure=0 时 adbd 不受 persist.sys.usb.config 约束）。本文档保留：
+  若未来切换非 root 测试固件，此需求重新生效。
 - 影响机型：MLD-LX3（V552AA 系列）稳定性测试固件；后续 ELA 测试固件同要求
 - 提出方：稳定性测试平台组
 
