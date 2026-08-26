@@ -7,9 +7,14 @@ export const plans = {
   listSpecialties: () =>
     unwrapApiResponse<Specialty[]>(apiClient.get('/specialties')),
 
-  list: (skip = 0, limit = 50, projectKey?: string) =>
+  list: (skip = 0, limit = 50, projectKey?: string, specialtyKey?: string) =>
     unwrapApiResponse<Plan[]>(apiClient.get('/plans', {
-      params: { skip, limit, ...(projectKey ? { project_key: projectKey } : {}) },
+      params: {
+        skip,
+        limit,
+        ...(projectKey ? { project_key: projectKey } : {}),
+        ...(specialtyKey ? { specialty_key: specialtyKey } : {}),
+      },
     })),
 
   get: (id: number) =>

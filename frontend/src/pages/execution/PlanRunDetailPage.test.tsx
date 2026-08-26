@@ -122,6 +122,7 @@ beforeEach(() => {
     failure_threshold: 0.05,
     run_type: 'MANUAL',
     triggered_by: 'tester@local',
+    project_key: 'MLD',
     started_at: new Date(Date.now() - 90_000).toISOString(),
     ended_at: null,
     run_context: {
@@ -372,6 +373,8 @@ describe('PlanRunDetailPage', () => {
     await waitFor(() =>
       expect(screen.getByTestId('plan-run-status-pill')).toHaveTextContent('RUNNING'),
     );
+    // #447：hero 显示归属项目 key（plan_run 快照归属）
+    expect(screen.getByTitle('归属项目 MLD')).toBeInTheDocument();
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('健康预检');
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-202');
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('1/2');
