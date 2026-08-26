@@ -16,9 +16,38 @@ import { Plus, Edit, Trash2, Search, FileText, Play } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
+import { FORM } from '@/design-system';
 import { STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatLocalDate } from '@/utils/format';
+
+/** ADR-0029 D6（#448 半段）：专项筛选下拉，字典源 GET /specialties（与编辑器共用缓存）。 */
+function SpecialtyFilterSelect({
+  value,
+  onChange,
+}: {
+  value: string | undefined;
+  onChange: (value: string | undefined) => void;
+}) {
+  const { data: specialties } = useQuery({
+    queryKey: ['specialties'],
+    queryFn: () => api.plans.listSpecialties(),
+  });
+
+  return (
+    <select
+      value={value ?? 'all'}
+      onChange={(e) => onChange(e.target.value === 'all' ? undefined : e.target.value)}
+      className={`${FORM.select} w-36`}
+      data-testid="plan-specialty-filter"
+    >
+      <option value="all">全部专项</option>
+      {specialties?.map((s) => (
+        <option key={s.key} value={s.key}>{s.display_name}</option>
+      ))}
+    </select>
+  );
+}
 
 export default function PlanListPage() {
   useDocumentTitle('Plan 编排');
@@ -27,8 +56,9 @@ export default function PlanListPage() {
   const confirmDialog = useConfirm();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
-  // ADR-0029：页面级项目筛选（无全局选择器/跨页跟随）
+  // ADR-0029：页面级项目/专项筛选（无全局选择器/跨页跟随）
   const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
+  const [specialtyKey, setSpecialtyKey] = useState<string | undefined>(undefined);
 
   const {
     data: plans,
@@ -37,8 +67,8 @@ export default function PlanListPage() {
     error,
     refetch,
   } = useQuery({
-    queryKey: planKeys.list(100, projectKey),
-    queryFn: () => api.plans.list(0, 100, projectKey),
+    queryKey: planKeys.list(100, projectKey, specialtyKey),
+    queryFn: () => api.plans.list(0, 100, projectKey, specialtyKey),
   });
 
   const isProject404 = isError && toApiError(error).status === 404;
@@ -81,12 +111,15 @@ export default function PlanListPage() {
         title="Plan 编排"
         subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链"
         action={
-          <ProjectFilterSelect
-            value={projectKey}
-            onChange={setProjectKey}
-            className="w-52"
-            testId="plan-project-filter"
-          />
+          <div className="flex items-center gap-2">
+            <ProjectFilterSelect
+              value={projectKey}
+              onChange={setProjectKey}
+              className="w-52"
+              testId="plan-project-filter"
+            />
+            <SpecialtyFilterSelect value={specialtyKey} onChange={setSpecialtyKey} />
+          </div>
         }
       />
 

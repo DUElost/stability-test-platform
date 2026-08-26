@@ -20,6 +20,7 @@ import {
 import { ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDateTimeShort, formatDurationSeconds } from '@/utils/format';
+import { ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
 import { PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
 
 // 状态 → 容器背景/边框（与 StatusBadge plan-run 语义对齐）
@@ -117,6 +118,8 @@ export default function PlanRunHero({
           <span className="font-semibold text-primary">
             {planName ? `Plan #${run?.plan_id} · ${planName}` : `Plan #${run?.plan_id ?? '—'}`}
           </span>
+          {/* ADR-0029（#447）：归属项目 key（plan_run 快照——Plan 改归属不影响历史 Run 归因） */}
+          <ProjectKeyBadge projectKey={run?.project_key} className="ml-1.5" />
         </div>
         <div className={cn('text-sm font-bold', TEXT.heading)}>
           PlanRun{' '}

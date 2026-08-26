@@ -45,12 +45,18 @@ export function ProjectFilterSelect({
   );
 }
 
-/** 项目 key 标签（列表行内小 badge，复用于四个页面）。 */
-export function ProjectKeyBadge({ projectKey }: { projectKey?: string | null }) {
+/** 项目 key 标签（列表行内小 badge，复用于五个页面，含 PlanRun 详情 Hero）。 */
+export function ProjectKeyBadge({
+  projectKey,
+  className,
+}: {
+  projectKey?: string | null;
+  className?: string;
+}) {
   if (!projectKey) return null;
   return (
     <span
-      className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+      className={`rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground ${className ?? ''}`}
       title={`归属项目 ${projectKey}`}
     >
       {projectKey}

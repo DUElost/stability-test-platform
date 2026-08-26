@@ -589,6 +589,66 @@ class TestPlanAttribution:
         assert resp.status_code == 404
 
 
+class TestPlanListFilters:
+    """ADR-0029：list 的 project_key / specialty_key 筛选（#448 半段）。
+
+    project 过滤此前无测试覆盖，本类一并补齐（含未知 key 404 语义）。
+    """
+
+    @pytest.fixture
+    def _project(self, db_session):
+        from backend.models.project import TestProject
+
+        proj = TestProject(project_key=_uniq("PRJ"), display_name="filter-target")
+        db_session.add(proj)
+        db_session.commit()
+        return proj
+
+    @pytest.fixture
+    def _specialty(self, db_session):
+        from backend.models.project import Specialty
+
+        spec = Specialty(key=_uniq("spec"), display_name="FilterSpec", sort_order=1)
+        db_session.add(spec)
+        db_session.commit()
+        return spec
+
+    def _create(self, client, auth_headers, **extra) -> dict:
+        resp = client.post("/api/v1/plans", json={
+            "name": _uniq("plan"), "steps": _minimal_steps(), **extra,
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        return resp.json()["data"]
+
+    def test_list_filters_by_project_and_specialty(
+        self, client, auth_headers, sample_script, _project, _specialty,
+    ):
+        tagged = self._create(
+            client, auth_headers,
+            project_key=_project.project_key, specialty_key=_specialty.key,
+        )
+        bare = self._create(client, auth_headers)
+
+        def _names(**params) -> set[str]:
+            resp = client.get("/api/v1/plans", params=params, headers=auth_headers)
+            assert resp.status_code == 200, resp.text
+            return {p["name"] for p in resp.json()["data"]}
+
+        assert _names(project_key=_project.project_key) == {tagged["name"]}
+        assert _names(specialty_key=_specialty.key) == {tagged["name"]}
+        assert _names(
+            project_key=_project.project_key, specialty_key=_specialty.key,
+        ) == {tagged["name"]}
+        # 无归属/无专项的 Plan 在两种筛选下都被排除
+        assert bare["name"] not in _names(project_key=_project.project_key)
+        assert bare["name"] not in _names(specialty_key=_specialty.key)
+
+    def test_list_filter_unknown_keys_404(self, client, auth_headers, sample_script):
+        for params in ({"project_key": "nope"}, {"specialty_key": "nope"}):
+            resp = client.get("/api/v1/plans", params=params, headers=auth_headers)
+            assert resp.status_code == 404, params
+
+
 class TestAppendChainTail:
     """#281 P1:原子链尾追加——单事务内锁定链尾、校验版本、创建新 Plan、
     更新 next_plan_id;冲突整体回滚,不产生孤立 Plan。"""

@@ -10,10 +10,10 @@
 export const planKeys = {
   /** Plan list queries — scoped by limit to avoid cache collision between
    *  PlanListPage (limit=100) and PlanExecutePage (limit=100).
-   *  ADR-0029：projectKey 维度（页面级筛选）。
+   *  ADR-0029：projectKey / specialtyKey 维度（页面级筛选）。
    */
-  list: (limit: number, projectKey?: string | null) =>
-    ['plans', { limit, projectKey: projectKey ?? null }] as const,
+  list: (limit: number, projectKey?: string | null, specialtyKey?: string | null) =>
+    ['plans', { limit, projectKey: projectKey ?? null, specialtyKey: specialtyKey ?? null }] as const,
 
   /** Invalidation key that matches ALL plan list queries regardless of limit.
    *  react-query partial matching: ['plans'] matches ['plans', {limit: X}].

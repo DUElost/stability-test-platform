@@ -786,6 +786,7 @@ def list_plans(
     skip: int = 0,
     limit: int = 50,
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
+    specialty_key: Optional[str] = Query(None, description="ADR-0029 D6: filter by specialty key"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -796,6 +797,11 @@ def list_plans(
             raise HTTPException(status_code=404, detail="project not found")
         plans = plans.join(TestProject, Plan.project_id == TestProject.id) \
                      .filter(TestProject.project_key == project_key)
+    if specialty_key:
+        spec = db.query(Specialty).filter(Specialty.key == specialty_key).first()
+        if spec is None:
+            raise HTTPException(status_code=404, detail="specialty not found")
+        plans = plans.filter(Plan.specialty_id == spec.id)
     plans = plans.order_by(Plan.created_at.desc())\
         .offset(skip).limit(limit).all()
 

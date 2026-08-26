@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   createPlan: vi.fn(),
   deletePlan: vi.fn(),
   listProjects: vi.fn(),
+  listSpecialties: vi.fn(),
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -26,6 +27,7 @@ vi.mock('@/utils/api', () => ({
       list: mocks.listPlans,
       create: mocks.createPlan,
       delete: mocks.deletePlan,
+      listSpecialties: mocks.listSpecialties,
     },
     // ADR-0029：项目筛选下拉（ProjectFilterSelect）依赖
     projects: { list: mocks.listProjects },
@@ -63,6 +65,9 @@ describe('PlanListPage', () => {
     mocks.listPlans.mockResolvedValue([]);
     mocks.deletePlan.mockResolvedValue({ deleted: 1 });
     mocks.listProjects.mockResolvedValue([]);
+    mocks.listSpecialties.mockResolvedValue([
+      { key: 'mtbf', display_name: 'MTBF', sort_order: 1 },
+    ]);
   });
 
   it('opens the new-plan editor without creating an empty Plan', async () => {
@@ -89,5 +94,25 @@ describe('PlanListPage', () => {
 
     await waitFor(() => expect(mocks.listPlans).toHaveBeenCalledTimes(2));
     expect(await screen.findByText('还没有 Plan')).toBeInTheDocument();
+  });
+
+  it('filters the list by specialty via the native select (#448)', async () => {
+    mocks.listPlans.mockResolvedValue([
+      { id: 1, name: 'MLD-MTBF', steps: [], created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z', specialty_key: 'mtbf' },
+      { id: 2, name: '裸 Plan', steps: [], created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z', specialty_key: null },
+    ]);
+
+    renderPage();
+    expect(await screen.findByText('MLD-MTBF')).toBeInTheDocument();
+    // 初始不传 specialty_key
+    expect(mocks.listPlans).toHaveBeenLastCalledWith(0, 100, undefined, undefined);
+
+    fireEvent.change(screen.getByTestId('plan-specialty-filter'), {
+      target: { value: 'mtbf' },
+    });
+
+    await waitFor(() =>
+      expect(mocks.listPlans).toHaveBeenLastCalledWith(0, 100, undefined, 'mtbf'),
+    );
   });
 });
