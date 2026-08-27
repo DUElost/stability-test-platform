@@ -32,12 +32,14 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const [prevModal, setPrevModal] = useState<{ open: boolean; editing: typeof editingHost }>({
-    open: isOpen,
-    editing: editingHost,
-  });
-  if (prevModal.open !== isOpen || prevModal.editing !== editingHost) {
-    setPrevModal({ open: isOpen, editing: editingHost });
+  // React 官方"adjust state when prop changes"模式：render 期对比 prev 快照并重置表单。
+  // 用「打开状态 + 编辑对象 id」作比较键（id 而非对象引用），避免父组件每次重渲染
+  // 传新 editingHost 引用而误触 reset。
+  const [prevOpen, setPrevOpen] = useState(isOpen);
+  const [prevEditingId, setPrevEditingId] = useState<string | null>(editingHost?.id ?? null);
+  if (prevOpen !== isOpen || prevEditingId !== (editingHost?.id ?? null)) {
+    setPrevOpen(isOpen);
+    setPrevEditingId(editingHost?.id ?? null);
     if (isOpen) {
       if (editingHost) {
         setFormData({

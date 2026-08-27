@@ -1,11 +1,16 @@
 import { Server } from 'lucide-react';
 import { PANEL, TEXT } from '@/design-system';
+import { InlineError } from '@/components/ui/error-state';
 import { cn } from '@/lib/utils';
 import type { WatcherAgentOpsMetrics } from '@/utils/api/types';
 
 interface Props {
   opsMetrics: WatcherAgentOpsMetrics | null | undefined;
   scanStatus?: string | null;
+  /** 来源 query 的加载/失败态：失败或加载中不再静默消失，显示占位。 */
+  isLoading?: boolean;
+  isError?: boolean;
+  onRetry?: () => void;
 }
 
 function pctBar(value: number | null | undefined, label: string) {
@@ -34,9 +39,38 @@ function pctBar(value: number | null | undefined, label: string) {
   );
 }
 
-export default function ArchiveStatusCard({ opsMetrics, scanStatus }: Props) {
-  if (!opsMetrics) {
-    return null;
+export default function ArchiveStatusCard({ opsMetrics, scanStatus, isLoading, isError, onRetry }: Props) {
+  if (isError) {
+    return (
+      <section className={PANEL.root} data-testid="archive-status-card">
+        <div className="flex items-center justify-between border-b px-4 py-2">
+          <span className={cn('flex items-center gap-1.5 text-sm font-semibold', TEXT.heading)}>
+            <Server className={cn('h-4 w-4', TEXT.subtitle)} />
+            存储运维概览
+          </span>
+        </div>
+        <div className="p-4">
+          <InlineError
+            message="存储运维数据加载失败"
+            onRetry={onRetry}
+          />
+        </div>
+      </section>
+    );
+  }
+
+  if (isLoading || !opsMetrics) {
+    return (
+      <section className={PANEL.root} data-testid="archive-status-card">
+        <div className="flex items-center justify-between border-b px-4 py-2">
+          <span className={cn('flex items-center gap-1.5 text-sm font-semibold', TEXT.heading)}>
+            <Server className={cn('h-4 w-4', TEXT.subtitle)} />
+            存储运维概览
+          </span>
+        </div>
+        <p className="px-4 py-4 text-xs text-muted-foreground">暂无数据</p>
+      </section>
+    );
   }
 
   return (

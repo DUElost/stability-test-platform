@@ -330,6 +330,9 @@ export default function PlanRunDetailPage() {
             <ArchiveStatusCard
               opsMetrics={watcherQ.data?.archive?.ops_metrics}
               scanStatus={watcherQ.data?.archive?.scan_status}
+              isLoading={watcherQ.isLoading}
+              isError={watcherQ.isError}
+              onRetry={() => void watcherQ.refetch()}
             />
 
             <DedupReportCard

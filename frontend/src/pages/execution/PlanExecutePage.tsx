@@ -17,7 +17,7 @@ import { api, ApiError, fetchAllDevices, fetchHostList, type HostActiveJob, type
 import { deviceKeys, hostKeys, jobKeys, planKeys, planRunKeys } from '@/utils/api/queryKeys';
 import { Smartphone, ExternalLink, RefreshCw, Trash2, ChevronLeft } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
-import { TEXT } from '@/design-system/tokens';
+import { ALERT_BANNER, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -227,7 +227,7 @@ export default function PlanExecutePage() {
     queryFn: () => api.plans.list(0, 500),
   });
 
-  const { data: hostsList } = useQuery({
+  const { data: hostsList, isError: hostsError, refetch: refetchHosts } = useQuery({
     queryKey: hostKeys.list(),
     queryFn: () => fetchHostList(0, 200),
   });
@@ -271,7 +271,7 @@ export default function PlanExecutePage() {
   const executableStepCount =
     selectedPlan?.steps?.filter((step) => step.enabled !== false).length ?? 0;
 
-  const { data: scriptsList } = useQuery({
+  const { data: scriptsList, isError: scriptsError, refetch: refetchScripts } = useQuery({
     queryKey: ['scripts', 'active'],
     queryFn: () => api.scripts.list(true),
     enabled: phase === 'plan' && selectedPlanId != null,
@@ -288,6 +288,8 @@ export default function PlanExecutePage() {
   const {
     data: recentPlanRuns = [],
     isLoading: recentPlanRunsLoading,
+    isError: recentRunsError,
+    refetch: refetchRecentRuns,
   } = useQuery({
     queryKey: [...planRunKeys.list(), { planId: selectedPlanId, limit: 10 }],
     queryFn: () => api.planRuns.list(0, 10, selectedPlanId!),
@@ -306,6 +308,7 @@ export default function PlanExecutePage() {
     [selectedDeviceIds],
   );
 
+  // React 官方"adjust state when prop changes"模式：previewResetKey 为稳定字符串比较。
   const previewResetKey = `${selectedPlanId}|${selectedDeviceIdsKey}`;
   const [prevPreviewResetKey, setPrevPreviewResetKey] = useState(previewResetKey);
   if (prevPreviewResetKey !== previewResetKey) {
@@ -471,6 +474,8 @@ export default function PlanExecutePage() {
     setDeviceTotal(filteredDevices.length);
   }, [filteredDevices.length, setDeviceTotal]);
 
+  // React 官方"adjust state when prop changes"模式：devicePageResetKey 为稳定字符串
+  // 比较（6 个筛选条件序列化），筛选变化时受控回到第 1 页；无引用比较问题。
   const devicePageResetKey = JSON.stringify([deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly]);
   const [prevDevicePageResetKey, setPrevDevicePageResetKey] = useState(devicePageResetKey);
   if (prevDevicePageResetKey !== devicePageResetKey) {
@@ -994,6 +999,35 @@ export default function PlanExecutePage() {
           title="发起前确认"
           subtitle="容量驾驶舱 + 近期执行感知。不承诺精确开跑时钟（挂 ADR-0026 QUEUED UI）"
         />
+      )}
+
+      {(hostsError || scriptsError || recentRunsError) && (
+        <div className="space-y-1">
+          {hostsError && (
+            <div className={cn(ALERT_BANNER.destructive, 'flex items-center justify-between px-4 py-2 text-xs')}>
+              <span>主机列表加载失败：节点名称与容量信息可能不完整。</span>
+              <button type="button" onClick={() => void refetchHosts()} className="underline underline-offset-2">
+                重试
+              </button>
+            </div>
+          )}
+          {scriptsError && (
+            <div className={cn(ALERT_BANNER.destructive, 'flex items-center justify-between px-4 py-2 text-xs')}>
+              <span>脚本列表加载失败：脚本参数默认值可能不显示。</span>
+              <button type="button" onClick={() => void refetchScripts()} className="underline underline-offset-2">
+                重试
+              </button>
+            </div>
+          )}
+          {recentRunsError && (
+            <div className={cn(ALERT_BANNER.destructive, 'flex items-center justify-between px-4 py-2 text-xs')}>
+              <span>近期执行记录加载失败：墙钟估算与去重提示可能不准确。</span>
+              <button type="button" onClick={() => void refetchRecentRuns()} className="underline underline-offset-2">
+                重试
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       <ExecuteCommandBar

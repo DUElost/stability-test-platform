@@ -526,6 +526,19 @@ export interface FileServerOverview {
   }>;
 }
 
+// ─── 系统设置概览（GET /api/v1/settings）─────────────────────────────────────
+
+export interface SystemSettings {
+  platform_name: string;
+  timezone: string;
+  database_type: string;
+  database_connected: boolean;
+  agent_heartbeat_interval_seconds: number;
+  offline_threshold_seconds: number;
+  device_offline_notification_enabled: boolean;
+  task_failure_notification_enabled: boolean;
+}
+
 // ─── Phase 2: 成功率/失败率细分 ──────────────────────────────────────────────
 
 export interface HostFailureRateItem {

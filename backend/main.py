@@ -44,6 +44,7 @@ from backend.api.routes.stats import router as stats_router
 from backend.api.routes.notifications import router as notifications_router
 from backend.api.routes.audit import router as audit_router
 from backend.api.routes.schedules import router as schedules_router
+from backend.api.routes.settings import router as settings_router
 from backend.api.routes.pipeline import router as pipeline_router
 from backend.api.routes.scripts import router as scripts_router
 from backend.api.routes.action_templates import router as action_templates_router
@@ -289,6 +290,7 @@ _fastapi_app.include_router(stats_router)
 _fastapi_app.include_router(notifications_router)
 _fastapi_app.include_router(audit_router)
 _fastapi_app.include_router(schedules_router)
+_fastapi_app.include_router(settings_router)
 _fastapi_app.include_router(pipeline_router)
 _fastapi_app.include_router(scripts_router)
 _fastapi_app.include_router(action_templates_router)

@@ -9,7 +9,8 @@ import { cn } from '@/lib/utils';
 interface UserModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (data: { username: string; password?: string; role: string }) => void;
+  /** 创建态提交；编辑态走 onUpdate（M1 死代码清理后编辑态不再传 onSubmit）。 */
+  onSubmit?: (data: { username: string; password?: string; role: string }) => void;
   onUpdate?: (data: { username?: string; password?: string; role?: string; is_active?: string }) => void;
   isSubmitting?: boolean;
   editUser?: User | null;
@@ -26,12 +27,14 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
 
   const isEditMode = !!editUser;
 
-  const [prevModal, setPrevModal] = useState<{ open: boolean; editing: typeof editUser }>({
-    open: isOpen,
-    editing: editUser,
-  });
-  if (prevModal.open !== isOpen || prevModal.editing !== editUser) {
-    setPrevModal({ open: isOpen, editing: editUser });
+  // React 官方"adjust state when prop changes"模式：render 期对比 prev 快照并重置表单。
+  // 用「打开状态 + 编辑对象 id」作比较键（id 而非对象引用），避免父组件每次重渲染
+  // 传新 editUser 引用而误触 reset。
+  const [prevOpen, setPrevOpen] = useState(isOpen);
+  const [prevEditingId, setPrevEditingId] = useState<number | null>(editUser?.id ?? null);
+  if (prevOpen !== isOpen || prevEditingId !== (editUser?.id ?? null)) {
+    setPrevOpen(isOpen);
+    setPrevEditingId(editUser?.id ?? null);
     if (isOpen) {
       if (editUser) {
         setFormData({
@@ -105,7 +108,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
         }
         onUpdate(updateData);
       } else {
-        onSubmit({
+        onSubmit?.({
           username: formData.username.trim(),
           password: formData.password,
           role: formData.role,

@@ -177,11 +177,10 @@ export default function UsersPage() {
         isSubmitting={createMutation.isPending}
       />
 
-      {/* Edit User Modal */}
+      {/* Edit User Modal：编辑态只走 onUpdate，不传 onSubmit（原 create 路径为死代码，M1 清理） */}
       <UserModal
         isOpen={!!editUser}
         onClose={() => setEditUser(null)}
-        onSubmit={(data) => createMutation.mutate({ ...data, password: data.password || '' })}
         onUpdate={handleModalUpdate}
         isSubmitting={updateMutation.isPending}
         editUser={editUser}

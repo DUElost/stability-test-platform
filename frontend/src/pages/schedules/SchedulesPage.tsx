@@ -37,12 +37,22 @@ const DEFAULT_FORM: ScheduleForm = {
   enabled: true,
 };
 
-function parseDeviceIds(input: string): number[] {
-  const values = (input || '')
+function parseDeviceIds(input: string): { ids: number[]; invalid: string[] } {
+  const tokens = (input || '')
     .split(',')
-    .map(v => Number(v.trim()))
-    .filter(v => Number.isInteger(v) && v > 0);
-  return Array.from(new Set(values));
+    .map(v => v.trim())
+    .filter(Boolean);
+  const ids = new Set<number>();
+  const invalid: string[] = [];
+  for (const token of tokens) {
+    const n = Number(token);
+    if (Number.isInteger(n) && n > 0) {
+      ids.add(n);
+    } else {
+      invalid.push(token);
+    }
+  }
+  return { ids: Array.from(ids), invalid };
 }
 
 export default function SchedulesPage() {
@@ -85,12 +95,23 @@ export default function SchedulesPage() {
 
   const handleSave = async () => {
     try {
+      if (!form.name.trim()) {
+        toast.error('请填写任务名称');
+        return;
+      }
+      if (!form.cron_expr.trim()) {
+        toast.error('请填写 Cron 表达式');
+        return;
+      }
       const planId = Number(form.plan_id);
-      const deviceIds = parseDeviceIds(form.device_ids);
+      const { ids: deviceIds, invalid: invalidDeviceIds } = parseDeviceIds(form.device_ids);
 
       if (!Number.isInteger(planId) || planId <= 0) {
         toast.error('请选择 Plan');
         return;
+      }
+      if (invalidDeviceIds.length > 0) {
+        toast.info(`以下设备 ID 无效已忽略：${invalidDeviceIds.join('、')}`);
       }
       if (deviceIds.length === 0) {
         toast.error('请至少填写一个设备 ID');

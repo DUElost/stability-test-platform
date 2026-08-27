@@ -159,8 +159,9 @@ export default function WifiPage() {
           <CardContent>
             <form onSubmit={handleSubmit} className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               <div>
-                <label className={FORM.label}>名称</label>
+                <label htmlFor="wifi-name" className={FORM.label}>名称</label>
                 <input
+                  id="wifi-name"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
@@ -169,8 +170,9 @@ export default function WifiPage() {
                 />
               </div>
               <div>
-                <label className={FORM.label}>SSID</label>
+                <label htmlFor="wifi-ssid" className={FORM.label}>SSID</label>
                 <input
+                  id="wifi-ssid"
                   value={form.config_ssid}
                   onChange={(e) => setForm({ ...form, config_ssid: e.target.value })}
                   required
@@ -179,8 +181,11 @@ export default function WifiPage() {
                 />
               </div>
               <div>
-                <label className={FORM.label}>密码</label>
+                <label htmlFor="wifi-password" className={FORM.label}>密码</label>
                 <input
+                  id="wifi-password"
+                  type="password"
+                  autoComplete="new-password"
                   value={form.config_password}
                   onChange={(e) => setForm({ ...form, config_password: e.target.value })}
                   required
@@ -189,8 +194,9 @@ export default function WifiPage() {
                 />
               </div>
               <div>
-                <label className={FORM.label}>路由器 IP（可选）</label>
+                <label htmlFor="wifi-router-ip" className={FORM.label}>路由器 IP（可选）</label>
                 <input
+                  id="wifi-router-ip"
                   value={form.config_router_ip}
                   onChange={(e) => setForm({ ...form, config_router_ip: e.target.value })}
                   placeholder="192.0.2.1"
@@ -198,8 +204,9 @@ export default function WifiPage() {
                 />
               </div>
               <div>
-                <label className={FORM.label}>最大设备数</label>
+                <label htmlFor="wifi-max-devices" className={FORM.label}>最大设备数</label>
                 <input
+                  id="wifi-max-devices"
                   type="number"
                   min={1}
                   max={1000}
@@ -209,8 +216,9 @@ export default function WifiPage() {
                 />
               </div>
               <div>
-                <label className={FORM.label}>主机组（可选）</label>
+                <label htmlFor="wifi-host-group" className={FORM.label}>主机组（可选）</label>
                 <input
+                  id="wifi-host-group"
                   value={form.host_group}
                   onChange={(e) => setForm({ ...form, host_group: e.target.value })}
                   placeholder="限制分配给指定主机"
