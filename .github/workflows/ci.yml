@@ -137,6 +137,13 @@ jobs:
       - name: Ruff
         run: ruff check backend/ tools/ scripts/
 
+      # 前端死文件/死依赖（G23 收尾，issue #459 状态评论）：实测 0.9s；
+      # 粒度收窄为 files+dependencies，取舍见
+      # docs/notes/process/2026-08-14-dead-code-knip.md
+      - name: knip 死代码检查
+        working-directory: frontend
+        run: npm run --silent knip
+
       # 这条**阻塞**:不是风格建议,是二值门禁,且当前全仓已清零。
       # pre-commit 钩子需开发者手动 `git config core.hooksPath .githooks`
       # 才生效 —— pipeline_engine.py 当年就是这么漏进来的,CI 侧兜底。

@@ -160,6 +160,55 @@ def check_required_checks_doc(workflows: dict[str, str], agents_md: str) -> list
     return issues
 
 
+# S5x: 本地门禁(GATES key) → CI 锚点 的显式映射。刻意不做自动推断——两侧
+# 命名多对多，靠表强制「新增门禁必须回答 CI 对应物在哪」。None = 有意仅本地。
+GATE_TO_CI_ANCHOR = {
+    "ruff": ("ci.yml", "Ruff"),
+    "eslint": ("ci.yml", "ESLint"),
+    "tsc": ("ci.yml", "TypeScript check"),
+    "knip": ("ci.yml", "knip 死代码检查"),
+    "compileall": ("ci.yml", "Compile check"),
+    "pollution": ("ci.yml", "空行注入污染检查"),
+    "immutability": ("ci.yml", "脚本版本不可变检查"),
+    "gov-surface": ("ci.yml", "治理面结构检查"),
+    "agent-tests": ("ci.yml", "Run agent tests"),
+    # check:full 级——CI 对应物在 backend-test / frontend-check / docker-build job
+    "backend-tests": ("ci.yml", "Run backend tests"),
+    "integration": ("ci.yml", "Main-chain integration smoke"),
+    "repo-tests": ("ci.yml", "Run repo-level tests"),
+    "vitest": ("ci.yml", "Run vitest"),
+    "frontend-build": ("ci.yml", "npm run build"),
+    "docker-build": ("ci.yml", "Build backend image"),
+    # 有意仅本地的例外——登记理由防止未来审计误判为缺口：
+    "gov-evals": None,   # 按需诊断（裁决降级）：LLM 成本/flaky 不进阻塞路径
+    "gov-skills": None,  # 数据源=本机 ~/.claude 转录，物理不在 runner 上
+}
+
+
+def check_gate_ci_mapping(gates_src: str, workflows: dict[str, str]) -> list[str]:
+    """S5x: 双向断言 GATES 与 CI 步骤的配对关系（漂移当场红灯）。
+
+    ① 本地每个 gate 必须在映射表登记（防「只加本地不接 CI」）；
+    ② 已登记且非 None 的条目，锚点字符串必须在对应 workflow 出现
+       （防「CI 改名/删步骤」与「映射表过期」）。
+    """
+    issues: list[str] = []
+    for m in re.finditer(r'(?m)^\s{4}"([\w-]+)": \(', gates_src):
+        gate = m.group(1)
+        if gate not in GATE_TO_CI_ANCHOR:
+            issues.append(
+                f"S5x run_gates 门禁 {gate!r} 未在 GATE_TO_CI_ANCHOR 登记配对——"
+                f"新增门禁必须先声明其 CI 对应物（或显式 None 并附理由）"
+            )
+    for gate, spec in GATE_TO_CI_ANCHOR.items():
+        if spec is None:
+            continue
+        wf, anchor = spec
+        if anchor not in workflows.get(wf, ""):
+            issues.append(f"S5x {gate!r} 的 CI 锚点 {anchor!r} 在 {wf} 中消失")
+    return issues
+
+
 def check_skill_frontmatter(dirname: str, text: str) -> list[str]:
     """S7: skill 目录的 SKILL.md frontmatter 必须合法，且 name 与目录名一致。
 
@@ -245,6 +294,11 @@ def run_check() -> int:
         workflows, open(os.path.join(ROOT, "AGENTS.md"), encoding="utf-8").read()
     )
 
+    gates_src_path = os.path.join(ROOT, "scripts", "run_gates.py")
+    if os.path.exists(gates_src_path):
+        gates_src = open(gates_src_path, encoding="utf-8").read()
+        issues += check_gate_ci_mapping(gates_src, workflows)
+
     # S6: 仅信息输出
     for rel in ("CLAUDE.md", "AGENTS.md"):
         n = len(open(os.path.join(ROOT, rel), encoding="utf-8").read().splitlines())
@@ -255,7 +309,7 @@ def run_check() -> int:
     if issues:
         print(f"\n治理面结构检查失败：{len(issues)} 项", file=sys.stderr)
         return 1
-    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S5、S7）")
+    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S5、S7、S5x）")
     return 0
 
 
@@ -316,6 +370,29 @@ def run_self_test() -> int:
     expect("S7 name 错配目录", lambda: check_skill_frontmatter("foo", bad_name), True)
     expect("S7 description 空", lambda: check_skill_frontmatter("foo", bad_desc), True)
     expect("S7 缺 frontmatter", lambda: check_skill_frontmatter("foo", no_fm), True)
+
+    # S5x 夹具：映射表按全局常量走，workflows 必须含全部非 None 锚点才算「齐」
+    # 注意：`for x in it if cond` 是先解包后过滤，None 会在 filter 前炸——
+    # 必须用 filter() 预过滤再解包。
+    wf_full = " ".join(
+        f"- {anchor}\n"
+        for (wf, anchor) in filter(None, GATE_TO_CI_ANCHOR.values())
+    )
+    src_with_gate = '    "ruff": (\n'
+    src_mystery = '    "mystery-gate": (\n'
+    wf_have = {"ci.yml": wf_full}
+    wf_missing = {"ci.yml": wf_full.replace("- Ruff\n", "")}
+    expect("S5x 配对齐", lambda: check_gate_ci_mapping(src_with_gate, wf_have), False)
+    expect(
+        "S5x CI 锚点消失",
+        lambda: check_gate_ci_mapping(src_with_gate, wf_missing),
+        True,
+    )
+    expect(
+        "S5x 未登记新门禁",
+        lambda: bool([i for i in check_gate_ci_mapping(src_mystery, wf_have) if "mystery" in i]),
+        True,
+    )
 
     if failures:
         for f in failures:
