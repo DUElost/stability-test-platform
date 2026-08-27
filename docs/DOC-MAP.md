@@ -106,6 +106,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`operations/mtbf-api.md`](./operations/mtbf-api.md) | MTBF 用例管理接口说明（§1 P0 validate / §1.5 脚本配置通道与 env 退役 / §2 P1 管理面；ADR-0030） |
 | [`operations/README.md`](./operations/README.md) | 运维索引 |
 | [`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md) | 生产最小部署 |
+| [`development/cursor-rules.md`](./development/cursor-rules.md) | Cursor 规则说明：`.cursor/rules/*.mdc` 分层与格式（薄适配层） |
 
 ---
 
