@@ -70,3 +70,58 @@ docs/
 3. **协议 / 状态机变更**：必更新 [`design/07-execution-protocol.md`](./design/07-execution-protocol.md)  
 4. **一次性计划**：完工后移 `docs/archive/`，记入 `DOC-RETIREMENT.md`  
 5. **禁止**在 `docs/archive/` 上继续堆新规范（见 [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)）
+
+---
+
+## 详细索引（自 DOC-MAP 迁入，2026-08-27）
+
+> DOC-MAP 常驻层只保留阅读顺序 / 分层 / Living 审查登记簿；下列描述表是查阅型内容，住在这里按需翻。
+
+## 设计文档索引（`design/`）
+
+| 文档 | 内容 |
+|------|------|
+| [`00-system-overview.md`](./design/00-system-overview.md) | 部署拓扑、分层、领域模型摘要 |
+| [`01-execution-pipeline.md`](./design/01-execution-pipeline.md) | Plan→PlanRun→Job 主链路 |
+| [`07-execution-protocol.md`](./design/07-execution-protocol.md) | 状态机、abort ACK、snapshot、claim、schema |
+| [`02-backend.md`](./design/02-backend.md) | 后端路由、服务、启动 |
+| [`03-frontend.md`](./design/03-frontend.md) | 路由、API Client、核心页面 |
+| [`04-agent.md`](./design/04-agent.md) | Agent、Watcher、脚本执行 |
+| [`05-data-model.md`](./design/05-data-model.md) | ORM 与表关系 |
+| [`06-realtime-and-background.md`](./design/06-realtime-and-background.md) | SocketIO、APScheduler、SAQ |
+| [`2026-plan-c-storage-and-access.md`](./design/2026-plan-c-storage-and-access.md) | 方案 C 存储与访问 |
+| [`2026-adr-0025-log-flow-sequence.md`](./design/2026-adr-0025-log-flow-sequence.md) | 设备日志流转时序（上送规则=ADR-0025；含给人读 / 给其他 Agent 的两版图） |
+| [`2026-storage-roles-and-aliases.md`](./design/2026-storage-roles-and-aliases.md) | 存储/部署角色与别称（CIFS/NFS=中心存储；文件服务器页≠中心存储） |
+| [`2026-device-log-event-implementation-spec.md`](./design/2026-device-log-event-implementation-spec.md) | DeviceLogEvent 阶段 3 实现规格（ADR-0028 D1–D8） |
+| [`2026-07-plan-execute-page-improvements.md`](./design/2026-07-plan-execute-page-improvements.md) | Plan 执行页：Phase1–6 + §7 已落地；**§8 V2 选机工作台/驾驶舱实现方案** |
+| [`2026-08-mtbf-p0-runner-design.md`](./design/2026-08-mtbf-p0-runner-design.md) | MTBF 专项 P0 设计：脚本三件套契约 + realresult schema 实测 + 配置/产物通道（ADR-0030 D6 P0，**已验收**） |
+| [`2026-08-mtbf-p1-suite-management.md`](./design/2026-08-mtbf-p1-suite-management.md) | MTBF 专项 P1 设计：test_suite/test_case 实体 + 外部管理面 + D2/D3b 派发门禁（ADR-0030 D6 P1，P1a/P1b 已实施） |
+| [`2026-08-project-registry-p25-mapping-workbench.md`](./design/2026-08-project-registry-p25-mapping-workbench.md) | ADR-0029 P2.5：登记簿 = Fleet 事实 + 人工 USER 项目 + `match_models` 精确映射 |
+| [`2026-08-honor-flash-firmware-routing.md`](./design/2026-08-honor-flash-firmware-routing.md) | Honor 刷机：固件指纹路由 + NFS manifest 布局 + 刷前/刷后版本核验 + v1.3.0 多设备门控/重试环/环境预检（方向 A，已实施） |
+| [`2026-08-governance-surface-protection.md`](./design/2026-08-governance-surface-protection.md) | 治理面防护两层方案：L0 结构门禁 S1–S5 + 本地护栏（pre-commit/settings deny/skill 试点）+ backstop 机械摘要 + L1 按需 evals（synthesis C-G1 落地，含校准教训与重议条件） |
+| [`design/mockups/plan-execute-v2/`](./design/mockups/plan-execute-v2/) | Plan Execute V2 静态预览（§8 视觉基准） |
+
+## 开发 / 运维索引
+
+| 文档 | 内容 |
+|------|------|
+| [`development/environment-variables.md`](./development/environment-variables.md) | env 详表（含超时与版本门禁） |
+| [`development/testing.md`](./development/testing.md) | pytest / vitest / 生产机禁区 |
+| [`operations/agent-version-and-hot-update.md`](./operations/agent-version-and-hot-update.md) | 滚动升级与 code revision |
+| [`operations/adr-0028-prune-local-and-spill-gray.md`](./operations/adr-0028-prune-local-and-spill-gray.md) | #217 PRUNE_LOCAL / HddSpill 单机灰度 |
+| [`operations/mtbf-api.md`](./operations/mtbf-api.md) | MTBF 用例管理接口说明（§1 P0 validate / §1.5 脚本配置通道与 env 退役 / §2 P1 管理面；ADR-0030） |
+| [`operations/README.md`](./operations/README.md) | 运维索引 |
+| [`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md) | 生产最小部署 |
+| [`development/cursor-rules.md`](./development/cursor-rules.md) | Cursor 规则说明：`.cursor/rules/*.mdc` 分层与格式（薄适配层） |
+
+## PRD / 验收索引
+
+| 文档 | 内容 |
+|------|------|
+| [`prd/00-platform-overview.md`](./prd/00-platform-overview.md) | 平台级 PRD |
+| [`prd/2026-plan-c-storage-and-archive.md`](./prd/2026-plan-c-storage-and-archive.md) | 方案 C PRD |
+| [`acceptance/00-platform-smoke.md`](./acceptance/00-platform-smoke.md) | 平台冒烟与 CI 映射 |
+| [`acceptance/2026-plan-c-sprint2-3.md`](./acceptance/2026-plan-c-sprint2-3.md) | 方案 C Sprint 2/3 验收 |
+| [`acceptance/2026-plan-c-sprint4.md`](./acceptance/2026-plan-c-sprint4.md) | 方案 C Sprint 4 自动化验收矩阵 |
+| [`acceptance/2026-plan-c-sprint4-real-device.md`](./acceptance/2026-plan-c-sprint4-real-device.md) | 方案 C Sprint 4 真机联调记录 |
+| [`acceptance/2026-08-adr-0028-phase3-mtk-signoff.md`](./acceptance/2026-08-adr-0028-phase3-mtk-signoff.md) | ADR-0028 阶段 3 MTK DLE + EventUploader 签字 |
