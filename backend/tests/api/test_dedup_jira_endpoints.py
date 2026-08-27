@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from backend.models.jira_run import JiraRun
 from backend.services.run_console import RunConsole, RunConsoleError, RunKeyBusyError
 
 
@@ -263,3 +264,106 @@ class TestCancelJiraRun:
         data = resp.json()["data"]
         assert data["console_run_id"] == "con-fake-123"
         assert data["canceled"] is True
+
+
+class TestJiraProjectKeyWiring:
+    """G17：source=plan_run 解析登记簿 jira_project_key 并注入 stage1 argv。"""
+
+    @staticmethod
+    def _seed_plan_run(db_session, *, jira_project_key=None):
+        """TestProject → Plan → PlanRun → PlanRunArtifact 四层种子，返回 artifact id。"""
+        from backend.models.plan import Plan
+        from backend.models.plan_run import PlanRun
+        from backend.models.plan_run_artifact import PlanRunArtifact
+        from backend.models.project import TestProject
+
+        project = TestProject(
+            project_key="pz-test",
+            display_name="G17 seed",
+            jira_project_key=jira_project_key,
+        )
+        db_session.add(project)
+        db_session.flush()
+        plan = Plan(name="g17-plan", failure_threshold=0.1, created_by="t", project_id=project.id)
+        db_session.add(plan)
+        db_session.flush()
+        run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
+            failure_threshold=plan.failure_threshold,
+            plan_snapshot={"name": plan.name},
+            run_type="MANUAL",
+            triggered_by="test",
+        )
+        db_session.add(run)
+        db_session.flush()
+        artifact = PlanRunArtifact(plan_run_id=run.id, storage_uri="/mnt/fake/Result_org.xls")
+        db_session.add(artifact)
+        db_session.commit()
+        return artifact.id, run.id
+
+    def _post_plan_run_source(self, client, auth_headers, artifact_id, stage="upload_list"):
+        return client.post(
+            "/api/v1/jira/runs",
+            data={
+                "vendor": "transsion",
+                "stage": stage,
+                "dry_run": "true",
+                "source": "plan_run",
+                "artifact_id": str(artifact_id),
+            },
+            headers=auth_headers,
+        )
+
+    def test_resolved_key_injected_into_upload_list_argv(
+        self, client, auth_headers, monkeypatch, mock_run_console, db_session
+    ):
+        artifact_id, _ = self._seed_plan_run(db_session, jira_project_key="ZKEY")
+        _set_vendor_env(monkeypatch)
+        resp = self._post_plan_run_source(client, auth_headers, artifact_id)
+        assert resp.status_code == 200, resp.text
+        argv = mock_run_console.start.call_args.kwargs.get("cmd", [])
+        assert "--set-project-key" in argv
+        assert argv[argv.index("--set-project-key") + 1] == "ZKEY"
+        assert resp.json()["data"]["jira_project_key"] == "ZKEY"
+
+    def test_missing_key_soft_falls_back_without_flag(
+        self, client, auth_headers, monkeypatch, mock_run_console, db_session
+    ):
+        artifact_id, _ = self._seed_plan_run(db_session, jira_project_key=None)
+        _set_vendor_env(monkeypatch)
+        resp = self._post_plan_run_source(client, auth_headers, artifact_id)
+        # 缺键不阻断：argv 不带 --set-project-key（工具用自身 config 映射），响应透出 null
+        assert resp.status_code == 200, resp.text
+        argv = mock_run_console.start.call_args.kwargs.get("cmd", [])
+        assert "--set-project-key" not in argv
+        assert resp.json()["data"]["jira_project_key"] is None
+
+    def test_create_stage_never_injects_flag(
+        self, client, auth_headers, monkeypatch, mock_run_console, db_session
+    ):
+        artifact_id, _ = self._seed_plan_run(db_session, jira_project_key="ZKEY")
+        _set_vendor_env(monkeypatch)
+        resp = self._post_plan_run_source(client, auth_headers, artifact_id, stage="create")
+        assert resp.status_code == 200, resp.text
+        argv = mock_run_console.start.call_args.kwargs.get("cmd", [])
+        # 注入只属 stage1（create 消费的模板已带 Project 列）……
+        assert "--set-project-key" not in argv
+        # ……但解析与审计照常：响应/落库仍透出登记簿键
+        assert resp.json()["data"]["jira_project_key"] == "ZKEY"
+
+    def test_persisted_row_records_key(
+        self, client, auth_headers, monkeypatch, mock_run_console, db_session
+    ):
+        artifact_id, _ = self._seed_plan_run(db_session, jira_project_key="AUDIT1")
+        _set_vendor_env(monkeypatch)
+        resp = self._post_plan_run_source(client, auth_headers, artifact_id)
+        console_run_id = resp.json()["data"]["console_run_id"]
+        row = (
+            db_session.query(JiraRun)
+            .filter_by(console_run_id=console_run_id)
+            .one_or_none()
+        )
+        # 落库走独立 SessionLocal；本断言在真 PG 下可见，SQLite 变体亦同步提交
+        assert row is not None
+        assert row.jira_project_key == "AUDIT1"

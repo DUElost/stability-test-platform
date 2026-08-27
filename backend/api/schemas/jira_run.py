@@ -16,6 +16,7 @@ class JiraRunOut(ORMBaseModel):
     input_source: str
     plan_run_id: Optional[int] = None
     artifact_id: Optional[int] = None
+    jira_project_key: Optional[str] = None
     status: str
     started_at: datetime
     ended_at: Optional[datetime] = None
