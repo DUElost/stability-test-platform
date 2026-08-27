@@ -34,6 +34,7 @@ def execute_pipeline_run(
     device_id: Optional[int] = None,
     plan_run_host_id: Optional[int] = None,
     barrier_total: Optional[int] = None,
+    step_trace_uploader: Optional[Any] = None,  # #483: 终态前排空 trace 队列
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -69,6 +70,7 @@ def execute_pipeline_run(
         device_id=device_id,
         plan_run_host_id=plan_run_host_id,
         barrier_total=barrier_total,
+        step_trace_uploader=step_trace_uploader,
     )
 
     if patrol_cycle_checkpoint_store is not None:
