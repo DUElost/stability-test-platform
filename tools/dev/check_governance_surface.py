@@ -15,6 +15,8 @@
   S5  required checks 文档↔workflow 互检：ci.yml/pr-agent.yml 定义的 job id
       未在 AGENTS.md 记载，或反之缺 job
   S6  CLAUDE.md/AGENTS.md 行数信息行（仅输出，不判失败——分层加载是既定取舍）
+  S7  .claude/skills/*/SKILL.md frontmatter：name 与目录一致、description 非空
+      （写坏 = skill 对 agent 静默不存在，与 S1/S3 同故障类）
 
 用法:
     python tools/dev/check_governance_surface.py --check     # 门禁模式
@@ -158,6 +160,36 @@ def check_required_checks_doc(workflows: dict[str, str], agents_md: str) -> list
     return issues
 
 
+def check_skill_frontmatter(dirname: str, text: str) -> list[str]:
+    """S7: skill 目录的 SKILL.md frontmatter 必须合法，且 name 与目录名一致。
+
+    name 错配 / description 空 → Claude Code 不把该 skill 呈现给会话，
+    属「文件在、能力亡」的静默失效。
+    """
+    issues: list[str] = []
+    if not text.startswith("---"):
+        return [f"S7 {dirname}: SKILL.md 缺 frontmatter"]
+    end = text.find("\n---", 3)
+    if end < 0:
+        return [f"S7 {dirname}: frontmatter 未闭合"]
+
+    def _clean(v: str) -> str:
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            return v[1:-1]
+        return v
+
+    fields: dict[str, str] = {}
+    for m in re.finditer(r"^([\w-]+):\s*(.*)$", text[4:end], re.M):
+        fields[m.group(1)] = _clean(m.group(2))
+    nm = fields.get("name", "")
+    if nm != dirname:
+        issues.append(f"S7 {dirname}: frontmatter name={nm!r} 与目录名不一致")
+    if not fields.get("description"):
+        issues.append(f"S7 {dirname}: description 为空（agent 靠它决定是否加载）")
+    return issues
+
+
 # ── 门禁执行 ──
 
 def run_check() -> int:
@@ -188,6 +220,17 @@ def run_check() -> int:
     else:
         issues.append("S3 .cursor/rules/ 目录不存在")
 
+    skills_dir = os.path.join(ROOT, ".claude", "skills")
+    if os.path.isdir(skills_dir):
+        for d in sorted(os.listdir(skills_dir)):
+            sk_path = os.path.join(skills_dir, d, "SKILL.md")
+            if os.path.isfile(sk_path):
+                issues += check_skill_frontmatter(
+                    d, open(sk_path, encoding="utf-8").read()
+                )
+            else:
+                issues.append(f"S7 .claude/skills/{d}/: 缺 SKILL.md")
+
     pr_agent_path = os.path.join(ROOT, ".github", "workflows", "pr-agent.yml")
     if os.path.exists(pr_agent_path):
         issues += check_pr_agent_anchors(open(pr_agent_path, encoding="utf-8").read())
@@ -212,7 +255,7 @@ def run_check() -> int:
     if issues:
         print(f"\n治理面结构检查失败：{len(issues)} 项", file=sys.stderr)
         return 1
-    print("[OK] 治理面结构检查通过（S1–S5 阻塞项全绿）")
+    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S5、S7）")
     return 0
 
 
@@ -265,12 +308,21 @@ def run_self_test() -> int:
     expect("S5 CI 删 job", lambda: check_required_checks_doc(wfs_bad, doc_full), True)
     expect("S5 文档漂移", lambda: check_required_checks_doc(wfs_ok, doc_drift), True)
 
+    good_skill = "---\nname: foo\ndescription: 触发词 d\n---\n步骤"
+    bad_name = "---\nname: bar\ndescription: d\n---\nb"
+    bad_desc = "---\nname: foo\ndescription: \"\"\n---\nb"
+    no_fm = "直接正文没有 frontmatter"
+    expect("S7 合法 skill", lambda: check_skill_frontmatter("foo", good_skill), False)
+    expect("S7 name 错配目录", lambda: check_skill_frontmatter("foo", bad_name), True)
+    expect("S7 description 空", lambda: check_skill_frontmatter("foo", bad_desc), True)
+    expect("S7 缺 frontmatter", lambda: check_skill_frontmatter("foo", no_fm), True)
+
     if failures:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         print(f"\n自测失败 {len(failures)} 项——检查器自身不可信，禁止用于拦截", file=sys.stderr)
         return 1
-    print("[OK] self-test 通过：6 条规则各含红/绿样例双向验证")
+    print("[OK] self-test 通过：7 条规则各含红/绿样例双向验证")
     return 0
 
 

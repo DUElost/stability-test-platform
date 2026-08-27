@@ -102,9 +102,11 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 | pr-agent findings 修复闭环 | 降为观察项：收集 1–2 月 findings 与处置数据再议 |
 | 回滚演练 | 下次真实回滚时补记录（runbook §5 新增表格）；连续两次不顺才升级排期 |
 | DORA 近似采集 | 暂不建；需要数据时按 synthesis 查询口径现查 |
+| skills 防空洞机制（2026-08-27 补充裁决） | L0 增 **S7**：SKILL.md frontmatter name==目录名 + description 非空（写坏=对 agent 静默不存在）；新增 `tools/dev/skill_usage_report.py` 扫本机会话转录统计真实调用——判洞只看「是否为零」（零值可靠，正数为启发式上界）；**HOLLOW 判据=存在 ≥14 天零调用**，`check:gov` 以 `--strict` 把洞变红灯 | pilot（test-env-self-check）上线次日实测已非空（25 次）|
 
 ## 9. 修订记录
 
 | 日期 | 变更 |
 |------|------|
 | 2026-08-26 | 初版：L0+护栏+backstop 摘要落地；L1 十二条 case 首轮全绿（两轮校准，教训二条记档） |
+| 2026-08-27 | S7 skill frontmatter 校验入 L0（自测 7 条规则全绿）+ skill_usage_report 用量探针上线（HOLLOW=≥14 天零调用，strict 进 check:gov）；常驻瘦身 A/B1 依 RESIDENT_CONTEXT_AUDIT 执行完毕（−31.7%）另行留档 |
