@@ -1,15 +1,15 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FolderKanban, Layers, Plus, Link2, Smartphone, Activity } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
+import { ChevronDown, FolderKanban, Layers, Plus, Link2, X } from 'lucide-react';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
-import { FORM, STAT, TEXT } from '@/design-system/tokens';
+import { STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -32,6 +32,15 @@ const FACET_LABEL: Record<FacetField, string> = {
   product_line: '产品线',
 };
 
+function facetChipClass(active: boolean): string {
+  return cn(
+    'rounded-full border px-2.5 py-0.5 text-xs transition-colors',
+    active
+      ? 'border-primary/40 bg-accent font-medium text-foreground'
+      : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground',
+  );
+}
+
 function facetOptions(projects: ProjectSummary[], field: FacetField): string[] {
   const values = new Set<string>();
   for (const p of projects) {
@@ -53,6 +62,7 @@ export default function ProjectsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [mapPreview, setMapPreview] = useState<ProjectMapPreview | null>(null);
+  const [inventoryOpen, setInventoryOpen] = useState(true);
 
   const { data: projects, isLoading, isError, error, refetch } = useQuery({
     queryKey: projectKeys.list(),
@@ -133,27 +143,13 @@ export default function ProjectsPage() {
     <PageContainer width="content">
       <PageHeader
         title="项目登记簿"
-        subtitle="上方是设备心跳可读的型号事实；下方是人工创建的项目。HONOR-MLD 等回填标签不出现在本页。"
+        subtitle="按客户与机型登记项目归属，维护 JIRA 集成。"
         action={
           isAdmin ? (
-            <>
-              <Button
-                variant="outline"
-                data-testid="map-models-open"
-                disabled={selectedModels.length === 0}
-                onClick={() => {
-                  setMapPreview(null);
-                  setMapOpen(true);
-                }}
-              >
-                <Link2 className="mr-1.5 h-4 w-4" />
-                映射所选型号
-              </Button>
-              <Button data-testid="create-project-open" onClick={() => setCreateOpen(true)}>
-                <Plus className="mr-1.5 h-4 w-4" />
-                新建项目
-              </Button>
-            </>
+            <Button data-testid="create-project-open" onClick={() => setCreateOpen(true)}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              新建项目
+            </Button>
           ) : undefined
         }
       />
@@ -179,130 +175,235 @@ export default function ProjectsPage() {
         </Card>
       </div>
 
-      <InventoryModelsTable
-        models={inventoryQ.data}
-        summary={summaryQ.data}
-        selectedModels={selectedModels}
-        onSelectedModelsChange={setSelectedModels}
-        isLoading={inventoryQ.isLoading}
-        isError={inventoryQ.isError}
-        errorMessage={(inventoryQ.error as Error)?.message}
-        onRetry={() => {
-          void inventoryQ.refetch();
-          void summaryQ.refetch();
-        }}
-      />
-
-      <div>
-        <h2 className={cn('text-sm font-medium', TEXT.heading)}>人工项目</h2>
-        <p className={cn('mt-1 text-xs', TEXT.subtitle)}>
-          项目按 ADR-0029 登记簿创建：客户 / 形态 / JIRA 等设备读不到的信息。型号映射需在上方表格勾选后填写。
-        </p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {FACET_FIELDS.map((field) => (
-          <select
-            key={field}
-            value={facetFilters[field] ?? 'all'}
-            onChange={(e) =>
-              setFacetFilters((prev) => ({
-                ...prev,
-                [field]: e.target.value === 'all' ? undefined : e.target.value,
-              }))
-            }
-            className={FORM.select}
-            data-testid={`facet-${field}`}
-            aria-label={`${FACET_LABEL[field]}筛选`}
-          >
-            <option value="all">全部{FACET_LABEL[field]}</option>
-            {facetOptions(projects ?? [], field).map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        ))}
-      </div>
-      {activeFacetCount > 0 && (
-        <div className={cn('text-xs', TEXT.subtitle)}>
-          已应用 {activeFacetCount} 个 facet 筛选，命中 {filtered.length} 个项目
+      {/* ── 主区块：人工项目 ───────────────────────────────── */}
+      <section aria-label="人工项目" className="space-y-3">
+        <div>
+          <h2 className={cn('text-base font-semibold', TEXT.heading)}>项目</h2>
+          <p className={cn('mt-0.5 text-xs', TEXT.subtitle)}>
+            {(projects ?? []).length} 个项目 · 点击卡片查看详情，JIRA 项目键等字段在详情页维护
+          </p>
         </div>
-      )}
 
-      {isLoading ? (
-        <PageSkeleton.Cards count={3} layout="grid" />
-      ) : isError ? (
-        <ErrorState
-          title="加载项目失败"
-          description={(error as Error)?.message || '请检查网络连接或稍后重试'}
-          onRetry={() => void refetch()}
-        />
-      ) : (filtered.length === 0 && !projects?.length) ? (
-        <EmptyState
-          title="暂无项目"
-          description="管理员可新建项目，再把上方型号映射过来。系统不会根据 HONOR-MLD 之类的回填标签自动建项目。"
-          icon={<FolderKanban className="w-16 h-16" />}
-        />
-      ) : filtered.length === 0 ? (
-        <EmptyState
-          title="没有匹配的项目"
-          description="调整 facet 筛选条件后重试"
-          icon={<Layers className="w-16 h-16" />}
-        />
-      ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((project) => (
-            <Card
-              key={project.project_key}
-              data-testid="project-card"
-              className="cursor-pointer transition-shadow hover:shadow-md"
-              onClick={() => navigate(`/projects/${project.project_key}`)}
+        {/* facet 筛选：chip 单选（点选中值过滤，选「全部」恢复） */}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          {FACET_FIELDS.map((field) => (
+            <div
+              key={field}
+              role="group"
+              aria-label={`${FACET_LABEL[field]}筛选`}
+              className="flex flex-wrap items-center gap-1.5"
             >
-              <CardContent className="py-4">
-                <div className="min-w-0">
-                  <h3 className={cn('truncate font-medium', TEXT.heading)}>
-                    {project.display_name}
-                  </h3>
-                  <p className={cn('font-mono text-xs', TEXT.subtitle)}>
-                    {project.project_key}
-                  </p>
-                </div>
-
-                <div className={cn('mt-3 flex flex-wrap gap-1.5', TEXT.subtitle)}>
-                  {FACET_FIELDS.map((field) => {
-                    const value = project[field];
-                    if (!value) return null;
-                    return (
-                      <Badge key={field} variant="outline" className="text-[11px] font-normal">
-                        {FACET_LABEL[field]}: {value}
-                      </Badge>
-                    );
-                  })}
-                </div>
-
-                <div className={cn('mt-3 flex items-center gap-4 text-xs', TEXT.subtitle)}>
-                  <span className="flex items-center gap-1">
-                    <Smartphone className="h-3.5 w-3.5" />
-                    {project.device_count} 台设备
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Activity className="h-3.5 w-3.5" />
-                    {project.running_run_count} 在跑
-                  </span>
-                </div>
-                {(project.match_models ?? []).length > 0 ? (
-                  <p className={cn('mt-2 font-mono text-[11px]', TEXT.subtitle)}>
-                    映射型号：{(project.match_models ?? []).join(' · ')}
-                  </p>
-                ) : (
-                  <p className={cn('mt-2 text-[11px]', TEXT.subtitle)}>尚未映射型号</p>
-                )}
-              </CardContent>
-            </Card>
+              <span className={cn('mr-0.5 text-xs', TEXT.subtitle)}>
+                {FACET_LABEL[field]}
+              </span>
+              <button
+                type="button"
+                data-testid={`facet-${field}-all`}
+                aria-pressed={!facetFilters[field]}
+                onClick={() => setFacetFilters((prev) => ({ ...prev, [field]: undefined }))}
+                className={facetChipClass(!facetFilters[field])}
+              >
+                全部
+              </button>
+              {facetOptions(projects ?? [], field).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  data-testid={`facet-${field}-${value}`}
+                  aria-pressed={facetFilters[field] === value}
+                  onClick={() =>
+                    setFacetFilters((prev) => ({
+                      ...prev,
+                      [field]: prev[field] === value ? undefined : value,
+                    }))
+                  }
+                  className={facetChipClass(facetFilters[field] === value)}
+                >
+                  {value}
+                </button>
+              ))}
+            </div>
           ))}
         </div>
-      )}
+
+        {activeFacetCount > 0 && (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className={TEXT.subtitle}>命中 {filtered.length} 个：</span>
+            {Object.entries(facetFilters)
+              .filter(([, v]) => v)
+              .map(([k, v]) => (
+                <Badge key={k} variant="secondary" className="gap-1 py-1 pl-2.5 pr-1">
+                  {FACET_LABEL[k as FacetField]}: {v}
+                  <button
+                    type="button"
+                    aria-label={`清除${FACET_LABEL[k as FacetField]}筛选`}
+                    data-testid={`facet-clear-${k}`}
+                    className="rounded-full p-0.5 hover:bg-muted"
+                    onClick={() => setFacetFilters((prev) => ({ ...prev, [k]: undefined }))}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+            <button
+              type="button"
+              data-testid="facet-clear-all"
+              onClick={() => setFacetFilters({})}
+              className={cn(TEXT.subtitle, 'underline-offset-2 hover:underline')}
+            >
+              清空全部
+            </button>
+          </div>
+        )}
+
+        {isLoading ? (
+          <PageSkeleton.Cards count={3} layout="grid" />
+        ) : isError ? (
+          <ErrorState
+            title="加载项目失败"
+            description={(error as Error)?.message || '请检查网络连接或稍后重试'}
+            onRetry={() => void refetch()}
+          />
+        ) : filtered.length === 0 && !projects?.length ? (
+          <EmptyState
+            title="暂无项目"
+            description="点击右上角「新建项目」创建第一个项目；再到下方「型号映射」把勾选的型号归入它。"
+            icon={<FolderKanban className="w-16 h-16" />}
+          />
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            title="没有匹配的项目"
+            description="点击筛选项的「全部」或清空全部后重试。"
+            icon={<Layers className="w-16 h-16" />}
+          />
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {filtered.map((project) => (
+              <Card
+                key={project.project_key}
+                data-testid="project-card"
+                role="button"
+                tabIndex={0}
+                className="cursor-pointer transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => navigate(`/projects/${project.project_key}`)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    navigate(`/projects/${project.project_key}`);
+                  }
+                }}
+              >
+                <CardContent className="py-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className={cn('truncate font-medium', TEXT.heading)}>
+                        {project.display_name}
+                      </h3>
+                      <p className={cn('font-mono text-xs', TEXT.subtitle)}>
+                        {project.project_key}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-xl font-bold leading-none text-foreground">
+                        {project.device_count}
+                      </p>
+                      <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>台设备</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {project.running_run_count > 0 ? (
+                      <Badge variant="success" className="text-[11px] font-normal">
+                        {project.running_run_count} 在跑
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-[11px] font-normal">
+                        空闲
+                      </Badge>
+                    )}
+                    {FACET_FIELDS.map((field) => {
+                      const value = project[field];
+                      if (!value) return null;
+                      return (
+                        <Badge key={field} variant="outline" className="text-[11px] font-normal">
+                          {FACET_LABEL[field]}: {value}
+                        </Badge>
+                      );
+                    })}
+                  </div>
+
+                  {(project.match_models ?? []).length > 0 ? (
+                    <p
+                      className={cn(
+                        'mt-2 truncate font-mono text-[11px]',
+                        TEXT.subtitle,
+                      )}
+                      title={(project.match_models ?? []).join(' · ')}
+                    >
+                      映射型号：{(project.match_models ?? []).join(' · ')}
+                    </p>
+                  ) : null}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ── 次区块：型号映射（可折叠） ──────────────────────── */}
+      <Card data-testid="inventory-section">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              aria-expanded={inventoryOpen}
+              data-testid="inventory-toggle"
+              onClick={() => setInventoryOpen((open) => !open)}
+              className="flex items-center gap-2 rounded-md px-1 py-0.5 -mx-1 hover:bg-accent"
+            >
+              <ChevronDown
+                className={cn('h-4 w-4 transition-transform', !inventoryOpen && '-rotate-90')}
+              />
+              <span className="text-sm font-medium text-foreground">型号映射</span>
+            </button>
+            {isAdmin ? (
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="map-models-open"
+                disabled={selectedModels.length === 0}
+                onClick={() => {
+                  setMapPreview(null);
+                  setMapOpen(true);
+                }}
+              >
+                <Link2 className="mr-1.5 h-4 w-4" />
+                映射所选型号{selectedModels.length ? `（${selectedModels.length}）` : ''}
+              </Button>
+            ) : null}
+          </div>
+          <p className={cn('text-xs', TEXT.subtitle)}>
+            设备心跳采集的型号事实，用于批量归入上方项目；归属只由人工登记决定。
+          </p>
+        </CardHeader>
+        {inventoryOpen ? (
+          <CardContent>
+            <InventoryModelsTable
+              models={inventoryQ.data}
+              summary={summaryQ.data}
+              selectedModels={selectedModels}
+              onSelectedModelsChange={setSelectedModels}
+              isLoading={inventoryQ.isLoading}
+              isError={inventoryQ.isError}
+              errorMessage={(inventoryQ.error as Error)?.message}
+              onRetry={() => {
+                void inventoryQ.refetch();
+                void summaryQ.refetch();
+              }}
+            />
+          </CardContent>
+        ) : null}
+      </Card>
 
       <CreateProjectDialog
         isOpen={createOpen}

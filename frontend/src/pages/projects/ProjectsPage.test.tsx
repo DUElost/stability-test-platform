@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -127,7 +127,9 @@ describe('ProjectsPage', () => {
     expect(screen.getByText('HONOR-CAMERA')).toBeInTheDocument();
     expect(screen.getByText('客户: CustA')).toBeInTheDocument();
     expect(screen.getByText('平台: MTK')).toBeInTheDocument();
-    expect(screen.getByText('3 台设备')).toBeInTheDocument();
+    const cardA = screen.getByText('荣耀相机').closest('[data-testid="project-card"]');
+    expect(within(cardA as HTMLElement).getByText('3')).toBeInTheDocument();
+    expect(within(cardA as HTMLElement).getByText('台设备')).toBeInTheDocument();
     expect(screen.getByText('ODM 平板')).toBeInTheDocument();
     expect(screen.queryByText('HONOR-MLD')).not.toBeInTheDocument();
     expect(screen.queryByText('Legacy')).not.toBeInTheDocument();
@@ -139,7 +141,7 @@ describe('ProjectsPage', () => {
     renderPage();
 
     await screen.findByText('荣耀相机');
-    await user.selectOptions(screen.getByTestId('facet-customer'), 'CustA');
+    await user.click(screen.getByTestId('facet-customer-CustA'));
 
     await waitFor(() => {
       expect(screen.getByText('荣耀相机')).toBeInTheDocument();
@@ -172,8 +174,8 @@ describe('ProjectsPage', () => {
     renderPage();
 
     await screen.findByText('荣耀相机');
-    await user.selectOptions(screen.getByTestId('facet-customer'), 'CustA');
-    await user.selectOptions(screen.getByTestId('facet-platform'), 'QCOM');
+    await user.click(screen.getByTestId('facet-customer-CustA'));
+    await user.click(screen.getByTestId('facet-platform-QCOM'));
 
     expect(await screen.findByText('没有匹配的项目')).toBeInTheDocument();
   });
