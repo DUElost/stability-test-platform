@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, FolderKanban, Layers, Plus, Link2, X } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -18,6 +17,7 @@ import { api, toApiError } from '@/utils/api';
 import { projectKeys } from '@/utils/api/queryKeys';
 import type { ProjectCreateInput, ProjectMapPreview, ProjectSummary } from '@/utils/api/types';
 import InventoryModelsTable from './components/InventoryModelsTable';
+import ProjectDetailSheet from './components/ProjectDetailSheet';
 import CreateProjectDialog from './components/CreateProjectDialog';
 import MapModelsDialog from './components/MapModelsDialog';
 
@@ -52,7 +52,6 @@ function facetOptions(projects: ProjectSummary[], field: FacetField): string[] {
 
 export default function ProjectsPage() {
   useDocumentTitle('项目登记簿');
-  const navigate = useNavigate();
   const toast = useToast();
   const queryClient = useQueryClient();
   const sessionQ = useAuthSession();
@@ -63,6 +62,7 @@ export default function ProjectsPage() {
   const [mapOpen, setMapOpen] = useState(false);
   const [mapPreview, setMapPreview] = useState<ProjectMapPreview | null>(null);
   const [inventoryOpen, setInventoryOpen] = useState(true);
+  const [sheetKey, setSheetKey] = useState<string | null>(null);
 
   const { data: projects, isLoading, isError, error, refetch } = useQuery({
     queryKey: projectKeys.list(),
@@ -285,11 +285,11 @@ export default function ProjectsPage() {
                 role="button"
                 tabIndex={0}
                 className="cursor-pointer transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => navigate(`/projects/${project.project_key}`)}
+                onClick={() => setSheetKey(project.project_key)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    navigate(`/projects/${project.project_key}`);
+                    setSheetKey(project.project_key);
                   }
                 }}
               >
@@ -429,6 +429,13 @@ export default function ProjectsPage() {
         onApply={(projectKey, reassign) =>
           applyMutation.mutate({ projectKey, reassign })
         }
+      />
+
+      {/* 方向1 首个实践：卡片点击开启抽屉式详情，渐进披露 */}
+      <ProjectDetailSheet
+        projectKey={sheetKey}
+        isOpen={!!sheetKey}
+        onClose={() => setSheetKey(null)}
       />
     </PageContainer>
   );

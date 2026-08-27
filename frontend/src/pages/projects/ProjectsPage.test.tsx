@@ -8,6 +8,7 @@ import ProjectsPage from './ProjectsPage';
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   listProjects: vi.fn(),
+  getProject: vi.fn(),
   inventoryModels: vi.fn(),
   inventorySummary: vi.fn(),
   createProject: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('@/utils/api', () => ({
   api: {
     projects: {
       list: mocks.listProjects,
+      get: mocks.getProject,
       inventoryModels: mocks.inventoryModels,
       inventorySummary: mocks.inventorySummary,
       create: mocks.createProject,
@@ -149,15 +151,38 @@ describe('ProjectsPage', () => {
     });
   });
 
-  it('navigates to project detail on card click', async () => {
+  it('opens drawer with fetched detail on card click; footer navigates to full page', async () => {
     const user = userEvent.setup();
+    mocks.getProject.mockResolvedValue(makeProject());
     renderPage();
 
-    const card = (await screen.findByText('荣耀相机')).closest('[data-testid="project-card"]');
-    expect(card).not.toBeNull();
-    await user.click(card as HTMLElement);
+    await screen.findByText('荣耀相机');
+    await user.click(screen.getByText('荣耀相机').closest('[data-testid="project-card"]')!);
 
+    // 抽屉内渲染的是 get 拉取的详情数据（非列表快照）
+    const sheet = await screen.findByTestId('project-detail-sheet');
+    expect(within(sheet).getByText('JIRA 项目键')).toBeInTheDocument();
+
+    await user.click(within(sheet).getByTestId('sheet-open-full-page'));
     expect(mocks.navigate).toHaveBeenCalledWith('/projects/HONOR-CAMERA');
+  });
+
+  it('sheet exposes admin jira key edit prefilled from detail fetch', async () => {
+    const user = userEvent.setup();
+    mocks.getProject.mockResolvedValue(
+      makeProject({ jira_project_key: 'OLD', running_run_count: 0 }),
+    );
+    renderPage();
+
+    await screen.findByText('荣耀相机');
+    await user.click(screen.getByText('荣耀相机').closest('[data-testid="project-card"]')!);
+
+    const sheet = await screen.findByTestId('project-detail-sheet');
+    // 详情页卡片内的「在跑」徽标不受抽屉影响；抽屉侧是可编辑入口
+    await user.click(await within(sheet).findByTestId('sheet-edit-jira-open'));
+
+    const jiraInput = (await screen.findByTestId('edit-project-jira')) as HTMLInputElement;
+    expect(jiraInput.value).toBe('OLD');
   });
 
   it('shows empty state when no projects exist', async () => {
