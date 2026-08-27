@@ -63,6 +63,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **Living 审查** | [`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_claude-code-2.md`](./reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_claude-code-2.md) | 同上题第二轮评审（三方交叉比对与裁决：G6 降级 P1、先拦截后赋能、gate 单点依赖论证 + DOC-MAP 引用完整性发现；产出方 Claude Code 第二轮） |
 | **Living 审查** | [`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_composer.md`](./reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_composer.md) | 同上题并行评审（六阶段成熟度 + 三层治理剖面 §4 + G1–G6 主题并表指引 + 与 claude-code-2「先拦截后赋能」对齐；产出方 Cursor Composer） |
 | **Living 审查** | [`reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md`](./reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md) | 同上题五稿总汇（canonical C-G1–C-G7 编号映射 + 裁决固化 D1–D5 + 「刻意不追」正式采纳 + 最终行动清单 P0–P2 + 独立性折扣声明；产出方 Claude Code 综合评判轮） |
+| **Living 审查** | [`reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md`](./reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md) | 治理面常驻上下文瘦身评估（55.7KB 常驻集逐文件/逐段字节盘点 + A/B/C 三级降级候选 ≈30% 削减空间 + 反方意见公平呈现 + 执行安全网协议；只读未改动，待裁决） |
 | **Living 审查** | [`reviews/TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md`](./reviews/TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md) | automation-toolkit 合入 × 平台优化七方向可行性（展锐拆两步：P2 汇总服务化先行、P1 采集 Agent 化必开 ADR 重议 #220；Jira 定位管道复用；缺口 G1–G24 + 落地顺序 + 各项 ADR 触发条件；toolkit 主张经 gh REST 对照远端复核；跟踪载体 = GitHub Projects 看板） |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
