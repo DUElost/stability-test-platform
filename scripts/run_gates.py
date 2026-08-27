@@ -93,6 +93,13 @@ GATES = {
         ROOT,
         None,
     ),
+    # skill 用量探针（防建而不用）：--strict 下 ≥14 天零调用 = 门禁红。
+    # 空洞处置二选一：删 skill 或改写触发词使其真实可命中。
+    "gov-skills": (
+        f"{PY} tools/dev/skill_usage_report.py --strict",
+        ROOT,
+        None,
+    ),
     "agent-tests": (
         f"{PY} -m pytest backend/agent/tests/ -q",
         ROOT,
@@ -142,8 +149,8 @@ PROFILES = {
         "ruff", "eslint", "tsc", "knip", "compileall",
         "pollution", "immutability", "gov-surface", "agent-tests",
     ],
-    # 治理面专项：结构门禁 + 行为 evals（后者需 claude CLI，按需手跑）
-    "check:gov": ["gov-surface", "gov-evals"],
+    # 治理面专项：结构门禁 + 行为 evals + skill 用量探针（evals 需 CLI，手跑）
+    "check:gov": ["gov-surface", "gov-evals", "gov-skills"],
     "check:full": None,  # = 全部，按 GATES 顺序
 }
 
