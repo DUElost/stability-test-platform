@@ -172,6 +172,8 @@ def run_check() -> int:
         ("CLAUDE.md", ROOT),
         ("AGENTS.md", ROOT),
         ("docs/DOC-MAP.md", os.path.join(ROOT, "docs")),
+        # B1 迁移后三个描述型索引表住进 hub——同样纳入断链防护
+        ("docs/README.md", os.path.join(ROOT, "docs")),
     ]
     for rel, basedir in link_files:
         text = open(os.path.join(ROOT, rel), encoding="utf-8").read()
