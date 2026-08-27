@@ -20,6 +20,7 @@ export { plans } from './plans';
 export { planRuns } from './planRuns';
 export { runs } from './runs';
 export { suites } from './suites';
+export { settings } from './settings';
 
 export type {
   Host, Device, Task, RunStep, TaskRun,
@@ -48,6 +49,7 @@ export type {
   JobActionCapabilities, StructuredApiError, ApiErrorCapabilities,
   HostActiveJob,
   TestSuiteSummary,
+  SystemSettings,
 } from './types';
 
 import { auth } from './auth';
@@ -65,6 +67,7 @@ import { plans } from './plans';
 import { planRuns } from './planRuns';
 import { runs } from './runs';
 import { suites } from './suites';
+import { settings } from './settings';
 
 export const api = {
   auth,
@@ -91,4 +94,5 @@ export const api = {
   planRuns,
   runs,
   suites,
+  settings,
 };

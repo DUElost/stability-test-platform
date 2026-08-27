@@ -26,6 +26,7 @@ from backend.api.schemas.notification import (
 from backend.api.schemas.schedule import TaskScheduleCreate, TaskScheduleUpdate, TaskScheduleOut
 from backend.api.schemas.audit import AuditLogOut
 from backend.api.schemas.jira_run import JiraRunOut
+from backend.api.schemas.settings import SettingsOut
 from backend.api.schemas.plan_run import (
     StepTraceOut,
     JobInstanceOut,
@@ -138,4 +139,5 @@ __all__ = [
     "PrecheckHostState",
     "PrecheckGateFailure",
     "PrecheckSummary",
+    "SettingsOut",
 ]

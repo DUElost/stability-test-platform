@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api, toApiError, NotificationChannel, AlertRule } from '@/utils/api';
@@ -68,10 +68,16 @@ export default function NotificationsPage() {
   });
   const hasLogs = (logsCountQ.data ?? 0) > 0;
 
-  if (!tabAutoDetected && !searchParams.get('tab') && hasLogs) {
-    setTab('logs');
-    setTabAutoDetected(true);
-  }
+  // 异步日志数据到达后的一次性自动导航：属 effect 内受控 setState，
+  // 有 tabAutoDetected 守卫不会循环，注释豁免 set-state-in-effect。
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!tabAutoDetected && !searchParams.get('tab') && hasLogs) {
+      setTab('logs');
+      setTabAutoDetected(true);
+    }
+  }, [tabAutoDetected, searchParams, hasLogs]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Channel form
   const [showChannelForm, setShowChannelForm] = useState(false);

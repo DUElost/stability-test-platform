@@ -23,6 +23,8 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
   const [description, setDescription] = useState('');
   const [parseError, setParseError] = useState('');
 
+  // React 官方"adjust state when prop changes"模式：render 期对比 prev 快照并重置表单。
+  // resetKey 为 `${open}|${script.id}` 稳定字符串，无引用比较问题。
   const resetKey = `${open}|${script?.id ?? ''}`;
   const [prevResetKey, setPrevResetKey] = useState(resetKey);
   if (prevResetKey !== resetKey) {

@@ -49,7 +49,13 @@ export default function AuditLogPage() {
   });
 
   const loadLogs = useCallback(async () => {
-    if (filters.start_time && filters.end_time && filters.start_time > filters.end_time) return;
+    if (filters.start_time && filters.end_time && filters.start_time > filters.end_time) {
+      // 非法区间不再静默 return：显示错误而非旧列表/空态
+      setError('起始时间不能晚于结束时间');
+      setLogs([]);
+      setTotal(0);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {

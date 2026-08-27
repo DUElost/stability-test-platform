@@ -11,6 +11,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { FORM, TEXT } from '@/design-system';
+import { InlineError } from '@/components/ui/error-state';
 import { cn } from '@/lib/utils';
 
 interface DeviceMetricsModalProps {
@@ -23,7 +24,7 @@ interface DeviceMetricsModalProps {
 export function DeviceMetricsModal({ isOpen, onClose, deviceId, deviceSerial }: DeviceMetricsModalProps) {
   const [hours, setHours] = useState(24);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['device-metrics', deviceId, hours],
     queryFn: () => api.stats.deviceMetrics(deviceId, hours),
     enabled: isOpen,
@@ -57,6 +58,13 @@ export function DeviceMetricsModal({ isOpen, onClose, deviceId, deviceSerial }: 
           {isLoading ? (
             <div className="flex h-64 items-center justify-center">
               <Loader2 className={cn('h-8 w-8 animate-spin', TEXT.subtitle)} />
+            </div>
+          ) : isError ? (
+            <div className="flex h-64 items-center justify-center">
+              <InlineError
+                message="设备指标加载失败，请稍后重试"
+                onRetry={() => void refetch()}
+              />
             </div>
           ) : (
             <DeviceMetricsChart data={data?.points || []} />
