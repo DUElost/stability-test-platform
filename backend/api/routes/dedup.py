@@ -59,6 +59,7 @@ def resolve_vendor_tool(vendor: str) -> Optional[Dict[str, str]]:
 def build_jira_argv(
     vendor: str, stage: str, tool_dir: str, python: str,
     *, input_xls: str, dry_run: bool = True, reporter: Optional[str] = None,
+    jira_project_key: Optional[str] = None,
 ) -> List[str]:
     """按 (vendor, stage) 拼装厂商工具 argv（不走 shell）。两阶段均需输入文件。
 
@@ -66,11 +67,19 @@ def build_jira_argv(
     stage=create:      create_<vendor>_jira_batch_from_excel.py <JIRA_Upload_List_*.xlsx> [--dry-run] [--reporter <reporter>]
        （create 消费 stage1 产出的上传模板；输入文件作为位置参数传入，
          reporter 指定建单负责人；具体 CLI 形参可按工具版本在部署侧微调。）
+
+    jira_project_key（G17）：仅 upload_list 阶段注入 `--set-project-key`。
+    工具内部按机型的 affect_project_mapping 逐行优先、注入值只替换默认槽位
+    （2026-08-27 对照 Transsion/Tinno generate 脚本源码确认），因此登记簿的
+    粗粒度键不会覆盖细粒度映射；Moto 工具无此参数（vendor 未接，见 G16）。
     """
     d = Path(tool_dir)
     if stage == "upload_list":
         script = d / f"generate_{vendor}_jira_upload_list.py"
-        return [python, str(script), "--add-main-excel", input_xls]
+        argv = [python, str(script), "--add-main-excel", input_xls]
+        if jira_project_key:
+            argv += ["--set-project-key", jira_project_key]
+        return argv
     if stage == "create":
         script = d / f"create_{vendor}_jira_batch_from_excel.py"
         argv = [python, str(script), "--add-excel-file", input_xls]
@@ -107,6 +116,32 @@ def _work_dir() -> Path:
     root = Path(os.getenv("STP_DEDUP_WORK_DIR", "logs/dedup_uploads"))
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def resolve_jira_project_key(db: Session, plan_run_id: Optional[int]) -> Optional[str]:
+    """G17：PlanRun → Plan → test_project.jira_project_key 解析链。
+
+    任一环缺失/未配置返回 None——提单是旁路功能，映射缺失只记日志不阻断
+    （厂商工具自己的默认映射仍生效）；硬门禁属 G18 自动草稿策略的范畴。
+    解析异常同样吞掉记 ERROR，保证主流程不受影响。
+    """
+    if plan_run_id is None:
+        return None
+    try:
+        from backend.models.plan import Plan
+        from backend.models.plan_run import PlanRun
+        from backend.models.project import TestProject
+
+        run = db.get(PlanRun, plan_run_id)
+        plan_id = getattr(run, "plan_id", None) if run else None
+        plan = db.get(Plan, plan_id) if plan_id else None
+        project_id = getattr(plan, "project_id", None) if plan else None
+        project = db.get(TestProject, project_id) if project_id else None
+        key = (getattr(project, "jira_project_key", "") or "").strip() if project else ""
+        return key or None
+    except Exception:
+        logger.exception("jira_project_key_resolve_failed plan_run=%s", plan_run_id)
+        return None
 
 
 def _on_jira_run_complete(run: "ConsoleRun") -> None:
@@ -222,8 +257,22 @@ async def start_jira_run(
         resolved_plan_run_id = artifact.plan_run_id
         resolved_artifact_id = artifact.id
 
+    # G17：plan_run 源时解析登记簿映射键并注入 stage1 argv；缺失不阻断（工具侧
+    # 默认映射仍生效），仅记 warning 供运营在登记簿补齐。upload 源无项目上下文。
+    jira_project_key: Optional[str] = None
+    if resolved_plan_run_id is not None:
+        jira_project_key = resolve_jira_project_key(db, resolved_plan_run_id)
+        if jira_project_key is None:
+            logger.warning(
+                "jira_project_key_unresolved source=plan_run plan_run_id=%s — "
+                "fill test_project.jira_project_key or the vendor tool falls back "
+                "to its own config mapping",
+                resolved_plan_run_id,
+            )
+
     argv = build_jira_argv(vendor, stage, tool["dir"], tool["python"],
-                           input_xls=input_xls, dry_run=dry_run, reporter=reporter)
+                           input_xls=input_xls, dry_run=dry_run, reporter=reporter,
+                           jira_project_key=jira_project_key)
 
     # on_complete 回调直接用 run.run_id（== console_run_id），无需闭包捕获；
     # 极小竞态（子进程秒级结束早于下方 INSERT）时回调记 warning 跳过，可接受。
@@ -253,6 +302,7 @@ async def start_jira_run(
                 input_source=input_source_label,
                 plan_run_id=resolved_plan_run_id,
                 artifact_id=resolved_artifact_id,
+                jira_project_key=jira_project_key,
                 status="RUNNING",
                 created_by_user_id=getattr(_user, "id", None),
             )
@@ -263,7 +313,8 @@ async def start_jira_run(
 
     logger.info("dedup_jira_run_started vendor=%s stage=%s source=%s run_id=%s", vendor, stage, source, console_run_id)
     return ok({"console_run_id": console_run_id, "room": f"console:{console_run_id}",
-               "vendor": vendor, "stage": stage, "source": source})
+               "vendor": vendor, "stage": stage, "source": source,
+               "jira_project_key": jira_project_key})
 
 
 @router.get("/runs", response_model=ApiResponse[list[JiraRunOut]])

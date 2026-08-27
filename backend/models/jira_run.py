@@ -44,6 +44,9 @@ class JiraRun(Base):
     input_source        = Column(String(512), nullable=False, default="upload")
     plan_run_id         = Column(Integer, ForeignKey("plan_run.id", ondelete="SET NULL"), nullable=True)
     artifact_id         = Column(Integer, ForeignKey("plan_run_artifact.id", ondelete="SET NULL"), nullable=True)
+    # G17：source=plan_run 时经 PlanRun→Plan→test_project 解析出的目标 Jira 项目键，
+    # 逐 run 记录实际注入值（缺键为 NULL）；审计与 G18 自动草稿策略都以此为事实源。
+    jira_project_key    = Column(String(32), nullable=True)
     status              = Column(String(16), nullable=False, default="RUNNING")  # RUNNING|SUCCESS|FAILED|CANCELED
     started_at          = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     ended_at            = Column(DateTime(timezone=True), nullable=True)
