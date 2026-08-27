@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
+  Pencil,
   Smartphone,
   FileBox,
   ListTodo,
@@ -26,9 +28,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useAuthSession } from '@/hooks/useAuthSession';
+import { useToast } from '@/hooks/useToast';
 import { api, toApiError } from '@/utils/api';
 import { projectKeys } from '@/utils/api/queryKeys';
+import type { ProjectUpdateInput } from '@/utils/api/types';
 import { formatLocalDateTime } from '@/utils/format';
+import EditProjectDialog from './components/EditProjectDialog';
 import { coverageSummary } from './inventoryDisplay';
 
 const FACET_FIELDS = [
@@ -66,6 +72,25 @@ export default function ProjectDetailPage() {
   const modelsQ = useQuery({
     queryKey: projectKeys.modelsOf(projectKey),
     queryFn: () => api.projects.modelsOf(projectKey),
+  });
+
+  // G17 收尾：登记簿编辑入口（后端 PUT 仅 admin；fields_set 语义，显式 null 即清空）
+  const sessionQ = useAuthSession();
+  const isAdmin = sessionQ.data?.role === 'admin';
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [editOpen, setEditOpen] = useState(false);
+  const updateMutation = useMutation({
+    mutationFn: (payload: ProjectUpdateInput) => api.projects.update(projectKey, payload),
+    onSuccess: () => {
+      toast.success('项目信息已更新');
+      setEditOpen(false);
+      void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectKey) });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
+    },
+    onError: (error) => {
+      toast.error(`更新失败: ${toApiError(error).message || '请稍后重试'}`);
+    },
   });
 
   if (detailQ.isLoading) {
@@ -150,6 +175,19 @@ export default function ProjectDetailPage() {
               <Badge variant="secondary" className="text-[11px] font-normal">
                 系统回填（不在工作台列出）
               </Badge>
+            ) : null}
+            {isAdmin ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-auto"
+                data-testid="edit-project-open"
+                onClick={() => setEditOpen(true)}
+                disabled={project.status === 'ARCHIVED'}
+              >
+                <Pencil className="h-3.5 w-3.5 mr-1" />
+                编辑
+              </Button>
             ) : null}
           </div>
           {project.source === 'SEED' ? (
@@ -331,17 +369,29 @@ export default function ProjectDetailPage() {
             {project.jira_project_key ? (
               <p>
                 提交 JIRA 时将自动带出项目关键字{' '}
-                <span className="font-mono text-foreground">{project.jira_project_key}</span>（P3
-                落地后生效）。
+                <span className="font-mono text-foreground">{project.jira_project_key}</span>
+                （plan_run 源提单已接入自动注入）。
               </p>
             ) : (
               <p data-testid="jira-placeholder">
-                尚未配置 JIRA 项目关键字。P3 落地后由管理员在此维护。
+                尚未配置 JIRA 项目关键字。管理员可通过右上角「编辑」填写；配置后
+                plan_run 源提单将自动带出该键。
               </p>
             )}
           </CardContent>
         </Card>
       </div>
+
+      {/* 编辑项目（G17 收尾：JIRA 键等登记簿字段的人工修正通道） */}
+      {isAdmin && project ? (
+        <EditProjectDialog
+          isOpen={editOpen}
+          isSubmitting={updateMutation.isPending}
+          project={project}
+          onClose={() => setEditOpen(false)}
+          onSubmit={(payload) => updateMutation.mutate(payload)}
+        />
+      ) : null}
     </PageContainer>
   );
 }

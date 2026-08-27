@@ -7,10 +7,12 @@ import ProjectDetailPage from './ProjectDetailPage';
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   getProject: vi.fn(),
+  updateProject: vi.fn(),
   listDevices: vi.fn(),
   listPlans: vi.fn(),
   resultsSummary: vi.fn(),
   modelsOf: vi.fn(),
+  authRole: 'admin',
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -21,9 +23,17 @@ vi.mock('react-router-dom', async () => {
   };
 });
 
+vi.mock('@/hooks/useAuthSession', () => ({
+  useAuthSession: () => ({ data: { role: mocks.authRole } }),
+}));
+
+vi.mock('@/hooks/useToast', () => ({
+  useToast: () => ({ success: vi.fn(), error: vi.fn() }),
+}));
+
 vi.mock('@/utils/api', () => ({
   api: {
-    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf },
+    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject },
     devices: { list: mocks.listDevices },
     plans: { list: mocks.listPlans },
     results: { summary: mocks.resultsSummary },
@@ -75,6 +85,7 @@ function renderPage() {
 describe('ProjectDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.authRole = 'admin';
     mocks.getProject.mockResolvedValue(makeDetail());
     mocks.modelsOf.mockResolvedValue([
       { model: 'M1', device_count: 1, platforms: ['MTK'] },
@@ -175,5 +186,58 @@ describe('ProjectDetailPage', () => {
       '不能代表客户、项目或机型',
     );
     expect(screen.queryByTestId('match-models-empty')).not.toBeInTheDocument();
+  });
+
+  it('admin opens prefilled edit dialog and submits updated jira key', async () => {
+    mocks.getProject.mockResolvedValue(makeDetail({ jira_project_key: 'OLD' }));
+    mocks.updateProject.mockResolvedValue(makeDetail({ jira_project_key: 'VFFCA' }));
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId('edit-project-open'));
+    const input = (await screen.findByTestId('edit-project-jira')) as HTMLInputElement;
+    expect(input.value).toBe('OLD');
+    fireEvent.change(input, { target: { value: 'VFFCA' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(mocks.updateProject).toHaveBeenCalledWith(
+        'proj-a',
+        expect.objectContaining({
+          display_name: 'Project A',
+          jira_project_key: 'VFFCA',
+        }),
+      );
+    });
+    // 成功后关窗并失效详情缓存 → getProject 至少重新拉取一次
+    await waitFor(() => {
+      expect(mocks.getProject.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('edit-project-jira')).not.toBeInTheDocument();
+    });
+  });
+
+  it('blank jira key submits explicit null (PUT fields_set 清空语义)', async () => {
+    mocks.updateProject.mockResolvedValue(makeDetail());
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId('edit-project-open'));
+    const input = await screen.findByTestId('edit-project-jira');
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(mocks.updateProject).toHaveBeenCalledWith(
+        'proj-a',
+        expect.objectContaining({ jira_project_key: null }),
+      );
+    });
+  });
+
+  it('non-admin does not see edit entry', async () => {
+    mocks.authRole = 'viewer';
+    renderPage();
+    await screen.findByText('Project A');
+    expect(screen.queryByTestId('edit-project-open')).not.toBeInTheDocument();
   });
 });
