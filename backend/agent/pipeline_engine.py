@@ -649,6 +649,10 @@ class PipelineEngine:
         # ADR-0026 barrier: PlanRunHost id + expected peer count (INIT→PATROL)
         plan_run_host_id: Optional[int] = None,
         barrier_total: Optional[int] = None,
+        # #483: step-trace 异步上传器。终态宣告前 drain_sync() 排空，
+        # 否则快路径（步骤秒级完成）下 trace 批次晚于 job 终态到达控制面
+        # 会被拒绝——.20/.81/.83/.84 实测 flash/oobe trace 截断的根因。
+        step_trace_uploader=None,
     ):
         self._adb = adb
         self._serial = serial
@@ -685,6 +689,7 @@ class PipelineEngine:
         self._process_lock = threading.Lock()
         self._active_process: Optional[subprocess.Popen] = None
         self._patrol_cycle_index = 0
+        self._step_trace_uploader = step_trace_uploader  # #483
 
     def set_patrol_cycle_resume(self, checkpoint: dict) -> None:
         """Restore patrol loop from a persisted checkpoint (agent crash recovery)."""
@@ -1705,6 +1710,22 @@ class PipelineEngine:
                 teardown_result = self._execute_teardown_best_effort(teardown_def)
 
         # ── Unified exit: terminal MQ + artifact + StepResult ──
+        # #483: 终态前必须排空 step-trace 上传队列——异步批量上传器可能
+        # 落后于 teardown，迟到批次会被控制面以"job 已终态"拒绝（trace
+        # 截断、oobe 编排失明）。drain_sync 阻塞直到队列清空或出错。
+        if self._step_trace_uploader is not None:
+            try:
+                flushed = self._step_trace_uploader.drain_sync()
+                if flushed:
+                    logger.info(
+                        "[Lifecycle] run=%d — step_trace_flushed_before_terminal count=%d",
+                        self._run_id, flushed,
+                    )
+            except Exception:
+                logger.exception(
+                    "step_trace_drain_before_terminal_failed run=%d", self._run_id,
+                )
+
         success = termination_reason in ("completed", "timeout")
 
         # Map termination_reason to MQ terminal status

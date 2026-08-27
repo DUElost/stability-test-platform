@@ -180,6 +180,7 @@ def run_task_wrapper(
     patrol_cycle_checkpoint_store: Optional[Any] = None,
     operation_scheduler: Any = None,
     coordinator: Any = None,
+    step_trace_uploader: Optional[Any] = None,  # #483
 ) -> None:
     """Run a claimed job in a worker thread and report its terminal state."""
     job_id = run["id"]
@@ -329,6 +330,7 @@ def run_task_wrapper(
             device_id=device_id,
             plan_run_host_id=run.get("plan_run_host_id"),
             barrier_total=run.get("plan_run_host_total_job_count"),
+            step_trace_uploader=step_trace_uploader,
         )
 
         watcher_summary = None
