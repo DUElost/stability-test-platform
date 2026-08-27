@@ -1,0 +1,160 @@
+import { useState } from 'react';
+import { Pencil } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { FORM } from '@/design-system';
+import type { ProjectDetail, ProjectUpdateInput } from '@/utils/api/types';
+
+type Props = {
+  isOpen: boolean;
+  isSubmitting?: boolean;
+  /** 打开时用于预填；提交只回传后端 _UPDATABLE_FIELDS 覆盖的六个字段 */
+  project: ProjectDetail;
+  onClose: () => void;
+  onSubmit: (payload: ProjectUpdateInput) => void;
+};
+
+const EDITABLE_TEXT_FIELDS = [
+  ['customer', '客户'],
+  ['platform', '平台'],
+  ['form_factor', '形态'],
+  ['product_line', '产品线'],
+] as const;
+
+export default function EditProjectDialog({
+  isOpen,
+  isSubmitting = false,
+  project,
+  onClose,
+  onSubmit,
+}: Props) {
+  const [form, setForm] = useState<ProjectUpdateInput>({});
+  const [error, setError] = useState('');
+
+  const [prevOpen, setPrevOpen] = useState(isOpen);
+  if (prevOpen !== isOpen) {
+    setPrevOpen(isOpen);
+    if (isOpen) {
+      setForm({
+        display_name: project.display_name,
+        customer: project.customer ?? '',
+        platform: project.platform ?? '',
+        form_factor: project.form_factor ?? '',
+        product_line: project.product_line ?? '',
+        jira_project_key: project.jira_project_key ?? '',
+      });
+      setError('');
+    }
+  }
+
+  const setField = (key: keyof ProjectUpdateInput, value: string) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setError('');
+  };
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const displayName = (form.display_name ?? '').trim();
+    if (!displayName) {
+      setError('显示名不能为空');
+      return;
+    }
+    // 空串 → null：与后端 PUT fields_set 语义一致（显式清空 facet / jira 键）
+    const blankToNull = (value?: string | null) => {
+      const trimmed = value?.trim();
+      return trimmed ? trimmed : null;
+    };
+    onSubmit({
+      display_name: displayName,
+      customer: blankToNull(form.customer),
+      platform: blankToNull(form.platform),
+      form_factor: blankToNull(form.form_factor),
+      product_line: blankToNull(form.product_line),
+      jira_project_key: blankToNull(form.jira_project_key),
+    });
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && !isSubmitting && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Pencil className="h-5 w-5 text-primary" />
+            编辑项目
+          </DialogTitle>
+          <DialogDescription>
+            项目标识不可修改。字段变更逐项落审计（仅管理员可操作），JIRA 项目键
+            将在 plan_run 源提单时自动带出。
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className={FORM.label} htmlFor="edit-project-name">
+              显示名
+            </label>
+            <Input
+              id="edit-project-name"
+              data-testid="edit-project-name"
+              value={form.display_name ?? ''}
+              onChange={(event) => setField('display_name', event.target.value)}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {EDITABLE_TEXT_FIELDS.map(([field, label]) => (
+              <div key={field}>
+                <label className={FORM.label} htmlFor={`edit-project-${field}`}>
+                  {label}
+                </label>
+                <Input
+                  id={`edit-project-${field}`}
+                  data-testid={`edit-project-${field}`}
+                  value={form[field] ?? ''}
+                  onChange={(event) => setField(field, event.target.value)}
+                />
+              </div>
+            ))}
+          </div>
+          <div>
+            <label className={FORM.label} htmlFor="edit-project-jira">
+              JIRA 项目键
+            </label>
+            <Input
+              id="edit-project-jira"
+              data-testid="edit-project-jira"
+              value={form.jira_project_key ?? ''}
+              onChange={(event) => setField('jira_project_key', event.target.value)}
+              placeholder="如 VFFCA；留空表示未配置"
+              className="font-mono"
+            />
+          </div>
+          {error ? (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isSubmitting}
+              onClick={() => onClose()}
+            >
+              取消
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? '保存中…' : '保存'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
