@@ -698,3 +698,68 @@ class TestTeardownPermit:
         assert scheduler.acquire.call_count == 2, "每步必须 acquire 一次"
         assert permit.release.called, "permit 必须 release(不能拿锁不还)"
         assert permit.release.call_count == 2
+
+
+class TestStepTraceFlushBeforeTerminal:
+    """#483：终态返回前必须排空 step-trace 上传队列。
+
+    快路径（preflight/flash SKIPPED 秒级完成）下，异步批量上传器的
+    迟到批次会在 job 终态之后到达控制面并被拒绝——.20/.81/.83/.84
+    实测 flash/oobe trace 截断、oobe 编排失明的根因。修复：引擎在
+    unified exit 中、返回前对注入的上传器调用 drain_sync()。
+    """
+
+    @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
+    def test_drain_sync_called_before_terminal_return(self, mock_sleep):
+        engine, *_ = _make_engine()
+        fake_uploader = MagicMock()
+        fake_uploader.drain_sync.return_value = 3
+        engine._step_trace_uploader = fake_uploader
+        engine._run_lifecycle_steps = (
+            lambda phase, steps: StepResult(success=True))
+        engine._execute_teardown_best_effort = (
+            lambda td: StepResult(success=True,
+                                  metadata={"teardown_status": "SUCCESS"}))
+        engine._verify_device_lease = lambda: None
+        engine._archive_logs = lambda: None
+
+        result = engine._execute_lifecycle(_lifecycle_no_patrol())
+
+        assert result.success is True
+        fake_uploader.drain_sync.assert_called_once()
+
+    @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
+    def test_drain_error_does_not_block_terminal(self, mock_sleep):
+        """上传器异常时不得阻塞终态返回——best-effort 排空。"""
+        engine, *_ = _make_engine()
+        fake_uploader = MagicMock()
+        fake_uploader.drain_sync.side_effect = RuntimeError("uploader blew up")
+        engine._step_trace_uploader = fake_uploader
+        engine._run_lifecycle_steps = (
+            lambda phase, steps: StepResult(success=True))
+        engine._execute_teardown_best_effort = (
+            lambda td: StepResult(success=True,
+                                  metadata={"teardown_status": "SUCCESS"}))
+        engine._verify_device_lease = lambda: None
+        engine._archive_logs = lambda: None
+
+        result = engine._execute_lifecycle(_lifecycle_no_patrol())
+
+        assert result.success is True
+        fake_uploader.drain_sync.assert_called_once()
+
+    @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
+    def test_no_uploader_injected_is_noop(self, mock_sleep):
+        """未注入上传器（旧调用方/单测）→ 生命周期行为不变。"""
+        engine, *_ = _make_engine()
+        engine._run_lifecycle_steps = (
+            lambda phase, steps: StepResult(success=True))
+        engine._execute_teardown_best_effort = (
+            lambda td: StepResult(success=True,
+                                  metadata={"teardown_status": "SUCCESS"}))
+        engine._verify_device_lease = lambda: None
+        engine._archive_logs = lambda: None
+
+        result = engine._execute_lifecycle(_lifecycle_no_patrol())
+
+        assert result.success is True

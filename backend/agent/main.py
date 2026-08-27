@@ -1074,6 +1074,7 @@ def main() -> None:
             patrol_checkpoint_store,
             operation_scheduler=operation_scheduler,
             coordinator=coordinator,
+            step_trace_uploader=step_trace_uploader,  # #483
         )
 
     _resume_recovered_job = _resume_recovered_job_impl
@@ -1182,6 +1183,7 @@ def main() -> None:
                                 patrol_checkpoint_store,
                                 operation_scheduler=operation_scheduler,
                                 coordinator=coordinator,
+                                step_trace_uploader=step_trace_uploader,  # #483
                             )
                         except Exception:
                             logger.exception("submit_failed job=%d device=%s", job["id"], device_id)
