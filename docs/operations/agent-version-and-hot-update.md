@@ -84,6 +84,12 @@ CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_ag
 
 - **回滚形态**：对目标 host 重跑指向旧 code revision 的热更新（同一流程），`.env`
   键值不动。回滚路径与本文件 §2 是同一条路——它就是「最被练过的路径」。
+- **回滚执行前置检查**（2026-08-27 就绪性审计结论，详见
+  [`2026-08-27-agent-rollback-readiness-audit.md`](./2026-08-27-agent-rollback-readiness-audit.md)）：
+  ① host 侧五项就绪（VERSION 可读 / `.env` 存在 / schemas 存在 / 服务可重启 /
+  磁盘充足——34/34 已验）；② 目标 revision 在 git 历史可得；③ **控制面 agent
+  源码树先切到目标 revision**（`_build_tarball` 打包当前 HEAD，无一键入口——
+  此步骤是回滚链唯一非原子环节）。
 - **演练策略**：部署是偶发手工动作而非持续交付，不设主动演练排期；**每次真实
   回滚完成后在本节末尾追加一行记录**（日期 / 触发原因 / 波及 host 数 / 耗时 /
   是否一次成功）。历史积累即演练库；出现「连续两次回滚不顺」再升级为正式演练
