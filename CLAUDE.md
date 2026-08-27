@@ -8,9 +8,7 @@
 
 @docs/DOC-MAP.md
 
-Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以本文与 AGENTS.md 为准），说明见：
-
-@docs/development/cursor-rules.md
+Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以本文与 AGENTS.md 为准），说明见：[docs/development/cursor-rules.md](docs/development/cursor-rules.md)（按需查阅）
 
 ---
 
