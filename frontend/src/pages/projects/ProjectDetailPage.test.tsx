@@ -145,9 +145,7 @@ describe('ProjectDetailPage', () => {
     // 「Plan A」同时出现在计划块与结果块 recent_runs 里——按数量断言
     expect((await screen.findAllByText('Plan A')).length).toBeGreaterThanOrEqual(2);
     expect(await screen.findByText('#1')).toBeInTheDocument();
-    expect(await screen.findByTestId('match-models-empty')).toHaveTextContent(
-      '尚未映射型号',
-    );
+    expect(await screen.findByTestId('detail-kpi-strip')).toBeInTheDocument();
     expect(await screen.findByTestId('hanging-models')).toHaveTextContent(
       '当前归属此项目的设备型号：M1 (1)',
     );
@@ -185,7 +183,7 @@ describe('ProjectDetailPage', () => {
     expect(await screen.findByTestId('seed-disclaimer')).toHaveTextContent(
       '不能代表客户、项目或机型',
     );
-    expect(screen.queryByTestId('match-models-empty')).not.toBeInTheDocument();
+    expect(screen.queryByText('已映射型号：')).not.toBeInTheDocument();
   });
 
   it('admin opens prefilled edit dialog and submits updated jira key', async () => {

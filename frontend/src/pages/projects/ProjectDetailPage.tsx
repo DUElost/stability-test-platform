@@ -25,7 +25,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { InlineEmpty } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
-import { STAT, TEXT } from '@/design-system/tokens';
+import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -194,15 +194,7 @@ export default function ProjectDetailPage() {
             <p className={cn('mt-3 text-xs', TEXT.subtitle)} data-testid="seed-disclaimer">
               这是 P1 脚本灌入的回填标签，不能代表客户、项目或机型。请在工作台新建人工项目并映射型号。
             </p>
-          ) : (project.match_models ?? []).length > 0 ? (
-            <p className={cn('mt-3 font-mono text-xs', TEXT.subtitle)} data-testid="match-models">
-              已映射型号：{(project.match_models ?? []).join(' · ')}
-            </p>
-          ) : (
-            <p className={cn('mt-3 text-xs', TEXT.subtitle)} data-testid="match-models-empty">
-              尚未映射型号。请在工作台勾选型号后填写。
-            </p>
-          )}
+          ) : null}
           {modelsQ.isLoading ? (
             <Skeleton className="mt-2 h-5 w-64" />
           ) : modelsQ.data && modelsQ.data.length > 0 ? (
@@ -217,33 +209,36 @@ export default function ProjectDetailPage() {
         </CardContent>
       </Card>
 
-      {/* 统计 */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Card>
-          <CardContent className="py-4 text-center">
-            <p className={STAT.value}>{project.device_count}</p>
-            <p className={STAT.label}>设备</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-4 text-center">
-            <p className={STAT.value}>{project.plan_count}</p>
-            <p className={STAT.label}>Plan</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-4 text-center">
-            <p className={STAT.value}>{project.total_run_count}</p>
-            <p className={STAT.label}>历史 Run</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-4 text-center">
-            <p className={STAT.value}>{project.running_run_count}</p>
-            <p className={STAT.label}>在跑 Run</p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* KPI 带（与列表页/抽屉同款形态） */}
+      <Card data-testid="detail-kpi-strip">
+        <CardContent className="py-3">
+          <div className="grid grid-cols-2 divide-x md:grid-cols-4">
+            <div className="px-4 py-1 text-center">
+              <p className="text-lg font-bold leading-none text-foreground">{project.device_count}</p>
+              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>设备</p>
+            </div>
+            <div className="px-4 py-1 text-center">
+              <p className="text-lg font-bold leading-none text-foreground">{project.plan_count}</p>
+              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>Plan</p>
+            </div>
+            <div className="px-4 py-1 text-center">
+              <p className="text-lg font-bold leading-none text-foreground">{project.total_run_count}</p>
+              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>历史 Run</p>
+            </div>
+            <div className="px-4 py-1 text-center">
+              <p
+                className={cn(
+                  'text-lg font-bold leading-none',
+                  project.running_run_count > 0 ? 'text-success' : 'text-foreground',
+                )}
+              >
+                {project.running_run_count}
+              </p>
+              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>在跑 Run</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* 设备块 */}
@@ -254,7 +249,7 @@ export default function ProjectDetailPage() {
               设备（{project.device_count}）
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="py-3">
             {devicesQ.isLoading ? (
               <Skeleton className="h-24 w-full" />
             ) : devices.length === 0 ? (
@@ -285,7 +280,7 @@ export default function ProjectDetailPage() {
               计划（{project.plan_count}）
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="py-3">
             {plansQ.isLoading ? (
               <Skeleton className="h-24 w-full" />
             ) : plans.length === 0 ? (
