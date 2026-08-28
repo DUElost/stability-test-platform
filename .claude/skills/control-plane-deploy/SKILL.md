@@ -22,24 +22,28 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 
 ## 1. 控制面后端更新与 DB 迁移（本机即生产控制面）
 
-> 本机（127.0.0.1:8000）即是生产控制面：代码跑在 `/opt/stability-test-platform`，
-> **不等于** git 仓库工作区（仓库根只读，生产唯一 env 源是 `.env.backend`）。
+> 本机（127.0.0.1:8000）即是生产控制面：代码即跑在 **git 仓库根
+> `/home/debian13/stability-test-platform`**（systemd `WorkingDirectory` 指向它），
+> `#else` 上述清单里的 `/opt/stability-test-platform` 对**本机不成立**（已校准，
+> 该目录不存在）。生产唯一 env 源是 `.env.backend`。
 > 这是**既有人工 SOP**（`docs/production-minimum-deployment-checklist.md` §3.5），
 > 不是 CI/CD 管道——每次上线都要人工执行。
 
 1. **PR 合入** main（禁直推；auto-merge 由 AGENTS.md 门禁把关）。
-2. **同步代码到生产目录**：把 repo 变更 rsync / git 更新到 `/opt/stability-test-platform`。
+2. **同步代码到生产目录**（本机=仓库根）：`git checkout main && git pull origin main`
+   ——部署源就是工作树，务必保持在 main。
 3. **应用 DB 迁移**（禁止直连生产库手动 `alembic upgrade`：
-   AGENTS.md「迁移试验禁对生产库执行」；迁移必须先经 PR + 上面验证）：
+   AGENTS.md「迁移试验禁对生产库执行」；迁移必须先经 PR + 验证）：
    ```bash
-   cd /opt/stability-test-platform/backend
+   cd /home/debian13/stability-test-platform/backend
    ../venv/bin/python -m alembic upgrade head
    ```
    部署后回查：`venv/bin/python -m alembic current` 应等于目标 revision。
 4. **重启服务**（迁移若已解耦为 `-migrate` oneshot，则只重启常驻服务）：
    ```bash
    sudo systemctl restart stability-backend
-   sudo systemctl status stability-backend --no-pager
+   systemctl is-active stability-backend
+   curl -s http://127.0.0.1:8000/health
    ```
 5. **迁移窗口观察**（改 host.id 类迁移）：Agent 的 `agent:{host_id}` socketio room
    键随 id 变更，Agent 需按新 id 重建心跳/连接——预期一次重连，观测心跳波动；
@@ -95,4 +99,5 @@ venv/bin/python -m backend.scripts.batch_hot_update   # ⚠️待校对：参数
 |------|-----------|------|
 | 2026-08-27 | v0 骨架创建（全部 ⚠️待校对） | memory + runbook 预起草 |
 | 2026-08-28 | 新增 §1 控制面后端更新与 DB 迁移路径（本机即生产控制面） | docs/production-minimum-deployment-checklist.md §3.5 + k8l9m0n1o2p3 迁移 |
+| 2026-08-28 | 校准 §1：本机生产代码路径是仓库根 `/home/debian13/stability-test-platform`，非 `/opt/...`（后者不存在）；部署现已实操验证（k8l9m0n1o2p3 真机应用 + restart + 34 ONLINE） | 本机 pgrep/journalctl + 正式部署 |
 | （下次真实部署） | | |
