@@ -8,7 +8,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
-import { TEXT } from '@/design-system/tokens';
+import { LAYOUT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -140,18 +140,10 @@ export default function ProjectsPage() {
   }, [projects]);
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title="项目登记簿"
         subtitle="按客户与机型登记项目归属，维护 JIRA 集成。"
-        action={
-          isAdmin ? (
-            <Button data-testid="create-project-open" onClick={() => setCreateOpen(true)}>
-              <Plus className="mr-1.5 h-4 w-4" />
-              新建项目
-            </Button>
-          ) : undefined
-        }
       />
 
       {/* KPI 带（与抽屉内 KPI 行同款紧凑形态） */}
@@ -185,11 +177,23 @@ export default function ProjectsPage() {
 
       {/* ── 主区块：人工项目 ───────────────────────────────── */}
       <section aria-label="人工项目" className="space-y-3">
-        <div>
-          <h2 className={cn('text-base font-semibold', TEXT.heading)}>项目</h2>
-          <p className={cn('mt-0.5 text-xs', TEXT.subtitle)}>
-            {(projects ?? []).length} 个项目 · 点击卡片查看详情，JIRA 项目键等字段在详情页维护
-          </p>
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <h2 className={cn('text-base font-semibold', TEXT.heading)}>项目</h2>
+            <p className={cn('mt-0.5 text-xs', TEXT.subtitle)}>
+              {(projects ?? []).length} 个项目 · 点击卡片查看详情，JIRA 项目键等字段在详情页维护
+            </p>
+          </div>
+          {isAdmin ? (
+            <Button
+              size="sm"
+              data-testid="create-project-open"
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus className="mr-1.5 h-4 w-4" />
+              新建项目
+            </Button>
+          ) : null}
         </div>
 
         {/* facet 筛选：chip 单选（点选中值过滤，选「全部」恢复） */}
@@ -285,14 +289,14 @@ export default function ProjectsPage() {
             icon={<Layers className="w-16 h-16" />}
           />
         ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
             {filtered.map((project) => (
               <Card
                 key={project.project_key}
                 data-testid="project-card"
                 role="button"
                 tabIndex={0}
-                className="cursor-pointer transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="cursor-pointer transition-all hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => setSheetKey(project.project_key)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
@@ -301,15 +305,24 @@ export default function ProjectsPage() {
                   }
                 }}
               >
-                <CardContent className="py-4">
+                <CardContent className="py-5">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h3 className={cn('truncate font-medium', TEXT.heading)}>
-                        {project.display_name}
-                      </h3>
-                      <p className={cn('font-mono text-xs', TEXT.subtitle)}>
-                        {project.project_key}
-                      </p>
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div
+                        data-testid={`project-avatar-${project.project_key}`}
+                        aria-hidden
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-sm font-semibold text-primary"
+                      >
+                        {project.display_name.slice(0, 1).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className={cn('truncate font-medium', TEXT.heading)}>
+                          {project.display_name}
+                        </h3>
+                        <p className={cn('font-mono text-xs', TEXT.subtitle)}>
+                          {project.project_key}
+                        </p>
+                      </div>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-xl font-bold leading-none text-foreground">
