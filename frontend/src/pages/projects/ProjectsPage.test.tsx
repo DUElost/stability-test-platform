@@ -136,6 +136,7 @@ describe('ProjectsPage', () => {
     expect(screen.queryByText('HONOR-MLD')).not.toBeInTheDocument();
     expect(screen.queryByText('Legacy')).not.toBeInTheDocument();
     expect(await screen.findByText('2')).toBeInTheDocument();
+    expect(screen.getByTestId('kpi-strip')).toBeInTheDocument();
   });
 
   it('filters cards by facet selection', async () => {
