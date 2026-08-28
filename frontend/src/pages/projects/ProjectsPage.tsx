@@ -8,7 +8,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
-import { STAT, TEXT } from '@/design-system/tokens';
+import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -154,26 +154,34 @@ export default function ProjectsPage() {
         }
       />
 
-      <div className="grid grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="py-4 text-center">
-            <p className={STAT.value}>{totals.projects}</p>
-            <p className={STAT.label}>人工项目</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-4 text-center">
-            <p className={STAT.value}>{summaryQ.data?.total_devices ?? totals.devices}</p>
-            <p className={STAT.label}>设备总数</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-4 text-center">
-            <p className={STAT.value}>{totals.running}</p>
-            <p className={STAT.label}>在跑 Run</p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* KPI 带（与抽屉内 KPI 行同款紧凑形态） */}
+      <Card data-testid="kpi-strip">
+        <CardContent className="py-3">
+          <div className="grid grid-cols-3 divide-x">
+            <div className="px-4 text-center">
+              <p className="text-lg font-bold leading-none text-foreground">{totals.projects}</p>
+              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>人工项目</p>
+            </div>
+            <div className="px-4 text-center">
+              <p className="text-lg font-bold leading-none text-foreground">
+                {summaryQ.data?.total_devices ?? totals.devices}
+              </p>
+              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>设备总数</p>
+            </div>
+            <div className="px-4 text-center">
+              <p
+                className={cn(
+                  'text-lg font-bold leading-none',
+                  totals.running > 0 ? 'text-success' : 'text-foreground',
+                )}
+              >
+                {totals.running}
+              </p>
+              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>在跑 Run</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* ── 主区块：人工项目 ───────────────────────────────── */}
       <section aria-label="人工项目" className="space-y-3">

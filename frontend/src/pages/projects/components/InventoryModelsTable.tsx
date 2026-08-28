@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { FORM, TEXT } from '@/design-system/tokens';
+import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import type { InventoryModel, InventorySummary } from '@/utils/api/types';
 import { formatModelLabel, isMapped, selectableModel } from '../inventoryDisplay';
@@ -44,6 +44,15 @@ function MappingCell({ row }: { row: InventoryModel }) {
         </Badge>
       ))}
     </div>
+  );
+}
+
+function facetChipClass(active: boolean): string {
+  return cn(
+    'rounded-full border px-2.5 py-0.5 text-xs transition-colors',
+    active
+      ? 'border-primary/40 bg-accent font-medium text-foreground'
+      : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground',
   );
 }
 
@@ -109,29 +118,43 @@ export default function InventoryModelsTable({
           <div>
             <CardTitle className="text-sm font-medium">Fleet 型号分布</CardTitle>
             <p className={cn('mt-1 text-xs', TEXT.subtitle)}>
-              型号 / platform 来自设备心跳。已映射项目只能人工填写，不会从 HONOR-MLD 等回填标签推断。
+              设备心跳采集的型号清单，勾选行后可批量归入上方项目。
               {summary
-                ? ` ${summary.distinct_models} 种型号 · ${summary.user_mapped_devices} 台已映射 · ${summary.unmapped_models.length} 种未映射`
+                ? ` 共 ${summary.distinct_models} 种型号 · ${summary.user_mapped_devices} 台已映射 · ${summary.unmapped_models.length} 种待映射`
                 : null}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={platformFilter ?? 'all'}
-              onChange={(e) =>
-                setPlatformFilter(e.target.value === 'all' ? undefined : e.target.value)
-              }
-              data-testid="inventory-platform"
-              className={`${FORM.selectSm} w-[140px]`}
+            <div
+              role="group"
               aria-label="平台筛选"
+              data-testid="inventory-platform"
+              className="flex flex-wrap items-center gap-1.5"
             >
-              <option value="all">全部平台</option>
+              <button
+                type="button"
+                data-testid="inventory-platform-all"
+                aria-pressed={!platformFilter}
+                onClick={() => setPlatformFilter(undefined)}
+                className={facetChipClass(!platformFilter)}
+              >
+                全部
+              </button>
               {platformOptions.map((platform) => (
-                <option key={platform} value={platform}>
+                <button
+                  key={platform}
+                  type="button"
+                  data-testid={`inventory-platform-${platform}`}
+                  aria-pressed={platformFilter === platform}
+                  onClick={() =>
+                    setPlatformFilter(platformFilter === platform ? undefined : platform)
+                  }
+                  className={facetChipClass(platformFilter === platform)}
+                >
                   {platform}
-                </option>
+                </button>
               ))}
-            </select>
+            </div>
             <label
               className={cn(
                 'inline-flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-lg border bg-card px-2.5 text-xs',
