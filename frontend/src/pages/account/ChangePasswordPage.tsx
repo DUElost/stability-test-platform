@@ -70,8 +70,9 @@ export default function ChangePasswordPage() {
 
           <form onSubmit={handleChangePassword} className="space-y-4">
             <div>
-              <label className={FORM.label}>当前密码</label>
+              <label htmlFor="cp-old-password" className={FORM.label}>当前密码</label>
               <input
+                id="cp-old-password"
                 type="password"
                 value={oldPassword}
                 onChange={(e) => setOldPassword(e.target.value)}
@@ -80,8 +81,9 @@ export default function ChangePasswordPage() {
               />
             </div>
             <div>
-              <label className={FORM.label}>新密码</label>
+              <label htmlFor="cp-new-password" className={FORM.label}>新密码</label>
               <input
+                id="cp-new-password"
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
@@ -92,8 +94,9 @@ export default function ChangePasswordPage() {
               />
             </div>
             <div>
-              <label className={FORM.label}>确认新密码</label>
+              <label htmlFor="cp-confirm-password" className={FORM.label}>确认新密码</label>
               <input
+                id="cp-confirm-password"
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}

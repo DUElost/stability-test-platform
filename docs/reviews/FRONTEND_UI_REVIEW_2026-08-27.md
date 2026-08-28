@@ -210,7 +210,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ## 4. 一致性欠债（多页同概念多实现）
 
-### C1 — 数据获取范式分裂：react-query vs 手写 useEffect —— **已修复（2026-08-28，AuditLogPage 已迁 react-query；SchedulesPage 待迁）**
+### C1 — 数据获取范式分裂：react-query vs 手写 useEffect —— **已修复（2026-08-28：AuditLogPage + SchedulesPage 均已迁 react-query）**
 
 **证据**：绝大多数页面用 react-query；但 `AuditLogPage.tsx:51-76` 与
 `SchedulesPage.tsx:51-84` 用 `useState` + `useEffect` + `useCallback` 手动拉取。
@@ -249,7 +249,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ---
 
-### C4 — 表单实现与 label 绑定不统一
+### C4 — 表单实现与 label 绑定不统一 —— **部分修复（2026-08-28：WifiPage/SchedulesPage/ChangePasswordPage 已补 htmlFor/id；其余表单待统一）**
 
 **证据**：
 - 封装 `Input` 组件（LoginPage / RegisterPage / 多数页）vs 原生 `<input className={FORM.input}>`（ChangePasswordPage / UserModal / WifiPage 内联表单）。
@@ -260,7 +260,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ---
 
-### C5 — 错误提示 token 与消息粒度不统一
+### C5 — 错误提示 token 与消息粒度不统一 —— **部分修复（2026-08-28：LoginPage 横幅改 ALERT_BOX；SchedulesPage delete/toggle 改 toApiError；其余页面待统一）**
 
 **证据**：
 - 错误横幅 token：LoginPage 用 `STATUS_CHIP.destructive`，RegisterPage/ChangePasswordPage 用 `ALERT_BOX.destructive`。
