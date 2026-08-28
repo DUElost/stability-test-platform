@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { AlertCircle } from 'lucide-react';
 import { clearAppQueryCache } from '@/components/QueryProvider';
 import { api, toApiError } from '@/utils/api';
-import { STATUS_CHIP, SURFACE, TEXT } from '@/design-system/tokens';
+import { ALERT_BOX, SURFACE, TEXT } from '@/design-system/tokens';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 
 export default function LoginPage() {
@@ -49,7 +49,7 @@ export default function LoginPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <div className={`flex items-center gap-2 p-3 text-sm rounded-md ${STATUS_CHIP.destructive}`}>
+              <div className={`flex items-center gap-2 p-3 text-sm rounded-md ${ALERT_BOX.destructive}`}>
                 <AlertCircle className="w-4 h-4" />
                 {error}
               </div>

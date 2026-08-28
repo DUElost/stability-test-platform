@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
-import { api, toApiError, type TaskSchedule, type TaskScheduleCreatePayload, type Plan } from '@/utils/api';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { api, toApiError, type TaskSchedule, type TaskScheduleCreatePayload } from '@/utils/api';
+import { planKeys, scheduleKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { CronExpressionInput } from '@/components/schedule/CronExpressionInput';
@@ -58,40 +60,33 @@ function parseDeviceIds(input: string): { ids: number[]; invalid: string[] } {
 export default function SchedulesPage() {
   const toast = useToast();
   const confirmDialog = useConfirm();
-  const [schedules, setSchedules] = useState<TaskSchedule[]>([]);
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<TaskSchedule | null>(null);
   const [form, setForm] = useState<ScheduleForm>(DEFAULT_FORM);
 
-  const loadSchedules = useCallback(async () => {
-    const res = await api.schedules.list(0, 200);
-    setSchedules(res.items || []);
-  }, []);
-
-  const loadPlans = useCallback(async () => {
-    const list = await api.plans.list(0, 200);
-    setPlans(list || []);
-  }, []);
-
-  const loadAll = useCallback(async () => {
-    try {
-      setLoadError(null);
-      await Promise.all([loadSchedules(), loadPlans()]);
-    } catch (err: unknown) {
-      setLoadError(toApiError(err).message);
-      toast.error('加载定时任务失败');
-    } finally {
-      setLoading(false);
-    }
-  }, [loadSchedules, loadPlans, toast]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 拉取 effect 的同步 loading 置位
-    loadAll();
-  }, [loadAll]);
+  // C1：数据获取迁移 react-query（缓存/重试/去重与全站一致）
+  const schedulesQ = useQuery({
+    queryKey: scheduleKeys.list(),
+    queryFn: async () => {
+      const res = await api.schedules.list(0, 200);
+      return res.items || [];
+    },
+  });
+  const plansQ = useQuery({
+    queryKey: planKeys.list(200),
+    queryFn: () => api.plans.list(0, 200),
+  });
+  const schedules = schedulesQ.data ?? [];
+  const plans = plansQ.data ?? [];
+  const loading = schedulesQ.isLoading || plansQ.isLoading;
+  const loadError = schedulesQ.isError
+    ? (schedulesQ.error as Error)?.message ?? '加载失败'
+    : null;
+  const loadAll = () => {
+    void schedulesQ.refetch();
+    void plansQ.refetch();
+  };
 
   const handleSave = async () => {
     try {
@@ -137,7 +132,7 @@ export default function SchedulesPage() {
       setShowForm(false);
       setEditing(null);
       setForm(DEFAULT_FORM);
-      await loadSchedules();
+      qc.invalidateQueries({ queryKey: scheduleKeys.list() });
     } catch (err: unknown) {
       toast.error(toApiError(err).message);
     }
@@ -147,18 +142,20 @@ export default function SchedulesPage() {
     if (!(await confirmDialog({ description: '确定要删除此定时任务吗？', variant: 'destructive' }))) return;
     try {
       await api.schedules.delete(id);
-      await loadSchedules();
-    } catch {
-      toast.error('删除失败');
+      qc.invalidateQueries({ queryKey: scheduleKeys.list() });
+    } catch (err: unknown) {
+      // C5：错误文案带后端详情，与 handleSave 粒度一致
+      toast.error(toApiError(err).message);
     }
   };
 
   const handleToggle = async (id: number) => {
     try {
       await api.schedules.toggle(id);
-      await loadSchedules();
-    } catch {
-      toast.error('切换失败');
+      qc.invalidateQueries({ queryKey: scheduleKeys.list() });
+    } catch (err: unknown) {
+      // C5：错误文案带后端详情
+      toast.error(toApiError(err).message);
     }
   };
 
@@ -248,8 +245,9 @@ export default function SchedulesPage() {
           </h3>
           <div className="space-y-4">
             <div>
-              <label className={cn('block text-sm font-medium mb-1', TEXT.body)}>名称</label>
+              <label htmlFor="schedule-name" className={cn('block text-sm font-medium mb-1', TEXT.body)}>名称</label>
               <input
+                id="schedule-name"
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -257,15 +255,16 @@ export default function SchedulesPage() {
               />
             </div>
             <div>
-              <label className={cn('block text-sm font-medium mb-1', TEXT.body)}>Cron 表达式</label>
+              <label htmlFor="schedule-cron" className={cn('block text-sm font-medium mb-1', TEXT.body)}>Cron 表达式</label>
               <CronExpressionInput
                 value={form.cron_expr}
                 onChange={(v) => setForm({ ...form, cron_expr: v })}
               />
             </div>
             <div>
-              <label className={cn('block text-sm font-medium mb-1', TEXT.body)}>Plan 蓝图</label>
+              <label htmlFor="schedule-plan" className={cn('block text-sm font-medium mb-1', TEXT.body)}>Plan 蓝图</label>
               <select
+                id="schedule-plan"
                 value={form.plan_id}
                 onChange={(e) => setForm({ ...form, plan_id: e.target.value })}
                 className={FORM.select}
@@ -277,8 +276,9 @@ export default function SchedulesPage() {
               </select>
             </div>
             <div>
-              <label className={cn('block text-sm font-medium mb-1', TEXT.body)}>设备 IDs（逗号分隔）</label>
+              <label htmlFor="schedule-device-ids" className={cn('block text-sm font-medium mb-1', TEXT.body)}>设备 IDs（逗号分隔）</label>
               <input
+                id="schedule-device-ids"
                 type="text"
                 value={form.device_ids}
                 onChange={(e) => setForm({ ...form, device_ids: e.target.value })}
@@ -288,12 +288,13 @@ export default function SchedulesPage() {
             </div>
             <div className="flex items-center gap-2">
               <input
+                id="schedule-enabled"
                 type="checkbox"
                 checked={form.enabled}
                 onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
                 className="rounded"
               />
-              <span className={cn('text-sm', TEXT.body)}>启用</span>
+              <label htmlFor="schedule-enabled" className={cn('text-sm', TEXT.body)}>启用</label>
             </div>
             <div className="flex gap-2">
               <Button onClick={handleSave} size="sm">保存</Button>

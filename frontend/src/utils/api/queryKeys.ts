@@ -73,6 +73,10 @@ export const notificationKeys = {
   rules: () => ['notifications', 'rules'] as const,
 } as const;
 
+export const scheduleKeys = {
+  list: () => ['schedules'] as const,
+} as const;
+
 /** Job report keys — `jobId` is Job.id, not PlanRun.id. */
 export const jobReportKeys = {
   report: (jobId: number) => ['job-report', jobId] as const,
