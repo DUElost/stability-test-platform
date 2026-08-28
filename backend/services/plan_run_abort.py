@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from backend.realtime.socketio_server import schedule_emit
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -43,10 +43,10 @@ from backend.core.audit import record_audit
 from backend.core.job_timeout_config import ABORT_ACK_GRACE_SECONDS
 from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.job import JobInstance
-from backend.models.plan_run import PlanRun
-from backend.services.job_terminalization import on_job_terminal_sync
+from backend.models.plan_run import PlanRun, PlanRunHost
 from backend.services.plan_run_aggregation import (
     apply_plan_run_aggregation,
+    apply_plan_run_aggregation_from_counters,
     notify_plan_run_terminal,
 )
 from backend.services.dedup_scan import should_trigger_dedup, enqueue_dedup_terminal_sync
@@ -237,14 +237,68 @@ def abort_plan_run(
         pr.run_context = run_ctx
         flag_modified(pr, "run_context")
 
-        for job in pending_to_abort:
-            from backend.services.state_machine import JobStateMachine
-            JobStateMachine.transition(job, JobStatus.ABORTED, reason)
-            job.ended_at = now
-            aborted_jobs.append(job.id)
-            # ADR-0026 §6: PENDING→ABORTED is a real terminalization —
-            # bump O(1) counters via the single entry (run already locked).
-            on_job_terminal_sync(job, db, run=pr)
+        # #492: PENDING 批量终态化——单条 UPDATE 完成状态迁移 + 计数器
+        # 一次聚合 + 聚合审计。旧实现逐条 transition+on_job_terminal_sync：
+        # 246 的 359 台 PENDING 产生每秒 ~40 条 audit/UPDATE 风暴（手动 abort
+        # 实测控制面卡顿、会话失效）。批量语义与逐条等价：
+        #   - WHERE status='PENDING' 即状态机校验（同 VALID_TRANSITIONS 约束）
+        #   - 计数器一次性 +n（run 级与每 host 级）
+        #   - 审计聚合为一条 batch 记录
+        #   - 批量块末尾调用一次计数器聚合（等价逐条路径的每次尝试）
+        if pending_to_abort:
+            pending_ids = [job.id for job in pending_to_abort]
+            n = len(pending_ids)
+            from collections import Counter
+
+            db.execute(
+                update(JobInstance)
+                .where(
+                    JobInstance.id.in_(pending_ids),
+                    JobInstance.status == JobStatus.PENDING.value,
+                )
+                .values(
+                    status=JobStatus.ABORTED.value,
+                    status_reason=reason,
+                    execution_state=None,  # 同 transition 的终态清理语义
+                    ended_at=now,
+                    updated_at=now,
+                )
+            )
+            pr.aborted_job_count = int(pr.aborted_job_count or 0) + n
+            pr.terminal_job_count = int(pr.terminal_job_count or 0) + n
+            host_counts = Counter(
+                job.host_id for job in pending_to_abort if job.host_id
+            )
+            for hid, cnt in host_counts.items():
+                db.execute(
+                    update(PlanRunHost)
+                    .where(
+                        PlanRunHost.plan_run_id == plan_run_id,
+                        PlanRunHost.host_id == hid,
+                    )
+                    .values(
+                        aborted_job_count=PlanRunHost.aborted_job_count + cnt,
+                        terminal_job_count=PlanRunHost.terminal_job_count + cnt,
+                    )
+                )
+            record_audit(
+                db,
+                action="job_batch_terminalized",
+                resource_type="plan_run",
+                resource_id=plan_run_id,
+                details={
+                    "count": n,
+                    "from_status": JobStatus.PENDING.value,
+                    "to_status": JobStatus.ABORTED.value,
+                    "plan_run_id": plan_run_id,
+                    "hosts": dict(host_counts),
+                },
+                username=triggered_by or "system",
+            )
+            aborted_jobs.extend(pending_ids)
+            total = int(pr.total_job_count or 0)
+            if total > 0:
+                apply_plan_run_aggregation_from_counters(pr)
 
         # Refresh requested_job_ids only (pending jobs are already terminal).
         run_ctx["abort_requested"]["requested_job_ids"] = list(abort_requested_jobs)
