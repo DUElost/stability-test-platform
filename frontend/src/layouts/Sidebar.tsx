@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -16,13 +16,9 @@ import {
   Rocket,
   Code2,
   CalendarClock,
-  BellRing,
   HardDrive,
   Wifi,
   FolderKanban,
-  Users,
-  Shield,
-  Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -48,43 +44,18 @@ interface NavGroup {
   items: NavItem[];
 }
 
-// FRONTEND_NAV_IA_REDESIGN v1.1（方案 A）：三级信息架构——工作区（概览/项目/执行）
-// → 资产与成果 → 平台管理（admin 独占、收拢五处散落入口）。路由 path 全保持。
+// FRONTEND_NAV_IA_REDESIGN v1.3（2026-08-28 二次反馈：按使用频率分层，非组内重排）：
+// 一级=高频常驻（工作区/分析报告）；二级=中频折叠组（资源）；三级=低频收角落
+// （「更多功能」折叠组 + admin 管理页移入右上角 UserMenu 下拉）。路由 path 全保持。
 const navGroups: NavGroup[] = [
   {
-    label: '概览',
+    label: '工作区',
     items: [
       { path: '/', label: '仪表盘', icon: LayoutDashboard },
-    ],
-  },
-  {
-    // ADR-0029 影响表：新增「项目」一级导航，置于概览与执行之间（评审裁决：保持独立一级）
-    label: '项目',
-    items: [
       { path: '/projects', label: '项目登记簿', icon: FolderKanban },
-    ],
-  },
-  {
-    label: '执行',
-    items: [
       { path: '/orchestration/plans', label: 'Plan 管理', icon: FileBox },
       { path: '/execution/plan-execute', label: '执行 Plan', icon: Rocket },
       { path: '/execution/plan-runs', label: '执行记录', icon: ListTodo },
-      { path: '/schedules', label: '定时调度', icon: CalendarClock },
-    ],
-  },
-  {
-    label: '测试资产',
-    items: [
-      { path: '/script-management', label: '脚本库', icon: Code2 },
-      { path: '/wifi', label: 'WiFi 资源池', icon: Wifi },
-    ],
-  },
-  {
-    label: '主机与设备',
-    items: [
-      { path: '/hosts', label: '主机集群', icon: Server },
-      { path: '/devices', label: '物理设备', icon: Smartphone },
     ],
   },
   {
@@ -95,14 +66,21 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    // 平台管理：admin 专属入口单一来源（原 UserMenu 3 项 + 「主机与设备」「运营配置」各 1 项收拢）
-    label: '平台管理',
+    // 中频：排查/维护期使用，默认折叠
+    label: '资源',
     items: [
-      { path: '/users', label: '用户管理', icon: Users, adminOnly: true },
-      { path: '/notifications', label: '通知管理', icon: BellRing, adminOnly: true },
-      { path: '/audit', label: '审计日志', icon: Shield, adminOnly: true },
+      { path: '/hosts', label: '主机集群', icon: Server },
+      { path: '/devices', label: '物理设备', icon: Smartphone },
+      { path: '/script-management', label: '脚本库', icon: Code2 },
       { path: '/storage', label: '文件服务器', icon: HardDrive, adminOnly: true },
-      { path: '/settings', label: '系统设置', icon: Settings, adminOnly: true },
+    ],
+  },
+  {
+    // 低频长尾：有但不必显眼
+    label: '更多功能',
+    items: [
+      { path: '/wifi', label: 'WiFi 资源池', icon: Wifi },
+      { path: '/schedules', label: '定时调度', icon: CalendarClock },
     ],
   },
 ];
@@ -128,7 +106,32 @@ export default function Sidebar({
   const location = useLocation();
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+
+  const isItemActive = (path: string) =>
+    location.pathname === path || (path !== '/' && location.pathname.startsWith(path));
+
+  // 方案 B：默认折叠非活跃组（首屏一级只有 3 个组名），活跃组自动展开。
+  // 仅挂载时初始化一次；此后用户手动开合优先。
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
+    const map: Record<string, boolean> = {};
+    for (const group of navGroups) {
+      map[group.label] = !group.items.some((item) => isItemActive(item.path));
+    }
+    return map;
+  });
+
+  // 路由切换后自动展开新活跃组（不收起其他组）。条件守卫的一次性 setState，
+  // 不会循环（对齐 NotificationsPage 先例）。
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const activeGroup = navGroups.find((group) =>
+      group.items.some((item) => isItemActive(item.path)),
+    );
+    if (activeGroup && collapsedGroups[activeGroup.label]) {
+      setCollapsedGroups((prev) => ({ ...prev, [activeGroup.label]: false }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
 
   const visibleGroups = useMemo(
     () =>
