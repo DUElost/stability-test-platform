@@ -137,6 +137,7 @@ describe('ProjectsPage', () => {
     expect(screen.queryByText('Legacy')).not.toBeInTheDocument();
     expect(await screen.findByText('2')).toBeInTheDocument();
     expect(screen.getByTestId('kpi-strip')).toBeInTheDocument();
+    expect(screen.getByTestId('project-avatar-HONOR-CAMERA')).toHaveTextContent('荣');
   });
 
   it('filters cards by facet selection', async () => {
