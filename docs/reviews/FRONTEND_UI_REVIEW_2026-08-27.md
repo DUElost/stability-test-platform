@@ -416,7 +416,7 @@ playwright-cli + 缓存 chromium 登录逐页截图，证实 H1/H2/H3 行为级�
 | 12 | **P1–P4** 分页/虚拟滚动/轮询 | 低→高（规模上线时） | 中–高 | 性能 |
 | 13 | **D1–D8** 单页 UX | 低–中 | 低 | 打磨 |
 | 14 | **E1–E6** 代码卫生（含 M1 死代码） | 低 | 极低 | 内务 |
-| 15 | **H5'** ErrorBoundary 粒度（独立保留项） | 中（单页崩会带掉整壳） | 中 | 结构弱点 |
+| 15 | **H5'** ErrorBoundary 粒度（独立保留项）—— **已修复 2026-08-28** | 中（单页崩会带掉整壳） | 中 | 结构弱点 |
 | 附 | ~~H5 FileServerPage 整页崩~~ | 已撤销 | — | B 轨方法论 artifact |
 
 ### 推荐 top 3（复核轮 B 后调整）
@@ -777,6 +777,7 @@ B 轨复核轮对 B 轨结果与 H5 根因做独立裁决：**B-H1/B-H2/B-H3 全
 | **M2** Schedules 校验缺失 + 设备 ID 静默丢弃 | ✅ 已修复 | `handleSave` 补 name/cron 非空校验；`parseDeviceIds` 返回非法项并 `toast.info` 提示。`SchedulesPage.test.tsx` 2 用例全过 |
 | **M3** Audit 时间区间非法静默 | ✅ 已修复 | `start_time > end_time` 改 `setError` + 清空列表，复用 `InlineError` 渲染 |
 | **M1/E6** UsersPage 编辑弹窗死代码 | ✅ 已修复 | `UserModal.onSubmit` 改可选，编辑弹窗删除 `onSubmit=create`（复核轮定性死代码），只传 `onUpdate` |
+| **H5'** ErrorBoundary 粒度 | ✅ 已修复（2026-08-28） | `AppShell.tsx` main 区域包 `ErrorBoundary fullscreen={false}`（页面级兜底，单页 render-throw 只崩内容区、侧栏顶栏保住）；`App.tsx` 顶层 ErrorBoundary 保留为 Provider/Shell 级最后防线；`ErrorBoundary` 新增 `fullscreen` prop（默认 true 保持顶层全屏，紧凑模式 `h-full min-h-64`）。`ErrorBoundary.test.tsx` + `PlanRunDetailPage.test.tsx` 23 用例全过 |
 
 **验证证据**：
 - 后端 pytest：`test_settings_endpoints.py` 6 passed（testcontainers PG）

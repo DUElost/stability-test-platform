@@ -1,6 +1,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { Menu, ChevronRight, FileText, LogOut, Loader2, KeyRound, Wifi, WifiOff, Users, Shield, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -180,13 +181,18 @@ export default function AppShell() {
         </header>
 
         <main className="flex-1 min-h-0 overflow-hidden">
-          <Suspense fallback={
-            <div className="flex items-center justify-center h-64">
-              <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.caption)} />
-            </div>
-          }>
-            <Outlet />
-          </Suspense>
+          {/* H5'：ErrorBoundary 下沉到路由层——单页 render-throw 只崩内容区，
+              侧栏/顶栏（AppShell 外壳）保住；App.tsx 顶层 ErrorBoundary 仍为
+              Provider/Shell 级最后防线 */}
+          <ErrorBoundary fullscreen={false}>
+            <Suspense fallback={
+              <div className="flex items-center justify-center h-64">
+                <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.caption)} />
+              </div>
+            }>
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
     </div>
