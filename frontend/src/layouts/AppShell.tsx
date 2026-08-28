@@ -2,7 +2,7 @@ import { useState, useEffect, Suspense } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { Menu, ChevronRight, FileText, LogOut, Loader2, KeyRound, Wifi, WifiOff, Users, Shield, Settings } from 'lucide-react';
+import { Menu, ChevronRight, FileText, LogOut, Loader2, KeyRound, Wifi, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { clearAppQueryCache } from '@/components/QueryProvider';
@@ -159,14 +159,8 @@ export default function AppShell() {
                 items={[
                   { label: '文档', href: '/docs', icon: <FileText className="w-4 h-4" /> },
                   { label: '修改密码', href: '/account/password', icon: <KeyRound className="w-4 h-4" /> },
-                  ...(currentUser?.role === 'admin'
-                    ? [
-                        { label: '__SEPARATOR__' } as const,
-                        { label: '用户管理', href: '/users', icon: <Users className="w-4 h-4" /> },
-                        { label: '操作日志', href: '/audit', icon: <Shield className="w-4 h-4" /> },
-                        { label: '系统设置', href: '/settings', icon: <Settings className="w-4 h-4" /> },
-                      ]
-                    : []),
+                  // FRONTEND_NAV_IA_REDESIGN：admin 管理入口收拢至侧边栏「平台管理」组，
+                  // UserMenu 只留账号域（文档/修改密码/退出登录）
                   { label: '__SEPARATOR__' },
                   {
                     label: '退出登录',

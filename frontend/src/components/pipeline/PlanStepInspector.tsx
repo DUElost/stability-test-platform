@@ -106,7 +106,7 @@ export default function PlanStepInspector({
                   PIPELINE_EDITOR.linkBtn,
                 )}
               >
-                在脚本管理中编辑参数
+                在脚本库中编辑参数
                 <ArrowUpRight className="w-3.5 h-3.5" />
               </Link>
             )}
@@ -117,7 +117,7 @@ export default function PlanStepInspector({
       {/* 空态引导只在 StepEmptyState 卡里说一次；无步骤时不再渲染脚注 */}
       {step && (
         <footer className={cn('px-3 py-2 text-[10px] leading-relaxed', PIPELINE_EDITOR.panelHeader, TEXT.subtitle)}>
-          {`位于 ${phase ?? '—'} #${(index ?? 0) + 1}。脚本的参数和默认值在脚本管理页面维护。`}
+          {`位于 ${phase ?? '—'} #${(index ?? 0) + 1}。脚本的参数和默认值在脚本库页面维护。`}
         </footer>
       )}
     </aside>
@@ -174,7 +174,7 @@ function ScriptInfoCard({
       <CardHead>
         <span>脚本信息</span>
         <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold', STATUS_CHIP.primary)}>
-          来自脚本管理
+          来自脚本库
         </span>
       </CardHead>
       <CardBody>

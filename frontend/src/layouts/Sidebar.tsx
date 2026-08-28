@@ -20,6 +20,9 @@ import {
   HardDrive,
   Wifi,
   FolderKanban,
+  Users,
+  Shield,
+  Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -45,6 +48,8 @@ interface NavGroup {
   items: NavItem[];
 }
 
+// FRONTEND_NAV_IA_REDESIGN v1.1（方案 A）：三级信息架构——工作区（概览/项目/执行）
+// → 资产与成果 → 平台管理（admin 独占、收拢五处散落入口）。路由 path 全保持。
 const navGroups: NavGroup[] = [
   {
     label: '概览',
@@ -53,18 +58,19 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    // ADR-0029 影响表：新增「项目」一级导航，置于概览与测试编排之间
+    // ADR-0029 影响表：新增「项目」一级导航，置于概览与执行之间（评审裁决：保持独立一级）
     label: '项目',
     items: [
       { path: '/projects', label: '项目登记簿', icon: FolderKanban },
     ],
   },
   {
-    label: '测试编排',
+    label: '执行',
     items: [
       { path: '/orchestration/plans', label: 'Plan 管理', icon: FileBox },
       { path: '/execution/plan-execute', label: '执行 Plan', icon: Rocket },
       { path: '/execution/plan-runs', label: '执行记录', icon: ListTodo },
+      { path: '/schedules', label: '定时调度', icon: CalendarClock },
     ],
   },
   {
@@ -79,7 +85,6 @@ const navGroups: NavGroup[] = [
     items: [
       { path: '/hosts', label: '主机集群', icon: Server },
       { path: '/devices', label: '物理设备', icon: Smartphone },
-      { path: '/storage', label: '文件服务器', icon: HardDrive, adminOnly: true },
     ],
   },
   {
@@ -90,10 +95,14 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    label: '运营配置',
+    // 平台管理：admin 专属入口单一来源（原 UserMenu 3 项 + 「主机与设备」「运营配置」各 1 项收拢）
+    label: '平台管理',
     items: [
-      { path: '/schedules', label: '定时调度', icon: CalendarClock },
+      { path: '/users', label: '用户管理', icon: Users, adminOnly: true },
       { path: '/notifications', label: '通知管理', icon: BellRing, adminOnly: true },
+      { path: '/audit', label: '审计日志', icon: Shield, adminOnly: true },
+      { path: '/storage', label: '文件服务器', icon: HardDrive, adminOnly: true },
+      { path: '/settings', label: '系统设置', icon: Settings, adminOnly: true },
     ],
   },
 ];
@@ -182,6 +191,7 @@ export default function Sidebar({
           </button>
         )}
       </div>
+
 
       {/* Navigation Groups */}
       <nav className="p-3 overflow-y-auto flex-1 sidebar-scroll">
