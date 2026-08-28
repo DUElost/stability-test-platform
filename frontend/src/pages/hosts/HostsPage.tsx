@@ -561,7 +561,7 @@ export default function HostsPage() {
   if (isLoading) {
     return (
       <PageContainer width="wide">
-        <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
+        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
         <PageSkeleton>
           <PageSkeleton.Stats count={4} />
           <PageSkeleton.Block size="lg" />
@@ -573,7 +573,7 @@ export default function HostsPage() {
   if (error) {
     return (
       <PageContainer width="wide">
-        <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
+        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
         <ErrorState
           title="加载主机失败"
           description="请检查后端服务连接"
@@ -586,7 +586,7 @@ export default function HostsPage() {
   if (tableData.length === 0) {
     return (
       <PageContainer width="wide">
-        <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
+        <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
         <EmptyState
           title="还没有主机"
           description="添加您的第一台测试执行节点"
@@ -612,7 +612,7 @@ export default function HostsPage() {
 
   return (
     <PageContainer width="wide">
-      <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
+      <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
 
       <div className="flex items-center justify-end gap-2 py-2">
         {!opPanelOpen && hostOps.length > 0 && (

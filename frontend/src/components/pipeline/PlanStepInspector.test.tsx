@@ -142,7 +142,7 @@ describe('PlanStepInspector', () => {
     it('脚注给出步骤在 pipeline 中的位置（下标从 1 起）', () => {
       render(<Harness phase="patrol" index={2} />);
       expect(
-        screen.getByText('位于 patrol #3。脚本的参数和默认值在脚本管理页面维护。'),
+        screen.getByText('位于 patrol #3。脚本的参数和默认值在脚本库页面维护。'),
       ).toBeInTheDocument();
     });
   });
@@ -551,9 +551,9 @@ describe('PlanStepInspector', () => {
   });
 
   describe('跳转链接', () => {
-    it('有脚本名时给出脚本管理页深链', () => {
+    it('有脚本名时给出脚本库页深链', () => {
       render(<Harness />);
-      expect(screen.getByText('在脚本管理中编辑参数').closest('a')).toHaveAttribute(
+      expect(screen.getByText('在脚本库中编辑参数').closest('a')).toHaveAttribute(
         'href',
         '/scripts?name=install_apk',
       );
@@ -561,7 +561,7 @@ describe('PlanStepInspector', () => {
 
     it('没有脚本名时不渲染链接', () => {
       render(<Harness step={makeStep({ action: 'script:', version: '' })} />);
-      expect(screen.queryByText('在脚本管理中编辑参数')).not.toBeInTheDocument();
+      expect(screen.queryByText('在脚本库中编辑参数')).not.toBeInTheDocument();
     });
   });
 

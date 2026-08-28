@@ -268,7 +268,7 @@ export default function DevicesPage() {
   if (isLoading) {
     return (
       <PageContainer width="wide">
-        <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
+        <PageHeader title="物理设备" subtitle="管理和监控测试设备" />
         <PageSkeleton>
           <PageSkeleton.Stats count={5} />
           <PageSkeleton.Block size="lg" />
@@ -281,7 +281,7 @@ export default function DevicesPage() {
     const isProject404 = toApiError(error).status === 404;
     return (
       <PageContainer width="wide">
-        <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
+        <PageHeader title="物理设备" subtitle="管理和监控测试设备" />
         <ErrorState
           // 未知项目 key：路由/筛选参数错误语义，按错误态渲染不吞成空列表
           title={isProject404 ? '项目不存在' : '加载设备失败'}
@@ -302,7 +302,7 @@ export default function DevicesPage() {
   if (formattedDevices.length === 0) {
     return (
       <PageContainer width="wide">
-        <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
+        <PageHeader title="物理设备" subtitle="管理和监控测试设备" />
         <EmptyState
           title="还没有设备"
           description="添加您的第一台测试设备"
@@ -329,7 +329,7 @@ export default function DevicesPage() {
       width="wide"
       className={selectedDeviceIds.size > 0 ? 'pb-28' : undefined}
     >
-      <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
+      <PageHeader title="物理设备" subtitle="管理和监控测试设备" />
 
       <div className="flex flex-wrap items-center justify-between gap-2 py-2">
         <span className={cn('text-xs', TEXT.subtitle)}>点击设备行展开详情，勾选后可批量处理</span>

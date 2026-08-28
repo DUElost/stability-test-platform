@@ -227,7 +227,7 @@ describe('HostsPage', () => {
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
-    expect(screen.getByText('主机管理')).toBeInTheDocument();
+    expect(screen.getByText('主机集群')).toBeInTheDocument();
     expect(screen.getByText('管理和监控测试执行节点')).toBeInTheDocument();
   });
 
@@ -235,7 +235,7 @@ describe('HostsPage', () => {
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
-    expect(screen.getByText('主机管理')).toBeInTheDocument();
+    expect(screen.getByText('主机集群')).toBeInTheDocument();
     expect((await screen.findAllByText('添加主机')).length).toBeGreaterThan(0);
   });
 
@@ -244,7 +244,7 @@ describe('HostsPage', () => {
     const { container } = render(<HostsPage />, { wrapper: createWrapper() });
 
     // Wait for query to resolve
-    await screen.findByText('主机管理');
+    await screen.findByText('主机集群');
 
     // Should show empty state with "暂无主机" message eventually
     // The component will show either the table or empty state

@@ -69,7 +69,7 @@ export default function ScriptManagementPage() {
         }}
       />
 
-      <PageHeader title="脚本管理" subtitle="管理脚本目录、默认参数与版本。修改默认参数需创建新版本。" />
+      <PageHeader title="脚本库" subtitle="管理脚本目录、默认参数与版本。修改默认参数需创建新版本。" />
 
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
