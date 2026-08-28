@@ -12,7 +12,8 @@ import { InlineError } from '@/components/ui/error-state';
 import JiraSubmitPanel from '@/components/issues/JiraSubmitPanel';
 import JiraRunHistory from '@/components/issues/JiraRunHistory';
 import { InlineEmpty } from '@/components/ui/empty-state';
-import { INTERACTIVE, TEXT, tabLinkClass } from '@/design-system';
+import { StateTabs } from '@/components/ui/state-tabs';
+import { INTERACTIVE, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatLocalDateTime } from '@/utils/format';
 
@@ -79,19 +80,13 @@ export default function IssueTrackerPage() {
       />
 
       <div className="space-y-6">
-        <div data-testid="issue-tracker-tabs" className="flex items-center gap-x-1 border-b border-border">
-          {tabs.map(t => (
-            <button
-              key={t.key}
-              type="button"
-              data-testid={t.testId}
-              onClick={() => setTab(t.key)}
-              className={tabLinkClass(tab === t.key)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <StateTabs
+          items={tabs}
+          activeKey={tab}
+          onChange={(key) => setTab(key as TabKey)}
+          testId="issue-tracker-tabs"
+          ariaLabel="提单视图切换"
+        />
 
         {tab === 'form' && (
           <Card>
