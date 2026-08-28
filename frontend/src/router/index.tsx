@@ -35,6 +35,9 @@ const ScriptManagementPage = lazy(() => import('../pages/scripts/ScriptManagemen
 // ADR-0029 P2 项目登记簿
 const ProjectsPage = lazy(() => import('../pages/projects/ProjectsPage'));
 const ProjectDetailPage = lazy(() => import('../pages/projects/ProjectDetailPage'));
+// ADR-0031 平台 AI 助手
+const AssistantPage = lazy(() => import('../pages/assistant/AssistantPage'));
+const AiAssistantSettingsPage = lazy(() => import('../pages/settings/AiAssistantSettingsPage'));
 
 function AuthGateLoading() {
   return (
@@ -97,12 +100,14 @@ export default function AppRouter() {
             <Route path="account/password" element={<ChangePasswordPage />} />
             <Route path="schedules" element={<SchedulesPage />} />
             <Route path="issue-tracker" element={<IssueTrackerPage />} />
+            <Route path="assistant" element={<AssistantPage />} />
 
             {/* Admin-only routes */}
             <Route element={<AdminRoute />}>
               <Route path="users" element={<UsersPage />} />
               <Route path="notifications" element={<NotificationsPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="settings/ai-assistant" element={<AiAssistantSettingsPage />} />
               <Route path="audit" element={<AuditLogPage />} />
               <Route path="storage" element={<FileServerPage />} />
             </Route>

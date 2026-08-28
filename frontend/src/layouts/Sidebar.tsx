@@ -19,6 +19,7 @@ import {
   HardDrive,
   Wifi,
   FolderKanban,
+  Sparkles,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -106,6 +107,7 @@ export default function Sidebar({
   const location = useLocation();
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
+  const assistantActive = location.pathname.startsWith('/assistant');
 
   const isItemActive = (path: string) =>
     location.pathname === path || (path !== '/' && location.pathname.startsWith(path));
@@ -195,6 +197,31 @@ export default function Sidebar({
         )}
       </div>
 
+      {/* ADR-0031 / FRONTEND_NAV_IA_REDESIGN §5.1：AI 助手 pinned 入口——
+          横切能力不占业务组坑位；与业务项的区分 = 描边 + 图标 + 文案（不依赖纯颜色） */}
+      <div className="px-3 pt-3">
+        <NavLink
+          to="/assistant"
+          aria-label="AI 助手"
+          className={cn(
+            'flex items-center gap-3 rounded-lg border px-3 py-2 text-sm font-medium transition-all duration-200',
+            assistantActive
+              ? 'border-primary/60 bg-primary/10 text-primary'
+              : 'border-primary/25 bg-primary/5 text-primary hover:bg-primary/10',
+            collapsed && !isMobile && 'justify-center px-2',
+          )}
+        >
+          <Sparkles className="h-4 w-4 shrink-0" />
+          <span
+            className={cn(
+              'truncate transition-all duration-200',
+              collapsed && !isMobile && 'w-0 overflow-hidden opacity-0',
+            )}
+          >
+            AI 助手
+          </span>
+        </NavLink>
+      </div>
 
       {/* Navigation Groups */}
       <nav className="p-3 overflow-y-auto flex-1 sidebar-scroll">

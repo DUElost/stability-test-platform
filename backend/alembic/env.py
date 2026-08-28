@@ -49,6 +49,7 @@ config.set_main_option("sqlalchemy.url", _sync_url)
 def get_metadata():
     from backend.core.database import Base  # noqa: F401 — import all models for metadata
     import backend.models.action_template      # noqa: F401
+    import backend.models.ai_assistant        # noqa: F401
     import backend.models.audit                # noqa: F401
     import backend.models.device_lease         # noqa: F401 — ADR-0019 Phase 1
     import backend.models.enums                # noqa: F401

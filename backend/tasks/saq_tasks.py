@@ -673,6 +673,8 @@ async def install_agent_task(
     return result
 
 
+from backend.services.ai_assistant.orchestrator import ai_assistant_turn_task
+
 SAQ_FUNCTIONS = [
     post_completion_task,
     send_notification_task,
@@ -684,4 +686,5 @@ SAQ_FUNCTIONS = [
     merge_task,
     extract_task,
     install_agent_task,
+    ai_assistant_turn_task,
 ]

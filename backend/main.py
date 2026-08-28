@@ -32,6 +32,7 @@ from sqlalchemy import text
 import socketio as python_socketio
 
 from backend.api.routes import auth_router, heartbeat_router, hosts_router
+from backend.api.routes.ai_assistant import router as ai_assistant_router
 from backend.api.routes.devices import router as devices_router
 from backend.api.routes.jobs import router as jobs_router
 from backend.api.routes.runs import router as runs_router
@@ -291,6 +292,7 @@ _fastapi_app.include_router(notifications_router)
 _fastapi_app.include_router(audit_router)
 _fastapi_app.include_router(schedules_router)
 _fastapi_app.include_router(settings_router)
+_fastapi_app.include_router(ai_assistant_router)
 _fastapi_app.include_router(pipeline_router)
 _fastapi_app.include_router(scripts_router)
 _fastapi_app.include_router(action_templates_router)

@@ -1724,3 +1724,113 @@ export interface ResourcePoolCreatePayload {
   host_group?: string | null;
   is_active?: boolean;
 }
+
+// ─── 平台 AI 助手（ADR-0031，/api/v1/ai-assistant）─────────────────────────────
+
+export type AiMessageRole = 'user' | 'assistant' | 'tool' | 'system';
+
+export type AiMessageStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export type AiActionStatus =
+  | 'proposed'
+  | 'approved'
+  | 'rejected'
+  | 'expired'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
+
+/** GET /config 返回——api_key 永不回明文，只回掩码。 */
+export interface AiAssistantConfig {
+  base_url: string;
+  model: string;
+  /** 如 `sk-***abcd`；null = 未配置 */
+  api_key_masked: string | null;
+  enabled: boolean;
+  temperature: number;
+  max_turns: number;
+  request_timeout_seconds: number;
+  /** T1 测试门禁收回开关：true = 测试类工具也走审批 */
+  t1_require_confirm: boolean;
+  /** 免确认白名单（仅 T2 级低危工具可加入，后端校验） */
+  auto_approve_tools: string[];
+  updated_at: string;
+}
+
+/** PUT /config——api_key 留空（不传字段）= 不变更。 */
+export interface AiAssistantConfigUpdate {
+  base_url?: string;
+  model?: string;
+  api_key?: string;
+  enabled?: boolean;
+  temperature?: number;
+  max_turns?: number;
+  request_timeout_seconds?: number;
+  t1_require_confirm?: boolean;
+  auto_approve_tools?: string[];
+}
+
+export interface AiConnectionTestResult {
+  ok: boolean;
+  /** 握手往返延迟；ok=false 时为 null */
+  latency_ms: number | null;
+  model: string;
+  /** ok=false 时的归一化错误说明（含错误码，如 ai_auth_error） */
+  error: string | null;
+}
+
+export interface AiChatSession {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AiToolCallInfo {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface AiChatMessageMeta {
+  usage?: { prompt_tokens: number; completion_tokens: number } | null;
+  latency_ms?: number | null;
+  error?: string | null;
+  /** 非 null = 本条助手消息附带一个待审批/已流转的操作卡 */
+  proposed_action_id?: number | null;
+}
+
+export interface AiChatMessage {
+  id: number;
+  session_id: number;
+  role: AiMessageRole;
+  content: string;
+  tool_calls: AiToolCallInfo[];
+  tool_call_id: string | null;
+  status: AiMessageStatus;
+  meta: AiChatMessageMeta;
+  created_at: string;
+}
+
+export interface AiAssistantAction {
+  id: number;
+  session_id: number;
+  tool_name: string;
+  params: Record<string, unknown>;
+  status: AiActionStatus;
+  console_run_id: string | null;
+  result_summary: string | null;
+  requested_by: string;
+  decided_by: string | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+/** GET /actions/{id}/log —— 镜像 jira-run 的日志读取契约。 */
+export interface AiActionLogEntry {
+  seq: number;
+  ts: string | null;
+  stream: 'stdout' | 'stderr';
+  line: string;
+}
