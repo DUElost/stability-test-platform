@@ -35,7 +35,9 @@ def test_all_healthy_full_slots():
     assert health["status"] == "HEALTHY"
     assert health["reasons"] == []
     assert cap["available_slots"] == 7   # 8 - 1 = 7 free device slots
-    assert cap["effective_slots"] == 7   # min(7, effectively-unlimited) = 7
+    # #483: 认领上限默认 5（与 permit 对齐）——available 仍报真实空闲数，
+    # effective 被钳到 5
+    assert cap["effective_slots"] == 5
 
 
 # ── Test 2: CPU high → UNSCHEDULABLE ─────────────────────────────────────────
@@ -165,8 +167,8 @@ def test_adb_server_conflict_degrades_without_blocking():
     health = result["health"]
     assert health["status"] == "DEGRADED"
     assert "adb_multiple_servers" in health["reasons"]
-    # warning 级 reason 不打闸：可见设备仍可调度
-    assert result["capacity"]["effective_slots"] == 7
+    # warning 级 reason 不打闸：可见设备仍可调度；#483 认领上限钳 5
+    assert result["capacity"]["effective_slots"] == 5
 
 
 def test_adb_server_conflict_with_blocking_reason_still_unschedulable():
@@ -183,4 +185,64 @@ def test_adb_server_conflict_with_blocking_reason_still_unschedulable():
     assert result["health"]["status"] == "UNSCHEDULABLE"
     assert "adb_multiple_servers" in result["health"]["reasons"]
     assert "cpu_high" in result["health"]["reasons"]
+    assert result["capacity"]["effective_slots"] == 0
+
+
+# ── #483: 认领上限钳制 ─────────────────────────────────────────────────────
+
+def test_max_claim_slots_caps_effective(monkeypatch):
+    """默认上限 5：空闲 7 台也最多认领 5。"""
+    monkeypatch.delenv("STP_MAX_CLAIM_SLOTS", raising=False)
+    result = compute_capacity(
+        active_job_count=2,
+        active_device_count=1,
+        online_healthy_devices=8,
+        total_devices=10,
+        system_stats=_healthy_system_stats(),
+        mount_status=_healthy_mount_status(),
+    )
+    assert result["capacity"]["available_slots"] == 7
+    assert result["capacity"]["effective_slots"] == 5
+
+
+def test_max_claim_slots_env_override(monkeypatch):
+    """显式调大覆盖默认：8 时回到空闲设备数。"""
+    monkeypatch.setenv("STP_MAX_CLAIM_SLOTS", "8")
+    result = compute_capacity(
+        active_job_count=2,
+        active_device_count=1,
+        online_healthy_devices=8,
+        total_devices=10,
+        system_stats=_healthy_system_stats(),
+        mount_status=_healthy_mount_status(),
+    )
+    assert result["capacity"]["effective_slots"] == 7
+
+
+def test_max_claim_slots_floor_one(monkeypatch):
+    """钳制至少为 1（坏值/0 都按 1 处理）。"""
+    monkeypatch.setenv("STP_MAX_CLAIM_SLOTS", "0")
+    result = compute_capacity(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=3,
+        total_devices=3,
+        system_stats=_healthy_system_stats(),
+        mount_status=_healthy_mount_status(),
+    )
+    assert result["capacity"]["effective_slots"] == 1
+
+
+def test_unhealthy_still_zero_despite_cap(monkeypatch):
+    """不健康 host 的 health_limit=0 仍优先于认领上限。"""
+    monkeypatch.delenv("STP_MAX_CLAIM_SLOTS", raising=False)
+    stats = {"cpu_load": 95, "ram_usage": 50, "disk_usage": {"usage_percent": 40}}
+    result = compute_capacity(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=5,
+        total_devices=5,
+        system_stats=stats,
+        mount_status=_healthy_mount_status(),
+    )
     assert result["capacity"]["effective_slots"] == 0
