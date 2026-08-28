@@ -240,3 +240,53 @@ def test_postgresql_abort_and_aggregator_are_serialized_by_plan_run_lock(
     PlanRunStatus.SUCCESS.value,
     PlanRunStatus.FAILED.value,
   }
+
+
+def test_abort_batch_pending_updates_counters_and_audit_once(
+        db_session, sample_plan_run, sample_plan, sample_device, sample_host):
+    """#492：PENDING 批量 abort → 状态批量置位、计数器聚合。"""
+    from backend.models.plan_run import PlanRun
+    from backend.models.job import JobInstance
+    from backend.models.enums import JobStatus
+    from backend.models.host import Device
+    from backend.services.plan_run_abort import abort_plan_run
+
+    run = db_session.get(PlanRun, sample_plan_run.id)
+    db_session.add_all([
+        Device(serial=f"bulk-{i}", host_id=sample_host.id, status="ONLINE")
+        for i in range(15)
+    ])
+    db_session.flush()
+    devs = db_session.query(Device).filter(
+        Device.serial.like("bulk-%")).all()
+    job_ids = []
+    for dev in devs:
+        job = JobInstance(
+            plan_run_id=run.id, plan_id=sample_plan.id,
+            device_id=dev.id, host_id=sample_host.id,
+            status=JobStatus.PENDING.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        )
+        db_session.add(job)
+        db_session.flush()
+        job_ids.append(job.id)
+    run.total_job_count = len(job_ids)
+    db_session.commit()
+
+    result = abort_plan_run(run.id, db=db_session, reason="bulk_test")
+
+    db_session.expire_all()
+    run = db_session.get(PlanRun, run.id)
+    remaining = db_session.query(JobInstance).filter(
+        JobInstance.plan_run_id == run.id,
+        JobInstance.status == JobStatus.PENDING.value,
+    ).count()
+    assert remaining == 0
+    aborted = db_session.query(JobInstance).filter(
+        JobInstance.plan_run_id == run.id,
+        JobInstance.status == JobStatus.ABORTED.value,
+    ).count()
+    assert aborted == 15
+    assert run.aborted_job_count == 15
+    assert run.terminal_job_count == 15
+    assert len(result.get("aborted_jobs") or []) == 15
