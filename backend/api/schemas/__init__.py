@@ -27,6 +27,14 @@ from backend.api.schemas.schedule import TaskScheduleCreate, TaskScheduleUpdate,
 from backend.api.schemas.audit import AuditLogOut
 from backend.api.schemas.jira_run import JiraRunOut
 from backend.api.schemas.settings import SettingsOut
+from backend.api.schemas.ai_assistant import (
+    AiActionOut,
+    AiAssistantConfigOut,
+    AiAssistantConfigUpdate,
+    AiConnectionTestOut,
+    AiMessageOut,
+    AiSessionOut,
+)
 from backend.api.schemas.plan_run import (
     StepTraceOut,
     JobInstanceOut,
@@ -140,4 +148,10 @@ __all__ = [
     "PrecheckGateFailure",
     "PrecheckSummary",
     "SettingsOut",
+    "AiActionOut",
+    "AiAssistantConfigOut",
+    "AiAssistantConfigUpdate",
+    "AiConnectionTestOut",
+    "AiMessageOut",
+    "AiSessionOut",
 ]

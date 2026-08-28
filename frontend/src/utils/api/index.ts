@@ -21,6 +21,7 @@ export { planRuns } from './planRuns';
 export { runs } from './runs';
 export { suites } from './suites';
 export { settings } from './settings';
+export { aiAssistant } from './aiAssistant';
 
 export type {
   Host, Device, Task, RunStep, TaskRun,
@@ -50,6 +51,10 @@ export type {
   HostActiveJob,
   TestSuiteSummary,
   SystemSettings,
+  AiMessageRole, AiMessageStatus, AiActionStatus,
+  AiAssistantConfig, AiAssistantConfigUpdate, AiConnectionTestResult,
+  AiChatSession, AiToolCallInfo, AiChatMessageMeta, AiChatMessage,
+  AiAssistantAction, AiActionLogEntry,
 } from './types';
 
 import { auth } from './auth';
@@ -68,6 +73,7 @@ import { planRuns } from './planRuns';
 import { runs } from './runs';
 import { suites } from './suites';
 import { settings } from './settings';
+import { aiAssistant } from './aiAssistant';
 
 export const api = {
   auth,
@@ -95,4 +101,5 @@ export const api = {
   runs,
   suites,
   settings,
+  aiAssistant,
 };

@@ -95,3 +95,13 @@ export const projectKeys = {
   plansOf: (key: string | null | undefined) => ['project-plans', key ?? '*'] as const,
   summaryOf: (key: string | null | undefined) => ['project-summary', key ?? '*'] as const,
 } as const;
+
+/** ADR-0031 平台 AI 助手。 */
+export const aiAssistantKeys = {
+  config: () => ['ai-assistant-config'] as const,
+  sessions: () => ['ai-assistant-sessions'] as const,
+  messages: (sessionId: number) => ['ai-assistant-messages', sessionId] as const,
+  action: (actionId: number) => ['ai-assistant-action', actionId] as const,
+  /** 长命令日志——running 时由调用方开 refetchInterval 轮询。 */
+  actionLog: (actionId: number) => ['ai-assistant-action-log', actionId] as const,
+} as const;

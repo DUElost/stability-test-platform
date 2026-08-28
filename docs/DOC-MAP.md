@@ -68,6 +68,9 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **Living 审查** | [`reviews/TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md`](./reviews/TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md) | automation-toolkit 合入 × 平台优化七方向可行性（展锐拆两步：P2 汇总服务化先行、P1 采集 Agent 化必开 ADR 重议 #220；Jira 定位管道复用；缺口 G1–G24 + 落地顺序 + 各项 ADR 触发条件；toolkit 主张经 gh REST 对照远端复核；跟踪载体 = GitHub Projects 看板） |
 | **Living 审查** | [`reviews/FRONTEND_NAV_IA_REDESIGN_2026-08-28.md`](./reviews/FRONTEND_NAV_IA_REDESIGN_2026-08-28.md) | 前端导航与布局 IA 治理方案（P1–P7 现状审计：admin 入口散落三层三处/僵尸路由/分组频次混列/页签三实现/命名不一；方案 A 保守档=平台管理组收拢+执行组重排+僵尸路由清理+页头命名对齐；v1.2/v1.3 二次演进定稿=**三级频率分层**〔一级高频常驻/二级中频折叠组/三级低频收角落（更多功能组+UserMenu 下拉）〕+默认折叠与活跃组自动展开；AI 助手 pinned 入口设计；四项开放问题已裁决〔Q2 被 v1.2 覆盖、admin 单一来源被 v1.3 撤销〕） |
 | **Living 审查** | [`reviews/REVIEW_FRONTEND_NAV_IA_2026-08-28.md`](./reviews/REVIEW_FRONTEND_NAV_IA_2026-08-28.md) | 前端导航 IA 方案只读审核（P1–P7 逐条代码核验属实；四项裁决=方案 A/项目保持独立一级/pinned v1 抽屉留 v2/页头改「脚本库」；补充 HostsPage.test 断言破坏点 230/238/247） |
+| **Living 审查** | [`reviews/AI_ASSISTANT_PLAN_2026-08-27.md`](./reviews/AI_ASSISTANT_PLAN_2026-08-27.md) | 平台 AI 助手实施计划（ADR-0031 配套：两阶段路线 / 四表模型 / 14 工具清单 / 13 端点 / 测试矩阵 / 部署步骤；v1.3 采纳可行性分析风险 #8=T1 统一 action+续轮） |
+| **Living 审查** | [`reviews/REVIEW_ADR0031_AI_ASSISTANT_2026-08-28.md`](./reviews/REVIEW_ADR0031_AI_ASSISTANT_2026-08-28.md) | ADR-0031 只读审核（H1=RunConsole 透传生产 DATABASE_URL 须 AGENT_TEST_ENV 显式覆盖等 6 项已采纳修订） |
+| **Living 审查** | [`reviews/FEASIBILITY_ANALYSIS_AI_ASSISTANT_2026-08-28.md`](./reviews/FEASIBILITY_ANALYSIS_AI_ASSISTANT_2026-08-28.md) | AI 助手可行性分析（需求×基座映射全「高」；风险 #8 SAQ timeout×T1 长任务已转化为设计约束） |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
 

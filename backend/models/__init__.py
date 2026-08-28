@@ -1,5 +1,6 @@
 from backend.models.enums import DeviceStatus, EventState, HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.action_template import ActionTemplate
+from backend.models.ai_assistant import AiAssistantAction, AiAssistantConfig, AiChatMessage, AiChatSession
 from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease
 from backend.models.device_log_event import DeviceLogEvent
@@ -26,6 +27,10 @@ __all__ = [
     "ChannelType",
     "DeviceStatus",
     "ActionTemplate",
+    "AiAssistantAction",
+    "AiAssistantConfig",
+    "AiChatMessage",
+    "AiChatSession",
     "Device",
     "DeviceLease",
     "DeviceLogEvent",

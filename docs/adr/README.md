@@ -79,6 +79,7 @@
 | [ADR-0028](./ADR-0028-device-log-event-and-continuous-upload.md) | 设备日志事件实体 + PlanRun FAILED 触发上送 + 存储路径收敛（方案 A，2026-08-12 修订） | Accepted | P1 | 阶段 3 | 方案 A 生产生效（2026-08-13）：upload_task=控制面长期筛选者（LOCAL→UPLOAD_PENDING），EventUploader=Agent 侧唯一执行者（copytree/重试/PRUNE）；#287：CONTINUOUS 逃生阀删除，过滤模型是唯一路径；DLE 单一开关默认开 |
 | [ADR-0029](./ADR-0029-project-taxonomy-and-param-layering.md) | 项目分类域（TestProject 登记簿 + facet 分类） | Accepted | P1 | M7 | v2.4：登记簿产品面只列人工 `USER` 项目；P1 六个回填 key 为 `SEED`，不进 `/projects`。项目模型收窄为**登记簿**（客户 / 关系 / 形态 / jira 映射）；APK 差异由**脚本端设备指纹路由**吸收（`backend=auto` 先例，路由表住工具目录 + step_trace 记 sha256）。**D1/D4/D5/D7/D8/D9 与 D6 的 `applicable` 已挂起**（原文保留、各有复议触发条件，未触发前不得重提）；生效的是 D2/D3/D6 `specialty`。落地 P1–P3 最小形态。背景分析见 [reviews](../reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md) |
 | [ADR-0030](./ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（test_suite / test_case + 外部管理面） | Accepted | P0+P1 | M7 | v1.8：P0 验收✅ + **P1 全部✅ + D6 真机冒烟✅**（#404：P1a 实体/管理面、P1b 绑定门禁+env 双层退役、P1c CLI + 文档收口；suite_sha256 == 门禁 sha 已实机签字）+ **mtbf 绑定翻转硬拒**（v1.8，SUITE_BINDING_REQUIRED）。**未做**：P2 前端与 `test_case_result`。背景：[reviews](../reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) |
+| [ADR-0031](./ADR-0031-platform-ai-assistant.md) | 平台 AI 助手（运维域 LLM 助手与风险分级自治边界） | Proposed | P1 | M8 | v1.3：T0-T3 四级自治 / OpenAI 兼容单协议（httpx 手写载体，SDK 留作切换目标）/ 配置 DB+Fernet / RunConsole 统一执行 / T1 统一 action+续轮（SAQ timeout 结构性规避）。实施计划见 [reviews](../reviews/AI_ASSISTANT_PLAN_2026-08-27.md) |
 
 ## Proposed 里程碑看板（2026 上半年）
 
@@ -90,7 +91,7 @@
 | M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
 | M5 | 2026-07 | ADR-0026 P0–P2（规模化执行正确性 + 控制面减负） |
 | M6 | 待定 | ADR-0027（控制面水平扩展；重启条件见 ADR-0025 D1） |
-| M7 | 进行中 | ADR-0029（项目分类域·登记簿；D1/D4/D5/D7/D8/D9 挂起，落地 P1–P3 最小形态）；ADR-0030（**Accepted**：P0 ✅ / P1 ✅ #404 / D6 真机冒烟 ✅ / 仅余 P2 前端；0030 依赖 0029 `test_project`，不复活 0029 挂起决策） |
+| M7 | 进行中 | ADR-0029（项目分类域·登记簿；D1/D4/D5/D7/D8/D9 挂起，落地 P1–P3 最小形态）；ADR-0030（**Accepted**：P0 ✅ / P1 ✅ #404 / D6 真机冒烟 ✅ / 仅余 P2 前端；0030 依赖 0029 `test_project`，不复活 0029 挂起决策） |；ADR-0031（平台 AI 助手，Proposed，实现已就绪待评审）
 
 ## 维护约定
 

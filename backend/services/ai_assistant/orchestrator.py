@@ -1,0 +1,515 @@
+# -*- coding: utf-8 -*-
+"""AI 助手编排器（ADR-0031 D5 + 计划 v1.3）。
+
+轮次 = 一个 SAQ 任务（job key `ai-turn:{session_id}` 串行防并发轮）。
+设计要点（可行性分析风险 #8 采纳）：T1 自动路径与 T2 白名单/审批路径
+**同构**——都创建 action 并经 RunConsole/服务执行，完成后经 on_complete
+入队**续轮**；轮次任务本身只含 LLM 调用 + T0 快查，天然短，不受
+enqueue_sync 默认 60s job timeout 约束。
+"""
+
+import asyncio
+import json
+import logging
+from datetime import datetime, timezone
+from functools import partial
+
+from sqlalchemy.orm import Session
+
+from backend.core.database import SessionLocal
+from backend.models.ai_assistant import (
+    AiAssistantAction,
+    AiAssistantConfig,
+    AiChatMessage,
+    AiChatSession,
+)
+from backend.services.ai_assistant.llm_client import (
+    AiAuthError,
+    AiBadResponse,
+    AiNotConfigured,
+    AiUpstreamTimeout,
+    LlmClient,
+)
+from backend.services.ai_assistant.tools import (
+    TOOLS,
+    ToolValidationError,
+    build_runconsole_plan,
+    execute_query,
+    to_openai_tools,
+)
+
+logger = logging.getLogger(__name__)
+
+HISTORY_LIMIT = 20
+
+SYSTEM_PROMPT = (
+    "你是稳定性测试平台的运维助手。回答使用简体中文，简洁、基于事实。"
+    "你可以调用工具查询平台状态、运行测试与质量门禁、执行低危运维动作。"
+    "有副作用的操作会生成操作卡：需要管理员审批的你会收到等待提示；"
+    "自动执行的命令完成后结果会回传给你，你再向用户汇报。"
+    "禁止承诺执行平台未提供的能力（如重启主机、修改数据库数据）。"
+    "你不知道也永远不应询问 LLM API Key 等平台凭据。"
+)
+
+
+def get_or_create_config(db: Session) -> AiAssistantConfig:
+    cfg = db.get(AiAssistantConfig, 1)
+    if cfg is None:
+        cfg = AiAssistantConfig(id=1)
+        db.add(cfg)
+        db.commit()
+        db.refresh(cfg)
+    return cfg
+
+
+def load_effective_config(db: Session) -> tuple[AiAssistantConfig, str]:
+    """返回 (配置行, 解密后的 api_key)。未启用/缺三元组 → AiNotConfigured。"""
+    from backend.core.ai_security import AiSecurityConfigError, decrypt_api_key
+
+    cfg = get_or_create_config(db)
+    if not cfg.enabled or not cfg.base_url or not cfg.model:
+        raise AiNotConfigured("ai assistant not configured")
+    try:
+        api_key = decrypt_api_key(cfg.api_key_encrypted or "")
+    except AiSecurityConfigError as exc:
+        raise AiNotConfigured(f"api key unreadable: {exc}") from exc
+    if not api_key:
+        raise AiNotConfigured("api key not set")
+    return cfg, api_key
+
+
+def _touch_session(db: Session, session: AiChatSession) -> None:
+    session.updated_at = datetime.now(timezone.utc)
+    db.add(session)
+
+
+def _add_message(
+    db: Session,
+    session: AiChatSession,
+    *,
+    role: str,
+    content: str = "",
+    tool_calls: list | None = None,
+    tool_call_id: str | None = None,
+    status: str = "completed",
+    meta: dict | None = None,
+) -> AiChatMessage:
+    msg = AiChatMessage(
+        session_id=session.id,
+        role=role,
+        content=content or "",
+        tool_calls=tool_calls or [],
+        tool_call_id=tool_call_id,
+        status=status,
+        meta=meta or {},
+    )
+    db.add(msg)
+    _touch_session(db, session)
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+def _fail_pending_messages(db: Session, session: AiChatSession, error: str) -> None:
+    pending = (
+        db.query(AiChatMessage)
+        .filter(
+            AiChatMessage.session_id == session.id,
+            AiChatMessage.status.in_(["pending", "running"]),
+        )
+        .all()
+    )
+    for msg in pending:
+        msg.status = "failed"
+        meta = dict(msg.meta or {})
+        meta["error"] = error[:500]
+        msg.meta = meta
+    _touch_session(db, session)
+    db.commit()
+
+
+def _history_as_llm_messages(db: Session, session_id: int) -> list[dict]:
+    rows = (
+        db.query(AiChatMessage)
+        .filter(
+            AiChatMessage.session_id == session_id,
+            AiChatMessage.role.in_(["user", "assistant", "tool"]),
+        )
+        .order_by(AiChatMessage.id.desc())
+        .limit(HISTORY_LIMIT)
+        .all()
+    )
+    rows.reverse()
+    messages: list[dict] = []
+    for row in rows:
+        if row.role == "user":
+            messages.append({"role": "user", "content": row.content})
+        elif row.role == "assistant":
+            entry: dict = {"role": "assistant", "content": row.content or None}
+            if row.tool_calls:
+                entry["tool_calls"] = [
+                    {
+                        "id": tc.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": tc.get("name", ""),
+                            "arguments": json.dumps(
+                                tc.get("arguments") or {}, ensure_ascii=False
+                            ),
+                        },
+                    }
+                    for tc in row.tool_calls
+                ]
+            messages.append(entry)
+        else:
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": row.tool_call_id or "",
+                    "content": row.content,
+                }
+            )
+    return messages
+
+
+def _decide_execution_mode(spec, cfg: AiAssistantConfig) -> str:
+    """返回 "auto"（直接执行）或 "proposed"（操作卡审批）。"""
+    if spec.tier == "T1":
+        return "proposed" if cfg.t1_require_confirm else "auto"
+    # T2：白名单内低危工具可免确认（仅 whitelistable 标记的工具可入名单）
+    if spec.tier == "T2" and spec.whitelistable and spec.name in (cfg.auto_approve_tools or []):
+        return "auto"
+    return "proposed"
+
+
+def _create_action(
+    db: Session,
+    session: AiChatSession,
+    *,
+    tool_name: str,
+    arguments: dict,
+    mode: str,
+) -> AiAssistantAction:
+    action = AiAssistantAction(
+        session_id=session.id,
+        tool_name=tool_name,
+        params=arguments or {},
+        status="approved" if mode == "auto" else "proposed",
+        requested_by_user_id=session.user_id,
+        decided_by_user_id=session.user_id if mode == "auto" else None,
+        decided_at=datetime.now(timezone.utc) if mode == "auto" else None,
+    )
+    db.add(action)
+    db.commit()
+    db.refresh(action)
+    return action
+
+
+def _run_query(name: str, args: dict) -> str:
+    db = SessionLocal()
+    try:
+        return execute_query(db, name, args)
+    finally:
+        db.close()
+
+
+# ─────────────────────────── action 执行面 ───────────────────────────
+
+def _finalize_action(action_id: int, status: str, summary: str) -> None:
+    db = SessionLocal()
+    try:
+        action = db.get(AiAssistantAction, action_id)
+        if action is None:
+            logger.error("ai_action_finalize_missing id=%s", action_id)
+            return
+        action.status = status
+        action.result_summary = summary[:1000]
+        session = db.get(AiChatSession, action.session_id)
+        if session is not None:
+            db.add(
+                AiChatMessage(
+                    session_id=session.id,
+                    role="tool",
+                    tool_call_id=None,
+                    content=f"{action.tool_name} → {status}：{summary[:500]}",
+                )
+            )
+            _touch_session(db, session)
+        db.commit()
+        if session is not None:
+            _enqueue_continuation(session.id)
+    finally:
+        db.close()
+
+
+def _enqueue_continuation(session_id: int) -> None:
+    """执行完成后续轮（lazy import 防循环依赖：saq_worker → saq_tasks → 本模块）。"""
+    try:
+        from backend.tasks.saq_worker import enqueue_sync
+
+        timeout = 120
+        try:
+            db = SessionLocal()
+            try:
+                cfg = get_or_create_config(db)
+                timeout = cfg.request_timeout_seconds + 120
+            finally:
+                db.close()
+        except Exception:  # noqa: BLE001 - 超时取默认值即可
+            pass
+        enqueued = enqueue_sync(
+            "ai_assistant_turn_task",
+            key=f"ai-turn:{session_id}",
+            timeout=timeout,
+            session_id=session_id,
+        )
+        if not enqueued:
+            logger.warning("ai_continuation_enqueue_failed session=%s", session_id)
+    except Exception:  # noqa: BLE001 - 续轮失败不影响已完成动作的留痕
+        logger.exception("ai_continuation_enqueue_error session=%s", session_id)
+
+
+def _run_service_tool(name: str, params: dict) -> str:
+    """T2 服务型工具（非 RunConsole）：在 worker 线程执行，返回结果摘要。"""
+    import os
+
+    if name == "scan_script_catalog":
+        from backend.services.script_catalog import scan_script_root
+
+        root = os.getenv("STP_SCRIPT_ROOT", "").strip()
+        if not root:
+            raise RuntimeError("STP_SCRIPT_ROOT 未配置（scripts scan 503 同源约束）")
+        db = SessionLocal()
+        try:
+            result = scan_script_root(db, root)
+        finally:
+            db.close()
+        return (
+            f"扫描完成：{getattr(result, 'registered', '?')} 注册 / "
+            f"{getattr(result, 'created', '?')} 新建 / "
+            f"{getattr(result, 'conflicts', '?')} 冲突"
+        )
+
+    if name == "test_notification_channel":
+        from backend.models.notification import NotificationChannel
+        from backend.services.notification_service import send_to_channel
+
+        db = SessionLocal()
+        try:
+            channel = db.get(NotificationChannel, int(params.get("channel_id", 0)))
+            if channel is None:
+                raise RuntimeError(f"通知渠道 #{params.get('channel_id')} 不存在")
+            channel_name = channel.name
+        finally:
+            db.close()
+        send_to_channel(channel, "【AI 助手】通知通道测试消息")
+        return f"已向渠道「{channel_name}」发送测试消息"
+
+    if name == "reload_agent_config":
+        from backend.models.host import Host
+        from backend.realtime.socketio_server import emit_agent_control
+
+        host_id = str(params.get("host_id", ""))
+        db = SessionLocal()
+        try:
+            host = db.get(Host, host_id)
+            if host is None:
+                raise RuntimeError(f"主机 {host_id} 不存在")
+            if host.status != "ONLINE":
+                raise RuntimeError(f"主机 {host_id} 状态为 {host.status}，须 ONLINE")
+        finally:
+            db.close()
+        asyncio.run(emit_agent_control(host_id, "reload_config", payload={}))
+        return f"已向主机 {host_id} 下发 reload_config"
+
+    raise ToolValidationError(f"unknown service tool: {name}")
+
+
+def execute_action(action_id: int) -> None:
+    """执行一个已批准的 action（RunConsole 启动或服务调用）。
+
+    由审批端点（to_thread）或轮次内 auto 路径调用；RunConsole 完成/服务返回
+    后经 _finalize_action 回写状态并续轮。
+    """
+    from backend.services.run_console import RunConsole, RunConsoleError, RunKeyBusyError
+
+    db = SessionLocal()
+    try:
+        action = db.get(AiAssistantAction, action_id)
+        if action is None or action.status not in ("approved", "proposed"):
+            logger.warning("ai_action_execute_skipped id=%s status=%s",
+                           action_id, getattr(action, "status", None))
+            return
+        spec = TOOLS.get(action.tool_name)
+        if spec is None:
+            _finalize_action(action_id, "failed", f"unknown tool {action.tool_name}")
+            return
+
+        if spec.kind == "runconsole":
+            plan = build_runconsole_plan(action.tool_name, action.params or {})
+            action.status = "running"
+            db.commit()
+            try:
+                run_id = RunConsole.instance().start(
+                    run_key=plan.run_key,
+                    cmd=plan.cmd,
+                    cwd=str(plan.cwd),
+                    env=dict(plan.env) if plan.env else None,
+                    label=f"ai:{action.tool_name}",
+                    on_complete=partial(_on_action_complete, action.id),
+                )
+            except RunKeyBusyError:
+                _finalize_action(action_id, "failed", "同 run_key 任务正在运行，请稍后重试")
+                return
+            except RunConsoleError as exc:
+                _finalize_action(action_id, "failed", f"启动失败：{exc}")
+                return
+            action.console_run_id = run_id
+            db.commit()
+        else:
+            action.status = "running"
+            db.commit()
+            try:
+                summary = _run_service_tool(action.tool_name, action.params or {})
+            except Exception as exc:  # noqa: BLE001 - 服务工具失败即终态
+                _finalize_action(action_id, "failed", str(exc)[:500])
+                return
+            _finalize_action(action_id, "succeeded", summary)
+    finally:
+        db.close()
+
+
+def _on_action_complete(action_id: int, run) -> None:
+    status_map = {"SUCCESS": "succeeded", "FAILED": "failed", "CANCELED": "cancelled"}
+    status = status_map.get(getattr(run, "status", "FAILED"), "failed")
+    summary = f"{getattr(run, 'status', '?')}（exit={getattr(run, 'returncode', None)}）"
+    _finalize_action(action_id, status, summary)
+
+
+# ─────────────────────────── 轮次任务 ───────────────────────────
+
+async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
+    db = SessionLocal()
+    try:
+        session = db.get(AiChatSession, session_id)
+        if session is None:
+            logger.warning("ai_turn_session_missing id=%s", session_id)
+            return
+        try:
+            cfg, api_key = load_effective_config(db)
+        except AiNotConfigured as exc:
+            _fail_pending_messages(db, session, f"ai_not_configured: {exc}")
+            return
+
+        client = LlmClient(
+            base_url=cfg.base_url,
+            api_key=api_key,
+            model=cfg.model,
+            timeout_seconds=float(cfg.request_timeout_seconds),
+        )
+        messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(_history_as_llm_messages(db, session.id))
+
+        try:
+            for _turn in range(max(int(cfg.max_turns), 1)):
+                reply = await client.chat(
+                    messages, tools=to_openai_tools(), temperature=float(cfg.temperature)
+                )
+                if not reply.tool_calls:
+                    _add_message(
+                        db, session, role="assistant", content=reply.content,
+                        meta={
+                            "usage": reply.usage,
+                            "latency_ms": reply.latency_ms,
+                        },
+                    )
+                    return
+
+                meta: dict = {"usage": reply.usage, "latency_ms": reply.latency_ms}
+                assistant_msg = _add_message(
+                    db, session, role="assistant", content=reply.content,
+                    tool_calls=[
+                        {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                        for tc in reply.tool_calls
+                    ],
+                    meta=meta,
+                )
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": reply.content or None,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": json.dumps(
+                                        tc.arguments, ensure_ascii=False
+                                    ),
+                                },
+                            }
+                            for tc in reply.tool_calls
+                        ],
+                    }
+                )
+
+                yielded = False
+                proposed_action_id: int | None = None
+                for tc in reply.tool_calls:
+                    spec = TOOLS.get(tc.name)
+                    if spec is None:
+                        note = f"未知工具 {tc.name}（不可用）"
+                    elif spec.kind == "query":
+                        try:
+                            result = await asyncio.to_thread(_run_query, tc.name, tc.arguments)
+                            note = result
+                        except ToolValidationError as exc:
+                            note = f"参数校验失败：{exc}"
+                        except Exception as exc:  # noqa: BLE001 - 查询失败回填重试
+                            note = f"查询失败：{exc}"
+                            logger.warning("ai_query_failed tool=%s err=%s", tc.name, exc)
+                    else:
+                        mode = _decide_execution_mode(spec, cfg)
+                        action = _create_action(
+                            db, session,
+                            tool_name=tc.name, arguments=tc.arguments, mode=mode,
+                        )
+                        proposed_action_id = action.id
+                        if mode == "proposed":
+                            note = (
+                                f"该操作需要管理员审批（操作卡 #{action.id}）。"
+                                "请在平台上批准或拒绝。"
+                            )
+                        else:
+                            try:
+                                await asyncio.to_thread(execute_action, action.id)
+                                note = f"已开始执行（操作卡 #{action.id}），完成后我会汇报结果。"
+                            except Exception as exc:  # noqa: BLE001
+                                note = f"启动执行失败：{exc}"
+                        yielded = True
+
+                    _add_message(
+                        db, session, role="tool", content=note, tool_call_id=tc.id or None
+                    )
+                    messages.append(
+                        {"role": "tool", "tool_call_id": tc.id or "", "content": note}
+                    )
+
+                if proposed_action_id is not None and assistant_msg is not None:
+                    assistant_msg.meta = {**dict(assistant_msg.meta or {}),
+                                         "proposed_action_id": proposed_action_id}
+                    db.commit()
+
+                if yielded:
+                    return  # 止轮：等 on_complete 续轮 / 审批
+
+            _add_message(
+                db, session, role="assistant",
+                content="已达单轮工具迭代上限（max_turns），请拆分请求或继续对话。",
+            )
+        except (AiAuthError, AiUpstreamTimeout, AiBadResponse) as exc:
+            _fail_pending_messages(db, session, str(exc))
+            logger.warning("ai_turn_llm_failed session=%s err=%s", session_id, exc)
+    finally:
+        db.close()
