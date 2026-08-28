@@ -8,6 +8,8 @@ import { clearChunkRecoveryAttempt, isChunkLoadError } from '@/utils/chunkLoadRe
 
 interface Props {
   children: React.ReactNode;
+  /** 全屏错误态（默认 true，App.tsx 顶层用）；AppShell 路由层用 false 走紧凑布局 */
+  fullscreen?: boolean;
 }
 
 interface State {
@@ -20,6 +22,8 @@ export class ErrorBoundary extends React.Component<Props, State> {
     super(props);
     this.state = { hasError: false, error: null };
   }
+
+  static defaultProps = { fullscreen: true };
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
@@ -41,8 +45,9 @@ export class ErrorBoundary extends React.Component<Props, State> {
   render() {
     const isChunkFailure = isChunkLoadError(this.state.error);
     if (this.state.hasError) {
+      const { fullscreen = true } = this.props;
       return (
-        <div className={cn('flex items-center justify-center min-h-screen p-8', SURFACE.page)}>
+        <div className={cn('flex items-center justify-center p-8', fullscreen ? 'min-h-screen' : 'h-full min-h-64', SURFACE.page)}>
           <div className="w-full max-w-md">
             <ErrorState
               icon={<AlertTriangle className="w-8 h-8 text-destructive" />}
