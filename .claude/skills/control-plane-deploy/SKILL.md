@@ -54,6 +54,28 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 等价变换验证过 6 FK 表 + 2 快照列，详见 Agent Note
 `docs/notes/bug-fix/2026-08-28-align-host-id-with-ip.md`）。
 
+## 1.5 前端静态资源部署（✅ 2026-08-27 真机校准）
+
+nginx 站点 `stability-platform` root 指向仓库内 `frontend/dist-prod`
+（gitignore 排除、无 CI 自动发布）——部署 = 干净 worktree 构建 + 目录原子替换：
+
+```bash
+git fetch origin && git worktree add /tmp/stp-deploy origin/main   # 必先 fetch！
+ln -sfn $PWD/frontend/node_modules /tmp/stp-deploy/frontend/node_modules
+cd /tmp/stp-deploy/frontend && npm run build                        # 产物 → dist/
+cd $REPO/frontend
+mv dist-prod dist-prod.bak-$(date +%H%M)                            # bak 目录留原地回滚
+mv /tmp/stp-deploy/frontend/dist dist-prod                          # 双 rename 原子切换
+```
+
+验证清单（实测有效）：`curl -s http://127.0.0.1/<path> | grep -o 'assets/index-[^"]*\.js'`
+与磁盘对比；浏览器强刷目标页核对新文案 testid。
+
+**坑（2026-08-27 已踩）**：worktree 基于的本地 `origin/main` 引用可能落后于
+远端——构建前必 fetch，并用
+`git merge-base --is-ancestor <目标PR mergeCommit> origin/main`
+校验目标 PR 确实在基线里（曾打出不含当日 PR 的旧包）。
+
 ## 2. 脚本目录 scan 与版本核验
 
 ```bash
@@ -92,6 +114,7 @@ venv/bin/python -m backend.scripts.batch_hot_update   # ⚠️待校对：参数
 | SP Flash Tool host 缺库 | `sudo -n apt-get install -y --no-install-recommends libice6 libsm6 libxrender1 libfontconfig1 libglib2.0-0` ⚠️待校对 |
 | MLD 拼写 | `getprop ro.product.model` 返回 `MLD-LX3`（连字符），`adb devices` 是下划线——以 getprop 为准 |
 | 部署后代码 | 部署验证完成后按仓库流程走 PR 合入，不直推 main |
+| 本地 ref 陈旧 | worktree 基于 origin/main 前必 fetch；构建前用 `merge-base --is-ancestor <PR mergeCommit> origin/main` 校验 |
 
 ## 7. 校准记录
 
@@ -100,4 +123,6 @@ venv/bin/python -m backend.scripts.batch_hot_update   # ⚠️待校对：参数
 | 2026-08-27 | v0 骨架创建（全部 ⚠️待校对） | memory + runbook 预起草 |
 | 2026-08-28 | 新增 §1 控制面后端更新与 DB 迁移路径（本机即生产控制面） | docs/production-minimum-deployment-checklist.md §3.5 + k8l9m0n1o2p3 迁移 |
 | 2026-08-28 | 校准 §1：本机生产代码路径是仓库根 `/home/debian13/stability-test-platform`，非 `/opt/...`（后者不存在）；部署现已实操验证（k8l9m0n1o2p3 真机应用 + restart + 34 ONLINE） | 本机 pgrep/journalctl + 正式部署 |
+| 2026-08-27 | 新增 §1.5 前端段：nginx root=仓库内 `frontend/dist-prod`、worktree 构建 + 双 rename 原子切换、浏览器/curl 双验证 | 登记簿 UI 批次（#476/#477）部署实操 |
+| 2026-08-28 | 坑表补「本地 ref 陈旧」条目：目标 PR mergeCommit ∈ origin/main 用 `merge-base --is-ancestor` 校验（曾打出旧包） | 同上事故复盘 |
 | （下次真实部署） | | |
