@@ -249,7 +249,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ---
 
-### C4 — 表单实现与 label 绑定不统一 —— **部分修复（2026-08-28：WifiPage/SchedulesPage/ChangePasswordPage 已补 htmlFor/id；其余表单待统一）**
+### C4 — 表单实现与 label 绑定不统一 —— **已修复（2026-08-28：WifiPage/SchedulesPage/ChangePasswordPage/NotificationsPage/ScriptVersionDialog/PlanRunHero 已补 htmlFor/id；包裹型 label 判定隐式关联无需改）**
 
 **证据**：
 - 封装 `Input` 组件（LoginPage / RegisterPage / 多数页）vs 原生 `<input className={FORM.input}>`（ChangePasswordPage / UserModal / WifiPage 内联表单）。
@@ -260,7 +260,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ---
 
-### C5 — 错误提示 token 与消息粒度不统一 —— **部分修复（2026-08-28：LoginPage 横幅改 ALERT_BOX；SchedulesPage delete/toggle 改 toApiError；其余页面待统一）**
+### C5 — 错误提示 token 与消息粒度不统一 —— **已修复（2026-08-28：LoginPage 横幅改 ALERT_BOX；SchedulesPage/NotificationsPage/WifiPage 错误均带 toApiError 详情）**
 
 **证据**：
 - 错误横幅 token：LoginPage 用 `STATUS_CHIP.destructive`，RegisterPage/ChangePasswordPage 用 `ALERT_BOX.destructive`。

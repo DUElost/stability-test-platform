@@ -98,8 +98,9 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className={FORM.label}>新版本 *</label>
+            <label htmlFor="sv-version" className={FORM.label}>新版本 *</label>
             <input
+              id="sv-version"
               type="text"
               value={version}
               onChange={(e) => setVersion(e.target.value)}
@@ -109,8 +110,9 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
             />
           </div>
           <div>
-            <label className={FORM.label}>描述</label>
+            <label htmlFor="sv-description" className={FORM.label}>描述</label>
             <input
+              id="sv-description"
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -119,8 +121,9 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
             />
           </div>
           <div>
-            <label className={FORM.label}>NFS 路径</label>
+            <label htmlFor="sv-nfs-path" className={FORM.label}>NFS 路径</label>
             <input
+              id="sv-nfs-path"
               type="text"
               value={nfsPath}
               onChange={(e) => setNfsPath(e.target.value)}
@@ -129,8 +132,9 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
             />
           </div>
           <div>
-            <label className={FORM.label}>Content SHA256</label>
+            <label htmlFor="sv-sha256" className={FORM.label}>Content SHA256</label>
             <input
+              id="sv-sha256"
               type="text"
               value={contentSha256}
               onChange={(e) => setContentSha256(e.target.value)}
@@ -139,11 +143,12 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
             />
           </div>
           <div>
-            <label className={FORM.label}>
+            <label htmlFor="sv-default-params" className={FORM.label}>
               default_params (JSON) *
               <span className={cn('ml-1 font-normal', TEXT.subtitle)}>— 修改此字段即为新建版本</span>
             </label>
             <textarea
+              id="sv-default-params"
               value={defaultParamsText}
               onChange={(e) => setDefaultParamsText(e.target.value)}
               rows={4}
@@ -152,8 +157,9 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
             />
           </div>
           <div>
-            <label className={FORM.label}>param_schema (JSON)</label>
+            <label htmlFor="sv-param-schema" className={FORM.label}>param_schema (JSON)</label>
             <textarea
+              id="sv-param-schema"
               value={paramSchemaText}
               onChange={(e) => setParamSchemaText(e.target.value)}
               rows={3}

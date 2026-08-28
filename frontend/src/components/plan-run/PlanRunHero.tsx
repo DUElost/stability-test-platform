@@ -321,8 +321,9 @@ export default function PlanRunHero({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-2">
-            <label className={cn('block text-sm font-medium', TEXT.heading)}>中止原因（可选）</label>
+            <label htmlFor="pr-abort-reason" className={cn('block text-sm font-medium', TEXT.heading)}>中止原因（可选）</label>
             <input
+              id="pr-abort-reason"
               type="text"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
