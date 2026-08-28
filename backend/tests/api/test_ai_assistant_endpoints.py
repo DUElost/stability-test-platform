@@ -296,6 +296,60 @@ class TestTurnLoopWithFakeClient:
         )
         assert any((m.meta or {}).get("proposed_action_id") == action.id for m in assistant_msgs)
 
+    def test_non_admin_cannot_reach_admin_only_tools(self, auth_headers, db_session, monkeypatch):
+        """PR-Agent gate 越权修复回归：普通用户的轮次里，admin-only 工具
+        不出现在 tools 载荷；直接点名调用走「未知工具」分支。"""
+        _configure(db_session)
+        from backend.services.ai_assistant import orchestrator as orch
+        from backend.services.ai_assistant.llm_client import AssistantReply, ToolCallRequest
+
+        seen_tools: list = []
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            async def chat(self, messages, tools=None, **kw):
+                seen_tools.append(tools)
+                return AssistantReply(
+                    content="",
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="c1", name="query_recent_audit_logs", arguments={}
+                        )
+                    ],
+                )
+
+        monkeypatch.setattr(orch, "LlmClient", FakeClient)
+
+        class _Shared:
+            def __init__(self, s):
+                self._s = s
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+
+        user = db_session.query(User).filter(User.role != "admin").first()
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.commit()
+
+        asyncio.run(orch.ai_assistant_turn_task({}, session_id=s.id))
+
+        names = {t["function"]["name"] for t in (seen_tools[0] or [])}
+        assert "query_recent_audit_logs" not in names
+        tool_msg = (
+            db_session.query(AiChatMessage)
+            .filter(AiChatMessage.session_id == s.id, AiChatMessage.role == "tool")
+            .first()
+        )
+        assert "不可用" in tool_msg.content
+
     def test_not_configured_fails_pending(self, auth_headers, db_session, monkeypatch):
         from backend.services.ai_assistant import orchestrator as orch
 

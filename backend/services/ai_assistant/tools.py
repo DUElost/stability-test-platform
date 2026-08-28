@@ -53,6 +53,9 @@ class ToolSpec:
     timeout_seconds: int = 300
     # 仅 T2 低危工具可加入免确认白名单（前端勾选与此处对齐）
     whitelistable: bool = False
+    # 镜像 admin-only 端点的工具（audit/settings 路由均 require_admin）：
+    # 助手工具面不得宽于用户自身 API 权限（PR-Agent gate 越权发现）
+    admin_only: bool = False
 
 
 @dataclass
@@ -392,7 +395,7 @@ TOOLS: dict[str, ToolSpec] = {
                 "resource_type": {"type": "string"},
                 "limit": {"type": "integer", "description": "1-50，默认 20"},
             }),
-            tier="T0", kind="query",
+            tier="T0", kind="query", admin_only=True,
         ),
         ToolSpec(
             name="search_docs",
@@ -404,7 +407,7 @@ TOOLS: dict[str, ToolSpec] = {
             name="get_settings_overview",
             description="获取平台设置概览（平台名/时区/数据库类型/告警规则数）。",
             parameters=_schema({}),
-            tier="T0", kind="query",
+            tier="T0", kind="query", admin_only=True,
         ),
         ToolSpec(
             name="run_quality_gate",
@@ -448,8 +451,8 @@ TOOLS: dict[str, ToolSpec] = {
 }
 
 
-def to_openai_tools() -> list[dict[str, Any]]:
-    """生成 OpenAI chat/completions 的 tools 载荷。"""
+def to_openai_tools(allowed_names: set[str] | None = None) -> list[dict[str, Any]]:
+    """生成 OpenAI chat/completions 的 tools 载荷（allowed_names 非空时按其过滤）。"""
     return [
         {
             "type": "function",
@@ -460,4 +463,16 @@ def to_openai_tools() -> list[dict[str, Any]]:
             },
         }
         for spec in TOOLS.values()
+        if allowed_names is None or spec.name in allowed_names
     ]
+
+
+def allowed_tool_names(is_admin: bool) -> set[str]:
+    """按用户角色裁剪工具集：助手工具面不得宽于用户自身 API 权限。
+
+    admin-only 端点的镜像工具（audit / settings 路由均 require_admin）
+    仅 admin 会话可见；非 admin 调用此类工具名走「未知工具」分支回填。
+    """
+    if is_admin:
+        return set(TOOLS)
+    return {n for n, s in TOOLS.items() if not s.admin_only}

@@ -23,6 +23,12 @@
 - 后端新测试 47 用例全过（testcontainers PG）：加密往返/掩码、llm_client 七类错误（MockTransport，含 SOCKS 代理环境 ImportError 包裹）、工具校验（路径穿越/profile 枚举/白名单形状/**AGENT_TEST_ENV 四键结构断言**）、API（掩码不落明文、PUT 留空不变更、审计行、409 ai_not_configured、会话隔离 404、非 admin 审批 403、假客户端完整轮次含 D7 密钥不落消息断言、T2 提案止轮）。
 - agent 测试 1236 全过（saq_tasks 导入链零回归）；ruff 全绿；前端 tsc + 621 vitest 全过。
 - 迁移经 conftest 空库 `alembic upgrade head` 真实执行（47 用例即证据）。
+- **PR-Agent gate 越权发现已修复**（#509 首评）：`query_recent_audit_logs`/`get_settings_overview`
+  镜像的均为 `require_admin` 端点，原实现对全员开放构成越权。修复=**双门禁**：工具 payload
+  按会话用户角色裁剪（`allowed_tool_names`）+ 执行面校验（模型点名调用角色外工具同样拒绝）；
+  新增 3 用例锁定（含「payload 过滤但执行未挡」的缺口回归——首版修复正是被测试抓出此洞）。
+- 迁移 DDL 另经一次性 PG 容器真实执行验证（本地 conftest 为 `create_all` 直建，不覆盖迁移链；
+  stamp 跳过 main 既有缺陷 #510 后 `i5j6→q9r8` 全链路执行，四表五索引核验）。
 
 ## 何时重议
 

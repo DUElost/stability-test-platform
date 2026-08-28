@@ -33,6 +33,7 @@ from backend.services.ai_assistant.llm_client import (
 from backend.services.ai_assistant.tools import (
     TOOLS,
     ToolValidationError,
+    allowed_tool_names,
     build_runconsole_plan,
     execute_query,
     to_openai_tools,
@@ -407,13 +408,21 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
             model=cfg.model,
             timeout_seconds=float(cfg.request_timeout_seconds),
         )
+        # 工具面按用户角色裁剪（PR-Agent gate：审计/设置为 admin-only 端点，
+        # 镜像它们的工具不得对普通用户开放）
+        from backend.models.user import User as UserModel
+
+        user_row = db.get(UserModel, session.user_id)
+        is_admin = getattr(user_row, "role", None) == "admin"
+        tool_names = allowed_tool_names(is_admin)
+        openai_tools = to_openai_tools(tool_names)
         messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
         messages.extend(_history_as_llm_messages(db, session.id))
 
         try:
             for _turn in range(max(int(cfg.max_turns), 1)):
                 reply = await client.chat(
-                    messages, tools=to_openai_tools(), temperature=float(cfg.temperature)
+                    messages, tools=openai_tools, temperature=float(cfg.temperature)
                 )
                 if not reply.tool_calls:
                     _add_message(
@@ -458,7 +467,9 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                 proposed_action_id: int | None = None
                 for tc in reply.tool_calls:
                     spec = TOOLS.get(tc.name)
-                    if spec is None:
+                    if spec is None or tc.name not in tool_names:
+                        # 双门禁：payload 裁剪 + 执行面校验——模型点名调用
+                        # 角色外工具（如幻觉出的 admin-only 工具）同样拒绝
                         note = f"未知工具 {tc.name}（不可用）"
                     elif spec.kind == "query":
                         try:

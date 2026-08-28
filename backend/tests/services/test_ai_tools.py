@@ -33,6 +33,25 @@ class TestRegistryShape:
             assert entry["function"]["parameters"]["type"] == "object"
 
 
+class TestRoleFiltering:
+    def test_admin_gets_all_non_admin_excludes_admin_only(self):
+        admin = tools.allowed_tool_names(is_admin=True)
+        normal = tools.allowed_tool_names(is_admin=False)
+        assert "query_recent_audit_logs" in admin
+        assert "get_settings_overview" in admin
+        # admin-only 端点的镜像工具不得对普通用户开放（PR-Agent gate 越权修复）
+        assert "query_recent_audit_logs" not in normal
+        assert "get_settings_overview" not in normal
+        # 普通用户仍可用观测类其余工具
+        assert "query_hosts" in normal and "query_plan_runs" in normal
+
+    def test_openai_payload_filtered(self):
+        payload = tools.to_openai_tools(tools.allowed_tool_names(is_admin=False))
+        names = {e["function"]["name"] for e in payload}
+        assert "query_recent_audit_logs" not in names
+        assert len(names) == len(tools.TOOLS) - 2
+
+
 class TestRunConsolePlans:
     def test_quality_gate_cmd_is_argv(self):
         plan = tools.build_runconsole_plan("run_quality_gate", {"profile": "quick"})
