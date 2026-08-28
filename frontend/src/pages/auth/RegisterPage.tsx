@@ -5,8 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertCircle } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
-import axios from 'axios';
-import { toApiError } from '@/utils/api';
+import { api, toApiError } from '@/utils/api';
 import { SURFACE, TEXT } from '@/design-system/tokens';
 import { ALERT_BOX } from '@/design-system/tokens';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
@@ -32,11 +31,8 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      await axios.post('/api/v1/auth/register', {
-        username,
-        password,
-        role: 'user',
-      });
+      // C8：统一走 api 客户端（withCredentials/token/错误规范化与 Login 一致）
+      await api.auth.register({ username, password, role: 'user' });
 
       // 注册成功，跳转到登录页
       toast.success('注册成功，请登录');

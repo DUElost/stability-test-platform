@@ -1,4 +1,5 @@
-import { useCallback, useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '@/utils/api';
 import { Shield } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -32,10 +33,6 @@ interface AuditLogEntry {
 }
 
 export default function AuditLogPage() {
-  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
 
@@ -48,38 +45,27 @@ export default function AuditLogPage() {
     end_time: '',
   });
 
-  const loadLogs = useCallback(async () => {
-    if (filters.start_time && filters.end_time && filters.start_time > filters.end_time) {
-      // 非法区间不再静默 return：显示错误而非旧列表/空态
-      setError('起始时间不能晚于结束时间');
-      setLogs([]);
-      setTotal(0);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
+  // C1：数据获取迁移 react-query（缓存/重试/去重与全站一致）；
+  // 非法时间区间通过 enabled 禁发请求，UI 层显示静态错误（M3 语义保留）
+  const invalidRange = Boolean(
+    filters.start_time && filters.end_time && filters.start_time > filters.end_time,
+  );
+
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ['audit-logs', page, pageSize, filters],
+    queryFn: () => {
       const params: Record<string, string> = {};
       if (filters.resource_type !== 'all') params.resource_type = filters.resource_type;
       if (filters.action !== 'all') params.action = filters.action;
       if (filters.start_time) params.start_time = filters.start_time;
       if (filters.end_time) params.end_time = filters.end_time;
-      const res = await api.audit.list(page * pageSize, pageSize, params);
-      setLogs(res.items as unknown as AuditLogEntry[]);
-      setTotal(res.total);
-    } catch {
-      setError('加载失败，请检查网络连接或管理员权限');
-      setLogs([]);
-      setTotal(0);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, filters, pageSize]);
+      return api.audit.list(page * pageSize, pageSize, params);
+    },
+    enabled: !invalidRange,
+  });
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 拉取 effect 的同步 loading/分页置位
-    loadLogs();
-  }, [loadLogs]);
+  const logs = (data?.items as unknown as AuditLogEntry[] | undefined) ?? [];
+  const total = data?.total ?? 0;
 
   return (
     <PageContainer width="content">
@@ -138,16 +124,19 @@ export default function AuditLogPage() {
         </label>
       </div>
 
-      {error && !loading && (
-        <InlineError message={error} onRetry={loadLogs} />
-      )}
-
-      {loading ? (
+      {invalidRange ? (
+        <InlineError message="起始时间不能晚于结束时间" />
+      ) : isError ? (
+        <InlineError
+          message="加载失败，请检查网络连接或管理员权限"
+          onRetry={() => void refetch()}
+        />
+      ) : isLoading ? (
         <PageSkeleton>
           <PageSkeleton.Block size="md" />
           <PageSkeleton.Block size="lg" />
         </PageSkeleton>
-      ) : error ? null : logs.length === 0 ? (
+      ) : logs.length === 0 ? (
         <EmptyState
           title="暂无审计记录"
           description="操作日志将在此处记录"
