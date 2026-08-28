@@ -57,6 +57,10 @@ class TestRunConsolePlans:
         plan = tools.build_runconsole_plan("run_quality_gate", {"profile": "quick"})
         assert plan.cmd == [sys.executable, "scripts/run_gates.py", "check:quick"]
         assert plan.run_key == "ai-gate:quick"
+        # check:pr 含 agent-tests：质量门禁同样必须显式覆盖生产 DATABASE_URL
+        # （PR-Agent gate 复评发现；与 run_agent_tests 同源约束）
+        assert plan.env["DATABASE_URL"] == tools.AGENT_TEST_ENV_OVERRIDE["DATABASE_URL"]
+        assert plan.env["TESTING"] == "1"
         # cwd 是仓库根（worktree 或主树皆可）：以门禁脚本存在性判定
         assert (plan.cwd / "scripts" / "run_gates.py").exists()
 

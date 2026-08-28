@@ -27,6 +27,10 @@
   镜像的均为 `require_admin` 端点，原实现对全员开放构成越权。修复=**双门禁**：工具 payload
   按会话用户角色裁剪（`allowed_tool_names`）+ 执行面校验（模型点名调用角色外工具同样拒绝）；
   新增 3 用例锁定（含「payload 过滤但执行未挡」的缺口回归——首版修复正是被测试抓出此洞）。
+- **gate 复评第二轮两项修复**：① `run_quality_gate` 补 `AGENT_TEST_ENV_OVERRIDE`
+  （check:pr 含 agent-tests，原实现会继承生产 DATABASE_URL——与 H1 同类透传，有回归断言）；
+  ② RunConsole 无超时机制，`execute_action` 为 run 装看门狗 Timer（到时 RUNNING 才取消，
+  走正常 on_complete 终态回填），`timeout_seconds` 不再是死代码。
 - 迁移 DDL 另经一次性 PG 容器真实执行验证（本地 conftest 为 `create_all` 直建，不覆盖迁移链；
   stamp 跳过 main 既有缺陷 #510 后 `i5j6→q9r8` 全链路执行，四表五索引核验）。
 

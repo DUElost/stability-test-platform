@@ -288,6 +288,9 @@ def _plan_quality_gate(args: dict) -> RunConsolePlan:
     return RunConsolePlan(
         cmd=[sys.executable, "scripts/run_gates.py", f"check:{profile}"],
         cwd=REPO_ROOT,
+        # check:pr 含 agent-tests（run_gates.py:104）——同款四键覆盖，
+        # 防 backend 进程 env 中生产 DATABASE_URL 透传（PR-Agent gate 复评发现）
+        env=dict(AGENT_TEST_ENV_OVERRIDE),
         run_key=f"ai-gate:{profile}",
         timeout_seconds=timeout,
     )

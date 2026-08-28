@@ -367,6 +367,7 @@ def execute_action(action_id: int) -> None:
                 return
             action.console_run_id = run_id
             db.commit()
+            _arm_run_timeout(run_id, plan.timeout_seconds)
         else:
             action.status = "running"
             db.commit()
@@ -378,6 +379,31 @@ def execute_action(action_id: int) -> None:
             _finalize_action(action_id, "succeeded", summary)
     finally:
         db.close()
+
+
+def _arm_run_timeout(run_id: str, timeout_seconds: int) -> None:
+    """给 RunConsole run 装一个看门狗定时器（RunConsole 本身无超时机制）。
+
+    到时仍在 RUNNING 才取消——已完成/已取消的 run 不受影响；取消会走
+    正常 on_complete 终态回填（CANCELED），无需重复 finalize。
+    """
+    import threading
+
+    from backend.services.run_console import RunConsole
+
+    def _fire():
+        try:
+            st = RunConsole.instance().status(run_id)
+            if st and st.get("status") == "RUNNING":
+                RunConsole.instance().cancel(run_id)
+                logger.warning("ai_action_run_timeout_cancelled run_id=%s after=%ss",
+                               run_id, timeout_seconds)
+        except Exception:  # noqa: BLE001 - 看门狗失败不影响的执行面
+            logger.exception("ai_action_run_timeout_error run_id=%s", run_id)
+
+    timer = threading.Timer(max(int(timeout_seconds), 60), _fire)
+    timer.daemon = True
+    timer.start()
 
 
 def _on_action_complete(action_id: int, run) -> None:
