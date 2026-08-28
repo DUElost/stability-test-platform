@@ -38,8 +38,16 @@ echo '{"version": "8.0.1.100"}' > "$ROOT/MLD/latest.json"
 - `version` 必须与设备 `getprop ro.build.version.incremental` 的值同口径
   （比对就靠它）；不确定时先在一台设备上 `adb shell getprop
   ro.build.version.incremental` 确认版本字符串格式。
+- **构建后缀陷阱（2026-08-28 实测）**：目录名可能带 `_FTM_userdebug` 等
+  后缀，但设备 `ro.build.version.incremental` 返回**不含后缀**的串。
+  manifest.version 必须以真机实测值为准（三处一致：目录名/manifest/
+  latest.json）；否则 post-flash verify 恒 mismatch 误判失败。
 - manifest 的 `version` 必须等于目录名，放错目录会 fail-fast。
 - ELA 上架同样步骤，目录换成 `$ROOT/ELA/`，models 填 `ELA_LX2`/`ELA_LX3`。
+- **版本切换 = 改 latest.json（族级指针，同族全部机型共享）**：多机型
+  多固件并存时需按机型错开派发（models 白名单兜底防误刷）。per-model
+  版本映射方案见
+  [2026-08-28-flash-plan-version-mechanism](../notes/architecture/2026-08-28-flash-plan-version-mechanism.md)。
 
 ## 2. 鉴权（运维 curl 模式）
 
