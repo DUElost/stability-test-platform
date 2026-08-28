@@ -84,4 +84,4 @@ def test_capacity_reporter_effective_slots_normal():
         system_stats={"cpu_load": 30.0, "ram_usage": 40.0, "disk_usage": {"usage_percent": 40.0}},
         mount_status={"/mnt/hdd": {"ok": True, "usage_percent": 50.0}},
     )
-    assert result["capacity"]["effective_slots"] == 7  # 8 - 1 = 7 free
+    assert result["capacity"]["effective_slots"] == 5  # #483: 认领上限默认 5

@@ -4,7 +4,13 @@
 """
 
 import math
+import os
+import logging
 from typing import Any, List, Optional
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_MAX_CLAIM_SLOTS = 5  # 与 operation_scheduler 的 permit 默认对齐（#483）
 
 
 def _coerce_usage_percent(raw: Any) -> Optional[float]:
@@ -34,11 +40,16 @@ def compute_capacity(
     system_stats: dict,
     mount_status: dict,
     adb_server_conflict: bool = False,
+    max_claim_slots: "Optional[int]" = None,
 ) -> dict:
     """返回 {"capacity": {...}, "health": {...}}。
 
     total_devices — 本 host 上报的设备总数（含离线/不健康），用于判断 adb 全死。
-    有效槽位 = min(空闲设备数, 主机健康状态)，不再受 max_concurrent_jobs 限制。
+    有效槽位 = min(空闲设备数, 主机健康状态, 认领上限)。
+    max_concurrent_jobs 已删除——空闲设备数原本是唯一上限；#483 追加
+    认领上限（默认 5，与 OperationScheduler permit 对齐）：
+    否则同 host 大批次会把全部设备一次认领，worker 池过大 → 密集
+    重启/重枚举风暴压垮 hub（.80 19 台并发刷写 15 台写失败的根因）。
     """
     health = _compute_health(
         system_stats,
@@ -53,7 +64,9 @@ def compute_capacity(
     )
 
     device_slots = max(0, online_healthy_devices - active_device_count)
-    effective_slots = min(device_slots, health_limit)
+    if max_claim_slots is None:
+        max_claim_slots = configured_max_claim_slots()
+    effective_slots = min(device_slots, health_limit, max_claim_slots)
 
     capacity = {
         "active_jobs": active_job_count,
@@ -64,6 +77,20 @@ def compute_capacity(
     }
 
     return {"capacity": capacity, "health": health}
+
+
+def configured_max_claim_slots() -> int:
+    """认领上限：STP_MAX_CLAIM_SLOTS（默认 5，与 STP_MAX_CONCURRENT_OPERATIONS
+    对齐）。钳在 compute_capacity 层，使 agent 一次认领的 job 数不超过该值——
+    permit 只限步骤并发，挡不住「17 个 worker 全活跃」的认领风暴。"""
+    raw = os.getenv("STP_MAX_CLAIM_SLOTS", str(_DEFAULT_MAX_CLAIM_SLOTS))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("invalid_max_claim_slots raw=%r default=%d",
+                       raw, _DEFAULT_MAX_CLAIM_SLOTS)
+        value = _DEFAULT_MAX_CLAIM_SLOTS
+    return max(value, 1)
 
 
 def _compute_health_limit(
