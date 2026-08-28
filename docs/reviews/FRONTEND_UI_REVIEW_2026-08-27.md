@@ -210,7 +210,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ## 4. 一致性欠债（多页同概念多实现）
 
-### C1 — 数据获取范式分裂：react-query vs 手写 useEffect
+### C1 — 数据获取范式分裂：react-query vs 手写 useEffect —— **已修复（2026-08-28，AuditLogPage 已迁 react-query；SchedulesPage 待迁）**
 
 **证据**：绝大多数页面用 react-query；但 `AuditLogPage.tsx:51-76` 与
 `SchedulesPage.tsx:51-84` 用 `useState` + `useEffect` + `useCallback` 手动拉取。
@@ -274,7 +274,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ---
 
-### C6 — 批量操作并发策略不一致
+### C6 — 批量操作并发策略不一致 —— **已修复（2026-08-28）**
 
 **证据**：`devices/DevicesPage.tsx:151-170` 标签批量更新用并发 worker（5）；`hosts/HostsPage.tsx:278-295` 批量删除是串行 `for...of`，大批量下慢且失败不汇总（`onError` 只 toast 单台，最终仍报"已完成"）。
 
@@ -282,7 +282,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ---
 
-### C7 — 模态关闭语义相反
+### C7 — 模态关闭语义相反 —— **已修复（2026-08-28：统一为提交中禁止所有关闭路径）**
 
 **证据**：`AddHostModal` 的"取消"按钮仍 `disabled={isSubmitting}`（复核轮修正：无条件允许关闭
 仅限 X 与 overlay 两条路径，注释确实写了"始终允许关闭"）；`AddDeviceModal:64-66` 在
@@ -292,7 +292,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ---
 
-### C8 — 注册页绕过 api 客户端
+### C8 — 注册页绕过 api 客户端 —— **已修复（2026-08-28：走 `api.auth.register`；用户名前端校验未补，随 C4 表单统一轮）**
 
 **证据**：`pages/auth/RegisterPage.tsx:35` 直接 `axios.post('/api/v1/auth/register', ...)`，
 而 LoginPage 走 `api.auth.login`。会导致 token/拦截器/错误规范化不一致；且前端对用户名

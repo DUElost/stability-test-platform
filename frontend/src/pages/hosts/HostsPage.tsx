@@ -282,14 +282,30 @@ export default function HostsPage() {
       variant: 'destructive',
     });
     if (!ok) return;
-    for (const id of Array.from(selectedHostIds)) {
-      try {
-        await api.hosts.delete(id);
-      } catch (error: unknown) {
-        toast.error(`删除 ${id} 失败: ${toApiError(error).message}`);
+    // C6：受控并发（与 DevicesPage 批量标签同模式），失败汇总而非逐条静默
+    const ids = Array.from(selectedHostIds);
+    let cursor = 0;
+    let succeeded = 0;
+    const failed: string[] = [];
+    const workers = Array.from({ length: Math.min(5, ids.length) }, async () => {
+      while (cursor < ids.length) {
+        const id = ids[cursor++];
+        try {
+          await api.hosts.delete(id);
+          succeeded += 1;
+        } catch {
+          failed.push(String(id));
+        }
       }
+    });
+    await Promise.all(workers);
+    if (failed.length > 0) {
+      toast.error(
+        `批量删除完成：成功 ${succeeded}，失败 ${failed.length}（${failed.slice(0, 3).join('、')}${failed.length > 3 ? ' 等' : ''}）`,
+      );
+    } else {
+      toast.success(`已删除 ${succeeded} 台主机`);
     }
-    toast.success('批量删除已完成');
     setSelectedHostIds(new Set());
     queryClient.invalidateQueries({ queryKey: hostKeys.list() });
   };

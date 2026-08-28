@@ -86,8 +86,8 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
   };
 
   const handleClose = () => {
-    // 始终允许关闭（即便 isSubmitting，错误后用户需要关掉弹窗）
-    onClose();
+    // C7：提交中禁止关闭（与 AddDeviceModal 一致），防止提交中途关窗导致状态混乱
+    if (!isSubmitting) onClose();
   };
 
   if (!isOpen) return null;
