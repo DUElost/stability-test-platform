@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/utils/api';
+import { api, toApiError } from '@/utils/api';
 import type { ResourcePool, ResourcePoolLoad } from '@/utils/api/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -56,7 +56,7 @@ export default function WifiPage() {
       queryClient.invalidateQueries({ queryKey: ['resource-pools'] });
       resetForm();
     },
-    onError: () => toast.error('创建失败'),
+    onError: (err: unknown) => toast.error(toApiError(err).message),
   });
 
   const updateMutation = useMutation({
@@ -71,7 +71,7 @@ export default function WifiPage() {
       queryClient.invalidateQueries({ queryKey: ['resource-pools'] });
       resetForm();
     },
-    onError: () => toast.error('更新失败'),
+    onError: (err: unknown) => toast.error(toApiError(err).message),
   });
 
   const deleteMutation = useMutation({
@@ -80,7 +80,7 @@ export default function WifiPage() {
       toast.success('WiFi 池已删除');
       queryClient.invalidateQueries({ queryKey: ['resource-pools'] });
     },
-    onError: () => toast.error('删除失败'),
+    onError: (err: unknown) => toast.error(toApiError(err).message),
   });
 
   function resetForm() {

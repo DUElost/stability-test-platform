@@ -145,8 +145,9 @@ export default function NotificationsPage() {
       setShowChannelForm(false);
       setEditingChannel(null);
       invalidateAll();
-    } catch {
-      toast.error('保存失败');
+    } catch (err: unknown) {
+      // C5：错误文案带后端详情，与 handleTestChannel 一致
+      toast.error(toApiError(err).message);
     } finally {
       setActionLoading(false);
     }
@@ -157,8 +158,9 @@ export default function NotificationsPage() {
     try {
       await api.notifications.deleteChannel(id);
       invalidateAll();
-    } catch {
-      toast.error('删除失败');
+    } catch (err: unknown) {
+      // C5：错误文案带后端详情
+      toast.error(toApiError(err).message);
     }
   };
 
@@ -206,8 +208,9 @@ export default function NotificationsPage() {
       setShowRuleForm(false);
       setEditingRule(null);
       invalidateAll();
-    } catch {
-      toast.error('保存失败');
+    } catch (err: unknown) {
+      // C5：错误文案带后端详情
+      toast.error(toApiError(err).message);
     } finally {
       setActionLoading(false);
     }
@@ -218,8 +221,9 @@ export default function NotificationsPage() {
     try {
       await api.notifications.deleteRule(id);
       invalidateAll();
-    } catch {
-      toast.error('删除失败');
+    } catch (err: unknown) {
+      // C5：错误文案带后端详情
+      toast.error(toApiError(err).message);
     }
   };
 
@@ -403,8 +407,9 @@ export default function NotificationsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <label className={FORM.label}>名称</label>
+              <label htmlFor="nc-name" className={FORM.label}>名称</label>
               <input
+                id="nc-name"
                 value={channelForm.name}
                 onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })}
                 className={FORM.input}
@@ -412,8 +417,9 @@ export default function NotificationsPage() {
               />
             </div>
             <div>
-              <label className={FORM.label}>类型</label>
+              <label htmlFor="nc-type" className={FORM.label}>类型</label>
               <select
+                id="nc-type"
                 value={channelForm.type}
                 onChange={(e) => setChannelForm({ ...channelForm, type: e.target.value })}
                 className={FORM.select}
@@ -424,10 +430,11 @@ export default function NotificationsPage() {
               </select>
             </div>
             <div>
-              <label className={FORM.label}>
+              <label htmlFor="nc-url" className={FORM.label}>
                 {channelForm.type === 'EMAIL' ? '收件人邮箱' : 'Webhook URL'}
               </label>
               <input
+                id="nc-url"
                 value={channelForm.url}
                 onChange={(e) => setChannelForm({ ...channelForm, url: e.target.value })}
                 className={FORM.input}
@@ -463,8 +470,9 @@ export default function NotificationsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <label className={FORM.label}>名称</label>
+              <label htmlFor="nr-name" className={FORM.label}>名称</label>
               <input
+                id="nr-name"
                 value={ruleForm.name}
                 onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })}
                 className={FORM.input}
@@ -472,8 +480,9 @@ export default function NotificationsPage() {
               />
             </div>
             <div>
-              <label className={FORM.label}>事件类型</label>
+              <label htmlFor="nr-event-type" className={FORM.label}>事件类型</label>
               <select
+                id="nr-event-type"
                 value={ruleForm.event_type}
                 onChange={(e) => setRuleForm({ ...ruleForm, event_type: e.target.value })}
                 className={FORM.select}
@@ -484,8 +493,9 @@ export default function NotificationsPage() {
               </select>
             </div>
             <div>
-              <label className={FORM.label}>通知渠道</label>
+              <label htmlFor="nr-channel" className={FORM.label}>通知渠道</label>
               <select
+                id="nr-channel"
                 value={ruleForm.channel_id}
                 onChange={(e) => setRuleForm({ ...ruleForm, channel_id: Number(e.target.value) })}
                 className={FORM.select}
