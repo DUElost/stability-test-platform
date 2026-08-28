@@ -66,7 +66,7 @@ _FK_REBINDS = [
     ("device_leases", "device_leases_host_id_fkey", "CASCADE"),
     ("device_log_event", "device_log_event_host_id_fkey", "CASCADE"),
     ("job_instance", "job_instance_host_id_fkey", "CASCADE"),
-    ("job_log_signal", "fk_job_log_signal_host_id", "CASCADE"),
+    ("job_log_signal", "job_log_signal_host_id_fkey", "CASCADE"),
     ("plan_run_host", "plan_run_host_host_id_fkey", "CASCADE"),
 ]
 
