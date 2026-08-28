@@ -56,3 +56,9 @@ Class: bug-fix
 - 合入走 PR，由部署流程跑 `alembic upgrade`；不动手对生产库直改。
 - 迁移窗口内控制面/Agent 的 `agent:{old_id}` socketio room 键随 id 变更，
   Agent 需按新 id 重建心跳/连接——属预期一次重连，观测窗口期心跳波动即可。
+- **遗留缺口（2026-08-28 修复）**：agent 侧 `/opt/stability-test-agent/.env`
+  的 `HOST_ID` 不随迁移更新（hot-update 不覆盖该键）→ Agent 仍以旧 id 注册
+  SocketIO room → precheck `verify_scripts` 的 RPC 全判 agent_offline、
+  派发循环 requeue（PlanRun #247 实证）。配套批量修复见
+  [2026-08-28-agent-host-id-mismatch-after-migration.md](./2026-08-28-agent-host-id-mismatch-after-migration.md)；
+  **今后任何 host.id 类迁移必须把 agent 侧 HOST_ID 刷新列为配套步骤**。
