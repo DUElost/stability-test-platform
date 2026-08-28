@@ -21,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { ClickableRow } from '@/components/ui/clickable-row';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { InlineEmpty } from '@/components/ui/empty-state';
@@ -327,9 +328,9 @@ export default function ProjectDetailPage() {
                   </TableHeader>
                   <TableBody>
                     {summary.recent_runs.map((run) => (
-                      <TableRow
+                      <ClickableRow
                         key={run.run_id}
-                        className="cursor-pointer border-b transition-colors last:border-0 hover:bg-muted/50"
+                        className="border-b transition-colors last:border-0 hover:bg-muted/50"
                         onClick={() => navigate(`/runs/${run.run_id}/report`)}
                       >
                         <TableCell className="py-2 pr-4 font-mono text-xs">#{run.run_id}</TableCell>
@@ -343,7 +344,7 @@ export default function ProjectDetailPage() {
                         <TableCell className="py-2 text-xs text-muted-foreground">
                           {formatLocalDateTime(run.started_at)}
                         </TableCell>
-                      </TableRow>
+                      </ClickableRow>
                     ))}
                   </TableBody>
                 </Table>

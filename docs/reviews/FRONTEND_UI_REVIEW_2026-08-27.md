@@ -220,7 +220,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ---
 
-### C2 — 页签（tab）实现三种画法，无障碍语义全缺
+### C2 — 页签（tab）实现三种画法，无障碍语义全缺 —— **已修复（2026-08-28：抽 StateTabs 组件，underline/segmented 两变体 + role="tablist"/aria-selected；IssueTracker/Notifications 已接入）**
 
 **证据**：
 - `IssueTrackerPage.tsx:82-94`：手写 `<button>` + `tabLinkClass`，无 `role="tablist"`。
@@ -234,7 +234,7 @@ device_ids，**未校验 name / cron_expr 非空**；设备 ID 解析（`:40-46`
 
 ---
 
-### C3 — 可点击整行 / 整卡缺键盘可达性
+### C3 — 可点击整行 / 整卡缺键盘可达性 —— **已修复（2026-08-28：抽 ClickableRow 组件（role/tabIndex/Enter+Space）；Results/ProjectDetail 行已接入；ProjectsPage 项目卡此前已达标）**
 
 **证据**（多处）：
 - `results/ResultsPage.tsx:164-166` 表格行 `onClick` 导航

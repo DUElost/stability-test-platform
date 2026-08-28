@@ -31,7 +31,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { FORM, INTERACTIVE, SEGMENTED, STATUS_CHIP, TEXT } from '@/design-system';
+import { FORM, INTERACTIVE, STATUS_CHIP, TEXT } from '@/design-system';
+import { StateTabs } from '@/components/ui/state-tabs';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { cn } from '@/lib/utils';
 
@@ -238,28 +239,22 @@ export default function NotificationsPage() {
     setShowRuleForm(true);
   };
 
-  const tabBtnClass = (active: boolean) =>
-    cn(
-      'px-4 py-2 text-sm rounded-md transition-colors',
-      active ? SEGMENTED.toggleActive : SEGMENTED.toggleIdle,
-    );
-
   return (
     <PageContainer width="content">
       <PageHeader title="通知管理" subtitle="配置通知渠道和告警规则" />
 
       {/* Tabs */}
-      <div className={cn(SEGMENTED.track, 'w-fit text-sm bg-muted border-0 p-1')}>
-        <button onClick={() => setTab('channels')} className={tabBtnClass(tab === 'channels')}>
-          通知渠道 ({channels.length})
-        </button>
-        <button onClick={() => setTab('rules')} className={tabBtnClass(tab === 'rules')}>
-          告警规则 ({rules.length})
-        </button>
-        <button onClick={() => setTab('logs')} className={tabBtnClass(tab === 'logs')}>
-          通知记录
-        </button>
-      </div>
+      <StateTabs
+        variant="segmented"
+        items={[
+          { key: 'channels', label: `通知渠道 (${channels.length})` },
+          { key: 'rules', label: `告警规则 (${rules.length})` },
+          { key: 'logs', label: '通知记录' },
+        ]}
+        activeKey={tab}
+        onChange={(key) => setTab(key as TabKey)}
+        ariaLabel="通知视图切换"
+      />
 
       {loading ? (
         <PageSkeleton>
