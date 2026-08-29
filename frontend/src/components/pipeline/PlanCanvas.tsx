@@ -326,8 +326,9 @@ function PlanHeader({
                 className={cn('w-36', metaInputCls, 'bg-transparent')}
                 aria-label="归属项目"
                 data-testid="plan-project-select"
+                title="必填；影响后续派发，不影响已有历史 Run（快照语义）。运维型 Plan 选「通用（不限项目）」"
               >
-                <option value="">不归属</option>
+                <option value="">请选择</option>
                 {(projects ?? []).map(p => (
                   <option key={p.project_key} value={p.project_key}>
                     {p.display_name}（{p.project_key}）
@@ -346,8 +347,9 @@ function PlanHeader({
                 className={cn('w-28', metaInputCls, 'bg-transparent')}
                 aria-label="专项"
                 data-testid="plan-specialty-select"
+                title="必填；mtbf / power-cycle / monkey / ops（运维型）"
               >
-                <option value="">未指定</option>
+                <option value="">请选择</option>
                 {(specialties ?? []).map(s => (
                   <option key={s.key} value={s.key}>{s.display_name}</option>
                 ))}

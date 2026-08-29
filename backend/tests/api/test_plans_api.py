@@ -25,6 +25,22 @@ def _minimal_steps() -> list[dict]:
     ]
 
 
+@pytest.fixture(autouse=True)
+def _seed_plan_defaults(db_session):
+    """ADR-0029 P1-B2：Plan 双必填——默认提供 GENERIC 哨兵 + ops 专项。"""
+    from backend.models.project import Specialty, TestProject
+
+    if not db_session.query(TestProject).filter_by(project_key="GENERIC").first():
+        db_session.add(TestProject(
+            project_key="GENERIC", display_name="通用（不限项目）",
+            source="USER", match_models=[],
+        ))
+    if not db_session.query(Specialty).filter_by(key="ops").first():
+        db_session.add(Specialty(key="ops", display_name="运维", sort_order=10))
+    db_session.commit()
+    yield
+
+
 def _ensure_legacy_aee_scripts(db_session) -> None:
     from backend.models.script import Script
 
@@ -54,7 +70,8 @@ def _ensure_legacy_aee_scripts(db_session) -> None:
 class TestPlanCRUD:
     def test_create_and_get_plan(self, client, auth_headers, sample_script):
         name = _uniq("plan")
-        payload = {"name": name, "steps": _minimal_steps()}
+        payload = {"name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops"}
         resp = client.post("/api/v1/plans", json=payload, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         data = resp.json()["data"]
@@ -72,6 +89,7 @@ class TestPlanCRUD:
         name = _uniq("plan")
         client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
 
         resp = client.get("/api/v1/plans", headers=auth_headers)
@@ -95,11 +113,13 @@ class TestPlanCRUD:
         name = _uniq("plan")
         create = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
 
         update = client.put(f"/api/v1/plans/{plan_id}", json={
             "name": f"{name}_updated",
+            "project_key": "GENERIC", "specialty_key": "ops",
             "expected_updated_at": create.json()["data"]["updated_at"],
             "steps": [
                 {"step_key": "new_step", "script_name": "check_device",
@@ -118,6 +138,7 @@ class TestPlanCRUD:
         name = _uniq("plan")
         create = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan = create.json()["data"]
         plan_id = plan["id"]
@@ -125,10 +146,12 @@ class TestPlanCRUD:
 
         # 先做一次合法更新,把 updated_at 推走
         first = client.put(f"/api/v1/plans/{plan_id}", json={
+            "project_key": "GENERIC", "specialty_key": "ops",
             "name": f"{name}_v1", "expected_updated_at": loaded_at,
         }, headers=auth_headers)
         assert first.status_code == 200
         stale = client.put(f"/api/v1/plans/{plan_id}", json={
+            "project_key": "GENERIC", "specialty_key": "ops",
             "name": f"{name}_v2", "expected_updated_at": loaded_at,
         }, headers=auth_headers)
         assert stale.status_code == 409
@@ -137,6 +160,7 @@ class TestPlanCRUD:
         # 用最新 updated_at 可正常保存
         fresh_at = first.json()["data"]["updated_at"]
         ok_resp = client.put(f"/api/v1/plans/{plan_id}", json={
+            "project_key": "GENERIC", "specialty_key": "ops",
             "name": f"{name}_v2", "expected_updated_at": fresh_at,
         }, headers=auth_headers)
         assert ok_resp.status_code == 200
@@ -146,6 +170,7 @@ class TestPlanCRUD:
         name = _uniq("plan")
         create = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
 
@@ -174,7 +199,8 @@ class TestPlanCRUD:
 
         resp = client.put(
             f"/api/v1/plans/{legacy_plan_id}",
-            json={"name": "legacy_hidden"},
+            json={"name": "legacy_hidden",
+                  "project_key": "GENERIC", "specialty_key": "ops"},
             headers=auth_headers,
         )
 
@@ -196,6 +222,7 @@ class TestPlanCRUD:
         name = _uniq("plan_hist")
         create = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
 
@@ -221,6 +248,7 @@ class TestPlanCRUD:
         name = _uniq("plan_ver")
         create = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
 
@@ -250,6 +278,7 @@ class TestPlanCRUD:
         name = _uniq("plan")
         create = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
 
@@ -271,6 +300,7 @@ class TestPlanCRUD:
 
         update = client.put(f"/api/v1/plans/{plan_id}", json={
             "name": f"{name}_hack",
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=other_headers)
         assert update.status_code == 403
 
@@ -282,11 +312,13 @@ class TestPlanCRUD:
         name = _uniq("plan")
         create = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
 
         update = client.put(f"/api/v1/plans/{plan_id}", json={
             "name": f"{name}_admin_renamed",
+            "project_key": "GENERIC", "specialty_key": "ops",
             "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=admin_headers)
         assert update.status_code == 200, update.text
@@ -303,6 +335,7 @@ class TestPlanCRUD:
             "name": _uniq("legacy"),
             "lifecycle": {"init": [], "teardown": []},
             "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }
         resp = client.post("/api/v1/plans", json=payload, headers=auth_headers)
         assert resp.status_code == 422
@@ -311,10 +344,12 @@ class TestPlanCRUD:
         name = _uniq("self")
         create = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
         resp = client.put(f"/api/v1/plans/{plan_id}", json={
             "next_plan_id": plan_id,
+            "project_key": "GENERIC", "specialty_key": "ops",
             "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
         assert resp.status_code == 422
@@ -380,6 +415,7 @@ class TestPlanCRUD:
             "name": _uniq("next_hidden_create"),
             "next_plan_id": legacy_plan_id,
             "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
 
         assert resp.status_code == 404, resp.text
@@ -393,11 +429,13 @@ class TestPlanCRUD:
         create = client.post("/api/v1/plans", json={
             "name": _uniq("next_hidden_update"),
             "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
 
         resp = client.put(f"/api/v1/plans/{plan_id}", json={
             "next_plan_id": legacy_plan_id,
+            "project_key": "GENERIC", "specialty_key": "ops",
             "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
 
@@ -427,6 +465,7 @@ class TestPlanCRUD:
                  "script_version": "1.0.0", "stage": "patrol", "sort_order": 0,
                  "timeout_seconds": 30},
             ],
+            "project_key": "GENERIC", "specialty_key": "ops",
         }
 
         resp = client.post("/api/v1/plans", json=payload, headers=auth_headers)
@@ -444,6 +483,7 @@ class TestPlanCRUD:
         name = _uniq("legacy_aee_update")
         create = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
 
@@ -454,6 +494,7 @@ class TestPlanCRUD:
                  "timeout_seconds": 30},
             ],
             "expected_updated_at": create.json()["data"]["updated_at"],
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
 
         assert resp.status_code == 422, resp.text
@@ -500,11 +541,12 @@ class TestPlanAttribution:
     def test_create_unknown_keys_404(self, client, auth_headers, sample_script):
         for extra in ({"project_key": "nope"}, {"specialty_key": "nope"}):
             resp = client.post("/api/v1/plans", json={
-                "name": _uniq("plan"), "steps": _minimal_steps(), **extra,
+                "name": _uniq("plan"), "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops", **extra,
             }, headers=auth_headers)
             assert resp.status_code == 404, extra
 
-    def test_update_changes_and_clears_attribution(
+    def test_update_changes_attribution_and_generic_sentinel(
         self, client, auth_headers, sample_script, db_session, _project, _specialty,
     ):
         from backend.models.project import TestProject
@@ -522,6 +564,7 @@ class TestPlanAttribution:
         # 只改 project：specialty 不受影响（fields_set 语义）
         upd = client.put(f"/api/v1/plans/{plan_id}", json={
             "project_key": other.project_key,
+            "specialty_key": "mtbf",
             "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
         assert upd.status_code == 200, upd.text
@@ -529,14 +572,15 @@ class TestPlanAttribution:
         assert data["project_key"] == other.project_key
         assert data["specialty_key"] == "mtbf"
 
-        # 显式 null = 清除
+        # P1-B2：归属不可清除——GENERIC 是显式「不限」哨兵
         upd2 = client.put(f"/api/v1/plans/{plan_id}", json={
-            "project_key": None, "specialty_key": None,
+            "project_key": "GENERIC",
+            "specialty_key": "ops",
             "expected_updated_at": data["updated_at"],
         }, headers=auth_headers)
         assert upd2.status_code == 200, upd2.text
-        assert upd2.json()["data"]["project_key"] is None
-        assert upd2.json()["data"]["specialty_key"] is None
+        assert upd2.json()["data"]["project_key"] == "GENERIC"
+        assert upd2.json()["data"]["specialty_key"] == "ops"
 
     def test_specialties_dictionary_endpoint(
         self, client, auth_headers, _specialty,
@@ -560,6 +604,7 @@ class TestPlanAttribution:
 
         create = client.post("/api/v1/plans", json={
             "name": _uniq("plan"), "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
             "suite_name": s1.name,
         }, headers=auth_headers)
         assert create.status_code == 201, create.text
@@ -569,6 +614,7 @@ class TestPlanAttribution:
         upd = client.put(f"/api/v1/plans/{create.json()['data']['id']}", json={
             "suite_name": s2.name,
             "expected_updated_at": create.json()["data"]["updated_at"],
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         assert upd.status_code == 200, upd.text
         assert upd.json()["data"]["suite_name"] == s2.name
@@ -577,6 +623,7 @@ class TestPlanAttribution:
         upd2 = client.put(f"/api/v1/plans/{create.json()['data']['id']}", json={
             "suite_name": None,
             "expected_updated_at": upd.json()["data"]["updated_at"],
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         assert upd2.status_code == 200, upd2.text
         assert upd2.json()["data"]["suite_name"] is None
@@ -584,6 +631,7 @@ class TestPlanAttribution:
     def test_create_unknown_suite_404(self, client, auth_headers, sample_script):
         resp = client.post("/api/v1/plans", json={
             "name": _uniq("plan"), "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
             "suite_name": "no-such-suite",
         }, headers=auth_headers)
         assert resp.status_code == 404
@@ -615,7 +663,8 @@ class TestPlanListFilters:
 
     def _create(self, client, auth_headers, **extra) -> dict:
         resp = client.post("/api/v1/plans", json={
-            "name": _uniq("plan"), "steps": _minimal_steps(), **extra,
+            "name": _uniq("plan"), "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops", **extra,
         }, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         return resp.json()["data"]
@@ -657,6 +706,7 @@ class TestAppendChainTail:
         name = _uniq("chain")
         resp = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         return resp.json()["data"]
@@ -665,6 +715,7 @@ class TestAppendChainTail:
         resp = client.put(f"/api/v1/plans/{head['id']}", json={
             "next_plan_id": tail["id"],
             "expected_updated_at": head["updated_at"],
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 200, resp.text
 
@@ -677,7 +728,8 @@ class TestAppendChainTail:
             f"/api/v1/plans/{head['id']}/append-chain-tail",
             json={
                 "name": _uniq("newtail"), "steps": _minimal_steps(),
-                "expected_updated_at": tail["updated_at"],
+            "project_key": "GENERIC", "specialty_key": "ops",
+            "expected_updated_at": tail["updated_at"],
             },
             headers=auth_headers,
         )
@@ -699,7 +751,8 @@ class TestAppendChainTail:
 
         resp = client.post(
             f"/api/v1/plans/{anchor['id']}/append-chain-tail",
-            json={"name": _uniq("real_tail"), "steps": _minimal_steps()},
+            json={"name": _uniq("real_tail"), "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops"},
             headers=auth_headers,
         )
         assert resp.status_code == 201, resp.text
@@ -718,7 +771,8 @@ class TestAppendChainTail:
             f"/api/v1/plans/{head['id']}/append-chain-tail",
             json={
                 "name": _uniq("orphan"), "steps": _minimal_steps(),
-                "expected_updated_at": "2000-01-01T00:00:00Z",
+            "project_key": "GENERIC", "specialty_key": "ops",
+            "expected_updated_at": "2000-01-01T00:00:00Z",
             },
             headers=auth_headers,
         )
@@ -732,7 +786,8 @@ class TestAppendChainTail:
     def test_append_missing_plan_404(self, client, auth_headers):
         resp = client.post(
             "/api/v1/plans/999999/append-chain-tail",
-            json={"name": _uniq("ghost"), "steps": _minimal_steps()},
+            json={"name": _uniq("ghost"), "steps": _minimal_steps(),
+                  "project_key": "GENERIC", "specialty_key": "ops"},
             headers=auth_headers,
         )
         assert resp.status_code == 404, resp.text
@@ -776,7 +831,9 @@ class TestAppendChainTailConcurrent:
             result = append_chain_tail(
                 anchor_id,
                 PlanChainTailCreate(
-                    name=name, steps=_minimal_steps(), expected_updated_at=token,
+                    name=name, steps=_minimal_steps(),
+                    project_key="GENERIC", specialty_key="ops",
+                    expected_updated_at=token,
                 ),
                 request=None,
                 db=db,
@@ -920,6 +977,7 @@ class TestPlanDispatchFailFast:
         name = _uniq("ff")
         resp = client.post("/api/v1/plans", json={
             "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         return resp.json()["data"]["id"]
@@ -1064,6 +1122,7 @@ class TestPlanRunWifiChoice:
     def _create_plan(client, auth_headers) -> int:
         resp = client.post("/api/v1/plans", json={
             "name": _uniq("wifi"), "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         return resp.json()["data"]["id"]
@@ -1095,6 +1154,7 @@ class TestPlanRunWifiChoice:
                 "sort_order": 0,
                 "timeout_seconds": 300,
             }],
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         return resp.json()["data"]["id"]
@@ -1256,6 +1316,7 @@ class TestStallRequiresProgressScript:
         resp = client.post("/api/v1/plans", json={
             "name": _uniq("plan"),
             "steps": steps,
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 422, resp.text
         detail = resp.json()["detail"]
@@ -1281,6 +1342,7 @@ class TestStallRequiresProgressScript:
         resp = client.post("/api/v1/plans", json={
             "name": _uniq("plan"),
             "steps": steps,
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         assert resp.json()["data"]["steps"][0]["stall_seconds"] == 120
@@ -1291,6 +1353,7 @@ class TestStallRequiresProgressScript:
         create = client.post("/api/v1/plans", json={
             "name": _uniq("plan"),
             "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
 
@@ -1298,6 +1361,7 @@ class TestStallRequiresProgressScript:
         steps[0]["stall_seconds"] = 120
         resp = client.put(f"/api/v1/plans/{plan_id}", json={
             "steps": steps,
+            "project_key": "GENERIC", "specialty_key": "ops",
             "expected_updated_at": create.json()["data"]["updated_at"],
         }, headers=auth_headers)
         assert resp.status_code == 422, resp.text
