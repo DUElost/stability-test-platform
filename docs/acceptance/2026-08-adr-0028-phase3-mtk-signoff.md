@@ -39,7 +39,7 @@ Hosts 有 DLE 落库：`8.103` / `8.143` / `8.192` / `8.195` / `9.124` / `9.6`�
 
 | 项 | 值 |
 |----|-----|
-| Host / device | `192-0-2-143` / `0000NX2622000488`（ELA-LX2 `mt6768`） |
+| Host / device | `192-0-2-143` / `0000NX26****0488`（ELA-LX2 `mt6768`） |
 | Plan / PlanRun / Job | Plan `dle-e2e-216-aee-trigger` (#7) / **#199 SUCCESS** / **#2729 COMPLETED** |
 | Trigger | `aee_signal_trigger` → `success=true`，`db_path=/data/aee_exp/db.02.NE` |
 | DLE | **6** 条 `ARCHIVED`；`event_type` = ANR×3 / JE×1 / NE×2 |

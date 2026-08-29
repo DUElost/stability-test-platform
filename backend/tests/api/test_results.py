@@ -181,3 +181,94 @@ class TestResultsSummary:
         assert smoke_type in data["recent_runs"][0]["task_name"]
         assert data["recent_runs"][1]["run_id"] == jobs[2].id
         assert data["recent_runs"][1]["status"] == "CANCELED"
+
+
+class TestRiskTrend:
+    """ADR-0029 P2：项目级风险趋势（按天 S/A/B，run 级 DLE 权威聚合）。"""
+
+    def test_trend_empty(self, client, auth_headers):
+        resp = client.get("/api/v1/results/risk-trend", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["buckets"] == []
+        assert data["days"] == 30
+
+    def test_trend_buckets_by_project(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        from backend.models.job import JobLogSignal
+        from backend.models.project import TestProject
+
+        now = datetime.now(timezone.utc)
+        project = TestProject(project_key="TREND-A", display_name="trend",
+                              source="USER")
+        db_session.add(project)
+        db_session.flush()
+        plan = Plan(name="trend-plan", failure_threshold=0.05, project_id=project.id)
+        db_session.add(plan)
+        db_session.flush()
+        run = PlanRun(
+            plan_id=plan.id,
+            project_id=project.id,
+            status="SUCCESS",
+            failure_threshold=0.05,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL",
+            triggered_by="pytest",
+            started_at=now - timedelta(days=1),
+        )
+        db_session.add(run)
+        db_session.flush()
+        job = JobInstance(
+            plan_run_id=run.id,
+            plan_id=plan.id,
+            device_id=sample_device.id,
+            host_id=sample_device.host_id,
+            status="COMPLETED",
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            started_at=now - timedelta(days=1),
+            ended_at=now - timedelta(days=1),
+            created_at=now - timedelta(days=1),
+            updated_at=now - timedelta(days=1),
+        )
+        db_session.add(job)
+        db_session.flush()
+        # S 级：category 在白名单（ANR）+ event_subtype=swt（命中 swt 规则）
+        # + nfs_path 非空（unlinked 计数按 nfs_path DISTINCT）
+        db_session.add(JobLogSignal(
+            job_id=job.id,
+            host_id=str(sample_device.host_id),
+            device_serial=sample_device.serial,
+            seq_no=0,
+            category="ANR",
+            source="inotifyd",
+            path_on_device="/data/anr/1.txt",
+            detected_at=now - timedelta(days=1),
+            received_at=now - timedelta(days=1),
+            extra={
+                "event_subtype": "swt",
+                "nfs_path": "/nfs/swt/1",
+                "schema_version": 2,
+            },
+        ))
+        db_session.commit()
+
+        resp = client.get(
+            "/api/v1/results/risk-trend?project_key=TREND-A",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["project_key"] == "TREND-A"
+        assert len(data["buckets"]) == 1
+        bucket = data["buckets"][0]
+        assert bucket["date"] == (now - timedelta(days=1)).date().isoformat()
+        assert bucket["S"] == 1
+        assert bucket["runs"] == 1
+
+        # 其他项目不串扰
+        other = client.get(
+            "/api/v1/results/risk-trend?project_key=NOPE",
+            headers=auth_headers,
+        )
+        assert other.status_code == 404

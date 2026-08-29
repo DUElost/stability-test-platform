@@ -1,5 +1,6 @@
 """Script catalog API tests."""
 
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from backend.models.plan import Plan, PlanStep
@@ -572,3 +573,60 @@ def test_delete_rejects_deactivation_when_script_is_still_referenced(
     assert script.is_active is True
 
 
+
+
+def test_script_usage_aggregates_by_project(client, auth_headers, db_session, sample_device):
+    """ADR-0029 P2-10：plan_step → plan → plan_run.project_id 派生使用统计。"""
+    from backend.models.plan import Plan, PlanStep
+    from backend.models.plan_run import PlanRun
+    from backend.models.project import TestProject
+    from backend.models.script import Script
+
+    script = Script(
+        name="usage_probe", script_type="python", version="1.0.0",
+        nfs_path="/s/usage_probe.py", content_sha256="u" * 64,
+        default_params={}, param_schema={}, is_active=True,
+    )
+    db_session.add(script)
+    db_session.commit()
+
+    proj_a = TestProject(project_key="USG-A", display_name="a", source="USER")
+    proj_b = TestProject(project_key="USG-B", display_name="b", source="USER")
+    db_session.add_all([proj_a, proj_b])
+    db_session.commit()
+
+    plan_a = Plan(name="usg-plan-a", project_id=proj_a.id)
+    plan_b = Plan(name="usg-plan-b", project_id=proj_b.id)
+    db_session.add_all([plan_a, plan_b])
+    db_session.commit()
+    db_session.add_all([
+        PlanStep(plan_id=plan_a.id, step_key="s1", script_name="usage_probe",
+                 script_version="1.0.0", stage="init", sort_order=0),
+        PlanStep(plan_id=plan_b.id, step_key="s1", script_name="usage_probe",
+                 script_version="1.0.0", stage="init", sort_order=0),
+    ])
+    db_session.commit()
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        PlanRun(plan_id=plan_a.id, project_id=proj_a.id, status="SUCCESS",
+                plan_snapshot={}, run_type="MANUAL", triggered_by="t",
+                started_at=now - timedelta(days=1)),
+        PlanRun(plan_id=plan_a.id, project_id=proj_a.id, status="FAILED",
+                plan_snapshot={}, run_type="MANUAL", triggered_by="t",
+                started_at=now - timedelta(days=1)),
+        PlanRun(plan_id=plan_b.id, project_id=proj_b.id, status="SUCCESS",
+                plan_snapshot={}, run_type="MANUAL", triggered_by="t",
+                started_at=now - timedelta(days=1)),
+    ])
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/scripts/{script.id}/usage", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    by_key = {p["project_key"]: p for p in data["projects"]}
+    assert by_key["USG-A"]["run_count"] == 2
+    assert by_key["USG-A"]["success_count"] == 1
+    assert by_key["USG-A"]["success_rate"] == 0.5
+    assert by_key["USG-A"]["plan_count"] == 1
+    assert by_key["USG-B"]["run_count"] == 1
+    assert by_key["USG-B"]["success_rate"] == 1.0

@@ -93,7 +93,7 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
               type="text"
               value={formData.serial}
               onChange={(e) => setFormData({ ...formData, serial: e.target.value })}
-              placeholder="例如：A1B2C3D4E5F6"
+              placeholder="例如：A1B2C3******"
               className={fieldClass(!!errors.serial)}
               disabled={isSubmitting}
             />
