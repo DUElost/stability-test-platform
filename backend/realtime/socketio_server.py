@@ -703,15 +703,16 @@ def call_agent_control_sync(
     sio 连接对象属于主循环——工作线程（asyncio.to_thread 里的服务工具等）
     不得用 asyncio.run 新建循环跨循环 emit（不受支持，可能静默丢弃）。
     返回 True = Agent 侧 control handler 已确认收到。
+
+    **只能从非主循环线程调用**：在主循环线程里调用会自等 future 而死锁；
+    已在 async 上下文的调用方直接 await call_agent_control。
     """
     if _main_loop is None or _main_loop.is_closed():
         logger.warning("main_loop_not_available_for_agent_control host=%s", host_id)
         return False
-    try:
-        coro = call_agent_control(host_id, command, payload=payload, timeout=timeout)
-    except RuntimeError:
-        logger.warning("sio_not_initialized_for_agent_control host=%s", host_id)
-        return False
+    # sio 未初始化的 RuntimeError 由协程体内抛出（get_agent_namespace），
+    # 在 future.result() 处统一收口——此处不做无效的构造期捕获
+    coro = call_agent_control(host_id, command, payload=payload, timeout=timeout)
     future = asyncio.run_coroutine_threadsafe(coro, _main_loop)
     try:
         return future.result(timeout=timeout + 2.0)

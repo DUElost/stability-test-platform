@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ban, ChevronDown, ChevronUp, ScrollText, Wrench, X } from 'lucide-react';
 import { api, toApiError } from '@/utils/api';
@@ -42,6 +42,14 @@ const STATUS_BADGE: Record<AiActionStatus, { label: string; variant: 'default' |
 };
 
 const ACTIVE_STATUSES: ReadonlySet<string> = new Set(['approved', 'running']);
+/** 终态：到达时立刻刷新对话流（续轮汇报紧随其后落库）。 */
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  'succeeded',
+  'failed',
+  'cancelled',
+  'rejected',
+  'expired',
+]);
 /** 有日志可看的终态（含运行中）。 */
 const LOG_STATUSES: ReadonlySet<string> = new Set(['approved', 'running', 'succeeded', 'failed', 'cancelled']);
 
@@ -76,6 +84,21 @@ export function ActionCard({ actionId, className }: ActionCardProps) {
     qc.invalidateQueries({ queryKey: aiAssistantKeys.messages(sessionId) });
     qc.invalidateQueries({ queryKey: aiAssistantKeys.sessions() });
   };
+
+  // 动作到达终态时立刻刷一次对话流。续轮汇报本身由后端 pending 占位驱动
+  // 2s 轮询，这里只是让「结果落卡」与「助手汇报」尽量同时到位。
+  const lastStatusRef = useRef<string | null>(null);
+  const actionStatus = actionQ.data?.status;
+  const actionSessionId = actionQ.data?.session_id;
+  useEffect(() => {
+    if (!actionStatus || actionSessionId == null) return;
+    const prev = lastStatusRef.current;
+    lastStatusRef.current = actionStatus;
+    if (prev && prev !== actionStatus && TERMINAL_STATUSES.has(actionStatus)) {
+      qc.invalidateQueries({ queryKey: aiAssistantKeys.messages(actionSessionId) });
+      qc.invalidateQueries({ queryKey: aiAssistantKeys.sessions() });
+    }
+  }, [actionStatus, actionSessionId, qc]);
 
   const decide = useMutation({
     mutationFn: async ({ verb }: { verb: 'approve' | 'reject' }) => {

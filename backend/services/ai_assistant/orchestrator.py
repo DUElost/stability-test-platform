@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 
 HISTORY_LIMIT = 20
 
+# action 终态：内联执行（服务型工具 / 启动即失败）在轮次内就会落到这些状态
+_ACTION_TERMINAL = {"succeeded", "failed", "cancelled", "rejected", "expired"}
+
 SYSTEM_PROMPT = (
     "你是稳定性测试平台的运维助手。回答使用简体中文，简洁、基于事实。"
     "你可以调用工具查询平台状态、运行测试与质量门禁、执行低危运维动作。"
@@ -259,6 +262,38 @@ def _finalize_action(action_id: int, status: str, summary: str) -> None:
         db.close()
 
 
+def ensure_pending_placeholder(session_id: int, db: Session | None = None) -> None:
+    """确保会话有一条 pending 占位——它是前端「助手仍欠一条回复」的唯一信号。
+
+    幂等：已有 pending/running 占位时不重复插入。占位不进 LLM 历史
+    （`_history_as_llm_messages` 跳过 pending），只驱动前端 2s 轮询：
+    没有它，动作完成后的续轮汇报只落库、不上屏（全局 refetchOnWindowFocus=false）。
+    """
+    own = db is None
+    session_db = db or SessionLocal()
+    try:
+        exists = (
+            session_db.query(AiChatMessage.id)
+            .filter(
+                AiChatMessage.session_id == session_id,
+                AiChatMessage.role == "assistant",
+                AiChatMessage.status.in_(["pending", "running"]),
+            )
+            .first()
+        )
+        if exists:
+            return
+        session_db.add(
+            AiChatMessage(
+                session_id=session_id, role="assistant", content="", status="pending"
+            )
+        )
+        session_db.commit()
+    finally:
+        if own:
+            session_db.close()
+
+
 def _enqueue_continuation(session_id: int) -> None:
     """执行完成后续轮（lazy import 防循环依赖：saq_worker → saq_tasks → 本模块）。"""
     try:
@@ -277,6 +312,8 @@ def _enqueue_continuation(session_id: int) -> None:
                 db.close()
         except Exception:  # noqa: BLE001 - 超时取默认值即可
             pass
+        # 续轮期间前端据占位继续轮询；入队失败时下面立刻把它标 failed，不留悬挂
+        ensure_pending_placeholder(session_id)
         enqueued = enqueue_sync(
             "ai_assistant_turn_task",
             key=f"ai-turn:{session_id}",
@@ -286,6 +323,9 @@ def _enqueue_continuation(session_id: int) -> None:
         )
         if not enqueued:
             logger.warning("ai_continuation_enqueue_failed session=%s", session_id)
+            _converge_pending(
+                session_id, False, error="续轮任务入队失败（SAQ 不可用），请重新提问。"
+            )
     except Exception:  # noqa: BLE001 - 续轮失败不影响已完成动作的留痕
         logger.exception("ai_continuation_enqueue_error session=%s", session_id)
 
@@ -441,10 +481,14 @@ def _on_action_complete(action_id: int, run) -> None:
 
 # ─────────────────────────── 轮次任务 ───────────────────────────
 
-def _converge_pending(session_id: int, produced_output: bool) -> None:
+def _converge_pending(
+    session_id: int, produced_output: bool, *, error: str | None = None
+) -> None:
     """H1：任何退出路径都不得留 pending 占位（否则前端无限轮询+气泡永挂）。
 
     轮次已产出真实回复 → 删除占位；未产出（异常路径）→ 标 failed 留错误可见。
+    例外：止轮等待自动执行的续轮时**不调用本函数**——占位要留着驱动前端轮询，
+    由续轮自己收口（见 `ai_assistant_turn_task` 的 finally）。
     """
     db = SessionLocal()
     try:
@@ -466,7 +510,7 @@ def _converge_pending(session_id: int, produced_output: bool) -> None:
             for msg in pending:
                 msg.status = "failed"
                 meta = dict(msg.meta or {})
-                meta["error"] = "本轮未产出回复（编排异常，详见后端日志）"
+                meta["error"] = error or "本轮未产出回复（编排异常，详见后端日志）"
                 msg.meta = meta
         db.commit()
     finally:
@@ -476,6 +520,7 @@ def _converge_pending(session_id: int, produced_output: bool) -> None:
 async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
     db = SessionLocal()
     produced_output = False
+    awaiting_continuation = False
     try:
         session = db.get(AiChatSession, session_id)
         if session is None:
@@ -579,13 +624,31 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                                 f"该操作需要管理员审批（操作卡 #{action.id}）。"
                                 "请在平台上批准或拒绝。"
                             )
+                            yielded = True
                         else:
                             try:
                                 await asyncio.to_thread(execute_action, action.id)
-                                note = f"已开始执行（操作卡 #{action.id}），完成后我会汇报结果。"
                             except Exception as exc:  # noqa: BLE001
                                 note = f"启动执行失败：{exc}"
-                        yielded = True
+                                yielded = True
+                            else:
+                                db.refresh(action)
+                                if action.status in _ACTION_TERMINAL:
+                                    # 内联出终态（服务型工具 / RunKeyBusy / spawn 失败）：
+                                    # 此刻续轮与本轮 SAQ job 同 key 会被静默丢弃
+                                    # （saq enqueue 对已存在的 key 返回 None），所以必须
+                                    # 在本轮把真实结果喂回模型——也不能谎报「已开始执行」
+                                    note = (
+                                        f"操作卡 #{action.id} 已结束（{action.status}）："
+                                        f"{action.result_summary or ''}"
+                                    )
+                                else:
+                                    note = (
+                                        f"已开始执行（操作卡 #{action.id}），"
+                                        "完成后我会汇报结果。"
+                                    )
+                                    yielded = True
+                                    awaiting_continuation = True
 
                     _add_message(
                         db, session, role="tool", content=note, tool_call_id=tc.id or None
@@ -612,7 +675,12 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
             logger.warning("ai_turn_llm_failed session=%s err=%s", session_id, exc)
     finally:
         try:
-            _converge_pending(session_id, produced_output)
+            if awaiting_continuation:
+                # 止轮等自动执行：占位留给续轮驱动前端轮询，由续轮自己收口。
+                # 删掉它 UI 就停轮，动作完成后的汇报只落库不上屏。
+                ensure_pending_placeholder(session_id)
+            else:
+                _converge_pending(session_id, produced_output)
         except Exception:  # noqa: BLE001 - 收口失败仅记日志，不掩盖主流程异常
             logger.exception("ai_turn_converge_pending_failed session=%s", session_id)
         db.close()
