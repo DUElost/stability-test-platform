@@ -71,7 +71,7 @@ python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 
 每步执行后填入实测值。最小负载：1 PlanRun × 1 设备。
 **2026-08-25 实跑记录**：Plan 10（MTBF-专项-冒烟-P0）绑定 suite `MTBF-legacy`(id=1)，
-Run #224 / 设备 395（AYCGNX6730000054，MLD_LX2，host 172.21.15.78）。
+Run #224 / 设备 395（AYCGNX6730000054，MLD_LX2，host 172.21.x.x）。
 
 | # | 目标 | 步骤 | 期望 | 实测 | 锚点 |
 |---|------|------|------|------|------|
@@ -101,7 +101,7 @@ Run #224 / 设备 395（AYCGNX6730000054，MLD_LX2，host 172.21.15.78）。
 日期/执行人：2026-08-25 00:15–00:35 CST / opencode（运营授权窗口）
 PlanRun id：222(脚本校验失败,暴露sync缺口) / 223(user构建fail-fast,预期) /
             224(主验收RUNNING→abort收尾) / 225(S7反向FAILED)
-设备 serial：395 AYCGNX6730000054 (MLD_LX2)   host ip：172.21.15.78
+设备 serial：395 AYCGNX6730000054 (MLD_LX2)   host ip：172.21.x.x
 exported_sha256：e782bf7814604dce1e2246558f6b89ab08550546c7a30aaf558688f3bb7347af
 init trace suite_sha256：（NFS JSON metrics）同上，逐字节相等
 dispatch_suite 快照：{suite_id:1, suite_name:MTBF-legacy, exported_sha256:同上,

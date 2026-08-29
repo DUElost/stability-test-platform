@@ -15,7 +15,7 @@ Class: bug-fix
 
 ## 为什么
 
-生产控制面（172.21.8.202）后端**未部署** `0e17f55`（首次加入 `match_models` 字段的
+生产控制面（172.21.x.x）后端**未部署** `0e17f55`（首次加入 `match_models` 字段的
 commit）之前，`GET /projects` 响应里项目对象**没有 `match_models` 字段**（实测 8/8 全缺）。
 而前端构建产物已是消费该字段的新代码——`ProjectsPage.tsx:294` 原写
 `project.match_models.length`，对 undefined 调 `.length` → `Cannot read properties of
