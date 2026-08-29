@@ -2,7 +2,7 @@ import apiClient from './client';
 import type { Device, PaginatedResponse } from './types';
 
 export const devices = {
-  list: (skip = 0, limit = 50, status?: string, tags?: string, projectKey?: string) =>
+  list: (skip = 0, limit = 50, status?: string, tags?: string, projectKey?: string, unassigned = false) =>
     apiClient.get<PaginatedResponse<Device>>('/devices', {
       params: {
         skip,
@@ -10,6 +10,7 @@ export const devices = {
         ...(status ? { status } : {}),
         ...(tags ? { tags } : {}),
         ...(projectKey ? { project_key: projectKey } : {}),
+        ...(unassigned ? { unassigned: true } : {}),
       },
     }).then(r => r.data),
   get: (id: number) => apiClient.get<Device>(`/devices/${id}`).then(r => r.data),
