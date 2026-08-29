@@ -31,10 +31,8 @@ def project_a(db_session):
         project_key="proj-a",
         display_name="Project A",
         customer="CustA",
-        platform="MTK",
         form_factor="PHONE",
         source="USER",
-        match_models=[],
     )
     db_session.add(p)
     db_session.commit()
@@ -47,10 +45,8 @@ def project_legacy(db_session):
         project_key="LEGACY",
         display_name="Legacy",
         customer=None,
-        platform=None,
         form_factor=None,
         source="SEED",
-        match_models=[],
     )
     db_session.add(p)
     db_session.commit()
@@ -131,6 +127,20 @@ class TestListProjects:
         assert all_resp.status_code == 200
         all_keys = {p["project_key"] for p in all_resp.json()["data"]}
         assert all_keys == {"proj-a", "LEGACY"}
+
+    def test_platforms_derived_from_devices(
+        self, client, auth_headers, db_session, project_a
+    ):
+        """ADR-0029 P1-B：项目平台从设备派生（distinct，UNKNOWN 不展示）。"""
+        _make_device(db_session, "s-p1", project_a, model="MLD_LX2", platform="MTK")
+        _make_device(db_session, "s-p2", project_a, model="MLD_LX3", platform="UNISOC")
+        _make_device(db_session, "s-p3", project_a, model="MLD_LX2", platform="MTK")
+        _make_device(db_session, "s-p4", project_a, model="MLD_LX4", platform="UNKNOWN")
+
+        resp = client.get("/api/v1/projects", headers=auth_headers)
+        by_key = {p["project_key"]: p for p in resp.json()["data"]}
+        assert by_key["proj-a"]["platforms"] == ["MTK", "UNISOC"]
+        assert "platform" not in by_key["proj-a"]
 
     def test_status_filter_archived(self, client, auth_headers, db_session, project_a):
         """ADR-0029 P0：status 过滤——归档项目可从列表筛出（修「归档是 no-op」）。"""
@@ -362,7 +372,9 @@ class TestUpdateAndArchiveProject:
         assert data["display_name"] == "Project A Renamed"
         assert data["customer"] == "CustB"
         assert data["jira_project_key"] == "CAM"
-        assert data["platform"] == "MTK"  # 未提交字段不动
+        # P1-B：platform 删列改派生——未提交 facet 不动、platforms 空（无设备）
+        assert "platform" not in data
+        assert data["platforms"] == []
 
         audits = (
             db_session.query(AuditLog)
@@ -536,7 +548,6 @@ class TestMapProject:
             project_key="proj-b",
             display_name="Project B",
             source="USER",
-            match_models=[],
         )
         db_session.add(other)
         db_session.commit()
@@ -613,9 +624,7 @@ class TestPromoteSeedProject:
             project_key=key,
             display_name="Honor ELA",
             customer="荣耀",
-            platform="MTK",
             source="SEED",
-            match_models=[],
             status=status,
         )
         db_session.add(p)

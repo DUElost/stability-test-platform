@@ -1,4 +1,4 @@
-name: PR Agent (DeepSeek)
+name: PR Agent (advisory review)
 
 on:
   pull_request:
@@ -18,21 +18,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pr-agent-gate:
-    name: pr-agent-gate
-    # 非阻塞顾问（2026-08-29 定位变更：从 required check 摘除）：只在
-    # pull_request 事件上跑，产出 review 评论 + check 信号：
-    # - review 对当前 head 完成且无 security concerns → success；
-    # - 有 security concerns / review 未完成 / 工具或 API 失败 → check 红
-    #   （顾问信号），**不阻断合入**——合入前人工查看评论即可；
-    # issue_comment 命令（/review 等）由独立非门禁 job 处理，避免评论触发的
-    # 成功 check run 顶掉/覆盖审查信号（security-gate bypass 同源防护）。
+  pr-agent-review:
+    name: pr-agent-review
+    # 全异步顾问：只在 pull_request 事件上跑，产出 review 评论；对合入路径
+    # 零影响——不是 required check，auto-merge 也不等它（required 长极
+    # ~125s，本 job 中位数 133s / p90 300s，评论常在合入后才落地）。
+    #
+    # 本 job 只在一种情况下变红：有 security concerns 却连 issue 都开不出来
+    # ——那是「发现没送达」，值得分诊。LLM 代理故障/超时/输出缺失一律绿
+    # （docker 步 continue-on-error + 判定分支全 exit 0）：那类红叉是纯假阳性，
+    # 只制造分诊成本。security concerns 不靠 check 颜色传达，而是单独开
+    # issue + @ 作者（persistent comment 会被下次复评原地覆盖，issue 才留得住
+    # 审计痕迹，且 PR 此时多半已合入）。
+    #
+    # issue_comment 命令（/review 等）由独立 job 处理，避免评论触发的 run
+    # 顶掉/覆盖自动 review 的产出。
     if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Run PR Agent
         # 直接以 digest 固定镜像，避免本地 action 依赖 checkout。
+        # continue-on-error：LLM 代理/API 故障不得把 job 染红（见 job 抬头）。
+        continue-on-error: true
+        timeout-minutes: 12
         uses: docker://pragent/pr-agent@sha256:b81235c3bddc551939a1feca8926f4b6e8abcec2ae5bf4620424f8f56dd9cb93
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -49,7 +58,7 @@ jobs:
           config.log_level: INFO
           github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "review_requested"]'
           # 每次 push（含 dependabot 等 bot push）自动复评，保证当前 head 都有
-          # 门禁；复评更新同一条 persistent comment，不刷屏。v4-flash 单次调用
+          # 审查意见；复评更新同一条 persistent comment，不刷屏。单次调用
           # 成本低，可接受。
           github_action_config.handle_push_trigger: "true"
           github_action_config.push_commands: '["/review"]'
@@ -58,7 +67,8 @@ jobs:
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
-      - name: Evaluate PR Agent review (security verdict)
+      - name: Read PR Agent review verdict
+        id: review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -78,25 +88,85 @@ jobs:
             sleep 5
           done
 
+          # 以下所有分支都 exit 0：本 job 是顾问，不产出阻断信号。
           if [ -z "$comment" ]; then
-            echo "::error::PR Agent review output not found; pr-agent-gate fails (rerun or check PR_AGENT_LLM_API_KEY / LLM proxy)."
-            exit 1
+            echo "::warning::PR Agent 未产出 review（LLM 代理/API 故障或超时）；顾问式审查本轮跳过。"
+            echo "security=unknown" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           if printf '%s' "$comment" | grep -qi 'No security concerns'; then
             echo "PR Agent review completed: no security concerns."
+            echo "security=clean" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if printf '%s' "$comment" | grep -qi 'Security concerns'; then
-            echo "::error::PR Agent 发现 security concerns，请修复后 push 触发自动复评（synchronize），或对失败的 pr-agent-gate 检查点 rerun；/review 只更新评论、不重算门禁。"
-            exit 1
+            echo "::warning::PR Agent 报告 security concerns；将开 issue 跟进（不阻断合入）。"
+            # 抽出 security 段落存盘：persistent comment 下次复评会被原地
+            # 覆盖，issue 正文里的摘录是唯一留得住的证据。
+            # 用 sed 取行而非 head，避免 pipefail 下的 SIGPIPE(141)。
+            printf '%s\n' "$comment" \
+              | sed -n '/[Ss]ecurity concerns/,$p' \
+              | sed -e 's/<br[^>]*>/\n/g' -e 's/<[^>]*>//g' -e 's/&nbsp;/ /g' \
+              | sed '/^[[:space:]]*$/d' \
+              | sed -n '1,40p' > "$RUNNER_TEMP/security_excerpt.txt"
+            echo "security=concerns" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "::error::无法解析 PR Agent review 输出中的 security 段落；pr-agent-gate fails。"
-          exit 1
+          echo "::warning::无法解析 PR Agent review 输出中的 security 段落；本轮按未知处理。"
+          echo "security=unknown" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # security concerns 的注意力载体：单独 issue（可去重、可追溯、可关闭），
+      # 而不是会被覆盖的 persistent comment、也不是会被漏看的红叉。
+      - name: Open follow-up issue on security concerns
+        if: steps.review.outputs.security == 'concerns'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          title="[pr-agent] PR #${PR_NUMBER} 报告 security concerns"
+          # 用 jq 精确匹配标题去重（gh --search 的 in:title 对 `#`/中文不可靠），
+          # 同一 PR 多次 push 只追加评论，不刷 issue。
+          existing="$(
+            gh issue list --repo "$REPO" --state open --limit 200 --json number,title \
+              | jq -r --arg t "$title" '[.[] | select(.title == $t)] | first | .number // empty'
+          )" || existing=""
+
+          {
+            echo "@${PR_AUTHOR} — PR-Agent 对 [#${PR_NUMBER}](${PR_URL})（\`${HEAD_SHA}\`）报告了 security concerns。"
+            echo
+            echo "**这不阻断合入**：AI 审查是全异步顾问，PR 可能已经合入。请人工裁决——误报直接关闭本 issue，属实则另开修复 PR。"
+            echo
+            echo "PR 标题：${PR_TITLE}"
+            echo
+            echo "<details><summary>审查输出摘录（persistent comment 会被后续复评覆盖）</summary>"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/security_excerpt.txt"
+            echo '```'
+            echo
+            echo "</details>"
+          } > "$RUNNER_TEMP/issue_body.md"
+
+          if [ -n "$existing" ]; then
+            echo "已有开放 issue #${existing}，追加评论而非新建。"
+            gh issue comment "$existing" --repo "$REPO" --body-file "$RUNNER_TEMP/issue_body.md"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body-file "$RUNNER_TEMP/issue_body.md" \
+              || gh issue create --repo "$REPO" --title "$title" --body "见 ${PR_URL}（正文生成失败）"
+          fi
 
   pr-agent-comment:
     name: pr-agent-comment
-    # 非门禁 job：处理 PR 评论里的 /review、/ask 等命令；不产生 required
-    # check，也不参与 pr-agent-gate 判定。
+    # 处理 PR 评论里的 /review、/ask 等命令；与 pr-agent-review 分离，避免
+    # 评论触发的 run 顶掉/覆盖自动 review 的产出。
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.sender.type != 'Bot' &&

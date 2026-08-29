@@ -1,0 +1,34 @@
+# 后端覆盖率配置。
+#
+# 当前阶段**只度量、不设阈值**（ci.yml 的 backend-test job 用 --cov-report 输出，
+# 没有 --cov-fail-under）。理由是先把水位数据攒起来：一上来就设 fail-under
+# 等于给一个自己都没看过的数字背书，只会把门禁变成噪音。
+#
+# 等水位稳定后要收口时，在 ci.yml 加 --cov-fail-under=<略低于当前水位>，
+# 并在那时重议本文件的 omit 清单（分母变了，数字不能跨口径比较）。
+[run]
+# 计入未被任何测试导入的文件。不开这个的话 coverage 只统计测试碰到的模块，
+# 完全没测的文件直接消失在分母里，覆盖率会虚高。
+# （--cov=backend 在 ci.yml 显式给出，这里不重复写 source。）
+omit =
+    # ADR-0020 不可变脚本版本目录：flash_firmware 等 11 个版本全量重复入库
+    # 共约 3.1 万行（backend 总量约 17.5 万行），靠真机执行验证而非单测。
+    # 计入分母会凭空压低约 18 个百分点，让整体数字失去参考价值。
+    backend/agent/scripts/*
+
+    # Alembic 迁移脚本：由 `alembic upgrade head` 执行，不在 pytest 进程内，
+    # 永远统计为 0%。要覆盖它们得单独跑迁移 instrumentation，收益不匹配。
+    */alembic/versions/*
+
+    # 测试自身不计入被测代码
+    */tests/*
+    */conftest.py
+
+    */__pycache__/*
+    */venv/*
+
+[report]
+# 未覆盖行号在 CI 日志里逐行列出（term-missing）。单行过长会被 coverage
+# 截断，但定位到文件+行区间已经够用。
+show_missing = True
+skip_covered = False

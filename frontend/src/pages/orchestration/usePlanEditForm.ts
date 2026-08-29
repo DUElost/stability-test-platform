@@ -232,6 +232,11 @@ export function usePlanEditForm(planId: number | null) {
       toast.error('请输入 Plan 名称');
       return null;
     }
+    // ADR-0029 P1-B：项目 + 专项双必填（后端 schema 也强制；GENERIC = 显式「不限」）
+    if (!projectKey || !specialtyKey) {
+      toast.error('请选择归属项目与专项（运维型 Plan 选「通用（不限项目）」）');
+      return null;
+    }
     setSaving(true);
     try {
       const payload: PlanUpdate = {
@@ -246,17 +251,17 @@ export function usePlanEditForm(planId: number | null) {
         expected_updated_at: plan?.updated_at,
       };
       // #405：归属字段只在变更时进 payload——后端 update 语义按 fields_set，
-      // 恒发会让每次无关保存都在审计里记归属变更。新建则恒带（含空=不归属）。
+      // 恒发会让每次无关保存都在审计里记归属变更。新建则恒带。
       if (isNew) {
-        (payload as PlanCreate).project_key = projectKey || undefined;
-        (payload as PlanCreate).specialty_key = specialtyKey || undefined;
+        (payload as PlanCreate).project_key = projectKey;
+        (payload as PlanCreate).specialty_key = specialtyKey;
         (payload as PlanCreate).suite_name = suiteName || undefined;
       } else {
         if (projectKey !== origProjectKey) {
-          payload.project_key = projectKey || null;
+          payload.project_key = projectKey;
         }
         if (specialtyKey !== origSpecialtyKey) {
-          payload.specialty_key = specialtyKey || null;
+          payload.specialty_key = specialtyKey;
         }
         if (suiteName !== origSuiteName) {
           payload.suite_name = suiteName || null;

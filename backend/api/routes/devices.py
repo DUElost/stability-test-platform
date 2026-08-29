@@ -13,6 +13,7 @@ from backend.core.database import get_db
 from backend.core.audit import record_audit
 from backend.models.host import Host, Device
 from backend.models.project import TestProject
+from backend.services.project_attribution import resolve_project_id
 from backend.api.schemas import DeviceCreate, DeviceOut, PaginatedResponse
 from backend.api.response import ApiResponse, ok
 from backend.api.schemas.device import BulkProjectAssignIn
@@ -184,36 +185,36 @@ def bulk_assign_project(
         # 直接写目标 key（不读 device.project）
         out.project_key = project.project_key
         out.attribution_source = _attribution_source(
-            project, device.model, pinned=device.project_pinned,
+            db, project, device.model, pinned=device.project_pinned,
         )
         items.append(out)
     return ok(items)
 
 
 def _attribution_source(
-    project, model: Optional[str], *, pinned: bool = False,
+    db: Session, project, model: Optional[str], *, pinned: bool = False,
 ) -> str:
     """ADR-0029 归属来源派生（pinned / rule / manual / unassigned）。
 
     无项目 → unassigned；project_pinned（人工钉住，规则不覆盖）→ pinned；
-    型号命中项目 match_models（精确匹配，非前缀推断）→ rule；其余（人工
-    批量归入、SEED 回填、型号不在规则）→ manual。
+    型号命中项目活跃规则（project_device_rule，精确匹配）→ rule；其余
+    （人工批量归入、SEED 回填、型号不在规则）→ manual。
     """
     if project is None:
         return "unassigned"
     if pinned:
         return "pinned"
-    if model and model in (project.match_models or []):
+    if model and resolve_project_id(db, model) == project.id:
         return "rule"
     return "manual"
 
 
-def _fill_project_key(device: Device, out) -> None:
+def _fill_project_key(db: Session, device: Device, out) -> None:
     """ADR-0029：DeviceOut.project_key（F2 口径，不暴露数字 project_id）+ 归属来源。"""
     project = device.project
     out.project_key = project.project_key if project else None
     out.attribution_source = _attribution_source(
-        project, device.model, pinned=device.project_pinned,
+        db, project, device.model, pinned=device.project_pinned,
     )
 
 
@@ -272,7 +273,7 @@ def list_devices(
     items = []
     for d in devices:
         out = DeviceOut.model_validate(d)
-        _fill_project_key(d, out)
+        _fill_project_key(db, d, out)
         items.append(out)
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
@@ -292,7 +293,7 @@ def get_device(
     if _ensure_host_online_for_device(device):
         db.commit()
     out = DeviceOut.model_validate(device)
-    _fill_project_key(device, out)
+    _fill_project_key(db, device, out)
     return out
 
 

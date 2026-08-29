@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from backend.api.schemas.base import ORMBaseModel
 
 _PROJECT_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
+
+# 闭集合（P1-B 收敛）；旧自由文本如 '手机' 已迁移为 'PHONE'
+FormFactor = Literal["PHONE", "TABLET", "WATCH", "OTHER"]
 
 
 class ProjectOut(ORMBaseModel):
@@ -23,8 +26,9 @@ class ProjectOut(ORMBaseModel):
     jira_project_key: Optional[str] = None
     product_line: Optional[str] = None
     customer: Optional[str] = None
-    platform: Optional[str] = None
-    form_factor: Optional[str] = None
+    form_factor: Optional[FormFactor] = None
+    # ADR-0029 P1-B：platform 删列（事实层在设备），此处为派生
+    platforms: List[str] = []
     status: str
     source: str = "USER"
     match_models: List[str] = []
@@ -69,8 +73,7 @@ class ProjectCreateIn(BaseModel):
     project_key: str = Field(min_length=1, max_length=64)
     display_name: str = Field(min_length=1, max_length=256)
     customer: Optional[str] = None
-    platform: Optional[str] = None
-    form_factor: Optional[str] = None
+    form_factor: Optional[FormFactor] = None
     product_line: Optional[str] = None
     jira_project_key: Optional[str] = None
 
@@ -99,8 +102,7 @@ class ProjectUpdateIn(BaseModel):
 
     display_name: Optional[str] = None
     customer: Optional[str] = None
-    platform: Optional[str] = None
-    form_factor: Optional[str] = None
+    form_factor: Optional[FormFactor] = None
     product_line: Optional[str] = None
     jira_project_key: Optional[str] = None
 
