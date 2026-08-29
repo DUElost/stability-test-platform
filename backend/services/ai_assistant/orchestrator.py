@@ -146,30 +146,46 @@ def _history_as_llm_messages(db: Session, session_id: int) -> list[dict]:
         if row.role == "user":
             messages.append({"role": "user", "content": row.content})
         elif row.role == "assistant":
+            # pending/running 是 UI 占位（send_message 先落占位再入队轮次），
+            # 不是对话内容——发给严格供应商会 400
+            # "content or tool_calls must be set"（线上实测）。
+            if row.status in ("pending", "running"):
+                continue
+            tool_calls_fmt = [
+                {
+                    "id": tc.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": tc.get("name", ""),
+                        "arguments": json.dumps(
+                            tc.get("arguments") or {}, ensure_ascii=False
+                        ),
+                    },
+                }
+                for tc in row.tool_calls
+            ]
+            # 失败占位常为空 content 且无 tool_calls，同样会被拒绝
+            if not row.content and not tool_calls_fmt:
+                continue
             entry: dict = {"role": "assistant", "content": row.content or None}
-            if row.tool_calls:
-                entry["tool_calls"] = [
-                    {
-                        "id": tc.get("id", ""),
-                        "type": "function",
-                        "function": {
-                            "name": tc.get("name", ""),
-                            "arguments": json.dumps(
-                                tc.get("arguments") or {}, ensure_ascii=False
-                            ),
-                        },
-                    }
-                    for tc in row.tool_calls
-                ]
+            if tool_calls_fmt:
+                entry["tool_calls"] = tool_calls_fmt
             messages.append(entry)
         else:
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": row.tool_call_id or "",
-                    "content": row.content,
-                }
-            )
+            if not row.tool_call_id:
+                # 动作完成回执（无对应 assistant tool_calls）——以 user 角色
+                # 注入，避免「tool 消息没有前置 tool_calls」的严格校验拒绝
+                messages.append(
+                    {"role": "user", "content": f"[执行回执] {row.content}"}
+                )
+            else:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": row.tool_call_id,
+                        "content": row.content,
+                    }
+                )
     return messages
 
 
