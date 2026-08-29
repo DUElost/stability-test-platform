@@ -33,7 +33,6 @@ def project_a(db_session):
         customer="CustA",
         form_factor="PHONE",
         source="USER",
-        match_models=[],
     )
     db_session.add(p)
     db_session.commit()
@@ -48,7 +47,6 @@ def project_legacy(db_session):
         customer=None,
         form_factor=None,
         source="SEED",
-        match_models=[],
     )
     db_session.add(p)
     db_session.commit()
@@ -550,7 +548,6 @@ class TestMapProject:
             project_key="proj-b",
             display_name="Project B",
             source="USER",
-            match_models=[],
         )
         db_session.add(other)
         db_session.commit()
@@ -628,7 +625,6 @@ class TestPromoteSeedProject:
             display_name="Honor ELA",
             customer="荣耀",
             source="SEED",
-            match_models=[],
             status=status,
         )
         db_session.add(p)
