@@ -1,6 +1,6 @@
 """Route-level dual-write tests for ADR-0019 Phase 2a.
 
-直接调用 claim_jobs / get_pending_jobs / extend_job_lock / complete_job
+直接调用 claim_jobs / extend_job_lock / complete_job
 handler，断言 device_leases 写入正确。
 
 Phase 6d-2：device_leases 是真源；生产代码已停止写投影列
@@ -47,7 +47,6 @@ from backend.api.routes.agent_api import (
     claim_jobs,
     complete_job,
     extend_job_lock,
-    get_pending_jobs,
     job_heartbeat,
     recovery_sync,
     update_job_status,
@@ -223,43 +222,6 @@ async def test_claim_jobs_writes_lock_and_lease():
             )
             assert lease is not None, "claim_jobs must create an ACTIVE device_lease"
             assert lease.fencing_token == f"{seed['device_id']}:{lease.lease_generation}"
-        finally:
-            db.close()
-    finally:
-        _cleanup_seed(seed)
-
-
-# ---------------------------------------------------------------------------
-# get_pending_jobs 路由双写
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio(loop_scope="module")
-async def test_get_pending_jobs_is_removed_without_claiming():
-    """The legacy GET claim path is gone and cannot mutate Job/lease state."""
-    seed = _seed_job(status=JobStatus.PENDING.value)
-    try:
-        async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc:
-                await get_pending_jobs(
-                    host_id=seed["host_id"], limit=5,
-                    db=async_db, _=None,
-                )
-        assert exc.value.status_code == 410
-
-        db = SessionLocal()
-        try:
-            # Phase 6d: device_leases is the sole source of truth.
-            lease = (
-                db.query(DeviceLease)
-                .filter(
-                    DeviceLease.device_id == seed["device_id"],
-                    DeviceLease.job_id == seed["job_id"],
-                    DeviceLease.lease_type == LeaseType.JOB.value,
-                    DeviceLease.status == LeaseStatus.ACTIVE.value,
-                )
-                .first()
-            )
-            assert lease is None
         finally:
             db.close()
     finally:
@@ -1275,43 +1237,6 @@ async def test_reconciler_releases_expired_lease_lock_expiration():
 # ══════════════════════════════════════════════════════════════════════════════
 # Phase 2c API integration tests
 # ══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio(loop_scope="module")
-async def test_get_pending_jobs_returns_gone():
-    """GET /jobs/pending is a hard protocol cut, not a compatibility path."""
-    from fastapi import Response as FapiResponse
-
-    seed = _seed_job(status=JobStatus.PENDING.value)
-    try:
-        r = FapiResponse()
-        async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc:
-                await get_pending_jobs(
-                    host_id=seed["host_id"], limit=5,
-                    response=r, db=async_db, _=None,
-                )
-        assert exc.value.status_code == 410
-    finally:
-        _cleanup_seed(seed)
-
-
-@pytest.mark.asyncio(loop_scope="module")
-async def test_get_pending_jobs_never_claims():
-    """The removed endpoint never creates a fencing token."""
-    seed = _seed_job(status=JobStatus.PENDING.value)
-    try:
-        async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc:
-                await get_pending_jobs(
-                    host_id=seed["host_id"], limit=5,
-                    db=async_db, _=None,
-                )
-        assert exc.value.status_code == 410
-
-        # Phase 6d: device_leases is the sole source of truth.
-    finally:
-        _cleanup_seed(seed)
 
 
 @pytest.mark.asyncio(loop_scope="module")

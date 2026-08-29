@@ -277,3 +277,21 @@ sequenceDiagram
 ### 4.7 一句话给 Agent 的任务边界
 
 > 设备日志：手机 → Agent HDD。中心只在「归档报告点名」或「HDD≥95%」时接收事件目录。95% 那条必须上送成功后删除本地。不要用 `CONTINUOUS=1` 逃生阀或 `PRUNE_LOCAL` 舰队开关冒充这两条规则。
+
+---
+
+## 5. 观测 vs 归档：消费方矩阵（#527）
+
+`job_log_signal` 与 `device_log_event` **有意并存**；不是二选一，也不是待删双轨。
+
+| 消费方 | RUNNING（跑测中） | 终态后 |
+|--------|-------------------|--------|
+| `GET /plan-runs/{id}/watcher-summary` | `job_log_signal`（秒级；`WATCHER_SIGNAL` 刷新） | 仍读 signal 做分类/trend；`archive.link_stats` 暴露链接健康 |
+| `GET /plan-runs/{id}/log-events` | 可返回已有 DLE 行（部分列表） | **`device_log_event` 权威**（路径 / `state`） |
+| 风险评级 / RunReport | — | DLE + `device_log_event_id IS NULL` 的 signal 补洞（`log_observation`） |
+| EventUploader / extract / upload_task | — | `device_log_event` only |
+| devices `ui_status=risk` | signal count | — |
+
+关联键：`(job_id, seq_no)` ↔ `(job_id, signal_seq_no)`；`watcher-summary` 请求时做 read-repair 链接（`link_signals_to_device_log_events_sync`）。
+
+详细决策记录：`docs/notes/architecture/2026-08-29-log-observation-authority.md`。

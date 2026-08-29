@@ -2,9 +2,11 @@
 
 Handles:
   1. Host heartbeat timeout  → mark OFFLINE, jobs → UNKNOWN (lease stays ACTIVE)
-  2. UNKNOWN grace period    → job → FAILED after grace window
 
-Device lock expiration is now handled by Reconciler
+UNKNOWN grace → FAILED and lease release are owned solely by
+``device_lease_reconciler`` (#515).
+
+Device lock expiration is handled by Reconciler
 (backend.scheduler.device_lease_reconciler), the sole handler of lease
 expiration since ADR-0019 Phase 4b.
 
@@ -24,13 +26,11 @@ from backend.core.database import AsyncSessionLocal
 from backend.models.enums import HostStatus, JobStatus
 from backend.models.host import Host
 from backend.models.job import JobInstance
-from backend.services.aggregator import PlanAggregator
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)
 
 _HOST_HEARTBEAT_TIMEOUT = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "120"))
-from backend.core.job_timeout_config import UNKNOWN_GRACE_SECONDS as _UNKNOWN_GRACE_SECONDS
 
 
 async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
@@ -73,42 +73,15 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
     return hosts_offline, affected_jobs
 
 
-async def _check_unknown_grace_period(db) -> int:
-    """Transition UNKNOWN jobs to FAILED after grace period expires."""
-    grace_deadline = datetime.now(timezone.utc) - timedelta(seconds=_UNKNOWN_GRACE_SECONDS)
-    stuck_jobs = (await db.execute(
-        select(JobInstance).where(
-            JobInstance.status == JobStatus.UNKNOWN.value,
-            JobInstance.ended_at.is_not(None),
-            JobInstance.ended_at < grace_deadline,
-        )
-    )).scalars().all()
-
-    failed = 0
-    for job in stuck_jobs:
-        try:
-            JobStateMachine.transition(job, JobStatus.FAILED, "unknown_grace_timeout")
-            await PlanAggregator.on_job_terminal(job, db)
-            failed += 1
-            logger.warning(
-                "watchdog_grace_expired: job=%d ended_at=%s", job.id, job.ended_at,
-            )
-        except InvalidTransitionError:
-            pass
-
-    return failed
-
-
 async def session_watchdog_once() -> None:
     """Run all watchdog checks in a single pass."""
     async with AsyncSessionLocal() as db:
         hosts_offline, jobs_unknown = await _check_host_heartbeat_timeouts(db)
-        jobs_failed = await _check_unknown_grace_period(db)
 
-        has_changes = hosts_offline or jobs_unknown or jobs_failed
+        has_changes = hosts_offline or jobs_unknown
         if has_changes:
             await db.commit()
             logger.info(
-                "watchdog_pass: hosts_offline=%d jobs_unknown=%d jobs_failed=%d",
-                hosts_offline, jobs_unknown, jobs_failed,
+                "watchdog_pass: hosts_offline=%d jobs_unknown=%d",
+                hosts_offline, jobs_unknown,
             )

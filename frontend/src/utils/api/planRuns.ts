@@ -12,6 +12,7 @@ import type {
   PlanRunDevicesPayload,
   WatcherSummary,
   WatcherTimeScope,
+  PlanRunLogEventsPayload,
   JobManualActionResult,
   PlanRunAbortResult,
   PlanRunDispatchRetryResult,
@@ -85,6 +86,14 @@ export const planRuns = {
       apiClient.get(`/plan-runs/${runId}/watcher-summary`, {
         params: { time_scope: timeScope },
       }),
+    ),
+
+  getLogEvents: (
+    runId: number,
+    params: { skip?: number; limit?: number; state?: string } = {},
+  ) =>
+    unwrapApiResponse<PlanRunLogEventsPayload>(
+      apiClient.get(`/plan-runs/${runId}/log-events`, { params: cleanParams(params) }),
     ),
 
   // ── ADR-0021 D7 abort + ADR-0022 D7 manual intervention ──

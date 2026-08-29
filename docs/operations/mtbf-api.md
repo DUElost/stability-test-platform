@@ -126,7 +126,7 @@ user 构建（`ro.debuggable=0`）直接 fail-fast，需 userdebug/eng 工程包
 ### 关键语义
 
 - **双漂移检测器**：`export_stale` 由库内容指纹计算得出（任何写路径都不清快照列）——「库改了没导出」在 export 响应头与详情 `export_stale` 同时可见；「导出后磁盘被手改」由门禁比对 `exported_sha256` 捕获（precheck 五步门禁 `suite_verify_failed`，#404 PR-C）。
-- **在途守卫（#402 精确化，PR-C）**：绑定**同一套件**的 QUEUED/PRECHECK/RUNNING PlanRun → 409 `SUITE_RUNS_ACTIVE`（**force 不豁免**）；无绑定的 P0 存量 MTBF Run → 409 `ACTIVE_MTBF_RUNS`（admin 可 `?force=true` 越过，审计记 `active_guard_forced`）。跨套件并发导出互不阻塞。
+- **在途守卫（#402 / #516）**：绑定**同一套件**的 QUEUED/PRECHECK/RUNNING PlanRun → 409 `SUITE_RUNS_ACTIVE`。跨套件并发导出互不阻塞。未绑定 mtbf 存量 Run 不再阻断 export（#404 硬拒新派发后宽匹配已删）。
 - **export_dir 解析**：显式 `export_dir` > 项目 key > `legacy`（兼容 P0 部署）。
 
 ### 典型闭环（ADR-0030 D6 验收信号）

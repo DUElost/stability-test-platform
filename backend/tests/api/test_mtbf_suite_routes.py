@@ -313,7 +313,7 @@ class TestExportToToolDirAndDriftDetection:
 
 
 class TestActiveRunGuard:
-    """#402 弱版在途守卫：有 MTBF 长跑在飞时拒绝覆盖工具目录（force 可越过）。"""
+    """#402 / #516：仅绑定同一套件的在途 Run 阻断 export-to-tool-dir。"""
 
     @pytest.fixture(autouse=True)
     def _storage_root(self, tmp_path, monkeypatch):
@@ -322,7 +322,7 @@ class TestActiveRunGuard:
 
     @pytest.fixture
     def _active_run(self, db_session):
-        """带 mtbf_setup 步骤的 Plan + 指定状态的 PlanRun（可绑定套件）。"""
+        """带 mtbf_setup 步骤的 Plan + 指定状态的 PlanRun（无套件绑定）。"""
         from backend.models.plan import Plan, PlanStep
         from backend.models.plan_run import PlanRun
 
@@ -342,43 +342,17 @@ class TestActiveRunGuard:
             return pr
         return _make
 
-    def test_active_queued_mtbf_run_blocks_export(self, client, admin_headers,
-                                                  suite, real_runtask, _active_run,
-                                                  _storage_root):
-        blocked = _active_run("QUEUED")
-        client.post(f"/api/v1/test-suites/{suite.id}/import", headers=admin_headers,
-                    files={"file": ("runtask.xml", real_runtask, "application/xml")})
-        resp = client.post(f"/api/v1/test-suites/{suite.id}/export-to-tool-dir",
-                           headers=admin_headers)
-        assert resp.status_code == 409
-        detail = resp.json()["detail"]
-        assert detail["code"] == "ACTIVE_MTBF_RUNS"
-        assert blocked.id in detail["plan_run_ids"]
-        # 守卫先于落盘：409 时消费目录不应被创建
-        assert not (Path(str(_storage_root)) / "mtbf").exists()
-
-    def test_running_and_precheck_block_terminal_does_not(
-        self, client, admin_headers, suite, real_runtask, db_session, _active_run,
+    def test_unbound_mtbf_active_run_does_not_block_export(
+        self, client, admin_headers, suite, real_runtask, _active_run, _storage_root,
     ):
-        _active_run("RUNNING")
-        _active_run("PRECHECK")
-        finished = _active_run("SUCCESS")
+        """#404 硬拒新派发后，无绑定存量 Run 不再阻断工具目录导出。"""
+        _active_run("QUEUED")
         client.post(f"/api/v1/test-suites/{suite.id}/import", headers=admin_headers,
                     files={"file": ("runtask.xml", real_runtask, "application/xml")})
         resp = client.post(f"/api/v1/test-suites/{suite.id}/export-to-tool-dir",
                            headers=admin_headers)
-        assert resp.status_code == 409
-        ids = resp.json()["detail"]["plan_run_ids"]
-        assert finished.id not in ids
-
-        # 终态化所有在途 Run 后放行
-        from backend.models.plan_run import PlanRun
-        for row in db_session.query(PlanRun).filter(PlanRun.status.in_(
-                ["QUEUED", "PRECHECK", "RUNNING"])).all():
-            row.status = "SUCCESS"
-        db_session.commit()
-        assert client.post(f"/api/v1/test-suites/{suite.id}/export-to-tool-dir",
-                           headers=admin_headers).status_code == 200
+        assert resp.status_code == 200
+        assert (Path(str(_storage_root)) / "mtbf").exists()
 
     def test_non_mtbf_active_run_does_not_block(self, client, admin_headers,
                                                 suite, real_runtask, _active_run):
@@ -388,29 +362,10 @@ class TestActiveRunGuard:
         assert client.post(f"/api/v1/test-suites/{suite.id}/export-to-tool-dir",
                            headers=admin_headers).status_code == 200
 
-    def test_force_overrides_guard_with_audit(self, client, admin_headers,
-                                              suite, real_runtask, db_session,
-                                              _active_run):
-        in_flight = _active_run("RUNNING")
-        client.post(f"/api/v1/test-suites/{suite.id}/import", headers=admin_headers,
-                    files={"file": ("runtask.xml", real_runtask, "application/xml")})
-        resp = client.post(
-            f"/api/v1/test-suites/{suite.id}/export-to-tool-dir?force=true",
-            headers=admin_headers)
-        assert resp.status_code == 200
-        audit = db_session.query(AuditLog).filter(
-            AuditLog.action == "export",
-            AuditLog.resource_type == "test_suite",
-        ).order_by(AuditLog.id.desc()).first()
-        assert audit.details["active_guard_forced"] is True
-        assert audit.details["active_run_count"] >= 1
-        assert in_flight.id  # 引用保形
-
 
 class TestActiveRunGuardPrecision:
-    """#402 守卫精确化（ADR-0030 v1.4）：匹配键从 mtbf_ 前缀宽匹配升级为
-    plan.suite_id join——同套件在途硬阻断（force 不豁免），跨套件不互斥，
-    force 逃生阀仅对无绑定 P0 存量 Run 保留。"""
+    """#402 守卫精确化（ADR-0030 v1.4）：匹配键为 plan.suite_id join——
+    同套件在途硬阻断；跨套件不互斥。"""
 
     @pytest.fixture(autouse=True)
     def _storage_root(self, tmp_path, monkeypatch):
@@ -438,7 +393,7 @@ class TestActiveRunGuardPrecision:
             return pr
         return _make
 
-    def test_same_suite_active_run_blocks_even_with_force(
+    def test_same_suite_active_run_blocks_export(
         self, client, admin_headers, suite, real_runtask, _active_run,
     ):
         """绑定同一套件的 ACTIVE Run：托管模式中途换清单没有正当理由。"""
@@ -446,7 +401,7 @@ class TestActiveRunGuardPrecision:
         client.post(f"/api/v1/test-suites/{suite.id}/import", headers=admin_headers,
                     files={"file": ("runtask.xml", real_runtask, "application/xml")})
         resp = client.post(
-            f"/api/v1/test-suites/{suite.id}/export-to-tool-dir?force=true",
+            f"/api/v1/test-suites/{suite.id}/export-to-tool-dir",
             headers=admin_headers)
         assert resp.status_code == 409
         detail = resp.json()["detail"]

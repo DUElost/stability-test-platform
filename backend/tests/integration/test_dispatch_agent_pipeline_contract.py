@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
+from backend.agent.operation_scheduler import OperationScheduler
 from backend.agent.pipeline_engine import PipelineEngine
 from backend.models.enums import HostStatus
 from backend.models.host import Device, Host
@@ -128,6 +129,7 @@ def test_dispatcher_pipeline_def_is_executable_by_agent_pipeline_engine(
         serial=device.serial,
         run_id=job.id,
         script_registry=_FakeScriptRegistry(str(script_path)),
+        operation_scheduler=OperationScheduler(),
     )
 
     result = engine.execute(pipeline_def)
