@@ -27,14 +27,12 @@ def upgrade() -> None:
     op.execute(
         "UPDATE test_project SET form_factor = 'PHONE' WHERE form_factor = '手机'"
     )
+    # 固定枚举值内联（migration 常量，无注入面）；expanding bindparam 在
+    # op.execute 缺值（CI 空库迁移现场 InvalidRequestError）
     op.execute(
-        sa.text(
-            """
-            UPDATE test_project SET form_factor = 'OTHER'
-            WHERE form_factor IS NOT NULL
-              AND form_factor NOT IN :values
-            """
-        ).bindparams(sa.bindparam("values", expanding=True))
+        "UPDATE test_project SET form_factor = 'OTHER' "
+        "WHERE form_factor IS NOT NULL "
+        "AND form_factor NOT IN ('PHONE', 'TABLET', 'WATCH', 'OTHER')"
     )
     # SQLite 测试环境不建 CHECK（CREATE TABLE 处才有约束；此处仅 PG 生效）
     op.execute(
