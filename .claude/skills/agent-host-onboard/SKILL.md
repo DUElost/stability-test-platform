@@ -5,8 +5,8 @@ description: 新 Linux Agent 主机接入 SOP。触发时机：扩容新 host、
 
 # 新 Agent Host 接入 SOP（v0 骨架）
 
-> **状态**：v0 骨架——§0–§7 已在 **2026-08-28 14 台批量接入**（`172.21.15.89`–`.102` 子集 +
-> `172.21.9.69/.126/.127/.128`）真机校准；标 ✅ 的步骤可照抄，标 ⚠️待校对的步骤在
+> **状态**：v0 骨架——§0–§7 已在 **2026-08-28 14 台批量接入**（新网段子集，具体机位
+> 见 `/home/debian13/hosts.ini`）真机校准；标 ✅ 的步骤可照抄，标 ⚠️待校对的步骤在
 > **下一次新机接入时**以当天实况复核后移除标记。
 >
 > **与 `control-plane-deploy` 的分工**：本 skill 覆盖「从裸机到 fleet 对齐」；热更新 /
@@ -29,7 +29,7 @@ curl -s http://127.0.0.1:8000/health
 set -a && . ./.env.backend && set +a
 ```
 
-- 挑一台**已上线老机**作参照（双盘推荐 `172.21.15.60`，单盘推荐 `172.21.15.68`）：
+- 挑一台**已上线老机**作参照（双盘 / 单盘各挑一台，机位见 `/home/debian13/hosts.ini`）：
   ```bash
   ssh android@<ref-ip> 'lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT; grep -E "STP_AEE|MOUNT_POINTS|API_URL|HOST_ID" /opt/stability-test-agent/.env'
   mount | grep stp-aee
@@ -64,8 +64,8 @@ ssh android@<new-ip> 'sudo -n true && echo sudo_ok || echo sudo_needs_password'
 
 | `lsblk` 特征 | 类型 | `STP_AEE_LOCAL_ROOT` | 参照老机 |
 |---|---|---|---|
-| NVMe 系统盘 + **~931G** `/dev/sda`（常为 NTFS/未分区） | 双盘 | `/mnt/hdd/aee_events` | `.60` / `.20` |
-| 仅 NVMe（无第二块 ~1TB 盘） | 单盘 | `/mnt/hdd/aee_events`（落在系统盘 FS 上） | `.68` |
+| NVMe 系统盘 + **~931G** `/dev/sda`（常为 NTFS/未分区） | 双盘 | `/mnt/hdd/aee_events` | 双盘老机 |
+| 仅 NVMe（无第二块 ~1TB 盘） | 单盘 | `/mnt/hdd/aee_events`（落在系统盘 FS 上） | 单盘老机 |
 
 ```bash
 ssh android@<new-ip> 'lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT'
@@ -103,7 +103,7 @@ ssh android@<new-ip> 'sudo mkdir -p /mnt/hdd/aee_events && sudo chown -R android
 
 ```bash
 # 参照值（以老机实际 mount 为准，勿硬编码 UNC）
-# 172.21.8.202:/mnt/stp-aee  →  /mnt/stp-aee
+# <NFS 服务器>:/mnt/stp-aee  →  /mnt/stp-aee（具体地址见 hosts.ini / 老机 fstab）
 sudo mkdir -p /mnt/stp-aee
 # 将老机 /etc/fstab 中 stp-aee 行复制到新机，或：
 # echo '<nfs-server>:/mnt/stp-aee /mnt/stp-aee nfs defaults,_netdev,nofail 0 0' | sudo tee -a /etc/fstab
@@ -113,7 +113,7 @@ mount | grep stp-aee
 
 ## 3. 控制面登记 Host
 
-`HOST_ID` = IPv4 点转横杠（`172.21.15.89` → `172-21-15-89`），由 `allocate_host_id()` 生成，
+`HOST_ID` = IPv4 点转横杠（如 `10.0.0.89` → `10-0-0-89`），由 `allocate_host_id()` 生成，
 **必须与 Agent `.env` 一致**。
 
 ### 方式 A：UI（推荐）
@@ -147,8 +147,8 @@ cd "$REPO_ROOT/tools/ansible"
 # agent_api_url 走 Nginx 入口（:80），不直连 loopback :8000
 ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml \
   --limit <new-ip> \
-  -e agent_api_url=http://172.21.8.202 \
-  -e agent_host_id=172-21-15-89
+  -e agent_api_url=http://<控制面地址> \
+  -e agent_host_id=<host_id>
 ```
 
 - `agent_host_id` **必须**与 DB `hosts.id` 一致；不传则 install 脚本自行生成，易与 DB 错位。
@@ -176,8 +176,8 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 
 在 `/opt/stability-test-agent/.env` 确认（值以老机为准）：
 
 ```env
-API_URL=http://172.21.8.202
-HOST_ID=172-21-15-89
+API_URL=http://<控制面地址>
+HOST_ID=<host_id>   # 点转横杠，见 §3
 AUTO_REGISTER_HOST=false
 
 STP_AEE_LOCAL_ROOT=/mnt/hdd/aee_events
@@ -228,7 +228,7 @@ PYTHONPATH=. venv/bin/python backend/scripts/batch_hot_update.py --direct
 | systemd | `ssh android@<ip> systemctl is-active stability-test-agent` | `active` |
 | agentctl | `ssh android@<ip> sudo /opt/stability-test-agent/agentctl health` | rc=0 |
 | 平台主机态 | `GET /api/v1/hosts` 或 UI 主机页 | `ONLINE` + `HEALTHY`（或至少 `ONLINE`） |
-| 中心存储挂载 | `http://172.21.8.202/storage` 或 `GET /api/v1/stats/file-server` | nfs=已挂载；fleet `agents_mounted == agents_total` |
+| 中心存储挂载 | `http://<控制面地址>/storage` 或 `GET /api/v1/stats/file-server` | nfs=已挂载；fleet `agents_mounted == agents_total` |
 | 设备日志盘 | 同上 storage 页 Agent 表 | 路径 `/mnt/hdd/aee_events`；双盘 ~916GB，单盘 ~225GB |
 | ADB | 接设备后 `adb devices`（agent 用户） | 单 server、5037；无 `adb_multiple_servers` DEGRADED |
 | 代码 revision | 主机行 code sync 徽章 | `matched` |
@@ -279,7 +279,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/v1/stats/fil
 | 日期 | 校准了什么 | 来源 |
 |------|-----------|------|
 | 2026-08-28 | v0 创建；14 台批量接入全链路（SSH → HDD ext4 → NFS → install → env → hot-update → storage 48/48 healthy） | 生产扩容实操 |
-| 2026-08-28 | 双盘 12 台 `/dev/sda` NTFS → ext4 `/mnt/hdd`；单盘 2 台（`.90`/`.101`）对齐 `.68` | 同上 |
+| 2026-08-28 | 双盘 12 台 `/dev/sda` NTFS → ext4 `/mnt/hdd`；单盘 2 台对齐单盘老机 | 同上 |
 | 2026-08-28 | `MOUNT_POINTS` / `STP_AEE_*` 装后手工补全；`5039` 端口误配与双 ADB 修复 | 同上 |
 | 2026-08-28 | pip 清华镜像 403 → 改公网 PyPI | 同上 |
 | （下次新机接入） | | |

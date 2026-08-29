@@ -50,8 +50,8 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
    完事后对照 `GET /api/v1/hosts` 全部 ONLINE 且 `host.id == host.ip` 派生号一致。
 
 **本迁移样例**：`k8l9m0n1o2p3_align_host_id_with_ip_after_subnet_migration.py`
-（把 20 台遗留 `172-21-8/9-*` 的 `host.id` 对齐到 `172-21-15-{ip末段}`，
-等价变换验证过 6 FK 表 + 2 快照列，详见 Agent Note
+（把 20 台遗留旧网段 `host.id`（形如 `10-0-8-*`）对齐到新网段点转横杠规则
+`10-0-15-{ip末段}`，等价变换验证过 6 FK 表 + 2 快照列，详见 Agent Note
 `docs/notes/bug-fix/2026-08-28-align-host-id-with-ip.md`）。
 
 ## 1.5 前端静态资源部署（✅ 2026-08-27 真机校准）
