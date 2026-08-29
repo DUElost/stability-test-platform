@@ -43,7 +43,7 @@ Class: bug-fix
   - B2：`/audit` 四控件 `getBoundingClientRect().y` 全等（113），日期框 208px
     （≤300），label 文本在；
   - B5：`/results` 表头无「类型」，30 行 td 数与表头列数零失配；
-  - B6：`/hosts` 首行「主机」列仅 1 个文本 div（`172.21.15.20`）；
+  - B6：`/hosts` 首行「主机」列仅 1 个文本 div（`172.21.x.x`）；
   - B3：`/schedules` 拦截首个 `/api/v1/schedules` 返回 500，toaster top=88、
     前 toast top=79（≥72），与「新建定时任务」按钮矩形（24–56px）不相交——
     7 条 toast 堆叠的病态场景下仍通过。
