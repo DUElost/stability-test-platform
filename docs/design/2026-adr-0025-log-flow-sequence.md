@@ -292,6 +292,6 @@ sequenceDiagram
 | EventUploader / extract / upload_task | — | `device_log_event` only |
 | devices `ui_status=risk` | signal count | — |
 
-关联键：`(job_id, seq_no)` ↔ `(job_id, signal_seq_no)`；`watcher-summary` 请求时做 read-repair 链接（`link_signals_to_device_log_events_sync`）。
+关联键：`(job_id, seq_no)` ↔ `(job_id, signal_seq_no)`。补链由两个**写方**负责：signal 上送时（`agent_api` 同事务）即时链接；错序遗漏的存量由 `signal_link_reconcile` 周期 sweep（`STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS`，默认 300s）补链（`link_signals_to_device_log_events_sync`）。只读路由不补链。
 
 详细决策记录：`docs/notes/architecture/2026-08-29-log-observation-authority.md`。
