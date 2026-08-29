@@ -2,7 +2,7 @@ import apiClient from './client';
 import { unwrapApiResponse } from './client';
 import type {
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
-  ScriptEntry,
+  ScriptEntry, ScriptUsage,
 } from './types';
 
 export const actionTemplates = {
@@ -48,4 +48,9 @@ export const scripts = {
     description?: string;
   }) =>
     unwrapApiResponse<ScriptEntry>(apiClient.post(`/scripts/${name}/versions`, data)),
+  /** ADR-0029 P2-10：脚本被哪些项目的 Plan 使用过（run 维度成功率）。 */
+  usage: (scriptId: number, days = 30) =>
+    unwrapApiResponse<ScriptUsage>(
+      apiClient.get(`/scripts/${scriptId}/usage`, { params: { days } }),
+    ),
 };

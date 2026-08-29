@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import distinct
+from sqlalchemy import distinct, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -642,3 +642,79 @@ def deactivate_script(
     db.commit()
     invalidate_script_catalog_version_cache()
     return ok({"deactivated": script_id})
+
+
+# ADR-0029 P2-10：脚本使用统计——「被哪些项目的 Plan 用过 / 各自成功率」
+
+class ScriptUsageProjectOut(BaseModel):
+    project_key: str
+    plan_count: int = 0
+    run_count: int = 0
+    success_count: int = 0
+    success_rate: float = 0.0
+
+
+class ScriptUsageOut(BaseModel):
+    script_id: int
+    days: int
+    projects: List[ScriptUsageProjectOut] = []
+
+
+@router.get("/{script_id}/usage", response_model=ApiResponse[ScriptUsageOut])
+def get_script_usage(
+    script_id: int,
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0029 P2-10：脚本被哪些项目的 Plan 使用过（run 维度成功率）。
+
+    从 plan_step → plan → plan_run.project_id 一次 join 派生（零新增
+    schema）。回答「这脚本在我这个项目上靠谱吗」——plan_run 快照口径
+    （P0-1 起新 Run 有真实项目归属）。
+    """
+    script = db.get(Script, script_id)
+    _raise_if_hidden_legacy_aee_script_row(script)
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = db.execute(
+        text(
+            """
+            SELECT
+                tp.project_key,
+                COUNT(DISTINCT p.id) AS plan_count,
+                COUNT(DISTINCT pr.id) AS run_count,
+                COUNT(DISTINCT pr.id) FILTER (
+                    WHERE pr.status = 'SUCCESS'
+                ) AS success_count
+            FROM plan_step ps
+            JOIN plan p ON p.id = ps.plan_id
+            JOIN plan_run pr
+                ON pr.plan_id = p.id
+               AND pr.started_at >= :since
+            JOIN test_project tp ON tp.id = pr.project_id
+            WHERE ps.script_name = :name
+              AND ps.script_version = :version
+            GROUP BY tp.project_key
+            ORDER BY run_count DESC
+            """
+        ),
+        {
+            "since": since,
+            "name": script.name,
+            "version": script.version,
+        },
+    ).all()
+
+    projects = []
+    for key, plan_count, run_count, success_count in rows:
+        success_count = int(success_count or 0)
+        run_count = int(run_count or 0)
+        projects.append(ScriptUsageProjectOut(
+            project_key=key,
+            plan_count=int(plan_count or 0),
+            run_count=run_count,
+            success_count=success_count,
+            success_rate=round(success_count / run_count, 2) if run_count else 0.0,
+        ))
+    return ok(ScriptUsageOut(script_id=script.id, days=days, projects=projects))
