@@ -425,7 +425,7 @@ def _arm_run_timeout(run_id: str, timeout_seconds: int) -> None:
 def _on_action_complete(action_id: int, run) -> None:
     status_map = {"SUCCESS": "succeeded", "FAILED": "failed", "CANCELED": "cancelled"}
     status = status_map.get(getattr(run, "status", "FAILED"), "failed")
-    summary = f"{getattr(run, 'status', '?')}（exit={getattr(run, 'returncode', None)}）"
+    summary = f"{getattr(run, 'status', '?')}（exit={getattr(run, 'exit_code', None)}）"
     _finalize_action(action_id, status, summary)
 
 
