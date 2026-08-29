@@ -13,7 +13,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import bindparam, case, func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession

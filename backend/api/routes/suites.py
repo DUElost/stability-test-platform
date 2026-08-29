@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
