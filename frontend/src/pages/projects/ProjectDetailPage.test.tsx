@@ -10,8 +10,8 @@ const mocks = vi.hoisted(() => ({
   updateProject: vi.fn(),
   listDevices: vi.fn(),
   listPlans: vi.fn(),
-  resultsSummary: vi.fn(),
   modelsOf: vi.fn(),
+  riskTrend: vi.fn(),
   authRole: 'admin',
 }));
 
@@ -36,7 +36,7 @@ vi.mock('@/utils/api', () => ({
     projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject },
     devices: { list: mocks.listDevices },
     plans: { list: mocks.listPlans },
-    results: { summary: mocks.resultsSummary },
+    results: { riskTrend: mocks.riskTrend },
   },
   toApiError: (error: unknown) => ({
     message: error instanceof Error ? error.message : '请求失败',
@@ -97,21 +97,10 @@ describe('ProjectDetailPage', () => {
     mocks.listPlans.mockResolvedValue([
       { id: 1, name: 'Plan A', steps: [], project_key: 'proj-a' },
     ]);
-    mocks.resultsSummary.mockResolvedValue({
-      runs_by_status: { finished: 1, failed: 0, canceled: 0, running: 0, total: 1 },
-      test_type_stats: [],
-      risk_distribution: { high: 0, medium: 0, low: 0, unknown: 1 },
-      recent_runs: [{
-        run_id: 1,
-        task_name: 'Plan A',
-        task_type: 'Plan A',
-        status: 'FINISHED',
-        risk_level: 'UNKNOWN',
-        project_key: 'proj-a',
-        duration_seconds: null,
-        started_at: '2026-08-01T00:00:00Z',
-        finished_at: null,
-      }],
+    mocks.riskTrend.mockResolvedValue({
+      project_key: 'proj-a',
+      days: 30,
+      buckets: [],
     });
   });
 
@@ -124,10 +113,10 @@ describe('ProjectDetailPage', () => {
     // 四块标题
     expect(screen.getByText(/设备（1）/)).toBeInTheDocument();
     expect(screen.getByText(/计划（1）/)).toBeInTheDocument();
-    expect(screen.getByText('最近运行（快照语义：按 plan_run.project_id 归属）')).toBeInTheDocument();
+    expect(screen.getByText('风险趋势（近 30 天 · S/A/B）')).toBeInTheDocument();
     expect(screen.getByText('JIRA 集成')).toBeInTheDocument();
-    // jira 占位文案（约束 3：未配置占位）
-    expect(screen.getByTestId('jira-placeholder')).toHaveTextContent('尚未配置 JIRA 项目关键字');
+    // 空态（暂无风险数据）
+    expect(screen.getByText(/暂无风险数据/)).toBeInTheDocument();
   });
 
   it('shows jira key badge when configured', async () => {
@@ -138,13 +127,11 @@ describe('ProjectDetailPage', () => {
     expect(screen.queryByTestId('jira-not-configured')).not.toBeInTheDocument();
   });
 
-  it('renders devices / plans / recent runs from scoped queries', async () => {
+  it('renders devices / plans / risk trend from scoped queries', async () => {
     renderPage();
 
     expect(await screen.findByText('S-1')).toBeInTheDocument();
-    // 「Plan A」同时出现在计划块与结果块 recent_runs 里——按数量断言
-    expect((await screen.findAllByText('Plan A')).length).toBeGreaterThanOrEqual(2);
-    expect(await screen.findByText('#1')).toBeInTheDocument();
+    expect(await screen.findByText('Plan A')).toBeInTheDocument();
     expect(await screen.findByTestId('detail-kpi-strip')).toBeInTheDocument();
     expect(await screen.findByTestId('hanging-models')).toHaveTextContent(
       '当前归属此项目的设备型号：M1 (1)',
@@ -153,7 +140,7 @@ describe('ProjectDetailPage', () => {
     await waitFor(() => {
       expect(mocks.listDevices).toHaveBeenCalledWith(0, 20, undefined, undefined, 'proj-a');
       expect(mocks.listPlans).toHaveBeenCalledWith(0, 20, 'proj-a');
-      expect(mocks.resultsSummary).toHaveBeenCalledWith(5, 'proj-a');
+      expect(mocks.riskTrend).toHaveBeenCalledWith('proj-a', 30);
       expect(mocks.modelsOf).toHaveBeenCalledWith('proj-a');
     });
   });

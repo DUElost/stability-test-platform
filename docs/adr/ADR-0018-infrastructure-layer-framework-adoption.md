@@ -390,10 +390,10 @@ Watcher 子系统有**两条并行 AEE 拉取路径**，拉取范围不同：
 
 **路径举例**：
 - folder_name = `X6851-OP_16.3.0.022_0527_MonkeyAEEinfo`（由 `ro.product.name` + `ro.build.display.id` + run_date 生成）
-- serial = `R32M30F12345`
+- serial = `R32M30F***45`
 - db_path basename = `db.01`（`db.NN` 风格，非 `db_crashtime_...`）
 - 事件目录名 = `2026_0527_101522_123_db.01`（时间戳格式 `%Y_%m%d_%H%M%S_{ms3}` + db_path basename）
-- 完整路径 = `sonic_tinno/X6851-OP_16.3.0.022_0527_MonkeyAEEinfo/R32M30F12345/aee_exp/2026_0527_101522_123_db.01/mobilelog/main_log.2026_0527_101400`
+- 完整路径 = `sonic_tinno/X6851-OP_16.3.0.022_0527_MonkeyAEEinfo/R32M30F***45/aee_exp/2026_0527_101522_123_db.01/mobilelog/main_log.2026_0527_101400`
 
 ## 关联实现
 

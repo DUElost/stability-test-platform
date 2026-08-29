@@ -139,7 +139,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
               type="text"
               value={formData.ip}
               onChange={(e) => setFormData({ ...formData, ip: e.target.value })}
-              placeholder="例如：192.168.1.100"
+              placeholder="例如：192.0.2.100"
               className={fieldClass(!!errors.ip)}
               disabled={isSubmitting}
             />

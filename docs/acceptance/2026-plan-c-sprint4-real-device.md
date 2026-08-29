@@ -23,7 +23,7 @@
 | 后端地址 | `http://203.0.113.25:8000` |
 | Agent Host ID | `auto-fdaf1d55e319` |
 | Agent IP | `203.0.113.36` |
-| 设备序列号 | `11914404BG100577`, `11914404BG102162`, `121512542H004524` |
+| 设备序列号 | `11914404****0577`, `11914404****2162`, `12151254****4524` |
 | NFS/CIFS 挂载点 | `Y:\sonic_tinno` (控制面) / Agent 侧同路径挂载 |
 | scan tool 路径 | `stability_Start-Log-Scan_20260615/start_log_scan.py`（15.4 CIFS） |
 | 操作人 | Rin |
@@ -502,9 +502,9 @@ ls -la {nfs_root}/jira/{plan_run_id}/
 | Host ID | `auto-fdaf1d55e319` |
 | Host IP | `203.0.113.36` |
 | Host 状态 | ONLINE |
-| 设备 1 | ID=99, serial=`11914404BG100577` |
-| 设备 2 | ID=63, serial=`11914404BG102162` |
-| 设备 3 | ID=62, serial=`121512542H004524` |
+| 设备 1 | ID=99, serial=`11914404****0577` |
+| 设备 2 | ID=63, serial=`11914404****2162` |
+| 设备 3 | ID=62, serial=`12151254****4524` |
 | Plan | ID=5, name=`smoke-plan-001` |
 | PlanRun | ID=41 |
 | 操作人 | `_________` |

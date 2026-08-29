@@ -25,7 +25,7 @@ import EditProjectDialog from './EditProjectDialog';
 
 const FACET_FIELDS = [
   ['customer', '客户'],
-  ['platform', '平台'],
+  ['platforms', '平台'],
   ['form_factor', '形态'],
   ['product_line', '产品线'],
 ] as const;
@@ -141,6 +141,14 @@ export default function ProjectDetailSheet({ projectKey, isOpen, onClose }: Prop
               <div className="flex flex-wrap gap-1.5">
                 {FACET_FIELDS.map(([field, label]) => {
                   const value = project[field];
+                  if (Array.isArray(value)) {
+                    if (value.length === 0) return null;
+                    return (
+                      <Badge key={field} variant="outline" className="text-[11px] font-normal">
+                        {label}: {value.join('、')}
+                      </Badge>
+                    );
+                  }
                   if (!value) return null;
                   return (
                     <Badge key={field} variant="outline" className="text-[11px] font-normal">
