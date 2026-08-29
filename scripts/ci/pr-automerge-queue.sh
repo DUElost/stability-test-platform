@@ -69,3 +69,59 @@ for row in "${filtered[@]}"; do
     echo "Disabled auto-merge on #${num} (waiting in queue)"
   fi
 done
+
+# 队首换档后常无新 CI → workflow_run 不会触发 pr-update-branch；reconcile 后
+# 主动检查队首：已挂 auto-merge + required 全 SUCCESS + behind_by>0 → update。
+REQUIRED=(
+  lint
+  CodeQL
+  pr-typecheck
+  pr-compileall
+  pr-agent-tests
+  pr-migrate-empty-db
+)
+
+head_ref=""
+for row in "${filtered[@]}"; do
+  if [ "$(jq -r '.number' <<<"$row")" = "$head_number" ]; then
+    head_ref="$(jq -r '.headRefName' <<<"$row")"
+    break
+  fi
+done
+if [ -z "$head_ref" ]; then
+  echo "Queue head #${head_number} head ref not found; skip head update."
+  exit 0
+fi
+
+head_json="$(
+  gh pr view "$head_number" --repo "$REPO" \
+    --json autoMergeRequest,statusCheckRollup,headRefName
+)"
+auto_method="$(jq -r '.autoMergeRequest.mergeMethod // ""' <<<"$head_json")"
+if [ -z "$auto_method" ]; then
+  echo "Queue head #${head_number} has no auto-merge; skip head update."
+  exit 0
+fi
+
+for check in "${REQUIRED[@]}"; do
+  conclusion="$(
+    jq -r --arg name "$check" '
+      [.statusCheckRollup[]? | select(.name == $name)] | first | .conclusion // ""
+    ' <<<"$head_json"
+  )"
+  if [ "$conclusion" != "SUCCESS" ]; then
+    echo "Queue head #${head_number}: ${check} not SUCCESS (${conclusion:-missing}); skip head update."
+    exit 0
+  fi
+done
+
+behind="$(
+  gh api "repos/${REPO}/compare/main...${head_ref}" --jq '.behind_by // 0'
+)"
+if [ "$behind" -eq 0 ]; then
+  echo "Queue head #${head_number} is up to date with main."
+  exit 0
+fi
+
+echo "Queue head #${head_number} is ${behind} commit(s) behind main; updating branch."
+gh pr update-branch "$head_number" --repo "$REPO"

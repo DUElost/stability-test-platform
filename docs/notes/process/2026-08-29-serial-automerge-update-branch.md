@@ -42,6 +42,13 @@ CI 重跑。采纳两项低成本缓解（否决 Merge Queue，见
 - `pr-update-branch.yml` 在每次 update 判断后 **顺带 reconcile**（任 PR CI 完成
   时修正队列）。
 
+## 补充（2026-08-30，reconcile 后队首主动 update）
+
+队首换档后下一 PR 常无新 CI，`workflow_run` 链断。`pr-automerge-queue.sh` 在
+FIFO reconcile 末尾增加：队首已挂 auto-merge、6 项 required 全 SUCCESS、
+`behind_by > 0` → `gh pr update-branch`（不依赖 `workflow_run.head_sha`）。
+schedule reconcile（≤10 分钟）与任 PR CI 完成后的 reconcile 均覆盖此路径。
+
 ## Revisit
 
 若 open PR 常态 >3 或出现外部 fork 贡献潮，再评估轻量队列状态 API 或

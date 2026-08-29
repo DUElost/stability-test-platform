@@ -30,7 +30,7 @@ jobs:
           ref: ${{ github.event_name == 'schedule' && 'main' || github.sha }}
           sparse-checkout: scripts/ci/pr-automerge-queue.sh
           sparse-checkout-cone-mode: false
-      - name: Reconcile FIFO auto-merge queue
+      - name: Reconcile queue and update head if behind
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ci/pr-automerge-queue.sh
