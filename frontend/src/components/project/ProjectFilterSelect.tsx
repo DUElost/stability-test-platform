@@ -9,7 +9,12 @@ interface ProjectFilterSelectProps {
   onChange: (value: string | undefined) => void;
   className?: string;
   testId?: string;
+  /** ADR-0029 P0：设备页专用——追加「未归属」选项（选中传 '__unassigned__'） */
+  showUnassigned?: boolean;
 }
+
+/** 未归属筛选的哨兵值（DevicesPage 用它切换 ?unassigned=true，不发给后端当 project_key）。 */
+export const UNASSIGNED_FILTER_VALUE = '__unassigned__';
 
 /**
  * ADR-0029 P2 — 页面级项目筛选下拉（设备 / Plan / PlanRun / 结果页共用）。
@@ -22,6 +27,7 @@ export function ProjectFilterSelect({
   onChange,
   className,
   testId = 'project-filter',
+  showUnassigned = false,
 }: ProjectFilterSelectProps) {
   const { data: projects } = useQuery({
     queryKey: projectKeys.list(),
@@ -36,6 +42,9 @@ export function ProjectFilterSelect({
       data-testid={testId}
     >
       <option value="all">全部项目</option>
+      {showUnassigned && (
+        <option value={UNASSIGNED_FILTER_VALUE}>未归属</option>
+      )}
       {projects?.map((project) => (
         <option key={project.project_key} value={project.project_key}>
           {project.display_name}（{project.project_key}）

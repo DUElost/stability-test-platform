@@ -181,14 +181,29 @@ def bulk_assign_project(
         # 整批归入同一目标；joinedload 缓存的关系在赋值后不自动失效，
         # 直接写目标 key（不读 device.project）
         out.project_key = project.project_key
+        out.attribution_source = _attribution_source(project, device.model)
         items.append(out)
     return ok(items)
 
 
+def _attribution_source(project, model: Optional[str]) -> str:
+    """ADR-0029 P0：归属来源派生（rule / manual / unassigned）。
+
+    无项目 → unassigned；型号命中项目 match_models（精确匹配，非前缀推断）
+    → rule；其余（人工批量归入、SEED 回填、型号不在规则）→ manual。
+    """
+    if project is None:
+        return "unassigned"
+    if model and model in (project.match_models or []):
+        return "rule"
+    return "manual"
+
+
 def _fill_project_key(device: Device, out) -> None:
-    """ADR-0029：DeviceOut.project_key（F2 口径，不暴露数字 project_id）。"""
+    """ADR-0029：DeviceOut.project_key（F2 口径，不暴露数字 project_id）+ 归属来源。"""
     project = device.project
     out.project_key = project.project_key if project else None
+    out.attribution_source = _attribution_source(project, device.model)
 
 
 @router.get("", response_model=Union[List[DeviceOut], PaginatedResponse])
@@ -197,12 +212,21 @@ def list_devices(
     tags: Optional[str] = Query(None, description="Comma-separated tag filter"),
     status: Optional[str] = Query(None, description="Filter by device status (ONLINE, OFFLINE, BUSY)"),
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
+    unassigned: bool = Query(False, description="ADR-0029 P0: only devices with no project (project_id IS NULL)"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=1200),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
     query = db.query(Device).options(joinedload(Device.project)).order_by(Device.last_seen.desc().nullslast())
+
+    # ADR-0029 P0：未归属筛选——与 project_key 互斥（「某项目里未归属」无意义）；
+    # 参数组合错误优先于 key 存在性校验
+    if unassigned and project_key:
+        raise HTTPException(
+            status_code=400,
+            detail="unassigned and project_key are mutually exclusive",
+        )
 
     # ADR-0029：项目归属筛选（project_id NULL 的设备不命中——筛选 = 只显示该项目）
     if project_key:
@@ -211,6 +235,9 @@ def list_devices(
             raise HTTPException(status_code=404, detail="project not found")
         query = query.join(TestProject, Device.project_id == TestProject.id) \
                      .filter(TestProject.project_key == project_key)
+
+    if unassigned:
+        query = query.filter(Device.project_id.is_(None))
 
     # Filter by status if provided
     if status:

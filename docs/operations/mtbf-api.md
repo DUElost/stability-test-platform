@@ -159,7 +159,7 @@ python tools/dev/mtbf-cases.py show --suite MTBF-legacy [--case test_Reliability
 python tools/dev/mtbf-cases.py import --suite MTBF-legacy --file runtask.xml [--global UiAutomatorTestData.xml]
 python tools/dev/mtbf-cases.py export --suite MTBF-legacy --out runtask.xml [--times 100]
 python tools/dev/mtbf-cases.py validate --suite MTBF-legacy
-python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy [--force]
+python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 ```
 
 退出码：0 成功 / 2 本地错误（套件或用例找不到）/ 3 远端拒绝（401/403/404/409 原样透出）。

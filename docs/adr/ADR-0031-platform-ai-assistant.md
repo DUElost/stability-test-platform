@@ -1,8 +1,8 @@
 # ADR-0031: 平台 AI 助手（运维域 LLM 助手与风险分级自治边界）
 
-- 状态：**Proposed（待评审，未实施）**
+- 状态：**Accepted**
 - 优先级：**P1**
-- 目标里程碑：M8（建议，未排期）
+- 目标里程碑：M8（阶段二全栈已合 main，2026-08-28）
 - 日期：2026-08-27
 - 决策者：平台研发组（待评审确认）
 - 标签：AI 助手, LLM, 工具调用, 运维, 安全边界
@@ -19,6 +19,7 @@
 | 2026-08-28 | v1.2（载体选型评估落档） | 完成「LLM 支持引入框架/技术栈 vs 手写 httpx」专项评估并落档：D2 补载体隔离与可逆性说明；备选表将「引入 openai SDK」扩为框架族对比（官方 SDK 留作首选切换目标；LiteLLM/PydanticAI/LangChain 分别给出拒绝理由）；触发复议条件新增 #6 载体切换条件。评估基线：httpx 已在运行时依赖（`requirements.txt:43`，`file_server_monitor.py` 先例），全仓无 openai SDK |
 | 2026-08-28 | v1.3（AI 入口落位回写） | 前端导航 IA 治理方案（FRONTEND_NAV_IA_REDESIGN，v1.1）经用户评审裁决：方案 A 保守档采纳、AI 入口=**侧边栏置顶 pinned 块**（v1）、全局抽屉留 v2；本文前端影响段据此回写，实施计划 §4 同步（v1.2）。PR 切分：导航治理 PR1 先行（不依赖本 ADR，可独立合入），AI 助手实现为 PR2 |
 | 2026-08-29 | v1.4（二轮审核采纳 + 文档补齐） | 采纳二轮审核（H1 pending 收口/H3 跨循环 ack 下发/M1 枚举校验/M2 超时按 max_turns 估/M3 retries=0/M4 会话严格隔离/M5 后台任务持引用/Low-1 执行闸门收紧）；D7 措辞对齐实现（逐参手写校验，非 jsonschema）；§影响承诺的设计文档本批补齐（docs/design/2026-08-27-platform-ai-assistant.md）。低危索引名与 .env.example/.ts 注释随批修正 |
+| 2026-08-29 | v1.5（Accepted） | 阶段二全栈合 main（orchestrator + tools + 前端 `/assistant` + 二轮安全修复）；状态 Proposed → Accepted；七挂靠位同步（adr/README、CLAUDE.md 决策表） |
 
 ## 背景
 

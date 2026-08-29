@@ -6,7 +6,7 @@
 - import（130 条真实快照入库 + 整体替换语义 + source_sha256）
 - export（渲染字节与生产文件**逐字节一致**）/ global / validate
 - export-to-tool-dir（atomic write + 两个漂移基线 + 审计）
-- export-to-tool-dir 在途守卫（#402 弱版：ACTIVE MTBF 长跑在飞时 409，force 可越过）
+- export-to-tool-dir 在途守卫（#402/#516：绑定同一套件的 ACTIVE Run 硬阻断 409，无 force 逃生）
 - **结构性漂移检测**：改任意内容后 export_stale 自动翻转，端点不清快照列
 - 非 admin 403
 """

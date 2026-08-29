@@ -1,8 +1,12 @@
-"""Log observation layer — ADR-0028 authority vs UI aggregation (#519).
+"""Log observation layer — ADR-0028 authority vs UI aggregation (#519 / #527).
 
 ``device_log_event`` is the upload/extract authority; ``job_log_signal`` remains
 the PlanRun watcher-summary transport. Risk rating merges both without
 double-counting linked rows (signals with ``device_log_event_id`` are excluded).
+
+Follow-up (#519 remaining): migrate watcher-summary UI to read DLE-backed
+aggregates — tracked separately from this module; do not delete ``job_log_signal``
+until that UI migration lands.
 """
 
 from __future__ import annotations

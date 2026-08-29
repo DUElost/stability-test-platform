@@ -170,7 +170,7 @@ class TestSuiteResolutionAndCommands:
                 {"id": 9, "name": "S"}]}),
         })
         with pytest.raises(SystemExit) as ei:
-            cli.cmd_export_to_tool_dir(_args(cli, suite="S", force=False, token="t"))
+            cli.cmd_export_to_tool_dir(_args(cli, suite="S", token="t"))
         assert ei.value.code == 3
         err = capsys.readouterr().err
         assert "SUITE_RUNS_ACTIVE" in err and "HTTP 409" in err
