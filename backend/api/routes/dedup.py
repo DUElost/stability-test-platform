@@ -119,7 +119,11 @@ def _work_dir() -> Path:
 
 
 def resolve_jira_project_key(db: Session, plan_run_id: Optional[int]) -> Optional[str]:
-    """G17：PlanRun → Plan → test_project.jira_project_key 解析链。
+    """G17：PlanRun.project_id 快照 → test_project.jira_project_key 解析链。
+
+    快照语义与 results.py 同口径：派发时冻结的归属为准，Plan 事后改归属
+    不影响历史 Run 的 JIRA 目标（ADR-0029 D5；plan_run.project_id 由
+    dispatcher 创建时冻结/推断）。
 
     任一环缺失/未配置返回 None——提单是旁路功能，映射缺失只记日志不阻断
     （厂商工具自己的默认映射仍生效）；硬门禁属 G18 自动草稿策略的范畴。
@@ -128,14 +132,11 @@ def resolve_jira_project_key(db: Session, plan_run_id: Optional[int]) -> Optiona
     if plan_run_id is None:
         return None
     try:
-        from backend.models.plan import Plan
         from backend.models.plan_run import PlanRun
         from backend.models.project import TestProject
 
         run = db.get(PlanRun, plan_run_id)
-        plan_id = getattr(run, "plan_id", None) if run else None
-        plan = db.get(Plan, plan_id) if plan_id else None
-        project_id = getattr(plan, "project_id", None) if plan else None
+        project_id = getattr(run, "project_id", None) if run else None
         project = db.get(TestProject, project_id) if project_id else None
         key = (getattr(project, "jira_project_key", "") or "").strip() if project else ""
         return key or None

@@ -329,7 +329,10 @@ class TestDispatchProjectSnapshot:
         }
 
     def test_plan_without_project_stays_null(self, db_session, _plan_fixture):
-        """存量兼容：未归属 Plan 派发出的 Run 同样 NULL，不臆造归属。"""
+        """存量兼容：未归属 Plan + 未归属设备 → Run 同样 NULL，不臆造归属。
+
+        ADR-0029 P0 后推断只认设备事实——设备也无归属时仍是显式「待归属」。
+        """
         plan, device, _host = _plan_fixture
 
         pr = dispatch_plan_sync(
@@ -337,6 +340,64 @@ class TestDispatchProjectSnapshot:
             triggered_by="test", db=db_session,
         )
         assert pr.project_id is None
+
+    def test_plan_without_project_infers_from_devices(self, db_session, _plan_fixture):
+        """ADR-0029 P0：Plan 未归属时按目标设备 project_id 推断，留痕 project_inferred。"""
+        plan, device, _host = _plan_fixture
+        project = TestProject(project_key="INF-P", display_name="inferred")
+        db_session.add(project)
+        db_session.flush()
+        device.project_id = project.id
+        db_session.commit()
+
+        pr = dispatch_plan_sync(
+            plan_id=plan.id, device_ids=[device.id],
+            triggered_by="test", db=db_session,
+        )
+        assert pr.project_id == project.id
+        assert pr.run_context["project_inferred"] is True
+        assert "project_mixed" not in pr.run_context
+
+    def test_mixed_device_projects_keep_mode_and_mark_mixed(
+        self, db_session, _plan_fixture,
+    ):
+        """ADR-0029 P0：跨项目目标照常派发——众数归属 + project_mixed 留痕，不阻断。"""
+        plan, device, _host = _plan_fixture
+        p_a = TestProject(project_key="MIX-A", display_name="a")
+        p_b = TestProject(project_key="MIX-B", display_name="b")
+        d2 = Device(serial="S-mix-2", host_id="h-disp", status="ONLINE")
+        db_session.add_all([p_a, p_b, d2])
+        db_session.flush()
+        device.project_id = p_a.id
+        d2.project_id = p_b.id
+        db_session.commit()
+
+        pr = dispatch_plan_sync(
+            plan_id=plan.id, device_ids=[device.id, d2.id],
+            triggered_by="test", db=db_session,
+        )
+        # 1:1 平分时众数取排序后首个，两项目都合法；mixed 留痕是断言主体
+        assert pr.project_id in {p_a.id, p_b.id}
+        assert pr.run_context["project_inferred"] is True
+        assert pr.run_context["project_mixed"] == ["MIX-A", "MIX-B"]
+
+    def test_explicit_plan_project_beats_device_inference(
+        self, db_session, _project_snapshot_fixture,
+    ):
+        """ADR-0029 P0：Plan 显式归属优先——设备归属不同也不推断（对抗 case）。"""
+        plan, d1, _d2 = _project_snapshot_fixture
+        other = TestProject(project_key="DEV-P", display_name="device-side")
+        db_session.add(other)
+        db_session.flush()
+        d1.project_id = other.id
+        db_session.commit()
+
+        pr = dispatch_plan_sync(
+            plan_id=plan.id, device_ids=[d1.id],
+            triggered_by="test", db=db_session,
+        )
+        assert pr.project_id == plan.project_id
+        assert "project_inferred" not in pr.run_context
 
 
 class TestValidation:
