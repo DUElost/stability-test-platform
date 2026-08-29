@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
@@ -175,17 +176,23 @@ def _load_inventory(db: Session) -> list[InventoryModelOut]:
     return _aggregate_inventory(list(rows), rule_models=_rule_models_by_model(db))
 
 
-def _inventory_summary(items: list[InventoryModelOut]) -> InventorySummaryOut:
+def _inventory_summary(db: Session, items: list[InventoryModelOut]) -> InventorySummaryOut:
     total = sum(item.device_count for item in items)
     user_mapped = sum(item.device_count - item.unassigned_device_count for item in items)
     unmapped_models = [
         item.model for item in items if not item.mapped_project_keys
     ]
+    # ADR-0029 P0：严格未归属口径（project_id IS NULL）——与设备页
+    # ?unassigned=true 数字一致，页面 KPI 据此显示「待归属」。
+    unassigned_devices = db.query(func.count(Device.id)).filter(
+        Device.project_id.is_(None)
+    ).scalar() or 0
     return InventorySummaryOut(
         total_devices=total,
         user_mapped_devices=user_mapped,
         distinct_models=len(items),
         unmapped_models=unmapped_models,
+        unassigned_devices=unassigned_devices,
     )
 
 
@@ -265,6 +272,8 @@ def _map_preview(
 @router.get("", response_model=ApiResponse[list[ProjectSummaryOut]])
 def list_projects(
     source: str = Query("user", pattern="^(user|seed|all)$"),
+    status: Optional[str] = Query(None, pattern="^(ACTIVE|ARCHIVED)$",
+                                  description="ADR-0029 P0: filter by lifecycle status"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -274,6 +283,8 @@ def list_projects(
         query = query.filter(~TestProject.project_key.in_(SEED_PROJECT_KEYS))
     elif source == "seed":
         query = query.filter(TestProject.source == _SEED_SOURCE)
+    if status:
+        query = query.filter(TestProject.status == status)
     projects = query.all()
     aggregates = _summary_rows(db)
     items = []
@@ -357,7 +368,7 @@ def get_inventory_summary(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    return ok(_inventory_summary(_load_inventory(db)))
+    return ok(_inventory_summary(db, _load_inventory(db)))
 
 
 @router.put("/{project_key}", response_model=ApiResponse[ProjectSummaryOut])

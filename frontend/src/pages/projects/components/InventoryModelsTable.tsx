@@ -36,13 +36,32 @@ function MappingCell({ row }: { row: InventoryModel }) {
       </span>
     );
   }
+  // ADR-0029 P0：规则目标 vs 实际——covered = 已归入 USER 项目数；
+  // 缺口（unassigned_device_count > 0）标 ⚠，即页面待办。
+  const covered = row.device_count - row.unassigned_device_count;
+  const gap = row.unassigned_device_count;
   return (
-    <div className="flex flex-wrap items-center gap-1">
+    <div className="flex flex-wrap items-center gap-1.5">
       {row.mapped_project_keys.map((key) => (
         <Badge key={key} variant="outline" className="font-mono text-[11px] font-normal">
           {key}
         </Badge>
       ))}
+      <span
+        className={cn(
+          'font-mono text-xs',
+          gap > 0 ? 'font-medium text-warning' : 'text-success',
+        )}
+        data-testid="mapping-coverage"
+        title={
+          gap > 0
+            ? `${gap} 台未归属，需补规则或手动归入`
+            : '规则目标与实际一致'
+        }
+      >
+        {covered}/{row.device_count}
+        {gap > 0 ? ' ⚠' : ' ✓'}
+      </span>
     </div>
   );
 }
@@ -200,7 +219,7 @@ export default function InventoryModelsTable({
                 <TableHead>型号</TableHead>
                 <TableHead className="w-20">台数</TableHead>
                 <TableHead className="w-28">platform</TableHead>
-                <TableHead>已映射项目</TableHead>
+                <TableHead>归属规则 · 实际</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
