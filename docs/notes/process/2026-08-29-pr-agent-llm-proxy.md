@@ -6,12 +6,13 @@ Class: process
 ## Decision
 
 官方 DeepSeek API 返回 `Insufficient Balance`，`pr-agent-gate` 全线失败。
-改为 OpenAI 兼容代理 `https://ai.hybgzs.com/v1`，模型
-`deepseek-ai/deepseek-v4-flash-0731`；repo secret 使用 `PR_AGENT_LLM_API_KEY`
-（与平台 AI 助手及其他 LLM 配置解耦）。
+官方 DeepSeek API 返回 `Insufficient Balance` 后曾切到 `ai.hybgzs.com`，但该域对
+GitHub Actions（及本机）返回 Cloudflare **1010**，LLM 调用静默失败、门禁找不到
+review 评论。现改为公网可达的 `https://api.astrdark.cyou/v1` + `grok-4.6`；
+repo secret 仍为 `PR_AGENT_LLM_API_KEY`（须为该端点有效 key）。
 
 Workflow 注入：`OPENAI__API_BASE` + `OPENAI__KEY` + `config.model:
-openai/deepseek-ai/deepseek-v4-flash-0731`（PR-Agent / LiteLLM 约定）。
+openai/grok-4.6`（PR-Agent / LiteLLM 约定）。
 
 ## Alternatives
 
