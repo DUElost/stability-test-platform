@@ -232,14 +232,17 @@ class TestProjectAttribution:
     def _seed(self, db_session):
         from backend.models.host import Host
         from backend.models.project import TestProject
+        from backend.models.project_rule import ProjectDeviceRule
 
         host = Host(id="h-attr", hostname="hattr", status="ONLINE")
         db_session.add(host)
         db_session.commit()
-        project = TestProject(
-            project_key="ATTR-P", display_name="attr", match_models=["MLD_LX2"],
-        )
+        project = TestProject(project_key="ATTR-P", display_name="attr")
         db_session.add(project)
+        db_session.commit()
+        # ADR-0029 P1：rule 判定走规则表（match_models 列已 drop）
+        db_session.add(ProjectDeviceRule(
+            project_id=project.id, match_value="MLD_LX2"))
         db_session.commit()
         rule_dev = Device(serial="S-rule-1", host_id="h-attr", status="ONLINE",
                           model="MLD_LX2", project_id=project.id)

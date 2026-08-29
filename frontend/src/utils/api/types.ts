@@ -703,8 +703,9 @@ export interface Project {
   jira_project_key: string | null;
   product_line: string | null;
   customer: string | null;
-  platform: string | null;
-  form_factor: string | null;
+  /** ADR-0029 P1-B：platform 删列（事实层在设备），此为派生 distinct */
+  platforms: string[];
+  form_factor: 'PHONE' | 'TABLET' | 'WATCH' | 'OTHER' | null;
   status: 'ACTIVE' | 'ARCHIVED';
   source: 'USER' | 'SEED';
   /** 旧版后端（未部署 mapping 端点前）响应不含该字段——消费方需 ?? [] 防御。 */
@@ -768,7 +769,7 @@ export interface ProjectCreateInput {
   project_key: string;
   display_name: string;
   customer?: string | null;
-  platform?: string | null;
+  /** 下拉只给合法枚举；后端 Literal 校验 422 兜底 */
   form_factor?: string | null;
   product_line?: string | null;
   jira_project_key?: string | null;
@@ -777,7 +778,6 @@ export interface ProjectCreateInput {
 export interface ProjectUpdateInput {
   display_name?: string;
   customer?: string | null;
-  platform?: string | null;
   form_factor?: string | null;
   product_line?: string | null;
   jira_project_key?: string | null;

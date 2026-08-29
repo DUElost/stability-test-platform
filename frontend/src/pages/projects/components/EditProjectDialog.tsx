@@ -24,8 +24,6 @@ type Props = {
 
 const EDITABLE_TEXT_FIELDS = [
   ['customer', '客户'],
-  ['platform', '平台'],
-  ['form_factor', '形态'],
   ['product_line', '产品线'],
 ] as const;
 
@@ -46,7 +44,6 @@ export default function EditProjectDialog({
       setForm({
         display_name: project.display_name,
         customer: project.customer ?? '',
-        platform: project.platform ?? '',
         form_factor: project.form_factor ?? '',
         product_line: project.product_line ?? '',
         jira_project_key: project.jira_project_key ?? '',
@@ -75,7 +72,6 @@ export default function EditProjectDialog({
     onSubmit({
       display_name: displayName,
       customer: blankToNull(form.customer),
-      platform: blankToNull(form.platform),
       form_factor: blankToNull(form.form_factor),
       product_line: blankToNull(form.product_line),
       jira_project_key: blankToNull(form.jira_project_key),
@@ -121,6 +117,24 @@ export default function EditProjectDialog({
                 />
               </div>
             ))}
+            <div>
+              <label className={FORM.label} htmlFor="edit-project-form">
+                形态
+              </label>
+              <select
+                id="edit-project-form"
+                data-testid="edit-project-form"
+                value={form.form_factor ?? ''}
+                onChange={(event) => setField('form_factor', event.target.value || '')}
+                className={FORM.select}
+              >
+                <option value="">未设置</option>
+                <option value="PHONE">手机</option>
+                <option value="TABLET">平板</option>
+                <option value="WATCH">手表</option>
+                <option value="OTHER">其他</option>
+              </select>
+            </div>
           </div>
           <div>
             <label className={FORM.label} htmlFor="edit-project-jira">
