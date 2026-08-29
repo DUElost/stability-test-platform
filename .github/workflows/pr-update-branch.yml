@@ -24,9 +24,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
-          sparse-checkout: scripts/ci/pr-update-branch-if-behind.sh
+          sparse-checkout: |
+            scripts/ci/pr-update-branch-if-behind.sh
+            scripts/ci/pr-automerge-queue.sh
           sparse-checkout-cone-mode: false
-      - name: Update branch when green and behind
+      - name: Reconcile queue and update head if behind
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ci/pr-automerge-queue.sh
+      - name: Update branch when green and behind (workflow_run PR)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}

@@ -130,8 +130,11 @@ def check_pr_agent_anchors(text: str) -> list[str]:
     anchors = {
         "镜像 digest pin": "docker://pragent/pr-agent@sha256:",
         "fallback_models 置空": "config.fallback_models",
-        "门禁/命令 job 分离(防 gate 被顶掉)": "pr-agent-comment:",
-        "gate security 判定": "No security concerns",
+        "自动 review/命令 job 分离(防产出被顶掉)": "pr-agent-comment:",
+        "security 判定": "No security concerns",
+        # 顾问模式下 security concerns 的唯一送达路径：check 颜色不再承载
+        # 该信号，issue 步一旦被删就等于「发现静默丢失」。
+        "security concerns 开 issue 兜底": "Open follow-up issue on security concerns",
     }
     return [
         f"S4 pr-agent.yml: 丢失锚点「{name}」——防绕过机制被改动，需人工确认是否有意"
@@ -141,13 +144,13 @@ def check_pr_agent_anchors(text: str) -> list[str]:
 
 
 def check_required_checks_doc(workflows: dict[str, str], agents_md: str) -> list[str]:
-    """S5: ci.yml/pr-agent.yml 的 PR 门禁 job 与 AGENTS.md 记载互检。
+    """S5: ci.yml 的 PR 门禁 job 与 AGENTS.md 记载互检。
 
     CodeQL 由 GitHub 默认设置提供（仓库无对应 workflow 文件），只查文档侧。
+    pr-agent.yml 不再贡献 required check（顾问模式），故不在此表。
     """
     issues: list[str] = []
-    for wf, job_ids in (("ci.yml", ["lint", "pr-typecheck", "pr-compileall", "pr-agent-tests", "pr-migrate-empty-db"]),
-                        ("pr-agent.yml", ["pr-agent-gate"])):
+    for wf, job_ids in (("ci.yml", ["lint", "pr-typecheck", "pr-compileall", "pr-agent-tests", "pr-migrate-empty-db"]),):
         text = workflows.get(wf, "")
         for jid in job_ids:
             if not re.search(rf"(?m)^\s{{2}}{re.escape(jid)}:\s*$", text):
@@ -170,6 +173,8 @@ GATE_TO_CI_ANCHOR = {
     "pollution": ("ci.yml", "空行注入污染检查"),
     "immutability": ("ci.yml", "脚本版本不可变检查"),
     "gov-surface": ("ci.yml", "治理面结构检查"),
+    # public 仓库内网主机地址扫描（#538 收尾）——锚点即 ci.yml 中该 step 的 name
+    "ip-leak": ("ci.yml", "内网主机地址检查"),
     "agent-tests": ("ci.yml", "Run agent tests"),
     # check:full 级——CI 对应物在 backend-test / frontend-check / docker-build job
     "backend-tests": ("ci.yml", "Run backend tests"),
@@ -340,21 +345,24 @@ def run_self_test() -> int:
     expect("S3 缺 alwaysApply", lambda: check_mdc_frontmatter("m.mdc", no_aa_mdc), True)
 
     full_pr_agent = (
-        "jobs:\n  pr-agent-gate:\n"
+        "jobs:\n  pr-agent-review:\n"
         "      uses: docker://pragent/pr-agent@sha256:abc\n"
         "          config.fallback_models: '[]'\n"
+        "      - name: Open follow-up issue on security concerns\n"
         "  pr-agent-comment:\n"
         "          - No security concerns\n"
     )
     broken = full_pr_agent.replace("No security concerns", "Renamed verdict")
+    no_issue = full_pr_agent.replace("Open follow-up issue on security concerns", "x")
     expect("S4 锚点齐全", lambda: check_pr_agent_anchors(full_pr_agent), False)
     expect("S4 security 判定丢失", lambda: check_pr_agent_anchors(broken), True)
+    expect("S4 issue 兜底丢失", lambda: check_pr_agent_anchors(no_issue), True)
 
     ok_ci = "jobs:\n  lint:\n  pr-typecheck:\n  pr-compileall:\n  pr-agent-tests:\n  pr-migrate-empty-db:\n"
     drop_ci = ok_ci.replace("  pr-typecheck:\n", "")
-    wfs_ok = {"ci.yml": ok_ci, "pr-agent.yml": "jobs:\n  pr-agent-gate:\n"}
-    wfs_bad = {"ci.yml": drop_ci, "pr-agent.yml": "jobs:\n  pr-agent-gate:\n"}
-    doc_full = "required checks：lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests / pr-migrate-empty-db / pr-agent-gate"
+    wfs_ok = {"ci.yml": ok_ci}
+    wfs_bad = {"ci.yml": drop_ci}
+    doc_full = "required checks：lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests / pr-migrate-empty-db"
     doc_drift = doc_full.replace("pr-typecheck", "pr-typografie")
     expect("S5 一致", lambda: check_required_checks_doc(wfs_ok, doc_full), False)
     expect("S5 CI 删 job", lambda: check_required_checks_doc(wfs_bad, doc_full), True)

@@ -51,7 +51,7 @@ adb shell ping -c 3 8.8.8.8
 
 **后端日志确认**：
 ```
-ping_parse_success: MTK0002503011717, target=8.8.8.8, latency=451.89ms
+ping_parse_success: MTK00025****1717, target=8.8.8.8, latency=451.89ms
 ```
 
 **问题定位**：ping 解析成功，但数据未正确传递到前端。
@@ -242,15 +242,15 @@ logger.info(f"heartbeat_success: host_id={host_id}, devices_count={len(devices o
 
 ```bash
 # Agent 采集日志
-device_collected: MTK0002503011717, network_latency=24.874, battery=85, temp=32
+device_collected: MTK00025****1717, network_latency=24.874, battery=85, temp=32
 
 # 心跳发送日志
-heartbeat_device: serial=MTK0002503011717, network_latency=24.874, battery=85, temp=32
+heartbeat_device: serial=MTK00025****1717, network_latency=24.874, battery=85, temp=32
 heartbeat_success: host_id=1, devices_count=1, response={'ok': True, 'devices_count': 1}
 
 # Ping 解析日志
-ping_raw_output: MTK0002503011717, target=223.5.5.5, returncode=0
-ping_parse_success: MTK0002503011717, target=223.5.5.5, latency=24.874ms
+ping_raw_output: MTK00025****1717, target=223.5.5.5, returncode=0
+ping_parse_success: MTK00025****1717, target=223.5.5.5, latency=24.874ms
 ```
 
 ### 前端显示

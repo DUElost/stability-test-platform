@@ -30,6 +30,7 @@
 | `STP_HEARTBEAT_INTERVAL_BASE` / `_MIN` / `_MAX` | 控制面建议 Agent 心跳周期（随在线设备数缓增） |
 | `STP_LOG_RATE_LIMIT_BASE` / `_MIN` | 控制面建议每 host `step_log` 行速率（随设备数收紧；ADR-0026 P2-2） |
 | `STP_COUNTER_RECONCILE_INTERVAL_SECONDS` | O(1) 计数器对账 sweep 周期（默认 300） |
+| `STP_LOG_LEVEL` | `backend.**` 应用日志级别（默认 `INFO`）；uvicorn 访问/错误日志不受此键影响 |
 | `STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS` | `job_log_signal` ↔ `device_log_event` 补链 sweep 周期（默认 300）；只读路由不补链 |
 | `STP_SIGNAL_LINK_RECONCILE_BATCH` | 每个 tick 最多处理的 job 数（默认 200）；积压按 tick 逐步排干 |
 | `STP_PLAN_ADMISSION_QUEUE_ENABLED` | `1`=V2 准入队列；默认 `1`。设为 `0` 会停用新派发（不会恢复已移除的 legacy inline dispatch）；存量 QUEUED 仍 drain。灰度见 [`../operations/adr-0026-admission-and-scale-gray-rollout.md`](../operations/adr-0026-admission-and-scale-gray-rollout.md)；`/health` 暴露 `admission_queue_*` |

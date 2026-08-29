@@ -3,6 +3,10 @@ name: Enable auto-merge
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize, closed]
+  # auto-merge 合入由 GITHUB_TOKEN 推送，pull_request closed 常被级联限制抑制；
+  # 定时 reconcile 作兜底，避免队首合入后下一 PR 长时间挂不上 auto-merge。
+  schedule:
+    - cron: "*/10 * * * *"
 
 # 全局串行 reconcile，避免并行 enable/disable 竞态。
 concurrency:
@@ -13,7 +17,7 @@ permissions: {}
 
 jobs:
   reconcile-queue:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -21,11 +25,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # pull_request 默认检出 merge commit（含本 PR 脚本）；勿 pin main——
-          # 首合入前脚本尚不在 main，会导致 reconcile-queue bootstrap 失败。
+          # pull_request：默认 merge commit（含本 PR 脚本；首合入 bootstrap 勿 pin main）。
+          # schedule：脚本以 main 为准。
+          ref: ${{ github.event_name == 'schedule' && 'main' || github.sha }}
           sparse-checkout: scripts/ci/pr-automerge-queue.sh
           sparse-checkout-cone-mode: false
-      - name: Reconcile FIFO auto-merge queue
+      - name: Reconcile queue and update head if behind
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ci/pr-automerge-queue.sh

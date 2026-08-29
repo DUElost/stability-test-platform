@@ -113,7 +113,7 @@ mount | grep stp-aee
 
 ## 3. 控制面登记 Host
 
-`HOST_ID` = IPv4 点转横杠（如 `10.0.0.89` → `10-0-0-89`），由 `allocate_host_id()` 生成，
+`HOST_ID` = IPv4 点转横杠（如 `192.0.2.89` → `192-0-2-89`；示例用 RFC 5737 文档段），由 `allocate_host_id()` 生成，
 **必须与 Agent `.env` 一致**。
 
 ### 方式 A：UI（推荐）
