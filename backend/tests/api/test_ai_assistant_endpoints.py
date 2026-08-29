@@ -201,6 +201,62 @@ class TestReviewRound2Fixes:
         assert action.status == "proposed"
 
 
+class TestSearchAndTurnGuard:
+    def test_search_docs_tokenized(self, db_session):
+        """线上实测回归：带空格的长短语分词后任一词命中即算（此前整句
+        子串匹配在中文文档上必空，模型烧穿 max_turns）。"""
+        from backend.services.ai_assistant.tools import execute_query
+
+        result = execute_query(db_session, "search_docs", {"query": "AI 助手 设计"})
+        assert "未检索到" not in result
+
+    def test_search_docs_no_result_gives_guidance(self, db_session):
+        from backend.services.ai_assistant.tools import ToolValidationError, execute_query
+
+        with pytest.raises(ToolValidationError):
+            execute_query(db_session, "search_docs", {"query": ""})
+        result = execute_query(db_session, "search_docs", {"query": "zzz_no_such_zzz"})
+        assert "更短" in result
+
+    def test_send_message_rejected_while_turn_in_flight(
+        self, client, admin_headers, db_session, monkeypatch
+    ):
+        """线上实测回归：轮次进行中再发消息 → 409 ai_turn_in_progress
+        （否则第二占位因 SAQ 同 key 去重孤儿化，永挂 pending）。"""
+        from backend.models.ai_assistant import AiAssistantConfig
+        from backend.core.ai_security import encrypt_api_key
+
+        cfg = db_session.get(AiAssistantConfig, 1)
+        if cfg is None:
+            cfg = AiAssistantConfig(id=1)
+            db_session.add(cfg)
+        cfg.base_url = "https://api.example.com/v1"
+        cfg.model = "test-model"
+        cfg.enabled = True
+        cfg.api_key_encrypted = encrypt_api_key("sk-test-1234")
+        db_session.commit()
+        # TESTING 下 SAQ worker 不运行——打桩入队（互斥守卫在入队之前，不受影响）
+        monkeypatch.setattr(
+            "backend.tasks.saq_worker.enqueue_sync", lambda *a, **k: True
+        )
+
+        r = client.post("/api/v1/ai-assistant/sessions", json={}, headers=admin_headers)
+        sid = r.json()["data"]["id"]
+        r1 = client.post(
+            f"/api/v1/ai-assistant/sessions/{sid}/messages",
+            json={"content": "第一问"},
+            headers=admin_headers,
+        )
+        assert r1.status_code == 200
+        r2 = client.post(
+            f"/api/v1/ai-assistant/sessions/{sid}/messages",
+            json={"content": "第二问"},
+            headers=admin_headers,
+        )
+        assert r2.status_code == 409
+        assert r2.json()["detail"]["code"] == "ai_turn_in_progress"
+
+
 class TestSessionsAndMessages:
     def test_session_isolation(self, client, auth_headers, admin_headers, db_session):
         admin_id = db_session.query(User).filter(User.role == "admin").first().id
