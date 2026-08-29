@@ -262,7 +262,15 @@ def abort_plan_run(
                     execution_state=None,  # 同 transition 的终态清理语义
                     ended_at=now,
                     updated_at=now,
-                )
+                ),
+                # 必须同步回 session 中的 ORM 对象：下方 has_active_jobs 直接读
+                # all_jobs 的内存状态来判定是否走到兜底聚合
+                # （apply_plan_run_aggregation(pr, all_jobs)）。一旦这里改为
+                # synchronize_session=False，内存里的 job 仍是 PENDING →
+                # has_active_jobs 恒为 True → total_job_count==0 的 legacy run
+                # 既走不到计数器聚合也走不到兜底，PlanRun 会卡在 RUNNING。
+                # 默认值（auto）本就同步，此处显式写出以免被性能优化误改。
+                execution_options={"synchronize_session": "fetch"},
             )
             pr.aborted_job_count = int(pr.aborted_job_count or 0) + n
             pr.terminal_job_count = int(pr.terminal_job_count or 0) + n
