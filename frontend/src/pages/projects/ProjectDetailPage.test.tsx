@@ -125,9 +125,9 @@ describe('ProjectDetailPage', () => {
     expect(screen.getByText(/设备（1）/)).toBeInTheDocument();
     expect(screen.getByText(/计划（1）/)).toBeInTheDocument();
     expect(screen.getByText('最近运行（快照语义：按 plan_run.project_id 归属）')).toBeInTheDocument();
-    expect(screen.getByText('JIRA 集成')).toBeInTheDocument();
-    // jira 占位文案（约束 3：未配置占位）
-    expect(screen.getByTestId('jira-placeholder')).toHaveTextContent('尚未配置 JIRA 项目关键字');
+    // P2-11：归属规则提为主块（JIRA 占位卡片已删，头部 badge 保留）
+    expect(screen.getByTestId('detail-rules')).toBeInTheDocument();
+    expect(screen.queryByText('JIRA 集成')).not.toBeInTheDocument();
   });
 
   it('shows jira key badge when configured', async () => {
@@ -147,7 +147,7 @@ describe('ProjectDetailPage', () => {
     expect(await screen.findByText('#1')).toBeInTheDocument();
     expect(await screen.findByTestId('detail-kpi-strip')).toBeInTheDocument();
     expect(await screen.findByTestId('hanging-models')).toHaveTextContent(
-      '当前归属此项目的设备型号：M1 (1)',
+      '共 M1 (1)',
     );
     expect(screen.queryByTestId('seed-disclaimer')).not.toBeInTheDocument();
     await waitFor(() => {
