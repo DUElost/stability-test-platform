@@ -415,7 +415,8 @@ sudo userdel stability-test
 # batch_deploy.sh
 # 用法: ./batch_deploy.sh
 
-HOSTS=("192.168.1.101" "192.168.1.102" "192.168.1.103")
+# 示例用 RFC 5737 文档保留段（192.0.2.0/24）；实际部署替换为真实主机地址
+HOSTS=("192.0.2.101" "192.0.2.102" "192.0.2.103")
 AGENT_SRC="backend/agent"
 API_URL="http://<CONTROL_PLANE_IP>:8000"
 
