@@ -302,9 +302,8 @@ def _run_service_tool(name: str, params: dict) -> str:
         finally:
             db.close()
         return (
-            f"扫描完成：{getattr(result, 'registered', '?')} 注册 / "
-            f"{getattr(result, 'created', '?')} 新建 / "
-            f"{getattr(result, 'conflicts', '?')} 冲突"
+            f"扫描完成：新建 {result.created} / 跳过 {result.skipped} / "
+            f"停用 {result.deactivated} / 冲突 {len(result.conflicts)}"
         )
 
     if name == "test_notification_channel":
