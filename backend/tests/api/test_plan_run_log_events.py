@@ -9,6 +9,7 @@ from backend.models.device_log_event import DeviceLogEvent
 from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
+from backend.scheduler.signal_link_reconciler import reconcile_signal_links_once
 
 
 def _seed_plan_run(db_session, sample_device):
@@ -75,9 +76,14 @@ def test_plan_run_log_events_lists_dle_rows(client, auth_headers, db_session, sa
     assert data["items"][0]["remote_path"] == "/nfs/devices/1/aee/1"
 
 
-def test_watcher_summary_read_repair_links_signal_and_reports_stats(
+def test_watcher_summary_reports_links_made_by_reconcile_sweep(
     client, auth_headers, db_session, sample_device,
 ):
+    """#556: the reconcile sweep repairs; watcher-summary only reports.
+
+    Before the request performs no write, so link_stats reflects the database
+    as-is; after a sweep tick the same endpoint reports the repaired link.
+    """
     pr, job, now = _seed_plan_run(db_session, sample_device)
     event_id = uuid4()
     db_session.add(DeviceLogEvent(
@@ -106,6 +112,15 @@ def test_watcher_summary_read_repair_links_signal_and_reports_stats(
         received_at=now,
     ))
     db_session.commit()
+
+    before = client.get(
+        f"/api/v1/plan-runs/{pr.id}/watcher-summary?window_minutes=60",
+        headers=auth_headers,
+    )
+    assert before.status_code == 200, before.text
+    assert before.json()["data"]["archive"]["link_stats"]["linked_signals"] == 0
+
+    reconcile_signal_links_once()
 
     resp = client.get(
         f"/api/v1/plan-runs/{pr.id}/watcher-summary?window_minutes=60",

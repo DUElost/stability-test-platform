@@ -55,6 +55,11 @@ COUNTER_RECONCILE_INTERVAL = int(
     os.getenv("STP_COUNTER_RECONCILE_INTERVAL_SECONDS", "300")
 )
 
+# #556: signal↔DLE link backlog drain (moved off the watcher-summary read path)
+SIGNAL_LINK_RECONCILE_INTERVAL = int(
+    os.getenv("STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS", "300")
+)
+
 MISFIRE_GRACE = timedelta(seconds=60)
 
 # ADR-0027 P3-3: singleton jobs that must not multi-run across control-plane
@@ -331,4 +336,17 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     logger.info(
         "schedule_registered id=counter_reconcile interval=%ds",
         COUNTER_RECONCILE_INTERVAL,
+    )
+
+    # #556: drain signal↔DLE link backlog outside the request path
+    from backend.scheduler.signal_link_reconciler import reconcile_signal_links_once
+
+    await _add(
+        _instrumented("signal_link_reconcile", reconcile_signal_links_once),
+        IntervalTrigger(seconds=SIGNAL_LINK_RECONCILE_INTERVAL),
+        id="signal_link_reconcile",
+    )
+    logger.info(
+        "schedule_registered id=signal_link_reconcile interval=%ds",
+        SIGNAL_LINK_RECONCILE_INTERVAL,
     )

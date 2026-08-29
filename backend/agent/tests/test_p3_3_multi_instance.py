@@ -31,6 +31,7 @@ def test_singleton_schedule_ids_cover_p3_3_jobs():
     # Internal leadership — must NOT double-wrap.
     assert "admission_pump" not in SINGLETON_SCHEDULE_IDS
     assert "counter_reconcile" not in SINGLETON_SCHEDULE_IDS
+    assert "signal_link_reconcile" not in SINGLETON_SCHEDULE_IDS
     assert "saq_queue_depth_poll" not in SINGLETON_SCHEDULE_IDS
 
 
