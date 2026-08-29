@@ -51,7 +51,7 @@ async def list_audit_logs(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_async_db),
-    current_user: User = Depends(require_admin),
+    _current_user: User = Depends(require_admin),
 ):
     """List audit log entries (admin-only, paginated)."""
     base = _apply_audit_filters(

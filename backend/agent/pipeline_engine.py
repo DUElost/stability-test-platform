@@ -900,8 +900,7 @@ class PipelineEngine:
                 )
 
             # ADR-0026 Step 5b: gate execution through the per-host
-            # OperationScheduler. Falls back to the legacy path when no
-            # scheduler is available (old Agents, tests without a scheduler).
+            # OperationScheduler (required in production; tests inject via conftest).
             success = self._run_step_with_permit(phase, step)
             if not success:
                 if self._is_lock_lost() or self._canceled:

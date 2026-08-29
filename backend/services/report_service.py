@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError
-from sqlalchemy import text, select, func
+from sqlalchemy import select, func
 from backend.models.job import JobInstance, JobArtifact, JobLogSignal, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun

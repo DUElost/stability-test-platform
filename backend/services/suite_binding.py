@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.storage_root import resolve_shared_storage_root
 from backend.models.host import Device
-from backend.models.plan import Plan, PlanStep
+from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun, PlanRunTargetDevice
 from backend.models.suite import TestCase, TestSuite
 from backend.services.mtbf_suite import content_fingerprint
