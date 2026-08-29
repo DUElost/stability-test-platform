@@ -23,10 +23,15 @@ echo "expect alembic head: $EXPECT_HEAD"
 ```bash
 set -a && source "$CONTROL_DIR/.env.backend" && set +a
 export TOKEN=$(curl -s -H "X-Agent-Secret: $AGENT_SECRET" \
-  -F "username=$STP_ADMIN_USER&password=$STP_ADMIN_PASSWORD" \
-  http://127.0.0.1:8000/api/v1/auth/token | jq -r .data.access_token)
+  -F "username=$STP_ADMIN_USER" -F "password=$STP_ADMIN_PASSWORD" \
+  http://127.0.0.1:8000/api/v1/auth/token | jq -r .access_token)
 export AUTH="Authorization: Bearer $TOKEN"
 ```
+
+> `/auth/token` 回的是 OAuth2 扁平体 `{access_token, refresh_token, token_type}`，
+> **不套 `ApiResponse` 信封**——取 `.access_token` 而非 `.data.access_token`。
+> 用户名/口令是两个独立 `-F`：合成一个 `-F "username=a&password=b"` 会被当作
+> 单个表单字段，登录必失败。
 
 ---
 
@@ -73,13 +78,10 @@ curl -s -H "$AUTH" -X POST http://127.0.0.1:8000/api/v1/scripts/scan | jq '.data
 
 ### 1.5 前端（有 frontend 变更时）
 
-```bash
-cd "$CONTROL_DIR/frontend"
-npm ci
-VITE_API_BASE_URL= npm run build
-# 按 nginx 配置 reload（静态目录通常为 frontend/dist）
-sudo nginx -t && sudo systemctl reload nginx
-```
+nginx root 是仓库内 `frontend/dist-prod`（非 `dist`），部署 = 干净 worktree 构建 +
+同盘双 rename 原子切换。完整步骤与坑见
+[`.claude/skills/control-plane-deploy/SKILL.md`](../../.claude/skills/control-plane-deploy/SKILL.md) §1.5，
+勿在生产目录里 `npm run build`（构建期 `dist-prod` 会处于半成品态）。
 
 ### 1.6 Preflight（可选但推荐）
 
