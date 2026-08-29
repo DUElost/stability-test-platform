@@ -33,7 +33,6 @@ def _seed_plan_defaults(db_session):
     if not db_session.query(TestProject).filter_by(project_key="GENERIC").first():
         db_session.add(TestProject(
             project_key="GENERIC", display_name="通用（不限项目）",
-            source="USER", match_models=[],
         ))
     if not db_session.query(Specialty).filter_by(key="ops").first():
         db_session.add(Specialty(key="ops", display_name="运维", sort_order=10))

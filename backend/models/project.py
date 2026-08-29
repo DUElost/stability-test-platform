@@ -22,7 +22,6 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.core.database import Base
 
@@ -63,8 +62,6 @@ class TestProject(Base):
     # USER = 人工登记（工作台可见）；SEED = P1 脚本回填，不是客户/项目/机型。
     source           = Column(String(16), nullable=False, default="USER",
                               server_default="USER")
-    # 人工映射的 device.model 精确列表；空 = 尚未填写。
-    match_models     = Column(JSONB, nullable=False, default=list)
     created_at       = Column(DateTime(timezone=True), nullable=False,
                               default=lambda: datetime.now(timezone.utc))
     updated_at       = Column(

@@ -173,9 +173,9 @@ def _aggregate_inventory(
 
 
 def _rule_values_for_project(db: Session, project_id: int) -> list[str]:
-    """ADR-0029 P1：项目活跃规则 → match_models 兼容列表（读侧唯一来源）。
+    """项目活跃规则 → match_models 兼容列表（对外 API 契约）。
 
-    match_models 列 P1-B 阶段 drop，此处为过渡期读兼容。
+    match_models 列已 drop（P1 收尾），此处是唯一读侧派生来源。
     """
     rows = db.execute(
         select(ProjectDeviceRule.match_value)
@@ -371,7 +371,6 @@ def create_project(
         product_line=payload.product_line,
         jira_project_key=payload.jira_project_key,
         source=_USER_SOURCE,
-        match_models=[],
         status="ACTIVE",
     )
     db.add(project)
