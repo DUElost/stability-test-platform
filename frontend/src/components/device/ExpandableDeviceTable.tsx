@@ -63,8 +63,8 @@ export interface DeviceTableData {
   tags?: string[];
   /** ADR-0029：归属项目 key（F2 口径） */
   project_key?: string | null;
-  /** ADR-0029 P0：归属来源三态（rule / manual / unassigned），行内 badge 用 */
-  attribution_source?: 'rule' | 'manual' | 'unassigned' | null;
+  /** ADR-0029 P0：归属来源四态（rule / manual / pinned / unassigned），行内 badge 用 */
+  attribution_source?: 'rule' | 'manual' | 'pinned' | 'unassigned' | null;
 }
 
 interface ExpandableDeviceTableProps {
@@ -473,10 +473,18 @@ export function ExpandableDeviceTable({
                                 规则
                               </span>
                             )}
+                            {device.attribution_source === 'pinned' && (
+                              <span
+                                className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary"
+                                title="人工钉住：规则不覆盖此设备归属"
+                              >
+                                钉住
+                              </span>
+                            )}
                             {device.attribution_source === 'manual' && device.project_key && (
                               <span
                                 className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                title="人工归入（P1 后 = 钉住，规则不覆盖）"
+                                title="人工归入（非钉住，规则可能覆盖）"
                               >
                                 手动
                               </span>
