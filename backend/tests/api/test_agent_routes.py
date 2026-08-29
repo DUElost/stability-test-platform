@@ -18,7 +18,6 @@ from backend.api.routes.agent_api import (
     complete_job,
     extend_job_lock,
     extend_leases_batch,
-    get_pending_jobs,
     job_heartbeat,
     update_job_status,
     update_job_step_status,
@@ -206,37 +205,6 @@ def _cleanup_seed(seed: dict) -> None:
         db.commit()
     finally:
         db.close()
-
-
-@pytest.mark.asyncio
-async def test_get_pending_jobs_legacy_endpoint_removed():
-    seed = _seed_job(status=JobStatus.PENDING.value)
-    try:
-        await async_engine.dispose()
-        async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
-                await get_pending_jobs(
-                    host_id=seed["host_id"], limit=5, db=async_db, _=None,
-                )
-        assert exc_info.value.status_code == 410
-        assert exc_info.value.detail["code"] == "LEGACY_CLAIM_ENDPOINT_REMOVED"
-    finally:
-        _cleanup_seed(seed)
-
-
-@pytest.mark.asyncio
-async def test_get_pending_jobs_legacy_endpoint_removed_for_empty_host():
-    seed = _seed_host_only()
-    try:
-        await async_engine.dispose()
-        async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
-                await get_pending_jobs(
-                    host_id=seed["host_id"], limit=10, db=async_db, _=None,
-                )
-        assert exc_info.value.status_code == 410
-    finally:
-        _cleanup_seed(seed)
 
 
 @pytest.mark.asyncio

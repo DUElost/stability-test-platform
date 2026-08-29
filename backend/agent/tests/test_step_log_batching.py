@@ -140,3 +140,29 @@ async def test_on_step_log_accepts_batch(monkeypatch):
     assert len(emitted) == 4
     assert all(e[0] == "step_log" for e in emitted)
     assert all(e[1]["type"] == "STEP_LOG" for e in emitted)
+
+
+@pytest.mark.asyncio
+async def test_on_step_log_rejects_legacy_single_line(monkeypatch):
+    from backend.realtime import socketio_server as sio_mod
+
+    written = []
+
+    async def fake_append(job_id, lines):
+        written.append((job_id, list(lines)))
+
+    monkeypatch.setattr(
+        "backend.realtime.log_writer.append_log_lines", fake_append,
+    )
+
+    ns = sio_mod.AgentNamespace("/agent")
+    await ns.on_step_log("sid", {
+        "job_id": 42,
+        "step_id": "s1",
+        "seq": 1,
+        "level": "INFO",
+        "ts": "t1",
+        "msg": "legacy",
+    })
+
+    assert written == []

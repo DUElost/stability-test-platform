@@ -231,6 +231,18 @@ _LINK_SIGNAL_SQL = text(
 ).bindparams(bindparam("job_ids", expanding=True))
 
 
+def link_signals_to_device_log_events_sync(
+    db: Session,
+    job_ids: Sequence[int],
+) -> int:
+    """Sync read-repair: link signals when DLE landed first (#214 / #528)."""
+    ids = sorted({int(jid) for jid in job_ids if jid is not None})
+    if not ids:
+        return 0
+    result = db.execute(_LINK_SIGNAL_SQL, {"job_ids": ids})
+    return int(result.rowcount or 0)
+
+
 async def link_signals_to_device_log_events(
     db: AsyncSession,
     job_ids: Sequence[int],
@@ -240,3 +252,31 @@ async def link_signals_to_device_log_events(
     if not ids:
         return
     await db.execute(_LINK_SIGNAL_SQL, {"job_ids": ids})
+
+
+def list_plan_run_device_log_events(
+    db: Session,
+    plan_run_id: int,
+    *,
+    skip: int = 0,
+    limit: int = 200,
+    state: str | None = None,
+) -> tuple[list[DeviceLogEvent], int]:
+    """PlanRun-scoped DLE rows for terminal archive views (#529)."""
+    filters = [DeviceLogEvent.plan_run_id == plan_run_id]
+    if state:
+        filters.append(DeviceLogEvent.state == state)
+    total = int(
+        db.execute(
+            select(func.count(DeviceLogEvent.id)).where(*filters)
+        ).scalar()
+        or 0
+    )
+    rows = db.execute(
+        select(DeviceLogEvent)
+        .where(*filters)
+        .order_by(DeviceLogEvent.detected_at.desc(), DeviceLogEvent.id)
+        .offset(max(0, skip))
+        .limit(max(1, min(limit, 500)))
+    ).scalars().all()
+    return list(rows), total
