@@ -271,7 +271,11 @@ class TestJiraProjectKeyWiring:
 
     @staticmethod
     def _seed_plan_run(db_session, *, jira_project_key=None):
-        """TestProject → Plan → PlanRun → PlanRunArtifact 四层种子，返回 artifact id。"""
+        """TestProject → Plan → PlanRun → PlanRunArtifact 四层种子，返回 artifact id。
+
+        PlanRun 带 project_id 冻结值（模拟 dispatcher 快照语义）——解析必须
+        读 run.project_id，而不是当前 Plan 的归属。
+        """
         from backend.models.plan import Plan
         from backend.models.plan_run import PlanRun
         from backend.models.plan_run_artifact import PlanRunArtifact
@@ -289,6 +293,7 @@ class TestJiraProjectKeyWiring:
         db_session.flush()
         run = PlanRun(
             plan_id=plan.id,
+            project_id=project.id,
             status="RUNNING",
             failure_threshold=plan.failure_threshold,
             plan_snapshot={"name": plan.name},
@@ -367,3 +372,28 @@ class TestJiraProjectKeyWiring:
         # 落库走独立 SessionLocal；本断言在真 PG 下可见，SQLite 变体亦同步提交
         assert row is not None
         assert row.jira_project_key == "AUDIT1"
+
+    def test_snapshot_key_wins_over_current_plan_attachment(
+        self, client, auth_headers, monkeypatch, mock_run_console, db_session
+    ):
+        """快照语义：run.project_id 冻结值优先——Plan 事后改归属不影响历史 Run 的 JIRA 目标。"""
+        from backend.models.plan import Plan
+        from backend.models.plan_run import PlanRun
+        from backend.models.project import TestProject
+
+        artifact_id, run_id = self._seed_plan_run(db_session, jira_project_key="SNAPKEY")
+        _set_vendor_env(monkeypatch)
+        run = db_session.get(PlanRun, run_id)
+        plan = db_session.get(Plan, run.plan_id)
+        moved = TestProject(
+            project_key="moved-to", display_name="moved", jira_project_key="NEWKEY"
+        )
+        db_session.add(moved)
+        plan.project_id = moved.id
+        db_session.commit()
+
+        resp = self._post_plan_run_source(client, auth_headers, artifact_id)
+        assert resp.status_code == 200, resp.text
+        argv = mock_run_console.start.call_args.kwargs.get("cmd", [])
+        assert argv[argv.index("--set-project-key") + 1] == "SNAPKEY"
+        assert resp.json()["data"]["jira_project_key"] == "SNAPKEY"

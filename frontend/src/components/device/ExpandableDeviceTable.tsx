@@ -63,6 +63,8 @@ export interface DeviceTableData {
   tags?: string[];
   /** ADR-0029：归属项目 key（F2 口径） */
   project_key?: string | null;
+  /** ADR-0029 P0：归属来源三态（rule / manual / unassigned），行内 badge 用 */
+  attribution_source?: 'rule' | 'manual' | 'unassigned' | null;
 }
 
 interface ExpandableDeviceTableProps {
@@ -446,13 +448,40 @@ export function ExpandableDeviceTable({
                         <span className="truncate text-xs text-muted-foreground" title={device.model ?? ''}>
                           {device.model}
                         </span>
-                        {device.project_key && (
+                        {device.attribution_source === 'unassigned' ? (
                           <span
-                            className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-                            title={`归属项目 ${device.project_key}`}
+                            className="shrink-0 rounded-full bg-warning/20 px-1.5 py-0.5 font-mono text-[10px] text-warning"
+                            title="未归属：需在 /projects 配置归属规则或手动归入"
                           >
-                            {device.project_key}
+                            未归属
                           </span>
+                        ) : (
+                          <>
+                            {device.project_key && (
+                              <span
+                                className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                                title={`归属项目 ${device.project_key}`}
+                              >
+                                {device.project_key}
+                              </span>
+                            )}
+                            {device.attribution_source === 'rule' && (
+                              <span
+                                className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[10px] text-success"
+                                title="型号命中归属规则（match_models）"
+                              >
+                                规则
+                              </span>
+                            )}
+                            {device.attribution_source === 'manual' && device.project_key && (
+                              <span
+                                className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                title="人工归入（P1 后 = 钉住，规则不覆盖）"
+                              >
+                                手动
+                              </span>
+                            )}
+                          </>
                         )}
                       </div>
                     </TableCell>

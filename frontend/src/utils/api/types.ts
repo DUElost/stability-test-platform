@@ -65,6 +65,8 @@ export interface Device {
   host_id: string | number | null;
   /** ADR-0029：归属项目 key（F2 口径，后端不暴露数字 project_id） */
   project_key?: string | null;
+  /** ADR-0029 P0：归属来源三态——rule=型号命中规则；manual=人工归入（P1 后=钉住）；unassigned=无归属 */
+  attribution_source?: 'rule' | 'manual' | 'unassigned' | null;
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
   /** Authoritative backend admission decision. Legacy servers may omit it. */
   schedulable?: boolean;
