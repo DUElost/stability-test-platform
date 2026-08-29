@@ -37,10 +37,11 @@ jobs:
         uses: docker://pragent/pr-agent@sha256:b81235c3bddc551939a1feca8926f4b6e8abcec2ae5bf4620424f8f56dd9cb93
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # OpenAI 兼容代理（repo secret PR_AGENT_LLM_API_KEY）；官方 DeepSeek 余额不足后切换。
-          OPENAI__API_BASE: https://ai.hybgzs.com/v1
+          # OpenAI 兼容代理（repo secret PR_AGENT_LLM_API_KEY）。
+          # ai.hybgzs.com 对 GitHub Actions IP 返回 Cloudflare 1010，不可用。
+          OPENAI__API_BASE: https://api.astrdark.cyou/v1
           OPENAI__KEY: ${{ secrets.PR_AGENT_LLM_API_KEY }}
-          config.model: openai/deepseek-ai/deepseek-v4-flash-0731
+          config.model: openai/grok-4.6
           config.fallback_models: '[]'
           # 自定义模型不在 PR-Agent 内置 MAX_TOKENS 表，须显式设置。
           config.custom_model_max_tokens: 128000
@@ -127,9 +128,9 @@ jobs:
         uses: docker://pragent/pr-agent@sha256:b81235c3bddc551939a1feca8926f4b6e8abcec2ae5bf4620424f8f56dd9cb93
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI__API_BASE: https://ai.hybgzs.com/v1
+          OPENAI__API_BASE: https://api.astrdark.cyou/v1
           OPENAI__KEY: ${{ secrets.PR_AGENT_LLM_API_KEY }}
-          config.model: openai/deepseek-ai/deepseek-v4-flash-0731
+          config.model: openai/grok-4.6
           config.fallback_models: '[]'
           # 自定义模型不在 PR-Agent 内置 MAX_TOKENS 表，须显式设置。
           config.custom_model_max_tokens: 128000
