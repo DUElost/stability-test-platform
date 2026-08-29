@@ -501,8 +501,16 @@ def _resolve_jira_fields(
     return resolved
 
 
-def build_jira_draft(report: RunReportOut) -> JiraDraftOut:
-    """Build a JIRA draft from a completed run report.  Stateless & DB-free."""
+def build_jira_draft(
+    report: RunReportOut, *, project_key_override: Optional[str] = None,
+) -> JiraDraftOut:
+    """Build a JIRA draft from a completed run report.  DB-free (stateless).
+
+    project_key_override（ADR-0029 P0）：调用方（有 db 的端点）解析
+    plan_run.project_id → test_project.jira_project_key 后传入，快照口径。
+    None 时回落模板/全局默认，并在 extra.project_key_source 标注来源
+    （plan_run_project / template / global_default），让「未配置」可见。
+    """
     has_high = any(item.severity == "HIGH" for item in report.alerts)
     has_medium = any(item.severity == "MEDIUM" for item in report.alerts)
     priority = "Minor"
@@ -518,7 +526,15 @@ def build_jira_draft(report: RunReportOut) -> JiraDraftOut:
     resolved = _resolve_jira_fields(report.task.type, risk_level, priority)
     priority = resolved["priority"]
     issue_type = resolved["issue_type"]
+    # ADR-0029 P0：项目键优先级 = 调用方解析的 plan_run 快照 > 模板显式配置
+    # > 全局默认。来源标注让「静默用 STABILITY」变得可见。
     project_key = resolved["project_key"]
+    project_key_source = "global_default"
+    if project_key_override:
+        project_key = project_key_override
+        project_key_source = "plan_run_project"
+    elif (_load_jira_template().get("default") or {}).get("project_key") != REPORT_JIRA_PROJECT_KEY:
+        project_key_source = "template"
     component = resolved.get("component")
     fix_version = resolved.get("fix_version")
     assignee = resolved.get("assignee")
@@ -599,6 +615,8 @@ def build_jira_draft(report: RunReportOut) -> JiraDraftOut:
             "summary_metrics": report.summary_metrics,
             "alert_count": len(report.alerts),
             "template_resolved": resolved,
+            "project_key_source": project_key_source,
+            "project_key_global_default": REPORT_JIRA_PROJECT_KEY,
         },
     )
 
