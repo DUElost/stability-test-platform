@@ -9,6 +9,9 @@ pytest>=9.1.1,<10.0
 pytest-asyncio>=1.4.0,<2.0
 # conftest.py 在未设 TEST_DATABASE_URL 时用它拉起临时 postgres:16 容器
 testcontainers>=4.15.0,<5.0
+# 覆盖率。CI 只度量不设阈值(见 ci.yml)—— 先积累水位数据,
+# 摸清真实覆盖率后再考虑 fail-under,否则一上手就会把门禁变红。
+pytest-cov>=6.0,<8.0
 
 # ── Lint ────────────────────────────────────────────────────────────────
 # 配置见仓库根 ruff.toml;CI 的 lint job 也装这个

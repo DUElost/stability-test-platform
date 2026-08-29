@@ -52,23 +52,31 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements-dev.txt
+          cache-dependency-path: backend/requirements-dev.lock
       - name: Install dependencies
-        # dev 清单包含运行时依赖 + pytest / testcontainers
-        run: pip install -r backend/requirements-dev.txt
+        # 走 hash 锁定的 dev lock（含运行时依赖 + pytest / testcontainers / ruff /
+        # pytest-cov），与本地 `pip install -r requirements-dev.txt` 装的可能是
+        # 不同版本——这是有意的：CI 要可复现，本地要能追新。lock 过期时
+        # tests/test_requirements_dev_lock.py 会拦住，重新生成命令见 lock 抬头。
+        run: pip install --require-hashes -r backend/requirements-dev.lock
       - name: Compile check
         run: python -m compileall backend/ tools/ scripts/ -q
       - name: Migrate empty PostgreSQL database
         working-directory: backend
         run: python -m alembic upgrade head
+      # 覆盖率:三段 pytest 用 --cov-append 累加,最后一段统一出报告。
+      # **只度量不设阈值** —— 没有 --cov-fail-under。当前水位还没摸清就设底线,
+      # 等于给一个没读过的数字背书;先攒数据,水位稳定后在 .coveragerc 抬头
+      # 记录的数字基础上再定(换 omit 口径会让数字不可比,届时需重测)。
+      # 本地默认不带 --cov(不写进 pytest.ini 的 addopts),避免拖慢日常单测。
       - name: Run backend tests
-        run: python -m pytest backend/tests/ -v
+        run: python -m pytest backend/tests/ -v --cov=backend
       - name: Run agent tests
-        run: python -m pytest backend/agent/tests/ -v
+        run: python -m pytest backend/agent/tests/ -v --cov=backend --cov-append
       # 根 tests/ 也在 pytest.ini 的 testpaths 里(迁移升级 + 部署脚本契约),
       # 此前从未在 CI 跑过。test_repo_layout.py 现在会守住这条对应关系。
       - name: Run repo-level tests
-        run: python -m pytest tests/ -v
+        run: python -m pytest tests/ -v --cov=backend --cov-append --cov-report=term-missing
 
   frontend-check:
     if: github.event_name != 'pull_request'
@@ -89,9 +97,12 @@ jobs:
       - name: TypeScript check
         working-directory: frontend
         run: npx tsc --noEmit
+      # 同样只度量不设阈值(与后端一致):vitest 的 coverage.thresholds 未配置,
+      # 覆盖率不达标不会让 job 变红。@vitest/coverage-v8 由 package.json 显式
+      # 声明 —— 此前只有 test:coverage 脚本而没装 provider,直接跑会失败。
       - name: Run vitest
         working-directory: frontend
-        run: npx vitest run
+        run: npx vitest run --coverage
       - name: Build
         working-directory: frontend
         run: npm run build
@@ -118,7 +129,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements-dev.txt
+          cache-dependency-path: backend/requirements-dev.lock
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -128,8 +139,14 @@ jobs:
         run: npm run lint -- --max-warnings 0
 
       - name: Install ruff
-        # 版本随 requirements-dev.txt 走,避免 CI 与本地报出不同结果
-        run: pip install "$(grep -E '^ruff' backend/requirements-dev.txt)"
+        # 从 dev lock 取精确版本(而非 requirements-dev.txt 的区间),与其他 job
+        # 同一套锁定依赖。-oE 只取 `ruff==x.y.z`:lock 里该行以续行符结尾,
+        # 直接 grep 整行会把尾部 ' \' 带进 pip 参数。
+        #
+        # 本地 `pip install -r requirements-dev.txt` 装的是区间内最新版,因此
+        # 本地 ruff >= CI ruff。方向是安全的:本地只会比 CI 更严,不会更松,
+        # 不会出现「本地全绿、推上去才红」。反向(CI 更严)不可能发生。
+        run: pip install "$(grep -oE '^ruff==[^ ]+' backend/requirements-dev.lock)"
       - name: Ruff
         run: ruff check backend/ tools/ scripts/
 
@@ -195,9 +212,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements-dev.txt
+          cache-dependency-path: backend/requirements-dev.lock
       - name: Install dependencies
-        run: pip install -r backend/requirements-dev.txt
+        run: pip install --require-hashes -r backend/requirements-dev.lock
       - name: Run agent tests
         run: python -m pytest backend/agent/tests/ -q
 
@@ -234,9 +251,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements-dev.txt
+          cache-dependency-path: backend/requirements-dev.lock
       - name: Install dependencies
-        run: pip install -r backend/requirements-dev.txt
+        run: pip install --require-hashes -r backend/requirements-dev.lock
       - name: Migrate empty PostgreSQL database
         working-directory: backend
         run: python -m alembic upgrade head

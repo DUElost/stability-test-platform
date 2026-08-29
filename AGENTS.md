@@ -14,18 +14,26 @@
 
 本文只保留**推导不出来**的部分：依赖三件套分工、lint 现状与取舍、空行注入污染、生产机调试约束、Test quirks。
 
-**依赖清单**（后端三份，各有分工）：
+**依赖清单**（后端四份，两对 source→lock）：
 
 | 文件 | 内容 | 谁用 |
 |------|------|------|
 | `backend/requirements.txt` | 仅运行时 | Dockerfile.backend（生产镜像） |
-| `backend/requirements-dev.txt` | `-r requirements.txt` + pytest/testcontainers/ruff | CI、本地开发 |
-| `backend/requirements.lock` | 全量精确版本 + hash | 可复现构建校验 |
+| `backend/requirements.lock` | 上一份的全量精确版本 + hash | 生产镜像 `pip install --require-hashes` |
+| `backend/requirements-dev.txt` | `-r requirements.txt` + pytest/testcontainers/ruff/pytest-cov | 本地开发 |
+| `backend/requirements-dev.lock` | 上一份的全量精确版本 + hash | CI 各 job `pip install --require-hashes`（#560） |
 
-本地装开发环境用 `pip install -r backend/requirements-dev.txt`。改了
-`requirements.txt` 后**必须重新生成 lock**，命令见该文件抬头（须在 py3.11
-下生成，CI 与镜像都是 3.11）。测试/lint 依赖不要加进 `requirements.txt`——
-生产镜像带着 pytest 既浪费体积也是无谓的攻击面。
+本地装开发环境用 `pip install -r backend/requirements-dev.txt`（追新）。
+**CI 走 dev.lock 的锁定版本**，两者装的可能是不同版本 —— 这是有意的取舍：
+CI 要可复现（否则上游一发新版，无关 PR 就会莫名变红），本地要能追新。
+方向是安全的：本地只会比 CI 更新更严，不会更松。
+
+改了 `requirements.txt` **或** `requirements-dev.txt` 后**必须重新生成对应
+lock**，命令见各 lock 文件抬头（须在 py3.11 下生成，CI 与镜像都是 3.11）。
+两份 lock 的同步由 `tests/test_requirements_lock.py` 与
+`tests/test_requirements_dev_lock.py` 守住 —— 前者还额外断言测试依赖不得
+混入生产 lock。测试/lint 依赖不要加进 `requirements.txt`——生产镜像带着
+pytest 既浪费体积也是无谓的攻击面。
 
 **Lint**：ruff 与 ESLint 均为阻塞门禁（`--max-warnings 0`），`continue-on-error`
 已全部摘除；ruff 未开 `UP`(pyupgrade) 族的取舍与清库历史见
