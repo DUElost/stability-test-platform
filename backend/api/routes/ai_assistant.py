@@ -277,6 +277,23 @@ def send_message(
     content = str(payload.get("content") or "").strip()
     if not content:
         raise HTTPException(status_code=422, detail="content is required")
+    # 轮次互斥：同会话已有 pending/running 轮时拒绝再发——否则第二占位会因
+    # SAQ 同 key 去重而孤儿化（线上实测：占位永挂 pending）。#547 的续轮
+    # 占位机制让该互斥更必要（审批也会建占位）。
+    in_flight = (
+        db.query(AiChatMessage)
+        .filter(
+            AiChatMessage.session_id == session.id,
+            AiChatMessage.role == "assistant",
+            AiChatMessage.status.in_(["pending", "running"]),
+        )
+        .count()
+    )
+    if in_flight:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ai_turn_in_progress", "message": "上一轮仍在进行中，请等回复完成后再发送"},
+        )
     try:
         load_effective_config(db)
     except AiNotConfigured as exc:

@@ -235,31 +235,43 @@ def _q_audit_logs(db: Session, args: dict) -> str:
 
 
 def _search_docs(db: Session, args: dict) -> str:
+    """docs/ 轻量检索：查询按空白**分词**，任一词命中即算（按命中词数排序）。
+
+    线上实测（用户会话 8）：LLM 倾向发带空格的长短语，整句子串匹配在中文
+    文档上几乎必空，模型会反复重试烧穿 max_turns——分词 + 指引双管齐下。
+    """
     query = _opt_str(args.get("query"), "query", 200)
     if not query:
         raise ToolValidationError("query is required")
     limit = _clamp_int(args.get("limit"), "limit", 5, 1, 10)
-    needle = query.lower()
-    hits: list[str] = []
+    tokens = [t.lower() for t in query.split() if len(t.strip()) >= 2] or [query.lower()]
+    hits: list[tuple[int, str]] = []
     docs_root = REPO_ROOT / "docs"
-    for path in sorted(docs_root.rglob("*.md")):
-        if len(hits) >= limit:
-            break
+    for path in docs_root.rglob("*.md"):
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if needle in path.name.lower():
-            hits.append(f"{path.relative_to(REPO_ROOT)}（文件名匹配）")
-            continue
+        name_hit = sum(1 for t in tokens if t in path.name.lower())
+        best_line: tuple[int, str] | None = None
         for lineno, line in enumerate(content.splitlines(), start=1):
-            if needle in line.lower():
-                rel = path.relative_to(REPO_ROOT)
-                hits.append(f"{rel}:{lineno} {line.strip()[:120]}")
-                break
+            score = sum(1 for t in tokens if t in line.lower())
+            if score and (best_line is None or score > best_line[0]):
+                best_line = (score, f"{lineno} {line.strip()[:120]}")
+        score = name_hit * 2 + (best_line[0] if best_line else 0)
+        if score:
+            rel = path.relative_to(REPO_ROOT)
+            detail = f"（文件名匹配）{best_line[1]}" if name_hit and best_line else (
+                best_line[1] if best_line else "（文件名匹配）"
+            )
+            hits.append((score, f"{rel}:{detail}"))
     if not hits:
-        return f"docs/ 中未检索到「{query}」。"
-    return "\n".join(hits)
+        return (
+            f"docs/ 中未检索到「{query}」。"
+            "建议：改用 1-2 个更短的英文/编号关键词重试（如「MTBF」「suite_id」「ADR-0030」）。"
+        )
+    hits.sort(key=lambda x: -x[0])
+    return "\n".join(h[1] for h in hits[:limit])
 
 
 def _q_settings_overview(db: Session, args: dict) -> str:

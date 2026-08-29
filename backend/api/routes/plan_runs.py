@@ -98,7 +98,6 @@ from backend.services.plan_run_export import (
     plan_run_export_to_markdown,
 )
 from backend.services.device_log_event import (
-    link_signals_to_device_log_events_sync,
     list_plan_run_device_log_events,
 )
 from backend.services.log_observation import aggregate_signal_link_stats
@@ -2013,7 +2012,9 @@ def get_plan_run_watcher_summary(
             ),
         ))
 
-    link_signals_to_device_log_events_sync(db, job_ids)
+    # #556: read-only. Link repair is owned by the signal_link_reconcile sweep —
+    # doing it here ran inside a get_db() session that is never committed, so it
+    # never persisted while still locking rows on every poll.
     link_stats = WatcherSignalLinkStatsOut(
         **aggregate_signal_link_stats(db, job_ids),
     )
