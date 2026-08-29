@@ -42,6 +42,8 @@ jobs:
           OPENAI__KEY: ${{ secrets.PR_AGENT_LLM_API_KEY }}
           config.model: openai/deepseek-ai/deepseek-v4-flash-0731
           config.fallback_models: '[]'
+          # 自定义模型不在 PR-Agent 内置 MAX_TOKENS 表，须显式设置。
+          config.custom_model_max_tokens: 128000
           # 默认 log_level=DEBUG 会让失败排障日志膨胀到 ~50KB 且几乎全是工具内部
           # 噪音；INFO 保留关键进度与错误，失败时可直接读日志定位。
           config.log_level: INFO
@@ -129,6 +131,8 @@ jobs:
           OPENAI__KEY: ${{ secrets.PR_AGENT_LLM_API_KEY }}
           config.model: openai/deepseek-ai/deepseek-v4-flash-0731
           config.fallback_models: '[]'
+          # 自定义模型不在 PR-Agent 内置 MAX_TOKENS 表，须显式设置。
+          config.custom_model_max_tokens: 128000
           # 默认 log_level=DEBUG 会让失败排障日志膨胀到 ~50KB 且几乎全是工具内部
           # 噪音；INFO 保留关键进度与错误，失败时可直接读日志定位。
           config.log_level: INFO
