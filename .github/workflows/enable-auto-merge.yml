@@ -4,42 +4,27 @@ on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize, closed]
 
-# 并发键统一按 HEAD sha：同一 head 的所有事件共享一个组。
+# 全局串行 reconcile，避免并行 enable/disable 竞态。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.event.sha }}
+  group: pr-automerge-queue
+  cancel-in-progress: false
 
-# 不给整个 workflow 写权限；各 job 单独声明最小权限。
-permissions:
-  {}
+permissions: {}
 
 jobs:
-  enable-auto-merge:
-    # 仅同仓库、非 draft PR：fork PR 的 GITHUB_TOKEN 只读，且不应获得自动合入
-    # 能力。以下 Dependabot PR 不挂 auto-merge，交由人工评审后再合入：
-    # - frontend-major（react 19 / tailwind 4 / eslint 10 等迁移）；
-    # - github_actions（CI 执行代码的第三方替换；轻量门禁对其内容零检测力，
-    #   job 级写权限放大投毒后果，人工看一行 SHA diff 成本近零，#267 评审意见）。
-    if: github.event.pull_request.state == 'open' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name && !startsWith(github.event.pull_request.head.ref, 'dependabot/npm_and_yarn/frontend/frontend-major-') && !startsWith(github.event.pull_request.head.ref, 'dependabot/github_actions/')
+  reconcile-queue:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # gh pr merge --auto --merge 需要 PR 与 base 分支的写权限，job 内按需授予。
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - name: Enable auto-merge
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          sparse-checkout: scripts/ci/pr-automerge-queue.sh
+          sparse-checkout-cone-mode: false
+      - name: Reconcile FIFO auto-merge queue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          REPO_OWNER: ${{ github.repository_owner }}
-          REPO_NAME: ${{ github.event.repository.name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          method="$(
-            gh api graphql \
-              -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){autoMergeRequest{mergeMethod}}}}' \
-              -F owner="$REPO_OWNER" -F repo="$REPO_NAME" -F number="$PR_NUMBER" \
-              --jq '.data.repository.pullRequest.autoMergeRequest.mergeMethod // ""'
-          )"
-          if [ "$method" != "MERGE" ]; then
-            gh pr merge "$PR_URL" --auto --merge
-          fi
+        run: bash scripts/ci/pr-automerge-queue.sh
