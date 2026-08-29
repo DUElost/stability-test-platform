@@ -8,7 +8,7 @@ Class: bug-fix
 `reboot_target` 默认值从 `"bootloader"` 改为 `"normal"`（不带 target 的普通
 `adb reboot`）；`""` 与缺省同义于 normal；`"bootloader"` / `"fastboot"`
 保留为显式选项。该参数自 v1.2.0 引入以来从未被真机验证，2026-08-25 于
-172.21.15.66 首次真机执行即证伪。
+172.21.x.x 首次真机执行即证伪。
 
 ## 机制
 
@@ -31,7 +31,7 @@ SPFT console 版只附着 BROM(PID 2000)。两种重启的 USB 呈现完全不�
 
 - 单测 `test_flash_firmware_v132.py`：argv 形态断言（normal 不带 target、
   显式模式透传、设备不可达跳过）+ main() 缺省参数 wiring 冒烟。
-- 真机对照实验（172.21.15.66，2026-08-25）：同机同包，bootloader 目标两轮
+- 真机对照实验（172.21.x.x，2026-08-25）：同机同包，bootloader 目标两轮
   S_TIMEOUT；普通重启秒抓 BROM 并 `Download Succeeded @36.20MB/s`，
   刷后 `sys.boot_completed=1`、版本与 manifest 一致。
 

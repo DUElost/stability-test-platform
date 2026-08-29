@@ -16,7 +16,7 @@ signed APK 安装到 build `MLD-LX2-16-260810V62` 的 18 台设备：
   `STP_NFS_ROOT`（=`/mnt/stp-aee`）。代码与 v1.0.0 逐字节相同
   （`content_sha256=ce4a0d7d…`，v1.0.0/v1.0.1 一致）。
 - APK 从 SMB 仓库 `/data/apk-repo/incoming/` 复制到中心存储
-  `/mnt/stp-aee/apk-repo/incoming/`：控制面即 NFS server 172.21.8.202，
+  `/mnt/stp-aee/apk-repo/incoming/`：控制面即 NFS server 172.21.x.x，
   Agent 挂载同盘（`/mnt/stp-aee`），单份共享、所有 host 同路径可见。
   NFS 顶层新增 `apk-repo/` 目录族，不属既有 jobs/devices/dedup/jira 布局。
 - 三端同步：控制面 `STP_SCRIPT_ROOT`（`backend/agent/scripts/
@@ -43,7 +43,7 @@ signed APK 安装到 build `MLD-LX2-16-260810V62` 的 18 台设备：
 
 - PlanRun #251（2026-08-28）：18/18 COMPLETED、exit 0、pass_rate 1.0、
   run SUCCESS。
-- 设备侧抽查 3 台（host 172-21-15-68 ×2 + 172-21-15-76 ×1）：
+- 设备侧抽查 3 台（host 172-21-x-x ×2 + 172-21-x-x ×1）：
   `adb shell pm list packages` → `com.ape.aging` 已安装。
 - 三端 sha 一致：DB `content_sha256` = 控制面磁盘 = 两台 Agent 磁盘
   （`ce4a0d7d…`）。

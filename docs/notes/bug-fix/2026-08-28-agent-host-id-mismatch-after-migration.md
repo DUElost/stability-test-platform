@@ -6,7 +6,7 @@ Class: bug-fix
 ## Decision
 
 `k8l9m0n1o2p3_align_host_id_with_ip_after_subnet_migration.py` 把控制面
-`host.id` 从遗留 `172-21-8/9-*` 对齐到 `172-21-15-{ip末段}`，但 **agent 侧
+`host.id` 从遗留 `172-21-<旧网段>-*` 对齐到 `172-21-<新网段>-{ip末段}`，但 **agent 侧
 `/opt/stability-test-agent/.env` 的 `HOST_ID` 未同步**——Agent 仍以旧 id
 注册 SocketIO room（`agent:{host_id}`），控制面按新 id 发 SocketIO RPC
 时 `call_agent_rpc` 查不到 sid → `AgentNotConnectedError` → precheck 的

@@ -31,7 +31,7 @@ Class: bug-fix
 
 - 单测 `test_flash_firmware_v131.py`：6 种拼写参数化路由 + fail-fast 信息
   含双拼写 + 连字符机型过 manifest 白名单 + main() 默认路由直达 skipped 冒烟。
-- 生产回归（172.21.15.66）：v1.3.0 + 显式 `family:"MLD"` 时
+- 生产回归（172.21.x.x）：v1.3.0 + 显式 `family:"MLD"` 时
   `decided_by=fingerprint, model=MLD-LX3` 整链通；v1.3.1 使 family 参数
   不再必需。
 

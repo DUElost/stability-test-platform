@@ -40,6 +40,7 @@ from backend.services.ai_assistant.llm_client import (
     LlmClient,
 )
 from backend.services.ai_assistant.orchestrator import (
+    ensure_pending_placeholder,
     execute_action,
     get_or_create_config,
     load_effective_config,
@@ -391,6 +392,9 @@ async def _decide_action(
     )
     db.commit()
     if verb == "approve":
+        # 审批后的执行结果经续轮汇报——先落 pending 占位：前端 approve 成功后
+        # invalidate messages，据占位恢复 2s 轮询，否则汇报只落库不上屏
+        ensure_pending_placeholder(action.session_id, db)
         # M5：持引用防 GC（asyncio 文档要求），异常必须留日志——
         # 否则 action 永远停在 approved 且无任何痕迹
         task = asyncio.create_task(asyncio.to_thread(execute_action, action.id))
