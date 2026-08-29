@@ -22,6 +22,7 @@ from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
+from backend.models.project import TestProject
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
 from backend.models.script import Script
 from backend.services.plan_dispatcher_core import (
@@ -507,6 +508,39 @@ def prepare_plan_run(
     )
 
 
+def _infer_frozen_project_id(
+    db: Session, plan: Plan, target_ids: list[int],
+) -> tuple[int | None, bool, list[str]]:
+    """ADR-0029 P0：PlanRun 归属冻结值解析（快照语义）。
+
+    优先 plan.project_id（显式归属，不推断）；NULL 时按目标设备的 project_id
+    众数推断——多台设备归属不同项目照常派发（admin 天然跨项目），只记
+    WARNING + run_context.project_mixed；全部未归属 → None（无规则命中，
+    显式「待归属」，不臆造）。返回 (frozen, inferred, mixed_project_keys)。
+    """
+    if plan.project_id is not None:
+        return plan.project_id, False, []
+
+    rows = db.execute(
+        select(Device.project_id, func.count(Device.id))
+        .where(Device.id.in_(target_ids), Device.project_id.is_not(None))
+        .group_by(Device.project_id)
+        .order_by(func.count(Device.id).desc())
+    ).all()
+    if not rows:
+        return None, False, []
+    frozen = rows[0][0]
+    mixed_keys: list[str] = []
+    if len(rows) > 1:
+        keys = db.execute(
+            select(TestProject.project_key).where(
+                TestProject.id.in_([r[0] for r in rows])
+            )
+        ).scalars().all()
+        mixed_keys = sorted(keys)
+    return frozen, True, mixed_keys
+
+
 def _prepare_queued_plan_run(
     *,
     db: Session,
@@ -584,9 +618,22 @@ def _prepare_queued_plan_run(
         merged_run_ctx["dispatch_suite"] = frozen_suite
 
     now = datetime.now(timezone.utc)
+    # ADR-0029 P0：Plan 显式归属优先；NULL 时按目标设备众数推断。只写归属
+    # 快照、不参与派发决策（D5 挂起），推断/跨项目一律留痕 run_context。
+    frozen_project_id, project_inferred, project_mixed_keys = _infer_frozen_project_id(
+        db, plan, target_ids
+    )
+    if project_inferred:
+        merged_run_ctx["project_inferred"] = True
+    if project_mixed_keys:
+        merged_run_ctx["project_mixed"] = project_mixed_keys
+        logger.warning(
+            "plan_dispatch_project_mixed plan=%s mixed_projects=%s",
+            plan.id, ",".join(project_mixed_keys),
+        )
     pr = PlanRun(
         plan_id=plan.id,
-        project_id=plan.project_id,
+        project_id=frozen_project_id,
         build_version=frozen_build_version,
         status=PlanRunStatus.QUEUED.value,
         failure_threshold=effective_threshold,
