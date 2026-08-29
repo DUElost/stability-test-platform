@@ -224,3 +224,57 @@ class TestDeviceWithHostRelationship:
         assert response.status_code == 200
         data = response.json()
         assert data["host_id"] is None
+
+
+class TestProjectAttribution:
+    """ADR-0029 P0：未归属筛选 + 归属来源三态（rule / manual / unassigned）。"""
+
+    def _seed(self, db_session):
+        from backend.models.host import Host
+        from backend.models.project import TestProject
+
+        host = Host(id="h-attr", hostname="hattr", status="ONLINE")
+        db_session.add(host)
+        db_session.commit()
+        project = TestProject(
+            project_key="ATTR-P", display_name="attr", match_models=["MLD_LX2"],
+        )
+        db_session.add(project)
+        db_session.commit()
+        rule_dev = Device(serial="S-rule-1", host_id="h-attr", status="ONLINE",
+                          model="MLD_LX2", project_id=project.id)
+        manual_dev = Device(serial="S-manual-1", host_id="h-attr", status="ONLINE",
+                            model="Z2581", project_id=project.id)
+        unassigned_dev = Device(serial="S-none-1", host_id="h-attr", status="ONLINE",
+                                model="MLD_LX3")
+        db_session.add_all([rule_dev, manual_dev, unassigned_dev])
+        db_session.commit()
+        return rule_dev, manual_dev, unassigned_dev
+
+    def test_attribution_source_tristate(self, client, db_session, auth_headers):
+        """型号命中 match_models → rule；归属但型号不在规则 → manual；无项目 → unassigned。"""
+        rule_dev, manual_dev, unassigned_dev = self._seed(db_session)
+
+        response = client.get("/api/v1/devices", headers=auth_headers)
+        assert response.status_code == 200
+        by_serial = {d["serial"]: d for d in response.json()}
+        assert by_serial[rule_dev.serial]["attribution_source"] == "rule"
+        assert by_serial[manual_dev.serial]["attribution_source"] == "manual"
+        assert by_serial[unassigned_dev.serial]["attribution_source"] == "unassigned"
+        assert by_serial[unassigned_dev.serial]["project_key"] is None
+
+    def test_unassigned_filter_only_returns_unattached(self, client, db_session, auth_headers):
+        self._seed(db_session)
+
+        response = client.get("/api/v1/devices?unassigned=true", headers=auth_headers)
+        assert response.status_code == 200
+        serials = {d["serial"] for d in response.json()}
+        assert serials == {"S-none-1"}
+
+    def test_unassigned_mutually_exclusive_with_project_key(self, client, auth_headers):
+        response = client.get(
+            "/api/v1/devices?unassigned=true&project_key=ATTR-P",
+            headers=auth_headers,
+        )
+        assert response.status_code == 400
+        assert "mutually exclusive" in response.json()["detail"]
