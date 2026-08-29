@@ -516,7 +516,7 @@ A 轨 H2 升级为**目视确认级高危**。
 | B3 Toast 压住页头 | 沿袭 | toast 系统未变 |
 | B4 原生 select vs Radix 11:2 | 沿袭 | Hosts/Devices/Schedules/Notifications 等继续原生 select |
 | B5 结果页重复列 | 沿袭 | 本轮未截 results 页 |
-| B6 主机列 IP 重复 | **仍存在** | 03-hosts：每行只有 IP 172.21.15.x，副标题 Watch 已激活 |
+| B6 主机列 IP 重复 | **仍存在** | 03-hosts：每行只有 IP 172.21.x.x，副标题 Watch 已激活 |
 | B7 密度：1920×1080 只见 12 行 | **仍存在** | 03-hosts：行高 ~63px，1080p 可见 12 行 |
 | B8 空态四套 | 沿袭 | WiFi 空态用 InlineEmpty（窄带灰字），与 EmptyState 卡片居中不同 |
 | B9 KPI 高度不齐 | **仍存在** | 03-hosts：34 主机总数卡比其余三张多副文案，高度多约 10px |
