@@ -1,6 +1,6 @@
 # 文档地图（Documentation Map）
 
-> **最后更新**：2026-08-27  
+> **最后更新**：2026-08-29  
 > **文档中心**：[`README.md`](./README.md)  
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
@@ -71,15 +71,13 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **Living 审查** | [`reviews/AI_ASSISTANT_PLAN_2026-08-27.md`](./reviews/AI_ASSISTANT_PLAN_2026-08-27.md) | 平台 AI 助手实施计划（ADR-0031 配套：两阶段路线 / 四表模型 / 14 工具清单 / 13 端点 / 测试矩阵 / 部署步骤；v1.3 采纳可行性分析风险 #8=T1 统一 action+续轮） |
 | **Living 审查** | [`reviews/REVIEW_ADR0031_AI_ASSISTANT_2026-08-28.md`](./reviews/REVIEW_ADR0031_AI_ASSISTANT_2026-08-28.md) | ADR-0031 只读审核（H1=RunConsole 透传生产 DATABASE_URL 须 AGENT_TEST_ENV 显式覆盖等 6 项已采纳修订） |
 | **Living 审查** | [`reviews/FEASIBILITY_ANALYSIS_AI_ASSISTANT_2026-08-28.md`](./reviews/FEASIBILITY_ANALYSIS_AI_ASSISTANT_2026-08-28.md) | AI 助手可行性分析（需求×基座映射全「高」；风险 #8 SAQ timeout×T1 长任务已转化为设计约束） |
+| **Living 审查** | [`reviews/FRONTEND_UI_REVIEW_2026-08-19.md`](./reviews/FRONTEND_UI_REVIEW_2026-08-19.md) | 前端界面视觉与布局审查（A 轨源码取证 + B 轨目视取证 + 第三方复核轮） |
+| **Living 审查** | [`reviews/FRONTEND_UI_REVIEW_2026-08-27.md`](./reviews/FRONTEND_UI_REVIEW_2026-08-27.md) | 前端各界面全量审查（功能 / UX / a11y / 错误处理；复核轮第三方裁决） |
+| **Living 审查** | [`reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md`](./reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md) | 治理面常驻上下文瘦身评估（只读盘点；A 级已执行 PR #457、C 级已登记） |
+| **实现规格** | [`reviews/IMPLEMENTATION_SPEC_PROMPT.md`](./reviews/IMPLEMENTATION_SPEC_PROMPT.md) | 阶段 3 重构实现规格——Agent 工作提示词（产出 device-log-event implementation spec） |
 | **设计** | [`design/2026-08-27-platform-ai-assistant.md`](./design/2026-08-27-platform-ai-assistant.md) | 平台 AI 助手设计（组件职责/轮次时序/动作状态机/权限隔离矩阵/安全边界/部署观测；ADR-0031 配套） |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
-
----
-
----
-
----
 
 ---
 
