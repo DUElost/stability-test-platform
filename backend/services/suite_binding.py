@@ -261,26 +261,3 @@ def active_run_ids_bound_to_suite(db: Session, suite_id: int) -> list[int]:
         .distinct()
     ).scalars().all()
     return list(rows)
-
-
-def active_unbound_mtbf_run_ids(db: Session) -> list[int]:
-    """无绑定的 ACTIVE MTBF Run（宽匹配 script_name 前缀 ``mtbf_``）。
-
-    绑定落地（ADR-0030 v1.4）后宽匹配只剩一个存在理由：P0 文件真源模式下
-    plan.suite_id 为 NULL，Run 与目录的相关性 DB 无从知晓（host 级 env 决定
-    读哪份文件），唯一不撒谎的判断仍是「有 MTBF 长跑在飞」。绑定套件的
-    在途守卫走 :func:`active_run_ids_bound_to_suite` 精确匹配，跨套件并发
-    导出不再互相阻塞。
-    """
-    rows = db.execute(
-        select(PlanRun.id)
-        .join(Plan, Plan.id == PlanRun.plan_id)
-        .join(PlanStep, PlanStep.plan_id == PlanRun.plan_id)
-        .where(
-            PlanRun.status.in_(ACTIVE_RUN_STATUSES),
-            Plan.suite_id.is_(None),
-            PlanStep.script_name.like("mtbf\\_%"),
-        )
-        .distinct()
-    ).scalars().all()
-    return list(rows)

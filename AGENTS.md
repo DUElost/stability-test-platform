@@ -111,7 +111,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
   - 零产物记 `saq_scan_no_artifacts`（ERROR），部分产物记 `saq_scan_partial_artifacts`（WARNING）；两者都写 `run_context.archive`（`hosts_triggered` / `hosts_with_artifacts` / `scan_artifacts_registered`）。否则 Agent 侧扫描失败只有本地一条 WARNING，PlanRun 照报 SUCCESS 却没有任何报表。
 - **hot-update 的 env 同步分级**（`backend/services/agent_env_sync.py`）：控制面自己也读的键**不能**原样下发。控制面 scan 工具读 `STP_BACKEND_DEDUP_SCAN_*`（#295 后与 Agent 键名分离），Agent 的无前缀 `STP_DEDUP_SCAN_*` 经 `STP_AGENT_` 前缀源键映射下发；Agent 的 `STP_NFS_ROOT` 由 `STP_AEE_NFS_ROOT` 镜像（旧脚本 env），不下发控制面本机 `STP_NFS_ROOT`。`_FLEET_ENV_KEYS` 只放两边同值的键（含 `STP_DEVICE_LOG_EVENT_ENABLED`，#218；#287 后为设备日志单一开关，默认开）。推送后远端会校验 `AGENT_PATH_ENV_KEYS` 的值在 Agent 上确实存在，缺失项经 `env_paths_missing` 回传并记 ERROR。hot-update 远端脚本**先合并 `.env` 再 restart**；勿在 hot-update 未返回前抢 `reload_config`。
 - **reload_config**（路由 `backend/api/routes/dedup.py` 的 `POST /api/v1/plan-runs/hosts/{host_id}/reload-config`）：经 `emit_agent_control` 下发 SocketIO `reload_config` 命令，让 Agent 重读安装目录 `.env` 并热刷新运行时配置，无需重启进程。Agent 侧实际刷新的三样见 `backend/agent/CLAUDE.md`。
-- **风险评级**（`backend/services/report_service.py:aggregate_risk_summary_from_signals`）：从 `job_log_signal.extra->>'event_subtype'` 聚合（**观测层**；上送/extract 权威是 `device_log_event`，见 ADR-0028 §实体职责），按 `_RISK_RATING_RULES` 定级：
+- **风险评级**（`backend/services/log_observation.py:aggregate_risk_summary`）：DLE 权威计数 + 未链接 `job_log_signal` 补充；按 `_RISK_RATING_RULES` 定级（规则表在 `report_service.py`）：
 
 | 级别 | 触发条件 |
 |------|---------|

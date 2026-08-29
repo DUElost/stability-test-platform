@@ -1157,15 +1157,11 @@ class PipelineEngine:
 
         Sets WAITING_EXECUTION_SLOT while waiting for the permit, EXECUTING_STEP
         after grant, and releases the permit in finally. Step timeout is measured
-        from the moment the permit is granted (not from the wait start).
-        Falls back to the legacy path when no scheduler is available."""
+        from the moment the permit is granted (not from the wait start)."""
         scheduler = getattr(self, "_scheduler", None)
         if scheduler is None:
-            return self._run_step_with_retry(
-                phase,
-                step,
-                suppress_success_trace=suppress_success_trace,
-            )
+            self._last_step_error = "operation_scheduler_required"
+            return False
         device_id = self._device_id
         if device_id is None:
             return self._run_step_with_retry(

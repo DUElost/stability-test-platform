@@ -368,7 +368,7 @@ async def _claim_jobs_for_host(
     capacity: int = 10,
     agent_instance_id: str = "",
 ) -> tuple[List[JobInstance], Dict[int, str]]:
-    """Shared claim logic for claim_jobs (POST) and get_pending_jobs (GET).
+    """Shared claim logic for ``claim_jobs`` (POST).
 
     Phase 2d hardening:
     - Host row FOR UPDATE serializes concurrent claims for the same host
@@ -894,26 +894,6 @@ class _StepStatusIn(BaseModel):
     trace_event_id: Optional[str] = None
     fencing_token: str
 
-
-# ── Compat endpoints (mirroring old /runs/* interface under /jobs/*) ──────────
-
-
-@router.get("/jobs/pending", response_model=ApiResponse[List[JobOut]])
-async def get_pending_jobs(
-    host_id: str,
-    limit: int = 10,
-    response: Response = None,
-    db: AsyncSession = Depends(get_async_db),
-    _=Depends(_verify_agent),
-):
-    """Removed by the one-shot Agent protocol switch; use POST /jobs/claim."""
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "code": "LEGACY_CLAIM_ENDPOINT_REMOVED",
-            "message": "use POST /api/v1/agent/jobs/claim",
-        },
-    )
 
 
 @router.post("/jobs/{job_id}/heartbeat", response_model=ApiResponse[dict])

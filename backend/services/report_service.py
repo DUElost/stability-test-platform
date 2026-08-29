@@ -104,51 +104,10 @@ def _classify_subtype(subtype: str, count: int) -> str:
 def aggregate_risk_summary_from_signals(
     db: Session, job_ids: list[int]
 ) -> Optional[Dict[str, Any]]:
-    if not job_ids:
-        return None
+    """PlanRun risk rollup — delegates to log_observation (DLE + unlinked signals)."""
+    from backend.services.log_observation import aggregate_risk_summary
 
-    sql = text("""
-        SELECT
-            COALESCE(extra->>'event_subtype', category) AS subtype,
-            COUNT(DISTINCT extra->>'nfs_path') AS dedup_count,
-            COUNT(*) AS raw_count
-        FROM job_log_signal
-        WHERE job_id = ANY(:job_ids)
-          AND category IN ('AEE', 'VENDOR_AEE', 'ANR')
-        GROUP BY subtype
-    """)
-
-    rows = db.execute(sql, {"job_ids": list(job_ids)}).all()
-
-    if not rows:
-        return None
-
-    by_type: Dict[str, int] = {}
-    by_severity: Dict[str, int] = {"S": 0, "A": 0, "B": 0}
-    events_total = 0
-    aee_entries = 0
-    worst_level = _DEFAULT_RISK_LEVEL
-
-    for subtype, dedup_count, _raw_count in rows:
-        count = int(dedup_count)
-        by_type[subtype] = count
-        events_total += count
-        if subtype.upper() in ("AEE", "VENDOR_AEE"):
-            aee_entries += count
-        level = _classify_subtype(subtype, count)
-        by_severity[level] = by_severity.get(level, 0) + 1
-        if _RISK_SEVERITY_ORDER.get(level, 0) > _RISK_SEVERITY_ORDER.get(worst_level, 0):
-            worst_level = level
-
-    return {
-        "risk_level": worst_level,
-        "counts": {
-            "by_type": by_type,
-            "by_severity": by_severity,
-            "events_total": events_total,
-            "aee_entries": aee_entries,
-        },
-    }
+    return aggregate_risk_summary(db, job_ids)
 
 
 def _model_to_dict(payload: Any) -> Dict[str, Any]:

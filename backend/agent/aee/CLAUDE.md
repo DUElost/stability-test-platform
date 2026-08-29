@@ -1,7 +1,7 @@
 # AEE crash detection chain (初筛选)
 
 > 仅在改动 `backend/agent/aee/` 时加载。
-> **风险评级 S/A/B 的实现在控制面** `backend/services/report_service.py:aggregate_risk_summary_from_signals`，
+> **风险评级 S/A/B 的实现在控制面** `backend/services/log_observation.py:aggregate_risk_summary`（DLE 权威 + 未链接 signal），
 > 规则表见根 `AGENTS.md` §scan/upload/merge 跨进程契约 —— 本文只写 Agent 侧的采集与上报。
 
 两层互补，Reconciler 为主、inotifyd 为兜底：
