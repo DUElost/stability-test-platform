@@ -59,8 +59,14 @@ down_revision = "h2i3j4k5l6m7"
 branch_labels = None
 depends_on = None
 
-# (table, constraint_name, on_delete) — rebuild each FK on host.id with
-# ON UPDATE CASCADE, preserving the existing ON DELETE rule.
+# (table, canonical_constraint_name, on_delete) — rebuild each FK on host.id
+# with ON UPDATE CASCADE, preserving the existing ON DELETE rule.
+#
+# #510：约束的**现存名**在两条路径上不一致——存量库是 PG 默认名
+# （{table}_host_id_fkey），空库链路上 job_log_signal 的 FK 由建表迁移
+# 显式命名为 fk_job_log_signal_host_id。硬编码任一名字都会在另一条路径
+# 上 DROP 失败（空库 upgrade head 即 #510）。因此现存名一律经
+# _find_host_fk() 从 pg_constraint 动态发现；canonical 名仅用于重建。
 _FK_REBINDS = [
     ("device", "device_host_id_fkey", "CASCADE"),
     ("device_leases", "device_leases_host_id_fkey", "CASCADE"),
@@ -78,6 +84,27 @@ _SNAPSHOT_REFERENCES = [
 
 _WHERE_LEGACY = "id ~ '^172-21-(8|9)-'"
 
+# 查找 table 上「唯一指向 host.id 的单列 FK」的现存约束名（#510）。
+# 表名来自本文件 _FK_REBINDS 硬编码清单（非用户输入），做标识符卫生校验后
+# 内联——text():param::regclass 的绑定与 PG cast 组合存在解析歧义，故不走 bind。
+def _find_host_fk(conn, table: str) -> str | None:
+    import re
+
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", table):
+        raise RuntimeError(f"k8l9m0n1o2p3: invalid table identifier {table!r}")
+    row = conn.execute(
+        text(
+            "SELECT conname FROM pg_constraint c "
+            "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = 'host_id' "
+            "WHERE c.contype = 'f' "
+            f"AND c.conrelid = '{table}'::regclass "
+            "AND c.confrelid = 'host'::regclass "
+            "AND cardinality(c.conkey) = 1 "
+            "AND c.conkey[1] = a.attnum"
+        )
+    ).fetchone()
+    return row[0] if row else None
+
 
 def upgrade() -> None:
     conn = op.get_bind()
@@ -85,8 +112,15 @@ def upgrade() -> None:
     # 1) Rebuild the 6 FK constraints referencing host.id with ON UPDATE CASCADE.
     #    ON DELETE preserved from the current schema (dropping the constraint also
     #    drops the delete rule, so we re-declare it explicitly).
+    #    现存名动态发现（#510）：存量库/空库链路的命名分叉在此收敛。
     for table, cname, on_delete in _FK_REBINDS:
-        op.drop_constraint(cname, table, type_="foreignkey")
+        current = _find_host_fk(conn, table)
+        if current is None:
+            raise RuntimeError(
+                f"k8l9m0n1o2p3: no single-column FK on {table}.host_id -> host.id "
+                "found; schema drifted from both known naming paths"
+            )
+        op.drop_constraint(current, table, type_="foreignkey")
         op.create_foreign_key(
             cname,
             table,
