@@ -36,7 +36,8 @@ export const jobKeys = {
 
 export const deviceKeys = {
   /** ADR-0029：projectKey 维度——设备页项目筛选走后端（未知 key 404 语义）。 */
-  list: (projectKey?: string | null) => ['devices', { projectKey: projectKey ?? null }] as const,
+  list: (projectKey?: string | null, unassigned = false) =>
+    ['devices', { projectKey: projectKey ?? null, unassigned }] as const,
   /** 全量设备（fetchAllDevices 分页拉全）— PlanExecutePage 等需要完整设备视图的页面用。 */
   all: () => ['devices-all'] as const,
 } as const;

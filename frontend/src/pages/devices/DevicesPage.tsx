@@ -9,7 +9,7 @@ import { AddDeviceModal } from './components/AddDeviceModal';
 import { BatchEditDeviceTagsDialog, type DeviceTagOperation } from './components/BatchEditDeviceTagsDialog';
 import { DeviceMetricsModal } from './components/DeviceMetricsModal';
 import { AssignProjectDialog } from './components/AssignProjectDialog';
-import { ProjectFilterSelect } from '@/components/project/ProjectFilterSelect';
+import { ProjectFilterSelect, UNASSIGNED_FILTER_VALUE } from '@/components/project/ProjectFilterSelect';
 import { api, assignDevicesToProject, fetchHostList, toApiError } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
 import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
@@ -37,15 +37,18 @@ export default function DevicesPage() {
   const [isAssignDialogOpen, setIsAssignDialogOpen] = useState(false);
   // ADR-0029：页面级项目筛选（无全局选择器/跨页跟随，D8 挂起）。
   // 筛选走后端 ?project_key=——未知 key 后端 404，前端按错误态渲染。
+  // ADR-0029 P0：「未归属」哨兵值切 ?unassigned=true（与 project_key 互斥）。
   const [projectKey, setProjectKey] = useState<string | undefined>(undefined);
   const queryClient = useQueryClient();
   const toast = useToast();
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
+  const unassignedOnly = projectKey === UNASSIGNED_FILTER_VALUE;
+  const effectiveProjectKey = unassignedOnly ? undefined : projectKey;
 
   const { data: devices, isLoading, error } = useQuery({
-    queryKey: deviceKeys.list(projectKey),
-    queryFn: () => api.devices.list(0, 1200, undefined, undefined, projectKey).then(res => res.items),
+    queryKey: deviceKeys.list(projectKey, unassignedOnly),
+    queryFn: () => api.devices.list(0, 1200, undefined, undefined, effectiveProjectKey, unassignedOnly).then(res => res.items),
     refetchInterval: 10000,
   });
 
@@ -96,6 +99,7 @@ export default function DevicesPage() {
         last_seen: device.last_seen ?? undefined,
         tags: Array.isArray(device.tags) ? device.tags : [],
         project_key: device.project_key ?? null,
+        attribution_source: device.attribution_source ?? null,
       };
     });
   }, [devices, hostMap]);
@@ -278,7 +282,7 @@ export default function DevicesPage() {
   }
 
   if (error) {
-    const isProject404 = toApiError(error).status === 404;
+    const isProject404 = toApiError(error).status === 404 && !unassignedOnly;
     return (
       <PageContainer width="wide">
         <PageHeader title="物理设备" subtitle="管理和监控测试设备" />
@@ -286,9 +290,9 @@ export default function DevicesPage() {
           // 未知项目 key：路由/筛选参数错误语义，按错误态渲染不吞成空列表
           title={isProject404 ? '项目不存在' : '加载设备失败'}
           description={isProject404
-            ? `项目 "${projectKey}" 不存在，请清除筛选或核对 key`
+            ? `项目 "${effectiveProjectKey}" 不存在，请清除筛选或核对 key`
             : '请检查后端服务连接'}
-          onRetry={isProject404 ? undefined : () => queryClient.invalidateQueries({ queryKey: deviceKeys.list(projectKey) })}
+          onRetry={isProject404 ? undefined : () => queryClient.invalidateQueries({ queryKey: deviceKeys.list(projectKey, unassignedOnly) })}
           action={isProject404 ? (
             <Button variant="outline" onClick={() => setProjectKey(undefined)}>
               清除项目筛选
@@ -339,6 +343,7 @@ export default function DevicesPage() {
             onChange={setProjectKey}
             className="w-52"
             testId="device-project-filter"
+            showUnassigned
           />
           {isAdmin && (
             <Button onClick={() => setIsModalOpen(true)}>
