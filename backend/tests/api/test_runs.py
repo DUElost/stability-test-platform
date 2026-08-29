@@ -111,3 +111,85 @@ class TestRunReportFromJobChain:
         cached_data = cached_response.json()
         assert cached_data["data"]["run"]["id"] == job_id
         assert cached_data["data"]["summary_metrics"]["restarts"] == 2
+
+
+class TestRunJiraDraftProjectKey:
+    """ADR-0029 P0：草稿端点解析 plan_run.project_id 快照 → 项目 jira 键。
+
+    与提单（dedup）同口径：Plan 事后改归属不影响历史 Run 的 JIRA 目标。
+    """
+
+    def _seed_job(self, db_session, sample_device, *, project_jira_key=None, plan_run_project_id=None):
+        from backend.models.project import TestProject
+
+        now = datetime.now(timezone.utc)
+        project = None
+        if plan_run_project_id is not None:
+            project = TestProject(
+                project_key="DRAFT-P", display_name="draft proj",
+                jira_project_key=project_jira_key,
+            )
+            db_session.add(project)
+            db_session.flush()
+        plan = Plan(name="draft-workflow", failure_threshold=0.05)
+        db_session.add(plan)
+        db_session.flush()
+        plan_run = PlanRun(
+            plan_id=plan.id,
+            project_id=plan_run_project_id,
+            status="SUCCESS",
+            failure_threshold=0.05,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL",
+            triggered_by="pytest",
+        )
+        db_session.add(plan_run)
+        db_session.flush()
+        job = JobInstance(
+            plan_run_id=plan_run.id,
+            plan_id=plan.id,
+            device_id=sample_device.id,
+            host_id=sample_device.host_id,
+            status="COMPLETED",
+            pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},
+            started_at=now, ended_at=now, created_at=now, updated_at=now,
+        )
+        db_session.add(job)
+        db_session.flush()
+        snapshot = StepTrace(
+            job_id=job.id,
+            step_id="__job__",
+            stage="post_process",
+            status="COMPLETED",
+            event_type="RUN_COMPLETE",
+            output=json.dumps({"update": {"status": "FINISHED", "exit_code": 0}}),
+            original_ts=now,
+            created_at=now,
+        )
+        db_session.add(snapshot)
+        db_session.commit()
+        return job.id
+
+    def test_draft_uses_plan_run_project_key(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        job_id = self._seed_job(
+            db_session, sample_device,
+            plan_run_project_id=1, project_jira_key="V552AA-VFFB",
+        )
+        resp = client.post(f"/api/v1/runs/{job_id}/jira-draft", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        draft = resp.json()
+        assert draft["project_key"] == "V552AA-VFFB"
+        assert draft["extra"]["project_key_source"] == "plan_run_project"
+
+    def test_draft_without_project_marks_global_default(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        job_id = self._seed_job(db_session, sample_device)
+        resp = client.post(f"/api/v1/runs/{job_id}/jira-draft", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        draft = resp.json()
+        assert draft["project_key"] == "STABILITY"
+        assert draft["extra"]["project_key_source"] == "global_default"
+        assert draft["extra"]["project_key_global_default"] == "STABILITY"

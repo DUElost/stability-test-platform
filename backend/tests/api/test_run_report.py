@@ -170,6 +170,32 @@ class TestRunReportHelpers(unittest.TestCase):
         self.assertIn("risk-high", draft.labels)
         self.assertEqual(draft.custom_fields.get("cf_team"), "stability")
 
+    def test_build_jira_draft_project_key_override(self):
+        """ADR-0029 P0：plan_run 快照解析的键覆盖模板/全局默认，来源标注。"""
+        report = self._sample_report()
+        draft = _build_jira_draft(report, project_key_override="V552AA-VFFB")
+        self.assertEqual(draft.project_key, "V552AA-VFFB")
+        self.assertIn("V552AA-VFFB", draft.summary)
+        self.assertEqual(draft.extra["project_key_source"], "plan_run_project")
+        self.assertEqual(draft.extra["project_key_global_default"], "STABILITY")
+
+    def test_build_jira_draft_default_source_marked(self):
+        """ADR-0029 P0：无项目配置时回落全局默认，且明确标注「未配置」。"""
+        report = self._sample_report()
+        draft = _build_jira_draft(report)
+        self.assertEqual(draft.project_key, "STABILITY")
+        self.assertEqual(draft.extra["project_key_source"], "global_default")
+
+    def test_build_jira_draft_template_key_marks_template(self):
+        """模板显式配置的键标注 template（非全局默认）。"""
+        report = self._sample_report()
+        template = '{"default": {"project_key": "QA"}}'
+        module_name = _build_jira_draft.__module__
+        with patch(f"{module_name}.REPORT_JIRA_TEMPLATE_JSON", template):
+            draft = _build_jira_draft(report)
+        self.assertEqual(draft.project_key, "QA")
+        self.assertEqual(draft.extra["project_key_source"], "template")
+
 
 if __name__ == "__main__":
     unittest.main()

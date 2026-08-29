@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -153,6 +153,22 @@ def get_cached_run_report(
 # ── JIRA Draft ────────────────────────────────────────────────────────────────
 
 
+def _resolve_draft_project_key(db: Session, run_id: int) -> Optional[str]:
+    """ADR-0029 P0：草稿端点解析 plan_run.project_id 快照 → test_project 键。
+
+    run_id 是 JobInstance id（compose_run_report 同口径）；无 plan_run /
+    未归属 / 未配置 jira_project_key → None（回落模板/全局默认，由
+    build_jira_draft 标注来源）。
+    """
+    from backend.models.job import JobInstance
+    from backend.services.jira_project_key import resolve_jira_project_key
+
+    job = db.get(JobInstance, run_id)
+    if job is None or job.plan_run_id is None:
+        return None
+    return resolve_jira_project_key(db, job.plan_run_id)
+
+
 @router.post("/runs/{run_id}/jira-draft", response_model=JiraDraftOut)
 def create_run_jira_draft(
     run_id: int,
@@ -162,7 +178,9 @@ def create_run_jira_draft(
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return build_jira_draft(report)
+    return build_jira_draft(
+        report, project_key_override=_resolve_draft_project_key(db, run_id),
+    )
 
 
 @router.get("/runs/{run_id}/jira-draft/cached")
@@ -180,7 +198,9 @@ def get_cached_jira_draft(
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
-    draft = build_jira_draft(report)
+    draft = build_jira_draft(
+        report, project_key_override=_resolve_draft_project_key(db, run_id),
+    )
     return ok(_model_to_dict(draft))
 
 
