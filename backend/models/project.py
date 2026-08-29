@@ -22,7 +22,6 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.core.database import Base
 
@@ -52,10 +51,10 @@ class TestProject(Base):
     jira_project_key = Column(String(32), nullable=True)
 
     # facet：正交、可空、可枚举、可组合筛选；不建层级树（D2 两条理由）。
+    # platform 已删列（P1-B）——事实层在 device，项目侧由设备派生 platforms。
     # product_line 建表后可为 NULL 后补（§5 清单待补）。
     product_line     = Column(String(64), nullable=True)
     customer         = Column(String(64), nullable=True)
-    platform         = Column(String(64), nullable=True)
     form_factor      = Column(String(32), nullable=True)
 
     status           = Column(String(16), nullable=False, default="ACTIVE",
@@ -63,8 +62,6 @@ class TestProject(Base):
     # USER = 人工登记（工作台可见）；SEED = P1 脚本回填，不是客户/项目/机型。
     source           = Column(String(16), nullable=False, default="USER",
                               server_default="USER")
-    # 人工映射的 device.model 精确列表；空 = 尚未填写。
-    match_models     = Column(JSONB, nullable=False, default=list)
     created_at       = Column(DateTime(timezone=True), nullable=False,
                               default=lambda: datetime.now(timezone.utc))
     updated_at       = Column(
@@ -79,6 +76,10 @@ class TestProject(Base):
                         name="ck_test_project_status"),
         CheckConstraint("source IN ('USER', 'SEED')",
                         name="ck_test_project_source"),
+        CheckConstraint(
+            "form_factor IS NULL OR form_factor IN ('PHONE', 'TABLET', 'WATCH', 'OTHER')",
+            name="ck_test_project_form_factor",
+        ),
         UniqueConstraint("project_key", name="uq_test_project_key"),
         Index(
             "uq_test_project_key_lower",

@@ -3,9 +3,8 @@
 规则层：admin 显式声明的 model → project 映射，活跃规则内是函数（部分
 唯一索引 uq_rule_active 保证——同一型号不能同时归属两个项目）。由
 project_attribution.resolve_project_id 消费；心跳路径只应用规则、不写规则。
-
-P1 过渡：规则表与 test_project.match_models 并存（读侧 match_models 从
-规则表派生），P1-B 阶段 drop match_models 列。
+test_project.match_models 列已于 P1 收尾 drop，读侧由 _rule_values_for_project
+派生（API 契约不变）。
 """
 
 from __future__ import annotations

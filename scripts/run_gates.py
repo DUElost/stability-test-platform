@@ -86,6 +86,15 @@ GATES = {
         ROOT,
         None,
     ),
+    # public 仓库内网主机地址扫描（#538/#550/#557 收尾）：纯文本正则、秒级。
+    # 只拦四段齐全的具体主机地址，CIDR 网段常量与标准地址放行；
+    # ADR-0020 脚本目录 / 已锁定迁移 / 测试夹具走白名单。
+    # 正反样例自证：--self-test
+    "ip-leak": (
+        f"{PY} tools/dev/check-internal-ip-leak.py --check -q",
+        ROOT,
+        None,
+    ),
     # 治理面行为 evals（L1，按需诊断，不进 quick/pr——见
     # docs/design/2026-08-governance-surface-protection.md 的挂载裁决）。
     "gov-evals": (
@@ -147,7 +156,7 @@ PROFILES = {
     "check:quick": ["ruff", "eslint", "tsc", "knip", "compileall", "gov-surface"],
     "check:pr": [
         "ruff", "eslint", "tsc", "knip", "compileall",
-        "pollution", "immutability", "gov-surface", "agent-tests",
+        "pollution", "immutability", "gov-surface", "ip-leak", "agent-tests",
     ],
     # 治理面专项：结构门禁 + 行为 evals + skill 用量探针（evals 需 CLI，手跑）
     "check:gov": ["gov-surface", "gov-evals", "gov-skills"],

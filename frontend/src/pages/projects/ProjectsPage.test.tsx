@@ -62,7 +62,7 @@ function makeProject(overrides: Record<string, unknown> = {}) {
     jira_project_key: null,
     product_line: 'Sonic',
     customer: 'CustA',
-    platform: 'MTK',
+    platforms: ['MTK'],
     form_factor: 'PHONE',
     status: 'ACTIVE',
     source: 'USER',
@@ -117,7 +117,7 @@ describe('ProjectsPage', () => {
         project_key: 'ODM-TABLET',
         display_name: 'ODM 平板',
         customer: 'CustB',
-        platform: 'QCOM',
+        platforms: ['QCOM'],
         match_models: [],
         device_count: 0,
         running_run_count: 0,
@@ -208,7 +208,7 @@ describe('ProjectsPage', () => {
 
     await screen.findByText('荣耀相机');
     await user.click(screen.getByTestId('facet-customer-CustA'));
-    await user.click(screen.getByTestId('facet-platform-QCOM'));
+    await user.click(screen.getByTestId('facet-platforms-QCOM'));
 
     expect(await screen.findByText('没有匹配的项目')).toBeInTheDocument();
   });
@@ -269,7 +269,6 @@ describe('ProjectsPage', () => {
         project_key: 'HONOR-CAMERA',
         display_name: '荣耀相机',
         customer: null,
-        platform: null,
         form_factor: null,
         product_line: null,
         jira_project_key: null,

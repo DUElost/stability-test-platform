@@ -40,7 +40,7 @@ import { coverageSummary } from './inventoryDisplay';
 
 const FACET_FIELDS = [
   ['customer', '客户'],
-  ['platform', '平台'],
+  ['platforms', '平台'],
   ['form_factor', '形态'],
   ['product_line', '产品线'],
 ] as const;
@@ -155,6 +155,14 @@ export default function ProjectDetailPage() {
             </Badge>
             {FACET_FIELDS.map(([field, label]) => {
               const value = project[field];
+              if (Array.isArray(value)) {
+                if (value.length === 0) return null;
+                return (
+                  <Badge key={field} variant="outline">
+                    {label}: {value.join('、')}
+                  </Badge>
+                );
+              }
               if (!value) return null;
               return (
                 <Badge key={field} variant="outline">
