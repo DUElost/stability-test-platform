@@ -13,7 +13,6 @@ REQUIRED=(
   pr-compileall
   pr-agent-tests
   pr-migrate-empty-db
-  pr-agent-gate
 )
 
 pr_json="$(

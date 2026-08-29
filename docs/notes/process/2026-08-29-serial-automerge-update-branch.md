@@ -13,7 +13,7 @@ CI 重跑。采纳两项低成本缓解（否决 Merge Queue，见
    最老 eligible open PR 保留 `--auto --merge`，其余 `--disable-auto`。
 2. **全绿且落后时自动 update branch**：新 workflow `pr-update-branch.yml` 在
    CI / CodeQL / PR Agent 任一 `workflow_run` 成功结束后，若 PR 已挂
-   auto-merge、7 项 required checks 均为 SUCCESS、且 `behind_by > 0`，则
+   auto-merge、6 项 required checks 均为 SUCCESS、且 `behind_by > 0`，则
    `gh pr update-branch` 一次（`workflow_run.head_sha` 须与 PR head 一致，
    避免过期 run 误触发）。
 
@@ -29,9 +29,8 @@ CI 重跑。采纳两项低成本缓解（否决 Merge Queue，见
 - 开两个同仓库 PR：仅较早创建的挂 auto-merge；合并队首后队尾自动启用。
 - 队首全绿且 `BEHIND`：观察 `PR update branch if behind` workflow 调用
   update-branch 并触发一轮新 CI。
-- `pr-agent-gate` failure 仍由 #421 步骤 `--disable-auto`；reconcile 不会
-  给非队首重新挂上。
 - `enable-auto-merge` 脚本 checkout 不得 pin `ref: main`（首合入 bootstrap）。
+- required 列表与分支保护同步（2026-08-29 起 6 项，不含 pr-agent-gate 顾问）。
 
 ## Revisit
 
