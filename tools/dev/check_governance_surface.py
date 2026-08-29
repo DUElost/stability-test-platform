@@ -170,6 +170,8 @@ GATE_TO_CI_ANCHOR = {
     "pollution": ("ci.yml", "空行注入污染检查"),
     "immutability": ("ci.yml", "脚本版本不可变检查"),
     "gov-surface": ("ci.yml", "治理面结构检查"),
+    # public 仓库内网主机地址扫描（#538 收尾）——锚点即 ci.yml 中该 step 的 name
+    "ip-leak": ("ci.yml", "内网主机地址检查"),
     "agent-tests": ("ci.yml", "Run agent tests"),
     # check:full 级——CI 对应物在 backend-test / frontend-check / docker-build job
     "backend-tests": ("ci.yml", "Run backend tests"),
