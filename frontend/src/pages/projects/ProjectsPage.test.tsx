@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   createProject: vi.fn(),
   mapPreview: vi.fn(),
   mapApply: vi.fn(),
+  listSeed: vi.fn(),
+  promoteSeed: vi.fn(),
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
   authRole: 'admin' as string,
 }));
@@ -44,6 +46,8 @@ vi.mock('@/utils/api', () => ({
       create: mocks.createProject,
       mapPreview: mocks.mapPreview,
       mapApply: mocks.mapApply,
+      listSeed: mocks.listSeed,
+      promoteSeed: mocks.promoteSeed,
     },
   },
   toApiError: (error: unknown) => ({
@@ -87,6 +91,7 @@ const emptySummary = {
   user_mapped_devices: 0,
   distinct_models: 0,
   unmapped_models: [],
+  unassigned_devices: 0,
 };
 
 function renderPage() {
@@ -120,6 +125,7 @@ describe('ProjectsPage', () => {
     ]);
     mocks.inventoryModels.mockResolvedValue([]);
     mocks.inventorySummary.mockResolvedValue(emptySummary);
+    mocks.listSeed.mockResolvedValue([]);
   });
 
   it('renders project cards with facet badges and counts', async () => {
@@ -359,5 +365,73 @@ describe('ProjectsPage', () => {
     expect(await screen.findByText('荣耀相机')).toBeInTheDocument();
     expect(screen.queryByTestId('create-project-open')).not.toBeInTheDocument();
     expect(screen.queryByTestId('map-models-open')).not.toBeInTheDocument();
+  });
+
+  it('renders seed queue and promotes on confirm', async () => {
+    const user = userEvent.setup();
+    mocks.listSeed.mockResolvedValue([
+      {
+        project_key: 'HONOR-ELA',
+        display_name: '荣耀 ELA',
+        status: 'ACTIVE',
+        source: 'SEED',
+        match_models: [],
+        device_count: 20,
+        running_run_count: 0,
+      },
+      {
+        project_key: 'LEGACY',
+        display_name: 'Legacy',
+        status: 'ACTIVE',
+        source: 'SEED',
+        match_models: [],
+        device_count: 6,
+        running_run_count: 0,
+      },
+    ]);
+    mocks.promoteSeed.mockResolvedValue({
+      project_key: 'HONOR-ELA',
+      display_name: '荣耀 ELA',
+      source: 'USER',
+      match_models: ['MLD_LX2'],
+      device_count: 20,
+      running_run_count: 0,
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderPage();
+    expect(await screen.findByTestId('seed-queue')).toBeInTheDocument();
+    expect(screen.getByText('荣耀 ELA')).toBeInTheDocument();
+    expect(screen.getByText('20 台设备')).toBeInTheDocument();
+    // LEGACY 是兜底标签，不提供转正按钮
+    expect(screen.queryByTestId('seed-promote-LEGACY')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('seed-promote-HONOR-ELA'));
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(mocks.promoteSeed).toHaveBeenCalledWith('HONOR-ELA');
+    await waitFor(() => expect(mocks.toast.success).toHaveBeenCalled());
+    confirmSpy.mockRestore();
+  });
+
+  it('skips promote when confirm is dismissed', async () => {
+    const user = userEvent.setup();
+    mocks.listSeed.mockResolvedValue([
+      {
+        project_key: 'HONOR-ELA',
+        display_name: '荣耀 ELA',
+        status: 'ACTIVE',
+        source: 'SEED',
+        match_models: [],
+        device_count: 20,
+        running_run_count: 0,
+      },
+    ]);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    renderPage();
+    await screen.findByTestId('seed-queue');
+    await user.click(screen.getByTestId('seed-promote-HONOR-ELA'));
+    expect(mocks.promoteSeed).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });

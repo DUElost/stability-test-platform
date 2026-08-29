@@ -126,7 +126,6 @@ def _aggregate_inventory(
         if (
             source == _USER_SOURCE
             and project_key
-            and project_key not in SEED_PROJECT_KEYS
         ):
             bucket["mapped_project_keys"].add(project_key)
         else:
@@ -153,8 +152,6 @@ def _aggregate_inventory(
 def _rule_models_by_model(db: Session) -> dict[str | None, set[str]]:
     mapping: dict[str | None, set[str]] = {}
     for project in db.query(TestProject).filter(TestProject.source == _USER_SOURCE).all():
-        if project.project_key in SEED_PROJECT_KEYS:
-            continue
         for raw in project.match_models or []:
             model = _blank_to_none(raw)
             mapping.setdefault(model, set()).add(project.project_key)
@@ -271,7 +268,8 @@ def list_projects(
     query = db.query(TestProject).order_by(TestProject.id)
     if source == "user":
         query = query.filter(TestProject.source == _USER_SOURCE)
-        query = query.filter(~TestProject.project_key.in_(SEED_PROJECT_KEYS))
+        # 注意：不按 SEED_PROJECT_KEYS 剔除 key——promote 转正的行 key 不变、
+        # 但 source=USER，必须显示；未转正的 SEED 行已被 source 过滤挡住
     elif source == "seed":
         query = query.filter(TestProject.source == _SEED_SOURCE)
     projects = query.all()
@@ -358,6 +356,81 @@ def get_inventory_summary(
     _current_user: User = Depends(get_current_active_user),
 ):
     return ok(_inventory_summary(_load_inventory(db)))
+
+
+@router.post(
+    "/seed/{project_key}/promote",
+    response_model=ApiResponse[ProjectSummaryOut],
+)
+def promote_seed_project(
+    project_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0029 P0：SEED 回填标签转正为人工项目（admin 动作，就地转换）。
+
+    把 P1 脚本灌入的标签（HONOR-ELA 等）变成有终点的待办队列：SEED 行
+    source SEED → USER、match_models 预填其持有设备的型号、设备归属不动
+    （project_id 不变，行身份即归属身份）。解决「设备行显示归属它、筛选
+    下拉里却没有它」的半隐身状态。
+
+    project_key 全局唯一（uq_test_project_key 不分 source），不能新建同 key
+    USER 行——就地转换是唯一不违反约束的路径。
+
+    LEGACY 是「无型号设备」兜底标签，不是待转正对象——拒绝。
+    幂等：source=SEED 且 ACTIVE 才能转正，重复调用 → 404（已非 SEED）。
+    """
+    seed = (
+        db.query(TestProject)
+        .filter(TestProject.project_key == project_key)
+        .first()
+    )
+    if seed is None or seed.source != _SEED_SOURCE:
+        raise HTTPException(status_code=404, detail="seed project not found")
+    if project_key == "LEGACY":
+        raise HTTPException(status_code=422, detail="LEGACY is the fallback bucket, not promotable")
+    if seed.status == "ARCHIVED":
+        raise HTTPException(status_code=409, detail="seed project archived, not promotable")
+
+    models = sorted(
+        {
+            _blank_to_none(m)
+            for (m,) in (
+                db.query(Device.model)
+                .filter(Device.project_id == seed.id, Device.model.is_not(None))
+                .all()
+            )
+            if _blank_to_none(m)
+        }
+    )
+    seed.source = _USER_SOURCE
+    seed.match_models = models
+    flag_modified(seed, "match_models")
+    record_audit(
+        db,
+        action="promote_seed_project",
+        resource_type="test_project",
+        resource_id=seed.id,
+        details={
+            "project_key": project_key,
+            "match_models": models,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
+    from backend.realtime.socketio_server import emit_project_changed
+
+    emit_project_changed(seed.id, "promoted")
+
+    device_count, running_run_count = _summary_rows(db).get(seed.id, (0, 0))
+    out = ProjectSummaryOut.model_validate(seed)
+    out.match_models = list(models)
+    out.device_count = device_count
+    out.running_run_count = running_run_count
+    return ok(out)
 
 
 @router.put("/{project_key}", response_model=ApiResponse[ProjectSummaryOut])

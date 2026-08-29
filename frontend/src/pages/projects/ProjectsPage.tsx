@@ -79,6 +79,33 @@ export default function ProjectsPage() {
     queryFn: () => api.projects.inventorySummary(),
   });
 
+  // ADR-0029 P0：SEED 待转正队列（P1 脚本灌入的归属标签）
+  const seedQ = useQuery({
+    queryKey: projectKeys.seed(),
+    queryFn: () => api.projects.listSeed(),
+  });
+
+  const promoteMutation = useMutation({
+    mutationFn: (projectKey: string) => api.projects.promoteSeed(projectKey),
+    onSuccess: (promoted) => {
+      void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.seed() });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.inventoryModels() });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.inventorySummary() });
+      toast.success(`已转正 ${promoted.project_key}`);
+    },
+    onError: (err: unknown) => {
+      toast.error(`转正失败: ${toApiError(err).message}`);
+    },
+  });
+
+  const handlePromote = (seed: ProjectSummary) => {
+    if (!window.confirm(`将「${seed.display_name}」转为人工项目？其 ${seed.device_count} 台设备归属不变。`)) {
+      return;
+    }
+    promoteMutation.mutate(seed.project_key);
+  };
+
   const invalidateProjects = () => {
     void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
     void queryClient.invalidateQueries({ queryKey: projectKeys.inventoryModels() });
@@ -425,6 +452,61 @@ export default function ProjectsPage() {
           </CardContent>
         ) : null}
       </Card>
+
+      {/* ── 次区块：SEED 待转正队列 ────────────────────────── */}
+      {(seedQ.data ?? []).length > 0 && (
+        <Card data-testid="seed-queue">
+          <CardHeader className="pb-3">
+            <div>
+              <h2 className={cn('text-sm font-medium', TEXT.heading)}>待转正（SEED 回填）</h2>
+              <p className={cn('mt-0.5 text-xs', TEXT.subtitle)}>
+                P1 脚本灌入的归属标签；转正为人工项目后出现在上方列表与筛选下拉，
+                持有设备按型号预填归属规则
+              </p>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {seedQ.data?.map((seed) => (
+                <div
+                  key={seed.project_key}
+                  className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium">{seed.display_name}</span>
+                      <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                        {seed.project_key}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {seed.device_count} 台设备
+                      {(seed.match_models ?? []).length > 0
+                        ? ` · ${(seed.match_models ?? []).length} 个型号`
+                        : ''}
+                    </p>
+                  </div>
+                  {seed.project_key === 'LEGACY' ? (
+                    <span className="shrink-0 text-xs text-muted-foreground" title="无型号设备兜底">
+                      兜底标签
+                    </span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      data-testid={`seed-promote-${seed.project_key}`}
+                      disabled={promoteMutation.isPending}
+                      onClick={() => handlePromote(seed)}
+                    >
+                      转为项目
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <CreateProjectDialog
         isOpen={createOpen}

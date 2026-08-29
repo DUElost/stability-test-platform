@@ -18,6 +18,20 @@ export const projects = {
     unwrapApiResponse(
       apiClient.get<ApiResponseEnvelope<ProjectSummary[]>>('/projects'),
     ),
+  /** ADR-0029 P0：SEED 回填标签（待转正队列） */
+  listSeed: () =>
+    unwrapApiResponse(
+      apiClient.get<ApiResponseEnvelope<ProjectSummary[]>>('/projects', {
+        params: { source: 'seed' },
+      }),
+    ),
+  /** ADR-0029 P0：SEED 标签就地转正为人工项目（admin）。 */
+  promoteSeed: (projectKey: string) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<ProjectSummary>>(
+        `/projects/seed/${projectKey}/promote`,
+      ),
+    ),
   get: (projectKey: string) =>
     unwrapApiResponse(
       apiClient.get<ApiResponseEnvelope<ProjectDetail>>(`/projects/${projectKey}`),
