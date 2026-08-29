@@ -706,7 +706,7 @@ describe('PlanRunDetailPage', () => {
     expect(screen.getByTestId('chain-node-11')).toHaveTextContent('暂不触发');
   });
 
-  it('shows stuck-jobs banner when RUNNING job patrol heartbeat is stale', async () => {
+  it('shows stuck-jobs banner when backend marks RUNNING job as stuck', async () => {
     mocks.getDevices.mockResolvedValueOnce({
       plan_run_id: 12,
       total: 1,
@@ -730,6 +730,9 @@ describe('PlanRunDetailPage', () => {
           next_retry_at: null,
           manual_action: null,
           log_signal_count: 0,
+          // #514: frontend no longer infers staleness from last_heartbeat_at alone.
+          is_stuck: true,
+          heartbeat_deadline_at: new Date(Date.now() - 60_000).toISOString(),
           last_heartbeat_at: new Date(Date.now() - 300_000).toISOString(),
           started_at: new Date(Date.now() - 600_000).toISOString(),
           ended_at: null,

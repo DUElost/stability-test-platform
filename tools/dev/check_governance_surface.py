@@ -147,7 +147,7 @@ def check_required_checks_doc(workflows: dict[str, str], agents_md: str) -> list
     CodeQL 由 GitHub 默认设置提供（仓库无对应 workflow 文件），只查文档侧。
     """
     issues: list[str] = []
-    for wf, job_ids in (("ci.yml", ["lint", "pr-typecheck", "pr-compileall", "pr-agent-tests"]),
+    for wf, job_ids in (("ci.yml", ["lint", "pr-typecheck", "pr-compileall", "pr-agent-tests", "pr-migrate-empty-db"]),
                         ("pr-agent.yml", ["pr-agent-gate"])):
         text = workflows.get(wf, "")
         for jid in job_ids:
@@ -352,11 +352,11 @@ def run_self_test() -> int:
     expect("S4 锚点齐全", lambda: check_pr_agent_anchors(full_pr_agent), False)
     expect("S4 disable-auto 步骤丢失", lambda: check_pr_agent_anchors(broken), True)
 
-    ok_ci = "jobs:\n  lint:\n  pr-typecheck:\n  pr-compileall:\n  pr-agent-tests:\n"
+    ok_ci = "jobs:\n  lint:\n  pr-typecheck:\n  pr-compileall:\n  pr-agent-tests:\n  pr-migrate-empty-db:\n"
     drop_ci = ok_ci.replace("  pr-typecheck:\n", "")
     wfs_ok = {"ci.yml": ok_ci, "pr-agent.yml": "jobs:\n  pr-agent-gate:\n"}
     wfs_bad = {"ci.yml": drop_ci, "pr-agent.yml": "jobs:\n  pr-agent-gate:\n"}
-    doc_full = "required checks：lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests / pr-agent-gate"
+    doc_full = "required checks：lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests / pr-migrate-empty-db / pr-agent-gate"
     doc_drift = doc_full.replace("pr-typecheck", "pr-typografie")
     expect("S5 一致", lambda: check_required_checks_doc(wfs_ok, doc_full), False)
     expect("S5 CI 删 job", lambda: check_required_checks_doc(wfs_bad, doc_full), True)
