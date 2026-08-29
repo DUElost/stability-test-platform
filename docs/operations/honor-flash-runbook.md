@@ -5,8 +5,8 @@
 
 ## 0. 前置条件
 
-- `flash_firmware v1.2.0` 已注册（`GET /api/v1/scripts?name=flash_firmware` 能看到 1.2.0 且 is_active）。
-- 20 台 Agent host 已 hot-update 到含 v1.2.0 的 code revision。
+- `flash_firmware v1.3.6` 已注册（`GET /api/v1/scripts?name=flash_firmware` 能看到目标版本且 is_active）。
+- 20 台 Agent host 已 hot-update / restart 到含 v1.3.x 的 code revision。
 - 目标固件刷机包已从研发渠道拿到（解压后含 scatter 与 DA 文件）。
 
 ## 1. 固件上架（中心存储）
@@ -29,8 +29,16 @@ cat > "$ROOT/MLD/$VER/manifest.json" <<'EOF'
 }
 EOF
 
-# 版本指针：之后的刷机默认用这个版本（改这一个文件即切版本）
-echo '{"version": "8.0.1.100"}' > "$ROOT/MLD/latest.json"
+# 版本指针：v1.3.6+ 支持 per-model 映射（同族 LX2/LX3 并行）
+cat > "$ROOT/MLD/latest.json" <<'EOF'
+{
+  "versions": {
+    "MLD_LX2": "8.0.1.100",
+    "MLD_LX3": "8.0.1.101"
+  }
+}
+EOF
+# 旧单键 {"version": "..."} 仍兼容；仅一种机型时可继续用单键
 ```
 
 注意：

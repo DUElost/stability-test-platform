@@ -328,6 +328,26 @@ curl -v --max-time 5 http://<控制平面IP>/api/v1/hosts
 `PENDING -> RUNNING -> COMPLETED|FAILED|ABORTED`；心跳丢失 / patrol stall 时符合 `RUNNING -> UNKNOWN -> RUNNING|FAILED`
 5. 任务终态后设备锁释放（设备可再次调度）。
 
+### 5.1 版本升级后附加核查（2026-08-29 起）
+
+含 #404 套件绑定、#514 双轨收口、#527 日志观测层、ADR-0031 AI 助手、
+`k8l9` host.id 对齐等变更时，在 §5 主链路 smoke 之前或之后执行：
+
+```bash
+# 只读：alembic 版本 + 未绑定 mtbf Plan（有则派发即 SUITE_BINDING_REQUIRED）
+HEAD=$(cd backend && ../venv/bin/python -m alembic heads | awk '{print $1}')
+./venv/bin/python tools/dev/check-deploy-readiness.py --expect-revision "$HEAD"
+```
+
+详细逐步命令：[`operations/2026-08-29-post-review-deploy-runbook.md`](./operations/2026-08-29-post-review-deploy-runbook.md)
+
+- [ ] `alembic upgrade head` 已执行且 revision 与仓库 head 一致
+- [ ] `check-deploy-readiness.py` 退出码 0（无未绑定 mtbf Plan）
+- [ ] backend 已重启；`POST /api/v1/scripts/scan` 已跑（flash/oobe/mtbf 新版本注册）
+- [ ] 全部 Agent 已重启（#514 OperationScheduler fail-fast、claim cap 5、step-trace drain）
+- [ ] 抽样核对 Agent `HOST_ID` 与 `GET /api/v1/hosts` 返回的 `id` 一致（k8l9 迁移后）
+- [ ] （可选）fleet `.env` 清理残留 `STP_MTBF_EXPECTED_TESTPOINT_COUNT`（PR-D 已退役 hot-update 下发）
+
 ## 6. 迁移切换步骤（WSL -> 主 Linux Host）
 
 1. 停止 WSL 内旧服务（以下命令在 WSL 内执行，勿在主 Linux Host 执行）：
