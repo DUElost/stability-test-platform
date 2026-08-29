@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
@@ -48,7 +48,6 @@ from backend.services.mtbf_suite import (
 )
 from backend.services.suite_binding import (
     active_run_ids_bound_to_suite,
-    active_unbound_mtbf_run_ids,
     current_content_fingerprint as _current_fingerprint,
     resolve_export_dir as _resolve_export_dir,
     suite_case_rows as _case_rows,
@@ -69,11 +68,8 @@ _GLOBAL_NAME = "UiAutomatorTestData.xml"
 
 
 
-# #402 在途守卫（ADR-0030 v1.4 精确化）：ACTIVE = QUEUED / PRECHECK / RUNNING。
-# 匹配键升级为 plan.suite_id——绑定套件的在途 Run 走
-# ``active_run_ids_bound_to_suite`` 精确匹配（硬阻断，force 不豁免）；无绑定的
-# P0 存量 Run 保留宽匹配兜底（``active_unbound_mtbf_run_ids``，force 可越过）。
-# 过渡语义与存在理由见 suite_binding.active_unbound_mtbf_run_ids docstring。
+# #402 在途守卫（ADR-0030 v1.4）：ACTIVE = QUEUED / PRECHECK / RUNNING。
+# 仅 ``active_run_ids_bound_to_suite`` 精确匹配（绑定同一套件硬阻断）。
 
 
 def _suite_out(db: Session, suite: TestSuite, detail: bool = False):
@@ -504,20 +500,13 @@ def validate_suite(
 def export_to_tool_dir(
     suite_id: int,
     request: Request,
-    force: bool = Query(
-        False,
-        description="越过无绑定 MTBF 长跑守卫（仅 P0 存量场景；审计留痕）。"
-                    "绑定同一套件的在途 Run 一律硬阻断，force 不豁免",
-    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
     """渲染两文件 atomic write 到中心存储消费路径，并记下两个漂移比对基线。"""
     suite = _get_suite(db, suite_id)
 
-    # #402 在途守卫（精确化）：MTBF 长跑以天计，覆盖 runtask.xml 等于在跑中途换清单。
-    # 两层：绑定本套件的 ACTIVE Run 硬阻断（托管模式有门禁兜底，中途换清单
-    # 没有任何正当理由）；无绑定的 P0 存量 Run 保留 force 逃生阀。
+    # #402 在途守卫：绑定本套件的 ACTIVE Run 硬阻断（托管模式中途换清单无正当理由）。
     bound_runs = active_run_ids_bound_to_suite(db, suite.id)
     if bound_runs:
         raise HTTPException(
@@ -527,24 +516,10 @@ def export_to_tool_dir(
                 "message": (
                     "Runs bound to this suite are in flight; exporting would "
                     "swap the case list mid-run. Wait for them to finish or "
-                    "abort them first (force is not honored for bound suites)."
+                    "abort them first."
                 ),
                 "plan_run_ids": sorted(bound_runs)[:50],
                 "active_run_count": len(bound_runs),
-            },
-        )
-    unbound_runs = active_unbound_mtbf_run_ids(db)
-    if unbound_runs and not force:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "ACTIVE_MTBF_RUNS",
-                "message": (
-                    "Unbound MTBF runs are in flight; exporting would swap the "
-                    "case list mid-run. Wait for them to finish or pass force=true."
-                ),
-                "plan_run_ids": sorted(unbound_runs)[:50],
-                "active_run_count": len(unbound_runs),
             },
         )
 
@@ -597,8 +572,6 @@ def export_to_tool_dir(
             "exported_sha256": suite.exported_sha256,
             "archive_path": str(archive_dir / _RUNTASK_NAME),
             "testpoints": len(built.testpoints),
-            **({"active_guard_forced": True,
-                "active_run_count": len(unbound_runs)} if unbound_runs else {}),
         },
         user_id=current_user.id, username=current_user.username, request=request,
     )

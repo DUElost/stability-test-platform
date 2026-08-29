@@ -38,6 +38,8 @@ from backend.api.schemas.plan_run import (
     PlanRunAbortIn,
     PlanRunDevicesOut,
     PlanRunEventsOut,
+    PlanRunLogEventOut,
+    PlanRunLogEventsOut,
     PlanRunDetailOut,
     PlanRunTimelineOut,
     StageOut,
@@ -47,6 +49,7 @@ from backend.api.schemas.plan_run import (
     WatcherAgentOpsMetrics,
     WatcherArchiveOut,
     WatcherCategoryOut,
+    WatcherSignalLinkStatsOut,
     WatcherSummaryOut,
 )
 from backend.core.artifact_paths import (
@@ -94,6 +97,11 @@ from backend.services.plan_run_export import (
     build_plan_run_export,
     plan_run_export_to_markdown,
 )
+from backend.services.device_log_event import (
+    link_signals_to_device_log_events_sync,
+    list_plan_run_device_log_events,
+)
+from backend.services.log_observation import aggregate_signal_link_stats
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plan-runs"])
@@ -2000,8 +2008,15 @@ def get_plan_run_watcher_summary(
             current_run=_empty_dashboard_section(),
             preexisting=_empty_dashboard_section(),
             watcher_capability=None,
-            archive=WatcherArchiveOut(),
+            archive=WatcherArchiveOut(
+                link_stats=WatcherSignalLinkStatsOut(),
+            ),
         ))
+
+    link_signals_to_device_log_events_sync(db, job_ids)
+    link_stats = WatcherSignalLinkStatsOut(
+        **aggregate_signal_link_stats(db, job_ids),
+    )
 
     # 当前窗口聚合(按 category 分组)
     cur_rows = db.execute(
@@ -2104,7 +2119,64 @@ def get_plan_run_watcher_summary(
         preexisting=preexisting,
         aee_breakdown=aee_breakdown,
         watcher_capability=watcher_capability,
-        archive=_aggregate_run_log_archive(db, job_rows=job_rows, total_jobs=len(job_ids), plan_run_id=run_id),
+        archive=_aggregate_run_log_archive(
+            db,
+            job_rows=job_rows,
+            total_jobs=len(job_ids),
+            plan_run_id=run_id,
+            link_stats=link_stats,
+        ),
+    ))
+
+
+@router.get(
+    "/plan-runs/{run_id}/log-events",
+    response_model=ApiResponse[PlanRunLogEventsOut],
+)
+def get_plan_run_log_events(
+    run_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    state: Optional[str] = Query(None, description="Filter by DLE state"),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0028 / #529: PlanRun device log events — archive authority.
+
+    Paths and upload state come from ``device_log_event`` (not watcher-summary
+  signals). RUNNING PlanRuns may return a partial list; terminal runs are the
+    primary consumer.
+    """
+    _require_plan_run(db, run_id)
+    rows, total = list_plan_run_device_log_events(
+        db,
+        run_id,
+        skip=skip,
+        limit=limit,
+        state=state,
+    )
+    items = [
+        PlanRunLogEventOut(
+            id=str(row.id),
+            serial=row.serial,
+            platform=row.platform,
+            event_type=row.event_type,
+            event_subtype=row.event_subtype,
+            state=row.state,
+            local_path=row.local_path,
+            remote_path=row.remote_path,
+            detected_at=_iso(row.detected_at) or "",
+            device_timestamp=_iso(row.device_timestamp),
+            job_id=row.job_id,
+            host_id=row.host_id,
+            signal_seq_no=row.signal_seq_no,
+        )
+        for row in rows
+    ]
+    return ok(PlanRunLogEventsOut(
+        plan_run_id=run_id,
+        total=total,
+        items=items,
     ))
 
 
@@ -2123,7 +2195,12 @@ _CAPABILITY_SEVERITY: dict[str, int] = {
 
 
 def _aggregate_run_log_archive(
-    db: Session, *, job_rows: list, total_jobs: int, plan_run_id: int,
+    db: Session,
+    *,
+    job_rows: list,
+    total_jobs: int,
+    plan_run_id: int,
+    link_stats: Optional[WatcherSignalLinkStatsOut] = None,
 ) -> WatcherArchiveOut:
     host_ids = {r.host_id for r in job_rows if r.host_id}
     if not host_ids:
@@ -2226,6 +2303,7 @@ def _aggregate_run_log_archive(
         signaled_jobs=signaled_jobs,
         pending_jobs=pending_jobs,
         failed_jobs=failed_jobs,
+        link_stats=link_stats,
     )
 
 

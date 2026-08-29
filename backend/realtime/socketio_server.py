@@ -174,8 +174,7 @@ class AgentNamespace(socketio.AsyncNamespace):
     async def on_step_log(self, sid: str, data: dict):
         """Agent emits step_log → broadcast to dashboard subscribers + persist to file.
 
-        ADR-0026 P2-2: accepts both legacy single-line payloads and batched
-        ``lines: [{step_id, seq, level, ts, msg}, ...]``.
+        ADR-0026 P2-2 / #523: batched ``lines: [{step_id, seq, level, ts, msg}, ...]`` only.
         """
         job_id = data.get("job_id") or data.get("run_id")
         if not job_id:
@@ -183,26 +182,20 @@ class AgentNamespace(socketio.AsyncNamespace):
 
         run_id = data.get("run_id", job_id)
         raw_lines = data.get("lines")
-        if isinstance(raw_lines, list) and raw_lines:
-            lines = [
-                {
-                    "step_id": item.get("step_id", ""),
-                    "seq": item.get("seq"),
-                    "level": item.get("level", "INFO"),
-                    "ts": item.get("ts", ""),
-                    "msg": item.get("msg", ""),
-                }
-                for item in raw_lines
-                if isinstance(item, dict)
-            ]
-        else:
-            lines = [{
-                "step_id": data.get("step_id", ""),
-                "seq": data.get("seq"),
-                "level": data.get("level", "INFO"),
-                "ts": data.get("ts", ""),
-                "msg": data.get("msg", ""),
-            }]
+        if not isinstance(raw_lines, list) or not raw_lines:
+            return
+
+        lines = [
+            {
+                "step_id": item.get("step_id", ""),
+                "seq": item.get("seq"),
+                "level": item.get("level", "INFO"),
+                "ts": item.get("ts", ""),
+                "msg": item.get("msg", ""),
+            }
+            for item in raw_lines
+            if isinstance(item, dict)
+        ]
 
         if not lines:
             return

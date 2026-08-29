@@ -15,7 +15,7 @@ from backend.models.job import JobLogSignal
 ORPHAN_EXCLUDING_CALL_SITES: tuple[str, ...] = (
     "backend/api/routes/plan_runs.py:watcher-summary / aee breakdown",
     "backend/api/routes/plan_runs.py:event timeline / deduped AEE events",
-    "backend/services/report_service.py:aggregate_risk_summary_from_signals",
+    "backend/services/log_observation.py:aggregate_risk_summary",
 )
 
 
