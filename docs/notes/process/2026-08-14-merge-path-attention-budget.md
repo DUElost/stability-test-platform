@@ -40,6 +40,15 @@ CodeRabbit 对当前 head 给出终态决策时构成阻断）；任何引入等
 被否决的是「backend-test 前置为 PR 必查项」，信息性信号不在否决范围内；
 若未来要把它升为 required，须先重评本原则。
 
+## 补充（2026-08-29，移除 pr-backend-test）
+
+#281 P2 加入的信息性 `pr-backend-test`（PR 上跑 `backend/tests/`，~7 分钟）
+已删除：虽非 required check，但每个 PR 仍占用 ~7 分钟 Actions 与并发槽，
+与「PR 轻量 + 夜间全量兜底」的本末倒置。`backend/tests/` 回归改由
+`main-ci-backstop` 触发的全量 `backend-test` 覆盖；PR 保留
+`pr-migrate-empty-db`（空库迁移硬门禁）。详见
+`docs/notes/process/2026-08-29-remove-pr-backend-test.md`。
+
 ## Revisit
 
 若未来出现第二维护者或外部贡献者，「合并前全量验证」的价值排序需要重评
