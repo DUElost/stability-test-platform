@@ -334,6 +334,45 @@ class TestPlanRunAbort:
         assert pr_after.ended_at is not None
         assert db_session.get(JobInstance, pending_job.id).status == JobStatus.ABORTED.value
 
+    def test_abort_batch_update_keeps_orm_in_sync_for_convergence(
+        self, db_session, abort_chain,
+    ):
+        """#492 续：批量 UPDATE 必须把状态同步回 session 中的 ORM 对象。
+
+        批量块走 `db.execute(update(JobInstance)...)`。下方 has_active_jobs
+        读的是 all_jobs 的**内存**状态，据此决定是否走兜底聚合。若把该 UPDATE
+        改成 `synchronize_session=False`（常见的批量性能优化），内存里的 job
+        仍是 PENDING → has_active_jobs 恒为 True → total_job_count==0 的
+        legacy run 既走不到计数器聚合（total > 0 为假）也走不到兜底聚合，
+        PlanRun 会停在 RUNNING 永不收敛。本用例锁定这个同步契约。
+        """
+        plan = abort_chain["plan"]
+        pr = _make_plan_run(db_session, plan.id)
+        pr.total_job_count = 0  # legacy run：计数器从未回填
+        db_session.commit()
+        pending_job = _make_job(
+            db_session,
+            pr.id,
+            plan.id,
+            abort_chain["dev1"].id,
+            "h-abort",
+            status=JobStatus.PENDING.value,
+        )
+
+        with patch("backend.services.plan_run_abort.schedule_emit"), patch(
+            "backend.services.plan_run_abort.should_trigger_dedup",
+            return_value=False,
+        ):
+            abort_plan_run(pr.id, db=db_session, reason="legacy abort")
+
+        db_session.expire_all()
+        # 批量 UPDATE 落库生效
+        assert db_session.get(JobInstance, pending_job.id).status == JobStatus.ABORTED.value
+        # 且 run 必须收敛到终态，而不是卡在 RUNNING
+        pr_after = db_session.get(PlanRun, pr.id)
+        assert pr_after.status != "RUNNING"
+        assert pr_after.ended_at is not None
+
     def test_abort_terminal_plan_run_returns_409(
         self, client, auth_headers, db_session, abort_chain
     ):
