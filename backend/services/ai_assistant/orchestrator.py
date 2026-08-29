@@ -264,12 +264,15 @@ def _enqueue_continuation(session_id: int) -> None:
     try:
         from backend.tasks.saq_worker import enqueue_sync
 
-        timeout = 120
+        # M2：轮次最多 max_turns 次串行 LLM 调用，超时按最坏情况估
+        #（默认 60s 的 SAQ timeout 会把多轮 T0 链中途砍掉，占位滞留 pending）
+        # M3：轮次任务有副作用（写消息/建 action），retries=0 禁止整轮重放
+        timeout = 240
         try:
             db = SessionLocal()
             try:
                 cfg = get_or_create_config(db)
-                timeout = cfg.request_timeout_seconds + 120
+                timeout = cfg.request_timeout_seconds * max(int(cfg.max_turns), 1) + 120
             finally:
                 db.close()
         except Exception:  # noqa: BLE001 - 超时取默认值即可
@@ -278,6 +281,7 @@ def _enqueue_continuation(session_id: int) -> None:
             "ai_assistant_turn_task",
             key=f"ai-turn:{session_id}",
             timeout=timeout,
+            retries=0,
             session_id=session_id,
         )
         if not enqueued:
@@ -323,7 +327,7 @@ def _run_service_tool(name: str, params: dict) -> str:
 
     if name == "reload_agent_config":
         from backend.models.host import Host
-        from backend.realtime.socketio_server import emit_agent_control
+        from backend.realtime.socketio_server import call_agent_control_sync
 
         host_id = str(params.get("host_id", ""))
         db = SessionLocal()
@@ -335,8 +339,14 @@ def _run_service_tool(name: str, params: dict) -> str:
                 raise RuntimeError(f"主机 {host_id} 状态为 {host.status}，须 ONLINE")
         finally:
             db.close()
-        asyncio.run(emit_agent_control(host_id, "reload_config", payload={}))
-        return f"已向主机 {host_id} 下发 reload_config"
+        # H3：sio 归主事件循环所有——asyncio.run 新建循环跨循环 emit 不受支持
+        # （可能静默丢弃）。走 run_coroutine_threadsafe 桥接并等待 Agent ack。
+        acked = call_agent_control_sync(host_id, "reload_config", timeout=5.0)
+        if not acked:
+            raise RuntimeError(
+                f"reload_config 下发未获主机 {host_id} 确认（离线/超时/未注册）"
+            )
+        return f"已向主机 {host_id} 下发 reload_config 并获 Agent ack"
 
     raise ToolValidationError(f"unknown service tool: {name}")
 
@@ -352,7 +362,8 @@ def execute_action(action_id: int) -> None:
     db = SessionLocal()
     try:
         action = db.get(AiAssistantAction, action_id)
-        if action is None or action.status not in ("approved", "proposed"):
+        # Low-1：放行 proposed 等于「未经审批也能执行」——闸门只认 approved
+        if action is None or action.status != "approved":
             logger.warning("ai_action_execute_skipped id=%s status=%s",
                            action_id, getattr(action, "status", None))
             return
@@ -430,8 +441,41 @@ def _on_action_complete(action_id: int, run) -> None:
 
 # ─────────────────────────── 轮次任务 ───────────────────────────
 
+def _converge_pending(session_id: int, produced_output: bool) -> None:
+    """H1：任何退出路径都不得留 pending 占位（否则前端无限轮询+气泡永挂）。
+
+    轮次已产出真实回复 → 删除占位；未产出（异常路径）→ 标 failed 留错误可见。
+    """
+    db = SessionLocal()
+    try:
+        pending = (
+            db.query(AiChatMessage)
+            .filter(
+                AiChatMessage.session_id == session_id,
+                AiChatMessage.role == "assistant",
+                AiChatMessage.status.in_(["pending", "running"]),
+            )
+            .all()
+        )
+        if not pending:
+            return
+        if produced_output:
+            for msg in pending:
+                db.delete(msg)
+        else:
+            for msg in pending:
+                msg.status = "failed"
+                meta = dict(msg.meta or {})
+                meta["error"] = "本轮未产出回复（编排异常，详见后端日志）"
+                msg.meta = meta
+        db.commit()
+    finally:
+        db.close()
+
+
 async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
     db = SessionLocal()
+    produced_output = False
     try:
         session = db.get(AiChatSession, session_id)
         if session is None:
@@ -466,6 +510,7 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                     messages, tools=openai_tools, temperature=float(cfg.temperature)
                 )
                 if not reply.tool_calls:
+                    produced_output = True
                     _add_message(
                         db, session, role="assistant", content=reply.content,
                         meta={
@@ -476,6 +521,7 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                     return
 
                 meta: dict = {"usage": reply.usage, "latency_ms": reply.latency_ms}
+                produced_output = True
                 assistant_msg = _add_message(
                     db, session, role="assistant", content=reply.content,
                     tool_calls=[
@@ -556,6 +602,7 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                 if yielded:
                     return  # 止轮：等 on_complete 续轮 / 审批
 
+            produced_output = True
             _add_message(
                 db, session, role="assistant",
                 content="已达单轮工具迭代上限（max_turns），请拆分请求或继续对话。",
@@ -564,4 +611,8 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
             _fail_pending_messages(db, session, str(exc))
             logger.warning("ai_turn_llm_failed session=%s err=%s", session_id, exc)
     finally:
+        try:
+            _converge_pending(session_id, produced_output)
+        except Exception:  # noqa: BLE001 - 收口失败仅记日志，不掩盖主流程异常
+            logger.exception("ai_turn_converge_pending_failed session=%s", session_id)
         db.close()

@@ -115,7 +115,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("decided_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.create_index("ix_ai_chat_message_action_session", "ai_assistant_action", ["session_id"])
+    op.create_index("ix_ai_assistant_action_session", "ai_assistant_action", ["session_id"])
     op.create_index("ix_ai_assistant_action_status", "ai_assistant_action", ["status"])
 
 
