@@ -20,14 +20,13 @@ concurrency:
 jobs:
   pr-agent-gate:
     name: pr-agent-gate
-    # required check（替代原 code-rabbit-gate），只在 pull_request 事件上跑：
+    # 非阻塞顾问（2026-08-29 定位变更：从 required check 摘除）：只在
+    # pull_request 事件上跑，产出 review 评论 + check 信号：
     # - review 对当前 head 完成且无 security concerns → success；
-    # - 有 security concerns → failure 阻断；
-    # - review 未完成 / 工具或 API 失败 / 输出缺失 → failure 阻断
-    #   （fail-closed；逃生：修复后 push 自动复评，或对失败检查点 rerun，
-    #   或临时从分支保护摘除该 required check）。
+    # - 有 security concerns / review 未完成 / 工具或 API 失败 → check 红
+    #   （顾问信号），**不阻断合入**——合入前人工查看评论即可；
     # issue_comment 命令（/review 等）由独立非门禁 job 处理，避免评论触发的
-    # 成功 check run 顶掉/覆盖门禁（security-gate bypass）。
+    # 成功 check run 顶掉/覆盖审查信号（security-gate bypass 同源防护）。
     if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -59,7 +58,7 @@ jobs:
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
-      - name: Evaluate PR Agent review (security gate)
+      - name: Evaluate PR Agent review (security verdict)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -93,23 +92,6 @@ jobs:
           fi
           echo "::error::无法解析 PR Agent review 输出中的 security 段落；pr-agent-gate fails。"
           exit 1
-
-      # #421 双保险：branch protection 已把 pr-agent-gate 列为 required check，但
-      # PR #399 仍在 gate failure 后被 auto-merge 合入。failure 时显式关掉
-      # auto-merge，避免 GitHub 侧竞态/漏判把失败 head 合进 main。
-      - name: Disable auto-merge on gate failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: |
-          set -euo pipefail
-          if gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest.mergeMethod // empty' | grep -q .; then
-            echo "Gate failed with auto-merge enabled → disabling auto-merge (#421)."
-            gh pr merge "$PR_URL" --disable-auto
-          else
-            echo "Gate failed; auto-merge already disabled/absent."
-          fi
 
   pr-agent-comment:
     name: pr-agent-comment
