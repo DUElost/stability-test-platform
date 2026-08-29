@@ -31,6 +31,7 @@ CI 重跑。采纳两项低成本缓解（否决 Merge Queue，见
   update-branch 并触发一轮新 CI。
 - `pr-agent-gate` failure 仍由 #421 步骤 `--disable-auto`；reconcile 不会
   给非队首重新挂上。
+- `enable-auto-merge` 脚本 checkout 不得 pin `ref: main`（首合入 bootstrap）。
 
 ## Revisit
 

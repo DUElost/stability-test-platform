@@ -21,7 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: main
+          # pull_request 默认检出 merge commit（含本 PR 脚本）；勿 pin main——
+          # 首合入前脚本尚不在 main，会导致 reconcile-queue bootstrap 失败。
           sparse-checkout: scripts/ci/pr-automerge-queue.sh
           sparse-checkout-cone-mode: false
       - name: Reconcile FIFO auto-merge queue
