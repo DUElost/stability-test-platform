@@ -605,3 +605,204 @@ class TestTurnLoopWithFakeClient:
             .count()
         )
         assert pending == 0
+
+
+class TestContinuationVisibility:
+    """续轮汇报可见性：占位是前端「助手仍欠一条回复」的唯一轮询信号。
+
+    删早了 → UI 停轮，动作完成后的汇报只落库不上屏（全局
+    refetchOnWindowFocus=false，无兜底刷新）。
+    """
+
+    @staticmethod
+    def _shared_session(monkeypatch, orch, db_session):
+        class _Shared:
+            def __init__(self, s):
+                self._s = s
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+
+    @staticmethod
+    def _fake_llm(monkeypatch, orch, replies):
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            async def chat(self, messages, **kw):
+                return replies.pop(0)
+
+        monkeypatch.setattr(orch, "LlmClient", FakeClient)
+
+    def _session_with_placeholder(self, db_session):
+        user = db_session.query(User).filter(User.role != "admin").first()
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.flush()
+        db_session.add(AiChatMessage(session_id=s.id, role="user", content="跑一下 agent 测试"))
+        db_session.add(
+            AiChatMessage(session_id=s.id, role="assistant", content="", status="pending")
+        )
+        db_session.commit()
+        return s
+
+    def _pending_count(self, db_session, session_id):
+        return (
+            db_session.query(AiChatMessage)
+            .filter(
+                AiChatMessage.session_id == session_id,
+                AiChatMessage.role == "assistant",
+                AiChatMessage.status == "pending",
+            )
+            .count()
+        )
+
+    def test_auto_action_keeps_placeholder_until_continuation(
+        self, auth_headers, db_session, monkeypatch
+    ):
+        """T1 自动执行止轮时占位必须保留——续轮汇报靠它驱动前端轮询。"""
+        _configure(db_session)
+        from backend.services.ai_assistant import orchestrator as orch
+        from backend.services.ai_assistant.llm_client import AssistantReply, ToolCallRequest
+
+        self._fake_llm(
+            monkeypatch, orch,
+            [AssistantReply(
+                content="",
+                tool_calls=[ToolCallRequest(id="c1", name="run_agent_tests", arguments={})],
+            )],
+        )
+        self._shared_session(monkeypatch, orch, db_session)
+
+        def _fake_execute(action_id):
+            action = db_session.get(AiAssistantAction, action_id)
+            action.status = "running"  # RunConsole 已起，等 on_complete 续轮
+            db_session.commit()
+
+        monkeypatch.setattr(orch, "execute_action", _fake_execute)
+
+        s = self._session_with_placeholder(db_session)
+        asyncio.run(orch.ai_assistant_turn_task({}, session_id=s.id))
+
+        action = db_session.query(AiAssistantAction).filter_by(session_id=s.id).one()
+        assert action.status == "running"
+        tool_msg = (
+            db_session.query(AiChatMessage)
+            .filter(AiChatMessage.session_id == s.id, AiChatMessage.role == "tool")
+            .one()
+        )
+        assert "已开始执行" in tool_msg.content
+        # 关键断言：占位仍在（否则 UI 停轮，续轮汇报不上屏）
+        assert self._pending_count(db_session, s.id) == 1
+
+    def test_inline_terminal_action_reported_in_same_turn(
+        self, auth_headers, db_session, monkeypatch
+    ):
+        """内联出终态（服务工具/RunKeyBusy/spawn 失败）：同 key 续轮会被 SAQ
+        静默丢弃，必须本轮把真实结果喂回模型，且不得谎报「已开始执行」。"""
+        _configure(db_session)
+        from backend.services.ai_assistant import orchestrator as orch
+        from backend.services.ai_assistant.llm_client import AssistantReply, ToolCallRequest
+
+        self._fake_llm(
+            monkeypatch, orch,
+            [
+                AssistantReply(
+                    content="",
+                    tool_calls=[ToolCallRequest(id="c1", name="run_agent_tests", arguments={})],
+                ),
+                AssistantReply(content="启动失败了：同类任务正在运行。"),
+            ],
+        )
+        self._shared_session(monkeypatch, orch, db_session)
+
+        def _fake_execute(action_id):
+            action = db_session.get(AiAssistantAction, action_id)
+            action.status = "failed"
+            action.result_summary = "同 run_key 任务正在运行，请稍后重试"
+            db_session.commit()
+
+        monkeypatch.setattr(orch, "execute_action", _fake_execute)
+
+        s = self._session_with_placeholder(db_session)
+        asyncio.run(orch.ai_assistant_turn_task({}, session_id=s.id))
+
+        tool_msg = (
+            db_session.query(AiChatMessage)
+            .filter(AiChatMessage.session_id == s.id, AiChatMessage.role == "tool")
+            .one()
+        )
+        assert "已开始执行" not in tool_msg.content
+        assert "已结束（failed）" in tool_msg.content
+        assert "同 run_key" in tool_msg.content
+        # 本轮继续跑完并产出终答，占位随之收口
+        final = (
+            db_session.query(AiChatMessage)
+            .filter(
+                AiChatMessage.session_id == s.id,
+                AiChatMessage.role == "assistant",
+                AiChatMessage.status == "completed",
+            )
+            .order_by(AiChatMessage.id.desc())
+            .first()
+        )
+        assert final is not None and "启动失败" in final.content
+        assert self._pending_count(db_session, s.id) == 0
+
+    def test_continuation_enqueue_failure_marks_placeholder_failed(
+        self, auth_headers, db_session, monkeypatch
+    ):
+        """续轮入队失败不得留悬挂占位——标 failed 让用户看见而不是永远转圈。"""
+        from backend.services.ai_assistant import orchestrator as orch
+
+        self._shared_session(monkeypatch, orch, db_session)
+        monkeypatch.setattr(
+            "backend.tasks.saq_worker.enqueue_sync", lambda *a, **kw: False
+        )
+
+        s = self._session_with_placeholder(db_session)
+        orch._enqueue_continuation(s.id)
+
+        placeholder = (
+            db_session.query(AiChatMessage)
+            .filter(
+                AiChatMessage.session_id == s.id,
+                AiChatMessage.role == "assistant",
+            )
+            .one()
+        )
+        assert placeholder.status == "failed"
+        assert "入队失败" in (placeholder.meta or {}).get("error", "")
+
+    def test_approve_creates_placeholder_for_report(
+        self, client, admin_headers, auth_headers, db_session, monkeypatch
+    ):
+        """审批放行后的汇报同样经续轮——approve 时就落占位，
+        前端 invalidate messages 后据此恢复轮询。"""
+        monkeypatch.setattr(
+            "backend.api.routes.ai_assistant.execute_action", lambda action_id: None
+        )
+        user = db_session.query(User).filter(User.role != "admin").first()
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.flush()
+        action = AiAssistantAction(
+            session_id=s.id,
+            tool_name="test_notification_channel",
+            params={"channel_id": 1},
+            status="proposed",
+            requested_by_user_id=user.id,
+        )
+        db_session.add(action)
+        db_session.commit()
+
+        resp = client.post(
+            f"/api/v1/ai-assistant/actions/{action.id}/approve", headers=admin_headers
+        )
+        assert resp.status_code == 200
+        assert self._pending_count(db_session, s.id) == 1
