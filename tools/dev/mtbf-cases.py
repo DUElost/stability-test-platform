@@ -12,7 +12,7 @@ REST 为主通道（D4），本脚本是便捷层：与平台页面共用同一�
     python tools/dev/mtbf-cases.py import --suite MTBF-legacy --file runtask.xml [--global UiAutomatorTestData.xml]
     python tools/dev/mtbf-cases.py export --suite MTBF-legacy --out runtask.xml [--times 100]
     python tools/dev/mtbf-cases.py validate --suite MTBF-legacy
-    python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy [--force]
+    python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 
 凭据（明文不进 log / 不进输出）：
 - ``--token``：直接用 bearer token（Swagger / 手工签发）；
@@ -278,13 +278,11 @@ def cmd_validate(args: argparse.Namespace) -> None:
 def cmd_export_to_tool_dir(args: argparse.Namespace) -> None:
     token = _obtain_token(args)
     sid = _require_suite_id(args, token, args.suite)
-    params: dict[str, Any] = {"force": "true"} if args.force else None
     data = _api_json(
         "POST",
         _base_url(args),
         f"/api/v1/test-suites/{sid}/export-to-tool-dir",
         token,
-        params=params,
     )["data"]
     print(f"[export-to-tool-dir] dir={data['export_dir']}")
     print(f"    runtask: {data['runtask_path']}")
@@ -333,8 +331,6 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     p_tool = sub.add_parser("export-to-tool-dir", help="导出到中心存储消费路径")
     p_tool.add_argument("--suite", required=True)
-    p_tool.add_argument("--force", action="store_true",
-                        help="越过无绑定 MTBF 长跑守卫（同套件硬阻断不豁免）")
     p_tool.set_defaults(func=cmd_export_to_tool_dir)
 
     args = parser.parse_args(argv)
