@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, FolderKanban, Layers, Plus, Link2, X } from 'lucide-react';
+import { FolderKanban, Layers, Plus, Link2, X } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -61,7 +61,6 @@ export default function ProjectsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [mapPreview, setMapPreview] = useState<ProjectMapPreview | null>(null);
-  const [inventoryOpen, setInventoryOpen] = useState(true);
   const [sheetKey, setSheetKey] = useState<string | null>(null);
 
   const { data: projects, isLoading, isError, error, refetch } = useQuery({
@@ -146,19 +145,26 @@ export default function ProjectsPage() {
         subtitle="按客户与机型登记项目归属，维护 JIRA 集成。"
       />
 
-      {/* KPI 带（与抽屉内 KPI 行同款紧凑形态） */}
+      {/* KPI 带：唯一需要人行动的数字（待归属）放在最前、最大 */}
       <Card data-testid="kpi-strip">
         <CardContent className="py-3">
           <div className="grid grid-cols-3 divide-x">
             <div className="px-4 text-center">
-              <p className="text-lg font-bold leading-none text-foreground">{totals.projects}</p>
-              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>人工项目</p>
+              <p
+                className={cn(
+                  'text-xl font-bold leading-none',
+                  (summaryQ.data?.unassigned_devices ?? 0) > 0
+                    ? 'text-warning'
+                    : 'text-success',
+                )}
+              >
+                {summaryQ.data?.unassigned_devices ?? '—'}
+              </p>
+              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>台设备待归属</p>
             </div>
             <div className="px-4 text-center">
-              <p className="text-lg font-bold leading-none text-foreground">
-                {summaryQ.data?.total_devices ?? totals.devices}
-              </p>
-              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>设备总数</p>
+              <p className="text-lg font-bold leading-none text-foreground">{totals.projects}</p>
+              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>人工项目</p>
             </div>
             <div className="px-4 text-center">
               <p
@@ -333,7 +339,11 @@ export default function ProjectsPage() {
                   </div>
 
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    {project.running_run_count > 0 ? (
+                    {project.status === 'ARCHIVED' ? (
+                      <Badge variant="secondary" className="text-[11px] font-normal">
+                        已归档
+                      </Badge>
+                    ) : project.running_run_count > 0 ? (
                       <Badge variant="success" className="text-[11px] font-normal">
                         {project.running_run_count} 在跑
                       </Badge>
@@ -371,22 +381,16 @@ export default function ProjectsPage() {
         )}
       </section>
 
-      {/* ── 次区块：型号映射（可折叠） ──────────────────────── */}
+      {/* ── 主区块：归属规则（规则目标 vs 实际台数） ────────── */}
       <Card data-testid="inventory-section">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between gap-3">
-            <button
-              type="button"
-              aria-expanded={inventoryOpen}
-              data-testid="inventory-toggle"
-              onClick={() => setInventoryOpen((open) => !open)}
-              className="flex items-center gap-2 rounded-md px-1 py-0.5 -mx-1 hover:bg-accent"
-            >
-              <ChevronDown
-                className={cn('h-4 w-4 transition-transform', !inventoryOpen && '-rotate-90')}
-              />
-              <span className="text-sm font-medium text-foreground">型号映射</span>
-            </button>
+            <div>
+              <h2 className={cn('text-sm font-medium', TEXT.heading)}>归属规则</h2>
+              <p className={cn('mt-0.5 text-xs', TEXT.subtitle)}>
+                勾选型号批量归入项目；规则目标与实际台数不一致（⚠）即页面待办
+              </p>
+            </div>
             {isAdmin ? (
               <Button
                 size="sm"
@@ -403,27 +407,22 @@ export default function ProjectsPage() {
               </Button>
             ) : null}
           </div>
-          <p className={cn('text-xs', TEXT.subtitle)}>
-            设备心跳采集的型号事实，用于批量归入上方项目；归属只由人工登记决定。
-          </p>
         </CardHeader>
-        {inventoryOpen ? (
-          <CardContent>
-            <InventoryModelsTable
-              models={inventoryQ.data}
-              summary={summaryQ.data}
-              selectedModels={selectedModels}
-              onSelectedModelsChange={setSelectedModels}
-              isLoading={inventoryQ.isLoading}
-              isError={inventoryQ.isError}
-              errorMessage={(inventoryQ.error as Error)?.message}
-              onRetry={() => {
-                void inventoryQ.refetch();
-                void summaryQ.refetch();
-              }}
-            />
-          </CardContent>
-        ) : null}
+        <CardContent>
+          <InventoryModelsTable
+            models={inventoryQ.data}
+            summary={summaryQ.data}
+            selectedModels={selectedModels}
+            onSelectedModelsChange={setSelectedModels}
+            isLoading={inventoryQ.isLoading}
+            isError={inventoryQ.isError}
+            errorMessage={(inventoryQ.error as Error)?.message}
+            onRetry={() => {
+              void inventoryQ.refetch();
+              void summaryQ.refetch();
+            }}
+          />
+        </CardContent>
       </Card>
 
       <CreateProjectDialog

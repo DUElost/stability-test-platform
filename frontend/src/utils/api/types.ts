@@ -752,6 +752,8 @@ export interface InventorySummary {
   user_mapped_devices: number;
   distinct_models: number;
   unmapped_models: Array<string | null>;
+  /** ADR-0029 P0：严格未归属口径（project_id IS NULL，与设备页 ?unassigned=true 一致） */
+  unassigned_devices: number;
 }
 
 /** 某项目当前挂着的设备型号。 */
