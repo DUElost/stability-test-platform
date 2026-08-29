@@ -134,6 +134,9 @@ class InventorySummaryOut(ORMBaseModel):
     user_mapped_devices: int
     distinct_models: int
     unmapped_models: List[Optional[str]]
+    # ADR-0029 P0：project_id IS NULL 口径（与 GET /devices?unassigned=true
+    # 一致，区别于 inventory 的「非 USER 项目」宽口径）
+    unassigned_devices: int = 0
 
 
 class ProjectModelCoverageOut(ORMBaseModel):
