@@ -48,7 +48,6 @@ from backend.realtime.socketio_server import emit_project_changed
 _UPDATABLE_FIELDS = (
     "display_name",
     "customer",
-    "platform",
     "form_factor",
     "product_line",
     "jira_project_key",
@@ -59,6 +58,29 @@ router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 _ACTIVE_RUN_STATUSES = ("RUNNING", "QUEUED", "PRECHECK")
 _USER_SOURCE = "USER"
 _SEED_SOURCE = "SEED"
+
+
+def _platforms_map(db: Session, project_ids: list[int]) -> dict[int, list[str]]:
+    """ADR-0029 P1-B：项目平台从设备派生（distinct(device.platform)）。
+
+    事实层在 device；UNKNOWN（探测失败哨兵）不展示。列表场景一次聚合，
+    避免逐项目 N+1。
+    """
+    if not project_ids:
+        return {}
+    rows = db.execute(
+        select(Device.project_id, Device.platform)
+        .where(
+            Device.project_id.in_(project_ids),
+            Device.platform.is_not(None),
+        )
+        .distinct()
+    ).all()
+    buckets: dict[int, set[str]] = {}
+    for pid, platform in rows:
+        if platform and platform != "UNKNOWN":
+            buckets.setdefault(pid, set()).add(platform)
+    return {pid: sorted(values) for pid, values in buckets.items()}
 
 
 def _summary_rows(db: Session) -> dict[int, tuple[int, int]]:
@@ -241,6 +263,7 @@ def _fill_summary(db: Session, project: TestProject) -> ProjectSummaryOut:
     device_count, running_run_count = _summary_rows(db).get(project.id, (0, 0))
     out = ProjectSummaryOut.model_validate(project)
     out.match_models = _rule_values_for_project(db, project.id)
+    out.platforms = _platforms_map(db, [project.id]).get(project.id, [])
     out.device_count = device_count
     out.running_run_count = running_run_count
     return out
@@ -310,11 +333,13 @@ def list_projects(
         query = query.filter(TestProject.status == status)
     projects = query.all()
     aggregates = _summary_rows(db)
+    platforms_map = _platforms_map(db, [p.id for p in projects])
     items = []
     for project in projects:
         device_count, running_run_count = aggregates.get(project.id, (0, 0))
         out = ProjectSummaryOut.model_validate(project)
         out.match_models = _rule_values_for_project(db, project.id)
+        out.platforms = platforms_map.get(project.id, [])
         out.device_count = device_count
         out.running_run_count = running_run_count
         items.append(out)
@@ -342,7 +367,6 @@ def create_project(
         project_key=key,
         display_name=payload.display_name.strip(),
         customer=payload.customer,
-        platform=payload.platform,
         form_factor=payload.form_factor,
         product_line=payload.product_line,
         jira_project_key=payload.jira_project_key,
