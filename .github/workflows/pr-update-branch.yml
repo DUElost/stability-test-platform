@@ -24,7 +24,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
-          sparse-checkout: scripts/ci/pr-update-branch-if-behind.sh
+          sparse-checkout: |
+            scripts/ci/pr-update-branch-if-behind.sh
+            scripts/ci/pr-automerge-queue.sh
           sparse-checkout-cone-mode: false
       - name: Update branch when green and behind
         env:
@@ -32,3 +34,7 @@ jobs:
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: bash scripts/ci/pr-update-branch-if-behind.sh
+      - name: Reconcile FIFO auto-merge queue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ci/pr-automerge-queue.sh

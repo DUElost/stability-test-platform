@@ -32,6 +32,16 @@ CI 重跑。采纳两项低成本缓解（否决 Merge Queue，见
 - `enable-auto-merge` 脚本 checkout 不得 pin `ref: main`（首合入 bootstrap）。
 - required 列表与分支保护同步（2026-08-29 起 6 项，不含 pr-agent-gate 顾问）。
 
+## 补充（2026-08-30，merge 后 reconcile 兜底）
+
+`GITHUB_TOKEN` auto-merge 合入常抑制 `pull_request closed` workflow，队首合入后
+下一 PR 可能长时间无 auto-merge（#557 实测）。补丁：
+
+- `enable-auto-merge.yml` 增 **每 10 分钟** `schedule` reconcile（无 open PR 时
+  脚本空转退出）；
+- `pr-update-branch.yml` 在每次 update 判断后 **顺带 reconcile**（任 PR CI 完成
+  时修正队列）。
+
 ## Revisit
 
 若 open PR 常态 >3 或出现外部 fork 贡献潮，再评估轻量队列状态 API 或
