@@ -151,10 +151,12 @@ def bulk_assign_project(
         raise HTTPException(status_code=404, detail="one or more devices not found")
 
     for device in devices:
-        if device.project_id == project.id:
+        if device.project_id == project.id and device.project_pinned:
             continue
         from_key = device.project.project_key if device.project else None
         device.project_id = project.id
+        # ADR-0029 P1：批量归入 = 人工钉住（命令式例外路径，规则不覆盖）
+        device.project_pinned = True
         record_audit(
             db,
             action="assign_project",
@@ -181,19 +183,26 @@ def bulk_assign_project(
         # 整批归入同一目标；joinedload 缓存的关系在赋值后不自动失效，
         # 直接写目标 key（不读 device.project）
         out.project_key = project.project_key
-        out.attribution_source = _attribution_source(project, device.model)
+        out.attribution_source = _attribution_source(
+            project, device.model, pinned=device.project_pinned,
+        )
         items.append(out)
     return ok(items)
 
 
-def _attribution_source(project, model: Optional[str]) -> str:
-    """ADR-0029 P0：归属来源派生（rule / manual / unassigned）。
+def _attribution_source(
+    project, model: Optional[str], *, pinned: bool = False,
+) -> str:
+    """ADR-0029 归属来源派生（pinned / rule / manual / unassigned）。
 
-    无项目 → unassigned；型号命中项目 match_models（精确匹配，非前缀推断）
-    → rule；其余（人工批量归入、SEED 回填、型号不在规则）→ manual。
+    无项目 → unassigned；project_pinned（人工钉住，规则不覆盖）→ pinned；
+    型号命中项目 match_models（精确匹配，非前缀推断）→ rule；其余（人工
+    批量归入、SEED 回填、型号不在规则）→ manual。
     """
     if project is None:
         return "unassigned"
+    if pinned:
+        return "pinned"
     if model and model in (project.match_models or []):
         return "rule"
     return "manual"
@@ -203,7 +212,9 @@ def _fill_project_key(device: Device, out) -> None:
     """ADR-0029：DeviceOut.project_key（F2 口径，不暴露数字 project_id）+ 归属来源。"""
     project = device.project
     out.project_key = project.project_key if project else None
-    out.attribution_source = _attribution_source(project, device.model)
+    out.attribution_source = _attribution_source(
+        project, device.model, pinned=device.project_pinned,
+    )
 
 
 @router.get("", response_model=Union[List[DeviceOut], PaginatedResponse])

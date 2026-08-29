@@ -468,6 +468,18 @@ class TestUpdateAndArchiveProject:
 
 
 class TestMapProject:
+    @staticmethod
+    def _active_rules(db_session, project_id):
+        from backend.models.project_rule import ProjectDeviceRule
+
+        return [
+            r.match_value
+            for r in db_session.query(ProjectDeviceRule)
+            .filter_by(project_id=project_id, is_active=True)
+            .order_by(ProjectDeviceRule.match_value)
+            .all()
+        ]
+
     def test_preview_and_apply_from_seed_and_null(
         self, client, admin_headers, db_session, project_a, project_legacy
     ):
@@ -497,11 +509,11 @@ class TestMapProject:
         db_session.refresh(d_seed)
         db_session.refresh(d_null)
         db_session.refresh(d_already)
-        db_session.refresh(project_a)
         assert d_seed.project_id == project_a.id
         assert d_null.project_id == project_a.id
         assert d_already.project_id == project_a.id
-        assert project_a.match_models == ["MLD_LX2"]
+        # ADR-0029 P1：规则写入 project_device_rule（match_models 列冻结）
+        assert self._active_rules(db_session, project_a.id) == ["MLD_LX2"]
 
         inventory = client.get(
             "/api/v1/projects/inventory/models", headers=admin_headers
@@ -547,10 +559,9 @@ class TestMapProject:
         assert blocked.status_code == 409
         db_session.refresh(d_conflict)
         db_session.refresh(d_free)
-        db_session.refresh(project_a)
         assert d_conflict.project_id == other.id
         assert d_free.project_id is None
-        assert project_a.match_models == []
+        assert self._active_rules(db_session, project_a.id) == []
 
         applied = client.post(
             "/api/v1/projects/proj-a/map/apply",
@@ -560,10 +571,9 @@ class TestMapProject:
         assert applied.status_code == 200
         db_session.refresh(d_conflict)
         db_session.refresh(d_free)
-        db_session.refresh(project_a)
         assert d_conflict.project_id == project_a.id
         assert d_free.project_id == project_a.id
-        assert project_a.match_models == ["MLD_LX2"]
+        assert self._active_rules(db_session, project_a.id) == ["MLD_LX2"]
 
     def test_seed_project_cannot_be_mapped(
         self, client, admin_headers, project_legacy
@@ -727,6 +737,9 @@ class TestBulkAssignProject:
         self, client, db_session, project_a, admin_headers
     ):
         d1 = _make_device(db_session, "s-bulk-idem", project_a)
+        # 已归入且已钉住 = 幂等 no-op（不记 audit）
+        d1.project_pinned = True
+        db_session.commit()
         resp = client.post(
             "/api/v1/devices/bulk-project",
             headers=admin_headers,
