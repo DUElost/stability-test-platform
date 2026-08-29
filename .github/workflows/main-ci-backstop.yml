@@ -300,13 +300,15 @@ jobs:
           # ── 机械摘要三要素（纯 GH API；有意不做 LLM 分诊，见
           # docs/design/2026-08-governance-surface-protection.md §backstop）：
           # ① 红灯 job + 失败步骤名；② CI run 日志链接；③ 疑似变更区间 compare。
+          # 失败 job 上限 20 条在 jq 内截断（.[:20]），勿改回 head 管道：
+          # pipefail 下 head 提前关管道会触发 gh/jq SIGPIPE（同 #389 existing 的处理）。
           ci_run_url="${{ github.server_url }}/$REPO/actions/runs/$CI_RUN_ID"
           failed_jobs="$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID/jobs?per_page=100" \
             --jq '[.jobs[]
                    | select(.conclusion == "failure")
                    | "- **\(.name)** → 失败步骤: "
-                     + ([.steps[]? | select(.conclusion == "failure") | .name] | join(", "))] | join("\n")'
-            | head -20)"
+                     + ([.steps[]? | select(.conclusion == "failure") | .name] | join(", "))] | .[:20] | join("\n")'
+          )"
           [ -n "$failed_jobs" ] || failed_jobs="(未取到 job 明细——疑似基础设施错误或运行已被清理)"
           suspect_line="无（无法定位区间）"
           parent_sha="$(gh api "repos/$REPO/commits/$MAIN_SHA" --jq '.parents[0].sha' 2>/dev/null || true)"
