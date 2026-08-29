@@ -174,7 +174,7 @@ GATE_TO_CI_ANCHOR = {
     "agent-tests": ("ci.yml", "Run agent tests"),
     # check:full 级——CI 对应物在 backend-test / frontend-check / docker-build job
     "backend-tests": ("ci.yml", "Run backend tests"),
-    "integration": ("ci.yml", "Main-chain integration smoke"),
+    "integration": ("ci.yml", "Run backend tests"),
     "repo-tests": ("ci.yml", "Run repo-level tests"),
     "vitest": ("ci.yml", "Run vitest"),
     "frontend-build": ("ci.yml", "npm run build"),

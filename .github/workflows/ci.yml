@@ -20,9 +20,11 @@ concurrency:
 jobs:
   backend-test:
     # 全量 job：仅在 push main / workflow_dispatch 时运行。
-    # PR 只跑下方轻量 job（lint / pr-typecheck / pr-compileall / pr-agent-tests）。
+    # PR 只跑下方轻量 job（lint / pr-agent-tests / pr-backend-test /
+    # pr-migrate-empty-db / pr-typecheck / pr-compileall）。
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:16
@@ -55,20 +57,12 @@ jobs:
         # dev 清单包含运行时依赖 + pytest / testcontainers
         run: pip install -r backend/requirements-dev.txt
       - name: Compile check
-        run: python -m compileall backend/ -q
+        run: python -m compileall backend/ tools/ scripts/ -q
       - name: Migrate empty PostgreSQL database
         working-directory: backend
         run: python -m alembic upgrade head
       - name: Run backend tests
         run: python -m pytest backend/tests/ -v
-      - name: Main-chain integration smoke
-        run: >-
-          python -m pytest
-          backend/tests/integration/test_main_chain_happy_path.py
-          backend/tests/integration/test_pending_timeout_socketio.py
-          backend/tests/integration/test_plan_chain_e2e.py
-          backend/tests/test_seed_and_smoke.py
-          -v
       - name: Run agent tests
         run: python -m pytest backend/agent/tests/ -v
       # 根 tests/ 也在 pytest.ini 的 testpaths 里(迁移升级 + 部署脚本契约),
@@ -79,6 +73,7 @@ jobs:
   frontend-check:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -107,6 +102,7 @@ jobs:
   # (#159/#161/#162),本步骤已启用 --max-warnings 0 并摘 continue-on-error。
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -185,6 +181,7 @@ jobs:
   pr-agent-tests:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # 部分 agent 测试模块 import 时会解析 DATABASE_URL，但不会真正连接；
       # 与全量 backend-test 保持一致的环境可避免收集期 RuntimeError。
@@ -214,6 +211,7 @@ jobs:
   pr-backend-test:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     services:
       postgres:
         image: postgres:16
@@ -294,6 +292,7 @@ jobs:
   pr-typecheck:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -313,6 +312,7 @@ jobs:
   pr-compileall:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -326,6 +326,7 @@ jobs:
   docker-build:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [backend-test, frontend-check]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
