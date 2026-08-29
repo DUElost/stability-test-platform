@@ -82,7 +82,7 @@
 | PlanRun | 结果 | 根因 / 结论 |
 |---------|------|-------------|
 | #214（用户触发） | FAILED ~15s | **根因①**：hot-update 的 rsync `--delete` 清空 `agent/resources/mtbf/`（APK 不在仓库 tarball）→「APK 不存在」。平台缺陷，已修（决定了什么 #8） |
-| #215（用户触发） | FAILED ~20s | **根因②**：device 1（A2WENX6628000033，MLD-LX3，`ro.debuggable=0`）user 构建无法 adb root → prefs push `rc=1`。设备资格前置不满足，非平台缺陷 |
+| #215（用户触发） | FAILED ~20s | **根因②**：device 1（A2WENX66****0033，MLD-LX3，`ro.debuggable=0`）user 构建无法 adb root → prefs push `rc=1`。设备资格前置不满足，非平台缺陷 |
 | #216 | FAILED ~15s | 同根因①（8-195 hot-update 后 APK 被清，当时未修复）→ 触发 rsync 修复 + 全量补布 |
 | #217 | init ✓ → patrol ✓ → abort → teardown finish ✗ | **整条 init→patrol→teardown 链路首次跑通**：setup 28s（v1.3.0 preflight、APK、prefs、RunTaskService、run_dir）；check seq=1..3 + PROGRESS + patrol-heartbeat；设备端一轮 130 testpoint 全量跑完（**全 FAILURE：`UiAutomationService ... already registered`**——设备残留 UiAutomation 连接，重启设备清除）；abort → teardown → **finish 暴露 pull 路径 bug**（`adb pull` 目录保留远端末级名 → v1.2.0 定位 `local_dir/run_dir` 缺 `realresult/` 层）→ finish **v1.3.0 修复** |
 | #218 | **FAILED（abort 收尾，验收通过）** | 设备重启后用例真实执行（首轮 38 条：**30 PASS / 8 FAILURE**）；abort → teardown → **finish v1.3.0 成功落盘** NFS JSON（`mtbf/legacy/results/2026.08.10_18.46.43.036.json`）；**§6 复核 0 不一致**；suite_sha256 与 #217 一致（649d8d2d…） |

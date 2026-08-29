@@ -20,8 +20,9 @@ CI 步骤的配对，本地 gate 若未登记 CI 锚点，`check:quick` 当场�
 
 ### 规则边界（关键取舍）
 
-只拦**四段齐全的具体主机地址**（点分 `172.21.15.66` 与 HOST_ID 横杠
-`172-21-15-80` 两种写法都覆盖——历史上横杠格式正是被漏掉的那一种）。
+只拦**四段齐全的具体主机地址**（点分 `172.21.x.y` 与 HOST_ID 横杠
+`172-21-x-y` 两种写法都覆盖——历史上横杠格式正是被漏掉的那一种）。
+（此处及以下示例一律用脱敏写法，本 note 自身也在被扫描范围内。）
 以下放行：
 
 - **CIDR 网段常量**（`172.16.0.0/12`）：公开标准网段，不是资产。
@@ -33,9 +34,10 @@ CI 步骤的配对，本地 gate 若未登记 CI 锚点，`check:quick` 当场�
   - `backend/agent/scripts/**` —— ADR-0020 规定已发布脚本版本目录**不可变**
     （改写会让 DB sha 与磁盘永久不一致，2026-07-31 生产事故即由此起）；
   - `backend/alembic/versions/**` —— 已锁定迁移不可改；
-  - `backend/tests/**`、`tests/**`、`*.test.*` / `*.spec.*` —— 测试夹具，
-    构造 IP 是被测逻辑的一部分（如 `test_rate_limiter.py` 用 `172.20.0.4`
-    验证 `resolve_client_ip`）。
+  - `backend/tests/**`、`backend/agent/tests/**`、`tests/**`、
+    `*.test.*` / `*.spec.*`、路径含 `__fixtures__` —— 测试夹具：构造私有
+    地址是被测逻辑的一部分（如 `test_rate_limiter.py` 需构造私有段客户端
+    IP 来验证 `resolve_client_ip`）。
 
 ### 顺带修正的 3 处示例地址
 
@@ -69,7 +71,8 @@ CI 步骤的配对，本地 gate 若未登记 CI 锚点，`check:quick` 当场�
   与 `10.0.31558` 等非地址串）。
 - 全仓扫描 → **1579 个文件，0 命中**（基线已绿）。
 - **对照实验**（证明门禁真能拦回归）：向 `docs/DOC-MAP.md` 注入
-  `172.21.8.202` 与 `172-21-15-80` → exit=1、命中 2 处（两种写法均被拦）；
+  一个点分地址与一个横杠 HOST_ID（四段齐全）→ exit=1、命中 2 处（两种写法
+  均被拦）；
   `git checkout` 恢复后 exit=0。
 - `python tools/dev/check_governance_surface.py --check` → S1–S5、S5x、S7
   全绿（含新增 gate 的 CI 锚点配对断言）。
@@ -84,5 +87,7 @@ CI 步骤的配对，本地 gate 若未登记 CI 锚点，`check:quick` 当场�
 - 若希望拦截更早，可把该 step 下沉到 `.githooks/pre-commit`——但需同时解决
   钩子的启用覆盖率问题（参考空行污染门禁的三重防线设计）。
 - 设备序列号（`docs/acceptance/2026-08-suite-binding-mtbf-signoff.md` 中的
-  `AYCGNX6730000054` ×2）**尚未纳入**本门禁——它属设备个体标识而非网络
-  地址，脱敏粒度待定，确定后再扩规则。
+  已脱敏为 `AYCGNX67****0054` 形态）——**现已纳入**本门禁的设备序列号规则：
+  12–24 位大写字母与数字混合、无下划线的 token，排除纯十六进制摘要
+  （sha256/commit hash）与已掩码写法。测试夹具与 `backfill-test-project.py`
+  中作为判定依据的具体 serial 走白名单（后者理想做法是外置到配置/DB）。

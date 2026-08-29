@@ -67,6 +67,21 @@ DASH = re.compile(
 # CIDR / 掩码写法：网段常量，不是主机资产
 CIDR = re.compile(r"/\d{1,2}(?![\w.])")
 
+# ── 设备序列号（Android serial）──────────────────────────────────────────
+# 形态：12–24 位大写字母与数字混合（两者都须有），无下划线——据此避开
+# STP_AEE_NFS_ROOT 这类常量名（含下划线）与 RUNNING 这类全字母词（无数字）。
+# 已掩码写法（AYCGNX67****0054）会被 * 切成两段 8/4 位，均不足 12 位，
+# 因此天然不匹配，无需额外放行逻辑。
+SERIAL_LIKE = re.compile(
+    r"(?<![A-Za-z0-9*])"
+    r"(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]{12,24}"
+    r"(?![A-Za-z0-9*])"
+)
+# 纯十六进制且够长 → sha256 / commit hash 等摘要，不是序列号
+HEX_ONLY = re.compile(r"^[0-9a-fA-F]{32,}$")
+# 形态命中但语义无害的大写词（按需扩充，每条须附理由）
+SAFE_TOKENS: set[str] = set()
+
 # 与具体部署无关的标准地址，放行
 SAFE_LITERALS = {
     "0.0.0.0",        # 通配监听
@@ -80,10 +95,17 @@ ALLOWLIST_PREFIXES = (
     "backend/agent/scripts/",    # ADR-0020：已发布脚本版本不可变
     "backend/alembic/versions/",  # 已锁定迁移不可改
     "backend/tests/",            # 测试夹具（构造 IP 是被测逻辑的一部分）
+    "backend/agent/tests/",      # Agent 侧测试夹具，同上（形态同真实 serial）
     "tests/",                    # 仓库级测试，同上
     "tools/dev/check-internal-ip-leak.py",  # 自身：文档与样例含地址文本
     "tools/dev/testdata/",       # 自检与样例数据
+    # 回填脚本的判定依据就是「这一批具体 serial」——改了脚本语义就错了。
+    # 理想做法是外置到配置/DB（见 Revisit），当前先白名单留痕。
+    "tools/dev/backfill-test-project.py",
 )
+
+# 路径中含这些目录名 → 测试夹具，放行（形态与真实 serial 无法区分）
+ALLOWLIST_PATH_PARTS = ("__fixtures__", "__mocks__", "__snapshots__")
 
 # 前端测试文件（按后缀放行，路径不定）
 ALLOWLIST_SUFFIXES = (
@@ -119,6 +141,8 @@ def _is_allowlisted(rel: str) -> bool:
         return True
     if rel.startswith(ALLOWLIST_PREFIXES):
         return True
+    if any(part in rel for part in ALLOWLIST_PATH_PARTS):
+        return True
     return rel.endswith(ALLOWLIST_SUFFIXES)
 
 
@@ -142,6 +166,12 @@ def scan_text(text: str, rel: str) -> list[tuple[int, str, str]]:
                 continue
             line = text.count("\n", 0, m.start(1)) + 1
             hits.append((line, value, rule))
+    for m in SERIAL_LIKE.finditer(text):
+        value = m.group(0)
+        if HEX_ONLY.match(value) or value in SAFE_TOKENS:
+            continue
+        line = text.count("\n", 0, m.start()) + 1
+        hits.append((line, value, "device-serial"))
     hits.sort(key=lambda h: (h[0], h[1]))
     return hits
 
@@ -174,7 +204,15 @@ def _self_test() -> int:
         ("backend/agent/scripts/flash_firmware/v1.3.6/f.py", "实测 172.21.15.66。", 0),
         ("backend/alembic/versions/abc_x.py", "evidence on 172.21.15.66", 0),
         ("backend/tests/test_rate_limiter.py", 'resolve_client_ip("172.20.0.4")', 0),
+        ("backend/agent/tests/test_aee.py", "serial = '0000NX2622000670'", 0),
+        ("frontend/src/x/__fixtures__/a.json", '{"serial": "0000NX2622000514"}', 0),
         ("frontend/src/a/b.test.tsx", "const ip = '10.0.0.50';", 0),
+        # 设备序列号（升级后纳入）
+        ("docs/acceptance/x.md", "设备 serial：395 AYCGNX6730000054 (MLD_LX2)。", 1),
+        ("docs/acceptance/x.md", "设备 serial：395 AYCGNX67****0054 (MLD_LX2)。", 0),
+        # 放行：sha256 摘要（纯 hex 且够长）与含下划线的常量名
+        ("docs/x.md", "sha256：e782bf7814604dce1e2246558f6b89ab0855054。", 0),
+        ("docs/x.md", "读取 STP_AEE_NFS_ROOT 与 MAX_CONCURRENT 配置。", 0),
         # 放行：版本号 / 更长的点分串不该被误判
         ("docs/tmp/x.md", "升级到 1.2.3.4.5 版本。", 0),
         ("docs/tmp/x.md", "sha 10.0.31558 无关。", 0),
