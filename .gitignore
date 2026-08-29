@@ -31,6 +31,13 @@ env/
 *.db
 *.sqlite
 *.sqlite3
+# 覆盖率产物。即使把 reporter 收窄到 text(见 frontend/vitest.config.ts),
+# 仍要防住 `--coverage.reporter=html` 这类手动跑法 —— 那批 coverage/*.js
+# 会被 knip 判成「未被引用的文件」,直接把阻塞门禁 lint 变红。
+coverage/
+.coverage
+.coverage.*
+htmlcov/
 node_modules/
 .DS_Store
 *.log

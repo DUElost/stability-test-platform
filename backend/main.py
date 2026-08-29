@@ -85,6 +85,13 @@ from backend.tasks.saq_worker import (
 
 logger = logging.getLogger(__name__)
 
+# #563: give backend.** a stdout handler. Without this every app-level
+# logger.info() fell through to logging.lastResort (stderr, WARNING+ only),
+# so periodic sweeps and startup registration left no trace in production.
+from backend.core.logging_setup import configure_logging
+
+configure_logging()
+
 # Patch uvicorn loggers to include timestamps while preserving colors
 from uvicorn.logging import AccessFormatter, DefaultFormatter
 

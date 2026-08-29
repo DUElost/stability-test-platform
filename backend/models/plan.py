@@ -50,9 +50,12 @@ class Plan(Base):
     auto_archive_interval_seconds = Column(Integer, nullable=True)
     next_plan_id      = Column(Integer, ForeignKey("plan.id"), nullable=True)
     watcher_policy    = Column(JSONB, nullable=True)
-    # ADR-0029 归属（P1 M-a）：NULL = 迁移期瞬态，M-b 回填后归零（Legacy 承载存量 Plan）。
+    # ADR-0029 归属（P1-B2）：双必填——GENERIC 是显式「不限」哨兵，NULL 不再
+    # 存在（Legacy 承载存量 Plan 的回填目标）。生产 NOT NULL 由 migration
+    # e6f7g8h9i0j1 强制；ORM 保持可空以兼容测试 create_all 的宽松 schema
+    # （API 层 PlanCreate/PlanUpdate 已双必填）。
     project_id        = Column(Integer, ForeignKey("test_project.id"), nullable=True)
-    # D6：专项字典表（MTBF / 开关机 / MONKEY / …），Plan 列表按 项目×专项 二维分组。
+    # D6：专项字典表（MTBF / 开关机 / MONKEY / 运维），Plan 列表按 项目×专项 二维分组。
     specialty_id      = Column(Integer, ForeignKey("specialty.id"), nullable=True)
     # ADR-0030 v1.4（#404 PR-B）：套件绑定。NULL = P0 文件真源模式（不加门禁）；
     # 非空 = 托管模式（precheck 五步门禁 + prepare 冻结 dispatch_suite，随 PR-C 落地）。

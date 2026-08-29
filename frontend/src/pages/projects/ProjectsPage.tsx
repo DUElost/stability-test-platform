@@ -21,13 +21,14 @@ import ProjectDetailSheet from './components/ProjectDetailSheet';
 import CreateProjectDialog from './components/CreateProjectDialog';
 import MapModelsDialog from './components/MapModelsDialog';
 
-/** ADR-0029 facet：正交可组合筛选，选项从数据 distinct 提取。 */
-const FACET_FIELDS = ['customer', 'platform', 'form_factor', 'product_line'] as const;
+/** ADR-0029 facet：正交可组合筛选，选项从数据 distinct 提取。
+ *  platforms（P1-B 派生数组）匹配语义 = 包含；其余标量 = 相等。 */
+const FACET_FIELDS = ['customer', 'platforms', 'form_factor', 'product_line'] as const;
 type FacetField = (typeof FACET_FIELDS)[number];
 
 const FACET_LABEL: Record<FacetField, string> = {
   customer: '客户',
-  platform: '平台',
+  platforms: '平台',
   form_factor: '形态',
   product_line: '产品线',
 };
@@ -41,11 +42,22 @@ function facetChipClass(active: boolean): string {
   );
 }
 
+/** 字段匹配：platforms 数组含 filter；其余标量相等。 */
+function facetMatches(p: ProjectSummary, field: FacetField, filter: string): boolean {
+  const v = p[field];
+  if (Array.isArray(v)) return v.includes(filter);
+  return v === filter;
+}
+
 function facetOptions(projects: ProjectSummary[], field: FacetField): string[] {
   const values = new Set<string>();
   for (const p of projects) {
     const v = p[field];
-    if (v) values.add(v);
+    if (Array.isArray(v)) {
+      for (const item of v) values.add(item);
+    } else if (v) {
+      values.add(v);
+    }
   }
   return Array.from(values).sort();
 }
@@ -150,7 +162,7 @@ export default function ProjectsPage() {
   const filtered = useMemo(() => {
     if (!projects) return [];
     return projects.filter((p) =>
-      FACET_FIELDS.every((f) => !facetFilters[f] || p[f] === facetFilters[f]),
+      FACET_FIELDS.every((f) => !facetFilters[f] || facetMatches(p, f, facetFilters[f])),
     );
   }, [projects, facetFilters]);
 
@@ -381,6 +393,14 @@ export default function ProjectsPage() {
                     )}
                     {FACET_FIELDS.map((field) => {
                       const value = project[field];
+                      if (Array.isArray(value)) {
+                        if (value.length === 0) return null;
+                        return (
+                          <Badge key={field} variant="outline" className="text-[11px] font-normal">
+                            {FACET_LABEL[field]}: {value.join('、')}
+                          </Badge>
+                        );
+                      }
                       if (!value) return null;
                       return (
                         <Badge key={field} variant="outline" className="text-[11px] font-normal">
