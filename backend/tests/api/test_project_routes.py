@@ -132,6 +132,25 @@ class TestListProjects:
         all_keys = {p["project_key"] for p in all_resp.json()["data"]}
         assert all_keys == {"proj-a", "LEGACY"}
 
+    def test_status_filter_archived(self, client, auth_headers, db_session, project_a):
+        """ADR-0029 P0：status 过滤——归档项目可从列表筛出（修「归档是 no-op」）。"""
+        project_a.status = "ARCHIVED"
+        db_session.commit()
+
+        active = client.get("/api/v1/projects?status=ACTIVE", headers=auth_headers)
+        assert active.status_code == 200
+        assert active.json()["data"] == []
+
+        archived = client.get("/api/v1/projects?status=ARCHIVED", headers=auth_headers)
+        assert archived.status_code == 200
+        keys = {p["project_key"] for p in archived.json()["data"]}
+        assert keys == {"proj-a"}
+
+        # 缺省不带 status = 全量（既有行为不变）
+        all_projects = client.get("/api/v1/projects", headers=auth_headers)
+        keys_all = {p["project_key"] for p in all_projects.json()["data"]}
+        assert keys_all == {"proj-a"}
+
 
 class TestGetProject:
     def test_detail_counts_and_recent_runs(
@@ -172,6 +191,7 @@ class TestInventoryModels:
             "user_mapped_devices": 0,
             "distinct_models": 0,
             "unmapped_models": [],
+            "unassigned_devices": 0,
         }
 
     def test_groups_by_model_seed_is_not_mapping(
@@ -222,6 +242,9 @@ class TestInventoryModels:
         assert summary["user_mapped_devices"] == 3
         assert summary["distinct_models"] == 4
         assert set(summary["unmapped_models"]) == {None, "MYSTERY_X"}
+        # ADR-0029 P0：严格未归属口径（project_id IS NULL）——SEED 归属不算
+        # （s-legacy 归 project_legacy），3 台 NULL（s-null/s-blank-none/s-blank-empty）
+        assert summary["unassigned_devices"] == 3
 
     def test_mixed_user_and_seed_on_same_model(
         self, client, auth_headers, db_session, project_a, project_legacy

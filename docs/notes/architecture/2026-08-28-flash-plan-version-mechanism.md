@@ -1,6 +1,6 @@
 # Plan 级版本选择机制缺口的现场记录（换版本为何要新 Plan）
 
-Status: open（方案 A 待实施）
+Status: implemented（方案 A 已由 flash_firmware v1.3.6 per-model versions 落地，2026-08-29，PR #501）
 Class: architecture
 
 ## 现状
