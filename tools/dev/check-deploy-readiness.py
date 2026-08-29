@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -47,7 +48,8 @@ def _database_url() -> str:
                 break
     if not url:
         raise SystemExit("DATABASE_URL not found in ambient env / .env.backend / .env")
-    return url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    # psycopg.connect() needs plain postgresql:// (not +asyncpg / +psycopg / +psycopg2).
+    return re.sub(r"^postgresql\+[^:]+://", "postgresql://", url, count=1)
 
 
 def main() -> None:
