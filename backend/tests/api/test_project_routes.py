@@ -468,6 +468,18 @@ class TestUpdateAndArchiveProject:
 
 
 class TestMapProject:
+    @staticmethod
+    def _active_rules(db_session, project_id):
+        from backend.models.project_rule import ProjectDeviceRule
+
+        return [
+            r.match_value
+            for r in db_session.query(ProjectDeviceRule)
+            .filter_by(project_id=project_id, is_active=True)
+            .order_by(ProjectDeviceRule.match_value)
+            .all()
+        ]
+
     def test_preview_and_apply_from_seed_and_null(
         self, client, admin_headers, db_session, project_a, project_legacy
     ):
@@ -497,11 +509,11 @@ class TestMapProject:
         db_session.refresh(d_seed)
         db_session.refresh(d_null)
         db_session.refresh(d_already)
-        db_session.refresh(project_a)
         assert d_seed.project_id == project_a.id
         assert d_null.project_id == project_a.id
         assert d_already.project_id == project_a.id
-        assert project_a.match_models == ["MLD_LX2"]
+        # ADR-0029 P1：规则写入 project_device_rule（match_models 列冻结）
+        assert self._active_rules(db_session, project_a.id) == ["MLD_LX2"]
 
         inventory = client.get(
             "/api/v1/projects/inventory/models", headers=admin_headers
@@ -547,10 +559,9 @@ class TestMapProject:
         assert blocked.status_code == 409
         db_session.refresh(d_conflict)
         db_session.refresh(d_free)
-        db_session.refresh(project_a)
         assert d_conflict.project_id == other.id
         assert d_free.project_id is None
-        assert project_a.match_models == []
+        assert self._active_rules(db_session, project_a.id) == []
 
         applied = client.post(
             "/api/v1/projects/proj-a/map/apply",
@@ -560,10 +571,9 @@ class TestMapProject:
         assert applied.status_code == 200
         db_session.refresh(d_conflict)
         db_session.refresh(d_free)
-        db_session.refresh(project_a)
         assert d_conflict.project_id == project_a.id
         assert d_free.project_id == project_a.id
-        assert project_a.match_models == ["MLD_LX2"]
+        assert self._active_rules(db_session, project_a.id) == ["MLD_LX2"]
 
     def test_seed_project_cannot_be_mapped(
         self, client, admin_headers, project_legacy
@@ -588,6 +598,99 @@ class TestMapProject:
             "/api/v1/projects/proj-a/map/apply",
             headers=auth_headers,
             json={"models": ["MLD_LX2"]},
+        )
+        assert resp.status_code == 403
+
+
+class TestPromoteSeedProject:
+    """ADR-0029 P0：SEED 回填标签转正为人工项目。"""
+
+    @staticmethod
+    def _seed_project(db_session, *, key="HONOR-ELA", status="ACTIVE"):
+        from backend.models.project import TestProject as ProjectModel
+
+        p = ProjectModel(
+            project_key=key,
+            display_name="Honor ELA",
+            customer="荣耀",
+            platform="MTK",
+            source="SEED",
+            match_models=[],
+            status=status,
+        )
+        db_session.add(p)
+        db_session.commit()
+        return p
+
+    def test_promote_creates_user_project_and_moves_devices(
+        self, client, db_session, admin_headers
+    ):
+        seed = self._seed_project(db_session)
+        d1 = _make_device(db_session, "s-ela-1", seed, model="MLD_LX2", platform="MTK")
+        d2 = _make_device(db_session, "s-ela-2", seed, model="MLD_LX3", platform="MTK")
+        db_session.commit()
+
+        resp = client.post(
+            "/api/v1/projects/seed/HONOR-ELA/promote", headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["project_key"] == "HONOR-ELA"
+        assert data["source"] == "USER"
+        assert data["device_count"] == 2
+        assert data["match_models"] == ["MLD_LX2", "MLD_LX3"]
+        assert data["customer"] == "荣耀"
+
+        # 就地转换：同一行身份，设备归属不动（project_id 不变）
+        db_session.refresh(seed)
+        assert seed.source == "USER"
+        assert seed.status == "ACTIVE"
+        db_session.refresh(d1)
+        db_session.refresh(d2)
+        assert d1.project_id == seed.id
+        assert d2.project_id == seed.id
+
+        # 列表里出现（「设备行显示归属它、筛选下拉里却没有它」消除）
+        listed = client.get("/api/v1/projects", headers=admin_headers).json()["data"]
+        assert any(p["project_key"] == "HONOR-ELA" for p in listed)
+
+    def test_promote_legacy_rejected(self, client, admin_headers, project_legacy):
+        resp = client.post(
+            "/api/v1/projects/seed/LEGACY/promote", headers=admin_headers
+        )
+        assert resp.status_code == 422
+        assert "fallback" in resp.json()["detail"]
+
+    def test_promote_archived_rejected(self, client, db_session, admin_headers):
+        self._seed_project(db_session, status="ARCHIVED")
+        resp = client.post(
+            "/api/v1/projects/seed/HONOR-ELA/promote", headers=admin_headers
+        )
+        assert resp.status_code == 409
+        assert "archived" in resp.json()["detail"]
+
+    def test_promote_twice_404(self, client, db_session, admin_headers):
+        """转正后行已非 SEED——重复调用 404（幂等语义）。"""
+        self._seed_project(db_session)
+        first = client.post(
+            "/api/v1/projects/seed/HONOR-ELA/promote", headers=admin_headers
+        )
+        assert first.status_code == 200
+        second = client.post(
+            "/api/v1/projects/seed/HONOR-ELA/promote", headers=admin_headers
+        )
+        assert second.status_code == 404
+
+    def test_promote_unknown_404(self, client, admin_headers):
+        resp = client.post(
+            "/api/v1/projects/seed/NOPE/promote", headers=admin_headers
+        )
+        assert resp.status_code == 404
+
+    def test_promote_forbidden_for_non_admin(self, client, db_session, auth_headers):
+        self._seed_project(db_session)
+        resp = client.post(
+            "/api/v1/projects/seed/HONOR-ELA/promote", headers=auth_headers
         )
         assert resp.status_code == 403
 
@@ -634,6 +737,9 @@ class TestBulkAssignProject:
         self, client, db_session, project_a, admin_headers
     ):
         d1 = _make_device(db_session, "s-bulk-idem", project_a)
+        # 已归入且已钉住 = 幂等 no-op（不记 audit）
+        d1.project_pinned = True
+        db_session.commit()
         resp = client.post(
             "/api/v1/devices/bulk-project",
             headers=admin_headers,

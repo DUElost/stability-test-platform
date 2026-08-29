@@ -49,6 +49,13 @@ CodeRabbit 对当前 head 给出终态决策时构成阻断）；任何引入等
 `pr-migrate-empty-db`（空库迁移硬门禁）。详见
 `docs/notes/process/2026-08-29-remove-pr-backend-test.md`。
 
+## 补充（2026-08-29，串行 auto-merge + 自动 update branch）
+
+多 PR 并行 auto-merge 会在队首合入后使其余 PR 连环 `BEHIND` 并重跑 CI。
+`enable-auto-merge.yml` 改为 FIFO 队列（仅队首挂 auto-merge）；
+`pr-update-branch.yml` 在 required 全绿且落后时自动 update branch。
+详见 `docs/notes/process/2026-08-29-serial-automerge-update-branch.md`。
+
 ## Revisit
 
 若未来出现第二维护者或外部贡献者，「合并前全量验证」的价值排序需要重评

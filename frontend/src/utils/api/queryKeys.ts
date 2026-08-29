@@ -87,6 +87,8 @@ export const jobReportKeys = {
 /** ADR-0029 项目登记簿 — 页面级独立筛选（无全局选择器，D8 挂起）。 */
 export const projectKeys = {
   list: () => ['projects'] as const,
+  /** ADR-0029 P0：SEED 回填标签（待转正队列），与 list 分开缓存 */
+  seed: () => ['projects', 'seed'] as const,
   detail: (key: string) => ['project', key] as const,
   inventoryModels: () => ['projects', 'inventory-models'] as const,
   inventorySummary: () => ['projects', 'inventory-summary'] as const,

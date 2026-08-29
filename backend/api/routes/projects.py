@@ -17,10 +17,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy.orm.attributes import flag_modified
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import User, get_current_active_user, require_admin
@@ -43,6 +42,7 @@ from backend.models.host import Device
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import SEED_PROJECT_KEYS, TestProject
+from backend.models.project_rule import ProjectDeviceRule
 from backend.realtime.socketio_server import emit_project_changed
 
 _UPDATABLE_FIELDS = (
@@ -127,7 +127,6 @@ def _aggregate_inventory(
         if (
             source == _USER_SOURCE
             and project_key
-            and project_key not in SEED_PROJECT_KEYS
         ):
             bucket["mapped_project_keys"].add(project_key)
         else:
@@ -151,14 +150,37 @@ def _aggregate_inventory(
     return items
 
 
+def _rule_values_for_project(db: Session, project_id: int) -> list[str]:
+    """ADR-0029 P1：项目活跃规则 → match_models 兼容列表（读侧唯一来源）。
+
+    match_models 列 P1-B 阶段 drop，此处为过渡期读兼容。
+    """
+    rows = db.execute(
+        select(ProjectDeviceRule.match_value)
+        .where(
+            ProjectDeviceRule.project_id == project_id,
+            ProjectDeviceRule.match_type == "MODEL",
+            ProjectDeviceRule.is_active.is_(True),
+        )
+        .order_by(ProjectDeviceRule.match_value)
+    ).scalars().all()
+    return list(rows)
+
+
 def _rule_models_by_model(db: Session) -> dict[str | None, set[str]]:
     mapping: dict[str | None, set[str]] = {}
-    for project in db.query(TestProject).filter(TestProject.source == _USER_SOURCE).all():
-        if project.project_key in SEED_PROJECT_KEYS:
-            continue
-        for raw in project.match_models or []:
-            model = _blank_to_none(raw)
-            mapping.setdefault(model, set()).add(project.project_key)
+    rows = db.execute(
+        select(ProjectDeviceRule.match_value, TestProject.project_key)
+        .join(TestProject, TestProject.id == ProjectDeviceRule.project_id)
+        .where(
+            ProjectDeviceRule.is_active.is_(True),
+            TestProject.source == _USER_SOURCE,
+        )
+    ).all()
+    for raw, key in rows:
+        model = _blank_to_none(raw)
+        if model is not None:
+            mapping.setdefault(model, set()).add(key)
     return mapping
 
 
@@ -218,7 +240,7 @@ def _require_user_project(project: TestProject) -> None:
 def _fill_summary(db: Session, project: TestProject) -> ProjectSummaryOut:
     device_count, running_run_count = _summary_rows(db).get(project.id, (0, 0))
     out = ProjectSummaryOut.model_validate(project)
-    out.match_models = list(project.match_models or [])
+    out.match_models = _rule_values_for_project(db, project.id)
     out.device_count = device_count
     out.running_run_count = running_run_count
     return out
@@ -280,7 +302,8 @@ def list_projects(
     query = db.query(TestProject).order_by(TestProject.id)
     if source == "user":
         query = query.filter(TestProject.source == _USER_SOURCE)
-        query = query.filter(~TestProject.project_key.in_(SEED_PROJECT_KEYS))
+        # 注意：不按 SEED_PROJECT_KEYS 剔除 key——promote 转正的行 key 不变、
+        # 但 source=USER，必须显示；未转正的 SEED 行已被 source 过滤挡住
     elif source == "seed":
         query = query.filter(TestProject.source == _SEED_SOURCE)
     if status:
@@ -291,7 +314,7 @@ def list_projects(
     for project in projects:
         device_count, running_run_count = aggregates.get(project.id, (0, 0))
         out = ProjectSummaryOut.model_validate(project)
-        out.match_models = list(project.match_models or [])
+        out.match_models = _rule_values_for_project(db, project.id)
         out.device_count = device_count
         out.running_run_count = running_run_count
         items.append(out)
@@ -369,6 +392,86 @@ def get_inventory_summary(
     _current_user: User = Depends(get_current_active_user),
 ):
     return ok(_inventory_summary(db, _load_inventory(db)))
+
+
+@router.post(
+    "/seed/{project_key}/promote",
+    response_model=ApiResponse[ProjectSummaryOut],
+)
+def promote_seed_project(
+    project_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0029 P0：SEED 回填标签转正为人工项目（admin 动作，就地转换）。
+
+    把 P1 脚本灌入的标签（HONOR-ELA 等）变成有终点的待办队列：SEED 行
+    source SEED → USER、match_models 预填其持有设备的型号、设备归属不动
+    （project_id 不变，行身份即归属身份）。解决「设备行显示归属它、筛选
+    下拉里却没有它」的半隐身状态。
+
+    project_key 全局唯一（uq_test_project_key 不分 source），不能新建同 key
+    USER 行——就地转换是唯一不违反约束的路径。
+
+    LEGACY 是「无型号设备」兜底标签，不是待转正对象——拒绝。
+    幂等：source=SEED 且 ACTIVE 才能转正，重复调用 → 404（已非 SEED）。
+    """
+    seed = (
+        db.query(TestProject)
+        .filter(TestProject.project_key == project_key)
+        .first()
+    )
+    if seed is None or seed.source != _SEED_SOURCE:
+        raise HTTPException(status_code=404, detail="seed project not found")
+    if project_key == "LEGACY":
+        raise HTTPException(status_code=422, detail="LEGACY is the fallback bucket, not promotable")
+    if seed.status == "ARCHIVED":
+        raise HTTPException(status_code=409, detail="seed project archived, not promotable")
+
+    models = sorted(
+        {
+            _blank_to_none(m)
+            for (m,) in (
+                db.query(Device.model)
+                .filter(Device.project_id == seed.id, Device.model.is_not(None))
+                .all()
+            )
+            if _blank_to_none(m)
+        }
+    )
+    seed.source = _USER_SOURCE
+    for model in models:
+        db.add(ProjectDeviceRule(
+            project_id=seed.id,
+            match_type="MODEL",
+            match_value=model,
+            created_by=current_user.id,
+        ))
+    record_audit(
+        db,
+        action="promote_seed_project",
+        resource_type="test_project",
+        resource_id=seed.id,
+        details={
+            "project_key": project_key,
+            "match_models": models,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
+    from backend.realtime.socketio_server import emit_project_changed
+
+    emit_project_changed(seed.id, "promoted")
+
+    device_count, running_run_count = _summary_rows(db).get(seed.id, (0, 0))
+    out = ProjectSummaryOut.model_validate(seed)
+    out.match_models = _rule_values_for_project(db, seed.id)
+    out.device_count = device_count
+    out.running_run_count = running_run_count
+    return ok(out)
 
 
 @router.put("/{project_key}", response_model=ApiResponse[ProjectSummaryOut])
@@ -503,13 +606,33 @@ def apply_project_map(
             status_code=409,
             detail="models already mapped to another user project",
         )
-    merged = list(project.match_models or [])
+    # ADR-0029 P1：规则写入 project_device_rule（活跃唯一索引兜底——同型号
+    # 双归属 INSERT 即 IntegrityError，preview 设备级冲突之外的双保险）。
     for model in preview.models:
-        if model not in merged:
-            merged.append(model)
-    project.match_models = merged
-    flag_modified(project, "match_models")
+        existing = db.execute(
+            select(ProjectDeviceRule)
+            .where(
+                ProjectDeviceRule.match_type == "MODEL",
+                ProjectDeviceRule.match_value == model,
+                ProjectDeviceRule.is_active.is_(True),
+            )
+        ).scalar_one_or_none()
+        if existing is not None and existing.project_id != project.id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"model {model} already ruled to another project",
+            )
+        if existing is None:
+            db.add(ProjectDeviceRule(
+                project_id=project.id,
+                match_type="MODEL",
+                match_value=model,
+                created_by=current_user.id,
+            ))
+    # 设备重算：pinned 设备（人工钉住）不被规则覆盖
     for device in to_assign:
+        if device.project_pinned:
+            continue
         from_key = device.project.project_key if device.project else None
         device.project_id = project.id
         record_audit(
@@ -582,7 +705,7 @@ def get_project(
     project = _get_project_or_404(db, project_key)
     device_count, running_run_count = _summary_rows(db).get(project.id, (0, 0))
     detail = ProjectDetailOut.model_validate(project)
-    detail.match_models = list(project.match_models or [])
+    detail.match_models = _rule_values_for_project(db, project.id)
     detail.device_count = device_count
     detail.running_run_count = running_run_count
     detail.plan_count = (
