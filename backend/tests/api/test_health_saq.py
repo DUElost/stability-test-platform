@@ -22,9 +22,9 @@ class TestHealthSaqReady:
         if response.status_code == 200:
             assert data["data"]["saq_ready"] is False
             assert data["data"]["saq_inprocess_worker"] is True
-            assert "socketio_redis_adapter" in data["data"]
-            assert "agent_sid_registry" in data["data"]
-            assert data["data"]["agent_sid_registry"] is False
+            assert "socketio_redis_adapter_enabled" in data["data"]
+            assert "agent_sid_registry_enabled" in data["data"]
+            assert data["data"]["agent_sid_registry_enabled"] is False
             assert "admission_queue_flag" in data["data"]
             assert "admission_queue_pump_ready" in data["data"]
             assert "admission_queue_enabled" in data["data"]
