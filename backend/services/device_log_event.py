@@ -235,7 +235,12 @@ def link_signals_to_device_log_events_sync(
     db: Session,
     job_ids: Sequence[int],
 ) -> int:
-    """Sync read-repair: link signals when DLE landed first (#214 / #528)."""
+    """Link signals when the DLE landed first (#214 / #528).
+
+    Callers own the transaction: signal ingest (``agent_api``) and the
+    ``signal_link_reconcile`` sweep (#556). Do not call from a request path
+    whose session is never committed — the UPDATE would silently roll back.
+    """
     ids = sorted({int(jid) for jid in job_ids if jid is not None})
     if not ids:
         return 0

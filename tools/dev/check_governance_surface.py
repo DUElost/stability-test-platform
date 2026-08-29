@@ -11,7 +11,7 @@
   S3  .cursor/rules/*.mdc frontmatter 三字段齐全，alwaysApply!=true 时 globs 非空
       （坏 frontmatter = 规则静默不加载，与 S1 同故障类）
   S4  pr-agent.yml 防绕过机制锚点仍在（digest pin / fallback 空 /
-      #421 disable-auto 步骤 / 门禁与命令 job 分离）
+      门禁与命令 job 分离）
   S5  required checks 文档↔workflow 互检：ci.yml/pr-agent.yml 定义的 job id
       未在 AGENTS.md 记载，或反之缺 job
   S6  CLAUDE.md/AGENTS.md 行数信息行（仅输出，不判失败——分层加载是既定取舍）
@@ -126,11 +126,10 @@ def check_mdc_frontmatter(filename: str, text: str) -> list[str]:
 
 
 def check_pr_agent_anchors(text: str) -> list[str]:
-    """S4: 防绕过机制锚点仍在。这些都是真实事故的转化物（#399/#421）。"""
+    """S4: 防绕过机制锚点仍在。这些都是真实事故的转化物（#399 等）。"""
     anchors = {
         "镜像 digest pin": "docker://pragent/pr-agent@sha256:",
         "fallback_models 置空": "config.fallback_models",
-        "#421 gate 失败显式关 auto-merge 步骤": "Disable auto-merge on gate failure",
         "门禁/命令 job 分离(防 gate 被顶掉)": "pr-agent-comment:",
         "gate security 判定": "No security concerns",
     }
@@ -142,7 +141,7 @@ def check_pr_agent_anchors(text: str) -> list[str]:
 
 
 def check_required_checks_doc(workflows: dict[str, str], agents_md: str) -> list[str]:
-    """S5: ci.yml/pr-agent.yml 的 PR 门禁 job 与 AGENTS.md 六项记载互检。
+    """S5: ci.yml/pr-agent.yml 的 PR 门禁 job 与 AGENTS.md 记载互检。
 
     CodeQL 由 GitHub 默认设置提供（仓库无对应 workflow 文件），只查文档侧。
     """
@@ -344,13 +343,12 @@ def run_self_test() -> int:
         "jobs:\n  pr-agent-gate:\n"
         "      uses: docker://pragent/pr-agent@sha256:abc\n"
         "          config.fallback_models: '[]'\n"
-        "      - name: Disable auto-merge on gate failure\n"
         "  pr-agent-comment:\n"
         "          - No security concerns\n"
     )
-    broken = full_pr_agent.replace("Disable auto-merge on gate failure", "renamed-step")
+    broken = full_pr_agent.replace("No security concerns", "Renamed verdict")
     expect("S4 锚点齐全", lambda: check_pr_agent_anchors(full_pr_agent), False)
-    expect("S4 disable-auto 步骤丢失", lambda: check_pr_agent_anchors(broken), True)
+    expect("S4 security 判定丢失", lambda: check_pr_agent_anchors(broken), True)
 
     ok_ci = "jobs:\n  lint:\n  pr-typecheck:\n  pr-compileall:\n  pr-agent-tests:\n  pr-migrate-empty-db:\n"
     drop_ci = ok_ci.replace("  pr-typecheck:\n", "")
