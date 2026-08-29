@@ -326,12 +326,15 @@ async def health_check():
         from backend.realtime.agent_sid_registry import agent_sid_registry_enabled
         from backend.realtime.socketio_redis import socketio_redis_adapter_enabled
 
+        # 注意：以下两项是 **opt-in 配置开关**（ADR-0027 多实例能力，单实例
+        # 默认 false），不是实时连接状态——恒 false ≠ redis/agent 异常。
+        # 键名带 _enabled 后缀以消除歧义（曾误读为「适配器未连接」）。
         payload: dict = {
             "status": "healthy",
             "saq_ready": is_saq_ready(),
             "saq_inprocess_worker": inprocess_saq,
-            "socketio_redis_adapter": socketio_redis_adapter_enabled(),
-            "agent_sid_registry": agent_sid_registry_enabled(),
+            "socketio_redis_adapter_enabled": socketio_redis_adapter_enabled(),
+            "agent_sid_registry_enabled": agent_sid_registry_enabled(),
             "admission_queue_flag": admission_queue_flag_enabled(),
             "admission_queue_pump_ready": is_queue_pump_ready(),
             "admission_queue_enabled": admission_queue_enabled(),
