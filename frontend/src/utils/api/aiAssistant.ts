@@ -57,7 +57,7 @@ export const aiAssistant = {
         `${BASE}/sessions/${sessionId}/messages`,
       ),
     ),
-  /** 发送消息：后端入队一轮编排，返回 202 + pending 占位消息。 */
+  /** 发送消息：后端入队一轮编排，返回 200 + pending 占位消息。 */
   sendMessage: (sessionId: number, content: string) =>
     unwrapApiResponse(
       apiClient.post<ApiResponseEnvelope<AiChatMessage>>(
