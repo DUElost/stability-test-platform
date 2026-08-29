@@ -17,10 +17,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy.orm.attributes import flag_modified
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import User, get_current_active_user, require_admin
@@ -43,12 +42,12 @@ from backend.models.host import Device
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import SEED_PROJECT_KEYS, TestProject
+from backend.models.project_rule import ProjectDeviceRule
 from backend.realtime.socketio_server import emit_project_changed
 
 _UPDATABLE_FIELDS = (
     "display_name",
     "customer",
-    "platform",
     "form_factor",
     "product_line",
     "jira_project_key",
@@ -59,6 +58,29 @@ router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 _ACTIVE_RUN_STATUSES = ("RUNNING", "QUEUED", "PRECHECK")
 _USER_SOURCE = "USER"
 _SEED_SOURCE = "SEED"
+
+
+def _platforms_map(db: Session, project_ids: list[int]) -> dict[int, list[str]]:
+    """ADR-0029 P1-B：项目平台从设备派生（distinct(device.platform)）。
+
+    事实层在 device；UNKNOWN（探测失败哨兵）不展示。列表场景一次聚合，
+    避免逐项目 N+1。
+    """
+    if not project_ids:
+        return {}
+    rows = db.execute(
+        select(Device.project_id, Device.platform)
+        .where(
+            Device.project_id.in_(project_ids),
+            Device.platform.is_not(None),
+        )
+        .distinct()
+    ).all()
+    buckets: dict[int, set[str]] = {}
+    for pid, platform in rows:
+        if platform and platform != "UNKNOWN":
+            buckets.setdefault(pid, set()).add(platform)
+    return {pid: sorted(values) for pid, values in buckets.items()}
 
 
 def _summary_rows(db: Session) -> dict[int, tuple[int, int]]:
@@ -150,12 +172,37 @@ def _aggregate_inventory(
     return items
 
 
+def _rule_values_for_project(db: Session, project_id: int) -> list[str]:
+    """项目活跃规则 → match_models 兼容列表（对外 API 契约）。
+
+    match_models 列已 drop（P1 收尾），此处是唯一读侧派生来源。
+    """
+    rows = db.execute(
+        select(ProjectDeviceRule.match_value)
+        .where(
+            ProjectDeviceRule.project_id == project_id,
+            ProjectDeviceRule.match_type == "MODEL",
+            ProjectDeviceRule.is_active.is_(True),
+        )
+        .order_by(ProjectDeviceRule.match_value)
+    ).scalars().all()
+    return list(rows)
+
+
 def _rule_models_by_model(db: Session) -> dict[str | None, set[str]]:
     mapping: dict[str | None, set[str]] = {}
-    for project in db.query(TestProject).filter(TestProject.source == _USER_SOURCE).all():
-        for raw in project.match_models or []:
-            model = _blank_to_none(raw)
-            mapping.setdefault(model, set()).add(project.project_key)
+    rows = db.execute(
+        select(ProjectDeviceRule.match_value, TestProject.project_key)
+        .join(TestProject, TestProject.id == ProjectDeviceRule.project_id)
+        .where(
+            ProjectDeviceRule.is_active.is_(True),
+            TestProject.source == _USER_SOURCE,
+        )
+    ).all()
+    for raw, key in rows:
+        model = _blank_to_none(raw)
+        if model is not None:
+            mapping.setdefault(model, set()).add(key)
     return mapping
 
 
@@ -215,7 +262,8 @@ def _require_user_project(project: TestProject) -> None:
 def _fill_summary(db: Session, project: TestProject) -> ProjectSummaryOut:
     device_count, running_run_count = _summary_rows(db).get(project.id, (0, 0))
     out = ProjectSummaryOut.model_validate(project)
-    out.match_models = list(project.match_models or [])
+    out.match_models = _rule_values_for_project(db, project.id)
+    out.platforms = _platforms_map(db, [project.id]).get(project.id, [])
     out.device_count = device_count
     out.running_run_count = running_run_count
     return out
@@ -285,11 +333,13 @@ def list_projects(
         query = query.filter(TestProject.status == status)
     projects = query.all()
     aggregates = _summary_rows(db)
+    platforms_map = _platforms_map(db, [p.id for p in projects])
     items = []
     for project in projects:
         device_count, running_run_count = aggregates.get(project.id, (0, 0))
         out = ProjectSummaryOut.model_validate(project)
-        out.match_models = list(project.match_models or [])
+        out.match_models = _rule_values_for_project(db, project.id)
+        out.platforms = platforms_map.get(project.id, [])
         out.device_count = device_count
         out.running_run_count = running_run_count
         items.append(out)
@@ -317,12 +367,10 @@ def create_project(
         project_key=key,
         display_name=payload.display_name.strip(),
         customer=payload.customer,
-        platform=payload.platform,
         form_factor=payload.form_factor,
         product_line=payload.product_line,
         jira_project_key=payload.jira_project_key,
         source=_USER_SOURCE,
-        match_models=[],
         status="ACTIVE",
     )
     db.add(project)
@@ -416,8 +464,13 @@ def promote_seed_project(
         }
     )
     seed.source = _USER_SOURCE
-    seed.match_models = models
-    flag_modified(seed, "match_models")
+    for model in models:
+        db.add(ProjectDeviceRule(
+            project_id=seed.id,
+            match_type="MODEL",
+            match_value=model,
+            created_by=current_user.id,
+        ))
     record_audit(
         db,
         action="promote_seed_project",
@@ -438,7 +491,7 @@ def promote_seed_project(
 
     device_count, running_run_count = _summary_rows(db).get(seed.id, (0, 0))
     out = ProjectSummaryOut.model_validate(seed)
-    out.match_models = list(models)
+    out.match_models = _rule_values_for_project(db, seed.id)
     out.device_count = device_count
     out.running_run_count = running_run_count
     return ok(out)
@@ -576,13 +629,33 @@ def apply_project_map(
             status_code=409,
             detail="models already mapped to another user project",
         )
-    merged = list(project.match_models or [])
+    # ADR-0029 P1：规则写入 project_device_rule（活跃唯一索引兜底——同型号
+    # 双归属 INSERT 即 IntegrityError，preview 设备级冲突之外的双保险）。
     for model in preview.models:
-        if model not in merged:
-            merged.append(model)
-    project.match_models = merged
-    flag_modified(project, "match_models")
+        existing = db.execute(
+            select(ProjectDeviceRule)
+            .where(
+                ProjectDeviceRule.match_type == "MODEL",
+                ProjectDeviceRule.match_value == model,
+                ProjectDeviceRule.is_active.is_(True),
+            )
+        ).scalar_one_or_none()
+        if existing is not None and existing.project_id != project.id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"model {model} already ruled to another project",
+            )
+        if existing is None:
+            db.add(ProjectDeviceRule(
+                project_id=project.id,
+                match_type="MODEL",
+                match_value=model,
+                created_by=current_user.id,
+            ))
+    # 设备重算：pinned 设备（人工钉住）不被规则覆盖
     for device in to_assign:
+        if device.project_pinned:
+            continue
         from_key = device.project.project_key if device.project else None
         device.project_id = project.id
         record_audit(
@@ -655,7 +728,7 @@ def get_project(
     project = _get_project_or_404(db, project_key)
     device_count, running_run_count = _summary_rows(db).get(project.id, (0, 0))
     detail = ProjectDetailOut.model_validate(project)
-    detail.match_models = list(project.match_models or [])
+    detail.match_models = _rule_values_for_project(db, project.id)
     detail.device_count = device_count
     detail.running_run_count = running_run_count
     detail.plan_count = (

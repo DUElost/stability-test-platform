@@ -232,33 +232,40 @@ class TestProjectAttribution:
     def _seed(self, db_session):
         from backend.models.host import Host
         from backend.models.project import TestProject
+        from backend.models.project_rule import ProjectDeviceRule
 
         host = Host(id="h-attr", hostname="hattr", status="ONLINE")
         db_session.add(host)
         db_session.commit()
-        project = TestProject(
-            project_key="ATTR-P", display_name="attr", match_models=["MLD_LX2"],
-        )
+        project = TestProject(project_key="ATTR-P", display_name="attr")
         db_session.add(project)
+        db_session.commit()
+        # ADR-0029 P1：rule 判定走规则表（match_models 列已 drop）
+        db_session.add(ProjectDeviceRule(
+            project_id=project.id, match_value="MLD_LX2"))
         db_session.commit()
         rule_dev = Device(serial="S-rule-1", host_id="h-attr", status="ONLINE",
                           model="MLD_LX2", project_id=project.id)
         manual_dev = Device(serial="S-manual-1", host_id="h-attr", status="ONLINE",
                             model="Z2581", project_id=project.id)
+        pinned_dev = Device(serial="S-pinned-1", host_id="h-attr", status="ONLINE",
+                            model="MLD_LX2", project_id=project.id,
+                            project_pinned=True)
         unassigned_dev = Device(serial="S-none-1", host_id="h-attr", status="ONLINE",
                                 model="MLD_LX3")
-        db_session.add_all([rule_dev, manual_dev, unassigned_dev])
+        db_session.add_all([rule_dev, manual_dev, pinned_dev, unassigned_dev])
         db_session.commit()
         return rule_dev, manual_dev, unassigned_dev
 
     def test_attribution_source_tristate(self, client, db_session, auth_headers):
-        """型号命中 match_models → rule；归属但型号不在规则 → manual；无项目 → unassigned。"""
+        """型号命中 match_models → rule；钉住 → pinned；归属但不在规则 → manual；无项目 → unassigned。"""
         rule_dev, manual_dev, unassigned_dev = self._seed(db_session)
 
         response = client.get("/api/v1/devices", headers=auth_headers)
         assert response.status_code == 200
         by_serial = {d["serial"]: d for d in response.json()}
         assert by_serial[rule_dev.serial]["attribution_source"] == "rule"
+        assert by_serial["S-pinned-1"]["attribution_source"] == "pinned"
         assert by_serial[manual_dev.serial]["attribution_source"] == "manual"
         assert by_serial[unassigned_dev.serial]["attribution_source"] == "unassigned"
         assert by_serial[unassigned_dev.serial]["project_key"] is None

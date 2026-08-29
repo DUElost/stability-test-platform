@@ -13,6 +13,7 @@ from backend.core.database import get_db
 from backend.core.audit import record_audit
 from backend.models.host import Host, Device
 from backend.models.project import TestProject
+from backend.services.project_attribution import resolve_project_id
 from backend.api.schemas import DeviceCreate, DeviceOut, PaginatedResponse
 from backend.api.response import ApiResponse, ok
 from backend.api.schemas.device import BulkProjectAssignIn
@@ -151,10 +152,12 @@ def bulk_assign_project(
         raise HTTPException(status_code=404, detail="one or more devices not found")
 
     for device in devices:
-        if device.project_id == project.id:
+        if device.project_id == project.id and device.project_pinned:
             continue
         from_key = device.project.project_key if device.project else None
         device.project_id = project.id
+        # ADR-0029 P1：批量归入 = 人工钉住（命令式例外路径，规则不覆盖）
+        device.project_pinned = True
         record_audit(
             db,
             action="assign_project",
@@ -181,29 +184,38 @@ def bulk_assign_project(
         # 整批归入同一目标；joinedload 缓存的关系在赋值后不自动失效，
         # 直接写目标 key（不读 device.project）
         out.project_key = project.project_key
-        out.attribution_source = _attribution_source(project, device.model)
+        out.attribution_source = _attribution_source(
+            db, project, device.model, pinned=device.project_pinned,
+        )
         items.append(out)
     return ok(items)
 
 
-def _attribution_source(project, model: Optional[str]) -> str:
-    """ADR-0029 P0：归属来源派生（rule / manual / unassigned）。
+def _attribution_source(
+    db: Session, project, model: Optional[str], *, pinned: bool = False,
+) -> str:
+    """ADR-0029 归属来源派生（pinned / rule / manual / unassigned）。
 
-    无项目 → unassigned；型号命中项目 match_models（精确匹配，非前缀推断）
-    → rule；其余（人工批量归入、SEED 回填、型号不在规则）→ manual。
+    无项目 → unassigned；project_pinned（人工钉住，规则不覆盖）→ pinned；
+    型号命中项目活跃规则（project_device_rule，精确匹配）→ rule；其余
+    （人工批量归入、SEED 回填、型号不在规则）→ manual。
     """
     if project is None:
         return "unassigned"
-    if model and model in (project.match_models or []):
+    if pinned:
+        return "pinned"
+    if model and resolve_project_id(db, model) == project.id:
         return "rule"
     return "manual"
 
 
-def _fill_project_key(device: Device, out) -> None:
+def _fill_project_key(db: Session, device: Device, out) -> None:
     """ADR-0029：DeviceOut.project_key（F2 口径，不暴露数字 project_id）+ 归属来源。"""
     project = device.project
     out.project_key = project.project_key if project else None
-    out.attribution_source = _attribution_source(project, device.model)
+    out.attribution_source = _attribution_source(
+        db, project, device.model, pinned=device.project_pinned,
+    )
 
 
 @router.get("", response_model=Union[List[DeviceOut], PaginatedResponse])
@@ -261,7 +273,7 @@ def list_devices(
     items = []
     for d in devices:
         out = DeviceOut.model_validate(d)
-        _fill_project_key(d, out)
+        _fill_project_key(db, d, out)
         items.append(out)
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
@@ -281,7 +293,7 @@ def get_device(
     if _ensure_host_online_for_device(device):
         db.commit()
     out = DeviceOut.model_validate(device)
-    _fill_project_key(device, out)
+    _fill_project_key(db, device, out)
     return out
 
 

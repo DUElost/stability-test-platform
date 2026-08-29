@@ -19,6 +19,7 @@ from backend.core.metrics import (
 )
 from backend.api.schemas import HeartbeatIn
 from backend.api.routes.auth import verify_agent_secret
+from backend.services.project_attribution import apply_attribution
 from backend.services.script_catalog_version import compute_script_catalog_version
 
 router = APIRouter(prefix="/api/v1", tags=["heartbeat"])
@@ -371,6 +372,8 @@ def _process_heartbeat_with_db(
                 db.add(device)
                 db.flush()
                 existing_devices[serial] = device
+                # ADR-0029 P1：新设备按活跃规则立即归属（无命中保持 NULL）
+                apply_attribution(db, device)
 
             lease_host = active_lease_host_by_device.get(device.id)
             if lease_host is not None and lease_host != host.id:
@@ -382,8 +385,14 @@ def _process_heartbeat_with_db(
                 continue
 
             device.host_id = host.id
+            old_model = device.model
             if dev_data.get("model") is not None:
                 device.model = dev_data.get("model")
+
+            # ADR-0029 P1：触发条件收窄为「model 变更 / 仍未归属」——稳态下
+            # 两个条件都不满足，零额外查询。pinned 守卫在 apply_attribution 内。
+            if device.model != old_model or device.project_id is None:
+                apply_attribution(db, device)
 
             # #73: SoC 平台。Agent 探测失败时上报 UNKNOWN — 不能让它覆盖
             # 已判定出的 MTK/UNISOC/QCOM(adb 抖动一次就把结论抹掉)。
