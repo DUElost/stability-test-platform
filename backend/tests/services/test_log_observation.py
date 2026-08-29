@@ -9,7 +9,10 @@ from backend.models.device_log_event import DeviceLogEvent
 from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.services.log_observation import aggregate_risk_summary
+from backend.services.log_observation import (
+    aggregate_risk_summary,
+    aggregate_signal_link_stats,
+)
 
 
 def _seed_job(db_session, sample_device):
@@ -114,3 +117,73 @@ def test_risk_summary_prefers_dle_and_skips_linked_signals(db_session, sample_de
     assert summary is not None
     # 1 from DLE + 1 legacy unlinked signal (linked signal excluded)
     assert summary["counts"]["by_type"]["ANR"] == 2
+
+
+def test_signal_link_stats_excludes_mobilelog_from_link_rate(db_session, sample_device):
+    job, now = _seed_job(db_session, sample_device)
+    db_session.add(JobLogSignal(
+        job_id=job.id,
+        host_id=str(sample_device.host_id),
+        device_serial=sample_device.serial,
+        seq_no=1,
+        category="AEE",
+        source="reconciler",
+        path_on_device="/data/aee/1",
+        detected_at=now,
+        received_at=now,
+    ))
+    db_session.add(JobLogSignal(
+        job_id=job.id,
+        host_id=str(sample_device.host_id),
+        device_serial=sample_device.serial,
+        seq_no=2,
+        category="MOBILELOG",
+        source="reconciler",
+        path_on_device="/data/mobilelog",
+        detected_at=now,
+        received_at=now,
+    ))
+    db_session.commit()
+
+    stats = aggregate_signal_link_stats(db_session, [job.id])
+    assert stats["total_signals"] == 2
+    assert stats["unlinked_linkable"] == 1
+    assert stats["signal_only_signals"] == 1
+    assert stats["link_rate"] == 0.0
+
+
+def test_signal_link_stats_counts_linked_aee(db_session, sample_device):
+    job, now = _seed_job(db_session, sample_device)
+    dle = DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="AEE",
+        event_subtype="KE",
+        detected_at=now,
+        state="LOCAL",
+        local_path="/local/aee/1",
+        host_id=str(sample_device.host_id),
+        job_id=job.id,
+        plan_run_id=job.plan_run_id,
+        signal_seq_no=1,
+    )
+    db_session.add(dle)
+    db_session.flush()
+    db_session.add(JobLogSignal(
+        job_id=job.id,
+        host_id=str(sample_device.host_id),
+        device_serial=sample_device.serial,
+        device_log_event_id=dle.id,
+        seq_no=1,
+        category="AEE",
+        source="reconciler",
+        path_on_device="/data/aee/1",
+        detected_at=now,
+        received_at=now,
+    ))
+    db_session.commit()
+
+    stats = aggregate_signal_link_stats(db_session, [job.id])
+    assert stats["linked_signals"] == 1
+    assert stats["link_rate"] == 1.0

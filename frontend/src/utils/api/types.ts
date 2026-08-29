@@ -1652,6 +1652,14 @@ export interface WatcherAgentOpsMetrics {
 
 export type DedupScanStatus = 'pending' | 'scanned' | 'merged' | null;
 
+export interface WatcherSignalLinkStats {
+  total_signals: number;
+  linked_signals: number;
+  unlinked_linkable: number;
+  signal_only_signals: number;
+  link_rate: number;
+}
+
 export interface WatcherArchive {
   ops_metrics: WatcherAgentOpsMetrics;
   scan_status?: DedupScanStatus;
@@ -1659,6 +1667,7 @@ export interface WatcherArchive {
   signaled_jobs?: number;
   pending_jobs?: number;
   failed_jobs?: number;
+  link_stats?: WatcherSignalLinkStats | null;
   /** Authoritative readiness for final archive extraction. */
   readiness?: {
     ready: boolean;
@@ -1666,6 +1675,29 @@ export interface WatcherArchive {
   } | null;
   /** Compatibility with backends exposing the readiness boolean directly. */
   ready_for_extract?: boolean;
+}
+
+export interface PlanRunLogEvent {
+  id: string;
+  serial: string;
+  platform: string;
+  event_type: string;
+  event_subtype?: string | null;
+  state: string;
+  local_path: string;
+  remote_path?: string | null;
+  detected_at: string;
+  device_timestamp?: string | null;
+  job_id?: number | null;
+  host_id: string;
+  signal_seq_no?: number | null;
+}
+
+export interface PlanRunLogEventsPayload {
+  plan_run_id: number;
+  data_authority: 'device_log_event';
+  total: number;
+  items: PlanRunLogEvent[];
 }
 
 export interface JobManualActionResult {
