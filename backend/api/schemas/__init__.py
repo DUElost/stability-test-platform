@@ -60,7 +60,10 @@ from backend.api.schemas.plan_run import (
     AeeDashboardSectionOut,
     WatcherAgentOpsMetrics,
     WatcherArchiveOut,
+    WatcherSignalLinkStatsOut,
     WatcherSummaryOut,
+    PlanRunLogEventOut,
+    PlanRunLogEventsOut,
 )
 from backend.api.schemas.plan_run_precheck import (
     PrecheckPhase,
@@ -97,7 +100,10 @@ __all__ = [
     "AeeDashboardSectionOut",
     "WatcherAgentOpsMetrics",
     "WatcherArchiveOut",
+    "WatcherSignalLinkStatsOut",
     "WatcherSummaryOut",
+    "PlanRunLogEventOut",
+    "PlanRunLogEventsOut",
     "ORMBaseModel",
     "PaginatedResponse",
     "_isoformat_utc",

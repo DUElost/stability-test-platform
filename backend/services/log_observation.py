@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from backend.models.job import JobLogSignal
 from backend.services.report_service import (
     _DEFAULT_RISK_LEVEL,
     _RISK_SEVERITY_ORDER,
@@ -20,6 +21,9 @@ from backend.services.report_service import (
 
 _DLE_RISK_EVENT_TYPES = ("AEE", "VENDOR_AEE", "ANR", "CRASH")
 _SIGNAL_RISK_CATEGORIES = ("AEE", "VENDOR_AEE", "ANR")
+# Reconciler registers DLE for crash-family signals; MOBILELOG is signal-only (#528).
+_LINK_RATE_CATEGORIES = ("AEE", "VENDOR_AEE")
+_SIGNAL_ONLY_CATEGORIES = ("MOBILELOG",)
 
 
 def _rows_from_device_log_events(db: Session, job_ids: list[int]) -> list[tuple[str, int]]:
@@ -92,6 +96,77 @@ def _build_risk_summary(subtype_counts: dict[str, int]) -> Optional[Dict[str, An
             "events_total": events_total,
             "aee_entries": aee_entries,
         },
+    }
+
+
+def aggregate_signal_link_stats(db: Session, job_ids: list[int]) -> Dict[str, Any]:
+    """PlanRun-scoped signal↔DLE link metrics (#528).
+
+    ``link_rate`` is computed over AEE/VENDOR_AEE only (categories that should
+    register DLE on the reconciler path). MOBILELOG is excluded from the rate.
+    """
+    if not job_ids:
+        return {
+            "total_signals": 0,
+            "linked_signals": 0,
+            "unlinked_linkable": 0,
+            "signal_only_signals": 0,
+            "link_rate": 1.0,
+        }
+
+    total = int(
+        db.execute(
+            select(func.count(JobLogSignal.id)).where(
+                JobLogSignal.job_id.in_(job_ids),
+            )
+        ).scalar()
+        or 0
+    )
+    linked = int(
+        db.execute(
+            select(func.count(JobLogSignal.id)).where(
+                JobLogSignal.job_id.in_(job_ids),
+                JobLogSignal.device_log_event_id.isnot(None),
+            )
+        ).scalar()
+        or 0
+    )
+    linkable_total = int(
+        db.execute(
+            select(func.count(JobLogSignal.id)).where(
+                JobLogSignal.job_id.in_(job_ids),
+                JobLogSignal.category.in_(_LINK_RATE_CATEGORIES),
+            )
+        ).scalar()
+        or 0
+    )
+    linkable_linked = int(
+        db.execute(
+            select(func.count(JobLogSignal.id)).where(
+                JobLogSignal.job_id.in_(job_ids),
+                JobLogSignal.category.in_(_LINK_RATE_CATEGORIES),
+                JobLogSignal.device_log_event_id.isnot(None),
+            )
+        ).scalar()
+        or 0
+    )
+    signal_only = int(
+        db.execute(
+            select(func.count(JobLogSignal.id)).where(
+                JobLogSignal.job_id.in_(job_ids),
+                JobLogSignal.category.in_(_SIGNAL_ONLY_CATEGORIES),
+            )
+        ).scalar()
+        or 0
+    )
+    unlinked_linkable = max(0, linkable_total - linkable_linked)
+    link_rate = (linkable_linked / linkable_total) if linkable_total else 1.0
+    return {
+        "total_signals": total,
+        "linked_signals": linked,
+        "unlinked_linkable": unlinked_linkable,
+        "signal_only_signals": signal_only,
+        "link_rate": round(link_rate, 4),
     }
 
 

@@ -303,6 +303,15 @@ class WatcherAgentOpsMetrics(BaseModel):
     spilled_total: int = 0
 
 
+class WatcherSignalLinkStatsOut(BaseModel):
+    """Signal↔DLE link health for this PlanRun (#528)."""
+    total_signals: int = 0
+    linked_signals: int = 0
+    unlinked_linkable: int = 0
+    signal_only_signals: int = 0
+    link_rate: float = 1.0
+
+
 class WatcherArchiveOut(BaseModel):
     ops_metrics: WatcherAgentOpsMetrics = Field(default_factory=WatcherAgentOpsMetrics)
     scan_status: Optional[str] = None
@@ -310,6 +319,7 @@ class WatcherArchiveOut(BaseModel):
     signaled_jobs: int = 0
     pending_jobs: int = 0
     failed_jobs: int = 0
+    link_stats: Optional[WatcherSignalLinkStatsOut] = None
 
 
 class WatcherSummaryOut(BaseModel):
@@ -340,6 +350,32 @@ class WatcherSummaryOut(BaseModel):
     archive: Optional[WatcherArchiveOut] = None
 
 
+class PlanRunLogEventOut(BaseModel):
+    """Single device log event row — archive authority (#529)."""
+    id: str
+    serial: str
+    platform: str
+    event_type: str
+    event_subtype: Optional[str] = None
+    state: str
+    local_path: str
+    remote_path: Optional[str] = None
+    detected_at: str
+    device_timestamp: Optional[str] = None
+    job_id: Optional[int] = None
+    host_id: str
+    signal_seq_no: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlanRunLogEventsOut(BaseModel):
+    plan_run_id: int
+    data_authority: str = "device_log_event"
+    total: int
+    items: list[PlanRunLogEventOut]
+
+
 __all__ = [
     "StepTraceOut",
     "JobInstanceOut",
@@ -365,5 +401,8 @@ __all__ = [
     "AeeDashboardSectionOut",
     "WatcherAgentOpsMetrics",
     "WatcherArchiveOut",
+    "WatcherSignalLinkStatsOut",
     "WatcherSummaryOut",
+    "PlanRunLogEventOut",
+    "PlanRunLogEventsOut",
 ]
