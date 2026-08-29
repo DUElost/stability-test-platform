@@ -47,25 +47,32 @@ Class: testing
 
 ## Verification
 
-实测水位（2026-08-29，本 note 对应的 commit）：
+实测水位（2026-08-29，CI 全量跑出来的数字，非本地估算）：
 
-| 范围 | 结果 |
-|------|------|
-| 前端（85 文件 / 621 测试全绿） | 语句 **70.94%** · 分支 66.55% · 函数 63.45% · 行 **73.38%** |
-| 后端（**仅 agent tests**，1237 测试全绿） | 语句 **39%**（29744 语句 / 18064 未覆盖） |
+| 范围 | 覆盖率 | 说明 |
+|------|--------|------|
+| **后端最终** | 语句 **75%**（29744 语句 / 7482 未覆盖） | 三段 `--cov-append` 累加后的总数 |
+| ├ `backend/tests/` 跑完 | 57%（12903 未覆盖） | 控制面 1766 passed / 3 skipped |
+| ├ + `backend/agent/tests/` | 75%（7498 未覆盖） | agent 1237 passed |
+| └ + 根 `tests/` | 75%（7482 未覆盖） | repo 层 78 passed |
+| **前端** | 语句 **70.94%** · 分支 66.55% · 函数 63.45% · 行 **73.38%** | 85 文件 / 621 passed |
 
-⚠️ 后端 39% **不是完整水位**：本地只跑了 `backend/agent/tests/`（不需要 PG），
-`backend/tests/`（135 个控制面文件，需 PostgreSQL）与根 `tests/` 没跑。
-CI 上三段 `--cov-append` 累加后的真实数字会明显更高。首轮 nightly 跑完后
-应回来把这一行补正。
+值得记一笔：**agent 测试贡献了 18 个百分点**（57% → 75%）。只跑控制面
+`backend/tests/` 得到的 57% 会让人低估真实覆盖，也会误判「该给哪边补测试」。
+看后端覆盖率必须看三段累加后的数。
 
-前端已能看出的薄弱点：`utils/api/` 整体 37.83%，其中 `planRuns.ts` 2.7%、
+耗时：`backend-test` job 9m43s（含 coverage 开销），`frontend-check` 1m50s。
+对只在夜间跑的 job 来说可接受。
+
+薄弱点（前端）：`utils/api/` 整体 37.83%，其中 `planRuns.ts` 2.7%、
 `management.ts` 6.15%、`projects.ts` 8.33% —— API 层几乎是裸的。
 
 ## Revisit
 
-- **首轮 nightly backstop 跑完后**：用 CI 日志里的后端总覆盖率补正本 note
-  的水位表，然后决定是否设 `--cov-fail-under`（建议设在补正值下方 3–5 个点）。
+- 水位已由本次 CI 全量跑实测（后端 75% / 前端 70.94%），**不再需要等 nightly
+  补正**。要收口时按这两条定阈值：后端 `--cov-fail-under=70`（留 5 点余量），
+  前端用 `coverage.thresholds.lines: 70`。注意前端阈值按 glob 生效、后端是
+  全局口径，两边数字不可直接比较。
 - 若 `--cov` 让 nightly job 明显变慢到影响排队，改为只在其中一个 job 度量。
 - 前端若要设阈值，用 vitest 的 `coverage.thresholds`；注意它按 glob 生效，
   与后端 `--cov-fail-under` 的全局口径不同，两边数字不可直接比较。

@@ -75,9 +75,14 @@ Dependabot 提 `requirements.txt` / `requirements-dev.txt` 变更后，必须两
   - `pytest` / `pytest-cov` / `testcontainers` / `ruff` 必须在 lock 里 ——
     与运行时 lock 那条「它们不得出现」方向相反，别照抄。
 - 该测试落在 `backend/../tests/`，PR 阶段不跑（#552 移除 `pr-backend-test`
-  之后 `tests/` 只在 nightly 全量出现），**首次执行在 nightly backstop**。
-- 真机验证：`pip install --require-hashes -r backend/requirements-dev.lock`
-  能装出可用环境。
+  之后 `tests/` 只在 nightly 全量出现）。
+- **已在合入前用 workflow_dispatch 验证过**（run 33263777430，分支
+  `fix/ci-reproducible-deps-and-coverage`）：lint 41s / backend-test 9m43s /
+  frontend-check 1m50s / docker-build 58s **全绿**。其中 lint 走的是「从 lock
+  grep 出 ruff==0.16.5」这条新命令，backend-test 走的是 `--require-hashes`
+  安装 —— 两个最可能翻车的点都在真实 GitHub Actions 环境里跑过了。
+- 本地额外验过：`python:3.11-slim` 容器里
+  `pip install --require-hashes -r requirements-dev.lock` 退出码 0。
 
 ## Revisit
 
