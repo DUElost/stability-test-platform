@@ -698,6 +698,35 @@ async def emit_agent_control(host_id: str, command: str, *, payload: Optional[Di
     logger.info("emit_agent_control host_id=%s command=%s", host_id, command)
 
 
+def call_agent_control_sync(
+    host_id: str,
+    command: str,
+    *,
+    payload: Optional[Dict[str, Any]] = None,
+    timeout: float = 3.0,
+) -> bool:
+    """线程安全版 call_agent_control：ack 等待桥接到主事件循环。
+
+    sio 连接对象属于主循环——工作线程（asyncio.to_thread 里的服务工具等）
+    不得用 asyncio.run 新建循环跨循环 emit（不受支持，可能静默丢弃）。
+    返回 True = Agent 侧 control handler 已确认收到。
+    """
+    if _main_loop is None or _main_loop.is_closed():
+        logger.warning("main_loop_not_available_for_agent_control host=%s", host_id)
+        return False
+    try:
+        coro = call_agent_control(host_id, command, payload=payload, timeout=timeout)
+    except RuntimeError:
+        logger.warning("sio_not_initialized_for_agent_control host=%s", host_id)
+        return False
+    future = asyncio.run_coroutine_threadsafe(coro, _main_loop)
+    try:
+        return future.result(timeout=timeout + 2.0)
+    except Exception as exc:  # noqa: BLE001 - 桥接失败等价于未送达
+        logger.warning("call_agent_control_sync_failed host=%s err=%s", host_id, exc)
+        return False
+
+
 async def call_agent_control(
     host_id: str,
     command: str,

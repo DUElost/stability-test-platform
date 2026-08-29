@@ -95,6 +95,112 @@ class TestConfigEndpoints:
         assert data["error"]
 
 
+class TestReviewRound2Fixes:
+    def test_pending_placeholder_converges_on_success(self, auth_headers, db_session, monkeypatch):
+        """H1 回归：轮次成功产出真实回复后，pending 占位必须收口（删除），
+        不得残留——否则前端无限轮询 + 「思考中」气泡永挂（生产曾复现 8 条）。"""
+        _configure(db_session)
+        from backend.services.ai_assistant import orchestrator as orch
+        from backend.services.ai_assistant.llm_client import AssistantReply
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            async def chat(self, messages, **kw):
+                return AssistantReply(content="平台正常。")
+
+        monkeypatch.setattr(orch, "LlmClient", FakeClient)
+
+        class _Shared:
+            def __init__(self, s):
+                self._s = s
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+
+        user = db_session.query(User).filter(User.role != "admin").first()
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.flush()
+        db_session.add(
+            AiChatMessage(session_id=s.id, role="assistant", content="", status="pending")
+        )
+        db_session.commit()
+
+        asyncio.run(orch.ai_assistant_turn_task({}, session_id=s.id))
+
+        pending = (
+            db_session.query(AiChatMessage)
+            .filter(
+                AiChatMessage.session_id == s.id,
+                AiChatMessage.role == "assistant",
+                AiChatMessage.status == "pending",
+            )
+            .count()
+        )
+        assert pending == 0
+        assistants = (
+            db_session.query(AiChatMessage)
+            .filter(AiChatMessage.session_id == s.id, AiChatMessage.role == "assistant")
+            .all()
+        )
+        assert len(assistants) == 1 and assistants[0].content == "平台正常。"
+
+    def test_plan_runs_status_enum_feedback(self, db_session):
+        """M1 回归：非法状态值把合法列表回给模型（零枚举猜测）。"""
+        from backend.services.ai_assistant.tools import ToolValidationError, execute_query
+
+        with pytest.raises(ToolValidationError) as ei:
+            execute_query(db_session, "query_plan_runs", {"status": "PENDING"})
+        assert "RUNNING" in str(ei.value)
+
+    def test_admin_cannot_read_others_session(self, client, admin_headers, auth_headers, db_session):
+        """M4 回归：会话严格隔离，admin 也无跨用户通道（404 语义）。"""
+        user_id = db_session.query(User).filter(User.role != "admin").first().id
+        s = AiChatSession(user_id=user_id)
+        db_session.add(s)
+        db_session.commit()
+        resp = client.get(f"/api/v1/ai-assistant/sessions/{s.id}/messages", headers=admin_headers)
+        assert resp.status_code == 404
+
+    def test_proposed_action_not_executable(self, auth_headers, db_session, monkeypatch):
+        """Low-1 回归：执行闸门只认 approved——proposed 不可绕过审批直启。"""
+        from backend.services.ai_assistant import orchestrator as orch
+
+        class _Shared:
+            def __init__(self, s):
+                self._s = s
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+
+        user = db_session.query(User).filter(User.role != "admin").first()
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.flush()
+        action = AiAssistantAction(
+            session_id=s.id, tool_name="test_notification_channel", params={},
+            status="proposed", requested_by_user_id=user.id,
+        )
+        db_session.add(action)
+        db_session.commit()
+
+        orch.execute_action(action.id)
+        db_session.refresh(action)
+        assert action.status == "proposed"
+
+
 class TestSessionsAndMessages:
     def test_session_isolation(self, client, auth_headers, admin_headers, db_session):
         admin_id = db_session.query(User).filter(User.role == "admin").first().id

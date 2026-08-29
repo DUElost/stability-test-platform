@@ -17,6 +17,7 @@ from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from backend.models.audit import AuditLog
+from backend.models.enums import DeviceStatus, HostStatus, PlanRunStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.notification import AlertRule
@@ -119,12 +120,27 @@ def _q_platform_health(db: Session, args: dict) -> str:
     return "\n".join(lines)
 
 
+def _enum_values(enum_cls) -> tuple[str, ...]:
+    return tuple(m.value if hasattr(m, "value") else str(m) for m in enum_cls)
+
+
+def _filter_status(q, column, raw: str | None, enum_cls, name: str):
+    """M1：状态过滤按枚举成员校验，非法值把合法列表回给模型（零枚举猜测）。"""
+    if not raw:
+        return q
+    value = str(raw).strip().upper()
+    legal = _enum_values(enum_cls)
+    if value not in legal:
+        raise ToolValidationError(f"{name} 合法值：{list(legal)}")
+    return q.filter(column == value)
+
+
 def _q_plan_runs(db: Session, args: dict) -> str:
     limit = _clamp_int(args.get("limit"), "limit", 10, 1, 20)
-    q = db.query(PlanRun)
-    status = _opt_str(args.get("status"), "status", 32)
-    if status:
-        q = q.filter(PlanRun.status == status.upper())
+    q = _filter_status(
+        db.query(PlanRun), PlanRun.status,
+        _opt_str(args.get("status"), "status", 32), PlanRunStatus, "status",
+    )
     project_id = args.get("project_id")
     if project_id not in (None, ""):
         q = q.filter(PlanRun.project_id == int(project_id))
@@ -167,10 +183,10 @@ def _q_plan_run_detail(db: Session, args: dict) -> str:
 
 def _q_hosts(db: Session, args: dict) -> str:
     limit = _clamp_int(args.get("limit"), "limit", 20, 1, 50)
-    q = db.query(Host)
-    status = _opt_str(args.get("status"), "status", 32)
-    if status:
-        q = q.filter(Host.status == status.upper())
+    q = _filter_status(
+        db.query(Host), Host.status,
+        _opt_str(args.get("status"), "status", 32), HostStatus, "status",
+    )
     keyword = _opt_str(args.get("keyword"), "keyword", 64)
     if keyword:
         like = f"%{keyword}%"
@@ -185,10 +201,10 @@ def _q_hosts(db: Session, args: dict) -> str:
 
 def _q_devices(db: Session, args: dict) -> str:
     limit = _clamp_int(args.get("limit"), "limit", 20, 1, 50)
-    q = db.query(Device)
-    status = _opt_str(args.get("status"), "status", 32)
-    if status:
-        q = q.filter(Device.status == status.upper())
+    q = _filter_status(
+        db.query(Device), Device.status,
+        _opt_str(args.get("status"), "status", 32), DeviceStatus, "status",
+    )
     host_id = _opt_str(args.get("host_id"), "host_id", 64)
     if host_id:
         q = q.filter(Device.host_id == host_id)

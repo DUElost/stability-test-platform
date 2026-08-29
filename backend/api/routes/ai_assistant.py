@@ -50,6 +50,19 @@ router = APIRouter(prefix="/api/v1/ai-assistant", tags=["ai-assistant"])
 logger = logging.getLogger(__name__)
 
 
+# M5：在飞后台任务强引用集（create_task 结果无人持有时可能被 GC 回收）
+_BG_TASKS: set = set()
+
+
+def _bg_task_done(task) -> None:
+    _BG_TASKS.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("ai_action_execute_failed %s", exc, exc_info=exc)
+
+
 def _not_configured(detail: str = "AI 助手未配置或未启用") -> HTTPException:
     return HTTPException(status_code=409, detail={"code": "ai_not_configured", "message": detail})
 
@@ -171,8 +184,10 @@ async def test_ai_connection(
 # ─────────────────────────── 会话与消息（登录用户） ───────────────────────────
 
 def _own_session(db: Session, user: User, session_id: int) -> AiChatSession:
+    # M4：严格按 D6 用户隔离（含 admin——对话内容属隐私面；列表端点同口径，
+    # 不留「列表看不到、按 id 直取」的半开状态）
     session = db.get(AiChatSession, session_id)
-    if session is None or (session.user_id != user.id and user.role != "admin"):
+    if session is None or session.user_id != user.id:
         raise HTTPException(status_code=404, detail="session not found")
     return session
 
@@ -277,11 +292,14 @@ def send_message(
 
     from backend.tasks.saq_worker import enqueue_sync
 
-    timeout = get_or_create_config(db).request_timeout_seconds + 120
+    # M2：max_turns 次串行 LLM 调用的最坏超时；M3：轮次有副作用，retries=0
+    cfg = get_or_create_config(db)
+    timeout = cfg.request_timeout_seconds * max(int(cfg.max_turns), 1) + 120
     enqueued = enqueue_sync(
         "ai_assistant_turn_task",
         key=f"ai-turn:{session.id}",
         timeout=timeout,
+        retries=0,
         session_id=session.id,
     )
     if not enqueued:
@@ -327,6 +345,8 @@ def _visible_action(db: Session, user: User, action_id: int) -> AiAssistantActio
         raise HTTPException(status_code=404, detail="action not found")
     session = db.get(AiChatSession, action.session_id)
     owner_id = getattr(session, "user_id", None)
+    # 动作可见性保留 admin：审批职责要求 admin 能触达任意会话的操作卡
+    # （D6 审批限 admin；会话消息流仍严格隔离——见 _own_session）
     if owner_id != user.id and user.role != "admin":
         raise HTTPException(status_code=404, detail="action not found")
     return action
@@ -371,8 +391,11 @@ async def _decide_action(
     )
     db.commit()
     if verb == "approve":
-        # 服务端事件循环持久存在，任务跨响应生命周期继续执行
-        asyncio.create_task(asyncio.to_thread(execute_action, action.id))
+        # M5：持引用防 GC（asyncio 文档要求），异常必须留日志——
+        # 否则 action 永远停在 approved 且无任何痕迹
+        task = asyncio.create_task(asyncio.to_thread(execute_action, action.id))
+        _BG_TASKS.add(task)
+        task.add_done_callback(_bg_task_done)
         await asyncio.sleep(0)
         db.refresh(action)
     else:
