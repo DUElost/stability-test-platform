@@ -4,7 +4,7 @@ Results summary API — aggregated test run statistics for the dashboard.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +19,7 @@ from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import TestProject
+from backend.services.log_observation import aggregate_risk_summary
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
@@ -65,6 +66,29 @@ class ResultsSummary(BaseModel):
     test_type_stats: List[TestTypeStat]
     risk_distribution: RiskDistribution
     recent_runs: List[RecentRun]
+
+
+class RiskTrendBucket(BaseModel):
+    """单日 S/A/B 风险计数（项目维度，P2）。"""
+
+    date: str  # YYYY-MM-DD（run 起始日）
+    S: int = 0
+    A: int = 0
+    B: int = 0
+    runs: int = 0
+
+
+class RiskTrendOut(BaseModel):
+    """项目级风险趋势——按天的 S/A/B 计数。
+
+    数据源：DLE 权威聚合（aggregate_risk_summary，与 /results 同口径），
+    run 级风险按 plan_run.started_at 归日。plan_run.project_id 快照过滤
+    （P0-1 起新 Run 有真实项目归属）。
+    """
+
+    project_key: Optional[str] = None
+    days: int
+    buckets: List[RiskTrendBucket] = []
 
 
 # ---------- Helpers ----------
@@ -326,3 +350,62 @@ def get_results_summary(
             raise
         db.rollback()
         return _empty_summary()
+
+
+@router.get("/risk-trend", response_model=RiskTrendOut)
+def get_risk_trend(
+    project_key: Optional[str] = Query(
+        None, description="ADR-0029 P2: filter by project key（缺省 = 全量）"
+    ),
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """项目级风险趋势：按天的 S/A/B 计数（run 级 DLE 权威聚合）。
+
+    过滤统一经 PlanRun.project_id 快照（与 /summary 同口径，P0-1 后新 Run
+    有真实项目归属）。run 的风险 = 其全部 job 的 aggregate_risk_summary，
+    按 run 起始日归桶。project_key 未知 → 404（与 /summary 同语义）。
+    """
+    target_project_id: Optional[int] = None
+    if project_key:
+        project = (
+            db.query(TestProject)
+            .filter(TestProject.project_key == project_key)
+            .first()
+        )
+        if project is None:
+            raise HTTPException(status_code=404, detail="project not found")
+        target_project_id = project.id
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    run_query = db.query(PlanRun).filter(
+        PlanRun.started_at >= since,
+        # 终态才有风险判定；枚举为 SUCCESS/PARTIAL_SUCCESS/FAILED
+        PlanRun.status.in_(("SUCCESS", "PARTIAL_SUCCESS", "FAILED")),
+    )
+    if target_project_id is not None:
+        run_query = run_query.filter(PlanRun.project_id == target_project_id)
+
+    buckets: Dict[str, Dict[str, int]] = {}
+    for run in run_query.all():
+        job_ids = [
+            jid for (jid,) in db.query(JobInstance.id)
+            .filter(JobInstance.plan_run_id == run.id)
+            .all()
+        ]
+        summary = aggregate_risk_summary(db, job_ids) or {}
+        level = str(summary.get("risk_level", "B"))
+        if run.started_at is None:
+            continue
+        day = run.started_at.date().isoformat()
+        bucket = buckets.setdefault(day, {"S": 0, "A": 0, "B": 0, "runs": 0})
+        if level in ("S", "A", "B"):
+            bucket[level] += 1
+        bucket["runs"] += 1
+
+    return RiskTrendOut(
+        project_key=project_key,
+        days=days,
+        buckets=[RiskTrendBucket(date=d, **buckets[d]) for d in sorted(buckets)],
+    )

@@ -316,6 +316,21 @@ export interface ResultsSummary {
   recent_runs: RecentRun[];
 }
 
+/** ADR-0029 P2：项目级风险趋势单日桶（S/A/B 计数）。 */
+export interface RiskTrendBucket {
+  date: string; // YYYY-MM-DD
+  S: number;
+  A: number;
+  B: number;
+  runs: number;
+}
+
+export interface RiskTrend {
+  project_key: string | null;
+  days: number;
+  buckets: RiskTrendBucket[];
+}
+
 export interface ActivityPoint {
   hour: string;
   started: number;
