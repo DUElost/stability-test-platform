@@ -146,30 +146,46 @@ def _history_as_llm_messages(db: Session, session_id: int) -> list[dict]:
         if row.role == "user":
             messages.append({"role": "user", "content": row.content})
         elif row.role == "assistant":
+            # pending/running 是 UI 占位（send_message 先落占位再入队轮次），
+            # 不是对话内容——发给严格供应商会 400
+            # "content or tool_calls must be set"（线上实测）。
+            if row.status in ("pending", "running"):
+                continue
+            tool_calls_fmt = [
+                {
+                    "id": tc.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": tc.get("name", ""),
+                        "arguments": json.dumps(
+                            tc.get("arguments") or {}, ensure_ascii=False
+                        ),
+                    },
+                }
+                for tc in row.tool_calls
+            ]
+            # 失败占位常为空 content 且无 tool_calls，同样会被拒绝
+            if not row.content and not tool_calls_fmt:
+                continue
             entry: dict = {"role": "assistant", "content": row.content or None}
-            if row.tool_calls:
-                entry["tool_calls"] = [
-                    {
-                        "id": tc.get("id", ""),
-                        "type": "function",
-                        "function": {
-                            "name": tc.get("name", ""),
-                            "arguments": json.dumps(
-                                tc.get("arguments") or {}, ensure_ascii=False
-                            ),
-                        },
-                    }
-                    for tc in row.tool_calls
-                ]
+            if tool_calls_fmt:
+                entry["tool_calls"] = tool_calls_fmt
             messages.append(entry)
         else:
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": row.tool_call_id or "",
-                    "content": row.content,
-                }
-            )
+            if not row.tool_call_id:
+                # 动作完成回执（无对应 assistant tool_calls）——以 user 角色
+                # 注入，避免「tool 消息没有前置 tool_calls」的严格校验拒绝
+                messages.append(
+                    {"role": "user", "content": f"[执行回执] {row.content}"}
+                )
+            else:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": row.tool_call_id,
+                        "content": row.content,
+                    }
+                )
     return messages
 
 
@@ -286,9 +302,8 @@ def _run_service_tool(name: str, params: dict) -> str:
         finally:
             db.close()
         return (
-            f"扫描完成：{getattr(result, 'registered', '?')} 注册 / "
-            f"{getattr(result, 'created', '?')} 新建 / "
-            f"{getattr(result, 'conflicts', '?')} 冲突"
+            f"扫描完成：新建 {result.created} / 跳过 {result.skipped} / "
+            f"停用 {result.deactivated} / 冲突 {len(result.conflicts)}"
         )
 
     if name == "test_notification_channel":
@@ -409,7 +424,7 @@ def _arm_run_timeout(run_id: str, timeout_seconds: int) -> None:
 def _on_action_complete(action_id: int, run) -> None:
     status_map = {"SUCCESS": "succeeded", "FAILED": "failed", "CANCELED": "cancelled"}
     status = status_map.get(getattr(run, "status", "FAILED"), "failed")
-    summary = f"{getattr(run, 'status', '?')}（exit={getattr(run, 'returncode', None)}）"
+    summary = f"{getattr(run, 'status', '?')}（exit={getattr(run, 'exit_code', None)}）"
     _finalize_action(action_id, status, summary)
 
 

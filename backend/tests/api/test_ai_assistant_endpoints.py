@@ -350,6 +350,125 @@ class TestTurnLoopWithFakeClient:
         )
         assert "不可用" in tool_msg.content
 
+    def test_history_skips_empty_assistant_placeholder(self, auth_headers, db_session, monkeypatch):
+        """线上 400 回归：send_message 的 pending 占位（content 空、无 tool_calls）
+        不得进入 LLM 历史——严格供应商拒绝 "content or tool_calls must be set"。"""
+        _configure(db_session)
+        from backend.services.ai_assistant import orchestrator as orch
+        from backend.services.ai_assistant.llm_client import AssistantReply
+
+        captured: list = []
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            async def chat(self, messages, **kw):
+                captured.append(messages)
+                return AssistantReply(content="你好，平台一切正常。")
+
+        monkeypatch.setattr(orch, "LlmClient", FakeClient)
+
+        class _Shared:
+            def __init__(self, s):
+                self._s = s
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+
+        user = db_session.query(User).filter(User.role != "admin").first()
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.flush()
+        db_session.add(AiChatMessage(session_id=s.id, role="user", content="你好"))
+        # 复现线上：pending 占位先于轮次存在
+        db_session.add(
+            AiChatMessage(session_id=s.id, role="assistant", content="", status="pending")
+        )
+        # 一条已失败且内容为空的 assistant 消息（同样不得进历史）
+        db_session.add(
+            AiChatMessage(
+                session_id=s.id, role="assistant", content="", status="failed",
+                meta={"error": "llm unexpected status 400"},
+            )
+        )
+        db_session.commit()
+
+        asyncio.run(orch.ai_assistant_turn_task({}, session_id=s.id))
+
+        llm_messages = captured[0]
+        assistant_entries = [m for m in llm_messages if m["role"] == "assistant"]
+        # 仅含轮内产生的真实回复，无空 content 且无 tool_calls 的条目
+        for entry in assistant_entries:
+            assert entry.get("content") or entry.get("tool_calls"), entry
+        # 最终回复已落库
+        final = (
+            db_session.query(AiChatMessage)
+            .filter(AiChatMessage.session_id == s.id, AiChatMessage.role == "assistant")
+            .all()
+        )
+        assert any(m.content == "你好，平台一切正常。" for m in final)
+
+    def test_action_receipt_injected_as_user_role(self, auth_headers, db_session, monkeypatch):
+        """动作完成回执（tool 消息、无 tool_call_id）注入为 user 角色，
+        避免「tool 消息无前置 tool_calls」的严格校验拒绝。"""
+        _configure(db_session)
+        from backend.services.ai_assistant import orchestrator as orch
+        from backend.services.ai_assistant.llm_client import AssistantReply
+
+        captured: list = []
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            async def chat(self, messages, **kw):
+                captured.append(messages)
+                return AssistantReply(content="收到，任务已完成。")
+
+        monkeypatch.setattr(orch, "LlmClient", FakeClient)
+
+        class _Shared:
+            def __init__(self, s):
+                self._s = s
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+
+        user = db_session.query(User).filter(User.role != "admin").first()
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.flush()
+        # 模拟动作完成后的回执（orchestrator._finalize_action 落的形态）
+        db_session.add(
+            AiChatMessage(
+                session_id=s.id, role="tool", tool_call_id=None,
+                content="run_quality_gate → SUCCESS（exit=0）",
+            )
+        )
+        db_session.commit()
+
+        asyncio.run(orch.ai_assistant_turn_task({}, session_id=s.id))
+
+        llm_messages = captured[0]
+        assert any(
+            m["role"] == "user" and "[执行回执] run_quality_gate" in (m.get("content") or "")
+            for m in llm_messages
+        )
+        assert not any(
+            m["role"] == "tool" and not m.get("tool_call_id") for m in llm_messages
+        )
+
     def test_not_configured_fails_pending(self, auth_headers, db_session, monkeypatch):
         from backend.services.ai_assistant import orchestrator as orch
 

@@ -107,16 +107,14 @@ def _q_platform_health(db: Session, args: dict) -> str:
     db.execute(text("SELECT 1"))
     hosts = dict(db.query(Host.status, func.count(Host.id)).group_by(Host.status).all())
     devices = dict(db.query(Device.status, func.count(Device.id)).group_by(Device.status).all())
-    active_runs = (
-        db.query(func.count(PlanRun.id))
-        .filter(PlanRun.status.in_(["RUNNING", "PENDING", "QUEUED"]))
-        .scalar()
-    )
+    # 状态分布全量 group_by——不枚举具体状态值（plan_run_status 枚举与
+    # job_status 枚举值集不同，猜测会 InvalidTextRepresentation，线上实测）
+    run_dist = dict(db.query(PlanRun.status, func.count(PlanRun.id)).group_by(PlanRun.status).all())
     lines = [
         "数据库连接正常。",
         f"主机：{dict(hosts) or '无记录'}",
         f"设备：{dict(devices) or '无记录'}",
-        f"进行中的 PlanRun（RUNNING/PENDING/QUEUED）：{active_runs or 0}",
+        f"PlanRun 状态分布：{run_dist or '无记录'}",
     ]
     return "\n".join(lines)
 

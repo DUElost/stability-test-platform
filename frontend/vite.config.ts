@@ -1,7 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { aiAssistantMockPlugin } from './mock/ai-assistant-mock.mjs';
 
 function manualChunks(id: string): string | undefined {
   if (!id.includes('/node_modules/')) return undefined;
@@ -60,12 +59,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
 
   return {
-    plugins: [
-      react(),
-      // 后端 /api/v1/ai-assistant 未实现期间的 UI 开发脚手架：STP_AI_UI_MOCK=1 时
-      // 拦截这组路径返回演示数据（mock/ai-assistant-mock.mjs），后端落地后移除。
-      ...(process.env.STP_AI_UI_MOCK === '1' ? [aiAssistantMockPlugin()] : []),
-    ],
+    plugins: [react()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
