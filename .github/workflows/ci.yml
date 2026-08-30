@@ -143,9 +143,16 @@ jobs:
         # 同一套锁定依赖。-oE 只取 `ruff==x.y.z`:lock 里该行以续行符结尾,
         # 直接 grep 整行会把尾部 ' \' 带进 pip 参数。
         #
-        # 本地 `pip install -r requirements-dev.txt` 装的是区间内最新版,因此
-        # 本地 ruff >= CI ruff。方向是安全的:本地只会比 CI 更严,不会更松,
-        # 不会出现「本地全绿、推上去才红」。反向(CI 更严)不可能发生。
+        # 与本地的关系:**方向通常是安全的,但不是保证**。
+        # 本地走 `pip install -r requirements-dev.txt`,拿到的是区间内最新版,
+        # 所以「刚装过」时本地 ruff >= CI ruff —— 本地只会更严,不会更松。
+        #
+        # 但环境放久了不升级就会反过来:实测本机 venv 曾长期停在 0.16.2(区间
+        # `>=0.16.2,<1.0` 的下界),而 CI 锁的是 0.16.5 —— 那就是本地比 CI 松,
+        # 「本地全绿、推上去才红」完全可能发生。所以别把上面那句当成保证。
+        #
+        # 要排查这类不一致,或想让本地与 CI 逐个版本对齐,直接装 lock:
+        #   pip install --require-hashes -r backend/requirements-dev.lock
         run: pip install "$(grep -oE '^ruff==[^ ]+' backend/requirements-dev.lock)"
       - name: Ruff
         run: ruff check backend/ tools/ scripts/

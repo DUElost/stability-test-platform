@@ -26,7 +26,18 @@
 本地装开发环境用 `pip install -r backend/requirements-dev.txt`（追新）。
 **CI 走 dev.lock 的锁定版本**，两者装的可能是不同版本 —— 这是有意的取舍：
 CI 要可复现（否则上游一发新版，无关 PR 就会莫名变红），本地要能追新。
-方向是安全的：本地只会比 CI 更新更严，不会更松。
+
+方向**通常**是安全的：刚装过或刚升过级时，本地拿到区间内最新版，本地
+工具链 ≥ CI，本地只会更严不会更松。
+
+但**这不是保证**：环境放久了不升级就会反过来。实测本机 venv 曾长期停在
+ruff 0.16.2（区间 `>=0.16.2,<1.0` 的下界），而 CI 锁的是 0.16.5 —— 本地比
+CI 松，「本地全绿、推上去才红」照样会发生。所以要排查这类不一致、或想让
+本地与 CI 逐个版本对齐，直接装 lock：
+
+```bash
+pip install --require-hashes -r backend/requirements-dev.lock
+```
 
 改了 `requirements.txt` **或** `requirements-dev.txt` 后**必须重新生成对应
 lock**，命令见各 lock 文件抬头（须在 py3.11 下生成，CI 与镜像都是 3.11）。
