@@ -110,6 +110,29 @@ update 前后各查一次状态做乐观锁（缩短窗口但不消除，还多�
 验证：桩 `gh` 四路径断言（head-sha 竞争→0、其他错误 + OPEN→非零、其他错误 +
 MERGED / CLOSED→0、成功→0），两个脚本各跑一遍。
 
+## 补充（2026-08-30，队首合入后的 reconcile 触发点）
+
+队首合入后必须立刻给下一 PR 挂 auto-merge，但那一刻没有任何事件可用：
+
+- `pull_request closed`：auto-merge 合入常被级联限制抑制（#557 实测）；
+- `workflow_run`：main 上唯一的 workflow 是 **CodeQL 默认 setup**（仓库无
+  `codeql.yml`），默认 setup 的 run **不参与 `workflow_run` 链**——实测 #587
+  于 11:23:59Z 合入后，没有任何新的 `pr-update-branch` run；
+- `cron: */10`：**实际被 GitHub 节流到 2–6 小时一次**。2026-08-30 统计：
+  25.6h 内只有 4 次 schedule run（21:20 / 23:33 / 01:39 / 07:28），全部
+  success；同期 96 次为 `pull_request`。对照 `main-ci-backstop.yml` 的每日
+  cron 正常触发，说明仓库级 schedule 是通的，问题在高频调度本身。
+
+故改用 `on: push: branches: [main]`：main 每次前进（即每次合入）都触发一次
+reconcile（~10s job，concurrency group 仍串行）。cron 保留作低频兜底。
+
+放弃的备选：放宽 `pr-update-branch.yml` 的 `workflow_run` 到 `event == 'push'`
+（默认 setup 的 run 根本不触发 workflow_run，无从放宽）；把 reconcile 塞进
+`main-ci-backstop.yml`（每天一次太稀疏，且混进与队列无关的职责）。
+
+验证：合入后观察下一次 main 前进——应出现 event=push 的 `Enable auto-merge`
+run，并在队首全绿且 BEHIND 时执行 update-branch。
+
 ## Revisit
 
 若 open PR 常态 >3 或出现外部 fork 贡献潮，再评估轻量队列状态 API 或
@@ -117,7 +140,6 @@ required check 列表变更时的脚本同步方式。
 
 - GitHub 若改写该 GraphQL 报错文案（如改用 `expectedHeadOid` 措辞），需同步
   `update_branch_tolerant` 的匹配串，否则会退化回红 X。
-- `enable-auto-merge.yml` 的 `cron: */10` 兜底自 2026-08-29 17:39 UTC 加入后，
-  截至 19:12 UTC 零次 schedule 运行（近 12h 的 100 次运行全为 `pull_request`，
-  工作流 `state=active`）。当前队列靠 PR push 推进未停滞，但若该兜底长期不
-  触发，需另找 merge 后的 reconcile 触发点。
+- 若 main 的 push 事件将来也被抑制（GitHub 策略变更），退回 cron 兜底前先确认
+  `main-ci-backstop.yml` 的每日 cron 是否仍正常——它是判断「仓库级 schedule
+  是否还活着」的对照样本。
