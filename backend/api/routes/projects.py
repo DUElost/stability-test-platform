@@ -691,6 +691,61 @@ def apply_project_map(
     return ok(preview)
 
 
+@router.delete(
+    "/{project_key}/rules/{model}",
+    response_model=ApiResponse[dict],
+)
+def remove_project_rule(
+    project_key: str,
+    model: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0029 复盘：删除项目的一条活跃型号规则（admin，记审计）。
+
+    规则表此前只增不减（map/apply 对已归属别的项目的型号 409），错误规则
+    （如生产 A57→MLD_LX2 残留）无法通过平台修正。删除只影响规则声明本身，
+    已归属设备不动——由心跳按新规则状态自然收敛。
+
+    路由顺序：/{project_key}/rules/{model} 三段静态，与 /{project_key}
+    单段、/inventory/* 静态段互不冲突。
+    """
+    project = _get_project_or_404(db, project_key)
+    _require_user_project(project)
+    rule = db.execute(
+        select(ProjectDeviceRule)
+        .where(
+            ProjectDeviceRule.project_id == project.id,
+            ProjectDeviceRule.match_type == "MODEL",
+            ProjectDeviceRule.match_value == model,
+            ProjectDeviceRule.is_active.is_(True),
+        )
+    ).scalar_one_or_none()
+    if rule is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no active rule for model {model}",
+        )
+    db.delete(rule)
+    record_audit(
+        db,
+        action="remove_project_device_rule",
+        resource_type="test_project",
+        resource_id=project.id,
+        details={
+            "project_key": project.project_key,
+            "model": model,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
+    emit_project_changed(project.id, "rule_removed")
+    return ok({"project_key": project.project_key, "model": model})
+
+
 @router.get(
     "/{project_key}/models",
     response_model=ApiResponse[list[ProjectModelCoverageOut]],
