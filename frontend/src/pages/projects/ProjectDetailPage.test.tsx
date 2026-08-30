@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   riskTrend: vi.fn(),
   removeRule: vi.fn(),
   renameProject: vi.fn(),
+  archiveProject: vi.fn(),
   authRole: 'admin',
 }));
 
@@ -35,7 +36,7 @@ vi.mock('@/hooks/useToast', () => ({
 
 vi.mock('@/utils/api', () => ({
   api: {
-    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, rename: mocks.renameProject },
+    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, rename: mocks.renameProject, archive: mocks.archiveProject },
     devices: { list: mocks.listDevices },
     plans: { list: mocks.listPlans },
     results: { riskTrend: mocks.riskTrend },
@@ -145,6 +146,21 @@ describe('ProjectDetailPage', () => {
       expect(mocks.renameProject).toHaveBeenCalledWith('proj-a', 'HONOR-ELA2');
       expect(mocks.navigate).toHaveBeenCalledWith('/projects/HONOR-ELA2');
     });
+  });
+
+  it('archives project with confirm on admin', async () => {
+    mocks.archiveProject.mockResolvedValue(makeDetail({ status: 'ARCHIVED' }));
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderPage();
+    await screen.findByText('Project A');
+    fireEvent.click(screen.getByTestId('archive-project-open'));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mocks.archiveProject).toHaveBeenCalledWith('proj-a');
+    });
+    confirmSpy.mockRestore();
   });
 
   it('removes a rule with confirm on admin', async () => {

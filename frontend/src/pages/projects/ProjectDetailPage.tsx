@@ -12,6 +12,7 @@ import {
   YAxis,
 } from 'recharts';
 import {
+  Archive,
   ArrowLeft,
   Pencil,
   Smartphone,
@@ -127,6 +128,26 @@ export default function ProjectDetailPage() {
     removeRuleMutation.mutate({ model });
   };
 
+  // 归档：登记簿的终结操作（无删除设计）。归档后从活跃列表消失，历史数据保留。
+  const archiveMutation = useMutation({
+    mutationFn: () => api.projects.archive(projectKey),
+    onSuccess: () => {
+      toast.success('项目已归档');
+      void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectKey) });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
+    },
+    onError: (error) => {
+      toast.error(`归档失败: ${toApiError(error).message || '请稍后重试'}`);
+    },
+  });
+
+  const handleArchive = () => {
+    if (!window.confirm('归档此项目？归档后从活跃列表消失（历史 Run 与设备归属保留），可在列表用状态筛选查看。')) {
+      return;
+    }
+    archiveMutation.mutate();
+  };
+
   if (detailQ.isLoading) {
     return (
       <PageContainer width="content">
@@ -228,6 +249,17 @@ export default function ProjectDetailPage() {
               >
                 <Pencil className="h-3.5 w-3.5 mr-1" />
                 编辑
+              </Button>
+            ) : null}
+            {isAdmin && project.status === 'ACTIVE' ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                data-testid="archive-project-open"
+                onClick={() => handleArchive()}
+              >
+                <Archive size={14} className="mr-1.5" />
+                归档
               </Button>
             ) : null}
           </div>
