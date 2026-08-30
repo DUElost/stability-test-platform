@@ -59,6 +59,9 @@ export default function ChangePasswordPage() {
         <CardContent>
           {message && (
             <div
+              // 成功与失败都是提交后的即时反馈，读屏应自动播报（#497 A2）
+              role="alert"
+              aria-live="assertive"
               className={cn(
                 'mb-4 rounded-md px-3 py-2 text-sm',
                 message.type === 'success' ? ALERT_BOX.success : ALERT_BOX.destructive,

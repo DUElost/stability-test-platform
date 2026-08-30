@@ -39,13 +39,7 @@ import { projectKeys } from '@/utils/api/queryKeys';
 import type { ProjectUpdateInput } from '@/utils/api/types';
 import EditProjectDialog from './components/EditProjectDialog';
 import { coverageSummary } from './inventoryDisplay';
-
-const FACET_FIELDS = [
-  ['customer', '客户'],
-  ['platforms', '平台'],
-  ['form_factor', '形态'],
-  ['product_line', '产品线'],
-] as const;
+import { FACET_FIELD_ENTRIES } from './facetFields';
 
 export default function ProjectDetailPage() {
   const { projectKey = '' } = useParams<{ projectKey: string }>();
@@ -177,7 +171,7 @@ export default function ProjectDetailPage() {
             <Badge variant={project.status === 'ACTIVE' ? 'success' : 'secondary'}>
               {project.status === 'ACTIVE' ? '启用' : '归档'}
             </Badge>
-            {FACET_FIELDS.map(([field, label]) => {
+            {FACET_FIELD_ENTRIES.map(([field, label]) => {
               const value = project[field];
               if (Array.isArray(value)) {
                 if (value.length === 0) return null;

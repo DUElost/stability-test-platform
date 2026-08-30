@@ -1,10 +1,13 @@
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import PageContainer from '@/components/layout/PageContainer';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { SURFACE, TEXT } from '@/design-system/tokens';
 
 export default function NotFoundPage() {
+  useDocumentTitle('页面未找到');
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
+    <PageContainer className="items-center justify-center min-h-[60vh] text-center">
       <div className={`w-20 h-20 mb-6 rounded-full flex items-center justify-center ${SURFACE.subtle}`}>
         <span className={`text-3xl font-bold ${TEXT.caption}`}>404</span>
       </div>
@@ -13,6 +16,6 @@ export default function NotFoundPage() {
       <Button asChild>
         <Link to="/">返回首页</Link>
       </Button>
-    </div>
+    </PageContainer>
   );
 }

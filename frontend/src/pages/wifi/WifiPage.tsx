@@ -15,13 +15,17 @@ import { FORM, INTERACTIVE, MODAL, PANEL, STATUS_CHIP, TEXT } from '@/design-sys
 import { resourceUsageBgClass } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
+const DEFAULT_MAX_DEVICES = 30;
+const MAX_DEVICES_LIMIT = 1000;
+
+// 最大设备数不放进 form：数字输入框需要「清空后重填」的中间态，与 form 的
+// number 语义直接冲突——`parseInt(v) || 1` 会在清空的那一刻把值弹回 1，
+// 用户根本输不进去（#498 D2）。改由单独的字符串 state 承载，提交时再解析。
 const FORM_INITIAL = {
   name: '',
-  resource_type: 'wifi',
   config_ssid: '',
   config_password: '',
   config_router_ip: '',
-  max_concurrent_devices: 30,
   host_group: '',
 };
 
@@ -36,6 +40,14 @@ export default function WifiPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(FORM_INITIAL);
+  const [maxDevicesInput, setMaxDevicesInput] = useState(String(DEFAULT_MAX_DEVICES));
+
+  /** 提交时解析；空串/非法输入回落默认值，其余夹到 [1, MAX_DEVICES_LIMIT]。 */
+  const maxDevicesValue = () => {
+    const parsed = Number.parseInt(maxDevicesInput, 10);
+    if (!Number.isFinite(parsed)) return DEFAULT_MAX_DEVICES;
+    return Math.min(Math.max(parsed, 1), MAX_DEVICES_LIMIT);
+  };
 
   const { data: pools = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['resource-pools', 'loads'],
@@ -46,9 +58,9 @@ export default function WifiPage() {
   const createMutation = useMutation({
     mutationFn: () => api.resourcePools.create({
       name: form.name,
-      resource_type: form.resource_type,
+      // resource_type 由后端按 WiFi 池默认，前端不再携带这个恒为 'wifi' 的残留字段（#499 E4）
       config: { ssid: form.config_ssid, password: form.config_password, router_ip: form.config_router_ip },
-      max_concurrent_devices: form.max_concurrent_devices,
+      max_concurrent_devices: maxDevicesValue(),
       host_group: form.host_group || null,
     }),
     onSuccess: () => {
@@ -63,7 +75,7 @@ export default function WifiPage() {
     mutationFn: (id: number) => api.resourcePools.update(id, {
       name: form.name,
       config: { ssid: form.config_ssid, password: form.config_password, router_ip: form.config_router_ip },
-      max_concurrent_devices: form.max_concurrent_devices,
+      max_concurrent_devices: maxDevicesValue(),
       host_group: form.host_group || null,
     }),
     onSuccess: () => {
@@ -85,6 +97,7 @@ export default function WifiPage() {
 
   function resetForm() {
     setForm(FORM_INITIAL);
+    setMaxDevicesInput(String(DEFAULT_MAX_DEVICES));
     setEditingId(null);
     setShowCreate(false);
   }
@@ -92,13 +105,12 @@ export default function WifiPage() {
   function startEdit(pool: ResourcePool | ResourcePoolLoad) {
     setForm({
       name: pool.name,
-      resource_type: pool.resource_type,
       config_ssid: configString(pool.config?.ssid),
       config_password: configString(pool.config?.password),
       config_router_ip: configString(pool.config?.router_ip),
-      max_concurrent_devices: pool.max_concurrent_devices,
       host_group: pool.host_group || '',
     });
+    setMaxDevicesInput(String(pool.max_concurrent_devices ?? DEFAULT_MAX_DEVICES));
     setEditingId(pool.id);
     setShowCreate(false);
   }
@@ -209,9 +221,9 @@ export default function WifiPage() {
                   id="wifi-max-devices"
                   type="number"
                   min={1}
-                  max={1000}
-                  value={form.max_concurrent_devices}
-                  onChange={(e) => setForm({ ...form, max_concurrent_devices: parseInt(e.target.value, 10) || 1 })}
+                  max={MAX_DEVICES_LIMIT}
+                  value={maxDevicesInput}
+                  onChange={(e) => setMaxDevicesInput(e.target.value)}
                   className={FORM.input}
                 />
               </div>

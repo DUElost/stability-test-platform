@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, toApiError, type TaskSchedule, type TaskScheduleCreatePayload } from '@/utils/api';
 import { planKeys, scheduleKeys } from '@/utils/api/queryKeys';
@@ -64,6 +64,8 @@ export default function SchedulesPage() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<TaskSchedule | null>(null);
   const [form, setForm] = useState<ScheduleForm>(DEFAULT_FORM);
+  const formRef = useRef<HTMLDivElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   // C1：数据获取迁移 react-query（缓存/重试/去重与全站一致）
   const schedulesQ = useQuery({
@@ -191,6 +193,30 @@ export default function SchedulesPage() {
     setShowForm(true);
   };
 
+  const closeForm = useCallback(() => {
+    setShowForm(false);
+    setEditing(null);
+    setForm(DEFAULT_FORM);
+  }, []);
+
+  // D5：表单是内联卡片，从列表下方点「编辑」时页面不动、焦点也不动，
+  // 用户常以为没点上。打开时滚到表单并聚焦首个字段。
+  useEffect(() => {
+    if (!showForm) return;
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    nameInputRef.current?.focus();
+  }, [showForm, editing]);
+
+  // D5：内联表单此前没有 ESC 关闭，退出只能滚回顶部点「取消」。
+  useEffect(() => {
+    if (!showForm) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeForm();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showForm, closeForm]);
+
   if (loading) {
     return (
       <PageContainer width="content">
@@ -239,7 +265,12 @@ export default function SchedulesPage() {
       />
 
       {showForm && (
-        <div className={cn('rounded-xl border p-6 max-w-lg', PANEL.root)}>
+        <div
+          ref={formRef}
+          role="group"
+          aria-label={editing ? '编辑定时任务' : '新建定时任务'}
+          className={cn('rounded-xl border p-6 max-w-lg', PANEL.root)}
+        >
           <h3 className={cn('text-lg font-medium mb-4', TEXT.heading)}>
             {editing ? '编辑定时任务' : '新建定时任务'}
           </h3>
@@ -248,6 +279,7 @@ export default function SchedulesPage() {
               <label htmlFor="schedule-name" className={cn('block text-sm font-medium mb-1', TEXT.body)}>名称</label>
               <input
                 id="schedule-name"
+                ref={nameInputRef}
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -298,11 +330,7 @@ export default function SchedulesPage() {
             </div>
             <div className="flex gap-2">
               <Button onClick={handleSave} size="sm">保存</Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => { setShowForm(false); setEditing(null); setForm(DEFAULT_FORM); }}
-              >
+              <Button variant="outline" size="sm" onClick={closeForm}>
                 取消
               </Button>
             </div>
