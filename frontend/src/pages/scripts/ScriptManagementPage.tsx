@@ -34,22 +34,36 @@ function UsageSection({ script }: { script: ScriptEntry }) {
       ) : (
         <div className="space-y-1">
           {projects.map(p => (
-            <div key={p.project_key} className="flex items-center gap-2">
-              <span className="font-mono">{p.project_key}</span>
-              <span className={TEXT.subtitle}>
-                {p.run_count} 次 run · 成功 {p.success_count}
-              </span>
-              <span
-                className={cn(
-                  'font-medium',
-                  p.success_rate >= 0.8 ? 'text-success'
-                    : p.success_rate >= 0.5 ? 'text-warning' : 'text-destructive',
+            <div key={p.project_key} className="space-y-0.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-mono">{p.project_key}</span>
+                <span className={TEXT.subtitle}>
+                  {p.run_count} 次 run · 成功 {p.success_count}
+                </span>
+                <span
+                  className={cn(
+                    'font-medium',
+                    p.success_rate >= 0.8 ? 'text-success'
+                      : p.success_rate >= 0.5 ? 'text-warning' : 'text-destructive',
+                  )}
+                >
+                  {(p.success_rate * 100).toFixed(0)}%
+                </span>
+                {p.plan_count > 0 && (
+                  <span className={TEXT.subtitle}>
+                    {p.plan_count} 个 Plan 引用
+                  </span>
                 )}
-              >
-                {(p.success_rate * 100).toFixed(0)}%
-              </span>
-              {p.plan_count > 1 && (
-                <span className={TEXT.subtitle}>{p.plan_count} 个 Plan</span>
+              </div>
+              {p.versions_used.length > 1 && (
+                <div className={cn('pl-2', TEXT.subtitle)}>
+                  执行版本：
+                  {p.versions_used.map(v => (
+                    <span key={v.script_version} className="ml-2 font-mono">
+                      v{v.script_version} ({v.run_count})
+                    </span>
+                  ))}
+                </div>
               )}
             </div>
           ))}

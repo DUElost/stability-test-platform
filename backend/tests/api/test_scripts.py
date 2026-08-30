@@ -575,8 +575,24 @@ def test_delete_rejects_deactivation_when_script_is_still_referenced(
 
 
 
+def _usage_snapshot_steps(
+    script_name: str,
+    script_version: str,
+) -> dict:
+    return {
+        "steps": [
+            {
+                "stage": "init",
+                "step_key": "s1",
+                "script_name": script_name,
+                "script_version": script_version,
+            },
+        ],
+    }
+
+
 def test_script_usage_aggregates_by_project(client, auth_headers, db_session, sample_device):
-    """ADR-0029 P2-10：plan_step → plan → plan_run.project_id 派生使用统计。"""
+    """ADR-0029 P2-10：plan_snapshot 执行事实 + plan_step 配置引用。"""
     from backend.models.plan import Plan, PlanStep
     from backend.models.plan_run import PlanRun
     from backend.models.project import TestProject
@@ -606,16 +622,17 @@ def test_script_usage_aggregates_by_project(client, auth_headers, db_session, sa
                  script_version="1.0.0", stage="init", sort_order=0),
     ])
     db_session.commit()
+    snap = _usage_snapshot_steps("usage_probe", "1.0.0")
     now = datetime.now(timezone.utc)
     db_session.add_all([
         PlanRun(plan_id=plan_a.id, project_id=proj_a.id, status="SUCCESS",
-                plan_snapshot={}, run_type="MANUAL", triggered_by="t",
+                plan_snapshot=snap, run_type="MANUAL", triggered_by="t",
                 started_at=now - timedelta(days=1)),
         PlanRun(plan_id=plan_a.id, project_id=proj_a.id, status="FAILED",
-                plan_snapshot={}, run_type="MANUAL", triggered_by="t",
+                plan_snapshot=snap, run_type="MANUAL", triggered_by="t",
                 started_at=now - timedelta(days=1)),
         PlanRun(plan_id=plan_b.id, project_id=proj_b.id, status="SUCCESS",
-                plan_snapshot={}, run_type="MANUAL", triggered_by="t",
+                plan_snapshot=snap, run_type="MANUAL", triggered_by="t",
                 started_at=now - timedelta(days=1)),
     ])
     db_session.commit()
@@ -628,5 +645,123 @@ def test_script_usage_aggregates_by_project(client, auth_headers, db_session, sa
     assert by_key["USG-A"]["success_count"] == 1
     assert by_key["USG-A"]["success_rate"] == 0.5
     assert by_key["USG-A"]["plan_count"] == 1
+    assert by_key["USG-A"]["versions_used"] == [{
+        "script_version": "1.0.0",
+        "run_count": 2,
+        "success_count": 1,
+        "success_rate": 0.5,
+    }]
     assert by_key["USG-B"]["run_count"] == 1
     assert by_key["USG-B"]["success_rate"] == 1.0
+
+
+def test_script_usage_config_ref_without_recent_runs(client, auth_headers, db_session):
+    """退役交叉：配置有引用 + 窗口内零执行 → plan_count>0, run_count=0。"""
+    from backend.models.plan import Plan, PlanStep
+    from backend.models.project import TestProject
+    from backend.models.script import Script
+
+    script = Script(
+        name="retire_cfg_only", script_type="python", version="1.0.0",
+        nfs_path="/s/retire.py", content_sha256="r" * 64,
+        default_params={}, param_schema={}, is_active=True,
+    )
+    proj = TestProject(project_key="RET-CFG", display_name="cfg", source="USER")
+    db_session.add_all([script, proj])
+    db_session.commit()
+    plan = Plan(name="retire-plan", project_id=proj.id)
+    db_session.add(plan)
+    db_session.commit()
+    db_session.add(PlanStep(
+        plan_id=plan.id, step_key="s1", script_name="retire_cfg_only",
+        script_version="1.0.0", stage="init", sort_order=0,
+    ))
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/scripts/{script.id}/usage", headers=auth_headers)
+    assert resp.status_code == 200
+    row = resp.json()["data"]["projects"][0]
+    assert row["project_key"] == "RET-CFG"
+    assert row["plan_count"] == 1
+    assert row["run_count"] == 0
+    assert row["versions_used"] == []
+
+
+def test_script_usage_runs_without_config_ref(client, auth_headers, db_session):
+    """退役交叉：配置零引用 + 窗口内有执行 → 仍出现且 versions_used 可查。"""
+    from backend.models.plan import Plan
+    from backend.models.plan_run import PlanRun
+    from backend.models.project import TestProject
+    from backend.models.script import Script
+
+    script = Script(
+        name="retire_run_only", script_type="python", version="1.0.0",
+        nfs_path="/s/retire_run.py", content_sha256="x" * 64,
+        default_params={}, param_schema={}, is_active=True,
+    )
+    proj = TestProject(project_key="RET-RUN", display_name="run", source="USER")
+    db_session.add_all([script, proj])
+    db_session.commit()
+    plan = Plan(name="orphan-plan", project_id=proj.id)
+    db_session.add(plan)
+    db_session.commit()
+    now = datetime.now(timezone.utc)
+    db_session.add(PlanRun(
+        plan_id=plan.id, project_id=proj.id, status="SUCCESS",
+        plan_snapshot=_usage_snapshot_steps("retire_run_only", "1.0.0"),
+        run_type="MANUAL", triggered_by="t",
+        started_at=now - timedelta(days=1),
+    ))
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/scripts/{script.id}/usage", headers=auth_headers)
+    assert resp.status_code == 200
+    row = resp.json()["data"]["projects"][0]
+    assert row["project_key"] == "RET-RUN"
+    assert row["plan_count"] == 0
+    assert row["run_count"] == 1
+    assert row["versions_used"] == [{
+        "script_version": "1.0.0",
+        "run_count": 1,
+        "success_count": 1,
+        "success_rate": 1.0,
+    }]
+
+
+def test_script_usage_versions_used_when_config_diverges(client, auth_headers, db_session):
+    """plan_step 已改版本，快照仍记录旧版执行。"""
+    from backend.models.plan import Plan, PlanStep
+    from backend.models.plan_run import PlanRun
+    from backend.models.project import TestProject
+    from backend.models.script import Script
+
+    script = Script(
+        name="version_drift", script_type="python", version="1.0.0",
+        nfs_path="/s/drift.py", content_sha256="d" * 64,
+        default_params={}, param_schema={}, is_active=True,
+    )
+    proj = TestProject(project_key="DRIFT", display_name="d", source="USER")
+    db_session.add_all([script, proj])
+    db_session.commit()
+    plan = Plan(name="drift-plan", project_id=proj.id)
+    db_session.add(plan)
+    db_session.commit()
+    db_session.add(PlanStep(
+        plan_id=plan.id, step_key="s1", script_name="version_drift",
+        script_version="2.0.0", stage="init", sort_order=0,
+    ))
+    now = datetime.now(timezone.utc)
+    db_session.add(PlanRun(
+        plan_id=plan.id, project_id=proj.id, status="SUCCESS",
+        plan_snapshot=_usage_snapshot_steps("version_drift", "1.0.0"),
+        run_type="MANUAL", triggered_by="t",
+        started_at=now - timedelta(days=1),
+    ))
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/scripts/{script.id}/usage", headers=auth_headers)
+    assert resp.status_code == 200
+    row = resp.json()["data"]["projects"][0]
+    assert row["plan_count"] == 0
+    assert row["run_count"] == 1
+    assert row["versions_used"][0]["script_version"] == "1.0.0"
