@@ -485,13 +485,13 @@ class TestUpdateAndArchiveProject:
 class TestMapProject:
     @staticmethod
     def _active_rules(db_session, project_id):
-        from backend.models.project_rule import ProjectDeviceRule
+        from backend.models.project_model import ProjectModel
 
         return [
             r.match_value
-            for r in db_session.query(ProjectDeviceRule)
+            for r in db_session.query(ProjectModel)
             .filter_by(project_id=project_id, is_active=True)
-            .order_by(ProjectDeviceRule.match_value)
+            .order_by(ProjectModel.match_value)
             .all()
         ]
 
@@ -527,7 +527,7 @@ class TestMapProject:
         assert d_seed.project_id == project_a.id
         assert d_null.project_id == project_a.id
         assert d_already.project_id == project_a.id
-        # ADR-0029 P1：规则写入 project_device_rule（match_models 列冻结）
+        # ADR-0029 P1：规则写入 project_model（match_models 列冻结）
         assert self._active_rules(db_session, project_a.id) == ["MLD_LX2"]
 
         inventory = client.get(
@@ -539,10 +539,10 @@ class TestMapProject:
         audits = {
             a.action
             for a in db_session.query(AuditLog).filter(
-                AuditLog.action.in_(("assign_project", "apply_project_device_rule"))
+                AuditLog.action.in_(("assign_project", "apply_project_model"))
             )
         }
-        assert audits == {"assign_project", "apply_project_device_rule"}
+        assert audits == {"assign_project", "apply_project_model"}
 
     def test_user_conflict_skipped_unless_reassign(
         self, client, admin_headers, db_session, project_a
@@ -946,9 +946,9 @@ class TestRemoveProjectRule:
     def test_remove_rule_records_audit(
         self, client, db_session, project_a, admin_headers
     ):
-        from backend.models.project_rule import ProjectDeviceRule
+        from backend.models.project_model import ProjectModel
 
-        db_session.add(ProjectDeviceRule(
+        db_session.add(ProjectModel(
             project_id=project_a.id, match_value="MLD_LX2"))
         db_session.commit()
 
@@ -957,11 +957,11 @@ class TestRemoveProjectRule:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["data"] == {"project_key": "proj-a", "model": "MLD_LX2"}
-        assert db_session.query(ProjectDeviceRule).filter_by(
+        assert db_session.query(ProjectModel).filter_by(
             project_id=project_a.id, match_value="MLD_LX2",
         ).count() == 0
         audits = db_session.query(AuditLog).filter(
-            AuditLog.action == "remove_project_device_rule"
+            AuditLog.action == "remove_project_model"
         ).all()
         assert len(audits) == 1
         assert audits[0].details["model"] == "MLD_LX2"
@@ -1039,9 +1039,9 @@ class TestRecomputeProjectRules:
     """按规则重算存量归属（显式纠正，不依赖心跳）。"""
 
     def test_recompute_moves_unattributed_and_wrong(self, client, db_session, project_a, admin_headers):
-        from backend.models.project_rule import ProjectDeviceRule
+        from backend.models.project_model import ProjectModel as MemberModel
 
-        db_session.add(ProjectDeviceRule(
+        db_session.add(MemberModel(
             project_id=project_a.id, match_value="MLD_LX2"))
         db_session.commit()
         d_null = _make_device(db_session, "s-rec-null", None, model="MLD_LX2")

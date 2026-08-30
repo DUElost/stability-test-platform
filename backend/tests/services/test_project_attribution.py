@@ -1,10 +1,10 @@
-"""ProjectDeviceRule + project_attribution 解析层测试（ADR-0029 P1）。"""
+"""ProjectModel + project_attribution 解析层测试（ADR-0029 P1）。"""
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
 from backend.models.project import TestProject
-from backend.models.project_rule import ProjectDeviceRule
+from backend.models.project_model import ProjectModel
 from backend.services.project_attribution import (
     apply_attribution,
     resolve_project_id,
@@ -21,7 +21,7 @@ def _rule_project(db_session):
 
 class TestResolveProjectId:
     def test_hit_returns_project_id(self, db_session, _rule_project):
-        db_session.add(ProjectDeviceRule(
+        db_session.add(ProjectModel(
             project_id=_rule_project.id, match_value="MLD_LX2"))
         db_session.commit()
         assert resolve_project_id(db_session, "MLD_LX2") == _rule_project.id
@@ -30,14 +30,14 @@ class TestResolveProjectId:
         assert resolve_project_id(db_session, "Z2581") is None
 
     def test_blank_model_returns_none(self, db_session, _rule_project):
-        db_session.add(ProjectDeviceRule(
+        db_session.add(ProjectModel(
             project_id=_rule_project.id, match_value="MLD_LX2"))
         db_session.commit()
         assert resolve_project_id(db_session, None) is None
         assert resolve_project_id(db_session, "") is None
 
     def test_inactive_rule_not_matched(self, db_session, _rule_project):
-        db_session.add(ProjectDeviceRule(
+        db_session.add(ProjectModel(
             project_id=_rule_project.id, match_value="MLD_LX2",
             is_active=False))
         db_session.commit()
@@ -50,11 +50,11 @@ class TestResolveProjectId:
         other = TestProject(project_key="RULE-B", display_name="b", source="USER")
         db_session.add(other)
         db_session.commit()
-        db_session.add(ProjectDeviceRule(
+        db_session.add(ProjectModel(
             project_id=_rule_project.id, match_value="MLD_LX2"))
         db_session.commit()
         with pytest.raises(IntegrityError):  # SQLite/PG 都报唯一冲突
-            db_session.add(ProjectDeviceRule(
+            db_session.add(ProjectModel(
                 project_id=other.id, match_value="MLD_LX2"))
             db_session.commit()
         db_session.rollback()
@@ -75,7 +75,7 @@ class TestApplyAttribution:
         return device
 
     def test_applies_when_unattributed(self, db_session, _rule_project):
-        db_session.add(ProjectDeviceRule(
+        db_session.add(ProjectModel(
             project_id=_rule_project.id, match_value="MLD_LX2"))
         db_session.commit()
         device = self._device(db_session)
@@ -83,7 +83,7 @@ class TestApplyAttribution:
         assert device.project_id == _rule_project.id
 
     def test_no_change_when_already_correct(self, db_session, _rule_project):
-        db_session.add(ProjectDeviceRule(
+        db_session.add(ProjectModel(
             project_id=_rule_project.id, match_value="MLD_LX2"))
         db_session.commit()
         device = self._device(db_session, project_id=_rule_project.id)
@@ -91,7 +91,7 @@ class TestApplyAttribution:
         assert device.project_id == _rule_project.id
 
     def test_pinned_never_overwritten(self, db_session, _rule_project):
-        db_session.add(ProjectDeviceRule(
+        db_session.add(ProjectModel(
             project_id=_rule_project.id, match_value="MLD_LX2"))
         db_session.commit()
         device = self._device(db_session, project_id=None, pinned=True)
@@ -114,7 +114,7 @@ class TestReassignWarning:
 
         from backend.models.host import Device
 
-        db_session.add(ProjectDeviceRule(
+        db_session.add(ProjectModel(
             project_id=_rule_project.id, match_value="MLD_LX2"))
         db_session.commit()
         other = TestProject(project_key="RULE-C", display_name="c", source="USER")
@@ -139,7 +139,7 @@ class TestReassignWarning:
 
         from backend.models.host import Device
 
-        db_session.add(ProjectDeviceRule(
+        db_session.add(ProjectModel(
             project_id=_rule_project.id, match_value="MLD_LX2"))
         db_session.commit()
         device = Device(serial="S-FIRST-1", model="MLD_LX2")
