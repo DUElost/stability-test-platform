@@ -115,3 +115,20 @@ class TestFilenameUnaffected:
         assert format_timestamp_for_filename(
             "Fri Jul 17 13:36:21 CST 2026"
         ) == "2026_0717_133621_000"
+
+
+def test_fallback_timestamp_3digit_millis(monkeypatch):
+    """P1: 解析失败 fallback 必须生成 3 位毫秒（与正常路径一致）。"""
+    from backend.agent.aee import timestamp as ts_mod
+
+    fixed = ts_mod.datetime(2026, 8, 30, 7, 5, 27, 992448)
+    monkeypatch.setattr(ts_mod, "datetime", type(
+        "DT", (), {
+            "now": staticmethod(lambda: fixed),
+            "strptime": staticmethod(ts_mod.datetime.strptime),
+        }))
+    out = ts_mod.format_timestamp_for_filename("not-a-timestamp")
+    # 末段恰 3 位且与 event_dirs 正则兼容
+    assert out == "2026_0830_070527_000"
+    import re
+    assert re.match(r"^\d{4}_\d{4}_\d{6}_\d{3}_", out + "_x")
