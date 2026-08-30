@@ -19,6 +19,7 @@ import {
   ListTodo,
   Link2,
   TicketCheck,
+  X,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -95,6 +96,28 @@ export default function ProjectDetailPage() {
       toast.error(`更新失败: ${toApiError(error).message || '请稍后重试'}`);
     },
   });
+
+  // ADR-0029 复盘：移除型号规则（admin）。已归属设备不动，心跳按新状态收敛。
+  const removeRuleMutation = useMutation({
+    mutationFn: ({ model }: { model: string }) =>
+      api.projects.removeRule(projectKey, model),
+    onSuccess: () => {
+      toast.success('规则已移除');
+      void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectKey) });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.inventoryModels() });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.inventorySummary() });
+    },
+    onError: (error) => {
+      toast.error(`移除失败: ${toApiError(error).message || '请稍后重试'}`);
+    },
+  });
+
+  const handleRemoveRule = (model: string) => {
+    if (!window.confirm(`移除型号 ${model} 的归属规则？设备归属不动，心跳按新规则状态收敛。`)) {
+      return;
+    }
+    removeRuleMutation.mutate({ model });
+  };
 
   if (detailQ.isLoading) {
     return (
@@ -217,22 +240,40 @@ export default function ProjectDetailPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="py-3">
-          {modelsQ.isLoading ? (
-            <Skeleton className="h-10 w-full" />
-          ) : modelsQ.data && modelsQ.data.length > 0 ? (
+          {(project.match_models ?? []).length > 0 ? (
             <div className="flex flex-wrap items-center gap-1.5">
-              {modelsQ.data.map((row) => (
-                <Badge key={row.model ?? '__blank__'} variant="outline" className="font-mono text-xs">
-                  {row.model}
-                  <span className="ml-1 text-muted-foreground">{row.device_count}</span>
-                </Badge>
+              {(project.match_models ?? []).map((model) => (
+                <span key={model} className="inline-flex items-center gap-1">
+                  <Badge variant="outline" className="font-mono text-xs">
+                    {model}
+                  </Badge>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      aria-label={`移除规则 ${model}`}
+                      title="删除此型号规则（设备归属不动，心跳按新规则状态收敛）"
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() => handleRemoveRule(model)}
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </span>
               ))}
-              <span className="ml-1 text-xs text-muted-foreground" data-testid="hanging-models">
-                共 {coverageSummary(modelsQ.data)}
-              </span>
             </div>
           ) : (
-            <p className={cn('text-xs', TEXT.subtitle)} data-testid="hanging-models-empty">
+            <p className={cn('text-xs', TEXT.subtitle)} data-testid="rules-empty">
+              暂无归属规则
+            </p>
+          )}
+          {modelsQ.isLoading ? (
+            <Skeleton className="mt-2 h-5 w-40" />
+          ) : modelsQ.data && modelsQ.data.length > 0 ? (
+            <p className={cn('mt-2 text-xs', TEXT.subtitle)} data-testid="hanging-models">
+              当前归属此项目的设备型号：{coverageSummary(modelsQ.data)}
+            </p>
+          ) : (
+            <p className={cn('mt-2 text-xs', TEXT.subtitle)} data-testid="hanging-models-empty">
               当前没有设备归属此项目
             </p>
           )}

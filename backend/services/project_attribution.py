@@ -10,10 +10,14 @@
 
 pinned 语义：device.project_pinned = true 的设备**永不被规则覆盖**——人工
 钉住是唯一允许同型号拆两个项目的方式，显式可列出。
+
+改判告警：已归属设备被规则改判（model 变更 / 历史错误归属）必须留痕——
+一条错规则会静默搬走整批设备（生产事故：A57→MLD_LX2 残留规则）。
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from sqlalchemy import select
@@ -21,6 +25,8 @@ from sqlalchemy.orm import Session
 
 from backend.models.host import Device
 from backend.models.project_rule import ProjectDeviceRule
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_project_id(db: Session, model: Optional[str]) -> Optional[int]:
@@ -58,6 +64,13 @@ def apply_attribution(db: Session, device: Device) -> bool:
         return False
     if device.project_id == resolved:
         return False
+    # 改判告警：已归属设备被规则改判（model 变更 / 历史错误归属）——
+    # 一条错规则会静默搬走整批设备，必须留痕（生产事故复盘结论）。
+    if device.project_id is not None:
+        logger.warning(
+            "attribution_reassigned serial=%s model=%s from_project=%s to_project=%s",
+            device.serial, device.model, device.project_id, resolved,
+        )
     device.project_id = resolved
     return True
 

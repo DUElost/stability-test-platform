@@ -81,6 +81,13 @@ export const projects = {
         { models, reassign_conflicts: reassignConflicts },
       ),
     ),
+  /** ADR-0029 复盘：删除一条型号规则（admin）。 */
+  removeRule: (projectKey: string, model: string) =>
+    unwrapApiResponse(
+      apiClient.delete<ApiResponseEnvelope<{ project_key: string; model: string }>>(
+        `/projects/${projectKey}/rules/${encodeURIComponent(model)}`,
+      ),
+    ),
 };
 
 /** 设备批量归入项目（admin 动作）。返回更新后的设备列表。 */

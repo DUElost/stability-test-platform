@@ -938,3 +938,44 @@ class TestListFilters:
         for url in urls:
             resp = client.get(url, headers=auth_headers)
             assert resp.status_code == 404, url
+
+
+class TestRemoveProjectRule:
+    """ADR-0029 复盘：删除型号规则（规则表此前只增不减）。"""
+
+    def test_remove_rule_records_audit(
+        self, client, db_session, project_a, admin_headers
+    ):
+        from backend.models.project_rule import ProjectDeviceRule
+
+        db_session.add(ProjectDeviceRule(
+            project_id=project_a.id, match_value="MLD_LX2"))
+        db_session.commit()
+
+        resp = client.delete(
+            "/api/v1/projects/proj-a/rules/MLD_LX2", headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"] == {"project_key": "proj-a", "model": "MLD_LX2"}
+        assert db_session.query(ProjectDeviceRule).filter_by(
+            project_id=project_a.id, match_value="MLD_LX2",
+        ).count() == 0
+        audits = db_session.query(AuditLog).filter(
+            AuditLog.action == "remove_project_device_rule"
+        ).all()
+        assert len(audits) == 1
+        assert audits[0].details["model"] == "MLD_LX2"
+
+    def test_remove_missing_rule_404(self, client, project_a, admin_headers):
+        resp = client.delete(
+            "/api/v1/projects/proj-a/rules/NO_SUCH", headers=admin_headers
+        )
+        assert resp.status_code == 404
+
+    def test_remove_rule_forbidden_for_non_admin(
+        self, client, project_a, auth_headers
+    ):
+        resp = client.delete(
+            "/api/v1/projects/proj-a/rules/MLD_LX2", headers=auth_headers
+        )
+        assert resp.status_code == 403

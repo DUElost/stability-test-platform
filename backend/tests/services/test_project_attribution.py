@@ -105,3 +105,49 @@ class TestApplyAttribution:
         device = self._device(db_session, project_id=_rule_project.id)
         assert apply_attribution(db_session, device) is False
         assert device.project_id == _rule_project.id
+
+
+class TestReassignWarning:
+    def test_reassign_logs_warning(self, db_session, _rule_project, caplog):
+        """改判已归属设备必须留痕（错规则静默搬走整批设备的事故复盘）。"""
+        import logging
+
+        from backend.models.host import Device
+
+        db_session.add(ProjectDeviceRule(
+            project_id=_rule_project.id, match_value="MLD_LX2"))
+        db_session.commit()
+        other = TestProject(project_key="RULE-C", display_name="c", source="USER")
+        db_session.add(other)
+        db_session.commit()
+        device = Device(serial="S-REASSIGN-1", model="MLD_LX2",
+                        project_id=other.id)
+        db_session.add(device)
+        db_session.flush()
+
+        with caplog.at_level(logging.WARNING, logger="backend.services.project_attribution"):
+            assert apply_attribution(db_session, device) is True
+        assert device.project_id == _rule_project.id
+        assert any(
+            "attribution_reassigned" in r.message and "S-REASSIGN-1" in r.message
+            for r in caplog.records
+        )
+
+    def test_no_warning_when_unattributed(self, db_session, _rule_project, caplog):
+        """未归属设备首次归属是预期行为，不告警。"""
+        import logging
+
+        from backend.models.host import Device
+
+        db_session.add(ProjectDeviceRule(
+            project_id=_rule_project.id, match_value="MLD_LX2"))
+        db_session.commit()
+        device = Device(serial="S-FIRST-1", model="MLD_LX2")
+        db_session.add(device)
+        db_session.flush()
+
+        with caplog.at_level(logging.WARNING, logger="backend.services.project_attribution"):
+            assert apply_attribution(db_session, device) is True
+        assert not any(
+            "attribution_reassigned" in r.message for r in caplog.records
+        )
