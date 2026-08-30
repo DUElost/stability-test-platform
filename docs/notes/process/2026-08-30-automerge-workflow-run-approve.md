@@ -40,6 +40,14 @@ run 33306014644 reconcile 日志：`integer expression expected` /
 仅 `gh api` 批准、不 checkout PR 代码），在 sync/开 PR 后秒级批同分支待审 run。
 `pr-automerge-queue.sh` reconcile 改为对**队列内全部** eligible 分支批准（非仅队首）。
 
+## 补充（2026-08-30，merge main 空窗 + schedule 兜底）
+
+#601 merge main：CI `created` 14:12:53 → `run_started` 14:14:04（71s 手批）；
+同次 synchronize **未**再触发 `pull_request_target`（全库仅 1 次 approve run）。
+补丁：`approve-pending-workflow-runs.sh` 在 pull_request_target 路径 **轮询 6×15s**；
+`approve-workflow-runs.yml` 增 **每 5 分钟** schedule 扫全部 open PR 分支
+（`approve-all-open-pr-workflow-runs.sh`）。reconcile 仍单次查询，避免拖慢队列。
+
 ## Revisit
 
 若 GitHub 放宽同仓库 write 协作者的 workflow 审批策略，可删此逻辑。
