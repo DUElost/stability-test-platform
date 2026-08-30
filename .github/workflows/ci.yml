@@ -187,6 +187,18 @@ jobs:
         run: |
           python tools/dev/check_governance_surface.py --check
 
+      # 这条**阻塞**：仓库保持 public（2026-08-29 决策），真实内网主机地址
+      # 一旦写进文档/代码就等于公开资产清单。历史累积过两轮人工清理
+      # （#550 全泛化 172.21.x.x、#557 补 172.16 网段），没有门禁就会再来一次。
+      # 只拦「四段齐全的具体主机地址」：CIDR 网段常量（172.16.0.0/12）、
+      # Docker 默认网关（172.17.0.1）、回环/通配一律放行；ADR-0020 脚本目录
+      # 与已锁定迁移因物理不可改写走白名单。文档示例请用 RFC 5737
+      # 文档保留段（192.0.2.0/24），它不在 RFC1918 内故天然放行。
+      # 正反样例自证：python tools/dev/check-internal-ip-leak.py --self-test
+      - name: 内网主机地址检查(public 仓库)
+        run: |
+          python tools/dev/check-internal-ip-leak.py --check
+
   # ── PR 轻量检查 ──────────────────────────────────────────────────────────
   # pull_request 只跑 lint（上方，两边都跑）+ 下面四个 job（pr-agent-tests /
   # pr-migrate-empty-db / pr-typecheck / pr-compileall）；

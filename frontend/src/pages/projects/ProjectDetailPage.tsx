@@ -2,26 +2,28 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import {
   ArrowLeft,
   Pencil,
   Smartphone,
   FileBox,
   ListTodo,
+  Link2,
   TicketCheck,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/status-badge';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { ClickableRow } from '@/components/ui/clickable-row';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { InlineEmpty } from '@/components/ui/empty-state';
@@ -34,7 +36,6 @@ import { useToast } from '@/hooks/useToast';
 import { api, toApiError } from '@/utils/api';
 import { projectKeys } from '@/utils/api/queryKeys';
 import type { ProjectUpdateInput } from '@/utils/api/types';
-import { formatLocalDateTime } from '@/utils/format';
 import EditProjectDialog from './components/EditProjectDialog';
 import { coverageSummary } from './inventoryDisplay';
 
@@ -65,9 +66,10 @@ export default function ProjectDetailPage() {
     queryFn: () => api.plans.list(0, 20, projectKey),
   });
 
-  const summaryQ = useQuery({
-    queryKey: projectKeys.summaryOf(projectKey),
-    queryFn: () => api.results.summary(5, projectKey),
+  // ADR-0029 P2：项目级风险趋势（按天 S/A/B，run 级 DLE 权威聚合）
+  const riskTrendQ = useQuery({
+    queryKey: ['project-risk-trend', projectKey],
+    queryFn: () => api.results.riskTrend(projectKey, 30),
   });
 
   const modelsQ = useQuery({
@@ -136,7 +138,6 @@ export default function ProjectDetailPage() {
   const project = detailQ.data!;
   const devices = devicesQ.data?.items ?? [];
   const plans = plansQ.data ?? [];
-  const summary = summaryQ.data;
 
   return (
     <PageContainer width="content">
@@ -204,17 +205,45 @@ export default function ProjectDetailPage() {
               这是 P1 脚本灌入的回填标签，不能代表客户、项目或机型。请在工作台新建人工项目并映射型号。
             </p>
           ) : null}
+        </CardContent>
+      </Card>
+
+      {/* 归属规则（规则就是项目的定义本身——提为主块） */}
+      <Card data-testid="detail-rules">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium">
+            <Link2 size={16} className="text-muted-foreground" />
+            归属规则
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="py-3">
           {modelsQ.isLoading ? (
-            <Skeleton className="mt-2 h-5 w-64" />
+            <Skeleton className="h-10 w-full" />
           ) : modelsQ.data && modelsQ.data.length > 0 ? (
-            <p className={cn('mt-2 font-mono text-xs', TEXT.subtitle)} data-testid="hanging-models">
-              当前归属此项目的设备型号：{coverageSummary(modelsQ.data)}
-            </p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {modelsQ.data.map((row) => (
+                <Badge key={row.model ?? '__blank__'} variant="outline" className="font-mono text-xs">
+                  {row.model}
+                  <span className="ml-1 text-muted-foreground">{row.device_count}</span>
+                </Badge>
+              ))}
+              <span className="ml-1 text-xs text-muted-foreground" data-testid="hanging-models">
+                共 {coverageSummary(modelsQ.data)}
+              </span>
+            </div>
           ) : (
-            <p className={cn('mt-2 text-xs', TEXT.subtitle)} data-testid="hanging-models-empty">
+            <p className={cn('text-xs', TEXT.subtitle)} data-testid="hanging-models-empty">
               当前没有设备归属此项目
             </p>
           )}
+          <Button
+            variant="link"
+            size="sm"
+            className="mt-1 h-auto p-0 text-xs"
+            onClick={() => navigate('/projects')}
+          >
+            在项目登记簿维护归属规则（型号 → 项目映射）
+          </Button>
         </CardContent>
       </Card>
 
@@ -309,78 +338,67 @@ export default function ProjectDetailPage() {
           </CardContent>
         </Card>
 
-        {/* 结果块 */}
+        {/* 结果块：风险趋势（按天 S/A/B）——最近运行列表在 /results 页已有 */}
         <Card className="lg:col-span-2">
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-sm font-medium">
               <ListTodo size={16} className="text-muted-foreground" />
-              最近运行（快照语义：按 plan_run.project_id 归属）
+              风险趋势（近 30 天 · S/A/B）
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {summaryQ.isLoading ? (
-              <Skeleton className="h-32 w-full" />
-            ) : !summary?.recent_runs?.length ? (
-              <InlineEmpty>该项目暂无运行记录</InlineEmpty>
+            {riskTrendQ.isLoading ? (
+              <Skeleton className="h-56 w-full" />
+            ) : !riskTrendQ.data?.buckets?.length ? (
+              <InlineEmpty>
+                暂无风险数据——新 Run 派发完成后开始积累（S/A/B 由事件定级）
+              </InlineEmpty>
             ) : (
-              <div className="overflow-x-auto">
-                <Table className="min-w-[560px]">
-                  <TableHeader>
-                    <TableRow className="border-b text-left text-xs text-muted-foreground">
-                      <TableHead className="pb-2 pr-4">Run</TableHead>
-                      <TableHead className="pb-2 pr-4">任务</TableHead>
-                      <TableHead className="pb-2 pr-4">状态</TableHead>
-                      <TableHead className="pb-2 pr-4">风险</TableHead>
-                      <TableHead className="pb-2">开始时间</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {summary.recent_runs.map((run) => (
-                      <ClickableRow
-                        key={run.run_id}
-                        className="border-b transition-colors last:border-0 hover:bg-muted/50"
-                        onClick={() => navigate(`/runs/${run.run_id}/report`)}
-                      >
-                        <TableCell className="py-2 pr-4 font-mono text-xs">#{run.run_id}</TableCell>
-                        <TableCell className="max-w-[240px] truncate py-2 pr-4">{run.task_name}</TableCell>
-                        <TableCell className="py-2 pr-4">
-                          <StatusBadge kind="job-result" status={run.status} size="sm" fallbackToRaw />
-                        </TableCell>
-                        <TableCell className="py-2 pr-4">
-                          <StatusBadge kind="risk" status={run.risk_level} size="sm" />
-                        </TableCell>
-                        <TableCell className="py-2 text-xs text-muted-foreground">
-                          {formatLocalDateTime(run.started_at)}
-                        </TableCell>
-                      </ClickableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <div className="h-56 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={riskTrendQ.data.buckets}
+                    margin={{ top: 4, right: 8, bottom: 0, left: -8 }}
+                    barCategoryGap="20%"
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      vertical={false}
+                      stroke="hsl(var(--border))"
+                    />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      allowDecimals={false}
+                      width={28}
+                      tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip
+                      cursor={{ fill: 'hsl(var(--muted) / 0.35)' }}
+                      contentStyle={{
+                        fontSize: 12,
+                        borderRadius: 8,
+                        border: '1px solid hsl(var(--border))',
+                        background: 'hsl(var(--card))',
+                      }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    {/* 状态语义色：S=critical / A=warning / B=good（dataviz 规范） */}
+                    <Bar dataKey="S" name="S（致命）" stackId="risk"
+                         fill="hsl(var(--destructive))" />
+                    <Bar dataKey="A" name="A（高）" stackId="risk"
+                         fill="hsl(var(--warning))" />
+                    <Bar dataKey="B" name="B（低）" stackId="risk"
+                         fill="hsl(var(--success))" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* JIRA 块 */}
-        <Card className="lg:col-span-2">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium">
-              <TicketCheck size={16} className="text-muted-foreground" />
-              JIRA 集成
-            </CardTitle>
-          </CardHeader>
-          <CardContent className={cn('text-sm', TEXT.subtitle)}>
-            {project.jira_project_key ? (
-              <p>
-                提交 JIRA 时将自动带出项目关键字{' '}
-                <span className="font-mono text-foreground">{project.jira_project_key}</span>
-                （plan_run 源提单已接入自动注入）。
-              </p>
-            ) : (
-              <p data-testid="jira-placeholder">
-                尚未配置 JIRA 项目关键字。管理员可通过右上角「编辑」填写；配置后
-                plan_run 源提单将自动带出该键。
-              </p>
             )}
           </CardContent>
         </Card>

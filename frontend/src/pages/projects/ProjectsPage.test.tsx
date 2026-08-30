@@ -159,38 +159,16 @@ describe('ProjectsPage', () => {
     });
   });
 
-  it('opens drawer with fetched detail on card click; footer navigates to full page', async () => {
+  it('navigates to detail page on card click', async () => {
     const user = userEvent.setup();
-    mocks.getProject.mockResolvedValue(makeProject());
     renderPage();
 
     await screen.findByText('荣耀相机');
     await user.click(screen.getByText('荣耀相机').closest('[data-testid="project-card"]')!);
 
-    // 抽屉内渲染的是 get 拉取的详情数据（非列表快照）
-    const sheet = await screen.findByTestId('project-detail-sheet');
-    expect(within(sheet).getByText('JIRA 项目键')).toBeInTheDocument();
-
-    await user.click(within(sheet).getByTestId('sheet-open-full-page'));
+    // P2-11：抽屉删除——卡片直接跳详情页
     expect(mocks.navigate).toHaveBeenCalledWith('/projects/HONOR-CAMERA');
-  });
-
-  it('sheet exposes admin jira key edit prefilled from detail fetch', async () => {
-    const user = userEvent.setup();
-    mocks.getProject.mockResolvedValue(
-      makeProject({ jira_project_key: 'OLD', running_run_count: 0 }),
-    );
-    renderPage();
-
-    await screen.findByText('荣耀相机');
-    await user.click(screen.getByText('荣耀相机').closest('[data-testid="project-card"]')!);
-
-    const sheet = await screen.findByTestId('project-detail-sheet');
-    // 详情页卡片内的「在跑」徽标不受抽屉影响；抽屉侧是可编辑入口
-    await user.click(await within(sheet).findByTestId('sheet-edit-jira-open'));
-
-    const jiraInput = (await screen.findByTestId('edit-project-jira')) as HTMLInputElement;
-    expect(jiraInput.value).toBe('OLD');
+    expect(screen.queryByTestId('project-detail-sheet')).not.toBeInTheDocument();
   });
 
   it('shows empty state when no projects exist', async () => {
