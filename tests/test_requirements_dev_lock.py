@@ -37,8 +37,9 @@ _REQUIREMENTS_RUNTIME = _REPO_ROOT / "backend" / "requirements.txt"
 _LOCK = _REPO_ROOT / "backend" / "requirements-dev.lock"
 _DIGEST_TOOL = _REPO_ROOT / "tools" / "dev" / "requirements_digest.py"
 
-# pip-compile 展开 `-r requirements.txt` 后会保留两种来源标记,都表示直接依赖。
-_VIA_MARKERS = ("-r requirements-dev.txt", "-r requirements.txt")
+# 来源标记 = 直接依赖：pip-compile 用 `-r requirements-dev.txt`（相对路径），
+# uv 0.12+ 带目录前缀 `-r backend/requirements-dev.txt`——按文件名子串匹配。
+_VIA_MARKERS = ("requirements-dev.txt", "requirements.txt")
 
 
 def _load_digest_module():
@@ -89,6 +90,9 @@ def _lock_direct_names() -> set[str]:
         stripped = line.strip()
         if stripped.startswith("# via"):
             in_via = True
+            # 单行 direct 标记（`# via -r backend/requirements-dev.txt`）或
+            # 多行 via 首行（`# via` 空，上游列表在续行）——direct 判定
+            # 统一靠 marker 子串（含续行分支）。
             if current and any(m in stripped for m in _VIA_MARKERS):
                 direct.add(current)
         elif in_via and stripped.startswith("#"):
