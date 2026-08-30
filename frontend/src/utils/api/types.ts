@@ -963,6 +963,8 @@ export interface PlanStep {
   timeout_seconds?: number | null;
   /** 停滞钟（#115 阶段 1）：多久无 PROGRESS 戳算卡死。null/0 = 关闭。 */
   stall_seconds?: number | null;
+  /** 步骤级 params（#508）：执行时覆盖脚本版本 default_params。null/缺省 = 纯默认。 */
+  params?: Record<string, unknown> | null;
   retry: number;
   enabled: boolean;
 }
@@ -975,6 +977,8 @@ export interface PlanStepCreate {
   sort_order?: number;
   timeout_seconds?: number | null;
   stall_seconds?: number | null;
+  /** 步骤级 params（#508）：执行时覆盖脚本版本 default_params。 */
+  params?: Record<string, unknown> | null;
   retry?: number;
   enabled?: boolean;
 }

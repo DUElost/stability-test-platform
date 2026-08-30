@@ -104,6 +104,27 @@ class TestSnapshotRoundTrip:
         snap = build_plan_snapshot(_plan(), [_step()], _META, 0.05)
         assert build_lifecycle_from_snapshot(snap).get("barrier_timeout_seconds") is None
 
+    def test_step_params_frozen_into_snapshot_and_replayed(self):
+        """#508：步骤级 params 固化进快照，重放时覆盖 default_params。"""
+        step = _step()
+        step.params = {"apk_path": "/mnt/x/a.apk"}
+        meta = {("check_device", "1.0.0"): {
+            "default_params": {"apk_path": "/default/a.apk", "timeout": 30},
+            "nfs_path": "/s/x.py", "param_schema": {},
+        }}
+        snap = build_plan_snapshot(_plan(), [step], meta, 0.05)
+        assert snap["steps"][0]["params"] == {"apk_path": "/mnt/x/a.apk"}
+        lc = build_lifecycle_from_snapshot(snap)
+        params = lc["init"][0]["params"]
+        assert params["apk_path"] == "/mnt/x/a.apk"
+        assert params["timeout"] == 30
+
+    def test_snapshot_without_step_params_replays_pure_defaults(self):
+        """#508：旧快照/未配 params 的步骤——重放只带 default_params（行为不变）。"""
+        snap = build_plan_snapshot(_plan(), [_step()], _META, 0.05)
+        lc = build_lifecycle_from_snapshot(snap)
+        assert lc["init"][0]["params"] == {}
+
 
 class TestApiRoundTrip:
     @staticmethod

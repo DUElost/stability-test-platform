@@ -350,26 +350,73 @@ describe('PlanStepInspector', () => {
       expect(lastStep(onUpdateStep).params).toEqual({});
     });
 
-    it('无 schema 但有 default_params 时降级为只读标签', () => {
+    it('无 schema 但有 default_params 时渲染自由键可编辑输入', () => {
+      const onUpdateStep = vi.fn();
       render(
         <Harness
           scripts={[makeScript({ id: 8, name: 'legacy', version: '1.0', default_params: { host: 'x', port: 22 } })]}
           step={makeStep({ action: 'script:legacy', version: '1.0' })}
+          onUpdateStep={onUpdateStep}
         />,
       );
-      expect(screen.getByText('无 schema')).toBeInTheDocument();
-      expect(screen.getByText('host')).toBeInTheDocument();
-      expect(screen.getByText('port')).toBeInTheDocument();
+      expect(screen.getByText('自由键值')).toBeInTheDocument();
+      // default_params 键渲染为可编辑输入（字符串 → textbox，数字 → spinbutton）
+      expect(within(fieldOf('host')).getByRole('textbox')).toHaveValue('x');
+      expect(within(fieldOf('port')).getByRole('spinbutton')).toHaveValue(22);
+      // 修改会写进 step.params
+      fireEvent.change(within(fieldOf('host')).getByRole('textbox'), {
+        target: { value: 'y' },
+      });
+      expect(lastStep(onUpdateStep).params).toEqual({ host: 'y' });
     });
 
-    it('schema 与 default_params 都为空时整张参数卡不渲染', () => {
+    it('无 schema 且 default_params 为空时可新增自由键（如 apk_path）', () => {
+      const onUpdateStep = vi.fn();
       render(
         <Harness
           scripts={[makeScript({ id: 8, name: 'bare', version: '1.0' })]}
           step={makeStep({ action: 'script:bare', version: '1.0' })}
+          onUpdateStep={onUpdateStep}
         />,
       );
-      expect(screen.queryByText('脚本参数')).not.toBeInTheDocument();
+      expect(screen.getByText('自由键值')).toBeInTheDocument();
+      expect(screen.getByText(/可手动添加自定义参数/)).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('新参数名'), {
+        target: { value: 'apk_path' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '添加' }));
+      expect(lastStep(onUpdateStep).params).toEqual({ apk_path: '' });
+    });
+
+    it('新增自由键与已存在键重名时报错', () => {
+      const onUpdateStep = vi.fn();
+      render(
+        <Harness
+          scripts={[makeScript({ id: 8, name: 'legacy', version: '1.0', default_params: { host: 'x' } })]}
+          step={makeStep({ action: 'script:legacy', version: '1.0' })}
+          onUpdateStep={onUpdateStep}
+        />,
+      );
+      fireEvent.change(screen.getByLabelText('新参数名'), {
+        target: { value: 'host' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: '添加' }));
+      expect(screen.getByText('参数已存在')).toBeInTheDocument();
+      expect(onUpdateStep).not.toHaveBeenCalled();
+    });
+
+    it('自由键移除：非默认键从 step.params 删除', () => {
+      const onUpdateStep = vi.fn();
+      render(
+        <Harness
+          scripts={[makeScript({ id: 8, name: 'bare', version: '1.0' })]}
+          step={makeStep({ action: 'script:bare', version: '1.0', params: { extra: 'v' } })}
+          onUpdateStep={onUpdateStep}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: '移除参数 extra' }));
+      expect(lastStep(onUpdateStep).params).toEqual({});
     });
   });
 
