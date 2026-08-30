@@ -114,7 +114,9 @@ describe('ProjectDetailPage', () => {
     expect(screen.getByText(/设备（1）/)).toBeInTheDocument();
     expect(screen.getByText(/计划（1）/)).toBeInTheDocument();
     expect(screen.getByText('风险趋势（近 30 天 · S/A/B）')).toBeInTheDocument();
-    expect(screen.getByText('JIRA 集成')).toBeInTheDocument();
+    // P2-11：归属规则提为主块（JIRA 占位卡片已删，头部 badge 保留）
+    expect(screen.getByTestId('detail-rules')).toBeInTheDocument();
+    expect(screen.queryByText('JIRA 集成')).not.toBeInTheDocument();
     // 空态（暂无风险数据）
     expect(screen.getByText(/暂无风险数据/)).toBeInTheDocument();
   });
@@ -134,7 +136,7 @@ describe('ProjectDetailPage', () => {
     expect(await screen.findByText('Plan A')).toBeInTheDocument();
     expect(await screen.findByTestId('detail-kpi-strip')).toBeInTheDocument();
     expect(await screen.findByTestId('hanging-models')).toHaveTextContent(
-      '当前归属此项目的设备型号：M1 (1)',
+      '共 M1 (1)',
     );
     expect(screen.queryByTestId('seed-disclaimer')).not.toBeInTheDocument();
     await waitFor(() => {

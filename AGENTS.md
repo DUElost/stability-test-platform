@@ -147,6 +147,38 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
   - **#220**：生产只扫 MTK；UNISOC/QCOM 保留 stub 入口、默认跳过；勿扩白名单
 - **ScanRunner / UploadManager**（`start_log_scan.py` 的非显然参数、自动发现规则、`reload_config`）→ `backend/agent/CLAUDE.md`
 
+## 脚本版本退役
+
+`backend/agent/scripts/<name>/v<ver>/` 只增不减（ADR-0020 不可变 + ADR-0029
+「每版本全量副本」），长期会线性膨胀。退役靠下面这条只读诊断，按需人工跑：
+
+```bash
+python -m backend.scripts.check_unreferenced_script_versions [--json] [--name flash_firmware]
+```
+
+它列出每个 script 版本的 `plan_step` 引用计数，标出「`is_active` 且零引用」的
+退役候选。只读 SELECT，不写库、不改状态，可对生产库跑。
+
+**退役 ≠ 删除，两件事别混**：
+
+| | 怎么做 | 目录 | 后果 |
+|---|---|---|---|
+| **退役**（支持） | `PUT /api/v1/scripts/{id}` 带 `is_active=false` | **留着** | 不再进 `?is_active=1` 目录；扫描不会把它重新激活（`script_catalog.py:281`） |
+| **删除**（别做） | `rm -rf` 版本目录 | 没了 | **会被 CI 拦下** —— `check-script-version-immutability.py` 把 `D` 当变更；且会让历史 `plan_step` 的 `script.sha` 与磁盘永久对不上，2026-07-31 那次就是这么把全平台派发搞挂的 |
+
+**退役有硬守卫，误操作退不掉**：`scripts.py:484` 在 `is_active=False` 时先跑
+`_ensure_script_can_be_deactivated()`，它用的是**与本工具完全相同的连接条件**
+（`PlanStep.script_name + script_version`，`scripts.py:250`）—— 只要还有 Plan
+引用就返回 **409 `SCRIPT_STILL_REFERENCED`**，并把 `plan_ids` 一并返回。
+
+所以两层职责是：本工具**提前圈出候选**，`PUT` **最终裁定**。判据一致，不会
+出现「工具说可以、接口却拒」或反之。
+
+**但 `refs == 0` 只覆盖配置态，不覆盖运行态。** 一个版本可能已无任何 Plan
+配置引用、却仍有历史 PlanRun 需要追溯（退役不删目录正是为此）。要判断「后续
+是否还会再用」，还需要运行使用事实 —— 见 issue #506（脚本详情页「最近 30 天
+被哪些项目使用 / 成功率」，尚未实现）。两个维度都为零，退役才够稳妥。
+
 ## Key env vars
 
 | Var | Where | Purpose |
@@ -175,8 +207,7 @@ See `backend/.env.example` and `backend/agent/.env.example` for full list.
 
 - Production Agent needs `AGENT_SECRET` env for SocketIO auth.
 - `ORMBaseModel` (`backend/api/schemas/base.py`) auto-serializes datetime to ISO-UTC via `field_serializer(when_used="json")`.
-- **PR 合入**：仓库已开启 Auto-merge；`.github/workflows/enable-auto-merge.yml` 按 FIFO **串行**给同仓库非 draft eligible PR 挂 auto-merge（仅队首 `--auto --merge`，其余 `--disable-auto`；fork / frontend-major / github_actions 仍排除）。队首全绿且落后 main 时，`.github/workflows/pr-update-branch.yml` 自动 `update-branch`（见 `docs/notes/process/2026-08-29-serial-automerge-update-branch.md`）。**main 已开分支保护**：PR 是唯一合入通道，6 项 required checks 全绿自动合入；approvals=0（无需人工点 approve）；`enforce_admins` 开启（admin 直推 main 同样被 GH006 拒绝）；strict=true（分支落后 main 时需先并 main 再 push）。required checks：lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests / pr-migrate-empty-db。**pr-agent-review 为全异步顾问**：PR-Agent 自动 review 并更新 persistent comment，**不是 required check，auto-merge 也不等它**（required 长极 ~125s，本 job 中位数 133s / p90 300s，评论常在合入后才落地）。check 只在「有 security concerns 却开不出 issue」时变红——LLM 代理故障/超时/输出缺失一律绿，不制造分诊成本。security concerns 走单独 issue（标题 `[pr-agent] PR #<N> 报告 security concerns`）+ @ 作者，同一 PR 复评只追加评论；误报关 issue，属实另开修复 PR。修复后 push 自动复评（synchronize），或 PR 评论 `/review`（仅 OWNER / MEMBER / COLLABORATOR）。不要手动点 Merge。
-- **PR-Agent 复评（顾问）**：自动 review 在 opened / reopened / ready_for_review / review_requested / synchronize 触发；每次 push 自动复评并更新同一条 persistent comment。security concerns 只作顾问信号（check 红 + 评论），**不阻断合入**；其余 findings 仅作参考；复评走 push（synchronize）或 PR 评论 `/review`（仅 OWNER / MEMBER / COLLABORATOR）；fork PR 在 job 级排除。
+- **PR 合入**：仓库已开启 Auto-merge；`.github/workflows/enable-auto-merge.yml` 按 FIFO **串行**给同仓库非 draft eligible PR 挂 auto-merge（仅队首 `--auto --merge`，其余 `--disable-auto`；fork / frontend-major / github_actions 仍排除）。队首全绿且落后 main 时，`.github/workflows/pr-update-branch.yml` 自动 `update-branch`（见 `docs/notes/process/2026-08-29-serial-automerge-update-branch.md`）。**main 已开分支保护**：PR 是唯一合入通道，6 项 required checks 全绿自动合入；approvals=0（无需人工点 approve）；`enforce_admins` 开启（admin 直推 main 同样被 GH006 拒绝）；strict=true（分支落后 main 时需先并 main 再 push）。required checks：lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests / pr-migrate-empty-db。**pr-agent-review 为全异步顾问**：PR-Agent 自动 review 并更新 persistent comment，**不是 required check，auto-merge 也不等它**（required 长极 ~125s，本 job 中位数 133s / p90 300s，评论常在合入后才落地）。check 只在「有 security concerns 却开不出 issue」时变红——LLM 代理故障/超时/输出缺失一律绿，不制造分诊成本。security concerns 走单独 issue（标题 `[pr-agent] PR #<N> 报告 security concerns`）+ @ 作者，同一 PR 复评只追加评论；误报关 issue，属实另开修复 PR。修复后 push 自动复评（synchronize），或 PR 评论 `/review`（仅 OWNER / MEMBER / COLLABORATOR）；fork PR 在 job 级排除。不要手动点 Merge。
 - **CI 分层**：PR 只跑轻量 job（lint / pr-typecheck / pr-compileall / pr-agent-tests / pr-migrate-empty-db（required，#510 空库迁移守卫））；全量 backend-test（PG + pytest）、frontend-check（vitest + build）、docker-build 仅由 workflow_dispatch 触发运行（ci.yml 的 on 只有 pull_request + workflow_dispatch：auto-merge 的 merge commit 由 GITHUB_TOKEN 推送，on: push / closed / workflow_run 会被级联限制抑制，手动合入的 push 又会造成「合入即全量」的随机运行）。main 全量由 `main-ci-backstop.yml` 每天（UTC 18:00）检查尖端是否已有全量 CI、没有则显式 dispatch。PR 合入前不跑 `backend/tests`/vitest/docker；`backend/tests/` 由夜间全量 `backend-test` 兜底（见 `docs/notes/process/2026-08-29-remove-pr-backend-test.md`）。**合入路径注意力预算（核心原则）**：合并路径上的阻塞检查保持 ~2 分钟内（required checks：lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests / pr-migrate-empty-db）；pr-agent-review 定位顾问后不再计入合入路径预算（不是 required check，auto-merge 不等它，其耗时全异步消化）；任何引入等待或分心的检查一律走异步（夜间全量兜底）；人工评审属同一注意力块内的同步动作，不在此限。取舍与被否决方案的历史见 `docs/notes/process/2026-08-14-merge-path-attention-budget.md`。
 - **全量 CI 失败通知（2026-08-13）**：`main-ci-backstop.yml` 失败会自动开 `ci/backstop-failed` issue（同 label 去重、只追加评论），恢复通过后自动关闭；Dependabot npm 拆为 `frontend-patch-minor`（自动合入）与 `frontend-major`（人工评审）两组，typescript 的 semver-major 更新被 ignore（typescript-eslint 8.x peer 上限 <6.1）；`github_actions` 生态更新同样**排除 auto-merge、人工评审**（供应链考虑）。
 - **文档只写现状，不写变迁**：常驻文档里不出现「之前/现在/已移除」式编年叙事；变更史归 commit / PR / Agent Note。AGENTS.md 是常驻命令清单，事故与取舍搬进 `docs/notes/` 后只留一行链接。
