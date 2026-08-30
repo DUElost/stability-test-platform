@@ -13,6 +13,7 @@ import type {
   WatcherSummary,
   WatcherTimeScope,
   PlanRunLogEventsPayload,
+  TestCaseResultsPayload,
   JobManualActionResult,
   PlanRunAbortResult,
   PlanRunDispatchRetryResult,
@@ -94,6 +95,14 @@ export const planRuns = {
   ) =>
     unwrapApiResponse<PlanRunLogEventsPayload>(
       apiClient.get(`/plan-runs/${runId}/log-events`, { params: cleanParams(params) }),
+    ),
+
+  getTestCaseResults: (
+    runId: number,
+    params: { skip?: number; limit?: number; status?: string } = {},
+  ) =>
+    unwrapApiResponse<TestCaseResultsPayload>(
+      apiClient.get(`/plan-runs/${runId}/test-case-results`, { params: cleanParams(params) }),
     ),
 
   // ── ADR-0021 D7 abort + ADR-0022 D7 manual intervention ──

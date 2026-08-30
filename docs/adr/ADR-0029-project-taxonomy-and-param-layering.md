@@ -1,6 +1,6 @@
 # ADR-0029: 项目分类域（TestProject 登记簿 + facet 分类）
 
-- 状态：**Accepted**（2026-08-19 决策者拍板；历经 v1 评审 → v2 决策转向 → v2.1 → v2.2 → 定性纠正 → v2.4 产品面纠正，见修订记录）
+- 状态：**Accepted**（2026-08-19 决策者拍板；历经 v1 评审 → v2 决策转向 → v2.1 → v2.2 → 定性纠正 → v2.4 产品面纠正 → **v2.5 派生归属重设计**，见修订记录）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-08-18
@@ -391,6 +391,142 @@ D8 定义的是**前端**上下文；API 层缺 `project_id` 时的行为需独�
 **无 HTTP 上下文的链路不适用本规则。** SAQ 任务（scan / upload / merge / extract）、
 APScheduler sweep、reconciler 等从 `plan_run` 快照读 `project_id` / `project_storage_key`，
 不查活表、不依赖请求参数——这也是 D5 要求把项目信息冻结进 PlanRun 快照的原因之一。
+
+## v2.5 派生归属重设计（2026-08-31）
+
+### 核心诊断
+
+**`device.project_id` 是 `rule(device.model)` 的缓存副本。** 生产实证（2026-08-31）：
+
+```
+A57            ← {Z2581, Z2582}
+V552AA         ← {MLD_LX2, MLD_LX3}
+HONOR-ELA      ← {ELA_LX2, ELA_LX3}
+ODM-DAM        ← {DAM_M500}
+TRANSSION-X110 ← {Infinix_X1102D}
+```
+
+每个项目恰好等于一个机型集合；没有一个型号跨两个项目（`uq_rule_active`
+partial unique 明令禁止）；没有一个项目脱离型号存在。`model → project`
+是全函数，而 `device.project_id` 存的就是这个函数的取值——于是两轮评审的
+每个 P0 都是同一缓存问题的不同侧面：
+
+| 现象 | 缓存术语 |
+|---|---|
+| 删规则后设备不收敛 | 无失效机制 |
+| 心跳只在 model 变 / project_id IS NULL 时算 | 失效条件写错 |
+| 承诺的夜间 sweep 不存在 | reconciler 没写 |
+| project_pinned 只能设不能清 | 缓存钉死无驱逐 |
+| 页面 ⚠「规则目标 vs 实际台数不一致」 | 把缓存脏页做成用户待办 |
+
+代价量化：KPI「70 台待归属」= MLD_LX3 69 + Z2581 1，两型号都有活跃规则，
+按型号口径真实待决策数是 **0**——70 个待办全是假警报；唯一真实数据问题
+（6 台 model IS NULL）被 LEGACY 项目盖住反而不出现在待办里。**该报的没报，
+报的全是噪音。**
+
+### D10：归属改派生，删 device.project_id
+
+```
+test_project (id, project_key, display_name, jira_project_key, customer, status)
+project_model (project_id, model)        ← 成员定义的唯一事实源
+归属 = device ⋈ project_model ON device.model = project_model.model
+```
+
+一次改动消掉：`project_device_rule` 与 `device.project_id` 合并（它们本是
+同一件事的两个副本）、`project_attribution.py` 整模块、心跳热路径的
+`apply_attribution`（少一次查询）、`project_pinned` 列与单向门、从未写出的
+sweep、⚠ 待办、`attribution_reassigned` 告警、重算按钮（#612 随之退役——
+方向对，但副本删除后机制无存在必要）。
+
+**「待归属」语义改对**：从设备级 `SELECT * FROM device WHERE project_id IS
+NULL`（70 行假警报）变成型号级 `SELECT DISTINCT model FROM device WHERE
+model NOT IN (SELECT model FROM project_model)`（当前 1 行 = NULL，对应 6
+台设备）——admin 决策从 O(设备) 降到 O(型号)，且那 1 行指向真问题（心跳/
+adb 数据质量，该修在源头）。
+
+**例外用显式覆盖表，不用 pin**：
+
+```
+device_project_override (serial, project_id, reason, created_by, created_at)
+```
+
+它是声明不是状态：可列出、可删除、删掉即自动回归型号归属（归属是 JOIN
+出来的，没有第二个副本要清）。pin 的问题是「冻结当前值」——值取决于历史
+不自解释；override 说「就是这个项目」，自解释。生产 pinned=0 → 此表先不
+建，等第一个真实需求（>3 例同型号拆分时建）。
+
+性能：515 台 × 8 行成员表一次 hash join，写路径反而更快；万台规模加
+`INDEX ON device(model)` 或物化视图。历史归属由 `plan_run.project_id`
+快照承担（现有设计正确，保留）——派生只管「现在」，快照只管「当时」。
+
+### D11：哨兵出表，plan.project_id 恢复可空
+
+`GENERIC` / `LEGACY` 是「这个 Plan 没有项目维度」的两种说法，SQL 里表达
+「没有」的方式是 NULL。P1-B2 收 NOT NULL 的动机（强迫创建者选择）正确但
+放错了层：**显式性属于 API/UI 契约，不属于存储约束**。
+
+```python
+class PlanCreate(BaseModel):
+    project_key: Optional[str]   # 客户端必须显式传，可以传 null
+```
+
+UI 二选一单选：○ 归属项目 [___] ／ ○ 不限项目（运维/验证），不选不让提交。
+存储层 NULL = 不限。收益：KPI「人工项目」从 9 回 5；下拉无假项目；风险
+趋势不再聚合 LEGACY 的 102 个 run；`_infer_frozen_project_id` 推断分支
+从死代码变回常走路径（plan 侧恢复可 NULL）。6 台 model IS NULL 设备自然
+落进「未映射」——不需要一个叫 LEGACY 的项目行收容。
+
+### D12：facet 减列 + jira 键补校验
+
+判据：**一个 facet 值得存在，当且仅当它能改变某人的行为。**
+
+- `customer` 保留（唯一有稳定值的），建字典表（`specialty` 表为现成范式）
+- `product_line` 删（5 行里 2 行填 customer 副本、1 行是字符串 'None'）
+- `form_factor` 删（除一个 TABLET 全是 PHONE；真要用从 model 派生）
+- `platforms` 保留（已是派生，P1-B 做对了）
+- 5 个项目筛选，一个搜索框比 4 组 chip 好用
+
+`jira_project_key`（自称「唯一硬需求」却零校验）：格式 validator + 详情页
+「已验证 / 未验证」状态 + 提单前一次存在性探测（失败降级不阻断，与现有
+best-effort 定位一致）。硬需求应拿到最强的输入校验而非最弱。
+
+### D13：详情页换问题
+
+S/A/B 分布图在 3 个 run 的样本下没有信息量（且零事件被记成 B——
+`results.py` 默认值 + 空计数返回 None，近 30 天 121/152 个 run 中招）。
+改为回答「这个项目最近跑得怎么样」：一行 KPI（run 数 / 成功率 / S 级事件
+数）+ S 级事件清单（可点进 run）+ 风险等级第四态 **NONE**（零事件，不与
+B 混）。堆叠趋势图留给全局 dashboard。
+
+### 保留不动
+
+`plan_run.project_id` 快照语义、`project_key` 对外 / 数字 id 做外键（正因
+如此 rename 才低风险）、preview→apply 两段式（作用对象改为 project_model
+的增删）、逐字段审计。**D2「key 一经对外使用即不可变」由本版修订**——
+rename 已实现（#605），key 是用户指定标识、外键全走 id，本版正式承认。
+
+### 迁移路径（四步，每步独立可合、可回滚）
+
+| 步 | 内容 | 风险 |
+|---|---|---|
+| M1 | `project_device_rule` 收敛为 `project_model`（表更名/语义纠正）；抹平 2 型号现有偏差（MLD_LX3 69 + Z2581 1 一次显式重算） | 无 |
+| M2 | 读路径改 JOIN：`devices?project_key=`、`_infer_frozen_project_id`、inventory 聚合、DeviceOut、suite_binding project_mismatch、心跳新建设备（删 apply_attribution） | 中，有测试覆盖 |
+| M3 | 删 `device.project_id` / `device.project_pinned`；删 `project_attribution.py`、心跳调用点、告警、重算端点 | 低（M2 后无读者） |
+| M4 | `plan.project_id` 放开可空 + 回填 GENERIC/LEGACY → NULL；删两行哨兵；facet 减列 + jira 校验；详情页换问题 | 低，additive 反向 |
+
+现在是历史上最容易迁的时刻：pinned=0（无例外要保）、规则与事实只差 2 个
+型号、真实项目 5 个、有真实归属的 Plan 1 个。拖到 60 host / 1000 device、
+几十个 pinned、几百个 LEGACY run 之后，M3/M4 就从「删列」变成「数据迁移
+工程」。
+
+### 重议条件
+
+- 同型号拆两个项目成为常态（>3 例）→ 建 `device_project_override`，但仍
+  不回到存储列
+- 项目不再等于机型集合（按软件版本 / 客户批次划分）→ 成员定义从 model
+  换成表达式，派生模型依然成立，JOIN 条件变复杂
+- D5 派发门禁复活 → 派生归属对门禁更好（读出的答案永远不 stale），不构成
+  回退理由
 
 ## 非目标
 

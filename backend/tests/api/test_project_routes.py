@@ -1033,3 +1033,58 @@ class TestRenameProject:
         resp = client.put("/api/v1/projects/proj-a/rename",
                           json={"new_key": "hacked"}, headers=auth_headers)
         assert resp.status_code == 403
+
+
+class TestRecomputeProjectRules:
+    """按规则重算存量归属（显式纠正，不依赖心跳）。"""
+
+    def test_recompute_moves_unattributed_and_wrong(self, client, db_session, project_a, admin_headers):
+        from backend.models.project_rule import ProjectDeviceRule
+
+        db_session.add(ProjectDeviceRule(
+            project_id=project_a.id, match_value="MLD_LX2"))
+        db_session.commit()
+        d_null = _make_device(db_session, "s-rec-null", None, model="MLD_LX2")
+        other = ProjectModel(project_key="rec-other", display_name="o", source="USER")
+        db_session.add(other)
+        db_session.commit()
+        d_wrong = _make_device(db_session, "s-rec-wrong", other, model="MLD_LX2")
+        d_ok = _make_device(db_session, "s-rec-ok", project_a, model="MLD_LX2")
+        d_pinned = _make_device(db_session, "s-rec-pin", None, model="MLD_LX2")
+        d_pinned.project_pinned = True
+        db_session.commit()
+
+        resp = client.post(
+            "/api/v1/projects/proj-a/rules/recompute", headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["devices_moved"] == 2  # null + wrong；已正确与 pinned 跳过
+
+        db_session.refresh(d_null)
+        db_session.refresh(d_wrong)
+        db_session.refresh(d_ok)
+        db_session.refresh(d_pinned)
+        assert d_null.project_id == project_a.id
+        assert d_wrong.project_id == project_a.id
+        assert d_ok.project_id == project_a.id
+        assert d_pinned.project_id is None
+
+        audits = db_session.query(AuditLog).filter(
+            AuditLog.action == "recompute_project_rules"
+        ).all()
+        assert len(audits) == 1
+        assert audits[0].details["devices_moved"] == 2
+
+    def test_recompute_no_rules_noop(self, client, project_a, admin_headers):
+        resp = client.post(
+            "/api/v1/projects/proj-a/rules/recompute", headers=admin_headers
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["devices_moved"] == 0
+
+    def test_recompute_forbidden_for_non_admin(self, client, project_a, auth_headers):
+        resp = client.post(
+            "/api/v1/projects/proj-a/rules/recompute", headers=auth_headers
+        )
+        assert resp.status_code == 403

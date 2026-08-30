@@ -1825,6 +1825,36 @@ export interface PlanRunLogEventsPayload {
   items: PlanRunLogEvent[];
 }
 
+/** ADR-0030 P2 — PlanRun 逐条用例结果。 */
+export interface TestCaseResultRow {
+  id: number;
+  plan_run_id: number;
+  job_id: number;
+  suite_id: number | null;
+  case_id: number | null;
+  case_name: string;
+  status: string;
+  detail: string | null;
+  artifact_uri: string | null;
+  run_dir: string | null;
+  created_at: string;
+  device_id: number | null;
+  host_id: string | null;
+}
+
+export interface TestCaseResultSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  error: number;
+}
+
+export interface TestCaseResultsPayload {
+  items: TestCaseResultRow[];
+  total: number;
+  summary: TestCaseResultSummary;
+}
+
 export interface JobManualActionResult {
   job_id: number;
   plan_run_id: number;
