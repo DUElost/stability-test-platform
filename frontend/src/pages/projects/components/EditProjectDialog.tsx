@@ -20,6 +20,8 @@ type Props = {
   project: ProjectDetail;
   onClose: () => void;
   onSubmit: (payload: ProjectUpdateInput) => void;
+  /** ADR-0029 D2 复核：项目重命名（admin 传入时显示 key 输入框）。 */
+  onRename?: (newKey: string) => void;
 };
 
 const EDITABLE_TEXT_FIELDS = [
@@ -33,14 +35,17 @@ export default function EditProjectDialog({
   project,
   onClose,
   onSubmit,
+  onRename,
 }: Props) {
   const [form, setForm] = useState<ProjectUpdateInput>({});
+  const [projectKey, setProjectKey] = useState('');
   const [error, setError] = useState('');
 
   const [prevOpen, setPrevOpen] = useState(isOpen);
   if (prevOpen !== isOpen) {
     setPrevOpen(isOpen);
     if (isOpen) {
+      setProjectKey(project.project_key);
       setForm({
         display_name: project.display_name,
         customer: project.customer ?? '',
@@ -69,6 +74,10 @@ export default function EditProjectDialog({
       const trimmed = value?.trim();
       return trimmed ? trimmed : null;
     };
+    if (onRename && projectKey.trim() !== project.project_key) {
+      onRename(projectKey.trim());
+      return;
+    }
     onSubmit({
       display_name: displayName,
       customer: blankToNull(form.customer),
@@ -92,6 +101,23 @@ export default function EditProjectDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
+          {onRename ? (
+            <div>
+              <label className={FORM.label} htmlFor="edit-project-key">
+                项目标识（key）
+              </label>
+              <Input
+                id="edit-project-key"
+                data-testid="edit-project-key"
+                value={projectKey}
+                onChange={(event) => setProjectKey(event.target.value)}
+                className="font-mono"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                改名后旧链接失效（外键不受影响），审计记录新旧 key
+              </p>
+            </div>
+          ) : null}
           <div>
             <label className={FORM.label} htmlFor="edit-project-name">
               显示名

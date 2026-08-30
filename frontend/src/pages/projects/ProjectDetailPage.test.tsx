@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   modelsOf: vi.fn(),
   riskTrend: vi.fn(),
   removeRule: vi.fn(),
+  renameProject: vi.fn(),
   archiveProject: vi.fn(),
   authRole: 'admin',
 }));
@@ -35,7 +36,7 @@ vi.mock('@/hooks/useToast', () => ({
 
 vi.mock('@/utils/api', () => ({
   api: {
-    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, archive: mocks.archiveProject },
+    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, rename: mocks.renameProject, archive: mocks.archiveProject },
     devices: { list: mocks.listDevices },
     plans: { list: mocks.listPlans },
     results: { riskTrend: mocks.riskTrend },
@@ -129,6 +130,22 @@ describe('ProjectDetailPage', () => {
 
     expect(await screen.findByText('JIRA: STP')).toBeInTheDocument();
     expect(screen.queryByTestId('jira-not-configured')).not.toBeInTheDocument();
+  });
+
+  it('renames project via edit dialog key input', async () => {
+    mocks.renameProject.mockResolvedValue(makeDetail({ project_key: 'HONOR-ELA2' }));
+    renderPage();
+    await screen.findByText('Project A');
+
+    fireEvent.click(screen.getByTestId('edit-project-open'));
+    const keyInput = (await screen.findByTestId('edit-project-key')) as HTMLInputElement;
+    fireEvent.change(keyInput, { target: { value: 'HONOR-ELA2' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(mocks.renameProject).toHaveBeenCalledWith('proj-a', 'HONOR-ELA2');
+      expect(mocks.navigate).toHaveBeenCalledWith('/projects/HONOR-ELA2');
+    });
   });
 
   it('archives project with confirm on admin', async () => {

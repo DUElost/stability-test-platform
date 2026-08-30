@@ -32,6 +32,7 @@ from backend.api.schemas.project import (
     ProjectMapIn,
     ProjectMapPreviewOut,
     ProjectModelCoverageOut,
+    ProjectRenameIn,
     ProjectSummaryOut,
     ProjectUpdateIn,
     RecentProjectRunOut,
@@ -587,6 +588,58 @@ def archive_project(
     db.commit()
     db.refresh(project)
     emit_project_changed(project.id, "archived")
+    return ok(_fill_summary(db, project))
+
+
+@router.put(
+    "/{project_key}/rename",
+    response_model=ApiResponse[ProjectSummaryOut],
+)
+def rename_project(
+    project_key: str,
+    payload: ProjectRenameIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0029 D2 复核：项目重命名（admin，记审计）。
+
+    key 是用户指定标识（创建时手填），外键全用数字 project_id——改名
+    不影响 device/plan/plan_run 归属。影响面：旧 URL 404（新 URL 生效）、
+    历史审计显示旧 key（留痕）。SEED 保留名仍不可作新 key。
+    """
+    project = _get_project_or_404(db, project_key)
+    _require_user_project(project)
+    new_key = payload.new_key
+    if new_key.upper() in SEED_PROJECT_KEYS:
+        raise HTTPException(status_code=422, detail="reserved seed project_key")
+    existing = (
+        db.query(TestProject)
+        .filter(func.lower(TestProject.project_key) == new_key.lower())
+        .first()
+    )
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="project_key already exists")
+
+    old_key = project.project_key
+    project.project_key = new_key
+    project.updated_at = datetime.now(timezone.utc)
+    record_audit(
+        db,
+        action="rename_project",
+        resource_type="test_project",
+        resource_id=project.id,
+        details={
+            "from_project_key": old_key,
+            "to_project_key": new_key,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
+    db.refresh(project)
+    emit_project_changed(project.id, "renamed")
     return ok(_fill_summary(db, project))
 
 
