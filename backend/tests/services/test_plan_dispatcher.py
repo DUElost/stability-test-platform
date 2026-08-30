@@ -328,21 +328,28 @@ class TestDispatchProjectSnapshot:
             "MLD-LX2-20260801", "MLD-LX3-20260815",
         }
 
-    def test_plan_without_project_stays_null(self, db_session, _plan_fixture):
-        """存量兼容：未归属 Plan + 未归属设备 → Run 同样 NULL，不臆造归属。
+    def test_generic_plan_run_attributes_generic(self, db_session, _plan_fixture):
+        """P1-B2：Plan 归属双必填后「无归属」= GENERIC 哨兵——run 归属 GENERIC。
 
-        ADR-0029 P0 后推断只认设备事实——设备也无归属时仍是显式「待归属」。
+        P0 的「未归属 Plan → NULL 不臆造」语义被 GENERIC（显式「不限」）
+        取代：NULL 不再存在（API 层必填 + DB NOT NULL）。
         """
         plan, device, _host = _plan_fixture
+        # conftest 钩子已把测试 Plan 落到 GENERIC（P1-B2 双必填兜底）
+        generic = db_session.get(TestProject, plan.project_id)
+        assert generic is not None and generic.project_key == "GENERIC"
 
         pr = dispatch_plan_sync(
             plan_id=plan.id, device_ids=[device.id],
             triggered_by="test", db=db_session,
         )
-        assert pr.project_id is None
+        assert pr.project_id == plan.project_id
+        assert "project_inferred" not in pr.run_context
 
-    def test_plan_without_project_infers_from_devices(self, db_session, _plan_fixture):
-        """ADR-0029 P0：Plan 未归属时按目标设备 project_id 推断，留痕 project_inferred。"""
+    def test_generic_plan_does_not_infer_from_devices(
+        self, db_session, _plan_fixture,
+    ):
+        """P1-B2：GENERIC（显式「不限」）是普通归属——不按设备推断（plan 优先）。"""
         plan, device, _host = _plan_fixture
         project = TestProject(project_key="INF-P", display_name="inferred")
         db_session.add(project)
@@ -354,14 +361,14 @@ class TestDispatchProjectSnapshot:
             plan_id=plan.id, device_ids=[device.id],
             triggered_by="test", db=db_session,
         )
-        assert pr.project_id == project.id
-        assert pr.run_context["project_inferred"] is True
-        assert "project_mixed" not in pr.run_context
+        # plan 显式归属（GENERIC）优先，设备归属不覆盖
+        assert pr.project_id == plan.project_id
+        assert "project_inferred" not in pr.run_context
 
-    def test_mixed_device_projects_keep_mode_and_mark_mixed(
+    def test_generic_plan_across_mixed_devices_no_mixed_mark(
         self, db_session, _plan_fixture,
     ):
-        """ADR-0029 P0：跨项目目标照常派发——众数归属 + project_mixed 留痕，不阻断。"""
+        """P1-B2：GENERIC Plan 跨项目派发——run 归属 GENERIC，无 mixed 留痕。"""
         plan, device, _host = _plan_fixture
         p_a = TestProject(project_key="MIX-A", display_name="a")
         p_b = TestProject(project_key="MIX-B", display_name="b")
@@ -376,10 +383,9 @@ class TestDispatchProjectSnapshot:
             plan_id=plan.id, device_ids=[device.id, d2.id],
             triggered_by="test", db=db_session,
         )
-        # 1:1 平分时众数取排序后首个，两项目都合法；mixed 留痕是断言主体
-        assert pr.project_id in {p_a.id, p_b.id}
-        assert pr.run_context["project_inferred"] is True
-        assert pr.run_context["project_mixed"] == ["MIX-A", "MIX-B"]
+        assert pr.project_id == plan.project_id
+        assert "project_inferred" not in pr.run_context
+        assert "project_mixed" not in pr.run_context
 
     def test_explicit_plan_project_beats_device_inference(
         self, db_session, _project_snapshot_fixture,

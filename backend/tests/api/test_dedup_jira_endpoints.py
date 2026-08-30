@@ -389,6 +389,7 @@ class TestJiraProjectKeyWiring:
             project_key="moved-to", display_name="moved", jira_project_key="NEWKEY"
         )
         db_session.add(moved)
+        db_session.flush()
         plan.project_id = moved.id
         db_session.commit()
 

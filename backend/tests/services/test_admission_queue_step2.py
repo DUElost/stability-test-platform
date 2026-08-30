@@ -95,6 +95,9 @@ class TestAdmissionQueueGate:
         import logging
         caplog.set_level(logging.WARNING)
         monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "1")
+        # conftest 的 _default_admission_queue（autouse）默认注册了 pump——
+        # 本测试显式回到「未注册」基线
+        admission_queue.mark_queue_pump_ready(False)
         assert admission_queue.admission_queue_flag_enabled() is True
         assert admission_queue.admission_queue_enabled() is False
         assert any(
