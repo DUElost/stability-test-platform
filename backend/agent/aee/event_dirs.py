@@ -10,11 +10,14 @@ import re
 from pathlib import Path
 
 # ISO: 2026-06-23_14-30-00_*  or  2026_06_23_14_30_00_*
-# Compact: 2026_0629_174940_206_*
+# Compact: 2026_0629_174940_206_*  (末段 3 位毫秒；\d{3,6} 兼容异常
+# timestamp 走 fallback 时生成的 4-6 位微秒——P1 实证见
+# docs/notes/bug-fix/2026-08-30-flash-download-succeeded-but-not-flashed.md
+# 附录，正则过严会静默断 DLE 上送标记链)
 _EVENT_DIR_BASENAME_RE = re.compile(
     r"^("
     r"\d{4}[-_]\d{2}[-_]\d{2}[_T]\d{2}[-_:]?\d{2}[-_:]?\d{2}"
-    r"|\d{4}_\d{4}_\d{6}_\d{3}"
+    r"|\d{4}_\d{4}_\d{6}_\d{3,6}"
     r")_",
 )
 

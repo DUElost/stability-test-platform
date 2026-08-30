@@ -96,7 +96,11 @@ def as_device_local_naive(dt: Optional[datetime]) -> Optional[datetime]:
 def format_timestamp_for_filename(timestamp_field_str: str) -> str:
     dt_obj = parse_timestamp(timestamp_field_str)
     if not dt_obj:
-        return datetime.now().strftime("%Y_%m%d_%H%M%S_%f")[:21]
+        # 解析失败 fallback：固定 3 位毫秒（与正常路径一致）。
+        # 此前用 %f 截断（4-6 位）导致目录名末段非 3 位，与
+        # event_dirs._EVENT_DIR_BASENAME_RE 不匹配 → DLE 上送标记
+        # 静默断裂（P1 实证 2026-08-30 run 268）。
+        return datetime.now().strftime("%Y_%m%d_%H%M%S") + "_000"
     ms_part = "000"
     if "." in timestamp_field_str:
         ms_match = re.search(r"\.(\d+)", timestamp_field_str)
