@@ -304,12 +304,22 @@ class WatcherAgentOpsMetrics(BaseModel):
 
 
 class WatcherSignalLinkStatsOut(BaseModel):
-    """Signal↔DLE link health for this PlanRun (#528)."""
+    """Signal↔DLE link health for this PlanRun (#528).
+
+    ``link_rate`` counts every AEE/VENDOR_AEE signal, so it also drops for
+    events that were never archived — it is not a failure rate. Use
+    ``fixable_link_rate`` for alerting: it only considers signals whose DLE
+    exists but is not linked, which is the sole genuine failure bucket.
+    """
     total_signals: int = 0
     linked_signals: int = 0
     unlinked_linkable: int = 0
     signal_only_signals: int = 0
     link_rate: float = 1.0
+    not_yet_archived: int = 0
+    unlinkable: int = 0
+    unlinked_fixable: int = 0
+    fixable_link_rate: float = 1.0
 
 
 class WatcherArchiveOut(BaseModel):

@@ -1692,7 +1692,16 @@ export interface WatcherSignalLinkStats {
   linked_signals: number;
   unlinked_linkable: number;
   signal_only_signals: number;
+  /** 含「尚未归档」的 signal，会因此偏低——不是故障率。 */
   link_rate: number;
+  /** job 完全没有 DLE 行：按 ADR-0028 事件仍在 Agent 本地，尚未归档。 */
+  not_yet_archived: number;
+  /** job 有 DLE 但无匹配 signal_seq_no：不源自 signal，链接不了。 */
+  unlinkable: number;
+  /** 匹配的 DLE 存在却没链上：唯一的真故障，sweep 可修。 */
+  unlinked_fixable: number;
+  /** 告警用：只算「已链接 + 真故障」。 */
+  fixable_link_rate: number;
 }
 
 export interface WatcherArchive {
