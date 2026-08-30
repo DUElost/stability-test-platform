@@ -26,6 +26,13 @@ GitHub 在 PR 含 `.github/workflows/` 变更时不自动跑 `pull_request` work
   `Approved workflow run`；Checks 不再显示 awaiting approval。
 - 本 PR 自身合入后首次 run 可能仍须一次人工批准（workflow 变更 bootstrap）。
 
+## 补充（2026-08-30，GET 查询参数修复）
+
+run 33306014644 reconcile 日志：`integer expression expected` /
+`jq: Cannot iterate over null`。根因：`gh api -f` 用于 GET 时响应缺
+`workflow_runs`。改为 URL query（`?status=...&head_branch=...`）+ `// []`
+兜底 + count 非整数时按 0 处理。
+
 ## Revisit
 
 若 GitHub 放宽同仓库 write 协作者的 workflow 审批策略，可删此逻辑。
