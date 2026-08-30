@@ -106,6 +106,20 @@ export default function ProjectDetailPage() {
     },
   });
 
+  // D2 复核：项目重命名——改 key 后跳新 URL（外键不受影响）
+  const renameMutation = useMutation({
+    mutationFn: (newKey: string) => api.projects.rename(projectKey, newKey),
+    onSuccess: (renamed) => {
+      toast.success(`已重命名为 ${renamed.project_key}`);
+      setEditOpen(false);
+      void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
+      navigate(`/projects/${renamed.project_key}`);
+    },
+    onError: (error) => {
+      toast.error(`重命名失败: ${toApiError(error).message || '请稍后重试'}`);
+    },
+  });
+
   const handleRemoveRule = (model: string) => {
     if (!window.confirm(`移除型号 ${model} 的归属规则？设备归属不动，心跳按新规则状态收敛。`)) {
       return;
@@ -447,6 +461,7 @@ export default function ProjectDetailPage() {
           project={project}
           onClose={() => setEditOpen(false)}
           onSubmit={(payload) => updateMutation.mutate(payload)}
+          onRename={(newKey) => renameMutation.mutate(newKey)}
         />
       ) : null}
     </PageContainer>

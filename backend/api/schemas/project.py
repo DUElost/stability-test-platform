@@ -95,7 +95,7 @@ class ProjectCreateIn(BaseModel):
 
 
 class ProjectUpdateIn(BaseModel):
-    """Facet 修改入参——``project_key`` 不可变（D2），不在此 schema。
+    """Facet 修改入参——``project_key`` 改走独立 rename 端点（D2 复核）。
 
     未出现的字段不动；显式 ``null`` 清空可空 facet。
     """
@@ -166,3 +166,20 @@ class ProjectMapPreviewOut(BaseModel):
     already_in_target: int
     conflicts: List[ProjectMapConflictOut] = []
     unknown_models: List[str] = []
+
+
+class ProjectRenameIn(BaseModel):
+    """项目重命名入参（D2 复核：key 是用户指定标识，允许 admin 改名）。
+
+    与 ProjectCreateIn 同格式校验；SEED 保留名在路由层拦截。
+    """
+
+    new_key: str = Field(min_length=1, max_length=64)
+
+    @field_validator("new_key")
+    @classmethod
+    def normalize_new_key(cls, value: str) -> str:
+        key = value.strip()
+        if not _PROJECT_KEY_RE.match(key):
+            raise ValueError("new_key must match [A-Za-z0-9][A-Za-z0-9-]{0,62}")
+        return key

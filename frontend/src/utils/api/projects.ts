@@ -82,6 +82,14 @@ export const projects = {
       ),
     ),
   /** ADR-0029 复盘：删除一条型号规则（admin）。 */
+  /** ADR-0029 D2 复核：项目重命名（admin）。 */
+  rename: (projectKey: string, newKey: string) =>
+    unwrapApiResponse(
+      apiClient.put<ApiResponseEnvelope<ProjectSummary>>(
+        `/projects/${projectKey}/rename`,
+        { new_key: newKey },
+      ),
+    ),
   removeRule: (projectKey: string, model: string) =>
     unwrapApiResponse(
       apiClient.delete<ApiResponseEnvelope<{ project_key: string; model: string }>>(

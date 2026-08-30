@@ -979,3 +979,57 @@ class TestRemoveProjectRule:
             "/api/v1/projects/proj-a/rules/MLD_LX2", headers=auth_headers
         )
         assert resp.status_code == 403
+
+
+class TestRenameProject:
+    """ADR-0029 D2 复核：项目重命名（key 是用户指定标识，admin 可改）。"""
+
+    def test_rename_updates_key_and_records_audit(
+        self, client, db_session, project_a, admin_headers
+    ):
+        _make_device(db_session, "s-rename-1", project_a)
+        plan = _make_plan(db_session, "plan-rename", project_a)
+        _make_run(db_session, plan, status="SUCCESS", project=project_a)
+
+        resp = client.put(
+            "/api/v1/projects/proj-a/rename",
+            json={"new_key": "proj-a2"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["project_key"] == "proj-a2"
+        assert data["device_count"] == 1
+
+        # 外键归属性不受 key 影响（id 是稳定身份）
+        db_session.refresh(project_a)
+        assert project_a.project_key == "proj-a2"
+        audits = db_session.query(AuditLog).filter(
+            AuditLog.action == "rename_project"
+        ).all()
+        assert len(audits) == 1
+        assert audits[0].details["from_project_key"] == "proj-a"
+        assert audits[0].details["to_project_key"] == "proj-a2"
+
+        # 新 key 可查、旧 key 404
+        assert client.get("/api/v1/projects/proj-a2", headers=admin_headers).status_code == 200
+        assert client.get("/api/v1/projects/proj-a", headers=admin_headers).status_code == 404
+
+    def test_rename_conflict_and_reserved_and_format(
+        self, client, db_session, project_a, admin_headers
+    ):
+        other = ProjectModel(project_key="taken-key", display_name="t", source="USER")
+        db_session.add(other)
+        db_session.commit()
+
+        assert client.put("/api/v1/projects/proj-a/rename",
+                          json={"new_key": "TAKEN-KEY"}, headers=admin_headers).status_code == 409
+        assert client.put("/api/v1/projects/proj-a/rename",
+                          json={"new_key": "HONOR-MLD"}, headers=admin_headers).status_code == 422
+        assert client.put("/api/v1/projects/proj-a/rename",
+                          json={"new_key": "bad key!"}, headers=admin_headers).status_code == 422
+
+    def test_rename_forbidden_for_non_admin(self, client, project_a, auth_headers):
+        resp = client.put("/api/v1/projects/proj-a/rename",
+                          json={"new_key": "hacked"}, headers=auth_headers)
+        assert resp.status_code == 403
