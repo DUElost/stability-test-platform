@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "description": "GPU stress test: install APK, launch benchmark activity in loops",
+  "description": "GPU stress test (Antutu): RAM-based variant split, install APK, run instrument loop, collect log",
   "lifecycle": {
-    "timeout_seconds": 7200,
+    "timeout_seconds": 604800,
     "init": [
       {
         "step_id": "check_device",
@@ -21,8 +21,38 @@
         "params": {
           "max_attempts": 3
         }
+      },
+      {
+        "step_id": "gpu_setup",
+        "action": "script:gpu_setup",
+        "version": "1.0.0",
+        "timeout_seconds": 900,
+        "retry": 1,
+        "params": {}
       }
     ],
-    "teardown": []
+    "patrol": {
+      "interval_seconds": 300,
+      "steps": [
+        {
+          "step_id": "gpu_check",
+          "action": "script:gpu_check",
+          "version": "1.0.0",
+          "timeout_seconds": 60,
+          "retry": 0,
+          "params": {}
+        }
+      ]
+    },
+    "teardown": [
+      {
+        "step_id": "gpu_finish",
+        "action": "script:gpu_finish",
+        "version": "1.0.0",
+        "timeout_seconds": 600,
+        "retry": 1,
+        "params": {}
+      }
+    ]
   }
 }
