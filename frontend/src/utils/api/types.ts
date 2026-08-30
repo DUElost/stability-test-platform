@@ -1102,12 +1102,81 @@ export interface TestSuiteSummary {
   name: string;
   display_name?: string | null;
   project_key?: string | null;
+  export_dir?: string | null;
+  apk_binding?: string[] | null;
   case_count: number;
   enabled_case_count: number;
+  exported_sha256?: string | null;
   is_active: boolean;
   export_stale: boolean;
   created_at: string;
   updated_at: string;
+}
+
+/** ADR-0030：套件详情（含漂移指纹）。 */
+export interface TestSuiteDetail extends TestSuiteSummary {
+  root_config: Record<string, unknown>;
+  global_params?: Record<string, unknown> | null;
+  source_sha256?: string | null;
+  exported_content_sha256?: string | null;
+  content_sha256?: string | null;
+}
+
+export interface TestSuiteCreateInput {
+  name: string;
+  display_name?: string | null;
+  project_key?: string | null;
+  export_dir?: string | null;
+  apk_binding?: string[] | null;
+  root_config?: Record<string, unknown>;
+  global_params?: Record<string, unknown> | null;
+}
+
+export interface TestSuiteUpdateInput {
+  display_name?: string | null;
+  project_key?: string | null;
+  export_dir?: string | null;
+  apk_binding?: string[] | null;
+  root_config?: Record<string, unknown>;
+  global_params?: Record<string, unknown> | null;
+  is_active?: boolean;
+}
+
+export interface TestCase {
+  id: number;
+  name: string;
+  ordinal: number;
+  times: number;
+  enabled: boolean;
+  exec_descs: Record<string, unknown>[];
+}
+
+export interface TestCaseInput {
+  name: string;
+  ordinal?: number;
+  times?: number;
+  enabled?: boolean;
+  exec_descs?: Record<string, unknown>[];
+}
+
+export interface SuiteValidateIssue {
+  severity: string;
+  code: string;
+  message: string;
+  testpoint?: string | null;
+}
+
+export interface SuiteValidateResult {
+  valid: boolean;
+  issues: SuiteValidateIssue[];
+}
+
+export interface SuiteExportResult {
+  export_dir: string;
+  runtask_path: string;
+  global_path?: string | null;
+  exported_sha256: string;
+  exported_content_sha256: string;
 }
 
 /**
