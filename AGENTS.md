@@ -42,19 +42,15 @@ pip install --require-hashes -r backend/requirements-dev.lock
 改了 `requirements.txt` **或** `requirements-dev.txt` 后**必须重新生成对应
 lock**，命令见各 lock 文件抬头（须在 py3.11 下生成，CI 与镜像都是 3.11）。
 
-**Dependabot 的 PR 会自动补 dev.lock**（`regenerate-dev-lock.yml`）：它只改
-manifest 不改 lock，所以由 workflow 重新生成 + `--stamp` + commit 回 PR 分支，
-锁变更随 PR 一起进 CI，不再等到 main 变红才发现。
+**Dependabot 的 PR 会自动补两份 lock**（`regenerate-locks.yml`）：它只改
+manifest 不改 lock，所以由 workflow 用 `scripts/ci/regenerate-lock.sh` 重新
+生成 + `--stamp` + commit 回 PR 分支，锁变更随 PR 一起进 CI，不再等到 main
+变红才发现。
 
-**但 `requirements.lock`（运行时 / 生产镜像那份）无法自动补**，需要手动：
-- 它走 pip-compile，而该工具在这份输入上实测 30 分钟仍未完成（复测 5m39s
-  仍在跑，CPU 近乎空转），CI 里用不了；
-- 改用 uv 能秒出，但会改变生产镜像的依赖 hash（与现有 lock 差 18 个包，含
-  `cryptography` 49→50、`websockets` 16→17 两个 major），属于需要单独验证
-  的变更，不能塞进自动化。
+该脚本默认**沿用已有 pin**（uv/pip-tools 同行为），所以 Dependabot 改一个包
+就只动那一个包。要「把区间内所有包刷到最新」得显式加 `--upgrade` —— 那是有
+意的对齐操作，不是日常重生成该用的。
 
-Dependabot 改到 `requirements.txt` 时，那个 workflow 会在 PR 上留评论 + 把
-job 标红（但不在 required checks 里，不阻塞合入）。看到红灯就手动补 lock。
 两份 lock 的同步由 `tests/test_requirements_lock.py` 与
 `tests/test_requirements_dev_lock.py` 守住 —— 前者还额外断言测试依赖不得
 混入生产 lock。测试/lint 依赖不要加进 `requirements.txt`——生产镜像带着
