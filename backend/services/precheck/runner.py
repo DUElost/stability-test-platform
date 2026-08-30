@@ -17,6 +17,7 @@ from backend.core.metrics import record_dispatch_gate
 from backend.models.enums import PlanRunStatus
 from backend.models.plan_run import PlanRun
 from backend.services import precheck as precheck_config
+from backend.services.precheck import reachability as precheck_reachability
 from backend.services.precheck import sync as precheck_sync
 from backend.services.precheck import verify as precheck_verify
 from backend.services.plan_dispatcher_core import (
@@ -142,6 +143,17 @@ async def drive_dispatch_gate(
             if precheck["hosts"][hid]["error"] == "agent_offline"
         ]
         if offline_hosts:
+            # #491：RPC 判 offline 时对照 HTTP 心跳做冲突诊断——两条通道失配
+            # （心跳新鲜却 RPC 离线）此前会静默失败，日志里零告警。诊断并入
+            # precheck 便于事后追溯；不参与判定（判定仍为 failed）。
+            reachability = precheck_reachability.diagnose_unreachable_hosts(
+                db, offline_hosts,
+            )
+            for hid, diag in reachability.items():
+                precheck["hosts"].setdefault(hid, {})["reachability"] = diag
+            precheck_reachability.log_unreachable_conflicts(
+                reachability, plan_run_id=plan_run_id,
+            )
             mark_precheck_failed(
                 plan_run_id, precheck, db,
                 error=f"agent_offline: {','.join(offline_hosts)}",
