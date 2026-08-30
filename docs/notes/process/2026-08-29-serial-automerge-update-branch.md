@@ -49,7 +49,58 @@ FIFO reconcile 末尾增加：队首已挂 auto-merge、6 项 required 全 SUCCE
 `behind_by > 0` → `gh pr update-branch`（不依赖 `workflow_run.head_sha`）。
 schedule reconcile（≤10 分钟）与任 PR CI 完成后的 reconcile 均覆盖此路径。
 
+## 补充（2026-08-30，并发 reconcile 的 head-sha 竞态）
+
+两个 workflow 都跑 `pr-automerge-queue.sh`，但 concurrency group 不同
+（`pr-automerge-queue` vs `pr-update-branch-<head_branch>`），可对**同一队首**
+并发调 `updatePullRequestBranch`。该 mutation 带 `expectedHeadOid`，胜者改掉
+head 后，败者报 `head sha didn't match the current head ref`；脚本 `set -e`
+遂把「别人已经做完了」刷成红 X，并连带跳过同一 job 的第二个 step。实例：
+run 33269782605（19:01:33 失败，同秒的 33269780623 已成功更新 #571，#571 于
+19:05 正常合入）。不属 required checks，不阻塞合入。
+
+两处改动：
+
+1. `pr-update-branch.yml` 的 concurrency group 统一为 `pr-automerge-queue`
+   （repo 级 group 跨 workflow 生效），消除并发源。代价：本 workflow 第二个
+   step 一并串行，单 job ~10s，可接受。
+2. 两个脚本各内联 `update_branch_tolerant`：仅对
+   `didn't match the current head ref` 归零并打印说明，其余失败原样返回非零。
+   纵深防御——`gh pr update-branch` 读 head 与 mutation 之间仍有窗口，且
+   schedule / 手动 dispatch 未必都落在同一排队路径上。
+
+放弃的备选：
+
+- **只加容错**：竞态照旧发生，只是不显红；诊断信息反而变少。
+- **只统一 group**：留不住 mutation 窗口内 head 被改的情形（如人工 push）。
+- **失败重试**：先重读状态再重试会把 10s 的 job 拉长、逻辑绕，与合入路径
+  注意力预算冲突。
+- **拆成两个 job、各用各的 group**：多一次 checkout，且仍需
+  `continue-on-error` 才能不让 reconcile 挡住第二个 job，更绕。
+
+验证：`bash -n` 两脚本 + `yaml.safe_load` 工作流；桩 `gh` 三路径断言
+（race→0、其他错误→非零、成功→0），两个脚本各跑一遍。
+
+## 补充（2026-08-30，队首 workflow run 自动批准）
+
+PR 分支含 `.github/workflows/` 变更（含 merge main 带入）时，GitHub 将
+`pull_request` 触发的 run 置为 `action_required`，须维护者点 Approve（#570
+实测：CI / Enable auto-merge / PR Agent 三条同时挂起）。`pr-automerge-queue.sh`
+在 FIFO reconcile 开头对**队首分支**查询 `status=action_required` 并调用
+`POST .../actions/runs/{id}/approve`；`enable-auto-merge.yml` 与
+`pr-update-branch.yml` 增 `actions: write`。批准失败只打日志、不阻断 reconcile。
+仅队首、且队列已排除 fork / dependabot major。
+
+放弃的备选：全 open PR 批量批准（扩大攻击面）；专用 PAT（运维负担）。
+
 ## Revisit
 
 若 open PR 常态 >3 或出现外部 fork 贡献潮，再评估轻量队列状态 API 或
 required check 列表变更时的脚本同步方式。
+
+- GitHub 若改写该 GraphQL 报错文案（如改用 `expectedHeadOid` 措辞），需同步
+  `update_branch_tolerant` 的匹配串，否则会退化回红 X。
+- `enable-auto-merge.yml` 的 `cron: */10` 兜底自 2026-08-29 17:39 UTC 加入后，
+  截至 19:12 UTC 零次 schedule 运行（近 12h 的 100 次运行全为 `pull_request`，
+  工作流 `state=active`）。当前队列靠 PR push 推进未停滞，但若该兜底长期不
+  触发，需另找 merge 后的 reconcile 触发点。

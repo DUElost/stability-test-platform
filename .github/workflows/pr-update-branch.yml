@@ -7,8 +7,14 @@ on:
 
 permissions: {}
 
+# 与 enable-auto-merge.yml 共用同一个 group：两个 workflow 都跑
+# scripts/ci/pr-automerge-queue.sh，对同一个队首并发调 updatePullRequestBranch
+# 时，落败方会拿到 "head sha didn't match the current head ref"（run 33269782605）。
+# 全局串行是消除该竞态的主手段；脚本内对竞争错误另有容错兜底。
+# 代价：本 workflow 内第二个 step（按触发分支更新）也被一并串行，单 job ~10s，
+# 队列长度受 open PR 数约束，可接受。
 concurrency:
-  group: pr-update-branch-${{ github.event.workflow_run.head_branch }}
+  group: pr-automerge-queue
   cancel-in-progress: false
 
 jobs:
@@ -18,6 +24,7 @@ jobs:
       github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
       pull-requests: write
     steps:
