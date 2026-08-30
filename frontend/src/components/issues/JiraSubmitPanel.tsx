@@ -43,6 +43,7 @@ export default function JiraSubmitPanel() {
   const [planRuns, setPlanRuns] = useState<PlanRun[]>([]);
   const [artifacts, setArtifacts] = useState<ScanArtifact[]>([]);
   const [loadingArtifacts, setLoadingArtifacts] = useState(false);
+  const [jiraProjectKey, setJiraProjectKey] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     if (source !== 'plan_run') return;
@@ -50,6 +51,26 @@ export default function JiraSubmitPanel() {
     api.planRuns.list(0, 10).then(rs => { if (!cancelled) setPlanRuns(rs); }).catch(() => {});
     return () => { cancelled = true; };
   }, [source]);
+
+  useEffect(() => {
+    if (source !== 'plan_run' || planRunId === '') {
+      setJiraProjectKey(undefined);
+      return;
+    }
+    const run = planRuns.find((r) => r.id === Number(planRunId));
+    const projectKey = run?.project_key;
+    if (!projectKey) {
+      setJiraProjectKey(null);
+      return;
+    }
+    let cancelled = false;
+    api.projects.get(projectKey).then((project) => {
+      if (!cancelled) setJiraProjectKey(project.jira_project_key ?? null);
+    }).catch(() => {
+      if (!cancelled) setJiraProjectKey(null);
+    });
+    return () => { cancelled = true; };
+  }, [source, planRunId, planRuns]);
 
   const artifactQueryKey = `${source}|${planRunId}`;
   const [prevArtifactQueryKey, setPrevArtifactQueryKey] = useState(artifactQueryKey);
@@ -271,6 +292,19 @@ export default function JiraSubmitPanel() {
             </p>
           </div>
         </div>
+      )}
+
+      {source === 'plan_run' && planRunId !== '' && jiraProjectKey !== undefined && (
+        <p className={FORM.hint} data-testid="jira-project-key-preview">
+          {jiraProjectKey ? (
+            <>
+              JIRA 项目键（将自动注入）：
+              <span className="ml-1 font-mono">{jiraProjectKey}</span>
+            </>
+          ) : (
+            '未配置 JIRA 项目键 — 请在项目登记簿补齐 jira_project_key'
+          )}
+        </p>
       )}
 
       {stage === 'create' && (

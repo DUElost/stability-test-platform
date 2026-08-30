@@ -10,12 +10,32 @@ vi.mock('@/components/console/LiveConsole', () => ({
 
 const startJiraRun = vi.fn();
 const cancelRun = vi.fn();
+const listPlanRuns = vi.fn();
+const getProject = vi.fn();
 vi.mock('@/utils/api/dedup', () => ({
   dedup: {
     startJiraRun: (...a: unknown[]) => startJiraRun(...a),
     cancelRun: (...a: unknown[]) => cancelRun(...a),
   },
 }));
+vi.mock('@/utils/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/api')>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      planRuns: {
+        ...actual.api.planRuns,
+        list: (...a: unknown[]) => listPlanRuns(...a),
+        getDedupStatus: vi.fn().mockResolvedValue({ plan_run_id: 1, artifacts: [] }),
+      },
+      projects: {
+        ...actual.api.projects,
+        get: (...a: unknown[]) => getProject(...a),
+      },
+    },
+  };
+});
 
 import JiraSubmitPanel from './JiraSubmitPanel';
 
@@ -29,6 +49,12 @@ describe('JiraSubmitPanel', () => {
   beforeEach(() => {
     startJiraRun.mockReset();
     cancelRun.mockReset();
+    listPlanRuns.mockReset();
+    getProject.mockReset();
+    listPlanRuns.mockResolvedValue([
+      { id: 42, plan_id: 1, status: 'SUCCESS', project_key: 'A57', run_type: 'MANUAL', started_at: '2026-08-01T00:00:00Z' },
+    ]);
+    getProject.mockResolvedValue({ jira_project_key: 'A57-中兴微测' });
   });
 
   it('renders vendor/stage/dry-run menu + file input + run button', () => {
@@ -94,5 +120,14 @@ describe('JiraSubmitPanel', () => {
     pickFile();
     fireEvent.click(screen.getByTestId('jira-run-btn'));
     expect(await screen.findByTestId('jira-error')).toHaveTextContent('503');
+  });
+
+  it('plan_run mode previews jira_project_key from project registry', async () => {
+    render(<JiraSubmitPanel />);
+    fireEvent.click(screen.getByTestId('jira-source-plan-run'));
+    await waitFor(() => expect(listPlanRuns).toHaveBeenCalled());
+    fireEvent.change(screen.getByTestId('jira-plan-run'), { target: { value: '42' } });
+    await waitFor(() => expect(getProject).toHaveBeenCalledWith('A57'));
+    expect(await screen.findByTestId('jira-project-key-preview')).toHaveTextContent('A57-中兴微测');
   });
 });
