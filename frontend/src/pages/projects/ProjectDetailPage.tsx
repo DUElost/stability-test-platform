@@ -2,6 +2,16 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import {
   ArrowLeft,
   Pencil,
   Smartphone,
@@ -14,15 +24,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/status-badge';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { ClickableRow } from '@/components/ui/clickable-row';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { InlineEmpty } from '@/components/ui/empty-state';
@@ -35,7 +36,6 @@ import { useToast } from '@/hooks/useToast';
 import { api, toApiError } from '@/utils/api';
 import { projectKeys } from '@/utils/api/queryKeys';
 import type { ProjectUpdateInput } from '@/utils/api/types';
-import { formatLocalDateTime } from '@/utils/format';
 import EditProjectDialog from './components/EditProjectDialog';
 import { coverageSummary } from './inventoryDisplay';
 
@@ -66,9 +66,10 @@ export default function ProjectDetailPage() {
     queryFn: () => api.plans.list(0, 20, projectKey),
   });
 
-  const summaryQ = useQuery({
-    queryKey: projectKeys.summaryOf(projectKey),
-    queryFn: () => api.results.summary(5, projectKey),
+  // ADR-0029 P2：项目级风险趋势（按天 S/A/B，run 级 DLE 权威聚合）
+  const riskTrendQ = useQuery({
+    queryKey: ['project-risk-trend', projectKey],
+    queryFn: () => api.results.riskTrend(projectKey, 30),
   });
 
   const modelsQ = useQuery({
@@ -137,7 +138,6 @@ export default function ProjectDetailPage() {
   const project = detailQ.data!;
   const devices = devicesQ.data?.items ?? [];
   const plans = plansQ.data ?? [];
-  const summary = summaryQ.data;
 
   return (
     <PageContainer width="content">
@@ -338,53 +338,66 @@ export default function ProjectDetailPage() {
           </CardContent>
         </Card>
 
-        {/* 结果块 */}
+        {/* 结果块：风险趋势（按天 S/A/B）——最近运行列表在 /results 页已有 */}
         <Card className="lg:col-span-2">
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-sm font-medium">
               <ListTodo size={16} className="text-muted-foreground" />
-              最近运行（快照语义：按 plan_run.project_id 归属）
+              风险趋势（近 30 天 · S/A/B）
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {summaryQ.isLoading ? (
-              <Skeleton className="h-32 w-full" />
-            ) : !summary?.recent_runs?.length ? (
-              <InlineEmpty>该项目暂无运行记录</InlineEmpty>
+            {riskTrendQ.isLoading ? (
+              <Skeleton className="h-56 w-full" />
+            ) : !riskTrendQ.data?.buckets?.length ? (
+              <InlineEmpty>
+                暂无风险数据——新 Run 派发完成后开始积累（S/A/B 由事件定级）
+              </InlineEmpty>
             ) : (
-              <div className="overflow-x-auto">
-                <Table className="min-w-[560px]">
-                  <TableHeader>
-                    <TableRow className="border-b text-left text-xs text-muted-foreground">
-                      <TableHead className="pb-2 pr-4">Run</TableHead>
-                      <TableHead className="pb-2 pr-4">任务</TableHead>
-                      <TableHead className="pb-2 pr-4">状态</TableHead>
-                      <TableHead className="pb-2 pr-4">风险</TableHead>
-                      <TableHead className="pb-2">开始时间</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {summary.recent_runs.map((run) => (
-                      <ClickableRow
-                        key={run.run_id}
-                        className="border-b transition-colors last:border-0 hover:bg-muted/50"
-                        onClick={() => navigate(`/runs/${run.run_id}/report`)}
-                      >
-                        <TableCell className="py-2 pr-4 font-mono text-xs">#{run.run_id}</TableCell>
-                        <TableCell className="max-w-[240px] truncate py-2 pr-4">{run.task_name}</TableCell>
-                        <TableCell className="py-2 pr-4">
-                          <StatusBadge kind="job-result" status={run.status} size="sm" fallbackToRaw />
-                        </TableCell>
-                        <TableCell className="py-2 pr-4">
-                          <StatusBadge kind="risk" status={run.risk_level} size="sm" />
-                        </TableCell>
-                        <TableCell className="py-2 text-xs text-muted-foreground">
-                          {formatLocalDateTime(run.started_at)}
-                        </TableCell>
-                      </ClickableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <div className="h-56 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={riskTrendQ.data.buckets}
+                    margin={{ top: 4, right: 8, bottom: 0, left: -8 }}
+                    barCategoryGap="20%"
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      vertical={false}
+                      stroke="hsl(var(--border))"
+                    />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      allowDecimals={false}
+                      width={28}
+                      tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <Tooltip
+                      cursor={{ fill: 'hsl(var(--muted) / 0.35)' }}
+                      contentStyle={{
+                        fontSize: 12,
+                        borderRadius: 8,
+                        border: '1px solid hsl(var(--border))',
+                        background: 'hsl(var(--card))',
+                      }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    {/* 状态语义色：S=critical / A=warning / B=good（dataviz 规范） */}
+                    <Bar dataKey="S" name="S（致命）" stackId="risk"
+                         fill="hsl(var(--destructive))" />
+                    <Bar dataKey="A" name="A（高）" stackId="risk"
+                         fill="hsl(var(--warning))" />
+                    <Bar dataKey="B" name="B（低）" stackId="risk"
+                         fill="hsl(var(--success))" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             )}
           </CardContent>

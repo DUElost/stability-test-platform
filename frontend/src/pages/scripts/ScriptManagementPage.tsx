@@ -14,6 +14,51 @@ import { ErrorState } from '@/components/ui/error-state';
 import { INTERACTIVE, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
+/** ADR-0029 P2-10：脚本被哪些项目的 Plan 使用过（展开时懒加载）。 */
+function UsageSection({ script }: { script: ScriptEntry }) {
+  const usageQ = useQuery({
+    queryKey: ['script-usage', script.id],
+    queryFn: () => api.scripts.usage(script.id, 30),
+  });
+  const projects = usageQ.data?.projects ?? [];
+
+  return (
+    <div className="mt-3 p-3 bg-muted/50 rounded-lg text-xs space-y-2">
+      <span className={cn('font-medium', TEXT.subtitle)}>
+        使用统计（近 30 天 · 被哪些项目的 Plan 用过）
+      </span>
+      {usageQ.isLoading ? (
+        <p className={TEXT.subtitle}>加载中…</p>
+      ) : projects.length === 0 ? (
+        <p className={TEXT.subtitle}>近 30 天无 Plan 使用记录</p>
+      ) : (
+        <div className="space-y-1">
+          {projects.map(p => (
+            <div key={p.project_key} className="flex items-center gap-2">
+              <span className="font-mono">{p.project_key}</span>
+              <span className={TEXT.subtitle}>
+                {p.run_count} 次 run · 成功 {p.success_count}
+              </span>
+              <span
+                className={cn(
+                  'font-medium',
+                  p.success_rate >= 0.8 ? 'text-success'
+                    : p.success_rate >= 0.5 ? 'text-warning' : 'text-destructive',
+                )}
+              >
+                {(p.success_rate * 100).toFixed(0)}%
+              </span>
+              {p.plan_count > 1 && (
+                <span className={TEXT.subtitle}>{p.plan_count} 个 Plan</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ScriptManagementPage() {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -155,25 +200,28 @@ export default function ScriptManagementPage() {
                     </div>
                   </div>
 
-                  {/* Expandable params */}
+                  {/* Expandable params + usage */}
                   {expanded && (
-                    <div className="mt-3 p-3 bg-muted/50 rounded-lg text-xs space-y-2">
-                      {script.default_params && Object.keys(script.default_params).length > 0 && (
-                        <div>
-                          <span className={cn('font-medium', TEXT.subtitle)}>默认参数: </span>
-                          <code className={TEXT.body}>{JSON.stringify(script.default_params, null, 2)}</code>
-                        </div>
-                      )}
-                      {script.param_schema && Object.keys(script.param_schema).length > 0 && (
-                        <div>
-                          <span className={cn('font-medium', TEXT.subtitle)}>参数 Schema: </span>
-                          <code className={TEXT.body}>{JSON.stringify(script.param_schema, null, 2)}</code>
-                        </div>
-                      )}
-                      {(!script.default_params || Object.keys(script.default_params).length === 0) &&
-                       (!script.param_schema || Object.keys(script.param_schema).length === 0) && (
-                        <p className={TEXT.subtitle}>无参数定义</p>
-                      )}
+                    <div className="mt-3 space-y-2">
+                      <div className="p-3 bg-muted/50 rounded-lg text-xs space-y-2">
+                        {script.default_params && Object.keys(script.default_params).length > 0 && (
+                          <div>
+                            <span className={cn('font-medium', TEXT.subtitle)}>默认参数: </span>
+                            <code className={TEXT.body}>{JSON.stringify(script.default_params, null, 2)}</code>
+                          </div>
+                        )}
+                        {script.param_schema && Object.keys(script.param_schema).length > 0 && (
+                          <div>
+                            <span className={cn('font-medium', TEXT.subtitle)}>参数 Schema: </span>
+                            <code className={TEXT.body}>{JSON.stringify(script.param_schema, null, 2)}</code>
+                          </div>
+                        )}
+                        {(!script.default_params || Object.keys(script.default_params).length === 0) &&
+                         (!script.param_schema || Object.keys(script.param_schema).length === 0) && (
+                          <p className={TEXT.subtitle}>无参数定义</p>
+                        )}
+                      </div>
+                      <UsageSection script={script} />
                     </div>
                   )}
                 </CardContent>

@@ -316,6 +316,21 @@ export interface ResultsSummary {
   recent_runs: RecentRun[];
 }
 
+/** ADR-0029 P2：项目级风险趋势单日桶（S/A/B 计数）。 */
+export interface RiskTrendBucket {
+  date: string; // YYYY-MM-DD
+  S: number;
+  A: number;
+  B: number;
+  runs: number;
+}
+
+export interface RiskTrend {
+  project_key: string | null;
+  days: number;
+  buckets: RiskTrendBucket[];
+}
+
 export interface ActivityPoint {
   hour: string;
   started: number;
@@ -816,6 +831,21 @@ export interface ScriptEntry {
   description?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+/** ADR-0029 P2-10：脚本在某项目的使用统计（run 维度成功率）。 */
+export interface ScriptUsageProject {
+  project_key: string;
+  plan_count: number;
+  run_count: number;
+  success_count: number;
+  success_rate: number;
+}
+
+export interface ScriptUsage {
+  script_id: number;
+  days: number;
+  projects: ScriptUsageProject[];
 }
 
 export interface ActionTemplateEntry {
