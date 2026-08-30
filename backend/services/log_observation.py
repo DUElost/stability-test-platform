@@ -108,6 +108,22 @@ def aggregate_signal_link_stats(db: Session, job_ids: list[int]) -> Dict[str, An
 
     ``link_rate`` is computed over AEE/VENDOR_AEE only (categories that should
     register DLE on the reconciler path). MOBILELOG is excluded from the rate.
+
+    A single ratio cannot answer "is the link logic broken?", because the
+    unlinked set mixes three very different states. Per ADR-0028, events stay
+    on the Agent's local disk until an archive report names them or the disk
+    fills, so a signal with no DLE usually means "not archived yet" — not a
+    failure. The unlinked linkable set is therefore split three ways:
+
+    - ``not_yet_archived``: the job has no ``device_log_event`` row at all.
+    - ``unlinkable``: the job has DLE rows, but none carrying this signal's
+      ``seq_no`` (e.g. UNKNOWN events reconciled without a originating signal).
+    - ``unlinked_fixable``: a matching DLE exists yet the link is missing —
+      the only bucket that is a genuine failure, and the only one the
+      ``signal_link_reconcile`` sweep can repair.
+
+    ``fixable_link_rate`` is the alert-able number: it ignores the two buckets
+    that cannot be fixed by construction.
     """
     if not job_ids:
         return {
@@ -116,6 +132,10 @@ def aggregate_signal_link_stats(db: Session, job_ids: list[int]) -> Dict[str, An
             "unlinked_linkable": 0,
             "signal_only_signals": 0,
             "link_rate": 1.0,
+            "not_yet_archived": 0,
+            "unlinkable": 0,
+            "unlinked_fixable": 0,
+            "fixable_link_rate": 1.0,
         }
 
     total = int(
@@ -165,12 +185,57 @@ def aggregate_signal_link_stats(db: Session, job_ids: list[int]) -> Dict[str, An
     )
     unlinked_linkable = max(0, linkable_total - linkable_linked)
     link_rate = (linkable_linked / linkable_total) if linkable_total else 1.0
+
+    # Three-way split of the unlinked linkable set. Both EXISTS probes ride
+    # idx_device_log_event_job_signal_seq (job_id, signal_seq_no).
+    split = db.execute(
+        text(
+            """
+            SELECT
+              count(*) FILTER (
+                WHERE s.device_log_event_id IS NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM device_log_event e WHERE e.job_id = s.job_id)
+              ) AS not_yet_archived,
+              count(*) FILTER (
+                WHERE s.device_log_event_id IS NULL
+                  AND EXISTS (
+                    SELECT 1 FROM device_log_event e WHERE e.job_id = s.job_id)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM device_log_event e
+                     WHERE e.job_id = s.job_id AND e.signal_seq_no = s.seq_no)
+              ) AS unlinkable,
+              count(*) FILTER (
+                WHERE s.device_log_event_id IS NULL
+                  AND EXISTS (
+                    SELECT 1 FROM device_log_event e
+                     WHERE e.job_id = s.job_id AND e.signal_seq_no = s.seq_no)
+              ) AS unlinked_fixable
+            FROM job_log_signal s
+            WHERE s.job_id = ANY(:job_ids)
+              AND s.category = ANY(:categories)
+            """
+        ),
+        {"job_ids": list(job_ids), "categories": list(_LINK_RATE_CATEGORIES)},
+    ).one()
+    not_yet_archived = int(split.not_yet_archived or 0)
+    unlinkable = int(split.unlinkable or 0)
+    unlinked_fixable = int(split.unlinked_fixable or 0)
+
+    fixable_total = linkable_linked + unlinked_fixable
+    fixable_link_rate = (
+        linkable_linked / fixable_total if fixable_total else 1.0
+    )
     return {
         "total_signals": total,
         "linked_signals": linked,
         "unlinked_linkable": unlinked_linkable,
         "signal_only_signals": signal_only,
         "link_rate": round(link_rate, 4),
+        "not_yet_archived": not_yet_archived,
+        "unlinkable": unlinkable,
+        "unlinked_fixable": unlinked_fixable,
+        "fixable_link_rate": round(fixable_link_rate, 4),
     }
 
 
