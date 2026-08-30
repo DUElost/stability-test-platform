@@ -245,7 +245,7 @@ export default function HostOperationPanel({
                   )}
                   <span
                     className={cn(
-                      'ml-auto rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase',
+                      'ml-auto rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase',
                       statusChip(op.status),
                     )}
                   >

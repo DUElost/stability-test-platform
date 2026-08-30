@@ -15,6 +15,8 @@ import { Button } from '@/components/ui/button';
 interface UserMenuItem {
   label: string;
   href?: string;
+  /** href 为站点外/后端页面（如 Swagger /docs）时用 <a>，绕开前端路由 404 */
+  external?: boolean;
   onClick?: () => void;
   icon?: React.ReactNode;
   destructive?: boolean;
@@ -56,10 +58,17 @@ export const UserMenu: React.FC<UserMenuProps> = ({ username, role, items }) => 
                 <DropdownMenuSeparator />
               ) : item.href ? (
                 <DropdownMenuItem asChild>
-                  <Link to={item.href} className={className}>
-                    {item.icon}
-                    <span className="ml-2">{item.label}</span>
-                  </Link>
+                  {item.external ? (
+                    <a href={item.href} target="_blank" rel="noreferrer" className={className}>
+                      {item.icon}
+                      <span className="ml-2">{item.label}</span>
+                    </a>
+                  ) : (
+                    <Link to={item.href} className={className}>
+                      {item.icon}
+                      <span className="ml-2">{item.label}</span>
+                    </Link>
+                  )}
                 </DropdownMenuItem>
               ) : (
                 <DropdownMenuItem onClick={item.onClick} className={className}>

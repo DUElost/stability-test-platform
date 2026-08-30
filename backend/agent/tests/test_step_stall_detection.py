@@ -329,3 +329,28 @@ class TestProgressOnlyOnStderr:
         """)
         outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
         assert "PROGRESS" in outcome.stdout
+
+
+def test_pump_process_writes_full_log_files(tmp_path):
+    """2026-08-31：运行日志唯一副本——stdout/stderr 全量落盘（含 PROGRESS）。"""
+    import subprocess
+    import sys
+
+    out_log = tmp_path / "step.out.log"
+    err_log = tmp_path / "step.err.log"
+    proc = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys; print('hello-out'); "
+         "print('PROGRESS {\"seq\":1}', file=sys.stderr); "
+         "print('hello-err', file=sys.stderr)"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    outcome = _pump_process(
+        proc, wall_clock=30, stall_seconds=None,
+        log_paths=(str(out_log), str(err_log)),
+    )
+    assert outcome.reason is None
+    assert "hello-out" in out_log.read_text(encoding="utf-8")
+    err_text = err_log.read_text(encoding="utf-8")
+    assert "PROGRESS" in err_text       # PROGRESS 也落盘（缓冲里被 drop 不影响文件）
+    assert "hello-err" in err_text

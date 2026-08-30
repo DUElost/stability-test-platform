@@ -710,7 +710,7 @@ export default function AnomalyDashboard({
                                   crashDetailPackage === row.package_name ? null : row.package_name,
                                 );
                               }}
-                              className="mt-1 inline-flex items-center gap-0.5 text-[10px] font-medium text-info hover:text-info/80"
+                              className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-info hover:text-info/80"
                             >
                               查看 {row.total_count} 条详情
                               <ChevronRight className="h-2.5 w-2.5" />

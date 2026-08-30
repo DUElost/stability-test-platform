@@ -60,7 +60,7 @@ function ActiveJobRow({ job }: { job: HostActiveJob }) {
       </span>
       <span
         className={cn(
-          'rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+          'rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider',
           job.status === 'RUNNING' ? STATUS_CHIP.warning : STATUS_CHIP.primary,
         )}
       >
@@ -69,7 +69,7 @@ function ActiveJobRow({ job }: { job: HostActiveJob }) {
       {job.abort_pending ? (
         <span
           data-testid={`hot-update-job-abort-pending-${job.id}`}
-          className={cn('rounded px-1.5 py-0.5 text-[10px] font-semibold', STATUS_CHIP.warning)}
+          className={cn('rounded px-1.5 py-0.5 text-[11px] font-semibold', STATUS_CHIP.warning)}
         >
           收口中…
         </span>
@@ -216,7 +216,7 @@ export default function HostHotUpdateConfirmDialog({
               </div>
 
               <div className="rounded-md border border-border bg-card">
-                <div className={cn('flex items-center gap-2 border-b px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider', SURFACE.subtle, TEXT.subtitle)}>
+                <div className={cn('flex items-center gap-2 border-b px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider', SURFACE.subtle, TEXT.subtitle)}>
                   <Server className="h-3 w-3" /> 收口中的 Job
                 </div>
                 <div className="max-h-40 overflow-y-auto">
@@ -243,7 +243,7 @@ export default function HostHotUpdateConfirmDialog({
               </div>
 
               <div className="rounded-md border border-border bg-card">
-                <div className={cn('flex items-center gap-2 border-b px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider', SURFACE.subtle, TEXT.subtitle)}>
+                <div className={cn('flex items-center gap-2 border-b px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider', SURFACE.subtle, TEXT.subtitle)}>
                   <Server className="h-3 w-3" /> 受影响 Job
                 </div>
                 <div className="max-h-40 overflow-y-auto">

@@ -90,7 +90,7 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
                   </td>
                   <td className="px-2 py-1.5">
                     <span className={cn(
-                      'inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold',
+                      'inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold',
                       STATE_CHIP[ev.state] ?? STATUS_CHIP.muted,
                     )}>
                       {ev.state}

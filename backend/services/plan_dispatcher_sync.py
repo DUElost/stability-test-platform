@@ -23,6 +23,7 @@ from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.project import TestProject
+from backend.models.project_model import ProjectModel
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
 from backend.models.script import Script
 from backend.services.plan_dispatcher_core import (
@@ -511,20 +512,26 @@ def prepare_plan_run(
 def _infer_frozen_project_id(
     db: Session, plan: Plan, target_ids: list[int],
 ) -> tuple[int | None, bool, list[str]]:
-    """ADR-0029 P0：PlanRun 归属冻结值解析（快照语义）。
+    """ADR-0029 v2.5 D10 M2：PlanRun 归属冻结值解析（快照语义，派生读）。
 
-    优先 plan.project_id（显式归属，不推断）；NULL 时按目标设备的 project_id
-    众数推断——多台设备归属不同项目照常派发（admin 天然跨项目），只记
-    WARNING + run_context.project_mixed；全部未归属 → None（无规则命中，
-    显式「待归属」，不臆造）。返回 (frozen, inferred, mixed_project_keys)。
+    优先 plan.project_id（显式归属，不推断）；NULL 时按目标设备型号的
+    成员归属（device ⋈ project_model）众数推断——多台设备归属不同项目
+    照常派发（admin 天然跨项目），只记 WARNING + run_context.project_mixed；
+    全部未映射 → None（型号无成员行，显式「待映射」，不臆造）。
+    返回 (frozen, inferred, mixed_project_keys)。
     """
     if plan.project_id is not None:
         return plan.project_id, False, []
 
     rows = db.execute(
-        select(Device.project_id, func.count(Device.id))
-        .where(Device.id.in_(target_ids), Device.project_id.is_not(None))
-        .group_by(Device.project_id)
+        select(ProjectModel.project_id, func.count(Device.id))
+        .join(Device, Device.model == ProjectModel.match_value)
+        .where(
+            Device.id.in_(target_ids),
+            ProjectModel.match_type == "MODEL",
+            ProjectModel.is_active.is_(True),
+        )
+        .group_by(ProjectModel.project_id)
         .order_by(func.count(Device.id).desc())
     ).all()
     if not rows:

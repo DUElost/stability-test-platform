@@ -208,8 +208,8 @@ export function StatusBadge({
   fallbackToRaw = false,
 }: StatusBadgeProps) {
   const entry = resolveStatusEntry(kind, status, { fallbackToRaw });
-  const iconSize = size === "sm" ? 10 : 12;
-  const sizeCls = size === "sm" ? "px-2 py-0 text-[10px]" : "";
+  const iconSize = size === "sm" ? 11 : 12;
+  const sizeCls = size === "sm" ? "px-2 py-0.5 text-[11px]" : "";
   return (
     <Badge
       variant={entry.variant}

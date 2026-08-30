@@ -65,7 +65,7 @@ export function ProjectKeyBadge({
   if (!projectKey) return null;
   return (
     <span
-      className={`rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground ${className ?? ''}`}
+      className={`rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground ${className ?? ''}`}
       title={`归属项目 ${projectKey}`}
     >
       {projectKey}

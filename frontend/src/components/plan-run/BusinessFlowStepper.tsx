@@ -68,16 +68,16 @@ function StageNode({ stageKey, stage, isCurrent }: {
         <NodeIcon status={status} />
         <span className={cn('text-xs font-semibold', TEXT.body)}>{meta.label}</span>
       </div>
-      <div className={cn('text-[10px]', TEXT.subtitle)}>{meta.desc}</div>
+      <div className={cn('text-[11px]', TEXT.subtitle)}>{meta.desc}</div>
       {(completedDevices != null || activeDevices != null) && (
-        <div className={cn('mt-1.5 text-[10px]', TEXT.subtitle)}>
+        <div className={cn('mt-1.5 text-[11px]', TEXT.subtitle)}>
           {activeDevices != null && <span className="text-warning font-medium">{activeDevices} 活跃</span>}
           {activeDevices != null && completedDevices != null && ' · '}
           {completedDevices != null && <span>{completedDevices} 完成</span>}
         </div>
       )}
       {patrolCycle != null && (
-        <div className="mt-1 text-[10px] font-mono text-warning">周期 #{patrolCycle}</div>
+        <div className="mt-1 text-[11px] font-mono text-warning">周期 #{patrolCycle}</div>
       )}
     </div>
   );

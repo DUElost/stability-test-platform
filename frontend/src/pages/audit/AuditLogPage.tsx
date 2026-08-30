@@ -32,6 +32,16 @@ interface AuditLogEntry {
   timestamp: string;
 }
 
+/** 与筛选下拉的中文文案一致，避免表格里裸英文 action */
+const ACTION_LABELS: Record<string, string> = {
+  create: '创建',
+  update: '更新',
+  delete: '删除',
+  dispatch: '分发',
+  start: '启动',
+  cancel: '取消',
+};
+
 export default function AuditLogPage() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
@@ -164,7 +174,7 @@ export default function AuditLogPage() {
                     <TableCell className={cn('px-4 py-1.5', TEXT.body)}>{log.username || '-'}</TableCell>
                     <TableCell className="px-4 py-1.5">
                       <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', STATUS_CHIP.primary)}>
-                        {log.action}
+                        {ACTION_LABELS[log.action] ?? log.action}
                       </span>
                     </TableCell>
                     <TableCell className={cn('px-4 py-1.5', TEXT.subtitle)}>

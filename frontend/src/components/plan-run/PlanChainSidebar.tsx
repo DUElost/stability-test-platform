@@ -102,23 +102,23 @@ function ChainNodeRow({
         )}
 
         {node.is_current && (
-          <span className={cn('ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold', STATUS_CHIP.warning)}>
+          <span className={cn('ml-1 rounded-full px-1.5 py-0.5 text-[11px] font-semibold', STATUS_CHIP.warning)}>
             当前
           </span>
         )}
 
         {node.is_blocked && node.block_reason && (
-          <span className={cn('ml-1 rounded-full px-1.5 py-0.5 text-[10px]', STATUS_CHIP.muted)}>
+          <span className={cn('ml-1 rounded-full px-1.5 py-0.5 text-[11px]', STATUS_CHIP.muted)}>
             暂不触发
           </span>
         )}
 
-        <div className={cn('mt-0.5 truncate text-[10px]', TEXT.subtitle)}>
+        <div className={cn('mt-0.5 truncate text-[11px]', TEXT.subtitle)}>
           {node.plan_name ?? `Plan #${node.plan_id}`}
         </div>
 
         {!isPending && node.pass_rate != null && (
-          <div className={cn('mt-0.5 text-[10px] font-medium', TEXT.subtitle)}>
+          <div className={cn('mt-0.5 text-[11px] font-medium', TEXT.subtitle)}>
             通过率 {Math.round(node.pass_rate * 100)}%
           </div>
         )}
@@ -149,7 +149,7 @@ export default function PlanChainSidebar({
           <div className="min-w-0 space-y-0.5">
             <p className="font-semibold">下游 Plan 派发失败</p>
             {chainDispatchFailed.error && (
-              <p className="break-words text-[10px] opacity-90">{chainDispatchFailed.error}</p>
+              <p className="break-words text-[11px] opacity-90">{chainDispatchFailed.error}</p>
             )}
           </div>
         </div>
