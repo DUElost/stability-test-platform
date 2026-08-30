@@ -6,6 +6,9 @@
   [`docs/design/2026-08-mtbf-p0-runner-design.md`](../design/2026-08-mtbf-p0-runner-design.md)、
   ADR-0030 P1（test_suite/test_case）
 - 依据：`/mnt/automation-toolkit/android-tools/` 三执行包逐文件勘察（2026-08-31）+ 平台侧代码核对
+- 落地状态：P0a Sleep（7ca82b0）/ P0b PowerCycle（8bc00d8）/ P0c GPU（df9305f）已随
+  PR #462 分支合入待验收；**真机冒烟未做**（GPU `-e loop 1`×N 等价性、Sleep 闹钟丢场景、
+  PowerCycle reboot 循环均需实机验证后开生产 Plan）
 
 ## 0. 结论摘要
 
