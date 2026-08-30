@@ -210,6 +210,11 @@ class TestInventoryModels:
     def test_groups_by_model_seed_is_not_mapping(
         self, client, auth_headers, db_session, project_a, project_legacy
     ):
+        from backend.models.project_model import ProjectModel
+
+        db_session.add(ProjectModel(
+            project_id=project_a.id, match_value="MLD_LX2"))
+        db_session.commit()
         _make_device(
             db_session, "s-mld-1", project_a, model="MLD_LX2", platform="MTK"
         )
@@ -240,6 +245,8 @@ class TestInventoryModels:
         assert "project_keys" not in by_model["MLD_LX2"]
 
         assert by_model["MLD_LX3"]["device_count"] == 1
+        assert by_model["MLD_LX3"]["mapped_project_keys"] == []
+        assert by_model["MLD_LX3"]["unassigned_device_count"] == 1
         assert by_model["MYSTERY_X"]["mapped_project_keys"] == []
         assert by_model["MYSTERY_X"]["unassigned_device_count"] == 2
         assert by_model[None]["device_count"] == 2
@@ -252,16 +259,22 @@ class TestInventoryModels:
             "/api/v1/projects/inventory/summary", headers=auth_headers
         ).json()["data"]
         assert summary["total_devices"] == 7
-        assert summary["user_mapped_devices"] == 3
+        # v2.5 型号级口径：仅 MLD_LX2（成员行）的 2 台 mapped
+        assert summary["user_mapped_devices"] == 2
         assert summary["distinct_models"] == 4
-        assert set(summary["unmapped_models"]) == {None, "MYSTERY_X"}
-        # ADR-0029 P0：严格未归属口径（project_id IS NULL）——SEED 归属不算
-        # （s-legacy 归 project_legacy），3 台 NULL（s-null/s-blank-none/s-blank-empty）
-        assert summary["unassigned_devices"] == 3
+        assert set(summary["unmapped_models"]) == {None, "MYSTERY_X", "MLD_LX3"}
+        # 严格未映射口径：型号无成员行的设备数（MLD_LX3 1 + MYSTERY_X 2 +
+        # None/空白 2）
+        assert summary["unassigned_devices"] == 5
 
     def test_mixed_user_and_seed_on_same_model(
         self, client, auth_headers, db_session, project_a, project_legacy
     ):
+        from backend.models.project_model import ProjectModel
+
+        db_session.add(ProjectModel(
+            project_id=project_a.id, match_value="MLD_LX2"))
+        db_session.commit()
         _make_device(
             db_session, "s-mix-a", project_a, model="MLD_LX2", platform="MTK"
         )
@@ -272,7 +285,8 @@ class TestInventoryModels:
         row = resp.json()["data"][0]
         assert row["model"] == "MLD_LX2"
         assert row["mapped_project_keys"] == ["proj-a"]
-        assert row["unassigned_device_count"] == 1
+        # v2.5 型号级：成员行覆盖全部设备（含原 LEGACY 的），无未映射
+        assert row["unassigned_device_count"] == 0
         assert row["device_count"] == 2
 
 
@@ -280,6 +294,13 @@ class TestProjectModelCoverage:
     def test_reverse_lookup_counts_only_this_label(
         self, client, auth_headers, db_session, project_a, project_legacy
     ):
+        from backend.models.project_model import ProjectModel
+
+        db_session.add_all([
+            ProjectModel(project_id=project_a.id, match_value="MLD_LX2"),
+            ProjectModel(project_id=project_a.id, match_value="MLD_LX3"),
+        ])
+        db_session.commit()
         _make_device(
             db_session, "s-cov-a1", project_a, model="MLD_LX2", platform="MTK"
         )
@@ -293,7 +314,8 @@ class TestProjectModelCoverage:
         resp = client.get("/api/v1/projects/proj-a/models", headers=auth_headers)
         assert resp.status_code == 200
         by_model = {row["model"]: row for row in resp.json()["data"]}
-        assert by_model["MLD_LX2"]["device_count"] == 1
+        # v2.5 派生：成员行按型号覆盖全部设备（含原 LEGACY 的 s-cov-legacy）
+        assert by_model["MLD_LX2"]["device_count"] == 2
         assert by_model["MLD_LX3"]["device_count"] == 1
         assert "mapped_project_keys" not in by_model["MLD_LX2"]
 
@@ -809,16 +831,21 @@ class TestListFilters:
     def test_devices_filter_by_project_key(
         self, client, auth_headers, db_session, project_a, project_legacy
     ):
-        _make_device(db_session, "s-filt-a", project_a)
-        _make_device(db_session, "s-filt-legacy", project_legacy)
-        _make_device(db_session, "s-filt-null", None)
+        from backend.models.project_model import ProjectModel
+
+        db_session.add(ProjectModel(
+            project_id=project_a.id, match_value="F_MODEL"))
+        db_session.commit()
+        _make_device(db_session, "s-filt-a", project_a, model="F_MODEL")
+        _make_device(db_session, "s-filt-legacy", project_legacy, model="L_MODEL")
+        _make_device(db_session, "s-filt-null", None, model=None)
 
         resp = client.get(
             "/api/v1/devices?project_key=proj-a", headers=auth_headers
         )
         assert resp.status_code == 200
         serials = {d["serial"] for d in resp.json()}
-        assert serials == {"s-filt-a"}  # NULL 与 LEGACY 都不命中
+        assert serials == {"s-filt-a"}  # 未映射型号与无型号都不命中
         assert resp.json()[0]["project_key"] == "proj-a"
 
     def test_plans_filter_by_project_key(
