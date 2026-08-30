@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "description": "Power cycle stress test (AutoTestTool): install APK, reboot loop, collect result file",
+  "lifecycle": {
+    "timeout_seconds": 604800,
+    "init": [
+      {
+        "step_id": "check_device",
+        "action": "script:check_device",
+        "version": "1.0.0",
+        "timeout_seconds": 30,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "powercycle_setup",
+        "action": "script:powercycle_setup",
+        "version": "1.0.0",
+        "timeout_seconds": 900,
+        "retry": 1,
+        "params": {}
+      }
+    ],
+    "patrol": {
+      "interval_seconds": 300,
+      "steps": [
+        {
+          "step_id": "powercycle_check",
+          "action": "script:powercycle_check",
+          "version": "1.0.0",
+          "timeout_seconds": 60,
+          "retry": 0,
+          "params": {}
+        }
+      ]
+    },
+    "teardown": [
+      {
+        "step_id": "powercycle_finish",
+        "action": "script:powercycle_finish",
+        "version": "1.0.0",
+        "timeout_seconds": 600,
+        "retry": 1,
+        "params": {}
+      }
+    ]
+  }
+}
