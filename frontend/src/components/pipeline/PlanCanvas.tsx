@@ -587,10 +587,10 @@ function StepRow({
         <div className={cn('flex items-center gap-1.5 text-[13px] font-bold', TEXT.heading)}>
           <span className="truncate">{scriptName}</span>
           {step.version && (
-            <span className={cn('text-[10px] font-mono', TEXT.subtitle)}>v{step.version.replace(/^v/, '')}</span>
+            <span className={cn('text-[11px] font-mono', TEXT.subtitle)}>v{step.version.replace(/^v/, '')}</span>
           )}
           {step.enabled === false && (
-            <span className={cn('ml-1 inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold', STATUS_CHIP.muted)}>
+            <span className={cn('ml-1 inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold', STATUS_CHIP.muted)}>
               已禁用
             </span>
           )}

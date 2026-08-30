@@ -1,8 +1,14 @@
 import { useState } from 'react';
-import { X, Server, Loader2 } from 'lucide-react';
+import { Server, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { STATUS_TEXT_COLORS } from '@/design-system/colors';
-import { FORM, MODAL } from '@/design-system';
+import { FORM } from '@/design-system';
 import { cn } from '@/lib/utils';
 import type { Host } from '@/utils/api/types';
 
@@ -96,24 +102,16 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
     cn(FORM.input, hasError && FORM.inputInvalid);
 
   return (
-    <div className={MODAL.overlay} onClick={handleClose}>
-      <div className={MODAL.panel} onClick={(e) => e.stopPropagation()}>
-        <div className={MODAL.header}>
-          <div className="flex items-center gap-2">
+    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) handleClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
             <Server className={STATUS_TEXT_COLORS.primary} size={20} />
-            <h2 className={MODAL.title}>{isEdit ? '编辑主机' : '添加主机'}</h2>
-          </div>
-          <button
-            type="button"
-            onClick={handleClose}
-            className={MODAL.closeButton}
-            aria-label="关闭"
-          >
-            <X size={20} />
-          </button>
-        </div>
+            {isEdit ? '编辑主机' : '添加主机'}
+          </DialogTitle>
+        </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4 p-6">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="host-name" className={FORM.label}>
               主机名称 <span className={STATUS_TEXT_COLORS.error}>*</span>
@@ -213,7 +211,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
             </Button>
           </div>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

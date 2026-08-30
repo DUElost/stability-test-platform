@@ -363,7 +363,7 @@ export default function SchedulesPage() {
                   <TableCell className={cn('px-4 py-3 font-medium', TEXT.heading)}>{s.name}</TableCell>
                   <TableCell className={cn('px-4 py-3 font-mono', TEXT.subtitle)}>{s.cron_expr}</TableCell>
                   <TableCell className={cn('px-4 py-3', TEXT.subtitle)}>
-                    Plan #{s.plan_id} ({(s.device_ids || []).length} devices)
+                    Plan #{s.plan_id}（{(s.device_ids || []).length} 台设备）
                   </TableCell>
                   <TableCell className="px-4 py-3">
                     <span className={cn(

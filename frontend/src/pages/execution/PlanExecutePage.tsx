@@ -1255,12 +1255,7 @@ export default function PlanExecutePage() {
                       activeFilterChips={activeFilterChips}
                       onClearFilterChip={applyFilterChipClear}
                     />
-                    <div
-                      className={cn(
-                        'min-h-0 flex-1',
-                        view === 'matrix' ? 'overflow-hidden' : 'overflow-hidden',
-                      )}
-                    >
+                    <div className="min-h-0 flex-1 overflow-hidden">
                       {view === 'matrix' ? (
                         <DeviceMatrix
                           className="h-full"
