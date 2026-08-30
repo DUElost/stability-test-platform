@@ -100,7 +100,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 |------|-----|------|
 | 2026-08-27 | [0031](docs/adr/ADR-0031-platform-ai-assistant.md) | 平台 AI 助手（Accepted v1.5：T0–T3 运维域自治 / RunConsole 白名单执行 / 角色裁剪工具面；未配 Key 降级） |
 | 2026-08-19 | [0030](docs/adr/ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（Accepted v1.8：P0/P1 ✅、D6 真机冒烟 ✅、mtbf 绑定翻转硬拒；余 P2 前端） |
-| 2026-08-19 | [0029](docs/adr/ADR-0029-project-taxonomy-and-param-layering.md) | 项目分类域·TestProject 登记簿（Accepted v2.4；D1/D4/D5/D7/D8/D9 挂起，未触发不得重提） |
+| 2026-08-19 | [0029](docs/adr/ADR-0029-project-taxonomy-and-param-layering.md) | 项目分类域·TestProject 登记簿（Accepted v2.5 派生归属重设计：归属改 JOIN 删 device.project_id、哨兵出表、facet 减列；D1/D4/D5/D7/D8/D9 挂起） |
 | 2026-07-16 | [0026](docs/operations/adr-0026-admission-and-scale-gray-rollout.md) | 大规模化执行架构(目标态,分阶段落地中):PlanRun 准入队列 + Host OperationScheduler + 批量续租/O(1) 聚合;当前状态机不变,QUEUED/PRECHECK 待 feature flag 路径落地后生效 |
 | 2026-06-21 | [0025](docs/adr/ADR-0025-phase4-architecture-alignment.md) | 方案 C 存储：日志留 SSD、AEE 留 HDD、CIFS 仅汇总；取消 run_log_bundle |
 | 2026-05-21 | [0024](docs/adr/ADR-0024-browser-session-security-hardening.md) | HttpOnly Cookie + CSRF + refresh 黑名单 + 生产 guard |
