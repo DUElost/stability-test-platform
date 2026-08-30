@@ -1,0 +1,10 @@
+2026-08-30 22:00:00 cycle 1/100 wake OK screen=ON
+2026-08-30 22:00:03 go sleep 300s screen=OFF
+2026-08-30 22:05:03 cycle 2/100 wake OK screen=ON
+2026-08-30 22:05:06 go sleep 300s screen=OFF
+2026-08-30 22:10:06 cycle 3/100 wake FAIL screen=OFF
+2026-08-30 22:10:09 go sleep 300s screen=OFF
+2026-08-30 22:15:09 cycle 4/100 wake OK screen=ON
+2026-08-30 22:15:12 go sleep 300s screen=ON
+2026-08-30 22:20:12 cycle 5/100 wake OK screen=ON
+2026-08-31 01:00:00 finished result=PASS
