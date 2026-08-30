@@ -68,7 +68,7 @@ def run_post_completion(job_id: int, db: Session) -> bool:
         logger.info("post_completion: job %d report persisted", job_id)
 
         try:
-            from backend.services.test_case_result_ingest import ingest_test_case_results_for_job
+            from backend.services.case_result_ingest import ingest_test_case_results_for_job
 
             ingest_test_case_results_for_job(db, job_id)
             db.commit()
