@@ -10,6 +10,8 @@ WorkingDirectory=/home/debian13/stability-test-platform
 EnvironmentFile=/home/debian13/stability-test-platform/.env.backend
 # Keep schema in sync with the running code path before the single backend instance starts.
 ExecStartPre=/bin/bash -lc 'cd /home/debian13/stability-test-platform/backend && ../venv/bin/python -m alembic upgrade head'
+# 部署源守卫（失败仅记日志不中断——硬失败 + Restart=always 会进 start-limit 循环致生产中断）
+ExecStartPre=-/home/debian13/stability-test-platform/tools/dev/check-deploy-source.sh
 ExecStart=/home/debian13/stability-test-platform/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5

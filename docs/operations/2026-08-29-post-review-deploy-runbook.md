@@ -41,9 +41,11 @@ export AUTH="Authorization: Bearer $TOKEN"
 
 ```bash
 cd "$CONTROL_DIR"
+git checkout main                         # 部署源必须是 main（并发会话可能已把工作树切走）
 git fetch origin main
 git log -1 --oneline origin/main          # 确认目标 commit
 git pull --ff-only origin main            # 或已合并的 release 分支
+./tools/dev/check-deploy-source.sh        # 部署源守卫：HEAD==main 且无未提交改动，退出码须为 0
 ```
 
 ### 1.2 依赖（requirements 有变时）
@@ -68,6 +70,7 @@ cd "$CONTROL_DIR"
 ### 1.4 重启 backend + 脚本 catalog
 
 ```bash
+./tools/dev/check-deploy-source.sh        # 重启前再核一次（§1.1 后并发会话可能又动了工作树）
 sudo systemctl restart stability-backend
 sleep 3
 curl -sf http://127.0.0.1:8000/health | jq .

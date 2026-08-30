@@ -32,6 +32,10 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 
 1. **PR 合入** main（禁直推；auto-merge 由 AGENTS.md 门禁把关）。
 2. **同步代码到生产目录**（本机=仓库根）：`git checkout main && git pull origin main`
+   ```bash
+   git checkout main && git pull origin main
+   ./tools/dev/check-deploy-source.sh   # 部署源守卫：非 main / 有未提交改动 → 退出 1，先处理再继续
+   ```
    ——部署源就是工作树，务必保持在 main。
 3. **应用 DB 迁移**（禁止直连生产库手动 `alembic upgrade`：
    AGENTS.md「迁移试验禁对生产库执行」；迁移必须先经 PR + 验证）：
@@ -42,6 +46,7 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
    部署后回查：`venv/bin/python -m alembic current` 应等于目标 revision。
 4. **重启服务**（迁移若已解耦为 `-migrate` oneshot，则只重启常驻服务）：
    ```bash
+   ./tools/dev/check-deploy-source.sh   # 重启前再核一次（并发会话可能已把工作树切走）
    sudo systemctl restart stability-backend
    systemctl is-active stability-backend
    curl -s http://127.0.0.1:8000/health
@@ -148,4 +153,5 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-08-27 | 新增 §1.5 前端段：nginx root=仓库内 `frontend/dist-prod`、worktree 构建 + 双 rename 原子切换、浏览器/curl 双验证 | 登记簿 UI 批次（#476/#477）部署实操 |
 | 2026-08-28 | 坑表补「本地 ref 陈旧」条目：目标 PR mergeCommit ∈ origin/main 用 `merge-base --is-ancestor` 校验（曾打出旧包） | 同上事故复盘 |
 | 2026-08-30 | 四步全链路真机部署（r0s9t8u7v6w5 迁移 + 前端换包 + backend restart + 48 台热更新）后校准：§0 凭据与 token 取值路径（扁平 `.access_token`、双 `-F`）；§1.5 **`/tmp` 是 tmpfs、跨盘 `mv` 非原子**→ 改 `cp -a` 到同盘再双 rename，并记录无需 `VITE_API_BASE_URL`；§2 scan 无 CLI 模块、只有 HTTP 路由 + 「diff 为空则免跑」判据；§3 改为 canary→批量两段式，补 `--direct` 语义、串行 20s/台与 stdout 块缓冲（看 DB 不看日志）。§0/§2/§3 相应 ⚠️待校对 解除 | 本次部署实操 |
+| 2026-08-30 | 新增部署源守卫步骤（§1 step 2/4 前各一行 `tools/dev/check-deploy-source.sh`）：共享工作树曾跑在未合入分支上被推上生产，重启前强制校验 HEAD==main 且工作区干净；已装 systemd unit 另加 `ExecStartPre=-` 兜底（失败仅记日志不中断） | 2026-08-30 事故复盘 + PR |
 | （下次真实部署） | | |

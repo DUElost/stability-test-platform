@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from backend.core import metrics
 from backend.models.job import JobLogSignal
 from backend.services.report_service import (
     _DEFAULT_RISK_LEVEL,
@@ -221,6 +222,12 @@ def aggregate_signal_link_stats(db: Session, job_ids: list[int]) -> Dict[str, An
     not_yet_archived = int(split.not_yet_archived or 0)
     unlinkable = int(split.unlinkable or 0)
     unlinked_fixable = int(split.unlinked_fixable or 0)
+
+    # #528 链接健康：unlinked_fixable 稳态不该出现 → 非零即告警。
+    # 注意本函数唯一调用点是 GET watcher-summary 路由，计数随前端轮询重复自增，
+    # 绝对值无意义，只用于 increase(...)>0（见 metrics.py 同名计数器注释）。
+    if unlinked_fixable > 0:
+        metrics.unlinked_fixable_total.inc()
 
     fixable_total = linkable_linked + unlinked_fixable
     fixable_link_rate = (
