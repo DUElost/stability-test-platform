@@ -3,8 +3,14 @@ name: Enable auto-merge
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize, closed]
-  # auto-merge 合入由 GITHUB_TOKEN 推送，pull_request closed 常被级联限制抑制；
-  # 定时 reconcile 作兜底，避免队首合入后下一 PR 长时间挂不上 auto-merge。
+  # 队首合入后要立刻给下一 PR 挂 auto-merge，但那一刻没有任何可靠事件源：
+  # pull_request closed 常被级联限制抑制；main 上唯一的 workflow（CodeQL）是
+  # GitHub 默认 setup，其 run 不参与 workflow_run 链（实测 #587 于 11:23:59Z
+  # 合入后，没有任何新的 pr-update-branch run）；cron 被 GitHub 节流到
+  # 2–6 小时一次（2026-08-30 统计：25.6h 内仅 4 次 schedule run）。
+  # 故直接监听 main 的 push —— 每次合入都会触发，~10s 代价。
+  push:
+    branches: [main]
   schedule:
     - cron: "*/10 * * * *"
 
@@ -17,7 +23,10 @@ permissions: {}
 
 jobs:
   reconcile-queue:
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule'
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -27,7 +36,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # pull_request：默认 merge commit（含本 PR 脚本；首合入 bootstrap 勿 pin main）。
-          # schedule：脚本以 main 为准。
+          # schedule / push：脚本以 main 为准（push 的 sha 即 main 尖端）。
           ref: ${{ github.event_name == 'schedule' && 'main' || github.sha }}
           sparse-checkout: scripts/ci/pr-automerge-queue.sh
           sparse-checkout-cone-mode: false
