@@ -265,7 +265,7 @@ export default function PlanListPage() {
                     <span>更新于 {formatLocalDate(plan.updated_at)}</span>
                   </div>
                 </div>
-                <div className="flex items-center gap-1 ml-4 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                <div className="flex items-center gap-1 ml-4 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
                   <Button variant="ghost" size="sm" onClick={() => navigate(`/execution/plan-execute?plan=${plan.id}`)} title="执行">
                     <Play className="w-4 h-4" />
                   </Button>

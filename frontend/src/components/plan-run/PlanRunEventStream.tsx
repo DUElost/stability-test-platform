@@ -95,7 +95,7 @@ function EventRow({ event }: { event: PlanRunEvent }) {
           </div>
         )}
       </div>
-      <span className={cn('shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider', STAGE_CHIP_CLS[event.stage])}>
+      <span className={cn('shrink-0 rounded border px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wider', STAGE_CHIP_CLS[event.stage])}>
         {STAGE_CHIP_LABEL[event.stage]}
       </span>
     </div>

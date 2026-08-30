@@ -123,8 +123,20 @@ export default function IssueTrackerPage() {
                       return (
                         <div
                           key={run.id}
-                          className={cn('flex cursor-pointer items-start gap-4 rounded-lg border p-4 transition-colors', INTERACTIVE.hover)}
+                          role="button"
+                          tabIndex={0}
+                          className={cn(
+                            'flex cursor-pointer items-start gap-4 rounded-lg border p-4 transition-colors',
+                            INTERACTIVE.hover,
+                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                          )}
                           onClick={() => navigate(`/execution/plan-runs/${run.id}`)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              navigate(`/execution/plan-runs/${run.id}`);
+                            }
+                          }}
                         >
                           <AlertCircle className="mt-0.5 h-5 w-5 text-warning" />
                           <div className="flex-1 min-w-0">
@@ -136,7 +148,11 @@ export default function IssueTrackerPage() {
                               {draft?.project_key}-{draft?.issue_type} | Plan #{run.plan_id ?? '-'} | Job #{run.id}
                             </div>
                             <div className={cn('mt-1 text-sm', TEXT.caption)}>
-                              {draft?.description ? `${draft.description.substring(0, 100)}...` : '-'}
+                              {draft?.description
+                                ? draft.description.length > 100
+                                  ? `${draft.description.substring(0, 100)}...`
+                                  : draft.description
+                                : '-'}
                             </div>
                             <div className={cn('mt-2 flex items-center gap-4 text-xs', TEXT.caption)}>
                               <span>标签: {draft?.labels?.join(', ') || '-'}</span>

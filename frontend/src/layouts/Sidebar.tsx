@@ -185,7 +185,7 @@ export default function Sidebar({
               collapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100',
             )}
           >
-            北极星目标
+            稳定性测试平台
           </span>
         </div>
         {isMobile && onCloseMobile && (

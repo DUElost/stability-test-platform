@@ -409,7 +409,7 @@ export function ExpandableHostTable({
                           </div>
                           <div
                             className={cn(
-                              'flex items-center gap-1 text-[10px]',
+                              'flex items-center gap-1 text-[11px]',
                               host.watcher_admin_active !== false ? 'text-success' : 'text-destructive',
                             )}
                           >
@@ -446,7 +446,7 @@ export function ExpandableHostTable({
                               ['磁盘', host.resources.disk_usage],
                             ].map(([label, value]) => (
                               <div key={String(label)} className="text-center">
-                                <div className="text-[10px] text-muted-foreground">{label}</div>
+                                <div className="text-[11px] text-muted-foreground">{label}</div>
                                 <div
                                   data-testid={label === '磁盘' ? 'host-disk-usage' : undefined}
                                   className={cn(
@@ -531,7 +531,7 @@ export function ExpandableHostTable({
                             </span>
                             <span
                               className={cn(
-                                'inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                                'inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
                                 agentSyncBadgeClass(host.agent_code_sync_status),
                               )}
                               title={
@@ -767,7 +767,7 @@ export function ExpandableHostTable({
                                     <span className="text-muted-foreground shrink-0">对齐状态</span>
                                     <span
                                       className={cn(
-                                        'rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                                        'rounded-full px-1.5 py-0.5 text-[11px] font-medium',
                                         agentSyncBadgeClass(host.agent_code_sync_status),
                                       )}
                                     >

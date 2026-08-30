@@ -157,7 +157,7 @@ export default function AppShell() {
                 username={currentUser?.username}
                 role={currentUser?.role}
                 items={[
-                  { label: '文档', href: '/docs', icon: <FileText className="w-4 h-4" /> },
+                  { label: '文档', href: '/docs', external: true, icon: <FileText className="w-4 h-4" /> },
                   { label: '修改密码', href: '/account/password', icon: <KeyRound className="w-4 h-4" /> },
                   // FRONTEND_NAV_IA_REDESIGN v1.3：低频 admin 管理页收进下拉（三级入口）
                   ...(currentUser?.role === 'admin'

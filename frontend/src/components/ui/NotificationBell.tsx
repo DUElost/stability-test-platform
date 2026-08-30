@@ -130,14 +130,14 @@ export function NotificationBell() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className={cn('text-xs font-medium truncate', TEXT.heading)}>{log.title}</span>
-                        <span className={cn('text-[10px] px-1.5 py-0.5 rounded shrink-0', SURFACE.subtle, TEXT.caption)}>
+                        <span className={cn('text-[11px] px-1.5 py-0.5 rounded shrink-0', SURFACE.subtle, TEXT.caption)}>
                           {SOURCE_LABEL[log.source as keyof typeof SOURCE_LABEL] ?? log.source}
                         </span>
                       </div>
                       {log.message && (
                         <p className={cn('text-xs mt-1 line-clamp-2', TEXT.caption)}>{log.message}</p>
                       )}
-                      <span className={cn('text-[10px] mt-1', TEXT.caption)}>
+                      <span className={cn('text-[11px] mt-1', TEXT.caption)}>
                         {formatDateTimeLocale(log.created_at, '')}
                       </span>
                     </div>

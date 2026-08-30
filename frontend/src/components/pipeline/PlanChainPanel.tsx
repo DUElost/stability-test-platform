@@ -150,7 +150,7 @@ export default function PlanChainPanel({
               <div className={cn('text-[13px] font-bold truncate', TEXT.heading)}>
                 {node.name}
                 {node.isDraftCurrent && (
-                  <span className="ml-1.5 text-[10px] font-semibold text-warning">草稿</span>
+                  <span className="ml-1.5 text-[11px] font-semibold text-warning">草稿</span>
                 )}
               </div>
               <div className="flex flex-wrap gap-1">
@@ -171,7 +171,7 @@ export default function PlanChainPanel({
             </button>
 
             {idx < chain.length - 1 && (
-              <div className="px-3 py-1 flex items-center gap-1.5 text-[10px] font-bold text-primary">
+              <div className="px-3 py-1 flex items-center gap-1.5 text-[11px] font-bold text-primary">
                 <span className="block w-px h-4 bg-primary/30" />
                 <span className="inline-flex items-center gap-1">
                   执行后自动触发 <ArrowDown className="w-3 h-3" />
@@ -197,7 +197,7 @@ export default function PlanChainPanel({
         >
           <Plus className="w-3.5 h-3.5" /> 追加 Plan 到链末尾
         </button>
-        <p className={cn('px-3.5 pb-2.5 text-[10px] leading-relaxed', TEXT.subtitle)}>
+        <p className={cn('px-3.5 pb-2.5 text-[11px] leading-relaxed', TEXT.subtitle)}>
           每个 Plan 是一个完整的测试计划。
           <br />
           链式执行：前一个 Plan 完成后自动触发下一个。

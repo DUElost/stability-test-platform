@@ -337,16 +337,16 @@ export default function Dashboard() {
               />
             )}
           </div>
-          <Card className="p-4">
-            <CardHeader className="px-0 pt-0 pb-3">
-              <CardTitle className="flex items-center gap-2 text-sm">
+          <Card className="p-4 md:col-span-2">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
                 <Wifi size={16} className={CHART_SECTION.icon} />
-                主机在线率
-              </CardTitle>
-            </CardHeader>
-            <span className={`text-2xl font-bold ${ENTITY_STATUS_COLORS.host.online}`}>
-              {isLoading ? <Skeleton className="h-7 w-16" /> : `${(hostStats.online_rate * 100).toFixed(1)}%`}
-            </span>
+                <span className="text-sm font-medium">主机在线率</span>
+              </div>
+              <span className={`text-2xl font-bold ${ENTITY_STATUS_COLORS.host.online}`}>
+                {isLoading ? <Skeleton className="h-7 w-16" /> : `${(hostStats.online_rate * 100).toFixed(1)}%`}
+              </span>
+            </div>
           </Card>
         </div>
       </div>

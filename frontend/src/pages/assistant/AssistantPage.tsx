@@ -188,6 +188,31 @@ export default function AssistantPage() {
         </div>
       )}
 
+      {/* 移动端会话切换：md+ 用左侧 SessionList，窄屏用紧凑选择条（否则无法切换/新建会话） */}
+      <div className="mb-2 flex items-center gap-2 md:hidden">
+        <select
+          value={activeId ?? ''}
+          onChange={(e) => setActiveId(Number(e.target.value) || null)}
+          className={cn(FORM.select, 'min-w-0 flex-1')}
+          aria-label="选择会话"
+        >
+          {sessions.length === 0 && <option value="">暂无会话</option>}
+          {sessions.map((session) => (
+            <option key={session.id} value={session.id}>
+              {session.title || '未命名会话'}
+            </option>
+          ))}
+        </select>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => createMutation.mutate()}
+          disabled={createMutation.isPending}
+        >
+          新建
+        </Button>
+      </div>
+
       <div className="flex h-[calc(100vh-14rem)] min-h-[480px] gap-4">
         <SessionList
           sessions={sessions}
