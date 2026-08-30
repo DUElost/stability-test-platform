@@ -332,6 +332,7 @@ def _pump_process(
     wall_clock: Optional[float],
     stall_seconds: Optional[float],
     on_progress: Optional[Callable[[], None]] = None,
+    log_paths: Optional[Tuple[str, str]] = None,
 ) -> _PumpOutcome:
     """Drain both pipes on reader threads while the main thread watches two clocks.
 
@@ -374,7 +375,17 @@ def _pump_process(
         sink_index: int,
         stream_name: str,
         progress_stream: bool,
+        log_path: Optional[str] = None,
     ) -> None:
+        # 2026-08-31：运行日志唯一副本（SSD logs/runs/{job_id}/）——全量落盘
+        # （含 PROGRESS 行——排障需要完整输出；缓冲只留非 PROGRESS 尾部）。
+        # stdout/stderr 分开文件避免 reader 线程并发写同一句柄。
+        if log_path:
+            try:
+                with open(log_path, "a", encoding="utf-8") as log_f:
+                    log_f.write(line + "\n")
+            except OSError:
+                logger.debug("step_log_file_write_failed path=%s", log_path)
         # #147: PROGRESS 允许前导空白（缩进/日志前缀场景）。用 lstrip 后匹配，
         # 避免脚本因一个前导空格而错过刷新停滞钟、在长静默段被误杀。
         stripped = line.lstrip()
@@ -408,6 +419,7 @@ def _pump_process(
         stream_name: str,
         *,
         progress_stream: bool,
+        log_path: Optional[str] = None,
     ) -> None:
         try:
             _drain_stream(
@@ -419,6 +431,7 @@ def _pump_process(
                     sink_index=sink_index,
                     stream_name=stream_name,
                     progress_stream=progress_stream,
+                    log_path=log_path,
                 ),
             )
         except (ValueError, OSError):
@@ -435,14 +448,16 @@ def _pump_process(
         threading.Thread(
             target=_reader,
             args=(proc.stdout, stdout_lines, 0, "step-stdout"),
-            kwargs={"progress_stream": False},
+            kwargs={"progress_stream": False,
+                    "log_path": log_paths[0] if log_paths else None},
             daemon=True,
             name="step-stdout",
         ),
         threading.Thread(
             target=_reader,
             args=(proc.stderr, stderr_lines, 1, "step-stderr"),
-            kwargs={"progress_stream": True},
+            kwargs={"progress_stream": True,
+                    "log_path": log_paths[1] if log_paths else None},
             daemon=True,
             name="step-stderr",
         ),
@@ -1413,6 +1428,16 @@ class PipelineEngine:
 
         timeout_seconds = _resolve_step_wall_clock(step)
         stall_seconds = _resolve_step_stall_seconds(step)
+        # 2026-08-31：运行日志唯一副本（SSD logs/runs/{job_id}/）——
+        # 脚本 stdout/stderr 全量落盘（含 PROGRESS），与 ctx.log_dir 对齐。
+        log_paths = None
+        if ctx.log_dir:
+            import re as _re
+
+            safe = _re.sub(r"[^\w\-]", "_", str(step.get("step_key") or name))
+            out_path = os.path.join(ctx.log_dir, f"{ctx.phase}_{safe}.out.log")
+            err_path = os.path.join(ctx.log_dir, f"{ctx.phase}_{safe}.err.log")
+            log_paths = (out_path, err_path)
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -1435,6 +1460,7 @@ class PipelineEngine:
                     # 每收到一个 PROGRESS 戳就刷 last_progress_at，供 #117 的
                     # progress-aware barrier 判断同 host 的 peer 是否还在推进。
                     on_progress=lambda: self._update_execution_state("EXECUTING_STEP"),
+                    log_paths=log_paths,
                 )
                 if outcome.reason is not None:
                     combined_output = "\n".join(
