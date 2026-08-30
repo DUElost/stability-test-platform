@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   listPlans: vi.fn(),
   modelsOf: vi.fn(),
   riskTrend: vi.fn(),
+  removeRule: vi.fn(),
   authRole: 'admin',
 }));
 
@@ -33,7 +34,7 @@ vi.mock('@/hooks/useToast', () => ({
 
 vi.mock('@/utils/api', () => ({
   api: {
-    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject },
+    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule },
     devices: { list: mocks.listDevices },
     plans: { list: mocks.listPlans },
     results: { riskTrend: mocks.riskTrend },
@@ -129,6 +130,33 @@ describe('ProjectDetailPage', () => {
     expect(screen.queryByTestId('jira-not-configured')).not.toBeInTheDocument();
   });
 
+  it('removes a rule with confirm on admin', async () => {
+    mocks.getProject.mockResolvedValue(makeDetail({ match_models: ['M1'] }));
+    mocks.removeRule.mockResolvedValue({ project_key: 'proj-a', model: 'M1' });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderPage();
+    await screen.findByText('Project A');
+    fireEvent.click(screen.getByLabelText('移除规则 M1'));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mocks.removeRule).toHaveBeenCalledWith('proj-a', 'M1');
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it('skips remove when confirm dismissed', async () => {
+    mocks.getProject.mockResolvedValue(makeDetail({ match_models: ['M1'] }));
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    renderPage();
+    await screen.findByText('Project A');
+    fireEvent.click(screen.getByLabelText('移除规则 M1'));
+    expect(mocks.removeRule).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
   it('renders devices / plans / risk trend from scoped queries', async () => {
     renderPage();
 
@@ -136,7 +164,7 @@ describe('ProjectDetailPage', () => {
     expect(await screen.findByText('Plan A')).toBeInTheDocument();
     expect(await screen.findByTestId('detail-kpi-strip')).toBeInTheDocument();
     expect(await screen.findByTestId('hanging-models')).toHaveTextContent(
-      '共 M1 (1)',
+      '当前归属此项目的设备型号：M1 (1)',
     );
     expect(screen.queryByTestId('seed-disclaimer')).not.toBeInTheDocument();
     await waitFor(() => {
