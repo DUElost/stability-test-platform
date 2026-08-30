@@ -2,15 +2,20 @@ name: Approve workflow runs
 
 # pull_request 触发的 workflow 在 PR 含 workflow 变更时会 action_required 且自身
 # 无法启动；pull_request_target 在 base（main）上下文执行，可立即批掉同分支待审 run。
+# #601 实测 merge main 的 synchronize 有时不触发 pull_request_target → schedule 兜底。
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
+  schedule:
+    # 每 5 分钟扫 open PR；取 :02 起避开整点高峰（轻量 job，实测比 enable-auto-merge 的 hourly 更稳）
+    - cron: "2-57/5 * * * *"
 
 permissions: {}
 
 jobs:
-  approve:
+  approve-pr:
     if: >-
+      github.event_name == 'pull_request_target' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -22,7 +27,28 @@ jobs:
           ref: main
           sparse-checkout: scripts/ci/approve-pending-workflow-runs.sh
           sparse-checkout-cone-mode: false
-      - name: Approve action_required runs on PR branch
+      - name: Approve action_required runs on PR branch (poll)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPROVE_POLL_ATTEMPTS: "6"
+          APPROVE_POLL_INTERVAL_SEC: "15"
         run: bash scripts/ci/approve-pending-workflow-runs.sh "${{ github.event.pull_request.head.ref }}"
+
+  approve-schedule:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          sparse-checkout: |
+            scripts/ci/approve-pending-workflow-runs.sh
+            scripts/ci/approve-all-open-pr-workflow-runs.sh
+          sparse-checkout-cone-mode: false
+      - name: Approve action_required runs on all open PR branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ci/approve-all-open-pr-workflow-runs.sh
