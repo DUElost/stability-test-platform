@@ -55,6 +55,8 @@ export const planRunKeys = {
   devicesByRun: (id: number) => ['plan-run-devices', id] as const,
   watcher: (id: number, scope?: string) => ['plan-run-watcher', id, scope] as const,
   watcherByRun: (id: number) => ['plan-run-watcher', id] as const,
+  /** #529 终态 DLE 事件视图（log-events 端点）。 */
+  logEvents: (id: number) => ['plan-run-log-events', id] as const,
   chain: (id: number) => ['plan-run-chain', id] as const,
   logs: (id: number, stage: string, severity: string, page: number) =>
     ['plan-run-logs', id, stage, severity, page] as const,

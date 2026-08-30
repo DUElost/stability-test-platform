@@ -1,0 +1,52 @@
+{
+  "plan_run_id": 103,
+  "data_authority": "device_log_event",
+  "total": 3,
+  "items": [
+    {
+      "id": "f7a5c1e0-0000-4000-8000-000000000001",
+      "serial": "0000NX2622000514",
+      "platform": "MTK",
+      "event_type": "AEE",
+      "event_subtype": "NE",
+      "state": "REMOTE",
+      "local_path": "/mnt/hdd/aee_events/103/0000NX2622000514/NE_20260725_175707",
+      "remote_path": "/mnt/stp-aee/devices/103/0000NX2622000514/NE_20260725_175707",
+      "detected_at": "2026-07-25T17:57:07.908689+08:00",
+      "device_timestamp": "2026-07-25T17:57:07.000000+08:00",
+      "job_id": 1001,
+      "host_id": "host-101",
+      "signal_seq_no": 3
+    },
+    {
+      "id": "f7a5c1e0-0000-4000-8000-000000000002",
+      "serial": "0000NX2622000514",
+      "platform": "MTK",
+      "event_type": "AEE",
+      "event_subtype": "ANR",
+      "state": "UPLOAD_PENDING",
+      "local_path": "/mnt/hdd/aee_events/103/0000NX2622000514/ANR_20260725_175656",
+      "remote_path": null,
+      "detected_at": "2026-07-25T17:56:43.390621+08:00",
+      "device_timestamp": null,
+      "job_id": 1001,
+      "host_id": "host-101",
+      "signal_seq_no": 2
+    },
+    {
+      "id": "f7a5c1e0-0000-4000-8000-000000000003",
+      "serial": "0000NX2622000514",
+      "platform": "MTK",
+      "event_type": "AEE",
+      "event_subtype": "KE",
+      "state": "ARCHIVED",
+      "local_path": "/mnt/hdd/aee_events/103/0000NX2622000514/KE_20260725_175601",
+      "remote_path": "/nfs/archive/103/0000NX2622000514/KE_20260725_175601",
+      "detected_at": "2026-07-25T17:56:01.123456+08:00",
+      "device_timestamp": null,
+      "job_id": 1001,
+      "host_id": "host-101",
+      "signal_seq_no": 1
+    }
+  ]
+}
