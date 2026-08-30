@@ -1,10 +1,9 @@
-"""ProjectDeviceRule — 机型/序列号 → 项目归属规则（ADR-0029 P1）。
+"""ProjectModel — 项目成员定义（ADR-0029 v2.5 D10 M1 收敛）。
 
-规则层：admin 显式声明的 model → project 映射，活跃规则内是函数（部分
-唯一索引 uq_rule_active 保证——同一型号不能同时归属两个项目）。由
-project_attribution.resolve_project_id 消费；心跳路径只应用规则、不写规则。
-test_project.match_models 列已于 P1 收尾 drop，读侧由 _rule_values_for_project
-派生（API 契约不变）。
+成员定义：项目 = 机型集合的唯一事实源（model → project 全函数，
+部分唯一索引 uq_project_model_active 保证同一型号不能双归属）。由
+project_attribution.resolve_project_id 消费。v2.5 D10 归属派生化后本表与
+device.project_id 合二为一（副本删除，M3）；届时本表即归属的唯一来源。
 """
 
 from __future__ import annotations
@@ -26,12 +25,12 @@ from sqlalchemy.orm import relationship
 
 from backend.core.database import Base
 
-# 预留 SERIAL（按序列号归属），当前仅 MODEL 有写入路径
-MATCH_TYPES = ("MODEL", "SERIAL")
+# SERIAL 预留已放弃（v2.5 D10：例外走 device_project_override），当前仅 MODEL
+MATCH_TYPES = ("MODEL",)
 
 
-class ProjectDeviceRule(Base):
-    __tablename__ = "project_device_rule"
+class ProjectModel(Base):
+    __tablename__ = "project_model"
 
     id          = Column(Integer, primary_key=True)
     project_id  = Column(Integer, ForeignKey("test_project.id", ondelete="CASCADE"),
@@ -49,10 +48,10 @@ class ProjectDeviceRule(Base):
     __table_args__ = (
         CheckConstraint(
             "match_type IN ('MODEL', 'SERIAL')",
-            name="ck_project_device_rule_type",
+            name="ck_project_model_type",
         ),
         Index(
-            "uq_rule_active",
+            "uq_project_model_active",
             "match_type",
             text("lower(match_value)"),
             unique=True,

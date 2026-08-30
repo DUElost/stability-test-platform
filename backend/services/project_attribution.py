@@ -1,6 +1,6 @@
 """项目归属解析（ADR-0029 P1）——规则表 → device.project_id 的唯一应用路径。
 
-分层：规则（project_device_rule，admin 显式声明）→ 解析（本模块）→
+分层：规则（project_model，admin 显式声明）→ 解析（本模块）→
 应用（心跳 / 规则变更 / reconcile sweep）。解析是纯函数（只读规则表），
 应用点负责「何时写 device.project_id」：
 - 心跳：新建 Device 后 / model 变更后 / project_id IS NULL（稳态三个条件
@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.models.host import Device
-from backend.models.project_rule import ProjectDeviceRule
+from backend.models.project_model import ProjectModel
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,11 @@ def resolve_project_id(db: Session, model: Optional[str]) -> Optional[int]:
     if not model:
         return None
     rule = db.execute(
-        select(ProjectDeviceRule.project_id)
+        select(ProjectModel.project_id)
         .where(
-            ProjectDeviceRule.match_type == "MODEL",
-            ProjectDeviceRule.match_value == model,
-            ProjectDeviceRule.is_active.is_(True),
+            ProjectModel.match_type == "MODEL",
+            ProjectModel.match_value == model,
+            ProjectModel.is_active.is_(True),
         )
     ).scalar_one_or_none()
     return rule
@@ -75,17 +75,17 @@ def apply_attribution(db: Session, device: Device) -> bool:
     return True
 
 
-def resolve_rules_for_model(db: Session, model: Optional[str]) -> list[ProjectDeviceRule]:
+def resolve_rules_for_model(db: Session, model: Optional[str]) -> list[ProjectModel]:
     """查询某型号的全部活跃规则（map/preview、规则删除重算用）。"""
     if not model:
         return []
     rows = db.execute(
-        select(ProjectDeviceRule)
+        select(ProjectModel)
         .where(
-            ProjectDeviceRule.match_type == "MODEL",
-            ProjectDeviceRule.match_value == model,
-            ProjectDeviceRule.is_active.is_(True),
+            ProjectModel.match_type == "MODEL",
+            ProjectModel.match_value == model,
+            ProjectModel.is_active.is_(True),
         )
-        .order_by(ProjectDeviceRule.id)
+        .order_by(ProjectModel.id)
     ).scalars().all()
     return list(rows)

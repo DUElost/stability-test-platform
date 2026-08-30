@@ -43,7 +43,7 @@ from backend.models.host import Device
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.project import SEED_PROJECT_KEYS, TestProject
-from backend.models.project_rule import ProjectDeviceRule
+from backend.models.project_model import ProjectModel
 from backend.realtime.socketio_server import emit_project_changed
 
 _UPDATABLE_FIELDS = (
@@ -179,13 +179,13 @@ def _rule_values_for_project(db: Session, project_id: int) -> list[str]:
     match_models 列已 drop（P1 收尾），此处是唯一读侧派生来源。
     """
     rows = db.execute(
-        select(ProjectDeviceRule.match_value)
+        select(ProjectModel.match_value)
         .where(
-            ProjectDeviceRule.project_id == project_id,
-            ProjectDeviceRule.match_type == "MODEL",
-            ProjectDeviceRule.is_active.is_(True),
+            ProjectModel.project_id == project_id,
+            ProjectModel.match_type == "MODEL",
+            ProjectModel.is_active.is_(True),
         )
-        .order_by(ProjectDeviceRule.match_value)
+        .order_by(ProjectModel.match_value)
     ).scalars().all()
     return list(rows)
 
@@ -193,10 +193,10 @@ def _rule_values_for_project(db: Session, project_id: int) -> list[str]:
 def _rule_models_by_model(db: Session) -> dict[str | None, set[str]]:
     mapping: dict[str | None, set[str]] = {}
     rows = db.execute(
-        select(ProjectDeviceRule.match_value, TestProject.project_key)
-        .join(TestProject, TestProject.id == ProjectDeviceRule.project_id)
+        select(ProjectModel.match_value, TestProject.project_key)
+        .join(TestProject, TestProject.id == ProjectModel.project_id)
         .where(
-            ProjectDeviceRule.is_active.is_(True),
+            ProjectModel.is_active.is_(True),
             TestProject.source == _USER_SOURCE,
         )
     ).all()
@@ -466,7 +466,7 @@ def promote_seed_project(
     )
     seed.source = _USER_SOURCE
     for model in models:
-        db.add(ProjectDeviceRule(
+        db.add(ProjectModel(
             project_id=seed.id,
             match_type="MODEL",
             match_value=model,
@@ -682,15 +682,15 @@ def apply_project_map(
             status_code=409,
             detail="models already mapped to another user project",
         )
-    # ADR-0029 P1：规则写入 project_device_rule（活跃唯一索引兜底——同型号
+    # ADR-0029 P1：规则写入 project_model（活跃唯一索引兜底——同型号
     # 双归属 INSERT 即 IntegrityError，preview 设备级冲突之外的双保险）。
     for model in preview.models:
         existing = db.execute(
-            select(ProjectDeviceRule)
+            select(ProjectModel)
             .where(
-                ProjectDeviceRule.match_type == "MODEL",
-                ProjectDeviceRule.match_value == model,
-                ProjectDeviceRule.is_active.is_(True),
+                ProjectModel.match_type == "MODEL",
+                ProjectModel.match_value == model,
+                ProjectModel.is_active.is_(True),
             )
         ).scalar_one_or_none()
         if existing is not None and existing.project_id != project.id:
@@ -699,7 +699,7 @@ def apply_project_map(
                 detail=f"model {model} already ruled to another project",
             )
         if existing is None:
-            db.add(ProjectDeviceRule(
+            db.add(ProjectModel(
                 project_id=project.id,
                 match_type="MODEL",
                 match_value=model,
@@ -726,7 +726,7 @@ def apply_project_map(
         )
     record_audit(
         db,
-        action="apply_project_device_rule",
+        action="apply_project_model",
         resource_type="test_project",
         resource_id=project.id,
         details={
@@ -767,12 +767,12 @@ def remove_project_rule(
     project = _get_project_or_404(db, project_key)
     _require_user_project(project)
     rule = db.execute(
-        select(ProjectDeviceRule)
+        select(ProjectModel)
         .where(
-            ProjectDeviceRule.project_id == project.id,
-            ProjectDeviceRule.match_type == "MODEL",
-            ProjectDeviceRule.match_value == model,
-            ProjectDeviceRule.is_active.is_(True),
+            ProjectModel.project_id == project.id,
+            ProjectModel.match_type == "MODEL",
+            ProjectModel.match_value == model,
+            ProjectModel.is_active.is_(True),
         )
     ).scalar_one_or_none()
     if rule is None:
@@ -783,7 +783,7 @@ def remove_project_rule(
     db.delete(rule)
     record_audit(
         db,
-        action="remove_project_device_rule",
+        action="remove_project_model",
         resource_type="test_project",
         resource_id=project.id,
         details={

@@ -17,7 +17,7 @@ from backend.models.schedule import TaskSchedule
 from backend.models.script import Script
 from backend.models.suite import TestCase, TestSuite
 from backend.models.project import Specialty, TestProject
-from backend.models.project_rule import ProjectDeviceRule
+from backend.models.project_model import ProjectModel
 from backend.models.user import User
 
 __all__ = [
@@ -64,6 +64,6 @@ __all__ = [
     "StepTrace",
     "TaskSchedule",
     "TestProject",
-    "ProjectDeviceRule",
+    "ProjectModel",
     "User",
 ]
