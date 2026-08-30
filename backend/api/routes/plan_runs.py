@@ -22,6 +22,11 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
+from backend.api.schemas.test_case_result import (
+    TestCaseResultOut,
+    TestCaseResultSummary,
+    TestCaseResultsPayload,
+)
 from backend.api.schemas.plan_run import (
     AeeBreakdownOut,
     AeeDashboardSectionOut,
@@ -101,6 +106,7 @@ from backend.services.device_log_event import (
     list_plan_run_device_log_events,
 )
 from backend.services.log_observation import aggregate_signal_link_stats
+from backend.services.test_case_result_ingest import list_plan_run_test_case_results
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plan-runs"])
@@ -2178,6 +2184,55 @@ def get_plan_run_log_events(
         plan_run_id=run_id,
         total=total,
         items=items,
+    ))
+
+
+@router.get(
+    "/plan-runs/{run_id}/test-case-results",
+    response_model=ApiResponse[TestCaseResultsPayload],
+)
+def get_plan_run_test_case_results(
+    run_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(500, ge=1, le=2000),
+    status: Optional[str] = Query(None, description="PASS / FAILURE / ERROR"),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0030 P2: PlanRun 逐条用例结果（test_case_result 表）。"""
+    _require_plan_run(db, run_id)
+    rows, total, summary_counts = list_plan_run_test_case_results(
+        db, run_id, status=status, skip=skip, limit=limit,
+    )
+    job_ids = {row.job_id for row in rows}
+    jobs_by_id: dict[int, JobInstance] = {}
+    if job_ids:
+        jobs_by_id = {
+            j.id: j
+            for j in db.query(JobInstance).filter(JobInstance.id.in_(job_ids)).all()
+        }
+    items = []
+    for row in rows:
+        job = jobs_by_id.get(row.job_id)
+        items.append(TestCaseResultOut(
+            id=row.id,
+            plan_run_id=row.plan_run_id,
+            job_id=row.job_id,
+            suite_id=row.suite_id,
+            case_id=row.case_id,
+            case_name=row.case_name,
+            status=row.status,
+            detail=row.detail,
+            artifact_uri=row.artifact_uri,
+            run_dir=row.run_dir,
+            created_at=row.created_at,
+            device_id=job.device_id if job else None,
+            host_id=str(job.host_id) if job and job.host_id is not None else None,
+        ))
+    return ok(TestCaseResultsPayload(
+        items=items,
+        total=total,
+        summary=TestCaseResultSummary(**summary_counts),
     ))
 
 
