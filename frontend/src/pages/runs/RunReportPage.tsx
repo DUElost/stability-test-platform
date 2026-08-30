@@ -264,12 +264,14 @@ export default function RunReportPage() {
           <button
             className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             onClick={() => setShowJira(!showJira)}
+            aria-expanded={showJira}
+            aria-controls="jira-draft-panel"
           >
             <FileText className="h-4 w-4" />
             JIRA 草稿 {showJira ? '(收起)' : '(展开)'}
           </button>
           {showJira && (
-            <div className="space-y-2 text-sm border-t pt-3">
+            <div id="jira-draft-panel" className="space-y-2 text-sm border-t pt-3">
               <div>
                 <span className="text-muted-foreground">摘要: </span>
                 <span className="font-medium">{jiraDraft.summary}</span>

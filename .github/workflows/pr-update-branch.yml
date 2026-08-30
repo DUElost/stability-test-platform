@@ -34,6 +34,7 @@ jobs:
           sparse-checkout: |
             scripts/ci/pr-update-branch-if-behind.sh
             scripts/ci/pr-automerge-queue.sh
+            scripts/ci/approve-pending-workflow-runs.sh
           sparse-checkout-cone-mode: false
       - name: Reconcile queue and update head if behind
         env:

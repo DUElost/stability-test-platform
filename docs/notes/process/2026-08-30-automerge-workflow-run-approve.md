@@ -33,6 +33,13 @@ run 33306014644 reconcile 日志：`integer expression expected` /
 `workflow_runs`。改为 URL query（`?status=...&head_branch=...`）+ `// []`
 兜底 + count 非整数时按 0 处理。
 
+## 补充（2026-08-30，pull_request_target 即时批准）
+
+#596 实测 reconcile 批 run 有约 2–3 分钟空窗（须等另一 PR 触发
+`pull_request`）。新增 `approve-workflow-runs.yml`（`pull_request_target`，
+仅 `gh api` 批准、不 checkout PR 代码），在 sync/开 PR 后秒级批同分支待审 run。
+`pr-automerge-queue.sh` reconcile 改为对**队列内全部** eligible 分支批准（非仅队首）。
+
 ## Revisit
 
 若 GitHub 放宽同仓库 write 协作者的 workflow 审批策略，可删此逻辑。

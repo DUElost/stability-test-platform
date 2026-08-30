@@ -552,6 +552,24 @@ export default function FileServerPage() {
         action={refreshAction}
       />
 
+      {/* D4：keepPreviousData 保住了旧数据，但刷新失败时页面与此前一模一样——
+          用户无法区分「数据没变」和「根本没刷到」。这里显式说明展示的是陈旧数据。 */}
+      {query.isError && data && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            刷新失败，以下为上一次成功获取的数据
+            {data.generated_at ? `（生成于 ${formatTime(data.generated_at)}）` : ''}
+          </span>
+          <Button type="button" variant="outline" size="sm" onClick={() => query.refetch()}>
+            重试
+          </Button>
+        </div>
+      )}
+
       {query.isLoading || !data ? <LoadingState /> : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3 border-y py-3">

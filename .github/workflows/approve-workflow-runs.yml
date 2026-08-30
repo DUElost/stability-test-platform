@@ -1,0 +1,28 @@
+name: Approve workflow runs
+
+# pull_request 触发的 workflow 在 PR 含 workflow 变更时会 action_required 且自身
+# 无法启动；pull_request_target 在 base（main）上下文执行，可立即批掉同分支待审 run。
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions: {}
+
+jobs:
+  approve:
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          sparse-checkout: scripts/ci/approve-pending-workflow-runs.sh
+          sparse-checkout-cone-mode: false
+      - name: Approve action_required runs on PR branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/ci/approve-pending-workflow-runs.sh "${{ github.event.pull_request.head.ref }}"

@@ -20,18 +20,7 @@ import type { ProjectCreateInput, ProjectMapPreview, ProjectSummary } from '@/ut
 import InventoryModelsTable from './components/InventoryModelsTable';
 import CreateProjectDialog from './components/CreateProjectDialog';
 import MapModelsDialog from './components/MapModelsDialog';
-
-/** ADR-0029 facet：正交可组合筛选，选项从数据 distinct 提取。
- *  platforms（P1-B 派生数组）匹配语义 = 包含；其余标量 = 相等。 */
-const FACET_FIELDS = ['customer', 'platforms', 'form_factor', 'product_line'] as const;
-type FacetField = (typeof FACET_FIELDS)[number];
-
-const FACET_LABEL: Record<FacetField, string> = {
-  customer: '客户',
-  platforms: '平台',
-  form_factor: '形态',
-  product_line: '产品线',
-};
+import { FACET_FIELDS, FACET_LABEL, type FacetField } from './facetFields';
 
 function facetChipClass(active: boolean): string {
   return cn(

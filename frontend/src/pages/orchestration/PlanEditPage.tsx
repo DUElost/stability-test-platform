@@ -24,13 +24,38 @@ import { ErrorState } from '@/components/ui/error-state';
 
 export default function PlanEditPage() {
   const { id } = useParams<{ id: string }>();
-  const planId = id && id !== 'new' && Number(id) > 0 ? Number(id) : null;
+  // D8：`Number(id) > 0` 对 `/plans/abc` 得到 NaN，比较为假 → 静默当成「新建」，
+  // 用户以为在编辑某个 Plan，实际打开的是空白表单。与 PlanRunDetailPage 对齐：
+  // 先把非法 id 单独判出来报错，而不是落进新建分支。
+  const parsedPlanId = id != null && id !== 'new' ? Number(id) : Number.NaN;
+  const invalidPlanId = id != null && id !== 'new' && !Number.isFinite(parsedPlanId);
+  const planId = invalidPlanId || !Number.isFinite(parsedPlanId) || parsedPlanId <= 0
+    ? null
+    : parsedPlanId;
   const navigate = useNavigate();
 
   const form = usePlanEditForm(planId);
   const headerReady = !form.planLoading && !form.planIsError && !form.dependenciesIsError;
   usePlanEditHeaderSlot(form, headerReady);
   useDocumentTitle(form.name || (form.isNew ? '新建 Plan' : '编辑 Plan'));
+
+  if (invalidPlanId) {
+    return (
+      <div className="space-y-3 p-6">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate('/orchestration/plans')}
+        >
+          <ArrowLeft className="mr-1 h-4 w-4" /> 返回 Plan 列表
+        </Button>
+        <ErrorState
+          title="无效的 Plan ID"
+          description={`URL 中的 Plan ID「${id}」不是合法数字，无法编辑。`}
+        />
+      </div>
+    );
+  }
 
   if (!form.isNew && form.planLoading) {
     return (

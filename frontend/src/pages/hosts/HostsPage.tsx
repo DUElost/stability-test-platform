@@ -45,8 +45,11 @@ export default function HostsPage() {
   const toast = useToast();
   const confirmDialog = useConfirm();
   const sessionQ = useAuthSession();
-  const canManageWatcherAdminState = sessionQ.data?.role === 'admin';
+  // E1：此前 canManageWatcherAdminState 与 isAdmin 是**同一判定的两个独立表达式**，
+  // 名字暗示两种权限，实际永远同值——改一处忘另一处就会静默漂移。能力名保留
+  // （ExpandableHostTable 按能力收 prop，将来分化时不必改调用方），真值来源只留一个。
   const isAdmin = sessionQ.data?.role === 'admin';
+  const canManageWatcherAdminState = isAdmin;
 
   const { data: hostsData, isLoading, error } = useQuery({
     queryKey: hostKeys.list(),
@@ -558,6 +561,28 @@ export default function HostsPage() {
     }
   };
 
+  // E2：新增 / 编辑两个模态此前在 empty 分支与主分支各声明一遍（共 3 处），
+  // 任一 prop 改漏一处就会静默不同步。抽成片段后全局只有这一份。
+  const hostModals = (
+    <>
+      <AddHostModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSubmit={(data) => createMutation.mutate(data)}
+        isSubmitting={createMutation.isPending}
+      />
+      <AddHostModal
+        isOpen={editingHost != null}
+        editingHost={editingHost}
+        onClose={() => {
+          if (!updateMutation.isPending) setEditingHost(null);
+        }}
+        onSubmit={handleEditSubmit}
+        isSubmitting={updateMutation.isPending}
+      />
+    </>
+  );
+
   if (isLoading) {
     return (
       <PageContainer width="wide">
@@ -571,12 +596,17 @@ export default function HostsPage() {
   }
 
   if (error) {
+    // D3：无 HTTP 状态码 = 请求压根没到后端（网络 / 服务未起）；有状态码 =
+    // 后端给出的业务错误，把状态码与后端 message 说出来，别一律甩给
+    // 「请检查后端服务连接」——那会把 4xx 误报成运维故障。
+    const apiError = toApiError(error);
+    const unreachable = apiError.status == null;
     return (
       <PageContainer width="wide">
         <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
         <ErrorState
-          title="加载主机失败"
-          description="请检查后端服务连接"
+          title={unreachable ? '无法连接后端服务' : `加载主机失败（${apiError.status}）`}
+          description={unreachable ? '请检查后端服务连接与网络。' : apiError.message}
           onRetry={() => queryClient.invalidateQueries({ queryKey: hostKeys.list() })}
         />
       </PageContainer>
@@ -600,12 +630,7 @@ export default function HostsPage() {
             ) : undefined
           }
         />
-        <AddHostModal
-          isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
-          onSubmit={createMutation.mutate}
-          isSubmitting={createMutation.isPending}
-        />
+        {hostModals}
       </PageContainer>
     );
   }
@@ -678,22 +703,7 @@ export default function HostsPage() {
         />
       )}
 
-      <AddHostModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onSubmit={(data) => createMutation.mutate(data)}
-        isSubmitting={createMutation.isPending}
-      />
-
-      <AddHostModal
-        isOpen={editingHost != null}
-        editingHost={editingHost}
-        onClose={() => {
-          if (!updateMutation.isPending) setEditingHost(null);
-        }}
-        onSubmit={handleEditSubmit}
-        isSubmitting={updateMutation.isPending}
-      />
+      {hostModals}
 
       <HostHotUpdateConfirmDialog
         hostId={pendingHotUpdateHostId}

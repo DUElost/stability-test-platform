@@ -336,6 +336,8 @@ export default function NotificationsPage() {
             <Button
               onClick={() => { setEditingRule(null); setRuleForm({ name: '', event_type: 'RUN_FAILED', channel_id: channels[0]?.id || 0, enabled: true }); setShowRuleForm(true); }}
               disabled={channels.length === 0}
+              // D7：禁用却不给原因，用户只会以为按钮坏了
+              title={channels.length === 0 ? '请先创建一个通知渠道' : undefined}
             >
               <Plus size={16} /> 添加规则
             </Button>
