@@ -15,6 +15,21 @@ REQUIRED=(
   pr-migrate-empty-db
 )
 
+# updatePullRequestBranch 带 expectedHeadOid：并发 reconcile 中落败方会被拒
+# （GraphQL: head sha didn't match the current head ref，见 run 33269782605）。
+# 该错误意味着别的 run 已经把 main 合进来了 —— 本轮目标已达成，按无害处理，
+# 别把竞态刷成红 X。其余失败原样返回非零，交给 set -e 让 job 变红。
+update_branch_tolerant() {
+  local num="$1" out rc=0
+  out="$(gh pr update-branch "$num" --repo "$REPO" 2>&1)" || rc=$?
+  printf '%s\n' "$out"
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi "didn't match the current head ref"; then
+    echo "update-branch on #${num} lost the head-sha race; another run already updated it."
+    return 0
+  fi
+  return "$rc"
+}
+
 pr_json="$(
   gh pr list --repo "$REPO" --head "$BRANCH" --state open \
     --json number,autoMergeRequest,statusCheckRollup,headRefOid \
@@ -59,4 +74,4 @@ if [ "$behind" -eq 0 ]; then
 fi
 
 echo "PR #${num} is ${behind} commit(s) behind main; updating branch."
-gh pr update-branch "$num" --repo "$REPO"
+update_branch_tolerant "$num"
