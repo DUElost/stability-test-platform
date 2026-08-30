@@ -30,13 +30,20 @@ import { formatTimeFromDate } from '@/utils/format';
 export default function Dashboard() {
   const navigate = useNavigate();
 
-  const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
+  const {
+    data: summary,
+    isLoading: summaryLoading,
+    error: summaryError,
+    dataUpdatedAt: summaryUpdatedAt,
+  } = useQuery({
     queryKey: ['dashboard-summary'],
     queryFn: () => api.stats.dashboardSummary(),
     refetchInterval: 10000,
   });
 
-  const { lastUpdateTime } = useRealtimeDashboard(DASHBOARD_SUBSCRIPTION);
+  // WS 订阅仍需保留（实时事件驱动失效），但「更新于」不再取 WS 事件时间：
+  // 它与轮询数据无关，会出现「时间戳在动、数字没动」的错位（#498 D1）。
+  useRealtimeDashboard(DASHBOARD_SUBSCRIPTION);
 
   const { data: activityData, isLoading: activityLoading, error: activityError, refetch: refetchActivity } = useQuery({
     queryKey: ['stats-activity'],
@@ -132,7 +139,10 @@ export default function Dashboard() {
 
       <div className={`flex justify-end items-center text-sm ${TEXT.caption}`}>
         <Clock size={14} aria-hidden />
-        <span className="ml-2">更新于: {formatTimeFromDate(lastUpdateTime)}</span>
+        {/* 时间戳跟随 summary 数据的实际落库时刻，而非 WS 事件时刻（#498 D1） */}
+        <span className="ml-2">
+          更新于: {formatTimeFromDate(summaryUpdatedAt ? new Date(summaryUpdatedAt) : null)}
+        </span>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

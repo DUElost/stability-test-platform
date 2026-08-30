@@ -49,7 +49,11 @@ export default function LoginPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <div className={`flex items-center gap-2 p-3 text-sm rounded-md ${ALERT_BOX.destructive}`}>
+              <div
+                role="alert"
+                aria-live="assertive"
+                className={`flex items-center gap-2 p-3 text-sm rounded-md ${ALERT_BOX.destructive}`}
+              >
                 <AlertCircle className="w-4 h-4" />
                 {error}
               </div>

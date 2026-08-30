@@ -73,6 +73,18 @@ export default function PlanListPage() {
 
   const isProject404 = isError && toApiError(error).status === 404;
 
+  // D6：卡片徽章此前直接渲染 specialty_key 原始 key，而筛选下拉用 display_name，
+  // 同一概念两处文案对不上。取同一份字典（与 SpecialtyFilterSelect 共用
+  // ['specialties'] 缓存，不额外发请求）做展示名映射；字典未就绪时回落 key。
+  const { data: specialties } = useQuery({
+    queryKey: ['specialties'],
+    queryFn: () => api.plans.listSpecialties(),
+  });
+  const specialtyLabel = useMemo(() => {
+    const byKey = new Map((specialties ?? []).map((s) => [s.key, s.display_name]));
+    return (key: string) => byKey.get(key) ?? key;
+  }, [specialties]);
+
   const deleteMutation = useMutation({
     mutationFn: (plan: Plan) => api.plans.delete(plan.id, plan.updated_at),
     onSuccess: () => {
@@ -205,7 +217,13 @@ export default function PlanListPage() {
                     <ProjectKeyBadge projectKey={plan.project_key} />
                     {/* ADR-0029 D6（#405）：专项接线——有值才显示，避免噪音 */}
                     {plan.specialty_key && (
-                      <Badge variant="default" className="text-xs px-1.5 py-0.5">{plan.specialty_key}</Badge>
+                      <Badge
+                        variant="default"
+                        className="text-xs px-1.5 py-0.5"
+                        title={plan.specialty_key}
+                      >
+                        {specialtyLabel(plan.specialty_key)}
+                      </Badge>
                     )}
                     {plan.suite_name && (
                       <Badge variant="info" className="text-xs px-1.5 py-0.5" title="托管模式：已绑定套件">
