@@ -101,6 +101,18 @@ export const projectKeys = {
   summaryOf: (key: string | null | undefined) => ['project-summary', key ?? '*'] as const,
 } as const;
 
+/** ADR-0030 用例套件管理。 */
+export const suiteKeys = {
+  list: (projectKey?: string | null, q?: string | null) =>
+    ['test-suites', { projectKey: projectKey ?? null, q: q ?? null }] as const,
+  allLists: () => ['test-suites'] as const,
+  detail: (id: number) => ['test-suite', id] as const,
+  cases: (id: number, q?: string | null) =>
+    ['test-suite-cases', id, { q: q ?? null }] as const,
+  /** Plan 编辑器下拉缓存（usePlanEditForm）。 */
+  planEditor: () => ['suites-for-plan-editor'] as const,
+} as const;
+
 /** ADR-0031 平台 AI 助手。 */
 export const aiAssistantKeys = {
   config: () => ['ai-assistant-config'] as const,
