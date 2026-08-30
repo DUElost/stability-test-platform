@@ -118,3 +118,31 @@ groups:
           description: >-
             The session_watchdog APScheduler job reported errors.  Hosts may
             not be timed out correctly.  Check watchdog logs.
+
+  - name: stability-platform-silent-skips
+    rules:
+      # 稳态不该出现的桶（#518 教训：静默跳过只记日志无人盯 → 指标化）。
+      # merge_skip_no_org_files / merge_skip_failed_plan_run 是预期路径，只计数不告警。
+      - alert: StabilityMergeSkipToolNotConfigured
+        expr: increase(stability_merge_skip_tool_not_configured_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Merge skipped because scan tool not configured
+          description: >-
+            STP_BACKEND_DEDUP_SCAN_* missing → resolve_scan_tool() returned None
+            and merge silently skipped.  Check production .env.backend and run
+            tools/dev/check-deploy-readiness.py (required-env blocking check).
+
+      - alert: StabilityUnlinkedFixable
+        expr: increase(stability_unlinked_fixable_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Unlinked fixable signal observed
+          description: >-
+            Watcher-summary computed unlinked_fixable > 0 (#528 threshold).
+            A matching DLE exists yet the signal link is missing — check
+            signal_link_reconcile_done logs and backend/scheduler/signal_link_reconciler.py.

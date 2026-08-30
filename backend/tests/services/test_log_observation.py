@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 from uuid import uuid4
 
+from backend.core import metrics
 from backend.models.device_log_event import DeviceLogEvent
 from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan import Plan
@@ -221,9 +223,11 @@ def _add_dle(db_session, sample_device, job, now, signal_seq_no):
 
 
 def test_signal_link_stats_splits_unlinked_into_three_buckets(
-    db_session, sample_device,
+    db_session, sample_device, monkeypatch,
 ):
     """#528: 未链接集合必须拆成三类，且三桶之和守恒。"""
+    counter = MagicMock()
+    monkeypatch.setattr(metrics, "unlinked_fixable_total", counter)
     # uq_job_active_per_device：同一设备只允许一个在途 job，其余用终态
     job_a, now = _seed_job(db_session, sample_device)              # 无任何 DLE
     job_b, _ = _seed_job(db_session, sample_device, "COMPLETED")   # DLE 的 seq 不匹配
@@ -248,14 +252,18 @@ def test_signal_link_stats_splits_unlinked_into_three_buckets(
     assert stats["link_rate"] == 0.0
     # 告警口径：已链接 0 / (已链接 0 + 真故障 1)
     assert stats["fixable_link_rate"] == 0.0
+    # P1：unlinked_fixable > 0 → 非零即告警计数器自增
+    counter.inc.assert_called_once_with()
 
 
-def test_fixable_link_rate_ignores_not_yet_archived(db_session, sample_device):
+def test_fixable_link_rate_ignores_not_yet_archived(db_session, sample_device, monkeypatch):
     """#528 核心：只有「尚未归档」时，告警口径必须仍是 1.0。
 
     旧口径把这类 signal 算作失败，导致生产 link_rate 被压到 0.575，
     而这个数字无论怎么修链接逻辑都提不上去。
     """
+    counter = MagicMock()
+    monkeypatch.setattr(metrics, "unlinked_fixable_total", counter)
     job, now = _seed_job(db_session, sample_device)
     _add_aee_signal(db_session, sample_device, job, 1, now)
     db_session.commit()
@@ -267,3 +275,5 @@ def test_fixable_link_rate_ignores_not_yet_archived(db_session, sample_device):
     assert stats["unlinked_fixable"] == 0
     assert stats["link_rate"] == 0.0          # 旧口径误报为失败
     assert stats["fixable_link_rate"] == 1.0  # 告警口径：没有真故障
+    # P1：unlinked_fixable == 0 → 计数器不自增（不该触发告警）
+    counter.inc.assert_not_called()

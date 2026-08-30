@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from backend.core import metrics
 from backend.models.plan_run_artifact import PlanRunArtifact
 
 logger = logging.getLogger(__name__)
@@ -276,11 +277,13 @@ def run_merge_sync(
         db.close()
     if run is not None and run.status == PlanRunStatus.FAILED.value:
         logger.info("merge_skip_failed_plan_run plan_run=%d", plan_run_id)
+        metrics.merge_skip_failed_plan_run_total.inc()
         return ""
 
     tool = resolve_scan_tool()
     if tool is None:
         logger.warning("merge_skip_tool_not_configured plan_run=%d", plan_run_id)
+        metrics.merge_skip_tool_not_configured_total.inc()
         return ""
 
     org_files = _load_org_files_for_merge(
@@ -290,6 +293,7 @@ def run_merge_sync(
     )
     if not org_files:
         logger.warning("merge_skip_no_org_files plan_run=%d", plan_run_id)
+        metrics.merge_skip_no_org_files_total.inc()
         return ""
 
     side = os.getenv("STP_DEDUP_SCAN_TAG", "shanghai")

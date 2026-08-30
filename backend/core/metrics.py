@@ -384,6 +384,32 @@ log_signal_total = Counter(
     ['category']  # AEE / VENDOR_AEE / ANR / TOMBSTONE / MOBILELOG
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# dedup scan merge 静默跳过路径（#518 教训：配置缺失只记一条日志，没人盯 → 指标化）。
+# 前两个「非零即告警」（稳态不该出现）；no_org_files / failed_plan_run 是预期路径
+# （空产物自然跳过 / ADR-0028 显式门禁），只计数供阈值告警用。
+merge_skip_tool_not_configured_total = Counter(
+    'stability_merge_skip_tool_not_configured_total',
+    'Total merge skips because scan tool not configured (STP_BACKEND_DEDUP_SCAN_* missing)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+merge_skip_no_org_files_total = Counter(
+    'stability_merge_skip_no_org_files_total',
+    'Total merge skips because no org files for the round (expected on empty rounds)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+merge_skip_failed_plan_run_total = Counter(
+    'stability_merge_skip_failed_plan_run_total',
+    'Total merge skips because plan run FAILED (ADR-0028 intended gate, not a defect)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# #528 链接健康：unlinked_fixable 稳态不该出现。注意：唯一计算点是 GET
+# watcher-summary 路由，计数随前端轮询重复自增——绝对值无意义，仅用于
+# increase(...)>0 非零告警；不要据此推导「出现次数」。
+unlinked_fixable_total = Counter(
+    'stability_unlinked_fixable_total',
+    'Total watcher-summary computations observing unlinked_fixable > 0 (GET-triggered)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # AEE db_history reconciler (Watcher 收编 AEE — D2 hash-skip / burst)
 reconciler_skip_unchanged_total = Counter(
     'stability_reconciler_skip_unchanged_total',

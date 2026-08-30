@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backend.core import metrics
 from backend.services import dedup_scan as ds
 
 
@@ -107,9 +108,12 @@ def test_run_merge_sync_raises_when_subprocess_stderr_has_error(tmp_path):
             ds.run_merge_sync(99)
 
 
-def test_run_merge_sync_skips_failed_plan_run(db_session, sample_plan_run):
+def test_run_merge_sync_skips_failed_plan_run(db_session, sample_plan_run, monkeypatch):
     """ADR-0028 D2: FAILED PlanRun must not merge even with scan artifacts present."""
     from backend.models.enums import PlanRunStatus
+
+    failed_counter = MagicMock()
+    monkeypatch.setattr(metrics, "merge_skip_failed_plan_run_total", failed_counter)
 
     sample_plan_run.status = PlanRunStatus.FAILED.value
     db_session.commit()
@@ -119,6 +123,33 @@ def test_run_merge_sync_skips_failed_plan_run(db_session, sample_plan_run):
 
     with patch.object(ds, "resolve_scan_tool", side_effect=_must_not_resolve_tool):
         assert ds.run_merge_sync(sample_plan_run.id) == ""
+    # P1：跳过路径计数（failed_plan_run 是预期门禁，计数不告警）
+    failed_counter.inc.assert_called_once_with()
+
+
+def test_run_merge_sync_skips_when_tool_not_configured(
+    db_session, sample_plan_run, monkeypatch,
+):
+    """#518: STP_BACKEND_DEDUP_SCAN_* 缺失 → 静默跳过；P1 非零即告警计数。"""
+    tool_counter = MagicMock()
+    monkeypatch.setattr(metrics, "merge_skip_tool_not_configured_total", tool_counter)
+
+    with patch.object(ds, "resolve_scan_tool", return_value=None):
+        assert ds.run_merge_sync(sample_plan_run.id) == ""
+
+    tool_counter.inc.assert_called_once_with()
+
+
+def test_run_merge_sync_skips_no_org_files(db_session, sample_plan_run, monkeypatch):
+    """无本轮 org 文件 → 静默跳过（空产物自然跳过，计数不告警）。"""
+    no_files_counter = MagicMock()
+    monkeypatch.setattr(metrics, "merge_skip_no_org_files_total", no_files_counter)
+
+    tool = {"python": "python", "script": "/tmp/start_log_scan.py"}
+    with patch.object(ds, "resolve_scan_tool", return_value=tool):
+        assert ds.run_merge_sync(sample_plan_run.id) == ""
+
+    no_files_counter.inc.assert_called_once_with()
 
 
 def test_count_hosts_with_scan_artifacts_scopes_to_since_watermark(
