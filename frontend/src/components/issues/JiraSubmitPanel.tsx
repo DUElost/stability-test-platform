@@ -43,7 +43,9 @@ export default function JiraSubmitPanel() {
   const [planRuns, setPlanRuns] = useState<PlanRun[]>([]);
   const [artifacts, setArtifacts] = useState<ScanArtifact[]>([]);
   const [loadingArtifacts, setLoadingArtifacts] = useState(false);
-  const [jiraProjectKey, setJiraProjectKey] = useState<string | null | undefined>(undefined);
+  const [jiraProjectKey, setJiraProjectKey] = useState<string | null>(null);
+  const [jiraProjectKeyLoading, setJiraProjectKeyLoading] = useState(false);
+  const showJiraKeyPreview = source === 'plan_run' && planRunId !== '';
 
   useEffect(() => {
     if (source !== 'plan_run') return;
@@ -53,24 +55,38 @@ export default function JiraSubmitPanel() {
   }, [source]);
 
   useEffect(() => {
-    if (source !== 'plan_run' || planRunId === '') {
-      setJiraProjectKey(undefined);
-      return;
-    }
+    if (!showJiraKeyPreview) return;
+
+    let cancelled = false;
     const run = planRuns.find((r) => r.id === Number(planRunId));
     const projectKey = run?.project_key;
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 拉取 effect 的同步 loading 置位
+    setJiraProjectKeyLoading(true);
+
     if (!projectKey) {
-      setJiraProjectKey(null);
-      return;
+      void Promise.resolve().then(() => {
+        if (!cancelled) {
+          setJiraProjectKey(null);
+          setJiraProjectKeyLoading(false);
+        }
+      });
+      return () => { cancelled = true; };
     }
-    let cancelled = false;
+
     api.projects.get(projectKey).then((project) => {
-      if (!cancelled) setJiraProjectKey(project.jira_project_key ?? null);
+      if (!cancelled) {
+        setJiraProjectKey(project.jira_project_key ?? null);
+        setJiraProjectKeyLoading(false);
+      }
     }).catch(() => {
-      if (!cancelled) setJiraProjectKey(null);
+      if (!cancelled) {
+        setJiraProjectKey(null);
+        setJiraProjectKeyLoading(false);
+      }
     });
     return () => { cancelled = true; };
-  }, [source, planRunId, planRuns]);
+  }, [showJiraKeyPreview, planRunId, planRuns]);
 
   const artifactQueryKey = `${source}|${planRunId}`;
   const [prevArtifactQueryKey, setPrevArtifactQueryKey] = useState(artifactQueryKey);
@@ -294,9 +310,11 @@ export default function JiraSubmitPanel() {
         </div>
       )}
 
-      {source === 'plan_run' && planRunId !== '' && jiraProjectKey !== undefined && (
+      {showJiraKeyPreview && (
         <p className={FORM.hint} data-testid="jira-project-key-preview">
-          {jiraProjectKey ? (
+          {jiraProjectKeyLoading ? (
+            '加载 JIRA 项目键…'
+          ) : jiraProjectKey ? (
             <>
               JIRA 项目键（将自动注入）：
               <span className="ml-1 font-mono">{jiraProjectKey}</span>
