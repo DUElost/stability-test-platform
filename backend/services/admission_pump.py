@@ -456,6 +456,35 @@ def _mismatched_entries_for_push(
     return entries
 
 
+async def _annotate_unreachable(unreachable: list[dict], run_id: int) -> None:
+    """#491 —— 给 host_unreachable blocker 补「心跳 vs SocketIO」双通道诊断。
+
+    SocketIO room 键为 ``agent:{HOST_ID}``，与 HTTP 心跳是两条独立通道：
+    HOST_ID 失配时 RPC 恒报 ``agent_offline``，而心跳依旧新鲜，此前会静默
+    requeue 循环且零告警（PlanRun #247）。这里只补诊断字段 + 打 ERROR，
+    **不改判定、不改 requeue 语义**。
+    """
+    if not unreachable:
+        return
+
+    import asyncio
+
+    from backend.services.precheck import reachability
+
+    host_ids = [str(entry["host_id"]) for entry in unreachable]
+
+    def _diagnose() -> dict:
+        with SessionLocal() as db:
+            return reachability.diagnose_unreachable_hosts(db, host_ids)
+
+    diagnostics = await asyncio.to_thread(_diagnose)
+    reachability.log_unreachable_conflicts(diagnostics, plan_run_id=run_id)
+    for entry in unreachable:
+        diag = diagnostics.get(str(entry["host_id"]))
+        if diag:
+            entry["reachability"] = diag
+
+
 async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:
     """Script sha256 verify (+ one hot-update sync retry on mismatch).
 
@@ -491,6 +520,8 @@ async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:
         for hid, (ok, _res, err) in results.items()
         if not ok and _is_unreachable(err)
     ]
+    await _annotate_unreachable(unreachable, run_id)
+
     mismatched_hosts: dict[str, list[dict]] = {}
     unmapped_hosts: list[str] = []
     for hid, (ok, res, err) in results.items():
@@ -551,9 +582,9 @@ async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:
                 elif _is_unreachable(err):
                     # Agent went offline between push and reverify — transient,
                     # NOT a contract failure. Requeue instead of FAILED.
-                    unreachable.append(
-                        {"host_id": hid, "reason": "host_unreachable", "error": err}
-                    )
+                    entry = {"host_id": hid, "reason": "host_unreachable", "error": err}
+                    unreachable.append(entry)
+                    await _annotate_unreachable([entry], run_id)
                     mismatched_hosts.pop(hid, None)
                 else:
                     still_mismatched.append(hid)
