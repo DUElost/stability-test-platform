@@ -120,31 +120,60 @@ Dependabot 提 `requirements.txt` / `requirements-dev.txt` 变更后，必须两
   拼接漏换行产生的 `## This file...`，漏网会重生成出两份 uv 头部。两种形态
   都实测过。
 
-### 运行时 lock 为什么没一起自动化
+### 运行时 lock：先搁置，随后发现风险评估错了，同日补做
 
-`requirements.lock` 是**生产镜像**的输入，两个方向都走不通：
+**第一版判断（搁置）**：`requirements.lock` 是**生产镜像**的输入，两个方向
+都走不通 —— 保持 pip-tools 则 CI 跑不动（30 分钟）；改用 uv 则解析结果差 18
+个包、含两个 major，而这份 lock 在 CI 里只被 `docker-build` 装一次、不跑测试，
+「major 兼容性没有自动验证兜得住」。于是只做「留评论 + 标红」，不自动化。
 
-1. **保持 pip-tools**：实测这份输入 30 分钟未完成，复测 5m39s 仍在跑
-   （CPU 近乎空转，卡在顺序请求每个候选版本的元数据）。CI 里不可用。
-2. **改用 uv**：能秒出，但解析结果与现有 lock 差 18 个包，含
-   `cryptography` 49→50、`websockets` 16→17 两个 major。而这份 lock 在 CI
-   里只被 `docker-build` 装一次（不跑测试），major 变更的兼容性**没有任何
-   自动验证能兜住**。
+**这个判断错在哪**：把 uv 的解析结果当成了「没测过的新版本」。但
+`requirements-dev.lock` 包含 `-r requirements.txt`，**CI 每个 backend-test
+装的就是它** —— 也就是说 uv 解析出的那 18 个新版本，自 #566 合入起就已经是
+nightly 全量测试的安装源了（3132 个测试连跑数日全绿）。
 
-所以 workflow 对 `requirements.txt` 变更只做一件事：留评论 + 把 job 标红，
-把「需要人工动作」摆到 PR 上，而不是等 main 变红。它**不在** required
-checks 里 —— 不阻塞 auto-merge，只是红灯可见。
+于是真实的风险面是反的：
 
-历史上有先例：#247 里 Dependabot 只改 manifest，是 DUElost 手动 push 了
-`chore: regenerate requirements.lock under py3.11` 才补上的。这次自动化掉的
-正是这类手动往返。
+| | 迁移前 | 迁移后 |
+|---|---|---|
+| 生产镜像 | cryptography 49.0.0 | 50.0.1 |
+| CI 在测 | 50.0.1 | 50.0.1 |
+| | ❌ **生产跑的是 CI 不测的版本** | ✅ 一致 |
+
+**不是迁移引入未验证版本，而是迁移消掉了一个已经开了几天的分叉。**
+
+**补做（同日）**：
+- 用 uv 重新生成 `requirements.lock`（`--upgrade` 全新解析），结果与 CI 的
+  dev lock **75 个包零差异**；
+- 头部改写为 uv 的生成说明（并保留「为什么不用 pip-tools」的实测数据）；
+- `tests/test_requirements_lock.py` 两处适配：py3.11 断言接受 uv 写法；
+  `_lock_direct_names()` 改用**文件名子串**匹配 —— uv 从仓库根跑会让来源标记
+  带上 `backend/` 前缀，精确匹配会把所有包误判成非直接依赖。
+- workflow 改名为 `regenerate-locks.yml`，两份 lock 一起重生成。
+
+### ⚠️ uv 会沿用已有 pin（差点让迁移变成空操作）
+
+uv 与 pip-tools 一样：**输出文件里已有的 pin 会被保留**，只在必要时才动。
+第一次对已存在的 `requirements.lock` 跑 `uv pip compile`，得到的是
+`cryptography 49.0.0` —— 迁移看起来「成功」了，实际一个版本都没变，分叉
+照旧。（同一次会话里往一个不存在的输出文件跑，立刻得到 50.0.1，差异就是这么
+暴露出来的。）
+
+所以 `scripts/ci/regenerate-lock.sh`：
+- **默认不带 `--upgrade`**：沿用已有 pin。Dependabot 改一个包就只动那一个包 ——
+  这正是自动补 lock 想要的，否则每次都把区间内所有包刷到最新，diff 巨大。
+- **`--upgrade` 只用于有意的对齐**（这次迁移就是），会一次性改动多个包。
+
+这个语义已经写进脚本抬头和 AGENTS.md，别默认加上。
 
 ## Revisit
 
-- **运行时 lock 迁移到 uv**（本 note 未做，是下一步）：先拿 uv 的解析结果
-  在 py3.11 环境里跑通 `backend/tests/`（而不是只靠 docker-build 装成功），
-  验证通过后再切。切完即可把 runtime 也接进同一个 workflow 自动重生成。
-  迁移前先看 issue 里有没有对应的跟踪条目，没有就开一个。
+- **生产镜像的部署验证**（本 note 未覆盖）：迁移只验到「py3.11 容器里
+  `--require-hashes` 装通 + 全量导入 OK + 3132 个测试在同样版本下通过」。
+  真正上线前仍应在预发布环境按
+  `docs/production-minimum-deployment-checklist.md` 走一遍 —— 尤其
+  `starlette` 1.3→1.6、`websockets` 16→17 这两个 major 是运行时行为相关
+  的，测试覆盖不到的路径（长连接、SocketIO 心跳）值得手工过一遍。
 - 若 dev lock 的维护（每次依赖升级多跑一条 compile）实际比预想烦，退回方案 A，
   并在本报告记录回归原因。
 - 若 CI 与本地的依赖差异造成困惑（本地绿/CI 红，或反之），改为让本地也

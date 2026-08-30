@@ -1,0 +1,94 @@
+name: Regenerate locks
+
+# 背景（2026-08-30 事故）：
+#   Dependabot 提 #577 把 pytest-cov 约束从 >=6.0 改成 >=7.1.0，只改了
+#   backend/requirements-dev.txt、**没重新生成 lock**。PR 阶段不跑 tests/，
+#   所以 PR 全绿合入；当天 main 全量 CI 红在
+#   test_lock_digest_matches_requirements —— 守卫生效了，但红灯出现在合入
+#   之后、由夜间 job 兜底发现，排查时上下文已切走。
+#
+# 本 workflow 把「重新生成 lock」接进 Dependabot PR 本身：锁变更随 PR 一起
+# 进 CI 验证，不再等到 main 变红。
+#
+# 两份 lock 都在这里重生成（uv 秒级，成本可忽略）：
+#   requirements.lock      生产镜像（Dockerfile.backend --require-hashes）
+#   requirements-dev.lock  CI 各 job（-r 拉进运行时再叠测试工具）
+#
+# 生成逻辑在 scripts/ci/regenerate-lock.sh（保留文档头部 + 打摘要）。
+# 关于 uv 会沿用已有 pin、何时该用 --upgrade，见该脚本抬头注释。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - backend/requirements.txt
+      - backend/requirements-dev.txt
+      - backend/requirements.lock
+      - backend/requirements-dev.lock
+
+# 同一 PR 连续 push 时只保留最新一轮，避免多次重生成互相覆盖。
+concurrency:
+  group: lock-regen-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  regenerate-locks:
+    # 只处理 Dependabot 的 PR：这是观测到的实际失效场景，且 blast radius
+    # 最小 —— 不往人类开的 PR 分支上偷偷 push commit（那个更该本地做，
+    # AGENTS.md 已写明「改了 requirements* 必须重新生成 lock」）。
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # 检出 PR 分支本身（不是 merge ref）—— 要往这个分支推 commit。
+          ref: ${{ github.head_ref }}
+          # 本 job 依赖推送权限，故**不能**像其他 job 那样置 false。
+          persist-credentials: true
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      # 顺序有意义：先运行时（生产镜像），再 dev（-r 拉进运行时再叠测试工具）。
+      # 两份都从**仓库根**生成，见脚本抬头注释。
+      #
+      # 不带 --upgrade：沿用已有 pin，Dependabot 改一个包就只动那一个包 ——
+      # 带上的话每次都会把区间内所有包刷到最新，diff 巨大且不可预测。
+      - name: Regenerate both locks
+        run: |
+          set -euo pipefail
+          bash scripts/ci/regenerate-lock.sh backend/requirements.txt \
+            backend/requirements.lock
+          bash scripts/ci/regenerate-lock.sh backend/requirements-dev.txt \
+            backend/requirements-dev.lock
+
+      # 幂等：没有变化就不提交。推送 commit 会再次触发本 workflow
+      # （paths 含两个 lock 文件），靠这里的 diff 检查终止循环。
+      - name: Commit and push if changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- backend/requirements.lock backend/requirements-dev.lock; then
+            echo "::notice::两份 lock 均已是最新，无需提交"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/requirements.lock backend/requirements-dev.lock
+          git commit -m "chore(deps): 重新生成 locks（Dependabot 只改了 manifest）
+
+          自动提交：本 PR 改了 backend/requirements*.txt 但未同步 lock，
+          由 regenerate-locks.yml 重新生成并 --stamp。
+          生成方式见各 lock 抬头（uv，按 py3.11 解析，沿用已有 pin）。"
+          git push origin "HEAD:${{ github.head_ref }}"
+          echo "::notice::已提交并推送 lock 更新"
