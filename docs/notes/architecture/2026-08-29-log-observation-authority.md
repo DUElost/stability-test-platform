@@ -1,7 +1,7 @@
 # 日志观测权威边界（#527）
 
-- **日期**：2026-08-29
-- **关联**：Epic [#527](https://github.com/DUElost/stability-test-platform/issues/527)；前任 #519 / PR #524
+- **日期**：2026-08-29（2026-08-30 Epic 收口）
+- **关联**：Epic [#527](https://github.com/DUElost/stability-test-platform/issues/527)；前任 #519 / PR #524；#528 PR #595；#529 终态 `log-events` + `LogEventsCard`
 
 ## 决定了什么
 
@@ -12,7 +12,8 @@
   - `signal_link_reconcile` 周期 sweep 调 `link_signals_to_device_log_events_sync` 补链（#556 后；只读路由不补链）；
   - `archive.link_stats` 暴露 AEE/VENDOR_AEE 链接健康度（`link_rate` 为粗口径；
     告警用 `fixable_link_rate`，口径见 `docs/notes/feature/2026-08-30-signal-link-stats-three-way-split.md`）；
-  - 新增 `GET /plan-runs/{id}/log-events` 终态 DLE 视图；
+  - 前端 `ArchiveStatusCard` 展示三桶拆分与 `fixable_link_rate` 健康条（#528）；
+  - 新增 `GET /plan-runs/{id}/log-events` 终态 DLE 视图 + `LogEventsCard`（#529）；
   - 设计文档 §5 消费方矩阵。
 
 ## 放弃的备选
@@ -29,3 +30,12 @@
 
 - reconciler 路径 signal↔DLE 链接率长期 < 目标阈值；
 - 需把 RUNNING `abnormal_rate` 改读 DLE 时（须先证明链接 100% 且延迟可接受）。
+
+## 运维告警阈值（#528，2026-08-30 定稿）
+
+| 指标 | 阈值 | 动作 |
+|------|------|------|
+| `fixable_link_rate` | `< 1.0` | ERROR：查 `signal_link_reconcile` sweep、`link_signals_to_device_log_events_sync` |
+| `unlinked_fixable` | `> 0` | 同上（与上式等价，适合按计数告警） |
+| `not_yet_archived` | 无链接告警 | 仅归档及时性；事件仍在 Agent 本地，非链接故障 |
+| `link_rate` | 不设阈值 | 参考口径，含未归档会恒偏低 |

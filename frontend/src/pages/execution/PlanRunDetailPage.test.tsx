@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   getEvents: vi.fn(),
   getDevices: vi.fn(),
   getWatcherSummary: vi.fn(),
+  getLogEvents: vi.fn().mockResolvedValue({
+    plan_run_id: 12, data_authority: 'device_log_event', total: 0, items: [],
+  }),
   getChain: vi.fn(),
   abort: vi.fn(),
   manualRetryJob: vi.fn(),
@@ -54,6 +57,7 @@ vi.mock('@/utils/api', () => ({
       getEvents: mocks.getEvents,
       getDevices: mocks.getDevices,
       getWatcherSummary: mocks.getWatcherSummary,
+      getLogEvents: mocks.getLogEvents,
       getChain: mocks.getChain,
       abort: mocks.abort,
       manualRetryJob: mocks.manualRetryJob,
@@ -555,6 +559,9 @@ describe('PlanRunDetailPage', () => {
     expect(screen.queryByTestId('precheck-row')).not.toBeInTheDocument();
     // Hero should NOT render the abort button on terminal runs.
     expect(screen.queryByTestId('plan-run-abort-btn')).not.toBeInTheDocument();
+    // #529：终态 PlanRun 展示 DLE 归档卡
+    await waitFor(() => expect(mocks.getLogEvents).toHaveBeenCalled());
+    expect(screen.getByTestId('log-events-card')).toBeInTheDocument();
   });
 
   it('keeps precheck summary visible for active runs after precheck ready', async () => {

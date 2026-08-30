@@ -15,6 +15,7 @@ import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
 import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
 import ArchiveStatusCard from '@/components/plan-run/ArchiveStatusCard';
 import DedupReportCard from '@/components/plan-run/DedupReportCard';
+import LogEventsCard from '@/components/plan-run/LogEventsCard';
 import PrecheckSummaryRow from '@/components/plan-run/PrecheckSummaryRow';
 import {
   AlertDialog,
@@ -329,11 +330,15 @@ export default function PlanRunDetailPage() {
 
             <ArchiveStatusCard
               opsMetrics={watcherQ.data?.archive?.ops_metrics}
+              linkStats={watcherQ.data?.archive?.link_stats}
               scanStatus={watcherQ.data?.archive?.scan_status}
               isLoading={watcherQ.isLoading}
               isError={watcherQ.isError}
               onRetry={() => void watcherQ.refetch()}
             />
+
+            {/* #529：终态 DLE 事件视图（归档权威）。RUNNING 不渲染，见组件 gate。 */}
+            {isTerminal && <LogEventsCard runId={id} isTerminal />}
 
             <DedupReportCard
               runId={id}
