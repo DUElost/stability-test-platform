@@ -205,3 +205,40 @@ def test_count_hosts_with_scan_artifacts_scopes_to_since_watermark(
     ).delete()
     db_session.commit()
     assert ds.count_hosts_with_scan_artifacts(run_id, ["host-a"], since=watermark) == 0
+
+
+# ── merge 产物中心化（2026-08-31）────────────────────────────────────
+
+class TestPublishMergeToCenter:
+    def test_publishes_to_center_dedup_merge(self, tmp_path, monkeypatch):
+        merge_dir = tmp_path / "merge_result" / "2026_08_30_22_18_02"
+        merge_dir.mkdir(parents=True)
+        (merge_dir / "Result_MergeFiles.xls").write_text("x", encoding="utf-8")
+        (merge_dir / "statistics.txt").write_text("s", encoding="utf-8")
+        center = tmp_path / "center"
+        center.mkdir()
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+
+        dest = ds._publish_merge_to_center(270, merge_dir)
+        assert dest is not None
+        assert dest == center / "dedup" / "270" / "merge"
+        assert (dest / "Result_MergeFiles.xls").is_file()
+        assert (dest / "statistics.txt").is_file()
+
+    def test_returns_none_when_center_unconfigured(self, tmp_path, monkeypatch):
+        merge_dir = tmp_path / "merge_result" / "d1"
+        merge_dir.mkdir(parents=True)
+        (merge_dir / "Result_MergeFiles.xls").write_text("x", encoding="utf-8")
+        monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
+        assert ds._publish_merge_to_center(270, merge_dir) is None
+
+    def test_publish_is_idempotent_overwrite(self, tmp_path, monkeypatch):
+        merge_dir = tmp_path / "merge_result" / "d2"
+        merge_dir.mkdir(parents=True)
+        (merge_dir / "Result_MergeFiles.xls").write_text("new", encoding="utf-8")
+        center = tmp_path / "center"
+        center.mkdir()
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+        ds._publish_merge_to_center(270, merge_dir)
+        dest = ds._publish_merge_to_center(270, merge_dir)  # 重跑覆盖
+        assert (dest / "Result_MergeFiles.xls").read_text(encoding="utf-8") == "new"

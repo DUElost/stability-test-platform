@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from datetime import datetime
@@ -355,13 +356,22 @@ def run_merge_sync(
         logger.exception("merge_output_validation_failed plan_run=%d", plan_run_id)
         raise
 
+    # ── merge 产物中心化（2026-08-31）：工具固定输出到本机
+    # {工具目录}/merge_result/{ts}/——但 artifact 应指向中心持久路径
+    # （设计 adr-0025: `{CIFS}/dedup/{plan_run_id}/merge/`）。发布到中心后
+    # 注册中心路径；中心未配置（无 STP_AEE_NFS_ROOT）时回退本机路径。
+    published = _publish_merge_to_center(plan_run_id, latest)
+
     try:
         from backend.core.database import SessionLocal
 
         inner_db = SessionLocal()
         try:
-            n = _register_merge_artifacts(inner_db, plan_run_id, latest)
-            logger.info("merge_artifacts_registered plan_run=%d count=%d dir=%s", plan_run_id, n, latest)
+            n = _register_merge_artifacts(inner_db, plan_run_id, published or latest)
+            logger.info(
+                "merge_artifacts_registered plan_run=%d count=%d dir=%s",
+                plan_run_id, n, published or latest,
+            )
         finally:
             inner_db.close()
     except Exception:
@@ -544,6 +554,32 @@ def reset_merge_capability_cache_for_tests() -> None:
     """测试专用：清 -merge_files_list 探测缓存。"""
     global _merge_files_list_supported
     _merge_files_list_supported = None
+
+
+def _publish_merge_to_center(plan_run_id: int, merge_dir: Path) -> "Path | None":
+    """把工具本机 merge_result 产物发布到中心 ``dedup/{run_id}/merge/``。
+
+    工具（start_log_scan.py）固定输出到控制面本机
+    ``{工具目录}/merge_result/{ts}/``——但 artifact 应指向中心持久路径
+    （设计 adr-0025: ``{CIFS}/dedup/{plan_run_id}/merge/``）。发布 = 拷贝
+    产物到中心并返回中心目录；中心未配置（无 ``STP_AEE_NFS_ROOT``）时
+    返回 None（调用方回退注册本机路径——历史行为）。
+    """
+    from backend.core.storage_root import resolve_shared_storage_root
+
+    root = resolve_shared_storage_root()
+    if not root:
+        logger.warning("merge_publish_skip_no_center plan_run=%d", plan_run_id)
+        return None
+    dest = Path(root) / "dedup" / str(plan_run_id) / "merge"
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(merge_dir, dest, dirs_exist_ok=True)
+    except OSError:
+        logger.exception("merge_publish_failed plan_run=%d dest=%s", plan_run_id, dest)
+        return None
+    logger.info("merge_published plan_run=%d dest=%s", plan_run_id, dest)
+    return dest
 
 
 def _register_merge_artifacts(db: Session, plan_run_id: int, merge_dir: Path) -> int:

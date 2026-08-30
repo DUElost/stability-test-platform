@@ -132,7 +132,7 @@ sequenceDiagram
 | 按需事件 | `{CIFS}/devices/{plan_run_id}/{dirname}/` |
 | 溢出事件 | 有 `plan_run_id` 同上；否则 `{CIFS}/devices/unassigned/{event_id}/{dirname}/` |
 | 各 host scan | `{CIFS}/dedup/{plan_run_id}/{host_id}_Result_*_org.xls`（平铺，非 host 子目录） |
-| merge | `{CIFS}/dedup/{plan_run_id}/merge/`（或现网 `jira/` 旁的 merge 产物，以控制面 `dedup_scan` 为准） |
+| merge | `{CIFS}/dedup/{plan_run_id}/merge/`（控制面 merge 后发布；extract 另拷贝一份至 `jira/{plan_run_id}/`） |
 | 提单/extract | `{CIFS}/jira/{plan_run_id}/` |
 | 运行日志 | Agent SSD `logs/runs/{job_id}/` only |
 
