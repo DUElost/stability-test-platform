@@ -136,7 +136,9 @@ class TestRunJiraDraftProjectKey:
         db_session.flush()
         plan_run = PlanRun(
             plan_id=plan.id,
-            project_id=plan_run_project_id,
+            # 传入 plan_run_project_id 时用新建项目的真实 id（硬编码数字会
+            # 撞上 GENERIC 哨兵占位 id）
+            project_id=(project.id if project else plan_run_project_id),
             status="SUCCESS",
             failure_threshold=0.05,
             plan_snapshot={"name": plan.name, "plan_id": plan.id},

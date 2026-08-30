@@ -124,9 +124,11 @@ class TestListDevices:
 
         response = client.get("/api/v1/devices", headers=auth_headers)
         data = response.json()
-        ids = [d["id"] for d in data]
-        assert ids == sorted(ids)
-        serials = {d["serial"] for d in data}
+        # 接口按 last_seen DESC NULLS LAST 排序——新设备 last_seen 全 NULL，
+        # NULL 组内顺序 PG 不保证。断言集合与去重，不依赖 NULL 组内顺序。
+        serials = [d["serial"] for d in data]
+        assert all(s in serials for s in created_serials)
+        assert len(serials) == len(set(serials))
         assert set(created_serials).issubset(serials)
 
     def test_list_devices_status_offline_when_host_offline(
