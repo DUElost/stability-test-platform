@@ -130,8 +130,15 @@ reconcile（~10s job，concurrency group 仍串行）。cron 保留作低频兜�
 （默认 setup 的 run 根本不触发 workflow_run，无从放宽）；把 reconcile 塞进
 `main-ci-backstop.yml`（每天一次太稀疏，且混进与队列无关的职责）。
 
-验证：合入后观察下一次 main 前进——应出现 event=push 的 `Enable auto-merge`
-run，并在队首全绿且 BEHIND 时执行 update-branch。
+验证与证伪：`on: push` 实测**无效**——#589 于 11:43:18Z 合入（main 前进到
+`2e75d2d`）后，`--branch main` 查不到任何 push 事件的 `Enable auto-merge` run。
+即 auto-merge 的 merge commit 不触发自定义 workflow 的 push 事件（与
+`pull_request closed` 被抑制同源）。
+
+最终采用：**只靠 cron，但把频率从 `*/10` 降到每小时 `23 * * * *`**。依据是
+高频调度被节流、低频调度实测可靠——`main-ci-backstop.yml` 的每日 cron 连续多日
+每次都触发（延迟几分钟到 2 小时），而 `*/10` 在 25.6h 内只兑现 4 次。取 23 分
+而非整点以避开 GitHub 的整点调度高峰。
 
 ## Revisit
 
