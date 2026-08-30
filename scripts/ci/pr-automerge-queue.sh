@@ -37,29 +37,11 @@ update_branch_tolerant() {
   return "$rc"
 }
 
-# PR 含 .github/workflows/ 变更时，pull_request 触发的 run 会停在 action_required，
-# 直至维护者点 Approve。队首 sync main 后常批量出现（#570 实测）；reconcile 代为批准。
+# PR 含 .github/workflows/ 变更时，pull_request 触发的 run 会停在 action_required；
+# reconcile 与 pull_request_target workflow 代为批准（见 approve-pending-workflow-runs.sh）。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 approve_pending_workflow_runs() {
-  local branch="$1" runs_json count encoded_branch
-  encoded_branch="$(printf '%s' "$branch" | jq -sRr @uri)"
-  runs_json="$(
-    gh api "repos/${REPO}/actions/runs?status=action_required&head_branch=${encoded_branch}&per_page=30" \
-      2>/dev/null || echo '{"workflow_runs":[]}'
-  )"
-  count="$(jq '(.workflow_runs // []) | length' <<<"$runs_json")"
-  if ! [[ "$count" =~ ^[0-9]+$ ]] || [ "$count" -eq 0 ]; then
-    echo "No workflow runs awaiting approval on branch ${branch}."
-    return 0
-  fi
-  echo "Found ${count} workflow run(s) awaiting approval on ${branch}."
-  while IFS=$'\t' read -r run_id run_name; do
-    [ -z "$run_id" ] && continue
-    if gh api "repos/${REPO}/actions/runs/${run_id}/approve" -X POST >/dev/null 2>&1; then
-      echo "Approved workflow run ${run_id} (${run_name})."
-    else
-      echo "Failed to approve workflow run ${run_id} (${run_name}); check actions:write on GITHUB_TOKEN."
-    fi
-  done < <(jq -r '(.workflow_runs // [])[] | "\(.id)\t\(.name)"' <<<"$runs_json")
+  bash "${SCRIPT_DIR}/approve-pending-workflow-runs.sh" "$1"
 }
 
 owner="${REPO%/*}"
@@ -105,7 +87,9 @@ for row in "${filtered[@]}"; do
   fi
 done
 if [ -n "$head_ref" ]; then
-  approve_pending_workflow_runs "$head_ref"
+  for row in "${filtered[@]}"; do
+    approve_pending_workflow_runs "$(jq -r '.headRefName' <<<"$row")"
+  done
 fi
 
 for row in "${filtered[@]}"; do
