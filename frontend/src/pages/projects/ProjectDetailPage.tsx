@@ -17,6 +17,7 @@ import {
   Smartphone,
   FileBox,
   ListTodo,
+  Link2,
   TicketCheck,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -204,17 +205,45 @@ export default function ProjectDetailPage() {
               这是 P1 脚本灌入的回填标签，不能代表客户、项目或机型。请在工作台新建人工项目并映射型号。
             </p>
           ) : null}
+        </CardContent>
+      </Card>
+
+      {/* 归属规则（规则就是项目的定义本身——提为主块） */}
+      <Card data-testid="detail-rules">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium">
+            <Link2 size={16} className="text-muted-foreground" />
+            归属规则
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="py-3">
           {modelsQ.isLoading ? (
-            <Skeleton className="mt-2 h-5 w-64" />
+            <Skeleton className="h-10 w-full" />
           ) : modelsQ.data && modelsQ.data.length > 0 ? (
-            <p className={cn('mt-2 font-mono text-xs', TEXT.subtitle)} data-testid="hanging-models">
-              当前归属此项目的设备型号：{coverageSummary(modelsQ.data)}
-            </p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {modelsQ.data.map((row) => (
+                <Badge key={row.model ?? '__blank__'} variant="outline" className="font-mono text-xs">
+                  {row.model}
+                  <span className="ml-1 text-muted-foreground">{row.device_count}</span>
+                </Badge>
+              ))}
+              <span className="ml-1 text-xs text-muted-foreground" data-testid="hanging-models">
+                共 {coverageSummary(modelsQ.data)}
+              </span>
+            </div>
           ) : (
-            <p className={cn('mt-2 text-xs', TEXT.subtitle)} data-testid="hanging-models-empty">
+            <p className={cn('text-xs', TEXT.subtitle)} data-testid="hanging-models-empty">
               当前没有设备归属此项目
             </p>
           )}
+          <Button
+            variant="link"
+            size="sm"
+            className="mt-1 h-auto p-0 text-xs"
+            onClick={() => navigate('/projects')}
+          >
+            在项目登记簿维护归属规则（型号 → 项目映射）
+          </Button>
         </CardContent>
       </Card>
 
@@ -370,30 +399,6 @@ export default function ProjectDetailPage() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* JIRA 块 */}
-        <Card className="lg:col-span-2">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium">
-              <TicketCheck size={16} className="text-muted-foreground" />
-              JIRA 集成
-            </CardTitle>
-          </CardHeader>
-          <CardContent className={cn('text-sm', TEXT.subtitle)}>
-            {project.jira_project_key ? (
-              <p>
-                提交 JIRA 时将自动带出项目关键字{' '}
-                <span className="font-mono text-foreground">{project.jira_project_key}</span>
-                （plan_run 源提单已接入自动注入）。
-              </p>
-            ) : (
-              <p data-testid="jira-placeholder">
-                尚未配置 JIRA 项目关键字。管理员可通过右上角「编辑」填写；配置后
-                plan_run 源提单将自动带出该键。
-              </p>
             )}
           </CardContent>
         </Card>
