@@ -22,6 +22,14 @@ import psycopg
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# 删除兼容回落后必须存在的新键（#518：无前缀键回落删除后，生产只配旧键会
+# resolve_scan_tool() 返回 None → merge 静默跳过，报表缺失却照报 SUCCESS）。
+# 凡「删除兼容回落」的 PR 必须**同 PR**在此追加新键名；此处是阻塞项，缺失即部署失败。
+_REQUIRED_ENV_KEYS: tuple[str, ...] = (
+    "STP_BACKEND_DEDUP_SCAN_PYTHON",
+    "STP_BACKEND_DEDUP_SCAN_SCRIPT",
+)
+
 _UNBOUND_MTBF_SQL = """
 SELECT DISTINCT p.id, p.name
 FROM plan p
@@ -36,20 +44,31 @@ ORDER BY p.id
 def _database_url() -> str:
     url = (os.getenv("DATABASE_URL") or "").strip()
     if not url:
-        for name in (".env.backend", ".env"):
-            path = _REPO_ROOT / name
-            if not path.is_file():
-                continue
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if line.startswith("DATABASE_URL="):
-                    url = line.split("=", 1)[1].strip().strip('"')
-                    break
-            if url:
-                break
+        env = _load_env_file(_REPO_ROOT / ".env.backend")
+        url = (env.get("DATABASE_URL") or "").strip()
+        if not url:
+            env = _load_env_file(_REPO_ROOT / ".env")
+            url = (env.get("DATABASE_URL") or "").strip()
     if not url:
         raise SystemExit("DATABASE_URL not found in ambient env / .env.backend / .env")
     # psycopg.connect() needs plain postgresql:// (not +asyncpg / +psycopg / +psycopg2).
     return re.sub(r"^postgresql\+[^:]+://", "postgresql://", url, count=1)
+
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    """Parse a KEY=VALUE env file (handles ``export `` prefix and quotes)."""
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        k, _, v = line.partition("=")
+        out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
 
 
 def main() -> None:
@@ -63,6 +82,18 @@ def main() -> None:
 
     issues: list[str] = []
     url = _database_url()
+
+    # 阻塞项：删除兼容回落后必须存在的键（#518 教训——只配旧键 → merge 静默跳过）。
+    # 生效源 = ambient env 或仓库根 .env.backend（生产唯一 env 源）。
+    env_file = _load_env_file(_REPO_ROOT / ".env.backend")
+    missing = [k for k in _REQUIRED_ENV_KEYS if k not in os.environ and k not in env_file]
+    if missing:
+        issues.append(
+            "required env 键缺失（兼容回落已删，缺失即静默跳过 merge）："
+            + ", ".join(missing)
+        )
+    else:
+        print("[env] required keys present: " + ", ".join(_REQUIRED_ENV_KEYS))
 
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
