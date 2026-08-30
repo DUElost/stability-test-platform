@@ -141,6 +141,27 @@ export default function ProjectDetailPage() {
     },
   });
 
+  // 按规则重算存量归属（显式纠正——心跳不覆盖已归属设备）
+  const recomputeMutation = useMutation({
+    mutationFn: () => api.projects.recomputeRules(projectKey),
+    onSuccess: (data) => {
+      toast.success(`已按规则重算：${data.devices_moved} 台设备归位`);
+      void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectKey) });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.inventoryModels() });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.inventorySummary() });
+    },
+    onError: (error) => {
+      toast.error(`重算失败: ${toApiError(error).message || '请稍后重试'}`);
+    },
+  });
+
+  const handleRecompute = () => {
+    if (!window.confirm('按本项目的归属规则重算存量设备？未归属或归属错误的设备将归入本项目（钉住设备跳过）。')) {
+      return;
+    }
+    recomputeMutation.mutate();
+  };
+
   const handleArchive = () => {
     if (!window.confirm('归档此项目？归档后从活跃列表消失（历史 Run 与设备归属保留），可在列表用状态筛选查看。')) {
       return;
@@ -273,11 +294,21 @@ export default function ProjectDetailPage() {
 
       {/* 归属规则（规则就是项目的定义本身——提为主块） */}
       <Card data-testid="detail-rules">
-        <CardHeader className="pb-3">
+        <CardHeader className="flex items-center justify-between gap-2 pb-3">
           <CardTitle className="flex items-center gap-2 text-sm font-medium">
             <Link2 size={16} className="text-muted-foreground" />
             归属规则
           </CardTitle>
+          {isAdmin ? (
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="recompute-rules-open"
+              onClick={() => handleRecompute()}
+            >
+              按规则重算
+            </Button>
+          ) : null}
         </CardHeader>
         <CardContent className="py-3">
           {(project.match_models ?? []).length > 0 ? (

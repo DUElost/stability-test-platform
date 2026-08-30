@@ -1,12 +1,15 @@
 """项目归属解析（ADR-0029 P1）——规则表 → device.project_id 的唯一应用路径。
 
 分层：规则（project_device_rule，admin 显式声明）→ 解析（本模块）→
-应用（心跳 / 规则变更 / reconcile sweep）。解析是纯函数（只读规则表），
+应用（心跳 / 规则变更 / 显式重算）。解析是纯函数（只读规则表），
 应用点负责「何时写 device.project_id」：
 - 心跳：新建 Device 后 / model 变更后 / project_id IS NULL（稳态三个条件
   全不满足，零额外查询）
-- 规则变更（map/apply、规则删除）：受影响型号的设备重算
-- 夜间 sweep：兜底漂移检测（P1 阶段实现为记录，不自动改）
+- 规则变更（map/apply、规则删除）：只影响未来状态——已归属设备不重算
+  （心跳触发条件收窄）；需要纠正存量时用显式重算（routes/projects.py
+  的 POST /{key}/rules/recompute）
+- 漂移可见性：页面规则表（P0-4 的「规则目标 vs 实际」覆盖率）实时暴露
+  未收敛设备；无夜间 sweep（承诺已撤回——见 2026-08-31 审查 P0-1）
 
 pinned 语义：device.project_pinned = true 的设备**永不被规则覆盖**——人工
 钉住是唯一允许同型号拆两个项目的方式，显式可列出。
