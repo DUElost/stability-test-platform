@@ -10,7 +10,8 @@
 - **Phase 0（#524）**：风险评级 `log_observation.aggregate_risk_summary` 已 DLE 主 + unlinked signal 补洞。
 - **Phase 1（本批）**：
   - `signal_link_reconcile` 周期 sweep 调 `link_signals_to_device_log_events_sync` 补链（#556 后；只读路由不补链）；
-  - `archive.link_stats` 暴露 AEE/VENDOR_AEE 链接率；
+  - `archive.link_stats` 暴露 AEE/VENDOR_AEE 链接健康度（`link_rate` 为粗口径；
+    告警用 `fixable_link_rate`，口径见 `docs/notes/feature/2026-08-30-signal-link-stats-three-way-split.md`）；
   - 新增 `GET /plan-runs/{id}/log-events` 终态 DLE 视图；
   - 设计文档 §5 消费方矩阵。
 
