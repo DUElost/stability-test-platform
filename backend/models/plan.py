@@ -108,6 +108,9 @@ class PlanStep(Base):
     # 与 timeout_seconds 不同，0 是合法且有意义的（= 不启用）。启用的前提是
     # 该步骤脚本已接入 PROGRESS 打戳（#115 阶段 2）。
     stall_seconds   = Column(Integer, nullable=True)
+    # 步骤级 params（#508）：执行时覆盖脚本版本 default_params。NULL/{} = 纯
+    # default_params。可变不违反「版本即参数」——版本不可变仅约束 default_params。
+    params          = Column(JSONB, nullable=True)
     retry           = Column(Integer, nullable=False, default=0)
     enabled         = Column(Boolean, nullable=False, default=True, server_default="true")
     created_at      = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

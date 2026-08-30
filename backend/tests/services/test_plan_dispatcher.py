@@ -91,6 +91,48 @@ class TestBuildLifecycle:
         lifecycle = _build_lifecycle_from_steps(plan, steps, {("a", "1.0.0"): {}})
         assert [s["step_id"] for s in lifecycle["init"]] == ["enabled"]
 
+    def test_step_params_override_default_params(self):
+        """#508：步骤级 params 覆盖 default_params，未声明的默认键保留。"""
+        plan = Plan(name="p")
+        steps = [
+            PlanStep(plan_id=1, step_key="s1", script_name="install_apk",
+                     script_version="1.0.0", stage="init", sort_order=0,
+                     params={"apk_path": "/mnt/x/a.apk"}),
+        ]
+        defaults = {("install_apk", "1.0.0"): {"apk_path": "/default/a.apk",
+                                               "timeout": 30}}
+        lc = _build_lifecycle_from_steps(plan, steps, defaults)
+        params = lc["init"][0]["params"]
+        # 步骤级覆盖生效，未声明的默认键保留
+        assert params["apk_path"] == "/mnt/x/a.apk"
+        assert params["timeout"] == 30
+
+    def test_step_params_none_keeps_pure_defaults(self):
+        """#508：params=None 时行为不变——纯 default_params，不引入空覆盖。"""
+        plan = Plan(name="p")
+        steps = [
+            PlanStep(plan_id=1, step_key="s1", script_name="a",
+                     script_version="1.0.0", stage="init", sort_order=0),
+        ]
+        defaults = {("a", "1.0.0"): {"x": 1, "y": 2}}
+        lc = _build_lifecycle_from_steps(plan, steps, defaults)
+        assert lc["init"][0]["params"] == {"x": 1, "y": 2}
+
+    def test_step_params_does_not_mutate_defaults(self):
+        """#508：合并不得原地修改 script_defaults（多步骤共享 dict 防污染）。"""
+        plan = Plan(name="p")
+        steps = [
+            PlanStep(plan_id=1, step_key="s1", script_name="a",
+                     script_version="1.0.0", stage="init", sort_order=0,
+                     params={"x": 9}),
+            PlanStep(plan_id=1, step_key="s2", script_name="a",
+                     script_version="1.0.0", stage="init", sort_order=1),
+        ]
+        defaults = {("a", "1.0.0"): {"x": 1}}
+        lc = _build_lifecycle_from_steps(plan, steps, defaults)
+        assert lc["init"][0]["params"] == {"x": 9}
+        assert lc["init"][1]["params"] == {"x": 1}
+
 
 class TestBuildPreview:
     def test_preview_structure(self):

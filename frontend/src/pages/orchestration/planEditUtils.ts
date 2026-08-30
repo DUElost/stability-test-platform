@@ -56,7 +56,8 @@ export function rebuildLifecycleFromPlan(plan: Plan): PipelineDef {
       step_id: s.step_key,
       action: `script:${s.script_name}`,
       version: s.script_version,
-      params: {},
+      // #508 步骤级 params：读回（null/缺省 → 空对象，保持 snapshot() 脏检查稳定）
+      params: s.params ?? {},
       timeout_seconds: s.timeout_seconds ?? 30,
       retry: s.retry ?? 0,
       enabled: s.enabled !== false,
@@ -97,6 +98,9 @@ export function buildStepsForApi(lifecycle: PipelineDef): PlanStepCreate[] {
         sort_order: i,
         timeout_seconds: s.timeout_seconds ?? null,
         stall_seconds: s.stall_seconds ?? null,
+        // #508 步骤级 params：空对象不写键，避免既有 Plan 保存后多出
+        // ``params: {}``（后端 NULL 语义 = 纯 default_params）。
+        ...(s.params && Object.keys(s.params).length > 0 ? { params: s.params } : {}),
         retry: s.retry ?? 0,
         enabled: s.enabled !== false,
       });

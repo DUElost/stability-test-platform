@@ -84,6 +84,57 @@ class TestPlanCRUD:
         assert get_resp.status_code == 200
         assert get_resp.json()["data"]["name"] == name
 
+    def test_create_plan_with_step_params_round_trip(self, client, auth_headers, sample_script):
+        """#508：步骤级 params 创建后读回；缺省不塞 params 键。"""
+        name = _uniq("plan_params")
+        resp = client.post("/api/v1/plans", json={
+            "name": name,
+            "steps": [{
+                "step_key": "init_0", "script_name": "check_device",
+                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "timeout_seconds": 30, "params": {"apk_path": "/mnt/x/a.apk"},
+            }],
+            "project_key": "GENERIC", "specialty_key": "ops",
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        step = resp.json()["data"]["steps"][0]
+        assert step["params"] == {"apk_path": "/mnt/x/a.apk"}
+
+        got = client.get(f"/api/v1/plans/{resp.json()['data']['id']}", headers=auth_headers)
+        assert got.status_code == 200
+        assert got.json()["data"]["steps"][0]["params"] == {"apk_path": "/mnt/x/a.apk"}
+
+    def test_create_plan_without_step_params_returns_null(self, client, auth_headers, sample_script):
+        """#508：未配步骤级 params 时读回 null（语义 = 纯 default_params）。"""
+        name = _uniq("plan_no_params")
+        resp = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["data"]["steps"][0]["params"] is None
+
+    def test_update_plan_step_params(self, client, auth_headers, sample_script):
+        """#508：PUT 全量替换 step 行时 params 持久化。"""
+        name = _uniq("plan_params_update")
+        create = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        update = client.put(f"/api/v1/plans/{plan_id}", json={
+            "project_key": "GENERIC", "specialty_key": "ops",
+            "expected_updated_at": create.json()["data"]["updated_at"],
+            "steps": [
+                {"step_key": "init_0", "script_name": "check_device",
+                 "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                 "timeout_seconds": 30, "params": {"apk_path": "/mnt/y/b.apk"}},
+            ],
+        }, headers=auth_headers)
+        assert update.status_code == 200, update.text
+        assert update.json()["data"]["steps"][0]["params"] == {"apk_path": "/mnt/y/b.apk"}
+
     def test_list_plans(self, client, auth_headers, sample_script):
         name = _uniq("plan")
         client.post("/api/v1/plans", json={

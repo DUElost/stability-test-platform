@@ -66,6 +66,8 @@ class PlanStepIn(BaseModel):
     timeout_seconds: Optional[int] = None
     # 停滞钟（#115 阶段 1）：多久无 PROGRESS 戳算卡死。None/0 = 关闭。
     stall_seconds: Optional[int] = Field(default=None, ge=0)
+    # 步骤级 params（#508）：执行时覆盖脚本 default_params。None = 纯默认。
+    params: Optional[dict] = Field(default=None)
     retry: int = Field(default=0, ge=0, le=5)
     enabled: bool = True
 
@@ -158,6 +160,7 @@ class PlanStepOut(BaseModel):
     stall_seconds: Optional[int] = None
     retry: int
     enabled: bool
+    params: Optional[dict] = None
 
 
 class PlanOut(BaseModel):
@@ -342,8 +345,8 @@ def _assemble_lifecycle_for_validation(
 ) -> dict:
     """ADR-0020 §2：从 PlanStep 行 + 直列字段组装 lifecycle，仅用于 ``validate_pipeline_def``。
 
-    与 dispatcher 的最终生成逻辑保持一致；params 字段使用 ``{}`` 占位，因为
-    脚本的 default_params 在校验阶段不重要（pipeline_validator 只验结构）。
+    与 dispatcher 的最终生成逻辑保持一致；params 只透传步骤级值（default_params
+    在校验阶段不重要，pipeline_validator 只验结构）。
     """
     lifecycle: dict = {"init": [], "teardown": []}
     patrol_steps: list[dict] = []
@@ -354,7 +357,7 @@ def _assemble_lifecycle_for_validation(
             "step_id": s.step_key,
             "action": f"script:{s.script_name}",
             "version": s.script_version,
-            "params": {},
+            "params": s.params or {},
             "timeout_seconds": s.timeout_seconds,
             "retry": s.retry,
         }
@@ -598,6 +601,7 @@ def create_plan(
             sort_order=s.sort_order,
             timeout_seconds=s.timeout_seconds,
             stall_seconds=s.stall_seconds,
+            params=s.params,
             retry=s.retry,
             enabled=s.enabled,
             created_at=now,
@@ -749,6 +753,7 @@ def append_chain_tail(
             sort_order=s.sort_order,
             timeout_seconds=s.timeout_seconds,
             stall_seconds=s.stall_seconds,
+            params=s.params,
             retry=s.retry,
             enabled=s.enabled,
             created_at=now,
@@ -942,6 +947,7 @@ def update_plan(
                 sort_order=s.sort_order,
                 timeout_seconds=s.timeout_seconds,
                 stall_seconds=s.stall_seconds,
+                params=s.params,
                 retry=s.retry,
                 enabled=s.enabled,
                 created_at=now,
