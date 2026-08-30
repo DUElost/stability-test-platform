@@ -4,14 +4,15 @@
 power-cycle / mtbf / monkey 已存在，此处只补 sleep。
 
 Revision ID: i0j1k2l3m4n5
-Revises: h9i0j1k2l3m4
+Revises: m3n4o5p6q7r8（main 的 merge 迁移；原链 h9i0j1k2l3m4 → 本迁移会在
+合并后产生双 head，纯种子迁移顺序无关，重锚到 main head 保持线性）
 Create Date: 2026-08-31
 """
 
 from alembic import op
 
 revision = "i0j1k2l3m4n5"
-down_revision = "h9i0j1k2l3m4"
+down_revision = "m3n4o5p6q7r8"
 branch_labels = None
 depends_on = None
 
