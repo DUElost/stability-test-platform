@@ -397,7 +397,7 @@ export default function PlanRunDetailPage() {
             <AlertDialogTitle>PlanRun 已结束 — 是否最终归档？</AlertDialogTitle>
             <AlertDialogDescription>
               测试已中止或失败，系统不会自动归档。检测到已人工完成
-              scan + merge，是否继续执行分类提取（按去重结果从 15.4
+              scan + merge，是否继续执行分类提取（按去重结果从中心存储
               取事件日志到提单目录）？
               {archiveReadiness?.reason ? ` 当前状态：${archiveReadiness.reason}` : ''}
             </AlertDialogDescription>

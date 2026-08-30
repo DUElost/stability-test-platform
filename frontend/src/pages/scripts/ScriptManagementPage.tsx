@@ -221,13 +221,13 @@ export default function ScriptManagementPage() {
                         {script.default_params && Object.keys(script.default_params).length > 0 && (
                           <div>
                             <span className={cn('font-medium', TEXT.subtitle)}>默认参数: </span>
-                            <code className={TEXT.body}>{JSON.stringify(script.default_params, null, 2)}</code>
+                            <pre className={cn('mt-1 overflow-x-auto rounded bg-muted p-2', TEXT.body)}>{JSON.stringify(script.default_params, null, 2)}</pre>
                           </div>
                         )}
                         {script.param_schema && Object.keys(script.param_schema).length > 0 && (
                           <div>
                             <span className={cn('font-medium', TEXT.subtitle)}>参数 Schema: </span>
-                            <code className={TEXT.body}>{JSON.stringify(script.param_schema, null, 2)}</code>
+                            <pre className={cn('mt-1 overflow-x-auto rounded bg-muted p-2', TEXT.body)}>{JSON.stringify(script.param_schema, null, 2)}</pre>
                           </div>
                         )}
                         {(!script.default_params || Object.keys(script.default_params).length === 0) &&

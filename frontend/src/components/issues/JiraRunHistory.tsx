@@ -98,11 +98,11 @@ export default function JiraRunHistory() {
                     <div className="flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-medium text-sm">{run.vendor}</span>
-                        <Badge variant="outline" className="text-[10px]">
+                        <Badge variant="outline" className="text-[11px]">
                           {run.stage === 'upload_list' ? '上传模板' : '建单'}
                         </Badge>
-                        {run.dry_run && <Badge variant="secondary" className="text-[10px]">dry-run</Badge>}
-                        <Badge variant={STATUS_VARIANT[run.status] ?? 'secondary'} className="text-[10px]">
+                        {run.dry_run && <Badge variant="secondary" className="text-[11px]">dry-run</Badge>}
+                        <Badge variant={STATUS_VARIANT[run.status] ?? 'secondary'} className="text-[11px]">
                           {run.status}
                         </Badge>
                         {run.reporter && (

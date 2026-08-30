@@ -126,7 +126,7 @@ export default function ArchiveStatusCard({
         {linkStats && (
           <div className="space-y-1.5 border-t border-border/50 pt-2" data-testid="signal-link-stats">
             {pctBar(linkHealthPct(linkStats.fixable_link_rate), 'Signal 链接健康')}
-            <div className={cn('flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]', TEXT.subtitle)}>
+            <div className={cn('flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]', TEXT.subtitle)}>
               <span data-testid="link-not-yet-archived">未归档 {linkStats.not_yet_archived}</span>
               <span data-testid="link-unlinkable">不可链 {linkStats.unlinkable}</span>
               <span

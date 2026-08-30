@@ -60,7 +60,7 @@ export default function PrecheckSummaryRow({
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider', STATUS_CHIP.primary)}>
+          <span className={cn('rounded px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wider', STATUS_CHIP.primary)}>
             预检
           </span>
           <span className={cn('flex-1 text-xs font-semibold', TEXT.heading)}>健康预检</span>

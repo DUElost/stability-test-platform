@@ -111,7 +111,8 @@ describe('AssistantPage', () => {
 
   it('载入会话列表并自动选中首个会话拉取消息', async () => {
     renderPage();
-    expect(await screen.findByText('平台巡检')).toBeInTheDocument();
+    // 会话标题同时出现在桌面侧栏与移动端选择条（CSS 断点切换，jsdom 下并存）
+    expect((await screen.findAllByText('平台巡检')).length).toBeGreaterThan(0);
     await waitFor(() => {
       expect(mocks.aiAssistant.listMessages).toHaveBeenCalledWith(1);
     });

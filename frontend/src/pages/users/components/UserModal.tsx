@@ -1,9 +1,15 @@
 import { useState } from 'react';
-import { X, UserPlus, Loader2 } from 'lucide-react';
+import { UserPlus, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import type { User } from '@/utils/api';
 import { STATUS_TEXT_COLORS } from '@/design-system/colors';
-import { FORM, MODAL } from '@/design-system';
+import { FORM } from '@/design-system';
 import { cn } from '@/lib/utils';
 
 interface UserModalProps {
@@ -123,35 +129,23 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen) return null; // Radix 挂载即动画；保持早退，open 变化驱动开关
 
   const fieldClass = (hasError: boolean) =>
     cn(FORM.input, hasError && FORM.inputInvalid);
 
   return (
-    <div className={MODAL.overlay}>
-      <div className={MODAL.panel}>
-        {/* Header */}
-        <div className={MODAL.header}>
-          <div className="flex items-center gap-2">
+    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) handleClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
             <UserPlus className={STATUS_TEXT_COLORS.primary} size={20} />
-            <h2 className={MODAL.title}>
-              {isEditMode ? '编辑用户' : '添加用户'}
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={handleClose}
-            disabled={isSubmitting}
-            className={MODAL.closeButton}
-            aria-label="关闭"
-          >
-            <X size={20} />
-          </button>
-        </div>
+            {isEditMode ? '编辑用户' : '添加用户'}
+          </DialogTitle>
+        </DialogHeader>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
           {/* Username */}
           <div>
             <label htmlFor="user-username" className={FORM.label}>
@@ -252,7 +246,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
             </Button>
           </div>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

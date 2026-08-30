@@ -34,7 +34,7 @@ export function PlanStepList({ steps, scriptParamsByKey }: PlanStepListProps) {
           <div className="sticky top-0 z-[1] flex items-center gap-2 border-b bg-muted/80 px-3 py-1.5 backdrop-blur-sm">
             <span
               className={cn(
-                'rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider',
+                'rounded border px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wider',
                 stageChipClass(group.stage),
               )}
             >

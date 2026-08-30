@@ -450,7 +450,7 @@ export function ExpandableDeviceTable({
                         </span>
                         {device.attribution_source === 'unassigned' ? (
                           <span
-                            className="shrink-0 rounded-full bg-warning/20 px-1.5 py-0.5 font-mono text-[10px] text-warning"
+                            className="shrink-0 rounded-full bg-warning/20 px-1.5 py-0.5 font-mono text-[11px] text-warning"
                             title="未归属：需在 /projects 配置归属规则或手动归入"
                           >
                             未归属
@@ -459,7 +459,7 @@ export function ExpandableDeviceTable({
                           <>
                             {device.project_key && (
                               <span
-                                className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                                className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
                                 title={`归属项目 ${device.project_key}`}
                               >
                                 {device.project_key}
@@ -467,7 +467,7 @@ export function ExpandableDeviceTable({
                             )}
                             {device.attribution_source === 'rule' && (
                               <span
-                                className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[10px] text-success"
+                                className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[11px] text-success"
                                 title="型号命中归属规则（match_models）"
                               >
                                 规则
@@ -475,7 +475,7 @@ export function ExpandableDeviceTable({
                             )}
                             {device.attribution_source === 'pinned' && (
                               <span
-                                className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary"
+                                className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[11px] text-primary"
                                 title="人工钉住：规则不覆盖此设备归属"
                               >
                                 钉住
@@ -483,7 +483,7 @@ export function ExpandableDeviceTable({
                             )}
                             {device.attribution_source === 'manual' && device.project_key && (
                               <span
-                                className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
                                 title="人工归入（非钉住，规则可能覆盖）"
                               >
                                 手动
@@ -554,13 +554,13 @@ export function ExpandableDeviceTable({
                           {device.tags.slice(0, 2).map((tag) => (
                             <span
                               key={tag}
-                              className="max-w-[72px] truncate rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                              className="max-w-[72px] truncate rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
                             >
                               {tag}
                             </span>
                           ))}
                           {device.tags.length > 2 && (
-                            <span className="shrink-0 text-[10px] text-muted-foreground">
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
                               +{device.tags.length - 2}
                             </span>
                           )}

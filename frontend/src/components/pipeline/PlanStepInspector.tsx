@@ -123,7 +123,7 @@ export default function PlanStepInspector({
 
       {/* 空态引导只在 StepEmptyState 卡里说一次；无步骤时不再渲染脚注 */}
       {step && (
-        <footer className={cn('px-3 py-2 text-[10px] leading-relaxed', PIPELINE_EDITOR.panelHeader, TEXT.subtitle)}>
+        <footer className={cn('px-3 py-2 text-[11px] leading-relaxed', PIPELINE_EDITOR.panelHeader, TEXT.subtitle)}>
           {`位于 ${phase ?? '—'} #${(index ?? 0) + 1}。脚本的参数和默认值在脚本库页面维护。`}
         </footer>
       )}
@@ -180,7 +180,7 @@ function ScriptInfoCard({
     <Card>
       <CardHead>
         <span>脚本信息</span>
-        <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold', STATUS_CHIP.primary)}>
+        <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold', STATUS_CHIP.primary)}>
           来自脚本库
         </span>
       </CardHead>
@@ -298,7 +298,7 @@ function ParamFormCard({ step, matchedScript, onUpdateStep, readOnly }: ParamFor
       <Card>
         <CardHead>
           <span>脚本参数</span>
-          <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold', STATUS_CHIP.muted)}>
+          <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold', STATUS_CHIP.muted)}>
             自由键值
           </span>
         </CardHead>
@@ -346,7 +346,7 @@ function ParamFormCard({ step, matchedScript, onUpdateStep, readOnly }: ParamFor
       <CardHead>
         <span>脚本参数</span>
         {matchedScript && (
-          <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold', STATUS_CHIP.primary)}>
+          <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold', STATUS_CHIP.primary)}>
             {schemaKeys.length} 项
           </span>
         )}
@@ -460,7 +460,7 @@ function FreeformParamRow({ paramKey, value, onChange, onRemove, disabled }: Fre
             type="button"
             onClick={onRemove}
             aria-label={`移除参数 ${paramKey}`}
-            className={cn('text-[10px] px-1 py-0.5 rounded', STATUS_CHIP.muted)}
+            className={cn('text-[11px] px-1 py-0.5 rounded', STATUS_CHIP.muted)}
             title="移除该参数"
           >
             ✕
@@ -511,7 +511,7 @@ function FreeformParamAdder({ existingKeys, onAdd }: FreeformParamAdderProps) {
           添加
         </button>
       </div>
-      {error && <p className={cn('mt-1 text-[10px] text-destructive')}>{error}</p>}
+      {error && <p className={cn('mt-1 text-[11px] text-destructive')}>{error}</p>}
     </div>
   );
 }
@@ -729,7 +729,7 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
         )}
 
         <div className="flex items-center justify-between py-1">
-          <span className={cn('text-[10px] font-bold uppercase tracking-wide', TEXT.subtitle)}>启用步骤</span>
+          <span className={cn('text-[11px] font-bold uppercase tracking-wide', TEXT.subtitle)}>启用步骤</span>
           <button
             type="button"
             disabled={readOnly}
@@ -804,7 +804,7 @@ function Row({
 function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="grid gap-1">
-      <span className={cn('text-[10px] font-bold tracking-wide', TEXT.subtitle)}>{label}</span>
+      <span className={cn('text-[11px] font-bold tracking-wide', TEXT.subtitle)}>{label}</span>
       {children}
     </div>
   );

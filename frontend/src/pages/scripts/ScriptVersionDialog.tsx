@@ -1,9 +1,15 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useToast } from '@/hooks/useToast';
 import { api, type ScriptEntry } from '@/utils/api';
 import { Tag, AlertCircle } from 'lucide-react';
-import { ALERT_BANNER, FORM, MODAL, TEXT } from '@/design-system';
+import { ALERT_BANNER, FORM, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -81,18 +87,20 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
   };
 
   return (
-    <div className={MODAL.overlay} onClick={onClose}>
-      <div className={MODAL.panelLg} onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center gap-2">
-          <Tag className={cn('h-5 w-5', TEXT.subtitle)} />
-          <h2 className={cn('text-lg font-semibold', TEXT.heading)}>新建脚本版本 — {script.name}</h2>
-        </div>
+    <Dialog open={open && !!script} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Tag className={cn('h-5 w-5', TEXT.subtitle)} />
+            新建脚本版本 — {script!.name}
+          </DialogTitle>
+        </DialogHeader>
 
         <div className={cn('mb-3 flex items-center gap-2 rounded-lg px-3 py-2 text-xs', ALERT_BANNER.warning)}>
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
           <span>
             修改 default_params 必须创建新的脚本版本。当前版本{' '}
-            <code className="font-mono">{script.version}</code> 的默认参数保持不变。
+            <code className="font-mono">{script!.version}</code> 的默认参数保持不变。
           </span>
         </div>
 
@@ -179,7 +187,7 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
             </Button>
           </div>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

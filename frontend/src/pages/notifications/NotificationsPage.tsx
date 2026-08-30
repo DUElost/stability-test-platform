@@ -496,11 +496,18 @@ export default function NotificationsPage() {
                 value={ruleForm.channel_id}
                 onChange={(e) => setRuleForm({ ...ruleForm, channel_id: Number(e.target.value) })}
                 className={FORM.select}
+                disabled={channels.length === 0}
               >
+                {channels.length === 0 ? (
+                  <option value={0}>暂无可用渠道</option>
+                ) : null}
                 {channels.map((ch) => (
                   <option key={ch.id} value={ch.id}>{ch.name} ({CHANNEL_TYPE_LABELS[ch.type]})</option>
                 ))}
               </select>
+              {channels.length === 0 && (
+                <p className={FORM.hint}>请先在「通知渠道」页签创建渠道，再配置告警规则。</p>
+              )}
             </div>
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -592,20 +599,20 @@ function NotificationLogsTab() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className={cn('text-sm font-medium', TEXT.heading)}>{log.title}</span>
-                        <span className={cn('text-[10px] px-1.5 py-0.5 rounded', 'bg-muted', TEXT.caption)}>
+                        <span className={cn('text-[11px] px-1.5 py-0.5 rounded', 'bg-muted', TEXT.caption)}>
                           {SOURCE_LABEL_MAP[log.source] ?? log.source}
                         </span>
-                        <span className={cn('text-[10px] px-1.5 py-0.5 rounded', 'bg-muted', TEXT.caption)}>
+                        <span className={cn('text-[11px] px-1.5 py-0.5 rounded', 'bg-muted', TEXT.caption)}>
                           {log.event_type}
                         </span>
                         {!log.read && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary text-primary-foreground">未读</span>
+                          <span className="text-[11px] px-1.5 py-0.5 rounded bg-primary text-primary-foreground">未读</span>
                         )}
                       </div>
                       {log.message && (
                         <p className={cn('text-xs mt-1.5 whitespace-pre-wrap', TEXT.caption)}>{log.message}</p>
                       )}
-                      <span className={cn('text-[10px] mt-2 block', TEXT.caption)}>
+                      <span className={cn('text-[11px] mt-2 block', TEXT.caption)}>
                         {formatDateTimeLocale(log.created_at, '')}
                       </span>
                     </div>

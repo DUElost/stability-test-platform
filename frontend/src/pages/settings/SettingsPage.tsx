@@ -23,7 +23,7 @@ export default function SettingsPage() {
 
   return (
     <PageContainer width="form">
-      <PageHeader title="系统设置" subtitle="管理平台全局配置" />
+      <PageHeader title="系统设置" subtitle="平台运行配置一览（当前为只读视图）" />
 
       {isLoading ? (
         <div className="grid gap-4">

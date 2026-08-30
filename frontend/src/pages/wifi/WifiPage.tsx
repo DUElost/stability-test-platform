@@ -280,7 +280,7 @@ export default function WifiPage() {
                         <div className="flex items-center gap-2">
                           <span className={cn('truncate font-medium', TEXT.heading)}>{pool.name}</span>
                           {pool.host_group && (
-                            <span className={cn('rounded px-1.5 py-0.5 text-[10px]', STATUS_CHIP.muted)}>{pool.host_group}</span>
+                            <span className={cn('rounded px-1.5 py-0.5 text-[11px]', STATUS_CHIP.muted)}>{pool.host_group}</span>
                           )}
                         </div>
                         <div className={cn('mt-1 font-mono text-xs', TEXT.subtitle)}>{configString(pool.config?.ssid) || '-'}</div>

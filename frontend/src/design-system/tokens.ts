@@ -257,11 +257,11 @@ export function dedupActionBtnClass(variant: 'primary' | 'success'): string {
   return variant === 'primary'
     ? cn(
         'rounded border border-primary/25 bg-primary/10 px-1.5 py-0.5',
-        'text-[10px] font-semibold text-primary hover:bg-primary/15 disabled:opacity-50',
+        'text-[11px] font-semibold text-primary hover:bg-primary/15 disabled:opacity-50',
       )
     : cn(
         'rounded border border-success/25 bg-success/10 px-1.5 py-0.5',
-        'text-[10px] font-semibold text-success hover:bg-success/15 disabled:opacity-50',
+        'text-[11px] font-semibold text-success hover:bg-success/15 disabled:opacity-50',
       );
 }
 
