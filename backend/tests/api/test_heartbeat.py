@@ -635,9 +635,9 @@ class TestHeartbeatProjectAttribution:
 
     @staticmethod
     def _seed_rule(db_session, project, model):
-        from backend.models.project_rule import ProjectDeviceRule
+        from backend.models.project_model import ProjectModel
 
-        rule = ProjectDeviceRule(project_id=project.id, match_value=model)
+        rule = ProjectModel(project_id=project.id, match_value=model)
         db_session.add(rule)
         db_session.commit()
         return rule

@@ -197,7 +197,7 @@ def _attribution_source(
     """ADR-0029 归属来源派生（pinned / rule / manual / unassigned）。
 
     无项目 → unassigned；project_pinned（人工钉住，规则不覆盖）→ pinned；
-    型号命中项目活跃规则（project_device_rule，精确匹配）→ rule；其余
+    型号命中项目活跃规则（project_model，精确匹配）→ rule；其余
     （人工批量归入、SEED 回填、型号不在规则）→ manual。
     """
     if project is None:
