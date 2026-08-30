@@ -93,6 +93,23 @@ PR 分支含 `.github/workflows/` 变更（含 merge main 带入）时，GitHub 
 
 放弃的备选：全 open PR 批量批准（扩大攻击面）；专用 PAT（运维负担）。
 
+## 补充（2026-08-30，合入与 update-branch 的竞态）
+
+`update_branch_tolerant` 最初只吞 `head sha didn't match`（并发 reconcile 互抢）。
+run 33306014644 暴露第三类：脚本查状态时 PR #583 仍 open（stale 检查也过），
+随即被 auto-merge 合掉，`update-branch` 报 `Cannot update PR branch due to
+conflicts` —— PR 已合入，这次更新本就无意义。
+
+改为**失败后重查 PR 状态**：`MERGED` / `CLOSED` → 打印说明并返回 0，其余失败
+原样返回非零。按状态判定而不是再堆一条报错文案匹配——合入与 update-branch 的
+竞态不只有一种报错形态，而「PR 已经不在 open 态」是唯一稳定的判据。
+
+放弃的备选：给冲突文案再加一条 `grep`（文案随 gh / GitHub 版本变，会持续漏）；
+update 前后各查一次状态做乐观锁（缩短窗口但不消除，还多两次 API 调用）。
+
+验证：桩 `gh` 四路径断言（head-sha 竞争→0、其他错误 + OPEN→非零、其他错误 +
+MERGED / CLOSED→0、成功→0），两个脚本各跑一遍。
+
 ## Revisit
 
 若 open PR 常态 >3 或出现外部 fork 贡献潮，再评估轻量队列状态 API 或
