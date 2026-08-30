@@ -16,6 +16,7 @@ import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
 import ArchiveStatusCard from '@/components/plan-run/ArchiveStatusCard';
 import DedupReportCard from '@/components/plan-run/DedupReportCard';
 import LogEventsCard from '@/components/plan-run/LogEventsCard';
+import TestCaseResultsCard from '@/components/plan-run/TestCaseResultsCard';
 import PrecheckSummaryRow from '@/components/plan-run/PrecheckSummaryRow';
 import {
   AlertDialog,
@@ -339,6 +340,7 @@ export default function PlanRunDetailPage() {
 
             {/* #529：终态 DLE 事件视图（归档权威）。RUNNING 不渲染，见组件 gate。 */}
             {isTerminal && <LogEventsCard runId={id} isTerminal />}
+            {isTerminal && <TestCaseResultsCard runId={id} isTerminal />}
 
             <DedupReportCard
               runId={id}

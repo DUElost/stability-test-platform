@@ -758,8 +758,10 @@ def remove_project_rule(
     """ADR-0029 复盘：删除项目的一条活跃型号规则（admin，记审计）。
 
     规则表此前只增不减（map/apply 对已归属别的项目的型号 409），错误规则
-    （如生产 A57→MLD_LX2 残留）无法通过平台修正。删除只影响规则声明本身，
-    已归属设备不动——由心跳按新规则状态自然收敛。
+    （如生产 A57→MLD_LX2 残留）无法通过平台修正。删除 = 撤回声明：
+    已归属设备保持现状**不重算**（心跳触发条件收窄，已归属设备不会自动
+    收敛）；未归属/新接入设备按新规则状态归位。需要立即纠正存量归属时
+    用 POST /{key}/rules/recompute 显式重算。
 
     路由顺序：/{project_key}/rules/{model} 三段静态，与 /{project_key}
     单段、/inventory/* 静态段互不冲突。
@@ -797,6 +799,83 @@ def remove_project_rule(
     db.commit()
     emit_project_changed(project.id, "rule_removed")
     return ok({"project_key": project.project_key, "model": model})
+
+
+@router.post(
+    "/{project_key}/rules/recompute",
+    response_model=ApiResponse[dict],
+)
+def recompute_project_rules(
+    project_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """按活跃规则重算存量设备归属（显式纠正，不依赖心跳）。
+
+    心跳触发条件收窄后，已归属设备不会因规则变化自动收敛——规则改了但
+    设备停留在旧归属（生产 MLD_LX3 69 台 NULL + 规则指向 V552AA）。
+    本端点对该项目每条活跃规则覆盖的型号执行一次「按规则归位」：
+    pinned 跳过、已正确跳过、NULL 或归属其他项目 → 归入本项目（逐台
+    audit，reason=rule_recompute）+ 汇总 audit。返回移动台数。
+    """
+    project = _get_project_or_404(db, project_key)
+    _require_user_project(project)
+    rules = db.execute(
+        select(ProjectModel)
+        .where(
+            ProjectModel.project_id == project.id,
+            ProjectModel.match_type == "MODEL",
+            ProjectModel.is_active.is_(True),
+        )
+    ).scalars().all()
+    moved = 0
+    for rule in rules:
+        devices = db.query(Device).filter(
+            Device.model == rule.match_value,
+            Device.project_pinned.is_(False),
+        ).all()
+        for device in devices:
+            if device.project_id == project.id:
+                continue
+            from_key = device.project.project_key if device.project else None
+            device.project_id = project.id
+            record_audit(
+                db,
+                action="assign_project",
+                resource_type="device",
+                resource_id=device.id,
+                details={
+                    "project_key": project.project_key,
+                    "from_project_key": from_key,
+                    "reason": "rule_recompute",
+                },
+                user_id=current_user.id,
+                username=current_user.username,
+                request=request,
+            )
+            moved += 1
+    record_audit(
+        db,
+        action="recompute_project_rules",
+        resource_type="test_project",
+        resource_id=project.id,
+        details={
+            "project_key": project.project_key,
+            "rules": len(rules),
+            "devices_moved": moved,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
+    emit_project_changed(project.id, "recomputed")
+    return ok({
+        "project_key": project.project_key,
+        "rules": len(rules),
+        "devices_moved": moved,
+    })
 
 
 @router.get(

@@ -834,12 +834,20 @@ export interface ScriptEntry {
 }
 
 /** ADR-0029 P2-10：脚本在某项目的使用统计（run 维度成功率）。 */
+export interface ScriptUsageVersionUsed {
+  script_version: string;
+  run_count: number;
+  success_count: number;
+  success_rate: number;
+}
+
 export interface ScriptUsageProject {
   project_key: string;
   plan_count: number;
   run_count: number;
   success_count: number;
   success_rate: number;
+  versions_used: ScriptUsageVersionUsed[];
 }
 
 export interface ScriptUsage {
@@ -1815,6 +1823,36 @@ export interface PlanRunLogEventsPayload {
   data_authority: 'device_log_event';
   total: number;
   items: PlanRunLogEvent[];
+}
+
+/** ADR-0030 P2 — PlanRun 逐条用例结果。 */
+export interface TestCaseResultRow {
+  id: number;
+  plan_run_id: number;
+  job_id: number;
+  suite_id: number | null;
+  case_id: number | null;
+  case_name: string;
+  status: string;
+  detail: string | null;
+  artifact_uri: string | null;
+  run_dir: string | null;
+  created_at: string;
+  device_id: number | null;
+  host_id: string | null;
+}
+
+export interface TestCaseResultSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  error: number;
+}
+
+export interface TestCaseResultsPayload {
+  items: TestCaseResultRow[];
+  total: number;
+  summary: TestCaseResultSummary;
 }
 
 export interface JobManualActionResult {

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   removeRule: vi.fn(),
   renameProject: vi.fn(),
   archiveProject: vi.fn(),
+  recomputeRules: vi.fn(),
   authRole: 'admin',
 }));
 
@@ -36,7 +37,7 @@ vi.mock('@/hooks/useToast', () => ({
 
 vi.mock('@/utils/api', () => ({
   api: {
-    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, rename: mocks.renameProject, archive: mocks.archiveProject },
+    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, rename: mocks.renameProject, archive: mocks.archiveProject, recomputeRules: mocks.recomputeRules },
     devices: { list: mocks.listDevices },
     plans: { list: mocks.listPlans },
     results: { riskTrend: mocks.riskTrend },
@@ -146,6 +147,21 @@ describe('ProjectDetailPage', () => {
       expect(mocks.renameProject).toHaveBeenCalledWith('proj-a', 'HONOR-ELA2');
       expect(mocks.navigate).toHaveBeenCalledWith('/projects/HONOR-ELA2');
     });
+  });
+
+  it('recomputes rules with confirm on admin', async () => {
+    mocks.recomputeRules.mockResolvedValue({ project_key: 'proj-a', rules: 1, devices_moved: 3 });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderPage();
+    await screen.findByText('Project A');
+    fireEvent.click(screen.getByTestId('recompute-rules-open'));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mocks.recomputeRules).toHaveBeenCalledWith('proj-a');
+    });
+    confirmSpy.mockRestore();
   });
 
   it('archives project with confirm on admin', async () => {
