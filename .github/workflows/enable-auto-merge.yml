@@ -36,7 +36,9 @@ jobs:
           # pull_request：默认 merge commit（含本 PR 脚本；首合入 bootstrap 勿 pin main）。
           # schedule：脚本以 main 为准。
           ref: ${{ github.event_name == 'schedule' && 'main' || github.sha }}
-          sparse-checkout: scripts/ci/pr-automerge-queue.sh
+          sparse-checkout: |
+            scripts/ci/pr-automerge-queue.sh
+            scripts/ci/approve-pending-workflow-runs.sh
           sparse-checkout-cone-mode: false
       - name: Reconcile queue and update head if behind
         env:
