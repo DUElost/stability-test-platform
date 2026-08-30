@@ -19,6 +19,7 @@ import {
   HardDrive,
   Wifi,
   FolderKanban,
+  Layers,
   Sparkles,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -73,6 +74,7 @@ const navGroups: NavGroup[] = [
       { path: '/hosts', label: '主机集群', icon: Server },
       { path: '/devices', label: '物理设备', icon: Smartphone },
       { path: '/script-management', label: '脚本库', icon: Code2 },
+      { path: '/test-suites', label: '用例套件', icon: Layers },
       { path: '/storage', label: '文件服务器', icon: HardDrive, adminOnly: true },
     ],
   },

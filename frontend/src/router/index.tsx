@@ -35,6 +35,9 @@ const ScriptManagementPage = lazy(() => import('../pages/scripts/ScriptManagemen
 // ADR-0029 P2 项目登记簿
 const ProjectsPage = lazy(() => import('../pages/projects/ProjectsPage'));
 const ProjectDetailPage = lazy(() => import('../pages/projects/ProjectDetailPage'));
+// ADR-0030 P2 用例套件管理
+const TestSuitesPage = lazy(() => import('../pages/suites/TestSuitesPage'));
+const TestSuiteDetailPage = lazy(() => import('../pages/suites/TestSuiteDetailPage'));
 // ADR-0031 平台 AI 助手
 const AssistantPage = lazy(() => import('../pages/assistant/AssistantPage'));
 const AiAssistantSettingsPage = lazy(() => import('../pages/settings/AiAssistantSettingsPage'));
@@ -88,6 +91,8 @@ export default function AppRouter() {
             <Route path="runs/:runId/report" element={<RunReportPage />} />
 
             <Route path="script-management" element={<ScriptManagementPage />} />
+            <Route path="test-suites" element={<TestSuitesPage />} />
+            <Route path="test-suites/:suiteId" element={<TestSuiteDetailPage />} />
 
             {/* ADR-0029 P2 项目登记簿（页面级筛选，无全局选择器） */}
             <Route path="projects" element={<ProjectsPage />} />
