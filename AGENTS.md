@@ -158,6 +158,38 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
   - **#220**：生产只扫 MTK；UNISOC/QCOM 保留 stub 入口、默认跳过；勿扩白名单
 - **ScanRunner / UploadManager**（`start_log_scan.py` 的非显然参数、自动发现规则、`reload_config`）→ `backend/agent/CLAUDE.md`
 
+## 脚本版本退役
+
+`backend/agent/scripts/<name>/v<ver>/` 只增不减（ADR-0020 不可变 + ADR-0029
+「每版本全量副本」），长期会线性膨胀。退役靠下面这条只读诊断，按需人工跑：
+
+```bash
+python -m backend.scripts.check_unreferenced_script_versions [--json] [--name flash_firmware]
+```
+
+它列出每个 script 版本的 `plan_step` 引用计数，标出「`is_active` 且零引用」的
+退役候选。只读 SELECT，不写库、不改状态，可对生产库跑。
+
+**退役 ≠ 删除，两件事别混**：
+
+| | 怎么做 | 目录 | 后果 |
+|---|---|---|---|
+| **退役**（支持） | `PUT /api/v1/scripts/{id}` 带 `is_active=false` | **留着** | 不再进 `?is_active=1` 目录；扫描不会把它重新激活（`script_catalog.py:281`） |
+| **删除**（别做） | `rm -rf` 版本目录 | 没了 | **会被 CI 拦下** —— `check-script-version-immutability.py` 把 `D` 当变更；且会让历史 `plan_step` 的 `script.sha` 与磁盘永久对不上，2026-07-31 那次就是这么把全平台派发搞挂的 |
+
+**退役有硬守卫，误操作退不掉**：`scripts.py:484` 在 `is_active=False` 时先跑
+`_ensure_script_can_be_deactivated()`，它用的是**与本工具完全相同的连接条件**
+（`PlanStep.script_name + script_version`，`scripts.py:250`）—— 只要还有 Plan
+引用就返回 **409 `SCRIPT_STILL_REFERENCED`**，并把 `plan_ids` 一并返回。
+
+所以两层职责是：本工具**提前圈出候选**，`PUT` **最终裁定**。判据一致，不会
+出现「工具说可以、接口却拒」或反之。
+
+**但 `refs == 0` 只覆盖配置态，不覆盖运行态。** 一个版本可能已无任何 Plan
+配置引用、却仍有历史 PlanRun 需要追溯（退役不删目录正是为此）。要判断「后续
+是否还会再用」，还需要运行使用事实 —— 见 issue #506（脚本详情页「最近 30 天
+被哪些项目使用 / 成功率」，尚未实现）。两个维度都为零，退役才够稳妥。
+
 ## Key env vars
 
 | Var | Where | Purpose |
