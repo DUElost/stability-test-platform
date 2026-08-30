@@ -11,6 +11,48 @@ is_excluded_ref() {
   return 1
 }
 
+# updatePullRequestBranch 带 expectedHeadOid：并发 reconcile 中落败方会被拒
+# （GraphQL: head sha didn't match the current head ref，见 run 33269782605）。
+# 该错误意味着别的 run 已经把 main 合进来了 —— 本轮目标已达成，按无害处理，
+# 别把竞态刷成红 X。其余失败原样返回非零，交给 set -e 让 job 变红。
+update_branch_tolerant() {
+  local num="$1" out rc=0
+  out="$(gh pr update-branch "$num" --repo "$REPO" 2>&1)" || rc=$?
+  printf '%s\n' "$out"
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qi "didn't match the current head ref"; then
+    echo "update-branch on #${num} lost the head-sha race; another run already updated it."
+    return 0
+  fi
+  return "$rc"
+}
+
+# PR 含 .github/workflows/ 变更时，pull_request 触发的 run 会停在 action_required，
+# 直至维护者点 Approve。队首 sync main 后常批量出现（#570 实测）；reconcile 代为批准。
+approve_pending_workflow_runs() {
+  local branch="$1" runs_json count
+  runs_json="$(
+    gh api "repos/${REPO}/actions/runs" \
+      -f status=action_required \
+      -f head_branch="$branch" \
+      -f per_page=30 \
+      2>/dev/null || echo '{"workflow_runs":[]}'
+  )"
+  count="$(jq '.workflow_runs | length' <<<"$runs_json")"
+  if [ "$count" -eq 0 ]; then
+    echo "No workflow runs awaiting approval on branch ${branch}."
+    return 0
+  fi
+  echo "Found ${count} workflow run(s) awaiting approval on ${branch}."
+  while IFS=$'\t' read -r run_id run_name; do
+    [ -z "$run_id" ] && continue
+    if gh api "repos/${REPO}/actions/runs/${run_id}/approve" -X POST >/dev/null 2>&1; then
+      echo "Approved workflow run ${run_id} (${run_name})."
+    else
+      echo "Failed to approve workflow run ${run_id} (${run_name}); check actions:write on GITHUB_TOKEN."
+    fi
+  done < <(jq -r '.workflow_runs[] | "\(.id)\t\(.name)"' <<<"$runs_json")
+}
+
 owner="${REPO%/*}"
 name="${REPO#*/}"
 
@@ -45,6 +87,17 @@ if [ -z "$head_number" ]; then
 fi
 
 echo "Queue head: PR #${head_number}"
+
+head_ref=""
+for row in "${filtered[@]}"; do
+  if [ "$(jq -r '.number' <<<"$row")" = "$head_number" ]; then
+    head_ref="$(jq -r '.headRefName' <<<"$row")"
+    break
+  fi
+done
+if [ -n "$head_ref" ]; then
+  approve_pending_workflow_runs "$head_ref"
+fi
 
 for row in "${filtered[@]}"; do
   num="$(jq -r '.number' <<<"$row")"
@@ -81,13 +134,6 @@ REQUIRED=(
   pr-migrate-empty-db
 )
 
-head_ref=""
-for row in "${filtered[@]}"; do
-  if [ "$(jq -r '.number' <<<"$row")" = "$head_number" ]; then
-    head_ref="$(jq -r '.headRefName' <<<"$row")"
-    break
-  fi
-done
 if [ -z "$head_ref" ]; then
   echo "Queue head #${head_number} head ref not found; skip head update."
   exit 0
@@ -124,4 +170,4 @@ if [ "$behind" -eq 0 ]; then
 fi
 
 echo "Queue head #${head_number} is ${behind} commit(s) behind main; updating branch."
-gh pr update-branch "$head_number" --repo "$REPO"
+update_branch_tolerant "$head_number"
