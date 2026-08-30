@@ -834,12 +834,20 @@ export interface ScriptEntry {
 }
 
 /** ADR-0029 P2-10：脚本在某项目的使用统计（run 维度成功率）。 */
+export interface ScriptUsageVersionUsed {
+  script_version: string;
+  run_count: number;
+  success_count: number;
+  success_rate: number;
+}
+
 export interface ScriptUsageProject {
   project_key: string;
   plan_count: number;
   run_count: number;
   success_count: number;
   success_rate: number;
+  versions_used: ScriptUsageVersionUsed[];
 }
 
 export interface ScriptUsage {
