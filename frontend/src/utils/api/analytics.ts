@@ -1,11 +1,19 @@
 import apiClient from './client';
-import type { ResultsSummary, ActivityResponse, DeviceMetricsResponse, CompletionTrendResponse, DashboardSummary, FileServerOverview, HostFailureRateResponse, PlanSuccessRateResponse, PlanRunPassRateTrendResponse } from './types';
+import type { ResultsSummary, ActivityResponse, DeviceMetricsResponse, CompletionTrendResponse, DashboardSummary, FileServerOverview, HostFailureRateResponse, PlanSuccessRateResponse, PlanRunPassRateTrendResponse, RiskTrend } from './types';
 
 export const results = {
   summary: (limit?: number, projectKey?: string) =>
     apiClient.get<ResultsSummary>('/results/summary', {
       params: {
         ...(limit ? { limit } : {}),
+        ...(projectKey ? { project_key: projectKey } : {}),
+      },
+    }).then(r => r.data),
+  /** ADR-0029 P2：项目级风险趋势（按天 S/A/B，run 级 DLE 权威聚合）。 */
+  riskTrend: (projectKey?: string, days: number = 30) =>
+    apiClient.get<RiskTrend>('/results/risk-trend', {
+      params: {
+        days,
         ...(projectKey ? { project_key: projectKey } : {}),
       },
     }).then(r => r.data),

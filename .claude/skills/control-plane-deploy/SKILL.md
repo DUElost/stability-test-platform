@@ -18,7 +18,8 @@ systemctl is-active stability-backend     # 控制面服务态
 curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health）
 ```
 
-- 凭据注入（CLI 类脚本）：`set -a && . ./.env.backend && set +a`——`load_repo_dotenv()` 只读仓库根 `.env`（生产不存在）。⚠️待校对
+- 凭据注入（CLI 类脚本）：`set -a && . ./.env.backend && set +a`——`load_repo_dotenv()` 只读仓库根 `.env`（生产不存在）。
+- admin token：`/api/v1/auth/token` 回**扁平** OAuth2 体，取 `.access_token`（不是 `.data.access_token`）；用户名/口令必须是两个独立 `-F`。
 
 ## 1. 控制面后端更新与 DB 迁移（本机即生产控制面）
 
@@ -64,9 +65,18 @@ git fetch origin && git worktree add /tmp/stp-deploy origin/main   # 必先 fetc
 ln -sfn $PWD/frontend/node_modules /tmp/stp-deploy/frontend/node_modules
 cd /tmp/stp-deploy/frontend && npm run build                        # 产物 → dist/
 cd $REPO/frontend
-mv dist-prod dist-prod.bak-$(date +%H%M)                            # bak 目录留原地回滚
-mv /tmp/stp-deploy/frontend/dist dist-prod                          # 双 rename 原子切换
+cp -a /tmp/stp-deploy/frontend/dist ./dist-new                      # 先落到同一文件系统
+mv dist-prod dist-prod.bak-$(date +%Y%m%d-%H%M)                     # bak 目录留原地回滚
+mv dist-new dist-prod                                               # 同盘双 rename 原子切换
+sudo systemctl reload nginx
 ```
+
+**`/tmp` 是 tmpfs**：直接 `mv /tmp/stp-deploy/frontend/dist dist-prod` 是**跨文件系统
+拷贝而非 rename**，会给 nginx 留一段「目录已就位但文件没拷完」的窗口。必须先
+`cp -a` 到仓库同盘再做双 rename（`df --output=source /tmp <repo>` 一眼可辨）。
+
+构建 env：仓库无 `.env.production`，`client.ts` 里 `baseURL` 硬编码 `/api/v1`，
+所以裸 `npm run build` 即同源包，不需要设 `VITE_API_BASE_URL`。
 
 验证清单（实测有效）：`curl -s http://127.0.0.1/<path> | grep -o 'assets/index-[^"]*\.js'`
 与磁盘对比；浏览器强刷目标页核对新文案 testid。
@@ -78,21 +88,33 @@ mv /tmp/stp-deploy/frontend/dist dist-prod                          # 双 rename
 
 ## 2. 脚本目录 scan 与版本核验
 
+scan 只有 HTTP 路由，没有 CLI 模块（`backend/scripts/` 下无 `scan.py`）：
+
 ```bash
-venv/bin/python -m backend.scripts.scan   # ⚠️待校对：实际命令名/路由
+curl -s -H "$AUTH" -X POST http://127.0.0.1:8000/api/v1/scripts/scan \
+  | jq '.data | {created, skipped, conflicts, deactivated}'
 ```
 
-- **scan 幂等**：seed 预建版本显示 created=0/skipped 是正常，勿误判未注册；conflicts 出现时先 `sha256sum` 比对磁盘 vs DB，再决定是否 `?force_rebaseline=true`（需无在途 PlanRun）。⚠️待校对
+- **何时需要**：`git diff <上次部署commit>..HEAD -- backend/agent/scripts/` 非空才需要跑；为空是 no-op。
+- **scan 幂等**：seed 预建版本显示 created=0/skipped 是正常，勿误判未注册；conflicts 出现时先 `sha256sum` 比对磁盘 vs DB，再决定是否 `?force_rebaseline=true`（需无在途 PlanRun）。
 - **版本号无 v 前缀**：DB `script.version` 存 `2.3.4` 形式（scan 剥 v）。
 
-## 3. Agent 热更新（34 host）
+## 3. Agent 热更新（48 host）
+
+**先单机 canary，再批量**——批量脚本没有 `--dry-run`，也没有单机参数：
 
 ```bash
-venv/bin/python -m backend.scripts.batch_hot_update   # ⚠️待校对：参数形态
+# 1) canary：任取一台 ONLINE host，成功回 {"ok":true,...,"code_version":"<期望>"}
+curl -s -H "$AUTH" -X POST http://127.0.0.1:8000/api/v1/hosts/<host_id>/hot-update | jq .
+# 2) 校验该台 agent_code_sync_status 变 matched、心跳新鲜、设备数未掉，再批量：
+set -a && . ./.env.backend && set +a
+PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 ```
 
-- 推 `backend/agent/` 源码树（含 scripts/）→ 34 台 `/opt/stability-test-agent/agent/scripts/`，自动重启 Agent。⚠️待校对
-- 完成后逐台 `agent_code_revision` 应全量等于期望 commit（回滚就绪审计已验 34/34 读路径）。
+- `--direct` 走 SSH（不受登录限流）；默认**跳过有活跃 job 的 host**，`--include-active` 才纳入。
+- 期望 revision：`backend.services.host_updater.get_agent_code_version()`；逐台 `agent_code_revision` 应全量等于它、`agent_code_sync_status=matched`。
+- **串行约 20s/台**（48 台 ≈ 16 min）且 stdout 是块缓冲——重定向到文件时日志会长时间为空，**进度看 DB/API 的 `agent_code_revision` 分布，别盯日志**。
+- 推 `backend/agent/` 源码树（含 scripts/）→ 各 host `/opt/stability-test-agent/agent/`，自动重启 Agent。
 - **热更新会抹掉 host 上手工放入 agent 树的文件**（如临时 .so）——部署前确认无此类残留。⚠️待校对
 - **不要**在 hot-update 未返回成功时抢 `reload_config`（曾致 event_uploader 读到旧 flag）。
 
@@ -125,4 +147,5 @@ venv/bin/python -m backend.scripts.batch_hot_update   # ⚠️待校对：参数
 | 2026-08-28 | 校准 §1：本机生产代码路径是仓库根 `/home/debian13/stability-test-platform`，非 `/opt/...`（后者不存在）；部署现已实操验证（k8l9m0n1o2p3 真机应用 + restart + 34 ONLINE） | 本机 pgrep/journalctl + 正式部署 |
 | 2026-08-27 | 新增 §1.5 前端段：nginx root=仓库内 `frontend/dist-prod`、worktree 构建 + 双 rename 原子切换、浏览器/curl 双验证 | 登记簿 UI 批次（#476/#477）部署实操 |
 | 2026-08-28 | 坑表补「本地 ref 陈旧」条目：目标 PR mergeCommit ∈ origin/main 用 `merge-base --is-ancestor` 校验（曾打出旧包） | 同上事故复盘 |
+| 2026-08-30 | 四步全链路真机部署（r0s9t8u7v6w5 迁移 + 前端换包 + backend restart + 48 台热更新）后校准：§0 凭据与 token 取值路径（扁平 `.access_token`、双 `-F`）；§1.5 **`/tmp` 是 tmpfs、跨盘 `mv` 非原子**→ 改 `cp -a` 到同盘再双 rename，并记录无需 `VITE_API_BASE_URL`；§2 scan 无 CLI 模块、只有 HTTP 路由 + 「diff 为空则免跑」判据；§3 改为 canary→批量两段式，补 `--direct` 语义、串行 20s/台与 stdout 块缓冲（看 DB 不看日志）。§0/§2/§3 相应 ⚠️待校对 解除 | 本次部署实操 |
 | （下次真实部署） | | |
