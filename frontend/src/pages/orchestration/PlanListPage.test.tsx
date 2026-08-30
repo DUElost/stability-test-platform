@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { ConfirmProvider } from '@/hooks/useConfirm';
@@ -114,5 +114,29 @@ describe('PlanListPage', () => {
     await waitFor(() =>
       expect(mocks.listPlans).toHaveBeenLastCalledWith(0, 100, undefined, 'mtbf'),
     );
+  });
+});
+
+describe('PlanListPage grouping', () => {
+  it('groups plans by project key with group headers', async () => {
+    mocks.listPlans.mockResolvedValue([
+      { id: 1, name: 'MTBF-A', steps: [], project_key: 'V552AA', specialty_key: 'mtbf',
+        created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z' },
+      { id: 2, name: 'MTBF-B', steps: [], project_key: 'V552AA', specialty_key: 'mtbf',
+        created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z' },
+      { id: 3, name: 'Ops-C', steps: [], project_key: 'A57', specialty_key: 'ops',
+        created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z' },
+    ]);
+    renderPage();
+
+    expect(await screen.findByText('MTBF-A')).toBeInTheDocument();
+    // 二维分组：#448——两个组标题 + 组内计数
+    const groupV = screen.getByTestId('plan-group-V552AA');
+    expect(groupV).toHaveTextContent('V552AA（2）');
+    expect(within(groupV).getByText('MTBF-A')).toBeInTheDocument();
+    expect(within(groupV).getByText('MTBF-B')).toBeInTheDocument();
+    const groupA = screen.getByTestId('plan-group-A57');
+    expect(groupA).toHaveTextContent('A57（1）');
+    expect(within(groupA).getByText('Ops-C')).toBeInTheDocument();
   });
 });

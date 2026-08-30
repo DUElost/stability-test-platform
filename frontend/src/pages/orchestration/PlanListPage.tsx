@@ -117,6 +117,19 @@ export default function PlanListPage() {
     chained: plans?.filter(p => p.next_plan_id != null).length ?? 0,
   }), [plans]);
 
+  // ADR-0029 D6（#448）：项目×专项二维分组——按 project_key 保序分组。
+  // 项目筛选已选时仍显示单组标题（显式归属可见），不筛时按项目聚合。
+  const grouped = useMemo(() => {
+    const groups = new Map<string, Plan[]>();
+    for (const plan of filtered) {
+      const key = plan.project_key || '未归属';
+      const list = groups.get(key) ?? [];
+      list.push(plan);
+      groups.set(key, list);
+    }
+    return Array.from(groups.entries());
+  }, [filtered]);
+
   return (
     <PageContainer width="content">
       <PageHeader
@@ -207,8 +220,16 @@ export default function PlanListPage() {
           />
         )
       ) : (
-        <div className="space-y-3">
-          {filtered.map(plan => (
+        <div className="space-y-4">
+          {grouped.map(([groupKey, plans]) => (
+            <section key={groupKey} className="space-y-2" data-testid={`plan-group-${groupKey}`}>
+              <h3 className={cn('flex items-center gap-2 text-xs font-semibold uppercase tracking-wide', TEXT.subtitle)}>
+                <ProjectKeyBadge projectKey={groupKey === '未归属' ? undefined : groupKey} />
+                <span>{groupKey}</span>
+                <span className="font-normal">（{plans.length}）</span>
+              </h3>
+              <div className="space-y-3">
+                {plans.map(plan => (
             <Card key={plan.id} className="group hover:shadow-md transition-shadow">
               <CardContent className="py-4 flex items-center justify-between">
                 <div className="min-w-0 flex-1 space-y-3">
@@ -255,8 +276,11 @@ export default function PlanListPage() {
                     <Trash2 className="w-4 h-4" />
                   </Button>
                 </div>
-              </CardContent>
-            </Card>
+                  </CardContent>
+                </Card>
+              ))}
+              </div>
+            </section>
           ))}
         </div>
       )}
