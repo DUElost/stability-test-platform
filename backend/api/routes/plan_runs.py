@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
-from backend.api.schemas.test_case_result import (
+from backend.api.schemas.case_result import (
     TestCaseResultOut,
     TestCaseResultSummary,
     TestCaseResultsPayload,
@@ -106,7 +106,7 @@ from backend.services.device_log_event import (
     list_plan_run_device_log_events,
 )
 from backend.services.log_observation import aggregate_signal_link_stats
-from backend.services.test_case_result_ingest import list_plan_run_test_case_results
+from backend.services.case_result_ingest import list_plan_run_test_case_results
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plan-runs"])

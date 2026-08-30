@@ -9,7 +9,7 @@ from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.suite import TestCase, TestSuite
-from backend.services.test_case_result_ingest import (
+from backend.services.case_result_ingest import (
     ingest_test_case_results_for_job,
     list_plan_run_test_case_results,
 )
