@@ -53,5 +53,9 @@ signed APK 安装到 build `MLD-LX2-16-260810V62` 的 18 台设备：
 - 换包/重装：`apk_path` 不可变 → 需再建新版本。若「一次性参数版本」
   变频繁，应重议步骤级 params 注入（当前唯一特例是 WiFi 资源池注入，
   `plan_dispatcher_core.py:377`）。
+- **✅ 已落地（2026-08-30，#508）**：步骤级 params 注入已实现
+  （`plan_step.params` JSONB，step 覆盖 default_params），换 `apk_path`
+  不再需要新建版本。见
+  [`2026-08-30-step-level-params.md`](../feature/2026-08-30-step-level-params.md)。
 - `/mnt/stp-aee/apk-repo/` 若成为常规 APK 仓，应补进 AGENTS.md
   NFS 路径约定表。

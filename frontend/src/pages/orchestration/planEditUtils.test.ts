@@ -135,6 +135,31 @@ describe('planEditUtils', () => {
 
   // 保存是整体替换 PlanStep 行：任何编辑器不暴露的字段只要在这条往返里漏掉，
   // 用户打开 Plan 点一次保存就会把它静默清成 NULL（生产 plan 2 / 6 中过招）。
+  describe('#508 步骤级 params 往返', () => {
+    const planWithParams: Plan = {
+      ...basePlan,
+      steps: basePlan.steps!.map((s, i) =>
+        i === 0 ? { ...s, params: { apk_path: '/mnt/x/a.apk' } } : s,
+      ),
+    };
+
+    it('rebuildLifecycleFromPlan 把 params 读进 lifecycle', () => {
+      const lc = rebuildLifecycleFromPlan(planWithParams);
+      expect(lc.lifecycle.init![0].params).toEqual({ apk_path: '/mnt/x/a.apk' });
+    });
+
+    it('buildStepsForApi 把 params 发回后端', () => {
+      const steps = buildStepsForApi(rebuildLifecycleFromPlan(planWithParams));
+      expect(steps.find((s) => s.step_key === 'step_init_1')?.params)
+        .toEqual({ apk_path: '/mnt/x/a.apk' });
+    });
+
+    it('未配 params 的步骤不往 payload 里塞空对象', () => {
+      const steps = buildStepsForApi(rebuildLifecycleFromPlan(basePlan));
+      expect(steps[0]).not.toHaveProperty('params');
+    });
+  });
+
   describe('停滞钟往返', () => {
     const planWithStall: Plan = {
       ...basePlan,

@@ -71,13 +71,20 @@ export default function PlanStepInspector({
                 let params: Record<string, unknown> = {};
                 if (sameScript && step.params && Object.keys(step.params).length > 0) {
                   const newScript = scripts.find(s => s.name === name && s.version === version);
-                  const validKeys = new Set([
-                    ...Object.keys(newScript?.param_schema ?? {}),
-                    ...Object.keys(newScript?.default_params ?? {}),
-                  ]);
-                  params = Object.fromEntries(
-                    Object.entries(step.params).filter(([k]) => validKeys.has(k)),
-                  );
+                  const schemaKeys = Object.keys(newScript?.param_schema ?? {});
+                  const defaultKeys = Object.keys(newScript?.default_params ?? {});
+                  // #508 自由键模式：无 schema 且无 default_params 时，步骤级
+                  // params 是用户自定义自由键（如 apk_path），切换版本应保留，
+                  // 不能按 validKeys（空集）把已有自定义参数清空。
+                  const hasKnownKeys = schemaKeys.length > 0 || defaultKeys.length > 0;
+                  if (hasKnownKeys) {
+                    const validKeys = new Set([...schemaKeys, ...defaultKeys]);
+                    params = Object.fromEntries(
+                      Object.entries(step.params).filter(([k]) => validKeys.has(k)),
+                    );
+                  } else {
+                    params = { ...step.params };
+                  }
                 }
                 onUpdateStep({
                   ...step,
@@ -282,29 +289,44 @@ function ParamFormCard({ step, matchedScript, onUpdateStep, readOnly }: ParamFor
   );
 
   if (schemaKeys.length === 0) {
-    const dpKeys = Object.keys(defaultParams);
-    if (dpKeys.length === 0) return null;
-    // Fallback: no schema but has default_params — show as read-only tags
+    // #508 自由键模式：无 param_schema 的脚本（如 install_apk），把 default_params
+    // 与已保存的 step.params 按键名渲染为**可编辑**输入，并支持新增自由键。
+    const editableKeys = Array.from(
+      new Set([...Object.keys(defaultParams), ...Object.keys(stepParams)]),
+    );
     return (
       <Card>
         <CardHead>
           <span>脚本参数</span>
           <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold', STATUS_CHIP.muted)}>
-            无 schema
+            自由键值
           </span>
         </CardHead>
         <CardBody>
-          <div className="flex flex-wrap gap-1">
-            {dpKeys.map(k => (
-              <span
-                key={k}
-                title={JSON.stringify(defaultParams[k])}
-                className={cn('font-mono text-[10px] px-1.5 py-px rounded-[3px]', STATUS_CHIP.muted)}
-              >
-                {k}
-              </span>
-            ))}
-          </div>
+          {editableKeys.length === 0 ? (
+            <p className={cn('text-[11px]', TEXT.subtitle)}>
+              该脚本未声明参数 schema，可手动添加自定义参数（如 apk_path）。
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {editableKeys.map(key => (
+                <FreeformParamRow
+                  key={key}
+                  paramKey={key}
+                  value={resolvedFreeformValue(key, defaultParams, stepParams)}
+                  onChange={v => setParam(key, v)}
+                  onRemove={() => onUpdateStep({ ...step, params: removeKey(stepParams, key) })}
+                  disabled={!!readOnly}
+                />
+              ))}
+            </div>
+          )}
+          {!readOnly && (
+            <FreeformParamAdder
+              existingKeys={new Set([...editableKeys])}
+              onAdd={key => onUpdateStep({ ...step, params: { ...stepParams, [key]: '' } })}
+            />
+          )}
         </CardBody>
       </Card>
     );
@@ -346,6 +368,151 @@ function ParamFormCard({ step, matchedScript, onUpdateStep, readOnly }: ParamFor
         })}
       </CardBody>
     </Card>
+  );
+}
+
+/* ── Freeform key-value editor (#508, no param_schema) ───────────────────── */
+
+function resolvedFreeformValue(
+  key: string,
+  defaults: Record<string, unknown>,
+  overrides: Record<string, unknown>,
+): unknown {
+  if (key in overrides) return overrides[key];
+  return defaults[key];
+}
+
+/** 删除自由键覆盖：从 step.params 移除该键，执行时回落 default_params。 */
+function removeKey(
+  params: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> {
+  if (!(key in params)) return params;
+  const next = { ...params };
+  delete next[key];
+  return next;
+}
+
+interface FreeformParamRowProps {
+  paramKey: string;
+  value: unknown;
+  onChange: (v: unknown) => void;
+  onRemove: () => void;
+  disabled: boolean;
+}
+
+function FreeformParamRow({ paramKey, value, onChange, onRemove, disabled }: FreeformParamRowProps) {
+  const inputCls = cn('max-w-[60%] h-7 px-2 text-[12px] font-mono', PIPELINE_EDITOR.inputInline);
+  // 无 schema 无法声明类型：按当前值推断输入控件，新增键默认字符串。
+  if (typeof value === 'boolean') {
+    return (
+      <Row label={paramKey}>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange(!value)}
+          className={cn(
+            'relative w-8 h-[18px] rounded-full transition',
+            value ? 'bg-success' : 'bg-muted-foreground/40',
+            disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+          )}
+          aria-pressed={value}
+          aria-label={`${paramKey}: ${value ? '是' : '否'}`}
+        >
+          <span className={cn(
+            'absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-background shadow transition-transform',
+            value ? 'translate-x-[14px]' : 'translate-x-0',
+          )} />
+        </button>
+      </Row>
+    );
+  }
+  if (typeof value === 'number') {
+    return (
+      <Row label={paramKey}>
+        <input
+          type="number"
+          disabled={disabled}
+          value={value != null ? Number(value) : ''}
+          onChange={e => {
+            const raw = e.target.value;
+            if (raw === '') { onChange(undefined); return; }
+            const num = parseFloat(raw);
+            if (!isNaN(num)) onChange(num);
+          }}
+          className={inputCls}
+        />
+      </Row>
+    );
+  }
+  return (
+    <Row label={paramKey} align="start">
+      <div className="flex items-center gap-1">
+        <input
+          type="text"
+          disabled={disabled}
+          value={String(value ?? '')}
+          onChange={e => onChange(e.target.value || undefined)}
+          className={inputCls}
+        />
+        {!disabled && (
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label={`移除参数 ${paramKey}`}
+            className={cn('text-[10px] px-1 py-0.5 rounded', STATUS_CHIP.muted)}
+            title="移除该参数"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+    </Row>
+  );
+}
+
+interface FreeformParamAdderProps {
+  existingKeys: Set<string>;
+  onAdd: (key: string) => void;
+}
+
+function FreeformParamAdder({ existingKeys, onAdd }: FreeformParamAdderProps) {
+  const [draftKey, setDraftKey] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    const key = draftKey.trim();
+    if (!key) return;
+    if (existingKeys.has(key)) {
+      setError('参数已存在');
+      return;
+    }
+    onAdd(key);
+    setDraftKey('');
+    setError(null);
+  };
+
+  return (
+    <div className="mt-2 pt-2 border-t border-border">
+      <div className="flex items-center gap-1.5">
+        <input
+          value={draftKey}
+          onChange={e => { setDraftKey(e.target.value); setError(null); }}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }}
+          placeholder="新参数名，如 apk_path"
+          className={cn('h-7 px-2 text-[11px] font-mono flex-1', PIPELINE_EDITOR.inputInline)}
+          aria-label="新参数名"
+        />
+        <button
+          type="button"
+          onClick={submit}
+          className={cn('h-7 px-2 text-[11px] font-medium rounded-md', PIPELINE_EDITOR.linkBtn)}
+        >
+          添加
+        </button>
+      </div>
+      {error && <p className={cn('mt-1 text-[10px] text-destructive')}>{error}</p>}
+    </div>
   );
 }
 

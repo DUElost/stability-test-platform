@@ -208,11 +208,19 @@ def build_lifecycle_from_steps(
                 f"Update the step to an active version before dispatching."
             )
         default_params = script_defaults[key]
+        # #508 步骤级 params：step.params 覆盖 default_params（前端 ParamFormCard
+        # 同语义：step.params overrides default_params）。update 只替换用户声明
+        # 的键、保留未声明的默认键——``step.params={"a": 3}`` + default
+        # ``{"a": 1, "b": 2}`` → ``{"a": 3, "b": 2}``。
+        merged_params = deepcopy(default_params)
+        step_params = getattr(step, "params", None)
+        if step_params:
+            merged_params.update(deepcopy(step_params))
         step_def: dict[str, Any] = {
             "step_id": step.step_key,
             "action": f"script:{step.script_name}",
             "version": step.script_version,
-            "params": deepcopy(default_params),
+            "params": merged_params,
             "timeout_seconds": step.timeout_seconds,
             "retry": step.retry,
         }
@@ -274,11 +282,17 @@ def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
         script_version = step.get("script_version")
         if not script_name or not script_version:
             raise PlanDispatchError("snapshot step is missing script identity")
+        # #508 步骤级 params：快照固化生效参数（default_params + step.params 合并），
+        # 历史 run 可复核。旧快照无 params 键 → 仅 default_params（行为不变）。
+        merged_params = deepcopy(step.get("default_params") or {})
+        step_overrides = step.get("params")
+        if step_overrides:
+            merged_params.update(deepcopy(step_overrides))
         step_def: dict[str, Any] = {
             "step_id": step.get("step_key"),
             "action": f"script:{script_name}",
             "version": script_version,
-            "params": deepcopy(step.get("default_params") or {}),
+            "params": merged_params,
             "timeout_seconds": step.get("timeout_seconds"),
             "retry": step.get("retry", 0),
         }
@@ -502,6 +516,9 @@ def build_plan_snapshot(
                     .get((step.script_name, step.script_version), {})
                     .get("default_params", {})
                 ),
+                # #508 步骤级 params：固化生效参数，重放时 default_params + params
+                # 合并（见 build_lifecycle_from_snapshot）。旧快照无此键 → 行为不变。
+                "params": getattr(step, "params", None) or {},
                 "timeout_seconds": step.timeout_seconds,
                 "stall_seconds": step.stall_seconds,
                 "retry": step.retry,
