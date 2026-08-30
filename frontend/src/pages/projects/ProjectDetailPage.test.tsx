@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   modelsOf: vi.fn(),
   riskTrend: vi.fn(),
   removeRule: vi.fn(),
+  archiveProject: vi.fn(),
   authRole: 'admin',
 }));
 
@@ -34,7 +35,7 @@ vi.mock('@/hooks/useToast', () => ({
 
 vi.mock('@/utils/api', () => ({
   api: {
-    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule },
+    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, archive: mocks.archiveProject },
     devices: { list: mocks.listDevices },
     plans: { list: mocks.listPlans },
     results: { riskTrend: mocks.riskTrend },
@@ -128,6 +129,21 @@ describe('ProjectDetailPage', () => {
 
     expect(await screen.findByText('JIRA: STP')).toBeInTheDocument();
     expect(screen.queryByTestId('jira-not-configured')).not.toBeInTheDocument();
+  });
+
+  it('archives project with confirm on admin', async () => {
+    mocks.archiveProject.mockResolvedValue(makeDetail({ status: 'ARCHIVED' }));
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderPage();
+    await screen.findByText('Project A');
+    fireEvent.click(screen.getByTestId('archive-project-open'));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mocks.archiveProject).toHaveBeenCalledWith('proj-a');
+    });
+    confirmSpy.mockRestore();
   });
 
   it('removes a rule with confirm on admin', async () => {
