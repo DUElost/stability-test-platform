@@ -646,18 +646,94 @@ def deactivate_script(
 
 # ADR-0029 P2-10：脚本使用统计——「被哪些项目的 Plan 用过 / 各自成功率」
 
+class ScriptVersionUsedOut(BaseModel):
+    script_version: str
+    run_count: int = 0
+    success_count: int = 0
+    success_rate: float = 0.0
+
+
 class ScriptUsageProjectOut(BaseModel):
     project_key: str
     plan_count: int = 0
     run_count: int = 0
     success_count: int = 0
     success_rate: float = 0.0
+    versions_used: List[ScriptVersionUsedOut] = []
 
 
 class ScriptUsageOut(BaseModel):
     script_id: int
     days: int
     projects: List[ScriptUsageProjectOut] = []
+
+
+def _merge_script_usage_projects(
+    *,
+    script_version: str,
+    config_rows: list,
+    exec_rows: list,
+) -> List[ScriptUsageProjectOut]:
+    """合并配置引用（plan_step）与执行事实（plan_snapshot）。"""
+    projects_map: dict[str, dict] = {}
+
+    for key, plan_count in config_rows:
+        if not key:
+            continue
+        entry = projects_map.setdefault(
+            key,
+            {"plan_count": 0, "versions": {}},
+        )
+        entry["plan_count"] = int(plan_count or 0)
+
+    for key, version_used, run_count, success_count in exec_rows:
+        if not key or not version_used:
+            continue
+        entry = projects_map.setdefault(
+            key,
+            {"plan_count": 0, "versions": {}},
+        )
+        entry["versions"][version_used] = {
+            "run_count": int(run_count or 0),
+            "success_count": int(success_count or 0),
+        }
+
+    projects: List[ScriptUsageProjectOut] = []
+    for key, data in sorted(
+        projects_map.items(),
+        key=lambda item: -sum(v["run_count"] for v in item[1]["versions"].values()),
+    ):
+        versions_used = [
+            ScriptVersionUsedOut(
+                script_version=version_used,
+                run_count=stats["run_count"],
+                success_count=stats["success_count"],
+                success_rate=(
+                    round(stats["success_count"] / stats["run_count"], 2)
+                    if stats["run_count"]
+                    else 0.0
+                ),
+            )
+            for version_used, stats in sorted(
+                data["versions"].items(),
+                key=lambda item: -item[1]["run_count"],
+            )
+        ]
+        my_stats = data["versions"].get(
+            script_version,
+            {"run_count": 0, "success_count": 0},
+        )
+        run_count = my_stats["run_count"]
+        success_count = my_stats["success_count"]
+        projects.append(ScriptUsageProjectOut(
+            project_key=key,
+            plan_count=data["plan_count"],
+            run_count=run_count,
+            success_count=success_count,
+            success_rate=round(success_count / run_count, 2) if run_count else 0.0,
+            versions_used=versions_used,
+        ))
+    return projects
 
 
 @router.get("/{script_id}/usage", response_model=ApiResponse[ScriptUsageOut])
@@ -669,52 +745,59 @@ def get_script_usage(
 ):
     """ADR-0029 P2-10：脚本被哪些项目的 Plan 使用过（run 维度成功率）。
 
-    从 plan_step → plan → plan_run.project_id 一次 join 派生（零新增
-    schema）。回答「这脚本在我这个项目上靠谱吗」——plan_run 快照口径
-    （P0-1 起新 Run 有真实项目归属）。
+  plan_count 来自 plan_step（当前配置引用）；run_count / versions_used
+  来自 plan_run.plan_snapshot（历史执行事实）。两者口径刻意分离，供
+  退役判据「配置零引用 vs 近期仍有执行」交叉校验。
     """
     script = db.get(Script, script_id)
     _raise_if_hidden_legacy_aee_script_row(script)
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    rows = db.execute(
+    params = {
+        "since": since,
+        "name": script.name,
+        "version": script.version,
+    }
+    config_rows = db.execute(
+        text(
+            """
+            SELECT tp.project_key, COUNT(DISTINCT p.id) AS plan_count
+            FROM plan_step ps
+            JOIN plan p ON p.id = ps.plan_id
+            LEFT JOIN test_project tp ON tp.id = p.project_id
+            WHERE ps.script_name = :name
+              AND ps.script_version = :version
+            GROUP BY tp.project_key
+            """
+        ),
+        params,
+    ).all()
+    exec_rows = db.execute(
         text(
             """
             SELECT
                 tp.project_key,
-                COUNT(DISTINCT p.id) AS plan_count,
+                step->>'script_version' AS script_version,
                 COUNT(DISTINCT pr.id) AS run_count,
                 COUNT(DISTINCT pr.id) FILTER (
                     WHERE pr.status = 'SUCCESS'
                 ) AS success_count
-            FROM plan_step ps
-            JOIN plan p ON p.id = ps.plan_id
-            JOIN plan_run pr
-                ON pr.plan_id = p.id
-               AND pr.started_at >= :since
+            FROM plan_run pr
             JOIN test_project tp ON tp.id = pr.project_id
-            WHERE ps.script_name = :name
-              AND ps.script_version = :version
-            GROUP BY tp.project_key
-            ORDER BY run_count DESC
+            CROSS JOIN LATERAL jsonb_array_elements(
+                COALESCE(pr.plan_snapshot->'steps', '[]'::jsonb)
+            ) AS step
+            WHERE pr.started_at >= :since
+              AND step->>'script_name' = :name
+            GROUP BY tp.project_key, step->>'script_version'
             """
         ),
-        {
-            "since": since,
-            "name": script.name,
-            "version": script.version,
-        },
+        params,
     ).all()
 
-    projects = []
-    for key, plan_count, run_count, success_count in rows:
-        success_count = int(success_count or 0)
-        run_count = int(run_count or 0)
-        projects.append(ScriptUsageProjectOut(
-            project_key=key,
-            plan_count=int(plan_count or 0),
-            run_count=run_count,
-            success_count=success_count,
-            success_rate=round(success_count / run_count, 2) if run_count else 0.0,
-        ))
+    projects = _merge_script_usage_projects(
+        script_version=script.version,
+        config_rows=config_rows,
+        exec_rows=exec_rows,
+    )
     return ok(ScriptUsageOut(script_id=script.id, days=days, projects=projects))
