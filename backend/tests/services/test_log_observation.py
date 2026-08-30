@@ -15,7 +15,7 @@ from backend.services.log_observation import (
 )
 
 
-def _seed_job(db_session, sample_device):
+def _seed_job(db_session, sample_device, status="RUNNING"):
     now = datetime.now(timezone.utc)
     plan = Plan(name="risk-obs-plan", failure_threshold=0.05)
     db_session.add(plan)
@@ -34,7 +34,7 @@ def _seed_job(db_session, sample_device):
         plan_id=plan.id,
         device_id=sample_device.id,
         host_id=sample_device.host_id,
-        status="RUNNING",
+        status=status,
         pipeline_def={"lifecycle": {}},
         started_at=now,
         created_at=now,
@@ -187,3 +187,83 @@ def test_signal_link_stats_counts_linked_aee(db_session, sample_device):
     stats = aggregate_signal_link_stats(db_session, [job.id])
     assert stats["linked_signals"] == 1
     assert stats["link_rate"] == 1.0
+
+
+def _add_aee_signal(db_session, sample_device, job, seq, now):
+    db_session.add(JobLogSignal(
+        job_id=job.id,
+        host_id=str(sample_device.host_id),
+        device_serial=sample_device.serial,
+        seq_no=seq,
+        category="AEE",
+        source="reconciler",
+        path_on_device=f"/data/aee/{seq}",
+        detected_at=now,
+        received_at=now,
+    ))
+
+
+def _add_dle(db_session, sample_device, job, now, signal_seq_no):
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="AEE",
+        event_subtype="KE",
+        detected_at=now,
+        state="LOCAL",
+        local_path=f"/local/aee/{job.id}",
+        host_id=str(sample_device.host_id),
+        job_id=job.id,
+        plan_run_id=job.plan_run_id,
+        signal_seq_no=signal_seq_no,
+    ))
+
+
+def test_signal_link_stats_splits_unlinked_into_three_buckets(
+    db_session, sample_device,
+):
+    """#528: 未链接集合必须拆成三类，且三桶之和守恒。"""
+    # uq_job_active_per_device：同一设备只允许一个在途 job，其余用终态
+    job_a, now = _seed_job(db_session, sample_device)              # 无任何 DLE
+    job_b, _ = _seed_job(db_session, sample_device, "COMPLETED")   # DLE 的 seq 不匹配
+    job_c, _ = _seed_job(db_session, sample_device, "COMPLETED")   # seq 匹配但未链接
+
+    _add_aee_signal(db_session, sample_device, job_a, 1, now)
+    _add_aee_signal(db_session, sample_device, job_b, 2, now)
+    _add_aee_signal(db_session, sample_device, job_c, 3, now)
+    _add_dle(db_session, sample_device, job_b, now, 999)
+    _add_dle(db_session, sample_device, job_c, now, 3)
+    db_session.commit()
+
+    stats = aggregate_signal_link_stats(
+        db_session, [job_a.id, job_b.id, job_c.id],
+    )
+
+    assert stats["not_yet_archived"] == 1
+    assert stats["unlinkable"] == 1
+    assert stats["unlinked_fixable"] == 1
+    # 不变式：三桶之和 == 旧的粗口径未链接数
+    assert stats["unlinked_linkable"] == 3
+    assert stats["link_rate"] == 0.0
+    # 告警口径：已链接 0 / (已链接 0 + 真故障 1)
+    assert stats["fixable_link_rate"] == 0.0
+
+
+def test_fixable_link_rate_ignores_not_yet_archived(db_session, sample_device):
+    """#528 核心：只有「尚未归档」时，告警口径必须仍是 1.0。
+
+    旧口径把这类 signal 算作失败，导致生产 link_rate 被压到 0.575，
+    而这个数字无论怎么修链接逻辑都提不上去。
+    """
+    job, now = _seed_job(db_session, sample_device)
+    _add_aee_signal(db_session, sample_device, job, 1, now)
+    db_session.commit()
+
+    stats = aggregate_signal_link_stats(db_session, [job.id])
+
+    assert stats["not_yet_archived"] == 1
+    assert stats["unlinkable"] == 0
+    assert stats["unlinked_fixable"] == 0
+    assert stats["link_rate"] == 0.0          # 旧口径误报为失败
+    assert stats["fixable_link_rate"] == 1.0  # 告警口径：没有真故障

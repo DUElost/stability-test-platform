@@ -16,6 +16,7 @@ from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.scheduler.signal_link_reconciler import reconcile_signal_links_once
+from backend.services.log_observation import aggregate_signal_link_stats
 
 
 def _seed_unlinked_signal(db_session, sample_device):
@@ -105,6 +106,11 @@ def test_reconcile_links_backlog_signal(db_session, sample_device):
     assert summary["linked"] == 1, summary
     assert _link_state(job.id) == event_id
 
+    # 唯一的真故障桶被排干 → 告警口径恢复 1.0（#528 指标与 sweep 的闭环）
+    stats = aggregate_signal_link_stats(db_session, [job.id])
+    assert stats["unlinked_fixable"] == 0, stats
+    assert stats["fixable_link_rate"] == 1.0, stats
+
 
 def test_reconcile_is_idempotent(db_session, sample_device):
     """Second tick finds nothing left to do."""
@@ -137,3 +143,6 @@ def test_watcher_summary_no_longer_links_signals(
     assert stats["total_signals"] == 1, stats
     assert stats["linked_signals"] == 0, stats
     assert stats["unlinked_linkable"] == 1, stats
+    # 有匹配 DLE 却没链上 = 真故障，必须如实报出来（旧实现会谎报已链接）
+    assert stats["unlinked_fixable"] == 1, stats
+    assert stats["fixable_link_rate"] == 0.0, stats
