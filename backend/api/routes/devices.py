@@ -230,7 +230,13 @@ def list_devices(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    query = db.query(Device).options(joinedload(Device.project)).order_by(Device.last_seen.desc().nullslast())
+    # 稳定次序：last_seen 相同（尤其是全 NULL 的新设备）时 PG 不保证顺序，
+    # 追加 Device.id 作 tie-breaker，保证分页与前端列表顺序可复现（#537）
+    query = (
+        db.query(Device)
+        .options(joinedload(Device.project))
+        .order_by(Device.last_seen.desc().nullslast(), Device.id.asc())
+    )
 
     # ADR-0029 P0：未归属筛选——与 project_key 互斥（「某项目里未归属」无意义）；
     # 参数组合错误优先于 key 存在性校验
