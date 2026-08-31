@@ -852,14 +852,16 @@ def get_plan_run_chain(
         for r in chain_runs
     ]
 
-    # 3) 候选 next Plan(链尾):取 chain_runs 末尾的 PlanRun,看其对应 Plan.next_plan_id
+    # 3) next Plan 完整链:取 chain_runs 末尾 PlanRun 对应 Plan.next_plan_id,
+    #    沿 next_plan_id 展开到链尾——未触发节点全部 pending 占位（2026-09-01
+    #    「执行链未显示完整」反馈:原实现只显示 1 跳,后续链节丢失）。
     if chain_runs:
         tail = chain_runs[-1]
         tail_plan = db.get(Plan, tail.plan_id)
         if tail_plan and tail_plan.next_plan_id and not tail.next_plan_triggered:
-            next_plan = db.get(Plan, tail_plan.next_plan_id)
-            if next_plan is not None:
-                # 推断 block 原因
+            first_next = db.get(Plan, tail_plan.next_plan_id)
+            if first_next is not None:
+                # 推断 block 原因（仅第一个 next——后续 pending 等前序触发）
                 blocked = False
                 reason = None
                 summary = tail.result_summary or {}
@@ -890,16 +892,23 @@ def get_plan_run_chain(
                     blocked = True
                     reason = "等待下游 Plan 自动派发"
 
-                nodes.append(ChainNodeOut(
-                    plan_id=next_plan.id,
-                    plan_name=next_plan.name,
-                    plan_run_id=None,
-                    status="pending",
-                    chain_index=(tail.chain_index or 0) + 1,
-                    failure_threshold=next_plan.failure_threshold,
-                    is_blocked=blocked,
-                    block_reason=reason,
-                ))
+                cursor = first_next
+                idx = (tail.chain_index or 0) + 1
+                while cursor is not None:
+                    nodes.append(ChainNodeOut(
+                        plan_id=cursor.id,
+                        plan_name=cursor.name,
+                        plan_run_id=None,
+                        status="pending",
+                        chain_index=idx,
+                        failure_threshold=cursor.failure_threshold,
+                        is_blocked=blocked if cursor.id == first_next.id else False,
+                        block_reason=reason if cursor.id == first_next.id else "等待前序 Plan 触发",
+                    ))
+                    if cursor.next_plan_id is None:
+                        break
+                    cursor = db.get(Plan, cursor.next_plan_id)
+                    idx += 1
 
     return ok(PlanChainOut(
         plan_run_id=pr.id,

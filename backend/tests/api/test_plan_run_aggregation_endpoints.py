@@ -80,8 +80,11 @@ def chain_setup(db_session):
     )
     db_session.add_all([dev1, dev2, dev3])
 
-    # Plans: parent (#41) → current (#42) → next (#43)
-    plan_next = Plan(name="结果汇总", failure_threshold=0.05)
+    # Plans: parent (#41) → current (#42) → next (#43) → last (#44)（3 级链）
+    plan_last = Plan(name="链尾汇总", failure_threshold=0.05)
+    db_session.add(plan_last)
+    db_session.commit()
+    plan_next = Plan(name="结果汇总", failure_threshold=0.05, next_plan_id=plan_last.id)
     db_session.add(plan_next)
     db_session.commit()
 
@@ -265,6 +268,7 @@ def chain_setup(db_session):
 
     return {
         "plan_parent": plan_parent, "plan_current": plan_cur, "plan_next": plan_next,
+        "plan_last": plan_last,
         "parent_run": parent_run, "current_run": cur_run,
         "host_a": host_a, "host_b": host_b,
         "device_completed": dev1, "device_running": dev2, "device_failed": dev3,
@@ -291,8 +295,8 @@ class TestChainEndpoint:
         # parent_run is the chain root
         assert data["root_plan_run_id"] == chain_setup["parent_run"].id
         nodes = data["nodes"]
-        assert len(nodes) == 3, f"expected 3 nodes, got {nodes}"
-        # Order: parent (chain_index=0) → current (1) → next pending (2)
+        assert len(nodes) == 4, f"expected 4 nodes, got {nodes}"
+        # Order: parent (chain_index=0) → current (1) → next pending (2) → last pending (3)
         assert nodes[0]["plan_id"] == chain_setup["plan_parent"].id
         assert nodes[0]["status"] == PlanRunStatus.SUCCESS.value
         assert nodes[0]["pass_rate"] == 1.0
@@ -308,6 +312,13 @@ class TestChainEndpoint:
         assert nodes[2]["status"] == "pending"
         assert nodes[2]["is_blocked"] is True
         assert nodes[2]["block_reason"] is not None
+
+        # 完整链展开：第三个 next（plan_last）也 pending（等前序触发）
+        assert nodes[3]["plan_id"] == chain_setup["plan_last"].id
+        assert nodes[3]["plan_run_id"] is None
+        assert nodes[3]["status"] == "pending"
+        assert nodes[3]["is_blocked"] is False
+        assert nodes[3]["block_reason"] is not None
 
     def test_chain_returns_404_for_unknown_run(self, client, auth_headers):
         resp = client.get("/api/v1/plan-runs/999999/chain", headers=auth_headers)
