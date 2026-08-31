@@ -22,12 +22,13 @@ from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.models.project import TestProject as ProjectModel
+from backend.models.project import TestProject
+from backend.models.project_model import ProjectModel
 
 
 @pytest.fixture
 def project_a(db_session):
-    p = ProjectModel(
+    p = TestProject(
         project_key="proj-a",
         display_name="Project A",
         customer="CustA",
@@ -40,7 +41,7 @@ def project_a(db_session):
 
 @pytest.fixture
 def project_legacy(db_session):
-    p = ProjectModel(
+    p = TestProject(
         project_key="LEGACY",
         display_name="Legacy",
         customer=None,
@@ -54,19 +55,34 @@ def project_legacy(db_session):
 def _make_device(
     db_session,
     serial: str,
-    project: ProjectModel | None = None,
+    project: TestProject | None = None,
     *,
     model: str | None = None,
     platform: str | None = None,
 ) -> Device:
+    # ADR-0029 v2.5 D10：归属派生——设备归属 = 其型号的活跃成员行，
+    # 不再写 device.project_id 副本（M3 删列）。
     device = Device(
         serial=serial,
-        project_id=project.id if project else None,
         model=model,
         platform=platform,
     )
     db_session.add(device)
     db_session.commit()
+    if project is not None:
+        if not model:
+            raise ValueError("派生归属需要 device.model 才能建成员行")
+        # 型号级归属：一个型号全局只有一个活跃成员行（uq_project_model_active）
+        # ——已映射的型号不再建行，设备继承既有映射。
+        existing = db_session.query(ProjectModel).filter(
+            ProjectModel.match_value == model,
+            ProjectModel.is_active.is_(True),
+        ).first()
+        if existing is None:
+            db_session.add(ProjectModel(
+                project_id=project.id, match_value=model, is_active=True,
+            ))
+            db_session.commit()
     return device
 
 
@@ -236,7 +252,7 @@ class TestInventoryModels:
             db_session, "s-mld-2", project_a, model="MLD_LX2", platform="MTK"
         )
         _make_device(
-            db_session, "s-mld-3", project_a, model="MLD_LX3", platform="MTK"
+            db_session, "s-mld-3", None, model="MLD_LX3", platform="MTK"
         )
         _make_device(
             db_session, "s-legacy", project_legacy, model="MYSTERY_X", platform="MTK"
@@ -534,37 +550,37 @@ class TestMapProject:
     def test_preview_and_apply_from_seed_and_null(
         self, client, admin_headers, db_session, project_a, project_legacy
     ):
-        _make_device(
-            db_session, "s-map-seed", project_legacy, model="MLD_LX2"
-        )
-        _make_device(db_session, "s-map-null", None, model="MLD_LX2")
-        _make_device(db_session, "s-map-already", project_a, model="MLD_LX2")
+        # 型号级归属（v2.5 D10）：三个型号分别覆盖 seed 归属 / 未映射 / 已在目标
+        _make_device(db_session, "s-map-seed", project_legacy, model="SEED_M")
+        _make_device(db_session, "s-map-null", None, model="NULL_M")
+        _make_device(db_session, "s-map-already", project_a, model="ALREADY_M")
 
         preview = client.post(
             "/api/v1/projects/proj-a/map/preview",
             headers=admin_headers,
-            json={"models": ["MLD_LX2"]},
+            json={"models": ["SEED_M", "NULL_M", "ALREADY_M"]},
         )
         assert preview.status_code == 200
         body = preview.json()["data"]
-        assert body["will_assign"] == 2
-        assert body["already_in_target"] == 1
+        assert body["will_assign"] == 2       # SEED_M（SEED 不冲突）+ NULL_M（未映射）
+        assert body["already_in_target"] == 1  # ALREADY_M
         assert body["conflicts"] == []
 
         applied = client.post(
             "/api/v1/projects/proj-a/map/apply",
             headers=admin_headers,
-            json={"models": ["MLD_LX2"]},
+            json={"models": ["SEED_M", "NULL_M", "ALREADY_M"]},
         )
         assert applied.status_code == 200
         # v2.5 M3：apply 只写成员行——归属派生自 device.model ⋈ 成员行
-        assert self._active_rules(db_session, project_a.id) == ["MLD_LX2"]
+        assert self._active_rules(db_session, project_a.id) == ["ALREADY_M", "NULL_M", "SEED_M"]
 
         inventory = client.get(
             "/api/v1/projects/inventory/models", headers=admin_headers
-        ).json()["data"][0]
-        assert inventory["mapped_project_keys"] == ["proj-a"]
-        assert inventory["unassigned_device_count"] == 0
+        ).json()["data"]
+        by_model = {row["model"]: row for row in inventory}
+        assert by_model["ALREADY_M"]["mapped_project_keys"] == ["proj-a"]
+        assert by_model["ALREADY_M"]["unassigned_device_count"] == 0
 
         audits = {
             a.action
@@ -578,7 +594,7 @@ class TestMapProject:
     def test_user_conflict_skipped_unless_reassign(
         self, client, admin_headers, db_session, project_a
     ):
-        other = ProjectModel(
+        other = TestProject(
             project_key="proj-b",
             display_name="Project B",
             source="USER",
@@ -593,8 +609,9 @@ class TestMapProject:
             headers=admin_headers,
             json={"models": ["MLD_LX2"]},
         ).json()["data"]
-        assert preview["will_assign"] == 1
-        assert preview["conflicts"][0]["serial"] == "s-conflict"
+        # 型号级冲突：MLD_LX2 已是 USER 项目 proj-b 的成员 → 整型设备都在冲突
+        assert preview["will_assign"] == 0
+        assert {c["serial"] for c in preview["conflicts"]} == {"s-conflict", "s-free"}
 
         blocked = client.post(
             "/api/v1/projects/proj-a/map/apply",
@@ -645,9 +662,8 @@ class TestPromoteSeedProject:
 
     @staticmethod
     def _seed_project(db_session, *, key="HONOR-ELA", status="ACTIVE"):
-        from backend.models.project import TestProject as ProjectModel
 
-        p = ProjectModel(
+        p = TestProject(
             project_key=key,
             display_name="Honor ELA",
             customer="荣耀",
@@ -662,8 +678,8 @@ class TestPromoteSeedProject:
         self, client, db_session, admin_headers
     ):
         seed = self._seed_project(db_session)
-        d1 = _make_device(db_session, "s-ela-1", seed, model="MLD_LX2", platform="MTK")
-        d2 = _make_device(db_session, "s-ela-2", seed, model="MLD_LX3", platform="MTK")
+        _make_device(db_session, "s-ela-1", seed, model="MLD_LX2", platform="MTK")
+        _make_device(db_session, "s-ela-2", seed, model="MLD_LX3", platform="MTK")
         db_session.commit()
 
         resp = client.post(
@@ -677,14 +693,20 @@ class TestPromoteSeedProject:
         assert data["match_models"] == ["MLD_LX2", "MLD_LX3"]
         assert data["customer"] == "荣耀"
 
-        # 就地转换：同一行身份，设备归属不动（project_id 不变）
+        # 就地转换：同一行身份；设备归属 = 成员行（派生，device.project_id 已删）
         db_session.refresh(seed)
         assert seed.source == "USER"
         assert seed.status == "ACTIVE"
-        db_session.refresh(d1)
-        db_session.refresh(d2)
-        assert d1.project_id == seed.id
-        assert d2.project_id == seed.id
+        from backend.models.project_model import ProjectModel
+
+        members = [
+            r.match_value
+            for r in db_session.query(ProjectModel)
+            .filter_by(project_id=seed.id, is_active=True)
+            .order_by(ProjectModel.match_value)
+            .all()
+        ]
+        assert members == ["MLD_LX2", "MLD_LX3"]
 
         # 列表里出现（「设备行显示归属它、筛选下拉里却没有它」消除）
         listed = client.get("/api/v1/projects", headers=admin_headers).json()["data"]
@@ -738,7 +760,7 @@ class TestBulkAssignProject:
         from backend.models.project_model import ProjectModel
 
         d1 = _make_device(db_session, "s-bulk-1", None, model="BULK_M1")
-        d2 = _make_device(db_session, "s-bulk-2", project_legacy, model="BULK_M2")
+        d2 = _make_device(db_session, "s-bulk-2", None, model="BULK_M2")
 
         resp = client.post(
             "/api/v1/devices/bulk-project",
@@ -770,13 +792,9 @@ class TestBulkAssignProject:
     def test_idempotent_skip_no_audit(
         self, client, db_session, project_a, admin_headers
     ):
-        from backend.models.project_model import ProjectModel
 
         d1 = _make_device(db_session, "s-bulk-idem", project_a, model="BULK_IDEM")
-        # 成员行已存在 = 幂等 no-op（不记 audit）
-        db_session.add(ProjectModel(
-            project_id=project_a.id, match_value="BULK_IDEM"))
-        db_session.commit()
+        # 成员行已存在（helper 建的） = 幂等 no-op（不记 audit）
         resp = client.post(
             "/api/v1/devices/bulk-project",
             headers=admin_headers,
@@ -808,9 +826,7 @@ class TestBulkAssignProject:
             headers=admin_headers,
             json={"project_key": "proj-a", "device_ids": [d1.id, 999999]},
         )
-        assert resp.status_code == 404
-        db_session.refresh(d1)
-        assert d1.project_id is None  # 整体拒绝，防部分成功
+        assert resp.status_code == 404  # 整体拒绝，防部分成功（M3 后无 device.project_id 可断言）
 
     def test_empty_device_ids_422(self, client, project_a, admin_headers):
         resp = client.post(
@@ -1053,7 +1069,7 @@ class TestRenameProject:
     def test_rename_conflict_and_reserved_and_format(
         self, client, db_session, project_a, admin_headers
     ):
-        other = ProjectModel(project_key="taken-key", display_name="t", source="USER")
+        other = TestProject(project_key="taken-key", display_name="t", source="USER")
         db_session.add(other)
         db_session.commit()
 

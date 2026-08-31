@@ -19,7 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import User, get_current_active_user, require_admin
@@ -195,7 +195,8 @@ def _model_to_projects(db: Session) -> dict[str | None, set[str]]:
         select(ProjectModel.match_value, TestProject.project_key)
         .join(TestProject, TestProject.id == ProjectModel.project_id)
         .where(
-                        ProjectModel.is_active.is_(True),
+            ProjectModel.is_active.is_(True),
+            TestProject.source == _USER_SOURCE,
         )
     ).all()
     for raw, key in rows:
@@ -220,10 +221,16 @@ def _inventory_summary(db: Session, items: list[InventoryModelOut]) -> Inventory
     unmapped_models = [
         item.model for item in items if not item.mapped_project_keys
     ]
-    # ADR-0029 v2.5：严格未映射口径——型号无活跃成员行的设备数
-    # （与设备页 ?unassigned=true 一致；型号级归属函数，无逐设备例外）。
-    mapped_models = select(ProjectModel.match_value).where(
-                ProjectModel.is_active.is_(True),
+    # ADR-0029 v2.5：严格未映射口径——型号无 **USER** 成员行的设备数
+    # （SEED 成员不算映射，与 _model_to_projects 同口径；设备页
+    # ?unassigned=true 一致；型号级归属函数，无逐设备例外）。
+    mapped_models = (
+        select(ProjectModel.match_value)
+        .join(TestProject, TestProject.id == ProjectModel.project_id)
+        .where(
+            ProjectModel.is_active.is_(True),
+            TestProject.source == _USER_SOURCE,
+        )
     )
     unassigned_devices = db.query(func.count(Device.id)).filter(
         or_(Device.model.is_(None), ~Device.model.in_(mapped_models))
@@ -274,28 +281,40 @@ def _map_preview(
         raise HTTPException(status_code=422, detail="models must not be empty")
     devices = (
         db.query(Device)
-        .options(joinedload(Device.project))
         .filter(Device.model.in_(names))
         .all()
     )
     present = {_blank_to_none(d.model) for d in devices}
     unknown = [name for name in names if name not in present]
+    # 型号级归属（v2.5 D10 派生）：当前项目 = 型号的活跃成员行
+    model_to_project = {
+        match_value: (pid, key, source)
+        for pid, match_value, key, source in (
+            db.query(
+                ProjectModel.project_id, ProjectModel.match_value,
+                TestProject.project_key, TestProject.source,
+            )
+            .join(TestProject, TestProject.id == ProjectModel.project_id)
+            .filter(ProjectModel.is_active.is_(True))
+            .all()
+        )
+    }
     will: list[Device] = []
     already = 0
     conflicts: list[ProjectMapConflictOut] = []
     for device in devices:
-        current = device.project
-        if current is not None and current.id == project.id:
+        entry = model_to_project.get(_blank_to_none(device.model))
+        if entry is not None and entry[0] == project.id:
             already += 1
             continue
-        is_user = current is not None and current.source == _USER_SOURCE
+        is_user = entry is not None and entry[2] == _USER_SOURCE
         if is_user and not reassign_conflicts:
             conflicts.append(
                 ProjectMapConflictOut(
                     device_id=device.id,
                     serial=device.serial,
                     model=_blank_to_none(device.model),
-                    from_project_key=current.project_key,
+                    from_project_key=entry[2],
                 )
             )
             continue
@@ -452,14 +471,27 @@ def promote_seed_project(
             _blank_to_none(m)
             for (m,) in (
                 db.query(Device.model)
-                .filter(Device.project_id == seed.id, Device.model.is_not(None))
+                .join(ProjectModel, Device.model == ProjectModel.match_value)
+                .filter(
+                    ProjectModel.project_id == seed.id,
+                    ProjectModel.is_active.is_(True),
+                    Device.model.is_not(None),
+                )
                 .all()
             )
             if _blank_to_none(m)
         }
     )
     seed.source = _USER_SOURCE
+    existing_members = {
+        m for (m,) in db.query(ProjectModel.match_value).filter(
+            ProjectModel.project_id == seed.id,
+            ProjectModel.is_active.is_(True),
+        ).all()
+    }
     for model in models:
+        if model in existing_members:
+            continue   # 幂等：成员行已存在（如带外预建）不重复插入
         db.add(ProjectModel(
             project_id=seed.id,
             match_value=model,
@@ -677,20 +709,26 @@ def apply_project_map(
         )
     # ADR-0029 P1：规则写入 project_model（活跃唯一索引兜底——同型号
     # 双归属 INSERT 即 IntegrityError，preview 设备级冲突之外的双保险）。
+    # v2.5 语义与 preview 对齐（M3 修正）：SEED 项目占用不算冲突（让位），
+    # 仅 USER 项目占用需 reassign_conflicts。
     for model in preview.models:
         existing = db.execute(
             select(ProjectModel)
             .where(
-                                ProjectModel.match_value == model,
+                ProjectModel.match_value == model,
                 ProjectModel.is_active.is_(True),
             )
         ).scalar_one_or_none()
         if existing is not None and existing.project_id != project.id:
-            raise HTTPException(
-                status_code=409,
-                detail=f"model {model} already ruled to another project",
-            )
-        if existing is None:
+            owner = db.get(TestProject, existing.project_id)
+            if owner is not None and owner.source == _USER_SOURCE and not payload.reassign_conflicts:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"model {model} already ruled to another project",
+                )
+            # SEED 占用或 reassign：旧成员行让位（uq 只约束活跃行）
+            existing.is_active = False
+        if existing is None or existing.project_id != project.id:
             db.add(ProjectModel(
                 project_id=project.id,
                 match_value=model,
