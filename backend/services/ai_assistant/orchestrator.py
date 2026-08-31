@@ -359,6 +359,75 @@ def _run_service_tool(
         finally:
             db.close()
 
+    if name == "abort_plan_run":
+        from backend.services.ai_assistant.plan_run_ops import run_abort_plan_run
+
+        db = SessionLocal()
+        try:
+            return run_abort_plan_run(
+                db,
+                params,
+                triggered_by=triggered_by,
+                requester_user_id=requester_user_id,
+            )
+        finally:
+            db.close()
+
+    if name == "retry_plan_run_dispatch":
+        from backend.services.ai_assistant.plan_run_ops import run_retry_plan_run_dispatch
+
+        db = SessionLocal()
+        try:
+            return run_retry_plan_run_dispatch(
+                db,
+                params,
+                triggered_by=triggered_by,
+            )
+        finally:
+            db.close()
+
+    if name == "manual_retry_job":
+        from backend.services.ai_assistant.plan_run_ops import run_manual_retry_job
+
+        db = SessionLocal()
+        try:
+            return run_manual_retry_job(
+                db,
+                params,
+                triggered_by=triggered_by,
+                requester_user_id=requester_user_id,
+            )
+        finally:
+            db.close()
+
+    if name == "manual_exit_job":
+        from backend.services.ai_assistant.plan_run_ops import run_manual_exit_job
+
+        db = SessionLocal()
+        try:
+            return run_manual_exit_job(
+                db,
+                params,
+                triggered_by=triggered_by,
+                requester_user_id=requester_user_id,
+            )
+        finally:
+            db.close()
+
+    if name == "trigger_plan_run_archive":
+        from backend.services.ai_assistant.plan_run_ops import run_trigger_plan_run_archive
+
+        db = SessionLocal()
+        try:
+            return run_trigger_plan_run_archive(
+                db,
+                params,
+                triggered_by=triggered_by,
+                requester_user_id=requester_user_id,
+            )
+        finally:
+            db.close()
+
     if name == "scan_script_catalog":
         from backend.services.script_catalog import scan_script_root
 

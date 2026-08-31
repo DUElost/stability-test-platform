@@ -744,6 +744,47 @@ TOOLS: dict[str, ToolSpec] = {
             }, ["plan_id", "device_ids"]),
             tier="T2", kind="service",
         ),
+        ToolSpec(
+            name="abort_plan_run",
+            description="中止进行中的 PlanRun（PENDING job 立即 ABORTED；RUNNING 等 Agent ACK）。",
+            parameters=_schema({
+                "run_id": {"type": "integer"},
+                "reason": {"type": "string", "description": "可选中止原因"},
+            }, ["run_id"]),
+            tier="T2", kind="service",
+        ),
+        ToolSpec(
+            name="retry_plan_run_dispatch",
+            description="precheck/dispatch 失败后将 PlanRun 重入准入队列（须尚无 Job）。",
+            parameters=_schema({"run_id": {"type": "integer"}}, ["run_id"]),
+            tier="T2", kind="service",
+        ),
+        ToolSpec(
+            name="manual_retry_job",
+            description="清除 patrol backoff，请求 Agent 下一轮立即重试（不重置 failure_streak）。",
+            parameters=_schema({
+                "run_id": {"type": "integer"},
+                "job_id": {"type": "integer"},
+                "reason": {"type": "string"},
+            }, ["run_id", "job_id"]),
+            tier="T2", kind="service",
+        ),
+        ToolSpec(
+            name="manual_exit_job",
+            description="请求 Agent 跳过剩余 patrol 并退出（不跑 teardown；job 仍 RUNNING 直至 complete）。",
+            parameters=_schema({
+                "run_id": {"type": "integer"},
+                "job_id": {"type": "integer"},
+                "reason": {"type": "string"},
+            }, ["run_id", "job_id"]),
+            tier="T2", kind="service",
+        ),
+        ToolSpec(
+            name="trigger_plan_run_archive",
+            description="向 PlanRun 涉及的 ONLINE host 下发 archive_now + scan_now（异步触发）。",
+            parameters=_schema({"run_id": {"type": "integer"}}, ["run_id"]),
+            tier="T2", kind="service",
+        ),
     ]
 }
 
@@ -754,6 +795,26 @@ def normalize_tool_params(name: str, args: dict | None) -> dict:
         from backend.services.ai_assistant.dispatch import normalize_dispatch_params
 
         return normalize_dispatch_params(args)
+    if name == "abort_plan_run":
+        from backend.services.ai_assistant.plan_run_ops import normalize_abort_params
+
+        return normalize_abort_params(args)
+    if name == "retry_plan_run_dispatch":
+        from backend.services.ai_assistant.plan_run_ops import normalize_retry_dispatch_params
+
+        return normalize_retry_dispatch_params(args)
+    if name == "manual_retry_job":
+        from backend.services.ai_assistant.plan_run_ops import normalize_manual_job_params
+
+        return normalize_manual_job_params(args, default_reason="manual_retry")
+    if name == "manual_exit_job":
+        from backend.services.ai_assistant.plan_run_ops import normalize_manual_job_params
+
+        return normalize_manual_job_params(args, default_reason="manual_exit")
+    if name == "trigger_plan_run_archive":
+        from backend.services.ai_assistant.plan_run_ops import normalize_archive_params
+
+        return normalize_archive_params(args)
     return dict(args or {})
 
 
@@ -762,6 +823,26 @@ def describe_tool_action_preview(db: Session, tool_name: str, params: dict) -> s
         from backend.services.ai_assistant.dispatch import describe_dispatch_preview
 
         return describe_dispatch_preview(db, params)
+    if tool_name == "abort_plan_run":
+        from backend.services.ai_assistant.plan_run_ops import describe_abort_preview
+
+        return describe_abort_preview(db, params)
+    if tool_name == "retry_plan_run_dispatch":
+        from backend.services.ai_assistant.plan_run_ops import describe_retry_dispatch_preview
+
+        return describe_retry_dispatch_preview(db, params)
+    if tool_name == "manual_retry_job":
+        from backend.services.ai_assistant.plan_run_ops import describe_manual_job_preview
+
+        return describe_manual_job_preview(db, params, action="manual_retry")
+    if tool_name == "manual_exit_job":
+        from backend.services.ai_assistant.plan_run_ops import describe_manual_job_preview
+
+        return describe_manual_job_preview(db, params, action="manual_exit")
+    if tool_name == "trigger_plan_run_archive":
+        from backend.services.ai_assistant.plan_run_ops import describe_archive_preview
+
+        return describe_archive_preview(db, params)
     return None
 
 
