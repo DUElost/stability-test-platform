@@ -27,9 +27,8 @@ class DeviceOut(ORMBaseModel):
     platform: Optional[str] = None  # #73: MTK / UNISOC / QCOM / UNKNOWN
     host_id: Optional[str] = None
     project_key: Optional[str] = None  # ADR-0029：归属项目（F2 口径，不暴露 project_id）
-    # ADR-0029 P0：归属来源（派生三态）——rule=型号命中该项目 match_models；
-    # manual=人工/批量归入（P1 后 = 钉住）；unassigned=无归属。SEED 回填（如
-    # LEGACY）无 match_models，也计 manual——P1 规则表后来源语义重定义。
+    # ADR-0029 v2.5 D10：归属来源两态——mapped=型号有活跃成员行；
+    # unmapped=无型号设备或型号未映射。无 pinned 例外（M3 删列）。
     attribution_source: Optional[str] = None
     status: str
     last_seen: Optional[datetime] = None
