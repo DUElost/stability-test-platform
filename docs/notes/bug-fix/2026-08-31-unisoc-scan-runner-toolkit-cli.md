@@ -27,7 +27,7 @@ Class: bug-fix
 ## Verification
 
 - `python -m pytest backend/agent/tests/test_unisoc_scan_runner.py -q`
-- Z258 canary `172-21-15-56` PlanRun #246：`scan_gt` timeout → `scan_result` → `dedup/246/unisoc/*_org.xls`
+- Z258 canary host PlanRun #246：`scan_gt` timeout → `scan_result` → `dedup/246/unisoc/*_org.xls`
 - `artifact_uri_matches_platform(..., "unisoc")` 对 `dedup/{id}/unisoc/` 路径为真
 
 ## Revisit
