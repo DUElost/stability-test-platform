@@ -229,7 +229,7 @@ class TestDeviceWithHostRelationship:
 
 
 class TestProjectAttribution:
-    """ADR-0029 P0：未归属筛选 + 归属来源三态（rule / manual / unassigned）。"""
+    """ADR-0029 v2.5：未映射筛选 + 归属来源两态（mapped / unmapped，派生）。"""
 
     def _seed(self, db_session):
         from backend.models.host import Host
@@ -246,33 +246,27 @@ class TestProjectAttribution:
         db_session.add(ProjectModel(
             project_id=project.id, match_value="MLD_LX2"))
         db_session.commit()
-        rule_dev = Device(serial="S-rule-1", host_id="h-attr", status="ONLINE",
-                          model="MLD_LX2", project_id=project.id)
-        manual_dev = Device(serial="S-manual-1", host_id="h-attr", status="ONLINE",
-                            model="Z2581", project_id=project.id)
-        pinned_dev = Device(serial="S-pinned-1", host_id="h-attr", status="ONLINE",
-                            model="MLD_LX2", project_id=project.id,
-                            project_pinned=True)
-        unassigned_dev = Device(serial="S-none-1", host_id="h-attr", status="ONLINE",
-                                model="MLD_LX3")
-        db_session.add_all([rule_dev, manual_dev, pinned_dev, unassigned_dev])
+        mapped_dev = Device(serial="S-mapped-1", host_id="h-attr", status="ONLINE",
+                            model="MLD_LX2")
+        unmapped_dev = Device(serial="S-none-1", host_id="h-attr", status="ONLINE",
+                              model="MLD_LX3")
+        db_session.add_all([mapped_dev, unmapped_dev])
         db_session.commit()
-        return rule_dev, manual_dev, unassigned_dev
+        return mapped_dev, unmapped_dev
 
-    def test_attribution_source_tristate(self, client, db_session, auth_headers):
-        """型号命中 match_models → rule；钉住 → pinned；归属但不在规则 → manual；无项目 → unassigned。"""
-        rule_dev, manual_dev, unassigned_dev = self._seed(db_session)
+    def test_attribution_source_two_state(self, client, db_session, auth_headers):
+        """v2.5 派生：型号有活跃成员行 → mapped；无成员行/无型号 → unmapped。"""
+        mapped_dev, unmapped_dev = self._seed(db_session)
 
         response = client.get("/api/v1/devices", headers=auth_headers)
         assert response.status_code == 200
         by_serial = {d["serial"]: d for d in response.json()}
-        assert by_serial[rule_dev.serial]["attribution_source"] == "rule"
-        assert by_serial["S-pinned-1"]["attribution_source"] == "pinned"
-        assert by_serial[manual_dev.serial]["attribution_source"] == "manual"
-        assert by_serial[unassigned_dev.serial]["attribution_source"] == "unassigned"
-        assert by_serial[unassigned_dev.serial]["project_key"] is None
+        assert by_serial[mapped_dev.serial]["attribution_source"] == "mapped"
+        assert by_serial[mapped_dev.serial]["project_key"] == "ATTR-P"
+        assert by_serial[unmapped_dev.serial]["attribution_source"] == "unmapped"
+        assert by_serial[unmapped_dev.serial]["project_key"] is None
 
-    def test_unassigned_filter_only_returns_unattached(self, client, db_session, auth_headers):
+    def test_unassigned_filter_only_returns_unmapped(self, client, db_session, auth_headers):
         self._seed(db_session)
 
         response = client.get("/api/v1/devices?unassigned=true", headers=auth_headers)

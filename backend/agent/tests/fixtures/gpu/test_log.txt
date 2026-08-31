@@ -1,0 +1,17 @@
+test script is test_StressSpecial_GPUTest_002
+test module is stressgpumodule
+am instrument -w -m -e listener com.transsion.common.TestCaseRunListener -e debug false -e loop 1 -e class com.transsion.testcaserepository.stressgpu.TestStressGpuExecute#test_StressSpecial_GPUTest_002 com.transsion.testcaserepository.test/androidx.test.runner.AndroidJUnitRunner
+GPU_RUN_START test_id=002 rounds=3
+INSTRUMENTATION_STATUS: class=com.transsion.testcaserepository.stressgpu.TestStressGpuExecute
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS_CODE: 1
+OK (1 test)
+GPU_ROUND 1 rc=0
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS_CODE: 1
+OK (1 test)
+GPU_ROUND 2 rc=0
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS_CODE: -3
+GPU_ROUND 3 rc=-3
+GPU_RUN_END rc=0

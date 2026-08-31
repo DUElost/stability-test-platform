@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
@@ -127,45 +127,38 @@ def _normalize_models(models: list[str]) -> list[str]:
 
 
 def _aggregate_inventory(
-    rows: list[tuple[str | None, str | None, str | None, str | None]],
+    rows: list[tuple[str | None, str | None]],
     *,
-    rule_models: dict[str | None, set[str]],
+    model_to_projects: dict[str | None, set[str]],
 ) -> list[InventoryModelOut]:
+    """型号级聚合（ADR-0029 v2.5 D10 派生）。
+
+    归属是型号级函数（device.model ⋈ project_model 活跃成员行）：
+    mapped 型号全部设备归属、unmapped 全部未归属——unassigned_device_count
+    不再逐设备累计（无例外，pinned 已废）。
+    """
     buckets: dict[str | None, dict] = {}
-    for raw_model, raw_platform, project_key, source in rows:
+    for raw_model, raw_platform in rows:
         model = _blank_to_none(raw_model)
         bucket = buckets.get(model)
         if bucket is None:
-            bucket = {
-                "device_count": 0,
-                "platforms": set(),
-                "mapped_project_keys": set(),
-                "unassigned_device_count": 0,
-            }
+            bucket = {"device_count": 0, "platforms": set()}
             buckets[model] = bucket
         bucket["device_count"] += 1
         platform = _blank_to_none(raw_platform)
         if platform:
             bucket["platforms"].add(platform)
-        if (
-            source == _USER_SOURCE
-            and project_key
-        ):
-            bucket["mapped_project_keys"].add(project_key)
-        else:
-            bucket["unassigned_device_count"] += 1
-    for model, keys in rule_models.items():
-        bucket = buckets.get(model)
-        if bucket is None:
-            continue
-        bucket["mapped_project_keys"].update(keys)
     items = [
         InventoryModelOut(
             model=model,
             device_count=bucket["device_count"],
             platforms=sorted(bucket["platforms"]),
-            mapped_project_keys=sorted(bucket["mapped_project_keys"]),
-            unassigned_device_count=bucket["unassigned_device_count"],
+            mapped_project_keys=sorted(model_to_projects.get(model, set())),
+            unassigned_device_count=(
+                bucket["device_count"]
+                if not model_to_projects.get(model)
+                else 0
+            ),
         )
         for model, bucket in buckets.items()
     ]
@@ -190,14 +183,15 @@ def _rule_values_for_project(db: Session, project_id: int) -> list[str]:
     return list(rows)
 
 
-def _rule_models_by_model(db: Session) -> dict[str | None, set[str]]:
+def _model_to_projects(db: Session) -> dict[str | None, set[str]]:
+    """活跃成员行全量：model → {project_key}（v2.5 派生读预取）。"""
     mapping: dict[str | None, set[str]] = {}
     rows = db.execute(
         select(ProjectModel.match_value, TestProject.project_key)
         .join(TestProject, TestProject.id == ProjectModel.project_id)
         .where(
+            ProjectModel.match_type == "MODEL",
             ProjectModel.is_active.is_(True),
-            TestProject.source == _USER_SOURCE,
         )
     ).all()
     for raw, key in rows:
@@ -209,16 +203,11 @@ def _rule_models_by_model(db: Session) -> dict[str | None, set[str]]:
 
 def _load_inventory(db: Session) -> list[InventoryModelOut]:
     rows = (
-        db.query(
-            Device.model,
-            Device.platform,
-            TestProject.project_key,
-            TestProject.source,
-        )
-        .outerjoin(TestProject, Device.project_id == TestProject.id)
-        .all()
+        db.query(Device.model, Device.platform).all()
     )
-    return _aggregate_inventory(list(rows), rule_models=_rule_models_by_model(db))
+    return _aggregate_inventory(
+        list(rows), model_to_projects=_model_to_projects(db),
+    )
 
 
 def _inventory_summary(db: Session, items: list[InventoryModelOut]) -> InventorySummaryOut:
@@ -227,10 +216,14 @@ def _inventory_summary(db: Session, items: list[InventoryModelOut]) -> Inventory
     unmapped_models = [
         item.model for item in items if not item.mapped_project_keys
     ]
-    # ADR-0029 P0：严格未归属口径（project_id IS NULL）——与设备页
-    # ?unassigned=true 数字一致，页面 KPI 据此显示「待归属」。
+    # ADR-0029 v2.5：严格未映射口径——型号无活跃成员行的设备数
+    # （与设备页 ?unassigned=true 一致；型号级归属函数，无逐设备例外）。
+    mapped_models = select(ProjectModel.match_value).where(
+        ProjectModel.match_type == "MODEL",
+        ProjectModel.is_active.is_(True),
+    )
     unassigned_devices = db.query(func.count(Device.id)).filter(
-        Device.project_id.is_(None)
+        or_(Device.model.is_(None), ~Device.model.in_(mapped_models))
     ).scalar() or 0
     return InventorySummaryOut(
         total_devices=total,
@@ -888,10 +881,16 @@ def list_project_models(
     _current_user: User = Depends(get_current_active_user),
 ):
     project = _get_project_or_404(db, project_key)
+    # v2.5：详情页型号覆盖 = 该型号成员行下的设备（派生口径）——直接按
+    # 成员行 + 设备型号过滤，不读 device.project_id 列
     rows = (
-        db.query(Device.model, Device.platform, TestProject.project_key, TestProject.source)
-        .join(TestProject, Device.project_id == TestProject.id)
-        .filter(Device.project_id == project.id)
+        db.query(Device.model, Device.platform)
+        .join(ProjectModel, Device.model == ProjectModel.match_value)
+        .filter(
+            ProjectModel.project_id == project.id,
+            ProjectModel.match_type == "MODEL",
+            ProjectModel.is_active.is_(True),
+        )
         .all()
     )
     return ok(
@@ -901,7 +900,7 @@ def list_project_models(
                 device_count=item.device_count,
                 platforms=item.platforms,
             )
-            for item in _aggregate_inventory(list(rows), rule_models={})
+            for item in _aggregate_inventory(list(rows), model_to_projects={})
         ]
     )
 

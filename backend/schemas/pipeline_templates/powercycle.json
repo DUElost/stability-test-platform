@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "GPU stress test (Antutu): RAM-based variant split, install APK, run instrument loop, collect log",
+  "description": "Power cycle stress test (AutoTestTool): install APK, reboot loop, collect result file",
   "lifecycle": {
     "timeout_seconds": 604800,
     "init": [
@@ -13,18 +13,8 @@
         "params": {}
       },
       {
-        "step_id": "ensure_root",
-        "action": "script:ensure_root",
-        "version": "1.0.0",
-        "timeout_seconds": 60,
-        "retry": 1,
-        "params": {
-          "max_attempts": 3
-        }
-      },
-      {
-        "step_id": "gpu_setup",
-        "action": "script:gpu_setup",
+        "step_id": "powercycle_setup",
+        "action": "script:powercycle_setup",
         "version": "1.0.0",
         "timeout_seconds": 900,
         "retry": 1,
@@ -35,8 +25,8 @@
       "interval_seconds": 300,
       "steps": [
         {
-          "step_id": "gpu_check",
-          "action": "script:gpu_check",
+          "step_id": "powercycle_check",
+          "action": "script:powercycle_check",
           "version": "1.0.0",
           "timeout_seconds": 60,
           "retry": 0,
@@ -46,8 +36,8 @@
     },
     "teardown": [
       {
-        "step_id": "gpu_finish",
-        "action": "script:gpu_finish",
+        "step_id": "powercycle_finish",
+        "action": "script:powercycle_finish",
         "version": "1.0.0",
         "timeout_seconds": 600,
         "retry": 1,

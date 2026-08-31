@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/utils/api';
-import { Shield } from 'lucide-react';
+import { Shield, ChevronRight } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { FORM, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { FORM, INTERACTIVE, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull } from '@/utils/format';
 
@@ -45,6 +45,16 @@ const ACTION_LABELS: Record<string, string> = {
 export default function AuditLogPage() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+
+  const toggleExpand = (id: number) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   // 哨兵值 'all' = 不过滤；B4 决议后全站下拉为原生 <select>，
   // 哨兵同时避免了空字符串 value 的歧义，API 侧不带该参数即全量
@@ -158,6 +168,7 @@ export default function AuditLogPage() {
             <Table className="min-w-[640px]">
               <TableHeader>
                 <TableRow className="border-b border-border bg-muted/50">
+                  <TableHead className="w-8 px-2 py-2" />
                   <TableHead className={cn('text-left px-4 py-2 font-medium', TEXT.subtitle)}>时间</TableHead>
                   <TableHead className={cn('text-left px-4 py-2 font-medium', TEXT.subtitle)}>用户</TableHead>
                   <TableHead className={cn('text-left px-4 py-2 font-medium', TEXT.subtitle)}>操作</TableHead>
@@ -166,23 +177,53 @@ export default function AuditLogPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {logs.map((log) => (
-                  <TableRow key={log.id} className="border-b border-border/50 hover:bg-muted/50">
-                    <TableCell className={cn('px-4 py-1.5 text-xs', TEXT.subtitle)}>
-                      {formatDateTimeFull(log.timestamp)}
-                    </TableCell>
-                    <TableCell className={cn('px-4 py-1.5', TEXT.body)}>{log.username || '-'}</TableCell>
-                    <TableCell className="px-4 py-1.5">
-                      <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', STATUS_CHIP.primary)}>
-                        {ACTION_LABELS[log.action] ?? log.action}
-                      </span>
-                    </TableCell>
-                    <TableCell className={cn('px-4 py-1.5', TEXT.subtitle)}>
-                      {log.resource_type}{log.resource_id ? ` #${log.resource_id}` : ''}
-                    </TableCell>
-                    <TableCell className={cn('px-4 py-1.5 text-xs font-mono', TEXT.subtitle)}>{log.ip_address || '-'}</TableCell>
-                  </TableRow>
-                ))}
+                {logs.map((log) => {
+                  const hasDetails = log.details && Object.keys(log.details).length > 0;
+                  const expanded = expandedIds.has(log.id);
+                  return (
+                    <Fragment key={log.id}>
+                      <TableRow className="border-b border-border/50 hover:bg-muted/50">
+                        <TableCell className="w-8 px-2 py-1.5">
+                          {hasDetails ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleExpand(log.id)}
+                              className={cn('rounded p-0.5', INTERACTIVE.iconButton)}
+                              aria-label={expanded ? '收起详情' : '展开详情'}
+                              aria-expanded={expanded}
+                            >
+                              <ChevronRight
+                                className={cn('w-4 h-4 transition-transform', expanded && 'rotate-90')}
+                              />
+                            </button>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className={cn('px-4 py-1.5 text-xs', TEXT.subtitle)}>
+                          {formatDateTimeFull(log.timestamp)}
+                        </TableCell>
+                        <TableCell className={cn('px-4 py-1.5', TEXT.body)}>{log.username || '-'}</TableCell>
+                        <TableCell className="px-4 py-1.5">
+                          <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', STATUS_CHIP.primary)}>
+                            {ACTION_LABELS[log.action] ?? log.action}
+                          </span>
+                        </TableCell>
+                        <TableCell className={cn('px-4 py-1.5', TEXT.subtitle)}>
+                          {log.resource_type}{log.resource_id ? ` #${log.resource_id}` : ''}
+                        </TableCell>
+                        <TableCell className={cn('px-4 py-1.5 text-xs font-mono', TEXT.subtitle)}>{log.ip_address || '-'}</TableCell>
+                      </TableRow>
+                      {hasDetails && expanded && (
+                        <TableRow className="border-b border-border/50 bg-muted/30">
+                          <TableCell colSpan={6} className="px-6 py-2">
+                            <pre className={cn('overflow-x-auto text-xs leading-relaxed', TEXT.subtitle)}>
+                              {JSON.stringify(log.details, null, 2)}
+                            </pre>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

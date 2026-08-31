@@ -64,7 +64,7 @@ export interface DeviceTableData {
   /** ADR-0029：归属项目 key（F2 口径） */
   project_key?: string | null;
   /** ADR-0029 P0：归属来源四态（rule / manual / pinned / unassigned），行内 badge 用 */
-  attribution_source?: 'rule' | 'manual' | 'pinned' | 'unassigned' | null;
+  attribution_source?: 'mapped' | 'unmapped' | null;
 }
 
 interface ExpandableDeviceTableProps {
@@ -448,48 +448,28 @@ export function ExpandableDeviceTable({
                         <span className="truncate text-xs text-muted-foreground" title={device.model ?? ''}>
                           {device.model}
                         </span>
-                        {device.attribution_source === 'unassigned' ? (
+                        {device.project_key ? (
                           <span
-                            className="shrink-0 rounded-full bg-warning/20 px-1.5 py-0.5 font-mono text-[11px] text-warning"
-                            title="未归属：需在 /projects 配置归属规则或手动归入"
+                            className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+                            title={`归属项目 ${device.project_key}`}
                           >
-                            未归属
+                            {device.project_key}
+                          </span>
+                        ) : null}
+                        {device.attribution_source === 'mapped' ? (
+                          <span
+                            className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[11px] text-success"
+                            title="型号有活跃成员行（归属派生）"
+                          >
+                            已映射
                           </span>
                         ) : (
-                          <>
-                            {device.project_key && (
-                              <span
-                                className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
-                                title={`归属项目 ${device.project_key}`}
-                              >
-                                {device.project_key}
-                              </span>
-                            )}
-                            {device.attribution_source === 'rule' && (
-                              <span
-                                className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[11px] text-success"
-                                title="型号命中归属规则（match_models）"
-                              >
-                                规则
-                              </span>
-                            )}
-                            {device.attribution_source === 'pinned' && (
-                              <span
-                                className="shrink-0 rounded-full bg-primary/15 px-1.5 py-0.5 text-[11px] text-primary"
-                                title="人工钉住：规则不覆盖此设备归属"
-                              >
-                                钉住
-                              </span>
-                            )}
-                            {device.attribution_source === 'manual' && device.project_key && (
-                              <span
-                                className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                                title="人工归入（非钉住，规则可能覆盖）"
-                              >
-                                手动
-                              </span>
-                            )}
-                          </>
+                          <span
+                            className="shrink-0 rounded-full bg-warning/20 px-1.5 py-0.5 font-mono text-[11px] text-warning"
+                            title="型号未映射：在 /projects 添加型号成员"
+                          >
+                            未映射
+                          </span>
                         )}
                       </div>
                     </TableCell>

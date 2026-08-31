@@ -1,13 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, CheckCheck, AlertTriangle, Info, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
+import type { NotificationLog } from '@/utils/api/types';
 import { formatDateTimeLocale } from '@/utils/format';
 import { useSocketIO } from '@/hooks/useSocketIO';
 import { DASHBOARD_SUBSCRIPTION } from '@/config';
 import { BORDER, ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
+import { notificationTarget } from '@/pages/notifications/notificationTarget';
 
 const SEVERITY_ICON = {
   critical: AlertCircle,
@@ -30,6 +32,7 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const unreadQ = useQuery({
     queryKey: ['notification-unread-count'],
@@ -71,6 +74,24 @@ export function NotificationBell() {
     await api.notifications.markAllRead();
     qc.invalidateQueries({ queryKey: ['notification-unread-count'] });
     qc.invalidateQueries({ queryKey: ['notification-logs-recent'] });
+  };
+
+  /** 点击条目：未读则标记已读；有可解析上下文（run_id 等）则跳转详情 */
+  const handleItemClick = async (log: NotificationLog) => {
+    if (!log.read) {
+      try {
+        await api.notifications.markRead(log.id);
+        qc.invalidateQueries({ queryKey: ['notification-unread-count'] });
+        qc.invalidateQueries({ queryKey: ['notification-logs-recent'] });
+      } catch {
+        // 已读标记失败不阻塞跳转
+      }
+    }
+    const target = notificationTarget(log);
+    if (target) {
+      setOpen(false);
+      navigate(target.to);
+    }
   };
 
   return (
@@ -116,33 +137,39 @@ export function NotificationBell() {
             ) : (
               logs.map((log) => {
                 const Icon = SEVERITY_ICON[log.severity] ?? Info;
+                const target = notificationTarget(log);
                 return (
-                  <div
+                  <button
                     key={log.id}
+                    type="button"
+                    onClick={() => void handleItemClick(log)}
                     className={cn(
-                      'flex gap-3 px-4 py-3 border-b last:border-b-0 transition-colors',
+                      'block w-full text-left px-4 py-3 border-b last:border-b-0 transition-colors',
                       BORDER.default,
                       !log.read && 'bg-primary/5',
                       INTERACTIVE.hover,
                     )}
+                    title={target ? `${target.label}：` + log.title : '点击标记已读'}
                   >
-                    <Icon className={cn('w-4 h-4 mt-0.5 shrink-0', SEVERITY_COLOR[log.severity])} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={cn('text-xs font-medium truncate', TEXT.heading)}>{log.title}</span>
-                        <span className={cn('text-[11px] px-1.5 py-0.5 rounded shrink-0', SURFACE.subtle, TEXT.caption)}>
-                          {SOURCE_LABEL[log.source as keyof typeof SOURCE_LABEL] ?? log.source}
+                    <div className="flex gap-3">
+                      <Icon className={cn('w-4 h-4 mt-0.5 shrink-0', SEVERITY_COLOR[log.severity])} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={cn('text-xs font-medium truncate', TEXT.heading)}>{log.title}</span>
+                          <span className={cn('text-[11px] px-1.5 py-0.5 rounded shrink-0', SURFACE.subtle, TEXT.caption)}>
+                            {SOURCE_LABEL[log.source as keyof typeof SOURCE_LABEL] ?? log.source}
+                          </span>
+                        </div>
+                        {log.message && (
+                          <p className={cn('text-xs mt-1 line-clamp-2', TEXT.caption)}>{log.message}</p>
+                        )}
+                        <span className={cn('text-[11px] mt-1', TEXT.caption)}>
+                          {formatDateTimeLocale(log.created_at, '')}
                         </span>
                       </div>
-                      {log.message && (
-                        <p className={cn('text-xs mt-1 line-clamp-2', TEXT.caption)}>{log.message}</p>
-                      )}
-                      <span className={cn('text-[11px] mt-1', TEXT.caption)}>
-                        {formatDateTimeLocale(log.created_at, '')}
-                      </span>
+                      {!log.read && <div className="w-2 h-2 rounded-full bg-primary shrink-0 mt-1.5" />}
                     </div>
-                    {!log.read && <div className="w-2 h-2 rounded-full bg-primary shrink-0 mt-1.5" />}
-                  </div>
+                  </button>
                 );
               })
             )}
