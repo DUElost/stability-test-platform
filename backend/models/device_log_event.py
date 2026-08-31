@@ -42,7 +42,7 @@ class DeviceLogEvent(Base):
     )
     host_id = Column(
         String(64),
-        ForeignKey("host.id", ondelete="CASCADE"),
+        ForeignKey("host.id", ondelete="CASCADE", onupdate="CASCADE"),
         nullable=False,
     )
     job_id = Column(

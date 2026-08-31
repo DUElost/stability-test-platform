@@ -19,6 +19,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import JSON
@@ -35,7 +36,10 @@ class JiraRun(Base):
     __tablename__ = "jira_run"
 
     id                  = Column(Integer, primary_key=True)
-    console_run_id      = Column(String(64), nullable=False, unique=True, index=True)
+    # 显式表级约束/索引（对齐迁移链命名；列级 unique+index 的自动命名与
+    # DB 的 uq_jira_run_console_run_id / ix_jira_run_console_run_id 不匹配，
+    # schema-sync 会把它们当成 remove_constraint/add_index 噪音）
+    console_run_id      = Column(String(64), nullable=False)
     vendor              = Column(String(32), nullable=False)
     stage               = Column(String(32), nullable=False)  # upload_list | create
     dry_run             = Column(Boolean, nullable=False, default=True)
@@ -57,6 +61,8 @@ class JiraRun(Base):
     created_at          = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
+        UniqueConstraint("console_run_id", name="uq_jira_run_console_run_id"),
+        Index("ix_jira_run_console_run_id", "console_run_id", unique=True),
         Index("idx_jira_run_created", "created_at"),
         Index("idx_jira_run_vendor_status", "vendor", "status"),
     )
