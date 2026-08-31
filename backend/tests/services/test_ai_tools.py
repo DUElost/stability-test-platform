@@ -55,6 +55,16 @@ class TestRoleFiltering:
         assert len(names) == len(tools.TOOLS) - admin_only_count
 
 
+class TestPlanDispatchQueries:
+    def test_preview_requires_device_ids(self):
+        with pytest.raises(tools.ToolValidationError):
+            tools._parse_device_ids([])
+
+    def test_preview_rejects_too_many_devices(self):
+        with pytest.raises(tools.ToolValidationError):
+            tools._parse_device_ids(list(range(51)))
+
+
 class TestRunConsolePlans:
     def test_quality_gate_cmd_is_argv(self):
         plan = tools.build_runconsole_plan("run_quality_gate", {"profile": "quick"})
