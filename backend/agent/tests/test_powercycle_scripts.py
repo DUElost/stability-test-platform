@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,12 @@ def check_mod():
 def check_mod_v101():
     """powercycle_check v1.0.1：完成检测（同 sleep_check 冒烟发现）。"""
     return _load("powercycle_check_mod_v101", "powercycle_check/v1.0.1/powercycle_check.py")
+
+
+@pytest.fixture(scope="module")
+def check_mod_v102():
+    """powercycle_check v1.0.2：定时收取窗口（方案 A）+ boot 转换清零（发现⑥）。"""
+    return _load("powercycle_check_mod_v102", "powercycle_check/v1.0.2/powercycle_check.py")
 
 
 @pytest.fixture(scope="module")
@@ -249,6 +256,143 @@ class TestSetupFailFast:
 # ---------------------------------------------------------------------------
 # powercycle_check：设备离线不判死（reboot 模式固有）+ 进度/存活
 # ---------------------------------------------------------------------------
+
+
+class TestCollectWindow:
+    def _patch_env(self, monkeypatch):
+        for key in ("STP_POWER_CYCLE_COLLECT_WINDOW_START", "STP_POWER_CYCLE_COLLECT_WINDOW_MINUTES"):
+            monkeypatch.delenv(key, raising=False)
+
+    def test_disabled_when_no_start(self, check_mod_v102, monkeypatch):
+        self._patch_env(monkeypatch)
+        assert check_mod_v102._in_collect_window({}) is False
+
+    def test_inside_window(self, check_mod_v102, monkeypatch):
+        self._patch_env(monkeypatch)
+        now = datetime(2026, 8, 31, 0, 15)
+        assert check_mod_v102._in_collect_window(
+            {"collect_window_start": "00:00", "collect_window_minutes": 30}, now) is True
+
+    def test_outside_window(self, check_mod_v102, monkeypatch):
+        self._patch_env(monkeypatch)
+        now = datetime(2026, 8, 31, 1, 0)
+        assert check_mod_v102._in_collect_window(
+            {"collect_window_start": "00:00", "collect_window_minutes": 30}, now) is False
+
+    def test_cross_midnight(self, check_mod_v102, monkeypatch):
+        """窗口 23:50 + 30min → 次日 00:20 前仍属窗口（跨天覆盖）。"""
+        self._patch_env(monkeypatch)
+        now = datetime(2026, 8, 31, 0, 10)
+        assert check_mod_v102._in_collect_window(
+            {"collect_window_start": "23:50", "collect_window_minutes": 30}, now) is True
+        later = datetime(2026, 8, 31, 0, 30)
+        assert check_mod_v102._in_collect_window(
+            {"collect_window_start": "23:50", "collect_window_minutes": 30}, later) is False
+
+    def test_invalid_start_returns_false(self, check_mod_v102, monkeypatch):
+        self._patch_env(monkeypatch)
+        now = datetime(2026, 8, 31, 0, 15)
+        assert check_mod_v102._in_collect_window({"collect_window_start": "abc"}, now) is False
+        assert check_mod_v102._in_collect_window({"collect_window_start": "25:99"}, now) is False
+
+
+class TestV102WindowFlow:
+    def _patch(self, mod, monkeypatch, tmp_path, in_window=True):
+        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
+        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
+        monkeypatch.setattr(mod, "device_online", lambda: True)
+        monkeypatch.setattr(mod, "_in_collect_window", lambda cfg, now=None: in_window)
+        monkeypatch.setattr(mod, "_wait_online_short", lambda timeout_s=120: True)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+        return {"pause": [], "resume": [], "collect": []}
+
+    def test_window_collects_once_then_idles(self, check_mod_v102, monkeypatch, tmp_path):
+        calls = self._patch(check_mod_v102, monkeypatch, tmp_path)
+        monkeypatch.setattr(check_mod_v102, "pause_task", lambda: calls["pause"].append(1))
+        monkeypatch.setattr(check_mod_v102, "resume_task", lambda: calls["resume"].append(1))
+        monkeypatch.setattr(check_mod_v102, "collect_powercycle_result",
+                            lambda project: calls["collect"].append(project)
+                            or {"run_id": "powercycle_x_S1", "cycles_done": 3})
+        r1 = check_mod_v102._run({"collect_window_start": "00:00", "project": "smoke"})
+        assert r1["success"] is True
+        assert r1["progress"]["phase"] == "collecting"
+        assert r1["progress"]["last_collected_run_id"] == "powercycle_x_S1"
+        assert len(calls["pause"]) == 1 and len(calls["collect"]) == 1 and len(calls["resume"]) == 1
+        # 窗口内后续周期不重复收取
+        r2 = check_mod_v102._run({"collect_window_start": "00:00", "project": "smoke"})
+        assert r2["success"] is True
+        assert len(calls["collect"]) == 1
+
+    def test_window_collect_failure_retries_next_cycle(self, check_mod_v102, monkeypatch, tmp_path):
+        calls = self._patch(check_mod_v102, monkeypatch, tmp_path)
+        monkeypatch.setattr(check_mod_v102, "pause_task", lambda: None)
+        monkeypatch.setattr(check_mod_v102, "resume_task", lambda: None)
+
+        def fake_collect(project):
+            calls["collect"].append(project)
+            if len(calls["collect"]) == 1:
+                raise RuntimeError("设备 120s 未上线")
+            return {"run_id": "powercycle_y_S1", "cycles_done": 4}
+
+        monkeypatch.setattr(check_mod_v102, "collect_powercycle_result", fake_collect)
+        r1 = check_mod_v102._run({"collect_window_start": "00:00", "project": "smoke"})
+        assert r1["success"] is True          # 收取失败不判死
+        assert "未上线" in r1["progress"]["collect_error"]
+        r2 = check_mod_v102._run({"collect_window_start": "00:00", "project": "smoke"})
+        assert r2["progress"]["last_collected_run_id"] == "powercycle_y_S1"
+        assert r2["progress"].get("collect_error") is None
+
+    def test_window_disabled_normal_patrol(self, check_mod_v102, monkeypatch, tmp_path):
+        """未配置窗口 → 正常 patrol 语义（无 phase 字段）。"""
+        self._patch(check_mod_v102, monkeypatch, tmp_path, in_window=False)
+        monkeypatch.setattr(check_mod_v102, "service_alive", lambda: True)
+        monkeypatch.setattr(check_mod_v102, "_read_prefs_progress", lambda: (3, 100))
+        monkeypatch.setattr(check_mod_v102, "_grep_cycle_count", lambda: 0)
+        monkeypatch.setattr(check_mod_v102, "_result_bytes", lambda: 200)
+        monkeypatch.setattr(check_mod_v102, "_run_finished", lambda: False)
+        r = check_mod_v102._run({})
+        assert r["success"] is True
+        assert "phase" not in r["progress"]
+        assert r["progress"]["cycles_done"] == 3
+
+
+class TestV102BootTransition:
+    """⑥ 修复：offline→online 转换（boot 窗口）不累计 dead_streak。"""
+
+    def _patch(self, mod, monkeypatch, tmp_path):
+        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
+        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
+        monkeypatch.setattr(mod, "_in_collect_window", lambda cfg, now=None: False)
+        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: (5, 100))
+        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
+        monkeypatch.setattr(mod, "_result_bytes", lambda: 200)
+        monkeypatch.setattr(mod, "_run_finished", lambda: False)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+        return {"online": True, "alive": False}
+
+    def test_boot_window_not_counted_then_dead_detected(self, check_mod_v102, monkeypatch, tmp_path):
+        st = self._patch(check_mod_v102, monkeypatch, tmp_path)
+        monkeypatch.setattr(check_mod_v102, "device_online", lambda: st["online"])
+        monkeypatch.setattr(check_mod_v102, "service_alive", lambda: st["alive"])
+
+        # 周期1：设备离线（重启中）
+        st["online"] = False
+        r1 = check_mod_v102._run({"dead_grace_cycles": 2})
+        assert r1["success"] is True and r1["progress"]["device_online"] is False
+
+        # 周期2：刚上线（boot 窗口），服务未起 → 不累计
+        st["online"] = True
+        r2 = check_mod_v102._run({"dead_grace_cycles": 2})
+        assert r2["success"] is True
+
+        # 周期3：仍在线服务死 → dead_streak=1
+        r3 = check_mod_v102._run({"dead_grace_cycles": 2})
+        assert r3["success"] is True
+
+        # 周期4：dead_streak=2 → 判死（正常语义保留）
+        r4 = check_mod_v102._run({"dead_grace_cycles": 2})
+        assert r4["success"] is False
+        assert "连续 2 个周期" in r4["error_message"]
 
 
 class TestCheck:
