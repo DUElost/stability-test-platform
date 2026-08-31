@@ -136,7 +136,7 @@ class TestApiRoundTrip:
                 "script_version": "1.0.0", "stage": "init", "sort_order": 0,
                 "timeout_seconds": 30, "retry": 0, "enabled": True,
             }],
-            "project_key": "GENERIC", "specialty_key": "ops",
+            "specialty_key": "ops",
         }
         body.update(extra)
         return client.post("/api/v1/plans", json=body, headers=headers)
@@ -162,7 +162,7 @@ class TestApiRoundTrip:
 
         up = client.put(f"/api/v1/plans/{plan_id}",
                         json={"barrier_timeout_seconds": 7200,
-                              "project_key": "GENERIC", "specialty_key": "ops",
+                              "specialty_key": "ops",
                               "expected_updated_at": created_at}, headers=auth_headers)
         assert up.status_code == 200, up.text
         assert up.json()["data"]["barrier_timeout_seconds"] == 7200
@@ -170,7 +170,7 @@ class TestApiRoundTrip:
         # 显式置 null 要能清回缺省（走 model_fields_set，不是 None 判断）
         clr = client.put(f"/api/v1/plans/{plan_id}",
                          json={"barrier_timeout_seconds": None,
-                               "project_key": "GENERIC", "specialty_key": "ops",
+                               "specialty_key": "ops",
                                "expected_updated_at": up.json()["data"]["updated_at"]},
                          headers=auth_headers)
         assert clr.status_code == 200, clr.text
@@ -353,7 +353,7 @@ class TestStallSecondsApi:
                 "timeout_seconds": 30, "stall_seconds": stall_seconds,
                 "retry": 0, "enabled": True,
             }],
-            "project_key": "GENERIC", "specialty_key": "ops",
+            "specialty_key": "ops",
         }, headers=headers)
         assert resp.status_code == 201, resp.text
         return resp.json()["data"]
@@ -374,7 +374,7 @@ class TestStallSecondsApi:
                 "timeout_seconds": 30, "retry": 0, "enabled": True,
             }],
             "barrier_max_wait_seconds": 900,
-            "project_key": "GENERIC", "specialty_key": "ops",
+            "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         pid = resp.json()["data"]["id"]
@@ -384,7 +384,7 @@ class TestStallSecondsApi:
         up = client.put(f"/api/v1/plans/{pid}", json={
             "barrier_max_wait_seconds": None,
             "expected_updated_at": resp.json()["data"]["updated_at"],
-            "project_key": "GENERIC", "specialty_key": "ops",
+            "specialty_key": "ops",
         }, headers=auth_headers)
         assert up.status_code == 200, up.text
         assert up.json()["data"]["barrier_max_wait_seconds"] is None
@@ -397,7 +397,7 @@ class TestStallSecondsApi:
                 "script_version": "1.0.0", "stage": "init", "sort_order": 0,
                 "timeout_seconds": 30, "retry": 0, "enabled": True,
             }],
-            "project_key": "GENERIC", "specialty_key": "ops",
+            "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         assert resp.json()["data"]["steps"][0]["stall_seconds"] is None
@@ -415,7 +415,7 @@ class TestStallSecondsApi:
                 "retry": 0, "enabled": True,
             }],
             "expected_updated_at": plan["updated_at"],
-            "project_key": "GENERIC", "specialty_key": "ops",
+            "specialty_key": "ops",
         }, headers=auth_headers)
         assert up.status_code == 200, up.text
         assert up.json()["data"]["steps"][0]["stall_seconds"] == 600
@@ -433,7 +433,7 @@ class TestStallSecondsApi:
                 "retry": 0, "enabled": True,
             }],
             "expected_updated_at": plan["updated_at"],
-            "project_key": "GENERIC", "specialty_key": "ops",
+            "specialty_key": "ops",
         }, headers=auth_headers)
         assert clr.status_code == 200, clr.text
         plan = clr.json()["data"]
@@ -463,7 +463,7 @@ class TestStallSecondsApi:
                     "retry": 0, "enabled": True,
                 },
             ],
-            "project_key": "GENERIC", "specialty_key": "ops",
+            "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         plan = resp.json()["data"]
@@ -484,7 +484,7 @@ class TestStallSecondsApi:
                 "timeout_seconds": 30, "stall_seconds": -1,
                 "retry": 0, "enabled": True,
             }],
-            "project_key": "GENERIC", "specialty_key": "ops",
+            "specialty_key": "ops",
         }, headers=auth_headers)
         assert resp.status_code == 422
 
