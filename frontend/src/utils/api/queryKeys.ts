@@ -64,9 +64,26 @@ export const planRunKeys = {
     ['plan-run-logs', id, stage, severity, page] as const,
   /** Partial key — invalidates all log queries for a PlanRun. */
   logsByRun: (id: number) => ['plan-run-logs', id] as const,
-  /** ADR-0029：projectKey 维度（页面级筛选）。前缀仍为 ['plan-runs-list']。 */
-  list: (projectKey?: string | null) =>
-    ['plan-runs-list', { projectKey: projectKey ?? null }] as const,
+  /** ADR-0029：projectKey + 分页/筛选项（页面级）。前缀仍为 ['plan-runs-list']。 */
+  list: (
+    projectKey?: string | null,
+    opts?: {
+      page?: number;
+      pageSize?: number;
+      status?: string | string[] | null;
+      q?: string | null;
+    },
+  ) =>
+    [
+      'plan-runs-list',
+      {
+        projectKey: projectKey ?? null,
+        page: opts?.page ?? 1,
+        pageSize: opts?.pageSize ?? 50,
+        status: opts?.status ?? null,
+        q: opts?.q ?? null,
+      },
+    ] as const,
 } as const;
 
 export const dedupKeys = {

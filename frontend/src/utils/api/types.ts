@@ -1304,6 +1304,21 @@ export interface PlanRun {
   priority?: number;
 }
 
+/** GET /plan-runs 分页响应（ApiResponse.data）。 */
+export interface PlanRunListStats {
+  total: number;
+  running: number;
+  failed: number;
+}
+
+export interface PlanRunListPage {
+  items: PlanRun[];
+  total: number;
+  skip: number;
+  limit: number;
+  stats: PlanRunListStats;
+}
+
 export interface PlanRunCreate {
   device_ids: number[];
   /** Optional operator note → PlanRun.run_context.note */

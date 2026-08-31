@@ -45,6 +45,7 @@ export type {
   ResourcePool, ResourcePoolLoad, ResourcePoolCreatePayload,
   Plan, PlanStep, PlanStepCreate, PlanCreate, PlanUpdate,
   PlanRunStatus, PlanRunType, PlanRun, PlanRunCreate, PlanRunPreview,
+  PlanRunListPage, PlanRunListStats,
   PlanJobInstance, PlanRunSummary, PlanSnapshot, PlanSnapshotStep,
   PlanRunAbortRequest, PlanRunAbortResult, PlanRunCapabilities,
   JobActionCapabilities, StructuredApiError, ApiErrorCapabilities,

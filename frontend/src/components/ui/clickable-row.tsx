@@ -8,6 +8,7 @@ interface ClickableRowProps {
   className?: string;
   /** 无障碍语义：默认 link（跳转），可改 button */
   role?: 'link' | 'button';
+  'data-testid'?: string;
 }
 
 /**
@@ -16,7 +17,13 @@ interface ClickableRowProps {
  * Enter / Space 触发点击 + role/tabIndex + 焦点样式，
  * 解决"整行 onClick 但键盘不可达"的问题。用于 Results 表格行 / 运行记录行等。
  */
-export function ClickableRow({ onClick, children, className, role = 'link' }: ClickableRowProps) {
+export function ClickableRow({
+  onClick,
+  children,
+  className,
+  role = 'link',
+  'data-testid': testId,
+}: ClickableRowProps) {
   const handleKeyDown = (e: KeyboardEvent<HTMLTableRowElement>) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
@@ -34,6 +41,7 @@ export function ClickableRow({ onClick, children, className, role = 'link' }: Cl
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role={role}
+      data-testid={testId}
     >
       {children}
     </TableRow>

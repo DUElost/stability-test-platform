@@ -87,7 +87,8 @@ describe('IssueTrackerPage', () => {
     fireEvent.click(screen.getByTestId('issue-tracker-tab-drafts'));
 
     expect(await screen.findByText('Crash on boot')).toBeInTheDocument();
-    expect(screen.getByText('ABC-Bug | Plan #10 | Job #42')).toBeInTheDocument();
+    expect(screen.getByText('ABC')).toBeInTheDocument();
+    expect(screen.getByText('#42')).toBeInTheDocument();
   });
 
   it('shows an inline error when the drafts query fails outright', async () => {

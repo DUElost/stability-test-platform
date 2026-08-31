@@ -3,6 +3,7 @@ import { unwrapApiResponse } from './client';
 import type {
   PlanRun,
   PlanRunStatus,
+  PlanRunListPage,
   PlanJobInstance,
   PlanRunSummary,
   JobArtifactEntry,
@@ -39,13 +40,56 @@ export interface ListPlanRunDevicesParams {
   host_id?: string | 'all';
 }
 
+export interface ListPlanRunsParams {
+  skip?: number;
+  limit?: number;
+  planId?: number;
+  /** 单值或多值（排队中 = QUEUED+PRECHECK） */
+  status?: PlanRunStatus | PlanRunStatus[];
+  projectKey?: string;
+  /** Run ID / Plan 名 / 触发者 */
+  q?: string;
+}
+
+function buildPlanRunListParams(params: ListPlanRunsParams): URLSearchParams {
+  const sp = new URLSearchParams();
+  sp.set('skip', String(params.skip ?? 0));
+  sp.set('limit', String(params.limit ?? 50));
+  if (params.planId != null) sp.set('plan_id', String(params.planId));
+  if (params.projectKey) sp.set('project_key', params.projectKey);
+  if (params.q?.trim()) sp.set('q', params.q.trim());
+  const statuses = params.status == null
+    ? []
+    : Array.isArray(params.status)
+      ? params.status
+      : [params.status];
+  for (const s of statuses) {
+    sp.append('status', s);
+  }
+  return sp;
+}
+
 export const planRuns = {
-  list: (skip = 0, limit = 50, planId?: number, status?: PlanRunStatus, projectKey?: string) => {
-    const params: Record<string, string | number> = { skip, limit };
-    if (planId != null) params.plan_id = planId;
-    if (status) params.status = status;
-    if (projectKey) params.project_key = projectKey;
-    return unwrapApiResponse<PlanRun[]>(apiClient.get('/plan-runs', { params }));
+  /** 分页列表（含 total / stats）。 */
+  listPage: (params: ListPlanRunsParams = {}) =>
+    unwrapApiResponse<PlanRunListPage>(
+      apiClient.get(`/plan-runs?${buildPlanRunListParams(params).toString()}`),
+    ),
+
+  /**
+   * 兼容旧调用：返回当前页 items。
+   * 新列表页请用 `listPage` 拿 total/stats。
+   */
+  list: async (
+    skip = 0,
+    limit = 50,
+    planId?: number,
+    status?: PlanRunStatus | PlanRunStatus[],
+    projectKey?: string,
+    q?: string,
+  ) => {
+    const page = await planRuns.listPage({ skip, limit, planId, status, projectKey, q });
+    return page.items;
   },
 
   get: (id: number) =>
