@@ -43,6 +43,12 @@
   三条件（cycles==0 / result_bytes==0 / 转换清零）、⑪ finish 等
   boot_completed==1（boot 早期 /data 未挂载 run-as stat 失败）、
   主机时区各异（PDT）→ 窗口按东八区固定判定。
+- 最终回归验收（2026-08-31，4 设备 × powercycle v1.0.5 + 窗口 + finish v1.0.2）：
+  **setup 4/4 ✅、窗口收取 4/4 ✅（18:05 触发，13-15 轮落盘）、teardown 4/4 ✅
+  （22-23 轮全量，reboot_fail=0）、run_id 同秒多设备共存 ✅**。-67 两设备
+  patrol 全程零判死；-71 两设备各判死 1 次——服务偶发启动失败后自愈（文件
+  可读、cycles>0、无转换，v1.0.5 判死**正确触发**但 PowerCycle 重启场景
+  判死策略可更宽容——遗留：grace 提高或结果文件 mtime 停滞判定）。
 
 ## 0. 结论摘要
 
