@@ -36,7 +36,7 @@ PR required checks 不含 vitest/build；本地必须跑。build 后确认阻塞
 
 ## Revisit
 
-- Phase 2：Sidebar 接 `--sidebar`、Card 阴影收敛、Button / `destructive-foreground`（洋红底白字 ≈ 4.4:1，贴 AA 边界）对比度代偿。
+- Phase 2：✅ `docs/notes/feature/2026-08-31-openrouter-ui-phase2-shell.md`（Sidebar / 阴影 / destructive AA）。
 - Phase 3：逐页；若收敛卡片圆角，~59 处硬编码是待办来源。
 - Phase 4：`docs/design/mockups/plan-execute-v2/styles.css` 同步。
 - body `450`：Noto 动态加载前 CJK 回落字体可能短暂命中 700（窗口极小）；若首屏「闪粗」投诉再议字体加载策略。

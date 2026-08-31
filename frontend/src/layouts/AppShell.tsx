@@ -15,7 +15,7 @@ import { NotificationBell } from '@/components/ui/NotificationBell';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { api } from '@/utils/api';
 import { DASHBOARD_SUBSCRIPTION } from '@/config';
-import { BORDER, ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
+import { BORDER, ELEVATION, INTERACTIVE, SIDEBAR, SURFACE, TEXT } from '@/design-system/tokens';
 
 /**
  * 主应用布局 - 源自 web 样板设计风格
@@ -78,10 +78,9 @@ export default function AppShell() {
 
       <aside
         className={cn(
-          'hidden lg:flex flex-col transition-all duration-300',
-          SURFACE.elevated,
-          BORDER.default,
-          'border-r',
+          'hidden lg:flex flex-col transition-all duration-300 border-r',
+          SIDEBAR.root,
+          SIDEBAR.border,
         )}
         style={{ width: sidebarCollapsed ? 72 : 224 }}
       >
@@ -95,8 +94,8 @@ export default function AppShell() {
       <aside
         className={cn(
           'fixed inset-y-0 left-0 z-50 w-56 transform transition-transform duration-300 lg:hidden border-r',
-          SURFACE.elevated,
-          BORDER.default,
+          SIDEBAR.root,
+          SIDEBAR.border,
           sidebarOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
@@ -114,10 +113,11 @@ export default function AppShell() {
           aria-label="展开侧边栏"
           className={cn(
             'fixed left-[60px] top-1/2 -translate-y-1/2 z-40 h-6 w-6 rounded-full flex items-center justify-center transition-all duration-200',
-            SURFACE.elevated,
-            BORDER.default,
+            SIDEBAR.root,
+            SIDEBAR.border,
+            'border',
             ELEVATION.sm,
-            INTERACTIVE.hover,
+            'hover:bg-sidebar-accent',
           )}
         >
           <ChevronRight size={14} className={TEXT.subtitle} />

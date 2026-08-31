@@ -62,7 +62,7 @@
     --muted-foreground: 197.1 53.8% 2.5% / 0.69;
     --accent: 263.7 90.4% 54.9% / 0.078;
     --accent-foreground: 263.7 90.4% 54.9%;
-    --destructive: 346.8 77.2% 49.8%;
+    --destructive: 346.8 77.2% 45%;
     --destructive-foreground: 240 50% 99.2%;
     --warning: 41 100% 45%;
     --warning-foreground: 197.1 53.8% 2.5%;
@@ -101,7 +101,7 @@
     --muted-foreground: 240 5% 64.9%;
     --accent: 240 3.7% 15.9%;
     --accent-foreground: 0 0% 98%;
-    --destructive: 346.8 77.2% 49.8%;
+    --destructive: 346.8 77.2% 45%;
     --destructive-foreground: 240 50% 99.2%;
     --warning: 42 100% 62%;
     --warning-foreground: 224 7% 4%;
@@ -158,13 +158,14 @@
     }
   }
 
-  /* 卡片悬停效果 */
+  /* 卡片悬停：靠边框强调，不做浮起（OpenRouter 扁平分层） */
   .card-hover {
-    @apply transition-all duration-200 ease-out;
+    @apply transition-colors duration-150 ease-out;
   }
 
   .card-hover:hover {
-    @apply shadow-lg -translate-y-0.5;
+    @apply border-border;
+    box-shadow: 0 0 0 1px hsl(var(--border));
   }
 
   /* 按钮点击效果 */

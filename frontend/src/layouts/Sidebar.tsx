@@ -25,10 +25,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import {
-  BORDER,
-  INTERACTIVE,
-  SURFACE,
-  TEXT,
+  SIDEBAR,
   navIconClass,
   navLinkClass,
 } from '@/design-system/tokens';
@@ -166,22 +163,22 @@ export default function Sidebar({
   );
 
   return (
-    <div className={cn('flex flex-col h-full', SURFACE.elevated)}>
+    <div className={cn('flex flex-col h-full', SIDEBAR.root)}>
       {/* Logo */}
-      <div className={cn('h-20 flex items-center px-5 border-b', BORDER.default)}>
+      <div className={cn('h-20 flex items-center px-5 border-b', SIDEBAR.border)}>
         <div className="flex items-center gap-3 overflow-hidden">
           <div
             className={cn(
               'flex items-center justify-center rounded-lg transition-all duration-300 w-8 h-8',
-              SURFACE.subtle,
+              SIDEBAR.subtle,
             )}
           >
-            <Zap size={18} className={TEXT.heading} />
+            <Zap size={18} className="text-sidebar-foreground" />
           </div>
           <span
             className={cn(
-              'font-semibold text-base whitespace-nowrap transition-all duration-300',
-              TEXT.heading,
+              'font-semibold text-base whitespace-nowrap transition-all duration-300 tracking-[-0.02em]',
+              'text-sidebar-foreground',
               collapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100',
             )}
           >
@@ -191,7 +188,9 @@ export default function Sidebar({
         {isMobile && onCloseMobile && (
           <button
             onClick={onCloseMobile}
-            className={cn('ml-auto lg:hidden p-1', INTERACTIVE.iconButton)}
+            className={cn(
+              'ml-auto lg:hidden p-1 text-sidebar-foreground/60 hover:text-sidebar-foreground',
+            )}
             aria-label="关闭侧边栏"
           >
             <X className="w-5 h-5" />
@@ -232,7 +231,7 @@ export default function Sidebar({
           return (
             <div
               key={group.label}
-              className={cn('pb-3 mb-3 border-b last:mb-0 last:border-b-0 last:pb-0', BORDER.default)}
+              className={cn('pb-3 mb-3 border-b last:mb-0 last:border-b-0 last:pb-0', SIDEBAR.border)}
             >
               {!collapsed && (
                 <button
@@ -241,8 +240,7 @@ export default function Sidebar({
                   aria-expanded={!isGroupCollapsed}
                   className={cn(
                     'w-full flex items-center justify-between px-3 mb-2 text-xs font-medium uppercase tracking-wider transition-colors',
-                    TEXT.caption,
-                    INTERACTIVE.hoverText,
+                    'text-sidebar-foreground/45 hover:text-sidebar-foreground/80',
                   )}
                 >
                   <span>{group.label}</span>
@@ -295,7 +293,7 @@ export default function Sidebar({
 
       {/* Collapse Toggle Button - Desktop only */}
       {!isMobile && onToggleCollapse && (
-        <div className={cn('p-3 border-t', BORDER.default)}>
+        <div className={cn('p-3 border-t', SIDEBAR.border)}>
           <button
             onClick={onToggleCollapse}
             className={navLinkClass(false, collapsed)}

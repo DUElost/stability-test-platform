@@ -64,7 +64,7 @@ export const CHART_COLORS = {
   primary: 'hsl(263.7, 90.4%, 54.9%)',     // --primary（葡萄紫）
   success: 'hsl(154.9, 100%, 37.5%)',      // --success
   warning: 'hsl(41, 100%, 45%)',           // --warning
-  error: 'hsl(346.8, 77.2%, 49.8%)',       // --destructive
+  error: 'hsl(346.8, 77.2%, 45%)',         // --destructive（L 下调过 AA）
   info: 'hsl(199, 89%, 48%)',              // --info（有意保留蓝）
   muted: 'hsl(197.1, 53.8%, 2.5%, 0.69)',  // --muted-foreground（浅色通道）
 

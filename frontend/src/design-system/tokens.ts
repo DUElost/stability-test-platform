@@ -16,6 +16,17 @@ export const SURFACE = {
   header: 'bg-card/80 backdrop-blur-sm',
 } as const;
 
+/**
+ * 侧栏独立色阶（OpenRouter zinc：light #fafafa / dark #09090b）。
+ * Phase 2 起 AppShell/Sidebar 走这组，勿再混用 SURFACE.elevated。
+ */
+export const SIDEBAR = {
+  root: 'bg-sidebar text-sidebar-foreground',
+  border: 'border-sidebar-border',
+  accent: 'bg-sidebar-accent text-sidebar-accent-foreground',
+  subtle: 'bg-sidebar-accent/60',
+} as const;
+
 /** 边框 */
 export const BORDER = {
   default: 'border-border',
@@ -45,13 +56,13 @@ export const INTERACTIVE = {
   iconDanger: 'text-destructive hover:bg-destructive/10',
 } as const;
 
-/** 侧栏导航 */
+/** 侧栏导航（hover / active 走 sidebar-accent，与内容区 accent 紫晕分离） */
 export function navLinkClass(active: boolean, collapsed?: boolean): string {
   return cn(
-    'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group',
+    'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors duration-150 group',
     active
-      ? 'bg-accent text-foreground font-medium'
-      : cn('text-muted-foreground', INTERACTIVE.hover, INTERACTIVE.hoverText),
+      ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
     collapsed && 'justify-center px-2',
   );
 }
@@ -59,7 +70,9 @@ export function navLinkClass(active: boolean, collapsed?: boolean): string {
 export function navIconClass(active: boolean): string {
   return cn(
     'w-4 h-4 flex-shrink-0 transition-colors',
-    active ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground',
+    active
+      ? 'text-sidebar-accent-foreground'
+      : 'text-sidebar-foreground/55 group-hover:text-sidebar-accent-foreground',
   );
 }
 
@@ -119,12 +132,17 @@ export const LAYOUT = {
 
 export type PageWidth = keyof typeof LAYOUT.pageWidth;
 
-/** 阴影（与 Tailwind 默认阶梯一致，集中引用便于全局调整） */
+/**
+ * 阴影 — OpenRouter 靠边框分层，几乎无投影。
+ * sm = 1px 顶沿线（等价「薄抬升」）；md/lg 留给真正浮层（dropdown/modal）。
+ */
 export const ELEVATION = {
-  sm: 'shadow-sm',
+  sm: 'shadow-[0_1px_0_0_hsl(var(--border))]',
   md: 'shadow-md',
   lg: 'shadow-lg',
   dropdown: 'shadow-lg border border-border',
+  /** 卡片默认：无投影，只靠 border */
+  flat: 'shadow-none',
 } as const;
 
 /** 仪表盘 / KPI 统计卡 */
@@ -267,7 +285,7 @@ export function dedupActionBtnClass(variant: 'primary' | 'success'): string {
 
 /** 卡片容器（PlanRun 详情区块） */
 export const PANEL = {
-  root: cn('overflow-hidden rounded-xl border bg-card', ELEVATION.sm),
+  root: cn('overflow-hidden rounded-xl border bg-card', ELEVATION.flat),
   footer: cn('border-t bg-muted/50 px-4 py-2'),
   sectionLabel: 'text-[11px] text-muted-foreground',
 } as const;
@@ -367,9 +385,9 @@ export const SEGMENTED_DARK = {
 
 /** 仪表盘 KPI 摘要卡 */
 export const DASHBOARD_SUMMARY_CARD = {
-  root: 'rounded-2xl border bg-card px-4 py-3 shadow-sm',
+  root: cn('rounded-2xl border bg-card px-4 py-3', ELEVATION.flat),
   label: 'text-[11px] uppercase tracking-[0.16em] text-muted-foreground',
-  panel: 'rounded-[24px] border bg-card p-4 shadow-sm',
+  panel: cn('rounded-[24px] border bg-card p-4', ELEVATION.flat),
   sectionMuted: 'rounded-[24px] border bg-muted/50 p-4',
 } as const;
 
@@ -453,7 +471,7 @@ export const PIPELINE_EDITOR = {
   panel: 'flex flex-col h-full bg-card border-border',
   panelHeader: 'bg-muted/30 border-b border-border',
   canvasBg: 'bg-muted/40',
-  card: 'bg-card border border-border rounded-[10px] shadow-sm',
+  card: cn('bg-card border border-border rounded-[10px]', ELEVATION.flat),
   cardInner: 'border border-border rounded-[7px] overflow-hidden bg-card',
   cardHead:
     'px-2.5 py-1.5 bg-muted/30 border-b border-border text-[11px] font-bold text-foreground flex items-center justify-between',
