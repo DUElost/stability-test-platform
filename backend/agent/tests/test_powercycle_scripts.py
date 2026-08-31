@@ -59,6 +59,12 @@ def finish_mod():
     return _load("powercycle_finish_mod", "powercycle_finish/v1.0.0/powercycle_finish.py")
 
 
+@pytest.fixture(scope="module")
+def finish_mod_v101():
+    """powercycle_finish v1.0.1：收取前置等待设备上线（验收发现⑦）+ run_id 设备维度（⑨）。"""
+    return _load("powercycle_finish_mod_v101", "powercycle_finish/v1.0.1/powercycle_finish.py")
+
+
 @pytest.fixture()
 def golden_result() -> bytes:
     return (_FIXTURES / "powercycle_result.txt").read_bytes()
@@ -355,8 +361,60 @@ class TestCheckV101Completion:
 # ---------------------------------------------------------------------------
 
 
+class TestWaitDeviceOnline:
+    def test_online_immediately(self, finish_mod_v101, monkeypatch):
+        monkeypatch.setattr(finish_mod_v101, "device_online", lambda: True)
+        assert finish_mod_v101._wait_device_online(600) is True
+
+    def test_offline_until_timeout(self, finish_mod_v101, monkeypatch):
+        monkeypatch.setattr(finish_mod_v101, "device_online", lambda: False)
+        monkeypatch.setattr(finish_mod_v101.time, "sleep", lambda _: None)
+        assert finish_mod_v101._wait_device_online(10) is False
+
+    def test_comes_online_after_retries(self, finish_mod_v101, monkeypatch):
+        calls = {"n": 0}
+
+        def fake_online():
+            calls["n"] += 1
+            return calls["n"] >= 2
+
+        monkeypatch.setattr(finish_mod_v101, "device_online", fake_online)
+        monkeypatch.setattr(finish_mod_v101.time, "sleep", lambda _: None)
+        assert finish_mod_v101._wait_device_online(600) is True
+
+    def test_run_waits_online_before_stop(self, finish_mod_v101, monkeypatch, tmp_path):
+        """收取前置：设备离线时先等待（验收发现⑦——teardown 撞 reboot 窗口）。"""
+        order = []
+        monkeypatch.setattr(finish_mod_v101, "device_serial", lambda: "PC-S3")
+        monkeypatch.setattr(finish_mod_v101, "device_online", lambda: True)
+        monkeypatch.setattr(finish_mod_v101, "stop_task", lambda force=True: order.append("stop"))
+        monkeypatch.setattr(finish_mod_v101.time, "sleep", lambda _: None)
+        monkeypatch.setattr(finish_mod_v101, "adb_shell", lambda cmd, timeout=30: "")
+
+        def fake_pull():
+            local = tmp_path / "powercycle_result.txt"
+            local.write_bytes(b"cycle 1/10 start\n")
+            return local
+
+        monkeypatch.setattr(finish_mod_v101, "_pull_result_file", fake_pull)
+        monkeypatch.setattr(finish_mod_v101, "results_dir", lambda project: tmp_path / "r")
+        out = finish_mod_v101._run({})
+        assert out["metrics"]["final_status"] == "INCOMPLETE"
+        assert out["metrics"]["run_id"].endswith("_PC-S3")
+
+    def test_run_offline_timeout_raises(self, finish_mod_v101, monkeypatch):
+        """等待超时仍离线 → 明确报错（不静默丢结果）。"""
+        monkeypatch.setattr(finish_mod_v101, "device_serial", lambda: "PC-S4")
+        monkeypatch.setattr(finish_mod_v101, "device_online", lambda: False)
+        monkeypatch.setattr(finish_mod_v101.time, "sleep", lambda _: None)
+        with pytest.raises(RuntimeError) as ei:
+            finish_mod_v101._run({"wait_device_online_seconds": 10})
+        assert "未上线" in str(ei.value)
+
+
 class TestFinish:
     def test_run_writes_detail_json(self, finish_mod, monkeypatch, tmp_path):
+        monkeypatch.setattr(finish_mod, "device_serial", lambda: "PC-S1")
         monkeypatch.setattr(finish_mod, "stop_task", lambda force=True: None)
         monkeypatch.setattr(finish_mod.time, "sleep", lambda _: None)
         monkeypatch.setattr(finish_mod, "adb_shell", lambda cmd, timeout=30: "")
@@ -385,6 +443,7 @@ class TestFinish:
 
     def test_run_incomplete_marked(self, finish_mod, monkeypatch, tmp_path):
         """无 finished 行 → final_status=INCOMPLETE（测试未收尾）。"""
+        monkeypatch.setattr(finish_mod, "device_serial", lambda: "PC-S2")
         monkeypatch.setattr(finish_mod, "stop_task", lambda force=True: None)
         monkeypatch.setattr(finish_mod.time, "sleep", lambda _: None)
         monkeypatch.setattr(finish_mod, "adb_shell", lambda cmd, timeout=30: "")

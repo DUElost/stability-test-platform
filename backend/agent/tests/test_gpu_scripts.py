@@ -326,12 +326,36 @@ class TestV101ProcessDetection:
 
 
 # ---------------------------------------------------------------------------
+# gpu_finish v1.0.1：run_id 设备维度（验收发现⑨）
+# ---------------------------------------------------------------------------
+
+
+class TestFinishV101RunId:
+    def test_run_id_has_serial(self, monkeypatch, tmp_path):
+        mod = _load("gpu_finish_mod_v102", "gpu_finish/v1.0.2/gpu_finish.py")
+        monkeypatch.setattr(mod, "device_serial", lambda: "GPU-S9")
+        monkeypatch.setattr(mod, "stop_stress", lambda: None)
+        monkeypatch.setattr(mod.time, "sleep", lambda _: None)
+
+        def fake_pull():
+            local = tmp_path / "test_log.txt"
+            local.write_text("GPU_RUN_START test_id=001 rounds=1\nGPU_ROUND 1 rc=0\n", encoding="utf-8")
+            return local
+
+        monkeypatch.setattr(mod, "_pull_result_log", fake_pull)
+        monkeypatch.setattr(mod, "results_dir", lambda project: tmp_path / "r")
+        out = mod._run({})
+        assert out["metrics"]["run_id"].endswith("_GPU-S9")
+
+
+# ---------------------------------------------------------------------------
 # gpu_finish：停止 + 拉取 + 解析 + 落盘
 # ---------------------------------------------------------------------------
 
 
 class TestFinish:
     def test_run_writes_detail_json(self, finish_mod, monkeypatch, tmp_path):
+        monkeypatch.setattr(finish_mod, "device_serial", lambda: "GPU-S1")
         monkeypatch.setattr(finish_mod, "stop_stress", lambda: None)
         monkeypatch.setattr(finish_mod.time, "sleep", lambda _: None)
 
@@ -364,6 +388,7 @@ class TestFinish:
 
     def test_run_incomplete_marked(self, finish_mod, monkeypatch, tmp_path):
         """无 GPU_RUN_END → final_status=INCOMPLETE。"""
+        monkeypatch.setattr(finish_mod, "device_serial", lambda: "GPU-S2")
         monkeypatch.setattr(finish_mod, "stop_stress", lambda: None)
         monkeypatch.setattr(finish_mod.time, "sleep", lambda _: None)
 
