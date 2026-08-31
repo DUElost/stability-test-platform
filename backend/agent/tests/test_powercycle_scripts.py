@@ -49,6 +49,12 @@ def check_mod():
 
 
 @pytest.fixture(scope="module")
+def check_mod_v101():
+    """powercycle_check v1.0.1：完成检测（同 sleep_check 冒烟发现）。"""
+    return _load("powercycle_check_mod_v101", "powercycle_check/v1.0.1/powercycle_check.py")
+
+
+@pytest.fixture(scope="module")
 def finish_mod():
     return _load("powercycle_finish_mod", "powercycle_finish/v1.0.0/powercycle_finish.py")
 
@@ -296,6 +302,52 @@ class TestCheck:
         r = check_mod._run({})
         assert r["progress"]["cycles_done"] == 9
         assert r["progress"]["expected_cycles"] == 0
+
+
+# ---------------------------------------------------------------------------
+# powercycle_check v1.0.1 完成检测（服务完成 test_times 后自停 → 报完成）
+# ---------------------------------------------------------------------------
+
+
+class TestCheckV101Completion:
+    def _patch_device_io(self, mod, monkeypatch, tmp_path, online=True, finished=True, alive=False,
+                         prefs=(2, 2)):
+        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
+        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
+        monkeypatch.setattr(mod, "device_online", lambda: online)
+        monkeypatch.setattr(mod, "service_alive", lambda: alive)
+        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: prefs)
+        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
+        monkeypatch.setattr(mod, "_result_bytes", lambda: 383)
+        monkeypatch.setattr(mod, "_run_finished", lambda: finished)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+
+    def test_finished_reports_completion(self, check_mod_v101, monkeypatch, tmp_path):
+        self._patch_device_io(check_mod_v101, monkeypatch, tmp_path, finished=True, alive=False)
+        r = check_mod_v101._run({})
+        assert r["success"] is True
+        assert r["progress"]["run_finished"] is True
+        assert r["progress"]["cycles_done"] == 2
+
+    def test_finished_never_accumulates_dead_streak(self, check_mod_v101, monkeypatch, tmp_path):
+        self._patch_device_io(check_mod_v101, monkeypatch, tmp_path, finished=True, alive=False)
+        for _ in range(5):
+            assert check_mod_v101._run({"dead_grace_cycles": 2})["success"] is True
+
+    def test_not_finished_keeps_v100_dead_streak(self, check_mod_v101, monkeypatch, tmp_path):
+        self._patch_device_io(check_mod_v101, monkeypatch, tmp_path, finished=False, alive=False)
+        r1 = check_mod_v101._run({"dead_grace_cycles": 2})
+        assert r1["success"] is True
+        r2 = check_mod_v101._run({"dead_grace_cycles": 2})
+        assert r2["success"] is False
+
+    def test_offline_still_takes_precedence(self, check_mod_v101, monkeypatch, tmp_path):
+        """设备离线（重启周期）仍先报离线——此时结果文件读不到，finished 检测天然跳过。"""
+        self._patch_device_io(check_mod_v101, monkeypatch, tmp_path, online=False, finished=False)
+        r = check_mod_v101._run({})
+        assert r["success"] is True
+        assert r["progress"]["device_online"] is False
+        assert "run_finished" not in r["progress"]
 
 
 # ---------------------------------------------------------------------------
