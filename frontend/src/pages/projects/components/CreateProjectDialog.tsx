@@ -24,8 +24,6 @@ const EMPTY: ProjectCreateInput = {
   project_key: '',
   display_name: '',
   customer: '',
-  form_factor: '',
-  product_line: '',
   jira_project_key: '',
 };
 
@@ -72,8 +70,6 @@ export default function CreateProjectDialog({
       project_key: projectKey,
       display_name: displayName,
       customer: blankToNull(form.customer),
-      form_factor: blankToNull(form.form_factor),
-      product_line: blankToNull(form.product_line),
       jira_project_key: blankToNull(form.jira_project_key),
     });
   };
@@ -124,34 +120,6 @@ export default function CreateProjectDialog({
                 id="project-customer"
                 value={form.customer ?? ''}
                 onChange={(event) => setField('customer', event.target.value)}
-              />
-            </div>
-            <div>
-              <label className={FORM.label} htmlFor="project-form">
-                形态
-              </label>
-              <select
-                id="project-form"
-                data-testid="create-project-form"
-                value={form.form_factor ?? ''}
-                onChange={(event) => setField('form_factor', event.target.value)}
-                className={FORM.select}
-              >
-                <option value="">未设置</option>
-                <option value="PHONE">手机</option>
-                <option value="TABLET">平板</option>
-                <option value="WATCH">手表</option>
-                <option value="OTHER">其他</option>
-              </select>
-            </div>
-            <div>
-              <label className={FORM.label} htmlFor="project-line">
-                产品线
-              </label>
-              <Input
-                id="project-line"
-                value={form.product_line ?? ''}
-                onChange={(event) => setField('product_line', event.target.value)}
               />
             </div>
           </div>
