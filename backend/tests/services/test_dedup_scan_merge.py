@@ -242,3 +242,74 @@ class TestPublishMergeToCenter:
         ds._publish_merge_to_center(270, merge_dir)
         dest = ds._publish_merge_to_center(270, merge_dir)  # 重跑覆盖
         assert (dest / "Result_MergeFiles.xls").read_text(encoding="utf-8") == "new"
+
+
+# ── merge 报告 Path 对外重写（2026-08-31）────────────────────────────
+
+class TestMapAgentPathToCenter:
+    def test_maps_stp_scan_path_to_center(self):
+        src = ("/mnt/hdd/aee_events/.stp-scan/pr280-mc7gh7g0/"
+               "MLD-LX2_16_260804V71_0831_MonkeyAEEinfo/AYCGNX6728006411/aee_exp/"
+               "2026_0831_020000_789_db.fatal.04.KE/db.fatal.00.KEx/"
+               "db.fatal.00.KE.dbg.DEC/__exp_main.txt")
+        got = ds._map_agent_path_to_center(src, 280, "/mnt/stp-aee")
+        assert got == ("/mnt/stp-aee/devices/280/2026_0831_020000_789_db.fatal.04.KE/"
+                       "db.fatal.00.KEx/db.fatal.00.KE.dbg.DEC/__exp_main.txt")
+
+    def test_maps_vendor_aee_exp(self):
+        src = ("/mnt/hdd/aee_events/.stp-scan/pr280-x/"
+               "FOLDER/SERIAL/vendor_aee_exp/2026_0807_231846_000_db.00.NE/main.dbg")
+        got = ds._map_agent_path_to_center(src, 280, "/mnt/stp-aee")
+        assert got == ("/mnt/stp-aee/devices/280/2026_0807_231846_000_db.00.NE/main.dbg")
+
+    def test_non_event_path_unchanged(self):
+        assert ds._map_agent_path_to_center(
+            "/mnt/hdd/aee_events/Result_x.xls", 280, "/mnt/stp-aee"
+        ) == "/mnt/hdd/aee_events/Result_x.xls"
+
+
+class TestRewriteMergeReportPaths:
+    def test_rewrites_path_column_in_xls(self, tmp_path):
+        import xlwt
+
+        xls = tmp_path / "Result_MergeFiles.xls"
+        wb = xlwt.Workbook()
+        ws = wb.add_sheet("Sheet1")
+        ws.write(0, 0, "Id"); ws.write(0, 1, "Path"); ws.write(0, 2, "ExpClass")
+        ws.write(1, 0, "0.0")
+        ws.write(1, 1, ("/mnt/hdd/aee_events/.stp-scan/pr280-x/F/S/aee_exp/"
+                        "2026_0831_020000_789_db.fatal.04.KE/__exp_main.txt"))
+        ws.write(1, 2, "Kernel (KE)")
+        wb.save(str(xls))
+
+        n = ds._rewrite_merge_report_paths_to_center(tmp_path, 280, "/mnt/stp-aee")
+        assert n == 1
+        import xlrd
+        book = xlrd.open_workbook(str(xls))
+        sheet = book.sheet_by_index(0)
+        assert sheet.cell_value(1, 1) == (
+            "/mnt/stp-aee/devices/280/2026_0831_020000_789_db.fatal.04.KE/__exp_main.txt")
+        assert sheet.cell_value(1, 2) == "Kernel (KE)"  # 其余列原样
+
+    def test_publish_rewrites_center_copy(self, tmp_path, monkeypatch):
+        import xlwt
+
+        merge_dir = tmp_path / "merge_result" / "d1"
+        merge_dir.mkdir(parents=True)
+        xls = merge_dir / "Result_MergeFiles.xls"
+        wb = xlwt.Workbook()
+        ws = wb.add_sheet("S")
+        ws.write(0, 0, "Path")
+        ws.write(1, 0, ("/mnt/hdd/aee_events/.stp-scan/pr280-x/F/S/aee_exp/"
+                        "2026_0807_231846_000_db.00.NE/main.dbg"))
+        wb.save(str(xls))
+        center = tmp_path / "center"
+        center.mkdir()
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+
+        dest = ds._publish_merge_to_center(280, merge_dir)
+        assert dest is not None
+        import xlrd
+        book = xlrd.open_workbook(str(dest / "Result_MergeFiles.xls"))
+        assert book.sheet_by_index(0).cell_value(1, 0) == (
+            f"{center}/devices/280/2026_0807_231846_000_db.00.NE/main.dbg")
