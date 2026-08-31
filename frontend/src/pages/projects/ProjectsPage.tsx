@@ -9,7 +9,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
-import { LAYOUT, TEXT } from '@/design-system/tokens';
+import { LAYOUT, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -192,14 +192,16 @@ export default function ProjectsPage() {
         subtitle="按客户与机型登记项目归属，维护 JIRA 集成。"
       />
 
-      {/* KPI 带：唯一需要人行动的数字（待归属）放在最前、最大 */}
+      {/* KPI 带：稀疏数字条，待归属优先 */}
       <Card data-testid="kpi-strip">
-        <CardContent className="py-3">
-          <div className="grid grid-cols-3 divide-x">
-            <div className="px-4 text-center">
+        <CardContent className="py-3.5">
+          <div className="grid grid-cols-3 divide-x divide-border">
+            <div className="px-4">
+              <p className={STAT.label}>待归属设备</p>
               <p
                 className={cn(
-                  'text-xl font-bold leading-none',
+                  STAT.value,
+                  'mt-2 text-2xl',
                   (summaryQ.data?.unassigned_devices ?? 0) > 0
                     ? 'text-warning'
                     : 'text-success',
@@ -207,22 +209,22 @@ export default function ProjectsPage() {
               >
                 {summaryQ.data?.unassigned_devices ?? '—'}
               </p>
-              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>台设备待归属</p>
             </div>
-            <div className="px-4 text-center">
-              <p className="text-lg font-bold leading-none text-foreground">{totals.projects}</p>
-              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>人工项目</p>
+            <div className="px-4">
+              <p className={STAT.label}>人工项目</p>
+              <p className={cn(STAT.value, 'mt-2 text-2xl')}>{totals.projects}</p>
             </div>
-            <div className="px-4 text-center">
+            <div className="px-4">
+              <p className={STAT.label}>在跑 Run</p>
               <p
                 className={cn(
-                  'text-lg font-bold leading-none',
-                  totals.running > 0 ? 'text-success' : 'text-foreground',
+                  STAT.value,
+                  'mt-2 text-2xl',
+                  totals.running > 0 ? 'text-success' : undefined,
                 )}
               >
                 {totals.running}
               </p>
-              <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>在跑 Run</p>
             </div>
           </div>
         </CardContent>
@@ -349,7 +351,7 @@ export default function ProjectsPage() {
                 data-testid="project-card"
                 role="button"
                 tabIndex={0}
-                className="cursor-pointer transition-all hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="cursor-pointer transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => navigate(`/projects/${project.project_key}`)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
@@ -378,10 +380,8 @@ export default function ProjectsPage() {
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
-                      <p className="text-xl font-bold leading-none text-foreground">
-                        {project.device_count}
-                      </p>
-                      <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>台设备</p>
+                      <p className={cn(STAT.value, 'text-2xl')}>{project.device_count}</p>
+                      <p className={cn('mt-1', STAT.label)}>台设备</p>
                     </div>
                   </div>
 

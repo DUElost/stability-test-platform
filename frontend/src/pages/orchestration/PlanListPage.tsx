@@ -148,24 +148,24 @@ export default function PlanListPage() {
         }
       />
 
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* Stats — 稀疏数字条 */}
+      <div className="grid grid-cols-3 gap-3">
         <Card>
-          <CardContent className="py-4 text-center">
-            <p className={STAT.value}>{stats.total}</p>
+          <CardContent className="py-4 px-4">
             <p className={STAT.label}>Plan 总数</p>
+            <p className={cn(STAT.value, 'mt-2')}>{stats.total}</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="py-4 text-center">
-            <p className={STAT.value}>{stats.withSteps}</p>
+          <CardContent className="py-4 px-4">
             <p className={STAT.label}>已配置步骤</p>
+            <p className={cn(STAT.value, 'mt-2')}>{stats.withSteps}</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="py-4 text-center">
-            <p className={STAT.value}>{stats.chained}</p>
+          <CardContent className="py-4 px-4">
             <p className={STAT.label}>链式 Plan</p>
+            <p className={cn(STAT.value, 'mt-2')}>{stats.chained}</p>
           </CardContent>
         </Card>
       </div>
@@ -230,8 +230,8 @@ export default function PlanListPage() {
               </h3>
               <div className="space-y-3">
                 {plans.map(plan => (
-            <Card key={plan.id} className="group hover:shadow-md transition-shadow">
-              <CardContent className="py-4 flex items-center justify-between">
+            <Card key={plan.id} className="group transition-colors hover:bg-muted/30">
+              <CardContent className="py-3.5 flex items-center justify-between">
                 <div className="min-w-0 flex-1 space-y-3">
                   <div className="flex items-center gap-2">
                     <h3 className={cn('font-medium truncate', TEXT.heading)}>{plan.name}</h3>

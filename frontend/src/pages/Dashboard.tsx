@@ -26,6 +26,7 @@ import { DASHBOARD_SUBSCRIPTION } from '@/config';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 import { CHART_SECTION, STAT, TEXT } from '@/design-system/tokens';
 import { formatTimeFromDate } from '@/utils/format';
+import { cn } from '@/lib/utils';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -137,21 +138,22 @@ export default function Dashboard() {
     <PageContainer>
       <PageHeader title="仪表盘" subtitle="系统运行状态总览" />
 
-      <div className={`flex justify-end items-center text-sm ${TEXT.caption}`}>
-        <Clock size={14} aria-hidden />
+      <div className={`flex justify-end items-center text-xs ${TEXT.caption}`}>
+        <Clock size={12} aria-hidden />
         {/* 时间戳跟随 summary 数据的实际落库时刻，而非 WS 事件时刻（#498 D1） */}
-        <span className="ml-2">
-          更新于: {formatTimeFromDate(summaryUpdatedAt ? new Date(summaryUpdatedAt) : null)}
+        <span className="ml-1.5">
+          更新于 {formatTimeFromDate(summaryUpdatedAt ? new Date(summaryUpdatedAt) : null)}
         </span>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* KPI 稀疏行 */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <DashboardStatCard
           label="主机总数"
           value={hostStats.total}
-          suffix={`(在线${hostStats.online})`}
+          suffix={`在线 ${hostStats.online}`}
           loading={isLoading}
-          icon={<Server className="w-6 h-6" />}
+          icon={<Server />}
           iconWellClassName={STAT.iconWellMuted}
           onClick={() => navigate('/hosts')}
           ariaLabel="查看主机列表"
@@ -159,9 +161,9 @@ export default function Dashboard() {
         <DashboardStatCard
           label="设备总数"
           value={stats.total}
-          suffix={`(空闲${stats.idle})`}
+          suffix={`空闲 ${stats.idle}`}
           loading={isLoading}
-          icon={<Smartphone className={`w-6 h-6 ${ENTITY_STATUS_COLORS.device.idle}`} />}
+          icon={<Smartphone className={ENTITY_STATUS_COLORS.device.idle} />}
           iconWellClassName={STAT.iconWellSuccess}
           onClick={() => navigate('/devices')}
           ariaLabel="查看设备列表"
@@ -170,8 +172,8 @@ export default function Dashboard() {
           label="测试中"
           value={stats.testing}
           loading={isLoading}
-          valueClassName={`text-2xl font-bold ${ENTITY_STATUS_COLORS.execution.running}`}
-          icon={<Zap className={`w-6 h-6 ${ENTITY_STATUS_COLORS.execution.running}`} />}
+          valueClassName={cn(STAT.value, ENTITY_STATUS_COLORS.execution.running)}
+          icon={<Zap className={ENTITY_STATUS_COLORS.execution.running} />}
           iconWellClassName={STAT.iconWellPrimary}
           onClick={() => navigate('/execution/plan-runs')}
           ariaLabel="查看执行记录"
@@ -183,16 +185,17 @@ export default function Dashboard() {
           >
             <DashboardStatCard
               label="告警"
-              value={alertsCount > 0 ? alertsCount : '无'}
+              value={alertsCount > 0 ? alertsCount : '0'}
               loading={isLoading}
-              valueClassName={`text-2xl font-bold ${
-                alertsCount > 0 ? ENTITY_STATUS_COLORS.alert.high : ENTITY_STATUS_COLORS.alert.none
-              }`}
+              valueClassName={cn(
+                STAT.value,
+                alertsCount > 0 ? ENTITY_STATUS_COLORS.alert.high : ENTITY_STATUS_COLORS.alert.none,
+              )}
               icon={
                 <AlertCircle
-                  className={`w-6 h-6 ${
+                  className={
                     alertsCount > 0 ? ENTITY_STATUS_COLORS.alert.high : ENTITY_STATUS_COLORS.alert.none
-                  }`}
+                  }
                 />
               }
               iconWellClassName={
@@ -203,28 +206,28 @@ export default function Dashboard() {
       </div>
 
       {alertsCount > 0 && (
-        <Card className="p-4">
+        <Card className="px-4 py-3">
           <div className="flex items-center gap-6 flex-wrap">
             <div className="flex items-center gap-2">
-              <AlertCircle className={`w-5 h-5 ${ENTITY_STATUS_COLORS.alert.high}`} />
+              <AlertCircle className={`w-4 h-4 ${ENTITY_STATUS_COLORS.alert.high}`} />
               <span className={`text-sm font-medium ${TEXT.heading}`}>告警详情</span>
             </div>
             <div className="flex items-center gap-4 text-xs">
               {alerts.error > 0 && (
                 <span className={`flex items-center gap-1 ${ENTITY_STATUS_COLORS.alert.high}`}>
-                  <span className="w-2 h-2 rounded-full bg-destructive" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
                   错误: {alerts.error}
                 </span>
               )}
               {alerts.low_battery > 0 && (
                 <span className={`flex items-center gap-1 ${ENTITY_STATUS_COLORS.alert.medium}`}>
-                  <span className="w-2 h-2 rounded-full bg-warning" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-warning" />
                   低电量: {alerts.low_battery}
                 </span>
               )}
               {alerts.high_temp > 0 && (
                 <span className={`flex items-center gap-1 ${ENTITY_STATUS_COLORS.alert.medium}`}>
-                  <span className="w-2 h-2 rounded-full bg-warning" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-warning" />
                   高温: {alerts.high_temp}
                 </span>
               )}
@@ -233,16 +236,54 @@ export default function Dashboard() {
         </Card>
       )}
 
-      <div>
-        <div className="flex items-center gap-2 mb-4">
-          <BarChart3 size={18} className={CHART_SECTION.icon} />
-          <h3 className={CHART_SECTION.title}>数据统计</h3>
+      {/* 图表优先：趋势行全宽，其后 2 列栅格 */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <BarChart3 size={16} className={CHART_SECTION.icon} />
+          <h3 className={cn(CHART_SECTION.title, 'text-base tracking-[-0.02em]')}>数据统计</h3>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+        <div className="grid grid-cols-1 gap-3">
           <Card className="p-4">
             <CardHeader className="px-0 pt-0 pb-3">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Smartphone size={16} className={CHART_SECTION.icon} />
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <Activity size={14} className={CHART_SECTION.icon} />
+                任务活动趋势 (24h)
+              </CardTitle>
+            </CardHeader>
+            {activityError ? (
+              <InlineError message="任务活动趋势加载失败" onRetry={() => void refetchActivity()} />
+            ) : activityLoading ? (
+              <Skeleton className="h-[220px] w-full" />
+            ) : (
+              <ActivityChart data={activityData?.points ?? []} />
+            )}
+          </Card>
+          <div>
+            {passRateTrendError ? (
+              <Card className="p-4">
+                <CardHeader className="px-0 pt-0 pb-3">
+                  <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                    <TrendingUp size={14} className={CHART_SECTION.icon} />
+                    运行通过率趋势 (30d)
+                  </CardTitle>
+                </CardHeader>
+                <InlineError message="通过率趋势加载失败" onRetry={() => void refetchPassRateTrend()} />
+              </Card>
+            ) : (
+              <PlanRunPassRateTrendChart
+                data={passRateTrendData?.points ?? []}
+                isLoading={passRateTrendLoading}
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Card className="p-4">
+            <CardHeader className="px-0 pt-0 pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <Smartphone size={14} className={CHART_SECTION.icon} />
                 设备状态分布
               </CardTitle>
             </CardHeader>
@@ -250,8 +291,8 @@ export default function Dashboard() {
           </Card>
           <Card className="p-4">
             <CardHeader className="px-0 pt-0 pb-3">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Server size={16} className={CHART_SECTION.icon} />
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <Server size={14} className={CHART_SECTION.icon} />
                 主机资源负载
               </CardTitle>
             </CardHeader>
@@ -259,23 +300,8 @@ export default function Dashboard() {
           </Card>
           <Card className="p-4">
             <CardHeader className="px-0 pt-0 pb-3">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Activity size={16} className={CHART_SECTION.icon} />
-                任务活动趋势 (24h)
-              </CardTitle>
-            </CardHeader>
-            {activityError ? (
-              <InlineError message="任务活动趋势加载失败" onRetry={() => void refetchActivity()} />
-            ) : activityLoading ? (
-              <Skeleton className="h-[200px] w-full" />
-            ) : (
-              <ActivityChart data={activityData?.points ?? []} />
-            )}
-          </Card>
-          <Card className="p-4">
-            <CardHeader className="px-0 pt-0 pb-3">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <TrendingUp size={16} className={CHART_SECTION.icon} />
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <TrendingUp size={14} className={CHART_SECTION.icon} />
                 完成趋势 (7d)
               </CardTitle>
             </CardHeader>
@@ -290,8 +316,8 @@ export default function Dashboard() {
           {hostFailureError ? (
             <Card className="p-4">
               <CardHeader className="px-0 pt-0 pb-3">
-                <CardTitle className="flex items-center gap-2 text-sm">
-                  <AlertTriangle size={16} className={CHART_SECTION.icon} />
+                <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                  <AlertTriangle size={14} className={CHART_SECTION.icon} />
                   节点失败率排行 (30d)
                 </CardTitle>
               </CardHeader>
@@ -306,8 +332,8 @@ export default function Dashboard() {
           {planSuccessError ? (
             <Card className="p-4">
               <CardHeader className="px-0 pt-0 pb-3">
-                <CardTitle className="flex items-center gap-2 text-sm">
-                  <CheckCircle size={16} className={CHART_SECTION.icon} />
+                <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                  <CheckCircle size={14} className={CHART_SECTION.icon} />
                   方案成功率排行 (30d)
                 </CardTitle>
               </CardHeader>
@@ -319,31 +345,13 @@ export default function Dashboard() {
               isLoading={planSuccessLoading}
             />
           )}
-          <div className="md:col-span-2">
-            {passRateTrendError ? (
-              <Card className="p-4">
-                <CardHeader className="px-0 pt-0 pb-3">
-                  <CardTitle className="flex items-center gap-2 text-sm">
-                    <TrendingUp size={16} className={CHART_SECTION.icon} />
-                    运行通过率趋势 (30d)
-                  </CardTitle>
-                </CardHeader>
-                <InlineError message="通过率趋势加载失败" onRetry={() => void refetchPassRateTrend()} />
-              </Card>
-            ) : (
-              <PlanRunPassRateTrendChart
-                data={passRateTrendData?.points ?? []}
-                isLoading={passRateTrendLoading}
-              />
-            )}
-          </div>
           <Card className="p-4 md:col-span-2">
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
-                <Wifi size={16} className={CHART_SECTION.icon} />
+                <Wifi size={14} className={CHART_SECTION.icon} />
                 <span className="text-sm font-medium">主机在线率</span>
               </div>
-              <span className={`text-2xl font-bold ${ENTITY_STATUS_COLORS.host.online}`}>
+              <span className={cn(STAT.value, 'text-2xl', ENTITY_STATUS_COLORS.host.online)}>
                 {isLoading ? <Skeleton className="h-7 w-16" /> : `${(hostStats.online_rate * 100).toFixed(1)}%`}
               </span>
             </div>
