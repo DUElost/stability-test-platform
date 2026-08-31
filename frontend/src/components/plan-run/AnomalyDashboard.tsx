@@ -525,6 +525,7 @@ export default function AnomalyDashboard({
   const supportsOriginSplit = data?.supports_origin_split ?? false;
   const currentRun = data?.current_run ?? EMPTY_SECTION;
   const preexisting = data?.preexisting ?? EMPTY_SECTION;
+  const platformBuckets = data?.platform_buckets ?? [];
   const primaryLabel = supportsOriginSplit ? '本次新增' : '当前范围';
 
   const selectedPackageRow = useMemo(
@@ -601,6 +602,22 @@ export default function AnomalyDashboard({
               accent={currentRun.top_subtype ? KPI_TONE.destructive.value : KPI_TONE.default.value}
             />
           </div>
+
+          {platformBuckets.length > 0 && (
+            <div data-testid="watcher-platform-buckets" className="rounded-2xl border border-border/60 bg-card/60 p-3">
+              <div className={cn('mb-2 text-sm font-medium', TEXT.heading)}>按平台分桶</div>
+              <div className="flex flex-wrap gap-2">
+                {platformBuckets.map((bucket) => (
+                  <div key={bucket.platform} className="rounded-xl border border-border/50 bg-background/80 px-3 py-2 text-sm">
+                    <span className="font-medium">{bucket.platform}</span>
+                    <span className={cn('ml-2', TEXT.subtitle)}>
+                      信号 {bucket.total} · 设备 {bucket.affected_device_count}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
             <div className={DASHBOARD_SUMMARY_CARD.panel}>

@@ -20,13 +20,18 @@ def test_get_collector_unknown_falls_back_to_mtk():
     assert isinstance(collector, MtkPlatformCollector)
 
 
-def test_get_collector_unisoc_is_stub_only():
-    """#220: keep UNISOC entry; do not implement collect/parse."""
+def test_get_collector_unisoc_parses_unievent_info(tmp_path):
     collector = get_collector_for_platform("UNISOC")
     assert isinstance(collector, UnisocPlatformCollector)
-    assert collector.detect(lambda *_a, **_k: "unused", "serial") is False
-    with pytest.raises(CollectorError, match="UNISOC"):
-        collector.parse_metadata(Path("/tmp/no-such-event"))
+    event_dir = tmp_path / "evt-001"
+    event_dir.mkdir()
+    (event_dir / "unievent_info.json").write_text(
+        '{"event_name": "system_server_crash", "package_name": "com.example.app"}',
+        encoding="utf-8",
+    )
+    meta = collector.parse_metadata(event_dir)
+    assert meta.event_type == "UNIVIEW"
+    assert meta.event_subtype == "system_server_crash"
 
 
 def test_get_collector_qcom_is_stub_only():

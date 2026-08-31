@@ -39,8 +39,8 @@ class PlatformCollector(Protocol):
 def get_collector_for_platform(platform: str) -> Optional[PlatformCollector]:
     """按平台名返回 Collector；未知平台返回 None。
 
-    Production scans MTK only (#220). UNISOC/QCOM map to stubs (`detect→False`);
-    do not expand ``STP_WATCHER_AEE_RECONCILE_PLATFORMS`` until a real collector exists.
+    Production scans MTK by default. UNISOC uses UnisocPlatformCollector when
+    ``device.platform`` is UNISOC (ADR-0032 D6/D8). QCOM remains stub-only.
     """
     from .collectors.mtk import MtkPlatformCollector
     from .collectors.qcom import QcomPlatformCollector

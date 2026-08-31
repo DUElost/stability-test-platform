@@ -180,6 +180,17 @@ class ScanRunner:
                 device_serials=job.device_serials,
                 run_date_stamps=job.run_date_stamps,
             )
+            try:
+                from backend.agent.unisoc_scan_runner import UnisocScanRunner
+            except ImportError:
+                from agent.unisoc_scan_runner import UnisocScanRunner
+            UnisocScanRunner.instance().run_scan_and_upload(
+                job.plan_run_id,
+                job.host_id,
+                is_final=job.is_final,
+                device_serials=job.device_serials,
+                run_date_stamps=job.run_date_stamps,
+            )
         finally:
             cls._host_scan_semaphore.release()
 
@@ -214,9 +225,9 @@ class ScanRunner:
         if not uploader.is_configured():
             logger.warning("control_scan_now_skip_uploader_not_configured")
             return
-        uploader.upload_scan_report(plan_run_id, host_id, org_xls)
+        uploader.upload_scan_report(plan_run_id, host_id, org_xls, platform_subdir="mtk")
         if dedup_xls:
-            uploader.upload_scan_report(plan_run_id, host_id, dedup_xls)
+            uploader.upload_scan_report(plan_run_id, host_id, dedup_xls, platform_subdir="mtk")
         logger.info("control_scan_now_done plan_run=%d host=%s", plan_run_id, host_id)
 
     @classmethod
