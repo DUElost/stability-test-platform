@@ -21,16 +21,14 @@ logger = logging.getLogger(__name__)
 def resolve_project_id(db: Session, model: Optional[str]) -> Optional[int]:
     """活跃成员行精确匹配 model → project_id（派生前置查询）。
 
-    无成员命中 → None（型号未映射）。match_type 仅 MODEL（SERIAL 预留
-    已放弃，v2.5）。
+    无成员命中 → None（型号未映射）。
     """
     if not model:
         return None
     rule = db.execute(
         select(ProjectModel.project_id)
         .where(
-            ProjectModel.match_type == "MODEL",
-            ProjectModel.match_value == model,
+                        ProjectModel.match_value == model,
             ProjectModel.is_active.is_(True),
         )
     ).scalar_one_or_none()
@@ -44,8 +42,7 @@ def resolve_rules_for_model(db: Session, model: Optional[str]) -> list[ProjectMo
     rows = db.execute(
         select(ProjectModel)
         .where(
-            ProjectModel.match_type == "MODEL",
-            ProjectModel.match_value == model,
+                        ProjectModel.match_value == model,
             ProjectModel.is_active.is_(True),
         )
         .order_by(ProjectModel.id)

@@ -328,7 +328,7 @@ function PlanHeader({
                 data-testid="plan-project-select"
                 title="必填；影响后续派发，不影响已有历史 Run（快照语义）。运维型 Plan 选「通用（不限项目）」"
               >
-                <option value="">请选择</option>
+                <option value="">不限（运维/验证）</option>
                 {(projects ?? []).map(p => (
                   <option key={p.project_key} value={p.project_key}>
                     {p.display_name}（{p.project_key}）
