@@ -13,7 +13,7 @@ interface ClickableRowProps {
 /**
  * 可点击表格行（C3 收敛点）。
  *
- * 与 ClickableCard 同思路：Enter / Space 触发点击 + role/tabIndex + 焦点样式，
+ * Enter / Space 触发点击 + role/tabIndex + 焦点样式，
  * 解决"整行 onClick 但键盘不可达"的问题。用于 Results 表格行 / 运行记录行等。
  */
 export function ClickableRow({ onClick, children, className, role = 'link' }: ClickableRowProps) {

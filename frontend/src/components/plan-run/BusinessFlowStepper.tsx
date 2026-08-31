@@ -61,7 +61,7 @@ function StageNode({ stageKey, stage, isCurrent }: {
 
   return (
     <div
-      className={cn('flex-1 rounded-lg border p-2.5 shadow-sm', visual.border, visual.bg)}
+      className={cn('flex-1 rounded-lg border p-2.5 shadow-none', visual.border, visual.bg)}
       data-testid={`stage-node-${stageKey}`}
     >
       <div className="flex items-center gap-1.5 mb-1">
