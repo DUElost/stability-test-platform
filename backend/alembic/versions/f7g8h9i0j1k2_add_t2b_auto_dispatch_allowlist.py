@@ -2,7 +2,7 @@
 """ai_assistant_config.t2b_auto_dispatch_allowlist（ADR-0031 附录 PR-D）
 
 Revision ID: f7g8h9i0j1k2
-Revises: d6e7f8a9b0c1
+Revises: f8a9b0c1d2e3
 Create Date: 2026-08-31
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "f7g8h9i0j1k2"
-down_revision = "d6e7f8a9b0c1"
+down_revision = "f8a9b0c1d2e3"
 branch_labels = None
 depends_on = None
 

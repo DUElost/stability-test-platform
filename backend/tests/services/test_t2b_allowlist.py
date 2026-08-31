@@ -1,6 +1,5 @@
 """T2b 自动派发白名单单测。"""
 
-import pytest
 from types import SimpleNamespace
 
 from backend.services.ai_assistant.orchestrator import _decide_execution_mode
