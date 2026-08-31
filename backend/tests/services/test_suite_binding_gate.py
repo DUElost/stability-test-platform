@@ -53,7 +53,7 @@ def bound_fixture(db_session, storage_root):
     """绑定 MTBF-legacy 套件的 Plan + host/device/script，可派发。"""
     host = Host(id="sb-h1", hostname="sb-h1", status=HostStatus.ONLINE.value)
     device = Device(serial="sb-d1", host_id="sb-h1",
-                    status=DeviceStatus.ONLINE.value)
+                    status=DeviceStatus.ONLINE.value, model="SB_MODEL")
     setup_script = Script(
         name="mtbf_setup", script_type="python", version="1.3.0",
         nfs_path="/s/mtbf_setup.py", content_sha256="abc",
@@ -287,13 +287,16 @@ class TestSuiteGateMatrix:
     def test_step5_project_mismatch_then_retarget(
         self, db_session, bound_fixture,
     ):
+        from backend.models.project_model import ProjectModel
+
         f = bound_fixture
         p_cam = TestProject(project_key="CAM", display_name="Camera")
         p_other = TestProject(project_key="OTHER", display_name="Other")
         db_session.add_all([p_cam, p_other])
         db_session.flush()
         f["suite"].project_id = p_cam.id
-        f["device"].project_id = p_other.id
+        # v2.5 派生：设备型号成员行归属 p_other → mismatch
+        db_session.add(ProjectModel(project_id=p_other.id, match_value="SB_MODEL"))
         db_session.commit()
         _export(db_session, f["suite"])
         pr = _queued_run(db_session, f)
@@ -301,8 +304,12 @@ class TestSuiteGateMatrix:
         err = collect_suite_gate_error(db_session, pr)
         assert err is not None and err["step"] == "project_mismatch"
         assert err["mismatched_devices"][0]["device_id"] == f["device"].id
+        assert err["mismatched_devices"][0]["device_project_id"] == p_other.id
 
-        f["device"].project_id = p_cam.id
+        # retarget = 改成员行归属（不再写 device 列）
+        db_session.query(ProjectModel).filter(
+            ProjectModel.match_value == "SB_MODEL"
+        ).update({"project_id": p_cam.id})
         db_session.commit()
         assert collect_suite_gate_error(db_session, pr) is None
 
@@ -313,7 +320,7 @@ class TestSuiteGateMatrix:
         db_session.add(p_cam)
         db_session.flush()
         f["suite"].project_id = p_cam.id
-        f["device"].project_id = None      # NULL != CAM2 必须成立
+        # v2.5：无成员行 = 未映射 → fail-closed（与旧 NULL 语义等价）
         db_session.commit()
         _export(db_session, f["suite"])
         pr = _queued_run(db_session, f)
