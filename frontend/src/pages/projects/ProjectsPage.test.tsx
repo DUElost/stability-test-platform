@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   mapApply: vi.fn(),
   listSeed: vi.fn(),
   promoteSeed: vi.fn(),
+  archiveSeed: vi.fn(),
   customers: vi.fn(),
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
   authRole: 'admin' as string,
@@ -49,6 +50,7 @@ vi.mock('@/utils/api', () => ({
       mapApply: mocks.mapApply,
       listSeed: mocks.listSeed,
       promoteSeed: mocks.promoteSeed,
+      archive: mocks.archiveSeed,
       customers: mocks.customers,
     },
   },
@@ -394,6 +396,9 @@ describe('ProjectsPage', () => {
     expect(screen.getByText('20 台设备')).toBeInTheDocument();
     // LEGACY 是兜底标签，不提供转正按钮
     expect(screen.queryByTestId('seed-promote-LEGACY')).not.toBeInTheDocument();
+    // #644 P2-7：SEED 卡片提供「放弃」（显式退场）
+    expect(screen.getByTestId('seed-abandon-HONOR-ELA')).toBeInTheDocument();
+    expect(screen.getByTestId('seed-abandon-LEGACY')).toBeInTheDocument();
 
     await user.click(screen.getByTestId('seed-promote-HONOR-ELA'));
     expect(confirmSpy).toHaveBeenCalled();
@@ -421,6 +426,40 @@ describe('ProjectsPage', () => {
     await screen.findByTestId('seed-queue');
     await user.click(screen.getByTestId('seed-promote-HONOR-ELA'));
     expect(mocks.promoteSeed).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('abandons a seed label with confirm on admin', async () => {
+    const user = userEvent.setup();
+    mocks.listSeed.mockResolvedValue([
+      {
+        project_key: 'HONOR-ELA',
+        display_name: '荣耀 ELA',
+        status: 'ACTIVE',
+        source: 'SEED',
+        match_models: [],
+        device_count: 20,
+        running_run_count: 0,
+      },
+    ]);
+    mocks.archiveSeed.mockResolvedValue({
+      project_key: 'HONOR-ELA',
+      display_name: '荣耀 ELA',
+      status: 'ARCHIVED',
+      source: 'SEED',
+      match_models: [],
+      device_count: 20,
+      running_run_count: 0,
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderPage();
+    await screen.findByTestId('seed-queue');
+    await user.click(screen.getByTestId('seed-abandon-HONOR-ELA'));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(mocks.archiveSeed).toHaveBeenCalledWith('HONOR-ELA');
+    await waitFor(() => expect(mocks.toast.success).toHaveBeenCalled());
     confirmSpy.mockRestore();
   });
 });

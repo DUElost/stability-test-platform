@@ -106,6 +106,25 @@ export default function ProjectsPage() {
     promoteMutation.mutate(seed.project_key);
   };
 
+  // #644 P2-7：SEED 显式放弃（退场路径）——归档后从待转正队列消失。
+  const abandonSeedMutation = useMutation({
+    mutationFn: (projectKey: string) => api.projects.archive(projectKey),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: projectKeys.seed() });
+      toast.success('已放弃该回填标签');
+    },
+    onError: (err: unknown) => {
+      toast.error(`放弃失败: ${toApiError(err).message}`);
+    },
+  });
+
+  const handleAbandonSeed = (seed: ProjectSummary) => {
+    if (!window.confirm(`放弃回填标签「${seed.display_name}」？其 ${seed.device_count} 台设备不受影响（型号归属由 project_model 成员行决定），标签将从待转正队列移除。`)) {
+      return;
+    }
+    abandonSeedMutation.mutate(seed.project_key);
+  };
+
   const invalidateProjects = () => {
     void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
     void queryClient.invalidateQueries({ queryKey: projectKeys.inventoryModels() });
@@ -495,19 +514,41 @@ export default function ProjectsPage() {
                     </p>
                   </div>
                   {seed.project_key === 'LEGACY' ? (
-                    <span className="shrink-0 text-xs text-muted-foreground" title="无型号设备兜底">
-                      兜底标签
-                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-xs text-muted-foreground" title="无型号设备兜底">
+                        兜底标签
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        data-testid={`seed-abandon-${seed.project_key}`}
+                        disabled={abandonSeedMutation.isPending}
+                        onClick={() => handleAbandonSeed(seed)}
+                      >
+                        放弃
+                      </Button>
+                    </div>
                   ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      data-testid={`seed-promote-${seed.project_key}`}
-                      disabled={promoteMutation.isPending}
-                      onClick={() => handlePromote(seed)}
-                    >
-                      转为项目
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`seed-promote-${seed.project_key}`}
+                        disabled={promoteMutation.isPending}
+                        onClick={() => handlePromote(seed)}
+                      >
+                        转为项目
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        data-testid={`seed-abandon-${seed.project_key}`}
+                        disabled={abandonSeedMutation.isPending}
+                        onClick={() => handleAbandonSeed(seed)}
+                      >
+                        放弃
+                      </Button>
+                    </div>
                   )}
                 </div>
               ))}

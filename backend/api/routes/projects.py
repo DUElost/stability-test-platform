@@ -263,6 +263,19 @@ def _require_user_project(project: TestProject) -> None:
         )
 
 
+def _require_active_project(project: TestProject) -> None:
+    """归档守卫：ARCHIVED 项目只读（#644 P1-4 补齐）。
+
+    rename / map preview / map apply / remove-rule 均须显式拒绝——归档后
+    仍可改名会破坏「归档 = 冻结」的语义，仍可映射型号则归档形同虚设。
+    """
+    if project.status == "ARCHIVED":
+        raise HTTPException(
+            status_code=409,
+            detail="archived project is read-only; unarchive to modify",
+        )
+
+
 def _fill_summary(db: Session, project: TestProject) -> ProjectSummaryOut:
     device_count, running_run_count = _summary_rows(db).get(project.id, (0, 0))
     out = ProjectSummaryOut.model_validate(project)
@@ -345,6 +358,10 @@ def list_projects(
         # 但 source=USER，必须显示；未转正的 SEED 行已被 source 过滤挡住
     elif source == "seed":
         query = query.filter(TestProject.source == _SEED_SOURCE)
+        # 待转正队列默认只列 ACTIVE——归档 = 显式放弃（#644 P2-7 退场路径），
+        # 放弃的标签不再占队列名额；显式 ?status=ARCHIVED 仍可列出复查
+        if status is None:
+            query = query.filter(TestProject.status == "ACTIVE")
     if status:
         query = query.filter(TestProject.status == status)
     projects = query.all()
@@ -604,9 +621,8 @@ def archive_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """ADR-0029 D2 / #406 — 归档（单向；SEED 回填标签不可归档）。"""
+    """ADR-0029 D2 / #406 — 归档（SEED 回填标签也可归档 = 显式放弃）。"""
     project = _get_project_or_404(db, project_key)
-    _require_user_project(project)
     if project.status == "ARCHIVED":
         raise HTTPException(status_code=409, detail="project already archived")
 
@@ -632,6 +648,48 @@ def archive_project(
     return ok(_fill_summary(db, project))
 
 
+@router.post(
+    "/{project_key}/unarchive",
+    response_model=ApiResponse[ProjectSummaryOut],
+)
+def unarchive_project(
+    project_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """#644 P1-4 — 解档：ARCHIVED 项目恢复 ACTIVE（admin，记审计）。
+
+    归档守卫补齐后的必要另一半——没有解档端点，「归档 = 冻结」就是单行道，
+    误归档无法撤销。SEED 行从未被归档（v2.5 前不可归档；本版起允许），
+    对 ACTIVE 行调用幂等地 409（与 archive 对称）。
+    """
+    project = _get_project_or_404(db, project_key)
+    if project.status != "ARCHIVED":
+        raise HTTPException(status_code=409, detail="project is not archived")
+
+    project.status = "ACTIVE"
+    project.updated_at = datetime.now(timezone.utc)
+    record_audit(
+        db,
+        action="unarchive_project",
+        resource_type="test_project",
+        resource_id=project.id,
+        details={
+            "project_key": project.project_key,
+            "from_status": "ARCHIVED",
+            "to_status": "ACTIVE",
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
+    db.refresh(project)
+    emit_project_changed(project.id, "unarchived")
+    return ok(_fill_summary(db, project))
+
+
 @router.put(
     "/{project_key}/rename",
     response_model=ApiResponse[ProjectSummaryOut],
@@ -651,6 +709,7 @@ def rename_project(
     """
     project = _get_project_or_404(db, project_key)
     _require_user_project(project)
+    _require_active_project(project)
     new_key = payload.new_key
     if new_key.upper() in SEED_PROJECT_KEYS:
         raise HTTPException(status_code=422, detail="reserved seed project_key")
@@ -696,6 +755,7 @@ def preview_project_map(
 ):
     project = _get_project_or_404(db, project_key)
     _require_user_project(project)
+    _require_active_project(project)
     preview, _devices = _map_preview(
         db, project, payload.models, payload.reassign_conflicts
     )
@@ -715,6 +775,7 @@ def apply_project_map(
 ):
     project = _get_project_or_404(db, project_key)
     _require_user_project(project)
+    _require_active_project(project)
     preview, to_assign = _map_preview(
         db, project, payload.models, payload.reassign_conflicts
     )
@@ -794,6 +855,7 @@ def remove_project_rule(
     """
     project = _get_project_or_404(db, project_key)
     _require_user_project(project)
+    _require_active_project(project)
     rule = db.execute(
         select(ProjectModel)
         .where(

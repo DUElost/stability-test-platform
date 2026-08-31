@@ -59,6 +59,13 @@ export const projects = {
         `/projects/${projectKey}/archive`,
       ),
     ),
+  /** #644 P1-4：解档（ARCHIVED → ACTIVE，admin）。 */
+  unarchive: (projectKey: string) =>
+    unwrapApiResponse(
+      apiClient.post<ApiResponseEnvelope<ProjectSummary>>(
+        `/projects/${projectKey}/unarchive`,
+      ),
+    ),
   inventoryModels: () =>
     unwrapApiResponse(
       apiClient.get<ApiResponseEnvelope<InventoryModel[]>>('/projects/inventory/models'),
