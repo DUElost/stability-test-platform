@@ -5,6 +5,7 @@ import { planKeys, scheduleKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { CronExpressionInput } from '@/components/schedule/CronExpressionInput';
+import { DeviceMultiSelect } from '@/components/schedule/DeviceMultiSelect';
 import { Plus, Trash2, Edit2, Play, Power, Clock, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -27,7 +28,7 @@ interface ScheduleForm {
   name: string;
   cron_expr: string;
   plan_id: string;
-  device_ids: string;
+  deviceIds: number[];
   enabled: boolean;
 }
 
@@ -35,27 +36,9 @@ const DEFAULT_FORM: ScheduleForm = {
   name: '',
   cron_expr: '0 2 * * *',
   plan_id: '',
-  device_ids: '',
+  deviceIds: [],
   enabled: true,
 };
-
-function parseDeviceIds(input: string): { ids: number[]; invalid: string[] } {
-  const tokens = (input || '')
-    .split(',')
-    .map(v => v.trim())
-    .filter(Boolean);
-  const ids = new Set<number>();
-  const invalid: string[] = [];
-  for (const token of tokens) {
-    const n = Number(token);
-    if (Number.isInteger(n) && n > 0) {
-      ids.add(n);
-    } else {
-      invalid.push(token);
-    }
-  }
-  return { ids: Array.from(ids), invalid };
-}
 
 export default function SchedulesPage() {
   const toast = useToast();
@@ -101,17 +84,13 @@ export default function SchedulesPage() {
         return;
       }
       const planId = Number(form.plan_id);
-      const { ids: deviceIds, invalid: invalidDeviceIds } = parseDeviceIds(form.device_ids);
 
       if (!Number.isInteger(planId) || planId <= 0) {
         toast.error('请选择 Plan');
         return;
       }
-      if (invalidDeviceIds.length > 0) {
-        toast.info(`以下设备 ID 无效已忽略：${invalidDeviceIds.join('、')}`);
-      }
-      if (deviceIds.length === 0) {
-        toast.error('请至少填写一个设备 ID');
+      if (form.deviceIds.length === 0) {
+        toast.error('请至少选择一台设备');
         return;
       }
 
@@ -120,7 +99,7 @@ export default function SchedulesPage() {
         cron_expr: form.cron_expr,
         enabled: form.enabled,
         plan_id: planId,
-        device_ids: deviceIds,
+        device_ids: form.deviceIds,
       };
 
       if (editing) {
@@ -181,7 +160,7 @@ export default function SchedulesPage() {
       name: s.name,
       cron_expr: s.cron_expr,
       plan_id: s.plan_id ? String(s.plan_id) : '',
-      device_ids: (s.device_ids || []).join(','),
+      deviceIds: s.device_ids || [],
       enabled: s.enabled,
     });
     setShowForm(true);
@@ -308,14 +287,10 @@ export default function SchedulesPage() {
               </select>
             </div>
             <div>
-              <label htmlFor="schedule-device-ids" className={cn('block text-sm font-medium mb-1', TEXT.body)}>设备 IDs（逗号分隔）</label>
-              <input
-                id="schedule-device-ids"
-                type="text"
-                value={form.device_ids}
-                onChange={(e) => setForm({ ...form, device_ids: e.target.value })}
-                placeholder="例如: 1,2,3"
-                className={FORM.input}
+              <span className={cn('block text-sm font-medium mb-1', TEXT.body)}>设备（可多选）</span>
+              <DeviceMultiSelect
+                selectedIds={form.deviceIds}
+                onChange={(ids) => setForm({ ...form, deviceIds: ids })}
               />
             </div>
             <div className="flex items-center gap-2">
