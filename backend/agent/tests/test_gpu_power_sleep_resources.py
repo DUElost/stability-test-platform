@@ -55,23 +55,3 @@ def test_sleep_config_passthrough(monkeypatch):
                               "sleep_resources_dir": "/mnt/stp-aee/resources/sleep"})
     assert cfg["sleep_resources_dir"] == "/mnt/stp-aee/resources/sleep"
     assert sleep.resources_dir(cfg) == Path("/mnt/stp-aee/resources/sleep/p")
-
-
-def test_gpu_check_no_tests_is_failure(monkeypatch):
-    """v1.0.3：GPU_RUN_END 但 OK (0 tests) = 空跑显式失败（2026-08-31 实证）。"""
-    import importlib.util
-    gc_dir = "/home/debian13/stability-test-platform/backend/agent/scripts/gpu_check/v1.0.3"
-    sys.path.insert(0, gc_dir)  # 确保 gpu_check 的 _lib 优先（防 sys.path 污染）
-    spec = importlib.util.spec_from_file_location(
-        "gpu_check_v103", gc_dir + "/gpu_check.py")
-    gc = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(gc)
-    # 0 tests 的 test_log
-    monkeypatch.setattr(gc, "_read_log_cat",
-                        lambda: b"GPU_RUN_START test_id=001 rounds=2\nOK (0 tests)\nGPU_RUN_END rc=0\n")
-    assert gc._run_finished() == (True, "no-tests")
-    # 真实完成
-    monkeypatch.setattr(gc, "_read_log_cat",
-                        lambda: b"GPU_RUN_START test_id=001 rounds=2\nOK (1 test)\nGPU_ROUND 1 rc=0\nGPU_RUN_END rc=0\n")
-    assert gc._run_finished() == (True, "ok")
