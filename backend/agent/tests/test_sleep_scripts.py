@@ -53,6 +53,12 @@ def check_mod():
 
 
 @pytest.fixture(scope="module")
+def check_mod_v101():
+    """sleep_check v1.0.1：完成检测（冒烟发现 ①——服务完成 test_times 后自停）。"""
+    return _load("sleep_check_mod_v101", "sleep_check/v1.0.1/sleep_check.py")
+
+
+@pytest.fixture(scope="module")
 def finish_mod():
     return _load("sleep_finish_mod", "sleep_finish/v1.0.0/sleep_finish.py")
 
@@ -408,6 +414,68 @@ class TestFinish:
         monkeypatch.setattr(finish_mod, "results_dir", lambda project: tmp_path / "r")
         out = finish_mod._run({})
         assert out["metrics"]["final_status"] == "INCOMPLETE"
+
+
+# ---------------------------------------------------------------------------
+# sleep_check v1.0.1 完成检测（冒烟发现 ①：服务完成 test_times 后自停）
+# ---------------------------------------------------------------------------
+
+
+class TestCheckV101Completion:
+    def _patch_device_io(self, mod, monkeypatch, tmp_path, finished=True, alive=False, prefs=(2, 2)):
+        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
+        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
+        monkeypatch.setattr(mod, "service_alive", lambda: alive)
+        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: prefs)
+        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
+        monkeypatch.setattr(mod, "_result_bytes", lambda: 383)
+        monkeypatch.setattr(mod, "_run_finished", lambda: finished)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+
+    def test_finished_reports_completion_not_death(self, check_mod_v101, monkeypatch, tmp_path):
+        """服务自停 + 结果文件 finished → 报完成而非判死（真机冒烟实测行为）。"""
+        self._patch_device_io(check_mod_v101, monkeypatch, tmp_path, finished=True, alive=False)
+        r = check_mod_v101._run({})
+        assert r["success"] is True
+        assert r["progress"]["run_finished"] is True
+        assert r["progress"]["cycles_done"] == 2
+        assert r["progress"]["service_alive"] is False
+
+    def test_finished_never_accumulates_dead_streak(self, check_mod_v101, monkeypatch, tmp_path):
+        """连续多周期 finished 全部 success（v1.0.0 会在第 2 周期判死）。"""
+        self._patch_device_io(check_mod_v101, monkeypatch, tmp_path, finished=True, alive=False)
+        for _ in range(5):
+            r = check_mod_v101._run({"dead_grace_cycles": 2})
+            assert r["success"] is True
+
+    def test_not_finished_keeps_v100_dead_streak(self, check_mod_v101, monkeypatch, tmp_path):
+        """无 finished 行时 v1.0.0 判死语义保留（中途崩溃仍会失败）。"""
+        self._patch_device_io(check_mod_v101, monkeypatch, tmp_path, finished=False, alive=False)
+        r1 = check_mod_v101._run({"dead_grace_cycles": 2})
+        assert r1["success"] is True
+        r2 = check_mod_v101._run({"dead_grace_cycles": 2})
+        assert r2["success"] is False
+        assert "连续 2 个周期" in r2["error_message"]
+
+    def test_run_finished_detects_marker(self, check_mod_v101, monkeypatch):
+        monkeypatch.setattr(check_mod_v101, "device_serial", lambda: "S1")
+        monkeypatch.setattr(check_mod_v101, "result_paths", lambda: ("/sdcard/x/sleep_test_result.txt",))
+
+        class FakeResult:
+            stdout = "2026-08-07 20:52:53 cycle 2/2 wake OK screen=ON\nfinished result=PASS\n"
+
+        monkeypatch.setattr(check_mod_v101.subprocess, "run", lambda *a, **k: FakeResult())
+        assert check_mod_v101._run_finished() is True
+
+    def test_run_finished_no_marker(self, check_mod_v101, monkeypatch):
+        monkeypatch.setattr(check_mod_v101, "device_serial", lambda: "S1")
+        monkeypatch.setattr(check_mod_v101, "result_paths", lambda: ("/sdcard/x/sleep_test_result.txt",))
+
+        class FakeResult:
+            stdout = "cycle 1/2 wake OK screen=ON\n"
+
+        monkeypatch.setattr(check_mod_v101.subprocess, "run", lambda *a, **k: FakeResult())
+        assert check_mod_v101._run_finished() is False
 
 
 # ---------------------------------------------------------------------------
