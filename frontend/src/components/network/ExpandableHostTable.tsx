@@ -19,7 +19,7 @@ import {
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
-import { resourceUsageBgClass, resourceUsageTextClass } from '@/design-system/tokens';
+import { resourceUsageBgClass, resourceUsageTextClass, STAT } from '@/design-system/tokens';
 import { formatBytesFromGb, formatDateTimeFull, formatDurationSeconds, formatLocalTime, parseIsoToDate } from '@/utils/format';
 
 export interface HostResources {
@@ -230,7 +230,7 @@ export function ExpandableHostTable({
   return (
     <TooltipProvider>
       <div className="space-y-4">
-        {/* Summary Stats - 点击筛选，对齐设备页 */}
+        {/* Summary Stats — 稀疏数字筛选卡 */}
         <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
           <button
             type="button"
@@ -238,20 +238,22 @@ export function ExpandableHostTable({
             aria-pressed={statusFilter === 'all'}
             aria-label="筛选全部主机"
             className={cn(
-              'bg-card rounded-lg border p-3 flex items-center gap-3 text-left transition-all',
-              statusFilter === 'all' ? 'border-muted-foreground shadow-sm' : 'border-border',
+              'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
+              statusFilter === 'all' ? 'border-foreground/40 bg-muted/30' : 'border-border hover:bg-muted/20',
             )}
           >
-            <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
-              <Server className="w-5 h-5 text-muted-foreground" />
-            </div>
-            <div>
-              <div className="text-xl font-semibold text-foreground">{stats.total}</div>
-              {/* 机队级 Agent 对齐率内联进标签行：保持四卡文本块等高（B9 基线） */}
-              <div className="text-xs text-muted-foreground">
-                主机总数{stats.agentTrackable > 0 && ` · Agent 已对齐 ${stats.agentAligned}/${stats.agentTrackable}`}
+            <div className="flex items-start justify-between gap-2">
+              <p className={STAT.label}>主机总数</p>
+              <div className={cn(STAT.iconWell, STAT.iconWellMuted)}>
+                <Server />
               </div>
             </div>
+            <div className={cn(STAT.value, 'text-2xl')}>{stats.total}</div>
+            {stats.agentTrackable > 0 && (
+              <p className={STAT.suffix}>
+                Agent 已对齐 {stats.agentAligned}/{stats.agentTrackable}
+              </p>
+            )}
           </button>
           <button
             type="button"
@@ -259,19 +261,19 @@ export function ExpandableHostTable({
             aria-pressed={statusFilter === 'ONLINE'}
             aria-label="筛选在线主机"
             className={cn(
-              'bg-card rounded-lg border p-3 flex items-center gap-3 text-left transition-all',
+              'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
               statusFilter === 'ONLINE'
-                ? 'border-success shadow-md bg-success/5'
+                ? 'border-success bg-success/5'
                 : 'border-success/30 hover:border-success/40 hover:bg-success/5',
             )}
           >
-            <div className="w-10 h-10 rounded-lg bg-success/10 flex items-center justify-center">
-              <CheckCircle2 className="w-5 h-5 text-success" />
+            <div className="flex items-start justify-between gap-2">
+              <p className={STAT.label}>在线</p>
+              <div className={cn(STAT.iconWell, STAT.iconWellSuccess)}>
+                <CheckCircle2 className="text-success" />
+              </div>
             </div>
-            <div>
-              <div className="text-xl font-semibold text-success">{stats.online}</div>
-              <div className="text-xs text-muted-foreground">在线</div>
-            </div>
+            <div className={cn(STAT.value, 'text-2xl text-success')}>{stats.online}</div>
           </button>
           <button
             type="button"
@@ -279,19 +281,19 @@ export function ExpandableHostTable({
             aria-pressed={statusFilter === 'DEGRADED'}
             aria-label="筛选告警主机"
             className={cn(
-              'bg-card rounded-lg border p-3 flex items-center gap-3 text-left transition-all',
+              'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
               statusFilter === 'DEGRADED'
-                ? 'border-warning shadow-md bg-warning/5'
+                ? 'border-warning bg-warning/5'
                 : 'border-warning/30 hover:border-warning/40 hover:bg-warning/5',
             )}
           >
-            <div className="w-10 h-10 rounded-lg bg-warning/10 flex items-center justify-center">
-              <AlertTriangle className="w-5 h-5 text-warning" />
+            <div className="flex items-start justify-between gap-2">
+              <p className={STAT.label}>告警</p>
+              <div className={cn(STAT.iconWell, 'bg-warning/10 text-warning')}>
+                <AlertTriangle className="text-warning" />
+              </div>
             </div>
-            <div>
-              <div className="text-xl font-semibold text-warning">{stats.degraded}</div>
-              <div className="text-xs text-muted-foreground">告警</div>
-            </div>
+            <div className={cn(STAT.value, 'text-2xl text-warning')}>{stats.degraded}</div>
           </button>
           <button
             type="button"
@@ -299,17 +301,19 @@ export function ExpandableHostTable({
             aria-pressed={statusFilter === 'OFFLINE'}
             aria-label="筛选离线主机"
             className={cn(
-              'bg-card rounded-lg border p-3 flex items-center gap-3 text-left transition-all',
-              statusFilter === 'OFFLINE' ? 'border-muted-foreground shadow-sm' : 'border-border hover:bg-muted/30',
+              'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
+              statusFilter === 'OFFLINE'
+                ? 'border-foreground/40 bg-muted/30'
+                : 'border-border hover:bg-muted/20',
             )}
           >
-            <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
-              <Activity className="w-5 h-5 text-muted-foreground" />
+            <div className="flex items-start justify-between gap-2">
+              <p className={STAT.label}>离线</p>
+              <div className={cn(STAT.iconWell, STAT.iconWellMuted)}>
+                <Activity />
+              </div>
             </div>
-            <div>
-              <div className="text-xl font-semibold text-muted-foreground">{stats.offline}</div>
-              <div className="text-xs text-muted-foreground">离线</div>
-            </div>
+            <div className={cn(STAT.value, 'text-2xl text-muted-foreground')}>{stats.offline}</div>
           </button>
         </div>
 
