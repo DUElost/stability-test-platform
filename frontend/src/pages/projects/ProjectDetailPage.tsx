@@ -477,7 +477,9 @@ export default function ProjectDetailPage() {
                     <Bar dataKey="A" name="A（高）" stackId="risk"
                          fill="hsl(var(--warning))" />
                     <Bar dataKey="B" name="B（低）" stackId="risk"
-                         fill="hsl(var(--success))" radius={[3, 3, 0, 0]} />
+                         fill="hsl(var(--success))" />
+                    <Bar dataKey="NONE" name="NONE（零事件）" stackId="risk"
+                         fill="hsl(var(--muted-foreground) / 0.45)" radius={[3, 3, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
