@@ -16,7 +16,7 @@ Class: feature
 
 基础设施：`deploy/control-plane/nginx/stability-platform-preview.conf` + `.gitignore` 的 `dist-preview/`。
 
-预览 Origin 须进控制面 `CORS_ORIGINS`（与 CSRF 白名单同源）：生产 `.env.backend` 已加 `http://172.21.8.202:8081`，否则 cookie 写操作会 `403 CSRF check failed`。
+预览 Origin 须进控制面 `CORS_ORIGINS`（与 CSRF 白名单同源）：生产 `.env.backend` 须含 `http://<控制面内网IP>:8081`，否则 cookie 写操作会 `403 CSRF check failed`。
 
 ## Verification
 
