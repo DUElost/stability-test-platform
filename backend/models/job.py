@@ -22,7 +22,7 @@ class JobInstance(Base):
     plan_run_id      = Column(Integer, ForeignKey("plan_run.id"), nullable=False)
     plan_id          = Column(Integer, ForeignKey("plan.id"), nullable=False)
     device_id        = Column(Integer, ForeignKey("device.id"), nullable=False)
-    host_id          = Column(String(64), ForeignKey("host.id"))
+    host_id          = Column(String(64), ForeignKey("host.id", ondelete="CASCADE", onupdate="CASCADE"))
     status           = Column(JOB_STATUS_DB_ENUM, nullable=False, default=JobStatus.PENDING.value)
     status_reason    = Column(Text)
     pipeline_def     = Column(JSONB, nullable=False)
@@ -176,7 +176,7 @@ class JobLogSignal(Base):
 
     id             = Column(BigInteger, primary_key=True)
     job_id         = Column(Integer, ForeignKey("job_instance.id", ondelete="SET NULL"), nullable=True)
-    host_id        = Column(String(64), ForeignKey("host.id", ondelete="CASCADE"), nullable=False)
+    host_id        = Column(String(64), ForeignKey("host.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     device_log_event_id = Column(
         "device_log_event_id",
         ForeignKey("device_log_event.id", ondelete="SET NULL"),

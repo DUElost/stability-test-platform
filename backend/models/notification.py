@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import relationship
 
 from backend.core.database import Base
@@ -69,4 +69,10 @@ class NotificationLog(Base):
     message = Column(Text, nullable=False, default="")
     context = Column(JSON, default=dict)
     read = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        # 对齐迁移链既有索引（schema-sync 基线收敛）
+        Index("ix_notification_logs_created_at", "created_at"),
+        Index("ix_notification_logs_read", "read"),
+    )

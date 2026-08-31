@@ -116,7 +116,9 @@ def main() -> int:
     new_keys = [k for k in keys if k not in baseline]
 
     if args.rebaseline:
-        merged = sorted(baseline | set(keys))
+        # 覆盖语义（非并集）：基线 = 当前空库 diff keys 全集——收敛掉
+        # 的噪音项随之消失（并集会让已修复项永久留在基线里）
+        merged = sorted(keys)
         _BASELINE_FILE.write_text(
             json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

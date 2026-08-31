@@ -49,7 +49,10 @@ class PlanRun(Base):
     run_context       = Column(JSONB, nullable=True)
     triggered_by      = Column(String(128))
     # ADR-0029 归属（P1 M-a）：NULL = 迁移期瞬态，M-b 回填后归零（存量 run 归 Legacy）。
-    project_id        = Column(Integer, ForeignKey("test_project.id"), nullable=True)
+    # ADR-0029 v2.5：project_id 是派发时冻结的**悬空快照**（M4 删哨兵行时
+    # 同步 drop FK——哨兵删除后旧 run 指向已删行，FK 会成为历史追溯的障碍；
+    # 归属真源是 device.model ⋈ project_model，plan_run 快照只做归因）
+    project_id        = Column(Integer, nullable=True)
     # 运行期属性（D3）：由 device.build_display_id（心跳上报）取值，版本不进项目。
     build_version     = Column(String(256), nullable=True)
     started_at        = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -84,8 +87,13 @@ class PlanRun(Base):
 
     plan = relationship("Plan", foreign_keys=[plan_id],
                         back_populates="runs")
-    # ADR-0029：归属项目（project_id 快照语义——Plan 改归属不影响历史 Run）
-    project = relationship("TestProject", foreign_keys=[project_id])
+    # ADR-0029：归属项目（project_id 快照语义——Plan 改归属不影响历史 Run）。
+    # v2.5 M4 后 project_id 无 FK（悬空快照），显式 primaryjoin 供 ORM 使用。
+    project = relationship(
+        "TestProject",
+        primaryjoin="PlanRun.project_id == TestProject.id",
+        foreign_keys=[project_id],
+    )
     jobs = relationship("backend.models.job.JobInstance",
                         back_populates="plan_run", lazy="dynamic")
 
@@ -139,7 +147,7 @@ class PlanRunHost(Base):
     # CASCADE (step 1.1): retention cleanup deletes PlanRun rows directly —
     # pure-snapshot children must go with them, at the DB level.
     plan_run_id  = Column(Integer, ForeignKey("plan_run.id", ondelete="CASCADE"), nullable=False)
-    host_id      = Column(String(64), ForeignKey("host.id"), nullable=False)
+    host_id      = Column(String(64), ForeignKey("host.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     device_count = Column(Integer, nullable=False, default=0, server_default="0")
     # status expresses admission/liveness; phase expresses the business stage —
     # the two are orthogonal (ADR-0026 data-model section).

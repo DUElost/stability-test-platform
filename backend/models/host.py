@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     JSON,
     String,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -22,7 +23,9 @@ class Host(Base):
     __tablename__ = "host"
 
     id                   = Column(String(64), primary_key=True)
-    hostname             = Column(String(256), nullable=False, unique=True)
+    # hostname 唯一约束显式命名 host_hostname_key（对齐迁移链，schema-sync
+    # 不因自动命名漂移报警）
+    hostname             = Column(String(256), nullable=False)
     ip_address           = Column(String(64))
     script_catalog_version = Column(String(64))
     last_heartbeat       = Column(DateTime(timezone=True))
@@ -48,13 +51,19 @@ class Host(Base):
     boot_id       = Column(String(64), nullable=False, default="")           # ADR-0019 Phase 3a
     last_agent_instance_id = Column(String(64), nullable=False, default="")  # ADR-0019 Phase 3a
 
+    __table_args__ = (
+        UniqueConstraint("hostname", name="host_hostname_key"),
+        # 心跳超时巡检（reconciler / watchdog）按 last_heartbeat 排序扫描
+        Index("idx_host_last_heartbeat", "last_heartbeat"),
+    )
+
 
 class Device(Base):
     __tablename__ = "device"
 
     id         = Column(Integer, primary_key=True)
     serial     = Column(String(128), nullable=False, unique=True)
-    host_id    = Column(String(64), ForeignKey("host.id"))
+    host_id    = Column(String(64), ForeignKey("host.id", ondelete="CASCADE", onupdate="CASCADE"))
     model      = Column(String(128))
     platform   = Column(String(64))
     tags       = Column(JSONB, nullable=False, default=list)

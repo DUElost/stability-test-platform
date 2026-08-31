@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -45,3 +45,9 @@ class ResourceAllocation(Base):
     pool = relationship("ResourcePool", foreign_keys=[resource_pool_id], back_populates="allocations")
     job  = relationship("JobInstance", foreign_keys=[job_instance_id])
     device = relationship("Device", foreign_keys=[device_id])
+
+    __table_args__ = (
+        # 对齐迁移链既有索引（schema-sync 基线收敛）
+        Index("ix_resource_allocation_job", "job_instance_id"),
+        Index("ix_resource_allocation_pool", "resource_pool_id"),
+    )

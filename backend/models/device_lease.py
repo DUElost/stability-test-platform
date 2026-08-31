@@ -26,7 +26,7 @@ class DeviceLease(Base):
     id                 = Column(Integer, primary_key=True)
     device_id          = Column(Integer, ForeignKey("device.id"), nullable=False)
     job_id             = Column(Integer, ForeignKey("job_instance.id"), nullable=True)
-    host_id            = Column(String(64), ForeignKey("host.id"), nullable=False)
+    host_id            = Column(String(64), ForeignKey("host.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     lease_type         = Column(String(32), nullable=False)
     status             = Column(String(32), nullable=False)
     fencing_token      = Column(String(256), nullable=False)
