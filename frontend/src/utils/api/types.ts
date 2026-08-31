@@ -1948,7 +1948,15 @@ export interface AiAssistantConfig {
   t1_require_confirm: boolean;
   /** 免确认白名单（仅 T2 级低危工具可加入，后端校验） */
   auto_approve_tools: string[];
+  /** T2b 按 plan_id 自动派发白名单（仅 dispatch_plan_run） */
+  t2b_auto_dispatch_allowlist: T2bAutoDispatchAllowlistEntry[];
   updated_at: string;
+}
+
+export interface T2bAutoDispatchAllowlistEntry {
+  plan_id: number;
+  max_devices: number;
+  tools: string[];
 }
 
 /** PUT /config——api_key 留空（不传字段）= 不变更。 */
@@ -1962,6 +1970,7 @@ export interface AiAssistantConfigUpdate {
   request_timeout_seconds?: number;
   t1_require_confirm?: boolean;
   auto_approve_tools?: string[];
+  t2b_auto_dispatch_allowlist?: T2bAutoDispatchAllowlistEntry[];
 }
 
 export interface AiConnectionTestResult {

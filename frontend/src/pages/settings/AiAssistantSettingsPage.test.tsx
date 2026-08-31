@@ -40,6 +40,7 @@ const CONFIG: AiAssistantConfig = {
   request_timeout_seconds: 120,
   t1_require_confirm: false,
   auto_approve_tools: [],
+  t2b_auto_dispatch_allowlist: [],
   updated_at: '2026-08-28T00:00:00Z',
 };
 
@@ -119,6 +120,24 @@ describe('AiAssistantSettingsPage', () => {
         expect.objectContaining({
           t1_require_confirm: true,
           auto_approve_tools: ['test_notification_channel'],
+        }),
+      );
+    });
+  });
+
+  it('T2b 自动派发白名单可编辑并随保存上送', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText('添加 Plan 条目'));
+    const planInput = screen.getByLabelText('plan_id');
+    fireEvent.change(planInput, { target: { value: '42' } });
+    fireEvent.change(screen.getByLabelText('max_devices'), { target: { value: '5' } });
+    fireEvent.click(screen.getByText('保存配置'));
+    await waitFor(() => {
+      expect(mocks.aiAssistant.updateConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          t2b_auto_dispatch_allowlist: [
+            expect.objectContaining({ plan_id: 42, max_devices: 5 }),
+          ],
         }),
       );
     });

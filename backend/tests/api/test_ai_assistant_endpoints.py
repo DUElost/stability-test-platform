@@ -84,6 +84,29 @@ class TestConfigEndpoints:
         )
         assert resp.json()["data"]["auto_approve_tools"] == ["test_notification_channel"]
 
+    def test_t2b_allowlist_sanitized_on_save(self, client, admin_headers, db_session):
+        from backend.models.plan import Plan
+
+        plan = Plan(name="gpu-auto", failure_threshold=0.1)
+        db_session.add(plan)
+        db_session.commit()
+        _configure(db_session)
+        resp = client.put(
+            "/api/v1/ai-assistant/config",
+            json={
+                "t2b_auto_dispatch_allowlist": [
+                    {"plan_id": plan.id, "max_devices": 3},
+                    {"plan_id": 99999, "max_devices": 1},
+                ],
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]["t2b_auto_dispatch_allowlist"]
+        assert len(data) == 1
+        assert data[0]["plan_id"] == plan.id
+        assert data[0]["max_devices"] == 3
+
     def test_connection_test_refuses_fast(self, client, admin_headers, db_session):
         cfg = _configure(db_session)
         cfg.base_url = "http://127.0.0.1:9/v1"  # 不可达端口，连接立即拒绝
