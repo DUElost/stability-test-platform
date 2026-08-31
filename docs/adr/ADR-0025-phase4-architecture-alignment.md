@@ -222,7 +222,7 @@ start_log_scan.py -merge_files agentA_org.xls agentB_org.xls -side shanghai -mer
   → Result_MergeFiles.xls（跨设备去重终态）
 ```
 - 合并输入必须用 `_org.xls`（含 `DeviceId` 列），不能用 final `.xls`（`DeviceCount` 是整数语义错）
-- 合并输出落在 `<工具目录>/merge_result/<timestamp>/`，需后处理扫描取最新
+- 合并输出落在 `<工具目录>/merge_result/<timestamp>/`（工具约定，控制面工作目录）——控制面随后**发布到中心 `dedup/{plan_run_id}/merge/`** 并注册 artifact（2026-08-31 起；中心未配置时回退注册本机路径）
 - `-side shanghai`（默认）/ `-side factory` 需按部署侧显式指定
 
 **RunConsole 复用**：scan 与 merge 均走 RunConsole（`run_key=scan:{plan_run_id}` / `merge:{plan_run_id}`），前端 LiveConsole 看实时日志。

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -36,6 +37,12 @@ def _load(name: str, rel_path: str):
 @pytest.fixture(scope="module")
 def lib():
     return _load("gpu_lib", "gpu_setup/v1.0.0/_lib.py")
+
+
+@pytest.fixture(scope="module")
+def lib_v101():
+    """gpu v1.0.1：进程检测改 pgrep -f + bracket 防自匹配（冒烟发现 ④）。"""
+    return _load("gpu_lib_v101", "gpu_setup/v1.0.1/_lib.py")
 
 
 @pytest.fixture(scope="module")
@@ -255,6 +262,40 @@ class TestCheck:
         self._patch_device_io(check_mod, monkeypatch, tmp_path)
         r = check_mod._run({"expected_rounds": 2000})
         assert r["progress"]["expected_rounds"] == 2000
+
+
+# ---------------------------------------------------------------------------
+# gpu v1.0.1 进程检测（冒烟发现 ④：ps -A 截断 args + pkill/pgrep 自匹配）
+# ---------------------------------------------------------------------------
+
+
+class TestV101ProcessDetection:
+    def test_pattern_does_not_self_match(self, lib_v101):
+        """bracket 技巧：pattern 文本不匹配自身（adb shell 命令行含 pattern 串，
+        不排除会恒真/自杀）。"""
+        cmdline = f"sh -c pgrep -f '{lib_v101._INSTRUMENT_PGREP_PATTERN}'"
+        assert re.search(lib_v101._INSTRUMENT_PGREP_PATTERN, cmdline) is None
+
+    def test_instrument_alive_with_pids(self, lib_v101, monkeypatch):
+        monkeypatch.setattr(lib_v101, "adb_shell", lambda cmd, timeout=30: "7382\n7386\n")
+        assert lib_v101.instrument_alive() is True
+
+    def test_instrument_alive_empty(self, lib_v101, monkeypatch):
+        monkeypatch.setattr(lib_v101, "adb_shell", lambda cmd, timeout=30: "")
+        assert lib_v101.instrument_alive() is False
+
+    def test_stop_stress_uses_bracket_pattern(self, lib_v101, monkeypatch):
+        """v1.0.0 的 pkill -f 会杀掉自身 shell（命令行含 pattern），后续 force-stop 不执行。"""
+        calls = []
+        monkeypatch.setattr(lib_v101, "adb_shell", lambda cmd, timeout=30: calls.append(cmd) or "")
+        lib_v101.stop_stress()
+        pkills = [c for c in calls if c.startswith("pkill")]
+        assert len(pkills) == 1
+        assert "[g]pu_stress_loop" in pkills[0]
+        assert "[A]ndroidJUnitRunner" in pkills[0]
+        # force-stop 顺序执行（v1.0.0 会在 pkill 处自杀导致后面的 force-stop 丢失）
+        assert calls[0].startswith("am force-stop")
+        assert sum(1 for c in calls if c.startswith("am force-stop")) == 4
 
 
 # ---------------------------------------------------------------------------
