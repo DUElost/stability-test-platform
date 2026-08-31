@@ -28,6 +28,7 @@ const TOOL_LABELS: Record<string, string> = {
   scan_script_catalog: '脚本目录扫描',
   test_notification_channel: '通知通道测试发送',
   reload_agent_config: 'Agent 配置重载',
+  dispatch_plan_run: '发起 Plan 执行',
 };
 
 const STATUS_BADGE: Record<AiActionStatus, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' }> = {
@@ -183,6 +184,16 @@ export function ActionCard({ actionId, className }: ActionCardProps) {
         <Badge variant={badge.variant}>{badge.label}</Badge>
       </CardHeader>
       <CardContent className="space-y-2 py-0">
+        {action.preview_text && (
+          <pre
+            className={cn(
+              'max-h-48 overflow-auto rounded-md p-2 font-mono text-xs whitespace-pre-wrap',
+              SURFACE.subtle,
+            )}
+          >
+            {action.preview_text}
+          </pre>
+        )}
         <details>
           <summary className={cn('cursor-pointer text-xs', TEXT.subtitle)}>参数</summary>
           <pre
