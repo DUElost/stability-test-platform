@@ -16,13 +16,15 @@ from typing import Any
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.audit import AuditLog
 from backend.models.enums import DeviceStatus, HostStatus, PlanRunStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.notification import AlertRule
-from backend.models.plan import Plan
+from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
+from backend.models.project import Specialty, TestProject
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -102,6 +104,33 @@ def _opt_str(value: Any, name: str, max_len: int = 100) -> str | None:
     return v
 
 
+def _parse_device_ids(value: Any, name: str = "device_ids") -> list[int]:
+    if not isinstance(value, list) or not value:
+        raise ToolValidationError(f"{name} must be a non-empty array of integers")
+    out: list[int] = []
+    for item in value:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            raise ToolValidationError(f"{name} must contain integers only") from None
+    if len(out) > 50:
+        raise ToolValidationError(f"{name} too many devices (max 50)")
+    return out
+
+
+def _plan_hidden_by_legacy(steps: list) -> bool:
+    return any(s.script_name in LEGACY_AEE_SCRIPT_NAMES for s in steps)
+
+
+def _format_plan_summary(plan: Plan, steps: list) -> str:
+    spec = plan.specialty.key if getattr(plan, "specialty", None) else None
+    proj = plan.project.project_key if getattr(plan, "project", None) else None
+    return (
+        f"#{plan.id} name={plan.name!r} project={proj} specialty={spec} "
+        f"steps={len(steps)} failure_threshold={plan.failure_threshold}"
+    )
+
+
 # ─────────────────────────── T0 查询实现 ───────────────────────────
 
 def _q_platform_health(db: Session, args: dict) -> str:
@@ -179,6 +208,167 @@ def _q_plan_run_detail(db: Session, args: dict) -> str:
         f"PlanRun #{run.id}\nstatus={run.status}\nproject_id={run.project_id}\n"
         f"job 状态分布={jobs or '无 job'}\nrun_context 键={ctx_keys}"
     )
+
+
+def _q_list_plans(db: Session, args: dict) -> str:
+    limit = _clamp_int(args.get("limit"), "limit", 10, 1, 20)
+    q = db.query(Plan)
+    project_key = _opt_str(args.get("project_key"), "project_key", 64)
+    if project_key:
+        proj = db.query(TestProject).filter(TestProject.project_key == project_key).first()
+        if proj is None:
+            return f"项目 key {project_key!r} 不存在。"
+        q = q.filter(Plan.project_id == proj.id)
+    specialty_key = _opt_str(args.get("specialty_key"), "specialty_key", 64)
+    if specialty_key:
+        spec = db.query(Specialty).filter(Specialty.key == specialty_key).first()
+        if spec is None:
+            return f"专项 key {specialty_key!r} 不存在。"
+        q = q.filter(Plan.specialty_id == spec.id)
+    plans = q.order_by(Plan.created_at.desc()).limit(limit).all()
+    if not plans:
+        return "没有匹配的 Plan。"
+    plan_ids = [p.id for p in plans]
+    all_steps = (
+        db.query(PlanStep)
+        .filter(PlanStep.plan_id.in_(plan_ids))
+        .order_by(PlanStep.stage, PlanStep.sort_order)
+        .all()
+    )
+    steps_by: dict[int, list] = {}
+    for step in all_steps:
+        steps_by.setdefault(step.plan_id, []).append(step)
+    visible = [p for p in plans if not _plan_hidden_by_legacy(steps_by.get(p.id, []))]
+    if not visible:
+        return "没有匹配的 Plan。"
+    lines = [f"共 {len(visible)} 条 Plan："]
+    for plan in visible:
+        lines.append(_format_plan_summary(plan, steps_by.get(plan.id, [])))
+    return "\n".join(lines)
+
+
+def _q_get_plan_detail(db: Session, args: dict) -> str:
+    plan_id = _clamp_int(args.get("plan_id"), "plan_id", 0, 1, 10**9)
+    plan = db.get(Plan, plan_id)
+    if plan is None:
+        return f"Plan #{plan_id} 不存在。"
+    steps = (
+        db.query(PlanStep)
+        .filter(PlanStep.plan_id == plan_id)
+        .order_by(PlanStep.stage, PlanStep.sort_order)
+        .all()
+    )
+    if _plan_hidden_by_legacy(steps):
+        return f"Plan #{plan_id} 不存在。"
+    lines = [_format_plan_summary(plan, steps), "步骤："]
+    for idx, step in enumerate(steps, 1):
+        lines.append(
+            f"  {idx}. stage={step.stage} sort={step.sort_order} "
+            f"script={step.script_name}:{step.script_version}"
+        )
+    return "\n".join(lines)
+
+
+def _q_preview_plan_dispatch(db: Session, args: dict) -> str:
+    from backend.services.plan_dispatcher_sync import PlanDispatchError, preview_plan_dispatch_sync
+
+    plan_id = _clamp_int(args.get("plan_id"), "plan_id", 0, 1, 10**9)
+    device_ids = _parse_device_ids(args.get("device_ids"))
+    try:
+        preview = preview_plan_dispatch_sync(plan_id, device_ids, db)
+    except PlanDispatchError as exc:
+        return f"预检失败：{exc}"
+    lifecycle = preview.get("lifecycle") or {}
+    stage_keys = list(lifecycle.keys())[:10]
+    return (
+        f"预检通过（未创建 PlanRun）。\n"
+        f"plan_id={preview.get('plan_id')} name={preview.get('plan_name')!r}\n"
+        f"device_ids={preview.get('device_ids')} total_steps={preview.get('total_steps')}\n"
+        f"lifecycle 顶层键={stage_keys}"
+    )
+
+
+def _q_plan_run_jobs(db: Session, args: dict) -> str:
+    run_id = _clamp_int(args.get("run_id"), "run_id", 0, 1, 10**9)
+    if db.get(PlanRun, run_id) is None:
+        return f"PlanRun #{run_id} 不存在。"
+    jobs = (
+        db.query(JobInstance)
+        .filter(JobInstance.plan_run_id == run_id)
+        .order_by(JobInstance.id)
+        .all()
+    )
+    if not jobs:
+        return f"PlanRun #{run_id} 尚无 job。"
+    device_ids = list({j.device_id for j in jobs})
+    serials: dict[int, str] = {}
+    if device_ids:
+        for dev in db.query(Device).filter(Device.id.in_(device_ids)).all():
+            serials[dev.id] = dev.serial
+    lines = [f"PlanRun #{run_id} 共 {len(jobs)} 个 job："]
+    for job in jobs:
+        lines.append(
+            f" job#{job.id} device_id={job.device_id} serial={serials.get(job.device_id, '?')} "
+            f"host={job.host_id} status={job.status} manual_action={job.manual_action}"
+        )
+    return "\n".join(lines)
+
+
+def _q_plan_run_watcher_summary(db: Session, args: dict) -> str:
+    from backend.services.log_observation import aggregate_risk_summary, aggregate_signal_link_stats
+
+    run_id = _clamp_int(args.get("run_id"), "run_id", 0, 1, 10**9)
+    pr = db.get(PlanRun, run_id)
+    if pr is None:
+        return f"PlanRun #{run_id} 不存在。"
+    job_ids = [
+        row[0]
+        for row in db.query(JobInstance.id).filter(JobInstance.plan_run_id == run_id).all()
+    ]
+    if not job_ids:
+        return f"PlanRun #{run_id} 无 job，watcher 无数据。"
+    link = aggregate_signal_link_stats(db, job_ids)
+    risk = aggregate_risk_summary(db, job_ids)
+    jobs_status = dict(
+        db.query(JobInstance.status, func.count(JobInstance.id))
+        .filter(JobInstance.plan_run_id == run_id)
+        .group_by(JobInstance.status)
+        .all()
+    )
+    lines = [
+        f"PlanRun #{run_id} status={pr.status} failure_threshold={pr.failure_threshold}",
+        f"job 状态分布={jobs_status}",
+        (
+            f"signal 链接 linked={link.get('linked', 0)} "
+            f"unlinked_fixable={link.get('unlinked_fixable', 0)} "
+            f"fixable_link_rate={link.get('fixable_link_rate')}"
+        ),
+    ]
+    lines.append(f"风险摘要={risk if risk else '暂无'}")
+    return "\n".join(lines)
+
+
+def _q_plan_run_log_events(db: Session, args: dict) -> str:
+    from backend.services.device_log_event import list_plan_run_device_log_events
+
+    run_id = _clamp_int(args.get("run_id"), "run_id", 0, 1, 10**9)
+    if db.get(PlanRun, run_id) is None:
+        return f"PlanRun #{run_id} 不存在。"
+    limit = _clamp_int(args.get("limit"), "limit", 20, 1, 50)
+    state = _opt_str(args.get("state"), "state", 32)
+    rows, total = list_plan_run_device_log_events(
+        db, run_id, skip=0, limit=limit, state=state,
+    )
+    if not rows:
+        return f"PlanRun #{run_id} 无 device log events（total=0）。"
+    lines = [f"PlanRun #{run_id} log events（展示 {len(rows)}/{total}）："]
+    for row in rows:
+        path = row.remote_path or row.local_path or "-"
+        lines.append(
+            f" {row.serial} type={row.event_type}/{row.event_subtype} "
+            f"state={row.state} path={path}"
+        )
+    return "\n".join(lines)
 
 
 def _q_hosts(db: Session, args: dict) -> str:
@@ -291,6 +481,12 @@ QUERY_IMPLEMENTATIONS = {
     "get_platform_health": _q_platform_health,
     "query_plan_runs": _q_plan_runs,
     "get_plan_run_detail": _q_plan_run_detail,
+    "list_plans": _q_list_plans,
+    "get_plan_detail": _q_get_plan_detail,
+    "preview_plan_dispatch": _q_preview_plan_dispatch,
+    "get_plan_run_jobs": _q_plan_run_jobs,
+    "get_plan_run_watcher_summary": _q_plan_run_watcher_summary,
+    "get_plan_run_log_events": _q_plan_run_log_events,
     "query_hosts": _q_hosts,
     "query_devices": _q_devices,
     "query_recent_audit_logs": _q_audit_logs,
@@ -397,6 +593,57 @@ TOOLS: dict[str, ToolSpec] = {
             tier="T0", kind="query",
         ),
         ToolSpec(
+            name="list_plans",
+            description="列出 Plan（可按项目 key / 专项 key 过滤），含步骤数与归属。",
+            parameters=_schema({
+                "project_key": {"type": "string"},
+                "specialty_key": {"type": "string", "description": "如 GPU / MTBF"},
+                "limit": {"type": "integer", "description": "1-20，默认 10"},
+            }),
+            tier="T0", kind="query",
+        ),
+        ToolSpec(
+            name="get_plan_detail",
+            description="获取单个 Plan 的详情与全部 PlanStep（脚本名与版本）。",
+            parameters=_schema({"plan_id": {"type": "integer"}}, ["plan_id"]),
+            tier="T0", kind="query",
+        ),
+        ToolSpec(
+            name="preview_plan_dispatch",
+            description="预检 Plan 派发（只读，不创建 PlanRun）：校验脚本/套件并组装 lifecycle。",
+            parameters=_schema({
+                "plan_id": {"type": "integer"},
+                "device_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "目标设备 id 列表",
+                },
+            }, ["plan_id", "device_ids"]),
+            tier="T0", kind="query",
+        ),
+        ToolSpec(
+            name="get_plan_run_jobs",
+            description="列出 PlanRun 下全部 Job：设备 serial、host、状态、manual_action。",
+            parameters=_schema({"run_id": {"type": "integer"}}, ["run_id"]),
+            tier="T0", kind="query",
+        ),
+        ToolSpec(
+            name="get_plan_run_watcher_summary",
+            description="PlanRun watcher 摘要：job 分布、signal 链接健康、风险评级。",
+            parameters=_schema({"run_id": {"type": "integer"}}, ["run_id"]),
+            tier="T0", kind="query",
+        ),
+        ToolSpec(
+            name="get_plan_run_log_events",
+            description="PlanRun 设备日志事件（DLE 权威列表，终态为主）。",
+            parameters=_schema({
+                "run_id": {"type": "integer"},
+                "state": {"type": "string", "description": "按 DLE state 过滤"},
+                "limit": {"type": "integer", "description": "1-50，默认 20"},
+            }, ["run_id"]),
+            tier="T0", kind="query",
+        ),
+        ToolSpec(
             name="query_hosts",
             description="查询主机列表，可按状态/关键词过滤。",
             parameters=_schema({
@@ -476,8 +723,127 @@ TOOLS: dict[str, ToolSpec] = {
             parameters=_schema({"host_id": {"type": "string"}}, ["host_id"]),
             tier="T2", kind="service",
         ),
+        ToolSpec(
+            name="dispatch_plan_run",
+            description=(
+                "发起 Plan 手动执行（创建 QUEUED PlanRun 并入准入队列）。"
+                "建议先调用 preview_plan_dispatch 预检。"
+            ),
+            parameters=_schema({
+                "plan_id": {"type": "integer"},
+                "device_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "目标设备 id 列表（须唯一）",
+                },
+                "note": {"type": "string", "description": "可选备注，写入 run_context.note"},
+                "wifi_pool_id": {
+                    "type": "integer",
+                    "description": "含 connect_wifi/monkey_setup 步骤时可选 WiFi 资源池 id",
+                },
+            }, ["plan_id", "device_ids"]),
+            tier="T2", kind="service",
+        ),
+        ToolSpec(
+            name="abort_plan_run",
+            description="中止进行中的 PlanRun（PENDING job 立即 ABORTED；RUNNING 等 Agent ACK）。",
+            parameters=_schema({
+                "run_id": {"type": "integer"},
+                "reason": {"type": "string", "description": "可选中止原因"},
+            }, ["run_id"]),
+            tier="T2", kind="service",
+        ),
+        ToolSpec(
+            name="retry_plan_run_dispatch",
+            description="precheck/dispatch 失败后将 PlanRun 重入准入队列（须尚无 Job）。",
+            parameters=_schema({"run_id": {"type": "integer"}}, ["run_id"]),
+            tier="T2", kind="service",
+        ),
+        ToolSpec(
+            name="manual_retry_job",
+            description="清除 patrol backoff，请求 Agent 下一轮立即重试（不重置 failure_streak）。",
+            parameters=_schema({
+                "run_id": {"type": "integer"},
+                "job_id": {"type": "integer"},
+                "reason": {"type": "string"},
+            }, ["run_id", "job_id"]),
+            tier="T2", kind="service",
+        ),
+        ToolSpec(
+            name="manual_exit_job",
+            description="请求 Agent 跳过剩余 patrol 并退出（不跑 teardown；job 仍 RUNNING 直至 complete）。",
+            parameters=_schema({
+                "run_id": {"type": "integer"},
+                "job_id": {"type": "integer"},
+                "reason": {"type": "string"},
+            }, ["run_id", "job_id"]),
+            tier="T2", kind="service",
+        ),
+        ToolSpec(
+            name="trigger_plan_run_archive",
+            description="向 PlanRun 涉及的 ONLINE host 下发 archive_now + scan_now（异步触发）。",
+            parameters=_schema({"run_id": {"type": "integer"}}, ["run_id"]),
+            tier="T2", kind="service",
+        ),
     ]
 }
+
+
+def normalize_tool_params(name: str, args: dict | None) -> dict:
+    """执行类工具参数归一化（校验失败抛 ToolValidationError）。"""
+    if name == "dispatch_plan_run":
+        from backend.services.ai_assistant.dispatch import normalize_dispatch_params
+
+        return normalize_dispatch_params(args)
+    if name == "abort_plan_run":
+        from backend.services.ai_assistant.plan_run_ops import normalize_abort_params
+
+        return normalize_abort_params(args)
+    if name == "retry_plan_run_dispatch":
+        from backend.services.ai_assistant.plan_run_ops import normalize_retry_dispatch_params
+
+        return normalize_retry_dispatch_params(args)
+    if name == "manual_retry_job":
+        from backend.services.ai_assistant.plan_run_ops import normalize_manual_job_params
+
+        return normalize_manual_job_params(args, default_reason="manual_retry")
+    if name == "manual_exit_job":
+        from backend.services.ai_assistant.plan_run_ops import normalize_manual_job_params
+
+        return normalize_manual_job_params(args, default_reason="manual_exit")
+    if name == "trigger_plan_run_archive":
+        from backend.services.ai_assistant.plan_run_ops import normalize_archive_params
+
+        return normalize_archive_params(args)
+    return dict(args or {})
+
+
+def describe_tool_action_preview(db: Session, tool_name: str, params: dict) -> str | None:
+    if tool_name == "dispatch_plan_run":
+        from backend.services.ai_assistant.dispatch import describe_dispatch_preview
+
+        return describe_dispatch_preview(db, params)
+    if tool_name == "abort_plan_run":
+        from backend.services.ai_assistant.plan_run_ops import describe_abort_preview
+
+        return describe_abort_preview(db, params)
+    if tool_name == "retry_plan_run_dispatch":
+        from backend.services.ai_assistant.plan_run_ops import describe_retry_dispatch_preview
+
+        return describe_retry_dispatch_preview(db, params)
+    if tool_name == "manual_retry_job":
+        from backend.services.ai_assistant.plan_run_ops import describe_manual_job_preview
+
+        return describe_manual_job_preview(db, params, action="manual_retry")
+    if tool_name == "manual_exit_job":
+        from backend.services.ai_assistant.plan_run_ops import describe_manual_job_preview
+
+        return describe_manual_job_preview(db, params, action="manual_exit")
+    if tool_name == "trigger_plan_run_archive":
+        from backend.services.ai_assistant.plan_run_ops import describe_archive_preview
+
+        return describe_archive_preview(db, params)
+    return None
 
 
 def to_openai_tools(allowed_names: set[str] | None = None) -> list[dict[str, Any]]:

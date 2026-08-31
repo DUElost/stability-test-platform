@@ -116,10 +116,10 @@ T2b 提案须展示：**Plan 名称、专项、设备 SN 列表、主机、wifi_
 
 | PR | 内容 | 依赖 |
 |----|------|------|
-| **PR-A** | T0 深读：`list_plans`, `get_plan_detail`, `preview_plan_dispatch`, `get_plan_run_jobs`, watcher/log-events | 无 |
-| **PR-B** | T2b：`dispatch_plan_run` + 操作卡预览 + 审计 + 验收 1–4 | PR-A |
-| **PR-C** | T2b：`abort_plan_run`, `manual_*`, `retry_dispatch`, `trigger_archive` | PR-B |
-| **PR-D** | config：`t2b_auto_dispatch_allowlist` + 设置页 | PR-B |
+| **PR-A** | T0 深读：`list_plans`, `get_plan_detail`, `preview_plan_dispatch`, `get_plan_run_jobs`, watcher/log-events | ✅ PR #651 |
+| **PR-B** | T2b：`dispatch_plan_run` + 操作卡预览 + 审计 + 验收 1–4 | ✅ PR #653 |
+| **PR-C** | T2b：`abort_plan_run`, `manual_*`, `retry_dispatch`, `trigger_archive` | ✅ PR #655 |
+| **PR-D** | config：`t2b_auto_dispatch_allowlist` + 设置页 | ✅ 本分支 |
 
 ## 6. 与父 ADR 的关系
 

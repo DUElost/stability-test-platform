@@ -37,6 +37,11 @@ interface FormState {
   request_timeout_seconds: number;
   t1_require_confirm: boolean;
   auto_approve_tools: string[];
+  t2b_auto_dispatch_allowlist: Array<{
+    plan_id: number;
+    max_devices: number;
+    tools: string[];
+  }>;
 }
 
 function toFormState(config: AiAssistantConfig): FormState {
@@ -50,6 +55,11 @@ function toFormState(config: AiAssistantConfig): FormState {
     request_timeout_seconds: config.request_timeout_seconds,
     t1_require_confirm: config.t1_require_confirm,
     auto_approve_tools: [...config.auto_approve_tools],
+    t2b_auto_dispatch_allowlist: config.t2b_auto_dispatch_allowlist.map((e) => ({
+      plan_id: e.plan_id,
+      max_devices: e.max_devices,
+      tools: [...e.tools],
+    })),
   };
 }
 
@@ -112,6 +122,7 @@ export default function AiAssistantSettingsPage() {
       request_timeout_seconds: form.request_timeout_seconds,
       t1_require_confirm: form.t1_require_confirm,
       auto_approve_tools: form.auto_approve_tools,
+      t2b_auto_dispatch_allowlist: form.t2b_auto_dispatch_allowlist,
     };
     // api_key 留空 = 不变更（不上送字段）。
     if (form.api_key.trim()) {
@@ -157,6 +168,41 @@ export default function AiAssistantSettingsPage() {
         auto_approve_tools: has
           ? prev.auto_approve_tools.filter((t) => t !== tool)
           : [...prev.auto_approve_tools, tool],
+      };
+    });
+
+  const addT2bEntry = () =>
+    setForm((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        t2b_auto_dispatch_allowlist: [
+          ...prev.t2b_auto_dispatch_allowlist,
+          { plan_id: 0, max_devices: 3, tools: ['dispatch_plan_run'] },
+        ],
+      };
+    });
+
+  const updateT2bEntry = (
+    index: number,
+    field: 'plan_id' | 'max_devices',
+    value: number,
+  ) =>
+    setForm((prev) => {
+      if (!prev) return prev;
+      const next = [...prev.t2b_auto_dispatch_allowlist];
+      next[index] = { ...next[index], [field]: value };
+      return { ...prev, t2b_auto_dispatch_allowlist: next };
+    });
+
+  const removeT2bEntry = (index: number) =>
+    setForm((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        t2b_auto_dispatch_allowlist: prev.t2b_auto_dispatch_allowlist.filter(
+          (_, i) => i !== index,
+        ),
       };
     });
 
@@ -276,6 +322,65 @@ export default function AiAssistantSettingsPage() {
               <p className={FORM.hint}>
                 hot-update、生产库写操作、任意 shell 为硬排除（T3），不提供配置入口。
               </p>
+            </div>
+
+            <div>
+              <p className={FORM.label}>T2b 自动派发白名单（按 Plan）</p>
+              <p className={FORM.hint}>
+                命中条目时 <span className="font-mono text-xs">dispatch_plan_run</span>{' '}
+                对发起人免审批自动执行；设备数不得超过 max_devices；发起人仍须具备 API 派发权限（D8）。
+              </p>
+              <div className="mt-2 space-y-2">
+                {form.t2b_auto_dispatch_allowlist.map((entry, index) => (
+                  <div
+                    key={`t2b-${index}`}
+                    className="flex flex-wrap items-end gap-2 rounded-md border border-border p-3"
+                  >
+                    <div>
+                      <label className={FORM.label} htmlFor={`t2b-plan-${index}`}>
+                        plan_id
+                      </label>
+                      <input
+                        id={`t2b-plan-${index}`}
+                        type="number"
+                        min={1}
+                        value={entry.plan_id || ''}
+                        onChange={(e) =>
+                          updateT2bEntry(index, 'plan_id', Number(e.target.value) || 0)
+                        }
+                        className={cn(FORM.input, 'w-28')}
+                      />
+                    </div>
+                    <div>
+                      <label className={FORM.label} htmlFor={`t2b-max-${index}`}>
+                        max_devices
+                      </label>
+                      <input
+                        id={`t2b-max-${index}`}
+                        type="number"
+                        min={1}
+                        max={50}
+                        value={entry.max_devices}
+                        onChange={(e) =>
+                          updateT2bEntry(index, 'max_devices', Number(e.target.value) || 1)
+                        }
+                        className={cn(FORM.input, 'w-28')}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => removeT2bEntry(index)}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <Button type="button" variant="outline" size="sm" className="mt-2" onClick={addT2bEntry}>
+                添加 Plan 条目
+              </Button>
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">

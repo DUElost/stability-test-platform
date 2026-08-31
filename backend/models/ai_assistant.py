@@ -39,6 +39,8 @@ class AiAssistantConfig(Base):
     t1_require_confirm = Column(Boolean, nullable=False, default=False, server_default="false")
     # 免确认白名单：仅 T2 级低危工具可加入（后端校验）
     auto_approve_tools = Column(JSONB, nullable=False, default=list, server_default="[]")
+    # T2b 按 plan_id 自动派发白名单：[{plan_id, max_devices, tools}]
+    t2b_auto_dispatch_allowlist = Column(JSONB, nullable=False, default=list, server_default="[]")
     updated_at = Column(
         DateTime(timezone=True),
         nullable=False,
