@@ -142,6 +142,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | MLD 拼写 | `getprop ro.product.model` 返回 `MLD-LX3`（连字符），`adb devices` 是下划线——以 getprop 为准 |
 | 部署后代码 | 部署验证完成后按仓库流程走 PR 合入，不直推 main |
 | 本地 ref 陈旧 | worktree 基于 origin/main 前必 fetch；构建前用 `merge-base --is-ancestor <PR mergeCommit> origin/main` 校验 |
+| **热更新清带外资源**（2026-08-31 实测） | hot-update 的 rsync `--delete` 会清掉 `resources/` 下**非 exclude 目录**（仅 `resources/mtbf/` 豁免）——sleep/power-cycle/gpu 等专项的带外 APK 资源会被抹掉。处置：**带外资源一律在最终热更新后放置**；如需豁免某目录，改 `host_updater.py` 的 rsync exclude 列表 |
 
 ## 7. 校准记录
 
@@ -153,5 +154,6 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-08-27 | 新增 §1.5 前端段：nginx root=仓库内 `frontend/dist-prod`、worktree 构建 + 双 rename 原子切换、浏览器/curl 双验证 | 登记簿 UI 批次（#476/#477）部署实操 |
 | 2026-08-28 | 坑表补「本地 ref 陈旧」条目：目标 PR mergeCommit ∈ origin/main 用 `merge-base --is-ancestor` 校验（曾打出旧包） | 同上事故复盘 |
 | 2026-08-30 | 四步全链路真机部署（r0s9t8u7v6w5 迁移 + 前端换包 + backend restart + 48 台热更新）后校准：§0 凭据与 token 取值路径（扁平 `.access_token`、双 `-F`）；§1.5 **`/tmp` 是 tmpfs、跨盘 `mv` 非原子**→ 改 `cp -a` 到同盘再双 rename，并记录无需 `VITE_API_BASE_URL`；§2 scan 无 CLI 模块、只有 HTTP 路由 + 「diff 为空则免跑」判据；§3 改为 canary→批量两段式，补 `--direct` 语义、串行 20s/台与 stdout 块缓冲（看 DB 不看日志）。§0/§2/§3 相应 ⚠️待校对 解除 | 本次部署实操 |
+| 2026-08-31 | 坑表补「热更新清带外资源」：rsync --delete 清 resources/ 非 exclude 目录（sleep/powercycle/gpu 带外 APK 实测被抹），带外资源须在最终热更新后放置 | #462 三专项部署实操 |
 | 2026-08-30 | 新增部署源守卫步骤（§1 step 2/4 前各一行 `tools/dev/check-deploy-source.sh`）：共享工作树曾跑在未合入分支上被推上生产，重启前强制校验 HEAD==main 且工作区干净；已装 systemd unit 另加 `ExecStartPre=-` 兜底（失败仅记日志不中断） | 2026-08-30 事故复盘 + PR |
 | （下次真实部署） | | |

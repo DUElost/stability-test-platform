@@ -49,6 +49,10 @@
   patrol 全程零判死；-71 两设备各判死 1 次——服务偶发启动失败后自愈（文件
   可读、cycles>0、无转换，v1.0.5 判死**正确触发**但 PowerCycle 重启场景
   判死策略可更宽容——遗留：grace 提高或结果文件 mtime 停滞判定）。
+  发现② 关闭（2026-08-31 确认）：patrol 失败不转 teardown 是 **ADR-0022
+  best-effort 语义**——单步骤失败不中止周期、不产生 job 级失败，只 trace +
+  failure_streak + 指数退避；teardown 由 timeout/abort 触发。check 判死是
+  监控信号而非终止机制（设备级故障由平台心跳 UNKNOWN 链路处理），非缺陷。
 
 ## 0. 结论摘要
 
