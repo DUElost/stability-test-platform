@@ -43,6 +43,14 @@ vi.mock('@/utils/api', () => ({
       planSuccessRate: vi.fn().mockResolvedValue({ items: [] }),
       planRunPassRateTrend: vi.fn().mockResolvedValue({ points: [] }),
     },
+    results: {
+      summary: vi.fn().mockResolvedValue({
+        runs_by_status: { finished: 0, failed: 0, canceled: 0, running: 0, total: 0 },
+        test_type_stats: [],
+        risk_distribution: { high: 2, medium: 1, low: 5, unknown: 0 },
+        recent_runs: [],
+      }),
+    },
   },
 }));
 
@@ -66,6 +74,7 @@ vi.mock('@/components/charts', () => ({
   HostFailureRateChart: () => <div data-testid="host-failure-rate-chart" />,
   PlanSuccessRateChart: () => <div data-testid="plan-success-rate-chart" />,
   PlanRunPassRateTrendChart: () => <div data-testid="plan-run-pass-rate-trend-chart" />,
+  RiskDistributionChart: () => <div data-testid="risk-distribution-chart" />,
 }));
 
 vi.mock('../components/layout', () => ({
@@ -99,7 +108,7 @@ describe('Dashboard', () => {
     expect(await screen.findByText('453')).toBeInTheDocument();
     expect(await screen.findByText('483')).toBeInTheDocument();
     expect(screen.getByText('169')).toBeInTheDocument();
-    expect(screen.getByText('0.2%')).toBeInTheDocument();
+    expect(screen.getByText('在线 1 · 0.2%')).toBeInTheDocument();
   });
 
   it('renders page title', async () => {
@@ -122,6 +131,12 @@ describe('Dashboard', () => {
     const Dashboard = (await import('./Dashboard')).default;
     render(<Dashboard />, { wrapper: createWrapper() });
     expect(screen.getByText('数据统计')).toBeInTheDocument();
+  });
+
+  it('renders risk distribution chart to fill the 2-col grid', async () => {
+    const Dashboard = (await import('./Dashboard')).default;
+    render(<Dashboard />, { wrapper: createWrapper() });
+    expect(await screen.findByTestId('risk-distribution-chart')).toBeInTheDocument();
   });
 
   it('renders error state when data loading fails', async () => {

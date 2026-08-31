@@ -1,7 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { StableResponsiveContainer } from './StableResponsiveContainer';
-import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PieChart as PieChartIcon } from 'lucide-react';
 import { CHART_COLORS } from '@/design-system/colors';
@@ -37,6 +36,10 @@ const LABELS = {
   error: '错误',
 };
 
+function ChartBody({ children }: { children: ReactNode }) {
+  return <div className="min-h-[200px]">{children}</div>;
+}
+
 export function DeviceStatusChart({ data, isLoading }: DeviceStatusChartProps) {
   const chartData: DeviceStatusData[] = useMemo(() => {
     return [
@@ -54,90 +57,84 @@ export function DeviceStatusChart({ data, isLoading }: DeviceStatusChartProps) {
 
   if (isLoading) {
     return (
-      <Card className="border-none shadow-none">
-        <CardContent className="p-6">
-          <Skeleton className="h-[200px] w-full" />
-        </CardContent>
-      </Card>
+      <ChartBody>
+        <Skeleton className="h-[200px] w-full" />
+      </ChartBody>
     );
   }
 
   if (total === 0) {
     return (
-      <Card className="border-none shadow-none">
-        <CardContent className="p-6">
-          <div className="h-[200px] flex flex-col items-center justify-center text-muted-foreground">
-            <PieChartIcon size={32} className="mb-2 opacity-50" />
-            <span className="text-sm">暂无设备</span>
-          </div>
-        </CardContent>
-      </Card>
+      <ChartBody>
+        <div className="flex h-[200px] flex-col items-center justify-center text-muted-foreground">
+          <PieChartIcon size={32} className="mb-2 opacity-50" />
+          <span className="text-sm">暂无设备</span>
+        </div>
+      </ChartBody>
     );
   }
 
   return (
-    <Card className="border-none shadow-none">
-      <CardContent className="p-6">
-        <StableResponsiveContainer>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={chartData}
-                cx="50%"
-                cy="50%"
-                innerRadius={45}
-                outerRadius={70}
-                paddingAngle={2}
-                dataKey="value"
-                isAnimationActive={false}
-              >
-                {chartData.map((entry, index) => (
-                  <Cell
-                    key={`cell-${index}`}
-                    fill={entry.color}
-                    strokeWidth={0}
-                    style={{
-                      filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))',
-                    }}
-                  />
-                ))}
-              </Pie>
-              <Tooltip
-                content={({ active, payload }) => {
-                  if (active && payload && payload.length) {
-                    const data = payload[0].payload as DeviceStatusData;
-                    const percentage = ((data.value / total) * 100).toFixed(1);
-                    return (
-                      <div className="bg-popover border border-border rounded-lg p-2 shadow-md">
-                        <div className="flex items-center gap-2 mb-1">
-                          <div
-                            className="w-2 h-2 rounded-full"
-                            style={{ backgroundColor: data.color }}
-                          />
-                          <span className="text-sm font-medium">{data.name}</span>
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {data.value} 台设备（{percentage}%）
-                        </div>
+    <ChartBody>
+      <StableResponsiveContainer>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={chartData}
+              cx="50%"
+              cy="50%"
+              innerRadius={45}
+              outerRadius={70}
+              paddingAngle={2}
+              dataKey="value"
+              isAnimationActive={false}
+            >
+              {chartData.map((entry, index) => (
+                <Cell
+                  key={`cell-${index}`}
+                  fill={entry.color}
+                  strokeWidth={0}
+                  style={{
+                    filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))',
+                  }}
+                />
+              ))}
+            </Pie>
+            <Tooltip
+              content={({ active, payload }) => {
+                if (active && payload && payload.length) {
+                  const data = payload[0].payload as DeviceStatusData;
+                  const percentage = ((data.value / total) * 100).toFixed(1);
+                  return (
+                    <div className="bg-popover border border-border rounded-lg p-2 shadow-md">
+                      <div className="flex items-center gap-2 mb-1">
+                        <div
+                          className="w-2 h-2 rounded-full"
+                          style={{ backgroundColor: data.color }}
+                        />
+                        <span className="text-sm font-medium">{data.name}</span>
                       </div>
-                    );
-                  }
-                  return null;
-                }}
-              />
-              <Legend
-                verticalAlign="bottom"
-                height={30}
-                iconType="circle"
-                iconSize={8}
-                formatter={(value: string) => (
-                  <span className="text-xs text-muted-foreground">{value}</span>
-                )}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-        </StableResponsiveContainer>
-      </CardContent>
-    </Card>
+                      <div className="text-xs text-muted-foreground">
+                        {data.value} 台设备（{percentage}%）
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              }}
+            />
+            <Legend
+              verticalAlign="bottom"
+              height={30}
+              iconType="circle"
+              iconSize={8}
+              formatter={(value: string) => (
+                <span className="text-xs text-muted-foreground">{value}</span>
+              )}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      </StableResponsiveContainer>
+    </ChartBody>
   );
 }
