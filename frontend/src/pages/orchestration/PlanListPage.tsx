@@ -17,7 +17,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
 import { FORM } from '@/design-system';
-import { STAT, TEXT } from '@/design-system/tokens';
+import { LAYOUT, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatLocalDate } from '@/utils/format';
 
@@ -131,7 +131,7 @@ export default function PlanListPage() {
   }, [filtered]);
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title="Plan 编排"
         subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链"
@@ -149,7 +149,7 @@ export default function PlanListPage() {
       />
 
       {/* Stats — 稀疏数字条 */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-3 gap-4">
         <Card>
           <CardContent className="py-4 px-4">
             <p className={STAT.label}>Plan 总数</p>

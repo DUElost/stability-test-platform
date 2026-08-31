@@ -22,6 +22,7 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { useToast } from '@/hooks/useToast';
 import { ALERT_BOX, FORM, STATUS_CHIP, TEXT } from '@/design-system';
+import { LAYOUT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { api, toApiError } from '@/utils/api';
 import { suiteKeys } from '@/utils/api/queryKeys';
@@ -204,7 +205,7 @@ export default function TestSuiteDetailPage() {
 
   if (suiteQ.isLoading) {
     return (
-      <PageContainer>
+      <PageContainer className={LAYOUT.pageGap}>
         <PageSkeleton>
           <PageSkeleton.Cards count={2} />
         </PageSkeleton>
@@ -213,7 +214,7 @@ export default function TestSuiteDetailPage() {
   }
   if (suiteQ.isError || !suite) {
     return (
-      <PageContainer>
+      <PageContainer className={LAYOUT.pageGap}>
         <ErrorState
           title="加载失败"
           description={suiteQ.error ? toApiError(suiteQ.error).message : '套件不存在'}
@@ -228,7 +229,7 @@ export default function TestSuiteDetailPage() {
     && suite.exported_content_sha256 !== suite.content_sha256;
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <div className="mb-4">
         <Link
           to="/test-suites"

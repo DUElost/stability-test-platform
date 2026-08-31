@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
-import { ALERT_BANNER, PANEL, RISK_RATING_TEXT } from '@/design-system/tokens';
+import { ALERT_BANNER, LAYOUT, PANEL, RISK_RATING_TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 const severityIcons: Record<string, React.ReactNode> = {
@@ -57,7 +57,7 @@ export default function RunReportPage() {
 
   if (!enabled) {
     return (
-      <PageContainer width="content">
+      <PageContainer width="content" className={LAYOUT.pageGap}>
         <ErrorState
           title="无效 Job ID"
           description="URL 中的 Job ID 无法解析"
@@ -74,7 +74,7 @@ export default function RunReportPage() {
 
   if (reportQ.isLoading) {
     return (
-      <PageContainer width="content">
+      <PageContainer width="content" className={LAYOUT.pageGap}>
         <PageSkeleton>
           <PageSkeleton.Block size="md" />
           <PageSkeleton.Block size="lg" />
@@ -85,7 +85,7 @@ export default function RunReportPage() {
 
   if (reportQ.isError || !reportQ.data) {
     return (
-      <PageContainer width="content">
+      <PageContainer width="content" className={LAYOUT.pageGap}>
         <ErrorState
           title="报告加载失败"
           description="报告数据不存在或尚未生成"
@@ -106,7 +106,7 @@ export default function RunReportPage() {
   const counts = risk.counts || {};
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title={`Job 运行报告 #${report.run.id}`}
         subtitle={`任务: ${report.task.name} (${report.task.type})`}

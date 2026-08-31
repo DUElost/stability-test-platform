@@ -24,7 +24,7 @@ import { useRealtimeDashboard } from '@/hooks/useRealtimeDashboard';
 import { api } from '@/utils/api';
 import { DASHBOARD_SUBSCRIPTION } from '@/config';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
-import { CHART_SECTION, STAT, TEXT } from '@/design-system/tokens';
+import { CHART_SECTION, LAYOUT, STAT, TEXT } from '@/design-system/tokens';
 import { formatTimeFromDate } from '@/utils/format';
 import { cn } from '@/lib/utils';
 
@@ -127,7 +127,7 @@ export default function Dashboard() {
 
   if (summaryError) {
     return (
-      <PageContainer>
+      <PageContainer className={LAYOUT.pageGap}>
         <PageHeader title="仪表盘" subtitle="系统运行状态总览" />
         <InlineError message="数据加载失败，请检查后端服务连接。" />
       </PageContainer>
@@ -135,7 +135,7 @@ export default function Dashboard() {
   }
 
   return (
-    <PageContainer>
+    <PageContainer className={LAYOUT.pageGap}>
       <PageHeader title="仪表盘" subtitle="系统运行状态总览" />
 
       <div className={`flex justify-end items-center text-xs ${TEXT.caption}`}>
@@ -147,7 +147,7 @@ export default function Dashboard() {
       </div>
 
       {/* KPI 稀疏行 */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <DashboardStatCard
           label="主机总数"
           value={hostStats.total}
@@ -243,7 +243,7 @@ export default function Dashboard() {
           <h3 className={cn(CHART_SECTION.title, 'text-base tracking-[-0.02em]')}>数据统计</h3>
         </div>
 
-        <div className="grid grid-cols-1 gap-3">
+        <div className="grid grid-cols-1 gap-4">
           <Card className="p-4">
             <CardHeader className="px-0 pt-0 pb-3">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
@@ -279,7 +279,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <Card className="p-4">
             <CardHeader className="px-0 pt-0 pb-3">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
