@@ -16,7 +16,7 @@ from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.suite import TestCase
-from backend.models.test_case_result import TestCaseResult
+from backend.models.case_result import TestCaseResult
 from backend.services.report_service import _safe_json_loads
 
 logger = logging.getLogger(__name__)

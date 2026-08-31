@@ -65,9 +65,8 @@ export interface Device {
   host_id: string | number | null;
   /** ADR-0029：归属项目 key（F2 口径，后端不暴露数字 project_id） */
   project_key?: string | null;
-  /** ADR-0029 P0：归属来源四态——rule=型号命中规则；manual=人工归入；
-   *  pinned=人工钉住（规则不覆盖）；unassigned=无归属 */
-  attribution_source?: 'rule' | 'manual' | 'pinned' | 'unassigned' | null;
+  /** ADR-0029 v2.5：归属来源两态——mapped=型号有活跃成员行；unmapped=未映射 */
+  attribution_source?: 'mapped' | 'unmapped' | null;
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
   /** Authoritative backend admission decision. Legacy servers may omit it. */
   schedulable?: boolean;

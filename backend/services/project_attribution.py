@@ -1,21 +1,8 @@
-"""项目归属解析（ADR-0029 P1）——规则表 → device.project_id 的唯一应用路径。
+"""项目归属派生查询（ADR-0029 v2.5 D10）——model → project 的唯一事实源。
 
-分层：规则（project_model，admin 显式声明）→ 解析（本模块）→
-应用（心跳 / 规则变更 / 显式重算）。解析是纯函数（只读成员表），
-应用点负责「何时写 device.project_id」：
-- 心跳：新建 Device 后 / model 变更后 / project_id IS NULL（稳态三个条件
-  全不满足，零额外查询）
-- 规则变更（map/apply、规则删除）：只影响未来状态——已归属设备不重算
-  （心跳触发条件收窄）；需要纠正存量时用显式重算（routes/projects.py
-  的 POST /{key}/rules/recompute）
-- 漂移可见性：页面规则表（P0-4 的「规则目标 vs 实际」覆盖率）实时暴露
-  未收敛设备；无夜间 sweep（承诺已撤回——见 2026-08-31 审查 P0-1）
-
-pinned 语义：device.project_pinned = true 的设备**永不被规则覆盖**——人工
-钉住是唯一允许同型号拆两个项目的方式，显式可列出。
-
-改判告警：已归属设备被规则改判（model 变更 / 历史错误归属）必须留痕——
-一条错规则会静默搬走整批设备（生产事故：A57→MLD_LX2 残留规则）。
+归属 = device.model ⋈ project_model（活跃成员行）。M2 起读路径全部走本
+模块的派生查询；device.project_id 副本在 M3 删除。pinned 单向门随副本
+删除（v2.5：例外走未来的 device_project_override，生产 pinned=0 无需求）。
 """
 
 from __future__ import annotations
@@ -26,17 +13,16 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.models.host import Device
 from backend.models.project_model import ProjectModel
 
 logger = logging.getLogger(__name__)
 
 
 def resolve_project_id(db: Session, model: Optional[str]) -> Optional[int]:
-    """活跃规则精确匹配 model → project_id。
+    """活跃成员行精确匹配 model → project_id（派生前置查询）。
 
-    无规则命中 → None（显式「待归属」，不猜）。match_type 预留 SERIAL，
-    当前仅 MODEL 有写入路径。
+    无成员命中 → None（型号未映射）。match_type 仅 MODEL（SERIAL 预留
+    已放弃，v2.5）。
     """
     if not model:
         return None
@@ -51,35 +37,8 @@ def resolve_project_id(db: Session, model: Optional[str]) -> Optional[int]:
     return rule
 
 
-def apply_attribution(db: Session, device: Device) -> bool:
-    """按规则应用归属到单台设备；返回是否发生变更。
-
-    人工优先：project_pinned 的设备不动。规则未命中保持现状（不抹除已有
-    归属——归属错了改规则/改钉住，不是让心跳把设备清空）。
-    """
-    if device.project_pinned:
-        return False
-    if device.project_id is not None and device.model is None:
-        # 无型号无从判定；保持现状（不抹除）
-        return False
-    resolved = resolve_project_id(db, device.model)
-    if resolved is None:
-        return False
-    if device.project_id == resolved:
-        return False
-    # 改判告警：已归属设备被规则改判（model 变更 / 历史错误归属）——
-    # 一条错规则会静默搬走整批设备，必须留痕（生产事故复盘结论）。
-    if device.project_id is not None:
-        logger.warning(
-            "attribution_reassigned serial=%s model=%s from_project=%s to_project=%s",
-            device.serial, device.model, device.project_id, resolved,
-        )
-    device.project_id = resolved
-    return True
-
-
 def resolve_rules_for_model(db: Session, model: Optional[str]) -> list[ProjectModel]:
-    """查询某型号的全部活跃规则（map/preview、规则删除重算用）。"""
+    """查询某型号的全部活跃成员行（map/preview、重算用）。"""
     if not model:
         return []
     rows = db.execute(

@@ -4,7 +4,7 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import cast
+from sqlalchemy import cast, or_, select
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional, Union
@@ -13,7 +13,7 @@ from backend.core.database import get_db
 from backend.core.audit import record_audit
 from backend.models.host import Host, Device
 from backend.models.project import TestProject
-from backend.services.project_attribution import resolve_project_id
+from backend.models.project_model import ProjectModel
 from backend.api.schemas import DeviceCreate, DeviceOut, PaginatedResponse
 from backend.api.response import ApiResponse, ok
 from backend.api.schemas.device import BulkProjectAssignIn
@@ -185,36 +185,48 @@ def bulk_assign_project(
         # 直接写目标 key（不读 device.project）
         out.project_key = project.project_key
         out.attribution_source = _attribution_source(
-            db, project, device.model, pinned=device.project_pinned,
+            device.model, True,
         )
         items.append(out)
     return ok(items)
 
 
-def _attribution_source(
-    db: Session, project, model: Optional[str], *, pinned: bool = False,
-) -> str:
-    """ADR-0029 归属来源派生（pinned / rule / manual / unassigned）。
+def _model_to_project_map(db: Session) -> dict[str, tuple[int, str]]:
+    """活跃成员行一次查询：model → (project_id, project_key)（批量预取）。"""
+    rows = db.execute(
+        select(ProjectModel.project_id, ProjectModel.match_value,
+               TestProject.project_key)
+        .join(TestProject, TestProject.id == ProjectModel.project_id)
+        .where(
+            ProjectModel.match_type == "MODEL",
+            ProjectModel.is_active.is_(True),
+        )
+    ).all()
+    return {match_value: (project_id, project_key)
+            for project_id, match_value, project_key in rows}
 
-    无项目 → unassigned；project_pinned（人工钉住，规则不覆盖）→ pinned；
-    型号命中项目活跃规则（project_model，精确匹配）→ rule；其余
-    （人工批量归入、SEED 回填、型号不在规则）→ manual。
+
+def _attribution_source(model: Optional[str], mapped: bool) -> str:
+    """ADR-0029 v2.5 D10：归属来源两态（mapped / unmapped）。
+
+    派生自 project_model（型号有活跃成员行 = mapped）；无型号设备 /
+    型号未映射 = unmapped。pinned 随 device.project_id 副本删除（M3）。
     """
-    if project is None:
-        return "unassigned"
-    if pinned:
-        return "pinned"
-    if model and resolve_project_id(db, model) == project.id:
-        return "rule"
-    return "manual"
+    if not model or not mapped:
+        return "unmapped"
+    return "mapped"
 
 
-def _fill_project_key(db: Session, device: Device, out) -> None:
-    """ADR-0029：DeviceOut.project_key（F2 口径，不暴露数字 project_id）+ 归属来源。"""
-    project = device.project
-    out.project_key = project.project_key if project else None
+def _fill_project_key(device: Device, out, model_to_project: dict[str, int]) -> None:
+    """ADR-0029 v2.5：DeviceOut.project_key 派生（F2 口径）+ 归属来源两态。
+
+    model_to_project 由调用方批量预取（活跃成员行一次查询），避免逐设备
+    N+1。
+    """
+    entry = model_to_project.get(device.model) if device.model else None
+    out.project_key = entry[1] if entry else None
     out.attribution_source = _attribution_source(
-        db, project, device.model, pinned=device.project_pinned,
+        device.model, entry is not None,
     )
 
 
@@ -246,16 +258,27 @@ def list_devices(
             detail="unassigned and project_key are mutually exclusive",
         )
 
-    # ADR-0029：项目归属筛选（project_id NULL 的设备不命中——筛选 = 只显示该项目）
+    # ADR-0029 v2.5：归属筛选派生（device.model ⋈ project_model 活跃成员行）
     if project_key:
         # 未知 key 一律 404（与 projects 路由同语义；防「拼错 key 静默空列表」）
-        if db.query(TestProject).filter(TestProject.project_key == project_key).first() is None:
+        project = db.query(TestProject).filter(TestProject.project_key == project_key).first()
+        if project is None:
             raise HTTPException(status_code=404, detail="project not found")
-        query = query.join(TestProject, Device.project_id == TestProject.id) \
-                     .filter(TestProject.project_key == project_key)
+        query = query.join(ProjectModel, Device.model == ProjectModel.match_value) \
+                     .filter(
+                         ProjectModel.project_id == project.id,
+                         ProjectModel.match_type == "MODEL",
+                         ProjectModel.is_active.is_(True),
+                     )
 
     if unassigned:
-        query = query.filter(Device.project_id.is_(None))
+        mapped_models = select(ProjectModel.match_value).where(
+            ProjectModel.match_type == "MODEL",
+            ProjectModel.is_active.is_(True),
+        )
+        query = query.filter(
+            or_(Device.model.is_(None), ~Device.model.in_(mapped_models))
+        )
 
     # Filter by status if provided
     if status:
@@ -276,10 +299,11 @@ def list_devices(
             needs_commit = True
     if needs_commit:
         db.commit()
+    model_to_project = _model_to_project_map(db)
     items = []
     for d in devices:
         out = DeviceOut.model_validate(d)
-        _fill_project_key(db, d, out)
+        _fill_project_key(d, out, model_to_project)
         items.append(out)
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
@@ -299,7 +323,7 @@ def get_device(
     if _ensure_host_online_for_device(device):
         db.commit()
     out = DeviceOut.model_validate(device)
-    _fill_project_key(db, device, out)
+    _fill_project_key(device, out, _model_to_project_map(db))
     return out
 
 

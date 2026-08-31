@@ -1,0 +1,5 @@
+2026-08-30 22:00:00 cycle 1/100 start
+2026-08-30 22:00:05 reboot failed: power off timeout
+2026-08-30 22:02:00 cycle 2/100 start
+2026-08-30 22:04:00 cycle 3/100 start
+2026-08-31 01:00:00 finished result=PASS
