@@ -42,14 +42,17 @@ class TestRoleFiltering:
         # admin-only 端点的镜像工具不得对普通用户开放（PR-Agent gate 越权修复）
         assert "query_recent_audit_logs" not in normal
         assert "get_settings_overview" not in normal
+        assert "scan_script_catalog" not in normal
+        assert "test_notification_channel" not in normal
         # 普通用户仍可用观测类其余工具
         assert "query_hosts" in normal and "query_plan_runs" in normal
 
     def test_openai_payload_filtered(self):
         payload = tools.to_openai_tools(tools.allowed_tool_names(is_admin=False))
         names = {e["function"]["name"] for e in payload}
+        admin_only_count = sum(1 for s in tools.TOOLS.values() if s.admin_only)
         assert "query_recent_audit_logs" not in names
-        assert len(names) == len(tools.TOOLS) - 2
+        assert len(names) == len(tools.TOOLS) - admin_only_count
 
 
 class TestRunConsolePlans:

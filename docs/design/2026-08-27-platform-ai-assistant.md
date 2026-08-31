@@ -48,10 +48,10 @@ services/ai_assistant/orchestrator.py —— 轮次编排（SAQ 任务 ai_assist
 | 会话列表/消息/删除 | 仅本人（严格隔离，404 语义） | 同左（无跨用户通道） |
 | 动作详情/日志 | 本人提案的 | 任意（审批职责所需） |
 | 动作审批/取消 | ✗ 403 | ✓ |
-| 工具面 | `allowed_tool_names(False)`：T0（除 audit/settings 镜像）+ T1 + T2 | 全部 14 个 |
+| 工具面 | `allowed_tool_names(False)`：T0（除 admin 镜像）+ T1 + 非 admin-only 的 T2 | 全部 14 个 |
 | 配置 | ✗ 403 | ✓（变更入审计） |
 
-工具面双门禁：payload 按角色过滤 + 执行面按 `allowed_tool_names` 校验（模型点名角色外工具走「未知工具」分支）。
+工具面双门禁：payload 按角色过滤 + 执行面按 `allowed_tool_names` 与 `user_may_invoke_tool`（发起人）校验。`admin_only` 工具对普通用户等同「不存在」；`auto_approve` 仅当发起人本身有权调用时才可自动执行（D8）。
 
 ## 5. 安全边界
 

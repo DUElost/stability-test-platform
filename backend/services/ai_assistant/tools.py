@@ -462,13 +462,13 @@ TOOLS: dict[str, ToolSpec] = {
             name="scan_script_catalog",
             description="触发脚本目录扫描（对账 STP_SCRIPT_ROOT 与 script 表；不含 force）。",
             parameters=_schema({}),
-            tier="T2", kind="service",
+            tier="T2", kind="service", admin_only=True,
         ),
         ToolSpec(
             name="test_notification_channel",
             description="向指定通知渠道发送一条测试消息，验证通道连通性。",
             parameters=_schema({"channel_id": {"type": "integer"}}, ["channel_id"]),
-            tier="T2", kind="service", whitelistable=True,
+            tier="T2", kind="service", whitelistable=True, admin_only=True,
         ),
         ToolSpec(
             name="reload_agent_config",

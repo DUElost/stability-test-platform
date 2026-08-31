@@ -30,6 +30,7 @@ from backend.services.ai_assistant.llm_client import (
     AiUpstreamTimeout,
     LlmClient,
 )
+from backend.services.ai_assistant.authz import user_may_invoke_tool
 from backend.services.ai_assistant.tools import (
     TOOLS,
     ToolValidationError,
@@ -192,8 +193,11 @@ def _history_as_llm_messages(db: Session, session_id: int) -> list[dict]:
     return messages
 
 
-def _decide_execution_mode(spec, cfg: AiAssistantConfig) -> str:
+def _decide_execution_mode(spec, cfg: AiAssistantConfig, user) -> str:
     """返回 "auto"（直接执行）或 "proposed"（操作卡审批）。"""
+    # auto_approve / T1 自动均须发起人本身有权调用（D8：不得借助手越权）
+    if not user_may_invoke_tool(user, spec):
+        return "proposed"
     if spec.tier == "T1":
         return "proposed" if cfg.t1_require_confirm else "auto"
     # T2：白名单内低危工具可免确认（仅 whitelistable 标记的工具可入名单）
@@ -412,6 +416,21 @@ def execute_action(action_id: int) -> None:
             _finalize_action(action_id, "failed", f"unknown tool {action.tool_name}")
             return
 
+        from backend.models.user import User as UserModel
+
+        requester = (
+            db.get(UserModel, action.requested_by_user_id)
+            if action.requested_by_user_id is not None
+            else None
+        )
+        if requester is None or not user_may_invoke_tool(requester, spec):
+            _finalize_action(
+                action_id,
+                "failed",
+                "权限不足：发起人无权执行该操作（与账号 API 权限一致）",
+            )
+            return
+
         if spec.kind == "runconsole":
             plan = build_runconsole_plan(action.tool_name, action.params or {})
             action.status = "running"
@@ -612,8 +631,10 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                         except Exception as exc:  # noqa: BLE001 - 查询失败回填重试
                             note = f"查询失败：{exc}"
                             logger.warning("ai_query_failed tool=%s err=%s", tc.name, exc)
+                    elif not user_may_invoke_tool(user_row, spec):
+                        note = f"无权使用工具 {tc.name}（需要更高权限）"
                     else:
-                        mode = _decide_execution_mode(spec, cfg)
+                        mode = _decide_execution_mode(spec, cfg, user_row)
                         action = _create_action(
                             db, session,
                             tool_name=tc.name, arguments=tc.arguments, mode=mode,
