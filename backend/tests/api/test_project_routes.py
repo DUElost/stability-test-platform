@@ -31,7 +31,6 @@ def project_a(db_session):
         project_key="proj-a",
         display_name="Project A",
         customer="CustA",
-        form_factor="PHONE",
         source="USER",
     )
     db_session.add(p)
@@ -45,7 +44,6 @@ def project_legacy(db_session):
         project_key="LEGACY",
         display_name="Legacy",
         customer=None,
-        form_factor=None,
         source="SEED",
     )
     db_session.add(p)

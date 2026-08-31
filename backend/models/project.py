@@ -51,11 +51,9 @@ class TestProject(Base):
     jira_project_key = Column(String(32), nullable=True)
 
     # facet：正交、可空、可枚举、可组合筛选；不建层级树（D2 两条理由）。
-    # platform 已删列（P1-B）——事实层在 device，项目侧由设备派生 platforms。
-    # product_line 建表后可为 NULL 后补（§5 清单待补）。
-    product_line     = Column(String(64), nullable=True)
+    # v2.5 D12：product_line / form_factor 已删列（生产无稳定值）；
+    # platforms 由设备派生（P1-B 起）。customer 保留自由文本。
     customer         = Column(String(64), nullable=True)
-    form_factor      = Column(String(32), nullable=True)
 
     status           = Column(String(16), nullable=False, default="ACTIVE",
                               server_default="ACTIVE")
@@ -76,10 +74,6 @@ class TestProject(Base):
                         name="ck_test_project_status"),
         CheckConstraint("source IN ('USER', 'SEED')",
                         name="ck_test_project_source"),
-        CheckConstraint(
-            "form_factor IS NULL OR form_factor IN ('PHONE', 'TABLET', 'WATCH', 'OTHER')",
-            name="ck_test_project_form_factor",
-        ),
         UniqueConstraint("project_key", name="uq_test_project_key"),
         Index(
             "uq_test_project_key_lower",
