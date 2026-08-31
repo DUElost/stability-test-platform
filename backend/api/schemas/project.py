@@ -142,8 +142,8 @@ class ProjectUpdateIn(BaseModel):
 class InventoryModelOut(ORMBaseModel):
     """一种 ``device.model`` 的 fleet 聚合。
 
-    ``mapped_project_keys`` 只含人工 USER 项目（``match_models`` 或
-    ``device.project_id`` 指向 USER 行）。SEED 回填标签不出现在此字段。
+    ``mapped_project_keys`` 只含人工 USER 项目（型号的活跃成员行）。
+    SEED 回填标签不出现在此字段。
     """
 
     model: Optional[str] = None
