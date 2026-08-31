@@ -329,6 +329,12 @@ export interface RiskTrend {
   project_key: string | null;
   days: number;
   buckets: RiskTrendBucket[];
+  /** v2.5 D13：近窗口汇总（详情页 KPI） */
+  total_runs: number;
+  success_runs: number;
+  success_rate: number;
+  /** S 级事件 run 明细（可点进） */
+  s_runs: { run_id: number; started_at: string | null; status: string }[];
 }
 
 export interface ActivityPoint {
