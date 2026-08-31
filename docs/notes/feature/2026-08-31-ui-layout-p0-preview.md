@@ -12,8 +12,11 @@ Class: feature
 - `PANEL.root` / SectionHeader 实色条（去渐变）
 - PlanRun 详情 gutter 收紧；Archive / Dedup / TCR / EventStream / LogEvents 内边距收敛
 - 执行页：DispatchCockpit 去 Card 默认大 padding；表舞台去双层边框；矩阵 hover 去 shadow
+- **Activity 对齐（续）**：异常来源改为下划线 Tab（默认本次新增）；异常仪表盘页头改为「标题 + 副文 | 时间窗 chip」；PlanRunHero 标题行收束
 
 基础设施：`deploy/control-plane/nginx/stability-platform-preview.conf` + `.gitignore` 的 `dist-preview/`。
+
+预览 Origin 须进控制面 `CORS_ORIGINS`（与 CSRF 白名单同源）：生产 `.env.backend` 已加 `http://172.21.8.202:8081`，否则 cookie 写操作会 `403 CSRF check failed`。
 
 ## Verification
 

@@ -10,7 +10,7 @@
  * 故 current_run=0 / preexisting=4,数据落在「运行前遗留」面板。这是正确
  * 行为,不是空态 bug。
  */
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, it, expect } from 'vitest';
 import AnomalyDashboard from './AnomalyDashboard';
@@ -25,6 +25,7 @@ const wrap = (ui: React.ReactNode) => (
 describe('#72 acceptance — real production payload (PlanRun 103)', () => {
   it('AnomalyDashboard 遗留面板渲染子类型占比饼图 (NE 75% / ANR 25%)', () => {
     const { container } = render(wrap(<AnomalyDashboard runId={103} data={realPayload as any} />));
+    fireEvent.click(container.querySelector('[data-testid="anomaly-tab-preexisting"]')!);
     const text = container.textContent ?? '';
 
     expect(text).toMatch(/NE\s*75\s*%/);
@@ -33,9 +34,10 @@ describe('#72 acceptance — real production payload (PlanRun 103)', () => {
 
   it('AnomalyDashboard 遗留面板渲染总量与 Top 包名 / Top 类型', () => {
     const { container } = render(wrap(<AnomalyDashboard runId={103} data={realPayload as any} />));
+    fireEvent.click(container.querySelector('[data-testid="anomaly-tab-preexisting"]')!);
     const text = container.textContent ?? '';
 
-    expect(text).toMatch(/运行前遗留异常/);
+    expect(text).toMatch(/运行前遗留/);
     expect(text).toMatch(/遗留总量\s*4/);
     expect(text).toMatch(/com\.android\.settings/);
   });
@@ -44,7 +46,7 @@ describe('#72 acceptance — real production payload (PlanRun 103)', () => {
     const { container } = render(wrap(<AnomalyDashboard runId={103} data={realPayload as any} />));
     const text = container.textContent ?? '';
 
-    // aee_ts=07-16 早于 run started_at=07-25 → 本次新增应为 0
+    // aee_ts=07-16 早于 run started_at=07-25 → 本次新增应为 0；默认 Tab 即本次新增
     expect(text).toMatch(/本次新增异常总量\s*0/);
     expect(text).toMatch(/当前范围内未发现新增/);
   });

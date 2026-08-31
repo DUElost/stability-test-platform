@@ -53,7 +53,7 @@ export function StateTabs({
   const trackClass =
     variant === 'segmented'
       ? cn(SEGMENTED.track, 'w-fit text-sm bg-muted border-0 p-1')
-      : 'flex items-center gap-x-1 border-b border-border';
+      : 'flex overflow-x-auto scrollbar-hide -mb-px items-center border-b border-border';
 
   return (
     <div

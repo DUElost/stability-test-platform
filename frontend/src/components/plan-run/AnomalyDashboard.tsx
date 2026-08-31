@@ -14,6 +14,7 @@ import type {
 import { api } from '@/utils/api';
 import { StableResponsiveContainer } from '@/components/charts/StableResponsiveContainer';
 import { InlineEmpty } from '@/components/ui/empty-state';
+import { StateTabs } from '@/components/ui/state-tabs';
 import {
   ALERT_BANNER,
   aeeSubtypeChartColor,
@@ -24,12 +25,12 @@ import {
   KPI_TONE,
   PACKAGE_ROW,
   PANEL,
-  SEGMENTED_DARK,
   TEXT,
   packageRankClass,
 } from '@/design-system';
 import { cn } from '@/lib/utils';
-import SectionHeader from './SectionHeader';
+
+type OriginTab = 'current' | 'preexisting';
 
 interface Props {
   runId: number;
@@ -160,15 +161,27 @@ function SummaryCard({
   label,
   value,
   accent,
+  wrap = false,
 }: {
   label: string;
   value: string;
   accent: string;
+  /** 长包名等允许换行，避免半宽栅格里截断成「不全」 */
+  wrap?: boolean;
 }) {
   return (
     <div className={DASHBOARD_SUMMARY_CARD.root}>
       <div className={DASHBOARD_SUMMARY_CARD.label}>{label}</div>
-      <div className={cn('mt-2 text-lg font-bold', accent)}>{value}</div>
+      <div
+        className={cn(
+          'mt-2 text-lg font-bold',
+          accent,
+          wrap ? 'break-all text-base leading-snug' : 'truncate',
+        )}
+        title={value}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -515,6 +528,8 @@ export default function AnomalyDashboard({
   const [selectedPreexistingPackage, setSelectedPreexistingPackage] = useState<string | null>(null);
   const [isPreexistingDrawerOpen, setPreexistingDrawerOpen] = useState(false);
   const [crashDetailPackage, setCrashDetailPackage] = useState<string | null>(null);
+  /** 新计划主看本次新增；遗留降为次级 Tab，默认不占首屏 */
+  const [originTab, setOriginTab] = useState<OriginTab>('current');
 
   const crashDetailsQ = useQuery({
     queryKey: ['crash-details', runId, crashDetailPackage],
@@ -547,26 +562,42 @@ export default function AnomalyDashboard({
       <section
         data-testid="watcher-summary"
         className={cn(PANEL.root, 'space-y-3 p-3')}
-    >
-      <SectionHeader
-        title="异常仪表盘"
-        meta="聚焦 AEE / Vendor AEE 细分异常与高风险包名"
-        color={currentRun.total_events > 0 ? 'amber' : 'green'}
-        extra={
-          <div className={SEGMENTED_DARK.track}>
-            {TIME_SCOPE_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => onTimeScopeChange?.(option.value)}
-                className={timeScope === option.value ? SEGMENTED_DARK.itemActive : SEGMENTED_DARK.item}
-              >
-                {option.label}
-              </button>
-            ))}
+      >
+        {/* OpenRouter Activity 式页头：标题 + 副文 | 右侧时间窗 */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h2 className={cn('truncate text-xl font-semibold leading-9', TEXT.heading)}>
+              异常仪表盘
+            </h2>
+            <p className={cn('mt-1 text-sm', TEXT.subtitle)}>
+              聚焦 AEE / Vendor AEE 细分异常与高风险包名
+            </p>
           </div>
-        }
-      />
+          <div
+            className="flex h-9 w-fit shrink-0 items-center overflow-hidden rounded-md border border-border"
+            role="group"
+            aria-label="时间范围"
+          >
+            {TIME_SCOPE_OPTIONS.map((option) => {
+              const active = timeScope === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => onTimeScopeChange?.(option.value)}
+                  className={cn(
+                    'h-full px-2.5 text-xs font-medium transition-colors',
+                    active
+                      ? 'bg-muted text-foreground'
+                      : cn(TEXT.subtitle, 'hover:bg-muted/60 hover:text-foreground'),
+                  )}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
       {isLoading && (
         <div className={cn('flex h-28 items-center justify-center text-sm', TEXT.subtitle)}>加载中…</div>
@@ -581,231 +612,111 @@ export default function AnomalyDashboard({
 
       {!isLoading && !isError && (
         <div className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <SummaryCard
-              label={`${primaryLabel}异常总量`}
-              value={String(currentRun.total_events)}
-              accent={KPI_TONE.default.value}
+          {supportsOriginSplit && (
+            <StateTabs
+              variant="underline"
+              ariaLabel="异常来源"
+              testId="anomaly-origin-tabs"
+              activeKey={originTab}
+              onChange={(key) => setOriginTab(key as OriginTab)}
+              items={[
+                {
+                  key: 'current',
+                  label: '本次新增',
+                  panelId: 'anomaly-panel-current',
+                  testId: 'anomaly-tab-current',
+                },
+                {
+                  key: 'preexisting',
+                  label:
+                    preexisting.total_events > 0
+                      ? `运行前遗留 (${preexisting.total_events})`
+                      : '运行前遗留',
+                  panelId: 'anomaly-panel-preexisting',
+                  testId: 'anomaly-tab-preexisting',
+                },
+              ]}
             />
-            <SummaryCard
-              label="影响设备数"
-              value={String(currentRun.affected_device_count)}
-              accent={KPI_TONE.info.value}
-            />
-            <SummaryCard
-              label="Top 包名"
-              value={formatCompactValue(currentRun.top_package_name)}
-              accent={currentRun.top_package_name ? KPI_TONE.warning.value : KPI_TONE.default.value}
-            />
-            <SummaryCard
-              label="Top 类型"
-              value={formatCompactValue(currentRun.top_subtype)}
-              accent={currentRun.top_subtype ? KPI_TONE.destructive.value : KPI_TONE.default.value}
-            />
-          </div>
-
-          {platformBuckets.length > 0 && (
-            <div data-testid="watcher-platform-buckets" className="rounded-lg border border-border/60 bg-card/60 p-3">
-              <div className={cn('mb-2 text-sm font-medium', TEXT.heading)}>按平台分桶</div>
-              <div className="flex flex-wrap gap-2">
-                {platformBuckets.map((bucket) => (
-                  <div key={bucket.platform} className="rounded-lg border border-border/50 bg-background/80 px-3 py-2 text-sm">
-                    <span className="font-medium">{bucket.platform}</span>
-                    <span className={cn('ml-2', TEXT.subtitle)}>
-                      信号 {bucket.total} · 设备 {bucket.affected_device_count}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
           )}
 
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-            <div className={DASHBOARD_SUMMARY_CARD.panel}>
-              <div className={cn('mb-4 text-sm font-semibold', TEXT.heading)}>
-                {`${primaryLabel} · 细分类型占比`}
-              </div>
-              {currentRun.total_events > 0 ? (
-                <DonutChart
-                  items={chartDistribution}
-                  total={chartTotal}
-                  tone={KPI_TONE.default.value}
-                  chartTestId="current-run-pie-chart"
+          {(!supportsOriginSplit || originTab === 'current') && (
+            <div
+              role={supportsOriginSplit ? 'tabpanel' : undefined}
+              id={supportsOriginSplit ? 'anomaly-panel-current' : undefined}
+              className="space-y-3"
+            >
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <SummaryCard
+                  label={`${primaryLabel}异常总量`}
+                  value={String(currentRun.total_events)}
+                  accent={KPI_TONE.default.value}
                 />
-              ) : (
-                <InlineEmpty chart>
-                  {supportsOriginSplit
-                    ? '当前范围内未发现新增 AEE / Vendor AEE 异常'
-                    : '当前范围内未发现 AEE / Vendor AEE 异常'}
-                </InlineEmpty>
-              )}
-            </div>
-
-            <div className={DASHBOARD_SUMMARY_CARD.panel}>
-              <div className={cn('mb-1 text-sm font-semibold', TEXT.heading)}>
-                {`${primaryLabel} · 包名榜`}
+                <SummaryCard
+                  label="影响设备数"
+                  value={String(currentRun.affected_device_count)}
+                  accent={KPI_TONE.info.value}
+                />
+                <SummaryCard
+                  label="Top 包名"
+                  value={formatCompactValue(currentRun.top_package_name)}
+                  accent={currentRun.top_package_name ? KPI_TONE.warning.value : KPI_TONE.default.value}
+                  wrap
+                />
+                <SummaryCard
+                  label="Top 类型"
+                  value={formatCompactValue(currentRun.top_subtype)}
+                  accent={currentRun.top_subtype ? KPI_TONE.destructive.value : KPI_TONE.default.value}
+                />
               </div>
-              <div className={cn('mb-4 text-[11px]', TEXT.subtitle)}>
-                点击包名筛选饼图
-              </div>
-              {currentRun.package_ranking.length > 0 ? (
-                <div className="space-y-2">
-                  {currentRun.package_ranking.slice(0, 5).map((row, index) => {
-                    const active = selectedPackageRow?.package_name === row.package_name;
-                    const isUnknown = row.package_name === 'unknown';
-                    const dominantColor = isUnknown
-                      ? CHART_COLORS.muted
-                      : packageDominantColor(row);
-                    const rankCls = packageRankClass(index);
 
-                    return (
-                      <button
-                        key={row.package_name}
-                        type="button"
-                        aria-pressed={active}
-                        onClick={() =>
-                          setSelectedPackage((current) =>
-                            current === row.package_name ? null : row.package_name,
-                          )
-                        }
-                        className={cn(
-                          'group flex w-full items-stretch rounded-xl border text-left transition-all duration-200',
-                          active ? PACKAGE_ROW.active
-                            : isUnknown ? PACKAGE_ROW.unknown
-                            : PACKAGE_ROW.default,
-                        )}
-                      >
-                        <div
-                          className={cn(
-                            'shrink-0 w-1 rounded-l-xl transition-all duration-200',
-                            active ? 'w-1.5' : 'group-hover:w-1.5',
-                          )}
-                          style={{ backgroundColor: dominantColor }}
-                        />
-                        <div className="flex-1 min-w-0 px-3 py-2 flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className={cn('font-mono tabular-nums', rankCls)}>
-                                #{index + 1}
-                              </span>
-                              <span
-                                className={cn(
-                                  'truncate text-sm',
-                                  isUnknown
-                                    ? cn('italic', TEXT.subtitle)
-                                    : active
-                                      ? cn('font-semibold', TEXT.heading)
-                                      : cn('font-medium', TEXT.body),
-                                )}
-                              >
-                                {isUnknown ? '未知进程' : row.package_name}
-                              </span>
-                            </div>
-                            <div className="mt-1">
-                              <PackageSubtypeDots row={row} active={active} />
-                            </div>
-                          </div>
-                          <div className="shrink-0 text-right transition-all duration-300">
-                            <div
-                              className={cn(
-                                'text-lg font-bold transition-colors duration-200',
-                                active ? TEXT.heading
-                                  : isUnknown ? TEXT.subtitle
-                                  : TEXT.body,
-                              )}
-                            >
-                              {row.total_count}
-                            </div>
-                            <div className={cn('text-[11px]', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
-                              {row.affected_device_count} 台设备
-                            </div>
-                            <button
-                              type="button"
-                              data-testid={`crash-detail-btn-${row.package_name}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setCrashDetailPackage(
-                                  crashDetailPackage === row.package_name ? null : row.package_name,
-                                );
-                              }}
-                              className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-info hover:text-info/80"
-                            >
-                              查看 {row.total_count} 条详情
-                              <ChevronRight className="h-2.5 w-2.5" />
-                            </button>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-
-                  {crashDetailPackage && (
-                    <CrashDetailPanel
-                      packageName={crashDetailPackage}
-                      details={crashDetailsQ.data}
-                      isLoading={crashDetailsQ.isLoading}
-                      onClose={() => setCrashDetailPackage(null)}
-                    />
-                  )}
-
-                  {currentRun.package_ranking.length > 5 && (
-                    <button
-                      type="button"
-                      onClick={() => setPackageDrawerOpen(true)}
-                      className={cn(
-                        'w-full rounded-xl border border-dashed py-2 text-xs font-medium transition',
-                        TEXT.subtitle,
-                        'hover:border-border hover:text-foreground',
-                      )}
-                    >
-                      查看全部 ({currentRun.package_ranking.length})
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <InlineEmpty chart>当前范围内暂无异常包名数据</InlineEmpty>
-              )}
-            </div>
-          </div>
-
-          <div className={DASHBOARD_SUMMARY_CARD.sectionMuted}>
-            <div className={cn('mb-4 text-sm font-semibold', TEXT.body)}>运行前遗留</div>
-            {supportsOriginSplit ? (
-              preexisting.total_events > 0 ? (
-                <>
-                <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-center">
-                  <DonutChart
-                    items={preexistingDistribution}
-                    total={preexistingTotal}
-                    tone={KPI_TONE.default.value}
-                    chartTestId="preexisting-pie-chart"
-                  />
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <SummaryCard
-                      label="遗留总量"
-                      value={String(preexisting.total_events)}
-                      accent={KPI_TONE.default.value}
-                    />
-                    <SummaryCard
-                      label="Top 包名"
-                      value={formatCompactValue(preexisting.top_package_name)}
-                      accent={KPI_TONE.default.value}
-                    />
-                    <SummaryCard
-                      label="Top 类型"
-                      value={formatCompactValue(preexisting.top_subtype)}
-                      accent={KPI_TONE.default.value}
-                    />
+              {platformBuckets.length > 0 && (
+                <div data-testid="watcher-platform-buckets" className="rounded-lg border border-border/60 bg-card/60 p-3">
+                  <div className={cn('mb-2 text-sm font-medium', TEXT.heading)}>按平台分桶</div>
+                  <div className="flex flex-wrap gap-2">
+                    {platformBuckets.map((bucket) => (
+                      <div key={bucket.platform} className="rounded-lg border border-border/50 bg-background/80 px-3 py-2 text-sm">
+                        <span className="font-medium">{bucket.platform}</span>
+                        <span className={cn('ml-2', TEXT.subtitle)}>
+                          信号 {bucket.total} · 设备 {bucket.affected_device_count}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
-                <div className="mt-4">
+              )}
+
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+                <div className={DASHBOARD_SUMMARY_CARD.panel}>
+                  <div className={cn('mb-4 text-sm font-semibold', TEXT.heading)}>
+                    {`${primaryLabel} · 细分类型占比`}
+                  </div>
+                  {currentRun.total_events > 0 ? (
+                    <DonutChart
+                      items={chartDistribution}
+                      total={chartTotal}
+                      tone={KPI_TONE.default.value}
+                      chartTestId="current-run-pie-chart"
+                    />
+                  ) : (
+                    <InlineEmpty chart>
+                      {supportsOriginSplit
+                        ? '当前范围内未发现新增 AEE / Vendor AEE 异常'
+                        : '当前范围内未发现 AEE / Vendor AEE 异常'}
+                    </InlineEmpty>
+                  )}
+                </div>
+
+                <div className={DASHBOARD_SUMMARY_CARD.panel}>
                   <div className={cn('mb-1 text-sm font-semibold', TEXT.heading)}>
-                    运行前遗留 · 包名榜
+                    {`${primaryLabel} · 包名榜`}
                   </div>
-                  {preexisting.package_ranking.length > 0 ? (
+                  <div className={cn('mb-4 text-[11px]', TEXT.subtitle)}>
+                    点击包名筛选饼图
+                  </div>
+                  {currentRun.package_ranking.length > 0 ? (
                     <div className="space-y-2">
-                      {preexisting.package_ranking.slice(0, 5).map((row, index) => {
-                        const active = selectedPreexistingPackage === row.package_name;
+                      {currentRun.package_ranking.slice(0, 5).map((row, index) => {
+                        const active = selectedPackageRow?.package_name === row.package_name;
                         const isUnknown = row.package_name === 'unknown';
                         const dominantColor = isUnknown
                           ? CHART_COLORS.muted
@@ -817,9 +728,8 @@ export default function AnomalyDashboard({
                             key={row.package_name}
                             type="button"
                             aria-pressed={active}
-                            data-testid={`preexisting-pkg-${row.package_name}`}
                             onClick={() =>
-                              setSelectedPreexistingPackage((current) =>
+                              setSelectedPackage((current) =>
                                 current === row.package_name ? null : row.package_name,
                               )
                             }
@@ -860,7 +770,7 @@ export default function AnomalyDashboard({
                                   <PackageSubtypeDots row={row} active={active} />
                                 </div>
                               </div>
-                              <div className="shrink-0 text-right">
+                              <div className="shrink-0 text-right transition-all duration-300">
                                 <div
                                   className={cn(
                                     'text-lg font-bold transition-colors duration-200',
@@ -874,39 +784,213 @@ export default function AnomalyDashboard({
                                 <div className={cn('text-[11px]', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
                                   {row.affected_device_count} 台设备
                                 </div>
+                                <button
+                                  type="button"
+                                  data-testid={`crash-detail-btn-${row.package_name}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCrashDetailPackage(
+                                      crashDetailPackage === row.package_name ? null : row.package_name,
+                                    );
+                                  }}
+                                  className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-info hover:text-info/80"
+                                >
+                                  查看 {row.total_count} 条详情
+                                  <ChevronRight className="h-2.5 w-2.5" />
+                                </button>
                               </div>
                             </div>
                           </button>
                         );
                       })}
-                      {preexisting.package_ranking.length > 5 && (
+
+                      {crashDetailPackage && (
+                        <CrashDetailPanel
+                          packageName={crashDetailPackage}
+                          details={crashDetailsQ.data}
+                          isLoading={crashDetailsQ.isLoading}
+                          onClose={() => setCrashDetailPackage(null)}
+                        />
+                      )}
+
+                      {currentRun.package_ranking.length > 5 && (
                         <button
                           type="button"
-                          onClick={() => setPreexistingDrawerOpen(true)}
+                          onClick={() => setPackageDrawerOpen(true)}
                           className={cn(
                             'w-full rounded-xl border border-dashed py-2 text-xs font-medium transition',
                             TEXT.subtitle,
                             'hover:border-border hover:text-foreground',
                           )}
                         >
-                          查看全部 ({preexisting.package_ranking.length})
+                          查看全部 ({currentRun.package_ranking.length})
                         </button>
                       )}
                     </div>
                   ) : (
-                    <InlineEmpty chart>运行前遗留无包名数据</InlineEmpty>
+                    <InlineEmpty chart>当前范围内暂无异常包名数据</InlineEmpty>
                   )}
                 </div>
+              </div>
+
+              {!supportsOriginSplit && (
+                <div className={cn('rounded-lg border border-dashed bg-card/70 px-4 py-3 text-sm', TEXT.subtitle)}>
+                  该计划运行未记录新增/遗留来源标记，无法拆分运行前遗留
+                </div>
+              )}
+            </div>
+          )}
+
+          {supportsOriginSplit && originTab === 'preexisting' && (
+            <div
+              role="tabpanel"
+              id="anomaly-panel-preexisting"
+              className="space-y-3"
+            >
+              {preexisting.total_events > 0 ? (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <SummaryCard
+                      label="遗留总量"
+                      value={String(preexisting.total_events)}
+                      accent={KPI_TONE.default.value}
+                    />
+                    <SummaryCard
+                      label="Top 包名"
+                      value={formatCompactValue(preexisting.top_package_name)}
+                      accent={KPI_TONE.default.value}
+                      wrap
+                    />
+                    <SummaryCard
+                      label="Top 类型"
+                      value={formatCompactValue(preexisting.top_subtype)}
+                      accent={KPI_TONE.default.value}
+                    />
+                  </div>
+
+                  <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+                    <div className={DASHBOARD_SUMMARY_CARD.panel}>
+                      <div className={cn('mb-3 text-sm font-semibold', TEXT.heading)}>
+                        运行前遗留 · 细分类型占比
+                      </div>
+                      <DonutChart
+                        items={preexistingDistribution}
+                        total={preexistingTotal}
+                        tone={KPI_TONE.default.value}
+                        chartTestId="preexisting-pie-chart"
+                      />
+                    </div>
+
+                    <div className={DASHBOARD_SUMMARY_CARD.panel}>
+                      <div className={cn('mb-1 text-sm font-semibold', TEXT.heading)}>
+                        运行前遗留 · 包名榜
+                      </div>
+                      <div className={cn('mb-3 text-[11px]', TEXT.subtitle)}>
+                        点击包名查看类型分布点
+                      </div>
+                      {preexisting.package_ranking.length > 0 ? (
+                        <div className="space-y-2">
+                          {preexisting.package_ranking.slice(0, 5).map((row, index) => {
+                            const active = selectedPreexistingPackage === row.package_name;
+                            const isUnknown = row.package_name === 'unknown';
+                            const dominantColor = isUnknown
+                              ? CHART_COLORS.muted
+                              : packageDominantColor(row);
+                            const rankCls = packageRankClass(index);
+
+                            return (
+                              <button
+                                key={row.package_name}
+                                type="button"
+                                aria-pressed={active}
+                                data-testid={`preexisting-pkg-${row.package_name}`}
+                                onClick={() =>
+                                  setSelectedPreexistingPackage((current) =>
+                                    current === row.package_name ? null : row.package_name,
+                                  )
+                                }
+                                className={cn(
+                                  'group flex w-full items-stretch rounded-lg border text-left transition-all duration-200',
+                                  active ? PACKAGE_ROW.active
+                                    : isUnknown ? PACKAGE_ROW.unknown
+                                    : PACKAGE_ROW.default,
+                                )}
+                              >
+                                <div
+                                  className={cn(
+                                    'w-1 shrink-0 rounded-l-lg transition-all duration-200',
+                                    active ? 'w-1.5' : 'group-hover:w-1.5',
+                                  )}
+                                  style={{ backgroundColor: dominantColor }}
+                                />
+                                <div className="flex min-w-0 flex-1 items-start justify-between gap-3 px-3 py-2">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-start gap-2">
+                                      <span className={cn('shrink-0 font-mono tabular-nums', rankCls)}>
+                                        #{index + 1}
+                                      </span>
+                                      <span
+                                        className={cn(
+                                          'break-all text-sm leading-snug',
+                                          isUnknown
+                                            ? cn('italic', TEXT.subtitle)
+                                            : active
+                                              ? cn('font-semibold', TEXT.heading)
+                                              : cn('font-medium', TEXT.body),
+                                        )}
+                                        title={isUnknown ? '未知进程' : row.package_name}
+                                      >
+                                        {isUnknown ? '未知进程' : row.package_name}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1">
+                                      <PackageSubtypeDots row={row} active={active} />
+                                    </div>
+                                  </div>
+                                  <div className="shrink-0 text-right">
+                                    <div
+                                      className={cn(
+                                        'text-lg font-bold transition-colors duration-200',
+                                        active ? TEXT.heading
+                                          : isUnknown ? TEXT.subtitle
+                                          : TEXT.body,
+                                      )}
+                                    >
+                                      {row.total_count}
+                                    </div>
+                                    <div className={cn('text-[11px]', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
+                                      {row.affected_device_count} 台设备
+                                    </div>
+                                  </div>
+                                </div>
+                              </button>
+                            );
+                          })}
+                          {preexisting.package_ranking.length > 5 && (
+                            <button
+                              type="button"
+                              onClick={() => setPreexistingDrawerOpen(true)}
+                              className={cn(
+                                'w-full rounded-lg border border-dashed py-2 text-xs font-medium transition',
+                                TEXT.subtitle,
+                                'hover:border-border hover:text-foreground',
+                              )}
+                            >
+                              查看全部 ({preexisting.package_ranking.length})
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <InlineEmpty chart>运行前遗留无包名数据</InlineEmpty>
+                      )}
+                    </div>
+                  </div>
                 </>
               ) : (
-                <InlineEmpty className="py-3">运行开始前无遗留异常记录</InlineEmpty>
-              )
-            ) : (
-              <div className={cn('rounded-lg border border-dashed bg-card/70 px-4 py-3 text-sm', TEXT.subtitle)}>
-                该计划运行未记录新增/遗留来源标记，无法拆分运行前遗留
-              </div>
-            )}
-          </div>
+                <InlineEmpty className="py-6">运行开始前无遗留异常记录</InlineEmpty>
+              )}
+            </div>
+          )}
         </div>
       )}
     </section>

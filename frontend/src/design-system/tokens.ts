@@ -76,13 +76,13 @@ export function navIconClass(active: boolean): string {
   );
 }
 
-/** 下划线 Tab（PlanRun 详情等） */
+/** 下划线 Tab（OpenRouter Activity：text-xs + border-b-2） */
 export function tabLinkClass(active: boolean): string {
   return cn(
-    'inline-flex items-center border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+    'inline-flex shrink-0 items-center border-b-2 px-4 py-2 text-xs font-medium transition-colors cursor-pointer',
     active
       ? 'border-primary text-primary'
-      : 'border-transparent text-muted-foreground hover:text-foreground',
+      : 'border-transparent text-muted-foreground hover:text-accent-foreground',
   );
 }
 
