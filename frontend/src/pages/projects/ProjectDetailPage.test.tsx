@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   removeRule: vi.fn(),
   renameProject: vi.fn(),
   archiveProject: vi.fn(),
+  unarchiveProject: vi.fn(),
   customers: vi.fn(),
   authRole: 'admin',
 }));
@@ -37,7 +38,7 @@ vi.mock('@/hooks/useToast', () => ({
 
 vi.mock('@/utils/api', () => ({
   api: {
-    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, rename: mocks.renameProject, archive: mocks.archiveProject, customers: mocks.customers },
+    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, rename: mocks.renameProject, archive: mocks.archiveProject, unarchive: mocks.unarchiveProject, customers: mocks.customers },
     devices: { list: mocks.listDevices },
     plans: { list: mocks.listPlans },
     results: { riskTrend: mocks.riskTrend },
@@ -165,6 +166,21 @@ describe('ProjectDetailPage', () => {
       expect(mocks.archiveProject).toHaveBeenCalledWith('proj-a');
     });
     confirmSpy.mockRestore();
+  });
+
+  it('unarchives an archived project on admin', async () => {
+    mocks.getProject.mockResolvedValue(makeDetail({ status: 'ARCHIVED' }));
+    mocks.unarchiveProject.mockResolvedValue(makeDetail({ status: 'ACTIVE' }));
+
+    renderPage();
+    await screen.findByText('Project A');
+    // ARCHIVED 态：归档按钮消失、恢复按钮出现
+    expect(screen.queryByTestId('archive-project-open')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('unarchive-project-open'));
+
+    await waitFor(() => {
+      expect(mocks.unarchiveProject).toHaveBeenCalledWith('proj-a');
+    });
   });
 
   it('removes a rule with confirm on admin', async () => {
