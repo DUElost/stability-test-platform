@@ -29,7 +29,7 @@ import {
   Tag,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
-import { FORM, resourceUsageBgClass, resourceUsageTextClass, TEXT } from '@/design-system/tokens';
+import { FORM, resourceUsageBgClass, resourceUsageTextClass, STAT, TEXT } from '@/design-system/tokens';
 import { formatDateTimeFull } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
@@ -240,88 +240,88 @@ export function ExpandableDeviceTable({
 
   return (
     <div className="space-y-4">
-      {/* Summary Stats */}
+      {/* Summary Stats — 稀疏数字筛选卡 */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <button
           onClick={() => setStatusFilter('all')}
           className={cn(
-            'bg-card rounded-lg border p-3 flex items-center gap-3 transition-all',
-            statusFilter === 'all' ? 'border-muted-foreground shadow-sm' : 'border-border'
+            'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
+            statusFilter === 'all' ? 'border-foreground/40 bg-muted/30' : 'border-border hover:bg-muted/20',
           )}
         >
-          <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
-            <Smartphone className="w-5 h-5 text-muted-foreground" />
+          <div className="flex items-start justify-between gap-2">
+            <p className={STAT.label}>全部设备</p>
+            <div className={cn(STAT.iconWell, STAT.iconWellMuted)}>
+              <Smartphone />
+            </div>
           </div>
-          <div>
-            <div className="text-xl font-semibold text-foreground">{stats.total}</div>
-            <div className="text-xs text-muted-foreground">全部设备</div>
-          </div>
+          <div className={cn(STAT.value, 'text-2xl')}>{stats.total}</div>
         </button>
         <button
           onClick={() => setStatusFilter('idle')}
           className={cn(
-            'bg-card rounded-lg border p-3 flex items-center gap-3 transition-all',
+            'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'idle'
-              ? 'border-success shadow-md bg-success/5'
-              : 'border-success/20 hover:border-success/40 hover:bg-success/5'
+              ? 'border-success bg-success/5'
+              : 'border-success/20 hover:border-success/40 hover:bg-success/5',
           )}
         >
-          <div className="w-10 h-10 rounded-lg bg-success/10 flex items-center justify-center">
-            <CheckCircle2 className={`w-5 h-5 ${ENTITY_STATUS_COLORS.device.idle}`} />
+          <div className="flex items-start justify-between gap-2">
+            <p className={STAT.label}>空闲</p>
+            <div className={cn(STAT.iconWell, STAT.iconWellSuccess)}>
+              <CheckCircle2 className={ENTITY_STATUS_COLORS.device.idle} />
+            </div>
           </div>
-          <div>
-            <div className={`text-xl font-semibold ${ENTITY_STATUS_COLORS.device.idle}`}>{stats.idle}</div>
-            <div className="text-xs text-muted-foreground">空闲</div>
-          </div>
+          <div className={cn(STAT.value, 'text-2xl', ENTITY_STATUS_COLORS.device.idle)}>{stats.idle}</div>
         </button>
         <button
           onClick={() => setStatusFilter('testing')}
           className={cn(
-            'bg-card rounded-lg border p-3 flex items-center gap-3 transition-all',
+            'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'testing'
-              ? 'border-primary shadow-md bg-primary/5'
-              : 'border-primary/20 hover:border-primary/40 hover:bg-primary/5'
+              ? 'border-primary bg-primary/5'
+              : 'border-primary/20 hover:border-primary/40 hover:bg-primary/5',
           )}
         >
-          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-            <Zap className={`w-5 h-5 ${ENTITY_STATUS_COLORS.device.testing}`} />
+          <div className="flex items-start justify-between gap-2">
+            <p className={STAT.label}>测试中</p>
+            <div className={cn(STAT.iconWell, STAT.iconWellPrimary)}>
+              <Zap className={ENTITY_STATUS_COLORS.device.testing} />
+            </div>
           </div>
-          <div>
-            <div className={`text-xl font-semibold ${ENTITY_STATUS_COLORS.device.testing}`}>{stats.testing}</div>
-            <div className="text-xs text-muted-foreground">测试中</div>
-          </div>
+          <div className={cn(STAT.value, 'text-2xl', ENTITY_STATUS_COLORS.device.testing)}>{stats.testing}</div>
         </button>
         <button
           onClick={() => setStatusFilter('offline')}
           className={cn(
-            'bg-card rounded-lg border p-3 flex items-center gap-3 transition-all',
-            statusFilter === 'offline' ? 'border-muted-foreground shadow-sm' : 'border-border'
+            'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
+            statusFilter === 'offline' ? 'border-foreground/40 bg-muted/30' : 'border-border hover:bg-muted/20',
           )}
         >
-          <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
-            <WifiOff className="w-5 h-5 text-muted-foreground" />
+          <div className="flex items-start justify-between gap-2">
+            <p className={STAT.label}>离线</p>
+            <div className={cn(STAT.iconWell, STAT.iconWellMuted)}>
+              <WifiOff />
+            </div>
           </div>
-          <div>
-            <div className="text-xl font-semibold text-muted-foreground">{stats.offline}</div>
-            <div className="text-xs text-muted-foreground">离线</div>
-          </div>
+          <div className={cn(STAT.value, 'text-2xl text-muted-foreground')}>{stats.offline}</div>
         </button>
         <button
           onClick={() => setStatusFilter('error')}
           className={cn(
-            'bg-card rounded-lg border p-3 flex items-center gap-3 transition-all',
+            'bg-card rounded-lg border p-3 flex flex-col gap-2 text-left transition-colors',
             statusFilter === 'error'
-              ? 'border-destructive shadow-md bg-destructive/5'
-              : 'border-destructive/20 hover:border-destructive/40 hover:bg-destructive/5'
+              ? 'border-destructive bg-destructive/5'
+              : 'border-destructive/20 hover:border-destructive/40 hover:bg-destructive/5',
           )}
         >
-          <div className="w-10 h-10 rounded-lg bg-destructive/10 flex items-center justify-center">
-            <AlertTriangle className={`w-5 h-5 ${ENTITY_STATUS_COLORS.device.error}`} />
+          <div className="flex items-start justify-between gap-2">
+            <p className={STAT.label}>错误</p>
+            <div className={cn(STAT.iconWell, STAT.iconWellDestructive)}>
+              <AlertTriangle className={ENTITY_STATUS_COLORS.device.error} />
+            </div>
           </div>
-          <div>
-            <div className={`text-xl font-semibold ${ENTITY_STATUS_COLORS.device.error}`}>{stats.error}</div>
-            <div className="text-xs text-muted-foreground">错误</div>
-          </div>
+          <div className={cn(STAT.value, 'text-2xl', ENTITY_STATUS_COLORS.device.error)}>{stats.error}</div>
         </button>
       </div>
 
