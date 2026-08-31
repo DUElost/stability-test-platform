@@ -19,6 +19,7 @@
 | 2026-08-28 | v1.2（载体选型评估落档） | 完成「LLM 支持引入框架/技术栈 vs 手写 httpx」专项评估并落档：D2 补载体隔离与可逆性说明；备选表将「引入 openai SDK」扩为框架族对比（官方 SDK 留作首选切换目标；LiteLLM/PydanticAI/LangChain 分别给出拒绝理由）；触发复议条件新增 #6 载体切换条件。评估基线：httpx 已在运行时依赖（`requirements.txt:43`，`file_server_monitor.py` 先例），全仓无 openai SDK |
 | 2026-08-28 | v1.3（AI 入口落位回写） | 前端导航 IA 治理方案（FRONTEND_NAV_IA_REDESIGN，v1.1）经用户评审裁决：方案 A 保守档采纳、AI 入口=**侧边栏置顶 pinned 块**（v1）、全局抽屉留 v2；本文前端影响段据此回写，实施计划 §4 同步（v1.2）。PR 切分：导航治理 PR1 先行（不依赖本 ADR，可独立合入），AI 助手实现为 PR2 |
 | 2026-08-29 | v1.4（二轮审核采纳 + 文档补齐） | 采纳二轮审核（H1 pending 收口/H3 跨循环 ack 下发/M1 枚举校验/M2 超时按 max_turns 估/M3 retries=0/M4 会话严格隔离/M5 后台任务持引用/Low-1 执行闸门收紧）；D7 措辞对齐实现（逐参手写校验，非 jsonschema）；§影响承诺的设计文档本批补齐（docs/design/2026-08-27-platform-ai-assistant.md）。低危索引名与 .env.example/.ts 注释随批修正 |
+| 2026-08-31 | v1.7（阶段三落地） | 附录 A Accepted（#658）；工具面扩至 T0×14 / T1×3 / T2a×3 / T2b×6；`t2b_auto_dispatch_allowlist` 配置项 |
 | 2026-08-31 | v1.6（权限对齐 D8） | 新增 D8「助手权限 ⊆ 账号 API 权限」：`admin_only` 镜像 `require_admin` 端点；`auto_approve` / 执行面复检发起人；`scan_script_catalog` / `test_notification_channel` 标为 admin-only；阶段三扩权前置条件 |
 | 2026-08-29 | v1.5（Accepted） | 阶段二全栈合 main（orchestrator + tools + 前端 `/assistant` + 二轮安全修复）；状态 Proposed → Accepted；七挂靠位同步（adr/README、CLAUDE.md 决策表） |
 
@@ -130,7 +131,7 @@
 
 ## 落地与后续动作
 
-分两阶段：阶段一 = 本 ADR + 实施计划文档人工评审（当前）；阶段二 = 实现 PR（后端 + 前端 + 测试 + 文档，详见实施计划 §2）。**阶段三（Proposed）**：核心业务写操作工具面见 [附录 A：阶段三核心业务写操作](./ADR-0031-appendix-phase3-core-write-tools.md)——须 D8 已落地且验收矩阵全绿后方可开 PR-B。
+分两阶段：阶段一 = 本 ADR + 实施计划文档人工评审；阶段二 = 实现 PR（后端 + 前端 + 测试 + 文档）。**阶段三（Accepted）**：Plan 执行链路工具面见 [附录 A](./ADR-0031-appendix-phase3-core-write-tools.md)（#658 合入 `main`）。
 
 **触发复议条件**（未触发前不得重提）：
 
@@ -144,7 +145,7 @@
 ## 关联实现/文档
 
 - 实施计划：[`docs/reviews/AI_ASSISTANT_PLAN_2026-08-27.md`](../reviews/AI_ASSISTANT_PLAN_2026-08-27.md)（数据模型 / 工具清单 / 路由 / 测试矩阵 / 部署步骤）
-- 阶段三附录（Proposed）：[`ADR-0031-appendix-phase3-core-write-tools.md`](./ADR-0031-appendix-phase3-core-write-tools.md)
+- 阶段三附录（Accepted）：[`ADR-0031-appendix-phase3-core-write-tools.md`](./ADR-0031-appendix-phase3-core-write-tools.md)
 - D8 权限对齐：[`docs/notes/architecture/2026-08-31-ai-assistant-permission-parity-d8.md`](../notes/architecture/2026-08-31-ai-assistant-permission-parity-d8.md)
 - 域划界参照：[`docs/reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md`](../reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md)
 - [ADR-0006](./ADR-0006-realtime-communication-rest-plus-websocket.md)（REST + WebSocket 分工，D5 依据）
