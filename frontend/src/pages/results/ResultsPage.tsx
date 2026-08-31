@@ -32,6 +32,7 @@ import { ClickableRow } from '@/components/ui/clickable-row';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { KPI_TONE, STAT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 export default function ResultsPage() {
   useDocumentTitle('测试结果');
@@ -84,37 +85,37 @@ export default function ResultsPage() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <DashboardStatCard
           label="运行总数"
           value={stats?.total ?? 0}
           loading={isLoading}
-          icon={<ListChecks size={18} className={KPI_TONE.default.label} />}
+          icon={<ListChecks />}
           iconWellClassName={STAT.iconWellMuted}
         />
         <DashboardStatCard
           label="已完成"
           value={stats?.finished ?? 0}
           loading={isLoading}
-          icon={<CheckCircle size={18} className={KPI_TONE.success.value} />}
+          icon={<CheckCircle className="text-success" />}
           iconWellClassName={STAT.iconWellSuccess}
-          valueClassName={KPI_TONE.success.value}
+          valueClassName={cn(STAT.value, KPI_TONE.success.value)}
         />
         <DashboardStatCard
           label="失败"
           value={stats?.failed ?? 0}
           loading={isLoading}
-          icon={<XCircle size={18} className={KPI_TONE.destructive.value} />}
+          icon={<XCircle className="text-destructive" />}
           iconWellClassName={STAT.iconWellDestructive}
-          valueClassName={KPI_TONE.destructive.value}
+          valueClassName={cn(STAT.value, KPI_TONE.destructive.value)}
         />
         <DashboardStatCard
           label="运行中"
           value={stats?.running ?? 0}
           loading={isLoading}
-          icon={<PlayCircle size={18} className={KPI_TONE.primary.value} />}
+          icon={<PlayCircle className="text-primary" />}
           iconWellClassName={STAT.iconWellPrimary}
-          valueClassName={KPI_TONE.primary.value}
+          valueClassName={cn(STAT.value, KPI_TONE.primary.value)}
         />
       </div>
 

@@ -145,12 +145,16 @@ export const ELEVATION = {
   flat: 'shadow-none',
 } as const;
 
-/** 仪表盘 / KPI 统计卡 */
+/**
+ * 仪表盘 / KPI 统计卡 — OpenRouter 稀疏数字卡：
+ * 小号大写标签 + mono 大数字 + 可选小图标槽（不再用 48px 色块井）。
+ */
 export const STAT = {
-  label: 'text-xs text-muted-foreground uppercase tracking-wider',
-  value: 'text-2xl font-bold text-foreground',
-  suffix: 'text-xs text-muted-foreground',
-  iconWell: 'w-12 h-12 rounded-xl flex items-center justify-center',
+  label: 'text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground',
+  value:
+    'text-3xl font-semibold tracking-[-0.02em] text-foreground font-mono tabular-nums leading-none',
+  suffix: 'text-xs text-muted-foreground font-sans font-normal',
+  iconWell: 'w-8 h-8 rounded-md flex items-center justify-center [&_svg]:w-4 [&_svg]:h-4',
   iconWellMuted: 'bg-muted text-muted-foreground',
   iconWellPrimary: 'bg-primary/10 text-primary',
   iconWellSuccess: 'bg-success/10 text-success',

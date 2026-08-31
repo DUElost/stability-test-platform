@@ -36,7 +36,11 @@ function StatCardShell({
 }) {
   return (
     <Card
-      className={cn('p-4 transition-shadow hover:shadow-md', className)}
+      className={cn(
+        'p-4 transition-colors hover:bg-muted/30',
+        onClick && 'cursor-pointer',
+        className,
+      )}
       onClick={onClick}
       onKeyDown={onKeyDown}
       tabIndex={tabIndex}
@@ -49,7 +53,7 @@ function StatCardShell({
 }
 
 /**
- * 仪表盘 KPI 卡片 — 统一标签/数值/图标槽样式
+ * 仪表盘 KPI 卡片 — 稀疏数字优先（标签 → 大数字 → 可选小图标）
  */
 export function DashboardStatCard({
   label,
@@ -63,32 +67,31 @@ export function DashboardStatCard({
   ariaLabel,
 }: DashboardStatCardProps) {
   const inner = (
-    <div className="flex items-center justify-between">
-      <div>
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-2">
         <p className={STAT.label}>{label}</p>
-        <div className="flex items-baseline gap-1 mt-1">
-          {loading ? (
-            <Skeleton className="h-8 w-12" />
-          ) : (
-            <>
-              <span className={valueClassName}>{value}</span>
-              {suffix != null && suffix !== '' && (
-                <span className={STAT.suffix}>{suffix}</span>
-              )}
-            </>
-          )}
-        </div>
+        {icon && (
+          <div className={cn(STAT.iconWell, iconWellClassName, 'shrink-0')}>{icon}</div>
+        )}
       </div>
-      {icon && (
-        <div className={cn(STAT.iconWell, iconWellClassName)}>{icon}</div>
-      )}
+      <div className="flex items-baseline gap-1.5 min-h-[2rem]">
+        {loading ? (
+          <Skeleton className="h-8 w-16" />
+        ) : (
+          <>
+            <span className={valueClassName}>{value}</span>
+            {suffix != null && suffix !== '' && (
+              <span className={STAT.suffix}>{suffix}</span>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 
   if (onClick) {
     return (
       <StatCardShell
-        className="cursor-pointer"
         onClick={onClick}
         tabIndex={0}
         role="button"
