@@ -22,7 +22,7 @@ def _load(name: str, rel: str):
     return mod
 
 
-gpu = _load("gpu_lib_v102", "agent/scripts/gpu_setup/v1.0.2")
+gpu = _load("gpu_lib_v104", "agent/scripts/gpu_setup/v1.0.4")
 power = _load("power_lib_v101", "agent/scripts/powercycle_setup/v1.0.1")
 sleep = _load("sleep_lib_v101", "agent/scripts/sleep_setup/v1.0.1")
 
@@ -76,3 +76,26 @@ def test_gpu_check_no_tests_is_failure(monkeypatch):
                         lambda: b"GPU_RUN_START test_id=001 rounds=2\nOK (1 test)\nGPU_ROUND 1 rc=0\nGPU_RUN_END rc=0\n")
     assert gc._run_finished() == (True, "ok")
 
+
+
+def test_gpu_install_apk_stable_uses_push_pm(monkeypatch):
+    """v1.0.4：大 APK（378MB Lite）流式安装不稳定——push + pm install 设备本地。"""
+    import tempfile
+    calls = []
+
+    def fake_adb(*args, timeout=30):
+        calls.append(args)
+        if args[0] == "push":
+            return 0, "1 file pushed", ""
+        if args[0] == "shell" and args[1].startswith("pm install"):
+            return 0, "Success", ""
+        if args[0] == "shell" and args[1].startswith("rm "):
+            return 0, "", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(gpu, "adb", fake_adb)
+    with tempfile.NamedTemporaryFile(suffix=".apk") as f:
+        rc, out = gpu._install_apk_stable(Path(f.name))
+    assert rc == 0 and "Success" in out
+    assert any(c[0] == "push" for c in calls)
+    assert any(c[0] == "shell" and "pm install" in c[1] for c in calls)
