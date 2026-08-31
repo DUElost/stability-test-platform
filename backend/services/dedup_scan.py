@@ -557,12 +557,15 @@ def reset_merge_capability_cache_for_tests() -> None:
 
 
 def _map_agent_path_to_center(path: str, plan_run_id: int, center_root: str) -> str:
-    """把 agent 本机 scan 路径映射为中心可达路径。
+    """把 agent 本机 scan 路径映射为中心可达**事件目录根**。
 
     源形态: ``{hdd}/.stp-scan/{run_id}-{rand}/{folder}/{serial}/aee_exp/{event_dir}/{sub}``
-    （或 ``vendor_aee_exp``）。目标: ``{center}/devices/{run_id}/{event_dir}/{sub}``——
-    事件目录已按引用上送中心（EventUploader copytree 目录名 = 事件目录名），
-    映射后路径对外可达。非事件路径（无 aee_exp 段）原样返回。
+    （或 ``vendor_aee_exp``）。目标: ``{center}/devices/{run_id}/{event_dir}/``——
+    事件目录已按引用上送中心（目录名 = 事件目录名），映射后目录对外可达。
+
+    **只映射到目录根**：源路径的文件级子结构（``dbg.DEC/__exp_main.txt`` 等）
+    是 scan 工具 .stp-scan 副本的解密中间产物，中心事件目录没有该层——
+    文件级映射不可达（2026-08-31 run 289 实证）；目录是 Jira 提单的消费单元。
 
     文档依据: ADR-0025 D2「开发通过同一共享只读访问」——Jira 提单引用的
     报表路径必须指向中心存储，不能是各 host 本机路径。
@@ -571,12 +574,11 @@ def _map_agent_path_to_center(path: str, plan_run_id: int, center_root: str) -> 
     if not m:
         return path
     event_dir = m.group(1)
-    sub = m.group(2) or ""
-    return f"{center_root}/devices/{plan_run_id}/{event_dir}{sub}"
+    return f"{center_root}/devices/{plan_run_id}/{event_dir}/"
 
 
 def _resolve_center_event_path(
-    center_root: str, plan_run_id: int, event_dir: str, sub: str,
+    center_root: str, plan_run_id: int, event_dir: str,
 ) -> str:
     """映射后可达性兜底：本 run 未上送时搜历史 run 的上送位置。
 
@@ -586,15 +588,15 @@ def _resolve_center_event_path(
     ``devices/*/{event_dir}``（历史 run 上送位置）映射到存在的副本；
     搜不到保留原映射（尽力而为，中心不可达时由人工/提取路径兜底）。
     """
-    candidate = f"{center_root}/devices/{plan_run_id}/{event_dir}{sub}"
-    if os.path.exists(candidate):
+    candidate = f"{center_root}/devices/{plan_run_id}/{event_dir}/"
+    if os.path.isdir(candidate):
         return candidate
     try:
         hits = sorted(Path(center_root, "devices").glob(f"*/{event_dir}"))
     except OSError:
         return candidate
     if hits:
-        return str(hits[0]) + sub
+        return str(hits[0]) + "/"
     return candidate
 
 
@@ -633,10 +635,10 @@ def _rewrite_merge_report_paths_to_center(
                     mapped = _map_agent_path_to_center(str(val), plan_run_id, center_root)
                     if mapped != str(val):
                         # 可达性兜底：本 run 未上送时映射到历史 run 上送位置
-                        m = re.search(r"/devices/\d+/([^/]+)(/.*)?$", mapped)
+                        m = re.search(r"/devices/\d+/([^/]+)/$", mapped)
                         if m:
                             mapped = _resolve_center_event_path(
-                                center_root, plan_run_id, m.group(1), m.group(2) or "")
+                                center_root, plan_run_id, m.group(1))
                         count += 1
                         val = mapped
                 ws.write(r, c, val)

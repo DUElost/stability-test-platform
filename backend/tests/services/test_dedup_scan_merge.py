@@ -253,14 +253,13 @@ class TestMapAgentPathToCenter:
                "2026_0831_020000_789_db.fatal.04.KE/db.fatal.00.KEx/"
                "db.fatal.00.KE.dbg.DEC/__exp_main.txt")
         got = ds._map_agent_path_to_center(src, 280, "/mnt/stp-aee")
-        assert got == ("/mnt/stp-aee/devices/280/2026_0831_020000_789_db.fatal.04.KE/"
-                       "db.fatal.00.KEx/db.fatal.00.KE.dbg.DEC/__exp_main.txt")
+        assert got == "/mnt/stp-aee/devices/280/2026_0831_020000_789_db.fatal.04.KE/"
 
     def test_maps_vendor_aee_exp(self):
         src = ("/mnt/hdd/aee_events/.stp-scan/pr280-x/"
                "FOLDER/SERIAL/vendor_aee_exp/2026_0807_231846_000_db.00.NE/main.dbg")
         got = ds._map_agent_path_to_center(src, 280, "/mnt/stp-aee")
-        assert got == ("/mnt/stp-aee/devices/280/2026_0807_231846_000_db.00.NE/main.dbg")
+        assert got == "/mnt/stp-aee/devices/280/2026_0807_231846_000_db.00.NE/"
 
     def test_non_event_path_unchanged(self):
         assert ds._map_agent_path_to_center(
@@ -293,7 +292,7 @@ class TestRewriteMergeReportPaths:
         book = xlrd.open_workbook(str(xls))
         sheet = book.sheet_by_index(0)
         assert sheet.cell_value(1, 1) == (
-            f"{center}/devices/280/2026_0831_020000_789_db.fatal.04.KE/__exp_main.txt")
+            f"{center}/devices/280/2026_0831_020000_789_db.fatal.04.KE/")
         assert sheet.cell_value(1, 2) == "Kernel (KE)"  # 其余列原样
 
     def test_publish_rewrites_center_copy(self, tmp_path, monkeypatch):
@@ -317,7 +316,7 @@ class TestRewriteMergeReportPaths:
         import xlrd
         book = xlrd.open_workbook(str(dest / "Result_MergeFiles.xls"))
         assert book.sheet_by_index(0).cell_value(1, 0) == (
-            f"{center}/devices/280/2026_0807_231846_000_db.00.NE/main.dbg")
+            f"{center}/devices/280/2026_0807_231846_000_db.00.NE/")
 
 
 class TestResolveCenterEventPath:
@@ -326,23 +325,23 @@ class TestResolveCenterEventPath:
         ev = center / "devices" / "287" / "2026_0807_231846_000_db.00.NE"
         ev.mkdir(parents=True)
         assert ds._resolve_center_event_path(
-            str(center), 287, "2026_0807_231846_000_db.00.NE", "/main.dbg"
-        ) == f"{center}/devices/287/2026_0807_231846_000_db.00.NE/main.dbg"
+            str(center), 287, "2026_0807_231846_000_db.00.NE"
+        ) == f"{center}/devices/287/2026_0807_231846_000_db.00.NE/"
 
     def test_falls_back_to_history_run(self, tmp_path):
         center = tmp_path / "center"
         old = center / "devices" / "270" / "2026_0830_223000_456_db.fatal.02.KE"
         old.mkdir(parents=True)
         got = ds._resolve_center_event_path(
-            str(center), 287, "2026_0830_223000_456_db.fatal.02.KE", "/x/y.txt")
-        assert got == f"{center}/devices/270/2026_0830_223000_456_db.fatal.02.KE/x/y.txt"
+            str(center), 287, "2026_0830_223000_456_db.fatal.02.KE")
+        assert got == f"{center}/devices/270/2026_0830_223000_456_db.fatal.02.KE/"
 
     def test_no_history_keeps_candidate(self, tmp_path):
         center = tmp_path / "center"
         (center / "devices").mkdir(parents=True)
         got = ds._resolve_center_event_path(
-            str(center), 287, "2026_0830_223000_456_db.fatal.02.KE", "")
-        assert got == f"{center}/devices/287/2026_0830_223000_456_db.fatal.02.KE"
+            str(center), 287, "2026_0830_223000_456_db.fatal.02.KE")
+        assert got == f"{center}/devices/287/2026_0830_223000_456_db.fatal.02.KE/"
 
     def test_rewrite_falls_back_integration(self, tmp_path):
         import xlwt
@@ -365,4 +364,4 @@ class TestResolveCenterEventPath:
         import xlrd
         book = xlrd.open_workbook(str(xls))
         assert book.sheet_by_index(0).cell_value(1, 0) == (
-            f"{center}/devices/270/2026_0830_223000_456_db.fatal.02.KE/__exp_main.txt")
+            f"{center}/devices/270/2026_0830_223000_456_db.fatal.02.KE/")
