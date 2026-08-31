@@ -272,6 +272,11 @@ class TestRewriteMergeReportPaths:
     def test_rewrites_path_column_in_xls(self, tmp_path):
         import xlwt
 
+        # 隔离 center：建 devices/280/04（本 run 候选存在——不触发兜底）
+        center = tmp_path / "center"
+        ev = center / "devices" / "280" / "2026_0831_020000_789_db.fatal.04.KE"
+        ev.mkdir(parents=True)
+
         xls = tmp_path / "Result_MergeFiles.xls"
         wb = xlwt.Workbook()
         ws = wb.add_sheet("Sheet1")
@@ -282,13 +287,13 @@ class TestRewriteMergeReportPaths:
         ws.write(1, 2, "Kernel (KE)")
         wb.save(str(xls))
 
-        n = ds._rewrite_merge_report_paths_to_center(tmp_path, 280, "/mnt/stp-aee")
+        n = ds._rewrite_merge_report_paths_to_center(tmp_path, 280, str(center))
         assert n == 1
         import xlrd
         book = xlrd.open_workbook(str(xls))
         sheet = book.sheet_by_index(0)
         assert sheet.cell_value(1, 1) == (
-            "/mnt/stp-aee/devices/280/2026_0831_020000_789_db.fatal.04.KE/__exp_main.txt")
+            f"{center}/devices/280/2026_0831_020000_789_db.fatal.04.KE/__exp_main.txt")
         assert sheet.cell_value(1, 2) == "Kernel (KE)"  # 其余列原样
 
     def test_publish_rewrites_center_copy(self, tmp_path, monkeypatch):
@@ -313,3 +318,51 @@ class TestRewriteMergeReportPaths:
         book = xlrd.open_workbook(str(dest / "Result_MergeFiles.xls"))
         assert book.sheet_by_index(0).cell_value(1, 0) == (
             f"{center}/devices/280/2026_0807_231846_000_db.00.NE/main.dbg")
+
+
+class TestResolveCenterEventPath:
+    def test_prefers_current_run(self, tmp_path):
+        center = tmp_path / "center"
+        ev = center / "devices" / "287" / "2026_0807_231846_000_db.00.NE"
+        ev.mkdir(parents=True)
+        assert ds._resolve_center_event_path(
+            str(center), 287, "2026_0807_231846_000_db.00.NE", "/main.dbg"
+        ) == f"{center}/devices/287/2026_0807_231846_000_db.00.NE/main.dbg"
+
+    def test_falls_back_to_history_run(self, tmp_path):
+        center = tmp_path / "center"
+        old = center / "devices" / "270" / "2026_0830_223000_456_db.fatal.02.KE"
+        old.mkdir(parents=True)
+        got = ds._resolve_center_event_path(
+            str(center), 287, "2026_0830_223000_456_db.fatal.02.KE", "/x/y.txt")
+        assert got == f"{center}/devices/270/2026_0830_223000_456_db.fatal.02.KE/x/y.txt"
+
+    def test_no_history_keeps_candidate(self, tmp_path):
+        center = tmp_path / "center"
+        (center / "devices").mkdir(parents=True)
+        got = ds._resolve_center_event_path(
+            str(center), 287, "2026_0830_223000_456_db.fatal.02.KE", "")
+        assert got == f"{center}/devices/287/2026_0830_223000_456_db.fatal.02.KE"
+
+    def test_rewrite_falls_back_integration(self, tmp_path):
+        import xlwt
+
+        # 历史 run 270 有 02 事件副本；报表引用 02（本 run 287 未上送）
+        center = tmp_path / "center"
+        old = center / "devices" / "270" / "2026_0830_223000_456_db.fatal.02.KE"
+        old.mkdir(parents=True)
+        (old / "__exp_main.txt").write_text("x", encoding="utf-8")
+
+        xls = tmp_path / "Result_MergeFiles.xls"
+        wb = xlwt.Workbook()
+        ws = wb.add_sheet("S")
+        ws.write(0, 0, "Path")
+        ws.write(1, 0, ("/mnt/hdd/aee_events/.stp-scan/pr287-x/F/S/aee_exp/"
+                        "2026_0830_223000_456_db.fatal.02.KE/__exp_main.txt"))
+        wb.save(str(xls))
+
+        ds._rewrite_merge_report_paths_to_center(tmp_path, 287, str(center))
+        import xlrd
+        book = xlrd.open_workbook(str(xls))
+        assert book.sheet_by_index(0).cell_value(1, 0) == (
+            f"{center}/devices/270/2026_0830_223000_456_db.fatal.02.KE/__exp_main.txt")
