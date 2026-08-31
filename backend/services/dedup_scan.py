@@ -575,6 +575,29 @@ def _map_agent_path_to_center(path: str, plan_run_id: int, center_root: str) -> 
     return f"{center_root}/devices/{plan_run_id}/{event_dir}{sub}"
 
 
+def _resolve_center_event_path(
+    center_root: str, plan_run_id: int, event_dir: str, sub: str,
+) -> str:
+    """映射后可达性兜底：本 run 未上送时搜历史 run 的上送位置。
+
+    场景（2026-08-31 验收发现）：scan 对同内容事件去重合并显示代表目录
+    （如注入 cp 的 02/04 同内容——报表只显示 02），而 upload 上送的是
+    实际引用的 04——``devices/{run_id}/02`` 不存在。此时搜
+    ``devices/*/{event_dir}``（历史 run 上送位置）映射到存在的副本；
+    搜不到保留原映射（尽力而为，中心不可达时由人工/提取路径兜底）。
+    """
+    candidate = f"{center_root}/devices/{plan_run_id}/{event_dir}{sub}"
+    if os.path.exists(candidate):
+        return candidate
+    try:
+        hits = sorted(Path(center_root, "devices").glob(f"*/{event_dir}"))
+    except OSError:
+        return candidate
+    if hits:
+        return str(hits[0]) + sub
+    return candidate
+
+
 def _rewrite_merge_report_paths_to_center(
     xls_dir: Path, plan_run_id: int, center_root: str,
 ) -> int:
@@ -609,6 +632,11 @@ def _rewrite_merge_report_paths_to_center(
                 if c == path_col and r > 0 and val:
                     mapped = _map_agent_path_to_center(str(val), plan_run_id, center_root)
                     if mapped != str(val):
+                        # 可达性兜底：本 run 未上送时映射到历史 run 上送位置
+                        m = re.search(r"/devices/\d+/([^/]+)(/.*)?$", mapped)
+                        if m:
+                            mapped = _resolve_center_event_path(
+                                center_root, plan_run_id, m.group(1), m.group(2) or "")
                         count += 1
                         val = mapped
                 ws.write(r, c, val)
