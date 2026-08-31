@@ -101,9 +101,8 @@ class TestListProjects:
     def test_empty_returns_ok(self, client, auth_headers):
         resp = client.get("/api/v1/projects", headers=auth_headers)
         assert resp.status_code == 200
-        # P1-B2：GENERIC（「通用（不限项目）」哨兵）是合法 USER 项目，恒在
-        keys = {p["project_key"] for p in resp.json()["data"]}
-        assert keys == {"GENERIC"}
+        # v2.5 M4：GENERIC 哨兵已删
+        assert resp.json()["data"] == []
 
     def test_aggregates_device_and_running_run_counts(
         self, client, auth_headers, db_session, project_a, project_legacy
@@ -133,7 +132,7 @@ class TestListProjects:
         all_resp = client.get("/api/v1/projects?source=all", headers=auth_headers)
         assert all_resp.status_code == 200
         all_keys = {p["project_key"] for p in all_resp.json()["data"]}
-        assert all_keys == {"proj-a", "LEGACY", "GENERIC"}
+        assert all_keys == {"proj-a", "LEGACY"}
 
     def test_platforms_derived_from_devices(
         self, client, auth_headers, db_session, project_a
@@ -164,18 +163,17 @@ class TestListProjects:
 
         active = client.get("/api/v1/projects?status=ACTIVE", headers=auth_headers)
         assert active.status_code == 200
-        active_keys = {p["project_key"] for p in active.json()["data"]}
-        assert active_keys == {"GENERIC"}
+        assert active.json()["data"] == []
 
         archived = client.get("/api/v1/projects?status=ARCHIVED", headers=auth_headers)
         assert archived.status_code == 200
         keys = {p["project_key"] for p in archived.json()["data"]}
         assert keys == {"proj-a"}
 
-        # 缺省不带 status = 全量（既有行为不变 + GENERIC 哨兵）
+        # 缺省不带 status = 全量（既有行为不变）
         all_projects = client.get("/api/v1/projects", headers=auth_headers)
         keys_all = {p["project_key"] for p in all_projects.json()["data"]}
-        assert keys_all == {"proj-a", "GENERIC"}
+        assert keys_all == {"proj-a"}
 
 
 class TestGetProject:
