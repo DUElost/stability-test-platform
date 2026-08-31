@@ -79,3 +79,4 @@ backups/
 
 # 多工具 worktree 容器目录：防止 git add -A 把 worktree 扫成 gitlink(mode 160000)
 .wt/
+frontend/node_modules

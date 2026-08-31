@@ -97,3 +97,24 @@ class Specialty(Base):
         UniqueConstraint("key", name="uq_specialty_key"),
         Index("idx_specialty_sort", "sort_order"),
     )
+
+
+class Customer(Base):
+    """test_project.customer 的配套字典表（ADR-0029 D12）——编辑下拉的数据源。
+
+    与 specialty 同范式：静态种子数据（无写端点，变更走迁移）。**列不动**——
+    customer 列保持自由文本（历史/手写值不约束），字典表只承担输入建议
+    （key 即客户名，seed 从 test_project 去重回填）。
+    """
+
+    __tablename__ = "customer"
+
+    id           = Column(Integer, primary_key=True)
+    key          = Column(String(64), nullable=False, unique=True)
+    display_name = Column(String(64), nullable=False)
+    sort_order   = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint("key", name="uq_customer_key"),
+        Index("idx_customer_sort", "sort_order"),
+    )

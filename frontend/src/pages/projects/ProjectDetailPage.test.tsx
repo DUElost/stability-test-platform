@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   removeRule: vi.fn(),
   renameProject: vi.fn(),
   archiveProject: vi.fn(),
+  customers: vi.fn(),
   authRole: 'admin',
 }));
 
@@ -36,7 +37,7 @@ vi.mock('@/hooks/useToast', () => ({
 
 vi.mock('@/utils/api', () => ({
   api: {
-    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, rename: mocks.renameProject, archive: mocks.archiveProject },
+    projects: { get: mocks.getProject, modelsOf: mocks.modelsOf, update: mocks.updateProject, removeRule: mocks.removeRule, rename: mocks.renameProject, archive: mocks.archiveProject, customers: mocks.customers },
     devices: { list: mocks.listDevices },
     plans: { list: mocks.listPlans },
     results: { riskTrend: mocks.riskTrend },
@@ -105,6 +106,9 @@ describe('ProjectDetailPage', () => {
       days: 30,
       buckets: [],
     });
+    mocks.customers.mockResolvedValue([
+      { key: '荣耀', display_name: '荣耀', sort_order: 1 },
+    ]);
   });
 
   it('renders four blocks with facet badges and jira placeholder', async () => {
@@ -245,6 +249,15 @@ describe('ProjectDetailPage', () => {
     const input = (await screen.findByTestId('edit-project-jira')) as HTMLInputElement;
     expect(input.value).toBe('OLD');
     fireEvent.change(input, { target: { value: 'VFFCA' } });
+    // ADR-0029 D12：customer 编辑框带字典下拉建议
+    const customerInput = screen.getByTestId('edit-project-customer');
+    expect(customerInput).toHaveAttribute('list', 'edit-project-customer-options');
+    await waitFor(() => {
+      const option = document.querySelector(
+        '#edit-project-customer-options option',
+      );
+      expect(option?.getAttribute('value')).toBe('荣耀');
+    });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
