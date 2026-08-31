@@ -23,6 +23,7 @@ from backend.api.schemas.ai_assistant import (
     AiConnectionTestOut,
     AiMessageOut,
     AiSessionOut,
+    T2bAutoDispatchAllowlistEntry,
 )
 from backend.core.ai_security import decrypt_api_key, encrypt_api_key, mask_api_key
 from backend.core.audit import record_audit
@@ -45,7 +46,7 @@ from backend.services.ai_assistant.orchestrator import (
     get_or_create_config,
     load_effective_config,
 )
-from backend.services.ai_assistant.tools import TOOLS
+from backend.services.ai_assistant.tools import TOOLS, describe_tool_action_preview
 
 router = APIRouter(prefix="/api/v1/ai-assistant", tags=["ai-assistant"])
 logger = logging.getLogger(__name__)
@@ -76,6 +77,12 @@ def _config_out(db: Session) -> AiAssistantConfigOut:
         masked = mask_api_key(decrypt_api_key(cfg.api_key_encrypted or "")) or None
     except Exception:  # noqa: BLE001 - 密文不可解时只报未配置态，不抛栈
         masked = None
+    from backend.services.ai_assistant.t2b_allowlist import sanitize_t2b_auto_dispatch_allowlist
+
+    cleaned_allowlist, _ = sanitize_t2b_auto_dispatch_allowlist(
+        cfg.t2b_auto_dispatch_allowlist,
+        db,
+    )
     return AiAssistantConfigOut(
         base_url=cfg.base_url,
         model=cfg.model,
@@ -86,6 +93,9 @@ def _config_out(db: Session) -> AiAssistantConfigOut:
         request_timeout_seconds=cfg.request_timeout_seconds,
         t1_require_confirm=cfg.t1_require_confirm,
         auto_approve_tools=list(cfg.auto_approve_tools or []),
+        t2b_auto_dispatch_allowlist=[
+            T2bAutoDispatchAllowlistEntry.model_validate(e) for e in cleaned_allowlist
+        ],
         updated_at=cfg.updated_at,
     )
 
@@ -110,10 +120,18 @@ def update_ai_config(
     for field_name in (
         "base_url", "model", "enabled", "temperature", "max_turns",
         "request_timeout_seconds", "t1_require_confirm", "auto_approve_tools",
+        "t2b_auto_dispatch_allowlist",
     ):
         value = getattr(payload, field_name)
         if value is not None:
-            setattr(cfg, field_name, value)
+            if field_name == "t2b_auto_dispatch_allowlist":
+                setattr(
+                    cfg,
+                    field_name,
+                    [e.model_dump() for e in value],
+                )
+            else:
+                setattr(cfg, field_name, value)
             changed.append(field_name)
     if payload.api_key:  # 留空 = 不变更
         cfg.api_key_encrypted = encrypt_api_key(payload.api_key)
@@ -129,12 +147,26 @@ def update_ai_config(
         cfg.auto_approve_tools = [t for t in cfg.auto_approve_tools if t not in invalid]
         db.commit()
 
+    from backend.services.ai_assistant.t2b_allowlist import sanitize_t2b_auto_dispatch_allowlist
+
+    cleaned, dropped_allowlist = sanitize_t2b_auto_dispatch_allowlist(
+        cfg.t2b_auto_dispatch_allowlist,
+        db,
+    )
+    if list(cfg.t2b_auto_dispatch_allowlist or []) != cleaned:
+        cfg.t2b_auto_dispatch_allowlist = cleaned
+        db.commit()
+
     record_audit(
         db,
         action="ai_assistant_config_update",
         resource_type="ai_assistant_config",
         resource_id=1,
-        details={"changed_fields": changed, "invalid_whitelist_dropped": invalid},
+        details={
+            "changed_fields": changed,
+            "invalid_whitelist_dropped": invalid,
+            "t2b_allowlist_dropped": dropped_allowlist,
+        },
         user_id=user.id,
         username=user.username,
         request=request,
@@ -350,6 +382,9 @@ def _action_out(db: Session, action: AiAssistantAction) -> AiActionOut:
         status=action.status,
         console_run_id=action.console_run_id,
         result_summary=action.result_summary,
+        preview_text=describe_tool_action_preview(
+            db, action.tool_name, dict(action.params or {})
+        ),
         requested_by=requested_by,
         decided_by=decided_by,
         created_at=action.created_at,

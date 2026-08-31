@@ -74,6 +74,12 @@ def check_mod_v104():
 
 
 @pytest.fixture(scope="module")
+def check_mod_v105():
+    """powercycle_check v1.0.5：判死补强——result_bytes==0（boot 中 sdcard 未就绪）不累计。"""
+    return _load("powercycle_check_mod_v105", "powercycle_check/v1.0.5/powercycle_check.py")
+
+
+@pytest.fixture(scope="module")
 def finish_mod():
     return _load("powercycle_finish_mod", "powercycle_finish/v1.0.0/powercycle_finish.py")
 
@@ -82,6 +88,12 @@ def finish_mod():
 def finish_mod_v101():
     """powercycle_finish v1.0.1：收取前置等待设备上线（验收发现⑦）+ run_id 设备维度（⑨）。"""
     return _load("powercycle_finish_mod_v101", "powercycle_finish/v1.0.1/powercycle_finish.py")
+
+
+@pytest.fixture(scope="module")
+def finish_mod_v102():
+    """powercycle_finish v1.0.2：等待条件加 sys.boot_completed==1（发现⑪）。"""
+    return _load("powercycle_finish_mod_v102", "powercycle_finish/v1.0.2/powercycle_finish.py")
 
 
 @pytest.fixture()
@@ -460,6 +472,37 @@ class TestV104BootGrace:
         assert "连续 2 个周期" in r2["error_message"]
 
 
+class TestV105ResultBytesGrace:
+    """v1.0.5：result_bytes==0（boot 中结果文件不可读）不累计判死。"""
+
+    def _patch(self, mod, monkeypatch, tmp_path, prefs=(6, 100), result_bytes=0):
+        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
+        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
+        monkeypatch.setattr(mod, "_in_collect_window", lambda cfg, now=None: False)
+        monkeypatch.setattr(mod, "device_online", lambda: True)
+        monkeypatch.setattr(mod, "service_alive", lambda: False)
+        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: prefs)
+        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
+        monkeypatch.setattr(mod, "_result_bytes", lambda: result_bytes)
+        monkeypatch.setattr(mod, "_run_finished", lambda: False)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+
+    def test_boot_window_result_unreadable_not_counted(self, check_mod_v105, monkeypatch, tmp_path):
+        """cycles>0 但结果文件不可读（boot 中 sdcard 未就绪）→ 不判死。"""
+        self._patch(check_mod_v105, monkeypatch, tmp_path, prefs=(6, 100), result_bytes=0)
+        for _ in range(5):
+            r = check_mod_v105._run({"dead_grace_cycles": 2})
+            assert r["success"] is True
+
+    def test_result_readable_dead_still_detected(self, check_mod_v105, monkeypatch, tmp_path):
+        """结果文件可读（非 boot）+ 服务持续死 → 判死保留。"""
+        self._patch(check_mod_v105, monkeypatch, tmp_path, prefs=(6, 100), result_bytes=266)
+        r1 = check_mod_v105._run({"dead_grace_cycles": 2})
+        assert r1["success"] is True
+        r2 = check_mod_v105._run({"dead_grace_cycles": 2})
+        assert r2["success"] is False
+
+
 class TestCheck:
     def _patch_device_io(self, mod, monkeypatch, tmp_path, online=True, alive=True, prefs=(3, 100),
                          result_bytes=2048):
@@ -568,6 +611,23 @@ class TestCheckV101Completion:
 # ---------------------------------------------------------------------------
 # powercycle_finish：拉取 + 解析 + 落盘
 # ---------------------------------------------------------------------------
+
+
+class TestWaitDeviceOnlineV102:
+    def test_waits_for_boot_completed(self, finish_mod_v102, monkeypatch):
+        """get-state=device 但 boot_completed 未就绪 → 继续等（发现⑪）。"""
+        monkeypatch.setattr(finish_mod_v102, "device_online", lambda: True)
+        replies = {"getprop sys.boot_completed": ""}
+        monkeypatch.setattr(finish_mod_v102, "adb_shell", lambda cmd, timeout=15: replies.get(cmd, ""))
+        monkeypatch.setattr(finish_mod_v102.time, "sleep", lambda _: None)
+        # 永不就绪 → 超时 False
+        assert finish_mod_v102._wait_device_online(10) is False
+
+    def test_boot_completed_returns_true(self, finish_mod_v102, monkeypatch):
+        monkeypatch.setattr(finish_mod_v102, "device_online", lambda: True)
+        monkeypatch.setattr(finish_mod_v102, "adb_shell",
+                            lambda cmd, timeout=15: "1" if "boot_completed" in cmd else "")
+        assert finish_mod_v102._wait_device_online(600) is True
 
 
 class TestWaitDeviceOnline:

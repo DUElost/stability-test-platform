@@ -34,6 +34,15 @@
   （adb device not found）→ 结果 0/4 收集**（需 v1.0.2 容错：设备离线等待
   上线重试）；⑨ **秒级 run_id 并行碰撞**——同秒多个 finish 写同一文件名互相
   覆盖（sleep 4 job → 2 文件、gpu 4 job → 2 文件；run_id 需加设备维度）。
+- 收取机制方案落地（用户确认，方法 A/B）：B = finish 等设备上线容错
+  （powercycle_finish v1.0.1/1.0.2，#646/#657）；A = 定时收取窗口
+  （powercycle_check v1.0.2→v1.0.5：collect_window_start 东八区 +
+  collect_window_minutes Per-Plan 自由键可配，窗口内暂停→收取→续跑）。
+  **窗口实测通过**（2026-08-31，设备 253）：窗口 17:05-17:15，17:06 收取
+  13 轮落盘、任务续跑；手动 finish 收 21 轮全量。实测补强：⑥ boot 判死
+  三条件（cycles==0 / result_bytes==0 / 转换清零）、⑪ finish 等
+  boot_completed==1（boot 早期 /data 未挂载 run-as stat 失败）、
+  主机时区各异（PDT）→ 窗口按东八区固定判定。
 
 ## 0. 结论摘要
 

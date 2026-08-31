@@ -8,6 +8,12 @@ from pydantic import Field
 from backend.api.schemas.base import ORMBaseModel
 
 
+class T2bAutoDispatchAllowlistEntry(ORMBaseModel):
+    plan_id: int = Field(ge=1)
+    max_devices: int = Field(default=20, ge=1, le=50)
+    tools: list[str] = Field(default_factory=lambda: ["dispatch_plan_run"])
+
+
 class AiAssistantConfigOut(ORMBaseModel):
     model_config = ORMBaseModel.model_config.copy()
     model_config["from_attributes"] = True
@@ -21,6 +27,7 @@ class AiAssistantConfigOut(ORMBaseModel):
     request_timeout_seconds: int = 120
     t1_require_confirm: bool = False
     auto_approve_tools: list[str] = Field(default_factory=list)
+    t2b_auto_dispatch_allowlist: list[T2bAutoDispatchAllowlistEntry] = Field(default_factory=list)
     updated_at: datetime | None = None
 
 
@@ -35,6 +42,7 @@ class AiAssistantConfigUpdate(ORMBaseModel):
     request_timeout_seconds: int | None = Field(default=None, ge=10, le=600)
     t1_require_confirm: bool | None = None
     auto_approve_tools: list[str] | None = None
+    t2b_auto_dispatch_allowlist: list[T2bAutoDispatchAllowlistEntry] | None = None
 
 
 class AiConnectionTestOut(ORMBaseModel):
@@ -71,6 +79,7 @@ class AiActionOut(ORMBaseModel):
     status: str
     console_run_id: str | None = None
     result_summary: str | None = None
+    preview_text: str | None = None
     requested_by: str | None = None
     decided_by: str | None = None
     created_at: datetime | None = None

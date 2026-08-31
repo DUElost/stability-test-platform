@@ -68,6 +68,7 @@ function setData(opts?: { messages?: AiChatMessage[] }) {
     request_timeout_seconds: 120,
     t1_require_confirm: false,
     auto_approve_tools: [],
+    t2b_auto_dispatch_allowlist: [],
     updated_at: '2026-08-28T00:00:00Z',
   });
   mocks.aiAssistant.listSessions.mockResolvedValue([SESSION]);
@@ -80,6 +81,7 @@ function setData(opts?: { messages?: AiChatMessage[] }) {
     status: 'succeeded',
     console_run_id: null,
     result_summary: null,
+    preview_text: null,
     requested_by: 'tester',
     decided_by: null,
     created_at: '2026-08-28T01:00:00Z',
