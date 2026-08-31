@@ -8,13 +8,13 @@ import {
   CheckCircle,
   Clock,
   Server,
+  ShieldAlert,
   Smartphone,
-  Wifi,
   Zap,
   Activity,
   TrendingUp,
 } from 'lucide-react';
-import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart, HostFailureRateChart, PlanSuccessRateChart, PlanRunPassRateTrendChart } from '@/components/charts';
+import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart, HostFailureRateChart, PlanSuccessRateChart, PlanRunPassRateTrendChart, RiskDistributionChart } from '@/components/charts';
 import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
@@ -73,6 +73,13 @@ export default function Dashboard() {
   const { data: passRateTrendData, isLoading: passRateTrendLoading, error: passRateTrendError, refetch: refetchPassRateTrend } = useQuery({
     queryKey: ['stats-plan-run-pass-rate-trend'],
     queryFn: () => api.stats.planRunPassRateTrend(30),
+    refetchInterval: 60000,
+  });
+
+  // 与测试结果页同口径：近期 run 风险分布（高/中/低）——稳定性主信号，填 2 列栅格空位
+  const { data: resultsSummary, isLoading: riskLoading, error: riskError, refetch: refetchRisk } = useQuery({
+    queryKey: ['results-summary', { projectKey: null, limit: 30 }],
+    queryFn: () => api.results.summary(30),
     refetchInterval: 60000,
   });
 
@@ -151,7 +158,11 @@ export default function Dashboard() {
         <DashboardStatCard
           label="主机总数"
           value={hostStats.total}
-          suffix={`在线 ${hostStats.online}`}
+          suffix={
+            isLoading
+              ? undefined
+              : `在线 ${hostStats.online} · ${(hostStats.online_rate * 100).toFixed(1)}%`
+          }
           loading={isLoading}
           icon={<Server />}
           iconWellClassName={STAT.iconWellMuted}
@@ -345,17 +356,22 @@ export default function Dashboard() {
               isLoading={planSuccessLoading}
             />
           )}
-          <Card className="p-4 md:col-span-2">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <Wifi size={14} className={CHART_SECTION.icon} />
-                <span className="text-sm font-medium">主机在线率</span>
-              </div>
-              <span className={cn(STAT.value, 'text-2xl', ENTITY_STATUS_COLORS.host.online)}>
-                {isLoading ? <Skeleton className="h-7 w-16" /> : `${(hostStats.online_rate * 100).toFixed(1)}%`}
-              </span>
-            </div>
-          </Card>
+          {riskError ? (
+            <Card className="p-4">
+              <CardHeader className="px-0 pt-0 pb-3">
+                <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                  <ShieldAlert size={14} className={CHART_SECTION.icon} />
+                  风险分布
+                </CardTitle>
+              </CardHeader>
+              <InlineError message="风险分布加载失败" onRetry={() => void refetchRisk()} />
+            </Card>
+          ) : (
+            <RiskDistributionChart
+              data={resultsSummary?.risk_distribution ?? { high: 0, medium: 0, low: 0, unknown: 0 }}
+              isLoading={riskLoading}
+            />
+          )}
         </div>
       </div>
     </PageContainer>
