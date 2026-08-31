@@ -75,3 +75,4 @@ def test_gpu_check_no_tests_is_failure(monkeypatch):
     monkeypatch.setattr(gc, "_read_log_cat",
                         lambda: b"GPU_RUN_START test_id=001 rounds=2\nOK (1 test)\nGPU_ROUND 1 rc=0\nGPU_RUN_END rc=0\n")
     assert gc._run_finished() == (True, "ok")
+
