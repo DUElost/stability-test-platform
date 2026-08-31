@@ -2,7 +2,6 @@ import { CheckCircle2, Clock3, Info, Trash2 } from 'lucide-react';
 import type { PlanRun, PlanRunPreview, ResourcePool } from '@/utils/api';
 import type { CapacityPlanRow, ReadinessDevice } from '@/utils/planExecuteReadiness';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
   TableBody,
@@ -156,13 +155,11 @@ export function DispatchCockpit({
           </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">按节点派发计划</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="rounded-lg border">
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+          <div className="rounded-lg border bg-card">
+            <div className="border-b px-3 py-2 text-sm font-semibold">按节点派发计划</div>
+            <div className="space-y-3 px-3 py-2.5">
+              <div className="overflow-auto">
                 <Table className="text-sm">
                   <TableHeader className="bg-muted/50 text-left text-xs text-muted-foreground">
                     <TableRow className="hover:bg-transparent">
@@ -175,16 +172,16 @@ export function DispatchCockpit({
                   <TableBody>
                     {capacityRows.map((row) => (
                       <TableRow key={row.hostId}>
-                        <TableCell className="px-3 py-3">
+                        <TableCell className="px-3 py-2">
                           <div className="font-medium">{row.hostLabel}</div>
                           <div className={cn('mt-0.5 text-[11px]', TEXT.subtitle)}>
                             {row.healthStatus || '健康状态未知'}
                             {row.healthReasons.length ? ` · ${row.healthReasons.join('、')}` : ''}
                           </div>
                         </TableCell>
-                        <TableCell className="px-3 py-3">{row.selected}</TableCell>
-                        <TableCell className="px-3 py-3">{row.effectiveSlots ?? '暂无'}</TableCell>
-                        <TableCell className={cn('px-3 py-3 font-medium', (row.queued ?? 0) > 0 ? 'text-warning' : 'text-success')}>
+                        <TableCell className="px-3 py-2">{row.selected}</TableCell>
+                        <TableCell className="px-3 py-2">{row.effectiveSlots ?? '暂无'}</TableCell>
+                        <TableCell className={cn('px-3 py-2 font-medium', (row.queued ?? 0) > 0 ? 'text-warning' : 'text-success')}>
                           {row.effectiveSlots == null
                             ? <span className={TEXT.subtitle}>槽位数据缺失，不估算</span>
                             : row.queued
@@ -205,28 +202,24 @@ export function DispatchCockpit({
                   {devices.map((device) => <div key={device.id}>{device.serial}</div>)}
                 </div>
               </details>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
 
-          <div className="space-y-4">
-            <Card>
-              <CardContent className="pt-5">
+          <div className="space-y-3">
+            <div className="rounded-lg border bg-card px-3 py-2.5">
                 <RecentPlanRunsInline
                   runs={recentRuns}
                   loading={recentRunsLoading}
                   onOpenRun={onOpenRun}
                 />
-              </CardContent>
-            </Card>
+            </div>
 
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-base">参数与检查单</CardTitle>
+            <div className="rounded-lg border bg-card">
+              <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+                  <div className="text-sm font-semibold">参数与检查单</div>
                   <Button type="button" variant="outline" size="sm" onClick={onEditPlan}>编辑 Plan</Button>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
+              </div>
+              <div className="space-y-3 px-3 py-2.5 text-sm">
                 <div className="flex items-center justify-between gap-3">
                   <ParameterInfo label="巡检周期" tip="到达周期后触发下一轮巡检脚本；过短可能持续占用 Agent 执行槽位。" />
                   <strong>{formatDurationSeconds(patrolIntervalSeconds, 'precise', '未设置')}</strong>
@@ -266,13 +259,12 @@ export function DispatchCockpit({
                     <Trash2 className="mr-2 h-4 w-4" />移除全部阻塞设备
                   </Button>
                 ) : null}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           </div>
         </div>
 
-        <Card>
-          <CardContent className="pt-5">
+        <div className="rounded-lg border bg-card px-3 py-2.5">
             <div className={cn('text-xs font-medium', TEXT.subtitle)}>WiFi 连接（选填）</div>
             <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>
               仅本次执行生效。选择网络后，设备会在初始化阶段连接它；不选则跳过这一步。
@@ -310,11 +302,9 @@ export function DispatchCockpit({
                 （名称 + wifi 名 + 密码）。
               </p>
             ) : null}
-          </CardContent>
-        </Card>
+        </div>
 
-        <Card>
-          <CardContent className="pt-5">
+        <div className="rounded-lg border bg-card px-3 py-2.5">
             <label htmlFor="plan-execute-note" className={cn('text-xs font-medium', TEXT.subtitle)}>
               执行备注（选填）
             </label>
@@ -328,8 +318,7 @@ export function DispatchCockpit({
               className="mt-2 w-full resize-y rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
             <div className={cn('mt-1 text-right text-[11px]', TEXT.subtitle)}>{note.length}/500</div>
-          </CardContent>
-        </Card>
+        </div>
       </div>
     </TooltipProvider>
   );

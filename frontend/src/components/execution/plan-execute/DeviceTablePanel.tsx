@@ -74,7 +74,7 @@ export function DeviceTablePanel({
 }: DeviceTablePanelProps) {
   return (
     <div className="flex h-full min-h-0 flex-col p-3" data-testid="device-table-panel">
-      <div className="min-h-0 flex-1 rounded-lg border">
+      <div className="min-h-0 flex-1 overflow-auto">
         <Table className="w-full min-w-[800px] text-sm">
           {/* bg-muted/95 是 sticky 表头的必要条件：行要从表头下面滚过去，
               近乎不透明才不透行；勿当底色漂移改成 /50 */}

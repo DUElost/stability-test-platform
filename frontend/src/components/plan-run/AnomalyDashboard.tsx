@@ -546,7 +546,7 @@ export default function AnomalyDashboard({
     <>
       <section
         data-testid="watcher-summary"
-        className={cn(PANEL.root, 'space-y-4 p-4')}
+        className={cn(PANEL.root, 'space-y-3 p-3')}
     >
       <SectionHeader
         title="异常仪表盘"
@@ -580,7 +580,7 @@ export default function AnomalyDashboard({
       )}
 
       {!isLoading && !isError && (
-        <div className="space-y-4">
+        <div className="space-y-3">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <SummaryCard
               label={`${primaryLabel}异常总量`}

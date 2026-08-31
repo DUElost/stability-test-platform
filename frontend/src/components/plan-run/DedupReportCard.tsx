@@ -128,7 +128,7 @@ export default function DedupReportCard({ runId, uploadSummary, extractSummary }
         </div>
       </div>
 
-      <div className="space-y-2 p-4">
+      <div className="space-y-2 px-3 py-2.5">
         {statusQ.data?.archive && (statusQ.data.archive.hosts_triggered ?? 0) > 0 && (
           <div
             data-testid="dedup-host-completeness"

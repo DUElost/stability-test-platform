@@ -59,13 +59,13 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
       </div>
 
       {q.isError ? (
-        <div className="p-4">
+        <div className="px-3 py-2.5">
           <InlineError message="日志事件归档加载失败" onRetry={() => void q.refetch()} />
         </div>
       ) : q.isLoading ? (
-        <p className="px-4 py-4 text-xs text-muted-foreground">加载中…</p>
+        <p className="px-3 py-2.5 text-xs text-muted-foreground">加载中…</p>
       ) : !q.data || q.data.total === 0 ? (
-        <div className="p-4">
+        <div className="px-3 py-2.5">
           <InlineEmpty>无 device_log_event 记录</InlineEmpty>
         </div>
       ) : (

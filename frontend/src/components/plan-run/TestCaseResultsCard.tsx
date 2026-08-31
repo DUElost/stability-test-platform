@@ -45,7 +45,7 @@ export default function TestCaseResultsCard({ runId, isTerminal }: Props) {
           </span>
         )}
       </div>
-      <div className="p-4">
+      <div className="px-3 py-2.5">
         {!isTerminal ? (
           <p className={cn('text-sm', TEXT.subtitle)}>PlanRun 结束后展示逐条用例结果。</p>
         ) : q.isLoading ? (
