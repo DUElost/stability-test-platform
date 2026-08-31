@@ -1683,6 +1683,13 @@ export interface WatcherCategory {
   latest_detected_at?: string | null;
 }
 
+export interface WatcherPlatformBucket {
+  platform: string;
+  categories: WatcherCategory[];
+  total: number;
+  affected_device_count: number;
+}
+
 export interface PackageStat {
   package_name: string;                  // 空 / 缺失统一归 "unknown"
   crash_count: number;                   // AEE + COALESCE(extra.event_type,'CRASH')='CRASH',按 nfs_path 去重
@@ -1763,6 +1770,7 @@ export interface WatcherSummary {
   watcher_capability?: string | null;
   // ADR-0025 Sprint 3: 运行日志归档状态（控制面按需拉取聚合）；无关联 Job 时 null
   archive?: WatcherArchive | null;
+  platform_buckets?: WatcherPlatformBucket[];
 }
 
 export interface WatcherAgentOpsMetrics {

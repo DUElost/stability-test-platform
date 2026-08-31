@@ -630,6 +630,9 @@ def _platform_session(lock_tracker, patch_manager, monkeypatch, platform, reconc
     monkeypatch.setattr(
         "backend.agent.aee.reconciler.AeeDbHistoryReconciler", reconciler_cls,
     )
+    monkeypatch.setattr(
+        "backend.agent.aee.unisoc_reconciler.UnisocUniviewReconciler", reconciler_cls,
+    )
     patch_manager(_MgrWithAdb(mode="ok", capability="inotifyd_root"))
 
     session = JobSession(
@@ -652,14 +655,12 @@ class _OkReconciler:
         return True
 
 
-def test_reconciler_skipped_on_unisoc_platform(lock_tracker, patch_manager, monkeypatch):
-    """#73: 展锐机型无 /data/aee_exp — reconciler 不该启动。"""
+def test_reconciler_starts_on_unisoc_platform(lock_tracker, patch_manager, monkeypatch):
     session = _platform_session(
         lock_tracker, patch_manager, monkeypatch, "UNISOC", _OkReconciler,
     )
     session._maybe_start_aee_reconciler()
-
-    assert session._reconciler is None, "展锐平台必须跳过 reconciler"
+    assert session._reconciler is not None
     session.__exit__(None, None, None)
 
 
@@ -691,32 +692,21 @@ def test_reconciler_starts_on_unknown_platform(lock_tracker, patch_manager, monk
     )
     session._maybe_start_aee_reconciler()
 
-    assert session._reconciler is not None, "UNKNOWN 必须放行(见 _platform_supports_aee)"
+    assert session._reconciler is not None, "UNKNOWN 必须放行(见 _resolve_reconciler_class)"
     session.__exit__(None, None, None)
 
 
-def test_reconciler_platform_allowlist_is_configurable(lock_tracker, patch_manager, monkeypatch):
-    """逃生阀仅测门禁可配置；生产勿扩白名单至 UNISOC/QCOM（#220 stub-only）。"""
-    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_PLATFORMS", "MTK,UNISOC")
-    session = _platform_session(
-        lock_tracker, patch_manager, monkeypatch, "UNISOC", _OkReconciler,
-    )
-    session._maybe_start_aee_reconciler()
-
-    assert session._reconciler is not None, "白名单显式放开后 UNISOC 应能启动"
-    session.__exit__(None, None, None)
-
-
-def test_platform_gate_precedes_watcher_check(lock_tracker, patch_manager, monkeypatch):
-    """平台门禁应在 watcher 检查之前 — 展锐机型的日志要给出平台原因。"""
+def test_reconciler_host_allowlist_blocks_unlisted_host(lock_tracker, patch_manager, monkeypatch):
     monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "1")
-    monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_HOSTS", raising=False)
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_HOSTS", "other-host")
     monkeypatch.setattr(
         "backend.agent.device_platform.detect_device_platform",
         lambda *a, **k: "UNISOC",
     )
+    monkeypatch.setattr(
+        "backend.agent.aee.unisoc_reconciler.UnisocUniviewReconciler", _OkReconciler,
+    )
     patch_manager(_MgrWithAdb(mode="ok", capability="inotifyd_root"))
-
     session = JobSession(
         job_payload=_make_payload(),
         host_id="host-unittest",
@@ -725,11 +715,25 @@ def test_platform_gate_precedes_watcher_check(lock_tracker, patch_manager, monke
         lock_deregister=lock_tracker.dereg_job,
     )
     session.__enter__()
-    session._handle.impl = None  # watcher 也不可用
+    session._handle.impl = _PlatformImpl()
+    session._maybe_start_aee_reconciler()
+    assert session._reconciler is None
+    session.__exit__(None, None, None)
 
-    assert session._platform_supports_aee() is False, (
-        "handle.impl 为 None 时平台门禁仍应独立判定并拦下"
+
+def test_platform_gate_skips_qcom(lock_tracker, patch_manager, monkeypatch):
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "1")
+    patch_manager(_MgrWithAdb(mode="ok", capability="inotifyd_root"))
+    session = JobSession(
+        job_payload=_make_payload(),
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
     )
+    session.__enter__()
+    session._handle.impl = _PlatformImpl()
+    assert session._resolve_reconciler_class("QCOM") is None
     session.__exit__(None, None, None)
 
 

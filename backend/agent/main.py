@@ -32,6 +32,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.config import BASE_DIR, ensure_dirs
     from agent.log_archiver import LogArchiver, collect_archive_heartbeat_metrics
     from agent.scan_runner import ScanRunner
+    from agent.unisoc_scan_runner import UnisocScanRunner
     from agent.event_uploader import EventUploader
     from agent.upload_manager import UploadManager
     from agent.local_disk_monitor import LocalDiskMonitor
@@ -58,6 +59,7 @@ else:
     from .config import BASE_DIR, ensure_dirs
     from .log_archiver import LogArchiver, collect_archive_heartbeat_metrics
     from .scan_runner import ScanRunner
+    from .unisoc_scan_runner import UnisocScanRunner
     from .event_uploader import EventUploader
     from .upload_manager import UploadManager
     from .local_disk_monitor import LocalDiskMonitor
@@ -594,6 +596,7 @@ def main() -> None:
     ).start()
     logger.info("log_archiver=started")
     ScanRunner.instance().configure()
+    UnisocScanRunner.instance().configure()
     UploadManager.instance().configure()
     EventUploader.instance().configure(
         api_url=api_url,
@@ -768,6 +771,7 @@ def main() -> None:
                     active_count,
                 )
             ScanRunner.instance().configure(force=True)
+            UnisocScanRunner.instance().configure(force=True)
             UploadManager.instance().configure(force=True)
             reloaded_api_url = (os.getenv("API_URL") or api_url).rstrip("/")
             reloaded_agent_secret = os.getenv("AGENT_SECRET") or agent_secret

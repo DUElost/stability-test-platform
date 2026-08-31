@@ -509,7 +509,7 @@ async def merge_task(
     round_started_at: str | None = None,
 ) -> None:
     """ADR-0025 Sprint 4: 归档-2 集中合并（-merge_files 各 agent _org.xls）。"""
-    from backend.services.dedup_scan import run_merge_sync
+    from backend.services.dedup_scan import run_merge_all_platforms_sync
 
     round_dt = None
     if round_started_at:
@@ -524,7 +524,7 @@ async def merge_task(
     logger.info("saq_merge_start plan_run=%d round=%s", plan_run_id, scan_round_id)
     try:
         result = await asyncio.to_thread(
-            run_merge_sync,
+            run_merge_all_platforms_sync,
             plan_run_id,
             scan_round_id=scan_round_id,
             round_started_at=round_dt,
