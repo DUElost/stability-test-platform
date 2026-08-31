@@ -10,8 +10,6 @@
 export const FACET_FIELDS = [
   'customer',
   'platforms',
-  'form_factor',
-  'product_line',
 ] as const;
 
 export type FacetField = (typeof FACET_FIELDS)[number];
@@ -19,13 +17,9 @@ export type FacetField = (typeof FACET_FIELDS)[number];
 export const FACET_LABEL: Record<FacetField, string> = {
   customer: '客户',
   platforms: '平台',
-  form_factor: '形态',
-  product_line: '产品线',
 };
 
 export const FACET_FIELD_ENTRIES: ReadonlyArray<readonly [FacetField, string]> = [
   ['customer', FACET_LABEL.customer],
   ['platforms', FACET_LABEL.platforms],
-  ['form_factor', FACET_LABEL.form_factor],
-  ['product_line', FACET_LABEL.product_line],
 ];

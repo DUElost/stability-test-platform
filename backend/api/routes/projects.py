@@ -49,8 +49,6 @@ from backend.realtime.socketio_server import emit_project_changed
 _UPDATABLE_FIELDS = (
     "display_name",
     "customer",
-    "form_factor",
-    "product_line",
     "jira_project_key",
 )
 
@@ -385,8 +383,6 @@ def create_project(
         project_key=key,
         display_name=payload.display_name.strip(),
         customer=payload.customer,
-        form_factor=payload.form_factor,
-        product_line=payload.product_line,
         jira_project_key=payload.jira_project_key,
         source=_USER_SOURCE,
         status="ACTIVE",
