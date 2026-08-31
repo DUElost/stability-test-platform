@@ -113,44 +113,42 @@ export default function PlanRunHero({
 
   return (
     <div className={cn('rounded-lg border overflow-hidden', ELEVATION.flat, heroCls)}>
-      <div className="px-4 pt-3 pb-1">
-        <div className={cn('text-[11px] mb-0.5', TEXT.caption)}>
-          <span className="font-semibold text-primary">
-            {planName ? `Plan #${run?.plan_id} · ${planName}` : `Plan #${run?.plan_id ?? '—'}`}
-          </span>
-          {/* ADR-0029（#447）：归属项目 key（plan_run 快照——Plan 改归属不影响历史 Run 归因） */}
-          <ProjectKeyBadge projectKey={run?.project_key} className="ml-1.5" />
+      {/* OpenRouter 式页头：标题+副文 | 右侧状态 pill */}
+      <div className="flex items-start justify-between gap-3 px-4 pt-3 pb-2">
+        <div className="min-w-0">
+          <h2 className={cn('truncate text-base font-semibold leading-7', TEXT.heading)}>
+            PlanRun{' '}
+            <span className={isRunning ? 'text-primary' : undefined}>
+              #{run?.id ?? '—'}
+            </span>
+          </h2>
+          <div className={cn('mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 text-xs', TEXT.subtitle)}>
+            <span className="truncate">
+              {planName
+                ? `Plan #${run?.plan_id} · ${planName}`
+                : `Plan #${run?.plan_id ?? '—'}`}
+            </span>
+            <ProjectKeyBadge projectKey={run?.project_key} />
+          </div>
         </div>
-        <div className={cn('text-sm font-bold', TEXT.heading)}>
-          PlanRun{' '}
-          <span className={isRunning ? 'text-primary' : TEXT.heading}>
-            #{run?.id ?? '—'}
-          </span>
-        </div>
-      </div>
-
-      {/* 大状态 badge */}
-      <div className="px-4 pb-3">
         {pill && run && (
           <div
             data-testid="plan-run-status-pill"
-            className={`inline-flex items-center gap-2 rounded-md border px-3.5 py-2 shadow-none ${badgeCls}`}
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 shadow-none ${badgeCls}`}
           >
             {isRunning && (
-              <span className="relative flex h-2.5 w-2.5 shrink-0">
+              <span className="relative flex h-2 w-2 shrink-0">
                 <span className="absolute inset-0 rounded-full bg-warning/60 opacity-60 animate-ping" />
-                <span className="relative h-2.5 w-2.5 rounded-full bg-warning" />
+                <span className="relative h-2 w-2 rounded-full bg-warning" />
               </span>
             )}
-            <pill.Icon
-              className={`h-4 w-4 ${isRunning ? 'animate-spin' : ''}`}
-            />
-            <div>
-              <div className="text-sm font-bold">{pill.label}</div>
+            <pill.Icon className={`h-3.5 w-3.5 ${isRunning ? 'animate-spin' : ''}`} />
+            <div className="leading-tight">
+              <div className="text-xs font-semibold">{pill.label}</div>
               {runDuration && (
                 <div
                   data-testid="plan-run-duration"
-                  className="font-mono text-[11px] opacity-70"
+                  className="font-mono text-[10px] opacity-70"
                 >
                   {runDuration}
                 </div>

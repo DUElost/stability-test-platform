@@ -64,7 +64,7 @@ function EventRow({ event }: { event: PlanRunEvent }) {
   return (
     <div
       data-testid={`event-row-${event.ts}-${event.category}`}
-      className="grid grid-cols-[140px_16px_1fr_auto] items-start gap-2 border-b border-border/40 px-3 py-2.5 text-xs last:border-b-0 hover:bg-muted/30"
+      className="grid grid-cols-[140px_16px_1fr_auto] items-start gap-2 border-b border-border/40 px-3 py-1.5 text-xs last:border-b-0 hover:bg-muted/30"
     >
       <span className="pt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground/70">
         {fmtTs(event.ts)}
@@ -138,7 +138,7 @@ export default function PlanRunEventStream({
 
   return (
     <div data-testid="plan-run-event-stream" className={PANEL.root}>
-      <div className="flex flex-wrap items-center gap-1 border-b bg-card px-3 py-2">
+      <div className="flex flex-wrap items-center gap-1 border-b bg-card px-3 py-1.5">
         <span className={cn('mr-1 text-[11px] font-bold uppercase tracking-wider', TEXT.subtitle)}>阶段</span>
         {STAGE_FILTERS.map((f) => (
           <button

@@ -76,23 +76,23 @@ export function navIconClass(active: boolean): string {
   );
 }
 
-/** 下划线 Tab（PlanRun 详情等） */
+/** 下划线 Tab（OpenRouter Activity：text-xs + border-b-2） */
 export function tabLinkClass(active: boolean): string {
   return cn(
-    'inline-flex items-center border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+    'inline-flex shrink-0 items-center border-b-2 px-4 py-2 text-xs font-medium transition-colors cursor-pointer',
     active
       ? 'border-primary text-primary'
-      : 'border-transparent text-muted-foreground hover:text-foreground',
+      : 'border-transparent text-muted-foreground hover:text-accent-foreground',
   );
 }
 
 /** 区块标题色条（SectionHeader） */
 export const SECTION_ACCENT = {
-  primary: 'from-primary to-primary/60',
-  success: 'from-success to-success/60',
-  warning: 'from-warning to-warning/60',
-  destructive: 'from-destructive to-destructive/60',
-  muted: 'from-muted-foreground/50 to-muted-foreground/25',
+  primary: 'bg-primary',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  destructive: 'bg-destructive',
+  muted: 'bg-muted-foreground/50',
 } as const;
 
 /** @deprecated 使用 SECTION_ACCENT 语义名；保留旧 color prop 映射 */
@@ -289,7 +289,7 @@ export function dedupActionBtnClass(variant: 'primary' | 'success'): string {
 
 /** 卡片容器（PlanRun 详情区块） */
 export const PANEL = {
-  root: cn('overflow-hidden rounded-xl border bg-card', ELEVATION.flat),
+  root: cn('overflow-hidden rounded-lg border bg-card', ELEVATION.flat),
   footer: cn('border-t bg-muted/50 px-4 py-2'),
   sectionLabel: 'text-[11px] text-muted-foreground',
 } as const;

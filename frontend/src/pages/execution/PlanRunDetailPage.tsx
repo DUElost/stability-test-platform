@@ -235,13 +235,13 @@ export default function PlanRunDetailPage() {
         )}
         <aside
           className={cn(
-            'flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-card p-4 transition-transform fixed bottom-0 left-0 top-20 z-40 shadow-xl lg:static lg:bottom-auto lg:top-auto lg:z-auto lg:shadow-none',
+            'flex w-72 shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-card p-3 transition-transform fixed bottom-0 left-0 top-20 z-40 shadow-xl lg:static lg:bottom-auto lg:top-auto lg:z-auto lg:shadow-none',
             leftPanelOpen ? 'translate-x-0' : '-translate-x-full',
             'lg:translate-x-0',
           )}
         >
           {runQ.isLoading ? (
-            <Skeleton className="h-36 w-full rounded-xl" />
+            <Skeleton className="h-36 w-full rounded-lg" />
           ) : (
             <PlanRunHero
               run={runQ.data}
@@ -306,7 +306,7 @@ export default function PlanRunDetailPage() {
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="flex-1 overflow-y-auto p-3 space-y-3">
             <DeviceOverview
               data={devicesQ.data}
               isLoading={devicesQ.isLoading}

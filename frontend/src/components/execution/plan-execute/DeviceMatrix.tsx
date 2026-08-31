@@ -220,7 +220,7 @@ export function DeviceMatrix({
                                   lastClickedIndexRef.current = idx;
                                 }}
                                 className={cn(
-                                  'relative aspect-square overflow-hidden rounded-[5px] border-2 transition-transform hover:z-10 hover:scale-110 hover:shadow-md',
+                                  'relative aspect-square overflow-hidden rounded-[5px] border-2 transition-transform hover:z-10 hover:scale-[1.05]',
                                   TILE_CLS[status],
                                   selected &&
                                     'border-foreground shadow-[inset_0_0_0_1px_hsl(var(--background))]',

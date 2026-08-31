@@ -61,7 +61,7 @@ export default function ArchiveStatusCard({
             存储运维概览
           </span>
         </div>
-        <div className="p-4">
+        <div className="px-3 py-2.5">
           <InlineError
             message="存储运维数据加载失败"
             onRetry={onRetry}
@@ -99,23 +99,23 @@ export default function ArchiveStatusCard({
         )}
       </div>
 
-      <div className="space-y-2 p-4">
+      <div className="space-y-2 px-3 py-2.5">
         {pctBar(opsMetrics.local_disk_usage_pct, 'HDD 使用率')}
 
         <div className="grid grid-cols-3 gap-2 text-[11px] text-center">
-          <div className="rounded border px-2 py-1">
+          <div className="px-2 py-1">
             <div className={TEXT.subtitle}>SSD 已清理</div>
             <div className={cn('font-mono font-medium', TEXT.body)} data-testid="pruned-total">
               {opsMetrics.pruned_total}
             </div>
           </div>
-          <div className="rounded border px-2 py-1">
+          <div className="px-2 py-1">
             <div className={TEXT.subtitle}>HDD 溢出次数</div>
             <div className={cn('font-mono font-medium', TEXT.body)} data-testid="spill-cycles">
               {opsMetrics.spill_cycles}
             </div>
           </div>
-          <div className="rounded border px-2 py-1">
+          <div className="px-2 py-1">
             <div className={TEXT.subtitle}>溢出上送数</div>
             <div className={cn('font-mono font-medium', TEXT.body)} data-testid="spilled-total">
               {opsMetrics.spilled_total}
