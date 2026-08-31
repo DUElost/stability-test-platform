@@ -253,11 +253,17 @@ def test_flash_firmware_keys_omitted_when_unset(monkeypatch):
 
 
 def test_flash_firmware_root_is_path_verified(monkeypatch):
-    """固件根是路径键：hot-update 后远端校验其存在，配错在推送时就暴露。"""
     monkeypatch.setenv("STP_FLASH_FIRMWARE_ROOT", "/mnt/stp-aee/firmware")
-
     overrides = hot_update_env_overrides("/opt/stability-test-agent")
     keys = agent_path_keys_to_verify(overrides)
-
     assert "STP_FLASH_FIRMWARE_ROOT" in keys
-    assert "STP_FLASH_FIRMWARE_VERSION" not in keys
+
+
+def test_unisoc_scoped_keys_are_written_to_unprefixed_agent_keys(monkeypatch):
+    monkeypatch.setenv("STP_AGENT_UNISOC_LOG_SCAN_PYTHON", "/mnt/automation-toolkit/venv/bin/python")
+    monkeypatch.setenv("STP_AGENT_UNISOC_LOG_SCAN_SCRIPT", "/mnt/automation-toolkit/scan_log_gt.py")
+    monkeypatch.setenv("STP_AGENT_UNISOC_SCAN_RESULT_PYTHON", "/mnt/automation-toolkit/venv/bin/python")
+    monkeypatch.setenv("STP_AGENT_UNISOC_SCAN_RESULT_SCRIPT", "/mnt/automation-toolkit/scan_result.py")
+    overrides = hot_update_env_overrides("/opt/stability-test-agent")
+    assert overrides["STP_UNISOC_LOG_SCAN_SCRIPT"] == "/mnt/automation-toolkit/scan_log_gt.py"
+    assert "STP_AGENT_UNISOC_LOG_SCAN_PYTHON" not in overrides

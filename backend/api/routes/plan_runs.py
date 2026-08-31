@@ -54,6 +54,7 @@ from backend.api.schemas.plan_run import (
     WatcherAgentOpsMetrics,
     WatcherArchiveOut,
     WatcherCategoryOut,
+    WatcherPlatformBucketOut,
     WatcherSignalLinkStatsOut,
     WatcherSummaryOut,
 )
@@ -1964,6 +1965,68 @@ def _get_plan_run_devices_impl(
 # 旧 inotifyd 路径 signal 没有 extra,自动落入 unknown 桶。
 
 
+def _aggregate_watcher_platform_buckets(
+    db: Session,
+    *,
+    job_ids: list[int],
+    cur_start: datetime,
+    window_end: datetime,
+) -> list[WatcherPlatformBucketOut]:
+    if not job_ids:
+        return []
+    rows = db.execute(
+        select(
+            func.coalesce(Device.platform, "UNKNOWN").label("platform"),
+            JobLogSignal.category,
+            func.count(JobLogSignal.id),
+            func.count(func.distinct(JobLogSignal.device_serial)),
+        )
+        .select_from(JobLogSignal)
+        .join(JobInstance, JobLogSignal.job_id == JobInstance.id)
+        .join(Device, JobInstance.device_id == Device.id)
+        .where(
+            JobLogSignal.job_id.in_(job_ids),
+            JobLogSignal.detected_at >= cur_start,
+            JobLogSignal.detected_at <= window_end,
+        )
+        .group_by(Device.platform, JobLogSignal.category)
+    ).all()
+    by_platform: dict[str, list[tuple[str, int, int]]] = defaultdict(list)
+    for platform, category, count, affected in rows:
+        by_platform[str(platform or "UNKNOWN")].append(
+            (str(category), int(count or 0), int(affected or 0)),
+        )
+    buckets: list[WatcherPlatformBucketOut] = []
+    for platform in sorted(by_platform.keys()):
+        categories_out = [
+            WatcherCategoryOut(
+                category=cat, count=count, affected_device_count=affected, trend_change=0,
+            )
+            for cat, count, affected in sorted(by_platform[platform], key=lambda r: -r[1])
+        ]
+        affected_total = db.execute(
+            select(func.count(func.distinct(JobLogSignal.device_serial)))
+            .select_from(JobLogSignal)
+            .join(JobInstance, JobLogSignal.job_id == JobInstance.id)
+            .join(Device, JobInstance.device_id == Device.id)
+            .where(
+                JobLogSignal.job_id.in_(job_ids),
+                JobLogSignal.detected_at >= cur_start,
+                JobLogSignal.detected_at <= window_end,
+                func.coalesce(Device.platform, "UNKNOWN") == platform,
+            )
+        ).scalar() or 0
+        buckets.append(
+            WatcherPlatformBucketOut(
+                platform=platform,
+                categories=categories_out,
+                total=sum(c.count for c in categories_out),
+                affected_device_count=int(affected_total),
+            )
+        )
+    return buckets
+
+
 @router.get(
     "/plan-runs/{run_id}/watcher-summary",
     response_model=ApiResponse[WatcherSummaryOut],
@@ -2106,6 +2169,9 @@ def get_plan_run_watcher_summary(
     aee_breakdown = _aggregate_aee_breakdown(
         db, job_ids=job_ids, cur_start=cur_start, now=window_end,
     )
+    platform_buckets = _aggregate_watcher_platform_buckets(
+        db, job_ids=job_ids, cur_start=cur_start, window_end=window_end,
+    )
     watcher_capability = _aggregate_watcher_capability(db, job_ids=job_ids)
 
     return ok(WatcherSummaryOut(
@@ -2125,6 +2191,7 @@ def get_plan_run_watcher_summary(
         current_run=current_run,
         preexisting=preexisting,
         aee_breakdown=aee_breakdown,
+        platform_buckets=platform_buckets,
         watcher_capability=watcher_capability,
         archive=_aggregate_run_log_archive(
             db,

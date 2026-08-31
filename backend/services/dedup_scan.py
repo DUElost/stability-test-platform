@@ -20,6 +20,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from backend.core import metrics
+from backend.core.dedup_platform import DEDUP_PLATFORMS, artifact_uri_matches_platform
 from backend.models.plan_run_artifact import PlanRunArtifact
 
 logger = logging.getLogger(__name__)
@@ -121,14 +122,14 @@ def run_scan_sync(
             logger.warning("scan_skip_nfs_root_not_set plan_run=%d", plan_run_id)
             return ""
 
-        dedup_dir = Path(nfs_root) / "dedup" / str(plan_run_id)
-        if not dedup_dir.is_dir():
-            logger.warning("scan_skip_dedup_dir_missing plan_run=%d dir=%s", plan_run_id, dedup_dir)
-            return ""
-
-        n = _register_scan_artifacts_from_nfs(
-            db, plan_run_id, dedup_dir, scan_round_id=scan_round_id,
-        )
+        dedup_base = Path(nfs_root) / "dedup" / str(plan_run_id)
+        n = 0
+        for dedup_dir in (dedup_base, dedup_base / "mtk", dedup_base / "unisoc"):
+            if not dedup_dir.is_dir():
+                continue
+            n += _register_scan_artifacts_from_nfs(
+                db, plan_run_id, dedup_dir, scan_round_id=scan_round_id,
+            )
         logger.info("scan_artifacts_registered plan_run=%d count=%d", plan_run_id, n)
         return str(n) if n else ""
     finally:
@@ -259,6 +260,7 @@ def run_merge_sync(
     *,
     scan_round_id: str | None = None,
     round_started_at: datetime | None = None,
+    platform: str | None = None,
 ) -> str:
     """同步执行 merge（-merge_files_list；工具不支持即配置错误，#291）。
 
@@ -291,9 +293,10 @@ def run_merge_sync(
         plan_run_id,
         scan_round_id=scan_round_id,
         round_started_at=round_started_at,
+        platform=platform,
     )
     if not org_files:
-        logger.warning("merge_skip_no_org_files plan_run=%d", plan_run_id)
+        logger.warning("merge_skip_no_org_files plan_run=%d platform=%s", plan_run_id, platform)
         metrics.merge_skip_no_org_files_total.inc()
         return ""
 
@@ -360,7 +363,7 @@ def run_merge_sync(
     # {工具目录}/merge_result/{ts}/——但 artifact 应指向中心持久路径
     # （设计 adr-0025: `{CIFS}/dedup/{plan_run_id}/merge/`）。发布到中心后
     # 注册中心路径；中心未配置（无 STP_AEE_NFS_ROOT）时回退本机路径。
-    published = _publish_merge_to_center(plan_run_id, latest)
+    published = _publish_merge_to_center(plan_run_id, latest, platform=platform)
 
     try:
         from backend.core.database import SessionLocal
@@ -378,8 +381,26 @@ def run_merge_sync(
         logger.exception("merge_register_artifacts_failed plan_run=%d", plan_run_id)
         raise
 
-    logger.info("merge_done plan_run=%d", plan_run_id)
+    logger.info("merge_done plan_run=%d platform=%s", plan_run_id, platform or "all")
     return "ok"
+
+
+def run_merge_all_platforms_sync(
+    plan_run_id: int,
+    *,
+    scan_round_id: str | None = None,
+    round_started_at: datetime | None = None,
+) -> str:
+    any_ok = False
+    for platform in DEDUP_PLATFORMS:
+        if run_merge_sync(
+            plan_run_id,
+            scan_round_id=scan_round_id,
+            round_started_at=round_started_at,
+            platform=platform,
+        ) == "ok":
+            any_ok = True
+    return "ok" if any_ok else ""
 
 
 def _load_org_files_for_merge(
@@ -387,6 +408,7 @@ def _load_org_files_for_merge(
     *,
     scan_round_id: str | None = None,
     round_started_at: datetime | None = None,
+    platform: str | None = None,
 ) -> list[str]:
     from backend.core.database import SessionLocal
 
@@ -425,7 +447,10 @@ def _load_org_files_for_merge(
             )
             return []
         rows = db.execute(stmt).all()
-        return [r[0] for r in rows if "_org.xls" in r[0]]
+        paths = [r[0] for r in rows if "_org.xls" in r[0]]
+        if platform:
+            paths = [p for p in paths if artifact_uri_matches_platform(p, platform)]
+        return paths
     finally:
         db.close()
 
@@ -654,7 +679,9 @@ def _rewrite_merge_report_paths_to_center(
     return count
 
 
-def _publish_merge_to_center(plan_run_id: int, merge_dir: Path) -> "Path | None":
+def _publish_merge_to_center(
+    plan_run_id: int, merge_dir: Path, *, platform: str | None = None,
+) -> "Path | None":
     """把工具本机 merge_result 产物发布到中心 ``dedup/{run_id}/merge/``。
 
     工具（start_log_scan.py）固定输出到控制面本机
@@ -670,6 +697,8 @@ def _publish_merge_to_center(plan_run_id: int, merge_dir: Path) -> "Path | None"
         logger.warning("merge_publish_skip_no_center plan_run=%d", plan_run_id)
         return None
     dest = Path(root) / "dedup" / str(plan_run_id) / "merge"
+    if platform:
+        dest = dest / platform
     try:
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copytree(merge_dir, dest, dirs_exist_ok=True)

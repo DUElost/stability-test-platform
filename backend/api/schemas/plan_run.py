@@ -251,6 +251,13 @@ class WatcherCategoryOut(BaseModel):
     latest_detected_at: Optional[str] = None
 
 
+class WatcherPlatformBucketOut(BaseModel):
+    platform: str
+    categories: list[WatcherCategoryOut]
+    total: int
+    affected_device_count: int
+
+
 class PackageStatOut(BaseModel):
     package_name: str                 # 空/缺失统一归 "unknown"
     crash_count: int                  # category=AEE 且 event_type=CRASH(按 nfs_path 去重)
@@ -358,6 +365,7 @@ class WatcherSummaryOut(BaseModel):
     watcher_capability: Optional[str] = None
     # ADR-0025 Sprint 3: 运行日志归档状态（控制面按需拉取聚合）；无关联 Job 时 None
     archive: Optional[WatcherArchiveOut] = None
+    platform_buckets: list[WatcherPlatformBucketOut] = Field(default_factory=list)
 
 
 class PlanRunLogEventOut(BaseModel):
@@ -403,6 +411,7 @@ __all__ = [
     "DeviceMatrixItem",
     "PlanRunDevicesOut",
     "WatcherCategoryOut",
+    "WatcherPlatformBucketOut",
     "PackageStatOut",
     "AeeBreakdownOut",
     "PackageSubtypeCountOut",
