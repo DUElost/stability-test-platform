@@ -68,6 +68,12 @@ def check_mod_v103():
 
 
 @pytest.fixture(scope="module")
+def check_mod_v104():
+    """powercycle_check v1.0.4：boot 判死补强——cycles_done==0（首个 boot 窗口）不累计。"""
+    return _load("powercycle_check_mod_v104", "powercycle_check/v1.0.4/powercycle_check.py")
+
+
+@pytest.fixture(scope="module")
 def finish_mod():
     return _load("powercycle_finish_mod", "powercycle_finish/v1.0.0/powercycle_finish.py")
 
@@ -412,6 +418,46 @@ class TestV102BootTransition:
         r4 = check_mod_v102._run({"dead_grace_cycles": 2})
         assert r4["success"] is False
         assert "连续 2 个周期" in r4["error_message"]
+
+
+class TestV104BootGrace:
+    """v1.0.4：boot 窗口未被离线观测时（cycles_done==0）也不判死。"""
+
+    def _patch(self, mod, monkeypatch, tmp_path, prefs=(0, 100)):
+        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
+        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
+        monkeypatch.setattr(mod, "_in_collect_window", lambda cfg, now=None: False)
+        monkeypatch.setattr(mod, "device_online", lambda: True)
+        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: prefs)
+        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
+        monkeypatch.setattr(mod, "_result_bytes", lambda: 0)
+        monkeypatch.setattr(mod, "_run_finished", lambda: False)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+        monkeypatch.setattr(mod, "service_alive", lambda: False)
+
+    def test_first_boot_window_not_counted(self, check_mod_v104, monkeypatch, tmp_path):
+        """cycles_done==0（首个 boot 窗口，prefs 未就绪）+ 服务未起 → 不累计判死。"""
+        self._patch(check_mod_v104, monkeypatch, tmp_path, prefs=(0, 100))
+        for _ in range(5):
+            r = check_mod_v104._run({"dead_grace_cycles": 2})
+            assert r["success"] is True
+
+    def test_zero_cycles_then_progress_then_dead(self, check_mod_v104, monkeypatch, tmp_path):
+        """boot 窗口过后（cycles_done>0）服务持续死 → 判死语义保留。"""
+        self._patch(check_mod_v104, monkeypatch, tmp_path, prefs=(0, 100))
+        check_mod_v104._run({"dead_grace_cycles": 2})
+        # 服务起来了（cycles 在涨）→ dead_streak 清零
+        monkeypatch.setattr(check_mod_v104, "_read_prefs_progress", lambda: (6, 100))
+        monkeypatch.setattr(check_mod_v104, "service_alive", lambda: True)
+        r = check_mod_v104._run({"dead_grace_cycles": 2})
+        assert r["success"] is True
+        # 服务死且 cycles>0 且无转换 → 2 周期判死
+        monkeypatch.setattr(check_mod_v104, "service_alive", lambda: False)
+        r1 = check_mod_v104._run({"dead_grace_cycles": 2})
+        assert r1["success"] is True
+        r2 = check_mod_v104._run({"dead_grace_cycles": 2})
+        assert r2["success"] is False
+        assert "连续 2 个周期" in r2["error_message"]
 
 
 class TestCheck:
