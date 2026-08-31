@@ -85,4 +85,8 @@ class Device(Base):
 
     __table_args__ = (
         Index("idx_device_host", "host_id"),
+        # v2.5 D10：归属派生读路径（_summary_rows / _platforms_map /
+        # inventory / 派发推断 / suite 门禁）的 join 键，随
+        # f8a9b0c1d2e3 建（避免 model↔migration 漂移被 schema-sync 拦）。
+        Index("idx_device_model", "model"),
     )
