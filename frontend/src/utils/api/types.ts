@@ -315,12 +315,13 @@ export interface ResultsSummary {
   recent_runs: RecentRun[];
 }
 
-/** ADR-0029 P2：项目级风险趋势单日桶（S/A/B 计数）。 */
+/** ADR-0029 P2：项目级风险趋势单日桶（S/A/B/NONE 计数；NONE=零事件）。 */
 export interface RiskTrendBucket {
   date: string; // YYYY-MM-DD
   S: number;
   A: number;
   B: number;
+  NONE: number;
   runs: number;
 }
 
