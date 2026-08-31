@@ -168,6 +168,25 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml \
 ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit <new-ip>
 ```
 
+### 4.4 UNISOC 归档工具依赖（ADR-0032，Z258 / SPRD 机型）
+
+`scan_result.py`（`STP_UNISOC_SCAN_RESULT_SCRIPT`）导出 `.xls` 依赖 **`python3-xlwt`**。
+未安装时 Agent 日志为 `unisoc_scan_result_failed ... ModuleNotFoundError: xlwt`。
+
+```bash
+# 单机（android 用户可 sudo -n）
+ssh android@<ip> 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-xlwt'
+
+# 批量（172.21.15.x 段示例；并行度按需调低）
+grep -E '^172\.21\.15\.' /home/debian13/hosts.ini | while read -r ip; do
+  ssh -o ConnectTimeout=5 "android@${ip}" \
+    'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-xlwt' &
+done
+wait
+```
+
+验证：`ssh android@<ip> '/usr/bin/python3 -c "import xlwt"'`
+
 ## 5. `.env` 对齐（装后必查）
 
 `install_agent.sh` 生成的 `.env` **不完整**——须对照老机补全存储键。
@@ -264,6 +283,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/v1/stats/fil
 | `AGENT_SECRET` 取自 `backend/.env` | 集体 SocketIO 认证失败 → 只用 `.env.backend` |
 | 热更新后 schema/脚本不生效 | 须 `systemctl restart`（`reload_config` 不重载 schema 缓存） |
 | NFS server 地址变更 | `batch_hot_update` 不改 fstab；须逐台 remount（`2026-storage-roles-and-aliases.md` §6） |
+| UNISOC `scan_result` 缺 xlwt | `apt install python3-xlwt`（§4.4）；勿指望 Agent venv pip（镜像/离线常失败） ✅ |
 
 ## 10. 与相关 skill / 文档的边界
 
