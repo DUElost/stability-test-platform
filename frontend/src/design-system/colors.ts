@@ -61,21 +61,22 @@ export const ENTITY_STATUS_COLORS = {
  * 用于 Recharts 等数据可视化库
  */
 export const CHART_COLORS = {
-  primary: 'hsl(217, 91%, 60%)',           // --primary
-  success: 'hsl(142, 71%, 45%)',           // --success
-  warning: 'hsl(38, 92%, 50%)',            // --warning
-  error: 'hsl(0, 84.2%, 60.2%)',           // --destructive
-  info: 'hsl(199, 89%, 48%)',              // --info
-  muted: 'hsl(215.4, 16.3%, 46.9%)',       // --muted-foreground
+  primary: 'hsl(263.7, 90.4%, 54.9%)',     // --primary（葡萄紫）
+  success: 'hsl(154.9, 100%, 37.5%)',      // --success
+  warning: 'hsl(41, 100%, 45%)',           // --warning
+  error: 'hsl(346.8, 77.2%, 49.8%)',       // --destructive
+  info: 'hsl(199, 89%, 48%)',              // --info（有意保留蓝）
+  muted: 'hsl(197.1, 53.8%, 2.5%, 0.69)',  // --muted-foreground（浅色通道）
 
-  // 渐变色板（用于多系列图表）
+  // 多系列色板：前 5 来自 OR stats 页实测（非 shadcn chart-1..5 oklch）；
+  // 第 6 紫保留 —— DeviceMetricsChart 直取 palette[5]（CPU），不可缩到 5 色。
   palette: [
-    'hsl(217, 91%, 60%)',   // 蓝
-    'hsl(142, 71%, 45%)',   // 绿
-    'hsl(38, 92%, 50%)',    // 橙
-    'hsl(0, 84.2%, 60.2%)', // 红
-    'hsl(199, 89%, 48%)',   // 青
-    'hsl(271, 81%, 56%)',   // 紫
+    '#0088fe',
+    '#00c49f',
+    '#ffbb28',
+    '#ff8042',
+    'tomato',
+    '#8b5cf6',
   ],
 } as const;
 

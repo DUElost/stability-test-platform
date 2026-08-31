@@ -29,71 +29,97 @@
   --color-popover-foreground: hsl(var(--popover-foreground));
   --color-card: hsl(var(--card));
   --color-card-foreground: hsl(var(--card-foreground));
+  /* sidebar 存 hex（对齐 OR），不走 hsl(var(...)) */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
-  --font-sans: 'Noto Sans SC Variable', system-ui, sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  --font-sans: 'Plus Jakarta Sans Variable', 'Noto Sans SC Variable', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
 }
 
 @layer base {
+  /* OpenRouter grape theme（实测导出）→ STP；dark 用 224 锌灰套，不用荧光 primary / 冷黑套 */
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 240 50% 99.2%;
+    --foreground: 197.1 53.8% 2.5%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 197.1 53.8% 2.5%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 217 91% 60%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 210 40% 98%;
-    --success: 142 71% 45%;
-    --success-foreground: 210 40% 98%;
+    --popover-foreground: 197.1 53.8% 2.5%;
+    --primary: 263.7 90.4% 54.9%;
+    --primary-foreground: 240 50% 99.2%;
+    --secondary: 263.7 90.4% 54.9% / 0.078;
+    --secondary-foreground: 263.7 90.4% 54.9%;
+    --muted: 197.1 53.8% 2.5% / 0.031;
+    --muted-foreground: 197.1 53.8% 2.5% / 0.69;
+    --accent: 263.7 90.4% 54.9% / 0.078;
+    --accent-foreground: 263.7 90.4% 54.9%;
+    --destructive: 346.8 77.2% 49.8%;
+    --destructive-foreground: 240 50% 99.2%;
+    --warning: 41 100% 45%;
+    --warning-foreground: 197.1 53.8% 2.5%;
+    --success: 154.9 100% 37.5%;
+    --success-foreground: 240 50% 99.2%;
+    /* info 有意保留蓝，与葡萄紫 primary 语义分离 */
     --info: 199 89% 48%;
     --info-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 217 91% 60%;
-    --radius: 0.75rem;
+    --border: 197.1 53.8% 2.5% / 0.078;
+    /* 浅色 input 实色，与半透明 border 分开（表单描边可读） */
+    --input: 197.1 25% 92%;
+    --ring: 263.7 90.4% 54.9%;
+    --radius: 0.5rem;
+    --sidebar: #fafafa;
+    --sidebar-foreground: #09090b;
+    --sidebar-primary: #6467f2;
+    --sidebar-primary-foreground: #fafafa;
+    --sidebar-accent: #f4f4f5;
+    --sidebar-accent-foreground: #18181b;
+    --sidebar-border: #e4e4e7;
+    --sidebar-ring: #a1a1aa;
   }
 
   .dark {
-    /* 画布略深、卡片略抬升，实验室弱光下层次更清晰 */
-    --background: 222 28% 8%;
-    --foreground: 210 40% 96%;
-    --card: 222 24% 11%;
-    --card-foreground: 210 40% 96%;
-    --popover: 222 24% 11%;
-    --popover-foreground: 210 40% 96%;
-    --primary: 217 91% 62%;
-    --primary-foreground: 222 47% 11%;
-    --secondary: 217 20% 16%;
-    --secondary-foreground: 210 40% 96%;
-    --muted: 217 18% 15%;
-    --muted-foreground: 215 16% 68%;
-    --accent: 217 20% 16%;
-    --accent-foreground: 210 40% 96%;
-    /* 文字可读性优先（/10 背景用法仍成立） */
-    --destructive: 0 72% 58%;
-    --destructive-foreground: 210 40% 98%;
-    --warning: 38 92% 55%;
-    --warning-foreground: 222 47% 11%;
-    --success: 142 65% 48%;
-    --success-foreground: 222 47% 11%;
+    --background: 224 7% 4%;
+    --foreground: 206 6% 88%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 263.7 90.4% 54.9%;
+    --primary-foreground: 240 50% 99.2%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 346.8 77.2% 49.8%;
+    --destructive-foreground: 240 50% 99.2%;
+    --warning: 42 100% 62%;
+    --warning-foreground: 224 7% 4%;
+    --success: 142 71% 65%;
+    --success-foreground: 224 7% 4%;
     --info: 199 85% 55%;
     --info-foreground: 222 47% 11%;
-    --border: 217 16% 20%;
-    --input: 217 16% 20%;
-    --ring: 217 91% 55%;
+    --border: 240 4.7% 24.9%;
+    --input: 240 4.7% 24.9%;
+    --ring: 263.7 90.4% 62%;
+    --sidebar: #09090b;
+    --sidebar-foreground: #fafafa;
+    --sidebar-primary: #6467f2;
+    --sidebar-primary-foreground: #fafafa;
+    --sidebar-accent: #27272a;
+    --sidebar-accent-foreground: #fafafa;
+    --sidebar-border: #3d3d42;
+    --sidebar-ring: #a1a1aa;
   }
 }
 
@@ -106,6 +132,7 @@
        AA and makes Noto Sans SC (esp. Variable) look soft/grey on dense tables. */
     @apply bg-background text-foreground font-sans;
     margin: 0;
+    font-weight: 450;
     -webkit-font-smoothing: auto;
     -moz-osx-font-smoothing: auto;
   }
