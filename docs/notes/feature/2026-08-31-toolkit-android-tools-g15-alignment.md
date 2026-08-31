@@ -9,7 +9,7 @@
 - 落地状态：P0a Sleep（7ca82b0）/ P0b PowerCycle（8bc00d8）/ P0c GPU（df9305f）已随
   PR #462 分支合入待验收；**真机冒烟未做**（GPU `-e loop 1`×N 等价性、Sleep 闹钟丢场景、
   PowerCycle reboot 循环均需实机验证后开生产 Plan）
-- 真机冒烟（2026-08-31，Sleep P0a，设备 AYCGNX6730000029 / MLD-LX2 userdebug）：setup ✅
+- 真机冒烟（2026-08-31，Sleep P0a，MLD-LX2 userdebug 设备）：setup ✅
   （apk_sha 与资源一致、adb_root=true、服务启动）→ check ⚠️（见下）→ finish ✅
   （final_status=PASS，cycles 2/2，逐条 JSON 落 `{STP_AEE_NFS_ROOT}/sleep/smoke/results/`）。
   **冒烟发现**：① SleepTestService 完成 test_times 后**自停**（设计假设是常驻）——
