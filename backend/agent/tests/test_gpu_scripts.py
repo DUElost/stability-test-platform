@@ -56,6 +56,12 @@ def check_mod():
 
 
 @pytest.fixture(scope="module")
+def check_mod_v102():
+    """gpu_check v1.0.2：bytes 读取二进制日志（冒烟发现 ⑤）。"""
+    return _load("gpu_check_mod_v102", "gpu_check/v1.0.2/gpu_check.py")
+
+
+@pytest.fixture(scope="module")
 def finish_mod():
     return _load("gpu_finish_mod", "gpu_finish/v1.0.0/gpu_finish.py")
 
@@ -223,6 +229,27 @@ class TestSetupFailFast:
 # ---------------------------------------------------------------------------
 # gpu_check：存活/进度/自然收尾
 # ---------------------------------------------------------------------------
+
+
+class TestCheckV102BinaryLog:
+    def test_run_finished_binary_tolerant(self, check_mod_v102, monkeypatch):
+        """test_log.txt 含二进制 protobuf 输出——bytes 模式读取不抛解码错误。"""
+        monkeypatch.setattr(check_mod_v102, "device_serial", lambda: "S1")
+
+        class FakeResult:
+            stdout = b"\xf9\x01\x02\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00GPU_RUN_START test_id=002 rounds=2\nGPU_RUN_END rc=0\n"
+
+        monkeypatch.setattr(check_mod_v102.subprocess, "run", lambda *a, **k: FakeResult())
+        assert check_mod_v102._run_finished() is True
+
+    def test_run_finished_binary_without_marker(self, check_mod_v102, monkeypatch):
+        monkeypatch.setattr(check_mod_v102, "device_serial", lambda: "S1")
+
+        class FakeResult:
+            stdout = b"\xf9\x01\x02\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00GPU_RUN_START test_id=002 rounds=2\n"
+
+        monkeypatch.setattr(check_mod_v102.subprocess, "run", lambda *a, **k: FakeResult())
+        assert check_mod_v102._run_finished() is False
 
 
 class TestCheck:
