@@ -188,9 +188,9 @@ def _aggregate_inventory(
 
 
 def _rule_values_for_project(db: Session, project_id: int) -> list[str]:
-    """项目活跃规则 → match_models 兼容列表（对外 API 契约）。
+    """项目活跃成员型号 → match_models 兼容列表（对外 API 契约）。
 
-    match_models 列已 drop（P1 收尾），此处是唯一读侧派生来源。
+    唯一读侧派生来源（ProjectModel 活跃行）。
     """
     rows = db.execute(
         select(ProjectModel.match_value)
@@ -305,17 +305,27 @@ def _fill_summary(db: Session, project: TestProject) -> ProjectSummaryOut:
 
 def _map_preview(
     db: Session, project: TestProject, models: list[str], reassign_conflicts: bool
-) -> tuple[ProjectMapPreviewOut, list[Device]]:
+) -> tuple[ProjectMapPreviewOut, list[Device], dict[str, str]]:
     names = _normalize_models(models)
     if not names:
         raise HTTPException(status_code=422, detail="models must not be empty")
+    # 设备事实按归一匹配（#644 大小写归一回归：设备 model 可能是混合大小写
+    # 如 Infinix_X1102D，in_(大写) 全等会 miss——UI 勾选设备事实后映射路径
+    # 被锁死）
+    lowered = [n.lower() for n in names]
     devices = (
         db.query(Device)
-        .filter(Device.model.in_(names))
+        .filter(func.lower(Device.model).in_(lowered))
         .all()
     )
-    present = {_blank_to_none(d.model) for d in devices}
-    unknown = [name for name in names if name not in present]
+    # 归一值 → 设备事实原值（apply 写成员行用原值，join 才全等命中）
+    model_facts: dict[str, str] = {}
+    for d in devices:
+        m = _blank_to_none(d.model)
+        if m is not None:
+            model_facts.setdefault(m.upper(), m)
+    present_lower = {(_blank_to_none(d.model) or "").lower() for d in devices}
+    unknown = [name for name in names if name.lower() not in present_lower]
     # 型号级归属（v2.5 D10 派生）：当前项目 = 型号的活跃成员行
     model_to_project = {
         match_value: (pid, key, source)
@@ -357,7 +367,7 @@ def _map_preview(
         conflicts=conflicts,
         unknown_models=unknown,
     )
-    return preview, will
+    return preview, will, model_facts
 
 
 @router.get("", response_model=ApiResponse[list[ProjectSummaryOut]])
@@ -773,7 +783,7 @@ def preview_project_map(
     project = _get_project_or_404(db, project_key)
     _require_user_project(project)
     _require_active_project(project)
-    preview, _devices = _map_preview(
+    preview, _devices, _facts = _map_preview(
         db, project, payload.models, payload.reassign_conflicts
     )
     return ok(preview)
@@ -793,7 +803,7 @@ def apply_project_map(
     project = _get_project_or_404(db, project_key)
     _require_user_project(project)
     _require_active_project(project)
-    preview, to_assign = _map_preview(
+    preview, to_assign, model_facts = _map_preview(
         db, project, payload.models, payload.reassign_conflicts
     )
     if preview.conflicts:
@@ -805,11 +815,14 @@ def apply_project_map(
     # 双归属 INSERT 即 IntegrityError，preview 设备级冲突之外的双保险）。
     # v2.5 语义与 preview 对齐（M3 修正）：SEED 项目占用不算冲突（让位），
     # 仅 USER 项目占用需 reassign_conflicts。
+    # #644 回归修复：existing 按归一匹配（lower(lower 唯一索引口径）——
+    # 混合大小写旧行（如 Infinix_X1102D）必须命中，让位才生效；新行写
+    # **设备事实原值**（model_facts），否则 join 全等 miss 使设备归零。
     for model in preview.models:
         existing = db.execute(
             select(ProjectModel)
             .where(
-                ProjectModel.match_value == model,
+                func.lower(ProjectModel.match_value) == func.lower(model),
                 ProjectModel.is_active.is_(True),
             )
         ).scalar_one_or_none()
@@ -823,11 +836,21 @@ def apply_project_map(
             # SEED 占用或 reassign：旧成员行让位（uq 只约束活跃行）
             existing.is_active = False
         if existing is None or existing.project_id != project.id:
-            db.add(ProjectModel(
-                project_id=project.id,
-                match_value=model,
-                created_by=current_user.id,
-            ))
+            try:
+                db.add(ProjectModel(
+                    project_id=project.id,
+                    match_value=model_facts.get(model, model),
+                    created_by=current_user.id,
+                ))
+                db.flush()  # 立即触发唯一约束检查（IntegrityError 在此抛出）
+            except IntegrityError:
+                # 并发双写最后一道：existing 检查与 INSERT 之间被另一请求
+                # 抢占同一归一型号——409 而非 500（用户可重试）
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"model {model} concurrently claimed by another project",
+                ) from None
     # v2.5 D10 M3：归属派生——apply 只写成员行，不写设备列（无副本可写）
     record_audit(
         db,
@@ -860,12 +883,12 @@ def remove_project_rule(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """ADR-0029 复盘：删除项目的一条活跃型号规则（admin，记审计）。
+    """删除项目的一条活跃型号成员行（admin，记审计）。
 
-    规则表此前只增不减（map/apply 对已归属别的项目的型号 409），错误规则
-    （如生产 A57→MLD_LX2 残留）无法通过平台修正。删除 = 撤回成员声明：
-    型号脱离项目后，该型号设备在派生读路径下立即回归「未映射」（v2.5 D10
-    归属派生化——无副本可写，无需任何收敛机制）。
+    成员声明可撤回（map/apply 对已归属别的项目的型号 409，错误映射
+    如生产 A57→MLD_LX2 残留曾无法通过平台修正）：型号脱离项目后，
+    该型号设备在派生读路径下立即回归「未映射」（v2.5 D10 归属派生化——
+    无副本可写，无需任何收敛机制）。
 
     路由顺序：/{project_key}/rules/{model} 三段静态，与 /{project_key}
     单段、/inventory/* 静态段互不冲突。
