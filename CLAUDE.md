@@ -98,7 +98,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 
 | 日期 | ADR | 决策 |
 |------|-----|------|
-| 2026-08-31 | [0032](docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) | 展锐与 MTK 并列 dedup 归档流水线（Proposed：双轨工具不混用 / 归档与 Watcher 分层 / #463 P2 spike 可 Proposed 下先行；P1 须 Accepted + D4 终裁） |
+| 2026-08-31 | [0032](docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) | 展锐与 MTK 并列日志链路（**Accepted** v0.6：统一 platform 路由；Watcher w1 + 归档 D4c；B1 路径分区双 merge；#220 按 platform 分支） |
 | 2026-08-27 | [0031](docs/adr/ADR-0031-platform-ai-assistant.md) | 平台 AI 助手（Accepted v1.5：T0–T3 运维域自治 / RunConsole 白名单执行 / 角色裁剪工具面；未配 Key 降级） |
 | 2026-08-19 | [0030](docs/adr/ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（Accepted v1.8：P0/P1 ✅、D6 真机冒烟 ✅、mtbf 绑定翻转硬拒；余 P2 前端） |
 | 2026-08-19 | [0029](docs/adr/ADR-0029-project-taxonomy-and-param-layering.md) | 项目分类域·TestProject 登记簿（Accepted v2.5 派生归属重设计：归属改 JOIN 删 device.project_id、哨兵出表、facet 减列；D1/D4/D5/D7/D8/D9 挂起） |
