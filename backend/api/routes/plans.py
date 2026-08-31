@@ -91,9 +91,9 @@ class PlanCreate(BaseModel):
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     steps: List[PlanStepIn] = Field(default_factory=list)
-    # ADR-0029 D2/D6（#405）+ P1-B2：归属项目与专项**双必填**（F2 口径传
-    # key）；运维型 Plan 选 GENERIC（「通用（不限项目）」哨兵）——NULL 不再存在
-    project_key: str
+    # ADR-0029 D2/D6 + v2.5 D11：归属项目可选（None = 显式「不限」，UI
+    # 二选一单选强制选择）；专项必填（F2 口径传 key）
+    project_key: Optional[str] = None
     specialty_key: str
     # ADR-0030 v1.4（#404 PR-B）：套件绑定，对外引用键 = 套件 name
     suite_name: Optional[str] = None
@@ -118,9 +118,9 @@ class PlanUpdate(BaseModel):
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     steps: Optional[List[PlanStepIn]] = None
-    # ADR-0029 D2/D6（#405）+ P1-B2：更新必含 project_key / specialty_key
-    # （归属不可清除——GENERIC 是显式「不限」）；语义随 fields_set
-    project_key: str
+    # ADR-0029 D2/D6 + v2.5 D11：归属可选（None = 显式「不限」）；语义随
+    # fields_set
+    project_key: Optional[str] = None
     specialty_key: str
     # ADR-0030 v1.4（#404 PR-B）：同 fields_set 语义——显式 null = 解绑套件；
     # 解绑即回到 P0 文件真源模式（PR-C 起托管门禁不再适用）
@@ -138,8 +138,8 @@ class PlanChainTailCreate(BaseModel):
     name: str
     description: Optional[str] = None
     steps: List[PlanStepIn] = Field(default_factory=list)
-    # ADR-0029 P1-B2：链尾 Plan 同样双必填（归属与专项）
-    project_key: str
+    # ADR-0029 + v2.5 D11：链尾 Plan 归属可选（None = 显式「不限」）；专项必填
+    project_key: Optional[str] = None
     specialty_key: str
     # 链尾版本令牌(乐观锁):客户端加载链尾时的 updated_at,与链尾当前值
     # 不一致则整体 409 回滚。客户端无法确定链尾(超出最近 200 条窗口)时

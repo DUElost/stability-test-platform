@@ -67,10 +67,13 @@ def _platforms_map(db: Session, project_ids: list[int]) -> dict[int, list[str]]:
     """
     if not project_ids:
         return {}
+    # v2.5 D10：平台按成员型号派生（device.model ⋈ project_model）
     rows = db.execute(
-        select(Device.project_id, Device.platform)
+        select(ProjectModel.project_id, Device.platform)
+        .join(Device, Device.model == ProjectModel.match_value)
         .where(
-            Device.project_id.in_(project_ids),
+            ProjectModel.project_id.in_(project_ids),
+            ProjectModel.is_active.is_(True),
             Device.platform.is_not(None),
         )
         .distinct()
@@ -87,10 +90,15 @@ def _summary_rows(db: Session) -> dict[int, tuple[int, int]]:
     pids = [pid for (pid,) in projects]
     if not pids:
         return {}
+    # v2.5 D10：设备数按成员型号派生（device.model ⋈ project_model）
     device_counts = dict(
-        db.query(Device.project_id, func.count(Device.id))
-        .filter(Device.project_id.in_(pids))
-        .group_by(Device.project_id)
+        db.query(ProjectModel.project_id, func.count(Device.id))
+        .join(Device, Device.model == ProjectModel.match_value)
+        .filter(
+            ProjectModel.project_id.in_(pids),
+                        ProjectModel.is_active.is_(True),
+        )
+        .group_by(ProjectModel.project_id)
         .all()
     )
     run_counts = dict(
@@ -173,8 +181,7 @@ def _rule_values_for_project(db: Session, project_id: int) -> list[str]:
         select(ProjectModel.match_value)
         .where(
             ProjectModel.project_id == project_id,
-            ProjectModel.match_type == "MODEL",
-            ProjectModel.is_active.is_(True),
+                        ProjectModel.is_active.is_(True),
         )
         .order_by(ProjectModel.match_value)
     ).scalars().all()
@@ -188,8 +195,7 @@ def _model_to_projects(db: Session) -> dict[str | None, set[str]]:
         select(ProjectModel.match_value, TestProject.project_key)
         .join(TestProject, TestProject.id == ProjectModel.project_id)
         .where(
-            ProjectModel.match_type == "MODEL",
-            ProjectModel.is_active.is_(True),
+                        ProjectModel.is_active.is_(True),
         )
     ).all()
     for raw, key in rows:
@@ -217,8 +223,7 @@ def _inventory_summary(db: Session, items: list[InventoryModelOut]) -> Inventory
     # ADR-0029 v2.5：严格未映射口径——型号无活跃成员行的设备数
     # （与设备页 ?unassigned=true 一致；型号级归属函数，无逐设备例外）。
     mapped_models = select(ProjectModel.match_value).where(
-        ProjectModel.match_type == "MODEL",
-        ProjectModel.is_active.is_(True),
+                ProjectModel.is_active.is_(True),
     )
     unassigned_devices = db.query(func.count(Device.id)).filter(
         or_(Device.model.is_(None), ~Device.model.in_(mapped_models))
@@ -457,7 +462,6 @@ def promote_seed_project(
     for model in models:
         db.add(ProjectModel(
             project_id=seed.id,
-            match_type="MODEL",
             match_value=model,
             created_by=current_user.id,
         ))
@@ -677,8 +681,7 @@ def apply_project_map(
         existing = db.execute(
             select(ProjectModel)
             .where(
-                ProjectModel.match_type == "MODEL",
-                ProjectModel.match_value == model,
+                                ProjectModel.match_value == model,
                 ProjectModel.is_active.is_(True),
             )
         ).scalar_one_or_none()
@@ -690,29 +693,10 @@ def apply_project_map(
         if existing is None:
             db.add(ProjectModel(
                 project_id=project.id,
-                match_type="MODEL",
                 match_value=model,
                 created_by=current_user.id,
             ))
-    # 设备重算：pinned 设备（人工钉住）不被规则覆盖
-    for device in to_assign:
-        if device.project_pinned:
-            continue
-        from_key = device.project.project_key if device.project else None
-        device.project_id = project.id
-        record_audit(
-            db,
-            action="assign_project",
-            resource_type="device",
-            resource_id=device.id,
-            details={
-                "project_key": project.project_key,
-                "from_project_key": from_key,
-            },
-            user_id=current_user.id,
-            username=current_user.username,
-            request=request,
-        )
+    # v2.5 D10 M3：归属派生——apply 只写成员行，不写设备列（无副本可写）
     record_audit(
         db,
         action="apply_project_model",
@@ -747,10 +731,9 @@ def remove_project_rule(
     """ADR-0029 复盘：删除项目的一条活跃型号规则（admin，记审计）。
 
     规则表此前只增不减（map/apply 对已归属别的项目的型号 409），错误规则
-    （如生产 A57→MLD_LX2 残留）无法通过平台修正。删除 = 撤回声明：
-    已归属设备保持现状**不重算**（心跳触发条件收窄，已归属设备不会自动
-    收敛）；未归属/新接入设备按新规则状态归位。需要立即纠正存量归属时
-    用 POST /{key}/rules/recompute 显式重算。
+    （如生产 A57→MLD_LX2 残留）无法通过平台修正。删除 = 撤回成员声明：
+    型号脱离项目后，该型号设备在派生读路径下立即回归「未映射」（v2.5 D10
+    归属派生化——无副本可写，无需任何收敛机制）。
 
     路由顺序：/{project_key}/rules/{model} 三段静态，与 /{project_key}
     单段、/inventory/* 静态段互不冲突。
@@ -761,8 +744,7 @@ def remove_project_rule(
         select(ProjectModel)
         .where(
             ProjectModel.project_id == project.id,
-            ProjectModel.match_type == "MODEL",
-            ProjectModel.match_value == model,
+                        ProjectModel.match_value == model,
             ProjectModel.is_active.is_(True),
         )
     ).scalar_one_or_none()
@@ -790,82 +772,6 @@ def remove_project_rule(
     return ok({"project_key": project.project_key, "model": model})
 
 
-@router.post(
-    "/{project_key}/rules/recompute",
-    response_model=ApiResponse[dict],
-)
-def recompute_project_rules(
-    project_key: str,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
-):
-    """按活跃规则重算存量设备归属（显式纠正，不依赖心跳）。
-
-    心跳触发条件收窄后，已归属设备不会因规则变化自动收敛——规则改了但
-    设备停留在旧归属（生产 MLD_LX3 69 台 NULL + 规则指向 V552AA）。
-    本端点对该项目每条活跃规则覆盖的型号执行一次「按规则归位」：
-    pinned 跳过、已正确跳过、NULL 或归属其他项目 → 归入本项目（逐台
-    audit，reason=rule_recompute）+ 汇总 audit。返回移动台数。
-    """
-    project = _get_project_or_404(db, project_key)
-    _require_user_project(project)
-    rules = db.execute(
-        select(ProjectModel)
-        .where(
-            ProjectModel.project_id == project.id,
-            ProjectModel.match_type == "MODEL",
-            ProjectModel.is_active.is_(True),
-        )
-    ).scalars().all()
-    moved = 0
-    for rule in rules:
-        devices = db.query(Device).filter(
-            Device.model == rule.match_value,
-            Device.project_pinned.is_(False),
-        ).all()
-        for device in devices:
-            if device.project_id == project.id:
-                continue
-            from_key = device.project.project_key if device.project else None
-            device.project_id = project.id
-            record_audit(
-                db,
-                action="assign_project",
-                resource_type="device",
-                resource_id=device.id,
-                details={
-                    "project_key": project.project_key,
-                    "from_project_key": from_key,
-                    "reason": "rule_recompute",
-                },
-                user_id=current_user.id,
-                username=current_user.username,
-                request=request,
-            )
-            moved += 1
-    record_audit(
-        db,
-        action="recompute_project_rules",
-        resource_type="test_project",
-        resource_id=project.id,
-        details={
-            "project_key": project.project_key,
-            "rules": len(rules),
-            "devices_moved": moved,
-        },
-        user_id=current_user.id,
-        username=current_user.username,
-        request=request,
-    )
-    db.commit()
-    emit_project_changed(project.id, "recomputed")
-    return ok({
-        "project_key": project.project_key,
-        "rules": len(rules),
-        "devices_moved": moved,
-    })
-
 
 @router.get(
     "/{project_key}/models",
@@ -884,8 +790,7 @@ def list_project_models(
         .join(ProjectModel, Device.model == ProjectModel.match_value)
         .filter(
             ProjectModel.project_id == project.id,
-            ProjectModel.match_type == "MODEL",
-            ProjectModel.is_active.is_(True),
+                        ProjectModel.is_active.is_(True),
         )
         .all()
     )
