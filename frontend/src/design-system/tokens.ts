@@ -387,12 +387,12 @@ export const SEGMENTED_DARK = {
   item: 'rounded-full border bg-card px-2.5 py-1 text-[11px] font-semibold text-muted-foreground hover:border-border hover:text-foreground',
 } as const;
 
-/** 仪表盘 KPI 摘要卡 */
+/** 仪表盘 KPI 摘要卡（与 STAT 同密度：rounded-lg + flat） */
 export const DASHBOARD_SUMMARY_CARD = {
-  root: cn('rounded-2xl border bg-card px-4 py-3', ELEVATION.flat),
-  label: 'text-[11px] uppercase tracking-[0.16em] text-muted-foreground',
-  panel: cn('rounded-[24px] border bg-card p-4', ELEVATION.flat),
-  sectionMuted: 'rounded-[24px] border bg-muted/50 p-4',
+  root: cn('rounded-lg border bg-card px-4 py-3', ELEVATION.flat),
+  label: STAT.label,
+  panel: cn('rounded-lg border bg-card p-4', ELEVATION.flat),
+  sectionMuted: 'rounded-lg border bg-muted/50 p-4',
 } as const;
 
 /** 包名榜行状态 */

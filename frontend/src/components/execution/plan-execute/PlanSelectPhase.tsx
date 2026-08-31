@@ -96,7 +96,7 @@ export function PlanSelectPhase({
       className="grid min-h-[min(70vh,720px)] flex-1 gap-3 lg:grid-cols-[minmax(280px,1.1fr)_minmax(0,0.9fr)]"
       data-testid="plan-execute-plan-layout"
     >
-      <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
+      <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card shadow-none">
         <div className="shrink-0 border-b px-3 py-2.5 text-sm font-semibold">选择测试计划</div>
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
           {plansLoading ? (
@@ -160,7 +160,7 @@ export function PlanSelectPhase({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
+      <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card shadow-none">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2.5">
           <span className="text-sm font-semibold">Plan 详情</span>
           {selectedPlan && (

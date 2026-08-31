@@ -50,7 +50,7 @@ export default function PrecheckSummaryRow({
       type="button"
       data-testid="precheck-row"
       onClick={onToggle}
-      className="mx-1 flex w-full items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-left shadow-sm hover:bg-muted/50"
+      className="mx-1 flex w-full items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-left shadow-none hover:bg-muted/50"
     >
       <ChevronDown
         className={cn(

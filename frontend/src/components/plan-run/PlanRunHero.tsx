@@ -112,7 +112,7 @@ export default function PlanRunHero({
   };
 
   return (
-    <div className={cn('rounded-xl border overflow-hidden', ELEVATION.sm, heroCls)}>
+    <div className={cn('rounded-lg border overflow-hidden', ELEVATION.flat, heroCls)}>
       <div className="px-4 pt-3 pb-1">
         <div className={cn('text-[11px] mb-0.5', TEXT.caption)}>
           <span className="font-semibold text-primary">
@@ -134,7 +134,7 @@ export default function PlanRunHero({
         {pill && run && (
           <div
             data-testid="plan-run-status-pill"
-            className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 shadow-sm ${badgeCls}`}
+            className={`inline-flex items-center gap-2 rounded-md border px-3.5 py-2 shadow-none ${badgeCls}`}
           >
             {isRunning && (
               <span className="relative flex h-2.5 w-2.5 shrink-0">

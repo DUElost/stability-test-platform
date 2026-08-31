@@ -17,7 +17,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { TEXT } from '@/design-system/tokens';
+import { STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDurationSeconds } from '@/utils/format';
 import { DuplicateLaunchBanner } from './DuplicateLaunchBanner';
@@ -120,39 +120,39 @@ export function DispatchCockpit({
         ) : null}
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl border bg-card p-4">
-            <div className={cn('text-xs', TEXT.subtitle)}>本次设备</div>
-            <div className="mt-1 text-2xl font-semibold">{devices.length}</div>
-            <div className={cn('mt-1 text-xs', TEXT.subtitle)}>跨 {capacityRows.length} 节点</div>
+          <div className="rounded-lg border bg-card p-4">
+            <p className={STAT.label}>本次设备</p>
+            <p className={cn(STAT.value, 'mt-2')}>{devices.length}</p>
+            <p className={cn('mt-1 text-xs', TEXT.subtitle)}>跨 {capacityRows.length} 节点</p>
           </div>
-          <div className="rounded-xl border bg-card p-4">
-            <div className={cn('text-xs', TEXT.subtitle)}>可立即消化</div>
-            <div className="mt-1 text-2xl font-semibold">{unknownCapacityCount ? '—' : immediateCount}</div>
-            <div className={cn('mt-1 text-xs', TEXT.subtitle)}>按心跳剩余槽位合计</div>
+          <div className="rounded-lg border bg-card p-4">
+            <p className={STAT.label}>可立即消化</p>
+            <p className={cn(STAT.value, 'mt-2')}>{unknownCapacityCount ? '—' : immediateCount}</p>
+            <p className={cn('mt-1 text-xs', TEXT.subtitle)}>按心跳剩余槽位合计</p>
           </div>
-          <div className="rounded-xl border bg-card p-4">
-            <div className={cn('text-xs', TEXT.subtitle)}>将排队</div>
-            <div className={cn('mt-1 text-2xl font-semibold', queuedCount > 0 && 'text-warning')}>
+          <div className="rounded-lg border bg-card p-4">
+            <p className={STAT.label}>将排队</p>
+            <p className={cn(STAT.value, 'mt-2', queuedCount > 0 && 'text-warning')}>
               {unknownCapacityCount ? '—' : queuedCount}
-            </div>
-            <div className={cn('mt-1 text-xs', TEXT.subtitle)}>
+            </p>
+            <p className={cn('mt-1 text-xs', TEXT.subtitle)}>
               {unknownCapacityCount ? `${unknownCapacityCount} 个节点缺槽位数据` : '节点侧容量提示'}
-            </div>
+            </p>
           </div>
-          <div className="rounded-xl border bg-card p-4">
-            <div className={cn('flex items-center gap-1 text-xs', TEXT.subtitle)}>
+          <div className="rounded-lg border bg-card p-4">
+            <p className={cn(STAT.label, 'flex items-center gap-1')}>
               <Clock3 className="h-3.5 w-3.5" />历史墙钟参考
-            </div>
-            <div className="mt-1 text-2xl font-semibold">
+            </p>
+            <p className={cn(STAT.value, 'mt-2')}>
               {wallClock.averageSeconds == null
                 ? '暂无'
                 : `~${formatDurationSeconds(wallClock.averageSeconds, 'compact', '暂无')}`}
-            </div>
-            <div className={cn('mt-1 text-xs', TEXT.subtitle)}>
+            </p>
+            <p className={cn('mt-1 text-xs', TEXT.subtitle)}>
               {wallClock.averageSeconds == null
                 ? '至少需要 2 次有效终态样本'
                 : `近 ${wallClock.sampleCount} 次整次均值 · 长稳可能为天级`}
-            </div>
+            </p>
           </div>
         </div>
 
