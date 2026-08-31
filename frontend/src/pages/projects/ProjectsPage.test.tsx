@@ -247,8 +247,6 @@ describe('ProjectsPage', () => {
         project_key: 'HONOR-CAMERA',
         display_name: '荣耀相机',
         customer: null,
-        form_factor: null,
-        product_line: null,
         jira_project_key: null,
       });
     });
