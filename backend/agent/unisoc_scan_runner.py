@@ -10,10 +10,8 @@ from pathlib import Path
 from typing import List, Optional, Sequence
 
 try:
-    from backend.agent.aee.paths import get_aee_local_root
     from backend.agent.scan_runner import ScanRunner, _SCAN_SUBPROCESS_TIMEOUT
 except ImportError:
-    from agent.aee.paths import get_aee_local_root
     from agent.scan_runner import ScanRunner, _SCAN_SUBPROCESS_TIMEOUT
 
 logger = logging.getLogger(__name__)
