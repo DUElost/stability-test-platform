@@ -1,5 +1,5 @@
 import type { PlanRunDevicesPayload } from '@/utils/api/types';
-import { BORDER, KPI_TONE, SURFACE, type KpiTone } from '@/design-system/tokens';
+import { BORDER, KPI_TONE, STAT, SURFACE, type KpiTone } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import SectionHeader from './SectionHeader';
 
@@ -24,14 +24,14 @@ function Cell({
   return (
     <div
       className={cn(
-        'flex flex-col items-center justify-center rounded-lg border py-2.5 px-1 shadow-sm',
+        'flex flex-col items-center justify-center rounded-lg border py-2.5 px-1 shadow-none',
         SURFACE.elevated,
         BORDER.default,
       )}
       data-testid={testId}
     >
-      <span className={cn('text-2xl leading-none', cls.value)}>{value}</span>
-      <span className={cn('mt-1 text-[11px]', cls.label)}>{label}</span>
+      <span className={cn(STAT.value, 'text-2xl', cls.value)}>{value}</span>
+      <span className={cn('mt-1', STAT.label, cls.label)}>{label}</span>
     </div>
   );
 }

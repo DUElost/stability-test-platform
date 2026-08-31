@@ -38,7 +38,7 @@ export function DeviceNodeRail({
 }: DeviceNodeRailProps) {
   return (
     <aside
-      className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-card shadow-sm"
+      className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card shadow-none"
       data-testid="plan-execute-node-rail"
     >
       <div className="shrink-0 border-b px-3 py-2.5 text-sm font-semibold">节点</div>

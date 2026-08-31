@@ -173,7 +173,7 @@ export default function DispatchGateCard({
   return (
     <div
       data-testid="dispatch-gate-card"
-      className={cn('rounded-xl border bg-card', ELEVATION.sm)}
+      className={cn('rounded-lg border bg-card', ELEVATION.flat)}
     >
       <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
         <div className="inline-flex items-center gap-1.5">

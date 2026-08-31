@@ -1225,7 +1225,7 @@ export default function PlanExecutePage() {
                 }
                 stage={
                   <section
-                    className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-card shadow-none"
+                    className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-card shadow-none"
                     data-testid="plan-execute-stage"
                   >
                     <DeviceFilterBar

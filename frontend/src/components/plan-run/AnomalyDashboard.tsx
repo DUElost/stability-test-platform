@@ -23,6 +23,7 @@ import {
   INTERACTIVE,
   KPI_TONE,
   PACKAGE_ROW,
+  PANEL,
   SEGMENTED_DARK,
   TEXT,
   packageRankClass,
@@ -545,7 +546,7 @@ export default function AnomalyDashboard({
     <>
       <section
         data-testid="watcher-summary"
-        className="space-y-4 rounded-[28px] border bg-gradient-to-b from-muted/40 to-card p-4 shadow-sm"
+        className={cn(PANEL.root, 'space-y-4 p-4')}
     >
       <SectionHeader
         title="异常仪表盘"
@@ -572,7 +573,7 @@ export default function AnomalyDashboard({
       )}
 
       {isError && (
-        <div className={cn('flex h-28 items-center justify-center gap-2 rounded-2xl text-sm', ALERT_BANNER.destructive)}>
+        <div className={cn('flex h-28 items-center justify-center gap-2 rounded-lg text-sm', ALERT_BANNER.destructive)}>
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>异常数据加载失败，请稍后重试</span>
         </div>
@@ -604,11 +605,11 @@ export default function AnomalyDashboard({
           </div>
 
           {platformBuckets.length > 0 && (
-            <div data-testid="watcher-platform-buckets" className="rounded-2xl border border-border/60 bg-card/60 p-3">
+            <div data-testid="watcher-platform-buckets" className="rounded-lg border border-border/60 bg-card/60 p-3">
               <div className={cn('mb-2 text-sm font-medium', TEXT.heading)}>按平台分桶</div>
               <div className="flex flex-wrap gap-2">
                 {platformBuckets.map((bucket) => (
-                  <div key={bucket.platform} className="rounded-xl border border-border/50 bg-background/80 px-3 py-2 text-sm">
+                  <div key={bucket.platform} className="rounded-lg border border-border/50 bg-background/80 px-3 py-2 text-sm">
                     <span className="font-medium">{bucket.platform}</span>
                     <span className={cn('ml-2', TEXT.subtitle)}>
                       信号 {bucket.total} · 设备 {bucket.affected_device_count}
@@ -901,7 +902,7 @@ export default function AnomalyDashboard({
                 <InlineEmpty className="py-3">运行开始前无遗留异常记录</InlineEmpty>
               )
             ) : (
-              <div className={cn('rounded-2xl border border-dashed bg-card/70 px-4 py-3 text-sm', TEXT.subtitle)}>
+              <div className={cn('rounded-lg border border-dashed bg-card/70 px-4 py-3 text-sm', TEXT.subtitle)}>
                 该计划运行未记录新增/遗留来源标记，无法拆分运行前遗留
               </div>
             )}
