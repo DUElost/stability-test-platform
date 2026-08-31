@@ -314,7 +314,7 @@ def _map_preview(
                     device_id=device.id,
                     serial=device.serial,
                     model=_blank_to_none(device.model),
-                    from_project_key=entry[2],
+                    from_project_key=entry[1],
                 )
             )
             continue

@@ -612,6 +612,8 @@ class TestMapProject:
         # 型号级冲突：MLD_LX2 已是 USER 项目 proj-b 的成员 → 整型设备都在冲突
         assert preview["will_assign"] == 0
         assert {c["serial"] for c in preview["conflicts"]} == {"s-conflict", "s-free"}
+        # #644 P1：from_project_key 是占用方 key（proj-b），不是 source（'USER'）
+        assert {c["from_project_key"] for c in preview["conflicts"]} == {"proj-b"}
 
         blocked = client.post(
             "/api/v1/projects/proj-a/map/apply",
