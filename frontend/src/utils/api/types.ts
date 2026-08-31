@@ -2014,6 +2014,7 @@ export interface AiAssistantAction {
   status: AiActionStatus;
   console_run_id: string | null;
   result_summary: string | null;
+  preview_text: string | null;
   requested_by: string;
   decided_by: string | null;
   created_at: string;

@@ -37,6 +37,7 @@ from backend.services.ai_assistant.tools import (
     allowed_tool_names,
     build_runconsole_plan,
     execute_query,
+    normalize_tool_params,
     to_openai_tools,
 )
 
@@ -334,9 +335,29 @@ def _enqueue_continuation(session_id: int) -> None:
         logger.exception("ai_continuation_enqueue_error session=%s", session_id)
 
 
-def _run_service_tool(name: str, params: dict) -> str:
+def _run_service_tool(
+    name: str,
+    params: dict,
+    *,
+    triggered_by: str = "ai-assistant",
+    requester_user_id: int | None = None,
+) -> str:
     """T2 服务型工具（非 RunConsole）：在 worker 线程执行，返回结果摘要。"""
     import os
+
+    if name == "dispatch_plan_run":
+        from backend.services.ai_assistant.dispatch import run_dispatch_plan_run
+
+        db = SessionLocal()
+        try:
+            return run_dispatch_plan_run(
+                db,
+                params,
+                triggered_by=triggered_by,
+                requester_user_id=requester_user_id,
+            )
+        finally:
+            db.close()
 
     if name == "scan_script_catalog":
         from backend.services.script_catalog import scan_script_root
@@ -431,6 +452,8 @@ def execute_action(action_id: int) -> None:
             )
             return
 
+        triggered_by = getattr(requester, "username", None) or f"user:{action.requested_by_user_id}"
+
         if spec.kind == "runconsole":
             plan = build_runconsole_plan(action.tool_name, action.params or {})
             action.status = "running"
@@ -457,7 +480,12 @@ def execute_action(action_id: int) -> None:
             action.status = "running"
             db.commit()
             try:
-                summary = _run_service_tool(action.tool_name, action.params or {})
+                summary = _run_service_tool(
+                    action.tool_name,
+                    action.params or {},
+                    triggered_by=triggered_by,
+                    requester_user_id=action.requested_by_user_id,
+                )
             except Exception as exc:  # noqa: BLE001 - 服务工具失败即终态
                 _finalize_action(action_id, "failed", str(exc)[:500])
                 return
@@ -634,42 +662,43 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                     elif not user_may_invoke_tool(user_row, spec):
                         note = f"无权使用工具 {tc.name}（需要更高权限）"
                     else:
-                        mode = _decide_execution_mode(spec, cfg, user_row)
-                        action = _create_action(
-                            db, session,
-                            tool_name=tc.name, arguments=tc.arguments, mode=mode,
-                        )
-                        proposed_action_id = action.id
-                        if mode == "proposed":
-                            note = (
-                                f"该操作需要管理员审批（操作卡 #{action.id}）。"
-                                "请在平台上批准或拒绝。"
-                            )
-                            yielded = True
+                        try:
+                            tool_args = normalize_tool_params(tc.name, tc.arguments)
+                        except ToolValidationError as exc:
+                            note = f"参数校验失败：{exc}"
                         else:
-                            try:
-                                await asyncio.to_thread(execute_action, action.id)
-                            except Exception as exc:  # noqa: BLE001
-                                note = f"启动执行失败：{exc}"
+                            mode = _decide_execution_mode(spec, cfg, user_row)
+                            action = _create_action(
+                                db, session,
+                                tool_name=tc.name, arguments=tool_args, mode=mode,
+                            )
+                            proposed_action_id = action.id
+                            if mode == "proposed":
+                                note = (
+                                    f"该操作需要管理员审批（操作卡 #{action.id}）。"
+                                    "请在平台上批准或拒绝。"
+                                )
                                 yielded = True
                             else:
-                                db.refresh(action)
-                                if action.status in _ACTION_TERMINAL:
-                                    # 内联出终态（服务型工具 / RunKeyBusy / spawn 失败）：
-                                    # 此刻续轮与本轮 SAQ job 同 key 会被静默丢弃
-                                    # （saq enqueue 对已存在的 key 返回 None），所以必须
-                                    # 在本轮把真实结果喂回模型——也不能谎报「已开始执行」
-                                    note = (
-                                        f"操作卡 #{action.id} 已结束（{action.status}）："
-                                        f"{action.result_summary or ''}"
-                                    )
-                                else:
-                                    note = (
-                                        f"已开始执行（操作卡 #{action.id}），"
-                                        "完成后我会汇报结果。"
-                                    )
+                                try:
+                                    await asyncio.to_thread(execute_action, action.id)
+                                except Exception as exc:  # noqa: BLE001
+                                    note = f"启动执行失败：{exc}"
                                     yielded = True
-                                    awaiting_continuation = True
+                                else:
+                                    db.refresh(action)
+                                    if action.status in _ACTION_TERMINAL:
+                                        note = (
+                                            f"操作卡 #{action.id} 已结束（{action.status}）："
+                                            f"{action.result_summary or ''}"
+                                        )
+                                    else:
+                                        note = (
+                                            f"已开始执行（操作卡 #{action.id}），"
+                                            "完成后我会汇报结果。"
+                                        )
+                                        yielded = True
+                                        awaiting_continuation = True
 
                     _add_message(
                         db, session, role="tool", content=note, tool_call_id=tc.id or None

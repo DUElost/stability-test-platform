@@ -723,8 +723,46 @@ TOOLS: dict[str, ToolSpec] = {
             parameters=_schema({"host_id": {"type": "string"}}, ["host_id"]),
             tier="T2", kind="service",
         ),
+        ToolSpec(
+            name="dispatch_plan_run",
+            description=(
+                "发起 Plan 手动执行（创建 QUEUED PlanRun 并入准入队列）。"
+                "建议先调用 preview_plan_dispatch 预检。"
+            ),
+            parameters=_schema({
+                "plan_id": {"type": "integer"},
+                "device_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "目标设备 id 列表（须唯一）",
+                },
+                "note": {"type": "string", "description": "可选备注，写入 run_context.note"},
+                "wifi_pool_id": {
+                    "type": "integer",
+                    "description": "含 connect_wifi/monkey_setup 步骤时可选 WiFi 资源池 id",
+                },
+            }, ["plan_id", "device_ids"]),
+            tier="T2", kind="service",
+        ),
     ]
 }
+
+
+def normalize_tool_params(name: str, args: dict | None) -> dict:
+    """执行类工具参数归一化（校验失败抛 ToolValidationError）。"""
+    if name == "dispatch_plan_run":
+        from backend.services.ai_assistant.dispatch import normalize_dispatch_params
+
+        return normalize_dispatch_params(args)
+    return dict(args or {})
+
+
+def describe_tool_action_preview(db: Session, tool_name: str, params: dict) -> str | None:
+    if tool_name == "dispatch_plan_run":
+        from backend.services.ai_assistant.dispatch import describe_dispatch_preview
+
+        return describe_dispatch_preview(db, params)
+    return None
 
 
 def to_openai_tools(allowed_names: set[str] | None = None) -> list[dict[str, Any]]:

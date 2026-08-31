@@ -45,7 +45,7 @@ from backend.services.ai_assistant.orchestrator import (
     get_or_create_config,
     load_effective_config,
 )
-from backend.services.ai_assistant.tools import TOOLS
+from backend.services.ai_assistant.tools import TOOLS, describe_tool_action_preview
 
 router = APIRouter(prefix="/api/v1/ai-assistant", tags=["ai-assistant"])
 logger = logging.getLogger(__name__)
@@ -350,6 +350,9 @@ def _action_out(db: Session, action: AiAssistantAction) -> AiActionOut:
         status=action.status,
         console_run_id=action.console_run_id,
         result_summary=action.result_summary,
+        preview_text=describe_tool_action_preview(
+            db, action.tool_name, dict(action.params or {})
+        ),
         requested_by=requested_by,
         decided_by=decided_by,
         created_at=action.created_at,

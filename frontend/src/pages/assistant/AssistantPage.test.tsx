@@ -80,6 +80,7 @@ function setData(opts?: { messages?: AiChatMessage[] }) {
     status: 'succeeded',
     console_run_id: null,
     result_summary: null,
+    preview_text: null,
     requested_by: 'tester',
     decided_by: null,
     created_at: '2026-08-28T01:00:00Z',

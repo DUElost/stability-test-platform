@@ -71,6 +71,7 @@ class AiActionOut(ORMBaseModel):
     status: str
     console_run_id: str | None = None
     result_summary: str | None = None
+    preview_text: str | None = None
     requested_by: str | None = None
     decided_by: str | None = None
     created_at: datetime | None = None
