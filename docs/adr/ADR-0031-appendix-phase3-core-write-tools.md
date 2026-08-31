@@ -1,9 +1,9 @@
-# ADR-0031 附录 A：阶段三核心业务写操作（Proposed）
+# ADR-0031 附录 A：阶段三核心业务写操作（Accepted）
 
-- 状态：**Proposed**（依赖 D8 已落地；实现 PR 未开）
+- 状态：**Accepted**（#658 合入 `main`，2026-08-31）
 - 优先级：**P1**
 - 日期：2026-08-31
-- 父 ADR：[ADR-0031](./ADR-0031-platform-ai-assistant.md)（Accepted v1.6+）
+- 父 ADR：[ADR-0031](./ADR-0031-platform-ai-assistant.md)（Accepted v1.7+）
 - 前置：[D8 权限对齐 Agent Note](../notes/architecture/2026-08-31-ai-assistant-permission-parity-d8.md)
 
 ## 0. 目标
@@ -21,7 +21,7 @@
 | **T2b** | 改变 PlanRun/Job 运行态（派发、中止、人工干预、归档触发） | **需审批**（操作卡 + 参数预览） | 可按 `plan_id` + `max_devices` 配置自动派发（仅发起人本身有 API 权限时生效，D8） |
 | T2a（既有） | reload、扫脚本、测通知 | 需审批 / 低危 auto | `auto_approve_tools`（仅 whitelistable） |
 
-T2b 自动白名单落库键（建议新增 JSONB 列或扩展现有 config）：
+T2b 自动白名单落库键（`ai_assistant_config.t2b_auto_dispatch_allowlist`，JSONB 列，migration `f7g8h9i0j1k2`）：
 
 ```json
 {
@@ -33,7 +33,7 @@ T2b 自动白名单落库键（建议新增 JSONB 列或扩展现有 config）�
 
 校验：发起人须对该 `plan_id` 具备与 `POST /plans/{id}/run` 同等权限；设备数 ≤ `max_devices`；Plan `is_active`。
 
-## 2. 工具清单（拟新增）
+## 2. 工具清单（已落地）
 
 ### 2.1 P0 — 与「发起 / 止血」直接相关
 
@@ -52,7 +52,6 @@ T2b 自动白名单落库键（建议新增 JSONB 列或扩展现有 config）�
 |--------|------|------|----------|--------------|------|
 | `get_plan_run_watcher_summary` | T0 | query | `GET .../watcher-summary` | false | 运行中崩溃信号 / link_stats |
 | `get_plan_run_log_events` | T0 | query | `GET .../log-events` | false | 终态 DLE 视图 |
-| `get_plan_run_timeline` | T0 | query | `GET .../timeline` | false | 时间线 |
 | `retry_plan_run_dispatch` | **T2b** | service | `POST .../retry-dispatch` | false | precheck 失败后重入队 |
 | `manual_retry_job` | **T2b** | service | `POST .../jobs/{id}/manual-retry` | false | 清除 backoff |
 | `manual_exit_job` | **T2b** | service | `POST .../jobs/{id}/manual-exit` | false | 请求 Agent 退出 patrol |
@@ -62,6 +61,7 @@ T2b 自动白名单落库键（建议新增 JSONB 列或扩展现有 config）�
 
 | 工具名 | 理由 |
 |--------|------|
+| `get_plan_run_timeline` | 只读时间线，T0 即可；未纳入 #658 |
 | `export_plan_run_report` | 只读导出，T0 即可；优先级低于执行链路 |
 | Plan/脚本/项目 CRUD | 配置变更，保留 UI + 变更评审 |
 | dedup merge / jira submit | 控制面长任务，另评 RunConsole 封装 |
@@ -112,14 +112,16 @@ T2b 提案须展示：**Plan 名称、专项、设备 SN 列表、主机、wifi_
 | 7 | 幻觉 `device_id` / 跨 host 混选 | 校验拒绝，不占槽位 |
 | 8 | 越权回归 | 现有 D8 用例仍绿 |
 
-## 5. 交付切分（建议 PR 顺序）
+## 5. 交付切分（PR 顺序）
 
-| PR | 内容 | 依赖 |
+| PR | 内容 | 状态 |
 |----|------|------|
-| **PR-A** | T0 深读：`list_plans`, `get_plan_detail`, `preview_plan_dispatch`, `get_plan_run_jobs`, watcher/log-events | ✅ PR #651 |
-| **PR-B** | T2b：`dispatch_plan_run` + 操作卡预览 + 审计 + 验收 1–4 | ✅ PR #653 |
-| **PR-C** | T2b：`abort_plan_run`, `manual_*`, `retry_dispatch`, `trigger_archive` | ✅ PR #655 |
-| **PR-D** | config：`t2b_auto_dispatch_allowlist` + 设置页 | ✅ 本分支 |
+| **D8** | `admin_only` / `authz` / 越权对拍 | ✅ #650 |
+| **PR-A** | T0 深读：`list_plans`, `get_plan_detail`, `preview_plan_dispatch`, `get_plan_run_jobs`, watcher/log-events | ✅ #651 |
+| **PR-B** | T2b：`dispatch_plan_run` + 操作卡预览 + 审计 + 验收 1–4 | ✅ #653 |
+| **PR-C** | T2b：`abort_plan_run`, `manual_*`, `retry_dispatch`, `trigger_archive` | ✅ #655 |
+| **PR-D** | config：`t2b_auto_dispatch_allowlist` + 设置页 | ✅ #656 |
+| **集成** | 合并链合入 `main` | ✅ #658 |
 
 ## 6. 与父 ADR 的关系
 

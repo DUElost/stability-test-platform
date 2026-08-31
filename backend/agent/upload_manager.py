@@ -66,8 +66,10 @@ class UploadManager:
         plan_run_id: int,
         host_id: str,
         org_xls_path: str,
+        *,
+        platform_subdir: str = "",
     ) -> Optional[str]:
-        """Copy _org.xls → {nfs_root}/dedup/{plan_run_id}/{host_id}_{filename}.
+        """Copy _org.xls → {nfs_root}/dedup/{plan_run_id}/[{platform}/]{host_id}_{filename}.
 
         Returns dest path on success, None on failure.
         """
@@ -88,6 +90,8 @@ class UploadManager:
 
         filename = src.name
         dest_dir = Path(self._nfs_root) / "dedup" / str(plan_run_id)
+        if platform_subdir:
+            dest_dir = dest_dir / platform_subdir
         dest_path = dest_dir / f"{host_id}_{filename}"
 
         try:

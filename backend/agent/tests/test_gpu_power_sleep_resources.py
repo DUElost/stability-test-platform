@@ -1,0 +1,57 @@
+"""GPU/PowerCycle/Sleep setup 的资源目录透传（config 规范化丢键修复）。
+
+2026-08-31 实证：gpu_config/powercycle_config/sleep_config 只保留已知
+业务键，resources_dir 键被丢弃 → STP_STEP_PARAMS 里传的
+gpu_resources_dir 等失效，脚本回落默认路径（host 本地资源缺失报错）。
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+
+def _load(name: str, rel: str):
+    script_dir = Path(__file__).resolve().parents[2] / rel
+    sys.path.insert(0, str(script_dir))
+    spec = importlib.util.spec_from_file_location(name, script_dir / "_lib.py")
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+gpu = _load("gpu_lib_v102", "agent/scripts/gpu_setup/v1.0.2")
+power = _load("power_lib_v101", "agent/scripts/powercycle_setup/v1.0.1")
+sleep = _load("sleep_lib_v101", "agent/scripts/sleep_setup/v1.0.1")
+
+
+def test_gpu_config_passthrough_resources_dir(monkeypatch):
+    monkeypatch.delenv("STP_GPU_RESOURCES_DIR", raising=False)
+    cfg = gpu.gpu_config({"project": "gpu10min", "rounds": 5,
+                          "gpu_resources_dir": "/mnt/stp-aee/gpu"})
+    assert cfg["gpu_resources_dir"] == "/mnt/stp-aee/gpu"
+    assert gpu.resources_dir(cfg) == Path("/mnt/stp-aee/gpu/gpu10min")
+
+
+def test_gpu_config_env_fallback(monkeypatch):
+    monkeypatch.setenv("STP_GPU_RESOURCES_DIR", "/nfs/gpu")
+    cfg = gpu.gpu_config({"project": "p"})
+    assert cfg["gpu_resources_dir"] == "/nfs/gpu"
+
+
+def test_powercycle_config_passthrough(monkeypatch):
+    monkeypatch.delenv("STP_POWER_CYCLE_RESOURCES_DIR", raising=False)
+    cfg = power.powercycle_config({"project": "p",
+                                   "powercycle_resources_dir": "/mnt/stp-aee/resources/power-cycle"})
+    assert cfg["powercycle_resources_dir"] == "/mnt/stp-aee/resources/power-cycle"
+    assert power.resources_dir(cfg) == Path("/mnt/stp-aee/resources/power-cycle/p")
+
+
+def test_sleep_config_passthrough(monkeypatch):
+    monkeypatch.delenv("STP_SLEEP_RESOURCES_DIR", raising=False)
+    cfg = sleep.sleep_config({"project": "p",
+                              "sleep_resources_dir": "/mnt/stp-aee/resources/sleep"})
+    assert cfg["sleep_resources_dir"] == "/mnt/stp-aee/resources/sleep"
+    assert sleep.resources_dir(cfg) == Path("/mnt/stp-aee/resources/sleep/p")

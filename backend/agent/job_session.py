@@ -29,7 +29,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -289,77 +288,43 @@ class JobSession:
     # 私有
     # ------------------------------------------------------------------
 
-    def _platform_supports_aee(self) -> bool:
-        """#73: AEE 是联发科专有机制,展锐/高通机型无 /data/aee_exp。
-
-        非目标平台直接跳过 reconciler — 既省掉必然空跑的 baseline 轮次,
-        也让日志给出「平台不支持」而不是含糊的 no_active_watcher。
-
-        探测失败(UNKNOWN)默认放行:宁可让 MTK 机型在 adb 抖动时多跑一轮,
-        也不要因为一次探测失败而漏采崩溃信号。
-        """
+    def _resolve_reconciler_class(self, platform: str):
+        """ADR-0032 D6: route reconciler by device.platform."""
         try:
-            from .device_platform import PLATFORM_UNKNOWN, detect_device_platform
+            from .device_platform import (
+                PLATFORM_MTK,
+                PLATFORM_QCOM,
+                PLATFORM_UNISOC,
+                PLATFORM_UNKNOWN,
+            )
         except Exception:
-            logger.exception("aee_platform_probe_import_failed job_id=%d", self._job_id)
-            return True
+            logger.exception("reconciler_platform_import_failed job_id=%d", self._job_id)
+            return None
 
-        allowed_raw = os.environ.get("STP_WATCHER_AEE_RECONCILE_PLATFORMS", "MTK")
-        allowed = {p.strip().upper() for p in allowed_raw.split(",") if p.strip()}
-        # UNKNOWN 恒放行 — 见 docstring
-        allowed.add(PLATFORM_UNKNOWN)
-
-        try:
-            adb_path = self._manager.get_dep("adb_path") or "adb"
-        except Exception:
-            # manager 未提供依赖注入时退回默认 adb — 门禁不该因此炸掉 Job
-            adb_path = "adb"
-
-        platform = detect_device_platform(adb_path, self._serial)
-        if platform in allowed:
-            return True
-
-        logger.info(
-            "aee_reconciler_skipped_platform job_id=%d serial=%s platform=%s allowed=%s",
-            self._job_id, self._serial, platform, sorted(allowed),
-        )
-        return False
+        key = (platform or "").strip().upper()
+        if key == PLATFORM_UNISOC:
+            from .aee.unisoc_reconciler import UnisocUniviewReconciler
+            return UnisocUniviewReconciler
+        if key in (PLATFORM_MTK, PLATFORM_UNKNOWN):
+            from .aee.reconciler import AeeDbHistoryReconciler
+            return AeeDbHistoryReconciler
+        if key == PLATFORM_QCOM:
+            return None
+        return None
 
     def _maybe_start_aee_reconciler(self) -> None:
-        """M0/PR #2: 灰度判定 → 启动 AeeDbHistoryReconciler。
-
-        启动条件(全部满足):
-          1. STP_WATCHER_AEE_RECONCILE_ENABLED 真值 + 命中 host 白名单(若设置)
-          2. 设备 SoC 平台命中 STP_WATCHER_AEE_RECONCILE_PLATFORMS(#73,默认 MTK)
-          3. WatcherHandle.impl 存在(DeviceLogWatcher 已 active,非 skipped/degraded)
-          4. WatcherHandle.capability 不是 skipped/unavailable
-
-        失败一律仅 WARN — 不阻 Job;reconciler 无法启动时 AEE/VENDOR_AEE
-        会回到 watcher 直接 emit(self._handle.impl._aee_reconciler_active 也会为 False)。
-        """
-        # 导入放在方法内,避免主模块加载阶段的循环依赖
+        """ADR-0032 D6/D8: platform reconciler (MTK AEE or UNISOC uniview)."""
         try:
-            from .aee.reconciler import AeeDbHistoryReconciler, is_reconciler_enabled
+            from .aee.reconciler import is_reconciler_enabled
         except Exception:
-            logger.exception("aee_reconciler_import_failed job_id=%d", self._job_id)
+            logger.exception("platform_reconciler_import_failed job_id=%d", self._job_id)
             return
 
         if not is_reconciler_enabled(self._host_id):
             return
-        if not self._platform_supports_aee():
-            return
         if self._handle is None or self._handle.impl is None:
-            logger.info(
-                "aee_reconciler_skipped_no_active_watcher job_id=%d cap=%s",
-                self._job_id,
-                self._handle.capability if self._handle else "<none>",
-            )
             return
         if self._handle.capability in ("skipped", "unavailable"):
-            logger.info(
-                "aee_reconciler_skipped_capability job_id=%d cap=%s",
-                self._job_id, self._handle.capability,
-            )
             return
 
         try:
@@ -370,32 +335,26 @@ class JobSession:
 
             local_root = get_aee_local_root()
             run_date_stamp = (
-                shanghai_mmdd(self._started_at)
-                if self._started_at is not None
-                else None
+                shanghai_mmdd(self._started_at) if self._started_at is not None else None
             )
             adb_path = self._manager.get_dep("adb_path") or "adb"
             platform = detect_device_platform(adb_path, self._serial)
-            api_url = self._manager.get_dep("api_url") or ""
-            agent_secret = self._manager.get_dep("agent_secret") or ""
+            reconciler_cls = self._resolve_reconciler_class(platform)
+            if reconciler_cls is None:
+                return
             device_log_client = DeviceLogEventClient.from_env(
-                api_url=api_url,
-                agent_secret=agent_secret,
+                api_url=self._manager.get_dep("api_url") or "",
+                agent_secret=self._manager.get_dep("agent_secret") or "",
                 host_id=self._host_id,
             )
-            platform_collector = get_collector_for_platform(platform)
             plan_run_id = self._payload.get("plan_run_id")
             if plan_run_id is not None:
                 try:
                     plan_run_id = int(plan_run_id)
                 except (TypeError, ValueError):
-                    logger.warning(
-                        "aee_reconciler_invalid_plan_run_id job=%s value=%r",
-                        self._job_id, plan_run_id,
-                    )
                     plan_run_id = None
 
-            self._reconciler = AeeDbHistoryReconciler(
+            self._reconciler = reconciler_cls(
                 signal_emitter=self._handle.impl.emitter,
                 state_store=self._manager.get_dep("local_db"),
                 serial=self._serial,
@@ -407,41 +366,23 @@ class JobSession:
                 plan_run_id=plan_run_id,
                 platform=platform,
                 device_log_client=device_log_client,
-                platform_collector=platform_collector,
+                platform_collector=get_collector_for_platform(platform),
             )
-            started = self._reconciler.start()
-            if not started:
-                # #78 子任务 2:理论上 start() 总返回 True(preflight 软 hint 不阻塞),
-                # 这里保留极保守分支以备未来将 preflight 改为 hard gate 时使用。
+            if not self._reconciler.start():
                 self._reconciler = None
-                raise RuntimeError("aee_reconciler_preflight_failed")
+                raise RuntimeError("platform_reconciler_preflight_failed")
             logger.info(
-                "aee_reconciler_active job_id=%d serial=%s host=%s",
-                self._job_id, self._serial, self._host_id,
+                "platform_reconciler_active job_id=%d serial=%s platform=%s",
+                self._job_id, self._serial, platform,
             )
         except Exception:
-            logger.exception(
-                "aee_reconciler_start_failed job_id=%d serial=%s — skipping (Job 继续)",
-                self._job_id, self._serial,
-            )
+            logger.exception("platform_reconciler_start_failed job_id=%d", self._job_id)
             self._reconciler = None
-            # C-3: reconciler 启动失败时必须回滚 watcher 的 emit 抑制,否则
-            # AEE/VENDOR_AEE 既不由 reconciler emit、又被 watcher 关闭 →
-            # 崩溃信号静默丢失。恢复 inotifyd 直接 emit 兜底。
-            # #78 子任务 2:start() 返回 False(preflight 拒绝)同样走这段回滚。
             try:
                 if self._handle is not None and self._handle.impl is not None:
                     self._handle.impl.set_aee_reconciler_active(False)
-                    logger.warning(
-                        "aee_reconciler_emit_rollback job_id=%d serial=%s — "
-                        "watcher 恢复 inotifyd 直接 emit AEE/VENDOR_AEE",
-                        self._job_id, self._serial,
-                    )
             except Exception:
-                logger.exception(
-                    "aee_reconciler_emit_rollback_failed job_id=%d serial=%s",
-                    self._job_id, self._serial,
-                )
+                pass
 
     def _handle_start_failure(self, exc: WatcherStartError) -> None:
         """按 policy.on_unavailable 决策 Job 走向。"""
