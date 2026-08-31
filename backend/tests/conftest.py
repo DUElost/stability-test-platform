@@ -20,7 +20,7 @@ def pytest_configure(config):
         "integration: tests that require a live database (TEST_DATABASE_URL)",
     )
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 # Set test mode before importing app to disable startup background threads
@@ -88,66 +88,6 @@ import logging as _logging
 _logging.getLogger("backend").propagate = True
 
 
-# ADR-0029 P1-B2：Plan 归属/专项双必填的测试兜底。
-# CI 的 PG schema 由 `alembic upgrade head` 建（plan.project_id NOT NULL，
-# migration e6f7g8h9i0j1），而大量测试内联 Plan(...) 构造不设归属——直接
-# 违反约束（main CI backend-test 现场 NotNullViolation）。语义与设计一致：
-# 不显式归属 = GENERIC（「通用（不限项目）」哨兵）+ ops（运维）专项。
-# 全局 seed（每测试 TRUNCATE 后重建）——API 创建路径的 _resolve_project_id
-# 在 INSERT 前查库，钩子（before_insert）覆盖不到，必须预先存在。
-@pytest.fixture(autouse=True)
-def _seed_plan_defaults(db_session):
-    """每测试前重建 GENERIC 哨兵 + ops 专项（db_session 的 TRUNCATE 会清掉）。"""
-    from backend.models.project import Specialty, TestProject
-
-    if not db_session.query(TestProject).filter_by(project_key="GENERIC").first():
-        db_session.add(TestProject(
-            project_key="GENERIC", display_name="通用（不限项目）",
-            source="USER",
-        ))
-    if not db_session.query(Specialty).filter_by(key="ops").first():
-        db_session.add(Specialty(key="ops", display_name="运维", sort_order=10))
-    db_session.commit()
-    yield
-
-
-@event.listens_for(Plan, "before_insert")
-def _plan_default_attribution(mapper, connection, target):
-    """测试构造 Plan 未显式设归属时落到 GENERIC/ops（P1-B2 双必填兜底）。
-
-    覆盖 ORM 直接构造路径（db.add(Plan(...))）；API 路径由 autouse seed
-    保证 GENERIC/ops 预先存在。双保险：GENERIC 被删时按需重建。
-    """
-    if target.project_id is not None and target.specialty_id is not None:
-        return
-    if target.project_id is None:
-        generic_id = connection.execute(
-            text("SELECT id FROM test_project WHERE project_key = 'GENERIC'")
-        ).scalar()
-        if generic_id is None:
-            generic_id = connection.execute(
-                text(
-                    "INSERT INTO test_project "
-                    "(project_key, display_name, source, status, created_at, updated_at) "
-                    "VALUES ('GENERIC', '通用（不限项目）', 'USER', 'ACTIVE', "
-                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING id"
-                )
-            ).scalar()
-        target.project_id = generic_id
-    if target.specialty_id is None:
-        ops_id = connection.execute(
-            text("SELECT id FROM specialty WHERE key = 'ops'")
-        ).scalar()
-        if ops_id is None:
-            ops_id = connection.execute(
-                text(
-                    "INSERT INTO specialty (key, display_name, sort_order) "
-                    "VALUES ('ops', '运维', 10) RETURNING id"
-                )
-            ).scalar()
-        target.specialty_id = ops_id
-
-
 @pytest.fixture(scope="session", autouse=True)
 def engine():
     """Create a test database engine"""
@@ -200,6 +140,17 @@ def db_session(engine):
         yield session
     finally:
         session.close()
+
+
+@pytest.fixture(autouse=True)
+def _seed_ops_specialty(db_session):
+    """specialty 仍必填（v2.5 D11 只放开 project）——每测试前保证 ops 存在。"""
+    from backend.models.project import Specialty
+
+    if not db_session.query(Specialty).filter_by(key="ops").first():
+        db_session.add(Specialty(key="ops", display_name="运维", sort_order=10))
+        db_session.commit()
+    yield
 
 
 @pytest.fixture(autouse=True)
