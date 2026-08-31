@@ -24,6 +24,16 @@
   protobuf 输出，text 解码抛 UnicodeDecodeError（gpu_check v1.0.2 改 bytes 读取）。
   **运维坑**：Agent hot-update 的 rsync `--delete` 会清掉 `resources/` 下
   非 exclude 目录（仅 `resources/mtbf/` 豁免）——带外资源须在最终热更新后放置。
+- 综合验收（2026-08-31，3 专项 × 4 设备 × 2 host 并行 10 分钟，12 job）：
+  **Sleep ✅ / GPU ✅ / PowerCycle ⚠️**。Sleep 10/100 轮全 wake OK、GPU 各 2 轮
+  rc=0（单轮 ~4-5min，10 分钟 2 轮属预期）、PowerCycle 测试执行正常（7+ 轮
+  reboot 无设备挂）但 **teardown 0/4 收集失败**（撞 reboot 窗口）。验收发现：
+  ⑥ powercycle boot 窗口（adb 在线、服务未起）累计 dead_streak 误判——
+  reboot 周期 ~75s > patrol 60s，boot 窗口可跨 2 个 check（含 cycles_done=0
+  判死）；⑦ **powercycle teardown 撞 reboot 窗口 → prefs 写入/拉取失败
+  （adb device not found）→ 结果 0/4 收集**（需 v1.0.2 容错：设备离线等待
+  上线重试）；⑨ **秒级 run_id 并行碰撞**——同秒多个 finish 写同一文件名互相
+  覆盖（sleep 4 job → 2 文件、gpu 4 job → 2 文件；run_id 需加设备维度）。
 
 ## 0. 结论摘要
 
