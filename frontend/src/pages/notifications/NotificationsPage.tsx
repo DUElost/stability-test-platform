@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { api, toApiError, NotificationChannel, AlertRule } from '@/utils/api';
 import { formatDateTimeLocale } from '@/utils/format';
 import { notificationKeys } from '@/utils/api/queryKeys';
@@ -17,10 +17,12 @@ import {
   ToggleLeft,
   ToggleRight,
   Loader2,
+  Check,
   CheckCheck,
   AlertCircle,
   AlertTriangle,
   Info,
+  ArrowRight,
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -34,6 +36,7 @@ import {
 import { FORM, INTERACTIVE, STATUS_CHIP, TEXT } from '@/design-system';
 import { StateTabs } from '@/components/ui/state-tabs';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
+import { notificationTarget } from './notificationTarget';
 import { cn } from '@/lib/utils';
 
 type TabKey = 'channels' | 'rules' | 'logs';
@@ -553,6 +556,7 @@ const SOURCE_LABEL_MAP: Record<string, string> = {
 function NotificationLogsTab() {
   const qc = useQueryClient();
   const [page, setPage] = useState(0);
+  const [markingId, setMarkingId] = useState<number | null>(null);
   const pageSize = 20;
 
   const logsQ = useQuery({
@@ -564,6 +568,17 @@ function NotificationLogsTab() {
     await api.notifications.markAllRead();
     qc.invalidateQueries({ queryKey: ['notification-logs'] });
     qc.invalidateQueries({ queryKey: ['notification-unread-count'] });
+  };
+
+  const handleMarkRead = async (id: number) => {
+    setMarkingId(id);
+    try {
+      await api.notifications.markRead(id);
+      qc.invalidateQueries({ queryKey: ['notification-logs'] });
+      qc.invalidateQueries({ queryKey: ['notification-unread-count'] });
+    } finally {
+      setMarkingId(null);
+    }
   };
 
   const logs = logsQ.data?.items ?? [];
@@ -592,6 +607,7 @@ function NotificationLogsTab() {
           <div className="space-y-2">
             {logs.map((log) => {
               const Icon = SEVERITY_ICON_MAP[log.severity] ?? Info;
+              const target = notificationTarget(log);
               return (
                 <Card key={log.id} className={cn('p-4', !log.read && 'border-primary/40 bg-primary/5')}>
                   <div className="flex gap-3">
@@ -612,9 +628,32 @@ function NotificationLogsTab() {
                       {log.message && (
                         <p className={cn('text-xs mt-1.5 whitespace-pre-wrap', TEXT.caption)}>{log.message}</p>
                       )}
-                      <span className={cn('text-[11px] mt-2 block', TEXT.caption)}>
-                        {formatDateTimeLocale(log.created_at, '')}
-                      </span>
+                      <div className="mt-2 flex items-center gap-3">
+                        <span className={cn('text-[11px]', TEXT.caption)}>
+                          {formatDateTimeLocale(log.created_at, '')}
+                        </span>
+                        <span className="flex items-center gap-2">
+                          {!log.read && (
+                            <button
+                              type="button"
+                              disabled={markingId === log.id}
+                              onClick={() => void handleMarkRead(log.id)}
+                              className={cn('inline-flex items-center gap-1 text-xs', INTERACTIVE.iconButton)}
+                              aria-label={`标记已读：${log.title}`}
+                            >
+                              <Check size={12} /> 标为已读
+                            </button>
+                          )}
+                          {target && (
+                            <Link
+                              to={target.to}
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            >
+                              {target.label} <ArrowRight size={12} />
+                            </Link>
+                          )}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </Card>
