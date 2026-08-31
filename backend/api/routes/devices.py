@@ -6,7 +6,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import cast, or_, select
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 from typing import List, Optional, Union
 
 from backend.core.database import get_db
@@ -145,7 +145,6 @@ def bulk_assign_project(
     devices = (
         db.query(Device)
         .filter(Device.id.in_(payload.device_ids))
-        .options(joinedload(Device.project))
         .all()
     )
     if len(devices) != len(set(payload.device_ids)):
@@ -272,7 +271,6 @@ def list_devices(
     # 追加 Device.id 作 tie-breaker，保证分页与前端列表顺序可复现（#537）
     query = (
         db.query(Device)
-        .options(joinedload(Device.project))
         .order_by(Device.last_seen.desc().nullslast(), Device.id.asc())
     )
 

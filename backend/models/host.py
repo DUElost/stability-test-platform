@@ -80,17 +80,9 @@ class Device(Base):
     hardware_updated_at = Column(DateTime(timezone=True), nullable=True)
     lease_generation    = Column(Integer, nullable=False, default=0)   # ADR-0019 Phase 1
     extra               = Column(JSON, default=dict, nullable=True)
-    # ADR-0029 归属（P1 M-a）：NULL = 迁移期瞬态，M-c 回填后归零（完成标准）。
-    # 迁移完成后不存在「公共池」域——未识别设备归 LEGACY 项目。
-    project_id          = Column(Integer, ForeignKey("test_project.id"), nullable=True)
-    # ADR-0029 P1：人工钉住逃生阀——手工归属的设备打钉子，规则不覆盖。
-    # 显式、可列出、可审计（区别于 match_models 的隐性重叠）。
-    project_pinned      = Column(Boolean, nullable=False, default=False)
 
     host = relationship("backend.models.host.Host", foreign_keys=[host_id])
-    project = relationship("backend.models.project.TestProject", foreign_keys=[project_id])
 
     __table_args__ = (
         Index("idx_device_host", "host_id"),
-        Index("idx_device_project", "project_id"),
     )
