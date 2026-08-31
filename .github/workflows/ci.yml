@@ -276,6 +276,13 @@ jobs:
       - name: Migrate empty PostgreSQL database
         working-directory: backend
         run: python -m alembic upgrade head
+      - name: Assert schema matches ORM models
+        # #644 P0 复盘：pr-migrate-empty-db 原先只验「迁移能跑通」，不验
+        # 「结果与模型一致」——uq_project_model_active 索引在生产丢失时
+        # 空库守卫是绿的。基线白名单断言（diff ⊆ 基线）拦住新漂移。
+        # 注意：不加 working-directory——python -m 把 cwd 放 sys.path[0]，
+        # backend 包在仓库根。
+        run: python -m backend.scripts.check_schema_sync
 
   pr-typecheck:
     if: github.event_name == 'pull_request'
