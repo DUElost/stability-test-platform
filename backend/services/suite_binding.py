@@ -234,7 +234,7 @@ def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any
                 ProjectModel,
                 and_(
                     Device.model == ProjectModel.match_value,
-                                        ProjectModel.is_active.is_(True),
+                    ProjectModel.is_active.is_(True),
                 ),
             )
             .where(
