@@ -160,7 +160,7 @@ def bulk_assign_project(
         existing = db.execute(
             select(ProjectModel)
             .where(
-                                ProjectModel.match_value == model,
+                ProjectModel.match_value == model,
                 ProjectModel.is_active.is_(True),
             )
         ).scalar_one_or_none()
@@ -201,7 +201,7 @@ def bulk_assign_project(
     for device in devices:
         out = DeviceOut.model_validate(device)
         # 整批归入同一目标；joinedload 缓存的关系在赋值后不自动失效，
-        # 直接写目标 key（不读 device.project）
+        # device 无 project 关系（M3 删列），派生 key 直接写目标
         out.project_key = project.project_key
         out.attribution_source = _attribution_source(
             device.model, True,
@@ -224,7 +224,7 @@ def _model_to_project_map(db: Session) -> dict[str, tuple[int, str]]:
                TestProject.project_key)
         .join(TestProject, TestProject.id == ProjectModel.project_id)
         .where(
-                        ProjectModel.is_active.is_(True),
+            ProjectModel.is_active.is_(True),
         )
     ).all()
     return {match_value: (project_id, project_key)
@@ -235,7 +235,7 @@ def _attribution_source(model: Optional[str], mapped: bool) -> str:
     """ADR-0029 v2.5 D10：归属来源两态（mapped / unmapped）。
 
     派生自 project_model（型号有活跃成员行 = mapped）；无型号设备 /
-    型号未映射 = unmapped。pinned 随 device.project_id 副本删除（M3）。
+    型号未映射 = unmapped。归属唯一来源是成员行，无 pinned 例外。
     """
     if not model or not mapped:
         return "unmapped"
@@ -291,12 +291,12 @@ def list_devices(
         query = query.join(ProjectModel, Device.model == ProjectModel.match_value) \
                      .filter(
                          ProjectModel.project_id == project.id,
-                                                  ProjectModel.is_active.is_(True),
+                         ProjectModel.is_active.is_(True),
                      )
 
     if unassigned:
         mapped_models = select(ProjectModel.match_value).where(
-                        ProjectModel.is_active.is_(True),
+            ProjectModel.is_active.is_(True),
         )
         query = query.filter(
             or_(Device.model.is_(None), ~Device.model.in_(mapped_models))

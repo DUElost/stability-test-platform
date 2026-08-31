@@ -85,9 +85,8 @@ def _platforms_map(db: Session, project_ids: list[int]) -> dict[int, list[str]]:
     return {pid: sorted(values) for pid, values in buckets.items()}
 
 
-def _summary_rows(db: Session) -> dict[int, tuple[int, int]]:
-    projects = db.query(TestProject.id).all()
-    pids = [pid for (pid,) in projects]
+def _summary_rows_for(db: Session, pids: list[int]) -> dict[int, tuple[int, int]]:
+    """项目设备数 + 在途 run 数聚合（#644 P2：单项目路径不再跑全表）。"""
     if not pids:
         return {}
     # v2.5 D10：设备数按成员型号派生（device.model ⋈ project_model）
@@ -96,7 +95,7 @@ def _summary_rows(db: Session) -> dict[int, tuple[int, int]]:
         .join(Device, Device.model == ProjectModel.match_value)
         .filter(
             ProjectModel.project_id.in_(pids),
-                        ProjectModel.is_active.is_(True),
+            ProjectModel.is_active.is_(True),
         )
         .group_by(ProjectModel.project_id)
         .all()
@@ -113,6 +112,12 @@ def _summary_rows(db: Session) -> dict[int, tuple[int, int]]:
     }
 
 
+def _summary_rows(db: Session) -> dict[int, tuple[int, int]]:
+    """全量项目聚合（列表页用）；单项目详情走 _fill_summary 的过滤版。"""
+    pids = [pid for (pid,) in db.query(TestProject.id).all()]
+    return _summary_rows_for(db, pids)
+
+
 def _blank_to_none(value: str | None) -> str | None:
     if value is None:
         return None
@@ -121,11 +126,21 @@ def _blank_to_none(value: str | None) -> str | None:
 
 
 def _normalize_models(models: list[str]) -> list[str]:
+    """去重 + strip + 统一大写（#644 P2 大小写不对称）。
+
+    唯一索引按 ``lower(match_value)`` 防双归属，但 join 是全等比较——成员行
+    与设备 model 大小写不一致会让「项目卡片显示已映射、inventory 显示未
+    映射」两边同时正确。生产设备 model 事实全大写（getprop 上报），写入
+    统一大写即与事实对齐。若未来设备侧出现小写型号，需 join 归一（另案）。
+    """
     seen: set[str] = set()
     out: list[str] = []
     for raw in models:
         model = _blank_to_none(raw)
-        if model is None or model in seen:
+        if model is None:
+            continue
+        model = model.upper()
+        if model in seen:
             continue
         seen.add(model)
         out.append(model)
@@ -181,7 +196,7 @@ def _rule_values_for_project(db: Session, project_id: int) -> list[str]:
         select(ProjectModel.match_value)
         .where(
             ProjectModel.project_id == project_id,
-                        ProjectModel.is_active.is_(True),
+            ProjectModel.is_active.is_(True),
         )
         .order_by(ProjectModel.match_value)
     ).scalars().all()
@@ -277,7 +292,9 @@ def _require_active_project(project: TestProject) -> None:
 
 
 def _fill_summary(db: Session, project: TestProject) -> ProjectSummaryOut:
-    device_count, running_run_count = _summary_rows(db).get(project.id, (0, 0))
+    device_count, running_run_count = _summary_rows_for(
+        db, [project.id]
+    ).get(project.id, (0, 0))
     out = ProjectSummaryOut.model_validate(project)
     out.match_models = _rule_values_for_project(db, project.id)
     out.platforms = _platforms_map(db, [project.id]).get(project.id, [])
@@ -860,7 +877,7 @@ def remove_project_rule(
         select(ProjectModel)
         .where(
             ProjectModel.project_id == project.id,
-                        ProjectModel.match_value == model,
+            ProjectModel.match_value == model,
             ProjectModel.is_active.is_(True),
         )
     ).scalar_one_or_none()
@@ -906,7 +923,7 @@ def list_project_models(
         .join(ProjectModel, Device.model == ProjectModel.match_value)
         .filter(
             ProjectModel.project_id == project.id,
-                        ProjectModel.is_active.is_(True),
+            ProjectModel.is_active.is_(True),
         )
         .all()
     )

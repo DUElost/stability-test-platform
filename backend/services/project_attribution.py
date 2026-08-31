@@ -1,8 +1,7 @@
 """项目归属派生查询（ADR-0029 v2.5 D10）——model → project 的唯一事实源。
 
-归属 = device.model ⋈ project_model（活跃成员行）。M2 起读路径全部走本
-模块的派生查询；device.project_id 副本在 M3 删除。pinned 单向门随副本
-删除（v2.5：例外走未来的 device_project_override，生产 pinned=0 无需求）。
+归属 = device.model ⋈ project_model（活跃成员行）。无副本列、无 pinned
+例外——例外走未来的 device_project_override（当前无真实需求）。
 """
 
 from __future__ import annotations

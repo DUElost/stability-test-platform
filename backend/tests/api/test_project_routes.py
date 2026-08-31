@@ -1217,3 +1217,43 @@ class TestArchiveGuards:
             "/api/v1/projects?source=seed&status=ARCHIVED", headers=auth_headers
         )
         assert {p["project_key"] for p in archived.json()["data"]} == {"LEGACY"}
+
+
+class TestNormalizeModelsCase:
+    """#644 P2 大小写不对称：映射写入统一大写（与生产设备事实对齐）。"""
+
+    def test_map_preview_normalizes_model_case(
+        self, client, admin_headers, db_session, project_a
+    ):
+        # 设备无归属（不传 project 建成员行）——被测对象是写入归一
+        _make_device(db_session, "s-case", None, model="MLD_LX2")
+        preview = client.post(
+            "/api/v1/projects/proj-a/map/preview",
+            headers=admin_headers,
+            json={"models": ["mld_lx2", "MLD_LX2"]},  # 小写 + 去重
+        )
+        assert preview.status_code == 200
+        body = preview.json()["data"]
+        assert body["models"] == ["MLD_LX2"]
+        assert body["will_assign"] == 1
+        assert body["unknown_models"] == []
+
+    def test_map_apply_stores_uppercase(
+        self, client, admin_headers, db_session, project_a
+    ):
+        _make_device(db_session, "s-case2", None, model="MLD_LX3")
+        applied = client.post(
+            "/api/v1/projects/proj-a/map/apply",
+            headers=admin_headers,
+            json={"models": ["mld_lx3"]},
+        )
+        assert applied.status_code == 200
+        rules = (
+            db_session.query(ProjectModel.match_value)
+            .filter(
+                ProjectModel.project_id == project_a.id,
+                ProjectModel.is_active.is_(True),
+            )
+            .all()
+        )
+        assert [r[0] for r in rules] == ["MLD_LX3"]
