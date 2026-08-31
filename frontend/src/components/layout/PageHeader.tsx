@@ -66,7 +66,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
           {breadcrumbs && breadcrumbs.length > 0 && (
             <PageHeaderBreadcrumbs breadcrumbs={breadcrumbs} />
           )}
-          <h1 className={cn('truncate text-lg font-semibold leading-tight tracking-tight', TEXT.heading)}>
+          <h1 className={cn('truncate text-lg font-semibold leading-tight tracking-[-0.02em]', TEXT.heading)}>
             {title}
           </h1>
           {subtitle && (
@@ -94,7 +94,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
       )}
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className={cn('text-2xl font-semibold mb-1', TEXT.heading)}>{title}</h2>
+          <h2 className={cn('text-2xl font-semibold mb-1 tracking-[-0.02em]', TEXT.heading)}>{title}</h2>
           {subtitle && <p className={cn('text-sm', TEXT.caption)}>{subtitle}</p>}
         </div>
         {action && (

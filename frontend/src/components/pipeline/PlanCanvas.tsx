@@ -295,7 +295,7 @@ function PlanHeader({
           placeholder="Plan 名称"
           readOnly={readOnly}
           className={cn(
-            'flex-1 min-w-0 text-lg font-extrabold tracking-tight',
+            'flex-1 min-w-0 text-lg font-extrabold tracking-[-0.02em]',
             PIPELINE_EDITOR.inputTitle,
           )}
         />

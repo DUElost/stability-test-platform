@@ -1,18 +1,15 @@
 /**
- * Noto Sans SC 的 @font-face 声明，**必须**只经由动态 import 引入。
+ * 字体 @font-face 声明，**必须**只经由动态 import 引入（见 main.tsx）。
  *
- * 这个包为覆盖 CJK 字形拆了 101 个 @font-face 块（含若干 emoji 区段），
- * 光 CSS 就 101KB / 31.5KB gzip。静态 import 会把它并进 index.css ——
- * 那是 <head> 里的阻塞样式表，等于让首屏渲染多等一份字体声明，
- * 而声明本身并不画像素：woff2 已是 font-display: swap，本来就先用
- * 回落字体出字再换字。
+ * - Plus Jakarta Sans / Geist Mono：Latin 层，体积可控，进本 chunk。
+ * - Noto Sans SC Variable：CJK 拆了 101 个 @font-face（CSS ~101KB /
+ *   31.5KB gzip）。若静态 import 进 index.css，会阻塞首屏；拆到本文件后
+ *   Vite 单独产出 CSS，由 JS 挂载后注入。
  *
- * 拆成动态 import 后 Vite 会单独产出一份 CSS，由 JS 在挂载后注入，
- * 关键路径少 31.5KB gzip（CSS 包 58.6 → 27.2KB）。代价是字体切换比
- * 原先稍晚一点发生；因为 --font-sans 的回落是 system-ui（中文机器上
- * 本就是 CJK 字体），首屏不会出现方框或错位排版。
- *
- * 回归检测：`npm run build` 后 dist/index.html 的 <link rel=stylesheet>
- * 只应有一份，且 gzip 后 < 30KB。
+ * --font-sans 回落含 system-ui（中文机本就有 CJK），首屏不会方框/错位。
+ * 回归：`npm run build` 后 dist/index.html 的阻塞 stylesheet 应仍只有一份，
+ * 且 gzip 后大体 < 30KB（Jakarta Latin 增量可接受）。
  */
+import '@fontsource-variable/plus-jakarta-sans';
+import '@fontsource/geist-mono';
 import '@fontsource-variable/noto-sans-sc';
