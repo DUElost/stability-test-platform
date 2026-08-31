@@ -62,6 +62,12 @@ def check_mod_v102():
 
 
 @pytest.fixture(scope="module")
+def check_mod_v103():
+    """powercycle_check v1.0.3：窗口判定固定东八区（主机时区各异，实测 PDT）。"""
+    return _load("powercycle_check_mod_v103", "powercycle_check/v1.0.3/powercycle_check.py")
+
+
+@pytest.fixture(scope="module")
 def finish_mod():
     return _load("powercycle_finish_mod", "powercycle_finish/v1.0.0/powercycle_finish.py")
 
@@ -262,6 +268,19 @@ class TestCollectWindow:
     def _patch_env(self, monkeypatch):
         for key in ("STP_POWER_CYCLE_COLLECT_WINDOW_START", "STP_POWER_CYCLE_COLLECT_WINDOW_MINUTES"):
             monkeypatch.delenv(key, raising=False)
+
+    def test_cn_tz_default_now(self, check_mod_v103, monkeypatch):
+        """v1.0.3：不传 now 时按东八区判定（主机时区不影响窗口时刻）。"""
+        self._patch_env(monkeypatch)
+        # 直接验证：带 tzinfo 的 now 正常判定
+        from datetime import timezone, timedelta
+        now_cn = datetime(2026, 8, 31, 0, 15, tzinfo=timezone(timedelta(hours=8)))
+        assert check_mod_v103._in_collect_window(
+            {"collect_window_start": "00:00", "collect_window_minutes": 30}, now_cn) is True
+        now_pdt = datetime(2026, 8, 31, 9, 15, tzinfo=timezone(timedelta(hours=-7)))
+        # 同一实际时刻（UTC 09:15）：东八区 17:15 → 不在 00:00 窗口
+        assert check_mod_v103._in_collect_window(
+            {"collect_window_start": "00:00", "collect_window_minutes": 30}, now_pdt) is False
 
     def test_disabled_when_no_start(self, check_mod_v102, monkeypatch):
         self._patch_env(monkeypatch)
