@@ -90,13 +90,6 @@ export const projects = {
         { new_key: newKey },
       ),
     ),
-  /** 按活跃规则重算存量归属（显式纠正，不依赖心跳）。 */
-  recomputeRules: (projectKey: string) =>
-    unwrapApiResponse(
-      apiClient.post<ApiResponseEnvelope<{ project_key: string; rules: number; devices_moved: number }>>(
-        `/projects/${projectKey}/rules/recompute`,
-      ),
-    ),
   removeRule: (projectKey: string, model: string) =>
     unwrapApiResponse(
       apiClient.delete<ApiResponseEnvelope<{ project_key: string; model: string }>>(

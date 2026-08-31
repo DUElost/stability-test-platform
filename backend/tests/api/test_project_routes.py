@@ -108,9 +108,14 @@ class TestListProjects:
     def test_aggregates_device_and_running_run_counts(
         self, client, auth_headers, db_session, project_a, project_legacy
     ):
-        _make_device(db_session, "s-agg-1", project_a)
-        _make_device(db_session, "s-agg-2", project_a)
-        _make_device(db_session, "s-agg-3", None)  # NULL 不属任何项目
+        from backend.models.project_model import ProjectModel
+
+        db_session.add(ProjectModel(
+            project_id=project_a.id, match_value="AGG_MODEL"))
+        db_session.commit()
+        _make_device(db_session, "s-agg-1", project_a, model="AGG_MODEL")
+        _make_device(db_session, "s-agg-2", project_a, model="AGG_MODEL")
+        _make_device(db_session, "s-agg-3", None, model="NO_MODEL")
         plan = _make_plan(db_session, "plan-agg", project_a)
         _make_run(db_session, plan, status="RUNNING", project=project_a)
         _make_run(db_session, plan, status="SUCCESS", project=project_a)
@@ -134,6 +139,14 @@ class TestListProjects:
         self, client, auth_headers, db_session, project_a
     ):
         """ADR-0029 P1-B：项目平台从设备派生（distinct，UNKNOWN 不展示）。"""
+        from backend.models.project_model import ProjectModel
+
+        db_session.add_all([
+            ProjectModel(project_id=project_a.id, match_value="MLD_LX2"),
+            ProjectModel(project_id=project_a.id, match_value="MLD_LX3"),
+            ProjectModel(project_id=project_a.id, match_value="MLD_LX4"),
+        ])
+        db_session.commit()
         _make_device(db_session, "s-p1", project_a, model="MLD_LX2", platform="MTK")
         _make_device(db_session, "s-p2", project_a, model="MLD_LX3", platform="UNISOC")
         _make_device(db_session, "s-p3", project_a, model="MLD_LX2", platform="MTK")
@@ -169,10 +182,15 @@ class TestGetProject:
     def test_detail_counts_and_recent_runs(
         self, client, auth_headers, db_session, project_a
     ):
+        from backend.models.project_model import ProjectModel
+
+        db_session.add(ProjectModel(
+            project_id=project_a.id, match_value="DETAIL_MODEL"))
+        db_session.commit()
         plan = _make_plan(db_session, "plan-detail", project_a)
         _make_run(db_session, plan, status="SUCCESS", project=project_a)
         _make_run(db_session, plan, status="FAILED", project=project_a)
-        _make_device(db_session, "s-detail-1", project_a)
+        _make_device(db_session, "s-detail-1", project_a, model="DETAIL_MODEL")
 
         resp = client.get("/api/v1/projects/proj-a", headers=auth_headers)
         assert resp.status_code == 200
@@ -520,11 +538,11 @@ class TestMapProject:
     def test_preview_and_apply_from_seed_and_null(
         self, client, admin_headers, db_session, project_a, project_legacy
     ):
-        d_seed = _make_device(
+        _make_device(
             db_session, "s-map-seed", project_legacy, model="MLD_LX2"
         )
-        d_null = _make_device(db_session, "s-map-null", None, model="MLD_LX2")
-        d_already = _make_device(db_session, "s-map-already", project_a, model="MLD_LX2")
+        _make_device(db_session, "s-map-null", None, model="MLD_LX2")
+        _make_device(db_session, "s-map-already", project_a, model="MLD_LX2")
 
         preview = client.post(
             "/api/v1/projects/proj-a/map/preview",
@@ -543,13 +561,7 @@ class TestMapProject:
             json={"models": ["MLD_LX2"]},
         )
         assert applied.status_code == 200
-        db_session.refresh(d_seed)
-        db_session.refresh(d_null)
-        db_session.refresh(d_already)
-        assert d_seed.project_id == project_a.id
-        assert d_null.project_id == project_a.id
-        assert d_already.project_id == project_a.id
-        # ADR-0029 P1：规则写入 project_model（match_models 列冻结）
+        # v2.5 M3：apply 只写成员行——归属派生自 device.model ⋈ 成员行
         assert self._active_rules(db_session, project_a.id) == ["MLD_LX2"]
 
         inventory = client.get(
@@ -564,7 +576,8 @@ class TestMapProject:
                 AuditLog.action.in_(("assign_project", "apply_project_model"))
             )
         }
-        assert audits == {"assign_project", "apply_project_model"}
+        # v2.5 M3：apply 只写成员行——无逐设备 assign_project
+        assert audits == {"apply_project_model"}
 
     def test_user_conflict_skipped_unless_reassign(
         self, client, admin_headers, db_session, project_a
@@ -576,8 +589,8 @@ class TestMapProject:
         )
         db_session.add(other)
         db_session.commit()
-        d_conflict = _make_device(db_session, "s-conflict", other, model="MLD_LX2")
-        d_free = _make_device(db_session, "s-free", None, model="MLD_LX2")
+        _make_device(db_session, "s-conflict", other, model="MLD_LX2")
+        _make_device(db_session, "s-free", None, model="MLD_LX2")
 
         preview = client.post(
             "/api/v1/projects/proj-a/map/preview",
@@ -593,10 +606,6 @@ class TestMapProject:
             json={"models": ["MLD_LX2"]},
         )
         assert blocked.status_code == 409
-        db_session.refresh(d_conflict)
-        db_session.refresh(d_free)
-        assert d_conflict.project_id == other.id
-        assert d_free.project_id is None
         assert self._active_rules(db_session, project_a.id) == []
 
         applied = client.post(
@@ -605,10 +614,7 @@ class TestMapProject:
             json={"models": ["MLD_LX2"], "reassign_conflicts": True},
         )
         assert applied.status_code == 200
-        db_session.refresh(d_conflict)
-        db_session.refresh(d_free)
-        assert d_conflict.project_id == project_a.id
-        assert d_free.project_id == project_a.id
+        # v2.5：apply 只写成员行（reassign_conflicts 语义保留——冲突型号可覆盖）
         assert self._active_rules(db_session, project_a.id) == ["MLD_LX2"]
 
     def test_seed_project_cannot_be_mapped(
@@ -733,8 +739,10 @@ class TestBulkAssignProject:
     def test_assign_updates_devices_and_records_audit(
         self, client, db_session, project_a, project_legacy, admin_headers
     ):
-        d1 = _make_device(db_session, "s-bulk-1", None)
-        d2 = _make_device(db_session, "s-bulk-2", project_legacy)
+        from backend.models.project_model import ProjectModel
+
+        d1 = _make_device(db_session, "s-bulk-1", None, model="BULK_M1")
+        d2 = _make_device(db_session, "s-bulk-2", project_legacy, model="BULK_M2")
 
         resp = client.post(
             "/api/v1/devices/bulk-project",
@@ -743,36 +751,35 @@ class TestBulkAssignProject:
         )
         assert resp.status_code == 200
         returned = {d["serial"]: d for d in resp.json()["data"]}
+        # v2.5：派生归属——响应 project_key 来自成员行
         assert returned["s-bulk-1"]["project_key"] == "proj-a"
         assert returned["s-bulk-2"]["project_key"] == "proj-a"
 
-        # DB 归属更新
-        db_session.refresh(d1)
-        db_session.refresh(d2)
-        assert d1.project_id == project_a.id
-        assert d2.project_id == project_a.id
+        # 归属 = 型号成员行（不再写 device 列）
+        members = db_session.query(ProjectModel).filter(
+            ProjectModel.project_id == project_a.id,
+            ProjectModel.is_active.is_(True),
+        ).all()
+        assert sorted(m.match_value for m in members) == ["BULK_M1", "BULK_M2"]
 
-        # audit 留痕（D2：每台实际变更一条，details 含 from/to key）
+        # audit：一条汇总（bulk_assign_project_models）
         audits = (
             db_session.query(AuditLog)
-            .filter(AuditLog.action == "assign_project", AuditLog.resource_type == "device")
-            .order_by(AuditLog.id)
+            .filter(AuditLog.action == "bulk_assign_project_models")
             .all()
         )
-        assert len(audits) == 2
-        details = {a.resource_id: a.details for a in audits}
-        assert details[str(d1.id)] == {"project_key": "proj-a", "from_project_key": None}
-        assert details[str(d2.id)] == {
-            "project_key": "proj-a",
-            "from_project_key": "LEGACY",
-        }
+        assert len(audits) == 1
+        assert audits[0].details["models"] == ["BULK_M1", "BULK_M2"]
 
     def test_idempotent_skip_no_audit(
         self, client, db_session, project_a, admin_headers
     ):
-        d1 = _make_device(db_session, "s-bulk-idem", project_a)
-        # 已归入且已钉住 = 幂等 no-op（不记 audit）
-        d1.project_pinned = True
+        from backend.models.project_model import ProjectModel
+
+        d1 = _make_device(db_session, "s-bulk-idem", project_a, model="BULK_IDEM")
+        # 成员行已存在 = 幂等 no-op（不记 audit）
+        db_session.add(ProjectModel(
+            project_id=project_a.id, match_value="BULK_IDEM"))
         db_session.commit()
         resp = client.post(
             "/api/v1/devices/bulk-project",
@@ -782,7 +789,7 @@ class TestBulkAssignProject:
         assert resp.status_code == 200
         audits = (
             db_session.query(AuditLog)
-            .filter(AuditLog.action == "assign_project")
+            .filter(AuditLog.action == "bulk_assign_project_models")
             .all()
         )
         assert audits == []
@@ -1014,7 +1021,12 @@ class TestRenameProject:
     def test_rename_updates_key_and_records_audit(
         self, client, db_session, project_a, admin_headers
     ):
-        _make_device(db_session, "s-rename-1", project_a)
+        from backend.models.project_model import ProjectModel
+
+        db_session.add(ProjectModel(
+            project_id=project_a.id, match_value="RENAME_MODEL"))
+        db_session.commit()
+        _make_device(db_session, "s-rename-1", project_a, model="RENAME_MODEL")
         plan = _make_plan(db_session, "plan-rename", project_a)
         _make_run(db_session, plan, status="SUCCESS", project=project_a)
 
@@ -1059,59 +1071,4 @@ class TestRenameProject:
     def test_rename_forbidden_for_non_admin(self, client, project_a, auth_headers):
         resp = client.put("/api/v1/projects/proj-a/rename",
                           json={"new_key": "hacked"}, headers=auth_headers)
-        assert resp.status_code == 403
-
-
-class TestRecomputeProjectRules:
-    """按规则重算存量归属（显式纠正，不依赖心跳）。"""
-
-    def test_recompute_moves_unattributed_and_wrong(self, client, db_session, project_a, admin_headers):
-        from backend.models.project_model import ProjectModel as MemberModel
-
-        db_session.add(MemberModel(
-            project_id=project_a.id, match_value="MLD_LX2"))
-        db_session.commit()
-        d_null = _make_device(db_session, "s-rec-null", None, model="MLD_LX2")
-        other = ProjectModel(project_key="rec-other", display_name="o", source="USER")
-        db_session.add(other)
-        db_session.commit()
-        d_wrong = _make_device(db_session, "s-rec-wrong", other, model="MLD_LX2")
-        d_ok = _make_device(db_session, "s-rec-ok", project_a, model="MLD_LX2")
-        d_pinned = _make_device(db_session, "s-rec-pin", None, model="MLD_LX2")
-        d_pinned.project_pinned = True
-        db_session.commit()
-
-        resp = client.post(
-            "/api/v1/projects/proj-a/rules/recompute", headers=admin_headers
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()["data"]
-        assert data["devices_moved"] == 2  # null + wrong；已正确与 pinned 跳过
-
-        db_session.refresh(d_null)
-        db_session.refresh(d_wrong)
-        db_session.refresh(d_ok)
-        db_session.refresh(d_pinned)
-        assert d_null.project_id == project_a.id
-        assert d_wrong.project_id == project_a.id
-        assert d_ok.project_id == project_a.id
-        assert d_pinned.project_id is None
-
-        audits = db_session.query(AuditLog).filter(
-            AuditLog.action == "recompute_project_rules"
-        ).all()
-        assert len(audits) == 1
-        assert audits[0].details["devices_moved"] == 2
-
-    def test_recompute_no_rules_noop(self, client, project_a, admin_headers):
-        resp = client.post(
-            "/api/v1/projects/proj-a/rules/recompute", headers=admin_headers
-        )
-        assert resp.status_code == 200
-        assert resp.json()["data"]["devices_moved"] == 0
-
-    def test_recompute_forbidden_for_non_admin(self, client, project_a, auth_headers):
-        resp = client.post(
-            "/api/v1/projects/proj-a/rules/recompute", headers=auth_headers
-        )
         assert resp.status_code == 403
