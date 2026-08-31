@@ -556,6 +556,74 @@ def reset_merge_capability_cache_for_tests() -> None:
     _merge_files_list_supported = None
 
 
+def _map_agent_path_to_center(path: str, plan_run_id: int, center_root: str) -> str:
+    """把 agent 本机 scan 路径映射为中心可达路径。
+
+    源形态: ``{hdd}/.stp-scan/{run_id}-{rand}/{folder}/{serial}/aee_exp/{event_dir}/{sub}``
+    （或 ``vendor_aee_exp``）。目标: ``{center}/devices/{run_id}/{event_dir}/{sub}``——
+    事件目录已按引用上送中心（EventUploader copytree 目录名 = 事件目录名），
+    映射后路径对外可达。非事件路径（无 aee_exp 段）原样返回。
+
+    文档依据: ADR-0025 D2「开发通过同一共享只读访问」——Jira 提单引用的
+    报表路径必须指向中心存储，不能是各 host 本机路径。
+    """
+    m = re.search(r"/(?:vendor_)?aee_exp/([^/]+)(/.*)?$", path)
+    if not m:
+        return path
+    event_dir = m.group(1)
+    sub = m.group(2) or ""
+    return f"{center_root}/devices/{plan_run_id}/{event_dir}{sub}"
+
+
+def _rewrite_merge_report_paths_to_center(
+    xls_dir: Path, plan_run_id: int, center_root: str,
+) -> int:
+    """重写 merge 报告（Result_MergeFiles*.xls）的 Path 列为中心可达路径。
+
+    在中心副本上执行（发布后重写）；返回重写行数。xls 为 OLE 格式——
+    xlrd 读 + xlwt 写回（tools 的既有格式），其余列原样保留。
+    """
+    import xlrd
+    import xlwt
+
+    count = 0
+    for xls in sorted(xls_dir.glob("Result_MergeFiles*.xls")):
+        try:
+            book = xlrd.open_workbook(str(xls), formatting_info=False)
+        except Exception:
+            logger.exception("merge_report_rewrite_read_failed path=%s", xls)
+            continue
+        sheet = book.sheet_by_index(0)
+        headers = [str(sheet.cell_value(0, c)).strip() for c in range(sheet.ncols)]
+        path_col = next(
+            (idx for idx, header in enumerate(headers) if header.lower() == "path"),
+            None,
+        )
+        if path_col is None:
+            continue
+        wb = xlwt.Workbook()
+        ws = wb.add_sheet(sheet.name)
+        for r in range(sheet.nrows):
+            for c in range(sheet.ncols):
+                val = sheet.cell_value(r, c)
+                if c == path_col and r > 0 and val:
+                    mapped = _map_agent_path_to_center(str(val), plan_run_id, center_root)
+                    if mapped != str(val):
+                        count += 1
+                        val = mapped
+                ws.write(r, c, val)
+        try:
+            wb.save(str(xls))
+        except Exception:
+            logger.exception("merge_report_rewrite_write_failed path=%s", xls)
+    if count:
+        logger.info(
+            "merge_report_paths_rewritten plan_run=%d rows=%d center=%s",
+            plan_run_id, count, center_root,
+        )
+    return count
+
+
 def _publish_merge_to_center(plan_run_id: int, merge_dir: Path) -> "Path | None":
     """把工具本机 merge_result 产物发布到中心 ``dedup/{run_id}/merge/``。
 
@@ -578,6 +646,13 @@ def _publish_merge_to_center(plan_run_id: int, merge_dir: Path) -> "Path | None"
     except OSError:
         logger.exception("merge_publish_failed plan_run=%d dest=%s", plan_run_id, dest)
         return None
+    # 2026-08-31：报表 Path 列对外可达——重写中心副本（agent 本机
+    # .stp-scan 路径 → 中心 devices/{run_id}/{event_dir}/）。失败不阻断
+    # 发布（路径重写是增强，不是发布的前提）。
+    try:
+        _rewrite_merge_report_paths_to_center(dest, plan_run_id, root)
+    except Exception:
+        logger.exception("merge_report_rewrite_failed plan_run=%d", plan_run_id)
     logger.info("merge_published plan_run=%d dest=%s", plan_run_id, dest)
     return dest
 
