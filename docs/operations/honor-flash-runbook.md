@@ -5,9 +5,13 @@
 
 ## 0. 前置条件
 
-- `flash_firmware v1.3.6` 已注册（`GET /api/v1/scripts?name=flash_firmware` 能看到目标版本且 is_active）。
+- `flash_firmware v1.3.10` 已注册（`GET /api/v1/scripts?name=flash_firmware` 能看到目标版本且 is_active）。
 - 20 台 Agent host 已 hot-update / restart 到含 v1.3.x 的 code revision。
 - 目标固件刷机包已从研发渠道拿到（解压后含 scatter 与 DA 文件）。
+- 串行刷多台**首刷**设备时，v1.3.10 会在每台刷完后多等一段「boot 稳定窗口」
+  （默认 20s，`boot_stabilize_seconds`）；指纹只取 MTK 口，邻机非 MTK USB
+  抖动不会重置窗口
+  （[Agent Note](../notes/feature/2026-08-30-flash-v137-boot-stabilize-lock.md)）。
 
 ## 1. 固件上架（中心存储）
 
