@@ -19,13 +19,14 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.core.storage_root import resolve_shared_storage_root
 from backend.models.host import Device
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun, PlanRunTargetDevice
+from backend.models.project_model import ProjectModel
 from backend.models.suite import TestCase, TestSuite
 from backend.services.mtbf_suite import content_fingerprint
 
@@ -218,17 +219,29 @@ def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any
         )
 
     # 5) D3b：项目套件必须跑在归属项目的设备上；通用套件（project 空）放行。
-    #    注意 NULL 语义：SQL 里 `col != x` 不命中 NULL 行，未归属设备会被
-    #    静默放行——fail-closed 要求显式把 NULL 算作不等。
+    #    v2.5 D10：归属派生（device.model ⋈ project_model 活跃成员行）——
+    #    未映射型号（无成员行）与映射到其他项目的型号都算 mismatch，
+    #    fail-closed 语义不变。
     if suite.project_id is not None:
         mismatches = db.execute(
-            select(PlanRunTargetDevice.device_id, Device.project_id)
+            select(
+                PlanRunTargetDevice.device_id,
+                Device.model,
+                ProjectModel.project_id,
+            )
             .join(Device, Device.id == PlanRunTargetDevice.device_id)
+            .outerjoin(
+                ProjectModel,
+                and_(
+                    Device.model == ProjectModel.match_value,
+                                        ProjectModel.is_active.is_(True),
+                ),
+            )
             .where(
                 PlanRunTargetDevice.plan_run_id == pr.id,
                 or_(
-                    Device.project_id.is_(None),
-                    Device.project_id != suite.project_id,
+                    ProjectModel.project_id.is_(None),
+                    ProjectModel.project_id != suite.project_id,
                 ),
             )
         ).all()
@@ -239,8 +252,9 @@ def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any
                 "retarget devices of the suite's project or use a generic suite",
                 suite_project_id=suite.project_id,
                 mismatched_devices=[
-                    {"device_id": did, "device_project_id": pid}
-                    for did, pid in mismatches
+                    {"device_id": did, "device_model": model,
+                     "device_project_id": pid}
+                    for did, model, pid in mismatches
                 ],
             )
     return None
