@@ -80,6 +80,12 @@ def check_mod_v105():
 
 
 @pytest.fixture(scope="module")
+def check_mod_v106():
+    """powercycle_check v1.0.6：文件停滞判定（mtime）——偶发启动失败自愈不再误判。"""
+    return _load("powercycle_check_mod_v106", "powercycle_check/v1.0.6/powercycle_check.py")
+
+
+@pytest.fixture(scope="module")
 def finish_mod():
     return _load("powercycle_finish_mod", "powercycle_finish/v1.0.0/powercycle_finish.py")
 
@@ -501,6 +507,50 @@ class TestV105ResultBytesGrace:
         assert r1["success"] is True
         r2 = check_mod_v105._run({"dead_grace_cycles": 2})
         assert r2["success"] is False
+
+
+class TestV106MtimeGrace:
+    """v1.0.6：判死 = 文件 mtime 停滞（服务死且无进展），非「服务死 N 周期」。"""
+
+    def _patch(self, mod, monkeypatch, tmp_path, mtime=1000, prefs=(6, 100), result_bytes=266):
+        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
+        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
+        monkeypatch.setattr(mod, "_in_collect_window", lambda cfg, now=None: False)
+        monkeypatch.setattr(mod, "device_online", lambda: True)
+        monkeypatch.setattr(mod, "service_alive", lambda: False)
+        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: prefs)
+        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
+        monkeypatch.setattr(mod, "_result_bytes", lambda: result_bytes)
+        monkeypatch.setattr(mod, "_result_mtime", lambda: mtime)
+        monkeypatch.setattr(mod, "_run_finished", lambda: False)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+
+    def test_mtime_stalled_detects_dead(self, check_mod_v106, monkeypatch, tmp_path):
+        """文件停滞（服务真死）→ 基线 1 轮 + grace 2 轮后判死。"""
+        self._patch(check_mod_v106, monkeypatch, tmp_path, mtime=1000)
+        r1 = check_mod_v106._run({"dead_grace_cycles": 2})   # 首轮建基线
+        assert r1["success"] is True
+        r2 = check_mod_v106._run({"dead_grace_cycles": 2})   # 停滞 1
+        assert r2["success"] is True
+        r3 = check_mod_v106._run({"dead_grace_cycles": 2})   # 停滞 2 → 判死
+        assert r3["success"] is False
+        assert "连续 2 个周期" in r3["error_message"]
+
+    def test_mtime_growing_resets_streak(self, check_mod_v106, monkeypatch, tmp_path):
+        """文件持续增长（服务在工作/自愈场景）→ 判死永不触发（最终验收自愈场景）。"""
+        mt = {"v": 1000}
+        self._patch(check_mod_v106, monkeypatch, tmp_path)
+        monkeypatch.setattr(check_mod_v106, "_result_mtime", lambda: mt["v"])   # 覆盖 _patch 的固定值
+        for i in range(8):
+            mt["v"] = 1000 + i * 100   # 每轮都在增长（reboot 后文件写入）
+            r = check_mod_v106._run({"dead_grace_cycles": 2})
+            assert r["success"] is True
+
+    def test_first_cycle_mtime_unknown_not_counted(self, check_mod_v106, monkeypatch, tmp_path):
+        """首轮 last_mtime 未知 → 建基线不判死。"""
+        self._patch(check_mod_v106, monkeypatch, tmp_path, mtime=1000)
+        r1 = check_mod_v106._run({"dead_grace_cycles": 2})
+        assert r1["success"] is True   # 首轮基线
 
 
 class TestCheck:
