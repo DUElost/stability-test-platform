@@ -1,16 +1,16 @@
-/* Plan Execute V2 mockups — tokens aligned with frontend/src/index.css (OpenRouter Phase 1–3) */
+/* Plan Execute V2 mockups — 色板回 STP 蓝系；布局仍对齐 radius/字体/扁平阴影 */
 :root {
-  --bg: hsl(240 50% 99.2%);
-  --fg: hsl(197.1 53.8% 2.5%);
+  --bg: hsl(0 0% 100%);
+  --fg: hsl(222.2 84% 4.9%);
   --card: hsl(0 0% 100%);
-  --muted: hsl(240 5% 96%);
-  --muted-fg: hsl(197.1 20% 40%);
-  --border: hsl(197.1 53.8% 2.5% / 0.078);
-  --primary: hsl(263.7 90.4% 54.9%);
-  --primary-fg: hsl(240 50% 99.2%);
-  --success: hsl(154.9 100% 37.5%);
-  --warning: hsl(41 100% 45%);
-  --destructive: hsl(346.8 77.2% 45%);
+  --muted: hsl(210 40% 96.1%);
+  --muted-fg: hsl(215.4 16.3% 46.9%);
+  --border: hsl(214.3 31.8% 91.4%);
+  --primary: hsl(217 91% 60%);
+  --primary-fg: hsl(210 40% 98%);
+  --success: hsl(142 71% 45%);
+  --warning: hsl(38 92% 50%);
+  --destructive: hsl(0 84.2% 60.2%);
   --info: hsl(199 89% 48%);
   --radius: 0.5rem;
   --shadow: none;
@@ -43,7 +43,7 @@ a:hover { text-decoration: underline; }
   font-size: 12px; padding: 4px 10px; border-radius: 999px;
   background: var(--muted); color: var(--muted-fg);
 }
-.topnav .pill.on { background: hsl(263.7 90.4% 54.9% / 0.15); color: hsl(263.7 90.4% 40%); font-weight: 600; }
+.topnav .pill.on { background: hsl(217 91% 60% / 0.15); color: hsl(217 91% 45%); font-weight: 600; }
 .topnav .spacer { flex: 1; }
 .topnav .hint { font-size: 12px; color: var(--muted-fg); }
 
@@ -79,7 +79,7 @@ a:hover { text-decoration: underline; }
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 10px; border-radius: 8px; background: var(--muted); color: var(--muted-fg);
 }
-.command-bar .step.active { background: hsl(263.7 90.4% 54.9% / 0.12); color: hsl(263.7 90.4% 35%); font-weight: 600; }
+.command-bar .step.active { background: hsl(217 91% 60% / 0.12); color: hsl(217 91% 40%); font-weight: 600; }
 .command-bar .step.done { background: hsl(154.9 100% 37.5% / 0.12); color: hsl(154.9 100% 25%); }
 .command-bar .meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .chip {
@@ -90,7 +90,7 @@ a:hover { text-decoration: underline; }
 .chip.ok { background: hsl(154.9 100% 37.5% / 0.12); color: hsl(154.9 100% 25%); }
 .chip.warn { background: hsl(41 100% 45% / 0.15); color: hsl(32 80% 30%); }
 .chip.bad { background: hsl(346.8 77.2% 45% / 0.12); color: hsl(346.8 70% 38%); }
-.chip.filter { background: hsl(263.7 90.4% 54.9% / 0.1); border-color: hsl(263.7 90.4% 54.9% / 0.25); }
+.chip.filter { background: hsl(217 91% 60% / 0.1); border-color: hsl(217 91% 60% / 0.25); }
 .chip .x { opacity: 0.55; cursor: pointer; margin-left: 2px; }
 .chip .x:hover { opacity: 1; }
 .command-bar .cta { display: flex; gap: 8px; align-items: center; }
@@ -123,7 +123,7 @@ a:hover { text-decoration: underline; }
   border: 1px solid transparent; font-size: 12px;
 }
 .node-item:hover { background: var(--muted); }
-.node-item.on { background: hsl(263.7 90.4% 54.9% / 0.1); border-color: hsl(263.7 90.4% 54.9% / 0.35); }
+.node-item.on { background: hsl(217 91% 60% / 0.1); border-color: hsl(217 91% 60% / 0.35); }
 .node-item .row { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
 .node-item .name { font-weight: 600; font-size: 13px; }
 .node-item .sub { color: var(--muted-fg); }
@@ -157,12 +157,12 @@ a:hover { text-decoration: underline; }
   color: var(--muted-fg);
 }
 .seg button + button { border-left: 1px solid var(--border); }
-.seg button.on { background: hsl(263.7 90.4% 54.9% / 0.12); color: hsl(263.7 90.4% 35%); font-weight: 600; }
+.seg button.on { background: hsl(217 91% 60% / 0.12); color: hsl(217 91% 40%); font-weight: 600; }
 
 .quick-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
 .quick-chips .chip { cursor: pointer; }
 .quick-chips .chip:hover { border-color: var(--primary); }
-.quick-chips .chip.active { background: hsl(263.7 90.4% 54.9% / 0.15); border-color: var(--primary); color: hsl(263.7 90.4% 35%); }
+.quick-chips .chip.active { background: hsl(217 91% 60% / 0.15); border-color: var(--primary); color: hsl(217 91% 40%); }
 
 /* Matrix */
 .matrix-wrap { padding: 12px; }
@@ -192,7 +192,7 @@ a:hover { text-decoration: underline; }
     hsl(38 92% 70% / 0.35) 6px
   );
 }
-.cell.busy { background: hsl(263.7 90.4% 54.9% / 0.55); }
+.cell.busy { background: hsl(217 91% 60% / 0.55); }
 .cell.offline { background: hsl(215 16% 80%); }
 .cell.selected {
   border-color: hsl(222 84% 15%);
@@ -219,7 +219,7 @@ a:hover { text-decoration: underline; }
 .swatch.blocked {
   background: repeating-linear-gradient(-45deg, hsl(41 100% 45% / 0.55), hsl(41 100% 45% / 0.55) 2px, hsl(38 92% 70% / 0.35) 2px, hsl(38 92% 70% / 0.35) 4px);
 }
-.swatch.busy { background: hsl(263.7 90.4% 54.9% / 0.55); }
+.swatch.busy { background: hsl(217 91% 60% / 0.55); }
 .swatch.offline { background: hsl(215 16% 80%); }
 .swatch.selected { background: hsl(154.9 100% 37.5% / 0.75); border: 2px solid hsl(222 84% 15%); }
 
@@ -262,15 +262,15 @@ a:hover { text-decoration: underline; }
 .table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .table th, .table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .table th { color: var(--muted-fg); font-weight: 500; background: hsl(210 40% 98%); position: sticky; top: 0; }
-.table tr:hover td { background: hsl(263.7 90.4% 54.9% / 0.04); }
-.table tr.hl td { background: hsl(263.7 90.4% 54.9% / 0.12); animation: flash 0.9s ease; }
+.table tr:hover td { background: hsl(217 91% 60% / 0.04); }
+.table tr.hl td { background: hsl(217 91% 60% / 0.12); animation: flash 0.9s ease; }
 .badge {
   display: inline-flex; align-items: center; height: 20px; padding: 0 7px;
   border-radius: 999px; font-size: 11px; font-weight: 500;
 }
 .badge.ready { background: hsl(154.9 100% 37.5% / 0.15); color: hsl(154.9 100% 25%); }
 .badge.blocked { background: hsl(41 100% 45% / 0.18); color: hsl(32 80% 30%); }
-.badge.busy { background: hsl(263.7 90.4% 54.9% / 0.15); color: hsl(263.7 90.4% 35%); }
+.badge.busy { background: hsl(217 91% 60% / 0.15); color: hsl(217 91% 40%); }
 .badge.offline { background: var(--muted); color: var(--muted-fg); }
 
 /* Cockpit */
@@ -297,7 +297,7 @@ a:hover { text-decoration: underline; }
   padding: 10px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 8px;
   font-size: 12px; cursor: pointer;
 }
-.recent-run:hover { border-color: var(--primary); background: hsl(263.7 90.4% 54.9% / 0.04); }
+.recent-run:hover { border-color: var(--primary); background: hsl(217 91% 60% / 0.04); }
 .check-list { list-style: none; padding: 0; margin: 0; font-size: 13px; }
 .check-list li {
   display: flex; gap: 8px; align-items: flex-start; padding: 8px 0;
@@ -331,13 +331,13 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow);
   color: inherit; text-decoration: none; transition: border-color .15s, transform .15s;
 }
-.card-link:hover { border-color: var(--primary); background: hsl(263.7 90.4% 54.9% / 0.04); text-decoration: none; }
+.card-link:hover { border-color: var(--primary); background: hsl(217 91% 60% / 0.04); text-decoration: none; }
 .card-link h3 { margin: 0 0 6px; font-size: 16px; }
 .card-link p { margin: 0; font-size: 13px; color: var(--muted-fg); line-height: 1.5; }
-.card-link .tag { display: inline-block; margin-top: 10px; font-size: 11px; color: hsl(263.7 90.4% 40%); font-weight: 600; }
+.card-link .tag { display: inline-block; margin-top: 10px; font-size: 11px; color: hsl(217 91% 45%); font-weight: 600; }
 .note {
   margin: 16px 0; padding: 14px 16px; border-radius: 10px;
-  background: hsl(263.7 90.4% 54.9% / 0.08); border: 1px solid hsl(263.7 90.4% 54.9% / 0.2);
+  background: hsl(217 91% 60% / 0.08); border: 1px solid hsl(217 91% 60% / 0.2);
   font-size: 13px; line-height: 1.55;
 }
 .wire {
@@ -359,7 +359,7 @@ a:hover { text-decoration: underline; }
   padding: 2px 6px; border-radius: 4px;
 }
 .stage-tag.init { background: hsl(199 89% 48% / 0.15); color: hsl(199 89% 30%); }
-.stage-tag.patrol { background: hsl(263.7 90.4% 54.9% / 0.15); color: hsl(263.7 90.4% 35%); }
+.stage-tag.patrol { background: hsl(217 91% 60% / 0.15); color: hsl(217 91% 40%); }
 .stage-tag.teardown { background: hsl(215 16% 80% / 0.5); color: hsl(215 16% 35%); }
 
 .toast {
