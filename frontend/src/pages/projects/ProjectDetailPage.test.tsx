@@ -116,12 +116,12 @@ describe('ProjectDetailPage', () => {
     // 四块标题
     expect(screen.getByText(/设备（1）/)).toBeInTheDocument();
     expect(screen.getByText(/计划（1）/)).toBeInTheDocument();
-    expect(screen.getByText('风险趋势（近 30 天 · S/A/B）')).toBeInTheDocument();
+    expect(screen.getByText('最近 30 天')).toBeInTheDocument();
     // P2-11：归属规则提为主块（JIRA 占位卡片已删，头部 badge 保留）
     expect(screen.getByTestId('detail-rules')).toBeInTheDocument();
     expect(screen.queryByText('JIRA 集成')).not.toBeInTheDocument();
-    // 空态（暂无风险数据）
-    expect(screen.getByText(/暂无风险数据/)).toBeInTheDocument();
+    // 空态（暂无运行数据）
+    expect(screen.getByText(/暂无运行数据/)).toBeInTheDocument();
   });
 
   it('shows jira key badge when configured', async () => {
