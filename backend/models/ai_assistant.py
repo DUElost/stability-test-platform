@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -92,7 +93,9 @@ class AiAssistantAction(Base):
     __tablename__ = "ai_assistant_action"
 
     id = Column(Integer, primary_key=True)
-    session_id = Column(Integer, ForeignKey("ai_chat_session.id"), nullable=False, index=True)
+    # 显式索引名 ix_ai_assistant_action_session（对齐迁移链；index=True 的
+    # 自动命名 ix_ai_assistant_action_session_id 会让 schema-sync 误报）
+    session_id = Column(Integer, ForeignKey("ai_chat_session.id"), nullable=False)
     tool_name = Column(String(64), nullable=False)
     params = Column(JSONB, nullable=False, default=dict, server_default="{}")
     # proposed | approved | rejected | expired | running | succeeded | failed | cancelled
@@ -105,3 +108,7 @@ class AiAssistantAction(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )
     decided_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_ai_assistant_action_session", "session_id"),
+    )

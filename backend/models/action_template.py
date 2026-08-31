@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.core.database import Base
@@ -20,3 +20,8 @@ class ActionTemplate(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        # 对齐迁移链既有索引（schema-sync 基线收敛）
+        Index("ix_action_template_active", "is_active", "name"),
+    )
