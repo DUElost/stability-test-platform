@@ -93,6 +93,22 @@ class ProjectCreateIn(BaseModel):
             raise ValueError("display_name must not be blank")
         return name
 
+    @field_validator("jira_project_key")
+    @classmethod
+    def validate_jira_project_key(cls, value: Optional[str]) -> Optional[str]:
+        """v2.5 D12：宽松校验——只挡空白与超长（生产值含中文/连字符，
+        规范校验留详情页「未验证」标记与提单前探测）。"""
+        if value is None:
+            return None
+        key = value.strip()
+        if not key:
+            return None
+        if len(key) > 32:
+            raise ValueError("jira_project_key must be at most 32 chars")
+        if any(ch.isspace() for ch in key):
+            raise ValueError("jira_project_key must not contain whitespace")
+        return key
+
 
 class ProjectUpdateIn(BaseModel):
     """Facet 修改入参——``project_key`` 改走独立 rename 端点（D2 复核）。
@@ -115,6 +131,20 @@ class ProjectUpdateIn(BaseModel):
         if not name:
             raise ValueError("display_name must not be blank")
         return name
+
+    @field_validator("jira_project_key")
+    @classmethod
+    def validate_jira_project_key(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        key = value.strip()
+        if not key:
+            return None
+        if len(key) > 32:
+            raise ValueError("jira_project_key must be at most 32 chars")
+        if any(ch.isspace() for ch in key):
+            raise ValueError("jira_project_key must not contain whitespace")
+        return key
 
 
 class InventoryModelOut(ORMBaseModel):

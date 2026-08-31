@@ -69,12 +69,16 @@ class ResultsSummary(BaseModel):
 
 
 class RiskTrendBucket(BaseModel):
-    """单日 S/A/B 风险计数（项目维度，P2）。"""
+    """单日 S/A/B/NONE 风险计数（项目维度，v2.5 D13）。
+
+    NONE = 零事件 run（与 B 分开——「B：其余非零」口径；零不是低风险）。
+    """
 
     date: str  # YYYY-MM-DD（run 起始日）
     S: int = 0
     A: int = 0
     B: int = 0
+    NONE: int = 0
     runs: int = 0
 
 
@@ -395,12 +399,18 @@ def get_risk_trend(
             .all()
         ]
         summary = aggregate_risk_summary(db, job_ids) or {}
-        level = str(summary.get("risk_level", "B"))
+        # v2.5 D13：零事件（_build_risk_summary 返回 None）→ NONE 第四态，
+        # 不再落进 B（「B：其余非零」口径）
+        level = (
+            str(summary.get("risk_level"))
+            if summary
+            else "NONE"
+        )
         if run.started_at is None:
             continue
         day = run.started_at.date().isoformat()
-        bucket = buckets.setdefault(day, {"S": 0, "A": 0, "B": 0, "runs": 0})
-        if level in ("S", "A", "B"):
+        bucket = buckets.setdefault(day, {"S": 0, "A": 0, "B": 0, "NONE": 0, "runs": 0})
+        if level in ("S", "A", "B", "NONE"):
             bucket[level] += 1
         bucket["runs"] += 1
 
