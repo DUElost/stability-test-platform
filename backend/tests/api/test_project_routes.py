@@ -1257,3 +1257,119 @@ class TestNormalizeModelsCase:
             .all()
         )
         assert [r[0] for r in rules] == ["MLD_LX3"]
+
+
+class TestMapApplyCaseRoundtrip:
+    """#644 大小写归一回归：混合大小写设备事实的映射全链路。
+
+    - 设备 model='Infinix_X1102D'（混合大小写）：UI 勾选设备事实 → 归一
+      大写 → existing 归一匹配 → 新行写**设备事实原值**（join 全等命中）
+    - 让位：SEED 占用大写旧行 → reassign 让位后新行原值
+    - 并发双写：flush IntegrityError → 409（非 500）
+    """
+
+    def test_mixed_case_device_roundtrip(
+        self, client, admin_headers, db_session, project_a
+    ):
+        # 设备事实混合大小写（生产 Infinix_X1102D 即此形态）
+        _make_device(db_session, "s-mixed-1", None, model="Infinix_X1102D")
+        _make_device(db_session, "s-mixed-2", None, model="Infinix_X1102D")
+
+        preview = client.post(
+            "/api/v1/projects/proj-a/map/preview",
+            headers=admin_headers,
+            json={"models": ["Infinix_X1102D"]},  # UI 勾选设备事实
+        )
+        assert preview.status_code == 200
+        body = preview.json()["data"]
+        assert body["will_assign"] == 2
+        assert body["unknown_models"] == []
+
+        applied = client.post(
+            "/api/v1/projects/proj-a/map/apply",
+            headers=admin_headers,
+            json={"models": ["Infinix_X1102D"]},
+        )
+        assert applied.status_code == 200, applied.text
+        # 成员行写设备事实原值（不是归一大写）——join 全等命中设备
+        rule = (
+            db_session.query(ProjectModel)
+            .filter(
+                ProjectModel.project_id == project_a.id,
+                ProjectModel.is_active.is_(True),
+            )
+            .all()
+        )
+        assert [r.match_value for r in rule] == ["Infinix_X1102D"]
+
+        # 派生读路径：设备归属到 proj-a
+        detail = client.get("/api/v1/projects/proj-a", headers=admin_headers)
+        assert detail.json()["data"]["device_count"] == 2
+
+    def test_mixed_case_input_normalized_and_roundtrip(
+        self, client, admin_headers, db_session, project_a
+    ):
+        # 输入全小写也归一命中（写端仍归一，读端归一匹配）
+        _make_device(db_session, "s-mixed-3", None, model="Infinix_X1102D")
+        applied = client.post(
+            "/api/v1/projects/proj-a/map/apply",
+            headers=admin_headers,
+            json={"models": ["infinix_x1102d"]},
+        )
+        assert applied.status_code == 200, applied.text
+        rule = (
+            db_session.query(ProjectModel.match_value)
+            .filter(ProjectModel.project_id == project_a.id)
+            .all()
+        )
+        assert [r[0] for r in rule] == ["Infinix_X1102D"]
+
+    def test_seed_cede_keeps_device_fact_case(
+        self, client, admin_headers, db_session, project_a, project_legacy
+    ):
+        # SEED 项目占用大写旧行 + 设备混合大小写 → reassign 让位后新行原值
+        db_session.add(ProjectModel(
+            project_id=project_legacy.id, match_value="INFINIX_X1102D"))
+        db_session.commit()
+        _make_device(db_session, "s-mixed-4", None, model="Infinix_X1102D")
+
+        applied = client.post(
+            "/api/v1/projects/proj-a/map/apply",
+            headers=admin_headers,
+            json={"models": ["Infinix_X1102D"], "reassign_conflicts": True},
+        )
+        assert applied.status_code == 200, applied.text
+        # 旧行让位（inactive，保留大写）+ 新行设备事实原值（active）
+        rows = db_session.query(ProjectModel).filter(
+            ProjectModel.match_value.in_(["INFINIX_X1102D", "Infinix_X1102D"]),
+        ).order_by(ProjectModel.is_active).all()
+        assert [(r.match_value, r.is_active) for r in rows] == [
+            ("INFINIX_X1102D", False), ("Infinix_X1102D", True),
+        ]
+        assert rows[1].project_id == project_a.id
+
+    def test_concurrent_duplicate_returns_409(
+        self, client, admin_headers, db_session, project_a, monkeypatch
+    ):
+        # 并发双写：existing 未命中但 flush 撞唯一索引 → 409 非 500
+        from sqlalchemy.exc import IntegrityError
+
+        _make_device(db_session, "s-mixed-5", None, model="Infinix_X1102D")
+
+        original_flush = db_session.flush
+
+        def racy_flush():
+            # 有 pending INSERT 时模拟另一请求已抢先插入同归一型号
+            # （existing 查询的 autoflush 无 pending，放行）
+            if db_session.new:
+                original_flush()
+                raise IntegrityError("stmt", {}, Exception("dup"))
+            original_flush()
+
+        monkeypatch.setattr(db_session, "flush", racy_flush)
+        resp = client.post(
+            "/api/v1/projects/proj-a/map/apply",
+            headers=admin_headers,
+            json={"models": ["Infinix_X1102D"]},
+        )
+        assert resp.status_code == 409, resp.text

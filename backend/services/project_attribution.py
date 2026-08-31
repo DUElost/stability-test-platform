@@ -27,7 +27,7 @@ def resolve_project_id(db: Session, model: Optional[str]) -> Optional[int]:
     rule = db.execute(
         select(ProjectModel.project_id)
         .where(
-                        ProjectModel.match_value == model,
+            ProjectModel.match_value == model,
             ProjectModel.is_active.is_(True),
         )
     ).scalar_one_or_none()
@@ -41,7 +41,7 @@ def resolve_rules_for_model(db: Session, model: Optional[str]) -> list[ProjectMo
     rows = db.execute(
         select(ProjectModel)
         .where(
-                        ProjectModel.match_value == model,
+            ProjectModel.match_value == model,
             ProjectModel.is_active.is_(True),
         )
         .order_by(ProjectModel.id)
