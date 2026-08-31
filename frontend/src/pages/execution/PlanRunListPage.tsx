@@ -12,7 +12,7 @@ import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
-import { STAT, TEXT } from '@/design-system/tokens';
+import { LAYOUT, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull } from '@/utils/format';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -47,7 +47,7 @@ export default function PlanRunListPage() {
   }, [runs]);
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title="Plan 执行记录"
         subtitle="查看所有 PlanRun 历史记录"
@@ -63,7 +63,7 @@ export default function PlanRunListPage() {
 
       {/* Stats — 稀疏数字条（当前页聚合，不新增 API） */}
       {!isLoading && !isError && runs && runs.length > 0 && (
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-3 gap-4">
           <Card>
             <CardContent className="py-4 px-4">
               <p className={STAT.label}>总数</p>

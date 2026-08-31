@@ -12,7 +12,7 @@ import { InlineError } from '@/components/ui/error-state';
 import { InlineEmpty } from '@/components/ui/empty-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { FORM, INTERACTIVE, MODAL, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
-import { resourceUsageBgClass } from '@/design-system/tokens';
+import { LAYOUT, resourceUsageBgClass } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 const DEFAULT_MAX_DEVICES = 30;
@@ -137,7 +137,7 @@ export default function WifiPage() {
   };
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title="WiFi 资源池"
         subtitle="管理 WiFi 路由器池，平台按容量自动为设备分配接入点"

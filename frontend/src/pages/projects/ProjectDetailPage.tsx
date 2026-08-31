@@ -21,7 +21,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { InlineEmpty } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
-import { TEXT } from '@/design-system/tokens';
+import { LAYOUT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -158,7 +158,7 @@ export default function ProjectDetailPage() {
 
   if (detailQ.isLoading) {
     return (
-      <PageContainer width="content">
+      <PageContainer width="content" className={LAYOUT.pageGap}>
         <PageHeader title="项目详情" subtitle={projectKey} />
         <div className="space-y-4">
           <Skeleton className="h-24 w-full" />
@@ -172,7 +172,7 @@ export default function ProjectDetailPage() {
     const status = toApiError(detailQ.error).status;
     const isNotFound = status === 404;
     return (
-      <PageContainer width="content">
+      <PageContainer width="content" className={LAYOUT.pageGap}>
         <PageHeader title="项目详情" subtitle={projectKey} />
         <ErrorState
           // 约束 2：未知 key 是路由错误（后端统一 404），按错误态渲染不吞成空态
@@ -200,7 +200,7 @@ export default function ProjectDetailPage() {
   const plans = plansQ.data ?? [];
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title={project.display_name}
         subtitle={project.project_key}

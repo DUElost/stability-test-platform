@@ -31,7 +31,7 @@ import {
 import { ClickableRow } from '@/components/ui/clickable-row';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { KPI_TONE, STAT } from '@/design-system/tokens';
+import { KPI_TONE, LAYOUT, STAT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 export default function ResultsPage() {
@@ -51,7 +51,7 @@ export default function ResultsPage() {
 
   if (isError) {
     return (
-      <PageContainer width="content">
+      <PageContainer width="content" className={LAYOUT.pageGap}>
         <PageHeader title="测试结果" subtitle="测试运行统计与风险分布概览" />
         <ErrorState
           // 未知项目 key：按错误态渲染（后端统一 404），不吞成空数据
@@ -71,7 +71,7 @@ export default function ResultsPage() {
   }
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title="测试结果"
         subtitle="测试运行统计与风险分布概览"
@@ -85,7 +85,7 @@ export default function ResultsPage() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <DashboardStatCard
           label="运行总数"
           value={stats?.total ?? 0}
