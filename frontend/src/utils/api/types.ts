@@ -740,6 +740,13 @@ export interface Specialty {
   sort_order: number;
 }
 
+/** ADR-0029 D12：customer 字典行（编辑下拉数据源，列不动）。 */
+export interface CustomerDict {
+  key: string;
+  display_name: string;
+  sort_order: number;
+}
+
 export interface ProjectSummary extends Project {
   device_count: number;
   running_run_count: number;
