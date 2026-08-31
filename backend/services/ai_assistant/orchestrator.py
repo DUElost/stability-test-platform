@@ -194,7 +194,14 @@ def _history_as_llm_messages(db: Session, session_id: int) -> list[dict]:
     return messages
 
 
-def _decide_execution_mode(spec, cfg: AiAssistantConfig, user) -> str:
+def _decide_execution_mode(
+    spec,
+    cfg: AiAssistantConfig,
+    user,
+    *,
+    tool_args: dict | None = None,
+    db=None,
+) -> str:
     """返回 "auto"（直接执行）或 "proposed"（操作卡审批）。"""
     # auto_approve / T1 自动均须发起人本身有权调用（D8：不得借助手越权）
     if not user_may_invoke_tool(user, spec):
@@ -204,6 +211,16 @@ def _decide_execution_mode(spec, cfg: AiAssistantConfig, user) -> str:
     # T2：白名单内低危工具可免确认（仅 whitelistable 标记的工具可入名单）
     if spec.tier == "T2" and spec.whitelistable and spec.name in (cfg.auto_approve_tools or []):
         return "auto"
+    # T2b：按 plan_id 配置的自动派发（仅 dispatch_plan_run；仍须发起人 API 权限）
+    if (
+        spec.name == "dispatch_plan_run"
+        and tool_args
+        and db is not None
+    ):
+        from backend.services.ai_assistant.t2b_allowlist import dispatch_matches_t2b_allowlist
+
+        if dispatch_matches_t2b_allowlist(cfg, tool_args, db):
+            return "auto"
     return "proposed"
 
 
@@ -736,7 +753,9 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                         except ToolValidationError as exc:
                             note = f"参数校验失败：{exc}"
                         else:
-                            mode = _decide_execution_mode(spec, cfg, user_row)
+                            mode = _decide_execution_mode(
+                                spec, cfg, user_row, tool_args=tool_args, db=db,
+                            )
                             action = _create_action(
                                 db, session,
                                 tool_name=tc.name, arguments=tool_args, mode=mode,
@@ -757,6 +776,10 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                                 else:
                                     db.refresh(action)
                                     if action.status in _ACTION_TERMINAL:
+                                        # 内联出终态（服务型工具 / RunKeyBusy / spawn 失败）：
+                                        # 此刻续轮与本轮 SAQ job 同 key 会被静默丢弃
+                                        # （saq enqueue 对已存在的 key 返回 None），所以必须
+                                        # 在本轮把真实结果喂回模型——也不能谎报「已开始执行」
                                         note = (
                                             f"操作卡 #{action.id} 已结束（{action.status}）："
                                             f"{action.result_summary or ''}"
