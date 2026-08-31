@@ -151,27 +151,47 @@ def bulk_assign_project(
     if len(devices) != len(set(payload.device_ids)):
         raise HTTPException(status_code=404, detail="one or more devices not found")
 
-    for device in devices:
-        if device.project_id == project.id and device.project_pinned:
-            continue
-        from_key = device.project.project_key if device.project else None
-        device.project_id = project.id
-        # ADR-0029 P1：批量归入 = 人工钉住（命令式例外路径，规则不覆盖）
-        device.project_pinned = True
+    # ADR-0029 v2.5 D10 M3：批量归入 = 为选中设备的型号添加成员行
+    # （归属唯一事实源；同型号全部设备随之归入，无逐设备钉住）。
+    from backend.models.project_model import ProjectModel
+
+    models = sorted({_blank_to_none(d.model) for d in devices if d.model})
+    added = []
+    for model in models:
+        existing = db.execute(
+            select(ProjectModel)
+            .where(
+                                ProjectModel.match_value == model,
+                ProjectModel.is_active.is_(True),
+            )
+        ).scalar_one_or_none()
+        if existing is not None and existing.project_id != project.id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"model {model} already member of another project",
+            )
+        if existing is None:
+            db.add(ProjectModel(
+                project_id=project.id,
+                match_value=model,
+                created_by=current_user.id,
+            ))
+            added.append(model)
+    if added:
         record_audit(
             db,
-            action="assign_project",
-            resource_type="device",
-            resource_id=device.id,  # id 已存在，无需 flush 取号
+            action="bulk_assign_project_models",
+            resource_type="test_project",
+            resource_id=project.id,
             details={
                 "project_key": project.project_key,
-                "from_project_key": from_key,
+                "models": added,
+                "device_count": len(devices),
             },
             user_id=current_user.id,
             username=current_user.username,
             request=request,
         )
-    # 全部 UPDATE + audit 累积后单次 flush+commit（545 台批量归属不逐台往返）
     db.commit()
 
     from backend.realtime.socketio_server import emit_project_changed
@@ -191,6 +211,13 @@ def bulk_assign_project(
     return ok(items)
 
 
+def _blank_to_none(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 def _model_to_project_map(db: Session) -> dict[str, tuple[int, str]]:
     """活跃成员行一次查询：model → (project_id, project_key)（批量预取）。"""
     rows = db.execute(
@@ -198,8 +225,7 @@ def _model_to_project_map(db: Session) -> dict[str, tuple[int, str]]:
                TestProject.project_key)
         .join(TestProject, TestProject.id == ProjectModel.project_id)
         .where(
-            ProjectModel.match_type == "MODEL",
-            ProjectModel.is_active.is_(True),
+                        ProjectModel.is_active.is_(True),
         )
     ).all()
     return {match_value: (project_id, project_key)
@@ -267,14 +293,12 @@ def list_devices(
         query = query.join(ProjectModel, Device.model == ProjectModel.match_value) \
                      .filter(
                          ProjectModel.project_id == project.id,
-                         ProjectModel.match_type == "MODEL",
-                         ProjectModel.is_active.is_(True),
+                                                  ProjectModel.is_active.is_(True),
                      )
 
     if unassigned:
         mapped_models = select(ProjectModel.match_value).where(
-            ProjectModel.match_type == "MODEL",
-            ProjectModel.is_active.is_(True),
+                        ProjectModel.is_active.is_(True),
         )
         query = query.filter(
             or_(Device.model.is_(None), ~Device.model.in_(mapped_models))
