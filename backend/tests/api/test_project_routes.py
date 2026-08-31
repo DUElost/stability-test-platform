@@ -680,8 +680,8 @@ class TestPromoteSeedProject:
         self, client, db_session, admin_headers
     ):
         seed = self._seed_project(db_session)
-        d1 = _make_device(db_session, "s-ela-1", seed, model="MLD_LX2", platform="MTK")
-        d2 = _make_device(db_session, "s-ela-2", seed, model="MLD_LX3", platform="MTK")
+        _make_device(db_session, "s-ela-1", seed, model="MLD_LX2", platform="MTK")
+        _make_device(db_session, "s-ela-2", seed, model="MLD_LX3", platform="MTK")
         db_session.commit()
 
         resp = client.post(
