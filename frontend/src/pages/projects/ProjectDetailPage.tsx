@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Archive,
+  ArchiveRestore,
   ArrowLeft,
   Pencil,
   Smartphone,
@@ -142,6 +143,19 @@ export default function ProjectDetailPage() {
     archiveMutation.mutate();
   };
 
+  // #644 P1-4：解档——归档守卫的对称操作，误归档可撤销。
+  const unarchiveMutation = useMutation({
+    mutationFn: () => api.projects.unarchive(projectKey),
+    onSuccess: () => {
+      toast.success('项目已恢复');
+      void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectKey) });
+      void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
+    },
+    onError: (error) => {
+      toast.error(`恢复失败: ${toApiError(error).message || '请稍后重试'}`);
+    },
+  });
+
   if (detailQ.isLoading) {
     return (
       <PageContainer width="content">
@@ -262,6 +276,17 @@ export default function ProjectDetailPage() {
               >
                 <Archive size={14} className="mr-1.5" />
                 归档
+              </Button>
+            ) : null}
+            {isAdmin && project.status === 'ARCHIVED' ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                data-testid="unarchive-project-open"
+                onClick={() => unarchiveMutation.mutate()}
+              >
+                <ArchiveRestore size={14} className="mr-1.5" />
+                恢复
               </Button>
             ) : null}
           </div>

@@ -509,12 +509,20 @@ class TestUpdateAndArchiveProject:
         )
         assert update.status_code == 409
 
-    def test_archive_seed_422(self, client, admin_headers, project_legacy):
+    def test_archive_seed_allowed(self, client, admin_headers, project_legacy):
+        # #644 P2-7：SEED 可归档 = 显式放弃待转正标签（退场路径）
         resp = client.post(
             "/api/v1/projects/LEGACY/archive",
             headers=admin_headers,
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 200
+        assert resp.json()["data"]["status"] == "ARCHIVED"
+        # LEGACY 兜底标签的 promote 拒绝在 ARCHIVED 检查之前（422 先命中）
+        promote = client.post(
+            "/api/v1/projects/seed/LEGACY/promote",
+            headers=admin_headers,
+        )
+        assert promote.status_code == 422
 
     def test_forbidden_for_non_admin(self, client, auth_headers, project_a):
         assert (
@@ -1116,3 +1124,96 @@ class TestCustomerDict:
 
     def test_requires_auth(self, client):
         assert client.get("/api/v1/projects/customers").status_code == 401
+
+
+class TestArchiveGuards:
+    """#644 P1-4 — 归档守卫补齐 + 解档端点 + SEED 退场。"""
+
+    def _archive(self, client, admin_headers, key="proj-a"):
+        resp = client.post(f"/api/v1/projects/{key}/archive", headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+
+    def test_archived_project_read_only_endpoints(
+        self, client, admin_headers, db_session, project_a
+    ):
+        from backend.models.project_model import ProjectModel
+
+        db_session.add(ProjectModel(project_id=project_a.id, match_value="MLD_LX2"))
+        db_session.commit()
+        self._archive(client, admin_headers)
+
+        rename = client.put(
+            "/api/v1/projects/proj-a/rename",
+            headers=admin_headers, json={"new_key": "NEW-KEY"},
+        )
+        assert rename.status_code == 409
+
+        preview = client.post(
+            "/api/v1/projects/proj-a/map/preview",
+            headers=admin_headers, json={"models": ["MLD_LX3"]},
+        )
+        assert preview.status_code == 409
+
+        apply = client.post(
+            "/api/v1/projects/proj-a/map/apply",
+            headers=admin_headers, json={"models": ["MLD_LX3"]},
+        )
+        assert apply.status_code == 409
+
+        remove = client.delete(
+            "/api/v1/projects/proj-a/rules/MLD_LX2", headers=admin_headers
+        )
+        assert remove.status_code == 409
+
+    def test_unarchive_restores_and_records_audit(
+        self, client, admin_headers, db_session, project_a
+    ):
+        self._archive(client, admin_headers)
+        resp = client.post(
+            "/api/v1/projects/proj-a/unarchive", headers=admin_headers
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["status"] == "ACTIVE"
+        audits = db_session.query(AuditLog).filter(
+            AuditLog.action == "unarchive_project"
+        ).all()
+        assert len(audits) == 1
+        assert audits[0].details["to_status"] == "ACTIVE"
+        # 解档后可继续改名（只读守卫解除）
+        rename = client.put(
+            "/api/v1/projects/proj-a/rename",
+            headers=admin_headers, json={"new_key": "NEW-KEY"},
+        )
+        assert rename.status_code == 200
+
+    def test_unarchive_not_archived_409(self, client, admin_headers, project_a):
+        resp = client.post(
+            "/api/v1/projects/proj-a/unarchive", headers=admin_headers
+        )
+        assert resp.status_code == 409
+
+    def test_unarchive_forbidden_for_non_admin(
+        self, client, db_session, project_a, auth_headers
+    ):
+        project_a.status = "ARCHIVED"
+        db_session.commit()
+        resp = client.post(
+            "/api/v1/projects/proj-a/unarchive", headers=auth_headers
+        )
+        assert resp.status_code == 403
+
+    def test_seed_list_defaults_active(
+        self, client, auth_headers, admin_headers, project_legacy
+    ):
+        # 待转正队列默认只列 ACTIVE；归档（放弃）后退出队列
+        seed = client.get("/api/v1/projects?source=seed", headers=auth_headers)
+        assert {p["project_key"] for p in seed.json()["data"]} == {"LEGACY"}
+
+        self._archive(client, admin_headers, key="LEGACY")
+
+        active = client.get("/api/v1/projects?source=seed", headers=auth_headers)
+        assert active.json()["data"] == []
+        archived = client.get(
+            "/api/v1/projects?source=seed&status=ARCHIVED", headers=auth_headers
+        )
+        assert {p["project_key"] for p in archived.json()["data"]} == {"LEGACY"}
