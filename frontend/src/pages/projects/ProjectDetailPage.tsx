@@ -2,16 +2,6 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import {
   Archive,
   ArrowLeft,
   Pencil,
@@ -38,7 +28,11 @@ import { useToast } from '@/hooks/useToast';
 import { api, toApiError } from '@/utils/api';
 import { projectKeys } from '@/utils/api/queryKeys';
 import type { ProjectUpdateInput } from '@/utils/api/types';
+import { formatLocalDateTime } from '@/utils/format';
 import EditProjectDialog from './components/EditProjectDialog';
+
+// v2.5 D12：JIRA 键宽松规范（大写字母开头的字母数字/连字符）——生产含中文键标「未验证」
+const JIRA_KEY_RE = /^[A-Z][A-Z0-9-]*$/;
 import { coverageSummary } from './inventoryDisplay';
 import { FACET_FIELD_ENTRIES } from './facetFields';
 
@@ -227,6 +221,14 @@ export default function ProjectDetailPage() {
               <Badge variant="info">
                 <TicketCheck className="h-3 w-3 mr-1" />
                 JIRA: {project.jira_project_key}
+                {!JIRA_KEY_RE.test(project.jira_project_key) && (
+                  <span
+                    className="ml-1 text-[10px] text-warning"
+                    title="不符合 JIRA 项目键规范（大写字母开头）；提单时以厂商工具默认映射兜底"
+                  >
+                    未验证
+                  </span>
+                )}
               </Badge>
             ) : (
               <Badge variant="outline" data-testid="jira-not-configured">
@@ -420,68 +422,71 @@ export default function ProjectDetailPage() {
           </CardContent>
         </Card>
 
-        {/* 结果块：风险趋势（按天 S/A/B）——最近运行列表在 /results 页已有 */}
+        {/* 结果块：最近跑得怎么样（v2.5 D13——KPI + S 级清单；堆叠趋势留给全局） */}
         <Card className="lg:col-span-2">
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-sm font-medium">
               <ListTodo size={16} className="text-muted-foreground" />
-              风险趋势（近 30 天 · S/A/B）
+              最近 30 天
             </CardTitle>
           </CardHeader>
           <CardContent>
             {riskTrendQ.isLoading ? (
-              <Skeleton className="h-56 w-full" />
-            ) : !riskTrendQ.data?.buckets?.length ? (
-              <InlineEmpty>
-                暂无风险数据——新 Run 派发完成后开始积累（S/A/B 由事件定级）
-              </InlineEmpty>
+              <Skeleton className="h-24 w-full" />
             ) : (
-              <div className="h-56 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={riskTrendQ.data.buckets}
-                    margin={{ top: 4, right: 8, bottom: 0, left: -8 }}
-                    barCategoryGap="20%"
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      vertical={false}
-                      stroke="hsl(var(--border))"
-                    />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <YAxis
-                      allowDecimals={false}
-                      width={28}
-                      tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <Tooltip
-                      cursor={{ fill: 'hsl(var(--muted) / 0.35)' }}
-                      contentStyle={{
-                        fontSize: 12,
-                        borderRadius: 8,
-                        border: '1px solid hsl(var(--border))',
-                        background: 'hsl(var(--card))',
-                      }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    {/* 状态语义色：S=critical / A=warning / B=good（dataviz 规范） */}
-                    <Bar dataKey="S" name="S（致命）" stackId="risk"
-                         fill="hsl(var(--destructive))" />
-                    <Bar dataKey="A" name="A（高）" stackId="risk"
-                         fill="hsl(var(--warning))" />
-                    <Bar dataKey="B" name="B（低）" stackId="risk"
-                         fill="hsl(var(--success))" />
-                    <Bar dataKey="NONE" name="NONE（零事件）" stackId="risk"
-                         fill="hsl(var(--muted-foreground) / 0.45)" radius={[3, 3, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+              <div className="space-y-4">
+                {/* KPI 行：run 数 / 成功率 / S 级事件数 */}
+                <div className="grid grid-cols-3 divide-x">
+                  <div className="px-4 text-center">
+                    <p className="text-lg font-bold leading-none text-foreground">
+                      {riskTrendQ.data?.total_runs ?? 0}
+                    </p>
+                    <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>Run</p>
+                  </div>
+                  <div className="px-4 text-center">
+                    <p className="text-lg font-bold leading-none text-foreground">
+                      {((riskTrendQ.data?.success_rate ?? 0) * 100).toFixed(0)}%
+                    </p>
+                    <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>成功率</p>
+                  </div>
+                  <div className="px-4 text-center">
+                    <p className={cn(
+                      'text-lg font-bold leading-none',
+                      (riskTrendQ.data?.s_runs?.length ?? 0) > 0 ? 'text-destructive' : 'text-foreground',
+                    )}>
+                      {riskTrendQ.data?.s_runs?.length ?? 0}
+                    </p>
+                    <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>S 级事件</p>
+                  </div>
+                </div>
+
+                {/* S 级事件清单（可点进 run） */}
+                {(riskTrendQ.data?.s_runs?.length ?? 0) > 0 ? (
+                  <div className="space-y-1">
+                    {riskTrendQ.data!.s_runs!.map((s) => (
+                      <button
+                        key={s.run_id}
+                        type="button"
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted/60"
+                        onClick={() => navigate(`/runs/${s.run_id}/report`)}
+                      >
+                        <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-destructive">
+                          S
+                        </span>
+                        <span className="font-mono">#{s.run_id}</span>
+                        <span className="ml-auto text-muted-foreground">
+                          {s.started_at ? formatLocalDateTime(s.started_at) : ''}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className={cn('text-xs', TEXT.subtitle)}>
+                    {riskTrendQ.data?.total_runs
+                      ? '近 30 天无 S 级事件'
+                      : '暂无运行数据——新 Run 派发完成后开始积累'}
+                  </p>
+                )}
               </div>
             )}
           </CardContent>

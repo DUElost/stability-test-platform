@@ -93,6 +93,11 @@ class RiskTrendOut(BaseModel):
     project_key: Optional[str] = None
     days: int
     buckets: List[RiskTrendBucket] = []
+    # v2.5 D13：近窗口汇总（详情页「最近跑得怎么样」KPI + S 级清单）
+    total_runs: int = 0
+    success_runs: int = 0
+    success_rate: float = 0.0
+    s_runs: List[dict] = []
 
 
 # ---------- Helpers ----------
@@ -392,6 +397,9 @@ def get_risk_trend(
         run_query = run_query.filter(PlanRun.project_id == target_project_id)
 
     buckets: Dict[str, Dict[str, int]] = {}
+    total_runs = 0
+    success_runs = 0
+    s_runs: list[dict] = []
     for run in run_query.all():
         job_ids = [
             jid for (jid,) in db.query(JobInstance.id)
@@ -406,6 +414,15 @@ def get_risk_trend(
             if summary
             else "NONE"
         )
+        total_runs += 1
+        if run.status == "SUCCESS":
+            success_runs += 1
+        if level == "S":
+            s_runs.append({
+                "run_id": run.id,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "status": run.status,
+            })
         if run.started_at is None:
             continue
         day = run.started_at.date().isoformat()
@@ -418,4 +435,8 @@ def get_risk_trend(
         project_key=project_key,
         days=days,
         buckets=[RiskTrendBucket(date=d, **buckets[d]) for d in sorted(buckets)],
+        total_runs=total_runs,
+        success_runs=success_runs,
+        success_rate=round(success_runs / total_runs, 2) if total_runs else 0.0,
+        s_runs=s_runs,
     )
