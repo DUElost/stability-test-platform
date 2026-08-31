@@ -1,6 +1,7 @@
 import apiClient, { unwrapApiResponse } from './client';
 import type {
   ApiResponseEnvelope,
+  CustomerDict,
   Device,
   InventoryModel,
   InventorySummary,
@@ -35,6 +36,11 @@ export const projects = {
   get: (projectKey: string) =>
     unwrapApiResponse(
       apiClient.get<ApiResponseEnvelope<ProjectDetail>>(`/projects/${projectKey}`),
+    ),
+  /** ADR-0029 D12：customer 字典（编辑下拉数据源）。 */
+  customers: () =>
+    unwrapApiResponse(
+      apiClient.get<ApiResponseEnvelope<CustomerDict[]>>('/projects/customers'),
     ),
   create: (payload: ProjectCreateInput) =>
     unwrapApiResponse(

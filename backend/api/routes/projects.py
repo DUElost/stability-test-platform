@@ -42,7 +42,7 @@ from backend.core.database import get_db
 from backend.models.host import Device
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.models.project import SEED_PROJECT_KEYS, TestProject
+from backend.models.project import SEED_PROJECT_KEYS, Customer, TestProject
 from backend.models.project_model import ProjectModel
 from backend.realtime.socketio_server import emit_project_changed
 
@@ -360,6 +360,22 @@ def list_projects(
         out.running_run_count = running_run_count
         items.append(out)
     return ok(items)
+
+
+@router.get("/customers", response_model=ApiResponse[list[dict]])
+def list_customers(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0029 D12 customer 字典——项目编辑下拉的数据源。
+
+    静态种子数据（key 即客户名，seed 从 test_project 去重回填），无写端点——
+    变更走迁移（同 list_specialties 口径）。customer 列不动（自由文本保留），
+    字典表只承担输入建议。
+    """
+    rows = db.query(Customer).order_by(Customer.sort_order, Customer.id).all()
+    return ok([{"key": r.key, "display_name": r.display_name,
+                "sort_order": r.sort_order} for r in rows])
 
 
 @router.post("", response_model=ApiResponse[ProjectSummaryOut], status_code=201)

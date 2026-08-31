@@ -22,7 +22,7 @@ from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.models.project import TestProject
+from backend.models.project import Customer, TestProject
 from backend.models.project_model import ProjectModel
 
 
@@ -1084,3 +1084,33 @@ class TestRenameProject:
         resp = client.put("/api/v1/projects/proj-a/rename",
                           json={"new_key": "hacked"}, headers=auth_headers)
         assert resp.status_code == 403
+
+
+class TestCustomerDict:
+    """ADR-0029 D12 — customer 字典（项目编辑下拉的数据源，列不动）。"""
+
+    def test_list_customers_sorted(
+        self, client, db_session, auth_headers
+    ):
+        db_session.add_all([
+            Customer(key="传音", display_name="传音", sort_order=3),
+            Customer(key="荣耀", display_name="荣耀", sort_order=1),
+            Customer(key="中兴", display_name="中兴", sort_order=2),
+        ])
+        db_session.commit()
+        resp = client.get("/api/v1/projects/customers", headers=auth_headers)
+        assert resp.status_code == 200
+        rows = resp.json()["data"]
+        assert [r["key"] for r in rows] == ["荣耀", "中兴", "传音"]
+        assert rows[0]["display_name"] == "荣耀"
+        assert set(rows[0]) == {"key", "display_name", "sort_order"}
+
+    def test_customers_not_captured_by_project_key_route(
+        self, client, auth_headers
+    ):
+        # 回归：/customers 静态段注册在 /{project_key} 之前，不得被捕获为 key
+        resp = client.get("/api/v1/projects/customers", headers=auth_headers)
+        assert resp.status_code == 200
+
+    def test_requires_auth(self, client):
+        assert client.get("/api/v1/projects/customers").status_code == 401

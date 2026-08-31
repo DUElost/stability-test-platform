@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FolderKanban } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -11,7 +11,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { FORM } from '@/design-system';
-import type { ProjectCreateInput } from '@/utils/api/types';
+import { api } from '@/utils/api';
+import type { CustomerDict, ProjectCreateInput } from '@/utils/api/types';
 
 type Props = {
   isOpen: boolean;
@@ -35,6 +36,24 @@ export default function CreateProjectDialog({
 }: Props) {
   const [form, setForm] = useState<ProjectCreateInput>(EMPTY);
   const [error, setError] = useState('');
+  // ADR-0029 D12：customer 字典下拉建议（静态数据，挂载时取一次；
+  // 失败降级纯输入框，不阻断编辑）
+  const [customers, setCustomers] = useState<CustomerDict[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.projects
+      .customers()
+      .then((rows) => {
+        if (!cancelled) setCustomers(rows);
+      })
+      .catch(() => {
+        /* 字典不可用 = 保持自由文本输入 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [prevOpen, setPrevOpen] = useState(isOpen);
   if (prevOpen !== isOpen) {
@@ -118,9 +137,16 @@ export default function CreateProjectDialog({
               </label>
               <Input
                 id="project-customer"
+                data-testid="create-project-customer"
                 value={form.customer ?? ''}
                 onChange={(event) => setField('customer', event.target.value)}
+                list="create-project-customer-options"
               />
+              <datalist id="create-project-customer-options">
+                {customers.map((c) => (
+                  <option key={c.key} value={c.display_name} />
+                ))}
+              </datalist>
             </div>
           </div>
           <div>

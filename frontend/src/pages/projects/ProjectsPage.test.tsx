@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   mapApply: vi.fn(),
   listSeed: vi.fn(),
   promoteSeed: vi.fn(),
+  customers: vi.fn(),
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
   authRole: 'admin' as string,
 }));
@@ -48,6 +49,7 @@ vi.mock('@/utils/api', () => ({
       mapApply: mocks.mapApply,
       listSeed: mocks.listSeed,
       promoteSeed: mocks.promoteSeed,
+      customers: mocks.customers,
     },
   },
   toApiError: (error: unknown) => ({
@@ -126,6 +128,9 @@ describe('ProjectsPage', () => {
     mocks.inventoryModels.mockResolvedValue([]);
     mocks.inventorySummary.mockResolvedValue(emptySummary);
     mocks.listSeed.mockResolvedValue([]);
+    mocks.customers.mockResolvedValue([
+      { key: '荣耀', display_name: '荣耀', sort_order: 1 },
+    ]);
   });
 
   it('renders project cards with facet badges and counts', async () => {
@@ -240,6 +245,15 @@ describe('ProjectsPage', () => {
     await user.click(await screen.findByTestId('create-project-open'));
     await user.type(screen.getByTestId('create-project-key'), 'HONOR-CAMERA');
     await user.type(screen.getByTestId('create-project-name'), '荣耀相机');
+    // ADR-0029 D12：customer 字典下拉建议（datalist 里出现字典项）
+    const customerInput = screen.getByTestId('create-project-customer');
+    expect(customerInput).toHaveAttribute('list', 'create-project-customer-options');
+    await waitFor(() => {
+      const option = document.querySelector(
+        '#create-project-customer-options option',
+      );
+      expect(option?.getAttribute('value')).toBe('荣耀');
+    });
     await user.click(screen.getByTestId('create-project-confirm'));
 
     await waitFor(() => {
