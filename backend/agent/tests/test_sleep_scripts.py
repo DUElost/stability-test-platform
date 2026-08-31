@@ -374,6 +374,7 @@ class TestFinish:
         assert "sleep_test_result.txt" in str(ei.value)
 
     def test_run_writes_detail_json(self, finish_mod, monkeypatch, tmp_path):
+        monkeypatch.setattr(finish_mod, "device_serial", lambda: "SLEEP-S1")
         monkeypatch.setattr(finish_mod, "stop_task", lambda force=True: None)
         monkeypatch.setattr(finish_mod.time, "sleep", lambda _: None)
         monkeypatch.setattr(finish_mod, "adb_shell", lambda cmd, timeout=30: "")
@@ -401,6 +402,7 @@ class TestFinish:
 
     def test_run_incomplete_marked(self, finish_mod, monkeypatch, tmp_path):
         """无 finished 行 → final_status=INCOMPLETE（测试未收尾）。"""
+        monkeypatch.setattr(finish_mod, "device_serial", lambda: "SLEEP-S2")
         monkeypatch.setattr(finish_mod, "stop_task", lambda force=True: None)
         monkeypatch.setattr(finish_mod.time, "sleep", lambda _: None)
         monkeypatch.setattr(finish_mod, "adb_shell", lambda cmd, timeout=30: "")
@@ -476,6 +478,30 @@ class TestCheckV101Completion:
 
         monkeypatch.setattr(check_mod_v101.subprocess, "run", lambda *a, **k: FakeResult())
         assert check_mod_v101._run_finished() is False
+
+
+# ---------------------------------------------------------------------------
+# sleep_finish v1.0.1：run_id 设备维度（验收发现⑨）
+# ---------------------------------------------------------------------------
+
+
+class TestFinishV101RunId:
+    def test_run_id_has_serial(self, monkeypatch, tmp_path):
+        mod = _load("sleep_finish_mod_v101", "sleep_finish/v1.0.1/sleep_finish.py")
+        monkeypatch.setattr(mod, "device_serial", lambda: "SLEEP-S9")
+        monkeypatch.setattr(mod, "stop_task", lambda force=True: None)
+        monkeypatch.setattr(mod.time, "sleep", lambda _: None)
+        monkeypatch.setattr(mod, "adb_shell", lambda cmd, timeout=30: "")
+
+        def fake_pull():
+            local = tmp_path / "sleep_test_result.txt"
+            local.write_bytes(b"cycle 1/2 wake OK screen=ON\n")
+            return local
+
+        monkeypatch.setattr(mod, "_pull_result_file", fake_pull)
+        monkeypatch.setattr(mod, "results_dir", lambda project: tmp_path / "r")
+        out = mod._run({})
+        assert out["metrics"]["run_id"].endswith("_SLEEP-S9")
 
 
 # ---------------------------------------------------------------------------
