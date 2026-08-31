@@ -1,6 +1,6 @@
 # 平台 AI 助手设计（ADR-0031 配套设计文档）
 
-- 日期：2026-08-27（2026-08-29 随二轮审核采纳补齐）
+- 日期：2026-08-27（2026-08-31 随阶段三 #658 合入更新工具清单）
 - 性质：**设计文档（how，与代码对齐）**。自治边界与架构决策的裁决见 [ADR-0031](../adr/ADR-0031-platform-ai-assistant.md)，实施过程记录见 [Agent Note](../notes/feature/2026-08-28-platform-ai-assistant.md)。
 
 ## 1. 组件与职责
@@ -18,7 +18,7 @@
   ▼
 services/ai_assistant/orchestrator.py —— 轮次编排（SAQ 任务 ai_assistant_turn_task）
   ├─ llm_client.py：手写 httpx OpenAI 兼容 /chat/completions（载体可逆，切换面=单模块）
-  └─ tools.py：工具注册表（T0 观测×14 / T1 门禁×3 / T2 运维×3；T3 零注册）
+  └─ tools.py：工具注册表（T0×14 / T1×3 / T2a×3 / T2b×6，共 26；T3 零注册）
 ```
 
 ## 2. 轮次时序
@@ -26,8 +26,10 @@ services/ai_assistant/orchestrator.py —— 轮次编排（SAQ 任务 ai_assist
 1. `POST /sessions/{id}/messages`：落 user 消息 + **pending 占位**（不入 LLM 历史）→ 入队 SAQ（`retries=0`，超时 = `request_timeout_seconds × max_turns + 120`）。
 2. 轮次任务：载历史（截断 20 条，跳过 pending/失败占位）→ system prompt → 循环 ≤ `max_turns`：
    - **T0**：`execute_query` 直读（真库 group_by 全分布，零枚举猜测）；结果以 tool 消息回填继续循环。
-   - **T1 自动 / T2 白名单**：建 action（status=approved，decided=发起人）→ RunConsole/服务执行 → **止轮**。
-   - **T2 普通**：建 action（proposed）→ **止轮**等审批。
+   - **T1 自动 / T2a 白名单 / T2b 白名单**：建 action（status=approved，decided=发起人）→ RunConsole/服务执行 → **止轮**。
+     - T2a：`auto_approve_tools`（仅 `whitelistable` 工具，如 `test_notification_channel`）。
+     - T2b：`t2b_auto_dispatch_allowlist` 命中时 `dispatch_plan_run` 可免审批（仍须 D8 发起人权限 + `max_devices`）。
+   - **T2 普通 / T2b 未命中白名单**：建 action（proposed）→ **止轮**等审批。
    - 无 tool_calls：落最终回复，结束。
 3. 执行完成（RunConsole on_complete / 服务返回）：`_finalize_action` 回写状态 + 落「[执行回执]」消息 → 入队**续轮**（结果以 user 角色注入，规避 tool 无前置 tool_calls 的严格校验）。
 4. **收口保证（H1）**：轮次 finally 收口 pending 占位——已产出真实回复则删除占位；未产出（异常路径）则标 failed 留错误可见。任何退出路径不留 pending。
@@ -48,10 +50,21 @@ services/ai_assistant/orchestrator.py —— 轮次编排（SAQ 任务 ai_assist
 | 会话列表/消息/删除 | 仅本人（严格隔离，404 语义） | 同左（无跨用户通道） |
 | 动作详情/日志 | 本人提案的 | 任意（审批职责所需） |
 | 动作审批/取消 | ✗ 403 | ✓ |
-| 工具面 | `allowed_tool_names(False)`：T0（除 admin 镜像）+ T1 + 非 admin-only 的 T2 | 全部 20 个 |
-| 配置 | ✗ 403 | ✓（变更入审计） |
+| 工具面 | `allowed_tool_names(False)`：T0（除 admin 镜像）+ T1 + 非 admin-only 的 T2 | 全部 **26** 个 |
+| 配置 | ✗ 403 | ✓（变更入审计；含 `auto_approve_tools` 与 `t2b_auto_dispatch_allowlist`） |
 
-工具面双门禁：payload 按角色过滤 + 执行面按 `allowed_tool_names` 与 `user_may_invoke_tool`（发起人）校验。`admin_only` 工具对普通用户等同「不存在」；`auto_approve` 仅当发起人本身有权调用时才可自动执行（D8）。
+工具面双门禁：payload 按角色过滤 + 执行面按 `allowed_tool_names` 与 `user_may_invoke_tool`（发起人）校验。`admin_only` 工具对普通用户等同「不存在」；`auto_approve` / T2b 白名单仅当发起人本身有权调用时才可自动执行（D8）。
+
+### 4.1 工具注册表（`tools.py`）
+
+| tier | 数量 | 工具名 | `admin_only` | 备注 |
+|------|------|--------|--------------|------|
+| **T0** | 14 | `get_platform_health`, `query_plan_runs`, `get_plan_run_detail`, `list_plans`, `get_plan_detail`, `preview_plan_dispatch`, `get_plan_run_jobs`, `get_plan_run_watcher_summary`, `get_plan_run_log_events`, `query_hosts`, `query_devices`, `search_docs`, `query_recent_audit_logs`, `get_settings_overview` | 后 2 项 | 阶段三新增 6 项 Plan 深读 |
+| **T1** | 3 | `run_quality_gate`, `run_agent_tests`, `run_gov_checks` | — | RunConsole；`t1_require_confirm` 可收回自动 |
+| **T2a** | 3 | `scan_script_catalog`, `test_notification_channel`, `reload_agent_config` | 前 2 项 | `test_notification_channel` 可入 `auto_approve_tools` |
+| **T2b** | 6 | `dispatch_plan_run`, `abort_plan_run`, `retry_plan_run_dispatch`, `manual_retry_job`, `manual_exit_job`, `trigger_plan_run_archive` | — | 默认需审批；`dispatch_plan_run` 可入 `t2b_auto_dispatch_allowlist` |
+
+权威实现：`backend/services/ai_assistant/tools.py`。阶段三范围见 [ADR-0031 附录 A](../adr/ADR-0031-appendix-phase3-core-write-tools.md)（Accepted）。
 
 ## 5. 安全边界
 
