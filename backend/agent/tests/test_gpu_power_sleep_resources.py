@@ -60,7 +60,7 @@ def test_sleep_config_passthrough(monkeypatch):
 def test_gpu_check_no_tests_is_failure(monkeypatch):
     """v1.0.3：GPU_RUN_END 但 OK (0 tests) = 空跑显式失败（2026-08-31 实证）。"""
     import importlib.util
-    gc_dir = "/home/debian13/stability-test-platform/backend/agent/scripts/gpu_check/v1.0.3"
+    gc_dir = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_check/v1.0.3")
     sys.path.insert(0, gc_dir)  # 确保 gpu_check 的 _lib 优先（防 sys.path 污染）
     spec = importlib.util.spec_from_file_location(
         "gpu_check_v103", gc_dir + "/gpu_check.py")
