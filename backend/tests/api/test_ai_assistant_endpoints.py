@@ -200,6 +200,45 @@ class TestReviewRound2Fixes:
         db_session.refresh(action)
         assert action.status == "proposed"
 
+    def test_execute_action_denies_admin_only_for_non_admin_requester(
+        self, test_user, db_session, monkeypatch
+    ):
+        """D8：即使 action 被标为 approved，发起人无 API 权限也不得执行。"""
+        from backend.services.ai_assistant import orchestrator as orch
+
+        class _Shared:
+            def __init__(self, s):
+                self._s = s
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+        monkeypatch.setattr(orch, "_enqueue_continuation", lambda sid: None)
+
+        user = test_user
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.flush()
+        action = AiAssistantAction(
+            session_id=s.id,
+            tool_name="test_notification_channel",
+            params={"channel_id": 1},
+            status="approved",
+            requested_by_user_id=user.id,
+            decided_by_user_id=user.id,
+        )
+        db_session.add(action)
+        db_session.commit()
+
+        orch.execute_action(action.id)
+        db_session.refresh(action)
+        assert action.status == "failed"
+        assert "权限不足" in (action.result_summary or "")
+
 
 class TestSearchAndTurnGuard:
     def test_search_docs_tokenized(self, db_session):
@@ -418,8 +457,8 @@ class TestTurnLoopWithFakeClient:
                     content="",
                     tool_calls=[
                         ToolCallRequest(
-                            id="c1", name="test_notification_channel",
-                            arguments={"channel_id": 1},
+                            id="c1", name="reload_agent_config",
+                            arguments={"host_id": "h1"},
                         )
                     ],
                 )
@@ -449,7 +488,7 @@ class TestTurnLoopWithFakeClient:
         action = db_session.query(AiAssistantAction).filter_by(session_id=s.id).first()
         assert action is not None
         assert action.status == "proposed"
-        assert action.tool_name == "test_notification_channel"
+        assert action.tool_name == "reload_agent_config"
         # 助手消息挂上操作卡引用
         assistant_msgs = (
             db_session.query(AiChatMessage)
