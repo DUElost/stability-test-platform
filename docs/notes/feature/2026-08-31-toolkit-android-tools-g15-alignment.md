@@ -16,6 +16,14 @@
   sleep_check 必然判死收场，需 v1.0.1 增加「结果文件已 finished」完成检测；② patrol 步骤
   连续失败不触发 job 转 teardown（本冒烟以 abort 手动触发）；③ 真实结果行含 `cpuLock=true`
   等尾随 token，解析器 search 式正则已容错。
+- 三专项真机冒烟收尾（2026-08-31）：**Sleep/PowerCycle/GPU 全部 PASS**——
+  PowerCycle（2/2 轮 reboot，`final_status=PASS`）；GPU（2/2 轮 instrument，
+  `final_status=COMPLETED`，`-e loop 1`×N 等价性实机验证通过）。
+  另两个冒烟发现已修复：④ Android `ps -A` 截断 args 匹配不到 instrument
+  （gpu v1.0.1 改 pgrep -f + bracket 防自匹配）；⑤ test_log.txt 含二进制
+  protobuf 输出，text 解码抛 UnicodeDecodeError（gpu_check v1.0.2 改 bytes 读取）。
+  **运维坑**：Agent hot-update 的 rsync `--delete` 会清掉 `resources/` 下
+  非 exclude 目录（仅 `resources/mtbf/` 豁免）——带外资源须在最终热更新后放置。
 
 ## 0. 结论摘要
 
