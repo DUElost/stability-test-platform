@@ -1,7 +1,7 @@
 """seed gpu_setup v1.0.2 / powercycle v1.0.1 / sleep v1.0.1 resources_dir 透传
 
 Revision ID: e7f8a9b0c1d2
-Revises: d6e7f8a9b0c1
+Revises: f7g8h9i0j1k2
 Create Date: 2026-08-31
 
 Data migration (资源目录透传修复):
@@ -32,7 +32,7 @@ from alembic import op
 from sqlalchemy import text
 
 revision = "e7f8a9b0c1d2"
-down_revision = "d6e7f8a9b0c1"
+down_revision = "f7g8h9i0j1k2"
 branch_labels = None
 depends_on = None
 
