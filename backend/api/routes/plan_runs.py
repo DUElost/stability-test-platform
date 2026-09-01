@@ -2133,7 +2133,23 @@ def _aggregate_watcher_platform_buckets(
         str(platform or "UNKNOWN"): int(count or 0)
         for platform, count in running_rows
     }
-    all_platforms = set(by_platform) | set(running_by_platform)
+    participating_rows = db.execute(
+        select(
+            func.coalesce(Device.platform, "UNKNOWN").label("platform"),
+            func.count(func.distinct(JobInstance.device_id)),
+        )
+        .select_from(JobInstance)
+        .join(Device, JobInstance.device_id == Device.id)
+        .where(JobInstance.id.in_(job_ids))
+        .group_by(Device.platform)
+    ).all()
+    participating_by_platform = {
+        str(platform or "UNKNOWN"): int(count or 0)
+        for platform, count in participating_rows
+    }
+    all_platforms = (
+        set(by_platform) | set(running_by_platform) | set(participating_by_platform)
+    )
 
     buckets: list[WatcherPlatformBucketOut] = []
     for platform in sorted(all_platforms):
@@ -2166,6 +2182,7 @@ def _aggregate_watcher_platform_buckets(
                 total=sum(c.count for c in categories_out),
                 affected_device_count=int(affected_total),
                 running_device_count=running_by_platform.get(platform, 0),
+                participating_device_count=participating_by_platform.get(platform, 0),
             )
         )
     return buckets

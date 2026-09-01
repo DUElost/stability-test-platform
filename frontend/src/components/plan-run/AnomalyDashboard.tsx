@@ -682,7 +682,9 @@ export default function AnomalyDashboard({
                             ? ` · 异常设备 ${bucket.affected_device_count}`
                             : (bucket.running_device_count ?? 0) > 0
                               ? ` · 运行中 ${bucket.running_device_count}`
-                              : ' · 设备 0'}
+                              : (bucket.participating_device_count ?? 0) > 0
+                                ? ` · 参与 ${bucket.participating_device_count}`
+                                : ' · 设备 0'}
                         </span>
                       </div>
                     ))}

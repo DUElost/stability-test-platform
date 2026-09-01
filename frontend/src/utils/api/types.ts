@@ -1707,6 +1707,8 @@ export interface WatcherPlatformBucket {
   affected_device_count: number;
   /** RUNNING Job 覆盖的去重设备数（无 watcher 信号时也展示平台桶） */
   running_device_count?: number;
+  /** 本 PlanRun 内该平台去重参与设备数（终态无 RUNNING 时兜底展示） */
+  participating_device_count?: number;
 }
 
 export interface PackageStat {
