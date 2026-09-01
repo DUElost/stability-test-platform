@@ -677,7 +677,12 @@ export default function AnomalyDashboard({
                       <div key={bucket.platform} className="rounded-lg border border-border/50 bg-background/80 px-3 py-2 text-sm">
                         <span className="font-medium">{bucket.platform}</span>
                         <span className={cn('ml-2', TEXT.subtitle)}>
-                          信号 {bucket.total} · 设备 {bucket.affected_device_count}
+                          信号 {bucket.total}
+                          {bucket.affected_device_count > 0
+                            ? ` · 异常设备 ${bucket.affected_device_count}`
+                            : (bucket.running_device_count ?? 0) > 0
+                              ? ` · 运行中 ${bucket.running_device_count}`
+                              : ' · 设备 0'}
                         </span>
                       </div>
                     ))}

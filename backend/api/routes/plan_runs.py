@@ -2116,32 +2116,56 @@ def _aggregate_watcher_platform_buckets(
         by_platform[str(platform or "UNKNOWN")].append(
             (str(category), int(count or 0), int(affected or 0)),
         )
+    running_rows = db.execute(
+        select(
+            func.coalesce(Device.platform, "UNKNOWN").label("platform"),
+            func.count(func.distinct(JobInstance.device_id)),
+        )
+        .select_from(JobInstance)
+        .join(Device, JobInstance.device_id == Device.id)
+        .where(
+            JobInstance.id.in_(job_ids),
+            JobInstance.status == JobStatus.RUNNING.value,
+        )
+        .group_by(Device.platform)
+    ).all()
+    running_by_platform = {
+        str(platform or "UNKNOWN"): int(count or 0)
+        for platform, count in running_rows
+    }
+    all_platforms = set(by_platform) | set(running_by_platform)
+
     buckets: list[WatcherPlatformBucketOut] = []
-    for platform in sorted(by_platform.keys()):
+    for platform in sorted(all_platforms):
+        platform_rows = by_platform.get(platform, [])
         categories_out = [
             WatcherCategoryOut(
                 category=cat, count=count, affected_device_count=affected, trend_change=0,
             )
-            for cat, count, affected in sorted(by_platform[platform], key=lambda r: -r[1])
+            for cat, count, affected in sorted(platform_rows, key=lambda r: -r[1])
         ]
-        affected_total = db.execute(
-            select(func.count(func.distinct(JobLogSignal.device_serial)))
-            .select_from(JobLogSignal)
-            .join(JobInstance, JobLogSignal.job_id == JobInstance.id)
-            .join(Device, JobInstance.device_id == Device.id)
-            .where(
-                JobLogSignal.job_id.in_(job_ids),
-                JobLogSignal.detected_at >= cur_start,
-                JobLogSignal.detected_at <= window_end,
-                func.coalesce(Device.platform, "UNKNOWN") == platform,
-            )
-        ).scalar() or 0
+        if platform_rows:
+            affected_total = db.execute(
+                select(func.count(func.distinct(JobLogSignal.device_serial)))
+                .select_from(JobLogSignal)
+                .join(JobInstance, JobLogSignal.job_id == JobInstance.id)
+                .join(Device, JobInstance.device_id == Device.id)
+                .where(
+                    JobLogSignal.job_id.in_(job_ids),
+                    JobLogSignal.detected_at >= cur_start,
+                    JobLogSignal.detected_at <= window_end,
+                    func.coalesce(Device.platform, "UNKNOWN") == platform,
+                )
+            ).scalar() or 0
+        else:
+            affected_total = 0
         buckets.append(
             WatcherPlatformBucketOut(
                 platform=platform,
                 categories=categories_out,
                 total=sum(c.count for c in categories_out),
                 affected_device_count=int(affected_total),
+                running_device_count=running_by_platform.get(platform, 0),
             )
         )
     return buckets
