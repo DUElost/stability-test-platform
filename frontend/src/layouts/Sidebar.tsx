@@ -8,7 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
-  Zap,
   X,
   TestTube2,
   FileBox,
@@ -24,6 +23,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { BrandLogo } from '@/components/brand/BrandLogo';
 import {
   SIDEBAR,
   navIconClass,
@@ -167,14 +167,7 @@ export default function Sidebar({
       {/* Logo */}
       <div className={cn('h-20 flex items-center px-5 border-b', SIDEBAR.border)}>
         <div className="flex items-center gap-3 overflow-hidden">
-          <div
-            className={cn(
-              'flex items-center justify-center rounded-lg transition-all duration-300 w-8 h-8',
-              SIDEBAR.subtle,
-            )}
-          >
-            <Zap size={18} className="text-sidebar-foreground" />
-          </div>
+          <BrandLogo size={32} className="rounded-lg" />
           <span
             className={cn(
               'font-semibold text-base whitespace-nowrap transition-all duration-300 tracking-[-0.02em]',

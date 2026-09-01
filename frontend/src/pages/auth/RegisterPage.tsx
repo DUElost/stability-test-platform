@@ -9,6 +9,7 @@ import { api, toApiError } from '@/utils/api';
 import { SURFACE, TEXT } from '@/design-system/tokens';
 import { ALERT_BOX } from '@/design-system/tokens';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
+import { BrandLogo } from '@/components/brand/BrandLogo';
 
 export default function RegisterPage() {
   const navigate = useNavigate();
@@ -50,7 +51,10 @@ export default function RegisterPage() {
         <ThemeToggle showLabel />
       </div>
       <Card className="w-full max-w-md">
-        <CardHeader className="space-y-1">
+        <CardHeader className="space-y-3">
+          <div className="flex justify-center">
+            <BrandLogo size={64} decorative={false} className="rounded-2xl shadow-sm" />
+          </div>
           <CardTitle className="text-2xl font-bold text-center">
             注册账号
           </CardTitle>
