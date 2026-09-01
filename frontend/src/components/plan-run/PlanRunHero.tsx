@@ -287,42 +287,50 @@ export default function PlanRunHero({
 
   return (
     <div className={cn('rounded-lg border overflow-hidden', ELEVATION.flat, heroCls)}>
-      {/* 标题行与状态 pill 并排；Plan 副文独占下一整行，避免被 Running 挤成省略号 */}
+      {/* 左：PlanRun / #id 两行；右：状态块对齐增高，避免挤成小 pill */}
       <div className="px-4 pt-4 pb-3">
-        <div className="flex items-start justify-between gap-3">
-          <h2 className={cn('min-w-0 text-lg font-semibold leading-7', TEXT.heading)}>
-            PlanRun{' '}
-            <span className={isRunning ? 'text-primary' : undefined}>
+        <div className="flex items-stretch justify-between gap-3">
+          <div className="min-w-0">
+            <div className={cn('text-xs font-medium uppercase tracking-wide', TEXT.subtitle)}>
+              PlanRun
+            </div>
+            <h2
+              className={cn(
+                'mt-0.5 text-xl font-semibold leading-7 tabular-nums',
+                TEXT.heading,
+                isRunning && 'text-primary',
+              )}
+            >
               #{run?.id ?? '—'}
-            </span>
-          </h2>
+            </h2>
+          </div>
           {pill && run && (
             <div
               data-testid="plan-run-status-pill"
-              className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 shadow-none ${badgeCls}`}
+              className={`flex min-w-[5.5rem] shrink-0 flex-col justify-center gap-0.5 rounded-md border px-3 py-2 shadow-none ${badgeCls}`}
             >
-              {isRunning && (
-                <span className="relative flex h-2 w-2 shrink-0">
-                  <span className="absolute inset-0 rounded-full bg-warning/60 opacity-60 animate-ping" />
-                  <span className="relative h-2 w-2 rounded-full bg-warning" />
-                </span>
-              )}
-              <pill.Icon className={`h-3.5 w-3.5 ${isRunning ? 'animate-spin' : ''}`} />
-              <div className="leading-tight">
-                <div className="text-xs font-semibold">{pill.label}</div>
-                {runDuration && (
-                  <div
-                    data-testid="plan-run-duration"
-                    className="font-mono text-[10px] opacity-70"
-                  >
-                    {runDuration}
-                  </div>
+              <div className="flex items-center gap-1.5">
+                {isRunning && (
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="absolute inset-0 rounded-full bg-warning/60 opacity-60 animate-ping" />
+                    <span className="relative h-2 w-2 rounded-full bg-warning" />
+                  </span>
                 )}
+                <pill.Icon className={`h-3.5 w-3.5 shrink-0 ${isRunning ? 'animate-spin' : ''}`} />
+                <span className="text-sm font-semibold leading-none">{pill.label}</span>
               </div>
+              {runDuration && (
+                <div
+                  data-testid="plan-run-duration"
+                  className="pl-5 font-mono text-xs tabular-nums opacity-80"
+                >
+                  {runDuration}
+                </div>
+              )}
             </div>
           )}
         </div>
-        <div className={cn('mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-xs', TEXT.subtitle)}>
+        <div className={cn('mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5 text-xs', TEXT.subtitle)}>
           <span className="min-w-0 break-words" title={planName ?? undefined}>
             {planName
               ? `Plan #${run?.plan_id} · ${planName}`
