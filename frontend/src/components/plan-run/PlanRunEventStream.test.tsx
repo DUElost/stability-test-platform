@@ -50,6 +50,14 @@ describe('PlanRunEventStream', () => {
     expect(list).toHaveTextContent('Job #3064');
   });
 
+  it('scrolls the event list inside the panel (not the page shell)', () => {
+    render(<PlanRunEventStream events={events} />);
+    const root = screen.getByTestId('plan-run-event-stream');
+    expect(root.className).toMatch(/\bh-full\b/);
+    expect(root.className).toMatch(/\bmin-h-0\b/);
+    expect(screen.getByTestId('event-list').className).toMatch(/overflow-y-auto/);
+  });
+
   it('lifts stage and severity filter changes to parent', () => {
     const onStage = vi.fn();
     const onSev = vi.fn();
