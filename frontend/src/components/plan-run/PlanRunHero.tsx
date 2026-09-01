@@ -39,6 +39,195 @@ interface Props {
   onRerun?: () => void;
   /** Override "now" for deterministic tests. */
   now?: Date;
+  /**
+   * `embedded`（默认）：操作钮在卡片内。
+   * `none`：卡片只展示元信息；操作钮由 `PlanRunHeroActions` 放侧栏 sticky 底栏，
+   * 避免侧栏滚动后导出/中止被挤出可视区。
+   */
+  actions?: 'embedded' | 'none';
+}
+
+export interface PlanRunHeroActionsProps {
+  run: PlanRun | undefined;
+  isAborting?: boolean;
+  onAbort?: (reason: string) => void;
+  onExportReport?: (format: 'markdown' | 'json') => void;
+  onRerun?: () => void;
+  className?: string;
+}
+
+/** 导出 / 复跑 / 中止 — 供详情页侧栏底栏固定，避免被 KPI/链挤出。 */
+export function PlanRunHeroActions({
+  run,
+  isAborting = false,
+  onAbort,
+  onExportReport,
+  onRerun,
+  className,
+}: PlanRunHeroActionsProps) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const exportBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [exportPos, setExportPos] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    openUp: boolean;
+  } | null>(null);
+
+  const isTerminal = !!run && isPlanRunTerminal(run.status);
+  const canAbort = run?.capabilities
+    ? run.capabilities.abort === true
+    : !isTerminal;
+
+  const openExportMenu = () => {
+    const rect = exportBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      const menuH = 72;
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const openUp = spaceBelow < menuH + 12;
+      setExportPos({
+        top: openUp ? rect.top : rect.bottom,
+        left: rect.left,
+        width: rect.width,
+        openUp,
+      });
+    }
+    setExportOpen((v) => !v);
+  };
+
+  return (
+    <div className={cn('flex gap-1.5', className)}>
+      <div className="relative flex-1">
+        <Button
+          variant="outline"
+          size="sm"
+          ref={exportBtnRef}
+          data-testid="plan-run-export-btn"
+          onClick={openExportMenu}
+          disabled={!run}
+          className="w-full text-[11px] h-7"
+        >
+          <Download className="mr-1 h-3 w-3" />
+          导出报告
+          <ChevronDown className="ml-1 h-3 w-3" />
+        </Button>
+        {exportOpen && run && (
+          <>
+            <div className="fixed inset-0 z-20" onClick={() => setExportOpen(false)} />
+            <div
+              className={cn(
+                'fixed z-30 overflow-hidden rounded-md border shadow-lg',
+                SURFACE.elevated,
+                ELEVATION.dropdown,
+              )}
+              style={{
+                top: exportPos?.openUp
+                  ? undefined
+                  : (exportPos?.top ?? 0) + 4,
+                bottom: exportPos?.openUp
+                  ? window.innerHeight - (exportPos?.top ?? 0) + 4
+                  : undefined,
+                left: exportPos?.left ?? 0,
+                width: exportPos?.width ?? 160,
+              }}
+            >
+              <button
+                type="button"
+                data-testid="plan-run-export-md"
+                onClick={() => {
+                  setExportOpen(false);
+                  onExportReport?.('markdown');
+                }}
+                className={cn('block w-full px-3 py-1.5 text-left text-[11px]', INTERACTIVE.menuItem)}
+              >
+                Markdown (.md)
+              </button>
+              <button
+                type="button"
+                data-testid="plan-run-export-json"
+                onClick={() => {
+                  setExportOpen(false);
+                  onExportReport?.('json');
+                }}
+                className={cn('block w-full px-3 py-1.5 text-left text-[11px]', INTERACTIVE.menuItem)}
+              >
+                JSON (.json)
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {isTerminal && onRerun && (
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="plan-run-rerun-btn"
+          onClick={onRerun}
+          disabled={!run}
+          className="flex-1 text-[11px] h-7"
+        >
+          <RotateCcw className="mr-1 h-3 w-3" />
+          复跑
+        </Button>
+      )}
+
+      {canAbort && (
+        <Button
+          variant="destructive"
+          size="sm"
+          data-testid="plan-run-abort-btn"
+          onClick={() => setConfirmOpen(true)}
+          disabled={!run || isAborting}
+          className="flex-1 text-[11px] h-7"
+        >
+          {isAborting ? (
+            <><Loader2 className="mr-1 h-3 w-3 animate-spin" />中止中…</>
+          ) : (
+            <><X className="mr-1 h-3 w-3" />中止运行</>
+          )}
+        </Button>
+      )}
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认中止 PlanRun?</AlertDialogTitle>
+            <AlertDialogDescription>
+              PENDING Job 将直接标记为 ABORTED；运行中 Job 会收到中止请求，并在 Agent
+              确认执行进程停止后释放租约。操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <label htmlFor="pr-abort-reason" className={cn('block text-sm font-medium', TEXT.heading)}>中止原因（可选）</label>
+            <input
+              id="pr-abort-reason"
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="例如：资源池整改"
+              className="w-full rounded-md border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-destructive/30"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="plan-run-abort-confirm"
+              onClick={() => {
+                setConfirmOpen(false);
+                onAbort?.(reason.trim() || 'aborted_by_user');
+              }}
+              className={cn(buttonVariants({ variant: 'destructive' }))}
+            >
+              确认中止
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
 }
 
 export default function PlanRunHero({
@@ -49,14 +238,9 @@ export default function PlanRunHero({
   onExportReport,
   onRerun,
   now,
+  actions = 'embedded',
 }: Props) {
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
-  const [reason, setReason] = useState('');
   const [tick, setTick] = useState(0);
-  const exportBtnRef = useRef<HTMLButtonElement | null>(null);
-  /** 导出浮卡锚点：点击时测量一次入 state（渲染期读 ref.current 违反 react-hooks/refs；菜单瞬态，无需随渲染重测） */
-  const [exportPos, setExportPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const isTerminal = !!run && isPlanRunTerminal(run.status);
 
   useEffect(() => {
@@ -82,9 +266,6 @@ export default function PlanRunHero({
   const badgeCls = run ? BADGE_CLS[run.status as PlanRunHeroStatus] : '';
   const isRunning = run?.status === 'RUNNING';
   const isQueuedPhase = run?.status === 'QUEUED' || run?.status === 'PRECHECK';
-  const canAbort = run?.capabilities
-    ? run.capabilities.abort === true
-    : !isTerminal;
 
   // ADR-0026: queue wait is measured from enqueued_at (never started_at —
   // admission resets started_at to the real execution start).
@@ -219,131 +400,16 @@ export default function PlanRunHero({
         </div>
       )}
 
-      {/* 操作按钮行 — 导出下拉用 fixed 浮出卡片（卡片 overflow-hidden 会裁掉 absolute 下拉） */}
-      <div className="flex gap-1.5 px-4 pb-4">
-        <div className="relative flex-1">
-          <Button
-            variant="outline"
-            size="sm"
-            ref={exportBtnRef}
-            data-testid="plan-run-export-btn"
-            onClick={() => {
-              const rect = exportBtnRef.current?.getBoundingClientRect();
-              if (rect) setExportPos({ top: rect.bottom, left: rect.left, width: rect.width });
-              setExportOpen((v) => !v);
-            }}
-            disabled={!run}
-            className="w-full text-[11px] h-7"
-          >
-            <Download className="mr-1 h-3 w-3" />
-            导出报告
-            <ChevronDown className="ml-1 h-3 w-3" />
-          </Button>
-          {exportOpen && run && (
-            <>
-              <div className="fixed inset-0 z-20" onClick={() => setExportOpen(false)} />
-              <div
-                className={cn(
-                  'fixed z-30 mt-1 overflow-hidden rounded-md border shadow-lg',
-                  SURFACE.elevated,
-                  ELEVATION.dropdown,
-                )}
-                style={{ top: (exportPos?.top ?? 0) + 4, left: exportPos?.left ?? 0, width: exportPos?.width ?? 160 }}
-              >
-                <button
-                  type="button"
-                  data-testid="plan-run-export-md"
-                  onClick={() => {
-                    setExportOpen(false);
-                    onExportReport?.('markdown');
-                  }}
-                  className={cn('block w-full px-3 py-1.5 text-left text-[11px]', INTERACTIVE.menuItem)}
-                >
-                  Markdown (.md)
-                </button>
-                <button
-                  type="button"
-                  data-testid="plan-run-export-json"
-                  onClick={() => {
-                    setExportOpen(false);
-                    onExportReport?.('json');
-                  }}
-                  className={cn('block w-full px-3 py-1.5 text-left text-[11px]', INTERACTIVE.menuItem)}
-                >
-                  JSON (.json)
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-
-        {isTerminal && onRerun && (
-          <Button
-            variant="outline"
-            size="sm"
-            data-testid="plan-run-rerun-btn"
-            onClick={onRerun}
-            disabled={!run}
-            className="flex-1 text-[11px] h-7"
-          >
-            <RotateCcw className="mr-1 h-3 w-3" />
-            复跑
-          </Button>
-        )}
-
-        {canAbort && (
-          <Button
-            variant="destructive"
-            size="sm"
-            data-testid="plan-run-abort-btn"
-            onClick={() => setConfirmOpen(true)}
-            disabled={!run || isAborting}
-            className="flex-1 text-[11px] h-7"
-          >
-            {isAborting ? (
-              <><Loader2 className="mr-1 h-3 w-3 animate-spin" />中止中…</>
-            ) : (
-              <><X className="mr-1 h-3 w-3" />中止运行</>
-            )}
-          </Button>
-        )}
-      </div>
-
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认中止 PlanRun?</AlertDialogTitle>
-            <AlertDialogDescription>
-              PENDING Job 将直接标记为 ABORTED；运行中 Job 会收到中止请求，并在 Agent
-              确认执行进程停止后释放租约。操作不可撤销。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-2">
-            <label htmlFor="pr-abort-reason" className={cn('block text-sm font-medium', TEXT.heading)}>中止原因（可选）</label>
-            <input
-              id="pr-abort-reason"
-              type="text"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="例如：资源池整改"
-              className="w-full rounded-md border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-destructive/30"
-            />
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              data-testid="plan-run-abort-confirm"
-              onClick={() => {
-                setConfirmOpen(false);
-                onAbort?.(reason.trim() || 'aborted_by_user');
-              }}
-              className={cn(buttonVariants({ variant: 'destructive' }))}
-            >
-              确认中止
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {actions === 'embedded' && (
+        <PlanRunHeroActions
+          run={run}
+          isAborting={isAborting}
+          onAbort={onAbort}
+          onExportReport={onExportReport}
+          onRerun={onRerun}
+          className="px-4 pb-4"
+        />
+      )}
     </div>
   );
 }
