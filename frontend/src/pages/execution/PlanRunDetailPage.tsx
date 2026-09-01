@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/useToast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import PlanRunHero from '@/components/plan-run/PlanRunHero';
+import PlanRunHero, { PlanRunHeroActions } from '@/components/plan-run/PlanRunHero';
 import PlanRunKpiGrid from '@/components/plan-run/PlanRunKpiGrid';
 import AnomalyDashboard from '@/components/plan-run/AnomalyDashboard';
 import PlanChainSidebar from '@/components/plan-run/PlanChainSidebar';
@@ -235,53 +235,66 @@ export default function PlanRunDetailPage() {
         )}
         <aside
           className={cn(
-            'flex w-72 shrink-0 flex-col gap-3 overflow-y-auto border-r border-border bg-card p-3 transition-transform fixed bottom-0 left-0 top-20 z-40 shadow-xl lg:static lg:bottom-auto lg:top-auto lg:z-auto lg:shadow-none',
+            'flex w-72 shrink-0 flex-col overflow-hidden border-r border-border bg-card transition-transform fixed bottom-0 left-0 top-20 z-40 shadow-xl lg:static lg:bottom-auto lg:top-auto lg:z-auto lg:shadow-none',
             leftPanelOpen ? 'translate-x-0' : '-translate-x-full',
             'lg:translate-x-0',
           )}
         >
-          {runQ.isLoading ? (
-            <Skeleton className="h-36 w-full rounded-lg" />
-          ) : (
-            <PlanRunHero
-              run={runQ.data}
-              planName={planName}
-              isAborting={abortMut.isPending}
-              onAbort={(reason) => abortMut.mutate(reason)}
-              onRerun={() => void handleRerun()}
-              onExportReport={async (format) => {
-                try {
-                  const blob = await api.planRuns.exportReport(id, format);
-                  const ext = format === 'json' ? 'json' : 'md';
-                  const url = URL.createObjectURL(blob);
-                  const anchor = document.createElement('a');
-                  anchor.href = url;
-                  anchor.download = `plan-run-${id}-report.${ext}`;
-                  anchor.click();
-                  URL.revokeObjectURL(url);
-                  toast.success('PlanRun 报告已导出');
-                } catch (err: unknown) {
-                  const msg = err instanceof Error ? err.message : String(err);
-                  toast.error(`导出失败: ${msg}`);
-                }
-              }}
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+            {runQ.isLoading ? (
+              <Skeleton className="h-36 w-full rounded-lg" />
+            ) : (
+              <PlanRunHero
+                run={runQ.data}
+                planName={planName}
+                actions="none"
+              />
+            )}
+            <PlanRunKpiGrid
+              devices={devicesQ.data}
+              currentStage={timelineQ.data?.current_stage ?? null}
+              patrolCycle={
+                timelineQ.data?.stages?.find((s) => s.stage === 'patrol')
+                  ?.patrol_cycle_index ?? null
+              }
             />
+            <PlanChainSidebar
+              chain={chainQ.data}
+              isLoading={chainQ.isLoading}
+              isError={chainQ.isError}
+              chainDispatchFailed={chainDispatchFailed}
+              onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
+            />
+          </div>
+          {!runQ.isLoading && (
+            <div
+              data-testid="plan-run-sidebar-actions"
+              className="shrink-0 border-t border-border bg-card p-3"
+            >
+              <PlanRunHeroActions
+                run={runQ.data}
+                isAborting={abortMut.isPending}
+                onAbort={(reason) => abortMut.mutate(reason)}
+                onRerun={() => void handleRerun()}
+                onExportReport={async (format) => {
+                  try {
+                    const blob = await api.planRuns.exportReport(id, format);
+                    const ext = format === 'json' ? 'json' : 'md';
+                    const url = URL.createObjectURL(blob);
+                    const anchor = document.createElement('a');
+                    anchor.href = url;
+                    anchor.download = `plan-run-${id}-report.${ext}`;
+                    anchor.click();
+                    URL.revokeObjectURL(url);
+                    toast.success('PlanRun 报告已导出');
+                  } catch (err: unknown) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    toast.error(`导出失败: ${msg}`);
+                  }
+                }}
+              />
+            </div>
           )}
-          <PlanRunKpiGrid
-            devices={devicesQ.data}
-            currentStage={timelineQ.data?.current_stage ?? null}
-            patrolCycle={
-              timelineQ.data?.stages?.find((s) => s.stage === 'patrol')
-                ?.patrol_cycle_index ?? null
-            }
-          />
-          <PlanChainSidebar
-            chain={chainQ.data}
-            isLoading={chainQ.isLoading}
-            isError={chainQ.isError}
-            chainDispatchFailed={chainDispatchFailed}
-            onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
-          />
         </aside>
 
         <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
