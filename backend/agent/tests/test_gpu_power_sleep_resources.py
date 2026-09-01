@@ -77,6 +77,60 @@ def test_gpu_check_no_tests_is_failure(monkeypatch):
     assert gc._run_finished() == (True, "ok")
 
 
+def _load_gpu_check_104():
+    import importlib.util
+    gc_dir = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_check/v1.0.4")
+    sys.path.insert(0, gc_dir)
+    spec = importlib.util.spec_from_file_location("gpu_check_v104", gc_dir + "/gpu_check.py")
+    gc = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(gc)
+    return gc
+
+
+def test_gpu_check_v104_monitor_mode_ok(monkeypatch):
+    """v1.0.4：-m monitor 模式只输出 protobuf（无 OK 文本），test_result=true = 正常完成。"""
+    gc = _load_gpu_check_104()
+    # protobuf 完成：test_result string "true" + testcase_name（2026-09-01 真机实证形态）
+    log = (
+        b"GPU_RUN_START test_id=002 rounds=10\n"
+        b"\x00\x01\x18\x02\"\x01\x01\x0a\x00\x00\x01\x00\x01\x00\x01\x01"
+        b"test_result\x12\x05true\x0ftestcase_name\x12\x1etest_StressSpecial_GPUTest_002"
+        b"GPU_ROUND 1 rc=0\nGPU_RUN_END rc=0\n"
+    )
+    monkeypatch.setattr(gc, "_read_log_cat", lambda: log)
+    assert gc._run_finished() == (True, "ok")
+
+
+def test_gpu_check_v104_monitor_mode_crashed(monkeypatch):
+    """v1.0.4：protobuf shortMsg Process crashed = instrument 崩溃（2026-09-01 全量实证）。"""
+    gc = _load_gpu_check_104()
+    log = (
+        b"GPU_RUN_START test_id=002 rounds=10\n"
+        b"shortMsg\x12\x10Process crashed.\nGPU_ROUND 2 rc=0\nGPU_RUN_END rc=0\n"
+    )
+    monkeypatch.setattr(gc, "_read_log_cat", lambda: log)
+    assert gc._run_finished() == (True, "crashed")
+
+
+def test_gpu_check_v104_ok_text_still_works(monkeypatch):
+    """v1.0.4：非 monitor 文本模式判定不回归（OK (N tests) / OK (0 tests)）。"""
+    gc = _load_gpu_check_104()
+    monkeypatch.setattr(gc, "_read_log_cat",
+                        lambda: b"GPU_RUN_START test_id=001 rounds=2\nOK (1 test)\nGPU_RUN_END rc=0\n")
+    assert gc._run_finished() == (True, "ok")
+    monkeypatch.setattr(gc, "_read_log_cat",
+                        lambda: b"GPU_RUN_START test_id=001 rounds=2\nOK (0 tests)\nGPU_RUN_END rc=0\n")
+    assert gc._run_finished() == (True, "no-tests")
+
+
+def test_gpu_check_v104_running_no_end(monkeypatch):
+    gc = _load_gpu_check_104()
+    monkeypatch.setattr(gc, "_read_log_cat",
+                        lambda: b"GPU_RUN_START test_id=002 rounds=10\n\x00\x01\x18\x02")
+    assert gc._run_finished() == (False, "running")
+
+
 
 def test_gpu_install_apk_stable_uses_push_pm(monkeypatch):
     """v1.0.4：大 APK（378MB Lite）流式安装不稳定——push + pm install 设备本地。"""
