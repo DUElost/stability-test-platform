@@ -139,7 +139,7 @@ export default function RunReportPage() {
       />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className={cn(PANEL.root, 'p-4 space-y-2')}>
+        <div className={cn(PANEL.root, 'overflow-visible p-4 space-y-2')}>
           <h3 className="text-sm font-medium text-muted-foreground">任务信息</h3>
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
@@ -157,7 +157,7 @@ export default function RunReportPage() {
           </div>
         </div>
 
-        <div className={cn(PANEL.root, 'p-4 space-y-2')}>
+        <div className={cn(PANEL.root, 'overflow-visible p-4 space-y-2')}>
           <h3 className="text-sm font-medium text-muted-foreground">执行环境</h3>
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
@@ -175,7 +175,7 @@ export default function RunReportPage() {
           </div>
         </div>
 
-        <div className={cn(PANEL.root, 'p-4 space-y-2')}>
+        <div className={cn(PANEL.root, 'overflow-visible p-4 space-y-2')}>
           <h3 className="text-sm font-medium text-muted-foreground">风险摘要</h3>
           {report.report_status === 'pending_archive' && (
             <div className={cn('mb-2 rounded-md border px-3 py-2 text-xs', ALERT_BANNER.warning)}>
@@ -219,7 +219,7 @@ export default function RunReportPage() {
       </div>
 
       {report.summary_metrics && Object.keys(report.summary_metrics).length > 0 && (
-        <div className={cn(PANEL.root, 'p-4 space-y-2')}>
+        <div className={cn(PANEL.root, 'overflow-visible p-4 space-y-2')}>
           <h3 className="text-sm font-medium text-muted-foreground">汇总指标</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {Object.entries(report.summary_metrics).map(([key, value]) => (
@@ -260,7 +260,7 @@ export default function RunReportPage() {
       </div>
 
       {jiraDraft && (
-        <div className={cn(PANEL.root, 'p-4 space-y-3')}>
+        <div className={cn(PANEL.root, 'overflow-visible p-4 space-y-3')}>
           <button
             className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             onClick={() => setShowJira(!showJira)}

@@ -1,6 +1,6 @@
 # ADR-0030: 多用例平台化管理（test_suite / test_case + 外部管理面）
 
-- 状态：**Accepted**（2026-08-24 推进；P0 真机验收 + P1a 实体/管理面 + P1b 绑定门禁 + P1c CLI/文档收口 + **D6 真机冒烟✅** 已完成，实施记账见修订记录；仅余 P2 前端）
+- 状态：**Accepted**（2026-08-24 推进；P0 真机验收 + P1 全部 + **D6 真机冒烟✅** + **P2 核心✅** #429 已完成，实施记账见修订记录；JobArtifact `report` 白名单仍留待）
 - 优先级：**P0（专项接入主线，可先行独立交付）+ P1（多用例实体与管理面）**——见 D6
 - 目标里程碑：M7
 - 日期：2026-08-19
@@ -20,6 +20,7 @@
 | 2026-08-24 | v1.6（P1c 收口） | **CLI 定稿位置回写（D4 悬项关闭）**：[`tools/dev/mtbf-cases.py`](../../tools/dev/mtbf-cases.py)（单文件 kebab-case，对齐 `backfill-test-project.py` 先例；REST 便捷层非直连 DB——与页面同端点同权限同审计；凭据三级回退 `--token` > ambient env > `.env.backend` 约定源，明文不进输出；退出码 0/2/3）。**双模式观测层落地**：派发 mtbf 系脚本且 `plan.suite_id` 为空记 WARNING `suite_unbound`（翻转硬拒不默认启用，另起小 PR）。mtbf-api.md §2 定稿（守卫精确化语义 + CLI 小节）；05-data-model 表行已随 P1a 补齐。**D6 P1 API 面验收达成**：「导入→改 1 条→导出→export-to-tool-dir」全程审计有测试矩阵锁定（import/case PUT/export/export-to-tool-dir 各自 record_audit 断言）；绑定派发链路（冻结/注入/五步门禁/守卫）有 testcontainers 测试矩阵。**仍未做**：真机冒烟（init trace `suite_sha256` == 门禁比对 sha，需 fleet 在线窗口）；P2 前端与 `test_case_result` |
 | 2026-08-25 | v1.8（绑定翻转硬拒） | **mtbf 系脚本绑定从观测转强制**：未绑定 mtbf 计划在 preview/prepare 即以 `SUITE_BINDING_REQUIRED`（PlanDispatchError 结构化 detail，含 step_key 清单）拒绝；非 mtbf 计划不受影响。翻转依据（issue #404 口径「告警一个完整运行周期归零后」）：观测期（2026-08-24~25）`suite_unbound` 零命中、生产唯一 mtbf Plan 已绑定、全部派发为托管 Run——退化满足即无存量用户。P0 文件真源模式对 mtbf 脚本就此关闭（套件是唯一配置通道）；物化器对无 `dispatch_suite` 存量 Run 的零注入分支保留为防御。设计 §3.4 与 mtbf-api.md §1.5 同步改述 |
 | 2026-08-25 | v1.7（D6 总验收达成） | **真机冒烟签字**：[验收 runbook](../acceptance/2026-08-suite-binding-mtbf-signoff.md) 全矩阵通过——Plan 10 绑定 suite 后 Run #224 在设备 395 跑通准入链，**init trace `suite_sha256` == 门禁 `exported_sha256` 逐字节相等（R1）**；S3 注入 `{"expected_testpoint_count":130,"project":"legacy"}` 实证、S6 守卫 force 不豁免实证、S7 篡改→`sha_mismatch` fail-fast + 重导恢复实证、S5 审计链完整（create/import/update/export + 绑定与准入失败审计）。生产部署窗口同批完成（backend 重启至 main tip，catalog 注册 `mtbf_check@1.3.0`）。副产品两项记录于 runbook §5：① `push_mismatched_scripts` 不推支撑文件——治愈路径缺口，hot-update fallback 解锁，修复另起 PR；② user 构建设备被 root 前置正确拦截（设计行为）。D6 P1 验收信号**全部达成**，#404 可关单；仅余 P2 前端与 `test_case_result` |
+| 2026-09-01 | v1.9（P2 实施记账） | **P2 核心已合 main**（#429 分两块）：① 前端套件管理（`TestSuitesPage` / `TestSuiteDetailPage` / 创建与编辑对话框，`/test-suites` 路由）；② `test_case_result` 落库 + PlanRun `TestCaseResultsCard` 逐条浏览（数据源仍为 NFS `results/{run_dir}.json`，不扩 artifact 白名单）。**仍未做**：JobArtifact `report` 类型白名单扩展（§实施影响 大文件/下载场景）。七挂靠位同步：本行 / 头部 / adr README 清单 + M7 / CLAUDE.md / DOC-MAP Living 表 |
 
 ## 背景
 
@@ -110,7 +111,7 @@ MTBF 专项的用例清单 `runtask.xml`（`/mnt/automation-toolkit/android-tool
 |------|------|----------|
 | **P0** | `mtbf_setup`/`mtbf_check`/`mtbf_finish` 脚本组（deploy/start、轮询 + PROGRESS 打戳 + stall_seconds、stop/pull + realresult 解析）；只读预览/校验 API（输入源语义见研究 §5.5）；清单 sha256 留痕 | **✅ 已验收（2026-08-20）**：PlanRun #218（abort 收尾）+ #217（整链 init→patrol→设备端 130 条）；init trace `suite_sha256`、NFS `mtbf/legacy/results/{run_dir}.json`、§6 XML↔JSON 复核通过。详见 Agent Note §冒烟收尾记录 |
 | **P1** | `test_suite`/`test_case` 表 + CRUD/import/export/validate + 审计 + CLI + 导出落工具目录 + D2 绑定与 D3b 门禁 | 外部 agent 仅凭 API/CLI 完成「导入既有 130 条 → 改 1 条 → 导出 → 派发」，全程有审计 |
-| **P2** | 前端用例管理页 + PlanRun 逐条用例结果表（`test_case_result`） | 平台页面可浏览用例集与逐条结果，无需 adb |
+| **P2** | 前端用例管理页 + PlanRun 逐条用例结果表（`test_case_result`） | **✅ 核心已落地（#429）**：`/test-suites` 套件 CRUD/import/export + PlanRun `TestCaseResultsCard`；JobArtifact `report` 白名单仍留待 |
 
 ## 与 ADR-0029 的关系（显式和解）
 
@@ -142,13 +143,13 @@ ADR-0029 非目标明确放弃版本化 ExecutionProfile 实体族（5 张表：
 
 ## 影响
 
-- **DB**：新增 `test_suite` / `test_case`（P2 加 `test_case_result`），additive migration（ADR-0008）。
+- **DB**：新增 `test_suite` / `test_case` / `test_case_result`（P2 已落地），additive migration（ADR-0008）。
 - **API**：新增约 13 个端点（草案见研究 §5.5）。**结果落库主路径（P0 定，与 P0 设计 §5.3 一致）**：
   摘要 metrics + `suite_sha256` 走 step_trace（stdout JSON，规避 64KiB 截断）；**逐条结果写中心存储**
   `{STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}.json`（`report_json` 为控制面合成（`report_service`），脚本不写）；
   `JobArtifact` 白名单扩展报告类型（如 `report`）**留待 P2** 大文件/下载场景。
 - **审计**：`record_audit` 覆盖新资源类型（ADR-0015）。
-- **前端**（P2）：用例管理页 + PlanRun 用例结果区块。
+- **前端**（P2 ✅）：用例管理页 + PlanRun 用例结果区块（#429 已合 main）。
 - **前置条件**：配置/产物通道见 [P0 设计 §4](../design/2026-08-mtbf-p0-runner-design.md)（方案已定：清单/全局参数走中心存储
   `{STP_AEE_NFS_ROOT}/mtbf/{project}/`，APK 走 Agent resources；与 PowerCycle 对齐，P0 实施 PR 登记存储角色表）。
 - **文档**：研究文档（已入库）+ 本 ADR + [`docs/operations/mtbf-api.md`](../operations/mtbf-api.md)（§1 P0 validate 定稿 /
