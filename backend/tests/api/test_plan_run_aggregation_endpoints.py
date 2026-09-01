@@ -1223,6 +1223,44 @@ class TestWatcherSummaryEndpoint:
         assert data["exceeded"] is True
         assert data["threshold"] == 0.05
 
+    def test_watcher_summary_platform_bucket_includes_running_unisoc_without_signals(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        cur_run = chain_setup["current_run"]
+        plan_cur = chain_setup["plan_current"]
+        dev_mtk = chain_setup["device_running"]
+        dev_mtk.platform = "MTK"
+        dev_unisoc = Device(
+            serial="dev-unisoc-01", host_id="host-101", status="BUSY",
+            platform="UNISOC",
+            adb_connected=True, adb_state="device",
+        )
+        db_session.add(dev_unisoc)
+        db_session.commit()
+        j_unisoc = JobInstance(
+            plan_run_id=cur_run.id, plan_id=plan_cur.id,
+            device_id=dev_unisoc.id, host_id="host-101",
+            status=JobStatus.RUNNING.value,
+            pipeline_def={"lifecycle": {}},
+            started_at=_now() - timedelta(minutes=2),
+            patrol_cycle_count=3, patrol_success_cycle_count=3,
+        )
+        db_session.add(j_unisoc)
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        buckets = {b["platform"]: b for b in resp.json()["data"]["platform_buckets"]}
+        assert "MTK" in buckets
+        assert buckets["MTK"]["total"] >= 1
+        assert "UNISOC" in buckets
+        assert buckets["UNISOC"]["total"] == 0
+        assert buckets["UNISOC"]["affected_device_count"] == 0
+        assert buckets["UNISOC"]["running_device_count"] == 1
+
     def test_watcher_summary_window_minutes_validation(
         self, client, auth_headers, chain_setup,
     ):
