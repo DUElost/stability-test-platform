@@ -331,7 +331,10 @@ curl -v --max-time 5 http://<控制平面IP>/api/v1/hosts
 ### 5.1 版本升级后附加核查（2026-08-29 起）
 
 含 #404 套件绑定、#514 双轨收口、#527 日志观测层、ADR-0031 AI 助手、
-`k8l9` host.id 对齐等变更时，在 §5 主链路 smoke 之前或之后执行：
+`k8l9` host.id 对齐等变更时，在 §5 主链路 smoke 之前或之后执行。
+
+**2026-09-01 增量**（ADR-0029 v2.5 D10、ADR-0030 P2 #429、G15 #462、OpenRouter UI）：
+runbook **§7** 增量附录（Alembic head 当前 `j0k1l2m3n4o5`、前端 dist-prod 重建、G15/flash catalog）。
 
 ```bash
 # 只读：alembic 版本 + 未绑定 mtbf Plan（有则派发即 SUITE_BINDING_REQUIRED）
@@ -339,11 +342,12 @@ HEAD=$(cd backend && ../venv/bin/python -m alembic heads | awk '{print $1}')
 ./venv/bin/python tools/dev/check-deploy-readiness.py --expect-revision "$HEAD"
 ```
 
-详细逐步命令：[`operations/2026-08-29-post-review-deploy-runbook.md`](./operations/2026-08-29-post-review-deploy-runbook.md)
+详细逐步命令：[`operations/2026-08-29-post-review-deploy-runbook.md`](./operations/2026-08-29-post-review-deploy-runbook.md)（含 §7）
 
 - [ ] `alembic upgrade head` 已执行且 revision 与仓库 head 一致
 - [ ] `check-deploy-readiness.py` 退出码 0（无未绑定 mtbf Plan）
-- [ ] backend 已重启；`POST /api/v1/scripts/scan` 已跑（flash/oobe/mtbf 新版本注册）
+- [ ] backend 已重启；`POST /api/v1/scripts/scan` 已跑（flash v1.3.10 / G15 / mtbf 等）
+- [ ] 前端 dist-prod 已重建并 reload nginx（含 `/test-suites` 与 OpenRouter UI）
 - [ ] 全部 Agent 已重启（#514 OperationScheduler fail-fast、claim cap 5、step-trace drain）
 - [ ] 抽样核对 Agent `HOST_ID` 与 `GET /api/v1/hosts` 返回的 `id` 一致（k8l9 迁移后）
 - [ ] （可选）fleet `.env` 清理残留 `STP_MTBF_EXPECTED_TESTPOINT_COUNT`（PR-D 已退役 hot-update 下发）
