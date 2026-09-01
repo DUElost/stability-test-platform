@@ -1,6 +1,6 @@
 # 平台 Logo：宽画布裁切与多尺寸接入
 
-Status: preview
+Status: accepted
 Class: feature
 
 ## Decision
@@ -13,6 +13,8 @@ Class: feature
 
 未矢量化：源为栅格抽象图形，栅格多尺寸足够；后续若要 SVG 再单独重绘。
 
+**v2（2026-09-01）**：替换为新设计图 `Gemini_Generated_Image_w2lvzzw2lvzzw2lv（已编辑）.jpeg`（人工裁切近正方形 1391×1463 → 中心裁 1391²），覆盖全部 public/brand 位图；组件路径不变。
+
 ## Verification
 
 ```bash
@@ -22,4 +24,4 @@ cd frontend && npx tsc --noEmit && npm run build
 
 ## Revisit
 
-若需透明底（去灰底）或更紧裁白圆角卡，重跑裁切脚本并覆盖 brand/public。
+若需透明底（去白底）或更紧裁白圆角卡，重跑裁切脚本并覆盖 brand/public。
