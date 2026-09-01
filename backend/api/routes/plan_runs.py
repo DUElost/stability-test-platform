@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import String, and_, cast, func, or_, select, text
 from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
@@ -46,6 +46,8 @@ from backend.api.schemas.plan_run import (
     PlanRunLogEventOut,
     PlanRunLogEventsOut,
     PlanRunDetailOut,
+    PlanRunListPageOut,
+    PlanRunListStatsOut,
     PlanRunTimelineOut,
     StageOut,
     StageStepOut,
@@ -270,28 +272,104 @@ def _job_out(job: JobInstance, traces: list, device_serial: str | None = None) -
 
 # ── Endpoints ────────────────────────────────────────────────────────────
 
-@router.get("/plan-runs", response_model=ApiResponse[list[PlanRunDetailOut]])
+def _apply_plan_run_list_filters(
+    stmt,
+    *,
+    plan_id: Optional[int],
+    statuses: Optional[list[PlanRunStatus]],
+    project_key: Optional[str],
+    q: Optional[str],
+    db: Session,
+    join_plan_for_search: bool = False,
+):
+    """共享 list / count / stats 的过滤条件。project_key 未知 → 404。"""
+    if plan_id is not None:
+        stmt = stmt.where(PlanRun.plan_id == plan_id)
+    if statuses:
+        values = [s.value for s in statuses]
+        if len(values) == 1:
+            stmt = stmt.where(PlanRun.status == values[0])
+        else:
+            stmt = stmt.where(PlanRun.status.in_(values))
+    if project_key is not None:
+        if db.query(TestProject).filter(TestProject.project_key == project_key).first() is None:
+            raise HTTPException(status_code=404, detail="project not found")
+        stmt = stmt.join(TestProject, PlanRun.project_id == TestProject.id).where(
+            TestProject.project_key == project_key
+        )
+    needle = (q or "").strip()
+    if needle:
+        pattern = f"%{needle}%"
+        clauses = [
+            PlanRun.triggered_by.ilike(pattern),
+            cast(PlanRun.id, String).ilike(pattern),
+        ]
+        if join_plan_for_search:
+            stmt = stmt.join(Plan, PlanRun.plan_id == Plan.id)
+        clauses.append(Plan.name.ilike(pattern))
+        stmt = stmt.where(or_(*clauses))
+    return stmt
+
+
+@router.get("/plan-runs", response_model=ApiResponse[PlanRunListPageOut])
 def list_plan_runs(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
     plan_id: Optional[int] = None,
-    status: Optional[PlanRunStatus] = Query(default=None),
+    status: Optional[list[PlanRunStatus]] = Query(
+        default=None,
+        description="可重复：?status=QUEUED&status=PRECHECK",
+    ),
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
+    q: Optional[str] = Query(None, description="搜索 Run ID / Plan 名 / 触发者"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    q = select(PlanRun).options(joinedload(PlanRun.project)).order_by(PlanRun.started_at.desc())
-    if plan_id is not None:
-        q = q.where(PlanRun.plan_id == plan_id)
-    if status is not None:
-        q = q.where(PlanRun.status == status.value)
-    if project_key is not None:
-        # 未知 key 一律 404（与 projects 路由同语义）
-        if db.query(TestProject).filter(TestProject.project_key == project_key).first() is None:
-            raise HTTPException(status_code=404, detail="project not found")
-        q = q.join(TestProject, PlanRun.project_id == TestProject.id) \
-             .where(TestProject.project_key == project_key)
-    runs = db.execute(q.offset(skip).limit(limit)).scalars().all()
+    needle = (q or "").strip()
+    need_plan_join = bool(needle)
+
+    base = select(PlanRun).options(joinedload(PlanRun.project))
+    base = _apply_plan_run_list_filters(
+        base,
+        plan_id=plan_id,
+        statuses=status,
+        project_key=project_key,
+        q=q,
+        db=db,
+        join_plan_for_search=need_plan_join,
+    )
+    base = base.order_by(PlanRun.started_at.desc())
+
+    count_stmt = select(func.count()).select_from(PlanRun)
+    count_stmt = _apply_plan_run_list_filters(
+        count_stmt,
+        plan_id=plan_id,
+        statuses=status,
+        project_key=project_key,
+        q=q,
+        db=db,
+        join_plan_for_search=need_plan_join,
+    )
+    total = int(db.execute(count_stmt).scalar_one())
+
+    stats_stmt = select(PlanRun.status, func.count()).group_by(PlanRun.status)
+    stats_stmt = _apply_plan_run_list_filters(
+        stats_stmt,
+        plan_id=plan_id,
+        statuses=None,
+        project_key=project_key,
+        q=None,
+        db=db,
+        join_plan_for_search=False,
+    )
+    by_status = {row[0]: int(row[1]) for row in db.execute(stats_stmt).all()}
+    stats = PlanRunListStatsOut(
+        total=sum(by_status.values()),
+        running=by_status.get(PlanRunStatus.RUNNING.value, 0),
+        failed=by_status.get(PlanRunStatus.FAILED.value, 0),
+    )
+
+    runs = db.execute(base.offset(skip).limit(limit)).scalars().unique().all()
     plan_ids = {r.plan_id for r in runs}
     plan_names: dict[int, str] = {}
     if plan_ids:
@@ -299,7 +377,16 @@ def list_plan_runs(
             select(Plan.id, Plan.name).where(Plan.id.in_(plan_ids))
         ).all()
         plan_names = {row.id: row.name for row in plan_rows}
-    return ok([_plan_run_out(r, plan_name=plan_names.get(r.plan_id)) for r in runs])
+    items = [_plan_run_out(r, plan_name=plan_names.get(r.plan_id)) for r in runs]
+    return ok(
+        PlanRunListPageOut(
+            items=items,
+            total=total,
+            skip=skip,
+            limit=limit,
+            stats=stats,
+        )
+    )
 
 
 @router.get("/plan-runs/{run_id}", response_model=ApiResponse[PlanRunDetailOut])

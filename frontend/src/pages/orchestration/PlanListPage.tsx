@@ -1,9 +1,16 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { planKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -16,8 +23,9 @@ import { Plus, Edit, Trash2, Search, FileText, Play } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
+import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
 import { FORM } from '@/design-system';
-import { LAYOUT, STAT, TEXT } from '@/design-system/tokens';
+import { LAYOUT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatLocalDate } from '@/utils/format';
 
@@ -118,7 +126,6 @@ export default function PlanListPage() {
   }), [plans]);
 
   // ADR-0029 D6（#448）：项目×专项二维分组——按 project_key 保序分组。
-  // 项目筛选已选时仍显示单组标题（显式归属可见），不筛时按项目聚合。
   const grouped = useMemo(() => {
     const groups = new Map<string, Plan[]>();
     for (const plan of filtered) {
@@ -135,64 +142,46 @@ export default function PlanListPage() {
       <PageHeader
         title="Plan 编排"
         subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链"
-        action={
-          <div className="flex items-center gap-2">
-            <ProjectFilterSelect
-              value={projectKey}
-              onChange={setProjectKey}
-              className="w-52"
-              testId="plan-project-filter"
-            />
-            <SpecialtyFilterSelect value={specialtyKey} onChange={setSpecialtyKey} />
-          </div>
-        }
       />
 
-      {/* Stats — 稀疏数字条 */}
       <div className="grid grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="py-4 px-4">
-            <p className={STAT.label}>Plan 总数</p>
-            <p className={cn(STAT.value, 'mt-2')}>{stats.total}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-4 px-4">
-            <p className={STAT.label}>已配置步骤</p>
-            <p className={cn(STAT.value, 'mt-2')}>{stats.withSteps}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-4 px-4">
-            <p className={STAT.label}>链式 Plan</p>
-            <p className={cn(STAT.value, 'mt-2')}>{stats.chained}</p>
-          </CardContent>
-        </Card>
+        <DashboardStatCard label="Plan 总数" value={stats.total} />
+        <DashboardStatCard label="已配置步骤" value={stats.withSteps} />
+        <DashboardStatCard label="链式 Plan" value={stats.chained} />
       </div>
 
-      {/* Search + Create */}
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+        <div className="relative min-w-0 flex-1">
           <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4', TEXT.subtitle)} />
           <Input
-            type="text" placeholder="搜索 Plan 名称或描述..." value={search}
+            type="search"
+            placeholder="搜索 Plan 名称或描述..."
+            value={search}
             onChange={e => setSearch(e.target.value)}
             className="pl-9"
+            data-testid="plan-search"
           />
         </div>
-        <Button onClick={() => navigate('/orchestration/plans/new')}>
-          <Plus className="w-4 h-4 mr-1.5" /> 新建 Plan
-        </Button>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <ProjectFilterSelect
+            value={projectKey}
+            onChange={setProjectKey}
+            className="w-44"
+            testId="plan-project-filter"
+          />
+          <SpecialtyFilterSelect value={specialtyKey} onChange={setSpecialtyKey} />
+          <Button onClick={() => navigate('/orchestration/plans/new')} className="shrink-0">
+            <Plus className="w-4 h-4 mr-1.5" /> 新建 Plan
+          </Button>
+        </div>
       </div>
 
-      {/* List */}
       {isLoading ? (
         <PageSkeleton>
           <PageSkeleton.Cards count={3} />
         </PageSkeleton>
       ) : isError ? (
         <ErrorState
-          // 未知项目 key：按错误态渲染（后端统一 404），不吞成空列表
           title={isProject404 ? '项目不存在' : '加载 Plan 列表失败'}
           description={isProject404
             ? `项目 "${projectKey}" 不存在，请清除筛选或核对 key`
@@ -221,64 +210,109 @@ export default function PlanListPage() {
         )
       ) : (
         <div className="space-y-4">
-          {grouped.map(([groupKey, plans]) => (
+          {grouped.map(([groupKey, groupPlans]) => (
             <section key={groupKey} className="space-y-2" data-testid={`plan-group-${groupKey}`}>
               <h3 className={cn('flex items-center gap-2 text-xs font-semibold uppercase tracking-wide', TEXT.subtitle)}>
                 <ProjectKeyBadge projectKey={groupKey === '未归属' ? undefined : groupKey} />
                 <span>{groupKey}</span>
-                <span className="font-normal">（{plans.length}）</span>
+                <span className="font-normal">（{groupPlans.length}）</span>
               </h3>
-              <div className="space-y-3">
-                {plans.map(plan => (
-            <Card key={plan.id} className="group transition-colors hover:bg-muted/30">
-              <CardContent className="py-3.5 flex items-center justify-between">
-                <div className="min-w-0 flex-1 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <h3 className={cn('font-medium truncate', TEXT.heading)}>{plan.name}</h3>
-                    <ProjectKeyBadge projectKey={plan.project_key} />
-                    {/* ADR-0029 D6（#405）：专项接线——有值才显示，避免噪音 */}
-                    {plan.specialty_key && (
-                      <Badge
-                        variant="default"
-                        className="text-xs px-1.5 py-0.5"
-                        title={plan.specialty_key}
+              <div className="overflow-x-auto rounded-lg border border-border">
+                <Table className="min-w-[720px]">
+                  <TableHeader>
+                    <TableRow className="border-b text-left text-xs text-muted-foreground hover:bg-transparent">
+                      <TableHead className="h-9 px-3">Plan</TableHead>
+                      <TableHead className="h-9 px-3">专项</TableHead>
+                      <TableHead className="h-9 px-3">步骤</TableHead>
+                      <TableHead className="h-9 px-3">失败阈值</TableHead>
+                      <TableHead className="h-9 px-3">更新</TableHead>
+                      <TableHead className="h-9 px-3 text-right">操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {groupPlans.map((plan) => (
+                      <TableRow
+                        key={plan.id}
+                        className="border-b last:border-0 hover:bg-muted/30"
                       >
-                        {specialtyLabel(plan.specialty_key)}
-                      </Badge>
-                    )}
-                    {plan.suite_name && (
-                      <Badge variant="info" className="text-xs px-1.5 py-0.5" title="托管模式：已绑定套件">
-                        套件:{plan.suite_name}
-                      </Badge>
-                    )}
-                    {plan.next_plan_id != null && (
-                      <Badge variant="info" className="text-xs px-1.5 py-0.5">链式</Badge>
-                    )}
-                  </div>
-                  {plan.description && (
-                    <p className={cn('text-sm truncate', TEXT.subtitle)}>{plan.description}</p>
-                  )}
-                  <div className={cn('flex items-center gap-3 text-xs pt-1', TEXT.subtitle)}>
-                    <span>{plan.steps?.length ?? 0} 步骤</span>
-                    <span>阈值 {Math.round((plan.failure_threshold ?? 0.05) * 100)}%</span>
-                    {plan.created_by && <span>创建者: {plan.created_by}</span>}
-                    <span>更新于 {formatLocalDate(plan.updated_at)}</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 ml-4 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100">
-                  <Button variant="ghost" size="sm" onClick={() => navigate(`/execution/plan-execute?plan=${plan.id}`)} title="执行">
-                    <Play className="w-4 h-4" />
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => navigate(`/orchestration/plans/${plan.id}`)} title="编辑">
-                    <Edit className="w-4 h-4" />
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => handleDelete(plan)} className={cn(TEXT.destructive, 'hover:text-destructive')} title="删除">
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
-                </div>
-                  </CardContent>
-                </Card>
-              ))}
+                        <TableCell className="max-w-[280px] px-3 py-2.5">
+                          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                            <span className={cn('truncate text-sm font-medium', TEXT.heading)}>
+                              {plan.name}
+                            </span>
+                            {plan.suite_name && (
+                              <Badge variant="info" className="text-xs px-1.5 py-0.5" title="托管模式：已绑定套件">
+                                套件:{plan.suite_name}
+                              </Badge>
+                            )}
+                            {plan.next_plan_id != null && (
+                              <Badge variant="info" className="text-xs px-1.5 py-0.5">链式</Badge>
+                            )}
+                          </div>
+                          {plan.description && (
+                            <p className={cn('mt-0.5 truncate text-xs', TEXT.caption)}>
+                              {plan.description}
+                            </p>
+                          )}
+                        </TableCell>
+                        <TableCell className="px-3 py-2.5">
+                          {plan.specialty_key ? (
+                            <Badge
+                              variant="default"
+                              className="text-xs px-1.5 py-0.5"
+                              title={plan.specialty_key}
+                            >
+                              {specialtyLabel(plan.specialty_key)}
+                            </Badge>
+                          ) : (
+                            <span className={cn('text-xs', TEXT.caption)}>—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 text-xs', TEXT.caption)}>
+                          {plan.steps?.length ?? 0}
+                        </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 text-xs', TEXT.caption)}>
+                          {Math.round((plan.failure_threshold ?? 0.05) * 100)}%
+                        </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 text-xs whitespace-nowrap', TEXT.caption)}>
+                          {formatLocalDate(plan.updated_at)}
+                        </TableCell>
+                        <TableCell className="px-3 py-2.5">
+                          <div className="flex items-center justify-end gap-0.5">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => navigate(`/execution/plan-execute?plan=${plan.id}`)}
+                              title="执行"
+                              aria-label={`执行 ${plan.name}`}
+                            >
+                              <Play className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => navigate(`/orchestration/plans/${plan.id}`)}
+                              title="编辑"
+                              aria-label={`编辑 ${plan.name}`}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => void handleDelete(plan)}
+                              className={cn(TEXT.destructive, 'hover:text-destructive')}
+                              title="删除"
+                              aria-label={`删除 ${plan.name}`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             </section>
           ))}

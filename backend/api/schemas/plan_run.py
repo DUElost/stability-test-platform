@@ -95,6 +95,24 @@ class PlanRunDetailOut(BaseModel):
     priority: int = 0
 
 
+class PlanRunListStatsOut(BaseModel):
+    """项目/Plan 作用域内的 KPI 计数（不受 status/q 筛影响）。"""
+
+    total: int
+    running: int
+    failed: int
+
+
+class PlanRunListPageOut(BaseModel):
+    """GET /plan-runs 分页壳；items 为当前页，total 为筛后总数。"""
+
+    items: list[PlanRunDetailOut]
+    total: int
+    skip: int
+    limit: int
+    stats: PlanRunListStatsOut
+
+
 class PlanRunAbortIn(BaseModel):
     reason: Optional[str] = None
 

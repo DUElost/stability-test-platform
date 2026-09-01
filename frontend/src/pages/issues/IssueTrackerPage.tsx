@@ -1,19 +1,27 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { ClickableRow } from '@/components/ui/clickable-row';
 import { api, type JiraDraft, type PlanRun } from '@/utils/api';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
 import JiraSubmitPanel from '@/components/issues/JiraSubmitPanel';
 import JiraRunHistory from '@/components/issues/JiraRunHistory';
 import { InlineEmpty } from '@/components/ui/empty-state';
 import { StateTabs } from '@/components/ui/state-tabs';
-import { INTERACTIVE, TEXT } from '@/design-system';
+import { LAYOUT, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatLocalDateTime } from '@/utils/format';
 
@@ -62,131 +70,117 @@ export default function IssueTrackerPage() {
   ];
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" className={LAYOUT.pageGap}>
       <PageHeader
         title="问题追踪"
         subtitle="上传去重报告进行批量 Jira 提单，或查看任务自动生成的草稿"
-        action={
-          <Button
-            variant="outline"
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            aria-label="刷新 JIRA 草稿列表"
-          >
-            <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
-            刷新
-          </Button>
-        }
       />
 
-      <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <StateTabs
           items={tabs}
           activeKey={tab}
           onChange={(key) => setTab(key as TabKey)}
           testId="issue-tracker-tabs"
           ariaLabel="提单视图切换"
+          className="min-w-0 flex-1"
         />
-
-        {tab === 'form' && (
-          <Card>
-            <CardHeader>
-              <CardTitle>批量提单（去重报告）</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <JiraSubmitPanel />
-            </CardContent>
-          </Card>
-        )}
-
         {tab === 'drafts' && (
-          <>
-            {isError && <InlineError message="JIRA 草稿列表加载失败，请检查后端服务连接。" onRetry={() => void refetch()} />}
-
-            <Card>
-              <CardHeader>
-                <CardTitle>JIRA 草稿</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {isLoading ? (
-                  <div className="space-y-3">
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <Skeleton key={i} className="h-20 w-full" />
-                    ))}
-                  </div>
-                ) : runsData?.length === 0 ? (
-                  <InlineEmpty>暂无 JIRA 草稿 · 完成任务执行后会自动生成</InlineEmpty>
-                ) : (
-                  <div className="space-y-4">
-                    {runsData?.map(({ run, draft }) => {
-                      const priority = draft?.priority || 'Minor';
-                      return (
-                        <div
-                          key={run.id}
-                          role="button"
-                          tabIndex={0}
-                          className={cn(
-                            'flex cursor-pointer items-start gap-4 rounded-lg border p-4 transition-colors',
-                            INTERACTIVE.hover,
-                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                          )}
-                          onClick={() => navigate(`/execution/plan-runs/${run.id}`)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              navigate(`/execution/plan-runs/${run.id}`);
-                            }
-                          }}
-                        >
-                          <AlertCircle className="mt-0.5 h-5 w-5 text-warning" />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium truncate">{draft?.summary}</span>
-                              <StatusBadge kind="priority" status={priority} size="sm" />
-                            </div>
-                            <div className={cn('mt-1 text-sm', TEXT.subtitle)}>
-                              {draft?.project_key}-{draft?.issue_type} | Plan #{run.plan_id ?? '-'} | Job #{run.id}
-                            </div>
-                            <div className={cn('mt-1 text-sm', TEXT.caption)}>
-                              {draft?.description
-                                ? draft.description.length > 100
-                                  ? `${draft.description.substring(0, 100)}...`
-                                  : draft.description
-                                : '-'}
-                            </div>
-                            <div className={cn('mt-2 flex items-center gap-4 text-xs', TEXT.caption)}>
-                              <span>标签: {draft?.labels?.join(', ') || '-'}</span>
-                              <span>组件: {draft?.component || '-'}</span>
-                            </div>
-                          </div>
-                          <div className={cn('text-right text-sm', TEXT.subtitle)}>
-                            <div>{formatLocalDateTime(run.ended_at ?? null)}</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>说明</CardTitle>
-              </CardHeader>
-              <CardContent className={cn('space-y-2 text-sm', TEXT.subtitle)}>
-                <p>「批量提单」页签上传去重报告，经厂商脚本一键执行（生成上传模板 → 建单）。</p>
-                <p>「草稿列表」页签展示任务执行后自动生成的 JIRA 草稿，点击可跳转到对应任务。</p>
-                <p>「历史记录」页签展示历次批量提单执行结果与日志 replay。</p>
-              </CardContent>
-            </Card>
-          </>
-        )}
-
-        {tab === 'history' && (
-          <JiraRunHistory />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void handleRefresh()}
+            disabled={isRefreshing}
+            aria-label="刷新 JIRA 草稿列表"
+            className="shrink-0"
+          >
+            <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+            刷新
+          </Button>
         )}
       </div>
+
+      {tab === 'form' && (
+        <div className="rounded-lg border border-border p-4">
+          <JiraSubmitPanel />
+        </div>
+      )}
+
+      {tab === 'drafts' && (
+        <div className="space-y-3">
+          {isError && (
+            <InlineError
+              message="JIRA 草稿列表加载失败，请检查后端服务连接。"
+              onRetry={() => void refetch()}
+            />
+          )}
+
+          {isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          ) : runsData?.length === 0 ? (
+            <InlineEmpty bordered>暂无 JIRA 草稿 · 完成任务执行后会自动生成</InlineEmpty>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <Table className="min-w-[720px]">
+                <TableHeader>
+                  <TableRow className="border-b text-left text-xs text-muted-foreground hover:bg-transparent">
+                    <TableHead className="h-9 px-3">摘要</TableHead>
+                    <TableHead className="h-9 px-3">优先级</TableHead>
+                    <TableHead className="h-9 px-3">项目</TableHead>
+                    <TableHead className="h-9 px-3">PlanRun</TableHead>
+                    <TableHead className="h-9 px-3">结束时间</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {runsData?.map(({ run, draft }) => {
+                    const priority = draft?.priority || 'Minor';
+                    return (
+                      <ClickableRow
+                        key={run.id}
+                        className="border-b transition-colors last:border-0 hover:bg-muted/50"
+                        onClick={() => navigate(`/execution/plan-runs/${run.id}`)}
+                        role="button"
+                      >
+                        <TableCell className="max-w-[280px] px-3 py-2.5">
+                          <span className={cn('block truncate text-sm', TEXT.heading)}>
+                            {draft?.summary || '—'}
+                          </span>
+                          <span className={cn('mt-0.5 block truncate text-xs', TEXT.caption)}>
+                            {draft?.issue_type || '—'}
+                            {draft?.component ? ` · ${draft.component}` : ''}
+                          </span>
+                        </TableCell>
+                        <TableCell className="px-3 py-2.5">
+                          <StatusBadge kind="priority" status={priority} size="sm" />
+                        </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 font-mono text-xs', TEXT.caption)}>
+                          {draft?.project_key || '—'}
+                        </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 font-mono text-xs', TEXT.subtitle)}>
+                          #{run.id}
+                        </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 text-xs whitespace-nowrap', TEXT.caption)}>
+                          {formatLocalDateTime(run.ended_at ?? null)}
+                        </TableCell>
+                      </ClickableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          <p className={cn('text-xs', TEXT.caption)}>
+            批量提单上传去重报告；草稿来自任务执行后自动生成，点击行跳转对应 PlanRun。
+          </p>
+        </div>
+      )}
+
+      {tab === 'history' && <JiraRunHistory />}
     </PageContainer>
   );
 }

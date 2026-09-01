@@ -902,10 +902,10 @@ class TestListFilters:
             "/api/v1/plan-runs?project_key=proj-a", headers=auth_headers
         )
         assert resp.status_code == 200
-        run_ids = [r["id"] for r in resp.json()["data"]]
+        run_ids = [r["id"] for r in resp.json()["data"]["items"]]
         assert len(run_ids) == 1
         # 标签字段（PR 2 前端依赖）：PlanRunDetailOut.project_key 填充
-        assert resp.json()["data"][0]["project_key"] == "proj-a"
+        assert resp.json()["data"]["items"][0]["project_key"] == "proj-a"
 
     def test_results_summary_filter_by_project_key(
         self, client, auth_headers, db_session, project_a, sample_host

@@ -208,7 +208,10 @@ class TestPlanRunDetailOutCarriesRunContext:
 
         resp = client.get(f"/api/v1/plan-runs?plan_id={plan.id}", headers=auth_headers)
         assert resp.status_code == 200, resp.text
-        items = resp.json()["data"]
+        payload = resp.json()["data"]
+        assert payload["total"] == 1
+        assert payload["stats"]["total"] == 1
+        items = payload["items"]
         assert len(items) == 1
         assert items[0]["run_context"]["precheck"]["phase"] == "verifying"
 
