@@ -73,6 +73,7 @@ cd $REPO/frontend
 cp -a /tmp/stp-deploy/frontend/dist ./dist-new                      # 先落到同一文件系统
 mv dist-prod dist-prod.bak-$(date +%Y%m%d-%H%M)                     # bak 目录留原地回滚
 mv dist-new dist-prod                                               # 同盘双 rename 原子切换
+ls -dt dist-prod.bak-* 2>/dev/null | tail -n +3 | xargs -r rm -rf   # 只保留最近 2 个 bak
 sudo systemctl reload nginx
 ```
 
