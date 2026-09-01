@@ -277,6 +277,7 @@ class WatcherPlatformBucketOut(BaseModel):
     total: int
     affected_device_count: int
     running_device_count: int = 0
+    participating_device_count: int = 0
 
 
 class PackageStatOut(BaseModel):

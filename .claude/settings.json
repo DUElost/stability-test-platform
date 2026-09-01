@@ -1,13 +1,9 @@
 {
   "permissions": {
     "deny": [
-      "Write(.env.backend)",
       "Edit(.env.backend)",
-      "Write(**/.env)",
       "Edit(**/.env)",
-      "Write(**/*.pem)",
       "Edit(**/*.pem)",
-      "Write(//home/debian13/hosts.ini)",
       "Edit(//home/debian13/hosts.ini)"
     ]
   }
