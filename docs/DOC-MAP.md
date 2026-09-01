@@ -73,6 +73,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **Living 审查** | [`reviews/FEASIBILITY_ANALYSIS_AI_ASSISTANT_2026-08-28.md`](./reviews/FEASIBILITY_ANALYSIS_AI_ASSISTANT_2026-08-28.md) | AI 助手可行性分析（需求×基座映射全「高」；风险 #8 SAQ timeout×T1 长任务已转化为设计约束） |
 | **Living 审查** | [`reviews/FRONTEND_UI_REVIEW_2026-08-19.md`](./reviews/FRONTEND_UI_REVIEW_2026-08-19.md) | 前端界面视觉与布局审查（A 轨源码取证 + B 轨目视取证 + 第三方复核轮） |
 | **Living 审查** | [`reviews/FRONTEND_UI_REVIEW_2026-08-27.md`](./reviews/FRONTEND_UI_REVIEW_2026-08-27.md) | 前端各界面全量审查（功能 / UX / a11y / 错误处理；复核轮第三方裁决） |
+| **Living 审查** | [`reviews/FRONTEND_ARCHITECTURE_REVIEW_AND_ROADMAP_2026-09-01.md`](./reviews/FRONTEND_ARCHITECTURE_REVIEW_AND_ROADMAP_2026-09-01.md) | 前端架构全面只读审查与未来演进规划（健康基准/分层架构/设计令牌/通信与同步/主工作台剖析/四维演进路线） |
 | **Living 审查** | [`reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md`](./reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md) | 治理面常驻上下文瘦身评估（只读盘点；A 级已执行 PR #457、C 级已登记） |
 | **实现规格** | [`reviews/IMPLEMENTATION_SPEC_PROMPT.md`](./reviews/IMPLEMENTATION_SPEC_PROMPT.md) | 阶段 3 重构实现规格——Agent 工作提示词（产出 device-log-event implementation spec） |
 | **设计** | [`design/2026-08-27-platform-ai-assistant.md`](./design/2026-08-27-platform-ai-assistant.md) | 平台 AI 助手设计（组件职责/轮次时序/动作状态机/权限隔离矩阵/安全边界/部署观测；ADR-0031 配套） |
