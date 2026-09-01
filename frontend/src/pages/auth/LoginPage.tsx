@@ -8,6 +8,7 @@ import { clearAppQueryCache } from '@/components/QueryProvider';
 import { api, toApiError } from '@/utils/api';
 import { ALERT_BOX, SURFACE, TEXT } from '@/design-system/tokens';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
+import { BrandLogo } from '@/components/brand/BrandLogo';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -38,7 +39,10 @@ export default function LoginPage() {
         <ThemeToggle showLabel />
       </div>
       <Card className="w-full max-w-md">
-        <CardHeader className="space-y-1">
+        <CardHeader className="space-y-3">
+          <div className="flex justify-center">
+            <BrandLogo size={64} decorative={false} className="rounded-2xl shadow-sm" />
+          </div>
           <CardTitle className="text-2xl font-bold text-center">
             稳定性测试平台
           </CardTitle>
