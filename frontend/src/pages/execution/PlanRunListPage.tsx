@@ -56,6 +56,12 @@ function runDurationSeconds(run: PlanRun): number | null {
   return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 1000));
 }
 
+function formatPassRate(run: PlanRun): string {
+  const rate = run.result_summary?.pass_rate;
+  if (typeof rate !== 'number' || !Number.isFinite(rate)) return '—';
+  return `${Math.round(rate * 100)}%`;
+}
+
 export default function PlanRunListPage() {
   useDocumentTitle('Plan 执行记录');
   const navigate = useNavigate();
@@ -121,7 +127,7 @@ export default function PlanRunListPage() {
   );
 
   return (
-    <PageContainer width="content" className={LAYOUT.pageGap}>
+    <PageContainer width="wide" className={LAYOUT.pageGap}>
       <PageHeader
         title="Plan 执行记录"
         subtitle="查看所有 PlanRun 历史记录"
@@ -228,12 +234,14 @@ export default function PlanRunListPage() {
           ) : (
             <>
               <div className="overflow-x-auto rounded-lg border border-border">
-                <Table className="min-w-[720px]">
+                <Table className="min-w-[960px]">
                   <TableHeader>
                     <TableRow className="border-b text-left text-xs text-muted-foreground hover:bg-transparent">
                       <TableHead className="h-9 px-3">Run</TableHead>
                       <TableHead className="h-9 px-3">状态</TableHead>
                       <TableHead className="h-9 px-3">Plan</TableHead>
+                      <TableHead className="h-9 px-3">设备</TableHead>
+                      <TableHead className="h-9 px-3">通过率</TableHead>
                       <TableHead className="h-9 px-3">类型</TableHead>
                       <TableHead className="h-9 px-3">触发者</TableHead>
                       <TableHead className="h-9 px-3">时长</TableHead>
@@ -254,13 +262,19 @@ export default function PlanRunListPage() {
                         <TableCell className="px-3 py-2.5">
                           <StatusBadge kind="plan-run" status={run.status} size="sm" />
                         </TableCell>
-                        <TableCell className="max-w-[220px] px-3 py-2.5">
+                        <TableCell className="max-w-[260px] px-3 py-2.5">
                           <span className="flex min-w-0 items-center gap-1.5">
                             <span className={cn('truncate text-sm', TEXT.heading)}>
                               {run.plan_name || `Plan #${run.plan_id}`}
                             </span>
                             <ProjectKeyBadge projectKey={run.project_key} />
                           </span>
+                        </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 text-xs tabular-nums', TEXT.caption)}>
+                          {run.device_count ?? 0}
+                        </TableCell>
+                        <TableCell className={cn('px-3 py-2.5 text-xs tabular-nums', TEXT.caption)}>
+                          {formatPassRate(run)}
                         </TableCell>
                         <TableCell className={cn('px-3 py-2.5 text-xs', TEXT.caption)}>
                           {run.run_type}

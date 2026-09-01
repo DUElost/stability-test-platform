@@ -56,6 +56,8 @@ const sampleRuns = [
     started_at: '2026-09-01T01:00:00Z',
     ended_at: null,
     project_key: 'proj-a',
+    device_count: 12,
+    result_summary: null,
   },
   {
     id: 102,
@@ -68,6 +70,8 @@ const sampleRuns = [
     started_at: '2026-08-31T12:00:00Z',
     ended_at: '2026-08-31T13:00:00Z',
     project_key: 'proj-a',
+    device_count: 4,
+    result_summary: { pass_rate: 0.25, total: 4, failed: 3 },
   },
   {
     id: 103,
@@ -80,6 +84,8 @@ const sampleRuns = [
     started_at: '2026-08-30T08:00:00Z',
     ended_at: '2026-08-30T08:10:00Z',
     project_key: null,
+    device_count: 1,
+    result_summary: { pass_rate: 1, total: 1, completed: 1 },
   },
 ];
 
@@ -104,8 +110,10 @@ describe('PlanRunListPage', () => {
     renderPage();
     expect(await screen.findByText('MTBF overnight')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Plan' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '设备' })).toBeInTheDocument();
     expect(screen.getByText('#101')).toBeInTheDocument();
-    expect(screen.getByText('#102')).toBeInTheDocument();
+    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('25%')).toBeInTheDocument();
   });
 
   it('filters by status tab via API', async () => {

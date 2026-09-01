@@ -1296,6 +1296,8 @@ export interface PlanRun {
   plan_name?: string | null;
   /** ADR-0029：归属项目 key（plan_run 快照，F2 口径） */
   project_key?: string | null;
+  /** 列表页：JobInstance 数 ≈ 参与设备量 */
+  device_count?: number;
   capabilities?: PlanRunCapabilities | null;
   /** ADR-0026 admission queue — null/absent for legacy runs. */
   queue_reason?: 'DEVICE_BUSY' | 'RESOURCE_BUSY' | 'PRIORITY_WAIT' | 'PRECHECK_STALE' | string | null;

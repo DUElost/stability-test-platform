@@ -88,6 +88,8 @@ class PlanRunDetailOut(BaseModel):
     project_key: Optional[str] = None
     capabilities: Optional[dict] = None
     jobs: list[JobInstanceOut] = []
+    # 列表页关键列：JobInstance 数 ≈ 设备量（一设备一 job）
+    device_count: int = 0
     # ── ADR-0026: admission-queue observability (NULL for legacy runs) ──
     queue_reason: Optional[str] = None
     enqueued_at: Optional[str] = None
