@@ -7,7 +7,7 @@
 | 文档 | 用途 |
 |------|------|
 | [`production-minimum-deployment-checklist.md`](../production-minimum-deployment-checklist.md) | 生产最小部署、env、HTTPS、冒烟 |
-| [`2026-08-29-post-review-deploy-runbook.md`](./2026-08-29-post-review-deploy-runbook.md) | 审查收口后一次升级（migration + Agent 重启 + 冒烟） |
+| [`2026-08-29-post-review-deploy-runbook.md`](./2026-08-29-post-review-deploy-runbook.md) | 审查收口后一次升级（migration + Agent 重启 + 冒烟；§7 = v2.5/P2/G15 增量） |
 | [`preprod-drill-runbook.md`](../preprod-drill-runbook.md) | 预发布逐条验收 |
 | [`acceptance/00-platform-smoke.md`](../acceptance/00-platform-smoke.md) | 验收 ID 与测试映射 |
 | [`new-specialty-onboarding-runbook.md`](./new-specialty-onboarding-runbook.md) | 新建专项 / 适配新项目：项目登记 → 脚本入库 → 建 Plan → 试运行 → 上线检查单（G21） |
