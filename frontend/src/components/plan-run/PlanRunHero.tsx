@@ -39,12 +39,6 @@ interface Props {
   onRerun?: () => void;
   /** Override "now" for deterministic tests. */
   now?: Date;
-  /**
-   * `embedded`（默认）：操作钮在卡片内。
-   * `none`：卡片只展示元信息；操作钮由 `PlanRunHeroActions` 放侧栏 sticky 底栏，
-   * 避免侧栏滚动后导出/中止被挤出可视区。
-   */
-  actions?: 'embedded' | 'none';
 }
 
 export interface PlanRunHeroActionsProps {
@@ -56,7 +50,7 @@ export interface PlanRunHeroActionsProps {
   className?: string;
 }
 
-/** 导出 / 复跑 / 中止 — 供详情页侧栏底栏固定，避免被 KPI/链挤出。 */
+/** 导出 / 复跑 / 中止 — Hero 卡片内操作条。 */
 export function PlanRunHeroActions({
   run,
   isAborting = false,
@@ -238,7 +232,6 @@ export default function PlanRunHero({
   onExportReport,
   onRerun,
   now,
-  actions = 'embedded',
 }: Props) {
   const [tick, setTick] = useState(0);
   const isTerminal = !!run && isPlanRunTerminal(run.status);
@@ -294,49 +287,49 @@ export default function PlanRunHero({
 
   return (
     <div className={cn('rounded-lg border overflow-hidden', ELEVATION.flat, heroCls)}>
-      {/* OpenRouter 式页头：标题+副文 | 右侧状态 pill */}
-      <div className="flex items-start justify-between gap-3 px-4 pt-4 pb-3">
-        <div className="min-w-0">
-          <h2 className={cn('truncate text-lg font-semibold leading-7', TEXT.heading)}>
+      {/* 标题行与状态 pill 并排；Plan 副文独占下一整行，避免被 Running 挤成省略号 */}
+      <div className="px-4 pt-4 pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <h2 className={cn('min-w-0 text-lg font-semibold leading-7', TEXT.heading)}>
             PlanRun{' '}
             <span className={isRunning ? 'text-primary' : undefined}>
               #{run?.id ?? '—'}
             </span>
           </h2>
-          <div className={cn('mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-xs', TEXT.subtitle)}>
-            <span className="truncate">
-              {planName
-                ? `Plan #${run?.plan_id} · ${planName}`
-                : `Plan #${run?.plan_id ?? '—'}`}
-            </span>
-            <ProjectKeyBadge projectKey={run?.project_key} />
-          </div>
-        </div>
-        {pill && run && (
-          <div
-            data-testid="plan-run-status-pill"
-            className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 shadow-none ${badgeCls}`}
-          >
-            {isRunning && (
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="absolute inset-0 rounded-full bg-warning/60 opacity-60 animate-ping" />
-                <span className="relative h-2 w-2 rounded-full bg-warning" />
-              </span>
-            )}
-            <pill.Icon className={`h-3.5 w-3.5 ${isRunning ? 'animate-spin' : ''}`} />
-            <div className="leading-tight">
-              <div className="text-xs font-semibold">{pill.label}</div>
-              {runDuration && (
-                <div
-                  data-testid="plan-run-duration"
-                  className="font-mono text-[10px] opacity-70"
-                >
-                  {runDuration}
-                </div>
+          {pill && run && (
+            <div
+              data-testid="plan-run-status-pill"
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 shadow-none ${badgeCls}`}
+            >
+              {isRunning && (
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="absolute inset-0 rounded-full bg-warning/60 opacity-60 animate-ping" />
+                  <span className="relative h-2 w-2 rounded-full bg-warning" />
+                </span>
               )}
+              <pill.Icon className={`h-3.5 w-3.5 ${isRunning ? 'animate-spin' : ''}`} />
+              <div className="leading-tight">
+                <div className="text-xs font-semibold">{pill.label}</div>
+                {runDuration && (
+                  <div
+                    data-testid="plan-run-duration"
+                    className="font-mono text-[10px] opacity-70"
+                  >
+                    {runDuration}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
+        <div className={cn('mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-xs', TEXT.subtitle)}>
+          <span className="min-w-0 break-words" title={planName ?? undefined}>
+            {planName
+              ? `Plan #${run?.plan_id} · ${planName}`
+              : `Plan #${run?.plan_id ?? '—'}`}
+          </span>
+          <ProjectKeyBadge projectKey={run?.project_key} />
+        </div>
       </div>
 
       {/* 2×2 meta 网格 */}
@@ -400,16 +393,14 @@ export default function PlanRunHero({
         </div>
       )}
 
-      {actions === 'embedded' && (
-        <PlanRunHeroActions
-          run={run}
-          isAborting={isAborting}
-          onAbort={onAbort}
-          onExportReport={onExportReport}
-          onRerun={onRerun}
-          className="px-4 pb-4"
-        />
-      )}
+      <PlanRunHeroActions
+        run={run}
+        isAborting={isAborting}
+        onAbort={onAbort}
+        onExportReport={onExportReport}
+        onRerun={onRerun}
+        className="px-4 pb-4"
+      />
     </div>
   );
 }

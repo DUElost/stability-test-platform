@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/hooks/useToast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import PlanRunHero, { PlanRunHeroActions } from '@/components/plan-run/PlanRunHero';
+import PlanRunHero from '@/components/plan-run/PlanRunHero';
 import PlanRunKpiGrid from '@/components/plan-run/PlanRunKpiGrid';
 import AnomalyDashboard from '@/components/plan-run/AnomalyDashboard';
 import PlanChainSidebar from '@/components/plan-run/PlanChainSidebar';
@@ -240,45 +240,14 @@ export default function PlanRunDetailPage() {
             'lg:translate-x-0',
           )}
         >
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+          {/* Hero（含导出/中止）固定侧栏顶：原位可见，不被 KPI/链滚动遮挡 */}
+          <div className="shrink-0 border-b border-border p-3 pb-3">
             {runQ.isLoading ? (
-              <Skeleton className="h-36 w-full shrink-0 rounded-lg" />
+              <Skeleton className="h-36 w-full rounded-lg" />
             ) : (
-              <div className="shrink-0">
-                <PlanRunHero
-                  run={runQ.data}
-                  planName={planName}
-                  actions="none"
-                />
-              </div>
-            )}
-            <div className="shrink-0">
-              <PlanRunKpiGrid
-                devices={devicesQ.data}
-                currentStage={timelineQ.data?.current_stage ?? null}
-                patrolCycle={
-                  timelineQ.data?.stages?.find((s) => s.stage === 'patrol')
-                    ?.patrol_cycle_index ?? null
-                }
-              />
-            </div>
-            <div className="shrink-0">
-              <PlanChainSidebar
-                chain={chainQ.data}
-                isLoading={chainQ.isLoading}
-                isError={chainQ.isError}
-                chainDispatchFailed={chainDispatchFailed}
-                onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
-              />
-            </div>
-          </div>
-          {!runQ.isLoading && (
-            <div
-              data-testid="plan-run-sidebar-actions"
-              className="shrink-0 border-t border-border bg-card p-3"
-            >
-              <PlanRunHeroActions
+              <PlanRunHero
                 run={runQ.data}
+                planName={planName}
                 isAborting={abortMut.isPending}
                 onAbort={(reason) => abortMut.mutate(reason)}
                 onRerun={() => void handleRerun()}
@@ -299,8 +268,29 @@ export default function PlanRunDetailPage() {
                   }
                 }}
               />
+            )}
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+            <div className="shrink-0">
+              <PlanRunKpiGrid
+                devices={devicesQ.data}
+                currentStage={timelineQ.data?.current_stage ?? null}
+                patrolCycle={
+                  timelineQ.data?.stages?.find((s) => s.stage === 'patrol')
+                    ?.patrol_cycle_index ?? null
+                }
+              />
             </div>
-          )}
+            <div className="shrink-0">
+              <PlanChainSidebar
+                chain={chainQ.data}
+                isLoading={chainQ.isLoading}
+                isError={chainQ.isError}
+                chainDispatchFailed={chainDispatchFailed}
+                onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
+              />
+            </div>
+          </div>
         </aside>
 
         <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
