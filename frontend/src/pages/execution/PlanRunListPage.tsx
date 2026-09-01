@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -70,16 +70,6 @@ export default function PlanRunListPage() {
 
   const skip = (page - 1) * pageSize;
   const q = debouncedSearch.trim() || undefined;
-
-  // 搜索词防抖落地后再回第一页（跳过首屏）
-  const [searchReady, setSearchReady] = useState(false);
-  useEffect(() => {
-    if (!searchReady) {
-      setSearchReady(true);
-      return;
-    }
-    setPage(1);
-  }, [debouncedSearch, searchReady]);
 
   const {
     data: listPage,
@@ -220,7 +210,10 @@ export default function PlanRunListPage() {
                   type="search"
                   placeholder="搜索 ID / Plan / 触发者"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setPage(1);
+                  }}
                   className="pl-9"
                   data-testid="plan-run-search"
                 />
