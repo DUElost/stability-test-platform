@@ -65,6 +65,8 @@ export interface DeviceTableData {
   project_key?: string | null;
   /** ADR-0029 P0：归属来源四态（rule / manual / pinned / unassigned），行内 badge 用 */
   attribution_source?: 'mapped' | 'unmapped' | null;
+  /** adb 连接状态（unauthorized = USB 调试未授权，读不到型号/平台） */
+  adb_state?: string | null;
 }
 
 interface ExpandableDeviceTableProps {
@@ -448,6 +450,14 @@ export function ExpandableDeviceTable({
                         <span className="truncate text-xs text-muted-foreground" title={device.model ?? ''}>
                           {device.model}
                         </span>
+                        {device.adb_state === 'unauthorized' ? (
+                          <span
+                            className="shrink-0 rounded-full bg-destructive/10 px-1.5 py-0.5 text-[11px] text-destructive"
+                            title="USB 调试未授权：请在设备上允许授权，否则无法采集型号/平台"
+                          >
+                            未授权
+                          </span>
+                        ) : null}
                         {device.project_key ? (
                           <span
                             className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"

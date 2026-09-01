@@ -89,6 +89,7 @@ export default function DevicesPage() {
         serial: device.serial,
         model: device.model || '未知设备',
         status: deviceStatusMap[device.status] || 'offline',
+        adb_state: device.adb_state,
         battery_level: device.battery_level ?? undefined,
         temperature: device.temperature ?? device.battery_temp ?? undefined,
         network_latency: device.network_latency ?? null,
