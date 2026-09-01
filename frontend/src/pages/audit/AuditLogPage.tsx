@@ -16,7 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { FORM, INTERACTIVE, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { FORM, INTERACTIVE, LAYOUT, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull } from '@/utils/format';
 
@@ -88,11 +88,11 @@ export default function AuditLogPage() {
   const total = data?.total ?? 0;
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" scrollable={false} className={cn(LAYOUT.pageGap, 'min-h-0')}>
       <PageHeader title="操作日志" subtitle="查看系统操作审计记录（仅管理员）" />
 
       {/* Filters */}
-      <div className="flex gap-3 flex-wrap">
+      <div className="flex shrink-0 flex-wrap gap-3">
         <select
           value={filters.resource_type}
           onChange={(e) => { setFilters({ ...filters, resource_type: e.target.value }); setPage(0); }}
@@ -164,7 +164,7 @@ export default function AuditLogPage() {
         />
       ) : (
         <>
-          <div className={cn(PANEL.root, 'overflow-x-auto')}>
+          <div className={cn(PANEL.root, 'min-h-0 flex-1 overflow-auto')}>
             <Table className="min-w-[640px]">
               <TableHeader>
                 <TableRow className="border-b border-border bg-muted/50">
@@ -228,8 +228,8 @@ export default function AuditLogPage() {
             </Table>
           </div>
 
-          {/* Pagination */}
-          <PaginationBar
+          <div className="shrink-0">
+            <PaginationBar
             page={page + 1}
             totalPages={Math.max(1, Math.ceil(total / pageSize))}
             total={total}
@@ -240,7 +240,8 @@ export default function AuditLogPage() {
             onNextPage={() => setPage((p) => p + 1)}
             onPrevPage={() => setPage((p) => Math.max(0, p - 1))}
             onChangePageSize={(size) => { setPageSize(size); setPage(0); }}
-          />
+            />
+          </div>
         </>
       )}
     </PageContainer>
