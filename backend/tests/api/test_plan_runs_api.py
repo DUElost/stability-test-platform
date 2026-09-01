@@ -214,6 +214,17 @@ class TestPlanRunDetailOutCarriesRunContext:
         items = payload["items"]
         assert len(items) == 1
         assert items[0]["run_context"]["precheck"]["phase"] == "verifying"
+        assert items[0]["device_count"] == 0
+
+    def test_list_plan_runs_includes_device_count(
+        self, client, auth_headers, db_session, sample_running_job
+    ):
+        pr_id = sample_running_job.plan_run_id
+        resp = client.get(f"/api/v1/plan-runs?plan_id={sample_running_job.plan_id}", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        items = resp.json()["data"]["items"]
+        match = next(i for i in items if i["id"] == pr_id)
+        assert match["device_count"] >= 1
 
     def test_plan_run_without_run_context_serialises_to_null(
         self, client, auth_headers, db_session

@@ -215,7 +215,12 @@ def _plan_run_capabilities(pr: PlanRun) -> dict:
     }
 
 
-def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None, plan_name: str | None = None) -> PlanRunDetailOut:
+def _plan_run_out(
+    pr: PlanRun,
+    jobs: list[JobInstanceOut] | None = None,
+    plan_name: str | None = None,
+    device_count: int | None = None,
+) -> PlanRunDetailOut:
     return PlanRunDetailOut(
         id=pr.id,
         plan_id=pr.plan_id,
@@ -236,6 +241,9 @@ def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None, plan_na
         project_key=pr.project.project_key if pr.project else None,
         capabilities=_plan_run_capabilities(pr),
         jobs=jobs or [],
+        device_count=(
+            device_count if device_count is not None else len(jobs or [])
+        ),
         queue_reason=pr.queue_reason,
         enqueued_at=_iso(pr.enqueued_at),
         next_admission_at=_iso(pr.next_admission_at),
@@ -377,7 +385,23 @@ def list_plan_runs(
             select(Plan.id, Plan.name).where(Plan.id.in_(plan_ids))
         ).all()
         plan_names = {row.id: row.name for row in plan_rows}
-    items = [_plan_run_out(r, plan_name=plan_names.get(r.plan_id)) for r in runs]
+    run_ids = [r.id for r in runs]
+    device_counts: dict[int, int] = {}
+    if run_ids:
+        count_rows = db.execute(
+            select(JobInstance.plan_run_id, func.count())
+            .where(JobInstance.plan_run_id.in_(run_ids))
+            .group_by(JobInstance.plan_run_id)
+        ).all()
+        device_counts = {int(rid): int(cnt) for rid, cnt in count_rows}
+    items = [
+        _plan_run_out(
+            r,
+            plan_name=plan_names.get(r.plan_id),
+            device_count=device_counts.get(r.id, 0),
+        )
+        for r in runs
+    ]
     return ok(
         PlanRunListPageOut(
             items=items,
