@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { FORM, INTERACTIVE, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { FORM, INTERACTIVE, LAYOUT, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import {
   Table,
@@ -231,7 +231,7 @@ export default function SchedulesPage() {
   }
 
   return (
-    <PageContainer width="content">
+    <PageContainer width="content" scrollable={false} className={cn(LAYOUT.pageGap, 'min-h-0')}>
       <PageHeader
         title="定时任务"
         subtitle="管理 Cron 定时执行的 Plan"
@@ -248,7 +248,7 @@ export default function SchedulesPage() {
           ref={formRef}
           role="group"
           aria-label={editing ? '编辑定时任务' : '新建定时任务'}
-          className={cn('rounded-xl border p-6 max-w-lg', PANEL.root)}
+          className={cn('shrink-0 rounded-xl border p-6 max-w-lg', PANEL.root, 'overflow-visible')}
         >
           <h3 className={cn('text-lg font-medium mb-4', TEXT.heading)}>
             {editing ? '编辑定时任务' : '新建定时任务'}
@@ -320,7 +320,7 @@ export default function SchedulesPage() {
           icon={<Clock className="w-16 h-16" />}
         />
       ) : (
-        <div className={cn(PANEL.root, 'overflow-x-auto')}>
+        <div className={cn(PANEL.root, 'min-h-0 flex-1 overflow-auto')}>
           <Table className="min-w-[720px]">
             <TableHeader>
               <TableRow className="border-b bg-muted/50">
