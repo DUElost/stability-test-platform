@@ -528,7 +528,7 @@ def _infer_frozen_project_id(
         .join(Device, Device.model == ProjectModel.match_value)
         .where(
             Device.id.in_(target_ids),
-                        ProjectModel.is_active.is_(True),
+            ProjectModel.is_active.is_(True),
         )
         .group_by(ProjectModel.project_id)
         .order_by(func.count(Device.id).desc())
