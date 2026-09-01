@@ -295,15 +295,15 @@ export default function PlanRunHero({
   return (
     <div className={cn('rounded-lg border overflow-hidden', ELEVATION.flat, heroCls)}>
       {/* OpenRouter 式页头：标题+副文 | 右侧状态 pill */}
-      <div className="flex items-start justify-between gap-3 px-4 pt-3 pb-2">
+      <div className="flex items-start justify-between gap-3 px-4 pt-4 pb-3">
         <div className="min-w-0">
-          <h2 className={cn('truncate text-base font-semibold leading-7', TEXT.heading)}>
+          <h2 className={cn('truncate text-lg font-semibold leading-7', TEXT.heading)}>
             PlanRun{' '}
             <span className={isRunning ? 'text-primary' : undefined}>
               #{run?.id ?? '—'}
             </span>
           </h2>
-          <div className={cn('mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 text-xs', TEXT.subtitle)}>
+          <div className={cn('mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-xs', TEXT.subtitle)}>
             <span className="truncate">
               {planName
                 ? `Plan #${run?.plan_id} · ${planName}`
@@ -340,7 +340,7 @@ export default function PlanRunHero({
       </div>
 
       {/* 2×2 meta 网格 */}
-      <div className={cn('px-4 pb-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]', TEXT.caption)}>
+      <div className={cn('px-4 pb-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs', TEXT.caption)}>
         <span>触发方式</span>
         <span className={cn('font-medium', TEXT.heading)}>{run?.run_type ?? '—'}</span>
         <span>操作人</span>
