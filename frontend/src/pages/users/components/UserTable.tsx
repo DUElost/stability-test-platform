@@ -24,7 +24,7 @@ interface UserTableProps {
 
 export function UserTable({ users, currentUserId, onEdit, onDelete, onToggleActive }: UserTableProps) {
   return (
-    <div className="rounded-md border border-border overflow-hidden">
+    <div className="rounded-md border border-border">
       <Table>
         <TableHeader>
           <TableRow className="bg-muted">
