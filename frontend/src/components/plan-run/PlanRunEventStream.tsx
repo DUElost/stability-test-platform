@@ -137,8 +137,11 @@ export default function PlanRunEventStream({
   const to = Math.min(total, (page + 1) * pageSize);
 
   return (
-    <div data-testid="plan-run-event-stream" className={PANEL.root}>
-      <div className="flex flex-wrap items-center gap-1 border-b bg-card px-3 py-1.5">
+    <div
+      data-testid="plan-run-event-stream"
+      className={cn(PANEL.root, 'flex h-full min-h-0 flex-col')}
+    >
+      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b bg-card px-3 py-1.5">
         <span className={cn('mr-1 text-[11px] font-bold uppercase tracking-wider', TEXT.subtitle)}>阶段</span>
         {STAGE_FILTERS.map((f) => (
           <button
@@ -177,7 +180,7 @@ export default function PlanRunEventStream({
         ))}
       </div>
 
-      <div data-testid="event-list">
+      <div data-testid="event-list" className="min-h-0 flex-1 overflow-y-auto">
         {isError ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <AlertCircle className="mb-1 h-5 w-5 text-destructive/60" />
@@ -207,7 +210,7 @@ export default function PlanRunEventStream({
       {total > 0 && (
         <div
           data-testid="event-pagination"
-          className={cn('flex items-center justify-between border-t bg-muted/50 px-3 py-2 text-xs', TEXT.subtitle)}
+          className={cn('flex shrink-0 items-center justify-between border-t bg-muted/50 px-3 py-2 text-xs', TEXT.subtitle)}
         >
           <span>
             第 <b className={cn('font-mono', TEXT.body)}>{from}-{to}</b> / 共{' '}

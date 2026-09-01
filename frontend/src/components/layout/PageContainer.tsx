@@ -32,7 +32,7 @@ export const PageContainer: React.FC<PageContainerProps> = ({
   return (
     <div
       className={cn(
-        'h-full flex flex-col',
+        'flex h-full min-h-0 flex-col',
         LAYOUT.pageEnter,
         scrollable && 'overflow-auto',
         LAYOUT.pageWidth[width],

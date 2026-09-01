@@ -93,7 +93,7 @@ export default function PlanRunLogsPage() {
   }
 
   return (
-    <PageContainer width="bleed">
+    <PageContainer width="bleed" scrollable={false} className="min-h-0">
       <PlanRunEventStream
         events={eventsQ.data}
         stageFilter={stageFilter}
