@@ -242,29 +242,35 @@ export default function PlanRunDetailPage() {
         >
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
             {runQ.isLoading ? (
-              <Skeleton className="h-36 w-full rounded-lg" />
+              <Skeleton className="h-36 w-full shrink-0 rounded-lg" />
             ) : (
-              <PlanRunHero
-                run={runQ.data}
-                planName={planName}
-                actions="none"
-              />
+              <div className="shrink-0">
+                <PlanRunHero
+                  run={runQ.data}
+                  planName={planName}
+                  actions="none"
+                />
+              </div>
             )}
-            <PlanRunKpiGrid
-              devices={devicesQ.data}
-              currentStage={timelineQ.data?.current_stage ?? null}
-              patrolCycle={
-                timelineQ.data?.stages?.find((s) => s.stage === 'patrol')
-                  ?.patrol_cycle_index ?? null
-              }
-            />
-            <PlanChainSidebar
-              chain={chainQ.data}
-              isLoading={chainQ.isLoading}
-              isError={chainQ.isError}
-              chainDispatchFailed={chainDispatchFailed}
-              onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
-            />
+            <div className="shrink-0">
+              <PlanRunKpiGrid
+                devices={devicesQ.data}
+                currentStage={timelineQ.data?.current_stage ?? null}
+                patrolCycle={
+                  timelineQ.data?.stages?.find((s) => s.stage === 'patrol')
+                    ?.patrol_cycle_index ?? null
+                }
+              />
+            </div>
+            <div className="shrink-0">
+              <PlanChainSidebar
+                chain={chainQ.data}
+                isLoading={chainQ.isLoading}
+                isError={chainQ.isError}
+                chainDispatchFailed={chainDispatchFailed}
+                onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
+              />
+            </div>
           </div>
           {!runQ.isLoading && (
             <div
