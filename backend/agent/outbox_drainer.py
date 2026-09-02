@@ -110,7 +110,11 @@ class OutboxDrainThread:
                 sent += 1
                 logger.info("outbox_drain_acked job=%d", job_id)
             except requests.HTTPError as e:
-                status_code = e.response.status_code if e.response else None
+                # requests.Response.__bool__ is False for 4xx/5xx (alias of
+                # ``ok``). Never use truthiness — #729 ghost /complete storm.
+                status_code = (
+                    e.response.status_code if e.response is not None else None
+                )
                 if status_code == 409:
                     error_code = self._parse_error_code(e.response)
                     current = self._parse_current_status(e.response)
