@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from requests import HTTPError
+from requests import HTTPError, Response
 
 from backend.agent.outbox_drainer import OutboxDrainThread
 
@@ -71,3 +71,31 @@ def test_terminal_payload_conflict_is_retained_even_when_job_is_terminal():
     local_db.ack_terminal.assert_not_called()
     local_db.bump_terminal_attempt.assert_called_once()
     assert drainer.snapshot_metrics()["conflicts_retained_total"] == 1
+
+
+def test_404_acks_even_when_response_bool_is_false():
+    """#729: ``bool(Response)`` is False for 4xx — must still ack gone jobs."""
+    local_db = MagicMock()
+    local_db.count_pending_terminals.return_value = 1
+    local_db.get_pending_terminals.return_value = [
+        {"job_id": 976, "payload": {"update": {"status": "FAILED"}}},
+    ]
+    local_db.prune_acked_terminals.return_value = None
+
+    response = Response()
+    response.status_code = 404
+    response._content = b'{"detail":"job not found"}'
+    response.url = "http://127.0.0.1:8000/api/v1/agent/jobs/976/complete"
+    assert not response, "precondition: requests.Response is falsy on 404"
+
+    drainer = OutboxDrainThread(
+        "http://127.0.0.1:8000", local_db, interval=15.0,
+    )
+    with patch(
+        "backend.agent.outbox_drainer.requests.post",
+        return_value=response,
+    ):
+        assert drainer._drain_once() == 0
+
+    local_db.ack_terminal.assert_called_once_with(976)
+    local_db.bump_terminal_attempt.assert_not_called()
