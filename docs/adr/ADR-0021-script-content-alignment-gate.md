@@ -55,7 +55,7 @@ PlanRun 列表语义：所有派发尝试（成功 / 失败）都在列表中可
 
 - 状态机膨胀会蔓延到 aggregator、recycler、前端筛选等所有判断点；
 - `run_context.precheck` 已经有结构化字段表达进度，前端展示足够；
-- 终态保持既有四种：`SUCCESS` / `PARTIAL_SUCCESS` / `FAILED` / `DEGRADED`；
+- 终态保持 `SUCCESS` / `PARTIAL_SUCCESS` / `FAILED`；
 - 派发门禁失败 → `status='FAILED'` + `result_summary.precheck_failed=true`，与"测试运行失败"语义对偶，不混淆。
 
 ### D3 — `run_context.precheck` JSON Schema
