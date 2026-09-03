@@ -224,7 +224,7 @@ CREATE UNIQUE INDEX uniq_plan_run_chain_child
 - `root_plan_run_id` 记录链路根运行，便于查询整条执行链。
 - `next_plan_triggered` 防止重复触发。
 - 链式触发仅在上游 PlanRun 终态属于 `SUCCESS` 或 `PARTIAL_SUCCESS` 时执行。
-- `FAILED` 中止执行链；`DEGRADED` 仅历史可读，`UNKNOWN` 是 Job 非终态，不得触发 PlanRun 聚合。
+- `FAILED` 中止执行链；`UNKNOWN` 是 Job 非终态，不得触发 PlanRun 聚合。
 - `uniq_plan_run_chain_child` 防止同一个 `parent_plan_run_id + plan_id` 创建重复 next PlanRun。
 - 触发逻辑必须在事务内锁定父 PlanRun 行，检查 `next_plan_triggered = false` 后创建子 PlanRun，再回写 `next_plan_triggered = true`。
 - 子 PlanRun 的门禁任务只在上述事务提交后入队；持久化 sweeper 必须补偿“子 Run 已创建但门禁未入队”和“父 flag 已写但子 Run 缺失”两种中断窗口。

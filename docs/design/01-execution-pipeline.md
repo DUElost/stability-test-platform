@@ -106,7 +106,7 @@
 
 **服务**：`aggregator_sync.py` / `plan_run_aggregation.py`
 
-- UNKNOWN 存在时不得聚合终态；全部 Job 终态后计算 SUCCESS / PARTIAL_SUCCESS / FAILED（DEGRADED 仅历史可读，不再生产）
+- UNKNOWN 存在时不得聚合终态；全部 Job 终态后计算 SUCCESS / PARTIAL_SUCCESS / FAILED
 - lifecycle、watcher_policy、next_plan_id 均以 `PlanRun.plan_snapshot` 为权威；链式触发由 `next_plan_triggered` + 子 Run 唯一约束防重并可补偿
 - 仅 SUCCESS / PARTIAL_SUCCESS 默认触发 dedup `scan_task`；FAILED / ABORTED 需人工确认
 
