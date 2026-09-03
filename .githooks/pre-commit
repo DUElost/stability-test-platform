@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# stability-test-platform — pre-commit 污染拦截
+# stability-test-platform — pre-commit 拦截
 #
-# 用途:阻止 IDE/插件造成的"纯空行注入"或"CRLF/LF 混乱"污染入仓。
+# 用途:阻止 IDE/插件造成的"纯空行注入"或"CRLF/LF 混乱"污染入仓,
+# 以及真实内网主机地址/设备序列号入仓(与 CI 的
+# tools/dev/check-internal-ip-leak.py 门禁同规则,提交现场预检)。
 # 历史上 frontend/src/pages/orchestration/PlanEditPage.tsx 三次被
 # 此类污染撞坏 diff,详见根目录 .gitattributes 注释与 README 的
 # "EOL 与污染防御" 章节。
@@ -126,9 +128,29 @@ if [ -n "$published_bad" ]; then
   failed=1
 fi
 
+# ── 检查 5:内网主机地址 / 设备序列号(public 仓库)────────────────────
+#
+# CI 的 lint job 有同款阻塞门禁;这里是提交现场拦截——两次真实事故
+# (2026-08-31 #ui-layout / 09-01 #b1-unauthorized-hint)都是把真实 IP 或
+# 设备序列号写进代码/文档,push 后 CI 才红,多一轮往返。只扫暂存的新增/
+# 修改/重命名文件(工具内部仍应用白名单与后缀过滤);CI 扫全仓,仍是权威。
+py_bin="$(command -v python3 || command -v python || true)"
+if [ -n "$py_bin" ]; then
+  mapfile -t ip_staged < <(git diff --cached --name-only --diff-filter=ACMR)
+  if [ "${#ip_staged[@]}" -gt 0 ]; then
+    if ! ip_out="$("$py_bin" tools/dev/check-internal-ip-leak.py -q -- "${ip_staged[@]}" 2>&1)"; then
+      echo "[BLOCK] 真实内网主机地址/设备序列号命中(public 仓库,与 CI 门禁同规则):"
+      printf '%s\n' "$ip_out" | sed 's/^/        /'
+      failed=1
+    fi
+  fi
+else
+  echo "[WARN ] 未找到 python,跳过内网地址本地预检(CI 侧仍会拦)"
+fi
+
 if [ "$failed" = "1" ]; then
   echo
-  echo "Commit blocked by EOL / blank-line pollution guard."
+  echo "Commit blocked by pre-commit guard (blank-line/EOL pollution, script immutability, or internal-address leak)."
   echo "If this is intentional (rare):  git commit --no-verify"
   exit 1
 fi
