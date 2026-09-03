@@ -92,23 +92,40 @@ if [ -n "$head_ref" ]; then
   done
 fi
 
+# mergeMethod 预检只为日志区分「已启用/新启用」（c5d8d21e 起），enable 调用
+# 本身幂等（对已启用 PR 再次 enablePullRequestAutoMerge 同样成功）。
+# GraphQL 偶发 5xx（run 33508879071：E05B "Something went wrong while
+# executing your query"）会经 set -e 把整个 reconcile 刷成红 X，而 reconcile
+# 每小时 cron + 每个 PR 事件都会重跑、本轮跳过无累积损害——查询重试 3 次
+# 仍败就放弃预检、直接走幂等 enable，让真实失败（权限/冲突）由 enable
+# 调用自己暴露。
+head_merge_method() {
+  local num="$1" attempt out
+  for attempt in 1 2 3; do
+    out="$(
+      gh api graphql \
+        -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){autoMergeRequest{mergeMethod}}}}' \
+        -F owner="$owner" -F repo="$name" -F number="$num" \
+        --jq '.data.repository.pullRequest.autoMergeRequest.mergeMethod // ""'
+    )" && { printf '%s' "$out"; return 0; }
+    sleep 5
+  done
+  echo "mergeMethod query failed after 3 attempts on #${num}; falling back to idempotent enable." >&2
+  return 1
+}
+
 for row in "${filtered[@]}"; do
   num="$(jq -r '.number' <<<"$row")"
   url="$(jq -r '.url' <<<"$row")"
   has_auto="$(jq -r 'if .autoMergeRequest then "yes" else "no" end' <<<"$row")"
 
   if [ "$num" = "$head_number" ]; then
-    method="$(
-      gh api graphql \
-        -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){autoMergeRequest{mergeMethod}}}}' \
-        -F owner="$owner" -F repo="$name" -F number="$num" \
-        --jq '.data.repository.pullRequest.autoMergeRequest.mergeMethod // ""'
-    )"
-    if [ "$method" != "MERGE" ]; then
+    method="$(head_merge_method "$num" || true)"
+    if [ "$method" = "MERGE" ]; then
+      echo "Auto-merge already enabled on #${num}"
+    else
       gh pr merge "$url" --auto --merge
       echo "Enabled auto-merge on #${num}"
-    else
-      echo "Auto-merge already enabled on #${num}"
     fi
   elif [ "$has_auto" = "yes" ]; then
     gh pr merge "$url" --disable-auto || true
