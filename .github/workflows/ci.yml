@@ -210,6 +210,7 @@ jobs:
   # pull_request 只跑 lint（上方，两边都跑）+ 下面四个 job（pr-agent-tests /
   # pr-migrate-empty-db / pr-typecheck / pr-compileall）；
   # 全量 backend-test/frontend-check/docker-build 由 main-ci-backstop 夜间兜底。
+  # 例外：lock 卫生测试随 pr-agent-tests 前移（见该 job 内注释）。
   # 风险：PR 合入前不跑 backend/tests、vitest / docker build，
   # 由合入 main 后的全量兜底；若要“合并前全量”应改用 Merge Queue。
   pr-agent-tests:
@@ -236,6 +237,13 @@ jobs:
         run: pip install --require-hashes -r backend/requirements-dev.lock
       - name: Run agent tests
         run: python -m pytest backend/agent/tests/ -q
+      # 两份 lock 卫生测试前移到 PR 路径：改 requirements(.dev).txt 而未重生成
+      # lock 的失败此前只在夜间 backend-test 才红（2026-08-30/08-31/09-01 三次
+      # 全量失败中的两次即此形态，main 最长红了 14 小时）。32 例纯离线
+      # （无 DB/网络），实测 <1s，不破合并路径 ~2 分钟预算。只挑这两个文件，
+      # 不整目录搬：tests/ 其余文件与迁移/部署契约耦合，需 PG 的依赖归夜间。
+      - name: Run lock hygiene tests
+        run: python -m pytest tests/test_requirements_lock.py tests/test_requirements_dev_lock.py -q
 
   # #510 教训（P0-2）：空库迁移守卫。独立 required check——上线即炸的空库
   # 迁移回归在 PR 上必拦；成本 ~1 分钟（含依赖安装），不跑整套 backend/tests。
