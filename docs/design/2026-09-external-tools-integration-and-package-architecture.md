@@ -55,7 +55,7 @@ entrypoint --context /path/to/context.json --output-dir /path/to/output_dir
   "job_id": 2048,
   "execution_tier": "device",
   "device": {
-    "serial": "0000NX2622000514",
+    "serial": "DEVICE_SERIAL_EXAMPLE",
     "platform": "unisoc",
     "model": "MYOS16-Z2581",
     "build_version": "V1.0.0B05"
