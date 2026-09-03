@@ -105,7 +105,7 @@ sequenceDiagram
 |---|------|------|----------|
 | 1 | 测试结束 | PlanRun SUCCESS / PARTIAL_SUCCESS，自动 | 终态报告 + 报告中 db 对应事件 |
 | 2 | 手动停止 | abort → FAILED，前端确认后 | 同上 |
-| 3 | 中断/失败 | FAILED（历史 DEGRADED 只读），前端确认后 | 同上 |
+| 3 | 中断/失败 | FAILED，前端确认后 | 同上 |
 | 4 | 过程中手动归档 | 详情页按钮 | 增量报告 + 报告中 db 对应事件 |
 | 5 | 自动归档间隔 | Plan 配置的周期 | 同上 |
 

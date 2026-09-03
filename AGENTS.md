@@ -156,7 +156,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 |--------|------|
 | JobArtifact 文件（watcher puller 默认落点 + LOCAL promote） | `{root}/jobs/{job_id}/` |
 | 事件目录（EventUploader / DLE 上送，含 HddSpill enqueue） | `{root}/devices/{plan_run_id}/` 或 `{root}/devices/unassigned/{event_id}/` |
-| 扫描报告 / extract 输出 | `{root}/dedup/{run_id}/`、`{root}/jira/{run_id}/` |
+| 扫描报告 / extract 输出 / merge 产物 | `{root}/dedup/{run_id}/`（merge 中心化发布到其 `merge/` 子目录）、`{root}/jira/{run_id}/` |
 
 中心存储根：**只配置 `STP_AEE_NFS_ROOT`**（`STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` 弃用回落已删除，#289）。`STP_AEE_LOCAL_ROOT` 为按机 L1 路径，hot-update **不**覆盖（#235）。
 
@@ -167,7 +167,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 纯 Agent 侧实现，只在改对应目录时加载：
 
 - **AEE 崩溃检测链**（Reconciler / inotifyd 双路径、ZZ_INTERNAL 解析、监测目录）→ `backend/agent/aee/CLAUDE.md`
-  - **#220**：生产只扫 MTK；UNISOC/QCOM 保留 stub 入口、默认跳过；勿扩白名单
+  - **平台路由（ADR-0032 D6，supersede #220 单白名单）**：按 `device.platform` 选 Reconciler——MTK/UNKNOWN → AEE Reconciler，UNISOC → uniview Reconciler（真实现），QCOM → 跳过；`STP_WATCHER_AEE_RECONCILE_PLATFORMS` 白名单键已删除
 - **ScanRunner / UploadManager**（`start_log_scan.py` 的非显然参数、自动发现规则、`reload_config`）→ `backend/agent/CLAUDE.md`
 
 ## 脚本版本退役
@@ -199,8 +199,10 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
 
 **但 `refs == 0` 只覆盖配置态，不覆盖运行态。** 一个版本可能已无任何 Plan
 配置引用、却仍有历史 PlanRun 需要追溯（退役不删目录正是为此）。要判断「后续
-是否还会再用」，还需要运行使用事实 —— 见 issue #506（脚本详情页「最近 30 天
-被哪些项目使用 / 成功率」，尚未实现）。两个维度都为零，退役才够稳妥。
+是否还会再用」，还需要运行使用事实 —— 脚本管理页「使用统计（近 30 天）」/
+`GET /api/v1/scripts/{id}/usage`（`plan_count` 配置态 + `run_count` /
+`success_rate` / `versions_used` 运行态，原 #506）已提供。两个维度都为零，
+退役才够稳妥。
 
 ## Key env vars
 

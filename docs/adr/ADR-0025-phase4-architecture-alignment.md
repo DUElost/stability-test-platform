@@ -267,7 +267,7 @@ start_log_scan.py -merge_files agentA_org.xls agentB_org.xls -side shanghai -mer
 |---|------|---------|---------|
 | 1 | 测试结束时间到达 | PlanRun SUCCESS/PARTIAL_SUCCESS，自动 | scan 终态报告 + 报告中 db 对应事件目录 |
 | 2 | 手动停止测试 | 用户 abort → FAILED，前端确认后 | 同上 |
-| 3 | 测试中断/失败 | PlanRun FAILED/DEGRADED，前端确认后 | 同上 |
+| 3 | 测试中断/失败 | PlanRun FAILED，前端确认后 | 同上 |
 | 4 | 测试过程中手动归档 | 测试详情页「手动归档」按钮 | scan 增量报告 + 报告中 db 对应事件目录 |
 | 5 | 自动归档间隔 | 计划开始时设置的间隔时间，周期触发 | scan 增量报告 + 报告中 db 对应事件目录 |
 

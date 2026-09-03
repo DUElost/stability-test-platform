@@ -38,9 +38,11 @@
 
 | From | To |
 |------|-----|
+| QUEUED | PRECHECK · FAILED（abort / 不可重试错误） |
+| PRECHECK | QUEUED（竞争回队 / reaper stale recovery）· RUNNING · FAILED |
 | RUNNING | SUCCESS · PARTIAL_SUCCESS · FAILED |
-| FAILED | RUNNING（仅 `retry_plan_run_dispatch` / precheck 重试） |
-| SUCCESS / PARTIAL_SUCCESS / DEGRADED | ∅（DEGRADED **仅历史可读**，聚合不再生产） |
+| FAILED | QUEUED（仅 `retry_plan_run_dispatch` / precheck 重试，回准入队列） |
+| SUCCESS / PARTIAL_SUCCESS | ∅ |
 
 聚合（`plan_run_aggregation.py`）：
 

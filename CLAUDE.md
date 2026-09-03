@@ -37,7 +37,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 ## 状态机
 
 - **Job**（集中校验见 `backend/services/state_machine.py` 的 `VALID_TRANSITIONS`）：`PENDING → RUNNING → COMPLETED/FAILED/ABORTED`；`PENDING → FAILED`（recycler 派发超时）；`PENDING → ABORTED`（PlanRun abort）；`RUNNING → UNKNOWN`（recycler/watchdog/reconciler 心跳超时或 patrol stall——**不是**直接到 FAILED）；`UNKNOWN → RUNNING`（grace 内 recovery/sync 恢复）或 `UNKNOWN → FAILED`（grace 到期）
-- **PlanRun**（无集中状态机，靠 `_TERMINAL_PLAN_RUN_STATUSES` 终态守卫防覆盖）：新执行仅 `RUNNING → SUCCESS/PARTIAL_SUCCESS/FAILED`；`DEGRADED` 仅历史可读，不再生产。存在有意的 `FAILED → RUNNING`（precheck 失败后人工重试派发，`precheck/runner.py:retry_plan_run_dispatch`）
+- **PlanRun**（集中校验 `backend/services/state_machine.py` 的 `PLAN_RUN_VALID_TRANSITIONS`；聚合侧另有 `_TERMINAL_PLAN_RUN_STATUSES` 终态守卫防覆盖）：`QUEUED → PRECHECK → RUNNING → SUCCESS/PARTIAL_SUCCESS/FAILED`；`QUEUED/PRECHECK → FAILED`（abort / 不可重试错误）与 `PRECHECK → QUEUED`（竞争回队 / reaper stale recovery）。存在有意的 `FAILED → QUEUED`（precheck 失败后人工重试派发回准入队列，`precheck/runner.py:retry_plan_run_dispatch`；legacy 直入 RUNNING 的双轨已移除，准入队列是唯一路径）
 - **Agent 终态协议**：`/jobs/{id}/status` 与 `/heartbeat` 仅接受 RUNNING；COMPLETED/FAILED/ABORTED 只能通过 `/jobs/{id}/complete`，相同 payload 幂等、冲突 payload 返回 409。
 
 ---
@@ -67,8 +67,8 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 - 扫描结果：created(INSERT) / skipped(sha256一致) / conflicts(sha256不一致,不动DB,须新建版本) / deactivated(磁盘无,标false)
 - **已发布版本目录的内容不可变**：`script.content_sha256` 是**扫描那一刻**的快照，也是 precheck 的期望值。原地改写 → conflicts 只记录不落库 → DB 期望值永久冻结 → 引用该脚本的 Plan 在准入阶段 `script_verify_failed`，**self-heal 推送也修不好**（推的是磁盘内容，对不上的是 DB）。CI 门禁 `tools/dev/check-script-version-immutability.py` 拦截（含 `_` 辅助模块——它们不计入 entry sha，改了连 conflicts 都不报）；`ruff.toml` 已把该目录加进 `extend-exclude`
 - 逃生阀 `POST /scripts/scan?force_rebaseline=true`：把 conflicts 的 sha 重锚到磁盘，返回 `rebaselined[]`。仅 admin，且有在途 PlanRun（RUNNING/QUEUED/PRECHECK）时返回 409。**只用于契约已被上游破坏的既成事实**，正常改脚本一律新建版本
-- WiFi 资源池注入是唯一打破「params 完全来自 default_params」的特例（`_inject_wifi_params` 对 `connect_wifi` 注入 `{ssid, password, pool_name, pool_id}`）
-- 完整链路：文件 → `POST /scripts/scan` → DB.script → PlanStep → dispatcher `deepcopy(default_params)` → `pipeline_def` → Agent `ScriptRegistry.resolve` → `subprocess.run` → stdout JSON → step_trace → JobStatus → aggregator
+- 打破「params 完全来自 `default_params`」的三处：步骤级 `step.params` 覆盖（#508，只替换用户声明键、未声明键保留默认）；WiFi 资源池注入 `_inject_wifi_params`（对 `connect_wifi` 顶层与 `monkey_setup` 的 `params.wifi` 补齐未声明的 `ssid`/`password`，已声明值优先）；管理套件注入 `_inject_suite_params`（ADR-0030 §3.4，按冻结的 `dispatch_suite` 给 `script:mtbf_*` 步骤填 `{expected_testpoint_count, project}`）
+- 完整链路：文件 → `POST /scripts/scan` → DB.script → PlanStep → dispatcher 合并 `default_params` ⊕ `step.params`（#508）→ `pipeline_def` → Agent `ScriptRegistry.resolve` → `subprocess.run` → stdout JSON → step_trace → JobStatus → aggregator
 
 ---
 
@@ -102,7 +102,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 | 2026-08-27 | [0031](docs/adr/ADR-0031-platform-ai-assistant.md) | 平台 AI 助手（Accepted v1.5：T0–T3 运维域自治 / RunConsole 白名单执行 / 角色裁剪工具面；未配 Key 降级） |
 | 2026-08-19 | [0030](docs/adr/ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（Accepted v1.9：P0/P1/D6 ✅、P2 核心 #429 ✅；JobArtifact report 白名单仍留待） |
 | 2026-08-19 | [0029](docs/adr/ADR-0029-project-taxonomy-and-param-layering.md) | 项目分类域·TestProject 登记簿（Accepted v2.5 派生归属重设计：归属改 JOIN 删 device.project_id、哨兵出表、facet 减列；D1/D4/D5/D7/D8/D9 挂起） |
-| 2026-07-16 | [0026](docs/operations/adr-0026-admission-and-scale-gray-rollout.md) | 大规模化执行架构(目标态,分阶段落地中):PlanRun 准入队列 + Host OperationScheduler + 批量续租/O(1) 聚合;当前状态机不变,QUEUED/PRECHECK 待 feature flag 路径落地后生效 |
+| 2026-07-16 | [0026](docs/operations/adr-0026-admission-and-scale-gray-rollout.md) | 大规模化执行架构:PlanRun 准入队列 + Host OperationScheduler + 批量续租/O(1) 聚合;准入队列已生效(QUEUED/PRECHECK 落地,legacy 双轨已移除,`STP_PLAN_ADMISSION_QUEUE_ENABLED` 默认开) |
 | 2026-06-21 | [0025](docs/adr/ADR-0025-phase4-architecture-alignment.md) | 方案 C 存储：日志留 SSD、AEE 留 HDD、CIFS 仅汇总；取消 run_log_bundle |
 | 2026-05-21 | [0024](docs/adr/ADR-0024-browser-session-security-hardening.md) | HttpOnly Cookie + CSRF + refresh 黑名单 + 生产 guard |
 | 2026-05-06 | [0020](docs/adr/ADR-0020-plan-step-one-shot-migration.md) | Workflow→Plan + PlanStep；lifecycle 由行+直列字段重组 |

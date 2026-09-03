@@ -98,7 +98,7 @@ cd frontend && npx vitest run && npx tsc --noEmit
 
 | 主题 | 要点 | 文档 |
 |------|------|------|
-| 执行协议 | 终态仅 `/complete`；abort 保租约等 ACK；UNKNOWN 围栏；PlanRun 不再生产 DEGRADED | [07-execution-protocol](./docs/design/07-execution-protocol.md) |
+| 执行协议 | 终态仅 `/complete`；abort 保租约等 ACK；UNKNOWN 围栏 | [07-execution-protocol](./docs/design/07-execution-protocol.md) |
 | 派发 / 链 | Stage 2 物化自 `plan_snapshot`；链触发可补偿；preflight + schema 硬化 | 同上 + alembic `c8d9…` |
 | Agent 版本 | 热更新携带 code revision；`STP_AGENT_MIN_VERSION` **显式开启**才门禁 claim | [环境变量](./docs/development/environment-variables.md) · [主机运维](./docs/operations/agent-version-and-hot-update.md) |
 | 通知 | `notification_logs` + 前端铃铛 / 历史页 | [`design/03-frontend.md`](./docs/design/03-frontend.md) |

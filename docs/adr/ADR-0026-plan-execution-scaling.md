@@ -358,9 +358,9 @@ QUEUED PlanRun 不创建 Job 后，「本次执行要跑哪些设备」不能只
 
 ## 状态机变更
 
-### PlanRun 状态机（`backend/services/state_machine.py:47-60` `PLAN_RUN_VALID_TRANSITIONS`）
+### PlanRun 状态机（`backend/services/state_machine.py` `PLAN_RUN_VALID_TRANSITIONS`）
 
-**现状（已核实）**：`PlanRunStatus` 只有 `RUNNING / SUCCESS / PARTIAL_SUCCESS / FAILED / DEGRADED`（`backend/models/enums.py:13-18`）；合法迁移为 `RUNNING → {SUCCESS, PARTIAL_SUCCESS, FAILED}` + 有意的 `FAILED → RUNNING`（人工重试，`backend/services/state_machine.py:53-55`，`backend/services/precheck/runner.py:317` `retry_plan_run_dispatch`）。
+**决策基线（撰写时已核实）**：`PlanRunStatus` 当时只有 `RUNNING / SUCCESS / PARTIAL_SUCCESS / FAILED / DEGRADED`；合法迁移为 `RUNNING → {SUCCESS, PARTIAL_SUCCESS, FAILED}` + 有意的 `FAILED → RUNNING`（人工重试，`backend/services/precheck/runner.py` `retry_plan_run_dispatch`）。`DEGRADED` 已随 #417 从枚举与 DB enum label 中删除。
 
 **目标**：新增 `QUEUED` / `PRECHECK` 两态，扩展迁移表：
 
@@ -379,7 +379,7 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 - **`FAILED → RUNNING` 改为 `FAILED → QUEUED`（评审收口）**：现状人工重试 `retry_plan_run_dispatch`（`backend/services/precheck/runner.py:317`）把 FAILED 的 PlanRun 直接重置回 RUNNING 再重走 dispatch gate。QUEUED/PRECHECK 上线后若保留该迁移，人工重试将**绕过新准入流程**（不排队、不做 admission transaction 最终复查、不受优先级/aging 约束）。目标：人工重试改为置回 **QUEUED**（沿用 `dispatch_device_ids` 校验与幂等防重逻辑），由 pump 统一走 `QUEUED → PRECHECK → RUNNING`；`PLAN_RUN_VALID_TRANSITIONS` 中 `FAILED → RUNNING` 移除、改注册 `FAILED → QUEUED`。
 - **PRECHECK stale recovery（评审收口）**：PRECHECK 是「pump 已选中、慢操作进行中」的中间态——期间 pump / SAQ / Backend 崩溃会把 PlanRun 永久卡在 PRECHECK。新增 `precheck_started_at` / `admission_attempt_id` 两列（数据模型章节），由 reaper——参照现有 `reconcile_stale_precheck_runs`（`backend/scheduler/precheck_reaper.py:133`，stale 阈值模式 `PRECHECK_QUEUE_STALE_SECONDS` / `PRECHECK_ACTIVE_STALE_SECONDS`，`precheck_reaper.py:31-33`）——将 `precheck_started_at` 超时、且 `admission_attempt_id` 无活跃 SAQ job 归属的 PRECHECK 行**恢复回 QUEUED**（`queue_reason=PRECHECK_STALE`）。与现状 reaper 对 stale run 直接 `_fail_plan_run`（`precheck_reaper.py:93`）不同：恢复优先，达到重排上限（沿用 `MAX_PRECHECK_REENQUEUE_ATTEMPTS` 思路，`precheck_reaper.py:51`）才 `PRECHECK → FAILED`。
 - `PlanRunStateMachine.transition`（`backend/services/state_machine.py:62-80`）需接受新态；`prepare_plan_run` 改为建 `QUEUED`（现状建 `RUNNING`，`backend/services/plan_dispatcher_sync.py:343,419`）。
-- `DEGRADED` 仍仅历史可读、不再生产（与 CLAUDE.md 状态机约定一致）。
+- `DEGRADED` 已随 #417 从 `PlanRunStatus` 枚举与 DB enum label 中删除，状态机不为其定义迁移。
 
 ### Job 状态机（`backend/services/state_machine.py:12-22` `VALID_TRANSITIONS`）
 
