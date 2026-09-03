@@ -1,14 +1,10 @@
 import { cn } from '@/lib/utils';
 import logo32 from '@/assets/brand/logo-32.png';
-import logo40 from '@/assets/brand/logo-40.png';
 import logo64 from '@/assets/brand/logo-64.png';
-import logo96 from '@/assets/brand/logo-96.png';
 
 const SRC = {
   32: logo32,
-  40: logo40,
   64: logo64,
-  96: logo96,
 } as const;
 
 type BrandLogoSize = keyof typeof SRC;
@@ -20,7 +16,7 @@ interface BrandLogoProps {
   decorative?: boolean;
 }
 
-/** Platform mark — square crop of the official logo (PNG, no wide canvas padding). */
+/** Platform mark — transparent PNG; sizes used by sidebar (32) and auth (64). */
 export function BrandLogo({
   size = 32,
   className,
