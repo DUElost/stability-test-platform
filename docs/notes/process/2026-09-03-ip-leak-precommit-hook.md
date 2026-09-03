@@ -35,7 +35,7 @@ Class: process
 ## Verification
 
 - `bash -n` 通过。
-- 植入 `172.21.8.202` + `A2WENX6628000035` 的暂存文件 → 钩子 exit 1，
+- 植入真实主机地址 + 真实设备序列号的暂存文件 → 钩子 exit 1，
   两条规则（ipv4-dot / device-serial）均命中并给出处理指引。
 - 脱敏写法（`172.21.x.x`、CIDR、`172.17.0.1`、掩码序列号）→ exit 0 静默。
 - 无暂存改动 → exit 0。
