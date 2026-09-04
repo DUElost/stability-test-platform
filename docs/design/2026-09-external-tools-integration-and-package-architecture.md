@@ -4,7 +4,7 @@
 - 日期：2026-09-03
 - 对应决策：[`ADR-0033：外部工具统一接入契约规范与包管理解耦模型`](../adr/ADR-0033-tool-kit-ecosystem-integration.md)
 - 追踪 Issue：[#745](https://github.com/DUElost/stability-test-platform/issues/745)
-- 涉及范围：控制面 SAQ 任务链路、Agent 脚本执行器（PipelineEngine）、中心存储布局、外部专项执行包（MTK/展锐去重、Jira 提单、GPU、开关机、休眠唤醒）
+- 涉及范围：控制面 SAQ 任务链路、Agent 脚本执行器（PipelineEngine）、script catalog 注册流、中心存储布局、外部专项执行包（MTK/展锐去重、Jira 提单、GPU、开关机、休眠唤醒）
 
 ---
 
@@ -106,18 +106,40 @@ output_dir/
 ```
 
 ### 2.3 退出码语义（Fail-Fast 区分）
-进程退出码是平台判定任务终态与触发重试的关键依据：
+进程退出码是平台判定任务终态与触发重试的关键依据。**命名空间分层**：工具作者只拥有 `{0, 1, 2}`；`≥124` 为平台执行器保留；`3–123` 与信号死亡视为工具缺陷：
 * `0`：**PASS / SUCCESS**。任务正常完成，用例通过；
 * `1`：**TEST_FAILURE**。业务断言未通过（如被测设备发生重启、用例跑出 Crash）。平台记录为测试失败，生成失败报告；
 * `2`：**ENVIRONMENT_ERROR**。执行环境异常（如 ADB 断连、目标目录无写权限、原厂脚本底层报错）。平台将其定性为环境故障，可触发重试或设备隔离巡检；
+* `3–123` / 信号死亡：**工具缺陷**。按 ENVIRONMENT_ERROR 处理并告警（工具不得在该区间自定义语义）；
 * `124` / `125`：**TIMEOUT (Wall Clock / Stall Clock)**。由平台执行器双层钟沙箱强制终止时产生，工具自身不得伪造。
+
+退出码到步骤终态的完整映射（含 `failure_kind` 标注与重试资格）见 §2.5。
 
 ### 2.4 环境预检契约：`--check-env`
 外部工具必须支持 `--check-env` 命令行参数。该命令须在 **5 秒内执行完毕**，检查：
 1. 依赖的二进制（如 `adb`、Python 虚拟环境库）是否存在；
 2. 目标设备的 ADB 连通性及 root 权限状态；
 3. **判据标准**：以退出码 `0`（就绪）与 `2`（环境故障）为准；stdout 输出诊断 JSON：`{"ready": true, "error": null}`。
-在长跑测试启动前，平台调度器执行此命令秒级拦截环境不就绪的派发。
+
+**挂点**：Tier 3 设备端工具由 Agent 在步骤启动前调用（复用现有 precheck 槽位——ADB 连通性只有持有设备的主机可判）；Tier 1 平台工具由 SAQ 任务在长任务前自调。未就绪 → 步骤不启动、按 ENV_ERROR + `precheck_failed` 记录，不计入测试失败统计。
+
+### 2.5 契约与现态执行器的衔接（双轨运行声明）
+
+**总原则：契约翻译发生在 Agent 边缘，控制面状态机零改动。** ADR-0026 四层调度、Job/PlanRun 状态机、watcher 全程不感知契约存在。
+
+1. **`summary.json` 的消费者是 Agent 执行器内的 contract 分支**，结果落 step_trace 现有字段体系；控制面继续读取与现态相同的 Job/PlanRun 数据。
+2. **双轨开关不加新表**：script 行登记契约能力（沿用 `capabilities` JSONB 机制，#171 先例），控制面 dispatch payload 携带该标志，Agent 据此分支（Agent 不读 DB，符合现态派发模型）。
+3. **退出码 → 步骤终态映射**（`failure_kind` 为 step_trace 标注字段，**不新增状态机终态**；重试沿用现有重试旋钮，本 ADR 不新造重试机制）：
+
+   | 进程结果 | outcome 类 | 步骤终态 | 重试资格 |
+   |---|---|---|---|
+   | `0` | PASS | SUCCESS | — |
+   | `1` | TEST_FAILURE | FAILED + `failure_kind=assert` | 否（计入质量统计） |
+   | `2` / `3–123` / 信号死亡 | ENV_ERROR | FAILED + `failure_kind=env` | 是 |
+   | `124` / `125` | TIMEOUT_WALL / STALL | FAILED + `failure_kind=env` | 是 |
+
+4. **stdout → 文件的过渡即 secrets 治理**：contract 步骤的结果以 `summary.json` 为权威，stdout 不再要求结构化；契约禁止工具将 context 内容回显至 stdout/stderr（step_trace 收割 stdout/stderr 落库）；secrets 仅在 `execution_tier: "platform"` 的 context 注入。
+5. **存量兼容 = 显式双轨**：legacy 路径（argv + stdout JSON）原样保留；新工具族必须 contract + 包存储；既有族的新版本目录允许继续 legacy，直至该族 Phase 3 迁移（对齐 ADR-0033 D0 分级准入）。
 
 ---
 
@@ -131,7 +153,7 @@ version: "1.0.4"
 tier: "platform"               # platform / host / device
 description: "展锐 YPLog 汇总去重与 Excel 生成工具"
 package:
-  source: "nfs://tools/unisoc_scan_result/unisoc_scan_result-1.0.4.tar.gz"
+  source: "nfs://tools/unisoc_scan_result/1.0.4/unisoc_scan_result-1.0.4.tar.gz"
   sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 entrypoint:
   runtime: "python"
@@ -151,12 +173,30 @@ capabilities:
   3. 执行器在隔离的工作目录（Working Dir）中运行，避免多进程并发执行产生文件写入冲突；
   4. 支持基于最后访问时间的 LRU 磁盘清理策略，保持本地磁盘水位健康。
 
+### 3.3 注册流与门禁分工
+
+**发布流**（对齐 ADR-0033 D3 双版本体系权威裁定——DB script catalog 仍是唯一运行时权威，manifest 是发布格式）：
+
+1. 构建 `{name}-{version}.tar.gz` 并上传至 `{STP_AEE_NFS_ROOT}/tools/{name}/{version}/`；
+2. 注册（扩展现有 script catalog scan，读取 `tool_manifest.yaml`）创建**新的 script 版本行**，`content_sha256 := tarball sha256`，并登记入口 / tier / 契约能力；
+3. 此后一切照旧：ADR-0020 不可变与 422、`plan_step` 引用、退役 409 守卫（`SCRIPT_STILL_REFERENCED`）原样复用，零新机制。
+
+**CI 门禁分工**（GitHub Actions runner 无 NFS 访问，这是硬约束）：
+
+| 校验 | 在哪里做 | 时机 |
+|---|---|---|
+| manifest YAML schema lint | PR 门禁（Git 侧） | 每次 PR |
+| 已登记版本条目 append-only（不可变） | PR 门禁（Git 侧） | 每次 PR |
+| tarball 存在性 + sha256 一致 | 控制面 | 注册时 |
+| tarball sha256 防篡改复核 | Agent | 每次拉取（D3） |
+| 包存储健康巡检（缺失 / 损坏清单） | 控制面 | 周期任务 |
+
 ---
 
 ## 4. 典型外部工具接入实现指南
 
 ### 4.1 控制面汇总去重：统一 `DedupMergeEngine` 适配器
-针对 MTK 与展锐两种并列去重工具，控制面抽离通用抽象基类：
+针对 MTK 与展锐两种并列去重工具，控制面抽离通用抽象基类。**接口收窄**：基类只包 vendor CLI 调用（argv 构造、子进程执行、产物校验、错误映射）；round 选择、水位线、发布中心与产物注册等编排留在 `backend/services/dedup_scan.py` 编排层调用引擎：
 ```python
 # backend/services/dedup/base.py
 from abc import ABC, abstractmethod
@@ -164,18 +204,18 @@ from pathlib import Path
 from pydantic import BaseModel
 
 class MergeResult(BaseModel):
-    merged_xls_path: Path
+    produced_files: list[Path]   # 本轮 merge 产出的文件清单
     total_issues: int
     deduped_issues: int
     status: str
 
 class DedupMergeEngine(ABC):
     @abstractmethod
-    def run_merge(self, input_files: list[Path], output_dir: Path) -> MergeResult:
-        """执行去重合并"""
+    def run_merge(self, input_files: list[Path], work_dir: Path) -> MergeResult:
+        """执行单次 vendor 去重合并（不负责 round/水位线/发布编排）"""
         pass
 ```
-MTK 适配器与展锐适配器分别继承 `DedupMergeEngine` 实现各自原厂的特定调用，`backend/tasks/saq_tasks.py` 中的 `merge_task` 仅调用基类方法，不再保留任何 `start_log_scan` 专用参数或展锐专用分支。
+现态事实：`backend/tasks/saq_tasks.py` 的 `merge_task` 调用 service 层 `run_merge_all_platforms_sync`（同一扫描工具按 mtk/unisoc 分区跑两遍），厂商专用参数（`build_merge_argv`、`-side`、merge 产物目录探测）在 **service 层** `dedup_scan.py`。迁移路径：unisoc 分区先行接入第一个引擎实现（展锐 `Scan-Result-GT`，#463 P2，插在 ADR-0032 已建的 per-platform 循环内），mtk 分支随后以行为等价验收迁入。
 
 ### 4.2 设备端专项测试：标准 PlanStep 适配器
 针对 GPU（Antutu）、开关机、休眠唤醒专项，统一采用标准化 Python 适配器模板：
@@ -186,15 +226,16 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--context", required=False)
-    parser.add_argument("--output-dir", required=False)
+    parser.add_argument("--context", required=True)
+    parser.add_argument("--output-dir", required=True)
     parser.add_argument("--check-env", action="store_true")
     args = parser.parse_args()
 
     if args.check_env:
-        # 执行 5 秒快速 ADB 通道与 APK 就绪自检
-        print(json.dumps({"ready": True, "error": None}))
-        sys.exit(0)
+        # 5 秒快速自检：ADB 通道、依赖与 APK 就绪（退出码权威：0=就绪 / 2=未就绪）
+        ready, error = check_env()
+        print(json.dumps({"ready": ready, "error": error}))
+        sys.exit(0 if ready else 2)
 
     context = json.loads(Path(args.context).read_text())
     output_dir = Path(args.output_dir)
@@ -237,20 +278,23 @@ gantt
     推进 Issue #735 退役 47 个历史空脚本   :2026-09-04, 3d
     section Phase 2 标杆打样接入
     展锐去重工具 DedupMergeEngine 适配    :2026-09-07, 5d
-    GPU/开关机/休眠唤醒三专项标准模板打样  :2026-09-10, 7d
-    Agent 工具包拉取、解压与校验缓存机制  :2026-09-12, 6d
+    Agent 工具包拉取、解压与校验缓存机制  :2026-09-12, 5d
+    GPU/开关机/休眠唤醒三专项标准模板打样  :2026-09-17, 7d
     section Phase 3 存量收敛
-    存量 MTK 去重与 Jira 提单适配器收敛   :2026-09-18, 7d
-    前端管理面暴露 Tool Manifest 管理     :2026-09-22, 7d
+    存量 MTK 去重与 Jira 提单适配器收敛   :2026-09-24, 7d
+    前端管理面暴露 Tool Manifest 管理     :2026-09-29, 7d
 ```
+
+> 依赖序：设备端三专项打样排在工具包缓存机制之后（模板打样依赖包分发通道就绪），并对齐可行性评审（2026-08-26）的前置依赖序（如 G1 上传 API 先于方向 5）。
 
 ---
 
 ## 6. 验收标准与架构守卫（DoD & CI Gates）
 
-1. **主代码仓零外部源码膨胀**：
-   - PR 门禁中阻断任何向 `backend/agent/scripts/` 全量引入外部多版本工具的提交；
+1. **主代码仓零外部源码膨胀**（可判定规则，非口号）：
+   - PR 门禁：`backend/agent/scripts/` 新增顶层工具目录必须伴随对应 `tool_manifest.yaml` 注册记录，否则 gate 红；
+   - PR 门禁：manifest 已登记版本条目 append-only（tarball 校验不在 PR CI——runner 无 NFS 访问，分工见 §3.3）；
 2. **契约自测套件**：
-   - 编写 `tools/dev/verify_tool_contract.py`，任何新接入的工具适配器必须能通过标准测试（验证 `--check-env`、退出码映射与 `summary.json` 合规性）；
+   - 编写 `tools/dev/verify_tool_contract.py`，任何新接入的工具适配器必须能通过标准测试（验证 `--check-env`、退出码映射与 `summary.json` 合规性）——§4.2 模板即测试靶子，必须真正实现契约；
 3. **环境去黑盒化**：
    - 新工具接入不再向平台根 `.env.backend` 引入工具私有路径变量，全部收拢至 Manifest 与工具本地配置中。

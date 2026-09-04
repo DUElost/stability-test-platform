@@ -15,7 +15,7 @@
 | 1 | **设备** | Android 被测机 |
 | 2 | **Agent host** | 跑 Agent 的 Linux 机（约 20 台） |
 | 3 | **控制面** | FastAPI / Dashboard / SAQ，生产 **永远** `192.0.2.202` |
-| 4 | **中心存储（CIFS / NFS）** | 日志分享盘：`devices/` `dedup/` `jira/` `jobs/` `mtbf/` |
+| 4 | **中心存储（CIFS / NFS）** | 日志分享盘：`devices/` `dedup/` `jira/` `jobs/` `mtbf/` `tools/`（版本化外部工具包，ADR-0033） |
 | 5 | **PG** | 业务库（元数据，不是日志文件） |
 | 6 | **Redis** | 仅 SAQ broker（+ 可选 SocketIO adapter） |
 | 7 | **扫描工具** | `start_log_scan.py`（Agent scan + 控制面 merge） |
@@ -110,7 +110,8 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 
 子目录（角色 4 的内容，不是角色）：`devices/`、`dedup/`、`jira/{plan_run_id}/`、`jobs/{job_id}/`、
 `mtbf/{project}/`（MTBF 清单/全局参数 + `results/{run_dir}.json`；控制面写配置、Agent 写 `results/`，见
-[P0 设计 §4.4](../design/2026-08-mtbf-p0-runner-design.md)）。
+[P0 设计 §4.4](../design/2026-08-mtbf-p0-runner-design.md)）、`tools/{name}/{version}/`（版本化外部
+工具包 `.tar.gz` + sha256 校验，ADR-0033）。
 
 ### 4.5 PG / Redis
 

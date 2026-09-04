@@ -81,7 +81,7 @@
 | [ADR-0030](./ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（test_suite / test_case + 外部管理面） | Accepted | P0+P1 | M7 | v1.9：P0 验收✅ + **P1 全部✅ + D6 真机冒烟✅**（#404）+ **P2 核心✅**（#429：套件管理 UI + `test_case_result`/`TestCaseResultsCard`）+ **mtbf 绑定翻转硬拒**（v1.8）。**未做**：JobArtifact `report` 白名单。背景：[reviews](../reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) |
 | [ADR-0031](./ADR-0031-platform-ai-assistant.md) | 平台 AI 助手（运维域 LLM 助手与风险分级自治边界） | Accepted | P1 | M8 | v1.5：阶段二全栈 ✅（T0-T3 四级自治 / httpx 载体 / DB+Fernet / RunConsole / 角色裁剪工具面 / 二轮审核 H1–M5）。设计见 [docs/design/2026-08-27-platform-ai-assistant.md](../design/2026-08-27-platform-ai-assistant.md) |
 | [ADR-0032](./ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) | 展锐与 MTK 并列日志链路（Watcher + 归档）（#463 / #73） | Accepted | P1 | M7 | v0.6：platform 路由；w1 Watcher + D4c 归档；`dedup/{run}/{mtk,unisoc}/` + 双 merge；TAG 共用 |
-| [ADR-0033](./ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（#745） | Accepted | P1 | M7 | v1.0：D0 阻断全量入仓；D1 三层宿主隔离；D2 Tool Contract 协议；D3 Manifest+包存储解耦；D4 防腐适配器 |
+| [ADR-0033](./ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（#745） | Accepted | P1 | M7 | v1.1：D0 阻断全量入仓（分级准入）；D1 三层宿主隔离；D2 Tool Contract（退出码命名空间分层）；D3 Manifest 发布格式 × DB catalog 唯一权威；D4 防腐适配器（接口只包 vendor CLI）；与 ADR-0032 行为/结构权威分家 |
 
 ## Proposed 里程碑看板（2026 上半年）
 
@@ -93,7 +93,7 @@
 | M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
 | M5 | 2026-07 | ADR-0026 P0–P2（规模化执行正确性 + 控制面减负） |
 | M6 | 待定 | ADR-0027（控制面水平扩展；重启条件见 ADR-0025 D1） |
-| M7 | 进行中 | ADR-0029（项目分类域·登记簿；v2.5 派生归属 M1–M4 **已落地**）；ADR-0030（**Accepted** v1.9：P0 ✅ / P1 ✅ / D6 ✅ / **P2 核心 ✅** #429）；ADR-0031（**Accepted**：阶段二全栈 ✅，2026-08-28）；ADR-0032（**Accepted** v0.6：展锐 Watcher+归档，#463/#73）；ADR-0033（**Accepted** v1.0：外部工具接入契约与包管理解耦，#745） |
+| M7 | 进行中 | ADR-0029（项目分类域·登记簿；v2.5 派生归属 M1–M4 **已落地**）；ADR-0030（**Accepted** v1.9：P0 ✅ / P1 ✅ / D6 ✅ / **P2 核心 ✅** #429）；ADR-0031（**Accepted**：阶段二全栈 ✅，2026-08-28）；ADR-0032（**Accepted** v0.6：展锐 Watcher+归档，#463/#73）；ADR-0033（**Accepted** v1.1：外部工具接入契约与包管理解耦，#745） |
 
 ## 维护约定
 
