@@ -79,6 +79,29 @@ CI 有阻塞式门禁；本地钩子需一次性启用：`git config core.hooksP
 记录「决定了什么、放弃的备选、如何验证、何时重议」。纯机械改动豁免；
 方向级决策仍走 `docs/adr/`。模板与判定见 `docs/notes/README.md`。
 
+## 多 Agent 并行开发
+
+冲突靠**避免**，不靠**解决**。开工前跑派生视图看各 worktree 正在动哪些顶层目录
+（无需维护，必然准确；对 merge-base 取差异，未提交的也算）：
+
+```bash
+for w in $(git worktree list --porcelain | awk '/^worktree /{print $2}'); do
+  printf '%-46s -> ' "${w##*/}"
+  git -C "$w" diff --name-only "$(git -C "$w" merge-base origin/main HEAD)" | cut -d/ -f1 | sort -u | paste -sd, -
+  echo
+done
+```
+
+- **分片只是冲突规避手段，不是职责边界** —— 跨片任务照做，不限制单个 agent 能改什么；
+  只守一条：同一时刻别让两个 agent 改同一批文件。
+- **唯一硬规则：元文件串行化** —— 并行 agent 不要顺手改 `AGENTS.md` / `CLAUDE.md`。
+  它们不在任何分片内，横跨全部代码片；两处编辑可能各自成立、合起来语义矛盾，
+  靠合并解决不可靠。而改动频率低、影响面极大，串行成本近乎为零。需要改就记进
+  PR 描述或 issue，由人或专门的 docs agent 在独立 PR 里统一改（auto-merge 会串行化）。
+- **并发上限 ≈ 2–3** —— 瓶颈是你的审阅吞吐（N 个 agent = N 份 PR 要审），不是
+  agent 互相阻塞：CI ~2 分钟出结果 + FIFO auto-merge 已把 agent 侧阻塞降到零。
+  任务排队，别为 N=2 引入协同机制（手写 WIP 公告、subagent/team 互发消息等）。
+
 ## 生产机调试约束
 
 部分部署机上 **本机 PostgreSQL 即生产库**（生产 `DATABASE_URL` 在仓库根 `.env.backend`，指向 `stp`），而 **Docker testcontainers 仅用于隔离测试**。在生产机上改代码时务必遵守：
