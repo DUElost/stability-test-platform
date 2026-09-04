@@ -39,7 +39,7 @@ ADR-0026 将 P3 标为远期方向：
   - `0` / 未设：进程内 manager，单实例零 Redis pub/sub 开销
   - `1`：用 `REDIS_URL` + channel `STP_SOCKETIO_REDIS_CHANNEL`（默认 `stp-socketio`）
   - `TESTING=1`：强制关闭（单测不连 Redis）
-- `/health` 暴露 `socketio_redis_adapter` 布尔字段
+- `/health` 暴露 `socketio_redis_adapter_enabled` 布尔字段（2026-08-29 `d2b2cea5` 前为 `socketio_redis_adapter`）
 - **已覆盖**：dashboard room 广播、`emit_agent_control`（`room=agent:{host_id}`）跨进程 fan-out
 
 ### P3-3（已落地）：控制面多实例正式化守卫
@@ -58,7 +58,7 @@ ADR-0026 将 P3 标为远期方向：
 - 开关：`STP_AGENT_SID_REGISTRY`（默认跟随 Redis adapter；可显式 `0`/`1`）
 - connect 时 Redis `SET stp:agent:owner:{host_id}`（TTL 默认 120s）；disconnect 时 CAS delete
 - `call_agent_rpc`：本地 sid 优先；否则在 adapter 开启时走 `room=agent:{host_id}`（Redis manager 投递到持有连接的实例）；registry 开启时先查 owner，无登记则立即 `AgentNotConnectedError`（避免空 room 挂满 timeout）
-- `/health` 暴露 `agent_sid_registry`
+- `/health` 暴露 `agent_sid_registry_enabled`（同上改名）
 
 #### 与 ADR-0018 不变量 4
 

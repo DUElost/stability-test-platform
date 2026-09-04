@@ -19,8 +19,8 @@ curl -sS "$CONTROL_BASE_URL/health" | jq .data
 | `admission_queue_flag` | env `STP_PLAN_ADMISSION_QUEUE_ENABLED=1` |
 | `admission_queue_pump_ready` | APScheduler pump 已 `mark_queue_pump_ready` |
 | `admission_queue_enabled` | **两者同时为真** 才真正走 QUEUED 路径 |
-| `socketio_redis_adapter` | 多实例 room fan-out |
-| `agent_sid_registry` | Agent owner 跨实例登记（默认同 adapter） |
+| `socketio_redis_adapter_enabled` | ADR-0027 多实例 room fan-out 的 **opt-in 开关**（单实例默认 false，非连接状态；2026-08-29 起键名带 `_enabled`） |
+| `agent_sid_registry_enabled` | Agent owner 跨实例登记的 opt-in 开关（默认同 adapter；同上改名） |
 
 Prometheus（已有）：queue-latency、extend-batch 成功率、aggregation、host-slots。
 
@@ -100,8 +100,8 @@ STP_SOCKETIO_REDIS_ADAPTER=1
 
 ```bash
 curl -sS "$CONTROL_BASE_URL/health" | jq '{
-  adapter: .data.socketio_redis_adapter,
-  registry: .data.agent_sid_registry
+  adapter: .data.socketio_redis_adapter_enabled,
+  registry: .data.agent_sid_registry_enabled
 }'
 ```
 
@@ -193,7 +193,7 @@ STP_AGENT_SID_REGISTRY=0
 | 门槛 | 当前证据 | 处理条件 |
 |------|----------|----------|
 | 44→60→100 host 阶梯 | 当前 API 复核为 20/20 host ONLINE、41 台 device ONLINE，`below_44_current_20` | 补足至少 44 个 ONLINE host 后，按每档完整长跑重新记录四项指标 |
-| 多实例 SocketIO | 当前 `/health`：单 uvicorn；`socketio_redis_adapter=false`、`agent_sid_registry=false` | 准备 ≥2 控制面进程、Redis 可达、leader-election/LB 窗口后，再滚动开启并验证跨实例 RPC/断线重连 |
+| 多实例 SocketIO | 当前 `/health`：单 uvicorn；`socketio_redis_adapter_enabled=false`、`agent_sid_registry_enabled=false`（opt-in 开关默认关，非异常） | 准备 ≥2 控制面进程、Redis 可达、leader-election/LB 窗口后，再滚动开启并验证跨实例 RPC/断线重连 |
 
 ### 本次代码与回归证据
 

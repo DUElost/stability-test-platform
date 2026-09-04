@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   backend-test:
-    # 全量 job：仅在 push main / workflow_dispatch 时运行。
+    # 全量 job：仅在 workflow_dispatch（main-ci-backstop 每日 UTC 18:00 dispatch）时运行。
     # PR 只跑下方轻量 job（lint / pr-agent-tests / pr-migrate-empty-db /
     # pr-typecheck / pr-compileall）。
     if: github.event_name != 'pull_request'

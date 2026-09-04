@@ -1,7 +1,12 @@
 # ADR-0029 P2.5：登记簿 = Fleet 事实 + 人工项目 + 精确映射
 
+> ⚠️ 2026-08-31 起已被 ADR-0029 v2.5 派生归属重设计取代（见修订行）：映射实体
+> `project_device_rule` → 更名 `project_model`，`device.project_id` 列已删除，
+> 归属按活跃 `project_model` 成员行派生；本页保留为 v2.4 工作台记录，API 与
+> 口径以 v2.5 及代码为准。
+
 - 日期：2026-08-20
-- 状态：**现行**
+- 状态：**历史记录**（v2.4；已由 ADR-0029 v2.5 取代）
 - 上游：[ADR-0029](../adr/ADR-0029-project-taxonomy-and-param-layering.md) v2.4
 
 ## 0. 结论
