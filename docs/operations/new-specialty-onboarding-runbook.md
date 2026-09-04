@@ -34,8 +34,9 @@ curl -s -X POST '<base>/api/v1/auth/token' \
 | **script**（脚本） | 版本化可执行单元，唯一 action 类型 `script:<name>` 的载体 | ADR-0020 |
 | **suite**（套件） | 设备端用例清单元数据层（多用例专项才需要） | ADR-0030 |
 
-Plan 通过 `project_key` + `specialty_key` 双键归属；一次冒烟验证可以只有
-project 没有 specialty。
+Plan 归属两个维度：`project_key`（**可选**，空 = 显式「不限」）+ `specialty_key`（**必填**）。
+前者决定派发目标与报表聚合，后者决定用例/套件语义（ADR-0029 D2/D6 + v2.5 D11）；
+纯冒烟可以只填 specialty，但**不能**只有 project 没有 specialty。
 
 ## 2. Step 1 —— 项目登记
 
@@ -44,18 +45,20 @@ curl -s -X POST '<base>/api/v1/projects' -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{
     "project_key": "Z2581",          // [A-Za-z0-9][A-Za-z0-9-]{0,62}
     "display_name": "Z2581 项目",
-    "customer": "<客户名>",           // 可选 facet，下同
-    "platform": "UNISOC",
-    "form_factor": "phone",
-    "product_line": null,
+    "customer": "<客户名>",           // 可选，登记用
     "jira_project_key": null          // Jira 提单键，可后补
   }'
 ```
 
+> 注：项目不再手动登记 `platform` / `form_factor` / `product_line` facet（列已随
+> ADR-0029 v2.5 D12 删除）；platform 由设备心跳派生，型号映射在登记簿工作台维护
+> （活跃 `project_model` 成员行，ADR-0029 v2.5）。
+
 - 登记簿查询：`GET /api/v1/projects`；详情含聚合视图：`GET /api/v1/projects/{project_key}`。
 - 后补 Jira 键：`PUT /api/v1/projects/{project_key}` 传 `{"jira_project_key": "XXX"}`。
   不填则该项目的 PlanRun 无法进入自动提单流程（风险评级照常产出）。
-- project_key 定了就别改：artifact 归档与报表按它聚合。
+- 改 project_key：用 `PUT /api/v1/projects/{key}/rename`（admin；ADR-0029 v2.5 D2 复核后 key 可改）。
+  不要用「新建 key + 复制项目」绕过 rename——旧 key 下的归档与报表不会自动迁移。
 
 ## 3. Step 2 —— 专项（specialty）确认
 
