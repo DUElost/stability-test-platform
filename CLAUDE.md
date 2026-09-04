@@ -30,7 +30,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 - **DB 表名单数**：`device` 非 `devices`，`host` 非 `hosts`
 - **Pydantic v2 only**：禁止 `.dict()`/`parse_obj`/`from_orm`/`class Config`；用 `model_dump()`/`model_validate()`/`ConfigDict(from_attributes=True)`
 - **前端类型权威源**：`frontend/src/utils/api/types.ts` — 必须与后端 Pydantic schema 同步
-- **`host.max_concurrent_jobs` 已删除**（migration `q2r3s4t5u6v7w8`）；容量 = `min(MAX_CONCURRENT_TASKS - active, heartbeat effective_slots)`
+- **`host.max_concurrent_jobs` 已删除**（migration `q2r3s4t5u6v7`）；Agent 认领容量 = `effective_slots = min(空闲健康设备 − 活跃, 健康上限, STP_MAX_CLAIM_SLOTS 默认 5)`（`backend/agent/capacity_reporter.py`；#483）
 
 ---
 
