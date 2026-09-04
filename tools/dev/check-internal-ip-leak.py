@@ -35,6 +35,7 @@
     python tools/dev/check-internal-ip-leak.py -q             # 静默：只在命中时输出
     python tools/dev/check-internal-ip-leak.py --self-test    # 正反样例自证
     python tools/dev/check-internal-ip-leak.py <path> [...]   # 指定路径（调试用）
+    python tools/dev/check-internal-ip-leak.py --staged <path> [...]  # 读暂存 blob（pre-commit 用）
 
 退出码：0 = 无命中；1 = 有命中（CI 阻塞）；2 = 用法/环境错误。
 """
@@ -176,14 +177,38 @@ def scan_text(text: str, rel: str) -> list[tuple[int, str, str]]:
     return hits
 
 
-def scan_path(root: Path, rel: str) -> list[tuple[int, str, str]]:
+def _read_index_blob(root: Path, rel: str) -> str | None:
+    """读暂存区 blob（`git show :<path>`），供 pre-commit 现场预检使用。
+
+    预检要拦的是「将提交的内容」。若直接读工作区文件字节，部分暂存时
+    工作区里未暂存的真实地址会误拦干净提交；stage 后工作区已清理又会
+    漏报。二进制 / 不在暂存区 → None，调用方跳过（与工作区不可读同语义）。
+    """
+    proc = subprocess.run(
+        ["git", "show", f":{rel}"], cwd=root,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        return proc.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def scan_path(root: Path, rel: str, *, staged: bool = False) -> list[tuple[int, str, str]]:
     if Path(rel).suffix not in SCAN_SUFFIXES:
         return []
-    full = root / rel
-    try:
-        text = full.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
-        return []  # 二进制 / 不可读：跳过
+    if staged:
+        text = _read_index_blob(root, rel)
+    else:
+        full = root / rel
+        try:
+            text = full.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            text = None  # 二进制 / 不可读：跳过
+    if text is None:
+        return []
     return scan_text(text, rel)
 
 
@@ -236,30 +261,36 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--check", action="store_true",
                     help="CI 语义：只报告不改写（本脚本从不改写）")
     ap.add_argument("-q", "--quiet", action="store_true", help="无命中时保持静默")
+    ap.add_argument("--staged", action="store_true",
+                    help="读暂存区 blob(git show :path)而非工作区文件；须配合显式 paths")
     ap.add_argument("--self-test", action="store_true", help="正反样例自证后退出")
     args = ap.parse_args(argv)
 
     if args.self_test:
         return _self_test()
+    if args.staged and not args.paths:
+        ap.error("--staged 需要显式 paths：暂存区没有“全仓”语义")
 
     root = ROOT
+    targets: list[str] = []
     if args.paths:
-        targets: list[str] = []
         for p in args.paths:
-            pp = Path(p)
-            if pp.is_dir():
-                for f in pp.rglob("*"):
-                    if f.is_file():
-                        targets.append(str(f.relative_to(root)))
+            cand = Path(p)
+            if not cand.is_absolute():
+                cand = root / cand
+            if not args.staged and cand.is_dir():
+                targets.extend(
+                    str(f.relative_to(root)) for f in cand.rglob("*") if f.is_file()
+                )
             else:
-                targets.append(p if not pp.is_absolute() else str(pp.relative_to(root)))
+                targets.append(str(cand.relative_to(root)))
     else:
         targets = _tracked_files(root)
 
     total = 0
     files_hit = 0
     for rel in targets:
-        hits = scan_path(root, rel)
+        hits = scan_path(root, rel, staged=args.staged)
         if not hits:
             continue
         files_hit += 1
