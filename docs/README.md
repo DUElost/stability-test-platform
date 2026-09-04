@@ -99,6 +99,7 @@ docs/
 | [`2026-08-project-registry-p25-mapping-workbench.md`](./design/2026-08-project-registry-p25-mapping-workbench.md) | ADR-0029 P2.5：登记簿 = Fleet 事实 + 人工 USER 项目 + `match_models` 精确映射 |
 | [`2026-08-honor-flash-firmware-routing.md`](./design/2026-08-honor-flash-firmware-routing.md) | Honor 刷机：固件指纹路由 + NFS manifest 布局 + 刷前/刷后版本核验 + v1.3.0 多设备门控/重试环/环境预检（方向 A，已实施） |
 | [`2026-08-governance-surface-protection.md`](./design/2026-08-governance-surface-protection.md) | 治理面防护两层方案：L0 结构门禁 S1–S5 + 本地护栏（pre-commit/settings deny/skill 试点）+ backstop 机械摘要 + L1 按需 evals（synthesis C-G1 落地，含校准教训与重议条件） |
+| [`2026-09-external-tools-integration-and-package-architecture.md`](./design/2026-09-external-tools-integration-and-package-architecture.md) | 外部工具统一接入实施计划（ADR-0033 配套：Tool Contract 协议与 §2.5 双轨衔接、manifest 注册流与门禁分工、NFS 工具包布局与 Agent 缓存、去重/专项/Jira 适配器、三阶段排期） |
 | [`design/mockups/plan-execute-v2/`](./design/mockups/plan-execute-v2/) | Plan Execute V2 静态预览（§8 视觉基准） |
 
 ## 开发 / 运维索引

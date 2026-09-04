@@ -78,8 +78,8 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **Living 审查** | [`reviews/PLATFORM_HEALTH_REVIEW_2026-09-03.md`](./reviews/PLATFORM_HEALTH_REVIEW_2026-09-03.md) | 平台全面只读健康审查报告（核心执行健康；梳理 3 个 A 级实缺陷与 ADR-0033 在途核验；登记下一阶段 6 维风险台账） |
 | **实现规格** | [`reviews/IMPLEMENTATION_SPEC_PROMPT.md`](./reviews/IMPLEMENTATION_SPEC_PROMPT.md) | 阶段 3 重构实现规格——Agent 工作提示词（产出 device-log-event implementation spec） |
 | **设计** | [`design/2026-08-27-platform-ai-assistant.md`](./design/2026-08-27-platform-ai-assistant.md) | 平台 AI 助手设计（组件职责/轮次时序/动作状态机/权限隔离矩阵/安全边界/部署观测；ADR-0031 配套） |
-| **架构 ADR** | [`adr/ADR-0033-tool-kit-ecosystem-integration.md`](./adr/ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（三层宿主/Tool Contract 协议/Manifest+包存储解耦/防腐适配器；Accepted v1.0；#745） |
-| **设计** | [`design/2026-09-external-tools-integration-and-package-architecture.md`](./design/2026-09-external-tools-integration-and-package-architecture.md) | 外部工具统一接入架构与包管理实施计划（ADR-0033 配套：协议定义/NFS 布局/Agent 缓存/MTK+展锐去重+专项适配器/三阶段排期） |
+| **架构 ADR** | [`adr/ADR-0033-tool-kit-ecosystem-integration.md`](./adr/ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（三层宿主/Tool Contract 退出码分层/Manifest 发布格式×DB catalog 唯一权威/防腐适配器/与 ADR-0032 权威分家；Accepted v1.1；#745） |
+| **设计** | [`design/2026-09-external-tools-integration-and-package-architecture.md`](./design/2026-09-external-tools-integration-and-package-architecture.md) | 外部工具统一接入架构与包管理实施计划（ADR-0033 配套：协议定义与 §2.5 双轨衔接/§3.3 注册流与门禁分工/NFS 布局/Agent 缓存/去重+专项适配器/三阶段排期） |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
 

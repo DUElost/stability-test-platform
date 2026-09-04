@@ -132,8 +132,8 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 以下规则的实现方在**控制面**，不在 `backend/agent/`，所以留在本文（始终加载）：
 
 - **Control-plane merge**（`backend/services/dedup_scan.py:run_merge_sync` / `build_merge_argv`）：跑在 backend、读 NFS `dedup/`。argv **不是固定的**：
-  - 先用 `scan_tool_supports_merge_files_list()` 跑一次 `start_log_scan.py -h` 探测能力（结果进程内缓存）。支持则写临时清单文件走 `-merge_files_list {listfile}`；
-  - 不支持才回退 `-merge_files {全部 org_files 展开}`，且此路径有 30000 字符的 argv 上限（`_WIN_MERGE_ARGV_CHAR_LIMIT`），超限直接 `RuntimeError` 要求升级扫描工具 —— **host 规模上来后回退路径会先撞这堵墙**。
+  - 先用 `scan_tool_supports_merge_files_list()` 跑一次 `start_log_scan.py -h` 探测能力（结果进程内缓存），写临时清单文件走 `-merge_files_list {listfile}`；
+  - 工具不支持清单模式即 `RuntimeError`（配置错误，#291 已删旧 `-merge_files` 回退路径与 30000 字符 argv 上限）。
   - `-side` 由 `STP_DEDUP_SCAN_TAG` 决定：tag 含 `factory`（大小写不敏感）→ `-side factory`，否则 `-side shanghai`（默认）。
 - **SAQ 链**（`backend/tasks/saq_tasks.py:scan_task`）：`scan_task` → `upload_task` → `merge_task`（`extract_task` 由 merge 链式触发）。`upload_task` 是控制面**筛选者**：按 scan xls 引用把 `LOCAL` 标记为 `UPLOAD_PENDING`（长期保留，只做 DB 标记）；Agent 侧 **EventUploader 是唯一执行者**（30s 轮询拉取 `UPLOAD_PENDING` → copytree → `REMOTE`，含重试/校验/PRUNE/HddSpill force）。#287 后 CONTINUOUS 全量逃生阀已删除，过滤模型是唯一路径。`scan_task` 轮询 NFS 上各 host 的产物**最多 300s**，等齐即提前跳出，等不齐也照样 enqueue 后继 —— 不是「齐了才 enqueue」。这是有意的：为一台慢/坏 host 扣住整轮，等于把「部分报表」换成「零报表」，而零报表正是这条链路要消灭的形态。缺口靠日志与 `PlanRun.run_context.archive` 显性化，不靠拦住后继：
   - 完备性由 `dedup_scan.count_hosts_with_scan_artifacts(run_id, triggered, since=...)` 判定，三个维度都必须收窄：按 **host 去重**而非产物文件数（每台 host 上送 2 个 `*_org*.xls`，拿文件数跟 host 数比会让「一台上送完毕」冒充「全部齐了」）；**限定在本轮 triggered 集合内**（增量扫描复用同一 `plan_run_id`，上轮别的 host 的旧产物会顶替本轮触发 host 的名额）；且**限定在 `since` 水位线之后**（同一台 host 上一轮留下的产物会在本轮首检就计数，合并过期报告）。`since` 取下发 `scan_now` 之前的时刻。三种误判的后果相同：慢的 host 被漏出合并，或合并的是过期报告。

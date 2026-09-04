@@ -98,6 +98,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 
 | 日期 | ADR | 决策 |
 |------|-----|------|
+| 2026-09-03 | [0033](docs/adr/ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约与包管理解耦（**Accepted** v1.1：D0 阻断全量入仓+分级准入 / D1 三层宿主 / D2 Tool Contract 退出码分层 / D3 Manifest 发布格式×DB catalog 唯一权威 / D4 防腐适配器只包 vendor CLI；与 ADR-0032 行为·结构权威分家；#745） |
 | 2026-08-31 | [0032](docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) | 展锐与 MTK 并列日志链路（**Accepted** v0.6：统一 platform 路由；Watcher w1 + 归档 D4c；B1 路径分区双 merge；#220 按 platform 分支） |
 | 2026-08-27 | [0031](docs/adr/ADR-0031-platform-ai-assistant.md) | 平台 AI 助手（Accepted v1.5：T0–T3 运维域自治 / RunConsole 白名单执行 / 角色裁剪工具面；未配 Key 降级） |
 | 2026-08-19 | [0030](docs/adr/ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（Accepted v1.9：P0/P1/D6 ✅、P2 核心 #429 ✅；JobArtifact report 白名单仍留待） |
