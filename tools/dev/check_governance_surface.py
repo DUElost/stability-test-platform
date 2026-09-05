@@ -302,7 +302,6 @@ GATE_TO_CI_ANCHOR = {
     "frontend-build": ("ci.yml", "npm run build"),
     "docker-build": ("ci.yml", "Build backend image"),
     # 有意仅本地的例外——登记理由防止未来审计误判为缺口：
-    "gov-evals": None,   # 按需诊断（裁决降级）：LLM 成本/flaky 不进阻塞路径
     "gov-skills": None,  # 数据源=本机 ~/.claude 转录，物理不在 runner 上
 }
 

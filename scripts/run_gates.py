@@ -4,7 +4,7 @@
 用法:
     python scripts/run_gates.py check:quick    # 最快一轮（纯静态，含 knip）
     python scripts/run_gates.py check:pr       # 推送前默认：与 PR CI 现有检查逐项重叠
-    python scripts/run_gates.py check:gov      # 治理面专项（结构 + 行为 evals）
+    python scripts/run_gates.py check:gov      # 治理面专项（结构 + skill 用量探针）
     python scripts/run_gates.py check:full     # 夜间全量：与 main 全量 CI 一致
     python scripts/run_gates.py --list
 
@@ -95,15 +95,10 @@ GATES = {
         ROOT,
         None,
     ),
-    # 治理面行为 evals（L1，按需诊断，不进 quick/pr——见
-    # docs/design/2026-08-governance-surface-protection.md 的挂载裁决）。
-    "gov-evals": (
-        f"{PY} tools/dev/run_gov_evals.py",
-        ROOT,
-        None,
-    ),
     # skill 用量探针（防建而不用）：--strict 下 ≥14 天零调用 = 门禁红。
     # 空洞处置二选一：删 skill 或改写触发词使其真实可命中。
+    # （gov-evals 行为 eval 已于 2026-09-06 移除——S11 锚点承接不变量保全，
+    #   残余缺口见 #855 与 docs/notes/simplification/2026-09-06-gov-eval-l1-removal.md）
     "gov-skills": (
         f"{PY} tools/dev/skill_usage_report.py --strict",
         ROOT,
@@ -158,8 +153,8 @@ PROFILES = {
         "ruff", "eslint", "tsc", "knip", "compileall",
         "pollution", "immutability", "gov-surface", "ip-leak", "agent-tests",
     ],
-    # 治理面专项：结构门禁 + 行为 evals + skill 用量探针（evals 需 CLI，手跑）
-    "check:gov": ["gov-surface", "gov-evals", "gov-skills"],
+    # 治理面专项：结构门禁 + skill 用量探针
+    "check:gov": ["gov-surface", "gov-skills"],
     "check:full": None,  # = 全部，按 GATES 顺序
 }
 
