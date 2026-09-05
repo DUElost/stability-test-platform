@@ -6,30 +6,13 @@ alwaysApply: false
 
 # Backend Python
 
-## Pydantic v2 only
+修改后端 Python 前按需读取：
 
-禁止：`.dict()` / `parse_obj` / `from_orm` / `class Config`
+- `AGENTS.md`：Pydantic、表名和跨层硬不变量；
+- `CLAUDE.md`：状态机与领域文档路由；
+- `docs/development/testing.md`：当前测试命令与隔离数据库要求；
+- `docs/design/2026-scan-upload-merge-contract.md`：跨进程归档契约；
+- 对应 `docs/design/` 文档：模块和协议细节。
 
-使用：`model_dump()` / `model_validate()` / `ConfigDict(from_attributes=True)`
-
-`ORMBaseModel`（`backend/api/schemas/base.py`）datetime 经 `field_serializer(when_used="json")` 序列化为 ISO-UTC。
-
-## 数据库
-
-- 表名单数：`device`、`host`、`plan`、`plan_run_artifact`
-- 同步 URL：`DATABASE_URL` 去掉 `+asyncpg` → `postgresql://...`
-
-## 测试（`backend/tests/`）
-
-- 必须 `python -m pytest`（裸 `pytest` 可能落到错误解释器）
-- PG：`TEST_DATABASE_URL`；本地无 PG：`ALLOW_SQLITE_TESTS=1`（`test_agent_dual_write.py` 仍 skip）
-- `conftest.py` 设 `TESTING=1`，lifespan 不启 Redis/SAQ/APScheduler
-- 全量 suite 可能超时 → 单文件：`pytest backend/tests/api/test_dedup_scan_endpoints.py -x`
-
-## 控制面 scan/merge
-
-- `dedup_scan.py:run_merge_sync` 调 `start_log_scan.py -merge_files`
-- NFS：`{STP_AEE_NFS_ROOT}/dedup/{run_id}/` + `devices/{run_id}/` + `jira/{run_id}/`
-- 终端 dedup：`STP_DEDUP_AUTO_SCAN`（默认 `1`）
-
-Control-plane 测试放 `backend/tests/`；无 DB 的 agent 单测放 `backend/agent/tests/`。
+本规则只负责按路径引导，不保存命令参数、环境变量默认值或实现摘要，避免与权威文档
+及代码形成第二套事实源。

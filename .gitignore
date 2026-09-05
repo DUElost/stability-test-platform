@@ -1,4 +1,5 @@
 .ace-tool/
+# OpenCode provider/model/credential config is machine-local and must never be committed.
 opencode.json
 .cursor/*
 !.cursor/rules/
@@ -50,6 +51,8 @@ venv-wsl/
 .claude/*
 !.claude/settings.json
 !.claude/skills/
+# One-off nested Claude plans are local session artifacts, not project rules.
+**/.claude/plan/
 # UI 原型归档（HTML/PNG 设计稿，非规范；本地保留，移出 git 跟踪）
 docs/archive/prototypes/
 *.db-wal

@@ -117,5 +117,5 @@ StepTrace / JobArtifact / JobLogSignal（运行时数据）
 | 前端 | [`03-frontend.md`](./03-frontend.md) |
 | Agent | [`04-agent.md`](./04-agent.md) |
 | 实时/后台 | [`06-realtime-and-background.md`](./06-realtime-and-background.md) |
-| API 端点表 | [`CLAUDE.md`](../../CLAUDE.md) §对外接口 |
+| API 端点与后端模块 | [`02-backend.md`](./02-backend.md)；运行时以 FastAPI OpenAPI 为准 |
 | 待删旧文档 | [`DOC-RETIREMENT.md`](../DOC-RETIREMENT.md) |

@@ -66,20 +66,15 @@ Class: process
 RESIDENT_CONTEXT_AUDIT_2026-08-27 的 C1–C4 保留结论——该审计当时保留多项常驻
 内容，并非预算来源）。差距点按采纳顺序排列：
 
-- **G1 硬不变量是 Claude-only —— 建议采纳**：`CLAUDE.md` 的 8 条跨模块硬不变量
-  只被 Claude 会话加载；只读 `AGENTS.md` 的 harness（Codex/OpenCode）看不到。
-  采纳形态：硬不变量移入 `AGENTS.md`（约 8–12 行，需与 80 行预算重平衡或走
-  raise-ceiling 流程），`CLAUDE.md` 只做导入 + 路由。注意与上游模式的差异：上游
-  CLAUDE.md 是全量 symlink；本仓库已有 CLAUDE 导入 AGENTS 的机制，G1 只需把
-  「硬不变量」小节从 CLAUDE 上移到 AGENTS。
-- **G4 证据纪律 —— 直接采纳，成本最低**：「只报告实际运行过的命令与结果；
-  pending 报 pending；不得因命令成功就声称验证通过」并入 AGENTS「提交前」小节
-  （约一行）。
-- **G3 note 取代/归档缺强制条款 —— 采纳规则 + 基础校验，不迁移目录结构**：
-  docs/notes 已按 class 分目录并有 README 生命周期约定；补两条即可——(a)
-  「新 note 必须显式扫旧 note，部分取代交叉链接、完全取代同 PR 归档」写进
-  docs/notes/README.md 作为作者义务（与上游一致：规则文本 + 人工义务，不承诺
-  自动 gate）；(b) Status/Class 头部一致性交给治理 checker 做基础校验。
+- **G1 硬不变量跨 Harness 可见 —— 已采纳**：8 条跨模块硬不变量已移入
+  `AGENTS.md`，`CLAUDE.md` 只做导入 + 路由。当前 AGENTS 63 行/3815B，未放宽
+  80 行/8KB ceiling。
+- **G4 证据纪律 —— 已采纳**：「只报告实际运行过的命令与结果；pending 报
+  pending；不得因命令成功就声称验证通过」已进入 AGENTS「提交前」小节。
+- **G3 note 取代/归档 —— 已采纳规则 + 基础校验**：`docs/notes/README.md` 要求新
+  note 先检索旧 note，部分取代交叉链接，完全取代同 PR 归档；治理 checker S10
+  校验 2026-09-05 起新 note 的 Status/Class 与目录一致。197 份存量中 78 份旧格式
+  明确 grandfathered，不迁移目录、不批量改写历史。
 - **G2 backend scoped 指令命名不对称 —— 条件采纳**：`backend/agent/{,aee/}
   CLAUDE.md` 内容中立却用 Claude-only 命名。注意措辞修正：根 `AGENTS.md`「开始
   任务时」第 2 条已要求**所有** harness 检查目标目录的 scoped `CLAUDE.md`，非
@@ -92,12 +87,9 @@ RESIDENT_CONTEXT_AUDIT_2026-08-27 的 C1–C4 保留结论——该审计当时�
 
 ### 本次处理
 
-- 不立即改动 `AGENTS.md` / `CLAUDE.md` / `backend/agent/{,aee/}CLAUDE.md` 或治理
-  checker——共享元文件同一时间只由一个 Execution 修改；G1–G4 采纳项放入后续
-  Execution ADR 的候选清单，按上表顺序执行。
-- 本文为后续 ADR 的引用基线（经审阅修正后）。
-
-涉及文件：本文（新增）。纯文档变更，无代码 / 测试 / env 影响。
+- 研究提交先冻结上游事实与裁决；后续 Phase -1 Execution 串行完成 G1/G4/G3，
+  同步 `AGENTS.md`、`CLAUDE.md`、Harness 路由、notes 规范和治理 checker。
+- G2/G5 不进入 ADR-0034 前置阻塞集；本文作为后续 ADR 的引用基线。
 
 ## Alternatives
 
@@ -111,8 +103,8 @@ RESIDENT_CONTEXT_AUDIT_2026-08-27 的 C1–C4 保留结论——该审计当时�
   C1–C4 保留结论（该审计当时保留多项常驻内容，非预算来源）。
 - **为多 harness 建 `.agents/` 单家 + symlink（上游模式）**——暂缓（G5）：当前
   skills 只有 Claude Code 一个消费方；等新增受版本控制的 harness 适配时再评估。
-- **在本 note 直接落地 G1–G4**——放弃（本次）：改动共享元文件需独立 PR 串行
-  Execution；作为候选交 ADR。
+- **在研究提交中同时落地 G1–G4**——放弃：先独立冻结证据，随后由串行 Phase -1
+  Execution 落地 G1/G4/G3，避免研究分支并发修改共享元文件。
 - **立即用 git 级 pre-push 钩子替 Codex hooks**——放弃：Codex PreToolUse
   （apply_patch 前 tsc）的精细控制在 git hook 层做不到，两者互补；观察项。
 - **双语 / i18n 化**——不适用：远端是双语国际项目；本仓库单语中文。
@@ -138,11 +130,11 @@ RESIDENT_CONTEXT_AUDIT_2026-08-27 的 C1–C4 保留结论——该审计当时�
   产品）与语言（双语）和本仓库（Python/FastAPI 运维平台、单语中文）不同，结论
   迁移注意语境差；`apps/cli/tests/profiles/AGENTS.md` 用途未核。
 - 本地结构性检查：`venv/bin/python tools/dev/check_governance_surface.py --check`
-  通过（阻塞项全绿 S1–S9、S5x）；`--self-test` 通过。
+  通过（阻塞项全绿 S1–S10、S5x）；`--self-test` 通过。
 
 ## Revisit
 
-- 后续 Execution ADR 定稿前引用本文 G1–G4 采纳顺序；
+- 后续 Execution ADR 定稿前引用本文的事实边界与已采纳状态；
 - G2 实施前实测嵌套 AGENTS.md 自动发现行为；新增受版本控制的 harness 适配、
   harness 升级改变规则自动发现时（对应 `harness-adapters.md` 的修改顺序）；
-- G1 若实施，复查 AGENTS 预算与治理 checker 覆盖范围是否同步扩展。
+- AGENTS 接近 80 行/8KB ceiling，或硬不变量再次出现 Harness 不对称时复查 G1。

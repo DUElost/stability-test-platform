@@ -1,6 +1,6 @@
 ---
 name: control-plane-deploy
-description: 生产控制面部署与 Agent 热更新操作 SOP。触发时机：部署控制面到 127.0.0.1:8000、批量热更新 Agent 到 34 台 host、scan 后脚本版本核验、部署后版本一致性确认。
+description: 生产控制面部署与 Agent 热更新操作 SOP。触发时机：部署控制面到 127.0.0.1:8000、批量热更新 Agent fleet、scan 后脚本版本核验、部署后版本一致性确认。
 ---
 
 # 控制面部署与 Agent 热更新 SOP（v0 骨架）
@@ -105,7 +105,7 @@ curl -s -H "$AUTH" -X POST http://127.0.0.1:8000/api/v1/scripts/scan \
 - **scan 幂等**：seed 预建版本显示 created=0/skipped 是正常，勿误判未注册；conflicts 出现时先 `sha256sum` 比对磁盘 vs DB，再决定是否 `?force_rebaseline=true`（需无在途 PlanRun）。
 - **版本号无 v 前缀**：DB `script.version` 存 `2.3.4` 形式（scan 剥 v）。
 
-## 3. Agent 热更新（48 host）
+## 3. Agent fleet 热更新
 
 **先单机 canary，再批量**——批量脚本没有 `--dry-run`，也没有单机参数：
 
@@ -119,7 +119,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 
 - `--direct` 走 SSH（不受登录限流）；默认**跳过有活跃 job 的 host**，`--include-active` 才纳入。
 - 期望 revision：`backend.services.host_updater.get_agent_code_version()`；逐台 `agent_code_revision` 应全量等于它、`agent_code_sync_status=matched`。
-- **串行约 20s/台**（48 台 ≈ 16 min）且 stdout 是块缓冲——重定向到文件时日志会长时间为空，**进度看 DB/API 的 `agent_code_revision` 分布，别盯日志**。
+- **串行约 20s/台**，总耗时随当前 ONLINE host 数量增长；stdout 是块缓冲，重定向到文件时日志会长时间为空，**进度看 DB/API 的 `agent_code_revision` 分布，别盯日志**。
 - 推 `backend/agent/` 源码树（含 scripts/）→ 各 host `/opt/stability-test-agent/agent/`，自动重启 Agent。
 - **热更新会抹掉 host 上手工放入 agent 树的文件**（如临时 .so）——部署前确认无此类残留。⚠️待校对
 - **不要**在 hot-update 未返回成功时抢 `reload_config`（曾致 event_uploader 读到旧 flag）。

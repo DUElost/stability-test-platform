@@ -100,7 +100,7 @@ cd "$CONTROL_DIR"
 
 ---
 
-## 2. Agent fleet（20 台）
+## 2. Agent fleet
 
 **必须重启**：#514 OperationScheduler fail-fast、claim cap 5、step-trace drain 均在 Agent 侧。
 
@@ -108,7 +108,7 @@ cd "$CONTROL_DIR"
 # 单台
 ssh android@<ip> 'sudo systemctl restart stability-test-agent && sudo systemctl is-active stability-test-agent'
 
-# 批量（hosts.ini 在 AGENTS.md §Production access）
+# 批量（清单边界见 production-diagnostics.md）
 ansible android -i /home/debian13/hosts.ini -m systemd -a 'name=stability-test-agent state=restarted' -b
 ```
 
@@ -178,7 +178,7 @@ Honor 刷机专项：[`honor-flash-runbook.md`](./honor-flash-runbook.md)（cata
 - [ ] `check-deploy-readiness.py` 退出 0
 - [ ] backend / nginx active
 - [ ] scripts/scan 无未处理 conflicts
-- [ ] 20 台 Agent restarted + HOST_ID 抽样 OK
+- [ ] 当前目标 Agent fleet restarted + HOST_ID 抽样 OK
 - [ ] seed_and_smoke 或等价主链路通过
 - [ ] （可选）MTBF / flash 专项抽检
 

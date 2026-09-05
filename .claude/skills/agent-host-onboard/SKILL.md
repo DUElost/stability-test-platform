@@ -49,7 +49,8 @@ ssh-copy-id -o StrictHostKeyChecking=accept-new android@<new-ip>
 ssh android@<new-ip> 'sudo -n true && echo sudo_ok || echo sudo_needs_password'
 ```
 
-- 将新机加入 `/home/debian13/hosts.ini` `[android]` 段（格式见 AGENTS.md）。
+- 将新机加入 `/home/debian13/hosts.ini` `[android]` 段；敏感清单边界见
+  `docs/operations/production-diagnostics.md`。
 - UI 建 host 时后端会 best-effort `ssh-keyscan`；失败不阻塞建库，但后续安装/热更新前须补：
   ```bash
   ssh-keyscan -p 22 <new-ip> >> ~/.ssh/known_hosts
@@ -124,9 +125,9 @@ mount | grep stp-aee
 ### 方式 B：API（批量）
 
 ```bash
-# 需 admin token；AGENT_SECRET 头可绕 CSRF（见 AGENTS.md）
+# 需 admin token；凭据边界见 docs/operations/production-diagnostics.md
 TOKEN=$(curl -s -H "X-Agent-Secret: $AGENT_SECRET" \
-  -F "username=$STP_ADMIN_USER&password=$STP_ADMIN_PASSWORD" \
+  -F "username=$STP_ADMIN_USER" -F "password=$STP_ADMIN_PASSWORD" \
   http://127.0.0.1:8000/api/v1/auth/token | jq -r .access_token)
 
 curl -s -X POST http://127.0.0.1:8000/api/v1/hosts \

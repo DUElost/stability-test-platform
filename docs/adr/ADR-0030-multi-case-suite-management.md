@@ -31,7 +31,7 @@ MTBF 专项的用例清单 `runtask.xml`（`/mnt/automation-toolkit/android-tool
 
 三条既有约束决定「多用例」不能走简单路线：
 
-1. **唯一 action 类型 `script:<name>` 是不变量**（CLAUDE.md 架构不变量），用例不是执行单元；
+1. **唯一 action 类型 `script:<name>` 是不变量**（AGENTS.md 硬不变量），用例不是执行单元；
 2. **`default_params` 版本内不可变 + 版本目录不可变**（ADR-0020）——把 130 条清单塞进脚本参数/文件会触发版本膨胀
    （ADR-0029 背景已估算：逐项目分化需新增 15–40 个版本）；
 3. **MTBF 的语义是「整套循环 N 圈」长跑**——把用例展开成 130 个 PlanStep 既违背语义，也制造 130×设备 的无意义 step_trace。

@@ -5,7 +5,8 @@ description: 在本仓库运行后端/前端测试或排查环境异常前的自
 
 # 测试与环境自检
 
-按序执行，任何一步红灯先修复再继续。权威约定见根 `CLAUDE.md` / `AGENTS.md`
+按序执行，任何一步红灯先修复再继续。权威约定见
+`docs/development/testing.md` 与 `docs/development/environment-variables.md`
 （本 skill 只列操作与检查命令，不复述理由）。
 
 ## 1. 解释器一致性
@@ -28,7 +29,7 @@ unset TEST_DATABASE_URL   # 让 conftest 走 Docker testcontainers（推荐）
 
 - 禁止把 `TEST_DATABASE_URL` 指到 `stp`（生产）或 `stp_dev`（compose 容器库名）。
 - SQLite 兜底：`ALLOW_SQLITE_TESTS=1` 仅限少量用例，partial unique index 类
-  用例会跳过（见 AGENTS.md §Test quirks）。
+  用例会跳过（见 `docs/development/testing.md`）。
 
 ## 3. 快速短路验证（<40s）
 

@@ -6,7 +6,7 @@
 ## 0. 前置条件
 
 - `flash_firmware v1.3.10` 已注册（`GET /api/v1/scripts?name=flash_firmware` 能看到目标版本且 is_active）。
-- 20 台 Agent host 已 hot-update / restart 到含 v1.3.x 的 code revision。
+- 当前目标 Agent fleet 已 hot-update / restart 到含 v1.3.x 的 code revision。
 - 目标固件刷机包已从研发渠道拿到（解压后含 scatter 与 DA 文件）。
 - 串行刷多台**首刷**设备时，v1.3.10 会在每台刷完后多等一段「boot 稳定窗口」
   （默认 20s，`boot_stabilize_seconds`）；指纹只取 MTK 口，邻机非 MTK USB
@@ -64,11 +64,11 @@ EOF
 ## 2. 鉴权（运维 curl 模式）
 
 ```bash
-# AGENTS.md「Production access」：.env.backend 的 STP_ADMIN_USER/PASSWORD + AGENT_SECRET
+# 凭据边界见 production-diagnostics.md
 source /home/debian13/stability-test-platform/.env.backend
 TOKEN=$(curl -s -H "X-Agent-Secret: $AGENT_SECRET" \
   -F "username=$STP_ADMIN_USER" -F "password=$STP_ADMIN_PASSWORD" \
-  http://127.0.0.1:8000/api/v1/auth/token | jq -r .data.access_token)
+  http://127.0.0.1:8000/api/v1/auth/token | jq -r .access_token)
 AUTH="Authorization: Bearer $TOKEN"
 ```
 

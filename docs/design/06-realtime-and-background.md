@@ -111,7 +111,7 @@ PlanRun 终态
   └→ enqueue_dedup_terminal_sync → scan_task
        ├→ emit scan_now → 各 ONLINE Agent
        │    ├→ ScanRunner.run_local_scan → _org.xls on HDD
-       │    └→ UploadManager.upload_scan_report → NFS dedup/{run_id}/{host_id}_Result_*_org.xls
+       │    └→ UploadManager.upload_scan_report → NFS dedup/{run_id}/{platform}/{host_id}_Result_*_org.xls
        ├→ poll NFS dedup/{plan_run_id}/ (10s × 30 = 300s max)
        │    等待 registered >= len(triggered_host_ids) 或超时
        ├→ run_scan_sync → PlanRunArtifact(scan_result_xls) 注册 DB
@@ -129,7 +129,7 @@ PlanRun 终态
 | 步骤 | 依赖 | 路径 | 说明 |
 |------|------|------|------|
 | scan_task | — | 入口 | poll 完成后 enqueue upload_task 再 enqueue merge |
-| merge_task | scan_task 完成 | `dedup/{run_id}/` | 读 scan 产物 _org.xls，产出 merge xls |
+| merge_task | scan_task 完成 | `dedup/{run_id}/{mtk|unisoc}/` | 按 platform 读取 scan 产物，产出分区 merge xls |
 | extract_task | merge_task 完成 | `devices/` → `jira/{run_id}/` | 仅按 DLE `remote_path` 打包（#213 B）；merge 成功后 poll DLE REMOTE/ARCHIVED；超时仍 enqueue extract（best-effort） |
 | merge_task SAQ timeout | — | — | `_MERGE_TASK_SAQ_TIMEOUT` = 300 + 660 + 120s，覆盖 merge 子进程与 DLE poll |
 

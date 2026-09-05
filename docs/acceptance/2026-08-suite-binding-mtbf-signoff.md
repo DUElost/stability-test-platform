@@ -2,7 +2,8 @@
 
 - **跟踪**：[GitHub #404](https://github.com/DUElost/stability-test-platform/issues/404)
 - **关联 ADR**：[ADR-0030](../adr/ADR-0030-multi-case-suite-management.md) v1.6（P1 设计 §3）
-- **CLI**：`tools/dev/mtbf-cases.py`（凭据约定见 AGENTS.md「Production access」）
+- **CLI**：`tools/dev/mtbf-cases.py`（凭据约定见
+  [`production-diagnostics.md`](../operations/production-diagnostics.md)）
 - **文档状态**：**已实跑签字（2026-08-25 凌晨窗口，R1–R4 全过）**，实测值见 §4
 
 > **目标**：在一台 MTK 真机上完成「导入 → 改 1 条 → 导出 → 绑定派发」全链，

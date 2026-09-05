@@ -1,115 +1,26 @@
 # stability-test-platform
 
-开发命令、测试运行方式、约定见：
+共享启动契约：
 
 @AGENTS.md
 
-设计文档索引见：
+跨 Harness 的硬不变量由 `AGENTS.md` 统一承载。具体状态、参数、路径和操作步骤必须从
+[`docs/DOC-MAP.md`](docs/DOC-MAP.md) 定位后按需读取。
 
-@docs/DOC-MAP.md
+## 按需读取
 
-Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以本文与 AGENTS.md 为准），说明见：[docs/development/cursor-rules.md](docs/development/cursor-rules.md)（按需查阅）
+- 执行状态机和 Agent 终态协议：
+  [`07-execution-protocol.md`](docs/design/07-execution-protocol.md)
+- 存储角色与路径：
+  [`2026-storage-roles-and-aliases.md`](docs/design/2026-storage-roles-and-aliases.md)
+- 脚本目录、参数和退役：
+  [`script-versioning.md`](docs/development/script-versioning.md)
+- 环境变量：
+  [`environment-variables.md`](docs/development/environment-variables.md)
+- ADR 状态：
+  [`docs/adr/README.md`](docs/adr/README.md)
+- Harness 加载边界：
+  [`harness-adapters.md`](docs/development/ai/harness-adapters.md)
 
----
-
-## 架构不变量
-
-- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — 合并 ASGI 挂载（`backend/main.py:207`）
-- **Plan 无 lifecycle 列**：由 PlanStep 行 + `patrol_interval_seconds`/`timeout_seconds` 在 dispatcher 阶段组装为 `pipeline_def.lifecycle`（唯一事实源）
-- **Redis 仅做 SAQ broker**，不存业务数据
-- **Production guard**：`ENV=production` 时强制 `AUTH_COOKIE_SECURE=1` + `AUTH_COOKIE_SAMESITE ∈ {lax,strict}` + `STP_CSRF_ENABLED` 开启，否则 `RuntimeError`（ADR-0024）
-- **Pipeline 仅接受 `lifecycle` 顶层键**：`stages`/`phases` 格式被拒绝（`backend/agent/pipeline_engine.py:325-332`）
-- **步骤两层钟**（#115 阶段 1，`pipeline_engine.py`）：总时长钟 `timeout_seconds`（缺省 300，安全网）+ 停滞钟 `stall_seconds`（**缺省 0=关闭**——全部脚本 `capture_output=True` 全程零输出，「任意输出=活」等于「全体判死」）。停滞钟按**逐个 PlanStep 显式打开**；`STP_STEP_STALL_SECONDS` 环境变量会**全机启用**（灰度后期开关，须等全部相关脚本接入打戳后才能设置），两者都要求脚本先接入 `PROGRESS` 打戳（阶段 2）。`timeout_seconds=0`（不限）已按步骤开门（2026-08-04，schema step 级 minimum 1→0），但**只对已接打戳 + 显式配了 `stall_seconds` 的步骤安全**——没打戳的步骤配 0 仍是"卡死永远占槽位"。完整协议见 `docs/design/2026-08-step-stall-detection.md`
-- **唯一 action 类型** `script:<name>`：`builtin:<name>` / `tool:<id>` / `shell:<command>` 已删除
-
----
-
-## 关键约定（违反会导致 bug）
-
-- **版本即参数**：已存在版本的 `default_params` 422 不可变，必须 `POST /api/v1/scripts/{name}/versions` 新建版本
-- **DB 表名单数**：`device` 非 `devices`，`host` 非 `hosts`
-- **Pydantic v2 only**：禁止 `.dict()`/`parse_obj`/`from_orm`/`class Config`；用 `model_dump()`/`model_validate()`/`ConfigDict(from_attributes=True)`
-- **前端类型权威源**：`frontend/src/utils/api/types.ts` — 必须与后端 Pydantic schema 同步
-- **`host.max_concurrent_jobs` 已删除**（migration `q2r3s4t5u6v7`）；Agent 认领容量 = `effective_slots = min(空闲健康设备 − 活跃, 健康上限, STP_MAX_CLAIM_SLOTS 默认 5)`（`backend/agent/capacity_reporter.py`；#483）
-
----
-
-## 状态机
-
-- **Job**（集中校验见 `backend/services/state_machine.py` 的 `VALID_TRANSITIONS`）：`PENDING → RUNNING → COMPLETED/FAILED/ABORTED`；`PENDING → FAILED`（recycler 派发超时）；`PENDING → ABORTED`（PlanRun abort）；`RUNNING → UNKNOWN`（recycler/watchdog/reconciler 心跳超时或 patrol stall——**不是**直接到 FAILED）；`UNKNOWN → RUNNING`（grace 内 recovery/sync 恢复）或 `UNKNOWN → FAILED`（grace 到期）
-- **PlanRun**（集中校验 `backend/services/state_machine.py` 的 `PLAN_RUN_VALID_TRANSITIONS`；聚合侧另有 `_TERMINAL_PLAN_RUN_STATUSES` 终态守卫防覆盖）：`QUEUED → PRECHECK → RUNNING → SUCCESS/PARTIAL_SUCCESS/FAILED`；`QUEUED/PRECHECK → FAILED`（abort / 不可重试错误）与 `PRECHECK → QUEUED`（竞争回队 / reaper stale recovery）。存在有意的 `FAILED → QUEUED`（precheck 失败后人工重试派发回准入队列，`precheck/runner.py:retry_plan_run_dispatch`；legacy 直入 RUNNING 的双轨已移除，准入队列是唯一路径）
-- **Agent 终态协议**：`/jobs/{id}/status` 与 `/heartbeat` 仅接受 RUNNING；COMPLETED/FAILED/ABORTED 只能通过 `/jobs/{id}/complete`，相同 payload 幂等、冲突 payload 返回 409。
-
----
-
-## 方案 C 存储（ADR-0025）
-
-详见：[docs/design/2026-plan-c-storage-and-access.md](docs/design/2026-plan-c-storage-and-access.md)（按需查阅）
-
-| 存储 | 用途 | 路径 |
-|------|------|------|
-| Agent SSD | 运行日志（唯一副本） | `logs/runs/{job_id}/` |
-| Agent HDD | AEE + mobilelog + bugreport | `STP_AEE_LOCAL_ROOT`（默认 `/mnt/hdd/aee_events`） |
-| 中心存储（CIFS / NFS） | 汇总 xls、按需事件、HDD 溢出；**不含**运行日志 | 挂载点 `STP_AEE_NFS_ROOT`。过渡 UNC 在 8.202；「15.4」是角色外号/目标。口头 CIFS/NFS 都指此角色 |
-
-角色/别称：[docs/design/2026-storage-roles-and-aliases.md](docs/design/2026-storage-roles-and-aliases.md)。**已取消（勿依赖）**：运行日志上送 CIFS、`run_log_bundle` JobArtifact、patrol cycle `snapshots/`。
-
----
-
-## 脚本目录契约（ADR-0020）
-
-```
-<STP_SCRIPT_ROOT>/<name>/v<version>/<entry>.{py,sh,bat,cmd}
-```
-
-- 一级 = 脚本名，二级 = v 开头版本号，入口 = 首个非 `_` 可识别文件
-- `_` 开头的辅助模块扫描时跳过
-- 扫描结果：created(INSERT) / skipped(sha256一致) / conflicts(sha256不一致,不动DB,须新建版本) / deactivated(磁盘无,标false)
-- **已发布版本目录的内容不可变**：`script.content_sha256` 是**扫描那一刻**的快照，也是 precheck 的期望值。原地改写 → conflicts 只记录不落库 → DB 期望值永久冻结 → 引用该脚本的 Plan 在准入阶段 `script_verify_failed`，**self-heal 推送也修不好**（推的是磁盘内容，对不上的是 DB）。CI 门禁 `tools/dev/check-script-version-immutability.py` 拦截（含 `_` 辅助模块——它们不计入 entry sha，改了连 conflicts 都不报）；`ruff.toml` 已把该目录加进 `extend-exclude`
-- 逃生阀 `POST /scripts/scan?force_rebaseline=true`：把 conflicts 的 sha 重锚到磁盘，返回 `rebaselined[]`。仅 admin，且有在途 PlanRun（RUNNING/QUEUED/PRECHECK）时返回 409。**只用于契约已被上游破坏的既成事实**，正常改脚本一律新建版本
-- 打破「params 完全来自 `default_params`」的三处：步骤级 `step.params` 覆盖（#508，只替换用户声明键、未声明键保留默认）；WiFi 资源池注入 `_inject_wifi_params`（对 `connect_wifi` 顶层与 `monkey_setup` 的 `params.wifi` 补齐未声明的 `ssid`/`password`，已声明值优先）；管理套件注入 `_inject_suite_params`（ADR-0030 §3.4，按冻结的 `dispatch_suite` 给 `script:mtbf_*` 步骤填 `{expected_testpoint_count, project}`）
-- 完整链路：文件 → `POST /scripts/scan` → DB.script → PlanStep → dispatcher 合并 `default_params` ⊕ `step.params`（#508）→ `pipeline_def` → Agent `ScriptRegistry.resolve` → `subprocess.run` → stdout JSON → step_trace → JobStatus → aggregator
-
----
-
-## 环境变量（开发必设）
-
-> 完整清单见 `backend/.env.example`、`backend/agent/.env.example`
-
-| 变量 | 开发值 | 说明 |
-|------|--------|------|
-| `STP_SCRIPT_ROOT` | `<repo>/backend/agent/scripts` | **必须显式设置**；未设不再回落到 `STP_NFS_ROOT/scripts` |
-| `STP_SCRIPT_RUNTIME_ROOT` | WSL 联调配 `/opt/stability-test-agent/scripts` | 扫描机≠运行机时须设 |
-| `ANDROID_ADB_SERVER_PORT` | WSL Agent 必须 `5039` | 忘配则心跳正常但设备数为 0 |
-| `DATABASE_URL` | `postgresql+asyncpg://...` | 同步驱动去掉 `+asyncpg` → `postgresql://...` |
-
----
-
-## 开发陷阱
-
-- **WSL 安装**：必须 rsync 到本地 FS 再运行；`/mnt/` 下有 CRLF + 权限问题；安装前 `sed -i 's/\r$//'`
-- **设备租约紧急释放**：`UPDATE device_leases SET status='RELEASED', released_at=now() WHERE device_id=<id> AND status='ACTIVE'`
-- **设备 ADB 端口**：WSL Agent 必须配 `ANDROID_ADB_SERVER_PORT=5039`，否则心跳正常设备数为 0
-- **pytest 调用**：必须 `python -m pytest`，裸 `pytest` 落到另一套解释器
-
----
-
-## 决策记录
-
-| 日期 | ADR | 决策 |
-|------|-----|------|
-| 2026-09-03 | [0033](docs/adr/ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约与包管理解耦（**Accepted** v1.1：D0 阻断全量入仓+分级准入 / D1 三层宿主 / D2 Tool Contract 退出码分层 / D3 Manifest 发布格式×DB catalog 唯一权威 / D4 防腐适配器只包 vendor CLI；与 ADR-0032 行为·结构权威分家；#745） |
-| 2026-08-31 | [0032](docs/adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) | 展锐与 MTK 并列日志链路（**Accepted** v0.6：统一 platform 路由；Watcher w1 + 归档 D4c；B1 路径分区双 merge；#220 按 platform 分支） |
-| 2026-08-27 | [0031](docs/adr/ADR-0031-platform-ai-assistant.md) | 平台 AI 助手（Accepted v1.5：T0–T3 运维域自治 / RunConsole 白名单执行 / 角色裁剪工具面；未配 Key 降级） |
-| 2026-08-19 | [0030](docs/adr/ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（Accepted v1.9：P0/P1/D6 ✅、P2 核心 #429 ✅；JobArtifact report 白名单仍留待） |
-| 2026-08-19 | [0029](docs/adr/ADR-0029-project-taxonomy-and-param-layering.md) | 项目分类域·TestProject 登记簿（Accepted v2.5 派生归属重设计：归属改 JOIN 删 device.project_id、哨兵出表、facet 减列；D1/D4/D5/D7/D8/D9 挂起） |
-| 2026-07-16 | [0026](docs/operations/adr-0026-admission-and-scale-gray-rollout.md) | 大规模化执行架构:PlanRun 准入队列 + Host OperationScheduler + 批量续租/O(1) 聚合;准入队列已生效(QUEUED/PRECHECK 落地,legacy 双轨已移除,`STP_PLAN_ADMISSION_QUEUE_ENABLED` 默认开) |
-| 2026-06-21 | [0025](docs/adr/ADR-0025-phase4-architecture-alignment.md) | 方案 C 存储：日志留 SSD、AEE 留 HDD、CIFS 仅汇总；取消 run_log_bundle |
-| 2026-05-21 | [0024](docs/adr/ADR-0024-browser-session-security-hardening.md) | HttpOnly Cookie + CSRF + refresh 黑名单 + 生产 guard |
-| 2026-05-06 | [0020](docs/adr/ADR-0020-plan-step-one-shot-migration.md) | Workflow→Plan + PlanStep；lifecycle 由行+直列字段重组 |
-| 2026-04-28 | [0019](docs/adr/ADR-0019-android-device-lease-and-capacity-scheduling.md) | Device Lease + capacity + fencing_token |
-| 2026-04-20 | [0018](docs/adr/ADR-0018-infrastructure-layer-framework-adoption.md) | Watcher 子系统主线 |
-| 2026-04-12 | — | 双轨合并 Wave 7+8：兼容层移除 |
-
-详细见 `docs/adr/`。
-
+修改具体领域时，继续读取目标目录内的 scoped `CLAUDE.md` 和对应设计文档；不要把
+领域细节重新复制回本文件。

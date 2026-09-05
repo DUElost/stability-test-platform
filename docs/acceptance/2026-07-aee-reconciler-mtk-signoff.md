@@ -63,7 +63,7 @@ ssh android@<ip> 'grep ^LOG_LEVEL ~/.env 2>/dev/null || echo "未设（=INFO 默
 （ADR-0020：扫描只在磁盘发现文件，`default_params` 由 `POST /scripts/{name}/versions` 录入）：
 
 ```bash
-# 控制面凭据见 AGENTS.md §Production access
+# 控制面凭据边界见 docs/operations/production-diagnostics.md
 curl -H "Authorization: Bearer <token>" \
   -F 'name=aee_signal_trigger' -F 'version=v1.0.0' \
   -F 'default_params={"package_name":"com.android.settings","poll_timeout_seconds":30,"poll_interval_seconds":1.0,"signal":11}' \
@@ -134,7 +134,7 @@ Plan 即可（最小：一个 PlanRun/单 PlanStep `script:aee_signal_trigger`�
 ### 4.2 schema 校验报告（R1）
 
 ```sql
--- 用 venv/bin/python + psycopg（AGENTS.md §Production access）
+-- 用 venv/bin/python + psycopg（见 docs/operations/production-diagnostics.md）
 SELECT id, job_id, category, source,
        extra->>'event_subtype'  AS event_subtype,
        extra->>'package_name'   AS package_name,
