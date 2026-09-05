@@ -47,6 +47,7 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 | S8 | CLAUDE.md 只能 `@import` 最小 `AGENTS.md` | BLOCK | 导入 DOC-MAP 会把完整索引无条件带入每次会话 |
 | S9 | AGENTS/CLAUDE 只允许固定启动级二级章节，禁止三级章节 | BLOCK | 体量预算只能限制总量，章节白名单进一步阻止领域知识重新常驻 |
 | S10 | 2026-09-05 起新增 Agent Note 的 Status/Class 头部与 class 目录一致 | BLOCK | 197 份存量中 78 份格式不统一；新门禁只阻止继续新增，不批量改写历史 |
+| S11 | AGENTS.md 硬不变量锚点（11 条锚串）逐条在场 | BLOCK | 2026-09-06 随 L1 移除引入：L0 此前对不变量整条删除/改写全盲（S9 只查章节名、S6 只查体量）；S4 锚点同模式 |
 
 检查器自身由 `--self-test` 守护：每条规则一红一绿样例双向验证
 （verify-before-asserting；自测曾真逮到 S3 引号值误判空的非空 bug）。
