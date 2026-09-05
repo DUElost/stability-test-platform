@@ -5,39 +5,9 @@ description: 设备租约紧急释放——设备卡在 ACTIVE 无法重新租�
 
 # 设备租约紧急释放
 
-权威 SQL 见根 `CLAUDE.md` §开发陷阱（原文即此，无歧义）。两步执行，先查后改。
+读取并严格执行
+`docs/operations/device-lease-emergency-release.md`。
 
-## 1. 前置确认（只读）
-
-```sql
-SELECT id, device_id, status, leased_at, released_at
-FROM device_leases
-WHERE device_id = '<设备ID>' AND status = 'ACTIVE';
-```
-
-- 确认确有一条 `ACTIVE` 租约、且该设备当前无在途 PlanRun 引用（有则优先走 PlanRun 侧释放，紧急情况除外）。
-
-## 2. 执行释放（写操作，权限受限时交由管理员执行）
-
-```sql
-UPDATE device_leases
-SET status = 'RELEASED', released_at = now()
-WHERE device_id = '<设备ID>' AND status = 'ACTIVE';
-```
-
-## 3. 后置验证
-
-```sql
-SELECT id, device_id, status, released_at
-FROM device_leases
-WHERE device_id = '<设备ID>'
-ORDER BY id DESC LIMIT 3;
-```
-
-- 最新一条应为 `RELEASED` 且 `released_at` 为刚才时刻。
-- 若设备仍显示占用：检查心跳/heartbeat 侧是否在续租（ADR-0019 机制），必要时同步查设备在线状态。
-
-## 约束
-
-- 只清 `device_leases` 租约行，**不触碰** `device` 表与任何 Agent 侧文件。
-- 表名单数：`device_leases` 非 `device_leases` 之外的任何复数变体。
+这是生产业务库写操作：先做只读查询，确认没有可用的 PlanRun 正常释放路径，并在当前
+请求明确授权写入后才能执行 UPDATE。完成后必须按文档回查；不得修改 `device` 表或
+Agent 文件。

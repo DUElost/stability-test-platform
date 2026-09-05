@@ -1,6 +1,6 @@
 # 稳定性测试平台 — 文档中心
 
-> **最后更新**：2026-08-29  
+> **最后更新**：2026-09-05
 > 本目录为项目**权威文档**入口。冲突时以**代码与测试**为准，并回写此处。  
 > 根目录 [`README.md`](../README.md) 只保留产品概述与快速入口；细则在本树子文档。
 
@@ -14,6 +14,8 @@
 | 跑起开发环境 | [`development/local-development.md`](./development/local-development.md) |
 | 查环境变量 | [`development/environment-variables.md`](./development/environment-variables.md) |
 | 查测试怎么跑 / 生产机禁区 | [`development/testing.md`](./development/testing.md) |
+| 查依赖、lock 与本地门禁 | [`development/dependencies-and-quality.md`](./development/dependencies-and-quality.md) |
+| 查 PR、CI、Agent Note 与并行 worktree | [`development/repository-workflow.md`](./development/repository-workflow.md) |
 | 理解系统架构 | [`design/00-system-overview.md`](./design/00-system-overview.md) |
 | 查存储角色 / CIFS / NFS / 文件服务器页别称 | [`design/2026-storage-roles-and-aliases.md`](./design/2026-storage-roles-and-aliases.md) |
 | 查设备日志上送时序（ADR-0025） | [`design/2026-adr-0025-log-flow-sequence.md`](./design/2026-adr-0025-log-flow-sequence.md) |
@@ -22,11 +24,13 @@
 | 查后端 / 前端 / Agent | [`design/02`](./design/02-backend.md) · [`03`](./design/03-frontend.md) · [`04`](./design/04-agent.md) |
 | 查数据模型 · 实时与后台 | [`design/05`](./design/05-data-model.md) · [`06`](./design/06-realtime-and-background.md) |
 | 查 Agent 版本门禁与热更新 | [`operations/agent-version-and-hot-update.md`](./operations/agent-version-and-hot-update.md) |
+| 查生产控制面只读诊断边界 | [`operations/production-diagnostics.md`](./operations/production-diagnostics.md) |
 | 查新建专项 / 适配新项目怎么做 | [`operations/new-specialty-onboarding-runbook.md`](./operations/new-specialty-onboarding-runbook.md) |
 | 查产品范围 | [`prd/00-platform-overview.md`](./prd/00-platform-overview.md) |
 | 查架构决策 | [`adr/README.md`](./adr/README.md) |
 | 查上线清单 | [`operations/README.md`](./operations/README.md) |
-| 查架构不变量摘要 | 根目录 [`CLAUDE.md`](../CLAUDE.md) |
+| 查跨模块硬不变量 | 根目录 [`AGENTS.md`](../AGENTS.md) |
+| 查 AI Harness 规则入口与本地配置边界 | [`development/ai/harness-adapters.md`](./development/ai/harness-adapters.md) |
 | 查哪些旧文档可删除 | [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md) |
 | 查设备日志流转审查 / DoD | [`reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md) |
 
@@ -57,8 +61,8 @@ docs/
 | 文件 | 角色 |
 |------|------|
 | [`README.md`](../README.md) | 仓库首页：架构摘要、快速启动、文档指针 |
-| [`AGENTS.md`](../AGENTS.md) | AI/开发者命令速查 + 生产机测试约束摘要 |
-| [`CLAUDE.md`](../CLAUDE.md) | 项目百科 + Changelog；**细节设计以 `docs/design/` 为准** |
+| [`AGENTS.md`](../AGENTS.md) | 最小启动契约：总原则、跨模块硬不变量、安全红线和按需入口 |
+| [`CLAUDE.md`](../CLAUDE.md) | Claude 导入与路由；**状态机与领域细节按需读取** |
 | [`backend/agent/DEPLOY.md`](../backend/agent/DEPLOY.md) | Agent 安装与热更新（运维实操） |
 
 ---
@@ -91,6 +95,8 @@ docs/
 | [`06-realtime-and-background.md`](./design/06-realtime-and-background.md) | SocketIO、APScheduler、SAQ |
 | [`2026-plan-c-storage-and-access.md`](./design/2026-plan-c-storage-and-access.md) | 方案 C 存储与访问 |
 | [`2026-adr-0025-log-flow-sequence.md`](./design/2026-adr-0025-log-flow-sequence.md) | 设备日志流转时序（上送规则=ADR-0025；含给人读 / 给其他 Agent 的两版图） |
+| [`2026-scan-upload-merge-contract.md`](./design/2026-scan-upload-merge-contract.md) | 控制面与 Agent 的 scan/upload/merge 跨进程契约 |
+| [`2026-08-step-stall-detection.md`](./design/2026-08-step-stall-detection.md) | Pipeline 总超时、停滞钟与 PROGRESS 打戳契约 |
 | [`2026-storage-roles-and-aliases.md`](./design/2026-storage-roles-and-aliases.md) | 存储/部署角色与别称（CIFS/NFS=中心存储；文件服务器页≠中心存储） |
 | [`2026-device-log-event-implementation-spec.md`](./design/2026-device-log-event-implementation-spec.md) | DeviceLogEvent 阶段 3 实现规格（ADR-0028 D1–D8） |
 | [`2026-07-plan-execute-page-improvements.md`](./design/2026-07-plan-execute-page-improvements.md) | Plan 执行页：Phase1–6 + §7 已落地；**§8 V2 选机工作台/驾驶舱实现方案** |
@@ -108,12 +114,18 @@ docs/
 |------|------|
 | [`development/environment-variables.md`](./development/environment-variables.md) | env 详表（含超时与版本门禁） |
 | [`development/testing.md`](./development/testing.md) | pytest / vitest / 生产机禁区 |
+| [`development/dependencies-and-quality.md`](./development/dependencies-and-quality.md) | 后端依赖分工、lock 更新、lint 与本地门禁 |
+| [`development/repository-workflow.md`](./development/repository-workflow.md) | Agent Note、并行 worktree、PR/CI 与 FIFO auto-merge |
+| [`development/script-versioning.md`](./development/script-versioning.md) | Agent 脚本版本不可变、参数分层与退役 |
 | [`operations/agent-version-and-hot-update.md`](./operations/agent-version-and-hot-update.md) | 滚动升级与 code revision |
+| [`operations/production-diagnostics.md`](./operations/production-diagnostics.md) | 生产控制面只读诊断、凭据来源与安全边界 |
+| [`operations/device-lease-emergency-release.md`](./operations/device-lease-emergency-release.md) | 设备 ACTIVE 租约紧急释放与回查 |
 | [`operations/adr-0028-prune-local-and-spill-gray.md`](./operations/adr-0028-prune-local-and-spill-gray.md) | #217 PRUNE_LOCAL / HddSpill 单机灰度 |
 | [`operations/mtbf-api.md`](./operations/mtbf-api.md) | MTBF 用例管理接口说明（§1 P0 validate / §1.5 脚本配置通道与 env 退役 / §2 P1 管理面；ADR-0030） |
 | [`operations/README.md`](./operations/README.md) | 运维索引 |
 | [`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md) | 生产最小部署 |
 | [`development/cursor-rules.md`](./development/cursor-rules.md) | Cursor 规则说明：`.cursor/rules/*.mdc` 分层与格式（薄适配层） |
+| [`development/ai/harness-adapters.md`](./development/ai/harness-adapters.md) | Cursor、Claude Code、Codex、OpenCode 等 Harness 的规则入口与本地配置边界 |
 
 ## PRD / 验收索引
 

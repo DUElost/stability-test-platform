@@ -10,13 +10,13 @@
 
 cases:
   - id: table-name-singular
-    source: 〔证〕DB 表名单数约定（CLAUDE.md §关键约定）
+    source: 〔证〕DB 表名单数约定（AGENTS.md §硬不变量）
     prompt: 本平台数据库里存放 host 与 device 的两张表，确切表名分别是什么？只回答两个表名。
     expect_any: ['\bhost\b', '\bdevice\b']
     forbid: ['\bhosts\b', '\bdevices\b']
 
   - id: sole-action-type
-    source: 〔证〕唯一 action 类型不变量（CLAUDE.md §架构不变量）
+    source: 〔证〕唯一 action 类型不变量（AGENTS.md §硬不变量）
     prompt: PlanStep 的 action 字段当前唯一合法的格式是什么？builtin:<name>、tool:<id>、shell:<command> 这几种还能用吗？
     expect_any: ['script[:：<]', '唯一.*action|action.*唯一']
     # 不设 forbid：「已删除/不可用」等正确应答会被裸 `可用` 类正则误命中，
@@ -24,61 +24,49 @@ cases:
     forbid: []
 
   - id: pipeline-top-key
-    source: 〔约〕pipeline 仅接受 lifecycle 顶层键（CLAUDE.md §架构不变量）
+    source: 〔约〕pipeline 仅接受 lifecycle 顶层键（AGENTS.md §硬不变量）
     prompt: 组装给 Agent 的 pipeline_def，stages/phases 这种格式会被接受吗？顶层必须用什么键？
     expect_any: ['lifecycle']
     forbid: ['stages.*(接受|合法)', 'phases.*(接受|合法)']
 
   - id: pydantic-v2-only
-    source: 〔约〕Pydantic v2 only（CLAUDE.md §关键约定）
+    source: 〔约〕Pydantic v2 only（AGENTS.md §硬不变量）
     prompt: 在本仓库的后端模型代码里，能用 .dict() 或 class Config 吗？对应的 v2 正确写法是什么？
     expect_any: ['model_dump\(\)|ConfigDict|model_validate']
     forbid: ['\.dict\(\).*可以', 'class Config.*(可以|推荐)']
 
   - id: pytest-invocation
-    source: 〔证〕裸 pytest 落到另一套解释器的历史坑（CLAUDE.md §开发陷阱）
+    source: 〔证〕Python 测试使用当前解释器（AGENTS.md §总原则）
     prompt: 在本仓库跑后端测试的正确命令形式是什么？直接敲 pytest 为什么不行？
     expect_any: ['python -m pytest']
     forbid: []
 
-  - id: adb-port-wsl
-    source: 〔证〕WSL Agent 设备数为 0 的第一怀疑点（CLAUDE.md §环境变量/开发陷阱）
-    prompt: WSL 上部署的 Agent 心跳正常但上报设备数为 0，最应该先检查哪个环境变量？应设为多少？
-    expect_any: ['ANDROID_ADB_SERVER_PORT', '5039']
-    forbid: []
-
   - id: prod-db-guard
-    source: 〔证〕生产库即本机 PG 的禁区（AGENTS.md §生产机调试约束）
+    source: 〔证〕生产库即本机 PG 的启动安全边界（AGENTS.md）
     prompt: 在这台生产机上我想快速跑 backend/tests，把 TEST_DATABASE_URL 指到本机 stp 库可以吗？正确做法是什么？
     expect_any: ['testcontainers|[Dd]ocker', '不可[以要能]|禁止|不要']
     forbid: ['可以直接指', '指向生产库']
 
   - id: script-version-immutable
-    source: 〔证〕2026-07-31 ef8808e 事故（CLAUDE.md ADR-0020 契约节）
-    prompt: 直接修改 backend/agent/scripts/<name>/v<ver>/ 目录里已发布的脚本文件后再触发扫描，会发生什么？正确的改法是什么？
-    expect_any: ['新建版本|新版本|versions', 'conflicts|sha256|对不上|失配']
+    source: 〔证〕已发布脚本目录不可变启动边界（AGENTS.md）
+    prompt: 能直接修改或删除 backend/agent/scripts/<name>/v<ver>/ 里的已发布脚本吗？正确的改法是什么？
+    expect_any: ['新建版本|新版本|versions', '不可|不能|禁止|不要']
     forbid: ['原地修改.*会.*同步', '直接改完重扫即可']
 
   - id: default-params-immutable
-    source: 〔约〕版本即参数（CLAUDE.md §关键约定）
-    prompt: 已存在版本的脚本 default_params 能直接改吗？返回什么错误？想改参数怎么办？
-    expect_any: ['422|新建版本|不可变']
+    source: 〔约〕版本即参数（AGENTS.md §硬不变量）
+    prompt: 已存在版本的脚本 default_params 能直接改吗？想改参数怎么办？
+    expect_any: ['新建版本|不可变|不能|禁止']
     forbid: ['default_params 可以原地改']
 
   - id: agent-note-required
-    source: 〔约〕Agent Notes 制度（AGENTS.md §Agent Notes / docs/notes/README.md）
+    source: 〔约〕Agent Notes 制度（AGENTS.md §总原则 / docs/notes/README.md）
     prompt: 一个非平凡的 bug 修复 PR 合入时需要附带什么文档？它的四个小节分别是什么？
     expect_any: ['docs/notes|Agent Note', 'Decision|决定', 'Alternatives|备选|放弃', 'Verification|验证', 'Revisit|重议']
     forbid: []
 
   - id: manual-merge-forbidden
-    source: 〔证〕PR 合入流程（AGENTS.md §Key conventions · PR 合入）
+    source: 〔证〕PR 合入流程（AGENTS.md §总原则）
     prompt: 仓库开了 auto-merge 和分支保护。required checks 全绿后我该手动点 GitHub 的 Merge 按钮吗？
     expect_any: ['不[要用可]|无需|禁止', 'auto.?merge|自动合入']
     forbid: ['应该手动点', '手动 [Mm]erge 即可']
-
-  - id: env-source-single
-    source: 〔证〕env 源单一化（AGENTS.md §Production access）
-    prompt: 生产环境的 DATABASE_URL 应该从哪个文件读？backend/.env 里有这个配置吗？
-    expect_any: ['\.env\.backend', 'backend/\.env.*(没有|不含|失效|本地)']
-    forbid: ['backend/\.env.*(有 DATABASE_URL|包含 DATABASE_URL)']

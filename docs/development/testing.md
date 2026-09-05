@@ -1,7 +1,7 @@
 # 测试指南
 
-> **最后更新**：2026-07-15  
-> 本文即测试命令的权威位置。根目录 [`AGENTS.md`](../../AGENTS.md) §Test quirks 补充 fixture / 超时等非命令类陷阱。
+> **最后更新**：2026-09-05
+> 本文是测试命令、隔离数据库要求、fixture 陷阱和已知限制的权威位置。
 
 ---
 
@@ -41,6 +41,10 @@ cp .env.test.example .env.test   # 首次
 `ALLOW_SQLITE_TESTS=1` 仅覆盖子集；`test_agent_dual_write.py` 等仍需 PG partial unique index。
 
 用户须在 `docker` 组（`permission denied` 时 `usermod -aG docker` 后重新登录），不要用生产 `DATABASE_URL` 代替测试库。
+
+生产唯一 env 源是仓库根 `.env.backend`；`backend/.env` 是本地开发覆盖，不含生产
+`DATABASE_URL`。数据库代码通过 `backend/core/env_source.resolve_database_url`
+解析配置，没有生产连接串兜底。测试不得读取或复用 `.env.backend`。
 
 ---
 

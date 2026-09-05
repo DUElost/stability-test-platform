@@ -11,3 +11,4 @@ def test_gitignore_excludes_local_patch_artifacts_and_reference_monolith():
     assert "patches/" in text
     assert "MonkeyAEEinfo_260523.py" in text
     assert "!.codex/hooks.json" in text
+    assert "**/.claude/plan/" in text

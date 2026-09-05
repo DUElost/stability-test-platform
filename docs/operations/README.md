@@ -11,6 +11,8 @@
 | [`preprod-drill-runbook.md`](../preprod-drill-runbook.md) | 预发布逐条验收 |
 | [`acceptance/00-platform-smoke.md`](../acceptance/00-platform-smoke.md) | 验收 ID 与测试映射 |
 | [`new-specialty-onboarding-runbook.md`](./new-specialty-onboarding-runbook.md) | 新建专项 / 适配新项目：项目登记 → 脚本入库 → 建 Plan → 试运行 → 上线检查单（G21） |
+| [`production-diagnostics.md`](./production-diagnostics.md) | 生产控制面只读诊断、凭据来源与安全边界 |
+| [`device-lease-emergency-release.md`](./device-lease-emergency-release.md) | ACTIVE 设备租约紧急释放与回查 |
 
 ---
 

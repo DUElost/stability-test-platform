@@ -51,7 +51,8 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **验收** | [`acceptance/`](./acceptance/) | 可测通过标准 + 测试映射 |
 | **开发** | [`development/`](./development/) | 本地环境、**env 表**、测试约定 |
 | **运维** | [`operations/`](./operations/) + runbook | 部署、Agent 版本、联调、监控 |
-| **不变量摘要** | [`../CLAUDE.md`](../CLAUDE.md) | 架构不变量、关键约定、状态机摘要 |
+| **共享启动契约** | [`../AGENTS.md`](../AGENTS.md) | 总原则、跨模块硬不变量、安全红线与按需入口 |
+| **Claude 入口** | [`../CLAUDE.md`](../CLAUDE.md) | 导入共享契约并路由状态机与领域细节 |
 | **Living 审查** | [`reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md) | 设备日志流转框架 + 缺陷/DoD/落地顺序（v3.0，阶段 0 ✅）；前一版快照 [`reviews/PROJECT_REVIEW_2026-08-09_previous.md`](./reviews/PROJECT_REVIEW_2026-08-09_previous.md) |
 | **Living 审查** | [`reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md`](./reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md) | 多项目并存需求 + 生产数据基准 + 缺口核对 G1–G14 + 落地顺序（ADR-0029 背景分析） |
 | **Living 审查** | [`reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md`](./reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) | MTBF 多用例平台化研究（runtask.xml 实测 + 平台缺口 G1–G5 + 候选形态 A/B/C + 设计草图；[ADR-0030](./adr/ADR-0030-multi-case-suite-management.md) 背景分析，Accepted v1.9） |
@@ -74,7 +75,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **Living 审查** | [`reviews/FRONTEND_UI_REVIEW_2026-08-19.md`](./reviews/FRONTEND_UI_REVIEW_2026-08-19.md) | 前端界面视觉与布局审查（A 轨源码取证 + B 轨目视取证 + 第三方复核轮） |
 | **Living 审查** | [`reviews/FRONTEND_UI_REVIEW_2026-08-27.md`](./reviews/FRONTEND_UI_REVIEW_2026-08-27.md) | 前端各界面全量审查（功能 / UX / a11y / 错误处理；复核轮第三方裁决） |
 | **Living 审查** | [`reviews/FRONTEND_ARCHITECTURE_REVIEW_AND_ROADMAP_2026-09-01.md`](./reviews/FRONTEND_ARCHITECTURE_REVIEW_AND_ROADMAP_2026-09-01.md) | 前端架构全面只读审查与未来演进规划（健康基准/分层架构/设计令牌/通信与同步/主工作台剖析/四维演进路线） |
-| **Living 审查** | [`reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md`](./reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md) | 治理面常驻上下文瘦身评估（只读盘点；A 级已执行 PR #457、C 级已登记） |
+| **历史审查** | [`reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md`](./reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md) | 治理面常驻上下文首轮评估；其常驻细节保留裁决已由 2026-09-05 Harness 基线整理取代 |
 | **Living 审查** | [`reviews/PLATFORM_HEALTH_REVIEW_2026-09-03.md`](./reviews/PLATFORM_HEALTH_REVIEW_2026-09-03.md) | 平台全面只读健康审查报告（核心执行健康；梳理 3 个 A 级实缺陷与 ADR-0033 在途核验；登记下一阶段 6 维风险台账） |
 | **实现规格** | [`reviews/IMPLEMENTATION_SPEC_PROMPT.md`](./reviews/IMPLEMENTATION_SPEC_PROMPT.md) | 阶段 3 重构实现规格——Agent 工作提示词（产出 device-log-event implementation spec） |
 | **设计** | [`design/2026-08-27-platform-ai-assistant.md`](./design/2026-08-27-platform-ai-assistant.md) | 平台 AI 助手设计（组件职责/轮次时序/动作状态机/权限隔离矩阵/安全边界/部署观测；ADR-0031 配套） |

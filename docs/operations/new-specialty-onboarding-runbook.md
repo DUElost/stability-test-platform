@@ -183,7 +183,7 @@ GET /api/v1/plan-runs/<run_id>/summary    # 完结后的风险评级摘要
 | dispatch 报 stall/capability 相关错误 | 脚本 capabilities.json 是否声明 progress_stamps |
 | init 卡住超时 | `barrier_timeout_seconds` 预算是否盖得住同 host 的 init 落差 |
 | 步骤反复被判卡死杀掉 | `stall_seconds` 是否短于脚本最长静默段（PROGRESS 戳间隔） |
-| run 报 SUCCESS 但没报表 | dedup 链日志按 AGENTS.md「scan/upload/merge」节排查 |
+| run 报 SUCCESS 但没报表 | 按 [`2026-scan-upload-merge-contract.md`](../design/2026-scan-upload-merge-contract.md) 排查 |
 
 试运行通过标准（建议）：一条完整 init→patrol→teardown 周期无 FAILED；
 watcher 信号正常上送（`/plan-runs/{id}/events` 有增量）；终态报告与 summary 可打开。

@@ -1,14 +1,14 @@
 # Stability Test Platform — 稳定性测试管理平台
 
-**版本**：1.0 · **文档更新**：2026-07-17
+**版本**：1.0 · **文档更新**：2026-09-05
 
 中心化 Android 设备稳定性测试管理平台：Linux-first 控制平面（FastAPI + React）编排执行，Linux Agent 经 ADB 驱动设备跑 Plan；支持实时监控、Watcher/AEE 采集、去重归档与通知。
 
 | 入口 | 说明 |
 |------|------|
 | [`docs/README.md`](./docs/README.md) | **文档中心**（分层索引） |
-| [`AGENTS.md`](./AGENTS.md) | 开发命令与 AI 约定 |
-| [`CLAUDE.md`](./CLAUDE.md) | 架构不变量、关键约定、状态机摘要 |
+| [`AGENTS.md`](./AGENTS.md) | 最小 AI/开发启动契约、硬不变量与按需入口 |
+| [`CLAUDE.md`](./CLAUDE.md) | Claude 导入与按需路由 |
 
 ---
 
@@ -90,7 +90,8 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/ -q
 cd frontend && npx vitest run && npx tsc --noEmit
 ```
 
-约束与 CI 映射：[`docs/development/testing.md`](./docs/development/testing.md)、[`AGENTS.md`](./AGENTS.md)。
+约束与 CI 映射：[`docs/development/testing.md`](./docs/development/testing.md)、
+[`docs/development/repository-workflow.md`](./docs/development/repository-workflow.md)。
 
 ---
 

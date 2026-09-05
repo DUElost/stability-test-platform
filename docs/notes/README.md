@@ -12,6 +12,8 @@
 
 - 每个非平凡 PR **至少附带/更新一条 note**（同 PR）；
 - 该主题已有 note 时更新它，不重复建；
+- 新建 note 前必须检索已有 note：部分取代时两边交叉链接并保留仍有效事实；完全取代
+  时在同一 PR 将旧 note 移入 `archived/`、修复入链，且不得把旧决定原地改写成反义；
 - 纯机械改动（typo、格式化、无行为变化的重构）豁免。
 
 ## 布局
@@ -35,6 +37,9 @@ Class: feature | bug-fix | simplification | architecture | process | testing
 ```
 
 标题后必须保留一个空行（markdownlint MD022）。
+
+治理门禁对文件名日期自 `2026-09-05` 起的新 note 校验上述 Status/Class 与目录一致；
+此前存量格式不统一，按 legacy 保留，不为启用门禁批量改写历史。
 
 ## 正文四节
 

@@ -67,7 +67,7 @@ backend/
 | `metrics.py` | `/metrics` | Prometheus |
 | `devices.py` | `/api/v1/devices` | 设备 |
 
-完整路径表见 [`CLAUDE.md`](../../CLAUDE.md) §对外接口。
+完整运行时路径以 FastAPI OpenAPI 与 `backend/api/routes/` 为准。
 
 ---
 

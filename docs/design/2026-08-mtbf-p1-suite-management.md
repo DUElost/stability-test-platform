@@ -158,7 +158,9 @@ python tools/dev/mtbf-cases.py validate --suite MTBF-legacy
 python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 ```
 
-凭据：`--base-url` / `--token`，默认仓库根 `.env.backend` 的 admin 凭据来源约定；**明文不进 log**（AGENTS.md 安全约束）。
+凭据：`--base-url` / `--token`，默认仓库根 `.env.backend` 的 admin 凭据来源约定；
+**明文不进 log**。详见
+[`production-diagnostics.md`](../operations/production-diagnostics.md)。
 
 ## 5. 文档与状态传播（P1c 收尾）
 

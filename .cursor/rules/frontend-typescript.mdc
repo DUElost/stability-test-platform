@@ -6,34 +6,14 @@ alwaysApply: false
 
 # Frontend
 
-## 类型
+修改前端 TypeScript/React 前按需读取：
 
-`frontend/src/utils/api/types.ts` 是权威源，必须与后端 Pydantic schema 同步。
+- `AGENTS.md`：前后端 schema 同步等跨层不变量；
+- `CLAUDE.md`：领域文档路由；
+- `docs/development/testing.md`：前端测试 quirks 与验证命令；
+- `docs/development/repository-workflow.md`：CI 与集成约定；
+- `frontend/package.json`：当前可执行脚本；
+- `docs/design/03-frontend.md`：路由、API client 与页面架构。
 
-API 客户端模块在 `frontend/src/utils/api/`（`planRuns.ts`、`hosts.ts`、`plans.ts` 等）。
-
-## 路由与页面
-
-页面经 `React.lazy()` 加载，路由定义在 `frontend/src/router/index.tsx`。
-
-## 命令
-
-```bash
-cd frontend && npm run dev          # 开发
-cd frontend && npx tsc --noEmit     # 类型检查
-cd frontend && npm run build        # 构建
-cd frontend && npx vitest run       # 测试
-```
-
-验证顺序：agent tests → tsc → build → backend tests（若有 PG）。
-
-## 测试
-
-- Vitest + jsdom；`@/` 别名 → `src/`
-- `PlanRunDetailPage.tsx` 中 WATCHER_SIGNAL 防抖 2s → 断言 refetch 用 `waitFor({ timeout: 4000 })`
-
-## Watcher UI 数据流
-
-`job_log_signal.extra` → watcher-summary → AnomalyDashboard / WatcherSummaryCard
-
-风险评级 S/A/B 来自 `aggregate_risk_summary_from_signals`（见 AGENTS.md）。
+涉及后端 schema、Watcher 或 PlanRun 协议时，同时读取对应后端 schema 与设计文档。
+本规则不复制脚本名、超时值或数据流摘要。

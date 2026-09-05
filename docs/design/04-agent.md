@@ -134,7 +134,7 @@ scripts/<name>/v<version>/<entry>.py|sh|bat
 扫描由**控制面** `POST /scripts/scan` 入库；Agent 通过 `nfs_path` 执行。  
 开发：`STP_SCRIPT_ROOT` + 可选 `STP_SCRIPT_RUNTIME_ROOT`（WSL）。
 
-详见 [`CLAUDE.md`](../../CLAUDE.md) §脚本目录与扫描机制。
+详见 [`script-versioning.md`](../development/script-versioning.md)。
 
 ---
 

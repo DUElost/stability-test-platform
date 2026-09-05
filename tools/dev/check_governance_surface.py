@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """治理面结构检查（synthesis C-G1 的 L0 层）。
 
-治理面 = CLAUDE.md / AGENTS.md / .cursor/rules / AI 门禁 workflow——所有 AI
-会话行为的上游事实源。本脚本只做**确定性结构检查**，不用 LLM：
+治理面 = CLAUDE.md / AGENTS.md / Harness 适配说明 / .cursor/rules /
+AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只做**确定性结构检查**，
+不用 LLM：
 
   S1  CLAUDE.md `@import` 必须独占一行且目标存在
       （事故：写在中文行内静默失效，只能人肉 /context 发现）
-  S2  CLAUDE.md / AGENTS.md / docs/DOC-MAP.md 相对链接目标必须存在
+  S2  根治理文档、文档地图与 Harness 适配说明的相对链接目标必须存在
       （实测发生过 DOC-MAP 断链）
   S3  .cursor/rules/*.mdc frontmatter 三字段齐全，alwaysApply!=true 时 globs 非空
       （坏 frontmatter = 规则静默不加载，与 S1 同故障类）
@@ -14,9 +15,12 @@
       门禁与命令 job 分离）
   S5  required checks 文档↔workflow 互检：ci.yml/pr-agent.yml 定义的 job id
       未在 AGENTS.md 记载，或反之缺 job
-  S6  CLAUDE.md/AGENTS.md 行数信息行（仅输出，不判失败——分层加载是既定取舍）
+  S6  常驻入口行数/字节预算，防止按需细节重新膨胀进启动上下文
   S7  .claude/skills/*/SKILL.md frontmatter：name 与目录一致、description 非空
       （写坏 = skill 对 agent 静默不存在，与 S1/S3 同故障类）
+  S8  CLAUDE.md 只允许 @import 最小 AGENTS.md，不得递归导入文档地图或领域文档
+  S9  根入口只允许固定的启动级章节，领域细节不能新增为二/三级章节
+  S10 2026-09-05 起新增 Agent Note 的 Status/Class 头部与 class 目录一致
 
 用法:
     python tools/dev/check_governance_surface.py --check     # 门禁模式
@@ -72,6 +76,22 @@ def check_imports(text: str, resolve) -> list[str]:
     return issues
 
 
+def check_resident_imports(text: str) -> list[str]:
+    """S8: 常驻 CLAUDE import 只允许最小共享启动契约。"""
+    imports = []
+    in_fence = False
+    for line in text.splitlines():
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if not in_fence and line.strip().startswith("@"):
+            imports.append(line.strip()[1:])
+    allowed = ["AGENTS.md"]
+    if imports != allowed:
+        return [f"S8 CLAUDE.md: @import 必须且只能是 {allowed!r}，实际 {imports!r}"]
+    return []
+
+
 _MD_LINK = re.compile(r"\]\(([^)\s]+)\)")
 
 
@@ -122,6 +142,76 @@ def check_mdc_frontmatter(filename: str, text: str) -> list[str]:
         issues.append(f"S3 {filename}: alwaysApply 必须是 true/false，得 {aa!r}")
     elif aa == "false" and not fields.get("globs"):
         issues.append(f"S3 {filename}: alwaysApply:false 但 globs 为空 → 规则永不激活")
+    return issues
+
+
+RESIDENT_BUDGETS = {
+    "AGENTS.md": (80, 8000),
+    "CLAUDE.md": (60, 6000),
+    ".cursor/rules/00-project-context.mdc": (30, 3000),
+    ".cursor/rules/backend-python.mdc": (30, 3000),
+    ".cursor/rules/frontend-typescript.mdc": (30, 3000),
+    ".cursor/rules/agent-runtime.mdc": (30, 3000),
+    ".cursor/rules/agent-scripts.mdc": (30, 3000),
+    "docs/development/ai/harness-adapters.md": (100, 10000),
+    "backend/agent/CLAUDE.md": (40, 5000),
+    "backend/agent/aee/CLAUDE.md": (100, 10000),
+}
+
+
+def check_resident_budget(label: str, text: str) -> list[str]:
+    """S6: 根入口或 Harness 适配超过预算即阻塞。"""
+    max_lines, max_bytes = RESIDENT_BUDGETS[label]
+    lines = len(text.splitlines())
+    size = len(text.encode("utf-8"))
+    issues = []
+    if lines > max_lines:
+        issues.append(f"S6 {label}: {lines} 行超过预算 {max_lines}")
+    if size > max_bytes:
+        issues.append(f"S6 {label}: {size} bytes 超过预算 {max_bytes}")
+    return issues
+
+
+ROOT_HEADING_ALLOWLIST = {
+    "AGENTS.md": {"总原则", "硬不变量", "开始任务时", "按需入口", "提交前"},
+    "CLAUDE.md": {"按需读取"},
+}
+
+
+def check_root_headings(label: str, text: str) -> list[str]:
+    """S9: 根入口只保留启动级固定章节。"""
+    issues = []
+    allowed = ROOT_HEADING_ALLOWLIST[label]
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if line.startswith("### "):
+            issues.append(f"S9 {label} line {lineno}: 禁止三级章节，细节应迁往按需文档")
+        elif line.startswith("## "):
+            heading = line[3:].strip()
+            if heading not in allowed:
+                issues.append(f"S9 {label} line {lineno}: 非启动章节 {heading!r}")
+    return issues
+
+
+NOTE_CLASSES = {"feature", "bug-fix", "simplification", "architecture", "process", "testing"}
+NOTE_HEADER_CUTOFF = "2026-09-05"
+
+
+def check_agent_note_header(label: str, text: str) -> list[str]:
+    """S10: 新格式启用后的 Agent Note 头部必须与 class 目录一致。"""
+    filename = os.path.basename(label)
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})-.+\.md$", filename)
+    if not match or match.group(1) < NOTE_HEADER_CUTOFF:
+        return []
+    class_name = os.path.basename(os.path.dirname(label))
+    issues = []
+    lines = text.splitlines()
+    if len(lines) < 4 or not lines[0].startswith("# ") or lines[1] != "":
+        issues.append(f"S10 {label}: 头两行必须是标题和空行")
+        return issues
+    if lines[2] not in {"Status: proposed", "Status: implemented", "Status: rejected"}:
+        issues.append(f"S10 {label}: 非法或缺失 Status 头")
+    if class_name not in NOTE_CLASSES or lines[3] != f"Class: {class_name}":
+        issues.append(f"S10 {label}: Class 必须与目录 {class_name!r} 一致")
     return issues
 
 
@@ -252,6 +342,7 @@ def run_check() -> int:
     claude_md = open(claude_md_path, encoding="utf-8").read()
     resolve_from_root = lambda rel: os.path.join(ROOT, rel)  # noqa: E731
     issues += check_imports(claude_md, resolve_from_root)
+    issues += check_resident_imports(claude_md)
 
     link_files = [
         ("CLAUDE.md", ROOT),
@@ -259,6 +350,43 @@ def run_check() -> int:
         ("docs/DOC-MAP.md", os.path.join(ROOT, "docs")),
         # B1 迁移后三个描述型索引表住进 hub——同样纳入断链防护
         ("docs/README.md", os.path.join(ROOT, "docs")),
+        (
+            "docs/development/cursor-rules.md",
+            os.path.join(ROOT, "docs", "development"),
+        ),
+        (
+            "docs/development/ai/harness-adapters.md",
+            os.path.join(ROOT, "docs", "development", "ai"),
+        ),
+        (
+            "docs/development/dependencies-and-quality.md",
+            os.path.join(ROOT, "docs", "development"),
+        ),
+        (
+            "docs/development/repository-workflow.md",
+            os.path.join(ROOT, "docs", "development"),
+        ),
+        (
+            "docs/development/script-versioning.md",
+            os.path.join(ROOT, "docs", "development"),
+        ),
+        (
+            "docs/design/2026-scan-upload-merge-contract.md",
+            os.path.join(ROOT, "docs", "design"),
+        ),
+        (
+            "docs/operations/production-diagnostics.md",
+            os.path.join(ROOT, "docs", "operations"),
+        ),
+        (
+            "docs/operations/device-lease-emergency-release.md",
+            os.path.join(ROOT, "docs", "operations"),
+        ),
+        ("backend/agent/CLAUDE.md", os.path.join(ROOT, "backend", "agent")),
+        (
+            "backend/agent/aee/CLAUDE.md",
+            os.path.join(ROOT, "backend", "agent", "aee"),
+        ),
     ]
     for rel, basedir in link_files:
         text = open(os.path.join(ROOT, rel), encoding="utf-8").read()
@@ -303,17 +431,31 @@ def run_check() -> int:
         gates_src = open(gates_src_path, encoding="utf-8").read()
         issues += check_gate_ci_mapping(gates_src, workflows)
 
-    # S6: 仅信息输出
-    for rel in ("CLAUDE.md", "AGENTS.md"):
-        n = len(open(os.path.join(ROOT, rel), encoding="utf-8").read().splitlines())
-        print(f"[info] S6 {rel}: {n} 行（体量趋势观测，不判失败）")
+    for rel in RESIDENT_BUDGETS:
+        text = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        issues += check_resident_budget(rel, text)
+    for rel in ROOT_HEADING_ALLOWLIST:
+        text = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        issues += check_root_headings(rel, text)
+
+    notes_root = os.path.join(ROOT, "docs", "notes")
+    for class_name in sorted(NOTE_CLASSES):
+        class_dir = os.path.join(notes_root, class_name)
+        for filename in sorted(os.listdir(class_dir)):
+            if filename == "README.md" or not filename.endswith(".md"):
+                continue
+            path = os.path.join(class_dir, filename)
+            label = os.path.relpath(path, ROOT)
+            issues += check_agent_note_header(
+                label, open(path, encoding="utf-8").read()
+            )
 
     for issue in issues:
         print(f"[BLOCK] {issue}")
     if issues:
         print(f"\n治理面结构检查失败：{len(issues)} 项", file=sys.stderr)
         return 1
-    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S5、S7、S5x）")
+    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S10、S5x）")
     return 0
 
 
@@ -333,6 +475,12 @@ def run_self_test() -> int:
     expect("S1 好样例", lambda: check_imports(good_doc, lambda r: os.path.join(ROOT, r)), False)
     expect("S1 中文行内 import", lambda: check_imports(bad_inline, lambda r: "/nonexistent"), True)
     expect("S1 目标缺失", lambda: check_imports(bad_missing, lambda r: "/nonexistent"), True)
+    expect("S8 最小 import", lambda: check_resident_imports("# T\n\n@AGENTS.md\n"), False)
+    expect(
+        "S8 递归导入文档地图",
+        lambda: check_resident_imports("# T\n\n@AGENTS.md\n\n@docs/DOC-MAP.md\n"),
+        True,
+    )
 
     expect("S2 好 (目指本文件所在目录)", lambda: check_links("见 [本文件](check_governance_surface.py)", os.path.dirname(os.path.abspath(__file__)), "t"), False)
     expect("S2 断链", lambda: check_links("见 [无](no-such-file.md)", os.path.dirname(os.path.abspath(__file__)), "t"), True)
@@ -343,6 +491,50 @@ def run_self_test() -> int:
     expect("S3 合法 mdc", lambda: check_mdc_frontmatter("ok.mdc", good_mdc), False)
     expect("S3 globs 空", lambda: check_mdc_frontmatter("e.mdc", empty_glob_mdc), True)
     expect("S3 缺 alwaysApply", lambda: check_mdc_frontmatter("m.mdc", no_aa_mdc), True)
+
+    expect(
+        "S6 预算内",
+        lambda: check_resident_budget("AGENTS.md", "# T\n"),
+        False,
+    )
+    expect(
+        "S6 超行数",
+        lambda: check_resident_budget("AGENTS.md", "x\n" * 81),
+        True,
+    )
+    expect(
+        "S9 根章节白名单",
+        lambda: check_root_headings("AGENTS.md", "# T\n\n## 总原则\n"),
+        False,
+    )
+    expect(
+        "S9 领域章节",
+        lambda: check_root_headings("AGENTS.md", "# T\n\n## 数据库迁移\n"),
+        True,
+    )
+    good_note = "# T\n\nStatus: implemented\nClass: process\n"
+    bad_note = "# T\n\nStatus: accepted\nClass: feature\n"
+    expect(
+        "S10 新 note 头部合法",
+        lambda: check_agent_note_header(
+            "docs/notes/process/2026-09-05-example.md", good_note
+        ),
+        False,
+    )
+    expect(
+        "S10 Status/Class 错配",
+        lambda: check_agent_note_header(
+            "docs/notes/process/2026-09-05-example.md", bad_note
+        ),
+        True,
+    )
+    expect(
+        "S10 legacy 不追溯",
+        lambda: check_agent_note_header(
+            "docs/notes/process/2026-09-04-example.md", bad_note
+        ),
+        False,
+    )
 
     full_pr_agent = (
         "jobs:\n  pr-agent-review:\n"
@@ -405,7 +597,7 @@ def run_self_test() -> int:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         print(f"\n自测失败 {len(failures)} 项——检查器自身不可信，禁止用于拦截", file=sys.stderr)
         return 1
-    print("[OK] self-test 通过：7 条规则各含红/绿样例双向验证")
+    print("[OK] self-test 通过：11 条规则各含红/绿样例双向验证")
     return 0
 
 

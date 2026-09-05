@@ -1,285 +1,63 @@
 # AGENTS.md
 
-## Dev commands
+本文件是所有 AI Coding Harness 的最小启动契约。只保留对任何 Requirement 都成立的
+原则；命令、实现和运维细节必须按任务从链接文档读取。
 
-命令速查已迁出本文，按用途分散在：
+## 总原则
 
-| 你要找 | 看这里 |
+- 先检查代码、测试和当前文档再修改；冲突时以代码与测试为准，并同步权威文档。
+- 只改当前 Requirement 必需内容，不顺手重构，不把目录分片当作所有权。
+- 不读取、打印、提交或复制当前任务不需要的凭据、token、私钥、连接串与主机清单。
+- 本机可能同时是生产控制面和生产数据库宿主；测试必须使用隔离环境，禁止在生产库
+  试跑测试、迁移或破坏性诊断。
+- 已发布 `backend/agent/scripts/<name>/v<version>/` 不可原地修改或删除；新行为使用
+  新版本。
+- Python 工具和测试使用当前解释器的 `python -m ...` 形式，避免命中另一套环境。
+- 非平凡变更必须附 Agent Note；方向级决策使用 ADR。
+- `main` 只通过 PR 合入；不要直推或手动 Merge，现有 FIFO auto-merge 负责串行集成。
+
+## 硬不变量
+
+- ASGI 入口是 `socketio.ASGIApp(sio_server, fastapi_app)`；不要拆成相互覆盖的挂载。
+- Pipeline 顶层只接受 `lifecycle`，action 唯一格式是 `script:<name>`。
+- Plan 不存 lifecycle；dispatcher 从 PlanStep 与 Plan 时间字段组装
+  `pipeline_def.lifecycle`。
+- Redis 只承载队列与瞬时跨进程通信，不作为业务事实存储。
+- 生产环境必须满足 secure cookie、受限 SameSite 和 CSRF guard。
+- Pydantic 只使用 v2 API；数据库业务表名使用单数。
+- 已存在脚本版本的 `default_params` 不可原地修改；参数变化通过新版本表达。
+- 前端 API 类型以 `frontend/src/utils/api/types.ts` 为入口，并与后端 schema 同步。
+
+## 开始任务时
+
+1. 从 [`docs/DOC-MAP.md`](docs/DOC-MAP.md) 和下表定位当前 Requirement 的权威文档；
+2. 检查目标代码、测试和相邻目录内的 scoped `CLAUDE.md`；
+3. 查看其他 worktree 的实际 diff，避免同时修改同一批文件；
+4. 共享元文件（本文件、`CLAUDE.md`、Harness rules）同一时间只由一个 Execution 修改。
+
+当前并行约定见
+[`repository-workflow.md`](docs/development/repository-workflow.md)；改变现行执行语义前
+必须先由 ADR 正式裁决。
+
+## 按需入口
+
+| 任务 | 权威入口 |
 |---|---|
-| 后端 / 前端 / Agent 启动、迁移 | [`docs/development/local-development.md`](docs/development/local-development.md) |
-| 测试（含 `./scripts/run_pytest.sh`、DB 前置、`python -m pytest` 的坑） | [`docs/development/testing.md`](docs/development/testing.md) |
-| Lint 实际调用参数 | `.github/workflows/ci.yml` §lint（`ruff check backend/ tools/ scripts/`）；规则取向见 `ruff.toml` 抬头注释 |
-| 前端 script 名 | `frontend/package.json` |
-| 本地门禁矩阵（CI 调用后续接入） | `python scripts/run_gates.py check:quick\|pr\|full`（清单 `--list`） |
-
-本文只保留**推导不出来**的部分：依赖三件套分工、lint 现状与取舍、空行注入污染、生产机调试约束、Test quirks。
-
-**依赖清单**（后端四份，两对 source→lock）：
-
-| 文件 | 内容 | 谁用 |
-|------|------|------|
-| `backend/requirements.txt` | 仅运行时 | Dockerfile.backend（生产镜像） |
-| `backend/requirements.lock` | 上一份的全量精确版本 + hash | 生产镜像 `pip install --require-hashes` |
-| `backend/requirements-dev.txt` | `-r requirements.txt` + pytest/testcontainers/ruff/pytest-cov | 本地开发 |
-| `backend/requirements-dev.lock` | 上一份的全量精确版本 + hash | CI 各 job `pip install --require-hashes` |
-
-本地装开发环境用 `pip install -r backend/requirements-dev.txt`（追新）。
-**CI 走 dev.lock 的锁定版本**，两者装的可能是不同版本 —— 这是有意的取舍：
-CI 要可复现（否则上游一发新版，无关 PR 就会莫名变红），本地要能追新。
-
-方向**通常**是安全的：刚装过或刚升过级时，本地拿到区间内最新版，本地
-工具链 ≥ CI，本地只会更严不会更松。
-
-但**这不是保证**：环境放久了不升级就会反过来。实测本机 venv 曾长期停在
-ruff 0.16.2（区间 `>=0.16.2,<1.0` 的下界），而 CI 锁的是 0.16.5 —— 本地比
-CI 松，「本地全绿、推上去才红」照样会发生。所以要排查这类不一致、或想让
-本地与 CI 逐个版本对齐，直接装 lock：
-
-```bash
-pip install --require-hashes -r backend/requirements-dev.lock
-```
-
-改了 `requirements.txt` **或** `requirements-dev.txt` 后**必须重新生成对应
-lock**，命令见各 lock 文件抬头（须在 py3.11 下生成，CI 与镜像都是 3.11）。
-
-**Dependabot 的 PR 会自动补两份 lock**（`regenerate-locks.yml`）：它只改
-manifest 不改 lock，所以由 workflow 用 `scripts/ci/regenerate-lock.sh` 重新
-生成 + `--stamp` + commit 回 PR 分支，锁变更随 PR 一起进 CI，不再等到 main
-变红才发现。
-
-该脚本默认**沿用已有 pin**（uv/pip-tools 同行为），所以 Dependabot 改一个包
-就只动那一个包。要「把区间内所有包刷到最新」得显式加 `--upgrade` —— 那是有
-意的对齐操作，不是日常重生成该用的。
-
-两份 lock 的同步由 `tests/test_requirements_lock.py` 与
-`tests/test_requirements_dev_lock.py` 守住 —— 前者还额外断言测试依赖不得
-混入生产 lock。测试/lint 依赖不要加进 `requirements.txt`——生产镜像带着
-pytest 既浪费体积也是无谓的攻击面。
-
-**Lint**：ruff 与 ESLint 均为阻塞门禁（`--max-warnings 0`），`continue-on-error`
-已全部摘除；ruff 未开 `UP`(pyupgrade) 族的取舍与清库历史见
-`docs/notes/process/2026-08-14-lint-ruff-eslint-onboarding.md`。
-
-**空行注入污染**：编辑器插件会逐行插空行，一次污染后每次 diff 都虚胖一倍。
-检测/清理：`python tools/dev/collapse-blank-pollution.py [--check] <file.py>`
-（先按文件整体空行率判定是否被污染，只动空行，并以 AST 比对保证语义不变）。
-CI 有阻塞式门禁；本地钩子需一次性启用：`git config core.hooksPath .githooks`。
-事故与三重防线设计见 `docs/notes/bug-fix/2026-08-14-blank-line-pollution.md`。
-
-**本地启动**：根目录 Windows/WSL 启动脚本已移除；本地开发统一走
-`docs/development/local-development.md`（Compose 或手动命令）。后端手动启动
-默认不带 `--reload`（real device safety），显式需要热重载时再加。
-
-**Verification order**: agent tests → tsc → build → (backend tests if PG available).
-
-## Agent Notes
-
-每个非平凡变更必须随 PR 附带/更新一条 Agent Note
-（`docs/notes/{feature|bug-fix|simplification|architecture|process|testing}/yyyy-mm-dd-主题.md`），
-记录「决定了什么、放弃的备选、如何验证、何时重议」。纯机械改动豁免；
-方向级决策仍走 `docs/adr/`。模板与判定见 `docs/notes/README.md`。
-
-## 多 Agent 并行开发
-
-冲突靠**避免**，不靠**解决**。开工前跑派生视图看各 worktree 正在动哪些顶层目录
-（无需维护，必然准确；对 merge-base 取差异，未提交的也算）：
-
-```bash
-for w in $(git worktree list --porcelain | awk '/^worktree /{print $2}'); do
-  printf '%-46s -> ' "${w##*/}"
-  git -C "$w" diff --name-only "$(git -C "$w" merge-base origin/main HEAD)" | cut -d/ -f1 | sort -u | paste -sd, -
-  echo
-done
-```
-
-- **分片只是冲突规避手段，不是职责边界** —— 跨片任务照做，不限制单个 agent 能改什么；
-  只守一条：同一时刻别让两个 agent 改同一批文件。
-- **唯一硬规则：元文件串行化** —— 并行 agent 不要顺手改 `AGENTS.md` / `CLAUDE.md`。
-  它们不在任何分片内，横跨全部代码片；两处编辑可能各自成立、合起来语义矛盾，
-  靠合并解决不可靠。而改动频率低、影响面极大，串行成本近乎为零。需要改就记进
-  PR 描述或 issue，由人或专门的 docs agent 在独立 PR 里统一改（auto-merge 会串行化）。
-- **并发上限 ≈ 2–3** —— 瓶颈是你的审阅吞吐（N 个 agent = N 份 PR 要审），不是
-  agent 互相阻塞：CI ~2 分钟出结果 + FIFO auto-merge 已把 agent 侧阻塞降到零。
-  任务排队，别为 N=2 引入协同机制（手写 WIP 公告、subagent/team 互发消息等）。
-
-## 生产机调试约束
-
-部分部署机上 **本机 PostgreSQL 即生产库**（生产 `DATABASE_URL` 在仓库根 `.env.backend`，指向 `stp`），而 **Docker testcontainers 仅用于隔离测试**。在生产机上改代码时务必遵守：
-
-| 场景 | 做法 |
-|------|------|
-| 日常改码验证 | 优先 `pytest backend/agent/tests/`（不连 PG，~30s） |
-| 必须跑 `backend/tests/` | 使用 **Docker testcontainers**（`conftest.py` 自动起临时 `postgres:16` 容器），**不要**把 `TEST_DATABASE_URL` 指到 `stp_dev`（docker-compose 开发栈容器库名，本机 PG 无此库）或任何生产库名 |
-| 迁移试验 | 禁止对生产库执行 `alembic upgrade` 试跑；在开发机/CI 或容器内验证 |
-| 手工 API 冒烟 | 可连生产控制面，但避免破坏性写操作 |
-
-> **env 源单一化（2026-08-01）**：生产唯一 env 源是仓库根 `.env.backend`。
-> `backend/main.py` 与 `backend/alembic/env.py` 都以它为准（ambient 环境变量仍最优先）；
-> `backend/.env` 降级为纯本地开发覆盖，已移除其中失效且指向 `stp_dev` 的 `DATABASE_URL`。
-> Alembic 与 `core/database.py` **都不再有兜底默认** —— 此前那个默认值是
-> `stp:password@localhost:5432/stp`，直接点名生产库，只靠密码错才没连上。
-> 现在统一走 `backend/core/env_source.resolve_database_url`：解析不到就
-> RuntimeError；alembic 连接前还把目标（已脱敏）打到 stderr。
-
-**禁止示例**（会在生产数据上建表/清库/跑用例）：
-
-```bash
-# ❌ 切勿在生产机这样跑后端测试（stp_dev 是 docker-compose 容器库名，本机 PG 无此库）
-export TEST_DATABASE_URL=postgresql+psycopg://...@127.0.0.1:5432/stp_dev
-pytest backend/tests/
-```
-
-**推荐示例**（隔离 PG，与 CI 一致）：
-
-```bash
-# 用户须在 docker 组（一次性：sudo usermod -aG docker $USER && newgrp docker）
-unset TEST_DATABASE_URL   # 让 conftest 走 testcontainers
-JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
-```
-
-- 未设置 `TEST_DATABASE_URL` 时，`backend/tests/conftest.py` 通过 Docker 拉起**独立**测试库，测完销毁。
-- 若 `docker ps` 报 `permission denied`，将当前用户加入 `docker` 组后**重新登录**（或 `newgrp docker`），不要用生产 `DATABASE_URL` 代替。
-- `ALLOW_SQLITE_TESTS=1` 仅适合少量用例；`test_agent_dual_write.py` 等仍需 PostgreSQL partial unique index，不能替代完整 backend 套件。
-
-## Test quirks
-
-- Backend pytest needs `TEST_DATABASE_URL` (PostgreSQL). Set `ALLOW_SQLITE_TESTS=1` for local SQLite (no PG required, but `test_agent_dual_write.py` skips on SQLite — needs PG partial unique index).
-- `os.environ["TESTING"] = "1"` is set in `backend/tests/conftest.py` — this disables Redis/SAQ/APScheduler startup in lifespan.
-- Backend full-suite can timeout locally due to session-scoped engine fixture. Run single files: `pytest backend/tests/api/test_dedup_scan_endpoints.py -x`.
-- Agent tests (`backend/agent/tests/`) are self-contained — no DB/Redis, fast (~30s for 600 tests). Control-plane tests that need DB go in `backend/tests/`, not `backend/agent/tests/`.
-- Frontend tests use vitest + jsdom, `@/` path alias maps to `src/`.
-- WATCHER_SIGNAL invalidation is debounced 2s in `PlanRunDetailPage.tsx` — tests asserting refetch need `waitFor({ timeout: 4000 })`.
-
-## scan/upload/merge 跨进程契约
-
-以下规则的实现方在**控制面**，不在 `backend/agent/`，所以留在本文（始终加载）：
-
-- **Control-plane merge**（`backend/services/dedup_scan.py:run_merge_sync` / `build_merge_argv`）：跑在 backend、读 NFS `dedup/`。argv **不是固定的**：
-  - 先用 `scan_tool_supports_merge_files_list()` 跑一次 `start_log_scan.py -h` 探测能力（结果进程内缓存）。支持则写临时清单文件走 `-merge_files_list {listfile}`；
-  - 工具不支持（过旧 / 脚本缺失 / 探测失败）→ 直接 `RuntimeError` 配置错误，要求升级扫描工具（#291 已删 `-merge_files` 回退路径，不存在 argv 长度上限问题）。
-  - `-side` 由 `STP_DEDUP_SCAN_TAG` 决定：tag 含 `factory`（大小写不敏感）→ `-side factory`，否则 `-side shanghai`（默认）。
-- **SAQ 链**（`backend/tasks/saq_tasks.py:scan_task`）：`scan_task` → `upload_task` → `merge_task`（`extract_task` 由 merge 链式触发）。`upload_task` 是控制面**筛选者**：按 scan xls 引用把 `LOCAL` 标记为 `UPLOAD_PENDING`（长期保留，只做 DB 标记）；Agent 侧 **EventUploader 是唯一执行者**（30s 轮询拉取 `UPLOAD_PENDING` → copytree → `REMOTE`，含重试/校验/PRUNE/HddSpill force）。#287 后 CONTINUOUS 全量逃生阀已删除，过滤模型是唯一路径。`scan_task` 轮询 NFS 上各 host 的产物**最多 300s**，等齐即提前跳出，等不齐也照样 enqueue 后继 —— 不是「齐了才 enqueue」。这是有意的：为一台慢/坏 host 扣住整轮，等于把「部分报表」换成「零报表」，而零报表正是这条链路要消灭的形态。缺口靠日志与 `PlanRun.run_context.archive` 显性化，不靠拦住后继：
-  - 完备性由 `dedup_scan.count_hosts_with_scan_artifacts(run_id, triggered, since=...)` 判定，三个维度都必须收窄：按 **host 去重**而非产物文件数（每台 host 上送 2 个 `*_org*.xls`，拿文件数跟 host 数比会让「一台上送完毕」冒充「全部齐了」）；**限定在本轮 triggered 集合内**（增量扫描复用同一 `plan_run_id`，上轮别的 host 的旧产物会顶替本轮触发 host 的名额）；且**限定在 `since` 水位线之后**（同一台 host 上一轮留下的产物会在本轮首检就计数，合并过期报告）。`since` 取下发 `scan_now` 之前的时刻。三种误判的后果相同：慢的 host 被漏出合并，或合并的是过期报告。
-  - 零产物记 `saq_scan_no_artifacts`（ERROR），部分产物记 `saq_scan_partial_artifacts`（WARNING）；两者都写 `run_context.archive`（`hosts_triggered` / `hosts_with_artifacts` / `scan_artifacts_registered`）。否则 Agent 侧扫描失败只有本地一条 WARNING，PlanRun 照报 SUCCESS 却没有任何报表。
-- **hot-update 的 env 同步分级**（`backend/services/agent_env_sync.py`）：控制面自己也读的键**不能**原样下发。控制面 scan 工具读 `STP_BACKEND_DEDUP_SCAN_*`（#295/#518 后与 Agent 键名分离，旧无前缀键回落已删），Agent 的无前缀 `STP_DEDUP_SCAN_*` 与 UNISOC 归档工具链 `STP_UNISOC_*`（ADR-0032 D3）分别经 `STP_AGENT_DEDUP_SCAN_*` / `STP_AGENT_UNISOC_*` 源键映射下发；Agent 的 `STP_NFS_ROOT` 由 `STP_AEE_NFS_ROOT` 镜像（旧脚本 env），不下发控制面本机 `STP_NFS_ROOT`。`_FLEET_ENV_KEYS` 只放两边同值的键（含 `STP_DEVICE_LOG_EVENT_ENABLED`，#218；#287 后为设备日志单一开关，默认开）。推送后远端会校验 `AGENT_PATH_ENV_KEYS` 的值在 Agent 上确实存在，缺失项经 `env_paths_missing` 回传并记 ERROR。hot-update 远端脚本**先合并 `.env` 再 restart**；勿在 hot-update 未返回前抢 `reload_config`。
-- **reload_config**（路由 `backend/api/routes/dedup.py` 的 `POST /api/v1/plan-runs/hosts/{host_id}/reload-config`）：经 `emit_agent_control` 下发 SocketIO `reload_config` 命令，让 Agent 重读安装目录 `.env` 并热刷新运行时配置，无需重启进程。Agent 侧实际刷新的三样见 `backend/agent/CLAUDE.md`。
-- **风险评级**（`backend/services/log_observation.py:aggregate_risk_summary`）：DLE 权威计数 + 未链接 `job_log_signal` 补充；按 `_RISK_RATING_RULES` 定级（规则表在 `report_service.py`）。观测 vs 归档消费方矩阵见 [`docs/design/2026-adr-0025-log-flow-sequence.md` §5](docs/design/2026-adr-0025-log-flow-sequence.md) 与 Agent Note [`docs/notes/architecture/2026-08-29-log-observation-authority.md`](docs/notes/architecture/2026-08-29-log-observation-authority.md)。
-- **Signal↔DLE 链接健康（#528）**：`GET /plan-runs/{id}/watcher-summary` → `archive.link_stats`（`log_observation.aggregate_signal_link_stats`）。`link_rate` 含「尚未归档」会偏低，**告警只用 `fixable_link_rate`**（`linked / (linked + unlinked_fixable)`，分母为 0 时 1.0）。阈值：**`fixable_link_rate < 1.0` 或 `unlinked_fixable > 0`** → 查 `signal_link_reconcile_done` 日志与 `backend/scheduler/signal_link_reconciler.py`；`not_yet_archived` 高属归档及时性而非链接故障。口径见 [`docs/notes/feature/2026-08-30-signal-link-stats-three-way-split.md`](docs/notes/feature/2026-08-30-signal-link-stats-three-way-split.md)。
-- **终态 DLE 视图（#529）**：`GET /plan-runs/{id}/log-events`；PlanRun 详情页终态区块 `LogEventsCard`（路径优先 `remote_path`）。RUNNING 仍读 `watcher-summary` / `job_log_signal`。
-
-| 级别 | 触发条件 |
-|------|---------|
-| **S**（致命） | SWT / Fatal NE / Fatal JE / HWT / Kernel (KE) / HW Reboot / HANG — 任 1 次 |
-| **A**（高） | ANR ≥ 10 / JE ≥ 3 / NE ≥ 2 / Java ≥ 3 |
-| **B**（低） | 其余非零 |
-
-**NFS 路径约定**（控制面与 Agent 共用，统一入口见 `backend/agent/aee/paths.py` / `backend/core/storage_root.py`，#172）：
-
-| 对象族 | 布局 |
-|--------|------|
-| JobArtifact 文件（watcher puller 默认落点 + LOCAL promote） | `{root}/jobs/{job_id}/` |
-| 事件目录（EventUploader / DLE 上送，含 HddSpill enqueue） | `{root}/devices/{plan_run_id}/` 或 `{root}/devices/unassigned/{event_id}/` |
-| 扫描报告 / extract 输出 / merge 产物 | `{root}/dedup/{run_id}/`（merge 中心化发布到其 `merge/` 子目录）、`{root}/jira/{run_id}/` |
-
-中心存储根：**只配置 `STP_AEE_NFS_ROOT`**（`STP_AEE_CIFS_ROOT` / `STP_WATCHER_NFS_BASE_DIR` 弃用回落已删除，#289）。`STP_AEE_LOCAL_ROOT` 为按机 L1 路径，hot-update **不**覆盖（#235）。
-
-`job_id IS NULL` 的 orphan `job_log_signal`：不进 PlanRun watcher-summary；admin 清单 `GET /api/v1/log-signals/orphans`。
-
-## Agent 子系统细则（按需加载）
-
-纯 Agent 侧实现，只在改对应目录时加载：
-
-- **AEE 崩溃检测链**（Reconciler / inotifyd 双路径、ZZ_INTERNAL 解析、监测目录）→ `backend/agent/aee/CLAUDE.md`
-  - **平台路由（ADR-0032 D6，supersede #220 单白名单）**：按 `device.platform` 选 Reconciler——MTK/UNKNOWN → AEE Reconciler，UNISOC → uniview Reconciler（真实现），QCOM → 跳过；`STP_WATCHER_AEE_RECONCILE_PLATFORMS` 白名单键已删除
-- **ScanRunner / UploadManager**（`start_log_scan.py` 的非显然参数、自动发现规则、`reload_config`）→ `backend/agent/CLAUDE.md`
-
-## 脚本版本退役
-
-`backend/agent/scripts/<name>/v<ver>/` 只增不减（ADR-0020 不可变 + ADR-0029
-「每版本全量副本」），长期会线性膨胀。退役靠下面这条只读诊断，按需人工跑：
-
-```bash
-python -m backend.scripts.check_unreferenced_script_versions [--json] [--name flash_firmware]
-```
-
-它列出每个 script 版本的 `plan_step` 引用计数，标出「`is_active` 且零引用」的
-退役候选。只读 SELECT，不写库、不改状态，可对生产库跑。
-
-**退役 ≠ 删除，两件事别混**：
-
-| | 怎么做 | 目录 | 后果 |
-|---|---|---|---|
-| **退役**（支持） | `PUT /api/v1/scripts/{id}` 带 `is_active=false` | **留着** | 不再进 `?is_active=1` 目录；扫描不会把它重新激活（`script_catalog.py:281`） |
-| **删除**（别做） | `rm -rf` 版本目录 | 没了 | **会被 CI 拦下** —— `check-script-version-immutability.py` 把 `D` 当变更；且会让历史 `plan_step` 的 `script.sha` 与磁盘永久对不上，2026-07-31 那次就是这么把全平台派发搞挂的 |
-
-**退役有硬守卫，误操作退不掉**：`scripts.py:484` 在 `is_active=False` 时先跑
-`_ensure_script_can_be_deactivated()`，它用的是**与本工具完全相同的连接条件**
-（`PlanStep.script_name + script_version`，`scripts.py:250`）—— 只要还有 Plan
-引用就返回 **409 `SCRIPT_STILL_REFERENCED`**，并把 `plan_ids` 一并返回。
-
-所以两层职责是：本工具**提前圈出候选**，`PUT` **最终裁定**。判据一致，不会
-出现「工具说可以、接口却拒」或反之。
-
-**但 `refs == 0` 只覆盖配置态，不覆盖运行态。** 一个版本可能已无任何 Plan
-配置引用、却仍有历史 PlanRun 需要追溯（退役不删目录正是为此）。要判断「后续
-是否还会再用」，还需要运行使用事实 —— 脚本管理页「使用统计（近 30 天）」/
-`GET /api/v1/scripts/{id}/usage`（`plan_count` 配置态 + `run_count` /
-`success_rate` / `versions_used` 运行态，原 #506）已提供。两个维度都为零，
-退役才够稳妥。
-
-## Key env vars
-
-| Var | Where | Purpose |
-|-----|-------|---------|
-| `STP_AEE_NFS_ROOT` | Backend + Agent | **中心存储（CIFS）** 挂载点主键（dedup/devices/jira）；过渡 UNC 在 8.202 |
-| `STP_AEE_LOCAL_ROOT` | Agent only | 本机 L1 AEE 根；**按机配置**，hot-update 不下发（#235） |
-| `STP_BACKEND_DEDUP_SCAN_PYTHON` / `_SCRIPT` | Backend only | 控制面本机 scan 工具路径（#295/#518 角色键分离；旧无前缀键回落已删，控制面只认此对键） |
-| `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | Agent only | Agent 侧 scan 工具路径（经 `STP_AGENT_*` 源键 hot-update 写入） |
-| `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | Backend only | Agent 侧 scan 工具路径的源键，hot-update 写进 Agent 的无前缀键 |
-| `STP_AGENT_UNISOC_LOG_SCAN_PYTHON` / `_SCRIPT`、`STP_AGENT_UNISOC_SCAN_RESULT_PYTHON` / `_SCRIPT` | Backend only | UNISOC 归档工具链源键，hot-update 写进 Agent 无前缀 `STP_UNISOC_*`（ADR-0032 D3） |
-| `STP_MAX_CLAIM_SLOTS` | Agent only | Agent 单次认领 job 上限（默认 5，#483，与 OperationScheduler permit 对齐）；`effective_slots = min(空闲健康设备 − 活跃, 健康上限, 此值)` |
-| `STP_AEE_LOCAL_ROOT` | Agent | HDD root for AEE events (e.g. `/mnt/hdd/aee_events`) |
-| `STP_SCRIPT_ROOT` | Backend | Script catalog scan source（**必须显式设置**；未设 scan 503） |
-| `STP_WATCHER_ENABLED` | Agent | Watcher subsystem gate (default `true`) |
-| `STP_FLASH_FIRMWARE_VERSION` / `_ROOT`、`STP_FLASH_SKIP_IF_CURRENT` / `_VERIFY_VERSION`、`STP_FLASH_GATE_OTHER_MTK` / `_MAX_ATTEMPTS` / `_RETRY_BACKOFF` / `_STRICT_ENV_CHECK` | Backend 源键 → Agent | 刷机 fleet 键：版本 pin / 固件根 / 跳过与核验开关；v1.3.0 增门控 / 尝试次数 / 重试间隔 / 严格预检。空值不推，缺省走 `{STP_NFS_ROOT}/firmware/{family}/latest.json` |
-| `STP_DEDUP_AUTO_SCAN` | Backend | Terminal auto-dedup trigger (default `1`) |
-| `AUTO_ARCHIVE_POLL_INTERVAL_SECONDS` | Backend | auto_archive_sweep interval (default 120) |
-
-See `backend/.env.example` and `backend/agent/.env.example` for full list.  
-角色/别称（口头 CIFS/NFS = 中心存储 ≠ 控制面 ≠ 健康页）：[`docs/design/2026-storage-roles-and-aliases.md`](docs/design/2026-storage-roles-and-aliases.md)。
-
-## Key conventions
-
-> 主清单在根 `CLAUDE.md`，分散在三节：
-> §架构不变量（唯一 action 类型 `script:<name>`）、
-> §关键约定（`default_params` 不可变、表名单数、`types.ts` 权威源、`max_concurrent_jobs` 已删、Pydantic v2）、
-> §环境变量 + §开发陷阱（`ANDROID_ADB_SERVER_PORT=5039`）。此处只补它没有的：
-
-- Production Agent needs `AGENT_SECRET` env for SocketIO auth.
-- `ORMBaseModel` (`backend/api/schemas/base.py`) auto-serializes datetime to ISO-UTC via `field_serializer(when_used="json")`.
-- **PR 合入**：仓库已开启 Auto-merge；`.github/workflows/enable-auto-merge.yml` 按 FIFO **串行**给同仓库非 draft eligible PR 挂 auto-merge（仅队首 `--auto --merge`，其余 `--disable-auto`；fork / frontend-major / github_actions 仍排除）。队首全绿且落后 main 时，`.github/workflows/pr-update-branch.yml` 自动 `update-branch`（见 `docs/notes/process/2026-08-29-serial-automerge-update-branch.md`）。**main 已开分支保护**：PR 是唯一合入通道，6 项 required checks 全绿自动合入；approvals=0（无需人工点 approve）；`enforce_admins` 开启（admin 直推 main 同样被 GH006 拒绝）；strict=true（分支落后 main 时需先并 main 再 push）。required checks：lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests / pr-migrate-empty-db。**pr-agent-review 为全异步顾问**：PR-Agent 自动 review 并更新 persistent comment，**不是 required check，auto-merge 也不等它**（required 长极 ~125s，本 job 中位数 133s / p90 300s，评论常在合入后才落地）。check 只在「有 security concerns 却开不出 issue」时变红——LLM 代理故障/超时/输出缺失一律绿，不制造分诊成本。security concerns 走单独 issue（标题 `[pr-agent] PR #<N> 报告 security concerns`）+ @ 作者，同一 PR 复评只追加评论；误报关 issue，属实另开修复 PR。修复后 push 自动复评（synchronize），或 PR 评论 `/review`（仅 OWNER / MEMBER / COLLABORATOR）；fork PR 在 job 级排除。不要手动点 Merge。
-- **CI 分层**：PR 只跑轻量 job（lint / pr-typecheck / pr-compileall / pr-agent-tests / pr-migrate-empty-db（required，#510 空库迁移守卫））；全量 backend-test（PG + pytest）、frontend-check（vitest + build）、docker-build 仅由 workflow_dispatch 触发运行（ci.yml 的 on 只有 pull_request + workflow_dispatch：auto-merge 的 merge commit 由 GITHUB_TOKEN 推送，on: push / closed / workflow_run 会被级联限制抑制，手动合入的 push 又会造成「合入即全量」的随机运行）。main 全量由 `main-ci-backstop.yml` 每天（UTC 18:00）检查尖端是否已有全量 CI、没有则显式 dispatch。PR 合入前不跑 `backend/tests`/vitest/docker；`backend/tests/` 由夜间全量 `backend-test` 兜底（见 `docs/notes/process/2026-08-29-remove-pr-backend-test.md`）。**合入路径注意力预算（核心原则）**：合并路径上的阻塞检查保持 ~2 分钟内（required checks：lint / CodeQL / pr-typecheck / pr-compileall / pr-agent-tests / pr-migrate-empty-db）；pr-agent-review 定位顾问后不再计入合入路径预算（不是 required check，auto-merge 不等它，其耗时全异步消化）；任何引入等待或分心的检查一律走异步（夜间全量兜底）；人工评审属同一注意力块内的同步动作，不在此限。取舍与被否决方案的历史见 `docs/notes/process/2026-08-14-merge-path-attention-budget.md`。
-- **全量 CI 失败通知（2026-08-13）**：`main-ci-backstop.yml` 失败会自动开 `ci/backstop-failed` issue（同 label 去重、只追加评论），恢复通过后自动关闭；Dependabot npm 拆为 `frontend-patch-minor`（自动合入）与 `frontend-major`（人工评审）两组，typescript 的 semver-major 更新被 ignore（typescript-eslint 8.x peer 上限 <6.1）；`github_actions` 生态更新同样**排除 auto-merge、人工评审**（供应链考虑）。
-- **文档只写现状，不写变迁**：常驻文档里不出现「之前/现在/已移除」式编年叙事；变更史归 commit / PR / Agent Note。AGENTS.md 是常驻命令清单，事故与取舍搬进 `docs/notes/` 后只留一行链接。
-
-## Documentation
-
-- **Entry**: [`docs/DOC-MAP.md`](docs/DOC-MAP.md) — PRD / ADR / design / acceptance layers.
-- **Hub**: [`docs/README.md`](docs/README.md) — full documentation center.
-- **Design**: [`docs/design/`](docs/design/) — system, backend, frontend, agent (aligned with code).
-- **ADR-0025**: [`docs/adr/ADR-0025-phase4-architecture-alignment.md`](docs/adr/ADR-0025-phase4-architecture-alignment.md) — Plan C architecture.
-- **Pipeline timing**: [`docs/design/06-realtime-and-background.md`](docs/design/06-realtime-and-background.md) §9 — scan/upload/merge sequence + five-trigger table.
-- **Acceptance**: [`docs/acceptance/`](docs/acceptance/) — Sprint 2/3/4 matrices + real-device verification template.
-
-## Production access (for ad-hoc diagnostics)
-
-> 这些是**只读运维凭据源**，用于 SSH/控制面诊断；写操作仍需走 PR 流程。所有路径已 `chmod 0600`/`0700`，泄露风险低。
-
-| 用途 | 凭据源 | 使用 |
-|------|--------|------|
-| SSH 到 20 台 Agent host | `/home/debian13/hosts.ini` (`[android]` 段 IP + `[android:vars]` 的 `ansible_user` / `ansible_password`) | `ssh android@<ip>`，`sudo -n` 免密可提权到 root。opencode 本机 `~/.ssh/id_ed25519` 已 ssh-copy-id 到 20 台 host，免密 SSH 已通。 |
-| Backend DB（生产 `stp` 库）| **仓库根 `.env.backend`** 的 `DATABASE_URL`（systemd `EnvironmentFile`，唯一生产 env 源）。`backend/.env` 是本地开发覆盖，**不含** `DATABASE_URL`，别从那里找 | 用 `/home/debian13/stability-test-platform/venv/bin/python`（含 sqlalchemy 2.0）+ `psycopg` 3 直连。**只读 SELECT 优先**，写须有迁移/PR。 |
-| 控制面 admin token | **仓库根 `.env.backend`** 的 `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD`；并需用**同一文件**的 `AGENT_SECRET` 头 `X-Agent-Secret` 绕 CSRF（前端 cookie session 才认 Origin/Referer）。`backend/.env` 里那个 `AGENT_SECRET` 是**陈旧值，控制面与 20 台 Agent 都不认**，照它操作会被拒 | `curl -H "X-Agent-Secret: <AGENT_SECRET>" -F "username=stp-admin&password=<ADMIN_PASS>" http://127.0.0.1:8000/api/v1/auth/token` → `Authorization: Bearer <token>` 调用任意 `/api/v1/...` 路由。 |
-| Agent `.env` 错配修复历史 | 20 台 host `STP_AEE_LOCAL_ROOT` 曾错配为 `/home/debian13/...`（android 用户无权写 `/home/debian13`）→ AEE Reconciler 100% 启动崩溃。已于 2026-07-25 改为 `/home/android/aee-local` / `/home/android/aee-nfs`，全部重启生效。详见 #72 + `docs/operations/adr-0026-admission-and-scale-gray-rollout.md`。|
-
-**安全约束**：不要把上面任何一个具体密码 / token 直接填到 commit 文件 / log 输出 / PR diff；AGENTS.md 仅文档化「在哪里能找到」，不复制明文。`backend/.env`、`backend/agent/.env`、`/home/debian13/hosts.ini`、`.env.backend`、`opencode.json` 都已在 `.gitignore`。
+| 启动、环境、迁移 | [`local-development.md`](docs/development/local-development.md) |
+| 测试与生产数据库边界 | [`testing.md`](docs/development/testing.md) |
+| 依赖、lock、lint、门禁 | [`dependencies-and-quality.md`](docs/development/dependencies-and-quality.md) |
+| PR、CI、Agent Note、并行 worktree | [`repository-workflow.md`](docs/development/repository-workflow.md) |
+| 架构、状态机、模块设计 | [`docs/DOC-MAP.md`](docs/DOC-MAP.md) |
+| 脚本版本、参数与退役 | [`script-versioning.md`](docs/development/script-versioning.md) |
+| scan/upload/merge | [`2026-scan-upload-merge-contract.md`](docs/design/2026-scan-upload-merge-contract.md) |
+| 生产只读诊断 | [`production-diagnostics.md`](docs/operations/production-diagnostics.md) |
+| Harness 适配与本地配置 | [`harness-adapters.md`](docs/development/ai/harness-adapters.md) |
+
+## 提交前
+
+- 运行与改动范围匹配的测试，再运行 `python scripts/run_gates.py check:quick`；
+- 只报告实际运行过的命令与结果；未完成的检查标为 pending，命令成功不等于验证通过；
+- 检查 diff 不含凭据、无关格式化或本地 Harness 状态；
+- Agent Note 使用 Decision、Alternatives、Verification、Revisit 四节；
+- required checks 为 `lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、
+  `pr-agent-tests`、`pr-migrate-empty-db`。

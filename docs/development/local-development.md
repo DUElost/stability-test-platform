@@ -1,6 +1,8 @@
 # 本地开发指南
 
-> 本文即启动/迁移命令的权威位置。根目录 [`AGENTS.md`](../../AGENTS.md) 只放推导不出来的约定（依赖分工、生产机调试约束、Test quirks）。
+> 本文是启动与迁移命令的权威位置。依赖分工见
+> [`dependencies-and-quality.md`](./dependencies-and-quality.md)，测试与生产数据库边界见
+> [`testing.md`](./testing.md)。
 
 ---
 

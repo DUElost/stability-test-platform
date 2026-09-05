@@ -1,7 +1,8 @@
 # Cursor 规则说明
 
-> 架构与 ADR 权威源：根目录 [`CLAUDE.md`](../../CLAUDE.md)  
-> 命令与测试速查：根目录 [`AGENTS.md`](../../AGENTS.md)
+> 跨 Harness 启动契约与硬不变量：根目录 [`AGENTS.md`](../../AGENTS.md)
+> Claude 导入与按需路由：根目录 [`CLAUDE.md`](../../CLAUDE.md)
+> 跨 Harness 适配基线：[`ai/harness-adapters.md`](./ai/harness-adapters.md)
 
 ---
 
@@ -11,12 +12,14 @@
 
 | 层级 | 路径 | 读者 | 作用 |
 |------|------|------|------|
-| 共享策略 | `AGENTS.md` | 所有 AI 工具 / 开发者 | 命令、测试、架构摘要 |
-| 项目约束 | `CLAUDE.md` | Claude Code、Cursor 等 | 架构不变量、ADR、开发陷阱 |
-| Cursor 适配 | `.cursor/rules/*.mdc` | Cursor Agent / Chat | 按文件类型自动注入的精简规则 |
+| 共享启动 | `AGENTS.md` | 所有 AI 工具 / 开发者 | 总原则、跨模块硬不变量、安全红线、按需入口 |
+| Claude 入口 | `CLAUDE.md` | Claude Code、Cursor 等 | 导入共享契约并提供按需路由 |
+| Cursor 适配 | `.cursor/rules/*.mdc` | Cursor Agent / Chat | 常驻入口与按路径加载路由 |
 | 个人习惯 | Cursor Settings → User Rules | 仅本机 | 提交规范、PR 流程等 |
 
-**维护原则**：改全局约定先改 `AGENTS.md` / `CLAUDE.md`，再按需同步对应 `.mdc`。不要在 rules 里复制整篇文档，避免漂移。
+**维护原则**：项目事实只在权威文档维护；`.mdc` 指向相关权威入口，不复制环境变量
+默认值、命令参数、状态机或实现摘要。Harness 共通边界见
+[`ai/harness-adapters.md`](./ai/harness-adapters.md)。
 
 ---
 
@@ -26,11 +29,11 @@
 
 | 文件 | 激活方式 | 内容 |
 |------|----------|------|
-| `00-project-context.mdc` | `alwaysApply: true`（每次对话） | 架构不变量、状态机、方案 C 存储边界 |
-| `backend-python.mdc` | `backend/**/*.py` | Pydantic v2、表名单数、pytest、dedup/NFS |
-| `frontend-typescript.mdc` | `frontend/**/*.{ts,tsx}` | `types.ts` 同步、vitest、`@/` 别名、Watcher UI 测试 |
-| `agent-runtime.mdc` | `backend/agent/**/*` | ADB、Watcher、Scan/Upload/SAQ |
-| `agent-scripts.mdc` | `backend/agent/scripts/**/*` | ADR-0020 脚本目录、扫描语义、stdout JSON 链路 |
+| `00-project-context.mdc` | `alwaysApply: true`（每次对话） | 根文档、文档地图与 Harness 基线入口 |
+| `backend-python.mdc` | `backend/**/*.py` | 后端约束、测试与设计文档路由 |
+| `frontend-typescript.mdc` | `frontend/**/*.{ts,tsx}` | 前端约束、脚本与设计文档路由 |
+| `agent-runtime.mdc` | `backend/agent/**/*` | Agent、AEE、跨进程契约文档路由 |
+| `agent-scripts.mdc` | `backend/agent/scripts/**/*` | 版本化脚本契约与退役规则路由 |
 
 编辑 `backend/agent/scan_runner.py` 时会同时命中 `backend-python` 与 `agent-runtime`，属预期行为。
 
@@ -58,7 +61,7 @@ alwaysApply: false
 | `globs` | 打开/编辑匹配文件时注入 |
 | `description` | Cursor Settings → Rules 中显示 |
 
-建议单条规则 **≤50 行**、一事一文件。
+建议单条规则 **≤30 行**、一事一文件；只保留 Cursor 加载所需的路由信息。
 
 ---
 
@@ -85,3 +88,4 @@ alwaysApply: false
 `.cursor/rules/` **应提交到 Git**（`.gitignore` 已对 `!.cursor/rules/` 放行）。其余 `.cursor/` 目录内容（本地缓存等）仍被忽略。
 
 新增或修改规则后，在 PR 中简要说明变更原因，并与 `CLAUDE.md` / `AGENTS.md` 保持一致。
+如果规则需要复述项目事实，应优先把该事实放回权威文档并在规则中链接。
