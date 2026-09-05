@@ -29,9 +29,10 @@ CLAUDE.md `@import` 写在中文行内静默失效（人肉 `/context` 才发现
 | **L0 结构门禁** | 确定性文本检查 S1–S10 | 阻塞：ci.yml lint job + run_gates `check:quick/pr` | 〔证〕真实事故/实测断链/常驻上下文回膨胀 |
 | 本地护栏 | git pre-commit 已发布脚本 M/D 拦截 + Claude settings 凭据写保护 | 提交现场/会话现场秒级反馈 | 〔证〕ef8808e 事故 |
 | backstop 机械摘要 | 失败 issue 附红灯 job+step / 日志链接 / compare 区间 | 事件驱动 | 〔证〕现有 body 无定位要素 |
-| **L1 行为 evals** | 封闭式问答 ×12，确定性正则判卷 | **按需手跑**（`check:gov`），不进 CI 不进常规 profile | 〔前〕门禁化前提不成立 |
+| **L1 行为 evals** | **已移除（2026-09-06）**：不变量保全由 L0 新增 S11 承接；语义传导/标准化分诊/多 Harness 摄取验证残余缺口见 #855；恢复锚点与决策见移除 note | — | 〔证〕能力分解评估（08-27 曾 12/12 全绿当瘦身安全网；09-05 后唯一环境 CLI 故障不可用） |
 
 L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工作态。
+（2026-09-06 已裁决移除而非升格；重开条件与补全方向见 #855。）
 
 ## 3. L0 规则明细（`tools/dev/check_governance_surface.py`）
 
@@ -47,6 +48,7 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 | S8 | CLAUDE.md 只能 `@import` 最小 `AGENTS.md` | BLOCK | 导入 DOC-MAP 会把完整索引无条件带入每次会话 |
 | S9 | AGENTS/CLAUDE 只允许固定启动级二级章节，禁止三级章节 | BLOCK | 体量预算只能限制总量，章节白名单进一步阻止领域知识重新常驻 |
 | S10 | 2026-09-05 起新增 Agent Note 的 Status/Class 头部与 class 目录一致 | BLOCK | 197 份存量中 78 份格式不统一；新门禁只阻止继续新增，不批量改写历史 |
+| S11 | AGENTS.md 硬不变量锚点（11 条锚串）逐条在场 | BLOCK | 2026-09-06 随 L1 移除引入：L0 此前对不变量整条删除/改写全盲（S9 只查章节名、S6 只查体量）；S4 锚点同模式 |
 
 检查器自身由 `--self-test` 守护：每条规则一红一绿样例双向验证
 （verify-before-asserting；自测曾真逮到 S3 引号值误判空的非空 bug）。
@@ -54,7 +56,8 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 ## 4. 接线
 
 - `scripts/run_gates.py`：`gov-surface` 入 `check:quick` / `check:pr`；
-  新增专项 `check:gov = [gov-surface, gov-evals]`（后者按需手跑）。
+  专项 `check:gov`（现组成 `[gov-surface, gov-skills]`；原 `gov-evals`
+  于 2026-09-06 移除）。
 - `ci.yml` lint job：脚本不可变检查之后追加「治理面结构检查(C-G1 L0)」步骤。
 
 ## 5. 本地护栏
@@ -79,7 +82,13 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 `compare/<parent>...<main>` 疑似变更区间。纯 GH API，**有意不含 LLM 分诊**
 （失败事件稀有 + 单人读得懂机械要素；扩展位留在 job 注释）。
 
-## 7. L1 行为 evals（`tools/dev/run_gov_evals.py` + `gov_evals_cases.yaml`）
+## 7. L1 行为 evals（已移除，2026-09-06）
+
+> **状态：Removed。** 工具本体（`tools/dev/run_gov_evals.py` +
+> `gov_evals_cases.yaml`）已删除，决策依据与恢复锚点见
+> [`2026-09-06-gov-eval-l1-removal.md`](../notes/simplification/2026-09-06-gov-eval-l1-removal.md)；
+> 不变量保全由 L0 S11 承接，残余缺口（语义传导/标准化分诊/多 Harness
+> 摄取验证）由 #855 跟踪。以下为移除时的机制留档。
 
 - **答题人**：`claude -p` 无工具会话在仓库根运行——测端到端摄取
   （自动加载 + import 解析），非文本包含性检查；不给工具是因为要测

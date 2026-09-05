@@ -21,6 +21,7 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
   S8  CLAUDE.md 只允许 @import 最小 AGENTS.md，不得递归导入文档地图或领域文档
   S9  根入口只允许固定的启动级章节，领域细节不能新增为二/三级章节
   S10 2026-09-05 起新增 Agent Note 的 Status/Class 头部与 class 目录一致
+  S11 AGENTS.md 硬不变量锚点逐条在场（防整条删除/改写静默丢失——S4 同模式）
 
 用法:
     python tools/dev/check_governance_surface.py --check     # 门禁模式
@@ -192,6 +193,33 @@ def check_root_headings(label: str, text: str) -> list[str]:
     return issues
 
 
+# S11: 硬不变量锚串刻意取 AGENTS.md 原文——改写措辞必须连锚一起改，
+# 让「不变量静默消失/被改写」这件事本身过不了门禁（S9 只查章节名、S6 只查体量）。
+HARD_INVARIANT_ANCHORS = [
+    ("ASGI 入口", r"socketio\.ASGIApp\(sio_server, fastapi_app\)"),
+    ("Pipeline 顶层只接受 lifecycle", r"Pipeline 顶层只接受 `lifecycle`"),
+    ("action 唯一格式", r"action 唯一格式是 `script:<name>`"),
+    ("Plan 不存 lifecycle", r"Plan 不存 lifecycle"),
+    ("dispatcher 组装 lifecycle", r"pipeline_def\.lifecycle"),
+    ("Redis 边界", r"Redis 只承载队列与瞬时跨进程通信"),
+    ("生产 cookie/CSRF guard", r"secure cookie、受限 SameSite 和 CSRF guard"),
+    ("Pydantic v2 only", r"Pydantic 只使用 v2 API"),
+    ("业务表名单数", r"数据库业务表名使用单数"),
+    ("default_params 不可原地修改", r"`default_params` 不可原地修改"),
+    ("前端类型入口", r"frontend/src/utils/api/types\.ts"),
+]
+
+
+def check_hard_invariant_anchors(text: str) -> list[str]:
+    """S11: 硬不变量锚点逐条在场。"""
+    return [
+        f"S11 AGENTS.md: 硬不变量锚点缺失「{label}」（{pattern}）——"
+        f"确认是否被删除/改写；有意改写须同步更新锚点表"
+        for label, pattern in HARD_INVARIANT_ANCHORS
+        if not re.search(pattern, text)
+    ]
+
+
 NOTE_CLASSES = {"feature", "bug-fix", "simplification", "architecture", "process", "testing"}
 NOTE_HEADER_CUTOFF = "2026-09-05"
 
@@ -274,7 +302,6 @@ GATE_TO_CI_ANCHOR = {
     "frontend-build": ("ci.yml", "npm run build"),
     "docker-build": ("ci.yml", "Build backend image"),
     # 有意仅本地的例外——登记理由防止未来审计误判为缺口：
-    "gov-evals": None,   # 按需诊断（裁决降级）：LLM 成本/flaky 不进阻塞路径
     "gov-skills": None,  # 数据源=本机 ~/.claude 转录，物理不在 runner 上
 }
 
@@ -437,6 +464,8 @@ def run_check() -> int:
     for rel in ROOT_HEADING_ALLOWLIST:
         text = open(os.path.join(ROOT, rel), encoding="utf-8").read()
         issues += check_root_headings(rel, text)
+    agents_text = open(os.path.join(ROOT, "AGENTS.md"), encoding="utf-8").read()
+    issues += check_hard_invariant_anchors(agents_text)
 
     notes_root = os.path.join(ROOT, "docs", "notes")
     for class_name in sorted(NOTE_CLASSES):
@@ -455,7 +484,7 @@ def run_check() -> int:
     if issues:
         print(f"\n治理面结构检查失败：{len(issues)} 项", file=sys.stderr)
         return 1
-    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S10、S5x）")
+    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S11、S5x）")
     return 0
 
 
@@ -536,6 +565,34 @@ def run_self_test() -> int:
         False,
     )
 
+    invariants_full = (
+        "- ASGI 入口是 `socketio.ASGIApp(sio_server, fastapi_app)`\n"
+        "- Pipeline 顶层只接受 `lifecycle`，action 唯一格式是 `script:<name>`。\n"
+        "- Plan 不存 lifecycle；组装 `pipeline_def.lifecycle`。\n"
+        "- Redis 只承载队列与瞬时跨进程通信，不作为业务事实存储。\n"
+        "- 生产环境必须满足 secure cookie、受限 SameSite 和 CSRF guard。\n"
+        "- Pydantic 只使用 v2 API；数据库业务表名使用单数。\n"
+        "- 已存在脚本版本的 `default_params` 不可原地修改。\n"
+        "- 前端 API 类型以 `frontend/src/utils/api/types.ts` 为入口。"
+    )
+    expect(
+        "S11 锚点齐全",
+        lambda: check_hard_invariant_anchors(invariants_full),
+        False,
+    )
+    expect(
+        "S11 锚点缺失",
+        lambda: check_hard_invariant_anchors("## 硬不变量\n\n（本节已清空）\n"),
+        True,
+    )
+    expect(
+        "S11 单条改写逃逸被拦",
+        lambda: check_hard_invariant_anchors(
+            invariants_full.replace("Pydantic 只使用 v2 API；", "用新版 Pydantic；")
+        ),
+        True,
+    )
+
     full_pr_agent = (
         "jobs:\n  pr-agent-review:\n"
         "      uses: docker://pragent/pr-agent@sha256:abc\n"
@@ -597,7 +654,7 @@ def run_self_test() -> int:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         print(f"\n自测失败 {len(failures)} 项——检查器自身不可信，禁止用于拦截", file=sys.stderr)
         return 1
-    print("[OK] self-test 通过：11 条规则各含红/绿样例双向验证")
+    print("[OK] self-test 通过：12 条规则各含红/绿样例双向验证")
     return 0
 
 
