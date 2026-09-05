@@ -1,6 +1,6 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Proposed（v0.1 草案，待人工评审）**
+- 状态：**Proposed（v0.2 草案，待人工评审）**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
@@ -34,6 +34,8 @@
 `Requirement → Harness → Execution（= Worktree + Role Context + Registry 记录）`。
 Agent 间**不通信、不共享上下文、不实时协调**——Parallel Execution + Asynchronous Visibility + **Repository-Mediated Integration**（仓库是唯一媒介）。
 
+**选择权原则**：用哪个 Harness 承接哪个 Requirement，**始终由开发者决定**（延续 2026-09-04 约定与现行实践——开发者亲自启动并驱动各 Harness）。本契约**不定义任何需求路由或自动下发机制**：上述箭头链只描述**溯源**（哪个 Requirement 由哪个 Harness 的哪个 Execution 承接），不描述**指派**（谁该做什么）；Registry 记录由执行侧自行 `declare`（visibility-only，供可见性与审计），不是调度器。
+
 ### 2.2 Execution Registry（P1 落地）
 
 - 工具 `tools/dev/ai_work.py`：`declare / status / update / finish` 子命令 + overlap 检测；
@@ -65,9 +67,9 @@ Registry 声明与实际 diff 不一致时**以 diff 为准**；派生视图（�
 
 | 期 | 内容 | 备注 |
 |---|---|---|
-| P0 | 规则先行：AGENTS.md/CLAUDE.md 改写走**独立 docs PR**（元文件串行化）；规则单一权威源（AGENTS.md/CLAUDE.md/.cursor/.codex/docs 五处 canonical + 最小引用，勿手工镜像） | 本文 Accepted 后第一个 PR |
+| P0 | 规则先行：AGENTS.md/CLAUDE.md 改写走**独立 docs PR**（元文件串行化）；规则单一权威源（AGENTS.md/CLAUDE.md/.cursor/.codex/docs 五处 canonical + 最小引用，勿手工镜像）；`harness-adapters.md` 与 Phase -1 基线 note 的并行约定指针接到本文（基线 note Revisit 的既定要求） | 本文 Accepted 后第一个 PR |
 | P1 | Registry MVP（ai_work.py + registry.yaml + overlap 检测 + 自测红绿样例） | |
-| P2 | Harness Adapter：各 Harness 启动时知晓 Role；**验收含 cwd 深度 × Harness 加载矩阵**（附录 A 协议扩展） | |
+| P2 | Harness Adapter：各 Harness 会话启动时知晓自身 Role——**上下文供给，非路由**（会话由开发者选择启动，Adapter 只保证该会话能读到 Role Context 与共享契约）；**验收含 cwd 深度 × Harness 加载矩阵**（附录 A 协议扩展） | |
 | P3 | 真增量 = **Drift / Freshness gate**：先 advisory（本地 run_gates / 夜间全量，守合入路径 ~2min 注意力预算），overlap 粒度用顶层目录作 hint 而非硬门禁 | **不建 merge queue**——主干机制已存在（FIFO enable-auto-merge + update-branch + strict 分支保护） |
 | P4 | Integration Planner：仅在「人已难判集成顺序」真实积累后启用 | 观察项 |
 
