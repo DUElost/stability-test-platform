@@ -1,6 +1,6 @@
 # 稳定性测试平台 — 文档中心
 
-> **最后更新**：2026-09-05
+> **最后更新**：2026-09-06
 > 本目录为项目**权威文档**入口。冲突时以**代码与测试**为准，并回写此处。  
 > 根目录 [`README.md`](../README.md) 只保留产品概述与快速入口；细则在本树子文档。
 
@@ -32,6 +32,7 @@
 | 查跨模块硬不变量 | 根目录 [`AGENTS.md`](../AGENTS.md) |
 | 查 AI Harness 规则入口与本地配置边界 | [`development/ai/harness-adapters.md`](./development/ai/harness-adapters.md) |
 | 查哪些旧文档可删除 | [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md) |
+| 开展全面只读审查 / 查区域与进度入口 | [`reviews/PROJECT_REVIEW_PLAN.md`](./reviews/PROJECT_REVIEW_PLAN.md) |
 | 查设备日志流转审查 / DoD | [`reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md) |
 
 ---
