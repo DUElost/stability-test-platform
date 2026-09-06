@@ -4,7 +4,7 @@
 - **性质**：八份独立只读审查的权威综合（playbook 2026-08-26 模式）；本文件编号为唯一权威映射，后续引用一律用 R 编号
 - **审查源**（8 份，同目录）：`_0cd302`、`_2873a2`、`_4f6e4b`、`_6d0f05`、`_9261bd`、`_9c124`、`_aa114c`、`_d4a277`
 - **总评谱系**：1 份建议直接 Accepted（aa114c）；多数「修完关键项再 Accepted」；9261bd 列 3 阻断。**共识：架构方向无异议（8/8 通过状态模型按集成窗口判定、事实分层、TTL 分期、不建 merge queue、Registry 非调度器）；分歧集中在契约定义完备度。**
-- **处置**：采纳 21 项 → ADR v0.4（PR 同批）；**R6/R18 已由用户 2026-09-06 晚裁决**（见各条目）；范围外遗留 3 项（附录 B）。
+- **处置**：第一轮采纳 21 项 → ADR v0.4（#862）；**R6/R18 已由用户 2026-09-06 晚裁决**（#863）；**第二轮 v0.4 复审 8 项（R23–R30）→ ADR v0.5**；范围外遗留 3 项（附录 B）。
 - **裁决后补记（2026-09-06）**：9261bd 经用户修订——①冻结版 Contract v1 确认为**两维**（Execution × Integration），三维模型为评审建议、未获显式确认；②B3 重定义为「finish 缺少独立可持久化语义表达」，lifecycle 字段与 `finished_at` 字段二选一皆合规（v0.4 采用 lifecycle，兼载 ABANDONED 放弃语义）；③Competition 降为非阻断追溯建议。本表 R6/R18 裁决栏已按此更新。
 
 ## 1. 裁决总表（R 编号 → v0.4 落点）
@@ -34,14 +34,30 @@
 | R21 | 与 #847「不为 N=2 引入 WIP 公告」缺显式对账；Alternatives 首条理由不准确（派生视图实已覆盖本机全部 worktree，真实缺口=双方均零 diff 时）；审阅瓶颈原结论未正面回应（d4a277-3.1/3.2、2873a2-R2） | **采纳** | §1/取代对象处补对账半句（工具媒介自动执行 vs 手工仪式、advisory、N 已跨 Harness）；§4 首条理由改窄口径；§2.6 补「审阅瓶颈未变，Registry 提升的是审计面信息完备性而非审阅吞吐，任务排队仍是主策略」 |
 | R22 | P1 缺启动判据（P4 有而 P1 无，v0.3 加重失衡）（2873a2-R1） | **采纳** | §2.7 P1 备注列触发判据（如「连续两周并行 worktree ≥3」或「发生 ≥2 次跨 Harness 撞车返工」） |
 
-## 2. 不采纳/缓办项
+## 2. 第二轮复审映射（v0.4 复审，2026-09-06 晚；R23 起）
+
+八源对 v0.4 的复审（各文件追加节；verdict 分布：5 份「可 Accepted」、2873a2「Accepted 前定死 N1」、9261bd「完成 B4/B5 后可转」）→ **v0.5（本 PR）**：
+
+| R | 发现（来源） | 裁决 | v0.5 落点 |
+|---|---|---|---|
+| R23 | **`ABANDONED × PR_OPEN` 悬空组合静默退出集成窗口**；`CODING × CLOSED` 同病——执行侧状态遮蔽 GitHub 侧开放 PR 事实，R2 所堵之洞换入口重开（**4 源共振**：9261bd-B4〔阻断〕、2873a2-N1〔中-高〕、4f6e4b-N1、6d0f05-O-2） | **采纳** | §2.3 overlap 改**真值表**：开放 PR（PR_OPEN/READY）恒在窗口；NO_PR 时看 lifecycle；CLOSED 不单独出局（关闭≠工作停止）；MERGED 出局；`finish --abandon` 不再立即出窗（无 PR 时出窗=僵尸出口唯一合法终点；有开放 PR 时警告并留窗至 GitHub 终态）；transition table 入 P0 |
+| R24 | **effective scope 两套互斥定义**（§2.2 既写 `declared ∪ derived` 又写「冲突以 derived 为准」「从不凭声明单独判定」——derived 非空且与声明不同时实现者无法判定并集还是丢弃）；且 derived 不含 untracked（`git diff --name-only` 不含新文件）（9261bd-B5〔阻断〕+ 6d0f05-O-1 过期声明残留面） | **采纳** | §2.2 重写：**并集恒成立**，不一致时输出 declaration drift 提示；`update` 可覆写声明（过期声明由执行侧清理）；derived 分档（worktree diff〔含 untracked：`git ls-files --others --exclude-standard` 口径〕→ branch diff → 声明单独生效）；删除两句矛盾表述 |
+| R25 | derived(diff) 绑定 worktree，finish 后删 worktree 则不可计算——恰是集成窗口最需可见的时段（2873a2-N2〔中〕） | **采纳** | 并入 R24 分档：worktree 在场→工作树 diff；不在场→branch diff（merge-base..branch）；皆无→声明 |
+| R26 | #847 对账第①条不准确：`declare` 仍是开工时人工调用，是仪式而非「工具自动登记」；成立的是②③+derived 优先（2873a2-N3〔低-中〕） | **采纳** | 头部对账重写：删①，advisory/visibility-only + 「手写状态会过期而你会信它」由 derived 优先正面化解 + 前提已变 |
+| R27 | 措辞/同步族：**README M7 仍 v0.3**（#861 同族缺陷第三次复发；4f6e4b-N2、9c124-N1、9261bd-8.3.1 三源）；Alternatives「Phase 1」「liveness=ACTIVE」旧术语；§2.10 图 `.cursor`→`.cursor/rules`；**「symlink 天然防误写」错误**（经 symlink 写入会穿透真身，9261bd-8.3.4）；Role Context 归属悬空（4f6e4b-N4）；僵尸句「lifecycle 非终态」精确化（9c124-N3）；「三个正交字段」vs liveness 派生（9c124-N4）；P1 判据数据源未指明（4f6e4b-N5）；Antigravity 静默缺席（9261bd-8.3.5） | **采纳** | 全部落 v0.5：M7→v0.5、术语统一、图修正、symlink 措辞改「消除漂移不提供写保护」、P0 目录补 Role Context 归属/lifecycle 消歧（与 pipeline_def 域 S11 锚定词，9c124-N2）/持久字段清单/判据数据源、附录 A 补 Antigravity「未验证（延期）」 |
+| R28 | P0 收缩 Accepted 正文 = 合入后改写 Accepted 记录，README 维护约定无此口径（2873a2-N5〔中〕） | **采纳** | §2.7 P0：平移合入时 **ADR 升 v1.1** 并在版本记录注明「细则已迁出，本文保留决策要点」 |
+| R29 | P0 负载已成分期最重一期（2873a2-N6〔提醒〕） | **采纳** | §2.7 P0 备注：「建议拆 P0a（契约文档）+ P0b（接线/门禁/supersede）两个 PR」 |
+| R30 | P1 启动判据未触发时的过渡窗口——旧 note 被 supersede 后无现行操作规范（9261bd-8.3.6） | **采纳** | §2.7 P1 备注已有「未触发则维持 2026-09-04 派生视图用法」；P0 supersede 改写时将该句保留为过渡条款（P0b 落地项） |
+
+## 3. 不采纳/缓办项
 
 - **章节重排（4f6e4b-B1）**：§2.8-2.10 前向引用问题随 R9 的 P0 平移自然消解，不单独重排（避免大段移动引入错位）。
 - **execution-contract.md 现不存在**（0cd302 §5）：非缺陷，P0 产物，分期使然。
 - **「声明仪式过重」总体担忧（0cd302 §6）**：以 R12（缺省策略）+ 既有 fail-open 原则回应，不再降级。
-- **§1「单人单 Harness」定性句校准（9c124-B3）**：并入 v0.4 顺手改（「同引擎多会话 → 多 Harness 引擎 × 执行层语义缺位」）。
+- **§1「单人单 Harness」定性句校准（9c124-B3）**：v0.4 已校准。
+- **0cd302 残留三项（finish argv 三态语义/附录 B 项/note Status 混淆）**：finish 三态（`finish`/`--pr N`/`--abandon`）入 P0 transition table；附录 B 仍范围外；note Status 为过程记录风格不改。
 
-## 3. 范围外遗留（建议另立 docs PR，不随本批）
+## 4. 范围外遗留（建议另立 docs PR，不随本批）
 
 1. `docs/design/2026-08-step-stall-detection.md:88-89` 两层钟 schema 门过期句（6d0f05-A1）；
 2. `effective_slots` 容量公式无常驻文档出处（6d0f05-A2）；

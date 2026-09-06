@@ -118,3 +118,72 @@ Proposed v0.3 技术内容可接受；§3 三处契约空白（READY/ABANDONED �
 落库口径、§2 内联规范迁移处置）建议 Accepted 前定稿——其中前两处与 0cd302 同题，
 采纳时以 0cd302 §4.1 + 本文 §3 合并为一条修订即可。§4 为编辑级建议，可随
 Accepted 前微修 PR 一并处理。
+
+## 7. v0.4 复审（2026-09-06 追加）
+
+- **审查对象**：[ADR-0034](../adr/ADR-0034-multi-harness-execution-contract.md)
+  **v0.4 终局** commit `1715eee6`（PR [#862](https://github.com/DUElost/stability-test-platform/pull/862)
+  八源 synthesis + [#863](https://github.com/DUElost/stability-test-platform/pull/863)
+  R6/R18 人工裁决落地）
+- **本文归属**：v0.3 部分已作为八源之一被
+  [`synthesis`](REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md) 收录并随
+  #862 入库（R 编号为唯一权威映射）；本节为对 v0.4 终局的只读复审（同一会话）。
+
+### 7.1 本文 v0.3 发现的处置核验（→ R 编号）
+
+| 本文 v0.3 发现 | synthesis 裁决 | v0.4 落点核验 |
+|---|---|---|
+| A1 READY/ABANDONED 写入权威（§3） | R2 采纳 | ✅ READY=GitHub checks 派生刷新可回退、CLOSED=GitHub 事实、ABANDONED 仅显式 `finish --abandon` |
+| A2 STALE 持久 vs 派生（§3） | R3+R4 采纳 | ✅ liveness 查询时派生、持久只存 `last_seen`、`status` 严格只读（观察不改状态） |
+| A3 ADR §2 存量规范去向（§3） | R9 采纳 | ✅ P0 一次性平移、ADR §2 收缩为决策要点+指针 |
+| B1 章节重排（§4） | 不采纳 | ✅ 理由成立：随 R9 P0 平移消解，避免大段移动错位；Proposed 窗口内的前向引用属可读性成本，非契约缺口 |
+| B2 coverage-mismatch 证据口径（§4） | R13 采纳 | ✅ 夜间全量/合并后记录，非 PR 轻量 checks |
+| B3 per-clone 可见性边界（§4） | 随 R1 采纳 | ✅ §2.2「Registry 按克隆隔离，不构成全局登记」 |
+| B4 git-common-dir 相对路径（§4） | R1 采纳 | ✅ 升级为 `--path-format=absolute` 唯一发现方式 + 删外置落点 + §5 三位置解析验收 |
+| B5 Role Context 入 contract 清单（§4） | 未见对应 R | ⚠️ 残差 → 本节 N4 |
+| B6 ①五处 canonical 口径 / ②G2 顺序 / ③63 行快照（§4） | R8 / R19 / R14 | ✅ ①②落地；③P0 行已删快照，但 §1 仍留「63 行」表述（事实引用，非 P0 快照问题，不再提） |
+
+### 7.2 新发现（v0.4，N1–N5）
+
+**N1（建议 Accepted 前补一句）`lifecycle=ABANDONED × integration=PR_OPEN` 悬空组合未定义**
+overlap 集合 = `lifecycle ∉ {ABANDONED}`——若执行者在 PR 仍开着时 `finish
+--abandon`，该 PR 的集成窗口即刻从 registry 消失，另一 Execution 改同文件时收不
+到 overlap 提示（registry 认为已放弃，PR 实际还活着）。契约定义了僵尸出口
+（STALE+零 diff→候选→abandon），未定义「abandon 时 PR 未关」这一侧。建议 §2.3
+加一句：`finish --abandon` 在 integration=PR_OPEN 时应提示先关闭/转交 PR，或
+transition table（P0 contract 必备目录）显式列出该组合处置。
+
+**N2（R14 同族漏网）README M7 看板行版本残留 v0.3**
+主表（`docs/adr/README.md:85`）已补 v0.4 完整行 ✅；**M7 里程碑看板行（:97）仍为
+「Proposed v0.3」**——正是 #861 修过的那类「版本修订漏更」，#862 只补了主表。
+
+**N3（R14 措辞族漏网）Alternatives「Phase 1」术语未统一**
+ADR §4 Alternatives「Phase 1 即引入 heartbeat daemon / TTL 硬语义」行仍保留
+「Phase 1」（§2.5 已全用 P1）。
+
+**N4（承接 B5）Role Context 定义归属仍悬空**
+§2.1 模型含 Role Context、P2 交付「上下文供给」；§2.10 contract.md 内容清单仍只
+列状态模型/scope 语法/registry 协议/drift/coverage，未含 Role Context 语义归属。
+建议 §2.1 注一行「Role Context 的定义与供给细则入 contract / 由 P2 定义」。
+
+**N5（轻微）P1 启动判据数据源未指明**
+「连续两周并行 worktree ≥3」——registry 是 P1 产物不能自证；判据应从 git
+worktree 历史/日志统计（与派生视图同数据源）。实施可解，contract 注明即可。
+
+### 7.3 通过项与一致性（v0.4，抽查）
+
+- #863 裁决背景句（§2.3「三维=实现选择而非冻结条款，lifecycle/finished_at 二选
+  一」）与 synthesis「裁决后补记」、draft note「裁决落地」三处一致 ✅
+- R15 归因修正（S1–S10→#853、S11→#856）、R21 #847 对账与 Alternatives 窄口径、
+  R22 P1 启动判据、#855 三段触发，均落地 ✅
+- R14 族：DOC-MAP 行（v0.4）、governance 文档 L0 行 S1–S11、draft note 锚 v0.4
+  并补 v0.4/v0.3 修订记录 ✅（漏网见 N2/N3）
+- `venv/bin/python tools/dev/check_governance_surface.py --check` 通过（S1–S11、
+  S5x）✅
+
+### 7.4 复审结论
+
+v0.4 技术内容**可以 Accepted**：核心契约空白（R2/R3/R6/R9 族）已全部钉死，人工
+裁决（R6 三维定位、R18 Competition 否决）收口干净。本节发现均不构成阻断——
+N1 建议 Accepted 前在 §2.3 补一句约束（或作为 P0 transition table 强制目录项）；
+N2–N5 可随 Accepted 前微修 PR 一并处理（合计约 5 行改动）。
