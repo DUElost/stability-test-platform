@@ -19,7 +19,7 @@ Class: process
 | OpenCode 1.18.25 | 是 | **是** | ✅ 根+scoped 双边可见（逐级发现） |
 | Claude Code 2.1.259 | 否（#857 已知） | **是** | ✅ scoped 经 symlink 薄壳可见——迁移前 Claude 子目录 scoped 供给为零，本迁移补上 |
 | Cursor Agent 2026.09.02（补测） | 是 | **是** | ✅ 根+scoped 双边可见；**Q3=两次：Cursor 同时加载 AGENTS.md 真身与 CLAUDE.md symlink，同一内容双份入上下文**（见下方新发现） |
-| Codex 0.153.0 | pending | pending | 5h 限额（01:20 重置）；机制=上午 4/4 矩阵实测的嵌套 AGENTS.md 发现，同构 |
+| Codex 0.153.0（补测） | 是 | **是** | ✅ 根+scoped 双边可见；**Q3=一次**（只读真身，不重复加载 symlink——与 Cursor「两次」对照，证实双份加载为 Cursor 特有行为） |
 
 本迁移对 **aee/** 的同构扩展（真身+薄壳+checker 条目）已一并落地，探针未单独重跑（同目录同机制）。
 
@@ -37,7 +37,8 @@ Class: process
 - `venv/bin/python tools/dev/check_governance_surface.py --check`：S1–S11+S5x 全绿（S6 校验真身 14 行/1.2KB 与 aee 71 行、S2 校验真身内链接）；`--self-test` 12 规则全绿；`ruff` 通过；
 - `git ls-files -s`：真身 mode 100644、薄壳 mode 120000（symlink）✓；
 - 验收探针实测见上表（OpenCode/Claude live 双绿；Codex/Cursor pending 如实标注）；
-- pending：Codex 限额恢复后补测（探针协议与命令见 ADR 附录 A）；PR CI 六项 required checks 以实际运行为准。
+- 验收终态：**4/4 Harness 全部通过**（OpenCode/Codex 双边单份、Cursor 双边双份、Claude scoped 单份；根契约对 Claude 的缺口=#857，P2 Adapter 解决）。
+- PR CI 六项 required checks 以实际运行为准。
 
 ## Revisit
 
