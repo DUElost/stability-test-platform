@@ -1,7 +1,7 @@
 # #72 实机验收 runbook：AEE Reconciler MTK 端到端
 
 - **跟踪**：[GitHub #72](https://github.com/DUElost/stability-test-platform/issues/72)
-- **关联 ADR**：[ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)（方案 C 存储）；平台门禁见 `backend/agent/aee/CLAUDE.md` §平台门禁（#73）
+- **关联 ADR**：[ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)（方案 C 存储）；平台门禁见 `backend/agent/aee/AGENTS.md` §平台门禁（#73）
 - **触发工具**：`backend/agent/scripts/aee_signal_trigger/v1.0.0/aee_signal_trigger.py`
 - **文档状态**：模板（待实跑填入实测值并签字）
 
@@ -15,7 +15,7 @@
 
 ### 1.1 机型
 
-任一台 MTK 机型（`backend/agent/aee/CLAUDE.md` §平台门禁记录的生产实测机型）：
+任一台 MTK 机型（`backend/agent/aee/AGENTS.md` §平台门禁记录的生产实测机型）：
 
 | 机型 | 平台 | RoM |
 |------|------|-----|
