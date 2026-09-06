@@ -32,7 +32,7 @@
 | 查跨模块硬不变量 | 根目录 [`AGENTS.md`](../AGENTS.md) |
 | 查 AI Harness 规则入口与本地配置边界 | [`development/ai/harness-adapters.md`](./development/ai/harness-adapters.md) |
 | 查哪些旧文档可删除 | [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md) |
-| 开展全面只读审查 / 查区域与进度入口 | [`reviews/PROJECT_REVIEW_PLAN.md`](./reviews/PROJECT_REVIEW_PLAN.md) |
+| 查全面审查指引（分区 / 进度入口；非审查结果） | [`reviews/PROJECT_REVIEW_PLAN.md`](./reviews/PROJECT_REVIEW_PLAN.md) |
 | 查设备日志流转审查 / DoD | [`reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md) |
 
 ---
@@ -50,7 +50,7 @@ docs/
 ├── acceptance/               ← 验收矩阵
 ├── development/              ← 本地开发、测试、env
 ├── operations/               ← 部署、联调、运维索引
-├── reviews/                  ← Living 审查（缺陷/DoD，不替代 design/）
+├── reviews/                  ← 全面审查指引 + Living 审查结果（缺陷/DoD；不替代 design/）
 ├── archive/                  ← 历史文档
 └── …
 ```
