@@ -156,8 +156,8 @@ RESIDENT_BUDGETS = {
     ".cursor/rules/agent-scripts.mdc": (30, 3000),
     "docs/development/ai/harness-adapters.md": (100, 10000),
     "docs/development/ai/execution-contract.md": (200, 20000),
-    "backend/agent/CLAUDE.md": (40, 5000),
-    "backend/agent/aee/CLAUDE.md": (100, 10000),
+    "backend/agent/AGENTS.md": (40, 5000),
+    "backend/agent/aee/AGENTS.md": (100, 10000),
 }
 
 
@@ -415,9 +415,10 @@ def run_check() -> int:
             "docs/operations/device-lease-emergency-release.md",
             os.path.join(ROOT, "docs", "operations"),
         ),
-        ("backend/agent/CLAUDE.md", os.path.join(ROOT, "backend", "agent")),
+        # G2：scoped 真身（symlink 薄壳 CLAUDE.md → AGENTS.md 不单列，同内容）
+        ("backend/agent/AGENTS.md", os.path.join(ROOT, "backend", "agent")),
         (
-            "backend/agent/aee/CLAUDE.md",
+            "backend/agent/aee/AGENTS.md",
             os.path.join(ROOT, "backend", "agent", "aee"),
         ),
     ]
