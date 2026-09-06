@@ -70,7 +70,11 @@
 
 `POST /agent/jobs/claim`：
 
-- Host 须 ONLINE；容量 = 空闲设备计与 Agent capacity。
+- Host 须 ONLINE；容量 = 空闲设备计与 Agent capacity。Agent 侧认领槽位公式
+  （`backend/agent/capacity_reporter.py`，#483）：`effective_slots =
+  min(max(0, 在线健康设备 − 活跃设备), health_limit, STP_MAX_CLAIM_SLOTS 默认 5)`——
+  `host.max_concurrent_jobs` 已删除（migration `q2r3s4t5u6v7`），空闲设备数之外
+  的上限只有健康门控与认领上限两个。
 - 仅 `PlanRun.status=RUNNING` 且未 abort 的 PENDING。
 - `agent_version` 可选；仅当控制面设置了 `STP_AGENT_MIN_VERSION` 时比较（短版本按数字段零填充，如 `2.1` → `2.1.0`）。未设置门控 → 不拦截。
 

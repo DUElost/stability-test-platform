@@ -11,6 +11,9 @@
 - 不得用生产数据库代替测试数据库；
 - 不得在生产数据库上试跑迁移；
 - `.env.backend`、`backend/.env` 和 Agent `.env` 的职责不同，不得互相代用。
+- **`backend/.env` 里的 `AGENT_SECRET` 是陈旧值**：控制面与全部 Agent 实际使用的
+  都是 `.env.backend` 的生产值，`backend/.env` 的旧值签发的 token 一律不被认——
+  诊断 auth 问题时以 `.env.backend` 为准，不要被 `backend/.env` 的残留值误导。
 
 ## 凭据来源
 

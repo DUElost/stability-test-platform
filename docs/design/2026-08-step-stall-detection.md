@@ -85,8 +85,11 @@ PROGRESS {"seq": N, "step": "fill", "written_kb": 12345, ...}
 **`timeout_seconds=0`(不限) 的开门条件是按步骤的**：只有「该步骤脚本已接入
 `PROGRESS` 打戳 且 该步骤显式开了 `stall_seconds`」时它才安全。没开停滞钟的
 步骤配 `0`，依然等于"卡死永远占住一个 permit"（执行心跳由 coordinator 独立
-线程发，脚本 hang 住时照常上报，控制面不会回收）。schema 侧 `minimum:1` 的门
-也保持关闭，随本条件一起开。
+线程发，脚本 hang 住时照常上报，控制面不会回收）。schema 侧 step 级
+`timeout_seconds` 已于 2026-08-04 放宽到 `minimum: 0`——但 `pipeline_schema`
+同时强制：`timeout_seconds` 恰为 `0` 时必须显式配 `stall_seconds >= 1`
+（stall 联动门，`pipeline_engine.py` docstring 为准），即「0 只对已接打戳 +
+显式开停滞钟的步骤表达」——与上文开门条件一致，不再是「待开」。
 
 ## 5. 后续阶段（未实施）
 
