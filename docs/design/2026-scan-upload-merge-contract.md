@@ -51,7 +51,7 @@ Agent `STP_NFS_ROOT` 由 `STP_AEE_NFS_ROOT` 镜像；不得下发控制面本机
 `reload_config`。
 
 `POST /api/v1/plan-runs/hosts/{host_id}/reload-config` 通过 SocketIO 让 Agent 重读
-安装目录 `.env`。Agent 侧刷新的组件见 `backend/agent/CLAUDE.md`。
+安装目录 `.env`。Agent 侧刷新的组件见 `backend/agent/AGENTS.md`。
 
 ## 风险与链接健康
 

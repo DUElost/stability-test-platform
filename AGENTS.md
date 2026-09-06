@@ -31,7 +31,7 @@
 ## 开始任务时
 
 1. 从 [`docs/DOC-MAP.md`](docs/DOC-MAP.md) 和下表定位当前 Requirement 的权威文档；
-2. 检查目标代码、测试和相邻目录内的 scoped `CLAUDE.md`；
+2. 检查目标代码、测试和相邻目录内的 scoped `AGENTS.md`（Claude 侧为其 `CLAUDE.md` symlink 薄壳）；
 3. 查看其他 worktree 的实际 diff，避免同时修改同一批文件；涉及并行
    Execution 登记时按 [`execution-contract.md`](docs/development/ai/execution-contract.md)；
 4. 共享元文件（本文件、`CLAUDE.md`、Harness rules）同一时间只由一个 Execution 修改。
