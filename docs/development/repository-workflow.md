@@ -16,9 +16,12 @@ ADR。模板与判定见 [`docs/notes/README.md`](../notes/README.md)。
 
 ## 并行 worktree
 
-当前规则仍以
-[`2026-09-04-multi-agent-parallel-convention.md`](../notes/process/2026-09-04-multi-agent-parallel-convention.md)
-为准：
+并行执行语义的权威源是
+[`ADR-0034`](../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted v1.0）与
+[`execution-contract.md`](ai/execution-contract.md)；其 Registry（P1）尚未实现且
+启动判据未触发，**现行操作规范为契约 §9 过渡条款**——下列规则（源自
+[`2026-09-04-multi-agent-parallel-convention.md`](../notes/process/2026-09-04-multi-agent-parallel-convention.md)，
+其并行语义已被 ADR-0034 取代、相关实践经过渡条款保留）继续有效：
 
 - 冲突靠开工前查看实际 worktree diff 避免，不依赖手写 WIP 状态；
 - 分片只用于冲突规避，不形成目录所有权；
@@ -36,7 +39,8 @@ for w in $(git worktree list --porcelain | awk '/^worktree /{print $2}'); do
 done
 ```
 
-新的 Execution Registry、Role 或 Scope 语义只有在后续 ADR 正式取代上述决策后才生效。
+Execution Registry（`ai_work.py`）按 ADR-0034 P1 分期落地，启动判据与过渡安排见
+`execution-contract.md` §9；判据未触发前不要手工维护任何登记状态。
 
 ## PR 与 Merge Queue
 

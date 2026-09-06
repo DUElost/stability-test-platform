@@ -155,6 +155,7 @@ RESIDENT_BUDGETS = {
     ".cursor/rules/agent-runtime.mdc": (30, 3000),
     ".cursor/rules/agent-scripts.mdc": (30, 3000),
     "docs/development/ai/harness-adapters.md": (100, 10000),
+    "docs/development/ai/execution-contract.md": (200, 20000),
     "backend/agent/CLAUDE.md": (40, 5000),
     "backend/agent/aee/CLAUDE.md": (100, 10000),
 }
@@ -383,6 +384,11 @@ def run_check() -> int:
         ),
         (
             "docs/development/ai/harness-adapters.md",
+            os.path.join(ROOT, "docs", "development", "ai"),
+        ),
+        # P0a/P0b：Execution Contract 唯一权威源（ADR-0034）纳入断链防护
+        (
+            "docs/development/ai/execution-contract.md",
             os.path.join(ROOT, "docs", "development", "ai"),
         ),
         (

@@ -43,9 +43,13 @@ Harness 的自动发现规则会随版本变化。新增专用适配前必须用
 1. 先确认代码、测试或权威文档中的现状；
 2. 修改 `AGENTS.md`、`CLAUDE.md` 或对应领域文档；
 3. 仅在 Harness 需要加载路由或专用格式时同步薄适配；
-4. 运行治理面结构检查，确认链接、frontmatter 和门禁清单没有漂移。
+4. 涉及并行 Execution（Registry 登记、scope 声明、集成窗口）时，按
+   [`execution-contract.md`](execution-contract.md) 执行；
+5. 运行治理面结构检查，确认链接、frontmatter 和门禁清单没有漂移。
 
 `AGENTS.md`、`CLAUDE.md` 与 Harness 适配文件属于共享元文件，同一时间只由一个
-Execution 串行修改。现有并行开发语义仍以
+Execution 串行修改。并行执行语义的权威源是
+[`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)
+（Accepted v1.0）与 [`execution-contract.md`](execution-contract.md)；
 [`2026-09-04-multi-agent-parallel-convention.md`](../../notes/process/2026-09-04-multi-agent-parallel-convention.md)
-为准，直至新的 ADR 正式取代它。
+已被取代，其元文件串行化与派生视图实践经契约 §9 过渡条款保留。

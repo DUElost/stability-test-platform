@@ -3,6 +3,14 @@
 Status: implemented
 Class: process
 
+> **并行执行语义已由 [`ADR-0034`](../../../docs/adr/ADR-0034-multi-harness-execution-contract.md)
+> （Accepted v1.0，2026-09-06）取代**：Execution Registry、三维状态模型、overlap
+> 真值表、scope 语义等以 [`execution-contract.md`](../../../docs/development/ai/execution-contract.md)
+> 为唯一权威源。本 note 的**元文件串行化**与**派生视图**实践经契约 §9 过渡条款保留
+> （Registry P1 启动判据未触发期间的现行操作规范，见
+> [`repository-workflow.md`](../../../docs/development/repository-workflow.md)）；其余
+> 并行规则与「不为 N=2 引入 WIP 公告」裁定成为被取代的历史记录，原文留档如下。
+
 ## Decision
 
 `AGENTS.md` 新增「多 Agent 并行开发」一节，三条约定：
