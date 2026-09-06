@@ -1,6 +1,6 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.0（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted v1.0），两者冲突时以本文为准并回溯修订 ADR）
+- **状态**：Living v1.1（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
 - **日期**：2026-09-06
 - **适用**：所有在本仓库参与 Execution Registry 的 AI Coding Harness 会话；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
@@ -22,6 +22,7 @@
 | `harness` | 承接的 Harness（溯源，非指派） |
 | `role` | Role Context 标签（执行侧自声明；定义与供给细则归 P2 Adapter） |
 | `worktree` | worktree 路径 |
+| `branch` | worktree 的工作分支（§5.2 第二档 branch diff 的数据源；v1.1 增） |
 | `scope` | declared scope（见 §5 语法） |
 | `pr_number` | 登记的 PR 号（可空） |
 | `lifecycle` | `CODING / FINISHED / ABANDONED`（§3） |
@@ -155,8 +156,11 @@ effective_scope = normalized(declared) ∪ derived(diff)
 
 ## 9. P1 启动判据与过渡条款
 
-- **启动判据**：连续两周并行 worktree ≥3，或实际发生 ≥2 次跨 Harness 撞车返工。**数据源 = git worktree 历史/日志统计**（与派生视图同源；registry 是 P1 产物不能自证）；
-- **过渡条款**：判据未触发期间，**维持 2026-09-04 约定的派生视图用法**（`git worktree list` 遍历 + 对 merge-base 取差异）作为现行操作规范——本契约 supersede 旧 note 后此条是唯一过渡依据，防止「旧规范已废、新工具未启」的空窗。
+- **启动判据**（满足其一即启动，**v1.1 修订**）：
+  1. **已计划的多 Harness 工作批次启动前**（2026-09-07 用户裁决增补——ADR-0034 的立项背景本就是「即将开展多 Issue 集中修复与新需求开发的多 Harness AI Coding」，工具须**在批次开始前预置就绪**，而非等场景自然发生；原「等撞车」判据把因果倒置）；
+  2. 连续两周并行 worktree ≥3（数据源 = git worktree 历史/日志统计，与派生视图同源）；
+  3. 实际发生 ≥2 次跨 Harness 撞车返工。
+- **过渡条款**：`ai_work.py` 就绪并被采用之前，**维持 2026-09-04 约定的派生视图用法**（`git worktree list` 遍历 + 对 merge-base 取差异）作为现行操作规范——防止「旧规范已废、新工具未启」的空窗；工具就绪后派生视图仍保留为 ground truth 交叉验证手段（§5.4）。
 
 ## 10. 演进
 

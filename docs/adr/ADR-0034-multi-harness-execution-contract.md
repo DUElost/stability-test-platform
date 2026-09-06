@@ -1,7 +1,7 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Accepted（v1.1）**
-- 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ v1.0 #865（**Accepted**，2026-09-06 用户人工终审批准）/ **v1.1 本版：§2 执行细则已迁出至 `execution-contract.md`（P0a），本文保留决策要点 + 指针**
+- 状态：**Accepted（v1.2）**
+- 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ v1.0 #865（**Accepted**，2026-09-06 用户人工终审批准）/ v1.1 #866（§2 细则迁出至 `execution-contract.md`，本文保留决策要点 + 指针）/ **v1.2 本版：P1 启动判据修订——增补「已计划的多 Harness 批次启动前预置就绪」（2026-09-07 用户裁决：本 ADR 立项背景即即将开展的多 Issue 集中修复与新需求开发，工具须先于场景就绪；判据全文见契约 §9 v1.1）**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
@@ -67,7 +67,7 @@ Registry 声明与实际 diff 不一致时**以 diff 为准**；派生视图（�
 | 期 | 内容 | 备注 |
 |---|---|---|
 | P0 | **P0a（本版已交付）**：`execution-contract.md` 建立、细则一次性平移、本 ADR 收缩升 v1.1。**P0b（独立 docs PR）**：AGENTS.md/CLAUDE.md 改写（元文件串行化）；单一 canonical Contract + 薄入口接线（AGENTS.md/CLAUDE.md/`.cursor/rules`/`.codex`）；`harness-adapters.md`、`repository-workflow.md` 与 Phase -1 基线 note 的指针接到本文；`execution-contract.md` 入治理门禁（S2 `link_files` + S6 `RESIDENT_BUDGETS`）；supersede 2026-09-04 note（含 §9 过渡条款保留） | P0b 合入后接 G2 试点（§3） |
-| P1 | Registry MVP（ai_work.py 按 [`execution-contract.md`](../development/ai/execution-contract.md) §2–§5 实现 + `test_impact` 入 schema（允许缺省）+ 自测红绿样例） | **启动判据**：连续两周并行 worktree ≥3，或 ≥2 次跨 Harness 撞车返工——未触发则维持派生视图用法（契约 §9 过渡条款） |
+| P1 | Registry MVP（ai_work.py 按 [`execution-contract.md`](../development/ai/execution-contract.md) §2–§5 实现 + `test_impact` 入 schema（允许缺省）+ 自测红绿样例） | **启动判据**见契约 §9 v1.1（v1.2 增补第一触发：已计划的多 Harness 批次启动前预置就绪）；就绪并采用前维持派生视图用法（过渡条款） |
 | P2 | Harness Adapter：会话启动时知晓自身 Role——**上下文供给，非路由**；提供 heartbeat（§2.5 升格条件）；**验收含 cwd 深度 × Harness 加载矩阵**（附录 A 协议扩展） | |
 | P3 | 真增量 = **Drift / Freshness gate**：先 advisory（本地 run_gates / 夜间全量），overlap 粒度用顶层目录作 hint 而非硬门禁；含 `coverage-mismatch` advisory（契约 §6） | **不建 merge queue**——主干机制已存在（FIFO enable-auto-merge + update-branch + strict 分支保护） |
 | P4 | Integration Planner：仅在「人已难判集成顺序」真实积累后启用 | 观察项 |
