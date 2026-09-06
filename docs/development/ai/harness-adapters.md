@@ -53,3 +53,24 @@ Execution 串行修改。并行执行语义的权威源是
 （Accepted v1.0）与 [`execution-contract.md`](execution-contract.md)；
 [`2026-09-04-multi-agent-parallel-convention.md`](../../notes/process/2026-09-04-multi-agent-parallel-convention.md)
 已被取代，其元文件串行化与派生视图实践经契约 §9 过渡条款保留。
+
+## P2 Adapter：会话启动动作（上下文供给，非路由）
+
+会话由开发者选择启动（选择权原则）；Adapter 只负责让该会话**知晓自身 Execution
+与集成窗口**。Registry CLI：`tools/dev/ai_work.py`（规范见
+[`execution-contract.md`](execution-contract.md) §2–§5）。
+
+| 时机 | 动作 | 所有 Harness 通用 |
+|---|---|---|
+| 会话启动（在 worktree 内） | `python tools/dev/ai_work.py whoami` | 输出自身 Execution 状态与**入向 overlap**（他人在窗记录覆盖本 worktree scope）；无记录则提示 declare |
+| 编码中（长会话） | `python tools/dev/ai_work.py heartbeat --id <R>` | 纯心跳（= 无参 `update`）：刷自身 `last_seen` + GitHub reconcile；P2 起由 wrapper 定时调用，`last_seen` 据此升格为可靠 liveness 信号 |
+| 开 PR / scope 变化 | `python tools/dev/ai_work.py update --id <R> --pr <N> [--scope ...]` | 登记 PR、派生 integration、覆写声明 |
+| 编码停止 | `finish --id <R> --pr <N>` / `finish --id <R> --abandon` | 语义见契约 §3.3 transition table |
+
+- `whoami`/`status` 严格只读（观察不改变被观察状态）；只有带 identity 的写命令
+  （declare/update/finish）刷新自身 `last_seen`；
+- 各 Harness 的自动加载差异（Codex/Cursor/OpenCode 读 scoped `AGENTS.md`；
+  Claude 经 `CLAUDE.md` symlink 薄壳）见本文件上方适配面表与 ADR 附录 A；
+  **Claude 子目录下根启动契约不自动加载（#857）**——修改共享层（根 AGENTS/
+  workflows/依赖）前必须先读仓库根 `AGENTS.md`，P2b 的根供给方案落地前以
+  此人工纪律过渡。
