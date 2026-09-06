@@ -3,8 +3,9 @@
 - **日期**：2026-09-06
 - **性质**：八份独立只读审查的权威综合（playbook 2026-08-26 模式）；本文件编号为唯一权威映射，后续引用一律用 R 编号
 - **审查源**（8 份，同目录）：`_0cd302`、`_2873a2`、`_4f6e4b`、`_6d0f05`、`_9261bd`、`_9c124`、`_aa114c`、`_d4a277`
-- **总评谱系**：1 份建议直接 Accepted（aa114c）；多数「修完关键项再 Accepted」；9261bd 列 3 阻断。**共识：架构方向无异议（8/8 通过两维→三维状态模型方向、事实分层、TTL 分期、不建 merge queue、Registry 非调度器）；分歧集中在契约定义完备度。**
-- **处置**：采纳 21 项 → ADR v0.4（PR 同批）；待人工裁决 1 项（R18）；范围外遗留 3 项（附录 B）。
+- **总评谱系**：1 份建议直接 Accepted（aa114c）；多数「修完关键项再 Accepted」；9261bd 列 3 阻断。**共识：架构方向无异议（8/8 通过状态模型按集成窗口判定、事实分层、TTL 分期、不建 merge queue、Registry 非调度器）；分歧集中在契约定义完备度。**
+- **处置**：采纳 21 项 → ADR v0.4（PR 同批）；**R6/R18 已由用户 2026-09-06 晚裁决**（见各条目）；范围外遗留 3 项（附录 B）。
+- **裁决后补记（2026-09-06）**：9261bd 经用户修订——①冻结版 Contract v1 确认为**两维**（Execution × Integration），三维模型为评审建议、未获显式确认；②B3 重定义为「finish 缺少独立可持久化语义表达」，lifecycle 字段与 `finished_at` 字段二选一皆合规（v0.4 采用 lifecycle，兼载 ABANDONED 放弃语义）；③Competition 降为非阻断追溯建议。本表 R6/R18 裁决栏已按此更新。
 
 ## 1. 裁决总表（R 编号 → v0.4 落点）
 
@@ -15,7 +16,7 @@
 | R3 | STALE「持久字段」vs「派生提示」矛盾（§2.3 vs §2.5）（**5 源**：0cd302-4.1③、4f6e4b-A2、9261bd-H4、9c124-L1、aa114c-建议3） | **采纳** | §2.3/§2.5 统一：**持久层只存 `last_seen`；liveness 值（LIVE/STALE）为查询时派生**，P1 不回写、P2 heartbeat 后仍由派生或唯一回写者，永不影响 integration risk |
 | R4 | `status` 刷新 `last_seen` = 观察行为改变被观察状态（9261bd-H3，单源但独立成立） | **采纳** | 并入 R2/R3：`status` 严格只读；仅携带 execution identity 的写命令（update/finish/declare）可刷新自身 `last_seen` |
 | R5 | overlap 检测未绑定 git diff——「diff 优先」只写在 §2.4 未接线（d4a277-必修1，单源但带 2026-09-04 真实反例：`docs/drift-sync-*` 声明 `docs` 实际触及 `backend/`、`.github/`） | **采纳** | §2.2：**overlap 参与集合不变（§2.3），但参与者 scope 数据 = `declared ∪ derived(diff)`、冲突以 derived 为准**；声明仅在零 diff 时单独生效；§5 P1 加「声明≠diff」fixture |
-| R6 | 两维模型压缩过度：finish 无法表达「先开 PR 再编码完」、ABANDONED 混入 integration、liveness 与 lifecycle 同名 ACTIVE（9261bd-B3，引冻结版三维） | **采纳（三维）**，⚠ 结构差异待人工确认 | §2.3 改三维：**lifecycle{CODING,FINISHED,ABANDONED} × liveness{LIVE,STALE} × integration{NO_PR,PR_OPEN,READY,MERGED,CLOSED}**；`finish` 只写 lifecycle（解耦 PR 先后）；overlap = lifecycle 非终态 且 integration∈{NO_PR,PR_OPEN,READY}。**注**：与 09-06 上午评审消息的两维表述存在结构差异，请人工对照冻结版 Contract v1 原文确认 |
+| R6 | 两维模型下 `finish` 缺少独立可持久化语义表达（9261bd-B3 修订版；原报告的「三维=冻结条款」表述经用户修订撤回——冻结版确认为两维，三维为评审建议） | **采纳（lifecycle 实现选择）**，已裁决 | §2.3：以**独立 lifecycle 字段**为 finish 提供持久化表达（修订后 B3 允许 lifecycle 或 `finished_at` 二选一，v0.4 选前者兼载 ABANDONED 放弃语义）；`finish` 只写 lifecycle（解耦 PR 先后）；overlap = lifecycle 非终态 且 integration∈{NO_PR,PR_OPEN,READY}；**三维为实现选择而非冻结条款**（ADR §2.3 裁决背景句已注明） |
 | R7 | 原子写协议不全：缺 validate 与 parent-directory fsync（9261bd-B2，引冻结版） | **采纳** | §2.2 固化九步全序为硬约束（异常处理/残留清理/损坏恢复下沉 contract.md） |
 | R8 | 「五处 canonical」与「唯一权威源」冲突（**4 源**：2873a2-M4、9261bd-H5、4f6e4b-B6①、9c124-L2） | **采纳** | §2.7 P0/§5 统一为「**单一 canonical Contract + 明确列举薄入口**（AGENTS.md/CLAUDE.md/.cursor/rules/.codex）」 |
 | R9 | ADR §2 细则与 contract.md 双份漂移；存量内联规范去向未定（**4 源**：0cd302-4.2⑧、4f6e4b-A3、6d0f05-N2、9c124-L3） | **采纳** | §2.10/P0：建 contract 时**一次性平移细则**，ADR §2 收缩为决策要点+指针（否则 ADR 变第二契约源，违反自设规矩） |
@@ -27,7 +28,7 @@
 | R15 | ADR:20「S1-S11 归 PR #853」归因串位——S11 由 #856 引入（6d0f05-A3；实核成立） | **采纳** | §1 修正为 S1–S10 归 #853、S11 归 #856 |
 | R16 | drift 比对对 Agent Note 等强制随附物的豁免未留痕（6d0f05-A5） | **采纳（轻）** | P0 行加半句：豁免规则入 contract 初稿 |
 | R17 | Scope 缺拒绝规则：absolute path / `..` / symlink escape / 组件边界（9261bd-H1） | **采纳** | §2.8 补明列；P0 contract 定义基于路径组件边界的 overlap 谓词 |
-| R18 | Competition mode（显式受审计竞争）未入 ADR（9261bd-H2，引冻结版；但 09-05 方案与其余 7 源均未提及） | **待人工裁决** | 冻结版 Contract v1 是否含此条款无法从本仓核实（用户评审消息从未出现）。若含 → v0.4.x 补最小语义（显式、非默认、无 ownership/locking）；若不含 → 否决（避免为不存在的条款加复杂度）。**ADR 现文本 overlap=hint+不上锁已隐含允许并行** |
+| R18 | Competition mode（显式受审计竞争）未入 ADR（9261bd-H2 原版；但 09-05 方案与其余 7 源均未提及） | **已裁决：不入 Contract** | 用户 2026-09-06 裁决：冻结版不含此条款，降为**非阻断追溯建议**——ADR Revisit 留观察（overlap=hint+不上锁已隐含允许并行），真实竞争需求出现再议，不为不存在的条款加复杂度 |
 | R19 | G2 补充族：symlink 写入方向与防护、验收含根契约同时可见（#857 下根 @import 不解析）、试点路径写全、P0 后接 G2（4 源：9261bd-M3、4f6e4b-B6②、0cd302-4.2⑥、d4a277-3.3） | **采纳** | §3：方向=CLAUDE.md→AGENTS.md symlink、写入防护句；验收口径加「根 bootstrap（总原则/硬不变量）与 scoped 内容同时可见」，P2 Adapter 明确根契约供给；试点 `backend/agent/`→`backend/agent/aee/`；P0 合入后接 G2 试点 |
 | R20 | #855 触发语义三段未分（9261bd-M5） | **采纳** | §5：Git merge=可引用 / Accepted=方向生效 / P0 完成=#855 补全开工 |
 | R21 | 与 #847「不为 N=2 引入 WIP 公告」缺显式对账；Alternatives 首条理由不准确（派生视图实已覆盖本机全部 worktree，真实缺口=双方均零 diff 时）；审阅瓶颈原结论未正面回应（d4a277-3.1/3.2、2873a2-R2） | **采纳** | §1/取代对象处补对账半句（工具媒介自动执行 vs 手工仪式、advisory、N 已跨 Harness）；§4 首条理由改窄口径；§2.6 补「审阅瓶颈未变，Registry 提升的是审计面信息完备性而非审阅吞吐，任务排队仍是主策略」 |

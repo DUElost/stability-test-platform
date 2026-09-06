@@ -7,8 +7,8 @@
   - `docs/notes/process/2026-09-06-adr-0034-draft.md`
   - `docs/adr/README.md`
   - Phase -1 Harness 基线、现行并行约定、Harness 适配与仓库集成工作流
-- 审查方式：对照已冻结的 Contract v1 条款、Git worktree 实际行为、现有 FIFO
-  auto-merge/CI 事实源和治理门禁进行只读交叉核验
+- 审查方式：对照用户明确确认的 Contract v1 条款、后续模型校正建议、Git worktree
+  实际行为、现有 FIFO auto-merge/CI 事实源和治理门禁进行只读交叉核验
 - 审查基线：`main` at `55e9a71e`（包含 PR #860、#861）
 
 ---
@@ -20,9 +20,10 @@ ADR-0034 v0.3 相比 v0.2 已完成关键方向修正：Registry 移入 Git comm
 MVP、`test_impact`、单一 Execution Contract 以及复用现有 FIFO auto-merge 均已进入
 正文。
 
-但 v0.3 **仍不应转为 Accepted**。当前有 3 项与冻结版 Contract v1 直接冲突的阻断项，
-另有 5 项应在同一轮修订中收口。建议发布 v0.3.1，完成本文 B1–B3 与 H1–H5 后再进行
-Accepted 评审；在此之前不应启动 P0/P1 实施。
+但 v0.3 **仍不应转为 Accepted**。当前有 2 项与用户明确确认条款直接冲突的阻断项，
+以及 1 项独立于模型维数选择的 `finish` 语义阻断项；另有 4 项应在同一轮修订中收口。
+建议发布 v0.3.1，完成本文 B1–B3 与 H1–H4 后再进行 Accepted 评审；在此之前不应启动
+P0/P1 实施。
 
 ---
 
@@ -86,37 +87,38 @@ flock(registry.lock)
 **修订要求：**在 ADR 固化完整硬约束，具体异常类型、残留 temp 清理和损坏恢复再由
 `execution-contract.md` 定义。
 
-### B3. 冻结的三维状态模型被压缩成两维，`finish` 无法被记录
+### B3. `finish` 缺少独立、可持久化的语义表达
 
-冻结版模型：
+对话中存在两版模型：
 
-| 维度 | 状态 |
+| 来源 | 模型 |
 |---|---|
-| execution lifecycle | `ACTIVE / FINISHED / ABANDONED` |
-| liveness | `LIVE / STALE` |
-| integration | `NO_PR / PR_OPEN / READY / MERGED / CLOSED` |
+| 用户明确确认 | Execution state 与 Integration state 两维，核心约束是 STALE 不退出集成风险 |
+| 后续审查建议（未获用户显式确认） | lifecycle / liveness / integration 三个正交维度 |
 
-v0.3 §2.3 只保留：
+因此，不能把三维模型称为“已冻结 Contract v1”，也不能仅因 v0.3 采用两维模型就判定
+其违反冻结裁决。v0.3 当前模型为：
 
 | 维度 | 状态 |
 |---|---|
 | liveness | `ACTIVE / STALE` |
 | integration | `NO_PR / PR_OPEN / READY / MERGED / ABANDONED` |
 
-这会造成具体不可实现问题：
+两维模型的 overlap 结论本身成立：integration window 决定风险集合，STALE 不构成排除
+条件。真实阻断点是 §2.3/§2.5 没有为“已停止编码”提供可持久化表达：
 
-1. `ACTIVE` 被用作 liveness，重新混入 execution lifecycle；
-2. `ABANDONED` 被放进 integration，执行生命周期与 PR 生命周期再次耦合；
-3. PR 可以在编码期间已经处于 `PR_OPEN`，此时执行 `finish(PR #N)` 后两个字段都无需
+1. PR 可以在编码期间已经处于 `PR_OPEN`，此时执行 `finish(PR #N)` 后两个字段都无需
    变化，Registry 无法表达“执行者已停止编码”；
-4. `finish` 被写成固定的 `NO_PR → PR_OPEN`，无法覆盖“先开 PR、继续编码、再 finish”
+2. `finish` 被写成固定的 `NO_PR → PR_OPEN`，无法覆盖“先开 PR、继续编码、再 finish”
    的正常路径。
 
-**修订要求：**恢复三个正交字段；风险集合由三维状态派生，不能以压缩状态替代：
+**修订要求：**明确记录 coding finished，但不强制三维枚举。可选方案包括：
 
-- overlap/integration risk 继续覆盖尚未 `MERGED/CLOSED` 的声明；
-- `STALE` 永远不构成排除条件；
-- `finish` 只更新 lifecycle，不自行宣告 GitHub/CI 事实。
+- 增加独立 lifecycle 字段；或
+- 保留两维模型并增加 `finished_at` / `coding_finished` 等明确字段。
+
+无论采用哪种方案，`finish` 都不得自行宣告 GitHub/CI 事实，且不能使记录退出 integration
+risk。三维模型是可选设计，不再作为本报告的强制修订结论。
 
 ---
 
@@ -136,21 +138,7 @@ path 拒绝”。这不足以约束：
 应在 ADR 明列 `no absolute path / no .. / no symlink escape`，并要求 P0 Contract
 定义基于路径组件边界的 overlap 谓词。
 
-### H2. Competition mode 仍未进入 ADR
-
-新机制正式取代 2026-09-04 “冲突靠避免”的关键理由之一，是允许在开发者明确选择时
-进行受审计的 Competition。当前 ADR 只说 overlap 是 hint、Registry 不上锁，但没有
-区分：
-
-- 意外 overlap；
-- 开发者批准的 Competition；
-- Competition 的声明、结束和候选淘汰语义。
-
-缺少这一点会让新 Registry 看起来仍只是自动化 WIP 公告，取代旧决策的理由不完整。
-应至少在 ADR 定义 Competition 为“显式、非默认、仍不形成 ownership/locking”，具体
-字段与 CLI 由 P0 Contract 规定。
-
-### H3. `status` 刷新 `last_seen` 会让观察行为改变被观察状态
+### H2. `status` 刷新 `last_seen` 会让观察行为改变被观察状态
 
 §2.5 写明 `status/update` 顺带刷新 `last_seen`。`status` 是读取全局 Registry 的观察
 命令；若它刷新记录，则任何巡检都可能把失联 Execution 重新显示为活跃，破坏 stale
@@ -162,7 +150,7 @@ path 拒绝”。这不足以约束：
 - 只有带明确 execution identity 的 `update/heartbeat` 可以刷新自身 `last_seen`；
 - 读取其他 Execution 不得改变其 liveness。
 
-### H4. STALE 的“持久字段”与“派生提示”互相矛盾
+### H3. STALE 的“持久字段”与“派生提示”互相矛盾
 
 §2.3 称每条记录包含 `liveness ∈ {ACTIVE, STALE}`，且超时“标 STALE”；§2.5 又规定
 P1 超时“不自动改写任何字段”，只在输出中提示可能陈旧。实现者无法判断 P1 的 STALE
@@ -179,7 +167,7 @@ P1 超时“不自动改写任何字段”，只在输出中提示可能陈旧�
 - P2 heartbeat 就位后仍由查询时派生，或明确唯一回写者；
 - 不论采用哪种形式，都不得影响 integration risk。
 
-### H5. 单一权威源与“五处 canonical”表述冲突
+### H4. 单一权威源与“五处 canonical”表述冲突
 
 §2.10 正确声明 `execution-contract.md` 是唯一权威源，但 §2.7 P0 又写
 “AGENTS.md/CLAUDE.md/.cursor/.codex/docs 五处 canonical”。这既像五份权威副本，
@@ -247,6 +235,17 @@ ADR 已合入 Git，但仍为 Proposed，P0/P1 尚未发生。§5 把“本文�
 - ADR Accepted：方向生效；
 - P0 Contract 完成：行为验证方案可开始实施。
 
+### M6. Competition 是取代背景，但不是已冻结的执行条款
+
+用户原方案与第 9 点确认中确实使用了 `competition mode` / “显式 Competition”，并将
+competition 列为 Phase 4 的真实使用观察对象。这足以说明 Competition 是新机制取代
+“冲突靠避免”时的背景和预期场景之一。
+
+但现有对话没有冻结 Competition 的字段、CLI、审批、结束或候选淘汰协议。“显式受审计
+竞争”是本报告根据 Registry 可审计性作出的归纳，不是用户确认过的规范原文。因此 ADR
+未定义 Competition 不构成 Accepted 阻断项；可在取代理由或 P4 Revisit 中补一行以保留
+追溯性，具体机制等出现真实需求后再裁决。
+
 ---
 
 ## 五、已闭环项
@@ -300,13 +299,14 @@ git -C backend/agent rev-parse --path-format=absolute --git-common-dir
 
 1. Registry root 固定为 absolute git-common-dir，删除替代落点；
 2. 补全原子写入九步协议；
-3. 恢复 lifecycle × liveness × integration 三维模型；
+3. 为 `finish` 增加独立、可持久化的 coding-finished 表达；可采用 lifecycle 或
+   `finished_at`，不强制三维枚举；
 4. 明列 Scope 的 absolute/`..`/symlink escape 拒绝规则；
-5. 定义 Competition mode 的最小语义；
-6. 让 `status` 严格只读，澄清 STALE 派生/持久化模型；
-7. 明确 READY、MERGED、CLOSED/ABANDONED 的权威 transition 与 reconciliation；
-8. 将“五处 canonical”改为“单一 Contract + 精确薄入口清单”；
-9. 修正 G2 根契约摄取验收与索引/版本漂移。
+5. 让 `status` 严格只读，澄清 STALE 派生/持久化模型；
+6. 明确 READY、MERGED、CLOSED/ABANDONED 的权威 transition 与 reconciliation；
+7. 将“五处 canonical”改为“单一 Contract + 精确薄入口清单”；
+8. 修正 G2 根契约摄取验收与索引/版本漂移；
+9. 可选：在取代理由或 P4 Revisit 中记录 Competition 场景，不提前冻结实现协议。
 
 完成上述修订后，可再次进行短周期只读复审；复审通过后再将 ADR-0034 改为 Accepted，
 随后执行 P0 Contract 与入口接线，最后进入 P1 Registry MVP。
