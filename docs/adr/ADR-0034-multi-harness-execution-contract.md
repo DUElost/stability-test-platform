@@ -1,6 +1,7 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Proposed（v0.5 草案，待人工评审）**
+- 状态：**Accepted（v1.0，2026-09-06 经用户人工终审批准——两轮八源评审 R1–R30 全闭环，无待裁决项；正文冻结为本决策的完整记录，细则后续演进见 `execution-contract.md`，迁出时本 ADR 升 v1.1）**
+- 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ **v1.0 本版（Accepted）**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
