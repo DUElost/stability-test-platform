@@ -418,6 +418,45 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_whoami(args) -> int:
+    """P2 Adapter 基元：按 worktree 定位自身 Execution（上下文供给，非路由）。
+
+    各 Harness 会话启动时由 agent 执行（薄适配层指引见 harness-adapters.md）：
+    输出自身状态 + 其他在窗 Execution 对本 worktree scope 的 overlap 提示。
+    严格只读（同 status）。"""
+    path, _ = registry_paths()
+    records = read_registry(path)
+    repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                               text=True, check=True).stdout.strip()
+    if args.worktree:
+        wt = os.path.realpath(os.path.abspath(args.worktree))
+    else:
+        wt = os.path.realpath(repo_root)
+    mine = {k: v for k, v in records.items()
+            if os.path.realpath(v.get("worktree", "")) == wt}
+    if not mine:
+        print(f"(worktree {wt} 无 Registry 记录——若本会话属于某个 Requirement，"
+              f"请先 declare；过渡条款见 repository-workflow.md)")
+        return 0
+    for rec_id in sorted(mine):
+        _report(rec_id, mine[rec_id], repo_root, refresh=False)
+    # 谁的 effective scope 压到了本 worktree 的 scope（入向 overlap）
+    my_scope = set()
+    for v in mine.values():
+        my_scope |= set(v.get("scope", [])) | set(derived_paths(v, repo_root))
+    for rec_id, v in sorted(records.items()):
+        if rec_id in mine:
+            continue
+        if not in_risk(v.get("lifecycle", "CODING"), v.get("integration_cache") or "NO_PR"):
+            continue
+        their = set(v.get("scope", [])) | set(derived_paths(v, repo_root))
+        hits = {x for x in my_scope for y in their if scope_overlap(x, y)}
+        if hits:
+            print(f"[overlap-in] {rec_id}（{v.get('harness', '?')}，{v.get('lifecycle', '?')}）"
+                  f" 的集成窗口覆盖本 worktree scope: {sorted(hits)}（hint，从不禁止修改）")
+    return 0
+
+
 def cmd_update(args) -> int:
     path, lock = registry_paths()
     repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
@@ -586,7 +625,13 @@ def main() -> int:
     p.add_argument("--id")
     p.set_defaults(fn=cmd_status)
 
-    p = sub.add_parser("update")
+    p = sub.add_parser("whoami", help="按 worktree 定位自身 Execution + 入向 overlap（只读）")
+    p.add_argument("--worktree", help="默认当前 worktree（git rev-parse --show-toplevel）")
+    p.set_defaults(fn=cmd_whoami)
+
+    # update 即 heartbeat：无 --scope/--pr 的 update = 纯心跳（刷 last_seen）+ reconcile
+    # （契约 §2.5 的 identity 写命令语义；P2 wrapper 按此定时调用）
+    p = sub.add_parser("update", aliases=["heartbeat"])
     p.add_argument("--id", required=True)
     p.add_argument("--scope", action="append")
     p.add_argument("--pr", type=int)
