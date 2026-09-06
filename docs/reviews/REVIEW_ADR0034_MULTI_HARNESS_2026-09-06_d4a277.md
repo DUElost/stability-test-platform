@@ -1,12 +1,17 @@
-# ADR-0034 多 Harness 执行契约 —— 只读评审（v0.3 草案）
+# ADR-0034 多 Harness 执行契约 —— 只读评审（v0.3 → v0.4 两轮）
 
-- **状态**：Final（2026-09-06 一次性只读评审，结论不随 ADR 演进修订；ADR 修改后需另开评审）
+- **状态**：Living（第一轮 v0.3 已结稿；第二轮 v0.4 结论见 §7–§10）
 - **日期**：2026-09-06
-- **性质**：**只读评审**（非 ADR、非 Agent Note）——未改动被评对象任何一行
-- **被评对象**：[`ADR-0034`](../adr/ADR-0034-multi-harness-execution-contract.md)（Proposed v0.3，待人工评审）
+- **性质**：**只读评审**（非 ADR、非 Agent Note）——两轮均**未改动被评对象任何一行**
+- **被评对象**：[`ADR-0034`](../adr/ADR-0034-multi-harness-execution-contract.md)——**第一轮 v0.3**（§0–§6）、**第二轮 v0.4**（§7–§10）
 - **产出会话**：resume `afacd042-6df8-47f3-b632-a14ad6d4a277`（后六位 `d4a277`，文件名尾缀）
-- **评审范围**：ADR 全文（§1–§6 + 附录 A）与配套 note [`2026-09-06-adr-0034-draft.md`](../notes/process/2026-09-06-adr-0034-draft.md)。**未读**：方案原始全文（折叠部分），故不对未出现在 ADR 内的细节作判断
-- **方法**：仓库内直接核验（行数、引用文件存在性、`git rev-parse` 行为实测、关联 issue 状态）+ 与既有约定（[`2026-09-04-multi-agent-parallel-convention.md`](../notes/process/2026-09-04-multi-agent-parallel-convention.md)、#847）交叉比对
+- **评审范围**：ADR 全文（§1–§6 + 附录 A）、配套 note [`2026-09-06-adr-0034-draft.md`](../notes/process/2026-09-06-adr-0034-draft.md)、八源综合裁决 [`REVIEW_…_synthesis.md`](./REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)。**未读**：方案原始全文（折叠部分）与其余 7 源原始报告，故不对 ADR 外细节、及 R 编号映射本身的准确性作独立判断——第二轮仅核验**各 R 项在 v0.4 中的落点**
+- **方法**：仓库内直接核验（行数、引用文件存在性、`git rev-parse` 行为实测、关联 issue/PR 状态、文档同步项逐条外部核验）+ 与既有约定（[`2026-09-04-multi-agent-parallel-convention.md`](../notes/process/2026-09-04-multi-agent-parallel-convention.md)、#847）交叉比对
+
+---
+
+> **阅读指引**：§0–§6 为 **v0.3 第一轮**（结论：修完 2 项必修再 Accepted）；
+> §7–§10 为 **v0.4 第二轮**（结论：建议 Accepted）。**两轮冲突处以第二轮为准。**
 
 ---
 
@@ -157,9 +162,115 @@ ADR 需明说**为什么这次不同**，例如：
 
 ---
 
-## 6. 评审边界声明
+## 6. 第一轮评审边界声明
 
-- 本次为**只读评审**，未改动 ADR-0034 或其配套 note 任何一行；
+- 第一轮为**只读评审**，未改动 ADR-0034 或其配套 note 任何一行；
 - 未读被折叠的方案原文，对未出现在 ADR 内的细节（registry schema 字段级定义、
   Integration Planner 输入输出、Role 的完整取值域）不作判断；
-- 核验以 2026-09-06 仓库状态为准；ADR 后续演进需另开评审。
+- 核验以 2026-09-06 仓库状态为准；**v0.4 发布后已开第二轮，见 §7–§10**。
+
+---
+---
+
+# 第二部分：第二轮评审（v0.4）
+
+## 7. 第二轮结论摘要
+
+| 维度 | 结论 |
+|---|---|
+| **可否 Accepted** | ✅ **建议 Accepted**（无阻断项） |
+| 第一轮 5 条意见 | ✅ 全部闭合（对应 R1 / R5 / R19 / R21） |
+| synthesis 22 项 R 裁决 | ✅ 全部在 v0.4 落地（§8.1） |
+| R14 文档同步族（ADR 外） | ✅ 四项外部核验通过（§8.3） |
+| 新观察 | 4 条，**均不阻断**（§9） |
+
+**一句话**：v0.4 不是小修——22 项 R 全部落地，第一轮提的 5 条也全闭合，且多数落得比建议更完整
+（例：R5 除接线 overlap 与 diff 外，还在 §5 P1 验收加了「声明 scope ≠ 实际 diff」fixture）。
+
+---
+
+## 8. 第一轮意见闭合核验
+
+### 8.1 ADR 内落点（第一轮 5 条 → R 编号 → v0.4）
+
+| 上轮意见 | R | v0.4 落点 | 核验 |
+|---|---|---|---|
+| 必修1：overlap 检测未绑定 git diff | R5 | §2.2：`overlap = declared ∪ derived(diff)`，冲突以 derived 为准；声明仅在零 diff 时单独生效；附 2026-09-04 实测反例 | ✅ 且 §5 P1 增「声明≠diff」fixture（超出建议） |
+| 必修2：registry root 用相对路径 | R1 | §2.2 固定 `--path-format=absolute --git-common-dir`（git ≥ 2.31）为**唯一发现方式**；删除 common dir 外替代落点 | ✅ §5 要求主 checkout 根/子目录/linked worktree 三处解析一致 |
+| 建议1：与 #847 缺显式对账 | R21 | 抬头「取代对象」处三点对账：①工具媒介自动登记 vs 手工仪式 ②advisory/visibility-only ③N 已跨 Harness | ✅ |
+| 建议2：Alternatives 首条理由不准确 | R21 | §4 首条改窄口径：明写派生视图实已覆盖本机全部 worktree，真实缺口 = 双方均零 diff 时 + 偏离无留痕 | ✅ |
+| 建议3：G2 symlink 缺写入方向 | R19 | §3 方向固定 `CLAUDE.md → AGENTS.md`；写入防护（编辑一律落真身，退化时只允许 `@AGENTS.md` 单行）；验收加「根 bootstrap 与 scoped 同时可见」 | ✅ |
+
+### 8.2 新增引用与事实声明
+
+| v0.4 声明 | 核验方式 | 结果 |
+|---|---|---|
+| synthesis 文件存在（抬头 L11） | `test -f` | ✅ `REVIEW_…_synthesis.md` 存在 |
+| `execution-contract.md` 尚不存在 | `test -f` | ✅ 如期为 P0 产物，非缺陷 |
+| S11 由 #856 引入（§1 L21） | `gh pr view 856` | ✅ MERGED「S11 硬不变量锚点检查 + 移除 L1 行为 eval」 |
+| G2 目标文件存在（§3） | `test -f` | ✅ `backend/agent/CLAUDE.md`、`backend/agent/aee/CLAUDE.md` 均在 |
+| 薄入口列举（§2.7/§2.10） | `test -d` | ✅ `.cursor/rules/`、`.codex/` 均在 |
+| S2 `link_files` / S6 `RESIDENT_BUDGETS` 锚点存在 | `grep` checker | ✅ 命中 |
+| AGENTS.md 仍 63 行（§5 的 80 行预算前提） | `wc -l` | ✅ 63 |
+
+### 8.3 R14 文档同步族（ADR 之外，唯一须外部核验的一项）
+
+| 项 | 结果 |
+|---|---|
+| `docs/adr/README.md` 主表补 0034 行 | ✅ 已补 |
+| `docs/DOC-MAP.md` 引用 0034 | ✅ 已补 |
+| 治理面设计文档 :29 → S1–S11 | ✅ 实测 `docs/design/2026-08-governance-surface-protection.md:29` 已为「确定性文本检查 S1–S11」 |
+| 起草 note 开篇锚 v0.4 | ✅ |
+| P0「现 63 行」快照移除 | ✅ v0.4 §5 已无该快照 |
+
+---
+
+## 9. 新观察（4 条，均不阻断 Accepted）
+
+### 9.1 lifecycle 缺「恢复编码」回退路径
+
+§2.3 定义 `lifecycle ∈ {CODING, FINISHED, ABANDONED}`，`finish` → `FINISHED`。
+但「PR 评审意见回来 → Harness 恢复编码」这条现实路径**没有定义 `FINISHED → CODING`**。
+结果是审计记录写「已停止编码」而实际在编码——R6 引入 lifecycle 正是为了表达停止/继续，
+回退路径缺失使其不完整。
+
+**建议**（P0 transition table 二选一并写死）：允许 `FINISHED → CODING`；
+或明确「恢复编码 = 新开 Execution」。
+
+### 9.2 `finish --abandon` 与 integration 终态冲突未定义
+
+`lifecycle=ABANDONED` + `integration=MERGED` 语义矛盾（已合入的工作被标放弃）。
+R2 已把 transition table 列为 P0 必备目录，建议在其中显式写明：
+`integration ∈ {MERGED, CLOSED}` 时 `finish --abandon` 应拒绝或 no-op，避免污染审计记录。
+
+### 9.3 「三维」表述与 liveness 不持久化存在张力（术语精度）
+
+§2.3 标题为「lifecycle × liveness × integration **三维正交**」，但同节明写
+liveness「查询时派生、不持久化」。把派生量与两个持久字段并列称「维」，
+实现者易误以为 liveness 也需落库。
+
+实际上**持久维度是两条**（lifecycle × integration），liveness 是查询时派生——
+这与冻结版 Contract v1 的「两维」应当是一致的，只是措辞造成歧义。
+建议改称「两维持久 + 派生 liveness」，或在 §2.3 首句加一句显式区分。
+
+### 9.4 `test_impact` 缺省=indirect 使 coverage-mismatch 召回率取决于自愿声明率
+
+§2.9 的 mismatch 判定只针对 `none`（声明不涉行为但 diff 触及测试路径）与
+`direct`（声明直接但无测试运行记录）两种；而同节允许**缺省（缺省=indirect）**。
+因此**默认路径不参与检测**。
+
+这是 R12 的有意取舍（「不为分类摩擦付协同税」），取舍本身认同。
+但建议在 contract 中记录该取舍与重议条件：若显式声明率长期偏低，该检测实际空转，
+届时要么改为强制，要么撤掉——避免长期挂一个不产生信号的 advisory。
+
+---
+
+## 10. 第二轮边界声明
+
+- 第二轮同为**只读评审**，未改动 ADR-0034、synthesis 或任何配套文件；
+- 8 源审查中仅完整读了本文件（`d4a277`）、synthesis 总表与 ADR v0.4；
+  **其余 7 源原始报告未逐篇读**，故不对 R 编号映射本身的准确性作独立判断，
+  仅核验各 R 项在 v0.4 中的落点是否到位；
+- 未读方案原始全文（折叠部分），对 ADR 外的 registry schema 字段级定义、
+  Integration Planner 输入输出、Role 完整取值域不作判断；
+- 事实核验以 2026-09-06 仓库状态为准；ADR 若再有 v0.5+ 演进需另开评审。

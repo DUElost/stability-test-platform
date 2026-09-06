@@ -1,6 +1,6 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Proposed（v0.4 草案，待人工评审）**
+- 状态：**Proposed（v0.5 草案，待人工评审）**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
@@ -9,7 +9,7 @@
 - 关联 Issue：[#855](https://github.com/DUElost/stability-test-platform/issues/855)（行为验证缺口补全）、[#857](https://github.com/DUElost/stability-test-platform/issues/857)（子目录 import 解析缺陷）、[#854](https://github.com/DUElost/stability-test-platform/issues/854)（门禁缺口，非阻塞）
 - 引用基线：[`2026-09-05-deepseek-harness-convention-study.md`](../notes/process/2026-09-05-deepseek-harness-convention-study.md)（G1-G5 事实边界）、[`2026-09-05-ai-harness-convention-baseline.md`](../notes/process/2026-09-05-ai-harness-convention-baseline.md)（Phase -1 基线，#853）
 - 多 Harness 评审：[`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（八源审查综合裁决，v0.4 修订的输入证据；R 编号为唯一权威映射）
-- 取代对象（Accepted 后生效）：[`2026-09-04-multi-agent-parallel-convention.md`](../notes/process/2026-09-04-multi-agent-parallel-convention.md)（多 Agent 并行开发约定，含 #847「不为 N=2 引入 WIP 公告类机制」裁定——**对账**：本 ADR 的 Registry 与被否决的 WIP 公告不同在于①工具媒介自动登记（CLI 顺带执行，非每次开工的人工读写仪式）②advisory/visibility-only（从不构成约束或 ownership）③前提已变（多 Harness 引擎并行已实测可用，非 N=2 单机形态）；「任务排队、不为 N 引入协同机制」的主策略不变）
+- 取代对象（Accepted 后生效）：[`2026-09-04-multi-agent-parallel-convention.md`](../notes/process/2026-09-04-multi-agent-parallel-convention.md)（多 Agent 并行开发约定，含 #847「不为 N=2 引入 WIP 公告类机制」裁定——**对账**：本 ADR 的 Registry 与被否决的 WIP 公告不同在于①**advisory/visibility-only**（从不构成约束或 ownership；手写状态「会过期而你会信它」的否决理由由 `declared ∪ derived`、derived 为准正面化解——声明不构成事实来源）②**前提已变**（多 Harness 引擎并行已实测可用，非 N=2 单机形态）；「任务排队、不为 N 引入协同机制」的主策略不变）
 
 ---
 
@@ -43,7 +43,7 @@ Agent 间**不通信、不共享上下文、不实时协调**——Parallel Exec
 - **Registry root = `$(git rev-parse --path-format=absolute --git-common-dir)/ai-work/`**——`--path-format=absolute`（git ≥ 2.31）是**唯一发现方式**：裸 `--git-common-dir` 在主 checkout 返回 cwd 相对路径（仓库根 `.git`、子目录 `../../.git`）、linked worktree 返回绝对路径，行为不一致且裸拼接会算错。不硬编码 `.git`，不提供 common dir 之外的替代落点（防多 Registry 分裂与 NFS/CIFS 落位）。目录内固定两文件：`registry.yaml`（数据）+ `registry.lock`（flock 锁，同目录）；位于 `.git` 内天然不被跟踪。**Registry 按克隆隔离**——同一机器多个独立克隆不共享 registry，与派生视图同口径（per-clone），不构成全局登记；
 - **写入协议（九步全序，硬约束）**：`flock(registry.lock) → read registry.yaml → validate → modify → write same-dir registry.yaml.tmp → fsync(tmp) → rename(tmp, registry.yaml) → fsync(parent dir) → unlock`——文件 fsync 不保证 rename 后目录项的崩溃持久性，故必须补父目录 fsync。异常类型、残留 tmp 清理与损坏恢复由 `execution-contract.md` 定义。**仅本地 FS 成立，禁止落 NFS/CIFS**；
 - Registry **不对业务文件/scope 上锁（visibility-only）**；`registry.lock` 仅保护 registry 文件自身的原子写；
-- **overlap 数据源 = `declared ∪ derived(diff)`，冲突时以 derived 为准**：每个 Execution 的 `derived(diff)`（对 merge-base 取差异，含未提交，口径同 AGENTS.md 派生视图）由 `ai_work` 执行时现算并与声明求并集；声明仅在 `derived(diff)` 为空时单独生效（那才是声明不可替代的位置）。Registry 从不凭声明单独判定 overlap——实测反例：2026-09-04 `docs/drift-sync-*` 声明 `docs`、实际 diff 触及 `backend/` 与 `.github/`。overlap 参与集合见 §2.3。
+- **effective scope = `normalized(declared) ∪ derived(diff)`（并集恒成立）**：`derived(diff)` 是 Git 事实、声明不能覆盖或删除它；`declared` 无论有无 diff 都保留为意图（Registry 的核心新增价值恰是 diff 出现前、以及 diff 尚未覆盖全部计划范围时的意图可见性）。两者不一致时输出 **declaration drift 提示**（advisory）——不是丢弃声明，也不静默放行；`update` 可覆写声明（声明过期由执行侧显式清理，见 6d0f05 O-1 的残留面）。`derived(diff)` 口径分档：worktree 在场 → 工作树 diff（tracked staged/unstaged + untracked，untracked 口径 = `git ls-files --others --exclude-standard`——`git diff --name-only` 不含新文件，新建文件同样是集成风险）；worktree 已删除（finish 后常见）→ branch diff（`merge-base..branch`）；两者皆不可得 → 回落到声明单独生效。实测反例（声明与 diff 偏离须提示 drift 而非静默采信任一方）：2026-09-04 `docs/drift-sync-*` 声明 `docs`、实际 diff 触及 `backend/` 与 `.github/`。overlap 参与集合见 §2.3。
 
 ### 2.3 状态模型：lifecycle × liveness × integration 三维正交
 
@@ -53,7 +53,15 @@ Agent 间**不通信、不共享上下文、不实时协调**——Parallel Exec
 - **liveness ∈ {LIVE, STALE}**（**永远 advisory、查询时派生、不持久化**）：持久层只存 `last_seen`；STALE = `now − last_seen > TTL` 的展示层派生值，P1 不回写。STALE ≠ 死、≠ 可回收、**不退出集成窗口**、不影响任何业务语义；
 - **integration ∈ {NO_PR, PR_OPEN, READY, MERGED, CLOSED}**（GitHub 权威）：`NO_PR`=未登记 PR；`PR_OPEN`=已登记 PR 号；`READY`=required checks 全绿（由 `update` 依 GitHub checks **派生刷新**，非人工宣称；主干推进致 checks 重跑则回退 `PR_OPEN`；不区分 FIFO 队首位置）；`MERGED`/`CLOSED`=终态（合入 / PR 关闭未合），均只能由 GitHub PR 状态确认。
 
-**overlap 集合 = lifecycle ∉ {ABANDONED} 且 integration ∈ {NO_PR, PR_OPEN, READY}；liveness 不参与**。理由：编码停止、执行者退出的在途变更仍处于集成风险窗口——典型反例：Execution A `finish` 后 Harness 退出（liveness 派生为 STALE），其 PR 仍改着 `foo.py`，新 Execution B 改 `foo.py` 时必须仍能看到 overlap 提示。**overlap 生命周期终于 merge/close/abandon，非编码结束**。僵尸出口：`status` 输出「lifecycle 非终态 且 liveness STALE 且 derived(diff) 为空」候选清单，人工经 `finish --abandon` 收口。
+**overlap（集成风险）集合由真值表定义——开放 PR 永不被本地执行侧状态遮蔽**（v0.5 依四源复审共振修正：v0.4 的 `lifecycle ∉ {ABANDONED} 且 integration ∈ {NO_PR, PR_OPEN, READY}` 会让 `ABANDONED × PR_OPEN` 悬空组合静默退出窗口——执行者放弃了，PR 还开着还在等 FIFO；也与 `CODING × CLOSED` 同病，即 R2 所堵之洞换了入口重开）：
+
+```text
+risk = integration ∈ {PR_OPEN, READY}                                ← GitHub 事实：开放 PR 恒在窗口
+    OR (integration = NO_PR    AND lifecycle ∈ {CODING, FINISHED})   ← 无 PR 但执行侧未放弃
+    OR (integration = CLOSED   AND lifecycle ≠ ABANDONED)            ← PR 被关 ≠ 工作停止（误关/被取代/reopen）
+```
+
+`MERGED` 出局（变更已进主干，风险真实关闭；merge 后继续新工作应重新 declare）。`liveness` 不参与。典型反例仍成立：Execution A `finish` 后 Harness 退出（STALE），其 PR 仍改着 `foo.py`，新 Execution B 改 `foo.py` 时必须仍能看到 overlap 提示。**`finish --abandon` 不再是「立即出窗」**：无开放 PR 时记录出窗（僵尸出口的唯一合法终点）；有开放 PR 时记录留在窗口直到 GitHub 侧终态——`finish --abandon` 在 `integration ∈ {PR_OPEN, READY}` 时必须警告并提示先关闭/转交 PR（转手 = 新 Execution 重新 `declare`）。僵尸候选清单：`status` 输出「lifecycle ∈ {CODING, FINISHED} 且 STALE 且 effective scope 为空」记录，人工经 `finish --abandon` 收口。完整组合矩阵与并发刷新顺序入 P0 transition table。
 
 **事实来源分层**（Registry 从不僭越权威）：
 
@@ -84,7 +92,7 @@ Registry 声明与实际 diff 不一致时**以 diff 为准**；派生视图（�
 
 | 期 | 内容 | 备注 |
 |---|---|---|
-| P0 | 规则先行：**建立 `docs/development/ai/execution-contract.md`（Execution Contract 唯一权威源，§2.10），§2.2/2.3/2.5/2.8/2.9 细则一次性平移入内（含 transition table、reconcile 来源、GitHub 不可用降级、drift 对 Agent Note 等强制随附物的豁免规则、scope 组件边界 overlap 谓词），ADR §2 随之收缩为决策要点 + 指针**；AGENTS.md/CLAUDE.md 改写走**独立 docs PR**（元文件串行化）；**单一 canonical Contract + 明确列举薄入口**（AGENTS.md/CLAUDE.md/`.cursor/rules`/`.codex`——各入口只保留最小启动原则与指针，勿手工镜像）；`harness-adapters.md`、`repository-workflow.md` 与 Phase -1 基线 note 的并行约定指针接到本文；`execution-contract.md` 入治理门禁（S2 `link_files` + S6 `RESIDENT_BUDGETS`） | 本文 Accepted 后第一个 PR；合入后接 G2 试点（§3） |
+| P0 | 规则先行：**建立 `docs/development/ai/execution-contract.md`（Execution Contract 唯一权威源，§2.10），§2.2/2.3/2.5/2.8/2.9 细则一次性平移入内（必备目录：transition table 含 §2.3 真值表全部组合与并发刷新顺序、reconcile 来源、GitHub 不可用降级、drift 对 Agent Note 等强制随附物的豁免规则、scope 组件边界 overlap 谓词、`lifecycle` 术语与 pipeline_def 域 lifecycle（S11 锚定）的消歧注记、持久字段清单（liveness 不在其中）、P1 启动判据的数据源口径（git worktree 历史/日志统计，与派生视图同源——registry 是 P1 产物不能自证）、Role Context 定义归属）**，**平移合入时本 ADR 升 v1.1 并在版本记录注明「细则已迁出至 execution-contract.md，本文保留决策要点」**（Accepted 正文不被无痕改写）；AGENTS.md/CLAUDE.md 改写走**独立 docs PR**（元文件串行化）；**单一 canonical Contract + 明确列举薄入口**（AGENTS.md/CLAUDE.md/`.cursor/rules`/`.codex`——各入口只保留最小启动原则与指针，勿手工镜像）；`harness-adapters.md`、`repository-workflow.md` 与 Phase -1 基线 note 的并行约定指针接到本文；`execution-contract.md` 入治理门禁（S2 `link_files` + S6 `RESIDENT_BUDGETS`） | **负载最重一期，建议拆 P0a（契约文档）+ P0b（接线/门禁/supersede）两个 PR**；合入后接 G2 试点（§3） |
 | P1 | Registry MVP（ai_work.py + registry.yaml/registry.lock 按 §2.2 + 三维状态与 overlap 集合按 §2.3 + scope MVP 按 §2.8 + `test_impact` 字段入 schema（§2.9，允许缺省）+ 自测红绿样例） | **启动判据**：连续两周并行 worktree ≥3，或实际发生 ≥2 次跨 Harness 撞车返工——未触发则维持 2026-09-04 派生视图用法 |
 | P2 | Harness Adapter：各 Harness 会话启动时知晓自身 Role——**上下文供给，非路由**（会话由开发者选择启动，Adapter 只保证该会话能读到 Role Context 与**根启动契约 + scoped 内容**）；提供 heartbeat（§2.5 升格条件）；**验收含 cwd 深度 × Harness 加载矩阵**（附录 A 协议扩展） | |
 | P3 | 真增量 = **Drift / Freshness gate**：先 advisory（本地 run_gates / 夜间全量，守合入路径 ~2min 注意力预算），overlap 粒度用顶层目录作 hint 而非硬门禁；含 `coverage-mismatch` advisory（§2.9） | **不建 merge queue**——主干机制已存在（FIFO enable-auto-merge + update-branch + strict 分支保护） |
@@ -107,7 +115,7 @@ Registry 声明与实际 diff 不一致时**以 diff 为准**；派生视图（�
 ```text
 docs/development/ai/execution-contract.md   ← Execution Contract 唯一权威源（single authority）
         ↑ 最小引用
-AGENTS.md / CLAUDE.md / .cursor / .codex    ← 各入口只保留最小启动原则与指针
+AGENTS.md / CLAUDE.md / .cursor/rules / .codex    ← 各入口只保留最小启动原则与指针
 ```
 
 - `execution-contract.md` 承载执行语义完整规范（状态模型、scope 语法、registry 协议、drift/coverage 语义），细则演进在该文档版本化，不回填 ADR 正文；
@@ -120,7 +128,7 @@ AGENTS.md / CLAUDE.md / .cursor / .codex    ← 各入口只保留最小启动�
 
 **裁决**：迁移为「scoped `AGENTS.md` 真身（中立内容）+ `CLAUDE.md` 薄壳」：
 
-- **形态优先级：symlink > `@import`**。依据：#857 实证 `@import` 在子目录 cwd 下不解析（-p 与 TUI 双模式）；symlink 在文件系统层生效、与 cwd 无关（deepseek 上游与业界推荐的另一形态，此处获反面实证支撑）。**symlink 方向固定为 `CLAUDE.md → AGENTS.md`**（真身只此一份）；写入防护：任何工具不得经 `CLAUDE.md` 路径写入——编辑一律落 `AGENTS.md` 真身，薄壳若为 symlink 则天然防误写、若退化为实体文件则只允许 `@AGENTS.md` 单行。symlink 若被工具链（Windows 协作 / 特定构建）拒绝，退回 `@import` 并以 **#857 修复确认为前置**。
+- **形态优先级：symlink > `@import`**。依据：#857 实证 `@import` 在子目录 cwd 下不解析（-p 与 TUI 双模式）；symlink 在文件系统层生效、与 cwd 无关（deepseek 上游与业界推荐的另一形态，此处获反面实证支撑）。**symlink 方向固定为 `CLAUDE.md → AGENTS.md`**（真身只此一份）；**注意：symlink 消除的是双份内容漂移，不提供写保护**——经 `CLAUDE.md` 路径写入会穿透修改真身，写路径限制需 checker / hook / 明确操作规则（如「编辑一律落 `AGENTS.md` 真身」的约定）。symlink 若被工具链（Windows 协作 / 特定构建）拒绝，退回 `@import` 并以 **#857 修复确认为前置**。
 - **试点顺序**：`backend/agent/` → `backend/agent/aee/`；迁移走共享元文件串行 PR，排在 P0 合入之后。
 - **checker 同步**：S6 预算表加 scoped AGENTS.md 条目；S2 `link_files` 加新路径；根层 CLAUDE.md 的 import 形态（S8 已锁）**本次不动**，待 #857 修复后另行评估是否 symlink 化。
 - **验收**：四家 Harness 以 cwd=目标目录跑附录 A 探针协议，**scoped 真身内容与根启动契约（总原则/硬不变量）同时可见**——#857 已证明 scoped symlink 不自动解决根契约供给，P2 Adapter 必须明确根 bootstrap 供给方案（如会话从仓库根启动或显式注入），验收不得只验 scoped 单边。
@@ -134,8 +142,8 @@ AGENTS.md / CLAUDE.md / .cursor / .codex    ← 各入口只保留最小启动�
 | G2 维持 CLAUDE.md 命名 | 3/3 非 Claude Harness 实测读嵌套 AGENTS.md（附录 A）；维持等于放弃已验证的加载通道 |
 | symlink 全局替换（含根层） | 根层 S8 已锁 import 形态且 #857 仅证实子目录缺陷；根层迁移待 #857 修复后独立评估，不随本 ADR 捆绑 |
 | auto mode 默认化 / 提高并发上限 | 08-26 synthesis 裁决前提（治理面写者 >1 常态化、auto mode）未满足；并发瓶颈见 §2.6 |
-| overlap 仅看 liveness=ACTIVE | finish 后 STALE 的在途变更仍是集成风险窗口（§2.3 反例）；集成窗口与执行者活性是两个正交维度 |
-| Phase 1 即引入 heartbeat daemon / TTL 硬语义 | 声明式 CLI 之间无可靠心跳源，硬 TTL 会把「上午 declare、全天编码」的长任务误判（§2.5 分期：P1 advisory，P2 有 heartbeat 后再升格） |
+| overlap 仅看 liveness（当时术语 ACTIVE，即现 LIVE） | finish 后 STALE 的在途变更仍是集成风险窗口（§2.3 反例）；集成窗口与执行者活性是两个正交维度 |
+| P1 即引入 heartbeat daemon / TTL 硬语义 | 声明式 CLI 之间无可靠心跳源，硬 TTL 会把「上午 declare、全天编码」的长任务误判（§2.5 分期：P1 advisory，P2 有 heartbeat 后再升格） |
 
 ## 5. Verification
 
@@ -164,5 +172,6 @@ AGENTS.md / CLAUDE.md / .cursor / .codex    ← 各入口只保留最小启动�
 | Cursor Agent 2026.09.02 | ✅ live | 非交互需 `--trust` |
 | OpenCode 1.18.25 | ✅ live | 需本机 `opencode.json`（未跟踪）在启动目录树内 |
 | Claude Code 2.1.259 | ❌（子目录通道=CLAUDE.md） | 需显式 `--settings`（alias 对脚本不生效）；`unrecognized_model` 警告无害 |
+| Antigravity CLI | **未验证（延期）** | Phase -1 时未安装，未纳入矩阵——不因缺席而视为通过；安装后按同协议补测 |
 
 **延伸矩阵（#857）**：Claude `@AGENTS.md` import 解析——仓库根 ✅ / 子目录 ❌（`-p` 与 TUI 双模式，引文诊断证实字面行未展开、AGENTS.md 五章节零出现；cwd 相对存在同名文件亦不解析）。

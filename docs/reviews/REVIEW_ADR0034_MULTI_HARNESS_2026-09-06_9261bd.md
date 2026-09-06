@@ -1,4 +1,4 @@
-# ADR-0034 v0.3 多 Harness 执行契约只读审查
+# ADR-0034 v0.3→v0.4 多 Harness 执行契约只读审查
 
 - 审查日期：2026-09-06
 - 会话标识：`9261bd`
@@ -10,6 +10,10 @@
 - 审查方式：对照用户明确确认的 Contract v1 条款、后续模型校正建议、Git worktree
   实际行为、现有 FIFO auto-merge/CI 事实源和治理门禁进行只读交叉核验
 - 审查基线：`main` at `55e9a71e`（包含 PR #860、#861）
+- 复审基线：`main` at `1715eee6`（v0.4，包含 PR #862、#863）
+
+> **当前有效结论见 §八。** §一至§七保留 v0.3 审查原貌及人工裁决后的修订痕迹，
+> 不再作为 v0.4 的 Accepted 判据。
 
 ---
 
@@ -310,4 +314,151 @@ git -C backend/agent rev-parse --path-format=absolute --git-common-dir
 
 完成上述修订后，可再次进行短周期只读复审；复审通过后再将 ADR-0034 改为 Accepted，
 随后执行 P0 Contract 与入口接线，最后进入 P1 Registry MVP。
+
+---
+
+## 八、v0.4 复审（当前有效结论）
+
+### 8.1 总评
+
+v0.4 已闭环 v0.3 的 B1–B3、H1–H4 及大部分文档一致性问题：
+
+- Registry root 固定为
+  `git rev-parse --path-format=absolute --git-common-dir` 的唯一发现方式；
+- 原子写入补齐九步全序与 parent-directory `fsync`；
+- lifecycle 为 `finish` 提供独立持久化表达，并明确三维是 ADR 的实现选择而非冻结条款；
+- STALE 改为由 `last_seen` 查询时派生，`status` 严格只读；
+- READY/MERGED/CLOSED 绑定 GitHub 权威，`finish` 不再冒充外部事实；
+- Scope 补齐 absolute/`..`/symlink escape/组件边界约束；
+- 单一 Contract、薄入口、G2 根契约双边验收及 #855 三段触发均已写入。
+
+但状态组合与 effective scope 仍各有一处会导致不兼容或不安全实现的缺口。v0.4
+应继续保持 Proposed，完成以下 B4–B5 后可转 Accepted。
+
+### 8.2 新发现的阻断项
+
+#### B4. `ABANDONED` 可错误释放仍开放的 PR
+
+v0.4 定义：
+
+```text
+lifecycle ∈ {CODING, FINISHED, ABANDONED}
+integration ∈ {NO_PR, PR_OPEN, READY, MERGED, CLOSED}
+overlap = lifecycle != ABANDONED
+          AND integration ∈ {NO_PR, PR_OPEN, READY}
+```
+
+同时提供 `finish --abandon`，但没有限制该动作只能作用于无 PR 或已经 CLOSED 的记录。
+因此以下合法可构造组合会被排除：
+
+```text
+ABANDONED + PR_OPEN
+ABANDONED + READY
+```
+
+GitHub 上 PR 仍开放、仍可能进入 FIFO 集成，但 Registry 已不再提示 overlap。这违反
+“开放 PR 的集成风险不因执行者退出而消失”的核心原则。
+
+另一个同类组合是 `CODING + CLOSED`：若 PR 被关闭但 Harness 仍在编码，当前公式也会
+因 integration 已终态而释放风险。
+
+**修订要求：**
+
+1. `PR_OPEN/READY` 必须始终参与 integration risk，不得被 lifecycle=ABANDONED 覆盖；
+2. `finish --abandon` 若已登记开放 PR，应拒绝执行，或要求先由 GitHub 确认 CLOSED；
+3. P0 transition table 必须列出允许/禁止的组合及并发刷新顺序；
+4. 推荐以真值表定义风险，而不是简单对两个维度做 AND。例如：
+
+```text
+risk =
+    integration ∈ {PR_OPEN, READY}
+    OR lifecycle = CODING
+    OR (lifecycle = FINISHED AND integration = NO_PR)
+```
+
+具体公式可以调整，但必须保证开放 PR 永不被本地 lifecycle 状态遮蔽。
+
+#### B5. effective scope 同时存在两套互斥定义
+
+§2.2 同一条先定义：
+
+```text
+effective_scope = declared ∪ derived(diff)
+```
+
+随后又写：
+
+```text
+声明仅在 derived(diff) 为空时单独生效
+Registry 从不凭声明单独判定 overlap
+```
+
+若 `derived(diff)` 非空但与声明不同，实现者无法判断：
+
+- 保留并集，同时提示 declaration drift；还是
+- 丢弃 declared，只使用 derived。
+
+前者才能保留“尚未触碰但计划修改”的意图；后者会在第一次产生 diff 后使剩余声明路径
+从风险面消失。Registry 的核心新增价值恰是 diff 出现前和 diff 尚未覆盖全部计划范围时
+提供意图可见性，因此这里不能留给实现自由解释。
+
+**修订要求：**
+
+```text
+effective_scope = normalized(declared) ∪ derived(diff)
+```
+
+- derived 永远作为 Git 事实存在，声明不能覆盖或删除它；
+- declared 在有无 diff 时都保留为意图；
+- 两者不一致时输出 drift，但 overlap 对 advisory 并集计算；
+- `derived(diff)` 必须明确包含 tracked staged/unstaged 与 untracked 文件。当前
+  `repository-workflow.md` 的 `git diff --name-only` 不含 untracked，新建文件不能被称为
+  ground truth；P0 Contract 应补 `git ls-files --others --exclude-standard` 等价口径。
+
+### 8.3 非阻断同步项
+
+1. `docs/adr/README.md` 主表已写 v0.4，但 M7 看板仍写 Proposed v0.3；
+2. README/DOC-MAP 的“三维状态模型”宜补充“ADR 实现选择”，避免再次被误读为冻结条款；
+3. 本报告 v0.3 结论已由本节显式标记为历史；其他审查快照应通过 synthesis 阅读，不宜
+   单独作为当前 gate；
+4. §3 “symlink 天然防误写”表述不准确：经 `CLAUDE.md` symlink 写入会直接修改目标
+   `AGENTS.md`。symlink 消除的是双份内容漂移，不提供写保护；写路径限制需要 checker、
+   hook 或明确操作规则；
+5. Appendix A 仍只有四家 Harness，未包含 Phase -1 标记为未安装的 Antigravity CLI。
+   应明确 Antigravity 为未验证/延期，而不是静默从验收矩阵消失；
+6. P0 Contract 应说明 P1 启动条件未触发时继续使用派生视图，避免旧 note 被 supersede
+   后出现无现行操作规范的过渡窗口。
+
+### 8.4 v0.4 验证
+
+本次复审实际执行：
+
+```text
+venv/bin/python tools/dev/check_governance_surface.py --check
+venv/bin/python tools/dev/check_governance_surface.py --self-test
+venv/bin/python scripts/run_gates.py check:quick
+git diff --check
+git status --short --branch
+```
+
+并核验：
+
+- PR #862、#863 required checks 全绿；
+- ADR、起草 Note、synthesis 与 ADR README 的相对链接存在；
+- DOC-MAP 已登记 ADR-0034 v0.4；
+- governance 汇总已从 S1–S10 更新为 S1–S11；
+- 工作树在复审开始时干净。
+
+这些结果证明文档结构、静态质量与既有门禁健康，但不会覆盖 B4/B5 的组合状态语义。
+
+### 8.5 v0.4 Accepted 判据
+
+建议在同一修订中：
+
+1. 修正 `ABANDONED`/开放 PR 的风险真值表与 transition guard；
+2. 将 effective scope 唯一化为 declared 与完整 derived diff 的 advisory 并集；
+3. 同步 README M7 版本与 symlink 写保护表述。
+
+完成前两项后，ADR-0034 的方向与核心状态语义即可转为 Accepted；P0
+`execution-contract.md`、入口接线、G2 试点和 P1 Registry 实现仍按 ADR 分期后置。
 
