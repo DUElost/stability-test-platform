@@ -82,6 +82,7 @@
 | [ADR-0031](./ADR-0031-platform-ai-assistant.md) | 平台 AI 助手（运维域 LLM 助手与风险分级自治边界） | Accepted | P1 | M8 | v1.5：阶段二全栈 ✅（T0-T3 四级自治 / httpx 载体 / DB+Fernet / RunConsole / 角色裁剪工具面 / 二轮审核 H1–M5）。设计见 [docs/design/2026-08-27-platform-ai-assistant.md](../design/2026-08-27-platform-ai-assistant.md) |
 | [ADR-0032](./ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) | 展锐与 MTK 并列日志链路（Watcher + 归档）（#463 / #73） | Accepted | P1 | M7 | v0.6：platform 路由；w1 Watcher + D4c 归档；`dedup/{run}/{mtk,unisoc}/` + 双 merge；TAG 共用 |
 | [ADR-0033](./ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（#745） | Accepted | P1 | M7 | v1.1：D0 阻断全量入仓（分级准入）；D1 三层宿主隔离；D2 Tool Contract（退出码命名空间分层）；D3 Manifest 发布格式 × DB catalog 唯一权威；D4 防腐适配器（接口只包 vendor CLI）；与 ADR-0032 行为/结构权威分家 |
+| [ADR-0034](./ADR-0034-multi-harness-execution-contract.md) | 多 Harness 并行执行契约与执行登记（#855 / #857） | Proposed | P1 | M7 | v0.4：选择权原则（Harness 由开发者决定）/ 三维状态模型 lifecycle×liveness×integration / Registry=visibility-only 非调度器 / `--path-format=absolute` 唯一发现方式 / overlap=declared∪derived(diff) / P0 建 `execution-contract.md` 唯一权威源 / drift gate 非 merge queue / G2 真身+薄壳（symlink 优先）。八源多 Harness 评审综合见 [reviews](../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md) |
 
 ## Proposed 里程碑看板（2026 上半年）
 
