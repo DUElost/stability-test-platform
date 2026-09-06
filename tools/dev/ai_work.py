@@ -1,0 +1,609 @@
+#!/usr/bin/env python3
+"""ai_work.py — Execution Registry CLI（ADR-0034 P1）。
+
+权威规范：docs/development/ai/execution-contract.md（Living v1.1，唯一权威源）。
+本文件是其 §2（Registry 协议）/§3（状态模型）/§5（scope 与 overlap）的 MVP 实现：
+选择权原则（ADR §2.1）——本工具是执行侧自声明的 visibility-only 登记簿，不是调度器。
+
+命令：
+    ai_work.py declare --requirement R --harness H --worktree W --scope P [--scope ...]
+                       [--role ROLE] [--test-impact none|direct|indirect]
+    ai_work.py status [--id ID]                 # 严格只读（不刷任何 last_seen）
+    ai_work.py update --id ID [--scope P ...] [--pr N]   # 刷 last_seen + GitHub reconcile
+    ai_work.py finish --id ID [--pr N | --abandon]
+    ai_work.py --self-test                      # 纯函数红绿自证（离线，无 git/gh 调用）
+
+设计约束（契约即约束）：
+- Registry root = $(git rev-parse --path-format=absolute --git-common-dir)/ai-work/，
+  registry.yaml + registry.lock 同目录，位于 .git 内天然不被跟踪；
+- 写入九步全序（flock → read → validate → modify → tmp → fsync → rename → 父目录 fsync → unlock）；
+- liveness 查询时派生不持久化；integration 由 GitHub（gh）派生刷新，不可用时保持旧值+observed_at；
+- overlap 真值表：开放 PR 恒在风险窗口；effective scope = declared ∪ derived(diff)。
+
+自包含：不依赖 PyYAML（registry.yaml 使用本工具自写的受限 YAML 子集：仅扁平
+mapping + 标量/字符串列表，解析器对任何超集语法 fail-fast——同时充当九步协议
+中 validate 步骤的一部分）。
+"""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import os
+import re
+import subprocess
+import sys
+import time
+
+TTL_SECONDS = 24 * 3600  # §4：24h 量级，仅 advisory
+RECORD_FIELDS = {
+    "requirement", "harness", "role", "worktree", "branch", "scope",
+    "pr_number", "lifecycle", "test_impact", "last_seen", "created_at",
+    "updated_at", "integration_cache", "observed_at",
+}
+LIFECYCLE = ("CODING", "FINISHED", "ABANDONED")
+TEST_IMPACT = ("none", "direct", "indirect")
+
+
+# ── 受限 YAML 子集 codec（自写自读 schema；超集语法 fail-fast）──
+
+def yaml_dump(data: dict) -> str:
+    lines = ["# ai-work registry (managed by tools/dev/ai_work.py; do not edit by hand)"]
+    for key in sorted(data):
+        rec = data[key]
+        lines.append(f"{key}:")
+        for field in ("requirement", "harness", "role", "worktree", "branch",
+                      "lifecycle", "test_impact", "pr_number", "integration_cache",
+                      "last_seen", "created_at", "updated_at", "observed_at"):
+            if field in rec and rec[field] is not None:
+                lines.append(f"  {field}: {_quote(rec[field])}")
+        scope = rec.get("scope") or []
+        lines.append("  scope:")
+        if scope:
+            lines.extend(f"    - {_quote(s)}" for s in scope)
+        else:
+            lines.append("    []")
+    return "\n".join(lines) + "\n"
+
+
+def _quote(v) -> str:
+    s = str(v)
+    if s == "":
+        return '""'
+    if re.fullmatch(r"[A-Za-z0-9_./+=:@#-]+", s):
+        return s
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _unquote(s: str) -> str:
+    s = s.strip()
+    if not s.startswith('"'):
+        return s
+    # 受限转义：仅 \\ 与 \"（与 _quote 对称）
+    out, i = [], 1
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and i + 1 < len(s) and s[i + 1] in('\\"'):
+            out.append(s[i + 1]); i += 2
+        else:
+            out.append(c); i += 1
+    return "".join(out).removesuffix('"')
+
+
+def yaml_load(text: str) -> dict:
+    data: dict = {}
+    current = None
+    field = None
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = raw.rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        if line.startswith("  scope:"):
+            if current is None:
+                raise ValueError(f"registry.yaml:{lineno}: scope 出现在记录外")
+            data[current]["scope"] = []
+            field = "scope"
+            continue
+        if line.startswith("    - "):
+            if field != "scope" or current is None:
+                raise ValueError(f"registry.yaml:{lineno}: 列表项只允许出现在 scope 内")
+            data[current]["scope"].append(_unquote(line[6:]))
+            continue
+        if line.startswith("    []"):
+            field = None
+            continue
+        m = re.match(r"^(\S[^:]*):$", line)
+        if m:
+            current = m.group(1)
+            if current in data:
+                raise ValueError(f"registry.yaml:{lineno}: 记录重复 {current!r}")
+            data[current] = {}
+            field = None
+            continue
+        m = re.match(r"^  ([a-z_]+): (.*)$", line)
+        if m and current is not None:
+            field = m.group(1)
+            if field not in RECORD_FIELDS:
+                raise ValueError(f"registry.yaml:{lineno}: 未知字段 {field!r}")
+            data[current][field] = _unquote(m.group(2))
+            continue
+        raise ValueError(f"registry.yaml:{lineno}: 非法语法 {line!r}")
+    return data
+
+
+# ── scope：归一化、拒绝规则、组件边界 overlap 谓词（§5.3/§5.4）──
+
+def normalize_scope(path: str, repo_root: str | None = None) -> str:
+    """归一化并执行拒绝规则；返回归一化路径。非法即 ValueError。"""
+    p = path.strip()
+    if not p:
+        raise ValueError("scope 不能为空")
+    if p.startswith("/") or p.startswith("\\") or os.path.isabs(p):
+        raise ValueError(f"scope 必须是 repo-relative 路径（拒绝绝对路径）: {path!r}")
+    p = p.rstrip("/")
+    parts = [seg for seg in p.split("/") if seg not in ("", ".")]
+    if ".." in parts:
+        raise ValueError(f"scope 拒绝含 '..' 的路径: {path!r}")
+    if not parts:
+        raise ValueError(f"scope 归一化后为空: {path!r}")
+    norm = "/".join(parts)
+    # symlink 逃逸：路径已存在时验证 realpath 不出仓库
+    if repo_root and os.path.exists(os.path.join(repo_root, norm)):
+        real = os.path.realpath(os.path.join(repo_root, norm))
+        if not real.startswith(os.path.realpath(repo_root) + os.sep):
+            raise ValueError(f"scope 经 symlink 逃逸出仓库: {path!r}")
+    return norm
+
+
+def scope_overlap(a: str, b: str) -> bool:
+    """组件边界前缀谓词：backend 与 backend_new 不重叠（§5.4）。"""
+    pa, pb = a.split("/"), b.split("/")
+    return pa == pb[: len(pa)] or pb == pa[: len(pb)]
+
+
+# ── 状态模型：真值表与派生（§3）──
+
+def in_risk(lifecycle: str, integration: str) -> bool:
+    """overlap 真值表：开放 PR 恒在窗口；CLOSED 不单独出局；MERGED 出局。"""
+    if integration in ("PR_OPEN", "READY"):
+        return True
+    if integration == "NO_PR":
+        return lifecycle in ("CODING", "FINISHED")
+    if integration == "CLOSED":
+        return lifecycle != "ABANDONED"
+    return False  # MERGED
+
+
+def derive_liveness(last_seen: float | None, now: float) -> str:
+    if last_seen is None:
+        return "UNKNOWN"
+    return "LIVE" if now - last_seen < TTL_SECONDS else "STALE"
+
+
+# ── Registry 定位与九步原子写（§2.1/§2.2）──
+
+def registry_paths(cwd: str | None = None) -> tuple[str, str]:
+    out = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True, text=True, check=True, cwd=cwd,
+    ).stdout.strip()
+    root = os.path.join(out, "ai-work")
+    return os.path.join(root, "registry.yaml"), os.path.join(root, "registry.lock")
+
+
+def read_registry(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        return yaml_load(fh.read())
+
+
+def validate(records: dict) -> None:
+    for key, rec in records.items():
+        missing = {"requirement", "harness", "worktree", "lifecycle"} - set(rec)
+        if missing:
+            raise ValueError(f"记录 {key!r} 缺必填字段: {sorted(missing)}")
+        if rec["lifecycle"] not in LIFECYCLE:
+            raise ValueError(f"记录 {key!r} lifecycle 非法: {rec['lifecycle']!r}")
+        if "test_impact" in rec and rec["test_impact"] not in TEST_IMPACT:
+            raise ValueError(f"记录 {key!r} test_impact 非法: {rec['test_impact']!r}")
+
+
+def atomic_write(path: str, lock_path: str, records: dict) -> None:
+    """九步全序：flock → read → validate → modify(由调用方完成) → tmp → fsync →
+    rename → 父目录 fsync → unlock。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    validate(records)
+    with open(lock_path, "w") as lock_fh:
+        fcntl.flock(lock_fh, fcntl.LOCK_EX)
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(yaml_dump(records))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+            dir_fd = os.open(os.path.dirname(path), os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        finally:
+            fcntl.flock(lock_fh, fcntl.LOCK_UN)
+
+
+def load_locked(path: str, lock_path: str):
+    """读+锁上下文：返回 (records, writer)。modify 后调 writer(records) 走九步。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lock_fh = open(lock_path, "w")
+    fcntl.flock(lock_fh, fcntl.LOCK_EX)
+
+    class _Ctx:
+        def __init__(self):
+            self.records = read_registry(path)
+
+        def commit(self) -> None:
+            validate(self.records)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(yaml_dump(self.records))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+            dir_fd = os.open(os.path.dirname(path), os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+
+        def close(self) -> None:
+            fcntl.flock(lock_fh, fcntl.LOCK_UN)
+            lock_fh.close()
+
+    return _Ctx()
+
+
+# ── derived(diff) 三分档（§5.2）──
+
+def _git(args: list[str], cwd: str) -> list[str]:
+    proc = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
+    if proc.returncode != 0:
+        return []
+    return [ln for ln in proc.stdout.splitlines() if ln.strip()]
+
+
+def derived_paths(rec: dict, repo_root: str) -> list[str]:
+    wt = rec.get("worktree")
+    if wt and os.path.isdir(wt):
+        merge_base = _git(["merge-base", "origin/main", "HEAD"], wt)
+        paths: list[str] = []
+        if merge_base:
+            paths += _git(["diff", "--name-only", merge_base[0], "HEAD"], wt)
+            paths += _git(["diff", "--name-only", merge_base[0]], wt)  # 未提交（tracked）
+        paths += _git(["ls-files", "--others", "--exclude-standard"], wt)  # untracked
+        return sorted({p for p in paths if p})
+    branch = rec.get("branch")
+    if branch:
+        merge_base = _git(["merge-base", "origin/main", branch], repo_root)
+        if merge_base:
+            return sorted(set(_git(["diff", "--name-only", merge_base[0], branch], repo_root)))
+    return []
+
+
+# ── integration 派生（GitHub 权威，§3.3；不可用降级）──
+
+def derive_integration(pr_number: str | None, cached: str | None, cwd: str) -> tuple[str, bool]:
+    """返回 (integration, refreshed)。pr 未登记 → NO_PR；GitHub 不可用 → 旧值+False。"""
+    if not pr_number:
+        return "NO_PR", True
+    try:
+        proc = subprocess.run(
+            ["gh", "pr", "view", pr_number, "--json", "state,statusCheckRollup"],
+            capture_output=True, text=True, timeout=30, cwd=cwd,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return cached or "PR_OPEN", False
+    if proc.returncode != 0:
+        return cached or "PR_OPEN", False
+    import json
+    data = json.loads(proc.stdout)
+    state = data.get("state")
+    if state == "MERGED":
+        return "MERGED", True
+    if state == "CLOSED":
+        return "CLOSED", True
+    rollup = data.get("statusCheckRollup") or []
+    conclusions = {c.get("conclusion") for c in rollup if c.get("status") == "COMPLETED"}
+    ok = conclusions <= {"SUCCESS", "SKIPPED", "NEUTRAL"} and conclusions
+    return ("READY" if ok else "PR_OPEN"), True
+
+
+# ── 命令实现 ──
+
+def _now() -> float:
+    return time.time()
+
+
+def cmd_declare(args) -> int:
+    path, lock = registry_paths()
+    repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                               text=True, check=True).stdout.strip()
+    scopes = []
+    for s in args.scope:
+        try:
+            scopes.append(normalize_scope(s, repo_root))
+        except ValueError as exc:
+            print(f"[REFUSED] {exc}", file=sys.stderr)
+            return 2
+    rec_id = args.requirement
+    ctx = load_locked(path, lock)
+    try:
+        if rec_id in ctx.records and in_risk(ctx.records[rec_id].get("lifecycle", "CODING"),
+                                             ctx.records[rec_id].get("integration_cache", "NO_PR")):
+            print(f"[REFUSED] 已存在同 Requirement 的在窗记录 {rec_id!r}（先 finish --abandon 收口）",
+                  file=sys.stderr)
+            return 2
+        branch = (_git(["rev-parse", "--abbrev-ref", "HEAD"], args.worktree) or [None])[0]
+        now = _now()
+        ctx.records[rec_id] = {
+            "requirement": args.requirement,
+            "harness": args.harness,
+            "role": args.role or "",
+            "worktree": os.path.abspath(args.worktree),
+            "branch": branch or "",
+            "scope": scopes,
+            "pr_number": None,
+            "lifecycle": "CODING",
+            "test_impact": args.test_impact or "indirect",  # 缺省=indirect（§6）
+            "last_seen": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        ctx.commit()
+    finally:
+        ctx.close()
+    print(f"[OK] declare {rec_id} scope={scopes} test_impact={args.test_impact or 'indirect(缺省)'}")
+    return 0
+
+
+def _report(rec_id: str, rec: dict, repo_root: str, refresh: bool) -> None:
+    now = _now()
+    integration = rec.get("integration_cache")
+    if refresh and rec.get("pr_number"):
+        integration, ok = derive_integration(rec["pr_number"], integration, repo_root)
+        if not ok:
+            print(f"  (integration 观测于 {rec.get('observed_at', '?')}，GitHub 暂不可达)")
+    integration = integration or "NO_PR"
+    liveness = derive_liveness(float(rec["last_seen"]) if rec.get("last_seen") else None, now)
+    effective = sorted(set(rec.get("scope", [])) | set(derived_paths(rec, repo_root)))
+    risk = in_risk(rec["lifecycle"], integration)
+    print(f"{rec_id}: {rec['harness']} lifecycle={rec['lifecycle']} liveness={liveness} "
+          f"integration={integration} risk={'YES' if risk else 'no'}")
+    print(f"  effective_scope={effective}")
+    if risk:
+        declared = set(rec.get("scope", []))
+        derived = set(derived_paths(rec, repo_root))
+        if declared and derived and not declared <= derived:
+            print(f"  [declaration-drift] 声明未落地: {sorted(declared - derived)}; "
+                  f"diff 未声明: {sorted(derived - declared)}")
+        if liveness == "STALE" and not effective:
+            print("  [zombie-candidate] STALE 且 effective scope 为空——人工经 finish --abandon 收口")
+
+
+def cmd_status(args) -> int:
+    path, _ = registry_paths()
+    records = read_registry(path)  # 严格只读：不取锁写、不刷 last_seen（§2.5）
+    if not records:
+        print("(registry 为空——过渡条款生效：使用派生视图，见 repository-workflow.md)")
+        return 0
+    repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                               text=True, check=True).stdout.strip()
+    ids = [args.id] if args.id else sorted(records)
+    # overlap 提示（risk 集合内两两组件边界）
+    risk_recs = {k: v for k, v in records.items()
+                 if in_risk(v.get("lifecycle", "CODING"), v.get("integration_cache") or "NO_PR")}
+    for rec_id in ids:
+        if rec_id not in records:
+            print(f"[NOT-FOUND] {rec_id}", file=sys.stderr)
+            return 2
+        _report(rec_id, records[rec_id], repo_root, refresh=False)
+    if len(risk_recs) >= 2:
+        keys = sorted(risk_recs)
+        for i, a in enumerate(keys):
+            for b in keys[i + 1:]:
+                ea = set(risk_recs[a].get("scope", [])) | set(derived_paths(risk_recs[a], repo_root))
+                eb = set(risk_recs[b].get("scope", [])) | set(derived_paths(risk_recs[b], repo_root))
+                hits = {x for x in ea for y in eb if scope_overlap(x, y)}
+                if hits:
+                    print(f"[overlap-hint] {a} ↔ {b}: {sorted(hits)}（hint，从不禁止修改）")
+    return 0
+
+
+def cmd_update(args) -> int:
+    path, lock = registry_paths()
+    repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                               text=True, check=True).stdout.strip()
+    ctx = load_locked(path, lock)
+    try:
+        rec = ctx.records.get(args.id)
+        if not rec:
+            print(f"[NOT-FOUND] {args.id}", file=sys.stderr)
+            return 2
+        if args.scope:
+            try:
+                rec["scope"] = [normalize_scope(s, repo_root) for s in args.scope]
+            except ValueError as exc:
+                print(f"[REFUSED] {exc}", file=sys.stderr)
+                return 2
+        if args.pr:
+            rec["pr_number"] = str(args.pr)
+        integration, ok = derive_integration(rec.get("pr_number"),
+                                             rec.get("integration_cache"), repo_root)
+        rec["integration_cache"] = integration
+        rec["observed_at"] = _now()
+        rec["last_seen"] = _now()
+        rec["updated_at"] = _now()
+        ctx.commit()
+    finally:
+        ctx.close()
+    print(f"[OK] update {args.id} integration={integration}"
+          + ("" if ok else "（GitHub 不可达，保持旧观测值）"))
+    return 0
+
+
+def cmd_finish(args) -> int:
+    path, lock = registry_paths()
+    repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                               text=True, check=True).stdout.strip()
+    ctx = load_locked(path, lock)
+    try:
+        rec = ctx.records.get(args.id)
+        if not rec:
+            print(f"[NOT-FOUND] {args.id}", file=sys.stderr)
+            return 2
+        now = _now()
+        if args.abandon:
+            integration, _ = derive_integration(rec.get("pr_number"),
+                                                rec.get("integration_cache"), repo_root)
+            rec["lifecycle"] = "ABANDONED"
+            if integration in ("PR_OPEN", "READY"):
+                print(f"[WARN] PR #{rec.get('pr_number')} 仍在集成窗口——记录留窗至 GitHub 侧终态；"
+                      f"请先关闭/转交 PR（转手 = 新 Execution 重新 declare）", file=sys.stderr)
+            rec["integration_cache"] = integration
+            rec["observed_at"] = now
+        else:
+            rec["lifecycle"] = "FINISHED"
+            if args.pr:
+                rec["pr_number"] = str(args.pr)
+            integration, _ = derive_integration(rec.get("pr_number"),
+                                                rec.get("integration_cache"), repo_root)
+            rec["integration_cache"] = integration
+            rec["observed_at"] = now
+        rec["last_seen"] = now
+        rec["updated_at"] = now
+        ctx.commit()
+    finally:
+        ctx.close()
+    print(f"[OK] finish {args.id} lifecycle={rec['lifecycle']}")
+    return 0
+
+
+# ── 自测：纯函数红绿双向（离线）──
+
+def run_self_test() -> int:
+    failures: list[str] = []
+
+    def expect(name, fn, should_raise=False):
+        try:
+            fn()
+            if should_raise:
+                failures.append(f"{name}: 预期红，实际绿")
+        except ValueError:
+            if not should_raise:
+                failures.append(f"{name}: 预期绿，实际红")
+
+    expect("scope 合法", lambda: normalize_scope("backend/agent/aee.py"), False)
+    expect("scope 绝对路径拒绝", lambda: normalize_scope("/etc/passwd"), True)
+    expect("scope .. 拒绝", lambda: normalize_scope("backend/../outside"), True)
+    expect("scope trailing slash 归一", lambda: (
+        (lambda n: n == "backend/agent")(normalize_scope("backend/agent/"))), False)
+    assert normalize_scope("backend/agent/") == "backend/agent"
+
+    assert scope_overlap("backend", "backend/agent/aee.py") is True
+    assert scope_overlap("backend", "backend_new/x.py") is False  # 组件边界（§5.4）
+    assert scope_overlap("a.py", "a.py") is True
+    assert scope_overlap("a.py", "a.py.bak") is False
+
+    # 真值表（§3.2）：开放 PR 恒在窗口（R23 的 ABANDONED×PR_OPEN 必须在窗）
+    assert in_risk("CODING", "NO_PR") and in_risk("FINISHED", "NO_PR")
+    assert in_risk("ABANDONED", "PR_OPEN") and in_risk("ABANDONED", "READY")
+    assert in_risk("CODING", "CLOSED") and not in_risk("ABANDONED", "CLOSED")
+    assert not in_risk("ANY", "MERGED") and not in_risk("ABANDONED", "NO_PR")
+
+    assert derive_liveness(time.time() - 10, time.time()) == "LIVE"
+    assert derive_liveness(time.time() - TTL_SECONDS - 1, time.time()) == "STALE"
+
+    # codec 往返 + 破坏检测
+    sample = {"r1": {"requirement": "fix", "harness": "claude", "worktree": "/tmp/w",
+                     "branch": "b1", "scope": ["backend/agent", "docs/评审 x.md"],
+                     "lifecycle": "CODING", "test_impact": "direct", "pr_number": None,
+                     "last_seen": 1.0, "created_at": 1.0, "updated_at": 1.0}}
+    loaded = yaml_load(yaml_dump(sample))
+    assert loaded["r1"]["scope"] == sample["r1"]["scope"]
+    assert loaded["r1"]["requirement"] == "fix"
+    try:
+        yaml_load("r1:\n  requirement: x\n  rogue_field: y\n")
+        failures.append("codec 未知字段: 预期红，实际绿")
+    except ValueError:
+        pass
+    try:
+        yaml_load("r1: [not, a, mapping]\n")
+        failures.append("codec 超集语法: 预期红，实际绿")
+    except ValueError:
+        pass
+
+    # 九步原子写往返（临时目录）
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        p, lk = os.path.join(td, "registry.yaml"), os.path.join(td, "registry.lock")
+        atomic_write(p, lk, sample)
+        back = read_registry(p)
+        assert back["r1"]["scope"] == sample["r1"]["scope"]
+        try:
+            validate({"r1": {"requirement": "x", "harness": "h", "worktree": "/w",
+                             "lifecycle": "BAD"}})
+            failures.append("validate 非法 lifecycle: 预期红，实际绿")
+        except ValueError:
+            pass
+        try:
+            validate({"r1": {"requirement": "x", "worktree": "/w",
+                             "lifecycle": "CODING"}})  # 缺 harness
+            failures.append("validate 缺必填: 预期红，实际绿")
+        except ValueError:
+            pass
+
+    if failures:
+        for f in failures:
+            print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
+        return 1
+    print("[OK] ai_work self-test 通过（scope/overlap/真值表/liveness/codec/原子写 红绿双向）")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Execution Registry CLI（execution-contract.md）")
+    sub = ap.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("declare")
+    p.add_argument("--requirement", required=True)
+    p.add_argument("--harness", required=True)
+    p.add_argument("--worktree", required=True)
+    p.add_argument("--role")
+    p.add_argument("--scope", action="append", required=True)
+    p.add_argument("--test-impact", choices=TEST_IMPACT)
+    p.set_defaults(fn=cmd_declare)
+
+    p = sub.add_parser("status")
+    p.add_argument("--id")
+    p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("update")
+    p.add_argument("--id", required=True)
+    p.add_argument("--scope", action="append")
+    p.add_argument("--pr", type=int)
+    p.set_defaults(fn=cmd_update)
+
+    p = sub.add_parser("finish")
+    p.add_argument("--id", required=True)
+    p.add_argument("--pr", type=int)
+    p.add_argument("--abandon", action="store_true")
+    p.set_defaults(fn=cmd_finish)
+
+    ap.add_argument("--self-test", action="store_true")
+    args = ap.parse_args()
+    if getattr(args, "self_test", False) or not hasattr(args, "fn"):
+        return run_self_test()
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
