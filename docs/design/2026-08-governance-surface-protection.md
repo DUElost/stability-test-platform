@@ -43,7 +43,7 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 | S3 | `.mdc` frontmatter 三字段齐全语义合法（值剥离包裹引号后判空） | BLOCK | 坏 frontmatter=规则静默不加载，与 S1 同故障类 |
 | S4 | pr-agent.yml 五锚点（digest pin / fallback_models / disable-auto 步骤 / 门禁命令分离 job / security 判定串） | BLOCK | #399 / #421 事故转化物防误删 |
 | S5 | ci.yml/pr-agent.yml 的 PR 门禁 job id 与 AGENTS.md 六项记载互检（CodeQL 无 workflow 文件，只查文档侧） | BLOCK | 五稿评审均人工核对过的事实固化 |
-| S6 | AGENTS ≤80 行/8KB、CLAUDE ≤60 行/6KB、每个 Cursor rule ≤30 行/3KB；Harness 总索引与 scoped CLAUDE 各有独立预算 | BLOCK | Requirement 无关细节曾让常驻链超过 50KB；超预算必须迁往按需文档 |
+| S6 | AGENTS ≤80 行/8KB、CLAUDE ≤60 行/6KB、每个 Cursor rule ≤30 行/3KB；Harness 总索引、执行契约与 scoped CLAUDE 各有独立预算（P0b 增 execution-contract.md 200 行/20KB） | BLOCK | Requirement 无关细节曾让常驻链超过 50KB；超预算必须迁往按需文档 |
 | S7 | `.claude/skills/*/SKILL.md` frontmatter 的 name 与目录一致且 description 非空 | BLOCK | 错误 frontmatter 会让技能静默不可见 |
 | S8 | CLAUDE.md 只能 `@import` 最小 `AGENTS.md` | BLOCK | 导入 DOC-MAP 会把完整索引无条件带入每次会话 |
 | S9 | AGENTS/CLAUDE 只允许固定启动级二级章节，禁止三级章节 | BLOCK | 体量预算只能限制总量，章节白名单进一步阻止领域知识重新常驻 |

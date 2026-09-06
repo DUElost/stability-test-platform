@@ -21,6 +21,8 @@
   [`docs/adr/README.md`](docs/adr/README.md)
 - Harness 加载边界：
   [`harness-adapters.md`](docs/development/ai/harness-adapters.md)
+- 并行 Execution 契约（Registry/状态模型/scope）：
+  [`execution-contract.md`](docs/development/ai/execution-contract.md)
 
 修改具体领域时，继续读取目标目录内的 scoped `CLAUDE.md` 和对应设计文档；不要把
 领域细节重新复制回本文件。

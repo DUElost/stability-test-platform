@@ -32,7 +32,8 @@
 
 1. 从 [`docs/DOC-MAP.md`](docs/DOC-MAP.md) 和下表定位当前 Requirement 的权威文档；
 2. 检查目标代码、测试和相邻目录内的 scoped `CLAUDE.md`；
-3. 查看其他 worktree 的实际 diff，避免同时修改同一批文件；
+3. 查看其他 worktree 的实际 diff，避免同时修改同一批文件；涉及并行
+   Execution 登记时按 [`execution-contract.md`](docs/development/ai/execution-contract.md)；
 4. 共享元文件（本文件、`CLAUDE.md`、Harness rules）同一时间只由一个 Execution 修改。
 
 当前并行约定见
@@ -52,6 +53,7 @@
 | scan/upload/merge | [`2026-scan-upload-merge-contract.md`](docs/design/2026-scan-upload-merge-contract.md) |
 | 生产只读诊断 | [`production-diagnostics.md`](docs/operations/production-diagnostics.md) |
 | Harness 适配与本地配置 | [`harness-adapters.md`](docs/development/ai/harness-adapters.md) |
+| 并行 Execution 契约 | [`execution-contract.md`](docs/development/ai/execution-contract.md) |
 
 ## 提交前
 
