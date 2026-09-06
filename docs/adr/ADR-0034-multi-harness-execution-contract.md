@@ -47,7 +47,7 @@ Agent 间**不通信、不共享上下文、不实时协调**——Parallel Exec
 
 ### 2.3 状态模型：lifecycle × liveness × integration 三维正交
 
-每条记录三个正交字段（v0.4 依评审 R6 由两维升维：两维下 `finish` 无法表达「先开 PR、继续编码、再 finish」的正常路径，且 `ABANDONED` 混入 integration 耦合了执行生命周期与 PR 生命周期）：
+每条记录三个正交字段。**裁决背景（2026-09-06 人工确认）**：用户确认的 Contract v1 为**两维**（Execution state × Integration state，核心约束 = STALE 不退出集成风险窗口）；评审修订后（9261bd B3）的真实阻断点是 **`finish` 缺少独立、可持久化的语义表达**——两维下「先开 PR、继续编码、再 finish」路径无字段可落，修订允许「独立 lifecycle 字段」或「两维 + `finished_at`」二选一。本 ADR 选**前者**（lifecycle 同时承载 `ABANDONED` 的执行侧放弃语义，覆盖「编码中途放弃、无 PR」路径）——三维是**实现选择而非冻结条款**：
 
 - **lifecycle ∈ {CODING, FINISHED, ABANDONED}**（执行侧自声明）：`CODING`=编码中；`FINISHED`=`finish` 写入（执行者已停止编码，**只写本字段、不碰 integration**——与 PR 先后无关）；`ABANDONED`=**仅显式人工动作**（`finish --abandon`），永不因超时/命令自动产生；
 - **liveness ∈ {LIVE, STALE}**（**永远 advisory、查询时派生、不持久化**）：持久层只存 `last_seen`；STALE = `now − last_seen > TTL` 的展示层派生值，P1 不回写。STALE ≠ 死、≠ 可回收、**不退出集成窗口**、不影响任何业务语义；
@@ -152,7 +152,7 @@ AGENTS.md / CLAUDE.md / .cursor / .codex    ← 各入口只保留最小启动�
 - **auto mode 成为默认工作态**：重访行为验证挂载强度（2026-08-26 synthesis 重议条件，现状见 #855）；
 - **AGENTS.md 逼近 80 行/8KB ceiling**：预算扩容须独立裁决，不随功能顺手放宽；
 - **#857 上游修复**：根层 import 形态与 G2 形态优先级随之复评；
-- **Competition mode**（显式、受审计的开发者批准竞争）：评审 R18 标记「冻结版 Contract v1 是否含此条款待人工确认」——若含，补最小语义（显式、非默认、不构成 ownership/locking）；若不含，否决并不再重提（现文本 overlap=hint + 不上锁已隐含允许并行）。
+- **Competition mode**（显式、受审计的开发者批准竞争）：**已裁决（2026-09-06）**——冻结版 Contract v1 不含此条款，评审建议降级为非阻断追溯项，不入 Contract；现文本 overlap=hint + 不上锁已隐含允许并行，真实竞争需求出现再议。
 
 ## 附录 A：2026-09-06 Harness 摄取实测矩阵
 
