@@ -196,6 +196,10 @@ jobs:
           python tools/dev/check_governance_surface.py --self-test
           python tools/dev/check_governance_surface.py --check
 
+      # Execution Registry（ADR-0034 P1）纯函数红绿自测：离线，不触网不写真实 registry。
+      - name: Execution Registry 自测
+        run: python tools/dev/ai_work.py --self-test
+
       # 这条**阻塞**：仓库保持 public（2026-08-29 决策），真实内网主机地址
       # 一旦写进文档/代码就等于公开资产清单。历史累积过两轮人工清理
       # （#550 全泛化 172.21.x.x、#557 补 172.16 网段），没有门禁就会再来一次。

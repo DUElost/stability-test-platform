@@ -86,6 +86,13 @@ GATES = {
         ROOT,
         None,
     ),
+    # Execution Registry 自测（ADR-0034 P1，execution-contract.md §2-§5 纯函数）：
+    # 离线红绿双向（scope/overlap/真值表/codec/原子写）；不触网、不写真实 registry。
+    "ai-work": (
+        f"{PY} tools/dev/ai_work.py --self-test",
+        ROOT,
+        None,
+    ),
     # public 仓库内网主机地址扫描（#538/#550/#557 收尾）：纯文本正则、秒级。
     # 只拦四段齐全的具体主机地址，CIDR 网段常量与标准地址放行；
     # ADR-0020 脚本目录 / 已锁定迁移 / 测试夹具走白名单。
@@ -148,7 +155,7 @@ GATES = {
 }
 
 PROFILES = {
-    "check:quick": ["ruff", "eslint", "tsc", "knip", "compileall", "gov-surface"],
+    "check:quick": ["ruff", "eslint", "tsc", "knip", "compileall", "gov-surface", "ai-work"],
     "check:pr": [
         "ruff", "eslint", "tsc", "knip", "compileall",
         "pollution", "immutability", "gov-surface", "ip-leak", "agent-tests",
