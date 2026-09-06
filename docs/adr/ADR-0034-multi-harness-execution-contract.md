@@ -1,7 +1,7 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Accepted（v1.0，2026-09-06 经用户人工终审批准——两轮八源评审 R1–R30 全闭环，无待裁决项；正文冻结为本决策的完整记录，细则后续演进见 `execution-contract.md`，迁出时本 ADR 升 v1.1）**
-- 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ **v1.0 本版（Accepted）**
+- 状态：**Accepted（v1.1）**
+- 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ v1.0 #865（**Accepted**，2026-09-06 用户人工终审批准）/ **v1.1 本版：§2 执行细则已迁出至 `execution-contract.md`（P0a），本文保留决策要点 + 指针**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
@@ -38,52 +38,25 @@ Agent 间**不通信、不共享上下文、不实时协调**——Parallel Exec
 
 **选择权原则**：用哪个 Harness 承接哪个 Requirement，**始终由开发者决定**（延续 2026-09-04 约定与现行实践——开发者亲自启动并驱动各 Harness）。本契约**不定义任何需求路由或自动下发机制**：上述箭头链只描述**溯源**（哪个 Requirement 由哪个 Harness 的哪个 Execution 承接），不描述**指派**（谁该做什么）；Registry 记录由执行侧自行 `declare`（visibility-only，供可见性与审计），不是调度器。
 
-### 2.2 Execution Registry（P1 落地）
+### 2.2 Execution Registry（P1 落地）— 细则见契约 §2
 
-- 工具 `tools/dev/ai_work.py`：`declare / status / update / finish`（含 `finish --abandon`）子命令 + overlap 检测；
-- **Registry root = `$(git rev-parse --path-format=absolute --git-common-dir)/ai-work/`**——`--path-format=absolute`（git ≥ 2.31）是**唯一发现方式**：裸 `--git-common-dir` 在主 checkout 返回 cwd 相对路径（仓库根 `.git`、子目录 `../../.git`）、linked worktree 返回绝对路径，行为不一致且裸拼接会算错。不硬编码 `.git`，不提供 common dir 之外的替代落点（防多 Registry 分裂与 NFS/CIFS 落位）。目录内固定两文件：`registry.yaml`（数据）+ `registry.lock`（flock 锁，同目录）；位于 `.git` 内天然不被跟踪。**Registry 按克隆隔离**——同一机器多个独立克隆不共享 registry，与派生视图同口径（per-clone），不构成全局登记；
-- **写入协议（九步全序，硬约束）**：`flock(registry.lock) → read registry.yaml → validate → modify → write same-dir registry.yaml.tmp → fsync(tmp) → rename(tmp, registry.yaml) → fsync(parent dir) → unlock`——文件 fsync 不保证 rename 后目录项的崩溃持久性，故必须补父目录 fsync。异常类型、残留 tmp 清理与损坏恢复由 `execution-contract.md` 定义。**仅本地 FS 成立，禁止落 NFS/CIFS**；
-- Registry **不对业务文件/scope 上锁（visibility-only）**；`registry.lock` 仅保护 registry 文件自身的原子写；
-- **effective scope = `normalized(declared) ∪ derived(diff)`（并集恒成立）**：`derived(diff)` 是 Git 事实、声明不能覆盖或删除它；`declared` 无论有无 diff 都保留为意图（Registry 的核心新增价值恰是 diff 出现前、以及 diff 尚未覆盖全部计划范围时的意图可见性）。两者不一致时输出 **declaration drift 提示**（advisory）——不是丢弃声明，也不静默放行；`update` 可覆写声明（声明过期由执行侧显式清理，见 6d0f05 O-1 的残留面）。`derived(diff)` 口径分档：worktree 在场 → 工作树 diff（tracked staged/unstaged + untracked，untracked 口径 = `git ls-files --others --exclude-standard`——`git diff --name-only` 不含新文件，新建文件同样是集成风险）；worktree 已删除（finish 后常见）→ branch diff（`merge-base..branch`）；两者皆不可得 → 回落到声明单独生效。实测反例（声明与 diff 偏离须提示 drift 而非静默采信任一方）：2026-09-04 `docs/drift-sync-*` 声明 `docs`、实际 diff 触及 `backend/` 与 `.github/`。overlap 参与集合见 §2.3。
+**决策要点**：`tools/dev/ai_work.py`（declare/status/update/finish --abandon）；Registry root 以 `git rev-parse --path-format=absolute --git-common-dir` 为**唯一发现方式**（落 `$(...)/ai-work/`，per-clone 隔离，禁止 NFS/CIFS）；九步原子写全序为硬约束；visibility-only 不对业务上锁；effective scope = `declared ∪ derived(diff)` 并集恒成立 + drift 提示（derived 三分档：worktree/branch/声明）。完整协议（写入异常处置、损坏恢复、untracked 口径、scope 语法与 overlap 谓词）见 [`execution-contract.md` §2/§5](../development/ai/execution-contract.md)。
 
-### 2.3 状态模型：lifecycle × liveness × integration 三维正交
+### 2.3 状态模型：lifecycle × liveness × integration 三维正交 — 细则见契约 §3
 
-每条记录三个正交字段。**裁决背景（2026-09-06 人工确认）**：用户确认的 Contract v1 为**两维**（Execution state × Integration state，核心约束 = STALE 不退出集成风险窗口）；评审修订后（9261bd B3）的真实阻断点是 **`finish` 缺少独立、可持久化的语义表达**——两维下「先开 PR、继续编码、再 finish」路径无字段可落，修订允许「独立 lifecycle 字段」或「两维 + `finished_at`」二选一。本 ADR 选**前者**（lifecycle 同时承载 `ABANDONED` 的执行侧放弃语义，覆盖「编码中途放弃、无 PR」路径）——三维是**实现选择而非冻结条款**：
+**裁决背景**：用户确认的 Contract v1 为两维（Execution × Integration）；真实阻断点是 `finish` 缺独立可持久化表达，修订允许独立 lifecycle 字段或 `finished_at` 二选一——本 ADR 选 lifecycle（兼载 `ABANDONED` 放弃语义），**三维是实现选择而非冻结条款**。
 
-- **lifecycle ∈ {CODING, FINISHED, ABANDONED}**（执行侧自声明）：`CODING`=编码中；`FINISHED`=`finish` 写入（执行者已停止编码，**只写本字段、不碰 integration**——与 PR 先后无关）；`ABANDONED`=**仅显式人工动作**（`finish --abandon`），永不因超时/命令自动产生；
-- **liveness ∈ {LIVE, STALE}**（**永远 advisory、查询时派生、不持久化**）：持久层只存 `last_seen`；STALE = `now − last_seen > TTL` 的展示层派生值，P1 不回写。STALE ≠ 死、≠ 可回收、**不退出集成窗口**、不影响任何业务语义；
-- **integration ∈ {NO_PR, PR_OPEN, READY, MERGED, CLOSED}**（GitHub 权威）：`NO_PR`=未登记 PR；`PR_OPEN`=已登记 PR 号；`READY`=required checks 全绿（由 `update` 依 GitHub checks **派生刷新**，非人工宣称；主干推进致 checks 重跑则回退 `PR_OPEN`；不区分 FIFO 队首位置）；`MERGED`/`CLOSED`=终态（合入 / PR 关闭未合），均只能由 GitHub PR 状态确认。
+**决策要点**：lifecycle{CODING,FINISHED,ABANDONED}（执行侧；ABANDONED 仅显式人工）；liveness{LIVE,STALE}（永远 advisory、查询时派生、不持久化）；integration{NO_PR,PR_OPEN,READY,MERGED,CLOSED}（GitHub 权威；READY 派生刷新可回退）。**overlap 集合由真值表定义——开放 PR（PR_OPEN/READY）恒在风险窗口，不被本地 lifecycle 遮蔽**；CLOSED 不单独出局；MERGED 出局。完整真值表、T1–T8 transition table、reconcile 与 GitHub 不可用降级见 [`execution-contract.md` §3](../development/ai/execution-contract.md)。
 
-**overlap（集成风险）集合由真值表定义——开放 PR 永不被本地执行侧状态遮蔽**（v0.5 依四源复审共振修正：v0.4 的 `lifecycle ∉ {ABANDONED} 且 integration ∈ {NO_PR, PR_OPEN, READY}` 会让 `ABANDONED × PR_OPEN` 悬空组合静默退出窗口——执行者放弃了，PR 还开着还在等 FIFO；也与 `CODING × CLOSED` 同病，即 R2 所堵之洞换了入口重开）：
-
-```text
-risk = integration ∈ {PR_OPEN, READY}                                ← GitHub 事实：开放 PR 恒在窗口
-    OR (integration = NO_PR    AND lifecycle ∈ {CODING, FINISHED})   ← 无 PR 但执行侧未放弃
-    OR (integration = CLOSED   AND lifecycle ≠ ABANDONED)            ← PR 被关 ≠ 工作停止（误关/被取代/reopen）
-```
-
-`MERGED` 出局（变更已进主干，风险真实关闭；merge 后继续新工作应重新 declare）。`liveness` 不参与。典型反例仍成立：Execution A `finish` 后 Harness 退出（STALE），其 PR 仍改着 `foo.py`，新 Execution B 改 `foo.py` 时必须仍能看到 overlap 提示。**`finish --abandon` 不再是「立即出窗」**：无开放 PR 时记录出窗（僵尸出口的唯一合法终点）；有开放 PR 时记录留在窗口直到 GitHub 侧终态——`finish --abandon` 在 `integration ∈ {PR_OPEN, READY}` 时必须警告并提示先关闭/转交 PR（转手 = 新 Execution 重新 `declare`）。僵尸候选清单：`status` 输出「lifecycle ∈ {CODING, FINISHED} 且 STALE 且 effective scope 为空」记录，人工经 `finish --abandon` 收口。完整组合矩阵与并发刷新顺序入 P0 transition table。
-
-**事实来源分层**（Registry 从不僭越权威）：
-
-| 事实 | 权威来源 |
-|---|---|
-| declaration / execution metadata（scope、Role、PR 号、lifecycle、时间戳） | Registry（执行侧自声明） |
-| actual diff / branch / commit | Git（不一致时以 diff 为准，§2.4） |
-| PR lifecycle（**MERGED / CLOSED / READY 的 checks 事实只能由 GitHub 确认**） | GitHub |
-| verification | CI |
-
-`finish(PR #N)` 的语义仅为：**执行者已停止编码且登记 PR 号**（lifecycle→FINISHED，integration→PR_OPEN 仅当尚为 NO_PR）；`ai_work` 不得单方面写 `MERGED`/`CLOSED`——`update` 落终态前必须核对 GitHub PR 状态。完整 transition table（含 reconcile 与 GitHub 不可用时的降级）为 P0 `execution-contract.md` 必备目录（§2.7）。
+**事实来源分层**（Registry 从不僭越权威）：declaration/metadata → Registry（自声明）；actual diff/branch/commit → Git；PR 生命周期（MERGED/CLOSED/READY checks）→ **GitHub**；verification → CI。`ai_work` 不得单方面写终态。
 
 ### 2.4 声明与 diff 的关系（diff 优先）
 
 Registry 声明与实际 diff 不一致时**以 diff 为准**；派生视图（对 merge-base 取差异，含未提交）保留为 ground truth，Registry 是补充而非替代。
 
-### 2.5 TTL 与心跳（分期）
+### 2.5 TTL 与心跳（分期）— 细则见契约 §4
 
-- **命令语义**：`status` **严格只读**（观察不得改变被观察状态——不刷任何记录的 `last_seen`）；仅携带 execution identity 的写命令（`declare/update/finish`）顺带刷新**自身** `last_seen`；
-- **P1（无 heartbeat daemon）**：TTL（24h 量级）**仅 advisory**——STALE 为查询时派生（§2.3），超时只在 status 输出提示「可能陈旧」并列出候选清单，不自动改写任何持久字段、不剔除、不降级。声明式 CLI 之间没有可靠心跳源，此期 `last_seen` 不是 liveness 权威；
-- **P2（Harness wrapper/adapter 提供 heartbeat）**：`last_seen` 方可升格为可靠 liveness 信号；STALE 仍为派生展示（或明确唯一回写者），advisory 语义不变。
+**决策要点**：`status` 严格只读（观察不改变被观察状态）；写命令刷自身 `last_seen`；P1 无 heartbeat daemon 故 TTL 仅 advisory（不改字段/不剔除/不降级），P2 有 heartbeat 后 `last_seen` 方可升格。分期语义见 [`execution-contract.md` §4](../development/ai/execution-contract.md)。
 
 ### 2.6 并发上限（保留）
 
@@ -93,23 +66,19 @@ Registry 声明与实际 diff 不一致时**以 diff 为准**；派生视图（�
 
 | 期 | 内容 | 备注 |
 |---|---|---|
-| P0 | 规则先行：**建立 `docs/development/ai/execution-contract.md`（Execution Contract 唯一权威源，§2.10），§2.2/2.3/2.5/2.8/2.9 细则一次性平移入内（必备目录：transition table 含 §2.3 真值表全部组合与并发刷新顺序、reconcile 来源、GitHub 不可用降级、drift 对 Agent Note 等强制随附物的豁免规则、scope 组件边界 overlap 谓词、`lifecycle` 术语与 pipeline_def 域 lifecycle（S11 锚定）的消歧注记、持久字段清单（liveness 不在其中）、P1 启动判据的数据源口径（git worktree 历史/日志统计，与派生视图同源——registry 是 P1 产物不能自证）、Role Context 定义归属）**，**平移合入时本 ADR 升 v1.1 并在版本记录注明「细则已迁出至 execution-contract.md，本文保留决策要点」**（Accepted 正文不被无痕改写）；AGENTS.md/CLAUDE.md 改写走**独立 docs PR**（元文件串行化）；**单一 canonical Contract + 明确列举薄入口**（AGENTS.md/CLAUDE.md/`.cursor/rules`/`.codex`——各入口只保留最小启动原则与指针，勿手工镜像）；`harness-adapters.md`、`repository-workflow.md` 与 Phase -1 基线 note 的并行约定指针接到本文；`execution-contract.md` 入治理门禁（S2 `link_files` + S6 `RESIDENT_BUDGETS`） | **负载最重一期，建议拆 P0a（契约文档）+ P0b（接线/门禁/supersede）两个 PR**；合入后接 G2 试点（§3） |
-| P1 | Registry MVP（ai_work.py + registry.yaml/registry.lock 按 §2.2 + 三维状态与 overlap 集合按 §2.3 + scope MVP 按 §2.8 + `test_impact` 字段入 schema（§2.9，允许缺省）+ 自测红绿样例） | **启动判据**：连续两周并行 worktree ≥3，或实际发生 ≥2 次跨 Harness 撞车返工——未触发则维持 2026-09-04 派生视图用法 |
-| P2 | Harness Adapter：各 Harness 会话启动时知晓自身 Role——**上下文供给，非路由**（会话由开发者选择启动，Adapter 只保证该会话能读到 Role Context 与**根启动契约 + scoped 内容**）；提供 heartbeat（§2.5 升格条件）；**验收含 cwd 深度 × Harness 加载矩阵**（附录 A 协议扩展） | |
-| P3 | 真增量 = **Drift / Freshness gate**：先 advisory（本地 run_gates / 夜间全量，守合入路径 ~2min 注意力预算），overlap 粒度用顶层目录作 hint 而非硬门禁；含 `coverage-mismatch` advisory（§2.9） | **不建 merge queue**——主干机制已存在（FIFO enable-auto-merge + update-branch + strict 分支保护） |
+| P0 | **P0a（本版已交付）**：`execution-contract.md` 建立、细则一次性平移、本 ADR 收缩升 v1.1。**P0b（独立 docs PR）**：AGENTS.md/CLAUDE.md 改写（元文件串行化）；单一 canonical Contract + 薄入口接线（AGENTS.md/CLAUDE.md/`.cursor/rules`/`.codex`）；`harness-adapters.md`、`repository-workflow.md` 与 Phase -1 基线 note 的指针接到本文；`execution-contract.md` 入治理门禁（S2 `link_files` + S6 `RESIDENT_BUDGETS`）；supersede 2026-09-04 note（含 §9 过渡条款保留） | P0b 合入后接 G2 试点（§3） |
+| P1 | Registry MVP（ai_work.py 按 [`execution-contract.md`](../development/ai/execution-contract.md) §2–§5 实现 + `test_impact` 入 schema（允许缺省）+ 自测红绿样例） | **启动判据**：连续两周并行 worktree ≥3，或 ≥2 次跨 Harness 撞车返工——未触发则维持派生视图用法（契约 §9 过渡条款） |
+| P2 | Harness Adapter：会话启动时知晓自身 Role——**上下文供给，非路由**；提供 heartbeat（§2.5 升格条件）；**验收含 cwd 深度 × Harness 加载矩阵**（附录 A 协议扩展） | |
+| P3 | 真增量 = **Drift / Freshness gate**：先 advisory（本地 run_gates / 夜间全量），overlap 粒度用顶层目录作 hint 而非硬门禁；含 `coverage-mismatch` advisory（契约 §6） | **不建 merge queue**——主干机制已存在（FIFO enable-auto-merge + update-branch + strict 分支保护） |
 | P4 | Integration Planner：仅在「人已难判集成顺序」真实积累后启用 | 观察项 |
 
-### 2.8 Scope MVP 边界（P1 Contract 即约束，不留给实现自由解释）
+### 2.8 Scope MVP 边界 — 细则见契约 §5.3/§5.4
 
-- scope 表达 = **repo-relative path**，仅 file 或 directory 两种粒度，归一化（normalized）后存储；**明确拒绝**：绝对路径、含 `..` 的路径、仓库内 symlink 逃逸到仓库外、trailing slash 歧义——overlap 匹配采用**路径组件边界**谓词（`backend` 与 `backend_new` 不重叠），细则入 P0 contract；
-- MVP 明确**不支持**：glob、ownership 语义、自动任务拆分、semantic scope、任何形式的 locking；
-- **Role 不是文件 ownership 边界**（延续 2026-09-04 约定第 2 条精神：分片是冲突规避手段，不是职责边界）——overlap 只是 hint，从不禁止跨 scope 修改。
+**决策要点**：repo-relative file/directory 归一化；拒绝 absolute/`..`/symlink 逃逸/trailing slash；不支持 glob/ownership/自动拆分/semantic/locking；**Role 不是文件 ownership 边界**；overlap 谓词 = 路径组件边界前缀。谓词定义见 [`execution-contract.md` §5.4](../development/ai/execution-contract.md)。
 
-### 2.9 test_impact 声明与 coverage-mismatch（Contract 先定义，实现后置）
+### 2.9 test_impact 声明与 coverage-mismatch — 细则见契约 §6
 
-- `declare` 附 `test_impact ∈ {none, direct, indirect}`：none=不改行为语义（纯文档/注释等）；direct=直接改测试或被测代码；indirect=可能影响行为的非直接改动。**P1 允许缺省**（缺省视同 indirect 并在 status 提示）——不为分类摩擦付协同税；
-- coverage 评估 = **Harness 声明 × CI 证据**合成：声明 `none` 但 diff 触及测试相关路径、或声明 `direct` 但无对应测试运行记录 → `coverage-mismatch`，**advisory**，归 P3 drift gate 家族（Drift / Verification）。**CI 证据口径 = 夜间全量 / 合并后 CI 运行记录**（非 PR 轻量 checks——PR 路径有意不含全量 backend/frontend 测试，按 PR checks 判定会让 `direct` 声明常态误报），与合入路径 ~2min 注意力预算原则联动；
-- 本节先入 Contract；P1 仅落 registry schema 字段，检测实现允许后置至 P3。
+**决策要点**：`test_impact ∈ {none, direct, indirect}`，P1 允许缺省（=indirect）；coverage 评估 = 声明 × CI 证据 → `coverage-mismatch`（advisory，P3 实现）；**CI 证据口径 = 夜间全量 / 合并后记录**（非 PR 轻量 checks）。定义见 [`execution-contract.md` §6](../development/ai/execution-contract.md)。
 
 ### 2.10 契约权威源（ADR 与契约文档分家）
 
@@ -119,9 +88,9 @@ docs/development/ai/execution-contract.md   ← Execution Contract 唯一权威�
 AGENTS.md / CLAUDE.md / .cursor/rules / .codex    ← 各入口只保留最小启动原则与指针
 ```
 
-- `execution-contract.md` 承载执行语义完整规范（状态模型、scope 语法、registry 协议、drift/coverage 语义），细则演进在该文档版本化，不回填 ADR 正文；
+- `execution-contract.md` 承载执行语义完整规范（术语与数据模型、registry 协议、状态模型与 transition table、scope 语法与 overlap 谓词、test_impact/coverage 语义、drift 豁免、启动判据与过渡条款），细则演进在该文档版本化，不回填 ADR 正文（**本版 v1.1 已完成迁出**）；
 - ADR-0034 本身 = 方向裁决记录（决策、理由、取代关系）；
-- `AGENTS.md` 仍为 **minimal bootstrap contract**：保留最少量不可遗漏的启动原则（总原则/硬不变量/按需入口），加一行指向 execution-contract.md——**不空壳化，也不复制执行语义**。
+- `AGENTS.md` 仍为 **minimal bootstrap contract**：保留最少量不可遗漏的启动原则（总原则/硬不变量/按需入口），加一行指向 execution-contract.md——**不空壳化，也不复制执行语义**（接线在 P0b）。
 
 ## 3. G2：scoped 上下文文件命名与形态（本 ADR 内裁决）
 
