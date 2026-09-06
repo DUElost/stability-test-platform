@@ -19,8 +19,9 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
   S7  .claude/skills/*/SKILL.md frontmatter：name 与目录一致、description 非空
       （写坏 = skill 对 agent 静默不存在，与 S1/S3 同故障类）
   S8  CLAUDE.md 只允许 @import 最小 AGENTS.md，不得递归导入文档地图或领域文档
-  S9  根入口只允许固定的启动级章节，领域细节不能新增为二/三级章节
-  S10 2026-09-05 起新增 Agent Note 的 Status/Class 头部与 class 目录一致
+  S9  根入口只允许固定的启动级章节；三级及以下（含 ####+ 深层）一律禁止
+  S10 class 目录内 Agent Note 必须日期命名（yyyy-mm-dd-主题.md），且 2026-09-05 起
+      新增 Note 的 Status/Class 头部与 class 目录一致
   S11 AGENTS.md 硬不变量锚点逐条在场（防整条删除/改写静默丢失——S4 同模式）
 
 用法:
@@ -180,15 +181,24 @@ ROOT_HEADING_ALLOWLIST = {
 }
 
 
+_HEADING = re.compile(r"^(#{2,})\s+(.*)$")
+
+
 def check_root_headings(label: str, text: str) -> list[str]:
-    """S9: 根入口只保留启动级固定章节。"""
+    """S9: 根入口只保留启动级固定章节；三级及以下一律禁止（含 ####+ 深层）。"""
     issues = []
     allowed = ROOT_HEADING_ALLOWLIST[label]
     for lineno, line in enumerate(text.splitlines(), 1):
-        if line.startswith("### "):
-            issues.append(f"S9 {label} line {lineno}: 禁止三级章节，细节应迁往按需文档")
-        elif line.startswith("## "):
-            heading = line[3:].strip()
+        m = _HEADING.match(line)
+        if not m:
+            continue
+        depth = len(m.group(1))
+        if depth >= 3:
+            issues.append(
+                f"S9 {label} line {lineno}: 禁止{depth}级章节，细节应迁往按需文档"
+            )
+        else:
+            heading = m.group(2).strip()
             if heading not in allowed:
                 issues.append(f"S9 {label} line {lineno}: 非启动章节 {heading!r}")
     return issues
@@ -226,10 +236,14 @@ NOTE_HEADER_CUTOFF = "2026-09-05"
 
 
 def check_agent_note_header(label: str, text: str) -> list[str]:
-    """S10: 新格式启用后的 Agent Note 头部必须与 class 目录一致。"""
+    """S10: 新格式启用后的 Agent Note 头部必须与 class 目录一致；文件名必须日期命名。"""
     filename = os.path.basename(label)
     match = re.match(r"^(\d{4}-\d{2}-\d{2})-.+\.md$", filename)
-    if not match or match.group(1) < NOTE_HEADER_CUTOFF:
+    if not match:
+        # class 目录内非日期命名的 .md 一律拒绝（README.md 已在调用方排除）——
+        # 否则改名即可绕过 Status/Class 头校验（#854）
+        return [f"S10 {label}: Agent Note 文件名必须形如 yyyy-mm-dd-<主题>.md"]
+    if match.group(1) < NOTE_HEADER_CUTOFF:
         return []
     class_name = os.path.basename(os.path.dirname(label))
     issues = []
@@ -548,6 +562,18 @@ def run_self_test() -> int:
         lambda: check_root_headings("AGENTS.md", "# T\n\n## 数据库迁移\n"),
         True,
     )
+    expect(
+        "S9 深层标题逃逸被拦（#854）",
+        lambda: check_root_headings(
+            "AGENTS.md", "# T\n\n## 总原则\n\n#### 领域细节逃逸\n"
+        ),
+        True,
+    )
+    expect(
+        "S9 五级标题逃逸被拦",
+        lambda: check_root_headings("AGENTS.md", "# T\n\n##### 更深\n"),
+        True,
+    )
     good_note = "# T\n\nStatus: implemented\nClass: process\n"
     bad_note = "# T\n\nStatus: accepted\nClass: feature\n"
     expect(
@@ -570,6 +596,13 @@ def run_self_test() -> int:
             "docs/notes/process/2026-09-04-example.md", bad_note
         ),
         False,
+    )
+    expect(
+        "S10 非日期文件名被拦（#854）",
+        lambda: check_agent_note_header(
+            "docs/notes/process/no-date-note.md", good_note
+        ),
+        True,
     )
 
     invariants_full = (
