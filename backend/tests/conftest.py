@@ -572,12 +572,17 @@ def admin_user(db_session):
 @pytest.fixture
 def auth_headers(test_user):
     """Get authentication headers for test user"""
-    token = create_access_token(data={"sub": "testuser", "role": "user"})
+    # R02-D1（#900）：token sub=用户 PK，username/role 为信息性 claim
+    token = create_access_token(
+        data={"sub": str(test_user.id), "username": test_user.username, "role": test_user.role}
+    )
     return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
 def admin_headers(admin_user):
     """Get authentication headers for admin user"""
-    token = create_access_token(data={"sub": "admin", "role": "admin"})
+    token = create_access_token(
+        data={"sub": str(admin_user.id), "username": admin_user.username, "role": admin_user.role}
+    )
     return {"Authorization": f"Bearer {token}"}

@@ -332,21 +332,27 @@ class TestPlanCRUD:
         }, headers=auth_headers)
         plan_id = create.json()["data"]["id"]
 
-        other_token = create_access_token(data={"sub": "otheruser", "role": "user"})
-        other_headers = {"Authorization": f"Bearer {other_token}"}
-
-        # 准备 otheruser 用户记录
+        # 准备 otheruser 用户记录——token sub=该用户 PK（R02-D1，#900），
+        # 须先建用户取 id 再签 token
         from backend.core.database import SessionLocal
+        from backend.core.security import get_password_hash
         with SessionLocal() as s:
-            if not s.query(User).filter(User.username == "otheruser").first():
-                from backend.core.security import get_password_hash
-                s.add(User(
+            other = s.query(User).filter(User.username == "otheruser").first()
+            if not other:
+                other = User(
                     username="otheruser",
                     hashed_password=get_password_hash("x"),
                     role="user",
                     is_active="Y",
-                ))
+                )
+                s.add(other)
                 s.commit()
+            other_id = other.id
+
+        other_token = create_access_token(
+            data={"sub": str(other_id), "username": "otheruser", "role": "user"}
+        )
+        other_headers = {"Authorization": f"Bearer {other_token}"}
 
         update = client.put(f"/api/v1/plans/{plan_id}", json={
             "name": f"{name}_hack",
