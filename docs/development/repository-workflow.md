@@ -58,14 +58,19 @@ Execution Registry（`ai_work.py`）按 ADR-0034 P1 分期落地，启动判据�
 Auto-merge 的队列与分支更新以 workflow 和
 [`scripts/ci/pr-automerge-queue.sh`](../../scripts/ci/pr-automerge-queue.sh) 为事实源。
 
-## 关单关键词写法
+## 关单关键词与自动关单
 
-PR body 的 closing keyword（`Closes #N` / `Fixes #N`）由 GitHub 服务端在合入时
-解析，与本机网络无关；**issue 号后必须跟空格或 ASCII 标点**——全角标点紧跟
-（如 `#962。`）不构成引用、不会关单（#926/#929/#931/#963 四单同型实证）。
-分支 commit message 内的关键词经 PR 合并不生效（merge commit 方式只扫
-PR body），本仓禁止直推，故 PR body 是唯一关单通道——**合入后核销 issue
-实际关闭**，未关按同因手工补。失效排查顺序：词边界 → 代码围栏 → base 分支。
+closing keyword（`Closes #N` / `Fixes #N`）由 GitHub 服务端在合入时解析。
+**写法已被 2026-09-07 实测双向证伪为失效因子**：`Fixes #881（`（全角括号紧跟
+issue 号，PR #912，06:21）正常关闭；`Closes #962. `（号后 ASCII 句号+空格，
+字节级干净，PR #980，15:14）未关闭。当日 06:21 前两例全成功、09:33 起五连败
+（#926/#929/#931/#963/#980），与当日 github.com TLS/GraphQL 异常同时段，
+指向**平台侧故障窗口**；分支 commit message 内关键词经 merge commit 合入
+也未触发（#963 实证）。**纪律**：
+
+- 合入后**核销 issue 实际关闭**，未关即手工补关（附证据评论）；
+- 失效排查顺序：平台故障窗口（时间线比对）→ 代码围栏 → base 分支 → 写法；
+- 平台恢复后用下一个带关键词的 PR 复测并回填本节结论。
 
 ## CI 分层
 
