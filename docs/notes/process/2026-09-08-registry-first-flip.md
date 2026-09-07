@@ -23,6 +23,11 @@ MVP）已合入 main 并被真实采用（fix-825/#895、fix-880/#899、fix-881/
 - 两处 ADR 引用「Accepted v1.0」去掉版本钉扎只留 Accepted——S12 索引门禁
   只约束 ADR 头部/README 主表/DOC-MAP/M7 看板四面，此处不在检查面；去钉扎
   消除后续版本递增的重复漂移源（#867 同类教训）。
+- `AGENTS.md`「开始任务时」第 3 条（随第二个 PR）：从「查看其他 worktree 的
+  实际 diff；涉及并行 Execution 登记时按契约」的条件式表述改为「并行前检与
+  领单：`ai_work.py status` + `declare`；实际 diff 作 ground truth 交叉验证」
+  ——原表述以派生视图为主路径、Registry 为特例，与翻转后主从关系相反；
+  净增 1 行（65→66 行，80 行预算内）。
 
 语义澄清（本次不改契约正文）：切换是**主操作规范易位**而非派生视图退役——
 派生视图保留三个角色：effective_scope 并集内嵌（§5.1 恒成立）、ground truth
@@ -34,22 +39,25 @@ MVP）已合入 main 并被真实采用（fix-825/#895、fix-880/#899、fix-881/
   条款本身是条件式表述（「就绪并被采用之前维持……」），条件失效后文本仍
   自洽；且该文件在另一 Execution（fix-946-lifecycle-t9-resume）在窗 scope
   内，避免撞文件。
-- 同步翻转 AGENTS.md「开始任务时」第 3 条为 Registry 前检口径：放弃——该条
-  已含指向 execution-contract.md 的指针且非事实错误，AGENTS.md 受 80 行/8KB
-  预算与共享元文件串行约束，留待下次元文件 PR 评估。
+- 同步翻转 AGENTS.md「开始任务时」第 3 条为 Registry 前检口径：**首 PR 放弃**
+  ——该条已含指向 execution-contract.md 的指针且非事实错误，AGENTS.md 受
+  80 行/8KB 预算与共享元文件串行约束；**同日后续 PR 重新评估后执行**（在窗
+  Execution 无一触 AGENTS.md、预算余量充足，原判定前提消失，非推翻原判定）。
 - 为本次翻转新建 issue：不需要——切换是 §9 预定义的条件触发机制（非缺陷），
   用户直接批准执行，本 note 承担决策留痕。
 
 ## Verification
 
-- `git diff` 核对两文件仅目标段落变更；
-- `python scripts/run_gates.py check:quick`（含 S1–S12 治理面与 ai-work gate）
-  全绿；
-- Registry dogfood：本 Execution 全程经 `ai_work.py` declare/update 登记，
-  scope 与实际 diff 一致（drift 零提示）。
+- `git diff` 核对仅目标段落变更（首 PR 三文件 / 后续 PR 两文件）；
+- 首 PR 本地实跑：`gov-surface`（S1–S12）与 `ai-work` 自测直接调用全绿、
+  ruff 绿；`check:quick` 中 eslint/tsc/knip 属 frontend 检查，/tmp worktree
+  无 node_modules 未本地跑（零 frontend 文件改动，CI required checks 覆盖
+  全绿后合入）；
+- 后续 PR 本地实跑：`gov-surface`（含 S6 AGENTS.md 预算）全绿；
+- Registry dogfood：两次 Execution 均全程经 `ai_work.py`
+  declare/update/finish 登记，scope 与实际 diff 一致（drift 零提示）。
 
 ## Revisit
 
 - P2 heartbeat 落地使 `last_seen` 升格为可靠 liveness 信号时（契约 §4），
-  本节「前检」描述需随之复核；
-- AGENTS.md 是否同步 Registry-first 口径，待下次共享元文件串行 PR 一并评估。
+  AGENTS.md 第 3 条「前检」与 repository-workflow.md 的描述需随之复核。
