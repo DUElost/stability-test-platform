@@ -1,6 +1,6 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.2（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
+- **状态**：Living v1.3（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.3 变更：§2.1/§3.1/§3.3 增 T9 `resume`——FINISHED→CODING 返工回退（#946）；v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
 - **日期**：2026-09-07
 - **适用**：所有在本仓库参与 Execution Registry 的 AI Coding Harness 会话；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
@@ -36,7 +36,7 @@
 
 ### 2.1 工具与发现（平移 ADR §2.2）
 
-- 工具 `tools/dev/ai_work.py`：`declare / status / update / finish`（含 `finish --abandon`）子命令 + overlap 检测 + declare 在窗 issue 查重（§3.4，#978）；
+- 工具 `tools/dev/ai_work.py`：`declare / status / update / finish`（含 `finish --abandon`）/ `resume` 子命令 + overlap 检测 + declare 在窗 issue 查重（§3.4，#978）；
 - **Registry root = `$(git rev-parse --path-format=absolute --git-common-dir)/ai-work/`**——`--path-format=absolute`（git ≥ 2.31）是**唯一发现方式**：裸 `--git-common-dir` 在主 checkout 返回 cwd 相对路径（仓库根 `.git`、子目录 `../../.git`）、linked worktree 返回绝对路径，行为不一致且裸拼接会算错。不硬编码 `.git`，不提供 common dir 之外的替代落点（防多 Registry 分裂与 NFS/CIFS 落位）；
 - 目录内固定两文件：`registry.yaml`（数据）+ `registry.lock`（flock 锁，同目录）；位于 `.git` 内天然不被跟踪；
 - **Registry 按克隆隔离**——同一机器多个独立克隆不共享 registry，与派生视图同口径（per-clone），不构成全局登记。
@@ -68,7 +68,7 @@ Registry **不对业务文件/scope 上锁**；`registry.lock` 仅保护 registr
 
 ### 3.1 三维定义（平移 ADR §2.3）
 
-- **`lifecycle ∈ {CODING, FINISHED, ABANDONED}`**（执行侧自声明）：`CODING`=编码中；`FINISHED`=执行者已停止编码（`finish` 写入，**只写本字段**——与 PR 先后无关）；`ABANDONED`=**仅显式人工动作**（`finish --abandon`），永不因超时/命令自动产生；
+- **`lifecycle ∈ {CODING, FINISHED, ABANDONED}`**（执行侧自声明）：`CODING`=编码中；`FINISHED`=执行者已停止编码（`finish` 写入，**只写本字段**——与 PR 先后无关；非终态：`resume` 可回退 CODING，T9/#946）；`ABANDONED`=**仅显式人工动作**（`finish --abandon`），永不因超时/命令自动产生，且不可 resume（恢复 = 新 Execution 重新 `declare`）；
 - **`liveness ∈ {LIVE, STALE}`**（**永远 advisory、查询时派生、不持久化**）：`STALE` = `now − last_seen > TTL`（TTL 24h 量级）。STALE ≠ 死、≠ 可回收、**不退出集成风险窗口**、不影响任何业务语义；
 - **`integration ∈ {NO_PR, PR_OPEN, READY, MERGED, CLOSED}`**（GitHub 权威）：`NO_PR`=未登记 PR；`PR_OPEN`=已登记 PR；`READY`=required checks 全绿（`update` 依 GitHub checks **派生刷新**，非人工宣称；主干推进致 checks 重跑则回退 `PR_OPEN`；不区分 FIFO 队首位置）；`MERGED`/`CLOSED`=终态（合入 / PR 关闭未合），只能由 GitHub PR 状态确认。
 
@@ -97,6 +97,7 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 | T6 | `update` 核对 GitHub：PR merged | 不变 | →MERGED | **唯一 MERGED 写入路径**；终态 |
 | T7 | `update` 核对 GitHub：PR closed（未合） | 不变 | →CLOSED | 终态；CLOSED 后 risk 由 §3.2 第三行决定 |
 | T8 | PR reopen（GitHub 事实） | 不变 | CLOSED→PR_OPEN | `update` 派生刷新 |
+| T9 | `resume` | FINISHED→CODING | 不变 | **返工回退（T8 的 lifecycle 侧对称，#946）**：评审意见等要求继续编码时恢复，保审计连续性；`MERGED` 拒绝（风险已真实关闭，走 T1 重新 `declare`）；`ABANDONED` 不可 resume；下一轮 `update` 照常 reconcile integration |
 
 - **并发刷新顺序**：`update` 单次调用内——先 GitHub 核对（T5–T8 的事实采集），再执行 §2.2 九步写入；两次并发 `update` 由 flock 串行；
 - **GitHub 不可用降级**：保持旧 integration 值 + 更新 `observed_at`（观测时间），status 输出「integration 观测于 <时间>，GitHub 暂不可达」；**不猜测、不推进终态**；
