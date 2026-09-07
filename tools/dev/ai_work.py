@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ai_work.py — Execution Registry CLI（ADR-0034 P1）。
 
-权威规范：docs/development/ai/execution-contract.md（Living v1.2，唯一权威源）。
+权威规范：docs/development/ai/execution-contract.md（Living v1.3，唯一权威源）。
 本文件是其 §2（Registry 协议）/§3（状态模型）/§5（scope 与 overlap）的 MVP 实现：
 选择权原则（ADR §2.1）——本工具是执行侧自声明的 visibility-only 登记簿，不是调度器。
 
@@ -12,6 +12,7 @@
     ai_work.py status [--id ID]                 # 严格只读（不刷任何 last_seen）
     ai_work.py update --id ID [--scope P ...] [--pr N]   # 刷 last_seen + GitHub reconcile
     ai_work.py finish --id ID [--pr N | --abandon]
+    ai_work.py resume --id ID                   # T9：FINISHED→CODING 返工回退（#946）
     ai_work.py --self-test                      # 纯函数红绿自证（离线，无 git/gh 调用）
 
 设计约束（契约即约束）：
@@ -209,6 +210,17 @@ def derive_liveness(last_seen: float | None, now: float) -> str:
     if last_seen is None:
         return "UNKNOWN"
     return "LIVE" if now - last_seen < TTL_SECONDS else "STALE"
+
+
+def can_resume(lifecycle: str, integration: str) -> tuple[bool, str]:
+    """T9 守卫（#946，§3.3）：仅 FINISHED 且未 MERGED 可恢复编码；拒绝须给理由。"""
+    if lifecycle == "CODING":
+        return False, "已在 CODING——无需 resume"
+    if lifecycle == "ABANDONED":
+        return False, "ABANDONED 仅显式人工动作——恢复 = 新 Execution 重新 declare"
+    if integration == "MERGED":
+        return False, "PR 已 MERGED，风险窗口真实关闭——返工/新工作走 T1 重新 declare"
+    return True, ""
 
 
 # ── Registry 定位与九步原子写（§2.1/§2.2）──
@@ -750,6 +762,32 @@ def cmd_finish(args) -> int:
     return 0
 
 
+def cmd_resume(args) -> int:
+    """T9（#946，契约 §3.3）：FINISHED→CODING 返工回退——评审意见要求继续编码时
+    恢复执行生命周期，保审计连续性（替代「abandon+重 declare」的自指 overlap 出路）。
+    integration 不变（下一轮 update 向 GitHub reconcile）；MERGED/ABANDONED 拒绝。"""
+    path, lock = registry_paths()
+    ctx = load_locked(path, lock)
+    try:
+        rec = ctx.records.get(args.id)
+        if not rec:
+            print(f"[NOT-FOUND] {args.id}", file=sys.stderr)
+            return 2
+        ok, reason = can_resume(rec["lifecycle"], rec.get("integration_cache") or "NO_PR")
+        if not ok:
+            print(f"[REFUSED] resume {args.id}: {reason}", file=sys.stderr)
+            return 2
+        now = _now()
+        rec["lifecycle"] = "CODING"
+        rec["last_seen"] = now
+        rec["updated_at"] = now
+        ctx.commit()
+    finally:
+        ctx.close()
+    print(f"[OK] resume {args.id} lifecycle=CODING（integration 不变，随下次 update reconcile）")
+    return 0
+
+
 # ── 自测：纯函数红绿双向（离线）──
 
 def run_self_test() -> int:
@@ -781,6 +819,15 @@ def run_self_test() -> int:
     assert in_risk("ABANDONED", "PR_OPEN") and in_risk("ABANDONED", "READY")
     assert in_risk("CODING", "CLOSED") and not in_risk("ABANDONED", "CLOSED")
     assert not in_risk("ANY", "MERGED") and not in_risk("ABANDONED", "NO_PR")
+
+    # #946 T9 resume 守卫真值表
+    assert can_resume("FINISHED", "PR_OPEN") == (True, "")
+    assert can_resume("FINISHED", "READY")[0] and can_resume("FINISHED", "NO_PR")[0]
+    assert can_resume("FINISHED", "CLOSED")[0]
+    assert not can_resume("FINISHED", "MERGED")[0]  # 风险已关闭，走 T1
+    assert not can_resume("CODING", "PR_OPEN")[0]  # 已在编码
+    assert not can_resume("ABANDONED", "PR_OPEN")[0]  # 恢复=重新 declare
+    assert can_resume("FINISHED", "MERGED")[1]  # 拒绝必附理由
 
     assert derive_liveness(time.time() - 10, time.time()) == "LIVE"
     assert derive_liveness(time.time() - TTL_SECONDS - 1, time.time()) == "STALE"
@@ -987,6 +1034,11 @@ def main() -> int:
     p.add_argument("--pr", type=int)
     p.add_argument("--abandon", action="store_true")
     p.set_defaults(fn=cmd_finish)
+
+    p = sub.add_parser("resume",
+                       help="T9：FINISHED→CODING 返工回退（#946；MERGED/ABANDONED 拒绝）")
+    p.add_argument("--id", required=True)
+    p.set_defaults(fn=cmd_resume)
 
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
