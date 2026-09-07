@@ -93,6 +93,14 @@ GATES = {
         ROOT,
         None,
     ),
+    # P3 drift gate（ADR-0034 §2.7 P3）：freshness/declaration-drift/coverage-mismatch/
+    # overlap 顶层 hint，**advisory 不阻塞**（exit 0）——只在 check:full（夜间全量）
+    # 留痕输出；不进 quick/pr（守合入路径 ~2min 注意力预算）。转 required 须独立裁决。
+    "ai-drift": (
+        f"{PY} tools/dev/ai_work.py drift",
+        ROOT,
+        None,
+    ),
     # public 仓库内网主机地址扫描（#538/#550/#557 收尾）：纯文本正则、秒级。
     # 只拦四段齐全的具体主机地址，CIDR 网段常量与标准地址放行；
     # ADR-0020 脚本目录 / 已锁定迁移 / 测试夹具走白名单。

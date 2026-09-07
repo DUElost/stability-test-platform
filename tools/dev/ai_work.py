@@ -418,6 +418,78 @@ def cmd_status(args) -> int:
     return 0
 
 
+# ── P3 drift gate（advisory；转 required 须独立裁决，ADR §2.7 P3）──
+
+TEST_PATH_PREFIXES = ("backend/tests/", "backend/agent/tests/", "tests/")
+TEST_PATH_NAMES = ("conftest.py", "pytest.ini", "vitest.config.ts", "vitest.config.js",
+                   "pyproject.toml")
+
+
+def is_test_path(path: str) -> bool:
+    """coverage-mismatch 的「测试相关路径」判定（MVP：目录前缀 + 名称/后缀）。"""
+    if path.startswith(TEST_PATH_PREFIXES):
+        return True
+    base = path.rsplit("/", 1)[-1]
+    return base in TEST_PATH_NAMES or ".test." in base or ".spec." in base
+
+
+def top_dirs(paths) -> set:
+    """overlap 顶层目录聚合（P3 用顶层粒度作 hint，比组件级更低噪）。"""
+    return {p.split("/", 1)[0] for p in paths if p}
+
+
+def collect_drift_advisories(records: dict, repo_root: str, now: float) -> list[str]:
+    """纯函数：drift/freshness/coverage-mismatch/overlap 四类 advisory（不输出、不退出码）。"""
+    advisories: list[str] = []
+    risk = {k: v for k, v in records.items()
+            if in_risk(v.get("lifecycle", "CODING"), v.get("integration_cache") or "NO_PR")}
+    effective: dict[str, set] = {}
+    for rec_id, rec in sorted(risk.items()):
+        declared = set(rec.get("scope", []))
+        derived = set(derived_paths(rec, repo_root))
+        effective[rec_id] = declared | derived
+        seen = float(rec["last_seen"]) if rec.get("last_seen") else None
+        if derive_liveness(seen, now) == "STALE":
+            advisories.append(f"freshness: {rec_id} STALE（>24h 无心跳）——人工裁决（非死、不剔除）")
+        if declared and derived:
+            unlanded = declared - derived
+            undeclared = derived - declared
+            if unlanded:
+                advisories.append(f"declaration-drift: {rec_id} 声明未落地 {sorted(unlanded)}")
+            if undeclared:
+                advisories.append(f"declaration-drift: {rec_id} diff 未声明 {sorted(undeclared)}")
+        if rec.get("test_impact") == "none":
+            hits = sorted(p for p in derived if is_test_path(p))
+            if hits:
+                advisories.append(
+                    f"coverage-mismatch: {rec_id} 声明 test_impact=none 但 diff 触及测试路径 {hits[:5]}")
+    keys = sorted(effective)
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            shared = top_dirs(effective[a]) & top_dirs(effective[b])
+            if shared:
+                advisories.append(f"overlap-hint: {a} ↔ {b} 顶层目录 {sorted(shared)}（hint，从不禁止修改）")
+    return advisories
+
+
+def cmd_drift(args) -> int:
+    path, _ = registry_paths()
+    records = read_registry(path)
+    if not records:
+        print("[advisory] registry 无记录——drift gate no-op（过渡条款：派生视图）")
+        return 0
+    repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                               text=True, check=True).stdout.strip()
+    advisories = collect_drift_advisories(records, repo_root, _now())
+    for line in advisories:
+        print(f"[advisory] {line}")
+    if advisories:
+        print(f"drift gate（advisory）：{len(advisories)} 项提示——不阻塞；转 required 须独立裁决")
+        return 1 if args.strict else 0
+    print("[OK] drift gate（advisory）：无 drift/freshness/coverage/overlap 提示")
+    return 0
+
+
 def cmd_whoami(args) -> int:
     """P2 Adapter 基元：按 worktree 定位自身 Execution（上下文供给，非路由）。
 
@@ -561,6 +633,27 @@ def run_self_test() -> int:
     assert derive_liveness(time.time() - 10, time.time()) == "LIVE"
     assert derive_liveness(time.time() - TTL_SECONDS - 1, time.time()) == "STALE"
 
+    # P3 drift gate 纯函数
+    assert is_test_path("backend/tests/test_x.py") and is_test_path("tests/y.py")
+    assert is_test_path("frontend/src/a.test.ts") and is_test_path("dir/conftest.py")
+    assert not is_test_path("backend/api/main.py") and not is_test_path("docs/x.md")
+    assert top_dirs(["a/b/c", "a/d", "e"]) == {"a", "e"}
+    fake = {
+        "r1": {"requirement": "r1", "harness": "h", "worktree": "/nonexistent",
+               "branch": "", "scope": ["docs", "backend/api/x.py"], "lifecycle": "CODING",
+               "test_impact": "none", "last_seen": time.time(),
+               "integration_cache": "NO_PR"},
+        "r2": {"requirement": "r2", "harness": "h", "worktree": "/nonexistent2",
+               "branch": "", "scope": ["backend/tests/t.py"], "lifecycle": "CODING",
+               "test_impact": "direct", "last_seen": time.time() - TTL_SECONDS - 10,
+               "integration_cache": "NO_PR"},
+    }
+    adv = collect_drift_advisories(fake, "/nonexistent-root", time.time())
+    text = "\n".join(adv)
+    assert "freshness: r2 STALE" in text
+    assert "overlap-hint: r1 ↔ r2 顶层目录 ['backend']" in text
+    assert not any("coverage-mismatch" in a and "r1" in a for a in adv)  # r1 derived 为空不误报
+
     # codec 往返 + 破坏检测
     sample = {"r1": {"requirement": "fix", "harness": "claude", "worktree": "/tmp/w",
                      "branch": "b1", "scope": ["backend/agent", "docs/评审 x.md"],
@@ -636,6 +729,11 @@ def main() -> int:
     p.add_argument("--scope", action="append")
     p.add_argument("--pr", type=int)
     p.set_defaults(fn=cmd_update)
+
+    p = sub.add_parser("drift", help="P3 drift gate（advisory；--strict 转 required 接口）")
+    p.add_argument("--strict", action="store_true",
+                   help="有提示即 exit 1（转 required 的接口；当前不接 CI）")
+    p.set_defaults(fn=cmd_drift)
 
     p = sub.add_parser("finish")
     p.add_argument("--id", required=True)
