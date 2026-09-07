@@ -103,6 +103,14 @@ GATES = {
         ROOT,
         None,
     ),
+    # Harness 摄取矩阵探针（ADR-0034 P2 验收/#855-b 落地）：黑盒双题探针 +
+    # EXPECTED 偏离检测（行为漂移监测，含 #857 上游修复对照行）。真实 LLM
+    # 会话分钟级 × 外部依赖——仅 check:gov 手跑，不进 quick/pr/full。
+    "harness-ingest": (
+        f"{PY} tools/dev/harness_probe.py",
+        ROOT,
+        None,
+    ),
     # P3 drift gate（ADR-0034 §2.7 P3）：freshness/declaration-drift/coverage-mismatch/
     # overlap 顶层 hint，**advisory 不阻塞**（exit 0）——只在 check:full（夜间全量）
     # 留痕输出；不进 quick/pr（守合入路径 ~2min 注意力预算）。转 required 须独立裁决。
@@ -189,8 +197,8 @@ PROFILES = {
         "gov-surface", "ip-leak", "agent-tests",
         "pr-migrate",
     ],
-    # 治理面专项：结构门禁 + skill 用量探针
-    "check:gov": ["gov-surface", "gov-skills"],
+    # 治理面专项：结构门禁 + skill 用量探针 + Harness 摄取矩阵（手跑，分钟级）
+    "check:gov": ["gov-surface", "gov-skills", "harness-ingest"],
     # check:full = main 全量 CI 的本地可跑部分 + 本机专属 gate，但排除
     # 数据源物理仅在本机的 gate（#825：他机跑 check:full 不得确定性红灯）。
     # gov-skills 依赖 ~/.claude 会话转录；ai-drift 在无 registry 数据的机器上
