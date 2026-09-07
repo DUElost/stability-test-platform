@@ -1,7 +1,7 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.3（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.3 变更：§2.1/§3.1/§3.3 增 T9 `resume`——FINISHED→CODING 返工回退（#946）；v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
-- **日期**：2026-09-07
+- **状态**：Living v1.4（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.4 变更：§10 增「实现与契约的先后纪律」——实现不得静默重新定义 Contract 语义（用户 2026-09-08 确认）；v1.3 变更：§2.1/§3.1/§3.3 增 T9 `resume`——FINISHED→CODING 返工回退（#946）；v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
+- **日期**：2026-09-08
 - **适用**：所有在本仓库参与 Execution Registry 的 AI Coding Harness 会话；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
 - **本文演进**：版本化演进于本文；细则不再回填 ADR 正文（ADR-0034 升 v1.1 收缩为决策要点 + 指针）
@@ -176,3 +176,9 @@ effective_scope = normalized(declared) ∪ derived(diff)
 ## 10. 演进
 
 本文为 Execution Contract 唯一权威源，按「版本号 + 日期」演进；方向级变更（推翻 ADR-0034 裁决）须先修订 ADR 并走其评审流程，细则级变更直接在本文版本化。ADR §2 细则已迁出（ADR-0034 v1.1），本文与其冲突时以本文为准。
+
+**实现与契约的先后纪律**（v1.4 增）：实现不得静默重新定义 Contract 语义。若实现需要新增、删除或改变项目级可观察语义，应先修改 Contract，再修改实现；不改变项目级可观察语义的纯实现细节，无需修改 Contract。
+
+- **项目级可观察语义**（最小判据）：本契约规定的外部可观察协议行为——registry 持久字段与校验规则（§1.2、§2.2）、三维状态与 transition table（§3）、overlap/issue 查重/drift 判定结果（§3.2、§3.4、§5.1）、CLI 输出与退出码；
+- **「先修改 Contract」是语义先行**：契约修订与实现可同 PR 原子落地（#978/#946 先例）；禁止的是实现先于任何契约修订独自合入、或实现合入后契约无版本化收口；
+- **与 AGENTS.md 的分工**：本条是**事前过程纪律**（契约先行）；AGENTS.md 总原则「冲突时以代码与测试为准，并同步权威文档」是**事后事实裁决**——后者不豁免前者：发现既成漂移时按 AGENTS.md 同步本文，且同步必须走本节版本化显式收口，不得以「代码已如此」静默追认。
