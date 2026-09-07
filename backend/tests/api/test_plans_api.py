@@ -348,9 +348,10 @@ class TestPlanCRUD:
                 s.add(other)
                 s.commit()
             other_id = other.id
+            other_ver = other.token_version
 
         other_token = create_access_token(
-            data={"sub": str(other_id), "username": "otheruser", "role": "user"}
+            data={"sub": str(other_id), "username": "otheruser", "role": "user", "ver": other_ver}
         )
         other_headers = {"Authorization": f"Bearer {other_token}"}
 
