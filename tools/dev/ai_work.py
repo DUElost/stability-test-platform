@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """ai_work.py — Execution Registry CLI（ADR-0034 P1）。
 
-权威规范：docs/development/ai/execution-contract.md（Living v1.1，唯一权威源）。
+权威规范：docs/development/ai/execution-contract.md（Living v1.2，唯一权威源）。
 本文件是其 §2（Registry 协议）/§3（状态模型）/§5（scope 与 overlap）的 MVP 实现：
 选择权原则（ADR §2.1）——本工具是执行侧自声明的 visibility-only 登记簿，不是调度器。
 
 命令：
     ai_work.py declare --requirement R --harness H --worktree W --scope P [--scope ...]
-                       [--role ROLE] [--test-impact none|direct|indirect]
+                       [--issue N ...] [--force] [--role ROLE]
+                       [--test-impact none|direct|indirect]
     ai_work.py status [--id ID]                 # 严格只读（不刷任何 last_seen）
     ai_work.py update --id ID [--scope P ...] [--pr N]   # 刷 last_seen + GitHub reconcile
     ai_work.py finish --id ID [--pr N | --abandon]
@@ -37,10 +38,11 @@ import time
 
 TTL_SECONDS = 24 * 3600  # §4：24h 量级，仅 advisory
 RECORD_FIELDS = {
-    "requirement", "harness", "role", "worktree", "branch", "scope",
+    "requirement", "harness", "role", "worktree", "branch", "scope", "issues",
     "pr_number", "lifecycle", "test_impact", "last_seen", "created_at",
     "updated_at", "integration_cache", "observed_at",
 }
+LIST_FIELDS = ("scope", "issues")  # codec 列表形态字段（受限 YAML 子集）
 LIFECYCLE = ("CODING", "FINISHED", "ABANDONED")
 TEST_IMPACT = ("none", "direct", "indirect")
 
@@ -63,6 +65,13 @@ def yaml_dump(data: dict) -> str:
             lines.extend(f"    - {_quote(s)}" for s in scope)
         else:
             lines.append("    []")
+        if "issues" in rec:  # v1.2（#978）：仅在有声明时落盘，legacy 记录输出不变
+            issues = rec.get("issues") or []
+            lines.append("  issues:")
+            if issues:
+                lines.extend(f"    - {_quote(str(i))}" for i in issues)
+            else:
+                lines.append("    []")
     return "\n".join(lines) + "\n"
 
 
@@ -98,16 +107,20 @@ def yaml_load(text: str) -> dict:
         line = raw.rstrip()
         if not line or line.lstrip().startswith("#"):
             continue
-        if line.startswith("  scope:"):
+        m = re.match(r"^  ([a-z_]+):$", line)
+        if m:
             if current is None:
-                raise ValueError(f"registry.yaml:{lineno}: scope 出现在记录外")
-            data[current]["scope"] = []
-            field = "scope"
+                raise ValueError(f"registry.yaml:{lineno}: 列表字段出现在记录外")
+            field = m.group(1)
+            if field not in LIST_FIELDS:
+                raise ValueError(f"registry.yaml:{lineno}: 字段 {field!r} 不支持列表形态")
+            data[current][field] = []
             continue
         if line.startswith("    - "):
-            if field != "scope" or current is None:
-                raise ValueError(f"registry.yaml:{lineno}: 列表项只允许出现在 scope 内")
-            data[current]["scope"].append(_unquote(line[6:]))
+            if field not in LIST_FIELDS or current is None:
+                raise ValueError(
+                    f"registry.yaml:{lineno}: 列表项只允许出现在 {sorted(LIST_FIELDS)} 内")
+            data[current][field].append(_unquote(line[6:]))
             continue
         if line.startswith("    []"):
             field = None
@@ -241,6 +254,10 @@ def validate(records: dict) -> None:
             raise ValueError(f"记录 {key!r} lifecycle 非法: {rec['lifecycle']!r}")
         if "test_impact" in rec and rec["test_impact"] not in TEST_IMPACT:
             raise ValueError(f"记录 {key!r} test_impact 非法: {rec['test_impact']!r}")
+        if "issues" in rec:
+            issues = rec.get("issues") or []
+            if not isinstance(issues, list) or not all(str(x).isdigit() for x in issues):
+                raise ValueError(f"记录 {key!r} issues 必须为正整数字符串列表: {issues!r}")
 
 
 def atomic_write(path: str, lock_path: str, records: dict) -> None:
@@ -382,6 +399,50 @@ def normalize_requirement_id(rid: str) -> str:
     return rid
 
 
+# ── issue 号：slug 提取与在窗查重（#978，契约 §3.4）──
+
+ISSUE_MARKER_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:issue|fix)(?:[-/_\s]|#)+(\d{1,6})(?![0-9])", re.IGNORECASE)
+
+
+def extract_issue_numbers(*texts) -> set:
+    """从 requirement/branch slug 兜底提取 issue 号（启发式；显式 --issue 为主）。
+
+    标记 = issue|fix + 至少一个分隔符（-/ _ 空格 #）+ 1-6 位数字：
+    'fix-978-x' / 'fix/900-x' / 'issue-878' / 'fix #878 x' 命中；
+    日期串（'sync-2026-09-07'）、无标记数字、标记粘连（'myfix-123'）与
+    ≥7 位数字不误报。"""
+    nums: set = set()
+    for t in texts:
+        if not t:
+            continue
+        for m in ISSUE_MARKER_RE.finditer(str(t)):
+            nums.add(int(m.group(1)))
+    return nums
+
+
+def record_issue_numbers(rec: dict) -> set:
+    """单条记录的 issue 集：issues 字段（权威）∪ requirement/branch slug 提取。"""
+    nums = {int(x) for x in (rec.get("issues") or []) if str(x).isdigit()}
+    nums |= extract_issue_numbers(rec.get("requirement", ""), rec.get("branch", ""))
+    return nums
+
+
+def issue_conflicts(new_issues: set, records: dict, skip_id: str) -> list:
+    """在窗 issue 撞车检测（纯函数）：返回 [(record_id, 命中 issue 号列表)]。"""
+    conflicts: list = []
+    for rid, rec in records.items():
+        if rid == skip_id:
+            continue
+        if not in_risk(rec.get("lifecycle", "CODING"),
+                       rec.get("integration_cache") or "NO_PR"):
+            continue
+        hit = sorted(new_issues & record_issue_numbers(rec))
+        if hit:
+            conflicts.append((rid, hit))
+    return conflicts
+
+
 def cmd_declare(args) -> int:
     try:
         args.requirement = normalize_requirement_id(args.requirement)
@@ -406,7 +467,23 @@ def cmd_declare(args) -> int:
             print(f"[REFUSED] 已存在同 Requirement 的在窗记录 {rec_id!r}（先 finish --abandon 收口）",
                   file=sys.stderr)
             return 2
+        if args.issue and any(n < 1 or n > 999999 for n in args.issue):
+            print(f"[REFUSED] --issue 必须为 1-6 位正整数: {sorted(args.issue)}", file=sys.stderr)
+            return 2
         branch = (_git(["rev-parse", "--abbrev-ref", "HEAD"], args.worktree) or [None])[0]
+        new_issues = set(args.issue or []) | extract_issue_numbers(args.requirement, branch or "")
+        conflicts = issue_conflicts(new_issues, ctx.records, rec_id)
+        if conflicts and not args.force:
+            for rid, hit in conflicts:
+                print(f"[REFUSED] issue {'/'.join('#' + str(n) for n in hit)} 已被在窗 Execution "
+                      f"{rid!r}（{ctx.records[rid].get('harness', '?')}，"
+                      f"{ctx.records[rid].get('lifecycle', '?')}）引用——"
+                      f"转手先 finish --abandon，或 --force 显式覆盖（§3.4）", file=sys.stderr)
+            return 2
+        if conflicts:  # --force：留痕后放行
+            for rid, hit in conflicts:
+                print(f"[WARN] --force：issue {'/'.join('#' + str(n) for n in hit)} "
+                      f"与在窗 Execution {rid!r} 重叠——人工确认转手/并行边界")
         now = _now()
         ctx.records[rec_id] = {
             "requirement": args.requirement,
@@ -415,6 +492,7 @@ def cmd_declare(args) -> int:
             "worktree": os.path.abspath(args.worktree),
             "branch": branch or "",
             "scope": scopes,
+            "issues": sorted((str(n) for n in new_issues), key=int),
             "pr_number": None,
             "lifecycle": "CODING",
             "test_impact": args.test_impact or "indirect",  # 缺省=indirect（§6）
@@ -425,7 +503,11 @@ def cmd_declare(args) -> int:
         ctx.commit()
     finally:
         ctx.close()
-    print(f"[OK] declare {rec_id} scope={scopes} test_impact={args.test_impact or 'indirect(缺省)'}")
+    issue_note = f" issues={sorted((str(n) for n in new_issues), key=int)}" if new_issues else ""
+    hint = "" if new_issues else \
+        "（hint：requirement/branch 未含 issue 号且未带 --issue——在窗查重无输入，建议 --issue N）"
+    print(f"[OK] declare {rec_id} scope={scopes} test_impact={args.test_impact or 'indirect(缺省)'}"
+          f"{issue_note}{hint}")
     return 0
 
 
@@ -440,8 +522,9 @@ def _report(rec_id: str, rec: dict, repo_root: str, refresh: bool) -> None:
     liveness = derive_liveness(float(rec["last_seen"]) if rec.get("last_seen") else None, now)
     effective = sorted(set(rec.get("scope", [])) | set(derived_paths(rec, repo_root)))
     risk = in_risk(rec["lifecycle"], integration)
+    issue_note = f" issues={rec.get('issues') or []}" if rec.get("issues") else ""
     print(f"{rec_id}: {rec['harness']} lifecycle={rec['lifecycle']} liveness={liveness} "
-          f"integration={integration} risk={'YES' if risk else 'no'}")
+          f"integration={integration} risk={'YES' if risk else 'no'}{issue_note}")
     print(f"  effective_scope={effective}")
     if risk:
         declared = set(rec.get("scope", []))
@@ -742,6 +825,56 @@ def run_self_test() -> int:
     # 空声明：helper 诚实返回全部 derived 为未声明——调用方以 declared and derived 守卫
     assert declaration_drift(set(), {"backend/x.py"}) == ([], ["backend/x.py"])
 
+    # #978 issue 提取启发式红绿
+    assert extract_issue_numbers("fix-978-declare-issue-dedup") == {978}
+    assert extract_issue_numbers("issue-878") == {878}
+    assert extract_issue_numbers("fix/900-jwt-sub") == {900}
+    assert extract_issue_numbers("fix #878 login") == {878}
+    assert extract_issue_numbers("Fix-881-SID-Renew") == {881}  # 大小写不敏感
+    assert extract_issue_numbers("fix-900", "issue-901") == {900, 901}
+    assert extract_issue_numbers("drift-sync-2026-09-07") == set()  # 日期串不误报
+    assert extract_issue_numbers("docs/947-observation-table-sync") == set()
+    assert extract_issue_numbers("myfix-123") == set()  # 标记词边界
+    assert extract_issue_numbers("fix-1234567") == set()  # ≥7 位非 issue 号
+
+    # #978 在窗查重纯函数：issues 字段权威、slug 兜底、MERGED 出窗、skip 自身
+    recs = {
+        "a": {"requirement": "fix-900-jwt", "harness": "h", "worktree": "/w",
+              "lifecycle": "CODING", "integration_cache": "NO_PR", "issues": ["900"]},
+        "b": {"requirement": "merged-thing", "harness": "h", "worktree": "/w",
+              "lifecycle": "CODING", "integration_cache": "MERGED", "issues": ["901"]},
+        "c": {"requirement": "legacy-slug", "harness": "h", "worktree": "/w",
+              "branch": "fix/902-legacy", "lifecycle": "FINISHED",
+              "integration_cache": "NO_PR"},  # 无 issues 字段：branch slug 兜底
+    }
+    assert issue_conflicts({900}, recs, "new") == [("a", [900])]
+    assert issue_conflicts({901}, recs, "new") == []  # MERGED 出窗
+    assert issue_conflicts({902}, recs, "new") == [("c", [902])]
+    assert issue_conflicts({999}, recs, "new") == []
+    assert issue_conflicts({900, 902}, recs, "a") == [("c", [902])]  # 同名在窗已先拒，此处防重扫
+
+    # #978 codec 往返：issues 列表 + 非法元素拒绝；legacy 无字段输出不变
+    rec978 = {"requirement": "fix", "harness": "claude", "worktree": "/tmp/w",
+              "branch": "b1", "scope": ["backend/agent"], "issues": ["900", "901"],
+              "lifecycle": "CODING", "test_impact": "direct", "last_seen": 1.0,
+              "created_at": 1.0, "updated_at": 1.0}
+    rt2 = yaml_load(yaml_dump({"r1": rec978}))
+    assert rt2["r1"]["issues"] == ["900", "901"]
+    assert rt2["r1"]["scope"] == ["backend/agent"]
+    legacy_out = yaml_dump({"r1": {k: v for k, v in rec978.items() if k != "issues"}})
+    assert "issues" not in legacy_out  # legacy 记录（无 issues）输出不变
+    try:
+        validate({"r1": {"requirement": "x", "harness": "h", "worktree": "/w",
+                         "lifecycle": "CODING", "issues": ["abc"]}})
+        failures.append("#978 issues 非数字: 预期红，实际绿")
+    except ValueError:
+        pass
+    try:
+        yaml_load("r1:\n  pr_number:\n    - a\n")  # 非 LIST_FIELDS 字段的列表形态
+        failures.append("#978 列表字段越界: 预期红，实际绿")
+    except ValueError:
+        pass
+
     # P3 drift gate 纯函数
     assert is_test_path("backend/tests/test_x.py") and is_test_path("tests/y.py")
     assert is_test_path("frontend/src/a.test.ts") and is_test_path("dir/conftest.py")
@@ -805,7 +938,8 @@ def run_self_test() -> int:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         return 1
-    print("[OK] ai_work self-test 通过（scope/overlap/真值表/liveness/codec/原子写 红绿双向）")
+    print("[OK] ai_work self-test 通过（scope/overlap/真值表/liveness/codec/原子写/"
+          "issue 查重 红绿双向）")
     return 0
 
 
@@ -819,6 +953,11 @@ def main() -> int:
     p.add_argument("--worktree", required=True)
     p.add_argument("--role")
     p.add_argument("--scope", action="append", required=True)
+    p.add_argument("--issue", action="append", type=int, metavar="N",
+                   help="关联 issue 号，可重复；与 requirement/branch slug 提取一并作"
+                        "在窗查重依据（§3.4，#978）")
+    p.add_argument("--force", action="store_true",
+                   help="issue 查重命中时强制 declare（转手/并行边界已人工确认）")
     p.add_argument("--test-impact", choices=TEST_IMPACT)
     p.set_defaults(fn=cmd_declare)
 

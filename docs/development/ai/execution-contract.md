@@ -1,7 +1,7 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.1（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
-- **日期**：2026-09-06
+- **状态**：Living v1.2（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
+- **日期**：2026-09-07
 - **适用**：所有在本仓库参与 Execution Registry 的 AI Coding Harness 会话；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
 - **本文演进**：版本化演进于本文；细则不再回填 ADR 正文（ADR-0034 升 v1.1 收缩为决策要点 + 指针）
@@ -23,6 +23,7 @@
 | `role` | Role Context 标签（执行侧自声明；定义与供给细则归 P2 Adapter） |
 | `worktree` | worktree 路径 |
 | `branch` | worktree 的工作分支（§5.2 第二档 branch diff 的数据源；v1.1 增） |
+| `issues` | declared issue 号列表（字符串形态存储；v1.2 增）——`declare --issue N` 可重复显式声明，另从 requirement/branch slug 启发式兜底提取；declare 在窗查重（§3.4）的数据源 |
 | `scope` | declared scope（见 §5 语法） |
 | `pr_number` | 登记的 PR 号（可空） |
 | `lifecycle` | `CODING / FINISHED / ABANDONED`（§3） |
@@ -35,7 +36,7 @@
 
 ### 2.1 工具与发现（平移 ADR §2.2）
 
-- 工具 `tools/dev/ai_work.py`：`declare / status / update / finish`（含 `finish --abandon`）子命令 + overlap 检测；
+- 工具 `tools/dev/ai_work.py`：`declare / status / update / finish`（含 `finish --abandon`）子命令 + overlap 检测 + declare 在窗 issue 查重（§3.4，#978）；
 - **Registry root = `$(git rev-parse --path-format=absolute --git-common-dir)/ai-work/`**——`--path-format=absolute`（git ≥ 2.31）是**唯一发现方式**：裸 `--git-common-dir` 在主 checkout 返回 cwd 相对路径（仓库根 `.git`、子目录 `../../.git`）、linked worktree 返回绝对路径，行为不一致且裸拼接会算错。不硬编码 `.git`，不提供 common dir 之外的替代落点（防多 Registry 分裂与 NFS/CIFS 落位）；
 - 目录内固定两文件：`registry.yaml`（数据）+ `registry.lock`（flock 锁，同目录）；位于 `.git` 内天然不被跟踪；
 - **Registry 按克隆隔离**——同一机器多个独立克隆不共享 registry，与派生视图同口径（per-clone），不构成全局登记。
@@ -100,6 +101,15 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 - **并发刷新顺序**：`update` 单次调用内——先 GitHub 核对（T5–T8 的事实采集），再执行 §2.2 九步写入；两次并发 `update` 由 flock 串行；
 - **GitHub 不可用降级**：保持旧 integration 值 + 更新 `observed_at`（观测时间），status 输出「integration 观测于 <时间>，GitHub 暂不可达」；**不猜测、不推进终态**；
 - `status` **严格只读**（不刷任何记录的 `last_seen`——观察不得改变被观察状态）；仅携带 execution identity 的写命令（`declare/update/finish`）刷新**自身** `last_seen`。
+
+### 3.4 declare 在窗 issue 查重（v1.2 增，#978）
+
+多 Harness 并行领单时，同一 issue 可能被不同 requirement 名各自 declare（同名录已在 T1 拒绝，但 `fix-900-a` 与 `fix-900-b` 互不感知）——declare 时按工作项去重：
+
+- **issue 集** = 显式 `--issue N`（可重复）∪ requirement/branch slug 启发式提取（标记 `issue|fix` + 分隔符 + 1-6 位数字；日期串与无标记数字不误报）；
+- **拒绝条件**：新 declare 的 issue 集与任何**在窗记录**（§3.2 risk 真值表；MERGED 已出窗不拦）的 issue 集相交 → exit 2，列出冲突记录与 issue 号；
+- **`--force`**：仅供人工确认转手/并行边界后显式覆盖，覆盖时输出 `[WARN]` 留痕；同名录拒绝（先 `finish --abandon`）不因 `--force` 放行；
+- **定位**：查重是**工作项去重，不是文件上锁**（§2.3 边界不变）——scope overlap（§5.4）管「同一处代码」，issue 查重管「同一件事」，两者互补且都尊重选择权原则（§适用）：冲突由人裁决，工具只保证可见与默认拒绝。
 
 ## 4. TTL 与心跳分期
 
