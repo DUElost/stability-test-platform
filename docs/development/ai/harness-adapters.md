@@ -84,6 +84,7 @@ Execution 串行修改。并行执行语义的权威源是
 | 编码中（长会话） | `python tools/dev/ai_work.py heartbeat --id <R>` | 纯心跳（= 无参 `update`）：刷自身 `last_seen` + GitHub reconcile；P2 起由 wrapper 定时调用，`last_seen` 据此升格为可靠 liveness 信号 |
 | 开 PR / scope 变化 | `python tools/dev/ai_work.py update --id <R> --pr <N> [--scope ...]` | 登记 PR、派生 integration、覆写声明 |
 | 编码停止 | `finish --id <R> --pr <N>` / `finish --id <R> --abandon` | 语义见契约 §3.3 transition table |
+| 文档/评审类会话（改 docs/reviews、issue 评论、PR 评审） | 同样 declare（scope=将产出的 docs/reviews 或 issue 意图目录） | 批次首单实战教训：纯评审会话不 declare 即「两头不可见」——diff 未产生时派生视图无信号，GitHub 只见产出不见意图；谁在评审什么也是审计面的一部分 |
 
 - `whoami`/`status` 严格只读（观察不改变被观察状态）；只有带 identity 的写命令
   （declare/update/finish）刷新自身 `last_seen`；
