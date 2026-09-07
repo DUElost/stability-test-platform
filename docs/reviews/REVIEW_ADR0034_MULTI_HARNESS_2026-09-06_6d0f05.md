@@ -1,11 +1,11 @@
-# ADR-0034 多 Harness 执行契约只读审查（v0.2 → v0.4 三轮闭环）
+# ADR-0034 多 Harness 执行契约只读审查（v0.2 → 完结 → 第一单实战，五轮闭环）
 
-- 审查对象：`docs/adr/ADR-0034-multi-harness-execution-contract.md`（Proposed v0.2 → v0.3 → v0.4）
-- 审查基线：v0.2 = `a6869878`（PR #858/#859）；v0.3 = `55e9a71e`（PR #860/#861）；v0.4 = `1715eee6`（PR #862 八源综合修订 + #863 R6/R18 人工裁决）
+- 审查对象：`docs/adr/ADR-0034-multi-harness-execution-contract.md`（Proposed v0.2 → v0.5 → Accepted v1.2）及分期实施产物
+- 审查基线：v0.2 = `a6869878`；v0.3 = `55e9a71e`；v0.4 = `1715eee6`；v0.5 = `6a8853a2`（#864 第二轮复审 R23–R30）；完结态 = `257a7e60`；第一单 = `3e072f62`（#899）
 - 附带审查：PR #853 约定文件规范化重构（旧锚 `cc18c116` → 新树）内容去向与引用完整性
-- 审查日期：2026-09-06
+- 审查日期：2026-09-06 → 2026-09-07
 - 产出方：Claude Code（会话 resume `6d0f05`），独立交叉核对 agent ×2；v0.4 轮为八源多 Harness 评审之一（synthesis 权威映射见 `REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`）
-- 状态：第一/二轮发现已全部被 v0.4 采纳或正确处置；第三轮结论见 §7
+- 状态：§1–6 第一/二轮（v0.2/v0.3）结论；§7–11 第三轮（v0.4）；§12–15 第四轮（v0.5 + 完结状态确认）；§16–18 第五轮（批次第一单实战核验）
 
 ---
 
@@ -138,3 +138,77 @@
 2. **P0 PR 必备目录请带上 O-1（声明生命周期/残留规则）与 O-2（ABANDONED×PR_OPEN 转移行）**——两者恰好落在「transition table + 谓词定义」清单内，补目录条目即可。
 3. **范围外遗留仍开**（synthesis 附录 B ①②③ + 本轮 O-3）：建议与 P0 分轨的独立 docs PR——A-1（stall 过期句，文档说谎优先级最高）、A-2（容量公式出处）、B-5（AGENT_SECRET 告警）、O-3（可选）。
 4. **流程评价**：八源 synthesis → 人工裁决 → 修订循环运作良好（R 编号唯一映射、共振计数、裁决后补记、范围外遗留单列），与本仓库「Living 审查」文化一致。
+
+---
+
+# 第四轮：v0.5 复审 + 完结状态确认（2026-09-07）
+
+- 本轮背景：v0.5（#864）由第二轮八源复审（R23–R30）驱动；随后 ADR Accepted v1.0（#865 人工终审）→ v1.1（#866 细则迁出）→ v1.2（启动判据修订），P0a/P0b/G2/P1/P2/P2b/P3 全部分期落地，#854 CLOSED，附录 B 三项收尾（64c21014）。
+
+## 12. 第四轮总评（v0.5）
+
+**v0.5 补上 v0.4 的最后两个语义洞（R23 真值表、R24 effective scope 互斥定义），技术细节精确到可实现的粒度；第二轮 verdict 分布对应的阻塞项全部落地。达到 Accepted 线。** 剩余为 1 个复发模式观察（中）、1 个流程小漏、附录 B 三项。
+
+## 13. 第三轮观察点核验（6d0f05 §10 → v0.5）
+
+| 观察点 | synthesis 编号 | v0.5 落点 | 状态 |
+|---|---|---|---|
+| O-1 过期声明残留面 | R24（与 9261bd-B5〔阻断〕共振） | §2.2 并集恒成立 + declaration drift 提示 + `update` 覆写；正文直接引用「见 6d0f05 O-1 的残留面」 | ✅ 采纳 |
+| O-2 ABANDONED×PR_OPEN 悬空组合 | R23（4 源共振，9261bd 标阻断） | §2.3 真值表：开放 PR 恒在窗口、abandon 不再立即出窗、顺带堵 `CODING × CLOSED` | ✅ 采纳 |
+| O-3 DOC-MAP 检索链 | 无 R 编号 | 未处置（随 64c21014 的 DOC-MAP 改动部分覆盖） | ⚠️ 流程小漏 |
+| 附录 B ①②③ | 仍范围外 | 64c21014 实质修复（见 §15） | ✅ 收口 |
+
+## 14. v0.5 关键确认与真值表完备性验证
+
+- **overlap 真值表 15 组合全覆盖**：PR_OPEN/READY × 任何 lifecycle = 窗口（含 ABANDONED——核心修正）；NO_PR × CODING/FINISHED = 窗口、× ABANDONED = 出窗（僵尸出口唯一合法终点）；CLOSED × CODING/FINISHED = 窗口（关 PR ≠ 停工作）、× ABANDONED = 出窗；MERGED × any = 出窗。「R2 堵的洞换入口重开」被结构性关闭。
+- **effective scope = `normalized(declared) ∪ derived(diff)` 并集恒成立**（R24）：derived 是 Git 事实、声明不能覆盖或删除；v0.4「冲突以 derived 为准」「从不凭声明单独判定」两句互斥表述删除。
+- **derived 三档口径**（R24/R25）：worktree 在场 → 工作树 diff（**含 untracked**，`git ls-files --others --exclude-standard`——`git diff --name-only` 不含新文件）；worktree 已删 → branch diff；皆不可得 → 声明单独生效。
+- 技术修正族（R26/R27）：#847 对账①「工具媒介自动登记」删除（declare 仍是人工仪式）；symlink「天然防误写」错误修正（写入穿透真身，需 checker/hook 约束）；lifecycle 术语与 `pipeline_def.lifecycle`（S11 锚定词）消歧注记入 P0；附录 A Antigravity 补「未验证（延期）」。
+- 分期可执行性（R28/R29/R30）：P0 拆 P0a（契约文档）+ P0b（接线/门禁/supersede）；平移时 ADR 升 v1.1 注明迁移（Accepted 正文不被无痕改写）；P1 判据数据源 = git worktree 历史（registry 不能自证）；supersede 过渡条款保留。
+
+## 15. 完结状态确认（2026-09-07 只读，基线 `257a7e60`）
+
+**主体开发工作已完结。** 判据核验：
+
+| 判据 | 证据 |
+|---|---|
+| ADR 状态 | Accepted v1.2（#865 v1.0 → #866 v1.1 细则迁出 → v1.2 启动判据修订，版本记录完整） |
+| P0a/P0b | `docs/development/ai/execution-contract.md`（Living v1.1）建立 + 09-04 note 头部 superseded 标注（原文留档） |
+| G2/P1/P2/P2b/P3 | `backend/agent/AGENTS.md` 真身；`tools/dev/ai_work.py`（declare/status/update/whoami/drift/finish）；#879/#892 adapter；#893 drift gate（「分期最后一块」） |
+| 附录 B 三项 | 64c21014：stall 文档过期句改正确（2026-08-04 `minimum:0` + stall 联动门）；容量公式落 `07-execution-protocol.md:70-76`（含 `max(0,…)` 精确化）；AGENT_SECRET 陈旧值告警入 production-diagnostics |
+| #854 | CLOSED |
+| 评审闭环 | R1–R30 全部有裁决落点；O-1/O-2 采纳 |
+
+**遗留尾巴（非阻断）**：T-1 #855 仍 OPEN（三段触发均已达成、P3 已落地，但三选一方向无显式裁决留痕，需一次收口）；T-2 README 版本号第四次漂移（主表/M7 行停 v1.0，ADR 已 v1.2——v0.3→R14→R27 后系统根因未除，O-4 复发）；T-3 #857 OPEN（Claude Code 上游依赖，ADR Revisit 明示跟踪项，非本 repo 欠账）。
+
+**v0.5 轮新观察（记档）**：O-4 README 版本号双写第三次复发（建议 README 行去版本号或 S 检查器比对——未实施，完结态确认时第四次复发）；O-5 synthesis 对无编号发现（O-3）缺显式缓办记录，R 映射完备性小缺口。
+
+---
+
+# 第五轮：批次第一单实战核验（2026-09-07，基线 `3e072f62`）
+
+- 对象：#880（ai_work.py registry codec：`#` 开头/含 `:` 的 requirement id 致 declare 报 OK 后全命令崩、registry 锁死）→ PR #899 修复合入，issue 自动 CLOSED。多 Harness 批次第一单，全程 Registry 工具链 dogfood。
+
+## 16. 第五轮核验结果（声明逐项属实）
+
+| 声明 | 核验证据 | 结果 |
+|---|---|---|
+| PR #899 合入 3e072f62 | tip = Merge PR #899（6abb2bc5 修复 → db3d3276 retrigger → 6ce81f80 ReDoS） | ✅ |
+| #880 CLOSED | gh：CLOSED @ 2026-09-07T04:55:47Z，标题与描述一致 | ✅ |
+| 语义守门 | `ai_work.py:352` normalize_requirement_id + REFUSED + 「issue-878 式 slug」指引 | ✅ |
+| codec 对称化 | dump key 走 `_quote`；`_quote`/`_unquote` 受限转义对称；load 引号 key 防御深度 | ✅ |
+| 损坏恢复兜底 | corrupt-`<时间戳>` 隔离 + load_locked 持锁清无主 `.tmp`（契约 §2.2 补实现） | ✅ |
+| CodeQL ReDoS 修复 | `(?:[^"\\]\|\\.)*` 非重叠交替，消除指数回溯 | ✅ |
+| required checks 绿 | merge 存在 = 分支保护 6 项 required 全绿（间接） | ✅ |
+| 自测样例 | 代码含 `"#878"` / `"P0: sync"` 拒绝样例 | ✅ |
+| Registry 两条真实记录 | `.git/ai-work/registry.yaml`：fix-825-gates-parity（PR #895）+ fix-880-registry-codec（PR #899），均 FINISHED + integration_cache: MERGED，字段完整 | ✅ |
+| 过程插曲 | db3d3276（check-run 与 workflow 结论脱节）在链上；本机 gh 同现 EOF，环境属实 | ✅ |
+
+## 17. 第五轮观察点（dogfood 第一单副产品，不阻塞）
+
+- **D-1（首个 scope drift 实战样本）**：PR #899 的 declared scope = `{tools/dev/ai_work.py, docs/notes/bug-fix(目录)}`，actual diff 另含 `docs/development/ai/harness-adapters.md`（+19）→ actual ⊋ declared。advisory 不拦（设计如此），但正是 drift gate 要抓的第一类真实样本，可作语义校准。
+- **D-2**：两条真实记录的 `role` 字段均为空串——Role Context 供给（P2）尚未在生产会话注入角色，与默认 implementation 语义兼容，仅记现状。
+
+## 18. 第五轮结论
+
+批次第一单声明全部属实；修复三层（语义守门 + codec 对称 + 损坏隔离）与根因判断（行首裸 `#` 被当注释）吻合。Registry 工具链经全周期（declare → whoami → update --pr → READY → merge → reconcile MERGED → finish）实战验证，P1 遗留验证项清零。工具链就绪状态确认。
