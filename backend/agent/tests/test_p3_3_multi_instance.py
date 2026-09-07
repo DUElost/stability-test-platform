@@ -255,3 +255,102 @@ async def test_call_agent_rpc_registry_miss_fails_fast(monkeypatch):
     with pytest.raises(sio_mod.AgentNotConnectedError):
         await sio_mod.call_agent_rpc("7", "ping", {})
     sio.call.assert_not_awaited()
+
+
+# ── #881：SID registry TTL 续期（R01-F01）──
+
+
+class _TtlFakeRedis:
+    """尊重 ex= 的最小 fake（原 FakeRedis 忽略 ex，无法覆盖过期行为）。"""
+
+    def __init__(self):
+        self.store: dict[str, tuple[str, float | None]] = {}
+        self.now = 1000.0  # 测试控制的虚拟时钟
+
+    async def set(self, key, value, ex=None):
+        expiry = self.now + ex if ex else None
+        self.store[key] = (value, expiry)
+
+    async def get(self, key):
+        item = self.store.get(key)
+        if item is None:
+            return None
+        value, expiry = item
+        if expiry is not None and self.now > expiry:
+            del self.store[key]
+        return self.store.get(key, (None,))[0]
+
+    async def delete(self, key):
+        self.store.pop(key, None)
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_renew_extends_ttl_beyond_initial_window(monkeypatch):
+    """跨进程 RPC 在连接存活但超过初始 TTL 后仍可达（#881 验收 b）。"""
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setenv("STP_AGENT_SID_REGISTRY", "1")
+    fake = _TtlFakeRedis()
+    reg.configure_agent_sid_registry(fake)
+    ttl = reg.owner_ttl_seconds()
+
+    # Owner 进程注册（connect）
+    import asyncio
+
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        reg.register_agent_owner("7", "sid-owner")
+    )
+    # 恰好在 TTL 边界前：另一进程 lookup 可达
+    fake.advance(ttl - 5)
+    assert reg.control_plane_instance_id()  # sanity
+    # 未续租路径复现（旧行为）：推进超过初始 TTL → key 过期
+    # （此处先验证续租修复；旧行为由下面的不续租用例覆盖）
+
+    # Owner 心跳续租 → key 恢复完整 TTL
+    renewed = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        reg.renew_agent_owner("7", "sid-owner")
+    )
+    assert renewed is True
+    fake.advance(ttl - 5)  # 距上次续租接近新 TTL
+    # 跨进程 lookup（另一 instance 视角）仍可达——即 #881 要保的语义
+    # （lookup 读同一 fake store；跨进程差异仅在 instance_id 字段值）
+    owner = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        reg.lookup_agent_owner("7")
+    )
+    assert owner is not None and owner["sid"] == "sid-owner"
+
+
+def test_renew_does_not_resurrect_foreign_or_expired_keys(monkeypatch):
+    """续租只作用于本进程 + 本 sid 的 key（不复活他人/已过期）。"""
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setenv("STP_AGENT_SID_REGISTRY", "1")
+    fake = _TtlFakeRedis()
+    reg.configure_agent_sid_registry(fake)
+    ttl = reg.owner_ttl_seconds()
+
+    import asyncio
+
+    async def _run():
+        # 他人 instance 注册的 key：renew 不得续
+        await fake.set(reg.owner_key("9"),
+                       '{"instance_id":"other","sid":"remote","host_id":"9"}',
+                       ex=ttl)
+        assert await reg.renew_agent_owner("9", "remote") is False
+        fake.advance(ttl + 1)
+        assert await reg.lookup_agent_owner("9") is None  # 未被复活
+
+        # 本进程 key 过期后：renew 不得复活（连接断开即应消失）
+        await reg.register_agent_owner("8", "sid-8")
+        fake.advance(ttl + 1)
+        assert await reg.lookup_agent_owner("8") is None  # 已过期
+        assert await reg.renew_agent_owner("8", "sid-8") is False
+
+        # sid 不匹配（host 被新连接接管）：本进程旧 sid 不得续
+        await reg.register_agent_owner("6", "sid-old")
+        await fake.set(reg.owner_key("6"),
+                       '{"instance_id":"%s","sid":"sid-new","host_id":"6"}'
+                       % reg.control_plane_instance_id(), ex=ttl)
+        assert await reg.renew_agent_owner("6", "sid-old") is False
+
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(_run())

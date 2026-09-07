@@ -273,6 +273,13 @@ class AgentNamespace(socketio.AsyncNamespace):
         async with self.session(sid) as session:
             host_id = session.get("host_id", "")
 
+        # Agent 心跳 = 连接活性证据：续租 SID registry（#881——否则连接存活
+        # 超过 TTL 后，跨进程 RPC 会因登记过期被拒、预检误判 agent_offline）
+        if host_id:
+            from backend.realtime.agent_sid_registry import renew_agent_owner
+
+            await renew_agent_owner(str(host_id), sid)
+
         stats = data.get("stats", {})
         devices = stats.get("devices", [])
         if not devices:
