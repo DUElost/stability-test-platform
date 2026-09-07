@@ -163,6 +163,22 @@ def scope_overlap(a: str, b: str) -> bool:
     return pa == pb[: len(pa)] or pb == pa[: len(pb)]
 
 
+def declaration_drift(declared: set[str], derived: set[str]) -> tuple[list[str], list[str]]:
+    """§5.4 组件边界语义的 declaration-drift 对（#928）。
+
+    声明粒度与 diff 粒度解耦：目录声明覆盖其组件边界内的全部子路径
+    （scope_overlap 判定），只有真正未被任何声明覆盖的 diff、与没有任何
+    diff 落地的声明才构成 drift。文件级声明对文件级 diff 行为不变
+    （精确匹配是组件边界的特例）。"""
+    unlanded = sorted(
+        s for s in declared if not any(scope_overlap(d, s) for d in derived)
+    )
+    undeclared = sorted(
+        d for d in derived if not any(scope_overlap(d, s) for s in declared)
+    )
+    return unlanded, undeclared
+
+
 # ── 状态模型：真值表与派生（§3）──
 
 def in_risk(lifecycle: str, integration: str) -> bool:
@@ -430,9 +446,12 @@ def _report(rec_id: str, rec: dict, repo_root: str, refresh: bool) -> None:
     if risk:
         declared = set(rec.get("scope", []))
         derived = set(derived_paths(rec, repo_root))
-        if declared and derived and not declared <= derived:
-            print(f"  [declaration-drift] 声明未落地: {sorted(declared - derived)}; "
-                  f"diff 未声明: {sorted(derived - declared)}")
+        if declared and derived:
+            unlanded, undeclared = declaration_drift(declared, derived)
+            parts = ([f"声明未落地: {unlanded}"] if unlanded
+                     else []) + ([f"diff 未声明: {undeclared}"] if undeclared else [])
+            if parts:
+                print("  [declaration-drift] " + "; ".join(parts))
         if liveness == "STALE" and not effective:
             print("  [zombie-candidate] STALE 且 effective scope 为空——人工经 finish --abandon 收口")
 
@@ -500,12 +519,11 @@ def collect_drift_advisories(records: dict, repo_root: str, now: float) -> list[
         if derive_liveness(seen, now) == "STALE":
             advisories.append(f"freshness: {rec_id} STALE（>24h 无心跳）——人工裁决（非死、不剔除）")
         if declared and derived:
-            unlanded = declared - derived
-            undeclared = derived - declared
+            unlanded, undeclared = declaration_drift(declared, derived)
             if unlanded:
-                advisories.append(f"declaration-drift: {rec_id} 声明未落地 {sorted(unlanded)}")
+                advisories.append(f"declaration-drift: {rec_id} 声明未落地 {unlanded}")
             if undeclared:
-                advisories.append(f"declaration-drift: {rec_id} diff 未声明 {sorted(undeclared)}")
+                advisories.append(f"declaration-drift: {rec_id} diff 未声明 {undeclared}")
         if rec.get("test_impact") == "none":
             hits = sorted(p for p in derived if is_test_path(p))
             if hits:
@@ -710,6 +728,16 @@ def run_self_test() -> int:
         except ValueError as exc:
             assert "已隔离至" in str(exc) and ".corrupt-" in str(exc)
         assert any(".corrupt-" in f for f in os.listdir(td)), "corrupt 隔离文件应留在 td"
+
+    # declaration_drift 红绿双向（#928：目录级 scope 用 §5.4 组件边界谓词）
+    assert declaration_drift({"docs/reviews"}, {"docs/reviews/x.md"}) == ([], [])  # 目录覆盖子文件
+    assert declaration_drift({"docs"}, {"docs/reviews/x.md"}) == ([], [])  # 父目录覆盖
+    assert declaration_drift({"docs/reviews"}, {"docs/reviews2/x.md"}) == (
+        ["docs/reviews"], ["docs/reviews2/x.md"])  # 组件边界：reviews2 不被 reviews 覆盖
+    assert declaration_drift({"backend/api.py"}, {"backend/api.py"}) == ([], [])  # 文件对文件精确
+    assert declaration_drift({"docs"}, {"backend/x.py"}) == (["docs"], ["backend/x.py"])  # 真 drift
+    # 空声明：helper 诚实返回全部 derived 为未声明——调用方以 declared and derived 守卫
+    assert declaration_drift(set(), {"backend/x.py"}) == ([], ["backend/x.py"])
 
     # P3 drift gate 纯函数
     assert is_test_path("backend/tests/test_x.py") and is_test_path("tests/y.py")
