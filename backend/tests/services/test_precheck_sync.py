@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.models.host import Host
 from backend.services.host_updater import _AGENT_SOURCE_DIR
+from backend.services.precheck import sync as sync_module
 from backend.services.precheck.sync import (
     nfs_path_to_local,
     push_mismatched_scripts,
@@ -22,6 +23,39 @@ def test_nfs_path_to_local_maps_agent_prefix():
 
 def test_nfs_path_to_local_rejects_foreign_prefix():
     assert nfs_path_to_local("/mnt/nfs/scripts/foo.py") is None
+
+
+def test_nfs_path_to_local_rejects_parent_traversal():
+    assert nfs_path_to_local("/opt/stability-test-agent/agent/../../etc/passwd") is None
+
+
+def test_nfs_path_to_local_rejects_dotdot_inside():
+    assert nfs_path_to_local("/opt/stability-test-agent/agent/scripts/../../x.py") is None
+
+
+def test_nfs_path_to_local_rejects_absolute_remainder():
+    # 前缀后多余 `/` 使剩余切片成为绝对路径，Path 拼接会丢弃预期根（#905）
+    assert nfs_path_to_local("/opt/stability-test-agent/agent//etc/passwd") is None
+
+
+def test_nfs_path_to_local_rejects_symlink_escape(monkeypatch, tmp_path):
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    root = tmp_path / "agent"
+    root.mkdir()
+    (root / "link.py").symlink_to(outside)
+    monkeypatch.setattr(sync_module, "_AGENT_SOURCE_DIR", root)
+    assert nfs_path_to_local("/opt/stability-test-agent/agent/link.py") is None
+
+
+def test_nfs_path_to_local_allows_nested_under_root(monkeypatch, tmp_path):
+    root = tmp_path / "agent"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "a.py").write_text("x")
+    monkeypatch.setattr(sync_module, "_AGENT_SOURCE_DIR", root)
+    assert nfs_path_to_local("/opt/stability-test-agent/agent/scripts/a.py") == str(
+        root / "scripts" / "a.py"
+    )
 
 
 def test_sync_host_via_hot_update_missing_host(db_session):

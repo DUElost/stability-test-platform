@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import PurePosixPath
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -28,7 +29,15 @@ logger = logging.getLogger(__name__)
 def nfs_path_to_local(nfs_path: str) -> str | None:
     if not nfs_path.startswith(_REMOTE_AGENT_PREFIX):
         return None
-    rel = nfs_path[len(_REMOTE_AGENT_PREFIX):]
+    rel = PurePosixPath(nfs_path[len(_REMOTE_AGENT_PREFIX):])
+    # nfs_path 管理员可登记：显式拒绝绝对切片与 `..` 组件，resolve 后校验
+    # 包含性拦 root 内 symlink 外指（#905）——前缀字符串比对单独不构成边界。
+    if rel.is_absolute() or ".." in rel.parts:
+        return None
+    root = _AGENT_SOURCE_DIR.resolve()
+    candidate = (root / rel).resolve()
+    if candidate != root and root not in candidate.parents:
+        return None
     return str(_AGENT_SOURCE_DIR / rel)
 
 
