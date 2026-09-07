@@ -112,7 +112,7 @@ def yaml_load(text: str) -> dict:
         if line.startswith("    []"):
             field = None
             continue
-        m = re.match(r'^(?:"((?:\\.|[^"])*)"|(\S[^:]*)):$', line)
+        m = re.match(r'^(?:"((?:[^"\\]|\\.)*)"|(\S[^:]*)):$', line)
         if m:
             current = _unquote(m.group(1)) if m.group(1) is not None else m.group(2)
             # codec 层只管正确往返（含引号 '#'/'::' key 的防御深度）；'#' 开头与
