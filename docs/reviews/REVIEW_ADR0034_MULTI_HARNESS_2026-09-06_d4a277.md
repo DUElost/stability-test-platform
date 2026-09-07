@@ -247,6 +247,14 @@ ADR 需明说**为什么这次不同**，例如：
 **建议**（P0 transition table 二选一并写死）：允许 `FINISHED → CODING`；
 或明确「恢复编码 = 新开 Execution」。
 
+> **【2026-09-07 后续】已立单 [#946](https://github.com/DUElost/stability-test-platform/issues/946)**
+> （`[devx][contract] ai_work lifecycle 无 FINISHED→CODING 回退`，`tech-debt`）。
+> 本条当时是**理论判断**（契约推演），#946 补齐了代码层证据与最小复现：
+> `ai_work.py:403` 是全文件唯一写入 `"CODING"` 处（仅 `declare` 新建记录），
+> `cmd_finish` 无条件写 FINISHED、`cmd_update` 不写 lifecycle。
+> 另补一条当时未识别的后果：换新 id 重新 declare 会导致**两条记录自指 overlap**
+> （旧记录 FINISHED+PR_OPEN 仍在窗、scope 重合）。**讨论与方案以 #946 为准。**
+
 ### 9.2 `finish --abandon` 与 integration 终态冲突未定义
 
 `lifecycle=ABANDONED` + `integration=MERGED` 语义矛盾（已合入的工作被标放弃）。
@@ -338,6 +346,7 @@ v0.5 §2.2 不再引用「AGENTS.md 派生视图」而是自定口径——**这
 
 - 第三轮同为**只读评审**，未改动 ADR 或任何配套文件；
 - 第二轮 4 条观察中，**观察 2 已被真值表闭合**、**观察 3（三维术语）本版未动**；观察 1（恢复编码回退）、观察 4（test_impact 缺省）未处理，属 P0/P1 实施期事项；
+  - **【2026-09-07 后续】观察 1 已立单 [#946](https://github.com/DUElost/stability-test-platform/issues/946)**（含代码证据与最小复现）；观察 4 仍无单据。
 - 未读方案原始全文与其余 7 源报告，仅核验 ADR 文本与本仓实测；
 - 事实核验以 2026-09-06 仓库状态为准。
 
@@ -521,3 +530,15 @@ ADR-0034 的 **P0 遗漏清零、P2 指引补强完成**。第五部分 §16.1 �
 
 本文件 §15 记录 ADR 为 **v1.2**；复核时仓库实况已是 **v1.3**（#911 标题提及 v1.4）。
 ADR 版本推进快于本文件的观察节奏——**引用版本时以仓库实况为准，勿沿用本文件快照。**
+
+### 20.4 本文件遗留观察项的最终去向
+
+| 观察 | 提出处 | 去向 |
+|---|---|---|
+| lifecycle 缺 `FINISHED→CODING` 回退 | §9.1 | ✅ 已立单 **[#946](https://github.com/DUElost/stability-test-platform/issues/946)**（含代码证据 + 最小复现 + 三方案） |
+| 目录级 scope 的 drift 恒定假阳性 | §13.3 | ✅ 已独立立单 **#928**（本文件未提，由批次另行识别；`/tmp/stp-928` 在修） |
+| `test_impact` 缺省=indirect 致 coverage-mismatch 召回率依赖自愿声明 | §9.4 | ⬜ **仍无单据**——若该 advisory 长期空转需重议，建议届时立单 |
+| 僵尸候选判据在并集语义下几乎不触发 | §13.2 | ⬜ 仍无单据，与 #928 同属「并集假阳性」家族，可考虑并入 |
+
+**注**：#928 与 #946 均非本文件直接产出单据，但问题与本文件观察同源；
+此处回链是为让后续读者能沿线索走通，不主张归属。
