@@ -5,12 +5,14 @@
     python scripts/run_gates.py check:quick    # 最快一轮（纯静态，含 knip）
     python scripts/run_gates.py check:pr       # 推送前默认：与 PR CI 现有检查逐项重叠
     python scripts/run_gates.py check:gov      # 治理面专项（结构 + skill 用量探针）
-    python scripts/run_gates.py check:full     # 夜间全量：与 main 全量 CI 一致
+    python scripts/run_gates.py check:full     # 夜间全量：main 全量 CI 的本地可跑部分
+                                               # + 本机专属 gate（FULL_EXCLUDE 除外，#825）
     python scripts/run_gates.py --list
 
 设计约束（与 ci.yml 现状一一对应，不改变任何门禁的语义）:
 - 本地默认不跑 PG 套件 / vitest / build / docker —— 这些归 check:full，
-  白天全量 CI 只在夜间出现（注意力优先）。
+  白天全量 CI 只在夜间出现（注意力优先）。pr-migrate 例外地进 check:pr：
+  docker 可用则真跑、不可用显式 SKIP（#825——迁移回归是 PR 阶段唯一拦截点）。
 - 每个 gate 顺序执行，失败即停（单人场景默认合理）。
 - 用 `python -m` 形式调用（ruff/pytest），保证落到当前解释器的工具链，
   规避「裸 pytest 落到另一套解释器」的历史坑。
@@ -101,6 +103,15 @@ GATES = {
         ROOT,
         None,
     ),
+    # pr-migrate-empty-db 本地等价（#825/#644）：docker 可用则真跑（空库 alembic
+    # upgrade head + ORM schema 比对，postgres:16 一次性容器）；docker 不可用则
+    # 显式 SKIP（exit 0 并注明）——推送前能拦迁移回归的环境拦，拦不了的不假绿。
+    # 正反样例自证：--self-test
+    "pr-migrate": (
+        f"{PY} tools/dev/check_pr_migrate.py",
+        ROOT,
+        None,
+    ),
     # public 仓库内网主机地址扫描（#538/#550/#557 收尾）：纯文本正则、秒级。
     # 只拦四段齐全的具体主机地址，CIDR 网段常量与标准地址放行；
     # ADR-0020 脚本目录 / 已锁定迁移 / 测试夹具走白名单。
@@ -167,11 +178,19 @@ PROFILES = {
     "check:pr": [
         "ruff", "eslint", "tsc", "knip", "compileall",
         "pollution", "immutability", "gov-surface", "ip-leak", "agent-tests",
+        "pr-migrate",
     ],
     # 治理面专项：结构门禁 + skill 用量探针
     "check:gov": ["gov-surface", "gov-skills"],
-    "check:full": None,  # = 全部，按 GATES 顺序
+    # check:full = main 全量 CI 的本地可跑部分 + 本机专属 gate，但排除
+    # 数据源物理仅在本机的 gate（#825：他机跑 check:full 不得确定性红灯）。
+    # gov-skills 依赖 ~/.claude 会话转录；ai-drift 在无 registry 数据的机器上
+    # no-op 绿，故保留。
+    "check:full": None,  # = 全部 GATES - FULL_EXCLUDE，按 GATES 顺序
 }
+
+# 显式排除表（#825）：仅本机数据源、他机必红的 gate
+FULL_EXCLUDE = {"gov-skills"}
 
 
 def run_gate(name: str, cmd: str, cwd: str, env: dict | None) -> bool:
@@ -195,7 +214,7 @@ def main() -> int:
     if profile not in PROFILES:
         print(f"unknown profile: {profile}", file=sys.stderr)
         return 2
-    gate_names = PROFILES[profile] or list(GATES)
+    gate_names = PROFILES[profile] or [g for g in GATES if g not in FULL_EXCLUDE]
     for name in gate_names:
         cmd, cwd, env = GATES[name]
         if not run_gate(name, cmd, cwd, env):
