@@ -822,7 +822,13 @@ def main() -> int:
     args = ap.parse_args()
     if getattr(args, "self_test", False) or not hasattr(args, "fn"):
         return run_self_test()
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except ValueError as exc:
+        # 命令层 ValueError（如 registry 损坏的隔离报错）统一走人类可读出口，
+        # 不裸 traceback（#880 验收残留；REFUSED 类已在各命令内自捕获）
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
