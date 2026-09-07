@@ -20,29 +20,30 @@ def async_visible_headers(engine):
 
     admin_username = _uniq("admin")
     user_username = _uniq("user")
-    session.add_all([
-        User(
-            username=admin_username,
-            hashed_password=get_password_hash("adminpass123"),
-            role="admin",
-            is_active="Y",
-        ),
-        User(
-            username=user_username,
-            hashed_password=get_password_hash("testpass123"),
-            role="user",
-            is_active="Y",
-        ),
-    ])
+    admin = User(
+        username=admin_username,
+        hashed_password=get_password_hash("adminpass123"),
+        role="admin",
+        is_active="Y",
+    )
+    user = User(
+        username=user_username,
+        hashed_password=get_password_hash("testpass123"),
+        role="user",
+        is_active="Y",
+    )
+    session.add_all([admin, user])
     session.commit()
+    # R02-D1（#900）：token sub=用户 PK，id 须在 session 关闭前取出
+    admin_id, user_id = admin.id, user.id
     session.close()
 
     return {
         "admin": {
-            "Authorization": f"Bearer {create_access_token(data={'sub': admin_username, 'role': 'admin'})}",
+            "Authorization": f"Bearer {create_access_token(data={'sub': str(admin_id), 'username': admin_username, 'role': 'admin'})}",
         },
         "user": {
-            "Authorization": f"Bearer {create_access_token(data={'sub': user_username, 'role': 'user'})}",
+            "Authorization": f"Bearer {create_access_token(data={'sub': str(user_id), 'username': user_username, 'role': 'user'})}",
         },
     }
 

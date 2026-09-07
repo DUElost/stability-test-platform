@@ -149,9 +149,32 @@ def _authenticate_user(db: Session, username: str, password: str) -> User:
 
 
 def _issue_token_pair(user: User) -> tuple[str, str]:
-    access_token = create_access_token(data={"sub": user.username, "role": user.role})
-    refresh_token = create_refresh_token(data={"sub": user.username})
+    # R02-D1（#900）：sub=不可变 PK——username 是可复用业务键（删建同名≠同一
+    # 身份）；username/role 降为信息性 claim，鉴权决策只信 DB 行。
+    access_token = create_access_token(
+        data={"sub": str(user.id), "username": user.username, "role": user.role}
+    )
+    refresh_token = create_refresh_token(
+        data={"sub": str(user.id), "username": user.username}
+    )
     return access_token, refresh_token
+
+
+def _user_from_payload(db: Session, payload: dict) -> Optional[User]:
+    """按 token payload 解析有效用户；无效返回 None。
+
+    R02-D1 硬切换（#900）：sub 必须是用户 PK，int 解析失败（含存量
+    username-sub token）一律拒绝——存量 token 的 sub 正是 #900 冒充窗口的
+    载体，不设宽限（设计 note §3）。"""
+    raw_sub = payload.get("sub")
+    try:
+        user_id = int(raw_sub)
+    except (TypeError, ValueError):
+        return None
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or user.is_active != "Y":
+        return None
+    return user
 
 
 def get_current_user(
@@ -180,16 +203,8 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    username: str = payload.get("sub")
-    if not username:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    user = db.query(User).filter(User.username == username).first()
-    if not user or user.is_active != "Y":
+    user = _user_from_payload(db, payload)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
@@ -419,18 +434,34 @@ def refresh(
             details={"reason": "missing_jti_after_grace"},
             request=request,
         )
-        logger.warning("refresh_token_missing_jti rejected_after_grace sub=%s", payload_data.get("sub"))
+        logger.warning(
+            "refresh_token_missing_jti rejected_after_grace sub=%s",
+            payload_data.get("username") or payload_data.get("sub"),
+        )
         # 拒绝路径审计独立落库(#281 P1)。
         db.commit()
         return _refresh_unauthorized("Invalid refresh token")
 
-    username: str = payload_data.get("sub")
-    if not username:
+    user = _user_from_payload(db, payload_data)
+    if not user:
         return _refresh_unauthorized("Invalid refresh token")
 
-    user = db.query(User).filter(User.username == username).first()
-    if not user or user.is_active != "Y":
-        return _refresh_unauthorized("Invalid refresh token")
+    # R02-D4（#901）：消费即吊销——rotation 后旧 refresh 重放命中上方既有
+    # is_revoked 检查被拒；revoke 幂等（logout 已吊销的 jti 重复写不报错）。
+    # revoke 内部落库提交，随后审计同事务落库（#281 纪律）。
+    expires_at = datetime.fromtimestamp(payload_data["exp"], tz=timezone.utc)
+    revoke(db, jti=jti, expires_at=expires_at, reason="rotation")
+    record_audit(
+        db,
+        action="refresh",
+        resource_type="session",
+        resource_id=user.id,
+        username=user.username,
+        user_id=user.id,
+        details={"reason": "rotation", "rotated_jti": jti},
+        request=request,
+    )
+    db.commit()
 
     access_token, refresh_token = _issue_token_pair(user)
     set_auth_cookies(response, access_token, refresh_token)
@@ -465,7 +496,7 @@ def logout(
                     action="logout",
                     resource_type="session",
                     resource_id=jti,
-                    username=decoded.get("sub"),
+                    username=decoded.get("username") or decoded.get("sub"),
                     details={"reason": "logout"},
                     request=request,
                 )
