@@ -709,9 +709,7 @@ def run_self_test() -> int:
             failures.append("#880 corrupt 隔离: 预期红，实际绿")
         except ValueError as exc:
             assert "已隔离至" in str(exc) and ".corrupt-" in str(exc)
-        for f in sorted(os.listdir(td)):
-            print(f"[dbg] f={f!r} startswith(p2)={f.startswith(p2)} corrupt={'​.corrupt-' in f}",
-                  file=sys.stderr)
+        assert any(".corrupt-" in f for f in os.listdir(td)), "corrupt 隔离文件应留在 td"
 
     # P3 drift gate 纯函数
     assert is_test_path("backend/tests/test_x.py") and is_test_path("tests/y.py")
