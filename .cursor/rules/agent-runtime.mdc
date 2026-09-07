@@ -8,8 +8,8 @@ alwaysApply: false
 
 修改 Agent 运行时代码前按需读取：
 
-- `backend/agent/CLAUDE.md`：Agent 侧 scan/upload 与热刷新边界；
-- `backend/agent/aee/CLAUDE.md`：AEE/UNISOC 采集链和平台路由；
+- `backend/agent/AGENTS.md`：Agent 侧 scan/upload 与热刷新边界；
+- `backend/agent/aee/AGENTS.md`：AEE/UNISOC 采集链和平台路由；
 - `docs/design/2026-scan-upload-merge-contract.md`：控制面跨进程归档契约；
 - `docs/development/testing.md`：生产机测试安全边界；
 - `AGENTS.md`：脚本执行与跨层硬不变量；

@@ -10,6 +10,7 @@ alwaysApply: true
 - Claude 导入与领域路由：`CLAUDE.md`
 - 完整设计与文档权威关系：`docs/DOC-MAP.md`
 - Harness 适配边界：`docs/development/ai/harness-adapters.md`
+- 并行 Execution（Registry 登记、scope、集成窗口）：`docs/development/ai/execution-contract.md`
 
 本文件只负责 Cursor 常驻加载路由，不复制项目事实。处理具体目录时继续读取匹配的
 按域规则及其指向的权威文档；代码与测试和文档不一致时，以代码与测试为准并回写文档。
