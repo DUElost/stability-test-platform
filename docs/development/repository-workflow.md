@@ -93,3 +93,28 @@ GitHub Actions 生态更新需要人工评审。全量 CI 失败由 backstop 使
 3. 「没写到 vs 写了没传导」的归因只在选择修复端时需要：文本缺失=前者；
    在场但违规=后者，修复走第 2 步的机器查/residual，**不重建行为验证层**
    （2026-08-26 挂载裁决 + 2026-09-07 #855 收口）。
+
+## Git 破坏性操作纪律（#930）
+
+共享工作树 + 多会话并行环境下，破坏性 git 命令的爆炸半径是**他人进行中的
+工作**，不只自己的：
+
+| 操作 | 风险 | 处置 |
+|---|---|---|
+| `git reset --hard` | **不可逆**销毁未提交工作（含并行会话的） | **禁止**；未提交工作显式 commit/分支保存 |
+| `git stash drop` / `clear` | **不可逆**销毁已暂存现场 | **禁止** |
+| `git stash`（创建） | 可恢复，但污染全局 `refs/stash` 栈——多会话 pop/apply 错位会拿错别人的现场 | **禁止**，走显式分支 |
+| `git stash list/show/pop/apply/branch` | 读侧/恢复侧 | 放行 |
+
+**强制层**：
+
+1. Claude 会话：PreToolUse hook（`.claude/settings.json` →
+   `tools/dev/check_destructive_git.py`）对 Bash 命令按 shell 段解析，
+   段首为 git 且命中上表禁止项即 exit 2 阻断；脚本 `--self-test` 红绿自证，
+   自身异常 fail-open（不阻断）；
+2. git 级观测：`.githooks/reference-transaction` 对 `refs/stash` 更新留痕
+   告警（opt-in：`git config core.hooksPath .githooks`）——`reset --hard`
+   的 worktree 破坏没有 git 级拦截点（ref 事务无法与普通提交区分），该命令
+   依赖第 1 层 + 纪律；
+3. 棘轮：同族命令（`git restore .` / `git clean -f` / `git checkout -- .`）
+   暂未入拦截清单，出现事故按不变量违规处置流程扩展。

@@ -1,0 +1,18 @@
+#!/bin/sh
+# stash 观测（非阻塞，#930）：refs/stash 更新在此留痕告警。
+# 仅对声明 core.hooksPath=.githooks 的机器生效（一次性：
+#   git config core.hooksPath .githooks）。
+# git 对 reset --hard 无干净拦截点（ref 事务无法与普通提交区分），
+# 阻断层在 Claude PreToolUse（tools/dev/check_destructive_git.py）；
+# 本钩子只做观测——如需硬拦截，在 prepared 阶段 exit 非零（会中止事务），
+# 属独立裁决事项。
+state=$1
+while read -r ref old new; do
+    case "$ref" in
+        refs/stash)
+            echo "[warn] refs/stash ${state}: ${old} -> ${new}" \
+                "（破坏性操作纪律见 repository-workflow.md §Git 破坏性操作纪律）" >&2
+            ;;
+    esac
+done
+exit 0
