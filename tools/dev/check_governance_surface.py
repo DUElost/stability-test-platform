@@ -440,9 +440,9 @@ GATE_TO_CI_ANCHOR = {
     "gov-skills": None,  # 数据源=本机 ~/.claude 转录，物理不在 runner 上
     "ai-drift": None,    # P3 advisory gate：CI runner 无本机 registry 数据可查；
                          # 夜间全量在本机跑 check:full 时留痕；转 required 须独立裁决
-    "invariant-diff": None,
-    # #855 差异面不变量检查：advisory 观察期收噪声数据，转 BLOCK 时配 CI step
-    # （与 immutability 同模式可跑 CI）并改此映射。
+    "invariant-diff": ("ci.yml", "差异面不变量检查"),
+    # #855 差异面不变量检查：2026-09-07 升格 BLOCK（全库枚举替代观察期验证
+    # 精度），与 immutability 同模式接入 ci.yml lint job。
     "harness-ingest": None,  # #855-b 摄取矩阵（ADR-0034 P2 验收）：每家一次真实
                              # 非交互 LLM 会话（分钟级+外部依赖），CI 不跑；
                              # check:gov 手跑，行为漂移时人工介入。与

@@ -49,9 +49,27 @@ Class: feature
 
 ## Revisit
 
-- advisory 数据（CI/check:full 留痕）收齐后裁决转 BLOCK：与 immutability
-  同模式加 ci.yml step + `GATE_TO_CI_ANCHOR` 改映射 + 移除本条；
+- ~~advisory 数据收齐后裁决转 BLOCK~~ → **已升格（同日）**，见下节；
 - 新不变量入覆盖图时同步加模式（棘轮）；模式误报经 allowlist 化处理并
   记录理由；
 - `python -m pytest` 规则当前仅覆盖 agent scripts 的 .sh——若 diff 面出现
   docs/CI 内裸调用事故再扩路径。
+
+## 升格记录（2026-09-07，advisory → BLOCK）
+
+原计划「advisory 观察期收噪声数据」被两项事实推翻：
+
+1. **观察期结构性失效**：本 gate 是差异面检查（只看 PR 新增行），其观察
+   渠道（夜间 check:full）在 main 上 diff 恒空——永远收不到样本；唯一
+   真实观察面是 CI 的 PR diff，而那本身就是 BLOCK 模式的接线；
+2. **精度可静态验证，无需等待**：全库枚举（把全部现存行视作新增行跑
+   模式）实证——`class Config`/复数表名/裸 pytest **零命中**；`.dict(`
+   唯一命中为 `patch.dict`/`monkeypatch.dict`（unittest.mock/pytest 标准
+   惯用法，3 处全在 tests）——**枚举真逮到一个会误伤的模式缺陷**，已加
+   `(?<!patch)` 负向后顾豁免并补 2 个绿样例。
+
+升格内容：默认 BLOCK（违规 exit 1，输出带修复指引），`--advisory` 保留为
+留痕放行模式（`--strict` 移除）；接入 ci.yml lint job（与 immutability
+同模式取 PR base）；`GATE_TO_CI_ANCHOR` 改 `("ci.yml", "差异面不变量检查")`；
+覆盖图 §7.1 两行差集闭合（context-only → 已强制）。存量债务（tests 内
+3 处 `patch.dict` 为豁免、无真违规）不动——diff 面棘轮只增不减。
