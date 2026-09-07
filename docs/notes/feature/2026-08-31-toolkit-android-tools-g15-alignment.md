@@ -54,6 +54,13 @@
   failure_streak + 指数退避；teardown 由 timeout/abort 触发。check 判死是
   监控信号而非终止机制（设备级故障由平台心跳 UNKNOWN 链路处理），非缺陷。
 
+**判死策略增补（2026-08-31 夜，`05101efa`）**：上文「最终回归验收（v1.0.5）…
+遗留：grace 提高或结果文件 mtime 停滞判定」已由 `powercycle_check v1.0.6`
+定稿实现——判死 = **结果文件 mtime 停滞**（mtime>0 且与上轮相同才累计；
+`cycles_done==0` / `result_bytes==0` / 刚上线等形态不累计）。当前版本链为
+v1.0.2→v1.0.6，v1.0.5 不再是判死策略终版；该策略边界（依赖 patrol 间隔 <
+结果文件写入间隔、alive 恒清零致挂死进程永不判死）另见 issue #761。
+
 ## 0. 结论摘要
 
 1. **无概念重复**：Sleep/PowerCycle 与 MTBF 执行包是**同构三件套**（`deploy/run/stop.ps1` +

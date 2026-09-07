@@ -65,7 +65,9 @@ S11 的文本级验证部分弥补。
 - `venv/bin/python -m ruff check tools/dev/check_governance_surface.py
   scripts/run_gates.py` 通过；`python -m py_compile scripts/run_gates.py` 通过；
 - 残留引用 grep：`run_gov_evals|gov_evals` 在非 archive/reviews/notes 路径
-  零命中（历史留档按纪律保留原文）；
+  零命中——唯一例外是 `docs/design/2026-08-governance-surface-protection.md`
+  §7（Removed 留档原文 :87-88 与验收演示行 :109），按纪律保留；
+  「零命中」不含该 design 留档（2026-09-07 口径修正，#868）；
 - 未运行项（pending）：`check_gov` 实跑（含 gov-skills 探针）依赖本机
   转录数据，未在本变更中执行；PR CI 六项 required checks 以实际运行为准。
 
