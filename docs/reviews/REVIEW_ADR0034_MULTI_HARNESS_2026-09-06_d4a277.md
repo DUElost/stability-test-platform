@@ -535,10 +535,13 @@ ADR 版本推进快于本文件的观察节奏——**引用版本时以仓库�
 
 | 观察 | 提出处 | 去向 |
 |---|---|---|
-| lifecycle 缺 `FINISHED→CODING` 回退 | §9.1 | ✅ 已立单 **[#946](https://github.com/DUElost/stability-test-platform/issues/946)**（含代码证据 + 最小复现 + 三方案） |
-| 目录级 scope 的 drift 恒定假阳性 | §13.3 | ✅ 已独立立单 **#928**（本文件未提，由批次另行识别；`/tmp/stp-928` 在修） |
+| lifecycle 缺 `FINISHED→CODING` 回退 | §9.1 | ✅ 已立单 **[#946](https://github.com/DUElost/stability-test-platform/issues/946)**（含代码证据 + 最小复现 + 三方案；OPEN，待方案裁决） |
+| 目录级 scope 的 drift 恒定假阳性 | §13.3 | ✅ **已修，#929 / #928 CLOSED（2026-09-07 10:33）**——`declaration_drift` 改用契约 §5.4 组件边界谓词，E2E 与活样本（`review-adr0034-issue946-link` 真实记录）双验证：目录声明假阳性消除、超界 diff 仍报 |
 | `test_impact` 缺省=indirect 致 coverage-mismatch 召回率依赖自愿声明 | §9.4 | ⬜ **仍无单据**——若该 advisory 长期空转需重议，建议届时立单 |
-| 僵尸候选判据在并集语义下几乎不触发 | §13.2 | ⬜ 仍无单据，与 #928 同属「并集假阳性」家族，可考虑并入 |
+| 僵尸候选判据在并集语义下几乎不触发 | §13.2 | ✅ 已立单 **[#962](https://github.com/DUElost/stability-test-platform/issues/962)**（死代码实证：declare `--scope` required、update 只替换不清空 → effective 恒非空） |
 
 **注**：#928 与 #946 均非本文件直接产出单据，但问题与本文件观察同源；
 此处回链是为让后续读者能沿线索走通，不主张归属。
+**回链更新（2026-09-07，#947 收口）**：第 2 行完结（#929 合入 + 活样本验证）、
+第 4 行立单 #962；第 1 行 #946 仍为活契约缺口（三方案待裁决）；第 3 行
+维持观察不变。
