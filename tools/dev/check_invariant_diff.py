@@ -7,21 +7,25 @@
 （结果侧）——同一不变量的两端；不重建行为验证层（§7.1 裁决）。
 
 - 只看新增行（diff `+` 行），存量违规不误伤；
-- advisory 不阻塞（exit 0）；`--strict` 为转 BLOCK 接口（按 §7.1 棘轮
-  裁决，收噪声数据后再议）；
+- **BLOCK（2026-09-07 升格）**：违规 exit 1。原 advisory 观察期被全库枚举
+  替代——差异面 gate 在 main 上 diff 恒空，观察期收不到样本；全库枚举实证
+  3/4 规则零命中、`.dict(` 唯一命中为 `patch.dict(`/`monkeypatch.dict(`
+  标准惯用法（已加负向后顾豁免），精度可静态验证即无需等待；
+- `--advisory` 保留为放行模式（调试/留痕用）；
 - 规则策展最小集，宁缺勿误报；扩展时机 = 新不变量入覆盖图时同步加模式
   （棘轮：违规事故 → 加模式 / 记 residual，见 repository-workflow.md）。
 
 规则：
-  pydantic-v1-api    backend/**/*.py      .dict( / .parse_obj( / .from_orm( / class Config:
+  pydantic-v1-api    backend/**/*.py      .dict(（patch.dict/monkeypatch.dict 豁免）/
+                                          .parse_obj( / .from_orm( / class Config:
   plural-table-name  backend/migrations/**create_table/CREATE TABLE 引用复数表名
                      （业务表名单数是硬不变量——任何以 s 结尾的新表名都值得看一眼）
   bare-pytest        backend/agent/scripts/**/*.sh   裸 pytest 调用（python -m pytest 放行）
 
 用法:
-    python tools/dev/check_invariant_diff.py                # 对 origin/main
+    python tools/dev/check_invariant_diff.py                # 对 origin/main，违规 exit 1
     python tools/dev/check_invariant_diff.py --base <ref>
-    python tools/dev/check_invariant_diff.py --strict       # 有违规 exit 1（BLOCK 接口）
+    python tools/dev/check_invariant_diff.py --advisory     # 只留痕不阻塞
     python tools/dev/check_invariant_diff.py --self-test    # 纯函数红绿自证（离线）
 """
 from __future__ import annotations
@@ -36,7 +40,9 @@ RULES: list[tuple[str, str, list[re.Pattern[str]]]] = [
         "pydantic-v1-api",
         r"backend/.*\.py$",
         [
-            re.compile(r"\.dict\("),
+            # patch.dict / monkeypatch.dict 是 unittest.mock / pytest 标准惯用法
+            # （全库枚举唯一 `.dict(` 命中面），负向后顾豁免
+            re.compile(r"(?<!patch)\.dict\("),
             re.compile(r"\.parse_obj\("),
             re.compile(r"\.from_orm\("),
             re.compile(r"^\s*class Config\b"),
@@ -127,6 +133,11 @@ def run_self_test() -> int:
     bad_dict = good.replace("model.model_dump()", "model.dict()")
     expect("pydantic .dict( 红向", bad_dict, True, "pydantic-v1-api")
     expect("pydantic model_dump( 绿向", good, False)
+    # 负向后顾豁免（升格枚举实证的唯一 `.dict(` 合法命中面）
+    patch_good = good.replace("model.model_dump()", 'patch.dict("os.environ", {})')
+    expect("patch.dict 绿向", patch_good, False)
+    monkey_good = good.replace("model.model_dump()", "monkeypatch.dict(os.environ, {})")
+    expect("monkeypatch.dict 绿向", monkey_good, False)
 
     bad_removed = """--- a/backend/api/x.py
 +++ b/backend/api/x.py
@@ -187,26 +198,30 @@ def main() -> int:
     if "--self-test" in argv:
         return run_self_test()
     base = argv[argv.index("--base") + 1] if "--base" in argv else "origin/main"
-    strict = "--strict" in argv
+    advisory = "--advisory" in argv
     proc = subprocess.run(
         ["git", "diff", "-U0", f"{base}...HEAD"],
         capture_output=True, text=True, check=False,
     )
     if proc.returncode != 0:
-        # base 不可达（浅克隆/无远端）：advisory 静默放行，不阻塞工作流
+        # base 不可达（浅克隆/无远端）：静默放行，不阻塞工作流
         print(f"[advisory] invariant-diff: git diff {base}...HEAD 不可达，跳过")
         return 0
     violations = check(added_lines(proc.stdout))
     if not violations:
         print("[OK] invariant-diff: 新增行无不变量违规")
         return 0
+    tag = "advisory" if advisory else "BLOCK"
     for v in violations:
-        print(f"[advisory] invariant-diff: {v}")
+        print(f"[{tag}] invariant-diff: {v}")
+    if advisory:
+        print(f"invariant-diff（advisory）：{len(violations)} 项——不阻塞")
+        return 0
     print(
-        f"invariant-diff（advisory）：{len(violations)} 项——不阻塞；"
-        "转 BLOCK 须按覆盖图棘轮裁决（§7.1）"
+        f"invariant-diff：{len(violations)} 项违规——Pydantic v2 用 model_dump/"
+        f"model_validate；新表名单数；测试调用用 python -m pytest"
     )
-    return 1 if strict else 0
+    return 1
 
 
 if __name__ == "__main__":

@@ -82,8 +82,10 @@ GATES = {
         None,
     ),
     # 差异面不变量检查（#855 收口，覆盖图 §7.1 的差集收缩）：context-only
-    # 不变量中可静态判定子集的「新增行」检查——S11 的产物侧对偶。advisory
-    # 不阻塞（exit 0，--strict 为转 BLOCK 接口）；先收噪声数据再按棘轮裁决。
+    # 不变量中可静态判定子集的「新增行」检查——S11 的产物侧对偶。
+    # 2026-09-07 升格 BLOCK（违规 exit 1；--advisory 留痕放行）：精度以全库
+    # 枚举静态验证（观察期对差异面 gate 结构性失效，见该脚本抬头），
+    # CI 对应物=ci.yml lint job「差异面不变量检查」step。
     "invariant-diff": (
         f"{PY} tools/dev/check_invariant_diff.py --base {BASE_REF}",
         ROOT,

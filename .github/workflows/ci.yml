@@ -187,6 +187,15 @@ jobs:
           python tools/dev/check-script-version-immutability.py \
             --base "origin/${{ github.base_ref || github.ref_name }}"
 
+      # 差异面不变量检查（#855 覆盖图 §7.1 差集收缩）：context-only 不变量的
+      # 产物侧检查（Pydantic v1 API/复数表名/裸 pytest），BLOCK——2026-09-07
+      # 升格（精度以全库枚举验证，观察期对差异面 gate 结构性失效）；
+      # 与 immutability 同模式取 PR base。
+      - name: 差异面不变量检查
+        run: |
+          python tools/dev/check_invariant_diff.py \
+            --base "origin/${{ github.base_ref || github.ref_name }}"
+
       # 治理面结构门禁（synthesis C-G1 L0）：CLAUDE.md @import 行内失效类事故的
       # 确定性拦截 + pr-agent 防绕过机制锚点守卫。检查器自身由 --self-test
       # 正反样例守护（#854：self-test 与 --check 同步进 CI，防检查器回归）；

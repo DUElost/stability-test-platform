@@ -127,8 +127,8 @@ actionable 终点永远是「加确定性 gate 或加结构性防线」——测
 | Plan 不存 lifecycle（dispatcher 组装） | 结构自证（schema 无列可存） | plan schema | 已强制 |
 | Redis 只承载队列与瞬时通信 | 无 | — | **residual**（review 兜底） |
 | 生产 secure cookie / 受限 SameSite / CSRF | **运行时强制** | `backend/core/security.py:83` | 已强制 |
-| Pydantic v2 only | 无（backend 现存 `.dict(` 用例实证） | `backend/tests/` | **差异面检查收缩中**（`invariant-diff`，advisory 起步） |
-| 业务表名单数 | 无（`pr-migrate-empty-db` 拦迁移失败，不拦复数表名） | — | **差异面检查收缩中**（`invariant-diff`，advisory 起步） |
+| Pydantic v2 only | 差异面新增行检查（backend 现存 `.dict(` 仅 `patch.dict` 惯用法，负向后顾豁免） | `tools/dev/check_invariant_diff.py` | **已强制**（BLOCK，2026-09-07 升格） |
+| 业务表名单数 | 差异面新增行检查（`pr-migrate-empty-db` 拦迁移失败，不拦复数表名） | 同上 | **已强制**（BLOCK，2026-09-07 升格） |
 | 已发布脚本 `default_params` 不可变 | **gate + 运行时 422** | `tools/dev/check-script-version-immutability.py` | 已强制 |
 | 前端 `types.ts` 与后端 schema 同步 | 无（手维护；typecheck 只查 TS 内部） | `frontend/package.json` 无生成器 | **residual**（review 兜底） |
 | Python 用 `python -m` 形式（总原则） | 无 | — | residual（scripts 内裸调用可入差异面清单） |
@@ -140,9 +140,12 @@ actionable 终点永远是「加确定性 gate 或加结构性防线」——测
 进 ADR），连续金丝雀**否决**（负复利 + 为低频事件建常驻设施）。
 
 差集收缩的执行器是 `tools/dev/check_invariant_diff.py`（`invariant-diff`
-gate，入 check:pr/check:full）：对 PR 新增行做策展模式检查，**advisory
-不阻塞**（`--strict` 为转 BLOCK 接口）；噪声数据收齐后按棘轮裁决升格，
-接线同 S5x 映射表登记（`GATE_TO_CI_ANCHOR` 现记 None + 理由）。
+gate，入 check:pr/check:full + ci.yml lint job）：对 PR 新增行做策展模式
+检查，**BLOCK**（违规 exit 1；`--advisory` 为留痕放行模式）。原计划的
+advisory 观察期被**全库枚举**替代——差异面 gate 在 main 上 diff 恒空，
+观察期收不到样本；枚举实证 3/4 规则零命中、`.dict(` 唯一命中为
+`patch.dict`/`monkeypatch.dict` 惯用法（负向后顾豁免），精度可静态验证
+即无需等待（2026-09-07 升格，`GATE_TO_CI_ANCHOR` 已改 CI 映射）。
 
 ## 8. 同日用户裁决记录（审计收口）
 | 待决点 | 裁决 |
@@ -163,3 +166,4 @@ gate，入 check:pr/check:full）：对 PR 新增行做策展模式检查，**ad
 | 2026-09-07 | 新增 S12 ADR 索引一致性门禁（#867 五次复发后的确定性收口），一次性修复 9 处存量漂移（ADR-0002/0009/0011 主表状态、ADR-0032 主表+M7 版本、ADR-0034 头部行+主表+DOC-MAP+M7 版本） |
 | 2026-09-07 | §7.1 强制力覆盖图（#855 收口）：11 条硬不变量按运行时强制/gate/结构自证/residual 分类，行为验证层重建被第一原理否决（测量不产生约束力+负复利），差集收缩走差异面检查，residual 走棘轮 |
 | 2026-09-07 | 差集收缩执行器落地：`invariant-diff` gate（差异面策展模式，advisory 起步入 check:pr/full；`--strict` 为转 BLOCK 接口） |
+| 2026-09-07 | `invariant-diff` 升格 BLOCK：全库枚举替代观察期（差异面 gate 观察期结构性收不到样本）验证精度，`.dict(` 加 patch/monkeypatch 豁免，接入 ci.yml lint job（`GATE_TO_CI_ANCHOR` 改映射）；覆盖图 Pydantic v2/表名单数两行差集闭合 |
