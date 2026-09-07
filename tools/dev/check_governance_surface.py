@@ -307,6 +307,7 @@ GATE_TO_CI_ANCHOR = {
     "immutability": ("ci.yml", "脚本版本不可变检查"),
     "gov-surface": ("ci.yml", "治理面结构检查"),
     "ai-work": ("ci.yml", "Execution Registry 自测"),
+    "pr-migrate": ("ci.yml", "Migrate empty PostgreSQL database"),
     # public 仓库内网主机地址扫描（#538 收尾）——锚点即 ci.yml 中该 step 的 name
     "ip-leak": ("ci.yml", "内网主机地址检查"),
     "agent-tests": ("ci.yml", "Run agent tests"),
