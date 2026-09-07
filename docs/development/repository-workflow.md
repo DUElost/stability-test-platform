@@ -30,7 +30,7 @@ reconcile；派生视图不再是主操作规范，降为 ground truth 交叉验
 - 冲突靠开工前 Registry 前检与实际 diff 交叉验证避免，不依赖手写 WIP 状态；
 - 分片只用于冲突规避，不形成目录所有权；
 - `AGENTS.md`、`CLAUDE.md` 及 Harness 共享规则同一时间只由一个 Execution 修改；
-- 当前建议并发上限约 2–3，瓶颈以人的审阅吞吐为准。
+- 并发不设会话数上限（ADR-0034 §2.6 v1.8）；瓶颈在集成收尾侧（审阅吞吐 + 平台可靠性），在窗 Execution 规模与 reconcile 负载为实测代理，恶化时重议。
 
 派生视图（交叉验证；`effective_scope = declared ∪ derived` 中 derived 是 Git
 事实、声明不能覆盖，契约 §5.1）：
