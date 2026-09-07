@@ -100,6 +100,38 @@ async def register_agent_owner(host_id: str, sid: str) -> None:
         )
 
 
+async def renew_agent_owner(host_id: str, sid: str) -> bool:
+    """Renew the TTL for an *active* connection owned by this process (#881).
+
+    Called from the owner process on live-connection signals (Agent heartbeat).
+    Only renews when the registered payload still matches ``sid`` **and** this
+    process — never resurrects a key that has been re-registered elsewhere or
+    already expired. Returns ``True`` when a renewal happened.
+    """
+    if not agent_sid_registry_enabled():
+        return False
+    client = _client()
+    if client is None:
+        return False
+    key = owner_key(str(host_id))
+    try:
+        raw = await client.get(key)
+        if not raw:
+            return False
+        data = json.loads(raw)
+        if data.get("sid") != sid or data.get("instance_id") != _INSTANCE_ID:
+            return False
+        await client.set(key, raw, ex=owner_ttl_seconds())
+        return True
+    except Exception:
+        logger.debug(
+            "agent_sid_registry_renew_failed host_id=%s",
+            host_id,
+            exc_info=True,
+        )
+        return False
+
+
 async def unregister_agent_owner(host_id: str, sid: str) -> None:
     """Clear ownership only if we still own the same sid."""
     if not agent_sid_registry_enabled():
