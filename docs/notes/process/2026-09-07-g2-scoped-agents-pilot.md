@@ -38,6 +38,7 @@ Class: process
 - `git ls-files -s`：真身 mode 100644、薄壳 mode 120000（symlink）✓；
 - 验收探针实测见上表（OpenCode/Claude live 双绿；Codex/Cursor pending 如实标注）；
 - 验收终态：**4/4 Harness 全部通过**（OpenCode/Codex 双边单份、Cursor 双边双份、Claude scoped 单份；根契约对 Claude 的缺口=#857，P2 Adapter 解决）。
+- **矩阵扩展（09-07 续）**：Cursor **IDE** 3.17.19 人工探针 Q1=是 Q2=是 Q3=2——与 CLI 同引擎对齐（含双份加载）；**Zcode 3.11.2** Q1=否 Q2=是——子目录**只装载 workspace 的 AGENTS.md、根不注入**（#857 互补形态；可发现性由 scoped 真身根指针覆盖，P2 动作表 #919 补「评审类会话同样 declare」指引）。六形态矩阵见 ADR 附录 A。
 - PR CI 六项 required checks 以实际运行为准。
 
 ## Revisit
