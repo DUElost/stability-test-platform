@@ -58,6 +58,15 @@ Execution Registry（`ai_work.py`）按 ADR-0034 P1 分期落地，启动判据�
 Auto-merge 的队列与分支更新以 workflow 和
 [`scripts/ci/pr-automerge-queue.sh`](../../scripts/ci/pr-automerge-queue.sh) 为事实源。
 
+## 关单关键词写法
+
+PR body 的 closing keyword（`Closes #N` / `Fixes #N`）由 GitHub 服务端在合入时
+解析，与本机网络无关；**issue 号后必须跟空格或 ASCII 标点**——全角标点紧跟
+（如 `#962。`）不构成引用、不会关单（#926/#929/#931/#963 四单同型实证）。
+分支 commit message 内的关键词经 PR 合并不生效（merge commit 方式只扫
+PR body），本仓禁止直推，故 PR body 是唯一关单通道——**合入后核销 issue
+实际关闭**，未关按同因手工补。失效排查顺序：词边界 → 代码围栏 → base 分支。
+
 ## CI 分层
 
 PR 合入路径只运行轻量 required checks。完整 backend tests、frontend tests/build 和
