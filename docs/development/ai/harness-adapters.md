@@ -70,9 +70,10 @@ Harness 的自动发现规则会随版本变化。新增专用适配前必须用
 `AGENTS.md`、`CLAUDE.md` 与 Harness 适配文件属于共享元文件，同一时间只由一个
 Execution 串行修改。并行执行语义的权威源是
 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)
-（Accepted v1.0）与 [`execution-contract.md`](execution-contract.md)；
+（Accepted）与 [`execution-contract.md`](execution-contract.md)；
 [`2026-09-04-multi-agent-parallel-convention.md`](../../notes/process/2026-09-04-multi-agent-parallel-convention.md)
-已被取代，其元文件串行化与派生视图实践经契约 §9 过渡条款保留。
+已被取代，其元文件串行化实践继续有效，派生视图保留为 ground truth 交叉验证
+手段（契约 §5.1/§9）。
 
 ## P2 Adapter：会话启动动作（上下文供给，非路由）
 

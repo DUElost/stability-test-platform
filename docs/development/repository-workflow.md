@@ -17,18 +17,23 @@ ADR。模板与判定见 [`docs/notes/README.md`](../notes/README.md)。
 ## 并行 worktree
 
 并行执行语义的权威源是
-[`ADR-0034`](../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted v1.0）与
-[`execution-contract.md`](ai/execution-contract.md)；其 Registry（P1）尚未实现且
-启动判据未触发，**现行操作规范为契约 §9 过渡条款**——下列规则（源自
+[`ADR-0034`](../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted）与
+[`execution-contract.md`](ai/execution-contract.md)。Execution Registry（P1，
+`tools/dev/ai_work.py`）已落地并被采用——契约 §9 启动判据第 1 条（已计划的
+多 Harness 批次启动前预置就绪）已触发，**现行操作规范为契约正文协议**：
+开工 `ai_work.py status` 前检 + `declare` 领单，收尾 `finish` 与 GitHub
+reconcile；派生视图不再是主操作规范，降为 ground truth 交叉验证手段（契约 §9）。
+下列规则（源自
 [`2026-09-04-multi-agent-parallel-convention.md`](../notes/process/2026-09-04-multi-agent-parallel-convention.md)，
-其并行语义已被 ADR-0034 取代、相关实践经过渡条款保留）继续有效：
+其并行语义已被 ADR-0034 取代）继续有效：
 
-- 冲突靠开工前查看实际 worktree diff 避免，不依赖手写 WIP 状态；
+- 冲突靠开工前 Registry 前检与实际 diff 交叉验证避免，不依赖手写 WIP 状态；
 - 分片只用于冲突规避，不形成目录所有权；
 - `AGENTS.md`、`CLAUDE.md` 及 Harness 共享规则同一时间只由一个 Execution 修改；
 - 当前建议并发上限约 2–3，瓶颈以人的审阅吞吐为准。
 
-派生视图：
+派生视图（交叉验证；`effective_scope = declared ∪ derived` 中 derived 是 Git
+事实、声明不能覆盖，契约 §5.1）：
 
 ```bash
 for w in $(git worktree list --porcelain | awk '/^worktree /{print $2}'); do
@@ -39,8 +44,8 @@ for w in $(git worktree list --porcelain | awk '/^worktree /{print $2}'); do
 done
 ```
 
-Execution Registry（`ai_work.py`）按 ADR-0034 P1 分期落地，启动判据与过渡安排见
-`execution-contract.md` §9；判据未触发前不要手工维护任何登记状态。
+Registry 细则（写入协议、scope 语法与 overlap 谓词、三维状态、drift、reconcile）
+见 `execution-contract.md` §2–§7。
 
 ## PR 与 Merge Queue
 
