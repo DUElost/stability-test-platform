@@ -37,6 +37,16 @@ Gemini 系统指令与 USER_SETTINGS（无任何仓库规则）；`agy agents` �
 非交互会话用 `tools/dev/agy_with_rules.sh "<prompt>"`（把根 `AGENTS.md` 拼进
 prompt 前缀）；上游出现 agent/配置装载机制后本脚本退役。
 
+**机制层发现（同日，`--log-file` 诊断）**：agy 的规则装载走其声明式配置加载器
+（`declarative_config_loader.go`）的 `prompt section "user_rules"`——运行日志明示
+该节**当前为空被 skip**（同批还有 `mcp_servers`/`subagent_reminder` 等节）；
+`~/.gemini/antigravity-cli/settings.json`（含 `trustedWorkspaces`）中无 rules 字段。
+即「不读 AGENTS.md」的根因是**其规则装载清单里根本没有约定文件通道**，而非文件
+名或路径问题。另：**headless（-p）模式未 allow 的工具一律 auto-deny**（报错原文
+指引 `permissions.allow` 机制）；`--dangerously-skip-permissions` 在本构建触发
+Agent execution terminated——作为 coding agent 使用需先在**本机** settings.json
+配置 `permissions.allow`（本机配置边界，不入库），并注意该模式本构建稳定性存疑。
+
 ## 本地配置边界
 
 - `opencode.json`、`.claude/settings.local.json`、嵌套 `.claude/plan/` 及 Harness
