@@ -127,8 +127,8 @@ actionable 终点永远是「加确定性 gate 或加结构性防线」——测
 | Plan 不存 lifecycle（dispatcher 组装） | 结构自证（schema 无列可存） | plan schema | 已强制 |
 | Redis 只承载队列与瞬时通信 | 无 | — | **residual**（review 兜底） |
 | 生产 secure cookie / 受限 SameSite / CSRF | **运行时强制** | `backend/core/security.py:83` | 已强制 |
-| Pydantic v2 only | 无（backend 现存 `.dict(` 用例实证） | `backend/tests/` | **差异面检查收缩（#855）** |
-| 业务表名单数 | 无（`pr-migrate-empty-db` 拦迁移失败，不拦复数表名） | — | **差异面检查收缩（#855）** |
+| Pydantic v2 only | 无（backend 现存 `.dict(` 用例实证） | `backend/tests/` | **差异面检查收缩中**（`invariant-diff`，advisory 起步） |
+| 业务表名单数 | 无（`pr-migrate-empty-db` 拦迁移失败，不拦复数表名） | — | **差异面检查收缩中**（`invariant-diff`，advisory 起步） |
 | 已发布脚本 `default_params` 不可变 | **gate + 运行时 422** | `tools/dev/check-script-version-immutability.py` | 已强制 |
 | 前端 `types.ts` 与后端 schema 同步 | 无（手维护；typecheck 只查 TS 内部） | `frontend/package.json` 无生成器 | **residual**（review 兜底） |
 | Python 用 `python -m` 形式（总原则） | 无 | — | residual（scripts 内裸调用可入差异面清单） |
@@ -138,6 +138,11 @@ actionable 终点永远是「加确定性 gate 或加结构性防线」——测
 ②标准化分诊——降为三步决策树（同上），不建独立协议；③多 Harness 摄取
 验证——维持 ADR-0034 附录 A 手工验收矩阵（低频事件按需探针 + 结果固化
 进 ADR），连续金丝雀**否决**（负复利 + 为低频事件建常驻设施）。
+
+差集收缩的执行器是 `tools/dev/check_invariant_diff.py`（`invariant-diff`
+gate，入 check:pr/check:full）：对 PR 新增行做策展模式检查，**advisory
+不阻塞**（`--strict` 为转 BLOCK 接口）；噪声数据收齐后按棘轮裁决升格，
+接线同 S5x 映射表登记（`GATE_TO_CI_ANCHOR` 现记 None + 理由）。
 
 ## 8. 同日用户裁决记录（审计收口）
 | 待决点 | 裁决 |
@@ -157,3 +162,4 @@ actionable 终点永远是「加确定性 gate 或加结构性防线」——测
 | 2026-09-05 | S6 从观测升级为常驻入口行数/字节阻塞预算，新增 S8/S9 限制 CLAUDE import 与根章节，S10 守住新 Agent Note 头部；L1 收敛为 10 条启动契约，领域知识改走按需文档 |
 | 2026-09-07 | 新增 S12 ADR 索引一致性门禁（#867 五次复发后的确定性收口），一次性修复 9 处存量漂移（ADR-0002/0009/0011 主表状态、ADR-0032 主表+M7 版本、ADR-0034 头部行+主表+DOC-MAP+M7 版本） |
 | 2026-09-07 | §7.1 强制力覆盖图（#855 收口）：11 条硬不变量按运行时强制/gate/结构自证/residual 分类，行为验证层重建被第一原理否决（测量不产生约束力+负复利），差集收缩走差异面检查，residual 走棘轮 |
+| 2026-09-07 | 差集收缩执行器落地：`invariant-diff` gate（差异面策展模式，advisory 起步入 check:pr/full；`--strict` 为转 BLOCK 接口） |
