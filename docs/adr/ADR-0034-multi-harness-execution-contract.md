@@ -4,7 +4,8 @@
 - 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ v1.0 #865（**Accepted**，2026-09-06 用户人工终审批准）/ v1.1 #866（§2 细则迁出至 `execution-contract.md`，本文保留决策要点 + 指针）/ **v1.2 #877：P1 启动判据修订——增补「已计划的多 Harness 批次启动前预置就绪」（2026-09-07 用户裁决：本 ADR 立项背景即即将开展的多 Issue 集中修复与新需求开发，工具须先于场景就绪；判据全文见契约 §9 v1.1）**
 **v1.3 本版：附录 A 增补 Antigravity CLI 实测（2026-09-07，`agy 1.1.26 -p`：无仓库规则自动发现——根/嵌套 AGENTS.md、CLAUDE.md symlink、GEMINI.md 均不加载，引文诊断确认；供给=调用方前置 `tools/dev/agy_with_rules.sh`；P2 加载矩阵终验随之扩展为五家结论）**
 **v1.4 本版：附录 A 补机制层根因（规则装载=声明式配置 `user_rules` 节空被 skip——装载清单无约定文件通道）与官方迁移文档冲突记录（迁移文档声称解析 active directory 的 GEMINI/AGENTS.md，但 `-p` 非交互实测不符——待上游确认，澄清前 agy 供给一律走前置脚本）**
-**v1.5 本版：附录 A 分层装载实测补全——全局层（`~/.gemini/GEMINI.md` 与 `~/.gemini/AGENTS.md`，可逆探针实验）在 `-p` 下**均装载**，workspace 层仍全部不装载**（「agy 不装载 context」修正为「全局装载、workspace 不装载」）；仓库规则供给维持 `agy_with_rules.sh` 前置（全局层属本机个人配置，不放仓库规则）**
+**v1.5 #914：附录 A 分层装载实测补全——全局层（~/.gemini/GEMINI.md 与 ~/.gemini/AGENTS.md）在 -p 下均装载、workspace 层仍全部不装载；仓库规则供给维持 agy_with_rules.sh 前置**
+**v1.6 本版：Antigravity 定性裁决（用户 2026-09-07）——「带规则的高级顾问」，不纳入可承接 Requirement 的 Harness 名单（headless 工具循环三路径崩溃、无法独立完成 Execution 周期）；Registry `--harness` 不做名单硬校验，上游修复复测后可升格**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
@@ -145,6 +146,6 @@ AGENTS.md / CLAUDE.md / .cursor/rules / .codex    ← 各入口只保留最小�
 | Cursor Agent 2026.09.02 | ✅ live | 非交互需 `--trust` |
 | OpenCode 1.18.25 | ✅ live | 需本机 `opencode.json`（未跟踪）在启动目录树内 |
 | Claude Code 2.1.259 | ❌（子目录通道=CLAUDE.md） | 需显式 `--settings`（alias 对脚本不生效）；`unrecognized_model` 警告无害 |
-| Antigravity CLI（agy 1.1.26） | ❌ 实测（2026-09-07）：根/嵌套 `AGENTS.md`、`CLAUDE.md`（含 symlink）、`GEMINI.md` 均不自动加载——探针+引文+日志+stream-json 四重证据；机制=声明式配置 `user_rules` 节空被 skip；**与官方迁移文档声称的 GEMINI/AGENTS 解析冲突，待上游确认**；供给=调用方前置（`tools/dev/agy_with_rules.sh`） | `agy -p` 非交互可用；`agy agents` 空、无全局配置目录 |
+| Antigravity CLI（agy 1.1.26） | ❌ 实测（2026-09-07）：根/嵌套 `AGENTS.md`、`CLAUDE.md`（含 symlink）、`GEMINI.md` 均不自动加载——探针+引文+日志+stream-json 四重证据；机制=声明式配置 `user_rules` 节空被 skip；**与官方迁移文档声称的 GEMINI/AGENTS 解析冲突，待上游确认**；供给=调用方前置（`tools/dev/agy_with_rules.sh`） | `agy -p` 非交互可用；**定性=带规则的高级顾问，不承接 Requirement/Execution（2026-09-07 用户裁决）** |
 
 **延伸矩阵（#857）**：Claude `@AGENTS.md` import 解析——仓库根 ✅ / 子目录 ❌（`-p` 与 TUI 双模式，引文诊断证实字面行未展开、AGENTS.md 五章节零出现；cwd 相对存在同名文件亦不解析）。
