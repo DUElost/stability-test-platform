@@ -187,3 +187,87 @@ v0.4 技术内容**可以 Accepted**：核心契约空白（R2/R3/R6/R9 族）�
 裁决（R6 三维定位、R18 Competition 否决）收口干净。本节发现均不构成阻断——
 N1 建议 Accepted 前在 §2.3 补一句约束（或作为 P0 transition table 强制目录项）；
 N2–N5 可随 Accepted 前微修 PR 一并处理（合计约 5 行改动）。
+
+## 8. ADR-0034 开发工作完结确认（2026-09-07 追加，只读盘点）
+
+- **性质**：第三轮审查（v0.5，结论见上轮会话交付的 F1–F3）之后，对 ADR-0034 从
+  Accepted 到分期实施完成的终局盘点；只读，未改任何文件
+- **时点**：2026-09-07；盘点基线 = origin/main（当时 tip `3e072f62`）
+
+### 8.1 结论
+
+ADR-0034 的契约决策、评审收敛与全部分期实施均已完成，开发工作收口。
+
+### 8.2 契约生命周期（完结）
+
+- **Accepted v1.0**（PR #865，2026-09-06 用户人工终审批准）→ v1.1（#866 细则
+  迁出）→ **v1.2**（#877 P1 启动判据修订：已计划批次启动前预置就绪）
+- 版本链完整：v0.1(#858)–v0.5(#864)→v1.0(#865)→v1.1(#866)→v1.2(#877)
+- 评审闭环：R1–R30 两轮八源 synthesis 全部裁决完结；8 份审查文件 + synthesis
+  入库；上轮 F1（§2.4「以 diff 为准」与并集口径冲突）在细则迁出时已消解——
+  `execution-contract.md` 内无该句残留，仅「并集恒成立 + drift 提示」（§5.1）
+- 细则权威源：`docs/development/ai/execution-contract.md` Living **v1.1**（10 节），
+  ADR 收缩为决策要点 + 指针，冲突以 contract 为准已明示
+
+### 8.3 分期实施（P0a–P3 完结，P4 按设计不启动）
+
+| 期 | PR | 落地 |
+|---|---|---|
+| P0a | #866 | contract 建立 + ADR §2 细则迁出（v1.1） |
+| P0b | #869 | supersede 标注（09-04 note 头部已标「已被 ADR-0034 Accepted v1.0 取代」）+ 薄入口接线 |
+| G2 试点 | #870+#873+#875 | scoped AGENTS.md 真身 + CLAUDE.md symlink 薄壳；Cursor/Codex 补测后 **4/4 全通过** |
+| P1 | #878 | `tools/dev/ai_work.py` Execution Registry MVP；`check:quick` 已含 ai-work gate |
+| P2 | #879 | Adapter（whoami + heartbeat 指引） |
+| P2b | #892 | Claude 根 bootstrap 供给 + 加载矩阵终验 |
+| P3 | #893 | drift gate（advisory）——commit 自述「ADR-0034 分期最后一块」 |
+| P4 | — | Integration Planner：观察项，不启动 = 正确终态 |
+| #854 | #876 | 治理门禁逃逸向量修复，issue CLOSED |
+
+### 8.4 收尾残差（3 项，均非未完结的开发工作）
+
+1. **README 版本滞后**：ADR 头已 v1.2，但 `docs/adr/README.md` 主表与 M7 看板行
+   仍写 v1.0——v1.1/v1.2 两次修订均漏更（同族缺陷第 N 次复发）。一行同步。
+2. **#855 [OPEN] deferred**：行为验证缺口——跟踪项（机制已随 P3 drift gate 落地），
+   issue 闭环待实际运行验证后由人关闭。
+3. **#857 [OPEN]**：Claude `@import` 子目录解析缺陷——工具链侧缺陷，ADR Revisit
+   跟踪项（根层 import 形态复评触发条件）；G2 已以 symlink 形态绕开，不阻塞。
+
+### 8.5 现场一致性
+
+工作树干净、本地与 origin 同步；`check_governance_surface.py --check` 全绿
+（S1–S11、S5x）；`ai_work.py` 存在且已接线 run_gates（check:quick 含 ai-work；
+ai-drift 为独立 advisory）。
+
+## 9. 批次第一单完成确认（2026-09-07 追加，只读核验）
+
+- **性质**：多 Harness 批次第一单（#880 codec 修复）交付声明的只读对证；P1
+  交付物（ai_work）首次实战验证记录
+- **核验对象**：main tip `3e072f62`（PR #899）；叙事声明逐项对证
+
+### 9.1 逐项核验
+
+| 声明 | 核验 | 证据 |
+|---|---|---|
+| main tip = `3e072f62`，#899 合入 | ✅ | tip 即 PR #899 merge（`fix/880-registry-codec`，MERGED 2026-09-07T04:55:46Z）；含 ReDoS 修复 `6ce81f80` 与 retrigger `db3d3276` |
+| #880 自动 CLOSED | ✅ | `[closed]`，标题精确匹配：「ai_work.py registry codec：requirement 以 '#' 开头或含 ': ' 时 declare 报 [OK]、随后所有命令崩（#878 引入）」 |
+| 修复 1+2+3 全落 | ✅ | `normalize_requirement_id` + REFUSED 路径；`_quote` 含 # 注释防护（行首裸 # 会被当注释）+ dump key 走 `_quote`；corrupt-<stamp> 隔离 + `load_locked` + 「#880 三缺口红绿」自测 |
+| Registry 两条完整生命周期 | ✅ | `.git/ai-work/registry.yaml`（`--path-format=absolute` 落位正确）：`fix-825-gates-parity` 与 `fix-880-registry-codec`，均 FINISHED / integration_cache=MERGED / 含 pr_number、test_impact、scope 全字段 |
+| Dogfood 工具链实战 | ✅ | `ai_work.py status`（契约规定严格只读）实况：两条记录 `integration=MERGED risk=no`——真值表「MERGED 出局」行为正确 |
+| 工作树干净 | ✅ | main 与 origin 同步，无未提交改动 |
+| CodeQL 修复 | ✅ | PR #899 内独立 commit `6ce81f80`（ReDoS 消除）；合入本身证明 required checks 通过 |
+
+### 9.2 一处叙事偏差（认知修正，不影响结论）
+
+**「#880 是 R01 架构审查台账（#891）的发现」不成立**：#891 台账全文 10 项为
+R01-F01–F10，对应 **#881–#890，全部是平台架构项**（SID registry 续期、PlanUpdate
+422、lifespan 清理、TESTING=1 加载 .env.backend、/health SAQ、REDIS_URL 明文、
+SID unregister 原子性、版本门禁、表名单数、领导选举 fail-open）——**不含 #880**。
+#880 编号低于 #881（先于台账 issues 登记），标题标注「（#878 引入）」，属工具链
+自身使用/审查链路的独立发现。优先级判定（工具链崩溃级、阻塞批次使用）不受影响。
+
+### 9.3 结论
+
+叙事主体事实全部属实：批次第一单已完成真实闭环——修复落码、红绿自测、CI 含
+CodeQL 通过、合入 main、issue 自动关闭、Registry 留下两条 MERGED 终态真实记录。
+多 Harness 批次可以正式开跑；需保留的认知修正是 #880 的发现归属（非 R01 台账
+项）。
