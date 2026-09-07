@@ -1,6 +1,8 @@
 # Agent 侧 scan / upload
 
-> 仅在改动 `backend/agent/` 时加载。
+> 仅在改动 `backend/agent/` 时加载。**根启动契约（总原则/8 条硬不变量）住仓库根
+> `AGENTS.md`**——本文件只覆盖 scoped 细节，改共享层（根规则/依赖/workflows）前
+> 先读它（#857 纵深防御）。
 > AEE 崩溃检测链细则见 `aee/AGENTS.md`；
 > **控制面侧的 merge / SAQ 链 / 风险评级 / NFS 路径约定见
 > `docs/design/2026-scan-upload-merge-contract.md`**。
