@@ -24,11 +24,18 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 | Claude Code | 根及目录内 `CLAUDE.md`、`.claude/settings.json`、`.claude/skills/` | 架构入口、领域上下文、权限和显式技能 |
 | Codex | `AGENTS.md`、`.codex/hooks.json` | 共享约定入口和确定性检查钩子 |
 | OpenCode | `AGENTS.md`；本地 `opencode.json` 不入库 | 共享约定入口；provider、模型和凭据属于本机配置 |
-| Antigravity CLI | `AGENTS.md` | 当前没有专用的受版本控制适配文件 |
+| Antigravity CLI | 无（`agy 1.1.26 -p` 实测不自动发现任何仓库规则文件） | 规则供给走调用方前置 `tools/dev/agy_with_rules.sh`（2026-09-07 实测，见下） |
 | 其他 Harness | `AGENTS.md` | 没有专用适配时，从共享约定和文档地图进入 |
 
 Harness 的自动发现规则会随版本变化。新增专用适配前必须用对应版本实测加载行为；
 不能仅凭文件名推断规则已经生效。
+
+**Antigravity CLI 实测（2026-09-07，`agy -p` 非交互）**：根与嵌套 `AGENTS.md`、
+`CLAUDE.md`（含 symlink）、`GEMINI.md` 均不自动加载——引文诊断确认其上下文仅含
+Gemini 系统指令与 USER_SETTINGS（无任何仓库规则）；`agy agents` 空、无全局配置
+目录。因此该 Harness **没有仓库文件的自动加载通道**，规则供给只能由调用方前置：
+非交互会话用 `tools/dev/agy_with_rules.sh "<prompt>"`（把根 `AGENTS.md` 拼进
+prompt 前缀）；上游出现 agent/配置装载机制后本脚本退役。
 
 ## 本地配置边界
 
