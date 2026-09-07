@@ -50,16 +50,16 @@
 | 编号 | 标题 | 状态 | 优先级 | 目标里程碑 | 类型 |
 |---|---|---|---|---|---|
 | [ADR-0001](./ADR-0001-control-plane-and-agent-architecture.md) | 控制面 + 执行面分层架构 | Accepted | - | - | 已实现 |
-| [ADR-0002](./ADR-0002-single-process-with-internal-schedulers.md) | 单进程后端 + 内置后台调度线程 | Accepted | - | - | 已实现 |
+| [ADR-0002](./ADR-0002-single-process-with-internal-schedulers.md) | 单进程后端 + 内置后台调度线程 | Superseded | - | - | 已实现 |
 | [ADR-0003](./ADR-0003-task-run-state-machine-and-device-lock-lease.md) | 任务状态机与设备锁租约机制 | Accepted | - | - | 已实现（2026-03-16 更新：统一锁服务 + 会话看门狗） |
 | [ADR-0004](./ADR-0004-heartbeat-driven-host-device-liveness.md) | 心跳驱动的主机/设备在线性模型 | Accepted | - | - | 已实现（2026-03-16 更新：watchdog 接管心跳超时） |
 | [ADR-0005](./ADR-0005-database-strategy-sqlite-first-postgresql-ready.md) | SQLite 起步 + PostgreSQL 兼容演进 | Deprecated | - | - | 已废弃，使用 PostgreSQL |
 | [ADR-0006](./ADR-0006-realtime-communication-rest-plus-websocket.md) | REST + WebSocket 的实时通信分工 | Accepted | - | - | 已实现 |
 | [ADR-0007](./ADR-0007-tool-template-workflow-extension-model.md) | 工具配置 + 任务模板 + 工作流扩展模型 | Accepted | - | - | 已实现 |
 | [ADR-0008](./ADR-0008-schema-migration-governance-alembic-only.md) | 统一 Schema 迁移治理（Alembic Only） | Accepted | P0 | M1 | 预扩展/重构 |
-| [ADR-0009](./ADR-0009-websocket-auth-and-endpoint-config-unification.md) | WebSocket 鉴权与端点配置统一化 | Accepted | P0 | M1 | 已实现（2026-03-24） |
+| [ADR-0009](./ADR-0009-websocket-auth-and-endpoint-config-unification.md) | WebSocket 鉴权与端点配置统一化 | Superseded | P0 | M1 | 已实现（2026-03-24） |
 | [ADR-0010](./ADR-0010-deployment-pipeline-jobification.md) | 部署能力作业化（异步、幂等、可回放） | Superseded | P1 | M2 | 已被 ADR-0020 取代（2026-06-12） |
-| [ADR-0011](./ADR-0011-observability-and-alerting-evolution.md) | 可观测性与告警体系演进 | Proposed | P1 | M2 | 预扩展/重构 |
+| [ADR-0011](./ADR-0011-observability-and-alerting-evolution.md) | 可观测性与告警体系演进 | Accepted | P1 | M2 | 第一层已实现 |
 | [ADR-0012](./ADR-0012-post-completion-pipeline-jira-automation.md) | 后处理流水线到 JIRA 自动提交演进 | Accepted | P2 | M3 | 第 1 层已实现 |
 | [ADR-0013](./ADR-0013-frontend-feature-expansion.md) | 前端功能模块扩展（任务实例、问题追踪、环境资源） | Accepted | P1 | M2 | 已实现 |
 | [ADR-0014](./ADR-0014-pipeline-execution-engine.md) | Pipeline 执行引擎架构 | Accepted | P1 | M2 | 已实现（2026-03-16 更新：锁验证 + 参数表单） |
@@ -80,21 +80,21 @@
 | [ADR-0029](./ADR-0029-project-taxonomy-and-param-layering.md) | 项目分类域（TestProject 登记簿 + facet 分类） | Accepted | P1 | M7 | v2.5：**归属派生化**（`device.project_id` 删列改 JOIN；`project_model` 为成员唯一事实源；哨兵 GENERIC/LEGACY 出表、`plan.project_id` 恢复可空；facet 减列 + jira 校验；详情页换问题）。**M1→M4 已落地**。v2.4：登记簿产品面只列人工 `USER` 项目；P1 六个回填 key 为 `SEED`，不进 `/projects`。项目模型收窄为**登记簿**（客户 / 关系 / 形态 / jira 映射）；APK 差异由**脚本端设备指纹路由**吸收（`backend=auto` 先例，路由表住工具目录 + step_trace 记 sha256）。**D1/D4/D5/D7/D8/D9 与 D6 的 `applicable` 已挂起**（原文保留、各有复议触发条件，未触发前不得重提）；生效的是 D2/D3/D6 `specialty`。落地 P1–P3 最小形态。背景分析见 [reviews](../reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md) |
 | [ADR-0030](./ADR-0030-multi-case-suite-management.md) | 多用例平台化管理（test_suite / test_case + 外部管理面） | Accepted | P0+P1 | M7 | v1.9：P0 验收✅ + **P1 全部✅ + D6 真机冒烟✅**（#404）+ **P2 核心✅**（#429：套件管理 UI + `test_case_result`/`TestCaseResultsCard`）+ **mtbf 绑定翻转硬拒**（v1.8）。**未做**：JobArtifact `report` 白名单。背景：[reviews](../reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) |
 | [ADR-0031](./ADR-0031-platform-ai-assistant.md) | 平台 AI 助手（运维域 LLM 助手与风险分级自治边界） | Accepted | P1 | M8 | v1.5：阶段二全栈 ✅（T0-T3 四级自治 / httpx 载体 / DB+Fernet / RunConsole / 角色裁剪工具面 / 二轮审核 H1–M5）。设计见 [docs/design/2026-08-27-platform-ai-assistant.md](../design/2026-08-27-platform-ai-assistant.md) |
-| [ADR-0032](./ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) | 展锐与 MTK 并列日志链路（Watcher + 归档）（#463 / #73） | Accepted | P1 | M7 | v0.6：platform 路由；w1 Watcher + D4c 归档；`dedup/{run}/{mtk,unisoc}/` + 双 merge；TAG 共用 |
+| [ADR-0032](./ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) | 展锐与 MTK 并列日志链路（Watcher + 归档）（#463 / #73） | Accepted | P1 | M7 | v0.7：platform 路由；w1 Watcher + D4c 归档；`dedup/{run}/{mtk,unisoc}/` + 双 merge；TAG 共用 |
 | [ADR-0033](./ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（#745） | Accepted | P1 | M7 | v1.1：D0 阻断全量入仓（分级准入）；D1 三层宿主隔离；D2 Tool Contract（退出码命名空间分层）；D3 Manifest 发布格式 × DB catalog 唯一权威；D4 防腐适配器（接口只包 vendor CLI）；与 ADR-0032 行为/结构权威分家 |
-| [ADR-0034](./ADR-0034-multi-harness-execution-contract.md) | 多 Harness 并行执行契约与执行登记（#855 / #857） | Accepted | P1 | M7 | v1.0：选择权原则（Harness 由开发者决定）/ 三维状态模型 lifecycle×liveness×integration（ADR 实现选择，非冻结条款）/ Registry=visibility-only 非调度器 / `--path-format=absolute` 唯一发现方式 / effective scope=declared∪derived(diff) 并集恒成立+drift 提示 / overlap 真值表（开放 PR 恒在风险窗口）/ drift gate 非 merge queue / G2 真身+薄壳（symlink 优先）。执行细则权威源 `docs/development/ai/execution-contract.md`（P0a 建立）；两轮八源多 Harness 评审综合见 [reviews](../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md) |
+| [ADR-0034](./ADR-0034-multi-harness-execution-contract.md) | 多 Harness 并行执行契约与执行登记（#855 / #857） | Accepted | P1 | M7 | v1.6：选择权原则（Harness 由开发者决定）/ 三维状态模型 lifecycle×liveness×integration（ADR 实现选择，非冻结条款）/ Registry=visibility-only 非调度器 / `--path-format=absolute` 唯一发现方式 / effective scope=declared∪derived(diff) 并集恒成立+drift 提示 / overlap 真值表（开放 PR 恒在风险窗口）/ drift gate 非 merge queue / G2 真身+薄壳（symlink 优先）/ Antigravity=带规则的高级顾问不入 Harness 名单。执行细则权威源 `docs/development/ai/execution-contract.md`（P0a 建立）；两轮八源多 Harness 评审综合见 [reviews](../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md) |
 
 ## Proposed 里程碑看板（2026 上半年）
 
 | 里程碑 | 目标日期 | 包含 ADR |
 |---|---|---|
 | M1 | 2026-03-15 | ADR-0008, ADR-0009 |
-| M2 | 2026-04-15 | ADR-0011（仍 Proposed）；ADR-0010 已由 ADR-0020 取代；ADR-0013/0014/0016/0018 已落地 |
+| M2 | 2026-04-15 | ADR-0011（已 Accepted：第一层指标落地）；ADR-0010 已由 ADR-0020 取代；ADR-0013/0014/0016/0018 已落地 |
 | M3 | 2026-05-15 | ADR-0012（第 2-3 层）, ADR-0019, ADR-0020, ADR-0021–0023 |
 | M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
 | M5 | 2026-07 | ADR-0026 P0–P2（规模化执行正确性 + 控制面减负） |
 | M6 | 待定 | ADR-0027（控制面水平扩展；重启条件见 ADR-0025 D1） |
-| M7 | 进行中 | ADR-0029（项目分类域·登记簿；v2.5 派生归属 M1–M4 **已落地**）；ADR-0030（**Accepted** v1.9：P0 ✅ / P1 ✅ / D6 ✅ / **P2 核心 ✅** #429）；ADR-0031（**Accepted**：阶段二全栈 ✅，2026-08-28）；ADR-0032（**Accepted** v0.6：展锐 Watcher+归档，#463/#73）；ADR-0033（**Accepted** v1.1：外部工具接入契约与包管理解耦，#745）；ADR-0034（**Accepted** v1.0：多 Harness 执行契约，#855/#857） |
+| M7 | 进行中 | ADR-0029（项目分类域·登记簿；v2.5 派生归属 M1–M4 **已落地**）；ADR-0030（**Accepted** v1.9：P0 ✅ / P1 ✅ / D6 ✅ / **P2 核心 ✅** #429）；ADR-0031（**Accepted**：阶段二全栈 ✅，2026-08-28）；ADR-0032（**Accepted** v0.7：展锐 Watcher+归档，#463/#73）；ADR-0033（**Accepted** v1.1：外部工具接入契约与包管理解耦，#745）；ADR-0034（**Accepted** v1.6：多 Harness 执行契约，#855/#857） |
 
 ## 维护约定
 

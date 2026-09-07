@@ -87,7 +87,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans -H "$AUTH" \
   "barrier_max_wait_seconds": 14400,
   "steps": [
     {"step_key": "flash", "script_name": "flash_firmware",
-     "script_version": "1.2.0", "stage": "init", "sort_order": 10,
+     "script_version": "1.3.10", "stage": "init", "sort_order": 10,
      "timeout_seconds": 2400, "stall_seconds": 900, "retry": 1},
     {"step_key": "check", "script_name": "check_device",
      "script_version": "1.0.0", "stage": "init", "sort_order": 20},
@@ -121,7 +121,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run/preview -H "$AU
 
 # 3. 正式触发
 curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
-  -H "Content-Type: application/json" -d "{\"device_ids\": [$DEVICES], \"note\": \"v1.2.0 首台验证\"}"
+  -H "Content-Type: application/json" -d "{\"device_ids\": [$DEVICES], \"note\": \"v1.3.10 首台验证\"}"
 ```
 
 验证点（PlanRun 详情 / step_trace）：
