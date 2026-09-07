@@ -1,12 +1,13 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Accepted（v1.7）**
+- 状态：**Accepted（v1.8）**
 - 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ v1.0 #865（**Accepted**，2026-09-06 用户人工终审批准）/ v1.1 #866（§2 细则迁出至 `execution-contract.md`，本文保留决策要点 + 指针）/ **v1.2 #877：P1 启动判据修订——增补「已计划的多 Harness 批次启动前预置就绪」（2026-09-07 用户裁决：本 ADR 立项背景即即将开展的多 Issue 集中修复与新需求开发，工具须先于场景就绪；判据全文见契约 §9 v1.1）**
 **v1.3 本版：附录 A 增补 Antigravity CLI 实测（2026-09-07，`agy 1.1.26 -p`：无仓库规则自动发现——根/嵌套 AGENTS.md、CLAUDE.md symlink、GEMINI.md 均不加载，引文诊断确认；供给=调用方前置 `tools/dev/agy_with_rules.sh`；P2 加载矩阵终验随之扩展为五家结论）**
 **v1.4 本版：附录 A 补机制层根因（规则装载=声明式配置 `user_rules` 节空被 skip——装载清单无约定文件通道）与官方迁移文档冲突记录（迁移文档声称解析 active directory 的 GEMINI/AGENTS.md，但 `-p` 非交互实测不符——待上游确认，澄清前 agy 供给一律走前置脚本）**
 **v1.5 #914：附录 A 分层装载实测补全——全局层（~/.gemini/GEMINI.md 与 ~/.gemini/AGENTS.md）在 -p 下均装载、workspace 层仍全部不装载；仓库规则供给维持 agy_with_rules.sh 前置**
 **v1.6 本版：Antigravity 定性裁决（用户 2026-09-07）——「带规则的高级顾问」，不纳入可承接 Requirement 的 Harness 名单（headless 工具循环三路径崩溃、无法独立完成 Execution 周期）；Registry `--harness` 不做名单硬校验，上游修复复测后可升格**
 **v1.7 本版：Role 定位收敛（用户 2026-09-08 裁决）——Role=保留的 Execution 元数据与未来扩展点，当前默认且唯一实际运行角色为 `implementation`（registry 空串视为缺省），特殊 Role 暂不进入主执行路径；§2.7 P2 的「会话启动时知晓自身 Role」从必交付降级为 deferred capability（不要求 Harness 启动时自动注入、不要求所有 Harness 对所有 Role 等价支持），不为「完成 P2」补建 Role 运行机制；原契约「role 定义与供给细则归 P2 Adapter」条款同步撤回，契约 §1.2 role 行已重写。P2 现存待交付项仅剩 heartbeat wrapper**
+**v1.8 本版：Role 收敛 Revisit 两项闭环（用户 2026-09-08 裁决）——①role 缺省归一化：declare 缺省写入 implementation（历史空串同义读取、不迁移），实现 ai_work.py `default_role` 同 PR；②Role 扩展再开启条件成文：仅「声明面消费 Role」的真实需求（差异化登记纪律/门禁判定/overlap 处理）构成触发，经用户裁决走契约新版本 + ADR 增补，「多一种标签写法」不构成触发。细则均落契约 §1.2**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
