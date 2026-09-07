@@ -18,7 +18,8 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
   S6  常驻入口行数/字节预算，防止按需细节重新膨胀进启动上下文
   S7  .claude/skills/*/SKILL.md frontmatter：name 与目录一致、description 非空
       （写坏 = skill 对 agent 静默不存在，与 S1/S3 同故障类）
-  S8  CLAUDE.md 只允许 @import 最小 AGENTS.md，不得递归导入文档地图或领域文档
+  S8  CLAUDE.md 双形态（#857）：指向 AGENTS.md 的 symlink（内容直读，子目录
+      ancestor 加载即送达）或恰含 `@AGENTS.md` 单条 import——不得递归导入
   S9  根入口只允许固定的启动级章节；三级及以下（含 ####+ 深层）一律禁止
   S10 class 目录内 Agent Note 必须日期命名（yyyy-mm-dd-主题.md），且 2026-09-05 起
       新增 Note 的 Status/Class 头部与 class 目录一致
@@ -81,7 +82,7 @@ def check_imports(text: str, resolve) -> list[str]:
 
 
 def check_resident_imports(text: str) -> list[str]:
-    """S8: 常驻 CLAUDE import 只允许最小共享启动契约。"""
+    """S8（经典形态）：常驻 CLAUDE import 只允许最小共享启动契约。"""
     imports = []
     in_fence = False
     for line in text.splitlines():
@@ -92,8 +93,26 @@ def check_resident_imports(text: str) -> list[str]:
             imports.append(line.strip()[1:])
     allowed = ["AGENTS.md"]
     if imports != allowed:
-        return [f"S8 CLAUDE.md: @import 必须且只能是 {allowed!r}，实际 {imports!r}"]
+        return [
+            f"S8 CLAUDE.md: @import 必须且只能是 {allowed!r}，实际 {imports!r}"
+            "（或改为指向 AGENTS.md 的 symlink，见 #857 双形态）"
+        ]
     return []
+
+
+def check_claude_entry_form(text: str, is_symlink: bool, link_target: str = "") -> list[str]:
+    """S8 双形态（#857 根契约绕过，G2 真身+薄壳上移到根）：
+
+    - symlink 形态：CLAUDE.md → AGENTS.md，内容直读零 @import——子目录会话
+      经 ancestor 加载即送达根契约（@import 仅 cwd 级生效的上游缺陷无法命中）；
+    - 经典形态：恰含 `@AGENTS.md` 单条 import（根 cwd 启动时展开）。"""
+    if is_symlink:
+        if os.path.basename(link_target) != "AGENTS.md":
+            return [
+                f"S8 CLAUDE.md: symlink 形态必须指向 AGENTS.md（实际 {link_target!r}）"
+            ]
+        return []
+    return check_resident_imports(text)
 
 
 _MD_LINK = re.compile(r"\]\(([^)\s]+)\)")
@@ -511,9 +530,11 @@ def run_check() -> int:
 
     claude_md_path = os.path.join(ROOT, "CLAUDE.md")
     claude_md = open(claude_md_path, encoding="utf-8").read()
+    claude_is_link = os.path.islink(claude_md_path)
+    claude_link = os.readlink(claude_md_path) if claude_is_link else ""
     resolve_from_root = lambda rel: os.path.join(ROOT, rel)  # noqa: E731
     issues += check_imports(claude_md, resolve_from_root)
-    issues += check_resident_imports(claude_md)
+    issues += check_claude_entry_form(claude_md, claude_is_link, claude_link)
 
     link_files = [
         ("CLAUDE.md", ROOT),
@@ -609,9 +630,15 @@ def run_check() -> int:
         issues += check_gate_ci_mapping(gates_src, workflows)
 
     for rel in RESIDENT_BUDGETS:
+        # #857 双形态：CLAUDE.md 为 symlink 时内容即 AGENTS.md，行数/字节与
+        # 章节由 AGENTS.md 侧的同名检查覆盖，不按 CLAUDE.md 的更紧预算重复计
+        if rel == "CLAUDE.md" and claude_is_link:
+            continue
         text = open(os.path.join(ROOT, rel), encoding="utf-8").read()
         issues += check_resident_budget(rel, text)
     for rel in ROOT_HEADING_ALLOWLIST:
+        if rel == "CLAUDE.md" and claude_is_link:
+            continue  # 同上：symlink 形态的章节结构由 AGENTS.md 白名单约束
         text = open(os.path.join(ROOT, rel), encoding="utf-8").read()
         issues += check_root_headings(rel, text)
     agents_text = open(os.path.join(ROOT, "AGENTS.md"), encoding="utf-8").read()
@@ -704,6 +731,21 @@ def run_self_test() -> int:
         "S8 递归导入文档地图",
         lambda: check_resident_imports("# T\n\n@AGENTS.md\n\n@docs/DOC-MAP.md\n"),
         True,
+    )
+    expect(
+        "S8 symlink 形态合法（#857）",
+        lambda: check_claude_entry_form("# 契约内容直读\n", True, "AGENTS.md"),
+        False,
+    )
+    expect(
+        "S8 symlink 指错真身",
+        lambda: check_claude_entry_form("# x\n", True, "docs/DOC-MAP.md"),
+        True,
+    )
+    expect(
+        "S8 双形态互斥（symlink 下不查 import）",
+        lambda: check_claude_entry_form("无任何 import 行\n", True, "AGENTS.md"),
+        False,
     )
 
     expect("S2 好 (目指本文件所在目录)", lambda: check_links("见 [本文件](check_governance_surface.py)", os.path.dirname(os.path.abspath(__file__)), "t"), False)

@@ -55,6 +55,10 @@
 | 生产只读诊断 | [`production-diagnostics.md`](docs/operations/production-diagnostics.md) |
 | Harness 适配与本地配置 | [`harness-adapters.md`](docs/development/ai/harness-adapters.md) |
 | 并行 Execution 契约 | [`execution-contract.md`](docs/development/ai/execution-contract.md) |
+| 执行状态机与 Agent 终态协议 | [`07-execution-protocol.md`](docs/design/07-execution-protocol.md) |
+| 存储角色与路径 | [`2026-storage-roles-and-aliases.md`](docs/design/2026-storage-roles-and-aliases.md) |
+| 环境变量清单 | [`environment-variables.md`](docs/development/environment-variables.md) |
+| ADR 状态 | [`docs/adr/README.md`](docs/adr/README.md) |
 
 ## 提交前
 

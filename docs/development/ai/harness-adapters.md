@@ -93,7 +93,7 @@ Execution 串行修改。并行执行语义的权威源是
   （declare/update/finish）刷新自身 `last_seen`；
 - 各 Harness 的自动加载差异（Codex/Cursor/OpenCode 读 scoped `AGENTS.md`；
   Claude 经 `CLAUDE.md` symlink 薄壳）见本文件上方适配面表与 ADR 附录 A；
-  **Claude 子目录下根启动契约不自动加载（#857）**——非交互会话用
-  `tools/dev/claude_with_root.sh "<prompt>"`（已验证的根供给 wrapper，
-  2026-09-07 子目录双题探针 Q1/Q2 双绿）；交互 TUI 从仓库根启动，或遵循
-  scoped 真身头部的根指针人工读根 `AGENTS.md`。
+- **#857 已在仓库侧绕过（2026-09-08）**：根 `CLAUDE.md` 转为 `AGENTS.md`
+  symlink（G2 上移到根）——@import 通道消失，子目录会话（TUI/-p）经
+  ancestor 加载直读完整契约（实测子目录裸跑 `claude -p` 复述硬不变量 ✓）；
+  `claude_with_root.sh` 降后备；#857 保持 open 作上游哨兵（探针对照行）。
