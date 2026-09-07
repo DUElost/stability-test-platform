@@ -38,11 +38,14 @@ prompt 前缀）。机制层：规则装载走 `declarative_config_loader.go` �
 `prompt section "user_rules"`（`~/.gemini/antigravity-cli/settings.json` 无此字段，
 空被 skip）——装载清单里没有约定文件通道，非路径问题。
 
-**与官方文档冲突（待上游确认）**：[迁移文档](https://antigravity.google/docs/cli/gcli-migration/)
-称会解析 active directory 的 `GEMINI.md`/`AGENTS.md`（另加载全局 `~/.gemini/GEMINI.md`），
-但 `-p` 实测（信任/非信任路径 × 根/嵌套 × 两类文件）均不装载。可能解释：文档描述
-交互模式行为 / 需 onboarding 激活 / 超前于 1.1.26 实装。**冲突澄清前，agy 会话规则
-供给一律走前置脚本，不依赖文档口径。**另：**headless（-p）模式未 allow 的工具一律 auto-deny**（报错原文
+**分层装载实测（2026-09-07，`-p` 模式）**：**全局层生效、workspace 层不装载**——
+在 `~/.gemini/GEMINI.md` 与 `~/.gemini/AGENTS.md` 放唯一探针串后（可逆实验，测后
+删除），agy `-p` 会话上下文**两个都出现**；而 workspace 层（信任/非信任路径 ×
+仓库根/嵌套的 `AGENTS.md`/`GEMINI.md`/`CLAUDE.md` symlink）仍全部不装载。[官方迁移
+文档](https://antigravity.google/docs/cli/gcli-migration/) 声称会解析 active
+directory 的 `GEMINI.md`/`AGENTS.md`——与 workspace 层实测冲突，待上游确认。
+**冲突澄清前，仓库规则供给一律走 `agy_with_rules.sh` 前置**；全局层通道属
+**本机个人配置**（影响所有 agy 会话与所有项目），不放仓库规则（本地配置边界）。另：**headless（-p）模式未 allow 的工具一律 auto-deny**（报错原文
 指引 `permissions.allow` 机制）；`--dangerously-skip-permissions` 在本构建触发
 Agent execution terminated——作为 coding agent 使用需先在**本机** settings.json
 配置 `permissions.allow`（本机配置边界，不入库），并注意该模式本构建稳定性存疑。

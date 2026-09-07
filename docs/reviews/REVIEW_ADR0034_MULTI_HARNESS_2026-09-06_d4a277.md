@@ -1,17 +1,26 @@
-# ADR-0034 多 Harness 执行契约 —— 只读评审（v0.3 → v0.4 两轮）
+# ADR-0034 多 Harness 执行契约 —— 只读评审与验收（v0.3 → v0.5 → Accepted → 批次首单）
 
-- **状态**：Living（第一轮 v0.3 已结稿；第二轮 v0.4 结论见 §7–§10）
-- **日期**：2026-09-06
-- **性质**：**只读评审**（非 ADR、非 Agent Note）——两轮均**未改动被评对象任何一行**
-- **被评对象**：[`ADR-0034`](../adr/ADR-0034-multi-harness-execution-contract.md)——**第一轮 v0.3**（§0–§6）、**第二轮 v0.4**（§7–§10）
+- **状态**：Living（评审三轮已结稿；第四部分为完结状态确认，第五部分为批次首单 dogfood 验收）
+- **日期**：2026-09-06（§0–§14）；2026-09-07 增补（§15–§18）
+- **性质**：**只读评审 / 只读确认**（非 ADR、非 Agent Note）——全部环节均**未改动被评对象任何一行**
+- **被评对象**：[`ADR-0034`](../adr/ADR-0034-multi-harness-execution-contract.md)——**v0.3**（§0–§6）、**v0.4**（§7–§10）、**v0.5**（§11–§14）、**完结状态**（§15–§16）、**批次首单**（§17–§18）
 - **产出会话**：resume `afacd042-6df8-47f3-b632-a14ad6d4a277`（后六位 `d4a277`，文件名尾缀）
 - **评审范围**：ADR 全文（§1–§6 + 附录 A）、配套 note [`2026-09-06-adr-0034-draft.md`](../notes/process/2026-09-06-adr-0034-draft.md)、八源综合裁决 [`REVIEW_…_synthesis.md`](./REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)。**未读**：方案原始全文（折叠部分）与其余 7 源原始报告，故不对 ADR 外细节、及 R 编号映射本身的准确性作独立判断——第二轮仅核验**各 R 项在 v0.4 中的落点**
 - **方法**：仓库内直接核验（行数、引用文件存在性、`git rev-parse` 行为实测、关联 issue/PR 状态、文档同步项逐条外部核验）+ 与既有约定（[`2026-09-04-multi-agent-parallel-convention.md`](../notes/process/2026-09-04-multi-agent-parallel-convention.md)、#847）交叉比对
 
 ---
 
-> **阅读指引**：§0–§6 为 **v0.3 第一轮**（结论：修完 2 项必修再 Accepted）；
-> §7–§10 为 **v0.4 第二轮**（结论：建议 Accepted）。**两轮冲突处以第二轮为准。**
+> **阅读指引**
+>
+> | 部分 | 章节 | 对象 | 结论 |
+> |---|---|---|---|
+> | 一 | §0–§6 | v0.3 | 修完 2 项必修再 Accepted |
+> | 二 | §7–§10 | v0.4 | 建议 Accepted |
+> | 三 | §11–§14 | v0.5 | 建议 Accepted（一处文字不一致建议同批修） |
+> | 四 | §15–§16 | Accepted v1.2 | 裁决已完结；实施剩 P0b 收尾 |
+> | 五 | §17–§18 | 批次首单 #880 | 报告属实；工具链经实战验证 |
+>
+> **各轮冲突处以时间在后者为准。**
 
 ---
 
@@ -273,4 +282,176 @@ liveness「查询时派生、不持久化」。把派生量与两个持久字段
   仅核验各 R 项在 v0.4 中的落点是否到位；
 - 未读方案原始全文（折叠部分），对 ADR 外的 registry schema 字段级定义、
   Integration Planner 输入输出、Role 完整取值域不作判断；
-- 事实核验以 2026-09-06 仓库状态为准；ADR 若再有 v0.5+ 演进需另开评审。
+- 事实核验以 2026-09-06 仓库状态为准；**v0.5 发布后已开第三轮，见 §11–§14**。
+
+---
+---
+
+# 第三部分：第三轮评审（v0.5）
+
+## 11. 第三轮结论摘要
+
+| 维度 | 结论 |
+|---|---|
+| **可否 Accepted** | ✅ **建议 Accepted**；§2.4 与 §2.2 的措辞冲突建议同批修（一行级） |
+| 性质 | v0.5 **不是补措辞，是修真 bug**——质量高于 v0.4 |
+
+## 12. 修得好的（5 项，均经本仓实测）
+
+| 改动 | 核验 |
+|---|---|
+| **§2.3 真值表重写** | 堵住 `ABANDONED × PR_OPEN` 悬空退窗（执行者放弃、PR 还开着仍在等 FIFO）与 `CODING × CLOSED` 同病。**这正闭合了第二轮观察 2**。逐组合验证：`ABANDONED×MERGED`=false、`ABANDONED×PR_OPEN`=true、`CODING×CLOSED`=true、`ABANDONED×NO_PR`=false——全部正确 |
+| **§3 symlink 写保护修正** | v0.4 写「薄壳若为 symlink 则**天然防误写**」是**错的**；v0.5 改为「symlink 消除的是双份内容漂移，**不提供写保护**，经 `CLAUDE.md` 路径写入会穿透修改真身」。修正正确 |
+| **§2.2 derived 口径含 untracked** | 指出 `git diff --name-only` 不含新文件。**实测证实**：新建文件在该命令下输出为空，须 `git ls-files --others --exclude-standard` |
+| **附录 A Antigravity 未验证** | 明写「不因缺席而视为通过」——诚实 |
+| **§2.7 P0 必备目录扩展** | 两处关键自查：①`lifecycle` 与 `pipeline_def` 域 lifecycle 的**术语消歧**（S11 有锚定，真会撞）②**P1 启动判据的数据源口径**——registry 是 P1 产物不能自证，须用 git worktree 历史 |
+
+## 13. 第三轮新观察（6 条）
+
+### 13.1 必修：§2.4 未随 §2.2 的并集语义更新（一行级）
+§2.2 改为「并集恒成立……不一致时输出 declaration drift 提示（advisory）」；
+§2.4 仍写「不一致时**以 diff 为准**」。并集下声明不会被 diff 丢弃，只是被标 drift——两句互斥。§2.4 是 v0.4 遗留。
+
+### 13.2 僵尸候选判据在并集语义下几乎永不触发
+§2.3 判据 = 「lifecycle ∈ {CODING, FINISHED} 且 STALE 且 **effective scope 为空**」。
+并集下 effective scope = declared ∪ derived，**只要声明非空就非空**——而声明非空是常态。
+结果：僵尸清单基本不触发，陈旧声明持续产生 overlap 噪音。建议改判据为「**derived(diff) 为空** 且 STALE」，或加声明龄阈值。
+
+### 13.3 并集把失败模式从假阴性翻成假阳性，缺兜底
+并集 = 不漏报，代价是未清理的声明持续进入 effective scope。§2.2 说过期声明由执行侧显式清理（引 6d0f05 O-1 残留面），但依赖自律。
+与 §2.9「不为分类摩擦付协同税」的价值取向相比，这里宁可要噪音也不漏——取舍可辩护，但**建议给假阳性兜底**：drift 提示累计 N 次后强制 `update`，或 status 把「仅来自声明、无 diff 支撑」的 scope 单独标为"意图未验证"。
+
+### 13.4 对账丢了「工具媒介」这一点
+抬头对账现为两点（①advisory ②前提已变），v0.4 三点中的「工具媒介自动登记 vs 手工仪式」被去掉。
+而 #847 的否决理由核心恰是「**持续性仪式** vs 一次性约定」。且 v0.5 保留声明（并集）+ 要求执行侧显式清理，**仪式感实际比 v0.4 更强**（多了清理动作）。建议补回第三点。
+
+### 13.5 §5 P1 验收未点名真值表新增分支
+写的是「overlap 集合分支」，未显式列 `ABANDONED × PR_OPEN`、`CODING × CLOSED`——这正是本次修正的核心，建议点名，防自测只覆盖旧集合。
+
+### 13.6 范围外但相关：AGENTS.md 并行约定已被 #853 压缩
+实测 `a015727b`（PR #853，Phase -1 基线）重写 AGENTS.md 后，「多 Agent 并行开发」整节被移除，现只剩 `AGENTS.md:35` 一句「查看其他 worktree 的实际 diff」，**未附任何口径**。
+v0.5 §2.2 不再引用「AGENTS.md 派生视图」而是自定口径——**这是对的**，否则会指向已消失的命令。
+但 P0 之前现行约定事实无可用口径，建议 §2.2 口径（含 untracked）在 P0a 同步回填。
+
+## 14. 第三轮边界声明
+
+- 第三轮同为**只读评审**，未改动 ADR 或任何配套文件；
+- 第二轮 4 条观察中，**观察 2 已被真值表闭合**、**观察 3（三维术语）本版未动**；观察 1（恢复编码回退）、观察 4（test_impact 缺省）未处理，属 P0/P1 实施期事项；
+- 未读方案原始全文与其余 7 源报告，仅核验 ADR 文本与本仓实测；
+- 事实核验以 2026-09-06 仓库状态为准。
+
+---
+---
+
+# 第四部分：完结状态只读确认（Accepted v1.2）
+
+> 用户问：「当前 ADR-0034 的开发工作是否完结」。以下为 2026-09-07 仓库状态的只读核验结果。
+
+## 15. 结论：本体裁决已完结，配套实施未完结（剩余项明确且量小）
+
+ADR 于 **v1.0（#865，2026-09-06 用户人工终审批准）Accepted**，现为 **v1.2**。版本链：
+`v0.1 #858 → v0.2 #859 → v0.3 #860 → #861（索引同步）→ v0.4 #862 → #863（R6/R18 裁决）
+→ v0.5 #864 → v1.0 #865（Accepted）→ v1.1 #866（细则迁出）→ v1.2（P1 启动判据修订）`
+
+### 15.1 已完结（有实证）
+
+| 项 | 证据 |
+|---|---|
+| 方向裁决 | 状态行 `Accepted（v1.2）`；README 索引标 Accepted |
+| **P0a** 契约文档 | `execution-contract.md` 存在，§1–§10 完整，Living v1.1 |
+| **P0a** 细则迁出 | ADR §2.2–2.9 已收缩为「决策要点 + 指针」 |
+| **P1** Registry MVP | `tools/dev/ai_work.py` 752 行，含 `--self-test`（scope/overlap/真值表/liveness/codec/原子写 红绿双向）；`test_impact` 入 schema（11 处命中） |
+| **G2** 真身+薄壳 | `backend/agent/CLAUDE.md → AGENTS.md`、`aee/CLAUDE.md → AGENTS.md` 均为 symlink |
+| 契约入门禁 | checker 中 2 处命中（S2 `link_files` + S6） |
+| AGENTS.md/CLAUDE.md 指向契约 | AGENTS.md:36、:56；65 行（80 行预算内） |
+| 09-04 note 交叉链接 | 抬头明写「已由 ADR-0034（Accepted v1.0）取代」并保留过渡条款 |
+| #854 | CLOSED |
+
+## 16. 未完结项
+
+### 16.1 P0b 收尾（2 处，均一行级）
+- `.cursor/rules` 未接线——grep 无 `execution-contract` 命中；
+- `.codex` 未接线——同上；
+- 附带：`2026-09-04-multi-agent-parallel-convention.md` 的 `Status:` 仍为 `implemented`，
+  虽正文已写取代关系，但字段未改 `superseded`（§5 P0 验收要求，半完成）。
+
+### 16.2 按设计未启动（非欠账）
+P2 Harness Adapter、P3 Drift/Freshness gate 无产物，属分期计划内；P4 Integration Planner 为观察项；
+Antigravity 验证附录 A 明标「未验证（延期）」。
+
+### 16.3 关联 issue 仍 OPEN（属预期，非阻塞）
+- **#855**：三段触发是「P0 完成 = 补全工作**可开工**」，不等于已完成；
+- **#857**：Claude `@import` 子目录不解析，上游缺陷，ADR §6 列为 Revisit 触发项。
+
+### 16.4 值得注意的变化：P1 启动判据被修订
+v1.2 增补第一触发「**已计划的多 Harness 批次启动前预置就绪**」（2026-09-07 用户裁决）——
+原「等 ≥2 次撞车返工」被判为**因果倒置**。故 `ai_work.py` 的落地是**主动预置**，非判据自然触发。
+契约 §9 过渡条款：`ai_work.py` 被采用前仍维持 2026-09-04 派生视图用法，防空窗。
+
+---
+---
+
+# 第五部分：批次首单 dogfood 验收（#880 / PR #899）
+
+> 用户报告：多 Harness 批次第一单完成，本会话（Claude Code）作为第一 Execution 全程用 Registry 工具链 dogfood。
+> 以下为只读核验结果——**报告全部属实**。
+
+## 17. 外部事实与代码层核验
+
+| 声明 | 核验方式 | 结果 |
+|---|---|---|
+| PR #899 合入 `3e072f62` | `gh pr view 899` | ✅ MERGED，mergeCommit `3e072f62` |
+| #880 自动 CLOSED | `gh issue view 880` | ✅ CLOSED |
+| #891 R01 台账 10 项 | `gh issue view 891` | ✅ OPEN「📌 [总表] R01 总体架构与硬契约审查台账（2026-09-07：**10 项**）」 |
+| main tip = `3e072f62` | `git log origin/main` | ✅ 首条即 #899 merge |
+| 主工作树干净 | `git status --short` | ✅ 空 |
+| 无在途 PR | `gh pr list --state open` | ✅ 空 |
+
+**修复三层均已落地**（`tools/dev/ai_work.py`）：
+
+```python
+def _quote(v) -> str:
+    s = str(v)
+    if s == "":
+        return '""'
+    if not s.startswith("#") and re.fullmatch(r"[A-Za-z0-9_./+=:@-]+", s):
+        return s  # 含 # 一律引号——行首裸 # 会被当注释（#880）
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+```
+
+`_quote` 字符集确无 `#` ✅；`normalize_requirement_id` 6 处命中（语义层守门）；`corrupt` 8 处命中（损坏隔离）✅。
+
+## 18. Dogfood 实证（本部分价值最高的一条）
+
+`registry.yaml` 真实落点确为
+`$(git rev-parse --path-format=absolute --git-common-dir)/ai-work/`——
+**契约 §2.2 定的 per-clone root 在实战中解析正确**（986 字节 + `registry.lock`）。
+
+两条记录均走到终态：
+
+```
+fix-825-gates-parity      lifecycle: FINISHED   integration_cache: MERGED
+fix-880-registry-codec    lifecycle: FINISHED   integration_cache: MERGED
+```
+
+按 §2.3 真值表 `MERGED` 出窗——两条均已正确退出风险窗口 ✅。
+**这是真值表第一次在真实数据上被验证，不是自测样例。**
+
+### 18.1 观察：`role` 字段两条均为空
+
+符合 §2.9「P1 允许缺省」的设计。但**若 P2 的 Role Context 定义归属尚无落点，该字段会持续为空**，
+而 §2.7 P2 的验收项是「会话启动时知晓自身 Role」。dogfood 已实测证明 **Role 字段当前实际消费为零**——
+这比事后推测更准，建议作为 P2 启动时的输入。
+
+### 18.2 留痕修正：「第一单」表述
+
+registry 中 `fix-825-gates-parity` 早于 `fix-880-registry-codec`。
+若 #825 同属本批次，则「第一单」宜表述为「**本会话承担的第一单**」——
+不影响结论，但审计留痕上值得准确。
+
+### 18.3 本部分边界声明
+
+- 全部为只读核验，未改动任何文件；
+- 未重跑 `ai_work.py --self-test`，对其自测结论不作独立复验；
+- 未复核 #899 的 CodeQL ReDoS 修复细节（仅确认提交 `6ce81f80` 存在于 main）；
+- 事实核验以 2026-09-07 仓库状态为准。
