@@ -440,6 +440,9 @@ GATE_TO_CI_ANCHOR = {
     "gov-skills": None,  # 数据源=本机 ~/.claude 转录，物理不在 runner 上
     "ai-drift": None,    # P3 advisory gate：CI runner 无本机 registry 数据可查；
                          # 夜间全量在本机跑 check:full 时留痕；转 required 须独立裁决
+    "invariant-diff": None,
+    # #855 差异面不变量检查：advisory 观察期收噪声数据，转 BLOCK 时配 CI step
+    # （与 immutability 同模式可跑 CI）并改此映射。
 }
 
 

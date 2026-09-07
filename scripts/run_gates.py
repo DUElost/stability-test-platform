@@ -81,6 +81,14 @@ GATES = {
         ROOT,
         None,
     ),
+    # 差异面不变量检查（#855 收口，覆盖图 §7.1 的差集收缩）：context-only
+    # 不变量中可静态判定子集的「新增行」检查——S11 的产物侧对偶。advisory
+    # 不阻塞（exit 0，--strict 为转 BLOCK 接口）；先收噪声数据再按棘轮裁决。
+    "invariant-diff": (
+        f"{PY} tools/dev/check_invariant_diff.py --base {BASE_REF}",
+        ROOT,
+        None,
+    ),
     # 治理面结构门禁（synthesis C-G1 L0）：@import 行内失效等事故的确定性拦截。
     # 纯文本检查、毫秒级；--self-test 正反样例自证见该脚本抬头。
     "gov-surface": (
@@ -177,7 +185,8 @@ PROFILES = {
     "check:quick": ["ruff", "eslint", "tsc", "knip", "compileall", "gov-surface", "ai-work"],
     "check:pr": [
         "ruff", "eslint", "tsc", "knip", "compileall",
-        "pollution", "immutability", "gov-surface", "ip-leak", "agent-tests",
+        "pollution", "immutability", "invariant-diff",
+        "gov-surface", "ip-leak", "agent-tests",
         "pr-migrate",
     ],
     # 治理面专项：结构门禁 + skill 用量探针
