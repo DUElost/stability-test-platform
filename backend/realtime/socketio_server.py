@@ -24,12 +24,27 @@ import socketio
 from sqlalchemy import text
 
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
+from backend.core.cors import get_cors_allowed_origins
 from backend.core.database import AsyncSessionLocal
 from backend.core.metrics import record_socketio_connection
 from backend.core.security import ACCESS_COOKIE_NAME, extract_cookie_token
 from backend.services.run_console import RunConsole
 
 logger = logging.getLogger(__name__)
+
+
+def _origin_allowed(environ: dict) -> bool:
+    """服务端强制 Origin 白名单（#904）。
+
+    engineio 的 cors_allowed_origins 只生成 CORS 响应头、由浏览器执行，
+    非浏览器客户端可无视；而 Cookie 自动附带握手必带 Origin——故外来
+    Origin 必须在应用层拒绝。缺 Origin（脚本/测试携 token）不在此拦，
+    交由既有认证分支。
+    """
+    origin = environ.get("HTTP_ORIGIN", "")
+    if not origin:
+        return True
+    return origin in get_cors_allowed_origins()
 
 def _ws_token() -> str:
     return os.getenv("WS_TOKEN", "")
@@ -87,7 +102,8 @@ def create_sio_server() -> socketio.AsyncServer:
     client_manager = build_socketio_client_manager()
     sio_kwargs: Dict[str, Any] = dict(
         async_mode="asgi",
-        cors_allowed_origins="*",
+        # #904: 与 FastAPI CORS 同源配置（cors.py 拒绝通配符），不再 "*"
+        cors_allowed_origins=get_cors_allowed_origins(),
         logger=False,
         engineio_logger=False,
         ping_timeout=60,
@@ -344,6 +360,16 @@ class DashboardNamespace(socketio.AsyncNamespace):
     """Handles Frontend connections on /dashboard namespace."""
 
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None):
+        # #904: 外来 Origin 在认证前直接拒绝——Cookie 自动附带握手必带
+        # Origin，有效凭据也不能改变来源不可信这一事实。
+        if not _origin_allowed(environ):
+            logger.warning(
+                "dashboard_sio_origin_rejected sid=%s origin=%s",
+                sid,
+                environ.get("HTTP_ORIGIN"),
+            )
+            raise socketio.exceptions.ConnectionRefusedError("Origin not allowed")
+
         auth = auth or {}
         token = auth.get("token", "")
         if not token:

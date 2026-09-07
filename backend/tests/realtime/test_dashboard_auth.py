@@ -1,9 +1,11 @@
-"""ADR-0024 P0 + #281 P0 — DashboardNamespace auth.
+"""ADR-0024 P0 + #281 P0 + #904 — DashboardNamespace auth.
 
 - ADR-0024：/dashboard SocketIO 也走 cookie/auth 解出 JWT。refresh token
   不能在此通道冒充 access，否则会话注销（blacklist）被旁路。
 - #281 P0：匿名接入规则与 ENV 无关——除 ``TESTING=1`` 外一律要求有效认证
   （旧实现只在 ENV=production 拒绝，生产部署 ENV=internal 时护栏从未生效）。
+- #904：外来 Origin 在认证前服务端强制拒绝——Cookie 自动附带握手必带
+  Origin，engineio 的 CORS 响应头只由浏览器执行、不构成服务端边界。
 
 仅测 on_connect 鉴权分支；subscribe/unsubscribe 与本 P0 无关。
 """
@@ -37,6 +39,76 @@ async def test_dashboard_rejects_refresh_token_via_cookie(monkeypatch):
 
     with pytest.raises(socketio.exceptions.ConnectionRefusedError):
         await ns.on_connect("sid-B", environ={"HTTP_COOKIE": cookie_header}, auth={})
+
+
+@pytest.mark.asyncio
+async def test_dashboard_rejects_foreign_origin_with_valid_token(
+    monkeypatch, db_session, test_user
+):
+    """#904：外来 Origin + 有效凭据仍拒——来源不可信与凭据有效性正交。"""
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)  # 用默认白名单
+    access = create_access_token(
+        data={
+            "sub": str(test_user.id),
+            "username": test_user.username,
+            "role": test_user.role,
+            "ver": test_user.token_version,
+        }
+    )
+    ns = DashboardNamespace("/dashboard")
+
+    with pytest.raises(socketio.exceptions.ConnectionRefusedError, match="Origin"):
+        await ns.on_connect(
+            "sid-O1",
+            environ={"HTTP_ORIGIN": "http://evil.example", "HTTP_COOKIE": f"stp_access_token={access}"},
+            auth={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_allows_allowlisted_origin_with_cookie(
+    monkeypatch, db_session, test_user
+):
+    """#904：白名单 Origin + Cookie 认证握手放行（默认白名单含 localhost:5173）。"""
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    access = create_access_token(
+        data={
+            "sub": str(test_user.id),
+            "username": test_user.username,
+            "role": test_user.role,
+            "ver": test_user.token_version,
+        }
+    )
+    ns = DashboardNamespace("/dashboard")
+
+    await ns.on_connect(
+        "sid-O2",
+        environ={
+            "HTTP_ORIGIN": "http://localhost:5173",
+            "HTTP_COOKIE": f"stp_access_token={access}",
+        },
+        auth={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_origin_absent_keeps_token_path(monkeypatch, db_session, test_user):
+    """#904：无 Origin（脚本/测试携 token）不触发 Origin 拦截，走既有认证。"""
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    access = create_access_token(
+        data={
+            "sub": str(test_user.id),
+            "username": test_user.username,
+            "role": test_user.role,
+            "ver": test_user.token_version,
+        }
+    )
+    ns = DashboardNamespace("/dashboard")
+
+    await ns.on_connect("sid-O3", environ={}, auth={"token": access})
 
 
 @pytest.mark.asyncio
