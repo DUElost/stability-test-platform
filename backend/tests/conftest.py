@@ -57,6 +57,10 @@ TEST_DATABASE_URL = _resolve_test_database_url()
 
 # Keep runtime modules aligned with the test database.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+# #941：解析结果（含 testcontainers 兜底路径）同步写回 TEST_DATABASE_URL——
+# 租约 / abort-reaper 等 PG-only 测试以 os.getenv("TEST_DATABASE_URL") 判方言，
+# 只写 DATABASE_URL 会让它们在实际 PG（容器兜底）上整组 skip。
+os.environ["TEST_DATABASE_URL"] = TEST_DATABASE_URL
 
 from backend.core.database import async_engine, engine as app_engine, get_db
 from backend.core.database import Base
