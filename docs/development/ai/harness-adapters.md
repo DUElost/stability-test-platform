@@ -24,7 +24,7 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 | Claude Code | 根及目录内 `CLAUDE.md`、`.claude/settings.json`、`.claude/skills/` | 架构入口、领域上下文、权限和显式技能 |
 | Codex | `AGENTS.md`、`.codex/hooks.json` | 共享约定入口和确定性检查钩子 |
 | OpenCode | `AGENTS.md`；本地 `opencode.json` 不入库 | 共享约定入口；provider、模型和凭据属于本机配置 |
-| Antigravity CLI | 无（`agy 1.1.26 -p` 实测不自动发现任何仓库规则文件） | 规则供给走调用方前置 `tools/dev/agy_with_rules.sh`（2026-09-07 实测，见下） |
+| Antigravity CLI | 无（实测不自动发现仓库规则文件） | **不承接 Requirement/Execution**（2026-09-07 定性：带规则的高级顾问——问答/分析/评审）；规则经 `tools/dev/agy_with_rules.sh` 前置 |
 | 其他 Harness | `AGENTS.md` | 没有专用适配时，从共享约定和文档地图进入 |
 
 Harness 的自动发现规则会随版本变化。新增专用适配前必须用对应版本实测加载行为；
@@ -42,8 +42,11 @@ Harness 的自动发现规则会随版本变化。新增专用适配前必须用
   两种语法共三条路径）一律 `Agent execution terminated`——崩点在执行循环（实验后
   settings.json 已恢复原状）；故 agy 会话不能读写文件/执行命令，**无法独立完成
   declare→工作→finish 的 Execution 周期**；交互 TUI 未验证（PTY 不稳定）；
-- **批次角色**：上游修复 headless 工具循环前，agy 仅承担注入规则的问答/分析，
-  不承接改码任务；全局层属本机个人配置，不放仓库规则。
+- **批次角色（2026-09-07 用户裁决）**：**定性为「带规则的高级顾问」——不纳入
+  可承接 Requirement 的 Harness 名单**，仅承担注入规则的问答/分析/评审；上游
+  修复 headless 工具循环并复测通过后，重跑附录 A 协议可升格（Registry 的
+  `--harness` 参数刻意不做名单硬校验，升格无需改代码）；全局层属本机个人
+  配置，不放仓库规则。
 
 ## 本地配置边界
 
