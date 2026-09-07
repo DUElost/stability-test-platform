@@ -443,6 +443,10 @@ GATE_TO_CI_ANCHOR = {
     "invariant-diff": ("ci.yml", "差异面不变量检查"),
     # #855 差异面不变量检查：2026-09-07 升格 BLOCK（全库枚举替代观察期验证
     # 精度），与 immutability 同模式接入 ci.yml lint job。
+    "harness-ingest": None,  # #855-b 摄取矩阵（ADR-0034 P2 验收）：每家一次真实
+                             # 非交互 LLM 会话（分钟级+外部依赖），CI 不跑；
+                             # check:gov 手跑，行为漂移时人工介入。与
+                             # invariant-diff（差异面）互补成两腿。
 }
 
 
