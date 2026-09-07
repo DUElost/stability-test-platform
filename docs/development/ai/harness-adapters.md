@@ -31,18 +31,18 @@ Harness 的自动发现规则会随版本变化。新增专用适配前必须用
 不能仅凭文件名推断规则已经生效。
 
 **Antigravity CLI 实测（2026-09-07，`agy -p` 非交互）**：根与嵌套 `AGENTS.md`、
-`CLAUDE.md`（含 symlink）、`GEMINI.md` 均不自动加载——引文诊断确认其上下文仅含
-Gemini 系统指令与 USER_SETTINGS（无任何仓库规则）；`agy agents` 空、无全局配置
-目录。因此该 Harness **没有仓库文件的自动加载通道**，规则供给只能由调用方前置：
-非交互会话用 `tools/dev/agy_with_rules.sh "<prompt>"`（把根 `AGENTS.md` 拼进
-prompt 前缀）；上游出现 agent/配置装载机制后本脚本退役。
+`CLAUDE.md`（含 symlink）、`GEMINI.md` 均不自动加载（随机探针串+引文诊断+运行日志
++stream-json init 四重证据；`agy agents` 空、无全局配置目录）——该 Harness 无仓库
+文件的自动加载通道，规则供给用 `tools/dev/agy_with_rules.sh "<prompt>"`（根规则拼
+prompt 前缀）。机制层：规则装载走 `declarative_config_loader.go` 的
+`prompt section "user_rules"`（`~/.gemini/antigravity-cli/settings.json` 无此字段，
+空被 skip）——装载清单里没有约定文件通道，非路径问题。
 
-**机制层发现（同日，`--log-file` 诊断）**：agy 的规则装载走其声明式配置加载器
-（`declarative_config_loader.go`）的 `prompt section "user_rules"`——运行日志明示
-该节**当前为空被 skip**（同批还有 `mcp_servers`/`subagent_reminder` 等节）；
-`~/.gemini/antigravity-cli/settings.json`（含 `trustedWorkspaces`）中无 rules 字段。
-即「不读 AGENTS.md」的根因是**其规则装载清单里根本没有约定文件通道**，而非文件
-名或路径问题。另：**headless（-p）模式未 allow 的工具一律 auto-deny**（报错原文
+**与官方文档冲突（待上游确认）**：[迁移文档](https://antigravity.google/docs/cli/gcli-migration/)
+称会解析 active directory 的 `GEMINI.md`/`AGENTS.md`（另加载全局 `~/.gemini/GEMINI.md`），
+但 `-p` 实测（信任/非信任路径 × 根/嵌套 × 两类文件）均不装载。可能解释：文档描述
+交互模式行为 / 需 onboarding 激活 / 超前于 1.1.26 实装。**冲突澄清前，agy 会话规则
+供给一律走前置脚本，不依赖文档口径。**另：**headless（-p）模式未 allow 的工具一律 auto-deny**（报错原文
 指引 `permissions.allow` 机制）；`--dangerously-skip-permissions` 在本构建触发
 Agent execution terminated——作为 coding agent 使用需先在**本机** settings.json
 配置 `permissions.allow`（本机配置边界，不入库），并注意该模式本构建稳定性存疑。
