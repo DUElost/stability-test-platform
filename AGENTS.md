@@ -23,7 +23,7 @@
 - Plan 不存 lifecycle；dispatcher 从 PlanStep 与 Plan 时间字段组装
   `pipeline_def.lifecycle`。
 - Redis 只承载队列与瞬时跨进程通信，不作为业务事实存储。
-- 生产环境必须满足 secure cookie、受限 SameSite 和 CSRF guard。
+- 生产类环境（production 与 internal）必须满足 secure cookie、受限 SameSite 和 CSRF guard；唯一例外是 internal 无 TLS 内网部署豁免 Secure 启动强制（ADR-0024 v1.1，#46 TLS 落地后收窄）。
 - Pydantic 只使用 v2 API；数据库业务表名使用单数。
 - 已存在脚本版本的 `default_params` 不可原地修改；参数变化通过新版本表达。
 - 前端 API 类型以 `frontend/src/utils/api/types.ts` 为入口，并与后端 schema 同步。
