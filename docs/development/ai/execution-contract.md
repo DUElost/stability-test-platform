@@ -1,6 +1,6 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.4（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.4 变更：§10 增「实现与契约的先后纪律」——实现不得静默重新定义 Contract 语义（用户 2026-09-08 确认）；v1.3 变更：§2.1/§3.1/§3.3 增 T9 `resume`——FINISHED→CODING 返工回退（#946）；v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
+- **状态**：Living v1.5（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.5 变更：§1.2 `role` 语义收敛——Role=保留元数据与未来扩展点、默认 `implementation`、Role Runtime 供给降级 deferred（用户 2026-09-08 裁决，ADR-0034 v1.7）；v1.4 变更：§10 增「实现与契约的先后纪律」——实现不得静默重新定义 Contract 语义（用户 2026-09-08 确认）；v1.3 变更：§2.1/§3.1/§3.3 增 T9 `resume`——FINISHED→CODING 返工回退（#946）；v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
 - **日期**：2026-09-08
 - **适用**：所有在本仓库参与 Execution Registry 的 AI Coding Harness 会话；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
@@ -20,7 +20,7 @@
 |---|---|
 | `requirement` | 承接的 Requirement 标识（溯源） |
 | `harness` | 承接的 Harness（溯源，非指派） |
-| `role` | Role Context 标签（执行侧自声明；定义与供给细则归 P2 Adapter） |
+| `role` | Execution 元数据标签与未来扩展点（执行侧自声明，自由文本，无枚举）：不参与路由、不加语义约束、非文件 ownership 边界（§5.3）。当前默认且唯一实际运行角色为 `implementation`（registry 空串即视为该缺省）；特殊 Role 暂不进入主执行路径，运行时 Role Context 供给为 **deferred capability 而非交付承诺**（v1.5 收敛，ADR-0034 v1.7——原「定义与供给细则归 P2 Adapter」条款自此撤回） |
 | `worktree` | worktree 路径 |
 | `branch` | worktree 的工作分支（§5.2 第二档 branch diff 的数据源；v1.1 增） |
 | `issues` | declared issue 号列表（字符串形态存储；v1.2 增）——`declare --issue N` 可重复显式声明，另从 requirement/branch slug 启发式兜底提取；declare 在窗查重（§3.4）的数据源 |
