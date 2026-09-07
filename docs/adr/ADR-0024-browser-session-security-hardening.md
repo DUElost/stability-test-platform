@@ -1,6 +1,7 @@
 # ADR-0024: 浏览器 Web 会话安全化
 
-- 状态：Accepted
+- 状态：**Accepted（v1.1）**
+- 版本记录：v1.0（2026-05-21 初版）/ v1.1（2026-09-08 internal 例外契约化，#909）
 - 优先级：P0
 - 目标里程碑：M3.2
 - 日期：2026-05-21
@@ -139,3 +140,26 @@ Origin in allowed_origins → 放行(严格 string match,不做子域 relax)
 - `backend/tests/test_agent_secret_guards.py`(CSRF / cookie production guard)
 
 依赖:无新增第三方库;Prometheus / passlib / PyJWT 均已在依赖树中。
+
+## v1.1：internal 无 TLS 例外契约化（2026-09-08，#909）
+
+**背景**：#281 P0（2026-08-16）把 `ENV=internal` 与 `ENV=production` 同等视为
+生产类环境（`PRODUCTION_LIKE_ENVS`）——CSRF guard、`SameSite` 校验、注册策略
+与匿名 SocketIO 护栏全部适用；唯一例外是 `AUTH_COOKIE_SECURE=1` 启动强制仅限
+`ENV=production`。该部署决策（操作者选定，见
+`docs/notes/bug-fix/2026-08-16-review-281-fixes.md`）此前未回写本 ADR 与
+AGENTS.md 硬不变量，形成 #909 所述契约表述不一致。
+
+**裁定**：例外**保留**，边界显式化——
+
+- 适用边界：`ENV=internal` 是**无 TLS 内网部署**标识（前提：内网网络边界
+  受控）。Secure cookie 在纯 HTTP 下被浏览器直接拒发，强制它等于必然拒启且
+  无安全收益——该环境下强制 Secure 不构成有效防御，只构成不可用。
+- 例外仅覆盖 `AUTH_COOKIE_SECURE` 启动强制一项；`SameSite` 受限与 CSRF guard
+  在 internal 下照常强制（`test_internal_still_rejects_csrf_disabled` /
+  `test_internal_still_rejects_invalid_samesite` 固化）。
+- 复议触发器：#46（生产 env 硬化 / HTTPS）为 internal 提供 TLS 后，部署应置
+  `AUTH_COOKIE_SECURE=1`，届时收窄本例外（取消豁免或改为逐环境显式声明）。
+
+**对账**：AGENTS.md 硬不变量行同步区分生产类环境与该唯一例外（S11 锚串
+「secure cookie、受限 SameSite 和 CSRF guard」保留在场）。

@@ -79,7 +79,7 @@ Execution 串行修改。并行执行语义的权威源是
 
 会话由开发者选择启动（选择权原则）；Adapter 只负责让该会话**知晓自身 Execution
 与集成窗口**。Registry CLI：`tools/dev/ai_work.py`（规范见
-[`execution-contract.md`](execution-contract.md) §2–§5）。
+[`execution-contract.md`](execution-contract.md) §2–§5）。**Role 非 Adapter 义务（ADR-0034 v1.7）**：`role` 仅为 Registry 元数据与未来扩展点（默认 `implementation`，空串即缺省；特殊 Role deferred）——本节供给不含 Role：无启动注入要求，无各 Role 等价支持要求。
 
 | 时机 | 动作 | 所有 Harness 通用 |
 |---|---|---|
