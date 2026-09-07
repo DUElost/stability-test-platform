@@ -25,6 +25,7 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 | Codex | `AGENTS.md`、`.codex/hooks.json` | 共享约定入口和确定性检查钩子 |
 | OpenCode | `AGENTS.md`；本地 `opencode.json` 不入库 | 共享约定入口；provider、模型和凭据属于本机配置 |
 | Antigravity CLI | 无（实测不自动发现仓库规则文件） | **不承接 Requirement/Execution**（2026-09-07 定性：带规则的高级顾问——问答/分析/评审）；规则经 `tools/dev/agy_with_rules.sh` 前置 |
+| Zcode（3.11.2，GUI） | `AGENTS.md`（仓库根注入=本会话实证；子目录**只装载 workspace 的 AGENTS.md**，根不注入——2026-09-07 人工探针） | 共享约定入口；Registry CLI 与 P2 动作表全程可用（三单 dogfood 即 Zcode 会话） |
 | 其他 Harness | `AGENTS.md` | 没有专用适配时，从共享约定和文档地图进入 |
 
 Harness 的自动发现规则会随版本变化。新增专用适配前必须用对应版本实测加载行为；

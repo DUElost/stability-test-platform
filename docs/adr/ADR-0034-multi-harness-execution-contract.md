@@ -147,5 +147,7 @@ AGENTS.md / CLAUDE.md / .cursor/rules / .codex    ← 各入口只保留最小�
 | OpenCode 1.18.25 | ✅ live | 需本机 `opencode.json`（未跟踪）在启动目录树内 |
 | Claude Code 2.1.259 | ❌（子目录通道=CLAUDE.md） | 需显式 `--settings`（alias 对脚本不生效）；`unrecognized_model` 警告无害 |
 | Antigravity CLI（agy 1.1.26） | ❌ 实测（2026-09-07）：根/嵌套 `AGENTS.md`、`CLAUDE.md`（含 symlink）、`GEMINI.md` 均不自动加载——探针+引文+日志+stream-json 四重证据；机制=声明式配置 `user_rules` 节空被 skip；**与官方迁移文档声称的 GEMINI/AGENTS 解析冲突，待上游确认**；供给=调用方前置（`tools/dev/agy_with_rules.sh`） | `agy -p` 非交互可用；**定性=带规则的高级顾问，不承接 Requirement/Execution（2026-09-07 用户裁决）** |
+| Cursor IDE 3.17.19 | ✅（2026-09-07 人工补测）：子目录工作区根+scoped 双边可见，与 cursor-agent CLI 同引擎对齐（双份加载 Q3=2 同 CLI）；Registry CLI 可用 | IDE Agent 人工探针（GUI 无脚本通道）；无需根供给（根 AGENTS.md 自动加载） |
+| Zcode 3.11.2（GUI） | ⚠️（2026-09-07 人工补测）：**子目录打开只装载 workspace 的 `AGENTS.md`，根不注入**（Q1=否/Q2=是——与 #857 互补的缺口形态）；可发现性已由 scoped 真身头部根指针覆盖（实测『总原则』在引述文字可见） | GUI 无 CLI 探针通道；Registry CLI 可用（三单 dogfood 即 Zcode 会话）；P2 动作表已补「文档/评审类会话同样 declare」指引（#919） |
 
 **延伸矩阵（#857）**：Claude `@AGENTS.md` import 解析——仓库根 ✅ / 子目录 ❌（`-p` 与 TUI 双模式，引文诊断证实字面行未展开、AGENTS.md 五章节零出现；cwd 相对存在同名文件亦不解析）。
