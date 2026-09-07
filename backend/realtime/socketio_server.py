@@ -361,11 +361,15 @@ class DashboardNamespace(socketio.AsyncNamespace):
                 pass  # 显式配置的静态口令(#281 二轮:源码默认值不算已配置)
             else:
                 try:
-                    from backend.core.security import decode_token
-                    # ADR-0024 P0: expected_type="access" 防止 refresh token 通过
-                    # cookie/auth 旁路冒充 access,绕过 logout 黑名单。
-                    payload = decode_token(token, expected_type="access")
-                    if not payload:
+                    # R02-D3（#903）：与 REST/metrics 同一校验面（PK 查库 +
+                    # is_active + ver 纪元），此前仅签名级 decode——停用用户
+                    # 的 token 到 exp 前全通。expected_type="access" 防止
+                    # refresh token 经 cookie/auth 旁路冒充 access。
+                    from backend.core.database import SessionLocal
+                    from backend.services.auth_session import authenticate_token
+                    with SessionLocal() as db:
+                        user = authenticate_token(db, token, expected_type="access")
+                    if not user:
                         raise socketio.exceptions.ConnectionRefusedError("Invalid token")
                 except socketio.exceptions.ConnectionRefusedError:
                     raise

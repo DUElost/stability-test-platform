@@ -40,13 +40,66 @@ async def test_dashboard_rejects_refresh_token_via_cookie(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_accepts_access_token(monkeypatch):
+async def test_dashboard_accepts_access_token(monkeypatch, db_session, test_user):
+    """R02-D3（#903）：socket 与 REST 同校验面——有效 token = 真实存在的
+    活跃用户（PK sub + 当前 ver）。"""
     monkeypatch.setenv("TESTING", "0")
-    access = create_access_token({"sub": "alice", "role": "admin"})
+    access = create_access_token(
+        data={
+            "sub": str(test_user.id),
+            "username": test_user.username,
+            "role": test_user.role,
+            "ver": test_user.token_version,
+        }
+    )
     ns = DashboardNamespace("/dashboard")
 
     # 不抛 ConnectionRefusedError 即视为接受。
     await ns.on_connect("sid-C", environ={}, auth={"token": access})
+
+
+@pytest.mark.asyncio
+async def test_dashboard_rejects_token_of_disabled_user(
+    monkeypatch, db_session, test_user
+):
+    """#903 核心场景：签名有效但用户已停用——此前签名级 decode 全通。"""
+    monkeypatch.setenv("TESTING", "0")
+    access = create_access_token(
+        data={
+            "sub": str(test_user.id),
+            "username": test_user.username,
+            "role": test_user.role,
+            "ver": test_user.token_version,
+        }
+    )
+    test_user.is_active = "N"
+    db_session.commit()
+    ns = DashboardNamespace("/dashboard")
+
+    with pytest.raises(socketio.exceptions.ConnectionRefusedError):
+        await ns.on_connect("sid-G", environ={}, auth={"token": access})
+
+
+@pytest.mark.asyncio
+async def test_dashboard_rejects_stale_epoch_token(
+    monkeypatch, db_session, test_user
+):
+    """R02-D2：ver 纪元不匹配（bump 后旧 token）必须被拒。"""
+    monkeypatch.setenv("TESTING", "0")
+    access = create_access_token(
+        data={
+            "sub": str(test_user.id),
+            "username": test_user.username,
+            "role": test_user.role,
+            "ver": test_user.token_version,
+        }
+    )
+    test_user.token_version = (test_user.token_version or 1) + 1
+    db_session.commit()
+    ns = DashboardNamespace("/dashboard")
+
+    with pytest.raises(socketio.exceptions.ConnectionRefusedError):
+        await ns.on_connect("sid-H", environ={}, auth={"token": access})
 
 
 @pytest.mark.asyncio
