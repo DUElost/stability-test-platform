@@ -932,12 +932,14 @@ def get_plan_run_chain(
     _current_user: User = Depends(get_current_active_user),
 ):
     """ADR-0020 §6: PlanRun chain 上下文 — 沿 parent_plan_run_id 回溯到 root,
-    再沿 next_plan_id + next_plan_triggered 向前查找下一段。
+    再沿 next_plan_id 展开到链尾（2026-09-01 起展示完整未触发链）。
 
     返回的 nodes 列表按 chain_index 升序,包含:
       - 0..N 个 parent PlanRun (已触发)
       - 1 个 current PlanRun(is_current=True)
-      - 0..1 个未触发的 next Plan 节点(plan_run_id=None, status='pending')
+      - 0..N 个未触发的 next Plan 节点(plan_run_id=None, status='pending')——
+        沿 next_plan_id 每个未触发链节一个占位节点;仅链首节点承载
+        is_blocked/block_reason,后续节点固定 block_reason="等待前序 Plan 触发"
     """
     pr = _require_plan_run(db, run_id)
 
