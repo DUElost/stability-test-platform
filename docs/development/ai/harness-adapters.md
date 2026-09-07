@@ -93,10 +93,8 @@ Execution 串行修改。并行执行语义的权威源是
   （declare/update/finish）刷新自身 `last_seen`；
 - 各 Harness 的自动加载差异（Codex/Cursor/OpenCode 读 scoped `AGENTS.md`；
   Claude 经 `CLAUDE.md` symlink 薄壳）见本文件上方适配面表与 ADR 附录 A；
-- **#857 已在仓库侧绕过并关闭（2026-09-08）**：根 `CLAUDE.md` 转为
-  `AGENTS.md` symlink（G2 上移到根）——@import 通道消失，子目录会话
-  （TUI/-p）经 ancestor 加载直读完整契约（实测子目录裸跑 `claude -p`
-  复述硬不变量 ✓）；`claude_with_root.sh` 降后备。上游缺陷
-  （anthropics/claude-code #79046/#87020）不在我方跟踪面——上游修复与否
-  对 symlink 形态无行动后果；若 ancestor CLAUDE.md 加载行为变化波及
-  symlink 形态，另立新单。
+- **#857 已绕过并关闭（2026-09-08）**：根 `CLAUDE.md` 转 `AGENTS.md`
+  symlink（G2 上移到根）——@import 通道消失，子目录会话经 ancestor 加载
+  直读完整契约（实测 `claude -p` 复述硬不变量 ✓）；`claude_with_root.sh`
+  降后备。上游缺陷（claude-code #79046/#87020）不在我方行动面，波及
+  symlink 时另立新单。
