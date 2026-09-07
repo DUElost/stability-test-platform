@@ -1,13 +1,14 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Accepted（v1.7）**
+- 状态：**Accepted（v1.9）**
 - 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ v1.0 #865（**Accepted**，2026-09-06 用户人工终审批准）/ v1.1 #866（§2 细则迁出至 `execution-contract.md`，本文保留决策要点 + 指针）/ **v1.2 #877：P1 启动判据修订——增补「已计划的多 Harness 批次启动前预置就绪」（2026-09-07 用户裁决：本 ADR 立项背景即即将开展的多 Issue 集中修复与新需求开发，工具须先于场景就绪；判据全文见契约 §9 v1.1）**
 **v1.3 本版：附录 A 增补 Antigravity CLI 实测（2026-09-07，`agy 1.1.26 -p`：无仓库规则自动发现——根/嵌套 AGENTS.md、CLAUDE.md symlink、GEMINI.md 均不加载，引文诊断确认；供给=调用方前置 `tools/dev/agy_with_rules.sh`；P2 加载矩阵终验随之扩展为五家结论）**
 **v1.4 本版：附录 A 补机制层根因（规则装载=声明式配置 `user_rules` 节空被 skip——装载清单无约定文件通道）与官方迁移文档冲突记录（迁移文档声称解析 active directory 的 GEMINI/AGENTS.md，但 `-p` 非交互实测不符——待上游确认，澄清前 agy 供给一律走前置脚本）**
 **v1.5 #914：附录 A 分层装载实测补全——全局层（~/.gemini/GEMINI.md 与 ~/.gemini/AGENTS.md）在 -p 下均装载、workspace 层仍全部不装载；仓库规则供给维持 agy_with_rules.sh 前置**
 **v1.6 本版：Antigravity 定性裁决（用户 2026-09-07）——「带规则的高级顾问」，不纳入可承接 Requirement 的 Harness 名单（headless 工具循环三路径崩溃、无法独立完成 Execution 周期）；Registry `--harness` 不做名单硬校验，上游修复复测后可升格**
 **v1.7 本版：Role 定位收敛（用户 2026-09-08 裁决）——Role=保留的 Execution 元数据与未来扩展点，当前默认且唯一实际运行角色为 `implementation`（registry 空串视为缺省），特殊 Role 暂不进入主执行路径；§2.7 P2 的「会话启动时知晓自身 Role」从必交付降级为 deferred capability（不要求 Harness 启动时自动注入、不要求所有 Harness 对所有 Role 等价支持），不为「完成 P2」补建 Role 运行机制；原契约「role 定义与供给细则归 P2 Adapter」条款同步撤回，契约 §1.2 role 行已重写。P2 现存待交付项仅剩 heartbeat wrapper**
-- 优先级：P1
+**v1.8 本版：Role 收敛 Revisit 两项闭环（用户 2026-09-08 裁决）——①role 缺省归一化：declare 缺省写入 implementation（历史空串同义读取、不迁移），实现 ai_work.py `default_role` 同 PR；②Role 扩展再开启条件成文：仅「声明面消费 Role」的真实需求（差异化登记纪律/门禁判定/overlap 处理）构成触发，经用户裁决走契约新版本 + ADR 增补，「多一种标签写法」不构成触发。细则均落契约 §1.2**
+**v1.9 本版：并发上限反转（用户 2026-09-08 裁决）——§2.6 移除「≈2-3 显式上限」与「上限不放宽」：该数字自 2026-09-04 约定未实测继承，多 Harness 批次实际常态为 5+ 会话并行（含单 Harness 多开），早已被常态超出而无机械强制，且与本 ADR 立项目的（为多 Harness 并行 AI Coding 建立协同机制）自相矛盾；瓶颈原则校准为「在集成收尾侧（人的审阅吞吐 + 外部平台可靠性），不在 agent 并行侧」，守的对象从会话数重锚为在窗 Execution（risk 集合）规模与集成收尾负载；「任务排队」主策略与同文件串行排程不变；§4 Alternatives 对应行拆分改写、§6 增实测数据触发器；契约 §8 同 PR 原子同步、adr/README 与 DOC-MAP 索引行同步（S12 口径）；本版号 v1.8 已被并行 #1018（Role 收敛闭环）占用，合并期重编 v1.9**- 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
 - 决策者：平台研发组
@@ -64,9 +65,14 @@ Registry 声明与实际 diff 不一致时**以 diff 为准**；派生视图（�
 
 **决策要点**：`status` 严格只读（观察不改变被观察状态）；写命令刷自身 `last_seen`；P1 无 heartbeat daemon 故 TTL 仅 advisory（不改字段/不剔除/不降级），P2 有 heartbeat 后 `last_seen` 方可升格。分期语义见 [`execution-contract.md` §4](../development/ai/execution-contract.md)。
 
-### 2.6 并发上限（保留）
+### 2.6 并发与审计吞吐（v1.9 反转）
 
-显式上限保留 ≈2-3。理由迁移：逐 PR 决策已政策化给 auto-merge（approvals=0 + FIFO），人的注意力从「审 PR」转移到「审审计面」——瓶颈仍是人的吞吐，上限只是换了守的对象。**正面回应 2026-09-04 原结论**：审阅瓶颈未被证伪也不打算缓解——Registry 不提升审阅吞吐，提升的是审计面的**信息完备性**（谁在做什么、集成窗口在哪）；「任务排队」仍是主策略，上限不放宽。
+**不设会话数上限**。原「≈2-3 显式上限」（v1.0–v1.8）自 2026-09-04 约定未实测继承：多 Harness 批次实际常态为 5+ 会话并行（含单 Harness 多开；2026-09-07/08 批次实测 6-7 并发会话），数字被常态超出而无机械强制——被常态违反的规范不是限制而是文档漂移，按「以实际为准、同步权威文档」纪律于本版移除。
+
+- **瓶颈模型（校准）**：瓶颈在**集成收尾侧**——人的审阅吞吐 + 外部平台可靠性（GitHub checks / auto-close 故障窗、gh 串行化），**不在 agent 并行侧**。Registry 不提升审阅吞吐，提升的是审计面的**信息完备性**（谁在做什么、集成窗口在哪）；
+- **守的对象重锚**：真实约束的可观测代理 = **在窗 Execution（§3.2 risk 集合）规模 + 集成收尾负载**（合入后核销、reconcile、冲突返工），由开发者按批次调度——上限由实测数据表达而非文档数字；数据恶化时按 §6 重议；
+- **「任务排队」仍是主策略**：FIFO auto-merge 串行集成、同文件显式串行排程不变；无 PR 的评审 / scratch 会话不计入约束；
+- 会话数 ≠ worktree 数 ≠ 在窗 Execution 数：registry 只统计已 declare 的 Execution（评审/scratch 会话按 #919 指引同样 declare），三者以 registry + `git worktree list` 组合观测。
 
 ### 2.7 分期
 
@@ -117,7 +123,8 @@ AGENTS.md / CLAUDE.md / .cursor/rules / .codex    ← 各入口只保留最小�
 | P3 建 merge queue | 主干机制已存在（FIFO auto-merge + update-branch + strict）；真增量是 drift/freshness 检测（修正⑥） |
 | G2 维持 CLAUDE.md 命名 | 3/3 非 Claude Harness 实测读嵌套 AGENTS.md（附录 A）；维持等于放弃已验证的加载通道 |
 | symlink 全局替换（含根层） | 根层 S8 已锁 import 形态且 #857 仅证实子目录缺陷；根层迁移待 #857 修复后独立评估，不随本 ADR 捆绑 |
-| auto mode 默认化 / 提高并发上限 | 08-26 synthesis 裁决前提（治理面写者 >1 常态化、auto mode）未满足；并发瓶颈见 §2.6 |
+| 维持 ≈2-3 会话数上限（v1.0–v1.7 原裁决） | **v1.9 反转**：数字未实测、被多批次 5+ 常态超出而无机械强制，且与本 ADR 立项目的矛盾；守对象重锚见 §2.6 |
+| auto mode 默认化 | 08-26 synthesis 裁决前提（治理面写者 >1 常态化、auto mode）仍未满足；与人驱动多会话并行为正交两轴，不随 v1.8 并发放开而松动 |
 | overlap 仅看 liveness（当时术语 ACTIVE，即现 LIVE） | finish 后 STALE 的在途变更仍是集成风险窗口（§2.3 反例）；集成窗口与执行者活性是两个正交维度 |
 | P1 即引入 heartbeat daemon / TTL 硬语义 | 声明式 CLI 之间无可靠心跳源，硬 TTL 会把「上午 declare、全天编码」的长任务误判（§2.5 分期：P1 advisory，P2 有 heartbeat 后再升格） |
 
@@ -134,6 +141,7 @@ AGENTS.md / CLAUDE.md / .cursor/rules / .codex    ← 各入口只保留最小�
 
 - **G5**（`.agents/` 单家目录 / skills 多消费方）：新增受版本控制的 harness 适配时，按 [`harness-adapters.md`](../development/ai/harness-adapters.md) 修改顺序重估；
 - **auto mode 成为默认工作态**：重访行为验证挂载强度（2026-08-26 synthesis 重议条件，现状见 #855）；
+- **审计吞吐实测恶化**（集成冲突/返工率、合入后核销与 reconcile 负载、登记交互成本上升）：重议 §2.6 并发姿态与收尾自动化（如 post-merge 自动 reconcile）——触发器是实测数据，非会话数；
 - **AGENTS.md 逼近 80 行/8KB ceiling**：预算扩容须独立裁决，不随功能顺手放宽；
 - **#857 上游修复**：根层 import 形态与 G2 形态优先级随之复评；
 - **Competition mode**（显式、受审计的开发者批准竞争）：**已裁决（2026-09-06）**——冻结版 Contract v1 不含此条款，评审建议降级为非阻断追溯项，不入 Contract；现文本 overlap=hint + 不上锁已隐含允许并行，真实竞争需求出现再议。

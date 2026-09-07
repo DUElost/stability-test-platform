@@ -1,7 +1,6 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.5（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.5 变更：§1.2 `role` 语义收敛——Role=保留元数据与未来扩展点、默认 `implementation`、Role Runtime 供给降级 deferred（用户 2026-09-08 裁决，ADR-0034 v1.7）；v1.4 变更：§10 增「实现与契约的先后纪律」——实现不得静默重新定义 Contract 语义（用户 2026-09-08 确认）；v1.3 变更：§2.1/§3.1/§3.3 增 T9 `resume`——FINISHED→CODING 返工回退（#946）；v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
-- **日期**：2026-09-08
+- **状态**：Living v1.7（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.7 变更：§8 并发上限反转——移除「≈2-3 显式上限」，会话数不设上限，瓶颈校准为集成收尾侧、守对象重锚为在窗 Execution 规模与 reconcile 负载（用户 2026-09-08 裁决，ADR-0034 v1.9）；v1.6 变更：§1.2 role 缺省归一化——declare 缺省写入 `implementation`（历史空串同义读取不迁移）+ 定义 Role 扩展再开启条件（v1.5 收敛 Revisit 两项闭环，ADR-0034 v1.8）；v1.5 变更：§1.2 `role` 语义收敛——Role=保留元数据与未来扩展点、默认 `implementation`、Role Runtime 供给降级 deferred（用户 2026-09-08 裁决，ADR-0034 v1.7）；v1.4 变更：§10 增「实现与契约的先后纪律」——实现不得静默重新定义 Contract 语义（用户 2026-09-08 确认）；v1.3 变更：§2.1/§3.1/§3.3 增 T9 `resume`——FINISHED→CODING 返工回退（#946）；v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）- **日期**：2026-09-08
 - **适用**：所有在本仓库参与 Execution Registry 的 AI Coding Harness 会话；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
 - **本文演进**：版本化演进于本文；细则不再回填 ADR 正文（ADR-0034 升 v1.1 收缩为决策要点 + 指针）
@@ -20,7 +19,7 @@
 |---|---|
 | `requirement` | 承接的 Requirement 标识（溯源） |
 | `harness` | 承接的 Harness（溯源，非指派） |
-| `role` | Execution 元数据标签与未来扩展点（执行侧自声明，自由文本，无枚举）：不参与路由、不加语义约束、非文件 ownership 边界（§5.3）。当前默认且唯一实际运行角色为 `implementation`（registry 空串即视为该缺省）；特殊 Role 暂不进入主执行路径，运行时 Role Context 供给为 **deferred capability 而非交付承诺**（v1.5 收敛，ADR-0034 v1.7——原「定义与供给细则归 P2 Adapter」条款自此撤回） |
+| `role` | Execution 元数据标签与未来扩展点（执行侧自声明，自由文本，无枚举）：不参与路由、不加语义约束、非文件 ownership 边界（§5.3）。默认且唯一实际运行角色为 `implementation`——declare 缺省即**写入** `implementation`（v1.6 归一化；显式 `--role ""` 同义），历史记录空串同义读取、不迁移；特殊 Role 暂不进入主执行路径，运行时 Role Context 供给为 **deferred capability 而非交付承诺**（v1.5 收敛，ADR-0034 v1.7——原「定义与供给细则归 P2 Adapter」条款自此撤回） |
 | `worktree` | worktree 路径 |
 | `branch` | worktree 的工作分支（§5.2 第二档 branch diff 的数据源；v1.1 增） |
 | `issues` | declared issue 号列表（字符串形态存储；v1.2 增）——`declare --issue N` 可重复显式声明，另从 requirement/branch slug 启发式兜底提取；declare 在窗查重（§3.4）的数据源 |
@@ -31,6 +30,8 @@
 | `created_at` / `updated_at` | 时间戳 |
 
 **不在持久层的**：liveness 值（`LIVE/STALE` 为查询时派生，ADR §2.3）、integration 事实（由 GitHub 权威派生刷新，§3.3——实现可选择缓存最近观测值，但必须带 `observed_at` 且不得作为权威）。
+
+**Role 扩展再开启条件（v1.6 成文，v1.5 收敛 Revisit ②闭环）**：特殊 Role 进入主执行路径仅当出现**声明面消费 Role 的真实需求**——某机制需要按 Role 区分行为（差异化登记纪律、门禁判定、overlap 处理等）——且经用户裁决后以本文新版本 + ADR 增补落地。「多一种标签写法」「想更细的身份标注」**不构成触发**；触发前 registry 接受自由标签值但一律无语义（ADR-0034 v1.7：Role Runtime 为 deferred capability）。
 
 ## 2. Registry 协议
 
@@ -161,9 +162,9 @@ effective_scope = normalized(declared) ∪ derived(diff)
 
 仓库纪律要求的强制随附物不参与 scope drift 比对（属流程义务而非执行意图）：`docs/notes/` 下的 Agent Note（含本仓库「非平凡变更必须附 Note」要求产生的文件）；`.github/workflows/*.yml` 中由 required checks 演进触发的配套改动（属门禁接线，须在 PR 描述中显式提及，豁免仅限 drift 提示、不豁免评审）。其余一律按 §5 比对。
 
-## 8. 并发上限
+## 8. 并发与审计吞吐（v1.7 反转，随 ADR-0034 v1.9）
 
-显式上限保留 ≈2-3；「任务排队」是主策略。Registry 提升的是审计面信息完备性，不是审阅吞吐。
+**会话数不设上限**——原「≈2-3 显式上限」自 2026-09-04 约定未实测继承、被多 Harness 批次 5+ 会话常态超出（含单 Harness 多开），于本版移除（理由与守对象重锚见 ADR §2.6 v1.9）。真实约束在**集成收尾侧**（人的审阅吞吐 + 外部平台可靠性），可观测代理为在窗 Execution（§3.2 risk 集合）规模与 reconcile 负载；「任务排队」仍是主策略（FIFO auto-merge 串行集成、同文件显式串行排程）。Registry 提升的是审计面信息完备性，不是审阅吞吐。
 
 ## 9. P1 启动判据与过渡条款
 

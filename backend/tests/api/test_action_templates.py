@@ -34,16 +34,17 @@ def async_visible_headers(engine):
     )
     session.add_all([admin, user])
     session.commit()
-    # R02-D1（#900）：token sub=用户 PK，id 须在 session 关闭前取出
+    # R02-D1/D2（#900/#902）：token sub=用户 PK + ver=会话纪元，须在 session 关闭前取出
     admin_id, user_id = admin.id, user.id
+    admin_ver, user_ver = admin.token_version, user.token_version
     session.close()
 
     return {
         "admin": {
-            "Authorization": f"Bearer {create_access_token(data={'sub': str(admin_id), 'username': admin_username, 'role': 'admin'})}",
+            "Authorization": f"Bearer {create_access_token(data={'sub': str(admin_id), 'username': admin_username, 'role': 'admin', 'ver': admin_ver})}",
         },
         "user": {
-            "Authorization": f"Bearer {create_access_token(data={'sub': str(user_id), 'username': user_username, 'role': 'user'})}",
+            "Authorization": f"Bearer {create_access_token(data={'sub': str(user_id), 'username': user_username, 'role': 'user', 'ver': user_ver})}",
         },
     }
 
