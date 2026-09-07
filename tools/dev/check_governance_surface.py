@@ -23,6 +23,8 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
   S10 class 目录内 Agent Note 必须日期命名（yyyy-mm-dd-主题.md），且 2026-09-05 起
       新增 Note 的 Status/Class 头部与 class 目录一致
   S11 AGENTS.md 硬不变量锚点逐条在场（防整条删除/改写静默丢失——S4 同模式）
+  S12 ADR 索引一致性：头部状态行 ↔ adr/README 主表/DOC-MAP/M7 看板（status 词级
+      + 规范位版本），头部行 ↔ 版本记录块末项（#861/#867 五次复发后的确定性收口）
 
 用法:
     python tools/dev/check_governance_surface.py --check     # 门禁模式
@@ -229,6 +231,122 @@ def check_hard_invariant_anchors(text: str) -> list[str]:
         for label, pattern in HARD_INVARIANT_ANCHORS
         if not re.search(pattern, text)
     ]
+
+
+# S12: ADR 索引一致性。ADR 头部「状态」行是 status+版本的权威写法，adr/README
+# 主表、DOC-MAP 行、M7 看板行是派生面——#861/#867 五次复发证明「PR 内记得同步」
+# 不可靠（含文内形态：头部行停 v1.3 而版本记录块已到 v1.6）。规则取最小可靠面：
+# status 词级同步到所有在场派生面；版本仅当头部行携带**规范位**版本（紧跟状态词的
+# **Status（vX.Y）** 或 **Status**（vX.Y：…））时才约束派生面——0029/0030 等
+# 注解散文里的 vX.Y（「历经 v1 评审 → v2.1 → …」）不视作头部版本，避免误报。
+_ADR_STATUSES = {"Proposed", "Accepted", "Superseded", "Deprecated"}
+_ADR_STATUS_LINE = re.compile(
+    r"-\s*状态[：:]\s*\*{0,2}(Proposed|Accepted|Superseded|Deprecated)\*{0,2}(.*)$"
+)
+_ADR_VERSION_TOKEN = re.compile(r"v(\d+\.\d+)")
+_ADR_README_LINK = re.compile(r"\((?:\./)?(ADR-\d{4}[^)]*\.md)\)")
+_ADR_DOCMAP_LINK = re.compile(r"\((?:\./)?adr/(ADR-\d{4}[^)]*\.md)\)")
+_ADR_M7_ENTRY = re.compile(
+    r"ADR-(\d{4})（\*\*(Proposed|Accepted|Superseded|Deprecated)\*\*\s*v(\d+\.\d+)"
+)
+
+
+def parse_adr_status_line(line: str) -> tuple[str, str] | tuple[None, None]:
+    """S12 辅助：ADR 头部「状态」行 → (status, 规范位版本)；无版本则 version=None。"""
+    m = _ADR_STATUS_LINE.match(line.strip())
+    if not m:
+        return None, None
+    rest = m.group(2).lstrip("*（ (")
+    vm = _ADR_VERSION_TOKEN.match(rest)
+    return m.group(1), vm.group(1) if vm else None
+
+
+def parse_adr_record_tip(text: str) -> str | None:
+    """S12 辅助：「版本记录」块的最后一个版本 token（块止于下一个 `- ` 项）。"""
+    tip = None
+    in_record = False
+    for line in text.splitlines():
+        s = line.strip()
+        if not in_record:
+            if s.startswith("- 版本记录") or s.startswith("- **版本记录**"):
+                in_record = True
+                found = _ADR_VERSION_TOKEN.findall(s)
+                if found:
+                    tip = found[-1]
+        else:
+            if s.startswith("- "):
+                break
+            found = _ADR_VERSION_TOKEN.findall(s)
+            if found:
+                tip = found[-1]
+    return tip
+
+
+def parse_adr_readme_row(line: str) -> tuple[str, str, str] | tuple[None, None, None]:
+    """S12 辅助：adr/README 主表行 → (文件名, status, 摘要版本前缀)。"""
+    if "ADR-" not in line:
+        return None, None, None
+    link = _ADR_README_LINK.search(line)
+    if not link:
+        return None, None, None
+    cells = [c.strip() for c in line.split("|") if c.strip()]
+    status = next((c for c in cells if c in _ADR_STATUSES), None)
+    summary = cells[-1] if cells else ""
+    vm = re.match(r"v(\d+\.\d+)：", summary)
+    return link.group(1), status, vm.group(1) if vm else None
+
+
+def parse_docmap_adr_row(line: str) -> tuple[str, list[str]] | tuple[None, None]:
+    """S12 辅助：DOC-MAP 中指向 adr/ 的行 → (文件名, 行内全部 vX.Y token)。"""
+    if "/adr/" not in line:
+        return None, None
+    link = _ADR_DOCMAP_LINK.search(line)
+    if not link:
+        return None, None
+    return link.group(1), _ADR_VERSION_TOKEN.findall(line)
+
+
+def check_adr_surface_sync(
+    num: str,
+    header_status: str | None,
+    header_version: str | None,
+    record_tip: str | None,
+    row_status: str | None,
+    row_version: str | None,
+    docmap_versions: list[str] | None,
+    m7_status: str | None,
+    m7_version: str | None,
+) -> list[str]:
+    """S12: ADR 头部 ↔ 派生索引面一致性。不在场（None）的派生面不约束。"""
+    issues: list[str] = []
+    where = f"S12 ADR-{num}"
+    if record_tip and header_version and record_tip != header_version:
+        issues.append(
+            f"{where}: 头部状态行 v{header_version} ≠ 版本记录块末项 v{record_tip}"
+            "——bump 版本必须同步头部行（#867 文内漂移形态）"
+        )
+    if header_status and row_status and header_status != row_status:
+        issues.append(
+            f"{where}: adr/README 主表状态 {row_status} ≠ 头部 {header_status}"
+        )
+    if header_version:
+        if row_version is None:
+            issues.append(
+                f"{where}: adr/README 主表行缺版本前缀（头部 v{header_version}）"
+            )
+        elif row_version != header_version:
+            issues.append(
+                f"{where}: adr/README 主表 v{row_version} ≠ 头部 v{header_version}"
+            )
+        if docmap_versions and docmap_versions[-1] != header_version:
+            issues.append(
+                f"{where}: DOC-MAP 行 v{docmap_versions[-1]} ≠ 头部 v{header_version}"
+            )
+        if m7_status and header_status and m7_status != header_status:
+            issues.append(f"{where}: M7 看板行状态 {m7_status} ≠ 头部 {header_status}")
+        if m7_version is not None and m7_version != header_version:
+            issues.append(f"{where}: M7 看板行 v{m7_version} ≠ 头部 v{header_version}")
+    return issues
 
 
 NOTE_CLASSES = {"feature", "bug-fix", "simplification", "architecture", "process", "testing"}
@@ -504,12 +622,57 @@ def run_check() -> int:
                 label, open(path, encoding="utf-8").read()
             )
 
+    adr_dir = os.path.join(ROOT, "docs", "adr")
+    adr_readme_path = os.path.join(adr_dir, "README.md")
+    docmap_path = os.path.join(ROOT, "docs", "DOC-MAP.md")
+    if os.path.isdir(adr_dir) and os.path.exists(adr_readme_path) and os.path.exists(docmap_path):
+        adr_readme = open(adr_readme_path, encoding="utf-8").read()
+        docmap_text = open(docmap_path, encoding="utf-8").read()
+        readme_rows: dict[str, tuple[str | None, str | None]] = {}
+        for line in adr_readme.splitlines():
+            fn, st, ver = parse_adr_readme_row(line)
+            if fn:
+                readme_rows[fn] = (st, ver)
+        m7_line = next(
+            (l for l in adr_readme.splitlines() if l.startswith("| M7")), ""
+        )
+        m7_entries = {
+            em.group(1): (em.group(2), em.group(3))
+            for em in _ADR_M7_ENTRY.finditer(m7_line)
+        }
+        docmap_rows: dict[str, list[str]] = {}
+        for line in docmap_text.splitlines():
+            fn, tokens = parse_docmap_adr_row(line)
+            if fn:
+                docmap_rows[fn] = tokens
+        for fn in sorted(os.listdir(adr_dir)):
+            if not (fn.startswith("ADR-") and fn.endswith(".md")):
+                continue
+            text = open(os.path.join(adr_dir, fn), encoding="utf-8").read()
+            status_line = next(
+                (l for l in text.splitlines() if l.strip().startswith("- 状态")),
+                None,
+            )
+            header_status, header_version = (
+                parse_adr_status_line(status_line) if status_line else (None, None)
+            )
+            num = fn[4:8]
+            issues += check_adr_surface_sync(
+                num,
+                header_status,
+                header_version,
+                parse_adr_record_tip(text),
+                *readme_rows.get(fn, (None, None)),
+                docmap_rows.get(fn),
+                *m7_entries.get(num, (None, None)),
+            )
+
     for issue in issues:
         print(f"[BLOCK] {issue}")
     if issues:
         print(f"\n治理面结构检查失败：{len(issues)} 项", file=sys.stderr)
         return 1
-    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S11、S5x）")
+    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S12、S5x）")
     return 0
 
 
@@ -693,12 +856,110 @@ def run_self_test() -> int:
         True,
     )
 
+    # S12 夹具：解析器规范位/散文边界 + 五面一致性红绿
+    expect(
+        "S12 头部括号内版本",
+        lambda: parse_adr_status_line("- 状态：**Accepted（v1.6）**")
+        != ("Accepted", "1.6"),
+        False,
+    )
+    expect(
+        "S12 头部外挂括号版本",
+        lambda: parse_adr_status_line("- 状态：**Accepted**（v0.7：P1 编码已合入）")[1]
+        != "0.7",
+        False,
+    )
+    expect(
+        "S12 注解散文 token 不作头部版本",
+        lambda: parse_adr_status_line(
+            "- 状态：**Accepted**（2026-08-19 拍板；历经 v1 评审 → v2.1 → v2.5 重设计）"
+        )[1]
+        is not None,
+        False,
+    )
+    adr_record = (
+        "- 版本记录：v0.1 #858 / v1.0 #865 / v1.2 #877\n"
+        "**v1.3 实测**\n**v1.6 本版：裁决**\n"
+        "- 优先级：P1\n"
+    )
+    expect(
+        "S12 版本记录末项",
+        lambda: parse_adr_record_tip(adr_record) != "1.6",
+        False,
+    )
+    row_ok = parse_adr_readme_row(
+        "| [ADR-0034](./ADR-0034-x.md) | 标题 | Accepted | P1 | M7 | v1.6：决策 |"
+    )
+    expect(
+        "S12 主表行解析",
+        lambda: row_ok != ("ADR-0034-x.md", "Accepted", "1.6"),
+        False,
+    )
+    expect(
+        "S12 五面一致",
+        lambda: check_adr_surface_sync(
+            "0034", "Accepted", "1.6", "1.6", "Accepted", "1.6", ["1.6"],
+            "Accepted", "1.6",
+        ),
+        False,
+    )
+    expect(
+        "S12 README 状态漂移",
+        lambda: check_adr_surface_sync(
+            "0002", "Superseded", None, None, "Accepted", None, None, None, None
+        ),
+        True,
+    )
+    expect(
+        "S12 README 版本漂移",
+        lambda: check_adr_surface_sync(
+            "0034", "Accepted", "1.6", "1.6", "Accepted", "1.0", None, None, None
+        ),
+        True,
+    )
+    expect(
+        "S12 头部行落后版本记录",
+        lambda: check_adr_surface_sync(
+            "0034", "Accepted", "1.3", "1.6", "Accepted", "1.6", None, None, None
+        ),
+        True,
+    )
+    expect(
+        "S12 DOC-MAP 版本漂移",
+        lambda: check_adr_surface_sync(
+            "0034", "Accepted", "1.6", "1.6", "Accepted", "1.6", ["1.1"], None, None
+        ),
+        True,
+    )
+    expect(
+        "S12 M7 看板漂移",
+        lambda: check_adr_surface_sync(
+            "0034", "Accepted", "1.6", "1.6", "Accepted", "1.6", None, "Accepted", "1.0"
+        ),
+        True,
+    )
+    expect(
+        "S12 头部无版本不约束派生面",
+        lambda: check_adr_surface_sync(
+            "0030", "Accepted", None, None, "Accepted", "1.9", ["1.9"],
+            "Accepted", "1.9",
+        ),
+        False,
+    )
+    expect(
+        "S12 行缺版本前缀被拦",
+        lambda: check_adr_surface_sync(
+            "0033", "Accepted", "1.1", None, "Accepted", None, None, None, None
+        ),
+        True,
+    )
+
     if failures:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         print(f"\n自测失败 {len(failures)} 项——检查器自身不可信，禁止用于拦截", file=sys.stderr)
         return 1
-    print("[OK] self-test 通过：12 条规则各含红/绿样例双向验证")
+    print("[OK] self-test 通过：13 条规则各含红/绿样例双向验证")
     return 0
 
 
