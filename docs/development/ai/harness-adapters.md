@@ -71,6 +71,7 @@ Execution 串行修改。并行执行语义的权威源是
   （declare/update/finish）刷新自身 `last_seen`；
 - 各 Harness 的自动加载差异（Codex/Cursor/OpenCode 读 scoped `AGENTS.md`；
   Claude 经 `CLAUDE.md` symlink 薄壳）见本文件上方适配面表与 ADR 附录 A；
-  **Claude 子目录下根启动契约不自动加载（#857）**——修改共享层（根 AGENTS/
-  workflows/依赖）前必须先读仓库根 `AGENTS.md`，P2b 的根供给方案落地前以
-  此人工纪律过渡。
+  **Claude 子目录下根启动契约不自动加载（#857）**——非交互会话用
+  `tools/dev/claude_with_root.sh "<prompt>"`（已验证的根供给 wrapper，
+  2026-09-07 子目录双题探针 Q1/Q2 双绿）；交互 TUI 从仓库根启动，或遵循
+  scoped 真身头部的根指针人工读根 `AGENTS.md`。
