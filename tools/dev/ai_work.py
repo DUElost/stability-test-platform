@@ -455,6 +455,19 @@ def issue_conflicts(new_issues: set, records: dict, skip_id: str) -> list:
     return conflicts
 
 
+# ── role 缺省归一化（契约 §1.2 v1.6，ADR-0034 v1.7 Revisit ①）──
+
+DEFAULT_ROLE = "implementation"
+
+
+def default_role(role_arg: str | None) -> str:
+    """declare 的 role 缺省归一化：缺省/空串一律写 DEFAULT_ROLE。
+
+    契约「默认且唯一实际运行角色=implementation」落到存储层；历史记录的
+    空串同义读取（不迁移）。显式 --role 透传（自由文本，无枚举校验）。"""
+    return role_arg or DEFAULT_ROLE
+
+
 def cmd_declare(args) -> int:
     try:
         args.requirement = normalize_requirement_id(args.requirement)
@@ -497,10 +510,11 @@ def cmd_declare(args) -> int:
                 print(f"[WARN] --force：issue {'/'.join('#' + str(n) for n in hit)} "
                       f"与在窗 Execution {rid!r} 重叠——人工确认转手/并行边界")
         now = _now()
+        role_value = default_role(args.role)
         ctx.records[rec_id] = {
             "requirement": args.requirement,
             "harness": args.harness,
-            "role": args.role or "",
+            "role": role_value,
             "worktree": os.path.abspath(args.worktree),
             "branch": branch or "",
             "scope": scopes,
@@ -518,7 +532,8 @@ def cmd_declare(args) -> int:
     issue_note = f" issues={sorted((str(n) for n in new_issues), key=int)}" if new_issues else ""
     hint = "" if new_issues else \
         "（hint：requirement/branch 未含 issue 号且未带 --issue——在窗查重无输入，建议 --issue N）"
-    print(f"[OK] declare {rec_id} scope={scopes} test_impact={args.test_impact or 'indirect(缺省)'}"
+    print(f"[OK] declare {rec_id} role={role_value} scope={scopes} "
+          f"test_impact={args.test_impact or 'indirect(缺省)'}"
           f"{issue_note}{hint}")
     return 0
 
@@ -922,6 +937,11 @@ def run_self_test() -> int:
     except ValueError:
         pass
 
+    # role 缺省归一化（契约 §1.2 v1.6）：缺省/空串写 implementation，显式值透传
+    assert default_role(None) == "implementation"
+    assert default_role("") == "implementation"
+    assert default_role("docs") == "docs"
+
     # P3 drift gate 纯函数
     assert is_test_path("backend/tests/test_x.py") and is_test_path("tests/y.py")
     assert is_test_path("frontend/src/a.test.ts") and is_test_path("dir/conftest.py")
@@ -998,7 +1018,9 @@ def main() -> int:
     p.add_argument("--requirement", required=True)
     p.add_argument("--harness", required=True)
     p.add_argument("--worktree", required=True)
-    p.add_argument("--role")
+    p.add_argument("--role",
+                   help="Role Context 标签（自由文本；缺省写入 implementation，"
+                        "历史空串记录同义读取——契约 §1.2）")
     p.add_argument("--scope", action="append", required=True)
     p.add_argument("--issue", action="append", type=int, metavar="N",
                    help="关联 issue 号，可重复；与 requirement/branch slug 提取一并作"
