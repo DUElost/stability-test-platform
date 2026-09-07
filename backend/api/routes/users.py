@@ -161,6 +161,11 @@ def update_user(
             )
         user.is_active = payload.is_active
 
+    # R02-D2（#902）：改密/改角色/停用启用即递增会话纪元，目标用户全部在发
+    # token 立即失效（ver 比对见 services/auth_session.py）。
+    if payload.password or payload.role or payload.is_active is not None:
+        user.token_version = (user.token_version or 1) + 1
+
     record_audit(
         db,
         action="user_updated",
@@ -233,6 +238,8 @@ def toggle_user_active(
         raise HTTPException(status_code=404, detail="User not found")
 
     user.is_active = "N" if user.is_active == "Y" else "Y"
+    # R02-D2（#902）：停用/启用递增会话纪元——重新启用后旧 token 也不复活。
+    user.token_version = (user.token_version or 1) + 1
     record_audit(
         db,
         action="user_active_toggled",
@@ -277,6 +284,9 @@ def change_password(
         )
 
     current_user.hashed_password = get_password_hash(payload.new_password)
+    # R02-D2（#902）：改密递增会话纪元——本会话在内的全部在发 token 立即
+    # 失效，用户须以新密码重新登录。
+    current_user.token_version = (current_user.token_version or 1) + 1
     record_audit(
         db,
         action="change_password",

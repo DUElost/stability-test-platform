@@ -83,7 +83,7 @@ def test_logout_clears_auth_cookies_and_invalidates_session(client, test_user):
 
 def test_auth_me_still_accepts_bearer_header(client, test_user):
     token = create_access_token(
-        data={"sub": str(test_user.id), "username": "testuser", "role": "user"}
+        data={"sub": str(test_user.id), "username": "testuser", "role": "user", "ver": test_user.token_version}
     )
 
     response = client.get(
@@ -215,3 +215,67 @@ def test_refresh_rotation_rejects_replayed_refresh_token(client, test_user):
 
     replay = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
     assert replay.status_code == 401
+
+
+# ── R02-D2（#902）：会话纪元——改密/停用即全量失效 ──────────────────────────
+
+
+def test_change_password_invalidates_existing_token(client, test_user):
+    login = client.post(
+        "/api/v1/auth/token",
+        data={"username": "testuser", "password": "testpass123"},
+    )
+    access = login.json()["access_token"]
+    assert client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {access}"}
+    ).status_code == 200
+
+    change = client.post(
+        "/api/v1/users/change-password",
+        json={"old_password": "testpass123", "new_password": "newpass12345"},
+        headers={"Authorization": f"Bearer {access}"},
+    )
+    assert change.status_code == 200
+
+    # 改密后旧 access token 立即失效（ver 纪元不匹配）
+    me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {access}"})
+    assert me.status_code == 401
+
+    # 新密码可登录、旧密码被拒
+    relogin = client.post(
+        "/api/v1/auth/token",
+        data={"username": "testuser", "password": "newpass12345"},
+    )
+    assert relogin.status_code == 200
+    oldpw = client.post(
+        "/api/v1/auth/token",
+        data={"username": "testuser", "password": "testpass123"},
+    )
+    assert oldpw.status_code == 401
+
+
+def test_admin_toggle_active_invalidates_existing_token(
+    client, test_user, admin_headers
+):
+    login = client.post(
+        "/api/v1/auth/token",
+        data={"username": "testuser", "password": "testpass123"},
+    )
+    access = login.json()["access_token"]
+
+    toggle = client.post(
+        f"/api/v1/users/{test_user.id}/toggle-active", headers=admin_headers
+    )
+    assert toggle.status_code == 200
+
+    me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {access}"})
+    assert me.status_code == 401
+
+
+def test_token_without_ver_claim_rejected(client, test_user):
+    """硬切换：无 ver 的存量 token（本部署前签发）一律 401。"""
+    from backend.core.security import create_access_token
+
+    legacy = create_access_token({"sub": str(test_user.id), "role": "user"})
+    me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {legacy}"})
+    assert me.status_code == 401
