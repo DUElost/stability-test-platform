@@ -452,8 +452,11 @@ def _report(rec_id: str, rec: dict, repo_root: str, refresh: bool) -> None:
                      else []) + ([f"diff 未声明: {undeclared}"] if undeclared else [])
             if parts:
                 print("  [declaration-drift] " + "; ".join(parts))
-        if liveness == "STALE" and not effective:
-            print("  [zombie-candidate] STALE 且 effective scope 为空——人工经 finish --abandon 收口")
+        # #962：旧判据 `not effective` 在并集语义下不可达（declare --scope
+        # required + update 只替换 → declared 恒非空）；僵尸本义是
+        # 「声明了、没干、还失联」→ STALE 且 derived 为空
+        if liveness == "STALE" and not derived:
+            print("  [zombie-candidate] STALE 且 diff 为空（声明未落地）——人工经 finish --abandon 收口")
 
 
 def cmd_status(args) -> int:
