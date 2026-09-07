@@ -11,10 +11,12 @@ import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from sqlalchemy.orm import Session
 
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
+from backend.core.database import get_db
 from backend.core.metrics import get_metrics_response, is_prometheus_available
-from backend.core.security import decode_token
+from backend.services.auth_session import authenticate_token
 
 router = APIRouter()
 
@@ -31,14 +33,18 @@ def _metrics_auth_required() -> bool:
 def verify_metrics_access(
     authorization: Optional[str] = Header(None),
     x_agent_secret: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
 ) -> None:
-    """Optional Bearer access token or X-Agent-Secret when auth is enabled."""
+    """Optional Bearer access token or X-Agent-Secret when auth is enabled.
+
+    R02-D3（#903）：Bearer 分支走 auth_session 完整校验面（此前仅签名级
+    decode——停用/删除用户的 token 到 exp 前全通）。"""
     if not _metrics_auth_required():
         return
 
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        if decode_token(token, expected_type="access"):
+        if authenticate_token(db, token, expected_type="access"):
             return
 
     if x_agent_secret:

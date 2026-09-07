@@ -33,6 +33,7 @@ from backend.core.security import (
     verify_password,
 )
 from backend.models.user import User
+from backend.services.auth_session import authenticate_token, resolve_payload_user
 from backend.services.token_blacklist import is_revoked, revoke
 
 logger = logging.getLogger(__name__)
@@ -151,30 +152,19 @@ def _authenticate_user(db: Session, username: str, password: str) -> User:
 def _issue_token_pair(user: User) -> tuple[str, str]:
     # R02-D1（#900）：sub=不可变 PK——username 是可复用业务键（删建同名≠同一
     # 身份）；username/role 降为信息性 claim，鉴权决策只信 DB 行。
+    # R02-D2（#902）：ver=会话纪元，bump 后携带旧 ver 的 token 立即失效。
     access_token = create_access_token(
-        data={"sub": str(user.id), "username": user.username, "role": user.role}
+        data={
+            "sub": str(user.id),
+            "username": user.username,
+            "role": user.role,
+            "ver": user.token_version,
+        }
     )
     refresh_token = create_refresh_token(
-        data={"sub": str(user.id), "username": user.username}
+        data={"sub": str(user.id), "username": user.username, "ver": user.token_version}
     )
     return access_token, refresh_token
-
-
-def _user_from_payload(db: Session, payload: dict) -> Optional[User]:
-    """按 token payload 解析有效用户；无效返回 None。
-
-    R02-D1 硬切换（#900）：sub 必须是用户 PK，int 解析失败（含存量
-    username-sub token）一律拒绝——存量 token 的 sub 正是 #900 冒充窗口的
-    载体，不设宽限（设计 note §3）。"""
-    raw_sub = payload.get("sub")
-    try:
-        user_id = int(raw_sub)
-    except (TypeError, ValueError):
-        return None
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user or user.is_active != "Y":
-        return None
-    return user
 
 
 def get_current_user(
@@ -193,17 +183,9 @@ def get_current_user(
     if not token:
         return None
 
-    # ADR-0024 P0: expected_type="access" 防止 refresh token 被当 access 重放
-    # → 绕过 logout 黑名单(blacklist 只在 /auth/refresh 端点检查)。
-    payload = decode_token(token, expected_type="access")
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    user = _user_from_payload(db, payload)
+    # R02-D3（#903）：校验链收敛到 auth_session 单一函数（签名/type/exp →
+    # PK 查库 → is_active → ver 纪元），与 metrics/Socket.IO 同强度。
+    user = authenticate_token(db, token, expected_type="access")
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -442,7 +424,7 @@ def refresh(
         db.commit()
         return _refresh_unauthorized("Invalid refresh token")
 
-    user = _user_from_payload(db, payload_data)
+    user = resolve_payload_user(db, payload_data)
     if not user:
         return _refresh_unauthorized("Invalid refresh token")
 
