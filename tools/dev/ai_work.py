@@ -32,6 +32,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 TTL_SECONDS = 24 * 3600  # §4：24h 量级，仅 advisory
@@ -50,7 +51,7 @@ def yaml_dump(data: dict) -> str:
     lines = ["# ai-work registry (managed by tools/dev/ai_work.py; do not edit by hand)"]
     for key in sorted(data):
         rec = data[key]
-        lines.append(f"{key}:")
+        lines.append(f"{_quote(key)}:")  # key 与值同规则引用——#880：'#'/'::' 开头的 id 不得裸写
         for field in ("requirement", "harness", "role", "worktree", "branch",
                       "lifecycle", "test_impact", "pr_number", "integration_cache",
                       "last_seen", "created_at", "updated_at", "observed_at"):
@@ -69,8 +70,8 @@ def _quote(v) -> str:
     s = str(v)
     if s == "":
         return '""'
-    if re.fullmatch(r"[A-Za-z0-9_./+=:@#-]+", s):
-        return s
+    if not s.startswith("#") and re.fullmatch(r"[A-Za-z0-9_./+=:@-]+", s):
+        return s  # 含 # 一律引号——行首裸 # 会被当注释（#880）
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
@@ -111,9 +112,11 @@ def yaml_load(text: str) -> dict:
         if line.startswith("    []"):
             field = None
             continue
-        m = re.match(r"^(\S[^:]*):$", line)
+        m = re.match(r'^(?:"((?:\\.|[^"])*)"|(\S[^:]*)):$', line)
         if m:
-            current = m.group(1)
+            current = _unquote(m.group(1)) if m.group(1) is not None else m.group(2)
+            # codec 层只管正确往返（含引号 '#'/'::' key 的防御深度）；'#' 开头与
+            # 含 ':' 的 id 由 declare 语义层拒绝（normalize_requirement_id）
             if current in data:
                 raise ValueError(f"registry.yaml:{lineno}: 记录重复 {current!r}")
             data[current] = {}
@@ -194,7 +197,23 @@ def read_registry(path: str) -> dict:
     if not os.path.exists(path):
         return {}
     with open(path, encoding="utf-8") as fh:
-        return yaml_load(fh.read())
+        text = fh.read()
+    try:
+        return yaml_load(text)
+    except ValueError:
+        # 契约 §2.2 损坏恢复：隔离留证 + 人类可读报错（#880：任何一次损坏都
+        # 不能只剩裸 traceback——registry 可重 declare，静默清空会伪造「无人工作」）
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        corrupt = f"{path}.corrupt-{stamp}"
+        try:
+            os.replace(path, corrupt)
+        except OSError:
+            corrupt = "(隔离失败，原文件未动)"
+        raise ValueError(
+            f"registry.yaml 无法解析——已隔离至 {corrupt} 留证。\n"
+            f"恢复：修复/删除隔离文件后重新 declare（Registry 是声明面，可重建；"
+            f"不要静默清空——那会伪造「无人在工作」）。原始内容见隔离文件。"
+        ) from None
 
 
 def validate(records: dict) -> None:
@@ -236,6 +255,13 @@ def load_locked(path: str, lock_path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     lock_fh = open(lock_path, "w")
     fcntl.flock(lock_fh, fcntl.LOCK_EX)
+    # 契约 §2.2：持锁后清理无主残留 tmp（前次崩溃遗留；mtime 早于本次持锁即清）
+    tmp = path + ".tmp"
+    if os.path.exists(tmp):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
     class _Ctx:
         def __init__(self):
@@ -323,7 +349,29 @@ def _now() -> float:
     return time.time()
 
 
+def normalize_requirement_id(rid: str) -> str:
+    """requirement id 校验（#880 修复 1，语义层）：拒绝 '#' 开头与含 ':' 的 id。
+
+    id 是 registry.yaml 的 record key（YAML 行首位）——'#' 开头会被任何 YAML
+    解析当注释、': ' 会破坏行结构。codec 已对称转义（防御深度），本校验是
+    语义层守门：id 保持简洁标识形态（本仓库自然形态=issue 语义短语或 slug）。"""
+    rid = rid.strip()
+    if not rid:
+        raise ValueError("requirement id 不能为空")
+    if rid.startswith("#"):
+        raise ValueError(f"requirement id 不得以 '#' 开头（会被 YAML 当注释）: {rid!r}"
+                         f"——引用 issue 号请写作 'issue-878' 式 slug 或 'fix #878 描述' 剥离前导 #")
+    if ":" in rid:
+        raise ValueError(f"requirement id 不得含 ':'（破坏 record 行结构）: {rid!r}")
+    return rid
+
+
 def cmd_declare(args) -> int:
+    try:
+        args.requirement = normalize_requirement_id(args.requirement)
+    except ValueError as exc:
+        print(f"[REFUSED] {exc}", file=sys.stderr)
+        return 2
     path, lock = registry_paths()
     repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
                                text=True, check=True).stdout.strip()
@@ -633,6 +681,38 @@ def run_self_test() -> int:
     assert derive_liveness(time.time() - 10, time.time()) == "LIVE"
     assert derive_liveness(time.time() - TTL_SECONDS - 1, time.time()) == "STALE"
 
+    # #880 三缺口红绿：declare 校验 / codec 引号 key 往返 / corrupt 隔离
+    try:
+        normalize_requirement_id("#878")
+        failures.append("#880 declare 拒绝 #开头: 预期红，实际绿")
+    except ValueError:
+        pass
+    try:
+        normalize_requirement_id("P0: sync")
+        failures.append("#880 declare 拒绝含冒号: 预期红，实际绿")
+    except ValueError:
+        pass
+    assert normalize_requirement_id("fix #878 login") == "fix #878 login"  # 值位 # 合法
+    quoted_key = {"#878": {"requirement": "#878", "harness": "claude",
+                            "worktree": "/w", "branch": "", "scope": ["backend"],
+                            "lifecycle": "CODING", "test_impact": "indirect",
+                            "last_seen": 1.0, "created_at": 1.0, "updated_at": 1.0}}
+    rt = yaml_load(yaml_dump(quoted_key))
+    assert rt["#878"]["requirement"] == "#878"  # codec 对称：引号 key 往返
+    with tempfile.TemporaryDirectory() as td:
+        p2, lk2 = os.path.join(td, "registry.yaml"), os.path.join(td, "registry.lock")
+        atomic_write(p2, lk2, quoted_key)
+        assert read_registry(p2)["#878"]["harness"] == "claude"
+        open(p2, "w", encoding="utf-8").write("garbage line not yaml\n")
+        try:
+            read_registry(p2)
+            failures.append("#880 corrupt 隔离: 预期红，实际绿")
+        except ValueError as exc:
+            assert "已隔离至" in str(exc) and ".corrupt-" in str(exc)
+        for f in sorted(os.listdir(td)):
+            print(f"[dbg] f={f!r} startswith(p2)={f.startswith(p2)} corrupt={'​.corrupt-' in f}",
+                  file=sys.stderr)
+
     # P3 drift gate 纯函数
     assert is_test_path("backend/tests/test_x.py") and is_test_path("tests/y.py")
     assert is_test_path("frontend/src/a.test.ts") and is_test_path("dir/conftest.py")
@@ -674,7 +754,6 @@ def run_self_test() -> int:
         pass
 
     # 九步原子写往返（临时目录）
-    import tempfile
     with tempfile.TemporaryDirectory() as td:
         p, lk = os.path.join(td, "registry.yaml"), os.path.join(td, "registry.lock")
         atomic_write(p, lk, sample)
