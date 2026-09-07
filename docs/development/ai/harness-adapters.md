@@ -30,25 +30,20 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 Harness 的自动发现规则会随版本变化。新增专用适配前必须用对应版本实测加载行为；
 不能仅凭文件名推断规则已经生效。
 
-**Antigravity CLI 实测（2026-09-07，`agy -p` 非交互）**：根与嵌套 `AGENTS.md`、
-`CLAUDE.md`（含 symlink）、`GEMINI.md` 均不自动加载（随机探针串+引文诊断+运行日志
-+stream-json init 四重证据；`agy agents` 空、无全局配置目录）——该 Harness 无仓库
-文件的自动加载通道，规则供给用 `tools/dev/agy_with_rules.sh "<prompt>"`（根规则拼
-prompt 前缀）。机制层：规则装载走 `declarative_config_loader.go` 的
-`prompt section "user_rules"`（`~/.gemini/antigravity-cli/settings.json` 无此字段，
-空被 skip）——装载清单里没有约定文件通道，非路径问题。
+**Antigravity CLI 实测汇总（2026-09-07，`agy 1.1.26 -p`）——当前为「只读顾问」型可用**：
 
-**分层装载实测（2026-09-07，`-p` 模式）**：**全局层生效、workspace 层不装载**——
-在 `~/.gemini/GEMINI.md` 与 `~/.gemini/AGENTS.md` 放唯一探针串后（可逆实验，测后
-删除），agy `-p` 会话上下文**两个都出现**；而 workspace 层（信任/非信任路径 ×
-仓库根/嵌套的 `AGENTS.md`/`GEMINI.md`/`CLAUDE.md` symlink）仍全部不装载。[官方迁移
-文档](https://antigravity.google/docs/cli/gcli-migration/) 声称会解析 active
-directory 的 `GEMINI.md`/`AGENTS.md`——与 workspace 层实测冲突，待上游确认。
-**冲突澄清前，仓库规则供给一律走 `agy_with_rules.sh` 前置**；全局层通道属
-**本机个人配置**（影响所有 agy 会话与所有项目），不放仓库规则（本地配置边界）。另：**headless（-p）模式未 allow 的工具一律 auto-deny**（报错原文
-指引 `permissions.allow` 机制）；`--dangerously-skip-permissions` 在本构建触发
-Agent execution terminated——作为 coding agent 使用需先在**本机** settings.json
-配置 `permissions.allow`（本机配置边界，不入库），并注意该模式本构建稳定性存疑。
+- **规则供给**：`agy_with_rules.sh` 注入根契约实测生效；**全局层**（`~/.gemini/GEMINI.md`
+  与 `~/.gemini/AGENTS.md`，可逆探针证实）在 `-p` 下装载；**workspace 层**（active
+  directory 的 `AGENTS.md`/`GEMINI.md`/`CLAUDE.md` symlink）全部不装载——与[官方迁移
+  文档](https://antigravity.google/docs/cli/gcli-migration/)冲突，待上游确认。机制层：
+  规则装载走声明式配置 `user_rules` 节（`~/.gemini/antigravity-cli/settings.json` 无
+  此字段，空被 skip）；
+- **工具执行不可用**：headless 下凡批准工具执行（skip-permissions、`permissions.allow`
+  两种语法共三条路径）一律 `Agent execution terminated`——崩点在执行循环（实验后
+  settings.json 已恢复原状）；故 agy 会话不能读写文件/执行命令，**无法独立完成
+  declare→工作→finish 的 Execution 周期**；交互 TUI 未验证（PTY 不稳定）；
+- **批次角色**：上游修复 headless 工具循环前，agy 仅承担注入规则的问答/分析，
+  不承接改码任务；全局层属本机个人配置，不放仓库规则。
 
 ## 本地配置边界
 
