@@ -220,9 +220,15 @@ def trigger_recovery_sync_on_device_reconnect(
     boot_id: str,
     execute_actions: Any,
 ) -> bool:
-    """Device reconnect hook: re-run recovery sync when local active jobs still exist."""
+    """Device reconnect hook: re-run recovery sync when local active jobs still exist.
+
+    Returns True when recovery is settled (completed, or nothing to do) —
+    callers clear their reconnect marks; False when recovery was needed but
+    this attempt failed — callers must keep the marks so the next heartbeat
+    re-attempts without requiring another plug/unplug (#1009).
+    """
     if not reconnected_serials:
-        return False
+        return True
 
     persisted_jobs = local_db.get_active_jobs()
     if not persisted_jobs:
@@ -230,7 +236,7 @@ def trigger_recovery_sync_on_device_reconnect(
             "recovery_skip_reconnect_no_local_jobs serials=%s",
             ",".join(reconnected_serials),
         )
-        return False
+        return True
 
     matched_jobs = [
         job
@@ -243,7 +249,7 @@ def trigger_recovery_sync_on_device_reconnect(
             ",".join(reconnected_serials),
             len(persisted_jobs),
         )
-        return False
+        return True
 
     logger.info(
         "recovery_reconnect_triggered serials=%s matched_jobs=%d active_jobs=%d",
@@ -251,7 +257,7 @@ def trigger_recovery_sync_on_device_reconnect(
         len(matched_jobs),
         len(persisted_jobs),
     )
-    run_recovery_sync_if_needed(
+    return run_recovery_sync_if_needed(
         local_db=local_db,
         api_url=api_url,
         host_id=host_id,
@@ -260,7 +266,6 @@ def trigger_recovery_sync_on_device_reconnect(
         execute_actions=execute_actions,
         active_jobs=matched_jobs,
     )
-    return True
 
 
 def execute_recovery_actions_impl(
@@ -509,27 +514,37 @@ def run_recovery_sync_if_needed(
     boot_id: str,
     execute_actions: Any,
     active_jobs: Optional[List[dict]] = None,
-) -> None:
-    """ADR-0019 Phase 3a: check local persisted state and sync with Backend if needed."""
+) -> bool:
+    """ADR-0019 Phase 3a: check local persisted state and sync with Backend if needed.
+
+    Returns True when recovery state is settled (fully reconciled, or there
+    is nothing to reconcile); False when a transient failure left recovery
+    incomplete — callers must keep their retry state so a later heartbeat /
+    reconnect re-attempts (#1009).
+    """
     try:
         persisted_jobs = active_jobs if active_jobs is not None else local_db.get_active_jobs()
         pending_outbox = local_db.get_pending_outbox()
-        if persisted_jobs or pending_outbox:
-            resp = sync_recovery(
-                api_url, host_id, agent_instance_id, boot_id,
-                active_jobs=persisted_jobs,
-                pending_outbox=pending_outbox,
-            )
-            if resp is not None:
-                execute_actions(resp, {j["job_id"]: j for j in persisted_jobs})
-                logger.info(
-                    "recovery_sync_complete active_jobs=%d outbox=%d",
-                    len(persisted_jobs), len(pending_outbox),
-                )
-        else:
+        if not (persisted_jobs or pending_outbox):
             logger.info("recovery_skip_no_persisted_state")
+            return True
+        resp = sync_recovery(
+            api_url, host_id, agent_instance_id, boot_id,
+            active_jobs=persisted_jobs,
+            pending_outbox=pending_outbox,
+        )
+        if resp is None:
+            logger.warning("recovery_sync_failed_http — retry state kept")
+            return False
+        execute_actions(resp, {j["job_id"]: j for j in persisted_jobs})
+        logger.info(
+            "recovery_sync_complete active_jobs=%d outbox=%d",
+            len(persisted_jobs), len(pending_outbox),
+        )
+        return True
     except Exception:
-        logger.exception("recovery_sync_failed_continuing")
+        logger.exception("recovery_sync_failed_continuing — retry state kept")
+        return False
 
 
 def main() -> None:
