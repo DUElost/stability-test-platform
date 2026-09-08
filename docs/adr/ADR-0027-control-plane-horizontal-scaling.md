@@ -1,6 +1,7 @@
 # ADR-0027: 控制面水平扩展（Leader Election + 多实例）
 
 - 状态：Accepted（P3-1 / P3-2 / P3-3 代码已落地；生产多实例仍为 **opt-in**，见 ADR-0025 D1）
+- 版本记录：v1.1（2026-09-08）leadership 失败策略 fail-open → 按 deployment 形态分级（R01-F10/#890）
 - 优先级：P2
 - 目标里程碑：M6
 - 日期：2026-07-20
@@ -29,8 +30,14 @@ ADR-0026 将 P3 标为远期方向：
 - 开关：`STP_SCHEDULER_LEADER_ELECTION`（默认 `1`）
   - 单实例：永远抢到锁，行为与改造前一致
   - 多实例误部署：至多一个进程跑 singleton tick
-  - `0`：关闭选举（调试/应急）
-  - SQLite / `TESTING=1`：恒为 leader（本地与单测）
+  - `0`：关闭选举（调试/应急）——**显式豁免路径**：遗留单进程模式，单进程
+    即无双跑，fail-open 仅存于此
+  - SQLite / `TESTING=1`：恒为 leader（本地与单测，非多实例形态）
+  - **Postgres 下 session 工厂 / 取锁失败 → fail-closed（跳过本轮 tick，
+    R01-F10/#890）**：DB 不可用期间 singleton job 本就依赖同一 DB，跳过无
+    可用性损失；多实例下 fail-open 会让全部副本同时自认 leader——双跑风险
+    不对称地大于跳过成本。DB 恢复后 tick 自动恢复。故障注入测试：
+    `tests/test_leader_election.py`
 
 ### P3-2（已落地）：SocketIO Redis adapter
 
@@ -99,3 +106,4 @@ ADR-0026 将 P3 标为远期方向：
 | 2026-07-20 | 初稿 Proposed；P3-1 advisory-lock leader election 落地 |
 | 2026-07-20 | P3-2：`AsyncRedisManager` opt-in（`STP_SOCKETIO_REDIS_ADAPTER`）；文档诚实边界（RPC sticky） |
 | 2026-07-20 | P3-3：全量 singleton schedule leadership + Agent sid registry + room RPC；状态 → Accepted；解除 sticky 依赖 |
+| 2026-09-08 | v1.1（R01-F10/#890）：Postgres 形态下 leadership 获取失败 fail-open → **fail-closed**（跳过 tick）；fail-open 仅保留于显式禁用（遗留单进程）与非 PG 形态两条文档化豁免路径；故障注入测试 `tests/test_leader_election.py` |
