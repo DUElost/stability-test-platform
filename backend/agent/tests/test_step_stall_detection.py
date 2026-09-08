@@ -238,6 +238,32 @@ class TestCaptureLimit:
             for r in caplog.records
         )
 
+    def test_no_newline_stream_is_bounded_by_capture_budget(self):
+        """#1011: 无换行大流不得让 reader pending 无界增长——EOF 前就要按
+        预算截断，进程正常退出且捕获总量不超上限。修复前整流滞留 pending，
+        EOF 一次性送出 → 捕获量随输出线性增长并 OOM。"""
+        proc = _spawn("""
+            import sys
+            sys.stdout.write("y" * (4 * 1024 * 1024) * 6)  # 24 MiB 无换行
+        """)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
+        assert proc.returncode == 0
+        assert len(outcome.stdout) <= _MAX_CAPTURED_CHARS
+
+    def test_single_huge_line_is_truncated_then_remaining_lines_dropped(self):
+        """#1011: 超长单行按预算截断保留前缀；截断后仍继续读完流（子进程
+        不因管道写满而阻塞）。"""
+        proc = _spawn("""
+            import sys
+            sys.stdout.write("x" * (3 * 1024 * 1024) * 7)  # 21 MiB 超长单行
+            sys.stdout.write("\\n")
+            sys.stdout.write("tail-after-newline\\n")
+        """)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
+        assert proc.returncode == 0
+        assert len(outcome.stdout) <= _MAX_CAPTURED_CHARS
+        assert outcome.stdout.startswith("x" * 100)
+
 
 class TestReaderThreadsDoNotLeak:
     def test_threads_are_joined_after_kill(self):
