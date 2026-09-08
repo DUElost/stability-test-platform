@@ -293,7 +293,14 @@ class EventUploader:
             return
 
         if job.plan_run_id is not None:
-            dst_base = resolve_upload_devices_dir(self._nfs_root, int(job.plan_run_id))
+            # #1073 / R10-F04: 事件目录 basename 无跨设备唯一性；扁平
+            # devices/{plan_run_id}/{src.name} 会在 checksum mismatch 时
+            # rmtree 掉另一事件的唯一副本。按稳定 event_id 隔离，与
+            # unassigned/{event_id}/ 布局对齐；extract 只认 DLE remote_path。
+            dst_base = (
+                resolve_upload_devices_dir(self._nfs_root, int(job.plan_run_id))
+                / job.event_id
+            )
         else:
             dst_base = Path(self._nfs_root) / "devices" / "unassigned" / job.event_id
         dst = dst_base / src.name
