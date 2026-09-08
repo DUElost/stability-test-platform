@@ -17,6 +17,30 @@ from backend.models.job import JobInstance
 logger = logging.getLogger(__name__)
 
 
+def _retry_stuck_case_ingest(job_id: int, db: Session) -> bool:
+    """Repair jobs marked post-processed while case ingest was still pending."""
+    from backend.services.case_result_ingest import (
+        case_result_ingest_pending,
+        ingest_test_case_results_for_job,
+    )
+
+    if not case_result_ingest_pending(db, job_id):
+        return True
+    logger.info(
+        "post_completion: job %d processed but case ingest pending, retrying",
+        job_id,
+    )
+    ingest_test_case_results_for_job(db, job_id)
+    db.commit()
+    if case_result_ingest_pending(db, job_id):
+        logger.warning(
+            "post_completion: job %d case ingest still pending after retry",
+            job_id,
+        )
+        return False
+    return True
+
+
 def run_post_completion(job_id: int, db: Session) -> bool:
     """Synchronous post-completion for a single JobInstance.
 
@@ -45,13 +69,25 @@ def run_post_completion(job_id: int, db: Session) -> bool:
         )
 
     if job.post_processed_at is not None:
-        logger.debug("post_completion: job %d already processed at %s", job_id, job.post_processed_at)
-        return True
+        logger.debug(
+            "post_completion: job %d already processed at %s",
+            job_id,
+            job.post_processed_at,
+        )
+        return _retry_stuck_case_ingest(job_id, db)
 
     try:
+        from backend.services.case_result_ingest import (
+            case_result_ingest_pending,
+            ingest_test_case_results_for_job,
+        )
+
         report = compose_run_report(db, job_id)
         if report is None:
-            logger.warning("post_completion: compose_run_report returned None for job %d", job_id)
+            logger.warning(
+                "post_completion: compose_run_report returned None for job %d",
+                job_id,
+            )
             return False
 
         report_dict = report.model_dump(mode="json")
@@ -61,20 +97,22 @@ def run_post_completion(job_id: int, db: Session) -> bool:
             jira_draft = build_jira_draft(report)
             job.jira_draft_json = jira_draft.model_dump(mode="json")
         except Exception:
-            logger.exception("post_completion: jira draft generation failed for job %d", job_id)
+            logger.exception(
+                "post_completion: jira draft generation failed for job %d", job_id,
+            )
+
+        ingest_test_case_results_for_job(db, job_id)
+        if case_result_ingest_pending(db, job_id):
+            db.rollback()
+            logger.warning(
+                "post_completion: job %d case ingest pending, deferring completion",
+                job_id,
+            )
+            return False
 
         job.post_processed_at = datetime.now(timezone.utc)
         db.commit()
         logger.info("post_completion: job %d report persisted", job_id)
-
-        try:
-            from backend.services.case_result_ingest import ingest_test_case_results_for_job
-
-            ingest_test_case_results_for_job(db, job_id)
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception("post_completion: test_case_result ingest failed for job %d", job_id)
 
         # RISK_HIGH only when AEE/ANR aggregation reaches S (once per PlanRun).
         try:
