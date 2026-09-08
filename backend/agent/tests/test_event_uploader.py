@@ -133,7 +133,7 @@ def test_missing_local_patches_remote_when_remote_present(tmp_path, monkeypatch)
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
     monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
     nfs = tmp_path / "nfs"
-    dst = nfs / "devices" / "7" / "evt_dir"
+    dst = nfs / "devices" / "7" / "evt-remote-only" / "evt_dir"
     dst.mkdir(parents=True)
     (dst / "a.txt").write_text("x", encoding="utf-8")
     up = EventUploader.instance()
@@ -219,8 +219,13 @@ def test_upload_one_marks_remote(tmp_path, monkeypatch):
             host_id="host-1",
         )
         up._upload_one(job)
-        assert (nfs / "devices" / "99" / src.name).is_dir()
+        assert (
+            nfs / "devices" / "99" / "00000000-0000-0000-0000-000000000001" / src.name
+        ).is_dir()
         assert posted[-1]["events"][0]["state"] == "REMOTE"
+        assert posted[-1]["events"][0]["remote_path"].endswith(
+            "/devices/99/00000000-0000-0000-0000-000000000001/event_dir"
+        )
     finally:
         for p in patches:
             p.stop()
@@ -346,3 +351,49 @@ def test_prune_local_refuses_aee_root(tmp_path, monkeypatch):
     mock_rm.assert_not_called()
     mock_post.assert_not_called()
     assert tmp_path.is_dir()
+
+
+def test_same_basename_different_events_do_not_overwrite(tmp_path, monkeypatch):
+    """#1073: 跨 host 同 basename、不同内容时不得 rmtree 另一事件远端副本。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+
+    nfs = tmp_path / "nfs"
+    devices = nfs / "devices" / "42"
+    first_remote = devices / "evt-host-a" / "db.fatal.01"
+    first_remote.mkdir(parents=True)
+    (first_remote / "payload.bin").write_bytes(b"host-a-unique")
+
+    src_b = tmp_path / "db.fatal.01"
+    src_b.mkdir()
+    (src_b / "payload.bin").write_bytes(b"host-b-different")
+
+    up = EventUploader.instance()
+    up.configure(api_url="http://x", agent_secret="s", host_id="host-b", nfs_root=str(nfs))
+    posted = []
+
+    def fake_post(url, **kwargs):
+        posted.append(kwargs.get("json"))
+        return MagicMock(status_code=200)
+
+    with patch("backend.agent.event_uploader.requests.post", side_effect=fake_post), patch(
+        "backend.agent.event_uploader.resolve_upload_devices_dir",
+        return_value=devices,
+    ):
+        up._upload_one(_UploadJob(
+            event_id="evt-host-b",
+            local_path=str(src_b),
+            plan_run_id=42,
+            serial="dev-b",
+            platform="MTK",
+            event_type="KE",
+            detected_at="2026-09-08T10:00:00+00:00",
+            host_id="host-b",
+        ))
+
+    second_remote = devices / "evt-host-b" / "db.fatal.01"
+    assert first_remote.is_dir()
+    assert (first_remote / "payload.bin").read_bytes() == b"host-a-unique"
+    assert second_remote.is_dir()
+    assert (second_remote / "payload.bin").read_bytes() == b"host-b-different"
+    assert posted[-1]["events"][0]["remote_path"] == str(second_remote)
