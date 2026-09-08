@@ -558,3 +558,20 @@ def parse_powercycle_result(content: bytes) -> dict:
         "final_status": final_status,
         "entries": entries,
     }
+
+
+def clear_cross_prefs() -> None:
+    """#894：启动前删除另一专项（sleep）prefs——防残留 boot 自启叠加。
+
+    AutoTestTool 是 platform 签名 system app——pm uninstall 无效
+    （DELETE_FAILED_INTERNAL_ERROR），prefs 从不清空。若前序 sleep
+    finish 写 running=false 失败（设备重启窗口 run-as 失败静默），残留
+    running=true 会在设备 boot 后经 boot receiver 拉起 SleepTestService
+    ——与本专项（powercycle）叠加。此处显式删除 sleep_test_runner.xml。
+    """
+    adb_shell(f"am force-stop {_PKG}", timeout=30)
+    cross = "/data/data/{p}/shared_prefs/sleep_test_runner.xml".format(p=_PKG)
+    if is_root():
+        adb_shell(f"rm -f {cross}", timeout=30)
+    else:
+        adb("shell", f"run-as {_PKG} rm -f shared_prefs/sleep_test_runner.xml", timeout=30)

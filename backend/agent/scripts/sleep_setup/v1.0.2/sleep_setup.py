@@ -37,6 +37,7 @@ from _lib import (
     adb_shell,
     device_serial,
     grant_storage,
+    clear_cross_prefs,
     install_apk,
     output_result,
     params,
@@ -68,6 +69,7 @@ def _run(cfg_raw: dict) -> dict:
 
     if cfg["install_apks"]:
         install_apk(apk)
+        clear_cross_prefs()  # #894：清另一专项 prefs 防 boot 自启叠加
 
     set_device_stability()
     grant_storage()

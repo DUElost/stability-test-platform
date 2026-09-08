@@ -366,6 +366,23 @@ def set_prefs(cfg: dict) -> int:
     return current_count
 
 
+def clear_cross_prefs() -> None:
+    """#894：启动前删除另一专项（powercycle）prefs——防残留 boot 自启叠加。
+
+    AutoTestTool 是 platform 签名 system app——pm uninstall 无效
+    （DELETE_FAILED_INTERNAL_ERROR），prefs 从不清空。若前序 powercycle
+    finish 写 running=false 失败（设备重启窗口 run-as 失败静默），残留
+    running=true 会在设备 boot 后经 boot receiver 拉起 PowerCycleService
+    ——与本专项（sleep）叠加。此处显式删除 powercycle_runner.xml。
+    """
+    adb_shell(f"am force-stop {_PKG}", timeout=30)
+    cross = "/data/data/{p}/shared_prefs/powercycle_runner.xml".format(p=_PKG)
+    if is_root():
+        adb_shell(f"rm -f {cross}", timeout=30)
+    else:
+        adb("shell", f"run-as {_PKG} rm -f shared_prefs/powercycle_runner.xml", timeout=30)
+
+
 def set_zte_smart_optimize_allowed() -> None:
     """ZTE 智能优化白名单（lib.ps1:Set-ZteAppSmartOptimizeAllowed 同款；尽力而为）。
 
