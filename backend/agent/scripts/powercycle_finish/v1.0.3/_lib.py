@@ -1,19 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Sleep 专项脚本共享库（sleep_setup / sleep_check / sleep_finish 三件套共用）。
+"""PowerCycle 专项脚本共享库（powercycle_setup / powercycle_check / powercycle_finish 共用）。
 
-移植自 stability_Sleep-Test/scripts/lib.ps1（issue #462 P0a；
-G15 对齐见 docs/notes/feature/2026-08-31-toolkit-android-tools-g15-alignment.md §3.1）。
+移植自 stability_PowerCycle-Test/scripts/lib.ps1（AutoTestTool 后端，issue #462 P0b；
+G15 对齐见 docs/notes/feature/2026-08-31-toolkit-android-tools-g15-alignment.md §3.2）。
 
-- 环境/参数/stdout 契约与 mtbf 三件套一致：
+P0 边界（G15 决策 D3/D4）：
+- 固定 autotesttool 后端，不实现 MSSV（展锐相关，与 G7/#220 合并推进）；
+- 只做 reboot 模式，poweroff（真关机+RTC 唤醒）配置直接校验失败；
+- PC pc-watchdog 不移植——设备离线期间由平台心跳 UNKNOWN/恢复链路兜底，
+  patrol 轮询对设备离线不判服务死亡。
+
+- 环境/参数/stdout 契约与 sleep/mtbf 三件套一致：
   ``STP_DEVICE_SERIAL`` / ``STP_STEP_PARAMS``（JSON）/ stdout 单行 JSON ``{"success": ...}``。
-- 配置解析层级：STP_STEP_PARAMS > STP_SLEEP_* env > ``{STP_AEE_NFS_ROOT}/sleep/{project}/test-config.properties``
-  （可选，lib.ps1:Read-SleepTestConfig 同款）> 代码默认。
-- 资源：APK 在 ``{sleep_resources_dir}/{project}/AutoTestTool.apk``
-  （默认 ``{agent}/resources/sleep/{project}/``，aimonkey/mtbf resources 先例）。
-- 结果：``/sdcard/Android/data/com.tinno.autotesttool/files/SleepTest/sleep_test_result.txt``
-  （旧路径 ``/sdcard/AutoTestTool/SleepTest/`` 兜底），行格式见 ``parse_sleep_result``。
-- adb root 非硬性前置（prefs 有 run-as 兜底）；设备稳定性等设置尽力 root，失败不阻断
-  （lib.ps1 同款语义）。
+- 配置解析层级：STP_STEP_PARAMS > STP_POWER_CYCLE_* env >
+  ``{STP_AEE_NFS_ROOT}/power-cycle/{project}/test-config.properties``（可选）> 代码默认。
+- 资源：APK 在 ``{powercycle_resources_dir}/{project}/AutoTestTool.apk``
+  （默认 ``{agent}/resources/power-cycle/{project}/``；与 Sleep 同一 AutoTestTool.apk，
+  包名 com.tinno.autotesttool，两专项在同一设备上互斥——部署互相覆盖）。
+- 结果：``/sdcard/Android/data/com.tinno.autotesttool/files/PowerCycle/powercycle_result.txt``
+  （旧路径 ``/sdcard/AutoTestTool/PowerCycle/`` 兜底），行格式见 ``parse_powercycle_result``。
+- adb root 非硬性前置（prefs 有 run-as 兜底），但 REBOOT 权限是硬前置
+  （``check_reboot_permission``：无 REBOOT 且无 su → fail-fast）。
 """
 from __future__ import annotations
 
@@ -27,34 +34,35 @@ import tempfile
 import time
 from pathlib import Path
 
-# 设备端常量（manifest 实测：AutoTestTool platform 签名、sharedUserId=android.uid.system）
+# 设备端常量（manifest 实测：与 Sleep 同一 AutoTestTool APK，PowerCycle 组件族）
 _PKG = "com.tinno.autotesttool"
-_SERVICE = "com.mediatek.schpwronoff.sleeptest.SleepTestService"
-_ACTIVITY = "com.mediatek.schpwronoff.sleeptest.SleepTestActivity"
-_KEEPALIVE_RECEIVER = "com.mediatek.schpwronoff.sleeptest.SleepTestKeepAliveReceiver"
-_PREFS_FILE = "sleep_test_runner.xml"
+_SERVICE = "com.mediatek.schpwronoff.powercycle.PowerCycleService"
+_ACTIVITY = "com.mediatek.schpwronoff.powercycle.PowerCycleActivity"
+_KEEPALIVE_RECEIVER = "com.mediatek.schpwronoff.powercycle.PowerCycleAutoResumeReceiver"
+_PREFS_FILE = "powercycle_runner.xml"
 _PREFS_DIR = f"/data/data/{_PKG}/shared_prefs"
 _RESULT_PATHS = (
-    f"/sdcard/Android/data/{_PKG}/files/SleepTest/sleep_test_result.txt",
-    "/sdcard/AutoTestTool/SleepTest/sleep_test_result.txt",
+    f"/sdcard/Android/data/{_PKG}/files/PowerCycle/powercycle_result.txt",
+    "/sdcard/AutoTestTool/PowerCycle/powercycle_result.txt",
 )
 
-# lib.ps1:Read-SleepTestConfig 内嵌默认值（文件缺键时用）
+# lib.ps1:Read-PowerCycleConfig 内嵌默认值（文件缺键时用）
 _DEFAULT_TEST_TIMES = 100
-_DEFAULT_WAKE_SECONDS = 60
-_DEFAULT_SLEEP_SECONDS = 300
+_DEFAULT_MODE = "reboot"
+_DEFAULT_POWER_OFF_MINUTES = 1
+_DEFAULT_WAIT_SECONDS = 3
 _DEFAULT_TESTER = "tester"
 _DEFAULT_AUTO_RESUME = "true"
 
-# 结果文件行格式（设备端 SleepTestService 追加写，时间戳前缀可带可无）
+# 结果文件行格式（设备端 PowerCycleService 追加写，时间戳前缀可带可无）
 _TS_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+(.*)$")
-_CYCLE_RE = re.compile(r"cycle\s+(\d+)/(\d+)\s+(wake OK|wake FAIL)\s+screen=(ON|OFF)")
-_SLEEP_RE = re.compile(r"go sleep\s+(\d+)s\s+screen=(ON|OFF)")
-_FINISH_RE = re.compile(r"finished result=(PASS|FAIL)")
+_CYCLE_RE = re.compile(r"cycle\s+(\d+)/(\d+)\s+start")
+_REBOOT_FAIL_RE = re.compile(r"reboot failed:\s*(.*)")
+_FINISH_RE = re.compile(r"finished result=(PASS)")
 
 
 # ---------------------------------------------------------------------------
-# 环境 / 参数 / 输出契约（与 mtbf _lib 同款）
+# 环境 / 参数 / 输出契约（与 sleep/mtbf _lib 同款）
 # ---------------------------------------------------------------------------
 
 def env(key: str, default: str = "") -> str:
@@ -128,19 +136,25 @@ def _push_file(local: Path, remote: str) -> None:
         raise RuntimeError(f"push 失败 {local.name} -> {remote}: {err.strip() or 'rc=%d' % rc}")
 
 
+def device_online() -> bool:
+    """adb get-state == device（reboot 周期中设备离线属正常，check 用）。"""
+    rc, out, _ = adb("get-state", timeout=15)
+    return rc == 0 and out.strip() == "device"
+
+
 # ---------------------------------------------------------------------------
-# 路径解析（G15 对齐 §4：与 PowerCycle 统一「配置走中心存储、工具走 resources」）
+# 路径解析（G15 对齐 §4：与 Sleep 统一「配置走中心存储、工具走 resources」）
 # ---------------------------------------------------------------------------
 
 def project_name(cfg: dict) -> str:
-    return str(param_or_env(cfg, "project", "STP_SLEEP_PROJECT", "legacy"))
+    return str(param_or_env(cfg, "project", "STP_POWER_CYCLE_PROJECT", "legacy"))
 
 
 def suite_dir(project: str) -> Path:
     root = env("STP_AEE_NFS_ROOT", "")
     if not root:
         raise RuntimeError("STP_AEE_NFS_ROOT is not set")
-    return Path(root) / "sleep" / project
+    return Path(root) / "power-cycle" / project
 
 
 def results_dir(project: str) -> Path:
@@ -148,17 +162,17 @@ def results_dir(project: str) -> Path:
 
 
 def _default_resources_root() -> Path:
-    """默认 resources 根：相对 Agent 目录解析（aimonkey/mtbf 先例同构）。"""
-    return Path(__file__).resolve().parents[3] / "resources" / "sleep"
+    """默认 resources 根：相对 Agent 目录解析（aimonkey/mtbf/sleep 先例同构）。"""
+    return Path(__file__).resolve().parents[3] / "resources" / "power-cycle"
 
 
 def resources_dir(cfg: dict) -> Path:
-    base = cfg.get("sleep_resources_dir") or env("STP_SLEEP_RESOURCES_DIR", str(_default_resources_root()))
+    base = cfg.get("powercycle_resources_dir") or env("STP_POWER_CYCLE_RESOURCES_DIR", str(_default_resources_root()))
     return Path(base) / project_name(cfg)
 
 
 def parse_properties(content: str) -> dict:
-    """test-config.properties 解析：跳过 # 注释，key=value 去空格（lib.ps1:Read-SleepTestConfig 同款）。"""
+    """test-config.properties 解析：跳过 # 注释，key=value 去空格（lib.ps1:Read-PowerCycleConfig 同款）。"""
     cfg = {}
     for line in content.splitlines():
         line = line.strip()
@@ -171,19 +185,22 @@ def parse_properties(content: str) -> dict:
 
 
 def read_properties(project: str) -> dict:
-    """可选配置层：{STP_AEE_NFS_ROOT}/sleep/{project}/test-config.properties，缺失返回空。"""
+    """可选配置层：{STP_AEE_NFS_ROOT}/power-cycle/{project}/test-config.properties，缺失返回空。"""
     root = env("STP_AEE_NFS_ROOT", "")
     if not root:
         return {}
-    path = Path(root) / "sleep" / project / "test-config.properties"
+    path = Path(root) / "power-cycle" / project / "test-config.properties"
     try:
         return parse_properties(path.read_text(encoding="utf-8"))
     except OSError:
         return {}
 
 
-def sleep_config(cfg: dict) -> dict:
-    """规范化配置（STP_STEP_PARAMS > STP_SLEEP_* env > properties > 代码默认）。"""
+def powercycle_config(cfg: dict) -> dict:
+    """规范化配置（STP_STEP_PARAMS > STP_POWER_CYCLE_* env > properties > 代码默认）。
+
+    P0 只做 reboot 模式（G15 D4）：mode=poweroff 直接校验失败（设备能力/充电保护未评估）。
+    """
     project = project_name(cfg)
     props = read_properties(project)
 
@@ -198,16 +215,19 @@ def sleep_config(cfg: dict) -> dict:
             return props[prop_key]
         return default
 
+    mode = str(pick("mode", "STP_POWER_CYCLE_MODE", "test.mode", _DEFAULT_MODE))
+    if mode != "reboot":
+        raise ValueError(f"mode={mode!r} 不支持：P0 只做 reboot（poweroff 需 RTC 唤醒与充电保护评估，见 G15 D4）")
     return {
         "project": project,
-        "test_times": int(pick("test_times", "STP_SLEEP_TEST_TIMES", "test.times", _DEFAULT_TEST_TIMES)),
-        "wake_seconds": int(pick("wake_seconds", "STP_SLEEP_WAKE_SECONDS", "wake.seconds", _DEFAULT_WAKE_SECONDS)),
-        "sleep_seconds": int(pick("sleep_seconds", "STP_SLEEP_SLEEP_SECONDS", "sleep.seconds", _DEFAULT_SLEEP_SECONDS)),
-        "tester": str(pick("tester", "STP_SLEEP_TESTER", "tester.name", _DEFAULT_TESTER)),
-        "auto_resume": str(pick("auto_resume", "STP_SLEEP_AUTO_RESUME", "auto.resume", _DEFAULT_AUTO_RESUME)).lower() == "true",
-        "install_apks": str(pick("install_apks", "STP_SLEEP_INSTALL_APKS", None, "true")).lower() == "true",
-        "reset_count": str(pick("reset_count", "STP_SLEEP_RESET_COUNT", None, "true")).lower() == "true",
-        "zte_optimize": str(pick("zte_optimize", "STP_SLEEP_ZTE_OPTIMIZE", None, "true")).lower() == "true",
+        "test_times": int(pick("test_times", "STP_POWER_CYCLE_TEST_TIMES", "test.times", _DEFAULT_TEST_TIMES)),
+        "mode": mode,
+        "power_off_minutes": int(pick("power_off_minutes", "STP_POWER_CYCLE_POWER_OFF_MINUTES", "power.off.minutes", _DEFAULT_POWER_OFF_MINUTES)),
+        "wait_seconds": int(pick("wait_seconds", "STP_POWER_CYCLE_WAIT_SECONDS", "wait.seconds", _DEFAULT_WAIT_SECONDS)),
+        "tester": str(pick("tester", "STP_POWER_CYCLE_TESTER", "tester.name", _DEFAULT_TESTER)),
+        "auto_resume": str(pick("auto_resume", "STP_POWER_CYCLE_AUTO_RESUME", "auto.resume", _DEFAULT_AUTO_RESUME)).lower() == "true",
+        "install_apks": str(pick("install_apks", "STP_POWER_CYCLE_INSTALL_APKS", None, "true")).lower() == "true",
+        "reset_count": str(pick("reset_count", "STP_POWER_CYCLE_RESET_COUNT", None, "true")).lower() == "true",
     }
 
 
@@ -237,7 +257,7 @@ def parse_size_from_ls(ls: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 设备交互（移植自 lib.ps1，函数级对应）
+# 设备交互（移植自 lib.ps1 AutoTestTool 后端，函数级对应）
 # ---------------------------------------------------------------------------
 
 def is_root() -> bool:
@@ -245,10 +265,7 @@ def is_root() -> bool:
 
 
 def try_adb_root() -> bool:
-    """尽力 adb root（sleep 非硬性前置；失败走 run-as 兜底，lib.ps1 同款不阻断）。
-
-    adb root 后 adbd 会重启，shell 短暂不可用——重试数次，避免瞬时误判。
-    """
+    """尽力 adb root（prefs 写入 run-as 兜底；lib.ps1 同款不阻断）。"""
     adb("root", timeout=15)
     for _ in range(3):
         time.sleep(1)
@@ -258,7 +275,7 @@ def try_adb_root() -> bool:
 
 
 def get_app_uid() -> int:
-    """dumpsys package 解析 uid：android.uid.system → 1000（lib.ps1:Get-SleepTestAppUid 同款）。"""
+    """dumpsys package 解析 uid：android.uid.system → 1000（lib.ps1:Get-PowerCycleAppUid 同款）。"""
     info = adb_shell(f"dumpsys package {_PKG}", timeout=30)
     if "android.uid.system" in info:
         return 1000
@@ -272,7 +289,7 @@ def get_app_uid() -> int:
 
 
 def get_prefs_xml() -> str:
-    """run-as cat prefs（lib.ps1:Get-SleepTestPrefsXml 同款；无文件/权限不足返回空串）。"""
+    """run-as cat prefs（lib.ps1:Get-PowerCyclePrefsXml 同款；无文件/权限不足返回空串）。"""
     _, out, _ = adb("shell", f"run-as {_PKG} cat shared_prefs/{_PREFS_FILE}", timeout=30)
     text = out.strip()
     if text and not any(t in text for t in ("Permission denied", "No such file", "run-as:")):
@@ -281,7 +298,7 @@ def get_prefs_xml() -> str:
 
 
 def repair_prefs_ownership() -> None:
-    """prefs 读不到且可 root → 删旧文件重建（system uid 迁移坑，lib.ps1:Repair-SleepTestPrefsOwnership 同款）。"""
+    """prefs 读不到且可 root → 删旧文件重建（system uid 迁移坑，lib.ps1:Repair-PowerCyclePrefsOwnership 同款）。"""
     if get_prefs_xml():
         return
     if not is_root():
@@ -310,7 +327,7 @@ def push_prefs_xml(content: str) -> None:
 
 
 def update_prefs_field(xml: str, name: str, value: str, type_: str) -> str:
-    """字段替换/追加（lib.ps1:Update-SleepTestPrefsField 同款）。"""
+    """字段替换/追加（lib.ps1:Update-PowerCyclePrefsField 同款）。"""
     if type_ == "int":
         replacement = f'<int name="{name}" value="{value}"/>'
     elif type_ == "string":
@@ -326,24 +343,25 @@ def update_prefs_field(xml: str, name: str, value: str, type_: str) -> str:
 
 def build_prefs_xml(
     test_times: int,
-    wake_seconds: int,
-    sleep_seconds: int,
+    mode: str,
+    power_off_minutes: int,
+    wait_seconds: int,
     tester: str,
     auto_resume: bool,
     current_count: int = 0,
 ) -> str:
-    """整写 prefs（lib.ps1:Set-SleepTestPrefs 同款 map；current_count 由调用方解析读回）。"""
+    """整写 prefs（lib.ps1:Set-PowerCyclePrefs 同款 map；current_count 由调用方解析读回）。"""
     resume = "true" if auto_resume else "false"
     return (
         "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
         "<map>\n"
         f'    <int name="test_times" value="{test_times}"/>\n'
         f'    <int name="current_count" value="{current_count}"/>\n'
-        f'    <int name="wake_seconds" value="{wake_seconds}"/>\n'
-        f'    <int name="sleep_seconds" value="{sleep_seconds}"/>\n'
+        f'    <string name="mode">{mode}</string>\n'
+        f'    <int name="power_off_minutes" value="{power_off_minutes}"/>\n'
+        f'    <int name="wait_seconds" value="{wait_seconds}"/>\n'
         f'    <boolean name="auto_resume" value="{resume}"/>\n'
         '    <boolean name="running" value="false"/>\n'
-        '    <string name="phase">idle</string>\n'
         f'    <string name="tester_name">{tester}</string>\n'
         "</map>\n"
     )
@@ -359,59 +377,37 @@ def set_prefs(cfg: dict) -> int:
         if match:
             current_count = int(match.group(1))
     push_prefs_xml(build_prefs_xml(
-        int(cfg["test_times"]), int(cfg["wake_seconds"]), int(cfg["sleep_seconds"]),
-        str(cfg["tester"]), bool(cfg["auto_resume"]), current_count,
+        int(cfg["test_times"]), str(cfg["mode"]), int(cfg["power_off_minutes"]),
+        int(cfg["wait_seconds"]), str(cfg["tester"]), bool(cfg["auto_resume"]), current_count,
     ))
     return current_count
 
 
-def set_zte_smart_optimize_allowed() -> None:
-    """ZTE 智能优化白名单（lib.ps1:Set-ZteAppSmartOptimizeAllowed 同款；尽力而为）。
+def check_reboot_permission() -> str | None:
+    """返回 reboot 方式：'granted'（REBOOT 权限）| 'su'（su 兜底）| None（两者皆无）。
 
-    仅当设备装有 com.zte.heartyservice.strategy 且可 root 时执行；否则静默跳过。
-    写库失败不阻断（ps1 同款 warning 语义）。
+    lib.ps1:Test-PowerCycleRebootPermission 同款：REBOOT 权限或 su 任一可用即可，
+    否则 PowerCycle 无法重启设备（后端分派已按 G15 D3 固定 autotesttool，无 MSSV 兜底）。
     """
-    zte_pkg = "com.zte.heartyservice.strategy"
-    if "package:" not in adb_shell(f"pm path {zte_pkg}", timeout=30):
-        return
-    if not is_root():
-        return
-    db = f"/data/user/0/{zte_pkg}/databases/UserStrategy.db"
-    sh = (
-        f'if [ ! -f "{db}" ]; then exit 0; fi\n'
-        f'sqlite3 "{db}" "INSERT INTO app_settings (pkg_name, editable, locked, self_start_mode, related_start_mode, bg_run_mode, app_user_install) SELECT \'{_PKG}\', 1, 0, 3, 3, 3, 1 WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE pkg_name=\'{_PKG}\');"\n'
-        f'sqlite3 "{db}" "UPDATE app_settings SET self_start_mode=3, related_start_mode=3, bg_run_mode=3 WHERE pkg_name=\'{_PKG}\';"\n'
-        f'sqlite3 "{db}" "SELECT pkg_name,self_start_mode,related_start_mode,bg_run_mode FROM app_settings WHERE pkg_name=\'{_PKG}\';"\n'
-    )
-    remote = "/data/local/tmp/sleeptest-zte-allow.sh"
-    with tempfile.NamedTemporaryFile(suffix=".sh", delete=False) as tmp:
-        tmp.write(sh.encode("utf-8"))
-        tmp_path = tmp.name
-    try:
-        _push_file(Path(tmp_path), remote)
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
-    rc, out, _ = adb("shell", f"sh {remote}", timeout=30)
-    if rc != 0 or not re.search(rf"{re.escape(_PKG)}\|3\|3\|3", out):
-        pass  # 尽力而为：写库失败不阻断
+    info = adb_shell(f"dumpsys package {_PKG}", timeout=30)
+    if "android.permission.REBOOT: granted=true" in info:
+        return "granted"
+    if adb_shell("which su", timeout=15).strip():
+        return "su"
+    return None
 
 
 def set_device_stability() -> None:
-    """休眠测试必须允许灭屏（与 MTBF/PowerCycle 相反）：关 USB 常亮、30 分钟超时、
-    appops/deviceidle 白名单、锁屏关闭（lib.ps1:Set-SleepTestDeviceStability 同款）。"""
+    """开关机测试要求屏幕常亮（与 Sleep 相反）：stayon true + 超长超时 + 插电常亮（lib.ps1 同款）。"""
     try_adb_root()
-    adb_shell("svc power stayon false", timeout=30)
-    adb_shell("settings put global stay_on_while_plugged_in 0", timeout=30)
-    adb_shell("settings put system screen_off_timeout 1800000", timeout=30)
-    adb_shell(f"appops set {_PKG} WRITE_SETTINGS allow", timeout=30)
-    adb_shell(f"appops set {_PKG} SYSTEM_ALERT_WINDOW allow", timeout=30)
-    adb_shell(f"dumpsys deviceidle whitelist +{_PKG}", timeout=30)
-    adb_shell(f"cmd appops set {_PKG} RUN_ANY_IN_BACKGROUND allow", timeout=30)
+    adb_shell("svc power stayon true", timeout=30)
+    adb_shell("settings put system screen_off_timeout 2147483647", timeout=30)
+    adb_shell("settings put global stay_on_while_plugged_in 7", timeout=30)
     adb_shell("locksettings set-disabled true", timeout=30)
 
 
 def grant_storage() -> None:
-    """存储权限 + MANAGE_EXTERNAL_STORAGE（lib.ps1:Grant-SleepTestStorage 同款）。"""
+    """存储权限 + MANAGE_EXTERNAL_STORAGE（lib.ps1:Grant-PowerCycleStorage 同款）。"""
     adb_shell(f"pm grant {_PKG} android.permission.READ_EXTERNAL_STORAGE", timeout=30)
     adb_shell(f"pm grant {_PKG} android.permission.WRITE_EXTERNAL_STORAGE", timeout=30)
     try_adb_root()
@@ -419,7 +415,7 @@ def grant_storage() -> None:
 
 
 def install_apk(apk: Path) -> None:
-    """force-stop → uninstall → install -r（lib.ps1:Install-SleepTestApk 同款，platform 签名包）。"""
+    """force-stop → uninstall → install -r（lib.ps1:Install-PowerCycleApk 同款，platform 签名包）。"""
     adb_shell(f"am force-stop {_PKG}", timeout=30)
     adb("uninstall", _PKG, timeout=60)
     rc, out, _ = adb("install", "-r", str(apk), timeout=300)
@@ -428,11 +424,15 @@ def install_apk(apk: Path) -> None:
 
 
 def service_alive() -> bool:
-    return "SleepTestService" in adb_shell(f"dumpsys activity services {_PKG}", timeout=30)
+    return "PowerCycleService" in adb_shell(f"dumpsys activity services {_PKG}", timeout=30)
 
 
 def start_task() -> None:
-    """force-stop → running=true → Activity → 前台服务(START) → KEEPALIVE 广播（lib.ps1:Start-SleepTestTask 同款）。"""
+    """force-stop → running=true → Activity → 前台服务(START) → KEEPALIVE 广播（lib.ps1:Start-PowerCycleTask 同款）。
+
+    先拉起 Activity 再起前台服务：部分机型（Z2582）后台 start-foreground-service 会被
+    AutoLaunch 拦截（lib.ps1 注释同款）。
+    """
     adb_shell(f"am force-stop {_PKG}", timeout=30)
     xml = get_prefs_xml()
     if xml:
@@ -440,18 +440,18 @@ def start_task() -> None:
     adb_shell(f"am start -n {_PKG}/{_ACTIVITY}", timeout=30)
     time.sleep(2)
     adb_shell(
-        f"am start-foreground-service -n {_PKG}/{_SERVICE} -a com.tinno.autotesttool.action.SLEEP_TEST_START",
+        f"am start-foreground-service -n {_PKG}/{_SERVICE} -a com.tinno.autotesttool.action.POWER_CYCLE_START",
         timeout=30,
     )
     time.sleep(2)
     adb_shell(
-        f"am broadcast -a com.tinno.autotesttool.action.SLEEP_TEST_KEEPALIVE -n {_PKG}/{_KEEPALIVE_RECEIVER}",
+        f"am broadcast -a com.tinno.autotesttool.action.POWER_CYCLE_KEEPALIVE -n {_PKG}/{_KEEPALIVE_RECEIVER}",
         timeout=30,
     )
 
 
 def set_stop_flags() -> None:
-    """auto_resume=false + running=false（lib.ps1:Set-SleepTestStopFlags 同款；prefs 缺失时整写最小 map）。"""
+    """auto_resume=false + running=false（lib.ps1:Set-PowerCycleStopFlags 同款；prefs 缺失时整写最小 map）。"""
     repair_prefs_ownership()
     xml = get_prefs_xml()
     if not xml:
@@ -486,22 +486,22 @@ def _verify_stop_flags() -> None:
 
 
 def stop_task(force: bool) -> None:
-    """set_stop_flags → 优雅 STOP → force-stop 兜底（lib.ps1:Stop-SleepTestTask 同款）。
+    """set_stop_flags → 优雅 STOP → force-stop 兜底（lib.ps1:Stop-PowerCycleTask 同款）。
 
-    PC wake-watchdog 不移植（G15 决策：OEM 闹钟丢失场景记已知缺口，patrol 兜底）。
+    PC pc-watchdog 不移植（G15 决策：设备离线由平台心跳 UNKNOWN/恢复链路兜底）。
     """
     set_stop_flags()
     _verify_stop_flags()
     if service_alive():
         adb_shell(
-            f"am startservice -n {_PKG}/{_SERVICE} -a com.tinno.autotesttool.action.SLEEP_TEST_STOP",
+            f"am startservice -n {_PKG}/{_SERVICE} -a com.tinno.autotesttool.action.POWER_CYCLE_STOP",
             timeout=30,
         )
         time.sleep(3)
     adb_shell(f"am force-stop {_PKG}", timeout=30)
     time.sleep(1)
     if force and service_alive():
-        raise RuntimeError("停止 SleepTestService 失败（优雅停止 + force-stop 均未生效）")
+        raise RuntimeError("停止 PowerCycleService 失败（优雅停止 + force-stop 均未生效）")
 
 
 def result_paths() -> tuple[str, ...]:
@@ -510,21 +510,20 @@ def result_paths() -> tuple[str, ...]:
 
 
 # ---------------------------------------------------------------------------
-# sleep_test_result.txt 解析（纯文本行，无 XML；join 键 = cycle 分子/分母）
+# powercycle_result.txt 解析（纯文本行，无 XML；join 键 = cycle 分子/分母）
 # ---------------------------------------------------------------------------
 
-def parse_sleep_result(content: bytes) -> dict:
-    """解析 sleep_test_result.txt → 摘要 + entries。
+def parse_powercycle_result(content: bytes) -> dict:
+    """解析 powercycle_result.txt → 摘要 + entries。
 
-    行格式（设备端 SleepTestService 追加写，时间戳前缀可带可无）：
-      cycle N/M wake OK|FAIL screen=ON|OFF
-      go sleep Xs screen=ON|OFF      （screen=ON = 灭屏失败异常）
+    行格式（设备端 PowerCycleService 追加写，时间戳前缀可带可无）：
+      cycle N/M start
+      reboot failed: <原因>
       stopped by user
-      finished result=PASS|FAIL      （整包结果取最后一行 finished）
+      finished result=PASS      （开关机测试只有 PASS 一种完成值；无该行 = 未收尾）
     """
     entries = []
-    wake_failures = 0
-    sleep_anomalies = 0
+    reboot_failures = 0
     cycles_done = 0
     expected_cycles = 0
     final_status = None
@@ -540,15 +539,12 @@ def parse_sleep_result(content: bytes) -> dict:
             n, total = int(cycle.group(1)), int(cycle.group(2))
             cycles_done = n
             expected_cycles = total
-            if cycle.group(3) == "wake FAIL":
-                wake_failures += 1
-            entries.append({"kind": "cycle", "cycle": n, "total": total, "status": cycle.group(3), "screen": cycle.group(4)})
+            entries.append({"kind": "cycle", "cycle": n, "total": total})
             continue
-        sleep_line = _SLEEP_RE.search(line)
-        if sleep_line:
-            if sleep_line.group(2) == "ON":
-                sleep_anomalies += 1
-            entries.append({"kind": "sleep", "seconds": int(sleep_line.group(1)), "screen": sleep_line.group(2)})
+        fail = _REBOOT_FAIL_RE.search(line)
+        if fail:
+            reboot_failures += 1
+            entries.append({"kind": "reboot_failed", "message": fail.group(1)})
             continue
         finish = _FINISH_RE.search(line)
         if finish:
@@ -561,8 +557,7 @@ def parse_sleep_result(content: bytes) -> dict:
     return {
         "cycles_done": cycles_done,
         "expected_cycles": expected_cycles,
-        "wake_failures": wake_failures,
-        "sleep_anomalies": sleep_anomalies,
+        "reboot_failures": reboot_failures,
         "final_status": final_status,
         "entries": entries,
     }
