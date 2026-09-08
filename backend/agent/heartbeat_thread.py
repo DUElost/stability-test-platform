@@ -346,9 +346,17 @@ class HeartbeatThread:
         if response and self._pending_reconnected_serials and self._on_devices_reconnected:
             serials = list(self._pending_reconnected_serials)
             try:
-                self._on_devices_reconnected(serials)
+                recovery_settled = self._on_devices_reconnected(serials)
             except Exception as exc:
                 logger.warning("device_reconnect_callback_failed: %s", exc)
+                recovery_settled = False
+            if recovery_settled is False:
+                # #1009: 恢复需要但本次失败——保留待恢复标记，下一个心跳 tick
+                # 自动重试（无需再次拔插设备）。
+                logger.warning(
+                    "device_reconnect_recovery_incomplete serials=%d — "
+                    "retrying on next heartbeat", len(serials),
+                )
             else:
                 self._pending_reconnected_serials.clear()
 

@@ -2,7 +2,24 @@
 
 > **ORM**：`backend/models/`  
 > **迁移**：`backend/alembic/versions/`  
-> **约定**：表名单数（`device` 非 `devices`）
+> **约定**：**新表**表名一律单数（`device` 非 `devices`）。
+
+### 复数历史例外（#889）
+
+以下既有表为**复数命名的历史例外**，保留以避免纯重命名迁移（重命名生产表
+是高风险动作，且无正确性收益——表名是存储层事实，显式性属于模型与文档层）：
+
+| 表 | 说明 |
+|----|------|
+| `users` | 初版即复数命名（`b0f805bf6cee_add_users_table`） |
+| `audit_logs` | 模型 docstring 明示：匹配既有生产表，避免危险重命名迁移 |
+| `notification_channels` / `alert_rules` / `notification_logs` | 通知域历史表，同批保留 |
+| `device_leases` | ADR-0019 Phase 1 历史命名 |
+| `task_schedules` | 历史命名（Cron → `plan_id` 调度） |
+
+**规则**：新建表必须单数；历史复数表仅原样保留——**禁止**仅为匹配文档措辞
+而重命名生产表，任何重命名必须以显式迁移（含数据回填与下游 SQL/脚本核对）
+单独立项评审。
 
 ---
 
@@ -84,7 +101,7 @@
 | 表 | 说明 |
 |----|------|
 | `script` | 脚本目录：`name`、`version`、`nfs_path`、`content_sha256`、`default_params` |
-| `task_schedule` | Cron → `plan_id` |
+| `task_schedules` | Cron → `plan_id` |
 | `resource_pool` | WiFi 等（`connect_wifi` 注入） |
 
 ### 用例集（ADR-0030 P1a）

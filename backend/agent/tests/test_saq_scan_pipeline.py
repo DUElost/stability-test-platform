@@ -511,6 +511,70 @@ async def test_scan_task_enqueues_upload_then_merge(monkeypatch):
     functions = [c.kwargs["function"] for c in mock_job_cls.call_args_list]
     assert functions == ["upload_task", "merge_task"]
     assert "extract_task" not in functions
+    keys = [c.kwargs["key"] for c in mock_job_cls.call_args_list]
+    assert keys[0].startswith("upload:42:")
+    assert keys[1].startswith("merge:42:")
+    assert keys[0] != "upload:42"
+    assert keys[1] != "merge:42"
+
+
+@pytest.mark.asyncio
+async def test_scan_task_enqueues_distinct_keys_per_round(monkeypatch):
+    """#1111: incremental vs final must not share upload/merge SAQ keys."""
+    from backend.tasks import saq_tasks
+
+    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    keys_by_run: list[list[str]] = []
+    round_times = iter([
+        datetime(2026, 9, 8, 10, 0, 0, tzinfo=timezone.utc),
+        datetime(2026, 9, 8, 12, 0, 0, tzinfo=timezone.utc),
+    ])
+
+    class _FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(round_times)
+
+    monkeypatch.setattr(saq_tasks, "datetime", _FixedDateTime)
+
+    async def fake_to_thread(fn, *a, **kw):
+        if fn is scan_sync:
+            return "1"
+        if fn is hosts_done:
+            return 1
+        return fn(*a, **kw)
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock(return_value=object())
+
+    for is_final in (False, True):
+        with _scan_task_env(
+            saq_tasks, monkeypatch, [("host-1", "ONLINE")],
+            to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
+            hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        ) as mock_job_cls:
+            await saq_tasks.scan_task({}, plan_run_id=7, is_final=is_final)
+            keys_by_run.append([c.kwargs["key"] for c in mock_job_cls.call_args_list])
+
+    inc_keys, final_keys = keys_by_run
+    assert inc_keys[0].startswith("upload:7:")
+    assert final_keys[0].startswith("upload:7:")
+    assert inc_keys != final_keys, "rounds must not reuse upload/merge keys"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_or_raise_on_dedup_none():
+    """#1111: SAQ key collision (enqueue→None) must be observable / fail."""
+    from backend.tasks import saq_tasks
+    from saq import Job as SaqJob
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock(return_value=None)
+    job = SaqJob(function="merge_task", kwargs={"plan_run_id": 1}, key="merge:1:x")
+    with pytest.raises(RuntimeError, match="saq enqueue deduped"):
+        await saq_tasks._enqueue_or_raise(
+            queue, job, plan_run_id=1, what="merge_task",
+        )
 
 
 @pytest.mark.asyncio
@@ -611,12 +675,68 @@ async def test_merge_task_skips_extract_when_merge_skipped(monkeypatch):
     mock_queue.enqueue.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_scan_task_reraises_when_followup_enqueue_fails(monkeypatch):
+    """#1110: follow-up enqueue failure must fail scan_task for SAQ retry."""
+    from backend.tasks import saq_tasks
+
+    scan_sync = MagicMock(return_value="1")
+    hosts_done = MagicMock(return_value=1)
+    record_archive = MagicMock()
+
+    async def fake_to_thread(fn, *a, **kw):
+        if fn is scan_sync:
+            return "1"
+        if fn is hosts_done:
+            return 1
+        return fn(*a, **kw)
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock(side_effect=RuntimeError("redis down"))
+    with _scan_task_env(
+        saq_tasks, monkeypatch, [("host-1", "ONLINE")],
+        to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
+        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+    ):
+        with pytest.raises(RuntimeError, match="redis down"):
+            await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
+
+
+@pytest.mark.asyncio
+async def test_merge_task_reraises_when_extract_enqueue_fails(monkeypatch):
+    """#1110: extract enqueue failure must fail merge_task for SAQ retry."""
+    from backend.tasks import saq_tasks
+
+    with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
+         patch.object(saq_tasks, "_wait_for_upload_mark", AsyncMock(return_value=True)), \
+         patch.object(saq_tasks, "_wait_for_remote_device_log_events", AsyncMock(return_value=True)), \
+         patch.object(saq_tasks, "_count_remote_device_log_events", AsyncMock(return_value=1)), \
+         patch.object(saq_tasks, "_summarize_upload_sync", return_value={"total": 0}), \
+         patch.object(saq_tasks, "_write_run_context_sync"), \
+         patch.object(
+             saq_tasks,
+             "_enqueue_extract_task",
+             AsyncMock(side_effect=RuntimeError("enqueue failed")),
+         ):
+        with pytest.raises(RuntimeError, match="enqueue failed"):
+            await saq_tasks.merge_task({}, plan_run_id=42)
+
+
 # ---------------------------------------------------------------------------
 # P1-3: auto_archive_sweep rate-limiting + incremental
 # ---------------------------------------------------------------------------
 
 
-def _mock_auto_archive_db(mock_db, *, plan, run, scan_count: int, last_scan_at=None):
+def _mock_auto_archive_db(
+    mock_db,
+    *,
+    plan,
+    run,
+    scan_count: int,
+    last_scan_at=None,
+    merge_count: int | None = None,
+    extract_context: dict | None = None,
+):
     """Wire mock db.query for per-plan auto_archive_sweep."""
     plan_query = MagicMock()
     plan_query.filter.return_value = plan_query
@@ -637,11 +757,16 @@ def _mock_auto_archive_db(mock_db, *, plan, run, scan_count: int, last_scan_at=N
 
     mock_db.query.side_effect = _query
     execute_result = MagicMock()
-    if last_scan_at is None:
-        execute_result.scalar_one.side_effect = [scan_count]
-    else:
+    if last_scan_at is not None:
         execute_result.scalar_one.side_effect = [scan_count, last_scan_at]
+    elif merge_count is not None:
+        execute_result.scalar_one.side_effect = [scan_count, merge_count]
+    else:
+        execute_result.scalar_one.side_effect = [scan_count]
     mock_db.execute.return_value = execute_result
+    if extract_context is not None:
+        run.run_context = {"extract": extract_context}
+        mock_db.get.return_value = run
 
 
 def test_auto_archive_sweep_first_scan_is_final():
@@ -704,7 +829,7 @@ def test_auto_archive_sweep_skips_failed_run_without_confirmation():
 
 
 def test_auto_archive_sweep_skips_terminal_already_scanned():
-    """Terminal run with scan artifacts is never scanned again."""
+    """Terminal run with scan+merge+extract artifacts is never scanned again."""
     import backend.scheduler.cron_scheduler as mod
 
     mock_db = MagicMock()
@@ -722,9 +847,13 @@ def test_auto_archive_sweep_skips_terminal_already_scanned():
     mock_run.status = "SUCCESS"
     mock_run.ended_at = datetime.now(timezone.utc) - timedelta(hours=5)
 
-    last_scan_time = datetime.now(timezone.utc) - timedelta(minutes=30)
     _mock_auto_archive_db(
-        mock_db, plan=mock_plan, run=mock_run, scan_count=1, last_scan_at=last_scan_time,
+        mock_db,
+        plan=mock_plan,
+        run=mock_run,
+        scan_count=1,
+        merge_count=1,
+        extract_context={"copied": 1},
     )
 
     orig = mod.SessionLocal
@@ -734,6 +863,40 @@ def test_auto_archive_sweep_skips_terminal_already_scanned():
         with patch("backend.services.dedup_scan.enqueue_dedup_terminal_sync") as mock_enqueue:
             mod.auto_archive_sweep()
             mock_enqueue.assert_not_called()
+    finally:
+        mod.SessionLocal = orig
+
+
+def test_auto_archive_sweep_retries_terminal_when_scan_only():
+    """Terminal run with scan but no merge/extract should re-trigger archive (#1110)."""
+    import backend.scheduler.cron_scheduler as mod
+
+    mock_db = MagicMock()
+    session_cm = MagicMock()
+    session_cm.__enter__ = MagicMock(return_value=mock_db)
+    session_cm.__exit__ = MagicMock(return_value=False)
+    mock_SessionLocal = MagicMock(return_value=session_cm)
+
+    mock_plan = MagicMock()
+    mock_plan.id = 10
+    mock_plan.auto_archive_interval_seconds = 3600
+
+    mock_run = MagicMock()
+    mock_run.id = 2
+    mock_run.status = "SUCCESS"
+    mock_run.ended_at = datetime.now(timezone.utc) - timedelta(hours=5)
+
+    _mock_auto_archive_db(
+        mock_db, plan=mock_plan, run=mock_run, scan_count=1, merge_count=0,
+    )
+
+    orig = mod.SessionLocal
+    mod.SessionLocal = mock_SessionLocal
+
+    try:
+        with patch("backend.services.dedup_scan.enqueue_dedup_terminal_sync") as mock_enqueue:
+            mod.auto_archive_sweep()
+            mock_enqueue.assert_called_once_with(2, is_final=True)
     finally:
         mod.SessionLocal = orig
 
