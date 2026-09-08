@@ -7,13 +7,15 @@ from backend.api.schemas.base import ORMBaseModel
 
 
 class AgentLogQuery(BaseModel):
-    host_id: int
+    # #940: Host.id 是 String(64) PK——host_id 契约必须为 str。历史 int 类型
+    # 在请求校验阶段就拒绝非数字主机 ID（如 "host-a1"），无法进入查询。
+    host_id: str
     log_path: str = "/tmp/agent.log"
     lines: int = 100
 
 
 class AgentLogOut(BaseModel):
-    host_id: int
+    host_id: str
     log_path: str
     content: str
     lines_read: int
