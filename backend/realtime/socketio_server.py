@@ -25,12 +25,21 @@ from sqlalchemy import text
 
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.cors import get_cors_allowed_origins
-from backend.core.database import AsyncSessionLocal
+from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.core.metrics import record_socketio_connection
 from backend.core.security import ACCESS_COOKIE_NAME, extract_cookie_token
+from backend.services.auth_session import authenticate_token
 from backend.services.run_console import RunConsole
 
 logger = logging.getLogger(__name__)
+
+
+def _authenticate_dashboard_user(token: str):
+    """#903 三面校验面（sync）。#1041：必须经 ``asyncio.to_thread`` 执行——
+    本模块跑在事件循环上，sync SessionLocal 直连查询会阻塞整个 Socket.IO
+    循环；入线程池后与 REST 的 sync 依赖同语义，不阻塞并发握手。"""
+    with SessionLocal() as db:
+        return authenticate_token(db, token, expected_type="access")
 
 
 def _origin_allowed(environ: dict) -> bool:
@@ -391,10 +400,10 @@ class DashboardNamespace(socketio.AsyncNamespace):
                     # is_active + ver 纪元），此前仅签名级 decode——停用用户
                     # 的 token 到 exp 前全通。expected_type="access" 防止
                     # refresh token 经 cookie/auth 旁路冒充 access。
-                    from backend.core.database import SessionLocal
-                    from backend.services.auth_session import authenticate_token
-                    with SessionLocal() as db:
-                        user = authenticate_token(db, token, expected_type="access")
+                    # #1041：sync DB 查询经 asyncio.to_thread 进工作线程，
+                    # 不阻塞事件循环。DB 故障同样在此转 ConnectionRefused
+                    # ——握手 fail-closed（设计 note §6），不降级放行。
+                    user = await asyncio.to_thread(_authenticate_dashboard_user, token)
                     if not user:
                         raise socketio.exceptions.ConnectionRefusedError("Invalid token")
                 except socketio.exceptions.ConnectionRefusedError:
