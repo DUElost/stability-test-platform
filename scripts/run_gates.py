@@ -107,7 +107,8 @@ GATES = {
     ),
     # Harness 摄取矩阵探针（ADR-0034 P2 验收/#855-b 落地）：黑盒双题探针 +
     # EXPECTED 偏离检测（行为漂移监测，含 #857 上游修复对照行）。真实 LLM
-    # 会话分钟级 × 外部依赖——仅 check:gov 手跑，不进 quick/pr/full。
+    # 会话分钟级 × 外部依赖——仅 check:gov 手跑，不进 quick/pr/full
+    # （FULL_EXCLUDE 同步排除，#1046——此前 check:full 实际会跑到本 gate）。
     "harness-ingest": (
         f"{PY} tools/dev/harness_probe.py",
         ROOT,
@@ -202,14 +203,15 @@ PROFILES = {
     # 治理面专项：结构门禁 + skill 用量探针 + Harness 摄取矩阵（手跑，分钟级）
     "check:gov": ["gov-surface", "gov-skills", "harness-ingest"],
     # check:full = main 全量 CI 的本地可跑部分 + 本机专属 gate，但排除
-    # 数据源物理仅在本机的 gate（#825：他机跑 check:full 不得确定性红灯）。
-    # gov-skills 依赖 ~/.claude 会话转录；ai-drift 在无 registry 数据的机器上
-    # no-op 绿，故保留。
+    # 数据源物理仅在本机的 gate（#825：他机跑 check:full 不得确定性红灯）
+    # 与须手跑外部依赖的 gate（#1046）。gov-skills 依赖 ~/.claude 会话转录；
+    # harness-ingest 每形态一次真实非交互 LLM 会话（分钟级 × 外部依赖），
+    # 仅 check:gov 手跑；ai-drift 在无 registry 数据的机器上 no-op 绿，故保留。
     "check:full": None,  # = 全部 GATES - FULL_EXCLUDE，按 GATES 顺序
 }
 
-# 显式排除表（#825）：仅本机数据源、他机必红的 gate
-FULL_EXCLUDE = {"gov-skills"}
+# 显式排除表（#825/#1046）：仅本机数据源/他机必红/须手跑外部依赖的 gate
+FULL_EXCLUDE = {"gov-skills", "harness-ingest"}
 
 
 def run_gate(name: str, cmd: str, cwd: str, env: dict | None) -> bool:

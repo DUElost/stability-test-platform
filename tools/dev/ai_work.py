@@ -82,21 +82,29 @@ def _quote(v) -> str:
         return '""'
     if not s.startswith("#") and re.fullmatch(r"[A-Za-z0-9_./+=:@-]+", s):
         return s  # 含 # 一律引号——行首裸 # 会被当注释（#880）
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    # 受限转义与 _unquote 对称；\n/\r 必转义——codec 行结构以物理换行为界，
+    # 值内裸换行会把一条记录拆成多行、读回即锁死（#1059）
+    return ('"' + s.replace("\\", "\\\\").replace('"', '\\"')
+            .replace("\n", "\\n").replace("\r", "\\r") + '"')
+
+
+_UNESCAPES = {"\\": "\\", '"': '"', "n": "\n", "r": "\r"}
 
 
 def _unquote(s: str) -> str:
     s = s.strip()
     if not s.startswith('"'):
         return s
-    # 受限转义：仅 \\ 与 \"（与 _quote 对称）
+    # 受限转义：\\ \" \n \r（与 _quote 对称）
     out, i = [], 1
     while i < len(s):
         c = s[i]
-        if c == "\\" and i + 1 < len(s) and s[i + 1] in('\\"'):
-            out.append(s[i + 1]); i += 2
+        if c == "\\" and i + 1 < len(s) and s[i + 1] in _UNESCAPES:
+            out.append(_UNESCAPES[s[i + 1]])
+            i += 2
         else:
-            out.append(c); i += 1
+            out.append(c)
+            i += 1
     return "".join(out).removesuffix('"')
 
 
@@ -395,11 +403,12 @@ def _now() -> float:
 
 
 def normalize_requirement_id(rid: str) -> str:
-    """requirement id 校验（#880 修复 1，语义层）：拒绝 '#' 开头与含 ':' 的 id。
+    """requirement id 校验（#880 修复 1，语义层）：拒绝 '#' 开头与含 ':'/换行的 id。
 
     id 是 registry.yaml 的 record key（YAML 行首位）——'#' 开头会被任何 YAML
-    解析当注释、': ' 会破坏行结构。codec 已对称转义（防御深度），本校验是
-    语义层守门：id 保持简洁标识形态（本仓库自然形态=issue 语义短语或 slug）。"""
+    解析当注释、': ' 与换行会破坏行结构（#1059：换行值写入成功读回即锁死）。
+    codec 已对称转义（防御深度），本校验是语义层守门：id 保持简洁标识形态
+    （本仓库自然形态=issue 语义短语或 slug）。"""
     rid = rid.strip()
     if not rid:
         raise ValueError("requirement id 不能为空")
@@ -408,6 +417,8 @@ def normalize_requirement_id(rid: str) -> str:
                          f"——引用 issue 号请写作 'issue-878' 式 slug 或 'fix #878 描述' 剥离前导 #")
     if ":" in rid:
         raise ValueError(f"requirement id 不得含 ':'（破坏 record 行结构）: {rid!r}")
+    if "\n" in rid or "\r" in rid:
+        raise ValueError(f"requirement id 不得含换行（破坏 record 行结构，#1059）: {rid!r}")
     return rid
 
 
@@ -780,7 +791,10 @@ def cmd_finish(args) -> int:
 def cmd_resume(args) -> int:
     """T9（#946，契约 §3.3）：FINISHED→CODING 返工回退——评审意见要求继续编码时
     恢复执行生命周期，保审计连续性（替代「abandon+重 declare」的自指 overlap 出路）。
-    integration 不变（下一轮 update 向 GitHub reconcile）；MERGED/ABANDONED 拒绝。"""
+    MERGED/ABANDONED 拒绝。放行判定前先向 GitHub reconcile integration
+    （#1056）：缓存可能陈旧（PR 已 MERGED 而 cache 仍 PR_OPEN/READY），
+    基于陈旧值放行会复活已出窗 execution 并重新阻塞同 issue 领取；
+    GitHub 不可达时拒绝并提示先 update，不基于已知可能陈旧的缓存放行。"""
     path, lock = registry_paths()
     ctx = load_locked(path, lock)
     try:
@@ -788,7 +802,18 @@ def cmd_resume(args) -> int:
         if not rec:
             print(f"[NOT-FOUND] {args.id}", file=sys.stderr)
             return 2
-        ok, reason = can_resume(rec["lifecycle"], rec.get("integration_cache") or "NO_PR")
+        cached = rec.get("integration_cache") or "NO_PR"
+        integration = cached
+        if rec.get("pr_number"):
+            repo_root = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"], capture_output=True,
+                text=True, cwd=os.getcwd()).stdout.strip() or os.getcwd()
+            integration, refreshed = derive_integration(rec["pr_number"], cached, repo_root)
+            if not refreshed:
+                print(f"[REFUSED] resume {args.id}: GitHub 不可达，integration 无法刷新"
+                      "（cache=" + cached + "）——先 update 再 resume", file=sys.stderr)
+                return 2
+        ok, reason = can_resume(rec["lifecycle"], integration)
         if not ok:
             print(f"[REFUSED] resume {args.id}: {reason}", file=sys.stderr)
             return 2
@@ -799,7 +824,8 @@ def cmd_resume(args) -> int:
         ctx.commit()
     finally:
         ctx.close()
-    print(f"[OK] resume {args.id} lifecycle=CODING（integration 不变，随下次 update reconcile）")
+    print(f"[OK] resume {args.id} lifecycle=CODING（integration={integration}，"
+          "registry 不回写，随下次 update reconcile）")
     return 0
 
 
@@ -858,6 +884,20 @@ def run_self_test() -> int:
         failures.append("#880 declare 拒绝含冒号: 预期红，实际绿")
     except ValueError:
         pass
+    # #1059 红绿：换行 id 语义层拒绝 + codec 值内换行往返保真（不再拆行锁死）
+    try:
+        normalize_requirement_id("fix-900\nline2")
+        failures.append("#1059 declare 拒绝含换行: 预期红，实际绿")
+    except ValueError:
+        pass
+    _nl_rec = {"requirement": "multi\nline\rvalue", "harness": "zcode",
+               "worktree": "/w", "branch": "b", "scope": ["a.py"],
+               "lifecycle": "CODING", "test_impact": "indirect",
+               "last_seen": 1.0, "created_at": 1.0, "updated_at": 1.0}
+    _nl_rt = yaml_load(yaml_dump({"r1": _nl_rec}))["r1"]["requirement"]
+    assert _nl_rt == "multi\nline\rvalue", f"#1059 换行往返失真: {_nl_rt!r}"
+    # 落盘为转义形态：requirement 值不产生裸换行（记录保持单行结构）
+    assert 'requirement: "multi\\nline\\rvalue"' in yaml_dump({"r1": _nl_rec})
     assert normalize_requirement_id("fix #878 login") == "fix #878 login"  # 值位 # 合法
     quoted_key = {"#878": {"requirement": "#878", "harness": "claude",
                             "worktree": "/w", "branch": "", "scope": ["backend"],
