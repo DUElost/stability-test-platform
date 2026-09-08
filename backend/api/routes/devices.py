@@ -19,6 +19,10 @@ from backend.api.response import ApiResponse, ok
 from backend.api.schemas.device import BulkProjectAssignIn
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 
+# 与 backend/api/routes/projects.py 的库存口径一致（ADR-0029 v2.5）：
+# SEED 项目成员不算真实归属映射。
+_USER_SOURCE = "USER"
+
 logger = logging.getLogger(__name__)
 
 # Host heartbeat timeout config (default 5 minutes)
@@ -295,8 +299,16 @@ def list_devices(
                      )
 
     if unassigned:
-        mapped_models = select(ProjectModel.match_value).where(
-            ProjectModel.is_active.is_(True),
+        # #952: 与项目 inventory 严格未映射口径一致（ADR-0029 v2.5）——
+        # 只认 **USER** 项目的活跃成员行，SEED 成员不算映射；否则含 SEED
+        # 时「统计显示待归属、待归属列表找不到」。
+        mapped_models = (
+            select(ProjectModel.match_value)
+            .join(TestProject, TestProject.id == ProjectModel.project_id)
+            .where(
+                ProjectModel.is_active.is_(True),
+                TestProject.source == _USER_SOURCE,
+            )
         )
         query = query.filter(
             or_(Device.model.is_(None), ~Device.model.in_(mapped_models))
