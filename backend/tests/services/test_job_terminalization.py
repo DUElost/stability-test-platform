@@ -100,11 +100,14 @@ def test_on_job_terminal_sync_bumps_and_aggregates():
         assert applied1 is False
         assert run.terminal_job_count == 1
         assert run.completed_job_count == 1
+        db.commit.assert_not_called()
 
         applied2, status = on_job_terminal_sync(job2, db, run=run)
         assert applied2 is True
         assert run.terminal_job_count == 2
         assert status == PlanRunStatus.SUCCESS.value
+        # #986: parent terminal facts commit before chain trigger
+        db.commit.assert_called_once()
         trigger.assert_called_once()
 
 
