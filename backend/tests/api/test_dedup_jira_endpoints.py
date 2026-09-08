@@ -251,19 +251,102 @@ class TestCancelJiraRun:
         resp = client.post("/api/v1/jira/runs/con-x/cancel")
         assert resp.status_code == 401
 
-    def test_unknown_run_returns_404(self, client, auth_headers, monkeypatch):
+    def test_unknown_run_returns_404(self, client, auth_headers, monkeypatch, db_session):
         inst = MagicMock()
         inst.status.return_value = None
         monkeypatch.setattr("backend.api.routes.dedup.RunConsole.instance", lambda: inst)
         resp = client.post("/api/v1/jira/runs/con-missing/cancel", headers=auth_headers)
         assert resp.status_code == 404
+        # R02-F07（#907）：404（探测/误操作）同样可归责
+        self._assert_audit(db_session, resource_id="con-missing", reason="run_not_found")
 
-    def test_cancel_returns_200(self, client, auth_headers, mock_run_console):
+    def test_cancel_returns_200(self, client, auth_headers, mock_run_console, db_session):
         resp = client.post("/api/v1/jira/runs/con-fake-123/cancel", headers=auth_headers)
         assert resp.status_code == 200, resp.text
         data = resp.json()["data"]
         assert data["console_run_id"] == "con-fake-123"
         assert data["canceled"] is True
+        self._assert_audit(db_session, resource_id="con-fake-123", canceled=True)
+
+    @staticmethod
+    def _assert_audit(db_session, *, resource_id, reason=None, canceled=None):
+        from backend.models.audit import AuditLog
+
+        latest = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "jira_run_cancel")
+            .filter(AuditLog.resource_id == resource_id)
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        assert latest is not None, "jira_run_cancel 审计行缺失"
+        assert latest.username == "testuser"
+        if reason is not None:
+            assert latest.details["reason"] == reason
+        if canceled is not None:
+            assert latest.details["canceled"] is canceled
+
+
+class TestReloadAgentConfig:
+    """POST /api/v1/plan-runs/hosts/{host_id}/reload-config"""
+
+    def test_unauthenticated_returns_401(self, client):
+        resp = client.post("/api/v1/plan-runs/hosts/h1/reload-config")
+        assert resp.status_code == 401
+
+    def test_reload_success_audited(self, client, auth_headers, db_session, monkeypatch):
+        from unittest.mock import AsyncMock, patch
+
+        with patch(
+            "backend.realtime.socketio_server.emit_agent_control",
+            new=AsyncMock(return_value=None),
+        ):
+            resp = client.post(
+                "/api/v1/plan-runs/hosts/h1/reload-config", headers=auth_headers
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["status"] == "sent"
+
+        from backend.models.audit import AuditLog
+
+        rows = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "agent_config_reload")
+            .all()
+        )
+        assert rows, "agent_config_reload 审计行缺失"
+        latest = rows[-1]
+        assert latest.username == "testuser"
+        assert latest.resource_id == "h1"
+        assert latest.details["status"] == "sent"
+
+    def test_reload_emit_failure_audited_and_reraised(
+        self, client, auth_headers, db_session, monkeypatch
+    ):
+        import pytest as _pytest
+        from unittest.mock import AsyncMock, patch
+
+        # TestClient 默认 raise_server_exceptions：服务端异常直接穿透到测试，
+        # 断言异常传播 + 审计已在重抛前落库（生产侧即 500）。
+        with patch(
+            "backend.realtime.socketio_server.emit_agent_control",
+            new=AsyncMock(side_effect=RuntimeError("agent offline")),
+        ):
+            with _pytest.raises(RuntimeError):
+                client.post(
+                    "/api/v1/plan-runs/hosts/h1/reload-config", headers=auth_headers
+                )
+
+        from backend.models.audit import AuditLog
+
+        latest = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "agent_config_reload")
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        assert latest is not None, "emit 失败路径审计行缺失"
+        assert latest.details["reason"] == "emit_failed:RuntimeError"
 
 
 class TestJiraProjectKeyWiring:
