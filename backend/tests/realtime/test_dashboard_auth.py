@@ -1,4 +1,4 @@
-"""ADR-0024 P0 + #281 P0 + #904 — DashboardNamespace auth.
+"""ADR-0024 P0 + #281 P0 + #904 + #1041 — DashboardNamespace auth.
 
 - ADR-0024：/dashboard SocketIO 也走 cookie/auth 解出 JWT。refresh token
   不能在此通道冒充 access，否则会话注销（blacklist）被旁路。
@@ -6,10 +6,15 @@
   （旧实现只在 ENV=production 拒绝，生产部署 ENV=internal 时护栏从未生效）。
 - #904：外来 Origin 在认证前服务端强制拒绝——Cookie 自动附带握手必带
   Origin，engineio 的 CORS 响应头只由浏览器执行、不构成服务端边界。
+- #1041：三面校验的 sync DB 查询经 ``asyncio.to_thread`` 出事件循环——
+  AsyncNamespace 的 on_connect 在循环上执行，sync 查询会阻塞整个
+  Socket.IO 循环。
 
 仅测 on_connect 鉴权分支；subscribe/unsubscribe 与本 P0 无关。
 """
 from __future__ import annotations
+
+import threading
 
 import pytest
 import socketio.exceptions
@@ -222,3 +227,36 @@ async def test_dashboard_explicit_ws_token_accepted_outside_testing(monkeypatch)
     ns = DashboardNamespace("/dashboard")
 
     await ns.on_connect("sid-H", environ={}, auth={"token": "configured-token-abc"})
+
+
+@pytest.mark.asyncio
+async def test_dashboard_token_auth_runs_off_event_loop(monkeypatch):
+    """#1041 不变量：握手认证不得在事件循环线程内做 sync DB 查询。
+
+    authenticate_token 经 asyncio.to_thread 进工作线程执行；若回归为在
+    on_connect 内直跑 sync SessionLocal，则查询线程与循环线程同 ident，
+    本测试即红。"""
+    import backend.realtime.socketio_server as sio_server
+
+    monkeypatch.setenv("TESTING", "0")
+    seen: dict[str, int] = {}
+
+    class _FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def _fake_auth(db, token, *, expected_type):
+        seen["auth_thread"] = threading.get_ident()
+        return None
+
+    monkeypatch.setattr(sio_server, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(sio_server, "authenticate_token", _fake_auth)
+    ns = DashboardNamespace("/dashboard")
+
+    with pytest.raises(socketio.exceptions.ConnectionRefusedError):
+        await ns.on_connect("sid-T1", environ={}, auth={"token": "some-token"})
+
+    assert seen["auth_thread"] != threading.get_ident()

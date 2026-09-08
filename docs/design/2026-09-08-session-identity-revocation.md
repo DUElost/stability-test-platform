@@ -84,4 +84,5 @@
 - **多设备语义**：bump = 全设备登出。改密/停用场景这正是需求；「登出单设备」需要 per-session jti 登记表，超范围（若需要，另立设计）。
 - **Socket.IO 存量连接**：见 D3 边界——依赖断线重连收敛，不做主动踢除。
 - **token_version 查询开销**：REST 每请求本就查库（现状），无增量；metrics/socket 为低频面。
+- **DB 可用性耦合（#1041 成文）**：D3 使 metrics Bearer 分支与 dashboard 握手依赖 DB；DB 故障时**显式失败（fail-closed）**——metrics 返回 5xx、握手以 `ConnectionRefusedError` 拒绝，不降级到签名级放行（降级 = 重开 #903 停用旁路）。X-Agent-Secret 的 metrics 认证分支不查库、不受影响。dashboard 握手认证经 `asyncio.to_thread` 在工作线程执行，不阻塞 Socket.IO 事件循环（#1041）。
 - **`username` claim 的展示用途**：前端 `/auth/me` 走 DB，不读 claim；claim 仅服务端日志。若未来前端要读，需文档化「信息性、不权威」。
