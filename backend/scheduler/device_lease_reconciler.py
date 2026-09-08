@@ -84,6 +84,7 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                     select(DeviceLease)
                     .where(DeviceLease.id == candidate.id)
                     .with_for_update()
+                    .execution_options(populate_existing=True)
                 )).scalars().first()
                 if (
                     lease is None
@@ -108,6 +109,7 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                         select(JobInstance)
                         .where(JobInstance.id == job_id)
                         .with_for_update()
+                        .execution_options(populate_existing=True)
                     )).scalars().first()
                 except Exception:
                     logger.warning("reconciler_job_load_failed job=%s", job_id, exc_info=True)
@@ -207,6 +209,7 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
                     select(JobInstance)
                     .where(JobInstance.id == candidate.id)
                     .with_for_update()
+                    .execution_options(populate_existing=True)
                 )).scalars().first()
                 if (
                     job is None
@@ -294,6 +297,52 @@ async def _reconcile_terminal_job_active_leases(db) -> int:
 _ABORT_REAPER_BROADCASTS: dict[str, list[dict]] = {}
 
 
+async def _abort_reaper_recheck_job(
+    db, job_id: int, now: datetime,
+) -> tuple[bool, dict | None]:
+    """Lock-reread one RUNNING+abort-requested candidate and recover it.
+
+    R06-F04 (#989): the candidate scan above has already loaded the row into
+    this session's identity map.  A plain ``SELECT ... FOR UPDATE`` on the
+    same id returns that cached object *without refreshing its attributes*,
+    so a terminal state committed by a concurrent ``/complete`` between the
+    scan and the lock would be shadowed by the stale RUNNING view — the
+    reaper would then write ABORTED/COMPLETED jobs back to UNKNOWN.
+    ``populate_existing`` forces the locked re-read to refresh, and the
+    re-check on fresh status is the conditional guard.
+
+    Returns ``(changed, broadcast_item)`` — ``changed=False`` when the job is
+    gone or no longer RUNNING (concurrent complete/abort won the race).
+    """
+    job = (await db.execute(
+        select(JobInstance)
+        .where(JobInstance.id == job_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )).scalars().first()
+    if job is None or job.status != JobStatus.RUNNING.value:
+        return False, None
+    try:
+        JobStateMachine.transition(
+            job, JobStatus.UNKNOWN, "abort_ack_timeout",
+        )
+    except InvalidTransitionError:
+        logger.debug(
+            "abort_reaper_skip_transition job=%d status=%s",
+            job.id, job.status,
+        )
+        return False, None
+
+    job.ended_at = now
+    return True, {
+        "type": "job_status",
+        "job_id": job.id,
+        "plan_run_id": job.plan_run_id,
+        "status": "UNKNOWN",
+        "plan_run_terminal": False,
+    }
+
+
 async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     """P1: 扫描 RUNNING job 且 PlanRun.run_context 含 abort_requested 且
     grace 已到 → JobStateMachine.transition UNKNOWN，保留 ACTIVE lease 隔离
@@ -341,38 +390,18 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     for candidate, _pr in rows:
         try:
             async with db.begin_nested():
-                job = (await db.execute(
-                    select(JobInstance)
-                    .where(JobInstance.id == candidate.id)
-                    .with_for_update()
-                )).scalars().first()
-                if job is None or job.status != JobStatus.RUNNING.value:
-                    continue
-                try:
-                    JobStateMachine.transition(
-                        job, JobStatus.UNKNOWN, "abort_ack_timeout",
-                    )
-                except InvalidTransitionError:
-                    logger.debug(
-                        "abort_reaper_skip_transition job=%d status=%s",
-                        job.id, job.status,
-                    )
+                changed, item = await _abort_reaper_recheck_job(
+                    db, candidate.id, now,
+                )
+                if not changed:
                     continue
 
-                job.ended_at = now
-                plan_run_terminal = False
                 unknown_count += 1
-                broadcast_items.append({
-                    "type": "job_status",
-                    "job_id": job.id,
-                    "plan_run_id": job.plan_run_id,
-                    "status": "UNKNOWN",
-                    "plan_run_terminal": plan_run_terminal,
-                })
+                broadcast_items.append(item)
 
                 logger.warning(
                     "abort_reaper job=%d plan_run=%d -> UNKNOWN (lease retained)",
-                    job.id, job.plan_run_id,
+                    candidate.id, candidate.plan_run_id,
                 )
         except Exception:
             logger.exception(
