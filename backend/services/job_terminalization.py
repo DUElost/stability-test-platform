@@ -2,7 +2,8 @@
 
 Every path that first puts a Job into COMPLETED / FAILED / ABORTED must call
 ``on_job_terminal`` (async) or ``on_job_terminal_sync`` afterwards in the
-**same transaction**. The service:
+**same transaction** as the job terminal write (through aggregation). The
+service:
 
 1. Locks ``plan_run`` with ``FOR NO KEY UPDATE`` (deadlock-safe vs FK KEY SHARE)
 2. Atomically increments the five O(1) counters on ``plan_run`` (+ ``plan_run_host``)
@@ -10,6 +11,9 @@ Every path that first puts a Job into COMPLETED / FAILED / ABORTED must call
    PlanRun aggregation from counters — no full sibling-job SELECT
 4. Falls back to the legacy full-job scan when ``total_job_count == 0``
    (pre-P2 / empty runs)
+5. On successful aggregation, **commits** parent terminal facts, then runs
+   chain trigger / dedup enqueue (#986) — chain prepare failure must not
+   ``rollback()`` the parent Job/PlanRun terminalization
 
 Idempotency is the caller's duty: only invoke on the *first* transition into
 a terminal job status (``complete_job`` already short-circuits replays).
@@ -41,6 +45,52 @@ _TERMINAL = {
     JobStatus.FAILED.value,
     JobStatus.ABORTED.value,
 }
+
+
+async def _post_aggregation_side_effects_async(
+    run: PlanRun,
+    db: AsyncSession,
+    applied: bool,
+) -> None:
+    """Commit parent terminal facts before chain/dedup side effects (#986).
+
+    ``trigger_next_plan`` may ``rollback()`` on prepare failure. If that shares
+    the still-open complete/aggregation transaction, parent Job terminalization,
+    lease release, and PlanRun aggregation are undone. Commit first so chain
+    failure only affects the child attempt; reconciler can retry the chain.
+    """
+    if not applied:
+        return
+    from backend.services.plan_chain_trigger import trigger_next_plan
+    from backend.services.dedup_scan import (
+        should_trigger_dedup,
+        enqueue_dedup_terminal_async,
+    )
+
+    await db.commit()
+    await trigger_next_plan(run, db)
+    if should_trigger_dedup(run.status):
+        await enqueue_dedup_terminal_async(run.id)
+
+
+def _post_aggregation_side_effects_sync(
+    run: PlanRun,
+    db: Session,
+    applied: bool,
+) -> None:
+    """Sync counterpart of ``_post_aggregation_side_effects_async`` (#986)."""
+    if not applied:
+        return
+    from backend.services.plan_chain_trigger import trigger_next_plan_sync
+    from backend.services.dedup_scan import (
+        should_trigger_dedup,
+        enqueue_dedup_terminal_sync,
+    )
+
+    db.commit()
+    trigger_next_plan_sync(run, db)
+    if should_trigger_dedup(run.status):
+        enqueue_dedup_terminal_sync(run.id)
 
 
 def _bump_counters(run: PlanRun, job: JobInstance) -> None:
@@ -114,15 +164,7 @@ async def on_job_terminal(
         record_plan_run_aggregation_duration(
             time.perf_counter() - t0, "counters",
         )
-        if applied:
-            from backend.services.plan_chain_trigger import trigger_next_plan
-            from backend.services.dedup_scan import (
-                should_trigger_dedup,
-                enqueue_dedup_terminal_async,
-            )
-            await trigger_next_plan(run, db)
-            if should_trigger_dedup(run.status):
-                await enqueue_dedup_terminal_async(run.id)
+        await _post_aggregation_side_effects_async(run, db, applied)
         return applied, run.status if applied else None
 
     jobs = await _load_jobs()
@@ -131,15 +173,7 @@ async def on_job_terminal(
     record_plan_run_aggregation_duration(
         time.perf_counter() - t0, "full_scan",
     )
-    if applied:
-        from backend.services.plan_chain_trigger import trigger_next_plan
-        from backend.services.dedup_scan import (
-            should_trigger_dedup,
-            enqueue_dedup_terminal_async,
-        )
-        await trigger_next_plan(run, db)
-        if should_trigger_dedup(run.status):
-            await enqueue_dedup_terminal_async(run.id)
+    await _post_aggregation_side_effects_async(run, db, applied)
     return applied, run.status if applied else None
 
 
@@ -185,15 +219,7 @@ def on_job_terminal_sync(
         record_plan_run_aggregation_duration(
             time.perf_counter() - t0, "counters",
         )
-        if applied:
-            from backend.services.plan_chain_trigger import trigger_next_plan_sync
-            from backend.services.dedup_scan import (
-                should_trigger_dedup,
-                enqueue_dedup_terminal_sync,
-            )
-            trigger_next_plan_sync(run, db)
-            if should_trigger_dedup(run.status):
-                enqueue_dedup_terminal_sync(run.id)
+        _post_aggregation_side_effects_sync(run, db, applied)
         return applied, run.status if applied else None
 
     jobs = (
@@ -206,15 +232,7 @@ def on_job_terminal_sync(
     record_plan_run_aggregation_duration(
         time.perf_counter() - t0, "full_scan",
     )
-    if applied:
-        from backend.services.plan_chain_trigger import trigger_next_plan_sync
-        from backend.services.dedup_scan import (
-            should_trigger_dedup,
-            enqueue_dedup_terminal_sync,
-        )
-        trigger_next_plan_sync(run, db)
-        if should_trigger_dedup(run.status):
-            enqueue_dedup_terminal_sync(run.id)
+    _post_aggregation_side_effects_sync(run, db, applied)
     return applied, run.status if applied else None
 
 

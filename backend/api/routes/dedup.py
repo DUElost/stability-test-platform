@@ -20,13 +20,14 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user
 from backend.api.schemas.jira_run import JiraRunOut
+from backend.core.audit import record_audit
 from backend.core.database import SessionLocal, get_db
 from backend.models.jira_run import JiraRun
 from backend.models.user import User
@@ -364,10 +365,38 @@ def get_jira_run_log(
 
 
 @router.post("/runs/{console_run_id}/cancel", response_model=ApiResponse[dict])
-def cancel_jira_run(console_run_id: str, _user: User = Depends(get_current_active_user)):
+def cancel_jira_run(
+    console_run_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_active_user),
+):
     if RunConsole.instance().status(console_run_id) is None:
+        # R02-F07（#907）：取消动作可归责——404（探测/误操作）同样落审计
+        record_audit(
+            db,
+            action="jira_run_cancel",
+            resource_type="jira_run",
+            resource_id=console_run_id,
+            username=user.username,
+            user_id=user.id,
+            details={"reason": "run_not_found"},
+            request=request,
+        )
+        db.commit()
         raise HTTPException(status_code=404, detail="run not found")
     canceled = RunConsole.instance().cancel(console_run_id)
+    record_audit(
+        db,
+        action="jira_run_cancel",
+        resource_type="jira_run",
+        resource_id=console_run_id,
+        username=user.username,
+        user_id=user.id,
+        details={"canceled": canceled},
+        request=request,
+    )
+    db.commit()
     return ok({"console_run_id": console_run_id, "canceled": canceled})
 
 
@@ -434,7 +463,9 @@ async def trigger_scan(
 @scan_router.post("/hosts/{host_id}/reload-config", response_model=ApiResponse[dict])
 async def reload_agent_config(
     host_id: str,
-    _user: User = Depends(get_current_active_user),
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_active_user),
 ):
     """远程触发 Agent 重新读取 env 并刷新运行时配置。
 
@@ -444,10 +475,36 @@ async def reload_agent_config(
     """
     from backend.realtime.socketio_server import emit_agent_control
 
-    await emit_agent_control(
-        host_id, "reload_config",
-        payload={},
+    try:
+        await emit_agent_control(
+            host_id, "reload_config",
+            payload={},
+        )
+    except Exception as exc:
+        # R02-F07（#907）：失败路径可归责——只记异常类型，不记参数原文
+        record_audit(
+            db,
+            action="agent_config_reload",
+            resource_type="host",
+            resource_id=host_id,
+            username=user.username,
+            user_id=user.id,
+            details={"reason": f"emit_failed:{type(exc).__name__}"},
+            request=request,
+        )
+        db.commit()
+        raise
+    record_audit(
+        db,
+        action="agent_config_reload",
+        resource_type="host",
+        resource_id=host_id,
+        username=user.username,
+        user_id=user.id,
+        details={"status": "sent"},
+        request=request,
     )
+    db.commit()
     return ok({"host_id": host_id, "command": "reload_config", "status": "sent"})
 
 
