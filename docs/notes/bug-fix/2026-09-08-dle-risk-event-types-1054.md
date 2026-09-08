@@ -1,5 +1,8 @@
 # DLE 风险汇总认具体 event_type（#1054）
 
+Status: implemented
+Class: bug-fix
+
 ## Decision
 
 扩展 `log_observation._rows_from_device_log_events` 的 DLE 过滤条件：
