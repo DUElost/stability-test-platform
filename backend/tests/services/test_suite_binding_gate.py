@@ -339,6 +339,32 @@ class TestSuiteGateMatrix:
         pr = _queued_run(db_session, f)
         assert collect_suite_gate_error(db_session, pr) is None
 
+    def test_project_param_conflict_with_export_dir(self, db_session, bound_fixture):
+        """#975：步骤已声明的 project 与门禁 export_dir 不一致 → fail-fast。"""
+        f = bound_fixture
+        for row in db_session.query(Script).filter(
+                Script.name == "mtbf_setup").all():
+            row.default_params = {"project": "other-project"}
+        db_session.commit()
+        _export(db_session, f["suite"])
+        pr = _queued_run(db_session, f)
+        err = collect_suite_gate_error(db_session, pr)
+        assert err is not None
+        assert err["step"] == "project_param_conflict"
+        assert err["expected_project"] == "legacy"
+        assert err["declared_project"] == "other-project"
+
+    def test_matching_project_override_passes_gate(self, db_session, bound_fixture):
+        """与 export_dir 一致的显式 project 仍放行（覆盖能力未取消）。"""
+        f = bound_fixture
+        for row in db_session.query(Script).filter(
+                Script.name == "mtbf_setup").all():
+            row.default_params = {"project": "legacy"}
+        db_session.commit()
+        _export(db_session, f["suite"])
+        pr = _queued_run(db_session, f)
+        assert collect_suite_gate_error(db_session, pr) is None
+
     def test_unbound_plan_never_gated(self, db_session, bound_fixture):
         """无冻结块 + Plan 未绑定：即使套件全坏也不进门禁。
 
@@ -509,7 +535,10 @@ class TestInjectSuiteParams:
         ]
 
     def test_existing_user_value_wins(self, db_session, bound_fixture):
-        """注入不以用户声明为前提，但已声明的值优先（WiFi 先例同款）。"""
+        """注入不以用户声明为前提；计数类键已声明值优先（WiFi 先例同款）。
+
+        ``project`` 冲突由门禁 #975 拒绝，本用例只覆盖 expected_testpoint_count。
+        """
         steps = self._materialize(
             db_session, bound_fixture,
             setup_defaults={"expected_testpoint_count": 999},
@@ -517,6 +546,30 @@ class TestInjectSuiteParams:
         setup = next(s for s in steps if s["action"] == "script:mtbf_setup")
         assert setup["params"]["expected_testpoint_count"] == 999
         assert setup["params"]["project"] == "legacy"   # 未声明的键照常注入
+
+    def test_inject_rejects_conflicting_project(self):
+        """物化防御：lifecycle 已带冲突 project 时 inject 不得静默吞掉。"""
+        import pytest as _pytest
+
+        from backend.services.plan_dispatcher_core import (
+            PlanDispatchError,
+            inject_suite_params,
+        )
+
+        pipeline = {
+            "lifecycle": {
+                "init": [{
+                    "step_id": "init_setup",
+                    "action": "script:mtbf_setup",
+                    "version": "1.3.0",
+                    "params": {"project": "other-project"},
+                    "retry": 0,
+                }],
+                "teardown": [],
+            },
+        }
+        with _pytest.raises(PlanDispatchError, match="conflicts with suite"):
+            inject_suite_params(pipeline, {"project": "legacy", "expected_testpoint_count": 1})
 
     def test_unbound_plan_not_injected(self, db_session, bound_fixture):
         """防御性覆盖：run_context 无 dispatch_suite 的 Run（翻转前 prepare 的
