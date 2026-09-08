@@ -281,3 +281,10 @@ def test_monkey_setup_v236_has_att_clean_step():
     spec.loader.exec_module(mod)
     assert "att_clean" in mod.STEPS
     assert "att_clean" in mod.main.__defaults__[0] if mod.main.__defaults__ else True
+
+
+def test_gpu_setup_v105_pre_reboot_config():
+    """#774：gpu_config 透传 pre_reboot（默认 true——setup 前重启清 UiAutomation 残留）。"""
+    lib = _load_lib("gpu_setup", "1.0.5")
+    assert lib.gpu_config({"project": "chain"})["pre_reboot"] is True
+    assert lib.gpu_config({"project": "chain", "pre_reboot": "false"})["pre_reboot"] is False
