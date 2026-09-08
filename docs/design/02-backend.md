@@ -30,10 +30,17 @@ backend/
 `backend/main.py` 启动顺序（`TESTING=1` 时跳过基础设施）：
 
 1. 生产 guard（Cookie、CSRF、注册开关等）  
-2. Redis PING  
-3. APScheduler jobs：recycler、cron、precheck_reaper、revoked_token_cleanup 等  
-4. `RunConsole` 子进程管理器  
-5. SAQ in-process worker（`STP_ENABLE_INPROCESS_SAQ`）
+2. Redis 连接 + PING 校验  
+3. `RunConsole` 子进程管理器（配置）  
+4. SAQ（in-process worker 或 producer，`STP_ENABLE_INPROCESS_SAQ`）  
+5. **APScheduler 最后启动**：recycler、cron、precheck_reaper、revoked_token_cleanup 等
+
+依赖校验先行、有副作用的后台任务最后启动（R01-F03/#883）：任一阶段失败由
+`_lifespan_cleanup` 清理已启动资源后中止；关闭期每步独立容错，单步失败不
+阻断后续清理。
+
+**健康探针分工**（R01-F05/#885）：`/health` 为 readiness（DB/Redis/SAQ 不可
+用即 503，Docker HEALTHCHECK 指向它）；`/health/live` 为纯 liveness。
 
 **ASGI**：`app = socketio.ASGIApp(sio_server, fastapi_app)`  
 **中间件**（外→内）：CORS → RateLimit → CSRF

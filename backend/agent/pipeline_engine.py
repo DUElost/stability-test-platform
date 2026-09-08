@@ -323,6 +323,14 @@ def _drain_polling(
         if not chunk:
             break  # EOF
         pending += decoder.decode(chunk).replace("\r\n", "\n").replace("\r", "\n")
+        # #1011: 无换行流 / 超长单行不得让 pending 无界增长（内存 OOM）。
+        # 达捕获预算即把前缀截断按完整行送出（sink 层预算随后丢弃剩余
+        # 输出，与既有 8 MiB 语义一致），把每段 pending 压回 chunk 量级；
+        # 超出的尾随部分续接下个 chunk，直到换行/EOF 自然排空。
+        if len(pending) > _MAX_CAPTURED_CHARS:
+            # MAX-1 + "\n" = 恰好预算：截断行本身不得再超上限。
+            on_line(pending[:_MAX_CAPTURED_CHARS - 1] + "\n")
+            pending = pending[_MAX_CAPTURED_CHARS - 1:]
         while "\n" in pending:
             line, pending = pending.split("\n", 1)
             on_line(line + "\n")

@@ -111,7 +111,7 @@ class LogSignalEnvelope(TypedDict, total=False):
     device_serial:       str
     fencing_token:       str    # emit 时快照的 lease token（延迟上送鉴权）
     agent_instance_id:   str    # emit 时快照的 agent 实例 id
-    category:            str    # AEE | VENDOR_AEE | MOBILELOG | ANR（ANR 生产路径为 AEE+extra.event_type；category=ANR 仅遗留/自定义 policy）
+    category:            str    # AEE | VENDOR_AEE | MOBILELOG | ANR | UNIVIEW（UNISOC realtime）
     source:              str    # inotifyd | polling | reconciler
     path_on_device:      str
     detected_at:         str    # ISO8601
@@ -180,7 +180,7 @@ def validate_log_signal(envelope: Dict[str, Any]) -> Dict[str, Any]:
         raise ContractViolation(
             f"log_signal missing required fields: {missing}"
         )
-    if envelope["category"] not in {"ANR", "AEE", "VENDOR_AEE", "MOBILELOG"}:
+    if envelope["category"] not in {"ANR", "AEE", "VENDOR_AEE", "MOBILELOG", "UNIVIEW"}:
         raise ContractViolation(f"log_signal.category unknown: {envelope['category']}")
     if envelope["source"] not in {"inotifyd", "polling", "reconciler"}:
         raise ContractViolation(f"log_signal.source unknown: {envelope['source']}")
