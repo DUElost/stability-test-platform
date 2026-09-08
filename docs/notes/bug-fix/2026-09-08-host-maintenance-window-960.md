@@ -53,7 +53,7 @@ drain / 前端预检。检查结束到上传、rsync、重启之间是**无互�
 - `pytest backend/tests/services/test_precheck_sync.py test_plan_precheck.py
   test_host_maintenance.py`：53 passed（precheck 回退路径未被窗口逻辑破坏）；
 - `pytest backend/tests/services/test_host_updater.py`：新增远端 tar 路径唯一性用例；
-- `alembic heads` 单一 head = `m8n9o0p1q2r3`（父 `n4o5p6q7r8s9`）；
+- `alembic heads` 单一 head = `m8n9o0p1q2r3`（父已从 `n4o5p6q7r8s9` 接到 `q7r6s5t4u3v2`，避免与 `o9p8…` 种子链并行双头）；
 - `pytest backend/tests`：全量通过。
 
 ## Revisit
@@ -67,3 +67,4 @@ drain / 前端预检。检查结束到上传、rsync、重启之间是**无互�
   下一步是把冲突变成显式排队而不是报错；
 - `maintenance_holder` 目前只用于并发识别与释放校验，未开放给 API 展示；若要给
   UI 展示「谁在更新这台主机」，需要显式加出参（schema 变更另走 PR）。
+- 并行合入后父 revision 撞车：`n4o5` 已被 `o9p8` 占用，维护窗口迁移必须挂到当时唯一 head（本轮 `q7r6`）。

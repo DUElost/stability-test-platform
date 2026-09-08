@@ -1,7 +1,7 @@
 """add host.maintenance_until / maintenance_holder — 主机维护窗口（#960）
 
 Revision ID: m8n9o0p1q2r3
-Revises: n4o5p6q7r8s9
+Revises: q7r6s5t4u3v2
 Create Date: 2026-09-08
 
 热更新此前只在发起前做一次活跃 Job 检查（409 / abort drain / 前端预检）；
@@ -23,7 +23,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "m8n9o0p1q2r3"
-down_revision = "n4o5p6q7r8s9"
+down_revision = "q7r6s5t4u3v2"
 branch_labels = None
 depends_on = None
 
