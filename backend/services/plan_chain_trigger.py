@@ -9,6 +9,11 @@ layer of protection.
 
 On dispatch failure the trigger flag is rolled back so a later aggregator
 pass can retry, and ``result_summary.chain_dispatch_failed`` records the error.
+
+Callers that share a session with uncommitted parent terminalization must
+commit those parent facts before invoking this module (#986 /
+``job_terminalization`` post-aggregation commit). A prepare failure still
+issues ``session.rollback()``; that must not undo Job/PlanRun terminal writes.
 """
 
 from __future__ import annotations
