@@ -644,6 +644,29 @@ class TestRecoverySyncStartup:
         mock_sync.assert_called_once()
         execute_actions.assert_not_called()  # recovery skipped on failure
 
+    def test_sync_returns_none_reports_false_for_retry(self):
+        """#1009: sync_recovery 返回 None（网络失败不抛）→ run 返回 False，
+        调用方保留重试状态。"""
+        local_db = MagicMock()
+        local_db.get_active_jobs.return_value = [
+            {"job_id": 1, "device_id": 10, "device_serial": "SERIAL-1", "fencing_token": "tok-1"},
+        ]
+        local_db.get_pending_outbox.return_value = []
+        execute_actions = MagicMock()
+
+        with patch("backend.agent.main.sync_recovery", return_value=None):
+            settled = run_recovery_sync_if_needed(
+                local_db=local_db,
+                api_url="http://x",
+                host_id="h1",
+                agent_instance_id="inst-1",
+                boot_id="boot-1",
+                execute_actions=execute_actions,
+            )
+
+        assert settled is False
+        execute_actions.assert_not_called()
+
 
 class TestReconnectRecoveryTrigger:
     def test_reconnected_device_triggers_recovery_only_for_matching_serial(self):
@@ -654,7 +677,8 @@ class TestReconnectRecoveryTrigger:
         ]
         execute_actions = MagicMock()
 
-        with patch("backend.agent.main.run_recovery_sync_if_needed") as mock_run:
+        with patch("backend.agent.main.run_recovery_sync_if_needed",
+                   return_value=True) as mock_run:
             triggered = trigger_recovery_sync_on_device_reconnect(
                 reconnected_serials=["ABC123"],
                 local_db=local_db,
@@ -687,7 +711,7 @@ class TestReconnectRecoveryTrigger:
                 execute_actions=execute_actions,
             )
 
-        assert triggered is False
+        assert triggered is True  # 确定无需恢复 → settled
         mock_run.assert_not_called()
 
     def test_reconnected_device_skips_recovery_without_matching_serial(self):
@@ -709,5 +733,112 @@ class TestReconnectRecoveryTrigger:
                 execute_actions=execute_actions,
             )
 
-        assert triggered is False
+        assert triggered is True  # 无匹配 serial → 确定无需恢复
         mock_run.assert_not_called()
+
+    def test_recovery_failure_propagates_false_keeps_retry_mark(self):
+        """#1009: 恢复被需要但 sync 失败 → trigger 返回 False，调用方保留
+        重连标记、下个心跳重试（无需再次拔插）。"""
+        local_db = MagicMock()
+        local_db.get_active_jobs.return_value = [
+            {"job_id": 1, "device_id": 10, "device_serial": "ABC123", "fencing_token": "tok-1"},
+        ]
+        execute_actions = MagicMock()
+
+        with patch("backend.agent.main.run_recovery_sync_if_needed",
+                   return_value=False) as mock_run:
+            triggered = trigger_recovery_sync_on_device_reconnect(
+                reconnected_serials=["ABC123"],
+                local_db=local_db,
+                api_url="http://x",
+                host_id="h1",
+                agent_instance_id="inst-1",
+                boot_id="boot-1",
+                execute_actions=execute_actions,
+            )
+
+        assert triggered is False
+        mock_run.assert_called_once()
+
+    def test_successful_recovery_returns_true_settled(self):
+        """恢复完成 → True（调用方清除重连标记）。"""
+        local_db = MagicMock()
+        local_db.get_active_jobs.return_value = [
+            {"job_id": 1, "device_id": 10, "device_serial": "ABC123", "fencing_token": "tok-1"},
+        ]
+        execute_actions = MagicMock()
+
+        with patch("backend.agent.main.run_recovery_sync_if_needed",
+                   return_value=True) as mock_run:
+            triggered = trigger_recovery_sync_on_device_reconnect(
+                reconnected_serials=["ABC123"],
+                local_db=local_db,
+                api_url="http://x",
+                host_id="h1",
+                agent_instance_id="inst-1",
+                boot_id="boot-1",
+                execute_actions=execute_actions,
+            )
+
+        assert triggered is True
+        mock_run.assert_called_once()
+
+
+class TestHeartbeatRecoveryRetry:
+    """#1009: heartbeat tick 按恢复回调返回值保留/清除待恢复标记。"""
+
+    def _thread(self, monkeypatch, callback):
+        import backend.agent.heartbeat_thread as hb_mod
+
+        monkeypatch.setattr(
+            hb_mod, "send_heartbeat", lambda *a, **k: {"ok": True},
+        )
+        monkeypatch.setattr(
+            hb_mod.device_discovery, "discover_devices", lambda adb: [],
+        )
+        from backend.agent.heartbeat_thread import HeartbeatThread
+        return HeartbeatThread(
+            api_url="http://x",
+            host_id="h1",
+            adb_path="adb",
+            mount_points=[],
+            host_info={},
+            poll_interval=60,
+            on_devices_reconnected=callback,
+        )
+
+    def test_failed_recovery_keeps_pending_serials_retried_next_tick(
+        self, monkeypatch,
+    ):
+        """验收：同步失败（回调返回 False）不清除重连标记——下个心跳周期
+        自动重试，无需再次拔插设备。"""
+        calls = []
+
+        def cb(serials):
+            calls.append(list(serials))
+            return False  # recovery 需要但本次失败
+
+        thread = self._thread(monkeypatch, cb)
+        thread._pending_reconnected_serials.append("S1")
+
+        thread._tick()
+        assert thread._pending_reconnected_serials == ["S1"]  # 保留
+        assert calls == [["S1"]]
+
+        thread._tick()  # 下一心跳自动重试
+        assert calls == [["S1"], ["S1"]]
+
+    def test_settled_recovery_clears_pending_serials(self, monkeypatch):
+        """恢复完成/确定无需恢复（True）→ 清除标记。"""
+        calls = []
+
+        def cb(serials):
+            calls.append(list(serials))
+            return True
+
+        thread = self._thread(monkeypatch, cb)
+        thread._pending_reconnected_serials.append("S1")
+
+        thread._tick()
+        assert thread._pending_reconnected_serials == []
+        assert calls == [["S1"]]

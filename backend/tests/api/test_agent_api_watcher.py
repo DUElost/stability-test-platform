@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -316,6 +316,35 @@ async def test_claim_overrides_watcher_policy_to_disabled_when_dispatch_snapshot
         assert item.watcher_policy["enabled"] is False
         assert item.watcher_policy["on_unavailable"] == DEFAULT_WATCHER_POLICY["on_unavailable"]
         assert item.watcher_policy["required_categories"] == DEFAULT_WATCHER_POLICY["required_categories"]
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_claim_skipped_when_host_in_maintenance_window():
+    """#960：主机在维护窗口内（热更新上传/重启中）不认领 —— 与派发侧同一判据。"""
+    seed = _seed_job_with_policy(watcher_policy=DEFAULT_WATCHER_POLICY)
+    try:
+        db = SessionLocal()
+        try:
+            host = db.get(Host, seed["host_id"])
+            assert host is not None
+            host.maintenance_until = datetime.now(timezone.utc) + timedelta(seconds=300)
+            host.maintenance_holder = "ui:tester"
+            db.commit()
+        finally:
+            db.close()
+
+        async with AsyncSessionLocal() as async_db:
+            result = await claim_jobs(
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data == []
     finally:
         _cleanup_seed(seed)
 

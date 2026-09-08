@@ -661,3 +661,110 @@ def test_run_extract_sync_failed_copy_does_not_archive_or_leave_complete_dest(
         DeviceLogEvent.plan_run_id == sample_plan_run.id,
     ).one()
     assert row.state == EventState.REMOTE.value
+
+
+def test_run_extract_sync_dual_platform_merge_xls_same_basename(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#766: mtk/unisoc Result_MergeFiles.xls 同名时都必须进 jira bundle。"""
+    nfs = tmp_path / "nfs"
+    devices = nfs / "devices" / str(sample_plan_run.id)
+    jira = nfs / "jira" / str(sample_plan_run.id)
+    keep = devices / "2026_0908_120000_000_db.1.NE"
+    keep.mkdir(parents=True)
+    (keep / "main.dbg").write_text("keep", encoding="utf-8")
+
+    mtk_dir = nfs / "dedup" / str(sample_plan_run.id) / "merge" / "mtk"
+    uni_dir = nfs / "dedup" / str(sample_plan_run.id) / "merge" / "unisoc"
+    mtk_dir.mkdir(parents=True)
+    uni_dir.mkdir(parents=True)
+    mtk_xls = mtk_dir / "Result_MergeFiles.xls"
+    uni_xls = uni_dir / "Result_MergeFiles.xls"
+    mtk_xls.write_bytes(b"mtk-report")
+    uni_xls.write_bytes(b"unisoc-report")
+
+    for uri in (mtk_xls, uni_xls):
+        db_session.add(PlanRunArtifact(
+            plan_run_id=sample_plan_run.id,
+            host_id=None,
+            storage_uri=str(uri),
+            artifact_type="merge_result_xls",
+            size_bytes=uri.stat().st_size,
+        ))
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="NE",
+        detected_at=datetime.now(timezone.utc),
+        state=EventState.REMOTE.value,
+        local_path=str(keep),
+        remote_path=str(keep),
+        plan_run_id=sample_plan_run.id,
+        host_id=sample_host.id,
+    ))
+    db_session.commit()
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    extracted = run_extract_sync(sample_plan_run.id)
+
+    assert (jira / "merge" / "mtk" / "Result_MergeFiles.xls").read_bytes() == b"mtk-report"
+    assert (jira / "merge" / "unisoc" / "Result_MergeFiles.xls").read_bytes() == b"unisoc-report"
+    # event dir + 2 merge xls
+    assert extracted == 3
+    from backend.models.plan_run import PlanRun
+    db_session.expire_all()
+    pr = db_session.get(PlanRun, sample_plan_run.id)
+    assert pr.run_context["extract"]["merge_xls_copied"] == 2
+    assert pr.run_context["extract"]["merge_xls_skipped_same_name"] == 0
+
+
+def test_run_extract_sync_legacy_flat_merge_collision_renames(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch, caplog,
+):
+    """#766: 非分区 URI 同名时改名落盘并 warning，不得静默跳过。"""
+    nfs = tmp_path / "nfs"
+    devices = nfs / "devices" / str(sample_plan_run.id)
+    jira = nfs / "jira" / str(sample_plan_run.id)
+    keep = devices / "2026_0908_120000_001_db.2.NE"
+    keep.mkdir(parents=True)
+    (keep / "main.dbg").write_text("keep", encoding="utf-8")
+
+    a = tmp_path / "a" / "Result_MergeFiles.xls"
+    b = tmp_path / "b" / "Result_MergeFiles.xls"
+    a.parent.mkdir(parents=True)
+    b.parent.mkdir(parents=True)
+    a.write_bytes(b"first")
+    b.write_bytes(b"second")
+
+    for uri in (a, b):
+        db_session.add(PlanRunArtifact(
+            plan_run_id=sample_plan_run.id,
+            host_id=None,
+            storage_uri=str(uri),
+            artifact_type="merge_result_xls",
+            size_bytes=10,
+        ))
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="NE",
+        detected_at=datetime.now(timezone.utc),
+        state=EventState.REMOTE.value,
+        local_path=str(keep),
+        remote_path=str(keep),
+        plan_run_id=sample_plan_run.id,
+        host_id=sample_host.id,
+    ))
+    db_session.commit()
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    with caplog.at_level("WARNING"):
+        extracted = run_extract_sync(sample_plan_run.id)
+
+    assert (jira / "Result_MergeFiles.xls").read_bytes() == b"first"
+    # legacy URI without /merge/{platform}/ defaults to mtk classifier → suffix
+    assert (jira / "Result_MergeFiles_mtk.xls").read_bytes() == b"second"
+    assert extracted == 3
+    assert "dedup_extract_merge_xls_renamed_same_name" in caplog.text

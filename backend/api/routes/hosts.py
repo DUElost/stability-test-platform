@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import os
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +34,7 @@ from backend.services.agent_installer import (
     get_active_install_console_id,
     start_install_agent_runconsole,
 )
+from backend.services.host_maintenance import HostMaintenanceConflict, maintenance_window
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
 from backend.services.agent_version_info import build_host_version_view, record_agent_code_deployed
 from backend.services.run_console import RunConsole
@@ -730,17 +732,34 @@ def host_hot_update(
     )
     db.commit()
 
-    result = execute_hot_update(
-        host_ip=host.ip or "",
-        ssh_port=host.ssh_port or 22,
-        ssh_user=creds.user,
-        ssh_password=creds.password,
-        ssh_key_path=creds.key_path,
-        known_hosts_path=creds.known_hosts_path,
-        sync_agent_secret=sync_agent_secret,
-        agent_secret=agent_secret,
-        code_version=code_version,
-    )
+    # #960：从这里到重启完成之前是互斥窗口 —— 检查完活跃 Job 之后的上传/rsync/
+    # 重启期间不得再向该主机派发或 claim（此前只有「检查时点」的 409，窗口内无
+    # 任何阻挡）。窗口在 finally 释放；进程崩溃时靠 maintenance_until 过期失效。
+    holder = f"ui:{current_user.username if current_user else 'api'}:{uuid.uuid4().hex[:8]}"
+    try:
+        with maintenance_window(db, host_id, holder):
+            result = execute_hot_update(
+                host_ip=host.ip or "",
+                ssh_port=host.ssh_port or 22,
+                ssh_user=creds.user,
+                ssh_password=creds.password,
+                ssh_key_path=creds.key_path,
+                known_hosts_path=creds.known_hosts_path,
+                sync_agent_secret=sync_agent_secret,
+                agent_secret=agent_secret,
+                code_version=code_version,
+            )
+    except HostMaintenanceConflict:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HOST_IN_MAINTENANCE",
+                "message": (
+                    f"Host {host_id} is already in a maintenance window "
+                    "(another hot-update in progress). Retry later."
+                ),
+            },
+        ) from None
 
     record_audit(
         db,
