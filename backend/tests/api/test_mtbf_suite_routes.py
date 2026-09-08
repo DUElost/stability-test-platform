@@ -99,6 +99,14 @@ class TestSuiteCrud:
         assert client.delete(f"/api/v1/test-suites/{suite.id}",
                              headers=auth_headers).status_code == 403
 
+    def test_put_rejects_explicit_null_is_active(self, client, admin_headers, suite):
+        """#939: is_active 列 NOT NULL——显式 null 在 schema 层 422，而非提交期
+        500；显式 false 正常生效。"""
+        assert client.put(f"/api/v1/test-suites/{suite.id}", headers=admin_headers,
+                          json={"is_active": None}).status_code == 422
+        assert client.put(f"/api/v1/test-suites/{suite.id}", headers=admin_headers,
+                          json={"is_active": False}).status_code == 200
+
 
 class TestCaseCrud:
     def test_create_update_delete(self, client, admin_headers, auth_headers, suite):
