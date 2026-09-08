@@ -264,11 +264,25 @@ PY
 # Fix ownership
 sudo chown -R {user}:{group} "$INSTALL_DIR"
 
-# Refresh Python dependencies if requirements.txt changed
+# Refresh Python dependencies when requirements.txt content changed, OR when a
+# previous pip for the current requirements SHA never completed successfully
+# (#948). Marker lives outside agent/ so rsync --delete cannot clear it.
+DEPS_MARKER="$INSTALL_DIR/.deps_installed_sha"
 DEPS_REFRESHED=0
 NEW_REQ_SHA=$(sha256sum "$INSTALL_DIR/agent/requirements.txt" 2>/dev/null | cut -d' ' -f1 || echo "none")
-if [ -n "$NEW_REQ_SHA" ] && [ "$NEW_REQ_SHA" != "none" ] && [ "$OLD_REQ_SHA" != "$NEW_REQ_SHA" ]; then
-    echo "INFO: requirements.txt changed ($OLD_REQ_SHA -> $NEW_REQ_SHA), running pip install"
+INSTALLED_REQ_SHA=$(cat "$DEPS_MARKER" 2>/dev/null || echo "none")
+NEED_PIP=0
+if [ -n "$NEW_REQ_SHA" ] && [ "$NEW_REQ_SHA" != "none" ]; then
+    if [ "$OLD_REQ_SHA" != "$NEW_REQ_SHA" ] || [ "$INSTALLED_REQ_SHA" != "$NEW_REQ_SHA" ]; then
+        NEED_PIP=1
+    fi
+fi
+if [ "$NEED_PIP" -eq 1 ]; then
+    if [ "$OLD_REQ_SHA" != "$NEW_REQ_SHA" ]; then
+        echo "INFO: requirements.txt changed ($OLD_REQ_SHA -> $NEW_REQ_SHA), running pip install"
+    else
+        echo "INFO: requirements.txt unchanged but deps marker missing/stale ($INSTALLED_REQ_SHA != $NEW_REQ_SHA), retrying pip install"
+    fi
     "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/agent/requirements.txt" -q --disable-pip-version-check
     PIP_RC=$?
     if [ "$PIP_RC" -ne 0 ]; then
@@ -276,6 +290,8 @@ if [ -n "$NEW_REQ_SHA" ] && [ "$NEW_REQ_SHA" != "none" ] && [ "$OLD_REQ_SHA" != 
         echo "STP_DEPS_REFRESHED=0"
         exit 1
     fi
+    echo "$NEW_REQ_SHA" | sudo tee "$DEPS_MARKER" > /dev/null
+    sudo chown {user}:{group} "$DEPS_MARKER"
     DEPS_REFRESHED=1
 fi
 echo "STP_DEPS_REFRESHED=$DEPS_REFRESHED"

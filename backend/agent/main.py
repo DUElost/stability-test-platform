@@ -197,7 +197,17 @@ def _cleanup_after_job_exit(
             if device_id is not None:
                 active_device_ids.discard(device_id)
     if job_was_active:
-        local_db.delete_active_job(job_id)
+        # #1005: 仅当终态事实到达可靠落点（远端 ack 或 outbox 持久化，均留
+        # job_terminal_outbox 行）才删除恢复依据；complete_job 双故障（HTTP
+        # 与 enqueue 都失败）时无行——删掉会让终态静默丢失（远端无终态、
+        # 本地无 outbox、恢复入口也被删）。
+        if local_db is None or local_db.has_terminal_fact(job_id):
+            local_db.delete_active_job(job_id)
+        else:
+            logger.error(
+                "active_job_kept_terminal_lost job=%d — no terminal fact "
+                "durably recorded; recovery record retained", job_id,
+            )
 
 
 def trigger_recovery_sync_on_device_reconnect(
