@@ -408,6 +408,45 @@ class TestAbortPermitSemantics:
         engine._update_execution_state = lambda _state: None
         assert engine._run_step_with_permit("init", {}) is False
 
+    def test_scheduler_shutdown_marks_engine_cancelled(self):
+        """R07-F12 (#1012): a terminal scheduler denial must propagate as a
+        worker-wide cancel so a patrol cruise stops instead of counting the
+        denied step as an ordinary failure and backoff-retrying forever."""
+        from backend.agent.pipeline_engine import PipelineEngine
+        from backend.agent.operation_scheduler import OperationScheduler
+
+        scheduler = OperationScheduler(max_concurrent=1)
+        scheduler.shutdown()
+        engine = PipelineEngine.__new__(PipelineEngine)
+        engine._scheduler = scheduler
+        engine._device_id = 42
+        engine._canceled = False
+        engine._run_id = 1
+        engine._is_aborted = lambda: False
+        engine._is_lock_lost = lambda: False
+        engine._update_execution_state = lambda _state: None
+
+        assert engine._run_step_with_permit("patrol", {}) is False
+        assert engine._canceled is True  # the cruise-stop signal (regression)
+
+    def test_cancelled_patrol_cycle_does_not_count_steps(self):
+        """R07-F12 (#1012): once a terminal denial cancels the engine, a patrol
+        cycle short-circuits instead of executing — nothing is recorded as a
+        step failure (which would trigger backoff retry)."""
+        from backend.agent.pipeline_engine import PipelineEngine
+
+        engine = PipelineEngine.__new__(PipelineEngine)
+        engine._canceled = True
+        engine._is_lock_lost = lambda: False
+
+        executions = []
+        engine._run_step_with_permit = lambda *a, **k: executions.append(1) or False
+        success, failed, last_failed = engine._run_patrol_cycle_steps(
+            [{"step_id": "s1"}]
+        )
+        assert executions == []
+        assert (success, failed, last_failed) == (0, 0, None)
+
     def test_abort_while_holding_does_not_release_permit(self):
         """Abort a job that is EXECUTING_STEP (holding a permit) — the
         cancel must be a no-op. The concurrency cap must survive."""
