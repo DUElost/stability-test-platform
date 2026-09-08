@@ -82,6 +82,135 @@ def test_find_fresh_merge_output_dir_requires_new_subdir(tmp_path):
     assert found == new
 
 
+def test_find_fresh_picks_newest_when_two_new_dirs(tmp_path):
+    """#1072 根因：共享 merge_result 下两轮新目录并存时 max(mtime) 会错绑。"""
+    import time
+
+    merge_root = tmp_path / "merge_result"
+    merge_root.mkdir()
+    before: set[str] = set()
+    baseline = 0.0
+    a = merge_root / "out_a"
+    a.mkdir()
+    (a / "Result_MergeFiles.xls").write_bytes(b"A")
+    time.sleep(0.02)
+    b = merge_root / "out_b"
+    b.mkdir()
+    (b / "Result_MergeFiles.xls").write_bytes(b"B")
+    found = ds.find_fresh_merge_output_dir(merge_root, baseline, before_names=before)
+    assert found == b
+
+
+def test_exclusive_merge_lock_serializes_harvest(tmp_path):
+    """#1072：持锁 snapshot→落盘→收割时，两 PlanRun 各自拿到自己的产物。"""
+    import threading
+    import time
+
+    merge_root = tmp_path / "merge_result"
+    merge_root.mkdir()
+    results: list[tuple[str, bytes]] = []
+    errors: list[BaseException] = []
+
+    def worker(tag: bytes) -> None:
+        try:
+            with ds._exclusive_merge_tool_lock(tmp_path):
+                before = ds._merge_output_dir_names(merge_root)
+                baseline = ds.latest_merge_output_mtime(merge_root)
+                time.sleep(0.05)  # 放大交错窗口；无锁时必交叉
+                sub = merge_root / f"out_{tag.decode()}"
+                sub.mkdir()
+                (sub / "Result_MergeFiles.xls").write_bytes(tag)
+                found = ds.find_fresh_merge_output_dir(merge_root, baseline, before)
+                results.append((found.name, found.joinpath("Result_MergeFiles.xls").read_bytes()))
+        except BaseException as exc:  # noqa: BLE001 — 收集线程错误
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=worker, args=(b"runA",)),
+        threading.Thread(target=worker, args=(b"runB",)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert not errors
+    assert sorted(c for _, c in results) == [b"runA", b"runB"]
+    assert {name for name, _ in results} == {"out_runA", "out_runB"}
+
+
+def test_run_merge_sync_holds_merge_lock_during_harvest(tmp_path, monkeypatch):
+    """run_merge_sync 在收割窗口内持有 .stp_merge.lock。"""
+    import fcntl
+
+    (tmp_path / "start_log_scan.py").write_text("# stub", encoding="utf-8")
+    tool = {"python": "python", "script": str(tmp_path / "start_log_scan.py")}
+    merge_root = tmp_path / "merge_result"
+    lock_held = {"ok": False}
+
+    def fake_run(*_a, **_k):
+        lock_path = merge_root / ".stp_merge.lock"
+        assert lock_path.is_file()
+        with open(lock_path, "a+", encoding="utf-8") as fh:
+            # 非阻塞抢锁应失败 → 证明 run_merge_sync 仍持 LOCK_EX
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                lock_held["ok"] = True
+            else:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                lock_held["ok"] = False
+        out = merge_root / "2026_09_08_18_00_00"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "Result_MergeFiles.xls").write_bytes(b"x")
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stderr = ""
+        proc.stdout = ""
+        return proc
+
+    monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
+    with patch.object(ds, "resolve_scan_tool", return_value=tool), \
+         patch.object(ds, "_load_org_files_for_merge", return_value=["/fake/a_org.xls"]), \
+         patch.object(ds, "build_merge_argv", return_value=(["python", "scan.py", "-merge_files_list", "x"], None)), \
+         patch.object(ds, "scan_tool_supports_merge_files_list", return_value=True), \
+         patch("backend.services.dedup_scan.subprocess.run", side_effect=fake_run), \
+         patch.object(ds, "_register_merge_artifacts", return_value=1):
+        assert ds.run_merge_sync(42) == "ok"
+    assert lock_held["ok"] is True
+
+
+def test_run_merge_sync_raises_on_center_publish_oserror(tmp_path, monkeypatch):
+    """#1074: 中心发布 OSError 时不登记本机产物、不返回 ok。"""
+    (tmp_path / "start_log_scan.py").write_text("# stub", encoding="utf-8")
+    tool = {"python": "python", "script": str(tmp_path / "start_log_scan.py")}
+    merge_root = tmp_path / "merge_result"
+    center = tmp_path / "center"
+    center.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+
+    def fake_run(*_a, **_k):
+        out = merge_root / "2026_09_08_20_00_00"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "Result_MergeFiles.xls").write_bytes(b"x")
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stderr = ""
+        proc.stdout = ""
+        return proc
+
+    register = MagicMock(return_value=1)
+    with patch.object(ds, "resolve_scan_tool", return_value=tool), \
+         patch.object(ds, "_load_org_files_for_merge", return_value=["/fake/a_org.xls"]), \
+         patch.object(ds, "build_merge_argv", return_value=(["python", "scan.py", "-merge_files_list", "x"], None)), \
+         patch.object(ds, "scan_tool_supports_merge_files_list", return_value=True), \
+         patch("backend.services.dedup_scan.subprocess.run", side_effect=fake_run), \
+         patch("backend.services.dedup_scan.shutil.copytree", side_effect=OSError("ENOSPC")), \
+         patch.object(ds, "_register_merge_artifacts", register):
+        with pytest.raises(RuntimeError, match="merge center publish failed"):
+            ds.run_merge_sync(42)
+    register.assert_not_called()
+
+
 def test_merge_stderr_indicates_failure():
     assert ds.merge_stderr_indicates_failure("start_log_scan.py: error: argument -m/--mode")
     assert not ds.merge_stderr_indicates_failure("[INFO] merge done")
@@ -279,6 +408,19 @@ class TestPublishMergeToCenter:
         (merge_dir / "Result_MergeFiles.xls").write_text("x", encoding="utf-8")
         monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
         assert ds._publish_merge_to_center(270, merge_dir) is None
+
+    def test_raises_when_center_copy_oserror(self, tmp_path, monkeypatch):
+        """#1074: 中心已配置但 copy 失败不得静默 None。"""
+        merge_dir = tmp_path / "merge_result" / "d_fail"
+        merge_dir.mkdir(parents=True)
+        (merge_dir / "Result_MergeFiles.xls").write_text("x", encoding="utf-8")
+        center = tmp_path / "center"
+        center.mkdir()
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+
+        with patch("backend.services.dedup_scan.shutil.copytree", side_effect=OSError("disk full")):
+            with pytest.raises(RuntimeError, match="merge center publish failed"):
+                ds._publish_merge_to_center(270, merge_dir)
 
     def test_publish_is_idempotent_overwrite(self, tmp_path, monkeypatch):
         merge_dir = tmp_path / "merge_result" / "d2"
