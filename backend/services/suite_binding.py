@@ -9,9 +9,11 @@
 2. **步骤参数注入**（P1 设计 §3.4）：``step_params_for_dispatch`` +
    ``plan_dispatcher_core.inject_suite_params`` 对 ``mtbf_`` 步骤注入
    ``{expected_testpoint_count, project}``，无需用户声明 default_params。
-3. **precheck 门禁**（P1 设计 §3.3 + #975）：``collect_suite_gate_error``
-   按活表套件行 + 磁盘文件逐项校验，并拒绝与 ``export_dir`` 冲突的 mtbf
-   ``project`` 覆盖；任一失败即 fail-fast 的结构化 detail。
+3. **precheck 门禁**（P1 设计 §3.3 + #965 / #975）：``collect_suite_gate_error``
+   按活表套件行 + 磁盘文件逐项校验；套件**身份**以 Run 冻结
+   ``dispatch_suite.suite_id`` 为准（#965），无冻结时回落 ``plan.suite_id``；
+   并拒绝与 ``export_dir`` 冲突的 mtbf ``project`` 覆盖（#975）；任一失败即
+   fail-fast 的结构化 detail。
 """
 from __future__ import annotations
 
@@ -150,20 +152,23 @@ def step_params_for_dispatch(
 def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any]]:
     """逐项校验；全部通过返回 None，否则返回 fail-fast 结构化 detail。
 
-    查找键 = ``plan.suite_id``（join，无 JSON 解析）；plan 未绑定直接放行
-    （存量 P0 行为零变化）。比较基准是**活表套件行 + 磁盘文件**——冻结块
-    只承担归因，不参与放行判定（重导后无需重新 prepare 即可通过门禁，
-    归因差异由 ``run_context.dispatch_suite`` 与 setup trace 的事后比对显性化）。
+    套件**身份**优先取 ``run_context.dispatch_suite.suite_id``（prepare 冻结），
+    无冻结块时回落 ``plan.suite_id``；二者皆无则放行（存量 P0 / 裸 Run）。
+    这样 prepare 后解绑/改绑不会让门禁与物化消费对象分叉（#965）。
+
+    比较基准仍是**该身份对应的活表套件行 + 磁盘文件**——内容指纹按活表校验，
+    重导后无需重新 prepare 即可通过门禁；冻结块只锚定「哪一套件」。
     """
     plan = db.get(Plan, pr.plan_id)
-    if plan is None or plan.suite_id is None:
+    suite_id = _resolve_bound_suite_id(pr, plan)
+    if suite_id is None:
         return None
-    suite = db.get(TestSuite, plan.suite_id)
+    suite = db.get(TestSuite, suite_id)
 
     def _fail(step: str, message: str, remedy: str, **extra: Any) -> dict[str, Any]:
         return {
             "step": step,
-            "suite_id": plan.suite_id,
+            "suite_id": suite_id,
             "message": message,
             "remedy": remedy,
             **extra,
@@ -173,7 +178,7 @@ def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any
     if suite is None or not suite.is_active:
         return _fail(
             "missing",
-            f"bound test suite {plan.suite_id} is missing or inactive",
+            f"bound test suite {suite_id} is missing or inactive",
             "rebind the plan to an active suite (PlanUpdate suite_name)",
         )
 
@@ -290,17 +295,49 @@ def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any
     return None
 
 
+def _resolve_bound_suite_id(
+    pr: PlanRun, plan: Optional[Plan],
+) -> Optional[int]:
+    """Run 冻结套件身份优先，其次 live Plan 绑定（#965）。"""
+    ctx = pr.run_context if isinstance(pr.run_context, dict) else {}
+    frozen = ctx.get("dispatch_suite")
+    if isinstance(frozen, dict) and frozen.get("suite_id") is not None:
+        try:
+            return int(frozen["suite_id"])
+        except (TypeError, ValueError):
+            logger.warning(
+                "dispatch_suite_suite_id_invalid plan_run=%s value=%r",
+                pr.id, frozen.get("suite_id"),
+            )
+    if plan is not None and plan.suite_id is not None:
+        return int(plan.suite_id)
+    return None
+
+
 # ── #402 在途守卫（精确匹配版）───────────────────────────────────────────────
 
 
 def active_run_ids_bound_to_suite(db: Session, suite_id: int) -> list[int]:
-    """ACTIVE 且绑定**同一套件**的 PlanRun——覆盖工具目录的硬阻断集合。"""
+    """ACTIVE 且绑定**同一套件**的 PlanRun——覆盖工具目录的硬阻断集合。
+
+    身份口径与门禁一致（#965）：有 ``dispatch_suite`` 时只认冻结
+    ``suite_id``；无冻结块时回落 live ``Plan.suite_id``。避免 prepare 后
+    解绑逃逸，也避免改绑后把仍消费 A 的 Run 算进 B 的守卫集。
+    """
+    frozen_hit = PlanRun.run_context.contains(
+        {"dispatch_suite": {"suite_id": suite_id}},
+    )
+    no_freeze = or_(
+        PlanRun.run_context.is_(None),
+        ~PlanRun.run_context.has_key("dispatch_suite"),
+    )
+    legacy_hit = and_(no_freeze, Plan.suite_id == suite_id)
     rows = db.execute(
         select(PlanRun.id)
-        .join(Plan, Plan.id == PlanRun.plan_id)
+        .outerjoin(Plan, Plan.id == PlanRun.plan_id)
         .where(
             PlanRun.status.in_(ACTIVE_RUN_STATUSES),
-            Plan.suite_id == suite_id,
+            or_(frozen_hit, legacy_hit),
         )
         .distinct()
     ).scalars().all()
