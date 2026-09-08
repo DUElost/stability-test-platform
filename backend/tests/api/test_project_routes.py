@@ -463,6 +463,43 @@ class TestUpdateAndArchiveProject:
         assert audit.details["old"] == "CustA"
         assert audit.details["new"] is None
 
+    def test_put_rejects_explicit_null_display_name(
+        self, client, admin_headers, db_session, project_a
+    ):
+        """#939: display_name 列 NOT NULL——显式 null 在 schema 层 422，而非
+        提交期 500；「未提供不动」语义不受影响（fields_set 判定）。"""
+        resp = client.put(
+            "/api/v1/projects/proj-a",
+            headers=admin_headers,
+            json={"display_name": None},
+        )
+        assert resp.status_code == 422
+        assert (
+            db_session.query(TestProject)
+            .filter_by(project_key="proj-a")
+            .one()
+            .display_name
+            == "Project A"
+        )
+
+    def test_put_rejects_overlong_customer(
+        self, client, admin_headers, db_session, project_a
+    ):
+        """#939: 更新侧长度与 DB 列对齐（customer String(64)）。"""
+        resp = client.put(
+            "/api/v1/projects/proj-a",
+            headers=admin_headers,
+            json={"customer": "C" * 65},
+        )
+        assert resp.status_code == 422
+        assert (
+            db_session.query(TestProject)
+            .filter_by(project_key="proj-a")
+            .one()
+            .customer
+            == "CustA"
+        )
+
     def test_put_empty_body_422(self, client, admin_headers, project_a):
         resp = client.put(
             "/api/v1/projects/proj-a",

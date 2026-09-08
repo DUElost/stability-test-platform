@@ -10,7 +10,7 @@ import re
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.api.schemas.base import ORMBaseModel
 
@@ -108,11 +108,21 @@ class ProjectUpdateIn(BaseModel):
     """Facet 修改入参——``project_key`` 改走独立 rename 端点（D2 复核）。
 
     未出现的字段不动；显式 ``null`` 清空可空 facet。
+
+    #939：不可空列（display_name）显式 ``null`` 在 schema 层拒绝为 422——
+    放行会在提交期 500；「未提供」语义不受影响（fields_set 判定）。
+    长度上限与 DB 列对齐（display_name 256 / customer 64）。
     """
 
-    display_name: Optional[str] = None
-    customer: Optional[str] = None
+    display_name: Optional[str] = Field(default=None, max_length=256)
+    customer: Optional[str] = Field(default=None, max_length=64)
     jira_project_key: Optional[str] = None
+
+    @model_validator(mode="after")
+    def reject_explicit_null_on_nonnullable(self) -> "ProjectUpdateIn":
+        if "display_name" in self.model_fields_set and self.display_name is None:
+            raise ValueError("display_name cannot be null (NOT NULL column)")
+        return self
 
     @field_validator("display_name")
     @classmethod
