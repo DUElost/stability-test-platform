@@ -7,6 +7,13 @@ export const resourcePools = {
     unwrapApiResponse<ResourcePool[]>(
       apiClient.get('/resource-pools', { params: resourceType ? { resource_type: resourceType } : {} }),
     ),
+  /** #955: 普通用户可选池列表（active only，config 白名单剥密，无 password）。 */
+  available: (resourceType?: string) =>
+    unwrapApiResponse<ResourcePool[]>(
+      apiClient.get('/resource-pools/available', {
+        params: resourceType ? { resource_type: resourceType } : {},
+      }),
+    ),
   listLoads: () =>
     unwrapApiResponse<ResourcePoolLoad[]>(apiClient.get('/resource-pools/loads')),
   get: (id: number) =>

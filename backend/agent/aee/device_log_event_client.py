@@ -4,14 +4,24 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+# Bound from Agent main after LocalDB.initialize (#1042 durable create intents).
+_bound_local_db: Any = None
+
+
+def bind_local_db(local_db: Any) -> None:
+    """Attach Agent LocalDB for DLE create-intent outbox (#1042)."""
+    global _bound_local_db
+    _bound_local_db = local_db
 
 
 def _env_truthy(name: str, default: bool = True) -> bool:
@@ -27,6 +37,7 @@ class DeviceLogEventClient:
     agent_secret: str
     host_id: str
     timeout: float = 15.0
+    local_db: Any = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, *, api_url: str, agent_secret: str, host_id: str) -> Optional["DeviceLogEventClient"]:
@@ -35,10 +46,36 @@ class DeviceLogEventClient:
             return None
         if not api_url or not agent_secret or not host_id:
             return None
-        return cls(api_url=api_url.rstrip("/"), agent_secret=agent_secret, host_id=host_id)
+        return cls(
+            api_url=api_url.rstrip("/"),
+            agent_secret=agent_secret,
+            host_id=host_id,
+            local_db=_bound_local_db,
+        )
 
     def _headers(self) -> Dict[str, str]:
         return {"X-Agent-Secret": self.agent_secret, "Content-Type": "application/json"}
+
+    def _db(self) -> Any:
+        return self.local_db if self.local_db is not None else _bound_local_db
+
+    def _enqueue_register_intent(self, event_id: str, payload: Dict[str, Any]) -> bool:
+        db = self._db()
+        if db is None:
+            return False
+        try:
+            db.enqueue_dle_register(event_id, payload)
+            logger.info(
+                "device_log_event_register_intent_enqueued event_id=%s path=%s",
+                event_id, payload.get("local_path"),
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "device_log_event_register_intent_enqueue_failed event_id=%s",
+                event_id,
+            )
+            return False
 
     def create_local_event(
         self,
@@ -54,9 +91,16 @@ class DeviceLogEventClient:
         job_id: Optional[int],
         link_signal_seq_no: Optional[int] = None,
         size_bytes: Optional[int] = None,
+        event_id: Optional[str] = None,
     ) -> Optional[str]:
-        """POST 新事件 state=LOCAL；返回 event id 字符串。"""
+        """POST 新事件 state=LOCAL；返回 event id 字符串。
+
+        #1042 / #1051: 预分配 UUID 作为幂等键；HTTP 失败时写入 LocalDB
+        ``dle_register_outbox``，由 :meth:`drain_register_outbox` 重试补建。
+        """
+        chosen_id = event_id or str(uuid4())
         payload: Dict[str, Any] = {
+            "id": chosen_id,
             "serial": serial,
             "platform": platform,
             "event_type": event_type,
@@ -83,12 +127,56 @@ class DeviceLogEventClient:
                     "device_log_event_create_failed status=%s body=%s",
                     resp.status_code, resp.text[:200],
                 )
+                self._enqueue_register_intent(chosen_id, payload)
                 return None
             ids = resp.json().get("data", {}).get("event_ids") or []
-            return str(ids[0]) if ids else None
+            return str(ids[0]) if ids else chosen_id
         except Exception:
             logger.exception("device_log_event_create_error path=%s", local_path)
+            self._enqueue_register_intent(chosen_id, payload)
             return None
+
+    def drain_register_outbox(self, *, limit: int = 20) -> int:
+        """Replay pending create intents; returns number newly ACKed (#1042)."""
+        db = self._db()
+        if db is None:
+            return 0
+        pending = db.get_pending_dle_registers(limit=limit)
+        acked = 0
+        for row in pending:
+            event_id = row["event_id"]
+            payload = dict(row.get("payload") or {})
+            payload.setdefault("id", event_id)
+            try:
+                resp = requests.post(
+                    f"{self.api_url}/api/v1/agent/device-log-events",
+                    json={"events": [payload]},
+                    headers=self._headers(),
+                    timeout=self.timeout,
+                )
+                if resp.status_code >= 400:
+                    db.bump_dle_register_attempts(
+                        event_id, error=f"HTTP {resp.status_code}",
+                    )
+                    logger.warning(
+                        "device_log_event_register_retry_failed event_id=%s status=%s",
+                        event_id, resp.status_code,
+                    )
+                    continue
+                db.ack_dle_register(event_id)
+                acked += 1
+                logger.info("device_log_event_register_retry_ok event_id=%s", event_id)
+            except Exception as exc:
+                db.bump_dle_register_attempts(event_id, error=str(exc)[:200])
+                logger.exception(
+                    "device_log_event_register_retry_error event_id=%s", event_id,
+                )
+        if acked:
+            try:
+                db.prune_acked_dle_registers()
+            except Exception:
+                logger.exception("device_log_event_register_prune_failed")
+        return acked
 
     def create_pull_failed_event(
         self,

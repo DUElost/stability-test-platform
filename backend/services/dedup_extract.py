@@ -15,6 +15,9 @@ from backend.models.plan_run_artifact import PlanRunArtifact
 
 logger = logging.getLogger(__name__)
 
+# #1070: jira 事件目录内完成凭据；缺此文件视为半成品，不得跳过重拷。
+_EXTRACT_COMPLETE_MARKER = ".stp_extract_complete"
+
 
 def parse_event_dir_names_from_xls(
     xls_path: Path,
@@ -92,6 +95,51 @@ def _log_same_basename_left(plan_run_id: int, dest_name: str, skipped_paths: lis
         )
 
 
+def _extract_dest_is_complete(dest: Path) -> bool:
+    """True only when dest exists and carries the #1070 completion marker."""
+    return dest.is_dir() and (dest / _EXTRACT_COMPLETE_MARKER).is_file()
+
+
+def _remove_incomplete_extract_dest(dest: Path, *, plan_run_id: int) -> None:
+    if not dest.exists():
+        return
+    logger.warning(
+        "dedup_extract_removing_incomplete_dest plan_run=%d dest=%s",
+        plan_run_id, dest,
+    )
+    shutil.rmtree(dest, ignore_errors=True)
+
+
+def _copy_event_dir_atomically(
+    src: Path,
+    dest: Path,
+    *,
+    devices_root: Path,
+    jira_dir: Path,
+    plan_run_id: int,
+) -> None:
+    """Copy into a staging dir, write completion marker, then rename onto *dest*.
+
+    Mid-copy failures must not leave a *dest* that later passes ``exists()``
+    and gets falsely ARCHIVED (#1070 / R10-F01).
+    """
+    from uuid import uuid4
+
+    from backend.core.artifact_paths import copytree_under_root, path_under_root
+
+    staging_name = f".extracting.{dest.name}.{uuid4().hex[:8]}"
+    staging = path_under_root(jira_dir, staging_name)
+    try:
+        copytree_under_root(src, staging, root=devices_root, dest_root=jira_dir)
+        (staging / _EXTRACT_COMPLETE_MARKER).write_text("ok\n", encoding="utf-8")
+        if dest.exists():
+            _remove_incomplete_extract_dest(dest, plan_run_id=plan_run_id)
+        staging.rename(dest)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
 def run_extract_sync(plan_run_id: int) -> int:
     """Copy DLE REMOTE/ARCHIVED event dirs + merge xls → jira/{plan_run_id}/.
 
@@ -142,7 +190,6 @@ def run_extract_sync(plan_run_id: int) -> int:
             return -2
 
         from backend.core.artifact_paths import (
-            copytree_under_root,
             path_under_root,
             resolve_extract_event_src,
         )
@@ -201,14 +248,22 @@ def run_extract_sync(plan_run_id: int) -> int:
                 continue
             dest = path_under_root(jira_dir, dest_name)
             if dest.exists():
-                existing_dirs += 1
-                extracted_dest_names.add(dest_name)
-                archived_remote_paths.extend(markable_paths)
-                same_basename_left_remote += len(raw_paths) - len(markable_paths)
-                _log_same_basename_left(plan_run_id, dest_name, raw_paths[1:])
-                continue
+                if _extract_dest_is_complete(dest):
+                    existing_dirs += 1
+                    extracted_dest_names.add(dest_name)
+                    archived_remote_paths.extend(markable_paths)
+                    same_basename_left_remote += len(raw_paths) - len(markable_paths)
+                    _log_same_basename_left(plan_run_id, dest_name, raw_paths[1:])
+                    continue
+                # #1070: 半成品（无完成标记）不得跳过；清掉后重拷。
+                _remove_incomplete_extract_dest(dest, plan_run_id=plan_run_id)
             try:
-                copytree_under_root(src, dest, root=devices_root, dest_root=jira_dir)
+                _copy_event_dir_atomically(
+                    src, dest,
+                    devices_root=devices_root,
+                    jira_dir=jira_dir,
+                    plan_run_id=plan_run_id,
+                )
                 extracted += 1
                 event_dirs_copied += 1
                 extracted_dest_names.add(dest_name)

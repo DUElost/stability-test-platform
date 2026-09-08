@@ -486,3 +486,79 @@ class TestArgOrderSurvivesDbRoundTrip:
                               headers=auth_headers).content
         first_arg = exported.index(b"<arg ")
         assert exported[first_arg:first_arg + 60].startswith(b'<arg name="wifiName"')
+
+
+class TestSuiteListBatching:
+    """#943（R03-F11）：列表用例批量加载——查询数不随套件数线性×2 增长。"""
+
+    @staticmethod
+    def _count_case_queries(engine, func):
+        from sqlalchemy import event
+
+        counter = {"n": 0}
+
+        def _before(conn, cursor, statement, parameters, context, executemany):
+            if "FROM test_case" in statement:
+                counter["n"] += 1
+
+        event.listen(engine, "before_cursor_execute", _before)
+        try:
+            func()
+        finally:
+            event.remove(engine, "before_cursor_execute", _before)
+        return counter["n"]
+
+    def test_case_query_count_constant(self, client, auth_headers, admin_headers, db_session):
+        from backend.core.database import engine
+        from backend.models.suite import TestSuite
+
+        for i in range(3):
+            resp = client.post("/api/v1/test-suites", headers=admin_headers,
+                               json={"name": f"S-BATCH-{i}", "display_name": f"批 {i}"})
+            assert resp.status_code == 200
+        suites = (
+            db_session.query(TestSuite)
+            .filter(TestSuite.name.like("S-BATCH-%"))
+            .all()
+        )
+        assert len(suites) == 3
+        for suite in suites:
+            _add_case(db_session, suite, f"{suite.name}-c1", ordinal=1)
+            _add_case(db_session, suite, f"{suite.name}-c2", ordinal=2, enabled=False)
+
+        n3 = self._count_case_queries(
+            engine,
+            lambda: client.get("/api/v1/test-suites", headers=auth_headers),
+        )
+
+        # 只保留 1 个套件：批量实现下 test_case 查询数应与 3 套件时一致
+        db_session.query(TestSuite).filter(TestSuite.name.like("S-BATCH-%")).filter(
+            TestSuite.name != "S-BATCH-0"
+        ).update({"is_active": False}, synchronize_session=False)
+        db_session.commit()
+        n1 = self._count_case_queries(
+            engine,
+            lambda: client.get(
+                "/api/v1/test-suites?is_active=true", headers=auth_headers
+            ),
+        )
+
+        assert n3 == n1, f"查询数随套件数增长：1 套件={n1}，3 套件={n3}（旧实现 1+2N）"
+        assert n3 <= 2  # 批量 IN 查询本身
+
+    def test_list_counts_and_stale(self, client, admin_headers, auth_headers, db_session):
+        from backend.models.suite import TestSuite
+
+        resp = client.post("/api/v1/test-suites", headers=admin_headers,
+                           json={"name": "S-COUNT", "display_name": "计数"})
+        assert resp.status_code == 200
+        suite = db_session.get(TestSuite, resp.json()["data"]["id"])
+        _add_case(db_session, suite, "c1", ordinal=1)
+        _add_case(db_session, suite, "c2", ordinal=2, enabled=False)
+        _add_case(db_session, suite, "c3", ordinal=3)
+
+        data = client.get("/api/v1/test-suites", headers=auth_headers).json()["data"]
+        row = next(s for s in data if s["name"] == "S-COUNT")
+        assert row["case_count"] == 3
+        assert row["enabled_case_count"] == 2
+        assert row["export_stale"] is True  # 从未导出即 stale（批量化不得改变判定）
