@@ -144,91 +144,139 @@ async def lifespan(app: FastAPI):
             decode_responses=True,
         )
 
-        from backend.realtime.agent_sid_registry import configure_agent_sid_registry
+        try:
+            from backend.realtime.agent_sid_registry import configure_agent_sid_registry
 
-        configure_agent_sid_registry(redis_client)
+            configure_agent_sid_registry(redis_client)
 
-        capture_main_loop()
-        init_build_info(version="2.0.0", commit="unknown")
+            capture_main_loop()
+            init_build_info(version="2.0.0", commit="unknown")
 
-        # ADR-0025 §9: RunConsole（控制面命令执行 + web 实时控制台）配置
-        from backend.services.run_console import RunConsole
-        RunConsole.instance().configure(
-            log_root=os.getenv("STP_RUN_CONSOLE_LOG_ROOT", "logs/console"),
-            encoding=os.getenv("STP_DEDUP_LOG_ENCODING", "utf-8"),
-        )
-
-        # APScheduler replaces legacy daemon threads + asyncio background tasks
-        scheduler = create_scheduler()
-        await scheduler.__aenter__()
-        await register_schedules(scheduler)
-        await scheduler.start_in_background()
-        logger.info("apscheduler_started")
-
-        # SAQ async task queue (post-completion, notifications, control commands)
-        # ADR-0026 P0: producer is always initialised when Redis is reachable.
-        # ``STP_ENABLE_INPROCESS_SAQ=0`` skips only the in-process worker so an
-        # external worker can drain the same Redis queue without paralysing
-        # enqueue / admission pump.
-        ENABLE_INPROCESS_SAQ = os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1"
-        skip_infra = (
-            os.getenv("STP_SKIP_INFRA_CHECK", "0") == "1"
-            and not is_production_like_env()
-        )
-        if skip_infra:
-            logger.warning(
-                "infra_check_skipped_by_env STP_SKIP_INFRA_CHECK=1 "
-                "(Redis PING + SAQ producer/worker skipped)"
+            # ADR-0025 §9: RunConsole（控制面命令执行 + web 实时控制台）配置
+            from backend.services.run_console import RunConsole
+            RunConsole.instance().configure(
+                log_root=os.getenv("STP_RUN_CONSOLE_LOG_ROOT", "logs/console"),
+                encoding=os.getenv("STP_DEDUP_LOG_ENCODING", "utf-8"),
             )
-        else:
+
+            # R01-F03（#883）：依赖校验先行，再启动有副作用的后台任务——
+            # 此前 Scheduler 先起、Redis/SAQ 校验在后，启动异常会留下已启动
+            # 的 Scheduler 而清理段（裸 yield 之后）不执行。
+            ENABLE_INPROCESS_SAQ = os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1"
+            skip_infra = (
+                os.getenv("STP_SKIP_INFRA_CHECK", "0") == "1"
+                and not is_production_like_env()
+            )
+            if skip_infra:
+                logger.warning(
+                    "infra_check_skipped_by_env STP_SKIP_INFRA_CHECK=1 "
+                    "(Redis PING + SAQ producer/worker skipped)"
+                )
+            else:
+                try:
+                    await verify_redis_connectivity(redis_url)
+                    _log_redis_ping_ok(redis_url)
+                except RuntimeError as exc:
+                    logger.error("redis_unreachable — %s", exc)
+                    raise
+                try:
+                    # SAQ async task queue (post-completion, notifications,
+                    # control commands). ADR-0026 P0: producer is always
+                    # initialised when Redis is reachable.
+                    # ``STP_ENABLE_INPROCESS_SAQ=0`` skips only the in-process
+                    # worker so an external worker can drain the same Redis
+                    # queue without paralysing enqueue / admission pump.
+                    if ENABLE_INPROCESS_SAQ:
+                        await start_saq_worker()
+                    else:
+                        await init_saq_producer()
+                        logger.warning(
+                            "saq_inprocess_worker_disabled — producer ready; "
+                            "expect an external SAQ worker on queue=%s",
+                            os.getenv("SAQ_QUEUE_NAME", "stp"),
+                        )
+                except Exception as exc:
+                    logger.error("saq_start_failed — %s", exc)
+                    raise RuntimeError(f"SAQ failed to start: {exc}") from exc
+                # Pump readiness: live in-process worker OR external-worker mode
+                # with a connected producer (ADR-0026 P0 producer/worker split).
+                from backend.core.admission_queue import mark_queue_pump_ready
+                if is_saq_ready():
+                    mark_queue_pump_ready(True)
+
+            # APScheduler last（#883）：纯调度面，其前置依赖（Redis/SAQ）已就绪
+            scheduler = create_scheduler()
             try:
-                await verify_redis_connectivity(redis_url)
-                _log_redis_ping_ok(redis_url)
-            except RuntimeError as exc:
-                logger.error("redis_unreachable — %s", exc)
+                await scheduler.__aenter__()
+            except Exception:
+                logger.exception("apscheduler_enter_failed")
+                scheduler = None
                 raise
             try:
-                if ENABLE_INPROCESS_SAQ:
-                    await start_saq_worker()
-                else:
-                    await init_saq_producer()
-                    logger.warning(
-                        "saq_inprocess_worker_disabled — producer ready; "
-                        "expect an external SAQ worker on queue=%s",
-                        os.getenv("SAQ_QUEUE_NAME", "stp"),
-                    )
-            except Exception as exc:
-                logger.error("saq_start_failed — %s", exc)
-                raise RuntimeError(f"SAQ failed to start: {exc}") from exc
-            # Pump readiness: live in-process worker OR external-worker mode
-            # with a connected producer (ADR-0026 P0 producer/worker split).
-            from backend.core.admission_queue import mark_queue_pump_ready
-            if is_saq_ready():
-                mark_queue_pump_ready(True)
-
-    yield
-
-    if os.getenv("TESTING") != "1":
-        # ADR-0025 §9: RunConsole 收尾——cancel inflight subprocess 避免孤儿
-        from backend.services.run_console import RunConsole
-        try:
-            RunConsole.instance().shutdown()
+                await register_schedules(scheduler)
+                await scheduler.start_in_background()
+                logger.info("apscheduler_started")
+            except Exception:
+                # 回滚已进入的 scheduler；__aexit__ 自身失败不吞原始异常
+                try:
+                    await scheduler.__aexit__(None, None, None)
+                except Exception:
+                    logger.exception("apscheduler_stop_failed")
+                scheduler = None
+                raise
         except Exception:
-            logger.exception("run_console_shutdown_failed")
-        # ADR-0026: pump 随进程退出 — 立即撤销就绪标记,防止 shutdown 窗口内
-        # 新的 V2 QUEUED 产生却无人准入。
-        from backend.core.admission_queue import mark_queue_pump_ready
+            # R01-F03（#883）：任一启动阶段失败，清理已启动的资源再传播
+            await _lifespan_cleanup(scheduler)
+            redis_client = None
+            raise
+
+    try:
+        yield
+    finally:
+        if os.getenv("TESTING") != "1":
+            # R01-F03（#883）：try/finally 保证关闭段必然执行
+            await _lifespan_cleanup(scheduler)
+            redis_client = None
+
+
+async def _lifespan_cleanup(scheduler) -> None:
+    """#883（R01-F03）：lifespan 清理段——每步独立容错，单步失败不阻断后续清理。"""
+    # ADR-0025 §9: RunConsole 收尾——cancel inflight subprocess 避免孤儿
+    from backend.services.run_console import RunConsole
+    try:
+        RunConsole.instance().shutdown()
+    except Exception:
+        logger.exception("run_console_shutdown_failed")
+    # ADR-0026: pump 随进程退出 — 立即撤销就绪标记,防止 shutdown 窗口内
+    # 新的 V2 QUEUED 产生却无人准入。
+    from backend.core.admission_queue import mark_queue_pump_ready
+    try:
         mark_queue_pump_ready(False)
+    except Exception:
+        logger.exception("pump_ready_revoke_failed")
+    try:
         if os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1":
             await stop_saq_worker()
         else:
             await stop_saq_producer()
-        if scheduler is not None:
+    except Exception:
+        logger.exception("saq_stop_failed")
+    if scheduler is not None:
+        try:
             await scheduler.__aexit__(None, None, None)
             logger.info("apscheduler_stopped")
-        if redis_client:
+        except Exception:
+            logger.exception("apscheduler_stop_failed")
+    global redis_client
+    if redis_client:
+        try:
             await redis_client.aclose()
+        except Exception:
+            logger.exception("redis_close_failed")
+    try:
         await async_engine.dispose()
+    except Exception:
+        logger.exception("engine_dispose_failed")
 
 
 def _api_docs_enabled(raw: str | None = None) -> bool:
@@ -325,12 +373,61 @@ def root():
     return {"message": "Stability Test Platform API", "version": "2.0.0"}
 
 
+@_fastapi_app.get("/health/live")
+async def health_live():
+    """R01-F05（#885）：liveness 探针——进程在即可用，不做依赖检查。
+
+    编排层若需「进程活着但不重启依赖抖动」的存活判断，指向本端点；
+    Docker HEALTHCHECK 保持指向 /health（readiness）。
+    """
+    return {"data": {"status": "alive"}, "error": None}
+
+
 @_fastapi_app.get("/health")
 async def health_check():
+    """readiness 探针（R01-F05，#885）：关键依赖不可用时非 200。
+
+    此前 SAQ worker 退出 / Redis 断连时仍 200（saq_ready 只进 payload 不影响
+    状态），Docker HEALTHCHECK 据此误报健康。现语义：
+    - DB 断开 → 503 DB_UNAVAILABLE（既有）；
+    - Redis 不可达 → 503 REDIS_UNREACHABLE（lifespan 已建 redis_client 时
+      ping 验证；TESTING=1 下 redis_client 为 None，跳过）；
+    - SAQ 未就绪 → 503 SAQ_NOT_READY（inprocess 与 producer 模式同判——
+      ADR-0026 P0 pump 就绪 = worker 活跃或 producer 已连）；
+    - ``STP_SKIP_INFRA_CHECK=1``（非生产类环境）与 lifespan 同条件跳过
+      Redis/SAQ 检查（运维显式豁免的基础设施面）。
+    """
     inprocess_saq = os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1"
+    # TESTING=1 下 lifespan 不启动 Redis/SAQ（redis_client 为 None、SAQ 未起），
+    # readiness 的基础设施检查随之跳过——与 skip_infra 运维豁免同通道。
+    skip_infra = (
+        os.getenv("TESTING") == "1"
+        or (
+            os.getenv("STP_SKIP_INFRA_CHECK", "0") == "1"
+            and not is_production_like_env()
+        )
+    )
     try:
         async with async_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+
+        if not skip_infra:
+            if redis_client is not None:
+                try:
+                    await redis_client.ping()
+                except Exception as exc:
+                    logger.warning("health_redis_unreachable — %s", exc)
+                    return JSONResponse(
+                        status_code=503,
+                        content={"data": None, "error": {"code": "REDIS_UNREACHABLE", "message": "redis disconnected"}},
+                    )
+            if not is_saq_ready():
+                logger.warning("health_saq_not_ready inprocess=%s", inprocess_saq)
+                return JSONResponse(
+                    status_code=503,
+                    content={"data": None, "error": {"code": "SAQ_NOT_READY", "message": "saq worker/producer not ready"}},
+                )
+
         from backend.core.admission_queue import (
             admission_queue_enabled,
             admission_queue_flag_enabled,
