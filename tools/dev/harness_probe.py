@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -126,12 +127,19 @@ FORMS = [
 ]
 
 
+def build_command(template: str, prompt: str, root: str) -> str:
+    """模板填充：prompt 经 shell 引号包裹（#1046）——PROBE_PROMPT 含空格，
+    裸插会被 shell 分词，argv 边界依赖各 CLI 对多余位置参数的宽容度，
+    升级即静默变 UNGRADED。纯函数（自测共用）。"""
+    return template.format(prompt=shlex.quote(prompt), root=root)
+
+
 def run_form(form: dict, timeout_s: int = 180) -> dict:
     """执行一个形态的探针；返回 {graded, q1, q2, q3, error, seconds}。"""
     if not form["command"]:
         return {"graded": False, "error": "manual（GUI，无自动化通道）"}
     prompt = PROBE_PROMPT
-    cmd = form["command"].format(prompt=prompt, root=ROOT)
+    cmd = build_command(form["command"], prompt, ROOT)
     cwd = os.path.join(ROOT, form["cwd"])
     start = time.time()
     try:
@@ -255,6 +263,19 @@ def run_self_test() -> int:
     # PROBE_PROMPT 含双题与禁令
     expect("prompt 禁工具", "不要读取任何文件" in PROBE_PROMPT)
     expect("prompt 双题", SCOPED_MARK in PROBE_PROMPT and ROOT_MARKS[0] in PROBE_PROMPT)
+
+    # build_command：prompt 引号安全（#1046）——含空格 prompt 经 shell 分词后
+    # 必须原样还原为单个 argv；各 FORMS 模板逐一验证
+    for form in FORMS:
+        if not form["command"]:
+            continue
+        filled = build_command(form["command"], PROBE_PROMPT, "/r")
+        argv = shlex.split(filled)
+        expect(f"build_command {form['id']} prompt 单 argv 还原",
+               PROBE_PROMPT in argv)
+    nasty = "a b 'c \"d $E `f`"
+    argv = shlex.split(build_command("x -p {prompt} {root}", nasty, "/r"))
+    expect("build_command 恶意字符还原", argv[2] == nasty and argv[3] == "/r")
 
     if failures:
         for f in failures:

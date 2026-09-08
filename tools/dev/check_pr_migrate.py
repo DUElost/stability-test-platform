@@ -8,7 +8,9 @@ diff ⊆ 基线白名单，防「迁移能跑但与模型漂移」）。
 docker 可用 → 起 postgres:16 一次性容器真跑（拦迁移回归）；
 docker 不可用 → **显式 SKIP**（exit 0 并大字注明）——本 gate 的设计立场是
 「能拦的环境拦、拦不了的不假绿」，与 #825 修复方向（本地覆盖声称与 CI 对齐
-或注明豁免）一致。SKIP 不冒充通过：输出语义明确区分。
+或注明豁免）一致。SKIP 不冒充通过：输出语义明确区分。端口用 `docker run -P`
+随机映射 + `docker port` 回读（#1057）——猜端口（55000+pid%1000）在并发下
+会撞，且撞端口曾被降级成 [SKIP] 假绿；现在容器启动失败一律 FAIL。
 
 用法:
     python tools/dev/check_pr_migrate.py           # gate 模式
@@ -65,6 +67,20 @@ def build_env(port: int) -> dict:
     return env
 
 
+def host_port(docker_port_output: str) -> int | None:
+    """`docker port <name> 5432` 输出 → 宿主端口（0.0.0.0:55123 / [::]:55123）。
+    解析不出返回 None。纯函数（自测共用）。"""
+    for line in docker_port_output.splitlines():
+        line = line.strip()
+        if ":" not in line:
+            continue
+        try:
+            return int(line.rsplit(":", 1)[1])
+        except ValueError:
+            continue
+    return None
+
+
 def run_check() -> int:
     if not docker_available():
         print("[SKIP] pr-migrate：docker 不可用——本地不跑空库迁移检查，"
@@ -72,18 +88,27 @@ def run_check() -> int:
         return 0
 
     container = f"{CONTAINER_PREFIX}-{os.getpid()}"
-    port = 55000 + os.getpid() % 1000
     pull = _docker(["pull", "-q", IMAGE], timeout=300)
     if pull.returncode != 0:
         print(f"[SKIP] pr-migrate：无法拉取 {IMAGE}（{pull.stderr.strip()[:120]}）——以 CI 为准。")
         return 0
+    # -P 随机宿主端口 + docker port 回读（#1057）：此前 55000+pid%1000 在并发
+    # pid 差 1000 倍数时撞端口，且端口冲突被降级成 [SKIP]（exit 0）假绿——
+    # 随机端口消除碰撞面；容器启动失败属异常态，FAIL 不再冒充豁免。
     run = _docker(["run", "-d", "--rm", "--name", container,
                    "-e", f"POSTGRES_USER={PGUSER}", "-e", f"POSTGRES_PASSWORD={PGPASSWORD}",
-                   "-e", f"POSTGRES_DB={PGDB}", "-p", f"{port}:5432", IMAGE])
+                   "-e", f"POSTGRES_DB={PGDB}", "-P", IMAGE])
     if run.returncode != 0:
-        print(f"[SKIP] pr-migrate：容器启动失败（{run.stderr.strip()[:120]}）——以 CI 为准。")
-        return 0
+        print(f"[FAIL] pr-migrate：容器启动失败（{run.stderr.strip()[:120]}）", file=sys.stderr)
+        return 1
     try:
+        port_p = _docker(["port", container, "5432"], timeout=30)
+        port = host_port(port_p.stdout) if port_p.returncode == 0 else None
+        if port is None:
+            print("[FAIL] pr-migrate：无法回读容器映射端口"
+                  f"（{port_p.stderr.strip()[:120] or port_p.stdout.strip()[:120]}）",
+                  file=sys.stderr)
+            return 1
         if not wait_ready(container):
             print("[FAIL] pr-migrate：postgres 60s 内未就绪", file=sys.stderr)
             return 1
@@ -120,6 +145,12 @@ def run_self_test() -> int:
     expect("env URL 端口", "127.0.0.1:55042" in env["DATABASE_URL"])
     expect("env TESTING", env["TESTING"] == "1")
     expect("env 不泄漏原 DATABASE_URL", "DATABASE_URL" in env and env["DATABASE_URL"].endswith(PGDB))
+
+    # host_port：docker port 输出解析（#1057）
+    expect("port IPv4 形态", host_port("5432/tcp -> 0.0.0.0:55123\n") == 55123)
+    expect("port IPv6 形态", host_port("5432/tcp -> [::]:55124\n") == 55124)
+    expect("port 多行取首个", host_port("5432/tcp -> 0.0.0.0:55125\n5432/tcp -> [::]:55125\n") == 55125)
+    expect("port 解析失败 None", host_port("cannot find\n") is None and host_port("") is None)
 
     # SKIP 语义：docker 不可用时必须 exit 0 且输出含 SKIP（非静默、非 FAIL）
     import contextlib

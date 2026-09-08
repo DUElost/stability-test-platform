@@ -280,8 +280,17 @@ def parse_adr_status_line(line: str) -> tuple[str, str] | tuple[None, None]:
     return m.group(1), vm.group(1) if vm else None
 
 
+_RECORD_CONTINUATION = re.compile(r"^(?:-\s+)?\*{0,2}v(\d+\.\d+)")
+
+
 def parse_adr_record_tip(text: str) -> str | None:
-    """S12 辅助：「版本记录」块的最后一个版本 token（块止于下一个 `- ` 项）。"""
+    """S12 辅助：「版本记录」块的最后一个版本 token（块止于下一个 `- ` 项）。
+
+    结构口径（#1058）：标题行取「版本记录」标签后全部 token 的末项（兼容
+    ADR-0024 式单行罗列形态）；块内续行只认**行首**版本 token（ADR-0034 式
+    `**vX.Y 本版：…**` 形态）——续行行尾的引用 token（如「本版号 v1.8 已被
+    占用，重编 v1.9」里另一处 vX.Y）不再充当末项。标题行行尾引用污染在单行
+    罗列形态下仍无法机械区分，靠书写纪律。"""
     tip = None
     in_record = False
     for line in text.splitlines():
@@ -295,21 +304,26 @@ def parse_adr_record_tip(text: str) -> str | None:
         else:
             if s.startswith("- "):
                 break
-            found = _ADR_VERSION_TOKEN.findall(s)
-            if found:
-                tip = found[-1]
+            m = _RECORD_CONTINUATION.match(s)
+            if m:
+                tip = m.group(1)
     return tip
 
 
 def parse_adr_readme_row(line: str) -> tuple[str, str, str] | tuple[None, None, None]:
-    """S12 辅助：adr/README 主表行 → (文件名, status, 摘要版本前缀)。"""
+    """S12 辅助：adr/README 主表行 → (文件名, status, 摘要版本前缀)。
+
+    status 取链接 cell 之后的第一个精确状态 cell（#1058）——不锚列位时，
+    状态 cell 缺席而摘要先出现状态词会被取错比对对象。"""
     if "ADR-" not in line:
         return None, None, None
     link = _ADR_README_LINK.search(line)
     if not link:
         return None, None, None
     cells = [c.strip() for c in line.split("|") if c.strip()]
-    status = next((c for c in cells if c in _ADR_STATUSES), None)
+    link_idx = next((i for i, c in enumerate(cells) if "ADR-" in c), None)
+    tail = cells[link_idx + 1:] if link_idx is not None else cells
+    status = next((c for c in tail if c in _ADR_STATUSES), None)
     summary = cells[-1] if cells else ""
     vm = re.match(r"v(\d+\.\d+)：", summary)
     return link.group(1), status, vm.group(1) if vm else None
@@ -357,10 +371,16 @@ def check_adr_surface_sync(
             issues.append(
                 f"{where}: adr/README 主表 v{row_version} ≠ 头部 v{header_version}"
             )
-        if docmap_versions and docmap_versions[-1] != header_version:
-            issues.append(
-                f"{where}: DOC-MAP 行 v{docmap_versions[-1]} ≠ 头部 v{header_version}"
-            )
+        if docmap_versions is not None and header_version:
+            if not docmap_versions:
+                issues.append(
+                    f"{where}: DOC-MAP 行缺版本 token（头部 v{header_version}）"
+                    "——改 ADR 必带 DOC-MAP 版本行（#1058，此前静默跳过）"
+                )
+            elif docmap_versions[-1] != header_version:
+                issues.append(
+                    f"{where}: DOC-MAP 行 v{docmap_versions[-1]} ≠ 头部 v{header_version}"
+                )
         if m7_status and header_status and m7_status != header_status:
             issues.append(f"{where}: M7 看板行状态 {m7_status} ≠ 头部 {header_status}")
         if m7_version is not None and m7_version != header_version:
@@ -848,6 +868,50 @@ def run_self_test() -> int:
         ),
         True,
     )
+
+    # S12 辅助函数（#1058：record_tip 行首锚定 / readme 状态列锚定 / docmap 缺 token）
+    record_single = "- 版本记录：v1.0（初版）/ v1.1（#909 例外契约化）\n- 优先级：P0\n"
+    expect("S12 record_tip 单行罗列取末项",
+           lambda: parse_adr_record_tip(record_single) != "1.1", False)
+    record_cont = (
+        "- 版本记录：v1.0 #858 / v1.1 #866（指针化）\n"
+        "**v1.2 本版：判据修订（全文见契约 §9 v1.1）**\n"
+        "**v1.3 本版：并发反转（本版号 v1.1 已被并行 PR 占用，重编 v1.3）**\n"
+        "- 优先级：P1\n"
+    )
+    expect("S12 record_tip 续行行尾引用 token 不干扰",
+           lambda: parse_adr_record_tip(record_cont) != "1.3", False)
+    record_no_cont = "- 版本记录：v1.0（初版）\n- 优先级：P0\n"
+    expect("S12 record_tip 无续行取标题行末项",
+           lambda: parse_adr_record_tip(record_no_cont) != "1.0", False)
+    expect("S12 record_tip 无版本记录块返回 None",
+           lambda: parse_adr_record_tip("# T\n\n正文\n") is not None, False)
+
+    readme_row = ("| [ADR-0001](./ADR-0001-x.md) | 描述（Accepted 曾出现在摘要里） "
+                  "| Accepted | P0 | M1 | v1.2：最新摘要 |\n")
+    _fn, _st, _ver = parse_adr_readme_row(readme_row)
+    expect("S12 readme 行解析",
+           lambda: (_fn, _st, _ver) != ("ADR-0001-x.md", "Accepted", "1.2"), False)
+    _st2 = parse_adr_readme_row(
+        "| [ADR-0001](./ADR-0001-x.md) | Accepted | Deprecated | P0 | v1.2：摘要 |\n")[1]
+    expect("S12 readme 状态取链接后首个状态 cell", lambda: _st2 != "Accepted", False)
+    expect("S12 readme 非 adr 链接行不解析",
+           lambda: parse_adr_readme_row(
+               "| M7 | ADR-0001（**Accepted** v1.9） |") != (None, None, None), False)
+
+    expect("S12 docmap 行在缺版本 token 即拦（#1058）",
+           lambda: not any("缺版本 token" in i for i in check_adr_surface_sync(
+               "01", "Accepted", "1.2", None, "Accepted", "1.2", [], None, None)),
+           False)
+    expect("S12 docmap 行缺失（None）仍不约束",
+           lambda: check_adr_surface_sync(
+               "01", "Accepted", "1.2", None, "Accepted", "1.2", None, None, None) != [],
+           False)
+    expect("S12 docmap 末项一致不报",
+           lambda: check_adr_surface_sync(
+               "01", "Accepted", "1.2", None, "Accepted", "1.2", ["1.0", "1.2"],
+               None, None) != [],
+           False)
 
     full_pr_agent = (
         "jobs:\n  pr-agent-review:\n"

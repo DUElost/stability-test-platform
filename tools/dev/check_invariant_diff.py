@@ -22,6 +22,10 @@
                      （业务表名单数是硬不变量——任何以 s 结尾的新表名都值得看一眼）
   bare-pytest        backend/agent/scripts/**/*.sh   裸 pytest 调用（python -m pytest 放行）
 
+注释行豁免（#1047）：行首 `#` / `//` / `--` 的新增行不参与匹配——注释里引述
+禁用 API 不构成产物违规；docstring 不做逐行状态机（diff 行缺文件上下文），
+docstring 内引述仍会命中，遇误报走 --advisory 留痕。
+
 用法:
     python tools/dev/check_invariant_diff.py                # 对 origin/main，违规 exit 1
     python tools/dev/check_invariant_diff.py --base <ref>
@@ -99,9 +103,17 @@ def added_lines(diff_text: str) -> list[tuple[str, int, str]]:
 
 
 def check(added: list[tuple[str, int, str]]) -> list[str]:
-    """新增行 → 违规清单（纯函数，供 --self-test 红绿双向）。"""
+    """新增行 → 违规清单（纯函数，供 --self-test 红绿双向）。
+
+    注释行豁免（#1047）：行首 `#` / `//` / `--`（缩进后）不参与匹配——
+    本仓库 doc-heavy，注释里引述禁用 API（「旧代码用 .dict(,已迁」）
+    不构成产物违规。docstring 不做逐行状态机（diff 行缺文件上下文），
+    docstring 内引述仍会命中，遇误报走 --advisory 留痕。
+    """
     violations: list[str] = []
     for path, lineno, line in added:
+        if line.lstrip().startswith(("#", "//", "--")):
+            continue
         for rule, path_re, patterns in RULES:
             if not re.match(path_re, path):
                 continue
@@ -184,6 +196,31 @@ def run_self_test() -> int:
 +const d = obj.dict();
 """
     expect("backend 之外不扫", other_path, False)
+
+    # 注释行豁免（#1047）：注释里引述禁用 API 不拦，代码行仍拦
+    bad_comment = """--- a/backend/api/x.py
++++ b/backend/api/x.py
+@@ -0,0 +1,2 @@
++# 旧代码用 .dict(，迁移后统一 model_dump
++x = data.dict()
+"""
+    expect("注释引述不拦(代码行仍拦)", bad_comment, True, "x = data.dict()")
+    expect("注释行自身不报", bad_comment.replace("+x = data.dict()", ""), False, "旧代码用")
+
+    bad_sh_comment = """--- a/backend/agent/scripts/tool/v1/run.sh
++++ b/backend/agent/scripts/tool/v1/run.sh
+@@ -0,0 +1,2 @@
++# 如失败可用 pytest -k xxx 单测排查
++python -m pytest backend/agent/tests -q
+"""
+    expect("sh 注释提及 pytest 不拦", bad_sh_comment, False)
+    bad_sql_comment = """--- a/backend/migrations/versions/abc.py
++++ b/backend/migrations/versions/abc.py
+@@ -0,0 +1,2 @@
++-- 存量库另有 hosts 备份表，不在本迁移范围
++op.create_table("host", sa.Column("id", sa.Integer))
+"""
+    expect("SQL 注释提及复数表名不拦", bad_sql_comment, False)
 
     if failures:
         for f in failures:
