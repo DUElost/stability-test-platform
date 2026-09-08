@@ -108,7 +108,8 @@ head_merge_method() {
         -F owner="$owner" -F repo="$name" -F number="$num" \
         --jq '.data.repository.pullRequest.autoMergeRequest.mergeMethod // ""'
     )" && { printf '%s' "$out"; return 0; }
-    sleep 5
+    # #851：sleep 只落在重试之间——第 3 次（末次）失败后直接回退，不再空转 5s
+    [ "$attempt" -eq 3 ] || sleep 5
   done
   echo "mergeMethod query failed after 3 attempts on #${num}; falling back to idempotent enable." >&2
   return 1
