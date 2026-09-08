@@ -666,3 +666,44 @@ def test_superseded_worker_release_keeps_new_workers_device_placeholder(
 
     assert 63 in job_runner_state.active_device_ids  # 新 worker 占位保留
     assert 26 in job_runner_state.active_job_ids
+
+
+def test_run_task_wrapper_terminal_lost_reraised_not_wrapped_agent_error(
+    job_runner_state,
+):
+    """#1005 端到端：complete 双故障（HTTP + outbox enqueue 均失败）→
+    TerminalReportLostError 透传（不得包装 AGENT_ERROR 二次上报覆盖真实
+    结果），HTTP 只尝试一次。"""
+    from backend.agent.api_client import TerminalReportLostError
+
+    run = {
+        "id": 99,
+        "device_id": 2,
+        "device_serial": "SN-99",
+        "fencing_token": "2:3",
+        "pipeline_def": {
+            "lifecycle": {
+                "init": [{"step_id": "x", "action": "script:noop", "version": "1.0.0", "timeout_seconds": 1}],
+                "teardown": [],
+            }
+        },
+    }
+    mock_adb = MagicMock()
+    fake_local_db = MagicMock()
+    fake_local_db.enqueue_terminal.side_effect = RuntimeError("sqlite locked")
+
+    with patch("backend.agent.job_runner.update_job"), \
+         patch("backend.agent.job_runner.execute_pipeline_run") as mock_exec, \
+         patch("backend.agent.api_client._post_with_retry",
+               side_effect=RuntimeError("network down")) as mock_post:
+        mock_exec.return_value = {"status": "FINISHED", "exit_code": 0}
+        with pytest.raises(TerminalReportLostError):
+            run_task_wrapper(
+                run, mock_adb, "http://x", "h1",
+                job_runner_state, None, None, fake_local_db,
+            )
+
+    fake_local_db.ack_terminal.assert_not_called()
+    assert mock_post.call_count == 1, (
+        "terminal-lost must propagate without a second AGENT_ERROR complete attempt"
+    )

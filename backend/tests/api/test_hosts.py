@@ -395,3 +395,85 @@ class TestWatcherAdminState:
             headers=auth_headers,
         )
         assert response.status_code == 403
+
+
+class TestUpdateHostPreserveSsh:
+    """#950: PUT /hosts/{id} 只写提交字段——未提交的密钥认证配置必须保留。"""
+
+    def _create_key_host(self, client, admin_headers):
+        created = client.post(
+            "/api/v1/hosts",
+            json={
+                "name": "key-host",
+                "ip": "192.168.50.77",
+                "ssh_port": 22,
+                "ssh_user": "ops",
+                "ssh_auth_type": "key",
+                "ssh_key_path": "/secret/key.pem",
+            },
+            headers=admin_headers,
+        )
+        assert created.status_code == 200, created.text
+        return created.json()["id"]
+
+    def test_update_name_only_keeps_key_auth_config(
+        self, client, db_session, admin_headers,
+    ):
+        """仅改名称（编辑表单真实形态：不提交认证字段）→ key 配置保留。"""
+        from backend.models.host import Host
+
+        host_id = self._create_key_host(client, admin_headers)
+
+        resp = client.put(
+            f"/api/v1/hosts/{host_id}",
+            json={"name": "key-host-renamed"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["name"] == "key-host-renamed"
+        assert data["ssh_auth_type"] == "key"  # 未被重置为 password
+
+        host = db_session.get(Host, host_id)
+        assert host.ssh_auth_type == "key"
+        assert host.ssh_key_path == "/secret/key.pem"  # output 隐藏但 DB 保留
+        assert host.ssh_user == "ops"
+
+    def test_explicit_auth_change_still_updates(
+        self, client, db_session, admin_headers,
+    ):
+        """显式提交 ssh_auth_type 切换 → 正常更新；同请求未提交的
+        ssh_known_hosts_path 保留。"""
+        from backend.models.host import Host
+
+        host_id = self._create_key_host(client, admin_headers)
+        db_session.query(Host).filter(Host.id == host_id).update(
+            {"ssh_known_hosts_path": "/etc/stp/known_hosts"}
+        )
+        db_session.commit()
+
+        resp = client.put(
+            f"/api/v1/hosts/{host_id}",
+            json={"ssh_auth_type": "password", "ssh_key_path": None},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["ssh_auth_type"] == "password"
+
+        host = db_session.get(Host, host_id)
+        assert host.ssh_key_path is None
+        assert host.ssh_known_hosts_path == "/etc/stp/known_hosts"  # 未提交保留
+
+    def test_ip_change_still_scans_host_key(
+        self, client, db_session, admin_headers,
+    ):
+        """回归：IP 实际变化仍触发 host key 重扫（依赖 host.ip 比较）。"""
+        host_id = self._create_key_host(client, admin_headers)
+
+        resp = client.put(
+            f"/api/v1/hosts/{host_id}",
+            json={"ip": "192.168.50.78"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["ip"] == "192.168.50.78"
