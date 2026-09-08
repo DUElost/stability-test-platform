@@ -6,15 +6,17 @@ config-gated：未配置 scan 工具 env 则跳过 + 503。
 """
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
@@ -302,84 +304,89 @@ def run_merge_sync(
 
     side = os.getenv("STP_DEDUP_SCAN_TAG", "shanghai")
     side_argv = ["-side", "factory"] if "factory" in side.lower() else ["-side", "shanghai"]
-    cwd = str(Path(tool["script"]).parent)
-    merge_root = Path(tool["script"]).parent / "merge_result"
-    before_names = _merge_output_dir_names(merge_root)
-    baseline_mtime = latest_merge_output_mtime(merge_root)
+    script_parent = Path(tool["script"]).parent
+    cwd = str(script_parent)
+    merge_root = script_parent / "merge_result"
 
-    listfile: Path | None = None
-    try:
-        argv, listfile = build_merge_argv(tool, org_files, side_argv)
-        logger.info(
-            "merge_started plan_run=%d files=%d cwd=%s mode=%s",
-            plan_run_id,
-            len(org_files),
-            cwd,
-            argv[2] if len(argv) > 2 else "?",
-        )
-        proc = subprocess.run(
-            argv,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=300,
-        )
-    except subprocess.TimeoutExpired:
-        logger.error("merge_timeout plan_run=%d timeout=300s", plan_run_id)
-        raise
-    except Exception:
-        logger.exception("merge_spawn_failed plan_run=%d", plan_run_id)
-        raise
-    finally:
-        if listfile is not None:
-            try:
-                listfile.unlink(missing_ok=True)
-            except Exception:
-                pass
+    # #1072 / R10-F03：工具固定写共享 merge_result/；snapshot→子进程→收割→
+    # 发布→登记全程跨进程串行，避免另一 PlanRun 的更新目录被本轮误登记。
+    with _exclusive_merge_tool_lock(script_parent):
+        before_names = _merge_output_dir_names(merge_root)
+        baseline_mtime = latest_merge_output_mtime(merge_root)
 
-    stderr_snip = (proc.stderr or "")[:500]
-    if proc.returncode != 0:
-        logger.error(
-            "merge_failed plan_run=%d exit=%d stderr=%s",
-            plan_run_id, proc.returncode, stderr_snip,
-        )
-        raise RuntimeError(f"merge subprocess failed (exit={proc.returncode})")
-    if merge_stderr_indicates_failure(proc.stderr or ""):
-        logger.error(
-            "merge_failed plan_run=%d exit=0 stderr=%s",
-            plan_run_id, stderr_snip,
-        )
-        raise RuntimeError("merge subprocess reported errors in stderr")
-
-    try:
-        latest = find_fresh_merge_output_dir(merge_root, baseline_mtime, before_names)
-    except RuntimeError:
-        logger.exception("merge_output_validation_failed plan_run=%d", plan_run_id)
-        raise
-
-    # ── merge 产物中心化（2026-08-31）：工具固定输出到本机
-    # {工具目录}/merge_result/{ts}/——但 artifact 应指向中心持久路径
-    # （设计 adr-0025: `{CIFS}/dedup/{plan_run_id}/merge/`）。发布到中心后
-    # 注册中心路径；中心未配置（无 STP_AEE_NFS_ROOT）时回退本机路径。
-    published = _publish_merge_to_center(plan_run_id, latest, platform=platform)
-
-    try:
-        from backend.core.database import SessionLocal
-
-        inner_db = SessionLocal()
+        listfile: Path | None = None
         try:
-            n = _register_merge_artifacts(inner_db, plan_run_id, published or latest)
+            argv, listfile = build_merge_argv(tool, org_files, side_argv)
             logger.info(
-                "merge_artifacts_registered plan_run=%d count=%d dir=%s",
-                plan_run_id, n, published or latest,
+                "merge_started plan_run=%d files=%d cwd=%s mode=%s",
+                plan_run_id,
+                len(org_files),
+                cwd,
+                argv[2] if len(argv) > 2 else "?",
             )
+            proc = subprocess.run(
+                argv,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error("merge_timeout plan_run=%d timeout=300s", plan_run_id)
+            raise
+        except Exception:
+            logger.exception("merge_spawn_failed plan_run=%d", plan_run_id)
+            raise
         finally:
-            inner_db.close()
-    except Exception:
-        logger.exception("merge_register_artifacts_failed plan_run=%d", plan_run_id)
-        raise
+            if listfile is not None:
+                try:
+                    listfile.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        stderr_snip = (proc.stderr or "")[:500]
+        if proc.returncode != 0:
+            logger.error(
+                "merge_failed plan_run=%d exit=%d stderr=%s",
+                plan_run_id, proc.returncode, stderr_snip,
+            )
+            raise RuntimeError(f"merge subprocess failed (exit={proc.returncode})")
+        if merge_stderr_indicates_failure(proc.stderr or ""):
+            logger.error(
+                "merge_failed plan_run=%d exit=0 stderr=%s",
+                plan_run_id, stderr_snip,
+            )
+            raise RuntimeError("merge subprocess reported errors in stderr")
+
+        try:
+            latest = find_fresh_merge_output_dir(merge_root, baseline_mtime, before_names)
+        except RuntimeError:
+            logger.exception("merge_output_validation_failed plan_run=%d", plan_run_id)
+            raise
+
+        # ── merge 产物中心化（2026-08-31）：工具固定输出到本机
+        # {工具目录}/merge_result/{ts}/——但 artifact 应指向中心持久路径
+        # （设计 adr-0025: `{CIFS}/dedup/{plan_run_id}/merge/`）。发布到中心后
+        # 注册中心路径；中心未配置（无 STP_AEE_NFS_ROOT）时回退本机路径。
+        published = _publish_merge_to_center(plan_run_id, latest, platform=platform)
+
+        try:
+            from backend.core.database import SessionLocal
+
+            inner_db = SessionLocal()
+            try:
+                n = _register_merge_artifacts(inner_db, plan_run_id, published or latest)
+                logger.info(
+                    "merge_artifacts_registered plan_run=%d count=%d dir=%s",
+                    plan_run_id, n, published or latest,
+                )
+            finally:
+                inner_db.close()
+        except Exception:
+            logger.exception("merge_register_artifacts_failed plan_run=%d", plan_run_id)
+            raise
 
     logger.info("merge_done plan_run=%d platform=%s", plan_run_id, platform or "all")
     return "ok"
@@ -521,6 +528,20 @@ def merge_stderr_indicates_failure(stderr: str) -> bool:
     """scan 工具可能在 stderr 打 error 但仍 exit 0。"""
     text = stderr.lower()
     return ": error:" in text or "error: argument" in text
+
+
+@contextmanager
+def _exclusive_merge_tool_lock(script_parent: Path) -> Iterator[None]:
+    """跨进程独占锁：覆盖共用 ``merge_result/`` 的调用到发布窗口（#1072）。"""
+    lock_dir = script_parent / "merge_result"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / ".stp_merge.lock"
+    with open(lock_path, "a+", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 def latest_merge_output_mtime(merge_root: Path) -> float:
