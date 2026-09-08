@@ -3263,3 +3263,181 @@ async def test_recovery_sync_unknown_grace_expired_cleanup():
     finally:
         _cleanup_seed(seed)
         _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_recovery_sync_abort_requested_blocks_same_boot_resume():
+    """#990: abort_requested + same-boot instance takeover must not RESUME.
+
+    Lease stays ACTIVE until ABORTED ACK / abort reaper.
+    """
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-abort-{suffix}"
+    old_instance = uuid4().hex
+    new_instance = uuid4().hex
+    boot_id = uuid4().hex
+    _seed_recovery_host(host_id, boot_id=boot_id, instance_id=old_instance)
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        db_sync = SessionLocal()
+        try:
+            job = db_sync.get(JobInstance, seed["job_id"])
+            device = db_sync.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            job.host_id = host_id
+            plan_run = db_sync.get(PlanRun, seed["plan_run_id"])
+            plan_run.run_context = {
+                "abort_requested": {
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "reason": "user",
+                    "acknowledged_job_ids": [],
+                },
+            }
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(plan_run, "run_context")
+            db_sync.commit()
+
+            lease = DeviceLease(
+                device_id=seed["device_id"],
+                job_id=seed["job_id"],
+                host_id=host_id,
+                lease_type=LeaseType.JOB.value,
+                status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1",
+                agent_instance_id=old_instance,
+                lease_generation=1,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+            db_sync.add(lease)
+            db_sync.commit()
+        finally:
+            db_sync.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=new_instance,
+            boot_id=boot_id,
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"], device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
+            )],
+        )
+
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        assert result.error is None
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "ABORT_LOCAL"
+        assert actions[0]["reason"] == "abort_requested"
+        assert actions[0]["action"] != "RESUME"
+
+        db_sync2 = SessionLocal()
+        try:
+            updated = (
+                db_sync2.query(DeviceLease)
+                .filter(DeviceLease.job_id == seed["job_id"])
+                .first()
+            )
+            assert updated is not None
+            assert updated.status == LeaseStatus.ACTIVE.value
+            assert updated.agent_instance_id == new_instance
+            job2 = db_sync2.get(JobInstance, seed["job_id"])
+            assert job2.status == JobStatus.RUNNING.value
+        finally:
+            db_sync2.close()
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_recovery_sync_abort_requested_blocks_unknown_resume():
+    """#990: abort_requested + UNKNOWN within grace must not RESUME."""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-abort-unk-{suffix}"
+    instance_id = uuid4().hex
+    boot_id = uuid4().hex
+    _seed_recovery_host(host_id, boot_id=boot_id, instance_id=instance_id)
+
+    seed = _seed_job(status=JobStatus.UNKNOWN.value)
+    try:
+        now = datetime.now(timezone.utc)
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            job.ended_at = now - timedelta(seconds=60)
+            job.host_id = host_id
+            plan_run = db.get(PlanRun, seed["plan_run_id"])
+            plan_run.run_context = {
+                "abort_requested": {
+                    "at": now.isoformat(),
+                    "reason": "user",
+                    "acknowledged_job_ids": [],
+                },
+            }
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(plan_run, "run_context")
+            db.commit()
+
+            device = db.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            db.commit()
+
+            lease = DeviceLease(
+                device_id=seed["device_id"], job_id=seed["job_id"],
+                host_id=host_id,
+                lease_type=LeaseType.JOB.value, status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1", lease_generation=1,
+                agent_instance_id=instance_id,
+                acquired_at=now - timedelta(seconds=3600),
+                renewed_at=now - timedelta(seconds=3600),
+                expires_at=now - timedelta(seconds=1800),
+            )
+            db.add(lease)
+            db.commit()
+        finally:
+            db.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=instance_id,
+            boot_id=boot_id,
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"],
+                device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
+            )],
+        )
+
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        assert result.error is None
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "ABORT_LOCAL"
+        assert actions[0]["reason"] == "abort_requested"
+
+        db2 = SessionLocal()
+        try:
+            j = db2.get(JobInstance, seed["job_id"])
+            assert j.status == JobStatus.UNKNOWN.value
+            l = (
+                db2.query(DeviceLease)
+                .filter(
+                    DeviceLease.device_id == seed["device_id"],
+                    DeviceLease.job_id == seed["job_id"],
+                )
+                .first()
+            )
+            assert l is not None and l.status == LeaseStatus.ACTIVE.value
+        finally:
+            db2.close()
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
