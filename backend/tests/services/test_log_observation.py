@@ -214,6 +214,103 @@ def test_risk_summary_counts_placeholder_dle_with_concrete_subtype(
     assert summary["counts"]["by_type"]["SWT"] == 1
 
 
+def test_risk_summary_counts_uniview_dle_and_unlinked_signal(db_session, sample_device):
+    """#1075: UNISOC UNIVIEW events must enter PlanRun risk rollup."""
+    job, now = _seed_job(db_session, sample_device)
+    dle = DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="UNISOC",
+        event_type="UNIVIEW",
+        event_subtype="kernel_panic",
+        detected_at=now,
+        state="REMOTE",
+        local_path="/local/uniview/1",
+        remote_path="/nfs/devices/1/uniview/1",
+        host_id=str(sample_device.host_id),
+        job_id=job.id,
+        plan_run_id=job.plan_run_id,
+        signal_seq_no=1,
+    )
+    db_session.add(dle)
+    db_session.flush()
+    db_session.add(JobLogSignal(
+        job_id=job.id,
+        host_id=str(sample_device.host_id),
+        device_serial=sample_device.serial,
+        device_log_event_id=dle.id,
+        seq_no=1,
+        category="UNIVIEW",
+        source="reconciler",
+        path_on_device="/data/uniview/1",
+        detected_at=now,
+        received_at=now,
+        extra={
+            "event_subtype": "kernel_panic",
+            "nfs_path": "/nfs/devices/1/uniview/1",
+        },
+    ))
+    db_session.add(JobLogSignal(
+        job_id=job.id,
+        host_id=str(sample_device.host_id),
+        device_serial=sample_device.serial,
+        seq_no=2,
+        category="UNIVIEW",
+        source="reconciler",
+        path_on_device="/data/uniview/2",
+        detected_at=now,
+        received_at=now,
+        extra={
+            "event_subtype": "watchdog",
+            "nfs_path": "/nfs/uniview/2",
+        },
+    ))
+    db_session.commit()
+
+    summary = aggregate_risk_summary(db_session, [job.id])
+    assert summary is not None
+    assert summary["counts"]["by_type"]["kernel_panic"] == 1
+    assert summary["counts"]["by_type"]["watchdog"] == 1
+    assert summary["counts"]["aee_entries"] == 2
+
+
+def test_signal_link_stats_counts_linked_uniview(db_session, sample_device):
+    job, now = _seed_job(db_session, sample_device)
+    dle = DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="UNISOC",
+        event_type="UNIVIEW",
+        event_subtype="kernel_panic",
+        detected_at=now,
+        state="LOCAL",
+        local_path="/local/uniview/1",
+        host_id=str(sample_device.host_id),
+        job_id=job.id,
+        plan_run_id=job.plan_run_id,
+        signal_seq_no=1,
+    )
+    db_session.add(dle)
+    db_session.flush()
+    db_session.add(JobLogSignal(
+        job_id=job.id,
+        host_id=str(sample_device.host_id),
+        device_serial=sample_device.serial,
+        device_log_event_id=dle.id,
+        seq_no=1,
+        category="UNIVIEW",
+        source="reconciler",
+        path_on_device="/data/uniview/1",
+        detected_at=now,
+        received_at=now,
+    ))
+    db_session.commit()
+
+    stats = aggregate_signal_link_stats(db_session, [job.id])
+    assert stats["linked_signals"] == 1
+    assert stats["link_rate"] == 1.0
+
+
 def test_signal_link_stats_excludes_mobilelog_from_link_rate(db_session, sample_device):
     job, now = _seed_job(db_session, sample_device)
     db_session.add(JobLogSignal(

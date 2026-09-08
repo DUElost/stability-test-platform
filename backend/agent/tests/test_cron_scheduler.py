@@ -267,12 +267,31 @@ class TestRunRetentionCleanup:
         cm.__exit__ = MagicMock(return_value=False)
         return cm
 
+    def _mock_db_with_runs(self, runs):
+        """db.query 按首参分发到模型预置结果；列对象查询（#936 引用扫描 /
+        祖先链）返回空 FakeQuery——语义 = 无外部链引用，走原删除路径。"""
+        from backend.models.device_lease import DeviceLease
+        from backend.models.job import JobArtifact, JobInstance, StepTrace
+        from backend.models.plan_run import PlanRun
+        from backend.models.resource_pool import ResourceAllocation
+
+        db = MagicMock()
+        queries = {
+            PlanRun: FakeQuery(items=runs),
+            StepTrace: FakeQuery(),
+            DeviceLease: FakeQuery(),
+            ResourceAllocation: FakeQuery(),
+            JobArtifact: FakeQuery(),
+            JobInstance: FakeQuery(),
+        }
+        db.query.side_effect = lambda *a, **k: queries.get(a[0], FakeQuery())
+        return db
+
     def test_deletes_stale_runs(self):
         from backend.scheduler.cron_scheduler import run_retention_cleanup
 
         old_run = MagicMock(id=99, status="SUCCESS")
-        db = MagicMock()
-        db.query.return_value = FakeQuery(items=[old_run])
+        db = self._mock_db_with_runs([old_run])
 
         with patch("backend.scheduler.cron_scheduler.SessionLocal",
                    return_value=self._patched_session(db)):
@@ -281,36 +300,23 @@ class TestRunRetentionCleanup:
         db.commit.assert_called_once()
 
     def test_deletes_job_artifacts_before_job_instances(self):
-        from backend.models.device_lease import DeviceLease
-        from backend.models.job import JobArtifact, JobInstance, StepTrace
-        from backend.models.plan_run import PlanRun
-        from backend.models.resource_pool import ResourceAllocation
+        from backend.models.job import JobArtifact, JobInstance
         from backend.scheduler.cron_scheduler import run_retention_cleanup
 
         old_run = MagicMock(id=99, status="SUCCESS")
-        db = MagicMock()
-
-        queries = {
-            PlanRun: FakeQuery(items=[old_run]),
-            StepTrace: FakeQuery(),
-            DeviceLease: FakeQuery(),
-            ResourceAllocation: FakeQuery(),
-            JobArtifact: FakeQuery(),
-            JobInstance: FakeQuery(),
-        }
-
-        def query_side_effect(model):
-            return queries[model]
-
-        db.query.side_effect = query_side_effect
+        db = self._mock_db_with_runs([old_run])
 
         with patch("backend.scheduler.cron_scheduler.SessionLocal",
                    return_value=self._patched_session(db)):
             run_retention_cleanup()
 
         queried_models = [call.args[0] for call in db.query.call_args_list]
-        assert JobArtifact in queried_models
-        assert queried_models.index(JobArtifact) < queried_models.index(JobInstance)
+        # #936 后 query 参数含列对象（引用扫描）——用身份比较，避免
+        # `JobArtifact in [...]` 触发 InstrumentedAttribute.__eq__ 协议。
+        artifact_queries = [i for i, m in enumerate(queried_models) if m is JobArtifact]
+        instance_queries = [i for i, m in enumerate(queried_models) if m is JobInstance]
+        assert artifact_queries and instance_queries
+        assert max(artifact_queries) < min(instance_queries)
 
     def test_no_stale_runs_no_commit(self):
         from backend.scheduler.cron_scheduler import run_retention_cleanup
