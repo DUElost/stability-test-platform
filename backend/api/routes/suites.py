@@ -39,6 +39,7 @@ from backend.models.project import TestProject
 from backend.models.suite import TestCase, TestSuite
 from backend.services.mtbf_suite import (
     _validate_suite,
+    content_fingerprint,
     exec_desc_to_dict,
     parse_global_params,
     parse_runtask,
@@ -72,9 +73,19 @@ _GLOBAL_NAME = "UiAutomatorTestData.xml"
 # 仅 ``active_run_ids_bound_to_suite`` 精确匹配（绑定同一套件硬阻断）。
 
 
-def _suite_out(db: Session, suite: TestSuite, detail: bool = False):
-    cases = _case_rows(db, suite.id)
-    current = _current_fingerprint(db, suite)
+def _suite_out(
+    db: Session,
+    suite: TestSuite,
+    detail: bool = False,
+    cases: Optional[list[dict]] = None,
+    current: Optional[str] = None,
+):
+    """单套件输出。``cases``/``current`` 已由调用方批量预取时直接复用（#943
+    列表路径），缺省按需查询（detail/单套件路径行为不变）。"""
+    if cases is None:
+        cases = _case_rows(db, suite.id)
+    if current is None:
+        current = _current_fingerprint(db, suite)
     payload = {
         "id": suite.id,
         "name": suite.name,
@@ -103,6 +114,41 @@ def _suite_out(db: Session, suite: TestSuite, detail: bool = False):
         }
     )
     return TestSuiteDetailOut(**payload)
+
+
+def _suite_outs(db: Session, suites: list[TestSuite], detail: bool = False):
+    """#943（R03-F11）：列表批量化——用例行一次 IN 查询取回，指纹纯函数
+    本地复算，消除每套件 1+2 次的线性查询增长。行形状与
+    ``suite_binding.suite_case_rows`` 保持一致（fingerprint 输入契约）。"""
+    ids = [s.id for s in suites]
+    rows_by_suite: dict[int, list[dict]] = {sid: [] for sid in ids}
+    if ids:
+        rows = (
+            db.query(TestCase)
+            .filter(TestCase.suite_id.in_(ids))
+            .order_by(TestCase.suite_id, TestCase.ordinal, TestCase.id)
+            .all()
+        )
+        for c in rows:
+            rows_by_suite[c.suite_id].append(
+                {
+                    "name": c.name,
+                    "ordinal": c.ordinal,
+                    "times": c.times,
+                    "enabled": c.enabled,
+                    "exec_descs": c.exec_descs or [],
+                }
+            )
+    outs = []
+    for s in suites:
+        cases = rows_by_suite[s.id]
+        current = content_fingerprint(
+            root_config=s.root_config,
+            global_params=s.global_params,
+            cases=cases,
+        )
+        outs.append(_suite_out(db, s, detail=detail, cases=cases, current=current))
+    return outs
 
 
 def _get_suite(db: Session, suite_id: int) -> TestSuite:
@@ -150,7 +196,11 @@ def list_suites(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """套件列表。未知 project_key → 404（与 ADR-0029 列表口径一致，不吞成空表）。"""
+    """套件列表。未知 project_key → 404（与 ADR-0029 列表口径一致，不吞成空表）。
+
+    #943：用例批量加载 + 指纹本地复算，查询数不随套件数线性增长；套件为
+    管理员维护的小表，保持全量返回的既有 API 契约（前端依赖完整列表）。
+    """
     query = db.query(TestSuite).options(joinedload(TestSuite.project))
     if project_key:
         query = query.filter(TestSuite.project_id == _resolve_project_id(db, project_key))
@@ -159,7 +209,7 @@ def list_suites(
     if q:
         like = f"%{q}%"
         query = query.filter(TestSuite.name.ilike(like))
-    return ok([_suite_out(db, s) for s in query.order_by(TestSuite.name).all()])
+    return ok(_suite_outs(db, query.order_by(TestSuite.name).all()))
 
 
 @router.post("/api/v1/test-suites", response_model=ApiResponse[TestSuiteDetailOut])
