@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, MutableMapping, Optional
 
-from .api_client import complete_job, update_job
+from .api_client import TerminalReportLostError, complete_job, update_job
 from .config import get_run_log_dir
 from .job_session import JobSession, JobStartupError
 from .pipeline_runner import execute_pipeline_run
@@ -377,6 +377,12 @@ def run_task_wrapper(
             suppress_reason="worker_superseded_after_run",
         ):
             logger.info("run_complete", extra={"job_id": job_id, "status": result["status"]})
+    except TerminalReportLostError:
+        # #1005: 终态双故障（HTTP + outbox 均失败）。complete_job 已记 error
+        # 并 raise——不得再包装成 AGENT_ERROR 二次上报：会覆盖真实脚本结果，
+        # 且二次上报在同样的故障下必然再次失败。恢复依据由
+        # _cleanup_after_job_exit 的 has_terminal_fact 守卫保留。
+        raise
     except Exception as exc:
         logger.exception("run_failed job=%d: %s", job_id, exc)
         watcher_summary = None

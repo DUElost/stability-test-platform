@@ -607,6 +607,20 @@ class LocalDB:
             ).fetchone()
         return int(row["c"]) if row else 0
 
+    def has_terminal_fact(self, job_id: int) -> bool:
+        """True when a terminal fact for *job_id* reached a durable sink.
+
+        #1005: 远端确认（ack）或 outbox 持久化都会留下 job_terminal_outbox
+        行；complete_job 双故障（HTTP 失败 + enqueue 失败）时无行——此时
+        active_job_registry 记录是唯一的恢复依据，不得删除。
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM job_terminal_outbox WHERE job_id = ? LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        return row is not None
+
     def ack_terminal(self, job_id: int) -> None:
         with self._lock:
             with self._conn:
