@@ -110,6 +110,28 @@ def test_parse_deps_refreshed_reads_sentinel():
     assert _parse_deps_refreshed("no sentinel here") is False
 
 
+def test_build_remote_script_retries_pip_when_deps_marker_stale():
+    """#948: requirements 哈希未变但安装成功标记缺失/陈旧时仍须 pip。"""
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        tar_path="/tmp/stp-agent-update.tar.gz",
+        user="android",
+        group="android",
+    )
+
+    assert 'DEPS_MARKER="$INSTALL_DIR/.deps_installed_sha"' in script
+    assert "INSTALLED_REQ_SHA=" in script
+    assert 'NEED_PIP=1' in script
+    assert 'INSTALLED_REQ_SHA" != "$NEW_REQ_SHA"' in script
+    assert 'sudo tee "$DEPS_MARKER"' in script
+    # 成功后才写标记；失败路径仍 exit 1 且不 restart（既有）
+    pip_ok_marker = script.index('sudo tee "$DEPS_MARKER"')
+    pip_fail = script.index("pip install failed")
+    assert pip_fail < pip_ok_marker
+    assert "service NOT restarted" in script
+
+
 def test_parse_env_synced_reads_sentinel():
     assert _parse_env_synced("STP_ENV_SYNCED=AIMONKEY_RESOURCE_DIR\nOK") == [
         "AIMONKEY_RESOURCE_DIR"

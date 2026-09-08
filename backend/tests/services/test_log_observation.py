@@ -121,6 +121,99 @@ def test_risk_summary_prefers_dle_and_skips_linked_signals(db_session, sample_de
     assert summary["counts"]["by_type"]["ANR"] == 2
 
 
+def test_risk_summary_counts_dle_with_concrete_event_type(db_session, sample_device):
+    """#1054: resolve_device_log_event_type stores JE/KE in event_type, not only AEE."""
+    job, now = _seed_job(db_session, sample_device)
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="JE",
+        event_subtype="JE",
+        detected_at=now,
+        state="REMOTE",
+        local_path="/local/aee/je/1",
+        remote_path="/nfs/devices/1/aee/je/1",
+        host_id=str(sample_device.host_id),
+        job_id=job.id,
+        plan_run_id=job.plan_run_id,
+    ))
+    db_session.commit()
+
+    summary = aggregate_risk_summary(db_session, [job.id])
+    assert summary is not None
+    assert summary["counts"]["by_type"]["JE"] == 1
+    assert summary["counts"]["aee_entries"] == 1
+
+
+def test_risk_summary_linked_concrete_dle_replaces_unlinked_signal(
+    db_session, sample_device,
+):
+    """#1054: linking must not drop the count when DLE uses a concrete event_type."""
+    job, now = _seed_job(db_session, sample_device)
+    dle = DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="KE",
+        event_subtype="KE",
+        detected_at=now,
+        state="REMOTE",
+        local_path="/local/aee/ke/1",
+        remote_path="/nfs/devices/1/aee/ke/1",
+        host_id=str(sample_device.host_id),
+        job_id=job.id,
+        plan_run_id=job.plan_run_id,
+        signal_seq_no=1,
+    )
+    db_session.add(dle)
+    db_session.flush()
+    db_session.add(JobLogSignal(
+        job_id=job.id,
+        host_id=str(sample_device.host_id),
+        device_serial=sample_device.serial,
+        device_log_event_id=dle.id,
+        seq_no=1,
+        category="AEE",
+        source="reconciler",
+        path_on_device="/data/aee/ke/1",
+        detected_at=now,
+        received_at=now,
+        extra={"event_subtype": "KE", "nfs_path": "/nfs/devices/1/aee/ke/1"},
+    ))
+    db_session.commit()
+
+    summary = aggregate_risk_summary(db_session, [job.id])
+    assert summary is not None
+    assert summary["counts"]["by_type"]["KE"] == 1
+
+
+def test_risk_summary_counts_placeholder_dle_with_concrete_subtype(
+    db_session, sample_device,
+):
+    """#1054: legacy UNKNOWN/AEE rows still count when subtype carries the type."""
+    job, now = _seed_job(db_session, sample_device)
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="UNKNOWN",
+        event_subtype="SWT",
+        detected_at=now,
+        state="REMOTE",
+        local_path="/local/aee/swt/1",
+        remote_path="/nfs/devices/1/aee/swt/1",
+        host_id=str(sample_device.host_id),
+        job_id=job.id,
+        plan_run_id=job.plan_run_id,
+    ))
+    db_session.commit()
+
+    summary = aggregate_risk_summary(db_session, [job.id])
+    assert summary is not None
+    assert summary["counts"]["by_type"]["SWT"] == 1
+
+
 def test_signal_link_stats_excludes_mobilelog_from_link_rate(db_session, sample_device):
     job, now = _seed_job(db_session, sample_device)
     db_session.add(JobLogSignal(
