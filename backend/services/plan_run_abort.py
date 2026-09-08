@@ -242,15 +242,18 @@ def abort_plan_run(
         # 246 的 359 台 PENDING 产生每秒 ~40 条 audit/UPDATE 风暴（手动 abort
         # 实测控制面卡顿、会话失效）。批量语义与逐条等价：
         #   - WHERE status='PENDING' 即状态机校验（同 VALID_TRANSITIONS 约束）
-        #   - 计数器一次性 +n（run 级与每 host 级）
+        #   - 计数器按 RETURNING 实际行数 +n（run 级与每 host 级；#988）
         #   - 审计聚合为一条 batch 记录
         #   - 批量块末尾调用一次计数器聚合（等价逐条路径的每次尝试）
+        # #988: 预读 PENDING 后 Agent 可能 claim→RUNNING；UPDATE 的 WHERE 会跳过，
+        # 但不得用预读 len 记账，也不得漏掉对这些 Job 的 abort 控制下发。
         if pending_to_abort:
-            pending_ids = [job.id for job in pending_to_abort]
-            n = len(pending_ids)
             from collections import Counter
 
-            db.execute(
+            pending_by_id = {job.id: job for job in pending_to_abort}
+            pending_ids = list(pending_by_id)
+
+            result = db.execute(
                 update(JobInstance)
                 .where(
                     JobInstance.id.in_(pending_ids),
@@ -262,7 +265,8 @@ def abort_plan_run(
                     execution_state=None,  # 同 transition 的终态清理语义
                     ended_at=now,
                     updated_at=now,
-                ),
+                )
+                .returning(JobInstance.id),
                 # 必须同步回 session 中的 ORM 对象：下方 has_active_jobs 直接读
                 # all_jobs 的内存状态来判定是否走到兜底聚合
                 # （apply_plan_run_aggregation(pr, all_jobs)）。一旦这里改为
@@ -272,41 +276,59 @@ def abort_plan_run(
                 # 默认值（auto）本就同步，此处显式写出以免被性能优化误改。
                 execution_options={"synchronize_session": "fetch"},
             )
-            pr.aborted_job_count = int(pr.aborted_job_count or 0) + n
-            pr.terminal_job_count = int(pr.terminal_job_count or 0) + n
-            host_counts = Counter(
-                job.host_id for job in pending_to_abort if job.host_id
-            )
-            for hid, cnt in host_counts.items():
-                db.execute(
-                    update(PlanRunHost)
-                    .where(
-                        PlanRunHost.plan_run_id == plan_run_id,
-                        PlanRunHost.host_id == hid,
-                    )
-                    .values(
-                        aborted_job_count=PlanRunHost.aborted_job_count + cnt,
-                        terminal_job_count=PlanRunHost.terminal_job_count + cnt,
-                    )
+            aborted_ids = [row[0] for row in result.all()]
+            n = len(aborted_ids)
+
+            if n:
+                pr.aborted_job_count = int(pr.aborted_job_count or 0) + n
+                pr.terminal_job_count = int(pr.terminal_job_count or 0) + n
+                host_counts = Counter(
+                    pending_by_id[jid].host_id
+                    for jid in aborted_ids
+                    if pending_by_id[jid].host_id
                 )
-            record_audit(
-                db,
-                action="job_batch_terminalized",
-                resource_type="plan_run",
-                resource_id=plan_run_id,
-                details={
-                    "count": n,
-                    "from_status": JobStatus.PENDING.value,
-                    "to_status": JobStatus.ABORTED.value,
-                    "plan_run_id": plan_run_id,
-                    "hosts": dict(host_counts),
-                },
-                username=triggered_by or "system",
-            )
-            aborted_jobs.extend(pending_ids)
-            total = int(pr.total_job_count or 0)
-            if total > 0:
-                apply_plan_run_aggregation_from_counters(pr)
+                for hid, cnt in host_counts.items():
+                    db.execute(
+                        update(PlanRunHost)
+                        .where(
+                            PlanRunHost.plan_run_id == plan_run_id,
+                            PlanRunHost.host_id == hid,
+                        )
+                        .values(
+                            aborted_job_count=PlanRunHost.aborted_job_count + cnt,
+                            terminal_job_count=PlanRunHost.terminal_job_count + cnt,
+                        )
+                    )
+                record_audit(
+                    db,
+                    action="job_batch_terminalized",
+                    resource_type="plan_run",
+                    resource_id=plan_run_id,
+                    details={
+                        "count": n,
+                        "from_status": JobStatus.PENDING.value,
+                        "to_status": JobStatus.ABORTED.value,
+                        "plan_run_id": plan_run_id,
+                        "hosts": dict(host_counts),
+                    },
+                    username=triggered_by or "system",
+                )
+                aborted_jobs.extend(aborted_ids)
+                total = int(pr.total_job_count or 0)
+                if total > 0:
+                    apply_plan_run_aggregation_from_counters(pr)
+
+            # 竞态 claim：预读为 PENDING、UPDATE 未命中 → 刷新后按 RUNNING 走停止协议
+            raced_ids = set(pending_ids) - set(aborted_ids)
+            for jid in raced_ids:
+                job = pending_by_id[jid]
+                db.refresh(job)
+                if job.status != JobStatus.RUNNING.value:
+                    continue
+                abort_requested_jobs.append(job.id)
+                if job.host_id:
+                    abort_hosts.add(job.host_id)
+                    abort_jobs_by_host[job.host_id].append(job.id)
 
         # Refresh requested_job_ids only (pending jobs are already terminal).
         run_ctx["abort_requested"]["requested_job_ids"] = list(abort_requested_jobs)
