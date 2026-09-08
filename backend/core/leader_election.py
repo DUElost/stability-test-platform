@@ -1,4 +1,4 @@
-"""Control-plane scheduler leader election (ADR-0027 P3-1).
+"""Control-plane scheduler leadership (ADR-0027 P3-1；fail-closed 策略见修订)。
 
 Singleton APScheduler jobs (admission pump, counter reconcile, …) must run on
 at most one control-plane process. Under the historical single-process
@@ -6,9 +6,14 @@ constraint this was implicit; once multi-instance is allowed, each tick
 acquires a Postgres session-level advisory lock for the job name.
 
 Behaviour:
-- ``STP_SCHEDULER_LEADER_ELECTION=0`` → always leader (legacy single-process).
-- ``=1`` (default) → ``pg_try_advisory_lock``; SQLite / ``TESTING=1`` /
-  non-Postgres / connection failure → always leader (fail-open).
+- ``STP_SCHEDULER_LEADER_ELECTION=0`` → always leader（显式退出协调——遗留
+  单进程模式，单进程即无双跑；fail-open 仅存于此显式豁免路径）。
+- ``=1`` (default) → ``pg_try_advisory_lock``；SQLite / ``TESTING=1`` /
+  non-Postgres → always leader（非多实例部署形态，文档化豁免）。
+- **Postgres + 连接/取锁失败 → fail-closed（跳过本轮 tick，#890）**：DB 不可用
+  期间 singleton job 本就依赖同一 DB，跳过无可用性损失；多实例下 fail-open
+  会让所有副本同时自认 leader，双跑风险不对称地大于跳过成本。DB 恢复后
+  tick 自动恢复。
 - Lock is held only for the duration of the ``leadership`` context and is
   released on exit (or when the DB session closes).
 """
@@ -69,12 +74,15 @@ def hold_scheduler_leadership(job_name: str) -> Iterator[bool]:
     try:
         db_cm = SessionLocal()
     except Exception:
+        # R01-F10（#890）：真 Postgres 多实例形态下失败不再 fail-open——
+        # 所有副本同时自认 leader 的双跑风险不对称地大于跳过一轮 tick。
         logger.warning(
-            "scheduler_leadership_fail_open job=%s reason=session_factory",
+            "scheduler_leadership_fail_closed job=%s reason=session_factory "
+            "(skipping tick)",
             job_name,
             exc_info=True,
         )
-        yield True
+        yield False
         return
 
     db = db_cm
@@ -92,7 +100,8 @@ def hold_scheduler_leadership(job_name: str) -> Iterator[bool]:
         )
     except Exception:
         logger.warning(
-            "scheduler_leadership_fail_open job=%s reason=lock_acquire",
+            "scheduler_leadership_fail_closed job=%s reason=lock_acquire "
+            "(skipping tick)",
             job_name,
             exc_info=True,
         )
@@ -100,7 +109,7 @@ def hold_scheduler_leadership(job_name: str) -> Iterator[bool]:
             db.close()
         except Exception:
             pass
-        yield True
+        yield False
         return
 
     if not acquired:
