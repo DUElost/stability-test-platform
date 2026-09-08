@@ -1,5 +1,6 @@
 /**
- * 审计 Frontend #4/#5 — unwrapApiResponse 严格化 + refreshAccessToken 防抖回归。
+ * 审计 Frontend #4/#5 — unwrapApiResponse 严格化 + refreshAccessToken 防抖回归；
+ * #1039 — refresh 跨标签锁（Web Locks）回归。
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -115,5 +116,73 @@ describe('refreshAccessToken — 单飞行防抖 (审计 Frontend #5)', () => {
 
     expect(result).toBe(false);
     expect(postSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('refreshAccessToken — 跨标签锁 (#1039)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('waits for the cross-tab lock before POSTing when navigator.locks exists', async () => {
+    const postSpy = vi.fn().mockResolvedValue({ data: { ok: true } });
+    vi.doMock('axios', () => ({ default: { post: postSpy } }));
+
+    // 模拟另一标签正持有 refresh 锁：拿到锁之前不得发出 POST。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const request = vi.fn(async (_name: string, cb: () => Promise<boolean>) => {
+      await gate;
+      return cb();
+    });
+    Object.defineProperty(navigator, 'locks', {
+      value: { request },
+      configurable: true,
+    });
+
+    try {
+      const { refreshAccessToken } = await import('@/utils/auth');
+      const pending = refreshAccessToken();
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(postSpy).not.toHaveBeenCalled();
+
+      release();
+      await expect(pending).resolves.toBe(true);
+      expect(postSpy).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledWith('stp:auth:refresh', expect.any(Function));
+    } finally {
+      delete (navigator as unknown as { locks?: unknown }).locks;
+    }
+  });
+
+  it('keeps single-tab debounce on top of the lock (one POST for concurrent calls)', async () => {
+    const postSpy = vi.fn().mockResolvedValue({ data: { ok: true } });
+    vi.doMock('axios', () => ({ default: { post: postSpy } }));
+
+    const request = vi.fn((_name: string, cb: () => Promise<boolean>) => cb());
+    Object.defineProperty(navigator, 'locks', {
+      value: { request },
+      configurable: true,
+    });
+
+    try {
+      const { refreshAccessToken } = await import('@/utils/auth');
+      const [r1, r2] = await Promise.all([refreshAccessToken(), refreshAccessToken()]);
+
+      expect(r1).toBe(true);
+      expect(r2).toBe(true);
+      expect(postSpy).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (navigator as unknown as { locks?: unknown }).locks;
+    }
   });
 });
