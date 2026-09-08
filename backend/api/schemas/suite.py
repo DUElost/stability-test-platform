@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from backend.api.schemas.base import ORMBaseModel
 
@@ -70,7 +70,12 @@ class TestSuiteCreateIn(BaseModel):
 
 
 class TestSuiteUpdateIn(BaseModel):
-    """PUT 元数据；未提供的字段不改（None 与「不提供」不可区分的字段用哨兵语义说明）。"""
+    """PUT 元数据；未提供的字段不改（None 与「不提供」不可区分的字段用哨兵语义说明）。
+
+    #939：is_active 列 NOT NULL——显式 ``null`` 在 schema 层拒绝为 422（放行
+    会在提交期 500）；可空列（display_name/export_dir）显式 ``null`` 清空语义
+    保留。
+    """
 
     display_name: Optional[str] = Field(default=None, max_length=256)
     project_key: Optional[str] = None
@@ -79,6 +84,12 @@ class TestSuiteUpdateIn(BaseModel):
     root_config: Optional[Dict[str, Any]] = None
     global_params: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def reject_explicit_null_on_nonnullable(self) -> "TestSuiteUpdateIn":
+        if "is_active" in self.model_fields_set and self.is_active is None:
+            raise ValueError("is_active cannot be null (NOT NULL column)")
+        return self
 
 
 class IssueOut(BaseModel):

@@ -18,6 +18,8 @@ RUN useradd --system --create-home --home-dir /home/appuser appuser \
 ENV PYTHONPATH=/app
 EXPOSE 8000
 
+# /health 是 readiness 探针（R01-F05，#885）：DB/Redis/SAQ 关键依赖不可用即非
+# 200，HEALTHCHECK 据此标记容器不健康。仅需「进程存活」判断的编排层用 /health/live。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python -c "from urllib.request import urlopen; import sys; sys.exit(0 if urlopen('http://127.0.0.1:8000/health', timeout=3).getcode() == 200 else 1)"
 
 USER appuser

@@ -9,10 +9,11 @@
 2. **步骤参数注入**（P1 设计 §3.4）：``step_params_for_dispatch`` +
    ``plan_dispatcher_core.inject_suite_params`` 对 ``mtbf_`` 步骤注入
    ``{expected_testpoint_count, project}``，无需用户声明 default_params。
-3. **precheck 五步门禁**（P1 设计 §3.3）：``collect_suite_gate_error``
-   按活表套件行 + 磁盘文件逐项校验，任一失败即 fail-fast 的结构化 detail。
-   套件**身份**以 Run 冻结 ``dispatch_suite.suite_id`` 为准（#965），无冻结
-   时回落 ``plan.suite_id``；内容指纹仍校验该身份的活表行。
+3. **precheck 门禁**（P1 设计 §3.3 + #965 / #975）：``collect_suite_gate_error``
+   按活表套件行 + 磁盘文件逐项校验；套件**身份**以 Run 冻结
+   ``dispatch_suite.suite_id`` 为准（#965），无冻结时回落 ``plan.suite_id``；
+   并拒绝与 ``export_dir`` 冲突的 mtbf ``project`` 覆盖（#975）；任一失败即
+   fail-fast 的结构化 detail。
 """
 from __future__ import annotations
 
@@ -149,7 +150,7 @@ def step_params_for_dispatch(
 
 
 def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any]]:
-    """五步逐项校验；全部通过返回 None，否则返回 fail-fast 结构化 detail。
+    """逐项校验；全部通过返回 None，否则返回 fail-fast 结构化 detail。
 
     套件**身份**优先取 ``run_context.dispatch_suite.suite_id``（prepare 冻结），
     无冻结块时回落 ``plan.suite_id``；二者皆无则放行（存量 P0 / 裸 Run）。
@@ -261,6 +262,35 @@ def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any
                      "device_project_id": pid}
                     for did, model, pid in mismatches
                 ],
+            )
+
+    # 6) #975 / R05-F12：最终生效的 mtbf ``project`` 必须与门禁对象
+    #    export_dir 一致。注入保留「已有值优先」；冲突覆盖不得静默消费另一目录。
+    expected_project = resolve_export_dir(suite)
+    for step in (pr.plan_snapshot or {}).get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        script_name = step.get("script_name") or ""
+        if not script_name.startswith("mtbf_"):
+            continue
+        merged = dict(step.get("default_params") or {})
+        overrides = step.get("params")
+        if overrides:
+            merged.update(overrides)
+        declared = merged.get("project")
+        if declared in (None, ""):
+            continue
+        if str(declared) != expected_project:
+            return _fail(
+                "project_param_conflict",
+                "mtbf step project overrides the suite export_dir gated by "
+                "precheck",
+                "clear the step/script project override or rebind the plan to "
+                "the matching suite",
+                expected_project=expected_project,
+                declared_project=str(declared),
+                step_key=step.get("step_key"),
+                script_name=script_name,
             )
     return None
 
