@@ -139,7 +139,8 @@ def run_scan_sync(
 
 
 def count_hosts_with_scan_artifacts(
-    plan_run_id: int, host_ids: Sequence[str], *, since: datetime
+    plan_run_id: int, host_ids: Sequence[str], *, since: datetime,
+    require_platforms: Sequence[str] | None = None,
 ) -> int:
     """``host_ids`` 中**本轮**已登记 scan 产物的去重 host 数。
 
@@ -156,25 +157,52 @@ def count_hosts_with_scan_artifacts(
       新产物赶不上 merge。``since`` 取下发 ``scan_now`` 之前的时刻；``created_at``
       与它同为 backend 进程侧 UTC 时间（模型是 Python default，不是库端 now()），
       不存在时钟偏差。
+    - ``require_platforms``（#1071 / R10-F02）：非空时，host 必须对每个平台都有
+      ≥1 条产物才计数。否则 MTK 先到即可满足「host 数齐了」并进 merge，UNISOC
+      文件漏入本轮。``saq_tasks`` 传入 ``DEDUP_PLATFORMS``；单测/兼容调用可省略。
     """
     if not host_ids:
         return 0
 
     from backend.core.database import SessionLocal
+    from backend.core.dedup_platform import scan_artifact_uri_platform
     from sqlalchemy import distinct, func
 
     db = SessionLocal()
     try:
-        return int(
-            db.execute(
-                select(func.count(distinct(PlanRunArtifact.host_id))).where(
-                    PlanRunArtifact.plan_run_id == plan_run_id,
-                    PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
-                    PlanRunArtifact.host_id.in_(list(host_ids)),
-                    PlanRunArtifact.created_at >= since,
-                )
-            ).scalar()
-            or 0
+        if not require_platforms:
+            return int(
+                db.execute(
+                    select(func.count(distinct(PlanRunArtifact.host_id))).where(
+                        PlanRunArtifact.plan_run_id == plan_run_id,
+                        PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
+                        PlanRunArtifact.host_id.in_(list(host_ids)),
+                        PlanRunArtifact.created_at >= since,
+                    )
+                ).scalar()
+                or 0
+            )
+
+        rows = db.execute(
+            select(PlanRunArtifact.host_id, PlanRunArtifact.storage_uri).where(
+                PlanRunArtifact.plan_run_id == plan_run_id,
+                PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
+                PlanRunArtifact.host_id.in_(list(host_ids)),
+                PlanRunArtifact.created_at >= since,
+            )
+        ).all()
+        platforms_by_host: dict[str, set[str]] = {}
+        for host_id, uri in rows:
+            if not host_id:
+                continue
+            platforms_by_host.setdefault(host_id, set()).add(
+                scan_artifact_uri_platform(uri or ""),
+            )
+        required = {str(p) for p in require_platforms}
+        return sum(
+            1
+            for hid in host_ids
+            if required.issubset(platforms_by_host.get(hid, set()))
         )
     finally:
         db.close()

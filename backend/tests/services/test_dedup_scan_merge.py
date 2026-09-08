@@ -304,6 +304,54 @@ def test_count_hosts_with_scan_artifacts_scopes_to_since_watermark(
     assert ds.count_hosts_with_scan_artifacts(run_id, ["host-a"], since=watermark) == 0
 
 
+def test_count_hosts_require_platforms_waits_for_unisoc(
+    db_session, sample_plan_run,
+):
+    """#1071: MTK-only delivery must not count as host-complete when both required."""
+    from datetime import datetime, timezone
+
+    from backend.core.dedup_platform import DEDUP_PLATFORMS
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    run_id = sample_plan_run.id
+    since = datetime(2026, 9, 8, 10, 0, tzinfo=timezone.utc)
+    db_session.add(
+        PlanRunArtifact(
+            plan_run_id=run_id,
+            host_id="host-a",
+            storage_uri="/nfs/dedup/1/mtk/host-a_Result_org.xls",
+            artifact_type=ds.ARTIFACT_TYPE_SCAN,
+            size_bytes=100,
+            created_at=since,
+        )
+    )
+    db_session.commit()
+    assert (
+        ds.count_hosts_with_scan_artifacts(
+            run_id, ["host-a"], since=since, require_platforms=DEDUP_PLATFORMS,
+        )
+        == 0
+    )
+
+    db_session.add(
+        PlanRunArtifact(
+            plan_run_id=run_id,
+            host_id="host-a",
+            storage_uri="/nfs/dedup/1/unisoc/host-a_Result_org.xls",
+            artifact_type=ds.ARTIFACT_TYPE_SCAN,
+            size_bytes=100,
+            created_at=since,
+        )
+    )
+    db_session.commit()
+    assert (
+        ds.count_hosts_with_scan_artifacts(
+            run_id, ["host-a"], since=since, require_platforms=DEDUP_PLATFORMS,
+        )
+        == 1
+    )
+
+
 # ── merge 产物中心化（2026-08-31）────────────────────────────────────
 
 class TestPublishMergeToCenter:
