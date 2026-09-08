@@ -161,6 +161,10 @@ _READER_DRAIN_GRACE_SECONDS = 1.0
 # 断，超时后只能放弃（daemon 线程，随进程退出而消亡），绝不能让它挂住主线程。
 _READER_JOIN_TIMEOUT_SECONDS = 5.0
 
+# #1003：等待进程组收敛时的轮询间隔。组级收敛要同时看「父已回收」与「整组已
+# 散」两个条件，只能轮询；50ms 让取消路径的体感延迟可忽略，又不至于忙等。
+_GROUP_EXIT_POLL_INTERVAL_SECONDS = 0.05
+
 # #117:barrier 判定 peer 是否还在推进的新鲜度阈值。EXECUTING_STEP 且
 # last_progress_at 距今小于此值 = 活(打戳步骤的戳在刷新);超过 = 视为停滞。
 # 与 STP_STEP_STALL_SECONDS 的建议值一致。
@@ -523,18 +527,91 @@ def _popen_isolation_kwargs() -> Dict[str, Any]:
     return {"start_new_session": True}
 
 
+def _remember_process_group(proc: subprocess.Popen) -> None:
+    """#1003: 在 Popen 之后立刻留存进程组身份（POSIX）。
+
+    Why: 父进程一旦被 wait/poll 回收，os.getpgid(pid) 就 ESRCH，pid 还可能已被
+         复用 —— 而 _terminate_process_tree 恰恰要在「父已退出」时仍能按组收敛
+         残留子孙（R07-F02：父退出 ≠ 整组退出）。组身份只能在父存活时取一次。
+    How to apply: 仅 POSIX 有意义（Windows 无 killpg 组语义）；取不到就静默放弃，
+                 退化到 _resolve_pgid 的现取路径，不改变既有行为。
+    """
+    if _IS_WINDOWS:
+        return
+    try:
+        proc._stp_pgid = os.getpgid(proc.pid)
+    except Exception:
+        logger.debug("pgid_capture_failed pid=%s", getattr(proc, "pid", None))
+
+
+def _resolve_pgid(proc: subprocess.Popen) -> Optional[int]:
+    """#1003: 取进程组身份 —— 优先 spawn 时留存的，否则趁父还活着现取。
+
+    拿不到就返回 None（父已回收且无留存 → 无法可信地识别原组，宁可不动手，
+    也不用可能已复用的 pid 去 killpg 一个陌生进程组）。
+    """
+    saved = getattr(proc, "_stp_pgid", None)
+    if isinstance(saved, int):
+        return saved
+    if proc.poll() is not None:
+        return None
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return None
+    except Exception:
+        logger.exception("getpgid_failed pid=%s", getattr(proc, "pid", None))
+        return None
+    return pgid if isinstance(pgid, int) else None
+
+
+def _process_group_alive(pgid: int) -> bool:
+    """#1003: 进程组内是否还有存活成员（signal 0 探测）。
+
+    ESRCH = 整组已散；其余（含 EPERM、探测本身失败）按「仍在」处理 —— 宁可多
+    收敛一次，也不能把残留子孙当成已清理。
+    """
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True
+    return True
+
+
+def _await_tree_exit(
+    proc: subprocess.Popen, pgid: int, timeout: float
+) -> bool:
+    """#1003: 等到「父已回收 且 整组已散」，返回是否收敛。
+
+    Why: proc.wait() 成功只说明父被回收 —— 同组子孙可能还在跑；只有组级判据才
+         能代表进程树真的收敛了。循环里的 poll() 顺带回收僵尸父进程，否则父的
+         僵尸项本身会让 killpg(0) 一直成功、永远探不到真实残留。
+    """
+    deadline = time.monotonic() + max(timeout, 0.0)
+    while True:
+        if proc.poll() is not None and not _process_group_alive(pgid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_GROUP_EXIT_POLL_INTERVAL_SECONDS)
+
+
 def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.0) -> None:
-    """#3: 跨平台 kill 进程树 — POSIX 走 killpg(SIGTERM → wait → SIGKILL),
+    """#3: 跨平台 kill 进程树 — POSIX 走 killpg(SIGTERM → 等整组收敛 → SIGKILL),
     Windows 走 taskkill /T /F。
 
     Why: proc.kill() 只发 SIGKILL 给 pid;若我们靠 _popen_isolation_kwargs 起了
          新进程组,必须用 killpg / taskkill /T 才能扫到组内所有孙进程。
-    How to apply: 已退出 proc 直接返回;ProcessLookupError 吞掉(race 状态正常);
-                  taskkill 失败兜底 proc.kill()。
+    How to apply: 收敛判据是**进程组级**的（#1003），不是「父进程 wait 成功」——
+                 父脚本退出、同组子孙忽略 SIGTERM 时，父的退出清理掉的是它自己，
+                 组里仍可能有进程在操作设备；此时必须继续收敛到 SIGKILL。
+                 ProcessLookupError 吞掉(race 状态正常);taskkill 失败兜底 proc.kill()。
     """
-    if proc.poll() is not None:
-        return
     if _IS_WINDOWS:
+        if proc.poll() is not None:
+            return
         try:
             subprocess.run(
                 ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
@@ -549,23 +626,23 @@ def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.
             except Exception:
                 pass
         return
-    try:
-        pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
+    pgid = _resolve_pgid(proc)
+    if pgid is None:
         return
-    except Exception:
-        pgid = proc.pid
+    if not _process_group_alive(pgid):
+        return
     try:
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
         return
     except Exception:
         logger.exception("killpg_sigterm_failed pgid=%d", pgid)
-    try:
-        proc.wait(timeout=grace_seconds)
+    if _await_tree_exit(proc, pgid, grace_seconds):
         return
-    except subprocess.TimeoutExpired:
-        pass
+    logger.warning(
+        "process_group_alive_after_sigterm pgid=%d — 父可能已退出但子孙仍在，升级 SIGKILL",
+        pgid,
+    )
     try:
         os.killpg(pgid, _SIGKILL)
     except ProcessLookupError:
@@ -573,9 +650,7 @@ def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.
     except Exception:
         logger.exception("killpg_sigkill_failed pgid=%d", pgid)
         return
-    try:
-        proc.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
+    if not _await_tree_exit(proc, pgid, grace_seconds):
         logger.error("process_tree_did_not_exit_after_sigkill pgid=%d", pgid)
 
 
@@ -1448,6 +1523,9 @@ class PipelineEngine:
                 cwd=os.path.dirname(entry.nfs_path) or None,
                 **_popen_isolation_kwargs(),
             )
+            # #1003：组身份必须在任何 wait/poll 之前留存 —— 父被回收后
+            # os.getpgid 就查不到了，而残留子孙仍要按组收敛。
+            _remember_process_group(proc)
             self._set_active_process(
                 proc,
                 allow_after_cancel=(ctx.phase == "teardown"),
