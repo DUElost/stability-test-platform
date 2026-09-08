@@ -70,6 +70,7 @@ from backend.core.csrf import CSRFOriginMiddleware, is_csrf_enabled
 from backend.core.database import async_engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
+from backend.core.redis import redact_redis_url
 from backend.core.security import is_production_like_env, validate_production_auth_cookie_settings
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.state_machine import InvalidTransitionError
@@ -111,6 +112,11 @@ for _h in logging.getLogger("uvicorn.access").handlers:
     ))
 
 redis_client: Optional[aioredis.Redis] = None
+
+
+def _log_redis_ping_ok(redis_url: str) -> None:
+    """Emit the startup Redis success record without credential material."""
+    logger.info("redis_ping_ok url=%s", redact_redis_url(redis_url))
 
 
 @asynccontextmanager
@@ -177,7 +183,7 @@ async def lifespan(app: FastAPI):
         else:
             try:
                 await verify_redis_connectivity(redis_url)
-                logger.info("redis_ping_ok url=%s", redis_url)
+                _log_redis_ping_ok(redis_url)
             except RuntimeError as exc:
                 logger.error("redis_unreachable — %s", exc)
                 raise
