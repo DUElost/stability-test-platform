@@ -17,9 +17,10 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any, Optional
-from urllib.parse import urlsplit, urlunsplit
 
 import socketio
+
+from backend.core.redis import redact_redis_url as _redact_redis_url
 
 logger = logging.getLogger(__name__)
 
@@ -40,23 +41,6 @@ def socketio_redis_channel() -> str:
 
 def socketio_redis_url() -> str:
     return os.getenv("REDIS_URL", "redis://localhost:6379/0").strip()
-
-
-def _redact_redis_url(url: str) -> str:
-    """Strip password from redis URL for logs."""
-    try:
-        parts = urlsplit(url)
-        if parts.password is None:
-            return url
-        host = parts.hostname or ""
-        if parts.port:
-            host = f"{host}:{parts.port}"
-        netloc = host
-        if parts.username:
-            netloc = f"{parts.username}:***@{host}"
-        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
-    except Exception:
-        return "<unparseable>"
 
 
 def build_socketio_client_manager() -> Optional[Any]:
