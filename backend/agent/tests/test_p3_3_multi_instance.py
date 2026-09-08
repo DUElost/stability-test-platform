@@ -156,6 +156,15 @@ async def test_register_lookup_unregister_roundtrip(monkeypatch):
         async def delete(self, key):
             store.pop(key, None)
 
+        async def eval(self, script, numkeys, key, *args):
+            # #887: compare-and-delete 参考语义（值相等才删）。
+            if "DEL" in script:
+                if store.get(key) == args[0]:
+                    del store[key]
+                    return 1
+                return 0
+            return 0
+
     reg.configure_agent_sid_registry(FakeRedis())
     await reg.register_agent_owner("42", "sid-abc")
     owner = await reg.lookup_agent_owner("42")
@@ -282,6 +291,24 @@ class _TtlFakeRedis:
 
     async def delete(self, key):
         self.store.pop(key, None)
+
+    async def eval(self, script, numkeys, key, *args):
+        # #887: compare-and-delete/expire 参考语义（含虚拟时钟过期模型）。
+        item = self.store.get(key)
+        if item is not None:
+            value, expiry = item
+            if expiry is not None and self.now > expiry:
+                del self.store[key]
+                item = None
+        if item is None or item[0] != args[0]:
+            return 0
+        if "DEL" in script:
+            del self.store[key]
+            return 1
+        if "EXPIRE" in script:
+            self.store[key] = (item[0], self.now + int(args[1]))
+            return 1
+        return 0
 
     def advance(self, seconds: float) -> None:
         self.now += seconds
