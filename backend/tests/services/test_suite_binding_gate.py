@@ -340,7 +340,7 @@ class TestSuiteGateMatrix:
         assert collect_suite_gate_error(db_session, pr) is None
 
     def test_unbound_plan_never_gated(self, db_session, bound_fixture):
-        """查找键 = plan.suite_id：未绑定的 Plan 即使套件全坏也不进门禁。
+        """无冻结块 + Plan 未绑定：即使套件全坏也不进门禁。
 
         翻转硬拒后 prepare 不再产出未绑定 mtbf Run，直构裸 PlanRun 验证
         门禁函数的放行分支（防御性覆盖，语义不变）。
@@ -356,6 +356,53 @@ class TestSuiteGateMatrix:
         db_session.add(pr)
         db_session.commit()
         assert collect_suite_gate_error(db_session, pr) is None
+
+    def test_gate_uses_frozen_suite_after_plan_unbind(self, db_session, bound_fixture):
+        """#965: prepare 后解绑 Plan —— 门禁仍按冻结 A，不能无检查放行。"""
+        from backend.services.suite_binding import active_run_ids_bound_to_suite
+
+        f = bound_fixture
+        _add_case(db_session, f["suite"])
+        # 未导出 → 门禁应 not_exported
+        pr = _queued_run(db_session, f)
+        assert pr.run_context["dispatch_suite"]["suite_id"] == f["suite"].id
+
+        f["plan"].suite_id = None
+        db_session.commit()
+
+        err = collect_suite_gate_error(db_session, pr)
+        assert err is not None
+        assert err["step"] == "not_exported"
+        assert err["suite_id"] == f["suite"].id
+        assert pr.id in active_run_ids_bound_to_suite(db_session, f["suite"].id)
+
+    def test_gate_uses_frozen_suite_after_plan_rebind(self, db_session, bound_fixture):
+        """#965: prepare 后改绑 B —— 门禁/在途仍锚定冻结 A，与物化一致。"""
+        from backend.services.suite_binding import active_run_ids_bound_to_suite
+
+        f = bound_fixture
+        _export(db_session, f["suite"])
+        pr = _queued_run(db_session, f)
+        frozen_id = f["suite"].id
+
+        suite_b = TestSuite(name="MTBF-other", root_config={}, apk_binding=[])
+        db_session.add(suite_b)
+        db_session.flush()
+        f["plan"].suite_id = suite_b.id
+        db_session.commit()
+
+        # A 已导出 → 仍按 A 放行；B 未导出不会误拦
+        assert collect_suite_gate_error(db_session, pr) is None
+
+        # 搞坏冻结套件 A 的磁盘 → 仍按 A 报错
+        from backend.services.suite_binding import runtask_disk_path
+        runtask_disk_path(f["suite"]).unlink()
+        err = collect_suite_gate_error(db_session, pr)
+        assert err is not None and err["step"] == "not_exported"
+        assert err["suite_id"] == frozen_id
+
+        assert pr.id in active_run_ids_bound_to_suite(db_session, frozen_id)
+        assert pr.id not in active_run_ids_bound_to_suite(db_session, suite_b.id)
 
 
 # ── admission 链集成 ─────────────────────────────────────────────────────────
