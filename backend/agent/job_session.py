@@ -322,16 +322,14 @@ class JobSession:
 
         if not is_reconciler_enabled(self._host_id):
             return
-        if self._handle is None or self._handle.impl is None:
-            return
-        if self._handle.capability in ("skipped", "unavailable"):
+        if self._handle is None:
             return
 
         try:
             from .aee.paths import get_aee_local_root, shanghai_mmdd
             from .aee.device_log_event_client import DeviceLogEventClient
             from .aee.collector import get_collector_for_platform
-            from .device_platform import detect_device_platform
+            from .device_platform import PLATFORM_UNISOC, detect_device_platform
 
             local_root = get_aee_local_root()
             run_date_stamp = (
@@ -342,6 +340,29 @@ class JobSession:
             reconciler_cls = self._resolve_reconciler_class(platform)
             if reconciler_cls is None:
                 return
+
+            cap = self._handle.capability
+            # #1043: UNISOC 实时链靠 reconciler（不依赖 MTK AEE inotifyd）。
+            # capability=unavailable/skipped 且无 DeviceLogWatcher 时仍可启动，
+            # 使用独立 SignalEmitter；MTK 等其它平台保持原门禁。
+            if cap in ("skipped", "unavailable"):
+                if (platform or "").strip().upper() != PLATFORM_UNISOC:
+                    return
+                logger.info(
+                    "platform_reconciler_start_degraded platform=UNISOC job=%d cap=%s",
+                    self._job_id, cap,
+                )
+            elif self._handle.impl is None:
+                return
+
+            emitter = self._reconciler_signal_emitter()
+            if emitter is None:
+                logger.warning(
+                    "platform_reconciler_skip_no_emitter job=%d platform=%s",
+                    self._job_id, platform,
+                )
+                return
+
             device_log_client = DeviceLogEventClient.from_env(
                 api_url=self._manager.get_dep("api_url") or "",
                 agent_secret=self._manager.get_dep("agent_secret") or "",
@@ -355,7 +376,7 @@ class JobSession:
                     plan_run_id = None
 
             self._reconciler = reconciler_cls(
-                signal_emitter=self._handle.impl.emitter,
+                signal_emitter=emitter,
                 state_store=self._manager.get_dep("local_db"),
                 serial=self._serial,
                 job_id=self._job_id,
@@ -383,6 +404,24 @@ class JobSession:
                     self._handle.impl.set_aee_reconciler_active(False)
             except Exception:
                 pass
+
+    def _reconciler_signal_emitter(self):
+        """Prefer watcher emitter; UNISOC degraded path builds a standalone one (#1043)."""
+        if self._handle is not None and self._handle.impl is not None:
+            return self._handle.impl.emitter
+        local_db = self._manager.get_dep("local_db")
+        if local_db is None:
+            return None
+        from .watcher.emitter import SignalEmitter
+
+        return SignalEmitter(
+            local_db=local_db,
+            job_id=self._job_id,
+            host_id=self._host_id,
+            device_serial=self._serial,
+            fencing_token=str(self._payload.get("fencing_token") or ""),
+            agent_instance_id=str(self._manager.get_dep("agent_instance_id") or ""),
+        )
 
     def _handle_start_failure(self, exc: WatcherStartError) -> None:
         """按 policy.on_unavailable 决策 Job 走向。"""
