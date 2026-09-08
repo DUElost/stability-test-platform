@@ -23,6 +23,7 @@ from saq import Job, Queue, Worker
 
 from backend.tasks.saq_tasks import SAQ_FUNCTIONS
 from backend.core.metrics import record_saq_task
+from backend.core.redis import redact_redis_url
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ async def verify_redis_connectivity(
     try:
         await asyncio.wait_for(client.ping(), timeout=ping_timeout)
     except Exception as exc:
-        raise RuntimeError(f"Redis unreachable at {url}: {exc}") from exc
+        raise RuntimeError(f"Redis unreachable at {redact_redis_url(url)}: {exc}") from exc
     finally:
         await client.aclose()
 
