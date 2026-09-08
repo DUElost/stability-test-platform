@@ -71,6 +71,7 @@ _WAITING_EXECUTION_STATES = {
     "PATROL_SLEEP",
     "WAITING_BARRIER",
 }
+_KNOWN_EXECUTION_STATES = _WAITING_EXECUTION_STATES | {"EXECUTING_STEP"}
 
 
 def _coordinator_heartbeats(db, jobs) -> dict[tuple[int, str], "datetime | None"]:
@@ -491,39 +492,71 @@ def _mark_running_timeout(
     reason: str,
     *,
     coordinator_heartbeat_deadline: datetime | None = None,
+    execution_heartbeat_deadline: datetime | None = None,
+    require_unreported: bool = False,
 ) -> bool:
     """RUNNING timeout → UNKNOWN (ADR-0019 Phase 4c).
 
     Lease stays ACTIVE — the device remains blocked. Reconciler will
     finalize (UNKNOWN→FAILED + release lease) after the grace period.
 
-    ADR-0026 Step 5b.6: when the timeout decision is based on a per-host
-    coordinator clock (WAITING_*/PATROL_SLEEP jobs), the WHERE clause must
-    re-assert that the coordinator heartbeat is STILL stale — a fresh
-    heartbeat arriving between SELECT and UPDATE must veto the transition.
+    CAS re-checks the same liveness signal used for the timeout verdict
+    (#991 / R06-F06) — never ``updated_at``. Batch lease renewals pin
+    ``updated_at`` while only refreshing ``last_execution_heartbeat_at``;
+    binding CAS to ``updated_at`` would still flip healthy EXECUTING jobs.
+
+    ADR-0026 Step 5b.6: coordinator-dependent timeouts re-assert the
+    coordinator clock; EXECUTING_STEP timeouts re-assert the execution
+    heartbeat; unreported jobs require execution_state still unknown.
     """
     if job.status != JobStatus.RUNNING.value:
         return False
 
     old_status = job.status
-    observed_updated_at = job.updated_at
 
     conditions = [
         JobInstance.id == job.id,
         JobInstance.status == JobStatus.RUNNING.value,
-        JobInstance.updated_at == observed_updated_at,
     ]
 
     if coordinator_heartbeat_deadline is not None:
         from backend.models.plan_run import PlanRunHost as _PRH
+        # Still missing a coordinator signal, OR the signal remains stale.
+        has_coord_row = exists(
+            select(1).where(
+                _PRH.plan_run_id == JobInstance.plan_run_id,
+                _PRH.host_id == JobInstance.host_id,
+                _PRH.coordinator_heartbeat_at.isnot(None),
+            )
+        )
+        stale_coord = exists(
+            select(1).where(
+                _PRH.plan_run_id == JobInstance.plan_run_id,
+                _PRH.host_id == JobInstance.host_id,
+                _PRH.coordinator_heartbeat_at.isnot(None),
+                _PRH.coordinator_heartbeat_at <= coordinator_heartbeat_deadline,
+            )
+        )
+        conditions.append(or_(~has_coord_row, stale_coord))
         conditions.append(
-            exists(
-                select(1).where(
-                    _PRH.plan_run_id == JobInstance.plan_run_id,
-                    _PRH.host_id == JobInstance.host_id,
-                    _PRH.coordinator_heartbeat_at.isnot(None),
-                    _PRH.coordinator_heartbeat_at <= coordinator_heartbeat_deadline,
-                )
+            JobInstance.execution_state.in_(list(_WAITING_EXECUTION_STATES)),
+        )
+
+    if execution_heartbeat_deadline is not None:
+        conditions.append(JobInstance.execution_state == "EXECUTING_STEP")
+        conditions.append(
+            or_(
+                JobInstance.last_execution_heartbeat_at.is_(None),
+                JobInstance.last_execution_heartbeat_at
+                <= execution_heartbeat_deadline,
+            )
+        )
+
+    if require_unreported:
+        conditions.append(
+            or_(
+                JobInstance.execution_state.is_(None),
+                JobInstance.execution_state.notin_(list(_KNOWN_EXECUTION_STATES)),
             )
         )
 
@@ -881,22 +914,25 @@ def recycle_once() -> None:
                 job_deadline = now - timedelta(seconds=timeout_seconds)
                 if anchor is None or anchor >= job_deadline:
                     continue
-                # ADR-0026 Step 5b.6: coordinator-dependent timeouts carry
-                # the deadline into the UPDATE CAS so a fresh coordinator
-                # heartbeat arriving between SELECT and UPDATE vetoes the
-                # transition.
+                # ADR-0026 Step 5b.6 + #991: CAS re-checks the same liveness
+                # signal that produced the timeout verdict — never updated_at.
                 coord_deadline: datetime | None = None
-                if (
-                    job.execution_state in _WAITING_EXECUTION_STATES
-                    and coord_hb.get((job.plan_run_id, job.host_id)) is not None
-                ):
+                exec_deadline: datetime | None = None
+                require_unreported = False
+                if job.execution_state == "EXECUTING_STEP":
+                    exec_deadline = job_deadline
+                elif job.execution_state in _WAITING_EXECUTION_STATES:
                     coord_deadline = job_deadline
+                else:
+                    require_unreported = True
                 try:
                     with db.begin_nested():
                         _mark_running_timeout(
                             db, job, now,
                             "running_timeout: no completion within window",
                             coordinator_heartbeat_deadline=coord_deadline,
+                            execution_heartbeat_deadline=exec_deadline,
+                            require_unreported=require_unreported,
                         )
                 except Exception:
                     logger.exception(

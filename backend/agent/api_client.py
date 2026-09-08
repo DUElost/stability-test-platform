@@ -22,6 +22,15 @@ RUN_TERMINAL_STATUS_MAP = {
 }
 
 
+class TerminalReportLostError(Exception):
+    """Terminal fact reached neither the backend nor the local outbox.
+
+    #1005: complete_job 双故障（HTTP 失败 + enqueue_terminal 失败）。调用方
+    不得把结果伪装成已 deferred——active_job_registry 记录是唯一的恢复
+    依据，必须保留到远端或 outbox 能确认。
+    """
+
+
 def _get_agent_secret() -> str:
     return os.getenv("AGENT_SECRET", "")
 
@@ -211,12 +220,22 @@ def complete_job(
     fencing_token: str,
     local_db=None,
 ) -> None:
-    """Report job terminal state. Writes to local outbox first for durability."""
+    """Report job terminal state. Writes to local outbox first for durability.
+
+    Outcome triage (#1005):
+    - 远端确认（HTTP ok）: ack outbox（若有）后返回;
+    - 仅本地持久化（enqueue ok + HTTP 失败）: 打 deferred 日志返回，outbox
+      drain 会补送;
+    - 两者均失败: raise :class:`TerminalReportLostError`——不得伪称已
+      deferred；本地 active 记录由清理路径保留作恢复依据。
+    """
     complete_payload = _build_complete_payload(payload, fencing_token)
 
+    outbox_ok = False
     if local_db is not None:
         try:
             local_db.enqueue_terminal(job_id, complete_payload)
+            outbox_ok = True
         except Exception as e:
             logger.warning("outbox_enqueue_failed job=%d: %s", job_id, e)
 
@@ -226,16 +245,24 @@ def complete_job(
             complete_payload,
             context=f"job_complete:{job_id}",
         )
-        if local_db is not None:
+        if local_db is not None and outbox_ok:
             try:
                 local_db.ack_terminal(job_id)
             except Exception:
                 pass
-    except Exception:
-        if local_db is not None:
+    except Exception as exc:
+        if local_db is not None and outbox_ok:
             logger.warning(
                 "complete_job_deferred_to_outbox job=%d", job_id,
             )
+        elif local_db is not None:
+            logger.error(
+                "complete_job_terminal_lost job=%d — HTTP failed and outbox "
+                "enqueue failed; keeping active recovery record", job_id,
+            )
+            raise TerminalReportLostError(
+                f"terminal fact for job {job_id} reached neither backend nor outbox"
+            ) from exc
         else:
             raise
 

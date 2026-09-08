@@ -407,10 +407,18 @@ def test_postgresql_heartbeat_wins_against_stale_timeout_candidate(engine):
     stale_at = now - timedelta(
         seconds=recycler.RUNNING_HEARTBEAT_TIMEOUT_SECONDS + 60,
     )
-    seed = _seed_running_job(started_at=stale_at, updated_at=stale_at)
+    seed = _seed_running_job(
+        started_at=stale_at,
+        updated_at=stale_at,
+        execution_state="EXECUTING_STEP",
+        last_execution_heartbeat_at=stale_at,
+    )
     barrier = threading.Barrier(2)
     timeout_results: list[bool] = []
     errors: list[Exception] = []
+    job_deadline = now - timedelta(
+        seconds=recycler.RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
+    )
 
     def timeout_worker():
         db = SessionLocal()
@@ -421,6 +429,7 @@ def test_postgresql_heartbeat_wins_against_stale_timeout_candidate(engine):
             timeout_results.append(
                 recycler._mark_running_timeout(
                     db, stale_job, now, "running_timeout",
+                    execution_heartbeat_deadline=job_deadline,
                 ),
             )
             db.commit()
@@ -437,7 +446,11 @@ def test_postgresql_heartbeat_wins_against_stale_timeout_candidate(engine):
                 JobInstance.id == seed["job_id"],
                 JobInstance.status == JobStatus.RUNNING.value,
             ).update(
-                {JobInstance.updated_at: now},
+                {
+                    JobInstance.last_execution_heartbeat_at: now,
+                    # Pin updated_at — mirrors extend-batch (#991).
+                    JobInstance.updated_at: stale_at,
+                },
                 synchronize_session=False,
             )
             db.commit()
@@ -464,7 +477,8 @@ def test_postgresql_heartbeat_wins_against_stale_timeout_candidate(engine):
         try:
             job = db.get(JobInstance, seed["job_id"])
             assert job.status == JobStatus.RUNNING.value
-            assert job.updated_at == now
+            assert job.last_execution_heartbeat_at == now
+            assert job.updated_at == stale_at
         finally:
             db.close()
     finally:
@@ -618,7 +632,60 @@ def test_running_timeout_cas_does_not_overwrite_concurrent_completion(engine, mo
 
 
 def test_running_timeout_cas_does_not_overwrite_concurrent_heartbeat(engine, monkeypatch):
-    """候选读取后心跳刷新 updated_at 时，recycler CAS 必须失败并保留 RUNNING。"""
+    """候选读取后执行心跳刷新时，recycler CAS 必须失败并保留 RUNNING（#991）。
+
+    模拟 extend-batch：只刷新 last_execution_heartbeat_at，钉住 updated_at。
+    """
+    from sqlalchemy import update as sa_update
+
+    now = datetime.now(timezone.utc)
+    old_time = now - timedelta(seconds=recycler.RUNNING_HEARTBEAT_TIMEOUT_SECONDS + 60)
+    seed = _seed_running_job(
+        started_at=old_time,
+        updated_at=old_time,
+        execution_state="EXECUTING_STEP",
+        last_execution_heartbeat_at=old_time,
+    )
+    job_deadline = now - timedelta(
+        seconds=recycler.RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
+    )
+    _patch_recycler_neutrals(monkeypatch)
+    try:
+        stale_db = SessionLocal()
+        try:
+            stale_job = stale_db.get(JobInstance, seed["job_id"])
+            assert stale_job is not None
+
+            with SessionLocal.begin() as concurrent_db:
+                concurrent_db.execute(
+                    sa_update(JobInstance)
+                    .where(JobInstance.id == seed["job_id"])
+                    .values(
+                        last_execution_heartbeat_at=now,
+                        updated_at=old_time,
+                    )
+                )
+
+            flipped = recycler._mark_running_timeout(
+                stale_db, stale_job, now, "test_heartbeat_race",
+                execution_heartbeat_deadline=job_deadline,
+            )
+            stale_db.commit()
+
+            assert flipped is False
+            stale_db.expire_all()
+            running = stale_db.get(JobInstance, seed["job_id"])
+            assert running.status == JobStatus.RUNNING.value
+            assert running.last_execution_heartbeat_at == now
+            assert running.updated_at == old_time
+        finally:
+            stale_db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_running_timeout_cas_not_vetoed_by_updated_at_only_refresh(engine, monkeypatch):
+    """#991: 仅刷新 updated_at（租约续租钉住字段的逆操作）不得阻止真正超时。"""
     from sqlalchemy import update as sa_update
 
     now = datetime.now(timezone.utc)
@@ -639,15 +706,15 @@ def test_running_timeout_cas_does_not_overwrite_concurrent_heartbeat(engine, mon
                 )
 
             flipped = recycler._mark_running_timeout(
-                stale_db, stale_job, now, "test_heartbeat_race",
+                stale_db, stale_job, now, "test_updated_at_irrelevant",
+                require_unreported=True,
             )
             stale_db.commit()
 
-            assert flipped is False
+            assert flipped is True
             stale_db.expire_all()
-            running = stale_db.get(JobInstance, seed["job_id"])
-            assert running.status == JobStatus.RUNNING.value
-            assert running.updated_at > old_time
+            unknown = stale_db.get(JobInstance, seed["job_id"])
+            assert unknown.status == JobStatus.UNKNOWN.value
         finally:
             stale_db.close()
     finally:
