@@ -13,8 +13,9 @@
 2. **脚本三件套** `mtbf_setup`（init）/ `mtbf_check`（patrol，PROGRESS 打戳）/ `mtbf_finish`（teardown），
    从 `deploy/run/stop.ps1 + lib.ps1` 移植为 Python；params 见 §3.2。
 3. **配置/产物通道推荐**：清单与全局参数放**中心存储** `{STP_AEE_NFS_ROOT}/mtbf/{project}/`（控制面导出 / Agent 直接读），
-   APK 放 **Agent resources 目录**（`aimonkey` bundle 先例）；逐条结果写 `{STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}.json`，
-   为 P1 export / P2 `test_case_result` 铺路。
+   APK 放 **Agent resources 目录**（`aimonkey` bundle 先例）；逐条结果写 `{STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}__job{job_id}__{serial}.json`，
+   为 P1 export / P2 `test_case_result` 铺路（`run_dir` 是设备本地毫秒时间戳、非全局
+   唯一，v1.5.0 起文件名带 job/serial 稳定身份防跨设备覆盖，见 #1030）。
 4. **结果回填**：摘要 metrics + `suite_sha256` 走 step_trace（stdout JSON）；**逐条结果不进 stdout**
    （`step_trace.output` 64KiB 截断，`_MAX_STEP_OUTPUT_CHARS`）；P0 不扩 JobArtifact 白名单（评审定调）。
 5. **预览/校验 API**：单端点 `POST /api/v1/mtbf/runtask/validate`（multipart 主路径），预览 + 校验合一。
@@ -178,7 +179,7 @@
      v1.2.0 误以 `{local}/{run_dir}/` 定位导致「结果文件缺失」；修正后含 adb 版本差异兜底。
 3. **解析**（ElementTree）：按 §2.2 schema、§2.3 状态派生；**以 testpoint name 为 join 键**；聚合 rounds、统计 PASS/FAILURE/ERROR。
 4. **摘要 metrics**：`{rounds, entries, testpoint_count, passed, failed, error, suite_sha256, run_dir, duration_ms}`；无结果文件 → `success=false`（或 `partial` 标记，P0 取失败 + error_message）。
-5. **逐条结果落盘**：解析后的完整 JSON（testpoint 列表含 testcase/failure 消息）→ `{STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}.json`（Agent 写中心存储——NFS 权限需在部署时确认可写，见 §4.4）→ `metrics.detail_uri`。
+5. **逐条结果落盘**：解析后的完整 JSON（testpoint 列表含 testcase/failure 消息）→ `{STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}__job{job_id}__{serial}.json`（Agent 写中心存储——NFS 权限需在部署时确认可写，见 §4.4）→ `metrics.detail_uri`。
 6. stdout JSON 只带摘要（**不带逐条**——64KiB 截断风险，见 §0.4）。
 
 ### 3.6 版本目录与文件布局
@@ -211,7 +212,7 @@ backend/agent/scripts/
 
 - **清单/全局参数**：`{STP_AEE_NFS_ROOT}/mtbf/{project}/runtask.xml`、`UiAutomatorTestData.xml`——P0 由控制面从工具目录手动/脚本同步，P1 由 `export-to-tool-dir` 写入（同一路径）。
 - **APK**：`{mtbf_resources_dir}/{project}/`（Agent 本地，带外部署，参照 `aimonkey_paths.py` 的 bundle 解析先例）。
-- **结果**：`{STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}.json`（Agent 写回，控制面可读——P2 `test_case_result` 入库的数据源）。
+- **结果**：`{STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}__job{job_id}__{serial}.json`（Agent 写回，控制面可读——P2 `test_case_result` 入库的数据源）。
 - 与 PowerCycle 专项统一：同模式（配置走中心存储、工具走 resources），P0 实施时在专项接入 PR 里对齐目录约定。
 
 ### 4.4 中心存储目录布局（存储角色表增补建议）
@@ -221,7 +222,7 @@ backend/agent/scripts/
 ├── mtbf/
 │   ├── {project}/runtask.xml            # 清单（P0 同步 / P1 export 写）
 │   ├── {project}/UiAutomatorTestData.xml
-│   └── {project}/results/{run_dir}.json # 逐条结果（Agent 写）
+│   └── {project}/results/{run_dir}__job{job_id}__{serial}.json # 逐条结果（Agent 写）
 └── (既有 dedup/ devices/ jira/ 不变)
 ```
 
@@ -255,7 +256,7 @@ POST /api/v1/mtbf/runtask/validate
 ```
 mtbf_finish stdout JSON（摘要） ──► step_trace.output（≤64KiB，安全）
 mtbf_finish metrics             ──► step_trace 展示 / PlanRun 详情
-逐条结果 JSON                    ──► {STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}.json
+逐条结果 JSON                    ──► {STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}__job{job_id}__{serial}.json
                                      └─ metrics.detail_uri（step_trace 可点查）
 ```
 
@@ -288,7 +289,7 @@ Plan: MTBF-专项-冒烟（specialty=MTBF, project 占位 legacy）
 ## 7. 与 P1/P2 的衔接与开放问题
 
 - **P1 衔接**：import 从真实 runtask.xml 建库；export 写 `{NFS}/mtbf/{project}/runtask.xml`（与 P0 消费路径相同）——「管理面升级、消费面不变」落地点；`project` 字符串 → `test_project.project_id` 映射 + D3b 门禁。
-- **P2 衔接**：`test_case_result` 数据源 = `{NFS}/mtbf/{project}/results/{run_dir}.json`；artifact 白名单扩展 `report` 供下载。
+- **P2 衔接**：`test_case_result` 数据源 = `{NFS}/mtbf/{project}/results/{run_dir}__job{job_id}__{serial}.json`；artifact 白名单扩展 `report` 供下载。
 - 开放问题（P0 实施 PR 内关闭）：
   1. Agent 对 `{STP_AEE_NFS_ROOT}/mtbf/` 的**写权限**（results/ 子目录 mkdir+写）——部署时实测确认，不行则结果先落 Agent 本地再由控制面收取（回退路径）；
   2. APK 安装幂等策略：`install_apks=true` 时是否每次重装（建议：versionName 相同则跳过，节省 7 天长跑重启场景的部署时间）；

@@ -1,7 +1,8 @@
 """TestCaseResult ORM — ADR-0030 P2 逐条用例结果。
 
-数据源 = 中心存储 ``mtbf/{project}/results/{run_dir}.json``（``mtbf_finish``
-产出）。按 Job 摄入、PlanRun 维度查询。
+数据源 = 中心存储 ``mtbf/{project}/results/{run_dir}__job{job_id}__{serial}.json``
+（``mtbf_finish`` 产出，v1.5.0 起文件名带 job/serial 稳定身份）。按 Job 摄入、
+PlanRun 维度查询。
 """
 
 from __future__ import annotations

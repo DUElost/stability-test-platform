@@ -255,7 +255,7 @@ export interface PipelineTemplate {
 }
 
 export interface AgentLogOut {
-  host_id: number;
+  host_id: string;  // #940: Host.id 字符串 PK 契约
   log_path: string;
   content: string;
   lines_read: number;
