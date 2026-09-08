@@ -511,6 +511,70 @@ async def test_scan_task_enqueues_upload_then_merge(monkeypatch):
     functions = [c.kwargs["function"] for c in mock_job_cls.call_args_list]
     assert functions == ["upload_task", "merge_task"]
     assert "extract_task" not in functions
+    keys = [c.kwargs["key"] for c in mock_job_cls.call_args_list]
+    assert keys[0].startswith("upload:42:")
+    assert keys[1].startswith("merge:42:")
+    assert keys[0] != "upload:42"
+    assert keys[1] != "merge:42"
+
+
+@pytest.mark.asyncio
+async def test_scan_task_enqueues_distinct_keys_per_round(monkeypatch):
+    """#1111: incremental vs final must not share upload/merge SAQ keys."""
+    from backend.tasks import saq_tasks
+
+    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    keys_by_run: list[list[str]] = []
+    round_times = iter([
+        datetime(2026, 9, 8, 10, 0, 0, tzinfo=timezone.utc),
+        datetime(2026, 9, 8, 12, 0, 0, tzinfo=timezone.utc),
+    ])
+
+    class _FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(round_times)
+
+    monkeypatch.setattr(saq_tasks, "datetime", _FixedDateTime)
+
+    async def fake_to_thread(fn, *a, **kw):
+        if fn is scan_sync:
+            return "1"
+        if fn is hosts_done:
+            return 1
+        return fn(*a, **kw)
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock(return_value=object())
+
+    for is_final in (False, True):
+        with _scan_task_env(
+            saq_tasks, monkeypatch, [("host-1", "ONLINE")],
+            to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
+            hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        ) as mock_job_cls:
+            await saq_tasks.scan_task({}, plan_run_id=7, is_final=is_final)
+            keys_by_run.append([c.kwargs["key"] for c in mock_job_cls.call_args_list])
+
+    inc_keys, final_keys = keys_by_run
+    assert inc_keys[0].startswith("upload:7:")
+    assert final_keys[0].startswith("upload:7:")
+    assert inc_keys != final_keys, "rounds must not reuse upload/merge keys"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_or_raise_on_dedup_none():
+    """#1111: SAQ key collision (enqueue→None) must be observable / fail."""
+    from backend.tasks import saq_tasks
+    from saq import Job as SaqJob
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock(return_value=None)
+    job = SaqJob(function="merge_task", kwargs={"plan_run_id": 1}, key="merge:1:x")
+    with pytest.raises(RuntimeError, match="saq enqueue deduped"):
+        await saq_tasks._enqueue_or_raise(
+            queue, job, plan_run_id=1, what="merge_task",
+        )
 
 
 @pytest.mark.asyncio
