@@ -14,7 +14,9 @@ import { cn } from '@/lib/utils';
 interface AddDeviceModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (data: { serial: string; model?: string; host_id?: number; tags?: string[] }) => void;
+  // #953: Host.id 是字符串 PK（如 "192-168-1-200"）——host_id 不再收窄为
+  // 正整数，提交原样字符串，存在性由后端校验。
+  onSubmit: (data: { serial: string; model?: string; host_id?: string; tags?: string[] }) => void;
   isSubmitting?: boolean;
 }
 
@@ -39,8 +41,8 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
     if (!formData.serial.trim()) newErrors.serial = '请输入设备序列号';
-    if (formData.host_id && (!Number.isInteger(Number(formData.host_id)) || Number(formData.host_id) < 1)) {
-      newErrors.host_id = '主机 ID 须为正整数';
+    if (formData.host_id.trim() && !/^[A-Za-z0-9._:-]+$/.test(formData.host_id.trim())) {
+      newErrors.host_id = '主机 ID 格式不合法（字母/数字/._:-）';
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -50,11 +52,12 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
     e.preventDefault();
     if (!validate()) return;
 
-    const data: { serial: string; model?: string; host_id?: number; tags?: string[] } = {
+    const data: { serial: string; model?: string; host_id?: string; tags?: string[] } = {
       serial: formData.serial.trim(),
     };
     if (formData.model.trim()) data.model = formData.model.trim();
-    if (formData.host_id) data.host_id = Number(formData.host_id);
+    const hostId = formData.host_id.trim();
+    if (hostId) data.host_id = hostId;
     if (formData.tags.trim()) {
       data.tags = formData.tags.split(',').map((t) => t.trim()).filter(Boolean);
     }
@@ -121,11 +124,10 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
             </label>
             <input
               id="device-host"
-              type="number"
-              min={1}
+              type="text"
               value={formData.host_id}
               onChange={(e) => setFormData({ ...formData, host_id: e.target.value })}
-              placeholder="例如：1（可选）"
+              placeholder="例如：192-168-1-200（可选）"
               className={fieldClass(!!errors.host_id)}
               disabled={isSubmitting}
             />
