@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Set
 
 from ..watcher.contracts import ContractViolation
+from .mobilelog import make_adb_pull_fn
 from .paths import get_aee_local_root
 from .reconciler import (
     ReconcilerStats,
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 _UNISOC_STATE_PREFIX = "watcher:unisoc"
 _PROCESSED_SUFFIX = "processed_event_dirs"
+_DEVICE_UNIVIEW_ROOTS = ("/data/uniview", "/data/vendor/uniview")
 
 
 def _unisoc_watcher_root(local_root: Path, run_date_stamp: Optional[str], serial: str) -> Path:
@@ -31,7 +34,7 @@ def _unisoc_watcher_root(local_root: Path, run_date_stamp: Optional[str], serial
 
 
 class UnisocUniviewReconciler:
-    """Poll local uniview watcher tree and emit UNIVIEW reconciler signals."""
+    """Pull device uniview dirs → local tree → emit UNIVIEW reconciler signals."""
 
     def __init__(
         self,
@@ -50,6 +53,7 @@ class UnisocUniviewReconciler:
         device_log_client: Any = None,
         platform_collector: Any = None,
         shell_fn: Optional[Callable[[str, int], Optional[str]]] = None,
+        pull_fn: Optional[Callable[[str, str, int], bool]] = None,
         **_: Any,
     ) -> None:
         self._emitter = signal_emitter
@@ -76,6 +80,7 @@ class UnisocUniviewReconciler:
         self._shell_fn = shell_fn or _make_interruptible_adb_shell_fn(
             self._serial, self._adb_path, self._stop_evt,
         )
+        self._pull_fn = pull_fn or make_adb_pull_fn(self._serial, self._adb_path)
         self._processed: Set[str] = set()
         self._state_lock = threading.Lock()
         self._max_consecutive_tick_errors = _env_int(
@@ -121,7 +126,8 @@ class UnisocUniviewReconciler:
         if self._state_store is None:
             return
         try:
-            raw = self._state_store.get(self._state_key())
+            # LocalDb / StateStore API is get_state/set_state (#806/#1043).
+            raw = self._state_store.get_state(self._state_key(), "")
             if raw:
                 self._processed = set(json.loads(raw))
         except Exception:
@@ -131,7 +137,9 @@ class UnisocUniviewReconciler:
         if self._state_store is None:
             return
         try:
-            self._state_store.set(self._state_key(), json.dumps(sorted(self._processed)))
+            self._state_store.set_state(
+                self._state_key(), json.dumps(sorted(self._processed)),
+            )
         except Exception:
             logger.debug("unisoc_reconciler_state_save_failed", exc_info=True)
 
@@ -156,9 +164,13 @@ class UnisocUniviewReconciler:
         self.stats.ticks_total += 1
         root = _unisoc_watcher_root(self._local_root, self._run_date_stamp, self._serial)
         root.mkdir(parents=True, exist_ok=True)
+        # #1043: produce local tree from device before emit loop.
+        self._sync_device_events_to_local(root)
         emitted = 0
         for event_dir in sorted(root.iterdir()):
             if not event_dir.is_dir():
+                continue
+            if event_dir.name.startswith("."):
                 continue
             key = event_dir.name
             with self._state_lock:
@@ -175,6 +187,73 @@ class UnisocUniviewReconciler:
             self.stats.new_entries_total += emitted
             self._save_processed_state()
         return emitted
+
+    def _sync_device_events_to_local(self, root: Path) -> int:
+        """adb-list + pull new uniview event dirs into ``uniview_watcher`` (#1043)."""
+        pulled = 0
+        for remote_root in _DEVICE_UNIVIEW_ROOTS:
+            if self._stop_evt.is_set():
+                break
+            listing = self._shell_fn(f"ls -1 {remote_root} 2>/dev/null", 30)
+            if not listing:
+                continue
+            for name in listing.splitlines():
+                name = name.strip()
+                if not name or name in {".", ".."} or "/" in name:
+                    continue
+                with self._state_lock:
+                    if name in self._processed:
+                        continue
+                local_dir = root / name
+                if (local_dir / "unievent_info.json").is_file():
+                    continue
+                remote_dir = f"{remote_root}/{name}"
+                info = self._shell_fn(
+                    f"ls {remote_dir}/unievent_info.json 2>/dev/null", 10,
+                )
+                if not info:
+                    continue
+                if self._pull_event_dir(remote_dir, local_dir):
+                    pulled += 1
+        if pulled:
+            logger.info(
+                "unisoc_reconciler_pulled serial=%s job=%d count=%d",
+                self._serial, self._job_id, pulled,
+            )
+        return pulled
+
+    def _pull_event_dir(self, remote_dir: str, local_dir: Path) -> bool:
+        """Pull remote event directory; flatten ``adb pull`` nested basename if needed."""
+        local_dir.mkdir(parents=True, exist_ok=True)
+        staging = local_dir.parent / f".pulling_{local_dir.name}"
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True, exist_ok=True)
+        try:
+            if not self._pull_fn(remote_dir, str(staging), 180):
+                return False
+            # adb pull dir → staging/<basename>/… or staging files
+            nested = staging / local_dir.name
+            source = nested if nested.is_dir() else staging
+            if not (source / "unievent_info.json").is_file():
+                # one more nesting level sometimes
+                candidates = [
+                    p for p in staging.rglob("unievent_info.json") if p.is_file()
+                ]
+                if not candidates:
+                    return False
+                source = candidates[0].parent
+            if local_dir.exists():
+                shutil.rmtree(local_dir, ignore_errors=True)
+            shutil.copytree(source, local_dir)
+            return (local_dir / "unievent_info.json").is_file()
+        except Exception:
+            logger.debug(
+                "unisoc_reconciler_pull_failed remote=%s", remote_dir, exc_info=True,
+            )
+            return False
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
     def _emit_event(self, event_dir: Path) -> bool:
         detected_at = datetime.now(timezone.utc)
