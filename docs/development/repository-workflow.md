@@ -76,17 +76,31 @@ Auto-merge 的队列与分支更新以 workflow 和
 
 ## 关单关键词与自动关单
 
-closing keyword（`Closes #N` / `Fixes #N`）由 GitHub 服务端在合入时解析。
-**写法已被 2026-09-07 实测双向证伪为失效因子**：`Fixes #881（`（全角括号紧跟
-issue 号，PR #912，06:21）正常关闭；`Closes #962. `（号后 ASCII 句号+空格，
-字节级干净，PR #980，15:14）未关闭。当日 06:21 前两例全成功、09:33 起五连败
-（#926/#929/#931/#963/#980），与当日 github.com TLS/GraphQL 异常同时段，
-指向**平台侧故障窗口**；分支 commit message 内关键词经 merge commit 合入
-也未触发（#963 实证）。**纪律**：
+closing keyword（`Closes #N` / `Fixes #N`）由 GitHub 服务端在**合入**时解析并
+关闭关联 issue——但仅当**合入执行者是人类身份**。
 
-- 合入后**核销 issue 实际关闭**，未关即手工补关（附证据评论）；
-- 失效排查顺序：平台故障窗口（时间线比对）→ 代码围栏 → base 分支 → 写法；
-- 平台恢复后用下一个带关键词的 PR 复测并回填本节结论。
+**根因（2026-09-08 对账 + 沙盒实验钉死，#1101）**：mergedBy=github-actions
+（GITHUB_TOKEN）的合入不触发 linked-issue 原生关闭，且其产生的
+`pull_request: closed` 事件被级联抑制（不触发新 workflow run）——与
+「GITHUB_TOKEN 事件不产生新 run」同族。mergedBy=DUElost（人类 token）的合入
+4/4 秒级原生关闭。关键词写法（全角括号、句号、空格）均非失效因子；2026-09-07
+「平台故障窗口」假说已证伪（当日 TLS/GraphQL 异常与关单失效仅为时间重合）。
+
+**机制**：auto-merge 由谁最后启用，GitHub 就以谁的身份执行合入。队列
+reconcile（enable-auto-merge.yml / pr-update-branch.yml）以 `AUTO_MERGE_PAT`
+（人类身份 fine-grained PAT，仅限本仓库 Contents/Pull requests RW；未配置时
+回退 GITHUB_TOKEN）启用队首 auto-merge，因此队列合入落在 DUElost 身份上，
+原生关单与事件级联均正常。
+
+**纪律**（不因机制修复而免除）：
+
+- 合入后**核销 issue 实际关闭**（查 issue state，勿以 PR body 为准），未关即
+  手工补关（附证据评论）；
+- `main-ci-backstop.yml` 每日 PASS 后以 `closingIssuesReferences` 兜底补关；
+  其「main 前进即整体跳过」guard 意味着密集合入日可能整天不补——兜底不可
+  依赖，手工核销仍是第一道；
+- 排查顺序：合入执行者身份（`mergedBy`）→ `closingIssuesReferences` 是否
+  建立 → 关键词写法。
 
 ## CI 分层
 
