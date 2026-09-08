@@ -21,6 +21,6 @@ export const logs = {
     }
     return apiClient.get<RuntimeLogQueryResponse>('/logs/query', { params: reqParams }).then(r => r.data);
   },
-  queryAgent: (data: { host_id: number; log_path?: string; lines?: number }) =>
+  queryAgent: (data: { host_id: string; log_path?: string; lines?: number }) =>
     apiClient.post<AgentLogOut>('/agent/logs', data).then(r => r.data),
 };
