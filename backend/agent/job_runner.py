@@ -107,13 +107,25 @@ class JobRunnerState:
         worker_token = local_worker_token or fencing_token
         self.lock_deregister(job_id, fencing_token, worker_token)
         with self.active_jobs_lock:
+            is_current_worker = self.active_job_tokens.get(job_id) in (
+                None, worker_token,
+            )
             if self.running_worker_tokens.get(job_id) == worker_token:
                 self.running_worker_tokens.pop(job_id, None)
             current = self.active_runners.get(job_id)
             if current is not None and current[0] == worker_token:
                 self.active_runners.pop(job_id, None)
-            if self.active_job_tokens.get(job_id) in (None, worker_token):
+            if is_current_worker:
                 self.abort_requested_job_ids.discard(job_id)
+                # #1006: 恢复动作（ABORT_LOCAL/CLEANUP）可能在 worker 退出前
+                # 先行 clear_fencing_token，使 lock_deregister 经 lease_renewer
+                # 映射取不到 device_id → _active_device_ids 占位残留、同设备
+                # 新 Job 被永久 skip_device_busy。release 自带的 device_id 是
+                # worker 上下文快照，本 worker 仍为 current 时在锁内补偿清理
+                # （幂等）。被新 token 取代的旧 worker（is_current_worker=False）
+                # 不得清除新 worker 的设备占位。
+                if device_id is not None:
+                    self.active_device_ids.discard(device_id)
 
 
 def _validate_pipeline_def(pipeline_def: Optional[Dict[str, Any]]) -> Optional[str]:
