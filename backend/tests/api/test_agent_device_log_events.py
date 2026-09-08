@@ -359,3 +359,88 @@ async def test_update_accepts_legacy_unassigned_remote_path(monkeypatch, tmp_pat
         assert exc_info.value.status_code == 400
     finally:
         _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_device_log_events_create_with_client_id_is_idempotent(monkeypatch, tmp_path):
+    """#1051: 预分配 UUID 重放创建不得重复插行。"""
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    client_id = str(uuid4())
+    try:
+        ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.LOCAL.value,
+            local_path="/mnt/hdd/aee_events/dev/ke_idem",
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+            link_signal_seq_no=3,
+        )
+        async with AsyncSessionLocal() as db:
+            r1 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[ev]), db=db, _=None,
+            )
+            r2 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[ev]), db=db, _=None,
+            )
+        assert r1.data["event_ids"] == [client_id]
+        assert r2.data["event_ids"] == [client_id]
+        db = SessionLocal()
+        try:
+            rows = db.query(DeviceLogEvent).filter(
+                DeviceLogEvent.host_id == seed["host_id"],
+            ).all()
+            assert len(rows) == 1
+            assert str(rows[0].id) == client_id
+        finally:
+            db.close()
+    finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_device_log_events_create_dedupes_job_signal_seq(monkeypatch, tmp_path):
+    """#1051: 无 client id 时同 job+signal_seq 重放返回已有行。"""
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    try:
+        ev = DeviceLogEventIn(
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.LOCAL.value,
+            local_path="/mnt/hdd/aee_events/dev/ke_seq",
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+            link_signal_seq_no=11,
+        )
+        async with AsyncSessionLocal() as db:
+            r1 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[ev]), db=db, _=None,
+            )
+            r2 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[ev]), db=db, _=None,
+            )
+        assert r1.data["event_ids"] == r2.data["event_ids"]
+        db = SessionLocal()
+        try:
+            assert (
+                db.query(DeviceLogEvent)
+                .filter(DeviceLogEvent.host_id == seed["host_id"])
+                .count()
+            ) == 1
+        finally:
+            db.close()
+    finally:
+        _cleanup(seed)

@@ -27,7 +27,7 @@ from backend.services.report_service import (
 # Legacy family labels in device_log_event.event_type (#519) plus concrete types
 # written by resolve_device_log_event_type (#215 / #1054). Placeholders
 # (UNKNOWN/CRASH/AEE/其他) still match when event_subtype carries the subtype.
-_DLE_RISK_FAMILY_EVENT_TYPES = frozenset({"AEE", "VENDOR_AEE", "ANR", "CRASH"})
+_DLE_RISK_FAMILY_EVENT_TYPES = frozenset({"AEE", "VENDOR_AEE", "ANR", "CRASH", "UNIVIEW"})
 _DLE_RISK_CONCRETE_EVENT_TYPES = frozenset({
     "ANR",
     "JE",
@@ -51,9 +51,9 @@ _DLE_RISK_PLACEHOLDER_EVENT_TYPES = frozenset(
 _DLE_RISK_EVENT_TYPES = tuple(
     sorted(_DLE_RISK_FAMILY_EVENT_TYPES | _DLE_RISK_CONCRETE_EVENT_TYPES),
 )
-_SIGNAL_RISK_CATEGORIES = ("AEE", "VENDOR_AEE", "ANR")
+_SIGNAL_RISK_CATEGORIES = ("AEE", "VENDOR_AEE", "ANR", "UNIVIEW")
 # Reconciler registers DLE for crash-family signals; MOBILELOG is signal-only (#528).
-_LINK_RATE_CATEGORIES = ("AEE", "VENDOR_AEE")
+_LINK_RATE_CATEGORIES = ("AEE", "VENDOR_AEE", "UNIVIEW")
 _SIGNAL_ONLY_CATEGORIES = ("MOBILELOG",)
 
 

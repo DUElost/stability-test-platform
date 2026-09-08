@@ -2330,28 +2330,72 @@ async def ingest_device_log_events(
                 ) from exc
             row = await db.get(DeviceLogEvent, event_id)
             if row is None:
-                raise HTTPException(status_code=404, detail=f"device_log_event {ev.id} not found")
-            if row.host_id != ev.host_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"device_log_event host_id mismatch: {ev.host_id!r} != {row.host_id!r}",
+                # #1051 / R09-R01: Agent 预分配 id 重试创建 —— 行不存在则插入，
+                # 与「无 id 新建」同形，保证同一 idempotency key 可安全重放。
+                row = DeviceLogEvent(
+                    id=event_id,
+                    serial=ev.serial,
+                    platform=ev.platform,
+                    event_type=ev.event_type,
+                    event_subtype=ev.event_subtype,
+                    detected_at=detected_dt,
+                    device_timestamp=device_ts,
+                    state=ev.state,
+                    local_path=ev.local_path,
+                    remote_path=_validated_remote_path(
+                        ev.remote_path,
+                        plan_run_id=ev.plan_run_id,
+                        event_id=str(event_id),
+                    ),
+                    size_bytes=ev.size_bytes,
+                    checksum=ev.checksum,
+                    plan_run_id=ev.plan_run_id,
+                    host_id=ev.host_id,
+                    job_id=ev.job_id,
+                    signal_seq_no=ev.link_signal_seq_no,
+                    created_at=now,
+                    updated_at=now,
                 )
-            row.state = ev.state
-            effective_plan_run = (
-                ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
-            )
-            row.remote_path = _validated_remote_path(
-                ev.remote_path,
-                plan_run_id=effective_plan_run,
-                event_id=str(row.id),
-                unassigned_fallback=True,
-            )
-            row.checksum = ev.checksum
-            row.size_bytes = ev.size_bytes
-            row.plan_run_id = ev.plan_run_id
-            row.updated_at = now
-            event_id = row.id
+                db.add(row)
+                await db.flush()
+            else:
+                if row.host_id != ev.host_id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            f"device_log_event host_id mismatch: "
+                            f"{ev.host_id!r} != {row.host_id!r}"
+                        ),
+                    )
+                row.state = ev.state
+                effective_plan_run = (
+                    ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
+                )
+                row.remote_path = _validated_remote_path(
+                    ev.remote_path,
+                    plan_run_id=effective_plan_run,
+                    event_id=str(row.id),
+                    unassigned_fallback=True,
+                )
+                row.checksum = ev.checksum
+                row.size_bytes = ev.size_bytes
+                row.plan_run_id = ev.plan_run_id
+                row.updated_at = now
+                event_id = row.id
         else:
+            # #1051: 无 client id 时，同 job+signal_seq 重放返回已有行（创建幂等）。
+            if ev.job_id is not None and ev.link_signal_seq_no is not None:
+                existing = (await db.execute(
+                    select(DeviceLogEvent).where(
+                        DeviceLogEvent.job_id == ev.job_id,
+                        DeviceLogEvent.signal_seq_no == ev.link_signal_seq_no,
+                    )
+                )).scalars().first()
+                if existing is not None:
+                    event_id = existing.id
+                    upserted += 1
+                    event_ids.append(str(event_id))
+                    continue
             row = DeviceLogEvent(
                 serial=ev.serial,
                 platform=ev.platform,
