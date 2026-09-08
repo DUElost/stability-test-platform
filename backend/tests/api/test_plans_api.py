@@ -114,6 +114,43 @@ class TestPlanCRUD:
         assert resp.status_code == 201, resp.text
         assert resp.json()["data"]["steps"][0]["params"] is None
 
+    def test_create_plan_step_key_at_length_limit(self, client, auth_headers, sample_script):
+        """#938：step_key 上限 128（= step_trace.step_id VARCHAR(128)）——恰 128 可存。"""
+        name = _uniq("plan_len128")
+        key = "k" * 128
+        resp = client.post("/api/v1/plans", json={
+            "name": name,
+            "steps": [{"step_key": key, "script_name": "check_device",
+                       "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                       "timeout_seconds": 30}],
+            "project_key": "GENERIC", "specialty_key": "ops",
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["data"]["steps"][0]["step_key"] == key
+
+    def test_create_plan_rejects_overlong_step_key(self, client, auth_headers, sample_script):
+        """#938：129 字符保存即 422——否则下发原样作 step_id，回传写
+        step_trace.step_id VARCHAR(128) 时炸掉同批事务。"""
+        name = _uniq("plan_len129")
+        resp = client.post("/api/v1/plans", json={
+            "name": name,
+            "steps": [{"step_key": "k" * 129, "script_name": "check_device",
+                       "script_version": "1.0.0", "stage": "init", "sort_order": 0}],
+            "project_key": "GENERIC", "specialty_key": "ops",
+        }, headers=auth_headers)
+        assert resp.status_code == 422
+
+    def test_create_plan_rejects_empty_step_key(self, client, auth_headers, sample_script):
+        """#938：空 step_key 同样在保存入口拒绝（Pipeline schema 仅非空，入口对齐）。"""
+        name = _uniq("plan_empty_key")
+        resp = client.post("/api/v1/plans", json={
+            "name": name,
+            "steps": [{"step_key": "", "script_name": "check_device",
+                       "script_version": "1.0.0", "stage": "init", "sort_order": 0}],
+            "project_key": "GENERIC", "specialty_key": "ops",
+        }, headers=auth_headers)
+        assert resp.status_code == 422
+
     def test_update_plan_step_params(self, client, auth_headers, sample_script):
         """#508：PUT 全量替换 step 行时 params 持久化。"""
         name = _uniq("plan_params_update")

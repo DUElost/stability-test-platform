@@ -58,7 +58,9 @@ def _require_plan_owner_or_admin(plan: Plan, user: User) -> None:
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class PlanStepIn(BaseModel):
-    step_key: str
+    # #938: step_key 原样作为下发 step_id 落 step_trace.step_id VARCHAR(128)，
+    # 129–256 字符会在回传写入时炸掉同批事务——在保存入口统一上限。
+    step_key: str = Field(min_length=1, max_length=128)
     script_name: str
     script_version: str
     stage: str = Field(..., pattern="^(init|patrol|teardown)$")
