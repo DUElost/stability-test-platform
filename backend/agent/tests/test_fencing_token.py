@@ -630,3 +630,39 @@ def test_pipeline_engine_step_trace_mq_includes_fencing_token():
     )
 
     assert mq.send_step_trace.call_args.kwargs["fencing_token"] == "92:3"
+
+
+def test_release_deregisters_active_device_when_fencing_map_already_cleared(
+    job_runner_state,
+):
+    """#1006：恢复动作（ABORT_LOCAL/CLEANUP）先行清 fencing 映射后 worker 退出。
+
+    真实链：main.py 恢复动作 clear_fencing_token(jid) → worker 退出调 release
+    → lock_deregister 的 _cleanup_after_job_exit 经 clear_fencing_token_if_current
+    取不到 device_id（映射已空）→ 占位残留。release 必须用自带的 device_id
+    快照补偿 active_device_ids 清理，否则同设备新 Job 被 skip_device_busy
+    永久跳过（需 Agent 重启才恢复）。
+    """
+    job_runner_state.lock_register(26, "63:6", 63, "SERIAL-63")
+    assert 63 in job_runner_state.active_device_ids
+
+    # fixture 无 lease_renewer 映射——等价于「映射已被恢复动作清除」的状态
+    job_runner_state.release(26, "63:6", 63)
+
+    assert 63 not in job_runner_state.active_device_ids
+    assert 26 not in job_runner_state.active_job_ids
+
+
+def test_superseded_worker_release_keeps_new_workers_device_placeholder(
+    job_runner_state,
+):
+    """#1006 guard：被新 fencing_token 取代的旧 worker 释放时，不得清除
+    新 worker 同设备占位（补偿只属于仍为 current 的 worker）。"""
+    job_runner_state.lock_register(26, "63:6", 63, "SERIAL-63")
+    job_runner_state.lock_register(26, "63:7", 63, "SERIAL-63")
+    assert 63 in job_runner_state.active_device_ids
+
+    job_runner_state.release(26, "63:6", 63)  # 旧 worker 释放
+
+    assert 63 in job_runner_state.active_device_ids  # 新 worker 占位保留
+    assert 26 in job_runner_state.active_job_ids

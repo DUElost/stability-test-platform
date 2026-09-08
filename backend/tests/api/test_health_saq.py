@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from backend.tasks import saq_worker as saq_mod
@@ -75,4 +77,32 @@ async def test_verify_redis_connectivity_failure(monkeypatch):
 
     monkeypatch.setattr(saq_mod.aioredis, "from_url", _fake_from_url)
     with pytest.raises(RuntimeError, match="Redis unreachable"):
-        await saq_mod.verify_redis_connectivity("redis://bad:6379/0")
+        await saq_mod.verify_redis_connectivity("redis://user:s3cret@bad:6379/0")
+
+
+@pytest.mark.asyncio
+async def test_verify_redis_connectivity_failure_redacts_password(monkeypatch):
+    async def _fake_from_url(*_args, **_kwargs):
+        class _BadRedis:
+            async def ping(self):
+                raise ConnectionError("connection refused")
+
+            async def aclose(self):
+                return None
+
+        return _BadRedis()
+
+    monkeypatch.setattr(saq_mod.aioredis, "from_url", _fake_from_url)
+    with pytest.raises(RuntimeError) as exc_info:
+        await saq_mod.verify_redis_connectivity("redis://user:s3cret@bad:6379/0")
+
+    assert "s3cret" not in str(exc_info.value)
+    assert "redis://user:***@bad:6379/0" in str(exc_info.value)
+
+
+def test_redis_ping_success_log_redacts_password(caplog):
+    with caplog.at_level(logging.INFO, logger="backend.main"):
+        main_mod._log_redis_ping_ok("redis://user:s3cret@redis.example:6379/0")
+
+    assert "s3cret" not in caplog.text
+    assert "redis://user:***@redis.example:6379/0" in caplog.text
