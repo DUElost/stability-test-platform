@@ -6,6 +6,7 @@ Provides PlanRun list/detail/jobs/summary endpoints.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from copy import deepcopy
 from collections import defaultdict
@@ -91,7 +92,7 @@ from backend.core.job_timeout_config import (
 )
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan, PlanStep
-from backend.models.plan_run import PlanRun
+from backend.models.plan_run import PlanRun, PlanRunHost
 from backend.models.project import TestProject
 from backend.services.plan_run_abort import (
     PlanRunAbortError,
@@ -1866,29 +1867,71 @@ def _pending_claim_deadline(j: JobInstance) -> Optional[datetime]:
     return base + timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
 
 
-def _running_heartbeat_deadline(j: JobInstance) -> Optional[datetime]:
+def _not_reported_liveness_anchor(j: JobInstance) -> Optional[datetime]:
+    """Dispatch-time anchor for jobs whose liveness signal never arrived.
+
+    Mirrors ``recycler._not_reported_anchor`` (#993 / ADR-0026 §3).
+    """
+    return _aware(j.started_at) or _aware(j.created_at)
+
+
+# #993: 与 backend/scheduler/recycler.py 的判据常量保持同步（ADR-0026 §3）。
+# recycler 是回收判死的唯一权威——本函数任何分支/超时改动必须同步
+# recycler._running_liveness_anchor，反之亦然。
+_WAITING_EXECUTION_STATES = frozenset({
+    "WAITING_EXECUTION_SLOT",
+    "PATROL_SLEEP",
+    "WAITING_BARRIER",
+})
+_COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS = int(
+    os.getenv("COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS", "300")
+)
+
+
+def _running_heartbeat_deadline(
+    j: JobInstance,
+    coord_heartbeat_by_host: Optional[dict[str, datetime]] = None,
+) -> Optional[datetime]:
+    """Projected stuck deadline for a RUNNING job — aligned with
+    ``recycler._running_liveness_anchor`` (#993 / ADR-0026 §3).
+
+    ``updated_at`` is deliberately NOT a liveness signal: lease renewals must
+    not be able to fake liveness (#288), so a job waiting for an execution
+    slot (WAITING_EXECUTION_SLOT / PATROL_SLEEP / WAITING_BARRIER) stays
+    non-stuck as long as its host's coordinator heartbeat is fresh — waiting
+    is legal (invariant ②), only a dead coordinator counts.  Jobs whose
+    liveness signal never arrived are anchored at dispatch time so they still
+    age out after one full window.
+    """
     if j.status != JobStatus.RUNNING.value:
         return None
-    updated = _aware(j.updated_at) or _aware(j.started_at)
-    candidates: list[datetime] = []
-    if updated is not None:
-        candidates.append(
-            updated + timedelta(seconds=running_heartbeat_timeout_seconds(j))
-        )
-
-    patrol = (
-        ((j.pipeline_def or {}).get("lifecycle") or {}).get("patrol")
-        if isinstance(j.pipeline_def, dict)
-        else None
+    graded_timeout = running_heartbeat_timeout_seconds(
+        j, patrol_stall_multiplier=PATROL_STALL_MULTIPLIER,
     )
-    interval = patrol.get("interval_seconds") if isinstance(patrol, dict) else None
-    heartbeat = _aware(j.last_patrol_heartbeat_at)
-    if heartbeat is not None and isinstance(interval, (int, float)) and interval > 0:
-        candidates.append(
-            heartbeat
-            + timedelta(seconds=float(interval) * PATROL_STALL_MULTIPLIER)
-        )
-    return min(candidates) if candidates else None
+
+    if j.execution_state == "EXECUTING_STEP":
+        hb = _aware(j.last_execution_heartbeat_at)
+        if hb is None:
+            hb = _not_reported_liveness_anchor(j)
+        if hb is None:
+            return None
+        return hb + timedelta(seconds=graded_timeout)
+
+    if j.execution_state in _WAITING_EXECUTION_STATES:
+        hb = None
+        if coord_heartbeat_by_host is not None:
+            hb = coord_heartbeat_by_host.get(j.host_id)
+        if hb is None:
+            hb = _not_reported_liveness_anchor(j)
+        if hb is None:
+            return None
+        return hb + timedelta(seconds=_COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS)
+
+    # NULL / unknown execution_state — nothing ever reported.
+    hb = _not_reported_liveness_anchor(j)
+    if hb is None:
+        return None
+    return hb + timedelta(seconds=graded_timeout)
 
 
 def _adb_state_excluded(adb_state: str | None) -> bool:
@@ -1990,13 +2033,26 @@ def _get_plan_run_devices_impl(
     by_link_status: dict[str, int] = {"all": 0}
     by_host: dict[str, int] = {}
 
+    # #993: WAITING_* 存活判据需要每 host coordinator 心跳（recycler 同源）。
+    coord_rows = db.execute(
+        select(PlanRunHost.host_id, PlanRunHost.coordinator_heartbeat_at)
+        .where(PlanRunHost.plan_run_id == run_id)
+    ).all()
+    coord_heartbeat_by_host: dict[str, datetime] = {
+        host_id: _aware(hb)
+        for host_id, hb in coord_rows
+        if hb is not None
+    }
+
     for j, dev, host_st, lease_job_id in joined:
         serial = dev.serial if dev else None
         model = dev.model if dev else None
         ui = _ui_status_for_job(j, now, dev, host_st)
         cur_stage = _current_stage_for_job(j)
         pending_deadline = _pending_claim_deadline(j)
-        heartbeat_deadline = _running_heartbeat_deadline(j)
+        heartbeat_deadline = _running_heartbeat_deadline(
+            j, coord_heartbeat_by_host,
+        )
         busy_reason, busy_lease_job_id = _derive_busy_reason(dev, host_st, lease_job_id)
         link = _derive_device_link_status(dev, host_st)
         exec_status = _job_exec_status_for_job(j, now)
