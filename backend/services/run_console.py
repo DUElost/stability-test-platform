@@ -246,15 +246,16 @@ class RunConsole:
         proc = run._proc
         assert proc is not None and run._log_path is not None
         buf: List[str] = []
-        last_flush = _monotonic()
+        buf_lock = threading.Lock()
+        stop_timer = threading.Event()
 
         def flush() -> None:
-            nonlocal buf, last_flush
-            if not buf:
-                return
-            lines = buf
-            buf = []
-            last_flush = _monotonic()
+            nonlocal buf
+            with buf_lock:
+                if not buf:
+                    return
+                lines = buf
+                buf = []
             with run._lock:
                 start_seq = run.seq + 1
                 run.seq += len(lines)
@@ -272,16 +273,32 @@ class RunConsole:
                 room,
             )
 
+        def timed_flush() -> None:
+            # #1118: flush on wall-clock interval even when stdout is quiet
+            # (reader blocked on the next readline).
+            while not stop_timer.wait(self._FLUSH_MAX_INTERVAL):
+                flush()
+
+        timer = threading.Thread(
+            target=timed_flush,
+            name=f"run-console-flush-{run.run_id}",
+            daemon=True,
+        )
+        timer.start()
         try:
             for line in proc.stdout:  # type: ignore[union-attr]
-                buf.append(line)
-                if len(buf) >= self._FLUSH_MAX_LINES or (_monotonic() - last_flush) >= self._FLUSH_MAX_INTERVAL:
+                with buf_lock:
+                    buf.append(line)
+                    should_flush = len(buf) >= self._FLUSH_MAX_LINES
+                if should_flush:
                     flush()
             flush()
             proc.wait()
         except Exception:
             logger.exception("run_console_reader_failed run_id=%s", run.run_id)
         finally:
+            stop_timer.set()
+            timer.join(timeout=self._FLUSH_MAX_INTERVAL + 1.0)
             try:
                 flush()
             except Exception:
@@ -424,11 +441,6 @@ class RunConsole:
             except Exception:
                 logger.exception("run_console_shutdown_cancel_failed run_id=%s", run.run_id)
         logger.info("run_console_shutdown_complete")
-
-
-def _monotonic() -> float:
-    import time
-    return time.monotonic()
 
 
 __all__ = ["RunConsole", "RunConsoleError", "RunKeyBusyError", "ConsoleRun"]
