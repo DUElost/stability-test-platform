@@ -185,6 +185,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         raise
 
     if triggered:
+        from backend.core.dedup_platform import DEDUP_PLATFORMS
         from backend.services.dedup_scan import (
             count_hosts_with_scan_artifacts,
             record_scan_archive_state,
@@ -197,11 +198,10 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         registered = 0
         hosts_done = 0
         n_triggered = len(triggered)
-        # Completeness is counted per host, scoped to this round's triggered set,
-        # and bounded below by round_started_at: each host uploads 2 matching
-        # files, and incremental scans reuse the plan_run_id, so neither a file
-        # count nor a run-wide host count nor a host's earlier-round artifacts
-        # mean "every host we just asked has delivered this time".
+        # Completeness is counted per host × platform (#1071): MTK arriving
+        # first must not satisfy the barrier before UNISOC uploads land.
+        # Scoped to this round's triggered set and since watermark (reuse of
+        # plan_run_id on incremental scans).
         while elapsed < _SCAN_POLL_MAX_WAIT:
             await asyncio_sleep(_SCAN_POLL_INTERVAL)
             elapsed += _SCAN_POLL_INTERVAL
@@ -213,6 +213,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             hosts_done = await asyncio_to_thread(
                 count_hosts_with_scan_artifacts, plan_run_id, triggered,
                 since=round_started_at,
+                require_platforms=DEDUP_PLATFORMS,
             )
             if hosts_done >= n_triggered:
                 break
@@ -232,6 +233,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
                 hosts_done = await asyncio_to_thread(
                     count_hosts_with_scan_artifacts, plan_run_id, triggered,
                     since=round_started_at,
+                    require_platforms=DEDUP_PLATFORMS,
                 )
 
         logger.info(
