@@ -6,6 +6,7 @@ Tables:
   agent_state           — key/value store for last_ack_id and other scalars
   job_terminal_outbox   — terminal-state payloads; retried until server ACKs
   log_signal_outbox     — per-job log_signal envelopes; (job_id, seq_no) idempotent key
+  dle_register_outbox   — DeviceLogEvent create intents; event_id idempotent key (#1042)
   watcher_state         — per-watcher lifecycle state; supports cross-restart recovery
 
 All writes are wrapped in transactions and protected by a threading lock.
@@ -100,6 +101,16 @@ class LocalDB:
             );
             CREATE INDEX IF NOT EXISTS idx_log_signal_outbox_pending
                 ON log_signal_outbox(acked, id);
+            CREATE TABLE IF NOT EXISTS dle_register_outbox (
+                event_id    TEXT    PRIMARY KEY,
+                payload     TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL,
+                attempts    INTEGER NOT NULL DEFAULT 0,
+                last_error  TEXT,
+                acked       INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_dle_register_outbox_pending
+                ON dle_register_outbox(acked, created_at);
             CREATE TABLE IF NOT EXISTS watcher_state (
                 watcher_id    TEXT    PRIMARY KEY,
                 job_id        INTEGER NOT NULL,
@@ -825,6 +836,80 @@ class LocalDB:
                     "  GROUP BY job_id"
                     ")",
                     (keep_recent,),
+                )
+                return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # dle_register_outbox — DeviceLogEvent create intents (#1042 / R09-F01)
+    # ------------------------------------------------------------------
+
+    def enqueue_dle_register(self, event_id: str, payload: Dict[str, Any]) -> None:
+        """Persist a create intent keyed by client-chosen event_id (idempotent)."""
+        now = datetime.now(timezone.utc).isoformat()
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO dle_register_outbox
+                        (event_id, payload, created_at, attempts, acked)
+                    VALUES (?, ?, ?, 0, 0)
+                    ON CONFLICT(event_id) DO UPDATE SET
+                        payload = excluded.payload,
+                        acked = 0,
+                        last_error = NULL
+                    """,
+                    (str(event_id), body, now),
+                )
+
+    def get_pending_dle_registers(self, limit: int = 20) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT event_id, payload, attempts FROM dle_register_outbox "
+                "WHERE acked = 0 ORDER BY created_at ASC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            out.append({
+                "event_id": row["event_id"],
+                "payload": payload,
+                "attempts": int(row["attempts"] or 0),
+            })
+        return out
+
+    def ack_dle_register(self, event_id: str) -> None:
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE dle_register_outbox SET acked = 1 WHERE event_id = ?",
+                    (str(event_id),),
+                )
+
+    def bump_dle_register_attempts(self, event_id: str, error: str | None = None) -> None:
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE dle_register_outbox SET attempts = attempts + 1, "
+                    "last_error = ? WHERE event_id = ?",
+                    (error, str(event_id)),
+                )
+
+    def prune_acked_dle_registers(self, keep_recent: int = 500) -> int:
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "DELETE FROM dle_register_outbox "
+                    "WHERE acked = 1 "
+                    "AND event_id NOT IN ("
+                    "  SELECT event_id FROM dle_register_outbox "
+                    "  WHERE acked = 1 ORDER BY created_at DESC LIMIT ?"
+                    ")",
+                    (int(keep_recent),),
                 )
                 return cur.rowcount
 

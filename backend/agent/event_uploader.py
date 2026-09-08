@@ -509,8 +509,28 @@ class EventUploader:
                         "plan_run_id": item.get("plan_run_id"),
                         "job_id": item.get("job_id"),
                     }, force=True)
+                # #1042: 同轮补建 create 失败留下的注册意图（幂等 POST）。
+                self._drain_dle_register_intents()
             except Exception:
                 logger.exception("event_uploader_recover_error")
+
+    def _drain_dle_register_intents(self) -> None:
+        """Replay LocalDB create intents left by failed DLE registration (#1042)."""
+        try:
+            try:
+                from .aee.device_log_event_client import DeviceLogEventClient
+            except ImportError:
+                from agent.aee.device_log_event_client import DeviceLogEventClient
+            client = DeviceLogEventClient.from_env(
+                api_url=self._api_url,
+                agent_secret=self._agent_secret,
+                host_id=self._host_id,
+            )
+            if client is None:
+                return
+            client.drain_register_outbox(limit=20)
+        except Exception:
+            logger.exception("event_uploader_dle_register_drain_error")
 
     def _retry_failed_loop(self) -> None:
         """600s 慢速恢复：重试 UPLOAD_FAILED + 找回卡在 UPLOADING 的行（#380）。

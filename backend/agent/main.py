@@ -628,6 +628,11 @@ def main() -> None:
     local_db = LocalDB()
     db_path = str(BASE_DIR / "agent_state.db")
     local_db.initialize(db_path)
+    try:
+        from .aee.device_log_event_client import bind_local_db as _bind_dle_db
+    except ImportError:
+        from agent.aee.device_log_event_client import bind_local_db as _bind_dle_db
+    _bind_dle_db(local_db)
     _migrate_legacy_aee_state_on_startup(db_path)
 
     patrol_checkpoint_store = PatrolCycleCheckpointStore(BASE_DIR / "patrol_checkpoint.db")
