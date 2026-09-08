@@ -51,6 +51,38 @@ def owner_key(host_id: str) -> str:
     return f"{_OWNER_KEY_PREFIX}{host_id}"
 
 
+def _owner_payload(host_id: str, sid: str) -> str:
+    """确定性 owner payload：键序固定，整串比对可逐字节复现（#887）。"""
+    return json.dumps(
+        {
+            "instance_id": _INSTANCE_ID,
+            "sid": sid,
+            "host_id": str(host_id),
+        },
+        separators=(",", ":"),
+    )
+
+
+# 原子 compare-and-delete / compare-and-expire（#887）：此前 GET→比较→写之间
+# 存在异步让出点，期间新连接 register 覆盖 key 后，旧连接的无条件 DELETE 会
+# 丢掉新登记、renew 会把旧 payload 续期写回同样覆盖新登记。Lua 在 Redis 单线
+# 程内原子执行比较与写，杜绝让出窗口。
+_CAS_DELETE_LUA = """
+local current = redis.call("GET", KEYS[1])
+if current == ARGV[1] then
+  return redis.call("DEL", KEYS[1])
+end
+return 0
+"""
+_CAS_EXPIRE_LUA = """
+local current = redis.call("GET", KEYS[1])
+if current == ARGV[1] then
+  return redis.call("EXPIRE", KEYS[1], ARGV[2])
+end
+return 0
+"""
+
+
 def owner_ttl_seconds() -> int:
     raw = os.getenv("STP_AGENT_SID_REGISTRY_TTL_SECONDS", str(_DEFAULT_TTL_SECONDS))
     try:
@@ -82,14 +114,7 @@ async def register_agent_owner(host_id: str, sid: str) -> None:
     client = _client()
     if client is None:
         return
-    payload = json.dumps(
-        {
-            "instance_id": _INSTANCE_ID,
-            "sid": sid,
-            "host_id": str(host_id),
-        },
-        separators=(",", ":"),
-    )
+    payload = _owner_payload(str(host_id), sid)
     try:
         await client.set(owner_key(str(host_id)), payload, ex=owner_ttl_seconds())
     except Exception:
@@ -115,14 +140,14 @@ async def renew_agent_owner(host_id: str, sid: str) -> bool:
         return False
     key = owner_key(str(host_id))
     try:
-        raw = await client.get(key)
-        if not raw:
-            return False
-        data = json.loads(raw)
-        if data.get("sid") != sid or data.get("instance_id") != _INSTANCE_ID:
-            return False
-        await client.set(key, raw, ex=owner_ttl_seconds())
-        return True
+        result = await client.eval(
+            _CAS_EXPIRE_LUA,
+            1,
+            key,
+            _owner_payload(str(host_id), sid),
+            owner_ttl_seconds(),
+        )
+        return int(result) == 1
     except Exception:
         logger.debug(
             "agent_sid_registry_renew_failed host_id=%s",
@@ -133,7 +158,7 @@ async def renew_agent_owner(host_id: str, sid: str) -> bool:
 
 
 async def unregister_agent_owner(host_id: str, sid: str) -> None:
-    """Clear ownership only if we still own the same sid."""
+    """Clear ownership only if we still own the same sid (#887: atomically)."""
     if not agent_sid_registry_enabled():
         return
     client = _client()
@@ -141,12 +166,9 @@ async def unregister_agent_owner(host_id: str, sid: str) -> None:
         return
     key = owner_key(str(host_id))
     try:
-        raw = await client.get(key)
-        if not raw:
-            return
-        data = json.loads(raw)
-        if data.get("sid") == sid and data.get("instance_id") == _INSTANCE_ID:
-            await client.delete(key)
+        await client.eval(
+            _CAS_DELETE_LUA, 1, key, _owner_payload(str(host_id), sid)
+        )
     except Exception:
         logger.debug(
             "agent_sid_registry_unregister_failed host_id=%s",
