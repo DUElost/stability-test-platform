@@ -15,7 +15,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.schedule import TaskSchedule, schedule_timestamp
@@ -240,10 +240,62 @@ def run_retention_cleanup() -> None:
                 return
 
             run_ids = [r.id for r in stale_runs]
+            run_id_set = set(run_ids)
 
-            # Subquery: job IDs belonging to stale PlanRuns
+            # #936: parent/root 自引用 FK 无删除级联——本批内 Run 若仍被「不在
+            # 本批」的 Run（未到期 / 仍在运行）经 parent/root 引用，直接批删
+            # 违反 FK、整批回滚（且每轮必然重选同批，僵尸积压）。计算保留集：
+            # 外部引用者指向的批内 id 入集，再沿祖先链传播（保留 R 则其
+            # parent/root 若在批内同样保留），只删无引用叶子。
+            keep: set = set()
+            ref_rows = (
+                db.query(
+                    PlanRun.parent_plan_run_id, PlanRun.root_plan_run_id
+                )
+                .filter(
+                    or_(
+                        PlanRun.parent_plan_run_id.in_(run_id_set),
+                        PlanRun.root_plan_run_id.in_(run_id_set),
+                    ),
+                    ~PlanRun.id.in_(run_id_set),
+                )
+                .all()
+            )
+            for parent_ref, root_ref in ref_rows:
+                if parent_ref in run_id_set:
+                    keep.add(parent_ref)
+                if root_ref in run_id_set:
+                    keep.add(root_ref)
+            if keep:
+                chain = (
+                    db.query(
+                        PlanRun.id,
+                        PlanRun.parent_plan_run_id,
+                        PlanRun.root_plan_run_id,
+                    )
+                    .filter(PlanRun.id.in_(run_id_set))
+                    .all()
+                )
+                ancestors = {rid: (p, q) for rid, p, q in chain}
+                changed = True
+                while changed:
+                    changed = False
+                    for rid in list(keep):
+                        for anc in ancestors.get(rid, (None, None)):
+                            if anc in run_id_set and anc not in keep:
+                                keep.add(anc)
+                                changed = True
+            safe_run_ids = sorted(run_id_set - keep)
+            if not safe_run_ids:
+                logger.info(
+                    "retention_cleanup skipped: all %d candidates chain-referenced",
+                    len(run_ids),
+                )
+                return
+
+            # Subquery: job IDs belonging to safely-deletable PlanRuns
             stale_job_ids = select(JobInstance.id).where(
-                JobInstance.plan_run_id.in_(run_ids)
+                JobInstance.plan_run_id.in_(safe_run_ids)
             )
 
             # FK order: child tables first
@@ -262,13 +314,17 @@ def run_retention_cleanup() -> None:
 
             # job_log_signal has ON DELETE CASCADE; job_artifact must be removed first.
             db.query(JobInstance).filter(
-                JobInstance.plan_run_id.in_(run_ids)
+                JobInstance.plan_run_id.in_(safe_run_ids)
             ).delete(synchronize_session=False)
             db.query(PlanRun).filter(
-                PlanRun.id.in_(run_ids)
+                PlanRun.id.in_(safe_run_ids)
             ).delete(synchronize_session=False)
             db.commit()
-            logger.info("retention_cleanup deleted runs=%d", len(stale_runs))
+            logger.info(
+                "retention_cleanup deleted runs=%d kept_chain_referenced=%d",
+                len(safe_run_ids),
+                len(keep),
+            )
         except Exception:
             logger.warning("retention_cleanup failed", exc_info=True)
             db.rollback()
