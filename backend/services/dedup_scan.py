@@ -396,19 +396,21 @@ def run_merge_sync(
 
         # ── merge 产物中心化（2026-08-31）：工具固定输出到本机
         # {工具目录}/merge_result/{ts}/——但 artifact 应指向中心持久路径
-        # （设计 adr-0025: `{CIFS}/dedup/{plan_run_id}/merge/`）。发布到中心后
-        # 注册中心路径；中心未配置（无 STP_AEE_NFS_ROOT）时回退本机路径。
+        # （设计 adr-0025: `{CIFS}/dedup/{plan_run_id}/merge/`）。
+        # #1074：中心已配置时发布失败必须抛错（可重试），不得回退登记本机
+        # 路径并返回 "ok"；仅中心未配置时才回退本机路径（历史开发行为）。
         published = _publish_merge_to_center(plan_run_id, latest, platform=platform)
+        artifact_dir = published if published is not None else latest
 
         try:
             from backend.core.database import SessionLocal
 
             inner_db = SessionLocal()
             try:
-                n = _register_merge_artifacts(inner_db, plan_run_id, published or latest)
+                n = _register_merge_artifacts(inner_db, plan_run_id, artifact_dir)
                 logger.info(
                     "merge_artifacts_registered plan_run=%d count=%d dir=%s",
-                    plan_run_id, n, published or latest,
+                    plan_run_id, n, artifact_dir,
                 )
             finally:
                 inner_db.close()
@@ -738,6 +740,9 @@ def _publish_merge_to_center(
     （设计 adr-0025: ``{CIFS}/dedup/{plan_run_id}/merge/``）。发布 = 拷贝
     产物到中心并返回中心目录；中心未配置（无 ``STP_AEE_NFS_ROOT``）时
     返回 None（调用方回退注册本机路径——历史行为）。
+
+    #1074：中心已配置但 ``OSError``（挂载满/权限/IO）时抛 ``RuntimeError``，
+    不返回 None——避免调用方把本机回退当成成功交付。
     """
     from backend.core.storage_root import resolve_shared_storage_root
 
@@ -751,9 +756,11 @@ def _publish_merge_to_center(
     try:
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copytree(merge_dir, dest, dirs_exist_ok=True)
-    except OSError:
+    except OSError as exc:
         logger.exception("merge_publish_failed plan_run=%d dest=%s", plan_run_id, dest)
-        return None
+        raise RuntimeError(
+            f"merge center publish failed plan_run={plan_run_id} dest={dest}: {exc}"
+        ) from exc
     # 2026-08-31：报表 Path 列对外可达——重写中心副本（agent 本机
     # .stp-scan 路径 → 中心 devices/{run_id}/{event_dir}/）。失败不阻断
     # 发布（路径重写是增强，不是发布的前提）。
