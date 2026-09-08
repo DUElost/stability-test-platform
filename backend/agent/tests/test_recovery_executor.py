@@ -443,14 +443,19 @@ class TestRecoveryExecutor:
         # But NOOP should still clear
         local_db.delete_active_job.assert_called_once_with(10)
 
-    def test_resume_job_not_deleted_by_upload_terminal_outbox_cleanup(self):
-        """同一 job 同时收到 RESUME + UPLOAD_TERMINAL 时，不应被 outbox 清理删掉 active_job。"""
+    def test_resume_skipped_when_pending_terminal_outbox(self):
+        """#1004: 同 job RESUME + UPLOAD_TERMINAL → 只补传终态，不启动 worker。"""
         local_db = MagicMock()
         lease_renewer = MagicMock()
         outbox_drain = MagicMock()
         outbox_drain.drain_sync.return_value = 1
-        local_db.get_pending_outbox.return_value = []
+        # After drain, nothing pending.
+        local_db.get_pending_outbox.side_effect = [
+            [{"job_id": 26, "event_type": "COMPLETED"}],
+            [],
+        ]
         register_active_job = MagicMock()
+        resume_job = MagicMock()
 
         resp = {
             "actions": [
@@ -458,7 +463,7 @@ class TestRecoveryExecutor:
                     "job_id": 26,
                     "device_id": 63,
                     "action": "RESUME",
-                    "fencing_token": "63:6",
+                    "fencing_token": "63:7",
                     "device_serial": "11914404BG102162",
                     "job_payload": {"id": 26},
                 },
@@ -482,12 +487,56 @@ class TestRecoveryExecutor:
             local_db=local_db,
             outbox_drain=outbox_drain,
             register_active_job=register_active_job,
+            resume_job=resume_job,
         )
 
-        register_args = register_active_job.call_args.args
-        assert register_args[:4] == (26, "63:6", 63, "11914404BG102162")
-        assert register_args[4].startswith("resume-26-")
-        local_db.delete_active_job.assert_not_called()
+        outbox_drain.drain_sync.assert_called_once()
+        register_active_job.assert_not_called()
+        resume_job.assert_not_called()
+        local_db.delete_active_job.assert_any_call(26)
+        lease_renewer.clear_fencing_token.assert_any_call(26)
+
+    def test_resume_skipped_for_local_pending_outbox_without_upload_action(self):
+        """#1004: 本地已有终态 outbox 时，即使后端未下发 UPLOAD_TERMINAL 也不得 RESUME。"""
+        local_db = MagicMock()
+        lease_renewer = MagicMock()
+        outbox_drain = MagicMock()
+        outbox_drain.drain_sync.return_value = 1
+        local_db.get_pending_outbox.side_effect = [
+            [{"job_id": 9, "event_type": "FAILED"}],
+            [],
+        ]
+        register_active_job = MagicMock()
+        resume_job = MagicMock()
+
+        resp = {
+            "actions": [
+                {
+                    "job_id": 9,
+                    "device_id": 90,
+                    "action": "RESUME",
+                    "fencing_token": "90:2",
+                    "device_serial": "SERIAL-9",
+                    "job_payload": {"id": 9},
+                },
+            ],
+            "outbox_actions": [],
+        }
+
+        execute_recovery_actions_impl(
+            resp=resp,
+            active_jobs_by_id={9: {"job_id": 9, "device_id": 90}},
+            lease_renewer=lease_renewer,
+            local_db=local_db,
+            outbox_drain=outbox_drain,
+            register_active_job=register_active_job,
+            resume_job=resume_job,
+        )
+
+        outbox_drain.drain_sync.assert_called_once()
+        register_active_job.assert_not_called()
+        resume_job.assert_not_called()
+        local_db.delete_active_job.assert_called_with(9)
 
 
 # ── Startup smoke tests (run_recovery_sync_if_needed) ──

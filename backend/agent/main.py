@@ -263,15 +263,84 @@ def execute_recovery_actions_impl(
     resume_job: Any = None,
     abort_local_job: Any = None,
 ) -> None:
-    """ADR-0019 Phase 3a: execute recovery actions (module-level for testability)."""
+    """ADR-0019 Phase 3a: execute recovery actions (module-level for testability).
+
+    Durable terminal outbox takes priority over RESUME (#1004 / R07-F03): a job
+    that already finished locally must upload its terminal payload, never
+    relaunch a worker (rotated fencing tokens would also reject the original
+    terminal fact).
+    """
     job_actions = resp.get("actions", [])
     outbox_actions = resp.get("outbox_actions", [])
-    resumed_job_ids: set[int] = set()
+
+    upload_terminal_ids = {
+        int(a["job_id"])
+        for a in outbox_actions
+        if a.get("action") == "UPLOAD_TERMINAL" and a.get("job_id") is not None
+    }
+    local_pending_ids: set[int] = set()
+    try:
+        pending_raw = local_db.get_pending_outbox()
+        if isinstance(pending_raw, (list, tuple)):
+            for entry in pending_raw:
+                if isinstance(entry, dict) and entry.get("job_id") is not None:
+                    local_pending_ids.add(int(entry["job_id"]))
+    except Exception:
+        logger.exception("recovery_list_pending_outbox_failed")
+    terminal_priority_ids = upload_terminal_ids | local_pending_ids
+
+    # Prefer persisted terminal upload before any RESUME (#1004).
+    if outbox_actions or local_pending_ids:
+        has_upload = bool(upload_terminal_ids) or bool(local_pending_ids)
+        if has_upload:
+            try:
+                flushed = outbox_drain.drain_sync()
+                logger.info("recovery_outbox_flushed count=%d", flushed)
+            except Exception:
+                logger.exception("recovery_outbox_flush_failed")
+                return
+
+        still_pending: set[int] = set()
+        try:
+            pending_after = local_db.get_pending_outbox()
+            if isinstance(pending_after, (list, tuple)):
+                still_pending = {
+                    int(e["job_id"])
+                    for e in pending_after
+                    if isinstance(e, dict) and e.get("job_id") is not None
+                }
+        except Exception:
+            logger.exception("recovery_relist_pending_outbox_failed")
+
+        for a in outbox_actions:
+            jid = a["job_id"]
+            action = a["action"]
+            if action == "UPLOAD_TERMINAL":
+                if jid not in still_pending:
+                    local_db.delete_active_job(jid)
+                    lease_renewer.clear_fencing_token(jid)
+                else:
+                    logger.warning("recovery_upload_terminal_still_pending job=%d", jid)
+            elif action == "NOOP":
+                local_db.delete_active_job(jid)
+
+        # Local pending without a matching outbox_action still needs active cleanup
+        # after a successful drain.
+        for jid in local_pending_ids:
+            if jid not in still_pending:
+                local_db.delete_active_job(jid)
+                lease_renewer.clear_fencing_token(jid)
 
     for a in job_actions:
         jid = a["job_id"]
         action = a["action"]
         if action == "RESUME":
+            if jid in terminal_priority_ids:
+                logger.warning(
+                    "recovery_resume_skipped_pending_terminal_outbox job=%d",
+                    jid,
+                )
+                continue
             token = a.get("fencing_token", "")
             # Defense-in-depth: a RESUME without a dict job_payload cannot re-enter
             # JobSession, so the watcher would never re-attach and the job would
@@ -296,7 +365,6 @@ def execute_recovery_actions_impl(
                 device_serial,
                 local_worker_token,
             )
-            resumed_job_ids.add(jid)
             if resume_job is not None:
                 resumed_payload = dict(a["job_payload"])
                 resumed_payload["id"] = jid
@@ -331,32 +399,6 @@ def execute_recovery_actions_impl(
             local_db.delete_active_job(jid)
             lease_renewer.clear_fencing_token(jid)
             logger.warning("recovery_abort_local job=%d reason=%s", jid, a.get("reason"))
-
-    if outbox_actions:
-        has_upload = any(a["action"] == "UPLOAD_TERMINAL" for a in outbox_actions)
-        if has_upload:
-            try:
-                flushed = outbox_drain.drain_sync()
-                logger.info("recovery_outbox_flushed count=%d", flushed)
-            except Exception:
-                logger.exception("recovery_outbox_flush_failed")
-                return
-
-        still_pending = local_db.get_pending_outbox()
-        pending_ids = {e["job_id"] for e in still_pending}
-        for a in outbox_actions:
-            jid = a["job_id"]
-            action = a["action"]
-            if jid in resumed_job_ids:
-                logger.info("recovery_outbox_skip_active_job_cleanup job=%d action=%s", jid, action)
-                continue
-            if action == "UPLOAD_TERMINAL":
-                if jid not in pending_ids:
-                    local_db.delete_active_job(jid)
-                else:
-                    logger.warning("recovery_upload_terminal_still_pending job=%d", jid)
-            elif action == "NOOP":
-                local_db.delete_active_job(jid)
 
 
 def _check_agent_version(api_url: str, host_id: str, mount_points, host_info) -> None:
