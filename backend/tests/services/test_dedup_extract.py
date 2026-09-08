@@ -552,3 +552,112 @@ def test_run_extract_sync_same_basename_only_first_row_archived(
     assert by_content[str(sibling)] == EventState.REMOTE.value
     pr = db_session.get(PlanRun, sample_plan_run.id)
     assert pr.run_context["extract"]["same_basename_left_remote"] == 1
+
+
+def test_run_extract_sync_replaces_incomplete_dest_without_marker(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#1070: 无完成标记的残缺 dest 不得跳过；重跑应完整复制并 ARCHIVED。"""
+    from backend.services.dedup_extract import _EXTRACT_COMPLETE_MARKER
+
+    nfs = tmp_path / "nfs"
+    devices = nfs / "devices" / str(sample_plan_run.id)
+    jira = nfs / "jira" / str(sample_plan_run.id)
+    name = "2026_0908_partial_db.01.KE"
+    src = devices / name
+    src.mkdir(parents=True)
+    (src / "main.dbg").write_text("full-payload", encoding="utf-8")
+
+    incomplete = jira / name
+    incomplete.mkdir(parents=True)
+    (incomplete / "main.dbg").write_text("truncated", encoding="utf-8")
+    assert not (incomplete / _EXTRACT_COMPLETE_MARKER).exists()
+
+    merge_xls = tmp_path / "Result_MergeFiles.xls"
+    merge_xls.write_bytes(b"fake-merge-xls")
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(merge_xls),
+        artifact_type="merge_result_xls",
+        size_bytes=200,
+    ))
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="KE",
+        detected_at=datetime.now(timezone.utc),
+        state=EventState.REMOTE.value,
+        local_path=str(src),
+        remote_path=str(src),
+        plan_run_id=sample_plan_run.id,
+        host_id=sample_host.id,
+    ))
+    db_session.commit()
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    extracted = run_extract_sync(sample_plan_run.id)
+    assert extracted == 2
+    assert (jira / name / "main.dbg").read_text(encoding="utf-8") == "full-payload"
+    assert (jira / name / _EXTRACT_COMPLETE_MARKER).is_file()
+    db_session.expire_all()
+    row = db_session.query(DeviceLogEvent).filter(
+        DeviceLogEvent.plan_run_id == sample_plan_run.id,
+    ).one()
+    assert row.state == EventState.ARCHIVED.value
+
+
+def test_run_extract_sync_failed_copy_does_not_archive_or_leave_complete_dest(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#1070: 复制中途失败不留下可被误认完整的 dest，也不标 ARCHIVED。"""
+    from backend.services import dedup_extract as extract_mod
+    from backend.services.dedup_extract import _EXTRACT_COMPLETE_MARKER
+
+    nfs = tmp_path / "nfs"
+    devices = nfs / "devices" / str(sample_plan_run.id)
+    jira = nfs / "jira" / str(sample_plan_run.id)
+    name = "2026_0908_fail_db.02.NE"
+    src = devices / name
+    src.mkdir(parents=True)
+    (src / "main.dbg").write_text("source", encoding="utf-8")
+
+    merge_xls = tmp_path / "Result_MergeFiles.xls"
+    merge_xls.write_bytes(b"fake-merge-xls")
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(merge_xls),
+        artifact_type="merge_result_xls",
+        size_bytes=200,
+    ))
+    db_session.add(DeviceLogEvent(
+        id=uuid4(),
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="NE",
+        detected_at=datetime.now(timezone.utc),
+        state=EventState.REMOTE.value,
+        local_path=str(src),
+        remote_path=str(src),
+        plan_run_id=sample_plan_run.id,
+        host_id=sample_host.id,
+    ))
+    db_session.commit()
+
+    def boom(*_a, **_k):
+        raise OSError("disk full mid-copy")
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    monkeypatch.setattr(extract_mod, "_copy_event_dir_atomically", boom)
+    extracted = run_extract_sync(sample_plan_run.id)
+    # merge xls 仍可能成功
+    assert extracted >= 0
+    dest = jira / name
+    assert not (dest.is_dir() and (dest / _EXTRACT_COMPLETE_MARKER).is_file())
+    db_session.expire_all()
+    row = db_session.query(DeviceLogEvent).filter(
+        DeviceLogEvent.plan_run_id == sample_plan_run.id,
+    ).one()
+    assert row.state == EventState.REMOTE.value
