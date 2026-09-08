@@ -16,6 +16,8 @@ from unittest.mock import patch
 
 import pytest
 
+from sqlalchemy import update
+
 from backend.core.database import SessionLocal
 from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.host import Device
@@ -290,3 +292,120 @@ def test_abort_batch_pending_updates_counters_and_audit_once(
     assert run.aborted_job_count == 15
     assert run.terminal_job_count == 15
     assert len(result.get("aborted_jobs") or []) == 15
+
+
+def test_abort_pending_count_uses_returning_after_concurrent_claim(
+    db_session, sample_plan_run, sample_plan, sample_device, sample_host,
+):
+    """#988：预读 PENDING 后并发 claim→RUNNING 时，计数用实际 UPDATE 行，并纳入停止协议。"""
+    from sqlalchemy.orm import Session
+    from sqlalchemy.sql.dml import Update
+
+    from backend.models.host import Device
+    from backend.models.plan_run import PlanRun
+
+    run = db_session.get(PlanRun, sample_plan_run.id)
+    second = Device(
+        serial=f"race-claim-{sample_plan_run.id}",
+        host_id=sample_host.id,
+        status="ONLINE",
+    )
+    db_session.add(second)
+    db_session.flush()
+
+    jobs = []
+    for device in (sample_device, second):
+        job = JobInstance(
+            plan_run_id=run.id,
+            plan_id=sample_plan.id,
+            device_id=device.id,
+            host_id=sample_host.id,
+            status=JobStatus.PENDING.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        )
+        db_session.add(job)
+        db_session.flush()
+        jobs.append(job)
+
+    claimed_id = jobs[0].id
+    kept_pending_id = jobs[1].id
+    run.total_job_count = 2
+    # Host 计数器行：批量路径会对命中 host 做 +cnt
+    from backend.models.plan_run import PlanRunHost
+
+    db_session.add(
+        PlanRunHost(
+            plan_run_id=run.id,
+            host_id=sample_host.id,
+            total_job_count=2,
+        )
+    )
+    db_session.commit()
+
+    claim_injected = {"done": False}
+    orig_execute = Session.execute
+
+    def execute_with_claim(self, statement, *args, **kwargs):
+        if (
+            self is db_session
+            and not claim_injected["done"]
+            and isinstance(statement, Update)
+            and getattr(statement.table, "name", None) == JobInstance.__tablename__
+        ):
+            claim_injected["done"] = True
+            other = SessionLocal()
+            try:
+                other.execute(
+                    update(JobInstance)
+                    .where(
+                        JobInstance.id == claimed_id,
+                        JobInstance.status == JobStatus.PENDING.value,
+                    )
+                    .values(
+                        status=JobStatus.RUNNING.value,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+                other.commit()
+            finally:
+                other.close()
+        return orig_execute(self, statement, *args, **kwargs)
+
+    with patch.object(Session, "execute", execute_with_claim), patch(
+        "backend.services.plan_run_abort.should_trigger_dedup",
+        return_value=False,
+    ), patch(
+        "backend.services.plan_run_abort.enqueue_dedup_terminal_sync",
+    ), patch("backend.services.plan_run_abort.schedule_emit") as emit:
+        result = abort_plan_run(run.id, db=db_session, reason="race_claim")
+
+    assert claim_injected["done"] is True
+    assert result["aborted_jobs"] == [kept_pending_id]
+    assert result["abort_requested_jobs"] == [claimed_id]
+
+    db_session.expire_all()
+    run = db_session.get(PlanRun, run.id)
+    claimed = db_session.get(JobInstance, claimed_id)
+    kept = db_session.get(JobInstance, kept_pending_id)
+    host_row = db_session.query(PlanRunHost).filter_by(
+        plan_run_id=run.id, host_id=sample_host.id,
+    ).one()
+
+    assert claimed.status == JobStatus.RUNNING.value
+    assert kept.status == JobStatus.ABORTED.value
+    assert run.aborted_job_count == 1
+    assert run.terminal_job_count == 1
+    assert host_row.aborted_job_count == 1
+    assert host_row.terminal_job_count == 1
+    # 仍有 RUNNING 待 ACK → PlanRun 不得因虚高 aborted 计数提前 FAILED
+    assert run.status == PlanRunStatus.RUNNING.value
+    assert run.run_context["abort_requested"]["requested_job_ids"] == [claimed_id]
+
+    control_emits = [
+        call
+        for call in emit.call_args_list
+        if call.args and call.args[0] == "control"
+    ]
+    assert control_emits, "claimed RUNNING job must receive abort control"
+    payload = control_emits[0].args[1]["payload"]
+    assert payload["job_ids"] == [claimed_id]

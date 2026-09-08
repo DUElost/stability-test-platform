@@ -24,7 +24,33 @@ from backend.services.report_service import (
     _classify_subtype,
 )
 
-_DLE_RISK_EVENT_TYPES = ("AEE", "VENDOR_AEE", "ANR", "CRASH")
+# Legacy family labels in device_log_event.event_type (#519) plus concrete types
+# written by resolve_device_log_event_type (#215 / #1054). Placeholders
+# (UNKNOWN/CRASH/AEE/其他) still match when event_subtype carries the subtype.
+_DLE_RISK_FAMILY_EVENT_TYPES = frozenset({"AEE", "VENDOR_AEE", "ANR", "CRASH"})
+_DLE_RISK_CONCRETE_EVENT_TYPES = frozenset({
+    "ANR",
+    "JE",
+    "NE",
+    "KE",
+    "SWT",
+    "HWT",
+    "HANG",
+    "FATAL JE",
+    "FATAL NE",
+    "COMBO EE",
+    "KERNEL API DUMP",
+    "SYSTEM API DUMP",
+    "MODEM EE",
+    "OCP REBOOT",
+    "HW REBOOT",
+})
+_DLE_RISK_PLACEHOLDER_EVENT_TYPES = frozenset(
+    {"", "UNKNOWN", "CRASH", "AEE", "VENDOR_AEE", "其他"},
+)
+_DLE_RISK_EVENT_TYPES = tuple(
+    sorted(_DLE_RISK_FAMILY_EVENT_TYPES | _DLE_RISK_CONCRETE_EVENT_TYPES),
+)
 _SIGNAL_RISK_CATEGORIES = ("AEE", "VENDOR_AEE", "ANR")
 # Reconciler registers DLE for crash-family signals; MOBILELOG is signal-only (#528).
 _LINK_RATE_CATEGORIES = ("AEE", "VENDOR_AEE")
@@ -38,7 +64,13 @@ def _rows_from_device_log_events(db: Session, job_ids: list[int]) -> list[tuple[
             COUNT(DISTINCT COALESCE(remote_path, local_path)) AS dedup_count
         FROM device_log_event
         WHERE job_id = ANY(:job_ids)
-          AND upper(event_type) = ANY(:event_types)
+          AND (
+            upper(event_type) = ANY(:event_types)
+            OR (
+              upper(event_type) = ANY(:placeholder_types)
+              AND upper(COALESCE(NULLIF(event_subtype, ''), '___')) = ANY(:concrete_subtypes)
+            )
+          )
         GROUP BY subtype
     """)
     rows = db.execute(
@@ -46,6 +78,8 @@ def _rows_from_device_log_events(db: Session, job_ids: list[int]) -> list[tuple[
         {
             "job_ids": list(job_ids),
             "event_types": [t.upper() for t in _DLE_RISK_EVENT_TYPES],
+            "placeholder_types": [t.upper() for t in _DLE_RISK_PLACEHOLDER_EVENT_TYPES],
+            "concrete_subtypes": [t.upper() for t in _DLE_RISK_CONCRETE_EVENT_TYPES],
         },
     ).all()
     return [(str(subtype), int(dedup_count)) for subtype, dedup_count in rows]
@@ -86,7 +120,7 @@ def _build_risk_summary(subtype_counts: dict[str, int]) -> Optional[Dict[str, An
         by_type[subtype] = count
         events_total += count
         upper = subtype.upper()
-        if upper in ("AEE", "VENDOR_AEE", "CRASH"):
+        if upper != "ANR":
             aee_entries += count
         level = _classify_subtype(subtype, count)
         by_severity[level] = by_severity.get(level, 0) + 1
