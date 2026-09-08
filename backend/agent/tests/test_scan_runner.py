@@ -26,9 +26,13 @@ from backend.agent.scan_runner import ScanRunner
 
 @pytest.fixture(autouse=True)
 def _reset_scan_runner():
+    from backend.agent.unisoc_scan_runner import UnisocScanRunner
+
     ScanRunner._reset_for_tests()
+    UnisocScanRunner._reset_for_tests()
     yield
     ScanRunner._reset_for_tests()
+    UnisocScanRunner._reset_for_tests()
 
 
 def _make_runner() -> ScanRunner:
@@ -171,6 +175,73 @@ def test_queue_defers_until_configured(monkeypatch):
         time.sleep(0.1)
     assert executed == [71]
     assert ScanRunner.pending_count() == 0
+
+
+def _configure_unisoc_for_tests() -> None:
+    from backend.agent.unisoc_scan_runner import UnisocScanRunner
+
+    UnisocScanRunner.instance().configure(
+        scan_tool_python="/usr/bin/python3",
+        scan_tool_script="/opt/unisoc/scan_log_gt.py",
+        result_python="/usr/bin/python3",
+        result_script="/opt/unisoc/scan_result.py",
+    )
+
+
+def test_queue_runs_when_only_unisoc_configured(monkeypatch):
+    """#1071: MTK ScanRunner 未配置时不得饿死已配置的 UNISOC 扫描。"""
+    from backend.agent.unisoc_scan_runner import UnisocScanRunner
+
+    UnisocScanRunner._reset_for_tests()
+    executed: list[str] = []
+
+    def fake_execute(cls, job):
+        executed.append("run")
+
+    monkeypatch.setattr(
+        ScanRunner, "_execute_job", classmethod(fake_execute),
+    )
+    _configure_unisoc_for_tests()
+    assert not ScanRunner.instance().is_configured()
+    assert UnisocScanRunner.instance().is_configured()
+
+    ScanRunner.enqueue_scan_now(88, "host-u", is_final=False)
+    deadline = time.time() + 5
+    while not executed and time.time() < deadline:
+        time.sleep(0.1)
+    assert executed == ["run"]
+    UnisocScanRunner._reset_for_tests()
+
+
+def test_execute_job_skips_mtk_runs_unisoc_when_mtk_missing(monkeypatch):
+    """#1071: _execute_job 按各自 is_configured 分支，不硬依赖 MTK。"""
+    from backend.agent.unisoc_scan_runner import UnisocScanRunner
+
+    UnisocScanRunner._reset_for_tests()
+    calls: list[str] = []
+
+    class _Job:
+        plan_run_id = 9
+        host_id = "h"
+        is_final = False
+        device_serials = ()
+        run_date_stamps = ()
+
+    monkeypatch.setattr(
+        ScanRunner.instance(),
+        "run_scan_and_upload",
+        lambda *a, **k: calls.append("mtk"),
+    )
+    _configure_unisoc_for_tests()
+    monkeypatch.setattr(
+        UnisocScanRunner.instance(),
+        "run_scan_and_upload",
+        lambda *a, **k: calls.append("unisoc"),
+    )
+    assert not ScanRunner.instance().is_configured()
+    ScanRunner._execute_job(_Job())
+    assert calls == ["unisoc"]
+    UnisocScanRunner._reset_for_tests()
 
 
 def test_configure_rejected_if_already_configured():

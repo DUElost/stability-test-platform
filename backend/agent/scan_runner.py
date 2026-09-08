@@ -157,8 +157,9 @@ class ScanRunner:
                             continue
                         cls._worker_started = False
                 return
-            if not cls.instance().is_configured():
-                # P2-2b：启动窗口内 scan_now 入队等待 configure，不再丢弃。
+            if not cls._any_scan_runner_configured():
+                # P2-2b / #1071：启动窗口内 scan_now 入队等待 configure；
+                # 仅当 MTK 与 UNISOC 都未配置时才 defer，避免「只配 UNISOC」饿死。
                 with cls._queue_lock:
                     cls._pending[job.plan_run_id] = job
                 logger.warning(
@@ -170,27 +171,51 @@ class ScanRunner:
             cls._execute_job(job)
 
     @classmethod
+    def _any_scan_runner_configured(cls) -> bool:
+        if cls.instance().is_configured():
+            return True
+        try:
+            from backend.agent.unisoc_scan_runner import UnisocScanRunner
+        except ImportError:
+            from agent.unisoc_scan_runner import UnisocScanRunner
+        return UnisocScanRunner.instance().is_configured()
+
+    @classmethod
     def _execute_job(cls, job: _ScanJob) -> None:
         cls._host_scan_semaphore.acquire(blocking=True)
         try:
-            cls.instance().run_scan_and_upload(
-                job.plan_run_id,
-                job.host_id,
-                is_final=job.is_final,
-                device_serials=job.device_serials,
-                run_date_stamps=job.run_date_stamps,
-            )
+            runner = cls.instance()
+            if runner.is_configured():
+                runner.run_scan_and_upload(
+                    job.plan_run_id,
+                    job.host_id,
+                    is_final=job.is_final,
+                    device_serials=job.device_serials,
+                    run_date_stamps=job.run_date_stamps,
+                )
+            else:
+                logger.info(
+                    "control_scan_now_skip_mtk_not_configured plan_run=%d",
+                    job.plan_run_id,
+                )
             try:
                 from backend.agent.unisoc_scan_runner import UnisocScanRunner
             except ImportError:
                 from agent.unisoc_scan_runner import UnisocScanRunner
-            UnisocScanRunner.instance().run_scan_and_upload(
-                job.plan_run_id,
-                job.host_id,
-                is_final=job.is_final,
-                device_serials=job.device_serials,
-                run_date_stamps=job.run_date_stamps,
-            )
+            unisoc = UnisocScanRunner.instance()
+            if unisoc.is_configured():
+                unisoc.run_scan_and_upload(
+                    job.plan_run_id,
+                    job.host_id,
+                    is_final=job.is_final,
+                    device_serials=job.device_serials,
+                    run_date_stamps=job.run_date_stamps,
+                )
+            else:
+                logger.info(
+                    "control_scan_now_skip_unisoc_not_configured plan_run=%d",
+                    job.plan_run_id,
+                )
         finally:
             cls._host_scan_semaphore.release()
 
