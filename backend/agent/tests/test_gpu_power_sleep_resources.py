@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 
 def _load(name: str, rel: str):
@@ -221,7 +222,7 @@ def test_powercycle_setup_v102_install_uses_push_pm(monkeypatch):
     assert any(c[0] == "shell" and "pm install" in c[1] for c in calls)
 
 
-def _load_lib(name: str, ver: str) -> "module":
+def _load_lib(name: str, ver: str) -> ModuleType:
     """加载任意脚本版本的 _lib（用于 finish/setup 单测）。"""
     import importlib.util
     d = str(Path(__file__).resolve().parents[2] / f"agent/scripts/{name}/v{ver}")
