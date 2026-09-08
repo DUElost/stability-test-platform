@@ -43,8 +43,17 @@ SCRIPT_ROOT = "backend/agent/scripts"
 # backend/agent/scripts/<name>/v<version>/<相对路径>
 _VERSIONED = re.compile(rf"^{re.escape(SCRIPT_ROOT)}/(?P<name>[^/]+)/(?P<version>v[^/]+)/(?P<rest>.+)$")
 
-# 只有「新增」是安全的。修改/删除/改名都会让既有版本的字节变化。
+# 修改/删除/改名会让既有版本的字节变化。「新增」只在**全新**版本目录里安全
+# ——往已发布版本目录塞文件（A）同样改变该版本的可用文件面（#888），且
+# `_` 前缀辅助文件连 entry sha 都不计，扫描器无从察觉。
 _MUTATING_STATUS = {"M": "修改", "D": "删除", "R": "改名", "T": "类型变更"}
+ADDED_STATUS = "A"
+ADDED_INTO_PUBLISHED = "新增入已发布版本"
+
+
+def _version_dir_exists_in_base(base: str, version_dir: str) -> bool:
+    """基线中该 v* 目录是否已存在（git 不跟踪空目录，含任意文件即存在）。"""
+    return bool(_git("ls-tree", "--name-only", base, "--", version_dir).strip())
 
 
 def _git(*args: str) -> str:
@@ -83,12 +92,17 @@ def main() -> int:
 
     violations: list[tuple[str, str, str, str]] = []
     for status, path in _changed_paths(args.base):
-        if status not in _MUTATING_STATUS:
-            continue
         m = _VERSIONED.match(path)
         if not m:
             continue
-        violations.append((path, _MUTATING_STATUS[status], m["name"], m["version"]))
+        if status in _MUTATING_STATUS:
+            violations.append((path, _MUTATING_STATUS[status], m["name"], m["version"]))
+        elif status == ADDED_STATUS:
+            # #888：A 不再一刀切放行——基线中该 v* 目录已存在 = 往已发布
+            # 版本塞文件，违约；全新 v* 目录整树新增 = ADR-0020 指定做法。
+            version_dir = f"{SCRIPT_ROOT}/{m['name']}/{m['version']}"
+            if _version_dir_exists_in_base(args.base, version_dir):
+                violations.append((path, ADDED_INTO_PUBLISHED, m["name"], m["version"]))
 
     if not violations:
         if not args.quiet:

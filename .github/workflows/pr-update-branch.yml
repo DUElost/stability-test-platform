@@ -38,11 +38,14 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Reconcile queue and update head if behind
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # #1101：同 enable-auto-merge——队列脚本会启用 auto-merge，必须以
+          # 人类身份（PAT）执行，否则合入落在 bot 身份上、原生关单不触发；
+          # 未配置 secret 时回退 GITHUB_TOKEN。
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
         run: bash scripts/ci/pr-automerge-queue.sh
       - name: Update branch when green and behind (workflow_run PR)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: bash scripts/ci/pr-update-branch-if-behind.sh
