@@ -1460,3 +1460,102 @@ class TestStallRequiresProgressScript:
         }, headers=auth_headers)
         assert resp.status_code == 422, resp.text
         assert resp.json()["detail"]["code"] == "STALL_REQUIRES_PROGRESS_SCRIPT"
+
+
+class TestPlanSpecialtyOptional:
+    """#882/#778（R01-F02）：specialty_key 可选 + fields_set 局部更新语义。
+
+    前端「专项不变即省略」（#405 审计纪律）曾被必填 schema 422 拦截；
+    链尾追加 payload 从不携带归属字段，专项缺省继承链尾 Plan。
+    """
+
+    def _create(self, client, auth_headers, name):
+        resp = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+            "project_key": "GENERIC", "specialty_key": "ops",
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        return resp.json()["data"]
+
+    def test_update_without_specialty_key_keeps_specialty(
+        self, client, auth_headers, sample_script, db_session
+    ):
+        data = self._create(client, auth_headers, _uniq("plan"))
+        resp = client.put(f"/api/v1/plans/{data['id']}", json={
+            "name": data["name"] + "_renamed",
+            "steps": _minimal_steps(),
+            "project_key": "GENERIC",
+            "expected_updated_at": data["updated_at"],
+            # specialty_key 省略 = 不变（前端 #405 纪律，曾被 422 拦截）
+        }, headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+
+        get_resp = client.get(f"/api/v1/plans/{data['id']}", headers=auth_headers)
+        assert get_resp.status_code == 200
+        assert get_resp.json()["data"]["specialty_key"] == "ops"
+        assert get_resp.json()["data"]["name"] == data["name"] + "_renamed"
+
+    def test_update_explicit_null_clears_specialty(
+        self, client, auth_headers, sample_script, db_session
+    ):
+        data = self._create(client, auth_headers, _uniq("plan"))
+        resp = client.put(f"/api/v1/plans/{data['id']}", json={
+            "specialty_key": None,  # 显式 null = 解绑（D2/D6「不限」）
+            "expected_updated_at": data["updated_at"],
+        }, headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+
+        get_resp = client.get(f"/api/v1/plans/{data['id']}", headers=auth_headers)
+        assert get_resp.json()["data"]["specialty_key"] is None
+
+    def test_update_with_new_specialty_key_changes_it(
+        self, client, auth_headers, sample_script, db_session
+    ):
+        from backend.models.project import Specialty
+
+        if not db_session.query(Specialty).filter_by(key="hw").first():
+            db_session.add(Specialty(key="hw", display_name="硬件", sort_order=20))
+            db_session.commit()
+
+        data = self._create(client, auth_headers, _uniq("plan"))
+        resp = client.put(f"/api/v1/plans/{data['id']}", json={
+            "specialty_key": "hw",
+            "expected_updated_at": data["updated_at"],
+        }, headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+
+        get_resp = client.get(f"/api/v1/plans/{data['id']}", headers=auth_headers)
+        assert get_resp.json()["data"]["specialty_key"] == "hw"
+
+    def test_chain_tail_inherits_tail_specialty(
+        self, client, auth_headers, sample_script, db_session
+    ):
+        data = self._create(client, auth_headers, _uniq("plan"))
+        resp = client.post(f"/api/v1/plans/{data['id']}/append-chain-tail", json={
+            "name": _uniq("tail"),
+            "steps": _minimal_steps(),
+            "expected_updated_at": data["updated_at"],
+            # specialty_key / project_key 均省略（前端链尾 payload 现状，#778）
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        tail = resp.json()["data"]
+        assert tail["specialty_key"] == "ops"  # 继承链尾专项
+
+    def test_chain_tail_explicit_specialty_wins(
+        self, client, auth_headers, sample_script, db_session
+    ):
+        from backend.models.project import Specialty
+
+        if not db_session.query(Specialty).filter_by(key="hw").first():
+            db_session.add(Specialty(key="hw", display_name="硬件", sort_order=20))
+            db_session.commit()
+
+        data = self._create(client, auth_headers, _uniq("plan"))
+        resp = client.post(f"/api/v1/plans/{data['id']}/append-chain-tail", json={
+            "name": _uniq("tail"),
+            "steps": _minimal_steps(),
+            "specialty_key": "hw",
+            "expected_updated_at": data["updated_at"],
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["data"]["specialty_key"] == "hw"

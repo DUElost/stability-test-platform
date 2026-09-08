@@ -123,7 +123,10 @@ class PlanUpdate(BaseModel):
     # ADR-0029 D2/D6 + v2.5 D11：归属可选（None = 显式「不限」）；语义随
     # fields_set
     project_key: Optional[str] = None
-    specialty_key: str
+    # #882（R01-F02）：与 project_key 同为可选+fields_set 语义——前端「专项
+    # 不变」时省略该字段（#405 审计纪律），必填声明会让普通编辑在进入更新
+    # 函数前 422；显式 null = 解绑专项（处理函数按 fields_set 区分）。
+    specialty_key: Optional[str] = None
     # ADR-0030 v1.4（#404 PR-B）：同 fields_set 语义——显式 null = 解绑套件；
     # 解绑即回到 P0 文件真源模式（PR-C 起托管门禁不再适用）
     suite_name: Optional[str] = None
@@ -140,9 +143,11 @@ class PlanChainTailCreate(BaseModel):
     name: str
     description: Optional[str] = None
     steps: List[PlanStepIn] = Field(default_factory=list)
-    # ADR-0029 + v2.5 D11：链尾 Plan 归属可选（None = 显式「不限」）；专项必填
+    # ADR-0029 + v2.5 D11：链尾 Plan 归属可选（None = 显式「不限」）。
+    # #778（R01-F02 同源）：专项缺省时继承链尾 Plan 的专项（链条延续语义，
+    # 由路由处理函数实现）；显式空字符串无效值仍走 _resolve 404。
     project_key: Optional[str] = None
-    specialty_key: str
+    specialty_key: Optional[str] = None
     # 链尾版本令牌(乐观锁):客户端加载链尾时的 updated_at,与链尾当前值
     # 不一致则整体 409 回滚。客户端无法确定链尾(超出最近 200 条窗口)时
     # 可省略——服务端仍以行锁串行化并发追加,不会产生孤立 Plan。
@@ -724,6 +729,11 @@ def append_chain_tail(
     )
 
     now = datetime.now(timezone.utc)
+    # #778（R01-F02 同源）：链尾专项缺省 = 继承链尾 Plan 的专项（链条延续
+    # 语义，前端链尾 payload 不携带归属字段）；显式提供则按值解析。
+    inherited_specialty_key = payload.specialty_key
+    if inherited_specialty_key is None and tail.specialty is not None:
+        inherited_specialty_key = tail.specialty.key
     new_plan = Plan(
         name=payload.name,
         description=payload.description,
@@ -735,9 +745,8 @@ def append_chain_tail(
         auto_archive_interval_seconds=None,
         next_plan_id=None,
         watcher_policy=None,
-        # ADR-0029 P1-B2：链尾 Plan 双必填（schema 层已强制）
         project_id=_resolve_project_id(db, payload.project_key),
-        specialty_id=_resolve_specialty_id(db, payload.specialty_key),
+        specialty_id=_resolve_specialty_id(db, inherited_specialty_key),
         created_by=current_user.username,
         created_at=now,
         updated_at=now,
@@ -907,9 +916,9 @@ def update_plan(
     if payload.watcher_policy is not None:
         plan.watcher_policy = payload.watcher_policy
 
-    # ADR-0029（#405）+ P1-B2：归属双必填——payload 恒含 project_key /
-    # specialty_key（schema 强制，无清除语义；GENERIC = 显式「不限」）。
-    # 未提供的字段不动另一维。审计经下方 changed 字段名列表自然覆盖。
+    # ADR-0029（#405）+ P1-B2：归属按 fields_set 局部更新——前端「不变即省略」
+    # （#405 审计纪律）；显式提供才落，None = 显式「不限」（GENERIC 同义）。
+    # #882：specialty_key 改可选后与 project_key 语义完全一致，普通编辑不再 422。
     if "project_key" in fields_set:
         plan.project_id = _resolve_project_id(db, payload.project_key)
     if "specialty_key" in fields_set:

@@ -123,6 +123,16 @@ function isLoginRequest(url: unknown): boolean {
   return typeof url === 'string' && url.includes('/auth/login');
 }
 
+// 裸 axios 调用，不经过本拦截器（防递归）。
+async function isSessionAlive(): Promise<boolean> {
+  try {
+    await axios.get('/api/v1/auth/me', { withCredentials: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 apiClient.interceptors.request.use(
   (config) => {
     if (import.meta.env.DEV) console.log(`[API] ${config.method?.toUpperCase()} ${config.url}`);
@@ -163,6 +173,21 @@ apiClient.interceptors.response.use(
       // 时这一整组副作用本就无业务收益。
       if (window.location.pathname === '/login') {
         return Promise.reject(toApiError(error));
+      }
+
+      // #1039：refresh 失败 ≠ 会话已死——多标签 rotation 竞态下本标签的旧
+      // jti 可能刚被另一标签的消费输掉，而赢家的新 cookie 已在 jar 里。探活
+      // 成功则直接重放原请求而不是全局登出；探活也失败才认定会话终态。
+      // __probeRetry 防重放后的 401 再次进入本分支造成循环。
+      if (
+        error.config
+        && !error.config.__probeRetry
+        && !shouldSkipRefresh(error.config.url)
+      ) {
+        error.config.__probeRetry = true;
+        if (await isSessionAlive()) {
+          return apiClient(error.config);
+        }
       }
 
       if (_authFailureHandler) {
