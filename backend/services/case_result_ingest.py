@@ -89,6 +89,28 @@ def _match_case_id(db: Session, suite_id: Optional[int], case_name: str) -> Opti
     return int(row[0]) if row else None
 
 
+def case_result_ingest_pending(db: Session, job_id: int) -> bool:
+    """True when finish detail is referenced but ``test_case_result`` rows are absent.
+
+    Covers late-arriving NFS JSON and unreadable payloads — ``post_completion``
+    must not set ``post_processed_at`` while this returns True (#1076).
+    """
+    if (
+        db.query(TestCaseResult.id)
+        .filter(TestCaseResult.job_id == job_id)
+        .first()
+    ):
+        return False
+    detail_uri = _find_finish_detail_uri(db, job_id)
+    if not detail_uri:
+        return False
+    payload = _load_detail_json(detail_uri)
+    if payload is None:
+        return True
+    testpoints = payload.get("testpoints")
+    return not isinstance(testpoints, list) or not testpoints
+
+
 def ingest_test_case_results_for_job(db: Session, job_id: int) -> int:
     """从 mtbf_finish detail JSON 摄入逐条结果。返回新写入行数（已存在则跳过）。"""
     job = db.get(JobInstance, job_id)
