@@ -300,6 +300,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         )
     except Exception as e:
         logger.error("saq_scan_enqueue_followup_failed plan_run=%d: %s", plan_run_id, e)
+        raise
 
     logger.info("saq_scan_done plan_run=%d", plan_run_id)
 
@@ -583,6 +584,7 @@ async def merge_task(
             "saq_merge_enqueue_extract_failed plan_run=%d: %s",
             plan_run_id, e,
         )
+        raise
 
 
 def _run_extract_sync(plan_run_id: int) -> int:
