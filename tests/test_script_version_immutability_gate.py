@@ -110,3 +110,52 @@ def test_gate_ignores_changes_outside_version_directories(repo: Path):
     result = _run_gate(repo, "main~1")
 
     assert result.returncode == 0, result.stderr
+
+
+def test_gate_blocks_adding_file_into_published_version(repo: Path):
+    """#888：往已发布版本目录「新增」文件 = 改变该版本可用文件面，必须拦。"""
+    published = repo / SCRIPT_ROOT / "check_device" / "v1.0.0"
+    (published / "_extra.py").write_text("def extra(): pass\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "smuggle helper into v1.0.0")
+
+    result = _run_gate(repo, "main~1")
+
+    assert result.returncode == 1, result.stdout
+    assert "check_device/v1.0.0/_extra.py" in result.stderr
+    assert "新增入已发布版本" in result.stderr
+
+
+def test_gate_allows_adding_nested_file_in_fresh_version(repo: Path):
+    """全新版本目录整树新增（含子目录）= ADR-0020 指定做法，放行。"""
+    new_version = repo / SCRIPT_ROOT / "check_device" / "v1.2.0" / "sub"
+    new_version.mkdir(parents=True)
+    (new_version / "part.py").write_text("print('v2 sub')\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "publish check_device v1.2.0")
+
+    result = _run_gate(repo, "main~1")
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_gate_blocks_adding_file_when_version_dir_only_has_subdirs(repo: Path):
+    """基线中版本目录仅含子目录（无直接文件）时，塞文件同样要拦——
+    ls-tree 非空即视为已发布（防 ls-tree 直接子项判定的空目录误判）。"""
+    existing_sub = repo / SCRIPT_ROOT / "check_device" / "v1.0.0" / "lib"
+    existing_sub.mkdir()
+    (existing_sub / "keep.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "v1.0.0 gains lib/")
+    base = "HEAD~1"
+
+    (repo / SCRIPT_ROOT / "check_device" / "v1.0.0" / "smuggled.py").write_text(
+        "y = 2\n", encoding="utf-8"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "smuggle into dir-with-only-subdirs")
+
+    result = _run_gate(repo, base)
+
+    assert result.returncode == 1, result.stdout
+    assert "smuggled.py" in result.stderr
