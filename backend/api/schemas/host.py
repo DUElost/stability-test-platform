@@ -17,6 +17,23 @@ class HostCreate(BaseModel):
     ssh_known_hosts_path: Optional[str] = None
 
 
+class HostUpdate(BaseModel):
+    """#950: PUT 以提交字段为准——未提交字段（含密钥认证配置）保持不变。
+
+    编辑表单只发用户改动过的字段（如仅改名称）；复用 HostCreate 会让
+    缺省默认值（password/None）无条件覆盖既有密钥认证配置。
+    """
+
+    name: Optional[str] = None
+    ip: Optional[str] = None
+    ssh_port: Optional[int] = None
+    ssh_user: Optional[str] = None
+    ssh_auth_type: Optional[str] = None
+    ssh_key_path: Optional[str] = None
+    ssh_password: Optional[str] = None
+    ssh_known_hosts_path: Optional[str] = None
+
+
 class HostWatcherAdminStatePatch(BaseModel):
     watcher_admin_active: bool
 

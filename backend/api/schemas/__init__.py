@@ -1,6 +1,7 @@
 from backend.api.schemas.base import ORMBaseModel, PaginatedResponse, _isoformat_utc
 from backend.api.schemas.host import (
     HostCreate,
+    HostUpdate,
     HostWatcherAdminStatePatch,
     HostOut,
     HostLiteOut,
@@ -108,6 +109,7 @@ __all__ = [
     "PaginatedResponse",
     "_isoformat_utc",
     "HostCreate",
+    "HostUpdate",
     "HostWatcherAdminStatePatch",
     "HostOut",
     "HostLiteOut",
