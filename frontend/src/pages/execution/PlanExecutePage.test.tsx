@@ -60,6 +60,7 @@ vi.mock('@/utils/api', async (importOriginal) => {
       },
       resourcePools: {
         list: vi.fn().mockResolvedValue([]),
+        available: vi.fn().mockResolvedValue([]),
       },
     },
   };
@@ -86,6 +87,7 @@ function renderPage({
   activeJobs = undefined as any[] | undefined,
   getHost,
   wifiPools = [] as any[],
+  wifiPoolsFailure,
 }: {
   plans?: any[];
   devices?: any[];
@@ -97,6 +99,7 @@ function renderPage({
   activeJobs?: any[];
   getHost?: (id: string) => any | Promise<any>;
   wifiPools?: any[];
+  wifiPoolsFailure?: Error;
 } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -123,7 +126,10 @@ function renderPage({
     (Array.isArray(hostDetail?.active_jobs) ? hostDetail.active_jobs : []);
   (api.jobs.activeByDevice as any).mockResolvedValue(derivedActiveJobs);
   (api.planRuns.retryDispatch as any).mockResolvedValue({ plan_run_id: 88, status: 'RUNNING' });
-  (api.resourcePools.list as any).mockResolvedValue(wifiPools);
+  (api.resourcePools.available as any).mockResolvedValue(wifiPools);
+  if (wifiPoolsFailure) {
+    (api.resourcePools.available as any).mockRejectedValue(wifiPoolsFailure);
+  }
 
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -1310,3 +1316,12 @@ describe('PlanExecutePage', () => {
     });
   });
 });
+
+  it('#955: shows wifi list failure banner instead of silently empty pools', async () => {
+    renderPage({
+      devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
+      wifiPoolsFailure: new Error('network down'),
+    });
+
+    expect(await screen.findByText(/WiFi 列表加载失败/)).toBeInTheDocument();
+  });
