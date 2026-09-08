@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -397,3 +399,159 @@ def test_same_basename_different_events_do_not_overwrite(tmp_path, monkeypatch):
     assert second_remote.is_dir()
     assert (second_remote / "payload.bin").read_bytes() == b"host-b-different"
     assert posted[-1]["events"][0]["remote_path"] == str(second_remote)
+
+
+def test_fresh_copy_remote_ack_failure_keeps_local(tmp_path, monkeypatch):
+    """#1083: 中心未确认（REMOTE patch ≥400）时不得 prune —— 本地保留待重试。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    src = tmp_path / "event_dir"
+    src.mkdir()
+    (src / "a.txt").write_text("hello", encoding="utf-8")
+
+    nfs = tmp_path / "nfs"
+    up = EventUploader.instance()
+    up.configure(api_url="http://127.0.0.1:8000", agent_secret="secret", host_id="h1", nfs_root=str(nfs))
+    job = _UploadJob(
+        event_id="evt-ack-fail", local_path=str(src), plan_run_id=7,
+        serial="d", platform="MTK", event_type="KE",
+        detected_at="2026-08-09T10:00:00+00:00", host_id="h1",
+        prune_after_upload=True,
+    )
+    posted = []
+
+    def fake_post(url, **kwargs):
+        posted.append(kwargs.get("json"))
+        resp = MagicMock()
+        resp.status_code = 500
+        return resp
+
+    with patch("backend.agent.event_uploader.requests.post", side_effect=fake_post), patch(
+        "backend.agent.event_uploader.resolve_upload_devices_dir",
+        return_value=nfs / "devices" / "7",
+    ):
+        up._upload_one(job)
+    assert src.is_dir()  # 本地未被删
+    dst = nfs / "devices" / "7" / job.event_id / "event_dir"
+    assert dst.is_dir()
+    states = [p["events"][0]["state"] for p in posted]
+    assert states == ["UPLOADING", "REMOTE"]  # REMOTE 尝试过但未被确认
+    assert "PRUNED" not in states
+
+
+def test_existing_remote_ack_failure_keeps_local(tmp_path, monkeypatch):
+    """#1083: 远端副本已存在且与源一致，但 REMOTE 确认失败 → 不 prune。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    src = tmp_path / "event_dir"
+    src.mkdir()
+    (src / "a.txt").write_text("hello", encoding="utf-8")
+
+    nfs = tmp_path / "nfs"
+    dst = nfs / "devices" / "7" / "evt-existing" / "event_dir"
+    dst.mkdir(parents=True)
+    (dst / "a.txt").write_text("hello", encoding="utf-8")
+
+    up = EventUploader.instance()
+    up.configure(api_url="http://127.0.0.1:8000", agent_secret="secret", host_id="h1", nfs_root=str(nfs))
+    job = _UploadJob(
+        event_id="evt-existing", local_path=str(src), plan_run_id=7,
+        serial="d", platform="MTK", event_type="KE",
+        detected_at="2026-08-09T10:00:00+00:00", host_id="h1",
+        prune_after_upload=True,
+    )
+    posted = []
+
+    def fake_post(url, **kwargs):
+        posted.append(kwargs.get("json"))
+        resp = MagicMock()
+        resp.status_code = 500
+        return resp
+
+    with patch("backend.agent.event_uploader.requests.post", side_effect=fake_post), patch(
+        "backend.agent.event_uploader.resolve_upload_devices_dir",
+        return_value=nfs / "devices" / "7",
+    ):
+        up._upload_one(job)
+    assert src.is_dir()
+    assert dst.is_dir()
+    states = [p["events"][0]["state"] for p in posted]
+    assert states == ["REMOTE"]
+    assert "PRUNED" not in states
+
+
+def test_fresh_copy_mismatch_removes_bad_copy_and_reschedules(tmp_path, monkeypatch):
+    """#1083: 拷贝后源/副本哈希不一致 → 丢坏副本走退避重试，不 REMOTE 不 prune。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    src = tmp_path / "event_dir"
+    src.mkdir()
+    (src / "a.txt").write_text("hello", encoding="utf-8")
+
+    nfs = tmp_path / "nfs"
+    up = EventUploader.instance()
+    up.configure(api_url="http://127.0.0.1:8000", agent_secret="secret", host_id="h1", nfs_root=str(nfs))
+    job = _UploadJob(
+        event_id="evt-mismatch", local_path=str(src), plan_run_id=7,
+        serial="d", platform="MTK", event_type="KE",
+        detected_at="2026-08-09T10:00:00+00:00", host_id="h1",
+        prune_after_upload=True,
+    )
+    posted = []
+
+    def fake_post(url, **kwargs):
+        posted.append(kwargs.get("json"))
+        return MagicMock(status_code=200)
+
+    def tamper_copy(s, d):
+        shutil.copytree(s, d)
+        (Path(d) / "a.txt").write_text("tampered", encoding="utf-8")
+
+    with patch("backend.agent.event_uploader.requests.post", side_effect=fake_post), patch(
+        "backend.agent.event_uploader.resolve_upload_devices_dir",
+        return_value=nfs / "devices" / "7",
+    ), patch(
+        "backend.agent.event_uploader.UploadManager._copytree_safe",
+        side_effect=tamper_copy,
+    ), patch("backend.agent.event_uploader.threading.Timer"):
+        up._upload_one(job)
+    assert job.rescheduled is True
+    assert job.attempt == 1
+    assert src.is_dir()
+    assert not (nfs / "devices" / "7" / job.event_id / "event_dir").exists()
+    states = [p["events"][0]["state"] for p in posted]
+    assert states == ["UPLOADING"]
+
+
+def test_upload_one_prunes_local_only_after_ack_ok(tmp_path, monkeypatch):
+    """#1083: 中心确认（2xx）后经完整上传路径 prune 本地（HddSpill 语义保持）。"""
+    monkeypatch.setenv("STP_DEVICE_LOG_EVENT_ENABLED", "1")
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    src = tmp_path / "event_dir"
+    src.mkdir()
+    (src / "a.txt").write_text("hello", encoding="utf-8")
+
+    nfs = tmp_path / "nfs"
+    up = EventUploader.instance()
+    up.configure(api_url="http://127.0.0.1:8000", agent_secret="secret", host_id="h1", nfs_root=str(nfs))
+    job = _UploadJob(
+        event_id="evt-prune-ok", local_path=str(src), plan_run_id=7,
+        serial="d", platform="MTK", event_type="KE",
+        detected_at="2026-08-09T10:00:00+00:00", host_id="h1",
+        prune_after_upload=True,
+    )
+
+    def fake_post(url, **kwargs):
+        return MagicMock(status_code=200)
+
+    with patch("backend.agent.event_uploader.requests.post", side_effect=fake_post), patch(
+        "backend.agent.aee.device_log_event_client.requests.post",
+        side_effect=fake_post,
+    ), patch(
+        "backend.agent.event_uploader.resolve_upload_devices_dir",
+        return_value=nfs / "devices" / "7",
+    ):
+        up._upload_one(job)
+    assert not src.exists()
+    assert (nfs / "devices" / "7" / job.event_id / "event_dir").is_dir()
