@@ -467,12 +467,50 @@ def set_stop_flags() -> None:
     push_prefs_xml(content)
 
 
+def _verify_stop_flags() -> None:
+    """#894：写后回读验证 running=false（防重启窗口 run-as 写失败静默残留）。
+
+    push_prefs_xml 的写入失败（boot 早期 /data 未挂载 run-as 失败等）当前
+    静默——残留 running=true 会在设备 boot 后经 AutoTestTool boot receiver
+    拉起服务。此处回读验证，失败重试一次，仍失败 raise（finish 报错而非
+    假成功）。
+    """
+    for _attempt in (1, 2):
+        xml = get_prefs_xml()
+        if 'name="running" value="false"' in xml:
+            return
+        set_stop_flags()
+    _verify_stop_flags()
+    raise RuntimeError(
+        "prefs running 未置 false（残留会导致 boot 后 AutoTestTool 自启叠加——#894）"
+    )
+
+
+def _verify_stop_flags() -> None:
+    """#894：写后回读验证 running=false（防重启窗口 run-as 写失败静默残留）。
+
+    push_prefs_xml 的写入失败（boot 早期 /data 未挂载 run-as 失败等）当前
+    静默——残留 running=true 会在设备 boot 后经 AutoTestTool boot receiver
+    拉起服务。此处回读验证，失败重试一次，仍失败 raise（finish 报错而非
+    假成功）。
+    """
+    for _attempt in (1, 2):
+        xml = get_prefs_xml()
+        if 'name="running" value="false"' in xml:
+            return
+        set_stop_flags()
+    raise RuntimeError(
+        "prefs running 未置 false（残留会导致 boot 后 AutoTestTool 自启叠加——#894）"
+    )
+
+
 def stop_task(force: bool) -> None:
     """set_stop_flags → 优雅 STOP → force-stop 兜底（lib.ps1:Stop-SleepTestTask 同款）。
 
     PC wake-watchdog 不移植（G15 决策：OEM 闹钟丢失场景记已知缺口，patrol 兜底）。
     """
     set_stop_flags()
+    _verify_stop_flags()
     if service_alive():
         adb_shell(
             f"am startservice -n {_PKG}/{_SERVICE} -a com.tinno.autotesttool.action.SLEEP_TEST_STOP",

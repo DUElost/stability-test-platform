@@ -1,4 +1,4 @@
-"""seed monkey_setup v2.3.6 + powercycle_finish v1.0.3 + sleep_finish v1.0.1 — #894 清理完整化
+"""seed monkey_setup v2.3.6 + powercycle_finish v1.0.3 + sleep_finish v1.0.2 — #894 清理完整化
 
 Revision ID: p8q7r6s5t4u3
 Revises: o9p8q7r6s5t4
@@ -10,7 +10,7 @@ Data migration (issue #894 teardown 清理完整化):
    AutoTestTool 残留，防 boot 自启叠加), deactivate v2.3.5.
 2. Ensure powercycle_finish v1.0.3 exists (停测后回读验证 prefs running=false),
    deactivate v1.0.2.
-3. Ensure sleep_finish v1.0.1 exists (同款验证), deactivate v1.0.0.
+3. Ensure sleep_finish v1.0.2 exists (同款验证), deactivate v1.0.1.
 """
 from __future__ import annotations
 
@@ -39,10 +39,10 @@ VERSIONS = [
         "deactivate": ["1.0.2"],
     },
     {
-        "name": "sleep_finish", "ver": "1.0.1",
+        "name": "sleep_finish", "ver": "1.0.2",
         "sha": "ff4fb1a3231ea925ccd0053571d07b57c323f34385b0bc50c357604a1bc75a26",
-        "desc": "休眠唤醒收尾 — v1.0.0 + 停测后回读验证 prefs running=false（#894）",
-        "deactivate": ["1.0.0"],
+        "desc": "休眠唤醒收尾 — v1.0.1 + 停测后回读验证 prefs running=false（#894）",
+        "deactivate": ["1.0.1"],
     },
 ]
 

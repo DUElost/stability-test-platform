@@ -265,7 +265,7 @@ def test_powercycle_finish_v103_raises_if_still_residual(monkeypatch):
 
 
 def test_sleep_finish_v101_verifies_stop_flags(monkeypatch):
-    lib = _load_lib("sleep_finish", "1.0.1")
+    lib = _load_lib("sleep_finish", "1.0.2")
     monkeypatch.setattr(lib, "get_prefs_xml",
                         lambda: 'name="running" value="false"')
     lib._verify_stop_flags()  # 直接通过
