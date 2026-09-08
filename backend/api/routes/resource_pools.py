@@ -10,13 +10,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse
-from backend.api.routes.auth import require_admin, User
+from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.core.audit import record_audit_async
 from backend.core.database import get_async_db
 from backend.models.resource_pool import ResourcePool
 from backend.services.resource_pool import get_pool_load_summary
 
 router = APIRouter(prefix="/api/v1/resource-pools", tags=["resource-pools"])
+
+# #955: 普通用户可选的池列表不得携带凭据。白名单只放非机密展示字段——
+# 保守方向：白名单外的新增 config 键默认不返回（防未来机密字段泄漏）。
+_PUBLIC_CONFIG_KEYS = ("ssid", "band", "router_ip", "mac_filter")
 
 
 class ResourcePoolIn(BaseModel):
@@ -64,6 +68,42 @@ async def list_pools(
     )
     pools = result.scalars().all()
     return ApiResponse(data=[ResourcePoolOut.model_validate(p) for p in pools])
+
+
+@router.get("/available")
+async def list_available_pools(
+    resource_type: Optional[str] = None,
+    db: AsyncSession = Depends(get_async_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """#955: 普通登录用户可选池列表——只含 active 池，config 白名单剥密。
+
+    管理接口（GET /resource-pools）保持 admin + 完整 config（含凭据）；
+    Plan 执行的 WiFi 选择器用本端点，不泄漏 password 等机密。
+    """
+    clauses = [ResourcePool.is_active.is_(True)]
+    if resource_type:
+        clauses.append(ResourcePool.resource_type == resource_type)
+    result = await db.execute(
+        select(ResourcePool).where(*clauses).order_by(ResourcePool.id)
+    )
+    pools = result.scalars().all()
+    return ApiResponse(data=[
+        ResourcePoolOut(
+            id=p.id,
+            name=p.name,
+            resource_type=p.resource_type,
+            config={
+                key: value
+                for key, value in (p.config or {}).items()
+                if key in _PUBLIC_CONFIG_KEYS
+            },
+            max_concurrent_devices=p.max_concurrent_devices,
+            host_group=p.host_group,
+            is_active=p.is_active,
+        )
+        for p in pools
+    ])
 
 
 @router.get("/loads")

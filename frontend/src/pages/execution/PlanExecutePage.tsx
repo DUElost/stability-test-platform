@@ -232,9 +232,11 @@ export default function PlanExecutePage() {
     queryFn: () => fetchHostList(0, 200),
   });
 
-  const { data: wifiPoolList } = useQuery({
-    queryKey: ['resource-pools', 'wifi'],
-    queryFn: () => api.resourcePools.list('wifi'),
+  const { data: wifiPoolList, isError: wifiPoolsError, refetch: refetchWifiPools } = useQuery({
+    queryKey: ['resource-pools', 'wifi', 'available'],
+    // #955: available 端点剥密（无 password），普通用户不再因 admin-only
+    // 列表 403 而静默得到空池。
+    queryFn: () => api.resourcePools.available('wifi'),
   });
   const wifiPools = useMemo(
     () => (wifiPoolList ?? []).filter((pool) => pool.is_active),
@@ -1001,8 +1003,17 @@ export default function PlanExecutePage() {
         />
       )}
 
-      {(hostsError || scriptsError || recentRunsError) && (
+      {(hostsError || scriptsError || recentRunsError || wifiPoolsError) && (
         <div className="space-y-1">
+          {wifiPoolsError && (
+            <div className={cn(ALERT_BANNER.destructive, 'flex items-center justify-between px-4 py-2 text-xs')}>
+              <span>WiFi 列表加载失败：可选网络可能无法选择。普通用户仅可读去密列表，
+                请联系管理员检查资源池服务。</span>
+              <button type="button" onClick={() => void refetchWifiPools()} className="underline underline-offset-2">
+                重试
+              </button>
+            </div>
+          )}
           {hostsError && (
             <div className={cn(ALERT_BANNER.destructive, 'flex items-center justify-between px-4 py-2 text-xs')}>
               <span>主机列表加载失败：节点名称与容量信息可能不完整。</span>
