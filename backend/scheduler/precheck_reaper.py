@@ -23,6 +23,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -287,6 +288,122 @@ MAX_ADMISSION_REQUEUE_ATTEMPTS = int(os.getenv("MAX_ADMISSION_REQUEUE_ATTEMPTS",
 ADMISSION_REQUEUE_BACKOFF_SECONDS = int(os.getenv("ADMISSION_REQUEUE_BACKOFF_SECONDS", "60"))
 
 
+def _recover_stale_precheck_run(
+    db: Session,
+    run_id: int,
+    stale_deadline: datetime,
+    now: datetime,
+) -> str:
+    """Lock-reread + conditional recovery of one stale PRECHECK PlanRun.
+
+    R06-F02 (#987): the candidate scan is lock-free, and between that
+    snapshot and this write the admission transaction may have committed
+    RUNNING (with materialised jobs) or the user may have aborted the run to
+    FAILED.  Writing on the stale snapshot would overwrite either outcome —
+    QUEUED with live jobs, or a committed FAILED whose ``run_context`` lost
+    the abort intent — so the row is re-read FOR UPDATE and the full stale
+    predicate re-checked before any transition.  Attempt ownership is implied
+    by the predicate: a rotated attempt is always accompanied by a state
+    leaving PRECHECK or by a refreshed ``precheck_started_at`` (claim retries
+    rewrite both), so ``status == PRECHECK`` with a started_at still beyond
+    the deadline proves the attempt this reaper observed is still the one in
+    charge.  Losing the lock race to admission/abort/another reaper yields
+    "skipped".
+
+    Returns ``"requeued"``, ``"failed"`` or ``"skipped"``.
+    """
+    from datetime import timedelta
+
+    pr = db.execute(
+        select(PlanRun)
+        .where(PlanRun.id == run_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if pr is None:
+        db.rollback()
+        return "skipped"
+    if (
+        pr.status != PlanRunStatus.PRECHECK.value
+        or pr.precheck_started_at is None
+        or pr.precheck_started_at >= stale_deadline
+    ):
+        # admission 已提交 RUNNING / abort 已提交 FAILED / 其他 reaper 已回收。
+        db.rollback()
+        logger.info(
+            "admission_reaper_skip_recovered plan_run=%d status=%s",
+            run_id, pr.status,
+        )
+        return "skipped"
+
+    run_ctx = dict(pr.run_context or {})
+    attempts = int(run_ctx.get("admission_requeue_attempts") or 0)
+
+    if attempts >= MAX_ADMISSION_REQUEUE_ATTEMPTS:
+        PlanRunStateMachine.transition(
+            pr, PlanRunStatus.FAILED, reason="admission_requeue_exhausted",
+        )
+        pr.ended_at = now
+        pr.result_summary = {
+            "precheck_failed": True,
+            "reason": "admission_requeue_exhausted",
+            "attempts": attempts,
+        }
+        pr.run_context = run_ctx
+        flag_modified(pr, "run_context")
+        record_audit(
+            db,
+            action="plan_admission_failed",
+            resource_type="plan_run",
+            resource_id=pr.id,
+            details={"reason": "admission_requeue_exhausted", "attempts": attempts},
+            username="system",
+        )
+        db.commit()
+        logger.warning(
+            "admission_reaper_failed plan_run=%d attempts=%d", pr.id, attempts,
+        )
+        from backend.services.plan_run_aggregation import notify_plan_run_terminal
+        notify_plan_run_terminal(
+            pr,
+            new_status=PlanRunStatus.FAILED,
+            error_message="precheck_reaper: admission_requeue_exhausted",
+        )
+        return "failed"
+
+    PlanRunStateMachine.transition(
+        pr, PlanRunStatus.QUEUED, reason="precheck_stale_requeue",
+    )
+    pr.queue_reason = "PRECHECK_STALE"
+    pr.next_admission_at = now + timedelta(
+        seconds=ADMISSION_REQUEUE_BACKOFF_SECONDS * (attempts + 1)
+    )
+    pr.admission_attempt_id = None
+    pr.precheck_started_at = None
+    if pr.enqueued_at is None:
+        pr.enqueued_at = now
+    run_ctx["admission_requeue_attempts"] = attempts + 1
+    pr.run_context = run_ctx
+    flag_modified(pr, "run_context")
+    record_audit(
+        db,
+        action="plan_admission_requeued",
+        resource_type="plan_run",
+        resource_id=pr.id,
+        details={
+            "reason": "precheck_stale",
+            "attempt": attempts + 1,
+            "next_admission_at": pr.next_admission_at.isoformat(),
+        },
+        username="system",
+    )
+    db.commit()
+    logger.warning(
+        "admission_reaper_requeued plan_run=%d attempt=%d", pr.id, attempts + 1,
+    )
+    return "requeued"
+
+
 def reconcile_stale_precheck_v2(db: Session | None = None) -> dict[str, int]:
     """Recover PlanRuns stuck in PRECHECK (pump/SAQ/backend died mid-admission).
 
@@ -300,6 +417,9 @@ def reconcile_stale_precheck_v2(db: Session | None = None) -> dict[str, int]:
     - ``enqueued_at`` is preserved on requeue — aging keeps its original basis.
     - ``next_admission_at`` gets a backoff so a crash-looping pump does not
       hot-spin one run.
+    - The scan itself is lock-free; each candidate is recovered through
+      :func:`_recover_stale_precheck_run`, which lock-rereads the row and
+      re-checks the stale predicate before writing (#987).
     """
     from datetime import timedelta
 
@@ -313,83 +433,30 @@ def reconcile_stale_precheck_v2(db: Session | None = None) -> dict[str, int]:
         stale_deadline = now - timedelta(seconds=PRECHECK_ACTIVE_STALE_SECONDS)
 
         runs = (
-            db.query(PlanRun)
+            db.query(PlanRun.id)
             .filter(
                 PlanRun.status == PlanRunStatus.PRECHECK.value,
                 PlanRun.precheck_started_at.isnot(None),
                 PlanRun.precheck_started_at < stale_deadline,
             )
+            .order_by(PlanRun.id.asc())
             .all()
         )
 
-        for pr in runs:
+        for (run_id,) in runs:
             summary["checked"] += 1
-            run_ctx = dict(pr.run_context or {})
-            attempts = int(run_ctx.get("admission_requeue_attempts") or 0)
-
-            if attempts >= MAX_ADMISSION_REQUEUE_ATTEMPTS:
-                PlanRunStateMachine.transition(
-                    pr, PlanRunStatus.FAILED, reason="admission_requeue_exhausted",
-                )
-                pr.ended_at = now
-                pr.result_summary = {
-                    "precheck_failed": True,
-                    "reason": "admission_requeue_exhausted",
-                    "attempts": attempts,
-                }
-                pr.run_context = run_ctx
-                flag_modified(pr, "run_context")
-                record_audit(
-                    db,
-                    action="plan_admission_failed",
-                    resource_type="plan_run",
-                    resource_id=pr.id,
-                    details={"reason": "admission_requeue_exhausted", "attempts": attempts},
-                    username="system",
-                )
-                db.commit()
+            outcome = _recover_stale_precheck_run(db, run_id, stale_deadline, now)
+            if outcome == "requeued":
+                summary["requeued"] += 1
+            elif outcome == "failed":
                 summary["failed"] += 1
-                logger.warning(
-                    "admission_reaper_failed plan_run=%d attempts=%d", pr.id, attempts,
-                )
-                from backend.services.plan_run_aggregation import notify_plan_run_terminal
-                notify_plan_run_terminal(
-                    pr,
-                    new_status=PlanRunStatus.FAILED,
-                    error_message="precheck_reaper: admission_requeue_exhausted",
-                )
-                continue
 
-            PlanRunStateMachine.transition(
-                pr, PlanRunStatus.QUEUED, reason="precheck_stale_requeue",
-            )
-            pr.queue_reason = "PRECHECK_STALE"
-            pr.next_admission_at = now + timedelta(
-                seconds=ADMISSION_REQUEUE_BACKOFF_SECONDS * (attempts + 1)
-            )
-            pr.admission_attempt_id = None
-            pr.precheck_started_at = None
-            if pr.enqueued_at is None:
-                pr.enqueued_at = now
-            run_ctx["admission_requeue_attempts"] = attempts + 1
-            pr.run_context = run_ctx
-            flag_modified(pr, "run_context")
-            record_audit(
-                db,
-                action="plan_admission_requeued",
-                resource_type="plan_run",
-                resource_id=pr.id,
-                details={
-                    "reason": "precheck_stale",
-                    "attempt": attempts + 1,
-                    "next_admission_at": pr.next_admission_at.isoformat(),
-                },
-                username="system",
-            )
-            db.commit()
-            summary["requeued"] += 1
-            logger.warning(
-                "admission_reaper_requeued plan_run=%d attempt=%d", pr.id, attempts + 1,
+        if summary["checked"]:
+            logger.info(
+                "admission_reaper_done checked=%d requeued=%d failed=%d",
+                summary["checked"],
+                summary["requeued"],
+                summary["failed"],
             )
 
         return summary
