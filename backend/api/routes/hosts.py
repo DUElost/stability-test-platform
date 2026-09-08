@@ -948,7 +948,9 @@ async def list_log_signal_dead_letters(
 async def replay_log_signal_dead_letter(
     host_id: str,
     row_id: int,
-    _current_user: User = Depends(require_admin),
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
 ):
     """重置 Agent 本地死信行并重新入队发送（admin）。
 
@@ -959,6 +961,20 @@ async def replay_log_signal_dead_letter(
         AgentRpcError,
         call_agent_rpc,
     )
+
+    def _audit(details: dict) -> None:
+        # R02-F07（#907）：重放动作可归责——成功/失败均落审计
+        record_audit(
+            db,
+            action="dead_letter_replay",
+            resource_type="agent_dead_letter",
+            resource_id=str(row_id),
+            username=current_user.username,
+            user_id=current_user.id,
+            details={"host_id": host_id, **details},
+            request=request,
+        )
+        db.commit()
 
     try:
         ack = await call_agent_rpc(
@@ -971,15 +987,19 @@ async def replay_log_signal_dead_letter(
             timeout=10.0,
         )
     except AgentNotConnectedError as exc:
+        _audit({"reason": "agent_not_connected"})
         raise HTTPException(
             status_code=503, detail=f"agent {host_id} not connected",
         ) from exc
     except AgentRpcError as exc:
+        _audit({"reason": "agent_rpc_failed"})
         raise HTTPException(
             status_code=502, detail=f"agent rpc failed: {exc}",
         ) from exc
     if not ack.get("ok"):
+        _audit({"reason": ack.get("error") or "replay_failed"})
         raise HTTPException(
             status_code=404, detail=ack.get("error") or "replay failed",
         )
+    _audit({"reason": "replayed"})
     return {"host_id": host_id, "row_id": row_id, "replayed": True}

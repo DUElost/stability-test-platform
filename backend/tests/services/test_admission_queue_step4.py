@@ -783,3 +783,183 @@ class TestAdmissionTaskEndToEnd:
         assert pr.queue_reason == "DEVICE_BUSY"
         blockers = pr.run_context["queue_blockers"]
         assert any(b.get("reason") == "host_unreachable" for b in blockers)
+
+
+# ── Reaper lock-reread CAS (R06-F02 / #987) ──────────────────────────────────
+# The stale-PRECHECK reaper used to write its lock-free snapshot straight back
+# (transition + commit).  Between the snapshot and the write the admission
+# transaction may commit RUNNING with materialised jobs, or the user may abort
+# to FAILED — the reaper then overwrote either outcome (QUEUED with live jobs /
+# committed FAILED with lost abort intent).  Fix: lock-reread the row FOR
+# UPDATE and re-check the full stale predicate before transitioning.  These
+# tests pin the reverse interleavings that the old code corrupted; the
+# admission-side direction (reaper won first, old admission no-ops) is already
+# covered by TestAdmissionTransaction.test_stale_attempt_noops.
+
+
+class TestReaperCompetition:
+    """Deterministic reverse interleavings + end-to-end concurrency guard."""
+
+    def _claim(self, db, pr) -> str:
+        claimed = claim_queued_plan_runs(db)
+        assert claimed and claimed[0][0] == pr.id
+        return claimed[0][1]
+
+    @staticmethod
+    def _age_into_reaper_window(db, pr, *, seconds=10_000):
+        """Push precheck_started_at far enough back that the row enters the
+        reaper candidate window (PRECHECK_ACTIVE_STALE_SECONDS << 10_000)."""
+        pr.precheck_started_at = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+        db.commit()
+
+    def _reap(self, run_id: int) -> str:
+        from backend.core.database import SessionLocal
+        from backend.scheduler.precheck_reaper import _recover_stale_precheck_run
+
+        db = SessionLocal()
+        try:
+            return _recover_stale_precheck_run(
+                db,
+                run_id,
+                stale_deadline=datetime.now(timezone.utc) - timedelta(seconds=1),
+                now=datetime.now(timezone.utc),
+            )
+        finally:
+            db.close()
+
+    def test_admission_committed_running_then_reaper_noop(
+        self, db_session, step4_fixture,
+    ):
+        """Acceptance #1: admission committed RUNNING (+ jobs) first — the
+        reaper's lock-reread must see RUNNING and skip, never write QUEUED
+        over live jobs."""
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id, f["d2"].id, f["d3"].id])
+        attempt = self._claim(db_session, pr)
+        self._age_into_reaper_window(db_session, pr)
+
+        assert admission_transaction(db_session, pr.id, attempt) is True
+
+        outcome = self._reap(pr.id)
+        assert outcome == "skipped"
+
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "RUNNING"
+        assert pr.queue_reason is None
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count() == 3
+
+    def test_abort_committed_failed_then_reaper_noop(
+        self, db_session, step4_fixture,
+    ):
+        """Acceptance #2: user abort committed FAILED first — the reaper must
+        not overwrite status / run_context (abort intent preserved)."""
+        from backend.services.plan_run_abort import abort_plan_run
+
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+        self._claim(db_session, pr)
+        self._age_into_reaper_window(db_session, pr)
+
+        abort_plan_run(pr.id, db=db_session, reason="aborted_by_user", triggered_by="pytest")
+
+        outcome = self._reap(pr.id)
+        assert outcome == "skipped"
+
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "FAILED"
+        assert pr.result_summary["aborted"] is True
+        assert pr.run_context["abort_requested"]["reason"] == "aborted_by_user"
+        assert pr.run_context["abort_requested"]["acknowledged_job_ids"] == []
+
+    def test_second_reaper_skips_row_already_requeued(
+        self, db_session, step4_fixture,
+    ):
+        """Two reaper ticks over the same stale row: the first requeues, the
+        second must skip (no double attempt accounting, no overwrite)."""
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+        self._claim(db_session, pr)
+        self._age_into_reaper_window(db_session, pr)
+
+        assert self._reap(pr.id) == "requeued"
+        assert self._reap(pr.id) == "skipped"
+
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "QUEUED"
+        assert pr.queue_reason == "PRECHECK_STALE"
+        assert pr.run_context["admission_requeue_attempts"] == 1
+
+    def test_concurrent_reaper_and_admission_never_corrupt(
+        self, db_session, step4_fixture,
+    ):
+        """Acceptance #3: real interleaving via two sessions + a barrier.
+
+        Both writers lock the same PlanRun row, so exactly one commits first
+        and the other's lock-reread/CAS makes it a no-op.  Legal end states:
+        RUNNING with all 3 jobs (admission won), or QUEUED with zero jobs
+        (reaper won before materialisation) — never QUEUED over live jobs.
+        """
+        import threading
+
+        from backend.core.database import SessionLocal
+        from backend.scheduler.precheck_reaper import reconcile_stale_precheck_v2
+
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id, f["d2"].id, f["d3"].id])
+        attempt = self._claim(db_session, pr)
+        self._age_into_reaper_window(db_session, pr)
+        run_id = pr.id
+
+        barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+        reaper_summary: dict = {}
+
+        def admit():
+            db = SessionLocal()
+            try:
+                barrier.wait(timeout=5)
+                assert admission_transaction(db, run_id, attempt) is True
+                db.commit()
+            except Exception as exc:  # noqa: BLE001 — surfaced below
+                errors.append(exc)
+            finally:
+                db.close()
+
+        def reap():
+            db = SessionLocal()
+            try:
+                barrier.wait(timeout=5)
+                reaper_summary.update(reconcile_stale_precheck_v2(db=db))
+            except Exception as exc:  # noqa: BLE001 — surfaced below
+                errors.append(exc)
+            finally:
+                db.close()
+
+        threads = [threading.Thread(target=admit), threading.Thread(target=reap)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert errors == []
+        assert reaper_summary["requeued"] + reaper_summary["failed"] <= 1
+
+        db_session.expire_all()
+        persisted = db_session.get(PlanRun, run_id)
+        jobs = db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == run_id
+        ).count()
+        if persisted.status == "RUNNING":
+            assert jobs == 3
+            assert persisted.queue_reason is None
+        elif persisted.status == "QUEUED":
+            assert jobs == 0
+            assert persisted.queue_reason == "PRECHECK_STALE"
+        else:
+            pytest.fail(f"illegal end state after race: {persisted.status} jobs={jobs}")
