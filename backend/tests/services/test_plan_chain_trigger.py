@@ -123,6 +123,86 @@ class TestPlanChainTriggerRollback:
         # child 未创建 → 允许下次 aggregator 重试
         assert refreshed.result_summary["chain_dispatch_failed"]["child_already_created"] is False
 
+    def test_uncommitted_parent_terminalization_survives_chain_prepare_failure(
+        self, db_session, sample_device, sample_host,
+    ):
+        """#986: complete→aggregate 尚未提交时，子 prepare 失败不得回滚父终态。
+
+        真实调用链：Job 在同会话标为 COMPLETED 后直接 ``on_job_terminal_sync``
+        （不先 commit），聚合触发 ``trigger_next_plan_sync``；prepare 抛错后的
+        ``session.rollback()`` 不得撤销 Job/PlanRun 终态与计数。
+        """
+        from backend.services.job_terminalization import on_job_terminal_sync
+
+        child_plan = Plan(name="chain-child-986", failure_threshold=0.1)
+        parent_plan = Plan(name="chain-parent-986", failure_threshold=0.1)
+        db_session.add_all([parent_plan, child_plan])
+        db_session.flush()
+        parent_plan.next_plan_id = child_plan.id
+
+        pr = PlanRun(
+            plan_id=parent_plan.id,
+            status="RUNNING",
+            failure_threshold=0.1,
+            plan_snapshot={
+                "plan": {
+                    "id": parent_plan.id,
+                    "next_plan_id": child_plan.id,
+                },
+                "steps": [],
+            },
+            run_type="MANUAL",
+            triggered_by="test",
+            started_at=datetime.now(timezone.utc),
+            total_job_count=1,
+            terminal_job_count=0,
+            completed_job_count=0,
+            failed_job_count=0,
+            aborted_job_count=0,
+        )
+        db_session.add(pr)
+        db_session.flush()
+        job = JobInstance(
+            plan_run_id=pr.id,
+            plan_id=parent_plan.id,
+            device_id=sample_device.id,
+            host_id=sample_host.id,
+            status=JobStatus.RUNNING.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        job.status = JobStatus.COMPLETED.value
+        job.ended_at = datetime.now(timezone.utc)
+        # Intentionally no commit — mirrors complete_job before outer commit.
+
+        with patch(
+            "backend.services.plan_chain_trigger.prepare_plan_run",
+            side_effect=PlanDispatchError("child plan has no steps"),
+        ), patch(
+            "backend.services.notification_service.dispatch_notification_async",
+        ), patch(
+            "backend.services.dedup_scan.should_trigger_dedup",
+            return_value=False,
+        ):
+            applied, status = on_job_terminal_sync(job, db_session)
+
+        assert applied is True
+        assert status == "SUCCESS"
+        db_session.expire_all()
+        stored_job = db_session.get(JobInstance, job.id)
+        stored_run = db_session.get(PlanRun, pr.id)
+        assert stored_job.status == JobStatus.COMPLETED.value
+        assert stored_run.status == "SUCCESS"
+        assert stored_run.terminal_job_count == 1
+        assert stored_run.completed_job_count == 1
+        assert stored_run.next_plan_triggered is False
+        assert "chain_dispatch_failed" in (stored_run.result_summary or {})
+        assert "child plan has no steps" in (
+            stored_run.result_summary["chain_dispatch_failed"]["error"]
+        )
+
     def test_sync_unexpected_exception_also_rolls_back(
         self, db_session, sample_device, sample_host,
     ):

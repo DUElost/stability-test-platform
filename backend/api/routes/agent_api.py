@@ -2778,6 +2778,30 @@ async def recovery_sync(
             ))
             continue
 
+        # #990 / R06-F05: durable abort intent forbids RESUME (and same-instance
+        # NOOP that would leave a live worker running). Steer Agent to local stop
+        # confirmation; keep the lease until /complete ABORTED ACK or abort reaper.
+        plan_run = await db.get(PlanRun, job.plan_run_id)
+        run_ctx = (
+            plan_run.run_context
+            if plan_run is not None and isinstance(plan_run.run_context, dict)
+            else {}
+        )
+        if run_ctx.get("abort_requested"):
+            if lease_agent_id != payload.agent_instance_id:
+                await _rotate_recovery_lease_token(
+                    db, lease, agent_instance_id=payload.agent_instance_id,
+                )
+            job_actions.append(_RecoveryAction(
+                job_id=entry.job_id,
+                device_id=entry.device_id,
+                action="ABORT_LOCAL",
+                fencing_token=lease.fencing_token,
+                device_serial=actual_serial,
+                reason="abort_requested",
+            ))
+            continue
+
         if job.status == JobStatus.UNKNOWN.value:
             # Phase 4b: UNKNOWN→RUNNING resurrection (within grace)
             resumed = await _resume_expired_lease_for_recovery(
