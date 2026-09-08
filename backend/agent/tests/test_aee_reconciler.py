@@ -700,6 +700,80 @@ def test_tick_skips_process_when_db_history_hash_unchanged(monkeypatch):
     assert rec._last_had_new_candidate is False
 
 
+def test_hash_unchanged_still_processes_when_pending_remaining(monkeypatch):
+    """#1044: 上轮 pending>0 时，hash 未变也必须再调 process（失败补采）。"""
+    emitter = _FakeEmitter()
+    store = _MemStore()
+    calls = {"pdl": 0}
+    results = [
+        ProcessResult(pulled=0, pending_remaining=1, errors=["pull_failed:/data/aee_exp/db.1"]),
+        ProcessResult(pulled=1, pending_remaining=0),
+    ]
+
+    def fake_pdl(*, on_new_entry=None, on_pull_failed=None, **_):
+        calls["pdl"] += 1
+        result = results.pop(0)
+        if result.errors and on_pull_failed is not None and calls["pdl"] == 1:
+            on_pull_failed({
+                "line": "/data/aee_exp/db.1,NE,...",
+                "parsed": {
+                    "db_path": "/data/aee_exp/db.1",
+                    "pkg_name": "com.fail",
+                    "timestamp": "2026-05-28 10:00:00.000",
+                    "event_type": "NE",
+                    "raw_event_type": "Native (NE)",
+                    "event_subtype": "NE",
+                },
+                "aee_type": "aee_exp",
+                "error": "adb_pull_failed",
+                "retry_count": 1,
+                "exhausted": False,
+            })
+        if result.pulled and on_new_entry is not None:
+            on_new_entry({
+                "line": "/data/aee_exp/db.1,NE,...",
+                "parsed": {
+                    "db_path": "/data/aee_exp/db.1",
+                    "pkg_name": "com.fail",
+                    "timestamp": "2026-05-28 10:00:00.000",
+                    "event_type": "NE",
+                    "raw_event_type": "Native (NE)",
+                    "event_subtype": "NE",
+                },
+                "aee_type": "aee_exp",
+                "output_subdir": Path("/tmp/aee-db1"),
+            })
+        return result
+
+    monkeypatch.setattr("backend.agent.aee.reconciler.process_device_logs", fake_pdl)
+
+    holder = {"v": "db.1,NE,...\n"}
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter,
+        state_store=store,
+        serial="SX",
+        job_id=10441,
+        host_id="HOST",
+        shell_fn=_shell_returning(holder),
+        baseline_snapshot_enabled=False,
+    )
+
+    rec.tick_once()
+    assert calls["pdl"] == 1
+    assert rec._runtime_has_pending is True
+    assert any(c.get("extra", {}).get("pull_failed") for c in emitter.calls)
+
+    # hash 未变，但 pending 仍在 → 不得跳过
+    rec.tick_once()
+    assert calls["pdl"] == 2, "pending 未清时 hash 未变也要 process"
+    assert rec.stats.ticks_skipped_unchanged == 0
+    assert rec._runtime_has_pending is False
+    assert any(
+        not c.get("extra", {}).get("pull_failed") and c.get("extra", {}).get("package_name") == "com.fail"
+        for c in emitter.calls
+    )
+
+
 def test_hash_unchanged_skip_does_not_reset_burst(monkeypatch):
     """D2: hash 未变跳过的轮次只递减 burst,不重置(模拟 _run 状态机)。"""
     emitter = _FakeEmitter()
