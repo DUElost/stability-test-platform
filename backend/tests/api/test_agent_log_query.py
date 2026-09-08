@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 
 def test_nonnumeric_host_id_is_404_not_422(client):
     """验收：字符串 host_id（如 "host-a1"）通过校验进入 route；host 不存在
