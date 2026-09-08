@@ -23,6 +23,7 @@ from backend.models.job import JobInstance
 from backend.api.schemas import (
     HostActiveJob,
     HostCreate,
+    HostUpdate,
     HostOut,
     HostWatcherAdminStatePatch,
     PaginatedResponse,
@@ -330,34 +331,49 @@ def get_host(host_id: str, db: Session = Depends(get_db), _current_user: User = 
 @router.put("/{host_id}", response_model=HostOut)
 def update_host(
     host_id: str,
-    payload: HostCreate,
+    payload: HostUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
     request: Request = None,
 ):
-    """更新主机信息"""
+    """更新主机信息。
+
+    #950: 只写请求中显式提交的字段（model_fields_set）。编辑表单仅改名称
+    时不提交认证字段——复用 HostCreate 的默认值（password/None）会把既有
+    密钥认证配置清掉。ssh_password 保持「提交且非空才更新」的密码语义。
+    """
     host = db.get(Host, host_id)
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
 
+    fields = payload.model_fields_set
+    new_name = payload.name if "name" in fields else host.name
+    new_ip = payload.ip if "ip" in fields else host.ip
     conflict = _find_host_identity_conflict(
-        db, name=payload.name, ip=payload.ip, exclude_id=host.id,
+        db, name=new_name, ip=new_ip, exclude_id=host.id,
     )
     if conflict is not None:
         raise _identity_conflict_409(conflict, action="update")
 
     old_ip = host.ip
     old_port = host.ssh_port
-    host.name = payload.name
-    host.hostname = payload.name
-    host.ip = payload.ip
-    host.ip_address = payload.ip
-    host.ssh_port = payload.ssh_port
-    host.ssh_user = payload.ssh_user
-    host.ssh_auth_type = payload.ssh_auth_type
-    host.ssh_key_path = payload.ssh_key_path
-    host.ssh_known_hosts_path = payload.ssh_known_hosts_path
-    if payload.ssh_password is not None:
+    if "name" in fields:
+        host.name = payload.name
+        host.hostname = payload.name
+    if "ip" in fields:
+        host.ip = payload.ip
+        host.ip_address = payload.ip
+    if "ssh_port" in fields:
+        host.ssh_port = payload.ssh_port
+    if "ssh_user" in fields:
+        host.ssh_user = payload.ssh_user
+    if "ssh_auth_type" in fields:
+        host.ssh_auth_type = payload.ssh_auth_type
+    if "ssh_key_path" in fields:
+        host.ssh_key_path = payload.ssh_key_path
+    if "ssh_known_hosts_path" in fields:
+        host.ssh_known_hosts_path = payload.ssh_known_hosts_path
+    if "ssh_password" in fields and payload.ssh_password is not None:
         try:
             host.ssh_password_enc = encrypt_ssh_password(payload.ssh_password) or None
         except SshSecurityConfigError as exc:
@@ -379,13 +395,13 @@ def update_host(
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail=f"主机名或 IP 与其他主机冲突：{payload.name} / {payload.ip}",
+            detail=f"主机名或 IP 与其他主机冲突：{new_name} / {new_ip}",
         ) from exc
     db.refresh(host)
 
-    # Re-scan host key only when IP or port changed.
+    # Re-scan host key only when IP or port actually changed.
     host_key_trust = None
-    if payload.ip != old_ip or payload.ssh_port != old_port:
+    if host.ip != old_ip or host.ssh_port != old_port:
         key_ok, key_reason = trust_host_key(
             host.ip or "", host.ssh_port or 22, host.ssh_known_hosts_path or "",
         )
