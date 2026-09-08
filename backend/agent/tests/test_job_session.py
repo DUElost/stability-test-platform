@@ -664,6 +664,91 @@ def test_reconciler_starts_on_unisoc_platform(lock_tracker, patch_manager, monke
     session.__exit__(None, None, None)
 
 
+def test_reconciler_starts_on_unisoc_when_capability_unavailable(
+    lock_tracker, patch_manager, monkeypatch, tmp_path,
+):
+    """#1043: UNISOC 在 MTK AEE probe unavailable 时仍应启动 reconciler。"""
+    from backend.agent.registry.local_db import LocalDB
+
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "1")
+    monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_HOSTS", raising=False)
+    monkeypatch.setattr(
+        "backend.agent.device_platform.detect_device_platform",
+        lambda *a, **k: "UNISOC",
+    )
+    started: list = []
+
+    class _TrackingReconciler:
+        def __init__(self, **kwargs):
+            started.append(kwargs)
+
+        def start(self):
+            return True
+
+    monkeypatch.setattr(
+        "backend.agent.aee.unisoc_reconciler.UnisocUniviewReconciler",
+        _TrackingReconciler,
+    )
+
+    db = LocalDB()
+    db.initialize(str(tmp_path / "agent.db"))
+
+    class _Mgr(_MgrWithAdb):
+        def get_dep(self, key, default=None):
+            if key == "local_db":
+                return db
+            if key == "agent_instance_id":
+                return "agent-test"
+            return super().get_dep(key, default)
+
+    patch_manager(_Mgr(mode="ok", capability="unavailable"))
+    session = JobSession(
+        job_payload=_make_payload(),
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
+    )
+    session.__enter__()
+    assert session._handle is not None
+    session._handle.impl = None
+    session._handle.capability = "unavailable"
+    session._maybe_start_aee_reconciler()
+    assert session._reconciler is not None
+    assert started and started[0]["signal_emitter"] is not None
+    session.__exit__(None, None, None)
+    db.close()
+
+
+def test_reconciler_not_started_on_mtk_when_capability_unavailable(
+    lock_tracker, patch_manager, monkeypatch,
+):
+    """#1043: MTK 在 unavailable 时仍不得绕过门禁。"""
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "1")
+    monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_HOSTS", raising=False)
+    monkeypatch.setattr(
+        "backend.agent.device_platform.detect_device_platform",
+        lambda *a, **k: "MTK",
+    )
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.AeeDbHistoryReconciler", _OkReconciler,
+    )
+    patch_manager(_MgrWithAdb(mode="ok", capability="unavailable"))
+    session = JobSession(
+        job_payload=_make_payload(),
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
+    )
+    session.__enter__()
+    session._handle.impl = None
+    session._handle.capability = "unavailable"
+    session._maybe_start_aee_reconciler()
+    assert session._reconciler is None
+    session.__exit__(None, None, None)
+
+
 def test_reconciler_skipped_on_qcom_platform(lock_tracker, patch_manager, monkeypatch):
     session = _platform_session(
         lock_tracker, patch_manager, monkeypatch, "QCOM", _OkReconciler,
