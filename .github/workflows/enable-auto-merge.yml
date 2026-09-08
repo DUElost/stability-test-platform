@@ -42,5 +42,10 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Reconcile queue and update head if behind
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # #1101：auto-merge 的「最后启用者身份」决定 GitHub 执行合入时的
+          # mergedBy——GITHUB_TOKEN（bot）身份启用会导致 a) linked-issue 原生
+          # 关闭不触发（39/39 实证）b) 合入产生的 closed 事件被级联抑制。
+          # 人类身份 PAT（AUTO_MERGE_PAT）恢复两者；secret 未配置时回退
+          # GITHUB_TOKEN 保持历史行为。
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
         run: bash scripts/ci/pr-automerge-queue.sh
