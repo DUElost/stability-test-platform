@@ -437,15 +437,28 @@ def inject_suite_params(pipeline: dict, suite_params: dict | None) -> dict:
     ``STP_STEP_PARAMS`` channel; unbound plans are untouched (env fallback in
     the scripts still applies).
 
-    Existing values win — a plan that hardcodes either key is left alone.
+    Existing values win for fill-in — except ``project`` (#975): a declared
+    value that disagrees with the gated suite ``export_dir`` is rejected so
+    materialize cannot consume a different tool directory than precheck.
     """
     if not suite_params:
         return pipeline
+    expected_project = suite_params.get("project")
     for _, step in iter_lifecycle_steps(pipeline):
         action = step.get("action") or ""
         if not action.startswith("script:mtbf_"):
             continue
         params = dict(step.get("params") or {})
+        declared_project = params.get("project")
+        if (
+            expected_project not in (None, "")
+            and declared_project not in (None, "")
+            and str(declared_project) != str(expected_project)
+        ):
+            raise PlanDispatchError(
+                "mtbf step project conflicts with suite export_dir "
+                f"(declared={declared_project!r}, expected={expected_project!r})",
+            )
         for key, value in suite_params.items():
             if not params.get(key):
                 params[key] = value
