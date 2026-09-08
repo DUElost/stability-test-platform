@@ -47,6 +47,17 @@ done
 Registry 细则（写入协议、scope 语法与 overlap 谓词、三维状态、drift、reconcile）
 见 `execution-contract.md` §2–§7。
 
+## Registry 批次收窗与 drift 留痕（#1097）
+
+`ai_work.py drift`（run_gates `ai-drift` gate，advisory 不阻塞）只在 registry
+宿主机产生信号（`check:full` 或按需运行）；CI runner 无 registry 数据，接
+PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 issue #1097）：
+
+- 批次收窗与合入核销/reconcile 前先跑 `python tools/dev/ai_work.py drift
+  --strict`；有提示先处置再收尾——STALE 记录人工裁决、declaration-drift
+  补/收窄 scope、overlap 改串行；
+- 输出与处置结论随批次收尾评论留痕（#1035 Evidence 台账回溯组同载体）。
+
 ## PR 与 Merge Queue
 
 - `main` 启用分支保护，PR 是唯一合入路径；不要直推或手动点击 Merge；
