@@ -400,3 +400,89 @@ async def test_no_key_update_still_serializes_writers():
             await db_b.rollback()
     finally:
         _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_complete_and_extend_batch_same_job_no_deadlock():
+    """#992: 同 Job 上 complete × extend-batch 交错不得因锁顺序死锁。
+
+    complete：Job FOR UPDATE → release_lease（碰 Lease）。
+    extend-batch：须先 FOR UPDATE Job，再 CAS DeviceLease。
+    """
+    from unittest.mock import patch
+
+    from backend.api.routes.agent_api import (
+        _ExtendBatchIn,
+        _ExtendBatchItemIn,
+        extend_leases_batch,
+    )
+    from backend.services import lease_manager
+
+    seed = _seed_plan_run_with_jobs(n_jobs=1)
+    try:
+        jid = seed["job_ids"][0]
+        token = seed["tokens"][0]
+        barrier = asyncio.Barrier(2)
+        orig_release = lease_manager.release_lease
+
+        async def release_synced(db, device_id, job_id, lease_type=LeaseType.JOB):
+            # Job 锁已持有；与 extend 同步后再碰 Lease，拉长交错窗口。
+            await barrier.wait()
+            return await orig_release(db, device_id, job_id, lease_type)
+
+        async def _complete() -> object:
+            async with AsyncSessionLocal() as db:
+                with patch(
+                    "backend.api.routes.agent_api.release_lease",
+                    release_synced,
+                ):
+                    return await complete_job(
+                        job_id=jid,
+                        payload=_RunCompleteIn(
+                            update={"status": "FINISHED", "exit_code": 0},
+                            fencing_token=token,
+                        ),
+                        db=db, _=None,
+                    )
+
+        async def _extend() -> object:
+            await barrier.wait()
+            async with AsyncSessionLocal() as db:
+                return await extend_leases_batch(
+                    payload=_ExtendBatchIn(
+                        host_id=seed["host_id"],
+                        agent_instance_id=seed["host_id"],
+                        leases=[_ExtendBatchItemIn(
+                            job_id=jid,
+                            fencing_token=token,
+                            execution_state="EXECUTING_STEP",
+                        )],
+                    ),
+                    db=db, _=None,
+                )
+
+        results = await asyncio.gather(
+            _complete(), _extend(), return_exceptions=True,
+        )
+        errors = [r for r in results if isinstance(r, Exception)]
+        assert not errors, (
+            f"complete × extend-batch 不应死锁; got: {errors}"
+        )
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, jid)
+            assert job is not None
+            assert job.status == JobStatus.COMPLETED.value
+            lease = (
+                db.query(DeviceLease)
+                .filter(DeviceLease.job_id == jid)
+                .order_by(DeviceLease.id.desc())
+                .first()
+            )
+            assert lease is not None
+            assert lease.status == LeaseStatus.RELEASED.value
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)

@@ -1378,6 +1378,10 @@ async def _cas_renew_leases(
       - Job.status == RUNNING join (a job that went terminal concurrently
         must not get a fresh TTL)
     Does NOT commit — runs inside the caller's transaction.
+
+    Caller must already hold ``JobInstance`` row locks for the target jobs
+    (``FOR UPDATE``, ordered by id) before invoking this (#992): complete
+    locks Job then Lease; batch renew must match that order.
     """
     conditions = [
         tuple_(DeviceLease.job_id, DeviceLease.fencing_token).in_(pairs),
@@ -1499,6 +1503,25 @@ async def extend_leases_batch(
 
     new_expires = now + timedelta(seconds=_DEVICE_LOCK_LEASE_SECONDS)
     renewed_ids: set[int] = set()
+    if renewable_job_ids:
+        # #992 / R06-F07: 与 complete_job（先 Job FOR UPDATE，再 release_lease）
+        # 统一为 Job → Lease。原先 CAS 先碰 DeviceLease、再 UPDATE Job，
+        # 与 complete 交错会形成死锁环。
+        locked_running = (await db.execute(
+            select(JobInstance.id)
+            .where(
+                JobInstance.id.in_(renewable_job_ids),
+                JobInstance.status == JobStatus.RUNNING.value,
+            )
+            .order_by(JobInstance.id)
+            .with_for_update()
+        )).scalars().all()
+        still_running = set(locked_running)
+        for jid in renewable_job_ids:
+            if jid not in still_running:
+                prelim[jid] = "job_not_running"
+        renewable_job_ids = [jid for jid in renewable_job_ids if jid in still_running]
+
     if renewable_job_ids:
         cas_pairs = [(jid, token_by_job[jid]) for jid in renewable_job_ids]
         renewed_ids = await _cas_renew_leases(
