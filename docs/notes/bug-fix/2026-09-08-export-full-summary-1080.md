@@ -1,6 +1,6 @@
 # 导出摘要基于全量 Job，仅截断明细（#1080）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
