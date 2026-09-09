@@ -107,4 +107,39 @@ describe('useSocketIO — token auth', () => {
     expect(socket.disconnect).toHaveBeenCalled();
     expect(socket.connect).toHaveBeenCalled();
   });
+
+  it('resubscribes with room names (not refcounts) on reconnect (#1112)', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const socket = createFakeSocket();
+    const ioMock = vi.fn(() => socket);
+
+    vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
+    vi.doMock('socket.io-client', () => ({ io: ioMock }));
+
+    const { useSocketIO } = await import('@/hooks/useSocketIO');
+
+    // Two subscribers on the same room → refcount 2; plus a distinct room.
+    renderHook(() => useSocketIO('plan_run:5'));
+    renderHook(() => useSocketIO('plan_run:5'));
+    renderHook(() => useSocketIO('job:9'));
+
+    await waitFor(() => {
+      expect(ioMock).toHaveBeenCalled();
+    });
+
+    socket.emit.mockClear();
+
+    // Simulate (re)connect while rooms are already tracked by refcount.
+    act(() => {
+      socket.emitLocal('connect');
+    });
+
+    const resubRooms = socket.emit.mock.calls
+      .filter((c: any[]) => c[0] === 'subscribe')
+      .map((c: any[]) => c[1]?.room);
+
+    expect(resubRooms).toHaveLength(2);
+    expect(new Set(resubRooms)).toEqual(new Set(['plan_run:5', 'job:9']));
+    expect(resubRooms.every((r: unknown) => typeof r === 'string')).toBe(true);
+  });
 });

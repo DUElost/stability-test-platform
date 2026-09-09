@@ -31,6 +31,29 @@ python tools/dev/check-script-version-immutability.py --base origin/main
 `POST /scripts/scan?force_rebaseline=true` 只用于契约已经被外部破坏后的恢复：仅 admin
 可调用，有 RUNNING、QUEUED 或 PRECHECK PlanRun 时返回 409。不能作为日常改版路径。
 
+## 种子迁移治理（#942 裁决 A）
+
+数据迁移里的种子逻辑（INSERT/UPDATE `script` 表、停用旧版本）**不受服务层
+保护**（alembic 内裸 SQL），因此负有与 API 同构的引用检查义务：
+
+- 对**已存在**的 `(script_name, script_version)` 做任何写操作（UPDATE
+  `default_params`/`param_schema`、停用 `is_active`）前，必须先查
+  `plan_step` 引用；
+- 引用数 > 0 → 迁移**失败**（RuntimeError 带重指指引）——与 API 层
+  `_ensure_script_can_be_deactivated` 的 409 同构；操作者重指 plan_step 或
+  以新建版本表达参数变化后重跑；
+- **禁止**裸 `UPDATE script SET default_params ...` 与无引用检查的
+  `UPDATE script SET is_active = false ...`；
+- 全新版本行的 INSERT 不受此约束。
+
+模板权威源：[`backend/services/script_seed_governance.py`](../../backend/services/script_seed_governance.py)
+（`raise_if_version_referenced` / `raise_if_any_version_referenced`）。迁移
+**自包含**原则下不 import 服务层——把该文件当前实现**内嵌**进迁移文件，并
+在迁移 docstring 注明复制来源与复制日期。带数据行为测试见
+`tests/test_script_seed_governance.py`。
+
+裁决与论证：[`docs/design/2026-09-08-seed-migration-governance.md`](../design/2026-09-08-seed-migration-governance.md)。
+
 ## 参数分层
 
 已存在版本的 `default_params` 不可原地修改；API 返回 422。需要修改默认参数时使用：
