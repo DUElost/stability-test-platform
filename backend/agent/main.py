@@ -352,10 +352,14 @@ def execute_recovery_actions_impl(
         if has_upload:
             try:
                 flushed = outbox_drain.drain_sync()
-                logger.info("recovery_outbox_flushed count=%d", flushed)
             except Exception:
+                # #1176: 吞错后静默提前 return 会让本轮 RESUME/ABORT/CLEANUP
+                # 全丢，而上层 run_recovery_sync_if_needed 无从得知仍记成功、
+                # 心跳据此清掉重连标记——恢复被推迟到下次物理插拔。
+                # 上抛 → 上层转 False，保留标记由心跳周期自动重试。
                 logger.exception("recovery_outbox_flush_failed")
-                return
+                raise
+            logger.info("recovery_outbox_flushed count=%d", flushed)
 
         still_pending: set[int] = set()
         try:
@@ -434,10 +438,11 @@ def execute_recovery_actions_impl(
                 resumed_payload["local_worker_token"] = local_worker_token
                 # T3: mark as recovery-resumed so the watcher re-attach is observable
                 resumed_payload["recovery_resumed"] = True
-                try:
-                    resume_job(resumed_payload)
-                except Exception:
-                    logger.exception("recovery_resume_submit_failed job=%d", jid)
+                # #1176: submit 失败不能吞——register 已把 job 标活跃、续租持有
+                # fencing token，worker 却未启动；静默继续会让上层清标记，该
+                # job 成僵尸直到 patrol 兜底。上抛保留重连标记，下一心跳周期
+                # 重试（register 幂等，resume 重发即可自愈）。
+                resume_job(resumed_payload)
             logger.info(
                 "recovery_resume job=%d token=%s worker=%s",
                 jid,
