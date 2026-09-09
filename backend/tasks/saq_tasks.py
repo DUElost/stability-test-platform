@@ -8,6 +8,7 @@ and keyword arguments that were passed at enqueue time.
 
 import logging
 import asyncio
+import os
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -30,10 +31,103 @@ _MERGE_TASK_SAQ_TIMEOUT = _MERGE_SYNC_TIMEOUT + _UPLOAD_WAIT_MAX + 120
 # 事件拉取完成后即待上送，不再依赖下一轮增量 scan 补标（最终轮没有下一轮）。
 _MARKABLE_EVENT_STATES = ("DETECTED", "LOCAL", "UPLOAD_PENDING", "UPLOADING", "UPLOAD_FAILED")
 
+_SCAN_POLL_INTERVAL_DEFAULT = 10
+_SCAN_POLL_MAX_WAIT_DEFAULT = 300
+_SCAN_POLL_PER_HOST_DEFAULT = 0
+_SCAN_POLL_GRACE_SECONDS_DEFAULT = 120
+_SCAN_POLL_GRACE_RATIO_DEFAULT = 0.9
+_SCAN_POLL_GRACE_MAX_MISSING_DEFAULT = 3
+
 
 def _escape_like(value: str) -> str:
     """Escape LIKE wildcards（#389）：目录名含 ``_``/``%`` 时防误配兄弟事件。"""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("saq_scan_poll_invalid_env name=%s value=%r — using %d", name, raw, default)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("saq_scan_poll_invalid_env name=%s value=%r — using %s", name, raw, default)
+        return default
+
+
+def _scan_poll_interval_seconds() -> int:
+    return max(1, _env_int("STP_SCAN_POLL_INTERVAL", _SCAN_POLL_INTERVAL_DEFAULT))
+
+
+def _scan_poll_max_wait_seconds(n_triggered: int) -> int:
+    """#732: base wait + optional per-host budget (fleet-scale slow nodes)."""
+    base = max(1, _env_int("STP_SCAN_POLL_MAX_WAIT", _SCAN_POLL_MAX_WAIT_DEFAULT))
+    per_host = max(0, _env_int("STP_SCAN_POLL_PER_HOST_SECONDS", _SCAN_POLL_PER_HOST_DEFAULT))
+    n = max(0, int(n_triggered))
+    return base + n * per_host
+
+
+def _scan_poll_grace_seconds(hosts_done: int, n_triggered: int) -> int:
+    """#732: one-shot grace when nearly complete at the primary deadline."""
+    if n_triggered <= 0 or hosts_done >= n_triggered:
+        return 0
+    missing = n_triggered - hosts_done
+    ratio = hosts_done / n_triggered
+    floor = _env_float("STP_SCAN_POLL_GRACE_RATIO", _SCAN_POLL_GRACE_RATIO_DEFAULT)
+    max_missing = max(1, _env_int("STP_SCAN_POLL_GRACE_MAX_MISSING", _SCAN_POLL_GRACE_MAX_MISSING_DEFAULT))
+    grace = max(0, _env_int("STP_SCAN_POLL_GRACE_SECONDS", _SCAN_POLL_GRACE_SECONDS_DEFAULT))
+    if ratio >= floor and missing <= max_missing:
+        return grace
+    return 0
+
+def _saq_round_key(prefix: str, plan_run_id: int, scan_round_id: str | None) -> str:
+    """SAQ dedup key scoped by PlanRun + scan round (#1111 / R11-F02).
+
+    Incremental vs final ``scan_task`` use different keys, but upload/merge
+    historically shared ``{prefix}:{plan_run_id}``. While an older merge is
+    still queued/running, SAQ returns ``None`` for the same key and does not
+    refresh kwargs — the final round is silently dropped.
+
+    Round-scoped keys schedule both; ``#1072`` flock serializes the shared
+    ``merge_result/`` tool directory so concurrent merges do not cross-claim
+    outputs.
+    """
+    if not scan_round_id:
+        return f"{prefix}:{plan_run_id}"
+    # ISO timestamps contain ':' / '+' — keep key Redis-safe and readable.
+    safe = (
+        str(scan_round_id)
+        .replace(":", "")
+        .replace("+", "p")
+        .replace(".", "")
+    )
+    return f"{prefix}:{plan_run_id}:{safe}"
+
+
+async def _enqueue_or_raise(queue, job, *, plan_run_id: int, what: str):
+    """Enqueue and fail loudly on SAQ key-dedup (``None``) (#1111)."""
+    result = await queue.enqueue(job)
+    if result is None:
+        key = getattr(job, "key", None)
+        logger.error(
+            "saq_enqueue_deduped plan_run=%d what=%s key=%s",
+            plan_run_id, what, key,
+        )
+        raise RuntimeError(
+            f"saq enqueue deduped (None) plan_run={plan_run_id} what={what} key={key}"
+        )
+    return result
 
 
 async def post_completion_task(ctx: dict, *, job_id: int) -> None:
@@ -60,6 +154,9 @@ async def send_notification_task(
     Runs synchronously inside the async task because the underlying
     ``dispatch_notification`` opens its own DB session and makes blocking
     HTTP calls — acceptable for a worker thread.
+
+    Channel delivery failures raise ``NotificationDeliveryError`` (#1117) so
+    SAQ retries; successful channels are skipped on retry via log context.
     """
     from backend.services.notification_service import dispatch_notification
 
@@ -192,8 +289,8 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             run_scan_sync,
         )
 
-        _SCAN_POLL_INTERVAL = 10
-        _SCAN_POLL_MAX_WAIT = 300
+        poll_interval = _scan_poll_interval_seconds()
+        poll_budget = _scan_poll_max_wait_seconds(len(triggered))
         elapsed = 0
         registered = 0
         hosts_done = 0
@@ -202,25 +299,44 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         # first must not satisfy the barrier before UNISOC uploads land.
         # Scoped to this round's triggered set and since watermark (reuse of
         # plan_run_id on incremental scans).
-        while elapsed < _SCAN_POLL_MAX_WAIT:
-            await asyncio_sleep(_SCAN_POLL_INTERVAL)
-            elapsed += _SCAN_POLL_INTERVAL
-            n_new = await asyncio_to_thread(
-                run_scan_sync, plan_run_id, scan_round_id=scan_round_id,
-            )
-            if n_new:
-                registered += int(n_new)
-            hosts_done = await asyncio_to_thread(
-                count_hosts_with_scan_artifacts, plan_run_id, triggered,
-                since=round_started_at,
-                require_platforms=DEDUP_PLATFORMS,
-            )
-            if hosts_done >= n_triggered:
-                break
-            logger.info(
-                "saq_scan_poll plan_run=%d elapsed=%ds hosts=%d/%d artifacts=%d",
-                plan_run_id, elapsed, hosts_done, n_triggered, registered,
-            )
+        logger.info(
+            "saq_scan_poll_budget plan_run=%d hosts=%d budget=%ds interval=%ds",
+            plan_run_id, n_triggered, poll_budget, poll_interval,
+        )
+
+        async def _poll_until(deadline: int) -> None:
+            nonlocal elapsed, registered, hosts_done
+            while elapsed < deadline:
+                await asyncio_sleep(poll_interval)
+                elapsed += poll_interval
+                n_new = await asyncio_to_thread(
+                    run_scan_sync, plan_run_id, scan_round_id=scan_round_id,
+                )
+                if n_new:
+                    registered += int(n_new)
+                hosts_done = await asyncio_to_thread(
+                    count_hosts_with_scan_artifacts, plan_run_id, triggered,
+                    since=round_started_at,
+                    require_platforms=DEDUP_PLATFORMS,
+                )
+                if hosts_done >= n_triggered:
+                    return
+                logger.info(
+                    "saq_scan_poll plan_run=%d elapsed=%ds hosts=%d/%d artifacts=%d",
+                    plan_run_id, elapsed, hosts_done, n_triggered, registered,
+                )
+
+        await _poll_until(poll_budget)
+
+        # #732: near-complete fleets get one grace window for stragglers.
+        if hosts_done < n_triggered:
+            grace = _scan_poll_grace_seconds(hosts_done, n_triggered)
+            if grace > 0:
+                logger.info(
+                    "saq_scan_poll_grace plan_run=%d hosts=%d/%d grace=%ds",
+                    plan_run_id, hosts_done, n_triggered, grace,
+                )
+                await _poll_until(elapsed + grace)
 
         # Poll exhausted with some hosts still missing: retry once so an _org.xls
         # that landed inside the last interval still gets registered and merged.
@@ -270,16 +386,19 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
 
     try:
         queue = get_queue()
-        await queue.enqueue(
+        await _enqueue_or_raise(
+            queue,
             SaqJob(
                 function="upload_task",
                 kwargs={"plan_run_id": plan_run_id, "scan_round_id": scan_round_id},
-                key=f"upload:{plan_run_id}",
+                key=_saq_round_key("upload", plan_run_id, scan_round_id),
                 timeout=600,
                 retries=2,
                 retry_delay=10.0,
                 retry_backoff=True,
-            )
+            ),
+            plan_run_id=plan_run_id,
+            what="upload_task",
         )
         merge_kwargs = {
             "plan_run_id": plan_run_id,
@@ -287,19 +406,23 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             "round_started_at": round_started_at.isoformat(),
         }
         logger.info("saq_scan_enqueue_upload_and_merge plan_run=%d", plan_run_id)
-        await queue.enqueue(
+        await _enqueue_or_raise(
+            queue,
             SaqJob(
                 function="merge_task",
                 kwargs=merge_kwargs,
-                key=f"merge:{plan_run_id}",
+                key=_saq_round_key("merge", plan_run_id, scan_round_id),
                 timeout=_MERGE_TASK_SAQ_TIMEOUT,
                 retries=2,
                 retry_delay=10.0,
                 retry_backoff=True,
-            )
+            ),
+            plan_run_id=plan_run_id,
+            what="merge_task",
         )
     except Exception as e:
         logger.error("saq_scan_enqueue_followup_failed plan_run=%d: %s", plan_run_id, e)
+        raise
 
     logger.info("saq_scan_done plan_run=%d", plan_run_id)
 
@@ -377,22 +500,27 @@ async def upload_task(ctx: dict, *, plan_run_id: int, scan_round_id: str | None 
     logger.info("saq_upload_done plan_run=%d marked=%d", plan_run_id, marked)
 
 
-async def _enqueue_extract_task(plan_run_id: int) -> None:
+async def _enqueue_extract_task(
+    plan_run_id: int, scan_round_id: str | None = None,
+) -> None:
     """enqueue extract_task（merge 成功后等待 DLE REMOTE，再链式 extract）。"""
     from backend.tasks.saq_worker import get_queue
     from saq import Job as SaqJob
 
     queue = get_queue()
-    await queue.enqueue(
+    await _enqueue_or_raise(
+        queue,
         SaqJob(
             function="extract_task",
             kwargs={"plan_run_id": plan_run_id},
-            key=f"extract:{plan_run_id}",
+            key=_saq_round_key("extract", plan_run_id, scan_round_id),
             timeout=300,
             retries=2,
             retry_delay=10.0,
             retry_backoff=True,
-        )
+        ),
+        plan_run_id=plan_run_id,
+        what="extract_task",
     )
     logger.info("saq_enqueued_extract plan_run=%d", plan_run_id)
 
@@ -401,9 +529,11 @@ async def _wait_for_upload_mark(plan_run_id: int, scan_round_id: str | None) -> 
     """#381: 等 upload_task 写入本轮 ``run_context.upload_mark`` 水位线。
 
     SAQ worker 并发 10，merge_task 可能先于 upload_task 的标记 UPDATE 到达；
-    不等水位线的话 ``pending == 0`` 是「还没标」的假就绪 → 空 extract 的
-    SUCCESS 空报表。超时则放行（best-effort，与链路既有取舍一致），
-    缺口由 run_context.upload_summary 显性化。
+    不等水位线的话 ``pending == 0`` 是「还没标」的假就绪（事件仍在 LOCAL，
+    不计入 pending）→ 空 extract 的 SUCCESS 空报表。
+
+    返回 False 表示本轮标记未确认（超时或读库失败）。调用方仍可 best-effort
+    继续 merge/extract，但不得把 ``upload_summary.ready`` 写成 true（#1079）。
     """
     if scan_round_id is None:
         # 无 round 作用域（旧触发路径/测试）——没有可匹配的水位线，直接放行。
@@ -543,25 +673,38 @@ async def merge_task(
         )
         return
 
-    # #381: 先等本轮标记水位线，再判定 pending——否则标记前的 pending==0
-    # 会让 merge 立即放行（空 extract 的 SUCCESS 空报表）。
-    if not await _wait_for_upload_mark(plan_run_id, scan_round_id):
+    # #381 / #1079: 先等本轮标记水位线，再判定 pending——否则标记前的
+    # pending==0（LOCAL 不计入 pending）会让 ready 假阳。
+    mark_ready = await _wait_for_upload_mark(plan_run_id, scan_round_id)
+    if not mark_ready:
         logger.warning(
-            "saq_merge_upload_mark_timeout plan_run=%d round=%s — proceeding best-effort",
+            "saq_merge_upload_mark_timeout plan_run=%d round=%s — "
+            "continuing best-effort but ready=false",
             plan_run_id, scan_round_id,
         )
 
-    upload_ready = await _wait_for_remote_device_log_events(plan_run_id)
-    if not upload_ready:
+    events_ready = await _wait_for_remote_device_log_events(plan_run_id)
+    if not events_ready:
         logger.warning(
             "saq_merge_extract_best_effort plan_run=%d reason=upload_not_ready",
             plan_run_id,
         )
 
+    # 就绪 = 本轮标记已确认 且 无 in-flight 上送。标记超时不得 ready=true。
+    upload_ready = mark_ready and events_ready
+
     # 无论是否等齐，都把上送进度落到 run_context（#300 P3-2）：
-    # 缺口（pending/failed/LOCAL）在汇总页可见，不再只能翻日志。
+    # 缺口（pending/failed/LOCAL/mark_timeout）在汇总页可见，不再只能翻日志。
     upload_summary = await asyncio_to_thread(_summarize_upload_sync, plan_run_id)
     upload_summary["ready"] = upload_ready
+    upload_summary["mark_ready"] = mark_ready
+    upload_summary["events_ready"] = events_ready
+    if not mark_ready:
+        upload_summary["incomplete_reason"] = "upload_mark_timeout"
+        upload_summary["compensation"] = "best_effort_extract"
+    elif not events_ready:
+        upload_summary["incomplete_reason"] = "upload_events_pending"
+        upload_summary["compensation"] = "best_effort_extract"
     await asyncio_to_thread(
         _write_run_context_sync,
         plan_run_id,
@@ -577,12 +720,13 @@ async def merge_task(
         )
 
     try:
-        await _enqueue_extract_task(plan_run_id)
+        await _enqueue_extract_task(plan_run_id, scan_round_id=scan_round_id)
     except Exception as e:
         logger.error(
             "saq_merge_enqueue_extract_failed plan_run=%d: %s",
             plan_run_id, e,
         )
+        raise
 
 
 def _run_extract_sync(plan_run_id: int) -> int:

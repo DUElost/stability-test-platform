@@ -26,6 +26,7 @@ from backend.models.project import TestProject
 from backend.models.project_model import ProjectModel
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
 from backend.models.script import Script
+from backend.services.host_maintenance import in_maintenance_window
 from backend.services.plan_dispatcher_core import (
     PlanDispatchError,
     build_lifecycle_from_steps as _build_lifecycle_from_steps,
@@ -89,6 +90,8 @@ def _classify_dispatch_devices_sync(
             Device.host_id,
             Device.status.label("device_status"),
             Host.status.label("host_status"),
+            # #960：热更新维护窗口（NULL = 无窗口）
+            Host.maintenance_until.label("host_maintenance_until"),
         )
         .select_from(Device)
         .outerjoin(Host, Device.host_id == Host.id)
@@ -152,6 +155,14 @@ def _classify_dispatch_devices_sync(
             unavailable.append({
                 "id": did, "reason": "host_offline",
                 "host_id": snap.host_id, "host_status": snap.host_status,
+            })
+            continue
+        # #960：主机在维护窗口内（热更新上传/重启中）不派发 —— 可重试调度状态，
+        # V2 准入队列下进 QUEUED 等待（与 host_offline 同类）。
+        if in_maintenance_window(snap.host_maintenance_until):
+            unavailable.append({
+                "id": did, "reason": "host_maintenance",
+                "host_id": snap.host_id,
             })
             continue
         if did in active_lease_by_device:
