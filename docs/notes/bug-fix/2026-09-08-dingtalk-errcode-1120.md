@@ -1,6 +1,6 @@
 # 钉钉业务 errcode 不得当发送成功（#1120）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
