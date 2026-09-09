@@ -1,6 +1,6 @@
 # RunConsole 安静等待时也能按时 flush（#1118）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
