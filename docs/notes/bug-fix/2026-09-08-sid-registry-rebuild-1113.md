@@ -1,6 +1,6 @@
 # SID 登记丢失后存活连接可重建（#1113）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
