@@ -8,6 +8,7 @@ and keyword arguments that were passed at enqueue time.
 
 import logging
 import asyncio
+import os
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -30,11 +31,65 @@ _MERGE_TASK_SAQ_TIMEOUT = _MERGE_SYNC_TIMEOUT + _UPLOAD_WAIT_MAX + 120
 # 事件拉取完成后即待上送，不再依赖下一轮增量 scan 补标（最终轮没有下一轮）。
 _MARKABLE_EVENT_STATES = ("DETECTED", "LOCAL", "UPLOAD_PENDING", "UPLOADING", "UPLOAD_FAILED")
 
+_SCAN_POLL_INTERVAL_DEFAULT = 10
+_SCAN_POLL_MAX_WAIT_DEFAULT = 300
+_SCAN_POLL_PER_HOST_DEFAULT = 0
+_SCAN_POLL_GRACE_SECONDS_DEFAULT = 120
+_SCAN_POLL_GRACE_RATIO_DEFAULT = 0.9
+_SCAN_POLL_GRACE_MAX_MISSING_DEFAULT = 3
+
 
 def _escape_like(value: str) -> str:
     """Escape LIKE wildcards（#389）：目录名含 ``_``/``%`` 时防误配兄弟事件。"""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("saq_scan_poll_invalid_env name=%s value=%r — using %d", name, raw, default)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("saq_scan_poll_invalid_env name=%s value=%r — using %s", name, raw, default)
+        return default
+
+
+def _scan_poll_interval_seconds() -> int:
+    return max(1, _env_int("STP_SCAN_POLL_INTERVAL", _SCAN_POLL_INTERVAL_DEFAULT))
+
+
+def _scan_poll_max_wait_seconds(n_triggered: int) -> int:
+    """#732: base wait + optional per-host budget (fleet-scale slow nodes)."""
+    base = max(1, _env_int("STP_SCAN_POLL_MAX_WAIT", _SCAN_POLL_MAX_WAIT_DEFAULT))
+    per_host = max(0, _env_int("STP_SCAN_POLL_PER_HOST_SECONDS", _SCAN_POLL_PER_HOST_DEFAULT))
+    n = max(0, int(n_triggered))
+    return base + n * per_host
+
+
+def _scan_poll_grace_seconds(hosts_done: int, n_triggered: int) -> int:
+    """#732: one-shot grace when nearly complete at the primary deadline."""
+    if n_triggered <= 0 or hosts_done >= n_triggered:
+        return 0
+    missing = n_triggered - hosts_done
+    ratio = hosts_done / n_triggered
+    floor = _env_float("STP_SCAN_POLL_GRACE_RATIO", _SCAN_POLL_GRACE_RATIO_DEFAULT)
+    max_missing = max(1, _env_int("STP_SCAN_POLL_GRACE_MAX_MISSING", _SCAN_POLL_GRACE_MAX_MISSING_DEFAULT))
+    grace = max(0, _env_int("STP_SCAN_POLL_GRACE_SECONDS", _SCAN_POLL_GRACE_SECONDS_DEFAULT))
+    if ratio >= floor and missing <= max_missing:
+        return grace
+    return 0
 
 def _saq_round_key(prefix: str, plan_run_id: int, scan_round_id: str | None) -> str:
     """SAQ dedup key scoped by PlanRun + scan round (#1111 / R11-F02).
@@ -231,8 +286,8 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             run_scan_sync,
         )
 
-        _SCAN_POLL_INTERVAL = 10
-        _SCAN_POLL_MAX_WAIT = 300
+        poll_interval = _scan_poll_interval_seconds()
+        poll_budget = _scan_poll_max_wait_seconds(len(triggered))
         elapsed = 0
         registered = 0
         hosts_done = 0
@@ -241,25 +296,44 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         # first must not satisfy the barrier before UNISOC uploads land.
         # Scoped to this round's triggered set and since watermark (reuse of
         # plan_run_id on incremental scans).
-        while elapsed < _SCAN_POLL_MAX_WAIT:
-            await asyncio_sleep(_SCAN_POLL_INTERVAL)
-            elapsed += _SCAN_POLL_INTERVAL
-            n_new = await asyncio_to_thread(
-                run_scan_sync, plan_run_id, scan_round_id=scan_round_id,
-            )
-            if n_new:
-                registered += int(n_new)
-            hosts_done = await asyncio_to_thread(
-                count_hosts_with_scan_artifacts, plan_run_id, triggered,
-                since=round_started_at,
-                require_platforms=DEDUP_PLATFORMS,
-            )
-            if hosts_done >= n_triggered:
-                break
-            logger.info(
-                "saq_scan_poll plan_run=%d elapsed=%ds hosts=%d/%d artifacts=%d",
-                plan_run_id, elapsed, hosts_done, n_triggered, registered,
-            )
+        logger.info(
+            "saq_scan_poll_budget plan_run=%d hosts=%d budget=%ds interval=%ds",
+            plan_run_id, n_triggered, poll_budget, poll_interval,
+        )
+
+        async def _poll_until(deadline: int) -> None:
+            nonlocal elapsed, registered, hosts_done
+            while elapsed < deadline:
+                await asyncio_sleep(poll_interval)
+                elapsed += poll_interval
+                n_new = await asyncio_to_thread(
+                    run_scan_sync, plan_run_id, scan_round_id=scan_round_id,
+                )
+                if n_new:
+                    registered += int(n_new)
+                hosts_done = await asyncio_to_thread(
+                    count_hosts_with_scan_artifacts, plan_run_id, triggered,
+                    since=round_started_at,
+                    require_platforms=DEDUP_PLATFORMS,
+                )
+                if hosts_done >= n_triggered:
+                    return
+                logger.info(
+                    "saq_scan_poll plan_run=%d elapsed=%ds hosts=%d/%d artifacts=%d",
+                    plan_run_id, elapsed, hosts_done, n_triggered, registered,
+                )
+
+        await _poll_until(poll_budget)
+
+        # #732: near-complete fleets get one grace window for stragglers.
+        if hosts_done < n_triggered:
+            grace = _scan_poll_grace_seconds(hosts_done, n_triggered)
+            if grace > 0:
+                logger.info(
+                    "saq_scan_poll_grace plan_run=%d hosts=%d/%d grace=%ds",
+                    plan_run_id, hosts_done, n_triggered, grace,
+                )
+                await _poll_until(elapsed + grace)
 
         # Poll exhausted with some hosts still missing: retry once so an _org.xls
         # that landed inside the last interval still gets registered and merged.
