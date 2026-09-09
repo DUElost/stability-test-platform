@@ -1,6 +1,6 @@
 # Socket.IO 重订阅误用 Map value（#1112）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
