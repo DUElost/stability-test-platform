@@ -281,3 +281,46 @@ class TestProjectAttribution:
         )
         assert response.status_code == 400
         assert "mutually exclusive" in response.json()["detail"]
+
+
+    def test_unassigned_excludes_seed_members_consistent_with_summary(
+        self, client, db_session, auth_headers,
+    ):
+        """#952: SEED 项目成员不算映射——?unassigned=true 必须与 inventory
+        summary 的严格未映射口径对拍（含 SEED 时统计与明细不再打架）。"""
+        from backend.models.host import Host
+        from backend.models.project import TestProject
+        from backend.models.project_model import ProjectModel
+
+        host = Host(id="h-seed952", hostname="hseed952", status="ONLINE")
+        db_session.add(host)
+        db_session.commit()
+        seed = TestProject(project_key="SEED-P", display_name="seed", source="SEED")
+        user = TestProject(project_key="USER-P", display_name="user")
+        db_session.add_all([seed, user])
+        db_session.commit()
+        db_session.add_all([
+            ProjectModel(project_id=seed.id, match_value="MLD_SEED_ONLY"),
+            ProjectModel(project_id=user.id, match_value="MLD_USER"),
+        ])
+        db_session.commit()
+        db_session.add_all([
+            Device(serial="S-seed-1", host_id="h-seed952", status="ONLINE",
+                   model="MLD_SEED_ONLY"),
+            Device(serial="S-user-1", host_id="h-seed952", status="ONLINE",
+                   model="MLD_USER"),
+            Device(serial="S-none-1", host_id="h-seed952", status="ONLINE",
+                   model="MLD_NONE"),
+        ])
+        db_session.commit()
+
+        response = client.get("/api/v1/devices?unassigned=true", headers=auth_headers)
+        assert response.status_code == 200
+        serials = {d["serial"] for d in response.json()}
+        # SEED-only 型号与无型号设备算未归属；USER 映射不算
+        assert serials == {"S-seed-1", "S-none-1"}
+
+        summary = client.get(
+            "/api/v1/projects/inventory/summary", headers=auth_headers,
+        ).json()["data"]
+        assert summary["unassigned_devices"] == 2  # 与明细口径一致

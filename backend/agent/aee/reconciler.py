@@ -8,9 +8,10 @@
       `category` 按 aee_type 映射,`source="reconciler"`,`extra` 携带
       `event_type / package_name / aee_ts / nfs_path / pull_source`
     - 双节奏:基线 180s;若上一轮有新条目则切到突发 60s × N 轮再回落
-    - D2:每轮先 `cat db_history` 算 sha256,内容未变直接跳过本轮
+    - D2:每轮先 `cat db_history` 算 sha256,内容未变且无 pending 重试时跳过本轮
       `process_device_logs`(计入 reconciler_skip_unchanged_total);
-      内容变化视为有新行候选 → 触发 burst
+      内容变化视为有新行候选 → 触发 burst;#1044:仍有 pending_pull 时即使
+      hash 未变也必须跑 process（失败补采与「发现新历史」解耦）
     - 状态键(M3):reconciler 使用 `state_key_prefix="watcher:aee"`,
       经同一 `db_history.state_key` helper 生成
       `watcher:aee:{serial}:{aee_type}:processed_entries` / `:pending_pull` 键。
@@ -374,6 +375,8 @@ class AeeDbHistoryReconciler:
         self._db_history_hashes: Dict[str, str] = {}
         # D2: 本轮是否存在"新行候选"(实际新增 pull 或 hash 变化) → 驱动 burst
         self._last_had_new_candidate = False
+        # #1044: 上轮 runtime process 仍有 pending_pull → hash 未变也不得跳过
+        self._runtime_has_pending = False
         # 设备当前已存在问题也要导出,并纳入当前 Job 的总览。
         # baseline snapshot 只在每个 Job 首轮执行一次。
         self._baseline_snapshot_done = not baseline_snapshot_enabled
@@ -563,11 +566,12 @@ class AeeDbHistoryReconciler:
     def tick_once(self) -> int:
         """单轮 diff + emit。返回本轮新增条目数。
 
-        D2:先比对 db_history 内容 hash;全部可读且未变则跳过 process_device_logs
-        (计 ticks_skipped_unchanged + reconciler_skip_unchanged_total),返回 0 且
-        不视为"新行候选"(不触发/重置 burst)。hash 变化或不可读则照常 process,
-        并把"hash 变化"也算作新行候选 → 即便本轮 pulled=0(已被 patrol 抢先 pull)
-        仍触发 burst。
+        D2:先比对 db_history 内容 hash;全部可读且未变、且无 runtime pending
+        时跳过 process_device_logs(计 ticks_skipped_unchanged +
+        reconciler_skip_unchanged_total),返回 0 且不视为"新行候选"
+        (不触发/重置 burst)。hash 变化、不可读、或仍有 pending_pull(#1044)
+        则照常 process;并把"hash 变化"也算作新行候选 → 即便本轮 pulled=0
+        (已被 patrol 抢先 pull)仍触发 burst。
         """
         self.stats.ticks_total += 1
         baseline_new = 0
@@ -576,7 +580,7 @@ class AeeDbHistoryReconciler:
             self._baseline_snapshot_done = not baseline_has_more
 
         changed = self._db_history_changed()
-        if changed is False:
+        if changed is False and not self._runtime_has_pending:
             self.stats.ticks_skipped_unchanged += 1
             self._last_had_new_candidate = baseline_new > 0
             record_reconciler_skip_unchanged(self._host_id)
@@ -590,6 +594,11 @@ class AeeDbHistoryReconciler:
             scoped_payload["entry_origin"] = "runtime"
             self._handle_new_entry(scoped_payload)
 
+        def _on_runtime_pull_failed(payload: Dict[str, Any]) -> None:
+            scoped_payload = dict(payload)
+            scoped_payload["entry_origin"] = "runtime"
+            self._handle_pull_failed(scoped_payload)
+
         result = process_device_logs(
             serial=self._serial,
             job_id=self._job_id,
@@ -599,10 +608,12 @@ class AeeDbHistoryReconciler:
             local_root=self._local_root,
             run_date_stamp=self._run_date_stamp,
             on_new_entry=_on_runtime_entry,
+            on_pull_failed=_on_runtime_pull_failed,
             shell_fn=self._shell_fn,
             pull_fn=self._pull_fn,
             stop_event=self._stop_evt,
         )
+        self._runtime_has_pending = int(result.pending_remaining) > 0
         runtime_new = int(result.pulled)
         if runtime_new > 0:
             self.stats.runtime_entries_total += runtime_new
@@ -627,6 +638,7 @@ class AeeDbHistoryReconciler:
             )
         # D2: 新行候选 = 实际新增 pull 或 db_history hash 变化(changed is True)。
         # changed is None(不可读)不算 hash 变化,仅按 new_count 判定。
+        # #1044: pending 重试本身不视为"新行候选"(不重置 burst)。
         self._last_had_new_candidate = (new_count > 0) or (changed is True)
         return new_count
 
@@ -711,6 +723,83 @@ class AeeDbHistoryReconciler:
     # ------------------------------------------------------------------
     # 新条目回调 → emit log_signal
     # ------------------------------------------------------------------
+
+    def _handle_pull_failed(self, payload: Dict[str, Any]) -> None:
+        """#1044: pull/verify 失败时仍落可观测 signal + PULL_FAILED DLE。
+
+        不标记 processed；processor 侧 pending 继续重试。
+        """
+        try:
+            aee_type = str(payload.get("aee_type") or "")
+            category = _AEE_TYPE_TO_CATEGORY.get(aee_type)
+            if not category:
+                logger.warning(
+                    "aee_reconciler_pull_failed_unknown_aee_type serial=%s job=%d aee_type=%r",
+                    self._serial, self._job_id, aee_type,
+                )
+                return
+
+            parsed: Dict[str, Any] = dict(payload.get("parsed") or {})
+            db_path: str = str(parsed.get("db_path") or "")
+            aee_ts: str = str(parsed.get("timestamp") or "")
+            pkg_name: str = str(parsed.get("pkg_name") or "") or "unknown"
+            event_type: str = str(parsed.get("event_type") or "") or "UNKNOWN"
+            raw_event_type: str = str(parsed.get("raw_event_type") or "")
+            event_subtype: str = str(parsed.get("event_subtype") or "") or "其他"
+            entry_origin: str = str(payload.get("entry_origin") or "") or "runtime"
+            error: str = str(payload.get("error") or "pull_failed")
+            exhausted = bool(payload.get("exhausted"))
+            detected_at = datetime.now(timezone.utc)
+            aee_ts_utc = to_utc(parse_timestamp(aee_ts))
+
+            extra: Dict[str, Any] = {
+                "schema_version": 2,
+                "event_type": event_type,
+                "event_subtype": event_subtype,
+                "raw_event_type": raw_event_type,
+                "package_name": pkg_name,
+                "aee_ts": aee_ts,
+                "aee_ts_utc": aee_ts_utc.isoformat() if aee_ts_utc else None,
+                "nfs_path": None,
+                "pull_source": "reconciler",
+                "entry_origin": entry_origin,
+                "pull_failed": True,
+                "pull_error": error,
+                "pull_retry_exhausted": exhausted,
+            }
+
+            seq_no = self._emitter.emit(
+                category=category,
+                source="reconciler",
+                path_on_device=db_path,
+                detected_at=detected_at,
+                artifact_uri=None,
+                extra=extra,
+            )
+            self.stats.signals_emitted += 1
+            self._register_pull_failed_device_log_event(
+                detected_at=detected_at,
+                event_type=resolve_device_log_event_type(event_type, event_subtype),
+                event_subtype=event_subtype,
+                aee_ts_utc=aee_ts_utc,
+                seq_no=seq_no,
+            )
+            logger.info(
+                "aee_reconciler_pull_failed serial=%s job=%d cat=%s pkg=%s err=%s exhausted=%s",
+                self._serial, self._job_id, category, pkg_name, error, exhausted,
+            )
+        except ContractViolation as exc:
+            self.stats.signals_dropped += 1
+            logger.warning(
+                "aee_reconciler_pull_failed_contract_violation serial=%s job=%d err=%s",
+                self._serial, self._job_id, exc,
+            )
+        except Exception:
+            self.stats.signals_dropped += 1
+            logger.exception(
+                "aee_reconciler_pull_failed_emit_failed serial=%s job=%d payload=%s",
+                self._serial, self._job_id, payload,
+            )
 
     def _handle_new_entry(self, payload: Dict[str, Any]) -> None:
         """processor.on_new_entry 回调:把新落盘的 AEE 条目 emit 成 log_signal。
