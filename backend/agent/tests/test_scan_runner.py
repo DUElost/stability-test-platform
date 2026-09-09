@@ -17,7 +17,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -442,3 +442,140 @@ def test_run_dedup_org_tool_failure():
         mock_run.return_value = _completed(returncode=1, stderr="error")
         result = r.run_dedup_org("/fake/path.xls", 1, "host-1")
     assert result is None
+
+
+# ── #1078：staging 回收（硬链接终态后不清理，削弱 HDD spill）────────────
+
+
+def _seed_event_file(hdd: Path, serial: str = "SER-A") -> Path:
+    """在 HDD 上造一个事件文件，返回原文件路径（供 nlink 断言）。"""
+    event = hdd / "V551A_0808_MonkeyAEEinfo" / serial / "2026_0808_010203_001_db.00.ANR"
+    event.parent.mkdir(parents=True)
+    event.write_text("event")
+    return event
+
+
+def _scan_with_fake_tool(r: ScanRunner, plan_run_id: int = 42, **kwargs):
+    """跑一次带假 scan 工具的扫描，返回 (result, staging)。"""
+
+    def fake_run(argv, **_kwargs):
+        scan_d = Path(argv[argv.index("-d") + 1])
+        (scan_d / "Result_shanghai_org.xls").write_text("fake")
+        return _completed(stdout="done")
+
+    with patch(
+        "backend.agent.scan_runner.subprocess.run", side_effect=fake_run,
+    ) as mock_run:
+        result = r.run_local_scan(plan_run_id, "host-1", **kwargs)
+    called_argv = mock_run.call_args[0][0]
+    staging = Path(called_argv[called_argv.index("-d") + 1])
+    return result, staging
+
+
+class TestReclaimScanStaging:
+    def test_refuses_hdd_root(self, tmp_path):
+        """serials 为空时 scan_root=HDD 根 —— 回收必须拒绝动手（防误删）。"""
+        from backend.agent.scan_runner import reclaim_scan_staging
+
+        reclaim_scan_staging(str(tmp_path))
+        assert tmp_path.exists()
+
+    def test_refuses_non_staging_parent(self, tmp_path):
+        from backend.agent.scan_runner import reclaim_scan_staging
+
+        decoy = tmp_path / "other" / "pr42-abc"
+        decoy.mkdir(parents=True)
+        reclaim_scan_staging(str(decoy))
+        assert decoy.exists()
+
+    def test_removes_staging_and_releases_hardlink(self, tmp_path):
+        """删 staging 后原事件目录的硬链接引用确实释放（nlink 回落）。"""
+        import os
+
+        from backend.agent.scan_runner import reclaim_scan_staging
+
+        hdd = tmp_path / "hdd"
+        hdd.mkdir()
+        event = _seed_event_file(hdd)
+        staging = hdd / ".stp-scan" / "pr42-abc"
+        staging.mkdir(parents=True)
+        linked = staging / "linked.ANR"
+        os.link(event, linked)
+        assert os.stat(event).st_nlink == 2
+
+        reclaim_scan_staging(str(staging))
+
+        assert not staging.exists()
+        assert event.exists()
+        assert os.stat(event).st_nlink == 1
+
+    def test_failure_path_reclaims_staging(self, tmp_path):
+        """scan 工具失败 → staging 立即回收，不等到下一轮 prepare。"""
+        r = _make_runner()
+        hdd = tmp_path / "hdd"
+        hdd.mkdir()
+        _seed_event_file(hdd)
+        r._hdd_root = str(hdd)
+
+        with patch("backend.agent.scan_runner.subprocess.run") as mock_run:
+            mock_run.return_value = _completed(returncode=1, stderr="error")
+            result = r.run_local_scan(
+                42, "host-1",
+                device_serials=["SER-A"], run_date_stamps=["0808"],
+            )
+
+        assert result is None
+        assert list((hdd / ".stp-scan").iterdir()) == []
+
+    def test_success_path_keeps_staging_for_upload(self, tmp_path):
+        """成功路径产物在 staging 里 —— 上传前不能删。"""
+        r = _make_runner()
+        hdd = tmp_path / "hdd"
+        hdd.mkdir()
+        _seed_event_file(hdd)
+        r._hdd_root = str(hdd)
+
+        result, staging = _scan_with_fake_tool(
+            r, device_serials=["SER-A"], run_date_stamps=["0808"],
+        )
+
+        assert result is not None
+        assert staging.exists()
+        assert r._last_scan_root == str(staging)
+
+    def test_run_scan_and_upload_reclaims_after_upload(self, tmp_path):
+        """端到端：上传完成后 staging 被回收，prune 原事件目录可释放空间。"""
+        r = _make_runner()
+        hdd = tmp_path / "hdd"
+        hdd.mkdir()
+        event = _seed_event_file(hdd)
+        r._hdd_root = str(hdd)
+
+        uploader = MagicMock()
+        uploader.is_configured.return_value = True
+        uploader.upload_scan_report.return_value = "/nfs/dst.xls"
+
+        with patch(
+            "backend.agent.scan_runner.subprocess.run",
+            side_effect=lambda argv, **_k: (
+                (_ := Path(argv[argv.index("-d") + 1]) / "Result_shanghai_org.xls")
+                .write_text("fake"),
+                _completed(stdout="done"),
+            )[1],
+        ):
+            with patch(
+                "backend.agent.upload_manager.UploadManager.instance",
+                return_value=uploader,
+            ):
+                r.run_scan_and_upload(
+                    42, "host-1", is_final=False,
+                    device_serials=["SER-A"], run_date_stamps=["0808"],
+                )
+
+        assert uploader.upload_scan_report.called
+        assert not (hdd / ".stp-scan" / "pr42-" ).exists() or all(
+            not p.name.startswith("pr42-")
+            for p in (hdd / ".stp-scan").iterdir()
+        )
+        import os
+        assert os.stat(event).st_nlink == 1
