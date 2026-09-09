@@ -293,19 +293,29 @@ class _TtlFakeRedis:
         self.store.pop(key, None)
 
     async def eval(self, script, numkeys, key, *args):
-        # #887: compare-and-delete/expire 参考语义（含虚拟时钟过期模型）。
+        # #887 / #1113: compare-and-delete / renew-or-rebuild（含虚拟时钟过期）。
         item = self.store.get(key)
         if item is not None:
             value, expiry = item
             if expiry is not None and self.now > expiry:
                 del self.store[key]
                 item = None
-        if item is None or item[0] != args[0]:
-            return 0
         if "DEL" in script:
+            if item is None or item[0] != args[0]:
+                return 0
             del self.store[key]
             return 1
+        if "RENEW_OR_REBUILD" in script:
+            if item is None:
+                self.store[key] = (args[0], self.now + int(args[1]))
+                return 1
+            if item[0] != args[0]:
+                return 0
+            self.store[key] = (item[0], self.now + int(args[1]))
+            return 1
         if "EXPIRE" in script:
+            if item is None or item[0] != args[0]:
+                return 0
             self.store[key] = (item[0], self.now + int(args[1]))
             return 1
         return 0
@@ -348,8 +358,8 @@ def test_renew_extends_ttl_beyond_initial_window(monkeypatch):
     assert owner is not None and owner["sid"] == "sid-owner"
 
 
-def test_renew_does_not_resurrect_foreign_or_expired_keys(monkeypatch):
-    """续租只作用于本进程 + 本 sid 的 key（不复活他人/已过期）。"""
+def test_renew_does_not_overwrite_foreign_keys(monkeypatch):
+    """续租不覆盖他人 owner；本进程过期 key 在心跳续租时可重建（#1113）。"""
     monkeypatch.delenv("TESTING", raising=False)
     monkeypatch.setenv("STP_AGENT_SID_REGISTRY", "1")
     fake = _TtlFakeRedis()
@@ -359,7 +369,7 @@ def test_renew_does_not_resurrect_foreign_or_expired_keys(monkeypatch):
     import asyncio
 
     async def _run():
-        # 他人 instance 注册的 key：renew 不得续
+        # 他人 instance 注册的 key：renew 不得续/覆盖
         await fake.set(reg.owner_key("9"),
                        '{"instance_id":"other","sid":"remote","host_id":"9"}',
                        ex=ttl)
@@ -367,11 +377,13 @@ def test_renew_does_not_resurrect_foreign_or_expired_keys(monkeypatch):
         fake.advance(ttl + 1)
         assert await reg.lookup_agent_owner("9") is None  # 未被复活
 
-        # 本进程 key 过期后：renew 不得复活（连接断开即应消失）
+        # 本进程 key 过期后：存活心跳可重建（#1113；连接仍在才有心跳）
         await reg.register_agent_owner("8", "sid-8")
         fake.advance(ttl + 1)
         assert await reg.lookup_agent_owner("8") is None  # 已过期
-        assert await reg.renew_agent_owner("8", "sid-8") is False
+        assert await reg.renew_agent_owner("8", "sid-8") is True
+        owner = await reg.lookup_agent_owner("8")
+        assert owner is not None and owner["sid"] == "sid-8"
 
         # sid 不匹配（host 被新连接接管）：本进程旧 sid 不得续
         await reg.register_agent_owner("6", "sid-old")

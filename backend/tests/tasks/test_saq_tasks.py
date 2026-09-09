@@ -427,7 +427,7 @@ async def test_wait_for_upload_mark_returns_when_round_matches(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_wait_for_upload_mark_times_out_on_missing_or_stale_round(monkeypatch):
-    """水位线缺失 / 是上一轮的旧值 → 超时放行（best-effort），不抛异常。"""
+    """水位线缺失 / 是上一轮的旧值 → 返回 False（#1079），不抛异常。"""
     from backend.tasks import saq_tasks
 
     pr = MagicMock()
@@ -443,3 +443,51 @@ async def test_wait_for_upload_mark_times_out_on_missing_or_stale_round(monkeypa
 
     assert await saq_tasks._wait_for_upload_mark(1, "round-NEW") is False
     assert sleep_mock.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_merge_task_mark_timeout_sets_ready_false_despite_pending_zero(monkeypatch):
+    """#1079: 标记超时 + LOCAL 事件（pending==0）不得写出 ready=true。"""
+    from backend.tasks import saq_tasks
+
+    written: dict = {}
+
+    async def _mark_timeout(*_a, **_k):
+        return False
+
+    async def _events_ready(*_a, **_k):
+        return True  # pending==0 假阳
+
+    async def _to_thread(fn, *args, **kwargs):
+        if fn is saq_tasks._summarize_upload_sync:
+            return {"total": 2, "local": 2, "pending": 0, "remote": 0}
+        if fn is saq_tasks._write_run_context_sync:
+            written["section"] = args[1]
+            written["value"] = args[2]
+            return None
+        if callable(fn):
+            return "ok"
+        return None
+
+    monkeypatch.setattr(saq_tasks, "_wait_for_upload_mark", _mark_timeout)
+    monkeypatch.setattr(saq_tasks, "_wait_for_remote_device_log_events", _events_ready)
+    monkeypatch.setattr(saq_tasks, "asyncio_to_thread", _to_thread)
+    monkeypatch.setattr(saq_tasks.asyncio, "to_thread", AsyncMock(return_value="ok"))
+    monkeypatch.setattr(saq_tasks, "_count_remote_device_log_events", AsyncMock(return_value=0))
+    monkeypatch.setattr(saq_tasks, "_enqueue_extract_task", AsyncMock())
+
+    await saq_tasks.merge_task(
+        {},
+        plan_run_id=42,
+        scan_round_id="round-NEW",
+        round_started_at="2026-09-08T12:00:00+00:00",
+    )
+
+    assert written["section"] == "upload_summary"
+    assert written["value"]["ready"] is False
+    assert written["value"]["mark_ready"] is False
+    assert written["value"]["events_ready"] is True
+    assert written["value"]["incomplete_reason"] == "upload_mark_timeout"
+    assert written["value"]["compensation"] == "best_effort_extract"
+    assert written["value"]["local"] == 2
+    saq_tasks._enqueue_extract_task.assert_awaited_once_with(42)

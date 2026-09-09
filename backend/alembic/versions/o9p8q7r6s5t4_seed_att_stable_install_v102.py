@@ -32,13 +32,13 @@ depends_on = None
 VERSIONS = [
     {
         "name": "sleep_setup", "ver": "1.0.2",
-        "sha": "970a02133edcf75528adb74cdcf413d89f8d3a4f6f384ab3380d1c872db6db79",
+        "sha": "41f40e5498e0ae822378d4c33443d8c2e9f7b008d7eab3b352d4905d19f9aea2",
         "desc": "休眠唤醒部署 — v1.0.1 + AutoTestTool push+pm 稳定安装（#775）",
         "deactivate": ["1.0.1"],
     },
     {
         "name": "powercycle_setup", "ver": "1.0.2",
-        "sha": "29136c9ce24f9dfcc90ad705988f9a5aa153de5a59d96e697ea278e59b9e3d7e",
+        "sha": "f36b155bffe1e3faed11ef3286a49492ac8279c4cf842d92831b6c33bf195e33",
         "desc": "开关机部署 — v1.0.1 + AutoTestTool push+pm 稳定安装（#775）",
         "deactivate": ["1.0.1"],
     },
