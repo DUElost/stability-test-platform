@@ -86,6 +86,49 @@ def test_streams_and_completes_success(tmp_path, emit_capture):
     assert pushed == ["line A", "line B", "line C"]
 
 
+def test_flushes_single_line_while_process_stays_quiet(tmp_path, emit_capture, monkeypatch):
+    """#1118: 一行输出后长时间安静，仍应在 flush 间隔内推送（不等到进程结束）。"""
+    events, emit = emit_capture
+    monkeypatch.setattr(RunConsole, "_FLUSH_MAX_INTERVAL", 0.05)
+    rc = _configure(tmp_path, emit)
+    run_id = rc.start(
+        run_key="quiet",
+        cmd=_py(
+            "import sys, time\n"
+            "print('early', flush=True)\n"
+            "time.sleep(2)\n"
+            "print('late', flush=True)\n"
+        ),
+    )
+
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        pushed = [
+            ln
+            for e in events
+            if e[0] == "console_log"
+            for ln in e[1]["lines"]
+        ]
+        if "early" in pushed:
+            st = RunConsole.instance().status(run_id) or {}
+            assert st.get("status") == "RUNNING"
+            assert "late" not in pushed
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("early line was not flushed while process remained quiet")
+
+    st = _wait_terminal(run_id)
+    assert st["status"] == "SUCCESS"
+    pushed = [
+        ln
+        for e in events
+        if e[0] == "console_log"
+        for ln in e[1]["lines"]
+    ]
+    assert pushed == ["early", "late"]
+
+
 def test_failed_exit_code(tmp_path, emit_capture):
     _events, emit = emit_capture
     rc = _configure(tmp_path, emit)
@@ -126,6 +169,68 @@ def test_cancel_running(tmp_path, emit_capture):
     # 取消后 key 释放，可再起
     rid2 = rc.start(run_key="k3", cmd=_py("print('ok')"))
     assert _wait_terminal(rid2)["status"] == "SUCCESS"
+
+
+# ── #1115：父退出 ≠ 整组退出 —— 忽略 SIGTERM 的后代必须被组级 SIGKILL ────
+
+
+def _spawn_parent_exits_first_cmd(grandchild_code: str) -> list:
+    """父进程起一个忽略 SIGTERM 的子孙后立刻退出；子孙继承 stdout 管道。"""
+    import os
+
+    assert hasattr(os, "killpg"), "POSIX-only"
+    parent_code = (
+        "import subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-c', {grandchild_code!r}])\n"
+        "time.sleep(0.5)\n"  # 给子孙装 SIG_IGN 的时间，否则测不出组级收敛
+        "print('parent exiting', flush=True)\n"
+    )
+    return _py(parent_code)
+
+
+def test_cancel_kills_descendants_ignoring_sigterm(tmp_path, emit_capture):
+    """父退出 + 后代忽略 SIGTERM → 必须组级 SIGKILL 收敛（R11-F07）。
+
+    后代握着 stdout 管道写端：它不死，reader 等不到 EOF、_finalize 不跑、
+    run_key 不释放 —— 所以「同 key 能立即重起」就是后代已死的可观察证据。
+    """
+    _events, emit = emit_capture
+    rc = _configure(tmp_path, emit)
+    grandchild_code = (
+        "import signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "while True: time.sleep(0.1)\n"
+    )
+    run_id = rc.start(
+        run_key="kg",
+        cmd=_spawn_parent_exits_first_cmd(grandchild_code),
+    )
+    time.sleep(0.3)  # 等 run 起来（parent 还活着，pgid 已留存）
+    assert rc.cancel(run_id) is True
+    st = _wait_terminal(run_id, timeout=15.0)
+    assert st["status"] == "CANCELED"
+    # run_key / reader 均已释放：同 key 可立即重起
+    rid2 = rc.start(run_key="kg", cmd=_py("print('ok')"))
+    assert _wait_terminal(rid2)["status"] == "SUCCESS"
+
+
+def test_start_captures_pgid_for_late_cancel(tmp_path, emit_capture):
+    """#1115：spawn 时留存组身份 —— 父被 reader 回收后 cancel 仍能按组收敛。"""
+    import os
+
+    _events, emit = emit_capture
+    rc = _configure(tmp_path, emit)
+    run_id = rc.start(
+        run_key="kpg",
+        cmd=_py("import time\nfor i in range(100):\n  print(i)\n  time.sleep(0.1)"),
+    )
+    time.sleep(0.3)
+    run = rc._runs.get(run_id)
+    assert run is not None and run._pgid is not None
+    if hasattr(os, "killpg"):
+        assert os.killpg(run._pgid, 0) is None  # 组还活着（不抛即活）
+    rc.cancel(run_id)
+    _wait_terminal(run_id)
 
 
 def test_read_log_from_seq(tmp_path, emit_capture):
