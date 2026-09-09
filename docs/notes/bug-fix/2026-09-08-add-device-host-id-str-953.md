@@ -5,7 +5,7 @@ Class: bug-fix
 
 ## Decision
 
-`Host.id` 是 `String(64)` 主键（常见 IP 派生连字符 ID 如 `192-168-1-200`、
+`Host.id` 是 `String(64)` 主键（常见 IP 派生连字符 ID 如 `192-168-x-x`、
 主机名式 `host-a1`）；`AddDeviceModal` 却校验「正整数」并 `Number()` 转换
 提交——非数字主机 ID 无法通过页面指定现有主机（后端 `DeviceCreate.host_id`
 早已是 `Optional[str]`，表单是唯一收窄点）。
@@ -31,7 +31,7 @@ Class: bug-fix
 
 - **反例实证**：回退 modal + devices.ts 保留测试 → 3 用例失败（字符串
   host_id 被正整数校验拦截）；修复版全绿；
-- 新增用例（`AddDeviceModal.test.tsx` +4）：`192-168-1-200` 原样提交 /
+- 新增用例（`AddDeviceModal.test.tsx` +4）：连字符 host_id 原样提交 /
   `host-a1` 非数字可提交 / 空 host_id 省略字段 / 非法字符（含空白）被拦
   且不提交；
 - `DevicesPage.test.tsx` 回归 **7 passed**；

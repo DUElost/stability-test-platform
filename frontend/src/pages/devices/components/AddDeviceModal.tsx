@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 interface AddDeviceModalProps {
   isOpen: boolean;
   onClose: () => void;
-  // #953: Host.id 是字符串 PK（如 "192-168-1-200"）——host_id 不再收窄为
+  // #953: Host.id 是字符串 PK（如 "192-168-x-x"）——host_id 不再收窄为
   // 正整数，提交原样字符串，存在性由后端校验。
   onSubmit: (data: { serial: string; model?: string; host_id?: string; tags?: string[] }) => void;
   isSubmitting?: boolean;
@@ -127,7 +127,7 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
               type="text"
               value={formData.host_id}
               onChange={(e) => setFormData({ ...formData, host_id: e.target.value })}
-              placeholder="例如：192-168-1-200（可选）"
+              placeholder="例如：192-168-x-x（可选）"
               className={fieldClass(!!errors.host_id)}
               disabled={isSubmitting}
             />
