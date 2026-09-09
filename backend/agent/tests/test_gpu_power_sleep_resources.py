@@ -289,3 +289,49 @@ def test_gpu_setup_v105_pre_reboot_config():
     lib = _load_lib("gpu_setup", "1.0.5")
     assert lib.gpu_config({"project": "chain"})["pre_reboot"] is True
     assert lib.gpu_config({"project": "chain", "pre_reboot": "false"})["pre_reboot"] is False
+
+
+def test_gpu_check_v105_failures_verdict(monkeypatch):
+    """#774 run 353 实证：JUnit FAILURES（antutu app 启动失败）→ failed 归因（非空跑）。"""
+    gc = _load_gpu_check_105()
+    log = (
+        b"GPU_RUN_START test_id=002 rounds=10\n"
+        b"1) test_StressSpecial_GPUTest_002(...)\n"
+        b"java.lang.AssertionError: antutu app\n start test | restart\n"
+        b"FAILURES!!!\nTests run: 1,  Failures: 1\n"
+        b"GPU_ROUND 1 rc=0\nGPU_RUN_END rc=0\n"
+    )
+    monkeypatch.setattr(gc, "_read_log_cat", lambda: log)
+    assert gc._run_finished() == (True, "failed")
+
+
+def test_gpu_check_v105_crashed_still_works(monkeypatch):
+    gc = _load_gpu_check_105()
+    monkeypatch.setattr(gc, "_read_log_cat",
+                        lambda: b"GPU_RUN_START test_id=002 rounds=1\nshortMsg Process crashed.\nGPU_RUN_END rc=0\n")
+    assert gc._run_finished() == (True, "crashed")
+
+
+def _load_gpu_check_105():
+    import importlib.util
+    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_check/v1.0.5")
+    sys.path.insert(0, d)
+    spec = importlib.util.spec_from_file_location("gpu_check_v105", d + "/gpu_check.py")
+    gc = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(gc)
+    return gc
+
+
+def test_gpu_setup_v106_has_settle(monkeypatch):
+    """v1.0.6：reboot 后 settle（boot_completed=1 后等待 60s 默认）。"""
+    import importlib.util
+    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.6")
+    sys.path.insert(0, d)
+    spec = importlib.util.spec_from_file_location("gpu_v106", d + "/gpu_setup.py")
+    g = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(g)
+    import inspect
+    src = inspect.getsource(g._pre_reboot_device)
+    assert "STP_GPU_REBOOT_SETTLE_SECONDS" in src
