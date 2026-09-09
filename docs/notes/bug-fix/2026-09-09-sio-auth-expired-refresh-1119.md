@@ -1,6 +1,6 @@
 # Access Cookie 过期后 Socket.IO 触发有界刷新（#1119）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
