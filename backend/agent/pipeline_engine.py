@@ -1266,7 +1266,12 @@ class PipelineEngine:
                 step,
                 suppress_success_trace=suppress_success_trace,
             )
-        from .operation_scheduler import PermitDenied, PermitWaitTimeout
+        from .operation_scheduler import (
+            PermitCancelled,
+            PermitDenied,
+            PermitWaitTimeout,
+            SchedulerShutdown,
+        )
         self._update_execution_state("WAITING_EXECUTION_SLOT")
         permit = None
         try:
@@ -1282,10 +1287,22 @@ class PipelineEngine:
                     # timeout — check abort signals and retry
                     if self._is_aborted is not None and self._is_aborted():
                         return False
+                except (SchedulerShutdown, PermitCancelled) as exc:
+                    # R07-F12 (#1012): scheduler shutdown / explicit cancel are
+                    # terminal for the whole worker, not merely one step. Mark
+                    # the run cancelled so a patrol cruise stops and does NOT
+                    # count this as an ordinary step failure / backoff retry.
+                    self._canceled = True
+                    logger.info(
+                        "[Lifecycle] run=%s — %s during permit wait, stopping worker",
+                        getattr(self, "_run_id", None),
+                        type(exc).__name__,
+                    )
+                    return False
                 except PermitDenied:
-                    # Cancellation and scheduler shutdown are terminal for
-                    # this worker. Retrying either condition can spin forever
-                    # during Agent shutdown or re-acquire an aborted job.
+                    # Permanent per-device contract errors (already holds,
+                    # duplicate wait) are a local step-level denial, not a
+                    # fleet-wide stop signal.
                     return False
             self._update_execution_state("EXECUTING_STEP")
             return self._run_step_with_retry(
@@ -1723,6 +1740,21 @@ class PipelineEngine:
             patrol_resume = self._patrol_cycle_checkpoint
             skip_init = True
 
+        # R07-F08 (#1010): a checkpoint resume must not grant a fresh cruise
+        # budget. When the persisted checkpoint carries the cruise time already
+        # consumed, anchor the run in the past so the remaining budget after a
+        # crash does not exceed what remained at the last successful cycle.
+        cruise_elapsed: Optional[float] = None
+        if timeout_seconds > 0 and patrol_resume is not None:
+            stored_elapsed = patrol_resume.get("cruise_elapsed_seconds")
+            if isinstance(stored_elapsed, (int, float)) and stored_elapsed > 0:
+                cruise_elapsed = min(float(stored_elapsed), float(timeout_seconds))
+        init_completed_at = (
+            time.time() - cruise_elapsed
+            if cruise_elapsed is not None
+            else time.time()
+        )
+
         try:
             # ── Phase 1: Init ──
             if skip_init:
@@ -1797,7 +1829,7 @@ class PipelineEngine:
                     # exponential backoff on consecutive failure, manual_action
                     # observation for runtime intervention.
                     termination_reason, lifecycle_error = self._run_patrol_loop(
-                        patrol_def, timeout_seconds, init_completed_at=time.time(),
+                        patrol_def, timeout_seconds, init_completed_at=init_completed_at,
                         resume=patrol_resume,
                     )
 
@@ -2103,6 +2135,10 @@ class PipelineEngine:
                 "last_failed_step_id": last_failed_step,
                 "last_observed_action": last_observed_action,
                 "pending_manual_action_ack": pending_manual_action_ack,
+                # R07-F08 (#1010): durable cruise-clock anchor so a crash resume
+                # does not get a fresh timeout. Compute from the same anchor the
+                # MQ status reason used above.
+                "cruise_elapsed_seconds": round(time_elapsed, 3),
             })
 
             # ── Sleep until next cycle, breakable by abort/manual_action ──
@@ -2176,7 +2212,7 @@ class PipelineEngine:
         failed = 0
         last_failed: Optional[str] = None
         for step in steps or []:
-            if self._is_lock_lost():
+            if self._is_lock_lost() or self._canceled:
                 self._canceled = True
                 return success, failed, last_failed
 

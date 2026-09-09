@@ -16,6 +16,7 @@ import logging
 import os
 import tarfile
 import time
+import uuid
 from pathlib import Path
 
 from backend.core.ssh_security import create_ssh_client
@@ -33,7 +34,11 @@ _PIPELINE_SCHEMA_FILE = (
 )
 _REMOTE_INSTALL_DIR = "/opt/stability-test-agent"
 _REMOTE_SERVICE_NAME = "stability-test-agent"
-_REMOTE_TAR_PATH = "/tmp/stp-agent-update.tar.gz"
+
+# #960：远端 tar 路径每次操作独立。固定路径下并发热更新（UI 触发 + precheck
+# 回退 + 批量脚本）会互相覆盖同一个 tar —— 后传的包被前者解压，或反之。
+def _remote_tar_path() -> str:
+    return f"/tmp/stp-agent-update-{uuid.uuid4().hex}.tar.gz"
 
 # Ansible inventory fallback for SSH credentials
 _INVENTORY_PATH = Path(__file__).resolve().parent.parent.parent / "tools" / "ansible" / "inventory.ini"
@@ -475,17 +480,18 @@ def execute_hot_update(
             known_hosts_path=known_hosts_path,
         )
 
+        tar_path = _remote_tar_path()
         try:
             # 3. Upload tarball
             logger.info("hot_update_uploading host=%s:%d", host_ip, ssh_port)
-            sftp.putfo(io.BytesIO(tarball), _REMOTE_TAR_PATH)
-            sftp.chmod(_REMOTE_TAR_PATH, 0o644)
+            sftp.putfo(io.BytesIO(tarball), tar_path)
+            sftp.chmod(tar_path, 0o644)
 
             # 4. Execute remote script
             script = _build_remote_script(
                 install_dir=_REMOTE_INSTALL_DIR,
                 service_name=_REMOTE_SERVICE_NAME,
-                tar_path=_REMOTE_TAR_PATH,
+                tar_path=tar_path,
                 user=install_user,
                 group=install_group,
                 sync_agent_secret=sync_agent_secret,
@@ -538,6 +544,11 @@ def execute_hot_update(
             }
 
         finally:
+            # #960：用完即删 —— 每个包都是独立路径，留着只会堆积在 /tmp
+            try:
+                sftp.remove(tar_path)
+            except Exception:
+                pass
             sftp.close()
             client.close()
 
