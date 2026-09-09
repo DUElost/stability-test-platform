@@ -79,7 +79,7 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
     # #1172: on_job_terminal 自管理提交（#986 契约：聚合后先提交父终态再
     # 触发链式派发）——不能在 begin_nested 内调用。savepoint 提交后由
     # 函数尾部统一终态化并返回；其余候选留待下轮 tick。
-    terminalize: Optional[JobInstance] = None
+    terminalize: JobInstance | None = None
 
     for candidate in expired:
         try:
@@ -214,7 +214,7 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
     failed = 0
     # #1172: on_job_terminal 自管理提交（#986 契约）——不在 begin_nested 内
     # 调用；savepoint 提交后由函数尾部统一终态化，其余候选下轮 tick 处理。
-    terminalize: Optional[JobInstance] = None
+    terminalize: JobInstance | None = None
     for candidate in stale:
         try:
             async with db.begin_nested():
