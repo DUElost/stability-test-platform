@@ -86,6 +86,49 @@ def test_streams_and_completes_success(tmp_path, emit_capture):
     assert pushed == ["line A", "line B", "line C"]
 
 
+def test_flushes_single_line_while_process_stays_quiet(tmp_path, emit_capture, monkeypatch):
+    """#1118: 一行输出后长时间安静，仍应在 flush 间隔内推送（不等到进程结束）。"""
+    events, emit = emit_capture
+    monkeypatch.setattr(RunConsole, "_FLUSH_MAX_INTERVAL", 0.05)
+    rc = _configure(tmp_path, emit)
+    run_id = rc.start(
+        run_key="quiet",
+        cmd=_py(
+            "import sys, time\n"
+            "print('early', flush=True)\n"
+            "time.sleep(2)\n"
+            "print('late', flush=True)\n"
+        ),
+    )
+
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        pushed = [
+            ln
+            for e in events
+            if e[0] == "console_log"
+            for ln in e[1]["lines"]
+        ]
+        if "early" in pushed:
+            st = RunConsole.instance().status(run_id) or {}
+            assert st.get("status") == "RUNNING"
+            assert "late" not in pushed
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("early line was not flushed while process remained quiet")
+
+    st = _wait_terminal(run_id)
+    assert st["status"] == "SUCCESS"
+    pushed = [
+        ln
+        for e in events
+        if e[0] == "console_log"
+        for ln in e[1]["lines"]
+    ]
+    assert pushed == ["early", "late"]
+
+
 def test_failed_exit_code(tmp_path, emit_capture):
     _events, emit = emit_capture
     rc = _configure(tmp_path, emit)

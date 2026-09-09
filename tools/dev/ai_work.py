@@ -231,6 +231,19 @@ def can_resume(lifecycle: str, integration: str) -> tuple[bool, str]:
     return True, ""
 
 
+def closed_unmerged_candidate(lifecycle: str, integration: str, liveness: str,
+                              derived: set) -> bool:
+    """僵尸候选第二类（#906，契约 §3.2）：PR CLOSED 未合且未放弃、失联、diff 为空。
+
+    与既有 [zombie-candidate]（无 PR 分支）同义，但触发条件不同：CLOSED 是终态
+    integration，按 §3.2 第三行**仍在风险窗口**（PR 被关 ≠ 工作停止），因此仍占
+    issue 槽位与 scope——而唯一合法出口 `finish --abandon` 只有人工知道要调。
+    本判据把这类记录显式列出，避免「已关闭 PR 的记录静默占用 issue 直到有人想起」。
+    """
+    return (integration == "CLOSED" and lifecycle in ("CODING", "FINISHED")
+            and liveness == "STALE" and not derived)
+
+
 # ── Registry 定位与九步原子写（§2.1/§2.2）──
 
 def registry_paths(cwd: str | None = None) -> tuple[str, str]:
@@ -577,7 +590,12 @@ def _report(rec_id: str, rec: dict, repo_root: str, refresh: bool) -> None:
         # required + update 只替换 → declared 恒非空）；僵尸本义是
         # 「声明了、没干、还失联」→ STALE 且 derived 为空
         if liveness == "STALE" and not derived:
-            print("  [zombie-candidate] STALE 且 diff 为空（声明未落地）——人工经 finish --abandon 收口")
+            if closed_unmerged_candidate(rec["lifecycle"], integration, liveness, derived):
+                # #906 第二类：PR 已关闭未合，仍在风险窗口并占用 issue 槽位
+                print("  [closed-unmerged] PR 已 CLOSED 未合且记录未放弃（仍在风险窗口）"
+                      "——请 finish --abandon 出窗，或 reopen PR / 转手重新 declare")
+            else:
+                print("  [zombie-candidate] STALE 且 diff 为空（声明未落地）——人工经 finish --abandon 收口")
 
 
 def cmd_status(args) -> int:
@@ -640,8 +658,15 @@ def collect_drift_advisories(records: dict, repo_root: str, now: float) -> list[
         derived = set(derived_paths(rec, repo_root))
         effective[rec_id] = declared | derived
         seen = float(rec["last_seen"]) if rec.get("last_seen") else None
-        if derive_liveness(seen, now) == "STALE":
+        live = derive_liveness(seen, now)
+        if live == "STALE":
             advisories.append(f"freshness: {rec_id} STALE（>24h 无心跳）——人工裁决（非死、不剔除）")
+        if closed_unmerged_candidate(rec.get("lifecycle", "CODING"),
+                                     rec.get("integration_cache") or "NO_PR", live, derived):
+            pr_note = f"PR #{rec['pr_number']} " if rec.get("pr_number") else "PR "
+            advisories.append(
+                f"closed-unmerged: {rec_id} {pr_note}已 CLOSED 未合且未放弃（仍在风险窗口）"
+                "——finish --abandon 出窗，或 reopen/转手")
         if declared and derived:
             unlanded, undeclared = declaration_drift(declared, derived)
             if unlanded:
@@ -869,6 +894,15 @@ def run_self_test() -> int:
     assert not can_resume("CODING", "PR_OPEN")[0]  # 已在编码
     assert not can_resume("ABANDONED", "PR_OPEN")[0]  # 恢复=重新 declare
     assert can_resume("FINISHED", "MERGED")[1]  # 拒绝必附理由
+
+    # #906 僵尸候选第二类：PR CLOSED 未合且未放弃 + 失联 + diff 为空（契约 §3.2）
+    assert closed_unmerged_candidate("CODING", "CLOSED", "STALE", set())
+    assert closed_unmerged_candidate("FINISHED", "CLOSED", "STALE", set())
+    assert not closed_unmerged_candidate("ABANDONED", "CLOSED", "STALE", set())  # 已出窗
+    assert not closed_unmerged_candidate("CODING", "CLOSED", "LIVE", set())  # 未失联
+    assert not closed_unmerged_candidate("CODING", "CLOSED", "STALE", {"docs/x.md"})  # 有落地
+    assert not closed_unmerged_candidate("CODING", "MERGED", "STALE", set())
+    assert not closed_unmerged_candidate("CODING", "NO_PR", "STALE", set())
 
     assert derive_liveness(time.time() - 10, time.time()) == "LIVE"
     assert derive_liveness(time.time() - TTL_SECONDS - 1, time.time()) == "STALE"

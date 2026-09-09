@@ -177,7 +177,11 @@ RESIDENT_BUDGETS = {
     ".cursor/rules/agent-runtime.mdc": (30, 3000),
     ".cursor/rules/agent-scripts.mdc": (30, 3000),
     "docs/development/ai/harness-adapters.md": (100, 10000),
-    "docs/development/ai/execution-contract.md": (200, 20000),
+    # execution-contract.md 是执行语义**唯一权威源**（ADR-0034 P0a），预算随其
+    # 版本化演进上调：v1.8（#906 决策实体唯一性）落地时 main 上已达
+    # 19638/20000 bytes（98%），预算已从「防臃肿」变成「阻止契约演进」。
+    # 2026-09-09 用户裁决：上调至 260 行/26KB（仅抬该文件，其余不变）。
+    "docs/development/ai/execution-contract.md": (260, 26000),
     "backend/agent/AGENTS.md": (40, 5000),
     "backend/agent/aee/AGENTS.md": (100, 10000),
 }
