@@ -528,4 +528,9 @@ class RunConsole:
         logger.info("run_console_shutdown_complete")
 
 
+def _monotonic() -> float:
+    import time
+    return time.monotonic()
+
+
 __all__ = ["RunConsole", "RunConsoleError", "RunKeyBusyError", "ConsoleRun"]
