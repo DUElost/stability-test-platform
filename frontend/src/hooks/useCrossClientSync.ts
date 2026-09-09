@@ -30,6 +30,8 @@ export function useCrossClientSync() {
         qc.invalidateQueries({ queryKey: ['devices'] });
         qc.invalidateQueries({ queryKey: ['project-devices'] });
         qc.invalidateQueries({ queryKey: ['projects-for-plan-editor'] });
+        // #958: 型号归属规则随项目变化——跨端（另一浏览器/标签）失效。
+        qc.invalidateQueries({ queryKey: ['project-models'] });
       }
     },
   });

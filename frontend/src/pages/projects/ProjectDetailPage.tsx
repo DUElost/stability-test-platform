@@ -96,6 +96,8 @@ export default function ProjectDetailPage() {
       void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectKey) });
       void queryClient.invalidateQueries({ queryKey: projectKeys.inventoryModels() });
       void queryClient.invalidateQueries({ queryKey: projectKeys.inventorySummary() });
+      // #958: modelsOf（型号列表查询）缺失效——否则详情页仍显示旧归属型号。
+      void queryClient.invalidateQueries({ queryKey: projectKeys.modelsOf(projectKey) });
     },
     onError: (error) => {
       toast.error(`移除失败: ${toApiError(error).message || '请稍后重试'}`);
