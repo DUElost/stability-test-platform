@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from pathlib import PurePosixPath
 from typing import Optional
 
@@ -15,6 +16,10 @@ from backend.core.ssh_security import (
     resolve_host_ssh_credentials,
 )
 from backend.models.host import Host
+from backend.services.host_maintenance import (
+    HostMaintenanceConflict,
+    maintenance_window,
+)
 from backend.services.host_updater import (
     _AGENT_SOURCE_DIR,
     _resolve_ssh_creds,
@@ -76,15 +81,21 @@ def sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional[
     if not creds.password and not creds.key_path:
         return False, "no_ssh_credentials"
 
+    # #960：上传/rsync/重启期间占住主机维护窗口，期间不再向该主机派发或 claim。
+    # 拿不到窗口（已有热更新在跑）视为本次同步失败，由调用方按既有兜底处理。
+    holder = f"precheck-sync:{uuid.uuid4().hex[:8]}"
     try:
-        result = execute_hot_update(
-            host_ip=host.ip,
-            ssh_port=host.ssh_port or 22,
-            ssh_user=creds.user,
-            ssh_password=creds.password,
-            ssh_key_path=creds.key_path,
-            known_hosts_path=creds.known_hosts_path,
-        )
+        with maintenance_window(db, host_id, holder):
+            result = execute_hot_update(
+                host_ip=host.ip,
+                ssh_port=host.ssh_port or 22,
+                ssh_user=creds.user,
+                ssh_password=creds.password,
+                ssh_key_path=creds.key_path,
+                known_hosts_path=creds.known_hosts_path,
+            )
+    except HostMaintenanceConflict:
+        return False, "host_in_maintenance"
     except Exception as exc:
         return False, f"hot_update_exception: {exc}"
 

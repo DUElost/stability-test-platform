@@ -1,4 +1,5 @@
 import sys
+import threading
 import time
 import unittest
 import sqlite3
@@ -342,6 +343,62 @@ class TestAdbServerStartupReconcile(unittest.TestCase):
         ok = _ensure_adb_server_on_startup("adb")
 
         self.assertFalse(ok)
+
+
+class TestRollbackFailedClaim(unittest.TestCase):
+    """R07-F13 (#1013): a claim whose local SQLite registration failed must not
+    leave a busy device placeholder / fencing residue behind."""
+
+    def test_rollback_frees_device_and_active_state(self):
+        from backend.agent.main import _rollback_failed_claim
+
+        lock = MagicMock()
+        active_job_ids = {101}
+        active_device_ids = {7}
+        active_job_tokens = {101: "tok"}
+        lease_renewer = MagicMock()
+        lease_renewer.clear_fencing_token_if_current.return_value = 7
+        local_db = MagicMock()
+
+        # Registration would have pre-allocated device 7 and job 101 before the
+        # SQLite save raised.
+        _rollback_failed_claim(
+            jid=101,
+            fencing_token="tok",
+            local_worker_token="",
+            device_id=7,
+            active_jobs_lock=lock,
+            active_job_ids=active_job_ids,
+            active_device_ids=active_device_ids,
+            active_job_tokens=active_job_tokens,
+            lease_renewer=lease_renewer,
+            local_db=local_db,
+        )
+
+        self.assertNotIn(101, active_job_ids)
+        self.assertNotIn(7, active_device_ids)
+        self.assertNotIn(101, active_job_tokens)
+        lease_renewer.clear_fencing_token_if_current.assert_called_once()
+        local_db.delete_active_job.assert_called_once_with(101)
+
+    def test_rollback_survives_no_explicit_device(self):
+        from backend.agent.main import _rollback_failed_claim
+
+        lease_renewer = MagicMock()
+        lease_renewer.clear_fencing_token_if_current.return_value = None
+        result = _rollback_failed_claim(
+            jid=5,
+            fencing_token="t",
+            local_worker_token="",
+            device_id=None,
+            active_jobs_lock=threading.Lock(),
+            active_job_ids={5},
+            active_device_ids=set(),
+            active_job_tokens={5: "t"},
+            lease_renewer=lease_renewer,
+            local_db=MagicMock(),
+        )
+        self.assertIsNone(result)  # cleanup is best-effort, returns None
 
 
 if __name__ == "__main__":
