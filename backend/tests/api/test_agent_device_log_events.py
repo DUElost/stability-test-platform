@@ -406,6 +406,89 @@ async def test_device_log_events_create_with_client_id_is_idempotent(monkeypatch
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_stale_local_register_replay_does_not_demote_remote(monkeypatch, tmp_path):
+    """#1174: 已确认 REMOTE（remote_path/checksum 权威）后，旧 LOCAL 注册意图
+    重放（无 remote_path）不得把行打回 LOCAL 或清空路径/校验和——否则 extract
+    不可见；REMOTE ack 后本地副本可能已 prune（#1083），回退即不可逆。"""
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    client_id = str(uuid4())
+    try:
+        create_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.LOCAL.value,
+            local_path="/mnt/hdd/aee_events/dev/ke_replay",
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[create_ev]), db=db, _=None,
+            )
+
+        remote_path = str(nfs / "devices" / str(seed["plan_run_id"]) / "ke_replay")
+        promote_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.REMOTE.value,
+            local_path="/mnt/hdd/aee_events/dev/ke_replay",
+            remote_path=remote_path,
+            checksum="sha-abc",
+            host_id=seed["host_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            r2 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[promote_ev]), db=db, _=None,
+            )
+        assert r2.data["upserted"] == 1
+
+        # 旧 LOCAL 注册意图重放（#1042 outbox drain 晚到）——必须 no-op
+        replay_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.LOCAL.value,
+            local_path="/mnt/hdd/aee_events/dev/ke_replay",
+            host_id=seed["host_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            r3 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[replay_ev]), db=db, _=None,
+            )
+        assert r3.data["upserted"] == 1
+        assert r3.data["event_ids"] == [client_id]
+
+        db = SessionLocal()
+        try:
+            rows = db.query(DeviceLogEvent).filter(
+                DeviceLogEvent.host_id == seed["host_id"],
+            ).all()
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.state == EventState.REMOTE.value
+            assert row.remote_path == remote_path
+            assert row.checksum == "sha-abc"
+        finally:
+            db.close()
+    finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_device_log_events_create_dedupes_job_signal_seq(monkeypatch, tmp_path):
     """#1051: 无 client id 时同 job+signal_seq 重放返回已有行。"""
     nfs = tmp_path / "nfs"

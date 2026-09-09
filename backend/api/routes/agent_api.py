@@ -2245,6 +2245,13 @@ async def ingest_log_signals(
 
 _VALID_EVENT_STATES = {s.value for s in EventState}
 
+# #1174: 中心 remote_path/checksum 已权威的行（extract 只认这三态，见
+# backend/services/device_log_event._REMOTE_STATES）——任何落后补丁（旧 LOCAL
+# 注册意图重放、PULL_FAILED 等不带 remote_path 的迟到 patch）不得覆盖降级。
+_EXTRACTABLE_STATES = frozenset(
+    {EventState.REMOTE.value, EventState.ARCHIVED.value, EventState.PRUNED.value}
+)
+
 
 class DeviceLogEventIn(BaseModel):
     id: Optional[str] = None
@@ -2409,21 +2416,37 @@ async def ingest_device_log_events(
                             f"{ev.host_id!r} != {row.host_id!r}"
                         ),
                     )
-                row.state = ev.state
-                effective_plan_run = (
-                    ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
-                )
-                row.remote_path = _validated_remote_path(
-                    ev.remote_path,
-                    plan_run_id=effective_plan_run,
-                    event_id=str(row.id),
-                    unassigned_fallback=True,
-                )
-                row.checksum = ev.checksum
-                row.size_bytes = ev.size_bytes
-                row.plan_run_id = ev.plan_run_id
-                row.updated_at = now
-                event_id = row.id
+                if (
+                    row.state in _EXTRACTABLE_STATES
+                    and ev.state not in _EXTRACTABLE_STATES
+                ):
+                    # #1174: 幂等重放/迟到补丁不得把已上送权威副本的行降级。
+                    # REMOTE/ARCHIVED/PRUNED 以中心 remote_path/checksum 为准；
+                    # 旧 LOCAL 注册意图（无 remote_path）或 PULL_FAILED 等落后
+                    # patch 重放到此时覆盖会清空路径并使 extract 不可见——
+                    # #1083 REMOTE ack 后本地副本可能已 prune，回退即不可逆。
+                    # 按幂等成功处理（客户端据此 ACK 并清掉 outbox 条目）。
+                    logger.warning(
+                        "dle_stale_replay_ignored id=%s existing=%s incoming=%s",
+                        row.id, row.state, ev.state,
+                    )
+                    event_id = row.id
+                else:
+                    row.state = ev.state
+                    effective_plan_run = (
+                        ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
+                    )
+                    row.remote_path = _validated_remote_path(
+                        ev.remote_path,
+                        plan_run_id=effective_plan_run,
+                        event_id=str(row.id),
+                        unassigned_fallback=True,
+                    )
+                    row.checksum = ev.checksum
+                    row.size_bytes = ev.size_bytes
+                    row.plan_run_id = ev.plan_run_id
+                    row.updated_at = now
+                    event_id = row.id
         else:
             # #1051: 无 client id 时，同 job+signal_seq 重放返回已有行（创建幂等）。
             if ev.job_id is not None and ev.link_signal_seq_no is not None:

@@ -32,6 +32,16 @@ class _FakeRedis:
                 del self.store[key]
                 return 1
             return 0
+        if "RENEW_OR_REBUILD" in script:
+            current = self.store.get(key)
+            if current is None:
+                self.store[key] = str(args[0])
+                self.expires.append((key, int(args[1])))  # type: ignore[arg-type]
+                return 1
+            if current == args[0]:
+                self.expires.append((key, int(args[1])))  # type: ignore[arg-type]
+                return 1
+            return 0
         if "EXPIRE" in script:
             if self.store.get(key) == args[0]:
                 self.expires.append((key, int(args[1])))  # type: ignore[arg-type]
@@ -103,8 +113,25 @@ async def test_renew_never_resurrects_or_overwrites_newer_registration(fake_regi
 
 
 @pytest.mark.asyncio
-async def test_renew_missing_key_returns_false(fake_registry):
+async def test_renew_rebuilds_missing_key_for_live_connection(fake_registry):
+    """#1113: Redis 丢 key 后，存活连接心跳可重建登记。"""
+    assert await registry.renew_agent_owner("h1", "sid-A") is True
+    owner = await registry.lookup_agent_owner("h1")
+    assert owner is not None
+    assert owner["sid"] == "sid-A"
+    assert owner["instance_id"] == registry.control_plane_instance_id()
+
+
+@pytest.mark.asyncio
+async def test_renew_missing_key_does_not_overwrite_foreign_owner(fake_registry):
+    """#1113: 重建不得覆盖其他实例的合法 owner。"""
+    foreign = (
+        '{"instance_id":"other-cp","sid":"sid-foreign","host_id":"h1"}'
+    )
+    fake_registry.store[registry.owner_key("h1")] = foreign
     assert await registry.renew_agent_owner("h1", "sid-A") is False
+    assert fake_registry.store[registry.owner_key("h1")] == foreign
+    assert fake_registry.expires == []
 
 
 @pytest.mark.asyncio
