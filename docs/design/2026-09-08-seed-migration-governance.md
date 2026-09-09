@@ -46,9 +46,11 @@ Plan 的派发参数静默变化（审计与重放失真）或被引用版本停
 
 ## 5. 实现计划（裁决后拆单）
 
-1. `backend/alembic/versions/` 下新增**共享辅助模块**（非迁移文件）：
-   `raise_if_version_referenced(conn, name, version)`——查 `plan_step`
-   引用计数，>0 时 raise 带指引的 RuntimeError；
+1. 治理模板权威源落 `backend/services/script_seed_governance.py`
+   （`raise_if_version_referenced` / `raise_if_any_version_referenced`）；
+   未来的种子迁移按**迁移自包含原则**把模板当前实现**内嵌**进迁移文件
+   （不 import 服务层——迁移是冻结的历史，服务层会演进），义务条文写入
+   `docs/development/script-versioning.md`「种子迁移治理」节；
 2. 两个既有迁移**不改**（已在生产执行过，重写历史迁移违反 ADR-0008；其
    已产生的影响属现状数据）；辅助模块仅约束**未来的**种子迁移；
 3. `docs/development/script-versioning.md` 增「种子迁移治理」节：引用检查
