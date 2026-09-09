@@ -444,3 +444,83 @@ async def test_device_log_events_create_dedupes_job_signal_seq(monkeypatch, tmp_
             db.close()
     finally:
         _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_device_log_events_create_replay_does_not_regress_advanced_row(
+    monkeypatch, tmp_path,
+):
+    """#1137 审计 follow-up：LOCAL create 幂等重放不得回退已推进行。
+
+    预分配 id 的 create 在「服务端已提交、响应丢失」的模糊失败下会进入 outbox，
+    稍后重放（state=LOCAL 且不带 remote_path/checksum）。若行已由上传流程推进
+    到 REMOTE（remote_path/checksum 已登记、本地副本可能已 prune），重放照旧
+    覆写会把行打回 LOCAL 并清空 remote_path——extract 永久不可见。重放必须按
+    幂等成功处理，不改动既有行。
+    """
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    client_id = str(uuid4())
+    try:
+        create_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.LOCAL.value,
+            local_path="/mnt/hdd/aee_events/dev/ke_replay",
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+            link_signal_seq_no=5,
+        )
+        async with AsyncSessionLocal() as db:
+            r1 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[create_ev]), db=db, _=None,
+            )
+        assert r1.data["event_ids"] == [client_id]
+
+        remote_path = str(
+            nfs / "devices" / str(seed["plan_run_id"]) / client_id / "ke_replay"
+        )
+        promote_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.REMOTE.value,
+            local_path="/mnt/hdd/aee_events/dev/ke_replay",
+            remote_path=remote_path,
+            checksum="sha-remote-1",
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            r2 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[promote_ev]), db=db, _=None,
+            )
+        assert r2.data["event_ids"] == [client_id]
+
+        # 过期 create 意图重放：不得把 REMOTE 行回退成 LOCAL / 清空 remote_path。
+        async with AsyncSessionLocal() as db:
+            r3 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[create_ev]), db=db, _=None,
+            )
+        assert r3.data["event_ids"] == [client_id]
+
+        db = SessionLocal()
+        try:
+            row = db.query(DeviceLogEvent).filter(DeviceLogEvent.id == client_id).one()
+            assert row.state == EventState.REMOTE.value
+            assert row.remote_path == remote_path
+            assert row.checksum == "sha-remote-1"
+            assert row.plan_run_id == seed["plan_run_id"]
+        finally:
+            db.close()
+    finally:
+        _cleanup(seed)

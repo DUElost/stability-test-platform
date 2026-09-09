@@ -2374,6 +2374,17 @@ async def ingest_device_log_events(
                             f"{ev.host_id!r} != {row.host_id!r}"
                         ),
                     )
+                if ev.state == "LOCAL" and ev.remote_path is None and ev.checksum is None:
+                    # 幂等创建重放守卫：create 意图恒为 state=LOCAL 且不带
+                    # remote_path/checksum。命中已存在行说明创建早已成功，行可能
+                    # 已推进（控制面标 UPLOAD_PENDING、agent 上送 REMOTE…）——
+                    # 重放若照常覆写会把推进态回退成 LOCAL、清空 remote_path/
+                    # plan_run_id，使 extract 永久不可见且本地副本已被 prune。
+                    # 一律按幂等成功处理，不改动既有行。
+                    event_id = row.id
+                    upserted += 1
+                    event_ids.append(str(event_id))
+                    continue
                 row.state = ev.state
                 effective_plan_run = (
                     ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
@@ -2390,12 +2401,15 @@ async def ingest_device_log_events(
                 row.updated_at = now
                 event_id = row.id
         else:
-            # #1051: 无 client id 时，同 job+signal_seq 重放返回已有行（创建幂等）。
+            # #1051: 无 client id 时，同 job+signal_seq+host 重放返回已有行（创建幂等）。
+            # 去重必须限定同 host——job.host_id 为空时不同 agent 的真实独立事件
+            # 不能互相吞并（id 分支对 host 不符有 403，此分支同理由）。
             if ev.job_id is not None and ev.link_signal_seq_no is not None:
                 existing = (await db.execute(
                     select(DeviceLogEvent).where(
                         DeviceLogEvent.job_id == ev.job_id,
                         DeviceLogEvent.signal_seq_no == ev.link_signal_seq_no,
+                        DeviceLogEvent.host_id == ev.host_id,
                     )
                 )).scalars().first()
                 if existing is not None:
