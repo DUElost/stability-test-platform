@@ -27,6 +27,15 @@ update_branch_tolerant() {
     echo "update-branch on #${num} lost the head-sha race; another run already updated it."
     return 0
   fi
+  # 真冲突（#906 实测）：队首 PR 与 main 冲突时 update-branch 必失败，队列被它
+  # 合法阻塞直到人工解冲突——这是可处置状态而非本 job 故障。原先只靠下面
+  # 「PR 已不在 open 态」兜底，而冲突 PR 仍 open → 落到 return rc，把每轮
+  # cron 与每个 PR 的 reconcile-queue 刷成红 X（reconcile-queue 不在 required
+  # checks 内，不阻塞合入，但污染信号）。显式识别并绿退，附人工动作指引。
+  if printf '%s' "$out" | grep -qiE "cannot update pr branch due to conflicts"; then
+    echo "PR #${num} has merge conflicts with main; queue head blocked until resolved manually."
+    return 0
+  fi
   # 按 PR 状态判定而非再堆一条报错文案匹配：合入与 update-branch 的竞态
   # 不只有一种报错形态，而「PR 已不在 open 态」是唯一稳定的判据。
   state="$(gh pr view "$num" --repo "$REPO" --json state --jq .state 2>/dev/null || echo UNKNOWN)"
