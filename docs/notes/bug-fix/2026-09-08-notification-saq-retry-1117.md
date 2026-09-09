@@ -1,6 +1,6 @@
 # 通知通道失败需可 SAQ 重试且不重发成功通道（#1117）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
