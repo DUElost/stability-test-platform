@@ -107,4 +107,93 @@ describe('useSocketIO — token auth', () => {
     expect(socket.disconnect).toHaveBeenCalled();
     expect(socket.connect).toHaveBeenCalled();
   });
+
+  it('recovers from Authentication required when access cookie is missing (#1119)', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const socket = createFakeSocket();
+    const ioMock = vi.fn(() => socket);
+
+    vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
+    vi.doMock('socket.io-client', () => ({ io: ioMock }));
+
+    const { useSocketIO } = await import('@/hooks/useSocketIO');
+    const { DASHBOARD_SUBSCRIPTION } = await import('@/config');
+    renderHook(() => useSocketIO(DASHBOARD_SUBSCRIPTION));
+
+    await waitFor(() => {
+      expect(ioMock).toHaveBeenCalled();
+    });
+
+    act(() => {
+      socket.emitLocal('connect_error', new Error('Authentication required'));
+    });
+
+    await waitFor(() => {
+      expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+    });
+    expect(socket.disconnect).toHaveBeenCalled();
+    expect(socket.connect).toHaveBeenCalled();
+  });
+
+  it('does not infinite-refresh when refresh fails for Authentication required (#1119)', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue(false);
+    const socket = createFakeSocket();
+    const ioMock = vi.fn(() => socket);
+
+    vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
+    vi.doMock('socket.io-client', () => ({ io: ioMock }));
+
+    const { useSocketIO } = await import('@/hooks/useSocketIO');
+    const { DASHBOARD_SUBSCRIPTION } = await import('@/config');
+    const { result } = renderHook(() => useSocketIO(DASHBOARD_SUBSCRIPTION));
+
+    await waitFor(() => {
+      expect(ioMock).toHaveBeenCalled();
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      act(() => {
+        socket.emitLocal('connect_error', new Error('Authentication required'));
+      });
+      await waitFor(() => {
+        expect(refreshAccessToken.mock.calls.length).toBeGreaterThan(0);
+      });
+      // Allow the in-flight promise to settle between attempts.
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    // Bounded: at most _AUTH_RECOVERY_MAX (2) refresh attempts.
+    expect(refreshAccessToken.mock.calls.length).toBeLessThanOrEqual(2);
+    await waitFor(() => {
+      expect(result.current.connectionStatus).toBe('error');
+    });
+  });
+
+  it('does not refresh on non-recoverable handshake errors (#1119)', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const socket = createFakeSocket();
+    const ioMock = vi.fn(() => socket);
+
+    vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
+    vi.doMock('socket.io-client', () => ({ io: ioMock }));
+
+    const { useSocketIO } = await import('@/hooks/useSocketIO');
+    const { DASHBOARD_SUBSCRIPTION } = await import('@/config');
+    renderHook(() => useSocketIO(DASHBOARD_SUBSCRIPTION));
+
+    await waitFor(() => {
+      expect(ioMock).toHaveBeenCalled();
+    });
+
+    act(() => {
+      socket.emitLocal('connect_error', new Error('Origin not allowed'));
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(refreshAccessToken).not.toHaveBeenCalled();
+  });
 });

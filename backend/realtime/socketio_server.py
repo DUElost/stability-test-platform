@@ -389,6 +389,9 @@ class DashboardNamespace(socketio.AsyncNamespace):
         # 从未生效——无 token 握手即可接入 /dashboard。TESTING=1 下保留
         # 匿名直连供测试套件使用。
         if os.getenv("TESTING") != "1" and not token:
+            # Client treats this message as refresh-recoverable (#1119): access
+            # cookie gone/expired while refresh may still be valid. Do not
+            # loosen auth — only name the refusal for the recovery branch.
             raise socketio.exceptions.ConnectionRefusedError("Authentication required")
 
         if token:
