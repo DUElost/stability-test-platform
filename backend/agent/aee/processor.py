@@ -82,6 +82,7 @@ def process_device_logs(
     local_root: Optional[Path] = None,
     run_date_stamp: Optional[str] = None,
     on_new_entry: Optional[Callable[[Dict[str, Any]], None]] = None,
+    on_pull_failed: Optional[Callable[[Dict[str, Any]], None]] = None,
     shell_fn: Optional[ShellFn] = None,
     pull_fn: Optional[PullFn] = None,
     stop_event: Optional[threading.Event] = None,
@@ -98,6 +99,18 @@ def process_device_logs(
         }
     Patrol path passes None → behavior unchanged. Reconciler path uses it to emit
     log_signal with extra={event_type, package_name, aee_ts, nfs_path, pull_source}.
+
+    on_pull_failed (#1044): optional callback invoked **once per pending line** when
+    adb pull / strict verify first fails (or retry budget is exhausted). Does **not**
+    mark the line processed — pending retry continues. Payload::
+        {
+            "line":        str
+            "parsed":      Dict[str, Any]
+            "aee_type":    str
+            "error":       str  # last_error / reason
+            "retry_count": int
+            "exhausted":   bool  # True when removed for pull_retry_limit
+        }
     """
     cfg = config or ProcessConfig()
     result = ProcessResult()
@@ -270,6 +283,15 @@ def process_device_logs(
                 continue
 
             if int(task.get("retry_count", 0)) >= cfg.pull_retry_limit:
+                _notify_pull_failed(
+                    on_pull_failed,
+                    line=line,
+                    parsed=parsed,
+                    aee_type=aee_type,
+                    task=task,
+                    error=str(task.get("last_error") or "pull_retry_exceeded"),
+                    exhausted=True,
+                )
                 pending_tasks.pop(line, None)
                 result.errors.append(f"pull_retry_exceeded:{parsed['db_path']}")
                 continue
@@ -310,6 +332,14 @@ def process_device_logs(
                 task["last_error"] = "adb_pull_failed"
                 _cleanup_dir(local_target_dir)
                 result.errors.append(f"pull_failed:{parsed['db_path']}")
+                _notify_pull_failed(
+                    on_pull_failed,
+                    line=line,
+                    parsed=parsed,
+                    aee_type=aee_type,
+                    task=task,
+                    error="adb_pull_failed",
+                )
                 continue
 
             verify_ok, verify_msg, _ = _verify_pulled_aee_log_strict(
@@ -322,6 +352,14 @@ def process_device_logs(
                 task["last_error"] = f"verify_failed: {verify_msg}"
                 _cleanup_dir(local_target_dir)
                 result.errors.append(f"pull_verify_failed:{parsed['db_path']}:{verify_msg}")
+                _notify_pull_failed(
+                    on_pull_failed,
+                    line=line,
+                    parsed=parsed,
+                    aee_type=aee_type,
+                    task=task,
+                    error=f"verify_failed: {verify_msg}",
+                )
                 continue
 
             parsed = _enrich_parsed_with_local_aee_metadata(parsed, local_target_dir)
@@ -337,6 +375,38 @@ def process_device_logs(
             break
 
     return result
+
+
+def _notify_pull_failed(
+    on_pull_failed: Optional[Callable[[Dict[str, Any]], None]],
+    *,
+    line: str,
+    parsed: Dict[str, Any],
+    aee_type: str,
+    task: Dict[str, Any],
+    error: str,
+    exhausted: bool = False,
+) -> None:
+    """#1044: persist detection fact once per pending line (not on every retry)."""
+    if on_pull_failed is None:
+        return
+    if task.get("failure_reported") and not exhausted:
+        return
+    try:
+        on_pull_failed({
+            "line": line,
+            "parsed": dict(parsed),
+            "aee_type": aee_type,
+            "error": error,
+            "retry_count": int(task.get("retry_count", 0)),
+            "exhausted": bool(exhausted),
+        })
+    except Exception:
+        logger.exception(
+            "aee_on_pull_failed_callback_failed db=%s error=%s",
+            parsed.get("db_path"), error,
+        )
+    task["failure_reported"] = True
 
 
 def _subdir_has_nonempty_files(path: Path) -> bool:

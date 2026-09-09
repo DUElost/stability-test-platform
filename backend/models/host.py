@@ -51,6 +51,12 @@ class Host(Base):
     boot_id       = Column(String(64), nullable=False, default="")           # ADR-0019 Phase 3a
     last_agent_instance_id = Column(String(64), nullable=False, default="")  # ADR-0019 Phase 3a
 
+    # #960：主机维护窗口 —— 热更新期间（检查完活跃 Job → 上传/rsync/重启之间）
+    # 禁止新派发与 claim。只存「截止时刻 + 持有者」：进程崩溃时窗口靠截止时刻
+    # 自然过期，无需对账清扫；持有者用于并发热更新互相识别（非本机持有即拒绝）。
+    maintenance_until  = Column(DateTime(timezone=True), nullable=True)
+    maintenance_holder = Column(String(128), nullable=True, default="")
+
     __table_args__ = (
         UniqueConstraint("hostname", name="host_hostname_key"),
         # 心跳超时巡检（reconciler / watchdog）按 last_heartbeat 排序扫描

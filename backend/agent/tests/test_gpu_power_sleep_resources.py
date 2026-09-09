@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 
 def _load(name: str, rel: str):
@@ -153,3 +154,138 @@ def test_gpu_install_apk_stable_uses_push_pm(monkeypatch):
     assert rc == 0 and "Success" in out
     assert any(c[0] == "push" for c in calls)
     assert any(c[0] == "shell" and "pm install" in c[1] for c in calls)
+
+
+def _load_setup_v102(name: str):
+    """加载 sleep_setup/powercycle_setup v1.0.2 的 _lib。"""
+    import importlib.util
+    d = str(Path(__file__).resolve().parents[2] / f"agent/scripts/{name}/v1.0.2")
+    sys.path.insert(0, d)
+    spec = importlib.util.spec_from_file_location(f"{name}_lib_v102", d + "/_lib.py")
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_sleep_setup_v102_install_uses_push_pm(monkeypatch):
+    """#775：sleep_setup v1.0.2 AutoTestTool 安装改 push+pm install（流式不稳）。"""
+    import tempfile
+    lib = _load_setup_v102("sleep_setup")
+    calls = []
+
+    def fake_adb(*args, timeout=30):
+        calls.append(args)
+        if args[0] == "push":
+            return 0, "1 file pushed", ""
+        if args[0] == "shell" and args[1].startswith("pm install"):
+            return 0, "Success", ""
+        if args[0] == "shell" and args[1].startswith("rm "):
+            return 0, "", ""
+        return 0, "", ""
+
+    def fake_shell(*args, timeout=30):
+        return 0, "", ""
+
+    monkeypatch.setattr(lib, "adb", fake_adb)
+    monkeypatch.setattr(lib, "adb_shell", fake_shell)
+    with tempfile.NamedTemporaryFile(suffix=".apk") as f:
+        lib.install_apk(Path(f.name))
+    assert any(c[0] == "push" for c in calls)
+    assert any(c[0] == "shell" and "pm install" in c[1] for c in calls)
+
+
+def test_powercycle_setup_v102_install_uses_push_pm(monkeypatch):
+    """#775：powercycle_setup v1.0.2 同款 push+pm install。"""
+    import tempfile
+    lib = _load_setup_v102("powercycle_setup")
+    calls = []
+
+    def fake_adb(*args, timeout=30):
+        calls.append(args)
+        if args[0] == "push":
+            return 0, "pushed", ""
+        if args[0] == "shell" and args[1].startswith("pm install"):
+            return 0, "Success", ""
+        if args[0] == "shell" and args[1].startswith("rm "):
+            return 0, "", ""
+        return 0, "", ""
+
+    def fake_shell(*args, timeout=30):
+        return 0, "", ""
+
+    monkeypatch.setattr(lib, "adb", fake_adb)
+    monkeypatch.setattr(lib, "adb_shell", fake_shell)
+    with tempfile.NamedTemporaryFile(suffix=".apk") as f:
+        lib.install_apk(Path(f.name))
+    assert any(c[0] == "push" for c in calls)
+    assert any(c[0] == "shell" and "pm install" in c[1] for c in calls)
+
+
+def _load_lib(name: str, ver: str) -> ModuleType:
+    """加载任意脚本版本的 _lib（用于 finish/setup 单测）。"""
+    import importlib.util
+    d = str(Path(__file__).resolve().parents[2] / f"agent/scripts/{name}/v{ver}")
+    sys.path.insert(0, d)
+    spec = importlib.util.spec_from_file_location(f"{name}_v{ver.replace('.', '')}", d + "/_lib.py")
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_powercycle_finish_v103_verifies_stop_flags(monkeypatch):
+    """#894：powercycle_finish v1.0.3 停测后回读验证 running=false——残留则重试并 raise。"""
+    lib = _load_lib("powercycle_finish", "1.0.3")
+    calls = {"set_stop_flags": 0}
+
+    def fake_get_prefs():
+        # 第一次回读残留 true（模拟写失败），重试后 false
+        calls["set_stop_flags"] += 0
+        return 'name="running" value="true"' if calls["set_stop_flags"] < 1 else 'name="running" value="false"'
+
+    def fake_set_stop_flags():
+        calls["set_stop_flags"] += 1
+
+    monkeypatch.setattr(lib, "get_prefs_xml", fake_get_prefs)
+    monkeypatch.setattr(lib, "set_stop_flags", fake_set_stop_flags)
+    lib._verify_stop_flags()  # 重试一次后通过
+    assert calls["set_stop_flags"] >= 1
+
+
+def test_powercycle_finish_v103_raises_if_still_residual(monkeypatch):
+    """残留无法清除（两次仍 true）→ raise（finish 报错而非假成功）。"""
+    lib = _load_lib("powercycle_finish", "1.0.3")
+    monkeypatch.setattr(lib, "get_prefs_xml",
+                        lambda: 'name="running" value="true"')
+    monkeypatch.setattr(lib, "set_stop_flags", lambda: None)
+    import pytest
+    with pytest.raises(RuntimeError, match="running 未置 false"):
+        lib._verify_stop_flags()
+
+
+def test_sleep_finish_v101_verifies_stop_flags(monkeypatch):
+    lib = _load_lib("sleep_finish", "1.0.2")
+    monkeypatch.setattr(lib, "get_prefs_xml",
+                        lambda: 'name="running" value="false"')
+    lib._verify_stop_flags()  # 直接通过
+
+
+def test_monkey_setup_v236_has_att_clean_step():
+    """#894：monkey_setup v2.3.6 默认 steps 含 att_clean。"""
+    import importlib.util
+    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/monkey_setup/v2.3.6")
+    sys.path.insert(0, d)
+    spec = importlib.util.spec_from_file_location("monkey_setup_v236", d + "/monkey_setup.py")
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    assert "att_clean" in mod.STEPS
+    assert "att_clean" in mod.main.__defaults__[0] if mod.main.__defaults__ else True
+
+
+def test_gpu_setup_v105_pre_reboot_config():
+    """#774：gpu_config 透传 pre_reboot（默认 true——setup 前重启清 UiAutomation 残留）。"""
+    lib = _load_lib("gpu_setup", "1.0.5")
+    assert lib.gpu_config({"project": "chain"})["pre_reboot"] is True
+    assert lib.gpu_config({"project": "chain", "pre_reboot": "false"})["pre_reboot"] is False

@@ -339,19 +339,46 @@ class EventUploader:
                 )
                 shutil.rmtree(dst, ignore_errors=True)
             else:
-                self._patch_state(
+                if self._patch_state(
                     job, state="REMOTE", remote_path=remote_path, checksum=dst_checksum,
-                )
-                self._maybe_prune_local(job, remote_path=remote_path)
+                ):
+                    # #1083: 只有中心确认持久化 remote_path/checksum 后才允许 prune
+                    # —— 否则删本地唯一副本后中心仍未登记，extract 不可见。
+                    self._maybe_prune_local(job, remote_path=remote_path)
+                else:
+                    logger.warning(
+                        "event_uploader_remote_ack_failed event_id=%s "
+                        "dest=%s — keeping local copy for retry",
+                        job.event_id, dst,
+                    )
                 return
 
         self._patch_state(job, state="UPLOADING")
         try:
             UploadManager._copytree_safe(str(src), str(dst))
-            checksum = self._dir_sha256(dst)
-            self._patch_state(job, state="REMOTE", remote_path=str(dst), checksum=checksum)
-            self._maybe_prune_local(job, remote_path=str(dst))
+            dst_checksum = self._dir_sha256(dst)
+            src_checksum = self._dir_sha256(src)
+            if dst_checksum != src_checksum:
+                # #1083: 自读回哈希不构成完整性证据——源/副本不一致时丢弃坏副本
+                # 走既有退避重试，不得 REMOTE/prune。
+                logger.warning(
+                    "event_uploader_copy_mismatch event_id=%s dest=%s "
+                    "— removing bad copy and retrying",
+                    job.event_id, dst,
+                )
+                shutil.rmtree(dst, ignore_errors=True)
+                raise OSError(f"copy verification failed: {src} != {dst}")
             logger.info("event_uploader_ok event_id=%s dest=%s", job.event_id, dst)
+            if self._patch_state(
+                job, state="REMOTE", remote_path=str(dst), checksum=dst_checksum,
+            ):
+                self._maybe_prune_local(job, remote_path=str(dst))
+            else:
+                logger.warning(
+                    "event_uploader_remote_ack_failed event_id=%s "
+                    "dest=%s — keeping local copy for retry",
+                    job.event_id, dst,
+                )
         except Exception:
             logger.exception("event_uploader_failed event_id=%s attempt=%d", job.event_id, job.attempt)
             if job.attempt + 1 < _MAX_RETRIES:
@@ -369,7 +396,12 @@ class EventUploader:
         state: str,
         remote_path: Optional[str] = None,
         checksum: Optional[str] = None,
-    ) -> None:
+    ) -> bool:
+        """把事件状态 patch 回中心；返回中心是否确认（2xx）。
+
+        #1083: 调用方以返回值为证据决定是否可 prune——返回 False 表示中心
+        未持久化（≥400/网络异常），本地副本必须保留待重试。
+        """
         payload = {
             "id": job.event_id,
             "serial": job.serial,
@@ -396,8 +428,11 @@ class EventUploader:
                     "event_uploader_patch_failed event_id=%s status=%s body=%s",
                     job.event_id, resp.status_code, resp.text[:200],
                 )
+                return False
+            return True
         except Exception:
             logger.exception("event_uploader_patch_error event_id=%s", job.event_id)
+            return False
 
     def _maybe_prune_local(self, job: _UploadJob, *, remote_path: str) -> None:
         """上送成功后可选删除本地目录并回写 PRUNED。
