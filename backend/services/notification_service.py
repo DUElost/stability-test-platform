@@ -135,6 +135,34 @@ def _send_dingtalk(url: str, secret: str, message: str) -> None:
 
     resp = requests.post(url, json=payload, headers=headers, timeout=10)
     resp.raise_for_status()
+    _raise_if_dingtalk_business_error(resp)
+
+
+def _raise_if_dingtalk_business_error(resp: requests.Response) -> None:
+    """#1120: DingTalk returns HTTP 200 with ``errcode != 0`` on business failure.
+
+    Treat any non-zero errcode as a delivery error so callers (SAQ / test
+    channel) do not report success.
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        # Non-JSON body with 2xx: nothing further to validate.
+        return
+    if not isinstance(body, dict):
+        return
+    errcode = body.get("errcode", 0)
+    try:
+        code_int = int(errcode) if errcode is not None else 0
+    except (TypeError, ValueError):
+        raise RuntimeError(
+            f"DingTalk API error: invalid errcode={errcode!r} body={body!r}"
+        ) from None
+    if code_int != 0:
+        errmsg = body.get("errmsg", "unknown")
+        raise RuntimeError(
+            f"DingTalk API error errcode={code_int} errmsg={errmsg}"
+        )
 
 
 def _send_email(to: str, subject_prefix: str, message: str) -> None:
