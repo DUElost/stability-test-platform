@@ -82,6 +82,12 @@ blocked_duration: 21h39m      # 上界
 - 失败日志路径实测：`fetch_failure(34337998363)` →
   `F821 Undefined name `_monotonic`` + `backend/services/run_console.py:71:16`
   （即 #1162 当时的真实阻塞证据，用于验证 `REQUIRED_CHECK_FAILED` 分支）；
+- **独立交叉验证**（本工具输出 vs reconcile 日志，两者互不依赖）：
+  - 本工具：`queue_head=#1173  reason_code=CONFLICTING  behind_by=77  blocked_duration=21h39m`；
+  - `Enable auto-merge` run 34341238984：
+    `Queue head #1173 is 77 commit(s) behind main; updating branch.` →
+    `X Cannot update PR branch due to conflicts`。
+  - `behind_by=77` 与阻塞原因完全一致；且该报错串正是 #1173 自身 diff 要容错处理的那一条。
 - `venv/bin/python scripts/run_gates.py check:quick`：见 PR 检查结果（pending→完成状态
   以 PR 上的 required checks 为准）。
 
