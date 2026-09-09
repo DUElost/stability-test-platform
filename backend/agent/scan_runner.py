@@ -37,6 +37,37 @@ logger = logging.getLogger(__name__)
 
 _SCAN_SUBPROCESS_TIMEOUT = 600
 
+# #1078：staging 根目录名（`.stp-scan/pr{plan_run_id}-<mkdtemp随机>`）。
+_STAGING_PARENT_NAME = ".stp-scan"
+
+
+def reclaim_scan_staging(scan_root: "str | Path | None") -> None:
+    """删除一轮扫描的 staging 根（best-effort，永不 raise）。
+
+    Why: staging 里的文件是 HDD 事件目录的**硬链接** —— staging 不清，原事件
+         目录被 prune 后磁盘空间仍释放不掉，HDD spill 被架空（#1078）。
+    How to apply: 只删 `.stp-scan/` 下 `pr<plan_run_id>-*` 目录；scan_root 指向
+                 HDD 根本身（serials 为空走全盘扫描）时**拒绝动手** —— 这是
+                 防误删的硬闸，不靠调用方自觉。
+    """
+    if not scan_root:
+        return
+    try:
+        root = Path(scan_root).resolve()
+        if root.parent.name != _STAGING_PARENT_NAME:
+            return
+        if not (root.name.startswith("pr") and "-" in root.name):
+            logger.warning(
+                "scan_staging_reclaim_refused path=%s", root,
+            )
+            return
+        if root.is_symlink() or not root.is_dir():
+            return
+        shutil.rmtree(root)
+        logger.info("scan_staging_reclaimed path=%s", root)
+    except OSError:
+        logger.warning("scan_staging_reclaim_failed root=%s", scan_root, exc_info=True)
+
 
 @dataclass(frozen=True)
 class _ScanJob:
@@ -249,10 +280,14 @@ class ScanRunner:
         uploader = UploadManager.instance()
         if not uploader.is_configured():
             logger.warning("control_scan_now_skip_uploader_not_configured")
+            reclaim_scan_staging(getattr(self, "_last_scan_root", None))
             return
         uploader.upload_scan_report(plan_run_id, host_id, org_xls, platform_subdir="mtk")
         if dedup_xls:
             uploader.upload_scan_report(plan_run_id, host_id, dedup_xls, platform_subdir="mtk")
+        # #1078：本轮产物已复制进 dedup/ 目录 —— staging（HDD 事件文件的硬链接）
+        # 立即回收， prune 原事件目录后磁盘才能真正释放。
+        reclaim_scan_staging(getattr(self, "_last_scan_root", None))
         logger.info("control_scan_now_done plan_run=%d host=%s", plan_run_id, host_id)
 
     @classmethod
@@ -286,6 +321,8 @@ class ScanRunner:
             side = "factory" if "factory" in tag else "shanghai"
         self._side = side
         self._configured = bool(self._scan_tool_python and self._scan_tool_script)
+        # #1078：最近一轮成功扫描的 staging 根 —— 上传完成后由 run_scan_and_upload 回收
+        self._last_scan_root: Optional[str] = None
         logger.info(
             "scan_runner_configured python=%s script=%s hdd_root=%s side=%s configured=%s",
             self._scan_tool_python, self._scan_tool_script, self._hdd_root,
@@ -335,7 +372,7 @@ class ScanRunner:
             if hdd.is_symlink() or not hdd.is_dir():
                 logger.warning("scan_runner_hdd_unsafe plan_run=%d hdd=%s", plan_run_id, hdd)
                 return None
-            parent = hdd / ".stp-scan"
+            parent = hdd / _STAGING_PARENT_NAME
             if parent.exists() and (parent.is_symlink() or not parent.is_dir()):
                 logger.warning(
                     "scan_runner_staging_parent_unsafe plan_run=%d parent=%s",
@@ -398,49 +435,58 @@ class ScanRunner:
             plan_run_id, host_id, is_final, list(device_serials),
             list(run_date_stamps), argv,
         )
+        org_xls: Optional[str] = None
         try:
-            result = subprocess.run(
-                argv,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=self._SUBPROCESS_TIMEOUT,
-            )
-        except Exception as exc:
-            logger.exception(
-                "scan_runner_exception plan_run=%d host=%s err=%s",
-                plan_run_id, host_id, exc,
-            )
-            return None
+            try:
+                result = subprocess.run(
+                    argv,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self._SUBPROCESS_TIMEOUT,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "scan_runner_exception plan_run=%d host=%s err=%s",
+                    plan_run_id, host_id, exc,
+                )
+                return None
 
-        if result.returncode != 0:
-            logger.warning(
-                "scan_runner_failed plan_run=%d host=%s rc=%d stderr=%s",
-                plan_run_id, host_id, result.returncode,
-                (result.stderr or "")[:500],
-            )
-            return None
+            if result.returncode != 0:
+                logger.warning(
+                    "scan_runner_failed plan_run=%d host=%s rc=%d stderr=%s",
+                    plan_run_id, host_id, result.returncode,
+                    (result.stderr or "")[:500],
+                )
+                return None
 
-        search_root = Path(scan_root)
-        all_candidates = list(search_root.glob("**/Result_*_org.xls"))
-        fresh = [
-            c for c in all_candidates
-            if c.stat().st_mtime >= scan_start - 1
-        ]
-        if not fresh:
-            logger.warning(
-                "scan_runner_no_fresh_org_xls plan_run=%d host=%s scan_root=%s total_candidates=%d",
-                plan_run_id, host_id, scan_root, len(all_candidates),
-            )
-            return None
+            search_root = Path(scan_root)
+            all_candidates = list(search_root.glob("**/Result_*_org.xls"))
+            fresh = [
+                c for c in all_candidates
+                if c.stat().st_mtime >= scan_start - 1
+            ]
+            if not fresh:
+                logger.warning(
+                    "scan_runner_no_fresh_org_xls plan_run=%d host=%s scan_root=%s total_candidates=%d",
+                    plan_run_id, host_id, scan_root, len(all_candidates),
+                )
+                return None
 
-        latest = max(fresh, key=lambda p: p.stat().st_mtime)
-        org_xls = str(latest.resolve())
-        logger.info(
-            "scan_runner_success plan_run=%d host=%s org_xls=%s fresh=%d total=%d",
-            plan_run_id, host_id, org_xls, len(fresh), len(all_candidates),
-        )
-        return org_xls
+            latest = max(fresh, key=lambda p: p.stat().st_mtime)
+            org_xls = str(latest.resolve())
+            logger.info(
+                "scan_runner_success plan_run=%d host=%s org_xls=%s fresh=%d total=%d",
+                plan_run_id, host_id, org_xls, len(fresh), len(all_candidates),
+            )
+            return org_xls
+        finally:
+            # #1078：失败路径立即回收 staging（硬链接占着 HDD 空间）；成功路径
+            # 记下 staging 根，留给 run_scan_and_upload 上传完再收。
+            if org_xls is None:
+                reclaim_scan_staging(scan_root)
+            else:
+                self._last_scan_root = scan_root
 
     def run_dedup_org(
         self, org_xls_path: str, plan_run_id: int, host_id: str,

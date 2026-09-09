@@ -1,0 +1,219 @@
+# ADR-0035: Agent 主机身份与凭据体系
+
+- **状态**：Accepted v1.1（2026-09-09 修订：合并两份竞争提案为单一决策——当前状态 /
+  目标形态 / 迁移路径 / 触发条件四段化；#906 不随本 ADR 关闭，实施单另行拆分）
+- **版本记录**：v1.0（2026-09-08 草案 → Accepted，用户裁决采纳「A 目标 + C 引入
+  路径」，来源 PR #1163/#1170）；**v1.1（2026-09-09 用户裁决）：并入原 PR #1147
+  的「当前状态风险接受 + 升级触发 + 主机级方案骨架」，正文按决策层级四段化，
+  消除「当前是否立即实施」的歧义**
+- **优先级**：P1
+- **日期**：2026-09-08（v1.1 修订 2026-09-09）
+- **决策者**：平台研发组 / 架构组
+- **标签**：Agent, 身份认证, 凭据管理, 横向扩展
+- **来源**：R02 台账 #910 的 R02-R01（设计风险，P1）；Epic #720 / #46
+- **关联**：ADR-0027（控制面水平扩展）、ADR-0024（浏览器会话）、ADR-0019
+  （device lease / fencing）、#905（已修的 nfs_path 越界——同一信任面）、
+  #881/#887（SID registry 单 owner CAS）、#900–#903（人类会话身份纪元，本 ADR 不覆盖）
+
+> **决策层级说明（v1.1 新增）**：本 ADR 把「现在怎么做」与「最终要变成什么样」
+> 分开成文。§3 = 当前状态决策（立即生效）；§4 = 目标形态；§5 = 迁移路径；
+> §6 = 升级触发条件。**ADR 转 Accepted 不等于实施已启动**——实施单另行拆分。
+
+## 1. 背景与问题
+
+当前**所有 Agent 共用一个全局 `AGENT_SECRET`**，且主机身份由客户端自报：
+
+- Socket.IO `AgentNamespace.on_connect`：验证全局 secret + 接受客户端提供的
+  `host_id`（`backend/realtime/socketio_server.py`）；
+- Agent API 各端点：同款共享 secret 模式（`backend/api/routes/agent_api.py`，
+  `_verify_agent`，16 个端点；`agent_api.py:2752-2755` 注释明示
+  secret 不与 host 绑定）；
+- `backend/api/routes/auth.py`（`verify_agent_secret`，heartbeat/logs/
+  notifications）、`scripts.py`（`_try_verify_agent`）、`metrics.py`（可选分支）
+  ——共五处校验共用同一个全局值；
+- `AGENT_SECRET` 部署在**每台设备**的 Agent 安装目录（暴露面 = 全部设备）；
+  部署侧（ansible group_vars、`install_agent.sh`、host_updater 热更新）同样按
+  单值分发；`Host` 表无任何主机级凭据列。
+
+后果链：单个 Agent 凭据泄露（设备被物理接触 / 安装包被抽取 / 日志泄漏）→
+攻击者可**冒充任意其他主机**——顶替别的设备接入 Socket.IO 接任务、上报伪造
+结果、抢占 claim。现有防护的边界：fencing/租约能限制「过期执行者」继续操
+作，但**不能**识别「持有效全局 secret 的冒充者」；网络边界（internal 无 TLS
+内网，ADR-0024 v1.1）缓解外部攻击者，不缓解已在内网设备上的横向移动。
+
+这是一张**设计风险**票，不是已证实故障——定级 P1 的原因是它位于「设备集群
+信任根」的位置，且修复窗口与 Agent 安装链路耦合（越晚改越贵）。
+
+## 2. 目标与非目标
+
+**目标**：
+- 单台主机凭据泄露不能冒充其他 host（#906 验收②）；
+- 主机身份在 Socket.IO 握手、Agent API、claim 三条通道上口径一致；
+- 安装/重装/换机流程可自动化（agentctl / ansible 链路不引入人工发凭据）。
+
+**非目标**：
+- 不解决控制面到 Agent 方向的命令真伪（现状由 Socket.IO 会话粘性保证，
+  ADR-0027 P3-2 文档诚实边界）；
+- 不改变浏览器侧用户认证（ADR-0024 管辖；#900–#903 已完成人类会话身份纪元化，
+  与本 ADR 范围互斥）。
+
+## 3. 当前状态决策（立即生效）
+
+**继续接受全局共享 `AGENT_SECRET` 作为主机级认证原语**，不立即引入主机级凭据；
+升级为主机级身份的触发条件（§6）与实施骨架（§5）在本 ADR 成文，条件满足即按
+骨架启动，**无需再开新 ADR**。
+
+本决策即 #906 验收标准①（ADR 明确风险边界）；标准②（泄露单机凭据不能冒充
+其他 host）在触发条件满足前**不实施**，属明示 deferred。
+
+**为什么现在不切**：泄露事件未发生、受信管理域假设仍成立（§3.1），而实施涉及
+全网主机轮换与离线宽限窗口，风险收益不匹配（备选见 §8）。
+
+### 3.1 接受边界（威胁模型）
+
+- 控制面与 Agent 主机同处受信管理域：主机由 ansible/SSH 集中纳管（host 级 SSH
+  凭据、vault 均强于共享 secret），控制面 ENV=internal/production 的 TLS 边界见
+  ADR-0024 v1.1。攻击者拿到 `AGENT_SECRET` 的前提（已控一台受管主机或已读控制面
+  env）本身已越过该边界的主要防线。
+- 泄露后的可冒充面被既有机制收窄：
+  - **作业写入**：claim/上传等作业级授权绑定 `fencing_token`/`agent_instance_id`
+    （ADR-0019、#992/#1073/#1005/#1006），非「有 secret 即可写」。
+  - **连接顶替**：SID registry 单 owner CAS（#881/#887）使冒充连接会 unregister
+    真连接——冒充是**可观测的 DoS/事件**，不是静默数据面接管；审计与告警可发现。
+  - **下行触发**：`scan_now` 等 control 走 socket room `agent:{host_id}`，需要
+    先建立合法身份连接，同样落在上述 CAS/告警面。
+- 剩余未收窄暴露：泄露者可冒充任意 host 上报心跳/日志/event、拉取脚本目录等
+  **只验证 secret 不验证 host** 的读接口；以及全量轮换（热更新改全局 secret）
+  前的旧值窗口。此暴露在受信域假设下判为可接受。
+
+## 4. 目标形态（Target）
+
+### 4.1 方案对比
+
+#### 方案 A：每主机独立凭据（host 表存哈希，安装期下发）
+
+控制面为每台 host 生成独立 secret；`hosts` 表存哈希（不存明文）；安装工具
+（agentctl / ansible playbook）在注册时领取该主机的凭据并写入 Agent 本地
+配置；Agent 握手/API 带 `host_id + host_secret`，服务端按 host 查哈希校验。
+
+- ✅ 直接满足「泄露单机不冒充他机」；轮换可按主机粒度（单机泄露 → 只轮那台）；
+- ✅ 复用现有 host 注册流（host 表已有注册/心跳生命周期）；
+- ⚠️ 安装链路改造：agentctl 需增加「向控制面领取凭据」步骤（引导期需要一次
+  管理员侧授权——见方案 C 的引导问题）；离线安装场景需要凭据预生成。
+
+#### 方案 B：mTLS 客户端证书绑定主机
+
+每台 host 签发客户端证书，Nginx/控制面校验证书指纹 ↔ host 绑定。
+
+- ✅ 最强形态（凭据不出设备、防复制能力最好）；
+- ❌ 引入 CA 与证书轮换运维（设备量大时成本显著）；TLS 终止点与 FastAPI 的
+  身份传递（header 注入）需要 #46 的 HTTPS 前置——当前 internal 是无 TLS 内
+  网部署（ADR-0024 v1.1），**前置依赖不满足**；
+- 结论：作为 #46 TLS 落地后的演进方向，不是当下方案（§6 触发条件 2 命中时重评）。
+
+#### 方案 C：全局引导 secret + 服务端注册质询（首启换发主机 token）
+
+Agent 首次连接用全局引导 secret 走「注册」：服务端生成该 host 的一次性
+注册凭据，管理员在 UI 批准（或预登记 host 指纹），换发**主机专属 token**
+（方案 A 的凭据，只是下发时机从安装期改为首启握手）。全局 secret 之后仅用
+于新设备引导，不再授权常规操作。
+
+- ✅ 兼容现有安装包（不需要在安装期注入每机凭据）；把「泄露全局 secret」的
+  危害从「冒充任意 host」缩到「引导新设备注册（可被审批拦截/发现）」；
+- ⚠️ 需要注册审批 UX 与 token 生命周期管理（续期/吊销/重装重发）。
+
+#### 方案 D：接受现状，文档化风险边界
+
+维持全局 secret，在 ADR-0027/运维文档写明信任模型（internal 网络边界 +
+fencing 兜底），挂 #46 TLS 后复议。
+
+- ✅ 零成本；
+- ❌ 单独作为终局与 P1 定级矛盾——凭据暴露面（全部设备）与「设备可被物理
+  接触」的现实使风险边界很难自洽成文。
+
+### 4.2 裁决
+
+**采纳 A 为目标形态，C 为引入路径**（2026-09-08 用户裁决）：
+
+1. host 表增 `agent_secret_hash`；握手/API 校验改为「按 host 校验其专属凭据」；
+2. 首启引导走 C 的注册质询（引导 secret → 管理员批准 → 换发主机凭据），
+   避免安装链路一次性大改；
+3. 全局 `AGENT_SECRET` 退役为「仅引导」，轮换 runbook 同步收窄其影响面；
+4. 轮换：按主机粒度可轮（单机泄露只动那一台）。
+
+**与方案 D 的关系（v1.1 澄清）**：D 不再作为独立终局，而是被吸收为 §3 的
+**当前状态决策**——即「现在接受 D，目标走 A+C」。原两份竞争提案的分歧点在此
+消解：D 是时间轴上的当前点，A+C 是终点与路径，二者不构成对立结论。
+
+## 5. 迁移路径（Migration Path）与实施骨架
+
+实施单另行拆分（`host 凭据哈希列迁移 / 注册审批 UI / 握手与 API 校验改造 /
+agentctl 引导流 / 轮换 runbook`），回链本 ADR。
+
+```
+全局引导 secret  ──注册质询──▶  主机专属凭据  ──▶  A（每主机独立凭据）
+   （仅引导）      （方案 C）        （方案 A）        per-host 轮换
+```
+
+- **存储**：`Host` 增 `agent_secret_hash`（带盐慢哈希）+ `credential_version`，
+  alembic 迁移；admin 侧 hosts API 签发/吊销（沿用既有 admin auth，先例
+  `boot_id`/`last_agent_instance_id`）。
+- **校验收敛**：新增单一 helper `resolve_expected_secret(host_id)` + `compare_digest`，
+  替换五处对全局 env 的比较；socket `on_connect` 的 DB 读经 `asyncio.to_thread`
+  且 fail-closed（#1041 先例）；REST 各端点本身已按请求查库。
+- **通道划分**：socket `/agent`、agent_api、heartbeat、logs、device-log-events 走
+  主机级凭据；`metrics.py` 的 X-Agent-Secret 可选分支与 notifications webhook 保持
+  独立 **ops token**（不经 host 凭据），本 ADR 定下该分界，实施时不得并入主机凭据。
+- **分发**：`install_agent.sh` / ansible group_vars / host_updater 热更新改为按 host
+  下发；保留热更新通道但 per-host。
+- **auto-register**：`host_id=0` 自动注册路径改一次性 enrollment token（admin
+  签发、带 TTL 或单次使用），不再允许凭「全局 secret + host_id=0」自举。
+- **轮换与离线**：离线主机收不到新 secret → 支持双值宽限窗口（旧值+新值并存期）
+  或 agent 心跳拉取式轮换；先经 agent 版本闸门（`agent_version_gate`）保证
+  全网版本支持后再强制切换。
+
+## 6. 升级触发条件（Trigger）
+
+满足任一即按 §5 骨架启动实施（无需再开新 ADR）：
+
+1. 发生或疑似单机 `AGENT_SECRET` 泄露事件，且评估认为「全量轮换前旧值窗口内
+   冒充读接口」会造成实际损害；
+2. 部署扩展到不受信网段 / 多云 / 多租户，受信域假设失效；
+3. R06（派发/执行）、R08（脚本库/外部工具）、R11（realtime 基建）审查出现
+   「主机冒充导致不可接受后果」的 P0 场景（#906 交接区）；
+4. 主机级审计归属（「谁上报了 X」）成为合规/定责要求。
+
+## 7. 影响面
+
+**当前（未触发）**：零运行时改动——五处校验、env 模板、ansible、install/hot-update、
+全部相关测试维持共享值语义（`test_agent_secret_guards.py`、
+`realtime/test_agent_rpc.py`、`api/test_metrics_auth.py` 等）。
+
+**触发实施时**：
+
+- `backend/realtime/socketio_server.py` AgentNamespace 握手校验；
+- `backend/api/routes/agent_api.py` 全部端点鉴权（含 `auth.py`/`scripts.py`/`metrics.py` 五处收敛）；
+- host 注册/审批 UI + `hosts` 表迁移（凭据哈希列）；
+- `backend/agent/agentctl` 与 ansible playbook 的引导流程；
+- 轮换 runbook（`docs/operations/`）与 `AUTO_MERGE_PAT` 类似的 secret 管理
+  纪律（凭据不入会话/日志）。
+
+预计含迁移、校验收敛、分发链路、注册协议与测试大面更新，需独立批次 + Agent
+Note + 逐步灰度。
+
+## 8. 替代方案
+
+- **立即实施主机级凭据**：本次不做——泄露事件未发生、受信域假设仍成立，且
+  实施涉及全网主机轮换与离线宽限，风险收益不匹配（决策见 §3，触发见 §6）。
+- **mTLS / 客户端证书**：主机绑定最强（密码学绑定 host），但需 CA、ingress/反代
+  改造、证书生命周期管理，与 #46（HTTPS 硬化）同轨；作为 §6 触发条件 2 命中后
+  的演进方向，不是当下方案。
+- **vault 按主机分发、控制面不落库**：避免 DB 迁移，但 vault 与控制面事实易漂移、
+  不支持自动上架主机；校验侧仍要 host→期望值查找，省不掉 §5 的 helper。
+
+## 9. 复议（Revisit）
+
+- §6 触发条件任一命中即自动重启本决策（按 §5 骨架实施），无需再开新 ADR；
+- #46（HTTPS 落地）后重评 mTLS 与 production 边界是否收窄受信域假设；
+- 本 ADR 由两份独立提案（#1147 当前状态接受 / #1163 目标形态）合并而成；流程
+  层面的教训（竞争提案可见性）见 `execution-contract.md` §3.5 与对应 Agent Note。

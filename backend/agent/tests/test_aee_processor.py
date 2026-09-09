@@ -272,6 +272,69 @@ def test_process_logs_strict_verify_rejects_dir_without_dbg(tmp_path, monkeypatc
         assert not db_dir.exists() or not any(db_dir.iterdir()), "失败 pull 应清理目录"
 
 
+def test_process_logs_on_pull_failed_called_once_keeps_pending(tmp_path, monkeypatch):
+    """#1044: pull 失败触发 on_pull_failed 一次，不 mark processed，pending 保留。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.44,NE,pkg,_,_,_,_,_,com.fail,2026-05-27 11:00:00.001"
+    failed: list[dict] = []
+
+    def shell_fn(cmd: str, timeout: int):
+        if "getprop" in cmd:
+            props = {
+                "ro.product.name": "X6851-OP",
+                "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+                "ro.build.version.incremental": "0401",
+                "ro.build.version.release": "16",
+            }
+            for key, val in props.items():
+                if key in cmd:
+                    return val
+        if "cat /data/aee_exp/db_history" in cmd:
+            return line + "\n"
+        if "cat /data/vendor/aee_exp/db_history" in cmd:
+            return ""
+        return ""
+
+    def pull_fn(remote: str, local: str, timeout: int) -> bool:
+        return False
+
+    from backend.agent.aee import processor as proc_mod
+
+    monkeypatch.setattr(proc_mod, "make_adb_shell_fn", lambda serial, adb_path: lambda cmd, t: shell_fn(cmd, t))
+    monkeypatch.setattr(proc_mod, "make_adb_pull_fn", lambda serial, adb_path: pull_fn)
+    monkeypatch.setattr(proc_mod, "export_correlated_mobilelogs", lambda **kw: {"matched": 0, "pulled": 0})
+    monkeypatch.setattr(proc_mod, "export_bugreport_for_timestamp", lambda **kw: True)
+
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r1 = process_device_logs(
+        serial="dev_fail",
+        job_id=1044,
+        state_store=store,
+        config=cfg,
+        on_pull_failed=failed.append,
+    )
+    assert r1.pulled == 0
+    assert r1.pending_remaining == 1
+    assert len(failed) == 1
+    assert failed[0]["error"] == "adb_pull_failed"
+    assert failed[0]["exhausted"] is False
+
+    r2 = process_device_logs(
+        serial="dev_fail",
+        job_id=1044,
+        state_store=store,
+        config=cfg,
+        on_pull_failed=failed.append,
+    )
+    assert r2.pending_remaining == 1
+    assert len(failed) == 1, "failure_reported 应只回调一次"
+    pending_raw = store.get_state("watcher:aee:dev_fail:aee_exp:pending_pull", "{}")
+    assert "db.44" in pending_raw
+    processed_raw = store.get_state("watcher:aee:dev_fail:aee_exp:processed_entries", "[]")
+    assert "db.44" not in processed_raw
+
+
 def test_process_logs_mobilelog_uses_stp_subdir_default(tmp_path, monkeypatch):
     """ADR-0025 D3: mobilelog 落在事件目录(local_target_dir)内的 mobilelog/ 子目录。"""
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))

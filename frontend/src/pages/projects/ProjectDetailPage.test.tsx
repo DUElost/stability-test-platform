@@ -317,4 +317,25 @@ describe('ProjectDetailPage', () => {
     await screen.findByText('Project A');
     expect(screen.queryByTestId('edit-project-open')).not.toBeInTheDocument();
   });
+
+  it('#958: models list refreshes immediately after rule removal', async () => {
+    mocks.getProject.mockResolvedValue(makeDetail({ match_models: ['M1'] }));
+    mocks.removeRule.mockResolvedValue({ project_key: 'proj-a', model: 'M1' });
+    mocks.modelsOf
+      .mockResolvedValueOnce([{ model: 'M1', device_count: 1, platforms: ['MTK'] }])
+      .mockResolvedValueOnce([]);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderPage();
+    await screen.findByText('当前归属此项目的设备型号：M1 (1)');
+
+    fireEvent.click(screen.getByLabelText('移除规则 M1'));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText('当前归属此项目的设备型号：M1 (1)'),
+      ).not.toBeInTheDocument();
+    });
+    confirmSpy.mockRestore();
+  });
 });

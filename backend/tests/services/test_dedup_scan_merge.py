@@ -555,3 +555,69 @@ class TestResolveCenterEventPath:
         book = xlrd.open_workbook(str(xls))
         assert book.sheet_by_index(0).cell_value(1, 0) == (
             f"{center}/devices/270/2026_0830_223000_456_db.fatal.02.KE/")
+
+
+def test_resolve_manual_merge_round_prefers_latest_stamped(db_session, sample_plan_run):
+    from datetime import datetime, timezone
+
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    older = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+    newer = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+    db_session.add_all([
+        PlanRunArtifact(
+            plan_run_id=sample_plan_run.id,
+            host_id="a",
+            storage_uri="/tmp/a_org.xls",
+            artifact_type=ds.ARTIFACT_TYPE_SCAN,
+            size_bytes=1,
+            scan_round_id="2026-09-01T10:00:00+00:00",
+            created_at=older,
+        ),
+        PlanRunArtifact(
+            plan_run_id=sample_plan_run.id,
+            host_id="b",
+            storage_uri="/tmp/b_org.xls",
+            artifact_type=ds.ARTIFACT_TYPE_SCAN,
+            size_bytes=1,
+            scan_round_id="2026-09-08T12:00:00+00:00",
+            created_at=newer,
+        ),
+    ])
+    db_session.commit()
+
+    rid, floor = ds.resolve_manual_merge_round(sample_plan_run.id)
+    assert rid == "2026-09-08T12:00:00+00:00"
+    assert floor == datetime.fromisoformat(rid)
+
+
+def test_resolve_manual_merge_round_legacy_min_created_at(db_session, sample_plan_run):
+    from datetime import datetime, timezone
+
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    t0 = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc)
+    t1 = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    db_session.add_all([
+        PlanRunArtifact(
+            plan_run_id=sample_plan_run.id,
+            host_id="a",
+            storage_uri="/tmp/a_org.xls",
+            artifact_type=ds.ARTIFACT_TYPE_SCAN,
+            size_bytes=1,
+            created_at=t1,
+        ),
+        PlanRunArtifact(
+            plan_run_id=sample_plan_run.id,
+            host_id="b",
+            storage_uri="/tmp/b_org.xls",
+            artifact_type=ds.ARTIFACT_TYPE_SCAN,
+            size_bytes=1,
+            created_at=t0,
+        ),
+    ])
+    db_session.commit()
+
+    rid, floor = ds.resolve_manual_merge_round(sample_plan_run.id)
+    assert rid is None
+    assert floor == t0

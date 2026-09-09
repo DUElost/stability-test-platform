@@ -210,6 +210,48 @@ def _cleanup_after_job_exit(
             )
 
 
+def _rollback_failed_claim(
+    *,
+    jid: int,
+    fencing_token: str,
+    local_worker_token: str,
+    device_id: Optional[int],
+    active_jobs_lock: Any,
+    active_job_ids: Set[int],
+    active_device_ids: Set[int],
+    active_job_tokens: Dict[int, str],
+    lease_renewer: Any,
+    local_db: Any,
+) -> None:
+    """R07-F13 (#1013): compensate a claim whose local SQLite registration failed
+    mid-way (device placeholder already pre-allocated, fencing token possibly
+    set). Roll back only what this attempt claimed so the device is not poisoned
+    and the same pending batch can keep going; the next tick / recovery re-claims
+    anything the server still sees as pending."""
+    released_device: Optional[int] = None
+    try:
+        released_device = lease_renewer.clear_fencing_token_if_current(
+            jid,
+            fencing_token,
+            local_worker_token=local_worker_token,
+        )
+    except Exception:
+        logger.exception("rollback_fencing_clear_failed job=%d", jid)
+    with active_jobs_lock:
+        active_job_ids.discard(jid)
+        active_job_tokens.pop(jid, None)
+    own_device = released_device if released_device is not None else device_id
+    if own_device is not None:
+        with active_jobs_lock:
+            active_device_ids.discard(own_device)
+    # Registration never reached SQLite; drop any stray row so a claimed-but-
+    # never-started job is not treated as live by the next recovery pass.
+    try:
+        local_db.delete_active_job(jid)
+    except Exception:
+        logger.exception("rollback_delete_active_failed job=%d", jid)
+
+
 def trigger_recovery_sync_on_device_reconnect(
     *,
     reconnected_serials: List[str],
@@ -310,10 +352,14 @@ def execute_recovery_actions_impl(
         if has_upload:
             try:
                 flushed = outbox_drain.drain_sync()
-                logger.info("recovery_outbox_flushed count=%d", flushed)
             except Exception:
+                # #1176: 吞错后静默提前 return 会让本轮 RESUME/ABORT/CLEANUP
+                # 全丢，而上层 run_recovery_sync_if_needed 无从得知仍记成功、
+                # 心跳据此清掉重连标记——恢复被推迟到下次物理插拔。
+                # 上抛 → 上层转 False，保留标记由心跳周期自动重试。
                 logger.exception("recovery_outbox_flush_failed")
-                return
+                raise
+            logger.info("recovery_outbox_flushed count=%d", flushed)
 
         still_pending: set[int] = set()
         try:
@@ -392,10 +438,11 @@ def execute_recovery_actions_impl(
                 resumed_payload["local_worker_token"] = local_worker_token
                 # T3: mark as recovery-resumed so the watcher re-attach is observable
                 resumed_payload["recovery_resumed"] = True
-                try:
-                    resume_job(resumed_payload)
-                except Exception:
-                    logger.exception("recovery_resume_submit_failed job=%d", jid)
+                # #1176: submit 失败不能吞——register 已把 job 标活跃、续租持有
+                # fencing token，worker 却未启动；静默继续会让上层清标记，该
+                # job 成僵尸直到 patrol 兜底。上抛保留重连标记，下一心跳周期
+                # 重试（register 幂等，resume 重发即可自愈）。
+                resume_job(resumed_payload)
             logger.info(
                 "recovery_resume job=%d token=%s worker=%s",
                 jid,
@@ -1228,13 +1275,35 @@ def main() -> None:
                         job["agent_instance_id"] = agent_instance_id
 
                         # ADR-0019 Phase 2b + 3a: 注册 job + fencing_token + 持久化 active_job
-                        _register_active_job(
-                            job["id"],
-                            job["fencing_token"],
-                            device_id,
-                            job.get("device_serial", ""),
-                            local_worker_token,
-                        )
+                        # R07-F13 (#1013): 本地（SQLite）登记失败必须补偿——否则设备忙占位
+                        # 残留且已认领未登记任务无显式归宿。回滚占位/令牌后跳批继续，让
+                        # server 下次 tick 或 recovery 重新对账该 claim。
+                        try:
+                            _register_active_job(
+                                job["id"],
+                                job["fencing_token"],
+                                device_id,
+                                job.get("device_serial", ""),
+                                local_worker_token,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "register_active_job_failed job=%d device=%s — rolling back claim",
+                                job["id"], device_id,
+                            )
+                            _rollback_failed_claim(
+                                jid=job["id"],
+                                fencing_token=job.get("fencing_token", ""),
+                                local_worker_token=local_worker_token,
+                                device_id=device_id,
+                                active_jobs_lock=_active_jobs_lock,
+                                active_job_ids=_active_job_ids,
+                                active_device_ids=_active_device_ids,
+                                active_job_tokens=_active_job_tokens,
+                                lease_renewer=lease_renewer,
+                                local_db=local_db,
+                            )
+                            continue
 
                         # ADR-0026 Step 5b: register job + PlanRunHost with coordinator
                         coordinator.register_job(job["id"])
@@ -1280,6 +1349,15 @@ def main() -> None:
         logger.info("agent_shutting_down, waiting for active tasks to finish...")
         coordinator.stop()
         operation_scheduler.shutdown()
+        # R07-F12 (#1012): scheduler.shutdown() only wakes permit waiters; also
+        # cancel already-running cruises so the executor drain below is bounded
+        # and SIGTERM actually ends a patrol loop instead of retrying it.
+        if job_runner_state is not None:
+            try:
+                for _jid in list(job_runner_state.active_runners):
+                    job_runner_state.request_abort(_jid)
+            except Exception:
+                logger.exception("shutdown_cancel_runners_failed")
         executor.shutdown(wait=True, cancel_futures=False)
         # Flush step traces via HTTP before shutdown
         try:
