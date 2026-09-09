@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 import backend.agent.main as agent_main
 from backend.agent.main import (
@@ -387,6 +388,73 @@ class TestRecoveryExecutor:
         local_db.delete_active_job.assert_any_call(3)
         local_db.delete_active_job.assert_any_call(4)
 
+    def test_execute_outbox_drain_failure_propagates(self):
+        """#1176: drain_sync 失败必须上抛（不得静默 return），否则本轮
+        RESUME/ABORT/CLEANUP 全丢而上层仍记成功、清掉重连标记。"""
+        local_db = MagicMock()
+        lease_renewer = MagicMock()
+        outbox_drain = MagicMock()
+        outbox_drain.drain_sync.side_effect = OSError("nfs down")
+        local_db.get_pending_outbox.return_value = []
+
+        resp = {
+            "actions": [
+                {"job_id": 5, "device_id": 50, "action": "CLEANUP", "reason": "x"},
+            ],
+            "outbox_actions": [
+                {"job_id": 3, "action": "UPLOAD_TERMINAL", "reason": "y"},
+            ],
+        }
+
+        with pytest.raises(OSError):
+            execute_recovery_actions_impl(
+                resp=resp,
+                active_jobs_by_id={},
+                lease_renewer=lease_renewer,
+                local_db=local_db,
+                outbox_drain=outbox_drain,
+                register_active_job=MagicMock(),
+            )
+        # drain 失败后不得继续执行后续 job_actions（CLEANUP）
+        local_db.delete_active_job.assert_not_called()
+        lease_renewer.clear_fencing_token.assert_not_called()
+
+    def test_execute_resume_submit_failure_propagates(self):
+        """#1176: RESUME 的 resume_job submit 失败不得吞——register 已标活跃，
+        静默继续会让上层清标记、job 成僵尸直到 patrol 兜底。"""
+        local_db = MagicMock()
+        lease_renewer = MagicMock()
+        outbox_drain = MagicMock()
+        local_db.get_pending_outbox.return_value = []
+        register_active_job = MagicMock()
+        resume_job = MagicMock(side_effect=RuntimeError("pool shutdown"))
+
+        resp = {
+            "actions": [
+                {
+                    "job_id": 5,
+                    "device_id": 50,
+                    "device_serial": "SERIAL-5",
+                    "action": "RESUME",
+                    "fencing_token": "tok-5",
+                    "job_payload": {"plan_run_id": 1, "script_name": "x"},
+                },
+            ],
+            "outbox_actions": [],
+        }
+
+        with pytest.raises(RuntimeError):
+            execute_recovery_actions_impl(
+                resp=resp,
+                active_jobs_by_id={},
+                lease_renewer=lease_renewer,
+                local_db=local_db,
+                outbox_drain=outbox_drain,
+                register_active_job=register_active_job,
+                resume_job=resume_job,
+            )
+        register_active_job.assert_called_once()
+
     def test_abort_local_clears_local_state(self):
         """ABORT_LOCAL action → delete_active_job + clear_fencing_token."""
         local_db = MagicMock()
@@ -666,6 +734,31 @@ class TestRecoverySyncStartup:
 
         assert settled is False
         execute_actions.assert_not_called()
+
+    def test_sync_execute_actions_raise_reports_false_for_retry(self):
+        """#1176: execute_actions 内部失败（如 outbox drain）上抛后，
+        run_recovery_sync_if_needed 必须返回 False——调用方保留重连标记，
+        心跳周期自动重试，而非静默清标记等到下次物理插拔。"""
+        local_db = MagicMock()
+        local_db.get_active_jobs.return_value = [
+            {"job_id": 1, "device_id": 10, "device_serial": "SERIAL-1", "fencing_token": "tok-1"},
+        ]
+        local_db.get_pending_outbox.return_value = []
+        execute_actions = MagicMock(side_effect=OSError("nfs down"))
+
+        with patch("backend.agent.main.sync_recovery") as mock_sync:
+            mock_sync.return_value = {"actions": [], "outbox_actions": []}
+            settled = run_recovery_sync_if_needed(
+                local_db=local_db,
+                api_url="http://x",
+                host_id="h1",
+                agent_instance_id="inst-1",
+                boot_id="boot-1",
+                execute_actions=execute_actions,
+            )
+
+        assert settled is False
+        execute_actions.assert_called_once()
 
 
 class TestReconnectRecoveryTrigger:

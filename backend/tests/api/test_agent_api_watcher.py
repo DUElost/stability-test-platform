@@ -21,7 +21,6 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 # 项目约定：API 层契约测试仅在 PostgreSQL 下运行（pg_insert + 跨 engine seed 验证）。
 # 命令：TEST_DATABASE_URL=postgresql+psycopg://... python -m pytest <this>
@@ -685,7 +684,7 @@ async def test_log_signals_inserts_unique_per_seq_no():
                 _=None,
             )
         assert r1.error is None
-        assert r1.data == {"inserted": 1, "total": 1}
+        assert r1.data == {"inserted": 1, "total": 1, "rejected": []}
 
         # 再发一次同 seq_no（不同 path，但幂等键仅 job_id+seq_no）
         sig1_dup = _make_signal(
@@ -699,7 +698,7 @@ async def test_log_signals_inserts_unique_per_seq_no():
                 _=None,
             )
         assert r2.error is None
-        assert r2.data == {"inserted": 0, "total": 1}
+        assert r2.data == {"inserted": 0, "total": 1, "rejected": []}
 
         # DB 中仍只有一行
         db = SessionLocal()
@@ -731,7 +730,7 @@ async def test_log_signals_increments_log_signal_count():
                 _=None,
             )
         assert result.error is None
-        assert result.data == {"inserted": 3, "total": 3}
+        assert result.data == {"inserted": 3, "total": 3, "rejected": []}
 
         db = SessionLocal()
         try:
@@ -752,7 +751,7 @@ async def test_log_signals_increments_log_signal_count():
                 db=async_db,
                 _=None,
             )
-        assert r2.data == {"inserted": 1, "total": 2}
+        assert r2.data == {"inserted": 1, "total": 2, "rejected": []}
 
         db = SessionLocal()
         try:
@@ -801,7 +800,7 @@ async def test_log_signals_broadcasts_watcher_signal_per_inserted_row(monkeypatc
                 db=async_db,
                 _=None,
             )
-        assert r1.data == {"inserted": 2, "total": 2}
+        assert r1.data == {"inserted": 2, "total": 2, "rejected": []}
         assert len(captured) == 2
         # All pushes target the right plan_run room and carry the original device_serial
         for c in captured:
@@ -823,7 +822,7 @@ async def test_log_signals_broadcasts_watcher_signal_per_inserted_row(monkeypatc
                 db=async_db,
                 _=None,
             )
-        assert r2.data == {"inserted": 0, "total": 1}
+        assert r2.data == {"inserted": 0, "total": 1, "rejected": []}
         assert captured == [], "broadcast must not fire for ON CONFLICT no-ops"
     finally:
         _cleanup_seed(seed)
@@ -831,6 +830,7 @@ async def test_log_signals_broadcasts_watcher_signal_per_inserted_row(monkeypatc
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_log_signals_reject_upload_fencing_mismatch():
+    """#1048：租约 fencing 不匹配 → 单条隔离进 rejected（不再整批 409 连坐）。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
     _setup_watcher_lease(seed)
     signal = _make_signal(
@@ -842,23 +842,24 @@ async def test_log_signals_reject_upload_fencing_mismatch():
     )
     try:
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as excinfo:
-                await ingest_log_signals(
-                    payload=LogSignalBatchIn(signals=[signal]),
-                    db=async_db,
-                    _=None,
-                )
-        assert excinfo.value.status_code == 409
-        assert excinfo.value.detail["code"] == "UPLOAD_FENCING_MISMATCH"
+            r = await ingest_log_signals(
+                payload=LogSignalBatchIn(signals=[signal]),
+                db=async_db,
+                _=None,
+            )
+        assert r.error is None
+        assert r.data["inserted"] == 0
+        assert r.data["total"] == 1
+        assert len(r.data["rejected"]) == 1
+        assert "lease_check_failed(409)" in r.data["rejected"][0]["reason"]
+        assert "UPLOAD_FENCING_MISMATCH" in r.data["rejected"][0]["reason"]
     finally:
         _cleanup_seed(seed)
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_log_signals_contract_violation_returns_400():
-    """非法 category → 契约校验直接 400，整批不入库。"""
-    from fastapi import HTTPException
-
+async def test_log_signals_contract_violation_isolated():
+    """#1048：非法 category → 单条隔离进 rejected，不入库、count 不变。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
     bad = _make_signal(
         seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=1,
@@ -866,14 +867,15 @@ async def test_log_signals_contract_violation_returns_400():
     )
     try:
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as excinfo:
-                await ingest_log_signals(
-                    payload=LogSignalBatchIn(signals=[bad]),
-                    db=async_db,
-                    _=None,
-                )
-        assert excinfo.value.status_code == 400
-        assert "contract violation" in str(excinfo.value.detail).lower()
+            r = await ingest_log_signals(
+                payload=LogSignalBatchIn(signals=[bad]),
+                db=async_db,
+                _=None,
+            )
+        assert r.error is None
+        assert r.data["inserted"] == 0
+        assert len(r.data["rejected"]) == 1
+        assert "contract violation" in r.data["rejected"][0]["reason"].lower()
 
         # 未入库 + count 未变
         db = SessionLocal()
@@ -881,6 +883,53 @@ async def test_log_signals_contract_violation_returns_400():
             assert db.query(JobLogSignal).filter(JobLogSignal.job_id == seed["job_id"]).count() == 0
             job = db.get(JobInstance, seed["job_id"])
             assert (job.log_signal_count or 0) == 0
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_log_signals_mixed_batch_partial_accept():
+    """#1048 核心场景：同批好坏混合 —— 好记录入库，坏记录单独隔离不连坐。
+
+    50 条批次混入一条已删除 Job 的旧记录，其余正常信号必须照常入库。
+    """
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
+    good1 = _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=1)
+    good2 = _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=2)
+    bad_job = _make_signal(999999, seed["device_serial"], seed["host_id"], seq_no=1)
+    bad_lease = _make_signal(
+        seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=3,
+        fencing_token="stale-worker-token",
+    )
+    try:
+        async with AsyncSessionLocal() as async_db:
+            r = await ingest_log_signals(
+                payload=LogSignalBatchIn(signals=[bad_job, good1, bad_lease, good2]),
+                db=async_db,
+                _=None,
+            )
+        assert r.error is None
+        assert r.data["total"] == 4
+        assert r.data["inserted"] == 2
+        assert len(r.data["rejected"]) == 2
+        reasons = {item["job_id"]: item["reason"] for item in r.data["rejected"]}
+        assert "not found" in reasons[999999]
+        assert "lease_check_failed(409)" in reasons[seed["job_id"]]
+        # 被拒记录的 (job_id, seq_no) 未入库；好记录全部入库
+        db = SessionLocal()
+        try:
+            assert db.query(JobLogSignal).filter(JobLogSignal.job_id == 999999).count() == 0
+            assert db.query(JobLogSignal).filter(
+                JobLogSignal.job_id == seed["job_id"],
+                JobLogSignal.seq_no == 3,
+            ).count() == 0
+            assert db.query(JobLogSignal).filter(
+                JobLogSignal.job_id == seed["job_id"],
+                JobLogSignal.seq_no.in_([1, 2]),
+            ).count() == 2
         finally:
             db.close()
     finally:

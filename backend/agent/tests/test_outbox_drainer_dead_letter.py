@@ -257,6 +257,72 @@ def test_below_max_attempts_does_not_dead_letter(db, emitter):
     assert drainer.snapshot_metrics()["dead_letter_total"] == 0
 
 
+# ── #1048：同批好坏混合 —— 好记录 ack，坏记录单独死信 ───────────────────
+
+
+def _make_partial_reject_session(rejected: list) -> MagicMock:
+    """200 但带逐条 rejected 清单的 session（API 层部分接受契约）。"""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = {
+        "data": {"inserted": 2, "total": 3, "rejected": rejected},
+    }
+    session = MagicMock()
+    session.post.return_value = resp
+    return session
+
+
+def test_mixed_batch_acks_good_and_dead_letters_rejected(db, emitter):
+    """50 条批次混入一条永久坏记录：好记录 ack，坏记录直接死信不重试。"""
+    emitter.emit(category="ANR", source="inotifyd", path_on_device="/good-1")
+    emitter.emit(category="ANR", source="inotifyd", path_on_device="/bad")
+    emitter.emit(category="AEE", source="inotifyd", path_on_device="/good-2")
+
+    batch = db.get_pending_log_signals()
+    assert len(batch) == 3
+    bad_row = next(r for r in batch if r["envelope"]["path_on_device"] == "/bad")
+    bad_key = (bad_row["envelope"]["job_id"], bad_row["envelope"]["seq_no"])
+
+    session = _make_partial_reject_session([
+        {"job_id": bad_key[0], "seq_no": bad_key[1], "reason": "job 999 not found"},
+    ])
+    drainer = OutboxDrainer.instance().configure(
+        local_db=db, api_url="http://fake", agent_secret="", session=session,
+    )
+    flushed = drainer.tick_once()
+
+    assert flushed == 2, "好记录应 ack，不连坐"
+    pending = db.get_pending_log_signals()
+    assert pending == [], "坏记录已死信，无残留 pending"
+    dl = db.get_log_signal_dead_letters()
+    assert len(dl) == 1
+    assert dl[0]["id"] == bad_row["id"]
+    assert "job 999 not found" in dl[0]["last_error"]
+    metrics = drainer.snapshot_metrics()
+    assert metrics["dead_letter_total"] == 1
+    assert metrics["flushed_total"] == 2
+    assert metrics["failed_total"] == 0, "永久拒绝不算尝试失败，不 bump attempts"
+
+    # 重试无意义：坏记录不再出现在 pending，新信号不受影响
+    emitter.emit(category="ANR", source="inotifyd", path_on_device="/new")
+    assert drainer.tick_once() == 1
+
+
+def test_mixed_batch_without_rejected_field_keeps_legacy_behavior(db, emitter):
+    """旧后端响应无 rejected 字段 → 保持原语义全部 ack。"""
+    emitter.emit(category="ANR", source="inotifyd", path_on_device="/a")
+    emitter.emit(category="ANR", source="inotifyd", path_on_device="/b")
+
+    session = _make_200_session()
+    drainer = OutboxDrainer.instance().configure(
+        local_db=db, api_url="http://fake", agent_secret="", session=session,
+    )
+    assert drainer.tick_once() == 2
+    assert db.get_pending_log_signals() == []
+    assert drainer.snapshot_metrics()["dead_letter_total"] == 0
+
+
 # ── snapshot_metrics ───────────────────────────────────────────────────
 
 

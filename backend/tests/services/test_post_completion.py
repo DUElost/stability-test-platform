@@ -82,6 +82,83 @@ def test_post_completion_defers_when_detail_file_missing(
     assert job.report_json is None
 
 
+def test_post_completion_succeeds_when_detail_has_empty_testpoints(
+    db_session, sample_device, monkeypatch, tmp_path,
+):
+    """#1175: detail 文件已存在且为合法 dict、testpoints 为空列表 = 终态
+    （合法零用例），不得永久当 pending 回滚——否则报告永失且无限重算。"""
+    job = _seed_job(db_session, sample_device)
+    detail = tmp_path / "empty.json"
+    detail.write_text(json.dumps({"testpoints": []}), encoding="utf-8")
+    db_session.add(StepTrace(
+        job_id=job.id,
+        step_id="finish",
+        stage="teardown",
+        event_type="COMPLETED",
+        status="COMPLETED",
+        output=json.dumps({"success": True, "detail_uri": str(detail)}),
+        original_ts=datetime.now(timezone.utc),
+    ))
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.services.report_service.compose_run_report",
+        lambda db, job_id: _fake_report(),
+    )
+    monkeypatch.setattr(
+        "backend.services.report_service.build_jira_draft",
+        lambda report: SimpleNamespace(model_dump=lambda mode="json": {}),
+    )
+    monkeypatch.setattr(
+        "backend.services.plan_chain_trigger.reconcile_chain_trigger_sync",
+        lambda plan_run_id, db: None,
+    )
+
+    assert run_post_completion(job.id, db_session) is True
+    db_session.refresh(job)
+    assert job.post_processed_at is not None
+    assert job.report_json == {"risk_summary": None}
+    assert db_session.query(TestCaseResult).filter_by(job_id=job.id).count() == 0
+
+
+def test_post_completion_succeeds_when_detail_lacks_testpoints_key(
+    db_session, sample_device, monkeypatch, tmp_path,
+):
+    """#1175: metrics-only detail（无 testpoints 键）同属终态 dict，放行提交。"""
+    job = _seed_job(db_session, sample_device)
+    detail = tmp_path / "metrics-only.json"
+    detail.write_text(json.dumps({
+        "metrics": {"run_dir": "/nfs/run/1", "total": 0},
+    }), encoding="utf-8")
+    db_session.add(StepTrace(
+        job_id=job.id,
+        step_id="finish",
+        stage="teardown",
+        event_type="COMPLETED",
+        status="COMPLETED",
+        output=json.dumps({"success": True, "detail_uri": str(detail)}),
+        original_ts=datetime.now(timezone.utc),
+    ))
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.services.report_service.compose_run_report",
+        lambda db, job_id: _fake_report(),
+    )
+    monkeypatch.setattr(
+        "backend.services.report_service.build_jira_draft",
+        lambda report: SimpleNamespace(model_dump=lambda mode="json": {}),
+    )
+    monkeypatch.setattr(
+        "backend.services.plan_chain_trigger.reconcile_chain_trigger_sync",
+        lambda plan_run_id, db: None,
+    )
+
+    assert run_post_completion(job.id, db_session) is True
+    db_session.refresh(job)
+    assert job.post_processed_at is not None
+
+
 def test_post_completion_succeeds_after_late_detail_file(
     db_session, sample_device, monkeypatch, tmp_path,
 ):

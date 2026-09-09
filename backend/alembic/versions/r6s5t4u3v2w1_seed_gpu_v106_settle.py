@@ -1,20 +1,21 @@
-"""seed sleep_setup v1.0.2 + powercycle_setup v1.0.2 — AutoTestTool 稳定安装
+"""seed gpu_setup v1.0.6（reboot settle）+ gpu_check v1.0.5（FAILURES 归因）
 
-Revision ID: l2m3n4o5p6q7
-Revises: k1l2m3n4o5p6
-Create Date: 2026-09-08
+Revision ID: r6s5t4u3v2w1
+Revises: q7r6s5t4u3v2
+Create Date: 2026-09-09
 
-Data migration (issue #775):
+Data migration (issue #774 第二轮实证 run 353):
 
-1. Ensure sleep_setup v1.0.2 + powercycle_setup v1.0.2 exist in the script table.
-2. Deactivate v1.0.1 for both.
+1. Ensure gpu_setup v1.0.6 exists, deactivate v1.0.5.
+2. Ensure gpu_check v1.0.5 exists, deactivate v1.0.4.
 
-Behavioral delta（2026-09-05 全量 484 台实证，#775）:
-- v1.0.1 的 adb install -r（流式）在 UNISOC 设备上不稳定——31/223 台
-  Performing Streamed Install 失败。
-- v1.0.2：install_apk 改 push + pm install -r -g -t -d（设备侧安装，
-  同 gpu_setup v1.0.4 _install_apk_stable），失败重试一次。
-- 入口脚本 sha 不变（仅 _lib.py 内部安装逻辑变更）。
+Behavioral delta:
+- v1.0.5（gpu_setup）pre_reboot 清残留有效（already registered/NPE 未再现）
+  但 boot_completed=1 后立即 instrument 时 Antutu 3D/Unity 首启失败
+  （AssertionError: antutu app start test）——589 台并发更甚。
+- gpu_setup v1.0.6：boot 后 settle（STP_GPU_REBOOT_SETTLE_SECONDS，默认 60s）。
+- gpu_check v1.0.5：判定识别 FAILURES!!!（测试执行但 JUnit 失败）→ failed
+  归因（区别于 no-tests/crashed——修复 #746 类误归因）。
 """
 from __future__ import annotations
 
@@ -24,23 +25,23 @@ from datetime import datetime, timezone
 from alembic import op
 from sqlalchemy import text
 
-revision = "o9p8q7r6s5t4"
-down_revision = "n4o5p6q7r8s9"
+revision = "r6s5t4u3v2w1"
+down_revision = "q7r6s5t4u3v2"
 branch_labels = None
 depends_on = None
 
 VERSIONS = [
     {
-        "name": "sleep_setup", "ver": "1.0.2",
-        "sha": "41f40e5498e0ae822378d4c33443d8c2e9f7b008d7eab3b352d4905d19f9aea2",
-        "desc": "休眠唤醒部署 — v1.0.1 + AutoTestTool push+pm 稳定安装（#775）",
-        "deactivate": ["1.0.1"],
+        "name": "gpu_setup", "ver": "1.0.6",
+        "sha": "e82720f938603e7f4b2d14531cf8fdff5448a54fb85589150b1d4a23d700a32b",
+        "desc": "GPU 部署 — v1.0.5 + reboot 后 settle 等待（#774 run 353：boot 后 Antutu 首启失败）",
+        "deactivate": ["1.0.5"],
     },
     {
-        "name": "powercycle_setup", "ver": "1.0.2",
-        "sha": "f36b155bffe1e3faed11ef3286a49492ac8279c4cf842d92831b6c33bf195e33",
-        "desc": "开关机部署 — v1.0.1 + AutoTestTool push+pm 稳定安装（#775）",
-        "deactivate": ["1.0.1"],
+        "name": "gpu_check", "ver": "1.0.5",
+        "sha": "90f7064e7d28e719e0b84aca2ee5b87edc89927def202a3e4ce521ab66c543df",
+        "desc": "GPU 轮询 — v1.0.4 + FAILURES 归因（测试失败非空跑，#774/#746）",
+        "deactivate": ["1.0.4"],
     },
 ]
 
