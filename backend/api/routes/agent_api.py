@@ -46,6 +46,7 @@ from backend.api.routes.auth import get_current_active_user
 from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
+from backend.services.host_maintenance import in_maintenance_window
 from backend.services.lease_manager import acquire_lease, extend_lease, release_lease
 from backend.services.plan_dispatcher_core import (
     apply_dispatch_host_watcher_admin_state_to_policy,
@@ -389,6 +390,12 @@ async def _claim_jobs_for_host(
     if not host_row:
         return [], {}  # host not found, no lock acquired — safe early return
     if host_row.status != HostStatus.ONLINE.value:
+        await db.rollback()
+        return [], {}
+    # #960：主机在维护窗口内（热更新上传/重启中）不认领 —— 与派发侧同一判据，
+    # 否则「检查完活跃 Job → 重启」之间仍会认领到新作业并被重启打断。
+    if in_maintenance_window(host_row.maintenance_until, now=now):
+        logger.info("claim_skipped_host_maintenance host=%s", host_id)
         await db.rollback()
         return [], {}
 
