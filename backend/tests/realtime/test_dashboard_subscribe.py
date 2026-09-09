@@ -133,6 +133,16 @@ async def test_subscribe_rejects_invalid_format():
 
 
 @pytest.mark.asyncio
+async def test_subscribe_rejects_non_string_room_without_raising():
+    """#1112: Map refcount / other non-str payloads must not TypeError."""
+    ns = DashboardNamespace("/dashboard")
+    ns.server = _FakeSioServer()
+    for room in (1, 2, 0, None, {"name": "job:1"}, ["job:1"]):
+        await ns.on_subscribe("sid-X", {"room": room})
+    assert ns.server.entered == []
+
+
+@pytest.mark.asyncio
 async def test_subscribe_rejects_missing_entity():
     ns = DashboardNamespace("/dashboard")
     ns.server = _FakeSioServer()
