@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 from backend.agent.pipeline_engine import PipelineEngine, StepResult
 from backend.agent.registry.patrol_checkpoint_store import (
@@ -149,3 +150,55 @@ def test_persist_checkpoint_swallows_recoverable_error(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "save", fail_save)
 
     engine._persist_patrol_cycle_checkpoint({"cycle": 1, "failure_streak": 0})
+
+
+def _patrol_pipeline_timeout(*, timeout: int, interval: int = 1) -> dict:
+    p = _patrol_pipeline(interval=interval)
+    p["lifecycle"]["timeout_seconds"] = timeout
+    return p
+
+
+@patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
+def test_resume_persists_cruise_elapsed_in_checkpoint(mock_sleep, tmp_path):
+    """R07-F08 (#1010): a persisted checkpoint carries the cruise time consumed,
+    so recovery can re-anchor the budget instead of granting a fresh timeout."""
+    store = PatrolCycleCheckpointStore(tmp_path / "cp.db")
+    store.initialize()
+    engine = _make_engine(store)
+
+    captured: list[dict] = []
+
+    def track_save(payload):
+        captured.append(payload)
+        engine._canceled = True
+
+    engine._persist_patrol_cycle_checkpoint = track_save
+
+    with patch(
+        "backend.agent.pipeline_engine.time.time", side_effect=lambda: 500.0
+    ):
+        engine.execute(_patrol_pipeline_timeout(timeout=100))
+
+    assert captured
+    assert captured[0]["cruise_elapsed_seconds"] == pytest.approx(0.0)
+
+
+@patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
+@patch("backend.agent.pipeline_engine.time.time", return_value=1000.0)
+def test_resume_does_not_regain_cruise_budget(mock_time, mock_sleep, tmp_path):
+    """R07-F08 (#1010): resuming a checkpoint that already consumed cruise time
+    back-dates init_completed_at so the remaining budget is not enlarged."""
+    engine = _make_engine(None)
+    engine.set_patrol_cycle_resume(
+        {"cycle": 3, "failure_streak": 0, "cruise_elapsed_seconds": 90.0}
+    )
+    engine._canceled = True  # terminate promptly; we only assert the anchor
+
+    with patch.object(
+        engine, "_run_patrol_loop", wraps=engine._run_patrol_loop
+    ) as spy:
+        engine.execute(_patrol_pipeline_timeout(timeout=100))
+
+    assert spy.called
+    anchor = spy.call_args.kwargs["init_completed_at"]
+    assert anchor == pytest.approx(1000.0 - 90.0)  # not 1000.0 (fresh budget)
