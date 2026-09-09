@@ -90,10 +90,16 @@ def _match_case_id(db: Session, suite_id: Optional[int], case_name: str) -> Opti
 
 
 def case_result_ingest_pending(db: Session, job_id: int) -> bool:
-    """True when finish detail is referenced but ``test_case_result`` rows are absent.
+    """True when the referenced finish detail is not yet readable.
 
     Covers late-arriving NFS JSON and unreadable payloads — ``post_completion``
     must not set ``post_processed_at`` while this returns True (#1076).
+
+    #1175: ``_load_detail_json`` 只在文件缺失/读失败/非 dict 时返回 None——
+    这些才是可能「晚到」的瞬时态。文件已存在且解析为 dict 即终态：即便
+    testpoints 为空或缺键（合法零用例、metrics-only 等）也视为可提交，与
+    ``ingest_test_case_results_for_job`` 把空列表当 0 行终态一致；否则
+    「终态空」会被永久当作 pending，报告每次被回滚。
     """
     if (
         db.query(TestCaseResult.id)
@@ -105,10 +111,7 @@ def case_result_ingest_pending(db: Session, job_id: int) -> bool:
     if not detail_uri:
         return False
     payload = _load_detail_json(detail_uri)
-    if payload is None:
-        return True
-    testpoints = payload.get("testpoints")
-    return not isinstance(testpoints, list) or not testpoints
+    return payload is None
 
 
 def ingest_test_case_results_for_job(db: Session, job_id: int) -> int:
