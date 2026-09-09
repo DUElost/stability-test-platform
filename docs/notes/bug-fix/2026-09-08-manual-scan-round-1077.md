@@ -1,6 +1,6 @@
 # 手动 scan/merge 接入轮次编排（#1077）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
