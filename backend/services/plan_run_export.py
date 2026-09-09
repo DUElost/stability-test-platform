@@ -22,8 +22,24 @@ def _iso(dt) -> Optional[str]:
 
 
 def build_plan_run_export(db: Session, pr: PlanRun) -> dict[str, Any]:
-    """Aggregate a bounded export payload for markdown/json download."""
+    """Aggregate a bounded export payload for markdown/json download.
+
+    Summary metrics always cover **all** jobs for the PlanRun (#1080).
+    Only the devices detail list is truncated at ``_EXPORT_MAX_JOBS``.
+    """
     plan = db.get(Plan, pr.plan_id)
+
+    status_rows = db.execute(
+        select(JobInstance.status, func.count(JobInstance.id))
+        .where(JobInstance.plan_run_id == pr.id)
+        .group_by(JobInstance.status)
+    ).all()
+    status_counts: dict[str, int] = {
+        str(status): int(cnt) for status, cnt in status_rows
+    }
+    total = sum(status_counts.values())
+    pass_rate = status_counts.get("COMPLETED", 0) / total if total else 0.0
+
     jobs = (
         db.query(JobInstance)
         .filter(JobInstance.plan_run_id == pr.id)
@@ -34,12 +50,6 @@ def build_plan_run_export(db: Session, pr: PlanRun) -> dict[str, Any]:
     truncated = len(jobs) > _EXPORT_MAX_JOBS
     if truncated:
         jobs = jobs[:_EXPORT_MAX_JOBS]
-
-    status_counts: dict[str, int] = {}
-    for job in jobs:
-        status_counts[job.status] = status_counts.get(job.status, 0) + 1
-    total = sum(status_counts.values())
-    pass_rate = status_counts.get("COMPLETED", 0) / total if total else 0.0
 
     device_serials: dict[int, str] = {}
     if jobs:
@@ -64,32 +74,34 @@ def build_plan_run_export(db: Session, pr: PlanRun) -> dict[str, Any]:
     ]
 
     timeline_stages: list[dict[str, Any]] = []
-    job_ids = [j.id for j in jobs]
-    if job_ids:
-        stage_rows = db.execute(
-            select(
-                StepTrace.stage,
-                StepTrace.status,
-                func.count(StepTrace.id),
+    stage_rows = db.execute(
+        select(
+            StepTrace.stage,
+            StepTrace.status,
+            func.count(StepTrace.id),
+        )
+        .where(
+            StepTrace.job_id.in_(
+                select(JobInstance.id).where(JobInstance.plan_run_id == pr.id)
             )
-            .where(StepTrace.job_id.in_(job_ids))
-            .group_by(StepTrace.stage, StepTrace.status)
-        ).all()
-        by_stage: dict[str, dict[str, int]] = {}
-        for stage, status, cnt in stage_rows:
-            by_stage.setdefault(stage, {})[status] = int(cnt)
-        for stage in ("init", "patrol", "teardown"):
-            counts = by_stage.get(stage, {})
-            if not counts:
-                continue
-            succeeded = counts.get("COMPLETED", 0) + counts.get("SUCCESS", 0)
-            failed = counts.get("FAILED", 0)
-            timeline_stages.append({
-                "stage": stage,
-                "step_status_counts": counts,
-                "device_succeeded": succeeded,
-                "device_failed": failed,
-            })
+        )
+        .group_by(StepTrace.stage, StepTrace.status)
+    ).all()
+    by_stage: dict[str, dict[str, int]] = {}
+    for stage, status, cnt in stage_rows:
+        by_stage.setdefault(stage, {})[status] = int(cnt)
+    for stage in ("init", "patrol", "teardown"):
+        counts = by_stage.get(stage, {})
+        if not counts:
+            continue
+        succeeded = counts.get("COMPLETED", 0) + counts.get("SUCCESS", 0)
+        failed = counts.get("FAILED", 0)
+        timeline_stages.append({
+            "stage": stage,
+            "step_status_counts": counts,
+            "device_succeeded": succeeded,
+            "device_failed": failed,
+        })
 
     return {
         "plan_run_id": pr.id,
