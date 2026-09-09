@@ -1,7 +1,7 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.7（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.7 变更：§8 并发上限反转——移除「≈2-3 显式上限」，会话数不设上限，瓶颈校准为集成收尾侧、守对象重锚为在窗 Execution 规模与 reconcile 负载（用户 2026-09-08 裁决，ADR-0034 v1.9）；v1.6 变更：§1.2 role 缺省归一化——declare 缺省写入 `implementation`（历史空串同义读取不迁移）+ 定义 Role 扩展再开启条件（v1.5 收敛 Revisit 两项闭环，ADR-0034 v1.8）；v1.5 变更：§1.2 `role` 语义收敛——Role=保留元数据与未来扩展点、默认 `implementation`、Role Runtime 供给降级 deferred（用户 2026-09-08 裁决，ADR-0034 v1.7）；v1.4 变更：§10 增「实现与契约的先后纪律」——实现不得静默重新定义 Contract 语义（用户 2026-09-08 确认）；v1.3 变更：§2.1/§3.1/§3.3 增 T9 `resume`——FINISHED→CODING 返工回退（#946）；v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
-- **日期**：2026-09-08
+- **状态**：Living v1.9（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.9 变更：§3.2 增僵尸候选第二类 `closed-unmerged`——PR CLOSED 未合且未放弃、失联、diff 为空的记录显式提示（仍在风险窗口并占 issue 槽位，唯一出口 `finish --abandon` 只能人工触发，来源 #1147 记录静默占位；2026-09-09 用户裁决）；v1.8 变更：§3.5 竞争提案可见性与决策实体唯一性——同一 Requirement 可有多个 Proposal Execution，但一个架构主题同一时刻只能有一个权威 Decision Artifact；决策类 Execution 必须显式 `--issue`、落笔前扫开放 PR 的同编号/同主题 ADR（用户 2026-09-09 裁决，来源 #906 的 ADR-0035 双份事故）；v1.7 变更：§8 并发上限反转——移除「≈2-3 显式上限」，会话数不设上限，瓶颈校准为集成收尾侧、守对象重锚为在窗 Execution 规模与 reconcile 负载（用户 2026-09-08 裁决，ADR-0034 v1.9）；v1.6 变更：§1.2 role 缺省归一化——declare 缺省写入 `implementation`（历史空串同义读取不迁移）+ 定义 Role 扩展再开启条件（v1.5 收敛 Revisit 两项闭环，ADR-0034 v1.8）；v1.5 变更：§1.2 `role` 语义收敛——Role=保留元数据与未来扩展点、默认 `implementation`、Role Runtime 供给降级 deferred（用户 2026-09-08 裁决，ADR-0034 v1.7）；v1.4 变更：§10 增「实现与契约的先后纪律」——实现不得静默重新定义 Contract 语义（用户 2026-09-08 确认）；v1.3 变更：§2.1/§3.1/§3.3 增 T9 `resume`——FINISHED→CODING 返工回退（#946）；v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
+- **日期**：2026-09-09
 - **适用**：所有在本仓库参与 Execution Registry 的 AI Coding Harness 会话；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
 - **本文演进**：版本化演进于本文；细则不再回填 ADR 正文（ADR-0034 升 v1.1 收缩为决策要点 + 指针）
@@ -85,7 +85,8 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 - `MERGED` 出局（变更已进主干，风险真实关闭；merge 后继续新工作应重新 `declare`）；
 - `liveness` 不参与；
 - **`finish --abandon` 不是「立即出窗」**：无开放 PR 时记录出窗（僵尸出口的唯一合法终点）；有开放 PR（`PR_OPEN/READY`）时**必须警告**「PR 仍在集成窗口」并提示先关闭/转交 PR（转手 = 新 Execution 重新 `declare`），记录留窗直到 GitHub 侧终态；
-- 僵尸候选清单：`status` 输出「`lifecycle ∈ {CODING, FINISHED}` 且 STALE 且 effective scope 为空」的记录，人工经 `finish --abandon` 收口。
+- 僵尸候选清单：`status` 输出「`lifecycle ∈ {CODING, FINISHED}` 且 STALE 且 effective scope 为空」的记录，人工经 `finish --abandon` 收口；
+- **僵尸候选第二类 `closed-unmerged`（v1.9 增，#906）**：`status`/`drift` 对「integration=CLOSED 且 lifecycle ∈ {CODING, FINISHED} 且 STALE 且 derived 为空」的记录显式提示。CLOSED 仍在风险窗口（见上）**并占用 issue 槽位**，而唯一合法出口 `finish --abandon` 只能人工触发——不显式提示时，PR 被关闭的记录会静默占位到有人想起（#1147 的记录即如此）。提示后二选一：`finish --abandon` 出窗，或 reopen/转手重新 `declare`。判据为纯函数（`closed_unmerged_candidate`），不触网、不改状态。
 
 ### 3.3 transition table（全组合）
 
@@ -113,6 +114,20 @@ risk = integration ∈ {PR_OPEN, READY}                                ← 开�
 - **拒绝条件**：新 declare 的 issue 集与任何**在窗记录**（§3.2 risk 真值表；MERGED 已出窗不拦）的 issue 集相交 → exit 2，列出冲突记录与 issue 号；
 - **`--force`**：仅供人工确认转手/并行边界后显式覆盖，覆盖时输出 `[WARN]` 留痕；同名录拒绝（先 `finish --abandon`）不因 `--force` 放行；
 - **定位**：查重是**工作项去重，不是文件上锁**（§2.3 边界不变）——scope overlap（§5.4）管「同一处代码」，issue 查重管「同一件事」，两者互补且都尊重选择权原则（§适用）：冲突由人裁决，工具只保证可见与默认拒绝。
+
+### 3.5 竞争提案可见性与决策实体唯一性（v1.8 增，#906）
+
+**事故来源（2026-09-08，#906 / R02-R01）**：同一 Requirement 上两个独立 Execution 各自把结论落成**同一编号 ADR-0035**的两份文件——#1147（当前状态：接受共享 `AGENT_SECRET` + 升级触发）与 #1163/#1170（目标形态：A 每主机凭据 + C 注册质询），两份正文均自称权威。二者并非结论对立，而是**决策层级不同**（当前状态 vs 目标形态）被写进了同一个权威位。用户裁决（2026-09-09）：合并为单一 ADR-0035 并四段化，不保留第二份。
+
+**分层原则**：`N Harness ─▶ N Proposals ─▶ 1 Human Decision ─▶ 1 ADR`。**Execution ≠ Artifact ≠ Decision**——同一 Requirement 可以有多个独立 implementation / review / adr-proposal Execution（竞争本身有价值，§适用）；但**一个架构主题在同一时刻只能有一个权威 Decision Artifact**，ADR 是 Decision 的持久化记录、不是 Proposal 的落点，多个 Proposal 必须在人类裁决后汇聚成一份 ADR；竞争 Proposal 之间**不设 Decision Lock**（Registry 只给可见性，不阻断、不预定编号、不宣告所有权）。
+
+**强制纪律**：
+
+1. **决策类 Execution 必须显式 `declare --issue <n>`**（决策类 = 产物为 ADR / 裁决文档 / 设计方向文档）。issue 集是 §3.4 查重的唯一数据源，缺 `--issue` 会让同一 Requirement 的两个 Execution 完全互不感知——本次事故中第二个 Execution 未声明 issue，§3.4 因此静默通过、只剩 hint 级 overlap。声明后同一 issue 的第二次 declare 会被 §3.4 **默认拒绝**，人工确认竞争边界才可 `--force` 放行（放行即留痕）。
+2. **落笔前必须扫竞争提案**：未合入的 ADR 提案只在 PR 里可见（`main` 上不存在），故除 `status` 前检外，动手写 ADR 前必须检查开放 PR 是否已有**同编号或同主题**的 ADR 文件，并确认目标编号未被占用。
+3. **同一主题的第二份权威 ADR 不得合入**：发现同主题已存在 Accepted/Proposed ADR 时，第二份不得以新编号自行落地为权威，应作为 Proposal 交人类裁决、裁决后合并进既有 ADR（本 ADR-0035 即此形态）。
+
+**边界**：本条是**可见性与汇聚纪律**，不是调度或上锁——不新增持久字段、不引入 Decision Registry、不改 overlap 谓词（§5.4 仍为 hint 级、从不禁止修改），也不推翻 §2.3「Registry 不对业务上锁」；只要求决策类 Execution 在声明面说清「我正在形成哪件事的决策」，让 §3.4 的既有查重真正生效。
 
 ## 4. TTL 与心跳分期
 

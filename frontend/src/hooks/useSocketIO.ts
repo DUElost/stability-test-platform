@@ -33,6 +33,19 @@ const _dashStatusListeners = new Set<(s: ConnectionStatus) => void>();
 const _dashEventListeners = new Map<string, Set<(data: unknown) => void>>();
 
 let _authRecoveryInFlight = false;
+/** Bounded refresh attempts for recoverable auth handshake failures (#1119). */
+let _authRecoveryAttempts = 0;
+const _AUTH_RECOVERY_MAX = 2;
+
+/** Handshake refusals where a cookie refresh may restore access (#1119). */
+const _RECOVERABLE_AUTH_ERRORS = new Set([
+  'Invalid token',
+  'Authentication required',
+]);
+
+function _isRecoverableAuthError(message: string): boolean {
+  return _RECOVERABLE_AUTH_ERRORS.has(message);
+}
 
 // 审计 Frontend #3: 旧实现 _dashSocket 永不释放 ── 用户登出 / 关闭所有订阅页面后
 // socket 仍持有过期 token + 占用 reconnection 配额。
@@ -85,6 +98,7 @@ export function disconnectDashSocket(): void {
   _activeRooms.clear();
   _dashEventListeners.clear();
   _authRecoveryInFlight = false;
+  _authRecoveryAttempts = 0;
   _hookRefcount = 0;
   if (sock) {
     try {
@@ -122,11 +136,13 @@ function _getDashSocket(): Socket {
 
   socket.on('connect', () => {
     console.log('[SIO/dashboard] Connected');
+    _authRecoveryAttempts = 0;
     _notifyDashStatus('connected');
-    // Re-subscribe to all active rooms after reconnect
-    _activeRooms.forEach(room => {
+    // Re-subscribe to all active rooms after reconnect.
+    // Map.forEach(cb) is (value, key) — iterate keys so room names are strings (#1112).
+    for (const room of _activeRooms.keys()) {
       socket.emit('subscribe', { room });
-    });
+    }
   });
 
   socket.on('disconnect', () => {
@@ -137,14 +153,22 @@ function _getDashSocket(): Socket {
   socket.on('connect_error', (err) => {
     console.error('[SIO/dashboard] Connection error:', err.message);
 
-    // If the server rejected our token as invalid, try a one-time refresh
-    // and reconnect.  Guard against concurrent recovery loops.
-    if (err.message === 'Invalid token' && !_authRecoveryInFlight) {
+    // Recoverable auth refusals (#1119): missing/expired access cookie still
+    // has a valid refresh path. Bound attempts so Origin/permanent failures
+    // cannot spin refresh forever while Socket.IO keeps reconnecting.
+    if (
+      _isRecoverableAuthError(err.message) &&
+      !_authRecoveryInFlight &&
+      _authRecoveryAttempts < _AUTH_RECOVERY_MAX
+    ) {
       _authRecoveryInFlight = true;
+      _authRecoveryAttempts += 1;
       socket.disconnect();
       void refreshAccessToken().then((fresh) => {
         if (fresh) {
           socket.connect();
+        } else {
+          _notifyDashStatus('error');
         }
         _authRecoveryInFlight = false;
       });

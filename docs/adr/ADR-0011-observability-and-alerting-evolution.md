@@ -26,6 +26,11 @@
   - 心跳异常、任务失败率突增、队列积压、部署失败。
   - 通过通知规则路由到 Webhook/邮件/钉钉。
 
+> **范围边界（2026-09-08 补，随 ADR-0036 起草）**：本 ADR 只裁决**「通知什么、何时触发、规则如何路由」**（What to notify）。
+> **「一次投递怎样算成功/失败、谁负责重试、重试何时停止、投递事实存在哪里、同步与异步边界」**（How delivery behaves）归
+> [ADR-0036 通知投递语义契约](./ADR-0036-notification-delivery-semantics.md)；本 ADR 不再定义投递语义。
+> 两者是上位/下位关系，不构成平行权威源——投递状态的可观测性要求由 ADR-0036 提出，在本 ADR 的指标基线下实现。
+
 ## 备选方案与权衡
 
 - 方案 A：仅保留日志人工排查。
@@ -47,6 +52,7 @@
   - 框架指标：saq_tasks_total、saq_task_duration、saq_queue_depth、socketio_connections_active、apscheduler_job_runs_total、apscheduler_job_duration（共 6 项）
   - Grafana dashboard：`docs/grafana/stability-platform-dashboard.json`（7 分组、20 面板）
 - 后续以独立 ADR 方式重启告警规则与运维闭环规划（当前 ADR 仅锁定第一层指标基线）
+- 通知**投递**语义（成功/失败定义、重试 owner、超时、幂等、同步异步边界、投递事实落库）已由 [ADR-0036](./ADR-0036-notification-delivery-semantics.md) 单独裁决；本 ADR 仅承接其可观测性要求（指标/日志口径），不重复定义投递行为
 
 ## 关联实现/文档
 

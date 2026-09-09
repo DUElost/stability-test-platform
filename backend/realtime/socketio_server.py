@@ -389,6 +389,9 @@ class DashboardNamespace(socketio.AsyncNamespace):
         # 从未生效——无 token 握手即可接入 /dashboard。TESTING=1 下保留
         # 匿名直连供测试套件使用。
         if os.getenv("TESTING") != "1" and not token:
+            # Client treats this message as refresh-recoverable (#1119): access
+            # cookie gone/expired while refresh may still be valid. Do not
+            # loosen auth — only name the refusal for the recovery branch.
             raise socketio.exceptions.ConnectionRefusedError("Authentication required")
 
         if token:
@@ -426,6 +429,13 @@ class DashboardNamespace(socketio.AsyncNamespace):
         实体的房间不会收到任何 emit，订阅它只会堆积无意义 room 条目。
         """
         room = data.get("room", "")
+        # #1112: reject non-string rooms (e.g. Map refcount numbers) without
+        # TypeError from ``_ROOM_PATTERN.fullmatch``.
+        if not isinstance(room, str):
+            logger.warning(
+                "dashboard_subscribe_rejected_type sid=%s room=%r", sid, room,
+            )
+            return
         if not room:
             return
         if _ROOM_PATTERN.fullmatch(room) is None:
@@ -441,9 +451,10 @@ class DashboardNamespace(socketio.AsyncNamespace):
     async def on_unsubscribe(self, sid: str, data: dict):
         """Client unsubscribes from a room."""
         room = data.get("room", "")
-        if room:
-            await self.leave_room(sid, room)
-            logger.debug("dashboard_unsubscribe sid=%s room=%s", sid, room)
+        if not isinstance(room, str) or not room:
+            return
+        await self.leave_room(sid, room)
+        logger.debug("dashboard_unsubscribe sid=%s room=%s", sid, room)
 
 
 def _register_agent_namespace(sio: socketio.AsyncServer) -> None:

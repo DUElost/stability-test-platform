@@ -107,4 +107,128 @@ describe('useSocketIO — token auth', () => {
     expect(socket.disconnect).toHaveBeenCalled();
     expect(socket.connect).toHaveBeenCalled();
   });
+
+  it('resubscribes with room names (not refcounts) on reconnect (#1112)', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const socket = createFakeSocket();
+    const ioMock = vi.fn(() => socket);
+
+    vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
+    vi.doMock('socket.io-client', () => ({ io: ioMock }));
+
+    const { useSocketIO } = await import('@/hooks/useSocketIO');
+
+    // Two subscribers on the same room → refcount 2; plus a distinct room.
+    renderHook(() => useSocketIO('plan_run:5'));
+    renderHook(() => useSocketIO('plan_run:5'));
+    renderHook(() => useSocketIO('job:9'));
+
+    await waitFor(() => {
+      expect(ioMock).toHaveBeenCalled();
+    });
+
+    socket.emit.mockClear();
+
+    // Simulate (re)connect while rooms are already tracked by refcount.
+    act(() => {
+      socket.emitLocal('connect');
+    });
+
+    const resubRooms = socket.emit.mock.calls
+      .filter((c: any[]) => c[0] === 'subscribe')
+      .map((c: any[]) => c[1]?.room);
+
+    expect(resubRooms).toHaveLength(2);
+    expect(new Set(resubRooms)).toEqual(new Set(['plan_run:5', 'job:9']));
+    expect(resubRooms.every((r: unknown) => typeof r === 'string')).toBe(true);
+  });
+
+  it('recovers from Authentication required when access cookie is missing (#1119)', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const socket = createFakeSocket();
+    const ioMock = vi.fn(() => socket);
+
+    vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
+    vi.doMock('socket.io-client', () => ({ io: ioMock }));
+
+    const { useSocketIO } = await import('@/hooks/useSocketIO');
+    const { DASHBOARD_SUBSCRIPTION } = await import('@/config');
+    renderHook(() => useSocketIO(DASHBOARD_SUBSCRIPTION));
+
+    await waitFor(() => {
+      expect(ioMock).toHaveBeenCalled();
+    });
+
+    act(() => {
+      socket.emitLocal('connect_error', new Error('Authentication required'));
+    });
+
+    await waitFor(() => {
+      expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+    });
+    expect(socket.disconnect).toHaveBeenCalled();
+    expect(socket.connect).toHaveBeenCalled();
+  });
+
+  it('does not infinite-refresh when refresh fails for Authentication required (#1119)', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue(false);
+    const socket = createFakeSocket();
+    const ioMock = vi.fn(() => socket);
+
+    vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
+    vi.doMock('socket.io-client', () => ({ io: ioMock }));
+
+    const { useSocketIO } = await import('@/hooks/useSocketIO');
+    const { DASHBOARD_SUBSCRIPTION } = await import('@/config');
+    const { result } = renderHook(() => useSocketIO(DASHBOARD_SUBSCRIPTION));
+
+    await waitFor(() => {
+      expect(ioMock).toHaveBeenCalled();
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      act(() => {
+        socket.emitLocal('connect_error', new Error('Authentication required'));
+      });
+      await waitFor(() => {
+        expect(refreshAccessToken.mock.calls.length).toBeGreaterThan(0);
+      });
+      // Allow the in-flight promise to settle between attempts.
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    // Bounded: at most _AUTH_RECOVERY_MAX (2) refresh attempts.
+    expect(refreshAccessToken.mock.calls.length).toBeLessThanOrEqual(2);
+    await waitFor(() => {
+      expect(result.current.connectionStatus).toBe('error');
+    });
+  });
+
+  it('does not refresh on non-recoverable handshake errors (#1119)', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const socket = createFakeSocket();
+    const ioMock = vi.fn(() => socket);
+
+    vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
+    vi.doMock('socket.io-client', () => ({ io: ioMock }));
+
+    const { useSocketIO } = await import('@/hooks/useSocketIO');
+    const { DASHBOARD_SUBSCRIPTION } = await import('@/config');
+    renderHook(() => useSocketIO(DASHBOARD_SUBSCRIPTION));
+
+    await waitFor(() => {
+      expect(ioMock).toHaveBeenCalled();
+    });
+
+    act(() => {
+      socket.emitLocal('connect_error', new Error('Origin not allowed'));
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(refreshAccessToken).not.toHaveBeenCalled();
+  });
 });
