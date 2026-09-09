@@ -138,10 +138,11 @@ function _getDashSocket(): Socket {
     console.log('[SIO/dashboard] Connected');
     _authRecoveryAttempts = 0;
     _notifyDashStatus('connected');
-    // Re-subscribe to all active rooms after reconnect
-    _activeRooms.forEach(room => {
+    // Re-subscribe to all active rooms after reconnect.
+    // Map.forEach(cb) is (value, key) — iterate keys so room names are strings (#1112).
+    for (const room of _activeRooms.keys()) {
       socket.emit('subscribe', { room });
-    });
+    }
   });
 
   socket.on('disconnect', () => {
