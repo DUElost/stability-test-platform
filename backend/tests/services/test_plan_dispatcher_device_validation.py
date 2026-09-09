@@ -185,6 +185,34 @@ class TestValidateDispatchDevicesSync:
         assert entries[0]["reason"] == "host_offline"
         assert entries[0]["host_status"] == "OFFLINE"
 
+    def test_host_maintenance_window_rejects(self, db_session, dispatch_fixture):
+        """#960：主机在维护窗口内（热更新上传/重启中）不派发。"""
+        dispatch_fixture["host"].maintenance_until = (
+            datetime.now(timezone.utc) + timedelta(seconds=300)
+        )
+        dispatch_fixture["host"].maintenance_holder = "ui:tester"
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as exc:
+            _validate_dispatch_devices_sync(
+                db_session, [dispatch_fixture["device"].id]
+            )
+        entries = exc.value.detail()["unavailable_devices"]
+        assert entries[0]["reason"] == "host_maintenance"
+        assert entries[0]["host_id"] == dispatch_fixture["host"].id
+
+    def test_expired_maintenance_window_does_not_reject(
+        self, db_session, dispatch_fixture,
+    ):
+        """窗口过期 = 无窗口（进程崩溃后不能把主机永久钉住）。"""
+        dispatch_fixture["host"].maintenance_until = (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        )
+        db_session.commit()
+        _validate_dispatch_devices_sync(
+            db_session, [dispatch_fixture["device"].id]
+        )
+
     def test_active_lease_rejects(self, db_session, dispatch_fixture):
         dev = dispatch_fixture["device"]
         _attach_active_lease(db_session, dev.id, dispatch_fixture["host"].id)

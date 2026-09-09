@@ -19,6 +19,41 @@ logger = logging.getLogger(__name__)
 _EXTRACT_COMPLETE_MARKER = ".stp_extract_complete"
 
 
+def _merge_uri_is_platform_partitioned(uri: str) -> bool:
+    norm = uri.replace("\\", "/").lower()
+    return "/merge/mtk/" in norm or "/merge/unisoc/" in norm
+
+
+def _resolve_merge_xls_jira_dest(jira_dir: Path, merge_xls: Path) -> Path:
+    """jira bundle 落点：分区 URI 进 ``merge/{platform}/``，避免同 basename 静默丢弃（#766）。"""
+    from backend.core.artifact_paths import path_under_root
+    from backend.core.dedup_platform import scan_artifact_uri_platform
+
+    uri = str(merge_xls)
+    if _merge_uri_is_platform_partitioned(uri):
+        platform = scan_artifact_uri_platform(uri)
+        return path_under_root(jira_dir, "merge", platform, merge_xls.name)
+    return path_under_root(jira_dir, merge_xls.name)
+
+
+def _alt_merge_xls_dest_on_collision(jira_dir: Path, merge_xls: Path) -> Path | None:
+    """Legacy flat URI 撞名时用 ``_{platform}`` 后缀；仍冲突则返回 None。"""
+    from backend.core.artifact_paths import path_under_root
+    from backend.core.dedup_platform import scan_artifact_uri_platform
+
+    platform = scan_artifact_uri_platform(str(merge_xls))
+    alt_name = f"{merge_xls.stem}_{platform}{merge_xls.suffix}"
+    if alt_name == merge_xls.name:
+        return None
+    try:
+        alt = path_under_root(jira_dir, alt_name)
+    except Exception:
+        return None
+    if alt.exists():
+        return None
+    return alt
+
+
 def parse_event_dir_names_from_xls(
     xls_path: Path,
     *,
@@ -227,6 +262,7 @@ def run_extract_sync(plan_run_id: int) -> int:
         event_dirs_copied = 0
         existing_dirs = 0
         merge_xls_copied = 0
+        merge_xls_skipped_same_name = 0
         same_basename_left_remote = 0
         archived_remote_paths: list[str] = []
         extracted_dest_names: set[str] = set()
@@ -289,7 +325,7 @@ def run_extract_sync(plan_run_id: int) -> int:
             if not merge_xls.is_file():
                 continue
             try:
-                dest = path_under_root(jira_dir, merge_xls.name)
+                dest = _resolve_merge_xls_jira_dest(jira_dir, merge_xls)
             except ArtifactPathError:
                 logger.warning(
                     "dedup_extract_skip_unsafe_merge_name plan_run=%d name=%r",
@@ -297,8 +333,30 @@ def run_extract_sync(plan_run_id: int) -> int:
                 )
                 continue
             if dest.exists():
-                continue
+                # Partitioned dest already unique per platform — treat as prior copy.
+                if _merge_uri_is_platform_partitioned(str(merge_xls)):
+                    logger.info(
+                        "dedup_extract_merge_xls_exists plan_run=%d dest=%s",
+                        plan_run_id, dest,
+                    )
+                    continue
+                alt = _alt_merge_xls_dest_on_collision(jira_dir, merge_xls)
+                if alt is None:
+                    merge_xls_skipped_same_name += 1
+                    logger.warning(
+                        "dedup_extract_merge_xls_skipped_same_name plan_run=%d "
+                        "src=%s dest=%s",
+                        plan_run_id, merge_xls, dest,
+                    )
+                    continue
+                logger.warning(
+                    "dedup_extract_merge_xls_renamed_same_name plan_run=%d "
+                    "src=%s from=%s to=%s",
+                    plan_run_id, merge_xls, dest.name, alt.name,
+                )
+                dest = alt
             try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(str(merge_xls), str(dest))
                 extracted += 1
                 merge_xls_copied += 1
@@ -317,6 +375,7 @@ def run_extract_sync(plan_run_id: int) -> int:
             "missing": missing_remote_paths,
             "existing": existing_dirs,
             "merge_xls_copied": merge_xls_copied,
+            "merge_xls_skipped_same_name": merge_xls_skipped_same_name,
             "archived": len(archived_remote_paths),
             # #386: 同 basename 未进 jira、保持 REMOTE 的行数（内容差异时人工复核）。
             "same_basename_left_remote": same_basename_left_remote,
