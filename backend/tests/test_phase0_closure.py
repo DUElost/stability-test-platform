@@ -362,6 +362,98 @@ class TestDeferredPostCompletion:
             db.commit()
             db.close()
 
+    @pytest.mark.skipif(
+        os.getenv("TESTING") != "1" and not os.getenv("DATABASE_URL"),
+        reason="Requires database connection",
+    )
+    def test_defer_cutoff_stops_reenqueue_for_ancient_orphan(self):
+        """#1175: 超过 POST_COMPLETION_MAX_DEFER_SECONDS 的孤儿终态 job
+        停止重入队（detail 长期未到，报告已被反复回滚）——不再无限重算。"""
+        from backend.core.database import SessionLocal
+        from backend.models.enums import HostStatus, JobStatus
+        from backend.models.host import Device, Host
+        from backend.models.job import JobInstance
+        from backend.models.plan import Plan, PlanStep
+        from backend.models.plan_run import PlanRun
+
+        from backend.scheduler import recycler as recycler_mod
+        from backend.scheduler.recycler import _fill_deferred_post_completions
+
+        suffix = uuid4().hex[:8]
+        now = datetime.now(timezone.utc)
+        host_id = f"test-ph0-cut-{suffix}"
+
+        db = SessionLocal()
+        try:
+            host = Host(
+                id=host_id, hostname=f"h-{suffix}",
+                status=HostStatus.ONLINE.value, created_at=now,
+            )
+            device = Device(
+                serial=f"S-cut-{suffix}", host_id=host_id,
+                status="ONLINE", tags=[], created_at=now,
+            )
+            plan = Plan(
+                name=f"wf-cut-{suffix}", failure_threshold=0.5,
+                created_by="pytest",
+            )
+            db.add_all([host, device, plan])
+            db.flush()
+            step = PlanStep(
+                plan_id=plan.id, step_key="default",
+                script_name="dummy", script_version="v1.0.0",
+                stage="init", sort_order=0,
+            )
+            db.add(step)
+            db.flush()
+            run = PlanRun(
+                plan_id=plan.id,
+                status="FAILED",
+                failure_threshold=0.5, triggered_by="pytest",
+                started_at=now, ended_at=now,
+                plan_snapshot={"name": plan.name, "plan_id": plan.id},
+                run_type="MANUAL",
+            )
+            db.add(run)
+            db.flush()
+            job = JobInstance(
+                plan_run_id=run.id, plan_id=plan.id,
+                device_id=device.id, host_id=host_id,
+                status=JobStatus.FAILED.value,
+                status_reason="test_timeout",
+                pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},
+                created_at=now, updated_at=now,
+                started_at=now,
+                ended_at=now - timedelta(days=7),
+                post_processed_at=None,
+            )
+            db.add(job)
+            db.commit()
+            job_id = job.id
+
+            with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enqueue:
+                recycler_mod._defer_cutoff_alerted.discard(job_id)
+                filled = _fill_deferred_post_completions(db, now)
+
+            assert filled == 0, "ancient orphan must not be re-enqueued"
+            pc_calls = [
+                c for c in mock_enqueue.call_args_list
+                if c[0][0] == "post_completion_task" and c[1].get("job_id") == job_id
+            ]
+            assert pc_calls == [], "post_completion_task must not fire for cut-off job"
+        finally:
+            from backend.models.job import StepTrace
+
+            db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
+            db.query(JobInstance).filter(JobInstance.id == job_id).delete()
+            db.query(PlanRun).filter(PlanRun.id == run.id).delete()
+            db.query(PlanStep).filter(PlanStep.plan_id == plan.id).delete()
+            db.query(Plan).filter(Plan.id == plan.id).delete()
+            db.query(Device).filter(Device.id == device.id).delete()
+            db.query(Host).filter(Host.id == host_id).delete()
+            db.commit()
+            db.close()
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  4. Outbox LocalDB primitives
