@@ -709,6 +709,14 @@ def _mark_patrol_stall(
 
 _POST_COMPLETION_GRACE_SECONDS = int(os.getenv("POST_COMPLETION_GRACE_SECONDS", "120"))
 
+# #1175: detail 文件长期不到（缺失/损坏）的终态 job 若无限重入队，报告每次被
+# 回滚且每轮重算。超过该窗口（grace 之后）即停止重试并告警留痕；进程重启会
+# 重置内存去重集，重新各告警一次（可接受）。
+_POST_COMPLETION_MAX_DEFER_SECONDS = int(os.getenv(
+    "POST_COMPLETION_MAX_DEFER_SECONDS", str(6 * 3600),
+))
+_defer_cutoff_alerted: set[int] = set()
+
 
 def _fill_deferred_post_completions(db, now: datetime) -> int:
     """Enqueue post-completion via SAQ for terminal jobs the primary path missed.
@@ -734,6 +742,23 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
         .limit(10)
         .all()
     )
+
+    defer_cutoff = now - timedelta(
+        seconds=_POST_COMPLETION_GRACE_SECONDS + _POST_COMPLETION_MAX_DEFER_SECONDS,
+    )
+    for job in orphan_jobs:
+        if job.ended_at is not None and job.ended_at < defer_cutoff:
+            if job.id not in _defer_cutoff_alerted:
+                logger.error(
+                    "post_completion_defer_cutoff job=%d plan_run=%s ended=%s "
+                    "— detail 长期未达，停止重入队（报告未持久化，需人工核查）",
+                    job.id, job.plan_run_id, job.ended_at,
+                )
+                _defer_cutoff_alerted.add(job.id)
+    orphan_jobs = [
+        job for job in orphan_jobs
+        if job.ended_at is None or job.ended_at >= defer_cutoff
+    ]
 
     filled = 0
     for job in orphan_jobs:
