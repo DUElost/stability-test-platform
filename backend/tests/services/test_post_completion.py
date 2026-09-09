@@ -79,7 +79,9 @@ def test_post_completion_defers_when_detail_file_missing(
     assert run_post_completion(job.id, db_session) is False
     db_session.refresh(job)
     assert job.post_processed_at is None
-    assert job.report_json is None
+    # 报告为终态产物且不依赖 test_case_result：先落库，摄入延后不再连带回滚。
+    assert job.report_json == {"risk_summary": None}
+    assert job.jira_draft_json == {}
 
 
 def test_post_completion_succeeds_after_late_detail_file(
@@ -162,3 +164,61 @@ def test_post_completion_ingest_failure_leaves_post_processed_null(
     assert run_post_completion(job.id, db_session) is False
     db_session.refresh(job)
     assert job.post_processed_at is None
+    # 报告先落库：摄入抛错不连带回滚已生成报告（后由 recycler 重试补摄入）。
+    assert job.report_json == {"risk_summary": None}
+
+
+def test_post_completion_retry_skips_recompose_after_report_persisted(
+    db_session, sample_device, monkeypatch, tmp_path,
+):
+    """报告已落库但摄入未完成时，重试不得重算报告（直接补摄入）。
+
+    detail JSON 永久损坏/空用例的 job 会一直走 pending——若每次重试都重算并
+    回滚报告，报告永不可见且空转。落库后必须走短路径只补摄入。
+    """
+    job = _seed_job(db_session, sample_device)
+    detail = tmp_path / "corrupt.json"
+    detail.write_text("{ not-json", encoding="utf-8")
+    db_session.add(StepTrace(
+        job_id=job.id,
+        step_id="finish",
+        stage="teardown",
+        event_type="COMPLETED",
+        status="COMPLETED",
+        output=json.dumps({"success": True, "detail_uri": str(detail)}),
+        original_ts=datetime.now(timezone.utc),
+    ))
+    db_session.commit()
+
+    calls = {"compose": 0}
+
+    def _compose(db, job_id):
+        calls["compose"] += 1
+        return _fake_report()
+
+    monkeypatch.setattr(
+        "backend.services.report_service.compose_run_report", _compose,
+    )
+    monkeypatch.setattr(
+        "backend.services.report_service.build_jira_draft",
+        lambda report: SimpleNamespace(model_dump=lambda mode="json": {}),
+    )
+    monkeypatch.setattr(
+        "backend.services.plan_chain_trigger.reconcile_chain_trigger_sync",
+        lambda plan_run_id, db: None,
+    )
+
+    assert run_post_completion(job.id, db_session) is False
+    assert calls["compose"] == 1
+    db_session.refresh(job)
+    assert job.post_processed_at is None
+    assert job.report_json == {"risk_summary": None}
+
+    # detail 恢复为可读后，重试仍只补摄入、不再重算报告。
+    detail.write_text(json.dumps({
+        "testpoints": [{"name": "case_a", "status": "PASS", "testcases": []}],
+    }), encoding="utf-8")
+    assert run_post_completion(job.id, db_session) is True
+    assert calls["compose"] == 1
+    db_session.refresh(job)
+    assert job.post_processed_at is not None
