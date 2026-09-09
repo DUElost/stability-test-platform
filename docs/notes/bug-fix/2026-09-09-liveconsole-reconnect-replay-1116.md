@@ -1,6 +1,6 @@
 # LiveConsole 重连后补齐日志缺口（#1116）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision

@@ -62,9 +62,13 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   if (prevConsoleRunId !== consoleRunId) {
     setPrevConsoleRunId(consoleRunId);
     setTermReady(false);
+  }
+
+  // Reset reconnect/gap-fill guards off the render path (react-hooks/refs).
+  useEffect(() => {
     everConnectedRef.current = false;
     gapFillInFlightRef.current = false;
-  }
+  }, [consoleRunId]);
 
   // memo 化是为了能进 replayFromStart 的依赖数组：裸函数每次渲染换引用，
   // 会让 replayFromStart 每帧重建，进而让 termReady effect 反复重跑回放。
