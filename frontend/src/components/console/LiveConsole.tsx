@@ -3,6 +3,9 @@
  *
  * 注意：日志回放必须在 XTerminal onReady 之后执行，否则折叠再展开时
  * termRef 尚未就绪，writeLines 会被静默丢弃 → 空白终端。
+ *
+ * #1116：断线重连后按 seq 增量补齐；live 批次若跳号则触发 gap fill，
+ * 并按行跳过与已写区间的重叠。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { XTerminal, type XTerminalHandle } from '@/components/log/XTerminal';
@@ -47,6 +50,8 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   const seqRef = useRef(0);
   const issueKeysRef = useRef<Set<string>>(new Set());
   const onStatusChangeRef = useRef(onStatusChange);
+  const gapFillInFlightRef = useRef(false);
+  const everConnectedRef = useRef(false);
   useLayoutEffect(() => {
     onStatusChangeRef.current = onStatusChange;
   }, [onStatusChange]);
@@ -57,6 +62,8 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   if (prevConsoleRunId !== consoleRunId) {
     setPrevConsoleRunId(consoleRunId);
     setTermReady(false);
+    everConnectedRef.current = false;
+    gapFillInFlightRef.current = false;
   }
 
   // memo 化是为了能进 replayFromStart 的依赖数组：裸函数每次渲染换引用，
@@ -68,6 +75,26 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     }
     setIssueCount(issueKeysRef.current.size);
   }, [enableIssueCount]);
+
+  const applyLines = useCallback((from: number, lines: string[]) => {
+    if (!lines.length) return;
+    const expected = seqRef.current + 1;
+    const batchEnd = from - 1 + lines.length;
+    if (batchEnd <= seqRef.current) {
+      // Fully overlapped with already-written history.
+      return;
+    }
+    if (from > expected) {
+      // Caller should have requested gap fill; still refuse to create a hole.
+      return;
+    }
+    const skip = Math.max(0, expected - from);
+    const newLines = lines.slice(skip);
+    if (!newLines.length) return;
+    termRef.current?.writeLines(newLines.map((msg) => ({ msg })));
+    tallyIssues(newLines);
+    seqRef.current = batchEnd;
+  }, [tallyIssues]);
 
   const replayFromStart = useCallback(() => {
     let cancelled = false;
@@ -95,29 +122,68 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     };
   }, [consoleRunId, tallyIssues]);
 
+  /** Incremental replay from the next missing seq (#1116). */
+  const fillGap = useCallback(() => {
+    if (gapFillInFlightRef.current) return;
+    const fromSeq = seqRef.current + 1;
+    gapFillInFlightRef.current = true;
+    dedup
+      .getRunLog(consoleRunId, fromSeq)
+      .then((res) => {
+        applyLines(res.from_seq || fromSeq, res.lines);
+        if (typeof res.status === 'string' && res.status) {
+          setStatus(res.status);
+          onStatusChangeRef.current?.(res.status);
+        }
+        // Server seq is authoritative when ahead of local (e.g. empty gap fill
+        // after a terminal run that never delivered the last live batch).
+        if (typeof res.seq === 'number' && res.seq > seqRef.current) {
+          seqRef.current = res.seq;
+        }
+      })
+      .catch(() => {
+        /* gap fill is best-effort */
+      })
+      .finally(() => {
+        gapFillInFlightRef.current = false;
+      });
+  }, [applyLines, consoleRunId]);
+
   useEffect(() => {
     if (!termReady) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 启动异步回填流；同步重置属于流的初始化
     return replayFromStart();
   }, [termReady, replayFromStart]);
 
-  useSocketIO(consoleSubscription(consoleRunId), {
+  const { connectionStatus } = useSocketIO(consoleSubscription(consoleRunId), {
     onMessage: (msg: unknown) => {
       const d = msg as { run_id?: string; from_seq?: number; lines?: string[]; status?: string };
       if (!d || d.run_id !== consoleRunId) return;
       if (Array.isArray(d.lines)) {
         const from = d.from_seq ?? seqRef.current + 1;
-        if (from > seqRef.current) {
-          termRef.current?.writeLines(d.lines.map((m) => ({ msg: m })));
-          tallyIssues(d.lines);
-          seqRef.current = from - 1 + d.lines.length;
+        const expected = seqRef.current + 1;
+        if (from > expected) {
+          fillGap();
+          return;
         }
+        applyLines(from, d.lines);
       } else if (typeof d.status === 'string') {
         setStatus(d.status);
         onStatusChangeRef.current?.(d.status);
       }
     },
   });
+
+  // Reconnect: after an earlier connected session, refill any missed lines.
+  useEffect(() => {
+    if (!termReady) return;
+    if (connectionStatus === 'connected') {
+      if (everConnectedRef.current) {
+        fillGap();
+      }
+      everConnectedRef.current = true;
+    }
+  }, [connectionStatus, termReady, fillGap]);
 
   return (
     <div className={cn('overflow-hidden rounded-lg', PANEL.root)} data-testid="live-console">
