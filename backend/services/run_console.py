@@ -41,6 +41,57 @@ class RunKeyBusyError(RunConsoleError):
 
 _TERMINAL_STATUSES = {"SUCCESS", "FAILED", "CANCELED"}
 
+# #1115：组级收敛判据与 #1003（pipeline_engine）同型 —— 「父进程已退出」不代表
+# 「进程组已散」，组里忽略 SIGTERM 的子孙必须升级到 SIGKILL，否则界面已 CANCELED
+# 而后代仍在跑，且它们握着 stdout 管道写端，reader 线程也永远等不到 EOF。
+
+
+def _process_group_alive(pgid: int) -> bool:
+    """进程组内是否还有存活成员（signal 0 探测）。
+
+    ESRCH = 整组已散；其余（含探测本身失败）按「仍在」处理 —— 宁可多收敛一次。
+    """
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True
+    return True
+
+
+def _await_group_exit(proc: subprocess.Popen, pgid: int, timeout: float) -> bool:
+    """等到「父已回收 且 整组已散」；返回是否收敛。
+
+    循环里的 poll() 顺带回收僵尸父进程 —— 否则父的僵尸项本身会让 killpg(0)
+    一直成功，探不到真实残留。
+    """
+    import time
+
+    deadline = _monotonic() + max(timeout, 0.0)
+    while True:
+        if proc.poll() is not None and not _process_group_alive(pgid):
+            return True
+        if _monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _resolve_pgid(proc: subprocess.Popen) -> Optional[int]:
+    """趁父进程还活着现取进程组身份。
+
+    父进程一旦被回收，os.getpgid 就 ESRCH（pid 还可能被复用）—— 拿不到就返回
+    None（宁可退化为单进程 kill，也不用可能已复用的 pgid 去打陌生进程组）。
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return None
+    except Exception:
+        logger.exception("run_console_getpgid_failed pid=%s", getattr(proc, "pid", None))
+        return None
+    return pgid if isinstance(pgid, int) else None
+
 
 @dataclass
 class ConsoleRun:
@@ -57,6 +108,9 @@ class ConsoleRun:
     _proc: Optional[subprocess.Popen] = None
     _log_path: Optional[Path] = None
     _thread: Optional[threading.Thread] = None
+    # #1115：spawn 时刻留存的进程组身份（POSIX）—— 父被回收后 getpgid 会 ESRCH，
+    # 而 cancel 恰恰要处理「父已退出、子孙还活着」的情形。
+    _pgid: Optional[int] = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def to_status(self) -> Dict[str, Any]:
@@ -229,6 +283,13 @@ class RunConsole:
             raise RunConsoleError(f"spawn failed: {exc}") from exc
 
         run._proc = proc
+        if os.name != "nt":
+            # #1115：组身份必须在任何 wait/poll 之前留存 —— 父被回收后
+            # os.getpgid 就查不到了，而 cancel 要处理的正是「父已退出」的情形。
+            try:
+                run._pgid = os.getpgid(proc.pid)
+            except Exception:
+                logger.exception("run_console_pgid_capture_failed run_id=%s", run_id)
         thread = threading.Thread(
             target=self._reader_loop, args=(run,), name=f"run-console-{run_id}", daemon=True,
         )
@@ -246,15 +307,16 @@ class RunConsole:
         proc = run._proc
         assert proc is not None and run._log_path is not None
         buf: List[str] = []
-        last_flush = _monotonic()
+        buf_lock = threading.Lock()
+        stop_timer = threading.Event()
 
         def flush() -> None:
-            nonlocal buf, last_flush
-            if not buf:
-                return
-            lines = buf
-            buf = []
-            last_flush = _monotonic()
+            nonlocal buf
+            with buf_lock:
+                if not buf:
+                    return
+                lines = buf
+                buf = []
             with run._lock:
                 start_seq = run.seq + 1
                 run.seq += len(lines)
@@ -272,16 +334,32 @@ class RunConsole:
                 room,
             )
 
+        def timed_flush() -> None:
+            # #1118: flush on wall-clock interval even when stdout is quiet
+            # (reader blocked on the next readline).
+            while not stop_timer.wait(self._FLUSH_MAX_INTERVAL):
+                flush()
+
+        timer = threading.Thread(
+            target=timed_flush,
+            name=f"run-console-flush-{run.run_id}",
+            daemon=True,
+        )
+        timer.start()
         try:
             for line in proc.stdout:  # type: ignore[union-attr]
-                buf.append(line)
-                if len(buf) >= self._FLUSH_MAX_LINES or (_monotonic() - last_flush) >= self._FLUSH_MAX_INTERVAL:
+                with buf_lock:
+                    buf.append(line)
+                    should_flush = len(buf) >= self._FLUSH_MAX_LINES
+                if should_flush:
                     flush()
             flush()
             proc.wait()
         except Exception:
             logger.exception("run_console_reader_failed run_id=%s", run.run_id)
         finally:
+            stop_timer.set()
+            timer.join(timeout=self._FLUSH_MAX_INTERVAL + 1.0)
             try:
                 flush()
             except Exception:
@@ -328,26 +406,50 @@ class RunConsole:
                 return False
             run.status = "CANCELED"
         proc = run._proc
+        # #1115：组身份优先用 spawn 时留存的；现取只是兜底（父可能已被 reader 回收）
+        pgid = run._pgid if isinstance(run._pgid, int) else _resolve_pgid(proc)
         try:
             if os.name == "nt":
                 proc.terminate()  # NEW_PROCESS_GROUP 下 terminate 即对组生效
+            elif pgid is None:
+                # 拿不到可信 pgid（父已回收且无留存）—— 退化为单进程 kill，
+                # 绝不用可能已复用的 pgid 去打陌生进程组
+                proc.terminate()
+                try:
+                    proc.wait(timeout=self._cancel_grace)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
             else:
                 import signal as _signal
                 try:
-                    os.killpg(os.getpgid(proc.pid), _signal.SIGTERM)
+                    os.killpg(pgid, _signal.SIGTERM)
+                except ProcessLookupError:
+                    pgid = None  # 整组已散，无需收敛
                 except Exception:
+                    logger.exception("run_console_killpg_sigterm_failed run_id=%s pgid=%s", run_id, pgid)
                     proc.terminate()
-            try:
-                proc.wait(timeout=self._cancel_grace)
-            except subprocess.TimeoutExpired:
-                if os.name != "nt":
-                    import signal as _signal
+                if pgid is not None and not _await_group_exit(
+                    proc, pgid, self._cancel_grace,
+                ):
+                    # 父退出 ≠ 整组退出：忽略 SIGTERM 的子孙必须升级 SIGKILL，
+                    # 否则界面已 CANCELED 而后代仍在跑（且握着 stdout 写端，
+                    # reader 线程等不到 EOF，run_key 也释放不了）
+                    logger.warning(
+                        "run_console_group_alive_after_sigterm run_id=%s pgid=%s", run_id, pgid,
+                    )
                     try:
-                        os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+                        os.killpg(pgid, _signal.SIGKILL)
+                    except ProcessLookupError:
+                        pgid = None
                     except Exception:
+                        logger.exception("run_console_killpg_sigkill_failed run_id=%s pgid=%s", run_id, pgid)
                         proc.kill()
-                else:
-                    proc.kill()
+                    if pgid is not None and not _await_group_exit(
+                        proc, pgid, self._cancel_grace,
+                    ):
+                        logger.error(
+                            "run_console_group_alive_after_sigkill run_id=%s pgid=%s", run_id, pgid,
+                        )
         except Exception:
             logger.exception("run_console_cancel_failed run_id=%s", run_id)
         # 等 reader 线程跑完 _finalize（释放 run_key + 写终态），使 cancel() 返回时

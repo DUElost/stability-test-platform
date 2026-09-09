@@ -815,6 +815,51 @@ def should_trigger_dedup(run_status: str) -> bool:
     return run_status in _DEDUP_AUTO_STATUSES
 
 
+def resolve_manual_merge_round(
+    plan_run_id: int,
+) -> tuple[str | None, datetime | None]:
+    """#1077: derive a round filter for manual merge — never unconstrained history.
+
+    Prefer the latest non-null ``scan_round_id`` among scan artifacts. If none
+    are stamped (legacy), use ``min(created_at)`` of registered scan rows as
+    ``round_started_at`` so ``_load_org_files_for_merge`` still has a floor.
+    """
+    from backend.core.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(PlanRunArtifact).where(
+                PlanRunArtifact.plan_run_id == plan_run_id,
+                PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
+            )
+        ).scalars().all()
+        if not rows:
+            return None, None
+        stamped = [r for r in rows if r.scan_round_id]
+        if stamped:
+            latest = max(
+                stamped,
+                key=lambda r: (r.created_at is not None, r.created_at or datetime.min),
+            )
+            floor = latest.created_at
+            try:
+                floor = datetime.fromisoformat(
+                    str(latest.scan_round_id).replace("Z", "+00:00"),
+                )
+            except ValueError:
+                # Non-ISO round ids still work via exact scan_round_id match;
+                # created_at is only a legacy floor for unstamped siblings.
+                pass
+            return str(latest.scan_round_id), floor
+        times = [r.created_at for r in rows if r.created_at is not None]
+        if not times:
+            return None, None
+        return None, min(times)
+    finally:
+        db.close()
+
+
 async def enqueue_dedup_terminal_async(plan_run_id: int, *, is_final: bool = True) -> None:
     """异步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。"""
     try:

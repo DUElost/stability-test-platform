@@ -412,18 +412,15 @@ async def trigger_scan(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """手动触发/重跑 scan：向各 ONLINE agent 下发 scan_now SocketIO 指令。
+    """手动触发/重跑 scan：enqueue 统一 ``scan_task`` 轮次编排（#1077）。
 
-    设备名单是整个 PlanRun（可跨多 host）；每台 Agent 用同一份 serial 列表
-    扫本地 HDD，Merge 再汇总。终态自动触发走 SAQ scan_task，本端点用于手动重跑。
+    不再仅 emit ``scan_now``（那不会登记产物/后继链）。SAQ ``scan_task`` 负责
+    下发、轮询登记、upload/merge。本端点仍返回目标 host 预览供 UI。
     """
     from backend.models.job import JobInstance
     from backend.models.plan_run import PlanRun
-    from backend.realtime.socketio_server import emit_agent_control
-    from backend.services.plan_run_scan_scope import (
-        build_scan_now_payload,
-        iter_plan_run_scan_hosts,
-    )
+    from backend.services.dedup_scan import enqueue_dedup_terminal_async
+    from backend.services.plan_run_scan_scope import iter_plan_run_scan_hosts
 
     pr = db.get(PlanRun, run_id)
     if pr is None:
@@ -445,16 +442,18 @@ async def trigger_scan(
     skipped: list[dict] = []
     for host_id, host_status in host_rows:
         if host_status == "ONLINE":
-            await emit_agent_control(
-                host_id, "scan_now",
-                payload=build_scan_now_payload(db, run_id, host_id, is_final=is_final),
-            )
             triggered.append(host_id)
         else:
             skipped.append({"host_id": host_id, "status": host_status})
 
+    if not triggered:
+        raise HTTPException(status_code=409, detail="no ONLINE hosts to scan")
+
+    await enqueue_dedup_terminal_async(run_id, is_final=is_final)
     return ok({
         "plan_run_id": run_id,
+        "enqueued": "scan_task",
+        "is_final": is_final,
         "triggered_hosts": triggered,
         "skipped_offline": skipped,
     })
@@ -556,7 +555,7 @@ async def trigger_merge(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """手动触发集中合并（-merge_files 各 agent _org.xls）。"""
+    """手动触发集中合并（按平台；带轮次过滤，#1077）。"""
     from backend.models.enums import PlanRunStatus
     from backend.models.plan_run import PlanRun
 
@@ -579,17 +578,40 @@ async def trigger_merge(
     if not scan_rows:
         raise HTTPException(status_code=409, detail="no scan result available, run scan first")
 
-    from backend.services.dedup_scan import resolve_scan_tool, run_merge_sync
+    from backend.services.dedup_scan import (
+        resolve_manual_merge_round,
+        resolve_scan_tool,
+        run_merge_all_platforms_sync,
+    )
 
     tool = resolve_scan_tool()
     if tool is None:
         raise HTTPException(status_code=503, detail="scan tool not configured")
 
+    scan_round_id, round_started_at = resolve_manual_merge_round(run_id)
+    if scan_round_id is None and round_started_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail="no merge round available (scan artifacts lack timestamps)",
+        )
+
     import asyncio
-    result = await asyncio.to_thread(run_merge_sync, run_id)
+    result = await asyncio.to_thread(
+        run_merge_all_platforms_sync,
+        run_id,
+        scan_round_id=scan_round_id,
+        round_started_at=round_started_at,
+    )
     if not result:
         raise HTTPException(status_code=500, detail="merge failed (no _org.xls?)")
-    return ok({"status": "ok", "plan_run_id": run_id})
+    return ok({
+        "status": "ok",
+        "plan_run_id": run_id,
+        "scan_round_id": scan_round_id,
+        "round_started_at": (
+            round_started_at.isoformat() if round_started_at is not None else None
+        ),
+    })
 
 
 @scan_router.post("/{run_id}/dedup/extract", response_model=ApiResponse[dict])
