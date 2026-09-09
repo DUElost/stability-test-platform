@@ -31,6 +31,13 @@ update_branch_tolerant() {
     echo "update-branch on #${num} lost the head-sha race; another run already updated it."
     return 0
   fi
+  # 真冲突（#906 实测）：与 main 冲突的 PR 无法 update-branch，属可处置状态而非
+  # 本 job 故障；显式识别并绿退，避免每轮 reconcile 红 X（详见
+  # pr-automerge-queue.sh 同段注释）。
+  if printf '%s' "$out" | grep -qiE "cannot update pr branch due to conflicts"; then
+    echo "PR #${num} has merge conflicts with main; skip until resolved manually."
+    return 0
+  fi
   # 按 PR 状态判定而非再堆一条报错文案匹配：合入与 update-branch 的竞态
   # 不只有一种报错形态，而「PR 已不在 open 态」是唯一稳定的判据。
   state="$(gh pr view "$num" --repo "$REPO" --json state --jq .state 2>/dev/null || echo UNKNOWN)"
