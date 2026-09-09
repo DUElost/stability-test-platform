@@ -27,6 +27,7 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 | Antigravity CLI | 无（实测不自动发现仓库规则文件） | **不承接 Requirement/Execution**（2026-09-07 定性：带规则的高级顾问——问答/分析/评审）；规则经 `tools/dev/agy_with_rules.sh` 前置 |
 | Zcode（3.11.2，GUI） | `AGENTS.md`（仓库根注入=本会话实证；子目录**只装载 workspace 的 AGENTS.md**，根不注入——2026-09-07 人工探针） | 共享约定入口；Registry CLI 与 P2 动作表全程可用（三单 dogfood 即 Zcode 会话） |
 | CodeBuddy（2.143.1） | `AGENTS.md`（根+嵌套均自动装载——2026-09-07 探针：子目录 cwd 根+scoped 双边可见、单份加载） | 共享约定入口；`codebuddy -p` 非交互可用、零配置；Registry CLI 与 P2 动作表全程可用 |
+| dsh web（0.1.1-rc.2，DeepSeek Harness 浏览器 UI） | `AGENTS.md`（根级基线注入 ✅；scoped 触碰后动态注入 ✅——2026-09-08 探针，形态详见 ADR-0034 附录 A v1.10） | 共享约定入口；工作区经原生目录选择器注册（GUI 无脚本通道）；Registry CLI 未 dogfood |
 | 其他 Harness | `AGENTS.md` | 没有专用适配时，从共享约定和文档地图进入 |
 
 Harness 的自动发现规则会随版本变化。新增专用适配前必须用对应版本实测加载行为；
@@ -89,10 +90,9 @@ Execution 串行修改。并行执行语义的权威源是
 | 编码停止 | `finish --id <R> --pr <N>` / `finish --id <R> --abandon` | 语义见契约 §3.3 transition table |
 | 文档/评审类会话（改 docs/reviews、issue 评论、PR 评审） | 同样 declare（scope=将产出的 docs/reviews 或 issue 意图目录） | 批次首单实战教训：纯评审会话不 declare 即「两头不可见」——diff 未产生时派生视图无信号，GitHub 只见产出不见意图；谁在评审什么也是审计面的一部分 |
 
-- `whoami`/`status` 严格只读（观察不改变被观察状态）；只有带 identity 的写命令
-  （declare/update/finish）刷新自身 `last_seen`；
+- `whoami`/`status` 严格只读（观察不改变被观察状态）；只有带 identity 的写命令（declare/update/finish）刷新自身 `last_seen`；
 - 各 Harness 的自动加载差异（Codex/Cursor/OpenCode 读 scoped `AGENTS.md`；
-  Claude 经 `CLAUDE.md` symlink 薄壳）见本文件上方适配面表与 ADR 附录 A；
+  Claude 经 `CLAUDE.md` symlink 薄壳；dsh web 根级基线+scoped 触碰动态）见上方表与 ADR 附录 A；
 - **#857 已绕过并关闭（2026-09-08）**：根 `CLAUDE.md` 转 `AGENTS.md`
   symlink（G2 上移到根）——@import 通道消失，子目录会话经 ancestor 加载
   直读完整契约（实测 `claude -p` 复述硬不变量 ✓）；`claude_with_root.sh`
