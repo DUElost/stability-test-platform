@@ -154,6 +154,9 @@ async def send_notification_task(
     Runs synchronously inside the async task because the underlying
     ``dispatch_notification`` opens its own DB session and makes blocking
     HTTP calls — acceptable for a worker thread.
+
+    Channel delivery failures raise ``NotificationDeliveryError`` (#1117) so
+    SAQ retries; successful channels are skipped on retry via log context.
     """
     from backend.services.notification_service import dispatch_notification
 

@@ -30,6 +30,25 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", "")
 
 
+class NotificationDeliveryError(RuntimeError):
+    """One or more notification channels failed (#1117).
+
+    Raised so SAQ ``send_notification_task`` can retry. ``succeeded`` /
+    ``failed`` carry channel ids for observability and idempotent resend.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        succeeded: list[int] | None = None,
+        failed: list[dict[str, Any]] | None = None,
+    ):
+        super().__init__(message)
+        self.succeeded = list(succeeded or [])
+        self.failed = list(failed or [])
+
+
 def _format_message(event_type: str, context: Dict[str, Any]) -> str:
     """Format a human-readable notification message."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -135,6 +154,34 @@ def _send_dingtalk(url: str, secret: str, message: str) -> None:
 
     resp = requests.post(url, json=payload, headers=headers, timeout=10)
     resp.raise_for_status()
+    _raise_if_dingtalk_business_error(resp)
+
+
+def _raise_if_dingtalk_business_error(resp: requests.Response) -> None:
+    """#1120: DingTalk returns HTTP 200 with ``errcode != 0`` on business failure.
+
+    Treat any non-zero errcode as a delivery error so callers (SAQ / test
+    channel) do not report success.
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        # Non-JSON body with 2xx: nothing further to validate.
+        return
+    if not isinstance(body, dict):
+        return
+    errcode = body.get("errcode", 0)
+    try:
+        code_int = int(errcode) if errcode is not None else 0
+    except (TypeError, ValueError):
+        raise RuntimeError(
+            f"DingTalk API error: invalid errcode={errcode!r} body={body!r}"
+        ) from None
+    if code_int != 0:
+        errmsg = body.get("errmsg", "unknown")
+        raise RuntimeError(
+            f"DingTalk API error errcode={code_int} errmsg={errmsg}"
+        )
 
 
 def _send_email(to: str, subject_prefix: str, message: str) -> None:
@@ -156,35 +203,97 @@ def _send_email(to: str, subject_prefix: str, message: str) -> None:
         server.sendmail(msg["From"], [to], msg.as_string())
 
 
+def _delivery_identity(event_type: str, context: Dict[str, Any]) -> tuple[Any, ...]:
+    """Stable identity for idempotent channel delivery across SAQ retries."""
+    return (
+        event_type,
+        context.get("run_id"),
+        context.get("task_id"),
+        context.get("device_serial"),
+    )
+
+
+def _load_prior_channel_delivery(
+    db, event_type: str, context: Dict[str, Any],
+) -> tuple[int | None, dict[str, Any]]:
+    """Return (log_id, channel_delivery) from the latest matching log, if any."""
+    run_id = context.get("run_id")
+    if run_id is None:
+        return None, {}
+    rows = (
+        db.query(NotificationLog)
+        .filter(NotificationLog.event_type == event_type)
+        .order_by(NotificationLog.id.desc())
+        .limit(30)
+        .all()
+    )
+    identity = _delivery_identity(event_type, context)
+    for log in rows:
+        ctx = log.context if isinstance(log.context, dict) else {}
+        if _delivery_identity(event_type, ctx) != identity:
+            continue
+        delivery = ctx.get("channel_delivery")
+        if isinstance(delivery, dict):
+            return log.id, dict(delivery)
+        return log.id, {}
+    return None, {}
+
+
+def _persist_channel_delivery(log_id: int, delivery: dict[str, Any]) -> None:
+    with SessionLocal() as db:
+        log = db.get(NotificationLog, log_id)
+        if log is None:
+            return
+        ctx = dict(log.context or {}) if isinstance(log.context, dict) else {}
+        ctx["channel_delivery"] = delivery
+        log.context = ctx
+        db.commit()
+
+
 def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
     """
     Dispatch notifications for an event. Opens its own DB session.
-    Safe to call from any thread.
+
+    Channel send failures raise ``NotificationDeliveryError`` so SAQ can retry
+    (#1117). Already-successful channels (recorded on NotificationLog.context
+    ``channel_delivery``) are skipped on retry.
     """
+    message = _format_message(event_type, context)
+    severity = NotificationSeverity.WARNING if event_type in (
+        EventType.RUN_FAILED.value, EventType.DEVICE_OFFLINE.value, EventType.RISK_HIGH.value,
+    ) else NotificationSeverity.INFO
+
     try:
-        message = _format_message(event_type, context)
-        severity = NotificationSeverity.WARNING if event_type in (
-            EventType.RUN_FAILED.value, EventType.DEVICE_OFFLINE.value, EventType.RISK_HIGH.value,
-        ) else NotificationSeverity.INFO
-
         with SessionLocal() as db:
-            log = NotificationLog(
-                source=NotificationSource.PLATFORM,
-                event_type=event_type,
-                severity=severity,
-                title=event_type.replace("_", " ").title(),
-                message=message,
-                context=context,
+            prior_log_id, prior_delivery = _load_prior_channel_delivery(
+                db, event_type, context,
             )
-            db.add(log)
-            db.commit()
-            db.refresh(log)
-            log_id = log.id
-            log_created = log.created_at.isoformat() if log.created_at else None
+            if prior_log_id is not None:
+                log_id = prior_log_id
+                log = db.get(NotificationLog, log_id)
+                log_created = (
+                    log.created_at.isoformat()
+                    if log is not None and log.created_at
+                    else None
+                )
+                # Keep in-app log once; only re-emit on first create.
+                emit_new = False
+            else:
+                log = NotificationLog(
+                    source=NotificationSource.PLATFORM,
+                    event_type=event_type,
+                    severity=severity,
+                    title=event_type.replace("_", " ").title(),
+                    message=message,
+                    context=dict(context or {}),
+                )
+                db.add(log)
+                db.commit()
+                db.refresh(log)
+                log_id = log.id
+                log_created = log.created_at.isoformat() if log.created_at else None
+                emit_new = True
 
-        _emit_notification_socketio(log_id, NotificationSource.PLATFORM.value, event_type, severity.value, event_type.replace("_", " ").title(), message, log_created)
-
-        with SessionLocal() as db:
             rules = (
                 db.query(AlertRule)
                 .options(joinedload(AlertRule.channel))
@@ -192,20 +301,13 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
                 .all()
             )
 
-            if not rules:
-                return
-
             pending_dispatches = []
-
             for rule in rules:
                 if not _matches_filters(rule.filters or {}, context):
                     continue
-
                 channel = rule.channel
                 if not channel or not channel.enabled:
                     continue
-
-                # 先把发送所需字段复制出来，再释放数据库连接。
                 pending_dispatches.append(
                     {
                         "rule_id": rule.id,
@@ -214,42 +316,101 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
                         "channel_config": dict(channel.config or {}),
                     }
                 )
-
-        for dispatch in pending_dispatches:
-            channel = NotificationChannel(
-                id=dispatch["channel_id"],
-                type=dispatch["channel_type"],
-                config=dispatch["channel_config"],
-                enabled=True,
-            )
-
-            try:
-                send_to_channel(channel, message)
-                logger.info(
-                    "notification_sent",
-                    extra={
-                        "rule_id": dispatch["rule_id"],
-                        "channel_id": dispatch["channel_id"],
-                        "event_type": event_type,
-                    },
-                )
-            except Exception as exc:
-                logger.warning(
-                    "notification_send_failed",
-                    extra={
-                        "rule_id": dispatch["rule_id"],
-                        "channel_id": dispatch["channel_id"],
-                        "error": str(exc),
-                    },
-                )
     except Exception:
         logger.exception("dispatch_notification_failed", extra={"event_type": event_type})
+        raise
+
+    if emit_new:
+        _emit_notification_socketio(
+            log_id,
+            NotificationSource.PLATFORM.value,
+            event_type,
+            severity.value,
+            event_type.replace("_", " ").title(),
+            message,
+            log_created,
+        )
+
+    if not pending_dispatches:
+        return
+
+    delivery: dict[str, Any] = dict(prior_delivery)
+    succeeded: list[int] = []
+    failed: list[dict[str, Any]] = []
+
+    for dispatch in pending_dispatches:
+        channel_id = int(dispatch["channel_id"])
+        ch_key = str(channel_id)
+        prior = delivery.get(ch_key)
+        if isinstance(prior, dict) and prior.get("status") == "ok":
+            succeeded.append(channel_id)
+            continue
+
+        channel = NotificationChannel(
+            id=channel_id,
+            type=dispatch["channel_type"],
+            config=dispatch["channel_config"],
+            enabled=True,
+        )
+        try:
+            send_to_channel(channel, message)
+            delivery[ch_key] = {"status": "ok"}
+            succeeded.append(channel_id)
+            logger.info(
+                "notification_sent",
+                extra={
+                    "rule_id": dispatch["rule_id"],
+                    "channel_id": channel_id,
+                    "event_type": event_type,
+                },
+            )
+        except Exception as exc:
+            delivery[ch_key] = {"status": "failed", "error": str(exc)}
+            failed.append({
+                "rule_id": dispatch["rule_id"],
+                "channel_id": channel_id,
+                "error": str(exc),
+            })
+            logger.warning(
+                "notification_send_failed",
+                extra={
+                    "rule_id": dispatch["rule_id"],
+                    "channel_id": channel_id,
+                    "error": str(exc),
+                },
+            )
+
+    try:
+        _persist_channel_delivery(log_id, delivery)
+    except Exception:
+        logger.exception(
+            "notification_delivery_persist_failed",
+            extra={"log_id": log_id, "event_type": event_type},
+        )
+
+    if failed:
+        raise NotificationDeliveryError(
+            f"notification channel delivery failed for {len(failed)} channel(s)",
+            succeeded=succeeded,
+            failed=failed,
+        )
 
 
 def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> None:
     """Fire-and-forget wrapper — submits to bounded thread pool."""
     from backend.core.thread_pool import submit as pool_submit
-    pool_submit(dispatch_notification, event_type, context)
+
+    def _safe() -> None:
+        try:
+            dispatch_notification(event_type, context)
+        except Exception:
+            # Thread-pool callers have no SAQ retry; keep best-effort semantics.
+            logger.exception(
+                "dispatch_notification_async_failed",
+                extra={"event_type": event_type},
+            )
+
+    pool_submit(_safe)
 
 
 def _emit_notification_socketio(
