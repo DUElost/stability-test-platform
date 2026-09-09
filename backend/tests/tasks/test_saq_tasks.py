@@ -1,6 +1,7 @@
 """Tests for SAQ task functions and worker lifecycle."""
 
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -491,3 +492,89 @@ async def test_merge_task_mark_timeout_sets_ready_false_despite_pending_zero(mon
     assert written["value"]["compensation"] == "best_effort_extract"
     assert written["value"]["local"] == 2
     saq_tasks._enqueue_extract_task.assert_awaited_once_with(42)
+
+
+# ---------------------------------------------------------------------------
+# #1123：SAQ 超时后的线程残留互斥（_run_sync_exclusive）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_exclusive_runs_fn_and_releases(monkeypatch):
+    """无冲突时正常执行并返回结果；结束释放互斥。"""
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_SAQ_SYNC_OVERLAP_WAIT_SECONDS", "2")
+
+    def work(value):
+        return value * 2
+
+    assert await saq_tasks._run_sync_exclusive(
+        "k1", work, 21, what="t", plan_run_id=1,
+    ) == 42
+    assert not saq_tasks._SYNC_OVERLAP_GUARDS._busy
+
+
+@pytest.mark.asyncio
+async def test_sync_exclusive_blocks_overlapping_retry(monkeypatch):
+    """上一轮线程残留（线程内 sleep）时重试等待，超预算报错而不是叠上去。"""
+    import threading
+
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_SAQ_SYNC_OVERLAP_WAIT_SECONDS", "1")
+    release = threading.Event()
+
+    def slow_work():
+        release.wait(timeout=5)
+        return "done"
+
+    # 模拟残留线程：绕过 helper 直接占住 key（SAQ 超时后线程仍在跑的等价态）
+    assert saq_tasks._SYNC_OVERLAP_GUARDS.try_begin("merge:42")
+    try:
+        with pytest.raises(RuntimeError, match="saq_sync_overlap_timeout"):
+            await saq_tasks._run_sync_exclusive(
+                "merge:42", slow_work, what="merge", plan_run_id=42,
+            )
+    finally:
+        saq_tasks._SYNC_OVERLAP_GUARDS.end("merge:42")
+        release.set()
+
+
+@pytest.mark.asyncio
+async def test_sync_exclusive_waits_then_runs_after_previous_finishes(monkeypatch):
+    """上一轮很快结束后，等待中的重试正常执行（互斥不丢工作）。"""
+    import threading
+
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_SAQ_SYNC_OVERLAP_WAIT_SECONDS", "5")
+
+    def previous():
+        time.sleep(0.3)
+        saq_tasks._SYNC_OVERLAP_GUARDS.end("extract:7")
+        return "prev"
+
+    threading.Thread(target=previous, daemon=True).start()
+    result = await saq_tasks._run_sync_exclusive(
+        "extract:7", lambda: "retry", what="extract", plan_run_id=7,
+    )
+    assert result == "retry"
+
+
+@pytest.mark.asyncio
+async def test_sync_exclusive_releases_on_fn_exception(monkeypatch):
+    """fn 抛异常也必须释放互斥——否则后续重试永久阻塞到超预算。"""
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_SAQ_SYNC_OVERLAP_WAIT_SECONDS", "2")
+
+    def boom():
+        raise ValueError("copy failed")
+
+    with pytest.raises(ValueError, match="copy failed"):
+        await saq_tasks._run_sync_exclusive("k9", boom, what="t", plan_run_id=9)
+    assert not saq_tasks._SYNC_OVERLAP_GUARDS._busy
+
+    # 释放后可立即再次执行
+    assert await saq_tasks._run_sync_exclusive("k9", lambda: "ok") == "ok"
