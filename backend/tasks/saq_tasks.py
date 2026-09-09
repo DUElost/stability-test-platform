@@ -154,6 +154,9 @@ async def send_notification_task(
     Runs synchronously inside the async task because the underlying
     ``dispatch_notification`` opens its own DB session and makes blocking
     HTTP calls — acceptable for a worker thread.
+
+    Channel delivery failures raise ``NotificationDeliveryError`` (#1117) so
+    SAQ retries; successful channels are skipped on retry via log context.
     """
     from backend.services.notification_service import dispatch_notification
 
@@ -526,9 +529,11 @@ async def _wait_for_upload_mark(plan_run_id: int, scan_round_id: str | None) -> 
     """#381: 等 upload_task 写入本轮 ``run_context.upload_mark`` 水位线。
 
     SAQ worker 并发 10，merge_task 可能先于 upload_task 的标记 UPDATE 到达；
-    不等水位线的话 ``pending == 0`` 是「还没标」的假就绪 → 空 extract 的
-    SUCCESS 空报表。超时则放行（best-effort，与链路既有取舍一致），
-    缺口由 run_context.upload_summary 显性化。
+    不等水位线的话 ``pending == 0`` 是「还没标」的假就绪（事件仍在 LOCAL，
+    不计入 pending）→ 空 extract 的 SUCCESS 空报表。
+
+    返回 False 表示本轮标记未确认（超时或读库失败）。调用方仍可 best-effort
+    继续 merge/extract，但不得把 ``upload_summary.ready`` 写成 true（#1079）。
     """
     if scan_round_id is None:
         # 无 round 作用域（旧触发路径/测试）——没有可匹配的水位线，直接放行。
@@ -668,25 +673,38 @@ async def merge_task(
         )
         return
 
-    # #381: 先等本轮标记水位线，再判定 pending——否则标记前的 pending==0
-    # 会让 merge 立即放行（空 extract 的 SUCCESS 空报表）。
-    if not await _wait_for_upload_mark(plan_run_id, scan_round_id):
+    # #381 / #1079: 先等本轮标记水位线，再判定 pending——否则标记前的
+    # pending==0（LOCAL 不计入 pending）会让 ready 假阳。
+    mark_ready = await _wait_for_upload_mark(plan_run_id, scan_round_id)
+    if not mark_ready:
         logger.warning(
-            "saq_merge_upload_mark_timeout plan_run=%d round=%s — proceeding best-effort",
+            "saq_merge_upload_mark_timeout plan_run=%d round=%s — "
+            "continuing best-effort but ready=false",
             plan_run_id, scan_round_id,
         )
 
-    upload_ready = await _wait_for_remote_device_log_events(plan_run_id)
-    if not upload_ready:
+    events_ready = await _wait_for_remote_device_log_events(plan_run_id)
+    if not events_ready:
         logger.warning(
             "saq_merge_extract_best_effort plan_run=%d reason=upload_not_ready",
             plan_run_id,
         )
 
+    # 就绪 = 本轮标记已确认 且 无 in-flight 上送。标记超时不得 ready=true。
+    upload_ready = mark_ready and events_ready
+
     # 无论是否等齐，都把上送进度落到 run_context（#300 P3-2）：
-    # 缺口（pending/failed/LOCAL）在汇总页可见，不再只能翻日志。
+    # 缺口（pending/failed/LOCAL/mark_timeout）在汇总页可见，不再只能翻日志。
     upload_summary = await asyncio_to_thread(_summarize_upload_sync, plan_run_id)
     upload_summary["ready"] = upload_ready
+    upload_summary["mark_ready"] = mark_ready
+    upload_summary["events_ready"] = events_ready
+    if not mark_ready:
+        upload_summary["incomplete_reason"] = "upload_mark_timeout"
+        upload_summary["compensation"] = "best_effort_extract"
+    elif not events_ready:
+        upload_summary["incomplete_reason"] = "upload_events_pending"
+        upload_summary["compensation"] = "best_effort_extract"
     await asyncio_to_thread(
         _write_run_context_sync,
         plan_run_id,

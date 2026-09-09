@@ -74,8 +74,15 @@ if current == ARGV[1] then
 end
 return 0
 """
-_CAS_EXPIRE_LUA = """
+# #1113: missing key + live renew → rebuild; matching → expire; foreign → 0.
+# Marker ``RENEW_OR_REBUILD`` keeps fakes from confusing this with plain EXPIRE.
+_CAS_RENEW_OR_REBUILD_LUA = """
+-- RENEW_OR_REBUILD
 local current = redis.call("GET", KEYS[1])
+if (not current) then
+  redis.call("SET", KEYS[1], ARGV[1], "EX", tonumber(ARGV[2]))
+  return 1
+end
 if current == ARGV[1] then
   return redis.call("EXPIRE", KEYS[1], ARGV[2])
 end
@@ -126,12 +133,16 @@ async def register_agent_owner(host_id: str, sid: str) -> None:
 
 
 async def renew_agent_owner(host_id: str, sid: str) -> bool:
-    """Renew the TTL for an *active* connection owned by this process (#881).
+    """Renew TTL for an active local connection, or rebuild if the key is gone.
 
     Called from the owner process on live-connection signals (Agent heartbeat).
-    Only renews when the registered payload still matches ``sid`` **and** this
-    process — never resurrects a key that has been re-registered elsewhere or
-    already expired. Returns ``True`` when a renewal happened.
+
+    - Matching payload → ``EXPIRE`` (#881 / #887 CAS).
+    - Missing key → ``SET`` this process's payload (#1113: Redis loss / TTL
+      expiry while the Socket.IO connection is still alive).
+    - Foreign payload → no-op (never overwrite another owner).
+
+    Returns ``True`` when a renewal or rebuild happened.
     """
     if not agent_sid_registry_enabled():
         return False
@@ -141,7 +152,7 @@ async def renew_agent_owner(host_id: str, sid: str) -> bool:
     key = owner_key(str(host_id))
     try:
         result = await client.eval(
-            _CAS_EXPIRE_LUA,
+            _CAS_RENEW_OR_REBUILD_LUA,
             1,
             key,
             _owner_payload(str(host_id), sid),
