@@ -11,6 +11,16 @@ from backend.services.host_updater import (
 )
 
 
+def test_remote_tar_path_is_unique_per_operation():
+    """#960：并发热更新不能共用固定远端 tar 路径。"""
+    from backend.services.host_updater import _remote_tar_path
+
+    first, second = _remote_tar_path(), _remote_tar_path()
+    assert first != second
+    assert first.startswith("/tmp/stp-agent-update-")
+    assert first.endswith(".tar.gz")
+
+
 def test_build_remote_script_disables_agent_secret_sync_by_default():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",

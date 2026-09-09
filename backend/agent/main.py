@@ -210,6 +210,48 @@ def _cleanup_after_job_exit(
             )
 
 
+def _rollback_failed_claim(
+    *,
+    jid: int,
+    fencing_token: str,
+    local_worker_token: str,
+    device_id: Optional[int],
+    active_jobs_lock: Any,
+    active_job_ids: Set[int],
+    active_device_ids: Set[int],
+    active_job_tokens: Dict[int, str],
+    lease_renewer: Any,
+    local_db: Any,
+) -> None:
+    """R07-F13 (#1013): compensate a claim whose local SQLite registration failed
+    mid-way (device placeholder already pre-allocated, fencing token possibly
+    set). Roll back only what this attempt claimed so the device is not poisoned
+    and the same pending batch can keep going; the next tick / recovery re-claims
+    anything the server still sees as pending."""
+    released_device: Optional[int] = None
+    try:
+        released_device = lease_renewer.clear_fencing_token_if_current(
+            jid,
+            fencing_token,
+            local_worker_token=local_worker_token,
+        )
+    except Exception:
+        logger.exception("rollback_fencing_clear_failed job=%d", jid)
+    with active_jobs_lock:
+        active_job_ids.discard(jid)
+        active_job_tokens.pop(jid, None)
+    own_device = released_device if released_device is not None else device_id
+    if own_device is not None:
+        with active_jobs_lock:
+            active_device_ids.discard(own_device)
+    # Registration never reached SQLite; drop any stray row so a claimed-but-
+    # never-started job is not treated as live by the next recovery pass.
+    try:
+        local_db.delete_active_job(jid)
+    except Exception:
+        logger.exception("rollback_delete_active_failed job=%d", jid)
+
+
 def trigger_recovery_sync_on_device_reconnect(
     *,
     reconnected_serials: List[str],
@@ -220,9 +262,15 @@ def trigger_recovery_sync_on_device_reconnect(
     boot_id: str,
     execute_actions: Any,
 ) -> bool:
-    """Device reconnect hook: re-run recovery sync when local active jobs still exist."""
+    """Device reconnect hook: re-run recovery sync when local active jobs still exist.
+
+    Returns True when recovery is settled (completed, or nothing to do) —
+    callers clear their reconnect marks; False when recovery was needed but
+    this attempt failed — callers must keep the marks so the next heartbeat
+    re-attempts without requiring another plug/unplug (#1009).
+    """
     if not reconnected_serials:
-        return False
+        return True
 
     persisted_jobs = local_db.get_active_jobs()
     if not persisted_jobs:
@@ -230,7 +278,7 @@ def trigger_recovery_sync_on_device_reconnect(
             "recovery_skip_reconnect_no_local_jobs serials=%s",
             ",".join(reconnected_serials),
         )
-        return False
+        return True
 
     matched_jobs = [
         job
@@ -243,7 +291,7 @@ def trigger_recovery_sync_on_device_reconnect(
             ",".join(reconnected_serials),
             len(persisted_jobs),
         )
-        return False
+        return True
 
     logger.info(
         "recovery_reconnect_triggered serials=%s matched_jobs=%d active_jobs=%d",
@@ -251,7 +299,7 @@ def trigger_recovery_sync_on_device_reconnect(
         len(matched_jobs),
         len(persisted_jobs),
     )
-    run_recovery_sync_if_needed(
+    return run_recovery_sync_if_needed(
         local_db=local_db,
         api_url=api_url,
         host_id=host_id,
@@ -260,7 +308,6 @@ def trigger_recovery_sync_on_device_reconnect(
         execute_actions=execute_actions,
         active_jobs=matched_jobs,
     )
-    return True
 
 
 def execute_recovery_actions_impl(
@@ -509,27 +556,37 @@ def run_recovery_sync_if_needed(
     boot_id: str,
     execute_actions: Any,
     active_jobs: Optional[List[dict]] = None,
-) -> None:
-    """ADR-0019 Phase 3a: check local persisted state and sync with Backend if needed."""
+) -> bool:
+    """ADR-0019 Phase 3a: check local persisted state and sync with Backend if needed.
+
+    Returns True when recovery state is settled (fully reconciled, or there
+    is nothing to reconcile); False when a transient failure left recovery
+    incomplete — callers must keep their retry state so a later heartbeat /
+    reconnect re-attempts (#1009).
+    """
     try:
         persisted_jobs = active_jobs if active_jobs is not None else local_db.get_active_jobs()
         pending_outbox = local_db.get_pending_outbox()
-        if persisted_jobs or pending_outbox:
-            resp = sync_recovery(
-                api_url, host_id, agent_instance_id, boot_id,
-                active_jobs=persisted_jobs,
-                pending_outbox=pending_outbox,
-            )
-            if resp is not None:
-                execute_actions(resp, {j["job_id"]: j for j in persisted_jobs})
-                logger.info(
-                    "recovery_sync_complete active_jobs=%d outbox=%d",
-                    len(persisted_jobs), len(pending_outbox),
-                )
-        else:
+        if not (persisted_jobs or pending_outbox):
             logger.info("recovery_skip_no_persisted_state")
+            return True
+        resp = sync_recovery(
+            api_url, host_id, agent_instance_id, boot_id,
+            active_jobs=persisted_jobs,
+            pending_outbox=pending_outbox,
+        )
+        if resp is None:
+            logger.warning("recovery_sync_failed_http — retry state kept")
+            return False
+        execute_actions(resp, {j["job_id"]: j for j in persisted_jobs})
+        logger.info(
+            "recovery_sync_complete active_jobs=%d outbox=%d",
+            len(persisted_jobs), len(pending_outbox),
+        )
+        return True
     except Exception:
-        logger.exception("recovery_sync_failed_continuing")
+        logger.exception("recovery_sync_failed_continuing — retry state kept")
+        return False
 
 
 def main() -> None:
@@ -1213,13 +1270,35 @@ def main() -> None:
                         job["agent_instance_id"] = agent_instance_id
 
                         # ADR-0019 Phase 2b + 3a: 注册 job + fencing_token + 持久化 active_job
-                        _register_active_job(
-                            job["id"],
-                            job["fencing_token"],
-                            device_id,
-                            job.get("device_serial", ""),
-                            local_worker_token,
-                        )
+                        # R07-F13 (#1013): 本地（SQLite）登记失败必须补偿——否则设备忙占位
+                        # 残留且已认领未登记任务无显式归宿。回滚占位/令牌后跳批继续，让
+                        # server 下次 tick 或 recovery 重新对账该 claim。
+                        try:
+                            _register_active_job(
+                                job["id"],
+                                job["fencing_token"],
+                                device_id,
+                                job.get("device_serial", ""),
+                                local_worker_token,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "register_active_job_failed job=%d device=%s — rolling back claim",
+                                job["id"], device_id,
+                            )
+                            _rollback_failed_claim(
+                                jid=job["id"],
+                                fencing_token=job.get("fencing_token", ""),
+                                local_worker_token=local_worker_token,
+                                device_id=device_id,
+                                active_jobs_lock=_active_jobs_lock,
+                                active_job_ids=_active_job_ids,
+                                active_device_ids=_active_device_ids,
+                                active_job_tokens=_active_job_tokens,
+                                lease_renewer=lease_renewer,
+                                local_db=local_db,
+                            )
+                            continue
 
                         # ADR-0026 Step 5b: register job + PlanRunHost with coordinator
                         coordinator.register_job(job["id"])
@@ -1265,6 +1344,15 @@ def main() -> None:
         logger.info("agent_shutting_down, waiting for active tasks to finish...")
         coordinator.stop()
         operation_scheduler.shutdown()
+        # R07-F12 (#1012): scheduler.shutdown() only wakes permit waiters; also
+        # cancel already-running cruises so the executor drain below is bounded
+        # and SIGTERM actually ends a patrol loop instead of retrying it.
+        if job_runner_state is not None:
+            try:
+                for _jid in list(job_runner_state.active_runners):
+                    job_runner_state.request_abort(_jid)
+            except Exception:
+                logger.exception("shutdown_cancel_runners_failed")
         executor.shutdown(wait=True, cancel_futures=False)
         # Flush step traces via HTTP before shutdown
         try:

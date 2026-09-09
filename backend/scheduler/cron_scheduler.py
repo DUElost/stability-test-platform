@@ -330,6 +330,26 @@ def run_retention_cleanup() -> None:
             db.rollback()
 
 
+def _terminal_archive_complete(db, plan_run_id: int) -> bool:
+    """True when merge artifact exists and extract stage was recorded (#1110)."""
+    from backend.models.plan_run import PlanRun
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    merge_count = db.execute(
+        select(func.count()).select_from(PlanRunArtifact).where(
+            PlanRunArtifact.plan_run_id == plan_run_id,
+            PlanRunArtifact.artifact_type == "merge_result_xls",
+        )
+    ).scalar_one()
+    if merge_count == 0:
+        return False
+    run = db.get(PlanRun, plan_run_id)
+    if run is None:
+        return False
+    extract = (run.run_context or {}).get("extract")
+    return isinstance(extract, dict)
+
+
 def auto_archive_sweep() -> None:
     """Enqueue scan→upload→merge for at most one PlanRun per Plan.
 
@@ -409,7 +429,7 @@ def auto_archive_sweep() -> None:
                 if run.status in _AUTO_FINAL_STATUSES:
                     if run.ended_at is None or now - run.ended_at < timedelta(seconds=interval):
                         continue
-                    if scan_count > 0:
+                    if scan_count > 0 and _terminal_archive_complete(db, run.id):
                         continue
                     enqueue_dedup_terminal_sync(run.id, is_final=True)
                     triggered += 1

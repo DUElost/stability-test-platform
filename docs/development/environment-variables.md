@@ -48,6 +48,12 @@
 | `STP_BACKEND_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：后端 merge/scan 工具路径（#518 起不再回落旧无前缀键） |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅 Agent**：Agent 侧 scan 工具路径（hot-update 经 `STP_AGENT_*` 源键写入） |
 | `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：Agent 侧 scan 工具路径的源键，hot-update 写成 Agent 的无前缀键 |
+| `STP_SCAN_POLL_MAX_WAIT` | 控制面 `scan_task` 主轮询预算秒数（默认 `300`；#732） |
+| `STP_SCAN_POLL_PER_HOST_SECONDS` | 叠加预算：`MAX_WAIT + n_triggered * PER_HOST`（默认 `0`） |
+| `STP_SCAN_POLL_INTERVAL` | 轮询间隔秒（默认 `10`） |
+| `STP_SCAN_POLL_GRACE_SECONDS` | 高进度宽限秒数（默认 `120`；就绪率≥ratio 且缺口≤max_missing 时一次） |
+| `STP_SCAN_POLL_GRACE_RATIO` | 触发宽限的最低就绪率（默认 `0.9`） |
+| `STP_SCAN_POLL_GRACE_MAX_MISSING` | 触发宽限的最大缺口 host 数（默认 `3`） |
 | `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` | Compose 开发初始化管理员；**禁止**用于生产默认值 |
 
 ### Agent 协议门禁

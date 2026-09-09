@@ -1,16 +1,17 @@
 """ADR-0025 Sprint 4: scan/merge/extract 端点 + 终态触发测试。
 
 覆盖：
-- POST /plan-runs/{run_id}/dedup/scan（SocketIO scan_now 触发 + 离线跳过）
+- POST /plan-runs/{run_id}/dedup/scan（enqueue scan_task 轮次链 + 离线拒绝）
 - GET /plan-runs/{run_id}/dedup/status（空 + 有产物）
-- POST /plan-runs/{run_id}/dedup/merge（无 scan 产物 409 + 正常触发）
+- POST /plan-runs/{run_id}/dedup/merge（无 scan 产物 409 + 带轮次触发）
 - POST /plan-runs/{run_id}/dedup/extract（无 merge 产物 409 + 正常提取）
 - crash-details 端点（空 + 有数据）
 - 终态触发 helper（should_trigger_dedup + enqueue mock）
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -41,7 +42,7 @@ class TestScanEndpoint:
         assert resp.status_code == 400
         assert "no jobs" in resp.json()["detail"].lower()
 
-    def test_scan_dispatches_scan_now_to_online_hosts(
+    def test_scan_enqueues_scan_task_for_online_hosts(
         self, client, auth_headers, db_session,
         sample_plan_run, sample_plan, sample_device, sample_host,
     ):
@@ -60,9 +61,9 @@ class TestScanEndpoint:
         db_session.commit()
 
         with patch(
-            "backend.realtime.socketio_server.emit_agent_control",
+            "backend.services.dedup_scan.enqueue_dedup_terminal_async",
             new=AsyncMock(),
-        ) as mock_emit:
+        ) as mock_enqueue:
             resp = client.post(
                 f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/scan",
                 headers=auth_headers,
@@ -70,29 +71,16 @@ class TestScanEndpoint:
 
         assert resp.status_code == 200
         body = resp.json()["data"]
+        assert body["enqueued"] == "scan_task"
+        assert body["is_final"] is False
         assert str(sample_host.id) in body["triggered_hosts"]
         assert body["skipped_offline"] == []
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
+        mock_enqueue.assert_awaited_once_with(sample_plan_run.id, is_final=False)
 
-        today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%m%d")
-        mock_emit.assert_awaited_once_with(
-            str(sample_host.id),
-            "scan_now",
-            payload={
-                "plan_run_id": sample_plan_run.id,
-                "is_final": False,
-                "device_serials": [sample_device.serial],
-                "run_date_stamps": [today],
-            },
-        )
-
-    def test_scan_sends_full_plan_run_serials_to_each_host(
+    def test_scan_lists_all_online_hosts_then_enqueues_once(
         self, client, auth_headers, db_session,
         sample_plan_run, sample_plan, sample_device, sample_host,
     ):
-        from datetime import datetime, timezone
-
         from backend.models.enums import HostStatus, JobStatus
         from backend.models.host import Device, Host
         from backend.models.job import JobInstance
@@ -130,9 +118,9 @@ class TestScanEndpoint:
         db_session.commit()
 
         with patch(
-            "backend.realtime.socketio_server.emit_agent_control",
+            "backend.services.dedup_scan.enqueue_dedup_terminal_async",
             new=AsyncMock(),
-        ) as mock_emit:
+        ) as mock_enqueue:
             resp = client.post(
                 f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/scan",
                 headers=auth_headers,
@@ -141,13 +129,10 @@ class TestScanEndpoint:
         assert resp.status_code == 200
         body = resp.json()["data"]
         assert set(body["triggered_hosts"]) == {str(sample_host.id), str(host_b.id)}
-        assert mock_emit.await_count == 2
-        payloads = [call.kwargs["payload"] for call in mock_emit.call_args_list]
-        expected = {sample_device.serial, device_b.serial}
-        assert all(set(p["device_serials"]) == expected for p in payloads)
-        assert payloads[0]["device_serials"] == payloads[1]["device_serials"]
+        assert body["enqueued"] == "scan_task"
+        mock_enqueue.assert_awaited_once_with(sample_plan_run.id, is_final=False)
 
-    def test_scan_skips_offline_hosts(
+    def test_scan_rejects_when_all_hosts_offline(
         self, client, auth_headers, db_session,
         sample_plan_run, sample_plan, sample_device, sample_offline_host,
     ):
@@ -166,19 +151,17 @@ class TestScanEndpoint:
         db_session.commit()
 
         with patch(
-            "backend.realtime.socketio_server.emit_agent_control",
+            "backend.services.dedup_scan.enqueue_dedup_terminal_async",
             new=AsyncMock(),
-        ) as mock_emit:
+        ) as mock_enqueue:
             resp = client.post(
                 f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/scan",
                 headers=auth_headers,
             )
 
-        assert resp.status_code == 200
-        body = resp.json()["data"]
-        assert body["triggered_hosts"] == []
-        assert len(body["skipped_offline"]) == 1
-        mock_emit.assert_not_awaited()
+        assert resp.status_code == 409
+        assert "online" in resp.json()["detail"].lower()
+        mock_enqueue.assert_not_awaited()
 
 
 class TestDedupStatusEndpoint:
@@ -240,7 +223,6 @@ class TestMergeEndpoint:
         """ADR-0028 D2: FAILED 立即 409，不先做 scan artifact / tool 预检。"""
         from backend.models.enums import PlanRunStatus
         from backend.models.plan_run_artifact import PlanRunArtifact
-        from unittest.mock import MagicMock, patch
 
         db_session.add(PlanRunArtifact(
             plan_run_id=sample_plan_run.id,
@@ -253,9 +235,9 @@ class TestMergeEndpoint:
         db_session.commit()
 
         resolve_tool = MagicMock()
-        merge_sync = MagicMock()
+        merge_all = MagicMock()
         with patch("backend.services.dedup_scan.resolve_scan_tool", resolve_tool), \
-             patch("backend.services.dedup_scan.run_merge_sync", merge_sync):
+             patch("backend.services.dedup_scan.run_merge_all_platforms_sync", merge_all):
             resp = client.post(
                 f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/merge",
                 json={},
@@ -264,7 +246,48 @@ class TestMergeEndpoint:
         assert resp.status_code == 409
         assert "FAILED" in resp.json()["detail"]
         resolve_tool.assert_not_called()
-        merge_sync.assert_not_called()
+        merge_all.assert_not_called()
+
+    def test_merge_passes_resolved_round_to_merge_all(
+        self, client, auth_headers, db_session, sample_plan_run, monkeypatch,
+    ):
+        """#1077: manual merge resolves a round and calls merge-all with it."""
+        from backend.models.plan_run_artifact import PlanRunArtifact
+
+        round_id = "2026-09-08T12:00:00+00:00"
+        floor = datetime.fromisoformat(round_id)
+        db_session.add(PlanRunArtifact(
+            plan_run_id=sample_plan_run.id,
+            host_id="host-1",
+            storage_uri="/tmp/host1_Result_org.xls",
+            artifact_type="scan_result_xls",
+            size_bytes=100,
+            scan_round_id=round_id,
+            created_at=floor,
+        ))
+        db_session.commit()
+
+        monkeypatch.setenv("STP_BACKEND_DEDUP_SCAN_PYTHON", "/usr/bin/python3")
+        monkeypatch.setenv("STP_BACKEND_DEDUP_SCAN_SCRIPT", "/tmp/fake_scan.py")
+
+        with patch(
+            "backend.services.dedup_scan.run_merge_all_platforms_sync",
+            return_value=["/tmp/merged.xls"],
+        ) as merge_all:
+            resp = client.post(
+                f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/merge",
+                json={},
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()["data"]
+        assert body["status"] == "ok"
+        assert body["scan_round_id"] == round_id
+        merge_all.assert_called_once()
+        kwargs = merge_all.call_args.kwargs
+        assert kwargs["scan_round_id"] == round_id
+        assert kwargs["round_started_at"] is not None
 
     def test_merge_env_unset_returns_503(self, client, auth_headers, monkeypatch, sample_plan_run, db_session):
         from backend.models.plan_run_artifact import PlanRunArtifact
