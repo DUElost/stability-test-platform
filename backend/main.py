@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -76,6 +77,7 @@ from backend.realtime.socketio_server import create_sio_server, capture_main_loo
 from backend.services.state_machine import InvalidTransitionError
 from backend.scheduler.app_scheduler import create_scheduler, register_schedules
 from backend.tasks.saq_worker import (
+    REDIS_PING_TIMEOUT,
     is_saq_ready,
     start_saq_worker,
     stop_saq_worker,
@@ -414,7 +416,11 @@ async def health_check():
         if not skip_infra:
             if redis_client is not None:
                 try:
-                    await redis_client.ping()
+                    # 与 verify_redis_connectivity 同一超时常量：黑洞式分区下
+                    # probe 不悬挂到 OS TCP 超时（超探针时限 + 事件循环累积）。
+                    await asyncio.wait_for(
+                        redis_client.ping(), timeout=REDIS_PING_TIMEOUT,
+                    )
                 except Exception as exc:
                     logger.warning("health_redis_unreachable — %s", exc)
                     return JSONResponse(

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -109,6 +111,36 @@ class TestHealthReadiness:
         response = client.get("/health")
         assert response.status_code == 503
         assert response.json()["error"]["code"] == "REDIS_UNREACHABLE"
+
+    def test_redis_ping_hang_times_out_returns_503(self, client, monkeypatch):
+        """黑洞式 Redis 分区：ping 挂起必须在超时常量内返回 503，不得无限悬挂。
+
+        与 ``verify_redis_connectivity`` 的 REDIS_PING_TIMEOUT 同一上限；此前
+        裸 ping 会一直等到 OS TCP 超时，超出编排探针时限并在事件循环上累积。
+        """
+        import asyncio
+
+        from unittest.mock import AsyncMock
+
+        self._ready_env(monkeypatch)
+
+        async def _hang_ping():
+            await asyncio.sleep(30)
+            return True
+
+        monkeypatch.setattr(
+            main_mod, "redis_client",
+            SimpleNamespace(ping=_hang_ping, aclose=AsyncMock()),
+        )
+        monkeypatch.setattr(main_mod, "REDIS_PING_TIMEOUT", 0.2)
+        monkeypatch.setattr(main_mod, "is_saq_ready", lambda: True)
+
+        started = time.monotonic()
+        response = client.get("/health")
+        elapsed = time.monotonic() - started
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "REDIS_UNREACHABLE"
+        assert elapsed < 5, f"health probe hung for {elapsed:.1f}s"
 
     def test_skip_infra_skips_saq_and_redis_checks(self, client, monkeypatch):
         """运维豁免（非生产类环境）与 lifespan 同条件：不检查 SAQ/Redis。"""
