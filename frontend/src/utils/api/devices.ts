@@ -14,7 +14,7 @@ export const devices = {
       },
     }).then(r => r.data),
   get: (id: number) => apiClient.get<Device>(`/devices/${id}`).then(r => r.data),
-  create: (data: { serial: string; model?: string; host_id?: number; tags?: string[] }) =>
+  create: (data: { serial: string; model?: string; host_id?: string; tags?: string[] }) =>
     apiClient.post<Device>('/devices', data).then(r => r.data),
   updateTags: (id: number, tags: string[]) =>
     apiClient.put<Device>(`/devices/${id}/tags`, tags).then(r => r.data),

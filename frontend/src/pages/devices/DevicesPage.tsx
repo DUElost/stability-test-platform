@@ -59,7 +59,7 @@ export default function DevicesPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: { serial: string; model?: string; host_id?: number; tags?: string[] }) =>
+    mutationFn: (data: { serial: string; model?: string; host_id?: string; tags?: string[] }) =>
       api.devices.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: deviceKeys.list() });

@@ -1,5 +1,8 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
 
 from backend.models.notification import EventType
 from backend.services import notification_service as mod
@@ -94,3 +97,38 @@ def test_dispatch_notification_closes_db_before_network_io(monkeypatch):
     )
 
     assert closed_states == [True]
+
+
+def test_send_dingtalk_raises_on_business_errcode(monkeypatch):
+    """#1120: HTTP 200 with errcode!=0 must fail delivery."""
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"errcode": 310000, "errmsg": "sign not match"}
+    monkeypatch.setattr(mod.requests, "post", MagicMock(return_value=resp))
+
+    with pytest.raises(RuntimeError, match="errcode=310000"):
+        mod._send_dingtalk("https://oapi.dingtalk.com/robot/send?access_token=x", "", "hi")
+
+
+def test_send_dingtalk_ok_when_errcode_zero(monkeypatch):
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"errcode": 0, "errmsg": "ok"}
+    monkeypatch.setattr(mod.requests, "post", MagicMock(return_value=resp))
+
+    mod._send_dingtalk("https://oapi.dingtalk.com/robot/send?access_token=x", "", "hi")
+
+
+def test_send_to_channel_dingtalk_surfaces_business_error(monkeypatch):
+    """Test-channel API path: send_to_channel must raise so route returns 502."""
+    channel = SimpleNamespace(
+        type=SimpleNamespace(value="DINGTALK"),
+        config={"url": "https://oapi.dingtalk.com/robot/send?access_token=x", "secret": ""},
+    )
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"errcode": 40035, "errmsg": "缺少参数 token"}
+    monkeypatch.setattr(mod.requests, "post", MagicMock(return_value=resp))
+
+    with pytest.raises(RuntimeError, match="errcode=40035"):
+        mod.send_to_channel(channel, "This is a test notification from Stability Test Platform.")
