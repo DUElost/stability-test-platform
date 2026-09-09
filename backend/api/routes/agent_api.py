@@ -2081,6 +2081,10 @@ async def ingest_log_signals(
     幂等：用 PostgreSQL `ON CONFLICT (job_id, seq_no) DO NOTHING` 去重。
     副作用：按本批实际新插入数累加 job_instance.log_signal_count。
     契约：字段校验见 backend.agent.watcher.contracts.validate_log_signal
+    部分接受（#1048）：单条**永久**不可恢复（契约违规 / job 不存在 / 租约
+    fencing 不匹配 / detected_at 非法）只隔离该条并在响应 ``rejected`` 里逐条
+    报告，不再整批 404/400 连坐 —— 否则 50 条批次混入一条坏记录，其余正常信号
+    会被 Agent 侧反复重试直至全部进死信。暂时性失败（DB 不可用等）仍整批失败。
     """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -2089,33 +2093,52 @@ async def ingest_log_signals(
     if not payload.signals:
         return ok({"inserted": 0, "total": 0})
 
+    def _rejected_item(s: LogSignalIn, reason: str) -> Dict[str, Any]:
+        return {
+            "job_id": s.job_id,
+            "seq_no": s.seq_no,
+            "reason": reason[:300],
+        }
+
+    rejected: List[Dict[str, Any]] = []
     rows: List[Dict[str, Any]] = []
     for s in payload.signals:
         envelope = s.model_dump()
         try:
             validate_log_signal(envelope)
         except ContractViolation as exc:
-            raise HTTPException(status_code=400, detail=f"log_signal contract violation: {exc}") from exc
+            rejected.append(_rejected_item(s, f"log_signal contract violation: {exc}"))
+            continue
         job = await db.get(JobInstance, s.job_id)
         if job is None:
-            raise HTTPException(status_code=404, detail=f"job {s.job_id} not found")
-        await _require_job_bound_upload_lease(
-            db,
-            job,
-            fencing_token=s.fencing_token,
-            agent_instance_id=s.agent_instance_id,
-            host_id=s.host_id,
-            device_serial=s.device_serial,
-        )
+            rejected.append(_rejected_item(s, f"job {s.job_id} not found"))
+            continue
+        try:
+            await _require_job_bound_upload_lease(
+                db,
+                job,
+                fencing_token=s.fencing_token,
+                agent_instance_id=s.agent_instance_id,
+                host_id=s.host_id,
+                device_serial=s.device_serial,
+            )
+        except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict):
+                detail = detail.get("code") or str(detail)
+            rejected.append(_rejected_item(
+                s, f"lease_check_failed({exc.status_code}): {detail}",
+            ))
+            continue
 
         # detected_at: ISO string → datetime
         try:
             detected_dt = datetime.fromisoformat(s.detected_at.replace("Z", "+00:00"))
         except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"log_signal.detected_at invalid ISO8601: {s.detected_at}",
-            ) from None
+            rejected.append(_rejected_item(
+                s, f"log_signal.detected_at invalid ISO8601: {s.detected_at}",
+            ))
+            continue
 
         rows.append({
             "job_id":         s.job_id,
@@ -2131,6 +2154,14 @@ async def ingest_log_signals(
             "first_lines":    s.first_lines,
             "detected_at":    detected_dt,
             "extra":          s.extra,
+        })
+
+    # #1048：整批被拒（无一条可入库）→ 直接返回逐条拒绝清单
+    if not rows:
+        return ok({
+            "inserted": 0,
+            "total": len(payload.signals),
+            "rejected": rejected,
         })
 
     # PostgreSQL 幂等 upsert：ON CONFLICT (job_id, seq_no) DO NOTHING
@@ -2160,7 +2191,7 @@ async def ingest_log_signals(
 
     from backend.services.device_log_event import link_signals_to_device_log_events
 
-    await link_signals_to_device_log_events(db, [s.job_id for s in payload.signals])
+    await link_signals_to_device_log_events(db, [row["job_id"] for row in rows])
 
     await db.commit()
 
@@ -2205,7 +2236,11 @@ async def ingest_log_signals(
         except Exception:
             logger.debug("broadcast_watcher_signal_failed", exc_info=True)
 
-    return ok({"inserted": len(inserted_rows), "total": len(payload.signals)})
+    return ok({
+        "inserted": len(inserted_rows),
+        "total": len(payload.signals),
+        "rejected": rejected,
+    })
 
 
 _VALID_EVENT_STATES = {s.value for s in EventState}
