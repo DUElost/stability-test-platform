@@ -2081,6 +2081,10 @@ async def ingest_log_signals(
     幂等：用 PostgreSQL `ON CONFLICT (job_id, seq_no) DO NOTHING` 去重。
     副作用：按本批实际新插入数累加 job_instance.log_signal_count。
     契约：字段校验见 backend.agent.watcher.contracts.validate_log_signal
+    部分接受（#1048）：单条**永久**不可恢复（契约违规 / job 不存在 / 租约
+    fencing 不匹配 / detected_at 非法）只隔离该条并在响应 ``rejected`` 里逐条
+    报告，不再整批 404/400 连坐 —— 否则 50 条批次混入一条坏记录，其余正常信号
+    会被 Agent 侧反复重试直至全部进死信。暂时性失败（DB 不可用等）仍整批失败。
     """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -2089,33 +2093,52 @@ async def ingest_log_signals(
     if not payload.signals:
         return ok({"inserted": 0, "total": 0})
 
+    def _rejected_item(s: LogSignalIn, reason: str) -> Dict[str, Any]:
+        return {
+            "job_id": s.job_id,
+            "seq_no": s.seq_no,
+            "reason": reason[:300],
+        }
+
+    rejected: List[Dict[str, Any]] = []
     rows: List[Dict[str, Any]] = []
     for s in payload.signals:
         envelope = s.model_dump()
         try:
             validate_log_signal(envelope)
         except ContractViolation as exc:
-            raise HTTPException(status_code=400, detail=f"log_signal contract violation: {exc}") from exc
+            rejected.append(_rejected_item(s, f"log_signal contract violation: {exc}"))
+            continue
         job = await db.get(JobInstance, s.job_id)
         if job is None:
-            raise HTTPException(status_code=404, detail=f"job {s.job_id} not found")
-        await _require_job_bound_upload_lease(
-            db,
-            job,
-            fencing_token=s.fencing_token,
-            agent_instance_id=s.agent_instance_id,
-            host_id=s.host_id,
-            device_serial=s.device_serial,
-        )
+            rejected.append(_rejected_item(s, f"job {s.job_id} not found"))
+            continue
+        try:
+            await _require_job_bound_upload_lease(
+                db,
+                job,
+                fencing_token=s.fencing_token,
+                agent_instance_id=s.agent_instance_id,
+                host_id=s.host_id,
+                device_serial=s.device_serial,
+            )
+        except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict):
+                detail = detail.get("code") or str(detail)
+            rejected.append(_rejected_item(
+                s, f"lease_check_failed({exc.status_code}): {detail}",
+            ))
+            continue
 
         # detected_at: ISO string → datetime
         try:
             detected_dt = datetime.fromisoformat(s.detected_at.replace("Z", "+00:00"))
         except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"log_signal.detected_at invalid ISO8601: {s.detected_at}",
-            ) from None
+            rejected.append(_rejected_item(
+                s, f"log_signal.detected_at invalid ISO8601: {s.detected_at}",
+            ))
+            continue
 
         rows.append({
             "job_id":         s.job_id,
@@ -2131,6 +2154,14 @@ async def ingest_log_signals(
             "first_lines":    s.first_lines,
             "detected_at":    detected_dt,
             "extra":          s.extra,
+        })
+
+    # #1048：整批被拒（无一条可入库）→ 直接返回逐条拒绝清单
+    if not rows:
+        return ok({
+            "inserted": 0,
+            "total": len(payload.signals),
+            "rejected": rejected,
         })
 
     # PostgreSQL 幂等 upsert：ON CONFLICT (job_id, seq_no) DO NOTHING
@@ -2160,7 +2191,7 @@ async def ingest_log_signals(
 
     from backend.services.device_log_event import link_signals_to_device_log_events
 
-    await link_signals_to_device_log_events(db, [s.job_id for s in payload.signals])
+    await link_signals_to_device_log_events(db, [row["job_id"] for row in rows])
 
     await db.commit()
 
@@ -2205,10 +2236,21 @@ async def ingest_log_signals(
         except Exception:
             logger.debug("broadcast_watcher_signal_failed", exc_info=True)
 
-    return ok({"inserted": len(inserted_rows), "total": len(payload.signals)})
+    return ok({
+        "inserted": len(inserted_rows),
+        "total": len(payload.signals),
+        "rejected": rejected,
+    })
 
 
 _VALID_EVENT_STATES = {s.value for s in EventState}
+
+# #1174: 中心 remote_path/checksum 已权威的行（extract 只认这三态，见
+# backend/services/device_log_event._REMOTE_STATES）——任何落后补丁（旧 LOCAL
+# 注册意图重放、PULL_FAILED 等不带 remote_path 的迟到 patch）不得覆盖降级。
+_EXTRACTABLE_STATES = frozenset(
+    {EventState.REMOTE.value, EventState.ARCHIVED.value, EventState.PRUNED.value}
+)
 
 
 class DeviceLogEventIn(BaseModel):
@@ -2374,21 +2416,37 @@ async def ingest_device_log_events(
                             f"{ev.host_id!r} != {row.host_id!r}"
                         ),
                     )
-                row.state = ev.state
-                effective_plan_run = (
-                    ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
-                )
-                row.remote_path = _validated_remote_path(
-                    ev.remote_path,
-                    plan_run_id=effective_plan_run,
-                    event_id=str(row.id),
-                    unassigned_fallback=True,
-                )
-                row.checksum = ev.checksum
-                row.size_bytes = ev.size_bytes
-                row.plan_run_id = ev.plan_run_id
-                row.updated_at = now
-                event_id = row.id
+                if (
+                    row.state in _EXTRACTABLE_STATES
+                    and ev.state not in _EXTRACTABLE_STATES
+                ):
+                    # #1174: 幂等重放/迟到补丁不得把已上送权威副本的行降级。
+                    # REMOTE/ARCHIVED/PRUNED 以中心 remote_path/checksum 为准；
+                    # 旧 LOCAL 注册意图（无 remote_path）或 PULL_FAILED 等落后
+                    # patch 重放到此时覆盖会清空路径并使 extract 不可见——
+                    # #1083 REMOTE ack 后本地副本可能已 prune，回退即不可逆。
+                    # 按幂等成功处理（客户端据此 ACK 并清掉 outbox 条目）。
+                    logger.warning(
+                        "dle_stale_replay_ignored id=%s existing=%s incoming=%s",
+                        row.id, row.state, ev.state,
+                    )
+                    event_id = row.id
+                else:
+                    row.state = ev.state
+                    effective_plan_run = (
+                        ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
+                    )
+                    row.remote_path = _validated_remote_path(
+                        ev.remote_path,
+                        plan_run_id=effective_plan_run,
+                        event_id=str(row.id),
+                        unassigned_fallback=True,
+                    )
+                    row.checksum = ev.checksum
+                    row.size_bytes = ev.size_bytes
+                    row.plan_run_id = ev.plan_run_id
+                    row.updated_at = now
+                    event_id = row.id
         else:
             # #1051: 无 client id 时，同 job+signal_seq 重放返回已有行（创建幂等）。
             if ev.job_id is not None and ev.link_signal_seq_no is not None:
