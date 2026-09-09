@@ -1,6 +1,6 @@
 # 上传标记超时不得标 ready=true（#1079）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
