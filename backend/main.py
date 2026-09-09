@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -112,6 +113,11 @@ for _h in logging.getLogger("uvicorn.access").handlers:
     ))
 
 redis_client: Optional[aioredis.Redis] = None
+
+# Readiness 探针的 Redis ping 时限（#1177）：与 saq_worker.REDIS_PING_TIMEOUT
+# 同 env 同缺省——黑洞分区（SYN 丢弃）下 ping 不得悬挂超过 Docker HEALTHCHECK
+# 时限，否则探针任务无限累积。
+_HEALTH_REDIS_PING_TIMEOUT = float(os.getenv("REDIS_PING_TIMEOUT", "3.0"))
 
 
 def _log_redis_ping_ok(redis_url: str) -> None:
@@ -414,7 +420,19 @@ async def health_check():
         if not skip_infra:
             if redis_client is not None:
                 try:
-                    await redis_client.ping()
+                    await asyncio.wait_for(
+                        redis_client.ping(),
+                        timeout=_HEALTH_REDIS_PING_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "health_redis_ping_timeout after %.1fs",
+                        _HEALTH_REDIS_PING_TIMEOUT,
+                    )
+                    return JSONResponse(
+                        status_code=503,
+                        content={"data": None, "error": {"code": "REDIS_UNREACHABLE", "message": "redis ping timed out"}},
+                    )
                 except Exception as exc:
                     logger.warning("health_redis_unreachable — %s", exc)
                     return JSONResponse(
