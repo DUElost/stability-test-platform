@@ -103,6 +103,66 @@ async def test_scan_task_polls_until_all_hosts_registered(monkeypatch):
     assert polls == 2
 
 
+def test_scan_poll_budget_scales_with_hosts(monkeypatch):
+    """#732: STP_SCAN_POLL_MAX_WAIT + n * PER_HOST."""
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_SCAN_POLL_MAX_WAIT", "300")
+    monkeypatch.setenv("STP_SCAN_POLL_PER_HOST_SECONDS", "2")
+    assert saq_tasks._scan_poll_max_wait_seconds(50) == 400
+
+
+def test_scan_poll_grace_when_near_complete(monkeypatch):
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_SCAN_POLL_GRACE_SECONDS", "120")
+    monkeypatch.setenv("STP_SCAN_POLL_GRACE_RATIO", "0.9")
+    monkeypatch.setenv("STP_SCAN_POLL_GRACE_MAX_MISSING", "3")
+    assert saq_tasks._scan_poll_grace_seconds(49, 50) == 120
+    assert saq_tasks._scan_poll_grace_seconds(40, 50) == 0
+    assert saq_tasks._scan_poll_grace_seconds(50, 50) == 0
+
+
+@pytest.mark.asyncio
+async def test_scan_task_applies_grace_for_near_complete_fleet(monkeypatch, caplog):
+    """#732: at primary deadline with ≥90% ready, poll continues into grace."""
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_SCAN_POLL_INTERVAL", "10")
+    monkeypatch.setenv("STP_SCAN_POLL_MAX_WAIT", "30")
+    monkeypatch.setenv("STP_SCAN_POLL_PER_HOST_SECONDS", "0")
+    monkeypatch.setenv("STP_SCAN_POLL_GRACE_SECONDS", "20")
+    monkeypatch.setenv("STP_SCAN_POLL_GRACE_RATIO", "0.9")
+    monkeypatch.setenv("STP_SCAN_POLL_GRACE_MAX_MISSING", "2")
+
+    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    polls = 0
+    # 10 hosts: after each poll return 9 until poll count >= 4, then 10
+    host_rows = [(f"host-{i}", "ONLINE") for i in range(10)]
+
+    async def fake_to_thread(fn, *a, **kw):
+        nonlocal polls
+        if fn is scan_sync:
+            polls += 1
+            return "1"
+        if fn is hosts_done:
+            return 10 if polls >= 4 else 9
+        return fn(*a, **kw)
+
+    queue = MagicMock()
+    queue.enqueue = AsyncMock()
+    with caplog.at_level("INFO"), _scan_task_env(
+        saq_tasks, monkeypatch, host_rows,
+        to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
+        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+    ):
+        await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
+
+    assert "saq_scan_poll_grace" in caplog.text
+    assert polls >= 4
+    assert record_archive.call_args.kwargs["hosts_with_artifacts"] == 10
+
+
 @pytest.mark.asyncio
 async def test_scan_task_does_not_break_on_one_host_worth_of_files(monkeypatch):
     """File count must not stand in for host coverage.

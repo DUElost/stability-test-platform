@@ -972,6 +972,8 @@ def get_project(
     device_count, running_run_count = _summary_rows(db).get(project.id, (0, 0))
     detail = ProjectDetailOut.model_validate(project)
     detail.match_models = _rule_values_for_project(db, project.id)
+    # #957: 派生 platforms 与列表 _fill_summary 同一构造——详情不再落回 []。
+    detail.platforms = _platforms_map(db, [project.id]).get(project.id, [])
     detail.device_count = device_count
     detail.running_run_count = running_run_count
     detail.plan_count = (

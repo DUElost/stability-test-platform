@@ -1410,3 +1410,34 @@ class TestMapApplyCaseRoundtrip:
             json={"models": ["Infinix_X1102D"]},
         )
         assert resp.status_code == 409, resp.text
+
+
+class TestDetailPlatformsParity:
+    """#957: 项目详情派生 platforms 与列表一致（详情不再恒空）。"""
+
+    def _seed_devices(self, client, auth_headers, db_session, project_a):
+        from backend.models.project_model import ProjectModel
+
+        db_session.add_all([
+            ProjectModel(project_id=project_a.id, match_value="MLD_LX2"),
+            ProjectModel(project_id=project_a.id, match_value="MLD_LX3"),
+        ])
+        db_session.commit()
+        _make_device(db_session, "dp-1", project_a, model="MLD_LX2", platform="MTK")
+        _make_device(db_session, "dp-2", project_a, model="MLD_LX3", platform="UNISOC")
+
+    def test_detail_platforms_match_list(self, client, auth_headers, db_session, project_a):
+        """同项目列表与详情 platforms 一致（验收）。"""
+        self._seed_devices(client, auth_headers, db_session, project_a)
+
+        list_resp = client.get("/api/v1/projects", headers=auth_headers)
+        by_key = {p["project_key"]: p for p in list_resp.json()["data"]}
+        detail_resp = client.get(
+            f"/api/v1/projects/{project_a.project_key}", headers=auth_headers,
+        )
+        assert detail_resp.status_code == 200, detail_resp.text
+
+        list_platforms = by_key[project_a.project_key]["platforms"]
+        detail_platforms = detail_resp.json()["data"]["platforms"]
+        assert list_platforms == ["MTK", "UNISOC"]
+        assert detail_platforms == list_platforms  # 详情与列表对拍

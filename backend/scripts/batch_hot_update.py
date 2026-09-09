@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+import uuid
 
 from backend.scripts.seed_and_smoke import (
     APIClient,
@@ -67,6 +68,10 @@ def _hot_update_direct(
         get_agent_code_version,
     )
     from backend.services.agent_version_info import record_agent_code_deployed
+    from backend.services.host_maintenance import (
+        HostMaintenanceConflict,
+        maintenance_window,
+    )
 
     active_statuses = {
         JobStatus.PENDING.value,
@@ -131,15 +136,23 @@ def _hot_update_direct(
                 continue
 
             print(f"\n=== hot-update {host.hostname} ({host.ip}) ===")
-            result = execute_hot_update(
-                host_ip=host.ip or "",
-                ssh_port=host.ssh_port or 22,
-                ssh_user=creds.user,
-                ssh_password=creds.password,
-                ssh_key_path=creds.key_path,
-                known_hosts_path=creds.known_hosts_path,
-                code_version=expected,
-            )
+            # #960：与 UI / precheck 同一把窗口锁 —— 批量跑也不能绕过互斥，
+            # 拿不到窗口说明该主机上已有热更新在跑。
+            try:
+                with maintenance_window(
+                    db, host.id, f"batch:{uuid.uuid4().hex[:8]}",
+                ):
+                    result = execute_hot_update(
+                        host_ip=host.ip or "",
+                        ssh_port=host.ssh_port or 22,
+                        ssh_user=creds.user,
+                        ssh_password=creds.password,
+                        ssh_key_path=creds.key_path,
+                        known_hosts_path=creds.known_hosts_path,
+                        code_version=expected,
+                    )
+            except HostMaintenanceConflict:
+                result = {"ok": False, "message": "host_in_maintenance"}
             row.update(result)
             if result.get("ok"):
                 record_agent_code_deployed(host, expected)

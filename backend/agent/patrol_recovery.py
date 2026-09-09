@@ -31,8 +31,10 @@ def build_patrol_job_not_running_handler(
             attempted.add(job_id)
 
         logger.info("patrol_recovery_sync_triggered job=%d", job_id)
-        # Lazy import avoids circular dependency with agent.main at module load.
-        from backend.agent.main import run_recovery_sync_if_needed
+        # Lazy relative import avoids circular dependency with agent.main at module
+        # load, and keeps parity between repo layout (backend.agent) and the top-level
+        # agent install layout (agent) where the `backend` package is not deployed.
+        from .main import run_recovery_sync_if_needed
 
         run_recovery_sync_if_needed(
             local_db=local_db,
