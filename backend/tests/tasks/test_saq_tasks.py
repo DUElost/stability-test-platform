@@ -188,6 +188,56 @@ async def test_enqueue_sync_required_waits_and_raises_on_enqueue_failure():
         mod._loop = original_loop
 
 
+@pytest.mark.asyncio
+async def test_enqueue_sync_required_reports_dedup_as_not_delivered():
+    """R13-F04 (#1216): SAQ returns None on same-key dedup — required must
+    report that as not delivered instead of a false success."""
+    import backend.tasks.saq_worker as mod
+
+    mock_queue = MagicMock()
+    mock_queue.enqueue = AsyncMock(return_value=None)  # deduped
+
+    original_queue = mod._queue
+    original_loop = mod._loop
+    try:
+        mod._queue = mock_queue
+        mod._loop = asyncio.get_running_loop()
+        assert await asyncio.to_thread(
+            mod.enqueue_sync,
+            "ai_assistant_turn_task",
+            key="ai-turn:1",
+            required=True,
+            session_id=1,
+        ) is False
+    finally:
+        mod._queue = original_queue
+        mod._loop = original_loop
+
+
+@pytest.mark.asyncio
+async def test_enqueue_sync_required_returns_true_on_real_delivery():
+    import backend.tasks.saq_worker as mod
+
+    mock_queue = MagicMock()
+    mock_queue.enqueue = AsyncMock(return_value=object())
+
+    original_queue = mod._queue
+    original_loop = mod._loop
+    try:
+        mod._queue = mock_queue
+        mod._loop = asyncio.get_running_loop()
+        assert await asyncio.to_thread(
+            mod.enqueue_sync,
+            "ai_assistant_turn_task",
+            key="ai-turn:2",
+            required=True,
+            session_id=2,
+        ) is True
+    finally:
+        mod._queue = original_queue
+        mod._loop = original_loop
+
+
 # ---------------------------------------------------------------------------
 # get_queue guard
 # ---------------------------------------------------------------------------

@@ -2059,6 +2059,14 @@ export interface AiAssistantAction {
   decided_at: string | null;
 }
 
+export interface AiPendingAction {
+  id: number;
+  tool_name: string;
+  preview_text: string | null;
+  requested_by: string | null;
+  created_at: string;
+}
+
 /** GET /actions/{id}/log —— 镜像 jira-run 的日志读取契约。 */
 export interface AiActionLogEntry {
   seq: number;
