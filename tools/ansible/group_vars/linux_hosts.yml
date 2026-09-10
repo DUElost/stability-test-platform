@@ -25,6 +25,11 @@ agent_log_level: "INFO"
 agent_health_log_tail_lines: 40
 agent_agentctl_path: "{{ agent_install_dir }}/agentctl"
 agent_source_dir: "{{ playbook_dir }}/../../../backend/agent"
+# 控制面仓库 HEAD 短 SHA：经 install_agent.sh 的 AGENT_CODE_VERSION 写入
+# $INSTALL_DIR/agent/VERSION（与 API 热更新的 code_version 同语义）；git 不可用
+# 时为空串，脚本跳过写入（不阻断安装）。#1247
+agent_code_version: >-
+  {{ lookup('pipe', 'git -C ' ~ stp_repo_root ~ ' rev-parse --short HEAD 2>/dev/null || true') | trim }}
 
 # pip 镜像地址（热更新 requirements.txt 变化时使用）。空则用 pip 默认 index。
 # 优先级：-e agent_pip_index_url=... > 环境变量 STP_AGENT_PIP_INDEX_URL > 空。

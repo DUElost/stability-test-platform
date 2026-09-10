@@ -34,6 +34,8 @@
 │   │   └── ...
 │   └── scripts/                        # 可执行脚本（扁平布局）
 │       └── <name>/v<version>/<entry>.py
+├── schemas/                            # 运行时工件：Pipeline JSON Schema
+│   └── pipeline_schema.json            # pipeline_validator 按 ../schemas/ 解析
 ├── resources/                          # 测试资源文件
 │   └── aimonkey/                       # AIMONKEY 二进制与配置
 ├── logs/                               # 所有日志统一目录
@@ -58,30 +60,38 @@
 
 ## 快速部署
 
-只需同步 `backend/agent/` 目录到目标主机，运行安装脚本即可。不需要复制 `backend/` 其他模块。
+只需同步 `backend/agent/` 源码目录，外加运行时工件 `backend/schemas/pipeline_schema.json`
+（安装脚本按 `<script_dir>/../schemas/` 解析；Ansible 入口会自动暂存），运行安装脚本即可。
+不需要复制 `backend/` 其他模块。
 
 ### 1. 同步代码到目标主机
 
 **远程 Linux 主机**：
 ```bash
 # 从 Windows 开发机同步（通过 SSH）
-rsync -av --delete backend/agent/ user@target-host:/tmp/agent-install/
+ssh user@target-host 'mkdir -p /tmp/agent-install/agent /tmp/agent-install/schemas'
+rsync -av --delete backend/agent/ user@target-host:/tmp/agent-install/agent/
+# schema 是运行时工件，必须与 agent/ 同批（#1247）
+rsync -av backend/schemas/pipeline_schema.json user@target-host:/tmp/agent-install/schemas/
 
 # 或使用 scp
-scp -r backend/agent/* user@target-host:/tmp/agent-install/
+ssh user@target-host 'mkdir -p /tmp/agent-install'
+scp -r backend/agent backend/schemas user@target-host:/tmp/agent-install/
 ```
 
 **WSL（同机模拟）**：
 ```bash
 # 必须先复制到 WSL 本地文件系统，不能直接在 /mnt/ 下运行安装脚本
 # 原因：/mnt/ 是 Windows 文件系统 (drvfs)，存在 CRLF 换行符和权限映射问题
-rsync -av --delete /mnt/f/stability-test-platform/backend/agent/ /tmp/agent-install/
+mkdir -p /tmp/agent-install/agent /tmp/agent-install/schemas
+rsync -av --delete /mnt/f/stability-test-platform/backend/agent/ /tmp/agent-install/agent/
+rsync -av /mnt/f/stability-test-platform/backend/schemas/pipeline_schema.json /tmp/agent-install/schemas/
 ```
 
 ### 2. 运行安装脚本
 
 ```bash
-cd /tmp/agent-install
+cd /tmp/agent-install/agent
 
 # 修复 CRLF 换行符（从 Windows 同步过来的文件可能包含 \r\n）
 sed -i 's/\r$//' install_agent.sh
@@ -96,10 +106,12 @@ sudo bash install_agent.sh
 
 安装脚本将自动完成：
 - 创建安装目录 `/opt/stability-test-agent`
-- 只部署 `agent/` 包代码（清理测试文件）
+- 部署 `agent/` 包代码（清理测试文件）
+- 安装运行时工件：`schemas/pipeline_schema.json` 与版本标识 `agent/VERSION`（#1247）
 - 配置 Python 虚拟环境并安装依赖
 - 安装 systemd 服务（以 `python -m agent.main` 模块模式启动）
 - 创建管理脚本 `agentctl`
+- 安装后自检：用安装产物校验样例 Pipeline，失败即中止安装
 
 ### 3. 配置环境变量
 
