@@ -1,6 +1,6 @@
 # Socket.IO 重连后 REST 校准（#1192）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
