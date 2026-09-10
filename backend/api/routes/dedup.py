@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -128,12 +129,28 @@ def resolve_jira_project_key(db: Session, plan_run_id: Optional[int]) -> Optiona
     return _resolve(db, plan_run_id)
 
 
+def _mark_jira_run_not_started(console_run_id: str, error: str) -> None:
+    """#1084：start 失败时回写 FAILED，不留永久 RUNNING 的悬挂行。"""
+    try:
+        with SessionLocal() as db:
+            row = db.query(JiraRun).filter_by(console_run_id=console_run_id).first()
+            if row is None:
+                return
+            row.status = "FAILED"
+            row.error = error[:1024]
+            row.ended_at = datetime.now(timezone.utc).isoformat()
+            db.commit()
+    except Exception:
+        logger.exception("jira_run_mark_not_started_failed run_id=%s", console_run_id)
+
+
 def _on_jira_run_complete(run: "ConsoleRun") -> None:
     """RunConsole 终态回调：把结果写回 jira_run 行（run.run_id == console_run_id）。
 
     在 reader 线程跑（同步），用独立 SessionLocal 操作 DB，解析落盘日志提取
     issue_keys。任何异常只记录日志——不影响 RunConsole 主流程。
-    找不到行（极小竞态：子进程秒级结束早于主线程 INSERT）时记 warning 跳过。
+    找不到行（持久化失败等）时记 warning 跳过 —— 正常路径已由「先写后启」
+    （#1084）消除该竞态。
     """
     console_run_id = run.run_id
     try:
@@ -258,26 +275,14 @@ async def start_jira_run(
                            input_xls=input_xls, dry_run=dry_run, reporter=reporter,
                            jira_project_key=jira_project_key)
 
-    # on_complete 回调直接用 run.run_id（== console_run_id），无需闭包捕获；
-    # 极小竞态（子进程秒级结束早于下方 INSERT）时回调记 warning 跳过，可接受。
-    try:
-        console_run_id = RunConsole.instance().start(
-            run_key=f"jira:{vendor}",
-            cmd=argv,
-            cwd=tool["dir"],
-            env=_load_vendor_tool_env(tool["dir"]),
-            label=f"jira-{vendor}-{stage}",
-            on_complete=_on_jira_run_complete,
-        )
-    except RunKeyBusyError:
-        raise HTTPException(status_code=409, detail=f"a {vendor} jira run is already in progress") from None
-    except RunConsoleError as exc:
-        raise HTTPException(status_code=500, detail=f"failed to start: {exc}") from exc
-
-    # 持久化 jira_run 行（RUNNING 态）；失败仅记日志，不阻塞 run（历史记录缺失而已）
+    # #1084：**先落库后启动** —— 子进程秒级结束时，on_complete 回调（reader
+    # 线程）可能早于本协程的 INSERT 执行，旧行为是回调找不到行直接跳过，
+    # jira_run 永久停在 RUNNING 且缺 issue_keys。预生成 console_run_id 先行
+    # INSERT，start() 失败则把行回写 FAILED，不留悬挂的 RUNNING。
+    console_run_id = f"con-{uuid.uuid4().hex[:12]}"
     try:
         with SessionLocal() as db2:
-            row = JiraRun(
+            db2.add(JiraRun(
                 console_run_id=console_run_id,
                 vendor=vendor,
                 stage=stage,
@@ -289,11 +294,27 @@ async def start_jira_run(
                 jira_project_key=jira_project_key,
                 status="RUNNING",
                 created_by_user_id=getattr(_user, "id", None),
-            )
-            db2.add(row)
+            ))
             db2.commit()
     except Exception:
         logger.exception("jira_run_persist_failed run_id=%s", console_run_id)
+
+    try:
+        RunConsole.instance().start(
+            run_key=f"jira:{vendor}",
+            cmd=argv,
+            cwd=tool["dir"],
+            env=_load_vendor_tool_env(tool["dir"]),
+            label=f"jira-{vendor}-{stage}",
+            on_complete=_on_jira_run_complete,
+            run_id=console_run_id,
+        )
+    except RunKeyBusyError:
+        _mark_jira_run_not_started(console_run_id, "a run is already in progress")
+        raise HTTPException(status_code=409, detail=f"a {vendor} jira run is already in progress") from None
+    except RunConsoleError as exc:
+        _mark_jira_run_not_started(console_run_id, f"failed to start: {exc}")
+        raise HTTPException(status_code=500, detail=f"failed to start: {exc}") from exc
 
     logger.info("dedup_jira_run_started vendor=%s stage=%s source=%s run_id=%s", vendor, stage, source, console_run_id)
     return ok({"console_run_id": console_run_id, "room": f"console:{console_run_id}",

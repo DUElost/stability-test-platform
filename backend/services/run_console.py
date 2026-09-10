@@ -219,24 +219,30 @@ class RunConsole:
         env: Optional[Dict[str, str]] = None,
         label: str = "",
         on_complete: Optional[Callable[["ConsoleRun"], None]] = None,
+        run_id: Optional[str] = None,
     ) -> str:
         """起一个受控 subprocess。返回 run_id。
 
         run_key 串行：同 key 已有 RUNNING run → 抛 RunKeyBusyError。
         cmd 必须是 argv 列表（不走 shell，避免注入）。
         env 在子进程 os.environ 之上叠加（凭据由调用方注入，本层不记录 env 值）。
+        run_id（#1084）：调用方可预生成并先行落库（「先写后启」），使 spawn 前
+        外部表已能按 run_id 关联 —— 回调早于外部 INSERT 的竞态从根上消除。
+        缺省仍由本层生成；调用方提供的 run_id 撞已有 run 时抛 RunConsoleError。
         """
         if not self._configured:
             raise RunConsoleError("RunConsole not configured — call configure() first")
         if not cmd or not isinstance(cmd, list):
             raise RunConsoleError("cmd must be a non-empty argv list")
 
+        if run_id is None:
+            run_id = f"con-{uuid.uuid4().hex[:12]}"
         with self._lock:
+            if run_id in self._runs:
+                raise RunConsoleError(f"run_id already exists: {run_id}")
             if run_key in self._inflight_keys:
                 raise RunKeyBusyError(f"run_key busy: {run_key}")
             self._inflight_keys.add(run_key)
-
-        run_id = f"con-{uuid.uuid4().hex[:12]}"
         log_path = self._log_root / f"{run_id}.log"
         run = ConsoleRun(
             run_id=run_id,
