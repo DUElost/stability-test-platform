@@ -128,4 +128,49 @@ describe('LogEventsCard (#529)', () => {
     const options = query?.options as { refetchInterval?: number | false } | undefined;
     expect(options?.refetchInterval).toBe(SLOW_REFETCH_MS);
   });
+
+  it('加载到接口上限后停止放大并明示截断（#1194 复查）', async () => {
+    mocks.getLogEvents.mockResolvedValue({
+      plan_run_id: 103,
+      data_authority: 'device_log_event',
+      total: 600,
+      items: [
+        {
+          id: 'ev-0',
+          serial: '0000NX2622000514',
+          platform: 'MTK',
+          event_type: 'AEE',
+          event_subtype: 'NE',
+          state: 'REMOTE',
+          local_path: '/mnt/hdd/aee_events/103/ev-0',
+          remote_path: '/mnt/stp-aee/devices/103/ev-0',
+          detected_at: '2026-07-25T17:57:07+08:00',
+          device_timestamp: null,
+          job_id: 1001,
+          host_id: 'h1',
+          signal_seq_no: null,
+        },
+      ],
+    });
+    renderCard(103, true);
+    expect(await screen.findByTestId('log-events-count')).toHaveTextContent('已显示 1 / 600');
+
+    fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
+    await waitFor(() =>
+      expect(mocks.getLogEvents).toHaveBeenLastCalledWith(103, { skip: 0, limit: 400 }),
+    );
+    // 换查询键后旧数据不可见，卡片短暂回加载态：等新窗口数据回填再点
+    await screen.findByRole('button', { name: /加载更多/ });
+
+    fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
+
+    // 600 超过服务端上限 500：封顶到 500，不请求 600
+    await waitFor(() =>
+      expect(mocks.getLogEvents).toHaveBeenLastCalledWith(103, { skip: 0, limit: 500 }),
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/已达接口单次上限 500 条（共 600 条）/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('button', { name: /加载更多/ })).not.toBeInTheDocument();
+  });
 });

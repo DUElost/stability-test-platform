@@ -473,8 +473,15 @@ def exec_desc_to_dict(desc: TestcaseExec) -> dict:
 
 
 def exec_desc_from_dict(raw: dict) -> TestcaseExec:
-    """`exec_descs` JSONB 元素 → TestcaseExec（缺省值容忍旧数据）。"""
+    """`exec_descs` JSONB 元素 → TestcaseExec（缺省值容忍旧数据）。
+
+    #969：形状非法（非对象 / ``times`` 不可转 int / ``args`` 非对象）显式抛
+    ``ValueError``——由 ``suite_from_rows`` 补 case 上下文后转 4xx，
+    不再漏成 500。
+    """
     raw = raw or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"exec_desc must be a JSON object, got {type(raw).__name__}")
     return TestcaseExec(
         type_=raw.get("type") or "uiautomator2",
         apk=raw.get("apk") or "",
@@ -503,17 +510,25 @@ def suite_from_rows(
     """
     rows = [c for c in cases if include_disabled or bool(c.get("enabled", True))]
     rows.sort(key=lambda c: (int(c.get("ordinal") or 0), c.get("name") or ""))
+    testpoints: List[Testpoint] = []
+    for c in rows:
+        case_name = c.get("name") or ""
+        try:
+            exec_descs = [exec_desc_from_dict(d) for d in (c.get("exec_descs") or [])]
+        except (TypeError, ValueError) as exc:
+            # #969：存量坏数据带 case 上下文冒泡（调用方转 422，不漏 500）
+            raise ValueError(f"case {case_name!r}: exec_descs invalid ({exc})") from exc
+        testpoints.append(
+            Testpoint(
+                name=case_name,
+                times=int(c.get("times") or 1),
+                exec_descs=exec_descs,
+            )
+        )
     return RuntaskSuite(
         name=name,
         root_config=dict(root_config or {}),
-        testpoints=[
-            Testpoint(
-                name=c.get("name") or "",
-                times=int(c.get("times") or 1),
-                exec_descs=[exec_desc_from_dict(d) for d in (c.get("exec_descs") or [])],
-            )
-            for c in rows
-        ],
+        testpoints=testpoints,
     )
 
 

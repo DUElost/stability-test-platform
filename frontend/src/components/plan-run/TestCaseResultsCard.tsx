@@ -21,6 +21,8 @@ interface Props {
 
 /** #1194：单页条数；「加载更多」按页放大 limit（后端 skip/limit 窗口读）。 */
 const PAGE_SIZE = 500;
+/** 后端 `GET /plan-runs/{id}/test-case-results` 的 `limit` 硬上限（`Query(..., le=2000)`）。 */
+const MAX_LIMIT = 2000;
 
 const STATUS_CLASS: Record<string, string> = {
   PASS: STATUS_CHIP.success,
@@ -42,6 +44,7 @@ export default function TestCaseResultsCard({ runId, isTerminal }: Props) {
   const total = q.data?.total ?? 0;
   const loaded = q.data?.items.length ?? 0;
   const hasMore = loaded < total;
+  const atLimitCap = limit >= MAX_LIMIT;
 
   return (
     <section className={PANEL.root} data-testid="test-case-results-card">
@@ -105,16 +108,21 @@ export default function TestCaseResultsCard({ runId, isTerminal }: Props) {
                 </tbody>
               </table>
             </div>
-            {hasMore && (
+            {hasMore && !atLimitCap && (
               <div className="border-t border-border/50 pt-1.5 text-center">
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setLimit((l) => l + PAGE_SIZE)}
+                  onClick={() => setLimit((l) => Math.min(l + PAGE_SIZE, MAX_LIMIT))}
                 >
                   加载更多（还有 {total - loaded} 条）
                 </Button>
               </div>
+            )}
+            {hasMore && atLimitCap && (
+              <p className="border-t border-border/50 pt-1.5 text-center text-[11px] text-muted-foreground">
+                已达接口单次上限 {MAX_LIMIT} 条（共 {total} 条），无法继续加载
+              </p>
             )}
           </>
         )}

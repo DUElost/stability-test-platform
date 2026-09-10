@@ -32,6 +32,47 @@
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../roles/agent_deploy/defaults/main.yml"
 
+    # 升级门禁目标解析（#1249）：显式 -e 变量优先，否则取目标机已部署 .env 的
+    # HOST_ID / API_URL —— 与 Agent 自身回连的控制面保持同一地址。
+    - name: Read deployed agent identity for the upgrade gate
+      become: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        env_file="{{ agent_install_dir }}/.env"
+        host_id=""
+        api_url=""
+        if [ -f "$env_file" ]; then
+          host_id=$(grep -E '^HOST_ID=' "$env_file" | tail -n1 | cut -d= -f2- | tr -d '"' || true)
+          api_url=$(grep -E '^API_URL=' "$env_file" | tail -n1 | cut -d= -f2- | tr -d '"' || true)
+        fi
+        printf '{"host_id":"%s","api_url":"%s"}\n' "$host_id" "$api_url"
+      args:
+        executable: /bin/bash
+      register: agent_deployed_identity
+      changed_when: false
+
+    - name: Resolve upgrade gate target (explicit vars win, else deployed .env)
+      ansible.builtin.set_fact:
+        agent_upgrade_host_id: >-
+          {{ (agent_host_id | default('', true) | trim)
+             or (agent_deployed_identity.stdout | from_json).host_id }}
+        agent_upgrade_api_url: >-
+          {{ (agent_api_url | default('', true) | trim)
+             or (agent_deployed_identity.stdout | from_json).api_url }}
+
+    - name: Assert upgrade gate target is resolvable
+      ansible.builtin.assert:
+        that:
+          - agent_upgrade_host_id | length > 0
+          - agent_upgrade_api_url | length > 0
+        fail_msg: >-
+          无法解析升级门禁目标：host_id='{{ agent_upgrade_host_id }}'
+          api_url='{{ agent_upgrade_api_url }}'。
+          host_id 取自目标机 {{ agent_install_dir }}/.env 的 HOST_ID（可 -e
+          agent_host_id= 覆盖）；api_url 同理取自 API_URL（可 -e agent_api_url=
+          覆盖）。升级门禁是强制前置（ADR-0021 D8 / #1249），缺失即拒绝升级。
+        success_msg: "Upgrade gate target: host_id={{ agent_upgrade_host_id }} api_url={{ agent_upgrade_api_url }}"
+
     - name: Freeze update backup timestamp
       ansible.builtin.set_fact:
         agent_update_timestamp: "{{ agent_update_timestamp }}"
@@ -273,6 +314,46 @@
         creates: "{{ agent_service_backup_path }}"
       when: agent_service_change_lines | length > 0
 
+    # ── 升级门禁 & 维护窗口（ADR-0021 D7/D8 / #1249）────────────────────────
+    # 与 UI 热更新共用控制面实现：有活跃 Job 默认 409 拒绝；
+    # -e agent_abort_running_jobs=true 允许先 abort 排空再升级。窗口在升级期间
+    # 挡住派发与 claim（#960），释放失败靠 maintenance_until TTL 过期兜底。
+    # 控制面不可达时 fail-closed——不允许绕开互斥直接 rsync/重启。
+    - name: Generate upgrade gate holder id
+      ansible.builtin.set_fact:
+        agent_upgrade_holder: "ansible:{{ inventory_hostname }}:{{ lookup('pipe', 'cat /proc/sys/kernel/random/uuid') }}"
+
+    - name: Request control-plane upgrade gate
+      delegate_to: localhost
+      become: false
+      ansible.builtin.uri:
+        url: "{{ agent_upgrade_api_url }}/api/v1/agent/hosts/{{ agent_upgrade_host_id }}/upgrade-gate"
+        method: POST
+        headers:
+          X-Agent-Secret: "{{ agent_secret }}"
+        body_format: json
+        body:
+          holder: "{{ agent_upgrade_holder }}"
+          abort_running_jobs: "{{ agent_abort_running_jobs | default(false) | bool }}"
+        return_content: true
+        status_code: [200, 401, 404, 409, 504]
+        timeout: "{{ agent_upgrade_gate_timeout | default(90) | int }}"
+      register: agent_upgrade_gate_response
+      no_log: true
+
+    - name: Assert upgrade gate acquired
+      ansible.builtin.assert:
+        that:
+          - agent_upgrade_gate_response.status == 200
+        success_msg: "Upgrade gate acquired (holder={{ agent_upgrade_holder }})"
+        fail_msg: >-
+          升级门禁拒绝（HTTP {{ agent_upgrade_gate_response.status }}）：
+          host_id={{ agent_upgrade_host_id }} api_url={{ agent_upgrade_api_url }}。
+          401=控制面 AGENT_SECRET 不匹配；404=host_id 不在控制面；
+          409=主机有活跃 Job 或已在维护窗口（可 -e agent_abort_running_jobs=true
+          允许先 abort 排空）；504=abort 排空超时需人工介入。
+          细节见控制面审计日志 action=upgrade_gate_acquire。
+
     - name: Run upgrade with rollback on health failure
       block:
         - name: Sync changed agent code into installed agent directory
@@ -483,6 +564,24 @@
           changed_when: false
           failed_when: false
 
+        - name: Release control-plane upgrade gate after rollback
+          delegate_to: localhost
+          become: false
+          ansible.builtin.uri:
+            url: "{{ agent_upgrade_api_url }}/api/v1/agent/hosts/{{ agent_upgrade_host_id }}/upgrade-gate/release"
+            method: POST
+            headers:
+              X-Agent-Secret: "{{ agent_secret }}"
+            body_format: json
+            body:
+              holder: "{{ agent_upgrade_holder }}"
+            status_code: [200]
+            timeout: 30
+          register: agent_upgrade_gate_rollback_release
+          failed_when: false
+          no_log: true
+          when: agent_upgrade_gate_response.status | default(0) == 200
+
         - name: Fail update batch after rollback
           ansible.builtin.fail:
             msg: >-
@@ -526,3 +625,21 @@
           service_unit_backup: "{{ agent_service_backup_path if (agent_service_change_lines | default([]) | length > 0) else 'skipped' }}"
           health_rc: "{{ agent_health_after_update.rc | default('skipped') }}"
           error_log_tail: "{{ agent_update_error_log.stdout_lines | default([]) }}"
+
+    - name: Release control-plane upgrade gate
+      delegate_to: localhost
+      become: false
+      ansible.builtin.uri:
+        url: "{{ agent_upgrade_api_url }}/api/v1/agent/hosts/{{ agent_upgrade_host_id }}/upgrade-gate/release"
+        method: POST
+        headers:
+          X-Agent-Secret: "{{ agent_secret }}"
+        body_format: json
+        body:
+          holder: "{{ agent_upgrade_holder }}"
+        status_code: [200]
+        timeout: 30
+      register: agent_upgrade_gate_release
+      failed_when: false
+      no_log: true
+      when: agent_upgrade_gate_response.status | default(0) == 200
