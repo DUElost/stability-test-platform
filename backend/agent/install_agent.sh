@@ -8,6 +8,8 @@
 # 2. 设置 Python 虚拟环境
 # 3. 安装依赖
 # 4. 配置 systemd 服务
+# 5. 安装运行时工件：Pipeline schema 与版本标识（#1247）
+# 6. 安装后自检（样例 Pipeline 校验，脱离开发仓库目录）
 #
 
 set -e
@@ -49,6 +51,35 @@ echo_info "获取安装锁成功（单实例守卫）"
 
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 运行时工件解析（#1247）：schema 与 VERSION 不属于 backend/agent/ 源码目录，
+# 必须与源码同批落盘到 INSTALL_DIR，否则 pipeline_validator 取不到 schema。
+# schema 来源两种布局：
+#   1) 仓库/暂存树同构布局：<script_dir>/../schemas/pipeline_schema.json
+#   2) Ansible 暂存布局：  <script_dir>/stp_schemas/pipeline_schema.json
+resolve_pipeline_schema() {
+    local script_dir="$1" candidate
+    for candidate in \
+        "$script_dir/../schemas/pipeline_schema.json" \
+        "$script_dir/stp_schemas/pipeline_schema.json"; do
+        if [ -f "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 版本标识：优先取调用方注入（Ansible 传控制面仓库 HEAD），
+# 其次从脚本所在 git 仓库派生；都不可得时留空（不阻断安装）。
+resolve_code_version() {
+    local script_dir="$1"
+    if [ -n "${AGENT_CODE_VERSION:-}" ]; then
+        echo "$AGENT_CODE_VERSION"
+        return 0
+    fi
+    git -C "$script_dir" rev-parse --short HEAD 2>/dev/null || true
+}
 
 echo_info "========================================="
 echo_info "Stability Test Platform Agent 安装"
@@ -130,19 +161,39 @@ mkdir -p "$INSTALL_DIR"/{agent,logs,tmp,venv,resources/aimonkey}
 
 # 3. 复制 Agent 代码
 echo_info "复制 Agent 代码..."
-# 只复制 agent 目录（Agent 运行时不依赖 backend/ 其他模块）
+# 只复制 agent 目录（Agent 运行时不依赖 backend/ 其他模块）；
+# 但 backend/schemas/pipeline_schema.json 是运行时工件，单独安装（3.1）
 cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR/agent/" 2>/dev/null || true
 # 清理测试文件和安装辅助文件
 rm -f "$INSTALL_DIR/agent/test_agent"*.py 2>/dev/null || true
 rm -f "$INSTALL_DIR/agent/test_aimonkey"*.py 2>/dev/null || true
 rm -f "$INSTALL_DIR/agent/test_main"*.py 2>/dev/null || true
 rm -rf "$INSTALL_DIR/agent/tests" 2>/dev/null || true
+rm -rf "$INSTALL_DIR/agent/stp_schemas" 2>/dev/null || true
 rm -f "$INSTALL_DIR/agent/install_agent.sh" 2>/dev/null || true
 rm -f "$INSTALL_DIR/agent/agentctl.sh" 2>/dev/null || true
 rm -f "$INSTALL_DIR/agent/DEPLOY.md" 2>/dev/null || true
 rm -f "$INSTALL_DIR/agent/.env.example" 2>/dev/null || true
 rm -f "$INSTALL_DIR/agent/stability-test-agent.service" 2>/dev/null || true
 find "$INSTALL_DIR/" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# 3.1 安装 Pipeline schema（运行时校验必需；与 API 热更新同一目标路径）
+SCHEMA_SRC="$(resolve_pipeline_schema "$SCRIPT_DIR")" || {
+    echo_error "缺少 Pipeline schema：既不在 $SCRIPT_DIR/../schemas/，也不在 $SCRIPT_DIR/stp_schemas/（#1247）"
+    echo_error "  schema 是 Agent 运行时校验必需工件：手工安装请连同 backend/schemas/ 一起同步，"
+    echo_error "  Ansible 安装请使用 install_agent.yml（会先暂存 schema）。"
+    exit 1
+}
+mkdir -p "$INSTALL_DIR/schemas"
+install -m 0644 "$SCHEMA_SRC" "$INSTALL_DIR/schemas/pipeline_schema.json"
+echo_info "Pipeline schema 已安装: $INSTALL_DIR/schemas/pipeline_schema.json"
+
+# 3.2 写入版本标识（与热更新的 agent/VERSION 同语义）
+CODE_VERSION="$(resolve_code_version "$SCRIPT_DIR")"
+if [ -n "$CODE_VERSION" ]; then
+    echo "$CODE_VERSION" > "$INSTALL_DIR/agent/VERSION"
+    echo_info "版本标识已写入: $CODE_VERSION"
+fi
 
 # 4. 设置权限
 echo_info "设置文件权限..."
@@ -180,6 +231,19 @@ if [ -f "$INSTALL_DIR/agent/requirements.txt" ]; then
 else
     # 基础依赖
     "$INSTALL_DIR/venv/bin/pip" install requests python-dotenv "websockets>=12.0" -q
+fi
+
+# 6.5 安装后自检：脱离开发仓库目录，用安装产物校验样例 Pipeline（#1247）
+# cwd 固定为 INSTALL_DIR：python -m 会把 cwd 加入 sys.path，若沿用调用方 cwd
+# （Ansible 场景是暂存源码树）会导入开发布局而非安装产物，自检即失真。
+echo_info "校验安装后的 Pipeline schema..."
+if (cd "$INSTALL_DIR" && sudo -u "$USER" env PYTHONPATH="$INSTALL_DIR" \
+        "$INSTALL_DIR/venv/bin/python" -m agent.install_selfcheck); then
+    echo_info "Pipeline schema 自检通过"
+else
+    echo_error "安装后 Pipeline 自检失败，安装中止（避免带病上线）"
+    echo_error "  排查: cd $INSTALL_DIR && sudo -u $USER env PYTHONPATH=$INSTALL_DIR $INSTALL_DIR/venv/bin/python -m agent.install_selfcheck"
+    exit 1
 fi
 
 # 7. 创建 .env 文件

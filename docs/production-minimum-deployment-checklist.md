@@ -242,9 +242,10 @@ sudo systemctl status nginx --no-pager
 ### 4.1 安装 Agent
 
 ```bash
-mkdir -p /tmp/agent-install
-cd /tmp/agent-install
-# 拷贝 backend/agent/* 与 install_agent.sh
+mkdir -p /tmp/agent-install/agent /tmp/agent-install/schemas
+# 拷贝 backend/agent/* 与 install_agent.sh 到 agent/，
+# 另拷 backend/schemas/pipeline_schema.json 到 schemas/（运行时工件，#1247）
+cd /tmp/agent-install/agent
 chmod +x install_agent.sh
 sudo ./install_agent.sh
 ```

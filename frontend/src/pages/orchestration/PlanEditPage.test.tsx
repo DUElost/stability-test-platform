@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanEditPage from './PlanEditPage';
 import { HeaderSlotProvider, useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { api } from '@/utils/api';
+import { planKeys } from '@/utils/api/queryKeys';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
   default: (props: {
     planName: string;
     onPlanNameChange: (name: string) => void;
+    onSpecialtyKeyChange: (key: string) => void;
   }) => (
     <div data-testid="plan-canvas">
       <input
@@ -34,6 +36,12 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
         value={props.planName}
         onChange={(e) => props.onPlanNameChange(e.target.value)}
       />
+      <button
+        type="button"
+        onClick={() => props.onSpecialtyKeyChange('SPEC-DRAFT')}
+      >
+        选择专项草稿
+      </button>
     </div>
   ),
 }));
@@ -83,7 +91,7 @@ function renderPage(path: string) {
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
 
-  return render(
+  render(
     <HeaderSlotProvider>
       <MemoryRouter initialEntries={[path]}>
         <QueryClientProvider client={queryClient}>
@@ -95,6 +103,9 @@ function renderPage(path: string) {
       </MemoryRouter>
     </HeaderSlotProvider>,
   );
+
+  // 供 #967 用例模拟跨端失效（useCrossClientSync 对 planKeys 的 invalidate）。
+  return { queryClient };
 }
 
 describe('PlanEditPage', () => {
@@ -251,5 +262,129 @@ describe('PlanEditPage', () => {
 
     expect(await screen.findByText('有未保存的修改')).toBeInTheDocument();
     expect(screen.getByText('是否先保存当前 Plan 再发起测试？')).toBeInTheDocument();
+  });
+
+  it('marks dirty and enables save when only the specialty binding changes (#966)', async () => {
+    (api.plans.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 9,
+      name: 'Bound Plan',
+      description: '',
+      failure_threshold: 0.05,
+      specialty_key: 'SPEC-OLD',
+      steps: [],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+
+    renderPage('/orchestration/plans/9');
+
+    await screen.findByText('Bound Plan');
+    expect(screen.getByText('已保存')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /保存修改/ })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: '选择专项草稿' }));
+
+    await waitFor(() => expect(screen.getByText('未保存')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /保存修改/ })).not.toBeDisabled();
+  });
+
+  it('keeps the local draft and offers reload when the plan changes remotely (#967)', async () => {
+    const initial = {
+      id: 9,
+      name: 'Plan v1',
+      description: '',
+      failure_threshold: 0.05,
+      specialty_key: 'S1',
+      steps: [],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    const remote = { ...initial, name: 'Plan v2', description: 'peer edit', updated_at: '2026-01-02T00:00:00Z' };
+    (api.plans.get as ReturnType<typeof vi.fn>).mockResolvedValue(initial);
+    const { queryClient } = renderPage('/orchestration/plans/9');
+
+    await screen.findByText('Plan v1');
+    fireEvent.change(screen.getByTestId('plan-name-input'), { target: { value: 'My Draft' } });
+    await waitFor(() => expect(screen.getByText('未保存')).toBeInTheDocument());
+
+    (api.plans.get as ReturnType<typeof vi.fn>).mockResolvedValue(remote);
+    await queryClient.invalidateQueries({ queryKey: planKeys.detail(9) });
+
+    expect(await screen.findByText(/已在其他会话更新/)).toBeInTheDocument();
+    expect(screen.getByTestId('plan-name-input')).toHaveValue('My Draft');
+
+    fireEvent.click(screen.getByRole('button', { name: '重新加载远端版本' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plan-name-input')).toHaveValue('Plan v2');
+      expect(screen.getByText('已保存')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/已在其他会话更新/)).not.toBeInTheDocument();
+  });
+
+  it('continues editing with the original lock base after dismissing the remote notice (#967)', async () => {
+    const initial = {
+      id: 9,
+      name: 'Plan v1',
+      description: '',
+      failure_threshold: 0.05,
+      specialty_key: 'S1',
+      steps: [],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    const remote = { ...initial, name: 'Plan v2', updated_at: '2026-01-02T00:00:00Z' };
+    (api.plans.get as ReturnType<typeof vi.fn>).mockResolvedValue(initial);
+    const { queryClient } = renderPage('/orchestration/plans/9');
+
+    await screen.findByText('Plan v1');
+    fireEvent.change(screen.getByTestId('plan-name-input'), { target: { value: 'My Draft' } });
+    await waitFor(() => expect(screen.getByText('未保存')).toBeInTheDocument());
+
+    (api.plans.get as ReturnType<typeof vi.fn>).mockResolvedValue(remote);
+    await queryClient.invalidateQueries({ queryKey: planKeys.detail(9) });
+    await screen.findByText(/已在其他会话更新/);
+
+    fireEvent.click(screen.getByRole('button', { name: '继续编辑' }));
+    expect(screen.queryByText(/已在其他会话更新/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('plan-name-input')).toHaveValue('My Draft');
+
+    (api.plans.update as ReturnType<typeof vi.fn>).mockResolvedValue({ ...remote, name: 'My Draft' });
+    fireEvent.click(screen.getByRole('button', { name: /保存修改/ }));
+
+    // 草稿基准仍是加载时的版本：乐观锁令牌不因远端刷新而推进
+    await waitFor(() => {
+      expect(api.plans.update).toHaveBeenCalledWith(
+        9,
+        expect.objectContaining({ expected_updated_at: '2026-01-01T00:00:00Z' }),
+      );
+    });
+  });
+
+  it('applies a remote change silently when there is no local draft (#967)', async () => {
+    const initial = {
+      id: 9,
+      name: 'Plan v1',
+      description: '',
+      failure_threshold: 0.05,
+      specialty_key: 'S1',
+      steps: [],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+    (api.plans.get as ReturnType<typeof vi.fn>).mockResolvedValue(initial);
+    const { queryClient } = renderPage('/orchestration/plans/9');
+
+    await screen.findByText('Plan v1');
+
+    (api.plans.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...initial,
+      name: 'Plan v2',
+      updated_at: '2026-01-02T00:00:00Z',
+    });
+    await queryClient.invalidateQueries({ queryKey: planKeys.detail(9) });
+
+    await waitFor(() => expect(screen.getByTestId('plan-name-input')).toHaveValue('Plan v2'));
+    expect(screen.queryByText(/已在其他会话更新/)).not.toBeInTheDocument();
   });
 });

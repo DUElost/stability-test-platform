@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, ArrowLeft } from 'lucide-react';
+import { Loader2, ArrowLeft, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -14,7 +14,7 @@ import {
 import PlanChainPanel from '@/components/pipeline/PlanChainPanel';
 import PlanCanvas from '@/components/pipeline/PlanCanvas';
 import PlanStepInspector from '@/components/pipeline/PlanStepInspector';
-import { SURFACE, TEXT, FORM } from '@/design-system/tokens';
+import { SURFACE, TEXT, FORM, ALERT_BANNER } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { PageContainer } from '@/components/layout';
 import { usePlanEditForm } from './usePlanEditForm';
@@ -105,6 +105,24 @@ export default function PlanEditPage() {
 
   return (
     <PageContainer width="bleed" className="bg-muted/40">
+      {form.remoteChange && (
+        <div
+          role="status"
+          className={cn('flex items-center gap-3 px-4 py-2 text-[13px]', ALERT_BANNER.warning)}
+        >
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span className="min-w-0 flex-1">
+            该 Plan 已在其他会话更新；本地草稿已保留，保存时将按乐观锁校验。
+          </span>
+          <Button size="sm" variant="outline" onClick={form.reloadFromRemote}>
+            重新加载远端版本
+          </Button>
+          <Button size="sm" variant="ghost" onClick={form.dismissRemoteChange}>
+            继续编辑
+          </Button>
+        </div>
+      )}
+
       <div className="flex-1 min-h-0 grid grid-cols-1 grid-rows-1 lg:grid-cols-[260px_minmax(0,1fr)_320px] overflow-y-auto lg:overflow-hidden">
         <PlanChainPanel
           plans={form.allPlans || []}
