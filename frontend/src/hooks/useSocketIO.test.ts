@@ -231,4 +231,85 @@ describe('useSocketIO — token auth', () => {
     });
     expect(refreshAccessToken).not.toHaveBeenCalled();
   });
+
+  it('schedules a bounded reconnect when the refresh fails (#1279)', async () => {
+    vi.useFakeTimers();
+    try {
+      const refreshAccessToken = vi.fn().mockResolvedValue(false);
+      const socket = createFakeSocket();
+      const ioMock = vi.fn(() => socket);
+
+      vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
+      vi.doMock('socket.io-client', () => ({ io: ioMock }));
+
+      const { useSocketIO } = await import('@/hooks/useSocketIO');
+      const { DASHBOARD_SUBSCRIPTION } = await import('@/config');
+      renderHook(() => useSocketIO(DASHBOARD_SUBSCRIPTION));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(ioMock).toHaveBeenCalled();
+
+      await act(async () => {
+        socket.emitLocal('connect_error', new Error('Invalid token'));
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+      expect(socket.disconnect).toHaveBeenCalled();
+      // 刷新失败时不得停在断开态：先不上连，但要有排定的退避重连。
+      expect(socket.connect).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(socket.connect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reconnects immediately when the browser goes back online (#1279)', async () => {
+    vi.useFakeTimers();
+    try {
+      const refreshAccessToken = vi.fn().mockResolvedValue(false);
+      const socket = createFakeSocket();
+      const ioMock = vi.fn(() => socket);
+
+      vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
+      vi.doMock('socket.io-client', () => ({ io: ioMock }));
+
+      const { useSocketIO } = await import('@/hooks/useSocketIO');
+      const { DASHBOARD_SUBSCRIPTION } = await import('@/config');
+      renderHook(() => useSocketIO(DASHBOARD_SUBSCRIPTION));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        socket.emitLocal('connect_error', new Error('Invalid token'));
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(socket.connect).not.toHaveBeenCalled();
+
+      // 网络恢复事件：立即重连，且取消已排定的退避重试。
+      await act(async () => {
+        window.dispatchEvent(new Event('online'));
+      });
+      expect(socket.connect).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(socket.connect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
