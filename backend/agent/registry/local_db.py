@@ -107,7 +107,8 @@ class LocalDB:
                 created_at  TEXT    NOT NULL,
                 attempts    INTEGER NOT NULL DEFAULT 0,
                 last_error  TEXT,
-                acked       INTEGER NOT NULL DEFAULT 0
+                acked       INTEGER NOT NULL DEFAULT 0,
+                dead_letter INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_dle_register_outbox_pending
                 ON dle_register_outbox(acked, created_at);
@@ -144,6 +145,7 @@ class LocalDB:
         """)
         self._ensure_step_trace_schema()
         self._ensure_log_signal_outbox_schema()
+        self._ensure_dle_register_outbox_schema()
         self._ensure_active_job_registry_schema()
         self._backfill_step_trace_tokens()
         conn.commit()
@@ -285,6 +287,27 @@ class LocalDB:
         if "dead_letter" not in columns:
             self._conn.execute(
                 "ALTER TABLE log_signal_outbox "
+                "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
+            )
+
+    def _ensure_dle_register_outbox_schema(self) -> None:
+        """dle_register_outbox 增列 dead_letter（#1204）：与 log_signal_outbox 同套路。
+
+        Why: 中心永久拒绝（403/422 等 4xx 或持续网络失败）的 create 意图只
+             bump_attempts、永不下台；get_pending 按 created_at ASC LIMIT 20
+             会把 batch 窗口永久占满，后续可恢复意图队首饿死。
+        How to apply: idempotent ALTER + DEFAULT 0，兼容已部署 Agent；
+             get_pending_dle_registers 加 dead_letter=0 过滤。
+        """
+        columns = {
+            row["name"]
+            for row in self._conn.execute(
+                "PRAGMA table_info(dle_register_outbox)"
+            ).fetchall()
+        }
+        if "dead_letter" not in columns:
+            self._conn.execute(
+                "ALTER TABLE dle_register_outbox "
                 "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
             )
 
@@ -857,6 +880,8 @@ class LocalDB:
                     ON CONFLICT(event_id) DO UPDATE SET
                         payload = excluded.payload,
                         acked = 0,
+                        attempts = 0,
+                        dead_letter = 0,
                         last_error = NULL
                     """,
                     (str(event_id), body, now),
@@ -866,7 +891,8 @@ class LocalDB:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT event_id, payload, attempts FROM dle_register_outbox "
-                "WHERE acked = 0 ORDER BY created_at ASC LIMIT ?",
+                "WHERE acked = 0 AND dead_letter = 0 "
+                "ORDER BY created_at ASC LIMIT ?",
                 (int(limit),),
             ).fetchall()
         out: List[Dict[str, Any]] = []
@@ -890,14 +916,42 @@ class LocalDB:
                     (str(event_id),),
                 )
 
-    def bump_dle_register_attempts(self, event_id: str, error: str | None = None) -> None:
+    def bump_dle_register_attempts(self, event_id: str, error: str | None = None) -> int:
+        """累计 attempts 并返回新值（#1204：返回值便于上游判断是否到死信阈值）。"""
         with self._lock:
             with self._conn:
                 self._conn.execute(
                     "UPDATE dle_register_outbox SET attempts = attempts + 1, "
                     "last_error = ? WHERE event_id = ?",
-                    (error, str(event_id)),
+                    ((error[:500] if error else None), str(event_id)),
                 )
+                row = self._conn.execute(
+                    "SELECT attempts FROM dle_register_outbox WHERE event_id = ?",
+                    (str(event_id),),
+                ).fetchone()
+        return int(row["attempts"]) if row else 0
+
+    def mark_dle_register_dead_letter(self, event_id: str, error: str | None) -> None:
+        """dead_letter=1：永久失败意图不再占 drain 窗口，保留行供审计/回放。"""
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE dle_register_outbox SET dead_letter = 1, "
+                    "last_error = ? WHERE event_id = ?",
+                    ((error[:500] if error else None), str(event_id)),
+                )
+
+    def replay_dle_register_dead_letter(self, event_id: str) -> bool:
+        """死信回放：重置 dead_letter=0 并清 attempts，让意图回到 drain 窗口。"""
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "UPDATE dle_register_outbox SET dead_letter = 0, "
+                    "attempts = 0, last_error = NULL WHERE event_id = ? "
+                    "AND dead_letter = 1",
+                    (str(event_id),),
+                )
+                return cur.rowcount > 0
 
     def prune_acked_dle_registers(self, keep_recent: int = 500) -> int:
         with self._lock:
