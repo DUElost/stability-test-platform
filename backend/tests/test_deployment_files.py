@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -99,3 +103,59 @@ def test_frontend_docker_nginx_targets_server_service():
 
     assert "http://server:8000" in nginx_conf
     assert "http://backend:8000" not in nginx_conf
+
+
+def test_control_plane_template_verifier_passes():
+    """部署根占位符等模板语义不变量由 verify_control_plane_templates.py 单一维护（#1256）。"""
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "verify_control_plane_templates.py")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_frontend_build_scripts_match_nginx_roots():
+    """Nginx root 指向的 frontend/dist-* 必须由某个构建脚本产出（#1256）。"""
+    scripts = json.loads(
+        (ROOT / "frontend" / "package.json").read_text(encoding="utf-8")
+    )["scripts"]
+    nginx_dir = ROOT / "deploy" / "control-plane" / "nginx"
+
+    roots: set[str] = set()
+    for conf_path in sorted(nginx_dir.glob("*.conf")):
+        conf = conf_path.read_text(encoding="utf-8")
+        roots.update(
+            re.findall(
+                r"^\s*root\s+<deploy-root>/frontend/([\w.-]+)\s*;", conf, re.MULTILINE
+            )
+        )
+
+    assert roots == {"dist-prod", "dist-preview"}
+    for out_dir in sorted(roots):
+        assert any(f"--outDir {out_dir}" in cmd for cmd in scripts.values()), (
+            f"Nginx root frontend/{out_dir} 没有对应构建脚本——"
+            "干净 checkout 会构建出 Nginx 不托管的目录（#1256）"
+        )
+
+
+def test_deploy_docs_render_templates_instead_of_copying_them():
+    """清单/演练 runbook 必须渲染模板，禁止原样拷贝（否则 <deploy-root> 会落进 /etc，#1256）。"""
+    docs = (
+        ROOT / "docs" / "production-minimum-deployment-checklist.md",
+        ROOT / "docs" / "preprod-drill-runbook.md",
+    )
+
+    for doc_path in docs:
+        doc = doc_path.read_text(encoding="utf-8")
+        assert "$STP_DEPLOY_ROOT" in doc or "$CONTROL_DIR" in doc
+        for verbatim in (
+            "cp deploy/control-plane/systemd/",
+            "cp deploy/control-plane/nginx/",
+            "cp deploy/control-plane/logrotate/",
+            'cp "$CONTROL_DIR/deploy/control-plane/',
+        ):
+            assert verbatim not in doc, f"{doc_path.name} 原样拷贝模板：{verbatim}"

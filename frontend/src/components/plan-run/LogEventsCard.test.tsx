@@ -2,11 +2,13 @@
  * #529 — LogEventsCard：终态 PlanRun 的 DLE 事件视图（归档权威）。
  * 只读 device_log_event 端点；RUNNING 不触发；路径优先 remote_path。
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import LogEventsCard from './LogEventsCard';
 import realPayload from './__fixtures__/log-events-103.json';
+import { SLOW_REFETCH_MS } from '@/hooks/plan-run/planRunDetailUtils';
+import { planRunKeys } from '@/utils/api/queryKeys';
 
 const mocks = vi.hoisted(() => ({
   getLogEvents: vi.fn(),
@@ -24,11 +26,12 @@ function renderCard(runId: number, isTerminal: boolean) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <LogEventsCard runId={runId} isTerminal={isTerminal} />
     </QueryClientProvider>,
   );
+  return { ...view, queryClient: qc };
 }
 
 beforeEach(() => {
@@ -72,5 +75,57 @@ describe('LogEventsCard (#529)', () => {
     mocks.getLogEvents.mockRejectedValue(new Error('boom'));
     renderCard(103, true);
     await waitFor(() => expect(screen.getByText('日志事件归档加载失败')).toBeInTheDocument());
+  });
+
+  it('超过单页时显示计数与「加载更多」，点击后放大窗口（#1194）', async () => {
+    const item = (i: number) => ({
+      id: `ev-${i}`,
+      serial: '0000NX2622000514',
+      platform: 'MTK',
+      event_type: 'AEE',
+      event_subtype: 'NE',
+      state: 'REMOTE',
+      local_path: `/mnt/hdd/aee_events/103/ev-${i}`,
+      remote_path: `/mnt/stp-aee/devices/103/ev-${i}`,
+      detected_at: '2026-07-25T17:57:07+08:00',
+      device_timestamp: null,
+      job_id: 1001,
+      host_id: 'h1',
+      signal_seq_no: null,
+    });
+    mocks.getLogEvents
+      .mockResolvedValueOnce({
+        plan_run_id: 103,
+        data_authority: 'device_log_event',
+        total: 201,
+        items: Array.from({ length: 200 }, (_, i) => item(i)),
+      })
+      .mockResolvedValueOnce({
+        plan_run_id: 103,
+        data_authority: 'device_log_event',
+        total: 201,
+        items: Array.from({ length: 201 }, (_, i) => item(i)),
+      });
+
+    renderCard(103, true);
+
+    expect(await screen.findByTestId('log-events-count')).toHaveTextContent('已显示 200 / 201');
+    fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
+
+    await waitFor(() => expect(mocks.getLogEvents).toHaveBeenLastCalledWith(103, { skip: 0, limit: 400 }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /加载更多/ })).not.toBeInTheDocument());
+    expect(screen.getByTestId('log-events-count')).toHaveTextContent('已显示 201 / 201');
+  });
+
+  it('终态查询挂载慢轮询（#1193：后处理产物延迟到达仍可持续可见）', async () => {
+    mocks.getLogEvents.mockResolvedValue(realPayload);
+    const { queryClient } = renderCard(103, true);
+    await waitFor(() => expect(mocks.getLogEvents).toHaveBeenCalled());
+
+    const query = queryClient
+      .getQueryCache()
+      .find({ queryKey: planRunKeys.logEvents(103, { limit: 200 }) });
+    const options = query?.options as { refetchInterval?: number | false } | undefined;
+    expect(options?.refetchInterval).toBe(SLOW_REFETCH_MS);
   });
 });

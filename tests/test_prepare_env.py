@@ -61,20 +61,36 @@ def test_prepare_env_keeps_existing_target_content(tmp_path):
 
 def test_backend_env_templates_are_present_and_unignored():
     gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
-    result = subprocess.run(
-        ["git", "check-ignore", "deploy/control-plane/env/.env.backend.example"],
+    templates = (
+        "deploy/control-plane/env/.env.backend.example",
+        "deploy/control-plane/env/.env.backend.internal.example",
+    )
+
+    assert (REPO_ROOT / ".env.server.example").exists()
+    assert "!.env.server.example" in gitignore
+    assert "!deploy/control-plane/env/" in gitignore
+
+    for template in templates:
+        assert (REPO_ROOT / template).exists(), template
+        assert f"!{template}" in gitignore, template
+        result = subprocess.run(
+            ["git", "check-ignore", template],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 1, result.stdout
+
+    # 运行期真实 env（无 .example 后缀）必须仍被 .gitignore 的 .env* 拦住（#1256）
+    runtime = subprocess.run(
+        ["git", "check-ignore", "deploy/control-plane/env/.env.backend.internal"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
-
-    assert (REPO_ROOT / ".env.server.example").exists()
-    assert (REPO_ROOT / "deploy/control-plane/env/.env.backend.example").exists()
-    assert "!.env.server.example" in gitignore
-    assert "!deploy/control-plane/env/" in gitignore
-    assert "!deploy/control-plane/env/.env.backend.example" in gitignore
-    assert result.returncode == 1, result.stdout
+    assert runtime.returncode == 0, runtime.stdout
 
 
 def test_ensure_backend_dev_secrets_replaces_placeholder_agent_secret(tmp_path):
