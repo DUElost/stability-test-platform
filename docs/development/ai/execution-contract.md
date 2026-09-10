@@ -1,10 +1,10 @@
 # AI Execution Contract（执行契约）
 
-- **状态**：Living v1.11（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.11 变更：§2.1 命令清单改以 `--help` 为准；§3.3 增 `update --all`（只刷终态、不刷 `last_seen`）（#1234）。v1.10 变更：§3.2/§3.3 **integration 缓存失效**（`risk = 真值表 ∧ ¬landed`，fail-safe、不写字段）+ 僵尸候选两类对齐；§5.2 增 derived 归属前提；§3.5/§3.6 决策类判据机械化、模式词汇表与字段封闭性（#1232；2026-09-10 用户裁决）。v1.9 变更：§3.2 增僵尸候选第二类 `closed-unmerged`——PR CLOSED 未合且未放弃、失联、diff 为空的记录显式提示（仍在风险窗口并占 issue 槽位，唯一出口 `finish --abandon` 只能人工触发，来源 #1147 记录静默占位；2026-09-09 用户裁决）；v1.8 变更：§3.5 竞争提案可见性与决策实体唯一性——同一 Requirement 可有多个 Proposal Execution，但一个架构主题同一时刻只能有一个权威 Decision Artifact；决策类 Execution 必须显式 `--issue`、落笔前扫开放 PR 的同编号/同主题 ADR（用户 2026-09-09 裁决，来源 #906 的 ADR-0035 双份事故）；v1.7 变更：§8 并发上限反转——移除「≈2-3 显式上限」，会话数不设上限，瓶颈校准为集成收尾侧、守对象重锚为在窗 Execution 规模与 reconcile 负载（用户 2026-09-08 裁决，ADR-0034 v1.9）；v1.6 变更：§1.2 role 缺省归一化——declare 缺省写入 `implementation`（历史空串同义读取不迁移）+ 定义 Role 扩展再开启条件（v1.5 收敛 Revisit 两项闭环，ADR-0034 v1.8）；v1.5 变更：§1.2 `role` 语义收敛——Role=保留元数据与未来扩展点、默认 `implementation`、Role Runtime 供给降级 deferred（用户 2026-09-08 裁决，ADR-0034 v1.7）；v1.4 变更：§10 增「实现与契约的先后纪律」——实现不得静默重新定义 Contract 语义（用户 2026-09-08 确认）；v1.3 变更：§2.1/§3.1/§3.3 增 T9 `resume`——FINISHED→CODING 返工回退（#946）；v1.2 变更：§1.2 增 `issues` 持久字段、§2.1/§3.4 增 declare 在窗 issue 查重（#978）；v1.1 变更：§9 启动判据增补「已计划的多 Harness 批次启动前预置就绪」（用户 2026-09-07 裁决）；§1.2 增 `branch` 持久字段）
+- **状态**：Living v1.12（本文是 Execution Contract 的**唯一权威源**；方向裁决与理由见 [`ADR-0034`](../../adr/ADR-0034-multi-harness-execution-contract.md)（Accepted），两者冲突时以本文为准并回溯修订 ADR。v1.12 变更：**契约分层**——实现级细则与历史留档迁入[规范附录](execution-contract-annex.md)（A.1 写入协议 / A.2 drift 豁免 / A.3 已满足的启动判据与过渡条款 / A.4 v1.1–v1.8 明细），正文只留语义面；S6 预算随之下调（#1238，2026-09-10 用户裁决）。v1.11 变更：§2.1 命令清单改以 `--help` 为准；§3.3 增 `update --all`（只刷终态、不刷 `last_seen`）（#1234）。v1.10 变更：§3.2/§3.3 **integration 缓存失效**（`risk = 真值表 ∧ ¬landed`，fail-safe、不写字段）+ 僵尸候选两类对齐；§5.2 增 derived 归属前提；§3.5/§3.6 决策类判据机械化、模式词汇表与字段封闭性（#1232；2026-09-10 用户裁决）。v1.9 变更：§3.2 增僵尸候选第二类 `closed-unmerged`——PR CLOSED 未合且未放弃、失联、diff 为空的记录显式提示（仍在风险窗口并占 issue 槽位，唯一出口 `finish --abandon` 只能人工触发，来源 #1147 记录静默占位；2026-09-09 用户裁决）；（v1.1–v1.8 变更明细见[附录 A.4](execution-contract-annex.md#a4-变更历史v11v18自正文头部迁出)））
 - **日期**：2026-09-10
 - **适用**：所有在本仓库参与 Execution Registry 的 AI Coding Harness 会话；**用哪个 Harness 承接哪个 Requirement 始终由开发者决定**（选择权原则，ADR §2.1）——本文只约束已被选择的 Execution 如何登记与协同可见，不定义任何路由或自动下发
 - **上游评审**：两轮八源审查综合 [`REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md`](../../reviews/REVIEW_ADR0034_MULTI_HARNESS_2026-09-06_synthesis.md)（R1–R30 权威映射）
-- **本文演进**：版本化演进于本文；细则不再回填 ADR 正文（ADR-0034 升 v1.1 收缩为决策要点 + 指针）
+- **本文演进**：版本化演进于本文（含其[规范附录](execution-contract-annex.md)，两者同版本）；细则不再回填 ADR 正文（ADR-0034 升 v1.1 收缩为决策要点 + 指针）。正文承载语义面、附录承载实现级细则与历史留档，冲突时以正文为准（v1.12）
 
 ---
 
@@ -43,24 +43,11 @@
 - 目录内固定两文件：`registry.yaml`（数据）+ `registry.lock`（flock 锁，同目录）；位于 `.git` 内天然不被跟踪；
 - **Registry 按克隆隔离**——同一机器多个独立克隆不共享 registry，与派生视图同口径（per-clone），不构成全局登记。
 
-### 2.2 写入协议（九步全序，硬约束）
+### 2.2 写入协议（v1.12 起细则见附录 A.1）
 
-```text
-flock(registry.lock)
-→ read registry.yaml
-→ validate          ← schema 校验：必填字段/枚举值/scope 语法（§5），非法即拒绝写入
-→ modify
-→ write same-dir registry.yaml.tmp
-→ fsync(tmp)
-→ rename(tmp, registry.yaml)
-→ fsync(parent dir)   ← 文件 fsync 不保证 rename 后目录项的崩溃持久性
-→ unlock
-```
+写入必须**加锁 + 原子替换 + 崩溃可恢复**：任何写命令在「读 → 校验 → 改 → 落盘」全程持 `registry.lock`（flock），经**同目录**临时文件 fsync 后 rename、再 fsync 父目录（文件 fsync 不保证 rename 后目录项的持久性）；校验失败**拒写**（不部分写入）、异常释放锁并清理残留 `.tmp`、`registry.yaml` 解析失败**隔离留证而不自动重建**；Registry 仅限**本地 FS**，禁止 NFS/CIFS。
 
-- **异常处置**：`validate` 失败 → 拒写并原样报错（不部分写入）；`fsync`/`rename` 失败 → 释放锁、删除残留 `.tmp`、报错退出（记录保持旧值）；
-- **残留 tmp 清理**：任何命令启动时（持锁后）发现无主 `registry.yaml.tmp`（mtime 早于当前进程启动）即删除；
-- **损坏恢复**：`registry.yaml` 解析失败时**不自动重建**——重命名为 `registry.yaml.corrupt-<timestamp>` 留证并报错，由人工决定重建（Registry 是声明面，丢了可重 declare，静默清空会伪造「无人工作」）；
-- **仅本地 FS 成立，禁止落 NFS/CIFS**（flock 语义与原子 rename 不保证）。
+**九步全序与逐条处置**：见[附录 A.1](execution-contract-annex.md#a1-registry-写入协议细则正文-22-的细则面)（附录是本文的规范组成部分）。
 
 ### 2.3 边界（visibility-only）
 
@@ -184,21 +171,17 @@ effective_scope = normalized(declared) ∪ derived(diff)
 - **coverage 评估**（P3 drift gate 家族，advisory）：声明 `none` 但 diff 触及测试相关路径、或声明 `direct` 但无对应测试运行记录 → `coverage-mismatch`；
 - **CI 证据口径 = 夜间全量 / 合并后 CI 运行记录**（非 PR 轻量 checks——PR 路径有意不含全量 backend/frontend 测试，按 PR checks 判定会让 `direct` 声明常态误报），与合入路径 ~2min 注意力预算原则联动。
 
-## 7. drift 与强制随附物豁免
+## 7. drift 与强制随附物豁免（v1.12 起清单见附录 A.2）
 
-仓库纪律要求的强制随附物不参与 scope drift 比对（属流程义务而非执行意图）：`docs/notes/` 下的 Agent Note（含本仓库「非平凡变更必须附 Note」要求产生的文件）；`.github/workflows/*.yml` 中由 required checks 演进触发的配套改动（属门禁接线，须在 PR 描述中显式提及，豁免仅限 drift 提示、不豁免评审）。其余一律按 §5 比对。
+仓库纪律要求的**强制随附物**不参与 scope drift 比对（属流程义务而非执行意图）；其余一律按 §5 比对。豁免清单见[附录 A.2](execution-contract-annex.md#a2-drift-强制随附物豁免清单正文-7-的清单面)。
 
 ## 8. 并发与审计吞吐（v1.7 反转，随 ADR-0034 v1.9）
 
 **会话数不设上限**——原「≈2-3 显式上限」自 2026-09-04 约定未实测继承、被多 Harness 批次 5+ 会话常态超出（含单 Harness 多开），于本版移除（理由与守对象重锚见 ADR §2.6 v1.9）。真实约束在**集成收尾侧**（人的审阅吞吐 + 外部平台可靠性），可观测代理为在窗 Execution（§3.2 risk 集合）规模与 reconcile 负载；「任务排队」仍是主策略（FIFO auto-merge 串行集成、同文件显式串行排程）。Registry 提升的是审计面信息完备性，不是审阅吞吐。
 
-## 9. P1 启动判据与过渡条款
+## 9. P1 启动判据与过渡条款（v1.12 起见附录 A.3）
 
-- **启动判据**（满足其一即启动，**v1.1 修订**）：
-  1. **已计划的多 Harness 工作批次启动前**（2026-09-07 用户裁决增补——ADR-0034 的立项背景本就是「即将开展多 Issue 集中修复与新需求开发的多 Harness AI Coding」，工具须**在批次开始前预置就绪**，而非等场景自然发生；原「等撞车」判据把因果倒置）；
-  2. 连续两周并行 worktree ≥3（数据源 = git worktree 历史/日志统计，与派生视图同源）；
-  3. 实际发生 ≥2 次跨 Harness 撞车返工。
-- **过渡条款**：`ai_work.py` 就绪并被采用之前，**维持 2026-09-04 约定的派生视图用法**（`git worktree list` 遍历 + 对 merge-base 取差异）作为现行操作规范——防止「旧规范已废、新工具未启」的空窗；工具就绪后派生视图仍保留为 ground truth 交叉验证手段（§5.4）。
+启动判据（三条）与过渡条款**均已满足并收口**：工具已预置就绪并被采用，**现行操作规范就是本文正文协议**，派生视图降为 ground truth 交叉验证手段（§5.4）。判据全文与历史留档见[附录 A.3](execution-contract-annex.md#a3-p1-启动判据与过渡条款已满足历史留档)。
 
 ## 10. 演进
 
