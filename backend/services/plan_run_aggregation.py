@@ -200,6 +200,12 @@ def _finalize_plan_run(
             f"{failed} failed"
         ),
     )
+    # #1082：终态后数据静止 —— 批量重算各 job 的报告缓存，快照从此 = 最终结果。
+    # Best-effort 后台执行（重算 N 份报告不阻塞聚合事务）；调度失败放弃本轮，
+    # /report/cached 的 live 兜底仍给出正确数据。
+    from backend.services.post_completion import _schedule_report_cache_refresh
+
+    _schedule_report_cache_refresh(int(run.id))
     return True
 
 
