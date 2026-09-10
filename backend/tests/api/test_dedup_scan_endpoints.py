@@ -163,6 +163,37 @@ class TestScanEndpoint:
         assert "online" in resp.json()["detail"].lower()
         mock_enqueue.assert_not_awaited()
 
+    def test_scan_enqueue_failure_returns_503_not_false_success(
+        self, client, auth_headers, db_session,
+        sample_plan_run, sample_plan, sample_device, sample_host,
+    ):
+        """#1274: 入队失败不得回 200 "enqueued"（假成功）。"""
+        from backend.models.job import JobInstance
+        from backend.models.enums import JobStatus
+
+        job = JobInstance(
+            plan_run_id=sample_plan_run.id,
+            plan_id=sample_plan.id,
+            device_id=sample_device.id,
+            host_id=sample_host.id,
+            status=JobStatus.COMPLETED.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        )
+        db_session.add(job)
+        db_session.commit()
+
+        with patch(
+            "backend.services.dedup_scan.enqueue_dedup_terminal_async",
+            new=AsyncMock(return_value=False),
+        ):
+            resp = client.post(
+                f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/scan",
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 503, resp.text
+        assert "enqueue failed" in resp.json()["detail"]
+
 
 class TestDedupStatusEndpoint:
     """GET /api/v1/plan-runs/{run_id}/dedup/status"""
@@ -400,4 +431,31 @@ class TestDedupTriggerHelpers:
             raise RuntimeError("redis down")
 
         monkeypatch.setattr("backend.tasks.saq_worker.get_queue", _boom)
-        await enqueue_dedup_terminal_async(42)
+        # 不应抛异常，且返回 False 供用户触发路径显式报错（#1274）
+        assert await enqueue_dedup_terminal_async(42) is False
+
+    @pytest.mark.asyncio
+    async def test_enqueue_dedup_terminal_async_returns_true_when_enqueued(self, monkeypatch):
+        from backend.services.dedup_scan import enqueue_dedup_terminal_async
+
+        queue = MagicMock()
+        queue.enqueue = AsyncMock(return_value=MagicMock())
+        monkeypatch.setattr("backend.tasks.saq_worker.get_queue", lambda: queue)
+
+        assert await enqueue_dedup_terminal_async(42) is True
+        queue.enqueue.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_dedup_terminal_async_deduped_key_is_success(
+        self, monkeypatch, caplog,
+    ):
+        """#1274: SAQ 键去重（enqueue 返回 None）= 同轮任务已在队列，属幂等成功。"""
+        from backend.services.dedup_scan import enqueue_dedup_terminal_async
+
+        queue = MagicMock()
+        queue.enqueue = AsyncMock(return_value=None)
+        monkeypatch.setattr("backend.tasks.saq_worker.get_queue", lambda: queue)
+
+        with caplog.at_level("INFO"):
+            assert await enqueue_dedup_terminal_async(42) is True
+        assert "enqueue_dedup_terminal_async deduped" in caplog.text
