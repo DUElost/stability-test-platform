@@ -78,6 +78,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **Living 审查** | [`reviews/FRONTEND_ARCHITECTURE_REVIEW_AND_ROADMAP_2026-09-01.md`](./reviews/FRONTEND_ARCHITECTURE_REVIEW_AND_ROADMAP_2026-09-01.md) | 前端架构全面只读审查与未来演进规划（健康基准/分层架构/设计令牌/通信与同步/主工作台剖析/四维演进路线） |
 | **历史审查** | [`reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md`](./reviews/RESIDENT_CONTEXT_AUDIT_2026-08-27.md) | 治理面常驻上下文首轮评估；其常驻细节保留裁决已由 2026-09-05 Harness 基线整理取代 |
 | **Living 审查** | [`reviews/PLATFORM_HEALTH_REVIEW_2026-09-03.md`](./reviews/PLATFORM_HEALTH_REVIEW_2026-09-03.md) | 平台全面只读健康审查报告（核心执行健康；梳理 3 个 A 级实缺陷与 ADR-0033 在途核验；登记下一阶段 6 维风险台账） |
+| **Living 审查** | [`reviews/SCRIPT_VERSION_BLOAT_ENDGAME_FEASIBILITY_2026-09-10.md`](./reviews/SCRIPT_VERSION_BLOAT_ENDGAME_FEASIBILITY_2026-09-10.md) | 脚本版本膨胀终态可行性（#735 长效机制）：复制冗余 78% 量化 + 四条路径裁决（P2 共享库不做、P1「不可变收窄至零引用退役」是唯一需新 ADR 项、P3 归 ADR-0033 D3 轨道） |
 | **实现规格** | [`reviews/IMPLEMENTATION_SPEC_PROMPT.md`](./reviews/IMPLEMENTATION_SPEC_PROMPT.md) | 阶段 3 重构实现规格——Agent 工作提示词（产出 device-log-event implementation spec） |
 | **设计** | [`design/2026-08-27-platform-ai-assistant.md`](./design/2026-08-27-platform-ai-assistant.md) | 平台 AI 助手设计（组件职责/轮次时序/动作状态机/权限隔离矩阵/安全边界/部署观测；ADR-0031 配套） |
 | **架构 ADR** | [`adr/ADR-0033-tool-kit-ecosystem-integration.md`](./adr/ADR-0033-tool-kit-ecosystem-integration.md) | 外部工具统一接入契约规范与包管理解耦模型（三层宿主/Tool Contract 退出码分层/Manifest 发布格式×DB catalog 唯一权威/防腐适配器/与 ADR-0032 权威分家；D0·D3 权威即刻生效、D2 按族准入、包存储条件落地、legacy 例外登记；**落地状态：未落地**；Accepted v1.2；#745） |
