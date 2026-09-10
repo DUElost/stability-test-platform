@@ -1,5 +1,7 @@
 """Secret redaction 单测（无 PG）。R13-F02 (#1214)."""
 
+from urllib.parse import urlsplit
+
 from backend.core.redaction import redact_secrets
 
 
@@ -9,13 +11,17 @@ def test_url_query_token_redacted():
     assert "ABC123" not in out
     assert "access_token=***" in out
     assert "channel=x" in out  # 非敏感参数保留
-    assert "hooks.example.com" in out
+    parsed = urlsplit(out.split("failed for ", 1)[1])
+    assert parsed.hostname == "hooks.example.com"
+    assert parsed.path == "/notify"
 
 
 def test_url_userinfo_redacted():
     out = redact_secrets("https://user:pw@example.com/path")
-    assert "user" not in out.split("://", 1)[1].split("@", 1)[0]
-    assert "example.com" in out
+    parsed = urlsplit(out)
+    assert parsed.hostname == "example.com"
+    assert parsed.username in (None, "", "***")
+    assert "user" != parsed.username
 
 
 def test_multiple_sensitive_keys_and_sign():
