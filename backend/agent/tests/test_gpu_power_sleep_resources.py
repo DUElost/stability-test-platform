@@ -372,3 +372,13 @@ def test_gpu_setup_v107_wait_timeout_caught(monkeypatch):
     spec.loader.exec_module(g)
     src = inspect.getsource(g._pre_reboot_device)
     assert "TimeoutExpired" in src
+
+
+def test_gpu_setup_v108_dismiss_dialogs_wired():
+    """#774 run 356/357 根因：v1.0.8 prepare_device 后清 Antutu 首启弹窗。"""
+    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.8"
+    setup_src = (d / "gpu_setup.py").read_text(encoding="utf-8")
+    lib_src = (d / "_lib.py").read_text(encoding="utf-8")
+    assert "dismiss_antutu_dialogs(meta" in setup_src          # 接线
+    assert "def dismiss_antutu_dialogs" in lib_src             # 实现
+    assert "uiautomator dump" in lib_src and "input tap" in lib_src  # 通用清弹窗
