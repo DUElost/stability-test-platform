@@ -442,6 +442,127 @@ class TestActiveRunGuardPrecision:
         assert resp.status_code == 409
         assert resp.json()["detail"]["code"] == "SUITE_RUNS_ACTIVE"
 
+    def test_put_deactivate_blocked_by_same_suite_runs(
+        self, client, admin_headers, suite, _active_run,
+    ):
+        """#971：PUT ``is_active=false`` 与 DELETE 共用同一在途守卫。"""
+        _active_run("RUNNING", suite)
+        resp = client.put(f"/api/v1/test-suites/{suite.id}", headers=admin_headers,
+                          json={"is_active": False})
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "SUITE_RUNS_ACTIVE"
+
+    def test_put_metadata_change_not_blocked_by_runs(
+        self, client, admin_headers, suite, _active_run,
+    ):
+        """守卫只覆盖停用语义；在途 Run 不阻塞无关元数据修改。"""
+        _active_run("RUNNING", suite)
+        resp = client.put(f"/api/v1/test-suites/{suite.id}", headers=admin_headers,
+                          json={"display_name": "改名"})
+        assert resp.status_code == 200
+
+
+class TestSuiteWriteBoundary:
+    """#968/#969：写入边界契约——export_dir 目录约束、exec_descs 形状校验。
+
+    存量坏数据（绕过 schema 直写库）在 validate/export 边界必须 4xx 而非 500。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _storage_root(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+        return tmp_path
+
+    # ── #968 export_dir：绝对路径 / .. / 空串拒绝，相对目录规范化后可导出 ──
+
+    @pytest.mark.parametrize("bad_dir", ["/etc/evil", "a/../b", "..", "", "  "])
+    def test_create_rejects_unsafe_export_dir(self, client, admin_headers, bad_dir):
+        resp = client.post("/api/v1/test-suites", headers=admin_headers,
+                           json={"name": "S-unsafe", "export_dir": bad_dir})
+        assert resp.status_code == 422, resp.text
+
+    def test_update_rejects_unsafe_export_dir(self, client, admin_headers, suite):
+        resp = client.put(f"/api/v1/test-suites/{suite.id}", headers=admin_headers,
+                          json={"export_dir": "../escape"})
+        assert resp.status_code == 422
+
+    def test_relative_export_dir_normalized_and_exportable(
+        self, client, admin_headers, auth_headers, real_runtask,
+    ):
+        """合法相对目录：尾斜杠归一化，导出落在 storage/mtbf/<dir> 下。"""
+        sid = client.post("/api/v1/test-suites", headers=admin_headers,
+                          json={"name": "S-rel", "export_dir": "team-a/"}).json()["data"]["id"]
+        detail = client.get(f"/api/v1/test-suites/{sid}",
+                            headers=auth_headers).json()["data"]
+        assert detail["export_dir"] == "team-a"
+
+        client.post(f"/api/v1/test-suites/{sid}/import", headers=admin_headers,
+                    files={"file": ("runtask.xml", real_runtask, "application/xml")})
+        resp = client.post(f"/api/v1/test-suites/{sid}/export-to-tool-dir",
+                           headers=admin_headers)
+        assert resp.status_code == 200
+        assert resp.json()["data"]["export_dir"] == "team-a"
+
+    def test_legacy_absolute_export_dir_refused_before_write(
+        self, client, admin_headers, suite, db_session, tmp_path,
+    ):
+        """存量坏数据（绕过 schema 直写库）：导出写盘前 422，不落任何文件。"""
+        _add_case(db_session, suite, "c1")
+        suite.export_dir = "/etc/evil"
+        db_session.commit()
+
+        resp = client.post(f"/api/v1/test-suites/{suite.id}/export-to-tool-dir",
+                           headers=admin_headers)
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "EXPORT_DIR_INVALID"
+        assert not (tmp_path / "mtbf").exists()
+
+    # ── #969 exec_descs：写边界拒绝不可消费形状，存量坏数据 4xx ──
+
+    @pytest.mark.parametrize(
+        "bad_desc",
+        ["not-an-object", {"times": "bad"}, {"times": 0}, {"args": 5}],
+    )
+    def test_create_rejects_unconsumable_exec_desc(
+        self, client, admin_headers, suite, bad_desc,
+    ):
+        resp = client.post(
+            f"/api/v1/test-suites/{suite.id}/cases", headers=admin_headers,
+            json={"name": "bad-desc", "exec_descs": [bad_desc]},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_numeric_string_times_still_accepted(self, client, admin_headers, suite):
+        """与读路径容忍语义对齐：可转 int 的字符串照常入库。"""
+        resp = client.post(
+            f"/api/v1/test-suites/{suite.id}/cases", headers=admin_headers,
+            json={"name": "ok-desc", "exec_descs": [{"times": "3"}]},
+        )
+        assert resp.status_code == 200
+
+    def test_legacy_bad_exec_desc_validate_and_export_422(
+        self, client, admin_headers, suite, db_session,
+    ):
+        """存量坏数据：validate / export / export-to-tool-dir 返回 422 而非 500。"""
+        db_session.add(TestCase(
+            suite_id=suite.id, name="legacy-bad", ordinal=1, enabled=True, times=1,
+            exec_descs=[{"class": "C", "method": "m", "times": "bad"}],
+        ))
+        db_session.commit()
+
+        validated = client.post(f"/api/v1/test-suites/{suite.id}/validate",
+                                headers=admin_headers)
+        assert validated.status_code == 422
+        assert validated.json()["detail"]["code"] == "EXEC_DESC_INVALID"
+
+        exported = client.get(f"/api/v1/test-suites/{suite.id}/export",
+                              headers=admin_headers)
+        assert exported.status_code == 422
+        assert exported.json()["detail"]["code"] == "EXEC_DESC_INVALID"
+
+        tool_dir = client.post(f"/api/v1/test-suites/{suite.id}/export-to-tool-dir",
+                               headers=admin_headers)
+        assert tool_dir.status_code == 422
 
 
 class TestAudit:

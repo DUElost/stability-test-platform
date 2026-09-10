@@ -11,10 +11,13 @@ Tool Contract + 包存储，既有工具族的新版本目录允许继续 legacy
 ## 目录与扫描
 
 ```text
-<STP_SCRIPT_ROOT>/<name>/v<version>/<entry>.{py,sh,bat,cmd}
+<STP_SCRIPT_ROOT>/<name>/v<version>/<entry>.{py,sh}
 ```
 
-- 一级目录是脚本名，二级目录以 `v` 开头；
+- 一级目录是脚本名，二级目录以 `v` 开头；扫描器只识别 `.py`（python）与
+  `.sh`（shell）两种后缀（`script_catalog._SUPPORTED_SUFFIXES`）——`.bat/.cmd`
+  等 Windows 批处理**不受支持**（历史文档曾宣称支持，2026-09 按实现收口，
+  #1029）；
 - 入口是首个非 `_` 前缀的可识别脚本；
 - `_` 辅助模块在入口扫描时跳过，但仍受版本目录不可变门禁保护；
 - 扫描结果：`created`、`skipped`、`conflicts`、`deactivated`；

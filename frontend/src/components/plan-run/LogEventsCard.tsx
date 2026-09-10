@@ -28,6 +28,8 @@ interface Props {
 
 /** #1194：单页条数；「加载更多」按页放大 limit（后端 skip/limit 窗口读）。 */
 const PAGE_SIZE = 200;
+/** 后端 `GET /plan-runs/{id}/log-events` 的 `limit` 硬上限（`Query(..., le=500)`）。 */
+const MAX_LIMIT = 500;
 
 const STATE_CHIP: Record<string, string> = {
   DETECTED: STATUS_CHIP.muted,
@@ -56,6 +58,7 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
   const total = q.data?.total ?? 0;
   const loaded = q.data?.items.length ?? 0;
   const hasMore = loaded < total;
+  const atLimitCap = limit >= MAX_LIMIT;
 
   return (
     <section className={PANEL.root} data-testid="log-events-card">
@@ -128,16 +131,21 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
               </tbody>
             </table>
           </div>
-          {hasMore && (
+          {hasMore && !atLimitCap && (
             <div className="border-t border-border/50 p-1.5 text-center">
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setLimit((l) => l + PAGE_SIZE)}
+                onClick={() => setLimit((l) => Math.min(l + PAGE_SIZE, MAX_LIMIT))}
               >
                 加载更多（还有 {total - loaded} 条）
               </Button>
             </div>
+          )}
+          {hasMore && atLimitCap && (
+            <p className="border-t border-border/50 p-1.5 text-center text-[11px] text-muted-foreground">
+              已达接口单次上限 {MAX_LIMIT} 条（共 {total} 条），无法继续加载
+            </p>
           )}
         </>
       )}
