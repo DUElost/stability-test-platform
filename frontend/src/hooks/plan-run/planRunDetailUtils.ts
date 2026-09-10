@@ -1,4 +1,5 @@
 import type { DeviceMatrixItem, PlanDispatchState, PlanRun, WatcherTimeScope } from '@/utils/api/types';
+import { dedupKeys, planRunKeys } from '@/utils/api/queryKeys';
 import { isPlanRunTerminal } from '@/components/plan-run/planRunStatus';
 
 export const GATE_ACTIVE_REFETCH_MS = 3_000;
@@ -114,6 +115,25 @@ export function planRunRefetchInterval(
 ): number | false {
   if (isTerminal) return false;
   return isDispatchGateActive(run) ? GATE_ACTIVE_REFETCH_MS : FAST_REFETCH_MS;
+}
+
+/**
+ * #1193：手动刷新（refreshAll）覆盖的查询键全集。
+ * 必须含后处理产物查询——去重状态（scan/merge/extract）与逐条用例结果在终态后
+ * 仍会异步到达，被「刷新」遗漏时用户看不到新产物。纯函数便于回归断言键表。
+ */
+export function planRunRefreshKeys(id: number) {
+  return [
+    planRunKeys.detail(id),
+    planRunKeys.timeline(id),
+    planRunKeys.devicesByRun(id),
+    planRunKeys.watcherByRun(id),
+    planRunKeys.logEvents(id),
+    planRunKeys.chain(id),
+    planRunKeys.logsByRun(id),
+    dedupKeys.status(id),
+    planRunKeys.testCaseResults(id),
+  ];
 }
 
 export { isPlanRunTerminal };
