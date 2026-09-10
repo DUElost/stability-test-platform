@@ -84,3 +84,19 @@ def test_update_agent_reenables_service_on_restart_and_rollback():
     assert "Reload systemd and restart service" in text
     assert "Restart service after rollback" in text
     assert "enabled: true" in text
+
+
+def test_update_agent_refreshes_pipeline_schema_and_version_marker():
+    """运行时工件随升级同步（#1247）：schema 进 install_dir/schemas/，
+    版本标识进 agent/VERSION；两者都按变更检测决定是否写。"""
+    text = PLAYBOOK.read_text(encoding="utf-8")
+
+    assert "Stat installed pipeline schema before sync" in text
+    assert "Ensure schemas directory exists" in text
+    assert "Refresh pipeline schema from local source" in text
+    assert "Refresh agent VERSION marker" in text
+    assert "{{ stp_repo_root }}/backend/schemas/pipeline_schema.json" in text
+    assert "{{ agent_install_dir }}/schemas/pipeline_schema.json" in text
+    assert "{{ agent_install_dir }}/agent/VERSION" in text
+    # 升级后不再有「schema 已更新但进程仍缓存旧 schema」的窗口
+    assert "agent_schema_changed | bool" in text

@@ -108,6 +108,32 @@
         agent_staged_req_sha: "{{ (agent_staged_req_sha_raw.stdout | default('')).split(' ')[0] | default('none') }}"
         agent_deps_refreshed: false
 
+    # Pipeline schema 是运行时工件（validator 按 install_dir/schemas/ 解析）。
+    # 旧记录可能没有该文件（#1247 修复前的安装），stat 缺失即视为有变更。
+    - name: Stat installed pipeline schema before sync
+      become: true
+      ansible.builtin.stat:
+        path: "{{ agent_install_dir }}/schemas/pipeline_schema.json"
+        checksum_algorithm: sha256
+      register: agent_installed_schema_stat
+
+    - name: Stat pipeline schema on control plane
+      delegate_to: localhost
+      become: false
+      ansible.builtin.stat:
+        path: "{{ stp_repo_root }}/backend/schemas/pipeline_schema.json"
+        checksum_algorithm: sha256
+      register: agent_staged_schema_stat
+
+    - name: Record pipeline schema change summary
+      ansible.builtin.set_fact:
+        agent_schema_changed: >-
+          {{
+            agent_staged_schema_stat.stat.isreg | default(false)
+            and (agent_staged_schema_stat.stat.checksum | default(''))
+                != (agent_installed_schema_stat.stat.checksum | default(''))
+          }}
+
     - name: Preview agent code changes with rsync dry-run
       delegate_to: localhost
       become: false
@@ -218,6 +244,7 @@
             or (agentctl_change_lines | length > 0)
             or (agent_service_change_lines | length > 0)
             or (agent_env_changed | bool)
+            or (agent_schema_changed | bool)
           }}
 
     - name: Snapshot current agent directory before sync
@@ -270,6 +297,36 @@
           environment:
             SSHPASS: "{{ ansible_password | default('') }}"
           when: agent_code_change_lines | length > 0
+
+        - name: Ensure schemas directory exists
+          become: true
+          ansible.builtin.file:
+            path: "{{ agent_install_dir }}/schemas"
+            state: directory
+            owner: "{{ agent_user }}"
+            group: "{{ agent_group }}"
+            mode: "0755"
+          when: agent_schema_changed | bool
+
+        - name: Refresh pipeline schema from local source
+          become: true
+          ansible.builtin.copy:
+            src: "{{ stp_repo_root }}/backend/schemas/pipeline_schema.json"
+            dest: "{{ agent_install_dir }}/schemas/pipeline_schema.json"
+            owner: "{{ agent_user }}"
+            group: "{{ agent_group }}"
+            mode: "0644"
+          when: agent_schema_changed | bool
+
+        - name: Refresh agent VERSION marker
+          become: true
+          ansible.builtin.copy:
+            content: "{{ agent_code_version }}\n"
+            dest: "{{ agent_install_dir }}/agent/VERSION"
+            owner: "{{ agent_user }}"
+            group: "{{ agent_group }}"
+            mode: "0644"
+          when: agent_code_version | length > 0
 
         - name: Refresh agentctl command from local source
           delegate_to: localhost
@@ -458,6 +515,8 @@
           agentctl_change_count: "{{ agentctl_change_lines | default([]) | length }}"
           service_unit_change_count: "{{ agent_service_change_lines | default([]) | length }}"
           env_changed: "{{ agent_env_changed | default(false) }}"
+          schema_changed: "{{ agent_schema_changed | default(false) }}"
+          code_version: "{{ agent_code_version | default('') }}"
           deps_refreshed: "{{ agent_deps_refreshed | default(false) }}"
           restart_required: "{{ agent_update_requires_restart | default(false) }}"
           backup_dir: "{{ agent_backup_dir if (agent_code_change_lines | default([]) | length > 0) else 'skipped' }}"

@@ -30,6 +30,18 @@
         dest: "{{ agent_remote_tmp_dir }}/"
         mode: preserve
 
+    - name: Ensure schema staging directory exists
+      ansible.builtin.file:
+        path: "{{ agent_remote_tmp_dir }}/stp_schemas"
+        state: directory
+        mode: "0755"
+
+    - name: Stage pipeline schema for install script
+      ansible.builtin.copy:
+        src: "{{ stp_repo_root }}/backend/schemas/pipeline_schema.json"
+        dest: "{{ agent_remote_tmp_dir }}/stp_schemas/pipeline_schema.json"
+        mode: "0644"
+
     - name: Normalize line endings in staged source tree
       become: true
       ansible.builtin.shell: |
@@ -48,6 +60,7 @@
         AGENT_USER: "{{ agent_user }}"
         AGENT_GROUP: "{{ agent_group }}"
         AGENT_SECRET: "{{ agent_secret }}"
+        AGENT_CODE_VERSION: "{{ agent_code_version | default('', true) }}"
         PIP_INDEX_URL: "{{ agent_pip_index_url | default('') }}"
 
     - name: Refresh agentctl command from staged source
