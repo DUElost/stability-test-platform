@@ -6,6 +6,7 @@ import { Scan, Merge, FileDown, Loader2 } from 'lucide-react';
 import { api } from '@/utils/api';
 import { dedupKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
+import { SLOW_REFETCH_MS } from '@/hooks/plan-run/planRunDetailUtils';
 import { PANEL, TEXT, TOOL_BTN } from '@/design-system';
 import { cn } from '@/lib/utils';
 import type { RunContextExtractSummary, RunContextUploadSummary } from '@/utils/api/types';
@@ -47,6 +48,9 @@ export default function DedupReportCard({ runId, uploadSummary, extractSummary }
     queryKey: dedupKeys.status(runId),
     queryFn: () => api.planRuns.getDedupStatus(runId),
     staleTime: 15_000,
+    // #1193：scan/upload/merge/extract 产物终态后仍可能陆续上送；慢轮询保持可见
+    // （标签页失焦时 React Query 默认暂停轮询）。
+    refetchInterval: SLOW_REFETCH_MS,
   });
   const { isError: statusError, refetch: refetchStatus } = statusQ;
 
