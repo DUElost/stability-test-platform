@@ -134,6 +134,8 @@ class ConsoleRun:
     # 而 cancel 恰恰要处理「父已退出、子孙还活着」的情形。
     _pgid: Optional[int] = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    # #1275: 串行化 flush（reader 线程 + 定时线程并发调用），保证 seq 序与落盘序一致。
+    _flush_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def to_status(self) -> Dict[str, Any]:
         return {
@@ -358,27 +360,31 @@ class RunConsole:
 
         def flush() -> None:
             nonlocal buf
-            with buf_lock:
-                if not buf:
-                    return
-                lines = buf
-                buf = []
-            with run._lock:
-                start_seq = run.seq + 1
-                run.seq += len(lines)
-            # 落盘（replay 源）
-            try:
-                with open(run._log_path, "a", encoding="utf-8") as f:
-                    for ln in lines:
-                        f.write(ln if ln.endswith("\n") else ln + "\n")
-            except Exception:
-                logger.exception("run_console_log_write_failed run_id=%s", run.run_id)
-            # 实时推送
-            self._do_emit(
-                "console_log",
-                {"run_id": run.run_id, "from_seq": start_seq, "lines": [ln.rstrip("\n") for ln in lines]},
-                room,
-            )
+            # #1275: flush 由 reader 线程（buf 达阈值）与 timed_flush 定时线程并发
+            # 调用——若不串行，「摘批 → 分配 seq → 落盘/推送」两步可交错，导致文件
+            # 行序与 seq 序倒置（read_log 回溯/实时 from_seq 错位）。
+            with run._flush_lock:
+                with buf_lock:
+                    if not buf:
+                        return
+                    lines = buf
+                    buf = []
+                with run._lock:
+                    start_seq = run.seq + 1
+                    run.seq += len(lines)
+                # 落盘（replay 源）
+                try:
+                    with open(run._log_path, "a", encoding="utf-8") as f:
+                        for ln in lines:
+                            f.write(ln if ln.endswith("\n") else ln + "\n")
+                except Exception:
+                    logger.exception("run_console_log_write_failed run_id=%s", run.run_id)
+                # 实时推送
+                self._do_emit(
+                    "console_log",
+                    {"run_id": run.run_id, "from_seq": start_seq, "lines": [ln.rstrip("\n") for ln in lines]},
+                    room,
+                )
 
         def timed_flush() -> None:
             # #1118: flush on wall-clock interval even when stdout is quiet

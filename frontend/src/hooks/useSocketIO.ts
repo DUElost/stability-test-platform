@@ -37,6 +37,44 @@ let _authRecoveryInFlight = false;
 let _authRecoveryAttempts = 0;
 const _AUTH_RECOVERY_MAX = 2;
 
+// #1279: refresh 失败后 socket 仍处于手动 disconnect 状态（manager 自动重连已被
+// 取消），瞬时网络故障同样会走到该分支——必须自行安排有界重连，否则实时更新要等
+// 整页刷新才恢复。
+const _AUTH_RETRY_BASE_MS = 3_000;
+const _AUTH_RETRY_MAX = 4;
+let _authRetryCount = 0;
+let _authRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function _cancelAuthRetry() {
+  if (_authRetryTimer !== null) {
+    clearTimeout(_authRetryTimer);
+    _authRetryTimer = null;
+  }
+}
+
+/** 指数退避的有界重连（3s/6s/12s/24s）；成功 connect 或登出时清零。 */
+function _scheduleAuthRetry(socket: Socket) {
+  if (_authRetryTimer !== null || _authRetryCount >= _AUTH_RETRY_MAX) return;
+  const delay = _AUTH_RETRY_BASE_MS * 2 ** _authRetryCount;
+  _authRetryCount += 1;
+  _authRetryTimer = setTimeout(() => {
+    _authRetryTimer = null;
+    if (socket !== _dashSocket) return; // 已登出/被替换
+    _authRecoveryAttempts = 0;           // 新的一轮：允许再次走 cookie 刷新恢复
+    socket.connect();
+  }, delay);
+}
+
+/** 网络恢复（window online）时立即重连并重置重试预算。 */
+function _retryDashConnectNow() {
+  const sock = _dashSocket;
+  if (!sock || sock.connected) return;
+  _cancelAuthRetry();
+  _authRetryCount = 0;
+  _authRecoveryAttempts = 0;
+  sock.connect();
+}
+
 /** Handshake refusals where a cookie refresh may restore access (#1119). */
 const _RECOVERABLE_AUTH_ERRORS = new Set([
   'Invalid token',
@@ -99,6 +137,8 @@ export function disconnectDashSocket(): void {
   _dashEventListeners.clear();
   _authRecoveryInFlight = false;
   _authRecoveryAttempts = 0;
+  _authRetryCount = 0;
+  _cancelAuthRetry();
   _hookRefcount = 0;
   if (sock) {
     try {
@@ -137,6 +177,8 @@ function _getDashSocket(): Socket {
   socket.on('connect', () => {
     console.log('[SIO/dashboard] Connected');
     _authRecoveryAttempts = 0;
+    _authRetryCount = 0;
+    _cancelAuthRetry();
     _notifyDashStatus('connected');
     // Re-subscribe to all active rooms after reconnect.
     // Map.forEach(cb) is (value, key) — iterate keys so room names are strings (#1112).
@@ -168,7 +210,9 @@ function _getDashSocket(): Socket {
         if (fresh) {
           socket.connect();
         } else {
+          // #1279: 刷新失败（含瞬时网络故障）不再停在断开态——安排有界退避重连。
           _notifyDashStatus('error');
+          _scheduleAuthRetry(socket);
         }
         _authRecoveryInFlight = false;
       });
@@ -404,7 +448,12 @@ export function useSocketIO<T = unknown>(
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 订阅 effect 的初始状态同步
     setConnectionStatus(_dashStatus);
 
+    // #1279: 浏览器网络恢复时立即重连（socket 可能因刷新失败处于手动断开态，
+    // 重试预算也可能已耗尽——online 是「真实恢复」的可靠信号）。
+    window.addEventListener('online', _retryDashConnectNow);
+
     return () => {
+      window.removeEventListener('online', _retryDashConnectNow);
       _dashStatusListeners.delete(handler);
       _hookRefcount = Math.max(0, _hookRefcount - 1);
       if (_hookRefcount === 0) {
