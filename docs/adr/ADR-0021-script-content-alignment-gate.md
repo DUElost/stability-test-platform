@@ -159,6 +159,14 @@ abort 不只是为热更新服务——它是产品独立价值的运维功能�
 
 让前端能展示明细、生成二次确认对话框。
 
+> ⚠️ **2026-09-11 适用面扩展（#1249）**：D7/D8 协议此前只完整实现在 UI 热更新
+> 路由；Ansible `update_agent.yml` 直接 rsync + 重启（无门禁、无 abort、不持
+> 窗口），`batch_hot_update.py --direct` 也没有 abort 能力。现收敛为
+> `backend/services/host_upgrade_gate.py` 单一实现，三条入口共用：有活跃 Job
+> 默认 409 / `abort_running_jobs=true` 时 abort 排空后占用维护窗口。Ansible 经
+> `POST /api/v1/agent/hosts/{id}/upgrade-gate`（agent secret 鉴权）接入，
+> 控制面不可达时 fail-closed（拒绝升级，不绕开互斥）。未改变 D8 任何语义。
+
 ### D9 — Per-PlanRun verify-once（运行时不重复校验）
 
 派发门禁的 sha 校验**仅在派发瞬间做一次**，运行中不再重复。原因：

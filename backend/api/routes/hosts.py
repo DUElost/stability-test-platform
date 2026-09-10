@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import logging
 import os
-import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -18,7 +17,6 @@ from backend.core.ssh_security import (
     resolve_host_ssh_credentials,
     trust_host_key,
 )
-from backend.models.enums import JobStatus
 from backend.models.host import Host
 from backend.models.job import JobInstance
 from backend.api.schemas import (
@@ -34,11 +32,19 @@ from backend.services.agent_installer import (
     get_active_install_console_id,
     start_install_agent_runconsole,
 )
-from backend.services.host_maintenance import HostMaintenanceConflict, maintenance_window
+from backend.services.host_maintenance import HostMaintenanceConflict
+from backend.services.host_upgrade_gate import (
+    ABORT_POLL_TIMEOUT_SECONDS,
+    ACTIVE_JOB_STATUSES as _ACTIVE_JOB_STATUSES,
+    HostAbortDrainTimeoutError,
+    HostAbortPendingError,
+    HostHasActiveJobsError,
+    begin_host_upgrade,
+    end_host_upgrade,
+)
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
 from backend.services.agent_version_info import build_host_version_view, record_agent_code_deployed
 from backend.services.run_console import RunConsole
-from backend.services.plan_run_abort import abort_jobs_for_host
 from backend.tasks.saq_worker import enqueue_sync, EnqueueSyncError, get_saq_job_state_sync
 
 logger = logging.getLogger(__name__)
@@ -74,13 +80,6 @@ def _ensure_host_status_up_to_date(host: Host) -> bool:
         return True
     return False
 
-# 与 plan_dispatcher_sync.ACTIVE_JOB_STATUSES 保持一致：UNKNOWN grace 期内
-# 作业仍可能恢复（UNKNOWN→RUNNING），删除/热更新 gate 都应视为活跃（#134）。
-_ACTIVE_JOB_STATUSES = (
-    JobStatus.PENDING.value,
-    JobStatus.RUNNING.value,
-    JobStatus.UNKNOWN.value,
-)
 _AGENT_SECRET_PLACEHOLDER = "change-me-in-production"
 
 
@@ -490,38 +489,6 @@ def update_host_watcher_admin_state(
     return _host_to_out(host)
 
 
-HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS = float(
-    os.getenv("HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS", "45")
-)
-HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS = float(
-    os.getenv("HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS", "1.0")
-)
-
-
-def _wait_until_no_active_jobs(
-    db: Session, host_id: str, *, timeout_seconds: float
-) -> tuple[bool, list[int]]:
-    """Poll until ``host_id`` has zero PENDING/RUNNING jobs or the timeout
-    elapses.  Returns (ok, lingering_job_ids)."""
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        db.expire_all()
-        rows = (
-            db.query(JobInstance.id)
-            .filter(
-                JobInstance.host_id == host_id,
-                JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
-            )
-            .all()
-        )
-        ids = [r[0] for r in rows]
-        if not ids:
-            return True, []
-        if time.monotonic() >= deadline:
-            return False, ids
-        time.sleep(HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS)
-
-
 @router.post("/{host_id}/hot-update")
 def host_hot_update(
     host_id: str,
@@ -563,192 +530,58 @@ def host_hot_update(
             detail="Host has no IP address configured",
         )
 
-    # ── ADR-0021 D8 active-job gate ────────────────────────────────────────
-    from backend.models.plan_run import PlanRun
-    from backend.scheduler.device_lease_reconciler import _ABORT_REAPER_GRACE_SECONDS
-    from backend.scheduler.app_scheduler import RECONCILER_INTERVAL
-
-    active_jobs_rows = (
-        db.query(JobInstance)
-        .filter(
-            JobInstance.host_id == host_id,
-            JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
-        )
-        .order_by(JobInstance.id)
-        .all()
-    )
-
-    # v3: preload PlanRun to detect abort_requested
-    pr_ids = {j.plan_run_id for j in active_jobs_rows}
-    pr_map: dict[int, Any] = {}
-    if pr_ids:
-        pr_rows = db.query(PlanRun).filter(PlanRun.id.in_(pr_ids)).all()
-        pr_map = {pr.id: pr for pr in pr_rows}
-
-    def _job_abort_pending(j: JobInstance) -> bool:
-        pr = pr_map.get(j.plan_run_id)
-        if pr is None or pr.run_context is None:
-            return False
-        return (
-            isinstance(pr.run_context, dict)
-            and "abort_requested" in pr.run_context
-        )
-
-    active_summary = [
-        {
-            "id": j.id,
-            "plan_run_id": j.plan_run_id,
-            "plan_id": j.plan_id,
-            "device_id": j.device_id,
-            "status": j.status,
-            "abort_pending": _job_abort_pending(j),
-        }
-        for j in active_jobs_rows
-    ]
-    aborted_summary: dict[str, Any] | None = None
-
-    if active_summary:
-        if not abort_running_jobs:
-            all_abort_pending = all(item["abort_pending"] for item in active_summary)
-            if all_abort_pending:
-                # 所有 active job 都在 abort 收口中 → 返回 HOST_ABORT_PENDING
-                # 计算 retry_after_seconds: 取最晚 abort 的 Job 剩余 grace，
-                # 确保用户按此时间重试时所有 Job 都已被 reaper 收割
-                max_remaining = 0
-                now_ts = datetime.now(timezone.utc)
-                for item in active_summary:
-                    pr = pr_map.get(item["plan_run_id"])
-                    if pr is None:
-                        continue
-                    rc = pr.run_context or {}
-                    at_str = rc.get("abort_requested", {}).get("at", "")
-                    if at_str:
-                        try:
-                            at_dt = datetime.fromisoformat(at_str.replace("Z", "+00:00"))
-                            elapsed = (now_ts - at_dt).total_seconds()
-                            remaining = max(0, _ABORT_REAPER_GRACE_SECONDS - elapsed)
-                            if remaining > max_remaining:
-                                max_remaining = remaining
-                        except (ValueError, TypeError):
-                            pass
-                retry_after = int(max_remaining + RECONCILER_INTERVAL)
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "HOST_ABORT_PENDING",
-                        "message": (
-                            f"Abort is still draining for {len(active_summary)} job(s) "
-                            f"on host {host_id}. Retry in approximately {retry_after}s."
-                        ),
-                        "active_jobs": active_summary,
-                        "retry_after_seconds": retry_after,
-                    },
-                )
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "HOST_HAS_ACTIVE_JOBS",
-                    "message": (
-                        f"Host {host_id} has {len(active_summary)} active job(s). "
-                        "Pass ?abort_running_jobs=true to abort them then hot-update."
-                    ),
-                    "active_jobs": active_summary,
-                },
-            )
-
-        # Compound path: abort then wait then update.
-        aborted_summary = abort_jobs_for_host(
+    # ── ADR-0021 D7/D8 门禁 + #960 维护窗口（统一实现：host_upgrade_gate）────
+    holder = f"ui:{current_user.username if current_user else 'api'}:{uuid.uuid4().hex[:8]}"
+    try:
+        gate = begin_host_upgrade(
+            db,
             host_id,
-            db=db,
-            reason="aborted_for_host_update",
+            holder=holder,
+            abort_running_jobs=abort_running_jobs,
             triggered_by=current_user.username if current_user else "api",
             audit_user_id=current_user.id if current_user else None,
             audit_username=current_user.username if current_user else None,
         )
-        logger.info(
-            "hot_update_abort_initiated host=%s plan_runs=%s aborted_jobs=%s",
-            host_id,
-            aborted_summary["plan_runs"],
-            aborted_summary["aborted_jobs"],
-        )
-
-        ok_drained, lingering = _wait_until_no_active_jobs(
-            db, host_id,
-            timeout_seconds=HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS,
-        )
-        if not ok_drained:
-            raise HTTPException(
-                status_code=504,
-                detail={
-                    "code": "ABORT_DRAIN_TIMEOUT",
-                    "message": (
-                        f"Aborted jobs but {len(lingering)} job(s) on host {host_id} "
-                        f"did not reach a terminal state within "
-                        f"{HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS}s. "
-                        "Investigate the agent or retry."
-                    ),
-                    "lingering_jobs": lingering,
-                    "abort_summary": aborted_summary,
-                },
-            )
-
-    # ── SSH credentials ────────────────────────────────────────────────────
-    try:
-        creds, _migrated = resolve_host_ssh_credentials(
-            host, inventory_lookup=_resolve_ssh_creds,
-        )
-    except SshSecurityConfigError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if not creds.password and not creds.key_path:
+    except HostAbortPendingError as exc:
         raise HTTPException(
-            status_code=400,
-            detail=(
-                "Host has no SSH credentials configured and is not found "
-                "in Ansible inventory. Set ssh_password or ssh_key_path via "
-                "PUT /api/v1/hosts/{host_id}."
-            ),
-        )
-
-    agent_secret = _get_syncable_agent_secret() if sync_agent_secret else ""
-    code_version = get_agent_code_version()
-
-    record_audit(
-        db,
-        action="hot_update",
-        resource_type="host",
-        resource_id=None,
-        details={
-            "host_id": host_id,
-            "ip": host.ip,
-            "abort_running_jobs": abort_running_jobs,
-            "sync_agent_secret": sync_agent_secret,
-            "aborted_jobs": (
-                aborted_summary["aborted_jobs"] if aborted_summary else []
-            ),
-            "code_version": code_version,
-        },
-        user_id=current_user.id if current_user else None,
-        username=current_user.username if current_user else None,
-    )
-    db.commit()
-
-    # #960：从这里到重启完成之前是互斥窗口 —— 检查完活跃 Job 之后的上传/rsync/
-    # 重启期间不得再向该主机派发或 claim（此前只有「检查时点」的 409，窗口内无
-    # 任何阻挡）。窗口在 finally 释放；进程崩溃时靠 maintenance_until 过期失效。
-    holder = f"ui:{current_user.username if current_user else 'api'}:{uuid.uuid4().hex[:8]}"
-    try:
-        with maintenance_window(db, host_id, holder):
-            result = execute_hot_update(
-                host_ip=host.ip or "",
-                ssh_port=host.ssh_port or 22,
-                ssh_user=creds.user,
-                ssh_password=creds.password,
-                ssh_key_path=creds.key_path,
-                known_hosts_path=creds.known_hosts_path,
-                sync_agent_secret=sync_agent_secret,
-                agent_secret=agent_secret,
-                code_version=code_version,
-            )
+            status_code=409,
+            detail={
+                "code": "HOST_ABORT_PENDING",
+                "message": (
+                    f"Abort is still draining for {len(exc.active_jobs)} job(s) "
+                    f"on host {host_id}. Retry in approximately "
+                    f"{exc.retry_after_seconds}s."
+                ),
+                "active_jobs": exc.active_jobs,
+                "retry_after_seconds": exc.retry_after_seconds,
+            },
+        ) from None
+    except HostHasActiveJobsError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HOST_HAS_ACTIVE_JOBS",
+                "message": (
+                    f"Host {host_id} has {len(exc.active_jobs)} active job(s). "
+                    "Pass ?abort_running_jobs=true to abort them then hot-update."
+                ),
+                "active_jobs": exc.active_jobs,
+            },
+        ) from None
+    except HostAbortDrainTimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "code": "ABORT_DRAIN_TIMEOUT",
+                "message": (
+                    f"Aborted jobs but {len(exc.lingering_jobs)} job(s) on host "
+                    f"{host_id} did not reach a terminal state within "
+                    f"{ABORT_POLL_TIMEOUT_SECONDS}s. Investigate the agent or retry."
+                ),
+                "lingering_jobs": exc.lingering_jobs,
+                "abort_summary": exc.abort_summary,
+            },
+        ) from None
     except HostMaintenanceConflict:
         raise HTTPException(
             status_code=409,
@@ -756,31 +589,92 @@ def host_hot_update(
                 "code": "HOST_IN_MAINTENANCE",
                 "message": (
                     f"Host {host_id} is already in a maintenance window "
-                    "(another hot-update in progress). Retry later."
+                    "(another upgrade is in progress). Retry later."
                 ),
             },
         ) from None
 
-    record_audit(
-        db,
-        action="hot_update_result",
-        resource_type="host",
-        resource_id=None,
-        details={
-            "host_id": host_id,
-            "ip": host.ip,
-            "ok": bool(result.get("ok")),
-            "deps_refreshed": bool(result.get("deps_refreshed")),
-            "env_keys_synced": result.get("env_keys_synced", []),
-            "env_paths_missing": result.get("env_paths_missing", {}),
-            "code_version": result.get("code_version", ""),
-            "duration_ms": result.get("duration_ms"),
-            "message": result.get("message", ""),
-        },
-        user_id=current_user.id if current_user else None,
-        username=current_user.username if current_user else None,
-    )
-    db.commit()
+    aborted_summary = gate["aborted_summary"]
+
+    # 窗口自此处已持有：任何后续失败路径都必须在 finally 释放
+    try:
+        # ── SSH credentials ────────────────────────────────────────────────
+        try:
+            creds, _migrated = resolve_host_ssh_credentials(
+                host, inventory_lookup=_resolve_ssh_creds,
+            )
+        except SshSecurityConfigError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if not creds.password and not creds.key_path:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Host has no SSH credentials configured and is not found "
+                    "in Ansible inventory. Set ssh_password or ssh_key_path via "
+                    "PUT /api/v1/hosts/{host_id}."
+                ),
+            )
+
+        agent_secret = _get_syncable_agent_secret() if sync_agent_secret else ""
+        code_version = get_agent_code_version()
+
+        record_audit(
+            db,
+            action="hot_update",
+            resource_type="host",
+            resource_id=None,
+            details={
+                "host_id": host_id,
+                "ip": host.ip,
+                "abort_running_jobs": abort_running_jobs,
+                "sync_agent_secret": sync_agent_secret,
+                "aborted_jobs": (
+                    aborted_summary["aborted_jobs"] if aborted_summary else []
+                ),
+                "code_version": code_version,
+            },
+            user_id=current_user.id if current_user else None,
+            username=current_user.username if current_user else None,
+        )
+        db.commit()
+
+        # #960/#1249：维护窗口已由 begin_host_upgrade 持有 —— 上传/rsync/重启
+        # 期间不得再向该主机派发或 claim；失败路径在 finally 释放，进程崩溃
+        # 靠 maintenance_until 过期失效。
+        result = execute_hot_update(
+            host_ip=host.ip or "",
+            ssh_port=host.ssh_port or 22,
+            ssh_user=creds.user,
+            ssh_password=creds.password,
+            ssh_key_path=creds.key_path,
+            known_hosts_path=creds.known_hosts_path,
+            sync_agent_secret=sync_agent_secret,
+            agent_secret=agent_secret,
+            code_version=code_version,
+        )
+
+        record_audit(
+            db,
+            action="hot_update_result",
+            resource_type="host",
+            resource_id=None,
+            details={
+                "host_id": host_id,
+                "ip": host.ip,
+                "ok": bool(result.get("ok")),
+                "deps_refreshed": bool(result.get("deps_refreshed")),
+                "env_keys_synced": result.get("env_keys_synced", []),
+                "env_paths_missing": result.get("env_paths_missing", {}),
+                "code_version": result.get("code_version", ""),
+                "duration_ms": result.get("duration_ms"),
+                "message": result.get("message", ""),
+            },
+            user_id=current_user.id if current_user else None,
+            username=current_user.username if current_user else None,
+        )
+        db.commit()
+    finally:
+        end_host_upgrade(db, host_id, holder)
 
     if not result["ok"]:
         raise HTTPException(status_code=502, detail=result["message"])
