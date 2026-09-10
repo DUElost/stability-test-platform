@@ -138,11 +138,19 @@ def get_cached_run_report(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """Return cached report if post-processed, otherwise compute live."""
+    """Return cached report if post-processed, otherwise compute live.
+
+    #1082 裁决语义：缓存 = 「该 Job 完成时刻」的报告快照；PlanRun 终态时由
+    post_completion.refresh_report_cache_for_plan_run 批量重算刷新一次——此后
+    快照即最终结果。快照生成时刻经响应体 ``cached_at`` 暴露（= post_processed_at），
+    UI 据此标注「截至 xx 时刻」；需要最新口径的调用方走 /runs/{id}/report。
+    """
     from backend.models.job import JobInstance
     job = db.get(JobInstance, run_id)
     if job and job.post_processed_at and job.report_json:
-        return ok(job.report_json)
+        payload = dict(job.report_json)
+        payload["cached_at"] = job.post_processed_at.isoformat()
+        return ok(payload)
 
     report = compose_run_report(db, run_id)
     if report is None:
