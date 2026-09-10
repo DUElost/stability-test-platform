@@ -491,7 +491,8 @@ async def test_merge_task_mark_timeout_sets_ready_false_despite_pending_zero(mon
     assert written["value"]["incomplete_reason"] == "upload_mark_timeout"
     assert written["value"]["compensation"] == "best_effort_extract"
     assert written["value"]["local"] == 2
-    saq_tasks._enqueue_extract_task.assert_awaited_once_with(42)
+    # #1111：extract 链式入队带上本轮 scan_round_id（round-scoped key）
+    saq_tasks._enqueue_extract_task.assert_awaited_once_with(42, scan_round_id="round-NEW")
 
 
 # ---------------------------------------------------------------------------

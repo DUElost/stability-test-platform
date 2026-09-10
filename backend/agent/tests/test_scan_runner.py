@@ -579,3 +579,42 @@ class TestReclaimScanStaging:
         )
         import os
         assert os.stat(event).st_nlink == 1
+
+    def test_run_scan_and_upload_reclaims_when_upload_raises(self, tmp_path):
+        """#1277: upload 抛异常也必须回收 staging——否则占盘到该 plan_run 下一轮
+        scan 的 prepare 才释放（长时不重跑即持续占盘）。"""
+        r = _make_runner()
+        hdd = tmp_path / "hdd"
+        hdd.mkdir()
+        event = _seed_event_file(hdd)
+        r._hdd_root = str(hdd)
+
+        uploader = MagicMock()
+        uploader.is_configured.return_value = True
+        uploader.upload_scan_report.side_effect = RuntimeError("nfs down")
+
+        with patch(
+            "backend.agent.scan_runner.subprocess.run",
+            side_effect=lambda argv, **_k: (
+                (_ := Path(argv[argv.index("-d") + 1]) / "Result_shanghai_org.xls")
+                .write_text("fake"),
+                _completed(stdout="done"),
+            )[1],
+        ):
+            with patch(
+                "backend.agent.upload_manager.UploadManager.instance",
+                return_value=uploader,
+            ):
+                with pytest.raises(RuntimeError, match="nfs down"):
+                    r.run_scan_and_upload(
+                        42, "host-1", is_final=False,
+                        device_serials=["SER-A"], run_date_stamps=["0808"],
+                    )
+
+        assert uploader.upload_scan_report.called
+        assert all(
+            not p.name.startswith("pr42-")
+            for p in (hdd / ".stp-scan").iterdir()
+        )
+        import os
+        assert os.stat(event).st_nlink == 1
