@@ -253,6 +253,39 @@ def test_send_to_channel_dingtalk_surfaces_business_error(monkeypatch):
         mod.send_to_channel(channel, "This is a test notification from Stability Test Platform.")
 
 
+def test_webhook_http_error_summary_redacts_credentials(monkeypatch):
+    """R13-F02 (#1214): 带 token 的 webhook 失败不得把 URL/凭据带进错误文本。"""
+    resp = MagicMock()
+    resp.status_code = 401
+    resp.reason = "Unauthorized"
+    monkeypatch.setattr(mod.requests, "post", MagicMock(return_value=resp))
+
+    with pytest.raises(mod.NotificationDeliveryError) as ei:
+        mod._send_webhook(
+            "https://hooks.example.com/notify?access_token=SUPERSECRET&channel=alerts",
+            "hi",
+        )
+
+    text = str(ei.value)
+    assert "SUPERSECRET" not in text
+    assert "access_token" not in text
+    assert "hooks.example.com" not in text
+    assert "HTTP 401" in text
+
+
+def test_webhook_http_error_reason_is_redacted(monkeypatch):
+    """Even a smuggled URL inside the reason phrase is redacted (#1214)."""
+    resp = MagicMock()
+    resp.status_code = 500
+    resp.reason = "caused by https://hooks.example.com/x?token=LEAKME"
+    monkeypatch.setattr(mod.requests, "post", MagicMock(return_value=resp))
+
+    with pytest.raises(mod.NotificationDeliveryError) as ei:
+        mod._send_webhook("https://hooks.example.com/x", "hi")
+
+    assert "LEAKME" not in str(ei.value)
+
+
 # ── #1122：SMTP 网络超时 + 队列满拒绝不外溢 ──────────────────────────────
 
 

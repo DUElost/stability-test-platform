@@ -765,3 +765,68 @@ def test_script_usage_versions_used_when_config_diverges(client, auth_headers, d
     assert row["plan_count"] == 0
     assert row["run_count"] == 1
     assert row["versions_used"][0]["script_version"] == "1.0.0"
+
+
+# ── #1026（R08-F06）：脚本版本创建的 SHA 与路径契约 ───────────────────────
+
+
+class TestScriptVersionCreateValidation:
+    """POST /{name}/versions：空/非法 SHA 与复用旧版本路径必须 422 拒绝。"""
+
+    def _seed_active_script(self, client, admin_headers, name: str) -> None:
+        resp = client.post("/api/v1/scripts", json={
+            "name": name,
+            "display_name": name,
+            "category": "device",
+            "script_type": "python",
+            "version": "1.0.0",
+            "nfs_path": f"/scripts/{name}/v1.0.0/{name}.py",
+            "content_sha256": "a" * 64,
+            "default_params": {},
+        }, headers=admin_headers)
+        assert resp.status_code in (200, 201), resp.text
+
+    def _post_version(self, client, admin_headers, name: str, **overrides) -> object:
+        payload = {
+            "version": "2.0.0",
+            "nfs_path": f"/scripts/{name}/v2.0.0/{name}.py",
+            "content_sha256": "b" * 64,
+            "param_schema": {},
+            "default_params": {},
+        }
+        payload.update(overrides)
+        return client.post(f"/api/v1/scripts/{name}/versions", json=payload,
+                           headers=admin_headers)
+
+    def test_empty_sha_rejected(self, client, admin_headers):
+        name = _uniq("sha_val")
+        self._seed_active_script(client, admin_headers, name)
+        resp = self._post_version(client, admin_headers, name, content_sha256="  ")
+        assert resp.status_code == 422, resp.text
+        assert "content_sha256" in str(resp.json())
+
+    def test_non_hex_short_sha_rejected(self, client, admin_headers):
+        name = _uniq("sha_val")
+        self._seed_active_script(client, admin_headers, name)
+        resp = self._post_version(client, admin_headers, name, content_sha256="abc123")
+        assert resp.status_code == 422, resp.text
+        assert "content_sha256" in str(resp.json())
+
+    def test_reusing_old_version_path_rejected(self, client, admin_headers):
+        name = _uniq("sha_val")
+        self._seed_active_script(client, admin_headers, name)
+        resp = self._post_version(
+            client, admin_headers, name,
+            nfs_path=f"/scripts/{name}/v1.0.0/{name}.py",  # 静默复用旧版本路径
+        )
+        assert resp.status_code == 422, resp.text
+        assert "v2.0.0" in str(resp.json())
+
+    def test_valid_sha_and_matching_path_created(self, client, admin_headers):
+        name = _uniq("sha_val")
+        self._seed_active_script(client, admin_headers, name)
+        resp = self._post_version(client, admin_headers, name)
+        assert resp.status_code == 201, resp.text
+        data = resp.json()["data"]
+        assert data["version"] == "2.0.0"
+        assert data["is_active"] is True
