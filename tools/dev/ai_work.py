@@ -759,7 +759,8 @@ def cmd_declare(args) -> int:
 
 def _report(rec_id: str, rec: dict, repo_root: str, refresh: bool, *,
             landed: bool = False, shared: frozenset | set = frozenset(),
-            peers: list | None = None) -> None:
+            peers: list | None = None, derived: set | None = None) -> None:
+    """`derived` 可由调用方注入（已 memoize 的集合，见 cmd_status）——不传则现算。"""
     now = _now()
     integration = rec.get("integration_cache")
     if refresh and rec.get("pr_number"):
@@ -768,7 +769,7 @@ def _report(rec_id: str, rec: dict, repo_root: str, refresh: bool, *,
             print(f"  (integration 观测于 {rec.get('observed_at', '?')}，GitHub 暂不可达)")
     integration = integration or "NO_PR"
     liveness = derive_liveness(float(rec["last_seen"]) if rec.get("last_seen") else None, now)
-    derived = set(derived_paths(rec, repo_root, shared))
+    derived = set(derived) if derived is not None else set(derived_paths(rec, repo_root, shared))
     effective = sorted(set(rec.get("scope", [])) | derived)
     # §3.3 v1.10 缓存失效：缓存称开放但分支已含于 origin/main ⇒ 不按风险窗口处理（不写字段）
     stale_cache = landed
@@ -815,13 +816,26 @@ def cmd_status(args) -> int:
         return 0
     repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
                                text=True, check=True).stdout.strip()
-    ids = [args.id] if args.id else sorted(records)
     # 在窗集合（§3.2 真值表 ∧ ¬landed，§3.3 v1.10）：landed/shared/ADR 占用各算一次
     risk = risk_ids(records, repo_root)
     landed = landed_ids(records, repo_root)
     shared = shared_worktrees(records, risk)
     claims = adr_collisions(records, risk)
     risk_recs = {k: v for k, v in records.items() if k in risk}
+    ids = ([args.id] if args.id
+           else sorted(risk) if getattr(args, "risk", False)
+           else sorted(records))
+    # derived 按记录 memoize（#1234）：成对 overlap 循环曾对每条记录反复重算
+    # derived_paths（O(n²) 次 git 子进程），是前检命令的主要时延来源
+    derived_cache: dict = {}
+
+    def dp(rid: str) -> set:
+        if rid not in derived_cache:
+            derived_cache[rid] = set(derived_paths(records[rid], repo_root, shared))
+        return derived_cache[rid]
+
+    if getattr(args, "risk", False) and not args.id:
+        print(f"（--risk：仅列在窗记录 {len(risk)}/{len(records)} 条；全量用 status（不带 --risk））")
     for rec_id in ids:
         if rec_id not in records:
             print(f"[NOT-FOUND] {rec_id}", file=sys.stderr)
@@ -829,13 +843,13 @@ def cmd_status(args) -> int:
         mine = {p for p in adr_claims(records[rec_id].get("scope", [])) if p in claims}
         peers = sorted({x for p in mine for x in claims[p] if x != rec_id})
         _report(rec_id, records[rec_id], repo_root, refresh=False,
-                landed=rec_id in landed, shared=shared, peers=peers)
+                landed=rec_id in landed, shared=shared, peers=peers, derived=dp(rec_id))
     if len(risk_recs) >= 2:
         keys = sorted(risk_recs)
         for i, a in enumerate(keys):
             for b in keys[i + 1:]:
-                ea = set(risk_recs[a].get("scope", [])) | set(derived_paths(risk_recs[a], repo_root, shared))
-                eb = set(risk_recs[b].get("scope", [])) | set(derived_paths(risk_recs[b], repo_root, shared))
+                ea = set(risk_recs[a].get("scope", [])) | dp(a)
+                eb = set(risk_recs[b].get("scope", [])) | dp(b)
                 hits = {x for x in ea for y in eb if scope_overlap(x, y)}
                 if hits:
                     print(f"[overlap-hint] {a} ↔ {b}: {sorted(hits)}（hint，从不禁止修改）")
@@ -976,10 +990,97 @@ def cmd_whoami(args) -> int:
     return 0
 
 
+# ── 批量 reconcile（契约 §3.3 v1.11，#1234）──
+
+def fetch_pr_states(cwd: str, limit: int = 400) -> dict | None:
+    """**一次** gh 调用取全部 PR 的 state：{pr_number: "OPEN|MERGED|CLOSED"}。
+
+    只取 `state`——批量 reconcile 的职责是**终态**（实测陈旧记录的主体：25/29 为
+    已合入），READY 派生仍归单记录 `update`（`gh pr checks --required` 逐 PR 调用，
+    #1211 的领地），批量侧不重算 READY，避免同一判据出现两套实现。
+    GitHub 不可用（gh 失败/超时/cwd 不可用）→ None（调用方降级，不猜测、不推进终态）。
+    """
+    try:
+        proc = subprocess.run(
+            ["gh", "pr", "list", "--state", "all", "--limit", str(limit),
+             "--json", "number,state"],
+            capture_output=True, text=True, timeout=60, cwd=cwd,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        import json
+        return {str(item["number"]): item.get("state") for item in json.loads(proc.stdout)}
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def batch_integration_updates(records: dict, states: dict) -> dict:
+    """纯函数：由 PR state 映射算出需要改写的 integration——{record_id: 新值}。
+
+    只改**终态**（MERGED/CLOSED）且仅在取值确有不同的记录；PR 仍 OPEN 的记录保持既有
+    `integration_cache` 不动（READY 不在此重算，见 `fetch_pr_states`）。无 `pr_number`
+    或未出现在映射中的记录跳过——纯函数、可离线红绿自证。
+    """
+    updates: dict = {}
+    for rid, rec in records.items():
+        pr = rec.get("pr_number")
+        if not pr:
+            continue
+        state = states.get(str(pr))
+        cached = rec.get("integration_cache") or "NO_PR"
+        if state == "MERGED" and cached != "MERGED":
+            updates[rid] = "MERGED"
+        elif state == "CLOSED" and cached != "CLOSED":
+            updates[rid] = "CLOSED"
+    return updates
+
+
+def reconcile_all(path: str, lock: str, repo_root: str) -> int:
+    """`update --all`：单次调用 + 单次九步写刷新全部已登记 PR 的终态。
+
+    **不刷任何 `last_seen`**：批量命令没有 execution identity，不冒充心跳（§3.3 的
+    identity 语义）；只写 `integration_cache`/`observed_at`/`updated_at`。
+    """
+    states = fetch_pr_states(repo_root)
+    if states is None:
+        print("[WARN] GitHub 不可达——批量 reconcile 跳过（不猜测、不推进终态，§3.3）",
+              file=sys.stderr)
+        return 1
+    updates: dict = {}
+    ctx = load_locked(path, lock)
+    try:
+        updates = batch_integration_updates(ctx.records, states)
+        if updates:
+            now = _now()
+            for rid, value in updates.items():
+                ctx.records[rid]["integration_cache"] = value
+                ctx.records[rid]["observed_at"] = now
+                ctx.records[rid]["updated_at"] = now
+            ctx.commit()
+    finally:
+        ctx.close()
+    for rid in sorted(updates):
+        print(f"[OK] reconcile {rid} → {updates[rid]}")
+    print(f"[OK] update --all：刷新 {len(updates)} 条终态（GitHub 侧共 {len(states)} 个 PR；"
+          f"未刷任何 last_seen；PR 仍 OPEN 的 READY 派生归单记录 update）")
+    return 0
+
+
 def cmd_update(args) -> int:
     path, lock = registry_paths()
     repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
                                text=True, check=True).stdout.strip()
+    if getattr(args, "all", False):
+        if args.id:
+            print("[REFUSED] --all 与 --id 互斥（批量 reconcile 无 execution identity）", file=sys.stderr)
+            return 2
+        return reconcile_all(path, lock, repo_root)
+    if not args.id:
+        print("[REFUSED] update 需要 --id <ID>，或 --all 做批量 reconcile（#1234）", file=sys.stderr)
+        return 2
     ctx = load_locked(path, lock)
     try:
         rec = ctx.records.get(args.id)
@@ -1377,6 +1478,39 @@ def run_self_test() -> int:
     assert default_role("") == "implementation"
     assert default_role("docs") == "docs"
 
+    # #1234 批量 reconcile 纯函数：由 PR state 映射算出「需要改的 integration」
+    # （本组断言刻意放在此处的独立区块，不追加到 self-test 尾部/状态派生区——
+    #  那两处是各 harness 追加断言的天然合并热点，#1211 与 #1232/#1234 曾在此撞车）
+    _batch = {
+        "stale-merged": {"requirement": "a", "harness": "h", "worktree": "/w",
+                         "lifecycle": "FINISHED", "pr_number": "11",
+                         "integration_cache": "PR_OPEN"},
+        "stale-closed": {"requirement": "b", "harness": "h", "worktree": "/w",
+                         "lifecycle": "CODING", "pr_number": "12",
+                         "integration_cache": "READY"},
+        "still-open": {"requirement": "c", "harness": "h", "worktree": "/w",
+                       "lifecycle": "CODING", "pr_number": "13",
+                       "integration_cache": "PR_OPEN"},
+        "already-merged": {"requirement": "d", "harness": "h", "worktree": "/w",
+                           "lifecycle": "FINISHED", "pr_number": "14",
+                           "integration_cache": "MERGED"},
+        "no-pr": {"requirement": "e", "harness": "h", "worktree": "/w",
+                  "lifecycle": "CODING"},
+        "unknown-pr": {"requirement": "f", "harness": "h", "worktree": "/w",
+                       "lifecycle": "CODING", "pr_number": "99"},
+    }
+    _states = {"11": "MERGED", "12": "CLOSED", "13": "OPEN", "14": "MERGED"}
+    assert batch_integration_updates(_batch, _states) == {
+        "stale-merged": "MERGED", "stale-closed": "CLOSED"}
+    # PR 仍 OPEN：不在此重算 READY（避免与单记录 update / #1211 双实现）
+    assert "still-open" not in batch_integration_updates(_batch, _states)
+    # 已终态：幂等（不产生无意义写入）；无 pr_number / 未出现在映射中：跳过
+    assert "already-merged" not in batch_integration_updates(_batch, _states)
+    assert batch_integration_updates(_batch, {}) == {}
+    assert batch_integration_updates({}, _states) == {}
+    # GitHub 不可用 → None（降级；此断言用不可用 cwd，不触网）
+    assert fetch_pr_states("/nonexistent-cwd-for-test") is None
+
     # P3 drift gate 纯函数
     assert is_test_path("backend/tests/test_x.py") and is_test_path("tests/y.py")
     assert is_test_path("frontend/src/a.test.ts") and is_test_path("dir/conftest.py")
@@ -1467,6 +1601,8 @@ def main() -> int:
 
     p = sub.add_parser("status")
     p.add_argument("--id")
+    p.add_argument("--risk", action="store_true",
+                   help="只列在窗记录（附加视图；默认仍列全部，#1234）")
     p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("whoami", help="按 worktree 定位自身 Execution + 入向 overlap（只读）")
@@ -1476,7 +1612,10 @@ def main() -> int:
     # update 即 heartbeat：无 --scope/--pr 的 update = 纯心跳（刷 last_seen）+ reconcile
     # （契约 §2.5 的 identity 写命令语义；P2 wrapper 按此定时调用）
     p = sub.add_parser("update", aliases=["heartbeat"])
-    p.add_argument("--id", required=True)
+    p.add_argument("--id")
+    p.add_argument("--all", action="store_true",
+                   help="批量 reconcile 全部已登记 PR 的终态（单次 gh 调用 + 单次九步写；"
+                        "不刷任何 last_seen，#1234）")
     p.add_argument("--scope", action="append")
     p.add_argument("--pr", type=int)
     p.set_defaults(fn=cmd_update)
