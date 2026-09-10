@@ -282,12 +282,15 @@ class ScanRunner:
             logger.warning("control_scan_now_skip_uploader_not_configured")
             reclaim_scan_staging(getattr(self, "_last_scan_root", None))
             return
-        uploader.upload_scan_report(plan_run_id, host_id, org_xls, platform_subdir="mtk")
-        if dedup_xls:
-            uploader.upload_scan_report(plan_run_id, host_id, dedup_xls, platform_subdir="mtk")
-        # #1078：本轮产物已复制进 dedup/ 目录 —— staging（HDD 事件文件的硬链接）
-        # 立即回收， prune 原事件目录后磁盘才能真正释放。
-        reclaim_scan_staging(getattr(self, "_last_scan_root", None))
+        try:
+            uploader.upload_scan_report(plan_run_id, host_id, org_xls, platform_subdir="mtk")
+            if dedup_xls:
+                uploader.upload_scan_report(plan_run_id, host_id, dedup_xls, platform_subdir="mtk")
+        finally:
+            # #1078/#1277：本轮产物已复制进 dedup/ 目录 —— staging（HDD 事件文件的
+            # 硬链接）即可回收，prune 原事件目录后磁盘才能真正释放。upload 抛异常
+            # 也必须回收，否则占盘到该 plan_run 下一轮 scan 的 prepare 才释放。
+            reclaim_scan_staging(getattr(self, "_last_scan_root", None))
         logger.info("control_scan_now_done plan_run=%d host=%s", plan_run_id, host_id)
 
     @classmethod
