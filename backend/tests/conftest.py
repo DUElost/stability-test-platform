@@ -4,6 +4,7 @@ Pytest Configuration and Fixtures
 
 import asyncio
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -21,6 +22,7 @@ def pytest_configure(config):
     )
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 # Set test mode before importing app to disable startup background threads
@@ -115,6 +117,34 @@ def engine():
         _TEST_DB_CONTAINER.stop()
 
 
+_TRUNCATE_DEADLOCK_RETRIES = 3
+
+
+def _truncate_all_tables(engine, table_names: str) -> None:
+    """清库（TRUNCATE ... RESTART IDENTITY CASCADE）并对死锁做有界重试（#1273）。
+
+    TRUNCATE 取 AccessExclusiveLock；同进程内仍有存活的连接/后台线程持
+    AccessShareLock 时，PG 会把 TRUNCATE 判为循环等待的牺牲者并抛
+    DeadlockDetected（全量套件 7–8 个 setup ERROR 的来源，出错集合随运行漂移）。
+    死锁是瞬态：对方语句结束后重试即成功；超出上限仍失败则原样抛出。
+    """
+    for attempt in range(_TRUNCATE_DEADLOCK_RETRIES + 1):
+        try:
+            with engine.begin() as conn:
+                if conn.dialect.name == "postgresql":
+                    conn.exec_driver_sql(
+                        f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
+                    )
+                else:
+                    for table in reversed(Base.metadata.sorted_tables):
+                        conn.execute(table.delete())
+            return
+        except OperationalError as exc:
+            if "DeadlockDetected" not in str(exc) or attempt >= _TRUNCATE_DEADLOCK_RETRIES:
+                raise
+            time.sleep(0.2 * (attempt + 1))
+
+
 @pytest.fixture(scope="function")
 def db_session(engine):
     """Per-test session with full isolation via TRUNCATE ... RESTART IDENTITY.
@@ -129,14 +159,7 @@ def db_session(engine):
     table_names = ", ".join(
         f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables)
     )
-    with engine.begin() as conn:
-        if conn.dialect.name == "postgresql":
-            conn.exec_driver_sql(
-                f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
-            )
-        else:
-            for table in reversed(Base.metadata.sorted_tables):
-                conn.execute(table.delete())
+    _truncate_all_tables(engine, table_names)
 
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     session = Session()
