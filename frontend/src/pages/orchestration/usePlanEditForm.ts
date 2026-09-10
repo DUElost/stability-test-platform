@@ -15,12 +15,25 @@ import { planKeys } from '@/utils/api/queryKeys';
 import {
   EMPTY_LIFECYCLE,
   buildStepsForApi,
+  draftSnapshot,
   findStepInLifecycle,
+  planDraftSnapshot,
   rebuildLifecycleFromPlan,
-  snapshot,
 } from './planEditUtils';
 
 export type ConfirmLeaveState = null | { type: 'switch' | 'execute'; targetPlanId?: number };
+
+/** 空表单的草稿快照基线：首帧 isDirty=false，新建 Plan 与「远端变更守卫」共用。 */
+const EMPTY_DRAFT_SNAPSHOT = draftSnapshot({
+  name: '',
+  description: '',
+  failureThreshold: 0.05,
+  nextPlanId: null,
+  projectKey: '',
+  specialtyKey: '',
+  suiteName: '',
+  lifecycle: EMPTY_LIFECYCLE,
+});
 
 export function usePlanEditForm(planId: number | null) {
   const isNew = planId == null;
@@ -47,7 +60,7 @@ export function usePlanEditForm(planId: number | null) {
   const [confirmLeave, setConfirmLeave] = useState<ConfirmLeaveState>(null);
   const [chainAppendDialog, setChainAppendDialog] = useState<'confirm-save' | 'name' | null>(null);
   const [chainAppendName, setChainAppendName] = useState('');
-  const [origSnapshot, setOrigSnapshot] = useState('');
+  const [origSnapshot, setOrigSnapshot] = useState(EMPTY_DRAFT_SNAPSHOT);
 
   const {
     data: plan,
@@ -101,50 +114,67 @@ export function usePlanEditForm(planId: number | null) {
   });
 
   const [prevPlanState, setPrevPlanState] = useState<{ plan: typeof plan; isNew: boolean } | null>(null);
+  // #967：用户已选择「继续编辑」的远端版本快照；同版本的重复刷新不再提示。
+  const [dismissedRemote, setDismissedRemote] = useState<string | null>(null);
+  // 乐观锁基准：跟随「草稿所基于的版本」。远端变更被挂起时不推进——继续编辑后
+  // 保存仍以旧版本提交，由后端 409 拒绝互相覆盖（#967 验收）。
+  const [baseUpdatedAt, setBaseUpdatedAt] = useState<string | undefined>(undefined);
+
+  // #966：脏状态覆盖全部可编辑业务字段（含归属项目/专项/套件）。
+  const currentSnapshot = useMemo(
+    () => draftSnapshot({ name, description, failureThreshold, nextPlanId, projectKey, specialtyKey, suiteName, lifecycle }),
+    [name, description, failureThreshold, nextPlanId, projectKey, specialtyKey, suiteName, lifecycle],
+  );
+  const isDirty = currentSnapshot !== origSnapshot;
+
+  const applyPlanToForm = (next: Plan) => {
+    setName(next.name);
+    setDescription(next.description || '');
+    setFailureThreshold(next.failure_threshold);
+    setNextPlanId(next.next_plan_id ?? null);
+    setProjectKey(next.project_key || '');
+    setSpecialtyKey(next.specialty_key || '');
+    setSuiteName(next.suite_name || '');
+    setOrigProjectKey(next.project_key || '');
+    setOrigSpecialtyKey(next.specialty_key || '');
+    setOrigSuiteName(next.suite_name || '');
+    setLifecycle(rebuildLifecycleFromPlan(next));
+    setSelectedStepKey(null);
+    setOrigSnapshot(planDraftSnapshot(next));
+    setBaseUpdatedAt(next.updated_at);
+  };
+
   if (prevPlanState?.plan !== plan || prevPlanState?.isNew !== isNew) {
     setPrevPlanState({ plan, isNew });
     if (plan && !isNew) {
-      setName(plan.name);
-      setDescription(plan.description || '');
-      setFailureThreshold(plan.failure_threshold);
-      setNextPlanId(plan.next_plan_id ?? null);
-      setProjectKey(plan.project_key || '');
-      setSpecialtyKey(plan.specialty_key || '');
-      setSuiteName(plan.suite_name || '');
-      setOrigProjectKey(plan.project_key || '');
-      setOrigSpecialtyKey(plan.specialty_key || '');
-      setOrigSuiteName(plan.suite_name || '');
-      const lc = rebuildLifecycleFromPlan(plan);
-      setLifecycle(lc);
-      setSelectedStepKey(null);
-      setOrigSnapshot(
-        snapshot({
-          name: plan.name,
-          description: plan.description || '',
-          failureThreshold: plan.failure_threshold,
-          nextPlanId: plan.next_plan_id ?? null,
-          lifecycle: lc,
-        }),
-      );
+      // #967：本地草稿优先——dirty 时不重置任何草稿字段；远端内容确有变化时由
+      // 提示条给「重新加载/继续编辑」两个出口，用户已选择的远端版本不重复提示。
+      if (!isDirty) applyPlanToForm(plan);
     }
     if (isNew) {
-      setOrigSnapshot(
-        snapshot({
-          name: '',
-          description: '',
-          failureThreshold: 0.05,
-          nextPlanId: null,
-          lifecycle: EMPTY_LIFECYCLE,
-        }),
-      );
+      setOrigSnapshot(EMPTY_DRAFT_SNAPSHOT);
+      setBaseUpdatedAt(undefined);
+      setDismissedRemote(null);
     }
   }
 
-  const currentSnapshot = useMemo(
-    () => snapshot({ name, description, failureThreshold, nextPlanId, lifecycle }),
-    [name, description, failureThreshold, nextPlanId, lifecycle],
+  // 远端版本与本地草稿基准不同且用户尚未「继续编辑」该版本 → 展示提示条。
+  const remoteSnapshot = useMemo(
+    () => (plan && !isNew ? planDraftSnapshot(plan) : null),
+    [plan, isNew],
   );
-  const isDirty = currentSnapshot !== origSnapshot;
+  const remoteChange =
+    remoteSnapshot != null && remoteSnapshot !== origSnapshot && remoteSnapshot !== dismissedRemote;
+
+  const reloadFromRemote = () => {
+    if (!plan || isNew) return;
+    applyPlanToForm(plan);
+    setDismissedRemote(null);
+  };
+
+  const dismissRemoteChange = () => {
+    if (remoteSnapshot != null) setDismissedRemote(remoteSnapshot);
+  };
 
   const draftStepCounts = useMemo(() => {
     const lc = lifecycle.lifecycle;
@@ -247,8 +277,10 @@ export function usePlanEditForm(planId: number | null) {
         timeout_seconds: lifecycle.lifecycle.timeout_seconds ?? null,
         next_plan_id: nextPlanId,
         steps: buildStepsForApi(lifecycle),
-        // 乐观锁令牌:后端据此拒绝"基于旧版本的保存"(409),防跨端互相覆盖
-        expected_updated_at: plan?.updated_at,
+        // 乐观锁令牌:后端据此拒绝"基于旧版本的保存"(409),防跨端互相覆盖。
+        // #967：用草稿基准版本而非最新 plan.updated_at——远端变更被挂起后继续
+        // 编辑时仍以旧基准提交，锁必须照常生效。
+        expected_updated_at: baseUpdatedAt,
       };
       // #405：归属字段只在变更时进 payload——后端 update 语义按 fields_set，
       // 恒发会让每次无关保存都在审计里记归属变更。新建则恒带。
@@ -279,6 +311,8 @@ export function usePlanEditForm(planId: number | null) {
       queryClient.invalidateQueries({ queryKey: planKeys.allLists() });
       queryClient.setQueryData(planKeys.detail(saved.id), saved);
       setOrigSnapshot(currentSnapshot);
+      setBaseUpdatedAt(saved.updated_at);
+      setDismissedRemote(null);
       if (isNew) {
         navigate(`/orchestration/plans/${saved.id}`, { replace: true });
       }
@@ -455,6 +489,9 @@ export function usePlanEditForm(planId: number | null) {
     chainAppendName,
     setChainAppendName,
     isDirty,
+    remoteChange,
+    reloadFromRemote,
+    dismissRemoteChange,
     draftStepCounts,
     nextPlanName,
     selectedRef,

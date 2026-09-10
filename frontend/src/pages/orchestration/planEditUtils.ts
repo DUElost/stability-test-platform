@@ -83,6 +83,49 @@ export function rebuildLifecycleFromPlan(plan: Plan): PipelineDef {
   };
 }
 
+/** 编辑表单草稿的统一快照形状（isDirty 与远端变更比对共用，键序固定）。 */
+export interface PlanFormDraft {
+  name: string;
+  description: string;
+  failureThreshold: number;
+  nextPlanId: number | null;
+  projectKey: string;
+  specialtyKey: string;
+  suiteName: string;
+  lifecycle: PipelineDef;
+}
+
+/**
+ * 草稿快照：所有可编辑业务字段（含归属项目/专项/套件绑定，#966）。
+ * orig 与 current 必须走同一函数，保证键序一致、脏检查稳定。
+ */
+export function draftSnapshot(draft: PlanFormDraft): string {
+  return snapshot({
+    name: draft.name,
+    description: draft.description,
+    failureThreshold: draft.failureThreshold,
+    nextPlanId: draft.nextPlanId,
+    projectKey: draft.projectKey,
+    specialtyKey: draft.specialtyKey,
+    suiteName: draft.suiteName,
+    lifecycle: draft.lifecycle,
+  });
+}
+
+/** 由远端 Plan 行构造同形状草稿快照（远端变更比对，#967）。 */
+export function planDraftSnapshot(plan: Plan): string {
+  return draftSnapshot({
+    name: plan.name,
+    description: plan.description || '',
+    failureThreshold: plan.failure_threshold,
+    nextPlanId: plan.next_plan_id ?? null,
+    projectKey: plan.project_key || '',
+    specialtyKey: plan.specialty_key || '',
+    suiteName: plan.suite_name || '',
+    lifecycle: rebuildLifecycleFromPlan(plan),
+  });
+}
+
 export function buildStepsForApi(lifecycle: PipelineDef): PlanStepCreate[] {
   const out: PlanStepCreate[] = [];
   const lc = lifecycle.lifecycle;
