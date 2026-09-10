@@ -140,6 +140,8 @@ export const aiAssistantKeys = {
   sessions: () => ['ai-assistant-sessions'] as const,
   messages: (sessionId: number) => ['ai-assistant-messages', sessionId] as const,
   action: (actionId: number) => ['ai-assistant-action', actionId] as const,
+  /** 管理员待审批动作队列（跨会话，仅摘要）。 */
+  pendingActions: () => ['ai-assistant-pending-actions'] as const,
   /** 长命令日志——running 时由调用方开 refetchInterval 轮询。 */
   actionLog: (actionId: number) => ['ai-assistant-action-log', actionId] as const,
 } as const;

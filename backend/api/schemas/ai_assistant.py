@@ -84,3 +84,13 @@ class AiActionOut(ORMBaseModel):
     decided_by: str | None = None
     created_at: datetime | None = None
     decided_at: datetime | None = None
+
+
+class AiPendingActionOut(ORMBaseModel):
+    """Admin 审批队列条目——只暴露动作必要摘要，不含他人会话消息全文。"""
+
+    id: int
+    tool_name: str
+    preview_text: str | None = None
+    requested_by: str | None = None
+    created_at: datetime | None = None

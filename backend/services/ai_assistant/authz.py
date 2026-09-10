@@ -20,6 +20,10 @@ class ToolAuthorizationError(PermissionError):
 def user_may_invoke_tool(user: Any, spec: ToolSpec | None) -> bool:
     if spec is None:
         return False
+    # R13-F01 (#1213): 停用账号不得借既有已批准动作执行——执行面必须复核
+    # 账号有效性（与 REST 登录 / 会话校验同口径：is_active == "Y"）。
+    if getattr(user, "is_active", None) != "Y":
+        return False
     if spec.admin_only and getattr(user, "role", None) != "admin":
         return False
     return True
