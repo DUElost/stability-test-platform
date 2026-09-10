@@ -53,3 +53,5 @@ ignore = [
 "tools/**" = ["T20"]
 # Agent 侧脚本是投递到设备执行的独立程序,stdout 是其协议
 "backend/agent/scripts/**" = ["T20"]
+# 安装后自检是 install_agent.sh 调用的 CLI,stdout 哨兵是其协议(#1247)
+"backend/agent/install_selfcheck.py" = ["T20"]
