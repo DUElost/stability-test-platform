@@ -32,13 +32,24 @@ required checks 全绿」不符（pending ≠ 全绿）。这是实现相对既�
 影响面：`tools/dev/ai_work.py`（函数 + `--self-test`）。所有 `derive_integration`
 调用点（status/update/heartbeat/resume 守卫/drift）共享新判据。
 
+**复查 follow-up（2026-09-10，PR #1235 复查）**：上述「观测不可用 → 降级」在
+「PR 刚创建、尚无任何 check 上报」的秒级窗口会命中（`gh pr checks` 对无上报分支
+返回 `no checks reported on the '<branch>' branch`），此时 `finish --pr N` 会把
+cached（新记录 = NO_PR）原样写回，违反 §3.3 T2「登记新号 → PR_OPEN」。修正：
+新增纯函数 `seed_registered_pr(cache)`，`cmd_finish`/`cmd_update` 登记 `--pr` 时
+先播种（NO_PR/空 → PR_OPEN，更精确的既有观测不覆盖），随后 `derive_integration`
+在观测可用时照常升级/降级。降级路径因此不再产生「已登记 PR 却是 NO_PR」的记录。
+
 ## Alternatives
 
 - 继续用 rollup 但排除非 required 检查：rollup 不携带 `isRequired`，无法区分
   required 与可选（如 backend-test/docker-build 常年 skipping），会误判。
 - 硬编码 required 名单（lint/CodeQL/pr-typecheck/pr-compileall/pr-agent-tests/
   pr-migrate-empty-db）：与 CI 配置重复、易漂移，branch protection 才是权威源。
-- 依赖 `gh pr checks` 退出码：实测 required FAILURE 时退出码仍为 0，不可作判据。
+- 依赖 `gh pr checks` 退出码判绿/待定：`--json` 导出路径在退出码逻辑**之前**
+  `return`（gh 2.98.0 `pkg/cmd/pr/checks/checks.go`；help 的「8: Checks pending」仅
+  适用表格/watch 路径），故 FAILURE/PENDING 时退出码仍为 0——退出码只可用于
+  「真错误」判定（无上报分支/网络/鉴权），不可作判据。
 
 ## Verification
 
@@ -48,9 +59,14 @@ required checks 全绿」不符（pending ≠ 全绿）。这是实现相对既�
   #1205/#1202(required FAILURE)→PR_OPEN、**#1210(required IN_PROGRESS)→PR_OPEN**
   （修复前该例会被虚报为 READY）。
 - `ruff check tools/dev/ai_work.py` 通过。
+- 复查 follow-up 离线红绿：`--self-test` 新增 `seed_registered_pr` 用例
+  （None/""/NO_PR→PR_OPEN；READY/CLOSED 原样保留）。
+- 复查来源与证据：[PR #1235 复查评论](https://github.com/DUElost/stability-test-platform/pull/1235#issuecomment-5614891000)
+  （gh 源码短路点 + 「无 check 上报」窗口推演）。
 
 ## Revisit
 
-若 GitHub 端为 main 之外分支（或 fork）无 required checks，derive 将恒为 PR_OPEN；
-这些来源本就不进 auto-merge 队列，可接受。若将来需要区分「无 required 配置」与
-「观测失败」，可再引入显式分支保护查询。
+若 GitHub 端为 main 之外分支（或 fork）无 required checks，`gh pr checks --required`
+报「no required checks reported」，derive 走降级回退**旧值**（fresh 记录为
+NO_PR），不会宣报 READY；这些来源本就不进 auto-merge 队列，可接受。若将来需要
+区分「无 required 配置」与「观测失败」，可再引入显式分支保护查询。
