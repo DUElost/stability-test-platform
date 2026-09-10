@@ -69,4 +69,7 @@ cached（新记录 = NO_PR）原样写回，违反 §3.3 T2「登记新号 → P
 若 GitHub 端为 main 之外分支（或 fork）无 required checks，`gh pr checks --required`
 报「no required checks reported」，derive 走降级回退**旧值**（fresh 记录为
 NO_PR），不会宣报 READY；这些来源本就不进 auto-merge 队列，可接受。若将来需要
-区分「无 required 配置」与「观测失败」，可再引入显式分支保护查询。
+区分「无 required 配置」与「观测失败」，或需要覆盖「required check 尚未上报」的
+残差窗口（`gh pr checks` 只含已上报项、缺席项不可见：实测 PR #1270 创建初期
+CodeQL 尚未上报而其余 required 已在列），可再引入显式分支保护查询——取 required
+清单逐一核对上报状态。
