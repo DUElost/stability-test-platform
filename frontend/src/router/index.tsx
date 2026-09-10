@@ -40,6 +40,7 @@ const TestSuitesPage = lazy(() => import('../pages/suites/TestSuitesPage'));
 const TestSuiteDetailPage = lazy(() => import('../pages/suites/TestSuiteDetailPage'));
 // ADR-0031 平台 AI 助手
 const AssistantPage = lazy(() => import('../pages/assistant/AssistantPage'));
+const AssistantApprovalsPage = lazy(() => import('../pages/assistant/AssistantApprovalsPage'));
 const AiAssistantSettingsPage = lazy(() => import('../pages/settings/AiAssistantSettingsPage'));
 
 function AuthGateLoading() {
@@ -111,6 +112,7 @@ export default function AppRouter() {
             <Route element={<AdminRoute />}>
               <Route path="users" element={<UsersPage />} />
               <Route path="notifications" element={<NotificationsPage />} />
+              <Route path="assistant/approvals" element={<AssistantApprovalsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="settings/ai-assistant" element={<AiAssistantSettingsPage />} />
               <Route path="audit" element={<AuditLogPage />} />

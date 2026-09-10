@@ -158,11 +158,16 @@ export default function AssistantPage() {
         subtitle="对话式查询平台状态、运行测试门禁与日常运维（有副作用的操作需按风险分级审批）"
         action={
           isAdmin ? (
-            <Button variant="ghost" size="icon" asChild>
-              <Link to="/settings/ai-assistant" aria-label="AI 助手设置">
-                <Settings className="h-4 w-4" />
-              </Link>
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="sm" asChild>
+                <Link to="/assistant/approvals">待审批</Link>
+              </Button>
+              <Button variant="ghost" size="icon" asChild>
+                <Link to="/settings/ai-assistant" aria-label="AI 助手设置">
+                  <Settings className="h-4 w-4" />
+                </Link>
+              </Button>
+            </div>
           ) : undefined
         }
       />

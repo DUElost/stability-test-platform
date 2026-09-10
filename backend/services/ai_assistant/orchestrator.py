@@ -17,12 +17,14 @@ from functools import partial
 from sqlalchemy.orm import Session
 
 from backend.core.database import SessionLocal
+from backend.core.redaction import redact_secrets
 from backend.models.ai_assistant import (
     AiAssistantAction,
     AiAssistantConfig,
     AiChatMessage,
     AiChatSession,
 )
+from backend.services.ai_assistant.actions import try_transition_action
 from backend.services.ai_assistant.llm_client import (
     AiAuthError,
     AiBadResponse,
@@ -177,18 +179,19 @@ def _history_as_llm_messages(db: Session, session_id: int) -> list[dict]:
                 entry["tool_calls"] = tool_calls_fmt
             messages.append(entry)
         else:
+            tool_content = redact_secrets(row.content)
             if not row.tool_call_id:
                 # 动作完成回执（无对应 assistant tool_calls）——以 user 角色
                 # 注入，避免「tool 消息没有前置 tool_calls」的严格校验拒绝
                 messages.append(
-                    {"role": "user", "content": f"[执行回执] {row.content}"}
+                    {"role": "user", "content": f"[执行回执] {tool_content}"}
                 )
             else:
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": row.tool_call_id,
-                        "content": row.content,
+                        "content": tool_content,
                     }
                 )
     return messages
@@ -264,8 +267,11 @@ def _finalize_action(action_id: int, status: str, summary: str) -> None:
         if action is None:
             logger.error("ai_action_finalize_missing id=%s", action_id)
             return
+        # R13-F02 (#1214): 结果摘要/回执可能携带外部失败原文（如含 token 的
+        # URL）——写库前统一脱敏，避免经回执进入 LLM 上下文。
+        safe_summary = redact_secrets(summary)
         action.status = status
-        action.result_summary = summary[:1000]
+        action.result_summary = safe_summary[:1000]
         session = db.get(AiChatSession, action.session_id)
         if session is not None:
             db.add(
@@ -273,7 +279,7 @@ def _finalize_action(action_id: int, status: str, summary: str) -> None:
                     session_id=session.id,
                     role="tool",
                     tool_call_id=None,
-                    content=f"{action.tool_name} → {status}：{summary[:500]}",
+                    content=f"{action.tool_name} → {status}：{safe_summary[:500]}",
                 )
             )
             _touch_session(db, session)
@@ -317,9 +323,20 @@ def ensure_pending_placeholder(session_id: int, db: Session | None = None) -> No
 
 
 def _enqueue_continuation(session_id: int) -> None:
-    """执行完成后续轮（lazy import 防循环依赖：saq_worker → saq_tasks → 本模块）。"""
+    """执行完成后续轮（lazy import 防循环依赖：saq_worker → saq_tasks → 本模块）。
+
+    R13-F04 (#1216)：续轮必须走 ``required=True`` 的真实投递——旧的默认
+    best-effort 只把协程排上事件循环即返回 True，Redis 入队异常 / 同 key
+    去重都被吞掉，动作结果可能永久不上屏。这里区分三态：
+    - 真实入队 → 正常；
+    - 同 key 去重（SAQ 返回 None，说明同会话轮次仍在飞）→ 有界重试等待
+      当前轮次释放 key，仍不行则把占位标成可重试失败，绝不留悬挂 pending；
+    - 入队异常 → 立即把占位收敛为 failed（可重试）。
+    """
+    import time as _time
+
     try:
-        from backend.tasks.saq_worker import enqueue_sync
+        from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
 
         # M2：轮次最多 max_turns 次串行 LLM 调用，超时按最坏情况估
         #（默认 60s 的 SAQ timeout 会把多轮 T0 链中途砍掉，占位滞留 pending）
@@ -334,20 +351,38 @@ def _enqueue_continuation(session_id: int) -> None:
                 db.close()
         except Exception:  # noqa: BLE001 - 超时取默认值即可
             pass
-        # 续轮期间前端据占位继续轮询；入队失败时下面立刻把它标 failed，不留悬挂
+
+        # 续轮期间前端据占位继续轮询
         ensure_pending_placeholder(session_id)
-        enqueued = enqueue_sync(
-            "ai_assistant_turn_task",
-            key=f"ai-turn:{session_id}",
-            timeout=timeout,
-            retries=0,
-            session_id=session_id,
-        )
-        if not enqueued:
-            logger.warning("ai_continuation_enqueue_failed session=%s", session_id)
-            _converge_pending(
-                session_id, False, error="续轮任务入队失败（SAQ 不可用），请重新提问。"
+
+        attempts = 3
+        last_error: str | None = None
+        for attempt in range(attempts):
+            try:
+                enqueued = enqueue_sync(
+                    "ai_assistant_turn_task",
+                    key=f"ai-turn:{session_id}",
+                    timeout=timeout,
+                    retries=0,
+                    required=True,
+                    session_id=session_id,
+                )
+            except EnqueueSyncError as exc:
+                last_error = str(exc)
+                break
+            if enqueued:
+                return
+            # 去重：同会话轮次仍在飞。短暂等待其释放 key 后重试。
+            logger.warning(
+                "ai_continuation_deduped session=%s attempt=%d", session_id, attempt + 1,
             )
+            last_error = "同会话轮次仍在处理中（续轮入队被去重）"
+            if attempt + 1 < attempts:
+                _time.sleep(0.5)
+        _converge_pending(
+            session_id, False,
+            error=f"续轮任务入队失败（{last_error or 'SAQ 不可用'}），请重新提问。",
+        )
     except Exception:  # noqa: BLE001 - 续轮失败不影响已完成动作的留痕
         logger.exception("ai_continuation_enqueue_error session=%s", session_id)
 
@@ -540,10 +575,20 @@ def execute_action(action_id: int) -> None:
 
         triggered_by = getattr(requester, "username", None) or f"user:{action.requested_by_user_id}"
 
+        # R13-F03 (#1215): 执行资格以「approved → running」的原子抢占为准。
+        # 仅靠 `action.status != "approved"` 的读判，两个执行线程会同时通过并
+        # 产生重复副作用（重复通知 / 重复 PlanRun）。条件 UPDATE + rowcount
+        # 让只有一人取得执行权。
+        if not try_transition_action(
+            db, action_id, expected="approved", new_status="running"
+        ):
+            logger.warning("ai_action_execute_race_lost id=%s", action_id)
+            return
+        db.commit()
+        db.refresh(action)
+
         if spec.kind == "runconsole":
             plan = build_runconsole_plan(action.tool_name, action.params or {})
-            action.status = "running"
-            db.commit()
             try:
                 run_id = RunConsole.instance().start(
                     run_key=plan.run_key,
@@ -563,8 +608,6 @@ def execute_action(action_id: int) -> None:
             db.commit()
             _arm_run_timeout(run_id, plan.timeout_seconds)
         else:
-            action.status = "running"
-            db.commit()
             try:
                 summary = _run_service_tool(
                     action.tool_name,
@@ -573,7 +616,7 @@ def execute_action(action_id: int) -> None:
                     requester_user_id=action.requested_by_user_id,
                 )
             except Exception as exc:  # noqa: BLE001 - 服务工具失败即终态
-                _finalize_action(action_id, "failed", str(exc)[:500])
+                _finalize_action(action_id, "failed", redact_secrets(str(exc))[:500])
                 return
             _finalize_action(action_id, "succeeded", summary)
     finally:
