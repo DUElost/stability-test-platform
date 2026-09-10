@@ -367,7 +367,10 @@ def _collect_patrol_stall_candidates(db, now: datetime) -> list[tuple[JobInstanc
     return _collect_patrol_stall_candidates_py(db, now)
 
 
-def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> bool:
+def _mark_pending_timeout(
+    db, job: JobInstance, now: datetime, reason: str,
+    defer_aggregation: bool = False,
+) -> bool:
     """PENDING timeout → FAILED + release lease (defensive, normally no-op).
 
     Only for jobs the Agent never claimed while the host had no RUNNING work.
@@ -376,6 +379,10 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> b
 
     ADR-0019 Phase 4c: release_lease_sync is kept as a safety net (normal
     PENDING path has no lease).
+
+    ``defer_aggregation`` (#1172): on_job_terminal_sync 自管理提交（#986 契
+    约）——不得在调用方的 begin_nested 内执行；置位时本函数只完成终态
+    落库/租约/审计，聚合由调用方在 savepoint 提交后执行。
     """
     _terminal = {
         JobStatus.COMPLETED.value, JobStatus.FAILED.value,
@@ -416,14 +423,15 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> b
     # no LeaseProjectionError fallback needed.
     release_lease_sync(db, job.device_id, job.id, LeaseType.JOB)
 
-    try:
-        from backend.services.aggregator_sync import plan_aggregator_sync
-        plan_aggregator_sync(job, db)
-    except Exception as e:
-        from backend.core.metrics import record_plan_run_aggregation_failed
-        record_plan_run_aggregation_failed()
-        logger.warning("recycler_aggregation_failed job=%d: %s", job.id, e)
-        raise
+    if not defer_aggregation:
+        try:
+            from backend.services.aggregator_sync import plan_aggregator_sync
+            plan_aggregator_sync(job, db)
+        except Exception as e:
+            from backend.core.metrics import record_plan_run_aggregation_failed
+            record_plan_run_aggregation_failed()
+            logger.warning("recycler_aggregation_failed job=%d: %s", job.id, e)
+            raise
 
     record_audit(
         db,
@@ -827,11 +835,14 @@ def recycle_once() -> None:
             if not batch:
                 break
             for job in batch:
+                deferred_aggregate = False
                 try:
                     with db.begin_nested():
-                        _mark_pending_timeout(
+                        changed = _mark_pending_timeout(
                             db, job, now, "pending_timeout: agent never claimed job",
+                            defer_aggregation=True,
                         )
+                    deferred_aggregate = changed
                 except Exception as exc:
                     record_audit(
                         db,
@@ -849,6 +860,31 @@ def recycle_once() -> None:
                         "recycler_pending_failed job=%d device=%d",
                         job.id, job.device_id,
                     )
+                if deferred_aggregate:
+                    # #1172: on_job_terminal_sync 自管理提交（#986 契约）——
+                    # 聚合在 savepoint 提交后执行；其后事务终结，本 tick
+                    # 停止处理余批（下轮 recycle_once 继续）。
+                    try:
+                        from backend.services.aggregator_sync import plan_aggregator_sync
+                        plan_aggregator_sync(job, db)
+                    except Exception as exc:
+                        record_audit(
+                            db,
+                            action="job_terminalization_failed",
+                            resource_type="job_instance",
+                            resource_id=job.id,
+                            details={
+                                "plan_run_id": job.plan_run_id,
+                                "source": "recycler_pending_timeout_aggregation",
+                                "error": str(exc)[:500],
+                            },
+                            username="system",
+                        )
+                        logger.exception(
+                            "recycler_pending_aggregation_failed job=%d device=%d",
+                            job.id, job.device_id,
+                        )
+                    break
             db.commit()
 
     # 2) RUNNING timeout → UNKNOWN (Phase 4c). Same batched approach.
