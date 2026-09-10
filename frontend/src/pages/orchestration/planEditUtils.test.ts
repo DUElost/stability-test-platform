@@ -3,8 +3,11 @@ import type { Plan, PipelineDef } from '@/utils/api';
 import {
   EMPTY_LIFECYCLE,
   buildStepsForApi,
+  draftSnapshot,
   findStepInLifecycle,
+  planDraftSnapshot,
   rebuildLifecycleFromPlan,
+  type PlanFormDraft,
 } from './planEditUtils';
 
 const basePlan: Plan = {
@@ -183,6 +186,43 @@ describe('planEditUtils', () => {
       // 脏检查靠 JSON.stringify 快照，凭空多一个键会让所有旧 Plan 一打开就显示"已修改"
       expect(lc.lifecycle.init![0]).not.toHaveProperty('stall_seconds');
       expect(buildStepsForApi(lc)[0].stall_seconds).toBeNull();
+    });
+  });
+
+  describe('draftSnapshot / planDraftSnapshot（#966/#967）', () => {
+    const draft = (over: Partial<PlanFormDraft> = {}): PlanFormDraft => ({
+      name: 'Smoke',
+      description: 'desc',
+      failureThreshold: 0.1,
+      nextPlanId: null,
+      projectKey: 'P1',
+      specialtyKey: 'S1',
+      suiteName: '',
+      lifecycle: EMPTY_LIFECYCLE,
+      ...over,
+    });
+
+    it('归属项目/专项/套件任一变更都会改变脏快照（#966）', () => {
+      const base = draftSnapshot(draft());
+      expect(draftSnapshot(draft({ projectKey: 'P2' }))).not.toBe(base);
+      expect(draftSnapshot(draft({ specialtyKey: 'S2' }))).not.toBe(base);
+      expect(draftSnapshot(draft({ suiteName: 'SUITE-A' }))).not.toBe(base);
+      expect(draftSnapshot(draft())).toBe(base);
+    });
+
+    it('planDraftSnapshot 与同值草稿快照一致（#967 远端比对键序稳定）', () => {
+      expect(planDraftSnapshot(basePlan)).toBe(
+        draftSnapshot({
+          name: basePlan.name,
+          description: basePlan.description || '',
+          failureThreshold: basePlan.failure_threshold,
+          nextPlanId: basePlan.next_plan_id ?? null,
+          projectKey: basePlan.project_key || '',
+          specialtyKey: basePlan.specialty_key || '',
+          suiteName: basePlan.suite_name || '',
+          lifecycle: rebuildLifecycleFromPlan(basePlan),
+        }),
+      );
     });
   });
 });

@@ -7,6 +7,7 @@ import {
   isJobStuck,
   isPlanRunTerminal,
   planRunRefetchInterval,
+  planRunRefreshKeys,
   SLOW_REFETCH_MS,
 } from '@/hooks/plan-run/planRunDetailUtils';
 import { api } from '@/utils/api';
@@ -79,14 +80,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     refetchInterval: isTerminal ? false : SLOW_REFETCH_MS,
   });
 
-  // #529：终态 DLE 事件视图——仅终态启用（RUNNING 不强制切 DLE，不变量见 #527）。
-  const logEventsQ = useQuery({
-    queryKey: planRunKeys.logEvents(id),
-    queryFn: () => api.planRuns.getLogEvents(id, { skip: 0, limit: 200 }),
-    enabled: !!id && isTerminal,
-    refetchInterval: false,
-  });
-
+  // #529：终态 DLE 事件视图由 LogEventsCard 自持查询（同 key），此处不再重复声明。
   const chainQ = useQuery({
     queryKey: planRunKeys.chain(id),
     queryFn: () => api.planRuns.getChain(id),
@@ -102,13 +96,10 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     chainQ.isFetching;
 
   const refreshAll = useCallback(() => {
-    qc.invalidateQueries({ queryKey: planRunKeys.detail(id) });
-    qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
-    qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
-    qc.invalidateQueries({ queryKey: planRunKeys.watcherByRun(id) });
-    qc.invalidateQueries({ queryKey: planRunKeys.logEvents(id) });
-    qc.invalidateQueries({ queryKey: planRunKeys.chain(id) });
-    qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
+    // #1193：手动刷新覆盖去重状态与逐条用例结果等后处理产物（键表见 utils）。
+    for (const key of planRunRefreshKeys(id)) {
+      qc.invalidateQueries({ queryKey: key });
+    }
   }, [qc, id]);
 
   const onSocketMessage = useCallback(
@@ -236,7 +227,6 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     timelineQ,
     devicesQ,
     watcherQ,
-    logEventsQ,
     chainQ,
     isTerminal,
     isAnyFetching,
