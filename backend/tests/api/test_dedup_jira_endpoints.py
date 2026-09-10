@@ -17,9 +17,17 @@ def reset_run_console_singleton():
 
 @pytest.fixture
 def mock_run_console(monkeypatch):
-    """Mock RunConsole.instance() 返回 MagicMock，避免起真子进程。"""
+    """Mock RunConsole.instance() 返回 MagicMock，避免起真子进程。
+
+    #1084 起 console_run_id 由路由预生成并传入 start(run_id=...) —— fake 直接
+    回显该值，保证响应/落库/断言三方一致。
+    """
     inst = MagicMock()
-    inst.start.return_value = "con-fake-123"
+
+    def _fake_start(*args, **kwargs):
+        return kwargs.get("run_id") or "con-fake-123"
+
+    inst.start.side_effect = _fake_start
     inst.status.return_value = {
         "run_id": "con-fake-123",
         "run_key": "jira:transsion",
@@ -113,7 +121,7 @@ class TestStartJiraRun:
         assert resp.status_code == 500
 
     def test_upload_list_success(
-        self, client, auth_headers, monkeypatch, mock_run_console
+        self, client, auth_headers, monkeypatch, mock_run_console, db_session
     ):
         _set_vendor_env(monkeypatch)
         resp = client.post(
@@ -124,8 +132,15 @@ class TestStartJiraRun:
         )
         assert resp.status_code == 200, resp.text
         data = resp.json()["data"]
-        assert data["console_run_id"] == "con-fake-123"
-        assert data["room"] == "console:con-fake-123"
+        # #1084：console_run_id 由路由预生成（先落库后启动），不再等于 fake 固定值
+        assert data["console_run_id"].startswith("con-")
+        assert data["room"] == f"console:{data['console_run_id']}"
+        # 行已在 start 之前落库（RUNNING）
+        row = db_session.query(JiraRun).filter_by(
+            console_run_id=data["console_run_id"],
+        ).one()
+        assert row.status == "RUNNING"
+        assert mock_run_console.start.call_args.kwargs.get("run_id") == data["console_run_id"]
         assert data["vendor"] == "transsion"
         assert data["stage"] == "upload_list"
         mock_run_console.start.assert_called_once()
@@ -481,3 +496,66 @@ class TestJiraProjectKeyWiring:
         argv = mock_run_console.start.call_args.kwargs.get("cmd", [])
         assert argv[argv.index("--set-project-key") + 1] == "SNAPKEY"
         assert resp.json()["data"]["jira_project_key"] == "SNAPKEY"
+
+
+# ── #1084：先写后启 —— 快速回调不再产生永久 RUNNING ──────────────────────
+
+
+class TestJiraRunPersistBeforeStart:
+    def test_fast_completion_finds_row(self, client, auth_headers, monkeypatch, mock_run_console, db_session):
+        """子进程秒级结束：on_complete 在 INSERT 之后仍能找到行并写终态。
+
+        旧顺序（先 start 后 INSERT）下回调早于 INSERT 会找不到行直接跳过，
+        jira_run 永久停在 RUNNING 且缺 issue_keys。
+        """
+        _set_vendor_env(monkeypatch)
+        started = {}
+
+        def fake_start(*args, **kwargs):
+            run_id = kwargs["run_id"]
+            started["run_id"] = run_id
+            # 模拟「子进程秒级结束」：start 内同步触发终态回调
+            row = db_session.query(JiraRun).filter_by(console_run_id=run_id).one()
+            assert row.status == "RUNNING", "start 前行必须已落库"
+            from types import SimpleNamespace
+            from backend.api.routes.dedup import _on_jira_run_complete
+
+            fake_run = SimpleNamespace(run_id=run_id, to_status=lambda: {
+                "status": "SUCCESS", "exit_code": 0,
+                "ended_at": "2026-09-09T00:00:00+00:00", "error": None,
+                "seq": 0,
+            })
+            _on_jira_run_complete(fake_run)
+            return run_id
+
+        mock_run_console.start.side_effect = fake_start
+        resp = client.post(
+            "/api/v1/jira/runs",
+            data={"vendor": "transsion", "stage": "upload_list", "dry_run": "true"},
+            files={"file": ("Result.xls", b"fake-xls", "application/vnd.ms-excel")},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        row = db_session.query(JiraRun).filter_by(
+            console_run_id=data["console_run_id"],
+        ).one()
+        assert row.status == "SUCCESS", "快速回调必须落终态，不能停留 RUNNING"
+
+    def test_start_failure_marks_row_failed(self, client, auth_headers, monkeypatch, mock_run_console, db_session):
+        """start 失败（409/500）时行回写 FAILED，不留悬挂 RUNNING。"""
+        _set_vendor_env(monkeypatch)
+        mock_run_console.start.side_effect = RunKeyBusyError("busy")
+        resp = client.post(
+            "/api/v1/jira/runs",
+            data={"vendor": "transsion", "stage": "upload_list", "dry_run": "true"},
+            files={"file": ("Result.xls", b"fake-xls", "application/vnd.ms-excel")},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 409
+        # start 被拒绝，但预生成的行存在且已回写 FAILED
+        rows = db_session.query(JiraRun).all()
+        assert len(rows) == 1
+        assert rows[0].status == "FAILED"
+        assert "already in progress" in (rows[0].error or "")
