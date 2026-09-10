@@ -90,4 +90,33 @@ describe('TestCaseResultsCard (#1194)', () => {
     renderCard(5, true);
     await waitFor(() => expect(screen.getByText(/暂无逐条用例结果/)).toBeInTheDocument());
   });
+
+  it('加载到接口上限后停止放大并明示截断（#1194 复查）', async () => {
+    mocks.getTestCaseResults.mockResolvedValue({
+      items: [row(1)],
+      total: 2001,
+      summary: summary(2001),
+    });
+    renderCard(5, true);
+    expect(await screen.findByTestId('test-case-results-count')).toHaveTextContent('已显示 1 / 2001');
+
+    for (const expectedLimit of [1000, 1500]) {
+      fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
+      await waitFor(() =>
+        expect(mocks.getTestCaseResults).toHaveBeenLastCalledWith(5, { limit: expectedLimit }),
+      );
+      // 换查询键后旧数据不可见，卡片短暂回加载态：等新窗口数据回填再点
+      await screen.findByRole('button', { name: /加载更多/ });
+    }
+    fireEvent.click(screen.getByRole('button', { name: /加载更多/ }));
+    await waitFor(() =>
+      expect(mocks.getTestCaseResults).toHaveBeenLastCalledWith(5, { limit: 2000 }),
+    );
+
+    // 到顶（2001 超过服务端上限 2000）：按钮消失，明示截断
+    await waitFor(() =>
+      expect(screen.getByText(/已达接口单次上限 2000 条（共 2001 条）/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('button', { name: /加载更多/ })).not.toBeInTheDocument();
+  });
 });
