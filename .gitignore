@@ -64,6 +64,10 @@ docs/archive/prototypes/
 # Codex CLI 本地状态文件（忽略除 hooks.json 外的所有内容）
 .codex/*
 !.codex/hooks.json
+# ZCode harness 会话局部产物（plan 等）；规则内容走 AGENTS.md/docs，勿入库
+.zcode/*
+!.zcode/rules/
+!.zcode/rules/**
 # Ansible / SSH 部署本地配置（敏感清单继续忽略，其余自动化文件纳入版本控制）
 tools/ansible/inventory.ini
 tools/ansible/.stp-install-*.ini
