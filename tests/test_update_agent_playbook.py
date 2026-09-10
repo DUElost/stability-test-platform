@@ -100,3 +100,26 @@ def test_update_agent_refreshes_pipeline_schema_and_version_marker():
     assert "{{ agent_install_dir }}/agent/VERSION" in text
     # 升级后不再有「schema 已更新但进程仍缓存旧 schema」的窗口
     assert "agent_schema_changed | bool" in text
+
+
+def test_update_agent_requires_control_plane_upgrade_gate():
+    """所有升级入口复用 ADR-0021 D7/D8 协议（#1249）：门禁必须 fail-closed，
+    有活跃 Job 默认拒绝，abort 需显式开关；正常与回滚路径都释放窗口。"""
+    text = PLAYBOOK.read_text(encoding="utf-8")
+    task_names = {task.get("name") for task in _tasks()}
+
+    assert "Read deployed agent identity for the upgrade gate" in task_names
+    assert "Assert upgrade gate target is resolvable" in task_names
+    assert "Request control-plane upgrade gate" in task_names
+    assert "Assert upgrade gate acquired" in task_names
+    assert "/upgrade-gate" in text
+    assert "/upgrade-gate/release" in text
+    assert "X-Agent-Secret" in text
+    # 只有 200 才放行（409/504/404/401 都是拒绝）
+    assert "agent_upgrade_gate_response.status == 200" in text
+    # 显式 abort 开关，默认关闭
+    assert "agent_abort_running_jobs | default(false) | bool" in text
+    # 正常路径与 rollback 路径都必须释放窗口
+    assert "Release control-plane upgrade gate" in text
+    assert "Release control-plane upgrade gate after rollback" in text
+    assert text.count('holder: "{{ agent_upgrade_holder }}"') >= 2
