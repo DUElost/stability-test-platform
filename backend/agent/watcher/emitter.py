@@ -159,7 +159,9 @@ class OutboxDrainer:
         - tick_once() 暴露单次刷出接口，便于单元测试直接驱动
 
     失败策略（#9）:
-        - 整批 POST 失败 → 逐条 bump_attempts;到 _MAX_ATTEMPTS → mark_dead_letter
+        - 整批 POST 失败（暂时性）→ 逐条 bump_attempts;到 _MAX_ATTEMPTS → mark_dead_letter
+        - 逐条拒绝（#1048，永久性：job 不存在 / 租约不匹配 / 契约违规）→ 好记录
+          ack，坏记录直接 mark_dead_letter（重试无意义）
         - 不在此处做指数退避：靠 interval_seconds 节流已足够
         - 死信行不再被 get_pending 取出,避免挤占 batch 名额
         - dead_letter_total 指标通过 snapshot_metrics 暴露给运维
@@ -339,12 +341,47 @@ class OutboxDrainer:
             )
             return 0
 
-        # 成功：批量 ack（后端 ON CONFLICT DO NOTHING 已保证幂等）
+        # #1048：解析逐条拒绝清单 —— API 层判定的都是**永久**不可恢复（job 不
+        # 存在 / 租约 fencing 不匹配 / 契约违规 / detected_at 非法），重试没有
+        # 意义，直接死信；其余记录正常 ack。响应无 rejected（旧后端 / 解析失败）
+        # 时保持原语义：全部 ack。
+        rejected: Dict[tuple, str] = {}
+        try:
+            body = resp.json()
+            data = body.get("data") if isinstance(body, dict) else None
+            items = data.get("rejected") if isinstance(data, dict) else None
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    key = (item.get("job_id"), item.get("seq_no"))
+                    rejected[key] = str(item.get("reason") or "rejected")[:300]
+        except Exception:
+            rejected = {}
+
+        flushed = 0
         for row in batch:
-            self._db.ack_log_signal(row["id"])
-        self._bump_metric("_flushed_total", len(batch))
+            envelope = row["envelope"]
+            reason = rejected.get(
+                (envelope.get("job_id"), envelope.get("seq_no")),
+            )
+            if reason is None:
+                self._db.ack_log_signal(row["id"])
+                flushed += 1
+            else:
+                self._db.mark_log_signal_dead_letter(
+                    row["id"], f"rejected: {reason}",
+                )
+                self._bump_metric("_dead_letter_total", 1)
+                logger.warning(
+                    "log_signal_rejected_dead_letter row_id=%d job_id=%s seq_no=%s reason=%s",
+                    row["id"], envelope.get("job_id"), envelope.get("seq_no"),
+                    reason[:200],
+                )
+        self._bump_metric("_flushed_total", flushed)
         logger.debug(
-            "outbox_drainer_flushed count=%d url=%s", len(batch), url,
+            "outbox_drainer_flushed count=%d rejected=%d url=%s",
+            flushed, len(rejected), url,
         )
 
         # Prune 闭环：定期清理已 ack 的旧条目，防止 SQLite 无限增长
@@ -368,7 +405,7 @@ class OutboxDrainer:
                 # prune 失败不影响主流程
                 logger.exception("outbox_drainer_prune_failed")
 
-        return len(batch)
+        return flushed
 
     # ------------------------------------------------------------------
     # #9: 监控指标(供 heartbeat 拼装)
