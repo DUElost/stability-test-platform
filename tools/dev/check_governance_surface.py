@@ -177,11 +177,16 @@ RESIDENT_BUDGETS = {
     ".cursor/rules/agent-runtime.mdc": (30, 3000),
     ".cursor/rules/agent-scripts.mdc": (30, 3000),
     "docs/development/ai/harness-adapters.md": (100, 10000),
-    # execution-contract.md 是执行语义**唯一权威源**（ADR-0034 P0a），预算随其
-    # 版本化演进上调：v1.8（#906 决策实体唯一性）落地时 main 上已达
-    # 19638/20000 bytes（98%），预算已从「防臃肿」变成「阻止契约演进」。
-    # 2026-09-09 用户裁决：上调至 260 行/26KB（仅抬该文件，其余不变）。
-    "docs/development/ai/execution-contract.md": (260, 26000),
+    # execution-contract.md 是执行语义**唯一权威源**（ADR-0034 P0a）。预算沿革：
+    # v1.8（#906）落地时已达 19638/20000（98%），2026-09-09 用户裁决上调至
+    # 260 行/26KB；2026-09-10 用户裁决走**契约分层**（方案 A，#1238）——实现级
+    # 细则迁入 execution-contract-annex.md，正文只留语义面，预算随之下调至
+    # 210 行/24500（收紧而非继续抬：语义增补放不下时，先迁细则或去冗余，
+    # 不许再靠抬预算过关）。
+    "docs/development/ai/execution-contract.md": (210, 24500),
+    # 规范附录（#1238）：**非常驻**（harness 不自动加载，按需查阅），但同样设上限
+    # ——附录的定位是「实现级细则的容身处」，无上限会退化成新的垃圾场。
+    "docs/development/ai/execution-contract-annex.md": (200, 20000),
     "backend/agent/AGENTS.md": (40, 5000),
     "backend/agent/aee/AGENTS.md": (100, 10000),
 }
@@ -392,6 +397,78 @@ def check_adr_surface_sync(
     return issues
 
 
+# S13: 执行契约版本一致性（#1238 增）。执行契约不是 ADR，S12 不覆盖它——
+# 但「头部 Living vX.Y ↔ 它自己的版本记录首项 ↔ 附录 ↔ DOC-MAP 行」是同一类
+# 漂移面，且已复发三次（2026-09-07 七日审计发现 5 残面 / v1.4 note 收口存量
+# 漂移 / #1232–#1238 期间又一次：加了 v1.11 变更条目却没改 Living token）。
+# 取最小可靠面：状态行是权威写法，其余三处同步。
+
+_CONTRACT_LIVING = re.compile(r"Living v(\d+\.\d+)")
+_CONTRACT_CHANGE_HEAD = re.compile(r"v(\d+\.\d+) 变更：")
+_ANNEX_LIVING = re.compile(r"当前 v(\d+\.\d+)")
+
+
+def parse_contract_status_line(text: str) -> tuple[str, str | None]:
+    """S13 辅助：执行契约状态行 → (原文行, 规范位版本)。"""
+    line = next((l for l in text.splitlines() if l.strip().startswith("- **状态**")), "")
+    m = _CONTRACT_LIVING.search(line)
+    return line, (m.group(1) if m else None)
+
+
+def parse_contract_change_head(text: str) -> str | None:
+    """S13 辅助：状态行所在行内**首个** `vX.Y 变更：`（= 最新版本条目）。"""
+    line, _ = parse_contract_status_line(text)
+    m = _CONTRACT_CHANGE_HEAD.search(line)
+    return m.group(1) if m else None
+
+
+def parse_docmap_contract_version(text: str) -> str | None:
+    """S13 辅助：DOC-MAP 中「执行契约」行 → Living 版本。
+
+    注意：`ADR-0034-multi-harness-execution-contract.md` 的文件名**也含**
+    `execution-contract.md` 子串（#1238 实测踩坑：按子串取首行会命中架构 ADR 行），
+    故先排除 adr/ 行，再取 Living token。
+    """
+    for line in text.splitlines():
+        if not line.lstrip().startswith("|") or "execution-contract.md" not in line:
+            continue
+        if "/adr/" in line:
+            continue
+        m = _CONTRACT_LIVING.search(line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def check_contract_version_sync(header_version: str | None, change_head: str | None,
+                                annex_version: str | None,
+                                docmap_version: str | None) -> list[str]:
+    """S13: 执行契约状态行 ↔ 版本记录首项 / 附录 / DOC-MAP 行（不在场的派生面不约束）。"""
+    issues: list[str] = []
+    if header_version is None:
+        return ["S13 执行契约: 状态行缺 `Living vX.Y` token（版本权威写法缺失）"]
+    if change_head is not None and change_head != header_version:
+        issues.append(
+            f"S13 执行契约: 状态行 v{header_version} ≠ 头部版本记录首项 v{change_head}"
+            "——bump 版本必须同步状态行（#1232–#1238 实测的文内漂移形态）"
+        )
+    if annex_version is not None and annex_version != header_version:
+        issues.append(
+            f"S13 执行契约附录: 当前 v{annex_version} ≠ 正文 v{header_version}"
+            "（附录与正文同版本演进）"
+        )
+    if docmap_version is None:
+        issues.append(
+            f"S13: DOC-MAP 执行契约行缺 `Living vX.Y`（正文 v{header_version}）"
+            "——改契约必带 DOC-MAP 版本同步"
+        )
+    elif docmap_version != header_version:
+        issues.append(
+            f"S13: DOC-MAP 执行契约行 v{docmap_version} ≠ 正文 v{header_version}"
+        )
+    return issues
+
+
 NOTE_CLASSES = {"feature", "bug-fix", "simplification", "architecture", "process", "testing"}
 NOTE_HEADER_CUTOFF = "2026-09-05"
 
@@ -579,6 +656,11 @@ def run_check() -> int:
             "docs/development/ai/execution-contract.md",
             os.path.join(ROOT, "docs", "development", "ai"),
         ),
+        # v1.12 契约分层（#1238）：规范附录同属权威面，断链防护一并纳入
+        (
+            "docs/development/ai/execution-contract-annex.md",
+            os.path.join(ROOT, "docs", "development", "ai"),
+        ),
         (
             "docs/development/dependencies-and-quality.md",
             os.path.join(ROOT, "docs", "development"),
@@ -725,12 +807,31 @@ def run_check() -> int:
                 *m7_entries.get(num, (None, None)),
             )
 
+        # S13: 执行契约版本一致性（#1238 增）——S12 只覆盖 ADR，契约是同类漂移面
+        contract_path = os.path.join(ROOT, "docs", "development", "ai",
+                                     "execution-contract.md")
+        annex_path = os.path.join(ROOT, "docs", "development", "ai",
+                                  "execution-contract-annex.md")
+        contract_text = open(contract_path, encoding="utf-8").read()
+        annex_version = None
+        if os.path.exists(annex_path):
+            m = _ANNEX_LIVING.search(
+                open(annex_path, encoding="utf-8").read())
+            annex_version = m.group(1) if m else ""
+        _, contract_version = parse_contract_status_line(contract_text)
+        issues += check_contract_version_sync(
+            contract_version,
+            parse_contract_change_head(contract_text),
+            annex_version,
+            parse_docmap_contract_version(docmap_text),
+        )
+
     for issue in issues:
         print(f"[BLOCK] {issue}")
     if issues:
         print(f"\n治理面结构检查失败：{len(issues)} 项", file=sys.stderr)
         return 1
-    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S12、S5x）")
+    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S13、S5x）")
     return 0
 
 
@@ -1071,12 +1172,36 @@ def run_self_test() -> int:
         True,
     )
 
+    # S13（#1238 增）：执行契约版本一致性——状态行 ↔ 版本记录首项 / 附录 / DOC-MAP
+    _c_head = "- **状态**：Living v1.2（唯一权威源。v1.2 变更：分层。v1.1 变更：旧）\n"
+    _c_stale = "- **状态**：Living v1.1（唯一权威源。v1.2 变更：分层。v1.1 变更：旧）\n"
+    assert parse_contract_status_line(_c_head)[1] == "1.2"
+    assert parse_contract_change_head(_c_head) == "1.2"
+    assert parse_contract_status_line(_c_stale)[1] == "1.1"  # 状态行落后
+    expect("S13 好样例（状态行=版本首项=附录=DOC-MAP）",
+           lambda: check_contract_version_sync("1.2", "1.2", "1.2", "1.2"), False)
+    expect("S13 状态行落后版本记录首项",
+           lambda: check_contract_version_sync("1.1", "1.2", "1.1", "1.1"), True)
+    expect("S13 附录版本漂移",
+           lambda: check_contract_version_sync("1.2", "1.2", "1.1", "1.2"), True)
+    expect("S13 DOC-MAP 版本漂移",
+           lambda: check_contract_version_sync("1.2", "1.2", "1.2", "1.9"), True)
+    expect("S13 DOC-MAP 行缺 token 被拦",
+           lambda: check_contract_version_sync("1.2", "1.2", "1.2", None), True)
+    expect("S13 状态行缺 Living token 被拦",
+           lambda: check_contract_version_sync(None, None, None, None), True)
+    # #1238 实测踩坑：ADR-0034 文件名也含 `execution-contract.md` 子串，必须跳过 adr/ 行
+    _dm = ("| **架构 ADR** | [adr/ADR-0034-multi-harness-execution-contract.md](x) | 描述 |\n"
+           "| **执行契约** | [development/ai/execution-contract.md](x) | **Living v1.2**：语义面 |\n")
+    expect("S13 DOC-MAP 行取执行契约行（不误取架构 ADR 行）",
+           lambda: parse_docmap_contract_version(_dm) != "1.2", False)
+
     if failures:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         print(f"\n自测失败 {len(failures)} 项——检查器自身不可信，禁止用于拦截", file=sys.stderr)
         return 1
-    print("[OK] self-test 通过：13 条规则各含红/绿样例双向验证")
+    print("[OK] self-test 通过：14 条规则各含红/绿样例双向验证")
     return 0
 
 

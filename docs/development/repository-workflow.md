@@ -53,9 +53,16 @@ Registry 细则（写入协议、scope 语法与 overlap 谓词、三维状态�
 宿主机产生信号（`check:full` 或按需运行）；CI runner 无 registry 数据，接
 PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 issue #1097）：
 
+- **先批量核销再收窗（#1234）**：`python tools/dev/ai_work.py update --all`
+  ——一次 gh 调用刷新全部已登记 PR 的终态（MERGED/CLOSED），一次九步写落盘，
+  **不刷任何 `last_seen`**（无 execution identity 即不冒充心跳）。逐条 `update`
+  刷上百条记录是分钟级；批量是秒级，且能一次清掉「已合入但缓存仍称开放」的
+  陈旧记录（实测 22 条一次清空）；
 - 批次收窗与合入核销/reconcile 前先跑 `python tools/dev/ai_work.py drift
   --strict`；有提示先处置再收尾——STALE 记录人工裁决、declaration-drift
   补/收窄 scope、overlap 改串行；
+- 开工前检看风险面用 `python tools/dev/ai_work.py status --risk`（只列在窗
+  记录 + overlap 提示；全量仍用不带 `--risk` 的 `status`）；
 - 输出与处置结论随批次收尾评论留痕（#1035 Evidence 台账回溯组同载体）。
 
 ## PR 与 Merge Queue

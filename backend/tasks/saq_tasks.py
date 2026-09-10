@@ -9,6 +9,8 @@ and keyword arguments that were passed at enqueue time.
 import logging
 import asyncio
 import os
+import threading
+import time
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,77 @@ _SCAN_POLL_PER_HOST_DEFAULT = 0
 _SCAN_POLL_GRACE_SECONDS_DEFAULT = 120
 _SCAN_POLL_GRACE_RATIO_DEFAULT = 0.9
 _SCAN_POLL_GRACE_MAX_MISSING_DEFAULT = 3
+
+
+# ── #1123：SAQ 超时后的线程残留互斥 ─────────────────────────────────────
+# SAQ 超时只取消 coroutine；asyncio.to_thread 里的同步工作（NFS 拷贝等）无法
+# 从外部终止，会继续跑完。重试若与残留线程同时写同一批目标文件，轻则重复
+# 劳动，重则交错写坏产物。策略 = **互斥**：后到者在协程侧等待（sleep 不占
+# 线程、可被正常取消），超预算才报错浮出；等待期间再被取消同样无副作用。
+
+
+class _SyncOverlapGuard:
+    """进程内 per-key 互斥：标记某 key 的同步段是否仍有线程在跑。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._busy: set[str] = set()
+
+    def try_begin(self, key: str) -> bool:
+        with self._lock:
+            if key in self._busy:
+                return False
+            self._busy.add(key)
+            return True
+
+    def end(self, key: str) -> None:
+        with self._lock:
+            self._busy.discard(key)
+
+
+_SYNC_OVERLAP_GUARDS = _SyncOverlapGuard()
+
+# 等待预算默认覆盖 merge 的 SAQ 超时（最长任务），避免「预算小于正常工作量
+# → 必然报错」；可用 STP_SAQ_SYNC_OVERLAP_WAIT_SECONDS 调整。
+_SYNC_OVERLAP_WAIT_BUDGET_DEFAULT = float(_MERGE_TASK_SAQ_TIMEOUT)
+
+
+def _overlap_wait_budget() -> float:
+    return max(
+        1.0,
+        _env_float("STP_SAQ_SYNC_OVERLAP_WAIT_SECONDS", _SYNC_OVERLAP_WAIT_BUDGET_DEFAULT),
+    )
+
+
+async def _run_sync_exclusive(
+    key: str,
+    fn,
+    *args,
+    what: str = "",
+    plan_run_id: int = 0,
+    **fn_kwargs,
+):
+    """to_thread + per-key 互斥（#1123）。
+
+    上一轮的残留线程仍在跑时，本轮在协程侧等待（不占线程池、可被 SAQ 正常
+    取消）；超预算说明残留线程异常顽固（NFS 挂死等），报错浮出而不是把新一轮
+    副作用叠上去。fn 正常跑完或抛异常都会释放互斥。
+    """
+    deadline = time.monotonic() + _overlap_wait_budget()
+    while not _SYNC_OVERLAP_GUARDS.try_begin(key):
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"saq_sync_overlap_timeout key={key} what={what} plan_run={plan_run_id}"
+            )
+        logger.warning(
+            "saq_sync_overlap_wait key=%s what=%s plan_run=%d — 上轮线程仍在运行",
+            key, what, plan_run_id,
+        )
+        await asyncio_sleep(1.0)
+    try:
+        return await asyncio_to_thread(fn, *args, **fn_kwargs)
+    finally:
+        _SYNC_OVERLAP_GUARDS.end(key)
 
 
 def _escape_like(value: str) -> str:
@@ -655,11 +728,16 @@ async def merge_task(
 
     logger.info("saq_merge_start plan_run=%d round=%s", plan_run_id, scan_round_id)
     try:
-        result = await asyncio.to_thread(
+        # #1123：merge 是长跑同步段（工具子进程 + 汇总写盘）—— SAQ 超时取消
+        # coroutine 后线程会继续跑完，重试必须等它结束而不是叠上去。
+        result = await _run_sync_exclusive(
+            f"merge:{plan_run_id}",
             run_merge_all_platforms_sync,
             plan_run_id,
             scan_round_id=scan_round_id,
             round_started_at=round_dt,
+            what="merge",
+            plan_run_id=plan_run_id,
         )
     except Exception:
         logger.exception("saq_merge_failed plan_run=%d", plan_run_id)
@@ -743,7 +821,15 @@ async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
     不阻塞事件循环。NFS 挂载点超时/中断时事件循环保持响应。
     """
     logger.info("saq_extract_start plan_run=%d", plan_run_id)
-    await asyncio.to_thread(_run_extract_sync, plan_run_id)
+    # #1123：extract 是 NFS 文件拷贝 —— 上一轮线程残留时重叠拷贝可能交错写坏
+    # 目标文件，必须互斥而不是叠上去。
+    await _run_sync_exclusive(
+        f"extract:{plan_run_id}",
+        _run_extract_sync,
+        plan_run_id,
+        what="extract",
+        plan_run_id=plan_run_id,
+    )
 
 
 async def install_agent_task(

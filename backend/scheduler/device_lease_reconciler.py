@@ -76,6 +76,10 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
     unknown_count = 0
     failed_count = 0
     terminal_released_count = 0
+    # #1172: on_job_terminal 自管理提交（#986 契约：聚合后先提交父终态再
+    # 触发链式派发）——不能在 begin_nested 内调用。savepoint 提交后由
+    # 函数尾部统一终态化并返回；其余候选留待下轮 tick。
+    terminalize: JobInstance | None = None
 
     for candidate in expired:
         try:
@@ -159,17 +163,15 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                         await release_lease(db, device_id, job_id, LeaseType.JOB)
 
                         try:
-                            JobStateMachine.transition(job, JobStatus.FAILED, "unknown_grace_timeout")
-                            await PlanAggregator.on_job_terminal(job, db)
-                            logger.warning(
-                                "reconciler_unknown_grace_released device=%s job=%s ended_at=%s",
-                                device_id, job_id, job.ended_at,
+                            JobStateMachine.transition(
+                                job, JobStatus.FAILED, "unknown_grace_timeout",
                             )
-                            failed_count += 1
+                            await db.flush()
+                            terminalize = job  # savepoint 提交后统一终态化
                         except InvalidTransitionError:
                             pass
                     # else: still within grace — do nothing
-                    continue
+                    break  # 事务交由函数尾部终态化（#1172）
 
                 # Other statuses (PENDING, etc.) — skip
         except Exception:
@@ -177,6 +179,14 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                 "reconciler_expired_lease_failed lease=%s device=%s job=%s",
                 candidate.id, candidate.device_id, candidate.job_id,
             )
+
+    if terminalize is not None:
+        await PlanAggregator.on_job_terminal(terminalize, db)
+        failed_count += 1
+        logger.warning(
+            "reconciler_unknown_grace_released device=%s job=%s ended_at=%s",
+            terminalize.device_id, terminalize.id, terminalize.ended_at,
+        )
 
     return unknown_count, failed_count, terminal_released_count
 
@@ -202,6 +212,9 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
     )).scalars().all()
 
     failed = 0
+    # #1172: on_job_terminal 自管理提交（#986 契约）——不在 begin_nested 内
+    # 调用；savepoint 提交后由函数尾部统一终态化，其余候选下轮 tick 处理。
+    terminalize: JobInstance | None = None
     for candidate in stale:
         try:
             async with db.begin_nested():
@@ -232,20 +245,27 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
                     await release_lease(db, job.device_id, job.id, LeaseType.JOB)
 
                 try:
-                    JobStateMachine.transition(job, JobStatus.FAILED, "unknown_grace_timeout")
-                    await PlanAggregator.on_job_terminal(job, db)
-                    failed += 1
-                    logger.warning(
-                        "reconciler_stale_unknown_finalized device=%s job=%s ended_at=%s",
-                        job.device_id, job.id, job.ended_at,
+                    JobStateMachine.transition(
+                        job, JobStatus.FAILED, "unknown_grace_timeout",
                     )
+                    await db.flush()
+                    terminalize = job
                 except InvalidTransitionError:
                     pass
+                break  # 事务交由函数尾部终态化（#1172）
         except Exception:
             logger.exception(
                 "reconciler_stale_unknown_failed device=%s job=%s",
                 candidate.device_id, candidate.id,
             )
+
+    if terminalize is not None:
+        await PlanAggregator.on_job_terminal(terminalize, db)
+        failed += 1
+        logger.warning(
+            "reconciler_stale_unknown_finalized device=%s job=%s ended_at=%s",
+            terminalize.device_id, terminalize.id, terminalize.ended_at,
+        )
 
     return failed
 
