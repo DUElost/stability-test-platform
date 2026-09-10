@@ -26,7 +26,7 @@ CLAUDE.md `@import` 写在中文行内静默失效（人肉 `/context` 才发现
 
 | 层 | 形态 | 挂载 | 依据类型 |
 |----|------|------|----------|
-| **L0 结构门禁** | 确定性文本检查 S1–S12 | 阻塞：ci.yml lint job + run_gates `check:quick/pr` | 〔证〕真实事故/实测断链/常驻上下文回膨胀 |
+| **L0 结构门禁** | 确定性文本检查 S1–S13 | 阻塞：ci.yml lint job + run_gates `check:quick/pr` | 〔证〕真实事故/实测断链/常驻上下文回膨胀 |
 | 本地护栏 | git pre-commit 已发布脚本 M/D 拦截 + Claude settings 凭据写保护 | 提交现场/会话现场秒级反馈 | 〔证〕ef8808e 事故 |
 | backstop 机械摘要 | 失败 issue 附红灯 job+step / 日志链接 / compare 区间 | 事件驱动 | 〔证〕现有 body 无定位要素 |
 | **L1 行为 evals** | **已移除（2026-09-06）**：不变量保全由 L0 新增 S11 承接；语义传导/标准化分诊/多 Harness 摄取验证残余缺口见 #855；恢复锚点与决策见移除 note | — | 〔证〕能力分解评估（08-27 曾 12/12 全绿当瘦身安全网；09-05 后唯一环境 CLI 故障不可用） |
@@ -43,13 +43,14 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 | S3 | `.mdc` frontmatter 三字段齐全语义合法（值剥离包裹引号后判空） | BLOCK | 坏 frontmatter=规则静默不加载，与 S1 同故障类 |
 | S4 | pr-agent.yml 五锚点（digest pin / fallback_models / disable-auto 步骤 / 门禁命令分离 job / security 判定串） | BLOCK | #399 / #421 事故转化物防误删 |
 | S5 | ci.yml/pr-agent.yml 的 PR 门禁 job id 与 AGENTS.md 六项记载互检（CodeQL 无 workflow 文件，只查文档侧） | BLOCK | 五稿评审均人工核对过的事实固化 |
-| S6 | AGENTS ≤80 行/8KB、CLAUDE ≤60 行/6KB、每个 Cursor rule ≤30 行/3KB；Harness 总索引、执行契约与 scoped CLAUDE 各有独立预算（P0b 增 execution-contract.md 200 行/20KB） | BLOCK | Requirement 无关细节曾让常驻链超过 50KB；超预算必须迁往按需文档 |
+| S6 | AGENTS ≤80 行/8KB、CLAUDE ≤60 行/6KB、每个 Cursor rule ≤30 行/3KB；Harness 总索引、执行契约与 scoped CLAUDE 各有独立预算（v1.12 契约分层后：正文 execution-contract.md 210 行/24500、规范附录 200 行/20000——语义面收紧、细则进附录） | BLOCK | Requirement 无关细节曾让常驻链超过 50KB；超预算必须迁往按需文档 |
 | S7 | `.claude/skills/*/SKILL.md` frontmatter 的 name 与目录一致且 description 非空 | BLOCK | 错误 frontmatter 会让技能静默不可见 |
 | S8 | CLAUDE.md 只能 `@import` 最小 `AGENTS.md` | BLOCK | 导入 DOC-MAP 会把完整索引无条件带入每次会话 |
 | S9 | AGENTS/CLAUDE 只允许固定启动级二级章节，禁止三级章节 | BLOCK | 体量预算只能限制总量，章节白名单进一步阻止领域知识重新常驻 |
 | S10 | 2026-09-05 起新增 Agent Note 的 Status/Class 头部与 class 目录一致 | BLOCK | 197 份存量中 78 份格式不统一；新门禁只阻止继续新增，不批量改写历史 |
 | S11 | AGENTS.md 硬不变量锚点（11 条锚串）逐条在场 | BLOCK | 2026-09-06 随 L1 移除引入：L0 此前对不变量整条删除/改写全盲（S9 只查章节名、S6 只查体量）；S4 锚点同模式 |
 | S12 | ADR 索引一致性：头部状态行 ↔ adr/README 主表/DOC-MAP/M7 看板（status 词级 + 规范位版本），头部行 ↔ 版本记录块末项 | BLOCK | 2026-09-07 随 #867 收口引入：ADR 版本 bump 漏同步索引已五次复发（#861 修两处、DOC-MAP/adr/README 再漏），且出现文内形态（头部行停 v1.3 而版本记录块已 v1.6）；版本约束仅限头部行携带规范位版本（**Status（vX.Y）** / **Status**（vX.Y：）），注解散文 token 不算 |
+| S13 | 执行契约版本一致性：`execution-contract.md` 状态行 `Living vX.Y` ↔ 自身版本记录**首项** ↔ 规范附录「当前 vX.Y」↔ DOC-MAP 执行契约行 | BLOCK | 2026-09-10 随 #1238 引入：执行契约不是 ADR，S12 不覆盖它，而同类漂移已复发三次（2026-09-07 七日审计 5 残面 / v1.4 note 收口存量漂移 / #1232–#1238 期间「加了 v1.11 变更条目却没改 Living token」）；解析需排除 `ADR-0034-multi-harness-execution-contract.md` 的文件名同子串误命中 |
 
 检查器自身由 `--self-test` 守护：每条规则一红一绿样例双向验证
 （verify-before-asserting；自测曾真逮到 S3 引号值误判空的非空 bug）。
@@ -167,3 +168,4 @@ advisory 观察期被**全库枚举**替代——差异面 gate 在 main 上 dif
 | 2026-09-07 | §7.1 强制力覆盖图（#855 收口）：11 条硬不变量按运行时强制/gate/结构自证/residual 分类，行为验证层重建被第一原理否决（测量不产生约束力+负复利），差集收缩走差异面检查，residual 走棘轮 |
 | 2026-09-07 | 差集收缩执行器落地：`invariant-diff` gate（差异面策展模式，advisory 起步入 check:pr/full；`--strict` 为转 BLOCK 接口） |
 | 2026-09-07 | `invariant-diff` 升格 BLOCK：全库枚举替代观察期（差异面 gate 观察期结构性收不到样本）验证精度，`.dict(` 加 patch/monkeypatch 豁免，接入 ci.yml lint job（`GATE_TO_CI_ANCHOR` 改映射）；覆盖图 Pydantic v2/表名单数两行差集闭合 |
+| 2026-09-10 | 新增 S13 执行契约版本一致性（#1238 契约分层的收口）：状态行 `Living vX.Y` ↔ 版本记录首项 ↔ 规范附录 ↔ DOC-MAP 行——执行契约不是 ADR、S12 不覆盖，同类漂移已第三次复发；同批 S6 值同步（正文 210 行/24500 + 附录 200 行/20000） |

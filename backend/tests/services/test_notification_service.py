@@ -251,3 +251,53 @@ def test_send_to_channel_dingtalk_surfaces_business_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="errcode=40035"):
         mod.send_to_channel(channel, "This is a test notification from Stability Test Platform.")
+
+
+# ── #1122：SMTP 网络超时 + 队列满拒绝不外溢 ──────────────────────────────
+
+
+def test_send_email_passes_explicit_timeout(monkeypatch):
+    """SMTP 连接必须带 deadline——无超时会挂死通知线程。"""
+    calls = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            calls["host"], calls["port"], calls["timeout"] = host, port, timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def starttls(self):
+            calls["starttls"] = True
+
+        def login(self, user, password):
+            pass
+
+        def sendmail(self, frm, to, body):
+            pass
+
+    monkeypatch.setattr(mod, "SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(mod, "SMTP_PORT", 587)
+    monkeypatch.setattr(mod.smtplib, "SMTP", FakeSMTP)
+    mod._send_email("ops@example.com", "STP", "hello")
+
+    assert calls["host"] == "smtp.example.com"
+    assert calls["timeout"] == mod.SMTP_TIMEOUT_SECONDS
+    assert calls["timeout"] >= 1
+
+
+def test_dispatch_notification_async_swallows_queue_full(monkeypatch):
+    """队列满被拒绝时丢弃并告警，绝不向调用方外溢（fire-and-forget 契约）。"""
+    from backend.core.thread_pool import PoolQueueFullError
+
+    def full_submit(fn, *args, **kwargs):
+        raise PoolQueueFullError("background pool queue full")
+
+    monkeypatch.setattr(
+        "backend.core.thread_pool.submit", full_submit,
+    )
+    # 不应抛出
+    mod.dispatch_notification_async("system_alert", {"run_id": 1})
