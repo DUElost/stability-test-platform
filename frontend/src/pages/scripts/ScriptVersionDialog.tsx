@@ -191,7 +191,7 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
               onChange={(e) => setParamSchemaText(e.target.value)}
               rows={3}
               className={FORM.textarea}
-              placeholder='{"timeout": {"type": "int"}}'
+              placeholder='{"timeout": {"type": "integer"}}'
             />
           </div>
 
