@@ -6,6 +6,9 @@
 # runs a sanity check, then drops the temporary database.
 # Run periodically (e.g. monthly) to validate backup integrity.
 #
+# Only prints "Restore drill PASSED" when restore + sanity checks all pass:
+# SQL errors (ON_ERROR_STOP), failed count queries, or too few tables exit non-zero.
+#
 # Usage:
 #   ./pg_restore_test.sh [backup_file]
 #   # If no backup_file given, uses the latest in BACKUP_DIR
@@ -57,18 +60,37 @@ cleanup() {
 trap cleanup EXIT
 
 # Restore
-if ! gunzip -c "${BACKUP_FILE}" | psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d "${TEST_DB}" -q 2>&1; then
+# ON_ERROR_STOP=1：#1255 — 中途 SQL 错误立即使 psql 非零，不得继续到 PASSED
+if ! gunzip -c "${BACKUP_FILE}" | psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d "${TEST_DB}" -q -v ON_ERROR_STOP=1 2>&1; then
   echo "ERROR: Restore failed" >&2
   exit 1
 fi
 
 # Sanity checks
-TABLE_COUNT=$(psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d "${TEST_DB}" -t -c \
-  "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';" 2>&1 | tr -d ' ')
-HOST_COUNT=$(psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d "${TEST_DB}" -t -c \
-  "SELECT count(*) FROM host;" 2>&1 | tr -d ' ')
-PLAN_COUNT=$(psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d "${TEST_DB}" -t -c \
-  "SELECT count(*) FROM plan;" 2>&1 | tr -d ' ')
+# 计数查询 stderr 不入变量；查询失败（管道非零）或输出非数字都中止演练
+run_count_query() {
+  psql -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" -d "${TEST_DB}" -t -A -c "$1" 2>/dev/null | tr -d '[:space:]'
+}
+
+TABLE_COUNT="$(run_count_query "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';")" \
+  || { echo "ERROR: tables count query failed" >&2; exit 1; }
+HOST_COUNT="$(run_count_query "SELECT count(*) FROM host;")" \
+  || { echo "ERROR: host count query failed" >&2; exit 1; }
+PLAN_COUNT="$(run_count_query "SELECT count(*) FROM plan;")" \
+  || { echo "ERROR: plan count query failed" >&2; exit 1; }
+
+check_count() {
+  local label="$1" value="$2"
+  case "${value}" in
+    '' | *[!0-9]*)
+      echo "ERROR: ${label} count query failed (got: '${value}')" >&2
+      exit 1
+      ;;
+  esac
+}
+check_count tables "${TABLE_COUNT}"
+check_count host "${HOST_COUNT}"
+check_count plan "${PLAN_COUNT}"
 
 echo "[$(date -Iseconds)] Restore verification:"
 echo "  Tables restored: ${TABLE_COUNT}"
@@ -76,7 +98,8 @@ echo "  Host rows:       ${HOST_COUNT}"
 echo "  Plan rows:       ${PLAN_COUNT}"
 
 if [ "${TABLE_COUNT}" -lt 5 ]; then
-  echo "WARNING: Only ${TABLE_COUNT} tables restored — expected at least 5" >&2
+  echo "ERROR: Only ${TABLE_COUNT} tables restored — expected at least 5" >&2
+  exit 1
 fi
 
 echo "[$(date -Iseconds)] Restore drill PASSED"
