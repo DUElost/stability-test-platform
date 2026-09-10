@@ -8,11 +8,54 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.api.schemas.base import ORMBaseModel
+
+
+def normalize_export_dir(value: str) -> str:
+    """#968 契约：``export_dir`` 是相对存储根的目录名 / 相对子路径。
+
+    拒绝绝对路径、``..`` 组件、空串与 NUL；其余规范化（折叠 ``.``、去尾斜杠）。
+    调用方（schema 写入口、导出端点）把 ``ValueError`` 文案转 422。
+    """
+    candidate = value.strip() if isinstance(value, str) else ""
+    if not candidate:
+        raise ValueError("export_dir must be a non-empty string")
+    if "\x00" in candidate:
+        raise ValueError("export_dir must not contain NUL")
+    parts = PurePosixPath(candidate).parts
+    if not parts or parts[0] == "/" or ".." in parts:
+        raise ValueError("export_dir must be a relative path without '..'")
+    return str(PurePosixPath(candidate))
+
+
+def _validate_exec_descs(descs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """#969 写边界字段级校验：保证入库的 exec_descs 可被读路径消费。
+
+    ``times`` 缺省/空串按 1；显式值须可转 int 且 ≥1（0 会被读路径静默改成 1，
+    负值会原样渲染进 XML，均拒绝）。``args`` 须为对象。其余键原样保留。
+    """
+    for index, raw in enumerate(descs):
+        if not isinstance(raw, dict):
+            raise ValueError(f"exec_descs[{index}] must be a JSON object")
+        raw_times = raw.get("times")
+        if raw_times in (None, ""):
+            times_value = 1
+        else:
+            try:
+                times_value = int(raw_times)
+            except (TypeError, ValueError):
+                raise ValueError(f"exec_descs[{index}].times must be an integer") from None
+        if times_value < 1:
+            raise ValueError(f"exec_descs[{index}].times must be >= 1")
+        args = raw.get("args") or {}
+        if not isinstance(args, dict):
+            raise ValueError(f"exec_descs[{index}].args must be a JSON object")
+    return descs
 
 
 class TestCaseOut(ORMBaseModel):
@@ -30,6 +73,11 @@ class TestCaseIn(BaseModel):
     times: int = Field(default=1, ge=1)
     enabled: bool = True
     exec_descs: List[Dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("exec_descs")
+    @classmethod
+    def _check_exec_descs(cls, value: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return _validate_exec_descs(value)
 
 
 class TestSuiteOut(ORMBaseModel):
@@ -68,6 +116,11 @@ class TestSuiteCreateIn(BaseModel):
     root_config: Dict[str, Any] = Field(default_factory=dict)
     global_params: Optional[Dict[str, Any]] = None
 
+    @field_validator("export_dir")
+    @classmethod
+    def _normalize_export_dir(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else normalize_export_dir(value)
+
 
 class TestSuiteUpdateIn(BaseModel):
     """PUT 元数据；未提供的字段不改（None 与「不提供」不可区分的字段用哨兵语义说明）。
@@ -90,6 +143,11 @@ class TestSuiteUpdateIn(BaseModel):
         if "is_active" in self.model_fields_set and self.is_active is None:
             raise ValueError("is_active cannot be null (NOT NULL column)")
         return self
+
+    @field_validator("export_dir")
+    @classmethod
+    def _normalize_export_dir(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else normalize_export_dir(value)
 
 
 class IssueOut(BaseModel):
