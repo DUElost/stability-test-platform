@@ -226,6 +226,12 @@ G1-G5 脚本管理 · G6-G11 展锐 · G12-G15 android-tools · G16-G20 Jira · 
 | 3 scan 语义调整（G2/G3） | 第一批前端落地后 | design 评审（影响 scan 对账不变量） |
 | 1/2 UI 风格 | tokens 定稿 | mockup + Agent Note（沿用 plan-execute-v2 先例） |
 
+> **补注（2026-09-10）**：上表首行「4-P1 必开新 ADR」**已由
+> [`ADR-0032`](../adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md) 承接**
+> （2026-08-31 Accepted：正式 supersede #220、落地 UNISOC Watcher / Reconciler /
+> 分区双 merge；形态不必再裁决）；`ADR-0033 §1.1` 只覆盖其 **P2 汇总去重**形态。
+> 本行原判据保留为历史记录，不再作为待办触发器。其余行的触发条件不变。
+
 ## 附录 A：证据索引（file:line）
 
 | 主题 | 位置 |

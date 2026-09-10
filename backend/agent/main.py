@@ -95,6 +95,11 @@ STP_WATCHER_PLAN_DEFAULT = os.getenv("STP_WATCHER_PLAN_DEFAULT", "true").lower()
 # 命名约定：_active_job_ids / _active_jobs_lock
 _active_job_ids: Set[int] = set()
 _active_device_ids: Set[int] = set()  # per-device concurrency guard
+# device_id → 占用它的 active job_id（与 _active_device_ids 同锁、同步增删）。
+# 占位清理只允许归属 job 本人执行：迟到 worker 的 release 不得清掉继任 job 已
+# 重占的占位（#1203，#1006 补偿的 None 分支无法区分「本 job 残留」与「已清 +
+# 继任重占」两种 token 消失态）。
+_active_device_owner: Dict[int, int] = {}
 _active_job_tokens: Dict[int, str] = {}
 _active_jobs_lock = threading.Lock()
 _lock_renewal_stop_event = threading.Event()
@@ -153,6 +158,7 @@ def _cleanup_after_lease_lost(
     active_job_ids: Set[int],
     active_device_ids: Set[int],
     active_job_tokens: Dict[int, str],
+    active_device_owner: Optional[Dict[int, int]] = None,
     local_db: Any,
 ) -> None:
     with active_jobs_lock:
@@ -160,6 +166,8 @@ def _cleanup_after_lease_lost(
         active_job_tokens.pop(job_id, None)
         if device_id is not None:
             active_device_ids.discard(device_id)
+            if active_device_owner is not None and active_device_owner.get(device_id) == job_id:
+                active_device_owner.pop(device_id, None)
     # 保留本地 active_job 记录，等待设备重连或 agent 重启时走 recovery/sync 恢复。
 
 
@@ -172,6 +180,7 @@ def _cleanup_after_job_exit(
     active_job_ids: Set[int],
     active_device_ids: Set[int],
     active_job_tokens: Dict[int, str],
+    active_device_owner: Optional[Dict[int, int]] = None,
     lease_renewer: Any,
     local_db: Any,
 ) -> None:
@@ -196,6 +205,8 @@ def _cleanup_after_job_exit(
             active_job_tokens.pop(job_id, None)
             if device_id is not None:
                 active_device_ids.discard(device_id)
+                if active_device_owner is not None and active_device_owner.get(device_id) == job_id:
+                    active_device_owner.pop(device_id, None)
     if job_was_active:
         # #1005: 仅当终态事实到达可靠落点（远端 ack 或 outbox 持久化，均留
         # job_terminal_outbox 行）才删除恢复依据；complete_job 双故障（HTTP
@@ -220,6 +231,7 @@ def _rollback_failed_claim(
     active_job_ids: Set[int],
     active_device_ids: Set[int],
     active_job_tokens: Dict[int, str],
+    active_device_owner: Optional[Dict[int, int]] = None,
     lease_renewer: Any,
     local_db: Any,
 ) -> None:
@@ -244,6 +256,8 @@ def _rollback_failed_claim(
     if own_device is not None:
         with active_jobs_lock:
             active_device_ids.discard(own_device)
+            if active_device_owner is not None and active_device_owner.get(own_device) == jid:
+                active_device_owner.pop(own_device, None)
     # Registration never reached SQLite; drop any stray row so a claimed-but-
     # never-started job is not treated as live by the next recovery pass.
     try:
@@ -930,6 +944,18 @@ def main() -> None:
                 row_id, replayed,
             )
             return {"ok": replayed, "row_id": row_id}
+        elif command == "replay_dle_register_dead_letter":
+            # #1204: DLE create 意图死信回放——重置 dead_letter/attempts，
+            # 下一 drain tick 重新补建（中心升级/漂移窗口过后恢复）。
+            event_id = payload.get("event_id")
+            if not isinstance(event_id, str) or not event_id:
+                return {"ok": False, "error": "invalid event_id"}
+            replayed = local_db.replay_dle_register_dead_letter(event_id)
+            logger.info(
+                "control_replay_dle_register_dead_letter event_id=%s replayed=%s",
+                event_id, replayed,
+            )
+            return {"ok": replayed, "event_id": event_id}
         else:
             logger.warning("unknown_control_command: %s", command)
             return {"ok": False, "error": f"unknown command: {command}"}
@@ -1026,6 +1052,7 @@ def main() -> None:
                 active_job_ids=_active_job_ids,
                 active_device_ids=_active_device_ids,
                 active_job_tokens=_active_job_tokens,
+                active_device_owner=_active_device_owner,
                 local_db=local_db,
             )
         except Exception:
@@ -1062,6 +1089,7 @@ def main() -> None:
             _active_job_tokens[jid] = effective_worker_token
             if device_id is not None:
                 _active_device_ids.add(device_id)  # Phase 3b: 注册时同步占位 device
+                _active_device_owner[device_id] = jid
         if fencing_token:
             lease_renewer.set_fencing_token(
                 jid,
@@ -1085,6 +1113,7 @@ def main() -> None:
             active_job_ids=_active_job_ids,
             active_device_ids=_active_device_ids,
             active_job_tokens=_active_job_tokens,
+            active_device_owner=_active_device_owner,
             lease_renewer=lease_renewer,
             local_db=local_db,
         )
@@ -1169,6 +1198,7 @@ def main() -> None:
         lock_deregister=_deregister_active_job,
         device_id_register=_register_active_device,
         device_id_deregister=_deregister_active_device,
+        active_device_owner=_active_device_owner,
         on_job_not_running_recovery=patrol_job_not_running_recovery,
     )
 
@@ -1267,6 +1297,7 @@ def main() -> None:
                                 continue
                             if device_id:
                                 _active_device_ids.add(device_id)
+                                _active_device_owner[device_id] = job["id"]
 
                         local_worker_token = _make_local_worker_token(
                             job["id"], job["fencing_token"],
@@ -1300,6 +1331,7 @@ def main() -> None:
                                 active_job_ids=_active_job_ids,
                                 active_device_ids=_active_device_ids,
                                 active_job_tokens=_active_job_tokens,
+                                active_device_owner=_active_device_owner,
                                 lease_renewer=lease_renewer,
                                 local_db=local_db,
                             )

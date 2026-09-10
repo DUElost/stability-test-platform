@@ -335,3 +335,40 @@ def test_gpu_setup_v106_has_settle(monkeypatch):
     import inspect
     src = inspect.getsource(g._pre_reboot_device)
     assert "STP_GPU_REBOOT_SETTLE_SECONDS" in src
+
+
+def test_gpu_setup_v107_install_push_fail_no_nameerror(monkeypatch):
+    """#755：push 全失败时返回 (rc, msg) 而非 NameError（run 355 实证 2 台）。"""
+    import tempfile
+    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.7")
+    sys.path.insert(0, d)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gpu_lib_v107", d + "/_lib.py")
+    lib = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(lib)
+
+    def fake_adb(*args, timeout=30):
+        if args[0] == "push":
+            return 1, "", "push failed"     # 两次 push 都失败
+        return 0, "", ""
+
+    monkeypatch.setattr(lib, "adb", fake_adb)
+    with tempfile.NamedTemporaryFile(suffix=".apk") as f:
+        rc, out = lib._install_apk_stable(Path(f.name))   # 不应抛 NameError
+    assert rc != 0
+    assert "push failed" in out
+
+
+def test_gpu_setup_v107_wait_timeout_caught(monkeypatch):
+    """v1.0.7：wait-for-device 超时被捕获（不抛 init 失败）。run 355 实证 2 台。"""
+    import inspect
+    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.7")
+    sys.path.insert(0, d)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gpu_v107", d + "/gpu_setup.py")
+    g = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(g)
+    src = inspect.getsource(g._pre_reboot_device)
+    assert "TimeoutExpired" in src

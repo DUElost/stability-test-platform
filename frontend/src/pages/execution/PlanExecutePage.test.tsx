@@ -978,6 +978,55 @@ describe('PlanExecutePage', () => {
     expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
   });
 
+  it('discards a stale in-flight preview after the device selection changes (#819)', async () => {
+    let resolvePreview!: (value: unknown) => void;
+    (api.plans.previewRun as any).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePreview = resolve;
+      }),
+    );
+    renderPage({
+      devices: [
+        { id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'DEV-2', host_id: 'h1', status: 'ONLINE' },
+      ],
+    });
+
+    await goToDeviceStep();
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-1/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /DEV-2/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+
+    // 在途期间返回修改并移除 DEV-2：previewResetKey 变化使本次请求作废
+    fireEvent.click(screen.getByRole('button', { name: /返回修改/ }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /DEV-2/ }));
+    expect(await screen.findByText(/已选 1 \/ 2 台可用/)).toBeInTheDocument();
+
+    // 旧响应此刻才到达，且携带已被移除的 DEV-2
+    resolvePreview({
+      plan_name: 'Smoke Plan',
+      device_count: 2,
+      job_count: 2,
+      total_steps: 1,
+      device_ids: [1, 2],
+    });
+
+    // 再进派发阶段：旧预览不得复活（「确认发起」只在本次预览结果上可用）
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+    const previewButton = await screen.findByRole('button', { name: /生成执行预览/ });
+    expect(screen.queryByText(/预览已生成并冻结/)).not.toBeInTheDocument();
+    expect(mocks.toast.info).not.toHaveBeenCalledWith(expect.stringContaining('预览已生成'));
+
+    // 重新预览后确认发起：派发集只含仍被选中的 DEV-1
+    await waitFor(() => expect(previewButton).toBeEnabled());
+    fireEvent.click(previewButton);
+    fireEvent.click(await screen.findByRole('button', { name: /确认发起/ }));
+    await waitFor(() => {
+      expect(api.plans.run).toHaveBeenCalledWith(7, { device_ids: [1] });
+    });
+  });
+
   it('expands step rows to show script default_params', async () => {
     (api.scripts.list as any).mockResolvedValueOnce([
       {

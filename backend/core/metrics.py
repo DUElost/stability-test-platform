@@ -300,6 +300,20 @@ socketio_connections = Gauge(
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
+# Background Thread Pool Metrics (#1122)
+# ============================================================================
+
+background_pool_queue_depth = Gauge(
+    'stability_background_pool_queue_depth',
+    'Background thread pool occupied slots (in-flight + queued)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+background_pool_rejected_total = Counter(
+    'stability_background_pool_rejected_total',
+    'Submissions rejected because the background pool queue was full',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ============================================================================
 # APScheduler Metrics
 # ============================================================================
 
