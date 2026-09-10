@@ -6,14 +6,14 @@ After=network.target
 Type=simple
 # Replace with your deploy user, e.g. User=stability
 User=<deploy-user>
-WorkingDirectory=/home/debian13/stability-test-platform
-EnvironmentFile=/home/debian13/stability-test-platform/.env.backend
-ExecStartPre=/home/debian13/stability-test-platform/venv/bin/python -m py_compile /home/debian13/stability-test-platform/backend/main.py
-ExecStart=/home/debian13/stability-test-platform/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
+WorkingDirectory=<deploy-root>
+EnvironmentFile=<deploy-root>/.env.backend
+ExecStartPre=<deploy-root>/venv/bin/python -m py_compile <deploy-root>/backend/main.py
+ExecStart=<deploy-root>/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
-StandardOutput=append:/home/debian13/stability-test-platform/logs/backend.log
-StandardError=append:/home/debian13/stability-test-platform/logs/backend_error.log
+StandardOutput=append:<deploy-root>/logs/backend.log
+StandardError=append:<deploy-root>/logs/backend_error.log
 
 [Install]
 WantedBy=multi-user.target

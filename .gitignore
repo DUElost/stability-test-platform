@@ -30,6 +30,7 @@ env/
 !deploy/postgres/.env.example
 !deploy/control-plane/env/
 !deploy/control-plane/env/.env.backend.example
+!deploy/control-plane/env/.env.backend.internal.example
 .venv
 *.db
 *.sqlite

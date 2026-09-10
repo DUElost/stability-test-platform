@@ -225,8 +225,8 @@ cd "$CONTROL_DIR/backend"
 ```bash
 cd "$CONTROL_DIR/frontend"
 npm ci
-VITE_API_BASE_URL= npm run build    # 产出 dist-prod
-# 原子切换 dist-prod → nginx root：见 control-plane-deploy SKILL §1.5
+VITE_API_BASE_URL= npm run build:prod   # 产物 = nginx root frontend/dist-prod
+# 生产换包仍建议走干净 worktree + 原子切换（避免半成品窗口）：见 control-plane-deploy SKILL §1.5
 sudo systemctl reload nginx
 ```
 

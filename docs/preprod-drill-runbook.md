@@ -16,6 +16,12 @@ export CONTROL_IP="203.0.113.15"
 export CONTROL_BASE_URL="http://$CONTROL_IP"
 export CONTROL_DIR="/opt/stability-test-platform"
 export DEPLOY_USER="$USER"
+
+# 模板渲染：deploy/control-plane/{systemd,nginx,logrotate} 里的 <deploy-root> / <deploy-user>
+# 占位符由上面两个变量唯一确定（源模板不含硬编码部署根）。
+render_template() {
+  sed -e "s|<deploy-root>|$CONTROL_DIR|g" -e "s|<deploy-user>|$DEPLOY_USER|g" "$1"
+}
 ```
 
 若预发布已启用 HTTPS，将 `CONTROL_BASE_URL` 改为 `https://<控制平面域名>`。
@@ -72,9 +78,8 @@ python3 tools/prepare_env.py \
 #   --replace-placeholders
 mkdir -p "$CONTROL_DIR/logs"
 
-cp deploy/control-plane/systemd/stability-backend.service /tmp/stability-backend.service
-sed -i "s|<deploy-user>|$DEPLOY_USER|g" /tmp/stability-backend.service
-sudo cp /tmp/stability-backend.service /etc/systemd/system/stability-backend.service
+render_template deploy/control-plane/systemd/stability-backend.service \
+  | sudo tee /etc/systemd/system/stability-backend.service >/dev/null
 
 sudo systemctl daemon-reload
 sudo systemctl enable stability-backend
@@ -87,9 +92,10 @@ sudo systemctl status stability-backend --no-pager
 ```bash
 cd "$CONTROL_DIR/frontend"
 npm install
-VITE_API_BASE_URL= npm run build
+VITE_API_BASE_URL= npm run build:prod   # 产物 → frontend/dist-prod（= Nginx root）
 
-sudo cp "$CONTROL_DIR/deploy/control-plane/nginx/stability-platform.conf" /etc/nginx/sites-available/stability-platform
+render_template "$CONTROL_DIR/deploy/control-plane/nginx/stability-platform.conf" \
+  | sudo tee /etc/nginx/sites-available/stability-platform >/dev/null
 # 如已具备证书，优先改用 stability-platform-https.conf
 sudo ln -sf /etc/nginx/sites-available/stability-platform /etc/nginx/sites-enabled/stability-platform
 sudo nginx -t
