@@ -580,6 +580,18 @@ def derive_integration(pr_number: str | None, cached: str | None, cwd: str) -> t
     return ("READY" if required_checks_all_green(required) else "PR_OPEN"), True
 
 
+def seed_registered_pr(cache: str | None) -> str:
+    """登记新 PR 号时的 integration 播种（契约 §3.3 T2）。
+
+    NO_PR/空缓存登记新号 → PR_OPEN：即便随后 derive_integration 因
+    「no checks reported」（PR 刚创建、尚无 check 上报）走降级，也不会把
+    已登记的 PR 留成 NO_PR；既有 PR_OPEN/READY/MERGED/CLOSED 原样保留。
+    """
+    if not cache or cache == "NO_PR":
+        return "PR_OPEN"
+    return cache
+
+
 # ── 命令实现 ──
 
 def _now() -> float:
@@ -1095,6 +1107,7 @@ def cmd_update(args) -> int:
                 return 2
         if args.pr:
             rec["pr_number"] = str(args.pr)
+            rec["integration_cache"] = seed_registered_pr(rec.get("integration_cache"))
         integration, ok = derive_integration(rec.get("pr_number"),
                                              rec.get("integration_cache"), repo_root)
         rec["integration_cache"] = integration
@@ -1133,6 +1146,7 @@ def cmd_finish(args) -> int:
             rec["lifecycle"] = "FINISHED"
             if args.pr:
                 rec["pr_number"] = str(args.pr)
+                rec["integration_cache"] = seed_registered_pr(rec.get("integration_cache"))
             integration, _ = derive_integration(rec.get("pr_number"),
                                                 rec.get("integration_cache"), repo_root)
             rec["integration_cache"] = integration
@@ -1368,6 +1382,14 @@ def run_self_test() -> int:
         [{"name": "lint", "state": "SUCCESS"}, {"name": "pr-agent-tests", "state": "FAILURE"}]
     )
     assert not required_checks_all_green([{"name": "lint", "state": "QUEUED"}])
+
+    # #1211 复查 follow-up：登记新号播种 PR_OPEN（T2）——「无 check 上报」窗口
+    # 降级时不再把已登记 PR 留成 NO_PR；更精确的既有观测不被覆盖
+    assert seed_registered_pr(None) == "PR_OPEN"
+    assert seed_registered_pr("") == "PR_OPEN"
+    assert seed_registered_pr("NO_PR") == "PR_OPEN"
+    assert seed_registered_pr("READY") == "READY"
+    assert seed_registered_pr("CLOSED") == "CLOSED"
 
     # #880 三缺口红绿：declare 校验 / codec 引号 key 往返 / corrupt 隔离
     try:
