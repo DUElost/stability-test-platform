@@ -71,6 +71,55 @@ Ansible（`host_key_checking = True`）与 `update_agent.yml` 的 rsync 通道�
   可信渠道核对新指纹后，`ssh-keygen -R <host>` 并重新登记，并在运维记录
   （工单 / 值班日志）留痕确认。
 
+### 控制机升级预检（#1263）
+
+从 `host_key_checking = False` 旧配置升级到严格校验后，先确认控制机已登记全部
+目标主机指纹，再跑只读连通检查——未登记主机会在连接阶段 fail-closed 中止。
+
+1）盘点覆盖率（只读，不改系统文件）：
+
+```bash
+cd "$REPO_ROOT/tools/ansible"
+python3 - <<'PY'
+import subprocess
+from pathlib import Path
+
+hosts = []
+for raw in Path("inventory.ini").read_text(encoding="utf-8").splitlines():
+    line = raw.strip()
+    if not line or line.startswith(("#", ";", "[")):
+        continue
+    toks = line.split()
+    vars_ = dict(t.split("=", 1) for t in toks[1:] if "=" in t)
+    hosts.append(
+        (vars_.get("ansible_host", toks[0]).strip('"'), vars_.get("ansible_port", "").strip('"'))
+    )
+
+for addr, port in hosts:
+    key = f"[{addr}]:{port}" if port else addr
+    if subprocess.run(["ssh-keygen", "-F", key], capture_output=True).returncode != 0:
+        print(f"missing: {key}")
+PY
+```
+
+2）对 `missing:` 主机按上文「首次连接前登记」补齐（带内核对指纹后登记）。
+
+3）单台只读验证（`--limit` 收缩到单台）：
+
+```bash
+cd "$REPO_ROOT/tools/ansible"
+ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping --limit <host>
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit <host>
+```
+
+可选：对单台确认严格校验确实生效（`/dev/null` 即"未登记"，不改系统文件）：
+
+```bash
+ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping --limit <host> \
+  -e '{"ansible_ssh_common_args": "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes"}'
+# 期望：UNREACHABLE + Host key verification failed
+```
+
 ## 4. 变量模型
 
 默认变量来源于 `tools/ansible/group_vars/linux_hosts.yml`。

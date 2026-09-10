@@ -47,11 +47,24 @@ Class: bug-fix
   `inventory.example.ini`）→ 全部通过；
 - `check:quick` → 7 gates 全绿（ruff / eslint / tsc / knip / compileall / gov-surface / ai-work）。
 
-未完成（pending）：
+补充验证记录（2026-09-11，追加）：
 
-- 真机 fail-closed 与登记后连通验证：本机为生产控制面宿主，不在生产主机清单上做
-  试验性连接；需在隔离 / 预发布环境按 runbook §3 登记 known_hosts 后跑
-  `ansible -m ping` 与 update playbook 验证。
+- **隔离机制验证（零风险：本机 loopback sshd + 临时 known_hosts，不改任何系统文件）**：
+  - ssh 层：未登记 → `No ED25519 host key is known ... Host key verification failed`
+    （fail-closed）；已登记正确指纹 → 通过主机密钥校验（止步认证 `Permission denied`）；
+    指纹不匹配（等效换钥）→ `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!` + 硬失败；
+  - ansible 层（本 PR 修复后配置 + 临时 inventory 指向 loopback）：未登记 →
+    `UNREACHABLE` + `Host key verification failed`；已登记 → 通过主机密钥校验；
+  - 全程未连接任何生产主机、未改系统 known_hosts，临时物已清理；
+- **控制面覆盖率预检（只读）**：`inventory.ini` 16 台目标中 **14 台已登记 / 2 台未登记**；
+  未登记主机在升级后会 fail-closed，需先按 runbook §3 补齐指纹再验证连通；
+- runbook §3 新增「控制机升级预检」小节（覆盖率盘点 + 单台只读验证 + 可选 fail-closed 对照）。
+
+仍未完成（pending）：
+
+- 2 台未登记主机的指纹补齐（带内核对，人工执行）与补齐后的单台 `-m ping` /
+  `check_agent.yml` 连通验证；
+- `update_agent.yml` 真机升级演练（需隔离 / 预发布环境与维护窗口）。
 
 ## Revisit
 
