@@ -120,6 +120,26 @@ def send_to_channel(channel: NotificationChannel, message: str) -> None:
         raise ValueError(f"Unknown channel type: {channel_type}")
 
 
+def _raise_for_delivery_error(resp: requests.Response) -> None:
+    """Raise a credential-safe delivery error on non-2xx (#1214).
+
+    ``requests.raise_for_status()`` embeds the full request URL (which may carry
+    ``access_token`` / ``sign`` query credentials) in the exception text; that
+    text is persisted and can reach the LLM context. Surface only the status.
+    """
+    status = getattr(resp, "status_code", None)
+    if not isinstance(status, int) or status < 400:
+        return
+    reason = (getattr(resp, "reason", "") or "").strip()
+    detail = f"HTTP {status}"
+    if reason:
+        detail = f"{detail} {reason}"
+    # Belt-and-braces: a custom adapter could still smuggle a URL via reason.
+    from backend.core.redaction import redact_secrets
+
+    raise NotificationDeliveryError(redact_secrets(detail))
+
+
 def _send_webhook(url: str, message: str) -> None:
     if not url:
         raise ValueError("Webhook URL not configured")
@@ -128,7 +148,7 @@ def _send_webhook(url: str, message: str) -> None:
         json={"text": message, "content": message},
         timeout=10,
     )
-    resp.raise_for_status()
+    _raise_for_delivery_error(resp)
 
 
 def _send_dingtalk(url: str, secret: str, message: str) -> None:
@@ -159,7 +179,7 @@ def _send_dingtalk(url: str, secret: str, message: str) -> None:
         url = f"{url}&timestamp={timestamp}&sign={sign}"
 
     resp = requests.post(url, json=payload, headers=headers, timeout=10)
-    resp.raise_for_status()
+    _raise_for_delivery_error(resp)
     _raise_if_dingtalk_business_error(resp)
 
 

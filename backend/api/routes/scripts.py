@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -538,6 +539,27 @@ class ScriptVersionCreate(BaseModel):
         err = _validate_param_schema(self.param_schema)
         if err:
             raise ValueError(err)
+        return self
+
+    @model_validator(mode="after")
+    def _check_version_contract(self) -> "ScriptVersionCreate":
+        """#1026：SHA 与路径契约——防「必败版本」入库。
+
+        - content_sha256 必须是 64 位 hex（空 / 短 / 非 hex 直接 422）：空 SHA
+          版本创建后必然无法匹配实际文件，precheck script_verify_failed；
+        - nfs_path 必须落在 ``v{version}/`` 目录下：静默复用旧版本路径时，
+          扫描按路径找文件，版本目录不存在会被判磁盘缺失并停用（R08-F06）。
+        """
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", self.content_sha256 or ""):
+            raise ValueError(
+                "content_sha256 must be a 64-character hex sha256 digest"
+            )
+        path = self.nfs_path.strip().replace("\\", "/")
+        if f"/v{self.version.strip()}/" not in f"/{path}/":
+            raise ValueError(
+                f"nfs_path must live under the version directory "
+                f"v{self.version}/ (got: {self.nfs_path})"
+            )
         return self
 
 
