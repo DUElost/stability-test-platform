@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ai_work.py — Execution Registry CLI（ADR-0034 P1）。
 
-权威规范：docs/development/ai/execution-contract.md（Living v1.3，唯一权威源）。
+权威规范：docs/development/ai/execution-contract.md（Living v1.10，唯一权威源）。
 本文件是其 §2（Registry 协议）/§3（状态模型）/§5（scope 与 overlap）的 MVP 实现：
 选择权原则（ADR §2.1）——本工具是执行侧自声明的 visibility-only 登记簿，不是调度器。
 
@@ -13,14 +13,19 @@
     ai_work.py update --id ID [--scope P ...] [--pr N]   # 刷 last_seen + GitHub reconcile
     ai_work.py finish --id ID [--pr N | --abandon]
     ai_work.py resume --id ID                   # T9：FINISHED→CODING 返工回退（#946）
-    ai_work.py --self-test                      # 纯函数红绿自证（离线，无 git/gh 调用）
+    ai_work.py --self-test                      # 纯函数红绿自证（离线；含临时 git 仓库 fixture）
 
 设计约束（契约即约束）：
 - Registry root = $(git rev-parse --path-format=absolute --git-common-dir)/ai-work/，
   registry.yaml + registry.lock 同目录，位于 .git 内天然不被跟踪；
 - 写入九步全序（flock → read → validate → modify → tmp → fsync → rename → 父目录 fsync → unlock）；
 - liveness 查询时派生不持久化；integration 由 GitHub（gh）派生刷新，不可用时保持旧值+observed_at；
-- overlap 真值表：开放 PR 恒在风险窗口；effective scope = declared ∪ derived(diff)。
+- overlap 真值表：开放 PR 恒在风险窗口；effective scope = declared ∪ derived(diff)；
+- **缓存失效（契约 §3.3 v1.10，#1232）**：integration_cache 只由 update 刷新、可以陈旧。
+  Git 能证明本记录分支已含于 origin/main（trunk containment）时，该缓存值对 risk 判定失效——
+  `risk = §3.2 真值表 ∧ ¬landed`。**不写 integration 字段**（MERGED 仍只能由 T6/GitHub 写入）；
+- **derived 归属（契约 §5.2 v1.10）**：worktree 的 HEAD 必须等于记录 branch，且不得被多条
+  在窗记录共享，否则退回 branch diff 档——避免把别人的工作记到本记录名下。
 
 自包含：不依赖 PyYAML（registry.yaml 使用本工具自写的受限 YAML 子集：仅扁平
 mapping + 标量/字符串列表，解析器对任何超集语法 fail-fast——同时充当九步协议
@@ -46,6 +51,9 @@ RECORD_FIELDS = {
 LIST_FIELDS = ("scope", "issues")  # codec 列表形态字段（受限 YAML 子集）
 LIFECYCLE = ("CODING", "FINISHED", "ABANDONED")
 TEST_IMPACT = ("none", "direct", "indirect")
+TRUNK_REFS = ("main", "master")  # §3.3 v1.10：主干自身不参与 trunk containment（trivially 祖先）
+ADR_FILE_RE = re.compile(r"^docs/adr/ADR-\d{3,4}(?:[-.]|$)")  # §3.5 v1.10：决策类判据
+MERGE_PR_RE = re.compile(r"^Merge pull request #(\d+) from ")  # §3.3 v1.10：GitHub merge 主题
 
 
 # ── 受限 YAML 子集 codec（自写自读 schema；超集语法 fail-fast）──
@@ -244,6 +252,21 @@ def closed_unmerged_candidate(lifecycle: str, integration: str, liveness: str,
             and liveness == "STALE" and not derived)
 
 
+def zombie_candidate(lifecycle: str, integration: str, liveness: str, derived: set) -> bool:
+    """僵尸候选第一类（契约 §3.2 v1.10 对齐实现，#1232）：**无 PR** + 未放弃 + 失联 + diff 为空。
+
+    契约原文写「effective scope 为空」，而 §5.1 并集语义下 declared 恒非空（declare --scope
+    必填）⇒ 旧判据不可达；#962 起实现改用「derived 为空」，本版把契约文案与之对齐并显式
+    限定 `integration == NO_PR`：
+
+    - 有开放 PR 的记录**不是**僵尸——它的工作在 PR 里（derived 为空只是 worktree 已移除）；
+      对它提示 `finish --abandon` 会与 T4「开放 PR 的 abandon 必须警告并留窗」自相矛盾；
+    - CLOSED 分支由 `closed_unmerged_candidate` 覆盖（判据不同、提示不同）。
+    """
+    return (integration == "NO_PR" and lifecycle in ("CODING", "FINISHED")
+            and liveness == "STALE" and not derived)
+
+
 # ── Registry 定位与九步原子写（§2.1/§2.2）──
 
 def registry_paths(cwd: str | None = None) -> tuple[str, str]:
@@ -357,28 +380,143 @@ def load_locked(path: str, lock_path: str):
 # ── derived(diff) 三分档（§5.2）──
 
 def _git(args: list[str], cwd: str) -> list[str]:
-    proc = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
+    try:
+        proc = subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd)
+    except OSError:
+        return []
     if proc.returncode != 0:
         return []
     return [ln for ln in proc.stdout.splitlines() if ln.strip()]
 
 
-def derived_paths(rec: dict, repo_root: str) -> list[str]:
+def derived_paths(rec: dict, repo_root: str, shared: frozenset | set = frozenset()) -> list[str]:
+    """derived(diff) 三分档（§5.2）+ 归属校验（v1.10，#1232）。
+
+    档 1（worktree 在场）额外要求两条归属条件，否则退回档 2：
+    - worktree 的 HEAD 提交必须等于记录 `branch`（相等 = 同一提交）；不等说明该 worktree
+      当前 checkout 的是别的分支，其 diff 不属于本记录；
+    - worktree 未被多条在窗记录共享（`shared`）：主检出被多个 Execution 共用时，它的
+      diff 无法归属任何单条记录——宁可返回空（effective = declared），也不记错账。
+    """
     wt = rec.get("worktree")
-    if wt and os.path.isdir(wt):
-        merge_base = _git(["merge-base", "origin/main", "HEAD"], wt)
-        paths: list[str] = []
-        if merge_base:
-            paths += _git(["diff", "--name-only", merge_base[0], "HEAD"], wt)
-            paths += _git(["diff", "--name-only", merge_base[0]], wt)  # 未提交（tracked）
-        paths += _git(["ls-files", "--others", "--exclude-standard"], wt)  # untracked
-        return sorted({p for p in paths if p})
+    if wt and os.path.isdir(wt) and os.path.realpath(wt) not in set(shared or ()):
+        branch = rec.get("branch")
+        head = (_git(["rev-parse", "HEAD"], wt) or [""])[0]
+        branch_head = (_git(["rev-parse", branch], repo_root) or [""])[0] if branch else ""
+        if not branch or (head and head == branch_head):
+            merge_base = _git(["merge-base", "origin/main", "HEAD"], wt)
+            paths: list[str] = []
+            if merge_base:
+                paths += _git(["diff", "--name-only", merge_base[0], "HEAD"], wt)
+                paths += _git(["diff", "--name-only", merge_base[0]], wt)  # 未提交（tracked）
+            paths += _git(["ls-files", "--others", "--exclude-standard"], wt)  # untracked
+            return sorted({p for p in paths if p})
     branch = rec.get("branch")
     if branch:
         merge_base = _git(["merge-base", "origin/main", branch], repo_root)
         if merge_base:
             return sorted(set(_git(["diff", "--name-only", merge_base[0], branch], repo_root)))
     return []
+
+
+# ── 缓存失效：trunk containment（§3.3 v1.10，#1232）──
+
+def _git_rc(args: list[str], cwd: str) -> int:
+    """返回 git 退出码；环境不可用（cwd 不存在/git 缺失）一律视为失败。"""
+    try:
+        return subprocess.run(["git", *args], capture_output=True, cwd=cwd).returncode
+    except OSError:
+        return 1
+
+
+def landed_in_trunk(rec: dict, repo_root: str, merged: set | None = None) -> bool:
+    """Git 证明「本记录分支已含于 origin/main」⇒ integration 缓存对 risk 判定失效。
+
+    仅对**已登记 PR 且缓存称开放**（`PR_OPEN/READY`）的记录判定——无 PR 的记录不存在
+    「已合入」语义，而缓存已为终态的记录本就不在窗口。命中即等价 MERGED 的风险理由
+    （§3.2「变更已进主干，风险真实关闭」），但**不写 integration 字段**：MERGED 的写入
+    路径仍唯一为 T6/GitHub（§3.3 事实来源分层不变）。
+
+    两条本地证据通道（任一命中即 landed，均零网络）：
+    1. **ancestry**：`branch` 或 `origin/<branch>` 是 `origin/main` 的祖先（要求 branch
+       非空且非主干自身——主干 trivially 是自身祖先，不构成证据）；
+    2. **merge 主题**：`origin/main` 的 GitHub merge commit 主题含 `#<pr_number>`
+       ——与 branch 无关，覆盖「分支 ref 已被删除 / 提交被改写 / 记录 branch 就是 main」
+       的形态（#1232 实测：`docs-adr0035-merge` 本地分支 2 ahead/121 behind，
+       `adr-0036-*` 记录 branch=main，两者仅 ancestry 都判不出已合入）。
+
+    fail-safe（任一不成立即返回 False，记录留在窗口）：
+    - 无 pr_number / 缓存非开放态；
+    - 两条通道都取不到证据（ref 缺失且 merge 主题无该 PR 号）；
+    - `origin/main` 落后于实际主干 → 判不出，只会漏判（随后由 `update` 核销），不会误判。
+    """
+    if not rec.get("pr_number") or (rec.get("integration_cache") or "NO_PR") not in ("PR_OPEN", "READY"):
+        return False
+    branch = rec.get("branch") or ""
+    if branch and branch not in TRUNK_REFS:
+        for ref in (branch, f"origin/{branch}"):
+            if _git_rc(["rev-parse", "--verify", "--quiet", ref], repo_root) != 0:
+                continue
+            if _git_rc(["merge-base", "--is-ancestor", ref, "origin/main"], repo_root) == 0:
+                return True
+    if merged is None:
+        merged = merged_pr_numbers(repo_root)
+    return str(rec["pr_number"]) in merged
+
+
+def merged_pr_numbers(repo_root: str) -> set:
+    """`origin/main` 上 GitHub merge commit 主题里的 PR 号集合（本地证据，零网络）。
+
+    GitHub 的 merge commit 主题固定为 `Merge pull request #N from <owner>/<branch>`；
+    只认这一形态（不做 `(#N)` 泛匹配，避免把普通提交里的 issue 引用误判为已合入）。
+    """
+    return {m.group(1) for line in _git(["log", "--merges", "--format=%s", "origin/main"], repo_root)
+            if (m := MERGE_PR_RE.match(line))}
+
+
+def landed_ids(records: dict, repo_root: str) -> set:
+    """对一批记录预计算 landed 集合（各命令调用一次；merge 主题集合只取一次）。"""
+    merged = merged_pr_numbers(repo_root)
+    return {rid for rid, rec in records.items() if landed_in_trunk(rec, repo_root, merged)}
+
+
+def effective_risk(rec: dict, repo_root: str) -> bool:
+    """契约 §3.2/§3.3 v1.10：`risk = 真值表 ∧ ¬landed`（单记录便捷入口）。"""
+    if not in_risk(rec.get("lifecycle", "CODING"), rec.get("integration_cache") or "NO_PR"):
+        return False
+    return not landed_in_trunk(rec, repo_root)
+
+
+def risk_ids(records: dict, repo_root: str) -> set:
+    """在窗集合（已剔除 landed 的陈旧缓存记录）；`landed_ids` 的同批入口。"""
+    landed = landed_ids(records, repo_root)
+    return {rid for rid, rec in records.items()
+            if rid not in landed
+            and in_risk(rec.get("lifecycle", "CODING"), rec.get("integration_cache") or "NO_PR")}
+
+
+def shared_worktrees(records: dict, risk: set) -> set:
+    """被 ≥2 条在窗记录共用的 worktree 绝对路径（§5.2 v1.10）——其 diff 不可归属单条记录。"""
+    seen: dict = {}
+    for rid in risk:
+        wt = os.path.realpath(records[rid].get("worktree") or "")
+        if wt:
+            seen[wt] = seen.get(wt, 0) + 1
+    return {wt for wt, n in seen.items() if n > 1}
+
+
+def adr_claims(scopes) -> list[str]:
+    """§3.5 v1.10 决策类判据：scope 显式声明了**具体 ADR 文件**（非 `docs/adr` 目录）。"""
+    return sorted(s for s in scopes or [] if ADR_FILE_RE.match(s))
+
+
+def adr_collisions(records: dict, risk: set) -> dict:
+    """在窗记录之间的 ADR 文件占用图：{ADR 文件: [占用它的在窗记录]}（§3.5 可见性）。"""
+    claims: dict = {}
+    for rid in risk:
+        for path in adr_claims(records[rid].get("scope", [])):
+            claims.setdefault(path, []).append(rid)
+    return {path: sorted(ids) for path, ids in claims.items() if len(ids) > 1}
 
 
 # ── integration 派生（GitHub 权威，§3.3；不可用降级）──
@@ -464,11 +602,19 @@ def record_issue_numbers(rec: dict) -> set:
     return nums
 
 
-def issue_conflicts(new_issues: set, records: dict, skip_id: str) -> list:
-    """在窗 issue 撞车检测（纯函数）：返回 [(record_id, 命中 issue 号列表)]。"""
+def issue_conflicts(new_issues: set, records: dict, skip_id: str,
+                    landed: set | None = None) -> list:
+    """在窗 issue 撞车检测（纯函数）：返回 [(record_id, 命中 issue 号列表)]。
+
+    `landed` = 已知「分支已含于 origin/main」的记录 id 集合（§3.3 v1.10 缓存失效）：
+    这些记录的 integration 缓存称开放但变更已进主干，不再占用 issue 槽位（#1232——
+    提交后 86% 的在窗记录属此类，会把已合入的 issue 号误判为在窗占用）。
+    缺省 None = 不掌握缓存失效信息（纯 §3.4 语义，供离线自测使用）。
+    """
+    landed = landed or set()
     conflicts: list = []
     for rid, rec in records.items():
-        if rid == skip_id:
+        if rid == skip_id or rid in landed:
             continue
         if not in_risk(rec.get("lifecycle", "CODING"),
                        rec.get("integration_cache") or "NO_PR"):
@@ -511,17 +657,33 @@ def cmd_declare(args) -> int:
     rec_id = args.requirement
     ctx = load_locked(path, lock)
     try:
-        if rec_id in ctx.records and in_risk(ctx.records[rec_id].get("lifecycle", "CODING"),
-                                             ctx.records[rec_id].get("integration_cache", "NO_PR")):
-            print(f"[REFUSED] 已存在同 Requirement 的在窗记录 {rec_id!r}（先 finish --abandon 收口）",
-                  file=sys.stderr)
+        existing = ctx.records.get(rec_id)
+        if existing and in_risk(existing.get("lifecycle", "CODING"),
+                                existing.get("integration_cache", "NO_PR")):
+            stale = landed_in_trunk(existing, repo_root)
+            extra = ("该记录 integration 缓存陈旧（分支已含于 origin/main）——先 "
+                     "update --id " + rec_id + " 核销后再 declare，或换 requirement 名"
+                     if stale else "先 finish --abandon 收口")
+            print(f"[REFUSED] 已存在同 Requirement 的在窗记录 {rec_id!r}（{extra}）", file=sys.stderr)
             return 2
         if args.issue and any(n < 1 or n > 999999 for n in args.issue):
             print(f"[REFUSED] --issue 必须为 1-6 位正整数: {sorted(args.issue)}", file=sys.stderr)
             return 2
         branch = (_git(["rev-parse", "--abbrev-ref", "HEAD"], args.worktree) or [None])[0]
         new_issues = set(args.issue or []) | extract_issue_numbers(args.requirement, branch or "")
-        conflicts = issue_conflicts(new_issues, ctx.records, rec_id)
+        # §3.5 v1.10 决策类纪律机械化（#1232）：产物落到具体 ADR 文件时必须显式 --issue，
+        # 否则 §3.4 工作项查重没有输入，同主题两个 Execution 完全互不感知（#906 事故形态）。
+        claims = adr_claims(scopes)
+        if claims and not new_issues and not args.force:
+            print(f"[REFUSED] scope 声明了具体 ADR 文件 {claims}——决策类 Execution 必须显式 "
+                  f"--issue <n>（契约 §3.5）：issue 集是 §3.4 在窗查重的唯一数据源，"
+                  f"缺它会让同一主题的第二个 Execution 无法被拦下。确认要无 issue 登记时用 --force",
+                  file=sys.stderr)
+            return 2
+        if claims and not new_issues:
+            print(f"[WARN] --force：决策类 Execution {claims} 未声明 --issue——§3.4 查重无输入（§3.5）")
+        landed = landed_ids(ctx.records, repo_root)
+        conflicts = issue_conflicts(new_issues, ctx.records, rec_id, landed)
         if conflicts and not args.force:
             for rid, hit in conflicts:
                 print(f"[REFUSED] issue {'/'.join('#' + str(n) for n in hit)} 已被在窗 Execution "
@@ -562,7 +724,9 @@ def cmd_declare(args) -> int:
     return 0
 
 
-def _report(rec_id: str, rec: dict, repo_root: str, refresh: bool) -> None:
+def _report(rec_id: str, rec: dict, repo_root: str, refresh: bool, *,
+            landed: bool = False, shared: frozenset | set = frozenset(),
+            peers: list | None = None) -> None:
     now = _now()
     integration = rec.get("integration_cache")
     if refresh and rec.get("pr_number"):
@@ -571,31 +735,43 @@ def _report(rec_id: str, rec: dict, repo_root: str, refresh: bool) -> None:
             print(f"  (integration 观测于 {rec.get('observed_at', '?')}，GitHub 暂不可达)")
     integration = integration or "NO_PR"
     liveness = derive_liveness(float(rec["last_seen"]) if rec.get("last_seen") else None, now)
-    effective = sorted(set(rec.get("scope", [])) | set(derived_paths(rec, repo_root)))
-    risk = in_risk(rec["lifecycle"], integration)
+    derived = set(derived_paths(rec, repo_root, shared))
+    effective = sorted(set(rec.get("scope", [])) | derived)
+    # §3.3 v1.10 缓存失效：缓存称开放但分支已含于 origin/main ⇒ 不按风险窗口处理（不写字段）
+    stale_cache = landed
+    risk = in_risk(rec["lifecycle"], integration) and not stale_cache
     issue_note = f" issues={rec.get('issues') or []}" if rec.get("issues") else ""
     print(f"{rec_id}: {rec['harness']} lifecycle={rec['lifecycle']} liveness={liveness} "
           f"integration={integration} risk={'YES' if risk else 'no'}{issue_note}")
     print(f"  effective_scope={effective}")
+    if stale_cache:
+        print(f"  [stale-cache] integration={integration} 但分支已含于 origin/main——"
+              f"该缓存值对 risk 判定失效（已按出窗处理）；建议 update --id {rec_id} 核销")
+    if os.path.realpath(rec.get("worktree") or "") in set(shared or ()):
+        print("  [shared-worktree] 本 worktree 被多条在窗记录共用——其 diff 不可归属单条记录，"
+              "已退回 branch diff 档（建议各 Execution 使用专属 worktree，§5.2）")
+    if peers:
+        print(f"  [adr-collision] ADR 文件被多个在窗记录声明: {list(peers)}——"
+              f"§3.5：一个架构主题同一时刻只能有一个权威 Decision Artifact，先汇聚再落笔")
     if risk:
         declared = set(rec.get("scope", []))
-        derived = set(derived_paths(rec, repo_root))
         if declared and derived:
             unlanded, undeclared = declaration_drift(declared, derived)
             parts = ([f"声明未落地: {unlanded}"] if unlanded
                      else []) + ([f"diff 未声明: {undeclared}"] if undeclared else [])
             if parts:
                 print("  [declaration-drift] " + "; ".join(parts))
-        # #962：旧判据 `not effective` 在并集语义下不可达（declare --scope
-        # required + update 只替换 → declared 恒非空）；僵尸本义是
-        # 「声明了、没干、还失联」→ STALE 且 derived 为空
+        # 僵尸本义「声明了、没干、还失联」= STALE + derived 空（#962 口径）；
+        # v1.10（#1232）把契约文案与之对齐，并限定 integration=NO_PR——有开放 PR 的记录
+        # 其工作在 PR 里，对它提示 finish --abandon 会与 T4 自相矛盾。
         if liveness == "STALE" and not derived:
             if closed_unmerged_candidate(rec["lifecycle"], integration, liveness, derived):
                 # #906 第二类：PR 已关闭未合，仍在风险窗口并占用 issue 槽位
                 print("  [closed-unmerged] PR 已 CLOSED 未合且记录未放弃（仍在风险窗口）"
                       "——请 finish --abandon 出窗，或 reopen PR / 转手重新 declare")
-            else:
-                print("  [zombie-candidate] STALE 且 diff 为空（声明未落地）——人工经 finish --abandon 收口")
+            elif zombie_candidate(rec["lifecycle"], integration, liveness, derived):
+                print("  [zombie-candidate] 无 PR 且 STALE 且 diff 为空（声明未落地）——"
+                      "人工经 finish --abandon 收口")
 
 
 def cmd_status(args) -> int:
@@ -607,20 +783,26 @@ def cmd_status(args) -> int:
     repo_root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
                                text=True, check=True).stdout.strip()
     ids = [args.id] if args.id else sorted(records)
-    # overlap 提示（risk 集合内两两组件边界）
-    risk_recs = {k: v for k, v in records.items()
-                 if in_risk(v.get("lifecycle", "CODING"), v.get("integration_cache") or "NO_PR")}
+    # 在窗集合（§3.2 真值表 ∧ ¬landed，§3.3 v1.10）：landed/shared/ADR 占用各算一次
+    risk = risk_ids(records, repo_root)
+    landed = landed_ids(records, repo_root)
+    shared = shared_worktrees(records, risk)
+    claims = adr_collisions(records, risk)
+    risk_recs = {k: v for k, v in records.items() if k in risk}
     for rec_id in ids:
         if rec_id not in records:
             print(f"[NOT-FOUND] {rec_id}", file=sys.stderr)
             return 2
-        _report(rec_id, records[rec_id], repo_root, refresh=False)
+        mine = {p for p in adr_claims(records[rec_id].get("scope", [])) if p in claims}
+        peers = sorted({x for p in mine for x in claims[p] if x != rec_id})
+        _report(rec_id, records[rec_id], repo_root, refresh=False,
+                landed=rec_id in landed, shared=shared, peers=peers)
     if len(risk_recs) >= 2:
         keys = sorted(risk_recs)
         for i, a in enumerate(keys):
             for b in keys[i + 1:]:
-                ea = set(risk_recs[a].get("scope", [])) | set(derived_paths(risk_recs[a], repo_root))
-                eb = set(risk_recs[b].get("scope", [])) | set(derived_paths(risk_recs[b], repo_root))
+                ea = set(risk_recs[a].get("scope", [])) | set(derived_paths(risk_recs[a], repo_root, shared))
+                eb = set(risk_recs[b].get("scope", [])) | set(derived_paths(risk_recs[b], repo_root, shared))
                 hits = {x for x in ea for y in eb if scope_overlap(x, y)}
                 if hits:
                     print(f"[overlap-hint] {a} ↔ {b}: {sorted(hits)}（hint，从不禁止修改）")
@@ -648,14 +830,20 @@ def top_dirs(paths) -> set:
 
 
 def collect_drift_advisories(records: dict, repo_root: str, now: float) -> list[str]:
-    """纯函数：drift/freshness/coverage-mismatch/overlap 四类 advisory（不输出、不退出码）。"""
+    """纯函数：drift/freshness/coverage-mismatch/overlap 四类 advisory（不输出、不退出码）。
+
+    在窗集合按 §3.3 v1.10 计算（`risk_ids`：真值表 ∧ ¬landed）——已进主干的陈旧缓存
+    记录不再产生 freshness/overlap 噪声（#1232）；landed 记录另有一条提示（提醒核销）。
+    """
     advisories: list[str] = []
-    risk = {k: v for k, v in records.items()
-            if in_risk(v.get("lifecycle", "CODING"), v.get("integration_cache") or "NO_PR")}
+    risk_set = risk_ids(records, repo_root)
+    landed = landed_ids(records, repo_root)
+    shared = shared_worktrees(records, risk_set)
+    risk = {k: v for k, v in records.items() if k in risk_set}
     effective: dict[str, set] = {}
     for rec_id, rec in sorted(risk.items()):
         declared = set(rec.get("scope", []))
-        derived = set(derived_paths(rec, repo_root))
+        derived = set(derived_paths(rec, repo_root, shared))
         effective[rec_id] = declared | derived
         seen = float(rec["last_seen"]) if rec.get("last_seen") else None
         live = derive_liveness(seen, now)
@@ -678,6 +866,12 @@ def collect_drift_advisories(records: dict, repo_root: str, now: float) -> list[
             if hits:
                 advisories.append(
                     f"coverage-mismatch: {rec_id} 声明 test_impact=none 但 diff 触及测试路径 {hits[:5]}")
+    for rec_id in sorted(landed):
+        advisories.append(
+            f"stale-cache: {rec_id} integration={records[rec_id].get('integration_cache')} "
+            f"但分支已含于 origin/main——缓存失效（已按出窗处理）；update --id {rec_id} 核销")
+    for path, ids in sorted(adr_collisions(records, risk_set).items()):
+        advisories.append(f"adr-collision: {path} 被在窗记录 {ids} 同时声明——§3.5 决策实体唯一性")
     keys = sorted(effective)
     for i, a in enumerate(keys):
         for b in keys[i + 1:]:
@@ -725,18 +919,23 @@ def cmd_whoami(args) -> int:
         print(f"(worktree {wt} 无 Registry 记录——若本会话属于某个 Requirement，"
               f"请先 declare；过渡条款见 repository-workflow.md)")
         return 0
+    risk = risk_ids(records, repo_root)
+    landed = landed_ids(records, repo_root)
+    shared = shared_worktrees(records, risk)
+    claims = adr_collisions(records, risk)
     for rec_id in sorted(mine):
-        _report(rec_id, mine[rec_id], repo_root, refresh=False)
+        my = {p for p in adr_claims(mine[rec_id].get("scope", [])) if p in claims}
+        peers = sorted({x for p in my for x in claims[p] if x != rec_id})
+        _report(rec_id, mine[rec_id], repo_root, refresh=False,
+                landed=rec_id in landed, shared=shared, peers=peers)
     # 谁的 effective scope 压到了本 worktree 的 scope（入向 overlap）
     my_scope = set()
     for v in mine.values():
-        my_scope |= set(v.get("scope", [])) | set(derived_paths(v, repo_root))
+        my_scope |= set(v.get("scope", [])) | set(derived_paths(v, repo_root, shared))
     for rec_id, v in sorted(records.items()):
-        if rec_id in mine:
+        if rec_id in mine or rec_id not in risk:
             continue
-        if not in_risk(v.get("lifecycle", "CODING"), v.get("integration_cache") or "NO_PR"):
-            continue
-        their = set(v.get("scope", [])) | set(derived_paths(v, repo_root))
+        their = set(v.get("scope", [])) | set(derived_paths(v, repo_root, shared))
         hits = {x for x in my_scope for y in their if scope_overlap(x, y)}
         if hits:
             print(f"[overlap-in] {rec_id}（{v.get('harness', '?')}，{v.get('lifecycle', '?')}）"
@@ -906,6 +1105,121 @@ def run_self_test() -> int:
 
     assert derive_liveness(time.time() - 10, time.time()) == "LIVE"
     assert derive_liveness(time.time() - TTL_SECONDS - 1, time.time()) == "STALE"
+
+    # #1232 僵尸候选第一类（契约 §3.2 v1.10 对齐）：**无 PR** + 未放弃 + 失联 + diff 为空
+    assert zombie_candidate("CODING", "NO_PR", "STALE", set())
+    assert zombie_candidate("FINISHED", "NO_PR", "STALE", set())
+    assert not zombie_candidate("ABANDONED", "NO_PR", "STALE", set())  # 已出窗
+    assert not zombie_candidate("CODING", "NO_PR", "LIVE", set())  # 未失联
+    assert not zombie_candidate("CODING", "NO_PR", "STALE", {"docs/x.md"})  # 有落地
+    # 有开放 PR 的记录不是僵尸（其工作在 PR 里；提示 abandon 会与 T4 自相矛盾）
+    assert not zombie_candidate("FINISHED", "PR_OPEN", "STALE", set())
+    assert not zombie_candidate("FINISHED", "READY", "STALE", set())
+    assert not zombie_candidate("FINISHED", "MERGED", "STALE", set())
+    assert not zombie_candidate("CODING", "CLOSED", "STALE", set())  # 归 closed-unmerged 判据
+
+    # #1232 §3.5 决策类判据：只认具体 ADR 文件，不认目录（`docs/adr` 目录是常规 scope）
+    assert adr_claims(["docs/adr/ADR-0035-agent-host-identity.md"]) == [
+        "docs/adr/ADR-0035-agent-host-identity.md"]
+    assert adr_claims(["docs/adr/README.md", "docs/adr", "docs/adr/ADR-0036-x.md"]) == [
+        "docs/adr/ADR-0036-x.md"]
+    assert adr_claims(["backend/agent", "docs/adr-notes.md"]) == []
+
+    # #1232 trunk containment 红绿（离线临时仓库：不触网、不依赖本仓库状态）
+    with tempfile.TemporaryDirectory() as gtd:
+        def _g(*a):
+            return subprocess.run(["git", *a], cwd=gtd, capture_output=True, text=True)
+
+        def _commit(msg):
+            _g("add", "-A")
+            _g("commit", "-qm", msg)
+            return _g("rev-parse", "HEAD").stdout.strip()
+
+        _g("init", "-q", "-b", "main")
+        _g("config", "user.email", "t@example.invalid")
+        _g("config", "user.name", "t")
+        with open(os.path.join(gtd, "f.txt"), "w", encoding="utf-8") as fh:
+            fh.write("1\n")
+        trunk = _commit("c1")
+        _g("update-ref", "refs/remotes/origin/main", trunk)  # 主干（无 remote，纯本地 ref）
+        _g("branch", "fix/merged", trunk)  # 已合入：分支停在主干提交上
+        _g("checkout", "-q", "-b", "fix/open", trunk)  # 未合入：有自己的提交
+        with open(os.path.join(gtd, "g.txt"), "w", encoding="utf-8") as fh:
+            fh.write("2\n")
+        _commit("c2")
+        _g("branch", "fix/remote-only", trunk)  # 本地 ref 缺失、只有 origin/ 的形态
+        _g("update-ref", "refs/remotes/origin/fix/remote-only", trunk)
+
+        def _rec(**kw):
+            base = {"requirement": "r", "harness": "h", "worktree": gtd, "lifecycle": "CODING"}
+            base.update(kw)
+            return base
+
+        # 绿：缓存称开放但分支已含于 origin/main（本地 ref / 远端 ref 两种形态）
+        assert landed_in_trunk(_rec(pr_number="1", integration_cache="READY",
+                                    branch="fix/merged"), gtd)
+        assert landed_in_trunk(_rec(pr_number="6", integration_cache="PR_OPEN",
+                                    branch="fix/remote-only"), gtd)
+        # 红：仍在窗口的四种 fail-safe（未合入 / 无 PR / 主干自身 / 缓存已终态 / 无分支）
+        assert not landed_in_trunk(_rec(pr_number="2", integration_cache="PR_OPEN",
+                                        branch="fix/open"), gtd)
+        assert not landed_in_trunk(_rec(integration_cache="READY", branch="fix/merged"), gtd)
+        assert not landed_in_trunk(_rec(pr_number="3", integration_cache="READY",
+                                        branch="main"), gtd)
+        assert not landed_in_trunk(_rec(pr_number="4", integration_cache="MERGED",
+                                        branch="fix/merged"), gtd)
+        assert not landed_in_trunk(_rec(pr_number="5", integration_cache="READY",
+                                        branch="no/such"), gtd)
+        # 红：仓库不可用（cwd 不存在）不得抛异常，一律留在窗口
+        assert not landed_in_trunk(_rec(pr_number="7", integration_cache="READY",
+                                        branch="fix/merged"), os.path.join(gtd, "nope"))
+        # risk 集合：真值表 ∧ ¬landed
+        _recs = {
+            "merged-stale": _rec(pr_number="1", integration_cache="READY", branch="fix/merged"),
+            "still-open": _rec(pr_number="2", integration_cache="PR_OPEN", branch="fix/open"),
+            "no-pr": _rec(integration_cache="NO_PR", branch="fix/merged"),
+        }
+        assert risk_ids(_recs, gtd) == {"still-open", "no-pr"}
+        assert not effective_risk(_recs["merged-stale"], gtd)
+        # 查重不再被已合入记录误拒（#1232：86% 假阳性的直接后果）
+        _dedup = {"merged-stale": dict(_recs["merged-stale"], issues=["1232"])}
+        assert issue_conflicts({1232}, _dedup, "new") == [("merged-stale", [1232])]  # 纯 §3.4 口径
+        assert issue_conflicts({1232}, _dedup, "new", landed_ids(_dedup, gtd)) == []  # 缓存失效后
+
+        # #1232 derived 归属（契约 §5.2 v1.10）：HEAD≠记录 branch 或 worktree 被共享 → 退回档 2
+        # 当前 checkout 为 fix/open（含 g.txt）
+        assert derived_paths(_rec(branch="fix/open"), gtd) == ["g.txt"]  # 档 1：同分支
+        assert derived_paths(_rec(branch="main"), gtd) == []  # 分支不符 → 档 2（g.txt 不得被误记）
+        assert derived_paths(_rec(branch="main"), gtd,
+                             {os.path.realpath(gtd)}) == []  # 共享 worktree → 不归属
+        assert derived_paths(_rec(worktree="/nonexistent", branch="fix/open"), gtd) == ["g.txt"]
+
+        # #1232 共享 worktree 与 ADR 占用：纯函数红绿
+        _shared = {"a": _rec(worktree=gtd, branch="fix/open"),
+                   "b": _rec(worktree=gtd, branch="fix/open")}
+        assert shared_worktrees(_shared, {"a", "b"}) == {os.path.realpath(gtd)}
+        assert shared_worktrees(_shared, {"a"}) == set()  # 仅一条在窗不算共享
+        _adr = {"x": _rec(scope=["docs/adr/ADR-0099-a.md"]),
+                "y": _rec(scope=["docs/adr/ADR-0099-a.md", "docs/adr"])}
+        assert adr_collisions(_adr, {"x", "y"}) == {"docs/adr/ADR-0099-a.md": ["x", "y"]}
+        assert adr_collisions(_adr, {"x"}) == {}
+
+        # #1232 第二条证据通道：origin/main 的 GitHub merge 主题（ancestry 断裂时仍判出）
+        _g("checkout", "-q", "main")
+        _g("checkout", "-q", "-b", "fix/msg", trunk)
+        with open(os.path.join(gtd, "h.txt"), "w", encoding="utf-8") as fh:
+            fh.write("3\n")
+        _commit("c3")
+        _g("checkout", "-q", "main")
+        _g("merge", "-q", "--no-ff", "fix/msg", "-m", "Merge pull request #99 from DUElost/fix/msg")
+        _g("update-ref", "refs/remotes/origin/main", _g("rev-parse", "HEAD").stdout.strip())
+        assert merged_pr_numbers(gtd) == {"99"}
+        assert not merged_pr_numbers(os.path.join(gtd, "nope"))  # 环境不可用 → 空集（fail-safe）
+        # 分支 ref 已被删除（ancestry 断裂）但 PR 的 merge commit 在主干上 → landed
+        assert landed_in_trunk(_rec(pr_number="99", integration_cache="PR_OPEN",
+                                    branch="deleted/branch"), gtd)
+        assert not landed_in_trunk(_rec(pr_number="98", integration_cache="PR_OPEN",
+                                        branch="deleted/branch"), gtd)  # 未合入 → 留在窗口
 
     # #880 三缺口红绿：declare 校验 / codec 引号 key 往返 / corrupt 隔离
     try:
