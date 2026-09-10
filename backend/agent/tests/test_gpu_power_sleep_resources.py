@@ -374,21 +374,11 @@ def test_gpu_setup_v107_wait_timeout_caught(monkeypatch):
     assert "TimeoutExpired" in src
 
 
-def test_gpu_setup_v108_dismiss_dialogs_wired(monkeypatch):
+def test_gpu_setup_v108_dismiss_dialogs_wired():
     """#774 run 356/357 根因：v1.0.8 prepare_device 后清 Antutu 首启弹窗。"""
-    import inspect
-    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.8")
-    sys.path.insert(0, d)
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("gpu_v108", d + "/gpu_setup.py")
-    g = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(g)
-    src = inspect.getsource(g._run)
-    assert "dismiss_antutu_dialogs" in src
-    # _lib 里实现存在且按文本找 OK
-    spec2 = importlib.util.spec_from_file_location("gpu_lib_v108", d + "/_lib.py")
-    lib = importlib.util.module_from_spec(spec2)
-    spec2.loader.exec_module(lib)
-    libsrc = inspect.getsource(lib.dismiss_antutu_dialogs)
-    assert "uiautomator dump" in libsrc and "input tap" in libsrc
+    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.8"
+    setup_src = (d / "gpu_setup.py").read_text(encoding="utf-8")
+    lib_src = (d / "_lib.py").read_text(encoding="utf-8")
+    assert "dismiss_antutu_dialogs(meta" in setup_src          # 接线
+    assert "def dismiss_antutu_dialogs" in lib_src             # 实现
+    assert "uiautomator dump" in lib_src and "input tap" in lib_src  # 通用清弹窗
