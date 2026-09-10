@@ -3,6 +3,11 @@
 本文是版本化脚本目录、参数分层、扫描和退役的开发契约。架构决策见
 [`ADR-0020`](../adr/ADR-0020-plan-step-one-shot-migration.md)。
 
+外部工具（原厂 / 专项工具）的**源码入仓边界与接入形态**另见
+[`ADR-0033`](../adr/ADR-0033-tool-kit-ecosystem-integration.md)：新工具族必须走
+Tool Contract + 包存储，既有工具族的新版本目录允许继续 legacy 形态（D0 分级准入）
+——本文的版本目录约定对已入仓脚本族持续有效。
+
 ## 目录与扫描
 
 ```text

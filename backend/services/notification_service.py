@@ -28,6 +28,12 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", "")
+# #1122：网络 deadline —— 无超时的 SMTP 会把通知线程挂死在 connect/read 上，
+# 8 个 worker 很快被拖光，后续所有通知持续积压。
+SMTP_TIMEOUT_SECONDS = max(
+    1.0,
+    float(os.getenv("STP_SMTP_TIMEOUT_SECONDS", "15")),
+)
 
 
 class NotificationDeliveryError(RuntimeError):
@@ -195,7 +201,7 @@ def _send_email(to: str, subject_prefix: str, message: str) -> None:
     msg["From"] = SMTP_FROM or SMTP_USER
     msg["To"] = to
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
         if SMTP_PORT != 25:
             server.starttls()
         if SMTP_USER and SMTP_PASSWORD:
@@ -397,8 +403,12 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
 
 
 def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> None:
-    """Fire-and-forget wrapper — submits to bounded thread pool."""
-    from backend.core.thread_pool import submit as pool_submit
+    """Fire-and-forget wrapper — submits to bounded thread pool.
+
+    #1122：队列满即拒绝（PoolQueueFullError）—— 本路径无重试，丢弃并记
+    warning/metric；需要可靠投递的通知走 SAQ 的 send_notification_task。
+    """
+    from backend.core.thread_pool import PoolQueueFullError, submit as pool_submit
 
     def _safe() -> None:
         try:
@@ -410,7 +420,13 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
                 extra={"event_type": event_type},
             )
 
-    pool_submit(_safe)
+    try:
+        pool_submit(_safe)
+    except PoolQueueFullError:
+        logger.warning(
+            "dispatch_notification_dropped_queue_full",
+            extra={"event_type": event_type},
+        )
 
 
 def _emit_notification_socketio(

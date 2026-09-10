@@ -130,7 +130,23 @@ export function NotificationBell() {
           </div>
 
           <div className="max-h-96 overflow-y-auto">
-            {logs.length === 0 ? (
+            {logsQ.isLoading ? (
+              <div className={cn('flex items-center justify-center py-12 text-sm', TEXT.caption)}>
+                加载通知…
+              </div>
+            ) : logsQ.isError ? (
+              // #1195: 加载失败不等同「暂无通知」——明确错误态并可重试。
+              <div className={cn('flex flex-col items-center gap-2 py-12 text-sm', TEXT.destructive)}>
+                <span>通知加载失败</span>
+                <button
+                  type="button"
+                  onClick={() => void logsQ.refetch()}
+                  className="underline underline-offset-2"
+                >
+                  重试
+                </button>
+              </div>
+            ) : logs.length === 0 ? (
               <div className={cn('flex items-center justify-center py-12 text-sm', TEXT.caption)}>
                 暂无通知
               </div>
