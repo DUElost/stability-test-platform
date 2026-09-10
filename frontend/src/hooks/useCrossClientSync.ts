@@ -1,8 +1,31 @@
-import { useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect } from 'react';
+import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useSocketIO } from '@/hooks/useSocketIO';
 import { DASHBOARD_SUBSCRIPTION } from '@/config';
 import { SOCKET_MESSAGE_TYPES } from '@/utils/socketEvents';
+
+/** plan_changed 与断线重连校准共用的计划相关缓存键。 */
+export function invalidatePlanSyncQueries(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: ['plans'] });
+  qc.invalidateQueries({ queryKey: ['plan'] });
+}
+
+/** project_changed 与断线重连校准共用的项目/设备相关缓存键。 */
+export function invalidateProjectSyncQueries(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: ['projects'] });
+  qc.invalidateQueries({ queryKey: ['project'] });
+  qc.invalidateQueries({ queryKey: ['devices'] });
+  qc.invalidateQueries({ queryKey: ['project-devices'] });
+  qc.invalidateQueries({ queryKey: ['projects-for-plan-editor'] });
+  // #958: 型号归属规则随项目变化——跨端（另一浏览器/标签）失效。
+  qc.invalidateQueries({ queryKey: ['project-models'] });
+}
+
+/** Socket 重连后 REST 校准：断线期间可能漏掉 plan/project_changed（#1192）。 */
+export function invalidateCrossClientSyncQueries(qc: QueryClient) {
+  invalidatePlanSyncQueries(qc);
+  invalidateProjectSyncQueries(qc);
+}
 
 /**
  * 多Worker 跨端一致性（#268 B2/B2c + #406）：
@@ -12,26 +35,25 @@ import { SOCKET_MESSAGE_TYPES } from '@/utils/socketEvents';
  *    失效 projects / project / devices（ADR-0029 D8）。
  * 3. 后台 tab 恢复可见时全量失效缓存，让活跃查询立即重取
  *    （此前后台 tab 停更且不回追）。
+ * 4. Socket 重连时失效跨端同步相关查询，弥补断线期间漏事件（#1192）。
  *
  * 挂载一次于 AppShell（全局常驻）。
  */
 export function useCrossClientSync() {
   const qc = useQueryClient();
 
+  const onReconnect = useCallback(() => {
+    invalidateCrossClientSyncQueries(qc);
+  }, [qc]);
+
   useSocketIO(DASHBOARD_SUBSCRIPTION, {
+    onConnect: onReconnect,
     onMessage: (msg) => {
       if (msg.type === SOCKET_MESSAGE_TYPES.PLAN_CHANGED) {
-        qc.invalidateQueries({ queryKey: ['plans'] });
-        qc.invalidateQueries({ queryKey: ['plan'] });
+        invalidatePlanSyncQueries(qc);
       }
       if (msg.type === SOCKET_MESSAGE_TYPES.PROJECT_CHANGED) {
-        qc.invalidateQueries({ queryKey: ['projects'] });
-        qc.invalidateQueries({ queryKey: ['project'] });
-        qc.invalidateQueries({ queryKey: ['devices'] });
-        qc.invalidateQueries({ queryKey: ['project-devices'] });
-        qc.invalidateQueries({ queryKey: ['projects-for-plan-editor'] });
-        // #958: 型号归属规则随项目变化——跨端（另一浏览器/标签）失效。
-        qc.invalidateQueries({ queryKey: ['project-models'] });
+        invalidateProjectSyncQueries(qc);
       }
     },
   });

@@ -668,6 +668,94 @@ def test_superseded_worker_release_keeps_new_workers_device_placeholder(
     assert 26 in job_runner_state.active_job_ids
 
 
+def _make_owned_job_runner_state():
+    """构造启用 active_device_owner 归属跟踪的 JobRunnerState（等价 main 形态）。"""
+    lock = threading.Lock()
+    ids = set()
+    device_ids = set()
+    active_tokens: dict = {}
+    owners: dict = {}
+
+    def register(
+        jid: int,
+        token: str = "",
+        device_id: Optional[int] = None,
+        device_serial: str = "",
+        local_worker_token: str = "",
+    ):
+        with lock:
+            ids.add(jid)
+            active_tokens[jid] = local_worker_token or token
+            if device_id is not None:
+                device_ids.add(device_id)
+                owners[device_id] = jid
+
+    def deregister(jid: int, token: str = "", local_worker_token: str = ""):
+        # 等价 main _cleanup_after_job_exit 的「取不到 device」形态：只摘
+        # ids/token，占位与归属留给 release 补偿（#1006 路径）。
+        with lock:
+            ids.discard(jid)
+            active_tokens.pop(jid, None)
+
+    state = JobRunnerState(
+        active_jobs_lock=lock,
+        active_job_ids=ids,
+        active_device_ids=device_ids,
+        active_job_tokens=active_tokens,
+        running_worker_tokens={},
+        watcher_globally_enabled=False,
+        watcher_plan_default=False,
+        lock_register=register,
+        lock_deregister=deregister,
+        device_id_register=lambda did: None,
+        device_id_deregister=lambda did: None,
+        active_device_owner=owners,
+    )
+    return state, lock, owners
+
+
+def test_stale_release_after_lease_lost_keeps_successor_placeholder():
+    """#1203：lease-lost 权威清理已清占位后继任 job 重占同设备——迟到的旧
+    worker release 不得清掉继任占位（否则同设备第三次并发派发）。"""
+    state, lock, owners = _make_owned_job_runner_state()
+    state.lock_register(26, "63:6", 63, "SERIAL-63")
+    assert 63 in state.active_device_ids and owners[63] == 26
+
+    # LeaseRenewer 409 → main._cleanup_after_lease_lost：摘 ids/token + 清占位/归属
+    with lock:
+        state.active_job_ids.discard(26)
+        state.active_job_tokens.pop(26, None)
+        state.active_device_ids.discard(63)
+        owners.pop(63, None)
+
+    # claim 环随后把同设备派给继任 job 77
+    state.lock_register(77, "63:8", 63, "SERIAL-63")
+    assert 63 in state.active_device_ids and owners[63] == 77
+
+    # 旧 worker（job 26）迟到退出 → release：占位归属已转 77，不得清
+    state.release(26, "63:6", 63)
+
+    assert 63 in state.active_device_ids  # 继任占位保留
+    assert owners[63] == 77
+    assert 77 in state.active_job_ids
+
+
+def test_owned_release_still_compensates_own_lingering_placeholder():
+    """#1203：归属跟踪下 #1006 合法补偿仍生效——deregister 取不到 device
+    （占位残留、归属仍是本 job）时，release 补偿清理。"""
+    state, lock, owners = _make_owned_job_runner_state()
+    state.lock_register(26, "63:6", 63, "SERIAL-63")
+    assert 63 in state.active_device_ids and owners[63] == 26
+
+    # 等价 #1006：恢复动作清了 renewer 映射，deregister（release 首步）只摘
+    # ids/token，无法按 device 清占位——归属 26 保留、占位残留
+    state.release(26, "63:6", 63)
+
+    assert 63 not in state.active_device_ids  # 残留占位已补偿清理
+    assert owners.get(63) is None
+    assert 26 not in state.active_job_ids
+
+
 def test_run_task_wrapper_terminal_lost_reraised_not_wrapped_agent_error(
     job_runner_state,
 ):
