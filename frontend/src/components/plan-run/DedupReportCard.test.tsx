@@ -73,4 +73,16 @@ describe('DedupReportCard', () => {
     ).toBeTruthy();
     expect(screen.queryByTestId('dedup-host-completeness')).toBeNull();
   });
+
+  it('#1195: query failure shows error state, not the scan-empty CTA', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('boom'),
+    );
+
+    render(<DedupReportCard runId={1} />, { wrapper });
+
+    expect(await screen.findByText(/去重状态加载失败/)).toBeTruthy();
+    expect(screen.queryByText(/暂无去重产物/)).toBeNull();
+    expect(screen.getByRole('button', { name: '重试' })).toBeTruthy();
+  });
 });

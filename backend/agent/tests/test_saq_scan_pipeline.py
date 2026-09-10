@@ -672,7 +672,16 @@ async def test_merge_task_waits_on_device_log_events(monkeypatch):
 
     wait_remote = AsyncMock(return_value=True)
     count_remote = AsyncMock(return_value=3)
-    with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
+
+    async def fake_to_thread(fn, *a, **kw):
+        # #1123: _run_sync_exclusive 经模块别名 asyncio_to_thread；merge 短路，
+        # 其余（汇总写盘）透传，避免 blanket "ok" 弄坏 upload_summary dict。
+        if getattr(fn, "__name__", "") == "run_merge_all_platforms_sync":
+            return "ok"
+        return fn(*a, **kw)
+
+    monkeypatch.setattr(saq_tasks, "asyncio_to_thread", fake_to_thread)
+    with patch.object(saq_tasks, "_wait_for_upload_mark", AsyncMock(return_value=True)), \
          patch.object(saq_tasks, "_wait_for_remote_device_log_events", wait_remote), \
          patch.object(saq_tasks, "_count_remote_device_log_events", count_remote), \
          patch.object(saq_tasks, "_summarize_upload_sync", return_value={"total": 0}), \
@@ -695,7 +704,14 @@ async def test_merge_task_enqueues_extract_on_success(monkeypatch):
 
     wait_remote = AsyncMock(return_value=True)
     count_remote = AsyncMock(return_value=2)
-    with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
+
+    async def fake_to_thread(fn, *a, **kw):
+        if getattr(fn, "__name__", "") == "run_merge_all_platforms_sync":
+            return "ok"
+        return fn(*a, **kw)
+
+    monkeypatch.setattr(saq_tasks, "asyncio_to_thread", fake_to_thread)
+    with patch.object(saq_tasks, "_wait_for_upload_mark", AsyncMock(return_value=True)), \
          patch.object(saq_tasks, "_wait_for_remote_device_log_events", wait_remote), \
          patch.object(saq_tasks, "_count_remote_device_log_events", count_remote), \
          patch.object(saq_tasks, "_summarize_upload_sync", return_value={"total": 0}), \
@@ -720,8 +736,14 @@ async def test_merge_task_skips_extract_when_merge_skipped(monkeypatch):
 
     wait_remote = AsyncMock()
     count_remote = AsyncMock()
-    with patch("asyncio.to_thread", new=AsyncMock(return_value="")), \
-         patch.object(saq_tasks, "_wait_for_remote_device_log_events", wait_remote), \
+
+    async def fake_to_thread(fn, *a, **kw):
+        if getattr(fn, "__name__", "") == "run_merge_all_platforms_sync":
+            return ""
+        return fn(*a, **kw)
+
+    monkeypatch.setattr(saq_tasks, "asyncio_to_thread", fake_to_thread)
+    with patch.object(saq_tasks, "_wait_for_remote_device_log_events", wait_remote), \
          patch.object(saq_tasks, "_count_remote_device_log_events", count_remote):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
@@ -767,8 +789,13 @@ async def test_merge_task_reraises_when_extract_enqueue_fails(monkeypatch):
     """#1110: extract enqueue failure must fail merge_task for SAQ retry."""
     from backend.tasks import saq_tasks
 
-    with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
-         patch.object(saq_tasks, "_wait_for_upload_mark", AsyncMock(return_value=True)), \
+    async def fake_to_thread(fn, *a, **kw):
+        if getattr(fn, "__name__", "") == "run_merge_all_platforms_sync":
+            return "ok"
+        return fn(*a, **kw)
+
+    monkeypatch.setattr(saq_tasks, "asyncio_to_thread", fake_to_thread)
+    with patch.object(saq_tasks, "_wait_for_upload_mark", AsyncMock(return_value=True)), \
          patch.object(saq_tasks, "_wait_for_remote_device_log_events", AsyncMock(return_value=True)), \
          patch.object(saq_tasks, "_count_remote_device_log_events", AsyncMock(return_value=1)), \
          patch.object(saq_tasks, "_summarize_upload_sync", return_value={"total": 0}), \
