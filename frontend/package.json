@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:prod": "tsc && vite build --outDir dist-prod --emptyOutDir",
+    "build:preview": "tsc && vite build --outDir dist-preview --emptyOutDir",
     "preview": "vite preview",
     "type-check": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest",
