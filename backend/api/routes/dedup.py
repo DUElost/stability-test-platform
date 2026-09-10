@@ -470,7 +470,13 @@ async def trigger_scan(
     if not triggered:
         raise HTTPException(status_code=409, detail="no ONLINE hosts to scan")
 
-    await enqueue_dedup_terminal_async(run_id, is_final=is_final)
+    if not await enqueue_dedup_terminal_async(run_id, is_final=is_final):
+        # #1274: 入队失败必须显式暴露——否则 UI 收到 200 "enqueued" 但没有任何
+        # scan 轮次在跑（SAQ 未运行 / Redis 故障）。
+        raise HTTPException(
+            status_code=503,
+            detail="scan enqueue failed (SAQ/Redis unavailable); no scan round scheduled",
+        )
     return ok({
         "plan_run_id": run_id,
         "enqueued": "scan_task",

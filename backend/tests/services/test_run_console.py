@@ -361,3 +361,60 @@ def test_terminal_runs_evicted_after_retention(tmp_path, emit_capture, monkeypat
     out = rc.read_log(run_id)
     assert out["status"] == "UNKNOWN"
     assert out["lines"] == ["bye"]
+
+
+def test_flush_is_serialized_across_threads(tmp_path):
+    """#1275: reader 线程（buf 达阈值）与 0.1s 定时线程并发 flush 必须串行。
+
+    不串行时「摘批 → 分配 seq」与「落盘/推送」两步可交错：先摘到 seq 的批可能
+    后落盘，使文件行序 ≠ seq 序（read_log 回溯与实时 from_seq 错位）。用 emit
+    回调在第一批推送时阻塞，观察是否有第二个 flush 并发进入 emit。
+    """
+    import threading
+
+    events: list = []
+    first_emit_entered = threading.Event()
+    release_first = threading.Event()
+    inflight = {"cur": 0, "max": 0}
+    guard = threading.Lock()
+
+    def _emit(event, data, room):
+        with guard:
+            inflight["cur"] += 1
+            inflight["max"] = max(inflight["max"], inflight["cur"])
+            is_first = event == "console_log" and not first_emit_entered.is_set()
+            if is_first:
+                first_emit_entered.set()
+        try:
+            if is_first:
+                # 阻塞首个 flush，给第二个 flush 一个并发进入 emit 的机会。
+                release_first.wait(timeout=2.0)
+            events.append((event, data, room))
+        finally:
+            with guard:
+                inflight["cur"] -= 1
+
+    rc = _configure(tmp_path, _emit)
+    # 先 20 行（不足 _FLUSH_MAX_LINES=50，reader 不 flush；由定时线程先摘批并阻塞在
+    # emit），随后 200 行让 reader 达到阈值再次调用 flush——不串行时两者并发进入
+    # emit（max=2），串行时后者阻塞在 flush 锁（max=1）。
+    cmd = (
+        "import sys, time\n"
+        "for i in range(20): print('A%d' % i)\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.4)\n"
+        "for i in range(200): print('L%d' % i)\n"
+    )
+    run_id = rc.start(run_key="k-flush", cmd=_py(cmd), label="burst")
+    assert first_emit_entered.wait(timeout=5.0), "应产生首个 console_log emit"
+    # 给 reader 线程足够时间在首个 flush 阻塞期间再次触发 flush。
+    time.sleep(0.8)
+    release_first.set()
+
+    st = _wait_terminal(run_id)
+    assert st["status"] == "SUCCESS"
+    log = rc.read_log(run_id)
+    assert log["lines"] == (
+        ["A%d" % i for i in range(20)] + ["L%d" % i for i in range(200)]
+    )
+    assert inflight["max"] == 1, "flush 未串行：两个 flush 并发进入 emit（落盘/推送可交错）"
