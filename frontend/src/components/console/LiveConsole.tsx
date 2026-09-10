@@ -52,9 +52,16 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   const onStatusChangeRef = useRef(onStatusChange);
   const gapFillInFlightRef = useRef(false);
   const everConnectedRef = useRef(false);
+  // #1278：in-flight 期间到达的「有缺口」批次只置位，由在途请求结束后再补一轮，
+  // 否则该行段要等下一个 live 批次才可能被补——run 转终态/静默时即永久丢。
+  const pendingGapRef = useRef(false);
+  const consoleRunIdRef = useRef(consoleRunId);
   useLayoutEffect(() => {
     onStatusChangeRef.current = onStatusChange;
   }, [onStatusChange]);
+  useLayoutEffect(() => {
+    consoleRunIdRef.current = consoleRunId;
+  }, [consoleRunId]);
   const [status, setStatus] = useState('RUNNING');
   const [issueCount, setIssueCount] = useState(0);
   const [termReady, setTermReady] = useState(false);
@@ -68,6 +75,7 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   useEffect(() => {
     everConnectedRef.current = false;
     gapFillInFlightRef.current = false;
+    pendingGapRef.current = false;
   }, [consoleRunId]);
 
   // memo 化是为了能进 replayFromStart 的依赖数组：裸函数每次渲染换引用，
@@ -128,29 +136,40 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
 
   /** Incremental replay from the next missing seq (#1116). */
   const fillGap = useCallback(() => {
-    if (gapFillInFlightRef.current) return;
-    const fromSeq = seqRef.current + 1;
+    if (gapFillInFlightRef.current) {
+      // #1278：已有请求在途——记下「仍需补」，由在途请求结束后再发起一轮；
+      // 否则该行段要等下一个 live 批次才可能被补（run 静默/转终态即永久丢）。
+      pendingGapRef.current = true;
+      return;
+    }
+    const requestRunId = consoleRunId;
     gapFillInFlightRef.current = true;
-    dedup
-      .getRunLog(consoleRunId, fromSeq)
-      .then((res) => {
-        applyLines(res.from_seq || fromSeq, res.lines);
-        if (typeof res.status === 'string' && res.status) {
-          setStatus(res.status);
-          onStatusChangeRef.current?.(res.status);
+    void (async () => {
+      try {
+        // 循环消费：在途期间若又出现新缺口（pendingGap 被再次置位），再补一轮。
+        for (;;) {
+          const fromSeq = seqRef.current + 1;
+          const res = await dedup.getRunLog(requestRunId, fromSeq);
+          if (requestRunId !== consoleRunIdRef.current) return; // 切 run：丢弃迟到结果（#1278）
+          applyLines(res.from_seq || fromSeq, res.lines);
+          if (typeof res.status === 'string' && res.status) {
+            setStatus(res.status);
+            onStatusChangeRef.current?.(res.status);
+          }
+          // Server seq is authoritative when ahead of local (e.g. empty gap fill
+          // after a terminal run that never delivered the last live batch).
+          if (typeof res.seq === 'number' && res.seq > seqRef.current) {
+            seqRef.current = res.seq;
+          }
+          if (!pendingGapRef.current) break;
+          pendingGapRef.current = false;
         }
-        // Server seq is authoritative when ahead of local (e.g. empty gap fill
-        // after a terminal run that never delivered the last live batch).
-        if (typeof res.seq === 'number' && res.seq > seqRef.current) {
-          seqRef.current = res.seq;
-        }
-      })
-      .catch(() => {
+      } catch {
         /* gap fill is best-effort */
-      })
-      .finally(() => {
+      } finally {
         gapFillInFlightRef.current = false;
-      });
+      }
+    })();
   }, [applyLines, consoleRunId]);
 
   useEffect(() => {
