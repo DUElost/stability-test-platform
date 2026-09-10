@@ -56,7 +56,20 @@ cd "$REPO_ROOT/tools/ansible"
 - `inventory = ./inventory.ini`
 - `remote_user = android`
 - `roles_path = ./roles`
-- `host_key_checking = False`
+- `host_key_checking = True`
+
+### 主机密钥信任模型（#1263 / R14-F17）
+
+Ansible（`host_key_checking = True`）与 `update_agent.yml` 的 rsync 通道均严格校验
+目标主机 SSH 主机密钥，不使用 `StrictHostKeyChecking=no` 或
+`UserKnownHostsFile=/dev/null`。
+
+- **首次连接前登记**：在控制机通过带内可信渠道获取目标主机指纹并人工核对后，
+  登记到 `~/.ssh/known_hosts`（例如核对 `ssh-keyscan -H <host>` 输出的指纹后追加）。
+  未登记时 playbook 以 host key verification 失败中止（fail-closed，不静默放行）。
+- **换钥（主机重装 / SSH 密钥重生成）**：连接会因 host key changed 失败；从带内
+  可信渠道核对新指纹后，`ssh-keygen -R <host>` 并重新登记，并在运维记录
+  （工单 / 值班日志）留痕确认。
 
 ## 4. 变量模型
 
