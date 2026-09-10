@@ -25,6 +25,12 @@ agent_log_level: "INFO"
 agent_health_log_tail_lines: 40
 agent_agentctl_path: "{{ agent_install_dir }}/agentctl"
 agent_source_dir: "{{ playbook_dir }}/../../../backend/agent"
+# 升级门禁（#1249）：有活跃 Job 时默认拒绝升级（409）；置 true 允许先走
+# abort 排空协议（释放租约 → Agent 收尾 → 终态）再占用维护窗口。
+agent_abort_running_jobs: false
+# 门禁请求超时（秒）。abort 排空最长约 45s（HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS），
+# 默认留足余量。
+agent_upgrade_gate_timeout: 90
 # 控制面仓库 HEAD 短 SHA：经 install_agent.sh 的 AGENT_CODE_VERSION 写入
 # $INSTALL_DIR/agent/VERSION（与 API 热更新的 code_version 同语义）；git 不可用
 # 时为空串，脚本跳过写入（不阻断安装）。#1247

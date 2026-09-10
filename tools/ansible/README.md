@@ -139,8 +139,16 @@ wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=
 - 本地 `rsync --dry-run --itemize-changes` 先比对正式目录，有差异才同步。
 - 无代码、`agentctl`、环境变量差异时跳过备份、同步和重启。
 - 自动备份 + 失败回滚。
+- **升级门禁（ADR-0021 D7/D8 / #1249）**：升级前向控制面申请维护窗口
+  （`POST /api/v1/agent/hosts/{host_id}/upgrade-gate`，agent secret 鉴权）。
+  有活跃 Job 时默认拒绝（409）；`-e agent_abort_running_jobs=true` 允许先走
+  abort 排空协议（释放租约 → Agent 收尾 → 终态）再升级。窗口期间该主机的
+  派发与 claim 都被跳过；正常与回滚路径都会释放，异常退出靠 TTL 过期兜底。
+  控制面不可达时门禁失败即拒绝升级（fail-closed），不允许绕开互斥直接 rsync。
 
-控制端需要安装 `rsync`；使用密码登录的节点还需要安装 `sshpass`。
+控制端需要安装 `rsync`；使用密码登录的节点还需要安装 `sshpass`。门禁的 host_id
+与 API 地址默认取自目标机 `/opt/stability-test-agent/.env`（`HOST_ID` / `API_URL`），
+可用 `-e agent_host_id=...` / `-e agent_api_url=...` 覆盖。
 
 推荐发布顺序：
 
