@@ -13,19 +13,33 @@ import threading
 import time
 from datetime import datetime, timezone
 
+from backend.core.dedup_platform import DEDUP_PLATFORMS
+
 logger = logging.getLogger(__name__)
 
 asyncio_sleep = asyncio.sleep
 asyncio_to_thread = asyncio.to_thread
 
-_MERGE_SYNC_TIMEOUT = 300
+# #1085：单平台 merge 工具 subprocess 上限（dedup_scan.run_merge_sync 内
+# subprocess timeout=300）。merge 阶段按平台各跑一轮（run_merge_all_platforms_sync
+# 遍历 DEDUP_PLATFORMS），旧公式只按单平台计——双平台链最长 2×300 工具调用 +
+# 180 标记等待 + 660 DLE 等待，超出旧预算 1080s 时 merge_task 会被 SAQ 误杀，
+# 留下与 #1123 同型的「线程残留 + 无终态」。
+_MERGE_TOOL_TIMEOUT_PER_PLATFORM = 300
+_MERGE_PLATFORM_COUNT = len(DEDUP_PLATFORMS)
 _UPLOAD_WAIT_INTERVAL = 5
 _UPLOAD_WAIT_MAX = 660  # DLE pending poll budget (merge_task waits on REMOTE/ARCHIVED)
 # #381: merge_task 等 upload_task 标记水位线的预算（标记是快速 DB UPDATE，
 # 只需覆盖 SAQ 并发调度下 merge 先于 upload 到达的乱序窗口）。
 _UPLOAD_MARK_WAIT_MAX = 180
-# merge 子进程 + DLE wait + 余量
-_MERGE_TASK_SAQ_TIMEOUT = _MERGE_SYNC_TIMEOUT + _UPLOAD_WAIT_MAX + 120
+# #1085：预算 = 平台数 × 300（各平台工具）+ 180（标记水位线）+ 660（DLE pending）
+# + 120（文件 I/O 与调度余量）= 双平台完整等待链。
+_MERGE_TASK_SAQ_TIMEOUT = (
+    _MERGE_PLATFORM_COUNT * _MERGE_TOOL_TIMEOUT_PER_PLATFORM
+    + _UPLOAD_MARK_WAIT_MAX
+    + _UPLOAD_WAIT_MAX
+    + 120
+)
 
 # #381: scan xls 引用事件的标记范围 —— 排除已达「远端可提取」的终态
 # （REMOTE/ARCHIVED/PRUNED，重复标记无意义）与 PULL_FAILED（本地无数据，
