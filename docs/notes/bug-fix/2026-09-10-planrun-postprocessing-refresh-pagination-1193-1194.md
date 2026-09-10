@@ -25,6 +25,12 @@ Class: bug-fix
   前缀失效仍兼容）；头部显示「已显示 X / total」，超出时给加载更多按钮，不再
   静默截断。
 
+**复查 follow-up（2026-09-10，PR #1290 复查）**：放大 limit 的窗口读会撞后端硬
+上限——`GET /plan-runs/{id}/log-events` 是 `Query(..., le=500)`、`test-case-results`
+是 `Query(..., le=2000)`，继续放大将 422、卡片进错误态。修正：两卡 limit 以服务端
+上限封顶（`MAX_LIMIT`，常量注明后端来源），到顶后隐藏「加载更多」并明示「已达
+接口单次上限 N 条（共 M 条）」；全量浏览（超过上限）需 offset 追加分页，见 Revisit。
+
 涉及：`hooks/plan-run/{planRunDetailUtils,usePlanRunDetailData}.ts`、
 `components/plan-run/{LogEventsCard,TestCaseResultsCard,DedupReportCard}.tsx`、
 `utils/api/queryKeys.ts` + 对应测试。
@@ -47,9 +53,12 @@ Class: bug-fix
 - 红绿：未修复卡片上 4 个新用例失败（两卡 load-more、空态、慢轮询断言），
   修复后通过
 - `npm run type-check`、`eslint src --max-warnings 0`、`npm run build` 通过
+- 复查 follow-up 增补：两卡「封顶 + 明示截断」流程用例（红绿：未封顶版本上新
+  用例失败），`npx vitest run src/components/plan-run/` 通过
 
 ## Revisit
 
 - 若后端暴露 run 级「后处理完成」信号（全部 job `post_processed_at` + archive
   完成），可把慢轮询改为按完成条件停更，去掉「页面在场」上界；
-- 若单 Run 明细增长到万级，limit 放大式窗口读需改为 offset 追加/虚拟列表。
+- 若需要浏览超过接口上限的记录（DLE >500 / 用例结果 >2000），放大 limit 的窗口读
+  不够用，需改为 offset 追加分页（`useInfiniteQuery`）或与后端协商提高上限。
