@@ -536,12 +536,23 @@ async def test_scan_task_chains_on_partial_coverage_with_warning(monkeypatch, ca
 
 
 def test_scan_task_merge_job_timeout_covers_poll_budget():
-    """merge_task SAQ timeout must cover merge subprocess + DLE wait."""
+    """merge_task SAQ timeout must cover the dual-platform chain (#1085).
+
+    预算公式：平台数 × 300（各平台 merge 工具 subprocess）+ 180（标记水位线）
+    + 660（DLE pending）+ 120（文件 I/O 与调度余量）——旧公式只按单平台计，
+    双平台链（2×300 + 180 + 660 = 1440s）会超出旧预算 1080s 被 SAQ 误杀。
+    """
+    from backend.core.dedup_platform import DEDUP_PLATFORMS
     from backend.tasks import saq_tasks
 
-    assert saq_tasks._MERGE_TASK_SAQ_TIMEOUT >= (
-        saq_tasks._MERGE_SYNC_TIMEOUT + saq_tasks._UPLOAD_WAIT_MAX + 120
+    assert saq_tasks._MERGE_PLATFORM_COUNT == len(DEDUP_PLATFORMS) == 2
+    assert saq_tasks._MERGE_TASK_SAQ_TIMEOUT == (
+        len(DEDUP_PLATFORMS) * saq_tasks._MERGE_TOOL_TIMEOUT_PER_PLATFORM
+        + saq_tasks._UPLOAD_MARK_WAIT_MAX
+        + saq_tasks._UPLOAD_WAIT_MAX
+        + 120
     )
+    assert saq_tasks._MERGE_TASK_SAQ_TIMEOUT == 1560
 
 
 @pytest.mark.asyncio
