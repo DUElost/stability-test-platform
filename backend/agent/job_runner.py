@@ -27,6 +27,9 @@ class JobRunnerState:
     lock_deregister: Callable[..., None]
     device_id_register: Callable[[int], None]
     device_id_deregister: Callable[[int], None]
+    # device_id → 占用它的 active job_id（main 与 _active_device_ids 同锁维护；
+    # None = 未启用归属跟踪（fixture/旧形态），回退到既有启发式行为）。
+    active_device_owner: Optional[MutableMapping[int, int]] = None
     on_job_not_running_recovery: Optional[Callable[[int], None]] = None
     active_runners: MutableMapping[int, tuple[str, Any]] = field(default_factory=dict)
     abort_requested_job_ids: set[int] = field(default_factory=set)
@@ -124,8 +127,22 @@ class JobRunnerState:
                 # worker 上下文快照，本 worker 仍为 current 时在锁内补偿清理
                 # （幂等）。被新 token 取代的旧 worker（is_current_worker=False）
                 # 不得清除新 worker 的设备占位。
+                #
+                # #1203: token 已消失（None 分支）可能是「本 job 残留占位待清」
+                # （#1006 流程：deregister 取不到 device 未清占位）也可能是
+                # 「权威清理已清占位、继任 job 已重占同设备」。启用
+                # active_device_owner 归属跟踪后，仅当该设备当前归属本 job（或
+                # 无归属）才 discard；归属已转给其他 job 时不得动，否则旧 worker
+                # 迟到退出会清掉继任 job 的占位、打开同设备第三次并发派发窗口。
                 if device_id is not None:
-                    self.active_device_ids.discard(device_id)
+                    owner_map = self.active_device_owner
+                    if (
+                        owner_map is None
+                        or owner_map.get(device_id) in (None, job_id)
+                    ):
+                        self.active_device_ids.discard(device_id)
+                        if owner_map is not None:
+                            owner_map.pop(device_id, None)
 
 
 def _validate_pipeline_def(pipeline_def: Optional[Dict[str, Any]]) -> Optional[str]:
