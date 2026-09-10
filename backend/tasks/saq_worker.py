@@ -296,8 +296,16 @@ def enqueue_sync(
     )
 
     async def _do_enqueue():
-        await _queue.enqueue(job)
-        logger.info("enqueue_async_ok task=%s key=%s", task_name, key)
+        # R13-F04 (#1216): SAQ returns None when a job with the same key is
+        # already enqueued (dedup) — that is NOT a successful (re)delivery.
+        # Propagate the truth so callers can observe/compensate instead of
+        # assuming the round was scheduled.
+        job_ref = await _queue.enqueue(job)
+        logger.info(
+            "enqueue_async_task=%s key=%s deduped=%s",
+            task_name, key, job_ref is None,
+        )
+        return job_ref
 
     on_main_loop = False
     try:
@@ -315,12 +323,12 @@ def enqueue_sync(
                 raise EnqueueSyncError(msg) from exc
             return False
         try:
-            future.result(timeout=SAQ_ENQUEUE_WAIT_TIMEOUT)
+            job_ref = future.result(timeout=SAQ_ENQUEUE_WAIT_TIMEOUT)
         except Exception as exc:
             msg = f"enqueue failed for {task_name}: {exc}"
             logger.exception("enqueue_async_failed task=%s", task_name)
             raise EnqueueSyncError(msg) from exc
-        return True
+        return job_ref is not None
 
     if required and on_main_loop:
         raise EnqueueSyncError(

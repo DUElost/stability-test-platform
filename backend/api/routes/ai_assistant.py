@@ -22,6 +22,7 @@ from backend.api.schemas.ai_assistant import (
     AiAssistantConfigUpdate,
     AiConnectionTestOut,
     AiMessageOut,
+    AiPendingActionOut,
     AiSessionOut,
     T2bAutoDispatchAllowlistEntry,
 )
@@ -33,6 +34,7 @@ from backend.models.ai_assistant import (
     AiChatMessage,
     AiChatSession,
 )
+from backend.services.ai_assistant.actions import try_transition_action
 from backend.services.ai_assistant.llm_client import (
     AiAuthError,
     AiBadResponse,
@@ -405,6 +407,46 @@ def _visible_action(db: Session, user: User, action_id: int) -> AiAssistantActio
     return action
 
 
+@router.get("/actions/pending", response_model=ApiResponse[list[AiPendingActionOut]])
+def list_pending_actions(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    """R13-F05 (#1217): 管理员待审批队列。
+
+    普通用户的 T2 提案只挂在其个人会话里，管理员无法读他人会话，导致审批
+    入口缺失。本端点跨会话列出 ``proposed`` 动作，仅返回审批所需摘要
+    （工具名 / 预览 / 发起人 / 时间），不暴露他人会话消息全文。
+    """
+    rows = (
+        db.query(AiAssistantAction)
+        .filter(AiAssistantAction.status == "proposed")
+        .order_by(AiAssistantAction.created_at.asc(), AiAssistantAction.id.asc())
+        .all()
+    )
+    from backend.models.user import User as UserModel
+
+    out: list[AiPendingActionOut] = []
+    for action in rows:
+        requested_by = None
+        session = db.get(AiChatSession, action.session_id)
+        if session is not None:
+            req_user = db.get(UserModel, session.user_id)
+            requested_by = getattr(req_user, "username", None)
+        out.append(
+            AiPendingActionOut(
+                id=action.id,
+                tool_name=action.tool_name,
+                preview_text=describe_tool_action_preview(
+                    db, action.tool_name, dict(action.params or {})
+                ),
+                requested_by=requested_by,
+                created_at=action.created_at,
+            )
+        )
+    return ok(out)
+
+
 @router.get("/actions/{action_id}", response_model=ApiResponse[AiActionOut])
 def get_action(
     action_id: int,
@@ -422,27 +464,45 @@ async def _decide_action(
     action_id: int,
     verb: str,
 ):
+    from datetime import datetime, timezone
+
     action = db.get(AiAssistantAction, action_id)
     if action is None:
         raise HTTPException(status_code=404, detail="action not found")
-    if action.status != "proposed":
-        raise HTTPException(status_code=409, detail=f"action is {action.status}, not proposed")
-    from datetime import datetime, timezone
 
-    action.status = "approved" if verb == "approve" else "rejected"
-    action.decided_by_user_id = user.id
-    action.decided_at = datetime.now(timezone.utc)
+    # R13-F03 (#1215): 审批必须是「proposed → decided」的原子抢占，否则两个
+    # 管理员并发批准都会通过，各自触发一次 execute_action（重复副作用）。
+    # 条件 UPDATE + rowcount 判定在 DB 层保证只有一人成功。
+    new_status = "approved" if verb == "approve" else "rejected"
+    won = try_transition_action(
+        db,
+        action_id,
+        expected="proposed",
+        new_status=new_status,
+        decided_by_user_id=user.id,
+        decided_at=datetime.now(timezone.utc),
+    )
+    if not won:
+        db.rollback()
+        current = db.get(AiAssistantAction, action_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="action not found")
+        raise HTTPException(
+            status_code=409, detail=f"action is {current.status}, not proposed"
+        )
+
     record_audit(
         db,
         action=f"ai_assistant_action_{verb}",
         resource_type="ai_assistant_action",
-        resource_id=action.id,
+        resource_id=action_id,
         details={"tool_name": action.tool_name, "params": dict(action.params or {})},
         user_id=user.id,
         username=user.username,
         request=request,
     )
     db.commit()
+    db.refresh(action)
     if verb == "approve":
         # 审批后的执行结果经续轮汇报——先落 pending 占位：前端 approve 成功后
         # invalidate messages，据占位恢复 2s 轮询，否则汇报只落库不上屏

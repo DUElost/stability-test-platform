@@ -15,8 +15,8 @@ check_server_connection() {
     if [ -z "$api_url" ]; then
         return 1
     fi
-    curl -fsS --max-time 5 "${api_url%/}/health" >/dev/null 2>&1 \
-        || curl -fsS --max-time 5 "${api_url%/}/" >/dev/null 2>&1
+    # #1254: 只消费 /health readiness，首页 200 不能证明控制面可用
+    curl -fsS --max-time 5 "${api_url%/}/health" >/dev/null 2>&1
 }
 
 health_check() {

@@ -8,6 +8,7 @@ import type {
   AiChatMessage,
   AiChatSession,
   AiConnectionTestResult,
+  AiPendingAction,
 } from './types';
 
 // client.ts baseURL 已含 /api/v1，此处用相对路径（与 management.ts 等模块一致）
@@ -67,6 +68,11 @@ export const aiAssistant = {
     ),
 
   // ── 动作（提案人或 admin 可读；approve/reject/cancel 限 admin）──
+  /** 管理员待审批队列（跨会话；仅摘要，不含他人会话消息全文）。 */
+  listPendingActions: () =>
+    unwrapApiResponse(
+      apiClient.get<ApiResponseEnvelope<AiPendingAction[]>>(`${BASE}/actions/pending`),
+    ),
   getAction: (actionId: number) =>
     unwrapApiResponse(
       apiClient.get<ApiResponseEnvelope<AiAssistantAction>>(`${BASE}/actions/${actionId}`),

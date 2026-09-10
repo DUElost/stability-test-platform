@@ -1,8 +1,10 @@
 """AI 助手 API 集成测试（testcontainers PG）。"""
 
 import asyncio
+import threading
 
 import pytest
+from sqlalchemy.orm import sessionmaker
 
 from backend.models.ai_assistant import (
     AiAssistantAction,
@@ -403,6 +405,128 @@ class TestActionPermissions:
             f"/api/v1/ai-assistant/actions/{action.id}/approve", headers=admin_headers
         )
         assert resp.status_code == 409
+
+    def test_pending_actions_admin_only(self, client, auth_headers, db_session):
+        """R13-F05 (#1217): 非 admin 不得读取跨会话待审批队列。"""
+        self._proposed_action(db_session)
+        resp = client.get("/api/v1/ai-assistant/actions/pending", headers=auth_headers)
+        assert resp.status_code == 403
+
+    def test_pending_actions_lists_proposed_without_session_content(
+        self, client, admin_headers, test_user, db_session
+    ):
+        """R13-F05 (#1217): admin 可跨会话看到待审批动作（仅摘要）。"""
+        action = self._proposed_action(db_session)
+        # 会话里放一条私密消息——审批队列不得泄露它
+        db_session.add(
+            AiChatMessage(
+                session_id=action.session_id,
+                role="user",
+                content="SECRET-SESSION-CONTENT",
+            )
+        )
+        db_session.commit()
+
+        resp = client.get("/api/v1/ai-assistant/actions/pending", headers=admin_headers)
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        ids = {item["id"] for item in data}
+        assert action.id in ids
+        assert "SECRET-SESSION-CONTENT" not in resp.text
+        # 摘要字段齐备且不含原始 params
+        item = next(i for i in data if i["id"] == action.id)
+        assert item["tool_name"] == "test_notification_channel"
+        assert "params" not in item
+
+    def test_pending_actions_excludes_decided(self, client, admin_headers, test_user, db_session):
+        action = self._proposed_action(db_session)
+        action.status = "succeeded"
+        db_session.commit()
+        resp = client.get("/api/v1/ai-assistant/actions/pending", headers=admin_headers)
+        assert resp.status_code == 200
+        assert all(item["id"] != action.id for item in resp.json()["data"])
+
+    def test_concurrent_approve_only_one_wins(self, db_session, admin_user, test_user):
+        """R13-F03 (#1215): 双 Session 并发批准同一 proposed action 仅一人成功。"""
+        from backend.services.ai_assistant.actions import try_transition_action
+
+        action = self._proposed_action(db_session)
+        action_id = action.id
+        engine = db_session.get_bind()
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+
+        barrier = threading.Barrier(2)
+        results: list[bool] = []
+        lock = threading.Lock()
+
+        def worker():
+            s = Session()
+            try:
+                barrier.wait(timeout=5)
+                won = try_transition_action(
+                    s, action_id, expected="proposed", new_status="approved"
+                )
+                s.commit()
+                with lock:
+                    results.append(won)
+            finally:
+                s.close()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert sorted(results) == [False, True]
+        db_session.expire_all()
+        refreshed = db_session.get(AiAssistantAction, action_id)
+        assert refreshed.status == "approved"
+
+    def test_execute_action_single_side_effect(self, db_session, admin_user, monkeypatch):
+        """R13-F03 (#1215): 双执行抢占仅产生一次副作用。"""
+        from backend.services.ai_assistant import orchestrator as orch
+
+        class _Shared:
+            def __init__(self, s):
+                self._s = s
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+        monkeypatch.setattr(orch, "_enqueue_continuation", lambda sid: None)
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            orch, "_run_service_tool",
+            lambda name, params, **kw: calls.append((name, params)) or "ok",
+        )
+
+        s = AiChatSession(user_id=admin_user.id)
+        db_session.add(s)
+        db_session.flush()
+        action = AiAssistantAction(
+            session_id=s.id,
+            tool_name="test_notification_channel",
+            params={"channel_id": 1},
+            status="approved",
+            requested_by_user_id=admin_user.id,
+            decided_by_user_id=admin_user.id,
+        )
+        db_session.add(action)
+        db_session.commit()
+
+        orch.execute_action(action.id)
+        orch.execute_action(action.id)  # second attempt must lose the CAS
+
+        assert len(calls) == 1
+        db_session.expire_all()
+        refreshed = db_session.get(AiAssistantAction, action.id)
+        assert refreshed.status == "succeeded"
 
 
 class TestTurnLoopWithFakeClient:
