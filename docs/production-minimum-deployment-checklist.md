@@ -29,6 +29,12 @@
 - 不允许 Agent 使用 `HOST_ID=0`；每台 Agent 必须唯一且固定。
 - 读 API 已要求登录；`/metrics` 默认受 `STP_METRICS_AUTH_REQUIRED=1` 保护，生产可额外叠加 Nginx IP 白名单。
 - 前端 SocketIO 生产构建须设 `VITE_API_BASE_URL=`（空），Nginx 须反代 `/socket.io/`（见 §3.6）。
+- **部署根唯一**：本清单所有路径都从 `STP_DEPLOY_ROOT` 派生；`deploy/control-plane/**` 模板
+  用 `<deploy-root>` / `<deploy-user>` 占位符，不含任何硬编码部署根（渲染见 §3.2）。
+  干净机示例根为 `/opt/stability-test-platform`；现有生产控制面主机用的是
+  `/home/debian13/stability-test-platform`——换根只改这一个变量。
+- **前端产物必须落在 Nginx `root`**：`npm run build:prod` → `frontend/dist-prod`；
+  `npm run build` 只产出 `dist/`，不满足 Nginx root（见 §3.4）。
 - 内网 HTTP 正式环境使用 `ENV=internal`；只有 HTTPS 入口才使用 `ENV=production`，否则 `AUTH_COOKIE_SECURE=1` 会导致 HTTP 登录 Cookie 不可用。
 
 ## 3. 控制平面部署清单（主 Linux Host）
@@ -57,10 +63,25 @@ npm --version
 ### 3.2 部署目录与代码
 
 ```bash
-sudo mkdir -p /opt/stability-test-platform
-sudo chown -R $USER:$USER /opt/stability-test-platform
-cd /opt/stability-test-platform
-# 将当前仓库内容同步到该目录（git clone 或 rsync）
+# 唯一部署根与部署用户：本清单后续所有路径都由这两个变量派生。
+# 干净机示例用 /opt/stability-test-platform；现有生产控制面主机用
+# /home/debian13/stability-test-platform。
+export STP_DEPLOY_ROOT=/opt/stability-test-platform
+export STP_DEPLOY_USER="$USER"
+
+sudo mkdir -p "$STP_DEPLOY_ROOT"
+sudo chown -R "$STP_DEPLOY_USER":"$STP_DEPLOY_USER" "$STP_DEPLOY_ROOT"
+
+# 干净 checkout：直接克隆到部署根（生产只部署已合入 main 的 revision）
+git clone https://github.com/DUElost/stability-test-platform.git "$STP_DEPLOY_ROOT"
+cd "$STP_DEPLOY_ROOT"
+./tools/dev/check-deploy-source.sh   # 部署源守卫：HEAD 必须在 main 且 tracked 工作区干净
+
+# 模板渲染：deploy/control-plane/{systemd,nginx,logrotate} 中的占位符由上面两个变量确定；
+# 源模板本身不含硬编码部署根，渲染后不留占位符。
+render_template() {
+  sed -e "s|<deploy-root>|$STP_DEPLOY_ROOT|g" -e "s|<deploy-user>|$STP_DEPLOY_USER|g" "$1"
+}
 ```
 
 ### 3.3 后端环境
@@ -68,50 +89,62 @@ cd /opt/stability-test-platform
 Redis 与 SAQ 为**硬依赖**：`STP_ENABLE_INPROCESS_SAQ=1`（默认）时，启动期会对 `REDIS_URL` 执行 PING，失败则进程退出；SAQ worker 启动失败同样导致 lifespan 失败。`/health` 在 in-process 模式下返回 `saq_ready`（worker 已启动且 Redis 可达）。开发/测试可通过 `TESTING=1`（pytest）或 **非 production** 下 `STP_SKIP_INFRA_CHECK=1` 跳过 Redis PING **与 in-process SAQ 启动**（纯 API 调试；`/health` 的 `saq_ready` 将为 `false`）。
 
 ```bash
-cd /opt/stability-test-platform
+cd "$STP_DEPLOY_ROOT"
 python3 -m venv venv
 source venv/bin/activate
 pip install -r backend/requirements.txt
 ```
 
-创建后端环境文件 `/opt/stability-test-platform/.env.backend`：
+创建后端环境文件 `$STP_DEPLOY_ROOT/.env.backend`：
 
 ```bash
 # 内网 HTTP 正式环境：使用 internal profile（ENV=internal + AUTH_COOKIE_SECURE=0）
 python3 tools/prepare_env.py \
   --template deploy/control-plane/env/.env.backend.internal.example \
-  --target /opt/stability-test-platform/.env.backend \
+  --target "$STP_DEPLOY_ROOT/.env.backend" \
   --replace-placeholders
 
 # HTTPS 生产环境：使用 production profile（ENV=production + AUTH_COOKIE_SECURE=1）
 # python3 tools/prepare_env.py \
 #   --template deploy/control-plane/env/.env.backend.example \
-#   --target /opt/stability-test-platform/.env.backend \
+#   --target "$STP_DEPLOY_ROOT/.env.backend" \
 #   --replace-placeholders
 ```
 
+两个 env 模板均在版本控制内（`.env*` 默认忽略，`.gitignore` 对这两个专用模板文件显式放行）。
+模板里的注释示例（如 `STP_SCRIPT_ROOT`）以示例根 `/opt/...` 书写，部署根不同时按 §3.2 的
+变量自行替换。
+
 ### 3.4 前端构建
 
+Nginx `root` 指向 `$STP_DEPLOY_ROOT/frontend/dist-prod`，因此构建必须写该目录：
+
 ```bash
-cd /opt/stability-test-platform/frontend
+cd "$STP_DEPLOY_ROOT/frontend"
 npm install
-npm run build
+VITE_API_BASE_URL= npm run build:prod   # 产物 → frontend/dist-prod（= Nginx root）
 ```
+
+> 在生产部署根内就地构建会让 Nginx 短暂读到半成品目录。生产换包请用干净 worktree 构建 +
+> 同盘双 rename 原子切换（`.claude/skills/control-plane-deploy/SKILL.md` §1.5）；
+> 预览站（`stability-platform-preview.conf`，root `frontend/dist-preview`）用 `npm run build:preview`。
 
 ### 3.5 后端 systemd 服务
 
-从模板生成 `/etc/systemd/system/stability-backend.service`（将 `<deploy-user>` 替换为实际部署用户）：
+从模板渲染 `/etc/systemd/system/stability-backend.service`：
 
 ```bash
-cp deploy/control-plane/systemd/stability-backend.service /tmp/stability-backend.service
-sed -i 's|<deploy-user>|'"$USER"'|g' /tmp/stability-backend.service
-sudo cp /tmp/stability-backend.service /etc/systemd/system/stability-backend.service
+render_template deploy/control-plane/systemd/stability-backend.service \
+  | sudo tee /etc/systemd/system/stability-backend.service >/dev/null
+# 渲染自检：占位符必须已全部替换
+render_template deploy/control-plane/systemd/stability-backend.service | grep -q '<deploy-root>' \
+  && echo "FAIL: 占位符残留" || echo "OK: 无占位符残留"
 ```
 
 首次部署或需要人工确认时，建议先显式执行一次迁移：
 
 ```bash
-cd /opt/stability-test-platform/backend
+cd "$STP_DEPLOY_ROOT/backend"
 ../venv/bin/python -m alembic upgrade head
 ```
 
@@ -123,7 +156,7 @@ cd /opt/stability-test-platform/backend
 启用服务：
 
 ```bash
-mkdir -p /opt/stability-test-platform/logs
+mkdir -p "$STP_DEPLOY_ROOT/logs"
 sudo systemctl daemon-reload
 sudo systemctl enable stability-backend
 sudo systemctl start stability-backend
@@ -135,17 +168,19 @@ sudo systemctl status stability-backend --no-pager
 `stability-backend.service` 默认把 stdout/stderr append 到本地文件（`logs/backend.log` / `logs/backend_error.log`），建议配置 logrotate：
 
 ```bash
-sudo cp deploy/control-plane/logrotate/stability-backend /etc/logrotate.d/stability-backend
+render_template deploy/control-plane/logrotate/stability-backend \
+  | sudo tee /etc/logrotate.d/stability-backend >/dev/null
 # 可选：立即验证一次
 sudo logrotate -f /etc/logrotate.d/stability-backend
 ```
 
 ### 3.6 Nginx（前端静态 + API / SocketIO 反向代理）
 
-从模板生成 `/etc/nginx/sites-available/stability-platform`：
+从模板渲染 `/etc/nginx/sites-available/stability-platform`：
 
 ```bash
-sudo cp deploy/control-plane/nginx/stability-platform.conf /etc/nginx/sites-available/stability-platform
+render_template deploy/control-plane/nginx/stability-platform.conf \
+  | sudo tee /etc/nginx/sites-available/stability-platform >/dev/null
 ```
 
 若预发布 / 生产已经具备证书，优先改用 `deploy/control-plane/nginx/stability-platform-https.conf` 作为模板。
@@ -155,8 +190,8 @@ sudo cp deploy/control-plane/nginx/stability-platform.conf /etc/nginx/sites-avai
 生产前端构建（同源，SocketIO 走 Nginx 443/80）：
 
 ```bash
-cd /opt/stability-test-platform/frontend
-VITE_API_BASE_URL= npm run build
+cd "$STP_DEPLOY_ROOT/frontend"
+VITE_API_BASE_URL= npm run build:prod   # 产物 = Nginx root frontend/dist-prod（同 §3.4）
 ```
 
 构建后确认：`frontend/src/config/index.ts` 在非 localhost 且 `VITE_API_BASE_URL` 为空时，
@@ -180,7 +215,7 @@ curl -I http://<你的前端Origin>/assets/definitely-missing.js
 # 如需登录/CSRF probe，请先在环境中设置 STP_ADMIN_PASSWORD（不打印 secret）
 python3 backend/scripts/preflight_control_plane.py \
   --backend http://127.0.0.1:8000 \
-  --env-file /opt/stability-test-platform/.env.backend \
+  --env-file "$STP_DEPLOY_ROOT/.env.backend" \
   --origin http://<你的前端Origin>
 ```
 

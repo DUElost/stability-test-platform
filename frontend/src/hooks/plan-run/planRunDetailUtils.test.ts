@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   isJobStuck,
   normalizeDispatchStateForRun,
+  planRunRefreshKeys,
   shouldShowDispatchGate,
 } from './planRunDetailUtils';
+import { dedupKeys, planRunKeys } from '@/utils/api/queryKeys';
 import type { DeviceMatrixItem, PlanRun } from '@/utils/api/types';
 
 function runningDevice(overrides: Partial<DeviceMatrixItem> = {}): DeviceMatrixItem {
@@ -85,5 +87,13 @@ describe('normalizeDispatchStateForRun', () => {
     expect(normalizeDispatchStateForRun(run, run.run_context?.dispatch_state)?.status).toBe(
       'completed',
     );
+  });
+
+  it('#1193 刷新键表覆盖去重状态与逐条用例结果（后处理产物不遗漏）', () => {
+    const keys = planRunRefreshKeys(7);
+    expect(keys).toContainEqual(planRunKeys.detail(7));
+    expect(keys).toContainEqual(planRunKeys.logEvents(7));
+    expect(keys).toContainEqual(dedupKeys.status(7));
+    expect(keys).toContainEqual(planRunKeys.testCaseResults(7));
   });
 });

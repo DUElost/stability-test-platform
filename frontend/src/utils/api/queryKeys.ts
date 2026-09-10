@@ -55,10 +55,12 @@ export const planRunKeys = {
   devicesByRun: (id: number) => ['plan-run-devices', id] as const,
   watcher: (id: number, scope?: string) => ['plan-run-watcher', id, scope] as const,
   watcherByRun: (id: number) => ['plan-run-watcher', id] as const,
-  /** #529 终态 DLE 事件视图（log-events 端点）。 */
-  logEvents: (id: number) => ['plan-run-log-events', id] as const,
-  /** ADR-0030 P2 逐条用例结果。 */
-  testCaseResults: (id: number) => ['plan-run-test-case-results', id] as const,
+  /** #529 终态 DLE 事件视图（log-events 端点）；#1194：分页参数纳入查询键。 */
+  logEvents: (id: number, opts?: { limit?: number }) =>
+    ['plan-run-log-events', id, { limit: opts?.limit ?? 200 }] as const,
+  /** ADR-0030 P2 逐条用例结果；#1194：分页参数纳入查询键。 */
+  testCaseResults: (id: number, opts?: { limit?: number }) =>
+    ['plan-run-test-case-results', id, { limit: opts?.limit ?? 500 }] as const,
   chain: (id: number) => ['plan-run-chain', id] as const,
   logs: (id: number, stage: string, severity: string, page: number) =>
     ['plan-run-logs', id, stage, severity, page] as const,

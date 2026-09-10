@@ -111,6 +111,8 @@ cd "$REPO_ROOT/tools/ansible"
 
 - 校验安装目录和 `.env` 已存在
 - 同步最新 agent 代码到已安装目录
+- 保留主机本地资源：`agent/resources/mtbf/` 不传输、不被 `--delete-excluded`
+  删除（与 API 热更新同一豁免语义，#1248）
 - 刷新 `agentctl`
 - 回写远端 `.env` 中的 `API_URL`
 - `daemon-reload` + `restart`

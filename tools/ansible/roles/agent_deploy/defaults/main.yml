@@ -16,3 +16,13 @@ agent_install_excludes:
   - ".env.example"
   - "stability-test-agent.service"
   - "hosts.txt"
+
+# 主机本地资源（不在 Git，由主机侧手工布放；如 MTBF APK 三件套）。
+# 升级同步策略 = 不传输 + 不删除，与 host_updater.py 热更新的
+# `--exclude='resources/mtbf/'` 语义一致（#1248）。
+#
+# 两个 flag 必须成对出现：`--exclude` 单独用会被 `--delete-excluded`
+# 当作「可删的排除项」清掉（本 issue 根因）；只发 protect 则挡不住
+# 源目录同名文件覆盖主机本地布放版本。
+agent_host_local_paths:
+  - "resources/mtbf/"

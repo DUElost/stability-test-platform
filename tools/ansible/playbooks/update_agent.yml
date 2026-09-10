@@ -28,7 +28,7 @@
           AGENT_SECRET（至少 16 字符），或通过环境变量 AGENT_SECRET /
           vault_agent_secret 覆盖后重试。
 
-    - name: Load agent_install_excludes from role defaults
+    - name: Load agent rsync policy from role defaults
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../roles/agent_deploy/defaults/main.yml"
 
@@ -151,6 +151,7 @@
           --rsync-path='sudo rsync' \
           -e "{{ agent_rsync_ssh_command }}" \
           {% for item in agent_install_excludes %}--exclude='{{ item }}' \
+          {% endfor %}{% for item in agent_host_local_paths %}--exclude='{{ item }}' --filter='protect {{ item }}' \
           {% endfor %}"{{ agent_source_dir }}/" "{{ agent_rsync_remote }}:{{ agent_install_dir }}/agent/"
       args:
         executable: /bin/bash
@@ -291,6 +292,7 @@
               --rsync-path='sudo rsync' \
               -e "{{ agent_rsync_ssh_command }}" \
               {% for item in agent_install_excludes %}--exclude='{{ item }}' \
+              {% endfor %}{% for item in agent_host_local_paths %}--exclude='{{ item }}' --filter='protect {{ item }}' \
               {% endfor %}"{{ agent_source_dir }}/" "{{ agent_rsync_remote }}:{{ agent_install_dir }}/agent/"
           args:
             executable: /bin/bash
