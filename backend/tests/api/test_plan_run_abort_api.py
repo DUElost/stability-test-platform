@@ -559,10 +559,10 @@ class TestHostHotUpdateSoftLock:
         # RUNNING jobs aren't transitioned inline by abort_jobs_for_host
         # (Agent must drain).  Configure the poll to time out quickly.
         monkeypatch.setattr(
-            "backend.api.routes.hosts.HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS", 0.05
+            "backend.services.host_upgrade_gate.ABORT_POLL_TIMEOUT_SECONDS", 0.05
         )
         monkeypatch.setattr(
-            "backend.api.routes.hosts.HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS", 0.01
+            "backend.services.host_upgrade_gate.ABORT_POLL_INTERVAL_SECONDS", 0.01
         )
 
         with patch("backend.api.routes.hosts.execute_hot_update") as mock_exec:

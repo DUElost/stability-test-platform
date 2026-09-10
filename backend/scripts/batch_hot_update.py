@@ -8,7 +8,9 @@ Usage:
     # Direct SSH (no API auth; uses DB + ansible inventory):
     PYTHONPATH=. python backend/scripts/batch_hot_update.py --direct
 
-    PYTHONPATH=. python backend/scripts/batch_hot_update.py --direct --include-active --abort-running-jobs
+    # 有活跃 Job 时：默认跳过；显式 abort 排空后再升级（ADR-0021 D8 / #1249）：
+    PYTHONPATH=. python backend/scripts/batch_hot_update.py --direct \\
+      --include-active --abort-running-jobs
 """
 
 from __future__ import annotations
@@ -68,9 +70,11 @@ def _hot_update_direct(
         get_agent_code_version,
     )
     from backend.services.agent_version_info import record_agent_code_deployed
-    from backend.services.host_maintenance import (
-        HostMaintenanceConflict,
-        maintenance_window,
+    from backend.services.host_maintenance import HostMaintenanceConflict
+    from backend.services.host_upgrade_gate import (
+        HostUpgradeGateError,
+        begin_host_upgrade,
+        end_host_upgrade,
     )
 
     active_statuses = {
@@ -110,14 +114,6 @@ def _hot_update_direct(
                 print(f"  SKIP {host.hostname} active_jobs={active}")
                 results.append(row)
                 continue
-            if active and abort_running_jobs:
-                print(
-                    f"  WARN {host.hostname} has active_jobs={active} "
-                    "(--abort-running-jobs not implemented in --direct mode; skip)"
-                )
-                row["skipped"] = "active_jobs_abort_not_supported_in_direct"
-                results.append(row)
-                continue
             try:
                 creds, _ = resolve_host_ssh_credentials(
                     host, inventory_lookup=_resolve_ssh_creds,
@@ -136,23 +132,45 @@ def _hot_update_direct(
                 continue
 
             print(f"\n=== hot-update {host.hostname} ({host.ip}) ===")
-            # #960：与 UI / precheck 同一把窗口锁 —— 批量跑也不能绕过互斥，
-            # 拿不到窗口说明该主机上已有热更新在跑。
+            # #960/#1249：门禁 + 维护窗口统一走 host_upgrade_gate —— 与 UI/API
+            # 同一把窗口锁；abort 排空也同一实现，direct 模式不再绕过协议。
+            holder = f"batch:{uuid.uuid4().hex[:8]}"
             try:
-                with maintenance_window(
-                    db, host.id, f"batch:{uuid.uuid4().hex[:8]}",
-                ):
-                    result = execute_hot_update(
-                        host_ip=host.ip or "",
-                        ssh_port=host.ssh_port or 22,
-                        ssh_user=creds.user,
-                        ssh_password=creds.password,
-                        ssh_key_path=creds.key_path,
-                        known_hosts_path=creds.known_hosts_path,
-                        code_version=expected,
-                    )
+                gate = begin_host_upgrade(
+                    db,
+                    host.id,
+                    holder=holder,
+                    abort_running_jobs=abort_running_jobs,
+                    triggered_by="batch-direct",
+                )
+            except HostUpgradeGateError as exc:
+                row["ok"] = False
+                row["error"] = exc.code
+                print(f"  FAIL {host.hostname} {exc.code}: {exc}")
+                results.append(row)
+                continue
             except HostMaintenanceConflict:
-                result = {"ok": False, "message": "host_in_maintenance"}
+                row["ok"] = False
+                row["error"] = "HOST_IN_MAINTENANCE"
+                print(f"  FAIL {host.hostname} HOST_IN_MAINTENANCE")
+                results.append(row)
+                continue
+
+            try:
+                result = execute_hot_update(
+                    host_ip=host.ip or "",
+                    ssh_port=host.ssh_port or 22,
+                    ssh_user=creds.user,
+                    ssh_password=creds.password,
+                    ssh_key_path=creds.key_path,
+                    known_hosts_path=creds.known_hosts_path,
+                    code_version=expected,
+                )
+            finally:
+                end_host_upgrade(db, host.id, holder)
+            row["aborted_jobs"] = (
+                (gate["aborted_summary"] or {}).get("aborted_jobs", [])
+            )
             row.update(result)
             if result.get("ok"):
                 record_agent_code_deployed(host, expected)
@@ -182,12 +200,18 @@ def main() -> int:
     parser.add_argument(
         "--include-active",
         action="store_true",
-        help="also hot-update hosts that currently have active jobs",
+        help=(
+            "also process hosts that currently have active jobs; pair with "
+            "--abort-running-jobs, otherwise the upgrade gate rejects them"
+        ),
     )
     parser.add_argument(
         "--abort-running-jobs",
         action="store_true",
-        help="pass abort_running_jobs=true (only with --include-active)",
+        help=(
+            "allow abort-then-drain for active jobs (only with --include-active); "
+            "works in both API and --direct modes"
+        ),
     )
     parser.add_argument(
         "--retry-abort-pending",
