@@ -43,6 +43,10 @@ Class: bug-fix
   `test_merge_task_mark_timeout_sets_ready_false_despite_pending_zero` —— **干净
   main 基线同样失败**（#1111 改了 `_enqueue_extract_task` 调用签名带
   `scan_round_id`，测试断言未跟上），与本单无关；
+- PR #1205 CI：`pr-agent-tests` 曾红——4 个 merge 链测试仍 `patch("asyncio.to_thread")`，
+  打不中模块别名 `asyncio_to_thread`（`_run_sync_exclusive` 经此走真实 merge →
+  连本机 5432 被拒）。已改为 `monkeypatch.setattr(saq_tasks, "asyncio_to_thread", …)`，
+  merge 短路、汇总透传（与同文件 scan 测试一致）；
 - `ruff check backend/ tools/ scripts/` 全绿。
 
 ## Revisit
