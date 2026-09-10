@@ -48,6 +48,7 @@ export default function DedupReportCard({ runId, uploadSummary, extractSummary }
     queryFn: () => api.planRuns.getDedupStatus(runId),
     staleTime: 15_000,
   });
+  const { isError: statusError, refetch: refetchStatus } = statusQ;
 
   const scanMut = useMutation({
     mutationFn: (isFinal: boolean) => api.planRuns.triggerScan(runId, isFinal),
@@ -150,6 +151,19 @@ export default function DedupReportCard({ runId, uploadSummary, extractSummary }
         {statusQ.isLoading ? (
           <div className={cn('flex items-center gap-1.5 text-xs', TEXT.subtitle)}>
             <Loader2 className="h-3 w-3 animate-spin" /> 加载去重状态...
+          </div>
+        ) : statusError ? (
+          // #1195: 查询失败不得展示「暂无产物」空态 CTA——那是成功空结果
+          // 的语义，会误导用户重复扫描。
+          <div className={cn('flex items-center justify-between gap-2 text-xs', TEXT.destructive)}>
+            <span>去重状态加载失败，暂无法判断产物。</span>
+            <button
+              type="button"
+              onClick={() => void refetchStatus()}
+              className="underline underline-offset-2"
+            >
+              重试
+            </button>
           </div>
         ) : artifacts.length === 0 ? (
           <p className={cn('text-xs', TEXT.subtitle)}>暂无去重产物。归档完成后点击「扫描」开始。</p>
