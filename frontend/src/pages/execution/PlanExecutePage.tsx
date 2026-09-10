@@ -313,10 +313,15 @@ export default function PlanExecutePage() {
   // React 官方"adjust state when prop changes"模式：previewResetKey 为稳定字符串比较。
   const previewResetKey = `${selectedPlanId}|${selectedDeviceIdsKey}`;
   const [prevPreviewResetKey, setPrevPreviewResetKey] = useState(previewResetKey);
+  // #819：预览请求代次——重置（改 Plan/改选）与重新发起预览都会使在途响应作废。
+  const previewGenerationRef = useRef(0);
   if (prevPreviewResetKey !== previewResetKey) {
     setPrevPreviewResetKey(previewResetKey);
     setPreview(null);
   }
+  useLayoutEffect(() => {
+    previewGenerationRef.current += 1;
+  }, [previewResetKey]);
 
   const { data: duplicateMatch = null } = useQuery({
     queryKey: [
@@ -650,6 +655,7 @@ export default function PlanExecutePage() {
     if (selectedSchedulableDeviceIds.length === 0) { toast.error('请至少选择一台设备'); return; }
     if (!readinessResult.passed) { toast.error('测试准备检查未通过'); return; }
 
+    const generation = ++previewGenerationRef.current;
     setPreviewing(true);
     try {
       const frozenDeviceIds = [...selectedSchedulableDeviceIds];
@@ -658,6 +664,9 @@ export default function PlanExecutePage() {
         ...(wifiPoolId != null ? { wifi_pool_id: wifiPoolId } : {}),
       });
 
+      // #819：响应返回时若代次已变（改 Plan/改选/重新预览），丢弃本次结果，
+      // 避免旧冻结设备集复活后被「确认发起」派发。
+      if (generation !== previewGenerationRef.current) return;
       if (p.total_steps === 0) {
         toast.error('Plan 没有可执行步骤，无法发起');
         return;
@@ -677,6 +686,7 @@ export default function PlanExecutePage() {
       setDispatchFailure(null);
       toast.info('预览已生成，请核对驾驶舱后再次确认发起');
     } catch (err: unknown) {
+      if (generation !== previewGenerationRef.current) return;
       toast.error(err instanceof Error ? err.message : '预览失败');
     } finally {
       setPreviewing(false);
