@@ -41,6 +41,28 @@ class RunKeyBusyError(RunConsoleError):
 
 _TERMINAL_STATUSES = {"SUCCESS", "FAILED", "CANCELED"}
 
+
+def _parse_positive_int(raw: Optional[str], default: int) -> int:
+    try:
+        value = int((raw or "").strip())
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+def _parse_positive_float(raw: Optional[str], default: float) -> float:
+    try:
+        value = float((raw or "").strip())
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+# #1124：replay 有界 + 终态运行记录淘汰（进程生命周期内 `_runs` 不得无界增长）
+_REPLAY_MAX_LINES_DEFAULT = 2000
+_REPLAY_MAX_LINE_CHARS = 100_000
+_TERMINAL_RETENTION_SECONDS_DEFAULT = 3600.0
+
 # #1115：组级收敛判据与 #1003（pipeline_engine）同型 —— 「父进程已退出」不代表
 # 「进程组已散」，组里忽略 SIGTERM 的子孙必须升级到 SIGKILL，否则界面已 CANCELED
 # 而后代仍在跑，且它们握着 stdout 管道写端，reader 线程也永远等不到 EOF。
@@ -147,6 +169,24 @@ class RunConsole:
         self._configured = False
         # 可注入的 emit（测试替换；默认走 socketio schedule_emit）
         self._emit = None
+        # #1124：replay 有界 + 终态运行记录淘汰
+        self._replay_max_lines = _parse_positive_int(
+            os.getenv("STP_RUN_CONSOLE_REPLAY_MAX_LINES"), _REPLAY_MAX_LINES_DEFAULT,
+        )
+        self._replay_max_line_chars = _REPLAY_MAX_LINE_CHARS
+        self._terminal_retention_seconds = _parse_positive_float(
+            os.getenv("STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS"),
+            _TERMINAL_RETENTION_SECONDS_DEFAULT,
+        )
+        # #1124：replay 有界 + 终态运行记录淘汰
+        self._replay_max_lines = _parse_positive_int(
+            os.getenv("STP_RUN_CONSOLE_REPLAY_MAX_LINES"), _REPLAY_MAX_LINES_DEFAULT,
+        )
+        self._replay_max_line_chars = _REPLAY_MAX_LINE_CHARS
+        self._terminal_retention_seconds = _parse_positive_float(
+            os.getenv("STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS"),
+            _TERMINAL_RETENTION_SECONDS_DEFAULT,
+        )
 
     # ------------------------------------------------------------------
     # 单例
@@ -466,14 +506,44 @@ class RunConsole:
         return True
 
     def status(self, run_id: str) -> Optional[Dict[str, Any]]:
+        self._sweep_terminal_runs()
         run = self._runs.get(run_id)
         return run.to_status() if run else None
+
+    def _sweep_terminal_runs(self) -> None:
+        """#1124：淘汰终态超保留期的运行记录，`_runs` 不随进程生命周期无界增长。
+
+        淘汰只移除内存条目 —— replay 仍可按 `log_root/{run_id}.log` 文件回读，
+        status 届时退化为 UNKNOWN（调用方按需从持久化层补全，如 jira_run 表）。
+        ended_at 解析失败的记录不淘汰（宁多留不误删）。
+        """
+        now = datetime.now(timezone.utc)
+        evicted: List[str] = []
+        with self._lock:
+            for rid, r in list(self._runs.items()):
+                if r.status not in _TERMINAL_STATUSES or not r.ended_at:
+                    continue
+                try:
+                    ended = datetime.fromisoformat(r.ended_at)
+                except ValueError:
+                    continue
+                if (now - ended).total_seconds() > self._terminal_retention_seconds:
+                    self._runs.pop(rid, None)
+                    evicted.append(rid)
+        if evicted:
+            logger.info(
+                "run_console_sweep_evicted count=%d retention=%.0fs",
+                len(evicted), self._terminal_retention_seconds,
+            )
 
     def read_log(self, run_id: str, *, from_seq: int = 0) -> Dict[str, Any]:
         """文件 replay：返回从 from_seq（1-based，含）起的行 + 当前 seq/status。
 
         run 不在内存（进程重启后的历史 run）时，仍尝试从 log_root/{run_id}.log
         读文件——status 回退为 UNKNOWN，由调用方按需从持久化层补全（如 jira_run 表）。
+
+        #1124：流式读取 —— 内存占用与响应体均有界（`_replay_max_lines` 上限 +
+        单行截断），不再 `readlines()` 全量装进内存；`seq` 仍精确统计到文件末尾。
         """
         run = self._runs.get(run_id)
         if run is not None and run._log_path is not None:
@@ -484,19 +554,22 @@ class RunConsole:
         if not log_path or not log_path.exists():
             return {"run_id": run_id, "from_seq": from_seq, "lines": [],
                     "seq": run.seq if run else 0, "status": run.status if run else "UNKNOWN"}
+        start = max(0, int(from_seq) - 1) if from_seq > 0 else 0
+        lines: List[str] = []
+        total = 0
         try:
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                all_lines = [ln.rstrip("\n") for ln in f.readlines()]
+                for ln in f:
+                    total += 1
+                    if total > start and len(lines) < self._replay_max_lines:
+                        lines.append(ln.rstrip("\n")[: self._replay_max_line_chars])
         except Exception:
             logger.exception("run_console_read_log_failed run_id=%s", run_id)
-            all_lines = []
-        start = max(0, int(from_seq) - 1) if from_seq > 0 else 0
-        sliced = all_lines[start:]
         return {
             "run_id": run_id,
             "from_seq": start + 1,
-            "lines": sliced,
-            "seq": len(all_lines),
+            "lines": lines,
+            "seq": total,
             "status": run.status if run else "UNKNOWN",
         }
 
