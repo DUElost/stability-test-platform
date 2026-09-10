@@ -521,13 +521,35 @@ def adr_collisions(records: dict, risk: set) -> dict:
 
 # ── integration 派生（GitHub 权威，§3.3；不可用降级）──
 
+# required check state 白名单（gh pr checks --json 的 state 归一口径）。
+# 任一 pending/queued/in_progress/failure 都不算「全绿」（§3.1：READY=required
+# checks 全绿，pending ≠ 全绿）。
+_GREEN_CHECK_STATES = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
+
+
+def required_checks_all_green(checks: list[dict] | None) -> bool:
+    """required checks 是否全绿（契约 §3.1）。
+
+    空集不算全绿：拿不到 required 集合时不能宣称 READY（由调用方降级处理）。
+    """
+    if not checks:
+        return False
+    return all(
+        (c.get("state") or "").upper() in _GREEN_CHECK_STATES for c in checks
+    )
+
+
 def derive_integration(pr_number: str | None, cached: str | None, cwd: str) -> tuple[str, bool]:
-    """返回 (integration, refreshed)。pr 未登记 → NO_PR；GitHub 不可用 → 旧值+False。"""
+    """返回 (integration, refreshed)。pr 未登记 → NO_PR；GitHub 不可用 → 旧值+False。
+
+    READY 判据以 branch protection 的 **required checks** 权威为准（#1211）：
+    只统计已完成的检查会漏掉仍 pending 的 required check 而虚报 READY。
+    """
     if not pr_number:
         return "NO_PR", True
     try:
         proc = subprocess.run(
-            ["gh", "pr", "view", pr_number, "--json", "state,statusCheckRollup"],
+            ["gh", "pr", "view", pr_number, "--json", "state"],
             capture_output=True, text=True, timeout=30, cwd=cwd,
         )
     except (subprocess.TimeoutExpired, OSError):
@@ -541,10 +563,21 @@ def derive_integration(pr_number: str | None, cached: str | None, cwd: str) -> t
         return "MERGED", True
     if state == "CLOSED":
         return "CLOSED", True
-    rollup = data.get("statusCheckRollup") or []
-    conclusions = {c.get("conclusion") for c in rollup if c.get("status") == "COMPLETED"}
-    ok = conclusions <= {"SUCCESS", "SKIPPED", "NEUTRAL"} and conclusions
-    return ("READY" if ok else "PR_OPEN"), True
+
+    # 开放 PR：required checks 的 state 是 READY 的唯一判据。
+    try:
+        checks_proc = subprocess.run(
+            ["gh", "pr", "checks", pr_number, "--required", "--json", "name,state"],
+            capture_output=True, text=True, timeout=30, cwd=cwd,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return cached or "PR_OPEN", False
+    if checks_proc.returncode != 0:
+        # 分支未保护 / 无 required checks / API 不可达 → 观测不可用，按降级语义
+        # 保留旧值，绝不虚报 READY。
+        return cached or "PR_OPEN", False
+    required = json.loads(checks_proc.stdout or "[]")
+    return ("READY" if required_checks_all_green(required) else "PR_OPEN"), True
 
 
 # ── 命令实现 ──
@@ -1322,6 +1355,20 @@ def run_self_test() -> int:
         assert not landed_in_trunk(_rec(pr_number="98", integration_cache="PR_OPEN",
                                         branch="deleted/branch"), gtd)  # 未合入 → 留在窗口
 
+    # #1211 READY 判据：required checks 全绿才算 READY，pending ≠ 全绿（§3.1）
+    assert required_checks_all_green(
+        [{"name": "lint", "state": "SUCCESS"}, {"name": "CodeQL", "state": "SKIPPED"}]
+    )
+    assert not required_checks_all_green([])  # 空集不虚报
+    assert not required_checks_all_green(None)
+    assert not required_checks_all_green(
+        [{"name": "lint", "state": "SUCCESS"}, {"name": "pr-agent-tests", "state": "PENDING"}]
+    )
+    assert not required_checks_all_green(
+        [{"name": "lint", "state": "SUCCESS"}, {"name": "pr-agent-tests", "state": "FAILURE"}]
+    )
+    assert not required_checks_all_green([{"name": "lint", "state": "QUEUED"}])
+
     # #880 三缺口红绿：declare 校验 / codec 引号 key 往返 / corrupt 隔离
     try:
         normalize_requirement_id("#878")
@@ -1528,7 +1575,7 @@ def run_self_test() -> int:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         return 1
     print("[OK] ai_work self-test 通过（scope/overlap/真值表/liveness/codec/原子写/"
-          "issue 查重 红绿双向）")
+          "issue 查重/required-checks 红绿双向）")
     return 0
 
 

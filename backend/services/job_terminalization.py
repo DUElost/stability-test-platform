@@ -1,5 +1,12 @@
 """ADR-0026 §6 — single job terminalization + O(1) counter bump.
 
+**事务契约（#986/#1172）**：``on_job_terminal``(_sync) 在聚合后**自行
+commit**（父终态先提交再触发链式派发）。调用方不得在嵌套事务
+（``begin_nested``/未提交的 SAVEPOINT 上下文）内调用——内部 commit 会
+终结外层事务，返回后继续使用同一 session 抛
+``InvalidRequestError``。调用方应在自身事务（如有）提交后调用，且调用后
+不再假定原事务仍开（reconciler/recycler 先例见 #1172）。
+
 Every path that first puts a Job into COMPLETED / FAILED / ABORTED must call
 ``on_job_terminal`` (async) or ``on_job_terminal_sync`` afterwards in the
 **same transaction** as the job terminal write (through aggregation). The

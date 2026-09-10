@@ -48,6 +48,11 @@
 | `STP_BACKEND_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：后端 merge/scan 工具路径（#518 起不再回落旧无前缀键） |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅 Agent**：Agent 侧 scan 工具路径（hot-update 经 `STP_AGENT_*` 源键写入） |
 | `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：Agent 侧 scan 工具路径的源键，hot-update 写成 Agent 的无前缀键 |
+| `STP_AGENT_UNISOC_LOG_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：展锐采集工具（`Monkey-Log-Scan-GT-SPRD`）路径的源键，hot-update 写成 `STP_UNISOC_LOG_SCAN_*`（ADR-0032） |
+| `STP_AGENT_UNISOC_SCAN_RESULT_PYTHON` / `_SCRIPT` | **仅控制面**：展锐汇总去重工具（`Scan-Result-GT`）路径的源键，hot-update 写成 `STP_UNISOC_SCAN_RESULT_*`（ADR-0032） |
+| `STP_UNISOC_LOG_SCAN_PYTHON` / `_SCRIPT` | **仅 Agent**：展锐采集工具路径；属 `AGENT_PATH_ENV_KEYS`（推送后校验路径存在）。与下两行四键齐备才启用，缺任一 = 静默 no-op |
+| `STP_UNISOC_SCAN_RESULT_PYTHON` / `_SCRIPT` | **仅 Agent**：展锐汇总去重工具路径；同上属路径校验集 |
+| `STP_UNISOC_LOG_SCAN_POLL_SECONDS` | **仅 Agent**：展锐采集轮询间隔秒（默认 `60`）；host 级手工键，**不进** fleet 同步列表 |
 | `STP_SCAN_POLL_MAX_WAIT` | 控制面 `scan_task` 主轮询预算秒数（默认 `300`；#732） |
 | `STP_SCAN_POLL_PER_HOST_SECONDS` | 叠加预算：`MAX_WAIT + n_triggered * PER_HOST`（默认 `0`） |
 | `STP_SCAN_POLL_INTERVAL` | 轮询间隔秒（默认 `10`） |

@@ -14,6 +14,10 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# 与 log_signal/step_trace outbox 对齐（watcher/emitter._MAX_ATTEMPTS=10）：
+# 持续失败的 create 意图达阈值转死信，避免队首饿死（#1204）。
+_MAX_REGISTER_ATTEMPTS = 10
+
 # Bound from Agent main after LocalDB.initialize (#1042 durable create intents).
 _bound_local_db: Any = None
 
@@ -155,8 +159,8 @@ class DeviceLogEventClient:
                     timeout=self.timeout,
                 )
                 if resp.status_code >= 400:
-                    db.bump_dle_register_attempts(
-                        event_id, error=f"HTTP {resp.status_code}",
+                    self._bump_or_dead_letter(
+                        db, event_id, error=f"HTTP {resp.status_code}",
                     )
                     logger.warning(
                         "device_log_event_register_retry_failed event_id=%s status=%s",
@@ -167,7 +171,7 @@ class DeviceLogEventClient:
                 acked += 1
                 logger.info("device_log_event_register_retry_ok event_id=%s", event_id)
             except Exception as exc:
-                db.bump_dle_register_attempts(event_id, error=str(exc)[:200])
+                self._bump_or_dead_letter(db, event_id, error=str(exc)[:200])
                 logger.exception(
                     "device_log_event_register_retry_error event_id=%s", event_id,
                 )
@@ -177,6 +181,22 @@ class DeviceLogEventClient:
             except Exception:
                 logger.exception("device_log_event_register_prune_failed")
         return acked
+
+    def _bump_or_dead_letter(self, db: Any, event_id: str, *, error: str) -> None:
+        """累计 attempts；达 _MAX_REGISTER_ATTEMPTS 转死信（#1204）。
+
+        与 log_signal/step_trace outbox 同语义：持续失败（403/422 等永久拒绝、
+        长窗口网络故障）的意图若一直占着 LIMIT 20 的队首，会饿死后续可恢复
+        意图。死信行不再被取出（排除了队首饿死），保留供审计与
+        replay_dle_register_dead_letter 手动回放。
+        """
+        new_attempts = db.bump_dle_register_attempts(event_id, error=error)
+        if new_attempts >= _MAX_REGISTER_ATTEMPTS:
+            db.mark_dle_register_dead_letter(event_id, error)
+            logger.warning(
+                "device_log_event_register_dead_letter event_id=%s attempts=%d error=%s",
+                event_id, new_attempts, error[:200],
+            )
 
     def create_pull_failed_event(
         self,

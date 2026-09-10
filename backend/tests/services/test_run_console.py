@@ -290,3 +290,74 @@ def test_shutdown_idempotent(tmp_path, emit_capture):
     rc.shutdown()  # 二次 shutdown 应安全
     st = _wait_terminal(run_id)
     assert st["status"] == "CANCELED"
+
+
+# ── #1124：replay 有界 + 终态运行记录淘汰 ────────────────────────────────
+
+
+def test_read_log_is_bounded_by_max_lines(tmp_path, emit_capture, monkeypatch):
+    """大日志增量 replay：响应行数有上限，seq 仍精确统计到文件末尾。"""
+    monkeypatch.setenv("STP_RUN_CONSOLE_REPLAY_MAX_LINES", "10")
+    _events, emit = emit_capture
+    rc = _configure(tmp_path, emit)
+    run_id = "con-boundary01"
+    log_path = tmp_path / "console" / f"{run_id}.log"
+    log_path.write_text("".join(f"line {i}\n" for i in range(1, 2101)), encoding="utf-8")
+
+    from backend.services.run_console import ConsoleRun
+
+    rc._runs[run_id] = ConsoleRun(
+        run_id=run_id, run_key="kb", label="big", _log_path=log_path,
+    )
+    out = rc.read_log(run_id)
+    assert len(out["lines"]) == 10
+    assert out["lines"][0] == "line 1"
+    assert out["seq"] == 2100, "seq 必须是全文件行数，不被上限截断"
+
+    tail = rc.read_log(run_id, from_seq=2096)
+    assert tail["from_seq"] == 2096
+    assert tail["lines"] == [f"line {i}" for i in range(2096, 2101)]
+    assert tail["seq"] == 2100
+
+
+def test_read_log_truncates_oversized_line(tmp_path, emit_capture):
+    """单行超长也不得撑爆响应内存（replay 显示层截断）。"""
+    _events, emit = emit_capture
+    rc = _configure(tmp_path, emit)
+    run_id = "con-boundary02"
+    log_path = tmp_path / "console" / f"{run_id}.log"
+    log_path.write_text("x" * 150_000 + "\n" + "ok\n", encoding="utf-8")
+
+    from backend.services.run_console import ConsoleRun
+
+    rc._runs[run_id] = ConsoleRun(
+        run_id=run_id, run_key="kc", label="long", _log_path=log_path,
+    )
+    out = rc.read_log(run_id)
+    assert len(out["lines"][0]) <= 100_000
+    assert out["lines"][1] == "ok"
+    assert out["seq"] == 2
+
+
+def test_terminal_runs_evicted_after_retention(tmp_path, emit_capture, monkeypatch):
+    """终态超保留期的 run 从 _runs 淘汰；replay 仍可按文件回读（status=UNKNOWN）。"""
+    monkeypatch.setenv("STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS", "1")
+    _events, emit = emit_capture
+    rc = _configure(tmp_path, emit)
+
+    run_id = rc.start(run_key="ke", cmd=_py("print('bye')"))
+    st = _wait_terminal(run_id)
+    assert st["status"] == "SUCCESS"
+    assert rc.status(run_id) is not None  # 保留期内仍可查
+
+    # 人为把 ended_at 回拨到保留期之外
+    from datetime import datetime, timedelta, timezone as tz
+
+    run = rc._runs[run_id]
+    run.ended_at = (datetime.now(tz.utc) - timedelta(seconds=120)).isoformat()
+
+    assert rc.status(run_id) is None, "超保留期的终态 run 应被淘汰"
+    # replay 仍走文件回退路径
+    out = rc.read_log(run_id)
+    assert out["status"] == "UNKNOWN"
+    assert out["lines"] == ["bye"]
