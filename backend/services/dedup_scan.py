@@ -860,27 +860,41 @@ def resolve_manual_merge_round(
         db.close()
 
 
-async def enqueue_dedup_terminal_async(plan_run_id: int, *, is_final: bool = True) -> None:
-    """异步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。"""
+async def enqueue_dedup_terminal_async(plan_run_id: int, *, is_final: bool = True) -> bool:
+    """异步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。
+
+    返回 True=本轮 scan_task 已在队列（新入队，或 SAQ 键去重返回 ``None`` 表示同轮
+    任务已在跑——幂等成功）；False=入队失败（SAQ/Redis 不可用）。后台最佳努力调用方
+    可忽略返回值；用户触发路径（#1274）必须据此区分真假成功。
+    """
+    suffix = "" if is_final else ":inc"
+    key = f"scan:{plan_run_id}{suffix}"
     try:
         from backend.tasks.saq_worker import get_queue
         from saq import Job as SaqJob
 
-        suffix = "" if is_final else ":inc"
         queue = get_queue()
-        await queue.enqueue(
+        result = await queue.enqueue(
             SaqJob(
                 function="scan_task",
                 kwargs={"plan_run_id": plan_run_id, "is_final": is_final},
-                key=f"scan:{plan_run_id}{suffix}",
+                key=key,
                 timeout=900,
                 retries=2,
                 retry_delay=10.0,
                 retry_backoff=True,
             )
         )
+        if result is None:
+            # #1274: SAQ 对重复 key 返回 None = 同轮任务已在队列，属幂等成功而非失败。
+            logger.info(
+                "enqueue_dedup_terminal_async deduped plan_run=%d key=%s",
+                plan_run_id, key,
+            )
+        return True
     except Exception as e:
         logger.error("enqueue_dedup_terminal_async failed plan_run=%d: %s", plan_run_id, e)
+        return False
 
 
 def enqueue_dedup_terminal_sync(plan_run_id: int, *, is_final: bool = True) -> None:
