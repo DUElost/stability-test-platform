@@ -128,7 +128,7 @@ DeviceLogWatcher
 ## 8. 脚本目录
 
 ```
-scripts/<name>/v<version>/<entry>.py|sh|bat
+scripts/<name>/v<version>/<entry>.{py,sh}
 ```
 
 扫描由**控制面** `POST /scripts/scan` 入库；Agent 通过 `nfs_path` 执行。  

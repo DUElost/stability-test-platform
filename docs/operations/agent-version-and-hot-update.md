@@ -66,6 +66,13 @@ UI：主机管理页单机「热更新」；浮动批量栏支持多选主机的
 
 CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_agent.yml`。
 
+**升级门禁与维护窗口（#960 / #1249，所有入口统一）**：升级前必须经控制面
+`POST /api/v1/agent/hosts/{id}/upgrade-gate` 申请门禁——该 host 有活跃 Job 时默认 **409**；
+`abort_running_jobs=true` 先排空再进。结束后 `POST .../upgrade-gate/release` 按 holder
+释放（幂等、不误清他人窗口）。窗口内该 host 不派发新 Job、不被 claim；控制面不可达时
+**fail-closed** 拒绝升级。UI / CLI（`batch_hot_update.py`）/ Ansible（`update_agent.yml`）
+三条入口共用 `backend/services/host_upgrade_gate.py` 单一实现，审计 `upgrade_gate_acquire/release`。
+
 ---
 
 ## 4. 排障
@@ -74,6 +81,7 @@ CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_ag
 |------|------|
 | claim 426 `AGENT_UPGRADE_REQUIRED` | Agent 协议版本 vs `STP_AGENT_MIN_VERSION`；临时可清空该 env 恢复放行 |
 | 心跳正常无任务 | `HOST_ID`、host ONLINE、容量/lease、Agent 是否被门禁 |
+| 升级被拒（409 / 门禁不可达） | 该 host 是否有活跃 Job（需 `abort_running_jobs=true` 排空）；控制面是否可达（不可达 fail-closed）；维护窗口 `host.maintenance_until/holder` 是否被他人持有 |
 | UI 显示 drift | Agent 未上报新 revision；热更新是否写 VERSION；控制面 `get_agent_code_version()` 期望是否刷新 |
 | 校验 / schema 不一致 | 热更新是否带上 `pipeline_schema.json`（见 2026-07 host-update 修复） |
 

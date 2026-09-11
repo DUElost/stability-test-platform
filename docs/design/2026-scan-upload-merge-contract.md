@@ -24,15 +24,18 @@ scan_task → upload_task → merge_task → extract_task
 EventUploader 是唯一复制执行者，轮询后 copytree 到中心存储，并负责重试、校验、
 PRUNE 和 HDD spill force。
 
-`scan_task` 在下发 `scan_now` 前记录 `since` 水位线，随后最多等待 300 秒。等待超时
-仍会 enqueue 后继，避免单台慢 host 把部分报告变成零报告。
+`scan_task` 在下发 `scan_now` 前记录 `since` 水位线，随后按**可配置预算**轮询等待
+（`STP_SCAN_POLL_INTERVAL` 默认 10s、`STP_SCAN_POLL_MAX_WAIT` 默认 300s，另可按 host 数叠加
+`STP_SCAN_POLL_PER_HOST_SECONDS`；近齐时给一次 near-complete grace，`STP_SCAN_POLL_GRACE_*`；
+#732）。等待超时仍会 enqueue 后继，避免单台慢 host 把部分报告变成零报告。
 
 完备性由
-`dedup_scan.count_hosts_with_scan_artifacts(run_id, triggered, since=...)` 判断：
+`dedup_scan.count_hosts_with_scan_artifacts(run_id, triggered, since=..., require_platforms=...)` 判断：
 
 - 按 host 去重，不按产物文件数；
 - 只统计本轮 `triggered` host；
-- 只统计 `since` 之后登记的产物。
+- 只统计 `since` 之后登记的产物；
+- **每个 host 必须对 `DEDUP_PLATFORMS` 的每个平台都有产物才计入**（`require_platforms`，#1071——单平台 host 不再凑数）。
 
 零产物记录 `saq_scan_no_artifacts`（ERROR），部分产物记录
 `saq_scan_partial_artifacts`（WARNING）。两者都写
