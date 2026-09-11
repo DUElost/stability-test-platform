@@ -19,6 +19,8 @@ class OutboxDrainThread:
     _ACKABLE_TERMINAL_STATUSES = {"COMPLETED", "FAILED", "ABORTED"}
     # #762：与 log_signal/step_trace 死信上限同口径（各 10 次尝试后转死信）。
     _MAX_TERMINAL_ATTEMPTS = 10
+    # Align with log_signal / step_trace / DLE outbox (#742).
+    _MAX_ATTEMPTS = 10
 
     def __init__(self, api_url: str, local_db, interval: float = 15.0):
         self._api_url = api_url
@@ -91,6 +93,25 @@ class OutboxDrainThread:
             return "dead_letter"
         self._bump_retained_conflict(unknown=unknown)
         return "retained"
+
+    def _bump_dead_letter(self) -> None:
+        with self._metrics_lock:
+            self._dead_letter_total += 1
+
+    def _bump_or_dead_letter(self, job_id: int, error: str) -> None:
+        """Bump attempts; mark dead letter when attempts reach _MAX_ATTEMPTS (#742)."""
+        raw = self._local_db.bump_terminal_attempt(job_id, error)
+        try:
+            attempts = int(raw or 0)
+        except (TypeError, ValueError):
+            attempts = 0
+        if attempts >= self._MAX_ATTEMPTS:
+            self._local_db.mark_terminal_dead_letter(job_id, error)
+            self._bump_dead_letter()
+            logger.error(
+                "outbox_drain_dead_letter job=%d attempts=%d error=%s",
+                job_id, attempts, error,
+            )
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -203,9 +224,9 @@ class OutboxDrainThread:
                         job_id, str(e), reason="http_%d" % status_code,
                     )
                 else:
-                    self._local_db.bump_terminal_attempt(job_id, str(e))
+                    self._bump_or_dead_letter(job_id, str(e))
             except Exception as e:
-                self._local_db.bump_terminal_attempt(job_id, str(e))
+                self._bump_or_dead_letter(job_id, str(e))
                 logger.warning("outbox_drain_retry job=%d error=%s", job_id, e)
 
         if sent:

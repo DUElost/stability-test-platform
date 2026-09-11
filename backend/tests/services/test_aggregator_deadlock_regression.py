@@ -350,11 +350,11 @@ async def test_no_key_update_compatible_with_fk_key_share():
                 await db_b.execute(
                     select(PlanRun)
                     .where(PlanRun.id == seed["plan_run_id"])
-                    .with_for_update(key_share=True)
+                    .with_for_update(read=True)
                 )
 
             # FOR NO KEY UPDATE 与 FOR KEY SHARE 兼容 → 立即完成
-            # 如果回退为 FOR UPDATE(key_share=False) → 与 KEY SHARE 冲突 → 超时
+            # 如果回退为 FOR UPDATE(read=False) → 与 KEY SHARE 冲突 → 超时
             await asyncio.wait_for(_lock_no_key_update(), timeout=5.0)
 
             await db_a.rollback()
@@ -377,7 +377,7 @@ async def test_no_key_update_still_serializes_writers():
             await db_a.execute(
                 select(PlanRun)
                 .where(PlanRun.id == seed["plan_run_id"])
-                .with_for_update(key_share=True)
+                .with_for_update(read=True)
             )
 
             # 事务 B 求同一行的 NO KEY UPDATE → 应阻塞 → NOWAIT 抛 55P03
@@ -385,7 +385,7 @@ async def test_no_key_update_still_serializes_writers():
                 await db_b.execute(
                     select(PlanRun)
                     .where(PlanRun.id == seed["plan_run_id"])
-                    .with_for_update(key_share=True, nowait=True)
+                    .with_for_update(read=True, nowait=True)
                 )
 
             # 验证是 lock_not_available(55P03),不是其他错误
