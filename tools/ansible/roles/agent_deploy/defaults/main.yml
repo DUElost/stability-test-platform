@@ -16,6 +16,9 @@ agent_install_excludes:
   - ".env.example"
   - "stability-test-agent.service"
   - "hosts.txt"
+  # 提权 wrapper 由 install/update playbook 装到 /usr/local/sbin（#1250），
+  # 不随代码同步进 Agent 可写的安装目录
+  - "stp_agent_priv.py"
 
 # 主机本地资源（不在 Git，由主机侧手工布放；如 MTBF APK 三件套）。
 # 升级同步策略 = 不传输 + 不删除，与 host_updater.py 热更新的

@@ -855,8 +855,9 @@ async def install_agent_task(
 ) -> dict:
     """UI 触发的 Agent 首次安装：ansible-playbook install_agent.yml（become 喂 sudo 密码）。
 
-    装完 install_agent.sh 自动落 /etc/sudoers.d/stability-test-agent NOPASSWD，
-    解锁后续 UI 热更新（execute_hot_update）的免密 sudo rsync/systemctl。
+    装完 install_agent.sh 自动落 /etc/sudoers.d/stability-test-agent：NOPASSWD 只授提权
+    wrapper /usr/local/sbin/stp-agent-priv + 固定服务 systemctl（ADR-0037/#1250），
+    解锁后续 UI 热更新（execute_hot_update）的受控提权。
     """
     from backend.services.agent_installer import run_install_agent_sync
 

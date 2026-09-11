@@ -149,37 +149,64 @@ tar xzf "$TAR_PATH" -C "$TMPDIR"
 find "$TMPDIR" -type f \( -name "*.py" -o -name "*.sh" \) \
     -exec sed -i 's/\r$//' {{}} + 2>/dev/null || true
 
+# 提权边界（#1250/ADR-0037）：优先走 stp-agent-priv wrapper；未迁移主机
+# （wrapper 或 conf 缺失）回退旧 sudo 面并留哨兵，便于控制面观测迁移进度。
+PRIV="/usr/local/sbin/stp-agent-priv"
+USE_PRIV_WRAPPER=0
+if sudo -n "$PRIV" selftest >/dev/null 2>&1; then
+    USE_PRIV_WRAPPER=1
+    echo "STP_PRIV_MODE=wrapper"
+else
+    echo "STP_PRIV_FALLBACK=legacy"
+fi
+
 # Capture pre-sync requirements.txt sha to detect dependency changes
-OLD_REQ_SHA=$(sudo sha256sum "$INSTALL_DIR/agent/requirements.txt" 2>/dev/null | cut -d' ' -f1 || echo "none")
+OLD_REQ_SHA=$(sha256sum "$INSTALL_DIR/agent/requirements.txt" 2>/dev/null | cut -d' ' -f1 || echo "none")
 
 # Rsync into install dir
 # NOTE: `--delete` 会删除远端 tarball 中不存在的目录——agent/resources/ 里
 # aimonkey/、flashtool/ 随 hot-update 同步，但 resources/mtbf/ 是 host 级
 # 手工布放（APK 三件套，不在仓库），必须排除，否则每次 hot-update 都会把
 # MTBF 资源清掉（2026-08-20 冒烟 #214/#216「APK 不存在」根因）。
-sudo rsync -av --delete \
-    --exclude='__pycache__/' \
-    --exclude='tests/' \
-    --exclude='resources/mtbf/' \
-    --exclude='.env.example' \
-    --exclude='install_agent.sh' \
-    --exclude='agentctl.sh' \
-    --exclude='DEPLOY.md' \
-    --exclude='stability-test-agent.service' \
-    --exclude='hosts.txt' \
-    "$TMPDIR/" "$INSTALL_DIR/agent/"
+if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+    # wrapper：固定目标 + 固定 excludes（含 mtbf protect）+ --safe-links
+    sudo "$PRIV" apply-code --staged "$TMPDIR"
+else
+    sudo rsync -av --delete \
+        --exclude='__pycache__/' \
+        --exclude='tests/' \
+        --exclude='resources/mtbf/' \
+        --exclude='.env.example' \
+        --exclude='install_agent.sh' \
+        --exclude='agentctl.sh' \
+        --exclude='DEPLOY.md' \
+        --exclude='stability-test-agent.service' \
+        --exclude='hosts.txt' \
+        "$TMPDIR/" "$INSTALL_DIR/agent/"
+fi
 
 CODE_VERSION="{code_version}"
 if [ -n "$CODE_VERSION" ]; then
-    echo "$CODE_VERSION" | sudo tee "$INSTALL_DIR/agent/VERSION" > /dev/null
+    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+        sudo "$PRIV" write-version --version "$CODE_VERSION"
+    else
+        echo "$CODE_VERSION" | sudo tee "$INSTALL_DIR/agent/VERSION" > /dev/null
+    fi
 fi
 
 if [ -f "$TMPDIR/stp_schemas/pipeline_schema.json" ]; then
-    sudo mkdir -p "$INSTALL_DIR/schemas"
-    sudo install -m 0644 "$TMPDIR/stp_schemas/pipeline_schema.json" "$INSTALL_DIR/schemas/pipeline_schema.json"
+    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+        sudo "$PRIV" install-schema --file "$TMPDIR/stp_schemas/pipeline_schema.json"
+    else
+        sudo mkdir -p "$INSTALL_DIR/schemas"
+        sudo install -m 0644 "$TMPDIR/stp_schemas/pipeline_schema.json" "$INSTALL_DIR/schemas/pipeline_schema.json"
+    fi
 fi
 
 if [ "$SYNC_AGENT_SECRET" = "1" ]; then
+    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+        sudo "$PRIV" sync-env --secret-b64 "$AGENT_SECRET_B64"
+    else
     sudo INSTALL_DIR="$INSTALL_DIR" AGENT_SECRET_B64="$AGENT_SECRET_B64" python3 - <<'PY'
 import base64
 import os
@@ -208,8 +235,12 @@ if not replaced:
 
 env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
 PY
+    fi
 fi
 
+if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+    sudo "$PRIV" sync-env --overrides-b64 "$ENV_OVERRIDES_B64" --path-keys-b64 "$ENV_PATH_KEYS_B64"
+else
 sudo INSTALL_DIR="$INSTALL_DIR" ENV_OVERRIDES_B64="$ENV_OVERRIDES_B64" ENV_PATH_KEYS_B64="$ENV_PATH_KEYS_B64" python3 - <<'PY'
 import base64
 import json
@@ -265,9 +296,14 @@ print("STP_ENV_PATH_MISSING=" + base64.b64encode(
     json.dumps(missing, sort_keys=True).encode("utf-8")
 ).decode("ascii"))
 PY
+fi
 
 # Fix ownership
-sudo chown -R {user}:{group} "$INSTALL_DIR"
+if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+    sudo "$PRIV" fix-ownership
+else
+    sudo chown -R {user}:{group} "$INSTALL_DIR"
+fi
 
 # Refresh Python dependencies when requirements.txt content changed, OR when a
 # previous pip for the current requirements SHA never completed successfully
@@ -295,14 +331,22 @@ if [ "$NEED_PIP" -eq 1 ]; then
         echo "STP_DEPS_REFRESHED=0"
         exit 1
     fi
-    echo "$NEW_REQ_SHA" | sudo tee "$DEPS_MARKER" > /dev/null
-    sudo chown {user}:{group} "$DEPS_MARKER"
+    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+        sudo "$PRIV" deps-marker --sha "$NEW_REQ_SHA"
+    else
+        echo "$NEW_REQ_SHA" | sudo tee "$DEPS_MARKER" > /dev/null
+        sudo chown {user}:{group} "$DEPS_MARKER"
+    fi
     DEPS_REFRESHED=1
 fi
 echo "STP_DEPS_REFRESHED=$DEPS_REFRESHED"
 
 # Restart service
-sudo systemctl restart "$SERVICE_NAME"
+if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+    sudo "$PRIV" restart
+else
+    sudo systemctl restart "$SERVICE_NAME"
+fi
 
 # Verify service came back up
 sleep 2
@@ -380,6 +424,17 @@ def _parse_deps_refreshed(stdout_text: str) -> bool:
         if line.startswith("STP_DEPS_REFRESHED="):
             return line.split("=", 1)[1].strip() == "1"
     return False
+
+
+def _parse_priv_mode(stdout_text: str) -> str:
+    """提权通道：#1250 迁移期 wrapper 与 legacy 并存，远端留模式哨兵。"""
+    for line in stdout_text.splitlines():
+        line = line.strip()
+        if line == "STP_PRIV_MODE=wrapper":
+            return "wrapper"
+        if line == "STP_PRIV_FALLBACK=legacy":
+            return "legacy"
+    return "unknown"
 
 
 def _parse_env_synced(stdout_text: str) -> list[str]:
@@ -509,6 +564,7 @@ def execute_hot_update(
             deps_refreshed = _parse_deps_refreshed(out_text)
             env_keys_synced = _parse_env_synced(out_text)
             env_paths_missing = _parse_env_paths_missing(out_text)
+            priv_mode = _parse_priv_mode(out_text)
 
             if exit_code != 0:
                 logger.error("hot_update_remote_failed exit=%d stderr=%s", exit_code, err_text[:500])
@@ -520,6 +576,7 @@ def execute_hot_update(
                     "env_keys_synced": env_keys_synced,
                     "env_paths_missing": env_paths_missing,
                     "code_version": code_version,
+                    "priv_mode": priv_mode,
                 }
 
             if env_paths_missing:
@@ -541,6 +598,7 @@ def execute_hot_update(
                 "env_keys_synced": env_keys_synced,
                 "env_paths_missing": env_paths_missing,
                 "code_version": code_version,
+                "priv_mode": priv_mode,
             }
 
         finally:
@@ -563,6 +621,7 @@ def execute_hot_update(
             "env_keys_synced": [],
             "env_paths_missing": {},
             "code_version": code_version,
+            "priv_mode": "unknown",
         }
 
     except (OSError, IOError) as e:
@@ -576,6 +635,7 @@ def execute_hot_update(
             "env_keys_synced": [],
             "env_paths_missing": {},
             "code_version": code_version,
+            "priv_mode": "unknown",
         }
 
     except Exception:
@@ -588,4 +648,5 @@ def execute_hot_update(
             "env_keys_synced": [],
             "env_paths_missing": {},
             "code_version": code_version,
+            "priv_mode": "unknown",
         }
