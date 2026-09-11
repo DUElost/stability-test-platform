@@ -625,3 +625,74 @@ class TestHeartbeatDevicePlatform:
         assert response.status_code == 200
         device = db_session.query(Device).filter(Device.serial == "PLATFORM_ABSENT").first()
         assert device.platform is None
+
+
+class TestPlaceholderSerialGuard:
+    """#1356: 占位 serial 设备标记 + 跨 host 漂移显式告警。"""
+
+    _DEVICES = [{
+        "serial": "0123456789ABCDEF",
+        "model": "MLD_LX3",
+        "platform": "MTK",
+        "adb_state": "device",
+        "adb_connected": True,
+    }]
+
+    def test_placeholder_serial_tagged_on_first_heartbeat(
+        self, client, db_session, sample_host, caplog,
+    ):
+        import logging
+
+        with caplog.at_level(
+            logging.WARNING, logger="backend.api.routes.heartbeat",
+        ):
+            resp = client.post("/api/v1/heartbeat", json={
+                "host_id": sample_host.id, "status": "ONLINE",
+                "devices": self._DEVICES,
+            })
+        assert resp.status_code == 200, resp.text
+
+        device = db_session.query(Device).filter(
+            Device.serial == "0123456789ABCDEF",
+        ).one()
+        assert "placeholder_serial" in (device.tags or [])
+        assert any(
+            "placeholder_serial_detected" in r.message for r in caplog.records
+        )
+
+    def test_placeholder_serial_host_drift_warns_not_duplicates_tag(
+        self, client, db_session, sample_host, caplog,
+    ):
+        import logging
+        from backend.models.host import Host
+
+        other = Host(id="ph-host-b", hostname="ph-b", status="ONLINE")
+        db_session.add(other)
+        db_session.commit()
+
+        # host A 先上报（首次检测）
+        client.post("/api/v1/heartbeat", json={
+            "host_id": sample_host.id, "status": "ONLINE",
+            "devices": self._DEVICES,
+        })
+        caplog.clear()
+
+        # host B 再上报同一 serial → 漂移告警
+        with caplog.at_level(
+            logging.WARNING, logger="backend.api.routes.heartbeat",
+        ):
+            resp = client.post("/api/v1/heartbeat", json={
+                "host_id": other.id, "status": "ONLINE",
+                "devices": self._DEVICES,
+            })
+        assert resp.status_code == 200, resp.text
+        assert any(
+            "placeholder_serial_host_drift" in r.message for r in caplog.records
+        ), caplog.text
+
+        db_session.expire_all()
+        device = db_session.query(Device).filter(
+            Device.serial == "0123456789ABCDEF",
+        ).one()
+        assert device.tags.count("placeholder_serial") == 1  # 打标不重复
+        assert device.host_id == other.id  # 归属更新语义不变（保护仍在派发侧）

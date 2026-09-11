@@ -34,6 +34,20 @@ HEARTBEAT_INTERVAL_BASE = int(os.getenv("STP_HEARTBEAT_INTERVAL_BASE", "20"))
 LOG_RATE_LIMIT_BASE = int(os.getenv("STP_LOG_RATE_LIMIT_BASE", "200"))
 LOG_RATE_LIMIT_MIN = int(os.getenv("STP_LOG_RATE_LIMIT_MIN", "20"))
 
+# #1356: 已知占位 serial——设备未上报真实 serial 时 adb 的默认值。同一 serial
+# 会被多台 host 同时识别，造成 device.host_id 反复漂移、派发被
+# device_host_drift 保护拦截（保护本身正确，但归属事实不稳定）。
+# 命中即打标签 + 显式告警（可见化），不改变归属更新语义（设备仍可用）。
+PLACEHOLDER_DEVICE_SERIALS = {
+    "0123456789ABCDEF",
+    "1234567890ABCDEF",
+    "0000000000000000",
+}
+for _s in os.getenv("STP_PLACEHOLDER_DEVICE_SERIALS", "").split(","):
+    if _s.strip():
+        PLACEHOLDER_DEVICE_SERIALS.add(_s.strip().upper())
+PLACEHOLDER_SERIAL_TAG = "placeholder_serial"
+
 
 def _suggested_heartbeat_interval(online_healthy: int) -> int:
     """Scale poll interval with fleet size (ADR-0026 P0 heartbeat 减负)."""
@@ -382,9 +396,29 @@ def _process_heartbeat_with_db(
                 )
                 continue
 
+            previous_host_id = device.host_id
             device.host_id = host.id
             if dev_data.get("model") is not None:
                 device.model = dev_data.get("model")
+
+            # #1356: 占位 serial 归属不稳——漂移告警 + 打标（可见化），
+            # 派发侧保护（device_host_drift）不变。
+            if serial.strip().upper() in PLACEHOLDER_DEVICE_SERIALS:
+                if previous_host_id is not None and previous_host_id != host.id:
+                    logger.warning(
+                        "placeholder_serial_host_drift serial=%s device=%s "
+                        "from_host=%s to_host=%s — 占位 serial 被多台 host 识别",
+                        serial, device.id, previous_host_id, host.id,
+                    )
+                tags = list(device.tags or [])
+                if PLACEHOLDER_SERIAL_TAG not in tags:
+                    tags.append(PLACEHOLDER_SERIAL_TAG)
+                    device.tags = tags
+                    logger.warning(
+                        "placeholder_serial_detected serial=%s device=%s host=%s "
+                        "— 设备未上报真实 serial，归属可能漂移",
+                        serial, device.id, host.id,
+                    )
             # ADR-0029 v2.5 D10：归属派生（JOIN project_model），心跳不再
             # 维护 device.project_id 副本——热路径少一次写+查询
 
