@@ -17,6 +17,8 @@ class OutboxDrainThread:
     """Background thread that retries un-acked terminal-state payloads."""
 
     _ACKABLE_TERMINAL_STATUSES = {"COMPLETED", "FAILED", "ABORTED"}
+    # #762：与 log_signal/step_trace 死信上限同口径（各 10 次尝试后转死信）。
+    _MAX_TERMINAL_ATTEMPTS = 10
 
     def __init__(self, api_url: str, local_db, interval: float = 15.0):
         self._api_url = api_url
@@ -30,15 +32,24 @@ class OutboxDrainThread:
         self._flushed_total = 0
         self._conflicts_retained_total = 0
         self._unknown_retained_total = 0
+        self._dead_letter_total = 0
 
     def snapshot_metrics(self) -> Dict[str, Any]:
-        """Outbox backlog + flush counters for heartbeat / ops."""
+        """Outbox backlog + flush counters for heartbeat / ops.
+
+        口径提示（#762）：
+        - ``conflicts_retained_total`` / ``unknown_retained_total`` 是**事件计数**
+          （每 drain 循环每行 +1，15s 间隔），不是积压 gauge；
+        - 「卡死行」的 distinct 口径看 ``dead_letter_total``（转死信数）与心跳
+          上报的 ``terminal_outbox_dead_letter_total``（库内死信行数）。
+        """
         with self._metrics_lock:
             return {
                 "pending_backlog": self._pending_backlog,
                 "flushed_total": self._flushed_total,
                 "conflicts_retained_total": self._conflicts_retained_total,
                 "unknown_retained_total": self._unknown_retained_total,
+                "dead_letter_total": self._dead_letter_total,
             }
 
     def _set_pending_backlog(self, count: int) -> None:
@@ -54,6 +65,32 @@ class OutboxDrainThread:
             self._conflicts_retained_total += 1
             if unknown:
                 self._unknown_retained_total += 1
+
+    def _retain_or_dead_letter(
+        self, job_id: int, error: str, *, reason: str, unknown: bool = False,
+    ) -> str:
+        """retain 分支统一出口（#762）：尝试数达上限转死信，否则留在 outbox。
+
+        返回 ``"dead_letter"`` / ``"retained"``（便于调用方日志语义）。
+        死信行不再被 ``get_pending_terminals`` 取出 → 不再占队头饿死新终态行。
+        """
+        attempts = self._local_db.bump_terminal_attempt(job_id, error)
+        # MagicMock/旧 DB 兜底：非 int（无 attempts 语义）按原 retain 处理
+        if (
+            isinstance(attempts, int)
+            and attempts >= self._MAX_TERMINAL_ATTEMPTS
+            and hasattr(self._local_db, "mark_terminal_dead_letter")
+        ):
+            self._local_db.mark_terminal_dead_letter(job_id, error)
+            with self._metrics_lock:
+                self._dead_letter_total += 1
+            logger.error(
+                "outbox_drain_terminal_dead_letter job=%d attempts=%d reason=%s",
+                job_id, attempts, reason,
+            )
+            return "dead_letter"
+        self._bump_retained_conflict(unknown=unknown)
+        return "retained"
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -119,8 +156,9 @@ class OutboxDrainThread:
                     error_code = self._parse_error_code(e.response)
                     current = self._parse_current_status(e.response)
                     if error_code == "TERMINAL_PAYLOAD_CONFLICT":
-                        self._local_db.bump_terminal_attempt(job_id, str(e))
-                        self._bump_retained_conflict()
+                        self._retain_or_dead_letter(
+                            job_id, str(e), reason="terminal_payload_conflict",
+                        )
                         logger.error(
                             "outbox_drain_terminal_payload_conflict job=%d",
                             job_id,
@@ -129,8 +167,9 @@ class OutboxDrainThread:
                         # An unstructured 409 does not prove that the requested
                         # terminal fact is already durable. Retain it so
                         # recovery/sync can reconcile the fencing/state race.
-                        self._local_db.bump_terminal_attempt(job_id, str(e))
-                        self._bump_retained_conflict()
+                        self._retain_or_dead_letter(
+                            job_id, str(e), reason="unstructured_409",
+                        )
                         logger.warning(
                             "outbox_drain_conflict_retained job=%d current=unstructured",
                             job_id,
@@ -143,8 +182,12 @@ class OutboxDrainThread:
                             job_id, current,
                         )
                     else:
-                        self._local_db.bump_terminal_attempt(job_id, str(e))
-                        self._bump_retained_conflict(unknown=current == "UNKNOWN")
+                        self._retain_or_dead_letter(
+                            job_id, str(e),
+                            reason=("current_unknown" if current == "UNKNOWN"
+                                    else "current_non_ackable"),
+                            unknown=current == "UNKNOWN",
+                        )
                         logger.warning(
                             "outbox_drain_conflict_retained job=%d current=%s",
                             job_id, current,
@@ -152,6 +195,13 @@ class OutboxDrainThread:
                 elif status_code == 404:
                     self._local_db.ack_terminal(job_id)
                     logger.warning("outbox_drain_job_gone job=%d", job_id)
+                elif status_code is not None and 400 <= status_code < 500:
+                    # #762：非 409/404 的 4xx 属中心永久拒绝 → 同走上限死信，
+                    # 避免永久失败行占队头饿死新终态；5xx/网络错误维持无限重试
+                    # （瞬时故障不得丢终态事实）。
+                    self._retain_or_dead_letter(
+                        job_id, str(e), reason="http_%d" % status_code,
+                    )
                 else:
                     self._local_db.bump_terminal_attempt(job_id, str(e))
             except Exception as e:

@@ -86,7 +86,8 @@ class LocalDB:
                 created_at  TEXT    NOT NULL,
                 attempts    INTEGER NOT NULL DEFAULT 0,
                 last_error  TEXT,
-                acked       INTEGER NOT NULL DEFAULT 0
+                acked       INTEGER NOT NULL DEFAULT 0,
+                dead_letter INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS log_signal_outbox (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,6 +147,7 @@ class LocalDB:
         self._ensure_step_trace_schema()
         self._ensure_log_signal_outbox_schema()
         self._ensure_dle_register_outbox_schema()
+        self._ensure_terminal_outbox_schema()
         self._ensure_active_job_registry_schema()
         self._backfill_step_trace_tokens()
         conn.commit()
@@ -308,6 +310,27 @@ class LocalDB:
         if "dead_letter" not in columns:
             self._conn.execute(
                 "ALTER TABLE dle_register_outbox "
+                "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
+            )
+
+    def _ensure_terminal_outbox_schema(self) -> None:
+        """job_terminal_outbox 增列 dead_letter（#762）：与 log_signal/dle 同套路。
+
+        Why: TERMINAL_PAYLOAD_CONFLICT / unstructured 409 等「命中即永久 retain」
+             的行只 bump_attempts、永不下台；get_pending_terminals 按 created_at
+             升序取最旧 → 永久行占满 batch 窗口，其后新终态行队头饿死。
+        How to apply: idempotent ALTER + DEFAULT 0，兼容已部署 Agent；
+             get_pending_terminals 加 dead_letter=0 过滤，达到上限由 drainer 标记。
+        """
+        columns = {
+            row["name"]
+            for row in self._conn.execute(
+                "PRAGMA table_info(job_terminal_outbox)"
+            ).fetchall()
+        }
+        if "dead_letter" not in columns:
+            self._conn.execute(
+                "ALTER TABLE job_terminal_outbox "
                 "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
             )
 
@@ -624,11 +647,14 @@ class LocalDB:
                 return cur.lastrowid
 
     def get_pending_terminals(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """Return un-acked outbox entries ordered by creation time."""
+        """Return un-acked, non-dead-letter outbox entries ordered by creation time.
+
+        #762：死信行（dead_letter=1）不再取出 → 不再占用 batch 窗口饿死新终态。
+        """
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, job_id, payload, attempts FROM job_terminal_outbox "
-                "WHERE acked = 0 ORDER BY created_at ASC LIMIT ?",
+                "WHERE acked = 0 AND dead_letter = 0 ORDER BY created_at ASC LIMIT ?",
                 (limit,),
             ).fetchall()
         result = []
@@ -671,14 +697,54 @@ class LocalDB:
                     (job_id,),
                 )
 
-    def bump_terminal_attempt(self, job_id: int, error: str) -> None:
+    def bump_terminal_attempt(self, job_id: int, error: str) -> int:
+        """+1 attempts, set last_error, 返回新 attempts（#762：死信判定需看新值）。
+
+        与 ``bump_step_trace_attempt`` / ``bump_log_signal_attempt`` 同口径。
+        """
         with self._lock:
             with self._conn:
                 self._conn.execute(
                     "UPDATE job_terminal_outbox SET attempts = attempts + 1, "
                     "last_error = ? WHERE job_id = ?",
-                    (error, job_id),
+                    (error[:500] if error else None, job_id),
                 )
+                row = self._conn.execute(
+                    "SELECT attempts FROM job_terminal_outbox WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                return int(row["attempts"]) if row else 0
+
+    def mark_terminal_dead_letter(self, job_id: int, error: str) -> None:
+        """标记终态行为死信（不再被 get_pending_terminals 取出；保留行供审计）。
+
+        #762：为「命中即永久 retain」的 409 分支提供退出路径（对齐 #742 口径）。
+        """
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE job_terminal_outbox "
+                    "SET dead_letter = 1, last_error = ? WHERE job_id = ?",
+                    (error[:500] if error else None, job_id),
+                )
+
+    def get_terminal_dead_letters(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """返回终态 outbox 死信样本（审计/运维查询用）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, job_id, attempts, last_error FROM job_terminal_outbox "
+                "WHERE dead_letter = 1 ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_terminal_dead_letters(self) -> int:
+        """终态 outbox 死信行数（distinct 卡死行口径；#762）。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM job_terminal_outbox WHERE dead_letter = 1"
+            ).fetchone()
+        return int(row["c"]) if row else 0
 
     def prune_acked_terminals(self, keep_recent: int = 100) -> int:
         """Delete old acked entries, keeping the most recent ones."""
