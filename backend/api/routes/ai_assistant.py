@@ -266,6 +266,47 @@ def delete_session(
     user: User = Depends(get_current_active_user),
 ):
     session = _own_session(db, user, session_id)
+    # #1223（R13-F11）：会话有未完成动作（proposed/approved/running）或进行中
+    # 对话轮次（pending/running 消息）时拒绝硬删除 —— 直接删会让后台执行在
+    # `_finalize_action` 里找不到 action（结果与回执丢失）、子进程成为孤儿。
+    # 终态动作（succeeded/failed/cancelled/rejected/expired）不阻塞清理。
+    active_action = (
+        db.query(AiAssistantAction.id)
+        .filter(
+            AiAssistantAction.session_id == session.id,
+            AiAssistantAction.status.in_(["proposed", "approved", "running"]),
+        )
+        .first()
+    )
+    if active_action is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SESSION_HAS_ACTIVE_ACTIONS",
+                "message": (
+                    "会话仍有未完成的助手动作（proposed/approved/running），"
+                    "请先在操作卡上审批或拒绝，等执行结束后再删除会话"
+                ),
+            },
+        )
+    in_flight_turn = (
+        db.query(AiChatMessage.id)
+        .filter(
+            AiChatMessage.session_id == session.id,
+            AiChatMessage.status.in_(["pending", "running"]),
+        )
+        .first()
+    )
+    if in_flight_turn is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SESSION_TURN_IN_FLIGHT",
+                "message": (
+                    "会话有进行中的对话轮次，请等本轮结束（或失败收敛）后再删除"
+                ),
+            },
+        )
     db.query(AiChatMessage).filter(AiChatMessage.session_id == session.id).delete()
     db.query(AiAssistantAction).filter(AiAssistantAction.session_id == session.id).delete()
     db.delete(session)
