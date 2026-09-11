@@ -6,7 +6,7 @@ Class: bug-fix
 ## Decision
 
 GPU 压测派发两次被 `device_host_drift` 拦截（run 360/362）：设备 280 的
-serial 是 adb 默认占位值 `0123456789ABCDEF`（设备未上报真实 serial），同一
+serial 是 adb 默认占位值 `01234567****CDEF`（设备未上报真实 serial），同一
 serial 被 `172-21-x-x` 与 `172-21-x-x` 两台 host 同时识别——
 `device.host_id` 随心跳反复漂移（哪个 host 后上报就改归属），派发窗口内
 快照与当前不一致被保护拦截。保护机制工作正确，缺的是**事实可见化**：
@@ -14,8 +14,8 @@ serial 被 `172-21-x-x` 与 `172-21-x-x` 两台 host 同时识别——
 
 修复（issue 方向 1/2 的可见化部分，不改归属更新语义与派发保护）：
 
-1. 心跳 upsert 检测已知占位 serial（内置 `0123456789ABCDEF` /
-   `1234567890ABCDEF` / `0000000000000000`，`STP_PLACEHOLDER_DEVICE_SERIALS`
+1. 心跳 upsert 检测已知占位 serial（内置 `01234567****CDEF` /
+   `12345678****CDEF` / `0000000000000000`，`STP_PLACEHOLDER_DEVICE_SERIALS`
    可扩展）→ `device.tags` 打 `placeholder_serial`（去重）+ 首次 warning；
 2. 同一占位 serial 跨 host 上报（`previous_host_id != host.id`）→
    `placeholder_serial_host_drift` warning（记录 from/to host）；
