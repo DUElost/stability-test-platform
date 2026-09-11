@@ -63,7 +63,7 @@ groups:
   - name: stability-platform-dispatch
     rules:
       - alert: StabilityDispatchGateFailed
-        expr: increase(stability_dispatch_gate_runs_total{status="failed"}[15m]) > 0
+        expr: increase(stability_dispatch_gate_runs_total{outcome="failed"}[15m]) > 0
         for: 5m
         labels:
           severity: warning
@@ -87,7 +87,12 @@ groups:
   - name: stability-platform-agent
     rules:
       - alert: StabilityPatrolStall
-        expr: increase(stability_patrol_failure_streak_observed[15m]) > 0
+        # streak 是 Histogram：_count − _bucket{le="1"} = 连续失败 ≥2 的观测数
+        # （基础名不是可查询序列，裸用会静默永不触发——#1257；两侧 sum()
+        # 归并标签，否则 le 标签不对称会使减法恒为空向量）
+        expr: >-
+          sum(increase(stability_patrol_failure_streak_observed_count[15m]))
+          - sum(increase(stability_patrol_failure_streak_observed_bucket{le="1"}[15m])) > 0
         for: 5m
         labels:
           severity: warning
@@ -109,7 +114,7 @@ groups:
             connectivity and SAQ worker concurrency.
 
       - alert: StabilityHostHeartbeatTimeout
-        expr: increase(stability_apscheduler_job_runs_total{job="session_watchdog",status="error"}[15m]) > 0
+        expr: increase(stability_apscheduler_job_runs_total{job_name="session_watchdog",outcome="error"}[15m]) > 0
         for: 5m
         labels:
           severity: warning

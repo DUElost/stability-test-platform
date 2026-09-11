@@ -11,9 +11,9 @@
     agent_agentctl_backup_path: "{{ agent_install_dir }}/agentctl.bak.{{ agent_update_timestamp }}"
     agent_service_backup_path: "/etc/systemd/system/{{ agent_service_name }}.service.bak.{{ agent_update_timestamp }}"
     agent_rsync_remote: "{{ ansible_user }}@{{ ansible_host | default(inventory_hostname) }}"
+    # 不关闭主机密钥校验（#1263 / R14-F17）：known_hosts 登记与换钥流程见 runbook §3
     agent_rsync_ssh_command: >-
-      ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-      -o ConnectTimeout={{ ansible_ssh_timeout | default(10) }}
+      ssh -o ConnectTimeout={{ ansible_ssh_timeout | default(10) }}
       {% if ansible_port is defined %}-p {{ ansible_port }}{% endif %}
 
   pre_tasks:

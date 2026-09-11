@@ -548,6 +548,9 @@ GATE_TO_CI_ANCHOR = {
     "pr-migrate": ("ci.yml", "Migrate empty PostgreSQL database"),
     # public 仓库内网主机地址扫描（#538 收尾）——锚点即 ci.yml 中该 step 的 name
     "ip-leak": ("ci.yml", "内网主机地址检查"),
+    # Prometheus 告警规则契约（#1257/R14-F11）——锚点即 ci.yml pr-agent-tests
+    # job 中该 step 的 name（与 lock 卫生测试同理由前移：纯离线、随 lock 可跑）
+    "prom-alerts": ("ci.yml", "Prometheus 告警规则契约"),
     "agent-tests": ("ci.yml", "Run agent tests"),
     # check:full 级——CI 对应物在 backend-test / frontend-check / docker-build job
     "backend-tests": ("ci.yml", "Run backend tests"),

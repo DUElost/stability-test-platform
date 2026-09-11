@@ -1,0 +1,61 @@
+# promtool 场景测试（#1257 / R14-F11）：三条修复过的规则必须在真实标签
+# 形状的样本上可触发。运行：
+#   promtool test rules deploy/prometheus/alerts-stability-platform.test.yml
+# CI 由 tests/test_prometheus_alerts_contract.py 调度（runner 无 promtool 时
+# 该子项跳过，结构层比对恒跑）。
+rule_files:
+  - alerts-stability-platform.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      # StabilityDispatchGateFailed：修复前用了不存在的 status 标签
+      - series: 'stability_dispatch_gate_runs_total{outcome="failed"}'
+        values: '0+1x20'
+      # StabilityPatrolStall：Histogram 只能经 _count/_bucket/_sum 使用；
+      # le="1" 桶保持 0 → 观测到的 streak 全部 ≥2
+      - series: 'stability_patrol_failure_streak_observed_count'
+        values: '0+1x20'
+      - series: 'stability_patrol_failure_streak_observed_bucket{le="1"}'
+        values: '0x21'
+      - series: 'stability_patrol_failure_streak_observed_bucket{le="+Inf"}'
+        values: '0+1x20'
+      # StabilityHostHeartbeatTimeout：修复前用了不存在的 job/status 标签
+      - series: 'stability_apscheduler_job_runs_total{job_name="session_watchdog",outcome="error"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StabilityDispatchGateFailed
+        exp_alerts:
+          - exp_labels:
+              outcome: failed
+              severity: warning
+            exp_annotations:
+              summary: Plan dispatch gate failure
+              description: >-
+                One or more Plan dispatch gates failed.  Check plan_precheck logs
+                and verify host/script readiness.
+      - eval_time: 20m
+        alertname: StabilityPatrolStall
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Patrol failure streak observed
+              description: >-
+                A device patrol loop hit consecutive failures.  Agent should have
+                entered BACKOFF; check device health and script functionality.
+      - eval_time: 20m
+        alertname: StabilityHostHeartbeatTimeout
+        exp_alerts:
+          - exp_labels:
+              job_name: session_watchdog
+              outcome: error
+              severity: warning
+            exp_annotations:
+              summary: Session watchdog job errors
+              description: >-
+                The session_watchdog APScheduler job reported errors.  Hosts may
+                not be timed out correctly.  Check watchdog logs.
