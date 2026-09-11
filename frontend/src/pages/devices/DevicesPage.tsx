@@ -62,7 +62,7 @@ export default function DevicesPage() {
     mutationFn: (data: { serial: string; model?: string; host_id?: string; tags?: string[] }) =>
       api.devices.create(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: deviceKeys.list() });
+      queryClient.invalidateQueries({ queryKey: deviceKeys.allLists() });
       setIsModalOpen(false);
       toast.success('设备添加成功');
     },
@@ -177,7 +177,7 @@ export default function DevicesPage() {
       return { succeeded, failed };
     },
     onSuccess: ({ succeeded, failed }) => {
-      queryClient.invalidateQueries({ queryKey: deviceKeys.list() });
+      queryClient.invalidateQueries({ queryKey: deviceKeys.allLists() });
       setIsTagDialogOpen(false);
       if (failed.length === 0) {
         toast.success(`已更新 ${succeeded} 台设备的标签`);
