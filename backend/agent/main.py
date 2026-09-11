@@ -1059,7 +1059,8 @@ def main() -> None:
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),
             # #302: 死信总量随心跳上报（历史累计，跨 Agent 重启保留）。
             "log_signal_dead_letter_total": local_db.count_log_signal_dead_letters(),
-            # #742: terminal outbox 死信总量（与 log_signal 对齐）。
+            # #762/#742: 终态 outbox 死信行数（distinct 卡死行口径；事件计数见 drainer
+            # snapshot 的 conflicts_retained_total，勿当积压 gauge）。
             "terminal_outbox_dead_letter_total": local_db.count_terminal_dead_letters(),
         },
         # ADR-0025 Sprint 2: 上报归档指标到 extra['archive']（归档禁用时回调返回 None）
@@ -1416,6 +1417,15 @@ def main() -> None:
                             )
                         except Exception:
                             logger.exception("submit_failed job=%d device=%s", job["id"], device_id)
+                            # #801: submit 失败的作业不会进引擎——补记 barrier
+                            # 到达，避免同 wave peer 空等 barrier_timeout。
+                            from backend.agent.job_runner import (
+                                _arrive_patrol_barrier_preengine,
+                            )
+
+                            _arrive_patrol_barrier_preengine(
+                                job, coordinator, job["id"],
+                            )
                             _deregister_active_job(
                                 job["id"],
                                 job.get("fencing_token", ""),
