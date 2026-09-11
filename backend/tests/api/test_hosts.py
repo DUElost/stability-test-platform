@@ -479,6 +479,68 @@ class TestUpdateHostPreserveSsh:
         assert resp.json()["ip"] == "192.168.50.78"
 
 
+# ── #908：主机密钥变更默认拒绝静默替换，显式换钥可审计 ─────────────────────
+
+
+class TestHostKeyReplaceConsent:
+    def _fake_keyscan(self, monkeypatch, key_blob: str):
+        from types import SimpleNamespace
+        from backend.core import ssh_security
+
+        monkeypatch.setattr(
+            ssh_security.subprocess, "run",
+            lambda *a, **k: SimpleNamespace(
+                returncode=0,
+                stdout=f"10.9.9.9 ssh-ed25519 {key_blob}\n",
+                stderr="",
+            ),
+        )
+
+    def test_create_refuses_silent_replace(self, client, admin_headers, tmp_path, monkeypatch):
+        """known_hosts 已有不同密钥且未确认 → host_key_trust=changed，文件不动。"""
+        known_hosts = tmp_path / "known_hosts"
+        known_hosts.write_text("10.9.9.9 ssh-ed25519 T0xES0VZ\n", encoding="utf-8")
+        self._fake_keyscan(monkeypatch, "TkVXS0VZ")
+
+        resp = client.post("/api/v1/hosts", json={
+            "name": "h908a", "ip": "10.9.9.9", "ssh_port": 22,
+            "ssh_known_hosts_path": str(known_hosts),
+        }, headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["host_key_trust"] == "changed"
+        assert "T0xES0VZ" in known_hosts.read_text(encoding="utf-8"), "未确认不得覆盖"
+
+    def test_create_with_explicit_replace_is_audited(
+        self, client, admin_headers, tmp_path, monkeypatch, db_session,
+    ):
+        """replace_host_key=true → 替换 + 审计 host_key_replaced（含指纹）。"""
+        from backend.models.audit import AuditLog
+
+        known_hosts = tmp_path / "known_hosts"
+        known_hosts.write_text("10.9.9.9 ssh-ed25519 T0xES0VZ\n", encoding="utf-8")
+        self._fake_keyscan(monkeypatch, "TkVXS0VZ")
+
+        resp = client.post("/api/v1/hosts", json={
+            "name": "h908b", "ip": "10.9.9.9", "ssh_port": 22,
+            "ssh_known_hosts_path": str(known_hosts),
+            "replace_host_key": True,
+        }, headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["host_key_trust"] == "ok"
+        content = known_hosts.read_text(encoding="utf-8")
+        assert "T0xES0VZ" not in content and "TkVXS0VZ" in content
+
+        audit = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "host_key_replaced")
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        assert audit is not None, "显式换钥必须留下审计"
+        details = audit.details or {}
+        assert "SHA256:" in str(details.get("change", ""))
+
+
 class TestHostHardDeleteGuards:
     """#937: 有历史依赖的主机硬删除返回 409（不裸 500/不静默清空）。"""
 
