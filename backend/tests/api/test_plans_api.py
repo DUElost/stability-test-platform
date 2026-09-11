@@ -1559,3 +1559,77 @@ class TestPlanSpecialtyOptional:
         }, headers=auth_headers)
         assert resp.status_code == 201, resp.text
         assert resp.json()["data"]["specialty_key"] == "hw"
+
+
+# ── #977：param_schema 保存期校验 ──────────────────────────────────────────
+
+
+@pytest.fixture
+def schema_script(db_session):
+    """带 param_schema 的脚本（独立命名，避免污染既有夹具）。"""
+    from backend.models.script import Script
+
+    script = Script(
+        name="param_guard", script_type="python", version="1.0.0",
+        nfs_path="/nfs/scripts/param_guard/1.0.0",
+        content_sha256="2" * 64, is_active=True,
+        default_params={"retries": 3},
+        param_schema={
+            "timeout": {"type": "integer", "default": 30},
+            "mode": {"type": "string", "enum": ["fast", "full"], "default": "fast"},
+        },
+    )
+    db_session.add(script)
+    db_session.commit()
+    return script
+
+
+def _guarded_steps(params: dict) -> list[dict]:
+    return [
+        {"step_key": "init_0", "script_name": "param_guard",
+         "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+         "timeout_seconds": 30, "params": params},
+    ]
+
+
+class TestStepParamSchemaValidation:
+    def _post(self, client, auth_headers, params):
+        return client.post("/api/v1/plans", json={
+            "name": _uniq("plan"), "steps": _guarded_steps(params),
+            "project_key": "GENERIC", "specialty_key": "ops",
+        }, headers=auth_headers)
+
+    def test_invalid_type_rejected_422(self, client, auth_headers, schema_script):
+        resp = self._post(client, auth_headers, {"timeout": "bad"})
+        assert resp.status_code == 422, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "INVALID_STEP_PARAMS"
+        assert detail["problems"][0]["step_key"] == "init_0"
+        assert "timeout" in detail["problems"][0]["problem"]
+
+    def test_enum_violation_rejected_422(self, client, auth_headers, schema_script):
+        resp = self._post(client, auth_headers, {"mode": "turbo"})
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "INVALID_STEP_PARAMS"
+
+    def test_valid_params_accepted(self, client, auth_headers, schema_script):
+        resp = self._post(client, auth_headers, {"timeout": 5, "mode": "full"})
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["data"]["steps"][0]["params"] == {"timeout": 5, "mode": "full"}
+
+    def test_undeclared_keys_pass_free_mode(self, client, auth_headers, schema_script):
+        resp = self._post(client, auth_headers, {"custom_flag": "anything"})
+        assert resp.status_code == 201, resp.text
+
+    def test_update_rejects_invalid_type(self, client, auth_headers, schema_script):
+        created = self._post(client, auth_headers, {"timeout": 5})
+        assert created.status_code == 201, created.text
+        data = created.json()["data"]
+        resp = client.put(f"/api/v1/plans/{data['id']}", json={
+            "name": data["name"],
+            "project_key": "GENERIC", "specialty_key": "ops",
+            "expected_updated_at": data["updated_at"],
+            "steps": _guarded_steps({"timeout": "bad"}),
+        }, headers=auth_headers)
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "INVALID_STEP_PARAMS"
