@@ -1,6 +1,6 @@
 import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry, ProjectSummary, Specialty, TestSuiteSummary } from '@/utils/api/types';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   PIPELINE_EDITOR,
   PIPELINE_PHASE_HEAD,
@@ -463,34 +463,34 @@ function FailureThresholdInput({
   onChange: (next: number) => void;
   className?: string;
 }) {
-  const [draft, setDraft] = useState(() => String(value));
-
-  useEffect(() => {
-    setDraft(String(value));
-  }, [value]);
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? String(value);
 
   const commit = (raw: string) => {
     const trimmed = raw.trim();
     if (trimmed === '' || trimmed === '.') {
-      setDraft(String(value));
+      setDraft(null);
       return;
     }
     const parsed = parseFloat(trimmed);
     if (Number.isNaN(parsed)) {
-      setDraft(String(value));
+      setDraft(null);
       return;
     }
     const clamped = Math.min(1, Math.max(0, parsed));
     onChange(clamped);
-    setDraft(String(clamped));
+    setDraft(null);
   };
 
   return (
     <input
       type="text"
       inputMode="decimal"
-      value={draft}
+      value={shown}
       disabled={disabled}
+      onFocus={() => {
+        if (draft === null) setDraft(String(value));
+      }}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={(e) => commit(e.target.value)}
       onKeyDown={(e) => {
