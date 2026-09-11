@@ -19,7 +19,14 @@ from backend.api.schemas import (
 )
 from backend.core.database import get_db
 from backend.core.audit import record_audit
-from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel, NotificationLog
+from backend.models.notification import (
+    AlertRule,
+    ChannelType,
+    EventType,
+    NotificationChannel,
+    NotificationDelivery,
+    NotificationLog,
+)
 from backend.api.routes.auth import (
     get_current_active_user,
     require_admin,
@@ -347,6 +354,70 @@ def list_logs(
         "total": total,
         "skip": skip,
         "limit": limit,
+    }
+
+
+@router.get("/logs/{log_id}/deliveries")
+def list_log_deliveries(
+    log_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """#1167 P4（D6）：一条通知的逐通道投递事实（1:N 可查）。
+
+    事实表为权威；P4 之前的历史日志无表行时回落 ``context.channel_delivery``
+    （``source`` 字段标注读取来源）。
+    """
+    log = db.get(NotificationLog, log_id)
+    if log is None:
+        raise HTTPException(status_code=404, detail="notification log not found")
+
+    rows = (
+        db.query(NotificationDelivery)
+        .filter(NotificationDelivery.notification_log_id == log_id)
+        .order_by(NotificationDelivery.id.asc())
+        .all()
+    )
+    if rows:
+        return {
+            "source": "table",
+            "items": [
+                {
+                    "id": r.id,
+                    "channel_id": r.channel_id,
+                    "channel_type": r.channel_type,
+                    "state": r.state,
+                    "outcome": r.outcome,
+                    "attempt_count": r.attempt_count,
+                    "last_error": r.last_error,
+                    "requested_at": r.requested_at.isoformat() if r.requested_at else None,
+                    "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                }
+                for r in rows
+            ],
+        }
+
+    legacy = (log.context or {}).get("channel_delivery") or {}
+    return {
+        "source": "legacy_context",
+        "items": [
+            {
+                "channel_id": int(channel_key),
+                "state": (
+                    "accepted"
+                    if entry.get("status") == "ok"
+                    or entry.get("outcome") == "ACCEPTED"
+                    else "failed"
+                    if entry.get("status") == "failed"
+                    else None
+                ),
+                "outcome": entry.get("outcome"),
+                "attempt_count": None,
+                "last_error": entry.get("error"),
+            }
+            for channel_key, entry in legacy.items()
+            if isinstance(entry, dict) and str(channel_key).isdigit()
+        ],
     }
 
 
