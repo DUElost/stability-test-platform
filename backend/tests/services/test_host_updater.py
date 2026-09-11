@@ -7,6 +7,7 @@ from backend.services.host_updater import (
     _parse_deps_refreshed,
     _parse_env_paths_missing,
     _parse_env_synced,
+    _parse_priv_mode,
     get_agent_code_version,
 )
 
@@ -188,3 +189,47 @@ def test_get_agent_code_version_returns_short_hash():
     version = get_agent_code_version()
     # In a git checkout this is a 7+ char hex short hash; outside git it's "".
     assert version == "" or all(c in "0123456789abcdef" for c in version)
+
+
+def _build_script_with_wrapper(**overrides):
+    kwargs = {
+        "install_dir": "/opt/stability-test-agent",
+        "service_name": "stability-test-agent",
+        "tar_path": "/tmp/stp-agent-update-abc.tar.gz",
+        "user": "android",
+        "group": "android",
+    }
+    kwargs.update(overrides)
+    return _build_remote_script(**kwargs)
+
+
+def test_remote_script_prefers_privilege_wrapper_with_legacy_fallback():
+    """#1250：优先 stp-agent-priv；未迁移主机回退旧 sudo 面并留哨兵。"""
+    script = _build_script_with_wrapper(
+        sync_agent_secret=True, agent_secret="s3cr3t-value"
+    )
+
+    assert 'PRIV="/usr/local/sbin/stp-agent-priv"' in script
+    assert 'sudo -n "$PRIV" selftest' in script
+    assert "STP_PRIV_MODE=wrapper" in script
+    assert "STP_PRIV_FALLBACK=legacy" in script
+    for expected in (
+        'sudo "$PRIV" apply-code --staged "$TMPDIR"',
+        'sudo "$PRIV" install-schema --file "$TMPDIR/stp_schemas/pipeline_schema.json"',
+        'sudo "$PRIV" write-version --version "$CODE_VERSION"',
+        'sudo "$PRIV" sync-env --secret-b64 "$AGENT_SECRET_B64"',
+        'sudo "$PRIV" sync-env --overrides-b64 "$ENV_OVERRIDES_B64" --path-keys-b64 "$ENV_PATH_KEYS_B64"',
+        'sudo "$PRIV" deps-marker --sha "$NEW_REQ_SHA"',
+        'sudo "$PRIV" fix-ownership',
+        'sudo "$PRIV" restart',
+    ):
+        assert expected in script, expected
+    # legacy 分支保留（迁移期回退），但不再用宽规则读文件
+    assert "sudo rsync -av --delete" in script
+    assert "sudo sha256sum" not in script
+
+
+def test_parse_priv_mode_reads_sentinels():
+    assert _parse_priv_mode("noise\nSTP_PRIV_MODE=wrapper\n") == "wrapper"
+    assert _parse_priv_mode("STP_PRIV_FALLBACK=legacy\n") == "legacy"
+    assert _parse_priv_mode("") == "unknown"

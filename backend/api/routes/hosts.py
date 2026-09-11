@@ -666,6 +666,7 @@ def host_hot_update(
                 "env_keys_synced": result.get("env_keys_synced", []),
                 "env_paths_missing": result.get("env_paths_missing", {}),
                 "code_version": result.get("code_version", ""),
+                "priv_mode": result.get("priv_mode", ""),
                 "duration_ms": result.get("duration_ms"),
                 "message": result.get("message", ""),
             },
@@ -691,6 +692,7 @@ def host_hot_update(
         "env_keys_synced": result.get("env_keys_synced", []),
         "env_paths_missing": result.get("env_paths_missing", {}),
         "code_version": result.get("code_version", ""),
+        "priv_mode": result.get("priv_mode", "unknown"),
         "abort_summary": aborted_summary,
     }
 
@@ -704,7 +706,8 @@ def host_install_agent(
     """触发 Agent 首次安装（ansible-playbook install_agent.yml，SAQ 异步执行）。
 
     自动检测控制平面 ansible-playbook + sshpass 是否可用；缺失则 501。
-    装完 install_agent.sh 自动落 sudoers.d NOPASSWD，解锁后续免密热更新。
+    装完 install_agent.sh 自动落 sudoers.d：NOPASSWD 只授提权 wrapper
+    /usr/local/sbin/stp-agent-priv + 固定服务 systemctl（ADR-0037/#1250）。
     """
     import shutil
 

@@ -55,3 +55,5 @@ ignore = [
 "backend/agent/scripts/**" = ["T20"]
 # 安装后自检是 install_agent.sh 调用的 CLI,stdout 哨兵是其协议(#1247)
 "backend/agent/install_selfcheck.py" = ["T20"]
+# 提权 wrapper 由 sudo 调用,stdout 哨兵是控制面解析协议(#1250)
+"backend/agent/stp_agent_priv.py" = ["T20"]
