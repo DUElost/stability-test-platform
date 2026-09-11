@@ -17,7 +17,7 @@ from backend.core.ssh_security import (
     resolve_host_ssh_credentials,
     trust_host_key,
 )
-from backend.models.host import Host
+from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.api.schemas import (
     HostActiveJob,
@@ -495,6 +495,39 @@ def delete_host(
             detail=f"主机有 {active_jobs} 个活跃 Job，请先 abort 再删除",
         )
 
+    # #937: 历史依赖预检——Host 删除会经 FK CASCADE 静默清空 job/device/
+    # plan_run_host 历史（#796 同族），或撞 step_trace.job_id（无 ondelete）
+    # 变 500。策略：有历史即 409 保数据，运维先显式归档/迁移。
+    job_history = (
+        db.query(JobInstance).filter(JobInstance.host_id == host_id).count()
+    )
+    if job_history > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"主机有 {job_history} 条历史 Job 记录，删除会清空执行历史；"
+                "请先归档/清理后再删除"
+            ),
+        )
+    device_count = (
+        db.query(Device).filter(Device.host_id == host_id).count()
+    )
+    if device_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"主机下仍有 {device_count} 台设备，请先移除或迁移设备",
+        )
+    from backend.models.plan_run import PlanRunHost
+
+    prh_count = (
+        db.query(PlanRunHost).filter(PlanRunHost.host_id == host_id).count()
+    )
+    if prh_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"主机有 {prh_count} 条执行投影记录，请先清理关联 Run 后再删除",
+        )
+
     record_audit(
         db,
         action="delete",
@@ -506,7 +539,14 @@ def delete_host(
         request=request,
     )
     db.delete(host)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="主机仍被其它记录引用，不可硬删除（请先清理关联数据）",
+        ) from exc
     return {"ok": True, "host_id": host_id, "message": "host deleted"}
 
 

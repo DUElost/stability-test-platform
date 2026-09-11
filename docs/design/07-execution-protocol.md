@@ -49,6 +49,17 @@
 - 存在 UNKNOWN Job **不得**落终态。
 - 全部 Job 进入 COMPLETED/FAILED/ABORTED 后计算；`abort_requested` 会把自然 SUCCESS/PARTIAL 覆盖为 FAILED。
 
+**成败语义（#815）**：SUCCESS / PARTIAL_SUCCESS / FAILED 描述**执行链**结果，不是**测试
+结论**：
+
+- Job 终态由 lifecycle `termination_reason` 决定（`completed` / `timeout` → COMPLETED；
+  `abort` / `manual_exit` → ABORTED；其余 → FAILED，见 `pipeline_engine`），teardown
+  步骤的成功与否不改变 Job 终态（只进 `teardown_status` metadata）；
+- 测试脚本自判的结论（`final_status=FAIL`、`failed_rounds>0`、设备侧 INCOMPLETE 等）
+  不参与该聚合，落在 metrics / `test_case_result` 结果层呈现；
+- 因此 **「PlanRun 绿」≠「测试通过」**——判定测试结果须消费结果层字段；INCOMPLETE
+  按「收取即成功」处理是同一设计的有意边界。
+
 前端通过 `PlanRun.capabilities`（abort / retry_dispatch / final_archive）与设备矩阵 `is_stuck` / deadline 字段消费权威投影，避免重复实现超时策略。
 
 ---
@@ -99,7 +110,9 @@ Watcher policy 取自 **PlanRun.plan_snapshot**，不再读 live `Plan.watcher_p
 ## 6. Plan 链
 
 - 触发读 snapshot 的 `next_plan_id`；旧 Run 缺键时 **fallback** live `Plan.next_plan_id`。
-- 原子：子 PlanRun + `next_plan_triggered`；gate 经 SAQ `precheck_and_dispatch_task`。
+- 原子：子 PlanRun + `next_plan_triggered`；子 Run 经 `prepare_plan_run` 落 **QUEUED**，
+  由 admission pump + `plan_admission_task` 物化（ADR-0026 现行主路径）——历史
+  sync gate 任务 `precheck_and_dispatch_task` 仅存于 V1 兜底/显式重试路径。
 - 补偿：`scheduler/plan_chain_reconciler.py` + `reconcile_chain_trigger_sync`（孤儿 flag / 缺子 Run）。
 - enqueue 失败后：子 Run 可由 `precheck_reaper` 补队列。
 
