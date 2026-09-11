@@ -37,7 +37,6 @@ from typing import Optional
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.audit import record_audit
 from backend.core.job_timeout_config import ABORT_ACK_GRACE_SECONDS
@@ -70,6 +69,37 @@ _TERMINAL_JOB_STATUSES = {
 
 class PlanRunAbortError(Exception):
     """Raised when an abort is rejected for state-machine reasons."""
+
+
+
+def _patch_run_context(db: Session, plan_run_id: int, path: list, value) -> None:
+    """#793：以库端 jsonb_set 分段更新 run_context。
+
+    先例 dedup_scan.record_scan_archive_state：abort / 归档 / dispatch_state 可能
+    同时更新同一行，整段读改写回会把并发写者的键抹掉（本函数此前四处
+    ``pr.run_context = run_ctx`` 均属该形态）。``path`` 为 jsonb_set 路径段
+    （如 ``["abort_requested", "requested_job_ids"]``）。
+    """
+    import json
+
+    from sqlalchemy import text
+
+    db.execute(
+        text(
+            "UPDATE plan_run SET run_context = jsonb_set("
+            # SQLAlchemy JSON 列的 None 落库为 JSON null（非 SQL NULL），
+            # COALESCE 不会替换它 → 需显式 NULLIF，否则 jsonb_set 报
+            # "cannot set path in scalar"。
+            "  COALESCE(NULLIF(run_context, 'null'::jsonb), '{}'::jsonb), "
+            "  CAST(:path AS text[]), CAST(:value AS jsonb), true"
+            ") WHERE id = :run_id"
+        ),
+        {
+            "run_id": plan_run_id,
+            "path": [str(seg) for seg in path],
+            "value": json.dumps(value, ensure_ascii=False, default=str),
+        },
+    )
 
 
 def abort_plan_run(
@@ -105,7 +135,7 @@ def abort_plan_run(
     pr = db.execute(
         select(PlanRun)
         .where(PlanRun.id == plan_run_id)
-        .with_for_update(read=True)  # PG FOR NO KEY UPDATE — matches terminalization (#789)
+        .with_for_update(key_share=True)  # SQLAlchemy key_share → PG FOR NO KEY UPDATE (#1473)
     ).scalar_one_or_none()
     if pr is None:
         raise PlanRunAbortError(f"PlanRun {plan_run_id} not found")
@@ -152,8 +182,9 @@ def abort_plan_run(
                 "phase": phase,
                 "total": 0,
             }
-            pr.run_context = run_ctx
-            flag_modified(pr, "run_context")
+            _patch_run_context(
+                db, plan_run_id, ["abort_requested"], run_ctx["abort_requested"],
+            )
             record_audit(
                 db,
                 action=audit_action,
@@ -234,8 +265,10 @@ def abort_plan_run(
             "requested_job_ids": list(abort_requested_jobs),
             "acknowledged_job_ids": [],
         }
-        pr.run_context = run_ctx
-        flag_modified(pr, "run_context")
+        # #793：分段写（整段写回会覆盖并发写者如 archive/dispatch_state 的键）
+        _patch_run_context(
+            db, plan_run_id, ["abort_requested"], run_ctx["abort_requested"],
+        )
 
         # #492: PENDING 批量终态化——单条 UPDATE 完成状态迁移 + 计数器
         # 一次聚合 + 聚合审计。旧实现逐条 transition+on_job_terminal_sync：
@@ -332,8 +365,12 @@ def abort_plan_run(
 
         # Refresh requested_job_ids only (pending jobs are already terminal).
         run_ctx["abort_requested"]["requested_job_ids"] = list(abort_requested_jobs)
-        pr.run_context = run_ctx
-        flag_modified(pr, "run_context")
+        _patch_run_context(
+            db,
+            plan_run_id,
+            ["abort_requested", "requested_job_ids"],
+            list(abort_requested_jobs),
+        )
 
         has_active_jobs = any(
             job.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)
@@ -372,8 +409,11 @@ def abort_plan_run(
         }
         direct_failed_notify = True
 
-    pr.run_context = run_ctx
-    flag_modified(pr, "run_context")
+    if in_precheck:
+        # #793：precheck 亦分段写（同一行可能被归档等并发写者更新）
+        _patch_run_context(db, plan_run_id, ["precheck"], precheck)
+    # 不再整段写回；让同 session 后续读者（如聚合的 _abort_requested）读到库端值
+    db.expire(pr, ["run_context"])
     db.flush()
 
     record_audit(
