@@ -82,4 +82,59 @@ describe('ErrorBoundary', () => {
     expect(reload).toHaveBeenCalledOnce();
     expect(removeItemSpy).toHaveBeenCalledWith(CHUNK_RECOVERY_KEY);
   });
+
+  describe('resetKey 路由复位（#821）', () => {
+    it('resetKey 变化清除错误态并渲染新内容', () => {
+      const { rerender } = render(
+        <ErrorBoundary resetKey="/crashed">
+          <ThrowChild error={new Error('boom')} />
+        </ErrorBoundary>
+      );
+      expect(screen.getByText('页面出错了')).toBeInTheDocument();
+
+      rerender(
+        <ErrorBoundary resetKey="/recovered">
+          <div>恢复后的页面</div>
+        </ErrorBoundary>
+      );
+
+      expect(screen.getByText('恢复后的页面')).toBeInTheDocument();
+      expect(screen.queryByText('页面出错了')).not.toBeInTheDocument();
+    });
+
+    it('resetKey 不变时错误态保持（不静默吞错）', () => {
+      const { rerender } = render(
+        <ErrorBoundary resetKey="/same">
+          <ThrowChild error={new Error('boom')} />
+        </ErrorBoundary>
+      );
+      expect(screen.getByText('页面出错了')).toBeInTheDocument();
+
+      rerender(
+        <ErrorBoundary resetKey="/same">
+          <ThrowChild error={new Error('boom')} />
+        </ErrorBoundary>
+      );
+
+      expect(screen.getByText('页面出错了')).toBeInTheDocument();
+    });
+
+    it('复位后新路由内容再次崩溃仍显示错误屏', () => {
+      const { rerender } = render(
+        <ErrorBoundary resetKey="/first">
+          <ThrowChild error={new Error('first crash')} />
+        </ErrorBoundary>
+      );
+      expect(screen.getByText('页面出错了')).toBeInTheDocument();
+
+      rerender(
+        <ErrorBoundary resetKey="/second">
+          <ThrowChild error={new Error('second crash')} />
+        </ErrorBoundary>
+      );
+
+      expect(screen.getByText('second crash')).toBeInTheDocument();
+      expect(screen.queryByText('first crash')).not.toBeInTheDocument();
+    });
+  });
 });
