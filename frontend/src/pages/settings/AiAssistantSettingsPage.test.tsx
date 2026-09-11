@@ -37,6 +37,7 @@ const CONFIG: AiAssistantConfig = {
   enabled: true,
   temperature: 0.2,
   max_turns: 8,
+  max_auto_continuations: 20,
   request_timeout_seconds: 120,
   t1_require_confirm: false,
   auto_approve_tools: [],
