@@ -256,6 +256,19 @@ class _PumpOutcome:
         self.elapsed = elapsed
 
 
+def _append_log_line(log_path: str, line: str) -> None:
+    """Append one drained line to the step log, avoiding a doubled newline (#805-3).
+
+    ``_drain_polling`` already appends ``\\n`` to each line; ``_drain_blocking``
+    may or may not. Normalize to exactly one trailing newline.
+    """
+    try:
+        with open(log_path, "a", encoding="utf-8") as log_f:
+            log_f.write(line if line.endswith("\n") else line + "\n")
+    except OSError:
+        logger.debug("step_log_file_write_failed path=%s", log_path)
+
+
 def _drain_stream(
     stream: Any,
     stop: threading.Event,
@@ -407,11 +420,7 @@ def _pump_process(
         # （含 PROGRESS 行——排障需要完整输出；缓冲只留非 PROGRESS 尾部）。
         # stdout/stderr 分开文件避免 reader 线程并发写同一句柄。
         if log_path:
-            try:
-                with open(log_path, "a", encoding="utf-8") as log_f:
-                    log_f.write(line + "\n")
-            except OSError:
-                logger.debug("step_log_file_write_failed path=%s", log_path)
+            _append_log_line(log_path, line)
         # #147: PROGRESS 允许前导空白（缩进/日志前缀场景）。用 lstrip 后匹配，
         # 避免脚本因一个前导空格而错过刷新停滞钟、在长静默段被误杀。
         stripped = line.lstrip()

@@ -188,3 +188,21 @@ def test_list_active_watcher_states(db):
     active = db.list_active_watcher_states()
     ids = {w["watcher_id"] for w in active}
     assert ids == {"wch-a", "wch-c"}
+
+
+def test_prune_guard_keeps_max_seq_row_not_max_id(db):
+    """#803: prune 守卫按 MAX(seq_no)（重启恢复口径）保留——多写入方并发下
+    seq 分配序可与行 id 序相反，按 MAX(id) 会删掉 seq 最大行，重启复用已
+    上送 seq，后端 ON CONFLICT DO NOTHING 静默吞新信号。"""
+    # 先插 seq=5（行 id 小），后插 seq=1（行 id 大）——制造相反序
+    rid_hi = db.enqueue_log_signal(1, 5, _make_envelope(1, 5))
+    db.ack_log_signal(rid_hi)
+    rid_lo = db.enqueue_log_signal(1, 1, _make_envelope(1, 1))
+    db.ack_log_signal(rid_lo)
+
+    db.prune_acked_log_signals(keep_recent=1)
+
+    # 重启恢复口径：下一 seq 必须仍接在 5 之后
+    assert db.next_log_signal_seq_no(1) == 6, (
+        "prune 后 MAX(seq_no) 回退——重启会复用已上送 seq"
+    )
