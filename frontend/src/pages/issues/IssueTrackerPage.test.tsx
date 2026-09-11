@@ -4,11 +4,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 const planRunsList = vi.fn();
+const planRunsListJobs = vi.fn();
 const getCachedJiraDraft = vi.fn();
 
 vi.mock('@/utils/api', () => ({
   api: {
-    planRuns: { list: (...a: unknown[]) => planRunsList(...a) },
+    planRuns: {
+      list: (...a: unknown[]) => planRunsList(...a),
+      listJobs: (...a: unknown[]) => planRunsListJobs(...a),
+    },
     runs: { getCachedJiraDraft: (...a: unknown[]) => getCachedJiraDraft(...a) },
   },
 }));
@@ -37,6 +41,7 @@ function renderPage() {
 describe('IssueTrackerPage', () => {
   beforeEach(() => {
     planRunsList.mockReset();
+    planRunsListJobs.mockReset();
     getCachedJiraDraft.mockReset();
   });
 
@@ -45,6 +50,7 @@ describe('IssueTrackerPage', () => {
     renderPage();
     expect(screen.getByTestId('jira-submit-panel-stub')).toBeInTheDocument();
     expect(screen.queryByTestId('jira-run-history-stub')).not.toBeInTheDocument();
+    expect(planRunsList).not.toHaveBeenCalled();
   });
 
   it('switches to the "history" tab and renders JiraRunHistory', () => {
@@ -61,6 +67,7 @@ describe('IssueTrackerPage', () => {
     planRunsList.mockResolvedValue([
       { id: 1, plan_id: 10, status: 'SUCCESS', ended_at: '2026-06-01T00:00:00Z' },
     ]);
+    planRunsListJobs.mockResolvedValue([{ id: 101, device_id: 1 }]);
     getCachedJiraDraft.mockRejectedValue(new Error('no draft'));
     renderPage();
 
@@ -73,6 +80,7 @@ describe('IssueTrackerPage', () => {
     planRunsList.mockResolvedValue([
       { id: 42, plan_id: 10, status: 'SUCCESS', ended_at: '2026-06-01T00:00:00Z' },
     ]);
+    planRunsListJobs.mockResolvedValue([{ id: 99, device_id: 1 }]);
     getCachedJiraDraft.mockResolvedValue({
       summary: 'Crash on boot',
       priority: 'High',
@@ -89,6 +97,8 @@ describe('IssueTrackerPage', () => {
     expect(await screen.findByText('Crash on boot')).toBeInTheDocument();
     expect(screen.getByText('ABC')).toBeInTheDocument();
     expect(screen.getByText('#42')).toBeInTheDocument();
+    expect(planRunsListJobs).toHaveBeenCalledWith(42);
+    expect(getCachedJiraDraft).toHaveBeenCalledWith(99);
   });
 
   it('shows an inline error when the drafts query fails outright', async () => {
