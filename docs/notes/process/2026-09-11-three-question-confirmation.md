@@ -6,7 +6,7 @@ Class: process
 ## Decision
 
 - 新增确认稿
-  [`REVIEW_THREE_QUESTION_CONFIRMATION_2026-09-11_d00273d0.md`](../../reviews/REVIEW_THREE_QUESTION_CONFIRMATION_2026-09-11_d00273d0.md)：
+  [`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_b77c27-confirmation.md`](../../reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_b77c27-confirmation.md)：
   对「R01–R15 覆盖面 / 已闭环修复质量 / 审查→issue→PR→main 修复模式」三问的独立确认（第三意见，
   `CF-*` 编号），与已合入的 `CA-*` 稿（#1307）、`IV-*` 稿（#1313）同题平行，供综合轮汇聚。
 - 定位为**确认 + 增补**而非第三份全量审计：CA/IV 已列缺口与量化不再复述；本稿独有增量 =
