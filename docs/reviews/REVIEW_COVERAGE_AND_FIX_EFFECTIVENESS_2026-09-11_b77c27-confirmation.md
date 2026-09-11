@@ -1,8 +1,8 @@
 # 三问确认稿：R01–R15 审查覆盖、修复有效性与修复模式（第三意见）
 
 > **状态**：待综合——独立确认稿（第三意见），供多 Harness 综合审查汇聚（Mode C：先独立、后汇聚）。
-> 与 [`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fb87d5f1.md`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fb87d5f1.md)（`CA-*`，第一意见）、
-> [`REVIEW_INDEPENDENT_VERIFICATION_2026-09-11_4a955874.md`](./REVIEW_INDEPENDENT_VERIFICATION_2026-09-11_4a955874.md)（`IV-*`，第二意见）同题独立完成。
+> 与 [`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fdca41.md`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fdca41.md)（`CA-*`，第一意见）、
+> [`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_b77c27-verification.md`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_b77c27-verification.md)（`IV-*`，第二意见）同题独立完成。
 >
 > **核验基线**：`d00273d0`（origin/main tip，本 Execution declare 时点）
 > **日期**：2026-09-11（观测时点：UTC 2026-09-10 19:15–19:50 前后，各节注明）
