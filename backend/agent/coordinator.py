@@ -169,6 +169,11 @@ class HostRunCoordinator:
         self._agent_secret = agent_secret
         self._local_db = local_db
         self._interval = float(os.getenv("COORDINATOR_HEARTBEAT_INTERVAL", "30"))
+        # #1014: 投影防御上限——正常由 deregister_job 回收；超限时兜底清理
+        # 无活跃 job 的投影（窗口泄漏），避免心跳载荷/内存无界增长。
+        self._MAX_PLAN_RUN_HOST_PROJECTIONS = int(
+            os.getenv("COORDINATOR_MAX_PLAN_RUN_HOSTS", "200")
+        )
         self._lock = threading.Lock()
         self._plan_run_hosts: Dict[int, PlanRunHostView] = {}  # keyed by host_row_id
         self._job_views: Dict[int, JobExecutionView] = {}  # keyed by job_id
@@ -230,8 +235,11 @@ class HostRunCoordinator:
     # ── registration (called by the claim loop) ────────────────────────────
 
     def register_plan_run_host(self, host_row_id: int, plan_run_id: int) -> PlanRunHostView:
+        reclaimed_keys: list = []
         with self._lock:
             if host_row_id not in self._plan_run_hosts:
+                if len(self._plan_run_hosts) >= self._MAX_PLAN_RUN_HOST_PROJECTIONS:
+                    reclaimed_keys = self._reclaim_stale_projections_locked()
                 v = PlanRunHostView(host_row_id, plan_run_id, self._host_id)
                 # Restore persisted epoch then bump — a new Agent process
                 # instance must always report epoch+1 to fence the old one.
@@ -239,7 +247,14 @@ class HostRunCoordinator:
                 v.bump_epoch()
                 self._persist_one_epoch(v)
                 self._plan_run_hosts[host_row_id] = v
-            return self._plan_run_hosts[host_row_id]
+            view = self._plan_run_hosts[host_row_id]
+        for key in reclaimed_keys:
+            if self._local_db is not None:
+                try:
+                    self._local_db.delete_state(key)
+                except Exception:
+                    logger.debug("coord_epoch_cleanup_failed key=%s", key)
+        return view
 
     def _restore_one_epoch(self, view: PlanRunHostView) -> None:
         if self._local_db is None:
@@ -334,10 +349,46 @@ class HostRunCoordinator:
             self._job_devices[job_id] = device_id
 
     def deregister_job(self, job_id: int) -> None:
+        """注销 job 视图；该 PlanRunHost 无其它活跃 job 时回收其投影（#1014）。
+
+        投影随历史运行线性累计会放大内存、心跳载荷与控制面逐项写负担——
+        正常 Job 结束是投影生命周期的终点。epoch 持久键随之清理（下一
+        进程按默认 epoch 恢复，不影响 fencing 语义）。
+        """
+        stale_epoch_key: Optional[str] = None
         with self._lock:
+            prh_id = self._job_prh.pop(job_id, None)
             self._job_views.pop(job_id, None)
             self._job_devices.pop(job_id, None)
-            self._job_prh.pop(job_id, None)
+            if prh_id is None:
+                return
+            still_active = any(pid == prh_id for pid in self._job_prh.values())
+            if still_active:
+                return
+            if self._plan_run_hosts.pop(prh_id, None) is not None:
+                stale_epoch_key = self._epoch_key(prh_id)
+        if stale_epoch_key is not None and self._local_db is not None:
+            try:
+                self._local_db.delete_state(stale_epoch_key)
+            except Exception:
+                logger.debug("coord_epoch_cleanup_failed key=%s", stale_epoch_key)
+
+    def _reclaim_stale_projections_locked(self) -> list:
+        """防御上限（#1014）：清掉无活跃 job 关联的投影。
+
+        正常路径由 deregister_job 回收；这里兜底「claim 登记后 job 始终
+        未启动」一类的窗口泄漏。调用方须已持锁。
+        """
+        active = set(self._job_prh.values())
+        reclaimable = [pid for pid in self._plan_run_hosts if pid not in active]
+        for pid in reclaimable:
+            self._plan_run_hosts.pop(pid, None)
+        if reclaimable:
+            logger.warning(
+                "coordinator_projections_reclaimed count=%d cap=%d",
+                len(reclaimable), self._MAX_PLAN_RUN_HOST_PROJECTIONS,
+            )
+        return [self._epoch_key(pid) for pid in reclaimable]
 
     def set_scheduler(self, scheduler: Any) -> None:
         self._scheduler = scheduler

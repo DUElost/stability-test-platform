@@ -266,3 +266,77 @@ class TestBarrierRenewal:
         assert result == [False], result
         assert 0.3 <= elapsed < 1.0, f"硬顶应约 0.3s 触发: {elapsed:.2f}s"
         assert eng._barrier_failure_reason == "barrier_max_wait"
+
+
+class _FakeLocalDb:
+    """最小 state 存储，捕获 delete_state（#1014 epoch 清理断言用）。"""
+
+    def __init__(self):
+        self.state = {}
+        self.deleted = []
+
+    def get_state(self, key, default=""):
+        return self.state.get(key, default)
+
+    def set_state(self, key, value):
+        self.state[key] = value
+
+    def delete_state(self, key):
+        self.deleted.append(key)
+        self.state.pop(key, None)
+
+
+class TestProjectionReclaim:
+    """#1014: PlanRunHost 投影在正常 Job 结束后回收，不随历史运行累计。"""
+
+    def test_projection_reclaimed_after_last_job_deregisters(self):
+        coord = _coord()
+        prh_id = 10
+        coord.register_plan_run_host(prh_id, plan_run_id=100)
+        coord.register_job(1, prh_id=prh_id)
+        coord.register_job(2, prh_id=prh_id)
+
+        coord.deregister_job(1)
+        assert prh_id in coord._plan_run_hosts  # 仍有活跃 job → 保留
+
+        coord.deregister_job(2)
+        assert prh_id not in coord._plan_run_hosts  # 无活跃 job → 回收
+
+    def test_history_loop_does_not_accumulate_projections(self):
+        """模拟多次历史运行：每轮 prh+job 注册后 job 正常结束。"""
+        coord = _coord()
+        for i in range(50):
+            prh_id = 1000 + i
+            coord.register_plan_run_host(prh_id, plan_run_id=2000 + i)
+            coord.register_job(i, prh_id=prh_id)
+            coord.deregister_job(i)
+
+        assert len(coord._plan_run_hosts) == 0
+        assert len(coord._job_views) == 0
+
+    def test_epoch_state_deleted_on_reclaim(self):
+        local_db = _FakeLocalDb()
+        coord = HostRunCoordinator(
+            api_url="http://127.0.0.1:1", host_id="h1",
+            agent_instance_id="a1", local_db=local_db,
+        )
+        coord.register_plan_run_host(10, plan_run_id=100)
+        coord.register_job(1, prh_id=10)
+
+        coord.deregister_job(1)
+
+        assert coord._epoch_key(10) in local_db.deleted
+
+    def test_defensive_cap_reclaims_idle_projections(self):
+        """超上限时兜底清理无活跃 job 的投影；有活跃 job 的不动。"""
+        coord = _coord()
+        coord._MAX_PLAN_RUN_HOST_PROJECTIONS = 2
+        coord.register_plan_run_host(1, plan_run_id=100)  # 有 job
+        coord.register_job(1, prh_id=1)
+        coord.register_plan_run_host(2, plan_run_id=101)  # 空闲
+
+        coord.register_plan_run_host(3, plan_run_id=102)  # 触发兜底
+
+        assert 1 in coord._plan_run_hosts      # 活跃 job 的投影保留
+        assert 2 not in coord._plan_run_hosts  # 空闲投影被回收
+        assert 3 in coord._plan_run_hosts

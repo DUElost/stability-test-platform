@@ -659,7 +659,12 @@ def _run_service_tool(
             channel_name = channel.name
         finally:
             db.close()
-        send_to_channel(channel, "【AI 助手】通知通道测试消息")
+        # #1167 P1（D1/D9）：按归一化结果判定成败，不把「未抛异常」当成功
+        result = send_to_channel(channel, "【AI 助手】通知通道测试消息")
+        if not result.accepted:
+            raise RuntimeError(
+                f"渠道「{channel_name}」投递失败（{result.outcome.value}）：{result.detail}"
+            )
         return f"已向渠道「{channel_name}」发送测试消息"
 
     if name == "reload_agent_config":

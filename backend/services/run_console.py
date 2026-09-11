@@ -151,6 +151,41 @@ class ConsoleRun:
         }
 
 
+#: #1228: 子进程环境白名单——控制面环境（含 DATABASE_URL/AGENT_SECRET/
+#: JWT_SECRET_KEY 等服务凭据）绝不透传给被测/工具子进程。调用方需要什么
+#: 就在 start(env=...) 显式注入；白名单只保留进程正常启动所需的通用键。
+_CHILD_ENV_ALLOWLIST = (
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "TZ",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+)
+
+
+def _build_child_env(extra: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """Minimal child environment + caller-provided keys (#1228).
+
+    Isolation boundary (documented in ``docs/design/06-realtime-and-background.md`` §5):
+    argv-list exec (no shell), fixed ``cwd``, this env allowlist, and a new
+    process group for group-kill. Same-UID filesystem permissions remain a
+    known limit (stronger isolation needs a separate user/container).
+    """
+    child = {k: v for k, v in os.environ.items() if k in _CHILD_ENV_ALLOWLIST}
+    if extra:
+        child.update(extra)
+    child.setdefault("PYTHONUNBUFFERED", "1")
+    child.setdefault("PYTHONIOENCODING", "utf-8")
+    return child
+
+
 class RunConsole:
     """进程级单例。configure() 注入日志根与编码；start() 起一个受控 subprocess。"""
 
@@ -267,7 +302,9 @@ class RunConsole:
 
         run_key 串行：同 key 已有 RUNNING run → 抛 RunKeyBusyError。
         cmd 必须是 argv 列表（不走 shell，避免注入）。
-        env 在子进程 os.environ 之上叠加（凭据由调用方注入，本层不记录 env 值）。
+        env 显式注入到子进程（#1228 起子进程环境为白名单 + env——
+        控制面环境/凭据不再透传；隔离边界见
+        docs/design/06-realtime-and-background.md §5）。
         run_id（#1084）：调用方可预生成并先行落库（「先写后启」），使 spawn 前
         外部表已能按 run_id 关联 —— 回调早于外部 INSERT 的竞态从根上消除。
         缺省仍由本层生成；调用方提供的 run_id 撞已有 run 时抛 RunConsoleError。
@@ -297,12 +334,9 @@ class RunConsole:
         with self._lock:
             self._runs[run_id] = run
 
-        # 子进程环境：叠加凭据 + 强制无缓冲/UTF-8 输出
-        proc_env = dict(os.environ)
-        if env:
-            proc_env.update(env)
-        proc_env.setdefault("PYTHONUNBUFFERED", "1")
-        proc_env.setdefault("PYTHONIOENCODING", "utf-8")
+        # 子进程环境：#1228 白名单（不继承控制面环境/凭据）+ 调用方注入 +
+        # 强制无缓冲/UTF-8 输出。
+        proc_env = _build_child_env(env)
 
         popen_kwargs: Dict[str, Any] = dict(
             cwd=cwd or None,

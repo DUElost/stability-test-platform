@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.host import Device, Host
 from backend.models.plan import Plan, PlanStep
+from backend.services.script_params import merge_effective_params
 
 
 class PlanDispatchError(Exception):
@@ -282,12 +283,14 @@ def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
         script_version = step.get("script_version")
         if not script_name or not script_version:
             raise PlanDispatchError("snapshot step is missing script identity")
-        # #508 步骤级 params：快照固化生效参数（default_params + step.params 合并），
-        # 历史 run 可复核。旧快照无 params 键 → 仅 default_params（行为不变）。
-        merged_params = deepcopy(step.get("default_params") or {})
-        step_overrides = step.get("params")
-        if step_overrides:
-            merged_params.update(deepcopy(step_overrides))
+        # #508/#977 步骤级 params：快照固化生效参数（schema.default +
+        # default_params + step.params 合并，与派发同优先级），历史 run 可复核；
+        # 旧快照无 param_schema/params 键 → 两处均按空处理，行为不变。
+        merged_params = merge_effective_params(
+            step.get("param_schema"),
+            step.get("default_params"),
+            step.get("params"),
+        )
         step_def: dict[str, Any] = {
             "step_id": step.get("step_key"),
             "action": f"script:{script_name}",
@@ -482,8 +485,13 @@ def build_preview(plan: Plan, lifecycle: dict, device_ids: list[int]) -> dict:
 def script_defaults(
     script_metadata: dict[tuple[str, str], dict[str, dict]]
 ) -> dict[tuple[str, str], dict]:
+    """有效脚本默认 = ``schema.default`` 为底、``default_params`` 覆盖（#977：
+    与前端展示的「step.params > default_params > schema.default」同优先级；
+    步骤级 ``step.params`` 在 build_lifecycle_from_steps 再覆盖一层）。"""
     return {
-        key: value.get("default_params") or {}
+        key: merge_effective_params(
+            value.get("param_schema"), value.get("default_params"),
+        )
         for key, value in script_metadata.items()
     }
 

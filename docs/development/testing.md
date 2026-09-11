@@ -38,7 +38,7 @@ cp .env.test.example .env.test   # 首次
 | 迁移试验 | 禁止对业务库试跑 `alembic upgrade`；在 CI / 容器 / 开发机验证 |
 | ❌ 禁止 | `TEST_DATABASE_URL=...@localhost:5432/<业务库>` |
 
-`ALLOW_SQLITE_TESTS=1` 仅覆盖子集；`test_agent_dual_write.py` 等仍需 PG partial unique index。
+**无 SQLite 退路**：`conftest` 固定拉起 testcontainers Postgres（`test_ci_and_test_harness_files.py` 契约钉住不得存在 SQLite 回退路径）。
 
 用户须在 `docker` 组（`permission denied` 时 `usermod -aG docker` 后重新登录），不要用生产 `DATABASE_URL` 代替测试库。
 
@@ -54,7 +54,6 @@ cp .env.test.example .env.test   # 首次
 |------|------|
 | `TESTING=1` | conftest 设置；禁用 Redis/SAQ/Scheduler lifespan |
 | `TEST_DATABASE_URL` | 仅隔离库；生产机请 **unset** 走 testcontainers。显式地址有机器护栏（#1300）：库名必须含 `test`（如 `stp_test`）且不得与运行时 `DATABASE_URL` 相同，违者 conftest 拒绝启动；确需豁免设 `STP_ALLOW_UNSAFE_TEST_DATABASE_URL=1`（记 warning） |
-| `ALLOW_SQLITE_TESTS=1` | 本地无 Docker/PG 时的退路 |
 | `JWT_SECRET_KEY` | 必设（见 `.env.test.example`） |
 
 ```bash
