@@ -87,7 +87,7 @@ STP_PLAN_ADMISSION_QUEUE_ENABLED=0
 
 - [ ] Redis 可达（与 SAQ 同 `REDIS_URL`）
 - [ ] `STP_SCHEDULER_LEADER_ELECTION=1`（默认开；确认只有一个 leader 跑 singleton job）
-- [ ] LB 可先保留 sticky，开 adapter 后再验证无 sticky 也能 RPC
+- [ ] LB 可先保留 sticky，开 adapter 后再验证无 sticky 也能 RPC（前置已就绪：Agent 于 #1121 起强制 websocket-only，会话天然亲和；浏览器 polling 回退路径仍需 sticky）
 
 ### 2.2 开启
 

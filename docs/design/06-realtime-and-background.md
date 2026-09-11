@@ -136,7 +136,7 @@ PlanRun 终态
        ├→ emit scan_now → 各 ONLINE Agent
        │    ├→ ScanRunner.run_local_scan → _org.xls on HDD
        │    └→ UploadManager.upload_scan_report → NFS dedup/{run_id}/{platform}/{host_id}_Result_*_org.xls
-       ├→ poll NFS dedup/{plan_run_id}/ (10s × 30 = 300s max)
+       ├→ poll NFS dedup/{plan_run_id}/（间隔 10s × 默认 300s 预算，可配置 + grace；#732）
        │    等待 registered >= len(triggered_host_ids) 或超时
        ├→ run_scan_sync → PlanRunArtifact(scan_result_xls) 注册 DB
        ├→ enqueue upload_task（控制面：scan 引用事件 LOCAL → UPLOAD_PENDING）
@@ -155,7 +155,7 @@ PlanRun 终态
 | scan_task | — | 入口 | poll 完成后 enqueue upload_task 再 enqueue merge |
 | merge_task | scan_task 完成 | `dedup/{run_id}/{mtk|unisoc}/` | 按 platform 读取 scan 产物，产出分区 merge xls |
 | extract_task | merge_task 完成 | `devices/` → `jira/{run_id}/` | 仅按 DLE `remote_path` 打包（#213 B）；merge 成功后 poll DLE REMOTE/ARCHIVED；超时仍 enqueue extract（best-effort） |
-| merge_task SAQ timeout | — | — | `_MERGE_TASK_SAQ_TIMEOUT` = 300 + 660 + 120s，覆盖 merge 子进程与 DLE poll |
+| merge_task SAQ timeout | — | — | `_MERGE_TASK_SAQ_TIMEOUT` = 平台数 × 300（各平台工具调用）+ 180（标记水位线）+ 660（DLE poll）+ 120（I/O 余量）s；双平台 = 1560s（#1085） |
 
 - **多 host**：`scan_task` poll 等待所有 triggered host 的 artifact 或超时
 - **Agent 上送**：`upload_scan_report`（scan xls）；事件目录由 EventUploader 拉取 `UPLOAD_PENDING` 执行 copytree（过滤模型，#287 后无全量分支）
@@ -181,7 +181,7 @@ PlanRun 终态
 3. **终态 run 归档已完成**（merge artifact + extract 上下文）→ 跳过该 run，继续看下一条更
    新的到期候选；全部完成则本轮不 enqueue。
 
-Agent 侧 **`scan_now` 同 host 串行执行**：单 worker 线程 + FIFO 队列；**同一 `plan_run_id` 在队列中合并为最新一条**（coalesce）。正在执行的 scan 不可中断；busy 期间新来的同 run 请求入队等待，不再 `busy_skip` 丢弃。控制面 SAQ `scan_task` 仍按 NFS poll 等待 artifact（最长 300s），与 Agent 队列独立。
+Agent 侧 **`scan_now` 同 host 串行执行**：单 worker 线程 + FIFO 队列；**同一 `plan_run_id` 在队列中合并为最新一条**（coalesce）。正在执行的 scan 不可中断；busy 期间新来的同 run 请求入队等待，不再 `busy_skip` 丢弃。控制面 SAQ `scan_task` 仍按 NFS poll 等待 artifact（默认预算 300s，`STP_SCAN_POLL_*` 可配置 + near-complete grace；#732），与 Agent 队列独立。
 
 ### Agent 端事件目录命名
 

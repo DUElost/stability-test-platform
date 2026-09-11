@@ -107,3 +107,34 @@ def test_unreferenced_runs_deleted_normally(cleanup_env):
 
     assert db.query(PlanRun).count() == 0
     assert a.id != b.id
+
+
+def test_console_log_files_purged_with_run(
+    cleanup_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#798: retention 删除 Run 后对应 console.log 目录与内存锁条目被清理。"""
+    import backend.realtime.log_writer as lw
+    from backend.models.job import JobInstance
+
+    db, plan = cleanup_env
+    monkeypatch.setattr(lw, "LOG_BASE_DIR", tmp_path)
+
+    run = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    job = JobInstance(
+        plan_run_id=run.id, plan_id=plan.id,
+        device_id=sample_device.id, host_id=sample_host.id,
+        status="COMPLETED",
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+    )
+    db.add(job)
+    db.commit()
+
+    log_dir = tmp_path / "jobs" / str(job.id)
+    log_dir.mkdir(parents=True)
+    (log_dir / "console.log").write_text("x\n", encoding="utf-8")
+    lw._get_lock(job.id)  # 模拟运行期建立的内存锁条目
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert not log_dir.exists(), "console.log 目录未被 retention 清理"
+    assert job.id not in lw._locks, "内存锁条目未清理"

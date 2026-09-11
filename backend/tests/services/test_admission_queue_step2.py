@@ -352,3 +352,77 @@ class TestPrepareRequiresAdmissionQueue:
                 plan_id=plan.id, device_ids=[dev.id],
                 triggered_by="pytest", db=db_session, run_type="MANUAL",
             )
+
+
+class TestAdmissionReaperLiveness:
+    """#797: 健康慢准入保护——SAQ job 存活时 reaper 跳过（不耗尽重排次数）。"""
+
+    @staticmethod
+    def _make_precheck(db_session, pr, *, stale_seconds=10_000, attempt_id="attempt-live"):
+        pr.status = "PRECHECK"
+        pr.precheck_started_at = datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)
+        pr.enqueued_at = datetime.now(timezone.utc) - timedelta(seconds=stale_seconds + 60)
+        pr.admission_attempt_id = attempt_id
+        pr.ended_at = None
+        db_session.commit()
+        return pr
+
+    def test_active_job_with_live_worker_skips_requeue(
+        self, db_session, failed_dispatch_run,
+    ):
+        from unittest.mock import patch
+
+        from backend.scheduler.precheck_reaper import reconcile_stale_precheck_v2
+
+        pr = self._make_precheck(db_session, failed_dispatch_run)
+        with patch(
+            "backend.scheduler.precheck_reaper.get_saq_job_state_sync",
+            return_value={"status": "active", "worker_id": "w-1"},
+        ), patch(
+            "backend.scheduler.precheck_reaper.is_worker_alive_sync",
+            return_value=True,
+        ):
+            summary = reconcile_stale_precheck_v2(db=db_session)
+
+        assert summary == {"checked": 1, "requeued": 0, "failed": 0}
+        db_session.refresh(pr)
+        assert pr.status == "PRECHECK"
+        assert not (pr.run_context or {}).get("admission_requeue_attempts")
+
+    def test_queued_job_skips_requeue(self, db_session, failed_dispatch_run):
+        from unittest.mock import patch
+
+        from backend.scheduler.precheck_reaper import reconcile_stale_precheck_v2
+
+        pr = self._make_precheck(db_session, failed_dispatch_run)
+        with patch(
+            "backend.scheduler.precheck_reaper.get_saq_job_state_sync",
+            return_value={"status": "queued"},
+        ):
+            summary = reconcile_stale_precheck_v2(db=db_session)
+
+        assert summary["requeued"] == 0 and summary["failed"] == 0
+        db_session.refresh(pr)
+        assert pr.status == "PRECHECK"
+
+    def test_dead_worker_falls_through_to_requeue(
+        self, db_session, failed_dispatch_run,
+    ):
+        """回归：job 存在但 worker 已死 → 走既有重排路径（保护不误放）。"""
+        from unittest.mock import patch
+
+        from backend.scheduler.precheck_reaper import reconcile_stale_precheck_v2
+
+        pr = self._make_precheck(db_session, failed_dispatch_run)
+        with patch(
+            "backend.scheduler.precheck_reaper.get_saq_job_state_sync",
+            return_value={"status": "active", "worker_id": "w-dead"},
+        ), patch(
+            "backend.scheduler.precheck_reaper.is_worker_alive_sync",
+            return_value=False,
+        ):
+            summary = reconcile_stale_precheck_v2(db=db_session)
+
+        assert summary["requeued"] == 1
+        db_session.refresh(pr)
+        assert pr.status == "QUEUED"

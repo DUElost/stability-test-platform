@@ -20,7 +20,12 @@ from backend.services.plan_dispatcher_sync import (
 
 def normalize_dispatch_params(args: dict | None) -> dict[str, Any]:
     raw = args or {}
-    plan_id = int(raw.get("plan_id") or 0)
+    # #758: bare int() ValueError pierces orchestrator (only catches
+    # ToolValidationError); mirror wifi_pool_id / _parse_run_id.
+    try:
+        plan_id = int(raw.get("plan_id") or 0)
+    except (TypeError, ValueError):
+        raise ToolValidationError("plan_id must be a positive integer") from None
     if plan_id < 1:
         raise ToolValidationError("plan_id must be a positive integer")
     device_ids = _parse_device_ids(raw.get("device_ids"))

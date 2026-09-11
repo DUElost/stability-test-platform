@@ -4,7 +4,7 @@
 用法:
     python scripts/run_gates.py check:quick    # 最快一轮（纯静态，含 knip）
     python scripts/run_gates.py check:pr       # 推送前默认：与 PR CI 现有检查逐项重叠
-    python scripts/run_gates.py check:gov      # 治理面专项（结构 + skill 用量探针）
+    python scripts/run_gates.py check:gov      # 治理面专项（结构 + skill 用量探针 + Harness 摄取矩阵）
     python scripts/run_gates.py check:full     # 夜间全量：main 全量 CI 的本地可跑部分
                                                # + 本机专属 gate（FULL_EXCLUDE 除外，#825）
     python scripts/run_gates.py --list
