@@ -64,7 +64,13 @@ def _run(cfg: dict) -> dict:
     parsed = parse_gpu_log(local_file.read_text(encoding="utf-8", errors="replace"))
     # v1.0.2：run_id 加设备维度——多设备并行同秒不再互相覆盖（验收发现⑨）
     run_id = f"gpu_{time.strftime('%Y%m%d_%H%M%S')}_{device_serial()}"
-    final_status = "COMPLETED" if parsed["end_rc"] is not None else "INCOMPLETE"
+    # v1.0.3：JUnit FAILURES（rc=0 假成功）单独标记
+    if parsed["end_rc"] is None:
+        final_status = "INCOMPLETE"
+    elif parsed.get("junit_failed_rounds", 0) > 0 or parsed["failed_rounds"] > 0:
+        final_status = "TEST_FAILED"
+    else:
+        final_status = "COMPLETED"
     metrics = {
         "run_id": run_id,
         "test_id": parsed["test_id"],
@@ -73,6 +79,7 @@ def _run(cfg: dict) -> dict:
         "failed_rounds": parsed["failed_rounds"],
         "end_rc": parsed["end_rc"],
         "final_status": final_status,
+        "junit_failed_rounds": parsed.get("junit_failed_rounds", 0),
         "log_bytes": local_file.stat().st_size,
     }
 

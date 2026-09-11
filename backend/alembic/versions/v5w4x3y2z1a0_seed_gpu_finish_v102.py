@@ -1,4 +1,4 @@
-"""seed gpu_finish v1.0.2 — JUnit FAILURES 计入（假成功修复）
+"""seed gpu_finish v1.0.3 — JUnit FAILURES 计入（假成功修复）
 
 Revision ID: v5w4x3y2z1a0
 Revises: u6v5w4x3y2z1
@@ -6,7 +6,7 @@ Create Date: 2026-09-11
 
 Data migration (issue #774 run 356 实证):
 
-1. Ensure gpu_finish v1.0.2 exists, deactivate v1.0.1.
+1. Ensure gpu_finish v1.0.3 exists, deactivate v1.0.1.
 
 Behavioral delta:
 - JUnit FAILURES 时 am instrument 退出码仍为 0 → failed_rounds=0 → job
@@ -29,10 +29,10 @@ depends_on = None
 
 VERSIONS = [
     {
-        "name": "gpu_finish", "ver": "1.0.2",
-        "sha": "55b9058d2c89c9b70cf2459b5b7419dc8127f24175bb2e62c46aa34eb3226b3c",
-        "desc": "GPU 收尾 — v1.0.1 + JUnit FAILURES 计入（假成功修复，#774 实证）",
-        "deactivate": ["1.0.1"],
+        "name": "gpu_finish", "ver": "1.0.3",
+        "sha": "6d7929d082e7be02f2e0803cdfedd85e54d7c5edf54e6fa5c7f9360e71fabdd6",
+        "desc": "GPU 收尾 — v1.0.2 + JUnit FAILURES 计入（假成功修复，#774 实证）",
+        "deactivate": ["1.0.2"],
     },
 ]
 

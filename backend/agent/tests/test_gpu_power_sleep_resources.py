@@ -384,12 +384,12 @@ def test_gpu_setup_v108_dismiss_dialogs_wired():
     assert "uiautomator dump" in lib_src and "input tap" in lib_src  # 通用清弹窗
 
 
-def test_gpu_finish_v102_junit_failures_counted():
+def test_gpu_finish_v103_junit_failures_counted():
     """#774：rc=0 但 JUnit FAILURES = 假成功——v1.0.2 计入 junit_failed_rounds。"""
-    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_finish/v1.0.2"
+    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_finish/v1.0.3"
     sys.path.insert(0, str(d))
     import importlib.util
-    spec = importlib.util.spec_from_file_location("gpu_finish_lib_v102", str(d / "_lib.py"))
+    spec = importlib.util.spec_from_file_location("gpu_finish_lib_v103", str(d / "_lib.py"))
     lib = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(lib)

@@ -9,7 +9,7 @@
 2. 拉取 /sdcard/Auto/test_log.txt（instrument stdout + 平台标记行原文）
 3. 解析（parse_gpu_log）→ 摘要 metrics（标记行为准；instrument 输出原文备查）
 4. 摘要 JSON 写 {STP_AEE_NFS_ROOT}/gpu/{project}/results/{run_id}.json
-   （run_id = 收尾时刻 gpu_YYYYmmdd_HHMMSS_<serial>，v1.0.2 加设备维度防并行碰撞）
+   （run_id = 收尾时刻 gpu_YYYYmmdd_HHMMSS）
 5. stdout JSON 只带摘要（step_trace 64KiB 截断约束同 MTBF）
 
 STP_STEP_PARAMS:
@@ -32,7 +32,6 @@ from pathlib import Path
 from _lib import (
     _RESULT_LOG,
     adb,
-    device_serial,
     output_result,
     param_or_env,
     params,
@@ -62,8 +61,7 @@ def _run(cfg: dict) -> dict:
 
     local_file = _pull_result_log()
     parsed = parse_gpu_log(local_file.read_text(encoding="utf-8", errors="replace"))
-    # v1.0.2：run_id 加设备维度——多设备并行同秒不再互相覆盖（验收发现⑨）
-    run_id = f"gpu_{time.strftime('%Y%m%d_%H%M%S')}_{device_serial()}"
+    run_id = time.strftime("gpu_%Y%m%d_%H%M%S")
     final_status = "COMPLETED" if parsed["end_rc"] is not None else "INCOMPLETE"
     metrics = {
         "run_id": run_id,
