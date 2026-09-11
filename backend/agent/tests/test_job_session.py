@@ -938,3 +938,72 @@ def test_log_signal_count_zero_when_reconciler_not_started(lock_tracker, patch_m
     assert summary.reconciler_signal_count == 0
     assert summary.log_signal_count == 0
     assert summary.reconciler_stats == {}
+
+
+def test_reconciler_self_shutdown_wiring_resets_watcher(
+    lock_tracker, patch_manager, monkeypatch
+):
+    """#806：JobSession 必须注入 on_self_shutdown；自关闭回调复位 watcher 抑制位。
+
+    与启动失败回滚（test_reconciler_start_failure_restores_direct_emit）同路：
+    reconciler 停摆后若不复位，AEE/VENDOR_AEE 信号与 DLE 注册静默全黑。
+    """
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "1")
+    monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_HOSTS", raising=False)
+
+    captured: Dict[str, Any] = {}
+
+    class _FakeImpl:
+        def __init__(self):
+            self._aee_reconciler_active = True
+            self.emitter = object()
+
+        def set_aee_reconciler_active(self, active: bool) -> None:
+            self._aee_reconciler_active = bool(active)
+
+    impl = _FakeImpl()
+
+    class _MgrWithDeps(_FakeManager):
+        def get_dep(self, key, default=None):
+            return {
+                "nfs_base_dir": "",
+                "local_db": object(),
+                "adb_path": "adb",
+            }.get(key, default)
+
+    patch_manager(_MgrWithDeps(mode="ok", capability="inotifyd_root"))
+
+    class _FakeReconciler:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def start(self):
+            return True
+
+        def stop(self, timeout=0):
+            return ReconcilerStats()
+
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.AeeDbHistoryReconciler", _FakeReconciler,
+    )
+
+    session = JobSession(
+        job_payload=_make_payload(),
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
+    )
+    session.__enter__()
+    session._handle.impl = impl
+    session._maybe_start_aee_reconciler()
+
+    callback = captured.get("on_self_shutdown")
+    assert callable(callback), "构造 reconciler 必须注入 on_self_shutdown"
+    callback()
+    assert impl._aee_reconciler_active is False, (
+        "自关闭回调必须复位 watcher 抑制位（set_aee_reconciler_active(False)）"
+    )
+
+    session.__exit__(None, None, None)
+    assert 101 not in lock_tracker.active_jobs

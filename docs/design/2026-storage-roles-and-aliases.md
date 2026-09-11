@@ -109,8 +109,8 @@ ADR-0025 / 方案 C 正文里大量「15.4」= **中心存储这个角色**，�
 | `STP_AGENT_NFS_ROOT` | **已停用**（不再映射） | 第三块盘 |
 
 子目录（角色 4 的内容，不是角色）：`devices/`、`dedup/`、`jira/{plan_run_id}/`、`jobs/{job_id}/`、
-`mtbf/{project}/`（MTBF 清单/全局参数 + `results/{run_dir}.json`；控制面写配置、Agent 写 `results/`，见
-[P0 设计 §4.4](../design/2026-08-mtbf-p0-runner-design.md)）、`tools/`（外部工具，ADR-0033）：
+`mtbf/{project}/`（MTBF 清单/全局参数 + `results/{run_dir}__job{job_id}__{serial}.json`（`mtbf_finish` v1.5.0+ 稳定身份，缺维度省略对应段）；
+控制面写配置、Agent 写 `results/`，见 [P0 设计 §4.4](../design/2026-08-mtbf-p0-runner-design.md)）、`tools/`（外部工具，ADR-0033）：
 **现态**为 `tools/{name}/` 下的版本化源码目录，由 Agent 经路径 env 配置调用（展锐三工具族，
 legacy 例外，见 ADR-0033 v1.2 §5.4）；**终态（条件落地）**为
 `tools/{name}/{version}/` 的 `.tar.gz` + sha256 校验（触发条件见同节）。

@@ -351,7 +351,19 @@ async def _dashboard_room_exists(kind: str, ident: str) -> bool:
     订阅被拒只影响推流（重连会重试），不阻塞 REST 主路径。
     """
     if kind == "console":
-        return RunConsole.instance().status(ident) is not None
+        exists = RunConsole.instance().status(ident) is not None
+        if not exists:
+            # #1114：多实例下「非本实例持有」与「不存在」同路径——留可诊断日志
+            try:
+                from backend.realtime.socketio_redis import socketio_redis_adapter_enabled
+            except Exception:  # pragma: no cover
+                socketio_redis_adapter_enabled = lambda: False  # type: ignore[assignment]
+            if socketio_redis_adapter_enabled():
+                logger.warning(
+                    "console_room_refused reason=not_local_multi_instance run_id=%s ref=#1114",
+                    ident,
+                )
+        return exists
     table = "job_instance" if kind in ("job", "run") else "plan_run"
     try:
         async with AsyncSessionLocal() as session:

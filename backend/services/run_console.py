@@ -28,6 +28,37 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+
+def _multi_instance_enabled() -> bool:
+    """Redis adapter（ADR-0027 P3-2）开启 = 多实例形态标志。"""
+    try:
+        from backend.realtime.socketio_redis import socketio_redis_adapter_enabled
+    except Exception:  # pragma: no cover - 导入失败不应影响诊断路径
+        return False
+    return socketio_redis_adapter_enabled()
+
+
+def console_run_miss_hint() -> str:
+    """#1114（R11-F06）：console run 本地缺失时的诊断附加说明。
+
+    多实例模式下 RunConsole 无 owner 路由（进程内态），本地缺失可能是
+    「由其他实例持有」而非「不存在」——把这一可能写进错误详情，避免困惑性 404。
+    """
+    if not _multi_instance_enabled():
+        return ""
+    return "；多实例模式（STP_SOCKETIO_REDIS_ADAPTER=1）下 RunConsole 无 owner 路由，该运行可能由其他控制面实例持有（#1114）"
+
+
+def multi_instance_console_warning() -> Optional[str]:
+    """#1114：多实例模式下受影响功能的启动告警文案（None = 单实例，无告警）。"""
+    if not _multi_instance_enabled():
+        return None
+    return (
+        "multi_instance_mode_enabled console_features_single_instance_only=true "
+        "affected=dedup_jira_serialization,agent_install_console,"
+        "ai_assistant_console_actions,console_room_subscribe ref=#1114"
+    )
+
 logger = logging.getLogger(__name__)
 
 
