@@ -226,7 +226,7 @@ export default function TestSuiteDetailPage() {
     );
   }
 
-  const diskDrift = suite.exported_content_sha256
+  const libraryContentDrift = suite.exported_content_sha256
     && suite.content_sha256
     && suite.exported_content_sha256 !== suite.content_sha256;
 
@@ -248,9 +248,9 @@ export default function TestSuiteDetailPage() {
           {suite.display_name && <p className={TEXT.subtitle}>{suite.display_name}</p>}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <DriftBadge stale={suite.export_stale} />
-            {diskDrift && (
+            {libraryContentDrift && (
               <Badge variant="outline" className="border-destructive/40 text-destructive">
-                磁盘导出物漂移
+                库内容漂移
               </Badge>
             )}
             {suite.project_key && (
