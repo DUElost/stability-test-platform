@@ -1,6 +1,6 @@
 # 套件详情页 Global 文件可选导入（#970）
 
-Status: implemented  
+Status: implemented
 Class: bug-fix
 
 ## Decision
