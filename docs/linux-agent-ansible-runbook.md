@@ -56,7 +56,81 @@ cd "$REPO_ROOT/tools/ansible"
 - `inventory = ./inventory.ini`
 - `remote_user = android`
 - `roles_path = ./roles`
-- `host_key_checking = False`
+- `host_key_checking = True`
+
+### 主机密钥信任模型（#1263 / R14-F17）
+
+Ansible（`host_key_checking = True`）与 `update_agent.yml` 的 rsync 通道均严格校验
+目标主机 SSH 主机密钥，不使用 `StrictHostKeyChecking=no` 或
+`UserKnownHostsFile=/dev/null`。
+
+- **首次连接前登记**：在控制机通过带内可信渠道获取目标主机指纹并人工核对后，
+  登记到 `~/.ssh/known_hosts`（例如核对 `ssh-keyscan -H <host>` 输出的指纹后追加）。
+  未登记时 playbook 以 host key verification 失败中止（fail-closed，不静默放行）。
+- **换钥（主机重装 / SSH 密钥重生成）**：连接会因 host key changed 失败；从带内
+  可信渠道核对新指纹后，`ssh-keygen -R <host>` 并重新登记，并在运维记录
+  （工单 / 值班日志）留痕确认。
+
+### 控制机升级预检（#1263）
+
+从 `host_key_checking = False` 旧配置升级到严格校验后，先确认控制机已登记全部
+目标主机指纹，再跑只读连通检查——未登记主机会在连接阶段 fail-closed 中止。
+
+1）盘点覆盖率（只读；基于 `ansible-inventory` 展开后的成员，含 `children` 子组）：
+
+```bash
+cd "$REPO_ROOT/tools/ansible"
+INV_JSON="$(mktemp)"   # 600 权限临时文件；内容含 hostvars，结束必须删除
+ANSIBLE_CONFIG=./ansible.cfg ansible-inventory -i inventory.ini --list > "$INV_JSON"
+python3 - "$INV_JSON" <<'PY'
+import json
+import subprocess
+import sys
+
+inv = json.load(open(sys.argv[1]))
+hostvars = inv.get("_meta", {}).get("hostvars", {})
+
+groups_seen, hosts_seen, queue = set(), set(), ["linux_hosts"]
+while queue:
+    group = queue.pop()
+    if group in groups_seen:
+        continue
+    groups_seen.add(group)
+    data = inv.get(group, {}) or {}
+    hosts_seen.update(data.get("hosts", []) or [])
+    queue.extend(data.get("children", []) or [])
+
+missing = 0
+for host in sorted(hosts_seen):
+    v = hostvars.get(host, {})
+    addr = v.get("ansible_host", host)
+    port = v.get("ansible_port")
+    key = f"[{addr}]:{port}" if port else addr
+    if subprocess.run(["ssh-keygen", "-F", key], capture_output=True).returncode != 0:
+        missing += 1
+        print(f"missing: {host}")
+print(f"linux_hosts total={len(hosts_seen)} missing={missing}")
+PY
+rm -f "$INV_JSON"
+```
+
+2）对 `missing:` 主机按上文「首次连接前登记」补齐（带内核对指纹后登记）。
+
+3）单台只读验证（`--limit` 收缩到单台）：
+
+```bash
+cd "$REPO_ROOT/tools/ansible"
+ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping --limit <host>
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit <host>
+```
+
+可选：对单台确认严格校验确实生效（`/dev/null` 即"未登记"，不改系统文件）：
+
+```bash
+ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping --limit <host> \
+  -e '{"ansible_ssh_common_args": "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes"}'
+# 期望：UNREACHABLE + Host key verification failed
+```
 
 ## 4. 变量模型
 
