@@ -19,6 +19,13 @@ from sqlalchemy.orm import joinedload
 
 from backend.core.database import SessionLocal
 from backend.models.notification import AlertRule, EventType, NotificationChannel, NotificationLog, NotificationSeverity, NotificationSource
+from backend.services.notification_delivery import (
+    DeliveryResult,
+    accepted,
+    classify_exception,
+    classify_http_status,
+    rejected_permanent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,23 +112,28 @@ def _matches_filters(rule_filters: Dict[str, Any], context: Dict[str, Any]) -> b
     return True
 
 
-def send_to_channel(channel: NotificationChannel, message: str) -> None:
-    """Send a message through the specified channel. Raises on failure."""
+def send_to_channel(channel: NotificationChannel, message: str) -> DeliveryResult:
+    """Send a message through the specified channel（#1167 P1：归一化 DeliveryResult）。
+
+    不再以异常表达投递失败——调用方按 ``result.accepted`` / ``outcome`` 判定
+    （ADR-0036 D1/D9）。配置缺失属 REJECTED_PERMANENT（重试无意义）。
+    """
     config = channel.config or {}
     channel_type = channel.type.value if hasattr(channel.type, "value") else str(channel.type)
 
     if channel_type == "WEBHOOK":
-        _send_webhook(config.get("url", ""), message)
-    elif channel_type == "DINGTALK":
-        _send_dingtalk(config.get("url", ""), config.get("secret", ""), message)
-    elif channel_type == "EMAIL":
-        _send_email(config.get("to", ""), config.get("subject_prefix", "[Stability]"), message)
-    else:
-        raise ValueError(f"Unknown channel type: {channel_type}")
+        return _send_webhook(config.get("url", ""), message)
+    if channel_type == "DINGTALK":
+        return _send_dingtalk(config.get("url", ""), config.get("secret", ""), message)
+    if channel_type == "EMAIL":
+        return _send_email(config.get("to", ""), config.get("subject_prefix", "[Stability]"), message)
+    return rejected_permanent(f"Unknown channel type: {channel_type}", channel_type=channel_type)
 
 
-def _raise_for_delivery_error(resp: requests.Response) -> None:
-    """Raise a credential-safe delivery error on non-2xx (#1214).
+def _delivery_error_result(
+    resp: requests.Response, channel_type: str,
+) -> DeliveryResult | None:
+    """非 2xx → 归一化失败结果（credential-safe，#1214）。
 
     ``requests.raise_for_status()`` embeds the full request URL (which may carry
     ``access_token`` / ``sign`` query credentials) in the exception text; that
@@ -129,7 +141,7 @@ def _raise_for_delivery_error(resp: requests.Response) -> None:
     """
     status = getattr(resp, "status_code", None)
     if not isinstance(status, int) or status < 400:
-        return
+        return None
     reason = (getattr(resp, "reason", "") or "").strip()
     detail = f"HTTP {status}"
     if reason:
@@ -137,23 +149,30 @@ def _raise_for_delivery_error(resp: requests.Response) -> None:
     # Belt-and-braces: a custom adapter could still smuggle a URL via reason.
     from backend.core.redaction import redact_secrets
 
-    raise NotificationDeliveryError(redact_secrets(detail))
+    result = classify_http_status(status, channel_type=channel_type)
+    return DeliveryResult(result.outcome, redact_secrets(detail), channel_type)
 
 
-def _send_webhook(url: str, message: str) -> None:
+def _send_webhook(url: str, message: str) -> DeliveryResult:
     if not url:
-        raise ValueError("Webhook URL not configured")
-    resp = requests.post(
-        url,
-        json={"text": message, "content": message},
-        timeout=10,
-    )
-    _raise_for_delivery_error(resp)
+        return rejected_permanent("Webhook URL not configured", channel_type="WEBHOOK")
+    try:
+        resp = requests.post(
+            url,
+            json={"text": message, "content": message},
+            timeout=10,
+        )
+    except Exception as exc:  # noqa: BLE001 - adapter contract：异常归一化
+        return classify_exception(exc, channel_type="WEBHOOK")
+    err = _delivery_error_result(resp, "WEBHOOK")
+    if err is not None:
+        return err
+    return accepted("WEBHOOK", f"HTTP {getattr(resp, 'status_code', '?')}")
 
 
-def _send_dingtalk(url: str, secret: str, message: str) -> None:
+def _send_dingtalk(url: str, secret: str, message: str) -> DeliveryResult:
     if not url:
-        raise ValueError("DingTalk webhook URL not configured")
+        return rejected_permanent("DingTalk webhook URL not configured", channel_type="DINGTALK")
 
     headers = {"Content-Type": "application/json"}
     payload = {
@@ -178,55 +197,76 @@ def _send_dingtalk(url: str, secret: str, message: str) -> None:
         sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
         url = f"{url}&timestamp={timestamp}&sign={sign}"
 
-    resp = requests.post(url, json=payload, headers=headers, timeout=10)
-    _raise_for_delivery_error(resp)
-    _raise_if_dingtalk_business_error(resp)
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+    except Exception as exc:  # noqa: BLE001 - adapter contract：异常归一化
+        return classify_exception(exc, channel_type="DINGTALK")
+    err = _delivery_error_result(resp, "DINGTALK")
+    if err is not None:
+        return err
+    biz = _dingtalk_business_error_result(resp)
+    if biz is not None:
+        return biz
+    return accepted("DINGTALK", f"HTTP {getattr(resp, 'status_code', '?')}")
 
 
-def _raise_if_dingtalk_business_error(resp: requests.Response) -> None:
-    """#1120: DingTalk returns HTTP 200 with ``errcode != 0`` on business failure.
+def _dingtalk_business_error_result(resp: requests.Response) -> DeliveryResult | None:
+    """#1120 / #1167 D2: DingTalk returns HTTP 200 with ``errcode != 0`` on
+    business failure.
 
-    Treat any non-zero errcode as a delivery error so callers (SAQ / test
-    channel) do not report success.
+    业务拒绝按 REJECTED_PERMANENT 归一化（配置/鉴权/参数类，重试无意义）；
+    errcode → 结果类的细分映射属 adapter contract，后续可依实测数据把
+    限流类 errcode 调整为 TRANSIENT（见 Agent Note Revisit）。
     """
     try:
         body = resp.json()
     except ValueError:
         # Non-JSON body with 2xx: nothing further to validate.
-        return
+        return None
     if not isinstance(body, dict):
-        return
+        return None
     errcode = body.get("errcode", 0)
     try:
         code_int = int(errcode) if errcode is not None else 0
     except (TypeError, ValueError):
-        raise RuntimeError(
-            f"DingTalk API error: invalid errcode={errcode!r} body={body!r}"
-        ) from None
-    if code_int != 0:
-        errmsg = body.get("errmsg", "unknown")
-        raise RuntimeError(
-            f"DingTalk API error errcode={code_int} errmsg={errmsg}"
+        from backend.core.redaction import redact_secrets
+
+        return rejected_permanent(
+            redact_secrets(f"DingTalk API error: invalid errcode={errcode!r}"),
+            channel_type="DINGTALK",
         )
+    if code_int != 0:
+        from backend.core.redaction import redact_secrets
+
+        errmsg = body.get("errmsg", "unknown")
+        return rejected_permanent(
+            redact_secrets(f"DingTalk API error errcode={code_int} errmsg={errmsg}"),
+            channel_type="DINGTALK",
+        )
+    return None
 
 
-def _send_email(to: str, subject_prefix: str, message: str) -> None:
+def _send_email(to: str, subject_prefix: str, message: str) -> DeliveryResult:
     if not to:
-        raise ValueError("Email recipient not configured")
+        return rejected_permanent("Email recipient not configured", channel_type="EMAIL")
     if not SMTP_HOST:
-        raise ValueError("SMTP_HOST not configured in environment")
+        return rejected_permanent("SMTP_HOST not configured in environment", channel_type="EMAIL")
 
     msg = MIMEText(message, "plain", "utf-8")
     msg["Subject"] = f"{subject_prefix} Notification"
     msg["From"] = SMTP_FROM or SMTP_USER
     msg["To"] = to
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
-        if SMTP_PORT != 25:
-            server.starttls()
-        if SMTP_USER and SMTP_PASSWORD:
-            server.login(SMTP_USER, SMTP_PASSWORD)
-        server.sendmail(msg["From"], [to], msg.as_string())
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
+            if SMTP_PORT != 25:
+                server.starttls()
+            if SMTP_USER and SMTP_PASSWORD:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(msg["From"], [to], msg.as_string())
+    except Exception as exc:  # noqa: BLE001 - adapter contract：异常归一化
+        return classify_exception(exc, channel_type="EMAIL")
+    return accepted("EMAIL", "smtp accepted")
 
 
 def _delivery_identity(event_type: str, context: Dict[str, Any]) -> tuple[Any, ...]:
@@ -280,8 +320,10 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
     """
     Dispatch notifications for an event. Opens its own DB session.
 
-    Channel send failures raise ``NotificationDeliveryError`` so SAQ can retry
-    (#1117). Already-successful channels (recorded on NotificationLog.context
+    #1167 P1/P2（ADR-0036 D1/D2/D5）：适配器结果归一化为 ``DeliveryResult``；
+    只有**可重试失败**（REJECTED_TRANSIENT / UNKNOWN）抛
+    ``NotificationDeliveryError`` 让 SAQ 重试；永久拒绝如实记录但不重试。
+    Already-successful channels (recorded on NotificationLog.context
     ``channel_delivery``) are skipped on retry.
     """
     message = _format_message(event_type, context)
@@ -363,6 +405,7 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
     delivery: dict[str, Any] = dict(prior_delivery)
     succeeded: list[int] = []
     failed: list[dict[str, Any]] = []
+    retryable_failed = 0
 
     for dispatch in pending_dispatches:
         channel_id = int(dispatch["channel_id"])
@@ -379,8 +422,21 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
             enabled=True,
         )
         try:
-            send_to_channel(channel, message)
-            delivery[ch_key] = {"status": "ok"}
+            # #1167 P1（D9）：适配器归一化返回 DeliveryResult；异常视为契约外
+            # 实现异常，保守归类（不吞、不猜成功）。
+            result = send_to_channel(channel, message)
+            if not isinstance(result, DeliveryResult):
+                from backend.services.notification_delivery import unknown
+
+                result = unknown(
+                    f"adapter returned non-DeliveryResult: {type(result).__name__}",
+                    channel_type=str(dispatch["channel_type"]),
+                )
+        except Exception as exc:  # noqa: BLE001 - 落地为结果类，不在此层吞语义
+            result = classify_exception(exc, channel_type=str(dispatch["channel_type"]))
+
+        if result.accepted:
+            delivery[ch_key] = result.record()
             succeeded.append(channel_id)
             logger.info(
                 "notification_sent",
@@ -390,19 +446,25 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
                     "event_type": event_type,
                 },
             )
-        except Exception as exc:
-            delivery[ch_key] = {"status": "failed", "error": str(exc)}
+        else:
+            delivery[ch_key] = result.record()
             failed.append({
                 "rule_id": dispatch["rule_id"],
                 "channel_id": channel_id,
-                "error": str(exc),
+                "outcome": result.outcome.value,
+                "retryable": result.retryable,
+                "error": result.detail,
             })
+            if result.retryable:
+                retryable_failed += 1
             logger.warning(
                 "notification_send_failed",
                 extra={
                     "rule_id": dispatch["rule_id"],
                     "channel_id": channel_id,
-                    "error": str(exc),
+                    "outcome": result.outcome.value,
+                    "retryable": result.retryable,
+                    "error": result.detail,
                 },
             )
 
@@ -414,9 +476,12 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
             extra={"log_id": log_id, "event_type": event_type},
         )
 
-    if failed:
+    # D5：只有可重试失败（REJECTED_TRANSIENT / UNKNOWN）才让 SAQ 重试；
+    # 永久拒绝（配置/鉴权/语义错）已记录事实，重试无意义。
+    if retryable_failed:
         raise NotificationDeliveryError(
-            f"notification channel delivery failed for {len(failed)} channel(s)",
+            f"notification channel delivery failed for {retryable_failed} "
+            f"retryable channel(s) ({len(failed)} failed total)",
             succeeded=succeeded,
             failed=failed,
         )
