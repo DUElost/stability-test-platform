@@ -5,6 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SHELL_SCRIPTS = [
     "backend/agent/agentctl.sh",
     "backend/agent/install_agent.sh",
+    "tools/dev/stp_agent_priv_smoke.sh",
 ]
 
 

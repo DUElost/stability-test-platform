@@ -104,6 +104,9 @@ export default function AppRouter() {
             <Route path="wifi" element={<WifiPage />} />
             <Route path="results" element={<ResultsPage />} />
             <Route path="account/password" element={<ChangePasswordPage />} />
+            {/* #1196：通知记录是普通用户的日常读取（后端 logs 端点本就仅要求登录）；
+                页面内部再按角色收窄——配置页签（渠道/规则）仅 admin 可见 */}
+            <Route path="notifications" element={<NotificationsPage />} />
             <Route path="schedules" element={<SchedulesPage />} />
             <Route path="issue-tracker" element={<IssueTrackerPage />} />
             <Route path="assistant" element={<AssistantPage />} />
@@ -111,7 +114,6 @@ export default function AppRouter() {
             {/* Admin-only routes */}
             <Route element={<AdminRoute />}>
               <Route path="users" element={<UsersPage />} />
-              <Route path="notifications" element={<NotificationsPage />} />
               <Route path="assistant/approvals" element={<AssistantApprovalsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="settings/ai-assistant" element={<AiAssistantSettingsPage />} />
