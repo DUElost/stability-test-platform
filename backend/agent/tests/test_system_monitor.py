@@ -16,16 +16,54 @@ def disk_usage_type():
     return namedtuple("DiskUsage", ["total", "used", "free"])
 
 
-@pytest.mark.parametrize(
-    ("stat_line", "expected"),
-    [
-        ("cpu 100 50 50 300 0 0 0\n", 30.0),
-        ("cpu 0 0 0 0\n", 0.0),
-    ],
-)
-def test_get_cpu_usage_success(stat_line: str, expected: float):
-    with patch("builtins.open", mock_open(read_data=stat_line)):
-        assert monitor_module.get_cpu_usage() == expected
+@pytest.fixture(autouse=True)
+def _reset_cpu_sample():
+    """#1259 差分状态跨用例清零，避免采样基线泄漏。"""
+    monitor_module._cpu_prev = None
+    yield
+    monitor_module._cpu_prev = None
+
+
+def _open_cpu_sequence(lines):
+    return patch("builtins.open", side_effect=[io.StringIO(line) for line in lines])
+
+
+def test_get_cpu_usage_first_sample_primes_without_lifetime_average():
+    """首采无基线：即便累计计数看起来几乎满载，也不回报历史均值。"""
+    with patch("builtins.open", mock_open(read_data="cpu 900 0 50 50 0 0 0 0\n")):
+        assert monitor_module.get_cpu_usage() == 0.0
+
+
+def test_get_cpu_usage_rises_from_idle_to_busy():
+    """空闲基线 → 繁忙窗口：第二次采样应显著上升（#1259 核心验收）。"""
+    with _open_cpu_sequence([
+        "cpu 100 0 50 850 0 0 0 0\n",    # 基线：开机以来 idle 占多数
+        "cpu 200 0 150 860 0 0 0 0\n",   # 窗口增量：user+system 200 / total 210
+    ]):
+        assert monitor_module.get_cpu_usage() == 0.0
+        assert monitor_module.get_cpu_usage() == pytest.approx(95.24, abs=0.01)
+
+
+def test_get_cpu_usage_counts_iowait_as_idle():
+    """窗口增量全在 idle+iowait：等 IO 不算 CPU 忙，使用率为 0。"""
+    with _open_cpu_sequence([
+        "cpu 0 0 0 1000 0 0 0 0\n",
+        "cpu 0 0 0 1010 90 0 0 0\n",
+    ]):
+        monitor_module.get_cpu_usage()
+        assert monitor_module.get_cpu_usage() == 0.0
+
+
+def test_get_cpu_usage_resets_baseline_on_counter_regression():
+    """计数器回绕（重启/热插拔）：重置基线，下一窗口从新基线重算。"""
+    with _open_cpu_sequence([
+        "cpu 500 0 500 1000 0 0 0 0\n",
+        "cpu 10 0 10 20 0 0 0 0\n",      # 回绕 → 回 0 并重置基线
+        "cpu 20 0 20 40 0 0 0 0\n",      # 新基线：busy 20 / total 40
+    ]):
+        assert monitor_module.get_cpu_usage() == 0.0
+        assert monitor_module.get_cpu_usage() == 0.0
+        assert monitor_module.get_cpu_usage() == pytest.approx(50.0, abs=0.01)
 
 
 def test_get_cpu_usage_returns_zero_for_invalid_format():
