@@ -77,7 +77,7 @@ def test_mark_terminal_dead_letter_excludes_from_pending(db):
 def test_drain_500_dead_letters_after_max_attempts(db):
     db.enqueue_terminal(42, {"status": "FAILED"})
     drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
-    drainer._MAX_ATTEMPTS = 3
+    drainer._MAX_TERMINAL_ATTEMPTS = 3
 
     resp = MagicMock(status_code=500)
     resp.raise_for_status.side_effect = HTTPError("HTTP 500", response=resp)
@@ -94,7 +94,7 @@ def test_drain_500_dead_letters_after_max_attempts(db):
 def test_drain_below_max_attempts_stays_pending(db):
     db.enqueue_terminal(43, {"status": "FAILED"})
     drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
-    drainer._MAX_ATTEMPTS = 5
+    drainer._MAX_TERMINAL_ATTEMPTS = 5
 
     resp = MagicMock(status_code=500)
     resp.raise_for_status.side_effect = HTTPError("HTTP 500", response=resp)
@@ -113,7 +113,7 @@ def test_drain_below_max_attempts_stays_pending(db):
 def test_dead_letter_does_not_block_newer_terminal(db):
     db.enqueue_terminal(1, {"status": "FAILED"})
     drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
-    drainer._MAX_ATTEMPTS = 1
+    drainer._MAX_TERMINAL_ATTEMPTS = 1
     resp = MagicMock(status_code=503)
     resp.raise_for_status.side_effect = HTTPError("HTTP 503", response=resp)
     with patch("backend.agent.outbox_drainer.requests.post", return_value=resp):

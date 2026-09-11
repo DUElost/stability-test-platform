@@ -145,7 +145,6 @@ class LocalDB:
             );
         """)
         self._ensure_step_trace_schema()
-        self._ensure_job_terminal_outbox_schema()
         self._ensure_log_signal_outbox_schema()
         self._ensure_dle_register_outbox_schema()
         self._ensure_terminal_outbox_schema()
@@ -272,26 +271,6 @@ class LocalDB:
             ALTER TABLE step_trace_cache_v2 RENAME TO step_trace_cache;
             """
         )
-
-    def _ensure_job_terminal_outbox_schema(self) -> None:
-        """job_terminal_outbox 增列 dead_letter (#742):与 log_signal_outbox 同套路。
-
-        Why: OutboxDrainThread 对非 404 失败只 bump_terminal_attempt，无上限时
-             持续打 /complete（5xx / 网络分区 / 契约变更）。
-        How to apply: idempotent ALTER + DEFAULT 0；get_pending_terminals 过滤
-             dead_letter=0；prune 保留死信行供审计。
-        """
-        columns = {
-            row["name"]
-            for row in self._conn.execute(
-                "PRAGMA table_info(job_terminal_outbox)"
-            ).fetchall()
-        }
-        if "dead_letter" not in columns:
-            self._conn.execute(
-                "ALTER TABLE job_terminal_outbox "
-                "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
-            )
 
     def _ensure_log_signal_outbox_schema(self) -> None:
         """log_signal_outbox 增列 dead_letter (#9):与 step_trace_cache 同套路。
@@ -675,8 +654,7 @@ class LocalDB:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, job_id, payload, attempts FROM job_terminal_outbox "
-                "WHERE acked = 0 AND dead_letter = 0 "
-                "ORDER BY created_at ASC LIMIT ?",
+                "WHERE acked = 0 AND dead_letter = 0 ORDER BY created_at ASC LIMIT ?",
                 (limit,),
             ).fetchall()
         result = []
@@ -721,7 +699,7 @@ class LocalDB:
                 )
 
     def bump_terminal_attempt(self, job_id: int, error: str) -> int:
-        """+1 attempts, set last_error, 返回新 attempts（#742/#762：死信判定需看新值）。
+        """+1 attempts, set last_error, 返回新 attempts（#762：死信判定需看新值）。
 
         与 ``bump_step_trace_attempt`` / ``bump_log_signal_attempt`` 同口径。
         """
