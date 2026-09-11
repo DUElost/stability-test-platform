@@ -61,6 +61,11 @@
 | `STP_SCAN_POLL_GRACE_MAX_MISSING` | 触发宽限的最大缺口 host 数（默认 `3`） |
 | `STP_HOST_MAINTENANCE_TTL_SECONDS` | 升级维护窗口兜底 TTL 秒（默认 `900`，上限 `3600`）；持有进程崩溃后窗口按此过期（#960） |
 | `STP_SMTP_TIMEOUT_SECONDS` | 通知 SMTP 网络 deadline 秒（默认 `15`；#1122） |
+| `STP_NOTIFY_WEBHOOK_TIMEOUT_S` | 通知 Webhook 单通道网络 deadline 秒（默认 `10`；#1167 P4） |
+| `STP_NOTIFY_DINGTALK_TIMEOUT_S` | 通知钉钉单通道网络 deadline 秒（默认 `10`；#1167 P4） |
+| `STP_NOTIFY_SAQ_RETRIES` | 通知 SAQ 入队重试次数；默认派生自 D5 策略上限（`DEFAULT_RETRY_POLICY.max_attempts`，当前 `3`），非法值告警回落、下限 `1`（#1167 P5） |
+| `STP_NOTIFY_SAQ_TIMEOUT_S` | 通知 SAQ 单次 job 上限秒（默认 `120`）；须覆盖「一次投递串行经过全部通道」的最坏耗时（#1167 P5） |
+| `BACKGROUND_POOL_SIZE` | 后台线程池 worker 数（默认 `8`；#1122） |
 | `BACKGROUND_POOL_MAX_QUEUE` | 后台线程池待提交队列上限（默认 `200`）；满即拒绝，不再无界堆积（#1122） |
 | `STP_RUN_CONSOLE_REPLAY_MAX_LINES` | RunConsole replay 单次回放行数上限（默认 `2000`；#1124） |
 | `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | RunConsole 终态运行记录保留秒数（默认 `3600`；#1124） |
