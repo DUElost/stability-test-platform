@@ -99,7 +99,9 @@ Watcher policy 取自 **PlanRun.plan_snapshot**，不再读 live `Plan.watcher_p
 ## 6. Plan 链
 
 - 触发读 snapshot 的 `next_plan_id`；旧 Run 缺键时 **fallback** live `Plan.next_plan_id`。
-- 原子：子 PlanRun + `next_plan_triggered`；gate 经 SAQ `precheck_and_dispatch_task`。
+- 原子：子 PlanRun + `next_plan_triggered`；子 Run 经 `prepare_plan_run` 落 **QUEUED**，
+  由 admission pump + `plan_admission_task` 物化（ADR-0026 现行主路径）——历史
+  sync gate 任务 `precheck_and_dispatch_task` 仅存于 V1 兜底/显式重试路径。
 - 补偿：`scheduler/plan_chain_reconciler.py` + `reconcile_chain_trigger_sync`（孤儿 flag / 缺子 Run）。
 - enqueue 失败后：子 Run 可由 `precheck_reaper` 补队列。
 
