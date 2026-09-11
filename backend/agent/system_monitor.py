@@ -3,43 +3,61 @@
 """
 import logging
 import shutil
-from typing import Dict, Any
+import threading
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# #1259：CPU 使用率必须两次采样差分——单次累计计数求比例等于「开机以来
+# 平均值」，长时间低负载后突然满载仍接近历史均值。心跳线程与手动心跳可能
+# 并发采集，状态更新加锁。
+_cpu_lock = threading.Lock()
+_cpu_prev: Optional[Dict[str, int]] = None
+
+_CPU_FIELDS = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
+
+
+def _parse_cpu_line(line: str) -> Dict[str, int]:
+    """解析 ``/proc/stat`` 首行；缺列按 0 补齐（旧内核字段子集）。"""
+    fields = line.split()
+    if len(fields) < 5 or fields[0] != 'cpu':
+        raise ValueError("Invalid /proc/stat format")
+    values = [int(v) for v in fields[1:1 + len(_CPU_FIELDS)]]
+    values += [0] * (len(_CPU_FIELDS) - len(values))
+    return dict(zip(_CPU_FIELDS, values, strict=True))
+
 
 def get_cpu_usage() -> float:
-    """
-    获取 CPU 使用率（百分比）
+    """当前 CPU 使用率（百分比），基于 ``/proc/stat`` 两次采样的区间差分。
+
+    首采无基线返回 ``0.0``（仅 priming，不报开机以来均值）；窗口内
+    ``busy = total − idle − iowait``（iowait 是等 IO 的空闲，不算 CPU 忙）。
+    计数器回绕（重启/热插拔）时重置基线并返回 ``0.0``。
 
     Returns:
         CPU 使用率 (0-100)
     """
+    global _cpu_prev
     try:
-        # 读取 /proc/stat 第一行
         with open('/proc/stat', 'r') as f:
-            line = f.readline()
+            current = _parse_cpu_line(f.readline())
 
-        # 解析字段
-        # 格式: cpu user nice system idle iowait irq softirq
-        fields = line.split()
-        if len(fields) < 5 or fields[0] != 'cpu':
-            raise ValueError("Invalid /proc/stat format")
+        with _cpu_lock:
+            previous, _cpu_prev = _cpu_prev, current
 
-        # 提取数值
-        user = int(fields[1])    # user mode
-        nice = int(fields[2])    # user mode with low priority
-        system = int(fields[3])  # system mode
-        idle = int(fields[4])    # idle task
-
-        # 计算 CPU 使用率
-        # usage = (user + system) / (user + nice + system + idle) * 100
-        total = user + nice + system + idle
-        if total == 0:
+        if previous is None:
             return 0.0
 
-        usage = ((user + system) / total) * 100
-        return round(usage, 2)
+        deltas = {key: current[key] - previous[key] for key in _CPU_FIELDS}
+        if any(delta < 0 for delta in deltas.values()):
+            return 0.0     # 计数器回绕：新样本已设为基线，下一窗口重算
+
+        total = sum(deltas.values())
+        if total <= 0:
+            return 0.0
+
+        busy = total - deltas["idle"] - deltas["iowait"]
+        return round(max(0.0, min(100.0, busy / total * 100)), 2)
     except Exception as e:
         logger.warning(f"get_cpu_usage_failed: {e}")
         return 0.0
