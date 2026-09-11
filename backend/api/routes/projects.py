@@ -835,6 +835,12 @@ def apply_project_map(
                 )
             # SEED 占用或 reassign：旧成员行让位（uq 只约束活跃行）
             existing.is_active = False
+        if existing is not None and existing.project_id == project.id:
+            # #752：同项目大小写变体行必须收敛到设备事实原值——否则 join 全等
+            # miss → 预览报 will_assign>0 但设备静默未归属（诊断从 500 变静默 200）。
+            fact = model_facts.get(model, model)
+            if existing.match_value != fact:
+                existing.match_value = fact
         if existing is None or existing.project_id != project.id:
             try:
                 db.add(ProjectModel(
