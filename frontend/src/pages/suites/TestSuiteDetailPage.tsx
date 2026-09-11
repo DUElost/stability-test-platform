@@ -90,6 +90,7 @@ export default function TestSuiteDetailPage() {
   const runtaskInputRef = useRef<HTMLInputElement>(null);
   const globalInputRef = useRef<HTMLInputElement>(null);
 
+  const [globalImportFile, setGlobalImportFile] = useState<File | null>(null);
   const [caseDialogOpen, setCaseDialogOpen] = useState(false);
   const [editingCase, setEditingCase] = useState<TestCase | null>(null);
   const [validateResult, setValidateResult] = useState<SuiteValidateResult | null>(null);
@@ -138,6 +139,7 @@ export default function TestSuiteDetailPage() {
       api.suites.import(suiteId, runtask, global),
     onSuccess: () => {
       invalidateSuite(queryClient, suiteId);
+      setGlobalImportFile(null);
       toast.success('导入成功');
     },
     onError: (err: unknown) => toast.error(`导入失败: ${toApiError(err).message}`),
@@ -289,6 +291,16 @@ export default function TestSuiteDetailPage() {
             <Button
               size="sm"
               variant="outline"
+              data-testid="suite-global-pick-btn"
+              onClick={() => globalInputRef.current?.click()}
+              disabled={importMutation.isPending}
+            >
+              <FileUp className="mr-2 h-4 w-4" />
+              选择 Global 文件
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
               data-testid="suite-import-btn"
               onClick={() => runtaskInputRef.current?.click()}
               disabled={importMutation.isPending}
@@ -330,15 +342,31 @@ export default function TestSuiteDetailPage() {
         type="file"
         accept=".xml"
         className="hidden"
+        data-testid="suite-runtask-file-input"
         onChange={(e) => {
           const file = e.target.files?.[0];
           e.target.value = '';
           if (!file) return;
-          const global = globalInputRef.current?.files?.[0] ?? null;
-          handleImport(file, global);
+          handleImport(file, globalImportFile);
         }}
       />
-      <input ref={globalInputRef} type="file" accept=".xml" className="hidden" />
+      <input
+        ref={globalInputRef}
+        type="file"
+        accept=".xml"
+        className="hidden"
+        data-testid="suite-global-file-input"
+        onChange={(e) => {
+          const file = e.target.files?.[0] ?? null;
+          e.target.value = '';
+          setGlobalImportFile(file);
+        }}
+      />
+      {globalImportFile && (
+        <p className="mb-4 text-sm text-muted-foreground" data-testid="suite-global-file-label">
+          待导入 Global：<span className="font-mono">{globalImportFile.name}</span>
+        </p>
+      )}
 
       <div className="mb-6 grid gap-4 md:grid-cols-2">
         <Card>
