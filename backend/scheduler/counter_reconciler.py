@@ -18,6 +18,7 @@ from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.job_terminalization import recount_plan_run_counters
+from backend.services.plan_run_aggregation import apply_plan_run_aggregation_from_counters
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ def reconcile_plan_run_counters_once(
 
     with hold_scheduler_leadership("counter_reconcile") as is_leader:
         if not is_leader:
-            return {"scanned": 0, "drifted": 0, "fixed": 0, "skipped_not_leader": 1}
+            return {"scanned": 0, "drifted": 0, "fixed": 0, "aggregated": 0, "skipped_not_leader": 1}
         return _reconcile_plan_run_counters_body(
             lookback_hours=lookback_hours,
             batch_size=batch_size,
@@ -68,6 +69,7 @@ def _reconcile_plan_run_counters_body(
     scanned = 0
     drifted = 0
     fixed = 0
+    aggregated = 0
 
     with SessionLocal() as db:
         rows = (
@@ -81,7 +83,7 @@ def _reconcile_plan_run_counters_body(
                 )
                 .order_by(PlanRun.id.desc())
                 .limit(limit)
-                .with_for_update(key_share=True, skip_locked=True)
+                .with_for_update(read=True, skip_locked=True)
             )
         ).scalars().all()
 
@@ -106,13 +108,17 @@ def _reconcile_plan_run_counters_body(
                     "plan_run_counter_drift plan_run=%d before=%s after=%s",
                     run.id, result["before"], result["after"],
                 )
+                # #789: recount alone leaves RUNNING runs stuck — re-aggregate when
+                # counters now show all jobs terminal.
+                if int(run.total_job_count or 0) > 0 and apply_plan_run_aggregation_from_counters(run):
+                    aggregated += 1
 
         if fixed:
             db.commit()
         else:
             db.rollback()
 
-    summary = {"scanned": scanned, "drifted": drifted, "fixed": fixed}
+    summary = {"scanned": scanned, "drifted": drifted, "fixed": fixed, "aggregated": aggregated}
     if drifted:
         logger.info("counter_reconcile_done %s", summary)
     else:
