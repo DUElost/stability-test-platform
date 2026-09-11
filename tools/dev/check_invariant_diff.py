@@ -18,7 +18,7 @@
 规则：
   pydantic-v1-api    backend/**/*.py      .dict(（patch.dict/monkeypatch.dict 豁免）/
                                           .parse_obj( / .from_orm( / class Config:
-  plural-table-name  backend/migrations/**create_table/CREATE TABLE 引用复数表名
+  plural-table-name  backend/alembic/versions/**/*.py  create_table/CREATE TABLE 引用复数表名
                      （业务表名单数是硬不变量——任何以 s 结尾的新表名都值得看一眼）
   bare-pytest        backend/agent/scripts/**/*.sh   裸 pytest 调用（python -m pytest 放行）
 
@@ -54,7 +54,7 @@ RULES: list[tuple[str, str, list[re.Pattern[str]]]] = [
     ),
     (
         "plural-table-name",
-        r"backend/migrations/.*\.py$",
+        r"backend/alembic/versions/.*\.py$",
         [
             # alembic op 风格：create_table("...s"）——业务表名单数，s 结尾即嫌疑
             re.compile(r"create_table\(\s*['\"][A-Za-z0-9_]+s['\"]", re.IGNORECASE),
@@ -169,8 +169,8 @@ def run_self_test() -> int:
     good_cfg = bad_cfg.replace("class Config:", "model_config = ConfigDict(")
     expect("ConfigDict 绿向", good_cfg, False)
 
-    bad_tbl = """--- a/backend/migrations/versions/abc.py
-+++ b/backend/migrations/versions/abc.py
+    bad_tbl = """--- a/backend/alembic/versions/abc.py
++++ b/backend/alembic/versions/abc.py
 @@ -0,0 +1,1 @@
 +    op.create_table("hosts", sa.Column("id", sa.Integer))
 """
@@ -214,8 +214,8 @@ def run_self_test() -> int:
 +python -m pytest backend/agent/tests -q
 """
     expect("sh 注释提及 pytest 不拦", bad_sh_comment, False)
-    bad_sql_comment = """--- a/backend/migrations/versions/abc.py
-+++ b/backend/migrations/versions/abc.py
+    bad_sql_comment = """--- a/backend/alembic/versions/abc.py
++++ b/backend/alembic/versions/abc.py
 @@ -0,0 +1,2 @@
 +-- 存量库另有 hosts 备份表，不在本迁移范围
 +op.create_table("host", sa.Column("id", sa.Integer))
