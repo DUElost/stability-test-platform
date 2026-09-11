@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { API_TIMEOUT_MS, SESSION_PROBE_TIMEOUT_MS } from './timeouts';
 import { refreshAccessToken } from '@/utils/auth';
 import type {
   ApiResponseEnvelope,
@@ -68,6 +69,12 @@ export function toApiError(error: unknown): ApiError {
   if (error instanceof ApiError) return error;
 
   const source = isRecord(error) ? error : undefined;
+  // #1199：axios 超时（ECONNABORTED/ETIMEDOUT 或 message 含 timeout）映射为
+  // 可辨识文案与 TIMEOUT 码，避免暴露 "timeout of 30000ms exceeded" 这类技术串
+  const isTimeout =
+    source?.code === 'ECONNABORTED' ||
+    source?.code === 'ETIMEDOUT' ||
+    (typeof source?.message === 'string' && /timeout/i.test(source.message));
   const response = isRecord(source?.response) ? source.response : undefined;
   const status = typeof response?.status === 'number' ? response.status : undefined;
   const responseData = response?.data;
@@ -82,11 +89,12 @@ export function toApiError(error: unknown): ApiError {
     (details && typeof details.message === 'string' ? details.message : undefined) ??
     (typeof candidate === 'string' ? candidate : undefined) ??
     validationMessage(candidate) ??
+    (isTimeout ? '请求超时，请重试' : undefined) ??
     (typeof source?.message === 'string' ? source.message : undefined) ??
     (status ? `请求失败 (${status})` : '网络请求失败');
   const code =
     (details && typeof details.code === 'string' ? details.code : undefined) ??
-    (status ? `HTTP_${status}` : 'NETWORK_ERROR');
+    (status ? `HTTP_${status}` : isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR');
 
   return new ApiError(code, message, {
     status,
@@ -106,6 +114,8 @@ export function registerAuthFailureHandler(fn: AuthFailureHandler): void {
 const apiClient = axios.create({
   baseURL: '/api/v1',
   withCredentials: true,
+  // #1199：普通 REST 的应用层超时上界（长请求在各自调用点豁免为 NO_TIMEOUT）
+  timeout: API_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -137,7 +147,11 @@ function isLoginRequest(url: unknown): boolean {
 // 裸 axios 调用，不经过本拦截器（防递归）。
 async function isSessionAlive(): Promise<boolean> {
   try {
-    await axios.get('/api/v1/auth/me', { withCredentials: true });
+    await axios.get('/api/v1/auth/me', {
+      withCredentials: true,
+      // #1199：探活位于 401 恢复路径内，挂起会拖住拦截器，收紧超时
+      timeout: SESSION_PROBE_TIMEOUT_MS,
+    });
     return true;
   } catch {
     return false;

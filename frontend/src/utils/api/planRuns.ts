@@ -1,4 +1,5 @@
 import apiClient from './client';
+import { NO_TIMEOUT } from './timeouts';
 import { unwrapApiResponse } from './client';
 import type {
   PlanRun,
@@ -105,6 +106,7 @@ export const planRuns = {
     const response = await apiClient.get(`/plan-runs/${runId}/report/export`, {
       params: { format },
       responseType: 'blob',
+      timeout: NO_TIMEOUT, // #1199：报表导出体量不可控，豁免应用层超时
     });
     return response.data as Blob;
   },
