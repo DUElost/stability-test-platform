@@ -15,6 +15,9 @@ class HostCreate(BaseModel):
     ssh_key_path: Optional[str] = None
     ssh_password: Optional[str] = None
     ssh_known_hosts_path: Optional[str] = None
+    # #908：known_hosts 已有不同主机密钥时，默认拒绝静默替换；
+    # 管理员显式置 true 才换钥（审计记录新旧指纹）
+    replace_host_key: bool = False
 
 
 class HostUpdate(BaseModel):
@@ -32,6 +35,8 @@ class HostUpdate(BaseModel):
     ssh_key_path: Optional[str] = None
     ssh_password: Optional[str] = None
     ssh_known_hosts_path: Optional[str] = None
+    # #908：同 HostCreate.replace_host_key
+    replace_host_key: bool = False
 
 
 class HostWatcherAdminStatePatch(BaseModel):

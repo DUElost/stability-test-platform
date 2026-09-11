@@ -1,6 +1,6 @@
 # 环境变量参考
 
-> **最后更新**：2026-08-09  
+> **最后更新**：2026-09-11  
 > 模板权威源：`backend/.env.example`、`backend/agent/.env.example`、根目录 `.env.server.example`。  
 > 本文只整理**常用/易踩坑**变量；完整清单以 example 文件为准。
 
@@ -12,7 +12,7 @@
 |------|------|
 | `DATABASE_URL` | PostgreSQL（async 驱动用 `postgresql+asyncpg://`；同步去掉 `+asyncpg`） |
 | `REDIS_URL` | SAQ broker；开启 `STP_SOCKETIO_REDIS_ADAPTER` 时兼作 SocketIO pub/sub（**不**存业务数据） |
-| `STP_SOCKETIO_REDIS_ADAPTER` | `1`=挂载 `AsyncRedisManager`（多实例 room fan-out）；默认 `0`（ADR-0027 P3-2） |
+| `STP_SOCKETIO_REDIS_ADAPTER` | `1`=挂载 `AsyncRedisManager`（多实例 room fan-out）；默认 `0`（ADR-0027 P3-2）。**启用前读 ADR-0027 清单第 6 条**：RunConsole 依赖功能（dedup 串行 / 安装 console / 助手 console / console 房间）仍为单实例语义（#1114） |
 | `STP_SOCKETIO_REDIS_CHANNEL` | Redis pub/sub channel 前缀（默认 `stp-socketio`） |
 | `STP_AGENT_SID_REGISTRY` | Agent `host_id` owner 登记；默认跟随 Redis adapter；`0`/`1` 可显式覆盖（ADR-0027 P3-3） |
 | `STP_AGENT_SID_REGISTRY_TTL_SECONDS` | owner key TTL（默认 120） |
@@ -59,6 +59,11 @@
 | `STP_SCAN_POLL_GRACE_SECONDS` | 高进度宽限秒数（默认 `120`；就绪率≥ratio 且缺口≤max_missing 时一次） |
 | `STP_SCAN_POLL_GRACE_RATIO` | 触发宽限的最低就绪率（默认 `0.9`） |
 | `STP_SCAN_POLL_GRACE_MAX_MISSING` | 触发宽限的最大缺口 host 数（默认 `3`） |
+| `STP_HOST_MAINTENANCE_TTL_SECONDS` | 升级维护窗口兜底 TTL 秒（默认 `900`，上限 `3600`）；持有进程崩溃后窗口按此过期（#960） |
+| `STP_SMTP_TIMEOUT_SECONDS` | 通知 SMTP 网络 deadline 秒（默认 `15`；#1122） |
+| `BACKGROUND_POOL_MAX_QUEUE` | 后台线程池待提交队列上限（默认 `200`）；满即拒绝，不再无界堆积（#1122） |
+| `STP_RUN_CONSOLE_REPLAY_MAX_LINES` | RunConsole replay 单次回放行数上限（默认 `2000`；#1124） |
+| `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | RunConsole 终态运行记录保留秒数（默认 `3600`；#1124） |
 | `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` | Compose 开发初始化管理员；**禁止**用于生产默认值 |
 
 ### Agent 协议门禁

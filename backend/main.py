@@ -144,6 +144,15 @@ async def lifespan(app: FastAPI):
             os.getenv("TESTING"), is_agent_secret_configured(),
         )
 
+        # #1114（R11-F06 / ADR-0027 清单第 6 条）：多实例模式下 RunConsole 仍是
+        # 进程内态——dedup Jira 串行 / Agent 安装 console / 助手 console 动作与日志 /
+        # console 房间订阅为单实例语义；使用这些功能应保持单实例（或 LB 层 sticky）。
+        from backend.services.run_console import multi_instance_console_warning
+
+        _console_warning = multi_instance_console_warning()
+        if _console_warning:
+            logger.warning(_console_warning)
+
         # Redis — retained for SAQ broker (task queue)
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         redis_client = await aioredis.from_url(

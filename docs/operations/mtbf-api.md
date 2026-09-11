@@ -92,7 +92,7 @@ user 构建（`ro.debuggable=0`）直接 fail-fast，需 userdebug/eng 工程包
 | 路径 | 内容 |
 |------|------|
 | `runtask.xml` / `UiAutomatorTestData.xml` | 派发源，由工具链同步（`/mnt/automation-toolkit/android-tools/stability_MTBF-Test/config`） |
-| `results/{run_dir}.json` | `mtbf_finish` 逐条结果（P2 `test_case_result` 数据源，不扩 artifact 白名单） |
+| `results/{run_dir}__job{job_id}__{serial}.json` | `mtbf_finish` v1.5.0+ 逐条结果（文件名带 job/serial 稳定身份，缺维度时省略对应段；P2 `test_case_result` 数据源，不扩 artifact 白名单） |
 
 > **凭据警示**：`UiAutomatorTestData.xml` 含**真实 SIM/WiFi/Google 账号凭据（明文）**，且该目录是常规运维可达路径。
 > 禁止将其内容复制进仓库 / 日志 / PR diff / Agent Note；需要夹具或示例时一律脱敏（仓库
@@ -125,9 +125,10 @@ user 构建（`ro.debuggable=0`）直接 fail-fast，需 userdebug/eng 工程包
 
 ### 关键语义
 
-- **双漂移检测器**：`export_stale` 由库内容指纹计算得出（任何写路径都不清快照列）——「库改了没导出」在 export 响应头与详情 `export_stale` 同时可见；「导出后磁盘被手改」由门禁比对 `exported_sha256` 捕获（precheck 五步门禁 `suite_verify_failed`，#404 PR-C）。
+- **双漂移检测器**：`export_stale` 由库内容指纹计算得出（任何写路径都不清快照列）——「库改了没导出」在 export 响应头与详情 `export_stale` 同时可见；「导出后磁盘被手改」由门禁比对 `exported_sha256`（runtask.xml）与 `exported_global_sha256`（Global）捕获（precheck 五步门禁 `suite_verify_failed` / `global_sha_mismatch`，#404 PR-C / #973）。Global 缺失或漂移与 runtask 同等 fail-closed。
 - **在途守卫（#402 / #516）**：绑定**同一套件**的 QUEUED/PRECHECK/RUNNING PlanRun → 409 `SUITE_RUNS_ACTIVE`。跨套件并发导出互不阻塞。未绑定 mtbf 存量 Run 不再阻断 export（#404 硬拒新派发后宽匹配已删）。
 - **export_dir 解析**：显式 `export_dir` > 项目 key > `legacy`（兼容 P0 部署）。
+- **export_dir 唯一性（运维 SOP，R05-F11 / #974）**：中心存储按 `{STP_AEE_NFS_ROOT}/mtbf/{export_dir}/` 落物，**同一 export_dir 的多个套件会互相覆盖消费路径文件**（在途守卫只按套件身份隔离，不按目录）。多套件共用目录属**误配置**：上线前必须保证每个套件解析出的 `export_dir` 唯一——显式 `export_dir` 或独立项目 key，避免都回落默认 `legacy`。目录级互斥未实现（已接受的设计风险）；需要目录级保护时另起 ADR。
 
 ### 典型闭环（ADR-0030 D6 验收信号）
 

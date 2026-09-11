@@ -259,12 +259,14 @@ sudo PYTHONPATH=/opt/stability-test-agent /opt/stability-test-agent/venv/bin/pyt
 
 **原因**：部署目录中仍保留旧代码，或本地 fork 引用了当前 agent 包中不存在的模块。
 
-**修复**：重新同步 agent 目录，并用 `--delete` 删除目标机上的过期文件：
+**修复**：重新同步 agent 目录（**连同 `backend/schemas/`**——`install_agent.sh` 自 #1247 起强制要求 Pipeline schema），并用 `--delete` 删除目标机上的过期文件：
 ```bash
-rsync -av --delete <source>/backend/agent/ /tmp/agent-install/
-sed -i 's/\r$//' /tmp/agent-install/install_agent.sh
-cd /tmp/agent-install && sudo bash install_agent.sh
+ssh user@target-host 'mkdir -p /tmp/agent-install/agent /tmp/agent-install/schemas'
+rsync -av --delete <source>/backend/agent/ user@target-host:/tmp/agent-install/agent/
+rsync -av <source>/backend/schemas/pipeline_schema.json user@target-host:/tmp/agent-install/schemas/
+ssh user@target-host 'sed -i "s/\r$//" /tmp/agent-install/agent/install_agent.sh && cd /tmp/agent-install/agent && sudo bash install_agent.sh'
 ```
+即 `<script_dir>/../schemas/` 必须存在；仅同步 `backend/agent/` 会让安装脚本以「缺少 Pipeline schema」fail-fast。
 
 ### Shell 脚本报错 `$'\r': command not found`
 
@@ -431,18 +433,21 @@ sudo userdel stability-test
 # 示例用 RFC 5737 文档保留段（192.0.2.0/24）；实际部署替换为真实主机地址
 HOSTS=("192.0.2.101" "192.0.2.102" "192.0.2.103")
 AGENT_SRC="backend/agent"
+SCHEMA_SRC="backend/schemas/pipeline_schema.json"
 API_URL="http://<CONTROL_PLANE_IP>:8000"
 
 for HOST in "${HOSTS[@]}"; do
     echo "部署到 $HOST..."
 
-    # 同步代码
-    rsync -av --delete "$AGENT_SRC/" root@$HOST:/tmp/agent-install/
+    # 同步代码（agent 与 schemas 分目录；install_agent.sh 要求 <script_dir>/../schemas/）
+    ssh root@$HOST 'mkdir -p /tmp/agent-install/agent /tmp/agent-install/schemas'
+    rsync -av --delete "$AGENT_SRC/" root@$HOST:/tmp/agent-install/agent/
+    rsync -av "$SCHEMA_SRC" root@$HOST:/tmp/agent-install/schemas/
 
     # 远程安装（修复 CRLF + 非交互执行）
     ssh root@$HOST << EOF
-        sed -i 's/\r$//' /tmp/agent-install/install_agent.sh
-        cd /tmp/agent-install && bash install_agent.sh <<< "$API_URL"
+        sed -i 's/\r$//' /tmp/agent-install/agent/install_agent.sh
+        cd /tmp/agent-install/agent && bash install_agent.sh <<< "$API_URL"
         systemctl daemon-reload
         systemctl start stability-test-agent
         systemctl status stability-test-agent --no-pager

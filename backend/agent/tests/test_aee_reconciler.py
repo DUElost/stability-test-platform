@@ -1272,3 +1272,77 @@ def test_aee_ts_utc_is_none_when_timezone_unknown(monkeypatch):
         extra = emitter.calls[0]["extra"]
         assert extra["aee_ts"] == ts, "设备原始字符串必须原样保留"
         assert extra["aee_ts_utc"] is None, f"ts={ts!r} 不该被假设为 UTC"
+
+
+def test_self_stop_notifies_self_shutdown_callback(monkeypatch, tmp_path):
+    """#806：连续错误自关闭必须调用 on_self_shutdown（JobSession 借此复位
+    watcher 的 emit 抑制位；否则该 Job 余下生命周期信号静默全黑）。"""
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_MAX_TICK_ERRORS", "2")
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("STP_WATCHER_AEE_LOCAL_ROOT", str(tmp_path))
+
+    notified: List[int] = []
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=_FakeEmitter(),
+        state_store=_MemStore(),
+        serial="SX-CB",
+        job_id=2002,
+        host_id="HOST",
+        local_root=tmp_path,
+        baseline_snapshot_enabled=False,
+        shell_fn=lambda cmd, timeout: None,
+        on_self_shutdown=lambda: notified.append(1),
+    )
+
+    def _always_fail():
+        raise RuntimeError("simulated_tick_failure")
+
+    rec.tick_once = _always_fail  # type: ignore[assignment]
+    assert rec.start() is True
+
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if rec._thread is not None and not rec._thread.is_alive():
+            break
+        time.sleep(0.01)
+
+    assert not rec._thread.is_alive(), "连续错误超阈值后线程应自我关闭"
+    assert notified, "自关闭后必须调用 on_self_shutdown（watcher 复位抑制位）"
+
+
+def test_self_stop_callback_failure_does_not_block_shutdown(monkeypatch, tmp_path):
+    """回调抛异常不得阻断自关闭本身（#72 现场：死循环比丢一次通知更糟）。"""
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_MAX_TICK_ERRORS", "2")
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("STP_WATCHER_AEE_LOCAL_ROOT", str(tmp_path))
+
+    def _boom() -> None:
+        raise RuntimeError("watcher reset failed")
+
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=_FakeEmitter(),
+        state_store=_MemStore(),
+        serial="SX-CB2",
+        job_id=2003,
+        host_id="HOST",
+        local_root=tmp_path,
+        baseline_snapshot_enabled=False,
+        shell_fn=lambda cmd, timeout: None,
+        on_self_shutdown=_boom,
+    )
+
+    def _always_fail():
+        raise RuntimeError("simulated_tick_failure")
+
+    rec.tick_once = _always_fail  # type: ignore[assignment]
+    assert rec.start() is True
+
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if rec._thread is not None and not rec._thread.is_alive():
+            break
+        time.sleep(0.01)
+
+    assert not rec._thread.is_alive(), "回调异常也不得阻断自关闭"
