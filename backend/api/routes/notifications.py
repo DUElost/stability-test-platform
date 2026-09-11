@@ -156,12 +156,23 @@ def test_channel(
 
     from backend.services.notification_service import send_to_channel
 
+    # #1167 P1（D1/D9）：投递结果归一化 —— 只有 ACCEPTED 才报成功；
+    # 失败按 outcome 如实回传（不再把「未抛异常」当成功）。
     try:
-        send_to_channel(channel, "This is a test notification from Stability Test Platform.")
-        return {"ok": True, "message": "Test notification sent"}
-    except Exception as exc:
+        result = send_to_channel(channel, "This is a test notification from Stability Test Platform.")
+    except Exception as exc:  # noqa: BLE001 - 契约外异常兜底为失败
         logger.warning("test_channel_failed: channel_id=%s err=%s", channel_id, exc)
         raise HTTPException(status_code=502, detail=f"Send failed: {exc}") from exc
+    if not result.accepted:
+        logger.warning(
+            "test_channel_failed: channel_id=%s outcome=%s detail=%s",
+            channel_id, result.outcome.value, result.detail,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Send failed ({result.outcome.value}): {result.detail}",
+        )
+    return {"ok": True, "message": "Test notification sent"}
 
 
 # ---------------------------------------------------------------------------
