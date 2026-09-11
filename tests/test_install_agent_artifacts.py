@@ -193,3 +193,23 @@ def test_install_script_assigns_env_ownership_to_agent_user():
         "install_agent.sh must chown .env to the agent user/group (#1251)"
     )
     assert chown_idx > chmod_idx, ".env ownership must be set after the mode fix-up"
+
+
+def test_install_script_configures_agent_log_rotation():
+    """#1265：unit 的 append 主日志必须随安装落盘 logrotate 配置（无轮转耗尽系统盘）。"""
+    script = INSTALL_SCRIPT.read_text(encoding="utf-8")
+    service = (REPO_ROOT / "backend/agent/stability-test-agent.service").read_text(
+        encoding="utf-8"
+    )
+
+    # 前置事实：unit 以 append 方式写两个日志（systemd 自身不做轮转）
+    assert "StandardOutput=append:" in service and "logs/agent.log" in service
+    assert "StandardError=append:" in service and "logs/agent_error.log" in service
+
+    # logrotate 段覆盖同一对日志 + 大小上限与保留策略
+    assert "/etc/logrotate.d/${SERVICE_NAME}" in script
+    assert "${INSTALL_DIR}/logs/agent.log" in script
+    assert "${INSTALL_DIR}/logs/agent_error.log" in script
+    assert "size 50M" in script
+    assert "rotate 5" in script
+    assert "copytruncate" in script
