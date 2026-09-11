@@ -83,11 +83,13 @@ export default function AssistantPage() {
       qc.invalidateQueries({ queryKey: aiAssistantKeys.sessions() });
     },
     onError: (err) => {
-      const message = toApiError(err).message || '发送失败';
-      if (message.includes(NOT_CONFIGURED_CODE)) {
+      const apiError = toApiError(err);
+      // #1226：后端把错误码放 ApiError.code、message 是人话说明——按 code 判断。
+      // 此前 message.includes(code) 对真实响应（message 为人话）永不命中，引导丢失。
+      if (apiError.code === NOT_CONFIGURED_CODE) {
         setShowNotConfigured(true);
       } else {
-        toast.error(message);
+        toast.error(apiError.message || '发送失败');
       }
     },
   });
