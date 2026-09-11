@@ -90,6 +90,7 @@ export default function TestSuiteDetailPage() {
   const runtaskInputRef = useRef<HTMLInputElement>(null);
   const globalInputRef = useRef<HTMLInputElement>(null);
 
+  const [globalImportFile, setGlobalImportFile] = useState<File | null>(null);
   const [caseDialogOpen, setCaseDialogOpen] = useState(false);
   const [editingCase, setEditingCase] = useState<TestCase | null>(null);
   const [validateResult, setValidateResult] = useState<SuiteValidateResult | null>(null);
@@ -138,6 +139,7 @@ export default function TestSuiteDetailPage() {
       api.suites.import(suiteId, runtask, global),
     onSuccess: () => {
       invalidateSuite(queryClient, suiteId);
+      setGlobalImportFile(null);
       toast.success('导入成功');
     },
     onError: (err: unknown) => toast.error(`导入失败: ${toApiError(err).message}`),
@@ -224,7 +226,7 @@ export default function TestSuiteDetailPage() {
     );
   }
 
-  const diskDrift = suite.exported_content_sha256
+  const libraryContentDrift = suite.exported_content_sha256
     && suite.content_sha256
     && suite.exported_content_sha256 !== suite.content_sha256;
 
@@ -246,9 +248,9 @@ export default function TestSuiteDetailPage() {
           {suite.display_name && <p className={TEXT.subtitle}>{suite.display_name}</p>}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <DriftBadge stale={suite.export_stale} />
-            {diskDrift && (
+            {libraryContentDrift && (
               <Badge variant="outline" className="border-destructive/40 text-destructive">
-                磁盘导出物漂移
+                库内容漂移
               </Badge>
             )}
             {suite.project_key && (
@@ -285,6 +287,16 @@ export default function TestSuiteDetailPage() {
             >
               <FolderOutput className="mr-2 h-4 w-4" />
               导出到工具目录
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="suite-global-pick-btn"
+              onClick={() => globalInputRef.current?.click()}
+              disabled={importMutation.isPending}
+            >
+              <FileUp className="mr-2 h-4 w-4" />
+              选择 Global 文件
             </Button>
             <Button
               size="sm"
@@ -330,15 +342,31 @@ export default function TestSuiteDetailPage() {
         type="file"
         accept=".xml"
         className="hidden"
+        data-testid="suite-runtask-file-input"
         onChange={(e) => {
           const file = e.target.files?.[0];
           e.target.value = '';
           if (!file) return;
-          const global = globalInputRef.current?.files?.[0] ?? null;
-          handleImport(file, global);
+          handleImport(file, globalImportFile);
         }}
       />
-      <input ref={globalInputRef} type="file" accept=".xml" className="hidden" />
+      <input
+        ref={globalInputRef}
+        type="file"
+        accept=".xml"
+        className="hidden"
+        data-testid="suite-global-file-input"
+        onChange={(e) => {
+          const file = e.target.files?.[0] ?? null;
+          e.target.value = '';
+          setGlobalImportFile(file);
+        }}
+      />
+      {globalImportFile && (
+        <p className="mb-4 text-sm text-muted-foreground" data-testid="suite-global-file-label">
+          待导入 Global：<span className="font-mono">{globalImportFile.name}</span>
+        </p>
+      )}
 
       <div className="mb-6 grid gap-4 md:grid-cols-2">
         <Card>

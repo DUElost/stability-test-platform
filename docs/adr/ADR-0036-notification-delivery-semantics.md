@@ -1,7 +1,8 @@
 # ADR-0036：通知投递语义契约（Notification Delivery Semantics Contract）
 
-- 状态：**Proposed**
-- 版本记录：v0.1（2026-09-08 初版草案，R11 审查触发）
+- 状态：**Accepted**
+- 版本记录：v0.1（2026-09-08 初版草案，R11 审查触发）；v1.0（2026-09-11
+  评审定稿，D1–D9 逐项确认无修订，附两处 editorial 澄清：#1166）
 - 优先级：P2
 - 目标里程碑：M7
 - 日期：2026-09-08
@@ -118,6 +119,9 @@ Retry / Final State
 - 投递结果必须存在于**业务事实层**（DB），不得只存在于 Redis/SAQ 的 job 生命周期中；
 - 至少能表达：`requested` → `dispatched` → `accepted` / `retrying` → `failed` / `exhausted`；
 - 状态词表**向前兼容**：未来新增 `delivered`（见 §4 挂起项）不得要求改本契约；
+- 澄清（v1.0）：D6 的状态词（小写）是**投递生命周期**，D2 的结果类（大写）是
+  **单次尝试结果**——一次投递含多次尝试，实现应把尝试结果归并进生命周期状态，
+  两层不得混用同一列表达；
 - 一个 Notification 天然对应 N 个通道投递尝试，模型必须能表达 1:N；
 - **具体落库形态（扩 `notification_logs` 还是新建投递表）属实现设计**，本文不选死。
 
@@ -131,7 +135,9 @@ Retry / Final State
 
 - **同步投递仅限**管理员的通道连通性测试（`POST /notifications/channels/{id}/test` 类）；
 - **所有生产投递路径一律异步**，不得新增同步直投；
-- 同步路径必须同样遵守 D1–D3（归一化结果、三态失败、显式 deadline），但不得自行重试。
+- 同步路径必须同样遵守 D1–D3（归一化结果、三态失败、显式 deadline），但不得自行重试；
+- 澄清（v1.0）：D6（投递事实落 DB）约束生产投递（D4 覆盖的异步路径）；管理员
+  连通性测试不写投递事实表（其结果仅用于接口反馈与审计日志）。
 
 #### D9 — channel adapter 语义
 
@@ -180,15 +186,18 @@ Retry / Final State
 
 ## 5. 落地与后续动作
 
-次序（本 ADR 起草不改代码）：
+次序与状态（**2026-09-11 定稿时校准**）：
 
-1. **本 ADR 定稿**（Proposed → Accepted）——跟踪 issue [#1166](https://github.com/DUElost/stability-test-platform/issues/1166)；
+1. **本 ADR 定稿**（Proposed → Accepted，v1.0）——已完成（#1166）；
 2. **ADR-0011 范围边界与指针**（同 PR 已补）；
 3. **索引挂靠位**（`docs/adr/README.md` 清单行 + `docs/DOC-MAP.md` 架构 ADR 行，同 PR 已补）。起草期间 `docs/DOC-MAP.md` 曾有**他人在窗未提交**的断链行（指向不存在的 `ADR-0035-agent-host-identity.md`，`gov-surface` 唯一 BLOCK），已由该 Execution 处置并经复核确认 `check_governance_surface.py --check` 全绿（跟踪 issue [#1165](https://github.com/DUElost/stability-test-platform/issues/1165)，已关闭）；
-4. **#1120**：按 D1/D9 修业务响应判定（可在契约定稿后立即进行）；
-5. **#1117**：按 D4/D5/D6/D7 修异常吞没 + 投递级幂等（retry owner 依本文）；
-6. **#1122**：按 D3/D4 收口 timeout 与队列边界（在 D4 定案后再动，避免再写一版会被推翻的参数）；
-7. **实现分解与验收台账**：[#1167](https://github.com/DUElost/stability-test-platform/issues/1167)（D1–D9 → 代码的映射与顺序）。
+4. **#1120**（DingTalk 业务响应判定）：缺陷单已关闭（`errcode` 判定落地）；
+5. **#1117**（异常吞没）：缺陷单已关闭——**其 ADR 语义级验收**（D4/D5/D6/D7：
+   统一 retry owner + 投递级幂等 + 投递事实持久化）未完成，由下方台账承接；
+6. **#1122**（SMTP deadline + 有界队列）：缺陷单已关闭（D3 的字段级落地）；
+7. **实现分解与验收台账**：[#1167](https://github.com/DUElost/stability-test-platform/issues/1167)
+   （D1–D9 → 代码的映射与顺序）——P1 部分由 #1120 覆盖；P2–P5 自本 ADR
+   定稿起可定案推进。
 
 **实现与契约的先后纪律**（对齐执行契约 §10）：实现不得静默重新定义本文语义；若实现发现本文不可行，先修订本文再改代码。
 
