@@ -123,3 +123,16 @@ def test_update_agent_requires_control_plane_upgrade_gate():
     assert "Release control-plane upgrade gate" in text
     assert "Release control-plane upgrade gate after rollback" in text
     assert text.count('holder: "{{ agent_upgrade_holder }}"') >= 2
+
+
+def test_api_url_refresh_never_writes_empty_override():
+    """#1250 迁移暴露的缺陷：API_URL 回写曾直接用未注入的 agent_api_url（默认空），
+    无条件覆盖目标机 .env → 心跳 URL 变空、agentctl health rc=1。
+
+    回写必须用 pre_tasks 解析出的 agent_upgrade_api_url（-e agent_api_url= 优先，
+    否则取目标机现值），空值场景由解析后的 assert 提前拦截。"""
+    text = PLAYBOOK.read_text(encoding="utf-8")
+
+    assert 'line: "API_URL={{ agent_upgrade_api_url }}"' in text
+    assert 'line: "API_URL={{ agent_api_url }}"' not in text
+    assert "Resolve upgrade gate target (explicit vars win, else deployed .env)" in text

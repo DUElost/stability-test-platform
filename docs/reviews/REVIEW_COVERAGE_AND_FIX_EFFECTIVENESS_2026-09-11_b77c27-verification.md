@@ -1,6 +1,6 @@
 # 独立核验：R01–R15 审查覆盖、修复有效性与闭环可持续性
 
-> **状态**：待综合（独立第二意见稿）——与 [`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fb87d5f1.md`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fb87d5f1.md)（`CA-*` 编号）同题独立完成，供多 Harness 综合审查汇聚（Mode C：先独立、后汇聚）。
+> **状态**：待综合（独立第二意见稿）——与 [`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fdca41.md`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fdca41.md)（`CA-*` 编号）同题独立完成，供多 Harness 综合审查汇聚（Mode C：先独立、后汇聚）。
 >
 > **核验基线**：`4a955874`（origin/main tip，本 Execution declare 时点）
 > **日期**：2026-09-11（观测时点：UTC 2026-09-10 19:20 前后）
@@ -176,7 +176,7 @@ Registry 现状：158 条记录，`FINISHED×MERGED` 146（92.4%），`ABANDONED
 
 | 记录 | harness | 状态 | 交付物 |
 |---|---|---|---|
-| `review-coverage-fix-effectiveness-20260911` | codebuddy | FINISHED / 已合入 | `REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fb87d5f1.md`（PR #1307，已 MERGED） |
+| `review-coverage-fix-effectiveness-20260911` | codebuddy | FINISHED / 已合入 | `REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fdca41.md`（PR #1307，已 MERGED） |
 | `docs-r01-r15-synthesis-2026-09-11` | cursor | CODING | `PROJECT_REVIEW_R01_R15_SYNTHESIS_2026-09-11.md` + 总纲 + DOC-MAP |
 | `audit-review-coverage-fix-effectiveness-20260911` | codex | CODING | `docs/reviews` |
 | `docs-r01-r15-independent-verification` | zcode | CODING（本文） | 本文件 |
