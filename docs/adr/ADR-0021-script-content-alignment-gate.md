@@ -189,6 +189,8 @@ abort 不只是为热更新服务——它是产品独立价值的运维功能�
 - 每 step 校验 sha 会引入 N×M 次磁盘读 + 网络往返，性能浪费
 
 **已知缝隙**：门禁 verify 通过后、Agent claim 并 spawn 之间（约 0-30s 窗口），若 DB Script 行的 `nfs_path` 通过通用 PUT 接口被修改，Agent 缓存刷新后会使用新路径。实际触发概率极低（PUT 接口未通过 UI 暴露、修改 nfs_path 属运维高危操作），但逻辑上存在。建议后续在 Script 层面对已存在版本增加 `nfs_path` 不可修改约束（与 `default_params` 422 约束对齐），可彻底收口。
+>
+> ✅ **2026-09-11 收口（#790）**：`PUT /scripts/{id}` 现对 `name` / `version` / `nfs_path` / `content_sha256` 四个契约字段的**变更**返回 422（同值回传不受影响），内容漂移只走 `POST /scripts/scan[?force_rebaseline=true]`，标识变更用新版本表达。本「已知缝隙」路径不再可达。
 
 ### D10 — Agent SocketIO RPC：verify_scripts
 
