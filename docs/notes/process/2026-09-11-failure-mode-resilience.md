@@ -127,3 +127,27 @@ grep -rn "_locks" backend/realtime/log_writer.py          # 20,24,25,26 — no e
 grep -rn "_pending_reconnected_serials" backend/agent/heartbeat_thread.py
 python3 /tmp/tocover3.py    # 32 outbound sites / 31 with timeout / 1 gap (backend/main.py:147)
 ```
+
+## Decision
+
+对失效模式与弹性面进行单轴证据审计，结果以本 Note 记录，不在审计范围内发起代码修复。
+三项 P1 风险（同步重连风暴无抖动、Redis 客户端无 per-op timeout、SIGKILL 被错记为 FAILED）
+及四项 P2/P3 风险作为发现列入，后续独立 PR 承接修复，避免将审计发现与修复方案混入同一提交。
+
+## Alternatives
+
+- 直接在 ADR-0021/ADR-0026/ADR-0018 内联补充：会模糊现有 ADR 规范主张与实际缺口的边界。
+- 开多个 Issue 分项登记：无法在 `docs/notes/process/` 里保留可追溯的全量证据命令，选择 Note 形式。
+- 立即提交 jitter 补丁：超出单次审计 scope，应在专项 PR 中引用本 Note 作为背景证据。
+
+## Verification
+
+所有引用均含 `file:line`；§EVIDENCE COMMANDS 内的命令可独立复现。
+"Positive counter-example"段（31/32 外部调用有显式 timeout）以工具脚本 `/tmp/tocover3.py` 统计，
+数据可在同一环境重跑验证。
+
+## Revisit
+
+任一 P1 风险修复后（jitter 加入、Redis `socket_timeout` 补齐、mid-job-kill 测试落地），
+重跑 §EVIDENCE COMMANDS 核验结论仍有效；ADR-0036 从 Proposed 转 Accepted 后，
+§SPECS vs NO SPECS 中"Delivery semantics"行需更新判定。

@@ -120,3 +120,25 @@ git log -1 --format=%cs -- docs/design/2026-07-plan-execute-page-improvements.md
 git log -1 --format=%cs -- frontend/src/utils/api/types.ts                          # 2026-09-11
 grep -rn "PRD-" docs/acceptance/*.md                           # → 空（无 PRD→AC 追溯）
 ```
+
+## Decision
+
+对文档/架构完整性进行单轴证据审计，结果以本 Note 记录，不在审计范围内发起修复。
+P1–P3 风险项（`types.ts` 零强制、ADR-0023 D2–D8 仍 Proposed、ADR-0031 编号重复）
+作为发现列入，修复由后续独立 PR 承接，避免将审计发现与修复方案混入同一提交。
+
+## Alternatives
+
+- 直接在对应 ADR/DOC-MAP 内联修复：会模糊审计基线与修复时间线，不利于后续验收追踪。
+- 开 Issue 登记：无法在 `docs/notes/process/` 里保留可追溯的全量证据命令，选择 Note 形式。
+- 拆分为多篇 Note（每条风险一篇）：当前 P1–P3 项存在交叉证据，合并审计降低冗余。
+
+## Verification
+
+所有引用均含 `file:line`；§EVIDENCE COMMANDS 内的命令可独立复现。
+审计时 `python3 tools/dev/check_governance_surface.py --check` → `[OK] … S1–S13，exit 0`（见 §DRIFT GATES 实跑行）。
+
+## Revisit
+
+任一 P1 风险被修复后（`types.ts` 同步门禁落地、ADR-0023 D2–D8 状态更新、ADR-0031 附录登记），
+重跑本节证据命令核验结论仍有效；或在下一次季度文档整体审查时重审孤儿/漂移计数。
