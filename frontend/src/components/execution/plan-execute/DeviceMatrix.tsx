@@ -50,7 +50,7 @@ interface DeviceMatrixProps {
   occupancyByDeviceId: Map<number, HostActiveJob>;
   highlightId?: number | null;
   onToggle: (device: ReadinessDevice, event: { shiftKey: boolean }) => void;
-  lastClickedIndexRef: React.MutableRefObject<number | null>;
+  lastClickedDeviceIdRef: React.MutableRefObject<number | null>;
   /** 填满父级高度（选机工作台舞台）；默认仍可独立使用。 */
   className?: string;
 }
@@ -96,7 +96,7 @@ export function DeviceMatrix({
   occupancyByDeviceId,
   highlightId,
   onToggle,
-  lastClickedIndexRef,
+  lastClickedDeviceIdRef,
   className,
 }: DeviceMatrixProps) {
   const ordered = useMemo(() => sortDevicesStable(devices, hostMap), [devices, hostMap]);
@@ -121,12 +121,6 @@ export function DeviceMatrix({
     () => buildMatrixVirtualRows(ordered, hostMap, selectedIds, cols),
     [ordered, hostMap, selectedIds, cols],
   );
-
-  const indexById = useMemo(() => {
-    const map = new Map<number, number>();
-    ordered.forEach((d, i) => map.set(d.id, i));
-    return map;
-  }, [ordered]);
 
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
@@ -215,9 +209,8 @@ export function DeviceMatrix({
                                 disabled={!canSelect}
                                 onClick={(event) => {
                                   if (!canSelect) return;
-                                  const idx = indexById.get(device.id) ?? 0;
                                   onToggle(device, { shiftKey: event.shiftKey });
-                                  lastClickedIndexRef.current = idx;
+                                  lastClickedDeviceIdRef.current = device.id;
                                 }}
                                 className={cn(
                                   'relative aspect-square overflow-hidden rounded-[5px] border-2 transition-transform hover:z-10 hover:scale-[1.05]',
@@ -273,12 +266,15 @@ export function applyMatrixSelection(
   prev: Set<number>,
   device: ReadinessDevice,
   event: { shiftKey: boolean },
-  lastClickedIndex: number | null,
+  lastClickedDeviceId: number | null,
 ): Set<number> {
   const index = ordered.findIndex((d) => d.id === device.id);
   if (index < 0) return prev;
-  if (event.shiftKey && lastClickedIndex != null) {
-    const ids = rangeSelectIds(ordered, lastClickedIndex, index).filter((id) => {
+  const anchorIndex = lastClickedDeviceId != null
+    ? ordered.findIndex((d) => d.id === lastClickedDeviceId)
+    : -1;
+  if (event.shiftKey && anchorIndex >= 0) {
+    const ids = rangeSelectIds(ordered, anchorIndex, index).filter((id) => {
       const d = ordered.find((x) => x.id === id);
       return d ? isSchedulable(d) : false;
     });

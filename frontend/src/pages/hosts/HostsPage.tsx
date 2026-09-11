@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Server } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
@@ -57,6 +57,17 @@ export default function HostsPage() {
     refetchInterval: 10000,
   });
   const hosts = useMemo(() => coerceHostList(hostsData), [hostsData]);
+  const liveHostIds = useMemo(
+    () => new Set(hosts.map((host) => String(host.id))),
+    [hosts],
+  );
+  const visibleSelectedHostIds = useMemo(() => {
+    if (selectedHostIds.size === 0) return selectedHostIds;
+    const next = new Set(
+      Array.from(selectedHostIds).filter((id) => liveHostIds.has(String(id))),
+    );
+    return next.size === selectedHostIds.size ? selectedHostIds : next;
+  }, [selectedHostIds, liveHostIds]);
 
   const createMutation = useMutation({
     mutationFn: (data: Parameters<typeof api.hosts.create>[0]) => api.hosts.create(data),
@@ -262,7 +273,7 @@ export default function HostsPage() {
   };
 
   const handleBulkInstall = async () => {
-    const targets = resolveInstallTargets(Array.from(selectedHostIds));
+    const targets = resolveInstallTargets(Array.from(visibleSelectedHostIds));
     if (!targets.length) {
       toast.info('选中主机中没有可安装目标（ONLINE 请用热更新）');
       return;
@@ -279,14 +290,14 @@ export default function HostsPage() {
   };
 
   const handleBulkDelete = async () => {
-    if (selectedHostIds.size === 0) return;
+    if (visibleSelectedHostIds.size === 0) return;
     const ok = await confirmDialog({
-      description: `确定删除选中的 ${selectedHostIds.size} 台主机？此操作不可恢复。`,
+      description: `确定删除选中的 ${visibleSelectedHostIds.size} 台主机？此操作不可恢复。`,
       variant: 'destructive',
     });
     if (!ok) return;
     // C6：受控并发（与 DevicesPage 批量标签同模式），失败汇总而非逐条静默
-    const ids = Array.from(selectedHostIds);
+    const ids = Array.from(visibleSelectedHostIds);
     let cursor = 0;
     let succeeded = 0;
     const failed: string[] = [];
@@ -433,7 +444,7 @@ export default function HostsPage() {
   }, [hosts]);
 
   const bulkCounts = useMemo(() => {
-    const selected = Array.from(selectedHostIds)
+    const selected = Array.from(visibleSelectedHostIds)
       .map((id) => hosts?.find((h: Host) => h.id === id))
       .filter((h): h is Host => Boolean(h));
     let firstInstall = 0;
@@ -449,12 +460,12 @@ export default function HostsPage() {
       }
     }
     return {
-      selected: selectedHostIds.size,
+      selected: visibleSelectedHostIds.size,
       firstInstall,
       reinstall,
       hotUpdate,
     };
-  }, [selectedHostIds, hosts]);
+  }, [visibleSelectedHostIds, hosts]);
 
   const installPending = hostOps.some(
     (op) =>
@@ -467,9 +478,9 @@ export default function HostsPage() {
   const hotUpdatePanelOps = hostOps.some((op) => op.kind === 'hot_update');
 
   const handleSelectedHotUpdate = async () => {
-    if (selectedHostIds.size === 0 || bulkHotUpdateProgress) return;
-    if (selectedHostIds.size === 1) {
-      const [hostId] = Array.from(selectedHostIds);
+    if (visibleSelectedHostIds.size === 0 || bulkHotUpdateProgress) return;
+    if (visibleSelectedHostIds.size === 1) {
+      const [hostId] = Array.from(visibleSelectedHostIds);
       const host = hosts?.find((item: Host) => item.id === hostId);
       if (!host || host.status !== 'ONLINE') {
         toast.info('请选择一台在线主机进行热更新');
@@ -479,7 +490,7 @@ export default function HostsPage() {
       return;
     }
 
-    const targets = Array.from(selectedHostIds)
+    const targets = Array.from(visibleSelectedHostIds)
       .map((id) => hosts?.find((host: Host) => host.id === id))
       .filter((host): host is Host => Boolean(host))
       .map((host) => ({
@@ -667,7 +678,7 @@ export default function HostsPage() {
         onHotUpdate={isAdmin ? handleHotUpdate : undefined}
         isHotUpdating={(hostId: string | number) =>
           isHostOpBusy(hostId, 'hot_update') ||
-          (bulkHotUpdateProgress != null && selectedHostIds.has(hostId))
+          (bulkHotUpdateProgress != null && visibleSelectedHostIds.has(hostId))
         }
         onInstall={isAdmin ? handleInstall : undefined}
         isInstalling={(hostId: string | number) =>
@@ -682,7 +693,7 @@ export default function HostsPage() {
         }
         canManageWatcherAdminState={canManageWatcherAdminState}
         isAdmin={isAdmin}
-        selectedIds={selectedHostIds}
+        selectedIds={visibleSelectedHostIds}
         onSelectionChange={setSelectedHostIds}
       />
 

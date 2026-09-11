@@ -83,7 +83,7 @@ def _reconcile_plan_run_counters_body(
                 )
                 .order_by(PlanRun.id.desc())
                 .limit(limit)
-                .with_for_update(read=True, skip_locked=True)
+                .with_for_update(key_share=True, skip_locked=True)
             )
         ).scalars().all()
 

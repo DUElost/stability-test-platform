@@ -409,3 +409,86 @@ def test_abort_pending_count_uses_returning_after_concurrent_claim(
     assert control_emits, "claimed RUNNING job must receive abort control"
     payload = control_emits[0].args[1]["payload"]
     assert payload["job_ids"] == [claimed_id]
+
+
+def test_abort_run_context_patch_preserves_concurrent_writer_keys(
+    db_session, sample_plan_run, sample_plan, sample_device, sample_host,
+):
+    """#793：abort 的 run_context 更新必须分段（jsonb_set）——并发写者（如归档
+    的 record_scan_archive_state）在 abort 读快照之后写入的键不得被整段写回抹掉。
+
+    注入点：批量 UPDATE job_instance 前（abort 已写完 abort_requested 首段），
+    用独立会话写入 `{archive}`；旧整段实现会在后续整写时把它覆盖掉。
+    """
+    import json as _json
+
+    from sqlalchemy import text as _text
+    from sqlalchemy.orm import Session
+
+    from backend.models.plan_run import PlanRun
+
+    run = db_session.get(PlanRun, sample_plan_run.id)
+    job = JobInstance(
+        plan_run_id=run.id,
+        plan_id=sample_plan.id,
+        device_id=sample_device.id,
+        host_id=sample_host.id,
+        status=JobStatus.PENDING.value,
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+    )
+    db_session.add(job)
+    run.total_job_count = 1
+    db_session.commit()
+
+    injected = {"done": False}
+    orig_execute = Session.execute
+
+    def _is_plan_run_read(statement) -> bool:
+        # abort 开场的 `select(PlanRun)...with_for_update` —— 其后 run_ctx 快照
+        # 才被复制；注入点必须在快照读取之后、首个 run_context 写之前。
+        try:
+            # 渲染 SQL 含换行 → 归一空白后再做子串匹配
+            sql = " ".join(str(statement).split())
+        except Exception:
+            return False
+        return "SELECT" in sql.upper() and "FROM plan_run WHERE" in sql
+
+    def execute_with_foreign_archive(self, statement, *args, **kwargs):
+        result = orig_execute(self, statement, *args, **kwargs)
+        if self is db_session and not injected["done"] and _is_plan_run_read(statement):
+            injected["done"] = True
+            # 同一事务内模拟「外部写者（归档）在 abort 读快照之后写入 {archive}」：
+            # 旧整段实现随后会用 stale 快照覆盖该键；分段 jsonb_set 只改自己的键。
+            # （跨会话 UPDATE 会与 abort 的行锁互等——同事务注入才可控可测。）
+            orig_execute(
+                self,
+                _text(
+                    "UPDATE plan_run SET run_context = jsonb_set("
+                    "  COALESCE(NULLIF(run_context, 'null'::jsonb), '{}'::jsonb), "
+                    "  '{archive}', CAST(:value AS jsonb), true"
+                    ") WHERE id = :run_id"
+                ),
+                {
+                    "run_id": run.id,
+                    "value": _json.dumps({"hosts_triggered": ["h-race"]}),
+                },
+            )
+        return result
+
+    with patch.object(Session, "execute", execute_with_foreign_archive), patch(
+        "backend.services.plan_run_abort.should_trigger_dedup",
+        return_value=False,
+    ), patch(
+        "backend.services.plan_run_abort.enqueue_dedup_terminal_sync",
+    ), patch("backend.services.plan_run_abort.schedule_emit"):
+        abort_plan_run(run.id, db=db_session, reason="race_archive")
+
+    assert injected["done"] is True
+    db_session.expire_all()
+    fresh = db_session.get(PlanRun, run.id)
+    ctx = fresh.run_context or {}
+    assert ctx.get("archive") == {"hosts_triggered": ["h-race"]}, (
+        "并发写者（归档）的键不得被 abort 抹掉"
+    )
+    assert ctx["abort_requested"]["reason"] == "race_archive"
+    assert ctx["abort_requested"]["requested_job_ids"] == []
