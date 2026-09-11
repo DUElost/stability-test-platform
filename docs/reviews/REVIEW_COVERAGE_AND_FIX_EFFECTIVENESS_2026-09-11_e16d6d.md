@@ -12,10 +12,10 @@
   [AI Execution Contract](../development/ai/execution-contract.md)
 - 同题他源（不覆盖、供交叉比对）：
   [`_4e188e`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_4e188e.md)、
-  [`_5e3831`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_5e3831.md)、
-  [`_705379`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_705379.md)、
+  `_5e3831`（已退役）、`_705379`（已退役）、
   [`_85d793`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_85d793.md)、
-  [`_f61411`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_f61411.md)
+  `_f61411`（已退役）——三份退役稿未入主干、存于备份（哈希校验见
+  [退役稿转正与丢失稿恢复记录](../notes/process/2026-09-11-retired-review-docs-promotion.md)）
 - 过程记录：[Agent Note](../notes/process/2026-09-11-three-question-confirmation-e16d6d.md)
 
 > 本文是单会话独立确认稿，不是综合裁决，不构成全面审查交付完成、缺陷修复完成、

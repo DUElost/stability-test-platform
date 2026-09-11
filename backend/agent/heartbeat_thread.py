@@ -7,12 +7,17 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional
 
 from . import device_discovery
 from .heartbeat import send_heartbeat
 
 logger = logging.getLogger(__name__)
+
+# #730：单设备 ADB 假死不得线性拖垮心跳主循环——按设备并发采集，
+# 上限 8（与 issue 建议一致：min(设备数, 8)）。
+_DEVICE_PROBE_MAX_WORKERS = 8
 
 
 class HeartbeatThread:
@@ -129,6 +134,39 @@ class HeartbeatThread:
                 break
             self._tick()
 
+    def _collect_device_infos(self, discovered: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """并发采集每台设备信息（#730），返回与 ``discovered`` 同序的结果列表。
+
+        单设备 ADB 假死时，其探测超时不再逐台累加到心跳主循环；整轮采集耗时
+        由「单个设备最坏探测时长」约束（配合 ``_DEVICE_PROBE_MAX_WORKERS``）。
+        单设备采集异常（非 ADB 超时路径的意外异常）只影响该设备：记 error 并
+        继续，不中断整轮心跳。
+        """
+        if not discovered:
+            return []
+        with ThreadPoolExecutor(
+            max_workers=min(len(discovered), _DEVICE_PROBE_MAX_WORKERS),
+            thread_name_prefix="hb-probe",
+        ) as pool:
+            futures = [
+                pool.submit(
+                    device_discovery.collect_device_info,
+                    self._adb_path,
+                    dev["serial"],
+                    raw_adb_state=dev.get("adb_state", "device"),
+                )
+                for dev in discovered
+            ]
+            infos: List[Dict[str, Any]] = []
+            # 不用 zip(strict=)：Agent 运行环境兼容旧 python3，按索引取保序
+            for idx, dev in enumerate(discovered):
+                try:
+                    infos.append(futures[idx].result())
+                except Exception:
+                    logger.exception("device_collect_failed serial=%s", dev["serial"])
+                    infos.append({"adb_state": "error", "adb_connected": False})
+            return infos
+
     def _tick(self) -> None:
         """Single heartbeat cycle: discover → compute capacity/health → HTTP POST (authoritative) → WS push (display-only)."""
         devices_list = []
@@ -136,11 +174,10 @@ class HeartbeatThread:
         discovered_serials: set[str] = set()
         try:
             discovered = device_discovery.discover_devices(self._adb_path)
-            for dev in discovered:
+            infos = self._collect_device_infos(discovered)
+            for idx, dev in enumerate(discovered):
+                info = infos[idx]
                 discovered_serials.add(dev["serial"])
-                info = device_discovery.collect_device_info(
-                    self._adb_path, dev["serial"], raw_adb_state=dev.get("adb_state", "device")
-                )
                 device_data = {
                     "serial": dev["serial"],
                     "model": dev.get("model"),
@@ -269,6 +306,20 @@ class HeartbeatThread:
         )
         total_devices = len(devices_list)
 
+        # lsusb 对照计数：物理 USB 侧枚举到的疑似 Android 设备数。与上面的
+        # online_healthy（adb devices 口径）并排展示，差值暴露「设备在 USB 上
+        # 但 ADB 看不到」。失败返回 None（显示未知而非 0），不影响心跳主流程。
+        try:
+            usb_device_count = device_discovery.count_usb_devices()
+        except Exception as exc:
+            logger.debug("usb_device_count_failed: %s", exc)
+            usb_device_count = None
+        if usb_device_count is not None and usb_device_count != online_healthy:
+            logger.info(
+                "usb_adb_device_mismatch usb=%s adb_online_healthy=%s total_adb=%s",
+                usb_device_count, online_healthy, total_devices,
+            )
+
         cap_result = compute_capacity(
             active_job_count=active_count,
             active_device_count=active_device_count,
@@ -277,6 +328,7 @@ class HeartbeatThread:
             system_stats=system_stats,
             mount_status=mount_status,
             adb_server_conflict=adb_server_conflict,
+            usb_device_count=usb_device_count,
         )
 
         with self._capacity_lock:
