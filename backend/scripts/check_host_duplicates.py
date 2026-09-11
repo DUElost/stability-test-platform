@@ -22,6 +22,20 @@ from backend.core.database import SessionLocal
 from backend.models.host import Host
 
 
+def _group_key(column, row: tuple) -> str:
+    """Group key for SELECT (id, name, ip, hostname, last_heartbeat).
+
+    #834: previous code used ``row[0]`` (id) when grouping by ip, so every
+    duplicate row became its own group and merge output was useless.
+    """
+    _id, name, ip, _hostname, _hb = row
+    if column is Host.ip:
+        return str(ip)
+    if column is Host.name:
+        return str(name)
+    raise ValueError(f"unsupported duplicate column: {column!r}")
+
+
 def _find_duplicates(db, column, limit: int | None = None):
     """Return {value: [row, ...]} for groups with count > 1 (NULL excluded)."""
     dup_values = [
@@ -45,7 +59,7 @@ def _find_duplicates(db, column, limit: int | None = None):
         stmt = stmt.limit(limit)
     groups: dict[str, list[tuple]] = defaultdict(list)
     for row in db.execute(stmt).all():
-        groups[str(row[0] if column is Host.ip else row[1])].append(tuple(row))
+        groups[_group_key(column, tuple(row))].append(tuple(row))
     return dict(groups)
 
 
