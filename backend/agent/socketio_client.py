@@ -107,7 +107,12 @@ class AgentSocketIOClient:
         self._control_handler = handler
 
     def _build_url(self) -> str:
-        """Return the base HTTP(S) URL for SocketIO (it upgrades internally)."""
+        """Return the base HTTP(S) URL for SocketIO.
+
+        #1121（R11-F13）：连接强制 ``transports=["websocket"]``——无 LB sticky 的
+        多实例契约以「会话天然亲和」为前提；polling 每次请求需命中同一进程
+        （会话亲和），该前提不成立。
+        """
         return self._api_url.rstrip("/")
 
     def connect(self) -> bool:
@@ -181,6 +186,9 @@ class AgentSocketIOClient:
                     "agent_secret": self._agent_secret,
                     "host_id": str(self._host_id),
                 },
+                # #1121：websocket-only——见 _build_url；WS 不可用时立即失败
+                # （可观测），不再静默降级为依赖 sticky 的 polling。
+                transports=["websocket"],
                 wait_timeout=10,
             )
             return self._connected

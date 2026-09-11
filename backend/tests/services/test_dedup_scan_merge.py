@@ -621,3 +621,16 @@ def test_resolve_manual_merge_round_legacy_min_created_at(db_session, sample_pla
     rid, floor = ds.resolve_manual_merge_round(sample_plan_run.id)
     assert rid is None
     assert floor == t0
+
+
+def test_merge_stderr_detects_error_prefix_and_traceback():
+    """#798：行首 ``ERROR:`` 与 Traceback 形态同样表达失败（旧匹配仅
+    ": error:"/"error: argument" 会漏判，exit 0 的残缺报表被当成功）。"""
+    assert ds.merge_stderr_indicates_failure("ERROR: cannot open result file")
+    assert ds.merge_stderr_indicates_failure(
+        "Traceback (most recent call last):\n  File \"x\", line 1"
+    )
+    assert ds.merge_stderr_indicates_failure("Error: missing input")
+    # 非失败形态不误报
+    assert not ds.merge_stderr_indicates_failure("[INFO] merge done")
+    assert not ds.merge_stderr_indicates_failure("wrote 3 rows")
