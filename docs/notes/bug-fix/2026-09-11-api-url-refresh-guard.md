@@ -33,10 +33,10 @@ agent 重启后 `Invalid URL '/api/v1/heartbeat'`、`agentctl health` 判
 实际运行（本次 fleet 迁移即回归现场）：
 
 - 首轮 canary（无 `-e`）复现：`API_URL=` 空 → `agentctl health` rc=1 →
-  回滚；带 `-e agent_api_url=http://172.21.8.202` 重跑 →
+  回滚；带 `-e agent_api_url=http://172.21.x.x` 重跑 →
   `health_rc=0`、`failed=0`；
 - 全 14 台迁移后核验：`wrapper_rc=0`、wrapper sudoers 规则在、宽规则
-  全 0、`API_URL=http://172.21.8.202`、`agentctl health` 服务 active +
+  全 0、`API_URL=http://172.21.x.x`、`agentctl health` 服务 active +
   服务器连接正常；
 - `pytest tests/test_update_agent_playbook.py -q` → **9 passed**（新增
   `test_api_url_refresh_never_writes_empty_override`：必须用已解析值、
@@ -51,6 +51,6 @@ agent 重启后 `Invalid URL '/api/v1/heartbeat'`、`agentctl health` 判
 
 - 若未来控制面地址需要按主机差异化，`-e` 覆盖只能全局一份——届时再评估
   inventory 级 `agent_api_url` 主机变量（当前 fleet 统一为
-  `http://172.21.8.202`，不做提前设计）；
+  `http://172.21.x.x`，不做提前设计）；
 - 空地址以外的弱值（如占位符）未做校验：如出现此类错误地址，同样由
   `agentctl health` 的服务器连接检查兜底（回滚 + 报错），暂不加额外解析规则。
