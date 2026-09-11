@@ -53,6 +53,86 @@ approve_pending_workflow_runs() {
   bash "${SCRIPT_DIR}/approve-pending-workflow-runs.sh" "$1"
 }
 
+# ── #1246：队首停摆告警（ci/queue-blocked，去重 + 恢复自动关闭）──────────────
+# 告警只承载可见性，不参与合入决策：任何 issue 操作失败都不得中断或染红
+# reconcile（队列行为与告警成败解耦）。issue 操作用独立 token（workflow 注入
+# 的 ALERT_TOKEN=GITHUB_TOKEN）——AUTO_MERGE_PAT 是 fine-grained PAT，若未含
+# Issues 权限，用它发告警会静默失效。
+QUEUE_BLOCKED_LABEL="ci/queue-blocked"
+
+issue_gh() {
+  if [ -n "${ALERT_TOKEN:-}" ]; then
+    GH_TOKEN="$ALERT_TOKEN" gh "$@"
+  else
+    gh "$@"
+  fi
+}
+
+find_open_queue_blocked_issue() {
+  # #384：REST issues 端点混返 PR——过滤带 pull_request 的条目，防误评论/误关
+  issue_gh api "repos/${REPO}/issues?labels=ci%2Fqueue-blocked&state=open&per_page=20" \
+    --jq '[.[] | select(.pull_request == null)] | first | .number // empty' 2>/dev/null || true
+}
+
+# 队首停摆：开/更新去重 issue。指纹（队首+失败集）未变则零写入，避免每小时刷屏。
+alert_queue_blocked() {
+  local head="$1" ref="$2" failed="$3"
+  local fingerprint existing existing_body body author pr_url
+  fingerprint="head=#${head} failed=${failed}"
+  pr_url="https://github.com/${REPO}/pull/${head}"
+  author="$(gh pr view "$head" --repo "$REPO" --json author --jq .author.login 2>/dev/null || echo unknown)"
+
+  body="$(printf '%s\n' \
+    "## FIFO 队首停摆（ci/queue-blocked 自动告警）" \
+    "" \
+    "- 队首 PR：[#%s](%s)（\`%s\`，作者 @%s）" "$head" "$pr_url" "$ref" "$author" \
+    "- 未通过 required check：%s" "$failed" \
+    "- 队列影响：其后所有 PR 无法合入；分支更新已跳过（不对红队首自动重基）" \
+    "- 判读工具：\`python -m tools.dev.queue_head_telemetry\`" \
+    "- 处置（人工，择一）：修复该 check / 解冲突 / 让位（关闭或改 draft）；不要手动 Merge" \
+    "" \
+    "<!-- queue-blocked-fingerprint: %s -->" "$fingerprint")"
+
+  if ! issue_gh label create "$QUEUE_BLOCKED_LABEL" --repo "$REPO" --color d73a4a \
+      --description "FIFO 队首停摆自动告警（#1246）" >/dev/null 2>&1; then
+    : # label 已存在属常态
+  fi
+
+  existing="$(find_open_queue_blocked_issue)"
+  if [ -z "$existing" ]; then
+    if issue_gh issue create --repo "$REPO" --title "FIFO 队首停摆：PR #${head} 的 required check 未通过" \
+        --label "$QUEUE_BLOCKED_LABEL" --body "$body" >/dev/null 2>&1; then
+      echo "Opened ci/queue-blocked alert for head #${head}."
+    else
+      echo "queue-blocked alert could not be created (issue 权限/网络)；继续，不中断 reconcile。" >&2
+    fi
+    return 0
+  fi
+
+  existing_body="$(issue_gh issue view "$existing" --repo "$REPO" --json body --jq .body 2>/dev/null || true)"
+  if printf '%s' "$existing_body" | grep -qF "queue-blocked-fingerprint: ${fingerprint}"; then
+    echo "ci/queue-blocked alert #${existing} unchanged (fingerprint match)."
+    return 0
+  fi
+  if issue_gh issue edit "$existing" --repo "$REPO" --body "$body" >/dev/null 2>&1; then
+    echo "Updated ci/queue-blocked alert #${existing} (head/失败集变化)."
+  fi
+  return 0
+}
+
+# 恢复：队首通过 required checks（或队列空）时关闭存量告警 issue。
+resolve_queue_blocked() {
+  local existing
+  existing="$(find_open_queue_blocked_issue)"
+  [ -n "$existing" ] || return 0
+  issue_gh issue comment "$existing" --repo "$REPO" \
+    --body "队列已恢复：队首不再被 required check 阻塞。自动关闭。" >/dev/null 2>&1 || true
+  if issue_gh issue close "$existing" --repo "$REPO" >/dev/null 2>&1; then
+    echo "Closed ci/queue-blocked alert #${existing} (recovered)."
+  fi
+  return 0
+}
+
 owner="${REPO%/*}"
 name="${REPO#*/}"
 
@@ -83,6 +163,8 @@ done
 
 if [ -z "$head_number" ]; then
   echo "No eligible PRs in auto-merge queue."
+  # #1246：队列空 = 无停摆；关闭存量告警（失败容忍）
+  resolve_queue_blocked
   exit 0
 fi
 
@@ -169,6 +251,7 @@ if [ -z "$auto_method" ]; then
   exit 0
 fi
 
+failed_checks=""
 for check in "${REQUIRED[@]}"; do
   conclusion="$(
     jq -r --arg name "$check" '
@@ -177,9 +260,17 @@ for check in "${REQUIRED[@]}"; do
   )"
   if [ "$conclusion" != "SUCCESS" ]; then
     echo "Queue head #${head_number}: ${check} not SUCCESS (${conclusion:-missing}); skip head update."
-    exit 0
+    failed_checks="${failed_checks:+${failed_checks}, }${check}:${conclusion:-missing}"
   fi
 done
+if [ -n "$failed_checks" ]; then
+  # #1246：停摆不再只是日志一行——去重告警（可见性通道，失败不阻断 reconcile）
+  alert_queue_blocked "$head_number" "$head_ref" "$failed_checks"
+  exit 0
+fi
+
+# 队首通过全部 required checks：恢复关闭存量告警
+resolve_queue_blocked
 
 behind="$(
   gh api "repos/${REPO}/compare/main...${head_ref}" --jq '.behind_by // 0'
