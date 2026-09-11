@@ -55,6 +55,28 @@ _LOG_RE = re.compile(
 )
 
 
+# ── Runtime 日志分页 cursor（#794）───────────────────────────────────────────
+# 结构："<job 序>:<文件内行号>"。旧格式（纯数字全局偏移）无法表达跨文件
+# 位置，解析失败时降级为从头开始——宁可重复一页，不丢段。
+
+def _encode_log_cursor(job_pos: int, line_idx: int) -> str:
+    return f"{job_pos}:{line_idx}"
+
+
+def _decode_log_cursor(cursor: Optional[str]) -> tuple[int, int]:
+    if not cursor:
+        return 0, 0
+    try:
+        pos_text, line_text = cursor.split(":", 1)
+        job_pos, line_idx = int(pos_text), int(line_text)
+        if job_pos < 0 or line_idx < 0:
+            raise ValueError(cursor)
+        return job_pos, line_idx
+    except (ValueError, AttributeError):
+        logger.warning("runtime_log_cursor_unrecognized cursor=%r — restarting from head", cursor)
+        return 0, 0
+
+
 # ── Orphan JobLogSignal (#213 D3 / #212 P1-7) ─────────────────────────────────
 
 
@@ -97,14 +119,15 @@ async def query_runtime_logs(
     step_id: Optional[str] = Query(None),
     from_ts: Optional[str] = Query(None, description="ISO8601 start time"),
     to_ts: Optional[str] = Query(None, description="ISO8601 end time"),
-    cursor: Optional[str] = Query(None, description="Line offset for pagination"),
+    cursor: Optional[str] = Query(None, description="Pagination cursor (jobPos:lineIdx)"),
     limit: int = Query(200, ge=20, le=1000),
     current_user: User = Depends(get_current_active_user),
 ):
     """Query runtime logs from persisted log files.
 
     Results are returned in chronological order (old -> new).
-    ``cursor`` is a line offset (integer string) for pagination.
+    ``cursor`` 是 ``"<job 序>:<文件内行号>"`` 的分页游标（#794）；旧纯数字
+    游标无法表达跨文件位置，按从头处理（宁可重复一页，不丢段）。
     """
     del current_user
     from backend.realtime.log_writer import LOG_BASE_DIR
@@ -137,11 +160,16 @@ async def query_runtime_logs(
         if to_ts:
             to_dt_dt = _parse_iso_timestamp(to_ts.strip())
 
-        offset = int(cursor) if cursor else 0
+        # #794: cursor 是 (job 序, 文件内行号) 结构——旧的全局行偏移会对每个
+        # 文件用本文件 idx 比较、又全局累加，翻页时跨文件丢段且可超 limit。
+        start_job_pos, start_line_idx = _decode_log_cursor(cursor)
         items: List[Dict[str, Any]] = []
         total_scanned = 0
+        next_cursor: Optional[str] = None
 
-        for jid in sorted(job_filter):
+        sorted_jobs = sorted(job_filter)
+        for job_pos in range(start_job_pos, len(sorted_jobs)):
+            jid = sorted_jobs[job_pos]
             log_path = LOG_BASE_DIR / "jobs" / str(jid) / "console.log"
             if not log_path.exists():
                 continue
@@ -151,9 +179,14 @@ async def query_runtime_logs(
             except Exception:
                 continue
 
-            for idx, raw_line in enumerate(all_lines):
-                if idx < offset:
-                    continue
+            line_start = start_line_idx if job_pos == start_job_pos else 0
+            for idx in range(line_start, len(all_lines)):
+                if len(items) >= limit:
+                    # 达上限立即停止并对当前未处理的下一行出 cursor；
+                    # （旧实现内层 break 后外层继续追加，可超 limit）
+                    next_cursor = _encode_log_cursor(job_pos, idx)
+                    break
+                raw_line = all_lines[idx]
                 total_scanned += 1
                 m = _LOG_RE.match(raw_line.rstrip("\n"))
                 if not m:
@@ -190,10 +223,10 @@ async def query_runtime_logs(
                     "timestamp": ts_text,
                     "message": msg,
                 })
-                if len(items) >= limit:
-                    break
 
-        next_cursor = str(offset + total_scanned) if len(items) >= limit else None
+            if next_cursor is not None:
+                break
+
         return {
             "items": items,
             "next_cursor": next_cursor,
