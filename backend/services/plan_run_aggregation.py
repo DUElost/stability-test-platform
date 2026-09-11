@@ -121,7 +121,7 @@ def maybe_notify_risk_high(
         pr = db.execute(
             select(PlanRun)
             .where(PlanRun.id == int(plan_run_id))
-            .with_for_update(read=True)  # PG FOR NO KEY UPDATE (#789)
+            .with_for_update(key_share=True)  # SQLAlchemy key_share → PG FOR NO KEY UPDATE (#1473)
         ).scalar_one_or_none()
         if pr is None:
             return False

@@ -795,3 +795,78 @@ def test_run_task_wrapper_terminal_lost_reraised_not_wrapped_agent_error(
     assert mock_post.call_count == 1, (
         "terminal-lost must propagate without a second AGENT_ERROR complete attempt"
     )
+
+
+class _FakeBarrierCoordinator:
+    def __init__(self, last: bool) -> None:
+        self.calls: list = []
+        self._last = last
+
+    def set_barrier_total(self, prh, total, *, for_phase=None):
+        self.calls.append(("set", prh, total, for_phase))
+
+    def arrive_at_barrier(self, prh):
+        self.calls.append(("arrive", prh))
+        return self._last
+
+    def advance_phase(self, prh, phase):
+        self.calls.append(("advance", prh, phase))
+
+
+def test_preengine_barrier_helper_counts_and_advances_on_last():
+    """#801: pre-engine 终态补记 barrier 到达；仅最后到达者 advance。"""
+    from backend.agent.job_runner import _arrive_patrol_barrier_preengine
+
+    run = {"plan_run_host_id": 7, "plan_run_host_total_job_count": 23}
+
+    non_last = _FakeBarrierCoordinator(last=False)
+    _arrive_patrol_barrier_preengine(run, non_last, 1)
+    assert ("set", 7, 23, "PATROL") in non_last.calls
+    assert ("arrive", 7) in non_last.calls
+    assert not any(c[0] == "advance" for c in non_last.calls)
+
+    last = _FakeBarrierCoordinator(last=True)
+    _arrive_patrol_barrier_preengine(run, last, 1)
+    assert ("advance", 7, "PATROL") in last.calls
+
+
+def test_preengine_barrier_helper_noop_without_peers_or_coordinator():
+    from backend.agent.job_runner import _arrive_patrol_barrier_preengine
+
+    coord = _FakeBarrierCoordinator(last=True)
+    _arrive_patrol_barrier_preengine(
+        {"plan_run_host_id": 7, "plan_run_host_total_job_count": 1}, coord, 1,
+    )
+    _arrive_patrol_barrier_preengine(
+        {"plan_run_host_id": None, "plan_run_host_total_job_count": 23}, coord, 1,
+    )
+    _arrive_patrol_barrier_preengine(
+        {"plan_run_host_id": 7, "plan_run_host_total_job_count": 23}, None, 1,
+    )
+    assert coord.calls == []
+
+
+def test_invalid_pipeline_reports_barrier_arrival(job_runner_state):
+    """#801 集成：pipeline 校验失败（pre-engine 终态）也计入 barrier。"""
+    from backend.agent.job_runner import run_task_wrapper
+
+    run = {
+        "id": 801,
+        "device_id": 2,
+        "device_serial": "SN-801",
+        "fencing_token": "2:3",
+        "plan_run_host_id": 7,
+        "plan_run_host_total_job_count": 4,
+        "pipeline_def": None,  # 触发 PIPELINE_REQUIRED
+    }
+    coordinator = _FakeBarrierCoordinator(last=False)
+
+    with patch("backend.agent.job_runner.update_job"), \
+         patch("backend.agent.job_runner.complete_job"):
+        run_task_wrapper(
+            run, MagicMock(), "http://x", "h1",
+            job_runner_state, None, None, None,
+            coordinator=coordinator,
+        )
+
+    assert ("arrive", 7) in coordinator.calls, "校验失败路径未补记 barrier 到达"
