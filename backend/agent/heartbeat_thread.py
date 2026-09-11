@@ -126,13 +126,21 @@ class HeartbeatThread:
         logger.info("heartbeat_thread_stopped")
 
     def _loop(self) -> None:
-        self._tick()
+        # R13/四域 #805-1：单次 tick 异常不得杀死心跳守护线程——否则
+        # effective_slots/在线状态永久冻结，主循环仍按冻结值 claim。
+        self._safe_tick()
 
         while not self._stop_event.is_set():
             self._stop_event.wait(self._poll_interval)
             if self._stop_event.is_set():
                 break
+            self._safe_tick()
+
+    def _safe_tick(self) -> None:
+        try:
             self._tick()
+        except Exception:
+            logger.exception("heartbeat_tick_failed")
 
     def _collect_device_infos(self, discovered: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """并发采集每台设备信息（#730），返回与 ``discovered`` 同序的结果列表。
