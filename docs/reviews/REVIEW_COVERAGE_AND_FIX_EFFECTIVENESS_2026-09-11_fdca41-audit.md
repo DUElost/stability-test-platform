@@ -16,10 +16,10 @@
 | 3 | `REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_b77c27-confirmation.md`（`CF-*`） | zcode `b77c27` | 主干 |
 | 4 | `REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_4e188e.md` | Cursor `4e188e` | 主干（#1349 入库） |
 | 5 | `REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_e16d6d.md` | Cursor `e16d6d` | 主干（#1349 入库） |
-| 6 | `REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_pf8rII-convergence.md` | opencode `pf8rII` | 主干（#1349 入库；**裁决层**） |
+| 6 | `REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_7d4f85-convergence.md` | **dsh `7d4f85`**（2026-09-11 更正） | 主干（#1349 入库；**裁决层**） |
 | 7 | `REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_85d793.md` | Codex `85d793` | 队列 #1369 |
 | 8 | `REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_705379-synthesis.md` | Cursor `705379`（恢复稿） | 队列 #1369 |
-| 9 | `REVIEW_THREE_QUESTION_CONFIRMATION_2026-09-11_7d4f85.md` | **dsh** `7d4f85` | 在途（未入库、未登记） |
+| 9 | `REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_7d4f85-confirmation.md` | **dsh** `7d4f85`（与汇聚稿同源会话） | 主干（本 PR 入库） |
 
 配套 Note 共 8 份（不逐一列出）。
 
@@ -40,7 +40,7 @@
 
 ## 2. 跨文档一致性与裁决链
 
-- **裁决链已闭合**：`pf8rII-convergence` 对 Q1/Q2 分歧的裁定与 `IV`/`CF` 一致；`CA` 的 Q1 否定论
+- **裁决链已闭合**：`7d4f85-convergence` 对 Q1/Q2 分歧的裁定与 `IV`/`CF` 一致；`CA` 的 Q1 否定论
   （CA-C03「无整块被遗忘业务域」）被证伪、Q2「可持续=条件成立」被更正为「条件未满足」。
   **有效结论以主干裁决层为准。**
 - **backstop 状态更新**：由「连续两晚红」更新为「09-08/09-09 红 → 09-10 绿」；
@@ -62,19 +62,19 @@
 - **零断链**：`fdca41`、`b77c27-verification`、`b77c27-confirmation`、`4e188e`、`85d793`、
   `705379-synthesis`、`7d4f85`。
 - **待修**：
-  1. `pf8rII-convergence` → `./PROJECT_REVIEW_R01_R15_SYNTHESIS_2026-09-11.md` 断链
+  1. `7d4f85-convergence` → `./PROJECT_REVIEW_R01_R15_SYNTHESIS_2026-09-11.md` 断链
      （该稿已恢复为 `..._705379-synthesis.md`，链接名需更新）；
   2. `e16d6d` → 3 份退役稿（`5e3831` / `705379` / `f61411`）断链（退役去向已登记于 promotion Note）。
 - **已闭合**：`e16d6d` 对 `85d793` 的引用随 #1369 合入生效。
 - **修复进展（2026-09-11）**：以上两处已由 **PR #1385** 修复（`e16d6d` 退役引用改「已退役」标注、
-  `pf8rII` 指向恢复稿新名）；本记录保留修复前状态以备考。
+  `7d4f85-convergence` 指向恢复稿新名）；本记录保留修复前状态以备考。
 
 ## 4. 过程合规
 
 - **命名**：8/9 合规（§4.1：会话后六位 + 可选角色后缀）；`7d4f85` 采用
   `REVIEW_THREE_QUESTION_CONFIRMATION_*`——其 Note 自述为「用户指定命名」，与后落地的 §4.1 冲突，
   需裁决（改名并入规范，或保留并登记例外）。
-- **登记**：`4e188e` 有 Registry 记录（FINISHED）；`e16d6d`、`pf8rII`、`7d4f85` 无 declare 记录（声明缺口）。
+- **登记**：`4e188e` 有 Registry 记录（FINISHED）；`e16d6d` 与 dsh `7d4f85`（汇聚稿+确认稿同源）无 declare 记录（声明缺口，已在更正单补登记）。
 - **索引**：本 PR 补齐 #1349 三稿的 DOC-MAP 登记；`85d793`/`705379-synthesis` 由 #1369 登记。
 
 ## 5. 结论可信度分级
@@ -90,11 +90,11 @@
 
 | # | 事项 | 推荐 |
 |---|---|---|
-| 1 | `pf8rII` 断链更新为恢复稿名 | 下一次文档维护顺手修，或综合轮统一处理 |
-| 2 | `7d4f85` 命名与登记 | 按 §4.1 改名 + declare + 入库；若弃用则书面备案 |
+| 1 | `7d4f85-convergence` 断链更新为恢复稿名 | **已执行（PR #1385）** |
+| 2 | `7d4f85` 命名与登记 | **已执行**：确认稿按 §4.1 改名入库（本更正单） |
 | 3 | 85d793 F01/F02 反例 | 优先转回归测试；或先开 F02 残余单，再开 F01 |
 | 4 | 计数口径归一 | 综合轮附「口径+时点」表；引用禁止跨口径比较 |
-| 5 | 收敛冻结 | 以 `pf8rII` 为唯一裁决基准；新稿默认只做增补 |
+| 5 | 收敛冻结 | 以 `7d4f85-convergence` 为唯一裁决基准；新稿默认只做增补 |
 | 6 | `/tmp` 备份（退役 5 稿） | 迁出到稳定位置，或书面弃用备案 |
 
 ## 7. 更正记录（本审计自身）
@@ -104,6 +104,13 @@
   `DSH_SESSION_ID`）。opencode 库中的命中系汇聚会话（`ses_f7f07f53…`）对它的引用。
 - 规则固化：**会话号在他库命中 ≠ 归属**；归属必须看该 harness 会话存储中的记录本体；
   检索须覆盖全部已知 harness 目录（codex/cursor/codebuddy/zcode/claude/dsh/opencode）。
+- **第二次更正（2026-09-11，更正单）**：汇聚稿 `..._pf8rII-convergence.md` 原按 opencode 会话推定命名；
+  经 dsh 会话**写入载荷**核验（`write` tool-call 携带 `file_path` = 该稿路径，写于 13:12:14），
+  作者实为 **dsh 会话 `f4f2a372-…-7d4f85`**——与确认稿同源。opencode 会话（`ses_f7f07f53…`）
+  仅在库中出现**引用**、无写入载荷。汇聚稿已改名 `..._7d4f85-convergence.md`；确认稿入库为
+  `..._7d4f85-confirmation.md`。
+- 方法补充：归属核验的**终局判据 = 在作者 harness 的会话存储中定位携带 `file_path` 的写入载荷**；
+  读取/引用痕迹（他库命中、转录中出现标题）不足以支持归属。
 
 ## 8. 复现（只读）
 
