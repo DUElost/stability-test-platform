@@ -629,3 +629,89 @@ async def test_sync_exclusive_releases_on_fn_exception(monkeypatch):
 
     # 释放后可立即再次执行
     assert await saq_tasks._run_sync_exclusive("k9", lambda: "ok") == "ok"
+
+
+# ── #1167 P3（D4/D7）：真实吞异常路径 + 投递级幂等（不 mock dispatcher）──
+
+
+@pytest.mark.asyncio
+async def test_send_notification_task_real_path_idempotent_retry(
+    db_session, monkeypatch,
+):
+    """仅 mock HTTP 层（真实 dispatch + DB）：
+
+    首次：ok 通道 ACCEPTED、bad 通道 UNKNOWN（Timeout）→ 任务抛
+    NotificationDeliveryError 供 SAQ 重试；
+    第二次：**只重试失败通道**，已 ACCEPTED 的通道不重发（D7）。
+    """
+    import requests as _requests
+
+    from backend.models.notification import (
+        AlertRule,
+        ChannelType,
+        EventType,
+        NotificationChannel,
+        NotificationLog,
+    )
+    from backend.services import notification_service as ns
+    from backend.services.notification_delivery import DeliveryOutcome
+    from backend.tasks.saq_tasks import send_notification_task
+
+    ok_ch = NotificationChannel(
+        name="p3-ok", type=ChannelType.WEBHOOK,
+        config={"url": "http://p3.test/ok"}, enabled=True,
+    )
+    bad_ch = NotificationChannel(
+        name="p3-bad", type=ChannelType.WEBHOOK,
+        config={"url": "http://p3.test/bad"}, enabled=True,
+    )
+    db_session.add_all([ok_ch, bad_ch])
+    db_session.flush()
+    db_session.add_all([
+        AlertRule(name="p3-r-ok", event_type=EventType.RUN_FAILED,
+                  channel_id=ok_ch.id, enabled=True),
+        AlertRule(name="p3-r-bad", event_type=EventType.RUN_FAILED,
+                  channel_id=bad_ch.id, enabled=True),
+    ])
+    db_session.commit()
+
+    calls: list[str] = []
+    bad_attempts = {"n": 0}
+
+    class _Resp:
+        status_code = 200
+        reason = "OK"
+
+        def json(self):
+            return {"errcode": 0, "errmsg": "ok"}
+
+    def fake_post(url, **kwargs):
+        calls.append(url)
+        if url.endswith("/bad") and bad_attempts["n"] == 0:
+            bad_attempts["n"] = 1
+            raise _requests.Timeout("read timeout")
+        return _Resp()
+
+    monkeypatch.setattr(ns.requests, "post", fake_post)
+    monkeypatch.setattr(ns, "_emit_notification_socketio", lambda *a, **k: None)
+
+    ctx = {"run_id": 901, "task_id": 5, "device_serial": "P3D", "task_name": "t"}
+
+    with pytest.raises(ns.NotificationDeliveryError) as ei:
+        await send_notification_task({}, event_type="RUN_FAILED", context=ctx)
+    assert ei.value.failed[0]["outcome"] == DeliveryOutcome.UNKNOWN.value
+    assert "http://p3.test/ok" in calls and "http://p3.test/bad" in calls
+
+    calls.clear()
+    await send_notification_task({}, event_type="RUN_FAILED", context=ctx)
+    assert calls == ["http://p3.test/bad"], "已 ACCEPTED 的通道不得重发（D7）"
+
+    log = (
+        db_session.query(NotificationLog)
+        .filter(NotificationLog.event_type == EventType.RUN_FAILED.value)
+        .order_by(NotificationLog.id.desc())
+        .first()
+    )
+    delivery = (log.context or {}).get("channel_delivery") or {}
+    assert delivery[str(ok_ch.id)]["outcome"] == DeliveryOutcome.ACCEPTED.value
+    assert delivery[str(bad_ch.id)]["outcome"] == DeliveryOutcome.ACCEPTED.value
