@@ -104,4 +104,33 @@ describe('SchedulesPage', () => {
       expect(screen.getByDisplayValue('0 6 * * *')).toBeInTheDocument();
     });
   });
+
+  it('ignores duplicate run-now clicks while request is in flight (#820)', async () => {
+    let resolveRun!: (v: { plan_run_id: number }) => void;
+    mocks.schedulesRunNow.mockImplementation(
+      () => new Promise((resolve) => { resolveRun = resolve; }),
+    );
+    mocks.schedulesList.mockResolvedValue({
+      items: [{
+        id: 9,
+        name: 'dup',
+        cron_expr: '0 1 * * *',
+        plan_id: 1,
+        device_ids: [1],
+        enabled: true,
+        created_at: '2026-08-14T00:00:00Z',
+      }],
+      total: 1,
+    });
+
+    renderPage();
+    const runBtn = await screen.findByRole('button', { name: '立即执行' });
+    fireEvent.click(runBtn);
+    fireEvent.click(runBtn);
+
+    await waitFor(() => expect(mocks.schedulesRunNow).toHaveBeenCalledTimes(1));
+
+    resolveRun({ plan_run_id: 42 });
+    await waitFor(() => expect(mocks.schedulesRunNow).toHaveBeenCalledTimes(1));
+  });
 });

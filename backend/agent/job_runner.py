@@ -1,6 +1,7 @@
 """Thread-pool job execution wrapper for the agent."""
 
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, MutableMapping, Optional
@@ -197,6 +198,40 @@ def _complete_job_if_current_worker(
     return True
 
 
+def _arrive_patrol_barrier_preengine(
+    run: Dict[str, Any],
+    coordinator: Any,
+    job_id: int,
+) -> None:
+    """#801: pre-engine 终态路径补记 INIT→PATROL barrier 到达。
+
+    校验失败 / JobStartupError / submit 失败都会让作业直接终态且从不进入
+    引擎——若不计数，同 wave 的健康 peer 会等满 barrier_timeout（缺省
+    600s）后集体 FAILED（1 台小故障放大为整波失败）。条件与
+    ``PipelineEngine._barrier_enabled`` 对齐：coordinator + PRH + ≥2 peers
+    + STP_PHASE_BARRIER_ENABLED。失败仅告警，不影响终态路径本身。
+    """
+    if coordinator is None:
+        return
+    prh_id = run.get("plan_run_host_id")
+    total = run.get("plan_run_host_total_job_count")
+    if prh_id is None or not total or int(total) < 2:
+        return
+    if os.getenv("STP_PHASE_BARRIER_ENABLED", "1") in (
+        "0", "false", "False", "no", "NO",
+    ):
+        return
+    try:
+        coordinator.set_barrier_total(prh_id, int(total), for_phase="PATROL")
+        if coordinator.arrive_at_barrier(prh_id):
+            coordinator.advance_phase(prh_id, "PATROL")
+            logger.info(
+                "barrier_preengine_last_arriver job=%d prh=%s", job_id, prh_id,
+            )
+    except Exception:
+        logger.exception("barrier_preengine_arrive_failed job=%d", job_id)
+
+
 def run_task_wrapper(
     run: Dict[str, Any],
     adb: Any,
@@ -279,6 +314,7 @@ def run_task_wrapper(
             local_db=local_db,
             suppress_reason="pipeline_invalid",
         )
+        _arrive_patrol_barrier_preengine(run, coordinator, job_id)  # #801
         state.release(job_id, fencing_token, device_id, local_worker_token=local_worker_token)
         return
 
@@ -327,6 +363,7 @@ def run_task_wrapper(
                 local_db=local_db,
                 suppress_reason="watcher_start_failed",
             )
+            _arrive_patrol_barrier_preengine(run, coordinator, job_id)  # #801
             state.release(job_id, fencing_token, device_id, local_worker_token=local_worker_token)
             return
 
