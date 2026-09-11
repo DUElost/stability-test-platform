@@ -32,8 +32,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import queue
 import re
+import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -63,6 +65,19 @@ class PullerStats:
     pulls_ok: int = 0
     pulls_failed: int = 0
     pulls_oversized: int = 0      # 超过 max_file_mb 的文件（仅记元数据）
+    pulls_quota_exceeded: int = 0  # #1053: 超过 nfs_quota_mb 而跳过/丢弃的拉取
+
+
+def _tree_bytes(path: Path) -> int:
+    """目录内容总字节数（#1053 配额计量用；stat 单点不代表内容大小）。"""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += (Path(root) / name).stat().st_size
+            except OSError:
+                continue
+    return total
 
 
 # ----------------------------------------------------------------------
@@ -115,6 +130,7 @@ class LogPuller:
         queue_maxsize: int = 256,
         pull_timeout_seconds: float = 300.0,
         max_file_mb: int = 500,
+        nfs_quota_mb: int = 0,
         first_lines_max_lines: int = 200,
         first_lines_max_bytes: int = 4096,
         sonic_output_dir: Optional[str] = None,
@@ -131,6 +147,11 @@ class LogPuller:
         self._queue: "queue.Queue[WatcherEvent]" = queue.Queue(maxsize=int(queue_maxsize))
         self._pull_timeout = float(pull_timeout_seconds)
         self._max_file_bytes = int(max_file_mb) * 1024 * 1024
+        # #1053: 单 Job NFS 写入配额（0 = 不限）。累计本实例（=本 Job）已
+        # 驻留 NFS 的字节数；超限即停止继续写入（后续拉取直接回元数据）。
+        self._nfs_quota_bytes = int(nfs_quota_mb) * 1024 * 1024
+        self._nfs_written_bytes = 0
+        self._quota_exceeded = False
         self._first_lines_max_lines = max(1, int(first_lines_max_lines))
         self._first_lines_max_bytes = max(256, int(first_lines_max_bytes))
         self._sonic_output_dir = Path(sonic_output_dir) if sonic_output_dir else None
@@ -277,6 +298,22 @@ class LogPuller:
 
         返回 dict：成功时含 4 个字段；失败返回 {}（emit 时不写入）。
         """
+        # #1053: 配额已耗尽——后续事件直接回元数据，不再发起 adb pull
+        # （配额是单 Job 生命周期内的硬上限，写满即停）。
+        if self._quota_exceeded:
+            logger.debug(
+                "log_puller_quota_skip serial=%s remote=%s written=%d quota=%d",
+                self._serial, event.full_path,
+                self._nfs_written_bytes, self._nfs_quota_bytes,
+            )
+            self.stats.pulls_quota_exceeded += 1
+            return {
+                "artifact_uri": None,
+                "sha256":       None,
+                "size_bytes":   None,
+                "first_lines":  None,
+            }
+
         local_path = self._compose_local_path(event)
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -325,6 +362,28 @@ class LogPuller:
             return {}
 
         if local_path.is_dir():
+            # #1053: 目录拉取同样计入字节配额（目录节点大小不代表内容）。
+            dir_bytes = _tree_bytes(local_path)
+            if (
+                self._nfs_quota_bytes
+                and self._nfs_written_bytes + dir_bytes > self._nfs_quota_bytes
+            ):
+                logger.warning(
+                    "log_puller_nfs_quota_exceeded serial=%s remote=%s "
+                    "dir_bytes=%d written=%d quota=%d",
+                    self._serial, event.full_path, dir_bytes,
+                    self._nfs_written_bytes, self._nfs_quota_bytes,
+                )
+                shutil.rmtree(local_path, ignore_errors=True)
+                self._quota_exceeded = True
+                self.stats.pulls_quota_exceeded += 1
+                return {
+                    "artifact_uri": None,
+                    "sha256":       None,
+                    "size_bytes":   dir_bytes,
+                    "first_lines":  None,
+                }
+            self._nfs_written_bytes += dir_bytes
             logger.info(
                 "log_puller_directory_artifact serial=%s remote=%s local=%s",
                 self._serial, event.full_path, local_path,
@@ -359,6 +418,32 @@ class LogPuller:
                 "size_bytes":   size_bytes,
                 "first_lines":  None,
             }
+
+        # #1053: 单 Job NFS 写入配额——超限文件不驻留（删除已拉副本，回元数据），
+        # 并标记配额耗尽（后续事件不再发起拉取）。
+        if (
+            self._nfs_quota_bytes
+            and self._nfs_written_bytes + size_bytes > self._nfs_quota_bytes
+        ):
+            logger.warning(
+                "log_puller_nfs_quota_exceeded serial=%s remote=%s "
+                "size=%d written=%d quota=%d",
+                self._serial, event.full_path, size_bytes,
+                self._nfs_written_bytes, self._nfs_quota_bytes,
+            )
+            try:
+                local_path.unlink()
+            except Exception:
+                pass
+            self._quota_exceeded = True
+            self.stats.pulls_quota_exceeded += 1
+            return {
+                "artifact_uri": None,
+                "sha256":       None,
+                "size_bytes":   size_bytes,
+                "first_lines":  None,
+            }
+        self._nfs_written_bytes += size_bytes
 
         sha256 = self._compute_sha256(local_path)
         first_lines = self._read_first_lines(local_path)

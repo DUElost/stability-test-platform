@@ -45,6 +45,7 @@ from backend.services.plan_dispatcher_core import (
     snapshot_dispatch_host_watcher_admin_states,
 )
 from backend.services.suite_binding import (
+    SuiteMaterializationConflict,
     freeze_dispatch_suite,
     step_params_for_dispatch,
 )
@@ -240,17 +241,59 @@ def _fetch_script_metadata(
     }
 # ── Sync resource pool helpers ────────────────────────────────────────────
 
+def _host_match_keys(host: Host) -> frozenset[str]:
+    """Identifiers operators may store in ``ResourcePool.host_group``."""
+    keys: set[str] = {host.id}
+    if host.name:
+        keys.add(host.name)
+    if host.hostname:
+        keys.add(host.hostname)
+    return frozenset(keys)
+
+
+def _pool_host_group_matches(
+    pool: ResourcePool,
+    host_keys: frozenset[str] | None,
+) -> bool:
+    """Return whether ``pool`` may serve a device on the given host.
+
+    Empty ``host_group`` means global (any host). A non-empty value must match
+    the device's host id, name, or hostname.
+    """
+    group = (pool.host_group or "").strip()
+    if not group:
+        return True
+    if host_keys is None:
+        return False
+    return group in host_keys
+
+
+def _load_host_match_keys(
+    db: Session, host_ids: set[str],
+) -> dict[str, frozenset[str]]:
+    if not host_ids:
+        return {}
+    rows = db.execute(
+        select(Host).where(Host.id.in_(host_ids))
+    ).scalars().all()
+    return {h.id: _host_match_keys(h) for h in rows}
+
+
 def _sync_allocate_devices(
     db: Session,
     device_ids: list[int],
     resource_type: str = "wifi",
     pool_id: int | None = None,
+    device_host_map: dict[int, str] | None = None,
 ) -> dict[int, tuple[ResourcePool, dict[str, Any]]]:
     """Assign each device a resource pool, respecting per-pool concurrency.
 
     ``pool_id`` restricts the choice to one specific pool — used when the
     operator picked a WiFi network for this execution. Without it the caller
     gets the legacy behaviour of load-balancing across every active pool.
+
+    Pools with a non-empty ``host_group`` are only eligible for devices whose
+    host id, name, or hostname matches that value.
     """
     query = select(ResourcePool).where(
         ResourcePool.resource_type == resource_type,
@@ -286,10 +329,30 @@ def _sync_allocate_devices(
     ).all()
     loads = {row[0]: row[1] for row in load_rows}
 
+    host_match_keys_by_id: dict[str, frozenset[str]] = {}
+    if device_host_map:
+        host_match_keys_by_id = _load_host_match_keys(
+            db, {hid for hid in device_host_map.values() if hid},
+        )
+
     allocations: dict[int, tuple[ResourcePool, dict[str, Any]]] = {}
 
     for device_id in device_ids:
-        ordered = sorted(pools, key=lambda p: (loads.get(p.id, 0), p.id))
+        host_id = device_host_map.get(device_id) if device_host_map else None
+        host_keys = host_match_keys_by_id.get(host_id) if host_id else None
+        eligible = [p for p in pools if _pool_host_group_matches(p, host_keys)]
+        if not eligible:
+            if pool_id is not None and pools:
+                raise AllocationError(
+                    f"{resource_type} resource pool {pool_id} is not allowed "
+                    f"for device {device_id} host {host_id!r}"
+                )
+            raise AllocationError(
+                f"No {resource_type} resource pool for device {device_id} "
+                f"host {host_id!r}"
+            )
+
+        ordered = sorted(eligible, key=lambda p: (loads.get(p.id, 0), p.id))
 
         chosen = None
         for pool in ordered:
@@ -301,7 +364,7 @@ def _sync_allocate_devices(
 
         if chosen is None:
             raise AllocationError(
-                f"No capacity for device {device_id}: all pools full"
+                f"No capacity for device {device_id}: all eligible pools full"
             )
 
         loads[chosen.id] = loads.get(chosen.id, 0) + 1
@@ -866,6 +929,35 @@ def complete_plan_run_dispatch(
         db.rollback()  # discards every job + allocation row of this attempt
         _fail_plan_run_on_device_conflict(plan_run_id, db, error=str(exc.orig or exc))
         return
+    except SuiteMaterializationConflict as exc:
+        # R05-F13 (#976): 门禁后套件内容被改动，物化注入会与已校验内容不一致——
+        # 显式失败（可检测），不放行不一致的 expected_testpoint_count。
+        from backend.core.audit import record_audit
+
+        db.rollback()
+        PlanRunStateMachine.transition(
+            pr, PlanRunStatus.FAILED, reason="suite_content_changed"
+        )
+        pr.ended_at = datetime.now(timezone.utc)
+        pr.result_summary = {
+            "dispatch_failed": True,
+            "reason": "suite_content_changed",
+            "error": str(exc),
+        }
+        flag_modified(pr, "result_summary")
+        record_audit(
+            db,
+            action="plan_dispatch_failed",
+            resource_type="plan_run",
+            resource_id=pr.id,
+            details={"reason": "suite_content_changed", "error": str(exc)},
+        )
+        db.commit()
+        logger.warning(
+            "plan_dispatch_suite_content_changed plan_run=%d error=%s",
+            plan_run_id, exc,
+        )
+        return
     db.refresh(pr)
     logger.info(
         "plan_run_dispatch_completed plan=%d plan_run=%d jobs=%d",
@@ -912,6 +1004,7 @@ def materialize_jobs_and_allocations(
     if needs_wifi:
         assignments = _sync_allocate_devices(
             db, device_ids, resource_type="wifi", pool_id=requested_pool_id,
+            device_host_map=device_host_map,
         )
         for device_id, (_pool, alloc_params) in assignments.items():
             wifi_allocations[device_id] = alloc_params
