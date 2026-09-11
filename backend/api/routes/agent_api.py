@@ -2261,6 +2261,31 @@ _EXTRACTABLE_STATES = frozenset(
     {EventState.REMOTE.value, EventState.ARCHIVED.value, EventState.PRUNED.value}
 )
 
+# #1052（R09-R02）：DLE 状态迁移显式化 —— 合法路径来自 Agent 生命周期
+# （LOCAL 注册 → UPLOADING → REMOTE/UPLOAD_FAILED → PRUNED、PULL_FAILED 重试
+# 直达 REMOTE）与控制面标记（scan xls 引用 → UPLOAD_PENDING，saq_tasks 直写）。
+# 同态重复 = 幂等允许；表外迁移 409 明确拒绝（extractable 降级走上方 #1174
+# 幂等忽略分支，不落到本表）。可信边界见
+# docs/design/2026-device-log-event-implementation-spec.md §"可信边界"。
+_ALLOWED_TRANSITIONS: dict[str, frozenset] = {
+    "DETECTED": frozenset({"PULL_FAILED", "LOCAL", "UPLOAD_PENDING", "UPLOADING"}),
+    "PULL_FAILED": frozenset({"LOCAL", "UPLOAD_PENDING", "UPLOADING", "REMOTE"}),
+    "LOCAL": frozenset({
+        "PULL_FAILED", "UPLOAD_PENDING", "UPLOADING", "UPLOAD_FAILED",
+        "REMOTE", "PRUNED",
+    }),
+    "UPLOAD_PENDING": frozenset({
+        "LOCAL", "UPLOADING", "UPLOAD_FAILED", "REMOTE", "PRUNED",
+    }),
+    "UPLOADING": frozenset({"UPLOAD_PENDING", "UPLOAD_FAILED", "REMOTE", "PRUNED"}),
+    "UPLOAD_FAILED": frozenset({
+        "LOCAL", "UPLOAD_PENDING", "UPLOADING", "REMOTE", "PRUNED",
+    }),
+    "REMOTE": frozenset({"ARCHIVED", "PRUNED"}),
+    "ARCHIVED": frozenset({"PRUNED"}),
+    "PRUNED": frozenset(),
+}
+
 
 class DeviceLogEventIn(BaseModel):
     id: Optional[str] = None
@@ -2377,6 +2402,20 @@ async def ingest_device_log_events(
                     status_code=400,
                     detail=f"device_log_event.host_id {ev.host_id!r} does not match job host {job.host_id!r}",
                 )
+            if (
+                ev.plan_run_id is not None
+                and job.plan_run_id is not None
+                and job.plan_run_id != ev.plan_run_id
+            ):
+                # #1052：host/job/plan_run 三元组必须互相一致——错误组合的
+                # 事件会让 extract 在错误的 run 下取数。
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"device_log_event.plan_run_id {ev.plan_run_id} does not "
+                        f"match job plan_run {job.plan_run_id}"
+                    ),
+                )
 
         if ev.id:
             try:
@@ -2425,6 +2464,40 @@ async def ingest_device_log_events(
                             f"{ev.host_id!r} != {row.host_id!r}"
                         ),
                     )
+                # #1052：身份字段不可变——serial / job_id / plan_run_id 与已入库
+                # 行不一致视为错误组合（跨设备/跨任务混淆或错误 Agent），403。
+                if row.serial != ev.serial:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            f"device_log_event serial mismatch: "
+                            f"{ev.serial!r} != {row.serial!r}"
+                        ),
+                    )
+                if (
+                    row.job_id is not None
+                    and ev.job_id is not None
+                    and row.job_id != ev.job_id
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            f"device_log_event job_id mismatch: "
+                            f"{ev.job_id} != {row.job_id}"
+                        ),
+                    )
+                if (
+                    row.plan_run_id is not None
+                    and ev.plan_run_id is not None
+                    and row.plan_run_id != ev.plan_run_id
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            f"device_log_event plan_run_id mismatch: "
+                            f"{ev.plan_run_id} != {row.plan_run_id}"
+                        ),
+                    )
                 if (
                     row.state in _EXTRACTABLE_STATES
                     and ev.state not in _EXTRACTABLE_STATES
@@ -2441,6 +2514,21 @@ async def ingest_device_log_events(
                     )
                     event_id = row.id
                 else:
+                    # #1052：状态迁移显式化（同态幂等；表外 409）。extractable
+                    # 降级已在上方 #1174 分支按幂等成功忽略。
+                    if ev.state != row.state and ev.state not in _ALLOWED_TRANSITIONS.get(
+                        row.state, frozenset()
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "code": "DLE_INVALID_TRANSITION",
+                                "message": (
+                                    "device_log_event state transition not allowed: "
+                                    f"{row.state} -> {ev.state}"
+                                ),
+                            },
+                        )
                     row.state = ev.state
                     effective_plan_run = (
                         ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
@@ -2453,7 +2541,11 @@ async def ingest_device_log_events(
                     )
                     row.checksum = ev.checksum
                     row.size_bytes = ev.size_bytes
-                    row.plan_run_id = ev.plan_run_id
+                    # #1052：plan_run_id 只在 payload 显式携带时更新——此前
+                    # 无条件赋值会被「不带 plan_run_id 的迟到 patch」清空归属，
+                    # extract 作用域随之丢锚。
+                    if ev.plan_run_id is not None:
+                        row.plan_run_id = ev.plan_run_id
                     row.updated_at = now
                     event_id = row.id
         else:
