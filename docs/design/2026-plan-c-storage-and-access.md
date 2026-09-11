@@ -38,7 +38,7 @@ flowchart TB
 
   W --> AEE
   LA --> RL
-  HS -->|"超阈 copytree"| DEV
+  HS -->|"超阈 → DLE 事件上送"| DEV
   RL -->|"SocketIO step_log"| LW
   UI --> LW
   UI -->|"事后 SSH"| API
@@ -112,12 +112,12 @@ flowchart TB
 ### 3.2 HddSpillMonitor（`local_disk_monitor.py`）
 
 - 监控 **HDD** 使用率（非 SSD）。
-- 超阈：按 mtime 找最旧**事件目录**（`__exp_main.txt` / `main.dbg` 启发式）→ `copytree` 到 `{cifs_root}/devices/{rel}` → 本地 prune。
+- 超阈：取 `state=LOCAL` 的最旧 DeviceLogEvent（`list_events(state="LOCAL", limit=50)`），经 `EventUploader.enqueue_local_event(..., prune_after_upload)` 上送（与常规连续上送同一 queue，落盘 `devices/{plan_run_id}/` 或 `unassigned/{event_id}/`），上传校验后释放本地磁盘（#382）——不再 rglob + copytree 到 legacy 相对路径。
 - 读盘失败返回 `None` 并跳过 spill（勿返回 `0.0`）——P1-1 已修。
 
-### 3.3 启动耦合（已知债）
+### 3.3 启动解耦（P2-3，已完成）
 
-LogArchiver、HddSpill 当前在 `watcher_subsystem_enabled()` 块内启动。`STP_WATCHER_ENABLED=0` 时二者均不启——待与 Watcher 解耦（#32 可选项）。
+LogArchiver 与 LocalDiskMonitor（HddSpill）**不再**绑定 `watcher_subsystem_enabled()`：`main.py` 中二者先于 watcher 子系统块启动，各自按自身 env 门控（EventUploader / LocalDiskMonitor 内部 enabled 判断）。`STP_WATCHER_ENABLED=0` 不影响归档与 spill。（历史债 #32 已关闭。）
 
 ---
 
