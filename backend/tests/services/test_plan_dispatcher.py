@@ -8,6 +8,10 @@ from backend.models.host import Device, Host
 from backend.models.plan import Plan, PlanStep
 from backend.models.project import TestProject
 from backend.models.script import Script
+from backend.services.plan_dispatcher_core import (
+    build_lifecycle_from_snapshot,
+    script_defaults,
+)
 from backend.services.plan_dispatcher_sync import (
     _build_lifecycle_from_steps,
     _build_preview,
@@ -132,6 +136,63 @@ class TestBuildLifecycle:
         lc = _build_lifecycle_from_steps(plan, steps, defaults)
         assert lc["init"][0]["params"] == {"x": 9}
         assert lc["init"][1]["params"] == {"x": 1}
+
+
+class TestSchemaDefaultSemantics:
+    """#977：展示默认 = 执行默认——schema.default 参与合并，
+    优先级 step.params > default_params > schema.default。"""
+
+    def test_script_defaults_merge_schema_defaults(self):
+        metadata = {
+            ("flash", "1.0.1"): {
+                "default_params": {"retries": 3},
+                "param_schema": {
+                    "retries": {"type": "integer", "default": 1},
+                    "mode": {"type": "string", "default": "fast"},
+                    "required_only": {"type": "string", "required": True},
+                },
+            },
+        }
+        defaults = script_defaults(metadata)
+        # default_params 覆盖 schema.default；无 default 的字段不注入
+        assert defaults[("flash", "1.0.1")] == {"retries": 3, "mode": "fast"}
+
+    def test_snapshot_replay_merges_schema_defaults(self):
+        snapshot = {
+            "plan": {"id": 1, "name": "p"},
+            "steps": [
+                {
+                    "stage": "init", "step_key": "s1",
+                    "script_name": "flash", "script_version": "1.0.1",
+                    "param_schema": {
+                        "retries": {"type": "integer", "default": 1},
+                        "mode": {"type": "string", "default": "fast"},
+                    },
+                    "default_params": {"retries": 3},
+                    "params": {"mode": "full"},
+                    "timeout_seconds": 60, "retry": 0,
+                },
+            ],
+        }
+        lifecycle = build_lifecycle_from_snapshot(snapshot)
+        assert lifecycle["init"][0]["params"] == {"retries": 3, "mode": "full"}
+
+    def test_snapshot_without_schema_is_unchanged(self):
+        """旧快照（无 param_schema 键）：行为与 #508 完全一致。"""
+        snapshot = {
+            "plan": {"id": 1},
+            "steps": [
+                {
+                    "stage": "init", "step_key": "s1",
+                    "script_name": "a", "script_version": "1.0.0",
+                    "default_params": {"x": 1},
+                    "params": {"y": 2},
+                    "timeout_seconds": None, "retry": 0,
+                },
+            ],
+        }
+        lifecycle = build_lifecycle_from_snapshot(snapshot)
+        assert lifecycle["init"][0]["params"] == {"x": 1, "y": 2}
 
 
 class TestBuildPreview:

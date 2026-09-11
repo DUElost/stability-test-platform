@@ -448,6 +448,29 @@ fi
 
 systemctl daemon-reload
 
+# 8.5. 主日志轮转保障（#1265）
+# systemd 的 append: 不做轮转，现有 LogArchiver 只处理任务运行目录——
+# 不落盘策略时长期运行会耗尽系统盘。
+LOGROTATE_FILE="/etc/logrotate.d/${SERVICE_NAME}"
+if [ -d /etc/logrotate.d ]; then
+    cat > "$LOGROTATE_FILE" << EOF
+${INSTALL_DIR}/logs/agent.log
+${INSTALL_DIR}/logs/agent_error.log
+{
+    size 50M
+    rotate 5
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+    echo_info "日志轮转已配置: $LOGROTATE_FILE（50M × 5，copytruncate）"
+else
+    echo_warn "未找到 /etc/logrotate.d — 主日志暂无轮转保障，请按 runbook 配置（#1265）"
+fi
+
 # 9. 创建管理脚本
 echo_info "创建管理脚本..."
 if [ ! -f "$SCRIPT_DIR/agentctl.sh" ]; then

@@ -29,7 +29,9 @@ Worker（替换 manager.py 的 stub capability="stub"）。
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +44,9 @@ from .puller   import LogPuller, PullerStats
 from .sources  import InotifydSource, ProbeResult, WatcherCapability, WatcherEvent
 
 logger = logging.getLogger(__name__)
+
+# #1049：InotifydSource 退出（EOF/进程被杀）后必须由上层退避重连。
+_SOURCE_RECONNECT_MAX_DELAY_SECONDS = 60.0
 
 
 @dataclass
@@ -58,6 +63,7 @@ class WatcherStats:
     signals_emitted: int = 0
     immediate_emits: int = 0
     batch_emits: int = 0
+    source_restarts: int = 0         # #1049：inotifyd 源退出后的成功重连次数
 
     @classmethod
     def from_batcher(
@@ -66,6 +72,7 @@ class WatcherStats:
         *,
         dropped_extra: int = 0,
         puller: Optional[PullerStats] = None,
+        source_restarts: int = 0,
     ) -> "WatcherStats":
         pulls_ok = puller.pulls_ok if puller else 0
         pulls_failed = (
@@ -80,6 +87,7 @@ class WatcherStats:
             signals_emitted=b.signals_total,
             immediate_emits=b.immediate_emits,
             batch_emits=b.batch_emits,
+            source_restarts=source_restarts,
         )
 
     def to_dict(self) -> Dict[str, int]:
@@ -91,6 +99,7 @@ class WatcherStats:
             "signals_emitted": self.signals_emitted,
             "immediate_emits": self.immediate_emits,
             "batch_emits":     self.batch_emits,
+            "source_restarts": self.source_restarts,
         }
 
 
@@ -172,6 +181,12 @@ class DeviceLogWatcher:
         self._stopped = False
         self._extra_dropped = 0     # SignalEmitter contract 违规等导致的额外丢弃
 
+        # #1049：源监督（观察 is_running()，退出后退避重连）
+        self._supervisor_thread: Optional[threading.Thread] = None
+        self._supervisor_stop = threading.Event()
+        self._source_restarts = 0
+        self._source_unavailable_since: Optional[datetime] = None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -231,6 +246,7 @@ class DeviceLogWatcher:
             self._batcher.stats,
             dropped_extra=self._extra_dropped,
             puller=self._puller.stats if self._puller is not None else None,
+            source_restarts=self._source_restarts,
         )
 
     @property
@@ -300,6 +316,16 @@ class DeviceLogWatcher:
             "on" if self._puller is not None else "off",
         )
 
+        # #1049：源监督线程——inotifyd 长连接退出后自动退避重连
+        if self._source is not None:
+            self._supervisor_stop.clear()
+            self._supervisor_thread = threading.Thread(
+                target=self._supervise_source,
+                name=f"watcher-source-supervisor-{self._serial}",
+                daemon=True,
+            )
+            self._supervisor_thread.start()
+
     def stop(self, *, drain: bool = True, timeout: float = 5.0) -> WatcherStats:
         """先停 source（断上游 inotifyd Popen）→ 停 batcher（drain 残余）→ 停 puller（drain pull）。
 
@@ -314,6 +340,12 @@ class DeviceLogWatcher:
         if self._stopped:
             return self.stats
         self._stopped = True
+
+        # Phase 0: 停源监督线程（避免与 source.stop 竞争重连）
+        self._supervisor_stop.set()
+        supervisor, self._supervisor_thread = self._supervisor_thread, None
+        if supervisor is not None and supervisor.is_alive():
+            supervisor.join(timeout=2.0)
 
         # Phase 1: 断上游
         if self._source is not None:
@@ -350,6 +382,65 @@ class DeviceLogWatcher:
             self._serial, self._job_id, final.to_dict(),
         )
         return final
+
+    # ------------------------------------------------------------------
+    # 源监督（#1049）
+    # ------------------------------------------------------------------
+
+    def _next_reconnect_delay(self, attempt: int) -> float:
+        """指数退避延迟（attempt 从 0 起），封顶
+        ``_SOURCE_RECONNECT_MAX_DELAY_SECONDS``。"""
+        base = max(0.05, float(self._policy.inotifyd_reconnect_delay))
+        return min(base * (2 ** min(attempt, 8)), _SOURCE_RECONNECT_MAX_DELAY_SECONDS)
+
+    def _supervise_source(self) -> None:
+        """观察 ``source.is_running()``，退出后退避重启同一实例。
+
+        InotifydSource.start() 在进程退出后可再次调用（内部检查
+        ``poll() is None``）——本线程是它 docstring 约定的「上层观察者」。
+        不可用/恢复都会写 warning/info 日志；成功重连计入
+        ``stats.source_restarts``（随 watcher_summary 上送控制面）。
+        """
+        base = max(0.05, float(self._policy.inotifyd_reconnect_delay))
+        poll = min(1.0, base)
+        attempt = 0
+        while not self._supervisor_stop.wait(poll):
+            source = self._source
+            if source is None:
+                return
+            if source.is_running():
+                if self._source_unavailable_since is not None:
+                    logger.info(
+                        "inotifyd_source_recovered serial=%s job=%d restarts=%d",
+                        self._serial, self._job_id, self._source_restarts,
+                    )
+                    self._source_unavailable_since = None
+                attempt = 0
+                continue
+
+            if self._source_unavailable_since is None:
+                self._source_unavailable_since = datetime.now(timezone.utc)
+                logger.warning(
+                    "inotifyd_source_exited serial=%s job=%d — 退避重连启动",
+                    self._serial, self._job_id,
+                )
+
+            delay = self._next_reconnect_delay(attempt)
+            attempt += 1
+            if self._supervisor_stop.wait(delay):
+                return
+            try:
+                source.start()
+                self._source_restarts += 1
+                logger.warning(
+                    "inotifyd_source_restarted serial=%s job=%d restarts=%d delay=%.2fs",
+                    self._serial, self._job_id, self._source_restarts, delay,
+                )
+            except Exception:
+                logger.exception(
+                    "inotifyd_source_restart_failed serial=%s job=%d attempt=%d",
+                    self._serial, self._job_id, attempt,
+                )
 
     # ------------------------------------------------------------------
     # 内部回调（由 EventBatcher 在 flusher 线程中调用）

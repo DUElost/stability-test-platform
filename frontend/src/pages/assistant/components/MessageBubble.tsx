@@ -7,7 +7,8 @@ import { cn } from '@/lib/utils';
 
 /**
  * 单条消息气泡。markdown 渲染基座：**禁 rehype-raw**（防 HTML 注入，ADR-0031 D7），
- * 链接一律新窗口打开且不带 referrer。
+ * 链接一律新窗口打开且不带 referrer；**图片一律不加载**（#1229：模型回复不可信，
+ * 外链图片 URL 可携带会话数据外发；仓库与部署侧均无 CSP 兜底）。
  */
 export function MessageBubble({ message }: { message: AiChatMessage }) {
   if (message.role === 'user') {
@@ -122,6 +123,23 @@ export function MessageBubble({ message }: { message: AiChatMessage }) {
                 />
               ),
               code: ({ node: _node, ...props }) => <code className="font-mono text-xs" {...props} />,
+              // #1229：外链/任意来源图片一律不渲染为 <img>（不发请求）；信息不丢——
+              // alt 与 URL 以纯文本呈现，用户可自行复制判断。
+              img: ({ node: _node, src, alt }) => (
+                <span
+                  className={cn(
+                    'inline-flex max-w-full flex-wrap items-baseline gap-1 rounded border px-1.5 py-0.5 text-xs',
+                    SURFACE.subtle,
+                    BORDER.subtle,
+                    TEXT.caption,
+                  )}
+                >
+                  <span>图片已禁用{alt ? `：${alt}` : ''}</span>
+                  {typeof src === 'string' && src !== '' && (
+                    <span className="break-all text-muted-foreground/70">{src}</span>
+                  )}
+                </span>
+              ),
             }}
           >
             {message.content}
