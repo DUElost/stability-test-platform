@@ -324,6 +324,37 @@ class TestChainEndpoint:
         resp = client.get("/api/v1/plan-runs/999999/chain", headers=auth_headers)
         assert resp.status_code == 404
 
+    def test_chain_truncates_on_next_plan_cycle(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """#753: A↔B cycle via direct ORM must not hang GET /chain."""
+        from backend.models.plan import Plan
+
+        plan_a = Plan(name="cycle-a", failure_threshold=0.1)
+        plan_b = Plan(name="cycle-b", failure_threshold=0.1)
+        db_session.add_all([plan_a, plan_b])
+        db_session.flush()
+        # Bypass API DAG validation (simulates SQL / migration leftover).
+        plan_a.next_plan_id = plan_b.id
+        plan_b.next_plan_id = plan_a.id
+
+        cur_run = chain_setup["current_run"]
+        plan_cur = chain_setup["plan_current"]
+        plan_cur.next_plan_id = plan_a.id
+        cur_run.next_plan_triggered = False
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/chain", headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        pending_ids = [
+            n["plan_id"]
+            for n in resp.json()["data"]["nodes"]
+            if n["plan_run_id"] is None
+        ]
+        assert pending_ids == [plan_a.id, plan_b.id]
+
 
 class TestTimelineEndpoint:
     def test_timeline_aggregates_stages_and_steps(
