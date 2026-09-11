@@ -118,6 +118,14 @@ async def test_host_timeout_marks_offline_and_jobs_unknown():
     host = _get_host(seed["host_id"])
     assert host.status == HostStatus.OFFLINE.value
 
+    # #1258：心跳超时是 host_heartbeat_missed_total 的生产者（仪表板依赖）
+    from prometheus_client import REGISTRY
+
+    missed = REGISTRY.get_sample_value(
+        "stability_host_heartbeat_missed_total", {"host_id": seed["host_id"]},
+    )
+    assert missed == 1.0
+
     job = _get_job(seed["job_id"])
     assert job.status == JobStatus.UNKNOWN.value
 
