@@ -1934,8 +1934,16 @@ export interface ResourcePool {
   is_active: boolean;
 }
 
-export interface ResourcePoolLoad extends ResourcePool {
+export interface ResourcePoolLoad {
+  id: number;
+  name: string;
+  resource_type: string;
+  max_concurrent_devices: number;
   current_devices: number;
+  host_group?: string | null;
+  is_active: boolean;
+  /** 列表展示用公网字段（ssid/router_ip 等），不含 password。 */
+  config?: Record<string, unknown>;
 }
 
 export interface ResourcePoolCreatePayload {

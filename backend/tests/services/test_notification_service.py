@@ -12,6 +12,13 @@ from backend.models.notification import (
     NotificationLog,
 )
 from backend.services import notification_service as mod
+from backend.services.notification_delivery import (
+    DeliveryOutcome,
+    accepted,
+    rejected_permanent,
+    rejected_transient,
+    unknown,
+)
 
 
 class _FakeQuery:
@@ -107,6 +114,7 @@ def test_dispatch_notification_closes_db_before_network_io(monkeypatch):
         assert sent_channel.config == channel.config
         assert "[Task Failed]" in message
         closed_states.append(fake_session.closed)
+        return accepted("WEBHOOK")
 
     monkeypatch.setattr(mod, "send_to_channel", fake_send_to_channel)
 
@@ -190,7 +198,10 @@ def test_dispatch_skips_already_ok_channels_on_retry(db_session, monkeypatch):
     def selective_send(channel, message):
         sent.append(channel.id)
         if channel.id == bad_ch.id:
-            raise RuntimeError("dingtalk business fail")
+            # #1167 P2：永久拒绝不再触发 SAQ 重试——用 TRANSIENT 保持
+            # 「可重试失败抛出 NotificationDeliveryError」的既有语义
+            return rejected_transient("dingtalk transient fail")
+        return accepted("WEBHOOK")
 
     monkeypatch.setattr(mod, "send_to_channel", selective_send)
 
@@ -209,7 +220,9 @@ def test_dispatch_skips_already_ok_channels_on_retry(db_session, monkeypatch):
     assert log is not None
     delivery = (log.context or {}).get("channel_delivery") or {}
     assert delivery[str(ok_ch.id)]["status"] == "ok"
+    assert delivery[str(ok_ch.id)]["outcome"] == DeliveryOutcome.ACCEPTED.value
     assert delivery[str(bad_ch.id)]["status"] == "failed"
+    assert delivery[str(bad_ch.id)]["outcome"] == DeliveryOutcome.REJECTED_TRANSIENT.value
 
     sent.clear()
     with pytest.raises(mod.NotificationDeliveryError):
@@ -218,39 +231,44 @@ def test_dispatch_skips_already_ok_channels_on_retry(db_session, monkeypatch):
     assert sent == [bad_ch.id]
 
 
-def test_send_dingtalk_raises_on_business_errcode(monkeypatch):
-    """#1120: HTTP 200 with errcode!=0 must fail delivery."""
+def test_send_dingtalk_business_errcode_is_permanent(monkeypatch):
+    """#1120 + #1167 D2: HTTP 200 with errcode!=0 → REJECTED_PERMANENT（不重试）。"""
     resp = MagicMock()
-    resp.raise_for_status = MagicMock()
+    resp.status_code = 200
     resp.json.return_value = {"errcode": 310000, "errmsg": "sign not match"}
     monkeypatch.setattr(mod.requests, "post", MagicMock(return_value=resp))
 
-    with pytest.raises(RuntimeError, match="errcode=310000"):
-        mod._send_dingtalk("https://oapi.dingtalk.com/robot/send?access_token=x", "", "hi")
+    result = mod._send_dingtalk("https://oapi.dingtalk.com/robot/send?access_token=x", "", "hi")
+    assert result.outcome is DeliveryOutcome.REJECTED_PERMANENT
+    assert not result.retryable
+    assert "errcode=310000" in result.detail
 
 
 def test_send_dingtalk_ok_when_errcode_zero(monkeypatch):
     resp = MagicMock()
-    resp.raise_for_status = MagicMock()
+    resp.status_code = 200
     resp.json.return_value = {"errcode": 0, "errmsg": "ok"}
     monkeypatch.setattr(mod.requests, "post", MagicMock(return_value=resp))
 
-    mod._send_dingtalk("https://oapi.dingtalk.com/robot/send?access_token=x", "", "hi")
+    result = mod._send_dingtalk("https://oapi.dingtalk.com/robot/send?access_token=x", "", "hi")
+    assert result.accepted
 
 
 def test_send_to_channel_dingtalk_surfaces_business_error(monkeypatch):
-    """Test-channel API path: send_to_channel must raise so route returns 502."""
+    """Test-channel API path（#1167 D1/D9）：业务失败归一化为
+    REJECTED_PERMANENT 结果，路由依此返回 502。"""
     channel = SimpleNamespace(
         type=SimpleNamespace(value="DINGTALK"),
         config={"url": "https://oapi.dingtalk.com/robot/send?access_token=x", "secret": ""},
     )
     resp = MagicMock()
-    resp.raise_for_status = MagicMock()
+    resp.status_code = 200
     resp.json.return_value = {"errcode": 40035, "errmsg": "缺少参数 token"}
     monkeypatch.setattr(mod.requests, "post", MagicMock(return_value=resp))
 
-    with pytest.raises(RuntimeError, match="errcode=40035"):
-        mod.send_to_channel(channel, "This is a test notification from Stability Test Platform.")
+    result = mod.send_to_channel(channel, "This is a test notification from Stability Test Platform.")
+    assert result.outcome is DeliveryOutcome.REJECTED_PERMANENT
+    assert "errcode=40035" in result.detail
 
 
 def test_webhook_http_error_summary_redacts_credentials(monkeypatch):
@@ -260,13 +278,13 @@ def test_webhook_http_error_summary_redacts_credentials(monkeypatch):
     resp.reason = "Unauthorized"
     monkeypatch.setattr(mod.requests, "post", MagicMock(return_value=resp))
 
-    with pytest.raises(mod.NotificationDeliveryError) as ei:
-        mod._send_webhook(
-            "https://hooks.example.com/notify?access_token=SUPERSECRET&channel=alerts",
-            "hi",
-        )
+    result = mod._send_webhook(
+        "https://hooks.example.com/notify?access_token=SUPERSECRET&channel=alerts",
+        "hi",
+    )
 
-    text = str(ei.value)
+    assert result.outcome is DeliveryOutcome.REJECTED_PERMANENT  # 401 = 配置/鉴权错
+    text = result.detail
     assert "SUPERSECRET" not in text
     assert "access_token" not in text
     assert "hooks.example.com" not in text
@@ -280,10 +298,10 @@ def test_webhook_http_error_reason_is_redacted(monkeypatch):
     resp.reason = "caused by https://hooks.example.com/x?token=LEAKME"
     monkeypatch.setattr(mod.requests, "post", MagicMock(return_value=resp))
 
-    with pytest.raises(mod.NotificationDeliveryError) as ei:
-        mod._send_webhook("https://hooks.example.com/x", "hi")
+    result = mod._send_webhook("https://hooks.example.com/x", "hi")
 
-    assert "LEAKME" not in str(ei.value)
+    assert result.outcome is DeliveryOutcome.REJECTED_TRANSIENT  # 500 = 瞬时
+    assert "LEAKME" not in result.detail
 
 
 # ── #1122：SMTP 网络超时 + 队列满拒绝不外溢 ──────────────────────────────
@@ -334,3 +352,69 @@ def test_dispatch_notification_async_swallows_queue_full(monkeypatch):
     )
     # 不应抛出
     mod.dispatch_notification_async("system_alert", {"run_id": 1})
+
+
+# ── #1167 P2（D2/D5）：永久拒绝记录不重试，可重试失败才抛 ────────────────
+
+
+def test_dispatch_permanent_failure_records_without_retry_raise(monkeypatch):
+    """REJECTED_PERMANENT（配置/鉴权错）如实落投递事实，但不触发 SAQ 重试。"""
+    channel = SimpleNamespace(
+        id=8,
+        enabled=True,
+        type=SimpleNamespace(value="DINGTALK"),
+        config={"url": "http://example.invalid/hook"},
+    )
+    rule = SimpleNamespace(id=12, filters={}, channel=channel)
+    fake_session = _FakeSession([rule])
+    monkeypatch.setattr(mod, "SessionLocal", lambda: fake_session)
+    monkeypatch.setattr(mod, "_emit_notification_socketio", lambda *a, **k: None)
+
+    monkeypatch.setattr(
+        mod, "send_to_channel",
+        lambda ch, msg: rejected_permanent("DingTalk API error errcode=310000"),
+    )
+
+    persisted: dict = {}
+    monkeypatch.setattr(
+        mod, "_persist_channel_delivery",
+        lambda log_id, delivery: persisted.update(delivery),
+    )
+
+    # 不抛 —— 永久拒绝重试无意义（D5）
+    mod.dispatch_notification(
+        EventType.RUN_FAILED.value,
+        {"run_id": 77, "task_name": "x", "device_serial": "s"},
+    )
+    rec = persisted.get("8")
+    assert rec is not None
+    assert rec["status"] == "failed"
+    assert rec["outcome"] == DeliveryOutcome.REJECTED_PERMANENT.value
+
+
+def test_dispatch_retryable_failure_raises_with_outcome(monkeypatch):
+    """REJECTED_TRANSIENT / UNKNOWN 抛 NotificationDeliveryError（供 SAQ 重试），
+    failed 明细携带 outcome/retryable。"""
+    channel = SimpleNamespace(
+        id=9,
+        enabled=True,
+        type=SimpleNamespace(value="WEBHOOK"),
+        config={"url": "http://example.invalid/hook"},
+    )
+    rule = SimpleNamespace(id=13, filters={}, channel=channel)
+    fake_session = _FakeSession([rule])
+    monkeypatch.setattr(mod, "SessionLocal", lambda: fake_session)
+    monkeypatch.setattr(mod, "_emit_notification_socketio", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "_persist_channel_delivery", lambda log_id, delivery: None)
+    monkeypatch.setattr(
+        mod, "send_to_channel",
+        lambda ch, msg: unknown("timeout: read timeout"),
+    )
+
+    with pytest.raises(mod.NotificationDeliveryError) as ei:
+        mod.dispatch_notification(
+            EventType.RUN_FAILED.value,
+            {"run_id": 78, "task_name": "x", "device_serial": "s"},
+        )
+    assert ei.value.failed[0]["outcome"] == DeliveryOutcome.UNKNOWN.value
+    assert ei.value.failed[0]["retryable"] is True

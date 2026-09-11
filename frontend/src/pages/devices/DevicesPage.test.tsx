@@ -152,6 +152,7 @@ describe('DevicesPage', () => {
     // 打开归入对话框 → 选择项目 → 确认
     await user.click(assignButton);
     expect(await screen.findByTestId('assign-project-select')).toBeInTheDocument();
+    expect(screen.getByTestId('assign-model-scope')).toHaveTextContent('TestModel');
     await user.selectOptions(screen.getByTestId('assign-project-select'), 'proj-a');
     await user.click(screen.getByTestId('assign-project-confirm'));
 
