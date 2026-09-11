@@ -81,7 +81,14 @@ SERIAL_LIKE = re.compile(
 # 纯十六进制且够长 → sha256 / commit hash 等摘要，不是序列号
 HEX_ONLY = re.compile(r"^[0-9a-fA-F]{32,}$")
 # 形态命中但语义无害的大写词（按需扩充，每条须附理由）
-SAFE_TOKENS: set[str] = set()
+SAFE_TOKENS: set[str] = {
+    # #1356 已知占位 serial（adb 默认值，非真实设备 serial）：
+    # 设备未上报真实 serial 时 adb 使用的固定默认字符串，被本 PR 写入
+    # PLACEHOLDER_DEVICE_SERIALS 作为测试夹具并在 docs/notes 中注明。
+    # 属于"文档化的测试夹具"而非内网资产，允许出现在代码与 notes 中。
+    "0123456789ABCDEF",
+    "1234567890ABCDEF",
+}
 
 # 与具体部署无关的标准地址，放行
 SAFE_LITERALS = {

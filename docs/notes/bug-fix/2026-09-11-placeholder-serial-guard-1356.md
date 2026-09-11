@@ -7,7 +7,7 @@ Class: bug-fix
 
 GPU 压测派发两次被 `device_host_drift` 拦截（run 360/362）：设备 280 的
 serial 是 adb 默认占位值 `0123456789ABCDEF`（设备未上报真实 serial），同一
-serial 被 `172-21-15-69` 与 `172-21-9-127` 两台 host 同时识别——
+serial 被 `172-21-x-x` 与 `172-21-x-x` 两台 host 同时识别——
 `device.host_id` 随心跳反复漂移（哪个 host 后上报就改归属），派发窗口内
 快照与当前不一致被保护拦截。保护机制工作正确，缺的是**事实可见化**：
 设备列表仍显示 ONLINE、归属不稳无任何标记。
