@@ -384,12 +384,12 @@ def test_gpu_setup_v108_dismiss_dialogs_wired():
     assert "uiautomator dump" in lib_src and "input tap" in lib_src  # 通用清弹窗
 
 
-def test_gpu_finish_v102_junit_failures_counted():
+def test_gpu_finish_v103_junit_failures_counted():
     """#774：rc=0 但 JUnit FAILURES = 假成功——v1.0.2 计入 junit_failed_rounds。"""
-    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_finish/v1.0.2"
+    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_finish/v1.0.3"
     sys.path.insert(0, str(d))
     import importlib.util
-    spec = importlib.util.spec_from_file_location("gpu_finish_lib_v102", str(d / "_lib.py"))
+    spec = importlib.util.spec_from_file_location("gpu_finish_lib_v103", str(d / "_lib.py"))
     lib = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(lib)
@@ -402,21 +402,17 @@ def test_gpu_finish_v102_junit_failures_counted():
     )
     p = lib.parse_gpu_log(log)
     assert p["rounds_done"] == 3
-    assert p["failed_rounds"] == 0          # rc 全 0（旧判据盲区）
-    assert p["junit_failed_rounds"] == 2    # v1.0.2 真实失败轮次
+    assert p["failed_rounds"] == 0
+    assert p["junit_failed_rounds"] == 2
 
 
 def test_gpu_setup_v109_loop_dismisses_dialogs():
-    """#774 run 359：v1.0.9 循环脚本每轮 instrument 前清弹窗。
-
-    关键点：sed 提取坐标（tr -d '[]' 会把 ][ 合并成 4361246 类错位）。
-    """
+    """#774 run 359：v1.0.9 循环脚本每轮 instrument 前清弹窗。"""
     d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.9"
     loop = (d / "_gpu_stress_loop.sh").read_text(encoding="utf-8")
     assert "dismiss_dialogs" in loop
     assert "uiautomator dump" in loop
     assert "input tap" in loop
-    assert "sed -E" in loop              # 坐标提取用 sed（非 tr -d）
-    # 循环体内：调用出现在 am instrument 之前
+    assert "sed -E" in loop
     loop_body = loop[loop.index("i=1"):]
     assert loop_body.index("    dismiss_dialogs") < loop_body.index("am instrument")
