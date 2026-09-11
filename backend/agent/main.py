@@ -1059,6 +1059,8 @@ def main() -> None:
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),
             # #302: 死信总量随心跳上报（历史累计，跨 Agent 重启保留）。
             "log_signal_dead_letter_total": local_db.count_log_signal_dead_letters(),
+            # #742: terminal outbox 死信总量（与 log_signal 对齐）。
+            "terminal_outbox_dead_letter_total": local_db.count_terminal_dead_letters(),
         },
         # ADR-0025 Sprint 2: 上报归档指标到 extra['archive']（归档禁用时回调返回 None）
         get_archive_metrics=collect_archive_heartbeat_metrics,
