@@ -154,6 +154,17 @@ def bulk_assign_project(
     if len(devices) != len(set(payload.device_ids)):
         raise HTTPException(status_code=404, detail="one or more devices not found")
 
+    no_model = [d for d in devices if _blank_to_none(d.model) is None]
+    if no_model:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "devices without model cannot be bulk-assigned",
+                "device_ids": [d.id for d in no_model],
+                "serial_numbers": [d.serial for d in no_model],
+            },
+        )
+
     # ADR-0029 v2.5 D10 M3：批量归入 = 为选中设备的型号添加成员行
     # （归属唯一事实源；同型号全部设备随之归入，无逐设备钉住）。
     from backend.models.project_model import ProjectModel
