@@ -273,6 +273,10 @@ class EventUploader:
             ).start()
 
     def _run_upload_holding_slot(self, job: _UploadJob) -> None:
+        # #800: 每次投递都是新一轮——复位上一轮失败留下的 rescheduled。
+        # 否则重投成功时 finally 永不 forget，event_id 滞留 _active_ids，
+        # 后续该事件的状态回退上送被去重静默丢弃。
+        job.rescheduled = False
         try:
             self._upload_one(job)
         finally:
