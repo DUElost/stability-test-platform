@@ -28,6 +28,7 @@ from backend.models.notification import (
     NotificationSource,
 )
 from backend.services.notification_delivery import (
+    DEFAULT_RETRY_POLICY,
     DeliveryOutcome,
     DeliveryResult,
     accepted,
@@ -70,6 +71,31 @@ def _channel_deadline(env_key: str, default: float) -> float:
 
 WEBHOOK_TIMEOUT_SECONDS = _channel_deadline("STP_NOTIFY_WEBHOOK_TIMEOUT_S", 10.0)
 DINGTALK_TIMEOUT_SECONDS = _channel_deadline("STP_NOTIFY_DINGTALK_TIMEOUT_S", 10.0)
+
+
+def _int_env(key: str, default: int, *, minimum: int = 1) -> int:
+    """#1167 P5：整数 env 读取（非法值告警回落、下限保护）。"""
+    raw = os.getenv(key, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        logger.warning("invalid_int_env key=%s value=%r", key, raw)
+        return default
+
+
+# #1167 P5（D4/D5）投递队列边界参数 —— 单一事实源与背压模型：
+#   · 重试次数默认派生自 D5 的策略对象（RetryPolicy.max_attempts），
+#     避免「策略对象与 SAQ 参数各写一版」；调整走 env，不改契约语义；
+#   · SAQ 单次 job 上限需覆盖「一次投递串行经过全部通道」的最坏耗时
+#     （通道 deadline × 通道数）：默认 120s 对 3 通道 × 15s 有富余；
+#   · 降级池的边界在 core/thread_pool.py（BACKGROUND_POOL_SIZE /
+#     BACKGROUND_POOL_MAX_QUEUE，#1122）——本模块只消费其拒绝语义。
+NOTIFICATION_SAQ_RETRIES = _int_env(
+    "STP_NOTIFY_SAQ_RETRIES", DEFAULT_RETRY_POLICY.max_attempts,
+)
+NOTIFICATION_SAQ_TIMEOUT_S = _int_env("STP_NOTIFY_SAQ_TIMEOUT_S", 120)
 
 
 class NotificationDeliveryError(RuntimeError):
@@ -635,6 +661,12 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
     （**无重试语义**，仅告警一次，保证可用性）；本函数不向调用方外溢异常。
     投递级幂等由 ``dispatch_notification`` 的 channel_delivery 记录保证
     （重试不重发已 ACCEPTED 通道）。
+
+    **背压链（#1167 P5 定案）**：SAQ 可用 → enqueue（Redis/队列故障 →
+    降级）→ 有界降级池（#1122：BACKGROUND_POOL_SIZE/MAX_QUEUE，满即
+    ``PoolQueueFullError`` → 丢弃 + 告警）→ 两级都不可用 = 丢弃（best-effort，
+    不阻塞调用方、不无限积压）。参数与语义见
+    ``docs/notes/feature/2026-09-11-notification-delivery-p5-1167.md``。
     """
     enqueued = False
     try:
@@ -643,8 +675,8 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
         enqueued = enqueue_sync(
             "send_notification_task",
             key=_notification_job_key(event_type, context),
-            timeout=120,
-            retries=3,
+            timeout=NOTIFICATION_SAQ_TIMEOUT_S,
+            retries=NOTIFICATION_SAQ_RETRIES,
             event_type=event_type,
             context=dict(context or {}),
         )

@@ -340,8 +340,14 @@ def test_send_email_passes_explicit_timeout(monkeypatch):
     assert calls["timeout"] >= 1
 
 
-def test_dispatch_notification_async_swallows_queue_full(monkeypatch):
-    """队列满被拒绝时丢弃并告警，绝不向调用方外溢（fire-and-forget 契约）。"""
+def test_dispatch_notification_async_swallows_queue_full(monkeypatch, caplog):
+    """背压链末端：SAQ 不可用（降级）且降级池队列满 → 丢弃 + 告警，不外溢。
+
+    #1167 P5 定案的背压链两段在本用例中同时命中：enqueue 失败（SAQ 未运行）
+    → 降级池 PoolQueueFullError → 丢弃（best-effort，不阻塞调用方）。
+    """
+    import logging
+
     from backend.core.thread_pool import PoolQueueFullError
 
     def full_submit(fn, *args, **kwargs):
@@ -350,8 +356,33 @@ def test_dispatch_notification_async_swallows_queue_full(monkeypatch):
     monkeypatch.setattr(
         "backend.core.thread_pool.submit", full_submit,
     )
-    # 不应抛出
-    mod.dispatch_notification_async("system_alert", {"run_id": 1})
+    with caplog.at_level(logging.WARNING, logger="backend.services.notification_service"):
+        # 不应抛出
+        mod.dispatch_notification_async("system_alert", {"run_id": 1})
+    assert any(
+        "notification_dropped_queue_full" in r.message for r in caplog.records
+    ), "丢弃必须留下告警（可观测）"
+
+
+# ── #1167 P5（D4/D5）：队列边界参数 —— 单一事实源与 env 校准 ───────────────
+
+
+def test_notification_queue_params_from_policy_and_env(monkeypatch):
+    from backend.services.notification_delivery import DEFAULT_RETRY_POLICY
+
+    monkeypatch.delenv("STP_NOTIFY_SAQ_RETRIES", raising=False)
+    # 默认重试次数派生自 D5 策略对象（单一事实源）
+    assert mod._int_env(
+        "STP_NOTIFY_SAQ_RETRIES", DEFAULT_RETRY_POLICY.max_attempts,
+    ) == DEFAULT_RETRY_POLICY.max_attempts
+    assert mod.NOTIFICATION_SAQ_TIMEOUT_S >= 1
+
+    monkeypatch.setenv("STP_NOTIFY_SAQ_RETRIES", "7")
+    assert mod._int_env("STP_NOTIFY_SAQ_RETRIES", 3) == 7
+    monkeypatch.setenv("STP_NOTIFY_SAQ_RETRIES", "not-a-number")
+    assert mod._int_env("STP_NOTIFY_SAQ_RETRIES", 3) == 3
+    monkeypatch.setenv("STP_NOTIFY_SAQ_RETRIES", "0")
+    assert mod._int_env("STP_NOTIFY_SAQ_RETRIES", 3) == 1, "下限保护"
 
 
 # ── #1167 P2（D2/D5）：永久拒绝记录不重试，可重试失败才抛 ────────────────
@@ -445,7 +476,8 @@ def test_dispatch_async_enqueues_saq(monkeypatch):
 
     assert captured["task"] == "send_notification_task"
     assert captured["key"] == "notif:RUN_FAILED:42:D"
-    assert captured["retries"] == 3
+    assert captured["retries"] == mod.NOTIFICATION_SAQ_RETRIES
+    assert captured["timeout"] == mod.NOTIFICATION_SAQ_TIMEOUT_S
     assert captured["event_type"] == "RUN_FAILED"
     assert pool_called["v"] is False, "入队成功不得再走线程池"
 
