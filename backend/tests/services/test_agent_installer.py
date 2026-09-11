@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -85,3 +86,64 @@ def test_start_install_runconsole_registers_active():
     assert out["console_run_id"] == "con-test-1"
     assert get_active_install_console_id("host-abc") == "con-test-1"
     prep["cleanup"].assert_not_called()
+
+
+def test_prepare_install_agent_key_only_passes_private_key_to_inventory(mock_host):
+    """#1252：仅私钥凭据必须写 ansible_ssh_private_key_file，且不写空密码键。"""
+    creds = MagicMock()
+    creds.user = "android"
+    creds.password = ""
+    creds.key_path = "/home/ops/.ssh/id_ed25519"
+
+    with (
+        patch("backend.services.agent_installer.SessionLocal") as sl,
+        patch(
+            "backend.services.agent_installer.resolve_host_ssh_credentials",
+            return_value=(creds, False),
+        ),
+    ):
+        db = MagicMock()
+        sl.return_value = db
+        db.get.return_value = mock_host
+        out = prepare_install_agent("host-abc")
+
+    assert out["ok"] is True
+    inv_path = Path(out["cmd"][out["cmd"].index("-i") + 1])
+    try:
+        content = inv_path.read_text(encoding="utf-8")
+        assert "ansible_ssh_private_key_file=/home/ops/.ssh/id_ed25519" in content
+        assert "ansible_password=" not in content
+        assert "ansible_become_password=" not in content
+    finally:
+        # 断言失败也必须清理临时 inventory（失败路径曾残留 .stp-install-*.ini）
+        out["cleanup"]()
+    assert not inv_path.exists()
+
+
+def test_prepare_install_agent_password_inventory_unchanged(mock_host):
+    """#1252 回归：密码凭据路径仍写 ansible_password / ansible_become_password。"""
+    creds = MagicMock()
+    creds.user = "android"
+    creds.password = "secret"
+    creds.key_path = ""
+
+    with (
+        patch("backend.services.agent_installer.SessionLocal") as sl,
+        patch(
+            "backend.services.agent_installer.resolve_host_ssh_credentials",
+            return_value=(creds, False),
+        ),
+    ):
+        db = MagicMock()
+        sl.return_value = db
+        db.get.return_value = mock_host
+        out = prepare_install_agent("host-abc")
+
+    inv_path = Path(out["cmd"][out["cmd"].index("-i") + 1])
+    try:
+        content = inv_path.read_text(encoding="utf-8")
+        assert "ansible_password=secret" in content
+        assert "ansible_become_password=secret" in content
+        assert "ansible_ssh_private_key_file" not in content
+    finally:
+        out["cleanup"]()
