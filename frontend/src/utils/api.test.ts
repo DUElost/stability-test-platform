@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
+import { API_TIMEOUT_MS, SESSION_PROBE_TIMEOUT_MS } from './api/timeouts';
 
 const mocks = vi.hoisted(() => ({
   authFailureHandler: vi.fn(),
@@ -55,6 +56,12 @@ describe('api module', () => {
         headers: { 'Content-Type': 'application/json' },
         withCredentials: true,
       })
+    );
+  });
+
+  it('applies the default application-level timeout (#1199)', async () => {
+    expect(axios.create).toHaveBeenCalledWith(
+      expect.objectContaining({ timeout: API_TIMEOUT_MS }),
     );
   });
 
@@ -215,7 +222,10 @@ describe('api module', () => {
 
       expect(axios.get).toHaveBeenCalledWith(
         '/api/v1/auth/me',
-        expect.objectContaining({ withCredentials: true }),
+        expect.objectContaining({
+          withCredentials: true,
+          timeout: SESSION_PROBE_TIMEOUT_MS, // #1199：探活有界，不拖拦截器
+        }),
       );
       expect(instance).toHaveBeenCalledTimes(1);
       expect(instance.mock.calls[0][0]).toBe(config);

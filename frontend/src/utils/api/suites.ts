@@ -1,4 +1,5 @@
 import apiClient, { unwrapApiResponse } from './client';
+import { NO_TIMEOUT } from './timeouts';
 import type {
   ApiResponseEnvelope,
   SuiteExportResult,
@@ -87,6 +88,7 @@ export const suites = {
     const response = await apiClient.get(`/test-suites/${suiteId}/export`, {
       params: { times },
       responseType: 'blob',
+      timeout: NO_TIMEOUT, // #1199：套件导出压缩包体量不可控，豁免应用层超时
     });
     const stale = response.headers['x-export-stale'] === '1';
     return { blob: response.data as Blob, stale };
@@ -95,6 +97,7 @@ export const suites = {
   exportGlobal: async (suiteId: number): Promise<Blob> => {
     const response = await apiClient.get(`/test-suites/${suiteId}/global`, {
       responseType: 'blob',
+      timeout: NO_TIMEOUT, // #1199：Global 文件下载体量不可控，豁免应用层超时
     });
     return response.data as Blob;
   },
