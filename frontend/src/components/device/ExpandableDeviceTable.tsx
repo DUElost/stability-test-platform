@@ -195,10 +195,14 @@ export function ExpandableDeviceTable({
     setCurrentPage(1);
   }
 
-  const totalPages = Math.ceil(filteredDevices.length / pageSize);
+  const totalPages = Math.max(1, Math.ceil(filteredDevices.length / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  if (safeCurrentPage !== currentPage) {
+    setCurrentPage(safeCurrentPage);
+  }
   const paginatedDevices = filteredDevices.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    (safeCurrentPage - 1) * pageSize,
+    safeCurrentPage * pageSize
   );
   const pageDeviceIds = useMemo(() => paginatedDevices.map((device) => device.id), [paginatedDevices]);
   const allPageSelected = pageDeviceIds.length > 0 && pageDeviceIds.every((id) => selectedIds?.has(id));
@@ -709,24 +713,24 @@ export function ExpandableDeviceTable({
         {filteredDevices.length > pageSize && (
           <div className="p-3 border-t border-border flex items-center justify-between">
             <div className="text-xs text-muted-foreground">
-              显示第 {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, filteredDevices.length)} 条，
+              显示第 {(safeCurrentPage - 1) * pageSize + 1} - {Math.min(safeCurrentPage * pageSize, filteredDevices.length)} 条，
               共 {filteredDevices.length} 条设备
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
+                disabled={safeCurrentPage === 1}
                 aria-label="上一页"
                 className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronLeft className="w-4 h-4 text-muted-foreground" />
               </button>
               <span className="text-xs text-muted-foreground">
-                {currentPage} / {totalPages}
+                {safeCurrentPage} / {totalPages}
               </span>
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
+                disabled={safeCurrentPage === totalPages}
                 aria-label="下一页"
                 className="p-1.5 rounded-md border border-border hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
               >
