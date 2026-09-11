@@ -72,7 +72,10 @@ deploy/
 
 - 指标：`GET /metrics`（生产建议保持 `STP_METRICS_AUTH_REQUIRED=1`，必要时叠加 Nginx IP 白名单）  
 - Grafana：`docs/grafana/stability-platform-dashboard.json`  
-- 告警草案：`deploy/prometheus/alerts-stability-platform.yml`（ADR-0011 待挂载）
+- 告警草案：`deploy/prometheus/alerts-stability-platform.yml`（ADR-0011 待挂载）。
+  规则选择器与 `backend/core/metrics.py` 注册表的一致性由
+  `tests/test_prometheus_alerts_contract.py` 在 PR 路径门禁（结构层恒跑；
+  本机有 promtool 时追加场景触发测试，场景文件同目录 `.test.yml`）
 
 ---
 

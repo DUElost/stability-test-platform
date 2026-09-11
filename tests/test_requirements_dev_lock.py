@@ -110,6 +110,44 @@ def _lock_direct_names() -> set[str]:
 # test_requirements_lock.py);只测本文件特有的解析差异。
 
 
+def test_include_digest_tracks_included_versions(tmp_path):
+    """R15-F05 (#1297): 摘要必须递归覆盖 `-r` 包含清单。
+
+    只对 dev 文件自身摘要时,只改 requirements.txt 的版本不会改变 dev 摘要
+    → dev lock 漏更新。递归后应随被包含文件内容变化。
+    """
+    mod = _load_digest_module()
+    runtime = tmp_path / "requirements.txt"
+    dev = tmp_path / "requirements-dev.txt"
+    runtime.write_text("fastapi==1.0\n", encoding="utf-8")
+    dev.write_text("-r requirements.txt\npytest==9.0\n", encoding="utf-8")
+    before = mod.compute(dev)
+
+    runtime.write_text("fastapi==2.0\n", encoding="utf-8")
+    assert mod.compute(dev) != before, "被包含清单版本变化必须改变 dev 摘要"
+
+    # 无关改动（顺序/注释）不改变摘要
+    runtime.write_text("# comment\nfastapi==2.0\n\n", encoding="utf-8")
+    assert mod.compute(dev) == mod.compute(dev)
+
+
+def test_include_digest_survives_missing_and_cyclic_includes(tmp_path):
+    """缺失/循环包含不得抛异常，且摘要仍随 include 路径变化。"""
+    mod = _load_digest_module()
+    dev = tmp_path / "requirements-dev.txt"
+    dev.write_text("-r missing.txt\npytest==9.0\n", encoding="utf-8")
+    d1 = mod.compute(dev)
+    dev.write_text("-r other-missing.txt\npytest==9.0\n", encoding="utf-8")
+    assert mod.compute(dev) != d1
+
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    a.write_text("-r b.txt\nA==1\n", encoding="utf-8")
+    b.write_text("-r a.txt\nB==1\n", encoding="utf-8")
+    assert mod.compute(a)  # 不挂死即可
+
+
+
 def test_lock_exists_and_is_hashed():
     assert _LOCK.is_file(), "缺少 backend/requirements-dev.lock"
     text = _LOCK.read_text(encoding="utf-8")
