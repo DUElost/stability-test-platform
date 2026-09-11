@@ -76,30 +76,42 @@ Ansible（`host_key_checking = True`）与 `update_agent.yml` 的 rsync 通道�
 从 `host_key_checking = False` 旧配置升级到严格校验后，先确认控制机已登记全部
 目标主机指纹，再跑只读连通检查——未登记主机会在连接阶段 fail-closed 中止。
 
-1）盘点覆盖率（只读，不改系统文件）：
+1）盘点覆盖率（只读；基于 `ansible-inventory` 展开后的成员，含 `children` 子组）：
 
 ```bash
 cd "$REPO_ROOT/tools/ansible"
-python3 - <<'PY'
+INV_JSON="$(mktemp)"   # 600 权限临时文件；内容含 hostvars，结束必须删除
+ANSIBLE_CONFIG=./ansible.cfg ansible-inventory -i inventory.ini --list > "$INV_JSON"
+python3 - "$INV_JSON" <<'PY'
+import json
 import subprocess
-from pathlib import Path
+import sys
 
-hosts = []
-for raw in Path("inventory.ini").read_text(encoding="utf-8").splitlines():
-    line = raw.strip()
-    if not line or line.startswith(("#", ";", "[")):
+inv = json.load(open(sys.argv[1]))
+hostvars = inv.get("_meta", {}).get("hostvars", {})
+
+groups_seen, hosts_seen, queue = set(), set(), ["linux_hosts"]
+while queue:
+    group = queue.pop()
+    if group in groups_seen:
         continue
-    toks = line.split()
-    vars_ = dict(t.split("=", 1) for t in toks[1:] if "=" in t)
-    hosts.append(
-        (vars_.get("ansible_host", toks[0]).strip('"'), vars_.get("ansible_port", "").strip('"'))
-    )
+    groups_seen.add(group)
+    data = inv.get(group, {}) or {}
+    hosts_seen.update(data.get("hosts", []) or [])
+    queue.extend(data.get("children", []) or [])
 
-for addr, port in hosts:
+missing = 0
+for host in sorted(hosts_seen):
+    v = hostvars.get(host, {})
+    addr = v.get("ansible_host", host)
+    port = v.get("ansible_port")
     key = f"[{addr}]:{port}" if port else addr
     if subprocess.run(["ssh-keygen", "-F", key], capture_output=True).returncode != 0:
-        print(f"missing: {key}")
+        missing += 1
+        print(f"missing: {host}")
+print(f"linux_hosts total={len(hosts_seen)} missing={missing}")
 PY
+rm -f "$INV_JSON"
 ```
 
 2）对 `missing:` 主机按上文「首次连接前登记」补齐（带内核对指纹后登记）。

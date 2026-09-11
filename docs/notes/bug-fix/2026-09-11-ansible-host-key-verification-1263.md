@@ -56,15 +56,19 @@ Class: bug-fix
   - ansible 层（本 PR 修复后配置 + 临时 inventory 指向 loopback）：未登记 →
     `UNREACHABLE` + `Host key verification failed`；已登记 → 通过主机密钥校验；
   - 全程未连接任何生产主机、未改系统 known_hosts，临时物已清理；
-- **控制面覆盖率预检（只读）**：`inventory.ini` 16 台目标中 **14 台已登记 / 2 台未登记**；
-  未登记主机在升级后会 fail-closed，需先按 runbook §3 补齐指纹再验证连通；
-- runbook §3 新增「控制机升级预检」小节（覆盖率盘点 + 单台只读验证 + 可选 fail-closed 对照）。
+- **控制面覆盖率预检（只读，修正版）**：首轮以行文本解析 inventory、未展开父组
+  `children`，把 2 个子组名误判为"未登记主机"；改用 `ansible-inventory`（权威）复核：
+  `linux_hosts` 为父组（2 个 children），展开后 **14 台主机，指纹全部已登记，无缺口**；
+- **P2 严格校验下只读连通验证**：以本 PR 修复后配置（`host_key_checking = True`）
+  对 `linux_hosts` 全组执行 `ansible -m ping` → **14/14 SUCCESS**、
+  0 UNREACHABLE / 0 FAILED——升级后现有运维链无 fail-closed 缺口；
+- runbook §3 新增「控制机升级预检」小节（`ansible-inventory` 覆盖率盘点 + 单台只读
+  验证 + 可选 fail-closed 对照；盘点用 600 权限临时文件且用后即删）。
 
 仍未完成（pending）：
 
-- 2 台未登记主机的指纹补齐（带内核对，人工执行）与补齐后的单台 `-m ping` /
-  `check_agent.yml` 连通验证；
-- `update_agent.yml` 真机升级演练（需隔离 / 预发布环境与维护窗口）。
+- `update_agent.yml` 真机升级演练（需隔离 / 预发布环境与维护窗口）；
+- 未来 inventory 新增主机时按 runbook §3 先登记指纹再纳入（预检脚本已内置）。
 
 ## Revisit
 
