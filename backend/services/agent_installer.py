@@ -72,11 +72,20 @@ def prepare_install_agent(host_id: str) -> dict[str, Any]:
     )
     with os.fdopen(inv_fd, "w", encoding="utf-8") as fh:
         fh.write("[linux_hosts]\n")
-        fh.write(
-            f"{ip} ansible_host={ip} ansible_port={port} "
-            f"ansible_user={creds.user} ansible_password={creds.password} "
-            f"ansible_become_password={creds.password}\n"
-        )
+        parts = [
+            ip,
+            f"ansible_host={ip}",
+            f"ansible_port={port}",
+            f"ansible_user={creds.user}",
+        ]
+        if creds.password:
+            parts.append(f"ansible_password={creds.password}")
+            parts.append(f"ansible_become_password={creds.password}")
+        if creds.key_path:
+            # #1252：仅私钥凭据必须把 key 路径写入 inventory，否则 Ansible
+            # 只能依赖 SSH agent 恰好持有该密钥——准备阶段通过、连接失败
+            parts.append(f"ansible_ssh_private_key_file={creds.key_path}")
+        fh.write(" ".join(parts) + "\n")
 
     env = dict(os.environ)
     if ansible_cfg.exists():
