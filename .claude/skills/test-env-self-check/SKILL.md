@@ -28,8 +28,8 @@ unset TEST_DATABASE_URL   # 让 conftest 走 Docker testcontainers（推荐）
 ```
 
 - 禁止把 `TEST_DATABASE_URL` 指到 `stp`（生产）或 `stp_dev`（compose 容器库名）。
-- SQLite 兜底：`ALLOW_SQLITE_TESTS=1` 仅限少量用例，partial unique index 类
-  用例会跳过（见 `docs/development/testing.md`）。
+- **无 SQLite 退路**：`conftest` 固定拉起 testcontainers Postgres（契约测试钉住不得
+  存在 SQLite 回退路径，见 `docs/development/testing.md`）。
 
 ## 3. 快速短路验证（<40s）
 
@@ -60,3 +60,15 @@ python scripts/run_gates.py check:gov      # 治理面专项
 
 改完环境后若仍异常：查 `docs/development/local-development.md` 与
 `backend/.env.example`，不要凭记忆猜键名。
+
+## 踩坑守卫（负向约束）
+
+- `TEST_DATABASE_URL` 一律不得指向 `stp`（生产）或 `stp_dev`（compose 容器库名）——
+  §2 的短路检查不过就停；
+- 测试与 ruff 一律 `python -m` 形式（裸 `pytest` 会落到另一套解释器，报错信号滞后）；
+- **无 SQLite 退路**（`ALLOW_SQLITE_TESTS` 不存在于 fixture）；确需隔离库时 `unset
+  TEST_DATABASE_URL` 走 testcontainers；
+- WSL Agent 必须 `ANDROID_ADB_SERVER_PORT=5039`；Linux 生产 host 用默认 5037（误配
+  表现为「心跳正常但设备数为 0」）；
+- 环境异常时查 `docs/development/local-development.md` 与 `backend/.env.example`，
+  **不要凭记忆猜键名**。
