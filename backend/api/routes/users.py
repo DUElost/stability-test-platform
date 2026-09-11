@@ -4,12 +4,15 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, require_admin
 from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.security import PasswordStr, get_password_hash, verify_password
+from backend.models.audit import AuditLog
 from backend.models.user import User as UserModel
 from backend.api.schemas import PaginatedResponse
 
@@ -203,6 +206,22 @@ def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # #937: 有审计记录的用户不可硬删除——audit.user_id FK 无 SET NULL，
+    # 裸删会 IntegrityError 500。指引停用路径（保审计事实）。
+    audit_refs = (
+        db.query(func.count(AuditLog.id))
+        .filter(AuditLog.user_id == user_id)
+        .scalar() or 0
+    )
+    if audit_refs:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"用户有 {audit_refs} 条审计记录，不可硬删除；"
+                "如需禁止登录请使用停用（toggle-active）"
+            ),
+        )
+
     record_audit(
         db,
         action="user_deleted",
@@ -215,7 +234,14 @@ def delete_user(
         request=request,
     )
     db.delete(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="用户仍被其它记录引用，不可硬删除（可停用）",
+        ) from exc
     return None
 
 

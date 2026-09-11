@@ -59,8 +59,11 @@ class TestSuite(Base):
     global_params          = Column(JSON, nullable=True)
 
     source_sha256          = Column(String(64), nullable=True)   # 导入时原始文件 sha（溯源）
-    exported_sha256        = Column(String(64), nullable=True)   # 磁盘漂移比对键
+    exported_sha256        = Column(String(64), nullable=True)   # runtask 磁盘漂移比对键
     exported_content_sha256 = Column(String(64), nullable=True)  # 库漂移比对键
+    # R05-F10 (#973): Global 文件（UiAutomatorTestData.xml）导出的磁盘 sha，
+    # 与 exported_sha256 同构——Global 丢失/被改也能检测（原先只覆盖 runtask）。
+    exported_global_sha256 = Column(String(64), nullable=True)   # Global 磁盘漂移比对键
 
     is_active              = Column(Boolean, nullable=False, default=True,
                                     server_default="true")
