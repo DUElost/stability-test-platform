@@ -228,6 +228,21 @@ describe('ProjectDetailPage', () => {
     });
   });
 
+  it('navigates to plan run detail when clicking an S-level event row', async () => {
+    mocks.riskTrend.mockResolvedValue({
+      project_key: 'proj-a',
+      days: 30,
+      buckets: [],
+      s_runs: [{ run_id: 77, started_at: '2026-06-01T00:00:00Z', status: 'FAILED' }],
+    });
+    renderPage();
+
+    const row = await screen.findByText('#77');
+    fireEvent.click(row.closest('button')!);
+
+    expect(mocks.navigate).toHaveBeenCalledWith('/execution/plan-runs/77');
+  });
+
   it('renders 404 as error state with back-to-list action, not empty data', async () => {
     mocks.getProject.mockRejectedValue(Object.assign(new Error('project not found'), { status: 404 }));
     renderPage();

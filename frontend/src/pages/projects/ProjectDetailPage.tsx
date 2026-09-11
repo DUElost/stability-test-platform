@@ -495,7 +495,7 @@ export default function ProjectDetailPage() {
                         key={s.run_id}
                         type="button"
                         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted/60"
-                        onClick={() => navigate(`/runs/${s.run_id}/report`)}
+                        onClick={() => navigate(`/execution/plan-runs/${s.run_id}`)}
                       >
                         <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-destructive">
                           S

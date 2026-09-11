@@ -39,21 +39,25 @@ export default function IssueTrackerPage() {
 
   const { data: runsData, isLoading, isError, refetch } = useQuery({
     queryKey: ['runs-with-jira-drafts'],
+    enabled: tab === 'drafts',
     queryFn: async () => {
       const runs = await api.planRuns.list(0, 50);
+      const runsWithDrafts: RunWithDraft[] = [];
 
-      const runsWithDrafts: RunWithDraft[] = await Promise.all(
-        runs.map(async (run: PlanRun) => {
+      for (const run of runs) {
+        const jobs = await api.planRuns.listJobs(run.id);
+        for (const job of jobs) {
           try {
-            const draft = await api.runs.getCachedJiraDraft(run.id);
-            return { run, draft };
+            const draft = await api.runs.getCachedJiraDraft(job.id);
+            runsWithDrafts.push({ run, draft });
+            break;
           } catch {
-            return { run, draft: null };
+            // no draft for this job instance
           }
-        })
-      );
+        }
+      }
 
-      return runsWithDrafts.filter(r => r.draft !== null);
+      return runsWithDrafts;
     },
   });
 
