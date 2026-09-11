@@ -6,7 +6,7 @@ Class: process
 ## Decision
 
 - 新增审计报告
-  [`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fb87d5f1.md`](../../reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fb87d5f1.md)：
+  [`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fdca41.md`](../../reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fdca41.md)：
   对「R01–R15 逐区审查 + issue 驱动修复闭环」的独立只读审计（基线 `fb87d5f1`），
   结论三块——覆盖缺口（跨区收口未启动 / 覆盖证据链缺失与总纲漂移 / 无主候选面）、
   已闭环修复的量化与可持续性风险（类级复发、Revisit 无收割、验证后置）、
