@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
+from backend.api.routes.plans import MAX_CHAIN_DEPTH
 from backend.api.schemas.case_result import (
     TestCaseResultOut,
     TestCaseResultSummary,
@@ -1006,9 +1007,19 @@ def get_plan_run_chain(
                     blocked = True
                     reason = "等待下游 Plan 自动派发"
 
+                # #753: read path must mirror write-side DAG guards — a 2+ cycle
+                # (API-bypassing SQL) previously hung this GET forever.
                 cursor = first_next
                 idx = (tail.chain_index or 0) + 1
+                seen_plans: set[int] = {r.plan_id for r in chain_runs}
+                depth = 0
                 while cursor is not None:
+                    if cursor.id in seen_plans:
+                        break
+                    depth += 1
+                    if depth > MAX_CHAIN_DEPTH:
+                        break
+                    seen_plans.add(cursor.id)
                     nodes.append(ChainNodeOut(
                         plan_id=cursor.id,
                         plan_name=cursor.name,
@@ -1017,7 +1028,9 @@ def get_plan_run_chain(
                         chain_index=idx,
                         failure_threshold=cursor.failure_threshold,
                         is_blocked=blocked if cursor.id == first_next.id else False,
-                        block_reason=reason if cursor.id == first_next.id else "等待前序 Plan 触发",
+                        block_reason=(
+                            reason if cursor.id == first_next.id else "等待前序 Plan 触发"
+                        ),
                     ))
                     if cursor.next_plan_id is None:
                         break
