@@ -588,7 +588,13 @@ def execute_action(action_id: int) -> None:
         db.refresh(action)
 
         if spec.kind == "runconsole":
-            plan = build_runconsole_plan(action.tool_name, action.params or {})
+            # #1218：防御性收口——存量 approved 动作可能携带创建期未校验的参数，
+            # plan 构建失败也必须达终态，而不是停在 running。
+            try:
+                plan = build_runconsole_plan(action.tool_name, action.params or {})
+            except ToolValidationError as exc:
+                _finalize_action(action_id, "failed", f"参数校验失败：{exc}")
+                return
             try:
                 run_id = RunConsole.instance().start(
                     run_key=plan.run_key,
@@ -619,6 +625,12 @@ def execute_action(action_id: int) -> None:
                 _finalize_action(action_id, "failed", redact_secrets(str(exc))[:500])
                 return
             _finalize_action(action_id, "succeeded", summary)
+    except Exception as exc:  # noqa: BLE001 - #1218：执行期异常必达 failed 终态
+        logger.exception("ai_action_execute_error id=%s", action_id)
+        try:
+            _finalize_action(action_id, "failed", redact_secrets(str(exc))[:500])
+        except Exception:  # noqa: BLE001 - 终态回写失败只记日志
+            logger.exception("ai_action_finalize_failed id=%s", action_id)
     finally:
         db.close()
 
