@@ -102,6 +102,47 @@ Class: process
 - **P3** Python 下界声明（3.10+）与工具链 pin（py311 / CI 3.11 / venv 3.13.5）不一致；DOC-MAP 头部日期落后自身链接与提交 4–5 天
 - **P3** ASGI / Redis / `python -m` 三条硬不变量自认 residual（结构自证或仅人工 review）
 
+## Decision
+
+本 Note 的审计范围：在单次 `find`/`grep` 会话内确认（1）现有治理门禁覆盖边界，
+（2）硬不变量与代码的矛盾点，（3）ADR 索引 ↔ 正文不一致，（4）文档孤儿与断链
+数量级。核心裁定：门禁 S1–S13 在 `lint` CI 中实跑、且本次全绿；`types.ts`↔后端
+schema 无门禁已被仓库自认为 residual（`docs/design/2026-08-governance-surface-protection.md:134`）；
+复数表名 7 处、ADR-0023 索引/正文矛盾、ADR-0031 重号附录均作为**已发现、待后续
+独立 Issue 处理**的开放条目记录，本 Note 不开新 ADR 也不做原地修复——审计与修复
+分离，避免单次变更覆盖面过大。
+
+## Alternatives
+
+- **审计同时开具修复 PR**：范围过大（跨 ADR 索引、AGENTS.md、7 张生产表注释、
+  断链修复），与「只改当前 Requirement 必需内容」原则冲突；修复合入顺序也不属
+  本次审计决策。
+- **只审计门禁子集**：会遗漏 `types.ts` 无门禁（P1）和 ADR-0031 重号（P1）等
+  高优先级发现；单轴全域扫描成本可接受（纯只读命令）。
+- **不写 Note，直接在 PR 描述里报告**：PR 描述非归档件，检索与追溯成本高；
+  `docs/notes/process/` 是此类过程证据的标准落点。
+
+## Verification
+
+- 全部 § EVIDENCE COMMANDS 命令在本机实际运行（working tree `/home/debian13/stability-test-platform`）；
+  输出数字（37 ADR 文件、618 docs/*.md、6 断链等）均为命令直接返回值，非估算。
+- `python3 tools/dev/check_governance_surface.py --check` → `[OK] 治理面结构检查通过
+  （阻塞项全绿：S1–S13、S5x）`，exit 0（见 §DRIFT GATES 末句）。
+- C1/C2/C3 矛盾经 `grep`/`sed` 双向核实：README 行号与 ADR 正文行号均已在正文
+  引用；复数表名列表经 `grep -rn "__tablename__"` 确认。
+
+## Revisit
+
+- **P1 items**（需独立 Issue 跟进，本 Note 不负责修复）：
+  - `types.ts`↔后端 schema 无门禁：需补生成器或 CI 对比步骤（`AGENTS.md:31`
+    硬不变量当前零强制）；
+  - ADR-0023 索引「已实现」vs 正文「D2–D8 仍 Proposed」：S12 有意不校验该列，
+    需独立决定是否修正索引或更新 ADR 正文；
+  - ADR-0031 重号附录 + 未登记 Accepted：需补 README/DOC-MAP 登记或重新编号。
+- **P2 items**：单数表名不变量 vs 7 张复数生产表——需在 AGENTS.md 登记粒度例外，
+  或在下次 ADR/架构复核时明确祖父化边界；DOC-MAP 头部日期落后需补门禁或人工修正。
+- 若上述任一 P1 在下一个双周 Sprint 内未拆出独立 Issue，应在 R02 台账复核时提级。
+
 ## EVIDENCE COMMANDS
 
 ```bash
@@ -120,3 +161,25 @@ git log -1 --format=%cs -- docs/design/2026-07-plan-execute-page-improvements.md
 git log -1 --format=%cs -- frontend/src/utils/api/types.ts                          # 2026-09-11
 grep -rn "PRD-" docs/acceptance/*.md                           # → 空（无 PRD→AC 追溯）
 ```
+
+## Decision
+
+对文档/架构完整性进行单轴证据审计，结果以本 Note 记录，不在审计范围内发起修复。
+P1–P3 风险项（`types.ts` 零强制、ADR-0023 D2–D8 仍 Proposed、ADR-0031 编号重复）
+作为发现列入，修复由后续独立 PR 承接，避免将审计发现与修复方案混入同一提交。
+
+## Alternatives
+
+- 直接在对应 ADR/DOC-MAP 内联修复：会模糊审计基线与修复时间线，不利于后续验收追踪。
+- 开 Issue 登记：无法在 `docs/notes/process/` 里保留可追溯的全量证据命令，选择 Note 形式。
+- 拆分为多篇 Note（每条风险一篇）：当前 P1–P3 项存在交叉证据，合并审计降低冗余。
+
+## Verification
+
+所有引用均含 `file:line`；§EVIDENCE COMMANDS 内的命令可独立复现。
+审计时 `python3 tools/dev/check_governance_surface.py --check` → `[OK] … S1–S13，exit 0`（见 §DRIFT GATES 实跑行）。
+
+## Revisit
+
+任一 P1 风险被修复后（`types.ts` 同步门禁落地、ADR-0023 D2–D8 状态更新、ADR-0031 附录登记），
+重跑本节证据命令核验结论仍有效；或在下一次季度文档整体审查时重审孤儿/漂移计数。

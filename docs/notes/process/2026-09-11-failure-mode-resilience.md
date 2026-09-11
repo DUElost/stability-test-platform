@@ -96,6 +96,54 @@ Class: process
 
 **Positive counter-example (not a risk).** First-party outbound coverage is strong: of 32 `requests`/`httpx`/`redis.from_url`/`asyncpg`/`paramiko`/`urlopen` call sites in non-test `backend/`, 31 specify an explicit `timeout` within 20 lines; the single gap is the Redis client above. SMTP was fixed with a stated reason at `backend/services/notification_service.py:31-35` "#1122：网络 deadline —— 无超时的 SMTP 会把通知线程挂死在 connect/read 上", `SMTP_TIMEOUT_SECONDS = max(..., float(os.getenv("STP_SMTP_TIMEOUT_SECONDS", "15")))`, used `:224`.
 
+## Decision
+
+本 Note 的审计范围：在单次 `grep`/`sed` 会话内确认（1）哪些失效模式有规格说明，
+（2）哪些有实现，（3）哪些有测试，（4）三类覆盖图的空白处。核心裁定：
+健康探针、幂等键、部分失效状态机、重试策略均已实现并有测试（具体见 §SPECS vs
+NO SPECS 表）；三条 P1 风险（重连风暴无 jitter、Redis 客户端无每操作超时、
+SIGKILL 被误记为 FAILED）**作为已发现、需独立 Issue 修复的开放条目记录**，
+本 Note 不做原地修复——观察与修复分离。无混沌测试和断路器被认定为**已知缺口**，
+记入 §ABSENT 而非在本 Note 范围内补足。
+
+## Alternatives
+
+- **审计同时开具修复 PR**：P1 修复（reconnect 抖动、Redis socket_timeout）
+  各涉及不同模块，与「只改当前 Requirement 必需内容」原则冲突；拆独立 PR 是
+  正确路径。
+- **只审计健康/探针子集**：会遗漏 Redis 无操作超时（P1）和重连风暴（P1）等
+  高优先级发现；全域扫描成本可接受（纯只读命令）。
+- **加入混沌/fault-injection 实测**：混沌测试属修复后验收范畴，在缺口尚未登记
+  的情况下引入混沌框架会产生额外噪声，且超出本次 Note 范围。
+
+## Verification
+
+- 全部 § EVIDENCE COMMANDS 命令在本机实际运行（working tree `/home/debian13/stability-test-platform`）；
+  所有「→0」断言（`chaos`/`jitter`/`circuit.break`/`toxiproxy` 等 grep 返回 0 行）
+  均已实际执行确认。
+- § ABSENT 中 16 处 monkeypatch 计数经 `grep -rn "ping_raises\|connection refused\|
+  redis down\|db gone\|smtp down" backend/tests/` 直接返回。
+- § SPECS vs NO SPECS 表的「Tested?」列经测试文件存在性与 grep 核实；
+  `backend/tests/api/test_health_saq.py`、`test_health.py`、
+  `backend/tests/api/test_agent_dual_write.py` 均已确认路径存在。
+- Redis 无 `socket_timeout` 经 `grep -rnE "socket_timeout|socket_connect_timeout"
+  backend/` 返回 0 命中确认。
+
+## Revisit
+
+- **P1 items**（需独立 Issue 跟进）：
+  - 重连风暴 jitter：在 `backend/agent/socketio_client.py:212-230` 补随机抖动，
+    防全队列重连锁步；
+  - Redis 客户端 `socket_timeout`/`socket_connect_timeout`：`backend/main.py:147-151`
+    需补超时参数，或引入断路器（tenacity/pybreaker）；
+  - SIGKILL 误记 FAILED 状态机不诚实（ADR-0021:33/280）：需状态机增 INTERRUPTED
+    态或补 mid-job kill 测试锁定现行语义。
+- **P2 items**：`log_writer.py` `_locks` 无驱逐、`heartbeat_thread.py`
+  `_pending_reconnected_serials` 无界增长、脚本 `time.time()` 墙钟 deadline——
+  后两项受脚本版本不变量约束，需新版本。
+- ADR-0036 通知投递语义仍 Proposed——若进入 Accepted 状态，需补充本 Note 中
+  § EXISTS 的「Delivery semantics」行的测试覆盖评估。
+
 ## EVIDENCE COMMANDS
 
 ```bash
@@ -127,3 +175,27 @@ grep -rn "_locks" backend/realtime/log_writer.py          # 20,24,25,26 — no e
 grep -rn "_pending_reconnected_serials" backend/agent/heartbeat_thread.py
 python3 /tmp/tocover3.py    # 32 outbound sites / 31 with timeout / 1 gap (backend/main.py:147)
 ```
+
+## Decision
+
+对失效模式与弹性面进行单轴证据审计，结果以本 Note 记录，不在审计范围内发起代码修复。
+三项 P1 风险（同步重连风暴无抖动、Redis 客户端无 per-op timeout、SIGKILL 被错记为 FAILED）
+及四项 P2/P3 风险作为发现列入，后续独立 PR 承接修复，避免将审计发现与修复方案混入同一提交。
+
+## Alternatives
+
+- 直接在 ADR-0021/ADR-0026/ADR-0018 内联补充：会模糊现有 ADR 规范主张与实际缺口的边界。
+- 开多个 Issue 分项登记：无法在 `docs/notes/process/` 里保留可追溯的全量证据命令，选择 Note 形式。
+- 立即提交 jitter 补丁：超出单次审计 scope，应在专项 PR 中引用本 Note 作为背景证据。
+
+## Verification
+
+所有引用均含 `file:line`；§EVIDENCE COMMANDS 内的命令可独立复现。
+"Positive counter-example"段（31/32 外部调用有显式 timeout）以工具脚本 `/tmp/tocover3.py` 统计，
+数据可在同一环境重跑验证。
+
+## Revisit
+
+任一 P1 风险修复后（jitter 加入、Redis `socket_timeout` 补齐、mid-job-kill 测试落地），
+重跑 §EVIDENCE COMMANDS 核验结论仍有效；ADR-0036 从 Proposed 转 Accepted 后，
+§SPECS vs NO SPECS 中"Delivery semantics"行需更新判定。
