@@ -69,6 +69,21 @@ Frontend ◄──SocketIO /dashboard──┘
 
 `services/run_console.py` — dedup 子进程生命周期；lifespan 内启动，退出时收尾（ADR-0025 §8.3）。
 
+### 5.1 子进程隔离边界（#1228）
+
+RunConsole 承载 dedup JIRA 工具与 Agent 安装等受控子进程。当前隔离手段与已知边界：
+
+| 维度 | 现状 |
+|---|---|
+| 命令 | `argv` 列表直 exec（无 shell，杜绝注入） |
+| 工作目录 | 调用方固定 `cwd`（工具目录/安装目录） |
+| **环境变量** | **白名单**（`_CHILD_ENV_ALLOWLIST`：PATH/HOME/USER/SHELL/TMPDIR/TZ/LANG/LC_*/TERM）+ 调用方 `start(env=...)` 显式注入 + PYTHONUNBUFFERED/PYTHONIOENCODING。**控制面环境（DATABASE_URL / AGENT_SECRET / JWT_SECRET_KEY 等）不透传** |
+| 进程组 | `start_new_session`（POSIX）/ CREATE_NEW_PROCESS_GROUP，取消时整组 kill |
+| 文件权限 | **与平台同 UID 同权限（已知边界）**——隔离依赖调用方传入的 cwd 与 argv，不能证明任意未来命令无法触达生产资源 |
+
+需要更强保证时：调用方仅注入最小 env、使用受限目录；若要求「任意命令不可达生产资源」，需独立用户或容器化执行（超出当前实现，评估见 #1228）。
+
+
 ---
 
 ## 6. Session Watchdog
