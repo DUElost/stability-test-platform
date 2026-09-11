@@ -7,8 +7,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
-
 # env 加载顺序（三层都是 override=False，先到先得）：
 #   1. 进程已有的环境变量 —— systemd 的 EnvironmentFile 走这条，永远最优先
 #   2. 仓库根 .env.backend —— **生产唯一事实源**。显式加载它，使手工
@@ -21,8 +19,12 @@ from dotenv import load_dotenv
 # 手工启动都会静默落到另一套配置上（连不通的库、解不开的 SSH 凭据、
 # 对不上的会话）。
 _repo_root = Path(__file__).resolve().parent.parent
-load_dotenv(_repo_root / ".env.backend")
-load_dotenv(Path(__file__).parent / ".env")
+# #884（R01-F04）：TESTING=1 下跳过 dotenv 加载 —— 测试不得读取或复用
+# .env.backend（docs/development/testing.md §2）。门控在配置加载层，
+# 见 backend/core/env_source.load_app_dotenv。
+from backend.core.env_source import load_app_dotenv  # noqa: E402
+
+load_app_dotenv(_repo_root)
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Request

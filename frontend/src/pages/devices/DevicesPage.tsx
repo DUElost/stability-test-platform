@@ -109,6 +109,23 @@ export default function DevicesPage() {
     () => formattedDevices.filter((device) => selectedDeviceIds.has(device.id)),
     [formattedDevices, selectedDeviceIds],
   );
+  const bulkAssignPreview = useMemo(() => {
+    if (!devices) {
+      return { affectedModels: [] as string[], devicesWithoutModelSerials: [] as string[] };
+    }
+    const selected = devices.filter((device) => selectedDeviceIds.has(device.id));
+    const devicesWithoutModelSerials = selected
+      .filter((device) => !device.model?.trim())
+      .map((device) => device.serial);
+    const affectedModels = [
+      ...new Set(
+        selected
+          .map((device) => device.model?.trim())
+          .filter((model): model is string => Boolean(model)),
+      ),
+    ].sort();
+    return { affectedModels, devicesWithoutModelSerials };
+  }, [devices, selectedDeviceIds]);
   const filteredDeviceIds = useMemo(() => new Set(filteredDevices.map((device) => device.id)), [filteredDevices]);
   const selectedFilteredCount = useMemo(
     () => Array.from(selectedDeviceIds).filter((id) => filteredDeviceIds.has(id)).length,
@@ -263,7 +280,12 @@ export default function DevicesPage() {
       queryClient.invalidateQueries({ queryKey: ['project-devices'] });
       setIsAssignDialogOpen(false);
       setSelectedDeviceIds(new Set());
-      toast.success(`已归入 ${selectedDevices.length} 台设备`);
+      const modelCount = bulkAssignPreview.affectedModels.length;
+      toast.success(
+        modelCount > 0
+          ? `已归入 ${modelCount} 个型号（${selectedDevices.length} 台已选）`
+          : `已归入 ${selectedDevices.length} 台设备`,
+      );
     },
     onError: (error: unknown) => {
       toast.error(`归入项目失败: ${toApiError(error).message}`);
@@ -403,6 +425,8 @@ export default function DevicesPage() {
       <AssignProjectDialog
         isOpen={isAssignDialogOpen}
         selectedCount={selectedDevices.length}
+        affectedModels={bulkAssignPreview.affectedModels}
+        devicesWithoutModelSerials={bulkAssignPreview.devicesWithoutModelSerials}
         isSubmitting={assignProjectMutation.isPending}
         onClose={() => setIsAssignDialogOpen(false)}
         onSubmit={(targetProjectKey) =>

@@ -6,15 +6,16 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.core.audit import record_audit_async
 from backend.core.database import get_async_db
-from backend.models.resource_pool import ResourcePool
-from backend.services.resource_pool import get_pool_load_summary
+from backend.models.resource_pool import ResourceAllocation, ResourcePool
+from backend.services.resource_pool import get_pool_load_summary, public_pool_config
 
 router = APIRouter(prefix="/api/v1/resource-pools", tags=["resource-pools"])
 
@@ -52,6 +53,7 @@ class ResourcePoolLoad(BaseModel):
     current_devices: int
     host_group: Optional[str]
     is_active: bool
+    config: Dict[str, Any] = Field(default_factory=dict)
 
 
 @router.get("")
@@ -93,11 +95,7 @@ async def list_available_pools(
             id=p.id,
             name=p.name,
             resource_type=p.resource_type,
-            config={
-                key: value
-                for key, value in (p.config or {}).items()
-                if key in _PUBLIC_CONFIG_KEYS
-            },
+            config=public_pool_config(p.config),
             max_concurrent_devices=p.max_concurrent_devices,
             host_group=p.host_group,
             is_active=p.is_active,
@@ -202,6 +200,22 @@ async def delete_pool(
     pool = await db.get(ResourcePool, pool_id)
     if not pool:
         raise HTTPException(status_code=404, detail="Resource pool not found")
+
+    # #937: 仍有分配记录的资源池不可硬删除——resource_allocation.resource_pool_id
+    # 为非空引用，裸删会 IntegrityError 500。
+    alloc_count = (
+        await db.execute(
+            select(func.count(ResourceAllocation.id)).where(
+                ResourceAllocation.resource_pool_id == pool_id,
+            )
+        )
+    ).scalar() or 0
+    if alloc_count:
+        raise HTTPException(
+            status_code=409,
+            detail=f"资源池有 {alloc_count} 条分配记录，不可删除",
+        )
+
     await record_audit_async(
         db,
         action="delete",
@@ -213,4 +227,11 @@ async def delete_pool(
         request=request,
     )
     await db.delete(pool)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="资源池仍被其它记录引用，不可删除",
+        ) from exc
