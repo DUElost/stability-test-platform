@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
+
+from fastapi import HTTPException
 
 import pytest
 
@@ -525,5 +527,110 @@ async def test_device_log_events_create_dedupes_job_signal_seq(monkeypatch, tmp_
             ) == 1
         finally:
             db.close()
+    finally:
+        _cleanup(seed)
+
+
+# ── #1052（R09-R02）：DLE 归属一致性 + 状态迁移显式化 ─────────────────────
+
+
+def _ev(seed: dict, **overrides) -> "DeviceLogEventIn":
+    base = dict(
+        serial=seed["serial"],
+        platform="MTK",
+        event_type="KE",
+        detected_at=datetime.now(timezone.utc).isoformat(),
+        state=EventState.LOCAL.value,
+        local_path="/mnt/hdd/aee_events/dev/ke_x",
+        host_id=seed["host_id"],
+        job_id=seed["job_id"],
+        plan_run_id=seed["plan_run_id"],
+    )
+    base.update(overrides)
+    return DeviceLogEventIn(**base)
+
+
+async def _ingest_one(ev: DeviceLogEventIn):
+    async with AsyncSessionLocal() as db:
+        return await ingest_device_log_events(
+            DeviceLogEventBatchIn(events=[ev]), db=db, _=None,
+        )
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_dle_rejects_job_plan_run_mismatch(monkeypatch, tmp_path):
+    """host/job/plan_run 错误组合：job 的 plan_run 与 payload 不一致 → 400。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path / "nfs"))
+    (tmp_path / "nfs").mkdir()
+    seed = _seed_host_job()
+    try:
+        with pytest.raises(HTTPException) as ei:
+            await _ingest_one(_ev(seed, plan_run_id=seed["plan_run_id"] + 999))
+        assert ei.value.status_code == 400
+        assert "plan_run" in str(ei.value.detail)
+    finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_dle_rejects_identity_mutation_on_update(monkeypatch, tmp_path):
+    """更新不得改 serial / job_id / plan_run_id（403），迟到补报不带
+    plan_run_id 时归属保留。"""
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    try:
+        r = await _ingest_one(_ev(seed))
+        event_id = r.data["event_ids"][0]
+
+        # 改 serial → 403
+        with pytest.raises(HTTPException) as ei:
+            await _ingest_one(_ev(seed, id=event_id, serial="other-serial"))
+        assert ei.value.status_code == 403
+        assert "serial mismatch" in str(ei.value.detail)
+
+        # 改 plan_run_id → 与 job 的 plan_run 不一致（400，共享前置校验先拦）
+        with pytest.raises(HTTPException) as ei:
+            await _ingest_one(_ev(seed, id=event_id,
+                                  plan_run_id=seed["plan_run_id"] + 999))
+        assert ei.value.status_code == 400
+        assert "does not match job plan_run" in str(ei.value.detail)
+
+        # 不带 plan_run_id 的合法迟到补报（LOCAL→UPLOAD_PENDING）→ 归属保留
+        await _ingest_one(_ev(seed, id=event_id, plan_run_id=None,
+                              state=EventState.UPLOAD_PENDING.value))
+        db = SessionLocal()
+        try:
+            row = db.get(DeviceLogEvent, UUID(event_id))
+            assert row.plan_run_id == seed["plan_run_id"], "归属不得被 None 清空"
+            assert row.state == EventState.UPLOAD_PENDING.value
+        finally:
+            db.close()
+    finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_dle_rejects_unlisted_state_transition(monkeypatch, tmp_path):
+    """表外迁移 → 409 DLE_INVALID_TRANSITION；合法路径不受影响。"""
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    try:
+        r = await _ingest_one(_ev(seed))
+        event_id = r.data["event_ids"][0]
+
+        # DETECTED → ARCHIVED 不在矩阵（DETECTED 可去 LOCAL/PULL_FAILED/
+        # UPLOAD_PENDING/UPLOADING）→ 409
+        # 合法路径不受影响：LOCAL → UPLOADING
+        await _ingest_one(_ev(seed, id=event_id, state=EventState.UPLOADING.value))
+
+        # 表外路径：UPLOADING → LOCAL（回退不在矩阵）→ 409
+        with pytest.raises(HTTPException) as ei:
+            await _ingest_one(_ev(seed, id=event_id, state=EventState.LOCAL.value))
+        assert ei.value.status_code == 409
+        assert ei.value.detail["code"] == "DLE_INVALID_TRANSITION"
     finally:
         _cleanup(seed)

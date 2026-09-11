@@ -159,3 +159,32 @@ def test_deploy_docs_render_templates_instead_of_copying_them():
             'cp "$CONTROL_DIR/deploy/control-plane/',
         ):
             assert verbatim not in doc, f"{doc_path.name} 原样拷贝模板：{verbatim}"
+
+
+def test_nginx_body_limit_covers_suite_upload_budget():
+    """#1260：反代 body 上限必须覆盖「2 × Suite 单文件上限 + multipart 余量」。
+
+    上传端点最多收到 file + global 两个文件（suites.py），单文件上限
+    _MAX_UPLOAD_BYTES；任一参数变化时本测试联动报警。
+    """
+    suites_src = (ROOT / "backend" / "api" / "routes" / "suites.py").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"_MAX_UPLOAD_BYTES = (\d+) \* 1024 \* 1024", suites_src)
+    assert match is not None, "suites.py 的 _MAX_UPLOAD_BYTES 定义形态变化，请同步本测试"
+    per_file = int(match.group(1)) * 1024 * 1024
+
+    for name in (
+        "stability-platform.conf",
+        "stability-platform-https.conf",
+        "stability-platform-preview.conf",
+    ):
+        conf = (ROOT / "deploy" / "control-plane" / "nginx" / name).read_text(
+            encoding="utf-8"
+        )
+        limit_match = re.search(r"client_max_body_size\s+(\d+)m;", conf)
+        assert limit_match is not None, f"{name} 缺 client_max_body_size"
+        body_limit = int(limit_match.group(1)) * 1024 * 1024
+        assert body_limit >= 2 * per_file, (
+            f"{name} body 上限 {body_limit} 小于 2 × 单文件上限 {2 * per_file}（#1260）"
+        )

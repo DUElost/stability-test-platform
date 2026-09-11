@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import PlanRunLogsPage from './PlanRunLogsPage';
 import { HeaderSlotProvider, useHeaderSlot } from '@/contexts/HeaderSlotContext';
+import { planRunKeys } from '@/utils/api/queryKeys';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -38,7 +39,7 @@ function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
-  return render(
+  render(
     <HeaderSlotProvider>
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
@@ -48,6 +49,8 @@ function renderPage() {
       </MemoryRouter>
     </HeaderSlotProvider>,
   );
+  // #823：返回 client 供断言查询配置
+  return queryClient;
 }
 
 function eventsPayload(overrides: Record<string, unknown> = {}) {
@@ -114,5 +117,18 @@ describe('PlanRunLogsPage', () => {
         expect.objectContaining({ stage: 'patrol', offset: 0 }),
       ),
     );
+  });
+
+  it('#823：runQ 非终态慢轮询推进、终态即停（eventsQ 随之停更）', async () => {
+    const qc = renderPage();
+    await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
+
+    const opts = qc.getQueryCache().find({ queryKey: planRunKeys.detail(12) })?.options as {
+      refetchInterval?: unknown;
+    };
+    const fn = opts.refetchInterval as (q: { state: { data?: { status?: string } } }) => unknown;
+    expect(typeof fn).toBe('function');
+    expect(fn({ state: { data: { status: 'RUNNING' } } })).toBe(30_000);
+    expect(fn({ state: { data: { status: 'SUCCESS' } } })).toBe(false);
   });
 });

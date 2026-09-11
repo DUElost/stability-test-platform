@@ -883,6 +883,21 @@ class TestBulkAssignProject:
         )
         assert resp.status_code == 422
 
+    def test_device_without_model_422_no_fake_success(
+        self, client, db_session, project_a, admin_headers
+    ):
+        """#951：无型号设备不得假成功返回目标 project_key。"""
+        d1 = _make_device(db_session, "s-bulk-nomodel", None, model=None)
+        resp = client.post(
+            "/api/v1/devices/bulk-project",
+            headers=admin_headers,
+            json={"project_key": "proj-a", "device_ids": [d1.id]},
+        )
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["detail"]["device_ids"] == [d1.id]
+        assert body["detail"]["serial_numbers"] == ["s-bulk-nomodel"]
+
     def test_forbidden_for_non_admin(self, client, db_session, project_a, auth_headers):
         _make_device(db_session, "s-bulk-user")
         resp = client.post(
