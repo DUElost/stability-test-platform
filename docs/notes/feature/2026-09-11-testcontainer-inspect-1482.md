@@ -1,7 +1,7 @@
 # 残留 testcontainer 巡检与安全清理工具（#1482）
 
 Status: implemented
-Class: feature（devx）
+Class: feature
 
 ## Decision
 
