@@ -53,6 +53,16 @@ from backend.services.ai_assistant.tools import TOOLS, describe_tool_action_prev
 router = APIRouter(prefix="/api/v1/ai-assistant", tags=["ai-assistant"])
 logger = logging.getLogger(__name__)
 
+# R13-F14 (#1225): 连通性预检用的受控工具声明——验证上游 function calling 能力。
+_PREFLIGHT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "preflight_ping",
+        "description": "Connectivity preflight; call this tool to confirm tool-calling works.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}
+
 
 # M5：在飞后台任务强引用集（create_task 结果无人持有时可能被 GC 回收）
 _BG_TASKS: set = set()
@@ -92,6 +102,7 @@ def _config_out(db: Session) -> AiAssistantConfigOut:
         enabled=cfg.enabled,
         temperature=cfg.temperature,
         max_turns=cfg.max_turns,
+        max_auto_continuations=cfg.max_auto_continuations,
         request_timeout_seconds=cfg.request_timeout_seconds,
         t1_require_confirm=cfg.t1_require_confirm,
         auto_approve_tools=list(cfg.auto_approve_tools or []),
@@ -121,8 +132,8 @@ def update_ai_config(
     changed: list[str] = []
     for field_name in (
         "base_url", "model", "enabled", "temperature", "max_turns",
-        "request_timeout_seconds", "t1_require_confirm", "auto_approve_tools",
-        "t2b_auto_dispatch_allowlist",
+        "max_auto_continuations", "request_timeout_seconds", "t1_require_confirm",
+        "auto_approve_tools", "t2b_auto_dispatch_allowlist",
     ):
         value = getattr(payload, field_name)
         if value is not None:
@@ -195,9 +206,32 @@ async def test_ai_connection(
             model=cfg.model,
             timeout_seconds=min(float(cfg.request_timeout_seconds), 30.0),
         )
-        await client.chat(
-            [{"role": "user", "content": "ping"}], temperature=0.0
+        # R13-F14 (#1225): 助手依赖 function calling。只发普通 ping 会把
+        # 「只支持聊天、不支持 tools」的上游判成功，正式对话才失败。这里带一个
+        # 受控工具声明并要求模型调用它，验证上游的 tool-calling 能力。
+        reply = await client.chat(
+            [
+                {
+                    "role": "system",
+                    "content": "这是连通性预检：必须调用提供的 preflight_ping 工具，不要用自然语言回复。",
+                },
+                {"role": "user", "content": "调用 preflight_ping 工具。"},
+            ],
+            tools=[_PREFLIGHT_TOOL],
+            temperature=0.0,
         )
+        if not reply.tool_calls:
+            return ok(
+                AiConnectionTestOut(
+                    ok=False,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    model=cfg.model,
+                    error=(
+                        "tool_calling_unsupported: 上游未返回工具调用。AI 助手依赖 "
+                        "function calling；请确认该模型/供应商支持 tools。"
+                    ),
+                )
+            )
         return ok(
             AiConnectionTestOut(
                 ok=True,
@@ -379,6 +413,8 @@ def send_message(
         session_id=session.id, role="assistant", content="", status="pending"
     )
     db.add(placeholder)
+    # R13-R01 (#1227): 用户新消息开启新的自动执行链，累计预算清零。
+    session.auto_continuation_count = 0
     session.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(placeholder)
@@ -556,7 +592,11 @@ async def _decide_action(
         await asyncio.sleep(0)
         db.refresh(action)
     else:
-        # 拒绝也续轮：让助手收到拒绝事实并继续对话
+        # 拒绝也续轮：让助手收到拒绝事实并继续对话。R13-F09 (#1221)：必须
+        # 先写入拒绝回执，否则模型仅看到「等待审批」会继续等待/重复提案。
+        from backend.services.ai_assistant.orchestrator import record_rejection_receipt
+
+        record_rejection_receipt(action_id, user.username)
         await asyncio.to_thread(_enqueue_continuation_sync, action.session_id)
     db.refresh(action)
     return ok(_action_out(db, action))
