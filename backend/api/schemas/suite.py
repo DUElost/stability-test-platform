@@ -92,6 +92,7 @@ class TestSuiteOut(ORMBaseModel):
     case_count: int = 0
     enabled_case_count: int = 0
     exported_sha256: Optional[str] = None
+    exported_global_sha256: Optional[str] = None
     is_active: bool = True
     # 库内容是否已漂离最近一次导出（= 门禁第 3 步会拦的状态，列表即可见）
     export_stale: bool = False
@@ -168,3 +169,4 @@ class ExportResultOut(BaseModel):
     global_path: Optional[str] = None
     exported_sha256: str
     exported_content_sha256: str
+    exported_global_sha256: Optional[str] = None

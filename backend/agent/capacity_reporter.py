@@ -41,6 +41,7 @@ def compute_capacity(
     mount_status: dict,
     adb_server_conflict: bool = False,
     max_claim_slots: "Optional[int]" = None,
+    usb_device_count: Optional[int] = None,
 ) -> dict:
     """返回 {"capacity": {...}, "health": {...}}。
 
@@ -50,6 +51,11 @@ def compute_capacity(
     认领上限（默认 5，与 OperationScheduler permit 对齐）：
     否则同 host 大批次会把全部设备一次认领，worker 池过大 → 密集
     重启/重枚举风暴压垮 hub（.80 19 台并发刷写 15 台写失败的根因）。
+
+    usb_device_count — lsusb 枚举到的疑似 Android 设备数，**纯观测对照**：
+    与 online_healthy_devices（adb devices 口径）并排展示，差值即 ADB 未枚举到的
+    物理设备（授权/驱动/多 fork-server 等）。为 None 表示无法判定（非 0）。
+    刻意不参与 device_slots / effective_slots / health 任何计算。
     """
     health = _compute_health(
         system_stats,
@@ -74,6 +80,7 @@ def compute_capacity(
         "online_healthy_devices": online_healthy_devices,
         "available_slots": device_slots,
         "effective_slots": effective_slots,
+        "usb_device_count": usb_device_count,
     }
 
     return {"capacity": capacity, "health": health}
