@@ -49,6 +49,20 @@ export default function SchedulesPage() {
   const [form, setForm] = useState<ScheduleForm>(DEFAULT_FORM);
   const formRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const actionInFlight = useRef(false);
+  const [actionBusy, setActionBusy] = useState(false);
+
+  const runGuarded = async (fn: () => Promise<void>) => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    setActionBusy(true);
+    try {
+      await fn();
+    } finally {
+      actionInFlight.current = false;
+      setActionBusy(false);
+    }
+  };
 
   // C1：数据获取迁移 react-query（缓存/重试/去重与全站一致）
   const schedulesQ = useQuery({
@@ -74,84 +88,92 @@ export default function SchedulesPage() {
   };
 
   const handleSave = async () => {
-    try {
-      if (!form.name.trim()) {
-        toast.error('请填写任务名称');
-        return;
-      }
-      if (!form.cron_expr.trim()) {
-        toast.error('请填写 Cron 表达式');
-        return;
-      }
-      const planId = Number(form.plan_id);
-
-      if (!Number.isInteger(planId) || planId <= 0) {
-        toast.error('请选择 Plan');
-        return;
-      }
-      if (form.deviceIds.length === 0) {
-        toast.error('请至少选择一台设备');
-        return;
-      }
-
-      const payload: TaskScheduleCreatePayload = {
-        name: form.name,
-        cron_expr: form.cron_expr,
-        enabled: form.enabled,
-        plan_id: planId,
-        device_ids: form.deviceIds,
-      };
-
-      if (editing) {
-        await api.schedules.update(editing.id, payload);
-        toast.success('定时任务更新成功');
-      } else {
-        await api.schedules.create(payload);
-        toast.success('定时任务创建成功');
-      }
-
-      setShowForm(false);
-      setEditing(null);
-      setForm(DEFAULT_FORM);
-      qc.invalidateQueries({ queryKey: scheduleKeys.list() });
-    } catch (err: unknown) {
-      toast.error(toApiError(err).message);
+    if (actionInFlight.current) return;
+    if (!form.name.trim()) {
+      toast.error('请填写任务名称');
+      return;
     }
+    if (!form.cron_expr.trim()) {
+      toast.error('请填写 Cron 表达式');
+      return;
+    }
+    const planId = Number(form.plan_id);
+
+    if (!Number.isInteger(planId) || planId <= 0) {
+      toast.error('请选择 Plan');
+      return;
+    }
+    if (form.deviceIds.length === 0) {
+      toast.error('请至少选择一台设备');
+      return;
+    }
+
+    const payload: TaskScheduleCreatePayload = {
+      name: form.name,
+      cron_expr: form.cron_expr,
+      enabled: form.enabled,
+      plan_id: planId,
+      device_ids: form.deviceIds,
+    };
+
+    await runGuarded(async () => {
+      try {
+        if (editing) {
+          await api.schedules.update(editing.id, payload);
+          toast.success('定时任务更新成功');
+        } else {
+          await api.schedules.create(payload);
+          toast.success('定时任务创建成功');
+        }
+
+        setShowForm(false);
+        setEditing(null);
+        setForm(DEFAULT_FORM);
+        qc.invalidateQueries({ queryKey: scheduleKeys.list() });
+      } catch (err: unknown) {
+        toast.error(toApiError(err).message);
+      }
+    });
   };
 
   const handleDelete = async (id: number) => {
+    if (actionInFlight.current) return;
     if (!(await confirmDialog({ description: '确定要删除此定时任务吗？', variant: 'destructive' }))) return;
-    try {
-      await api.schedules.delete(id);
-      qc.invalidateQueries({ queryKey: scheduleKeys.list() });
-    } catch (err: unknown) {
-      // C5：错误文案带后端详情，与 handleSave 粒度一致
-      toast.error(toApiError(err).message);
-    }
+    await runGuarded(async () => {
+      try {
+        await api.schedules.delete(id);
+        qc.invalidateQueries({ queryKey: scheduleKeys.list() });
+      } catch (err: unknown) {
+        toast.error(toApiError(err).message);
+      }
+    });
   };
 
   const handleToggle = async (id: number) => {
-    try {
-      await api.schedules.toggle(id);
-      qc.invalidateQueries({ queryKey: scheduleKeys.list() });
-    } catch (err: unknown) {
-      // C5：错误文案带后端详情
-      toast.error(toApiError(err).message);
-    }
+    await runGuarded(async () => {
+      try {
+        await api.schedules.toggle(id);
+        qc.invalidateQueries({ queryKey: scheduleKeys.list() });
+      } catch (err: unknown) {
+        toast.error(toApiError(err).message);
+      }
+    });
   };
 
   const handleRunNow = async (id: number) => {
-    try {
-      const res = await api.schedules.runNow(id);
-      const planRunId = res.plan_run_id;
-      if (planRunId) {
-        toast.success(`Plan 已触发，Run ID: ${planRunId}`);
-      } else {
-        toast.success('Plan 已触发');
+    await runGuarded(async () => {
+      try {
+        const res = await api.schedules.runNow(id);
+        const planRunId = res.plan_run_id;
+        if (planRunId) {
+          toast.success(`Plan 已触发，Run ID: ${planRunId}`);
+        } else {
+          toast.success('Plan 已触发');
+        }
+      } catch (err: unknown) {
+        toast.error(toApiError(err).message);
       }
-    } catch (err: unknown) {
-      toast.error(toApiError(err).message);
-    }
+    });
   };
 
   const openEdit = (s: TaskSchedule) => {
@@ -304,7 +326,7 @@ export default function SchedulesPage() {
               <label htmlFor="schedule-enabled" className={cn('text-sm', TEXT.body)}>启用</label>
             </div>
             <div className="flex gap-2">
-              <Button onClick={handleSave} size="sm">保存</Button>
+              <Button onClick={handleSave} size="sm" disabled={actionBusy}>保存</Button>
               <Button variant="outline" size="sm" onClick={closeForm}>
                 取消
               </Button>
@@ -353,16 +375,16 @@ export default function SchedulesPage() {
                   </TableCell>
                   <TableCell className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => handleRunNow(s.id)} title="立即执行" aria-label="立即执行" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-primary')}>
+                      <button onClick={() => handleRunNow(s.id)} disabled={actionBusy} title="立即执行" aria-label="立即执行" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-primary', actionBusy && 'opacity-50 pointer-events-none')}>
                         <Play className="w-4 h-4" />
                       </button>
-                      <button onClick={() => handleToggle(s.id)} title="切换状态" aria-label="切换状态" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-warning')}>
+                      <button onClick={() => handleToggle(s.id)} disabled={actionBusy} title="切换状态" aria-label="切换状态" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-warning', actionBusy && 'opacity-50 pointer-events-none')}>
                         <Power className="w-4 h-4" />
                       </button>
                       <button onClick={() => openEdit(s)} title="编辑" aria-label="编辑" className={cn('p-1.5 rounded', INTERACTIVE.iconButton)}>
                         <Edit2 className="w-4 h-4" />
                       </button>
-                      <button onClick={() => handleDelete(s.id)} title="删除" aria-label="删除" className={cn('p-1.5 rounded', INTERACTIVE.iconDanger)}>
+                      <button onClick={() => handleDelete(s.id)} disabled={actionBusy} title="删除" aria-label="删除" className={cn('p-1.5 rounded', INTERACTIVE.iconDanger, actionBusy && 'opacity-50 pointer-events-none')}>
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
