@@ -300,8 +300,9 @@ issue 重复认领: #906×3, #909×2, #1211×2, #1123×2
 ## 8. 关联
 
 - 总纲：[`PROJECT_REVIEW_PLAN.md`](./PROJECT_REVIEW_PLAN.md) §3/§4/§5/§6
-- 既有综合：[`PROJECT_REVIEW_R01_R15_SYNTHESIS_2026-09-11.md`](./PROJECT_REVIEW_R01_R15_SYNTHESIS_2026-09-11.md)
-  （该稿 §7 映射表缺 R02/R03/R04/R06–R10 的台账号，且 §2.1/§3.1 计数与实测不符，建议一并修订）
+- 既有综合：[`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_705379-synthesis.md`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_705379-synthesis.md)
+  （原 `PROJECT_REVIEW_R01_R15_SYNTHESIS_2026-09-11.md`，恢复自快照；
+  该稿 §7 映射表缺 R02/R03/R04/R06–R10 的台账号，且 §2.1/§3.1 计数与实测不符，建议一并修订）
 - 同题独立稿：`CA-*`（fb87d5f1）、`IV-*`（4a955874）、`CF-*`（d00273d0）、4e188e、e16d6d
 - 流程契约：[ADR-0034](../adr/ADR-0034-multi-harness-execution-contract.md)、
   [`execution-contract.md`](../development/ai/execution-contract.md)
