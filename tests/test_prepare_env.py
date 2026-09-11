@@ -143,3 +143,35 @@ def test_ensure_backend_dev_secrets_keeps_existing_valid_agent_secret(tmp_path):
     assert result.returncode == 0, result.stderr
     assert env_file.read_text(encoding="utf-8") == "AGENT_SECRET=already-valid-secret-123456\n"
     assert "already configured" in result.stdout
+
+
+def test_prepare_env_creates_target_with_owner_only_permissions(tmp_path):
+    """#1264（R14-F18）：含密钥的环境文件以 0600 创建，不受 umask 影响。"""
+    import os
+    import stat
+
+    template = tmp_path / ".env.example"
+    target = tmp_path / ".env.runtime"
+    template.write_text("JWT_SECRET_KEY=change-me\n", encoding="utf-8")
+
+    # 模拟常见 umask 022——若实现依赖调用者 umask，会得到 0644
+    old_umask = os.umask(0o022)
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--template", str(template),
+                "--target", str(target),
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        os.umask(old_umask)
+
+    assert result.returncode == 0, result.stderr
+    mode = stat.S_IMODE(target.stat().st_mode)
+    assert mode == 0o600, f"expected 0600, got {oct(mode)}"

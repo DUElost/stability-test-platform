@@ -1934,8 +1934,16 @@ export interface ResourcePool {
   is_active: boolean;
 }
 
-export interface ResourcePoolLoad extends ResourcePool {
+export interface ResourcePoolLoad {
+  id: number;
+  name: string;
+  resource_type: string;
+  max_concurrent_devices: number;
   current_devices: number;
+  host_group?: string | null;
+  is_active: boolean;
+  /** 列表展示用公网字段（ssid/router_ip 等），不含 password。 */
+  config?: Record<string, unknown>;
 }
 
 export interface ResourcePoolCreatePayload {
@@ -1972,6 +1980,8 @@ export interface AiAssistantConfig {
   enabled: boolean;
   temperature: number;
   max_turns: number;
+  /** 自动执行链累计续轮上限（#1227） */
+  max_auto_continuations: number;
   request_timeout_seconds: number;
   /** T1 测试门禁收回开关：true = 测试类工具也走审批 */
   t1_require_confirm: boolean;
@@ -1996,6 +2006,7 @@ export interface AiAssistantConfigUpdate {
   enabled?: boolean;
   temperature?: number;
   max_turns?: number;
+  max_auto_continuations?: number;
   request_timeout_seconds?: number;
   t1_require_confirm?: boolean;
   auto_approve_tools?: string[];

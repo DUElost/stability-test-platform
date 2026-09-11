@@ -17,6 +17,10 @@ import { projectKeys } from '@/utils/api/queryKeys';
 interface AssignProjectDialogProps {
   isOpen: boolean;
   selectedCount: number;
+  /** 选中设备涉及的唯一型号（批量归入按型号成员行写入）。 */
+  affectedModels: string[];
+  /** 无型号设备序列号——无法归入，需在 UI 阻断。 */
+  devicesWithoutModelSerials: string[];
   isSubmitting?: boolean;
   onClose: () => void;
   onSubmit: (projectKey: string) => void;
@@ -29,6 +33,8 @@ interface AssignProjectDialogProps {
 export function AssignProjectDialog({
   isOpen,
   selectedCount,
+  affectedModels,
+  devicesWithoutModelSerials,
   isSubmitting = false,
   onClose,
   onSubmit,
@@ -56,6 +62,14 @@ export function AssignProjectDialog({
       setError('请选择目标项目');
       return;
     }
+    if (devicesWithoutModelSerials.length > 0) {
+      setError('所选设备含无型号项，无法批量归入');
+      return;
+    }
+    if (affectedModels.length === 0) {
+      setError('没有可归入的型号');
+      return;
+    }
     onSubmit(projectKey);
   };
 
@@ -68,8 +82,8 @@ export function AssignProjectDialog({
             批量归入项目
           </DialogTitle>
           <DialogDescription>
-            将 {selectedCount} 台设备归入所选项目。已在该项目的设备自动跳过（幂等），
-            归入操作记录审计日志。
+            已选 {selectedCount} 台设备，实际按型号成员行归入（同型号全部设备随之变更）。
+            已在目标项目的型号自动跳过（幂等），归入操作记录审计日志。
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
@@ -88,16 +102,31 @@ export function AssignProjectDialog({
               ))}
             </select>
             {error && <p className={FORM.error}>{error}</p>}
+            {affectedModels.length > 0 && (
+              <p className="rounded-md bg-muted px-3 py-2 text-sm" data-testid="assign-model-scope">
+                将归入以下型号：
+                <span className="ml-1 font-mono">{affectedModels.join('、')}</span>
+              </p>
+            )}
+            {devicesWithoutModelSerials.length > 0 && (
+              <p className={FORM.error} data-testid="assign-no-model-error">
+                以下设备无型号，无法归入：
+                <span className="ml-1 font-mono">{devicesWithoutModelSerials.join('、')}</span>
+              </p>
+            )}
             <p className="rounded-md bg-warning/10 px-3 py-2 text-sm text-warning" data-testid="assign-seed-notice">
-              所选 {selectedCount} 台设备的归属将改为目标项目；当前属于 SEED / LEGACY
-              项目的设备会被直接迁移，不会出现冲突确认。
+              型号归属写入成员行后，同型号全部设备随之变更；SEED / LEGACY 覆盖规则不变。
             </p>
           </div>
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={onClose} disabled={isSubmitting}>
               取消
             </Button>
-            <Button type="submit" data-testid="assign-project-confirm" disabled={isSubmitting}>
+            <Button
+              type="submit"
+              data-testid="assign-project-confirm"
+              disabled={isSubmitting || devicesWithoutModelSerials.length > 0 || affectedModels.length === 0}
+            >
               {isSubmitting ? '归入中…' : '确认归入'}
             </Button>
           </DialogFooter>
