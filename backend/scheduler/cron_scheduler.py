@@ -18,12 +18,12 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, or_, select
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
+from backend.models.enums import PlanRunStatus
 from backend.models.schedule import TaskSchedule, schedule_timestamp
 
 logger = logging.getLogger(__name__)
 
 CRON_POLL_INTERVAL = float(os.getenv("CRON_POLL_INTERVAL", "30"))
-PATROL_TIMEOUT_MINUTES = int(os.getenv("PATROL_TIMEOUT_MINUTES", "10"))
 PLAN_RUN_RETENTION_DAYS = int(os.getenv("PLAN_RUN_RETENTION_DAYS", "3"))
 # ADR-0020 §"落地与后续动作 9"：同一 schedule 在该窗口内不重复触发 root PlanRun
 SCHEDULE_DEDUP_WINDOW_SECONDS = float(os.getenv("SCHEDULE_DEDUP_WINDOW_SECONDS", "60"))
@@ -129,22 +129,31 @@ async def _fire_schedule(db, sched: "TaskSchedule", now: datetime) -> None:
                 schedule_id, exc_info=True,
             )
 
-        # ── 2. plan 重叠跳过（避免对同一 plan 同时多窗口运行） ──
-        stale_cutoff = now - timedelta(minutes=PATROL_TIMEOUT_MINUTES)
+        # ── 2. plan 严格防重叠（#994 裁决：不允许排队） ──
+        # 同一 Plan 存在任一非终态 Run（QUEUED / PRECHECK / RUNNING）→ 跳过本
+        # 窗口并推进 next_run_at：排队态不积压、长跑不豁免（不设 started_at 年龄
+        # 阈值）、错过不补跑。卡住的非终态行由 recycler / precheck_reaper 收口，
+        # 需要补跑请用 CHAIN / 手动触发。
         try:
-            active_count_result = await db.execute(
-                select(PlanRun)
+            active_result = await db.execute(
+                select(PlanRun.id)
                 .where(
                     PlanRun.plan_id == plan_id,
-                    PlanRun.status == "RUNNING",
-                    PlanRun.started_at > stale_cutoff,
+                    PlanRun.status.in_(
+                        (
+                            PlanRunStatus.QUEUED.value,
+                            PlanRunStatus.PRECHECK.value,
+                            PlanRunStatus.RUNNING.value,
+                        )
+                    ),
                 )
+                .limit(1)
             )
-            active_count = len(active_count_result.scalars().all())
-            if active_count > 0:
+            if active_result.scalars().first() is not None:
                 logger.info(
-                    "cron_skip_overlap schedule_id=%s plan_id=%s active_runs=%d",
-                    schedule_id, plan_id, active_count,
+                    "cron_skip_overlap schedule_id=%s plan_id=%s — "
+                    "同 Plan 存在非终态 Run（严格防重叠，不排队）",
+                    schedule_id, plan_id,
                 )
                 sched.next_run_at = _next_schedule_run(cron_expression, now)
                 return
