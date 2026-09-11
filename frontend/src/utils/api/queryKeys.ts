@@ -38,6 +38,9 @@ export const deviceKeys = {
   /** ADR-0029：projectKey 维度——设备页项目筛选走后端（未知 key 404 语义）。 */
   list: (projectKey?: string | null, unassigned = false) =>
     ['devices', { projectKey: projectKey ?? null, unassigned }] as const,
+  /** 任意筛选态的设备列表（前缀）——写后失效用；用 list() 的无参形态会因对象深比较
+   *  与筛选态键不匹配而失效为空（#823）。 */
+  allLists: () => ['devices'] as const,
   /** 全量设备（fetchAllDevices 分页拉全）— PlanExecutePage 等需要完整设备视图的页面用。 */
   all: () => ['devices-all'] as const,
 } as const;

@@ -103,6 +103,9 @@ ALLOWLIST_PREFIXES = (
     # 回填脚本的判定依据就是「这一批具体 serial」——改了脚本语义就错了。
     # 理想做法是外置到配置/DB（见 Revisit），当前先白名单留痕。
     "tools/dev/backfill-test-project.py",
+    # #1356：占位 serial 检测表——被检测值本身必须出现（判定依据），
+    # 且 0123456789ABCDEF 是公开占位常量（非真实资产）。
+    "backend/core/device_serial.py",
 )
 
 # 路径中含这些目录名 → 测试夹具，放行（形态与真实 serial 无法区分）

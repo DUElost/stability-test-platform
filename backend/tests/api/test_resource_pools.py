@@ -128,3 +128,14 @@ def test_delete_pool_without_allocations_succeeds(client, admin_headers):
         f"/api/v1/resource-pools/{pool_id}", headers=admin_headers,
     )
     assert resp.status_code == 204, resp.text
+
+
+def test_loads_includes_public_config_without_password(client, admin_headers):
+    """#954：loads 列表含 SSID 等展示字段，不含 password。"""
+    pool_id = _create_pool_with_secret(client, admin_headers, name="wifi-loads")
+
+    resp = client.get("/api/v1/resource-pools/loads", headers=admin_headers)
+    assert resp.status_code == 200, resp.text
+    target = next(p for p in resp.json()["data"] if p["id"] == pool_id)
+    assert target["config"]["ssid"] == "Lab-5G"
+    assert "password" not in target["config"]

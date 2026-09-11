@@ -25,7 +25,7 @@ function renderDialog(props: {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <HostHotUpdateConfirmDialog
         hostId={props.hostId}
@@ -36,6 +36,7 @@ function renderDialog(props: {
       />
     </QueryClientProvider>,
   );
+  return { ...view, queryClient };
 }
 
 describe('HostHotUpdateConfirmDialog', () => {
@@ -218,5 +219,27 @@ describe('HostHotUpdateConfirmDialog', () => {
       });
       expect(retryEl).toHaveTextContent('73');
     });
+  });
+
+  it('#823：abort 收口期间按 5s 短轮询推进，收口完成即停', async () => {
+    mocks.getDetail.mockResolvedValue({
+      id: 1,
+      active_job_count: 1,
+      active_jobs: [{ id: 1, abort_pending: true }],
+    });
+    const { queryClient } = renderDialog({ hostId: 1 });
+    await waitFor(() => expect(mocks.getDetail).toHaveBeenCalled());
+
+    const opts = queryClient.getQueryCache().find({ queryKey: ['host-detail', 1] })?.options as {
+      refetchInterval?: unknown;
+    };
+    const fn = opts.refetchInterval as (q: { state: { data?: unknown } }) => unknown;
+    expect(typeof fn).toBe('function');
+    // 全部处于 abort 收口中 → 5s 短轮询推进快照
+    expect(
+      fn({ state: { data: { active_job_count: 1, active_jobs: [{ abort_pending: true }] } } }),
+    ).toBe(5000);
+    // 收口完成（active=0）→ 停
+    expect(fn({ state: { data: { active_job_count: 0, active_jobs: [] } } })).toBe(false);
   });
 });
