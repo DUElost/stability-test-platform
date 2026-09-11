@@ -14,6 +14,7 @@ import logging
 from datetime import datetime, timezone
 from functools import partial
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from backend.core.database import SessionLocal
@@ -278,6 +279,35 @@ def _decide_execution_mode(
     return "proposed"
 
 
+def _audit_action(
+    db: Session, action: AiAssistantAction, event: str, **extra: object
+) -> None:
+    """统一动作生命周期审计（R13-F12 / #1224）。
+
+    提案 / 自动批准 / 执行开始 / 执行结束此前大多无 ``record_audit``，
+    自动 T1 路径缺完整审计链。这里集中一处，事件名 ``ai_assistant_action_<event>``。
+    """
+    from backend.core.audit import record_audit
+    from backend.models.user import User as UserModel
+
+    actor_id = action.requested_by_user_id
+    username = None
+    if actor_id is not None:
+        actor = db.get(UserModel, actor_id)
+        username = getattr(actor, "username", None)
+    details = {"tool_name": action.tool_name, "status": action.status}
+    details.update(extra)
+    record_audit(
+        db,
+        action=f"ai_assistant_action_{event}",
+        resource_type="ai_assistant_action",
+        resource_id=action.id,
+        details=details,
+        user_id=actor_id,
+        username=username,
+    )
+
+
 def _create_action(
     db: Session,
     session: AiChatSession,
@@ -298,6 +328,11 @@ def _create_action(
     db.add(action)
     db.commit()
     db.refresh(action)
+    if mode == "auto":
+        _audit_action(db, action, "auto_approved")
+    else:
+        _audit_action(db, action, "proposed")
+    db.commit()
     return action
 
 
@@ -334,9 +369,45 @@ def _finalize_action(action_id: int, status: str, summary: str) -> None:
                 )
             )
             _touch_session(db, session)
+        # R13-F12 (#1224): 执行结束纳入统一审计链（状态 + 脱敏摘要）。
+        _audit_action(db, action, "finished", result_status=status)
         db.commit()
         if session is not None:
             _enqueue_continuation(session.id)
+    finally:
+        db.close()
+
+
+def record_rejection_receipt(action_id: int, decided_by: str | None) -> None:
+    """记录被拒绝的审批回执，供续轮历史读取（R13-F09 / #1221）。
+
+    拒绝此前往会话里不留任何痕迹，`_history_as_llm_messages` 又不读 action
+    状态，模型只看到「等待审批」，会继续等待或重复提案。这里写入一条明确的
+    tool 回执，让续轮看到拒绝事实。
+    """
+    db = SessionLocal()
+    try:
+        action = db.get(AiAssistantAction, action_id)
+        if action is None:
+            return
+        session = db.get(AiChatSession, action.session_id)
+        if session is None:
+            return
+        who = decided_by or "管理员"
+        content = (
+            f"操作卡 #{action.id}（{action.tool_name}）已被{who}拒绝——"
+            "该操作不会执行。请告知用户并停止等待该审批；如仍需，请用户确认后重新提案。"
+        )
+        db.add(
+            AiChatMessage(
+                session_id=session.id,
+                role="tool",
+                tool_call_id=None,
+                content=content,
+            )
+        )
+        _touch_session(db, session)
+        db.commit()
     finally:
         db.close()
 
@@ -393,15 +464,44 @@ def _enqueue_continuation(session_id: int) -> None:
         #（默认 60s 的 SAQ timeout 会把多轮 T0 链中途砍掉，占位滞留 pending）
         # M3：轮次任务有副作用（写消息/建 action），retries=0 禁止整轮重放
         timeout = 240
+        over_budget = False
+        limit = 20
         try:
             db = SessionLocal()
             try:
                 cfg = get_or_create_config(db)
                 timeout = cfg.request_timeout_seconds * max(int(cfg.max_turns), 1) + 120
+                # R13-R01 (#1227): 自动执行链的累计预算。每次自动续轮前原子自增
+                # 会话计数（用户新消息会清零），超限即不再入队。
+                limit = max(int(getattr(cfg, "max_auto_continuations", 20) or 20), 1)
+                new_count = db.execute(
+                    update(AiChatSession)
+                    .where(AiChatSession.id == session_id)
+                    .values(
+                        auto_continuation_count=AiChatSession.auto_continuation_count + 1
+                    )
+                    .returning(AiChatSession.auto_continuation_count)
+                    .execution_options(synchronize_session=False)
+                ).scalar_one_or_none()
+                db.commit()
+                over_budget = new_count is not None and new_count > limit
             finally:
                 db.close()
-        except Exception:  # noqa: BLE001 - 超时取默认值即可
-            pass
+        except Exception:  # noqa: BLE001 - 预算读取失败不阻塞正常投递
+            logger.exception("ai_continuation_budget_check_failed session=%s", session_id)
+
+        if over_budget:
+            logger.warning(
+                "ai_continuation_budget_exceeded session=%s limit=%d", session_id, limit
+            )
+            _converge_pending(
+                session_id, False,
+                error=(
+                    f"已达自动执行链累计上限（{limit} 次自动续轮），已停止自动续跑。"
+                    "请查看已执行结果，或发送新消息继续。"
+                ),
+            )
+            return
 
         # 续轮期间前端据占位继续轮询
         ensure_pending_placeholder(session_id)
@@ -637,6 +737,9 @@ def execute_action(action_id: int) -> None:
             return
         db.commit()
         db.refresh(action)
+        # R13-F12 (#1224): 执行开始纳入统一审计链。
+        _audit_action(db, action, "executing")
+        db.commit()
 
         if spec.kind == "runconsole":
             # #1218：防御性收口——存量 approved 动作可能携带创建期未校验的参数，

@@ -34,6 +34,7 @@ interface FormState {
   enabled: boolean;
   temperature: number;
   max_turns: number;
+  max_auto_continuations: number;
   request_timeout_seconds: number;
   t1_require_confirm: boolean;
   auto_approve_tools: string[];
@@ -52,6 +53,7 @@ function toFormState(config: AiAssistantConfig): FormState {
     enabled: config.enabled,
     temperature: config.temperature,
     max_turns: config.max_turns,
+    max_auto_continuations: config.max_auto_continuations,
     request_timeout_seconds: config.request_timeout_seconds,
     t1_require_confirm: config.t1_require_confirm,
     auto_approve_tools: [...config.auto_approve_tools],
@@ -119,6 +121,7 @@ export default function AiAssistantSettingsPage() {
       enabled: form.enabled,
       temperature: form.temperature,
       max_turns: form.max_turns,
+      max_auto_continuations: form.max_auto_continuations,
       request_timeout_seconds: form.request_timeout_seconds,
       t1_require_confirm: form.t1_require_confirm,
       auto_approve_tools: form.auto_approve_tools,
@@ -410,6 +413,20 @@ export default function AiAssistantSettingsPage() {
                   max="20"
                   value={form.max_turns}
                   onChange={(e) => update('max_turns', Number(e.target.value))}
+                  className={FORM.input}
+                />
+              </div>
+              <div>
+                <label className={FORM.label} htmlFor="ai-max-auto-continuations">
+                  自动执行链累计续轮上限
+                </label>
+                <input
+                  id="ai-max-auto-continuations"
+                  type="number"
+                  min="1"
+                  max="200"
+                  value={form.max_auto_continuations}
+                  onChange={(e) => update('max_auto_continuations', Number(e.target.value))}
                   className={FORM.input}
                 />
               </div>
