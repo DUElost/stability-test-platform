@@ -430,18 +430,12 @@ def parse_gpu_log(content: str) -> dict:
             continue
     rounds_done = rounds[-1]["round"] if rounds else 0
     failed = sum(1 for r in rounds if r["rc"] != 0)
-    # v1.0.2（#774 run 356/357 实证）：JUnit FAILURES 时 am instrument 退出码
-    # 仍为 0（如 Antutu 首启弹窗阻塞时断言失败）——rc 统计不到，job 被误判
-    # COMPLETED（假成功：523 台「完成 10 轮」实际未执行测试）。此处按
-    # FAILURES 文本计数（上限 rounds_done），暴露真实失败轮次。
-    junit_failed = min(content.count("FAILURES!!!"), rounds_done) if rounds_done else 0
     return {
         "started": start is not None,
         "test_id": start["test_id"] if start else None,
         "expected_rounds": expected,
         "rounds_done": rounds_done,
         "failed_rounds": failed,
-        "junit_failed_rounds": junit_failed,
         "end_rc": end_rc,
         "rounds": rounds,
     }
