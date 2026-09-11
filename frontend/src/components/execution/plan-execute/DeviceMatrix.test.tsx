@@ -29,7 +29,14 @@ describe('applyMatrixSelection', () => {
   });
 
   it('shift-selects a range of schedulable devices only', () => {
-    const next = applyMatrixSelection(ordered, new Set(), ordered[3], { shiftKey: true }, 0);
+    const next = applyMatrixSelection(ordered, new Set(), ordered[3], { shiftKey: true }, 1);
+    expect(Array.from(next).sort()).toEqual([1, 2, 4]);
+  });
+
+  it('shift-select anchors by device id after list reorder', () => {
+    const reordered = [ordered[1], ordered[0], ordered[3]];
+    const afterFirst = applyMatrixSelection(reordered, new Set(), reordered[0], { shiftKey: false }, null);
+    const next = applyMatrixSelection(reordered, afterFirst, reordered[2], { shiftKey: true }, 2);
     expect(Array.from(next).sort()).toEqual([1, 2, 4]);
   });
 

@@ -500,4 +500,55 @@ describe('HostsPage', () => {
       expect.stringContaining('成功 1 台，跳过 0 台，失败 1 台'),
     );
   });
+
+  it('prunes selected host ids when a host disappears from the list', async () => {
+    const hosts = [
+      {
+        id: 'h1',
+        name: 'node-1',
+        ip: '10.0.0.1',
+        status: 'ONLINE',
+        extra: {},
+        agent_installed: true,
+      },
+      {
+        id: 'h2',
+        name: 'node-2',
+        ip: '10.0.0.2',
+        status: 'ONLINE',
+        extra: {},
+        agent_installed: true,
+      },
+    ];
+    mockHostsList.mockResolvedValue({ items: hosts, total: 2 });
+
+    const { hostKeys } = await import('../../utils/api/queryKeys');
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(hostKeys.list(), { items: hosts, total: 2 });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <HostsPage />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByTestId('host-row-h1');
+    fireEvent.click(screen.getByTestId('select-all-hosts'));
+    expect(screen.getByTestId('host-bulk-action-bar')).toHaveTextContent('已选择 2 台主机');
+
+    queryClient.setQueryData(hostKeys.list(), [hosts[0]]);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('host-row-h2')).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('host-bulk-action-bar')).toHaveTextContent('已选择 1 台主机');
+    });
+    expect(screen.getByTestId('host-selected-h1')).toHaveTextContent('yes');
+  });
 });
