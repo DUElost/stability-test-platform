@@ -27,6 +27,7 @@ def main() -> int:
     systemd_service = root / "deploy" / "control-plane" / "systemd" / "stability-backend.service"
     nginx_http = root / "deploy" / "control-plane" / "nginx" / "stability-platform.conf"
     nginx_https = root / "deploy" / "control-plane" / "nginx" / "stability-platform-https.conf"
+    nginx_preview = root / "deploy" / "control-plane" / "nginx" / "stability-platform-preview.conf"
 
     # 清单/演练 runbook 渲染时替换的全部控制面模板（#1256）
     control_plane_templates = (
@@ -35,7 +36,7 @@ def main() -> int:
         root / "deploy" / "control-plane" / "systemd" / "stability-backend-migrate.service",
         nginx_http,
         nginx_https,
-        root / "deploy" / "control-plane" / "nginx" / "stability-platform-preview.conf",
+        nginx_preview,
         root / "deploy" / "control-plane" / "logrotate" / "stability-backend",
     )
 
@@ -76,6 +77,13 @@ def main() -> int:
                 raise AssertionError(
                     f"Hashed asset 404s must not be cached as immutable in {conf_path}"
                 )
+
+        # Suite 上传体上限（#1260）：反代 body 上限必须覆盖后端
+        # 「2 × 10 MiB 单文件预算 + multipart 余量」，否则合法上传在 Nginx 413。
+        # 后端常量 ↔ 模板值的数值对齐由 backend/tests/test_deployment_files.py 守。
+        for conf_path in (nginx_http, nginx_https, nginx_preview):
+            conf = conf_path.read_text(encoding="utf-8")
+            _require_contains(conf, "client_max_body_size 25m;", str(conf_path))
 
         # 部署根唯一性（#1256）：模板只能用 <deploy-root> 占位符。任何硬编码的部署根
         # 都会让「清单按 STP_DEPLOY_ROOT 渲染」与模板固定路径再次分叉——只核对字符串

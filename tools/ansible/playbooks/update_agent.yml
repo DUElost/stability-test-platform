@@ -290,7 +290,7 @@
       ansible.builtin.lineinfile:
         path: "{{ agent_install_dir }}/.env"
         regexp: "^API_URL="
-        line: "API_URL={{ agent_api_url }}"
+        line: "API_URL={{ agent_upgrade_api_url }}"
         create: false
       register: agent_api_url_update
 
