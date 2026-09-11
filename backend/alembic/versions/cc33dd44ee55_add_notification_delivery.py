@@ -8,16 +8,16 @@
 - 与 NotificationLog.context.channel_delivery（JSONB 过渡记录）双写，
   本表为权威（历史日志无本表行时回落 JSONB 读取）。
 
-Revision ID: bb22cc33dd44
-Revises: aa11bb22cc33
+Revision ID: cc33dd44ee55
+Revises: bb22cc33dd44
 Create Date: 2026-09-11
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "bb22cc33dd44"
-down_revision = "aa11bb22cc33"
+revision = "cc33dd44ee55"
+down_revision = "bb22cc33dd44"
 branch_labels = None
 depends_on = None
 

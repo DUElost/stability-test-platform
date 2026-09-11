@@ -54,7 +54,7 @@ Class: feature
 - API：`deliveries` 端点 table/legacy 两个来源 + 404 + 匿名 401 与普通用户
   200（并入 `_LOG_ENDPOINTS` 参数化）；
 - 迁移链：`tests/test_alembic_heads.py` + `test_alembic_upgrade.py` 通过
-  （新头 `bb22cc33dd44`，down_revision `aa11bb22cc33`）；
+  （新头 `cc33dd44ee55`，down_revision `bb22cc33dd44`，串联于 suite_global_sha 之后）；
 - `pytest backend/tests` 全量：见 PR 验证节；ruff 全绿。
 
 ## Revisit
