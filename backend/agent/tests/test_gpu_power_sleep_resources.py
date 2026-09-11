@@ -382,3 +382,37 @@ def test_gpu_setup_v108_dismiss_dialogs_wired():
     assert "dismiss_antutu_dialogs(meta" in setup_src          # 接线
     assert "def dismiss_antutu_dialogs" in lib_src             # 实现
     assert "uiautomator dump" in lib_src and "input tap" in lib_src  # 通用清弹窗
+
+
+def test_gpu_finish_v103_junit_failures_counted():
+    """#774：rc=0 但 JUnit FAILURES = 假成功——v1.0.2 计入 junit_failed_rounds。"""
+    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_finish/v1.0.3"
+    sys.path.insert(0, str(d))
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gpu_finish_lib_v103", str(d / "_lib.py"))
+    lib = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(lib)
+    log = (
+        "GPU_RUN_START test_id=002 rounds=3\n"
+        "FAILURES!!!\nTests run: 1, Failures: 1\nGPU_ROUND 1 rc=0\n"
+        "FAILURES!!!\nTests run: 1, Failures: 1\nGPU_ROUND 2 rc=0\n"
+        "OK (1 test)\nGPU_ROUND 3 rc=0\n"
+        "GPU_RUN_END rc=0\n"
+    )
+    p = lib.parse_gpu_log(log)
+    assert p["rounds_done"] == 3
+    assert p["failed_rounds"] == 0
+    assert p["junit_failed_rounds"] == 2
+
+
+def test_gpu_setup_v109_loop_dismisses_dialogs():
+    """#774 run 359：v1.0.9 循环脚本每轮 instrument 前清弹窗。"""
+    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.9"
+    loop = (d / "_gpu_stress_loop.sh").read_text(encoding="utf-8")
+    assert "dismiss_dialogs" in loop
+    assert "uiautomator dump" in loop
+    assert "input tap" in loop
+    assert "sed -E" in loop
+    loop_body = loop[loop.index("i=1"):]
+    assert loop_body.index("    dismiss_dialogs") < loop_body.index("am instrument")
