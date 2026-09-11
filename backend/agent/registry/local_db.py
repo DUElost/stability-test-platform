@@ -576,6 +576,14 @@ class LocalDB:
                     (key, value),
                 )
 
+    def delete_state(self, key: str) -> None:
+        """删除一条 agent_state 键（#1014：协调器投影回收时清理 epoch）。"""
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "DELETE FROM agent_state WHERE key=?", (key,),
+                )
+
     # ------------------------------------------------------------------
     # job_terminal_outbox
     # ------------------------------------------------------------------
