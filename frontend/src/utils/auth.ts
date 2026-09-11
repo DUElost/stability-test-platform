@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { AUTH_REFRESH_TIMEOUT_MS } from './api/timeouts';
 
 // 防抖：避免单标签内并发 refresh 导致重复请求 (axios interceptor + Socket.IO recovery 共用)
 let _refreshInFlight: Promise<boolean> | null = null;
@@ -21,7 +22,12 @@ async function requestRefreshOnce(): Promise<boolean> {
     await axios.post(
       '/api/v1/auth/refresh',
       undefined,
-      { withCredentials: true },
+      {
+        withCredentials: true,
+        // #1199：refresh 挂起会占住 _refreshInFlight 与跨标签 Web Lock，
+        // 后续 401 恢复全部排队；超时（失败）后 finally 释放，允许重试
+        timeout: AUTH_REFRESH_TIMEOUT_MS,
+      },
     );
     return true;
   } catch {

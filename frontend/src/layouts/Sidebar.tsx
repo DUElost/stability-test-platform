@@ -246,6 +246,8 @@ export default function Sidebar({
                 </button>
               )}
               <div
+                // #1197：折叠组内链接退出键盘焦点顺序（inert 同时移出焦点与辅助技术树）
+                inert={isGroupCollapsed}
                 className={cn(
                   'space-y-1 overflow-hidden transition-all duration-200',
                   isGroupCollapsed ? 'max-h-0 opacity-0' : 'max-h-96 opacity-100',

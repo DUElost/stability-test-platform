@@ -404,3 +404,15 @@ def test_gpu_finish_v103_junit_failures_counted():
     assert p["rounds_done"] == 3
     assert p["failed_rounds"] == 0
     assert p["junit_failed_rounds"] == 2
+
+
+def test_gpu_setup_v109_loop_dismisses_dialogs():
+    """#774 run 359：v1.0.9 循环脚本每轮 instrument 前清弹窗。"""
+    d = Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.9"
+    loop = (d / "_gpu_stress_loop.sh").read_text(encoding="utf-8")
+    assert "dismiss_dialogs" in loop
+    assert "uiautomator dump" in loop
+    assert "input tap" in loop
+    assert "sed -E" in loop
+    loop_body = loop[loop.index("i=1"):]
+    assert loop_body.index("    dismiss_dialogs") < loop_body.index("am instrument")

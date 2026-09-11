@@ -233,3 +233,42 @@ def test_parse_priv_mode_reads_sentinels():
     assert _parse_priv_mode("noise\nSTP_PRIV_MODE=wrapper\n") == "wrapper"
     assert _parse_priv_mode("STP_PRIV_FALLBACK=legacy\n") == "legacy"
     assert _parse_priv_mode("") == "unknown"
+
+
+# ── #1253（R14-F07）：服务重启后未 active 必须失败 ────────────────────────
+
+
+def test_build_remote_script_exits_nonzero_when_service_not_active():
+    """WARN 不算成功：is-active 重试窗口耗尽 → exit 1（API 得 ok=False）。"""
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        tar_path="/tmp/stp-agent-update.tar.gz",
+        user="android",
+        group="android",
+        sync_agent_secret=False,
+        agent_secret="",
+    )
+    assert "WARN: service may not be running" not in script, "旧 WARN 分支必须移除"
+    assert "SERVICE_ACTIVE=0" in script
+    assert "ERROR: service $SERVICE_NAME not active 5s after restart" in script
+    # 失败路径以 exit 1 结束（紧凑：ERROR 行之后紧跟 exit）
+    assert "    exit 1\nfi" in script or "exit 1" in script
+    # 成功路径仍打 OK
+    assert "OK: service restarted successfully" in script
+
+
+def test_remote_failure_message_prefers_error_line():
+    from backend.services.host_updater import _remote_failure_message
+
+    out = "STP_DEPS_REFRESHED=0\nERROR: service stability-test-agent not active 5s after restart"
+    assert _remote_failure_message(out, 1) == (
+        "Remote script failed (exit=1): "
+        "ERROR: service stability-test-agent not active 5s after restart"
+    )
+
+
+def test_remote_failure_message_falls_back_when_no_error_line():
+    from backend.services.host_updater import _remote_failure_message
+
+    assert _remote_failure_message("some log\nanother", 2) == "Remote script failed (exit=2)"

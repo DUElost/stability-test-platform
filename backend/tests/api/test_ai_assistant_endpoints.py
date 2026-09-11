@@ -1048,3 +1048,123 @@ class TestContinuationVisibility:
         )
         assert resp.status_code == 200
         assert self._pending_count(db_session, s.id) == 1
+
+
+# ── #1223（R13-F11）：有未完成动作/进行中轮次的会话拒绝硬删除 ─────────────
+
+
+def _seed_session_with(db_session, user_id: int, *, action_status=None, message_status=None):
+    s = AiChatSession(user_id=user_id)
+    db_session.add(s)
+    db_session.flush()
+    if action_status is not None:
+        db_session.add(AiAssistantAction(
+            session_id=s.id, tool_name="test_notification_channel", params={},
+            status=action_status, requested_by_user_id=user_id,
+        ))
+    if message_status is not None:
+        db_session.add(AiChatMessage(
+            session_id=s.id, role="assistant", content="", status=message_status,
+        ))
+    db_session.commit()
+    return s
+
+
+class TestSessionDeleteGuard:
+    def _user_id(self, db_session):
+        return db_session.query(User).filter(User.role != "admin").first().id
+
+    def test_running_action_blocks_delete(self, client, auth_headers, db_session):
+        uid = self._user_id(db_session)
+        s = _seed_session_with(db_session, uid, action_status="running")
+        resp = client.delete(f"/api/v1/ai-assistant/sessions/{s.id}", headers=auth_headers)
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["code"] == "SESSION_HAS_ACTIVE_ACTIONS"
+        assert db_session.get(AiChatSession, s.id) is not None, "会话不得被删"
+
+    def test_proposed_action_blocks_delete(self, client, auth_headers, db_session):
+        uid = self._user_id(db_session)
+        s = _seed_session_with(db_session, uid, action_status="proposed")
+        resp = client.delete(f"/api/v1/ai-assistant/sessions/{s.id}", headers=auth_headers)
+        assert resp.status_code == 409
+        assert db_session.get(AiChatSession, s.id) is not None
+
+    def test_in_flight_turn_blocks_delete(self, client, auth_headers, db_session):
+        uid = self._user_id(db_session)
+        s = _seed_session_with(db_session, uid, message_status="pending")
+        resp = client.delete(f"/api/v1/ai-assistant/sessions/{s.id}", headers=auth_headers)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "SESSION_TURN_IN_FLIGHT"
+
+    def test_terminal_actions_allow_delete(self, client, auth_headers, db_session):
+        """终态动作（succeeded/failed/cancelled）不阻塞清理——历史照删。"""
+        uid = self._user_id(db_session)
+        s = _seed_session_with(db_session, uid)
+        for st in ("succeeded", "failed", "cancelled", "rejected", "expired"):
+            db_session.add(AiAssistantAction(
+                session_id=s.id, tool_name="test_notification_channel", params={},
+                status=st, requested_by_user_id=uid,
+            ))
+        db_session.commit()
+
+        resp = client.delete(f"/api/v1/ai-assistant/sessions/{s.id}", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        assert db_session.get(AiChatSession, s.id) is None
+        assert db_session.query(AiAssistantAction).filter(
+            AiAssistantAction.session_id == s.id,
+        ).count() == 0
+
+
+# ── #1218（R13-F06）：T1 参数创建前校验 + 执行期异常必达终态 ───────────────
+
+
+class TestT1ParamValidation:
+    def test_normalize_rejects_missing_file_path(self):
+        """非法 file_path 在归一化（创建动作前）即抛 ToolValidationError。"""
+        from backend.services.ai_assistant.tools import (
+            ToolValidationError,
+            normalize_tool_params,
+        )
+
+        with pytest.raises(ToolValidationError, match="file not found"):
+            normalize_tool_params("run_agent_tests", {"file_path": "no_such_file.py"})
+
+    def test_normalize_passes_valid_args(self):
+        from backend.services.ai_assistant.tools import normalize_tool_params
+
+        assert normalize_tool_params("run_agent_tests", {}) == {}
+
+    def test_approved_action_with_bad_params_reaches_failed(
+        self, auth_headers, db_session, monkeypatch
+    ):
+        """执行期防御收口：存量 approved 动作带非法参数 → failed 而非永久 running。"""
+        from backend.services.ai_assistant import orchestrator as orch
+
+        user = db_session.query(User).filter(User.role != "admin").first()
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.flush()
+        action = AiAssistantAction(
+            session_id=s.id, tool_name="run_agent_tests",
+            params={"file_path": "no_such_file.py"},
+            status="approved", requested_by_user_id=user.id,
+        )
+        db_session.add(action)
+        db_session.commit()
+
+        class _Shared:
+            def __init__(self, session):
+                self._s = session
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+        orch.execute_action(action.id)
+
+        db_session.refresh(action)
+        assert action.status == "failed", "执行期异常必须达终态"
+        assert "参数校验失败" in (action.result_summary or "")

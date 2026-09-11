@@ -27,6 +27,8 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
   default: (props: {
     planName: string;
     onPlanNameChange: (name: string) => void;
+    description: string;
+    onDescriptionChange: (description: string) => void;
     onSpecialtyKeyChange: (key: string) => void;
   }) => (
     <div data-testid="plan-canvas">
@@ -35,6 +37,12 @@ vi.mock('@/components/pipeline/PlanCanvas', () => ({
         aria-label="Plan 名称"
         value={props.planName}
         onChange={(e) => props.onPlanNameChange(e.target.value)}
+      />
+      <input
+        data-testid="plan-description-input"
+        aria-label="Plan 描述"
+        value={props.description}
+        onChange={(e) => props.onDescriptionChange(e.target.value)}
       />
       <button
         type="button"
@@ -386,5 +394,74 @@ describe('PlanEditPage', () => {
 
     await waitFor(() => expect(screen.getByTestId('plan-name-input')).toHaveValue('Plan v2'));
     expect(screen.queryByText(/已在其他会话更新/)).not.toBeInTheDocument();
+  });
+
+  describe('描述清空（#1198）', () => {
+    const planWithDescription = {
+      id: 9,
+      name: 'Desc Plan',
+      description: '旧描述',
+      failure_threshold: 0.05,
+      specialty_key: 'S1',
+      steps: [],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    };
+
+    it('清空描述后保存提交空串（不再被省略）', async () => {
+      (api.plans.get as ReturnType<typeof vi.fn>).mockResolvedValue(planWithDescription);
+      (api.plans.update as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...planWithDescription,
+        description: '',
+      });
+      renderPage('/orchestration/plans/9');
+
+      const descInput = await screen.findByTestId('plan-description-input');
+      expect(descInput).toHaveValue('旧描述');
+      fireEvent.change(descInput, { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: /保存修改/ }));
+
+      await waitFor(() => {
+        expect(api.plans.update).toHaveBeenCalledWith(
+          9,
+          expect.objectContaining({ description: '' }),
+        );
+      });
+    });
+
+    it('未改描述时保存不携带 description（不误写、不 trim 回写原值）', async () => {
+      (api.plans.get as ReturnType<typeof vi.fn>).mockResolvedValue(planWithDescription);
+      (api.plans.update as ReturnType<typeof vi.fn>).mockResolvedValue(planWithDescription);
+      renderPage('/orchestration/plans/9');
+
+      const nameInput = await screen.findByTestId('plan-name-input');
+      fireEvent.change(nameInput, { target: { value: 'Desc Plan v2' } });
+      fireEvent.click(screen.getByRole('button', { name: /保存修改/ }));
+
+      await waitFor(() => expect(api.plans.update).toHaveBeenCalled());
+      const payload = (api.plans.update as ReturnType<typeof vi.fn>).mock.calls[0][1] as Record<string, unknown>;
+      expect(payload.description).toBeUndefined();
+    });
+
+    it('新建 Plan 时描述语义不变（空仍省略）', async () => {
+      (api.plans.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: 42,
+        name: 'New Plan',
+        description: null,
+        failure_threshold: 0.05,
+        steps: [],
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      renderPage('/orchestration/plans/new');
+
+      fireEvent.change(await screen.findByTestId('plan-name-input'), { target: { value: 'New Plan' } });
+      fireEvent.click(screen.getByRole('button', { name: '选择专项草稿' }));
+      fireEvent.click(screen.getByRole('button', { name: /创建/ }));
+
+      await waitFor(() => expect(api.plans.create).toHaveBeenCalled());
+      const payload = (api.plans.create as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>;
+      expect(payload.description).toBeUndefined();
+    });
   });
 });

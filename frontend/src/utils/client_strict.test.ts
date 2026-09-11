@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { AUTH_REFRESH_TIMEOUT_MS } from '@/utils/api/timeouts';
 
 describe('unwrapApiResponse — 严格契约 (审计 Frontend #4)', () => {
   beforeEach(() => {
@@ -100,6 +101,35 @@ describe('refreshAccessToken — 单飞行防抖 (审计 Frontend #5)', () => {
     await refreshAccessToken();
     await refreshAccessToken();
 
+    expect(postSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('refresh 请求带应用层超时（#1199）', async () => {
+    const postSpy = vi.fn().mockResolvedValue({ data: { ok: true } });
+    vi.doMock('axios', () => ({ default: { post: postSpy } }));
+
+    const { refreshAccessToken } = await import('@/utils/auth');
+    await refreshAccessToken();
+
+    expect(postSpy).toHaveBeenCalledWith(
+      '/api/v1/auth/refresh',
+      undefined,
+      expect.objectContaining({ timeout: AUTH_REFRESH_TIMEOUT_MS }),
+    );
+  });
+
+  it('refresh 超时失败后 in-flight 释放，后续调用可重试（#1199）', async () => {
+    const postSpy = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ECONNABORTED' }),
+      )
+      .mockResolvedValueOnce({ data: { ok: true } });
+    vi.doMock('axios', () => ({ default: { post: postSpy } }));
+
+    const { refreshAccessToken } = await import('@/utils/auth');
+    expect(await refreshAccessToken()).toBe(false); // 超时 → 失败
+    expect(await refreshAccessToken()).toBe(true); // 已释放 → 可立即重试
     expect(postSpy).toHaveBeenCalledTimes(2);
   });
 
