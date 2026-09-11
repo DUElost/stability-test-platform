@@ -27,7 +27,7 @@ _FORCE_ENV = "STP_ALLOW_DESTRUCTIVE_DOWNGRADE"
 # Identifiers only — never interpolate untrusted input into SQL.
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Matches values that PostgreSQL ``::integer`` accepts for typical audit ids
-# (signed digit string). Host-derived ids like ``172-21-15-80`` fail this.
+# (signed digit string). Host-derived ids like ``172-21-x-x`` fail this.
 _INTEGER_TEXT_RE_SQL = r"^-?[0-9]+$"
 
 
@@ -67,7 +67,7 @@ def guard_integer_castable(
     """若 ``table.column`` 存在无法安全 ``::integer`` 的非空值，抛 RuntimeError。
 
     用于 varchar→integer 收窄的 downgrade：裸 ``::integer`` 在含 host 派生 id
-    （``172-21-15-80``）等行上会 ``invalid input syntax`` 中止，且失败点离真正
+    （``172-21-x-x``）等行上会 ``invalid input syntax`` 中止，且失败点离真正
     危险步骤很远、误导排障。强制放行时调用方须使用 NULL-safe ``USING``
     （非整型行置 NULL），见 ``integer_cast_using``。
     """
