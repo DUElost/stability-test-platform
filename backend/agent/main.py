@@ -160,14 +160,70 @@ def _cleanup_after_lease_lost(
     active_job_tokens: Dict[int, str],
     active_device_owner: Optional[Dict[int, int]] = None,
     local_db: Any,
+    keep_device_slot: bool = False,
 ) -> None:
+    """lease 丢失后的内存状态清理。
+
+    ``keep_device_slot=True``（#799）：已派发 abort（runner 正在收尾）时保留设备
+    占位与归属，直到 worker 真正退出（``JobRunnerState.release`` 的归属感知补偿
+    负责清理）——把「本机不再驱动该设备」从「清理内存集合」推迟到「进程已死」的
+    硬保证成立时，避免设备立即回池被另一台 host 领走（跨 host 双驱）。
+    """
     with active_jobs_lock:
         active_job_ids.discard(job_id)
         active_job_tokens.pop(job_id, None)
-        if device_id is not None:
+        if device_id is not None and not keep_device_slot:
             active_device_ids.discard(device_id)
             if active_device_owner is not None and active_device_owner.get(device_id) == job_id:
                 active_device_owner.pop(device_id, None)
+
+
+def handle_lease_lost(
+    *,
+    job_id: int,
+    device_id: Optional[int],
+    job_runner_state: Any,
+    coordinator: Any,
+    active_jobs_lock: Any,
+    active_job_ids: Set[int],
+    active_device_ids: Set[int],
+    active_job_tokens: Dict[int, str],
+    active_device_owner: Optional[Dict[int, int]] = None,
+    local_db: Any,
+) -> bool:
+    """lease 丢失统一处理（#799 / ADR-0026 Step 5b）。
+
+    顺序：① 对仍在跑的 job 派发 abort（``request_abort`` → runner.cancel /
+    killpg，同时置 ``_is_aborted()`` 真，供 permit 等待者退出）→ ② 清理内存
+    状态（abort 已派发时保留设备占位，待 worker 退出再清）→ ③ 唤醒等待者。
+
+    返回 abort 是否派发（True = 有活跃 job 被 cancel）。
+    """
+    abort_dispatched = False
+    if job_runner_state is not None:
+        try:
+            abort_dispatched = bool(job_runner_state.request_abort(job_id))
+        except Exception:
+            logger.exception("on_lease_lost_abort_failed", extra={"job_id": job_id})
+    try:
+        _cleanup_after_lease_lost(
+            job_id=job_id,
+            device_id=device_id,
+            active_jobs_lock=active_jobs_lock,
+            active_job_ids=active_job_ids,
+            active_device_ids=active_device_ids,
+            active_job_tokens=active_job_tokens,
+            active_device_owner=active_device_owner,
+            local_db=local_db,
+            keep_device_slot=abort_dispatched,
+        )
+    except Exception:
+        logger.exception("on_lease_lost_cleanup_failed", extra={
+            "job_id": job_id,
+            "reason": "external_cleanup_exception",
+        })
+    coordinator.cancel_waiting_job(job_id)
+    return abort_dispatched
     # 保留本地 active_job 记录，等待设备重连或 agent 重启时走 recovery/sync 恢复。
 
 
@@ -1003,6 +1059,8 @@ def main() -> None:
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),
             # #302: 死信总量随心跳上报（历史累计，跨 Agent 重启保留）。
             "log_signal_dead_letter_total": local_db.count_log_signal_dead_letters(),
+            # #742: terminal outbox 死信总量（与 log_signal 对齐）。
+            "terminal_outbox_dead_letter_total": local_db.count_terminal_dead_letters(),
         },
         # ADR-0025 Sprint 2: 上报归档指标到 extra['archive']（归档禁用时回调返回 None）
         get_archive_metrics=collect_archive_heartbeat_metrics,
@@ -1039,28 +1097,22 @@ def main() -> None:
     # heartbeats + per-job execution_state to control plane).
     coordinator.start()
 
-    # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处清理外部状态）
+    # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处处理外部状态）
     def _on_lease_lost(jid: int, device_id: Optional[int]) -> None:
-        # ADR-0026 Step 5b: cleanup FIRST so _is_aborted() (job not in
-        # active_job_ids) is True before cancel wakes the permit waiter.
-        # Reversing this order lets the waiter retry acquire after PermitDenied.
-        try:
-            _cleanup_after_lease_lost(
-                job_id=jid,
-                device_id=device_id,
-                active_jobs_lock=_active_jobs_lock,
-                active_job_ids=_active_job_ids,
-                active_device_ids=_active_device_ids,
-                active_job_tokens=_active_job_tokens,
-                active_device_owner=_active_device_owner,
-                local_db=local_db,
-            )
-        except Exception:
-            logger.exception("on_lease_lost_cleanup_failed", extra={
-                "job_id": jid,
-                "reason": "external_cleanup_exception",
-            })
-        coordinator.cancel_waiting_job(jid)
+        # #799: 顺序与占位语义见 handle_lease_lost——先杀在跑脚本（换 hosting
+        # 前必须有「本机已停手」的硬保证），设备占位保留到 worker 真正退出。
+        handle_lease_lost(
+            job_id=jid,
+            device_id=device_id,
+            job_runner_state=job_runner_state,
+            coordinator=coordinator,
+            active_jobs_lock=_active_jobs_lock,
+            active_job_ids=_active_job_ids,
+            active_device_ids=_active_device_ids,
+            active_job_tokens=_active_job_tokens,
+            active_device_owner=_active_device_owner,
+            local_db=local_db,
+        )
 
     # 启动 lease 续租器
     lease_renewer = LeaseRenewer(

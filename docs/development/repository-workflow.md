@@ -81,6 +81,24 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
 Auto-merge 的队列与分支更新以 workflow 和
 [`scripts/ci/pr-automerge-queue.sh`](../../scripts/ci/pr-automerge-queue.sh) 为事实源。
 
+### 队首停摆的判读与处置（#1246）
+
+队首 required check 未通过时，队列**不再只是日志一行**：reconcile 会开/更新一个
+`ci/queue-blocked` 去重 issue（同型 `ci/backstop-failed`；指纹未变不刷屏，队首恢复
+或队列清空自动关闭）。告警只承载可见性，不参与合入决策；issue 操作失败不影响队列
+行为。
+
+收到告警（或怀疑停摆）时：
+
+1. **判读**：`python -m tools.dev.queue_head_telemetry`——只读输出队首、阻塞原因
+   （required check 未过 / 落后 main / 冲突）、已卡时长与失败日志；
+2. **处置（人工，择一）**：修复该 check（owner）/ 解冲突 / 让位（把该 PR 关闭或改
+   draft）；随后 reconcile（每小时 cron 或任意 PR 事件）自动推进并关闭告警；
+3. `main` 合入纪律不因停摆豁免——**不要手动 Merge**。
+
+> 红队首的「自动重基逃生」未启用（宽松谓词会每小时重刷红 head 的全量 CI）；
+> 如再现「陈旧红」（check 结果早于 main 推进、重基后可绿）实证，按收紧谓词另行立项。
+
 ## 关单关键词与自动关单
 
 closing keyword（`Closes #N` / `Fixes #N`）由 GitHub 服务端在**合入**时解析并

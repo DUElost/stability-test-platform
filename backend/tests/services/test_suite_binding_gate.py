@@ -90,16 +90,20 @@ def _add_case(db, suite, name="case-1", ordinal=1, enabled=True):
 
 
 def _export(db, suite) -> bytes:
-    """模拟 export-to-tool-dir：落盘 runtask.xml + 写两个基线列。"""
+    """模拟 export-to-tool-dir：落盘 runtask.xml + Global，写三个基线列。"""
     from backend.services.suite_binding import (
         current_content_fingerprint,
+        global_disk_path,
         runtask_disk_path,
     )
     payload = f"<runtask name='{suite.name}'/>".encode()
+    global_payload = f"<Global suite='{suite.name}'/>".encode()
     path = runtask_disk_path(suite)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
+    global_disk_path(suite).write_bytes(global_payload)
     suite.exported_sha256 = hashlib.sha256(payload).hexdigest()
+    suite.exported_global_sha256 = hashlib.sha256(global_payload).hexdigest()
     suite.exported_content_sha256 = current_content_fingerprint(db, suite)
     db.commit()
     return payload
@@ -127,6 +131,7 @@ class TestPrepareFreeze:
         assert frozen["suite_id"] == f["suite"].id
         assert frozen["suite_name"] == "MTBF-legacy"
         assert frozen["exported_sha256"] == f["suite"].exported_sha256
+        assert frozen["exported_global_sha256"] == f["suite"].exported_global_sha256
         assert (
             frozen["exported_content_sha256"]
             == f["suite"].exported_content_sha256
@@ -283,6 +288,36 @@ class TestSuiteGateMatrix:
 
         path.write_bytes(path.read_bytes().replace(b"<!-- patched -->", b""))
         assert collect_suite_gate_error(db_session, pr) is None
+
+    def test_step4b_global_tamper_then_restore(self, db_session, bound_fixture):
+        """#973 / R05-F10：Global 磁盘被改与 runtask 同等 fail-closed。"""
+        f = bound_fixture
+        _export(db_session, f["suite"])
+        pr = _queued_run(db_session, f)
+
+        from backend.services.suite_binding import global_disk_path
+        gpath = global_disk_path(f["suite"])
+        tampered = gpath.read_bytes() + b"<!-- patched -->"
+        gpath.write_bytes(tampered)
+
+        err = collect_suite_gate_error(db_session, pr)
+        assert err is not None and err["step"] == "global_sha_mismatch"
+        assert err["disk_sha256"] == hashlib.sha256(tampered).hexdigest()
+
+        gpath.write_bytes(gpath.read_bytes().replace(b"<!-- patched -->", b""))
+        assert collect_suite_gate_error(db_session, pr) is None
+
+    def test_step4b_global_missing_is_not_exported(self, db_session, bound_fixture):
+        """#973：Global 磁盘丢失也要拒绝（原先只查 runtask）。"""
+        f = bound_fixture
+        _export(db_session, f["suite"])
+        pr = _queued_run(db_session, f)
+
+        from backend.services.suite_binding import global_disk_path
+        global_disk_path(f["suite"]).unlink()
+
+        err = collect_suite_gate_error(db_session, pr)
+        assert err is not None and err["step"] == "not_exported"
 
     def test_step5_project_mismatch_then_retarget(
         self, db_session, bound_fixture,
@@ -546,6 +581,27 @@ class TestInjectSuiteParams:
         setup = next(s for s in steps if s["action"] == "script:mtbf_setup")
         assert setup["params"]["expected_testpoint_count"] == 999
         assert setup["params"]["project"] == "legacy"   # 未声明的键照常注入
+
+    def test_materialization_conflict_detected(self, db_session, bound_fixture):
+        """#976 / R05-F13：门禁后编辑用例，物化注入必须显式冲突而非静默。"""
+        import pytest as _pytest
+
+        from backend.services.suite_binding import (
+            SuiteMaterializationConflict,
+            step_params_for_dispatch,
+        )
+
+        f = bound_fixture
+        _add_case(db_session, f["suite"], name="case-1", ordinal=1, enabled=True)
+        _export(db_session, f["suite"])
+        pr = _queued_run(db_session, f)
+        frozen = pr.run_context["dispatch_suite"]
+
+        # 门禁语义上已通过；门禁后新增用例改变内容指纹
+        _add_case(db_session, f["suite"], name="case-2", ordinal=2, enabled=True)
+
+        with _pytest.raises(SuiteMaterializationConflict):
+            step_params_for_dispatch(db_session, frozen)
 
     def test_inject_rejects_conflicting_project(self):
         """物化防御：lifecycle 已带冲突 project 时 inject 不得静默吞掉。"""
