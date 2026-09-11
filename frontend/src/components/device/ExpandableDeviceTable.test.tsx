@@ -82,6 +82,24 @@ describe('ExpandableDeviceTable', () => {
     expect(screen.getByRole('table')).toHaveClass('min-w-[1420px]');
   });
 
+  it('clamps to the last valid page when the filtered list shrinks', () => {
+    const manyDevices = Array.from({ length: 51 }, (_, index) => ({
+      ...devices[0],
+      id: index + 1,
+      serial: `SERIAL-${index + 1}`,
+    }));
+    const { rerender } = render(<ExpandableDeviceTable devices={manyDevices} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(screen.getByText('SERIAL-51')).toBeInTheDocument();
+
+    rerender(<ExpandableDeviceTable devices={[manyDevices[0]]} />);
+
+    expect(screen.getByText('SERIAL-1')).toBeInTheDocument();
+    expect(screen.queryByText('SERIAL-51')).not.toBeInTheDocument();
+    expect(screen.queryByText('51 / 2')).not.toBeInTheDocument();
+  });
+
   it('filters by model, version, and host dropdowns', async () => {
     const onFilteredDevicesChange = vi.fn();
     const multiDevices = [

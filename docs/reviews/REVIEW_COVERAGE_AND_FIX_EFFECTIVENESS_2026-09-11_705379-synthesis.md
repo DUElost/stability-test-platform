@@ -4,7 +4,7 @@
 > 从工作树移除且未入主干（其后续改名稿 `..._5e3831.md` 亦未入库，均存备份）。本文按会话记录恢复为
 > **03:20:08 完整读取快照**（`sizeBytes=31886`，402 行；写入/主要编辑会话 `aaa7eec3` → 705379）。
 > 稿内计数与结论为当时草案，最终裁决以
-> [`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_pf8rII-convergence.md`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_pf8rII-convergence.md) 为准。
+> [`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_7d4f85-convergence.md`](./REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_7d4f85-convergence.md) 为准。
 > 恢复与转正记录见 [Agent Note](../notes/process/2026-09-11-retired-review-docs-promotion.md)。
 
 - **日期**：2026-09-11

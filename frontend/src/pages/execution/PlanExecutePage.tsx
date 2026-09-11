@@ -104,7 +104,7 @@ export default function PlanExecutePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   // 草稿（sessionStorage）只在挂载时读取一次；恢复消费在下方单入口 effect 完成
   const initialDraft = useInitialPlanExecuteDraft();
-  const lastClickedIndexRef = useRef<number | null>(null);
+  const lastClickedDeviceIdRef = useRef<number | null>(null);
   const pendingLocateIdRef = useRef<number | null>(null);
   const highlightClearTimerRef = useRef<number | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -479,7 +479,11 @@ export default function PlanExecutePage() {
 
   useEffect(() => {
     setDeviceTotal(filteredDevices.length);
-  }, [filteredDevices.length, setDeviceTotal]);
+    const maxPage = Math.max(1, Math.ceil(filteredDevices.length / devicePageSize));
+    if (devicePage > maxPage) {
+      goToDevicePage(maxPage);
+    }
+  }, [filteredDevices.length, devicePageSize, devicePage, goToDevicePage, setDeviceTotal]);
 
   // React 官方"adjust state when prop changes"模式：devicePageResetKey 为稳定字符串
   // 比较（6 个筛选条件序列化），筛选变化时受控回到第 1 页；无引用比较问题。
@@ -490,7 +494,7 @@ export default function PlanExecutePage() {
     goToDevicePage(1);
   }
 
-  useEffect(() => { lastClickedIndexRef.current = null; }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly]);
+  useEffect(() => { lastClickedDeviceIdRef.current = null; }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 设备集剪枝 + 用户提示，需在 effect 中做
@@ -756,7 +760,7 @@ export default function PlanExecutePage() {
 
   const handleMatrixToggle = (device: DeviceSummary, event: { shiftKey: boolean }) => {
     setSelectedDeviceIds((prev) =>
-      applyMatrixSelection(filteredDevices, prev, device, event, lastClickedIndexRef.current),
+      applyMatrixSelection(filteredDevices, prev, device, event, lastClickedDeviceIdRef.current),
     );
   };
 
@@ -1287,7 +1291,7 @@ export default function PlanExecutePage() {
                           occupancyByDeviceId={occupancyByDeviceId}
                           highlightId={highlightId}
                           onToggle={handleMatrixToggle}
-                          lastClickedIndexRef={lastClickedIndexRef}
+                          lastClickedDeviceIdRef={lastClickedDeviceIdRef}
                         />
                       ) : (
                         <DeviceTablePanel
