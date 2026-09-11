@@ -1,6 +1,7 @@
 # Host group WiFi pool allocation (#956)
 
 Status: implemented
+Class: bug-fix
 
 ## Decision
 
