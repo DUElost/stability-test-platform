@@ -418,3 +418,68 @@ def test_dispatch_retryable_failure_raises_with_outcome(monkeypatch):
         )
     assert ei.value.failed[0]["outcome"] == DeliveryOutcome.UNKNOWN.value
     assert ei.value.failed[0]["retryable"] is True
+
+
+# ── #1167 P3（D4/D7）：SAQ 唯一 retry owner + 降级路径 ─────────────────────
+
+
+def test_dispatch_async_enqueues_saq(monkeypatch):
+    """入队成功 → 不再走线程池；key 含事件身份（去重键）。"""
+    from backend.tasks import saq_worker as sw
+
+    captured: dict = {}
+
+    def fake_enqueue(task_name, **kwargs):
+        captured["task"] = task_name
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(sw, "enqueue_sync", fake_enqueue)
+    pool_called = {"v": False}
+    monkeypatch.setattr(
+        "backend.core.thread_pool.submit",
+        lambda *a, **k: pool_called.update(v=True),
+    )
+
+    mod.dispatch_notification_async("RUN_FAILED", {"run_id": 42, "device_serial": "D"})
+
+    assert captured["task"] == "send_notification_task"
+    assert captured["key"] == "notif:RUN_FAILED:42:D"
+    assert captured["retries"] == 3
+    assert captured["event_type"] == "RUN_FAILED"
+    assert pool_called["v"] is False, "入队成功不得再走线程池"
+
+
+def test_dispatch_async_falls_back_to_pool_when_saq_unavailable(monkeypatch):
+    """SAQ 未运行（enqueue 返回 False）→ 降级 best-effort 线程池，不外溢。"""
+    from backend.tasks import saq_worker as sw
+
+    monkeypatch.setattr(sw, "enqueue_sync", lambda *a, **k: False)
+    submitted: dict = {}
+    monkeypatch.setattr(
+        "backend.core.thread_pool.submit",
+        lambda fn, *a, **k: submitted.update(fn=fn),
+    )
+
+    mod.dispatch_notification_async("DEVICE_OFFLINE", {"device_serial": "D"})
+
+    assert "fn" in submitted, "降级路径必须提交线程池"
+
+
+def test_dispatch_async_swallows_enqueue_exception(monkeypatch):
+    """enqueue 抛异常（Redis 故障）→ 记日志 + 降级线程池，不向调用方外溢。"""
+    from backend.tasks import saq_worker as sw
+
+    def boom(*a, **k):
+        raise RuntimeError("redis down")
+
+    monkeypatch.setattr(sw, "enqueue_sync", boom)
+    submitted: dict = {}
+    monkeypatch.setattr(
+        "backend.core.thread_pool.submit",
+        lambda fn, *a, **k: submitted.update(fn=fn),
+    )
+
+    mod.dispatch_notification_async("RUN_COMPLETED", {"run_id": 1})
+
+    assert "fn" in submitted
