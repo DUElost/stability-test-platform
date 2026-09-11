@@ -83,6 +83,10 @@ adb devices -l                  # 应非空（需 USB 调试已授权）
 
 `dmesg` 应出现 bind 后 `new USB bus registered` 与手机 `New USB device found`（Unisoc / nubia A57）。
 
+> **2026-09-11 起**：Hosts 页「设备 / 任务」列的 `USB n` 徽标即上述 `lsusb` 口径的
+> 在线对照值（来源 Agent 心跳 `capacity.usb_device_count`）。`USB` 有值而 `在线` 为 0
+> 即本文 §1 中「USB 层有设备、ADB 未枚举」的形态，无需 SSH 即可在页面上发现。
+
 > **说明**：本次 **方案 A 有效**；整机 reboot 同样可恢复，但对 Agent 任务中断面更大。若 unbind/rebind 失败，再 `sudo reboot`。
 
 ### 3.2 恢复后暴露的次要问题（#160）

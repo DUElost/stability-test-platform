@@ -30,6 +30,11 @@ export interface Host {
     available_slots?: number;
     /** 剩余可派发槽位（= min(available_slots, health_limit)，心跳数据） */
     effective_slots?: number;
+    /**
+     * lsusb 枚举到的疑似 Android 设备数（物理 USB 侧对照值，仅供观测对比）。
+     * null/undefined = 未采集到（lsusb 缺失或失败），区别于 0。
+     */
+    usb_device_count?: number | null;
   };
   health?: {
     status: 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';

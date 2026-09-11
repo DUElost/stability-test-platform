@@ -51,6 +51,15 @@ Frontend ◄──SocketIO /dashboard──┘
 
 **约束**：默认单进程后端。ADR-0027 P3-3：除 `saq_queue_depth_poll` 外，全部 singleton job 经 leader election（`admission_pump` / `counter_reconcile` 为函数内 leadership，其余经 `_instrumented(..., singleton=True)`）。
 
+### Cron 防重叠策略（#994 裁决：不允许排队）
+
+`cron_scheduler._fire_schedule` 在派发前做两级判定（均 fail-closed）：
+
+1. **抖动去重**：同一 schedule 60s 内已产出 root PlanRun → 跳过（多实例重复触发防护）；
+2. **严格防重叠**：同一 Plan 存在任一**非终态** PlanRun（`QUEUED` / `PRECHECK` / `RUNNING`）→ 跳过本窗口，仅推进 `next_run_at`；**长跑不豁免**（不设 `started_at` 年龄阈值）、**错过不补跑**——同一 Plan 任何时刻至多一条非终态 Run。
+
+需要「设备空闲后补跑」的场景请用 CHAIN / 手动触发，不要依赖 cron 积压；卡在非终态的 Run 由 `recycler` / `precheck_reaper` 收口。
+
 ---
 
 ## 4. SAQ 异步队列

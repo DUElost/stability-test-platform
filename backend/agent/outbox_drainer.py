@@ -17,6 +17,8 @@ class OutboxDrainThread:
     """Background thread that retries un-acked terminal-state payloads."""
 
     _ACKABLE_TERMINAL_STATUSES = {"COMPLETED", "FAILED", "ABORTED"}
+    # Align with log_signal / step_trace / DLE outbox (#742).
+    _MAX_ATTEMPTS = 10
 
     def __init__(self, api_url: str, local_db, interval: float = 15.0):
         self._api_url = api_url
@@ -30,6 +32,7 @@ class OutboxDrainThread:
         self._flushed_total = 0
         self._conflicts_retained_total = 0
         self._unknown_retained_total = 0
+        self._dead_letter_total = 0
 
     def snapshot_metrics(self) -> Dict[str, Any]:
         """Outbox backlog + flush counters for heartbeat / ops."""
@@ -39,6 +42,7 @@ class OutboxDrainThread:
                 "flushed_total": self._flushed_total,
                 "conflicts_retained_total": self._conflicts_retained_total,
                 "unknown_retained_total": self._unknown_retained_total,
+                "dead_letter_total": self._dead_letter_total,
             }
 
     def _set_pending_backlog(self, count: int) -> None:
@@ -54,6 +58,25 @@ class OutboxDrainThread:
             self._conflicts_retained_total += 1
             if unknown:
                 self._unknown_retained_total += 1
+
+    def _bump_dead_letter(self) -> None:
+        with self._metrics_lock:
+            self._dead_letter_total += 1
+
+    def _bump_or_dead_letter(self, job_id: int, error: str) -> None:
+        """Bump attempts; mark dead letter when attempts reach _MAX_ATTEMPTS (#742)."""
+        raw = self._local_db.bump_terminal_attempt(job_id, error)
+        try:
+            attempts = int(raw or 0)
+        except (TypeError, ValueError):
+            attempts = 0
+        if attempts >= self._MAX_ATTEMPTS:
+            self._local_db.mark_terminal_dead_letter(job_id, error)
+            self._bump_dead_letter()
+            logger.error(
+                "outbox_drain_dead_letter job=%d attempts=%d error=%s",
+                job_id, attempts, error,
+            )
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -119,7 +142,7 @@ class OutboxDrainThread:
                     error_code = self._parse_error_code(e.response)
                     current = self._parse_current_status(e.response)
                     if error_code == "TERMINAL_PAYLOAD_CONFLICT":
-                        self._local_db.bump_terminal_attempt(job_id, str(e))
+                        self._bump_or_dead_letter(job_id, str(e))
                         self._bump_retained_conflict()
                         logger.error(
                             "outbox_drain_terminal_payload_conflict job=%d",
@@ -129,7 +152,7 @@ class OutboxDrainThread:
                         # An unstructured 409 does not prove that the requested
                         # terminal fact is already durable. Retain it so
                         # recovery/sync can reconcile the fencing/state race.
-                        self._local_db.bump_terminal_attempt(job_id, str(e))
+                        self._bump_or_dead_letter(job_id, str(e))
                         self._bump_retained_conflict()
                         logger.warning(
                             "outbox_drain_conflict_retained job=%d current=unstructured",
@@ -143,7 +166,7 @@ class OutboxDrainThread:
                             job_id, current,
                         )
                     else:
-                        self._local_db.bump_terminal_attempt(job_id, str(e))
+                        self._bump_or_dead_letter(job_id, str(e))
                         self._bump_retained_conflict(unknown=current == "UNKNOWN")
                         logger.warning(
                             "outbox_drain_conflict_retained job=%d current=%s",
@@ -153,9 +176,9 @@ class OutboxDrainThread:
                     self._local_db.ack_terminal(job_id)
                     logger.warning("outbox_drain_job_gone job=%d", job_id)
                 else:
-                    self._local_db.bump_terminal_attempt(job_id, str(e))
+                    self._bump_or_dead_letter(job_id, str(e))
             except Exception as e:
-                self._local_db.bump_terminal_attempt(job_id, str(e))
+                self._bump_or_dead_letter(job_id, str(e))
                 logger.warning("outbox_drain_retry job=%d error=%s", job_id, e)
 
         if sent:

@@ -54,9 +54,12 @@ class UnisocUniviewReconciler:
         platform_collector: Any = None,
         shell_fn: Optional[Callable[[str, int], Optional[str]]] = None,
         pull_fn: Optional[Callable[[str, str, int], bool]] = None,
+        on_self_shutdown: Optional[Callable[[], None]] = None,
         **_: Any,
     ) -> None:
         self._emitter = signal_emitter
+        # #806：自关闭通知（与 MTK 路径同语义，见 reconciler._notify_self_shutdown）。
+        self._on_self_shutdown = on_self_shutdown
         self._state_store = state_store
         self._serial = str(serial)
         self._job_id = int(job_id)
@@ -156,9 +159,24 @@ class UnisocUniviewReconciler:
                     self._serial, self._job_id,
                 )
                 if self._consecutive_tick_errors >= self._max_consecutive_tick_errors:
+                    # #806：自关闭同样要复位 watcher 抑制位（与 MTK 路径一致）。
+                    self._notify_self_shutdown()
                     break
             if self._stop_evt.wait(self._baseline):
                 break
+
+    def _notify_self_shutdown(self) -> None:
+        """#806：连续错误自关闭后通知外部；失败只记日志（自关闭必须完成）。"""
+        callback = getattr(self, "_on_self_shutdown", None)
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            logger.exception(
+                "unisoc_reconciler_self_shutdown_notify_failed serial=%s job=%d",
+                self._serial, self._job_id,
+            )
 
     def tick_once(self) -> int:
         self.stats.ticks_total += 1

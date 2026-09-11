@@ -58,9 +58,23 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
         )).scalars().all()
 
         for job in running_jobs:
+            # #792: 行锁复读 + 状态复查——watchdog 与 /complete 并发时，
+            # 陈旧 ORM 对象会把已提交终态覆写回 UNKNOWN（全仓唯一裸写终态
+            # 路径，lost update）。populate_existing 保证读到锁后最新行；
+            # 已非 RUNNING 即跳过。
+            locked = (await db.execute(
+                select(JobInstance)
+                .where(JobInstance.id == job.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )).scalars().first()
+            if locked is None or locked.status != JobStatus.RUNNING.value:
+                continue
             try:
-                JobStateMachine.transition(job, JobStatus.UNKNOWN, "host_heartbeat_timeout")
-                job.ended_at = datetime.now(timezone.utc)
+                JobStateMachine.transition(
+                    locked, JobStatus.UNKNOWN, "host_heartbeat_timeout",
+                )
+                locked.ended_at = datetime.now(timezone.utc)
                 affected_jobs += 1
             except InvalidTransitionError:
                 pass
