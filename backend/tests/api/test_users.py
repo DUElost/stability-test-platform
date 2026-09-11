@@ -71,3 +71,44 @@ class TestChangePassword:
             headers=auth_headers,
         )
         assert resp.status_code == 200
+
+
+class TestUserHardDeleteGuards:
+    """#937: 有审计引用的用户硬删除返回 409（不裸 500）。"""
+
+    @staticmethod
+    def _create(client, admin_headers, username):
+        created = client.post(
+            "/api/v1/users",
+            json={"username": username, "password": "pass12345", "role": "user"},
+            headers=admin_headers,
+        )
+        assert created.status_code == 200, created.text
+        return created.json()["id"]
+
+    def test_delete_user_with_audit_records_is_409(
+        self, client, db_session, admin_headers,
+    ):
+        from backend.models.audit import AuditLog
+        from backend.models.user import User as UserModel
+
+        uid = self._create(client, admin_headers, "del-audited")
+        db_session.add(AuditLog(
+            action="login", resource_type="user", resource_id=uid,
+            user_id=uid, username="del-audited",
+        ))
+        db_session.commit()
+
+        resp = client.delete(f"/api/v1/users/{uid}", headers=admin_headers)
+        assert resp.status_code == 409, resp.text
+        assert db_session.get(UserModel, uid) is not None
+
+    def test_delete_user_without_dependencies_succeeds(
+        self, client, db_session, admin_headers,
+    ):
+        from backend.models.user import User as UserModel
+
+        uid = self._create(client, admin_headers, "del-clean")
+        resp = client.delete(f"/api/v1/users/{uid}", headers=admin_headers)
+        assert resp.status_code == 204, resp.text
+        assert db_session.get(UserModel, uid) is None

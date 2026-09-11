@@ -22,7 +22,8 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
       ancestor 加载即送达）或恰含 `@AGENTS.md` 单条 import——不得递归导入
   S9  根入口只允许固定的启动级章节；三级及以下（含 ####+ 深层）一律禁止
   S10 class 目录内 Agent Note 必须日期命名（yyyy-mm-dd-主题.md），且 2026-09-05 起
-      新增 Note 的 Status/Class 头部与 class 目录一致
+      新增 Note 的 Status/Class 头部与 class 目录一致、四节（Decision/Alternatives/
+      Verification/Revisit）齐备（#1299）
   S11 AGENTS.md 硬不变量锚点逐条在场（防整条删除/改写静默丢失——S4 同模式）
   S12 ADR 索引一致性：头部状态行 ↔ adr/README 主表/DOC-MAP/M7 看板（status 词级
       + 规范位版本），头部行 ↔ 版本记录块末项（#861/#867 五次复发后的确定性收口）
@@ -471,10 +472,13 @@ def check_contract_version_sync(header_version: str | None, change_head: str | N
 
 NOTE_CLASSES = {"feature", "bug-fix", "simplification", "architecture", "process", "testing"}
 NOTE_HEADER_CUTOFF = "2026-09-05"
+#: 四节契约（AGENTS.md）：cutoff 起新增 Note 必须齐备（#1299）
+NOTE_REQUIRED_SECTIONS = ("## Decision", "## Alternatives", "## Verification", "## Revisit")
 
 
 def check_agent_note_header(label: str, text: str) -> list[str]:
-    """S10: 新格式启用后的 Agent Note 头部必须与 class 目录一致；文件名必须日期命名。"""
+    """S10: 新格式启用后的 Agent Note 头部必须与 class 目录一致；文件名必须日期命名；
+    cutoff 起四节（Decision/Alternatives/Verification/Revisit）必须齐备（#1299）。"""
     filename = os.path.basename(label)
     match = re.match(r"^(\d{4}-\d{2}-\d{2})-.+\.md$", filename)
     if not match:
@@ -493,6 +497,10 @@ def check_agent_note_header(label: str, text: str) -> list[str]:
         issues.append(f"S10 {label}: 非法或缺失 Status 头")
     if class_name not in NOTE_CLASSES or lines[3] != f"Class: {class_name}":
         issues.append(f"S10 {label}: Class 必须与目录 {class_name!r} 一致")
+    # 四节契约（#1299）：只校验各节标题在场；内容质量不属结构检查
+    for section in NOTE_REQUIRED_SECTIONS:
+        if not any(line.startswith(section) for line in lines):
+            issues.append(f"S10 {label}: 缺四节契约中的 {section}")
     return issues
 
 
@@ -918,7 +926,11 @@ def run_self_test() -> int:
         lambda: check_root_headings("AGENTS.md", "# T\n\n##### 更深\n"),
         True,
     )
-    good_note = "# T\n\nStatus: implemented\nClass: process\n"
+    good_note = (
+        "# T\n\nStatus: implemented\nClass: process\n"
+        "\n## Decision\n\nD\n\n## Alternatives\n\nA\n"
+        "\n## Verification\n\nV\n\n## Revisit\n\nR\n"
+    )
     bad_note = "# T\n\nStatus: accepted\nClass: feature\n"
     expect(
         "S10 新 note 头部合法",
@@ -938,6 +950,22 @@ def run_self_test() -> int:
         "S10 legacy 不追溯",
         lambda: check_agent_note_header(
             "docs/notes/process/2026-09-04-example.md", bad_note
+        ),
+        False,
+    )
+    expect(
+        "S10 缺四节被拦（#1299）",
+        lambda: check_agent_note_header(
+            "docs/notes/process/2026-09-05-example.md",
+            "# T\n\nStatus: implemented\nClass: process\n\n## Decision\n\nD\n",
+        ),
+        True,
+    )
+    expect(
+        "S10 legacy 不追溯四节",
+        lambda: check_agent_note_header(
+            "docs/notes/process/2026-09-04-example.md",
+            "# T\n\nStatus: implemented\nClass: process\n",
         ),
         False,
     )
