@@ -598,12 +598,29 @@ describe('PlanCanvas', () => {
       const input = screen.getByDisplayValue('0.2');
 
       fireEvent.change(input, { target: { value: '1.5' } });
+      fireEvent.blur(input);
       expect(onFailureThresholdChange).toHaveBeenLastCalledWith(1);
       expect(screen.getByText('100%')).toBeInTheDocument();
 
       fireEvent.change(screen.getByDisplayValue('1'), { target: { value: '-0.3' } });
+      fireEvent.blur(input);
       expect(onFailureThresholdChange).toHaveBeenLastCalledWith(0);
       expect(screen.getByText('0%')).toBeInTheDocument();
+    });
+
+    it('失败阈值键入小数时不吞小数点（#817）', () => {
+      const onFailureThresholdChange = vi.fn();
+      render(<Harness onFailureThresholdChange={onFailureThresholdChange} />);
+      const input = screen.getByDisplayValue('0.2');
+
+      fireEvent.change(input, { target: { value: '0.' } });
+      expect(onFailureThresholdChange).not.toHaveBeenCalled();
+      expect(input).toHaveValue('0.');
+
+      fireEvent.change(input, { target: { value: '0.15' } });
+      fireEvent.blur(input);
+      expect(onFailureThresholdChange).toHaveBeenCalledWith(0.15);
+      expect(screen.getByText('15%')).toBeInTheDocument();
     });
 
     it('全局超时留空视为不限、负数夹到 0', () => {

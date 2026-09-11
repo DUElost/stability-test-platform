@@ -1,5 +1,6 @@
 import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry, ProjectSummary, Specialty, TestSuiteSummary } from '@/utils/api/types';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import {
   PIPELINE_EDITOR,
   PIPELINE_PHASE_HEAD,
@@ -400,14 +401,10 @@ function PlanHeader({
         </MetaItem>
 
         <MetaItem label="失败阈值">
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.01}
+          <FailureThresholdInput
             value={failureThreshold}
             disabled={readOnly}
-            onChange={e => onFailureThresholdChange(Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)))}
+            onChange={onFailureThresholdChange}
             className={cn('w-20', metaInputCls)}
           />
           <span className={cn('text-[11px] font-semibold', TEXT.body)}>{Math.round(failureThreshold * 100)}%</span>
@@ -451,6 +448,59 @@ function MetaItem({ label, children }: { label: string; children: React.ReactNod
       <span className={cn('text-[11px] font-bold uppercase tracking-wide', TEXT.subtitle)}>{label}</span>
       {children}
     </div>
+  );
+}
+
+/** Local draft while typing — commit on blur so ``0.`` is not swallowed (#817). */
+function FailureThresholdInput({
+  value,
+  disabled,
+  onChange,
+  className,
+}: {
+  value: number;
+  disabled?: boolean;
+  onChange: (next: number) => void;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState(() => String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = (raw: string) => {
+    const trimmed = raw.trim();
+    if (trimmed === '' || trimmed === '.') {
+      setDraft(String(value));
+      return;
+    }
+    const parsed = parseFloat(trimmed);
+    if (Number.isNaN(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    const clamped = Math.min(1, Math.max(0, parsed));
+    onChange(clamped);
+    setDraft(String(clamped));
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={draft}
+      disabled={disabled}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={(e) => commit(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          commit((e.target as HTMLInputElement).value);
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className={className}
+    />
   );
 }
 
