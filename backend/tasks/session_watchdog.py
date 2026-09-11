@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from backend.core.database import AsyncSessionLocal
+from backend.core.metrics import host_heartbeat_missed
 from backend.models.enums import HostStatus, JobStatus
 from backend.models.host import Host
 from backend.models.job import JobInstance
@@ -66,6 +67,8 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
 
         host.status = HostStatus.OFFLINE.value
         hosts_offline += 1
+        # #1258：心跳超时事件的生产者（仪表板 Heartbeat Timeouts 面板依赖）
+        host_heartbeat_missed.labels(host_id=str(host.id)).inc()
         logger.warning(
             "watchdog_host_timeout: host=%s jobs_to_unknown=%d", host.id, len(running_jobs),
         )
