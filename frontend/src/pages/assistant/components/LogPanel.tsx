@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 
 interface LogPanelProps {
   actionId: number;
-  /** running/approved 时开启轮询（2s），终态或未开始时关闭。 */
+  /** running/approved 时开启轮询（2s）；挂载即读一次（是否挂载由使用方门控）。 */
   active: boolean;
   className?: string;
 }
@@ -17,10 +17,11 @@ interface LogPanelProps {
  */
 export function LogPanel({ actionId, active, className }: LogPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // #823：挂载即可读——ActionCard 以 (logOpen || isActive) 门控本组件；
+  // 原 enabled: active 使终态动作展开后永不请求，历史日志永远不可见。
   const logQ = useQuery({
     queryKey: aiAssistantKeys.actionLog(actionId),
     queryFn: () => api.aiAssistant.getActionLog(actionId),
-    enabled: active,
     refetchInterval: active ? 2000 : false,
   });
 

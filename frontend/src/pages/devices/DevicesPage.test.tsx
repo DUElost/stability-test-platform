@@ -3,11 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import { deviceKeys } from '@/utils/api/queryKeys';
 
 const mockDevicesList = vi.fn();
 const mockFetchHostList = vi.fn();
 const mockProjectsList = vi.fn();
 const mockAssignDevicesToProject = vi.fn();
+const mockCreateDevice = vi.fn();
 const mockUseAuthSession = vi.fn(() => ({ data: { role: 'admin' } }));
 
 vi.mock('@/utils/api', async (importOriginal) => {
@@ -26,6 +28,7 @@ vi.mock('@/utils/api', async (importOriginal) => {
       devices: {
         ...actual.api.devices,
         list: (...args: unknown[]) => mockDevicesList(...args),
+        create: (...args: unknown[]) => mockCreateDevice(...args),
       },
     },
   };
@@ -43,7 +46,14 @@ vi.mock('@/hooks/useAuthSession', () => ({
 }));
 
 vi.mock('./components/AddDeviceModal', () => ({
-  AddDeviceModal: () => null,
+  // 打开时提供一个提交按钮，供 page 级用例驱动 create 接线（弹窗自身行为由
+  // AddDeviceModal.test.tsx 覆盖）
+  AddDeviceModal: ({ isOpen, onSubmit }: { isOpen?: boolean; onSubmit?: (d: { serial: string }) => void }) =>
+    isOpen ? (
+      <button type="button" onClick={() => onSubmit?.({ serial: 'NEW-SERIAL' })}>
+        mock-添加提交
+      </button>
+    ) : null,
 }));
 
 vi.mock('./components/BatchEditDeviceTagsDialog', () => ({
@@ -166,5 +176,32 @@ describe('DevicesPage', () => {
     expect(screen.queryByTestId('device-bulk-assign-project')).not.toBeInTheDocument();
     // 批量标签入口同样不显示（非 admin）
     expect(screen.queryByTestId('device-bulk-tags')).not.toBeInTheDocument();
+  });
+
+  it('#823：添加设备后失效覆盖任意筛选态的设备列表', async () => {
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    mockCreateDevice.mockResolvedValue({ id: 99, serial: 'NEW-SERIAL' });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // 预置一个「项目筛选态」列表查询（页面当前未在看它）：旧实现用 list() 无参键失效，
+    // 对象深比较不匹配 → 永远失效不到它。
+    queryClient.setQueryData(deviceKeys.list('PROJ-X', true), { items: [], total: 0 });
+
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <MemoryRouter>
+          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        </MemoryRouter>
+      ),
+    });
+
+    await waitFor(() => expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /添加设备/ }));
+    fireEvent.click(screen.getByRole('button', { name: /mock-添加提交/ }));
+
+    await waitFor(() => expect(mockCreateDevice).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(queryClient.getQueryState(deviceKeys.list('PROJ-X', true))?.isInvalidated).toBe(true),
+    );
   });
 });
