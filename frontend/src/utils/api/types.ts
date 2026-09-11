@@ -1121,6 +1121,7 @@ export interface TestSuiteSummary {
   case_count: number;
   enabled_case_count: number;
   exported_sha256?: string | null;
+  exported_global_sha256?: string | null;
   is_active: boolean;
   export_stale: boolean;
   created_at: string;
@@ -1191,6 +1192,7 @@ export interface SuiteExportResult {
   global_path?: string | null;
   exported_sha256: string;
   exported_content_sha256: string;
+  exported_global_sha256?: string | null;
 }
 
 /**
