@@ -122,7 +122,7 @@
 ## 影响
 
 - **DB**：新增 `ai_assistant_config` / `ai_chat_session` / `ai_chat_message` / `ai_assistant_action` 四表，additive migration（ADR-0008）；alembic 已核实**单 head** `k8l9m0n1o2p3`（2026-08-28 时该 head 文件尚为未跟踪状态）——新迁移的 `down_revision` 须待该 head 随所属变更合入 main 后落位，避免产生孤儿迁移。
-- **API**：新增 `/api/v1/ai-assistant` 路由组约 13 端点（清单见实施计划 §3.6），全部走 `ApiResponse` 信封 + 既有鉴权依赖 + 限流中间件。
+- **API**：新增 `/api/v1/ai-assistant` 路由组 14 端点（清单见实施计划 §3.6），全部走 `ApiResponse` 信封 + 既有鉴权依赖 + 限流中间件。
 - **工具面**：新增 14 个工具（T0×8 / T1×3 / T2×3），其中 `search_docs` 对 `docs/` 目录只读检索（文件名 + 内容行摘录），不新增存储、不建索引（M3）。
 - **依赖**：后端**零新增** Python 依赖（httpx 已有）；前端新增 `react-markdown`（禁 rehype-raw，防 HTML 注入）。
 - **安全**：新增出站流量（对所配 LLM API）；`.env.backend` 新增 `AI_ASSISTANT_FERNET_KEY`；密钥掩码与 D7 红线由测试矩阵锁定。

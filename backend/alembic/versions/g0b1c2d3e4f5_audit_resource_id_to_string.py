@@ -31,11 +31,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # #832: bare resource_id::integer fails with invalid input syntax when any
+    # host-derived id (e.g. 172-21-15-80) exists. Guard first; forced downgrade
+    # uses NULL-safe USING so the cast itself cannot abort mid-chain.
+    from backend.core.migration_guard import guard_integer_castable, integer_cast_using
+
+    guard_integer_castable(
+        "audit_logs", "resource_id", migration_id="g0b1c2d3e4f5"
+    )
     op.alter_column(
         "audit_logs",
         "resource_id",
         existing_type=sa.String(length=64),
         type_=sa.Integer(),
         existing_nullable=True,
-        postgresql_using="resource_id::integer",
+        postgresql_using=integer_cast_using("resource_id"),
     )
