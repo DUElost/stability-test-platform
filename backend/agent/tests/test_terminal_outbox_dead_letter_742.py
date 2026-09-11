@@ -74,10 +74,15 @@ def test_mark_terminal_dead_letter_excludes_from_pending(db):
     assert dl[0]["job_id"] == 7
 
 
-def test_drain_500_dead_letters_after_max_attempts(db):
+def test_drain_500_retries_indefinitely_no_dead_letter(db):
+    """5xx (transient server error) must never dead-letter — infinite retry (#762).
+
+    PR #762 intentionally separates 4xx (permanent rejection → dead-letter) from
+    5xx/network (transient → bump attempts, stay pending forever).
+    """
     db.enqueue_terminal(42, {"status": "FAILED"})
     drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
-    drainer._MAX_ATTEMPTS = 3
+    drainer._MAX_TERMINAL_ATTEMPTS = 3
 
     resp = MagicMock(status_code=500)
     resp.raise_for_status.side_effect = HTTPError("HTTP 500", response=resp)
@@ -86,15 +91,17 @@ def test_drain_500_dead_letters_after_max_attempts(db):
         for _ in range(3):
             assert drainer._drain_once() == 0
 
-    assert db.get_pending_terminals() == []
-    assert db.count_terminal_dead_letters() == 1
-    assert drainer.snapshot_metrics()["dead_letter_total"] == 1
+    pending = db.get_pending_terminals()
+    assert len(pending) == 1, "5xx must stay pending — not dead-lettered"
+    assert pending[0]["attempts"] == 3
+    assert db.count_terminal_dead_letters() == 0
+    assert drainer.snapshot_metrics()["dead_letter_total"] == 0
 
 
 def test_drain_below_max_attempts_stays_pending(db):
     db.enqueue_terminal(43, {"status": "FAILED"})
     drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
-    drainer._MAX_ATTEMPTS = 5
+    drainer._MAX_TERMINAL_ATTEMPTS = 5
 
     resp = MagicMock(status_code=500)
     resp.raise_for_status.side_effect = HTTPError("HTTP 500", response=resp)
@@ -111,11 +118,16 @@ def test_drain_below_max_attempts_stays_pending(db):
 
 
 def test_dead_letter_does_not_block_newer_terminal(db):
+    """A dead-lettered entry (via 4xx) must not starve subsequent queue entries.
+
+    5xx is NOT used here: per #762, 5xx retries indefinitely and never dead-letters.
+    A 400 Bad Request (permanent 4xx) triggers the dead-letter path after 1 attempt.
+    """
     db.enqueue_terminal(1, {"status": "FAILED"})
     drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
-    drainer._MAX_ATTEMPTS = 1
-    resp = MagicMock(status_code=503)
-    resp.raise_for_status.side_effect = HTTPError("HTTP 503", response=resp)
+    drainer._MAX_TERMINAL_ATTEMPTS = 1
+    resp = MagicMock(status_code=400)
+    resp.raise_for_status.side_effect = HTTPError("HTTP 400", response=resp)
     with patch("backend.agent.outbox_drainer.requests.post", return_value=resp):
         drainer._drain_once()
     assert db.count_terminal_dead_letters() == 1

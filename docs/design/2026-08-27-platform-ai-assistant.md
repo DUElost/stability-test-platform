@@ -9,11 +9,11 @@
 前端 /assistant（AssistantPage + SessionList/MessageBubble/ActionCard/LogPanel）
   │  HTTP（轮询 2s，仅 pending 时）
   ▼
-/api/v1/ai-assistant（routes/ai_assistant.py，13 端点）
+/api/v1/ai-assistant（routes/ai_assistant.py，14 端点）
   │
   ├─ 配置面（admin）：GET/PUT /config（Fernet 掩码）· POST /config/test-connection
   ├─ 会话面（登录用户）：/sessions CRUD + /messages（严格按用户隔离）
-  └─ 动作面：/actions 详情/日志（提案人或 admin）· approve/reject/cancel（admin）
+  └─ 动作面：/actions 详情/日志（提案人或 admin）· approve/reject/cancel（admin）· /actions/pending 待审批队列（admin，跨会话仅摘要）
   │
   ▼
 services/ai_assistant/orchestrator.py —— 轮次编排（SAQ 任务 ai_assistant_turn_task）

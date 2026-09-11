@@ -306,6 +306,11 @@ def run_retention_cleanup() -> None:
             stale_job_ids = select(JobInstance.id).where(
                 JobInstance.plan_run_id.in_(safe_run_ids)
             )
+            # #798: 删行前收集 job 清单——DB 事务提交后据此清理 console.log
+            # 文件与内存锁（否则系统盘与 _locks 随历史运行无界增长）。
+            stale_job_id_list = [
+                row[0] for row in db.execute(stale_job_ids).all()
+            ]
 
             # FK order: child tables first
             db.query(StepTrace).filter(
@@ -334,6 +339,17 @@ def run_retention_cleanup() -> None:
                 len(safe_run_ids),
                 len(keep),
             )
+            # #798: DB 行删除事务已提交——best-effort 清理日志文件与锁。
+            try:
+                from backend.realtime.log_writer import purge_job_log_files
+
+                purged = purge_job_log_files(stale_job_id_list)
+                if purged:
+                    logger.info(
+                        "retention_cleanup purged_console_logs jobs=%d", purged,
+                    )
+            except Exception:
+                logger.warning("retention_console_purge_failed", exc_info=True)
         except Exception:
             logger.warning("retention_cleanup failed", exc_info=True)
             db.rollback()

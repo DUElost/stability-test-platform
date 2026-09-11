@@ -314,8 +314,11 @@ class AeeDbHistoryReconciler:
         platform: str = "MTK",
         device_log_client: Any = None,
         platform_collector: Any = None,
+        on_self_shutdown: Optional[Callable[[], None]] = None,
     ) -> None:
         self._emitter = signal_emitter
+        # #806：连续错误自关闭后通知外部（JobSession → watcher 复位 emit 抑制位）。
+        self._on_self_shutdown = on_self_shutdown
         self._state_store = state_store
         self._serial = str(serial)
         self._job_id = int(job_id)
@@ -512,6 +515,10 @@ class AeeDbHistoryReconciler:
                     )
                     self._emit_rollback_signal()
                     self._stop_evt.set()
+                    # #806：自关闭必须让 watcher 复位抑制位，否则该 Job 余下生命
+                    # 周期 AEE/VENDOR_AEE 信号与 DLE 注册静默全黑（inotifyd 兜底
+                    # 只有在 active=False 时才真正接管）。
+                    self._notify_self_shutdown()
                 continue
 
             # tick 成功 → 重置连续错误计数
@@ -1023,6 +1030,22 @@ class AeeDbHistoryReconciler:
             logger.info(
                 "aee_reconciler_pull_failed_fallback_signal_only serial=%s job=%d seq=%d",
                 self._serial, self._job_id, seq_no,
+            )
+
+    def _notify_self_shutdown(self) -> None:
+        """#806：自关闭后通知外部（JobSession → watcher 复位 emit 抑制位）。
+
+        回调失败只记日志：自关闭本身必须完成（防 #72 现场的死循环）。
+        """
+        callback = self._on_self_shutdown
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            logger.exception(
+                "aee_reconciler_self_shutdown_notify_failed serial=%s job=%d",
+                self._serial, self._job_id,
             )
 
     def _emit_rollback_signal(self) -> None:
