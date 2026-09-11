@@ -269,6 +269,20 @@ class HeartbeatThread:
         )
         total_devices = len(devices_list)
 
+        # lsusb 对照计数：物理 USB 侧枚举到的疑似 Android 设备数。与上面的
+        # online_healthy（adb devices 口径）并排展示，差值暴露「设备在 USB 上
+        # 但 ADB 看不到」。失败返回 None（显示未知而非 0），不影响心跳主流程。
+        try:
+            usb_device_count = device_discovery.count_usb_devices()
+        except Exception as exc:
+            logger.debug("usb_device_count_failed: %s", exc)
+            usb_device_count = None
+        if usb_device_count is not None and usb_device_count != online_healthy:
+            logger.info(
+                "usb_adb_device_mismatch usb=%s adb_online_healthy=%s total_adb=%s",
+                usb_device_count, online_healthy, total_devices,
+            )
+
         cap_result = compute_capacity(
             active_job_count=active_count,
             active_device_count=active_device_count,
@@ -277,6 +291,7 @@ class HeartbeatThread:
             system_stats=system_stats,
             mount_status=mount_status,
             adb_server_conflict=adb_server_conflict,
+            usb_device_count=usb_device_count,
         )
 
         with self._capacity_lock:
