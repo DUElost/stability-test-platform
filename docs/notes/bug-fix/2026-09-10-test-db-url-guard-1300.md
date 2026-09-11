@@ -42,9 +42,11 @@ testcontainers 路径安全，但显式地址一旦误指生产库（最可能�
   testpaths 下」，#1300 自验时踩到并已收口）——隔离命名通过
   （含大小写）/ 四种非 test 库名拒绝 / 非 PG scheme 拒绝 / 与 DATABASE_URL
   相同拒绝、不同通过 / 豁免 env 绕过且记 warning；
-- **端到端**：`TEST_DATABASE_URL=...@10.99.99.99/production` 跑 pytest →
+- **端到端**：`TEST_DATABASE_URL=...@192.0.2.10/production` 跑 pytest →
   conftest 加载即抛 `UnsafeTestDatabaseUrl`（含 unset/override 指引），
-  TRUNCATE 不会发生；`.../stp_test` 正常路径 10 passed；
+  TRUNCATE 不会发生；`.../stp_test` 正常路径 10 passed。示例主机取 RFC 5737
+  文档保留段：拒因是库名不含 `test`，与主机无关（写实 RFC1918 地址会撞
+  ip-leak 门禁）；
 - `pytest backend/tests`：全量回归通过（CI 同款 `stp_test` 命名过护栏）；
 - ruff 干净。
 
