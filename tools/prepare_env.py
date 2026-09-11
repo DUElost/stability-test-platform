@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import secrets
 import sys
 from pathlib import Path
@@ -134,7 +135,16 @@ def main() -> int:
         k, _, v = item.partition("=")
         overrides[k.strip()] = v.strip()
     content = _apply_overrides(content, overrides)
-    target.write_text(content, encoding="utf-8")
+    # #1264（R14-F18）：环境文件含密钥 —— 创建时显式 0600（不依赖调用者
+    # umask；默认 022 会产出 0644）。O_EXCL 同时收紧 exists 检查与写入之间的
+    # 竞态：并发下第二个进程拿到 FileExistsError，按既有「已存在」语义返回 0。
+    try:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        print(f"Env file already exists: {target}")
+        return 0
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(content)
     print(f"Created env file from template: {target}")
     return 0
 

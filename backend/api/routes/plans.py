@@ -270,6 +270,51 @@ def _validate_script_refs(db: Session, steps: list[PlanStepIn]) -> None:
         )
 
 
+def _validate_step_param_values(steps: list[PlanStepIn], db: Session) -> None:
+    """#977：有 ``param_schema`` 时，步骤参数的类型/枚举在保存期拒绝（422）。
+
+    只校验已提供的键；未声明键属已接受的自由键模式，``required`` 不在此强制
+    （wifi/suite 注入在派发期补键）。
+    """
+    from backend.models.script import Script as ScriptModel
+    from backend.services.script_params import validate_params_against_schema
+
+    if not steps:
+        return
+    keys = {(s.script_name, s.script_version) for s in steps}
+    rows = db.execute(
+        select(
+            ScriptModel.name, ScriptModel.version, ScriptModel.param_schema,
+        ).where(
+            ScriptModel.is_active.is_(True),
+            ScriptModel.name.in_({k[0] for k in keys}),
+        )
+    ).all()
+    schemas = {
+        (r.name, r.version): r.param_schema
+        for r in rows
+        if isinstance(r.param_schema, dict) and r.param_schema
+    }
+    if not schemas:
+        return
+    problems: list[dict] = []
+    for step in steps:
+        schema = schemas.get((step.script_name, step.script_version))
+        if not schema:
+            continue
+        for problem in validate_params_against_schema(step.params or {}, schema):
+            problems.append({"step_key": step.step_key, "problem": problem})
+    if problems:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_STEP_PARAMS",
+                "message": "步骤参数与脚本 param_schema 不匹配",
+                "problems": problems[:20],
+            },
+        )
+
+
 def _validate_stall_seconds_capability(
     steps: list[PlanStepIn],
     db: Session,
@@ -573,6 +618,7 @@ def create_plan(
     )
     _validate_plan_dag(db, None, payload.next_plan_id)
     _validate_script_refs(db, payload.steps)
+    _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
 
     now = datetime.now(timezone.utc)
@@ -723,6 +769,7 @@ def append_chain_tail(
 
     _validate_no_legacy_aee_scripts(payload.steps)
     _validate_script_refs(db, payload.steps)
+    _validate_step_param_values(payload.steps, db)
     _validate_stall_seconds_capability(payload.steps, db)
     _validate_assembled_lifecycle(
         payload.steps, None, None, None, None,
@@ -938,6 +985,7 @@ def update_plan(
     if payload.steps is not None:
         _validate_no_legacy_aee_scripts(payload.steps)
         _validate_script_refs(db, payload.steps)
+        _validate_step_param_values(payload.steps, db)
         _validate_stall_seconds_capability(payload.steps, db)
         _validate_assembled_lifecycle(
             payload.steps,
