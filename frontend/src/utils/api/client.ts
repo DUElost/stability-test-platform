@@ -114,9 +114,20 @@ const apiClient = axios.create({
 function shouldSkipRefresh(url: unknown): boolean {
   const value = typeof url === 'string' ? url : '';
   return value.includes('/auth/login')
+    || value.includes('/auth/register')
     || value.includes('/auth/token')
     || value.includes('/auth/refresh')
     || value.includes('/auth/logout');
+}
+
+/**
+ * 公开认证页（#1191）：这些页面上的 /auth/me 探活 401 是「未登录访客」的
+ * 正常形态，不是会话终态——不做 clearAppQueryCache/disconnect/redirect 副作用。
+ */
+const AUTH_PUBLIC_PATHS = ['/login', '/register'];
+
+function isAuthPublicPath(pathname: string): boolean {
+  return AUTH_PUBLIC_PATHS.includes(pathname.replace(/\/+$/, '') || '/');
 }
 
 function isLoginRequest(url: unknown): boolean {
@@ -167,11 +178,10 @@ apiClient.interceptors.response.use(
         return Promise.reject(toApiError(error));
       }
 
-      // 已经在 /login 时跳过 clearAppQueryCache + disconnect + redirect:
-      // 否则 useAuthSession 的 /auth/me 探活会在 queryClient.clear() 后立即重发,
-      // 再 401 → 再清缓存,造成永久 "校验登录状态中..." 死循环。pathname 已是 /login
-      // 时这一整组副作用本就无业务收益。
-      if (window.location.pathname === '/login') {
+      // 公开认证页（/login、/register）跳过 clearAppQueryCache + disconnect + redirect：
+      // 未登录冷启动这些页面时 /auth/me 探活 401 是预期形态（#1191）；/login 上
+      // 还会因 queryClient.clear() 后立即重发探活形成「校验登录状态中...」死循环。
+      if (isAuthPublicPath(window.location.pathname)) {
         return Promise.reject(toApiError(error));
       }
 

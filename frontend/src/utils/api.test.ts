@@ -145,6 +145,31 @@ describe('api module', () => {
       expect(mocks.authFailureHandler).not.toHaveBeenCalled();
     });
 
+    it('does not invoke auth-failure handler on /register after terminal 401（#1191 冷启动公开页）', async () => {
+      // 真实冷启动：refresh 失败 → 探活失败 → 不应触发全局登出（旧实现会重定向 /login）。
+      // 用持久默认 mock：Once 队列在「公开页跳过探活」的修复路径下不会被消费，会污染后续用例。
+      (axios.post as any).mockRejectedValue(new Error('401'));
+      (axios.get as any).mockRejectedValue(new Error('401'));
+      const error = {
+        response: { status: 401 },
+        config: { headers: {}, url: '/auth/me' },
+      };
+
+      Object.defineProperty(window, 'location', {
+        writable: true,
+        value: { pathname: '/register', href: '/register' },
+      });
+
+      try {
+        await responseRejected(error);
+      } catch {
+        // expected rejection
+      }
+
+      expect(mocks.authFailureHandler).not.toHaveBeenCalled();
+      expect(window.location.href).toBe('/register');
+    });
+
     it('invokes auth-failure handler after terminal 401 on a protected route', async () => {
       // refresh 与会话探活（#1039）都失败，才落到全局登出 handler。
       (axios.post as any).mockRejectedValueOnce(new Error('401'));
@@ -242,6 +267,19 @@ describe('api module', () => {
 
       expect(axios.get).not.toHaveBeenCalled();
       expect(mocks.authFailureHandler).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips refresh + probe for the public register endpoint（#1191）', async () => {
+      ctx();
+      const config = { headers: {} as any, url: '/auth/register' };
+
+      await responseRejected({
+        response: { status: 401 },
+        config,
+      }).catch(() => {});
+
+      expect(axios.post).not.toHaveBeenCalled(); // 不尝试 refresh（公开注册端点）
+      expect(axios.get).not.toHaveBeenCalled(); // 不探活
     });
   });
 
