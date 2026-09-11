@@ -20,6 +20,7 @@ from sqlalchemy.orm import joinedload
 from backend.core.database import SessionLocal
 from backend.models.notification import AlertRule, EventType, NotificationChannel, NotificationLog, NotificationSeverity, NotificationSource
 from backend.services.notification_delivery import (
+    DeliveryOutcome,
     DeliveryResult,
     accepted,
     classify_exception,
@@ -411,7 +412,12 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
         channel_id = int(dispatch["channel_id"])
         ch_key = str(channel_id)
         prior = delivery.get(ch_key)
-        if isinstance(prior, dict) and prior.get("status") == "ok":
+        # D7 投递级幂等：本通道已 ACCEPTED 的尝试不重发（重试只补失败通道）。
+        # 兼容 P1 之前的旧记录（仅有 status 字段）。
+        if isinstance(prior, dict) and (
+            prior.get("status") == "ok"
+            or prior.get("outcome") == DeliveryOutcome.ACCEPTED.value
+        ):
             succeeded.append(channel_id)
             continue
 
@@ -487,11 +493,54 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
         )
 
 
-def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> None:
-    """Fire-and-forget wrapper — submits to bounded thread pool.
+def _notification_job_key(event_type: str, context: Dict[str, Any]) -> str:
+    """SAQ 去重键：同一事件的重复终态/心跳不重复入队（D7 去重键形态之一）。"""
+    return (
+        f"notif:{event_type}:"
+        f"{context.get('run_id')}:{context.get('device_serial') or ''}"
+    )
 
-    #1122：队列满即拒绝（PoolQueueFullError）—— 本路径无重试，丢弃并记
-    warning/metric；需要可靠投递的通知走 SAQ 的 send_notification_task。
+
+def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> None:
+    """生产投递入口（#1167 P3 / ADR-0036 D4/D7）——入 SAQ，唯一 retry owner。
+
+    入队即返回；SAQ 未运行 / enqueue 失败 → 降级 best-effort 线程池直达
+    （**无重试语义**，仅告警一次，保证可用性）；本函数不向调用方外溢异常。
+    投递级幂等由 ``dispatch_notification`` 的 channel_delivery 记录保证
+    （重试不重发已 ACCEPTED 通道）。
+    """
+    enqueued = False
+    try:
+        from backend.tasks.saq_worker import enqueue_sync
+
+        enqueued = enqueue_sync(
+            "send_notification_task",
+            key=_notification_job_key(event_type, context),
+            timeout=120,
+            retries=3,
+            event_type=event_type,
+            context=dict(context or {}),
+        )
+    except Exception:
+        logger.exception(
+            "notification_enqueue_failed", extra={"event_type": event_type},
+        )
+        enqueued = False
+
+    if enqueued:
+        return
+
+    logger.warning(
+        "notification_enqueue_unavailable_fallback_pool",
+        extra={"event_type": event_type},
+    )
+    _dispatch_notification_via_pool(event_type, context)
+
+
+def _dispatch_notification_via_pool(event_type: str, context: Dict[str, Any]) -> None:
+    """降级路径：有界线程池 fire-and-forget（无重试语义）。
+
+    #1122：队列满即拒绝（PoolQueueFullError）——丢弃并记 warning/metric。
     """
     from backend.core.thread_pool import PoolQueueFullError, submit as pool_submit
 
@@ -499,7 +548,7 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
         try:
             dispatch_notification(event_type, context)
         except Exception:
-            # Thread-pool callers have no SAQ retry; keep best-effort semantics.
+            # 本路径无 SAQ 重试；保持 best-effort 语义。
             logger.exception(
                 "dispatch_notification_async_failed",
                 extra={"event_type": event_type},
