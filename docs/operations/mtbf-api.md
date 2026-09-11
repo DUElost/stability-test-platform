@@ -92,7 +92,7 @@ user 构建（`ro.debuggable=0`）直接 fail-fast，需 userdebug/eng 工程包
 | 路径 | 内容 |
 |------|------|
 | `runtask.xml` / `UiAutomatorTestData.xml` | 派发源，由工具链同步（`/mnt/automation-toolkit/android-tools/stability_MTBF-Test/config`） |
-| `results/{run_dir}.json` | `mtbf_finish` 逐条结果（P2 `test_case_result` 数据源，不扩 artifact 白名单） |
+| `results/{run_dir}__job{job_id}__{serial}.json` | `mtbf_finish` v1.5.0+ 逐条结果（文件名带 job/serial 稳定身份，缺维度时省略对应段；P2 `test_case_result` 数据源，不扩 artifact 白名单） |
 
 > **凭据警示**：`UiAutomatorTestData.xml` 含**真实 SIM/WiFi/Google 账号凭据（明文）**，且该目录是常规运维可达路径。
 > 禁止将其内容复制进仓库 / 日志 / PR diff / Agent Note；需要夹具或示例时一律脱敏（仓库

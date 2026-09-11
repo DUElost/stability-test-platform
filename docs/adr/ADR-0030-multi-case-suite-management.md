@@ -146,7 +146,7 @@ ADR-0029 非目标明确放弃版本化 ExecutionProfile 实体族（5 张表：
 - **DB**：新增 `test_suite` / `test_case` / `test_case_result`（P2 已落地），additive migration（ADR-0008）。
 - **API**：新增约 13 个端点（草案见研究 §5.5）。**结果落库主路径（P0 定，与 P0 设计 §5.3 一致）**：
   摘要 metrics + `suite_sha256` 走 step_trace（stdout JSON，规避 64KiB 截断）；**逐条结果写中心存储**
-  `{STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}.json`（`report_json` 为控制面合成（`report_service`），脚本不写）；
+  `{STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}__job{job_id}__{serial}.json`（`mtbf_finish` v1.5.0+ 带 job/serial 稳定身份；`report_json` 为控制面合成（`report_service`），脚本不写）；
   `JobArtifact` 白名单扩展报告类型（如 `report`）**留待 P2** 大文件/下载场景。
 - **审计**：`record_audit` 覆盖新资源类型（ADR-0015）。
 - **前端**（P2 ✅）：用例管理页 + PlanRun 用例结果区块（#429 已合 main）。
@@ -164,7 +164,7 @@ ADR-0029 非目标明确放弃版本化 ExecutionProfile 实体族（5 张表：
 3. 外部写权限模型：**初版写 = admin**；`X-Agent-Secret` 只读或限定 import/export，P1 评审定。
 4. `times` 覆盖链定稿：**`task_times` 仅影响 export/deploy**（渲染/部署时的覆盖参数），库内 `root_config.times` 为套件默认值。
 5. 结果落库：**已定稿**（与「影响」段一致）：摘要 metrics + `suite_sha256` 走 step_trace；逐条写中心存储
-   `mtbf/{project}/results/{run_dir}.json`；`report_json` 为控制面合成（`report_service`），脚本不写；P2 大文件再走 artifact 白名单扩展。
+   `mtbf/{project}/results/{run_dir}__job{job_id}__{serial}.json`（v1.5.0+）；`report_json` 为控制面合成（`report_service`），脚本不写；P2 大文件再走 artifact 白名单扩展。
 6. 套件版本化：触发复议条件足够（见下），暂不机制化。
 
 **触发复议条件**（防兜圈子，未触发前不得重提）：

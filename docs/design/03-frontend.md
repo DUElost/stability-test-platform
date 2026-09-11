@@ -42,6 +42,8 @@ frontend/src/
 | `/hosts`, `/devices` | 主机/设备 | 登录 |
 | `/schedules`, `/resources`, `/wifi`, `/issue-tracker` | 调度/资源 | 登录 |
 | `/account/password` | 修改密码 | 登录 |
+| `/assistant` | AI 助手 | 登录 |
+| `/assistant/approvals` | AI 助手待审批队列 | **admin** |
 | `/users`, `/audit`, `/settings`, `/notifications`, `/storage` | 管理 | **admin** |
 
 **守卫**：`ProtectedRoute`（登录）、`AdminRoute`（`role === 'admin'`）。  

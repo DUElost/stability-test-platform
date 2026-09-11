@@ -441,7 +441,10 @@ sweep、⚠ 待办、`attribution_reassigned` 告警、重算按钮（#612 随�
 
 **「待归属」语义改对**：从设备级 `SELECT * FROM device WHERE project_id IS
 NULL`（70 行假警报）变成型号级 `SELECT DISTINCT model FROM device WHERE
-model NOT IN (SELECT model FROM project_model)`（当前 1 行 = NULL，对应 6
+model NOT IN (SELECT pm.match_value FROM project_model pm JOIN test_project tp
+ON tp.id = pm.project_id WHERE pm.is_active AND tp.source = 'USER')`——只认
+**活跃 USER 项目**的成员行，`SEED` 成员不算映射（#952，与项目 inventory 未映射
+口径一致；否则含 SEED 时「统计显示待归属、列表找不到」）。（当前 1 行 = NULL，对应 6
 台设备）——admin 决策从 O(设备) 降到 O(型号)，且那 1 行指向真问题（心跳/
 adb 数据质量，该修在源头）。
 

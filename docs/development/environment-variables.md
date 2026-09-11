@@ -1,6 +1,6 @@
 # 环境变量参考
 
-> **最后更新**：2026-08-09  
+> **最后更新**：2026-09-11  
 > 模板权威源：`backend/.env.example`、`backend/agent/.env.example`、根目录 `.env.server.example`。  
 > 本文只整理**常用/易踩坑**变量；完整清单以 example 文件为准。
 
@@ -59,6 +59,11 @@
 | `STP_SCAN_POLL_GRACE_SECONDS` | 高进度宽限秒数（默认 `120`；就绪率≥ratio 且缺口≤max_missing 时一次） |
 | `STP_SCAN_POLL_GRACE_RATIO` | 触发宽限的最低就绪率（默认 `0.9`） |
 | `STP_SCAN_POLL_GRACE_MAX_MISSING` | 触发宽限的最大缺口 host 数（默认 `3`） |
+| `STP_HOST_MAINTENANCE_TTL_SECONDS` | 升级维护窗口兜底 TTL 秒（默认 `900`，上限 `3600`）；持有进程崩溃后窗口按此过期（#960） |
+| `STP_SMTP_TIMEOUT_SECONDS` | 通知 SMTP 网络 deadline 秒（默认 `15`；#1122） |
+| `BACKGROUND_POOL_MAX_QUEUE` | 后台线程池待提交队列上限（默认 `200`）；满即拒绝，不再无界堆积（#1122） |
+| `STP_RUN_CONSOLE_REPLAY_MAX_LINES` | RunConsole replay 单次回放行数上限（默认 `2000`；#1124） |
+| `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | RunConsole 终态运行记录保留秒数（默认 `3600`；#1124） |
 | `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` | Compose 开发初始化管理员；**禁止**用于生产默认值 |
 
 ### Agent 协议门禁

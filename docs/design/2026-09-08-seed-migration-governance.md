@@ -1,6 +1,6 @@
 # 种子迁移治理语义裁决：脚本 default_params 覆写与无引用停用（#942）
 
-- **状态**：Proposed——**待裁决**（三选一见 §3；裁决后按 §5 拆实现单，本 note 不关闭 #942）
+- **状态**：Accepted——**裁决 A**（三选一见 §3；已落地：契约入 [`script-versioning.md`](../development/script-versioning.md)「种子迁移治理（#942 裁决 A）」+ 模板 `backend/services/script_seed_governance.py`）
 - **日期**：2026-09-08
 - **来源**：R03 台账 #945 的 R03-F10（设计风险）；台账标注「交接 R07」
 - **关联不变量**：AGENTS.md 硬不变量「已存在脚本版本的 `default_params` 不可原地修改；参数变化通过新版本表达」

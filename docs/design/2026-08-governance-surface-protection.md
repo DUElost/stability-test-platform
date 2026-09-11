@@ -45,9 +45,9 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 | S5 | ci.yml/pr-agent.yml 的 PR 门禁 job id 与 AGENTS.md 六项记载互检（CodeQL 无 workflow 文件，只查文档侧） | BLOCK | 五稿评审均人工核对过的事实固化 |
 | S6 | AGENTS ≤80 行/8KB、CLAUDE ≤60 行/6KB、每个 Cursor rule ≤30 行/3KB；Harness 总索引、执行契约与 scoped CLAUDE 各有独立预算（v1.12 契约分层后：正文 execution-contract.md 210 行/24500、规范附录 200 行/20000——语义面收紧、细则进附录） | BLOCK | Requirement 无关细节曾让常驻链超过 50KB；超预算必须迁往按需文档 |
 | S7 | `.claude/skills/*/SKILL.md` frontmatter 的 name 与目录一致且 description 非空 | BLOCK | 错误 frontmatter 会让技能静默不可见 |
-| S8 | CLAUDE.md 只能 `@import` 最小 `AGENTS.md` | BLOCK | 导入 DOC-MAP 会把完整索引无条件带入每次会话 |
+| S8 | CLAUDE.md 双形态（#857）：指向 `AGENTS.md` 的 symlink（内容直读），或缺省恰含 `@AGENTS.md` 单条 import | BLOCK | 导入 DOC-MAP 会把完整索引无条件带入每次会话 |
 | S9 | AGENTS/CLAUDE 只允许固定启动级二级章节，禁止三级章节 | BLOCK | 体量预算只能限制总量，章节白名单进一步阻止领域知识重新常驻 |
-| S10 | 2026-09-05 起新增 Agent Note 的 Status/Class 头部与 class 目录一致 | BLOCK | 197 份存量中 78 份格式不统一；新门禁只阻止继续新增，不批量改写历史 |
+| S10 | class 目录内 Agent Note 必须日期命名 `yyyy-mm-dd-<主题>.md`（#854）；2026-09-05 起新增 Agent Note 的 Status/Class 头部与 class 目录一致，且四节（Decision/Alternatives/Verification/Revisit）齐备 | BLOCK | 197 份存量中 78 份格式不统一；新门禁只阻止继续新增，不批量改写历史；非日期命名改名即可绕过头部校验 |
 | S11 | AGENTS.md 硬不变量锚点（11 条锚串）逐条在场 | BLOCK | 2026-09-06 随 L1 移除引入：L0 此前对不变量整条删除/改写全盲（S9 只查章节名、S6 只查体量）；S4 锚点同模式 |
 | S12 | ADR 索引一致性：头部状态行 ↔ adr/README 主表/DOC-MAP/M7 看板（status 词级 + 规范位版本），头部行 ↔ 版本记录块末项 | BLOCK | 2026-09-07 随 #867 收口引入：ADR 版本 bump 漏同步索引已五次复发（#861 修两处、DOC-MAP/adr/README 再漏），且出现文内形态（头部行停 v1.3 而版本记录块已 v1.6）；版本约束仅限头部行携带规范位版本（**Status（vX.Y）** / **Status**（vX.Y：）），注解散文 token 不算 |
 | S13 | 执行契约版本一致性：`execution-contract.md` 状态行 `Living vX.Y` ↔ 自身版本记录**首项** ↔ 规范附录「当前 vX.Y」↔ DOC-MAP 执行契约行 | BLOCK | 2026-09-10 随 #1238 引入：执行契约不是 ADR，S12 不覆盖它，而同类漂移已复发三次（2026-09-07 七日审计 5 残面 / v1.4 note 收口存量漂移 / #1232–#1238 期间「加了 v1.11 变更条目却没改 Living token」）；解析需排除 `ADR-0034-multi-harness-execution-contract.md` 的文件名同子串误命中 |
@@ -58,9 +58,11 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 ## 4. 接线
 
 - `scripts/run_gates.py`：`gov-surface` 入 `check:quick` / `check:pr`；
-  专项 `check:gov`（现组成 `[gov-surface, gov-skills]`；原 `gov-evals`
-  于 2026-09-06 移除）。
-- `ci.yml` lint job：脚本不可变检查之后追加「治理面结构检查(C-G1 L0)」步骤。
+  专项 `check:gov`（现组成 `[gov-surface, gov-skills, harness-ingest]`；原 `gov-evals`
+  于 2026-09-06 移除，`harness-ingest` 于 2026-09-07 并入，`:214` `FULL_EXCLUDE` 除外）。
+- `ci.yml` lint job：脚本不可变检查之后追加「差异面不变量检查」（invariant-diff，BLOCK）、
+  「治理面结构检查(C-G1 L0)」（含 `--self-test`）与「Execution Registry 自测」三步
+  （步骤以 `ci.yml` 为准）。
 
 ## 5. 本地护栏
 
