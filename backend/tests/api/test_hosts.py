@@ -542,7 +542,7 @@ class TestHostKeyReplaceConsent:
 
 
 class TestHostHardDeleteGuards:
-    """#937: 有历史依赖的主机硬删除返回 409（不裸 500/不静默清空）。"""
+    """#937/#796: 有历史依赖的主机硬删除返回 409（不裸 500/不静默清空）。"""
 
     def test_delete_host_with_devices_is_409(
         self, client, db_session, admin_headers,
@@ -571,3 +571,72 @@ class TestHostHardDeleteGuards:
         resp = client.delete("/api/v1/hosts/del-h-clean", headers=admin_headers)
         assert resp.status_code == 200, resp.text
         assert db_session.get(Host, "del-h-clean") is None
+
+    def test_delete_host_with_job_history_is_409_and_preserves_history(
+        self, client, db_session, admin_headers,
+    ):
+        """#796: 历史 Job 即数据——409 且 job/device 行不得被 CASCADE 清空。"""
+        from backend.models.enums import JobStatus
+        from backend.models.host import Device, Host
+        from backend.models.job import JobInstance
+        from backend.models.plan import Plan
+        from backend.models.plan_run import PlanRun
+
+        host = Host(id="del-h-job", hostname="dhj", status="OFFLINE")
+        plan = Plan(name="del-h-job-plan")
+        db_session.add_all([host, plan])
+        db_session.flush()
+        device = Device(
+            serial="del-dev-job", host_id=host.id, status="OFFLINE",
+        )
+        db_session.add(device)
+        db_session.flush()
+        run = PlanRun(
+            plan_id=plan.id, status="SUCCESS",
+            plan_snapshot={"name": plan.name}, run_type="MANUAL",
+        )
+        db_session.add(run)
+        db_session.flush()
+        job = JobInstance(
+            plan_run_id=run.id, plan_id=plan.id, device_id=device.id,
+            host_id=host.id, status=JobStatus.COMPLETED.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        )
+        db_session.add(job)
+        db_session.commit()
+        job_id, device_id = job.id, device.id
+
+        resp = client.delete("/api/v1/hosts/del-h-job", headers=admin_headers)
+        assert resp.status_code == 409, resp.text
+        assert "历史 Job" in resp.json()["detail"]
+
+        # 409 是数据保护而非部分删除：job/device/host 行必须原样保留
+        db_session.expire_all()
+        assert db_session.get(JobInstance, job_id) is not None
+        assert db_session.get(Device, device_id) is not None
+        assert db_session.get(Host, "del-h-job") is not None
+
+    def test_delete_host_with_plan_run_projection_is_409(
+        self, client, db_session, admin_headers,
+    ):
+        """#796: 仅剩 plan_run_host 投影（无 job/device）也不得硬删。"""
+        from backend.models.host import Host
+        from backend.models.plan import Plan
+        from backend.models.plan_run import PlanRun, PlanRunHost
+
+        db_session.add(Host(id="del-h-prh", hostname="dhp", status="OFFLINE"))
+        plan = Plan(name="del-h-prh-plan")
+        db_session.add(plan)
+        db_session.flush()
+        run = PlanRun(
+            plan_id=plan.id, status="SUCCESS",
+            plan_snapshot={}, run_type="MANUAL",
+        )
+        db_session.add(run)
+        db_session.flush()
+        db_session.add(PlanRunHost(plan_run_id=run.id, host_id="del-h-prh"))
+        db_session.commit()
+
+        resp = client.delete("/api/v1/hosts/del-h-prh", headers=admin_headers)
+        assert resp.status_code == 409, resp.text
+        assert "投影" in resp.json()["detail"]
