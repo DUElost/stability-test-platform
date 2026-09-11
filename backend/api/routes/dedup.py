@@ -33,7 +33,13 @@ from backend.core.database import SessionLocal, get_db
 from backend.models.jira_run import JiraRun
 from backend.models.user import User
 from backend.services.jira_issue_parser import parse_issue_keys
-from backend.services.run_console import RunConsole, RunKeyBusyError, RunConsoleError, ConsoleRun
+from backend.services.run_console import (
+    RunConsole,
+    RunKeyBusyError,
+    RunConsoleError,
+    ConsoleRun,
+    console_run_miss_hint,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/jira", tags=["dedup-jira"])
@@ -363,7 +369,7 @@ def get_jira_run_detail(
 def get_jira_run_status(console_run_id: str, _user: User = Depends(get_current_active_user)):
     st = RunConsole.instance().status(console_run_id)
     if st is None:
-        raise HTTPException(status_code=404, detail="run not found")
+        raise HTTPException(status_code=404, detail=f"run not found{console_run_miss_hint()}")
     return ok(st)
 
 
@@ -381,7 +387,7 @@ def get_jira_run_log(
     """
     console = RunConsole.instance()
     if console.status(console_run_id) is None and not console.log_file_path(console_run_id).exists():
-        raise HTTPException(status_code=404, detail="run not found")
+        raise HTTPException(status_code=404, detail=f"run not found{console_run_miss_hint()}")
     return ok(console.read_log(console_run_id, from_seq=from_seq))
 
 
@@ -405,7 +411,7 @@ def cancel_jira_run(
             request=request,
         )
         db.commit()
-        raise HTTPException(status_code=404, detail="run not found")
+        raise HTTPException(status_code=404, detail=f"run not found{console_run_miss_hint()}")
     canceled = RunConsole.instance().cancel(console_run_id)
     record_audit(
         db,

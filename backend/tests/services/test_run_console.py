@@ -447,3 +447,23 @@ def test_child_env_is_allowlisted_not_inherited(tmp_path, emit_capture, monkeypa
     assert payload["PATH"]  # 白名单保留进程启动所需键
     assert payload["STP_PROBE"] == "injected"  # 调用方显式注入生效
     assert payload["PYTHONUNBUFFERED"] == "1"
+
+
+def test_console_miss_hint_and_startup_warning_follow_multi_instance_flag(monkeypatch):
+    """#1114（R11-F06）：多实例开关驱动 console 诊断提示与启动告警文案。"""
+    from backend.services import run_console as rc
+
+    monkeypatch.setattr(
+        "backend.realtime.socketio_redis.socketio_redis_adapter_enabled", lambda: False
+    )
+    assert rc.console_run_miss_hint() == ""
+    assert rc.multi_instance_console_warning() is None
+
+    monkeypatch.setattr(
+        "backend.realtime.socketio_redis.socketio_redis_adapter_enabled", lambda: True
+    )
+    assert "#1114" in rc.console_run_miss_hint()
+    warning = rc.multi_instance_console_warning()
+    assert warning is not None
+    assert "ref=#1114" in warning
+    assert "dedup_jira_serialization" in warning
