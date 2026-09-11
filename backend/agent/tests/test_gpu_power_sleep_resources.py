@@ -419,4 +419,4 @@ def test_gpu_setup_v109_loop_dismisses_dialogs():
     assert "sed -E" in loop              # 坐标提取用 sed（非 tr -d）
     # 循环体内：调用出现在 am instrument 之前
     loop_body = loop[loop.index("i=1"):]
-    assert loop_body.index("dismiss_dialogs()") < loop_body.index("am instrument")
+    assert loop_body.index("    dismiss_dialogs") < loop_body.index("am instrument")
