@@ -17,6 +17,11 @@ Class: process
   | `..._4e188e.md` / `..._e16d6d.md` | 前缀并入，后缀不变 | Cursor |
   | `REVIEW_THREE_QUESTION_CONVERGENCE_2026-09-11.md` | `..._pf8rII-convergence.md` | opencode `ses_f7f07f53bffevfu53As5pf8rII`（据本机会话库推定） |
 
+> **更正（2026-09-11，后单）**：上表最后一行「opencode（据本机会话库推定）」系**推定错误**——
+> 经 dsh 会话写入载荷核验（`write` tool-call 的 `file_path` 指向该稿路径），汇聚稿实为
+> **dsh 会话 `f4f2a372-…-7d4f85`** 所写（与 `_7d4f85` 确认稿同源）；已改名
+> `..._7d4f85-convergence.md`。详见[归属更正记录](2026-09-11-convergence-attribution-correction.md)。
+
 - 主干 3 份经本 PR 改名并同步全部引用（DOC-MAP、两份流程 Note、稿件互引）；
   在途 3 份在本地重命名并同步引用（**未提交**，待其入库时按新名提交）。
 - 命名纪律补入总纲 §4.1（会话后六位 + 同会话角色后缀 + 新稿不覆盖 + 禁止无后缀笼统名）。
