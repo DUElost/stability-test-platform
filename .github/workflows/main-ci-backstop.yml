@@ -66,12 +66,20 @@ jobs:
           )"
           if [ "$run_id" = "0" ]; then
             echo "No full CI run for main tip $main_sha; dispatching"
+            # R15-F06 (#1298): 记录 dispatch 前已存在的 run id —— 新 run 有创建
+            # 延迟，轮询时若只取第一条会把 dispatch 前的旧失败 run 认成本轮结果。
+            pre_existing_ids="$(
+              gh api "repos/$REPO/actions/workflows/ci.yml/runs?branch=main&per_page=50" \
+                --jq '[.workflow_runs[].id] | join(" ")'
+            )"
             gh workflow run ci.yml --ref main -R "$REPO"
-            # dispatch 创建有延迟，轮询等待运行出现（最多 10 分钟）
+            # dispatch 创建有延迟，轮询等待运行出现（最多 10 分钟）。只接受
+            # 不在 pre_existing_ids 中的 run（即本次 dispatch 产生的）。
             for _ in $(seq 1 60); do
               run_id="$(
-                gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$main_sha&event=workflow_dispatch&per_page=5" \
-                  --jq '[.workflow_runs[]][0].id // 0'
+                gh api "repos/$REPO/actions/workflows/ci.yml/runs?branch=main&event=workflow_dispatch&per_page=20" \
+                  --jq --arg pre "$pre_existing_ids" \
+                    '($pre | split(" ")) as $pre | [.workflow_runs[] | select(.id as $id | (($pre | index($id|tostring)) | not))][0].id // 0'
               )"
               [ "$run_id" != "0" ] && break
               sleep 10
@@ -189,6 +197,31 @@ jobs:
             fi
             if [ "$open_count" != "0" ]; then
               echo "skip branch with open PR (re-checked): $branch"
+              skipped=$((skipped + 1)); continue
+            fi
+            # R15-F02 (#1294): merged_heads 来自历史已合并 PR 的分支名。若该名字
+            # 被复用并推送了新提交（尚未建 PR），仅凭「历史上合并过」删引用会
+            # 销毁未合入工作。删除前必须证明当前 tip 已包含在 main 中：compare
+            # 状态 behind/identical 表示分支 tip ⊆ main（无领先提交）。
+            tip_sha="$(gh api "repos/$REPO/git/ref/heads/$branch" --jq .object.sha 2>/dev/null || echo '')"
+            if [ -z "$tip_sha" ]; then
+              echo "skip branch tip unreadable: $branch"
+              skipped=$((skipped + 1)); continue
+            fi
+            cmp_status="$(
+              gh api "repos/$REPO/compare/main...$branch" --jq .status 2>/dev/null || echo ''
+            )"
+            case "$cmp_status" in
+              behind|identical) : ;;
+              *)
+                echo "skip branch not contained in main (compare=$cmp_status): $branch"
+                skipped=$((skipped + 1)); continue
+                ;;
+            esac
+            # 检查与删除之间存在并发推送窗口：删除前重读 tip，变了即放弃。
+            tip_now="$(gh api "repos/$REPO/git/ref/heads/$branch" --jq .object.sha 2>/dev/null || echo '')"
+            if [ "$tip_now" != "$tip_sha" ]; then
+              echo "skip branch moved during cleanup ($tip_sha -> $tip_now): $branch"
               skipped=$((skipped + 1)); continue
             fi
             if ! gh api -X DELETE "repos/$REPO/git/refs/heads/$branch" >/dev/null; then

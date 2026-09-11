@@ -53,7 +53,7 @@ cp .env.test.example .env.test   # 首次
 | 变量 | 说明 |
 |------|------|
 | `TESTING=1` | conftest 设置；禁用 Redis/SAQ/Scheduler lifespan |
-| `TEST_DATABASE_URL` | 仅隔离库；生产机请 **unset** 走 testcontainers |
+| `TEST_DATABASE_URL` | 仅隔离库；生产机请 **unset** 走 testcontainers。显式地址有机器护栏（#1300）：库名必须含 `test`（如 `stp_test`）且不得与运行时 `DATABASE_URL` 相同，违者 conftest 拒绝启动；确需豁免设 `STP_ALLOW_UNSAFE_TEST_DATABASE_URL=1`（记 warning） |
 | `ALLOW_SQLITE_TESTS=1` | 本地无 Docker/PG 时的退路 |
 | `JWT_SECRET_KEY` | 必设（见 `.env.test.example`） |
 
