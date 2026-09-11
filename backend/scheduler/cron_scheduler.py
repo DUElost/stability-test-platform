@@ -358,12 +358,14 @@ def auto_archive_sweep() -> None:
     ``Plan.auto_archive_interval_seconds`` elapses and the scheduler triggers
     dedup incrementally.
 
-    Selection (one run per plan — avoids scanning every historical terminal run):
+    Selection (one run per plan per sweep):
       1. If the Plan has a RUNNING PlanRun → that is the active run.
-      2. Else → the latest successful terminal PlanRun.
+      2. Else → the oldest due terminal PlanRun that still needs archive
+         (``ended_at + interval`` elapsed and not archive-complete). Newest-first
+         selection starved earlier runs when a later run existed (#833).
 
-    Terminal runs: one final scan (``is_final=True``) after ``ended_at + interval``;
-    once a ``scan_result_xls`` artifact exists, that run is never scanned again.
+    Terminal runs: final scan (``is_final=True``) after ``ended_at + interval``;
+    skip only when merge artifact + extract context are present (#1110).
 
     RUNNING runs: incremental ``is_final=False`` scans while patrol is active, rate-limited
     by ``auto_archive_interval_seconds`` since the last scan artifact.
@@ -391,7 +393,7 @@ def auto_archive_sweep() -> None:
             triggered = 0
             for plan in plans:
                 interval = plan.auto_archive_interval_seconds
-                run = (
+                running = (
                     db.query(PlanRun)
                     .filter(
                         PlanRun.plan_id == plan.id,
@@ -400,53 +402,51 @@ def auto_archive_sweep() -> None:
                     .order_by(PlanRun.id.desc())
                     .first()
                 )
-                if run is None:
-                    run = (
-                        db.query(PlanRun)
-                        .filter(
-                            PlanRun.plan_id == plan.id,
-                            PlanRun.status.in_(_AUTO_FINAL_STATUSES),
-                            PlanRun.ended_at.isnot(None),
+                if running is not None:
+                    scan_count = db.execute(
+                        select(func.count()).select_from(PlanRunArtifact).where(
+                            PlanRunArtifact.plan_run_id == running.id,
+                            PlanRunArtifact.artifact_type == "scan_result_xls",
                         )
-                        .order_by(PlanRun.id.desc())
-                        .first()
-                    )
-                if run is None:
-                    continue
-                if (
-                    run.status != PlanRunStatus.RUNNING.value
-                    and run.status not in _AUTO_FINAL_STATUSES
-                ):
-                    continue
-
-                scan_count = db.execute(
-                    select(func.count()).select_from(PlanRunArtifact).where(
-                        PlanRunArtifact.plan_run_id == run.id,
-                        PlanRunArtifact.artifact_type == "scan_result_xls",
-                    )
-                ).scalar_one()
-
-                if run.status in _AUTO_FINAL_STATUSES:
-                    if run.ended_at is None or now - run.ended_at < timedelta(seconds=interval):
-                        continue
-                    if scan_count > 0 and _terminal_archive_complete(db, run.id):
-                        continue
-                    enqueue_dedup_terminal_sync(run.id, is_final=True)
+                    ).scalar_one()
+                    if scan_count > 0:
+                        last_scan_at = db.execute(
+                            select(func.max(PlanRunArtifact.created_at)).where(
+                                PlanRunArtifact.plan_run_id == running.id,
+                                PlanRunArtifact.artifact_type == "scan_result_xls",
+                            )
+                        ).scalar_one()
+                        if last_scan_at and now - last_scan_at < timedelta(seconds=interval):
+                            continue
+                    enqueue_dedup_terminal_sync(running.id, is_final=False)
                     triggered += 1
                     continue
 
-                if scan_count > 0:
-                    last_scan_at = db.execute(
-                        select(func.max(PlanRunArtifact.created_at)).where(
+                # No RUNNING: serve the oldest due terminal run still needing archive (#833).
+                due_cutoff = now - timedelta(seconds=interval)
+                candidates = (
+                    db.query(PlanRun)
+                    .filter(
+                        PlanRun.plan_id == plan.id,
+                        PlanRun.status.in_(_AUTO_FINAL_STATUSES),
+                        PlanRun.ended_at.isnot(None),
+                        PlanRun.ended_at <= due_cutoff,
+                    )
+                    .order_by(PlanRun.ended_at.asc(), PlanRun.id.asc())
+                    .all()
+                )
+                for run in candidates:
+                    scan_count = db.execute(
+                        select(func.count()).select_from(PlanRunArtifact).where(
                             PlanRunArtifact.plan_run_id == run.id,
                             PlanRunArtifact.artifact_type == "scan_result_xls",
                         )
                     ).scalar_one()
-                    if last_scan_at and now - last_scan_at < timedelta(seconds=interval):
+                    if scan_count > 0 and _terminal_archive_complete(db, run.id):
                         continue
-
-                enqueue_dedup_terminal_sync(run.id, is_final=False)
-                triggered += 1
+                    enqueue_dedup_terminal_sync(run.id, is_final=True)
+                    triggered += 1
+                    break
 
             if triggered:
                 logger.info("auto_archive_sweep triggered=%d", triggered)

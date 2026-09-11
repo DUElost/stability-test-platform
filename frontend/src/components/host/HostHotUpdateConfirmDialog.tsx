@@ -38,6 +38,8 @@ interface Props {
 }
 
 const RETRY_INIT = Symbol('retry-init');
+/** #823：abort 收口期快照短轮询间隔（收口完成即停）。 */
+const ABORT_POLL_MS = 5000;
 
 function fmtTime(ts?: string | null): string {
   return formatTimeLabel(ts ?? null);
@@ -126,6 +128,14 @@ export default function HostHotUpdateConfirmDialog({
     enabled: hostId != null,
     staleTime: 0,
     refetchOnMount: 'always',
+    // #823：abort 收口期间快照会过期（active_jobs.abort_pending 长期为真 → 确认按钮
+    // 永久 disabled）；倒计时或收口中按 5s 短轮询推进，收口完成即停。
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      const pending =
+        (d?.active_job_count ?? 0) > 0 && (d?.active_jobs ?? []).every((j) => j.abort_pending);
+      return pending || countdown > 0 ? ABORT_POLL_MS : false;
+    },
   });
 
   const open = hostId != null;
