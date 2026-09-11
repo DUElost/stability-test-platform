@@ -1,7 +1,7 @@
 # ADR-0024: 浏览器 Web 会话安全化
 
-- 状态：**Accepted（v1.1）**
-- 版本记录：v1.0（2026-05-21 初版）/ v1.1（2026-09-08 internal 例外契约化，#909）
+- 状态：**Accepted（v1.2）**
+- 版本记录：v1.0（2026-05-21 初版）/ v1.1（2026-09-08 internal 例外契约化，#909）/ v1.2（2026-09-11 internal 无 TLS 跨标签 refresh 已知限制，#1200）
 - 优先级：P0
 - 目标里程碑：M3.2
 - 日期：2026-05-21
@@ -163,3 +163,23 @@ AGENTS.md 硬不变量，形成 #909 所述契约表述不一致。
 
 **对账**：AGENTS.md 硬不变量行同步区分生产类环境与该唯一例外（S11 锚串
 「secure cookie、受限 SameSite 和 CSRF guard」保留在场）。
+
+## v1.2：internal 无 TLS 的跨标签 refresh 已知限制（2026-09-11，#1200）
+
+**背景**：#1039 以 Web Locks（`navigator.locks`）串行化多标签 refresh，消除
+rotation（#1016 消费即吊销）下的跨标签竞态。Web Locks 仅在**安全上下文**
+可用——本 ADR v1.1 的 `ENV=internal` 无 TLS 部署下浏览器不提供该 API，
+refresh 退回单标签 `_refreshInFlight` 防抖，跨标签并发竞态复现。
+
+**实测**（隔离环境双标签同时 refresh，服务端 1s 延迟放大 in-flight 窗口）：
+
+- 安全上下文（localhost，`locks=true`）：两请求串行，maxOverlap=1；
+- 非安全上下文（LAN IP HTTP，`locks=false`）：两请求并发，maxOverlap=2。
+
+**裁定**：接受该限制并文档化，不做前端自建跨标签锁（BroadcastChannel 类
+方案无原子性、非严格互斥，引入新失败模式而只能缩小窗口）：
+
+- 缓解 = internal 部署下的**单标签使用纪律**；
+- 该限制随 v1.1 复议触发器（#46 TLS）落地自动消除：HTTPS 提供安全上下文，
+  #1039 串行化恢复；
+- 实测方法与证据：`docs/notes/bug-fix/2026-09-11-http-cross-tab-refresh-1200.md`。
