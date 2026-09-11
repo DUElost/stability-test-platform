@@ -624,7 +624,32 @@ async def cancel_action(
     if action.console_run_id:
         from backend.services.run_console import RunConsole
 
-        RunConsole.instance().cancel(action.console_run_id)
+        # #1222（R13-F10）：检查实际取消结果，不再忽略 cancel False。
+        # False = 本进程找不到该 run —— 已结束（finalize 竞速）或由其他 worker
+        # 执行（RunConsole 是进程内单例，跨进程取消需路由层，见 Agent Note）。
+        if not RunConsole.instance().cancel(action.console_run_id):
+            db.refresh(action)
+            if action.status == "running":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "CANCEL_NOT_ROUTABLE",
+                        "message": (
+                            "无法在本进程定位该运行（可能刚结束，或由其他 worker "
+                            "执行）；当前状态 running，稍后刷新查看终态"
+                        ),
+                    },
+                )
+            # finalize 已竞速完成（如 CANCELED）→ 如实返回终态
+    else:
+        # #1222：service 型动作无可中止进程句柄 —— 如实拒绝，不假成功。
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ACTION_NOT_CANCELLABLE",
+                "message": "该动作类型不支持取消（服务型调用无可中止的进程句柄）",
+            },
+        )
     record_audit(
         db,
         action="ai_assistant_action_cancel",

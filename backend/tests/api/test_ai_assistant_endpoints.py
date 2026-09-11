@@ -5,6 +5,7 @@ import threading
 
 import pytest
 from sqlalchemy.orm import sessionmaker
+from unittest.mock import MagicMock
 
 from backend.models.ai_assistant import (
     AiAssistantAction,
@@ -1168,3 +1169,95 @@ class TestT1ParamValidation:
         db_session.refresh(action)
         assert action.status == "failed", "执行期异常必须达终态"
         assert "参数校验失败" in (action.result_summary or "")
+
+
+# ── #1222（R13-F10）：取消必须诚实——不可取消明确报错，不假成功 ─────────────
+
+
+def _seed_running_action(db_session, user_id: int, *, console_run_id=None):
+    s = AiChatSession(user_id=user_id)
+    db_session.add(s)
+    db_session.flush()
+    action = AiAssistantAction(
+        session_id=s.id, tool_name="run_gov_checks", params={},
+        status="running", requested_by_user_id=user_id,
+        console_run_id=console_run_id,
+    )
+    db_session.add(action)
+    db_session.commit()
+    return action
+
+
+class TestCancelActionHonesty:
+    def test_service_action_without_run_id_is_not_cancellable(
+        self, client, admin_headers, db_session
+    ):
+        """service 型动作无进程句柄 → 409 明确拒绝，不返回假成功。"""
+        user = db_session.query(User).filter(User.role == "admin").first()
+        action = _seed_running_action(db_session, user.id)
+        resp = client.post(
+            f"/api/v1/ai-assistant/actions/{action.id}/cancel", headers=admin_headers,
+        )
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["code"] == "ACTION_NOT_CANCELLABLE"
+        db_session.refresh(action)
+        assert action.status == "running", "未实际取消，状态不得变化"
+
+    def test_cancel_false_with_still_running_reports_not_routable(
+        self, client, admin_headers, db_session, monkeypatch
+    ):
+        """cancel False（跨 worker / run 丢失）+ 状态仍 running → 409 不谎报。"""
+        user = db_session.query(User).filter(User.role == "admin").first()
+        action = _seed_running_action(db_session, user.id, console_run_id="con-x1")
+
+        inst = MagicMock()
+        inst.cancel.return_value = False
+        monkeypatch.setattr(
+            "backend.services.run_console.RunConsole.instance", lambda: inst,
+        )
+        resp = client.post(
+            f"/api/v1/ai-assistant/actions/{action.id}/cancel", headers=admin_headers,
+        )
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["code"] == "CANCEL_NOT_ROUTABLE"
+
+    def test_cancel_false_after_finalize_race_returns_terminal(
+        self, client, admin_headers, db_session, monkeypatch
+    ):
+        """cancel False 但 finalize 已竞速落终态 → 200 如实返回 CANCELED。"""
+        user = db_session.query(User).filter(User.role == "admin").first()
+        action = _seed_running_action(db_session, user.id, console_run_id="con-x2")
+
+        inst = MagicMock()
+        inst.cancel.return_value = False
+        monkeypatch.setattr(
+            "backend.services.run_console.RunConsole.instance", lambda: inst,
+        )
+
+        def fake_refresh(obj):
+            obj.status = "cancelled"  # 模拟 finalize 在 cancel 后竞速完成
+
+        monkeypatch.setattr(db_session, "refresh", fake_refresh)
+        resp = client.post(
+            f"/api/v1/ai-assistant/actions/{action.id}/cancel", headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["status"] == "cancelled"
+
+    def test_cancel_true_returns_cancelled(self, client, admin_headers, db_session, monkeypatch):
+        """RunConsole 真正发起取消 → 200 且状态如实反映。"""
+        user = db_session.query(User).filter(User.role == "admin").first()
+        action = _seed_running_action(db_session, user.id, console_run_id="con-x3")
+
+        inst = MagicMock()
+        inst.cancel.return_value = True
+        monkeypatch.setattr(
+            "backend.services.run_console.RunConsole.instance", lambda: inst,
+        )
+        resp = client.post(
+            f"/api/v1/ai-assistant/actions/{action.id}/cancel", headers=admin_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        # cancel(True) 后 endpoint refresh 时 finalize 可能尚未竞速 —— 状态是
+        # 「当时事实」；断言不谎报为成功之外的东西即可
+        assert resp.json()["data"]["status"] in ("running", "cancelled")
