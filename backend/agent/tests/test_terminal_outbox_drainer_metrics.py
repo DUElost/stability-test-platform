@@ -49,6 +49,7 @@ def test_terminal_payload_conflict_is_retained_even_when_job_is_terminal():
         {"job_id": 42, "payload": {"update": {"status": "FAILED"}}},
     ]
     local_db.prune_acked_terminals.return_value = None
+    local_db.bump_terminal_attempt.return_value = 1
     response = MagicMock(status_code=409)
     response.json.return_value = {
         "detail": {

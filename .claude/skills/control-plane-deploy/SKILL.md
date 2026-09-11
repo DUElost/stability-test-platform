@@ -158,3 +158,18 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-08-31 | 坑表补「热更新清带外资源」：rsync --delete 清 resources/ 非 exclude 目录（sleep/powercycle/gpu 带外 APK 实测被抹），带外资源须在最终热更新后放置 | #462 三专项部署实操 |
 | 2026-08-30 | 新增部署源守卫步骤（§1 step 2/4 前各一行 `tools/dev/check-deploy-source.sh`）：共享工作树曾跑在未合入分支上被推上生产，重启前强制校验 HEAD==main 且工作区干净；已装 systemd unit 另加 `ExecStartPre=-` 兜底（失败仅记日志不中断） | 2026-08-30 事故复盘 + PR |
 | （下次真实部署） | | |
+
+## 踩坑守卫（负向约束）
+
+- 部署源守卫（`tools/dev/check-deploy-source.sh`）不过就停：非 `main` 或有未提交改动
+  时禁止继续部署（共享工作树曾跑在未合入分支上被推上生产）；
+- **禁止直连生产库手动 `alembic upgrade`**——迁移走代码与 PR 流程（§1 step 3）；
+- scan `conflicts` 出现时先 `sha256sum` 比对磁盘 vs DB，再决定是否
+  `?force_rebaseline=true`（且需无在途 PlanRun）；seed 预建版本 created=0/skipped 是
+  正常，勿误判未注册（§2）；
+- 热更新会抹掉 host 上手工放入 agent 树的文件（如临时 .so）——部署前确认无此类残留
+  （§3）；
+- **不要**在 hot-update 未返回成功时抢 `reload_config`（曾致 event_uploader 读到旧
+  flag）；
+- 版本门控顺序强制：先推 Agent → 确认 `agent_code_sync_status` 多 matched → 再设
+  `STP_AGENT_MIN_VERSION`；反序会让旧 Agent claim 426、PENDING 积压（§4）。

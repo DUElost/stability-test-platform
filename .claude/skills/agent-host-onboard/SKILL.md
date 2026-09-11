@@ -208,7 +208,9 @@ STP_AEE_CIFS_ROOT=/mnt/stp-aee
 MOUNT_POINTS=/mnt/stp-aee
 ```
 
-**禁止误配**：
+## 踩坑守卫（负向约束）
+
+**env 误配对照表**：
 
 | 键 | 说明 |
 |---|---|
@@ -216,6 +218,16 @@ MOUNT_POINTS=/mnt/stp-aee
 | `AUTO_REGISTER_HOST=true` | 生产禁用；`HOST_ID` 须与 DB 对齐 |
 | 留空 `STP_AEE_LOCAL_ROOT` | AEE Reconciler 不启动，storage 页日志盘「未上报」 |
 | 留空 `MOUNT_POINTS` | storage 页中心存储「未上报」（即使 NFS 已 mount） |
+
+**其他**：
+
+- 设备节点名因机型而异（`sda`/`sdb`）——**必须以 `lsblk` 为准，勿盲抄**；分区勿用
+  `parted`（新机常未装）；
+- `agent_host_id` **必须**与 DB `hosts.id` 一致（不传则 install 脚本自行生成，易错位）；
+- 挂载 UNC 路径勿硬编码，以老机实际 `mount` 为参照值；fstab 挂载须在 Agent 安装前后
+  手工完成；
+- WSL 联调用 5039、Linux 生产 host 用 5037——双 ADB server 会 DEGRADED
+  （`adb kill-server` 后统一 5037）。
 
 改完后：
 

@@ -120,11 +120,48 @@ def _resolve_known_hosts_path(explicit: str = "") -> Path:
     return Path.home() / ".ssh" / "known_hosts"
 
 
-def trust_host_key(ip: str, port: int = 22, known_hosts_path: str = "", timeout: int = 10) -> tuple[bool, str]:
+def host_key_fingerprints(known_host_lines: list[str]) -> list[str]:
+    """known_hosts 行的 SHA256 指纹列表（``SHA256:<base64>``，ssh-keygen 风格）。
+
+    #908：换钥审计与拒绝原因需要可比对的稳定指纹（行内含网络地址，不能直接
+    进审计文本对比）。
+    """
+    import base64
+    import hashlib
+
+    fingerprints: list[str] = []
+    for line in known_host_lines:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            blob = base64.b64decode(parts[2], validate=True)
+        except Exception:  # noqa: BLE001 - 非法行不阻塞指纹提取
+            continue
+        digest = hashlib.sha256(blob).digest()
+        fingerprints.append(
+            "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
+        )
+    return fingerprints
+
+
+def trust_host_key(
+    ip: str,
+    port: int = 22,
+    known_hosts_path: str = "",
+    timeout: int = 10,
+    *,
+    allow_replace: bool = False,
+) -> tuple[bool, str]:
     """Best-effort ssh-keyscan of (ip, port) appended to known_hosts.
 
     Returns (ok, reason). Never raises — failures are captured so callers can
     surface a warning without blocking host creation.
+
+    #908（R02-R02）：**已存在不同主机密钥时不静默覆盖**——默认拒绝并返回
+    ``host key changed``（含新旧指纹）；调用方（管理员）显式传
+    ``allow_replace=True`` 才替换，返回 ``replaced old=<fp> new=<fp>`` 供审计。
+    首次信任（无既有条目）与同键重扫不受影响。
     """
     ip = (ip or "").strip()
     if not ip:
@@ -148,16 +185,39 @@ def trust_host_key(ip: str, port: int = 22, known_hosts_path: str = "", timeout:
         if not new_keys:
             return False, f"ssh-keyscan returned no keys (rc={keyscan.returncode})"
 
-        # Rewrite the file under an exclusive lock: drop prior entries for this
-        # host, then append the freshly-scanned keys.
+        # Rewrite the file under an exclusive lock: replace prior entries for
+        # this host (or refuse when the key changed without explicit consent).
         port_token = f"[{ip}]:{port}" if port and port != 22 else None
+
+        def _host_token(line: str) -> str:
+            return line.split(" ", 1)[0] if line.strip() else ""
+
+        result_reason = "ok"
         with open(path, "r+", encoding="utf-8") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX)
             try:
                 existing = fh.read().splitlines()
+                prior_for_host = [
+                    ln for ln in existing
+                    if _host_token(ln) == ip
+                    or (port_token is not None and _host_token(ln) == port_token)
+                ]
+                if prior_for_host and set(prior_for_host) != set(new_keys):
+                    old_fp = ", ".join(host_key_fingerprints(prior_for_host))
+                    new_fp = ", ".join(host_key_fingerprints(new_keys))
+                    if not allow_replace:
+                        # 保持原条目不动 —— 不做无法审计的信任替换
+                        return False, (
+                            f"host key changed for {ip}:{port} "
+                            f"(existing {old_fp} -> scanned {new_fp}); "
+                            "explicit replace required"
+                        )
+                    result_reason = f"replaced old={old_fp} new={new_fp}"
+
                 kept = [
                     ln for ln in existing
-                    if ln.split(" ", 1)[0] != ip and (port_token is None or ln.split(" ", 1)[0] != port_token)
+                    if _host_token(ln) != ip
+                    and (port_token is None or _host_token(ln) != port_token)
                 ]
                 merged = kept + new_keys
                 fh.seek(0)
@@ -166,7 +226,7 @@ def trust_host_key(ip: str, port: int = 22, known_hosts_path: str = "", timeout:
                 fh.flush()
             finally:
                 fcntl.flock(fh, fcntl.LOCK_UN)
-        return True, "ok"
+        return True, result_reason
     except Exception as exc:  # noqa: BLE001 — best-effort, never raise
         return False, f"{type(exc).__name__}: {exc}"
 

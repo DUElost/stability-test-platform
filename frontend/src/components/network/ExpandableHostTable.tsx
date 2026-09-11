@@ -60,6 +60,11 @@ export interface HostTableData {
   resources?: HostResources;
   mount_status?: MountStatus[];
   device_count?: number;
+  /**
+   * lsusb 枚举到的疑似 Android 设备数（物理 USB 侧，与 device_count 的 adb 口径
+   * 并排对照）。null / undefined = 未采集到，渲染为「—」而非 0。
+   */
+  usb_device_count?: number | null;
   /** Tooltip: adb/lease exclusions from device list (frontend-derived). */
   claim_hint?: string | null;
   active_tasks?: number;
@@ -337,7 +342,7 @@ export function ExpandableHostTable({
                 <TableHead className="w-10"></TableHead>
                 <TableHead className="min-w-[150px] font-medium">主机</TableHead>
                 <TableHead className="min-w-[104px] font-medium">状态</TableHead>
-                <TableHead className="min-w-[112px] font-medium text-center whitespace-nowrap">设备 / 任务</TableHead>
+                <TableHead className="min-w-[188px] font-medium text-center whitespace-nowrap">设备 / 任务</TableHead>
                 <TableHead className="min-w-[156px] font-medium 2xl:hidden">资源</TableHead>
                 <TableHead className="hidden min-w-[112px] font-medium 2xl:table-cell">CPU</TableHead>
                 <TableHead className="hidden min-w-[112px] font-medium 2xl:table-cell">内存</TableHead>
@@ -429,10 +434,39 @@ export function ExpandableHostTable({
                               'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
                               (host.device_count || 0) > 0 ? 'bg-primary/10 text-primary' : 'bg-muted/50 text-muted-foreground'
                             )}
-                            title={host.claim_hint ?? '在线设备数'}
+                            title={host.claim_hint ?? '在线设备数（来源：adb devices）'}
                           >
                             在线 {host.device_count || 0}
                           </span>
+                          {(() => {
+                            // lsusb 对照值：与「在线」(adb devices) 并排，差值即 ADB
+                            // 未枚举到的物理设备。未采集显示「—」，不伪装成 0。
+                            const usb = host.usb_device_count;
+                            const known = typeof usb === 'number' && Number.isFinite(usb);
+                            const adbCount = host.device_count || 0;
+                            const mismatch = known && usb > adbCount;
+                            return (
+                              <span
+                                className={cn(
+                                  'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
+                                  !known
+                                    ? 'bg-muted/50 text-muted-foreground'
+                                    : mismatch
+                                      ? 'bg-warning/10 text-warning'
+                                      : 'bg-muted/50 text-muted-foreground'
+                                )}
+                                title={
+                                  !known
+                                    ? 'USB 设备数未采集到（lsusb 不可用或采集失败）'
+                                    : mismatch
+                                      ? `USB 枚举 ${usb} 台 > ADB 在线 ${adbCount} 台：设备在 USB 上但 ADB 未枚举，可能存在授权/驱动/多 ADB server 问题（来源：lsusb）`
+                                      : `USB 枚举到的疑似 Android 设备数（来源：lsusb），与 ADB 在线数对照`
+                                }
+                              >
+                                USB {known ? usb : '—'}
+                              </span>
+                            );
+                          })()}
                           <span className={cn(
                             'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
                             (host.active_tasks || 0) > 0 ? 'bg-info/10 text-info' : 'bg-muted/50 text-muted-foreground'

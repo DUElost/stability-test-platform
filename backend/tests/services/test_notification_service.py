@@ -418,3 +418,193 @@ def test_dispatch_retryable_failure_raises_with_outcome(monkeypatch):
         )
     assert ei.value.failed[0]["outcome"] == DeliveryOutcome.UNKNOWN.value
     assert ei.value.failed[0]["retryable"] is True
+
+
+# ── #1167 P3（D4/D7）：SAQ 唯一 retry owner + 降级路径 ─────────────────────
+
+
+def test_dispatch_async_enqueues_saq(monkeypatch):
+    """入队成功 → 不再走线程池；key 含事件身份（去重键）。"""
+    from backend.tasks import saq_worker as sw
+
+    captured: dict = {}
+
+    def fake_enqueue(task_name, **kwargs):
+        captured["task"] = task_name
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(sw, "enqueue_sync", fake_enqueue)
+    pool_called = {"v": False}
+    monkeypatch.setattr(
+        "backend.core.thread_pool.submit",
+        lambda *a, **k: pool_called.update(v=True),
+    )
+
+    mod.dispatch_notification_async("RUN_FAILED", {"run_id": 42, "device_serial": "D"})
+
+    assert captured["task"] == "send_notification_task"
+    assert captured["key"] == "notif:RUN_FAILED:42:D"
+    assert captured["retries"] == 3
+    assert captured["event_type"] == "RUN_FAILED"
+    assert pool_called["v"] is False, "入队成功不得再走线程池"
+
+
+def test_dispatch_async_falls_back_to_pool_when_saq_unavailable(monkeypatch):
+    """SAQ 未运行（enqueue 返回 False）→ 降级 best-effort 线程池，不外溢。"""
+    from backend.tasks import saq_worker as sw
+
+    monkeypatch.setattr(sw, "enqueue_sync", lambda *a, **k: False)
+    submitted: dict = {}
+    monkeypatch.setattr(
+        "backend.core.thread_pool.submit",
+        lambda fn, *a, **k: submitted.update(fn=fn),
+    )
+
+    mod.dispatch_notification_async("DEVICE_OFFLINE", {"device_serial": "D"})
+
+    assert "fn" in submitted, "降级路径必须提交线程池"
+
+
+def test_dispatch_async_swallows_enqueue_exception(monkeypatch):
+    """enqueue 抛异常（Redis 故障）→ 记日志 + 降级线程池，不向调用方外溢。"""
+    from backend.tasks import saq_worker as sw
+
+    def boom(*a, **k):
+        raise RuntimeError("redis down")
+
+    monkeypatch.setattr(sw, "enqueue_sync", boom)
+    submitted: dict = {}
+    monkeypatch.setattr(
+        "backend.core.thread_pool.submit",
+        lambda fn, *a, **k: submitted.update(fn=fn),
+    )
+
+    mod.dispatch_notification_async("RUN_COMPLETED", {"run_id": 1})
+
+    assert "fn" in submitted
+
+
+# ── #1167 P4（D3/D6）：事实表落库 + 权威读取 + 每通道 deadline ─────────────
+
+
+def test_channel_deadline_env_override(monkeypatch):
+    assert mod._channel_deadline("STP_NOTIFY_NO_SUCH_TIMEOUT_S", 10.0) == 10.0
+    monkeypatch.setenv("STP_NOTIFY_TEST_TIMEOUT_S", "3.5")
+    assert mod._channel_deadline("STP_NOTIFY_TEST_TIMEOUT_S", 10.0) == 3.5
+    monkeypatch.setenv("STP_NOTIFY_TEST_TIMEOUT_S", "not-a-number")
+    assert mod._channel_deadline("STP_NOTIFY_TEST_TIMEOUT_S", 10.0) == 10.0
+    monkeypatch.setenv("STP_NOTIFY_TEST_TIMEOUT_S", "0")
+    assert mod._channel_deadline("STP_NOTIFY_TEST_TIMEOUT_S", 10.0) == 1.0
+
+
+def test_delivery_facts_persist_and_attempt_count_increments(db_session, monkeypatch):
+    """真实 dispatch：首次插入事实行，重试在原行累加 attempt_count。"""
+    from backend.models.notification import (
+        AlertRule, ChannelType, NotificationChannel, NotificationDelivery,
+    )
+    from backend.services.notification_delivery import unknown
+
+    ch = NotificationChannel(
+        name="p4-facts", type=ChannelType.WEBHOOK,
+        config={"url": "http://p4.test/x"}, enabled=True,
+    )
+    db_session.add(ch)
+    db_session.flush()
+    db_session.add(AlertRule(
+        name="p4-facts-rule", event_type=EventType.RUN_FAILED,
+        channel_id=ch.id, enabled=True,
+    ))
+    db_session.commit()
+
+    monkeypatch.setattr(mod, "_emit_notification_socketio", lambda *a, **k: None)
+    outcomes = [unknown("timeout"), accepted("WEBHOOK", "HTTP 200")]
+    monkeypatch.setattr(mod, "send_to_channel", lambda c, m: outcomes.pop(0))
+
+    ctx = {"run_id": 1201, "task_id": 9, "device_serial": "P4D", "task_name": "t"}
+
+    with pytest.raises(mod.NotificationDeliveryError):
+        mod.dispatch_notification(EventType.RUN_FAILED.value, ctx)
+    db_session.expire_all()
+    row = db_session.query(NotificationDelivery).filter_by(channel_id=ch.id).one()
+    assert row.state == "retrying"
+    assert row.outcome == "UNKNOWN"
+    assert row.attempt_count == 1
+
+    mod.dispatch_notification(EventType.RUN_FAILED.value, ctx)
+    db_session.expire_all()
+    row = db_session.query(NotificationDelivery).filter_by(channel_id=ch.id).one()
+    assert row.state == "accepted"
+    assert row.outcome == "ACCEPTED"
+    assert row.attempt_count == 2
+
+
+def test_fact_table_is_authoritative_for_idempotency(db_session, monkeypatch):
+    """事实表行 ACCEPTED → 跳过该通道（即使 JSONB 无记录），不再发。"""
+    from backend.models.notification import (
+        AlertRule, ChannelType, NotificationChannel,
+        NotificationDelivery, NotificationLog,
+    )
+
+    ch = NotificationChannel(
+        name="p4-auth", type=ChannelType.WEBHOOK,
+        config={"url": "http://p4.test/auth"}, enabled=True,
+    )
+    db_session.add(ch)
+    db_session.flush()
+    db_session.add(AlertRule(
+        name="p4-auth-rule", event_type=EventType.RUN_FAILED,
+        channel_id=ch.id, enabled=True,
+    ))
+    ctx = {"run_id": 1202, "task_id": 9, "device_serial": "P4E", "task_name": "t"}
+    log = NotificationLog(
+        source=mod.NotificationSource.PLATFORM, event_type=EventType.RUN_FAILED.value,
+        severity=mod.NotificationSeverity.WARNING, title="t", message="m",
+        context=ctx,  # 注意：无 channel_delivery（模拟 P4 后只写表）
+    )
+    db_session.add(log)
+    db_session.flush()
+    db_session.add(NotificationDelivery(
+        notification_log_id=log.id, channel_id=ch.id, channel_type="WEBHOOK",
+        state="accepted", outcome="ACCEPTED", attempt_count=1,
+    ))
+    db_session.commit()
+
+    monkeypatch.setattr(mod, "_emit_notification_socketio", lambda *a, **k: None)
+    sent: list = []
+    monkeypatch.setattr(mod, "send_to_channel", lambda c, m: sent.append(c.id) or accepted())
+
+    mod.dispatch_notification(EventType.RUN_FAILED.value, ctx)
+    assert sent == [], "事实表 ACCEPTED 的通道不得重发"
+
+
+def test_legacy_jsonb_fallback_still_skips(db_session, monkeypatch):
+    """P4 历史日志（无表行）回落 JSONB：status ok 的通道仍不重发。"""
+    from backend.models.notification import (
+        AlertRule, ChannelType, NotificationChannel, NotificationLog,
+    )
+
+    ch = NotificationChannel(
+        name="p4-legacy", type=ChannelType.WEBHOOK,
+        config={"url": "http://p4.test/legacy"}, enabled=True,
+    )
+    db_session.add(ch)
+    db_session.flush()
+    db_session.add(AlertRule(
+        name="p4-legacy-rule", event_type=EventType.RUN_COMPLETED,
+        channel_id=ch.id, enabled=True,
+    ))
+    ctx = {"run_id": 1203, "task_id": 9, "device_serial": "P4F", "task_name": "t"}
+    db_session.add(NotificationLog(
+        source=mod.NotificationSource.PLATFORM, event_type=EventType.RUN_COMPLETED.value,
+        severity=mod.NotificationSeverity.INFO, title="t", message="m",
+        context={**ctx, "channel_delivery": {str(ch.id): {"status": "ok"}}},
+    ))
+    db_session.commit()
+
+    monkeypatch.setattr(mod, "_emit_notification_socketio", lambda *a, **k: None)
+    sent: list = []
+    monkeypatch.setattr(mod, "send_to_channel", lambda c, m: sent.append(c.id) or accepted())
+
+    mod.dispatch_notification(EventType.RUN_COMPLETED.value, ctx)
+    assert sent == [], "历史 JSONB 记录回落判定不得重发"
