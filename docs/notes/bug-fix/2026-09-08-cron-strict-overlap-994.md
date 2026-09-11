@@ -15,6 +15,10 @@ Class: bug-fix
 - `_fire_schedule` 重叠判定：`PlanRun.status in (QUEUED, PRECHECK, RUNNING)` 即
   跳过本窗口（去掉 `started_at` 年龄阈值与 `PATROL_TIMEOUT_MINUTES` 死常量）；
   跳过仅推进 `next_run_at`、不写 `last_run_at`、**不补跑**；
+  查询用 `limit(1)` + `.scalars().all()`（语义等价于 `first()`）：与既有 mock 单测
+  `backend/agent/tests/test_cron_scheduler.py` 的 `scalars().all()` 契约兼容，
+  避免跨会话改他单测试文件（首版用 `first()` 在其 fake db 上恒 truthy → CI 变红，
+  已修）；
 - 抖动去重（同 schedule 60s）与 fail-closed 语义/顺序不变；
 - 文档：`docs/design/06-realtime-and-background.md` §3 新增「Cron 防重叠策略」
   小节（两级判定、长跑不豁免、错过不补跑、补跑用 CHAIN/手动触发）；

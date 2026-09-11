@@ -149,7 +149,7 @@ async def _fire_schedule(db, sched: "TaskSchedule", now: datetime) -> None:
                 )
                 .limit(1)
             )
-            if active_result.scalars().first() is not None:
+            if active_result.scalars().all():
                 logger.info(
                     "cron_skip_overlap schedule_id=%s plan_id=%s — "
                     "同 Plan 存在非终态 Run（严格防重叠，不排队）",
