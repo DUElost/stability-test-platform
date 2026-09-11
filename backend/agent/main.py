@@ -1434,6 +1434,15 @@ def main() -> None:
                             )
                         except Exception:
                             logger.exception("submit_failed job=%d device=%s", job["id"], device_id)
+                            # #801: submit 失败的作业不会进引擎——补记 barrier
+                            # 到达，避免同 wave peer 空等 barrier_timeout。
+                            from backend.agent.job_runner import (
+                                _arrive_patrol_barrier_preengine,
+                            )
+
+                            _arrive_patrol_barrier_preengine(
+                                job, coordinator, job["id"],
+                            )
                             _deregister_active_job(
                                 job["id"],
                                 job.get("fencing_token", ""),

@@ -71,8 +71,12 @@ def auto_register_host(api_url: str, host_info: Dict[str, Any]) -> str:
         )
         return host_id
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response else None
-        body = exc.response.text[:500] if exc.response else None
+        # #763: requests.Response.__bool__ 是 ok 别名（4xx/5xx 恒假）——真值
+        # 判断会把 status/body 记成 None，故障定位无法区分服务端拒绝与网络异常。
+        status_code = (
+            exc.response.status_code if exc.response is not None else None
+        )
+        body = exc.response.text[:500] if exc.response is not None else None
         logger.error(
             "auto_register_host_failed: status=%s, body=%s, error=%s",
             status_code,
