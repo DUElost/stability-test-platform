@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,26 @@ def _get_lock(job_id: int) -> asyncio.Lock:
 
 def _log_path(job_id: int) -> Path:
     return LOG_BASE_DIR / "jobs" / str(job_id) / "console.log"
+
+
+def purge_job_log_files(job_ids: Iterable[int]) -> int:
+    """#798: 删除这些 job 的 console.log 目录与内存锁条目。
+
+    retention（cron_scheduler.run_retention_cleanup）删除 Run 行后调用——
+    否则 `{LOG_BASE_DIR}/jobs/*` 与 `_locks` 随历史运行无界增长（系统盘）。
+    best-effort：文件删除失败只告警，不影响 DB 侧已完成的事务。
+    """
+    removed = 0
+    for job_id in {int(j) for j in job_ids}:
+        path = LOG_BASE_DIR / "jobs" / str(job_id)
+        try:
+            if path.exists():
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+        except Exception:
+            logger.warning("log_writer_purge_job_failed job=%s", job_id)
+        _locks.pop(job_id, None)
+    return removed
 
 
 async def append_log_line(
