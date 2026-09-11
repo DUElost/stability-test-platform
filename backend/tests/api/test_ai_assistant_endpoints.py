@@ -1333,3 +1333,284 @@ class TestCancelActionHonesty:
         # cancel(True) 后 endpoint refresh 时 finalize 可能尚未竞速 —— 状态是
         # 「当时事实」；断言不谎报为成功之外的东西即可
         assert resp.json()["data"]["status"] in ("running", "cancelled")
+
+
+# ── #1220（R13-F08）：持久化历史按完整工具交互组修复 ──────────────────────
+
+
+class TestSanitizeToolHistory:
+    def _seed(self, db_session, user_id, rows):
+        s = AiChatSession(user_id=user_id)
+        db_session.add(s)
+        db_session.flush()
+        for role, content, tool_calls, tool_call_id in rows:
+            db_session.add(AiChatMessage(
+                session_id=s.id, role=role, content=content,
+                tool_calls=tool_calls or [], tool_call_id=tool_call_id,
+            ))
+        db_session.commit()
+        return s
+
+    def _assistant(self, call_ids, content=""):
+        return (
+            "assistant", content,
+            [{"id": cid, "name": "reload_agent_config", "arguments": {}} for cid in call_ids],
+            None,
+        )
+
+    def _tool(self, call_id, content="ok"):
+        return ("tool", content, [], call_id)
+
+    def _user(self, content):
+        return ("user", content, [], None)
+
+    def test_truncation_orphan_tool_becomes_user_receipt(self, auth_headers, db_session):
+        """前驱 assistant(tool_calls) 被截断 → 孤儿 tool 转 user 回执（不丢内容）。"""
+        from backend.services.ai_assistant.orchestrator import _history_as_llm_messages
+
+        user_id = db_session.query(User).filter(User.role != "admin").first().id
+        rows = [self._assistant(["t1"]), self._user("中间对话")] + [
+            self._user(f"填充 {i}") for i in range(25)
+        ] + [self._tool("t1")]
+        s = self._seed(db_session, user_id, rows)
+
+        msgs = _history_as_llm_messages(db_session, s.id)
+        assert not any(m["role"] == "tool" for m in msgs), "孤儿 tool 不得直发"
+        receipts = [m for m in msgs if m["role"] == "user" and m["content"].startswith("[执行回执]")]
+        assert len(receipts) == 1 and "ok" in receipts[0]["content"]
+
+    def test_user_receipt_between_group_is_reordered(self, auth_headers, db_session):
+        """assistant(tool_calls) → user 回执 → tool 的错误顺序被修复为组内紧随。"""
+        from backend.services.ai_assistant.orchestrator import _history_as_llm_messages
+
+        user_id = db_session.query(User).filter(User.role != "admin").first().id
+        rows = [
+            self._user("触发"),
+            self._assistant(["t1"], "我来执行"),
+            self._user("[执行回执] 中间插入的回执"),
+            self._tool("t1"),
+        ]
+        s = self._seed(db_session, user_id, rows)
+
+        msgs = _history_as_llm_messages(db_session, s.id)
+        roles = [m["role"] for m in msgs]
+        assert roles == ["user", "assistant", "tool", "user"], roles
+        assert msgs[2]["tool_call_id"] == "t1"
+
+    def test_missing_response_drops_tool_calls(self, auth_headers, db_session):
+        """响应被截断 → assistant 丢 tool_calls 保留 content；已有响应转 user。"""
+        from backend.services.ai_assistant.orchestrator import _history_as_llm_messages
+
+        user_id = db_session.query(User).filter(User.role != "admin").first().id
+        # t1 无响应（被截断），t2 有响应
+        rows = [
+            self._user("触发"),
+            self._assistant(["t1", "t2"], "我来执行"),
+            self._tool("t2"),
+        ]
+        s = self._seed(db_session, user_id, rows)
+
+        msgs = _history_as_llm_messages(db_session, s.id)
+        asst = [m for m in msgs if m["role"] == "assistant"]
+        assert len(asst) == 1
+        assert "tool_calls" not in asst[0], "缺响应时不得保留 tool_calls"
+        assert asst[0]["content"] == "我来执行"
+        assert any(m["role"] == "user" and "[执行回执] ok" in m["content"] for m in msgs)
+
+    def test_complete_group_stays_intact(self, auth_headers, db_session):
+        """完整交互组不受影响（正常路径回归）。"""
+        from backend.services.ai_assistant.orchestrator import _history_as_llm_messages
+
+        user_id = db_session.query(User).filter(User.role != "admin").first().id
+        rows = [
+            self._user("触发"),
+            self._assistant(["t1"], "我来执行"),
+            self._tool("t1"),
+            self._user("好的"),
+        ]
+        s = self._seed(db_session, user_id, rows)
+
+        msgs = _history_as_llm_messages(db_session, s.id)
+        roles = [m["role"] for m in msgs]
+        assert roles == ["user", "assistant", "tool", "user"]
+        assert msgs[1]["tool_calls"][0]["id"] == "t1"
+
+
+class TestR13P2AssistantFixes:
+    """#1221 / #1224 / #1225 / #1227 回归。"""
+
+    def test_reject_writes_receipt_with_fact(self, client, admin_headers, test_user, db_session, monkeypatch):
+        """#1221: 拒绝必须在会话写入拒绝回执，续轮历史可见拒绝事实。"""
+        monkeypatch.setattr(
+            "backend.api.routes.ai_assistant._enqueue_continuation_sync",
+            lambda sid: None,
+        )
+        user = test_user
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.flush()
+        action = AiAssistantAction(
+            session_id=s.id, tool_name="test_notification_channel", params={"channel_id": 1},
+            status="proposed", requested_by_user_id=user.id,
+        )
+        db_session.add(action)
+        db_session.commit()
+
+        resp = client.post(
+            f"/api/v1/ai-assistant/actions/{action.id}/reject", headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.text
+
+        msgs = (
+            db_session.query(AiChatMessage)
+            .filter(AiChatMessage.session_id == s.id, AiChatMessage.role == "tool")
+            .all()
+        )
+        assert msgs, "拒绝应写入回执消息"
+        assert any("拒绝" in m.content for m in msgs)
+
+        from backend.services.ai_assistant import orchestrator as orch
+
+        history = orch._history_as_llm_messages(db_session, s.id)
+        text = " ".join(str(m.get("content") or "") for m in history)
+        assert "拒绝" in text, "续轮历史必须包含拒绝事实"
+
+    def test_action_lifecycle_audited(self, db_session, admin_user, monkeypatch):
+        """#1224: 提案 / 执行开始 / 执行结束都有审计事件。"""
+        from backend.services.ai_assistant import orchestrator as orch
+
+        class _Shared:
+            def __init__(self, s):
+                self._s = s
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+        monkeypatch.setattr(orch, "_enqueue_continuation", lambda sid: None)
+        monkeypatch.setattr(
+            orch, "_run_service_tool",
+            lambda name, params, **kw: "ok",
+        )
+
+        s = AiChatSession(user_id=admin_user.id)
+        db_session.add(s)
+        db_session.commit()
+
+        action = orch._create_action(
+            db_session, s, tool_name="test_notification_channel",
+            arguments={"channel_id": 1}, mode="proposed",
+        )
+        assert (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "ai_assistant_action_proposed")
+            .count() == 1
+        )
+
+        # approve then execute
+        action.status = "approved"
+        db_session.commit()
+        orch.execute_action(action.id)
+        actions = {
+            r.action
+            for r in db_session.query(AuditLog)
+            .filter(AuditLog.resource_id == str(action.id))
+            .all()
+        }
+        assert "ai_assistant_action_executing" in actions
+        assert "ai_assistant_action_finished" in actions
+
+    def test_connection_test_requires_tool_calling(self, client, admin_headers, db_session, monkeypatch):
+        """#1225: 不支持 tools 的上游测连接失败并说明原因。"""
+        _configure(db_session)
+        from backend.services.ai_assistant.llm_client import AssistantReply
+
+        class NoToolsClient:
+            def __init__(self, **kw):
+                pass
+
+            async def chat(self, messages, **kw):
+                return AssistantReply(content="pong", tool_calls=[])
+
+        monkeypatch.setattr(
+            "backend.api.routes.ai_assistant.LlmClient", NoToolsClient
+        )
+        resp = client.post(
+            "/api/v1/ai-assistant/config/test-connection", headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["ok"] is False
+        assert "tool_calling_unsupported" in (data["error"] or "")
+
+    def test_connection_test_ok_when_tool_calling_works(self, client, admin_headers, db_session, monkeypatch):
+        """#1225: 支持 tools 的上游测连接成功。"""
+        _configure(db_session)
+        from backend.services.ai_assistant.llm_client import AssistantReply, ToolCallRequest
+
+        class ToolsClient:
+            def __init__(self, **kw):
+                pass
+
+            async def chat(self, messages, **kw):
+                assert kw.get("tools"), "预检必须携带工具声明"
+                return AssistantReply(
+                    content="",
+                    tool_calls=[ToolCallRequest(id="1", name="preflight_ping", arguments={})],
+                )
+
+        monkeypatch.setattr(
+            "backend.api.routes.ai_assistant.LlmClient", ToolsClient
+        )
+        resp = client.post(
+            "/api/v1/ai-assistant/config/test-connection", headers=admin_headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["ok"] is True
+
+    def test_auto_continuation_budget_stops_chain(self, db_session, test_user, monkeypatch):
+        """#1227: 超过累计预算后不再入队，占位收敛为用户可见失败。"""
+        from backend.services.ai_assistant import orchestrator as orch
+
+        cfg = AiAssistantConfig(id=1)
+        cfg.max_auto_continuations = 2
+        cfg.max_turns = 2
+        cfg.request_timeout_seconds = 10
+        db_session.add(cfg)
+        s = AiChatSession(user_id=test_user.id, auto_continuation_count=2)
+        db_session.add(s)
+        db_session.flush()
+        db_session.add(
+            AiChatMessage(session_id=s.id, role="assistant", content="", status="pending")
+        )
+        db_session.commit()
+
+        class _Shared:
+            def __init__(self, sess):
+                self._s = sess
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+        # 若预算生效，则不会调用 enqueue；若被调用则测试失败
+        monkeypatch.setattr(
+            "backend.tasks.saq_worker.enqueue_sync",
+            lambda *a, **k: pytest.fail("超预算不应再入队"),
+        )
+
+        orch._enqueue_continuation(s.id)
+
+        placeholder = (
+            db_session.query(AiChatMessage)
+            .filter(AiChatMessage.session_id == s.id, AiChatMessage.role == "assistant")
+            .one()
+        )
+        assert placeholder.status == "failed"
+        assert "上限" in (placeholder.meta or {}).get("error", "")

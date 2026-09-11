@@ -35,6 +35,11 @@ class AiAssistantConfig(Base):
     enabled = Column(Boolean, nullable=False, default=False, server_default="false")
     temperature = Column(Float, nullable=False, default=0.2, server_default="0.2")
     max_turns = Column(Integer, nullable=False, default=8, server_default="8")
+    # R13-R01 (#1227): 自动执行链的累计续轮上限（跨单个轮次任务的预算），
+    # 防止模型持续要求运行 T1 时无限自动续轮。
+    max_auto_continuations = Column(
+        Integer, nullable=False, default=20, server_default="20"
+    )
     request_timeout_seconds = Column(Integer, nullable=False, default=120, server_default="120")
     # T1 收回开关：true = 测试门禁类工具也走审批
     t1_require_confirm = Column(Boolean, nullable=False, default=False, server_default="false")
@@ -56,6 +61,10 @@ class AiChatSession(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(200), nullable=False, default="", server_default="")
+    # R13-R01 (#1227): 自最近一次用户消息以来的自动续轮次数（用户发消息时清零）。
+    auto_continuation_count = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at = Column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )

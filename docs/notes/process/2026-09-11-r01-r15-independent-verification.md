@@ -6,9 +6,9 @@ Class: process
 ## Decision
 
 新增只读审计报告
-[`docs/reviews/REVIEW_INDEPENDENT_VERIFICATION_2026-09-11_4a955874.md`](../../reviews/REVIEW_INDEPENDENT_VERIFICATION_2026-09-11_4a955874.md)，
+[`docs/reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_b77c27-verification.md`](../../reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_b77c27-verification.md)，
 作为"R01–R15 之后"元审查的**独立第二意见**，与已合入的
-[`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fb87d5f1.md`](../../reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fb87d5f1.md)
+[`REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fdca41.md`](../../reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_fdca41.md)
 （`CA-*` 编号）同题独立完成，供综合轮按 Mode C「先独立、后汇聚」并表。本文使用 `IV-*` 前缀避免编号冲突。
 
 三项独立结论（不是复述 `CA-*`）：
