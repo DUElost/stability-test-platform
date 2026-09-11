@@ -388,6 +388,7 @@ class JobSession:
                 platform=platform,
                 device_log_client=device_log_client,
                 platform_collector=get_collector_for_platform(platform),
+                on_self_shutdown=self._make_reconciler_self_shutdown_callback(),
             )
             if not self._reconciler.start():
                 self._reconciler = None
@@ -404,6 +405,24 @@ class JobSession:
                     self._handle.impl.set_aee_reconciler_active(False)
             except Exception:
                 pass
+
+    def _make_reconciler_self_shutdown_callback(self):
+        """#806：reconciler 连续错误自关闭 → watcher 复位 emit 抑制位。
+
+        与启动失败回滚同路（`set_aee_reconciler_active(False)`）：否则 reconciler
+        停摆后 watcher 仍抑制 AEE/VENDOR_AEE 信号与 DLE 注册，该 Job 余下生命
+        周期信号静默全黑（#72 现场要消灭的盲区形态）。
+        """
+        def _callback() -> None:
+            try:
+                if self._handle is not None and self._handle.impl is not None:
+                    self._handle.impl.set_aee_reconciler_active(False)
+            except Exception:
+                logger.exception(
+                    "aee_reconciler_watcher_reset_failed job_id=%d", self._job_id,
+                )
+
+        return _callback
 
     def _reconciler_signal_emitter(self):
         """Prefer watcher emitter; UNISOC degraded path builds a standalone one (#1043)."""
