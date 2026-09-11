@@ -27,6 +27,9 @@ class UnisocScanRunner:
         self._result_python = ""
         self._result_script = ""
         self._configured = False
+        # #805-5：记录最近一次 log_scan_gt 是否超时（超时=工具被 runner 主动
+        # 终止，此时产物可能是半成品），供后续完整性校验/降级使用。
+        self._last_scan_timed_out = False
 
     @classmethod
     def instance(cls) -> "UnisocScanRunner":
@@ -95,6 +98,13 @@ class UnisocScanRunner:
         if not uploader.is_configured():
             return
         uploader.upload_scan_report(plan_run_id, host_id, org_xls, platform_subdir="unisoc")
+        if self._last_scan_timed_out:
+            # #805-5：超时终止后的原始 Result_*.xls 可能是半成品，跳过二次上送，
+            # 只保留经 scan_result 处理且通过完整性校验的 org 文件。
+            logger.warning(
+                "unisoc_scan_dedup_upload_skipped_after_timeout plan_run=%d", plan_run_id,
+            )
+            return
         dedup_candidates = [
             p for p in Path(scan_root).glob("**/*.xls")
             if p.name.endswith(".xls") and "_org.xls" not in p.name and "Result_" in p.name
@@ -116,6 +126,7 @@ class UnisocScanRunner:
         ]
 
     def _run_log_scan_gt(self, scan_root: str, plan_run_id: int, host_id: str) -> bool:
+        self._last_scan_timed_out = False
         argv = self._build_argv(scan_root=scan_root)
         cwd = str(Path(self._scan_script).parent)
         poll_s = int(os.getenv("STP_UNISOC_LOG_SCAN_POLL_SECONDS", "60") or "60")
@@ -133,6 +144,9 @@ class UnisocScanRunner:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
+            # 工具按设计持续轮询，runner 到点主动终止——属预期路径，但产物可能
+            # 是半成品（#805-5）：置标供上游只做「完整性校验通过」的上送。
+            self._last_scan_timed_out = True
             logger.info(
                 "unisoc_scan_gt_timeout plan_run=%d host=%s after=%ds (expected)",
                 plan_run_id, host_id, timeout,
@@ -166,6 +180,25 @@ class UnisocScanRunner:
             return None
         return self.run_scan_result(scan_root, plan_run_id, host_id)
 
+    @staticmethod
+    def _artifact_looks_complete(path: Path) -> bool:
+        """#805-5：产物非空且大小稳定（未被仍在写入的进程持续追加）。
+
+        超时终止后工具可能留半成品；只读一次 size 无法区分「写完了」与
+        「正写到一半」，短暂复读大小一致才认为落定。
+        """
+        import time as _time
+
+        try:
+            first = path.stat().st_size
+            if first <= 0:
+                return False
+            _time.sleep(0.2)
+            second = path.stat().st_size
+        except OSError:
+            return False
+        return first == second
+
     def run_scan_result(
         self, scan_root: str, plan_run_id: int, host_id: str,
     ) -> Optional[str]:
@@ -193,7 +226,14 @@ class UnisocScanRunner:
         if not org_files:
             logger.warning("unisoc_scan_result_no_org_xls plan_run=%d dir=%s", plan_run_id, scan_root)
             return None
-        return str(org_files[-1].resolve())
+        chosen = org_files[-1].resolve()
+        if self._last_scan_timed_out and not self._artifact_looks_complete(chosen):
+            logger.warning(
+                "unisoc_scan_result_incomplete_after_timeout plan_run=%d path=%s",
+                plan_run_id, chosen,
+            )
+            return None
+        return str(chosen)
 
 
 __all__ = ["UnisocScanRunner"]

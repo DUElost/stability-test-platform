@@ -940,15 +940,23 @@ class LocalDB:
             with self._conn:
                 # Sub-select ids that are NOT the max-seq row for their job.
                 # Those can safely be pruned when they fall outside keep_recent.
+                # #803: 守卫必须按 MAX(seq_no)（重启恢复口径 next_log_signal_
+                # seq_no 同源）——按 MAX(id) 会在 seq 分配序与 SQLite 行 id 序
+                # 相反（多写入方并发）时删掉 seq 最大行，重启复用已上送 seq，
+                # 后端 ON CONFLICT DO NOTHING 静默吞新信号。
                 cur = self._conn.execute(
                     "DELETE FROM log_signal_outbox "
                     "WHERE acked = 1 AND dead_letter = 0 "
                     "AND id NOT IN (SELECT id FROM log_signal_outbox "
                     "WHERE acked = 1 AND dead_letter = 0 ORDER BY id DESC LIMIT ?) "
                     "AND id NOT IN ("
-                    "  SELECT MAX(id) FROM log_signal_outbox "
+                    "  SELECT id FROM log_signal_outbox "
                     "  WHERE acked = 1 AND dead_letter = 0 "
-                    "  GROUP BY job_id"
+                    "  AND (job_id, seq_no) IN ("
+                    "    SELECT job_id, MAX(seq_no) FROM log_signal_outbox "
+                    "    WHERE acked = 1 AND dead_letter = 0 "
+                    "    GROUP BY job_id"
+                    "  )"
                     ")",
                     (keep_recent,),
                 )

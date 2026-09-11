@@ -42,6 +42,25 @@ cp .env.test.example .env.test   # 首次
 
 用户须在 `docker` 组（`permission denied` 时 `usermod -aG docker` 后重新登录），不要用生产 `DATABASE_URL` 代替测试库。
 
+### 测试容器与残留巡检（#1482）
+
+- 未设 `TEST_DATABASE_URL` → conftest **每进程起独立 `postgres:16` 容器**
+  （注意：`DATABASE_URL` 会被 conftest 覆盖，想固定库必须设
+  `TEST_DATABASE_URL`，且受 #1300 命名护栏约束）；
+- 被 kill/超时的 pytest 进程会**遗留容器**（实测存量 36 个、最老 >2 周）；
+- 巡检（只读）：
+
+  ```bash
+  python tools/dev/check_test_containers.py            # dry-run 报告 + 建议命令
+  python tools/dev/check_test_containers.py --strict   # 有残留时退出码 1
+  ```
+
+- 清理（**默认阈值 120 分钟**，只动疑似残留、不碰其他会话活跃实例）：
+
+  ```bash
+  python tools/dev/check_test_containers.py --prune
+  ```
+
 生产唯一 env 源是仓库根 `.env.backend`；`backend/.env` 是本地开发覆盖，不含生产
 `DATABASE_URL`。数据库代码通过 `backend/core/env_source.resolve_database_url`
 解析配置，没有生产连接串兜底。测试不得读取或复用 `.env.backend`。
