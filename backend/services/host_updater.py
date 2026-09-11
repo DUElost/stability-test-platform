@@ -348,13 +348,22 @@ else
     sudo systemctl restart "$SERVICE_NAME"
 fi
 
-# Verify service came back up
-sleep 2
-if systemctl is-active --quiet "$SERVICE_NAME"; then
-    echo "OK: service restarted successfully"
-else
-    echo "WARN: service may not be running, check: systemctl status $SERVICE_NAME"
+# Verify service came back up（#1253 / R14-F07：WARN 不算成功——systemd 接受
+# 重启但新进程立即崩溃时，必须让 API 得到 ok=False 而不是记录部署修订）。
+SERVICE_ACTIVE=0
+for i in 1 2 3 4 5; do
+    sleep 1
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        SERVICE_ACTIVE=1
+        break
+    fi
+done
+if [ "$SERVICE_ACTIVE" -ne 1 ]; then
+    systemctl --no-pager -l status "$SERVICE_NAME" | head -20 || true
+    echo "ERROR: service $SERVICE_NAME not active 5s after restart; check: systemctl status $SERVICE_NAME"
+    exit 1
 fi
+echo "OK: service restarted successfully"
 """
 
 
@@ -415,6 +424,19 @@ def _ssh_connect(host_ip: str, port: int, username: str,
     )
     sftp = client.open_sftp()
     return client, sftp
+
+
+def _remote_failure_message(stdout_text: str, exit_code: int) -> str:
+    """远程脚本失败时的 message：优先取脚本打的 ``ERROR:`` 行。
+
+    #1253：脚本 exit 1（如服务重启后 5s 仍未 active）时，API 的 message 必须
+    携带原因，而不是一句无法定位的 "Remote script failed (exit=1)"。
+    """
+    for line in stdout_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("ERROR:"):
+            return f"Remote script failed (exit={exit_code}): {stripped[:300]}"
+    return f"Remote script failed (exit={exit_code})"
 
 
 def _parse_deps_refreshed(stdout_text: str) -> bool:
@@ -570,7 +592,7 @@ def execute_hot_update(
                 logger.error("hot_update_remote_failed exit=%d stderr=%s", exit_code, err_text[:500])
                 return {
                     "ok": False,
-                    "message": f"Remote script failed (exit={exit_code})",
+                    "message": _remote_failure_message(out_text, exit_code),
                     "duration_ms": int((time.monotonic() - t0) * 1000),
                     "deps_refreshed": deps_refreshed,
                     "env_keys_synced": env_keys_synced,
