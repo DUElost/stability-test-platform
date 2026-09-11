@@ -233,6 +233,43 @@ def _identity_conflict_409(conflict: dict, *, action: str) -> HTTPException:
     )
 
 
+def _host_key_trust_label(ok: bool, reason: str) -> str:
+    """#908：主机密钥信任结果的对外标签。"""
+    if ok:
+        return "ok"
+    if "host key changed" in reason:
+        return "changed"
+    return f"failed: {reason}"
+
+
+def _audit_host_key_replace(
+    db: Session,
+    host,
+    ok: bool,
+    reason: str,
+    *,
+    request: Request,
+    user_id: int,
+    username: str,
+) -> None:
+    """#908：显式换钥的审计（含新旧 SHA256 指纹，reason 内已附）。
+
+    首次信任（ok/reason=ok）与拒绝替换不写审计——只有「确实执行了替换」才写。
+    """
+    if not (ok and reason.startswith("replaced ")):
+        return
+    record_audit(
+        db,
+        action="host_key_replaced",
+        resource_type="host",
+        resource_id=host.id,
+        details={"ip": host.ip, "port": host.ssh_port or 22, "change": reason},
+        user_id=user_id,
+        username=username,
+        request=request,
+    )
+
+
 @router.post("", response_model=HostOut)
 def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin), request: Request = None):
     conflict = _find_host_identity_conflict(db, name=payload.name, ip=payload.ip)
@@ -284,10 +321,16 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user
 
     # Best-effort ssh-keyscan so subsequent hot-update/install won't trip
     # paramiko.RejectPolicy. Failure is non-fatal — surfaced as a warning.
+    # #908：既有不同主机密钥默认拒绝静默覆盖；replace_host_key 显式换钥 + 审计。
     key_ok, key_reason = trust_host_key(
         host.ip or "", host.ssh_port or 22, host.ssh_known_hosts_path or "",
+        allow_replace=bool(payload.replace_host_key),
     )
-    host_key_trust = "ok" if key_ok else f"failed: {key_reason}"
+    _audit_host_key_replace(
+        db, host, key_ok, key_reason, request=request, user_id=current_user.id,
+        username=current_user.username,
+    )
+    host_key_trust = _host_key_trust_label(key_ok, key_reason)
     if not key_ok:
         logger.warning("host_key_trust_failed host=%s ip=%s reason=%s", host.id, host.ip, key_reason)
 
@@ -401,12 +444,18 @@ def update_host(
     db.refresh(host)
 
     # Re-scan host key only when IP or port actually changed.
+    # #908：换钥需显式确认（payload.replace_host_key），自动覆盖可审计。
     host_key_trust = None
     if host.ip != old_ip or host.ssh_port != old_port:
         key_ok, key_reason = trust_host_key(
             host.ip or "", host.ssh_port or 22, host.ssh_known_hosts_path or "",
+            allow_replace=bool(payload.replace_host_key),
         )
-        host_key_trust = "ok" if key_ok else f"failed: {key_reason}"
+        _audit_host_key_replace(
+            db, host, key_ok, key_reason, request=request,
+            user_id=current_user.id, username=current_user.username,
+        )
+        host_key_trust = _host_key_trust_label(key_ok, key_reason)
         if not key_ok:
             logger.warning("host_key_trust_failed host=%s ip=%s reason=%s", host.id, host.ip, key_reason)
 

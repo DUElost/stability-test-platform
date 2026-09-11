@@ -436,6 +436,28 @@ cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook p
 3. 成功：响应 `host_key_trust="ok"`；失败：`host_key_trust="failed: <reason>"` + 前端 info 提示，**不阻塞建主机**
 4. 失败时需手动 `ssh-keyscan -p <port> <ip> >> <known_hosts>` 后再热更新/安装
 
+### SSH 主机密钥信任与换钥（#908 / R02-R02）
+
+**信任模型**：控制面在**建主机/地址变更**时用 `ssh-keyscan` 建立首次信任
+（TOFU，trust-on-first-use）；此后所有连接走 paramiko `RejectPolicy`
+（连接期不再自动信任）。首次信任阶段没有独立的人工指纹核对通道——这是
+当前边界（中间人前提下首次信任不可防），换钥流程是本模型唯一的可用补偿。
+
+**换钥规则（2026-09-11 起）**：
+
+- known_hosts 已有该地址条目且与扫描结果**不同** → **默认拒绝静默替换**：
+  `trust_host_key` 返回 `host key changed ... explicit replace required`
+  （含新旧 `SHA256:` 指纹），文件保持不动；响应 `host_key_trust="changed"`；
+- 确认换钥（如主机重装、宿主更换）→ 建主机/更新主机请求带
+  `"replace_host_key": true`；替换后写审计 `host_key_replaced`
+  （details 含 `ip/port/换钥前后指纹`）；
+- 同键重扫（正常重试）不受影响，返回 `ok`；
+- 审计查询：`audit_log` 过滤 `action = "host_key_replaced"`。
+
+**为什么不是全自动**：「扫描到就用」等价于任何能应答该 IP 的一方都能自动
+获得信任；显式确认 + 指纹审计把换钥变成可追溯的管理员动作。代价是主机重装
+后需管理员勾选/传参一次——这是有意为之。
+
 ### 首次安装（UI 按钮）
 
 1. 主机行 `status != ONLINE` 时显示「首次安装」按钮（ONLINE 显示「热更新」）
