@@ -1,4 +1,5 @@
 import apiClient, { unwrapApiResponse } from './client';
+import { NO_TIMEOUT } from './timeouts';
 import type {
   ApiResponseEnvelope,
   AiActionLogEntry,
@@ -34,6 +35,8 @@ export const aiAssistant = {
     unwrapApiResponse(
       apiClient.post<ApiResponseEnvelope<AiConnectionTestResult>>(
         `${BASE}/config/test-connection`,
+        undefined,
+        { timeout: NO_TIMEOUT }, // #1199：模型连通性探测耗时不可控（LLM）
       ),
     ),
 
@@ -64,6 +67,7 @@ export const aiAssistant = {
       apiClient.post<ApiResponseEnvelope<AiChatMessage>>(
         `${BASE}/sessions/${sessionId}/messages`,
         { content },
+        { timeout: NO_TIMEOUT }, // #1199：LLM 推理长耗时，豁免应用层超时
       ),
     ),
 

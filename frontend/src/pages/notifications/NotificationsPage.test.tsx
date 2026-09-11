@@ -6,6 +6,7 @@ import NotificationsPage from './NotificationsPage';
 import type { AlertRule, NotificationChannel, NotificationLog } from '@/utils/api/types';
 
 const mocks = vi.hoisted(() => ({
+  role: 'admin' as 'admin' | 'user',
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
   confirm: vi.fn(),
   notifications: {
@@ -32,6 +33,9 @@ vi.mock('@/utils/api', async (importOriginal) => {
 
 vi.mock('@/hooks/useToast', () => ({ useToast: () => mocks.toast }));
 vi.mock('@/hooks/useConfirm', () => ({ useConfirm: () => mocks.confirm }));
+vi.mock('@/hooks/useAuthSession', () => ({
+  useAuthSession: () => ({ data: { id: 1, username: 'tester', role: mocks.role } }),
+}));
 
 const CHANNEL_WEBHOOK: NotificationChannel = {
   id: 1,
@@ -113,6 +117,7 @@ function cardOf(name: string): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.role = 'admin';
   mocks.confirm.mockResolvedValue(true);
   mocks.notifications.createChannel.mockResolvedValue({});
   mocks.notifications.updateChannel.mockResolvedValue({});
@@ -506,6 +511,45 @@ describe('NotificationsPage', () => {
     it('无记录时给出空态', async () => {
       renderPage('/notifications?tab=logs');
       expect(await screen.findByText('暂无通知记录')).toBeInTheDocument();
+    });
+  });
+
+  describe('角色分流（#1196）', () => {
+    it('普通用户只看到「通知记录」：不渲染配置页签、不请求配置端点', async () => {
+      mocks.role = 'user';
+      setData({ logs: [makeLog({ id: 1 })] });
+      renderPage();
+
+      // 只读通知历史内容可见
+      expect(await screen.findByText('PlanRun #1 失败')).toBeInTheDocument();
+      // 配置页签缺席
+      expect(screen.queryByText(/通知渠道/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/告警规则/)).not.toBeInTheDocument();
+      // 配置端点未被请求（后端 require_admin，避免 403 噪音）
+      expect(mocks.notifications.listChannels).not.toHaveBeenCalled();
+      expect(mocks.notifications.listRules).not.toHaveBeenCalled();
+      // 页头收窄为只读语义
+      expect(screen.getByText('平台通知历史（只读）')).toBeInTheDocument();
+    });
+
+    it('普通用户显式带 ?tab=channels 也落回通知记录', async () => {
+      mocks.role = 'user';
+      setData({ logs: [makeLog({ id: 1 })] });
+      renderPage('/notifications?tab=channels');
+
+      expect(await screen.findByText('PlanRun #1 失败')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /添加渠道/ })).not.toBeInTheDocument();
+    });
+
+    it('管理员保留三个页签与配置能力（权限不变）', async () => {
+      mocks.role = 'admin';
+      setData({ channels: [CHANNEL_WEBHOOK], rules: [RULE] });
+      renderPage();
+
+      expect(await screen.findByText(/通知渠道 \(1\)/)).toBeInTheDocument();
+      expect(screen.getByText(/告警规则 \(1\)/)).toBeInTheDocument();
+      expect(screen.getByText('通知记录')).toBeInTheDocument();
+      expect(screen.getByText('配置通知渠道和告警规则')).toBeInTheDocument();
     });
   });
 });

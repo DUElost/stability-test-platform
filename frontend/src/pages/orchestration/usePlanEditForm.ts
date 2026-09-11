@@ -271,7 +271,6 @@ export function usePlanEditForm(planId: number | null) {
     try {
       const payload: PlanUpdate = {
         name: name.trim(),
-        description: description.trim() || undefined,
         failure_threshold: failureThreshold,
         patrol_interval_seconds: lifecycle.lifecycle.patrol?.interval_seconds ?? null,
         timeout_seconds: lifecycle.lifecycle.timeout_seconds ?? null,
@@ -282,14 +281,23 @@ export function usePlanEditForm(planId: number | null) {
         // 编辑时仍以旧基准提交，锁必须照常生效。
         expected_updated_at: baseUpdatedAt,
       };
+      // #1198：描述区分「未修改」（省略——不写、也不 trim 掉原值空白）与「明确清空」
+      // （提交空串：后端 `if payload.description is not None` 只跳过 None，空串才会落库）。
+      const trimmedDescription = description.trim();
       // #405：归属字段只在变更时进 payload——后端 update 语义按 fields_set，
       // 恒发会让每次无关保存都在审计里记归属变更。新建则恒带。
       if (isNew) {
+        // 新建：空描述仍省略（后端默认 NULL），语义不变
+        payload.description = trimmedDescription || undefined;
         // v2.5 D11：归属可选——空 = 显式「不限」（NULL），提交 null
         (payload as PlanCreate).project_key = projectKey || null;
         (payload as PlanCreate).specialty_key = specialtyKey;
         (payload as PlanCreate).suite_name = suiteName || undefined;
       } else {
+        // 未改动（逐字符比对原始输入，含首尾空白）→ 省略，避免把库中原值 trim 后回写
+        if (description !== (plan?.description ?? '')) {
+          payload.description = trimmedDescription;
+        }
         if (projectKey !== origProjectKey) {
           payload.project_key = projectKey || null;
         }

@@ -68,12 +68,6 @@ def is_prometheus_available() -> bool:
 # Task Dispatch Metrics
 # ============================================================================
 
-task_dispatch_latency = Histogram(
-    'stability_task_dispatch_latency_seconds',
-    'Task dispatch latency in seconds',
-    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0]
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
 task_dispatch_total = Counter(
     'stability_task_dispatch_total',
     'Total number of task dispatch attempts',
@@ -181,18 +175,6 @@ device_online = Gauge(
     'stability_device_online',
     'Number of online devices',
     ['status']  # online, offline, busy
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
-device_temperature = Gauge(
-    'stability_device_temperature_celsius',
-    'Device temperature in celsius',
-    ['device_serial']
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
-device_battery_level = Gauge(
-    'stability_device_battery_level_percent',
-    'Device battery level in percent',
-    ['device_serial']
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 device_monitoring_updates = Counter(

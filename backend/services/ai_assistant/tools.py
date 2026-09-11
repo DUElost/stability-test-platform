@@ -815,6 +815,14 @@ def normalize_tool_params(name: str, args: dict | None) -> dict:
         from backend.services.ai_assistant.plan_run_ops import normalize_archive_params
 
         return normalize_archive_params(args)
+    # #1218（R13-F06）：runconsole（T1）工具在创建动作前过**真实校验器**——
+    # 旧逻辑对这类工具直接 return dict(args)，存在性校验（如 run_agent_tests
+    # 的 file_path）要等执行期 build_runconsole_plan 才抛，且抛在异常收口外，
+    # 动作会永久停在 running。校验失败此处即抛 ToolValidationError，轮次把它
+    # 作为参数校验失败回给模型，不会产生动作。
+    spec = TOOLS.get(name)
+    if spec is not None and spec.kind == "runconsole":
+        build_runconsole_plan(name, args or {})
     return dict(args or {})
 
 

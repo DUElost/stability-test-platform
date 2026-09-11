@@ -1,4 +1,4 @@
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -24,6 +24,9 @@ export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  // #1197：移动抽屉关闭后把焦点还给触发按钮（链接已 inert，不能原地留焦）
+  const sidebarToggleRef = useRef<HTMLButtonElement | null>(null);
+  const wasSidebarOpenRef = useRef(false);
   const navigate = useNavigate();
   const location = useLocation();
   const sessionQ = useAuthSession();
@@ -53,6 +56,14 @@ export default function AppShell() {
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
   }, []);
+
+  // #1197：移动抽屉从开到关时，焦点回到触发按钮（关闭按钮/遮罩/Escape 三条路径共用）
+  useEffect(() => {
+    if (isMobile && wasSidebarOpenRef.current && !sidebarOpen) {
+      sidebarToggleRef.current?.focus();
+    }
+    wasSidebarOpenRef.current = sidebarOpen;
+  }, [isMobile, sidebarOpen]);
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
   const toggleSidebarCollapse = () => setSidebarCollapsed(!sidebarCollapsed);
@@ -93,6 +104,9 @@ export default function AppShell() {
       </aside>
 
       <aside
+        data-testid="mobile-drawer"
+        // #1197：关闭态抽屉仅位移动画隐藏，链接仍在 DOM——inert 让整棵子树退出焦点顺序
+        inert={!sidebarOpen}
         className={cn(
           'fixed inset-y-0 left-0 z-50 w-56 transform transition-transform duration-300 lg:hidden border-r',
           SIDEBAR.root,
@@ -129,6 +143,7 @@ export default function AppShell() {
         <header className={cn('sticky top-0 z-30 border-b', SURFACE.header, BORDER.default)}>
           <div className="flex items-center justify-between h-20 px-4 lg:px-6">
             <button
+              ref={sidebarToggleRef}
               onClick={toggleSidebar}
               className={cn('lg:hidden p-2', INTERACTIVE.iconButton)}
               aria-label="打开侧边栏"

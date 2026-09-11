@@ -76,4 +76,21 @@ describe('toApiError', () => {
       responseData,
     });
   });
+
+  it('maps axios timeout to friendly message and TIMEOUT code (#1199)', () => {
+    const aborted = toApiError({
+      code: 'ECONNABORTED',
+      message: 'timeout of 30000ms exceeded',
+    });
+    expect(aborted.message).toBe('请求超时，请重试');
+    expect(aborted.code).toBe('TIMEOUT');
+
+    // message 含 timeout（无 code 的变体）同样可辨识
+    const byMessage = toApiError({ message: 'timeout of 8000ms exceeded' });
+    expect(byMessage.message).toBe('请求超时，请重试');
+    expect(byMessage.code).toBe('TIMEOUT');
+
+    // 非超时错误不受影响
+    expect(toApiError(new Error('boom')).message).toBe('boom');
+  });
 });

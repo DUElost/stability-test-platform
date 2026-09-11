@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useAuthSession } from '@/hooks/useAuthSession';
 import {
   Plus,
   Trash2,
@@ -62,6 +63,12 @@ export default function NotificationsPage() {
   const [tab, setTab] = useState<TabKey>((searchParams.get('tab') as TabKey) || 'channels');
   const [tabAutoDetected, setTabAutoDetected] = useState(false);
 
+  // #1196：通知记录是普通用户的只读视图；渠道/规则配置页签仅 admin。
+  // 非 admin 一律落到 logs（含 URL 显式带 ?tab=channels 的情况）。
+  const sessionQ = useAuthSession();
+  const isAdmin = sessionQ.data?.role === 'admin';
+  const effectiveTab: TabKey = isAdmin ? tab : 'logs';
+
   const logsCountQ = useQuery({
     queryKey: ['notification-logs-count'],
     queryFn: async () => {
@@ -101,6 +108,8 @@ export default function NotificationsPage() {
       const resp = await api.notifications.listChannels(0, 200);
       return resp.items;
     },
+    // #1196：非 admin 不请求配置端点（后端 require_admin，免 403 噪音）
+    enabled: isAdmin,
   });
 
   const rulesQ = useQuery({
@@ -109,6 +118,7 @@ export default function NotificationsPage() {
       const resp = await api.notifications.listRules(0, 200);
       return resp.items;
     },
+    enabled: isAdmin,
   });
 
   const channels = channelsQ.data ?? [];
@@ -244,17 +254,24 @@ export default function NotificationsPage() {
 
   return (
     <PageContainer width="content">
-      <PageHeader title="通知管理" subtitle="配置通知渠道和告警规则" />
+      <PageHeader
+        title={isAdmin ? '通知管理' : '通知记录'}
+        subtitle={isAdmin ? '配置通知渠道和告警规则' : '平台通知历史（只读）'}
+      />
 
       {/* Tabs */}
       <StateTabs
         variant="segmented"
         items={[
-          { key: 'channels', label: `通知渠道 (${channels.length})` },
-          { key: 'rules', label: `告警规则 (${rules.length})` },
+          ...(isAdmin
+            ? [
+                { key: 'channels', label: `通知渠道 (${channels.length})` },
+                { key: 'rules', label: `告警规则 (${rules.length})` },
+              ]
+            : []),
           { key: 'logs', label: '通知记录' },
         ]}
-        activeKey={tab}
+        activeKey={effectiveTab}
         onChange={(key) => setTab(key as TabKey)}
         ariaLabel="通知视图切换"
       />
@@ -263,7 +280,7 @@ export default function NotificationsPage() {
         <PageSkeleton>
           <PageSkeleton.List count={2} />
         </PageSkeleton>
-      ) : tab === 'channels' ? (
+      ) : effectiveTab === 'channels' ? (
         <div className="space-y-3">
           <div className="flex justify-end">
             <Button
@@ -333,7 +350,7 @@ export default function NotificationsPage() {
             ))
           )}
         </div>
-      ) : tab === 'rules' ? (
+      ) : effectiveTab === 'rules' ? (
         <div className="space-y-3">
           <div className="flex justify-end">
             <Button
