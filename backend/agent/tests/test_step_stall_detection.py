@@ -178,6 +178,39 @@ class TestProgressStamps:
         assert outcome.reason is None
         assert len(seen) == 6
 
+    def test_repeated_seq_does_not_reset_stall_clock(self):
+        """#804：重复打同一 seq（进程活着但未推进）→ 判停滞。"""
+        proc = _spawn("""
+            import sys, time
+            for _ in range(8):
+                sys.stderr.write('PROGRESS {"seq": 1}\\n'); sys.stderr.flush()
+                time.sleep(0.4)
+        """)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=1.5)
+        assert outcome.reason == "stall"
+
+    def test_regressing_seq_does_not_reset_stall_clock(self):
+        """#804：seq 回退同样不算推进。"""
+        proc = _spawn("""
+            import sys, time
+            for seq in (3, 2, 1, 3, 2, 1):
+                sys.stderr.write('PROGRESS {"seq": %d}\\n' % seq); sys.stderr.flush()
+                time.sleep(0.4)
+        """)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=1.5)
+        assert outcome.reason == "stall"
+
+    def test_legacy_stamp_without_seq_still_resets(self):
+        """#804 兼容：无 seq 字段的旧戳按阶段 1 行为（仅刷新）——不被误杀。"""
+        proc = _spawn("""
+            import sys, time
+            for _ in range(6):
+                sys.stderr.write('PROGRESS step=fill\\n'); sys.stderr.flush()
+                time.sleep(0.4)
+        """)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=1.5)
+        assert outcome.reason is None
+
     def test_progress_lines_never_enter_the_buffers(self):
         """12h 步骤每 5s 一戳 = 8640 行，会把真正的报错挤出 64KiB 截断窗口。"""
         proc = _spawn("""
