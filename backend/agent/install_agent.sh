@@ -378,6 +378,9 @@ else
 fi
 
 chmod 640 "$INSTALL_DIR/.env"
+# #1251：.env 由 root 创建，显式归属 agent 用户/组——否则 Agent 进程
+# load_dotenv 因权限不足失败（独立安装路径无 Ansible 的后续属主修复）
+chown "$USER:$GROUP" "$INSTALL_DIR/.env"
 
 # 7.5 STP_AEE_LOCAL_ROOT 静态守门（#78 子任务 3）
 # 防止 #72 类 .env 错配（路径指向 android 用户无权写的目录）安装上线；
