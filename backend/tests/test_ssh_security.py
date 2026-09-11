@@ -158,22 +158,82 @@ def test_trust_host_key_returns_failure_when_keyscan_empty(monkeypatch, tmp_path
     assert "no keys" in reason
 
 
-def test_trust_host_key_replaces_prior_entry_for_same_ip(monkeypatch, tmp_path):
+def test_trust_host_key_refuses_silent_replace_on_key_change(monkeypatch, tmp_path):
+    """#908：既有条目与扫描结果不同 → 默认拒绝且不动文件（可审计换钥才替换）。"""
     from backend.core import ssh_security
 
     known_hosts = tmp_path / "known_hosts"
-    known_hosts.write_text("10.0.0.99 ssh-ed25519 OLDKEY\n", encoding="utf-8")
+    known_hosts.write_text("10.0.0.99 ssh-ed25519 T0xES0VZ\n", encoding="utf-8")
 
-    fake_completed = SimpleNamespace(returncode=0, stdout="10.0.0.99 ssh-ed25519 NEWKEY\n", stderr="")
+    fake_completed = SimpleNamespace(
+        returncode=0, stdout="10.0.0.99 ssh-ed25519 TkVXS0VZ\n", stderr="",
+    )
     monkeypatch.setattr(
-        ssh_security.subprocess,
-        "run",
-        lambda *args, **kwargs: fake_completed,
+        ssh_security.subprocess, "run", lambda *a, **k: fake_completed,
     )
 
-    ok, _ = ssh_security.trust_host_key("10.0.0.99", 22, str(known_hosts))
+    ok, reason = ssh_security.trust_host_key("10.0.0.99", 22, str(known_hosts))
+
+    assert ok is False
+    assert "host key changed" in reason
+    assert "explicit replace required" in reason
+    assert "SHA256:" in reason, "拒绝原因须含新旧指纹"
+    content = known_hosts.read_text(encoding="utf-8")
+    assert "T0xES0VZ" in content, "未确认时旧条目必须保持不动"
+
+
+def test_trust_host_key_replaces_with_explicit_consent(monkeypatch, tmp_path):
+    """显式 allow_replace=True → 替换并返回新旧指纹（调用方据此审计）。"""
+    from backend.core import ssh_security
+
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text("10.0.0.99 ssh-ed25519 T0xES0VZ\n", encoding="utf-8")
+
+    fake_completed = SimpleNamespace(
+        returncode=0, stdout="10.0.0.99 ssh-ed25519 TkVXS0VZ\n", stderr="",
+    )
+    monkeypatch.setattr(
+        ssh_security.subprocess, "run", lambda *a, **k: fake_completed,
+    )
+
+    ok, reason = ssh_security.trust_host_key(
+        "10.0.0.99", 22, str(known_hosts), allow_replace=True,
+    )
 
     assert ok is True
+    assert reason.startswith("replaced old=SHA256:")
+    assert "new=SHA256:" in reason
     content = known_hosts.read_text(encoding="utf-8")
-    assert "OLDKEY" not in content
-    assert "10.0.0.99 ssh-ed25519 NEWKEY" in content
+    assert "T0xES0VZ" not in content
+    assert "10.0.0.99 ssh-ed25519 TkVXS0VZ" in content
+
+
+def test_trust_host_key_same_key_rescan_is_ok(monkeypatch, tmp_path):
+    """同键重扫不触发换钥路径（幂等，不需要确认）。"""
+    from backend.core import ssh_security
+
+    known_hosts = tmp_path / "known_hosts"
+    line = "10.0.0.99 ssh-ed25519 T0xES0VZ"
+    known_hosts.write_text(line + "\n", encoding="utf-8")
+
+    fake_completed = SimpleNamespace(returncode=0, stdout=line + "\n", stderr="")
+    monkeypatch.setattr(
+        ssh_security.subprocess, "run", lambda *a, **k: fake_completed,
+    )
+
+    ok, reason = ssh_security.trust_host_key("10.0.0.99", 22, str(known_hosts))
+    assert ok is True
+    assert reason == "ok"
+
+
+def test_host_key_fingerprints_stable_shape():
+    from backend.core import ssh_security
+
+    import base64, hashlib
+    blob = base64.b64encode(b"key-material").decode("ascii")
+    fps = ssh_security.host_key_fingerprints([f"10.0.0.1 ssh-ed25519 {blob}"])
+    expected = "SHA256:" + base64.b64encode(
+        hashlib.sha256(b"key-material").digest()
+    ).decode("ascii").rstrip("=")
+    assert fps == [expected]
+    assert ssh_security.host_key_fingerprints(["not-a-known-hosts-line"]) == []

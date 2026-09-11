@@ -143,6 +143,20 @@ def _resolve_step_wall_clock(step: Dict[str, Any]) -> Optional[float]:
 # 会被判停滞 —— 这是对的：那证明的是"进程还活着"，不是"还在推进"。
 _PROGRESS_PREFIX = "PROGRESS "
 
+
+def _parse_progress_seq(line: str) -> Optional[int]:
+    """从 PROGRESS 行解析 seq（#804）；缺失或非法返回 None（旧戳兼容仅刷新）。"""
+    try:
+        payload = json.loads(line[len(_PROGRESS_PREFIX):].strip())
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if isinstance(payload, dict):
+        seq = payload.get("seq")
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            return seq
+    return None
+
+
 # 主线程轮询间隔。停滞检测的实际精度因此是 stall_seconds ± _POLL_INTERVAL。
 _POLL_INTERVAL_SECONDS = 1.0
 
@@ -405,7 +419,15 @@ def _pump_process(
             # 只有 PROGRESS 行刷停滞钟 —— 普通输出不算"推进"。
             # 否则活锁(fastboot 无限重试、adb install 卡 90% 反复重连
             # 打印日志)会因持续输出而永远不被判停滞,停滞钟就形同虚设。
-            state["last_progress"] = time.monotonic()
+            # #804：仅 seq 单调递增才刷新（上文契约「seq 单调递增是唯一判据」）——
+            # 重复/回退的 seq 证明的是"进程还活着"，不是"还在推进"；
+            # 无 seq 字段的旧戳按阶段 1 行为兼容（仅刷新）。
+            seq = _parse_progress_seq(stripped)
+            last_seq = state.get("last_progress_seq")
+            if seq is None or last_seq is None or seq > last_seq:
+                if seq is not None:
+                    state["last_progress_seq"] = seq
+                state["last_progress"] = time.monotonic()
             if on_progress is not None:
                 try:
                     on_progress()
