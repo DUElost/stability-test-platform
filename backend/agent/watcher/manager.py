@@ -341,6 +341,7 @@ class LogWatcherManager:
                     on_pull_done=watcher._on_pull_done,
                     pull_timeout_seconds=policy.pull_timeout_seconds,
                     max_file_mb=policy.pull_max_file_mb,
+                    nfs_quota_mb=policy.nfs_quota_mb,
                     sonic_output_dir=str(sonic_output_dir) if sonic_output_dir else None,
                     bugreport_enabled=sonic_output_dir is not None,
                 )

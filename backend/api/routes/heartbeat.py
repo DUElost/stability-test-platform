@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from backend.core.device_serial import is_placeholder_serial
 from backend.core.database import get_db
 from backend.core.host_identity import allocate_host_id
 from backend.models.host import Host, Device
@@ -382,6 +383,15 @@ def _process_heartbeat_with_db(
                 )
                 continue
 
+            # #1356：占位 serial 设备的归属不可靠（同一 serial 被多 host
+            # adb 同时识别）——漂移时告警（不阻断：归属仍按最新心跳，派发侧
+            # device_host_drift 保护兜底）
+            if device.host_id != host.id and is_placeholder_serial(device.serial):
+                logger.warning(
+                    "placeholder_serial_host_drift serial=%s device=%s %s->%s "
+                    "(serial 为占位值——归属不可靠，建议刷机/换线让设备上报真实 serial)",
+                    device.serial, device.id, device.host_id, host.id,
+                )
             device.host_id = host.id
             if dev_data.get("model") is not None:
                 device.model = dev_data.get("model")

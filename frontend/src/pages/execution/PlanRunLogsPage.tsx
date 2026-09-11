@@ -34,6 +34,12 @@ export default function PlanRunLogsPage() {
     queryKey: planRunKeys.detail(id),
     queryFn: () => api.planRuns.get(id),
     enabled: !!id,
+    // #823：runQ 一次性读取会让 isTerminal 永不推进——run 已结束后 eventsQ 仍每 30s
+    // 对终态 run 拉取。非终态慢轮询推进，终态即停（与 eventsQ 停更条件对齐）。
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status && TERMINAL.includes(status) ? false : SLOW_REFETCH_MS;
+    },
   });
   const isTerminal = !!runQ.data && TERMINAL.includes(runQ.data.status);
 
