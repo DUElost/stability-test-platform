@@ -418,3 +418,32 @@ def test_flush_is_serialized_across_threads(tmp_path):
         ["A%d" % i for i in range(20)] + ["L%d" % i for i in range(200)]
     )
     assert inflight["max"] == 1, "flush 未串行：两个 flush 并发进入 emit（落盘/推送可交错）"
+
+
+def test_child_env_is_allowlisted_not_inherited(tmp_path, emit_capture, monkeypatch):
+    """#1228: 子进程不继承控制面环境（凭据不透传）；白名单键与显式注入保留。"""
+    import json
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://prod-secret")
+    monkeypatch.setenv("AGENT_SECRET", "leak-me-not")
+    events, emit = emit_capture
+    rc = _configure(tmp_path, emit)
+    run_id = rc.start(
+        run_key="envprobe",
+        cmd=_py(
+            "import json, os\n"
+            "print(json.dumps({k: os.environ.get(k) for k in "
+            "['DATABASE_URL', 'AGENT_SECRET', 'PATH', 'STP_PROBE', "
+            "'PYTHONUNBUFFERED']}))\n"
+        ),
+        env={"STP_PROBE": "injected"},
+    )
+    st = _wait_terminal(run_id)
+    assert st["status"] == "SUCCESS"
+
+    payload = json.loads(rc.read_log(run_id)["lines"][0])
+    assert payload["DATABASE_URL"] is None, "控制面 DATABASE_URL 不得透传"
+    assert payload["AGENT_SECRET"] is None, "凭据不得透传"
+    assert payload["PATH"]  # 白名单保留进程启动所需键
+    assert payload["STP_PROBE"] == "injected"  # 调用方显式注入生效
+    assert payload["PYTHONUNBUFFERED"] == "1"

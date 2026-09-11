@@ -454,25 +454,29 @@ def update_script(
 ):
     script = db.get(Script, script_id)
     _raise_if_hidden_legacy_aee_script_row(script)
+    _raise_if_legacy_aee_script(script.name, script.version)
 
-    next_name = payload.name if payload.name is not None else script.name
-    next_version = payload.version if payload.version is not None else script.version
-    _raise_if_legacy_aee_script(next_name, next_version)
-    if (next_name, next_version) != (script.name, script.version):
-        existing = (
-            db.query(Script)
-            .filter(
-                Script.name == next_name,
-                Script.version == next_version,
-                Script.id != script_id,
-            )
-            .first()
+    # ADR-0020 / ADR-0021 D9 + #790：契约字段不可原地修改。
+    # 改 name/version 会让 PlanStep 的 (name, version) 引用键失配；改
+    # nfs_path/content_sha256 等价于 force_rebaseline 却跳过在途 PlanRun 守卫。
+    # 磁盘漂移只走 POST /scripts/scan[?force_rebaseline=true]，标识变更用新
+    # 版本表达；display_name/category/description 等展示字段保持可改。
+    contract_changed = [
+        field
+        for field in ("name", "version", "nfs_path", "content_sha256")
+        if getattr(payload, field) is not None
+        and getattr(payload, field) != getattr(script, field)
+    ]
+    if contract_changed:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "contract fields cannot be changed on an existing version "
+                f"({', '.join(contract_changed)}); use POST /scripts/scan"
+                "[?force_rebaseline=true] for disk drift or create a new "
+                "script version instead"
+            ),
         )
-        if existing is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"script name/version already exists: {next_name} {next_version}",
-            )
 
     # ADR-0020: changing default_params on an existing version is rejected;
     # the caller must create a new version instead.

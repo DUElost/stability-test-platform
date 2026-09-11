@@ -80,6 +80,12 @@ def check_mod_v105():
 
 
 @pytest.fixture(scope="module")
+def check_mod_v108():
+    """powercycle_check v1.0.8：收取窗口 pause→resume 原子化（#813）。"""
+    return _load("powercycle_check_mod_v108", "powercycle_check/v1.0.8/powercycle_check.py")
+
+
+@pytest.fixture(scope="module")
 def check_mod_v106():
     """powercycle_check v1.0.6：文件停滞判定（mtime）——偶发启动失败自愈不再误判。"""
     return _load("powercycle_check_mod_v106", "powercycle_check/v1.0.6/powercycle_check.py")
@@ -786,3 +792,116 @@ class TestFinish:
         with pytest.raises(RuntimeError) as ei:
             finish_mod._pull_result_file()
         assert "powercycle_result.txt" in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# powercycle_check v1.0.8：收取窗口 pause→resume 原子化（#813 / R08-F04）
+# ---------------------------------------------------------------------------
+
+
+class TestV108AtomicResume:
+    def _patch(self, mod, monkeypatch, tmp_path, in_window):
+        monkeypatch.setattr(mod, "device_serial", lambda: "S1")
+        monkeypatch.setattr(mod, "_state_file", lambda: tmp_path / "state.json")
+        monkeypatch.setattr(mod, "device_online", lambda: True)
+        monkeypatch.setattr(mod, "_in_collect_window", lambda cfg, now=None: in_window)
+        monkeypatch.setattr(mod, "_wait_online_short", lambda timeout_s=120: True)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+        return {"pause": [], "resume": []}
+
+    def _patch_patrol(self, mod, monkeypatch, *, alive=False, mtime=1000, bytes_=200):
+        monkeypatch.setattr(mod, "service_alive", lambda: alive)
+        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: (3, 100))
+        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
+        monkeypatch.setattr(mod, "_result_bytes", lambda: bytes_)
+        monkeypatch.setattr(mod, "_run_finished", lambda: False)
+        monkeypatch.setattr(mod, "_result_mtime", lambda: mtime)
+
+    def test_collect_exception_triggers_compensating_resume(
+        self, check_mod_v108, monkeypatch, tmp_path
+    ):
+        """收取抛异常时：pause 已执行 → except 分支补做 resume，且标记清掉。"""
+        calls = self._patch(check_mod_v108, monkeypatch, tmp_path, in_window=True)
+        monkeypatch.setattr(check_mod_v108, "pause_task", lambda: calls["pause"].append(1))
+        monkeypatch.setattr(check_mod_v108, "resume_task", lambda: calls["resume"].append(1))
+        monkeypatch.setattr(check_mod_v108, "service_alive", lambda: False)
+
+        def boom(project):
+            raise RuntimeError("pull timeout")
+
+        monkeypatch.setattr(check_mod_v108, "collect_powercycle_result", boom)
+        r = check_mod_v108._run({"collect_window_start": "00:00", "project": "smoke"})
+
+        assert r["success"] is True
+        assert calls["pause"] == [1] and calls["resume"] == [1]
+        assert "pull timeout" in r["progress"]["collect_error"]
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert state.get("paused_by_collect") is False
+
+    def test_pause_failure_still_lands_intent_and_compensates(
+        self, check_mod_v108, monkeypatch, tmp_path
+    ):
+        """pause 自身抛异常：意图标记先落盘（进程被杀同型），补偿 resume 仍执行。"""
+        calls = self._patch(check_mod_v108, monkeypatch, tmp_path, in_window=True)
+
+        def pause_boom():
+            calls["pause"].append(1)
+            raise RuntimeError("adb gone")
+
+        monkeypatch.setattr(check_mod_v108, "pause_task", pause_boom)
+        monkeypatch.setattr(check_mod_v108, "resume_task", lambda: calls["resume"].append(1))
+        monkeypatch.setattr(check_mod_v108, "service_alive", lambda: False)
+        check_mod_v108._run({"collect_window_start": "00:00", "project": "smoke"})
+
+        assert calls["resume"] == [1]
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert state.get("paused_by_collect") is False
+
+    def test_out_of_window_compensates_and_skips_death_judgement(
+        self, check_mod_v108, monkeypatch, tmp_path
+    ):
+        """进程被杀遗留 paused_by_collect：窗口外补做 resume，本轮不判死且清零停滞账。"""
+        (tmp_path / "state.json").write_text(json.dumps({
+            "job_id": "", "seq": 5, "paused_by_collect": True, "dead_streak": 3,
+            "last_mtime": 1000, "last_online": True,
+        }))
+        calls = self._patch(check_mod_v108, monkeypatch, tmp_path, in_window=False)
+        monkeypatch.setattr(check_mod_v108, "resume_task", lambda: calls["resume"].append(1))
+        self._patch_patrol(check_mod_v108, monkeypatch, alive=False, mtime=1000)
+
+        r = check_mod_v108._run({"dead_grace_cycles": 2})
+
+        assert r["success"] is True
+        assert r["progress"]["phase"] == "resume_recovered"
+        assert calls["resume"] == [1]
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert state.get("paused_by_collect") is False
+        assert state.get("dead_streak") == 0
+
+    def test_resume_failure_keeps_flag_then_retries_next_cycle(
+        self, check_mod_v108, monkeypatch, tmp_path
+    ):
+        """补偿失败：保留标记 + resume_error，照常判死评估；下轮补偿成功即恢复。"""
+        (tmp_path / "state.json").write_text(json.dumps({
+            "job_id": "", "seq": 1, "paused_by_collect": True, "last_mtime": 1000,
+            "last_online": True,
+        }))
+        calls = self._patch(check_mod_v108, monkeypatch, tmp_path, in_window=False)
+        self._patch_patrol(check_mod_v108, monkeypatch, alive=False, mtime=1000)
+
+        def resume_boom():
+            raise RuntimeError("start failed")
+
+        monkeypatch.setattr(check_mod_v108, "resume_task", resume_boom)
+        r1 = check_mod_v108._run({"dead_grace_cycles": 3})
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert state.get("paused_by_collect") is True
+        assert "start failed" in state.get("resume_error", "")
+        assert r1["success"] is True  # 未到 grace，不判死
+
+        monkeypatch.setattr(check_mod_v108, "resume_task", lambda: calls["resume"].append(1))
+        r2 = check_mod_v108._run({"dead_grace_cycles": 3})
+        assert r2["progress"]["phase"] == "resume_recovered"
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert state.get("paused_by_collect") is False
+        assert state.get("resume_error") is None
