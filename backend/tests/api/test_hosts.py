@@ -477,3 +477,35 @@ class TestUpdateHostPreserveSsh:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["ip"] == "192.168.50.78"
+
+
+class TestHostHardDeleteGuards:
+    """#937: 有历史依赖的主机硬删除返回 409（不裸 500/不静默清空）。"""
+
+    def test_delete_host_with_devices_is_409(
+        self, client, db_session, admin_headers,
+    ):
+        from backend.models.host import Device, Host
+
+        db_session.add(Host(id="del-h-dev", hostname="dhd", status="OFFLINE"))
+        db_session.commit()
+        db_session.add(Device(
+            serial="del-dev-1", host_id="del-h-dev", status="OFFLINE",
+        ))
+        db_session.commit()
+
+        resp = client.delete("/api/v1/hosts/del-h-dev", headers=admin_headers)
+        assert resp.status_code == 409, resp.text
+        assert "设备" in resp.json()["detail"]
+
+    def test_delete_clean_host_succeeds(
+        self, client, db_session, admin_headers,
+    ):
+        from backend.models.host import Host
+
+        db_session.add(Host(id="del-h-clean", hostname="dhc", status="OFFLINE"))
+        db_session.commit()
+
+        resp = client.delete("/api/v1/hosts/del-h-clean", headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+        assert db_session.get(Host, "del-h-clean") is None

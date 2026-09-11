@@ -13,9 +13,11 @@
     ↓
 [控制面] POST /plans/{id}/run 或 SCHEDULE/CHAIN 触发
     ↓
-[派发门禁] plan_precheck — 主机 SSH、脚本 sha、NFS 同步
+[派发] prepare_plan_run — 创 PlanRun(QUEUED) + 目标设备快照（ADR-0026）
     ↓
-[分发] plan_dispatcher(_sync) — 创 PlanRun + N×JobInstance(PENDING)
+[准入] admission pump claim → PRECHECK → 慢验证（SSH 可达 / 脚本 sha / 热更新同步）
+    ↓ plan_admission_task 单事务物化
+[控制面] N×JobInstance(PENDING)
     ↓
 [Agent] POST /agent/jobs/claim（版本门禁）→ RUNNING
     ↓
@@ -32,17 +34,24 @@
 
 | run_type | 触发 | 派发路径 |
 |----------|------|----------|
-| MANUAL | UI「执行」 | SAQ → async precheck → dispatch |
-| SCHEDULE | APScheduler cron | `dispatch_plan_sync` inline gate |
-| CHAIN | 上游 PlanRun 终态 | `plan_chain_trigger` → sync gate |
+| MANUAL | UI「执行」 | `prepare_plan_run` → PlanRun(QUEUED) → admission |
+| SCHEDULE | APScheduler cron | `dispatch_plan`（async）→ `dispatch_plan_sync` → `prepare_plan_run` → QUEUED → admission |
+| CHAIN | 上游 PlanRun 终态 | `plan_chain_trigger` → `prepare_plan_run`（子 Run QUEUED）→ admission |
+
+三者统一在 `prepare_plan_run` 收口为 **QUEUED**（不物化 Jobs）；随后由
+admission pump（claim QUEUED→PRECHECK，`claim_queued_plan_runs`）与
+`plan_admission_task`（单事务物化 Jobs）完成准入（ADR-0026 现行主路径）。
 
 派发失败：PlanRun / Job 显式 FAILED + 审计；支持 `retry-dispatch`（ADR-0021）。
+历史 ADR-0021 sync gate（SAQ `precheck_and_dispatch_task`）仅保留在
+precheck_reaper 的 V1 兜底与显式重试路径，不在主路径上。
 
 ---
 
-## 3. 派发门禁（Precheck）
+## 3. 派发门禁（Precheck / Admission 慢验证）
 
-**服务**：`backend/services/plan_precheck.py`
+**服务**：`backend/services/plan_precheck.py`（facade）+ `backend/services/precheck/`；
+现行执行者是 admission 的 Phase A（`plan_admission_task`），门禁 phase 语义不变：
 
 | phase | 含义 |
 |-------|------|
