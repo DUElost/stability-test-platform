@@ -556,6 +556,55 @@ def test_update_rejects_deactivation_when_script_is_still_referenced(
     assert script.is_active is True
 
 
+def test_update_rejects_contract_field_changes(client, admin_headers, db_session):
+    """#790：name/version/nfs_path/content_sha256 不可原地改（ADR-0020/0021 D9）。
+
+    否则可绕过 force_rebaseline 的在途 PlanRun 守卫，或让 PlanStep 的
+    (name, version) 引用键失配（2026-07-31 事故同型）。"""
+    script, _ = _create_referenced_script(db_session, "contract_guard")
+
+    for field, new_value in (
+        ("name", script.name + "_renamed"),
+        ("version", "9.9.9"),
+        ("nfs_path", "/nfs/scripts/elsewhere/9.9.9/evil.py"),
+        ("content_sha256", "c" * 64),
+    ):
+        resp = client.put(
+            f"/api/v1/scripts/{script.id}",
+            json={field: new_value},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422, (field, resp.text)
+        assert field in resp.json()["detail"], (field, resp.text)
+
+    db_session.refresh(script)
+    assert script.version == "1.0.0"
+    assert script.content_sha256 == "b" * 64
+
+
+def test_update_allows_unchanged_contract_fields(client, admin_headers, db_session):
+    """客户端回传全量对象（契约字段同值）+ 展示字段时不得被 422 误伤。"""
+    script, _ = _create_referenced_script(db_session, "contract_noop")
+
+    resp = client.put(
+        f"/api/v1/scripts/{script.id}",
+        json={
+            "name": script.name,
+            "version": script.version,
+            "nfs_path": script.nfs_path,
+            "content_sha256": script.content_sha256,
+            "display_name": "Renamed Display",
+            "description": "guard test",
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["display_name"] == "Renamed Display"
+    assert data["description"] == "guard test"
+
+
 def test_delete_rejects_deactivation_when_script_is_still_referenced(
     client, admin_headers, db_session
 ):

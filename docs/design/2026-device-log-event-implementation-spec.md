@@ -314,3 +314,37 @@ class PlatformCollector(Protocol):
 | SAQ | `backend/tasks/saq_tasks.py` |
 | Extract | `backend/services/dedup_extract.py` |
 | Merge 过滤 | `backend/services/dedup_scan.py` |
+
+---
+
+## 可信边界与状态迁移（#1052 / R09-R02）
+
+### 信任模型
+
+DLE 摄入端点（`POST /agent/device-log-events`）的授权只有**共享 Agent 密钥**
+（`_verify_agent`，fleet 级）+ `host/job/plan_run/serial` 的一致性校验；
+**没有** log_signal 路径的 `_require_job_bound_upload_lease` 级租约绑定——
+Agent 是「半可信」的（持有共享密钥的进程可按任意 host 身份提交，校验只能发现
+组合不一致，不能证明占有设备）。
+
+演进方向（R02/R03 未定项）：租约/设备占有证明、未绑定事件的独立授权通道；
+在此之前：
+
+- **身份字段不可变**：`serial` / `job_id` / `plan_run_id` 一经入库不得更改
+  （不一致 → 400/403）——防跨设备/跨任务混淆与错误 Agent 改写归属；
+- **三元组一致**：插入与更新都要求 `host_id == job.host_id`、
+  `plan_run_id == job.plan_run_id`（二者都非空时）；
+- **状态迁移显式**：`_ALLOWED_TRANSITIONS` 矩阵（agent_api.py）——同态幂等；
+  表外迁移 409 `DLE_INVALID_TRANSITION`；extractable 三态（REMOTE/ARCHIVED/
+  PRUNED）的降级补丁按 #1174 幂等成功忽略（保 Agent outbox ACK）；
+- **合法迟到补报**：不带 `plan_run_id` 的 patch **保留**既有归属（不清空）；
+  PULL_FAILED 重试直达 REMOTE、UPLOAD_PENDING（控制面 scan 标记，直写 SQL，
+  属控制面信任域）等路径均在矩阵内。
+
+### 未覆盖（有意）
+
+- 共享密钥泄漏的横向移动：超出本层（密钥轮换/每主机密钥另议）；
+- 控制面自身直写 DLE 状态（saq_tasks 标记 UPLOAD_PENDING）：中央信任域，
+  不经本端点；
+- 事件内容/路径的可信度：`remote_path` 有 plan_run 前缀与 UUID 规整
+  （`_validated_remote_path`），不做内容鉴定。
