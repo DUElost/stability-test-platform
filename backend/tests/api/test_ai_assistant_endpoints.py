@@ -1333,3 +1333,104 @@ class TestCancelActionHonesty:
         # cancel(True) 后 endpoint refresh 时 finalize 可能尚未竞速 —— 状态是
         # 「当时事实」；断言不谎报为成功之外的东西即可
         assert resp.json()["data"]["status"] in ("running", "cancelled")
+
+
+# ── #1220（R13-F08）：持久化历史按完整工具交互组修复 ──────────────────────
+
+
+class TestSanitizeToolHistory:
+    def _seed(self, db_session, user_id, rows):
+        s = AiChatSession(user_id=user_id)
+        db_session.add(s)
+        db_session.flush()
+        for role, content, tool_calls, tool_call_id in rows:
+            db_session.add(AiChatMessage(
+                session_id=s.id, role=role, content=content,
+                tool_calls=tool_calls or [], tool_call_id=tool_call_id,
+            ))
+        db_session.commit()
+        return s
+
+    def _assistant(self, call_ids, content=""):
+        return (
+            "assistant", content,
+            [{"id": cid, "name": "reload_agent_config", "arguments": {}} for cid in call_ids],
+            None,
+        )
+
+    def _tool(self, call_id, content="ok"):
+        return ("tool", content, [], call_id)
+
+    def _user(self, content):
+        return ("user", content, [], None)
+
+    def test_truncation_orphan_tool_becomes_user_receipt(self, auth_headers, db_session):
+        """前驱 assistant(tool_calls) 被截断 → 孤儿 tool 转 user 回执（不丢内容）。"""
+        from backend.services.ai_assistant.orchestrator import _history_as_llm_messages
+
+        user_id = db_session.query(User).filter(User.role != "admin").first().id
+        rows = [self._assistant(["t1"]), self._user("中间对话")] + [
+            self._user(f"填充 {i}") for i in range(25)
+        ] + [self._tool("t1")]
+        s = self._seed(db_session, user_id, rows)
+
+        msgs = _history_as_llm_messages(db_session, s.id)
+        assert not any(m["role"] == "tool" for m in msgs), "孤儿 tool 不得直发"
+        receipts = [m for m in msgs if m["role"] == "user" and m["content"].startswith("[执行回执]")]
+        assert len(receipts) == 1 and "ok" in receipts[0]["content"]
+
+    def test_user_receipt_between_group_is_reordered(self, auth_headers, db_session):
+        """assistant(tool_calls) → user 回执 → tool 的错误顺序被修复为组内紧随。"""
+        from backend.services.ai_assistant.orchestrator import _history_as_llm_messages
+
+        user_id = db_session.query(User).filter(User.role != "admin").first().id
+        rows = [
+            self._user("触发"),
+            self._assistant(["t1"], "我来执行"),
+            self._user("[执行回执] 中间插入的回执"),
+            self._tool("t1"),
+        ]
+        s = self._seed(db_session, user_id, rows)
+
+        msgs = _history_as_llm_messages(db_session, s.id)
+        roles = [m["role"] for m in msgs]
+        assert roles == ["user", "assistant", "tool", "user"], roles
+        assert msgs[2]["tool_call_id"] == "t1"
+
+    def test_missing_response_drops_tool_calls(self, auth_headers, db_session):
+        """响应被截断 → assistant 丢 tool_calls 保留 content；已有响应转 user。"""
+        from backend.services.ai_assistant.orchestrator import _history_as_llm_messages
+
+        user_id = db_session.query(User).filter(User.role != "admin").first().id
+        # t1 无响应（被截断），t2 有响应
+        rows = [
+            self._user("触发"),
+            self._assistant(["t1", "t2"], "我来执行"),
+            self._tool("t2"),
+        ]
+        s = self._seed(db_session, user_id, rows)
+
+        msgs = _history_as_llm_messages(db_session, s.id)
+        asst = [m for m in msgs if m["role"] == "assistant"]
+        assert len(asst) == 1
+        assert "tool_calls" not in asst[0], "缺响应时不得保留 tool_calls"
+        assert asst[0]["content"] == "我来执行"
+        assert any(m["role"] == "user" and "[执行回执] ok" in m["content"] for m in msgs)
+
+    def test_complete_group_stays_intact(self, auth_headers, db_session):
+        """完整交互组不受影响（正常路径回归）。"""
+        from backend.services.ai_assistant.orchestrator import _history_as_llm_messages
+
+        user_id = db_session.query(User).filter(User.role != "admin").first().id
+        rows = [
+            self._user("触发"),
+            self._assistant(["t1"], "我来执行"),
+            self._tool("t1"),
+            self._user("好的"),
+        ]
+        s = self._seed(db_session, user_id, rows)
+
+        msgs = _history_as_llm_messages(db_session, s.id)
+        roles = [m["role"] for m in msgs]
+        assert roles == ["user", "assistant", "tool", "user"]
+        assert msgs[1]["tool_calls"][0]["id"] == "t1"

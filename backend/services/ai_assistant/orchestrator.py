@@ -194,7 +194,58 @@ def _history_as_llm_messages(db: Session, session_id: int) -> list[dict]:
                         "content": tool_content,
                     }
                 )
-    return messages
+    return _sanitize_tool_history(messages)
+
+
+def _sanitize_tool_history(messages: list[dict]) -> list[dict]:
+    """#1220（R13-F08）：把截断后的历史修复成严格供应商可接受的形态。
+
+    HISTORY_LIMIT 按行数截断可能把工具交互组拦腰切断。规则（按完整交互组）：
+    - assistant(tool_calls) 的全部响应都在窗口内 → 响应前移为紧随其后的组
+      （用户回执不得插入 assistant 与 tool 响应之间——严格校验要求 tool 紧跟）；
+    - 任一响应缺失（前驱或响应被截断）→ 该 assistant 丢弃 tool_calls
+      （content 也为空则整条丢弃），已入库的响应转 user 回执；
+    - 无前驱的 tool 消息（前驱被截断）→ 转 user 回执，内容不丢。
+    """
+    def _as_user_receipt(m: dict) -> dict:
+        return {"role": "user", "content": f"[执行回执] {m.get('content') or ''}"}
+
+    tool_by_id: dict[str, dict] = {}
+    for m in messages:
+        if m.get("role") == "tool" and m.get("tool_call_id"):
+            tool_by_id.setdefault(m["tool_call_id"], m)
+
+    consumed: set[str] = set()
+    out: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        if role == "assistant" and m.get("tool_calls"):
+            call_ids = [tc.get("id", "") for tc in m["tool_calls"]]
+            unmatched = [
+                cid for cid in call_ids
+                if cid not in tool_by_id or cid in consumed
+            ]
+            if not unmatched:
+                out.append(m)
+                consumed.update(call_ids)
+                out.extend(tool_by_id[cid] for cid in call_ids)
+            else:
+                if m.get("content"):
+                    out.append({"role": "assistant", "content": m["content"]})
+                for cid in call_ids:
+                    resp = tool_by_id.get(cid)
+                    if resp is not None and cid not in consumed:
+                        out.append(_as_user_receipt(resp))
+                        consumed.add(cid)
+        elif role == "tool":
+            if m.get("tool_call_id") in consumed:
+                continue  # 已作为交互组一部分输出
+            out.append(_as_user_receipt(m))
+            if m.get("tool_call_id"):
+                consumed.add(m["tool_call_id"])
+        else:
+            out.append(m)
+    return out
 
 
 def _decide_execution_mode(
