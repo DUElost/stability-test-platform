@@ -834,23 +834,40 @@ def _mock_auto_archive_db(
     last_scan_at=None,
     merge_count: int | None = None,
     extract_context: dict | None = None,
+    terminal_candidates=None,
 ):
-    """Wire mock db.query for per-plan auto_archive_sweep."""
+    """Wire mock db.query for per-plan auto_archive_sweep.
+
+    RUNNING path uses ``.first()``; terminal path (#833) uses ``.all()`` on a
+    second PlanRun query. Pass ``terminal_candidates`` to override the list
+    returned by that ``.all()`` (default: ``[run]`` when run is not RUNNING).
+    """
     plan_query = MagicMock()
     plan_query.filter.return_value = plan_query
     plan_query.all.return_value = [plan]
 
-    run_query = MagicMock()
-    run_query.filter.return_value = run_query
-    run_query.order_by.return_value = run_query
-    run_query.first.return_value = run
+    is_running = getattr(run, "status", None) == "RUNNING"
+    running_query = MagicMock()
+    running_query.filter.return_value = running_query
+    running_query.order_by.return_value = running_query
+    running_query.first.return_value = run if is_running else None
+
+    if terminal_candidates is None:
+        terminal_candidates = [] if is_running else [run]
+    terminal_query = MagicMock()
+    terminal_query.filter.return_value = terminal_query
+    terminal_query.order_by.return_value = terminal_query
+    terminal_query.all.return_value = list(terminal_candidates)
+
+    plan_run_calls = {"n": 0}
 
     def _query(model):
         name = getattr(model, "__name__", str(model))
         if name == "Plan":
             return plan_query
         if name == "PlanRun":
-            return run_query
+            plan_run_calls["n"] += 1
+            return running_query if plan_run_calls["n"] == 1 else terminal_query
         return MagicMock()
 
     mock_db.query.side_effect = _query
@@ -907,12 +924,15 @@ def test_auto_archive_sweep_skips_failed_run_without_confirmation():
     session_cm.__enter__ = MagicMock(return_value=mock_db)
     session_cm.__exit__ = MagicMock(return_value=False)
     mock_plan = MagicMock(id=10, auto_archive_interval_seconds=3600)
+    # FAILED is outside _AUTO_FINAL_STATUSES; terminal query returns empty.
     mock_run = MagicMock(
         id=1,
         status="FAILED",
         ended_at=datetime.now(timezone.utc) - timedelta(hours=2),
     )
-    _mock_auto_archive_db(mock_db, plan=mock_plan, run=mock_run, scan_count=0)
+    _mock_auto_archive_db(
+        mock_db, plan=mock_plan, run=mock_run, scan_count=0, terminal_candidates=[],
+    )
 
     orig = mod.SessionLocal
     mod.SessionLocal = MagicMock(return_value=session_cm)
@@ -1035,7 +1055,7 @@ def test_auto_archive_sweep_running_incremental_enqueues_after_interval():
 
 
 def test_auto_archive_sweep_skips_run_before_interval():
-    """PlanRun within ended_at + interval is skipped entirely."""
+    """Due-cutoff query excludes not-yet-due terminal runs (empty candidates)."""
     import backend.scheduler.cron_scheduler as mod
 
     mock_db = MagicMock()
@@ -1050,10 +1070,12 @@ def test_auto_archive_sweep_skips_run_before_interval():
 
     mock_run = MagicMock()
     mock_run.id = 4
-    mock_run.status = "FAILED"
+    mock_run.status = "SUCCESS"
     mock_run.ended_at = datetime.now(timezone.utc) - timedelta(minutes=30)
 
-    _mock_auto_archive_db(mock_db, plan=mock_plan, run=mock_run, scan_count=0)
+    _mock_auto_archive_db(
+        mock_db, plan=mock_plan, run=mock_run, scan_count=0, terminal_candidates=[],
+    )
 
     orig = mod.SessionLocal
     mod.SessionLocal = mock_SessionLocal
@@ -1085,22 +1107,9 @@ def test_auto_archive_sweep_prefers_running_over_older_terminal():
     mock_running.status = "RUNNING"
     mock_running.ended_at = None
 
-    plan_query = MagicMock()
-    plan_query.filter.return_value = plan_query
-    plan_query.all.return_value = [mock_plan]
-
-    running_query = MagicMock()
-    running_query.filter.return_value = running_query
-    running_query.order_by.return_value = running_query
-    running_query.first.return_value = mock_running
-
-    mock_db.query.side_effect = lambda model: (
-        plan_query if getattr(model, "__name__", "") == "Plan" else running_query
+    _mock_auto_archive_db(
+        mock_db, plan=mock_plan, run=mock_running, scan_count=0,
     )
-
-    execute_result = MagicMock()
-    execute_result.scalar_one.side_effect = [0, None]
-    mock_db.execute.return_value = execute_result
 
     orig = mod.SessionLocal
     mod.SessionLocal = mock_SessionLocal
@@ -1109,5 +1118,190 @@ def test_auto_archive_sweep_prefers_running_over_older_terminal():
         with patch("backend.services.dedup_scan.enqueue_dedup_terminal_sync") as mock_enqueue:
             mod.auto_archive_sweep()
             mock_enqueue.assert_called_once_with(55, is_final=False)
+    finally:
+        mod.SessionLocal = orig
+
+
+def test_auto_archive_sweep_serves_oldest_due_terminal_not_newest():
+    """#833: when a newer terminal run exists, still enqueue the older due run."""
+    import backend.scheduler.cron_scheduler as mod
+
+    mock_db = MagicMock()
+    session_cm = MagicMock()
+    session_cm.__enter__ = MagicMock(return_value=mock_db)
+    session_cm.__exit__ = MagicMock(return_value=False)
+    mock_SessionLocal = MagicMock(return_value=session_cm)
+
+    mock_plan = MagicMock()
+    mock_plan.id = 10
+    mock_plan.auto_archive_interval_seconds = 3600
+
+    older = MagicMock()
+    older.id = 1
+    older.status = "SUCCESS"
+    older.ended_at = datetime.now(timezone.utc) - timedelta(hours=5)
+
+    newer = MagicMock()
+    newer.id = 2
+    newer.status = "SUCCESS"
+    newer.ended_at = datetime.now(timezone.utc) - timedelta(hours=3)
+    newer.run_context = {"extract": {"copied": 1}}
+
+    # Oldest-first candidate list; newer already archive-complete → skip to older.
+    _mock_auto_archive_db(
+        mock_db,
+        plan=mock_plan,
+        run=older,
+        scan_count=0,
+        terminal_candidates=[older, newer],
+    )
+    # First candidate (older): scan_count=0 → enqueue without merge check.
+    # (If older were complete we'd need more scalar_one values; here scan_count=0.)
+
+    orig = mod.SessionLocal
+    mod.SessionLocal = mock_SessionLocal
+
+    try:
+        with patch("backend.services.dedup_scan.enqueue_dedup_terminal_sync") as mock_enqueue:
+            mod.auto_archive_sweep()
+            mock_enqueue.assert_called_once_with(1, is_final=True)
+    finally:
+        mod.SessionLocal = orig
+
+
+def test_auto_archive_sweep_skips_complete_newer_serves_older_incomplete():
+    """#833: skip archive-complete newest, serve older incomplete terminal."""
+    import backend.scheduler.cron_scheduler as mod
+
+    mock_db = MagicMock()
+    session_cm = MagicMock()
+    session_cm.__enter__ = MagicMock(return_value=mock_db)
+    session_cm.__exit__ = MagicMock(return_value=False)
+    mock_SessionLocal = MagicMock(return_value=session_cm)
+
+    mock_plan = MagicMock(id=10, auto_archive_interval_seconds=3600)
+
+    older = MagicMock(
+        id=1,
+        status="SUCCESS",
+        ended_at=datetime.now(timezone.utc) - timedelta(hours=5),
+        run_context={},
+    )
+    newer = MagicMock(
+        id=2,
+        status="SUCCESS",
+        ended_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        run_context={"extract": {"copied": 1}},
+    )
+
+    plan_query = MagicMock()
+    plan_query.filter.return_value = plan_query
+    plan_query.all.return_value = [mock_plan]
+
+    running_query = MagicMock()
+    running_query.filter.return_value = running_query
+    running_query.order_by.return_value = running_query
+    running_query.first.return_value = None
+
+    terminal_query = MagicMock()
+    terminal_query.filter.return_value = terminal_query
+    terminal_query.order_by.return_value = terminal_query
+    # Oldest-first as production query orders.
+    terminal_query.all.return_value = [older, newer]
+
+    calls = {"n": 0}
+
+    def _query(model):
+        name = getattr(model, "__name__", "")
+        if name == "Plan":
+            return plan_query
+        if name == "PlanRun":
+            calls["n"] += 1
+            return running_query if calls["n"] == 1 else terminal_query
+        return MagicMock()
+
+    mock_db.query.side_effect = _query
+
+    # older: scan_count=0 → enqueue immediately (no merge check)
+    # (Order in candidates is oldest-first, so older is first.)
+    execute_result = MagicMock()
+    execute_result.scalar_one.side_effect = [0]
+    mock_db.execute.return_value = execute_result
+
+    orig = mod.SessionLocal
+    mod.SessionLocal = mock_SessionLocal
+    try:
+        with patch("backend.services.dedup_scan.enqueue_dedup_terminal_sync") as mock_enqueue:
+            mod.auto_archive_sweep()
+            mock_enqueue.assert_called_once_with(1, is_final=True)
+    finally:
+        mod.SessionLocal = orig
+
+
+def test_auto_archive_sweep_skips_complete_oldest_then_serves_next():
+    """#833: if oldest is archive-complete, move to next due terminal."""
+    import backend.scheduler.cron_scheduler as mod
+
+    mock_db = MagicMock()
+    session_cm = MagicMock()
+    session_cm.__enter__ = MagicMock(return_value=mock_db)
+    session_cm.__exit__ = MagicMock(return_value=False)
+    mock_SessionLocal = MagicMock(return_value=session_cm)
+
+    mock_plan = MagicMock(id=10, auto_archive_interval_seconds=3600)
+
+    older = MagicMock(
+        id=1,
+        status="SUCCESS",
+        ended_at=datetime.now(timezone.utc) - timedelta(hours=5),
+        run_context={"extract": {"copied": 1}},
+    )
+    newer = MagicMock(
+        id=2,
+        status="SUCCESS",
+        ended_at=datetime.now(timezone.utc) - timedelta(hours=3),
+        run_context={},
+    )
+
+    plan_query = MagicMock()
+    plan_query.filter.return_value = plan_query
+    plan_query.all.return_value = [mock_plan]
+
+    running_query = MagicMock()
+    running_query.filter.return_value = running_query
+    running_query.order_by.return_value = running_query
+    running_query.first.return_value = None
+
+    terminal_query = MagicMock()
+    terminal_query.filter.return_value = terminal_query
+    terminal_query.order_by.return_value = terminal_query
+    terminal_query.all.return_value = [older, newer]
+
+    calls = {"n": 0}
+
+    def _query(model):
+        name = getattr(model, "__name__", "")
+        if name == "Plan":
+            return plan_query
+        if name == "PlanRun":
+            calls["n"] += 1
+            return running_query if calls["n"] == 1 else terminal_query
+        return MagicMock()
+
+    mock_db.query.side_effect = _query
+
+    # older: scan_count=1, merge_count=1 → complete, skip
+    # newer: scan_count=0 → enqueue
+    execute_result = MagicMock()
+    execute_result.scalar_one.side_effect = [1, 1, 0]
+    mock_db.execute.return_value = execute_result
+    mock_db.get.side_effect = lambda model, pk: older if pk == 1 else newer
+
+    orig = mod.SessionLocal
+    mod.SessionLocal = mock_SessionLocal
+    try:
+        with patch("backend.services.dedup_scan.enqueue_dedup_terminal_sync") as mock_enqueue:
+            mod.auto_archive_sweep()
+            mock_enqueue.assert_called_once_with(2, is_final=True)
     finally:
         mod.SessionLocal = orig
