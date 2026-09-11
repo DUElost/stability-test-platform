@@ -1,7 +1,7 @@
 # ADR-0027: 控制面水平扩展（Leader Election + 多实例）
 
 - 状态：Accepted（P3-1 / P3-2 / P3-3 代码已落地；生产多实例仍为 **opt-in**，见 ADR-0025 D1）
-- 版本记录：v1.1（2026-09-08）leadership 失败策略 fail-open → 按 deployment 形态分级（R01-F10/#890）/ v1.2（2026-09-11）多实例清单增补 RunConsole 单实例约束（#1114，R11-F06）
+- 版本记录：v1.1（2026-09-08）leadership 失败策略 fail-open → 按 deployment 形态分级（R01-F10/#890）/ v1.2（2026-09-11）多实例清单增补 RunConsole 单实例约束（#1114，R11-F06）/ v1.3（2026-09-11）「可不 sticky」加 transport 前提：Agent websocket-only（#1121，R11-F13）
 - 优先级：P2
 - 目标里程碑：M6
 - 日期：2026-07-20
@@ -78,7 +78,11 @@ ADR-0026 将 P3 标为远期方向：
 1. `STP_SCHEDULER_LEADER_ELECTION=1`（默认）
 2. `STP_SOCKETIO_REDIS_ADAPTER=1`
 3. `STP_AGENT_SID_REGISTRY` 保持默认（跟随 adapter）或显式 `1`
-4. Postgres + Redis 可达；LB 可不 sticky（RPC 走 room）
+4. Postgres + Redis 可达；LB 可不 sticky **的条件**（v1.3 / #1121）：Agent 强制
+   `transports=["websocket"]`（单条长连接=会话天然亲和）+ LB/nginx 支持 WS upgrade；
+   浏览器端 WS-first，**polling 回退路径需会话 sticky**。无 sticky 的端到端 RPC
+   验收仍按 [adr-0026 rollout 清单](../operations/adr-0026-admission-and-scale-gray-rollout.md)
+   的未勾选项执行
 5. 仍以 ADR-0025 D1 重启条件为准，勿过早扩容
 6. **RunConsole 依赖功能为单实例语义**（v1.2 / #1114 / R11-F06）：dedup Jira `run_key`
    串行、Agent 安装 console、AI 助手 console 动作与日志、`console:` 房间订阅均依赖
@@ -114,3 +118,4 @@ ADR-0026 将 P3 标为远期方向：
 | 2026-07-20 | P3-3：全量 singleton schedule leadership + Agent sid registry + room RPC；状态 → Accepted；解除 sticky 依赖 |
 | 2026-09-08 | v1.1（R01-F10/#890）：Postgres 形态下 leadership 获取失败 fail-open → **fail-closed**（跳过 tick）；fail-open 仅保留于显式禁用（遗留单进程）与非 PG 形态两条文档化豁免路径；故障注入测试 `tests/test_leader_election.py` |
 | 2026-09-11 | v1.2（#1114/R11-F06）：多实例检查清单增补第 6 条——RunConsole 依赖功能（dedup 串行 / 安装 console / 助手 console / console 房间）为单实例语义；跨实例 console 操作改可诊断错误 + 启动 WARN（未做 owner 路由，属显式限制而非默认行为） |
+| 2026-09-11 | v1.3（#1121/R11-F13）：清单第 4 条「LB 可不 sticky」加前提——Agent websocket-only（实现同步改 `transports=["websocket"]`；此前默认 polling 优先，会话亲和与无 sticky 冲突）+ 浏览器 polling 回退需 sticky；无 sticky 端到端验收仍归 rollout 清单 |

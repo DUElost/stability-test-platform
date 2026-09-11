@@ -386,6 +386,12 @@ def send_message(
     content = str(payload.get("content") or "").strip()
     if not content:
         raise HTTPException(status_code=422, detail="content is required")
+    # #798: 轮次互斥加行锁——纯「查-插-提交」在双击/重试并发下两个请求都
+    # 通过检查 → 两条占位落库，一条因 SAQ 同 key 去重永久 pending。锁会话行
+    # （检查+插入同事务，commit 释放）后并发请求串行化。
+    db.query(AiChatSession).filter(
+        AiChatSession.id == session.id
+    ).with_for_update().first()
     # 轮次互斥：同会话已有 pending/running 轮时拒绝再发——否则第二占位会因
     # SAQ 同 key 去重而孤儿化（线上实测：占位永挂 pending）。#547 的续轮
     # 占位机制让该互斥更必要（审批也会建占位）。
