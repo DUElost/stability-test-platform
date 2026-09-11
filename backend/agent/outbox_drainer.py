@@ -202,15 +202,12 @@ class OutboxDrainThread:
                         job_id, str(e), reason="http_%d" % status_code,
                     )
                 else:
-                    # 5xx / 无响应：同样走上限死信，与 log_signal/step_trace 对齐
-                    # （#742/#762：持续 5xx 或分区同样会卡死队头）。
-                    self._retain_or_dead_letter(
-                        job_id, str(e), reason="http_%s" % status_code,
-                    )
+                    # #762：5xx / 无响应属瞬时故障，维持无限重试，不走死信上限
+                    # （瞬时故障不得丢终态事实；与 4xx 永久拒绝有本质区别）。
+                    self._local_db.bump_terminal_attempt(job_id, str(e))
             except Exception as e:
-                self._retain_or_dead_letter(
-                    job_id, str(e), reason="exception",
-                )
+                # 网络异常同 5xx 口径：无限重试，不走死信上限。
+                self._local_db.bump_terminal_attempt(job_id, str(e))
                 logger.warning("outbox_drain_retry job=%d error=%s", job_id, e)
 
         if sent:
