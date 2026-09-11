@@ -24,6 +24,7 @@ class AiAssistantConfigOut(ORMBaseModel):
     enabled: bool = False
     temperature: float = 0.2
     max_turns: int = 8
+    max_auto_continuations: int = 20
     request_timeout_seconds: int = 120
     t1_require_confirm: bool = False
     auto_approve_tools: list[str] = Field(default_factory=list)
@@ -39,6 +40,7 @@ class AiAssistantConfigUpdate(ORMBaseModel):
     enabled: bool | None = None
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_turns: int | None = Field(default=None, ge=1, le=20)
+    max_auto_continuations: int | None = Field(default=None, ge=1, le=200)
     request_timeout_seconds: int | None = Field(default=None, ge=10, le=600)
     t1_require_confirm: bool | None = None
     auto_approve_tools: list[str] | None = None

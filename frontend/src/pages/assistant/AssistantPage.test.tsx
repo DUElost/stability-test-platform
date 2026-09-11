@@ -139,11 +139,19 @@ describe('AssistantPage', () => {
     expect(await screen.findByText('帮我跑一遍 check:quick 门禁')).toBeInTheDocument();
   });
 
-  it('后端返回未配置错误时切换引导横幅（admin 见「前往设置」）', async () => {
+  it('code=ai_not_configured 且 message 为人话时仍显示引导横幅（#1226）', async () => {
     mocks.aiAssistant.sendMessage.mockRejectedValue(
       Object.assign(
-        new Error('ai_not_configured'),
-        { response: { status: 409, data: { error: { code: 'ai_not_configured', message: 'ai_not_configured' } } } },
+        new Error('Request failed with status code 409'),
+        {
+          response: {
+            status: 409,
+            data: {
+              // 与真实后端一致：码在 code、人话在 message（旧测试两者同串，掩盖了 bug）
+              error: { code: 'ai_not_configured', message: 'AI 助手尚未配置，请联系管理员启用' },
+            },
+          },
+        },
       ),
     );
     renderPage();
@@ -153,5 +161,23 @@ describe('AssistantPage', () => {
 
     expect(await screen.findByText(/尚未启用/)).toBeInTheDocument();
     expect(screen.getByText('前往设置')).toBeInTheDocument();
+  });
+
+  it('#1226：其他发送错误仍走 toast，不误触引导横幅', async () => {
+    mocks.aiAssistant.sendMessage.mockRejectedValue(
+      Object.assign(new Error('Request failed with status code 502'), {
+        response: {
+          status: 502,
+          data: { error: { code: 'upstream_error', message: '上游模型超时' } },
+        },
+      }),
+    );
+    renderPage();
+    const input = await screen.findByLabelText('消息输入框');
+    fireEvent.change(input, { target: { value: '你好' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('上游模型超时'));
+    expect(screen.queryByText(/尚未启用/)).not.toBeInTheDocument();
   });
 });

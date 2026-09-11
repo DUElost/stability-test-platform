@@ -682,3 +682,97 @@ def test_anr_event_not_routed_to_bugreport_under_aee_guard(tmp_path, monkeypatch
         p.stop(drain=True, timeout=1.0)
 
     assert call_count["n"] == 0, "ANR 不应进入 _maybe_export_bugreport(guard 只放 AEE/VENDOR_AEE)"
+
+
+# ----------------------------------------------------------------------
+# #1053: 单 Job NFS 写入配额（nfs_quota_mb）
+# ----------------------------------------------------------------------
+
+
+class _DirAdb:
+    """模拟 adb pull 目录：在 local 写一棵目录树。"""
+
+    def __init__(self, files: Dict[str, bytes]) -> None:
+        self._files = files
+        self.pull_calls: List[str] = []
+
+    def pull(self, serial: str, remote: str, local: str):
+        self.pull_calls.append(remote)
+        root = Path(local)
+        root.mkdir(parents=True, exist_ok=True)
+        for name, data in self._files.items():
+            (root / name).write_bytes(data)
+        return subprocess.CompletedProcess(
+            args=["adb"], returncode=0, stdout="", stderr="",
+        )
+
+
+class TestNfsQuota:
+    def _puller(self, adb, tmp_path, coll, **kw):
+        return LogPuller(
+            adb=adb, nfs_base_dir=str(tmp_path / "nfs"),
+            job_id=1, host_id="H", serial="S",
+            on_pull_done=coll, **kw,
+        )
+
+    def test_file_within_quota_accumulates(self, tmp_path):
+        body = b"x" * (1024 * 1024)  # 1 MiB
+        adb = _FakeAdb(content_by_remote={"/data/aee_exp/a.log": body})
+        coll = _Collector()
+        p = self._puller(adb, tmp_path, coll, nfs_quota_mb=10)
+        p.start()
+        try:
+            p.submit(_evt(filename="a.log"))
+            assert coll.wait_for(1, timeout=2.0)
+        finally:
+            p.stop(drain=True, timeout=1.0)
+
+        assert Path(coll.calls[0][1]["artifact_uri"]).exists()
+        assert p._nfs_written_bytes == len(body)
+        assert p.stats.pulls_quota_exceeded == 0
+
+    def test_over_quota_file_dropped_and_later_pulls_skipped(self, tmp_path):
+        big = b"y" * (2 * 1024 * 1024)  # 2 MiB > 1 MiB 配额
+        adb = _FakeAdb(content_by_remote={
+            "/data/aee_exp/big.log": big,
+            "/data/aee_exp/after.log": b"z",
+        })
+        coll = _Collector()
+        p = self._puller(adb, tmp_path, coll, nfs_quota_mb=1)
+        p.start()
+        try:
+            p.submit(_evt(filename="big.log"))
+            assert coll.wait_for(1, timeout=2.0)
+            p.submit(_evt(filename="after.log"))
+            assert coll.wait_for(2, timeout=2.0)
+        finally:
+            p.stop(drain=True, timeout=1.0)
+
+        by_name = {evt.filename: enr for evt, enr in coll.calls}
+        assert by_name["big.log"]["artifact_uri"] is None  # 超限不驻留
+        assert by_name["big.log"]["size_bytes"] == len(big)
+        assert by_name["after.log"]["artifact_uri"] is None  # 耗尽后直接跳过
+        assert len(adb.pull_calls) == 1, "配额耗尽后不得再发起 adb pull"
+        assert p.stats.pulls_quota_exceeded >= 1
+
+    def test_directory_over_quota_removed(self, tmp_path):
+        adb = _DirAdb(files={
+            "f1": b"q" * (1024 * 1024),
+            "f2": b"q" * (512 * 1024),
+        })  # 1.5 MiB > 1 MiB
+        coll = _Collector()
+        p = self._puller(adb, tmp_path, coll, nfs_quota_mb=1)
+        p.start()
+        try:
+            p.submit(_evt(filename="dir_artifact"))
+            assert coll.wait_for(1, timeout=2.0)
+        finally:
+            p.stop(drain=True, timeout=1.0)
+
+        enrichment = coll.calls[0][1]
+        assert enrichment["artifact_uri"] is None
+        assert enrichment["size_bytes"] == 1024 * 1024 + 512 * 1024
+        nfs_root = tmp_path / "nfs"
+        remaining = [p for p in nfs_root.rglob("f1")] if nfs_root.exists() else []
+        assert remaining == [], "超配额目录必须删除，不驻留"
+        assert p._quota_exceeded is True

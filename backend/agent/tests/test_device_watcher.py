@@ -411,3 +411,100 @@ def test_emitter_property_exposes_signal_emitter(db):
     assert watcher.emitter.job_id == 805
     assert watcher.aee_reconciler_active is False
 
+
+# ----------------------------------------------------------------------
+# #1049：inotifyd 源退出后的退避重连（源监督线程）
+# ----------------------------------------------------------------------
+
+
+class _FakeRestartableSource:
+    """可注入的假源：start() 支持反复调用（模拟 InotifydSource 重启语义）。"""
+
+    def __init__(self, fail_on_starts=()):
+        self.running = False
+        self.starts = 0
+        self._fail_on_starts = set(fail_on_starts)
+
+    def start(self):
+        self.starts += 1
+        if self.starts in self._fail_on_starts:
+            raise RuntimeError("restart boom")
+        self.running = True
+
+    def stop(self, timeout=2.0):
+        self.running = False
+
+    def is_running(self):
+        return self.running
+
+
+def _watcher_with_fake_source(db, serial, *, delay=0.05, fail_on_starts=()):
+    policy = WatcherPolicy(batch_interval_seconds=10.0, inotifyd_reconnect_delay=delay)
+    watcher = DeviceLogWatcher(
+        adb_path="adb", local_db=db,
+        host_id="HOST", serial=serial, job_id=903,
+        policy=policy,
+        capability=WatcherCapability.INOTIFYD_ROOT,
+        probe_result=_probe_all_root(),
+    )
+    fake = _FakeRestartableSource(fail_on_starts=fail_on_starts)
+    watcher._source = fake
+    return watcher, fake
+
+
+def _wait_until(predicate, deadline_seconds=3.0):
+    deadline = time.time() + deadline_seconds
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+def test_source_exit_triggers_reconnect_and_is_counted(db):
+    watcher, fake = _watcher_with_fake_source(db, "SUP1")
+    watcher.start()
+    try:
+        assert fake.starts == 1 and fake.running
+        fake.running = False          # 模拟 EOF / inotifyd 进程退出
+        assert _wait_until(lambda: fake.starts >= 2), "源退出后应自动重连"
+        assert _wait_until(lambda: watcher.stats.source_restarts >= 1)
+        assert watcher.stats.to_dict()["source_restarts"] >= 1
+    finally:
+        watcher.stop(drain=False, timeout=1.0)
+
+
+def test_source_reconnect_failure_retries_with_backoff(db):
+    """重连尝试失败不放弃：按退避继续重试，仅成功计入 restarts。"""
+    watcher, fake = _watcher_with_fake_source(
+        db, "SUP2", delay=0.05, fail_on_starts={2},
+    )
+    watcher.start()
+    try:
+        fake.running = False          # 退出；第 2 次 start 失败、第 3 次成功
+        assert _wait_until(lambda: fake.starts >= 3), "失败后应继续退避重试"
+        assert fake.running
+        assert _wait_until(lambda: watcher.stats.source_restarts == 1)
+    finally:
+        watcher.stop(drain=False, timeout=1.0)
+
+
+def test_supervisor_stops_with_watcher(db):
+    watcher, fake = _watcher_with_fake_source(db, "SUP3")
+    watcher.start()
+    assert _wait_until(lambda: fake.running)
+    watcher.stop(drain=False, timeout=1.0)
+
+    starts_after_stop = fake.starts
+    fake.running = False
+    time.sleep(0.25)                  # 监督线程已退出 → 不应再重连
+    assert fake.starts == starts_after_stop
+
+
+def test_next_reconnect_delay_grows_and_caps(db):
+    watcher, _ = _watcher_with_fake_source(db, "SUP4", delay=5.0)
+    assert watcher._next_reconnect_delay(0) == 5.0
+    assert watcher._next_reconnect_delay(1) == 10.0
+    assert watcher._next_reconnect_delay(2) == 20.0
+    assert watcher._next_reconnect_delay(10) == 60.0   # 封顶
+
