@@ -42,6 +42,22 @@ Class: process
 - **未验证**：Registry CLI 经 dsh web 的 Shell 工具理论可用，未 dogfood；完整
   Execution 周期以首个真实单为准。
 
+## Decision
+
+dsh web **可作为 ADR-0034 harness 使用**——加载行为与 headless 同源（root→cwd 基线链
+经行为探针证实）；静态 `disabled: true` 与运行时矛盾，判定只认行为探针。调用前提
+与已知限制（原生目录选择器注册、GUI 无脚本通道、共享 `~/.dsh` 全局状态）随结论一并
+写入 ADR-0034 v1.10 附录 A；本 note 为实测证据母本。
+
+## Alternatives
+
+- 以静态配置（`--dump-config` / cordis.patch.yml）判定插件禁用 → 放弃：与运行时
+  行为矛盾（见「实测 · 坑」），只认行为探针；
+- 经 dsh web GUI 做自动化探针 → 放弃：工作区注册仅原生目录选择器、无脚本通道，
+  浏览器自动化不可驱动（headless profile 即替代通道）；
+- 等待上游澄清 re-enable 机制后再实测 → 放弃：结论不依赖机制细节（行为已证），
+  机制留 Revisit。
+
 ## Verification
 
 - headless/web 双通道探针问答与 UI 状态留档于本会话记录；探针 worktree 已
