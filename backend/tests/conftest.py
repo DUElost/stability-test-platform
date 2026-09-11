@@ -6,6 +6,7 @@ import asyncio
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from testcontainers.postgres import PostgresContainer
@@ -48,7 +49,23 @@ def _resolve_test_database_url() -> str:
 
     configured = os.getenv("TEST_DATABASE_URL")
     if configured:
-        return _normalize_test_database_url(configured)
+        normalized = _normalize_test_database_url(configured)
+        # #1300（R15-R01）：显式地址的机器护栏——隔离命名 + 运行时配置比对；
+        # 误指生产库时在这里拒绝，而不是让 db_session 的全表 TRUNCATE 动手。
+        # 按文件路径加载（不进 backend.core 包）：此时代码尚未设置
+        # DATABASE_URL，包级导入会触发 env_source 的配置解析直接失败。
+        import importlib.util
+
+        guard_path = (
+            Path(__file__).resolve().parent.parent / "core" / "db_url_guard.py"
+        )
+        spec = importlib.util.spec_from_file_location("db_url_guard", guard_path)
+        guard_mod = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(guard_mod)
+        return guard_mod.guard_test_database_url(
+            normalized, runtime_database_url=os.getenv("DATABASE_URL"),
+        )
 
     _TEST_DB_CONTAINER = PostgresContainer("postgres:16")
     _TEST_DB_CONTAINER.start()
