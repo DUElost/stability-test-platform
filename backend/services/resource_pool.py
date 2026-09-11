@@ -19,6 +19,17 @@ from backend.models.resource_pool import ResourceAllocation, ResourcePool
 
 logger = logging.getLogger(__name__)
 
+# 与 resource_pools._PUBLIC_CONFIG_KEYS 同口径：loads/available 列表只暴露非机密字段。
+PUBLIC_CONFIG_KEYS = ("ssid", "band", "router_ip", "mac_filter")
+
+
+def public_pool_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in (config or {}).items()
+        if key in PUBLIC_CONFIG_KEYS
+    }
+
 # 与 plan_dispatcher_sync.ACTIVE_JOB_STATUSES 保持一致：UNKNOWN grace 期内
 # 仍占用资源，池负载/容量须纳入（#154 对齐收口）
 ACTIVE_JOB_STATUSES = (
@@ -217,6 +228,7 @@ async def get_pool_load_summary(db: AsyncSession) -> list[dict[str, Any]]:
             "current_devices": loads.get(p.id, 0),
             "host_group": p.host_group,
             "is_active": p.is_active,
+            "config": public_pool_config(p.config),
         }
         for p in pools
     ]

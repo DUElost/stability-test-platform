@@ -170,6 +170,8 @@ ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping --limi
 - 非交互执行 `install_agent.sh`
 - 刷新 `agentctl`
 - 修正安装目录和 `.env` 权限
+- 落盘主日志 logrotate 配置（`/etc/logrotate.d/<service>`，`size 50M × rotate 5`、
+  `copytruncate`，#1265）
 - 启用并启动 systemd 服务
 - 等待服务达到 `active`
 
@@ -178,6 +180,9 @@ ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping --limi
 - 首次部署会保留安装脚本的现有行为
 - `.env` 仍由安装脚本生成
 - 当前不做失败后的破坏性回滚
+- 主日志轮转由主机 logrotate（cron / timer）执行：确认主机已安装 logrotate 且在运行；
+  建议对 `<install_dir>/logs` 所在分区配置容量告警；若主机已有全局 logrotate 策略，
+  注意与本配置（`/etc/logrotate.d/stability-test-agent`）的参数叠加。
 
 ### `update_agent.yml`
 

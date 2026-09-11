@@ -157,3 +157,55 @@ class TestAllocateFromChosenPool:
 
         with pytest.raises(AllocationError):
             _sync_allocate_devices(db_session, [sample_device.id + 100], pool_id=a.id)
+
+    def test_host_group_restricts_pool_to_matching_host(
+        self, db_session, sample_device, sample_host, sample_offline_host,
+    ):
+        global_pool = ResourcePool(
+            name="global", resource_type="wifi",
+            config={"ssid": "global", "password": "pw"},
+            max_concurrent_devices=10, is_active=True,
+        )
+        host_pool = ResourcePool(
+            name="host-only", resource_type="wifi",
+            config={"ssid": "host-only", "password": "pw"},
+            max_concurrent_devices=10, is_active=True,
+            host_group=sample_host.name,
+        )
+        other_pool = ResourcePool(
+            name="other-host", resource_type="wifi",
+            config={"ssid": "other", "password": "pw"},
+            max_concurrent_devices=10, is_active=True,
+            host_group=sample_offline_host.id,
+        )
+        db_session.add_all([global_pool, host_pool, other_pool])
+        db_session.commit()
+
+        host_map = {sample_device.id: sample_host.id}
+        result = _sync_allocate_devices(
+            db_session, [sample_device.id], device_host_map=host_map,
+        )
+        pool, params = result[sample_device.id]
+        assert pool.id in {global_pool.id, host_pool.id}
+        assert pool.id != other_pool.id
+
+    def test_pinned_pool_rejects_wrong_host_group(
+        self, db_session, sample_device, sample_host,
+    ):
+        restricted = ResourcePool(
+            name="lab-only", resource_type="wifi",
+            config={"ssid": "lab", "password": "pw"},
+            max_concurrent_devices=10, is_active=True,
+            host_group="non-matching-host",
+        )
+        db_session.add(restricted)
+        db_session.commit()
+
+        with pytest.raises(AllocationError) as exc:
+            _sync_allocate_devices(
+                db_session,
+                [sample_device.id],
+                pool_id=restricted.id,
+                device_host_map={sample_device.id: sample_host.id},
+            )
+        assert str(restricted.id) in str(exc.value)
