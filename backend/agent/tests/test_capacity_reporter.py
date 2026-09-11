@@ -246,3 +246,78 @@ def test_unhealthy_still_zero_despite_cap(monkeypatch):
         mount_status=_healthy_mount_status(),
     )
     assert result["capacity"]["effective_slots"] == 0
+
+
+# ── usb_device_count：lsusb 对照值（纯观测，不得影响调度） ────────────────────
+
+def test_usb_device_count_is_reported_in_capacity():
+    result = compute_capacity(
+        active_job_count=1,
+        active_device_count=0,
+        online_healthy_devices=3,
+        total_devices=3,
+        system_stats=_healthy_system_stats(),
+        mount_status=_healthy_mount_status(),
+        usb_device_count=5,
+    )
+    assert result["capacity"]["usb_device_count"] == 5
+
+
+def test_usb_device_count_defaults_to_none():
+    """未传（旧 Agent / 采集失败）→ None，前端显示「—」而非 0。"""
+    result = compute_capacity(
+        active_job_count=1,
+        active_device_count=0,
+        online_healthy_devices=3,
+        total_devices=3,
+        system_stats=_healthy_system_stats(),
+        mount_status=_healthy_mount_status(),
+    )
+    assert result["capacity"]["usb_device_count"] is None
+
+
+def test_usb_device_count_does_not_affect_scheduling():
+    """回归保护：USB 对照值再悬殊，也不得改变槽位或健康判定。
+
+    USB 数 > ADB 数（授权/驱动问题）与 USB 数 < ADB 数是现场常见故障形态；
+    两者都必须与不传该字段时逐字段一致，否则会误伤派发。
+    """
+    baseline = compute_capacity(
+        active_job_count=2,
+        active_device_count=1,
+        online_healthy_devices=8,
+        total_devices=10,
+        system_stats=_healthy_system_stats(),
+        mount_status=_healthy_mount_status(),
+    )
+    for usb in (0, 1, 8, 99):
+        with_usb = compute_capacity(
+            active_job_count=2,
+            active_device_count=1,
+            online_healthy_devices=8,
+            total_devices=10,
+            system_stats=_healthy_system_stats(),
+            mount_status=_healthy_mount_status(),
+            usb_device_count=usb,
+        )
+        assert with_usb["health"] == baseline["health"]
+        for key, value in baseline["capacity"].items():
+            if key == "usb_device_count":
+                continue  # 对照值本身，不参与一致性比较
+            assert with_usb["capacity"][key] == value, f"{key} drifted with usb={usb}"
+
+
+def test_usb_device_count_does_not_rescue_adb_dead_host():
+    """USB 能看到设备也不能让 adb 全死的主机恢复调度（门禁只看 adb 口径）。"""
+    result = compute_capacity(
+        active_job_count=0,
+        active_device_count=0,
+        online_healthy_devices=0,
+        total_devices=5,
+        system_stats=_healthy_system_stats(),
+        mount_status=_healthy_mount_status(),
+        usb_device_count=5,
+    )
+    assert result["capacity"]["effective_slots"] == 0
+    assert result["health"]["status"] == "UNSCHEDULABLE"
+    assert "adb_low_healthy_devices" in result["health"]["reasons"]

@@ -107,6 +107,13 @@ effective_capacity = capacity   # Agent 心跳上报值，不再与 host.max_con
 
 Phase 1 在 `host` 表新增 `max_concurrent_jobs` 字段（integer, NOT NULL, DEFAULT 2），作为该 Host 的设备槽位上限。
 
+> **2026-09-11 追加**：`capacity` 新增只读对照字段 `usb_device_count`（lsusb 枚举到的
+> 疑似 Android 设备数，`null` = 采集失败/不可用）。它与 `online_healthy_devices`
+> （`adb devices` 口径）在 Hosts 页「设备 / 任务」列并排展示，用于区分「USB 上没设备」
+> 与「设备在 USB 上但 ADB 未枚举」（授权/驱动/多 fork-server，#160）。
+> **该字段不参与任何槽位与健康门禁计算**——`device_slots` / `effective_slots` /
+> `health` 全部仍只看 ADB 口径，避免「USB 看得到就放行」绕过设备租约语义。
+
 > ~~`max_concurrent_jobs` 字段仍存在于 DB 列和 ORM 定义中（`backend/models/host.py:28`）~~ **已移除**（migration `q2r3s4t5u6v7`，2026-06-12）。ORM、API、前端均无引用。
 
 原 `cpu_quota` 字段不再用于并发控制，避免 CPU 配额与设备槽位语义混淆。

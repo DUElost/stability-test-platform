@@ -433,3 +433,84 @@ def test_ping_with_fallback_returns_none_when_all_parse_failed(adb_path: str, se
     assert latency is None
     assert mock_run.call_count == 2
     assert mock_parse.call_count == 2
+
+
+# ── lsusb 对照计数（与 adb devices 并排展示的物理连接数） ──────────────────────
+
+_LSUSB_MIXED = (
+    "Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub\n"
+    "Bus 001 Device 004: ID 1c4f:0002 SiGma Micro Keyboard TRACER Gamma Ivory\n"
+    "Bus 001 Device 005: ID 413c:301a Dell Computer Corp. Dell MS116 Optical Mouse\n"
+    "Bus 001 Device 013: ID 0e8d:2046 MediaTek Inc. MLD-LX2\n"
+    "Bus 001 Device 014: ID 18d1:4ee7 Google Inc. Nexus Device\n"
+    "Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub\n"
+)
+
+
+def test_parse_lsusb_output_counts_only_android_like_devices():
+    """root hub / 键鼠被排除，真实手机计入。"""
+    assert device_module.parse_lsusb_output(_LSUSB_MIXED) == 2
+
+
+def test_parse_lsusb_output_empty_is_zero():
+    assert device_module.parse_lsusb_output("") == 0
+
+
+def test_parse_lsusb_output_ignores_malformed_lines():
+    text = (
+        "not a usb line\n"
+        "Bus 001 Device 013: ID 0e8d:2046 MediaTek Inc. MLD-LX2\n"
+        "\n"
+    )
+    assert device_module.parse_lsusb_output(text) == 1
+
+
+def test_parse_lsusb_output_all_peripherals_is_zero():
+    text = (
+        "Bus 001 Device 006: ID 0bda:8153 Realtek Ethernet adapter\n"
+        "Bus 001 Device 007: ID 05ac:0250 Apple Inc. Keyboard\n"
+        "Bus 001 Device 008: ID 0781:5567 SanDisk Corp. Mass Storage\n"
+    )
+    assert device_module.parse_lsusb_output(text) == 0
+
+
+def test_count_usb_devices_parses_real_output(completed_process_factory):
+    cp = completed_process_factory(stdout=_LSUSB_MIXED)
+
+    with patch.object(device_module.subprocess, "run", return_value=cp) as mock_run:
+        assert device_module.count_usb_devices() == 2
+
+    mock_run.assert_called_once_with(
+        ["lsusb"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+
+def test_count_usb_devices_returns_none_when_lsusb_missing():
+    """lsusb 不存在 → None（未知），不能伪装成 0。"""
+    with patch.object(device_module.subprocess, "run", side_effect=FileNotFoundError("no lsusb")):
+        assert device_module.count_usb_devices() is None
+
+
+def test_count_usb_devices_returns_none_on_timeout():
+    with patch.object(
+        device_module.subprocess,
+        "run",
+        side_effect=device_module.subprocess.TimeoutExpired(cmd="lsusb", timeout=5),
+    ):
+        assert device_module.count_usb_devices() is None
+
+
+def test_count_usb_devices_returns_none_on_nonzero_exit(completed_process_factory):
+    cp = completed_process_factory(stdout="", stderr="permission denied", returncode=1)
+    with patch.object(device_module.subprocess, "run", return_value=cp):
+        assert device_module.count_usb_devices() is None
+
+
+def test_count_usb_devices_returns_zero_when_no_target_devices(completed_process_factory):
+    """成功采集但确实没有目标设备 → 0（与「未知」语义不同）。"""
+    cp = completed_process_factory(stdout="Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub\n")
+    with patch.object(device_module.subprocess, "run", return_value=cp):
+        assert device_module.count_usb_devices() == 0

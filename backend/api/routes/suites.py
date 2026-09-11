@@ -135,6 +135,7 @@ def _suite_out(
         "case_count": len(cases),
         "enabled_case_count": sum(1 for c in cases if c["enabled"]),
         "exported_sha256": suite.exported_sha256,
+        "exported_global_sha256": suite.exported_global_sha256,
         "is_active": suite.is_active,
         # 未导出过也算 stale：门禁第 2 步会以 not_exported 拦下
         "export_stale": suite.exported_content_sha256 != current,
@@ -618,10 +619,13 @@ def export_to_tool_dir(
     # #406：按 sha 归档副本——消费路径仍是 target/runtask.xml；
     # 同 sha 再导出天然去重（覆盖同路径），覆盖消费文件时旧版可恢复。
     suite.exported_sha256 = hashlib.sha256(runtask_bytes).hexdigest()
+    # R05-F10 (#973): Global 与 runtask 同等归档 + 基线，磁盘丢失/被改可检测。
+    suite.exported_global_sha256 = hashlib.sha256(global_bytes).hexdigest()
     archive_dir = target / suite.exported_sha256
     try:
         archive_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(archive_dir / _RUNTASK_NAME, runtask_bytes)
+        _atomic_write(archive_dir / _GLOBAL_NAME, global_bytes)
     except OSError as exc:
         raise HTTPException(
             status_code=503,
@@ -637,6 +641,7 @@ def export_to_tool_dir(
             "name": suite.name,
             "export_dir": export_dir,
             "exported_sha256": suite.exported_sha256,
+            "exported_global_sha256": suite.exported_global_sha256,
             "archive_path": str(archive_dir / _RUNTASK_NAME),
             "testpoints": len(built.testpoints),
         },
@@ -650,6 +655,7 @@ def export_to_tool_dir(
             global_path=str(global_path),
             exported_sha256=suite.exported_sha256,
             exported_content_sha256=suite.exported_content_sha256,
+            exported_global_sha256=suite.exported_global_sha256,
         )
     )
 

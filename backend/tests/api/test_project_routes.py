@@ -1456,3 +1456,120 @@ class TestDetailPlatformsParity:
         detail_platforms = detail_resp.json()["data"]["platforms"]
         assert list_platforms == ["MTK", "UNISOC"]
         assert detail_platforms == list_platforms  # 详情与列表对拍
+
+
+# ---------------------------------------------------------------------------
+# #752：型号映射写路径残余缺口
+#   - bulk_assign 混大小写 → 409（原 500，lower 唯一索引撞库未捕获）
+#   - bulk_assign 归档项目 → 409（原可写新 ACTIVE 成员行复活归档）
+#   - bulk_assign 并发双写 → 409（非 500）
+#   - apply 同项目大小写变体行 → 收敛到设备事实原值（原静默 200 但 join miss）
+# ---------------------------------------------------------------------------
+
+
+def _make_user_project(db_session, key: str) -> TestProject:
+    project = TestProject(
+        project_key=key, display_name=key, customer=None, source="USER"
+    )
+    db_session.add(project)
+    db_session.commit()
+    return project
+
+
+def test_bulk_assign_mixed_case_existing_row_returns_409_not_500(
+    client, db_session, project_a, admin_headers
+):
+    """#752：成员行与设备事实大小写不同（lower 唯一索引同型）→ 409 而非 500。"""
+    other = _make_user_project(db_session, "proj-case-other")
+    db_session.add(
+        ProjectModel(project_id=other.id, match_value="Infinix_X1102D")
+    )
+    db_session.commit()
+    device = _make_device(db_session, "s-bulk-case", None, model="INFINIX_X1102D")
+
+    resp = client.post(
+        "/api/v1/devices/bulk-project",
+        headers=admin_headers,
+        json={"project_key": "proj-a", "device_ids": [device.id]},
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "another project" in resp.json()["detail"]
+
+
+def test_bulk_assign_archived_project_rejected(client, db_session, admin_headers):
+    """#752：归档 = 冻结，批量归入不得写新 ACTIVE 成员行。"""
+    archived = _make_user_project(db_session, "proj-archived")
+    archived.status = "ARCHIVED"
+    db_session.commit()
+    device = _make_device(db_session, "s-bulk-archived", None, model="BULK_ARCH_M1")
+
+    resp = client.post(
+        "/api/v1/devices/bulk-project",
+        headers=admin_headers,
+        json={"project_key": "proj-archived", "device_ids": [device.id]},
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "archived" in resp.json()["detail"]
+    assert (
+        db_session.query(ProjectModel)
+        .filter(ProjectModel.project_id == archived.id)
+        .count()
+        == 0
+    )
+
+
+def test_bulk_assign_concurrent_duplicate_returns_409(
+    client, db_session, project_a, admin_headers, monkeypatch
+):
+    """#752：existing 未命中但 flush 撞 lower() 唯一索引 → 409 非 500。"""
+    from sqlalchemy.exc import IntegrityError
+
+    device = _make_device(db_session, "s-bulk-race", None, model="BULK_RACE_M1")
+    original_flush = db_session.flush
+
+    def racy_flush():
+        if db_session.new:
+            original_flush()
+            raise IntegrityError("stmt", {}, Exception("dup"))
+        original_flush()
+
+    monkeypatch.setattr(db_session, "flush", racy_flush)
+    resp = client.post(
+        "/api/v1/devices/bulk-project",
+        headers=admin_headers,
+        json={"project_key": "proj-a", "device_ids": [device.id]},
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "concurrently" in resp.json()["detail"]
+
+
+def test_apply_same_project_case_variant_row_converges_to_device_fact(
+    client, db_session, project_a, admin_headers
+):
+    """#752：同项目大小写变体成员行收敛到设备事实原值（否则 join 全等 miss，
+    设备在预览 will_assign>0 的承诺下静默未归属）。"""
+    db_session.add(
+        ProjectModel(project_id=project_a.id, match_value="INFINIX_X1102D")
+    )
+    db_session.commit()
+    _make_device(db_session, "s-same-case", None, model="Infinix_X1102D")
+
+    resp = client.post(
+        "/api/v1/projects/proj-a/map/apply",
+        headers=admin_headers,
+        json={"models": ["Infinix_X1102D"]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    rows = (
+        db_session.query(ProjectModel)
+        .filter(
+            ProjectModel.project_id == project_a.id,
+            ProjectModel.is_active.is_(True),
+        )
+        .all()
+    )
+    assert [r.match_value for r in rows] == ["Infinix_X1102D"]
