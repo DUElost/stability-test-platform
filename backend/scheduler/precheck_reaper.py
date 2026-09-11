@@ -339,6 +339,31 @@ def _recover_stale_precheck_run(
     run_ctx = dict(pr.run_context or {})
     attempts = int(run_ctx.get("admission_requeue_attempts") or 0)
 
+    # #797: 健康慢准入保护——大 fleet（60+ host）Phase A 逐 host RPC/SSH 推
+    # 脚本常态超过 PRECHECK_ACTIVE_STALE_SECONDS；此时 SAQ admission job 可能
+    # 仍在 queued/active 且 worker 存活。盲重排会 3 轮耗尽 attempts 把本可
+    # 成功的准入判 FAILED（重排后旧 job 醒来终会因非 owner 退出，无并发双
+    # 准入，但是可重复假失败）。仿 V1：job 仍排队或 worker 存活 → 跳过本轮
+    # （不消耗重排次数）；job 缺失或 worker 已死才走既有重排/失败路径。
+    saq_key = f"admission:{run_id}:{pr.admission_attempt_id}"
+    saq_job = get_saq_job_state_sync(saq_key)
+    if saq_job is not None:
+        saq_status = saq_job.get("status")
+        if saq_status == "queued":
+            db.rollback()
+            logger.info(
+                "admission_reaper_skip_saq_pending plan_run=%d attempt=%s",
+                run_id, pr.admission_attempt_id,
+            )
+            return "skipped"
+        if saq_status == "active" and is_worker_alive_sync(saq_job.get("worker_id")):
+            db.rollback()
+            logger.info(
+                "admission_reaper_skip_worker_alive plan_run=%d attempt=%s worker=%s",
+                run_id, pr.admission_attempt_id, saq_job.get("worker_id"),
+            )
+            return "skipped"
+
     if attempts >= MAX_ADMISSION_REQUEUE_ATTEMPTS:
         PlanRunStateMachine.transition(
             pr, PlanRunStatus.FAILED, reason="admission_requeue_exhausted",
