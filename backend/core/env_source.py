@@ -32,6 +32,26 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_ENV_FILE = REPO_ROOT / ".env.backend"
 
 
+def load_app_dotenv(repo_root: Path | None = None) -> None:
+    """加载应用 dotenv（.env.backend → backend/.env），**TESTING=1 时跳过**。
+
+    #884（R01-F04）：生产配置文件存在时，导入 ``backend.main`` 的测试会在模块
+    顶层注入生产环境变量（JWT/Redis/密钥等）——``TESTING=1`` 此前只跳过
+    lifespan，管不住 import 期。测试所需配置由 conftest 显式设置；
+    本函数把「跳过」收在配置加载层（docs/development/testing.md §2：
+    测试不得读取或复用 .env.backend）。
+
+    override=False 语义由调用方的 load_dotenv 保持：进程环境最优先。
+    """
+    if os.getenv("TESTING") == "1":
+        return
+    from dotenv import load_dotenv
+
+    root = repo_root or REPO_ROOT
+    load_dotenv(root / ".env.backend")
+    load_dotenv(root / "backend" / ".env")
+
+
 def _read_key(env_file: Path, key: str) -> Optional[str]:
     """Minimal ``KEY=value`` reader — no dotenv dependency, no side effects."""
     if not env_file.is_file():

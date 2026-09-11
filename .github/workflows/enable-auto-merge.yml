@@ -30,6 +30,8 @@ jobs:
       actions: write
       contents: write
       pull-requests: write
+      # #1246：队首停摆告警需要 issue 读写（ci/queue-blocked 去重 issue）
+      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -48,4 +50,7 @@ jobs:
           # 人类身份 PAT（AUTO_MERGE_PAT）恢复两者；secret 未配置时回退
           # GITHUB_TOKEN 保持历史行为。
           GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
+          # #1246：告警 issue 操作用 GITHUB_TOKEN（job 已授 issues: write），
+          # 不依赖 AUTO_MERGE_PAT 是否含 Issues 权限
+          ALERT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ci/pr-automerge-queue.sh
