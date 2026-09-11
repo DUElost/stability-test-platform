@@ -402,5 +402,5 @@ def test_gpu_finish_v102_junit_failures_counted():
     )
     p = lib.parse_gpu_log(log)
     assert p["rounds_done"] == 3
-    assert p["failed_rounds"] == 0          # rc 全 0（旧判据盲区）
-    assert p["junit_failed_rounds"] == 2    # v1.0.2 真实失败轮次
+    assert p["failed_rounds"] == 0
+    assert p["junit_failed_rounds"] == 2

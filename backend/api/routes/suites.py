@@ -31,6 +31,7 @@ from backend.api.schemas.suite import (
     TestSuiteOut,
     TestSuiteUpdateIn,
     ValidateOut,
+    normalize_export_dir,
 )
 from backend.core.audit import record_audit
 from backend.core.database import get_db
@@ -67,10 +68,48 @@ _GLOBAL_NAME = "UiAutomatorTestData.xml"
 # ---------------------------------------------------------------------------
 
 
-
-
 # #402 在途守卫（ADR-0030 v1.4）：ACTIVE = QUEUED / PRECHECK / RUNNING。
 # 仅 ``active_run_ids_bound_to_suite`` 精确匹配（绑定同一套件硬阻断）。
+# #971：停用（DELETE 与 PUT is_active=false）与导出共用同一守卫，入口不再分叉。
+
+_SUITE_RUNS_ACTIVE_DEACTIVATE = (
+    "Runs bound to this suite are in flight; deactivate would pull the config "
+    "out from under them. Wait or abort first."
+)
+_SUITE_RUNS_ACTIVE_EXPORT = (
+    "Runs bound to this suite are in flight; exporting would swap the case "
+    "list mid-run. Wait for them to finish or abort them first."
+)
+
+
+def _reject_if_bound_runs(db: Session, suite: TestSuite, message: str) -> None:
+    """绑定本套件的 ACTIVE Run 硬阻断（409 SUITE_RUNS_ACTIVE），否则静默通过。"""
+    bound_runs = active_run_ids_bound_to_suite(db, suite.id)
+    if not bound_runs:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "SUITE_RUNS_ACTIVE",
+            "message": message,
+            "plan_run_ids": sorted(bound_runs)[:50],
+            "active_run_count": len(bound_runs),
+        },
+    )
+
+
+def _built_suite_or_422(db: Session, suite: TestSuite):
+    """库行 → RuntaskSuite；#969 存量坏 exec_descs 返回 422 而非 500。"""
+    try:
+        return suite_from_rows(
+            name=suite.name, root_config=suite.root_config,
+            cases=_case_rows(db, suite.id),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "EXEC_DESC_INVALID", "message": str(exc)},
+        ) from exc
 
 
 def _suite_out(
@@ -261,6 +300,9 @@ def update_suite(
     """更新元数据。**不清任何快照列**——库漂移由指纹计算检测（§2 总则）。"""
     suite = _get_suite(db, suite_id)
     fields = payload.model_dump(exclude_unset=True)
+    if fields.get("is_active") is False:
+        # #971：PUT 停用与 DELETE 共用同一在途 Run 守卫（同动作同保护）
+        _reject_if_bound_runs(db, suite, _SUITE_RUNS_ACTIVE_DEACTIVATE)
     if "project_key" in fields:
         suite.project_id = _resolve_project_id(db, fields.pop("project_key"))
     for key, value in fields.items():
@@ -284,20 +326,7 @@ def delete_suite(
     """软删（is_active=false）。绑定本套件的 ACTIVE Run 硬阻断（同 #402 精确守卫）：
     门禁第 1 步只拦未来准入，拦不住已在跑的 Run 被抽掉配置底座。"""
     suite = _get_suite(db, suite_id)
-    bound_runs = active_run_ids_bound_to_suite(db, suite.id)
-    if bound_runs:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "SUITE_RUNS_ACTIVE",
-                "message": (
-                    "Runs bound to this suite are in flight; deactivate would "
-                    "pull the config out from under them. Wait or abort first."
-                ),
-                "plan_run_ids": sorted(bound_runs)[:50],
-                "active_run_count": len(bound_runs),
-            },
-        )
+    _reject_if_bound_runs(db, suite, _SUITE_RUNS_ACTIVE_DEACTIVATE)
     suite.is_active = False
     record_audit(
         db, action="deactivate", resource_type="test_suite", resource_id=suite.id,
@@ -496,11 +525,7 @@ def export_runtask(
 ):
     """返回渲染的 runtask.xml 字节。库漂移时 ``X-Export-Stale: 1`` 提示需重导。"""
     suite = _get_suite(db, suite_id)
-    body = render_runtask(
-        suite_from_rows(name=suite.name, root_config=suite.root_config,
-                        cases=_case_rows(db, suite.id)),
-        times=times,
-    )
+    body = render_runtask(_built_suite_or_422(db, suite), times=times)
     stale = suite.exported_content_sha256 != _current_fingerprint(db, suite)
     return Response(
         content=body,
@@ -534,8 +559,7 @@ def validate_suite(
 ):
     """校验**库内数据**（与 P0 的文件输入 validate 分工，见 P1 设计 §2 抬头）。"""
     suite = _get_suite(db, suite_id)
-    built = suite_from_rows(name=suite.name, root_config=suite.root_config,
-                            cases=_case_rows(db, suite.id))
+    built = _built_suite_or_422(db, suite)
     issues = _validate_suite(built, (suite.global_params or {}).get("sim"))
     return ok(
         ValidateOut(
@@ -557,21 +581,7 @@ def export_to_tool_dir(
     suite = _get_suite(db, suite_id)
 
     # #402 在途守卫：绑定本套件的 ACTIVE Run 硬阻断（托管模式中途换清单无正当理由）。
-    bound_runs = active_run_ids_bound_to_suite(db, suite.id)
-    if bound_runs:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "SUITE_RUNS_ACTIVE",
-                "message": (
-                    "Runs bound to this suite are in flight; exporting would "
-                    "swap the case list mid-run. Wait for them to finish or "
-                    "abort them first."
-                ),
-                "plan_run_ids": sorted(bound_runs)[:50],
-                "active_run_count": len(bound_runs),
-            },
-        )
+    _reject_if_bound_runs(db, suite, _SUITE_RUNS_ACTIVE_EXPORT)
 
     root = resolve_shared_storage_root()
     if not root:
@@ -579,7 +589,15 @@ def export_to_tool_dir(
             status_code=503,
             detail={"code": "STORAGE_ROOT_UNSET", "message": "STP_AEE_NFS_ROOT is not configured"},
         )
-    target = Path(root) / "mtbf" / _resolve_export_dir(suite)
+    try:
+        # #968：写盘前复核目录契约（存量数据可能绕过 schema 校验）
+        export_dir = normalize_export_dir(_resolve_export_dir(suite))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "EXPORT_DIR_INVALID", "message": str(exc)},
+        ) from exc
+    target = Path(root) / "mtbf" / export_dir
     try:
         target.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -588,8 +606,7 @@ def export_to_tool_dir(
             detail={"code": "EXPORT_DIR_UNWRITABLE", "message": str(exc)},
         ) from exc
 
-    built = suite_from_rows(name=suite.name, root_config=suite.root_config,
-                            cases=_case_rows(db, suite.id))
+    built = _built_suite_or_422(db, suite)
     runtask_bytes = render_runtask(built)
     global_bytes = render_global(suite.global_params)
 
@@ -618,7 +635,7 @@ def export_to_tool_dir(
         db, action="export", resource_type="test_suite", resource_id=suite.id,
         details={
             "name": suite.name,
-            "export_dir": _resolve_export_dir(suite),
+            "export_dir": export_dir,
             "exported_sha256": suite.exported_sha256,
             "archive_path": str(archive_dir / _RUNTASK_NAME),
             "testpoints": len(built.testpoints),
@@ -628,7 +645,7 @@ def export_to_tool_dir(
     db.commit()
     return ok(
         ExportResultOut(
-            export_dir=_resolve_export_dir(suite),
+            export_dir=export_dir,
             runtask_path=str(runtask_path),
             global_path=str(global_path),
             exported_sha256=suite.exported_sha256,

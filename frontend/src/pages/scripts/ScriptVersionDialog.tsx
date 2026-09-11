@@ -48,6 +48,16 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
 
   if (!open || !script) return null;
 
+  // #1026：SHA 与路径契约 —— 前端先拦一道，避免创建后必然校验失败的「必败版本」。
+  // 后端 ScriptVersionCreate 有同型校验（64 位 hex + v{version} 目录一致）。
+  const versionTrimmed = version.trim();
+  const shaTrimmed = contentSha256.trim();
+  const pathTrimmed = nfsPath.trim();
+  const shaValid = /^[0-9a-fA-F]{64}$/.test(shaTrimmed);
+  const pathValid =
+    pathTrimmed !== '' && pathTrimmed.includes(`/v${versionTrimmed}/`);
+  const canSubmit = versionTrimmed !== '' && shaValid && pathValid;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setParseError('');
@@ -71,14 +81,14 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
 
     try {
       await api.scripts.createVersion(script.name, {
-        version: version.trim(),
-        nfs_path: nfsPath.trim() || script.nfs_path,
-        content_sha256: contentSha256.trim(),
+        version: versionTrimmed,
+        nfs_path: pathTrimmed,
+        content_sha256: shaTrimmed,
         param_schema: paramSchema,
         default_params: defaultParams,
         description: description.trim() || undefined,
       });
-      toast.success(`版本 ${version} 已创建`);
+      toast.success(`版本 ${versionTrimmed} 已创建`);
       onCreated();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '创建版本失败';
@@ -129,18 +139,24 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
             />
           </div>
           <div>
-            <label htmlFor="sv-nfs-path" className={FORM.label}>NFS 路径</label>
+            <label htmlFor="sv-nfs-path" className={FORM.label}>NFS 路径 *</label>
             <input
               id="sv-nfs-path"
               type="text"
               value={nfsPath}
               onChange={(e) => setNfsPath(e.target.value)}
               className={FORM.input}
-              placeholder={script.nfs_path || '/scripts/name/v2.0.0/main.py'}
+              placeholder={`/scripts/${script.name}/v2.0.0/${script.name}.py`}
             />
+            {versionTrimmed !== '' && !pathValid && (
+              <p className={FORM.error}>
+                路径必须落在新版本的版本目录 v{versionTrimmed}/ 下（不能复用旧版本路径，
+                否则扫描会判磁盘缺失并停用）
+              </p>
+            )}
           </div>
           <div>
-            <label htmlFor="sv-sha256" className={FORM.label}>Content SHA256</label>
+            <label htmlFor="sv-sha256" className={FORM.label}>Content SHA256 *</label>
             <input
               id="sv-sha256"
               type="text"
@@ -149,6 +165,9 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
               className={cn(FORM.input, 'font-mono')}
               placeholder="64位 hex..."
             />
+            {shaTrimmed !== '' && !shaValid && (
+              <p className={FORM.error}>SHA256 必须是 64 位 hex</p>
+            )}
           </div>
           <div>
             <label htmlFor="sv-default-params" className={FORM.label}>
@@ -172,7 +191,7 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
               onChange={(e) => setParamSchemaText(e.target.value)}
               rows={3}
               className={FORM.textarea}
-              placeholder='{"timeout": {"type": "int"}}'
+              placeholder='{"timeout": {"type": "integer"}}'
             />
           </div>
 
@@ -182,7 +201,7 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
             <Button type="button" variant="outline" onClick={onClose}>
               取消
             </Button>
-            <Button type="submit" disabled={!version.trim()}>
+            <Button type="submit" disabled={!canSubmit}>
               创建版本
             </Button>
           </div>
