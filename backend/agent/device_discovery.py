@@ -286,6 +286,98 @@ def discover_devices(adb_path: str = "adb") -> List[Dict[str, Any]]:
     return devices
 
 
+# ── lsusb：独立于 ADB 的物理连接计数（与 adb devices 对比用） ──────────────────
+#
+# 动机：`adb devices` 只反映 ADB 服务**看得到**的设备，授权失败、驱动缺失、
+# 多 ADB fork-server 抢占（#160）都会让设备在 USB 上却不在 adb 列表里。
+# `lsusb` 直接读 USB 总线，因此可作为「物理连接数」的对照真值。
+# 该值**仅供观测对比**，不参与 capacity 槽位/健康门禁计算。
+
+_LSUSB_TIMEOUT_SECONDS = 5
+# `Bus 001 Device 013: ID 0e8d:2046 MediaTek Inc. MLD-LX2`
+_LSUSB_LINE_RE = re.compile(
+    r"^Bus\s+\d+\s+Device\s+\d+:\s+ID\s+([0-9a-fA-F]{4}):([0-9a-fA-F]{4})\s*(.*)$"
+)
+# Linux Foundation root hub（1d6b:0001/0002/0003）——每台机器固定存在，非外接设备
+_ROOT_HUB_VID = "1d6b"
+# 明确的外设类别关键词：命中即排除，避免把键鼠/U盘算成待测手机。
+# 口径 = 「疑似 Android/手机」，宁可漏算也不虚高（虚高会让 USB vs adb 的差值失去意义）。
+_NON_TARGET_USB_KEYWORDS = (
+    "root hub",
+    "hub",
+    "keyboard",
+    "mouse",
+    "receiver",
+    "webcam",
+    "camera",
+    "audio",
+    "headset",
+    "bluetooth",
+    "ethernet",
+    "card reader",
+    "fingerprint",
+    "touchpad",
+    "trackpad",
+    "printer",
+    "scanner",
+    "storage",
+    "flash disk",
+    "mass storage",
+)
+
+
+def parse_lsusb_output(text: str) -> int:
+    """统计 `lsusb` 输出中疑似 Android/手机设备的条数（纯函数）。
+
+    排除 root hub、HID 外设、存储、网卡等；仅保留未被关键词排除的条目。
+    Returns: 计数（无匹配时为 0）。
+    """
+    count = 0
+    for line in text.splitlines():
+        match = _LSUSB_LINE_RE.match(line.strip())
+        if not match:
+            continue
+        vid, _pid, description = match.group(1).lower(), match.group(2), match.group(3)
+        if vid == _ROOT_HUB_VID:
+            continue
+        lowered = description.lower()
+        if any(keyword in lowered for keyword in _NON_TARGET_USB_KEYWORDS):
+            continue
+        count += 1
+    return count
+
+
+def count_usb_devices() -> Optional[int]:
+    """执行 `lsusb` 并返回疑似 Android 设备数。
+
+    Returns:
+        int  — 成功采集（0 表示确实没枚举到目标设备）；
+        None — 无法判定（lsusb 缺失/超时/非零退出），调用方应显示「未知」而非 0。
+    """
+    try:
+        result = subprocess.run(
+            ["lsusb"],
+            capture_output=True,
+            text=True,
+            timeout=_LSUSB_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        logger.debug("lsusb_not_found: skipping usb device count")
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning("lsusb_timeout: %ss", _LSUSB_TIMEOUT_SECONDS)
+        return None
+    except Exception as e:
+        logger.debug("lsusb_failed: %s", e)
+        return None
+
+    if result.returncode != 0:
+        logger.debug("lsusb_nonzero_exit: rc=%s stderr=%s", result.returncode, result.stderr)
+        return None
+
+    return parse_lsusb_output(result.stdout or "")
+
+
 def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device") -> Dict[str, Any]:
     """
     采集单台设备的基础信息

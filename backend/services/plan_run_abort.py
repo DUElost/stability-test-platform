@@ -105,7 +105,7 @@ def abort_plan_run(
     pr = db.execute(
         select(PlanRun)
         .where(PlanRun.id == plan_run_id)
-        .with_for_update(key_share=True)
+        .with_for_update(read=True)  # PG FOR NO KEY UPDATE — matches terminalization (#789)
     ).scalar_one_or_none()
     if pr is None:
         raise PlanRunAbortError(f"PlanRun {plan_run_id} not found")

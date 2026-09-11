@@ -145,6 +145,7 @@ class LocalDB:
             );
         """)
         self._ensure_step_trace_schema()
+        self._ensure_job_terminal_outbox_schema()
         self._ensure_log_signal_outbox_schema()
         self._ensure_dle_register_outbox_schema()
         self._ensure_terminal_outbox_schema()
@@ -271,6 +272,26 @@ class LocalDB:
             ALTER TABLE step_trace_cache_v2 RENAME TO step_trace_cache;
             """
         )
+
+    def _ensure_job_terminal_outbox_schema(self) -> None:
+        """job_terminal_outbox 增列 dead_letter (#742):与 log_signal_outbox 同套路。
+
+        Why: OutboxDrainThread 对非 404 失败只 bump_terminal_attempt，无上限时
+             持续打 /complete（5xx / 网络分区 / 契约变更）。
+        How to apply: idempotent ALTER + DEFAULT 0；get_pending_terminals 过滤
+             dead_letter=0；prune 保留死信行供审计。
+        """
+        columns = {
+            row["name"]
+            for row in self._conn.execute(
+                "PRAGMA table_info(job_terminal_outbox)"
+            ).fetchall()
+        }
+        if "dead_letter" not in columns:
+            self._conn.execute(
+                "ALTER TABLE job_terminal_outbox "
+                "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _ensure_log_signal_outbox_schema(self) -> None:
         """log_signal_outbox 增列 dead_letter (#9):与 step_trace_cache 同套路。
@@ -654,7 +675,8 @@ class LocalDB:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, job_id, payload, attempts FROM job_terminal_outbox "
-                "WHERE acked = 0 AND dead_letter = 0 ORDER BY created_at ASC LIMIT ?",
+                "WHERE acked = 0 AND dead_letter = 0 "
+                "ORDER BY created_at ASC LIMIT ?",
                 (limit,),
             ).fetchall()
         result = []
@@ -668,10 +690,11 @@ class LocalDB:
         return result
 
     def count_pending_terminals(self) -> int:
-        """Count un-acked terminal outbox rows (backlog depth)."""
+        """Count un-acked, non-dead-letter terminal outbox rows (backlog depth)."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT COUNT(*) AS c FROM job_terminal_outbox WHERE acked = 0"
+                "SELECT COUNT(*) AS c FROM job_terminal_outbox "
+                "WHERE acked = 0 AND dead_letter = 0"
             ).fetchone()
         return int(row["c"]) if row else 0
 
@@ -698,7 +721,7 @@ class LocalDB:
                 )
 
     def bump_terminal_attempt(self, job_id: int, error: str) -> int:
-        """+1 attempts, set last_error, 返回新 attempts（#762：死信判定需看新值）。
+        """+1 attempts, set last_error, 返回新 attempts（#742/#762：死信判定需看新值）。
 
         与 ``bump_step_trace_attempt`` / ``bump_log_signal_attempt`` 同口径。
         """
@@ -732,11 +755,26 @@ class LocalDB:
         """返回终态 outbox 死信样本（审计/运维查询用）。"""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, job_id, attempts, last_error FROM job_terminal_outbox "
-                "WHERE dead_letter = 1 ORDER BY id DESC LIMIT ?",
+                "SELECT id, job_id, payload, attempts, last_error, created_at "
+                "FROM job_terminal_outbox WHERE dead_letter = 1 "
+                "ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = row["payload"]
+            result.append({
+                "id": row["id"],
+                "job_id": row["job_id"],
+                "payload": payload,
+                "attempts": row["attempts"],
+                "last_error": row["last_error"],
+                "created_at": row["created_at"],
+            })
+        return result
 
     def count_terminal_dead_letters(self) -> int:
         """终态 outbox 死信行数（distinct 卡死行口径；#762）。"""
@@ -747,13 +785,15 @@ class LocalDB:
         return int(row["c"]) if row else 0
 
     def prune_acked_terminals(self, keep_recent: int = 100) -> int:
-        """Delete old acked entries, keeping the most recent ones."""
+        """Delete old acked non-dead-letter entries; keep dead letters for audit."""
         with self._lock:
             with self._conn:
                 cur = self._conn.execute(
                     "DELETE FROM job_terminal_outbox WHERE acked = 1 "
+                    "AND dead_letter = 0 "
                     "AND id NOT IN (SELECT id FROM job_terminal_outbox "
-                    "WHERE acked = 1 ORDER BY id DESC LIMIT ?)",
+                    "WHERE acked = 1 AND dead_letter = 0 "
+                    "ORDER BY id DESC LIMIT ?)",
                     (keep_recent,),
                 )
                 return cur.rowcount

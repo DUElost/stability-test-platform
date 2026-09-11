@@ -423,6 +423,7 @@ export default function HostsPage() {
             })
           : [],
         device_count: onlineDevices,
+        usb_device_count: optionalNumber(host.capacity?.usb_device_count) ?? null,
         claim_hint: claimHint,
         active_tasks: host.capacity?.active_jobs ?? host.active_job_count ?? 0,
         health_status: host.health?.status,

@@ -95,7 +95,7 @@ def test_prune_acked_terminals_keeps_dead_letters(db):
 
 def test_drainer_dead_letters_after_max_attempts_and_unblocks_queue(db, monkeypatch):
     """连续 TERMINAL_PAYLOAD_CONFLICT 达上限 → 死信；新终态行随后可正常 ack。"""
-    monkeypatch.setattr(OutboxDrainThread, "_MAX_TERMINAL_ATTEMPTS", 3)
+    monkeypatch.setattr(OutboxDrainThread, "_MAX_ATTEMPTS", 3)
     db.enqueue_terminal(1, {"update": {"status": "FAILED"}})
     drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
 

@@ -93,6 +93,7 @@ def test_notifications_require_admin(client, auth_headers):
 _LOG_ENDPOINTS = [
     ("get", "/api/v1/notifications/logs"),
     ("get", "/api/v1/notifications/logs/unread-count"),
+    ("get", "/api/v1/notifications/logs/1/deliveries"),
     ("patch", "/api/v1/notifications/logs/1/read"),
     ("post", "/api/v1/notifications/logs/read-all"),
 ]
@@ -136,3 +137,69 @@ class TestAlertmanagerWebhook:
         )
         assert resp.status_code == 200
         assert resp.json() == {"ok": True}
+
+
+# ── #1167 P4（D6）：投递事实查询端点 ───────────────────────────────────────
+
+
+def test_log_deliveries_from_table(client, auth_headers, db_session):
+    """事实表有行 → source=table，含 state/outcome/attempt_count。"""
+    from backend.models.notification import (
+        NotificationDelivery, NotificationLog, NotificationSeverity,
+        NotificationSource,
+    )
+
+    log = NotificationLog(
+        source=NotificationSource.PLATFORM, event_type="RUN_FAILED",
+        severity=NotificationSeverity.WARNING, title="t", message="m",
+        context={},
+    )
+    db_session.add(log)
+    db_session.flush()
+    db_session.add(NotificationDelivery(
+        notification_log_id=log.id, channel_id=None, channel_type="WEBHOOK",
+        state="retrying", outcome="REJECTED_TRANSIENT", attempt_count=2,
+        last_error="HTTP 503",
+    ))
+    db_session.commit()
+
+    resp = client.get(
+        f"/api/v1/notifications/logs/{log.id}/deliveries", headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["source"] == "table"
+    assert body["items"][0]["state"] == "retrying"
+    assert body["items"][0]["outcome"] == "REJECTED_TRANSIENT"
+    assert body["items"][0]["attempt_count"] == 2
+
+
+def test_log_deliveries_legacy_fallback(client, auth_headers, db_session):
+    """历史日志（无表行）→ source=legacy_context，字段从 JSONB 映射。"""
+    from backend.models.notification import (
+        NotificationLog, NotificationSeverity, NotificationSource,
+    )
+
+    log = NotificationLog(
+        source=NotificationSource.PLATFORM, event_type="RUN_COMPLETED",
+        severity=NotificationSeverity.INFO, title="t", message="m",
+        context={"channel_delivery": {"7": {"status": "ok", "outcome": "ACCEPTED"}}},
+    )
+    db_session.add(log)
+    db_session.commit()
+
+    resp = client.get(
+        f"/api/v1/notifications/logs/{log.id}/deliveries", headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["source"] == "legacy_context"
+    assert body["items"][0]["channel_id"] == 7
+    assert body["items"][0]["state"] == "accepted"
+
+
+def test_log_deliveries_404_for_missing_log(client, auth_headers):
+    resp = client.get(
+        "/api/v1/notifications/logs/999999/deliveries", headers=auth_headers,
+    )
+    assert resp.status_code == 404
