@@ -417,7 +417,7 @@ cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook p
 2. 点击 → `POST /api/v1/hosts/{id}/install` → SAQ 异步任务 `install_agent_task`
 3. 任务写临时 inventory（`ansible_become_password` = SSH 密码），调 `install_agent.yml --limit <ip>`
 4. ansible stdout 落盘 `$STP_INSTALL_LOG_DIR/install_<host_id>_<ts>.log`（默认 `/tmp/stp-install-logs/`）
-5. `install_agent.sh:79-113` 自动写 `/etc/sudoers.d/stability-test-agent` NOPASSWD（rsync/systemctl），**装完即解锁后续免密热更新**
+5. `install_agent.sh` 安装提权 wrapper `/usr/local/sbin/stp-agent-priv` 并由 bootstrap 写 `/etc/sudoers.d/stability-test-agent`：NOPASSWD 只授 wrapper 单命令 + 固定服务 systemctl（ADR-0037/#1250），**装完即解锁后续免密热更新**
 6. 前端每 3s 轮询 `GET /hosts/{id}/install/status`，终态 toast 通知
 
 ### 热更新（UI 按钮，高频）
@@ -427,7 +427,7 @@ cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook p
 3. **依赖刷新**：rsync 前后比对 `requirements.txt` sha256，变化则 `pip install -r`（`PIP_INDEX_URL` 取 `STP_AGENT_PIP_INDEX_URL`）；pip 失败则**不重启**服务以避免崩溃
 4. **版本审计**：响应含 `code_version`（`backend/agent` 的 `git rev-parse --short HEAD`）与 `deps_refreshed`，写入 `audit_log`（`hot_update` + `hot_update_result` 两条）
 5. 前端成功 toast 显示「(依赖已刷新/未变) @<code_version>」
-6. sudo 免密靠首次安装落的 sudoers.d；未装主机点热更新会因 `INSTALL_DIR` 缺失失败 → 先用「首次安装」
+6. sudo 免密走提权 wrapper（ADR-0037/#1250）：首次安装或 `update_agent.yml` 会部署 wrapper 并重写 sudoers；未迁移主机热更新自动回退 legacy 旧规则并以 `priv_mode=legacy` 记入审计，迁移完成后该回退分支下架（见 ADR-0037 Revisit）
 
 ### pip 镜像不可达时的兜底
 
