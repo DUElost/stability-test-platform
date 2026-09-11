@@ -17,6 +17,17 @@ class TestNormalizeDispatchParams:
         with pytest.raises(ToolValidationError):
             normalize_dispatch_params({"plan_id": 1, "device_ids": []})
 
+    def test_non_numeric_plan_id_is_tool_validation_error(self):
+        """#758: ValueError from int(plan_id) must not pierce SAQ turn."""
+        with pytest.raises(ToolValidationError, match="plan_id"):
+            normalize_dispatch_params({"plan_id": "abc", "device_ids": [1]})
+        with pytest.raises(ToolValidationError, match="plan_id"):
+            normalize_dispatch_params({"plan_id": None, "device_ids": [1]})
+        with pytest.raises(ToolValidationError, match="plan_id"):
+            normalize_dispatch_params({"plan_id": 0, "device_ids": [1]})
+        with pytest.raises(ToolValidationError, match="plan_id"):
+            normalize_dispatch_params({"plan_id": [], "device_ids": [1]})
+
     def test_normalizes_note_and_wifi_pool(self):
         out = normalize_dispatch_params({
             "plan_id": 5,
