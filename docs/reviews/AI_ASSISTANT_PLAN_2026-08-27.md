@@ -117,6 +117,7 @@ hot-update **不注册工具**（T3 无入口）。
 | GET `/sessions/{id}/messages` | 登录（本人） | 消息历史 |
 | DELETE `/sessions/{id}` | 登录（本人） | 删会话 |
 | POST `/sessions/{id}/messages` | 登录（本人） | 入队一轮，返回 202 + pending 占位 |
+| GET `/actions/pending` | admin | 跨会话待审批队列（仅返回摘要） |
 | GET `/actions/{id}` | 提案人或 admin | 操作卡详情 |
 | POST `/actions/{id}/approve` | admin | 状态机流转 + 审计 + 启动执行 |
 | POST `/actions/{id}/reject` | admin | 审计 + 续轮回填 |
@@ -132,7 +133,7 @@ hot-update **不注册工具**（T3 无入口）。
 | API 层 | `src/utils/api/aiAssistant.ts`（类型进权威源 `types.ts`，queryKeys 工厂补键） |
 | 助手页 | `pages/assistant/AssistantPage.tsx`：左会话列表 + 右消息区；子组件 `MessageBubble` / `ActionCard` / `LogPanel`（折叠 pre + 跟随滚动 + 取消按钮）；输入框回车发送 |
 | 设置页 | `pages/settings/AiAssistantSettingsPage.tsx`（admin）：URL / Key（掩码输入，留空不变）/ 模型 / temperature / max_turns / T1 收回开关 / `auto_approve_tools` 勾选 / 测试连接按钮 / 启用开关 |
-| 路由 | `/assistant`（ProtectedRoute 懒加载）、`/settings/ai-assistant`（AdminRoute）；助手页头齿轮入口（admin 可见）跳设置；AI 入口=侧边栏 Logo 下**置顶 pinned 块**「✦ AI 助手」（不占业务组坑位；collapsed 缩图标、isMobile 分支单独处理、带 `aria-label`，注意点见导航治理方案 §5.1），全局抽屉留 v2 |
+| 路由 | `/assistant`（ProtectedRoute 懒加载）、`/assistant/approvals`（AdminRoute，管理员待审批页）、`/settings/ai-assistant`（AdminRoute）；助手页头「待审批」+ 齿轮入口（admin 可见）跳设置与审批；AI 入口=侧边栏 Logo 下**置顶 pinned 块**「✦ AI 助手」（不占业务组坑位；collapsed 缩图标、isMobile 分支单独处理、带 `aria-label`，注意点见导航治理方案 §5.1），全局抽屉留 v2 |
 | 轮询 | messages 查询在有 pending/running 消息时 `refetchInterval: 2000`，否则关闭；action log 在 running 时同策略 |
 | Markdown | `react-markdown` + `remark-gfm`，**禁 rehype-raw**（防 HTML 注入）；代码块等宽渲染 |
 | 样式 | 遵循 `design-system/tokens.ts`，禁裸 `gray-*`/`blue-*`；确认弹窗复用 `useConfirm`，toast 复用 `useToast` |

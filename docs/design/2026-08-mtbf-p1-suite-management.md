@@ -11,7 +11,7 @@
    `project_id` 可空 = 通用套件 / 必填 = 项目套件；套件级 `apk_binding`；快照列 `source_sha256`（导入时文件）+ `exported_sha256`（导出产物文件 sha）+ `exported_content_sha256`（导出时**库内容规范化指纹**——库漂移由门禁计算检测，不靠端点置空纪律）。
 2. **API**：13 端点（研究 §5.5 草案细化定稿），挂 `/api/v1/test-suites` + `/api/v1/test-cases`；读 = 登录用户、写 = admin（初版）；**全部写操作 `record_audit`**。
 3. **复用 P0 资产**：`backend/services/mtbf_suite.py`（parse / validate / patch）全部复用，新增**渲染器**（库 → runtask.xml / UiAutomatorTestData.xml）——控制面唯一实现，与解析同文件；脚本侧 `_lib.py` 的 times patch 不变（消费面不变）。
-4. **D2 绑定（v1.3 修订）**：`plan.suite_id` 可空外键（NULL = P0 文件真源模式；非空 = 托管模式）→ prepare 冻结 `run_context.dispatch_suite` + precheck 五步门禁 fail-fast 挂 admission 既有链。
+4. **D2 绑定（v1.3 修订）**：`plan.suite_id` 可空外键（NULL = P0 文件真源模式；非空 = 托管模式）→ prepare 冻结 `run_context.dispatch_suite` + precheck 六步门禁 fail-fast 挂 admission 既有链。
 5. **导出落点 = 中心存储消费路径** `{STP_AEE_NFS_ROOT}/mtbf/{project}/`（P0 已部署，消费面不变）——「管理面从文件升级为 API，消费面不变」落地；atomic write + ACTIVE 引用守卫（依赖 P1b 冻结字段）。
 6. **CLI**：`tools/dev/mtbf-cases.py`（单文件 kebab-case，对齐 `backfill-test-project.py` 先例）——选定后回写 ADR-0030 修订记录（D4 要求）。
 7. **里程碑**：P1a 实体 + CRUD/import/export/validate + 审计 → P1b D2/D3b 绑定门禁 + 脚本侧注入（expected 替代 env）→ P1c CLI + 文档 + 状态传播。
@@ -114,7 +114,7 @@ run_context.dispatch_suite = {suite_id, suite_name, exported_sha256,
 托管模式下冻结的是**准入时刻的基线指纹**——同快照两次 run 结果不同可归因
 「清单被改」（D5）；precheck 重校验以活表套件行 + 冻结基线双读（§3.3）。
 
-### 3.3 precheck 五步门禁（fail-fast）
+### 3.3 precheck 六步门禁（fail-fast）
 
 挂 admission 既有链（`admission_pump.py` script_verify_failed 同层），
 查找键 = `plan.suite_id`（join，无 JSON 解析）：
@@ -124,6 +124,7 @@ run_context.dispatch_suite = {suite_id, suite_name, exported_sha256,
 3. **库漂移**：`content_fingerprint(suite)` == `exported_content_sha256`（不等 → `suite_verify_failed: content_changed`——「库改了没导出」在此拦截；**计算检测**，与任何端点置空纪律无关）；
 4. **磁盘漂移**：磁盘文件 sha256 == `exported_sha256`（不等 → `suite_verify_failed: sha_mismatch`——「导出后磁盘被人动过」，恢复该状态的字面语义；脚本 setup 的 `suite_sha256` trace 与此闭环）；
 5. **D3b**：`suite.project_id` 非空时与目标设备 `device.project_id` 匹配（不等 → `suite_verify_failed: project_mismatch`）；套件空 = 通用放行。
+6. **参数冲突（#975 / R05-F12）**：mtbf 步骤最终生效的 `project`（`default_params` 与 step `params` 合并、已有值优先）必须等于门禁对象 `export_dir`（`resolve_export_dir(suite)`）；不等 → `suite_verify_failed: project_param_conflict`。防止步骤级参数覆盖静默把结果写到另一目录。
 
 任一步失败 Plan 准入 `script_verify_failed` 同层失败，**禁止带病派发**（ADR-0030 D2）。修复路径：第 3 步 → 重导（export-to-tool-dir 更新两指纹）；第 4 步 → 重导或恢复磁盘文件。
 
@@ -180,7 +181,7 @@ python tools/dev/mtbf-cases.py export-to-tool-dir --suite MTBF-legacy
 
 ### P1b：D2/D3b 绑定 + 门禁 + 脚本侧注入
 
-- `inject_suite_params` + 冻结 run_context；admission 五步门禁 + 状态；
+- `inject_suite_params` + 冻结 run_context；admission 六步门禁 + 状态；
 - `mtbf_setup`/`mtbf_check` 读注入参数（expected 替代 env；project 注入）；
 - 测试：注入 golden（含已有值优先）、门禁矩阵（missing/not_exported/**content_changed**/sha_mismatch/project_mismatch）、`content_fingerprint` 对「新增/删除/改任意字段」六条变更路径全部翻转（库漂移必检）、脚本侧解析 env 新键；
 - **验收**：Plan 引用 suite 的 precheck 矩阵全绿 + 真机冒烟一轮（`suite_sha256` trace == 门禁比对 sha）。

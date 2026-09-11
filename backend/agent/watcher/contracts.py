@@ -182,7 +182,9 @@ def validate_log_signal(envelope: Dict[str, Any]) -> Dict[str, Any]:
         )
     if envelope["category"] not in {"ANR", "AEE", "VENDOR_AEE", "MOBILELOG", "UNIVIEW"}:
         raise ContractViolation(f"log_signal.category unknown: {envelope['category']}")
-    if envelope["source"] not in {"inotifyd", "polling", "reconciler"}:
+    # #806：reconciler_rollback 是 reconciler 自关闭时的合法 source（此前漏白名单
+    # → 可见性通道 100% 是死的：emit 必抛 ContractViolation 且被 except 吞掉）。
+    if envelope["source"] not in {"inotifyd", "polling", "reconciler", "reconciler_rollback"}:
         raise ContractViolation(f"log_signal.source unknown: {envelope['source']}")
     for str_field in ("fencing_token", "agent_instance_id"):
         if not isinstance(envelope[str_field], str) or not envelope[str_field]:
