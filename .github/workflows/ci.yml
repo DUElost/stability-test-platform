@@ -260,6 +260,13 @@ jobs:
       - name: Run lock hygiene tests
         run: python -m pytest tests/test_requirements_lock.py tests/test_requirements_dev_lock.py -q
 
+      # Prometheus 告警规则契约（#1257/R14-F11）：规则选择器与 backend 指标
+      # 注册表逐条比对（未知指标/标签、直方图裸用基础名即红）；promtool 可用时
+      # 追加场景触发测试（runner 无 promtool → 该子项 skip，结构层恒跑）。
+      # 与 lock 卫生测试同理由前移：纯离线 <1s，随 backend 依赖 lock 即可跑。
+      - name: Prometheus 告警规则契约
+        run: python -m pytest tests/test_prometheus_alerts_contract.py -q
+
   # #510 教训（P0-2）：空库迁移守卫。独立 required check——上线即炸的空库
   # 迁移回归在 PR 上必拦；成本 ~1 分钟（含依赖安装），不跑整套 backend/tests。
   pr-migrate-empty-db:

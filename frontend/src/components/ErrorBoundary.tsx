@@ -10,23 +10,41 @@ interface Props {
   children: React.ReactNode;
   /** 全屏错误态（默认 true，App.tsx 顶层用）；AppShell 路由层用 false 走紧凑布局 */
   fullscreen?: boolean;
+  /**
+   * 复位键（#821）：变化时清除错误态并重新渲染子树。
+   * AppShell 路由层传 `location.pathname`——一次 transient 渲染崩溃后切路由
+   * 即自动恢复，不再全站停留在旧错误屏直至整页刷新。
+   */
+  resetKey?: string;
 }
 
 interface State {
   hasError: boolean;
   error: Error | null;
+  prevResetKey?: string;
 }
 
 export class ErrorBoundary extends React.Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, prevResetKey: props.resetKey };
   }
 
   static defaultProps = { fullscreen: true };
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
+  }
+
+  /**
+   * resetKey 变化 → 清除错误态（#821）。子内容在错误态下已卸载，复位即重挂载
+   * 新路由内容；若新内容同样抛错，会再次走 getDerivedStateFromError 显示错误屏。
+   */
+  static getDerivedStateFromProps(props: Props, state: State): Partial<State> | null {
+    if (props.resetKey !== state.prevResetKey) {
+      return { hasError: false, error: null, prevResetKey: props.resetKey };
+    }
+    return null;
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {

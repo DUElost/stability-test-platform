@@ -46,9 +46,37 @@ def normalize(requirements_text: str) -> list[str]:
     return sorted(entries)
 
 
+# `-r other.txt` / `--requirement other.txt`：pip 的包含指令（R15-F05 / #1297）。
+# dev 清单用 `-r requirements.txt` 拉运行时依赖，若摘要只看本文件，运行时版本
+# 变化不会改变 dev 摘要 → 漏更新 dev lock，CI 装旧依赖、生产装新依赖。
+_INCLUDE_RE = re.compile(r"^(?:-r|--requirement)\s+(.+)$")
+
+
+def _collect_entries(requirements_path: Path, _seen: set[Path]) -> list[str]:
+    """递归展开 ``-r`` 包含清单，返回参与摘要的全部条目（含 include 标记）。
+
+    包含标记本身也入摘要：include 路径变化（或新增/删除 include）必须可见。
+    循环包含与缺失文件安全退出——缺失时保留标记、不读内容，摘要仍随路径变化。
+    """
+    entries: list[str] = []
+    for line in normalize(requirements_path.read_text(encoding="utf-8")):
+        match = _INCLUDE_RE.match(line)
+        if not match:
+            entries.append(line)
+            continue
+        rel = match.group(1).strip()
+        entries.append(f"@include {rel}")
+        included = (requirements_path.parent / rel).resolve()
+        if included in _seen or not included.is_file():
+            continue
+        _seen.add(included)
+        entries.extend(_collect_entries(included, _seen))
+    return entries
+
+
 def compute(requirements_path: Path) -> str:
-    entries = normalize(requirements_path.read_text(encoding="utf-8"))
-    payload = "\n".join(entries).encode("utf-8")
+    entries = _collect_entries(requirements_path, {requirements_path.resolve()})
+    payload = "\n".join(sorted(entries)).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 

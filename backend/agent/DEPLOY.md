@@ -109,6 +109,7 @@ sudo bash install_agent.sh
 - 部署 `agent/` 包代码（清理测试文件）
 - 安装运行时工件：`schemas/pipeline_schema.json` 与版本标识 `agent/VERSION`（#1247）
 - 配置 Python 虚拟环境并安装依赖
+- 安装提权边界 wrapper `/usr/local/sbin/stp-agent-priv` 并生成受控 sudoers（ADR-0037/#1250）
 - 安装 systemd 服务（以 `python -m agent.main` 模块模式启动）
 - 创建管理脚本 `agentctl`
 - 安装后自检：用安装产物校验样例 Pipeline，失败即中止安装

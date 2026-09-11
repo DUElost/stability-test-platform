@@ -45,7 +45,7 @@ set -a && . ./.env.backend && set +a
 # 免密 SSH（控制面运维机 → 新机）
 ssh-copy-id -o StrictHostKeyChecking=accept-new android@<new-ip>
 
-# 验证 sudo（首次安装前可能仍需密码；install_agent.sh 装完会落 NOPASSWD sudoers.d）
+# 验证 sudo（首次安装前可能仍需密码；install_agent.sh 装完落 wrapper 提权 sudoers.d，ADR-0037）
 ssh android@<new-ip> 'sudo -n true && echo sudo_ok || echo sudo_needs_password'
 ```
 
@@ -154,7 +154,8 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml \
 
 - `agent_host_id` **必须**与 DB `hosts.id` 一致；不传则 install 脚本自行生成，易与 DB 错位。
 - `AGENT_SECRET` 自动从仓库根 `.env.backend` 读取（**不是** `backend/.env`）。
-- `install_agent.sh` 装完自动写 `/etc/sudoers.d/stability-test-agent` NOPASSWD ✅
+- `install_agent.sh` 装完自动写 `/etc/sudoers.d/stability-test-agent`：NOPASSWD 只授提权
+  wrapper `/usr/local/sbin/stp-agent-priv` + 固定服务 systemctl（ADR-0037/#1250）✅
 - pip 镜像：默认公网 PyPI。`STP_AGENT_PIP_INDEX_URL` 设清华等镜像时，2026-08-28 曾遇
   **403**——新机接入建议留空。✅
 

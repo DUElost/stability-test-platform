@@ -11,9 +11,9 @@
     agent_agentctl_backup_path: "{{ agent_install_dir }}/agentctl.bak.{{ agent_update_timestamp }}"
     agent_service_backup_path: "/etc/systemd/system/{{ agent_service_name }}.service.bak.{{ agent_update_timestamp }}"
     agent_rsync_remote: "{{ ansible_user }}@{{ ansible_host | default(inventory_hostname) }}"
+    # 不关闭主机密钥校验（#1263 / R14-F17）：known_hosts 登记与换钥流程见 runbook §3
     agent_rsync_ssh_command: >-
-      ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-      -o ConnectTimeout={{ ansible_ssh_timeout | default(10) }}
+      ssh -o ConnectTimeout={{ ansible_ssh_timeout | default(10) }}
       {% if ansible_port is defined %}-p {{ ansible_port }}{% endif %}
 
   pre_tasks:
@@ -127,6 +127,36 @@
         that:
           - agent_env_file_stat.stat.exists
         fail_msg: "Agent environment file is missing on {{ inventory_hostname }}. Run install_agent.yml first."
+
+    # ── 提权边界 wrapper（#1250 / ADR-0037）─────────────────────────────────
+    # 存量主机迁移：NOPASSWD 从任意 rsync/cp/chmod/chown/ln 收窄为 wrapper
+    # 单命令（+ 固定 systemctl）。wrapper 放 /usr/local/sbin（Agent 不可写），
+    # conf/sudoers 由 bootstrap 生成并 visudo 校验；先装 wrapper 再重写 sudoers，
+    # 任何一步失败即中止本次更新（不产出半迁移状态）。
+    - name: Install agent privilege wrapper
+      become: true
+      ansible.builtin.copy:
+        src: "{{ stp_repo_root }}/backend/agent/stp_agent_priv.py"
+        dest: /usr/local/sbin/stp-agent-priv
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Bootstrap privilege wrapper (conf + sudoers)
+      become: true
+      ansible.builtin.command: >-
+        /usr/local/sbin/stp-agent-priv bootstrap
+        --install-dir {{ agent_install_dir }}
+        --user {{ agent_user }}
+        --group {{ agent_group }}
+        --service {{ agent_service_name }}
+      register: agent_priv_bootstrap
+      changed_when: false
+
+    - name: Verify privilege wrapper self-test
+      become: true
+      ansible.builtin.command: /usr/local/sbin/stp-agent-priv selftest
+      changed_when: false
 
     - name: Capture installed requirements.txt sha before sync
       become: true

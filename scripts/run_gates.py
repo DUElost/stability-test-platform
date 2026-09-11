@@ -140,6 +140,14 @@ GATES = {
         ROOT,
         None,
     ),
+    # Prometheus 告警规则契约（#1257/R14-F11）：规则选择器与 backend 指标
+    # 注册表逐条比对——未知指标/标签、直方图裸用基础名即红；promtool 可用时
+    # 追加场景触发测试（无 promtool 的机器该子项 skip，结构层恒跑）。
+    "prom-alerts": (
+        f"{PY} -m pytest tests/test_prometheus_alerts_contract.py -q",
+        ROOT,
+        None,
+    ),
     # skill 用量探针（防建而不用）：--strict 下 ≥14 天零调用 = 门禁红。
     # 空洞处置二选一：删 skill 或改写触发词使其真实可命中。
     # （gov-evals 行为 eval 已于 2026-09-06 移除——S11 锚点承接不变量保全，
@@ -197,7 +205,7 @@ PROFILES = {
     "check:pr": [
         "ruff", "eslint", "tsc", "knip", "compileall",
         "pollution", "immutability", "invariant-diff",
-        "gov-surface", "ip-leak", "agent-tests",
+        "gov-surface", "ip-leak", "prom-alerts", "agent-tests",
         "pr-migrate",
     ],
     # 治理面专项：结构门禁 + skill 用量探针 + Harness 摄取矩阵（手跑，分钟级）
