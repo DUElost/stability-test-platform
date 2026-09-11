@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import model_validator, BaseModel, Field, field_validator
 
 from backend.api.schemas.base import ORMBaseModel
 
@@ -43,11 +43,20 @@ class DeviceOut(ORMBaseModel):
     wifi_ssid: Optional[str] = None
     network_latency: Optional[float] = None
     build_display_id: Optional[str] = None
+    # #1356：serial 为占位值（跨 host 可重复→归属漂移）——读侧标记，供前端/运维识别
+    serial_suspect: bool = False
     cpu_usage: Optional[float] = None
     mem_total: Optional[int] = None
     mem_used: Optional[int] = None
     disk_total: Optional[int] = None
     disk_used: Optional[int] = None
+
+    @model_validator(mode='after')
+    def _mark_serial_suspect(self):
+        # #1356：占位 serial 标记（不落库，读时派生）
+        from backend.core.device_serial import is_placeholder_serial
+        self.serial_suspect = is_placeholder_serial(self.serial)
+        return self
 
     @field_validator('tags', mode='before')
     @classmethod

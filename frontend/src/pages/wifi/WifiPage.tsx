@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, toApiError } from '@/utils/api';
-import type { ResourcePool, ResourcePoolLoad } from '@/utils/api/types';
+import type { ResourcePoolLoad } from '@/utils/api/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/useToast';
@@ -102,17 +102,22 @@ export default function WifiPage() {
     setShowCreate(false);
   }
 
-  function startEdit(pool: ResourcePool | ResourcePoolLoad) {
-    setForm({
-      name: pool.name,
-      config_ssid: configString(pool.config?.ssid),
-      config_password: configString(pool.config?.password),
-      config_router_ip: configString(pool.config?.router_ip),
-      host_group: pool.host_group || '',
-    });
-    setMaxDevicesInput(String(pool.max_concurrent_devices ?? DEFAULT_MAX_DEVICES));
-    setEditingId(pool.id);
-    setShowCreate(false);
+  async function startEdit(pool: ResourcePoolLoad) {
+    try {
+      const full = await api.resourcePools.get(pool.id);
+      setForm({
+        name: full.name,
+        config_ssid: configString(full.config?.ssid),
+        config_password: configString(full.config?.password),
+        config_router_ip: configString(full.config?.router_ip),
+        host_group: full.host_group || '',
+      });
+      setMaxDevicesInput(String(full.max_concurrent_devices ?? DEFAULT_MAX_DEVICES));
+      setEditingId(pool.id);
+      setShowCreate(false);
+    } catch (err: unknown) {
+      toast.error(`加载 WiFi 池详情失败: ${toApiError(err).message}`);
+    }
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -308,7 +313,7 @@ export default function WifiPage() {
                     <div className="mt-3 flex items-center gap-1">
                       <button
                         type="button"
-                        onClick={() => startEdit(pool)}
+                        onClick={() => void startEdit(pool)}
                         className={cn('flex items-center gap-1 rounded px-2 py-1 text-xs', INTERACTIVE.iconButton, INTERACTIVE.hover)}
                         aria-label={`编辑 ${pool.name}`}
                       >
