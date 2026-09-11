@@ -175,3 +175,21 @@ def test_install_playbook_stages_schema_outside_agent_source_tree():
     assert stage_task["ansible.builtin.copy"]["dest"] == (
         "{{ agent_remote_tmp_dir }}/stp_schemas/pipeline_schema.json"
     )
+
+
+def test_install_script_assigns_env_ownership_to_agent_user():
+    """#1251：.env 由 root 创建，必须 chown 给 agent 用户/组，Agent 进程才可读。
+
+    独立安装路径没有 Ansible 的后续属主修复：chmod 640 + root:root 下
+    android 不可读，agent load_dotenv 失败。
+    """
+    text = INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+    chmod_idx = text.find('chmod 640 "$INSTALL_DIR/.env"')
+    chown_idx = text.find('chown "$USER:$GROUP" "$INSTALL_DIR/.env"')
+
+    assert chmod_idx != -1, "chmod 640 for .env not found"
+    assert chown_idx != -1, (
+        "install_agent.sh must chown .env to the agent user/group (#1251)"
+    )
+    assert chown_idx > chmod_idx, ".env ownership must be set after the mode fix-up"
