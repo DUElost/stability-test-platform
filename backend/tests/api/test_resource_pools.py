@@ -81,3 +81,14 @@ def test_admin_full_list_still_contains_password(client, admin_headers, auth_hea
     assert admin_list.status_code == 200
     target = next(p for p in admin_list.json()["data"] if p["id"] == pool_id)
     assert target["config"]["password"] == "top-secret"
+
+
+def test_loads_includes_public_config_without_password(client, admin_headers):
+    """#954：loads 列表含 SSID 等展示字段，不含 password。"""
+    pool_id = _create_pool_with_secret(client, admin_headers, name="wifi-loads")
+
+    resp = client.get("/api/v1/resource-pools/loads", headers=admin_headers)
+    assert resp.status_code == 200, resp.text
+    target = next(p for p in resp.json()["data"] if p["id"] == pool_id)
+    assert target["config"]["ssid"] == "Lab-5G"
+    assert "password" not in target["config"]
