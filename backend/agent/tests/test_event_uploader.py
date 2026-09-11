@@ -555,3 +555,46 @@ def test_upload_one_prunes_local_only_after_ack_ok(tmp_path, monkeypatch):
         up._upload_one(job)
     assert not src.exists()
     assert (nfs / "devices" / "7" / job.event_id / "event_dir").is_dir()
+
+
+def test_rescheduled_retry_success_releases_active(tmp_path, monkeypatch):
+    """#800: 失败一轮（rescheduled）后重投成功必须复位并释放 in-flight 标记——
+    否则 event_id 永久滞留 _active_ids，状态回退事件被去重静默丢弃。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    src = tmp_path / "evt_dir"
+    src.mkdir()
+    (src / "a.txt").write_text("x", encoding="utf-8")
+    up = EventUploader.instance()
+    up.configure(
+        api_url="http://x", agent_secret="s", host_id="h1",
+        nfs_root=str(tmp_path / "nfs"),
+    )
+    job = _UploadJob(
+        event_id="evt-retry-ok", local_path=str(src), plan_run_id=3, serial="d",
+        platform="MTK", event_type="KE", detected_at="2026-08-09T10:00:00+00:00",
+        host_id="h1",
+    )
+    up._active_ids.add(job.event_id)
+
+    def fake_post(url, **kwargs):
+        return MagicMock(status_code=200)
+
+    def boom(*_a, **_k):
+        raise OSError("cifs down")
+
+    # 第一轮：copy 失败 → rescheduled + 保留标记（退避窗口防重入队）
+    with patch("backend.agent.event_uploader.requests.post", side_effect=fake_post), patch(
+        "backend.agent.event_uploader.UploadManager._copytree_safe", side_effect=boom,
+    ), patch("backend.agent.event_uploader.threading.Timer"):
+        up._run_upload_holding_slot(job)
+    assert job.rescheduled is True
+    assert "evt-retry-ok" in up._active_ids
+
+    # 第二轮（模拟 Timer 重投）：正常完成 → 复位 + 释放标记
+    with patch("backend.agent.event_uploader.requests.post", side_effect=fake_post), patch(
+        "backend.agent.event_uploader.threading.Timer",
+    ):
+        up._run_upload_holding_slot(job)
+    assert job.rescheduled is False
+    assert "evt-retry-ok" not in up._active_ids

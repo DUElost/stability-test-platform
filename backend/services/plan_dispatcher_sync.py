@@ -45,6 +45,7 @@ from backend.services.plan_dispatcher_core import (
     snapshot_dispatch_host_watcher_admin_states,
 )
 from backend.services.suite_binding import (
+    SuiteMaterializationConflict,
     freeze_dispatch_suite,
     step_params_for_dispatch,
 )
@@ -927,6 +928,35 @@ def complete_plan_run_dispatch(
             raise  # unrelated constraint — surface it, don't mask
         db.rollback()  # discards every job + allocation row of this attempt
         _fail_plan_run_on_device_conflict(plan_run_id, db, error=str(exc.orig or exc))
+        return
+    except SuiteMaterializationConflict as exc:
+        # R05-F13 (#976): 门禁后套件内容被改动，物化注入会与已校验内容不一致——
+        # 显式失败（可检测），不放行不一致的 expected_testpoint_count。
+        from backend.core.audit import record_audit
+
+        db.rollback()
+        PlanRunStateMachine.transition(
+            pr, PlanRunStatus.FAILED, reason="suite_content_changed"
+        )
+        pr.ended_at = datetime.now(timezone.utc)
+        pr.result_summary = {
+            "dispatch_failed": True,
+            "reason": "suite_content_changed",
+            "error": str(exc),
+        }
+        flag_modified(pr, "result_summary")
+        record_audit(
+            db,
+            action="plan_dispatch_failed",
+            resource_type="plan_run",
+            resource_id=pr.id,
+            details={"reason": "suite_content_changed", "error": str(exc)},
+        )
+        db.commit()
+        logger.warning(
+            "plan_dispatch_suite_content_changed plan_run=%d error=%s",
+            plan_run_id, exc,
+        )
         return
     db.refresh(pr)
     logger.info(

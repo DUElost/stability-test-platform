@@ -214,4 +214,47 @@ describe('ExpandableHostTable', () => {
     expect(screen.getByText('上海执行机-03')).toBeInTheDocument();
   });
 
+  describe('USB 设备数（lsusb 对照值）', () => {
+    it('USB 数与在线数一致时中性展示', () => {
+      render(<ExpandableHostTable hosts={[{ ...host, usb_device_count: 6 }]} />);
+
+      const usb = screen.getByText('USB 6');
+      expect(usb).toBeInTheDocument();
+      expect(usb).not.toHaveClass('text-warning');
+      expect(usb.getAttribute('title')).toContain('lsusb');
+    });
+
+    it('USB 枚举数大于 ADB 在线数时告警并解释差值', () => {
+      render(<ExpandableHostTable hosts={[{ ...host, device_count: 6, usb_device_count: 8 }]} />);
+
+      const usb = screen.getByText('USB 8');
+      expect(usb).toHaveClass('text-warning');
+      expect(usb.getAttribute('title')).toContain('USB 枚举 8 台 > ADB 在线 6 台');
+      // 「在线」仍保持 adb 口径，不被 USB 值污染
+      expect(screen.getByText('在线 6')).toBeInTheDocument();
+    });
+
+    it('未采集到 lsusb 数据时显示 — 而非 0', () => {
+      render(<ExpandableHostTable hosts={[{ ...host, usb_device_count: null }]} />);
+
+      const usb = screen.getByText('USB —');
+      expect(usb).toBeInTheDocument();
+      expect(screen.queryByText('USB 0')).not.toBeInTheDocument();
+      expect(usb.getAttribute('title')).toContain('未采集到');
+    });
+
+    it('字段缺失（旧心跳数据）同样显示 —', () => {
+      render(<ExpandableHostTable hosts={[host]} />);
+
+      expect(screen.getByText('USB —')).toBeInTheDocument();
+    });
+
+    it('USB 为 0 是有效值，与「未知」区分', () => {
+      render(<ExpandableHostTable hosts={[{ ...host, usb_device_count: 0 }]} />);
+
+      expect(screen.getByText('USB 0')).toBeInTheDocument();
+      expect(screen.queryByText('USB —')).not.toBeInTheDocument();
+    });
+  });
+
 });

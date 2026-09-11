@@ -18,8 +18,17 @@ import requests
 from sqlalchemy.orm import joinedload
 
 from backend.core.database import SessionLocal
-from backend.models.notification import AlertRule, EventType, NotificationChannel, NotificationLog, NotificationSeverity, NotificationSource
+from backend.models.notification import (
+    AlertRule,
+    EventType,
+    NotificationChannel,
+    NotificationDelivery,
+    NotificationLog,
+    NotificationSeverity,
+    NotificationSource,
+)
 from backend.services.notification_delivery import (
+    DeliveryOutcome,
     DeliveryResult,
     accepted,
     classify_exception,
@@ -41,6 +50,26 @@ SMTP_TIMEOUT_SECONDS = max(
     1.0,
     float(os.getenv("STP_SMTP_TIMEOUT_SECONDS", "15")),
 )
+
+
+def _channel_deadline(env_key: str, default: float) -> float:
+    """#1167 P4（D3）：每通道显式 deadline（数值属实现/配置）。
+
+    WEBHOOK/DINGTALK 走 ``STP_NOTIFY_<TYPE>_TIMEOUT_S``；EMAIL 复用
+    ``STP_SMTP_TIMEOUT_SECONDS``（见 SMTP_TIMEOUT_SECONDS）。
+    """
+    raw = os.getenv(env_key, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        logger.warning("invalid_timeout_env key=%s value=%r", env_key, raw)
+        return default
+
+
+WEBHOOK_TIMEOUT_SECONDS = _channel_deadline("STP_NOTIFY_WEBHOOK_TIMEOUT_S", 10.0)
+DINGTALK_TIMEOUT_SECONDS = _channel_deadline("STP_NOTIFY_DINGTALK_TIMEOUT_S", 10.0)
 
 
 class NotificationDeliveryError(RuntimeError):
@@ -160,7 +189,7 @@ def _send_webhook(url: str, message: str) -> DeliveryResult:
         resp = requests.post(
             url,
             json={"text": message, "content": message},
-            timeout=10,
+            timeout=WEBHOOK_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # noqa: BLE001 - adapter contract：异常归一化
         return classify_exception(exc, channel_type="WEBHOOK")
@@ -198,7 +227,9 @@ def _send_dingtalk(url: str, secret: str, message: str) -> DeliveryResult:
         url = f"{url}&timestamp={timestamp}&sign={sign}"
 
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+        resp = requests.post(
+            url, json=payload, headers=headers, timeout=DINGTALK_TIMEOUT_SECONDS,
+        )
     except Exception as exc:  # noqa: BLE001 - adapter contract：异常归一化
         return classify_exception(exc, channel_type="DINGTALK")
     err = _delivery_error_result(resp, "DINGTALK")
@@ -305,6 +336,72 @@ def _load_prior_channel_delivery(
     return None, {}
 
 
+def _delivery_state_for(result: DeliveryResult) -> str:
+    """D6 生命周期词表（小写）：accepted / retrying / failed。"""
+    if result.accepted:
+        return "accepted"
+    return "retrying" if result.retryable else "failed"
+
+
+def _persist_delivery_facts(log_id: int, facts: list[dict[str, Any]]) -> None:
+    """#1167 P4（D6）：投递结果落 ``notification_delivery``（业务事实层）。
+
+    每通道一行（unique(log, channel)）：首次 insert、重试在原行累加
+    ``attempt_count`` 并覆盖 outcome/last_error/state/updated_at。
+    与 ``NotificationLog.context.channel_delivery``（过渡 JSONB）双写——
+    本表为权威读取源；历史日志无本表行时读取侧回落 JSONB。
+    """
+    if not facts:
+        return
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        for fact in facts:
+            row = (
+                db.query(NotificationDelivery)
+                .filter(
+                    NotificationDelivery.notification_log_id == log_id,
+                    NotificationDelivery.channel_id == fact["channel_id"],
+                )
+                .one_or_none()
+            )
+            result: DeliveryResult = fact["result"]
+            if row is None:
+                row = NotificationDelivery(
+                    notification_log_id=log_id,
+                    channel_id=fact["channel_id"],
+                    channel_type=fact["channel_type"],
+                    state=_delivery_state_for(result),
+                    outcome=result.outcome.value,
+                    attempt_count=1,
+                    last_error=result.detail or None,
+                    requested_at=now,
+                    updated_at=now,
+                )
+                db.add(row)
+            else:
+                row.state = _delivery_state_for(result)
+                row.outcome = result.outcome.value
+                row.attempt_count = int(row.attempt_count or 0) + 1
+                row.last_error = result.detail or None
+                row.channel_type = fact["channel_type"]
+                row.updated_at = now
+        db.commit()
+
+
+def _load_delivery_fact_outcomes(db, log_id: int) -> dict[int, str]:
+    """读取投递事实表：channel_id → outcome（本表权威；无行返回空 = 回落 JSONB）。"""
+    rows = (
+        db.query(NotificationDelivery)
+        .filter(NotificationDelivery.notification_log_id == log_id)
+        .all()
+    )
+    return {
+        int(r.channel_id): (r.outcome or "")
+        for r in rows
+        if r.channel_id is not None
+    }
+
+
 def _persist_channel_delivery(log_id: int, delivery: dict[str, Any]) -> None:
     with SessionLocal() as db:
         log = db.get(NotificationLog, log_id)
@@ -335,6 +432,13 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
         with SessionLocal() as db:
             prior_log_id, prior_delivery = _load_prior_channel_delivery(
                 db, event_type, context,
+            )
+            # #1167 P4（D6）：投递事实表为权威读取源；无行 = 历史日志，回落
+            # JSONB（prior_delivery）。
+            prior_fact_outcomes = (
+                _load_delivery_fact_outcomes(db, prior_log_id)
+                if prior_log_id is not None
+                else {}
             )
             if prior_log_id is not None:
                 log_id = prior_log_id
@@ -403,6 +507,7 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
         return
 
     delivery: dict[str, Any] = dict(prior_delivery)
+    delivery_facts: list[dict[str, Any]] = []
     succeeded: list[int] = []
     failed: list[dict[str, Any]] = []
     retryable_failed = 0
@@ -411,7 +516,20 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
         channel_id = int(dispatch["channel_id"])
         ch_key = str(channel_id)
         prior = delivery.get(ch_key)
-        if isinstance(prior, dict) and prior.get("status") == "ok":
+        # D7 投递级幂等：本通道已 ACCEPTED 的尝试不重发（重试只补失败通道）。
+        # 事实表为权威；历史日志（无表行）回落 JSONB——兼容仅有 status 字段
+        # 的 P1 前旧记录。
+        accepted_before = False
+        if channel_id in prior_fact_outcomes:
+            accepted_before = (
+                prior_fact_outcomes[channel_id] == DeliveryOutcome.ACCEPTED.value
+            )
+        elif isinstance(prior, dict):
+            accepted_before = (
+                prior.get("status") == "ok"
+                or prior.get("outcome") == DeliveryOutcome.ACCEPTED.value
+            )
+        if accepted_before:
             succeeded.append(channel_id)
             continue
 
@@ -435,6 +553,13 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
         except Exception as exc:  # noqa: BLE001 - 落地为结果类，不在此层吞语义
             result = classify_exception(exc, channel_type=str(dispatch["channel_type"]))
 
+        delivery_facts.append({
+            "channel_id": channel_id,
+            "channel_type": str(
+                getattr(dispatch["channel_type"], "value", dispatch["channel_type"])
+            ),
+            "result": result,
+        })
         if result.accepted:
             delivery[ch_key] = result.record()
             succeeded.append(channel_id)
@@ -469,6 +594,14 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
             )
 
     try:
+        # P4（D6）：事实表为权威（1:N 可查、可索引）；JSONB 双写为过渡兼容。
+        _persist_delivery_facts(log_id, delivery_facts)
+    except Exception:
+        logger.exception(
+            "notification_delivery_facts_persist_failed",
+            extra={"log_id": log_id, "event_type": event_type},
+        )
+    try:
         _persist_channel_delivery(log_id, delivery)
     except Exception:
         logger.exception(
@@ -487,11 +620,54 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
         )
 
 
-def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> None:
-    """Fire-and-forget wrapper — submits to bounded thread pool.
+def _notification_job_key(event_type: str, context: Dict[str, Any]) -> str:
+    """SAQ 去重键：同一事件的重复终态/心跳不重复入队（D7 去重键形态之一）。"""
+    return (
+        f"notif:{event_type}:"
+        f"{context.get('run_id')}:{context.get('device_serial') or ''}"
+    )
 
-    #1122：队列满即拒绝（PoolQueueFullError）—— 本路径无重试，丢弃并记
-    warning/metric；需要可靠投递的通知走 SAQ 的 send_notification_task。
+
+def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> None:
+    """生产投递入口（#1167 P3 / ADR-0036 D4/D7）——入 SAQ，唯一 retry owner。
+
+    入队即返回；SAQ 未运行 / enqueue 失败 → 降级 best-effort 线程池直达
+    （**无重试语义**，仅告警一次，保证可用性）；本函数不向调用方外溢异常。
+    投递级幂等由 ``dispatch_notification`` 的 channel_delivery 记录保证
+    （重试不重发已 ACCEPTED 通道）。
+    """
+    enqueued = False
+    try:
+        from backend.tasks.saq_worker import enqueue_sync
+
+        enqueued = enqueue_sync(
+            "send_notification_task",
+            key=_notification_job_key(event_type, context),
+            timeout=120,
+            retries=3,
+            event_type=event_type,
+            context=dict(context or {}),
+        )
+    except Exception:
+        logger.exception(
+            "notification_enqueue_failed", extra={"event_type": event_type},
+        )
+        enqueued = False
+
+    if enqueued:
+        return
+
+    logger.warning(
+        "notification_enqueue_unavailable_fallback_pool",
+        extra={"event_type": event_type},
+    )
+    _dispatch_notification_via_pool(event_type, context)
+
+
+def _dispatch_notification_via_pool(event_type: str, context: Dict[str, Any]) -> None:
+    """降级路径：有界线程池 fire-and-forget（无重试语义）。
+
+    #1122：队列满即拒绝（PoolQueueFullError）——丢弃并记 warning/metric。
     """
     from backend.core.thread_pool import PoolQueueFullError, submit as pool_submit
 
@@ -499,7 +675,7 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
         try:
             dispatch_notification(event_type, context)
         except Exception:
-            # Thread-pool callers have no SAQ retry; keep best-effort semantics.
+            # 本路径无 SAQ 重试；保持 best-effort 语义。
             logger.exception(
                 "dispatch_notification_async_failed",
                 extra={"event_type": event_type},

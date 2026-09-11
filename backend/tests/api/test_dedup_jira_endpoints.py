@@ -202,6 +202,20 @@ class TestGetJiraRunStatus:
         monkeypatch.setattr("backend.api.routes.dedup.RunConsole.instance", lambda: inst)
         resp = client.get("/api/v1/jira/runs/con-missing", headers=auth_headers)
         assert resp.status_code == 404
+        # 单实例下不应附加多实例诊断（#1114）
+        assert "#1114" not in resp.json()["detail"]
+
+    def test_unknown_run_404_includes_multi_instance_hint(self, client, auth_headers, monkeypatch):
+        """#1114：多实例下 404 带 owner-less 诊断——本地缺失可能由其他实例持有。"""
+        inst = MagicMock()
+        inst.status.return_value = None
+        monkeypatch.setattr("backend.api.routes.dedup.RunConsole.instance", lambda: inst)
+        monkeypatch.setattr(
+            "backend.realtime.socketio_redis.socketio_redis_adapter_enabled", lambda: True
+        )
+        resp = client.get("/api/v1/jira/runs/con-missing", headers=auth_headers)
+        assert resp.status_code == 404
+        assert "#1114" in resp.json()["detail"]
 
     def test_existing_run_returns_200(self, client, auth_headers, mock_run_console):
         resp = client.get("/api/v1/jira/runs/con-fake-123", headers=auth_headers)

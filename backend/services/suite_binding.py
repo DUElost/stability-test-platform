@@ -35,7 +35,17 @@ from backend.services.mtbf_suite import content_fingerprint
 
 logger = logging.getLogger(__name__)
 
+class SuiteMaterializationConflict(RuntimeError):
+    """物化时点套件内容与门禁通过的冻结基线不一致（#976 / R05-F13）。
+
+    预检门禁与物化之间存在脚本校验等较慢步骤；期间编辑用例会使「已校验内容」
+    与物化要注入的启用计数分叉。物化前复核活表指纹，冲突即显式失败而非静默
+    消费不一致的计数。
+    """
+
+
 _RUNTASK_NAME = "runtask.xml"
+_GLOBAL_NAME = "UiAutomatorTestData.xml"
 
 # #402 守卫的 ACTIVE 集合与 routes/suites.py 共用口径：QUEUED / PRECHECK /
 # RUNNING。PRECHECK 也算在途——它马上要物化并消费工具目录文件。
@@ -103,6 +113,14 @@ def runtask_disk_path(suite: TestSuite) -> Path:
     )
 
 
+def global_disk_path(suite: TestSuite) -> Path:
+    """套件在中心存储消费路径上的 Global 文件（#973，与 runtask 同等校验）。"""
+    return (
+        Path(resolve_shared_storage_root()) / "mtbf"
+        / resolve_export_dir(suite) / _GLOBAL_NAME
+    )
+
+
 # ── prepare 冻结（P1 设计 §3.2，与 #401 project/build 同一函数点） ────────────
 
 
@@ -123,6 +141,7 @@ def freeze_dispatch_suite(db: Session, plan: Plan) -> Optional[dict[str, Any]]:
         "suite_name": suite.name,
         "exported_sha256": suite.exported_sha256,
         "exported_content_sha256": suite.exported_content_sha256,
+        "exported_global_sha256": suite.exported_global_sha256,
         "apk_binding": suite.apk_binding,
         "export_dir": resolve_export_dir(suite),
     }
@@ -133,13 +152,28 @@ def step_params_for_dispatch(
 ) -> dict[str, Any]:
     """从冻结块算 mtbf 步骤注入参数（经 STP_STEP_PARAMS 通道下发）。
 
-    - ``expected_testpoint_count``：启用用例数（物化时点活表计数——此时五步
-      门禁已保证 库==导出==磁盘 三方一致，计数不会漂）；
+    - ``expected_testpoint_count``：启用用例数。R05-F13（#976）：门禁与物化间
+      存在较慢步骤，期间编辑用例会让「已校验内容」与注入计数分叉——注入前
+      复核活表指纹必须等于 prepare/门禁冻结的 ``exported_content_sha256``，
+      否则抛 :class:`SuiteMaterializationConflict` 让调度显式失败（可检测）。
     - ``project``：套件 export_dir（替代 host 手工 STP_MTBF_PROJECT env）。
     """
     suite_id = dispatch_suite.get("suite_id")
     if suite_id is None:
         return {}
+    frozen_fp = dispatch_suite.get("exported_content_sha256")
+    if frozen_fp:
+        suite = db.get(TestSuite, suite_id)
+        if suite is None:
+            raise SuiteMaterializationConflict(
+                f"bound suite {suite_id} vanished before materialization"
+            )
+        current_fp = current_content_fingerprint(db, suite)
+        if current_fp != frozen_fp:
+            raise SuiteMaterializationConflict(
+                "suite content changed between precheck gate and materialization "
+                f"(suite_id={suite_id}); re-export and re-dispatch"
+            )
     return {
         "expected_testpoint_count": enabled_case_count(db, suite_id),
         "project": dispatch_suite.get("export_dir") or "legacy",
@@ -184,18 +218,24 @@ def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any
 
     # 2) 已导出：两基线列非空 且 磁盘文件存在
     disk_path: Optional[Path] = None
+    global_path: Optional[Path] = None
     root = resolve_shared_storage_root()
     if root:
         disk_path = runtask_disk_path(suite)
+        global_path = global_disk_path(suite)
     if (
         not suite.exported_sha256
         or not suite.exported_content_sha256
+        or not suite.exported_global_sha256
         or disk_path is None
+        or global_path is None
         or not disk_path.is_file()
+        or not global_path.is_file()
     ):
         return _fail(
             "not_exported",
-            "suite has never been exported to the tool dir (or storage root unset)",
+            "suite has never been exported to the tool dir (or storage root unset "
+            "/ Global file missing)",
             "run POST /api/v1/test-suites/{id}/export-to-tool-dir",
             export_dir=resolve_export_dir(suite),
         )
@@ -222,6 +262,19 @@ def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any
             expected_sha256=suite.exported_sha256,
             disk_sha256=disk_sha,
             disk_path=str(disk_path),
+        )
+
+    # 4b) #973 / R05-F10：Global 与 runtask 同等——磁盘丢失/被改即拒绝。
+    global_sha = hashlib.sha256(global_path.read_bytes()).hexdigest()
+    if global_sha != suite.exported_global_sha256:
+        return _fail(
+            "global_sha_mismatch",
+            "Global (UiAutomatorTestData.xml) on shared storage no longer matches "
+            "the exported sha",
+            "re-export (overwrites the tampered file) or restore the file",
+            expected_sha256=suite.exported_global_sha256,
+            disk_sha256=global_sha,
+            disk_path=str(global_path),
         )
 
     # 5) D3b：项目套件必须跑在归属项目的设备上；通用套件（project 空）放行。
