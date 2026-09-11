@@ -1113,3 +1113,58 @@ class TestSessionDeleteGuard:
         assert db_session.query(AiAssistantAction).filter(
             AiAssistantAction.session_id == s.id,
         ).count() == 0
+
+
+# ── #1218（R13-F06）：T1 参数创建前校验 + 执行期异常必达终态 ───────────────
+
+
+class TestT1ParamValidation:
+    def test_normalize_rejects_missing_file_path(self):
+        """非法 file_path 在归一化（创建动作前）即抛 ToolValidationError。"""
+        from backend.services.ai_assistant.tools import (
+            ToolValidationError,
+            normalize_tool_params,
+        )
+
+        with pytest.raises(ToolValidationError, match="file not found"):
+            normalize_tool_params("run_agent_tests", {"file_path": "no_such_file.py"})
+
+    def test_normalize_passes_valid_args(self):
+        from backend.services.ai_assistant.tools import normalize_tool_params
+
+        assert normalize_tool_params("run_agent_tests", {}) == {}
+
+    def test_approved_action_with_bad_params_reaches_failed(
+        self, auth_headers, db_session, monkeypatch
+    ):
+        """执行期防御收口：存量 approved 动作带非法参数 → failed 而非永久 running。"""
+        from backend.services.ai_assistant import orchestrator as orch
+
+        user = db_session.query(User).filter(User.role != "admin").first()
+        s = AiChatSession(user_id=user.id)
+        db_session.add(s)
+        db_session.flush()
+        action = AiAssistantAction(
+            session_id=s.id, tool_name="run_agent_tests",
+            params={"file_path": "no_such_file.py"},
+            status="approved", requested_by_user_id=user.id,
+        )
+        db_session.add(action)
+        db_session.commit()
+
+        class _Shared:
+            def __init__(self, session):
+                self._s = session
+
+            def __getattr__(self, name):
+                return getattr(self._s, name)
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+        orch.execute_action(action.id)
+
+        db_session.refresh(action)
+        assert action.status == "failed", "执行期异常必须达终态"
+        assert "参数校验失败" in (action.result_summary or "")
