@@ -49,6 +49,17 @@
 - 存在 UNKNOWN Job **不得**落终态。
 - 全部 Job 进入 COMPLETED/FAILED/ABORTED 后计算；`abort_requested` 会把自然 SUCCESS/PARTIAL 覆盖为 FAILED。
 
+**成败语义（#815）**：SUCCESS / PARTIAL_SUCCESS / FAILED 描述**执行链**结果，不是**测试
+结论**：
+
+- Job 终态由 lifecycle `termination_reason` 决定（`completed` / `timeout` → COMPLETED；
+  `abort` / `manual_exit` → ABORTED；其余 → FAILED，见 `pipeline_engine`），teardown
+  步骤的成功与否不改变 Job 终态（只进 `teardown_status` metadata）；
+- 测试脚本自判的结论（`final_status=FAIL`、`failed_rounds>0`、设备侧 INCOMPLETE 等）
+  不参与该聚合，落在 metrics / `test_case_result` 结果层呈现；
+- 因此 **「PlanRun 绿」≠「测试通过」**——判定测试结果须消费结果层字段；INCOMPLETE
+  按「收取即成功」处理是同一设计的有意边界。
+
 前端通过 `PlanRun.capabilities`（abort / retry_dispatch / final_archive）与设备矩阵 `is_stuck` / deadline 字段消费权威投影，避免重复实现超时策略。
 
 ---
