@@ -64,3 +64,69 @@ def test_guard_error_message_lists_all_blocked_tables(monkeypatch):
     assert "plan=3 rows" in msg
     assert "plan_step=3 rows" in msg
     assert "STP_ALLOW_DESTRUCTIVE_DOWNGRADE=1" in msg
+
+
+def _setup_cast_mocks(has_table: bool, count: int):
+    bind = mock.MagicMock()
+    bind.execute.return_value.scalar.return_value = count
+    insp = mock.MagicMock()
+    insp.has_table.return_value = has_table
+    op_mock = mock.MagicMock()
+    op_mock.get_bind.return_value = bind
+    inspect_patch = mock.patch.object(migration_guard, "inspect", mock.Mock(return_value=insp))
+    op_patch = mock.patch.object(migration_guard, "op", op_mock)
+    return bind, inspect_patch, op_patch
+
+
+def test_guard_integer_castable_blocks_non_integer_rows(monkeypatch):
+    monkeypatch.delenv("STP_ALLOW_DESTRUCTIVE_DOWNGRADE", raising=False)
+    bind, insp_p, op_p = _setup_cast_mocks(has_table=True, count=2)
+    with insp_p, op_p:
+        with pytest.raises(RuntimeError, match="non-integer row"):
+            migration_guard.guard_integer_castable(
+                "audit_logs", "resource_id", migration_id="g0b1c2d3e4f5"
+            )
+    sql = str(bind.execute.call_args[0][0])
+    assert "audit_logs" in sql
+    assert "resource_id" in sql
+
+
+def test_guard_integer_castable_allows_when_all_integer_text(monkeypatch):
+    monkeypatch.delenv("STP_ALLOW_DESTRUCTIVE_DOWNGRADE", raising=False)
+    _, insp_p, op_p = _setup_cast_mocks(has_table=True, count=0)
+    with insp_p, op_p:
+        migration_guard.guard_integer_castable(
+            "audit_logs", "resource_id", migration_id="g0b1c2d3e4f5"
+        )
+
+
+def test_guard_integer_castable_force_env_bypasses(monkeypatch):
+    monkeypatch.setenv("STP_ALLOW_DESTRUCTIVE_DOWNGRADE", "1")
+    op_mock = mock.MagicMock()
+    op_mock.get_bind.side_effect = AssertionError("should not call get_bind when forced")
+    with mock.patch.object(migration_guard, "op", op_mock):
+        migration_guard.guard_integer_castable(
+            "audit_logs", "resource_id", migration_id="g0b1c2d3e4f5"
+        )
+
+
+def test_guard_integer_castable_skips_missing_table(monkeypatch):
+    monkeypatch.delenv("STP_ALLOW_DESTRUCTIVE_DOWNGRADE", raising=False)
+    _, insp_p, op_p = _setup_cast_mocks(has_table=False, count=99)
+    with insp_p, op_p:
+        migration_guard.guard_integer_castable(
+            "audit_logs", "resource_id", migration_id="g0b1c2d3e4f5"
+        )
+
+
+def test_integer_cast_using_nulls_non_integer():
+    expr = migration_guard.integer_cast_using("resource_id")
+    assert "resource_id" in expr
+    assert "::integer" in expr
+    assert "ELSE NULL" in expr
+    assert r"^-?[0-9]+$" in expr
+
+
+def test_integer_cast_using_rejects_bad_identifier():
+    with pytest.raises(ValueError, match="invalid SQL identifier"):
+        migration_guard.integer_cast_using("resource_id;drop")
