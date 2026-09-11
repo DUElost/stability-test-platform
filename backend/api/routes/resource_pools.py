@@ -14,7 +14,7 @@ from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.core.audit import record_audit_async
 from backend.core.database import get_async_db
 from backend.models.resource_pool import ResourcePool
-from backend.services.resource_pool import get_pool_load_summary
+from backend.services.resource_pool import get_pool_load_summary, public_pool_config
 
 router = APIRouter(prefix="/api/v1/resource-pools", tags=["resource-pools"])
 
@@ -52,6 +52,7 @@ class ResourcePoolLoad(BaseModel):
     current_devices: int
     host_group: Optional[str]
     is_active: bool
+    config: Dict[str, Any] = Field(default_factory=dict)
 
 
 @router.get("")
@@ -93,11 +94,7 @@ async def list_available_pools(
             id=p.id,
             name=p.name,
             resource_type=p.resource_type,
-            config={
-                key: value
-                for key, value in (p.config or {}).items()
-                if key in _PUBLIC_CONFIG_KEYS
-            },
+            config=public_pool_config(p.config),
             max_concurrent_devices=p.max_concurrent_devices,
             host_group=p.host_group,
             is_active=p.is_active,
