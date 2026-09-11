@@ -1168,3 +1168,75 @@ class TestT1ParamValidation:
         db_session.refresh(action)
         assert action.status == "failed", "执行期异常必须达终态"
         assert "参数校验失败" in (action.result_summary or "")
+
+
+# ── #1219（R13-F07）：一轮多个待审批动作各有卡片（meta 集合）──────────────
+
+
+def test_turn_with_two_proposed_actions_records_both(
+    client, auth_headers, db_session, monkeypatch
+):
+    """一轮两个写工具 → 两个 proposed 动作都进 meta 集合，不再互相覆盖。"""
+    _configure(db_session)
+    from backend.services.ai_assistant import orchestrator as orch
+    from backend.services.ai_assistant.llm_client import AssistantReply, ToolCallRequest
+
+    replies = [
+        AssistantReply(
+            content="",
+            tool_calls=[
+                ToolCallRequest(id="c1", name="reload_agent_config",
+                                arguments={"host_id": "h1"}),
+                ToolCallRequest(id="c2", name="reload_agent_config",
+                                arguments={"host_id": "h2"}),
+            ],
+        ),
+    ]
+
+    class FakeClient:
+        def __init__(self, **kw):
+            pass
+
+        async def chat(self, messages, **kw):
+            return replies.pop(0)
+
+    monkeypatch.setattr(orch, "LlmClient", FakeClient)
+
+    class _Shared:
+        def __init__(self, s):
+            self._s = s
+
+        def __getattr__(self, name):
+            return getattr(self._s, name)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(orch, "SessionLocal", lambda: _Shared(db_session))
+    monkeypatch.setattr(orch, "_enqueue_continuation", lambda sid: None)
+
+    user = db_session.query(User).filter(User.role != "admin").first()
+    s = AiChatSession(user_id=user.id)
+    db_session.add(s)
+    db_session.commit()
+
+    asyncio.run(orch.ai_assistant_turn_task({}, session_id=s.id))
+
+    actions = (
+        db_session.query(AiAssistantAction)
+        .filter_by(session_id=s.id, status="proposed")
+        .all()
+    )
+    assert len(actions) == 2, "两个写工具都应成为 proposed 动作"
+
+    assistant_msgs = (
+        db_session.query(AiChatMessage)
+        .filter(AiChatMessage.session_id == s.id, AiChatMessage.role == "assistant")
+        .all()
+    )
+    metas = [m.meta or {} for m in assistant_msgs if (m.meta or {}).get("proposed_action_ids")]
+    assert metas, "助手消息 meta 应携带 proposed_action_ids 集合"
+    assert sorted(metas[0]["proposed_action_ids"]) == sorted(a.id for a in actions)
+    # 单数键向后兼容：仍指向最后一个（既有消费方不炸）
+    assert any((m.meta or {}).get("proposed_action_id") == actions[-1].id
+               for m in assistant_msgs)

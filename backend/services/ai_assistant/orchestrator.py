@@ -785,6 +785,9 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
 
                 yielded = False
                 proposed_action_id: int | None = None
+                # #1219（R13-F07）：一轮可有多个待审批动作 —— 单值会互相覆盖，
+                # 只有最后一个有操作卡，前面的 proposed 动作永远无人可审批。
+                proposed_action_ids: list[int] = []
                 for tc in reply.tool_calls:
                     spec = TOOLS.get(tc.name)
                     if spec is None or tc.name not in tool_names:
@@ -816,6 +819,8 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                                 tool_name=tc.name, arguments=tool_args, mode=mode,
                             )
                             proposed_action_id = action.id
+                            if mode == "proposed":
+                                proposed_action_ids.append(action.id)
                             if mode == "proposed":
                                 note = (
                                     f"该操作需要管理员审批（操作卡 #{action.id}）。"
@@ -854,9 +859,15 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
                         {"role": "tool", "tool_call_id": tc.id or "", "content": note}
                     )
 
-                if proposed_action_id is not None and assistant_msg is not None:
-                    assistant_msg.meta = {**dict(assistant_msg.meta or {}),
-                                         "proposed_action_id": proposed_action_id}
+                if (proposed_action_ids or proposed_action_id is not None) and assistant_msg is not None:
+                    meta = {**dict(assistant_msg.meta or {})}
+                    if proposed_action_id is not None:
+                        # 单数键保留：兼容旧前端与历史消息的消费
+                        meta["proposed_action_id"] = proposed_action_id
+                    if proposed_action_ids:
+                        # #1219：完整动作关联集合 —— 一轮多个待审批动作各有卡片
+                        meta["proposed_action_ids"] = proposed_action_ids
+                    assistant_msg.meta = meta
                     db.commit()
 
                 if yielded:

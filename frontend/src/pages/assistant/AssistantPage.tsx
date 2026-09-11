@@ -262,11 +262,19 @@ export default function AssistantPage() {
                 {messages.map((message) => (
                   <div key={message.id} className="space-y-2">
                     <MessageBubble message={message} />
-                    {message.meta.proposed_action_id != null && (
-                      <div className="flex">
-                        <ActionCard actionId={message.meta.proposed_action_id} />
-                      </div>
-                    )}
+                    {(() => {
+                      // #1219：一轮可有多个待审批动作 —— 渲染完整集合；
+                      // 旧消息只有单数键，回落兼容。
+                      const ids = message.meta.proposed_action_ids ??
+                        (message.meta.proposed_action_id != null
+                          ? [message.meta.proposed_action_id]
+                          : []);
+                      return ids.map((actionId) => (
+                        <div key={actionId} className="flex">
+                          <ActionCard actionId={actionId} />
+                        </div>
+                      ));
+                    })()}
                   </div>
                 ))}
               </div>

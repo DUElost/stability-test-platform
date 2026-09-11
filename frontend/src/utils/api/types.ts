@@ -2030,6 +2030,8 @@ export interface AiChatMessageMeta {
   error?: string | null;
   /** 非 null = 本条助手消息附带一个待审批/已流转的操作卡 */
   proposed_action_id?: number | null;
+  /** #1219：一轮多个待审批动作的完整关联集合（旧消息可能只有单数键） */
+  proposed_action_ids?: number[] | null;
 }
 
 export interface AiChatMessage {
