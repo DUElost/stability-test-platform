@@ -4,7 +4,8 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import cast, or_, select
+from sqlalchemy import cast, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 from sqlalchemy.orm import Session
 from typing import List, Optional, Union
@@ -143,6 +144,13 @@ def bulk_assign_project(
     )
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
+    # #752：归档守卫（与 projects.py `_require_active_project` 同口径）——
+    # 归档 = 冻结；批量归入会写新 ACTIVE 成员行，等价于用 SEED 标签复活归档。
+    if project.status == "ARCHIVED":
+        raise HTTPException(
+            status_code=409,
+            detail="archived project is read-only; unarchive to modify",
+        )
     if not payload.device_ids:
         raise HTTPException(status_code=422, detail="device_ids must not be empty")
 
@@ -172,10 +180,13 @@ def bulk_assign_project(
     models = sorted({_blank_to_none(d.model) for d in devices if d.model})
     added = []
     for model in models:
+        # #752：与 apply_project_map 对齐——按 lower() 归一匹配（lower 唯一索引
+        # 口径），混大小写旧行必须命中，否则 INSERT 撞 uq_project_model_active
+        # 未捕获 IntegrityError → 500。
         existing = db.execute(
             select(ProjectModel)
             .where(
-                ProjectModel.match_value == model,
+                func.lower(ProjectModel.match_value) == func.lower(model),
                 ProjectModel.is_active.is_(True),
             )
         ).scalar_one_or_none()
@@ -185,11 +196,21 @@ def bulk_assign_project(
                 detail=f"model {model} already member of another project",
             )
         if existing is None:
-            db.add(ProjectModel(
-                project_id=project.id,
-                match_value=model,
-                created_by=current_user.id,
-            ))
+            try:
+                db.add(ProjectModel(
+                    project_id=project.id,
+                    match_value=model,
+                    created_by=current_user.id,
+                ))
+                db.flush()  # 立即触发 lower() 唯一索引检查（IntegrityError 在此抛）
+            except IntegrityError:
+                # 并发双写最后一道：existing 检查与 INSERT 之间被另一请求抢占
+                # 同一归一型号 → 409 而非 500（用户可重试）
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"model {model} concurrently claimed by another project",
+                ) from None
             added.append(model)
     if added:
         record_audit(

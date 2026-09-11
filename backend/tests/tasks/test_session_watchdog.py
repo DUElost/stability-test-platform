@@ -193,3 +193,45 @@ async def test_watchdog_host_timeout_keeps_lease_active():
     finally:
         db.close()
 
+
+
+@pytest.mark.asyncio
+async def test_complete_committed_before_watchdog_locks_is_not_overwritten():
+    """#792：候选查询前 /complete 已提交 COMPLETED → watchdog 不处理该行、
+    终态不被覆写。
+
+    注：本场景在修复前亦通过（候选查询自带 status==RUNNING 过滤，查询前
+    提交的行根本不会入选）——真正的 lost-update 窗口在**查询后、commit
+    前**，黑盒无法确定性注入（修复后的行锁会让注入的并发提交阻塞）。
+    本用例作「过滤语义不被移除」的回归；锁复读语义与 reconciler/recycler
+    同源，见 Agent Note 的验证说明。
+    """
+    from backend.core.database import AsyncSessionLocal
+    from backend.services.state_machine import JobStateMachine
+    from backend.tasks.session_watchdog import _check_host_heartbeat_timeouts
+
+    old_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=300)
+    seed = _seed_job_with_host(host_heartbeat=old_heartbeat)
+
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as db:
+        # 模拟 watchdog 候选扫描：job 已进入本 session identity map（RUNNING）
+        candidate = await db.get(JobInstance, seed["job_id"])
+        assert candidate.status == JobStatus.RUNNING.value
+
+        # /complete 在另一连接提交 COMPLETED
+        sync_db = SessionLocal()
+        try:
+            j = sync_db.get(JobInstance, seed["job_id"])
+            JobStateMachine.transition(j, JobStatus.COMPLETED, "complete_concurrent")
+            j.ended_at = datetime.now(timezone.utc)
+            sync_db.commit()
+        finally:
+            sync_db.close()
+
+        _, jobs_unknown = await _check_host_heartbeat_timeouts(db)
+        await db.rollback()
+
+    assert jobs_unknown == 0, "已提交终态不得再转 UNKNOWN"
+    job = _get_job(seed["job_id"])
+    assert job.status == JobStatus.COMPLETED.value, "已提交终态被 watchdog 覆写"

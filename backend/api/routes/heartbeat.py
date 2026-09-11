@@ -291,6 +291,14 @@ def _process_heartbeat_with_db(
             host.extra = host_extra
         except (TypeError, ValueError):
             pass
+    if "terminal_outbox_dead_letter_total" in extra:
+        try:
+            host_extra["terminal_outbox_dead_letter_total"] = int(
+                extra["terminal_outbox_dead_letter_total"]
+            )
+            host.extra = host_extra
+        except (TypeError, ValueError):
+            pass
     if "terminal_outbox_pending" in extra:
         try:
             record_agent_outbox_pending(

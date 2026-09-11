@@ -219,7 +219,10 @@ WHERE plan_run_id = :run_id AND state IN ('REMOTE', 'ARCHIVED')
 
 ## 专题 5：`PlatformCollector` 接口
 
-**结论**：协议在 `backend/agent/aee/collector.py`；MTK 从 `reconciler.py` + `processor.py` 抽离；UNISOC/QCOM 仅 `detect`。
+**结论**：协议在 `backend/agent/aee/collector.py`（ADR-0028 D4）；MTK 与 UNISOC 均有真实
+Collector（`collectors/mtk.py`、`collectors/unisoc.py`，ADR-0032 D6/B5），QCOM 仍为
+stub-only；Collector 路由由 `get_collector_for_platform` 按 `device.platform` 完成
+（ADR-0032），不再由 env 白名单决定。
 
 ### 5.1 类型与签名
 
@@ -237,34 +240,48 @@ class EventMetadata:
     package_name: str | None
     device_timestamp: datetime | None
 
+@runtime_checkable
 class PlatformCollector(Protocol):
     platform: str
 
-    def detect(self, adb_run: Callable[..., str], serial: str) -> bool: ...
-    def poll_new_events(
-        self, adb_run, serial: str, *, processed: set[str]
-    ) -> list[TriggerInfo]: ...
-    def collect(
-        self, adb_run, serial: str, trigger: TriggerInfo, output_dir: Path
-    ) -> Path: ...  # 返回 local_path；失败 raise CollectorError
+    def detect(
+        self, shell_fn: Callable[[str, int], Optional[str]], serial: str,
+    ) -> bool: ...
     def parse_metadata(self, event_dir: Path) -> EventMetadata: ...
 ```
+
+`TriggerInfo` 由 reconciler 从 `db_history` 解析产生（不是 collector 协议方法）；
+`parse_metadata` 失败 raise `CollectorError`。设备侧事件拉取由 reconciler 在
+`detect` 通过后驱动，成功后 `POST device-log-events` `state=LOCAL`。
 
 ### 5.2 Reconciler 错误约定
 
 - `CollectorError`：记日志 + `tick_errors++`，不 crash 线程
 - `detect=False`：跳过该设备本轮
-- `collect` 成功 → `POST device-log-events` `state=LOCAL`
 
-### 5.3 平台注册
+### 5.3 平台路由（ADR-0032）
 
-`STP_WATCHER_AEE_RECONCILE_PLATFORMS`（默认 `MTK`）决定启动哪个 Collector；`UNKNOWN` 仍放行 MTK Collector。
+`get_collector_for_platform(platform)` 按 `device.platform`（大写归一）路由：
 
-### 5.4 存根（#220）
+| platform | Collector |
+|---|---|
+| `MTK` | `MtkPlatformCollector`（真实） |
+| `UNISOC` | `UnisocPlatformCollector`（真实，ADR-0032 B5） |
+| `QCOM` | `QcomPlatformCollector`（stub-only） |
+| `UNKNOWN` / 未识别 | `MtkPlatformCollector`（兜底） |
 
-`UnisocCollector` / `QcomCollector`：`detect` 返回 False；`parse_metadata` 抛
-`CollectorError`。生产白名单默认仅 `MTK`——**勿**把 `STP_WATCHER_AEE_RECONCILE_PLATFORMS`
-扩成含 UNISOC/QCOM 冒充扫描。真采集仍见 #73（延期，不阻塞主线）。
+历史单白名单 env 键 `STP_WATCHER_AEE_RECONCILE_PLATFORMS` **已随路由删除**
+（全代码零读取点），不再作为 Collector 启动依据。
+
+### 5.4 平台可用性三层口径（#220 → ADR-0032 supersede）
+
+| 平台 | 模块存在 | 端到端采集可用 | 真机验收完成 |
+|---|---|---|---|
+| MTK | ✓ | ✓ | ✓（主线） |
+| UNISOC | ✓（collector + reconciler，ADR-0032） | 见 R09 台账 #1055 相关项 | 待补 |
+| QCOM | stub（`detect` False、`parse_metadata` raise） | —（#73 延期，不阻塞主线） | — |
+
+勿以「模块存在」代替「端到端可用」表述——三者按上表分别陈述。
 
 ---
 
