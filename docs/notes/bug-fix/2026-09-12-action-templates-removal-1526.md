@@ -26,7 +26,10 @@ ADR-0020 Phase 6 删除「工作流编辑器」概念后，其配套的 ActionTe
 
 **未 drop `action_template` 表**：迁移 `f4a5b6c7d8e9` 保留（历史不可改），
 表级删除需先确认生产数据无依赖（issue 明示前置）——独立后续动作
-（Revisit）。
+（Revisit）。ORM 删除后空库 schema-sync 会出现预期的
+`remove_table|action_template` /
+`remove_index|action_template|ix_action_template_active`，已写入
+`schema_sync_baseline.json`（成对白名单不适用——无对偶 add_*）。
 
 ## Alternatives
 
@@ -38,14 +41,14 @@ ADR-0020 Phase 6 删除「工作流编辑器」概念后，其配套的 ActionTe
 ## Verification
 
 - 残留检查：`grep -rn "action_template\|ActionTemplate\|actionTemplates"`
-  全仓仅剩 alembic 历史迁移与 ADR 的「已删除」标注（`env.py` 侧效应
-  import 已随 `pr-migrate-empty-db` 失败补删）；
+  全仓仅剩 alembic 历史迁移、schema-sync 基线白名单与文档的「已删除」
+  标注（`env.py` 侧效应 import 已随 `pr-migrate-empty-db` 失败补删）；
+- CI 补修：`alembic/env.py` 去掉已删模型 import 后，空库
+  `alembic upgrade head` 通过；`check_schema_sync` 将孤儿表/索引两项
+  写入基线后 diff ⊆ 基线；
 - `from backend.main import fastapi_app` 成功（路由注册移除后 34 条路由）；
   `pytest backend/tests --collect-only` **2285 tests collected**（首次暴露
   并修复 conftest/init_dev_db 漏网引用后无错）；
-- CI 补丁验证：`backend/models/action_template.py` 确认已删；`env.py`
-  不再 import 该模块；`python3 -m py_compile backend/alembic/env.py` 通过
-  （本机无 sqlalchemy 时以 CI `pr-migrate-empty-db` 为最终门禁）；
 - `backend/tests/api` 全量 **1019 passed**（7m29s）；
 - 前端 `api.test.ts` **16 passed**；`check:quick` 7 门禁全绿（tsc/knip 对
   删除后的导出面干净）。
