@@ -27,6 +27,7 @@ export type {
   Host, Device, Task, RunStep, TaskRun,
   RuntimeLogEntry, RuntimeLogQueryResponse, LogArtifact,
   RunRiskSummary, RunRiskAlert, RunReport, JiraDraft,
+  JiraDraftListItem,
   JiraRunRecord,
   PipelineTemplate, AgentLogOut, User,
   RunsByStatus, TestTypeStat, RiskDistribution, RecentRun, ResultsSummary,
