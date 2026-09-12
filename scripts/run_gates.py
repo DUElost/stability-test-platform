@@ -63,6 +63,12 @@ GATES = {
         FRONTEND,
         None,
     ),
+    # 分层门禁（#1519）：services/ 不得反向 import api.routes（含 --self-test 红绿自证）。
+    "layering": (
+        f"{PY} tools/dev/check_layering.py",
+        ROOT,
+        None,
+    ),
     "compileall": (
         f"{PY} -m compileall -q backend/ tools/ scripts/",
         ROOT,
@@ -203,7 +209,7 @@ GATES = {
 PROFILES = {
     "check:quick": ["ruff", "eslint", "tsc", "knip", "compileall", "gov-surface", "ai-work"],
     "check:pr": [
-        "ruff", "eslint", "tsc", "knip", "compileall",
+        "ruff", "eslint", "tsc", "knip", "compileall", "layering",
         "pollution", "immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests",
         "pr-migrate",
