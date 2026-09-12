@@ -867,42 +867,6 @@ export interface ScriptUsage {
   projects: ScriptUsageProject[];
 }
 
-export interface ActionTemplateEntry {
-  id: number;
-  name: string;
-  description?: string | null;
-  action: string;
-  version?: string | null;
-  params: Record<string, unknown>;
-  timeout_seconds: number;
-  retry: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ActionTemplateCreatePayload {
-  name: string;
-  description?: string;
-  action: string;
-  version?: string | null;
-  params?: Record<string, unknown>;
-  timeout_seconds?: number;
-  retry?: number;
-  is_active?: boolean;
-}
-
-export interface ActionTemplateUpdatePayload {
-  name?: string;
-  description?: string;
-  action?: string;
-  version?: string | null;
-  params?: Record<string, unknown>;
-  timeout_seconds?: number;
-  retry?: number;
-  is_active?: boolean;
-}
-
 export interface PipelineStep {
   step_id: string;
   action: string;

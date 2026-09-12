@@ -12,7 +12,7 @@ export { devices, fetchAllDevices } from './devices';
 export { projects, assignDevicesToProject } from './projects';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
-export { actionTemplates, scripts } from './tools';
+export { scripts } from './tools';
 export { resourcePools } from './resourcePools';
 export { results, stats } from './analytics';
 export { users, notifications, schedules, audit } from './management';
@@ -39,7 +39,6 @@ export type {
   InventoryModel, InventorySummary, ProjectModelCoverage,
   ProjectCreateInput, ProjectMapPreview, ProjectMapConflict,
   ScriptEntry,
-  ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
   PipelineStep, PipelinePhase, PipelinePatrol, PipelineDef,
   JobStatus, StepTrace, JobArtifactEntry,
   ResourcePool, ResourcePoolLoad, ResourcePoolCreatePayload,
@@ -65,7 +64,7 @@ import { devices } from './devices';
 import { projects, assignDevicesToProject } from './projects';
 import { logs } from './logs';
 import { pipeline } from './pipeline';
-import { actionTemplates, scripts } from './tools';
+import { scripts } from './tools';
 import { resourcePools } from './resourcePools';
 import { results, stats } from './analytics';
 import { users, notifications, schedules, audit } from './management';
@@ -94,7 +93,6 @@ export const api = {
   notifications,
   schedules,
   audit,
-  actionTemplates,
   scripts,
   resourcePools,
   plans,

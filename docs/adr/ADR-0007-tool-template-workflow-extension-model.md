@@ -60,11 +60,9 @@
 
 ### 当前活跃
 - `backend/models/script.py` — Script ORM 模型
-- `backend/models/action_template.py` — ActionTemplate ORM 模型
 - `backend/services/script_catalog.py` — 脚本目录扫描（替代 tool_catalog）
 - `backend/agent/registry/script_registry.py` — ScriptRegistry（运行时解析 `script:<name>`）
 - `backend/api/routes/scripts.py` — Script 管理 API（替代 tools / tool_catalog）
-- `backend/api/routes/action_templates.py` — Action 模板端点
 - `backend/api/routes/plans.py` — Plan CRUD + 触发执行
 - `backend/api/routes/plan_runs.py` — PlanRun 查询 + 聚合
 - `backend/api/routes/schedules.py` — 定时任务
@@ -100,7 +98,7 @@
 - `backend/core/task_templates.py` — 内置任务模板 → **已删除**
 - `backend/api/routes/orchestration.py` — Workflow 编排端点 → **已删除**
 - `backend/api/routes/tool_catalog.py` — 工具目录端点 → **已删除**
-- `backend/api/routes/action_templates.py` — Action 模板端点 → **仍活跃**
+- `backend/api/routes/action_templates.py` — Action 模板端点 → **已删除（#1526：ADR-0020 Phase 6 概念已退场，路由/模型/测试全删）**
 - `backend/api/routes/schedules.py` — 定时任务 → **仍活跃**
 - `backend/scheduler/cron_scheduler.py` — Cron 调度器 → **仍活跃**
 - `backend/services/dispatcher.py` — Workflow 派发服务 → **已删除**
