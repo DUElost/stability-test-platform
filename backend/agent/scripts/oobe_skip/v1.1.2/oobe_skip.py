@@ -1,5 +1,12 @@
 """Skip Android OOBE (out-of-box experience) on ONE target device via ADB.
 
+v1.1.2（#1591）：验证失败重试（verify_retries 默认 2）——刷机后系统忙碌，
+settings put 可能未即时落盘；重设 flags + 等待 + 重验证以收敛。
+
+v1.1.1（#816）：adb root 后固定 sleep(2) 改轮询 get-state==device（上限 15s，
+超时继续由命令层 rc/verify 兜底）——adbd 重启需 2–5s+，固定窗口落在
+offline 时整步失败率偏高。
+
 刷机成功后的固定后置步骤：把刚刷完、停在 OOBE 首页的单台设备自动送进
 主界面。OOBE 页长时间亮屏静置会自行关机（表现为「手机无故掉出 adb」），
 所以这一步必须在 flash_firmware 之后尽快执行。
@@ -118,6 +125,17 @@ def _adb_shell(serial: str, adb_path: str, shell_args: "list[str]",
     return proc.returncode, tail[-300:]
 
 
+def _wait_adbd_ready(serial: str, adb_path: str, deadline_seconds: float = 15.0) -> bool:
+    """adb root 后轮询 adbd 恢复（#816）：get-state == device 才算就绪。"""
+    deadline = time.monotonic() + deadline_seconds
+    while time.monotonic() < deadline:
+        rc, tail = _adb_shell(serial, adb_path, ["get-state"], timeout=5)
+        if rc == 0 and "device" in tail:
+            return True
+        time.sleep(1.0)
+    return False
+
+
 def _boot_completed(serial: str, adb_path: str) -> bool:
     rc, tail = _adb_shell(serial, adb_path,
                           ["getprop", "sys.boot_completed"], timeout=10)
@@ -200,7 +218,11 @@ def main() -> None:
     metrics["root"] = {"rc": root_rc, "tail": root_tail}
     _emit_progress(seq, stage="root", ok=root_rc == 0)
     if root_rc == 0:
-        time.sleep(2)  # adbd 重启窗口，紧随其后的命令可能瞬断
+        # #816：adbd 重启需 2–5s+，固定 sleep(2) 常落在 offline 窗口使整步
+        # 失败率偏高；改为轮询 get-state==device（上限 15s）再进入命令序列，
+        # 超时仍继续（后续命令 rc / verify 兜底，保持 root best-effort 语义）。
+        if not _wait_adbd_ready(serial, adb_path):
+            metrics["root_wait_timeout"] = True
 
     # ── 命令序列：provisioning 标志与 OOBE.bat 一致 ────────────────────
     shell_commands: "list[tuple[str, list[str]]]" = [
@@ -252,6 +274,33 @@ def main() -> None:
             oobe_done = oobe_done and ok
         verify_report["ok"] = oobe_done
         _emit_progress(seq, stage="verify", ok=oobe_done)
+
+        # v1.1.2（#1591）：验证失败重试——刷机后系统忙碌，settings put
+        # 可能未即时落盘（实测重试多可收敛；原实现立即失败）。
+        if not oobe_done:
+            try:
+                retries = int(_param_or_env(args, "verify_retries", "", 2))
+            except (TypeError, ValueError):
+                retries = 2
+            for attempt in range(1, max(1, retries) + 1):
+                time.sleep(15)
+                for _name, shell_args in shell_commands:
+                    _adb_shell(serial, adb_path, shell_args)
+                time.sleep(5)
+                ok_all = True
+                for name, read_args in checks:
+                    rc, tail = _adb_shell(serial, adb_path, read_args)
+                    value = tail.strip().splitlines()[-1] if tail.strip() else ""
+                    ok = rc == 0 and value.strip() == "1"
+                    verify_report[name] = {"value": value.strip(), "ok": ok}
+                    ok_all = ok_all and ok
+                oobe_done = ok_all
+                verify_report["ok"] = oobe_done
+                verify_report["retry_attempts"] = attempt
+                _emit_progress(seq, stage="verify-retry",
+                               attempt=attempt, ok=oobe_done)
+                if oobe_done:
+                    break
 
     # ── UI 焦点诊断（best-effort，不参与成败判定）─────────────────────
     focus_rc, focus_tail = _adb_shell(

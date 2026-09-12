@@ -272,33 +272,6 @@ def main() -> None:
         verify_report["ok"] = oobe_done
         _emit_progress(seq, stage="verify", ok=oobe_done)
 
-        # v1.1.1（#1591）：验证失败重试——刷机后系统忙碌，settings put
-        # 可能未即时落盘（实测重试多可收敛；原实现立即失败）。
-        if not oobe_done:
-            try:
-                retries = int(_param_or_env(args, "verify_retries", "", 2))
-            except (TypeError, ValueError):
-                retries = 2
-            for attempt in range(1, max(1, retries) + 1):
-                time.sleep(15)
-                for _name, shell_args in shell_commands:
-                    _adb_shell(serial, adb_path, shell_args)
-                time.sleep(5)
-                ok_all = True
-                for name, read_args in checks:
-                    rc, tail = _adb_shell(serial, adb_path, read_args)
-                    value = tail.strip().splitlines()[-1] if tail.strip() else ""
-                    ok = rc == 0 and value.strip() == "1"
-                    verify_report[name] = {"value": value.strip(), "ok": ok}
-                    ok_all = ok_all and ok
-                oobe_done = ok_all
-                verify_report["ok"] = oobe_done
-                verify_report["retry_attempts"] = attempt
-                _emit_progress(seq, stage="verify-retry",
-                               attempt=attempt, ok=oobe_done)
-                if oobe_done:
-                    break
-
     # ── UI 焦点诊断（best-effort，不参与成败判定）─────────────────────
     focus_rc, focus_tail = _adb_shell(
         serial, adb_path, ["dumpsys", "window"], timeout=20)
