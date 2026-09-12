@@ -25,6 +25,7 @@ from .db_history import (
 )
 from .folder_name import get_aee_log_folder_name, make_getprop_from_shell
 from .mobilelog import export_correlated_mobilelogs, make_adb_pull_fn, make_adb_shell_fn
+from .extraction_slot import host_extraction_slot
 from .paths import (
     get_aee_local_root,
     get_or_create_run_date_stamp,
@@ -312,67 +313,75 @@ def process_device_logs(
             )
             local_target_dir = output_subdir / dirname
 
-            if local_target_dir.exists():
+            # #740: host-level slot — pull + side exports share one HDD writer budget
+            with host_extraction_slot(purpose=f"aee:{serial}"):
+                if local_target_dir.exists():
+                    verify_ok, verify_msg, _ = _verify_pulled_aee_log_strict(
+                        local_target_dir,
+                        remote_path=parsed["db_path"],
+                        shell_fn=shell_fn,
+                    )
+                    if verify_ok:
+                        parsed = _enrich_parsed_with_local_aee_metadata(
+                            parsed, local_target_dir,
+                        )
+                        _finalize_processed_entry(
+                            line=line,
+                            parsed=parsed,
+                            local_target_dir=local_target_dir,
+                        )
+                        continue
+                    logger.info(
+                        "aee_pull_existing_dir_invalid serial=%s db=%s reason=%s",
+                        serial, parsed["db_path"], verify_msg,
+                    )
+                    _cleanup_dir(local_target_dir)
+
+                if not pull_fn(
+                    parsed["db_path"], str(local_target_dir), cfg.pull_timeout_seconds,
+                ):
+                    task["retry_count"] = int(task.get("retry_count", 0)) + 1
+                    task["last_error"] = "adb_pull_failed"
+                    _cleanup_dir(local_target_dir)
+                    result.errors.append(f"pull_failed:{parsed['db_path']}")
+                    _notify_pull_failed(
+                        on_pull_failed,
+                        line=line,
+                        parsed=parsed,
+                        aee_type=aee_type,
+                        task=task,
+                        error="adb_pull_failed",
+                    )
+                    continue
+
                 verify_ok, verify_msg, _ = _verify_pulled_aee_log_strict(
                     local_target_dir,
                     remote_path=parsed["db_path"],
                     shell_fn=shell_fn,
                 )
-                if verify_ok:
-                    parsed = _enrich_parsed_with_local_aee_metadata(parsed, local_target_dir)
-                    _finalize_processed_entry(
+                if not verify_ok:
+                    task["retry_count"] = int(task.get("retry_count", 0)) + 1
+                    task["last_error"] = f"verify_failed: {verify_msg}"
+                    _cleanup_dir(local_target_dir)
+                    result.errors.append(
+                        f"pull_verify_failed:{parsed['db_path']}:{verify_msg}"
+                    )
+                    _notify_pull_failed(
+                        on_pull_failed,
                         line=line,
                         parsed=parsed,
-                        local_target_dir=local_target_dir,
+                        aee_type=aee_type,
+                        task=task,
+                        error=f"verify_failed: {verify_msg}",
                     )
                     continue
-                logger.info(
-                    "aee_pull_existing_dir_invalid serial=%s db=%s reason=%s",
-                    serial, parsed["db_path"], verify_msg,
-                )
-                _cleanup_dir(local_target_dir)
 
-            if not pull_fn(parsed["db_path"], str(local_target_dir), cfg.pull_timeout_seconds):
-                task["retry_count"] = int(task.get("retry_count", 0)) + 1
-                task["last_error"] = "adb_pull_failed"
-                _cleanup_dir(local_target_dir)
-                result.errors.append(f"pull_failed:{parsed['db_path']}")
-                _notify_pull_failed(
-                    on_pull_failed,
+                parsed = _enrich_parsed_with_local_aee_metadata(parsed, local_target_dir)
+                _finalize_processed_entry(
                     line=line,
                     parsed=parsed,
-                    aee_type=aee_type,
-                    task=task,
-                    error="adb_pull_failed",
+                    local_target_dir=local_target_dir,
                 )
-                continue
-
-            verify_ok, verify_msg, _ = _verify_pulled_aee_log_strict(
-                local_target_dir,
-                remote_path=parsed["db_path"],
-                shell_fn=shell_fn,
-            )
-            if not verify_ok:
-                task["retry_count"] = int(task.get("retry_count", 0)) + 1
-                task["last_error"] = f"verify_failed: {verify_msg}"
-                _cleanup_dir(local_target_dir)
-                result.errors.append(f"pull_verify_failed:{parsed['db_path']}:{verify_msg}")
-                _notify_pull_failed(
-                    on_pull_failed,
-                    line=line,
-                    parsed=parsed,
-                    aee_type=aee_type,
-                    task=task,
-                    error=f"verify_failed: {verify_msg}",
-                )
-                continue
-
-            parsed = _enrich_parsed_with_local_aee_metadata(parsed, local_target_dir)
-            _finalize_processed_entry(
-                line=line,
-                parsed=parsed,
-                local_target_dir=local_target_dir,
-            )
 
         _save_pending_tasks(state_store, pending_key, pending_tasks)
         result.pending_remaining += len(pending_tasks)

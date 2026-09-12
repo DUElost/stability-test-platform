@@ -59,10 +59,12 @@ cp .env.test.example .env.test   # 首次
   python tools/dev/check_test_containers.py --strict   # 有残留时退出码 1
   ```
 
-- 清理（**默认阈值 120 分钟**，只动疑似残留、不碰其他会话活跃实例）：
+- 清理（**默认阈值 120 分钟**，只动疑似残留、不碰其他会话活跃实例；目标以
+  testcontainers 注入的 label 判定，手工起的同名 PG 不会被误删）：
 
   ```bash
-  python tools/dev/check_test_containers.py --prune
+  python tools/dev/check_test_containers.py --prune          # 列出待删清单（不删）
+  python tools/dev/check_test_containers.py --prune --yes    # 确认后执行删除
   ```
 
 生产唯一 env 源是仓库根 `.env.backend`；`backend/.env` 是本地开发覆盖，不含生产

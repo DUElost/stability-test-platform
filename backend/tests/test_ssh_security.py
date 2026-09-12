@@ -208,6 +208,58 @@ def test_trust_host_key_replaces_with_explicit_consent(monkeypatch, tmp_path):
     assert "10.0.0.99 ssh-ed25519 TkVXS0VZ" in content
 
 
+def test_trust_host_key_nondefault_port_ignores_22_port_entry(monkeypatch, tmp_path):
+    """#1655：非 22 端口信任只与同 token 的 [ip]:port 条目比较。
+
+    既有 22 端口条目行首 token 不同，此前会混进比较集合 → 集合恒不相等 →
+    即使密钥材料一致也被误判「host key changed」拒绝。
+    """
+    from backend.core import ssh_security
+
+    known_hosts = tmp_path / "known_hosts"
+    line = "10.0.0.99 ssh-ed25519 T0xES0VZ"
+    known_hosts.write_text(line + "\n", encoding="utf-8")
+
+    fake_completed = SimpleNamespace(
+        returncode=0, stdout="[10.0.0.99]:2222 ssh-ed25519 T0xES0VZ\n", stderr="",
+    )
+    monkeypatch.setattr(
+        ssh_security.subprocess, "run", lambda *a, **k: fake_completed,
+    )
+
+    ok, reason = ssh_security.trust_host_key("10.0.0.99", 2222, str(known_hosts))
+
+    assert ok is True, f"同密钥材料不应被误判换钥: {reason}"
+    assert reason == "ok"
+    content = known_hosts.read_text(encoding="utf-8")
+    assert "[10.0.0.99]:2222 ssh-ed25519 T0xES0VZ" in content
+
+
+def test_trust_host_key_nondefault_port_same_token_key_change_still_refused(
+    monkeypatch, tmp_path,
+):
+    """#1655 回归守卫：同 token 下密钥真的变化 → 仍须拒绝（不能放过换钥）。"""
+    from backend.core import ssh_security
+
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "[10.0.0.99]:2222 ssh-ed25519 T0xES0VZ\n", encoding="utf-8",
+    )
+
+    fake_completed = SimpleNamespace(
+        returncode=0, stdout="[10.0.0.99]:2222 ssh-ed25519 TkVXS0VZ\n", stderr="",
+    )
+    monkeypatch.setattr(
+        ssh_security.subprocess, "run", lambda *a, **k: fake_completed,
+    )
+
+    ok, reason = ssh_security.trust_host_key("10.0.0.99", 2222, str(known_hosts))
+
+    assert ok is False
+    assert "host key changed" in reason
+    assert "explicit replace required" in reason
+
+
 def test_trust_host_key_same_key_rescan_is_ok(monkeypatch, tmp_path):
     """同键重扫不触发换钥路径（幂等，不需要确认）。"""
     from backend.core import ssh_security

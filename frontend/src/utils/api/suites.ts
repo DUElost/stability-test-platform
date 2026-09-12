@@ -80,7 +80,11 @@ export const suites = {
     fd.append('file', runtask);
     if (global) fd.append('global', global);
     return unwrapApiResponse<TestSuiteDetail>(
-      apiClient.post<ApiResponseEnvelope<TestSuiteDetail>>(`/test-suites/${suiteId}/import`, fd),
+      apiClient.post<ApiResponseEnvelope<TestSuiteDetail>>(
+        `/test-suites/${suiteId}/import`,
+        fd,
+        { timeout: NO_TIMEOUT }, // #1199/#1655：套件 import 上传体量不可控，豁免应用层超时
+      ),
     );
   },
 

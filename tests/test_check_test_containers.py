@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,10 +22,16 @@ _spec.loader.exec_module(_mod)
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=timezone.utc)
 
 
-def _c(age_minutes: float, *, image: str = "postgres:16", name: str = "pg") -> _mod.Container:
+def _c(
+    age_minutes: float, *, image: str = "postgres:16", name: str = "pg",
+    labels: "dict | None" = None,
+) -> _mod.Container:
+    """默认带 testcontainers label（#1655 后 label 是权威判据）。"""
+    if labels is None:
+        labels = {"org.testcontainers": "true", "org.testcontainers.lang": "python"}
     return _mod.Container(
         cid=name[:12], name=name, image=image,
-        created=NOW - timedelta(minutes=age_minutes),
+        created=NOW - timedelta(minutes=age_minutes), labels=labels,
     )
 
 
@@ -46,18 +53,24 @@ class TestParseDockerTime:
 
 
 class TestTargetFilter:
-    def test_only_testcontainer_images_match(self):
+    def test_label_is_authoritative(self):
+        # #1655：testcontainers 注入的 label 是权威判据
         assert _c(10).is_target()
+        assert _c(10, image="some-custom-pg:16").is_target()
         assert _c(10, image="testcontainers/ryuk:0.8.1").is_target()
-        assert not _c(10, image="postgres:15").is_target()
-        assert not _c(10, image="stp-backend:latest").is_target()
+
+    def test_bare_postgres_without_label_not_target(self):
+        # 手工起、无 label 的 postgres 容器不得被当成目标（避免误删）
+        assert not _c(10, labels={}).is_target()
+        assert not _c(10, image="postgres:15", labels={}).is_target()
+        assert not _c(10, image="stp-backend:latest", labels={}).is_target()
 
 
 class TestPlanTargets:
     def test_splits_stale_and_recent_by_threshold(self):
         stale, recent = _mod.plan_targets(
             [_c(300), _c(121), _c(119), _c(5),
-             _c(999, image="other:image")],
+             _c(999, image="other:image", labels={})],
             min_age_minutes=120, now=NOW,
         )
         assert [c.age_minutes(now=NOW) for c in stale] == [300, 121]
@@ -69,18 +82,21 @@ class TestPlanTargets:
 
 
 class TestMainFlow:
-    def _runner(self, containers):
+    def _runner(self, containers, *, rm_rc: int = 0):
         calls: list[list[str]] = []
         listing = "\n".join(
-            f"{c.cid}\t{c.name}\t{c.image}\t{c.created.isoformat()}"
+            f"{c.cid}\t{c.name}\t{c.image}\t{c.created.isoformat()}\t"
+            f"{json.dumps(c.labels)}"
             for c in containers
         )
 
         def runner(args):
             calls.append(args)
             if args[0] == "ps":
-                return "\n".join(c.cid for c in containers)
-            return listing
+                return 0, "\n".join(c.cid for c in containers)
+            if args[0] == "rm":
+                return rm_rc, ""
+            return 0, listing
 
         return runner, calls
 
@@ -100,7 +116,16 @@ class TestMainFlow:
         runner, _ = self._runner([_c(10)])
         assert _mod.main(["--strict"], runner=runner, now=NOW) == 0
 
-    def test_prune_removes_only_stale(self):
+    def test_prune_without_yes_lists_only(self, capsys):
+        # #1655：--prune 不带 --yes 只列出待删清单，不执行删除
+        runner, calls = self._runner([_c(300, name="stale1")])
+        rc = _mod.main(["--prune"], runner=runner, now=NOW)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert all(a[0] != "rm" for a in calls), "--prune 无 --yes 不得删除"
+        assert "需显式确认" in out
+
+    def test_prune_with_yes_removes_only_stale(self):
         stale, recent = _c(300, name="stale1"), _c(5, name="recent1")
         removed: list[str] = []
         runner, calls = self._runner([stale, recent])
@@ -109,16 +134,23 @@ class TestMainFlow:
             calls.append(args)
             if args[0] == "rm":
                 removed.append(args[-1])
-                return ""
+                return 0, ""
             return runner(args)
 
-        rc = _mod.main(["--prune"], runner=prune_runner, now=NOW)
+        rc = _mod.main(["--prune", "--yes"], runner=prune_runner, now=NOW)
         assert rc == 0
         assert removed == [stale.cid], "只清残留、不动近期容器"
 
+    def test_prune_rm_failure_reported(self, capsys):
+        runner, _ = self._runner([_c(300, name="stale1")], rm_rc=1)
+        rc = _mod.main(["--prune", "--yes"], runner=runner, now=NOW)
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert "rm -f" in err and "失败" in err
+
     def test_no_containers_is_clean(self, capsys):
         def runner(args):
-            return ""
+            return 0, ""
 
         assert _mod.main([], runner=runner, now=NOW) == 0
         assert "未发现 testcontainer" in capsys.readouterr().out
@@ -129,3 +161,12 @@ class TestMainFlow:
 
         assert _mod.main([], runner=runner, now=NOW) == 2
         assert "docker 不可用" in capsys.readouterr().err
+
+    def test_docker_daemon_failure_is_not_green(self, capsys):
+        # #1655：daemon 异常时 docker ps 非零退出——不得报「未发现」绿退
+        def runner(args):
+            return 125, ""
+
+        assert _mod.main([], runner=runner, now=NOW) == 2
+        assert "docker 巡检失败" in capsys.readouterr().err
+        assert _mod.main(["--strict"], runner=runner, now=NOW) == 2
