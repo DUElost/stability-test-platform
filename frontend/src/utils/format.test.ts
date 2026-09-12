@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { formatDateTimeLocale, formatUnixSeconds } from './format';
+import { formatDateTimeLocale, formatDurationSeconds, formatUnixSeconds } from './format';
+import { datetimeLocalInputToIso } from './time';
 
 describe('formatDateTimeLocale', () => {
   it('合法 ISO 输出 zh-CN 24h 本地串', () => {
@@ -9,6 +10,23 @@ describe('formatDateTimeLocale', () => {
   it('空值返回自定义 empty（通知流空时间戳显示空串而非 -）', () => {
     expect(formatDateTimeLocale(null, '')).toBe('');
     expect(formatDateTimeLocale(undefined, '-')).toBe('-');
+  });
+});
+
+describe('formatDurationSeconds', () => {
+  it('includes seconds in precise style when hours are present', () => {
+    expect(formatDurationSeconds(3723, 'precise')).toBe('1h 2m 3s');
+  });
+
+  it('omits trailing seconds when zero at hour granularity', () => {
+    expect(formatDurationSeconds(3600, 'precise')).toBe('1h 0m');
+  });
+});
+
+describe('datetimeLocalInputToIso', () => {
+  it('converts datetime-local values to UTC ISO strings', () => {
+    const iso = datetimeLocalInputToIso('2026-06-01T10:00');
+    expect(iso).toMatch(/2026-06-01T\d{2}:00:00\.000Z/);
   });
 });
 
