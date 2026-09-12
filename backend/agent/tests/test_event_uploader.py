@@ -676,3 +676,57 @@ def test_store_attempts_survive_reenqueues(tmp_path):
     up._clear_attempts("evt-a")
     up._store_attempts("evt-a", 3)
     assert up._load_attempts("evt-a") == 3
+
+
+def test_retry_timer_is_daemon_and_cancelled_on_stop(monkeypatch, tmp_path):
+    """#784: 退避 Timer 必须 daemon，且 stop() 取消未决 Timer。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    src = tmp_path / "evt_dir"
+    src.mkdir()
+    (src / "a.txt").write_text("x", encoding="utf-8")
+    up = EventUploader.instance()
+    up.configure(
+        api_url="http://x", agent_secret="s", host_id="h1",
+        nfs_root=str(tmp_path / "nfs"),
+    )
+    job = _UploadJob(
+        event_id="evt-timer", local_path=str(src), plan_run_id=3, serial="d",
+        platform="MTK", event_type="KE", detected_at="2026-08-09T10:00:00+00:00",
+        host_id="h1",
+    )
+
+    created = []
+
+    class _FakeTimer:
+        def __init__(self, delay, fn):
+            self.delay = delay
+            self.fn = fn
+            self.daemon = False
+            self.cancelled = False
+            created.append(self)
+
+        def start(self):
+            return None
+
+        def cancel(self):
+            self.cancelled = True
+
+    def boom(*_a, **_k):
+        raise OSError("cifs down")
+
+    with patch("backend.agent.event_uploader.threading.Timer", _FakeTimer), patch(
+        "backend.agent.event_uploader.requests.post",
+        return_value=MagicMock(status_code=200),
+    ), patch(
+        "backend.agent.event_uploader.UploadManager._copytree_safe", side_effect=boom,
+    ):
+        up._run_upload_holding_slot(job)
+
+    assert created, "expected a retry Timer"
+    assert created[0].daemon is True
+    assert created[0] in up._retry_timers
+
+    up.stop(timeout=0.2)
+    assert created[0].cancelled is True
+    assert up._retry_timers == []
