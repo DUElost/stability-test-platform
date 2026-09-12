@@ -30,6 +30,9 @@ Class: bug-fix
 
 - `pytest backend/tests/tasks/test_saq_tasks.py -k sync_exclusive -q`
   （含新例 `test_sync_exclusive_cancel_holds_until_worker_done`）
+- `pytest backend/agent/tests/test_saq_scan_pipeline.py -k merge_task -q`
+  （#1497 后 `_guarded_call` 包一层：merge_task 用例改 mock `_run_sync_exclusive`，
+  不再按 `run_merge_all_platforms_sync.__name__` 短路，避免 agent-test CI 无 PG 连库）
 - `python scripts/run_gates.py check:quick`
 
 ## Revisit
