@@ -219,7 +219,7 @@
   [AI 安全测试](../../backend/tests/core/test_ai_security.py)、
   [AI API 测试](../../backend/tests/api/test_ai_assistant_endpoints.py)。
 - **权威文档**：[AI 助手 ADR](../adr/ADR-0031-platform-ai-assistant.md)、
-  [核心写工具附录](../adr/ADR-0031-appendix-phase3-core-write-tools.md)、
+  [核心写工具附录](../adr/ADR-0031-A-appendix-phase3-core-write-tools.md)、
   [AI 助手设计](../design/2026-08-27-platform-ai-assistant.md)。
 
 ### R14 部署、运维与可观测性
