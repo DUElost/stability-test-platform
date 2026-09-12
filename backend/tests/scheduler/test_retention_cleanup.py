@@ -138,3 +138,66 @@ def test_console_log_files_purged_with_run(
 
     assert not log_dir.exists(), "console.log 目录未被 retention 清理"
     assert job.id not in lw._locks, "内存锁条目未清理"
+
+
+def test_job_log_signal_and_dle_deleted_with_run(
+    cleanup_env, sample_host, sample_device,
+):
+    """#781: retention 删 Job/PlanRun 前显式清 job_log_signal 与 device_log_event。
+
+    二者 FK 为 SET NULL——若只删 Job，signal/event 变孤儿并单调堆积。
+    """
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from backend.models.device_log_event import DeviceLogEvent
+    from backend.models.job import JobInstance, JobLogSignal
+
+    db, plan = cleanup_env
+    run = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    job = JobInstance(
+        plan_run_id=run.id, plan_id=plan.id,
+        device_id=sample_device.id, host_id=sample_host.id,
+        status="COMPLETED",
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+    )
+    db.add(job)
+    db.flush()
+
+    now = datetime.now(timezone.utc)
+    event_id = uuid4()
+    db.add(DeviceLogEvent(
+        id=event_id,
+        serial=sample_device.serial,
+        platform="MTK",
+        event_type="AEE",
+        event_subtype="KE",
+        detected_at=now,
+        state="REMOTE",
+        local_path="/local/aee/781",
+        remote_path="/nfs/devices/781/aee/1",
+        host_id=str(sample_host.id),
+        job_id=job.id,
+        plan_run_id=run.id,
+        signal_seq_no=1,
+    ))
+    db.add(JobLogSignal(
+        job_id=job.id,
+        host_id=str(sample_host.id),
+        device_log_event_id=event_id,
+        device_serial=sample_device.serial,
+        seq_no=1,
+        category="AEE",
+        source="polling",
+        path_on_device="/sdcard/aee/781",
+        detected_at=now,
+        received_at=now,
+    ))
+    db.commit()
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert db.query(PlanRun).filter_by(id=run.id).first() is None
+    assert db.query(JobInstance).filter_by(id=job.id).first() is None
+    assert db.query(JobLogSignal).count() == 0
+    assert db.query(DeviceLogEvent).filter_by(id=event_id).first() is None
