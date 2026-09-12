@@ -177,6 +177,10 @@
 2. **拉结果**：`adb pull /sdcard/results/realresult` → 本地临时目录；定位最新 run_dir 的 `TESTS-RealResult-TestPoints.xml`（以 setup 记录的 `run_dir` 为准）。
    - **v1.3.0 修正（冒烟 #217 实测）**：`adb pull` 目录语义会保留远端末级名——本地结构为 `{local}/realresult/{run_dir}/`，
      v1.2.0 误以 `{local}/{run_dir}/` 定位导致「结果文件缺失」；修正后含 adb 版本差异兜底。
+   - **v1.6.0（#810）落地 run_dir 绑定**：setup v1.4.0 把本步骤起点之后新建的
+     run_dir 写为设备级绑定（按 serial 键控、项目匹配），check v1.5.0 / finish
+     v1.6.0 只认该绑定，无绑定才回退「最新目录」并留痕；finish 归档后清除绑定。
+     残留目录不再让新任务假阳性，也不会把历史轮数据混入归档。
 3. **解析**（ElementTree）：按 §2.2 schema、§2.3 状态派生；**以 testpoint name 为 join 键**；聚合 rounds、统计 PASS/FAILURE/ERROR。
 4. **摘要 metrics**：`{rounds, entries, testpoint_count, passed, failed, error, suite_sha256, run_dir, duration_ms}`；无结果文件 → `success=false`（或 `partial` 标记，P0 取失败 + error_message）。
 5. **逐条结果落盘**：解析后的完整 JSON（testpoint 列表含 testcase/failure 消息）→ `{STP_AEE_NFS_ROOT}/mtbf/{project}/results/{run_dir}__job{job_id}__{serial}.json`（Agent 写中心存储——NFS 权限需在部署时确认可写，见 §4.4）→ `metrics.detail_uri`。
