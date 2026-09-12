@@ -73,12 +73,9 @@ export interface Device {
   /** ADR-0029 v2.5：归属来源两态——mapped=型号有活跃成员行；unmapped=未映射 */
   attribution_source?: 'mapped' | 'unmapped' | null;
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
-  /** Authoritative backend admission decision. Legacy servers may omit it. */
-  schedulable?: boolean;
   last_seen: string | null;
   tags: string[];
   extra?: Record<string, unknown>;
-  current_task?: { name?: string } | null;
   adb_state?: string | null;
   adb_connected?: boolean | null;
   battery_level?: number | null;
@@ -874,42 +871,6 @@ export interface ScriptUsage {
   script_id: number;
   days: number;
   projects: ScriptUsageProject[];
-}
-
-export interface ActionTemplateEntry {
-  id: number;
-  name: string;
-  description?: string | null;
-  action: string;
-  version?: string | null;
-  params: Record<string, unknown>;
-  timeout_seconds: number;
-  retry: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ActionTemplateCreatePayload {
-  name: string;
-  description?: string;
-  action: string;
-  version?: string | null;
-  params?: Record<string, unknown>;
-  timeout_seconds?: number;
-  retry?: number;
-  is_active?: boolean;
-}
-
-export interface ActionTemplateUpdatePayload {
-  name?: string;
-  description?: string;
-  action?: string;
-  version?: string | null;
-  params?: Record<string, unknown>;
-  timeout_seconds?: number;
-  retry?: number;
-  is_active?: boolean;
 }
 
 export interface PipelineStep {

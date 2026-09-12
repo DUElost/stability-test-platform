@@ -59,6 +59,19 @@ describe("StatusBadge", () => {
     expect(screen.getByText("已断开")).toBeInTheDocument();
   });
 
+  // #786：后端 `_job_exec_status_for_job`（routes/plan_runs.py）含 aborted 分支，该值以
+  // kind="device-ui" 渲染；此前缺键 → 落 FALLBACK「未知」，与「已断开」混淆。
+  it("renders device-ui aborted with warning variant + 已中止 label（#786）", () => {
+    render(<StatusBadge kind="device-ui" status="aborted" />);
+    expect(screen.getByText("已中止")).toBeInTheDocument();
+    expect(screen.queryByText("未知")).not.toBeInTheDocument();
+  });
+
+  it("resolveStatusEntry 对 device-ui/aborted 大小写不敏感（#786）", () => {
+    expect(resolveStatusEntry("device-ui", "aborted").label).toBe("已中止");
+    expect(resolveStatusEntry("device-ui", "ABORTED").label).toBe("已中止");
+  });
+
   it("renders device-ui backoff with warning variant + 退避 label", () => {
     render(<StatusBadge kind="device-ui" status="backoff" />);
     expect(screen.getByText("退避")).toBeInTheDocument();
