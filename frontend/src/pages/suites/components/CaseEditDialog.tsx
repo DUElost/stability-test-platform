@@ -77,7 +77,7 @@ export default function CaseEditDialog({
       name: trimmed,
       times: parsedTimes,
       enabled,
-      ordinal: initial?.ordinal ?? 0,
+      ...(initial ? { ordinal: initial.ordinal } : {}),
       exec_descs: execDescs,
     });
   };

@@ -759,11 +759,17 @@ async def merge_task(
     logger.info("saq_merge_done plan_run=%d", plan_run_id)
 
     if result != "ok":
-        logger.info(
-            "saq_merge_skip_extract plan_run=%d result=%r",
+        # #1527: merge 全平台失败（result="" 非 "ok"）不得静默 return——
+        # SAQ 视 job 成功、extract 永不入队、PlanRun 永久 RUNNING，且日志仅
+        # INFO 监控无感（违反「失败必须收敛到 failed」）。对齐同函数异常
+        # 路径：ERROR + raise，让 SAQ 标记失败并触发重试。
+        logger.error(
+            "saq_merge_all_platforms_failed plan_run=%d result=%r",
             plan_run_id, result,
         )
-        return
+        raise RuntimeError(
+            f"merge all platforms failed for plan_run {plan_run_id}: result={result!r}"
+        )
 
     # #381 / #1079: 先等本轮标记水位线，再判定 pending——否则标记前的
     # pending==0（LOCAL 不计入 pending）会让 ready 假阳。

@@ -133,6 +133,21 @@ class TestCaseCrud:
         assert client.get(f"/api/v1/test-suites/{suite.id}/cases",
                           headers=auth_headers).json()["data"] == []
 
+    def test_create_assigns_next_ordinal_when_omitted(self, client, admin_headers, suite):
+        first = client.post(
+            f"/api/v1/test-suites/{suite.id}/cases", headers=admin_headers,
+            json={"name": "c-first", "ordinal": 3,
+                  "exec_descs": [{"class": "C", "method": "m"}]},
+        )
+        assert first.status_code == 200
+        second = client.post(
+            f"/api/v1/test-suites/{suite.id}/cases", headers=admin_headers,
+            json={"name": "c-second",
+                  "exec_descs": [{"class": "C", "method": "m"}]},
+        )
+        assert second.status_code == 200
+        assert second.json()["data"]["ordinal"] == 4
+
     def test_duplicate_case_name_409(self, client, admin_headers, suite, db_session):
         _add_case(db_session, suite, "dup")
         resp = client.post(f"/api/v1/test-suites/{suite.id}/cases",
