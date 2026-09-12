@@ -27,7 +27,9 @@ Class: bug-fix
 5. 新增门禁 `tools/dev/check_layering.py`：扫描 `backend/services/**` 的
    import 语句行（`from/import backend.api.routes`），违规 exit 1；带
    `--self-test` 红绿双向自证；接入 `run_gates.py`（`layering` gate，
-   `check:pr` profile + `check:full` 自动纳入）。
+   `check:pr` profile + `check:full` 自动纳入）；**CI 锚**：按 S5x 要求登记
+   `GATE_TO_CI_ANCHOR` 并接入 `ci.yml` lint job（新增 step「分层检查」，
+   与 immutability 同模式，含 self-test）。
 
 异常语义保持：下沉函数继续抛 `HTTPException`（404/400）——与消费方既有
 行为零变化；服务层已有 HTTPException 先例（同两个 ai_assistant 文件）。
