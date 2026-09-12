@@ -1,6 +1,6 @@
 # ADR-0034：多 Harness 并行执行契约与执行登记（Multi-Harness Execution Contract）
 
-- 状态：**Accepted（v1.11）**
+- 状态：**Accepted（v1.12）**
 - 版本记录：v0.1 #858 / v0.2 #859（选择权原则）/ v0.3 #860（Contract hardening）/ #861（索引同步）/ v0.4 #862（八源 synthesis）+ #863（R6/R18 裁决）/ v0.5 #864（第二轮复审）/ v1.0 #865（**Accepted**，2026-09-06 用户人工终审批准）/ v1.1 #866（§2 细则迁出至 `execution-contract.md`，本文保留决策要点 + 指针）/ **v1.2 #877：P1 启动判据修订——增补「已计划的多 Harness 批次启动前预置就绪」（2026-09-07 用户裁决：本 ADR 立项背景即即将开展的多 Issue 集中修复与新需求开发，工具须先于场景就绪；判据全文见契约 §9 v1.1）**
 **v1.3 本版：附录 A 增补 Antigravity CLI 实测（2026-09-07，`agy 1.1.26 -p`：无仓库规则自动发现——根/嵌套 AGENTS.md、CLAUDE.md symlink、GEMINI.md 均不加载，引文诊断确认；供给=调用方前置 `tools/dev/agy_with_rules.sh`；P2 加载矩阵终验随之扩展为五家结论）**
 **v1.4 本版：附录 A 补机制层根因（规则装载=声明式配置 `user_rules` 节空被 skip——装载清单无约定文件通道）与官方迁移文档冲突记录（迁移文档声称解析 active directory 的 GEMINI/AGENTS.md，但 `-p` 非交互实测不符——待上游确认，澄清前 agy 供给一律走前置脚本）**
@@ -11,6 +11,7 @@
 **v1.9 本版：并发上限反转（用户 2026-09-08 裁决）——§2.6 移除「≈2-3 显式上限」与「上限不放宽」：该数字自 2026-09-04 约定未实测继承，多 Harness 批次实际常态为 5+ 会话并行（含单 Harness 多开），早已被常态超出而无机械强制，且与本 ADR 立项目的（为多 Harness 并行 AI Coding 建立协同机制）自相矛盾；瓶颈原则校准为「在集成收尾侧（人的审阅吞吐 + 外部平台可靠性），不在 agent 并行侧」，守的对象从会话数重锚为在窗 Execution（risk 集合）规模与集成收尾负载；「任务排队」主策略与同文件串行排程不变；§4 Alternatives 对应行拆分改写、§6 增实测数据触发器；契约 §8 同 PR 原子同步、adr/README 与 DOC-MAP 索引行同步（S12 口径）；本版号 v1.8 已被并行 #1018（Role 收敛闭环）占用，合并期重编 v1.9**
 **v1.10 本版：附录 A 增补 dsh web 实测（2026-09-08，DeepSeek Harness `dsh` 0.1.1-rc.2，headless 阳性对照 + 浏览器自动化驱动 web UI）——根级 `AGENTS.md` 基线注入 ✅、scoped `AGENTS.md` 触碰后动态注入 ✅（会话 typed source `kind=agent-instructions` 实证；web 会话 cwd=工作区根，「cwd 深度」验收形态不适用）；⚠️ 静态 `--dump-config`/patch 层显示该插件 `disabled: true` 与运行时行为矛盾——加载判定只认行为探针；调用前提=工作区经原生目录选择器注册（GUI 无脚本通道）；Registry CLI 未 dogfood，转正以首个真实单为准**
 **v1.11 本版：dsh web 转正回填——Registry CLI 全周期 dogfood 通过（#1256：declare→worktree 修复→gates→PR #1291→update→finish，2026-09-10 合入；0.1.5-rc.1 加载复测与 v1.10 结论一致），附录 A 行与 harness-adapters.md 行同步更新**
+**v1.12 本版：CodeBuddy CLI/IDE 分立——附录 A 原单行「CodeBuddy」实为 CLI 结论却被读作覆盖整个产品线（IDE 从未探针）；2026-09-11 人工补测 IDE 得 Q1=否/Q2=是/Q3=一次（Zcode 同形态，与 CLI 相反），故照 Cursor CLI/IDE 分列先例拆为两行、CLI 版本按实测校正为 2.149.0，harness-adapters.md 与 harness_probe.py 同步（IDE 入人工形态）；**IDE 版本 4.11.3 经人工读取补入本版**（探针时未能从磁盘读出）**
 - 优先级：P1
 - 目标里程碑：M7（延续）
 - 日期：2026-09-06
@@ -162,6 +163,8 @@ AGENTS.md / CLAUDE.md / .cursor/rules / .codex    ← 各入口只保留最小�
 | Antigravity CLI（agy 1.1.26） | ❌ 实测（2026-09-07）：根/嵌套 `AGENTS.md`、`CLAUDE.md`（含 symlink）、`GEMINI.md` 均不自动加载——探针+引文+日志+stream-json 四重证据；机制=声明式配置 `user_rules` 节空被 skip；**与官方迁移文档声称的 GEMINI/AGENTS 解析冲突，待上游确认**；供给=调用方前置（`tools/dev/agy_with_rules.sh`） | `agy -p` 非交互可用；**定性=带规则的高级顾问，不承接 Requirement/Execution（2026-09-07 用户裁决）** |
 | Cursor IDE 3.17.19 | ✅（2026-09-07 人工补测）：子目录工作区根+scoped 双边可见，与 cursor-agent CLI 同引擎对齐（双份加载 Q3=2 同 CLI）；Registry CLI 可用 | IDE Agent 人工探针（GUI 无脚本通道）；无需根供给（根 AGENTS.md 自动加载） |
 | Zcode 3.11.2（GUI） | ⚠️（2026-09-07 人工补测）：**子目录打开只装载 workspace 的 `AGENTS.md`，根不注入**（Q1=否/Q2=是——与 #857 互补的缺口形态）；可发现性已由 scoped 真身头部根指针覆盖（实测『总原则』在引述文字可见） | GUI 无 CLI 探针通道；Registry CLI 可用（三单 dogfood 即 Zcode 会话）；P2 动作表已补「文档/评审类会话同样 declare」指引（#919） |
+| CodeBuddy CLI（2.143.1 首测→2.149.0 复测） | ✅ live（2026-09-07 首测 + 2026-09-11 复测一致）：子目录 cwd 根+scoped 双边可见、单份加载（Q1=是/Q2=是/Q3=一次）；机制侧 `[MemoryLoader] Loaded 1 memory rules: [project] [always] …/AGENTS.md` | `codebuddy -p` 非交互可用、零配置；Registry CLI 与 P2 动作表全程可用（110 条记录、FINISHED×MERGED 100） |
+| CodeBuddy IDE 4.11.3（GUI） | ⚠️（2026-09-11 人工补测）：**子目录打开只装载 workspace 的 scoped `AGENTS.md`，根不注入**（Q1=否/Q2=是/Q3=一次——**Zcode 同形态**，与上方 CLI 结论相反）；可发现性由 scoped 真身头部根指针部分覆盖（实测『总原则』仅在引述文字可见） | GUI 无脚本通道；Registry CLI 未 dogfood、未转正；**与 CodeBuddy CLI 是分立实体**——同厂商不同加载通道，照 Cursor CLI/IDE 分列先例，不得互相外推 |
 | dsh web（DeepSeek Harness，0.1.1-rc.2 首测→0.1.5-rc.1 复测） | ✅ 根级基线注入 + ✅ scoped 触碰后动态注入（2026-09-08/09-11 两版本探针行为一致；同路径重复触碰去重）：会话 cwd=工作区根，基线只注入根级（typed source `kind=agent-instructions` 实证）；scoped 在首次 read/write/edit 触碰该目录后动态注入（`backend/agent/AGENTS.md` read 实测）——「cwd 深度」验收形态不适用；⚠️ 静态 `--dump-config`/patch 层 `disabled: true` 与运行时矛盾，加载判定只认行为探针 | 工作区经原生目录选择器注册（GUI 无脚本通道，自动化不可驱动）；headless profile 同插件 root→cwd 基线全通（阳性对照）；**Registry CLI 全周期 dogfood 通过（#1256→PR #1291，2026-09-10 合入）——已转正** |
 
 **延伸矩阵（#857）**：Claude `@AGENTS.md` import 解析——仓库根 ✅ / 子目录 ❌（`-p` 与 TUI 双模式，引文诊断证实字面行未展开、AGENTS.md 五章节零出现；cwd 相对存在同名文件亦不解析）。
