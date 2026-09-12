@@ -510,29 +510,32 @@ async def test_merge_task_mark_timeout_sets_ready_false_despite_pending_zero(mon
         return True  # pending==0 假阳
 
     async def _to_thread(fn, *args, **kwargs):
+        # #1497: exclusive 路径提交的是 _guarded_call；必须真正调用它才能释放
+        # 互斥。merge 本体在下方 patch，其余仍按身份短路写盘侧效果。
         if fn is saq_tasks._summarize_upload_sync:
             return {"total": 2, "local": 2, "pending": 0, "remote": 0}
         if fn is saq_tasks._write_run_context_sync:
             written["section"] = args[1]
             written["value"] = args[2]
             return None
-        if callable(fn):
-            return "ok"
-        return None
+        return fn(*args, **kwargs)
 
     monkeypatch.setattr(saq_tasks, "_wait_for_upload_mark", _mark_timeout)
     monkeypatch.setattr(saq_tasks, "_wait_for_remote_device_log_events", _events_ready)
     monkeypatch.setattr(saq_tasks, "asyncio_to_thread", _to_thread)
-    monkeypatch.setattr(saq_tasks.asyncio, "to_thread", AsyncMock(return_value="ok"))
     monkeypatch.setattr(saq_tasks, "_count_remote_device_log_events", AsyncMock(return_value=0))
     monkeypatch.setattr(saq_tasks, "_enqueue_extract_task", AsyncMock())
 
-    await saq_tasks.merge_task(
-        {},
-        plan_run_id=42,
-        scan_round_id="round-NEW",
-        round_started_at="2026-09-08T12:00:00+00:00",
-    )
+    with patch(
+        "backend.services.dedup_scan.run_merge_all_platforms_sync",
+        return_value="ok",
+    ):
+        await saq_tasks.merge_task(
+            {},
+            plan_run_id=42,
+            scan_round_id="round-NEW",
+            round_started_at="2026-09-08T12:00:00+00:00",
+        )
 
     assert written["section"] == "upload_summary"
     assert written["value"]["ready"] is False
@@ -629,6 +632,69 @@ async def test_sync_exclusive_releases_on_fn_exception(monkeypatch):
 
     # 释放后可立即再次执行
     assert await saq_tasks._run_sync_exclusive("k9", lambda: "ok") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_sync_exclusive_cancel_holds_until_worker_done(monkeypatch):
+    """#1497：取消等待协程不得提前释放——残留线程仍持有互斥。
+
+    反事实：旧实现在协程 finally 里 end(key)，取消后同 key 第二轮会进入，
+    断言 ``retry started while the first synchronous worker still ran``。
+    """
+    import asyncio
+    import threading
+
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_SAQ_SYNC_OVERLAP_WAIT_SECONDS", "5")
+
+    first_entered = threading.Event()
+    first_may_finish = threading.Event()
+    second_entered = threading.Event()
+
+    def first_work():
+        first_entered.set()
+        first_may_finish.wait(timeout=5)
+        return "first"
+
+    def second_work():
+        second_entered.set()
+        return "second"
+
+    async def _wait_set(ev: threading.Event, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while not ev.is_set():
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return True
+
+    first_task = asyncio.create_task(
+        saq_tasks._run_sync_exclusive(
+            "cancel-key", first_work, what="t", plan_run_id=1,
+        )
+    )
+    assert await _wait_set(first_entered, 2.0), "first worker did not start"
+    first_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_task
+
+    assert "cancel-key" in saq_tasks._SYNC_OVERLAP_GUARDS._busy
+
+    second_task = asyncio.create_task(
+        saq_tasks._run_sync_exclusive(
+            "cancel-key", second_work, what="t", plan_run_id=1,
+        )
+    )
+    await asyncio.sleep(0.4)
+    assert not second_entered.is_set(), (
+        "retry started while the first synchronous worker still ran"
+    )
+
+    first_may_finish.set()
+    assert await second_task == "second"
+    assert second_entered.is_set()
+    assert not saq_tasks._SYNC_OVERLAP_GUARDS._busy
 
 
 # ── #1167 P3（D4/D7）：真实吞异常路径 + 投递级幂等（不 mock dispatcher）──

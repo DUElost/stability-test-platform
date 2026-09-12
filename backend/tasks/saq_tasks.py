@@ -103,11 +103,16 @@ async def _run_sync_exclusive(
     plan_run_id: int = 0,
     **fn_kwargs,
 ):
-    """to_thread + per-key 互斥（#1123）。
+    """to_thread + per-key 互斥（#1123 / #1497）。
 
     上一轮的残留线程仍在跑时，本轮在协程侧等待（不占线程池、可被 SAQ 正常
     取消）；超预算说明残留线程异常顽固（NFS 挂死等），报错浮出而不是把新一轮
-    副作用叠上去。fn 正常跑完或抛异常都会释放互斥。
+    副作用叠上去。
+
+    释放权绑定「同步工作线程完成」而非协程生命周期（#1497）：取消
+    ``await asyncio_to_thread`` 不会停止已在跑的线程；若在协程 ``finally``
+    里 ``end(key)``，新一轮会与残留副作用重叠。所有权在 worker 入口移交，
+    仅当 worker 从未取得所有权（提交失败）时才由协程侧释放。
     """
     deadline = time.monotonic() + _overlap_wait_budget()
     while not _SYNC_OVERLAP_GUARDS.try_begin(key):
@@ -120,10 +125,40 @@ async def _run_sync_exclusive(
             key, what, plan_run_id,
         )
         await asyncio_sleep(1.0)
+
+    # "async" | "worker" | "done" — 序列化移交，避免取消路径双释放/漏释放。
+    owner = "async"
+    owner_lock = threading.Lock()
+
+    def _release(from_owner: str) -> None:
+        nonlocal owner
+        with owner_lock:
+            if owner != from_owner:
+                return
+            owner = "done"
+            _SYNC_OVERLAP_GUARDS.end(key)
+
+    def _guarded_call():
+        nonlocal owner
+        with owner_lock:
+            if owner == "done":
+                # 协程在 worker 入口前因取消释放了 key；若仍被调度执行则收回。
+                if not _SYNC_OVERLAP_GUARDS.try_begin(key):
+                    raise RuntimeError(
+                        f"saq_sync_overlap_reclaim_failed key={key} "
+                        f"what={what} plan_run={plan_run_id}"
+                    )
+            owner = "worker"
+        try:
+            return fn(*args, **fn_kwargs)
+        finally:
+            _release("worker")
+
     try:
-        return await asyncio_to_thread(fn, *args, **fn_kwargs)
-    finally:
-        _SYNC_OVERLAP_GUARDS.end(key)
+        return await asyncio_to_thread(_guarded_call)
+    except BaseException:
+        _release("async")
+        raise
 
 
 def _escape_like(value: str) -> str:
