@@ -598,3 +598,81 @@ def test_rescheduled_retry_success_releases_active(tmp_path, monkeypatch):
         up._run_upload_holding_slot(job)
     assert job.rescheduled is False
     assert "evt-retry-ok" not in up._active_ids
+
+def test_retry_failed_skips_exhausted_upload_failed(monkeypatch, tmp_path):
+    """#785: 已耗尽 attempt 的 UPLOAD_FAILED 不得被 600s 循环以 attempt=0 重入队。"""
+    up = EventUploader.instance()
+    up.configure(
+        api_url="http://x", agent_secret="s", host_id="h1",
+        nfs_root=str(tmp_path / "nfs"),
+    )
+    up._stop_evt.clear()
+    up._attempt_counts["evt-dead"] = _MAX_RETRIES
+    enqueued: list[dict] = []
+
+    def fake_get(url, **kwargs):
+        return MagicMock(
+            status_code=200,
+            json=lambda: {
+                "data": {
+                    "events": [
+                        {
+                            "id": "evt-dead",
+                            "state": "UPLOAD_FAILED",
+                            "local_path": str(tmp_path / "missing"),
+                            "serial": "d",
+                            "platform": "MTK",
+                            "event_type": "KE",
+                            "detected_at": "2026-09-12T00:00:00+00:00",
+                            "plan_run_id": 1,
+                            "job_id": 2,
+                            "host_id": "h1",
+                        },
+                        {
+                            "id": "evt-uploading",
+                            "state": "UPLOADING",
+                            "local_path": str(tmp_path / "missing2"),
+                            "serial": "d",
+                            "platform": "MTK",
+                            "event_type": "KE",
+                            "detected_at": "2026-09-12T00:00:00+00:00",
+                            "plan_run_id": 1,
+                            "job_id": 3,
+                            "host_id": "h1",
+                        },
+                    ]
+                }
+            },
+        )
+
+    def capture_enqueue(*, event, force=False, prune_after_upload=False):
+        enqueued.append(dict(event))
+        return True
+
+    def stop_after_one(*_a, **_k):
+        if not hasattr(stop_after_one, "n"):
+            stop_after_one.n = 0
+        stop_after_one.n += 1
+        return stop_after_one.n > 1
+
+    with patch("backend.agent.event_uploader.requests.get", side_effect=fake_get), patch.object(
+        up, "enqueue_local_event", side_effect=capture_enqueue,
+    ), patch.object(up._stop_evt, "wait", side_effect=stop_after_one):
+        up._retry_failed_loop()
+
+    ids = [e["id"] for e in enqueued]
+    assert "evt-dead" not in ids
+    assert "evt-uploading" in ids
+    assert enqueued[0]["upload_attempts"] == 0
+
+
+def test_store_attempts_survive_reenqueues(tmp_path):
+    """#785: 失败递增后 _load_attempts 可见，供 600s 重入队续上。"""
+    up = EventUploader.instance()
+    up.configure(
+        api_url="http://x", agent_secret="s", host_id="h1",
+        nfs_root=str(tmp_path / "nfs"),
+    )
+    up._clear_attempts("evt-a")
+    up._store_attempts("evt-a", 3)
+    assert up._load_attempts("evt-a") == 3

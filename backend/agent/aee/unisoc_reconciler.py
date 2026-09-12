@@ -288,7 +288,10 @@ class UnisocUniviewReconciler:
             "event_type": "UNIVIEW",
             "event_subtype": meta.event_subtype,
             "package_name": meta.package_name,
-            "aee_ts": meta.event_subtype,
+            # #785: aee_ts = 设备时钟原文（非 event_subtype）；漂移排查靠 aee_ts vs detected_at
+            "aee_ts": meta.device_timestamp_raw or (
+                meta.device_timestamp.isoformat() if meta.device_timestamp else None
+            ),
             "aee_ts_utc": meta.device_timestamp.isoformat() if meta.device_timestamp else None,
             "nfs_path": str(event_dir),
             "pull_source": "reconciler",
