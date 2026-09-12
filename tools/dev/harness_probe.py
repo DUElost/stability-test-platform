@@ -109,14 +109,26 @@ FORMS = [
     },
     {
         "id": "codebuddy",
-        "desc": "CodeBuddy",
+        "desc": "CodeBuddy CLI（`codebuddy -p`；与 CodeBuddy IDE 分立实体，勿混用本行结论）",
         "command": "codebuddy -p {prompt}",
         "cwd": "backend/agent",
         "expected": {"q1": True, "q2": True},
-        "note": "零配置",
+        "note": "零配置；2026-09-11 实测 2.149.0 与预期一致。IDE 见 codebuddy-ide 形态",
+    },
+    {
+        "id": "codebuddy-ide",
+        "manual": True,
+        "desc": "CodeBuddy IDE 4.11.3（GUI——不可自动化，人工执行）",
+        "command": None,
+        "cwd": "backend/agent",
+        "expected": {"q1": False, "q2": True},
+        "note": "人工：子目录打开 CodeBuddy IDE 窗口，AI 面板新对话粘贴 PROBE_PROMPT；"
+                "workspace-only 注入形态（根不注入，与上方 CLI 相反），"
+                "2026-09-11 实测 Q1=否/Q2=是/Q3=一次（4.11.3），结果人工核对 EXPECTED",
     },
     {
         "id": "zcode",
+        "manual": True,
         "desc": "Zcode（GUI——不可自动化，人工执行）",
         "command": None,
         "cwd": "backend/agent",
@@ -258,7 +270,7 @@ def run_self_test() -> int:
         expect(f"FORMS {form['id']} expected 二键",
                set(form["expected"].keys()) == {"q1", "q2"})
         expect(f"FORMS {form['id']} command/manual 二选一",
-               bool(form["command"]) or form["id"] == "zcode")
+               bool(form["command"]) or form.get("manual") is True)
 
     # PROBE_PROMPT 含双题与禁令
     expect("prompt 禁工具", "不要读取任何文件" in PROBE_PROMPT)
