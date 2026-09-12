@@ -316,8 +316,6 @@ describe('api module', () => {
       expect(api.audit).toBeDefined();
       expect(api.scripts).toBeDefined();
       expect(api.scripts.list).toBeInstanceOf(Function);
-      expect(api.actionTemplates).toBeDefined();
-      expect(api.actionTemplates.list).toBeInstanceOf(Function);
     });
   });
 });

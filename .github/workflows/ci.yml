@@ -42,7 +42,12 @@ jobs:
     env:
       TESTING: "1"
       JWT_SECRET_KEY: "ci-test-secret-key"
-      DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
+      # #1547：DATABASE_URL 刻意**不放在 job 级**。它与 TEST_DATABASE_URL 指向同一个
+      # 容器库，会让 backend/tests/conftest.py 在导入期触发 db_url_guard 的「与运行时
+      # 配置同库」拒绝（pytest exit 4；且后端测试一失败，同 job 的 agent / 仓库级
+      # 测试就因 if: success() 全部 skipped）。
+      # 该护栏保护的是开发机与生产上的应用库，CI 的一次性容器库不属此列；确实需要
+      # DATABASE_URL 的两处（alembic migrate、agent 测试）改为步骤级注入，值同下。
       TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -63,6 +68,11 @@ jobs:
         run: python -m compileall backend/ tools/ scripts/ -q
       - name: Migrate empty PostgreSQL database
         working-directory: backend
+        env:
+          # alembic 经 env_source 解析 DATABASE_URL；此处显式指向测试库，
+          # 与 job 级「不设 DATABASE_URL」配合——迁移仍作用于 pytest 将要
+          # 使用的同一个库，测试因此跑在迁移后的 schema 上（#1547）。
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
         run: python -m alembic upgrade head
       # 覆盖率:三段 pytest 用 --cov-append 累加,最后一段统一出报告。
       # **只度量不设阈值** —— 没有 --cov-fail-under。当前水位还没摸清就设底线,
@@ -72,6 +82,10 @@ jobs:
       - name: Run backend tests
         run: python -m pytest backend/tests/ -v --cov=backend
       - name: Run agent tests
+        env:
+          # 部分 agent 测试模块在 import 期解析 DATABASE_URL（不真正连接）；
+          # job 级已刻意不设（见上方 #1547），这里按需注入。
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
         run: python -m pytest backend/agent/tests/ -v --cov=backend --cov-append
       # 根 tests/ 也在 pytest.ini 的 testpaths 里(迁移升级 + 部署脚本契约),
       # 此前从未在 CI 跑过。test_repo_layout.py 现在会守住这条对应关系。

@@ -126,6 +126,18 @@ describe('AiAssistantSettingsPage', () => {
     });
   });
 
+  it('rejects save when a T2b entry has an invalid plan_id', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByText('添加 Plan 条目'));
+    fireEvent.click(screen.getByText('保存配置'));
+    await waitFor(() => {
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        'T2b 白名单第 1 条 plan_id 须为不小于 1 的正整数',
+      );
+    });
+    expect(mocks.aiAssistant.updateConfig).not.toHaveBeenCalled();
+  });
+
   it('T2b 自动派发白名单可编辑并随保存上送', async () => {
     renderPage();
     fireEvent.click(await screen.findByText('添加 Plan 条目'));
@@ -141,6 +153,21 @@ describe('AiAssistantSettingsPage', () => {
           ],
         }),
       );
+    });
+  });
+
+  it('保存成功后用服务端白名单回填表单（#757）', async () => {
+    // 模拟后端 sanitize 丢弃不存在的 plan。
+    mocks.aiAssistant.updateConfig.mockResolvedValue({
+      ...CONFIG,
+      t2b_auto_dispatch_allowlist: [],
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText('添加 Plan 条目'));
+    fireEvent.change(screen.getByLabelText('plan_id'), { target: { value: '7' } });
+    fireEvent.click(screen.getByText('保存配置'));
+    await waitFor(() => {
+      expect(screen.queryByLabelText('plan_id')).not.toBeInTheDocument();
     });
   });
 });
