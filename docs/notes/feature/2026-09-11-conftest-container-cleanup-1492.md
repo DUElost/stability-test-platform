@@ -1,7 +1,7 @@
 # conftest 容器清理兜底：sessionfinish / 信号 / atexit（#1492）
 
 Status: implemented
-Class: feature（devx/testing 基建）
+Class: feature
 
 ## Decision
 
