@@ -106,10 +106,19 @@ export default function PlanRunListPage() {
   const total = listPage?.total ?? 0;
   const stats = listPage?.stats ?? { total: 0, running: 0, failed: 0 };
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  if (total > 0 && safePage !== page) {
+    setPage(safePage);
+  }
   const hasActiveFilter = statusFilter !== 'all' || Boolean(search.trim());
   const showEmpty = !isLoading && !isError && stats.total === 0 && !hasActiveFilter;
   const showFilteredEmpty =
-    !isLoading && !isError && !showEmpty && runs.length === 0 && hasActiveFilter;
+    !isLoading
+    && !isError
+    && !showEmpty
+    && runs.length === 0
+    && hasActiveFilter
+    && total === 0;
   const hasRunsView = !isLoading && !isError && !showEmpty;
 
   const resetPage = () => setPage(1);
@@ -296,12 +305,12 @@ export default function PlanRunListPage() {
 
               {total > 0 && (
                 <PaginationBar
-                  page={page}
+                  page={safePage}
                   totalPages={totalPages}
                   total={total}
                   pageSize={pageSize}
-                  canPreviousPage={page > 1}
-                  canNextPage={page < totalPages}
+                  canPreviousPage={safePage > 1}
+                  canNextPage={safePage < totalPages}
                   onGoToPage={setPage}
                   onNextPage={() => setPage((p) => p + 1)}
                   onPrevPage={() => setPage((p) => Math.max(1, p - 1))}
