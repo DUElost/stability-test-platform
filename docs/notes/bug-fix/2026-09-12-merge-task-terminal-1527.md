@@ -32,6 +32,10 @@ return 才是偏离），无需 owner 额外裁决；方向 2（显式 FAILED �
   修复版全绿；
 - 新增用例（`test_saq_tasks.py` +1）：`_run_sync_exclusive` 返回 `""` →
   `pytest.raises(RuntimeError)` 且 `_enqueue_extract_task` **未被调用**；
+- 同步修正 agent 侧旧期望（`test_saq_scan_pipeline.py`）：原
+  `test_merge_task_skips_extract_when_merge_skipped` 仍假定静默 return，
+  现改为 `test_merge_task_raises_when_merge_all_platforms_failed`，断言
+  raise 且不 wait/enqueue extract；
 - `test_saq_tasks.py` 全套 **30 passed**（含既有 merge mark/水位线回归）；
 - `check:quick` 与 PR 门禁：见 PR 描述。
 
