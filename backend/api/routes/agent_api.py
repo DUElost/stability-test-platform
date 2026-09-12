@@ -967,8 +967,14 @@ async def complete_job(
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
-    raw = str(payload.update.get("status", "FAILED")).upper()
-    target = _RUN_TO_JOB.get(raw, JobStatus.FAILED)
+    raw = str(payload.update.get("status", "FAILED")).strip().upper()
+    # #779: 未知状态串不得经 .get(..., FAILED) 伪装成真实失败。
+    if raw not in _RUN_TO_JOB:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_TERMINAL_STATUS", "requested_status": raw},
+        )
+    target = _RUN_TO_JOB[raw]
     if target not in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}:
         raise HTTPException(
             status_code=400,
