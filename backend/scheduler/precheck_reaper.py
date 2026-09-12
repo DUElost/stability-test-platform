@@ -468,9 +468,23 @@ def reconcile_stale_precheck_v2(db: Session | None = None) -> dict[str, int]:
             .all()
         )
 
+        errored = 0
         for (run_id,) in runs:
             summary["checked"] += 1
-            outcome = _recover_stale_precheck_run(db, run_id, stale_deadline, now)
+            try:
+                outcome = _recover_stale_precheck_run(db, run_id, stale_deadline, now)
+            except Exception:
+                # #1559：单候选故障（典型是 SAQ 读异常——`get_saq_job_state_sync` /
+                # `is_worker_alive_sync` 是裸 `future.result(timeout=3.0)`，Redis
+                # 抖动会抛 TimeoutError/RedisError）不得中断整轮扫描，否则本 tick
+                # 其余 stale PRECHECK 全部得不到恢复——而 reaper 是它们唯一的
+                # 恢复通道。清掉失败事务再继续，避免污染后续候选。
+                logger.exception(
+                    "admission_reaper_candidate_failed plan_run=%d", run_id,
+                )
+                db.rollback()
+                errored += 1
+                continue
             if outcome == "requeued":
                 summary["requeued"] += 1
             elif outcome == "failed":
@@ -478,10 +492,8 @@ def reconcile_stale_precheck_v2(db: Session | None = None) -> dict[str, int]:
 
         if summary["checked"]:
             logger.info(
-                "admission_reaper_done checked=%d requeued=%d failed=%d",
-                summary["checked"],
-                summary["requeued"],
-                summary["failed"],
+                "admission_reaper_done checked=%d requeued=%d failed=%d errored=%d",
+                summary["checked"], summary["requeued"], summary["failed"], errored,
             )
 
         return summary

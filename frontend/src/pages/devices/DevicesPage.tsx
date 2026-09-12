@@ -96,7 +96,6 @@ export default function DevicesPage() {
         build_display_id: device.build_display_id ?? null,
         host_id: hostKey ?? undefined,
         host_name: host?.name || host?.ip || null,
-        current_task: device.current_task?.name,
         last_seen: device.last_seen ?? undefined,
         tags: Array.isArray(device.tags) ? device.tags : [],
         project_key: device.project_key ?? null,

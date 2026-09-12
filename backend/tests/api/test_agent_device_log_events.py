@@ -16,6 +16,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 from backend.api.routes.agent_api import (
+    _ALLOWED_TRANSITIONS,
+    _EXTRACTABLE_STATES,
     DeviceLogEventBatchIn,
     DeviceLogEventIn,
     ingest_device_log_events,
@@ -632,5 +634,60 @@ async def test_dle_rejects_unlisted_state_transition(monkeypatch, tmp_path):
             await _ingest_one(_ev(seed, id=event_id, state=EventState.LOCAL.value))
         assert ei.value.status_code == 409
         assert ei.value.detail["code"] == "DLE_INVALID_TRANSITION"
+    finally:
+        _cleanup(seed)
+
+
+def test_pull_failed_is_a_sink_for_every_non_terminal_state():
+    """#1550：PULL_FAILED 必须对所有非终态源合法（派生自 _TRANSITIONS_LITERAL）。
+
+    Agent 在「本地 AEE 目录缺失」时**无条件**补丁 PULL_FAILED
+    （`event_uploader._upload_one` 的 missing-local 分支，即 #380 要求的终态
+    收敛），与它当时处于哪个在途状态无关；而驱动它到那一步的恢复循环恰好只
+    轮询 `UPLOAD_PENDING`（30s 快速）与 `UPLOAD_FAILED,UPLOADING`（600s 慢速）。
+    逐条手写已漏过一次——UPLOAD_PENDING / UPLOADING 缺这条出边时补丁吃 409，
+    行永远停在在途态并反复重入队。这里断言派生式的不变量，未来新增状态
+    若忘了收敛也会在此红。
+    """
+    pull_failed = EventState.PULL_FAILED.value
+    for state in _ALLOWED_TRANSITIONS:
+        if state in _EXTRACTABLE_STATES:
+            assert pull_failed not in _ALLOWED_TRANSITIONS[state], (
+                f"终态 {state} 不得降级回 PULL_FAILED（#1174：中心 remote_path/checksum 已权威）"
+            )
+        else:
+            assert pull_failed in _ALLOWED_TRANSITIONS[state], (
+                f"非终态 {state} 缺少 PULL_FAILED 出边——agent 的 missing-local 补丁会吃 409"
+            )
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_dle_accepts_pull_failed_from_inflight_states(monkeypatch, tmp_path):
+    """#1550：UPLOAD_PENDING / UPLOADING → PULL_FAILED 端到端必须被接受。"""
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    try:
+        r = await _ingest_one(_ev(seed))
+        event_id = r.data["event_ids"][0]
+
+        # 快路径：控制面把行标成 UPLOAD_PENDING（scan xls 引用）后 agent 打终态
+        await _ingest_one(_ev(seed, id=event_id, state=EventState.UPLOAD_PENDING.value))
+        await _ingest_one(_ev(seed, id=event_id, state=EventState.PULL_FAILED.value))
+
+        # 慢路径：600s 恢复循环覆盖的 UPLOADING 同样必须能收敛到 PULL_FAILED
+        await _ingest_one(_ev(seed, id=event_id, state=EventState.UPLOADING.value))
+        await _ingest_one(_ev(seed, id=event_id, state=EventState.PULL_FAILED.value))
+
+        db = SessionLocal()
+        try:
+            rows = db.query(DeviceLogEvent).filter(
+                DeviceLogEvent.host_id == seed["host_id"],
+            ).all()
+            assert len(rows) == 1
+            assert rows[0].state == EventState.PULL_FAILED.value
+        finally:
+            db.close()
     finally:
         _cleanup(seed)

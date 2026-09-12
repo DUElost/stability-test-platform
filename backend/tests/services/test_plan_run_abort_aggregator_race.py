@@ -492,3 +492,49 @@ def test_abort_run_context_patch_preserves_concurrent_writer_keys(
     )
     assert ctx["abort_requested"]["reason"] == "race_archive"
     assert ctx["abort_requested"]["requested_job_ids"] == []
+
+
+def test_abort_all_terminal_running_run_is_not_finalized_as_success(
+    db_session, sample_plan_run, sample_plan, sample_device, sample_host, monkeypatch,
+):
+    """#1552：卡在 RUNNING、job 已全终态时 abort，必须落 FAILED 而非 SUCCESS。
+
+    `_patch_run_context` 走原生 text() UPDATE，SQLAlchemy 不会同步 identity map；
+    而调用方手上的 `run_ctx` 只是 `dict(pr.run_context)` 的副本，写回它并不会改到
+    ORM 属性。若 expire 排在聚合读取（`_abort_requested`）之后，同 session 的聚合
+    读到的仍是**写入前**的 run_context → abort 覆盖不生效 →
+    `aborted=0, failed_only=0` 收敛成 SUCCESS，并发出成功通知、
+    `result_summary.abort_requested=False`。
+
+    这条路径正是 counter_reconciler（#789）存在的原因：run 卡在 RUNNING 而 job
+    已全部终态（计数器漂移 / 聚合副作用失败），运维此时点 abort。
+    """
+    from backend.models.plan_run import PlanRun
+
+    _terminal_jobs(
+        db_session, sample_plan_run, sample_plan, sample_device, sample_host,
+        JobStatus.COMPLETED,
+    )
+    assert sample_plan_run.status == PlanRunStatus.RUNNING.value
+
+    monkeypatch.setattr(
+        "backend.services.plan_run_aggregation._notify_plan_run_terminal", lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "backend.services.plan_run_abort.should_trigger_dedup", lambda *a, **k: False,
+    )
+    monkeypatch.setattr(
+        "backend.services.plan_run_abort.enqueue_dedup_terminal_sync", lambda *a, **k: None,
+    )
+    monkeypatch.setattr("backend.services.plan_run_abort.schedule_emit", lambda *a, **k: None)
+
+    abort_plan_run(
+        sample_plan_run.id, db=db_session, reason="aborted_by_user", triggered_by="tester",
+    )
+
+    db_session.expire_all()
+    fresh = db_session.get(PlanRun, sample_plan_run.id)
+    assert fresh.status == PlanRunStatus.FAILED.value, (
+        f"abort 后应落 FAILED，实际 {fresh.status}——abort_requested 覆盖未生效"
+    )
+    assert (fresh.result_summary or {}).get("abort_requested") is True

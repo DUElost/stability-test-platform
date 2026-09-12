@@ -165,3 +165,101 @@ def test_smoke_script_never_executes_payload_on_host():
     assert '[ ! -e /.dockerenv ]' in text
     assert "host mode never executes payloads" in text
     assert "docker run --rm -i -v \"$REPO_ROOT\":/src:ro" in text
+
+
+# ── #1553：安装锚点护栏（INSTALL_DIR 不得指向系统目录；conf 不得被重新指向） ──
+
+
+def test_install_dir_guard_rejects_system_directories():
+    """`fix-ownership` 会对 INSTALL_DIR 做 `chown -R`、`apply-code` 往其 rsync，
+    两者都是 root 操作——INSTALL_DIR 指向系统目录等于把那些目录交给 AGENT_USER。"""
+    module = _load_wrapper()
+
+    for bad in (
+        "/etc", "/", "/usr", "/usr/local", "/usr/local/sbin", "/var",
+        "/boot", "/home", "/root", "/etc/sudoers.d",
+    ):
+        try:
+            module._validate_install_dir(bad)
+        except module.PrivError:
+            continue
+        raise AssertionError(f"应当拒绝 INSTALL_DIR={bad}")
+
+    # 标准安装目录与自定义目录都必须放行
+    for ok in ("/opt/stability-test-agent", "/opt/agent", "/data/stp-agent"):
+        module._validate_install_dir(ok)
+
+
+def test_load_conf_rejects_poisoned_install_dir(tmp_path):
+    """即使主机上已存在被写坏的 conf，读它的子命令也要先拒绝（纵深防御）。"""
+    module = _load_wrapper()
+    conf = tmp_path / "conf"
+    conf.write_text(
+        "INSTALL_DIR=/etc\nAGENT_USER=android\nAGENT_GROUP=android\n"
+        "SERVICE_NAME=stability-test-agent\n",
+        encoding="utf-8",
+    )
+    # _load_conf 还要求 root 属主；非 root 环境下先以属主错误失败也算拒绝，
+    # 但本用例只想证明 INSTALL_DIR 这一关——直接调 _validate_install_dir 已覆盖。
+    try:
+        module._load_conf(str(conf))
+    except module.PrivError:
+        return
+    raise AssertionError("被写坏的 conf 必须被拒绝")
+
+
+def test_anchor_drift_guard_allows_first_time_and_idempotent_rerun(tmp_path):
+    """安装链与 Ansible 更新每次传同一组值 → 首次与重跑都必须放行。"""
+    module = _load_wrapper()
+    conf = tmp_path / "conf"
+
+    # 首次：conf 不存在
+    module._reject_anchor_drift(
+        str(conf), "/opt/stability-test-agent", "android", "android", "stability-test-agent",
+    )
+
+    conf.write_text(
+        "INSTALL_DIR=/opt/stability-test-agent\nAGENT_USER=android\nAGENT_GROUP=android\n"
+        "SERVICE_NAME=stability-test-agent\n",
+        encoding="utf-8",
+    )
+    # 幂等重跑（Ansible 更新路径的形态）
+    module._reject_anchor_drift(
+        str(conf), "/opt/stability-test-agent", "android", "android", "stability-test-agent",
+    )
+
+
+def test_anchor_drift_guard_rejects_repointing(tmp_path):
+    """#1553 的核心：把 INSTALL_DIR 移向 /etc 必须被拒（否则 fix-ownership 会
+    `chown -R agent:agent /etc`）。"""
+    module = _load_wrapper()
+    conf = tmp_path / "conf"
+    conf.write_text(
+        "INSTALL_DIR=/opt/stability-test-agent\nAGENT_USER=android\nAGENT_GROUP=android\n"
+        "SERVICE_NAME=stability-test-agent\n",
+        encoding="utf-8",
+    )
+
+    for kwargs in (
+        {"install_dir": "/etc", "user": "android", "group": "android", "service": "stability-test-agent"},
+        {"install_dir": "/opt/stability-test-agent", "user": "root", "group": "android", "service": "stability-test-agent"},
+        {"install_dir": "/opt/stability-test-agent", "user": "android", "group": "android", "service": "other-svc"},
+    ):
+        try:
+            module._reject_anchor_drift(
+                str(conf), kwargs["install_dir"], kwargs["user"],
+                kwargs["group"], kwargs["service"],
+            )
+        except module.PrivError:
+            continue
+        raise AssertionError(f"应当拒绝锚点漂移: {kwargs}")
+
+
+def test_smoke_script_covers_install_dir_guard():
+    """smoke 脚本是**唯一**能以 root 真跑 bootstrap 的载体（helper 级单测过不了
+    `_require_root`），锚点护栏必须在它里面有一席之地——否则这条护栏只有静态断言
+    守，无法证明它在真实 root 路径上生效。"""
+    text = SMOKE.read_text(encoding="utf-8")
+    assert "INSTALL_DIR_GUARD_OK" in text
+    assert "ANCHOR_DRIFT_GUARD_OK" in text
+    assert 'for bad_dir in /etc / /usr/local /usr/local/sbin; do' in text

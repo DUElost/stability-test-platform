@@ -64,6 +64,9 @@ const DEVICE_UI: Record<string, StatusEntry> = {
   UNKNOWN: { label: "已断开", variant: "warning", Icon: AlertTriangle },
   BACKOFF: { label: "退避", variant: "warning", Icon: Clock },
   PENDING: { label: "等待", variant: "secondary", Icon: PauseCircle },
+  // #786：后端 `_job_exec_status_for_job`（routes/plan_runs.py）含 aborted 分支，
+  // 该值以 kind="device-ui" 渲染；缺键时落到 FALLBACK「未知」，与「已断开」混淆。
+  ABORTED: { label: "已中止", variant: "warning", Icon: Ban },
 };
 
 const DEVICE_LINK: Record<string, StatusEntry> = {

@@ -11,6 +11,7 @@
     - 不做 aee_extract 解密（D1 范围外）
     - 不落 JobArtifact 表（5B2 由独立端点负责；当前 envelope.artifact_uri 仅记 NFS 路径）
     - 不做重试：单次 pull 失败即 emit 空 enrichment；事件不丢 outbox
+      （AEE/VENDOR_AEE 目录型 artifact 例外：拉取后 strict verify + 有限次重拉）
     - 不做 LRU 清理：NFS 配额由运维层外部处理
 
 线程模型：
@@ -66,6 +67,26 @@ class PullerStats:
     pulls_failed: int = 0
     pulls_oversized: int = 0      # 超过 max_file_mb 的文件（仅记元数据）
     pulls_quota_exceeded: int = 0  # #1053: 超过 nfs_quota_mb 而跳过/丢弃的拉取
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return default
 
 
 def _tree_bytes(path: Path) -> int:
@@ -293,6 +314,78 @@ class LogPuller:
     # pull 主逻辑
     # ------------------------------------------------------------------
 
+    def _remove_local_path(self, local_path: Path) -> None:
+        try:
+            if local_path.is_dir():
+                shutil.rmtree(local_path, ignore_errors=True)
+            elif local_path.exists():
+                local_path.unlink()
+        except Exception:
+            pass
+
+    def _run_adb_pull(self, event: WatcherEvent, local_path: Path) -> int:
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            try:
+                result = self._adb.pull(
+                    self._serial,
+                    event.full_path,
+                    str(local_path),
+                    timeout=self._pull_timeout,
+                )
+            except TypeError as exc:
+                if "timeout" not in str(exc):
+                    raise
+                result = self._adb.pull(
+                    self._serial, event.full_path, str(local_path),
+                )
+        except Exception:
+            logger.exception(
+                "log_puller_adb_pull_exception serial=%s remote=%s",
+                self._serial, event.full_path,
+            )
+            return 1
+        if getattr(result, "returncode", 1) != 0 or not local_path.exists():
+            return 1
+        return 0
+
+    def _pull_aee_directory_verified(self, event: WatcherEvent, local_path: Path) -> bool:
+        """#828: inotify 非递归时目录 create 即拉易拿到半成品；verify 后有限重拉。"""
+        try:
+            from backend.agent.aee.processor import _verify_pulled_aee_log_strict
+        except ImportError:
+            from agent.aee.processor import _verify_pulled_aee_log_strict
+
+        attempts = _env_int("STP_WATCHER_AEE_PULL_VERIFY_ATTEMPTS", 3)
+        delay = _env_float("STP_WATCHER_AEE_PULL_VERIFY_DELAY_SECONDS", 2.0)
+
+        for attempt in range(attempts):
+            if attempt > 0:
+                self._remove_local_path(local_path)
+                if self._run_adb_pull(event, local_path) != 0 or not local_path.is_dir():
+                    continue
+            ok, msg, _ = _verify_pulled_aee_log_strict(local_path)
+            if ok:
+                if attempt > 0:
+                    logger.info(
+                        "log_puller_aee_dir_verify_recovered serial=%s remote=%s attempt=%d",
+                        self._serial, event.full_path, attempt + 1,
+                    )
+                return True
+            logger.info(
+                "log_puller_aee_dir_incomplete serial=%s remote=%s attempt=%d msg=%s",
+                self._serial, event.full_path, attempt + 1, msg,
+            )
+            if attempt < attempts - 1 and delay > 0:
+                time.sleep(delay)
+
+        self._remove_local_path(local_path)
+        logger.warning(
+            "log_puller_aee_dir_verify_failed serial=%s remote=%s attempts=%d",
+            self._serial, event.full_path, attempts,
+        )
+        return False
+
     def _do_pull(self, event: WatcherEvent) -> Dict[str, Any]:
         """拉文件到 NFS + 计算 enrichment。
 
@@ -315,44 +408,13 @@ class LogPuller:
             }
 
         local_path = self._compose_local_path(event)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            try:
-                result = self._adb.pull(
-                    self._serial,
-                    event.full_path,
-                    str(local_path),
-                    timeout=self._pull_timeout,
-                )
-            except TypeError as exc:
-                # 兼容未接收 timeout 参数的旧测试替身 / 旧实现。
-                if "timeout" not in str(exc):
-                    raise
-                result = self._adb.pull(
-                    self._serial, event.full_path, str(local_path),
-                )
-        except Exception:
-            logger.exception(
-                "log_puller_adb_pull_exception serial=%s remote=%s",
+        if self._run_adb_pull(event, local_path) != 0:
+            logger.warning(
+                "log_puller_pull_failed serial=%s remote=%s",
                 self._serial, event.full_path,
             )
             self.stats.pulls_failed += 1
-            return {}
-
-        rc = getattr(result, "returncode", 1)
-        if rc != 0 or not local_path.exists():
-            logger.warning(
-                "log_puller_pull_failed serial=%s remote=%s rc=%s",
-                self._serial, event.full_path, rc,
-            )
-            self.stats.pulls_failed += 1
-            # 清理可能残留的半成品
-            try:
-                if local_path.exists():
-                    local_path.unlink()
-            except Exception:
-                pass
+            self._remove_local_path(local_path)
             return {}
 
         try:
@@ -362,6 +424,11 @@ class LogPuller:
             return {}
 
         if local_path.is_dir():
+            if event.category in ("AEE", "VENDOR_AEE") and not self._pull_aee_directory_verified(
+                event, local_path,
+            ):
+                self.stats.pulls_failed += 1
+                return {}
             # #1053: 目录拉取同样计入字节配额（目录节点大小不代表内容）。
             dir_bytes = _tree_bytes(local_path)
             if (

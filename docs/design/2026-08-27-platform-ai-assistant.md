@@ -64,7 +64,7 @@ services/ai_assistant/orchestrator.py —— 轮次编排（SAQ 任务 ai_assist
 | **T2a** | 3 | `scan_script_catalog`, `test_notification_channel`, `reload_agent_config` | 前 2 项 | `test_notification_channel` 可入 `auto_approve_tools` |
 | **T2b** | 6 | `dispatch_plan_run`, `abort_plan_run`, `retry_plan_run_dispatch`, `manual_retry_job`, `manual_exit_job`, `trigger_plan_run_archive` | — | 默认需审批；`dispatch_plan_run` 可入 `t2b_auto_dispatch_allowlist` |
 
-权威实现：`backend/services/ai_assistant/tools.py`。阶段三范围见 [ADR-0031 附录 A](../adr/ADR-0031-appendix-phase3-core-write-tools.md)（Accepted）。
+权威实现：`backend/services/ai_assistant/tools.py`。阶段三范围见 [ADR-0031 附录 A](../adr/ADR-0031-A-appendix-phase3-core-write-tools.md)（Accepted）。
 
 ## 5. 安全边界
 

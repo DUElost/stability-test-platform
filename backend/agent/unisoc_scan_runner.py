@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -85,9 +86,14 @@ class UnisocScanRunner:
         if scan_root is None:
             logger.warning("unisoc_scan_skip_bad_scan_root plan_run=%d", plan_run_id)
             return
+        # #760: 与 ScanRunner 同源——扫描启动水位线，避免增量复用 plan_run_id
+        # 时把上轮 *_org.xls 当本轮产物上送。
+        scan_start = time.time()
         if not self._run_log_scan_gt(scan_root, plan_run_id, host_id):
             return
-        org_xls = self.run_scan_result(scan_root, plan_run_id, host_id)
+        org_xls = self.run_scan_result(
+            scan_root, plan_run_id, host_id, scan_start=scan_start,
+        )
         if not org_xls:
             return
         try:
@@ -107,7 +113,12 @@ class UnisocScanRunner:
             return
         dedup_candidates = [
             p for p in Path(scan_root).glob("**/*.xls")
-            if p.name.endswith(".xls") and "_org.xls" not in p.name and "Result_" in p.name
+            if (
+                p.name.endswith(".xls")
+                and "_org.xls" not in p.name
+                and "Result_" in p.name
+                and p.stat().st_mtime >= scan_start - 1
+            )
         ]
         if dedup_candidates:
             dedup_xls = max(dedup_candidates, key=lambda p: p.stat().st_mtime)
@@ -206,9 +217,14 @@ class UnisocScanRunner:
         scan_root = ScanRunner.instance()._prepare_scan_root(
             plan_run_id, device_serials, run_date_stamps,
         )
-        if scan_root is None or not self._run_log_scan_gt(scan_root, plan_run_id, host_id):
+        if scan_root is None:
             return None
-        return self.run_scan_result(scan_root, plan_run_id, host_id)
+        scan_start = time.time()
+        if not self._run_log_scan_gt(scan_root, plan_run_id, host_id):
+            return None
+        return self.run_scan_result(
+            scan_root, plan_run_id, host_id, scan_start=scan_start,
+        )
 
     @staticmethod
     def _artifact_looks_complete(path: Path) -> bool:
@@ -230,7 +246,12 @@ class UnisocScanRunner:
         return first == second
 
     def run_scan_result(
-        self, scan_root: str, plan_run_id: int, host_id: str,
+        self,
+        scan_root: str,
+        plan_run_id: int,
+        host_id: str,
+        *,
+        scan_start: float,
     ) -> Optional[str]:
         del host_id
         argv = [self._result_python, self._result_script, "-d", scan_root]
@@ -249,14 +270,19 @@ class UnisocScanRunner:
                 plan_run_id, result.returncode, (result.stderr or "")[:500],
             )
             return None
-        org_files = sorted(
-            Path(scan_root).glob("**/*_org.xls"),
-            key=lambda p: p.stat().st_mtime,
-        )
+        # #760: 只接受本轮扫描启动后写出的 *_org.xls（对齐 ScanRunner fresh 过滤）
+        all_org = list(Path(scan_root).glob("**/*_org.xls"))
+        org_files = [
+            p for p in all_org
+            if p.stat().st_mtime >= scan_start - 1
+        ]
         if not org_files:
-            logger.warning("unisoc_scan_result_no_org_xls plan_run=%d dir=%s", plan_run_id, scan_root)
+            logger.warning(
+                "unisoc_scan_result_no_fresh_org_xls plan_run=%d dir=%s total_candidates=%d",
+                plan_run_id, scan_root, len(all_org),
+            )
             return None
-        chosen = org_files[-1].resolve()
+        chosen = max(org_files, key=lambda p: p.stat().st_mtime).resolve()
         if self._last_scan_timed_out and not self._artifact_looks_complete(chosen):
             logger.warning(
                 "unisoc_scan_result_incomplete_after_timeout plan_run=%d path=%s",

@@ -44,9 +44,11 @@ class UnisocPlatformCollector:
             except Exception:
                 logger.debug("unisoc_collector_ts_parse_failed dir=%s", event_dir, exc_info=True)
 
+        ts_raw_str = str(ts_raw).strip() if ts_raw else None
         return EventMetadata(
             event_type="UNIVIEW",
             event_subtype=str(event_name).strip() or None,
             package_name=str(package_name).strip() if package_name else None,
             device_timestamp=device_ts,
+            device_timestamp_raw=ts_raw_str or None,
         )
