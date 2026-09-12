@@ -578,6 +578,9 @@ GATE_TO_CI_ANCHOR = {
     "compileall": ("ci.yml", "Compile check"),
     "pollution": ("ci.yml", "空行注入污染检查"),
     "immutability": ("ci.yml", "脚本版本不可变检查"),
+    # 分层门禁（#1519）：services/ 不得反向 import api.routes；与
+    # immutability 同模式接入 ci.yml lint job（含 --self-test 自证）。
+    "layering": ("ci.yml", "分层检查"),
     "gov-surface": ("ci.yml", "治理面结构检查"),
     "ai-work": ("ci.yml", "Execution Registry 自测"),
     "pr-migrate": ("ci.yml", "Migrate empty PostgreSQL database"),
