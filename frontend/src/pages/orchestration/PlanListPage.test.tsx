@@ -115,6 +115,23 @@ describe('PlanListPage', () => {
       expect(mocks.listPlans).toHaveBeenLastCalledWith(0, 100, undefined, 'mtbf'),
     );
   });
+
+  // #748：表格化（606b4350）丢掉了卡片态的「创建者」信息行，数据一直在 Plan.created_by。
+  it('renders the plan creator restored from the card layout (#748)', async () => {
+    mocks.listPlans.mockResolvedValue([
+      { id: 1, name: 'MTBF-CREATOR', created_by: 'alice', steps: [],
+        created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z' },
+      { id: 2, name: 'MTBF-ANON', steps: [],
+        created_at: '2026-08-26T00:00:00Z', updated_at: '2026-08-26T00:00:00Z' },
+    ]);
+
+    renderPage();
+
+    expect(await screen.findByText('MTBF-CREATOR')).toBeInTheDocument();
+    expect(screen.getByText('创建者: alice')).toBeInTheDocument();
+    // 无 created_by 的 Plan 不渲染占位行（全表仅 1 处「创建者:」）
+    expect(screen.getAllByText(/创建者: /)).toHaveLength(1);
+  });
 });
 
 describe('PlanListPage grouping', () => {
