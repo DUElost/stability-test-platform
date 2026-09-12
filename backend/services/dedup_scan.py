@@ -557,7 +557,15 @@ def build_merge_argv(
 def merge_stderr_indicates_failure(stderr: str) -> bool:
     """scan 工具可能在 stderr 打 error 但仍 exit 0。"""
     text = stderr.lower()
-    return ": error:" in text or "error: argument" in text
+    if ": error:" in text or "error: argument" in text:
+        return True
+    # #798: 行首 ``ERROR:``（无前置冒号形态）与 Traceback 同样表达失败——
+    # 仅靠 ": error:" 会漏判，exit 0 的残缺报表会被当成功入库。
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("error:") or stripped.startswith("error "):
+            return True
+    return "traceback (most recent call last)" in text
 
 
 @contextmanager

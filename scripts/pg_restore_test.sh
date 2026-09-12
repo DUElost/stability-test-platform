@@ -32,7 +32,9 @@ BACKUP_DIR="${BACKUP_DIR:-/home/debian13/stability-test-platform/backups}"
 if [ $# -ge 1 ]; then
   BACKUP_FILE="$1"
 else
-  BACKUP_FILE=$(ls -t "${BACKUP_DIR}/${PGDATABASE}"_*.sql.gz 2>/dev/null | head -1)
+  # #826: ls 失败（无备份/目录不可读）在 set -euo pipefail 下会让赋值语句
+  # 直接退出——`|| true` 兜住，让下方空值分支能打出明确报错。
+  BACKUP_FILE=$(ls -t "${BACKUP_DIR}/${PGDATABASE}"_*.sql.gz 2>/dev/null | head -1 || true)
   if [ -z "${BACKUP_FILE}" ]; then
     echo "ERROR: No backup files found in ${BACKUP_DIR}" >&2
     exit 1

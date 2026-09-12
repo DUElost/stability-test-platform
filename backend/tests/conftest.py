@@ -34,6 +34,29 @@ os.environ["AGENT_SECRET"] = ""
 _TEST_DB_CONTAINER: PostgresContainer | None = None
 
 
+_CONTAINER_CLEANUP = None
+
+
+def _register_container_cleanup(container) -> None:
+    """#1492：按文件路径加载守卫模块（与 #1300 护栏同款，避免包级导入副作用）。"""
+    global _CONTAINER_CLEANUP
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "container_lifecycle.py"
+    spec = importlib.util.spec_from_file_location("container_lifecycle", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(mod)
+    _CONTAINER_CLEANUP = mod.ContainerCleanup(container)
+    _CONTAINER_CLEANUP.register()
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ARG001
+    """#1492：正常结束也主动停容器（不依赖 ryuk）。"""
+    if _CONTAINER_CLEANUP is not None:
+        _CONTAINER_CLEANUP.stop()
+
+
 def _normalize_test_database_url(database_url: str) -> str:
     if database_url.startswith("postgresql+psycopg2://"):
         return database_url.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
@@ -69,6 +92,9 @@ def _resolve_test_database_url() -> str:
 
     _TEST_DB_CONTAINER = PostgresContainer("postgres:16")
     _TEST_DB_CONTAINER.start()
+    # #1492：进程内清理兜底（sessionfinish / SIGTERM / SIGINT / atexit）——
+    # 本机 ryuk 回收不可靠（#1482 实测残留 36 个），在可控退出路径上主动停。
+    _register_container_cleanup(_TEST_DB_CONTAINER)
     return _normalize_test_database_url(_TEST_DB_CONTAINER.get_connection_url())
 
 

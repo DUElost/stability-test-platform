@@ -138,7 +138,7 @@ async def on_job_terminal(
         await db.execute(
             select(PlanRun)
             .where(PlanRun.id == job.plan_run_id)
-            .with_for_update(read=True)  # PG FOR NO KEY UPDATE — serializes counter bumps (#789)
+            .with_for_update(key_share=True)  # SQLAlchemy key_share → PG FOR NO KEY UPDATE (#1473)
         )
     ).scalar_one_or_none()
     if run is None:
@@ -202,7 +202,7 @@ def on_job_terminal_sync(
         run = db.execute(
             select(PlanRun)
             .where(PlanRun.id == job.plan_run_id)
-            .with_for_update(read=True)  # PG FOR NO KEY UPDATE — serializes counter bumps (#789)
+            .with_for_update(key_share=True)  # SQLAlchemy key_share → PG FOR NO KEY UPDATE (#1473)
         ).scalar_one_or_none()
     if run is None:
         return False, None

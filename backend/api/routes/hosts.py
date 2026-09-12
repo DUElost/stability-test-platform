@@ -469,7 +469,11 @@ def delete_host(
     current_user: User = Depends(require_admin),
     request: Request = None,
 ):
-    """删除主机记录。仅 admin。若主机仍 ONLINE 或有活跃 Job 拒绝删除。"""
+    """删除主机记录。仅 admin。
+
+    #796/#937: 有历史依赖即 409 保数据——ONLINE、活跃 Job、历史 Job、
+    设备或 PlanRunHost 投影任一存在都拒绝，不做 FK CASCADE 静默清空。
+    """
     host = db.get(Host, host_id)
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
