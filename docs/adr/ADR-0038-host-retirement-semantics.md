@@ -1,13 +1,13 @@
 # ADR-0038：主机退役语义（Host Retirement Semantics）
 
 - 状态：**Proposed**
-- 版本记录：v0.1（2026-09-12 初版，#796/#937 Revisit 触发）
+- 版本记录：v0.1（2026-09-12 初版，#796/#937 Revisit 触发；独立评审请求 [#1557](https://github.com/DUElost/stability-test-platform/issues/1557)）
 - 优先级：P2
 - 目标里程碑：M7
 - 日期：2026-09-12
 - 决策者：平台研发组
 - 标签：生命周期, 软删, 数据保留, 主机, 运维
-- 关联：[#796](https://github.com/DUElost/stability-test-platform/issues/796)（触发：DELETE 级联清历史）、[#937](https://github.com/DUElost/stability-test-platform/issues/937)（硬删预检，PR #1380）、[#827](https://github.com/DUElost/stability-test-platform/issues/827)（审查总表）、[#961](https://github.com/DUElost/stability-test-platform/issues/961)（R04 台账）、ADR-0025（存储归档闭环）、ADR-0035（主机身份与凭据）、ADR-0019（设备租约与容量）、#1249/#1250（维护窗口与升级门禁）
+- 关联：[#796](https://github.com/DUElost/stability-test-platform/issues/796)（触发：DELETE 级联清历史）、[#937](https://github.com/DUElost/stability-test-platform/issues/937)（硬删预检，PR #1380）、[#827](https://github.com/DUElost/stability-test-platform/issues/827)（审查总表）、[#961](https://github.com/DUElost/stability-test-platform/issues/961)（R04 台账）、[#1557](https://github.com/DUElost/stability-test-platform/issues/1557)（独立评审请求）、ADR-0025（存储归档闭环）、ADR-0035（主机身份与凭据）、ADR-0019（设备租约与容量）、#1249/#1250（维护窗口与升级门禁）
 
 ## 1. 背景
 

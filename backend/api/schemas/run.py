@@ -175,3 +175,18 @@ class JiraDraftOut(BaseModel):
     environment: Dict[str, Any] = Field(default_factory=dict)
     custom_fields: Dict[str, Any] = Field(default_factory=dict)
     extra: Dict[str, Any] = Field(default_factory=dict)
+
+
+class JiraDraftListItemOut(BaseModel):
+    """跨 Job 的缓存 JIRA 草稿列表项（#1532）。
+
+    ``job_id`` 是 JobInstance id——与 ``/runs/{run_id}/jira-draft/cached`` 同口径；
+    ``plan_run_id`` 是 PlanRun id。两者来自独立的自增序列，前端跳转 PlanRun 详情
+    必须用后者（#818 的错位根因）。
+    """
+
+    job_id: int
+    plan_run_id: Optional[int] = None
+    draft: Dict[str, Any]
+    ended_at: Optional[datetime] = None
+    post_processed_at: datetime
