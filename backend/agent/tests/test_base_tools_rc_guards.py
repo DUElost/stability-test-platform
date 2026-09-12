@@ -288,3 +288,81 @@ def test_push_resources_success(monkeypatch, tmp_path):
 
     assert capture.last["success"] is True
     assert capture.last["file_count"] == 2
+
+
+# ── fill_storage v1.0.2（#1554：回读核验假失败） ──────────────────────────────
+
+
+def _df_output_total(total_kb: int, used_kb: int) -> str:
+    """与 _df_output 同形，但允许指定真实容量（100000 恰好能被 100 整除，
+    会掩盖取整缺陷——真实 /data 容量不满足整除条件）。"""
+    avail_kb = total_kb - used_kb
+    pct = used_kb * 100 // total_kb if total_kb else 0
+    return (
+        f"{_DF_HEADER}\n/dev/block/sda  {total_kb}  {used_kb}  "
+        f"{avail_kb}  {pct}% /data\n"
+    )
+
+
+def test_fill_storage_v102_exact_target_is_not_a_false_failure(monkeypatch):
+    """#1554：真实容量下「正好灌到目标」不得被判 ``fill insufficient``。
+
+    v1.0.1 的两处 floor（``blocks`` 与 ``actual_pct``）叠加 dd 块对齐损耗，使
+    ``total=119473921 / target=60%`` 这种最常见的组合必判失败（回读 59% < 60%）：
+    target_used=71684352，floor 块数 70004 → 实写 71684096 KB < target_used。
+
+    这里按 dd 的真实行为构造：写入量 = blocks × block_size_kb，回读按实写量。
+    """
+    mod = _load("fill_storage_v102_exact", "fill_storage/v1.0.2/fill_storage.py")
+    total_kb = 119_473_921
+    target_used_kb = total_kb * 60 // 100
+    state = {"df_calls": 0, "dd_blocks": 0}
+
+    def respond(cmd, timeout=30):
+        if "df /data" in cmd:
+            state["df_calls"] += 1
+            if state["df_calls"] == 1:
+                return _cp(0, _df_output_total(total_kb, 0))
+            return _cp(0, _df_output_total(total_kb, state["dd_blocks"] * 1024))
+        if "dd if=/dev/zero" in cmd:
+            state["dd_blocks"] = int(cmd.split("count=")[1].split()[0])
+            return _cp(0, "")
+        return _cp(0, "")
+
+    capture = _prepare_fill_storage(
+        monkeypatch, mod, {"target_percentage": 60}, respond,
+    )
+
+    mod.main()
+
+    assert capture.last["success"] is True, capture.last
+    # 向上取整 → 实写量必须覆盖 target，而不是差一个块
+    assert capture.last["metrics"]["used_after_kb"] >= target_used_kb
+    assert capture.last["metrics"]["blocks"] * 1024 >= target_used_kb
+
+
+def test_fill_storage_v102_still_detects_real_shortfall(monkeypatch):
+    """对照：核验放宽后仍须抓住真实缺口（dd 退出码 0 但没写满）。"""
+    mod = _load("fill_storage_v102_short", "fill_storage/v1.0.2/fill_storage.py")
+    total_kb = 119_473_921
+    target_used_kb = total_kb * 60 // 100
+    state = {"df_calls": 0}
+
+    def respond(cmd, timeout=30):
+        if "df /data" in cmd:
+            state["df_calls"] += 1
+            if state["df_calls"] == 1:
+                return _cp(0, _df_output_total(total_kb, 0))
+            # 回读只到 target 以下 5000KB —— 真实缺口
+            return _cp(0, _df_output_total(total_kb, target_used_kb - 5000))
+        return _cp(0, "")
+
+    capture = _prepare_fill_storage(
+        monkeypatch, mod, {"target_percentage": 60}, respond,
+    )
+
+    mod.main()
+
+    assert capture.last["success"] is False
+    assert "fill insufficient" in capture.last["error_message"]
+    assert capture.last["metrics"]["used_after_kb"] == target_used_kb - 5000

@@ -327,6 +327,94 @@ async def test_complete_job_maps_finished_to_completed():
 
 
 @pytest.mark.asyncio
+async def test_complete_job_rejects_unknown_status_string():
+    """#779：未知/损坏 status 必须 400，不得静默落 FAILED。"""
+    from fastapi import HTTPException
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as exc_info:
+                await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={"status": "SUCCESS", "exit_code": 0},
+                        fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+        assert exc_info.value.status_code == 400
+        detail = exc_info.value.detail
+        assert detail["code"] == "INVALID_TERMINAL_STATUS"
+        assert detail["requested_status"] == "SUCCESS"
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.status == JobStatus.RUNNING.value
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_complete_job_rejects_whitespace_padded_unknown_status():
+    """#779：带空白的未知串 strip 后仍须拒绝（不可伪装 FAILED）。"""
+    from fastapi import HTTPException
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as exc_info:
+                await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={"status": " done ", "exit_code": 0},
+                        fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["requested_status"] == "DONE"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_complete_job_rejects_non_terminal_mapped_status():
+    """#779：映射到 RUNNING 的串（如 RUNNING）亦须 400。"""
+    from fastapi import HTTPException
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as exc_info:
+                await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={"status": "RUNNING"},
+                        fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["code"] == "INVALID_TERMINAL_STATUS"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
 async def test_complete_job_clears_execution_state():
     """#116: 终态写入必须清 execution_state —— 否则 FAILED/ABORTED 残留的
     EXECUTING_STEP/WAITING_BARRIER 会污染不按 status 过滤的并发统计。"""

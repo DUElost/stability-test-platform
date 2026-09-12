@@ -510,29 +510,32 @@ async def test_merge_task_mark_timeout_sets_ready_false_despite_pending_zero(mon
         return True  # pending==0 假阳
 
     async def _to_thread(fn, *args, **kwargs):
+        # #1497: exclusive 路径提交的是 _guarded_call；必须真正调用它才能释放
+        # 互斥。merge 本体在下方 patch，其余仍按身份短路写盘侧效果。
         if fn is saq_tasks._summarize_upload_sync:
             return {"total": 2, "local": 2, "pending": 0, "remote": 0}
         if fn is saq_tasks._write_run_context_sync:
             written["section"] = args[1]
             written["value"] = args[2]
             return None
-        if callable(fn):
-            return "ok"
-        return None
+        return fn(*args, **kwargs)
 
     monkeypatch.setattr(saq_tasks, "_wait_for_upload_mark", _mark_timeout)
     monkeypatch.setattr(saq_tasks, "_wait_for_remote_device_log_events", _events_ready)
     monkeypatch.setattr(saq_tasks, "asyncio_to_thread", _to_thread)
-    monkeypatch.setattr(saq_tasks.asyncio, "to_thread", AsyncMock(return_value="ok"))
     monkeypatch.setattr(saq_tasks, "_count_remote_device_log_events", AsyncMock(return_value=0))
     monkeypatch.setattr(saq_tasks, "_enqueue_extract_task", AsyncMock())
 
-    await saq_tasks.merge_task(
-        {},
-        plan_run_id=42,
-        scan_round_id="round-NEW",
-        round_started_at="2026-09-08T12:00:00+00:00",
-    )
+    with patch(
+        "backend.services.dedup_scan.run_merge_all_platforms_sync",
+        return_value="ok",
+    ):
+        await saq_tasks.merge_task(
+            {},
+            plan_run_id=42,
+            scan_round_id="round-NEW",
+            round_started_at="2026-09-08T12:00:00+00:00",
+        )
 
     assert written["section"] == "upload_summary"
     assert written["value"]["ready"] is False
@@ -629,6 +632,69 @@ async def test_sync_exclusive_releases_on_fn_exception(monkeypatch):
 
     # 释放后可立即再次执行
     assert await saq_tasks._run_sync_exclusive("k9", lambda: "ok") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_sync_exclusive_cancel_holds_until_worker_done(monkeypatch):
+    """#1497：取消等待协程不得提前释放——残留线程仍持有互斥。
+
+    反事实：旧实现在协程 finally 里 end(key)，取消后同 key 第二轮会进入，
+    断言 ``retry started while the first synchronous worker still ran``。
+    """
+    import asyncio
+    import threading
+
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_SAQ_SYNC_OVERLAP_WAIT_SECONDS", "5")
+
+    first_entered = threading.Event()
+    first_may_finish = threading.Event()
+    second_entered = threading.Event()
+
+    def first_work():
+        first_entered.set()
+        first_may_finish.wait(timeout=5)
+        return "first"
+
+    def second_work():
+        second_entered.set()
+        return "second"
+
+    async def _wait_set(ev: threading.Event, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while not ev.is_set():
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return True
+
+    first_task = asyncio.create_task(
+        saq_tasks._run_sync_exclusive(
+            "cancel-key", first_work, what="t", plan_run_id=1,
+        )
+    )
+    assert await _wait_set(first_entered, 2.0), "first worker did not start"
+    first_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_task
+
+    assert "cancel-key" in saq_tasks._SYNC_OVERLAP_GUARDS._busy
+
+    second_task = asyncio.create_task(
+        saq_tasks._run_sync_exclusive(
+            "cancel-key", second_work, what="t", plan_run_id=1,
+        )
+    )
+    await asyncio.sleep(0.4)
+    assert not second_entered.is_set(), (
+        "retry started while the first synchronous worker still ran"
+    )
+
+    first_may_finish.set()
+    assert await second_task == "second"
+    assert second_entered.is_set()
+    assert not saq_tasks._SYNC_OVERLAP_GUARDS._busy
 
 
 # ── #1167 P3（D4/D7）：真实吞异常路径 + 投递级幂等（不 mock dispatcher）──
@@ -735,3 +801,73 @@ async def test_merge_task_all_platforms_failed_raises_and_skips_extract(monkeypa
         )
 
     enq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_sync_reports_async_failure_to_callback():
+    """#1555：fire-and-forget 路径真正入队失败时必须回调，而不是静默吞掉。
+
+    ``required=False`` 走 ``call_soon_threadsafe``，在**触碰 Redis 之前**就返回
+    True；Redis 故障只发生在之后，并被 ``_do_enqueue_best_effort`` 的 except
+    吞掉。没有本回调，调用方拿到的 True 只是「已排上事件循环」——通知投递的
+    线程池降级因此永远收不到失败信号。
+    """
+    import backend.tasks.saq_worker as mod
+
+    mock_queue = MagicMock()
+    mock_queue.enqueue = AsyncMock(side_effect=RuntimeError("redis down"))
+
+    original_queue = mod._queue
+    original_loop = mod._loop
+    seen: list = []
+    try:
+        mod._queue = mock_queue
+        mod._loop = asyncio.get_running_loop()
+
+        scheduled = await asyncio.to_thread(
+            mod.enqueue_sync,
+            "send_notification_task",
+            key="notif:probe",
+            on_async_failure=seen.append,
+        )
+        assert scheduled is True, "fire-and-forget 路径先返回 True（这正是缺口所在）"
+
+        for _ in range(20):
+            if seen:
+                break
+            await asyncio.sleep(0)
+        assert seen, "异步入队失败必须回调 on_async_failure"
+        assert isinstance(seen[0], RuntimeError)
+    finally:
+        mod._queue = original_queue
+        mod._loop = original_loop
+
+
+@pytest.mark.asyncio
+async def test_enqueue_sync_callback_failure_does_not_escape():
+    """回调自身抛异常不得外溢（它在事件循环上执行，会污染无关任务）。"""
+    import backend.tasks.saq_worker as mod
+
+    mock_queue = MagicMock()
+    mock_queue.enqueue = AsyncMock(side_effect=RuntimeError("redis down"))
+
+    original_queue = mod._queue
+    original_loop = mod._loop
+    called: list = []
+
+    def _boom(_exc):
+        called.append(True)
+        raise ValueError("callback bug")
+
+    try:
+        mod._queue = mock_queue
+        mod._loop = asyncio.get_running_loop()
+        assert mod.enqueue_sync(
+            "send_notification_task", key="notif:probe2", on_async_failure=_boom,
+        ) is True
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert called, "回调未被调用"
+    finally:
+        mod._queue = original_queue
+        mod._loop = original_loop

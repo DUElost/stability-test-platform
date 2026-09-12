@@ -264,3 +264,41 @@ def test_collect_system_stats_aggregates_all_parts():
     mem_mock.assert_called_once_with()
     disk_mock.assert_called_once_with("/")
     net_mock.assert_called_once_with()
+
+
+# ── #1558：Python 3.8 兼容（不得依赖 zip(strict=)，它是 3.10+ 的形参） ────────
+
+
+def test_cpu_parse_avoids_zip_strict_kwarg():
+    """#1558：`zip(..., strict=)` 的 `strict` 形参是 Python 3.10+ 才有的。
+
+    backend/agent/DEPLOY.md 声明「Python 3.8+」，heartbeat_thread.py 也明确注释
+    规避它。3.8/3.9 上它抛 TypeError，被 get_cpu_usage 的 `except Exception`
+    吞掉 → CPU 恒 0.0 → capacity_reporter 的 `cpu > 90` 限流判据永不触发
+    （主机可持续超领 slot）。此处以源码断言钉住，避免以后被「顺手加回」。
+    """
+    text = Path(monitor_module.__file__).read_text(encoding="utf-8")
+    # 剔除注释再断言——注释里会引用这个错误写法做说明
+    code = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "strict=" not in code, (
+        "system_monitor 不得使用 zip(strict=)——该形参要求 Python 3.10+，"
+        "而 DEPLOY.md 声明 3.8+；请用按索引建字典的形式"
+    )
+
+
+def test_cpu_parse_fills_all_fields():
+    """字段数与 _CPU_FIELDS 一致，缺列按 0 补齐（与旧 dict(zip(..., strict=True)) 等价）。"""
+    full = "cpu  " + " ".join(
+        str((i + 1) * 100) for i in range(len(monitor_module._CPU_FIELDS))
+    )
+    parsed = monitor_module._parse_cpu_line(full)
+    assert parsed == {
+        field: (index + 1) * 100
+        for index, field in enumerate(monitor_module._CPU_FIELDS)
+    }
+
+    short = monitor_module._parse_cpu_line("cpu  1 2 3 4")
+    assert len(short) == len(monitor_module._CPU_FIELDS)
+    assert short["iowait"] == 0

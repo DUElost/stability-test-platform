@@ -28,6 +28,7 @@ from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.scheduler.device_lease_reconciler import (
+    _abort_at_expired,
     _reconcile_expired_leases,
     _reconcile_stale_unknown_jobs,
     _reconcile_terminal_job_active_leases,
@@ -495,3 +496,41 @@ async def test_reconciler_finalizes_recycler_unknown_after_grace():
             assert lease.status == LeaseStatus.RELEASED.value
     finally:
         _cleanup(host_id, device_id)
+
+
+# ── #782：abort reaper 的 cast 失败 fallback 不再用 ISO 文本比较 ──────────────
+
+_ABORT_DEADLINE = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class TestAbortAtFallbackComparison:
+    """cast 失败后的 fallback 判据（Python 侧解析后比较）。"""
+
+    @pytest.mark.parametrize(
+        ("raw", "expired"),
+        [
+            ("2026-09-12T11:59:59Z", True),
+            ("2026-09-12T11:59:59+00:00", True),
+            ("2026-09-12T19:59:59+08:00", True),  # 同一时刻的 +08:00 写法
+            ("2026-09-12T11:59:59.500000+00:00", True),
+            ("2026-09-12T12:00:00Z", False),  # 恰好等于 deadline：不算早于
+            ("2026-09-12T12:00:00.500000+00:00", False),
+            ("2026-09-12T04:00:01-08:00", False),  # 同一时刻的 -08:00 写法
+        ],
+    )
+    def test_parses_each_iso_form(self, raw, expired):
+        assert _abort_at_expired(raw, _ABORT_DEADLINE) is expired
+
+    def test_non_utc_offset_where_text_compare_was_wrong(self):
+        """钉住回归：非零偏移下文本比较与真实时间结论相反（旧 fallback 会漏回收）。"""
+        raw = "2026-09-12T19:59:59+08:00"  # 真实时刻 11:59:59Z，已过期
+        assert (raw < _ABORT_DEADLINE.isoformat()) is False  # 旧口径判为「不早」
+        assert _abort_at_expired(raw, _ABORT_DEADLINE) is True
+
+    def test_naive_value_treated_as_utc(self):
+        assert _abort_at_expired("2026-09-12T11:59:59", _ABORT_DEADLINE) is True
+
+    @pytest.mark.parametrize("raw", [None, "", "not-a-time", 1736678400, {"at": "x"}])
+    def test_unparseable_value_never_triggers_reclaim(self, raw):
+        """坏值按「不满足回收条件」处理：宁可漏回收，也不误杀在跑作业。"""
+        assert _abort_at_expired(raw, _ABORT_DEADLINE) is False

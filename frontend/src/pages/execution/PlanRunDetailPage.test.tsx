@@ -920,46 +920,76 @@ describe('PlanRunDetailPage', () => {
     );
   });
 
-  it('prompts for final archive only when backend readiness is true', async () => {
-    mocks.getRun.mockResolvedValueOnce({
-      id: 12,
-      plan_id: 7,
-      status: 'FAILED',
-      failure_threshold: 0.05,
-      run_type: 'MANUAL',
-      started_at: '2026-05-08T11:00:00Z',
-      ended_at: '2026-05-08T11:30:00Z',
-      run_context: null,
-      // final_archive defaults false when omitted; prompt requires explicit true.
-      capabilities: { final_archive: true },
-    });
-    mocks.getWatcherSummary.mockResolvedValueOnce({
-      plan_run_id: 12,
-      time_scope: 'all',
-      window_start_at: '2026-05-08T11:00:00Z',
-      window_end_at: '2026-05-08T11:30:00Z',
-      categories: [],
-      total: 0,
-      affected_device_count: 0,
-      total_devices: 0,
-      abnormal_rate: 0,
-      threshold: 0.05,
-      exceeded: false,
-      archive: {
-        ops_metrics: {
-          pruned_total: 0,
-          local_disk_usage_pct: null,
-          spill_cycles: 0,
-          spilled_total: 0,
-        },
-        readiness: { ready: true, reason: 'merge complete' },
+  // #780：归档提示的真实触发形状——后端只产出 `archive.scan_status`
+  // （`readiness` / `ready_for_extract` 全 git 史从不产出，原夹具属「盲区自洽」）。
+  const finalArchiveRun = (status: string) => ({
+    id: 12,
+    plan_id: 7,
+    status,
+    failure_threshold: 0.05,
+    run_type: 'MANUAL',
+    started_at: '2026-05-08T11:00:00Z',
+    ended_at: '2026-05-08T11:30:00Z',
+    run_context: null,
+    capabilities: { final_archive: true },
+  });
+
+  const finalArchiveSummary = (scanStatus: string | null) => ({
+    plan_run_id: 12,
+    time_scope: 'all',
+    window_start_at: '2026-05-08T11:00:00Z',
+    window_end_at: '2026-05-08T11:30:00Z',
+    categories: [],
+    total: 0,
+    affected_device_count: 0,
+    total_devices: 0,
+    abnormal_rate: 0,
+    threshold: 0.05,
+    exceeded: false,
+    archive: {
+      ops_metrics: {
+        pruned_total: 0,
+        local_disk_usage_pct: null,
+        spill_cycles: 0,
+        spilled_total: 0,
       },
-    });
+      scan_status: scanStatus,
+    },
+  });
+
+  it('#780: 成功终态且 scan 已 merge 时弹出最终归档提示', async () => {
+    mocks.getRun.mockResolvedValueOnce(finalArchiveRun('SUCCESS'));
+    mocks.getWatcherSummary.mockResolvedValueOnce(finalArchiveSummary('merged'));
 
     renderPage();
 
-    expect(await screen.findByText('PlanRun 已结束 — 是否最终归档？')).toBeInTheDocument();
-    expect(screen.getByText(/merge complete/)).toBeInTheDocument();
+    expect(
+      await screen.findByText('PlanRun 已结束 — 是否最终归档？'),
+    ).toBeInTheDocument();
+  });
+
+  it('#780: FAILED 终态不弹提示（后端 extract 对 FAILED 无条件 409）', async () => {
+    mocks.getRun.mockResolvedValueOnce(finalArchiveRun('FAILED'));
+    mocks.getWatcherSummary.mockResolvedValueOnce(finalArchiveSummary('merged'));
+
+    renderPage();
+    await screen.findByTestId('watcher-summary');
+
+    expect(
+      screen.queryByText('PlanRun 已结束 — 是否最终归档？'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('#780: scan 未 merge 时不弹提示（extract 会因缺 merge 结果 409）', async () => {
+    mocks.getRun.mockResolvedValueOnce(finalArchiveRun('SUCCESS'));
+    mocks.getWatcherSummary.mockResolvedValueOnce(finalArchiveSummary('scanned'));
+
+    renderPage();
+    await screen.findByTestId('watcher-summary');
+
+    expect(
+      screen.queryByText('PlanRun 已结束 — 是否最终归档？'),
+    ).not.toBeInTheDocument();
   });
 
   it('surfaces mixed watcher failure in precheck summary row', async () => {

@@ -684,11 +684,15 @@ async def test_merge_task_waits_on_device_log_events(monkeypatch):
     wait_remote = AsyncMock(return_value=True)
     count_remote = AsyncMock(return_value=3)
 
+    # #1497: _run_sync_exclusive 经 _guarded_call 再进 asyncio_to_thread，
+    # 不可再按 run_merge_all_platforms_sync.__name__ 短路（会落到真 DB）。
+    # 对齐 test_saq_tasks #1527：直接 mock 互斥入口。
+    monkeypatch.setattr(
+        saq_tasks, "_run_sync_exclusive", AsyncMock(return_value="ok"),
+    )
+
     async def fake_to_thread(fn, *a, **kw):
-        # #1123: _run_sync_exclusive 经模块别名 asyncio_to_thread；merge 短路，
-        # 其余（汇总写盘）透传，避免 blanket "ok" 弄坏 upload_summary dict。
-        if getattr(fn, "__name__", "") == "run_merge_all_platforms_sync":
-            return "ok"
+        # 汇总写盘透传（已 patch），避免 blanket "ok" 弄坏 upload_summary dict。
         return fn(*a, **kw)
 
     monkeypatch.setattr(saq_tasks, "asyncio_to_thread", fake_to_thread)
@@ -716,9 +720,11 @@ async def test_merge_task_enqueues_extract_on_success(monkeypatch):
     wait_remote = AsyncMock(return_value=True)
     count_remote = AsyncMock(return_value=2)
 
+    monkeypatch.setattr(
+        saq_tasks, "_run_sync_exclusive", AsyncMock(return_value="ok"),
+    )
+
     async def fake_to_thread(fn, *a, **kw):
-        if getattr(fn, "__name__", "") == "run_merge_all_platforms_sync":
-            return "ok"
         return fn(*a, **kw)
 
     monkeypatch.setattr(saq_tasks, "asyncio_to_thread", fake_to_thread)
@@ -752,12 +758,10 @@ async def test_merge_task_raises_when_merge_all_platforms_failed(monkeypatch):
     wait_remote = AsyncMock()
     count_remote = AsyncMock()
 
-    async def fake_to_thread(fn, *a, **kw):
-        if getattr(fn, "__name__", "") == "run_merge_all_platforms_sync":
-            return ""
-        return fn(*a, **kw)
+    monkeypatch.setattr(
+        saq_tasks, "_run_sync_exclusive", AsyncMock(return_value=""),
+    )
 
-    monkeypatch.setattr(saq_tasks, "asyncio_to_thread", fake_to_thread)
     with patch.object(saq_tasks, "_wait_for_remote_device_log_events", wait_remote), \
          patch.object(saq_tasks, "_count_remote_device_log_events", count_remote):
         mock_queue = MagicMock()
@@ -805,9 +809,11 @@ async def test_merge_task_reraises_when_extract_enqueue_fails(monkeypatch):
     """#1110: extract enqueue failure must fail merge_task for SAQ retry."""
     from backend.tasks import saq_tasks
 
+    monkeypatch.setattr(
+        saq_tasks, "_run_sync_exclusive", AsyncMock(return_value="ok"),
+    )
+
     async def fake_to_thread(fn, *a, **kw):
-        if getattr(fn, "__name__", "") == "run_merge_all_platforms_sync":
-            return "ok"
         return fn(*a, **kw)
 
     monkeypatch.setattr(saq_tasks, "asyncio_to_thread", fake_to_thread)

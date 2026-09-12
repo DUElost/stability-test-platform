@@ -667,6 +667,15 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
     ``PoolQueueFullError`` → 丢弃 + 告警）→ 两级都不可用 = 丢弃（best-effort，
     不阻塞调用方、不无限积压）。参数与语义见
     ``docs/notes/feature/2026-09-11-notification-delivery-p5-1167.md``。
+
+    #1555：上面这条「Redis/队列故障 → 降级」原先**不可达**。``enqueue_sync`` 的
+    默认 ``required=False`` 走 ``call_soon_threadsafe``，**在触碰 Redis 之前**就
+    返回 True；Redis 故障发生在之后并被 ``_do_enqueue_best_effort`` 吞掉，于是
+    下面的 ``if enqueued: return`` 直接返回、线程池降级永不触发——一次 Redis
+    抖动就把「尽力投递」变成「一行日志后丢弃」。这里把降级动作作为
+    ``on_async_failure`` 回调交给 enqueue_sync，在真正入队失败时执行。
+    （不能简单改用 ``required=True``：它在**主事件循环线程**上调用会直接抛
+    EnqueueSyncError 防死锁，而本函数存在从循环内调用的路径。）
     """
     enqueued = False
     try:
@@ -679,6 +688,7 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
             retries=NOTIFICATION_SAQ_RETRIES,
             event_type=event_type,
             context=dict(context or {}),
+            on_async_failure=lambda _exc: _fallback_to_pool(event_type, context),
         )
     except Exception:
         logger.exception(
@@ -689,6 +699,11 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
     if enqueued:
         return
 
+    _fallback_to_pool(event_type, context)
+
+
+def _fallback_to_pool(event_type: str, context: Dict[str, Any]) -> None:
+    """SAQ 入队不可用时的唯一降级出口（同步失败与异步失败回调共用）。"""
     logger.warning(
         "notification_enqueue_unavailable_fallback_pool",
         extra={"event_type": event_type},
