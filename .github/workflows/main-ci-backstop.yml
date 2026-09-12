@@ -76,9 +76,14 @@ jobs:
             # dispatch 创建有延迟，轮询等待运行出现（最多 10 分钟）。只接受
             # 不在 pre_existing_ids 中的 run（即本次 dispatch 产生的）。
             for _ in $(seq 1 60); do
+              # #1548：gh api 的 --jq 只吃一个字符串、没有 --arg —— 写成
+              # `--jq --arg pre ...` 会让 gh 报 "accepts 1 arg(s), received 4"，
+              # 并在 set -e 下中止整个 job（跳过等待/分支清理/补关三步，且不生成
+              # ci/backstop-failed 兜底单，红灯因此彻底静默）。
+              # 带参数时一律管道给真正的 jq，与本文件其它处写法一致。
               run_id="$(
                 gh api "repos/$REPO/actions/workflows/ci.yml/runs?branch=main&event=workflow_dispatch&per_page=20" \
-                  --jq --arg pre "$pre_existing_ids" \
+                  | jq -r --arg pre "$pre_existing_ids" \
                     '($pre | split(" ")) as $pre | [.workflow_runs[] | select(.id as $id | (($pre | index($id|tostring)) | not))][0].id // 0'
               )"
               [ "$run_id" != "0" ] && break

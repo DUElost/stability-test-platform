@@ -87,8 +87,10 @@ export default function AiAssistantSettingsPage() {
 
   const saveMutation = useMutation({
     mutationFn: (payload: AiAssistantConfigUpdate) => api.aiAssistant.updateConfig(payload),
-    onSuccess: () => {
+    onSuccess: (saved) => {
       toast.success('AI 助手配置已保存');
+      // #757: 回填服务端清洗结果（如不存在的 plan 被 sanitize 丢弃）。
+      setForm(toFormState(saved));
       qc.invalidateQueries({ queryKey: aiAssistantKeys.config() });
     },
     onError: (err) => toast.error(toApiError(err).message || '保存失败'),
@@ -113,6 +115,14 @@ export default function AiAssistantSettingsPage() {
     if (!form) return;
     if (!form.base_url.trim() || !form.model.trim()) {
       toast.error('API URL 与模型为必填项');
+      return;
+    }
+    const invalidT2bIndex = form.t2b_auto_dispatch_allowlist.findIndex(
+      (entry) => !Number.isInteger(entry.plan_id) || entry.plan_id < 1,
+    );
+    if (invalidT2bIndex >= 0) {
+      toast.error(`T2b 白名单第 ${invalidT2bIndex + 1} 条 plan_id 须为不小于 1 的正整数`);
+      document.getElementById(`t2b-plan-${invalidT2bIndex}`)?.focus();
       return;
     }
     const payload: AiAssistantConfigUpdate = {

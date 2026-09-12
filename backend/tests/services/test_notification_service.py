@@ -640,3 +640,37 @@ def test_legacy_jsonb_fallback_still_skips(db_session, monkeypatch):
 
     mod.dispatch_notification(EventType.RUN_COMPLETED.value, ctx)
     assert sent == [], "历史 JSONB 记录回落判定不得重发"
+
+
+def test_dispatch_async_falls_back_to_pool_when_async_enqueue_fails(monkeypatch):
+    """#1555：enqueue_sync 返回 True 但**异步入队失败**时，降级池仍须被触达。
+
+    原实现只看 enqueue_sync 的返回值，而 fire-and-forget 路径在触碰 Redis 之前
+    就返回 True；Redis 故障被 `_do_enqueue_best_effort` 吞掉，于是
+    `if enqueued: return` 直接返回、线程池降级永不触发——一次 Redis 抖动就把
+    文档承诺的「尽力投递」变成「一行日志后丢弃」。
+    """
+    from backend.tasks import saq_worker as sw
+
+    captured: dict = {}
+
+    def fake_enqueue(task_name, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(sw, "enqueue_sync", fake_enqueue)
+    submitted: dict = {}
+    monkeypatch.setattr(
+        "backend.core.thread_pool.submit",
+        lambda fn, *a, **k: submitted.update(fn=fn),
+    )
+
+    mod.dispatch_notification_async("RUN_FAILED", {"run_id": 7, "device_serial": "D"})
+
+    assert "on_async_failure" in captured, (
+        "未把降级动作交给 enqueue_sync 的异步失败出口——Redis 故障仍会静默丢通知"
+    )
+    assert "fn" not in submitted, "入队已排上事件循环时不应提前降级"
+
+    captured["on_async_failure"](RuntimeError("redis down"))
+    assert "fn" in submitted, "异步入队失败后必须降级到线程池"
