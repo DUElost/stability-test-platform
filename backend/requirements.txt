@@ -6,7 +6,7 @@
 # 版本仍是区间约束。真正的可复现构建靠 requirements.lock(见该文件抬头)。
 
 fastapi>=0.141.1,<1.0
-uvicorn[standard]>=0.52.1,<1.0
+uvicorn[standard]>=0.52.3,<1.0
 sqlalchemy[asyncio]>=2.0.52,<3.0
 pydantic>=2.13.4,<3.0
 python-multipart>=0.0.32
