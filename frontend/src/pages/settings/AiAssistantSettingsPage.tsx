@@ -87,8 +87,10 @@ export default function AiAssistantSettingsPage() {
 
   const saveMutation = useMutation({
     mutationFn: (payload: AiAssistantConfigUpdate) => api.aiAssistant.updateConfig(payload),
-    onSuccess: () => {
+    onSuccess: (saved) => {
       toast.success('AI 助手配置已保存');
+      // #757: 回填服务端清洗结果（如不存在的 plan 被 sanitize 丢弃）。
+      setForm(toFormState(saved));
       qc.invalidateQueries({ queryKey: aiAssistantKeys.config() });
     },
     onError: (err) => toast.error(toApiError(err).message || '保存失败'),

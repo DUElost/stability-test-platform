@@ -5,15 +5,15 @@ Class: bug-fix
 
 ## Decision
 
-`AiAssistantSettingsPage.handleSave` 在提交前校验每条
-`t2b_auto_dispatch_allowlist.plan_id >= 1`；失败则 toast 并 focus 对应输入，
-不上送。保存成功后用 `updateConfig` 返回体 `toFormState` 回填，使服务端
-sanitize 丢弃结果即时可见（不再依赖「仅 form==null 时回填」）。
+1. `handleSave` 提交前校验每条 `t2b_auto_dispatch_allowlist.plan_id >= 1`
+   （含 `Number.isInteger`）；失败 toast 并 focus 对应输入，不上送。
+2. 保存成功后用 `updateConfig` 返回体 `toFormState` 回填，使服务端 sanitize
+   （如 plan 不存在）丢弃结果即时可见。
 
 ## Alternatives
 
-- **仅依赖后端丢弃 + invalidate 后强制重填**：仍先报「已保存」再消失，体验更差；否决。
-- **前端校验 + 成功回填**（采纳）。
+- **仅前端校验**：仍挡不住「合法整数但库中无 Plan」的静默丢弃；否决单独方案。
+- **校验 + 成功回填**（采纳）。
 
 ## Verification
 

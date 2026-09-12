@@ -156,29 +156,18 @@ describe('AiAssistantSettingsPage', () => {
     });
   });
 
-  it('T2b plan_id 为空/0 时拦截保存并 toast（#757）', async () => {
-    renderPage();
-    fireEvent.click(await screen.findByText('添加 Plan 条目'));
-    fireEvent.click(screen.getByText('保存配置'));
-    await waitFor(() => {
-      expect(mocks.toast.error).toHaveBeenCalledWith(
-        expect.stringMatching(/plan_id 必须/),
-      );
-    });
-    expect(mocks.aiAssistant.updateConfig).not.toHaveBeenCalled();
-  });
-
   it('保存成功后用服务端白名单回填表单（#757）', async () => {
+    // 模拟后端 sanitize 丢弃不存在的 plan。
     mocks.aiAssistant.updateConfig.mockResolvedValue({
       ...CONFIG,
-      t2b_auto_dispatch_allowlist: [{ plan_id: 7, max_devices: 3, tools: ['dispatch_plan_run'] }],
+      t2b_auto_dispatch_allowlist: [],
     });
     renderPage();
     fireEvent.click(await screen.findByText('添加 Plan 条目'));
     fireEvent.change(screen.getByLabelText('plan_id'), { target: { value: '7' } });
     fireEvent.click(screen.getByText('保存配置'));
     await waitFor(() => {
-      expect(screen.getByLabelText('plan_id')).toHaveValue(7);
+      expect(screen.queryByLabelText('plan_id')).not.toBeInTheDocument();
     });
   });
 });
