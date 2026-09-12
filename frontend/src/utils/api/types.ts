@@ -242,6 +242,7 @@ export interface JiraDraftListItem {
 export interface JiraRunRecord {
   id: number;
   console_run_id: string;
+  jira_project_key?: string | null;
   vendor: 'transsion' | 'tinno' | string;
   stage: 'upload_list' | 'create' | string;
   dry_run: boolean;
@@ -845,6 +846,7 @@ export interface ScriptEntry {
   param_schema: Record<string, unknown>;
   default_params: Record<string, unknown>;
   is_active: boolean;
+  capabilities?: string[];
   description?: string | null;
   created_at?: string;
   updated_at?: string;
@@ -898,6 +900,8 @@ export interface PipelinePatrol {
 
 export interface PipelineLifecycle {
   timeout_seconds?: number;
+  barrier_timeout_seconds?: number;
+  barrier_max_wait_seconds?: number;
   init: PipelineStep[];
   patrol?: PipelinePatrol;
   teardown: PipelineStep[];
@@ -1220,7 +1224,10 @@ export interface PlanSnapshotStep {
   content_sha256?: string;
   param_schema: Record<string, unknown>;
   default_params: Record<string, unknown>;
+  /** #508 步骤级参数覆盖（快照固化 [default_params + params] 合并结果）。 */
+  params?: Record<string, unknown>;
   timeout_seconds?: number | null;
+  stall_seconds?: number | null;
   retry: number;
   enabled: boolean;
   sort_order: number;
@@ -1236,6 +1243,8 @@ export interface PlanSnapshot {
     failure_threshold: number;
     patrol_interval_seconds?: number | null;
     timeout_seconds?: number | null;
+    barrier_timeout_seconds?: number | null;
+    barrier_max_wait_seconds?: number | null;
     auto_archive_interval_seconds?: number | null;
     next_plan_id?: number | null;
     watcher_policy: WatcherPolicy | Record<string, never>;
@@ -1878,19 +1887,13 @@ export interface JobManualActionResult {
 }
 
 export interface PlanRunAbortResult {
+  // 后端权威键（plan_run_abort.py：QUEUED/PRECHECK 分支与 running 分支并集）
   plan_run_id: number;
   status: string;
   phase?: 'precheck' | 'running';
-  abort_requested?: PlanRunAbortRequest | null;
   aborted_jobs?: number[];
-  pending_aborted_job_ids?: number[];
-  running_abort_requested_job_ids?: number[];
-  quarantined_job_ids?: number[];
-  // Legacy counters retained during the one-shot API transition.
+  abort_requested_jobs?: number[];
   released_leases?: number;
-  released_lease_count?: number;
-  aborted_pending_count?: number;
-  drained_running_count?: number;
 }
 
 export interface PlanRunDispatchRetryResult {
@@ -1966,7 +1969,7 @@ export interface AiAssistantConfig {
   auto_approve_tools: string[];
   /** T2b 按 plan_id 自动派发白名单（仅 dispatch_plan_run） */
   t2b_auto_dispatch_allowlist: T2bAutoDispatchAllowlistEntry[];
-  updated_at: string;
+  updated_at?: string | null;
 }
 
 export interface T2bAutoDispatchAllowlistEntry {
@@ -2003,7 +2006,7 @@ export interface AiChatSession {
   id: number;
   title: string;
   created_at: string;
-  updated_at: string;
+  updated_at?: string | null;
 }
 
 export interface AiToolCallInfo {
@@ -2043,7 +2046,7 @@ export interface AiAssistantAction {
   console_run_id: string | null;
   result_summary: string | null;
   preview_text: string | null;
-  requested_by: string;
+  requested_by?: string | null;
   decided_by: string | null;
   created_at: string;
   decided_at: string | null;
