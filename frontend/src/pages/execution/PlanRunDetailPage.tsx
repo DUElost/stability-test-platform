@@ -119,18 +119,18 @@ export default function PlanRunDetailPage() {
   );
 
   const finalArchivePromptedKey = `plan-run-${id}-final-archive-prompted`;
-  const archiveReadiness = watcherQ.data?.archive?.readiness;
-  const archiveDataReady =
-    archiveReadiness?.ready ??
-    watcherQ.data?.archive?.ready_for_extract ??
-    false;
+  // #780：原先读 `archive.readiness` / `archive.ready_for_extract`——后端
+  // `WatcherArchiveOut` 从不产出这两个键（只有 `scan_status`），条件因此恒 false，
+  // 归档提示永不弹出。改用真实键，并按后端**可执行性**收口状态判据：
+  //   · `trigger_extract` 对 FAILED 无条件 409（ADR-0028 D2，dedup.py）；
+  //   · `scan_status === 'merged'` 才可能过 `run_extract_sync` 的「先 merge」前置。
+  // 否则提示出来的动作必定失败。
   const finalArchiveReady =
-    archiveDataReady &&
-    (runQ.data?.capabilities?.final_archive ?? false);
+    (runQ.data?.capabilities?.final_archive ?? false) &&
+    (runQ.data?.status === 'SUCCESS' || runQ.data?.status === 'PARTIAL_SUCCESS') &&
+    watcherQ.data?.archive?.scan_status === 'merged';
   useEffect(() => {
     if (!runQ.data) return;
-    const status = runQ.data.status;
-    if (status !== 'FAILED') return;
     if (!finalArchiveReady) return;
     if (sessionStorage.getItem(finalArchivePromptedKey)) return;
     sessionStorage.setItem(finalArchivePromptedKey, '1');
@@ -405,10 +405,8 @@ export default function PlanRunDetailPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>PlanRun 已结束 — 是否最终归档？</AlertDialogTitle>
             <AlertDialogDescription>
-              测试已中止或失败，系统不会自动归档。检测到已人工完成
-              scan + merge，是否继续执行分类提取（按去重结果从中心存储
-              取事件日志到提单目录）？
-              {archiveReadiness?.reason ? ` 当前状态：${archiveReadiness.reason}` : ''}
+              检测到 scan + merge 已完成，是否继续执行分类提取（按去重结果从
+              中心存储取事件日志到提单目录）？
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
