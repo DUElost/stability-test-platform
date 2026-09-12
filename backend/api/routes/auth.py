@@ -428,11 +428,26 @@ def refresh(
     if not user:
         return _refresh_unauthorized("Invalid refresh token")
 
-    # R02-D4（#901）：消费即吊销——rotation 后旧 refresh 重放命中上方既有
-    # is_revoked 检查被拒；revoke 幂等（logout 已吊销的 jti 重复写不报错）。
-    # revoke 内部落库提交，随后审计同事务落库（#281 纪律）。
+    # R02-D4（#901）/ #1496：签发必须以服务端原子消费成功为前提。
+    # is_revoked 只挡住顺序重放；并发交错下两请求均可越过该检查，
+    # 此时唯有 revoke() 的首次插入胜出（True）才能继续签发——冲突（False）
+    # 表示另一路已消费（rotation/logout），必须 401，不得再发新对。
+    # revoke 内部落库提交；审计同事务落库（#281 纪律）。
     expires_at = datetime.fromtimestamp(payload_data["exp"], tz=timezone.utc)
-    revoke(db, jti=jti, expires_at=expires_at, reason="rotation")
+    consumed = revoke(db, jti=jti, expires_at=expires_at, reason="rotation")
+    if not consumed:
+        record_audit(
+            db,
+            action="refresh_rejected",
+            resource_type="session",
+            resource_id=jti,
+            username=user.username,
+            user_id=user.id,
+            details={"reason": "jti_consume_conflict"},
+            request=request,
+        )
+        db.commit()
+        return _refresh_unauthorized("Invalid refresh token")
     record_audit(
         db,
         action="refresh",

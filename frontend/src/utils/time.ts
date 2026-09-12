@@ -1,3 +1,11 @@
+/** datetime-local 值按浏览器本地时区解释，转为 UTC ISO 供 API 过滤。 */
+export function datetimeLocalInputToIso(value: string): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toISOString();
+}
+
 export function parseIsoToDate(value?: string | null): Date | null {
   if (!value) return null;
   const hasTz = /[zZ]|[+-]\d{2}:\d{2}$/.test(value);

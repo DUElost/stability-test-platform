@@ -233,6 +233,15 @@ export interface JiraDraft {
   extra: Record<string, unknown>;
 }
 
+/** #1532: `GET /runs/jira-drafts` 列表项——job_id 是 JobInstance id，plan_run_id 是 PlanRun id，两者是独立 id 域。 */
+export interface JiraDraftListItem {
+  job_id: number;
+  plan_run_id: number | null;
+  draft: JiraDraft;
+  ended_at: string | null;
+  post_processed_at: string;
+}
+
 export interface JiraRunRecord {
   id: number;
   console_run_id: string;
