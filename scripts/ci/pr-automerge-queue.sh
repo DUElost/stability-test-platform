@@ -82,16 +82,21 @@ alert_queue_blocked() {
   pr_url="https://github.com/${REPO}/pull/${head}"
   author="$(gh pr view "$head" --repo "$REPO" --json author --jq .author.login 2>/dev/null || echo unknown)"
 
+  # #1549：逐行用 `printf '%s\n'` 输出，变量在**参数**里由 shell 展开。
+  # 此前的写法把整行（含 %s）当参数、只把 '%s\n' 当格式串，于是 %s 全部按
+  # 字面量输出——正文变成 "...[#%s](%s)..."，连指纹行也成了字面
+  # `<!-- queue-blocked-fingerprint: %s -->`，使下面第 113 行的 grep 永不命中，
+  # 「同指纹零写入」的反刷屏去重彻底失效（当时每次 reconcile 都重写一遍 issue）。
   body="$(printf '%s\n' \
     "## FIFO 队首停摆（ci/queue-blocked 自动告警）" \
     "" \
-    "- 队首 PR：[#%s](%s)（\`%s\`，作者 @%s）" "$head" "$pr_url" "$ref" "$author" \
-    "- 未通过 required check：%s" "$failed" \
+    "- 队首 PR：[#${head}](${pr_url})（\`${ref}\`，作者 @${author}）" \
+    "- 未通过 required check：${failed}" \
     "- 队列影响：其后所有 PR 无法合入；分支更新已跳过（不对红队首自动重基）" \
     "- 判读工具：\`python -m tools.dev.queue_head_telemetry\`" \
     "- 处置（人工，择一）：修复该 check / 解冲突 / 让位（关闭或改 draft）；不要手动 Merge" \
     "" \
-    "<!-- queue-blocked-fingerprint: %s -->" "$fingerprint")"
+    "<!-- queue-blocked-fingerprint: ${fingerprint} -->")"
 
   if ! issue_gh label create "$QUEUE_BLOCKED_LABEL" --repo "$REPO" --color d73a4a \
       --description "FIFO 队首停摆自动告警（#1246）" >/dev/null 2>&1; then

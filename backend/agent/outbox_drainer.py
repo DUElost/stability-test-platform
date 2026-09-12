@@ -6,6 +6,7 @@
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, Optional
 
 import requests
@@ -19,6 +20,15 @@ class OutboxDrainThread:
     _ACKABLE_TERMINAL_STATUSES = {"COMPLETED", "FAILED", "ABORTED"}
     # #762/#742：与 log_signal/step_trace 死信上限同口径（各 10 次尝试后转死信）。
     _MAX_TERMINAL_ATTEMPTS = 10
+    # #1551：HTTP 语义上**可重试**的状态码。408（Request Timeout）与 429
+    # （Too Many Requests）属瞬时故障；被判成「中心永久拒绝」的代价不可逆——
+    # job_terminal_outbox 是 terminal/log_signal/dle_register 三张同族表里
+    # **唯一没有** replay_*_dead_letter 出口的，转死信后连人工都取不回来。
+    # 429 在本平台确实可达：RateLimitMiddleware 已把 /api/v1/agent/jobs/ 移出
+    # 豁免清单（300 req/min/IP），而终态上送端点正在该前缀下。
+    _TRANSIENT_HTTP_STATUSES = frozenset({408, 429})
+    # Retry-After 的退避上限——防御异常巨大的头部把某一行钉死在本进程里。
+    _MAX_RETRY_AFTER_SECONDS = 300.0
 
     def __init__(self, api_url: str, local_db, interval: float = 15.0):
         self._api_url = api_url
@@ -27,6 +37,9 @@ class OutboxDrainThread:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._agent_secret = os.getenv("AGENT_SECRET", "")
+        # #1551：429 的 Retry-After 退避表（job_id → 可重试的单调时刻）。
+        # 仅进程内生效，重启即忘——最坏退化为原先的「每 15s 重试一次」，不会更差。
+        self._defer_until: Dict[int, float] = {}
         self._metrics_lock = threading.Lock()
         self._pending_backlog = 0
         self._flushed_total = 0
@@ -135,6 +148,13 @@ class OutboxDrainThread:
         for entry in pending:
             job_id = entry["job_id"]
             payload = entry["payload"]
+            deferred_until = self._defer_until.get(job_id)
+            if deferred_until is not None:
+                if deferred_until > time.monotonic():
+                    # #1551：中心在 429 上给了 Retry-After —— 按它退避，
+                    # 别用自己的 15s 节奏把限流窗口一直续上。
+                    continue
+                self._defer_until.pop(job_id, None)
             try:
                 resp = requests.post(
                     f"{self._api_url}/api/v1/agent/jobs/{job_id}/complete",
@@ -195,6 +215,20 @@ class OutboxDrainThread:
                 elif status_code == 404:
                     self._local_db.ack_terminal(job_id)
                     logger.warning("outbox_drain_job_gone job=%d", job_id)
+                elif status_code in self._TRANSIENT_HTTP_STATUSES:
+                    # #1551：408/429 按 HTTP 语义可重试 → 与 5xx 同口径，不判永久、
+                    # 不进死信。429 额外按 Retry-After 退避（缺失/非法则沿用
+                    # 默认节奏），免得自己的重试把限流窗口续上。
+                    self._local_db.bump_terminal_attempt(job_id, str(e))
+                    retry_after = self._parse_retry_after(e.response)
+                    if retry_after > 0:
+                        self._defer_until[job_id] = time.monotonic() + min(
+                            retry_after, self._MAX_RETRY_AFTER_SECONDS,
+                        )
+                    logger.warning(
+                        "outbox_drain_transient_retry job=%d status=%d retry_after=%.0fs",
+                        job_id, status_code, retry_after,
+                    )
                 elif status_code is not None and 400 <= status_code < 500:
                     # #762：非 409/404 的 4xx 属中心永久拒绝 → 同走上限死信，
                     # 避免永久失败行占队头饿死新终态。
@@ -216,6 +250,27 @@ class OutboxDrainThread:
             self._set_pending_backlog(self._local_db.count_pending_terminals())
         self._local_db.prune_acked_terminals()
         return sent
+
+    @staticmethod
+    def _parse_retry_after(response) -> float:
+        """Retry-After 的秒数（#1551）。缺失/非法返回 0.0（沿用默认重试节奏）。
+
+        只认 ``delta-seconds`` 形态；``HTTP-date`` 形态刻意忽略——本机时钟与中心
+        可能不一致，按日期差算容易得到负数或超大值，反而不如按默认节奏。
+        """
+        if response is None:
+            return 0.0
+        try:
+            raw = (response.headers.get("Retry-After") or "").strip()
+        except Exception:
+            return 0.0
+        if not raw:
+            return 0.0
+        try:
+            seconds = float(raw)
+        except ValueError:
+            return 0.0
+        return seconds if seconds > 0 else 0.0
 
     @staticmethod
     def _parse_current_status(response) -> Optional[str]:
