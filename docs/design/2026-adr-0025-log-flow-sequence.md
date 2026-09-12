@@ -7,7 +7,7 @@
 
 > **冲突声明**：若 ADR-0028 D2 出现「连续全量上送」表述，与本文 **上送规则** 冲突时以 ADR-0025 为准（ADR-0028 已修订为过滤模型，见下）。  
 > DeviceLogEvent 实体、路径收敛、extract 走 DB 等 **记账/查询** 能力可保留；**不得**把「`LOCAL` 立刻 copy 到 CIFS」当成合法上送通道。  
-> 2026-08-12 生产代码 EventUploader 的「连续上送」是 `CONTINUOUS=1` 逃生阀模式；默认 `CONTINUOUS=0` 走过滤模型（与本文上送规则一致）。
+> **2026-09-13 更新（#788）**：`CONTINUOUS` 全量模型与「逃生阀」开关**已由 #287 删除**——`event_uploader.py` 现只保留方案 A 过滤模型（见该文件内「#287：CONTINUOUS 全量模型已删除」注释）。原述的「`CONTINUOUS=1` 逃生阀 / 默认 `CONTINUOUS=0`」二元**不再存在**，现实只有过滤模型一条路径，与本文上送规则一致。
 
 ---
 
@@ -142,13 +142,13 @@ sequenceDiagram
 
 ## 4. 给其他 Agent 的时序图版本（可执行规格）
 
-本节给实现 / 评审 Agent：先读不变量，再对照图，禁止用「`CONTINUOUS=1` 全量模式」覆盖本节；`CONTINUOUS=0` 下 EventUploader 就是本节通道 A 的执行者。
+本节给实现 / 评审 Agent：先读不变量，再对照图。`CONTINUOUS` 全量模式**已删除（#287；本文 2026-09-13 更新，#788）**，不存在可用来「覆盖本节」的开关；EventUploader 就是本节通道 A 的执行者。
 
 ### 4.1 权威顺序
 
 1. **上送是否发生、上送哪些事件目录、上送后是否删本地** → ADR-0025（本文）。
 2. **事件如何记账**（`device_log_event` 行、state、`remote_path`）→ 可沿用 ADR-0028 D1；state 不得暗示「所有 LOCAL 必上送」。
-3. **现网 `CONTINUOUS=1` 逃生阀（全量 copy）** → **非**默认规格。默认 `CONTINUOUS=0` 只上送 `upload_task` 标记的 `UPLOAD_PENDING` 子集，与 ADR-0025 一致。
+3. ~~**现网 `CONTINUOUS=1` 逃生阀（全量 copy）**~~ → **该开关已删除（#287；本文 2026-09-13 更新，#788）**，不是「非默认规格」而是**不存在**。EventUploader 只上送 `upload_task` 标记的 `UPLOAD_PENDING` 子集，与 ADR-0025 一致。
 
 ### 4.2 MUST / MUST NOT
 
@@ -258,7 +258,7 @@ sequenceDiagram
 | 职责 | 文件 | 按本文应对齐的行为 |
 |------|------|-------------------|
 | 采集落盘 | `backend/agent/aee/processor.py`、`reconciler.py` | 只写 HDD；不要在此 copy CIFS |
-| 连续上送（逃生阀） | `backend/agent/event_uploader.py` | `CONTINUOUS=1` 才对全部 LOCAL enqueue；默认 0 只拉 `UPLOAD_PENDING`（upload_task 筛选） |
+| 连续上送（逃生阀） | `backend/agent/event_uploader.py` | **逃生阀已删除（#287；本文 2026-09-13 更新，#788）**：只拉 `UPLOAD_PENDING`（upload_task 筛选），不存在全量 enqueue 分支 |
 | 筛选上送（通道 A） | `upload_task`（控制面）按 scan 名单标记 `UPLOAD_PENDING`；EventUploader 执行 copytree | 只传报告命中的 dirname |
 | 溢出 | `backend/agent/local_disk_monitor.py` | ≥95% 上送 **并且** prune；不能只 enqueue 已是 REMOTE 的副本就结束 |
 | scan/merge | `backend/agent/scan_runner.py`、`backend/services/dedup_scan.py` | 扫 HDD；merge 在控制面读 CIFS `dedup/` |
@@ -276,7 +276,7 @@ sequenceDiagram
 
 ### 4.7 一句话给 Agent 的任务边界
 
-> 设备日志：手机 → Agent HDD。中心只在「归档报告点名」或「HDD≥95%」时接收事件目录。95% 那条必须上送成功后删除本地。不要用 `CONTINUOUS=1` 逃生阀或 `PRUNE_LOCAL` 舰队开关冒充这两条规则。
+> 设备日志：手机 → Agent HDD。中心只在「归档报告点名」或「HDD≥95%」时接收事件目录。95% 那条必须上送成功后删除本地。不要用 `PRUNE_LOCAL` 舰队开关冒充这两条规则（`CONTINUOUS=1` 逃生阀已由 #287 删除，本文 2026-09-13 更新，#788）。
 
 ---
 

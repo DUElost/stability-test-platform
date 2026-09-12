@@ -3,7 +3,7 @@
 - 日期：2026-08-31
 - 来源：[issue #462](https://github.com/DUElost/stability-test-platform/issues/462)（方向 5 第一步）
 - 上游：`docs/reviews/TOOLKIT_INTEGRATION_FEASIBILITY_2026-08-26.md` §2.5（G12–G15）、
-  [`docs/design/2026-08-mtbf-p0-runner-design.md`](../design/2026-08-mtbf-p0-runner-design.md)、
+  [`docs/design/2026-08-mtbf-p0-runner-design.md`](../../design/2026-08-mtbf-p0-runner-design.md)、
   ADR-0030 P1（test_suite/test_case）
 - 依据：`/mnt/automation-toolkit/android-tools/` 三执行包逐文件勘察（2026-08-31）+ 平台侧代码核对
 - 落地状态：P0a Sleep（7ca82b0）/ P0b PowerCycle（8bc00d8）/ P0c GPU（df9305f）已随
