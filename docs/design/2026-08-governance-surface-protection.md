@@ -49,7 +49,7 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 | S9 | AGENTS/CLAUDE 只允许固定启动级二级章节，禁止三级章节 | BLOCK | 体量预算只能限制总量，章节白名单进一步阻止领域知识重新常驻 |
 | S10 | class 目录内 Agent Note 必须日期命名 `yyyy-mm-dd-<主题>.md`（#854）；2026-09-05 起新增 Agent Note 的 Status/Class 头部与 class 目录一致，且四节（Decision/Alternatives/Verification/Revisit）齐备 | BLOCK | 197 份存量中 78 份格式不统一；新门禁只阻止继续新增，不批量改写历史；非日期命名改名即可绕过头部校验 |
 | S11 | AGENTS.md 硬不变量锚点（11 条锚串）逐条在场 | BLOCK | 2026-09-06 随 L1 移除引入：L0 此前对不变量整条删除/改写全盲（S9 只查章节名、S6 只查体量）；S4 锚点同模式 |
-| S12 | ADR 索引一致性：头部状态行 ↔ adr/README 主表/DOC-MAP/M7 看板（status 词级 + 规范位版本），头部行 ↔ 版本记录块末项 | BLOCK | 2026-09-07 随 #867 收口引入：ADR 版本 bump 漏同步索引已五次复发（#861 修两处、DOC-MAP/adr/README 再漏），且出现文内形态（头部行停 v1.3 而版本记录块已 v1.6）；版本约束仅限头部行携带规范位版本（**Status（vX.Y）** / **Status**（vX.Y：）），注解散文 token 不算 |
+| S12 | ADR 索引一致性：头部状态行 ↔ adr/README 主表/DOC-MAP/M7 看板（status 词级 + 规范位版本），头部行 ↔ 版本记录块末项；**头部状态行须在场且可解析**（#1524：键位粗体 `- **状态**：` 是执行契约文档形态、表格 `Status` 行都取行失败 → 该 ADR 静默退出全部索引校验，ADR-0035/ADR-0022 实测无覆盖） | BLOCK | 2026-09-07 随 #867 收口引入：ADR 版本 bump 漏同步索引已五次复发（#861 修两处、DOC-MAP/adr/README 再漏），且出现文内形态（头部行停 v1.3 而版本记录块已 v1.6）；版本约束仅限头部行携带规范位版本（**Status（vX.Y）** / **Status**（vX.Y：）），注解散文 token 不算 |
 | S13 | 执行契约版本一致性：`execution-contract.md` 状态行 `Living vX.Y` ↔ 自身版本记录**首项** ↔ 规范附录「当前 vX.Y」↔ DOC-MAP 执行契约行 | BLOCK | 2026-09-10 随 #1238 引入：执行契约不是 ADR，S12 不覆盖它，而同类漂移已复发三次（2026-09-07 七日审计 5 残面 / v1.4 note 收口存量漂移 / #1232–#1238 期间「加了 v1.11 变更条目却没改 Living token」）；解析需排除 `ADR-0034-multi-harness-execution-contract.md` 的文件名同子串误命中 |
 
 检查器自身由 `--self-test` 守护：每条规则一红一绿样例双向验证
@@ -171,3 +171,4 @@ advisory 观察期被**全库枚举**替代——差异面 gate 在 main 上 dif
 | 2026-09-07 | 差集收缩执行器落地：`invariant-diff` gate（差异面策展模式，advisory 起步入 check:pr/full；`--strict` 为转 BLOCK 接口） |
 | 2026-09-07 | `invariant-diff` 升格 BLOCK：全库枚举替代观察期（差异面 gate 观察期结构性收不到样本）验证精度，`.dict(` 加 patch/monkeypatch 豁免，接入 ci.yml lint job（`GATE_TO_CI_ANCHOR` 改映射）；覆盖图 Pydantic v2/表名单数两行差集闭合 |
 | 2026-09-10 | 新增 S13 执行契约版本一致性（#1238 契约分层的收口）：状态行 `Living vX.Y` ↔ 版本记录首项 ↔ 规范附录 ↔ DOC-MAP 行——执行契约不是 ADR、S12 不覆盖，同类漂移已第三次复发；同批 S6 值同步（正文 210 行/24500 + 附录 200 行/20000） |
+| 2026-09-12 | S12 增「头部状态行须在场且可解析」（#1524）：键位粗体 `- **状态**：`（执行契约文档形态，归 S13）与表格 `Status` 行都会让取行失败 → 该 ADR 静默退出**全部**索引一致性校验、无任何信号（ADR-0035 / ADR-0022 实测）；同批归一这两篇状态行格式（ADR-0035 键位去粗体、ADR-0022 表格 Status 行改为标准状态行） |

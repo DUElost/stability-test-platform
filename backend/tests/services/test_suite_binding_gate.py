@@ -319,6 +319,42 @@ class TestSuiteGateMatrix:
         err = collect_suite_gate_error(db_session, pr)
         assert err is not None and err["step"] == "not_exported"
 
+    def test_step2_incomplete_baseline_is_distinguishable_from_never_exported(
+        self, db_session, bound_fixture,
+    ):
+        """#1560：现场必须能区分「从未导出」与「已导出但基线不完整」。
+
+        #973 的 Global 基线只加了可空列、迁移**不回填**，所以本版本发布后所有
+        此前导出过的套件都会落进 not_exported。原文案一口咬定
+        "has never been exported"，会把运维引向「套件本身有问题」而不是
+        「按新版本重导一次」——这里断言 message / missing / ever_exported 三者
+        足以自助定位。
+        """
+        f = bound_fixture
+        pr = _queued_run(db_session, f)
+
+        # ① 从未导出：应明确说 never been exported
+        err_never = collect_suite_gate_error(db_session, pr)
+        assert err_never is not None and err_never["step"] == "not_exported"
+        assert err_never["ever_exported"] is False
+        assert "never been exported" in err_never["message"]
+        assert "exported_global_sha256" in err_never["missing"]
+
+        # ② 已导出、仅新增的 Global 基线列缺失（迁移后的存量行形态）
+        _export(db_session, f["suite"])
+        f["suite"].exported_global_sha256 = None
+        db_session.commit()
+
+        err = collect_suite_gate_error(db_session, pr)
+        assert err is not None and err["step"] == "not_exported"
+        assert err["ever_exported"] is True
+        assert err["missing"] == ["exported_global_sha256"]
+        assert "never been exported" not in err["message"], (
+            "已导出过就不能再说 never been exported"
+        )
+        assert "re-export" in err["message"]
+        assert "exported_global_sha256" in err["message"]
+
     def test_step5_project_mismatch_then_retarget(
         self, db_session, bound_fixture,
     ):
