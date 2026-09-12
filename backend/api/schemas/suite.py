@@ -69,7 +69,7 @@ class TestCaseOut(ORMBaseModel):
 
 class TestCaseIn(BaseModel):
     name: str = Field(min_length=1, max_length=512)
-    ordinal: int = 0
+    ordinal: Optional[int] = None
     times: int = Field(default=1, ge=1)
     enabled: bool = True
     exec_descs: List[Dict[str, Any]] = Field(default_factory=list)

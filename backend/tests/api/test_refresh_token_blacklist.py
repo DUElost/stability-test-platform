@@ -149,3 +149,86 @@ def test_refresh_endpoint_rejects_access_token_via_cookie(client, test_user):
     client.cookies.set(REFRESH_COOKIE_NAME, access)
     response = client.post("/api/v1/auth/refresh")
     assert response.status_code == 401
+
+
+# ── #1496：refresh 签发前提化——revoke 冲突不得继续发 token ──────────────
+
+
+def test_refresh_rejects_when_revoke_returns_false(client, test_user, monkeypatch):
+    """隔离诊断：越过 is_revoked、revoke 冲突分支必须 401（反事实：去掉分支则 200）。"""
+    token_resp = client.post(
+        "/api/v1/auth/token",
+        data={"username": "testuser", "password": "testpass123"},
+    )
+    assert token_resp.status_code == 200
+    refresh_token = token_resp.json()["refresh_token"]
+
+    monkeypatch.setattr(
+        "backend.api.routes.auth.revoke",
+        lambda *args, **kwargs: False,
+    )
+    response = client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid refresh token"
+
+
+def test_refresh_logout_race_loser_rejected(client, test_user, monkeypatch):
+    """refresh×logout：logout 已原子消费后，refresh 侧 revoke 冲突不得签发。"""
+    token_resp = client.post(
+        "/api/v1/auth/token",
+        data={"username": "testuser", "password": "testpass123"},
+    )
+    assert token_resp.status_code == 200
+    refresh_token = token_resp.json()["refresh_token"]
+
+    logout = client.post(
+        "/api/v1/auth/logout",
+        json={"refresh_token": refresh_token},
+    )
+    assert logout.status_code == 200
+
+    # 模拟 refresh 在 is_revoked 读点仍见未吊销、但 revoke 插入已冲突
+    monkeypatch.setattr("backend.api.routes.auth.is_revoked", lambda *a, **k: False)
+    monkeypatch.setattr("backend.api.routes.auth.revoke", lambda *a, **k: False)
+    retry = client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+    assert retry.status_code == 401
+
+
+def test_concurrent_refresh_only_first_consumer_issues(client, test_user, monkeypatch):
+    """并发交错：两路都越过 is_revoked，仅首次 revoke 成功者签发。"""
+    token_resp = client.post(
+        "/api/v1/auth/token",
+        data={"username": "testuser", "password": "testpass123"},
+    )
+    assert token_resp.status_code == 200
+    refresh_token = token_resp.json()["refresh_token"]
+
+    # 强制两路都越过读检查，暴露「仅靠 is_revoked 不够」的窗口
+    monkeypatch.setattr("backend.api.routes.auth.is_revoked", lambda *a, **k: False)
+    real_revoke = revoke
+    outcomes: list[bool] = []
+
+    def _gated_revoke(*args, **kwargs):
+        inserted = real_revoke(*args, **kwargs)
+        outcomes.append(inserted)
+        return inserted
+
+    monkeypatch.setattr("backend.api.routes.auth.revoke", _gated_revoke)
+
+    first = client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+    second = client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": refresh_token},
+    )
+    assert first.status_code == 200
+    assert second.status_code == 401
+    assert outcomes == [True, False]

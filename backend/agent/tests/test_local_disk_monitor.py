@@ -226,3 +226,50 @@ def test_unusable_usage_percent_skips_spill(tmp_path, disk_info):
 
     assert n == 0
     assert mon.snapshot_metrics()["local_disk_usage_pct"] is None
+
+
+# ── #1522: 追打（未达 target 的单批上限后缩短等待）────────────────────────
+
+
+def test_batch_cap_schedules_catchup(tmp_path):
+    """单批 20 上限用尽且水位仍高 → 追打：下一轮等待缩短为 catch-up 间隔。"""
+    cifs = tmp_path / "cifs"
+    cifs.mkdir()
+    mon = HddSpillMonitor.instance().configure(
+        hdd_root=str(tmp_path),
+        cifs_root=str(cifs),
+        spill_threshold_pct=80.0,
+        target_pct=70.0,
+        disk_usage_fn=MagicMock(return_value={"usage_percent": 95.0}),
+    )
+    with patch.object(mon, "_spill_oldest_event_dir", return_value=1) as spill:
+        n = mon.check_once()
+
+    assert n == mon._MAX_SPILL_PER_CYCLE  # 单批上限生效（写放大节流）
+    assert spill.call_count == mon._MAX_SPILL_PER_CYCLE
+    assert mon._catchup_needed is True
+    assert mon._next_wait_seconds() == mon._SPILL_CATCHUP_INTERVAL
+
+
+def test_drops_below_target_uses_regular_interval(tmp_path):
+    """水位回落到 target 以内 → 不追打，恢复常规轮询间隔。"""
+    cifs = tmp_path / "cifs"
+    cifs.mkdir()
+    usage = MagicMock(side_effect=[
+        {"usage_percent": 95.0},   # 入口检查：触发
+        {"usage_percent": 95.0},   # spill#1 后仍高
+        {"usage_percent": 65.0},   # spill#2 后达标 → break
+    ])
+    mon = HddSpillMonitor.instance().configure(
+        hdd_root=str(tmp_path),
+        cifs_root=str(cifs),
+        spill_threshold_pct=80.0,
+        target_pct=70.0,
+        disk_usage_fn=usage,
+    )
+    with patch.object(mon, "_spill_oldest_event_dir", return_value=1):
+        n = mon.check_once()
+
+    assert n == 2
+    assert mon._catchup_needed is False
+    assert mon._next_wait_seconds() == mon._interval

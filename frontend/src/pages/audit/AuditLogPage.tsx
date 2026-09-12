@@ -19,6 +19,7 @@ import {
 import { FORM, INTERACTIVE, LAYOUT, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull } from '@/utils/format';
+import { datetimeLocalInputToIso } from '@/utils/time';
 
 interface AuditLogEntry {
   id: number;
@@ -77,8 +78,8 @@ export default function AuditLogPage() {
       const params: Record<string, string> = {};
       if (filters.resource_type !== 'all') params.resource_type = filters.resource_type;
       if (filters.action !== 'all') params.action = filters.action;
-      if (filters.start_time) params.start_time = filters.start_time;
-      if (filters.end_time) params.end_time = filters.end_time;
+      if (filters.start_time) params.start_time = datetimeLocalInputToIso(filters.start_time);
+      if (filters.end_time) params.end_time = datetimeLocalInputToIso(filters.end_time);
       return api.audit.list(page * pageSize, pageSize, params);
     },
     enabled: !invalidRange,
