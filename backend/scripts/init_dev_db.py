@@ -23,7 +23,6 @@ def _refuse_production() -> None:
 
 
 def _import_models() -> None:
-    import backend.models.action_template  # noqa: F401
     import backend.models.audit  # noqa: F401
     import backend.models.device_lease  # noqa: F401
     import backend.models.host  # noqa: F401
