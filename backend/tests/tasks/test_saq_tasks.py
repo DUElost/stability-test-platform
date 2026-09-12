@@ -631,6 +631,69 @@ async def test_sync_exclusive_releases_on_fn_exception(monkeypatch):
     assert await saq_tasks._run_sync_exclusive("k9", lambda: "ok") == "ok"
 
 
+@pytest.mark.asyncio
+async def test_sync_exclusive_cancel_holds_until_worker_done(monkeypatch):
+    """#1497：取消等待协程不得提前释放——残留线程仍持有互斥。
+
+    反事实：旧实现在协程 finally 里 end(key)，取消后同 key 第二轮会进入，
+    断言 ``retry started while the first synchronous worker still ran``。
+    """
+    import asyncio
+    import threading
+
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_SAQ_SYNC_OVERLAP_WAIT_SECONDS", "5")
+
+    first_entered = threading.Event()
+    first_may_finish = threading.Event()
+    second_entered = threading.Event()
+
+    def first_work():
+        first_entered.set()
+        first_may_finish.wait(timeout=5)
+        return "first"
+
+    def second_work():
+        second_entered.set()
+        return "second"
+
+    async def _wait_set(ev: threading.Event, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while not ev.is_set():
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return True
+
+    first_task = asyncio.create_task(
+        saq_tasks._run_sync_exclusive(
+            "cancel-key", first_work, what="t", plan_run_id=1,
+        )
+    )
+    assert await _wait_set(first_entered, 2.0), "first worker did not start"
+    first_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_task
+
+    assert "cancel-key" in saq_tasks._SYNC_OVERLAP_GUARDS._busy
+
+    second_task = asyncio.create_task(
+        saq_tasks._run_sync_exclusive(
+            "cancel-key", second_work, what="t", plan_run_id=1,
+        )
+    )
+    await asyncio.sleep(0.4)
+    assert not second_entered.is_set(), (
+        "retry started while the first synchronous worker still ran"
+    )
+
+    first_may_finish.set()
+    assert await second_task == "second"
+    assert second_entered.is_set()
+    assert not saq_tasks._SYNC_OVERLAP_GUARDS._busy
+
+
 # ── #1167 P3（D4/D7）：真实吞异常路径 + 投递级幂等（不 mock dispatcher）──
 
 
