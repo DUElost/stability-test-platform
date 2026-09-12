@@ -26,7 +26,8 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 | OpenCode | `AGENTS.md`；本地 `opencode.json` 不入库 | 共享约定入口；provider、模型和凭据属于本机配置 |
 | Antigravity CLI | 无（实测不自动发现仓库规则文件） | **不承接 Requirement/Execution**（2026-09-07 定性：带规则的高级顾问——问答/分析/评审）；规则经 `tools/dev/agy_with_rules.sh` 前置 |
 | Zcode（3.11.2，GUI） | `AGENTS.md`（仓库根注入=本会话实证；子目录**只装载 workspace 的 AGENTS.md**，根不注入——2026-09-07 人工探针） | 共享约定入口；Registry CLI 与 P2 动作表全程可用（三单 dogfood 即 Zcode 会话） |
-| CodeBuddy（2.143.1） | `AGENTS.md`（根+嵌套均自动装载——2026-09-07 探针：子目录 cwd 根+scoped 双边可见、单份加载） | 共享约定入口；`codebuddy -p` 非交互可用、零配置；Registry CLI 与 P2 动作表全程可用 |
+| CodeBuddy **CLI**（2.149.0） | `AGENTS.md`（根+嵌套均自动装载——2026-09-07 探针 + 2026-09-11 复测：子目录 cwd 根+scoped 双边可见、单份加载） | 共享约定入口；`codebuddy -p` 非交互可用、零配置；Registry CLI 与 P2 动作表全程可用 |
+| CodeBuddy **IDE**（GUI） | `AGENTS.md`（子目录**只装载 scoped `AGENTS.md`、根不注入**——2026-09-11 人工探针 Q1=否/Q2=是/Q3=一次，**Zcode 同形态**，与上方 CLI 相反） | 共享约定入口；无脚本通道；可发现性由 scoped 根指针覆盖；**Registry CLI 未 dogfood、未转正** |
 | dsh web（0.1.5-rc.1，DeepSeek Harness 浏览器 UI） | `AGENTS.md`（根级基线注入 ✅；scoped 触碰后动态注入 ✅——0.1.1-rc.2/0.1.5-rc.1 双版本探针一致，形态详见 ADR-0034 附录 A v1.11） | 共享约定入口；工作区经原生目录选择器注册（GUI 无脚本通道）；**Registry CLI 全周期 dogfood 通过（#1256/PR #1291，已转正）** |
 | 其他 Harness | `AGENTS.md` | 没有专用适配时，从共享约定和文档地图进入 |
 
@@ -48,8 +49,7 @@ Harness 的自动发现规则会随版本变化。新增专用适配前必须用
 - **批次角色（2026-09-07 用户裁决）**：**定性为「带规则的高级顾问」——不纳入
   可承接 Requirement 的 Harness 名单**，仅承担注入规则的问答/分析/评审；上游
   修复 headless 工具循环并复测通过后，重跑附录 A 协议可升格（Registry 的
-  `--harness` 参数刻意不做名单硬校验，升格无需改代码）；全局层属本机个人
-  配置，不放仓库规则。
+  `--harness` 参数刻意不做名单硬校验，升格无需改代码）；全局层属本机个人配置，不放仓库规则。
 
 ## 本地配置边界
 
