@@ -48,6 +48,10 @@ cp .env.test.example .env.test   # 首次
   （注意：`DATABASE_URL` 会被 conftest 覆盖，想固定库必须设
   `TEST_DATABASE_URL`，且受 #1300 命名护栏约束）；
 - 被 kill/超时的 pytest 进程会**遗留容器**（实测存量 36 个、最老 >2 周）；
+- **进程内兜底（#1492）**：conftest 在正常结束（`sessionfinish`）、
+  `SIGTERM`/`SIGINT`、`atexit` 路径主动停掉**本进程**的容器（幂等、
+  best-effort，信号路径保持原退出语义）；**`SIGKILL` 无法拦截**，由下方
+  巡检兜底；
 - 巡检（只读）：
 
   ```bash
