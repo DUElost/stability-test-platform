@@ -95,6 +95,13 @@ from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun, PlanRunHost
 from backend.models.project import TestProject
+from backend.services.plan_run_events import emit_job_status_invalidation
+from backend.services.plan_run_queries import (
+    MANUAL_ACTION_JOB_STATUSES,
+    derive_device_link_status,
+    device_currently_disconnected,
+    load_job_in_run,
+)
 from backend.services.plan_run_abort import (
     PlanRunAbortError,
     abort_plan_run,
@@ -603,50 +610,6 @@ def retry_plan_run_dispatch_endpoint(
 # ── ADR-0022: Manual retry / exit for patrol-backoff jobs ───────────────────
 
 
-_MANUAL_ACTION_JOB_STATUSES = {JobStatus.RUNNING.value}
-
-
-def _load_job_in_run(db: Session, run_id: int, job_id: int) -> JobInstance:
-    job = db.get(JobInstance, job_id)
-    if job is None or job.plan_run_id != run_id:
-        raise HTTPException(status_code=404, detail="job not found in this plan run")
-    return job
-
-
-def _emit_job_status_invalidation(
-    run_id: int, job_id: int, status: str, reason: str
-) -> None:
-    """ADR-0021 C5c: notify the frontend that a job's row needs a refetch.
-
-    Used by the sync manual-retry / manual-exit endpoints.  We deliberately
-    use ``schedule_emit`` (thread-safe bridge) because these handlers run on
-    sync sessions and must not await.  The payload mirrors the agent-emitted
-    ``job_status`` event so the frontend's existing handler can reuse it as
-    a pure invalidation hint — no DB state is conveyed in the payload.
-    """
-    try:
-        from backend.realtime.socketio_server import schedule_emit
-    except Exception:
-        return
-    try:
-        schedule_emit(
-            "job_status",
-            {
-                "type": "JOB_STATUS",
-                "payload": {
-                    "job_id": int(job_id),
-                    "status": status,
-                    "reason": reason,
-                },
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            },
-            namespace="/dashboard",
-            room=f"plan_run:{run_id}",
-        )
-    except Exception:
-        logger.debug("emit_job_status_invalidation_failed", exc_info=True)
-
-
 @router.post(
     "/plan-runs/{run_id}/jobs/{job_id}/manual-retry",
     response_model=ApiResponse[JobManualActionOut],
@@ -664,8 +627,8 @@ def manual_retry_job(
     Agent picks it up on the next heartbeat.  **Does not reset**
     ``current_failure_streak`` — diagnostic information is preserved.
     """
-    job = _load_job_in_run(db, run_id, job_id)
-    if job.status not in _MANUAL_ACTION_JOB_STATUSES:
+    job = load_job_in_run(db, run_id, job_id)
+    if job.status not in MANUAL_ACTION_JOB_STATUSES:
         raise HTTPException(
             status_code=409,
             detail=f"job must be RUNNING for manual retry; current status is {job.status}",
@@ -676,7 +639,7 @@ def manual_retry_job(
     if job.host_id:
         host_row = db.get(Host, job.host_id)
         host_status = host_row.status if host_row else None
-    if _device_currently_disconnected(device, host_status):
+    if device_currently_disconnected(device, host_status):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -729,7 +692,7 @@ def manual_retry_job(
         run_id, job_id, job.current_failure_streak or 0,
     )
     record_patrol_manual_action("manual_retry")
-    _emit_job_status_invalidation(run_id, job_id, job.status, "manual_retry")
+    emit_job_status_invalidation(run_id, job_id, job.status, "manual_retry")
 
     return ok(JobManualActionOut(
         job_id=job_id,
@@ -763,8 +726,8 @@ def manual_exit_job(
     transitions to ABORTED once the Agent reports the terminal state via
     /jobs/{id}/complete (or via Recycler's stall detection).
     """
-    job = _load_job_in_run(db, run_id, job_id)
-    if job.status not in _MANUAL_ACTION_JOB_STATUSES:
+    job = load_job_in_run(db, run_id, job_id)
+    if job.status not in MANUAL_ACTION_JOB_STATUSES:
         raise HTTPException(
             status_code=409,
             detail=f"job must be RUNNING for manual exit; current status is {job.status}",
@@ -814,7 +777,7 @@ def manual_exit_job(
         run_id, job_id, job.current_failure_streak or 0,
     )
     record_patrol_manual_action("manual_exit")
-    _emit_job_status_invalidation(run_id, job_id, job.status, "manual_exit_pending")
+    emit_job_status_invalidation(run_id, job_id, job.status, "manual_exit_pending")
 
     return ok(JobManualActionOut(
         job_id=job_id,
@@ -1742,44 +1705,6 @@ def get_plan_run_events(
 # `unauthorized`:该设备物理在线、可被认领口径讨论,但 shell 必然失败,
 # 对「能否立即重试」而言等同断连。两者刻意不合并 —— 认领预筛的口径由
 # dispatcher 决定,不应被 UI 语义反向绑架。
-_ADB_LINK_ERROR_STATES = frozenset({"offline", "unknown", "unauthorized"})
-
-
-def _derive_device_link_status(
-    device: Device | None,
-    host_status: str | None,
-) -> str:
-    """设备 ADB / Host 可达性 — 与 Job 执行状态正交。
-
-    这是断连语义的**唯一事实源**;`_device_currently_disconnected` 由它派生。
-    """
-    if device is None:
-        return "unknown"
-    if host_status == HostStatus.OFFLINE.value:
-        return "host_offline"
-    if (device.adb_state or "device").lower() in _ADB_LINK_ERROR_STATES:
-        return "adb_error"
-    if not device.adb_connected or device.status == DeviceStatus.OFFLINE.value:
-        return "offline"
-    return "online"
-
-
-def _device_currently_disconnected(
-    device: Device | None,
-    host_status: str | None,
-) -> bool:
-    """manual retry / ui_status 的断连门禁。
-
-    Why: 必须与 `_derive_device_link_status` 同源。两处各自判 adb_state 时,
-         `unauthorized` 会被前者判成 adb_error、被后者放行,导致抽屉同时渲染
-         「设备 ADB 不可达」警告条和「立即重试」按钮,且 POST 真的执行。
-         当前 Agent 的 `collect_device_info` 会在 adb_state≠device 时一并把
-         adb_connected 置 False(device_discovery.py:122),所以线上暂被兜住 ——
-         但那是隐式字段配对约定,不该由两份判定规则各自假设。
-    """
-    if device is None:
-        return False
-    return _derive_device_link_status(device, host_status) != "online"
 
 
 def _job_exec_status_for_job(j: JobInstance, now: datetime) -> str:
@@ -1822,7 +1747,7 @@ def _ui_status_for_job(
         return "unknown"
 
     # RUNNING 分支
-    disconnected = _device_currently_disconnected(device, host_status)
+    disconnected = device_currently_disconnected(device, host_status)
     if disconnected:
         return "unknown"
     if (j.manual_action or "") == "EXIT_REQUESTED":
@@ -2067,9 +1992,9 @@ def _get_plan_run_devices_impl(
             j, coord_heartbeat_by_host,
         )
         busy_reason, busy_lease_job_id = _derive_busy_reason(dev, host_st, lease_job_id)
-        link = _derive_device_link_status(dev, host_st)
+        link = derive_device_link_status(dev, host_st)
         exec_status = _job_exec_status_for_job(j, now)
-        disconnected = _device_currently_disconnected(dev, host_st)
+        disconnected = device_currently_disconnected(dev, host_st)
         manual_retry_allowed = (
             j.status == JobStatus.RUNNING.value and not disconnected
         )

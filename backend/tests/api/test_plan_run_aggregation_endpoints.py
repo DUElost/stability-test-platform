@@ -1014,8 +1014,8 @@ class TestDevicesEndpoint:
     ):
         """unauthorized 设备:link 与断连门禁必须同源。
 
-        Why: 曾经 `_derive_device_link_status` 判 adb_error 而
-             `_device_currently_disconnected` 放行,抽屉会同时渲染
+        Why: 曾经 `derive_device_link_status` 判 adb_error 而
+             `device_currently_disconnected` 放行,抽屉会同时渲染
              「ADB 不可达」警告条和「立即重试」按钮。这里刻意让
              adb_connected 保持 True(绕开 Agent 侧的字段配对),
              确保门禁不依赖那个隐式约定。
