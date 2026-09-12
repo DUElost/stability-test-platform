@@ -12,6 +12,7 @@ def test_production_defaults(monkeypatch):
     monkeypatch.delenv("RUN_DISPATCHED_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("RUNNING_HEARTBEAT_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("RUN_HEARTBEAT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("UNKNOWN_GRACE_SECONDS", raising=False)
     monkeypatch.setenv("ENV", "production")
 
@@ -22,7 +23,42 @@ def test_production_defaults(monkeypatch):
     assert mod.RUNNING_HEARTBEAT_TIMEOUT_SECONDS == 900
     assert mod.PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS == 300
     assert mod.PATROL_STALL_MULTIPLIER == 3
+    assert mod.HOST_HEARTBEAT_TIMEOUT_SECONDS == 300
     assert mod.UNKNOWN_GRACE_SECONDS == 300
+
+
+def test_host_heartbeat_timeout_env(monkeypatch):
+    monkeypatch.setenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "180")
+    monkeypatch.setenv("ENV", "production")
+
+    mod = importlib.import_module("backend.core.job_timeout_config")
+    importlib.reload(mod)
+
+    assert mod.HOST_HEARTBEAT_TIMEOUT_SECONDS == 180
+
+
+def test_host_heartbeat_timeout_single_source(monkeypatch):
+    """#1518：消费面必须引用同一常量对象，禁止再各自 getenv。"""
+    monkeypatch.delenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("ENV", "production")
+
+    cfg = importlib.import_module("backend.core.job_timeout_config")
+    importlib.reload(cfg)
+
+    from backend.api.routes import devices, hosts
+    from backend.services.precheck import reachability
+    from backend.tasks import session_watchdog
+
+    importlib.reload(devices)
+    importlib.reload(hosts)
+    importlib.reload(reachability)
+    importlib.reload(session_watchdog)
+
+    assert devices.HOST_HEARTBEAT_TIMEOUT_SECONDS is cfg.HOST_HEARTBEAT_TIMEOUT_SECONDS
+    assert hosts.HOST_HEARTBEAT_TIMEOUT_SECONDS is cfg.HOST_HEARTBEAT_TIMEOUT_SECONDS
+    assert reachability.HOST_HEARTBEAT_TIMEOUT_SECONDS is cfg.HOST_HEARTBEAT_TIMEOUT_SECONDS
+    assert session_watchdog.HOST_HEARTBEAT_TIMEOUT_SECONDS is cfg.HOST_HEARTBEAT_TIMEOUT_SECONDS
+    assert cfg.HOST_HEARTBEAT_TIMEOUT_SECONDS == 300
 
 
 def test_legacy_env_aliases(monkeypatch):
