@@ -254,6 +254,13 @@ export default function PlanListPage() {
                               {plan.description}
                             </p>
                           )}
+                          {/* #748：卡片态原有的「创建者」在表格化（606b4350）时丢失；数据一直
+                              在（Plan.created_by ← route 读出，见 routes/plans.py）。 */}
+                          {plan.created_by && (
+                            <p className={cn('mt-0.5 truncate text-xs', TEXT.caption)}>
+                              创建者: {plan.created_by}
+                            </p>
+                          )}
                         </TableCell>
                         <TableCell className="px-3 py-2.5">
                           {plan.specialty_key ? (
