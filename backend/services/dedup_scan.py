@@ -291,13 +291,18 @@ def run_merge_sync(
     scan_round_id: str | None = None,
     round_started_at: datetime | None = None,
     platform: str | None = None,
+    allow_failed: bool = False,
 ) -> str:
     """同步执行 merge（-merge_files_list；工具不支持即配置错误，#291）。
 
-    阻塞等待子进程完成，校验 merge_result/ 出现新产物目录，返回 "ok" 或空串。
+    阻塞等待子进程完成，校验 merge_result/ 出现新产物目录，返回：
 
-    ADR-0028 D2：PlanRun ``FAILED``（含 abort）不 merge——即使已有 scan artifact
-    也不执行，显式门禁优先于「scan xls 不足自然跳过」。
+    - ``"ok"``：合并成功
+    - ``"skipped_failed"``：PlanRun FAILED 且未 ``allow_failed``（ADR-0028 D2
+      自动链故意跳过；与工具失败空串区分，避免 #1527 raise 误伤）
+    - ``""``：工具/产物不足等真失败
+
+    ``allow_failed=True``：手动 API（#697）对 FAILED 仍执行 merge。
     """
     from backend.core.database import SessionLocal
     from backend.models.enums import PlanRunStatus
@@ -308,10 +313,14 @@ def run_merge_sync(
         run = db.get(PlanRun, plan_run_id)
     finally:
         db.close()
-    if run is not None and run.status == PlanRunStatus.FAILED.value:
+    if (
+        run is not None
+        and run.status == PlanRunStatus.FAILED.value
+        and not allow_failed
+    ):
         logger.info("merge_skip_failed_plan_run plan_run=%d", plan_run_id)
         metrics.merge_skip_failed_plan_run_total.inc()
-        return ""
+        return "skipped_failed"
 
     tool = resolve_scan_tool()
     if tool is None:
@@ -427,17 +436,35 @@ def run_merge_all_platforms_sync(
     *,
     scan_round_id: str | None = None,
     round_started_at: datetime | None = None,
+    allow_failed: bool = False,
 ) -> str:
+    """各平台 merge；返回 ``ok`` / ``skipped_failed`` / ``""``。
+
+    任一平台 ``ok`` → ``ok``；全部为 ``skipped_failed`` → ``skipped_failed``；
+    否则（含工具失败空串）→ ``""``。
+    """
     any_ok = False
+    saw_skip_failed = False
+    saw_hard_fail = False
     for platform in DEDUP_PLATFORMS:
-        if run_merge_sync(
+        result = run_merge_sync(
             plan_run_id,
             scan_round_id=scan_round_id,
             round_started_at=round_started_at,
             platform=platform,
-        ) == "ok":
+            allow_failed=allow_failed,
+        )
+        if result == "ok":
             any_ok = True
-    return "ok" if any_ok else ""
+        elif result == "skipped_failed":
+            saw_skip_failed = True
+        else:
+            saw_hard_fail = True
+    if any_ok:
+        return "ok"
+    if saw_skip_failed and not saw_hard_fail:
+        return "skipped_failed"
+    return ""
 
 
 def _load_org_files_for_merge(
@@ -815,8 +842,8 @@ _DEDUP_AUTO_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS", "FAILED"}
 def should_trigger_dedup(run_status: str) -> bool:
     """ADR-0028 方案 A：SUCCESS/PARTIAL_SUCCESS/FAILED 均触发 scan→upload。
 
-    FAILED 只走到 upload（事件到达 CIFS）：手动 merge/extract 路由对 FAILED
-    返回 409；SAQ 侧 run_merge_sync 显式跳过，extract 因 merge 无产物短路。
+    FAILED 自动链只走到 upload；merge 由 ``run_merge_sync`` 返回
+    ``skipped_failed``（#697：手动 API 可 ``allow_failed=True`` 放行）。
     """
     if os.getenv(_DEDUP_AUTO_ENV, "1") != "1":
         return False

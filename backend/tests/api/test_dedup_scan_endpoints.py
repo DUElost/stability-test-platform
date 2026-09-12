@@ -248,36 +248,42 @@ class TestMergeEndpoint:
         assert resp.status_code == 409
         assert "scan first" in resp.json()["detail"].lower()
 
-    def test_failed_plan_run_returns_409_before_any_precheck(
-        self, client, auth_headers, db_session, sample_plan_run,
+    def test_failed_plan_run_manual_merge_allowed(
+        self, client, auth_headers, db_session, sample_plan_run, monkeypatch,
     ):
-        """ADR-0028 D2: FAILED 立即 409，不先做 scan artifact / tool 预检。"""
+        """#697 / ADR-0028 D2: FAILED 手动 merge 不 409，且传 allow_failed=True。"""
         from backend.models.enums import PlanRunStatus
         from backend.models.plan_run_artifact import PlanRunArtifact
 
+        round_id = "2026-09-08T12:00:00+00:00"
+        floor = datetime.fromisoformat(round_id)
         db_session.add(PlanRunArtifact(
             plan_run_id=sample_plan_run.id,
             host_id="host-1",
-            storage_uri="/tmp/fake_scan.xls",
+            storage_uri="/tmp/host1_Result_org.xls",
             artifact_type="scan_result_xls",
             size_bytes=100,
+            scan_round_id=round_id,
+            created_at=floor,
         ))
         sample_plan_run.status = PlanRunStatus.FAILED.value
         db_session.commit()
 
-        resolve_tool = MagicMock()
-        merge_all = MagicMock()
-        with patch("backend.services.dedup_scan.resolve_scan_tool", resolve_tool), \
-             patch("backend.services.dedup_scan.run_merge_all_platforms_sync", merge_all):
+        monkeypatch.setenv("STP_BACKEND_DEDUP_SCAN_PYTHON", "/usr/bin/python3")
+        monkeypatch.setenv("STP_BACKEND_DEDUP_SCAN_SCRIPT", "/tmp/fake_scan.py")
+
+        with patch(
+            "backend.services.dedup_scan.run_merge_all_platforms_sync",
+            return_value="ok",
+        ) as merge_all:
             resp = client.post(
                 f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/merge",
                 json={},
                 headers=auth_headers,
             )
-        assert resp.status_code == 409
-        assert "FAILED" in resp.json()["detail"]
-        resolve_tool.assert_not_called()
-        merge_all.assert_not_called()
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["status"] == "ok"
+        assert merge_all.call_args.kwargs.get("allow_failed") is True
 
     def test_merge_passes_resolved_round_to_merge_all(
         self, client, auth_headers, db_session, sample_plan_run, monkeypatch,
@@ -303,7 +309,7 @@ class TestMergeEndpoint:
 
         with patch(
             "backend.services.dedup_scan.run_merge_all_platforms_sync",
-            return_value=["/tmp/merged.xls"],
+            return_value="ok",
         ) as merge_all:
             resp = client.post(
                 f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/merge",
