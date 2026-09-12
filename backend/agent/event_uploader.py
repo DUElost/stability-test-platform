@@ -168,6 +168,8 @@ class EventUploader:
         self._active_ids: set[str] = set()
         # #785: attempt 跨 600s 重入队 / 进程重启保持；内存 + agent_state 双写
         self._attempt_counts: Dict[str, int] = {}
+        # #784: 退避重试 Timer 登记，stop() 时 cancel（默认非 daemon 会拖死关停）
+        self._retry_timers: list[threading.Timer] = []
 
     @classmethod
     def instance(cls) -> "EventUploader":
@@ -239,12 +241,23 @@ class EventUploader:
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop_evt.set()
+        # #784: 取消未决退避 Timer，避免非 daemon Timer 拖长关停窗口
+        with self._active_lock:
+            timers = list(self._retry_timers)
+            self._retry_timers.clear()
+        for timer in timers:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
         try:
             self._queue.put_nowait(None)
         except queue.Full:
             pass
         if self._dispatcher is not None:
             self._dispatcher.join(timeout=timeout)
+        if self._retry_thread is not None:
+            self._retry_thread.join(timeout=timeout)
 
     def _load_attempts(self, event_id: str) -> int:
         with self._active_lock:
@@ -463,7 +476,11 @@ class EventUploader:
                 self._store_attempts(job.event_id, job.attempt)
                 job.rescheduled = True
                 delay = min(300.0, 2.0 ** job.attempt)
-                threading.Timer(delay, lambda: self._queue.put(job)).start()
+                timer = threading.Timer(delay, lambda: self._queue.put(job))
+                timer.daemon = True  # #784: 关停不因退避 Timer 阻塞解释器
+                with self._active_lock:
+                    self._retry_timers.append(timer)
+                timer.start()
             else:
                 # #785: 耗尽后持久化上限，600s 重入队不得 attempt=0 再烧一轮
                 self._store_attempts(job.event_id, _MAX_RETRIES)
