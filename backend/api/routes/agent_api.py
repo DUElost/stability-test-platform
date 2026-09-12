@@ -2267,12 +2267,15 @@ _EXTRACTABLE_STATES = frozenset(
 # 同态重复 = 幂等允许；表外迁移 409 明确拒绝（extractable 降级走上方 #1174
 # 幂等忽略分支，不落到本表）。可信边界见
 # docs/design/2026-device-log-event-implementation-spec.md §"可信边界"。
-_ALLOWED_TRANSITIONS: dict[str, frozenset] = {
-    "DETECTED": frozenset({"PULL_FAILED", "LOCAL", "UPLOAD_PENDING", "UPLOADING"}),
+#
+# 本字面表**不含 PULL_FAILED 出边**——它的语义是「本地源已不可达」，Agent 在本地
+# 目录缺失时无条件打它（event_uploader `_upload_one` 的 missing-local 分支），与
+# 当时处于哪个在途状态无关，故由下方 _ALLOWED_TRANSITIONS 对所有非终态统一派生。
+_TRANSITIONS_LITERAL: dict[str, frozenset] = {
+    "DETECTED": frozenset({"LOCAL", "UPLOAD_PENDING", "UPLOADING"}),
     "PULL_FAILED": frozenset({"LOCAL", "UPLOAD_PENDING", "UPLOADING", "REMOTE"}),
     "LOCAL": frozenset({
-        "PULL_FAILED", "UPLOAD_PENDING", "UPLOADING", "UPLOAD_FAILED",
-        "REMOTE", "PRUNED",
+        "UPLOAD_PENDING", "UPLOADING", "UPLOAD_FAILED", "REMOTE", "PRUNED",
     }),
     "UPLOAD_PENDING": frozenset({
         "LOCAL", "UPLOADING", "UPLOAD_FAILED", "REMOTE", "PRUNED",
@@ -2284,6 +2287,22 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset] = {
     "REMOTE": frozenset({"ARCHIVED", "PRUNED"}),
     "ARCHIVED": frozenset({"PRUNED"}),
     "PRUNED": frozenset(),
+}
+
+# #1550：PULL_FAILED 是「源不可达」汇点，对所有**非终态**源都合法。由字面表统一
+# 派生而非逐条手写——手写已经漏过一次：UPLOAD_PENDING / UPLOADING 缺这条出边，
+# Agent 的 missing-local 补丁吃 409，行永远停在在途态，每 30s（快速恢复）/
+# 600s（慢速恢复）重新入队再撞 409，正是 #380 当年要消灭的「UPLOAD_PENDING 永久
+# 卡死」。派生式同时保证将来新增状态不会重演。
+# 终态（= _EXTRACTABLE_STATES，中心 remote_path/checksum 已权威）不得降级回
+# PULL_FAILED，与上方 #1174 的幂等忽略分支同一口径。
+_ALLOWED_TRANSITIONS: dict[str, frozenset] = {
+    src: (
+        allowed
+        if src in _EXTRACTABLE_STATES
+        else allowed | {EventState.PULL_FAILED.value}
+    )
+    for src, allowed in _TRANSITIONS_LITERAL.items()
 }
 
 
