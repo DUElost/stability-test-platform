@@ -115,6 +115,14 @@ export default function AiAssistantSettingsPage() {
       toast.error('API URL 与模型为必填项');
       return;
     }
+    const invalidT2bIndex = form.t2b_auto_dispatch_allowlist.findIndex(
+      (entry) => !Number.isInteger(entry.plan_id) || entry.plan_id < 1,
+    );
+    if (invalidT2bIndex >= 0) {
+      toast.error(`T2b 白名单第 ${invalidT2bIndex + 1} 条 plan_id 须为不小于 1 的正整数`);
+      document.getElementById(`t2b-plan-${invalidT2bIndex}`)?.focus();
+      return;
+    }
     const payload: AiAssistantConfigUpdate = {
       base_url: form.base_url.trim(),
       model: form.model.trim(),
