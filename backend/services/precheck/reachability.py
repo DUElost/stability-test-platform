@@ -26,18 +26,15 @@ PlanRun 卡 QUEUED、`queue_blockers` 恒为 ``host_unreachable``，日志里一
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.models.host import Host
 
 logger = logging.getLogger(__name__)
-
-# 与 api/routes/devices.py 保持一致：心跳超过该秒数视为过期
-HOST_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "300"))
 
 
 def _socketio_redis_adapter_enabled() -> bool:

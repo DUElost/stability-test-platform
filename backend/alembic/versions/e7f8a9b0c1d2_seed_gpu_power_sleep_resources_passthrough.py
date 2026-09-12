@@ -39,19 +39,20 @@ depends_on = None
 VERSIONS = [
     {
         "name": "gpu_setup", "ver": "1.0.2",
-        "sha": "961f2f3929b26aae4213c879992c609bb71ae4ce88134125a74c88dce9043990",
+        # entry script sha (gpu_setup.py) — NOT _lib.py (#751)
+        "sha": "a654a624a197dcbdfa626dbfd478114273a19253da779ff03fbae13f540748b1",
         "desc": "GPU 部署+启动 — v1.0.1 + gpu_resources_dir 透传（config 丢键修复）",
         "deactivate": ["1.0.0", "1.0.1"],
     },
     {
         "name": "powercycle_setup", "ver": "1.0.1",
-        "sha": "38cb525fd5405b0c0f08c765a8d3a3bdbcea7aadf21c0733f59fedbfd9a960e3",
+        "sha": "29136c9ce24f9dfcc90ad705988f9a5aa153de5a59d96e697ea278e59b9e3d7e",
         "desc": "开关机循环 — v1.0.0 + powercycle_resources_dir 透传（config 丢键修复）",
         "deactivate": ["1.0.0"],
     },
     {
         "name": "sleep_setup", "ver": "1.0.1",
-        "sha": "c54ed4b371612e37af3954df07a5588a19adebc5edce74f6205b0f1557f2163e",
+        "sha": "970a02133edcf75528adb74cdcf413d89f8d3a4f6f384ab3380d1c872db6db79",
         "desc": "休眠唤醒循环 — v1.0.0 + sleep_resources_dir 透传（config 丢键修复）",
         "deactivate": ["1.0.0"],
     },

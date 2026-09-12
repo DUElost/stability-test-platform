@@ -20,9 +20,11 @@ describe('evaluateDeviceReadiness', () => {
     expect(result.passed).toBe(false);
   });
 
-  it('honors schedulable, host status, and warning branches', () => {
+  it('honors device status, host status, and warning branches', () => {
+    // #786：后端不产出 `schedulable`，不可调度改由 status 表达（此处 BUSY）——原夹具
+    // 构造的是生产不存在的形状（「后端权威准入」恒走 status 兜底）。
     const result = evaluateDeviceReadiness([
-      { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE', schedulable: false },
+      { id: 1, serial: 'A', host_id: 'h1', status: 'BUSY' },
       { id: 2, serial: 'B', host_id: 'h1', status: 'ONLINE', adb_state: 'unauthorized', model: 'M1', build_display_id: 'v1' },
       { id: 3, serial: 'C', host_id: 'h2', status: 'ONLINE', model: 'M2', build_display_id: 'v2' },
     ], [{ id: 'h1', status: 'OFFLINE' }, { id: 'h2', status: 'ONLINE' }]);

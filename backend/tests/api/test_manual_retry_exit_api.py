@@ -346,7 +346,7 @@ class TestManualActionEmitsJobStatusInvalidation:
     """The sync manual-retry / manual-exit endpoints must publish a lightweight
     JOB_STATUS event to ``plan_run:{run_id}`` so the dashboard can drop its
     cached devices/timeline payloads and refetch.  We patch the imported
-    ``schedule_emit`` symbol because ``_emit_job_status_invalidation`` does a
+    ``schedule_emit`` symbol because ``emit_job_status_invalidation`` does a
     deferred import to avoid SocketIO bootstrapping in test environments.
     """
 

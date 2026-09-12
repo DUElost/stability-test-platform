@@ -148,7 +148,7 @@ class TestTimeoutArtifactIntegrity:
         )
         runner._last_scan_timed_out = True
 
-        assert runner.run_scan_result(str(scan_root), 1, "host") is None
+        assert runner.run_scan_result(str(scan_root), 1, "host", scan_start=0.0) is None
 
     def test_run_scan_result_accepts_complete_after_timeout(self, tmp_path, monkeypatch):
         runner = self._configured(monkeypatch)
@@ -164,7 +164,7 @@ class TestTimeoutArtifactIntegrity:
         )
         runner._last_scan_timed_out = True
 
-        assert runner.run_scan_result(str(scan_root), 1, "host") == str(org.resolve())
+        assert runner.run_scan_result(str(scan_root), 1, "host", scan_start=0.0) == str(org.resolve())
 
     def test_timeout_sets_flag(self, tmp_path, monkeypatch):
         import subprocess as sp
@@ -179,3 +179,66 @@ class TestTimeoutArtifactIntegrity:
         )
         assert runner._run_log_scan_gt(str(tmp_path), 1, "host") is True
         assert runner._last_scan_timed_out is True
+
+
+class TestScanStartWatermark:
+    """#760: 增量扫描不得把上轮 *_org.xls 当本轮产物。"""
+
+    def _configured(self, monkeypatch):
+        runner = UnisocScanRunner.instance()
+        runner.configure(
+            scan_tool_python="/usr/bin/python3",
+            scan_tool_script="/tools/scan_log_gt.py",
+            result_python="/usr/bin/python3",
+            result_script="/tools/scan_result.py",
+            force=True,
+        )
+        return runner
+
+    def test_run_scan_result_rejects_stale_org_only(self, tmp_path, monkeypatch):
+        import os
+        import time
+
+        runner = self._configured(monkeypatch)
+        scan_root = tmp_path / "scan"
+        scan_root.mkdir()
+        stale = scan_root / "Result_old_org.xls"
+        stale.write_bytes(b"old-report")
+        # 把 mtime 拨到「扫描启动」之前
+        past = time.time() - 120
+        os.utime(stale, (past, past))
+
+        fake = MagicMock(returncode=0, stderr="")
+        monkeypatch.setattr(
+            "backend.agent.unisoc_scan_runner.subprocess.run",
+            lambda *a, **k: fake,
+        )
+        scan_start = time.time()
+        assert runner.run_scan_result(
+            str(scan_root), 1, "host", scan_start=scan_start,
+        ) is None
+
+    def test_run_scan_result_prefers_fresh_over_stale(self, tmp_path, monkeypatch):
+        import os
+        import time
+
+        runner = self._configured(monkeypatch)
+        scan_root = tmp_path / "scan"
+        scan_root.mkdir()
+        stale = scan_root / "Result_old_org.xls"
+        stale.write_bytes(b"old-report-larger-mtime-trick")
+        past = time.time() - 120
+        os.utime(stale, (past, past))
+
+        scan_start = time.time()
+        fresh = scan_root / "Result_new_org.xls"
+        fresh.write_bytes(b"new")
+
+        fake = MagicMock(returncode=0, stderr="")
+        monkeypatch.setattr(
+            "backend.agent.unisoc_scan_runner.subprocess.run",
+            lambda *a, **k: fake,
+        )
+        assert runner.run_scan_result(
+            str(scan_root), 1, "host", scan_start=scan_start,
+        ) == str(fresh.resolve())

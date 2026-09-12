@@ -129,6 +129,7 @@ user 构建（`ro.debuggable=0`）直接 fail-fast，需 userdebug/eng 工程包
 - **在途守卫（#402 / #516）**：绑定**同一套件**的 QUEUED/PRECHECK/RUNNING PlanRun → 409 `SUITE_RUNS_ACTIVE`。跨套件并发导出互不阻塞。未绑定 mtbf 存量 Run 不再阻断 export（#404 硬拒新派发后宽匹配已删）。
 - **export_dir 解析**：显式 `export_dir` > 项目 key > `legacy`（兼容 P0 部署）。
 - **export_dir 唯一性（运维 SOP，R05-F11 / #974）**：中心存储按 `{STP_AEE_NFS_ROOT}/mtbf/{export_dir}/` 落物，**同一 export_dir 的多个套件会互相覆盖消费路径文件**（在途守卫只按套件身份隔离，不按目录）。多套件共用目录属**误配置**：上线前必须保证每个套件解析出的 `export_dir` 唯一——显式 `export_dir` 或独立项目 key，避免都回落默认 `legacy`。目录级互斥未实现（已接受的设计风险）；需要目录级保护时另起 ADR。
+- **升级后必须重导（#1560）**：`exported_global_sha256` 是 #973 新增的漂移基线列，迁移只 `add_column(nullable=True)`、**不回填**。因此**部署本版本之后，所有在此前导出过的套件都会被 precheck 五步门禁判为 `not_exported`**，绑定它们的 Run 无法准入，直到逐个重新执行一次 `export-to-tool-dir`（该端点总会写 Global 文件，重导一次即恢复）。这不是「套件有问题」：门禁 `detail` 里 `ever_exported=true` 且 `missing` 会列出究竟缺哪一项（`exported_sha256` / `exported_content_sha256` / `exported_global_sha256` / `runtask.xml` / `UiAutomatorTestData.xml`），据此逐项定位。发布清单应包含「对全部 bound suite 执行一次 export-to-tool-dir」。
 
 ### 典型闭环（ADR-0030 D6 验收信号）
 

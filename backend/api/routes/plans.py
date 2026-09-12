@@ -26,8 +26,10 @@ from backend.models.plan_run import PlanRun
 from backend.models.project import Specialty, TestProject
 from backend.models.suite import TestSuite
 from backend.services.script_progress_capability import script_supports_progress
-from backend.models.resource_pool import ResourcePool
-from backend.services.plan_dispatcher_core import plan_steps_consumes_wifi
+from backend.services.plan_wifi import (
+    require_active_wifi_pool,
+    require_wifi_pool_matches_plan,
+)
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
     initial_dispatch_state,
@@ -1138,37 +1140,6 @@ def delete_plan(
 
 # ── Dispatch ─────────────────────────────────────────────────────────────
 
-def _require_active_wifi_pool(db: Session, pool_id: int) -> None:
-    """Reject the run up front if the chosen WiFi pool is gone or disabled.
-
-    Without this the mistake would only surface inside the admission pump as an
-    ``AllocationError``, i.e. after the PlanRun is already QUEUED.
-    """
-    pool = db.get(ResourcePool, pool_id)
-    if pool is None or pool.resource_type != "wifi" or not pool.is_active:
-        raise HTTPException(
-            status_code=400,
-            detail=f"wifi_pool_id {pool_id} is not an active wifi resource pool",
-        )
-
-
-def _require_wifi_pool_matches_plan(db: Session, plan_id: int, pool_id: int) -> None:
-    """Reject wifi_pool_id when the Plan has no step that can consume WiFi."""
-    steps = (
-        db.query(PlanStep)
-        .filter(PlanStep.plan_id == plan_id)
-        .order_by(PlanStep.stage, PlanStep.sort_order)
-        .all()
-    )
-    if not plan_steps_consumes_wifi(steps):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "wifi_pool_id requires a plan step that consumes WiFi "
-                "(connect_wifi or monkey_setup)"
-            ),
-        )
-
 
 @router.post("/plans/{plan_id}/run/preview", response_model=ApiResponse[dict])
 def preview_plan_run(
@@ -1178,8 +1149,8 @@ def preview_plan_run(
     _current_user: User = Depends(get_current_active_user),
 ):
     if payload.wifi_pool_id is not None:
-        _require_active_wifi_pool(db, payload.wifi_pool_id)
-        _require_wifi_pool_matches_plan(db, plan_id, payload.wifi_pool_id)
+        require_active_wifi_pool(db, payload.wifi_pool_id)
+        require_wifi_pool_matches_plan(db, plan_id, payload.wifi_pool_id)
     try:
         preview = preview_plan_dispatch_sync(
             plan_id=plan_id,
@@ -1207,8 +1178,8 @@ def run_plan(
     if payload.note:
         run_context["note"] = payload.note
     if payload.wifi_pool_id is not None:
-        _require_active_wifi_pool(db, payload.wifi_pool_id)
-        _require_wifi_pool_matches_plan(db, plan_id, payload.wifi_pool_id)
+        require_active_wifi_pool(db, payload.wifi_pool_id)
+        require_wifi_pool_matches_plan(db, plan_id, payload.wifi_pool_id)
         run_context["wifi_pool_id"] = payload.wifi_pool_id
 
     try:
