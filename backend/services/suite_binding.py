@@ -232,12 +232,39 @@ def collect_suite_gate_error(db: Session, pr: PlanRun) -> Optional[dict[str, Any
         or not disk_path.is_file()
         or not global_path.is_file()
     ):
+        # #1560：把「从未导出」与「已导出但基线不完整（含新增列未回填）」区分开。
+        # #973 给 Global 基线只加了可空列、迁移不回填，于是本版本发布后**所有**
+        # 此前导出过的套件都会落进这一支；而原文案一口咬定
+        # "has never been exported"，会把运维引向「套件本身有问题」而不是
+        # 「按新版本重导一次」。step 码保持 not_exported（既有契约与 result_summary
+        # 消费方不变），改用 message + missing + ever_exported 让现场自助定位。
+        missing = []
+        if not suite.exported_sha256:
+            missing.append("exported_sha256")
+        if not suite.exported_content_sha256:
+            missing.append("exported_content_sha256")
+        if not suite.exported_global_sha256:
+            missing.append("exported_global_sha256")
+        if disk_path is None or not disk_path.is_file():
+            missing.append(_RUNTASK_NAME)
+        if global_path is None or not global_path.is_file():
+            missing.append(_GLOBAL_NAME)
+        # 任一 runtask 侧基线已置 = 这个套件确实导出过；缺口只是补列/文件漂移
+        ever_exported = bool(suite.exported_sha256 or suite.exported_content_sha256)
         return _fail(
             "not_exported",
-            "suite has never been exported to the tool dir (or storage root unset "
-            "/ Global file missing)",
+            (
+                "exported baseline is incomplete (missing: "
+                + ", ".join(missing)
+                + ") — re-export to refresh it"
+                if ever_exported
+                else "suite has never been exported to the tool dir "
+                "(or storage root unset)"
+            ),
             "run POST /api/v1/test-suites/{id}/export-to-tool-dir",
             export_dir=resolve_export_dir(suite),
+            missing=missing,
+            ever_exported=ever_exported,
         )
 
     # 3) 库漂移：「库改了没导出」——指纹是**算出来的**，与端点置空纪律无关

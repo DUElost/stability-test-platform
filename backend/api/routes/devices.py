@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import json
 import logging
-import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import cast, func, or_, select
@@ -12,6 +11,7 @@ from typing import List, Optional, Union
 
 from backend.core.database import get_db
 from backend.core.audit import record_audit
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.models.host import Host, Device
 from backend.models.project import TestProject
 from backend.models.project_model import ProjectModel
@@ -25,9 +25,6 @@ from backend.api.routes.auth import get_current_active_user, require_admin, User
 _USER_SOURCE = "USER"
 
 logger = logging.getLogger(__name__)
-
-# Host heartbeat timeout config (default 5 minutes)
-HOST_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "300"))
 
 
 def _ensure_host_online_for_device(device: Device) -> bool:

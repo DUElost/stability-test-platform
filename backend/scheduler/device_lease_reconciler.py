@@ -363,6 +363,32 @@ async def _abort_reaper_recheck_job(
     }
 
 
+def _parse_abort_at(value: object) -> datetime | None:
+    """把 ``run_context.abort_requested.at`` 解析为 aware datetime（#782）。
+
+    容忍实际会出现的三种写法：``…Z`` / ``…+00:00`` / 带或不带小数秒。解析失败返回
+    ``None``，调用方按「不满足回收条件」处理——坏值不触发 UNKNOWN 翻转，避免误杀。
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        # 3.11 之前 fromisoformat 不认 'Z'，显式归一为 +00:00。
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    # 无时区信息按平台约定视为 UTC（全平台时间戳均为 UTC）。
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _abort_at_expired(raw_abort_at: object, deadline: datetime) -> bool:
+    """fallback 判据：abort 请求时刻早于 ``deadline``（Python 侧解析后比较）。"""
+    parsed = _parse_abort_at(raw_abort_at)
+    return parsed is not None and parsed < deadline
+
+
 async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     """P1: 扫描 RUNNING job 且 PlanRun.run_context 含 abort_requested 且
     grace 已到 → JobStateMachine.transition UNKNOWN，保留 ACTIVE lease 隔离
@@ -389,20 +415,31 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
             )
         )).all()
     except (sqlalchemy.exc.DataError, sqlalchemy.exc.DBAPIError):
-        logger.warning("abort_reaper_timestamptz_cast_failed, fallback to string compare")
+        logger.warning(
+            "abort_reaper_timestamptz_cast_failed, fallback to python datetime compare"
+        )
         # Rollback the failed transaction so the fallback query can execute.
         # Without this, PostgreSQL raises InFailedSQLTransactionError for any
         # subsequent statement in the same transaction.
         await db.rollback()
-        rows = (await db.execute(
-            select(JobInstance, PlanRun)
+        # #782：不在 SQL 里比时间。ISO **文本**比较在形态混用时给出错误顺序——
+        # 非零偏移（`+08:00`）、`Z` 与 `+00:00` 混用、小数秒有无都会改变字典序，
+        # 可能与真实时间相反（例：`…T19:59:59+08:00` 早于 `…T12:00:00+00:00`，
+        # 文本比较却判为不早），既可能漏回收也可能误回收。改为取回候选后在
+        # Python 侧解析比较；候选面被 RUNNING + abort_requested 双重限定，行数有界。
+        candidates = (await db.execute(
+            select(JobInstance, PlanRun, abort_at_text)
             .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
             .where(
                 JobInstance.status == JobStatus.RUNNING.value,
                 abort_at_text.isnot(None),
-                abort_at_text < grace_deadline.isoformat(),
             )
         )).all()
+        rows = [
+            (job, plan_run)
+            for job, plan_run, raw_abort_at in candidates
+            if _abort_at_expired(raw_abort_at, grace_deadline)
+        ]
 
     unknown_count = 0
     broadcast_items: list[dict] = []
