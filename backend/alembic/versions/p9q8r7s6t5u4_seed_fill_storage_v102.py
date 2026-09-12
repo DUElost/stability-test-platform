@@ -1,7 +1,7 @@
 """seed fill_storage v1.0.2 — 回读核验假失败修复（#1554）
 
 Revision ID: p9q8r7s6t5u4
-Revises: cc33dd44ee55
+Revises: dd44ee55ff66
 Create Date: 2026-09-12
 
 Data migration（#1554，审计批次 audit-2026-09-12）：
@@ -39,7 +39,7 @@ from alembic import op
 from sqlalchemy import text
 
 revision = "p9q8r7s6t5u4"
-down_revision = "cc33dd44ee55"
+down_revision = "dd44ee55ff66"
 branch_labels = None
 depends_on = None
 
