@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import func, or_, select
 
@@ -221,14 +223,50 @@ async def check_and_fire_schedules() -> None:
 AUTO_ARCHIVE_INTERVAL = int(os.getenv("AUTO_ARCHIVE_POLL_INTERVAL_SECONDS", "120"))
 
 
+def purge_run_storage_dirs(run_ids: list) -> set:
+    """#1521: 删除这些 PlanRun 的 NFS 目录（`devices/{id}/` 与 `dedup/{id}/`）。
+
+    DB 行是「哪些目录属于此 run」的唯一索引——必须在删行**之前**清理，
+    否则行删后目录永不可回溯（R-01 盘满链：DB 轨有 TTL、NFS 轨无 TTL）。
+    返回删除失败的 run_id 集合（调用方应从本批 DB 删除中剔除，下轮重试
+    文件清理——先文件后行的顺序保证失败可自愈）。
+    """
+    from backend.core.storage_root import resolve_shared_storage_root
+
+    root = resolve_shared_storage_root()
+    if not root:
+        logger.warning("nfs_retention_skipped_root_unset")
+        return set()
+
+    base = Path(root)
+    failed: set = set()
+    removed = 0
+    for run_id in run_ids:
+        for sub in ("devices", "dedup"):
+            target = base / sub / str(int(run_id))
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target)
+                    removed += 1
+            except Exception:
+                failed.add(run_id)
+                logger.warning(
+                    "nfs_retention_purge_failed dir=%s", target, exc_info=True,
+                )
+    if removed:
+        logger.info("nfs_retention_purged dirs=%d failed_runs=%d", removed, len(failed))
+    return failed
+
+
 def run_retention_cleanup() -> None:
     """Delete completed PlanRuns older than PLAN_RUN_RETENTION_DAYS (ADR-0020).
 
     Runs as an independent APScheduler job (sync, runs in thread-pool).
     """
     from backend.models.plan_run import PlanRun
-    from backend.models.job import JobArtifact, JobInstance, StepTrace
+    from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
     from backend.models.device_lease import DeviceLease
+    from backend.models.device_log_event import DeviceLogEvent
     from backend.models.resource_pool import ResourceAllocation
 
     now = datetime.now(timezone.utc)
@@ -303,6 +341,21 @@ def run_retention_cleanup() -> None:
                 return
 
             # Subquery: job IDs belonging to safely-deletable PlanRuns
+            # #1521: NFS 轨回收——DB 行删除前先清 `devices/{id}/` 与
+            # `dedup/{id}/`（行是目录的唯一索引）；文件删除失败的 run 剔除出
+            # 本批 DB 删除，下轮重试（先文件后行，失败可自愈）。
+            purge_failed = purge_run_storage_dirs(safe_run_ids)
+            if purge_failed:
+                safe_run_ids = [
+                    rid for rid in safe_run_ids if rid not in purge_failed
+                ]
+                if not safe_run_ids:
+                    logger.warning(
+                        "retention_cleanup deferred: all %d candidates have "
+                        "unpurged NFS dirs", len(purge_failed),
+                    )
+                    return
+
             stale_job_ids = select(JobInstance.id).where(
                 JobInstance.plan_run_id.in_(safe_run_ids)
             )
@@ -326,7 +379,21 @@ def run_retention_cleanup() -> None:
                 JobArtifact.job_id.in_(stale_job_ids)
             ).delete(synchronize_session=False)
 
-            # job_log_signal has ON DELETE CASCADE; job_artifact must be removed first.
+            # #781: job_log_signal.job_id / device_log_event.{job,plan_run}_id
+            # 均为 ON DELETE SET NULL（非 CASCADE）。删 Job/PlanRun 前必须显式
+            # 删行，否则 signal/event 变孤儿并单调堆积（仅 /log-signals/orphans
+            # 可见，且是 #729 幽灵 /complete 404 的跨保留窗口来源之一）。
+            # 先 signal 再 event：signal.device_log_event_id 亦为 SET NULL。
+            db.query(JobLogSignal).filter(
+                JobLogSignal.job_id.in_(stale_job_ids)
+            ).delete(synchronize_session=False)
+            db.query(DeviceLogEvent).filter(
+                or_(
+                    DeviceLogEvent.plan_run_id.in_(safe_run_ids),
+                    DeviceLogEvent.job_id.in_(stale_job_ids),
+                )
+            ).delete(synchronize_session=False)
+
             db.query(JobInstance).filter(
                 JobInstance.plan_run_id.in_(safe_run_ids)
             ).delete(synchronize_session=False)
