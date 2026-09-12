@@ -572,6 +572,7 @@ const SOURCE_LABEL_MAP: Record<string, string> = {
 
 function NotificationLogsTab() {
   const qc = useQueryClient();
+  const toast = useToast();
   const [page, setPage] = useState(0);
   const [markingId, setMarkingId] = useState<number | null>(null);
   const pageSize = 20;
@@ -593,6 +594,8 @@ function NotificationLogsTab() {
       await api.notifications.markRead(id);
       qc.invalidateQueries({ queryKey: ['notification-logs'] });
       qc.invalidateQueries({ queryKey: ['notification-unread-count'] });
+    } catch (error) {
+      toast.error(`标记已读失败: ${toApiError(error).message}`);
     } finally {
       setMarkingId(null);
     }
