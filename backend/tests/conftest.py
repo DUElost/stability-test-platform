@@ -109,7 +109,6 @@ os.environ["TEST_DATABASE_URL"] = TEST_DATABASE_URL
 
 from backend.core.database import async_engine, engine as app_engine, get_db
 from backend.core.database import Base
-from backend.models import action_template as _action_template  # noqa: F401
 from backend.models import audit as _audit  # noqa: F401
 from backend.models import device_lease as _device_lease  # noqa: F401
 from backend.models import notification as _notification  # noqa: F401
