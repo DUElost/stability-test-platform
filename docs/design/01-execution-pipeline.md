@@ -164,13 +164,16 @@ Job 执行期间 `JobSession` 绑定 `DeviceLogWatcher`：
 
 ### 8.3 环境变量（控制面）
 
+**2026-09-13 更新（#788）**：scan 工具键按**角色分离**，权威表见
+[`docs/development/environment-variables.md`](../development/environment-variables.md)。
+
 | 变量 | 说明 |
 |------|------|
-| `STP_DEDUP_SCAN_PYTHON` | start_log_scan 解释器 |
-| `STP_DEDUP_SCAN_SCRIPT` | `start_log_scan.py` 路径 |
-| `STP_JIRA_TOOL_PYTHON` | Jira-Automation 解释器 |
-| `STP_JIRA_TOOL_DIR` | 厂商 Jira 工具目录 |
-| `STP_DEDUP_AUTO_SCAN` | 终态自动触发 scan |
+| `STP_BACKEND_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：merge/scan 工具解释器与 `start_log_scan.py` 路径（`services/dedup_scan.py`）。**#518 起不再回落**旧无前缀键（#295 引入的回落 + WARNING 已删除） |
+| `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅 Agent**：Agent 侧 scan 工具路径（`agent/scan_runner.py`；hot-update 经 `STP_AGENT_*` 源键写入） |
+| `STP_JIRA_TOOL_PYTHON` | Jira-Automation 解释器（**2026-09-13 核查：控制面代码中已无读取点**，本行保留待裁） |
+| `STP_JIRA_TOOL_DIR` | 厂商 Jira 工具目录（同上，无读取点） |
+| `STP_DEDUP_AUTO_SCAN` | 终态自动触发 scan（**2026-09-13 核查：控制面代码中无读取点**；仅见于 `deploy/control-plane/env/*.example` 与热更新下发说明） |
 
 ### 8.4 方案 C 演进
 

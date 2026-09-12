@@ -804,6 +804,43 @@ async def test_merge_task_all_platforms_failed_raises_and_skips_extract(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_merge_task_skipped_failed_writes_upload_summary(monkeypatch):
+    """#697: FAILED 自动 skip 不 raise，并落 upload_summary。"""
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setattr(
+        saq_tasks, "_run_sync_exclusive", AsyncMock(return_value="skipped_failed"),
+    )
+    writes = []
+
+    def _summarize(plan_run_id):
+        return {"pending": 2, "remote": 0}
+
+    def _write(plan_run_id, section, value):
+        writes.append((plan_run_id, section, value))
+
+    monkeypatch.setattr(saq_tasks, "_summarize_upload_sync", _summarize)
+    monkeypatch.setattr(saq_tasks, "_write_run_context_sync", _write)
+    enq = AsyncMock()
+    monkeypatch.setattr(saq_tasks, "_enqueue_extract_task", enq)
+
+    await saq_tasks.merge_task(
+        {}, plan_run_id=42, scan_round_id="round-X", round_started_at=None,
+    )
+    enq.assert_not_awaited()
+    assert writes == [(
+        42,
+        "upload_summary",
+        {
+            "pending": 2,
+            "remote": 0,
+            "ready": False,
+            "incomplete_reason": "merge_skipped_failed_plan_run",
+        },
+    )]
+
+
 async def test_enqueue_sync_reports_async_failure_to_callback():
     """#1555：fire-and-forget 路径真正入队失败时必须回调，而不是静默吞掉。
 

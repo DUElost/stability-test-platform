@@ -3,7 +3,7 @@
 Status: accepted
 Class: architecture
 
-> **权威**：[ADR-0032 v0.6 Accepted](../adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md)
+> **权威**：[ADR-0032 v0.6 Accepted](../../adr/ADR-0032-unisoc-mtk-parallel-dedup-pipelines.md)
 
 ## 已裁定摘要
 

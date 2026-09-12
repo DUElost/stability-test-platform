@@ -108,6 +108,12 @@ def finish_mod_v102():
     return _load("powercycle_finish_mod_v102", "powercycle_finish/v1.0.2/powercycle_finish.py")
 
 
+@pytest.fixture(scope="module")
+def finish_mod_v104():
+    """powercycle_finish v1.0.4：stop→pull 撞重启窗口时等设备就绪重拉（#830）。"""
+    return _load("powercycle_finish_mod_v104", "powercycle_finish/v1.0.4/powercycle_finish.py")
+
+
 @pytest.fixture()
 def golden_result() -> bytes:
     return (_FIXTURES / "powercycle_result.txt").read_bytes()
@@ -792,6 +798,93 @@ class TestFinish:
         with pytest.raises(RuntimeError) as ei:
             finish_mod._pull_result_file()
         assert "powercycle_result.txt" in str(ei.value)
+
+
+class TestCollectRetryV104:
+    """#830：stop→pull 撞设备重启窗口 → 等设备就绪重拉，不再首次失败即 raise。"""
+
+    def _patch(self, mod, monkeypatch, tmp_path, *, pull_fail_times: int, wait_seq=None):
+        """按次失败的 pull：前 pull_fail_times 次 raise，之后返回本地文件。
+
+        返回调用计数。``wait_seq`` 为 ``_wait_device_online`` 的返回序列（缺省恒 True）；
+        注意首个序列值被 pre-stop 就绪等待消费。
+        """
+        calls = {"pull": 0, "wait": 0}
+        monkeypatch.setattr(mod, "device_serial", lambda: "PC-R1")
+        monkeypatch.setattr(mod, "device_online", lambda: True)
+        monkeypatch.setattr(mod, "stop_task", lambda force=True: None)
+        monkeypatch.setattr(mod.time, "sleep", lambda _: None)
+
+        def fake_pull():
+            calls["pull"] += 1
+            if calls["pull"] <= pull_fail_times:
+                raise RuntimeError("设备离线（可能处重启窗口），未确认结果文件是否存在")
+            local = tmp_path / "powercycle_result.txt"
+            local.write_bytes(b"cycle 1/10 start\nfinished result=PASS\n")
+            return local
+
+        def fake_wait(_timeout_s):
+            calls["wait"] += 1
+            if wait_seq is None:
+                return True
+            idx = min(calls["wait"], len(wait_seq)) - 1
+            return wait_seq[idx]
+
+        monkeypatch.setattr(mod, "_pull_result_file", fake_pull)
+        monkeypatch.setattr(mod, "_wait_device_online", fake_wait)
+        monkeypatch.setattr(mod, "results_dir", lambda project: tmp_path / "r")
+        return calls
+
+    def test_transient_offline_recovers(self, finish_mod_v104, monkeypatch, tmp_path):
+        """首次 pull 撞重启窗口失败 → 等设备就绪后重拉成功（#830 主场景）。"""
+        calls = self._patch(finish_mod_v104, monkeypatch, tmp_path, pull_fail_times=1)
+        out = finish_mod_v104._run({})
+        assert out["metrics"]["final_status"] == "PASS"
+        assert calls["pull"] == 2
+        # pre-stop 就绪等待 1 次 + 重试前复检 1 次
+        assert calls["wait"] == 2
+
+    def test_all_attempts_fail_raise_with_history(self, finish_mod_v104, monkeypatch, tmp_path):
+        """连续失败到上限 → raise 且保留最后一次原因与实际尝试次数。"""
+        calls = self._patch(finish_mod_v104, monkeypatch, tmp_path, pull_fail_times=99)
+        with pytest.raises(RuntimeError) as ei:
+            finish_mod_v104._run({})
+        msg = str(ei.value)
+        assert "尝试 3/3 次" in msg
+        assert "设备离线" in msg
+        assert calls["pull"] == 3
+
+    def test_wait_failure_stops_early(self, finish_mod_v104, monkeypatch, tmp_path):
+        """重试前等不回设备 → 早停，不再空拉（pre-stop 等待仍成功）。"""
+        calls = self._patch(
+            finish_mod_v104, monkeypatch, tmp_path, pull_fail_times=99,
+            wait_seq=[True, False],
+        )
+        with pytest.raises(RuntimeError) as ei:
+            finish_mod_v104._run({})
+        assert "尝试 1/3 次" in str(ei.value)
+        assert calls["pull"] == 1
+
+    def test_collect_attempts_param_respected(self, finish_mod_v104, monkeypatch, tmp_path):
+        calls = self._patch(finish_mod_v104, monkeypatch, tmp_path, pull_fail_times=99)
+        with pytest.raises(RuntimeError):
+            finish_mod_v104._run({"collect_attempts": 2, "collect_retry_wait_seconds": 30})
+        assert calls["pull"] == 2
+
+    def test_missing_file_reports_offline_vs_absent(self, finish_mod_v104, monkeypatch):
+        """设备离线与「文件真不存在」诊断分离（离线不再误报文件缺失）。"""
+        monkeypatch.setattr(finish_mod_v104, "result_paths",
+                            lambda: ("/sdcard/x/powercycle_result.txt",))
+        monkeypatch.setattr(finish_mod_v104, "adb_shell", lambda cmd, timeout=30: "")
+        monkeypatch.setattr(finish_mod_v104, "device_online", lambda: False)
+        with pytest.raises(RuntimeError) as ei:
+            finish_mod_v104._pull_result_file()
+        assert "设备离线" in str(ei.value)
+        monkeypatch.setattr(finish_mod_v104, "device_online", lambda: True)
+        with pytest.raises(RuntimeError) as ei2:
+            finish_mod_v104._pull_result_file()
+        assert "powercycle_result.txt" in str(ei2.value)
+        assert "设备离线" not in str(ei2.value)
 
 
 # ---------------------------------------------------------------------------

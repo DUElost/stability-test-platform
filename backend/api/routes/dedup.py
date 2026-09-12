@@ -588,17 +588,10 @@ async def trigger_merge(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """手动触发集中合并（按平台；带轮次过滤，#1077）。"""
-    from backend.models.enums import PlanRunStatus
-    from backend.models.plan_run import PlanRun
+    """手动触发集中合并（按平台；带轮次过滤，#1077）。
 
-    run = db.get(PlanRun, run_id)
-    if run is not None and run.status == PlanRunStatus.FAILED.value:
-        raise HTTPException(
-            status_code=409,
-            detail="PlanRun FAILED：按 ADR-0028 D2 不执行 merge/extract",
-        )
-
+    #697 / ADR-0028 D2：FAILED 终态允许手动 merge（自动链仍 skip）。
+    """
     from backend.models.plan_run_artifact import PlanRunArtifact
     from sqlalchemy import select
 
@@ -634,8 +627,9 @@ async def trigger_merge(
         run_id,
         scan_round_id=scan_round_id,
         round_started_at=round_started_at,
+        allow_failed=True,
     )
-    if not result:
+    if result != "ok":
         raise HTTPException(status_code=500, detail="merge failed (no _org.xls?)")
     return ok({
         "status": "ok",
@@ -656,22 +650,9 @@ def trigger_extract(
 
     按 merge Result.xls 引用的事件目录定位 15.4 上的事件目录 → 复制到
     `nfs_root/jira/{run_id}/` 供厂商 Jira 工具消费。
+
+    #697：FAILED 终态不再 409；无 merge 产物时仍 409（run merge first）。
     """
-    from backend.core.database import SessionLocal
-    from backend.models.enums import PlanRunStatus
-    from backend.models.plan_run import PlanRun
-
-    db = SessionLocal()
-    try:
-        run = db.get(PlanRun, run_id)
-    finally:
-        db.close()
-    if run is not None and run.status == PlanRunStatus.FAILED.value:
-        raise HTTPException(
-            status_code=409,
-            detail="PlanRun FAILED：按 ADR-0028 D2 不执行 extract",
-        )
-
     from backend.services.dedup_extract import run_extract_sync
 
     extracted = run_extract_sync(run_id)
