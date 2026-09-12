@@ -251,9 +251,21 @@ def test_run_merge_sync_skips_failed_plan_run(db_session, sample_plan_run, monke
         raise AssertionError("merge tool must not be resolved for a FAILED PlanRun")
 
     with patch.object(ds, "resolve_scan_tool", side_effect=_must_not_resolve_tool):
-        assert ds.run_merge_sync(sample_plan_run.id) == ""
+        assert ds.run_merge_sync(sample_plan_run.id) == "skipped_failed"
     # P1：跳过路径计数（failed_plan_run 是预期门禁，计数不告警）
     failed_counter.inc.assert_called_once_with()
+
+
+def test_run_merge_sync_allow_failed_does_not_skip(db_session, sample_plan_run, monkeypatch):
+    """#697: 手动 allow_failed=True 时 FAILED 不再短路。"""
+    from backend.models.enums import PlanRunStatus
+
+    sample_plan_run.status = PlanRunStatus.FAILED.value
+    db_session.commit()
+
+    with patch.object(ds, "resolve_scan_tool", return_value=None):
+        # 越过 FAILED 门禁后，缺工具仍返回空串（非 skipped_failed）
+        assert ds.run_merge_sync(sample_plan_run.id, allow_failed=True) == ""
 
 
 def test_run_merge_sync_skips_when_tool_not_configured(

@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional, Set
 
 from ..watcher.contracts import ContractViolation
 from .mobilelog import make_adb_pull_fn
+from .extraction_slot import host_extraction_slot
 from .paths import get_aee_local_root
 from .reconciler import (
     ReconcilerStats,
@@ -242,6 +243,11 @@ class UnisocUniviewReconciler:
 
     def _pull_event_dir(self, remote_dir: str, local_dir: Path) -> bool:
         """Pull remote event directory; flatten ``adb pull`` nested basename if needed."""
+        # #740: share host extraction budget with MTK processor pulls
+        with host_extraction_slot(purpose=f"unisoc:{self._serial}"):
+            return self._pull_event_dir_unlocked(remote_dir, local_dir)
+
+    def _pull_event_dir_unlocked(self, remote_dir: str, local_dir: Path) -> bool:
         local_dir.mkdir(parents=True, exist_ok=True)
         staging = local_dir.parent / f".pulling_{local_dir.name}"
         if staging.exists():

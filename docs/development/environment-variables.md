@@ -45,6 +45,7 @@
 | `STP_CONTROL_PLANE_NODE_JOB` | 左栏控制面 node exporter 的 Prometheus job（默认 `file-server`；旧名 `STP_FILE_SERVER_NODE_JOB` 已删除，#289） |
 | `STP_STORAGE_NODE_JOB` | 右栏中心存储机 node exporter 的 Prometheus job（默认未设→同源；分源后必设，如 `storage-server`） |
 | `STP_AEE_LOCAL_ROOT` | Agent **本机** L1 AEE 根（按机配置；hot-update **不下发**，见 #235） |
+| `STP_AEE_MAX_CONCURRENT_PULLS` | Agent only。主机级 AEE/`adb pull`+mobilelog/bugreport 并发槽（**默认 2**，#740）。机械盘宿主机保持小值；SSD 可酌情上调。hot-update **不下发**（按机 I/O 能力） |
 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` | Agent only。上送成功后删本机事件目录并标 `PRUNED`（**默认 0**）。**禁止** fleet 同步（#217）：hot-update 仅下发 `_FLEET_ENV_KEYS` allowlist（`hot_update_env_overrides()`），本键不在列表中，控制面误设也不会进 payload。风险：CIFS 事后不可读时本地已无副本。灰度：单机改 Agent `.env` + `reload_config` |
 | `STP_BACKEND_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：后端 merge/scan 工具路径（#518 起不再回落旧无前缀键） |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅 Agent**：Agent 侧 scan 工具路径（hot-update 经 `STP_AGENT_*` 源键写入） |

@@ -793,6 +793,23 @@ async def merge_task(
         raise
     logger.info("saq_merge_done plan_run=%d", plan_run_id)
 
+    # #697: FAILED 自动 skip 与工具真失败分离——前者写 upload_summary 后正常结束。
+    if result == "skipped_failed":
+        upload_summary = await asyncio_to_thread(_summarize_upload_sync, plan_run_id)
+        upload_summary["ready"] = False
+        upload_summary["incomplete_reason"] = "merge_skipped_failed_plan_run"
+        await asyncio_to_thread(
+            _write_run_context_sync,
+            plan_run_id,
+            "upload_summary",
+            upload_summary,
+        )
+        logger.info(
+            "saq_merge_skipped_failed_plan_run plan_run=%d — upload_summary written",
+            plan_run_id,
+        )
+        return
+
     if result != "ok":
         # #1527: merge 全平台失败（result="" 非 "ok"）不得静默 return——
         # SAQ 视 job 成功、extract 永不入队、PlanRun 永久 RUNNING，且日志仅
