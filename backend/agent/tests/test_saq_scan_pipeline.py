@@ -741,8 +741,12 @@ async def test_merge_task_enqueues_extract_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_merge_task_skips_extract_when_merge_skipped(monkeypatch):
-    """merge_task should not wait or enqueue extract when merge skipped."""
+async def test_merge_task_raises_when_merge_all_platforms_failed(monkeypatch):
+    """#1527: merge 全失败（result=""）必须 raise，且不得 wait/enqueue extract。
+
+    旧实现静默 return：SAQ 视成功、PlanRun 永久 RUNNING。现改为 ERROR +
+    RuntimeError，与同函数异常路径对齐。
+    """
     from backend.tasks import saq_tasks
 
     wait_remote = AsyncMock()
@@ -760,7 +764,8 @@ async def test_merge_task_skips_extract_when_merge_skipped(monkeypatch):
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
              patch("saq.Job") as mock_job_cls:
-            await saq_tasks.merge_task({}, plan_run_id=42)
+            with pytest.raises(RuntimeError, match="merge all platforms failed"):
+                await saq_tasks.merge_task({}, plan_run_id=42)
 
     wait_remote.assert_not_awaited()
     count_remote.assert_not_awaited()

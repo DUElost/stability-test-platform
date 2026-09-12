@@ -13,7 +13,7 @@ from backend.api.schemas.run import (
     LogArtifactIn, LogArtifactOut,
     TaskOut, RunOut, RunUpdate, RunCompleteIn, RunAgentOut,
     RunStepCreate, RunStepUpdate, RunStepOut,
-    RiskAlertOut, RunReportOut, JiraDraftOut,
+    RiskAlertOut, RunReportOut, JiraDraftOut, JiraDraftListItemOut,
     RiskSummaryCounts, RunRiskSummaryOut,
 )
 from backend.api.schemas.agent import (
@@ -131,6 +131,7 @@ __all__ = [
     "RiskAlertOut",
     "RunReportOut",
     "JiraDraftOut",
+    "JiraDraftListItemOut",
     "RiskSummaryCounts",
     "RunRiskSummaryOut",
     "AgentLogQuery",

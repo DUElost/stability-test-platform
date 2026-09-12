@@ -90,15 +90,15 @@ export default function EditProjectDialog({
       const trimmed = value?.trim();
       return trimmed ? trimmed : null;
     };
-    if (onRename && projectKey.trim() !== project.project_key) {
-      onRename(projectKey.trim());
-      return;
-    }
-    onSubmit({
+    const payload = {
       display_name: displayName,
       customer: blankToNull(form.customer),
       jira_project_key: blankToNull(form.jira_project_key),
-    });
+    };
+    onSubmit(payload);
+    if (onRename && projectKey.trim() !== project.project_key) {
+      onRename(projectKey.trim());
+    }
   };
 
   return (
