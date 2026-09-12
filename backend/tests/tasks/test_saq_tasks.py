@@ -510,29 +510,32 @@ async def test_merge_task_mark_timeout_sets_ready_false_despite_pending_zero(mon
         return True  # pending==0 假阳
 
     async def _to_thread(fn, *args, **kwargs):
+        # #1497: exclusive 路径提交的是 _guarded_call；必须真正调用它才能释放
+        # 互斥。merge 本体在下方 patch，其余仍按身份短路写盘侧效果。
         if fn is saq_tasks._summarize_upload_sync:
             return {"total": 2, "local": 2, "pending": 0, "remote": 0}
         if fn is saq_tasks._write_run_context_sync:
             written["section"] = args[1]
             written["value"] = args[2]
             return None
-        if callable(fn):
-            return "ok"
-        return None
+        return fn(*args, **kwargs)
 
     monkeypatch.setattr(saq_tasks, "_wait_for_upload_mark", _mark_timeout)
     monkeypatch.setattr(saq_tasks, "_wait_for_remote_device_log_events", _events_ready)
     monkeypatch.setattr(saq_tasks, "asyncio_to_thread", _to_thread)
-    monkeypatch.setattr(saq_tasks.asyncio, "to_thread", AsyncMock(return_value="ok"))
     monkeypatch.setattr(saq_tasks, "_count_remote_device_log_events", AsyncMock(return_value=0))
     monkeypatch.setattr(saq_tasks, "_enqueue_extract_task", AsyncMock())
 
-    await saq_tasks.merge_task(
-        {},
-        plan_run_id=42,
-        scan_round_id="round-NEW",
-        round_started_at="2026-09-08T12:00:00+00:00",
-    )
+    with patch(
+        "backend.services.dedup_scan.run_merge_all_platforms_sync",
+        return_value="ok",
+    ):
+        await saq_tasks.merge_task(
+            {},
+            plan_run_id=42,
+            scan_round_id="round-NEW",
+            round_started_at="2026-09-08T12:00:00+00:00",
+        )
 
     assert written["section"] == "upload_summary"
     assert written["value"]["ready"] is False

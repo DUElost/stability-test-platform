@@ -38,3 +38,6 @@ Class: bug-fix
 ## Revisit
 
 多副本下进程内 guard 仍不跨进程（#1123 Revisit）；本单只闭合取消交错。
+凡 stub `asyncio_to_thread` 且会撞上 `_guarded_call` 的用例：必须真正调用
+wrapper（并 patch merge），或直接 mock `_run_sync_exclusive`；不得对 wrapper
+blanket 返回而不释放互斥。
