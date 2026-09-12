@@ -26,7 +26,9 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
       Verification/Revisit）齐备（#1299）
   S11 AGENTS.md 硬不变量锚点逐条在场（防整条删除/改写静默丢失——S4 同模式）
   S12 ADR 索引一致性：头部状态行 ↔ adr/README 主表/DOC-MAP/M7 看板（status 词级
-      + 规范位版本），头部行 ↔ 版本记录块末项（#861/#867 五次复发后的确定性收口）
+      + 规范位版本），头部行 ↔ 版本记录块末项（#861/#867 五次复发后的确定性收口）；
+      **头部状态行自身必须在场且可解析**（#1524：此前键位粗体/表格形态会让取行
+      失败 → 该 ADR 静默退出全部索引校验）
 
 用法:
     python tools/dev/check_governance_surface.py --check     # 门禁模式
@@ -398,6 +400,31 @@ def check_adr_surface_sync(
     return issues
 
 
+def check_adr_status_line_present(num: str, status_line: str | None) -> list[str]:
+    """S12: ADR 头部状态行必须在场且可解析（#1524）。
+
+    两个盲区此前都表现为**静默跳过**：`- **状态**：`（键位粗体——那是执行契约文档
+    的形态，归 S13；ADR 不适用）与表格形态 `| Status | Accepted |` 都让取行失败 →
+    ``header_status=None`` → 「不在场不约束」使该 ADR 退出**全部**索引一致性校验，
+    却不留任何信号（ADR-0035 / ADR-0022 实测：两者各自静默无覆盖）。
+
+    故把「状态行在场且可解析」提升为 S12 的显式前提：缺行/不可解析即报，不再退化
+    成无信号。规范写法 `- 状态：<Proposed|Accepted|Superseded|Deprecated>`。
+    """
+    if status_line is None:
+        return [
+            f"S12 ADR-{num}: 缺头部状态行（或形态不可取行：键位粗体 `- **状态**：` / "
+            "表格 `| Status |` 都会取行失败）——会静默退出全部索引一致性校验；"
+            "规范写法 `- 状态：<Proposed|Accepted|Superseded|Deprecated>`"
+        ]
+    if not _ADR_STATUS_LINE.match(status_line.strip()):
+        return [
+            f"S12 ADR-{num}: 头部状态行不可解析：{status_line.strip()[:60]!r}"
+            "——需为 `- 状态：<Proposed|Accepted|Superseded|Deprecated>`"
+        ]
+    return []
+
+
 # S13: 执行契约版本一致性（#1238 增）。执行契约不是 ADR，S12 不覆盖它——
 # 但「头部 Living vX.Y ↔ 它自己的版本记录首项 ↔ 附录 ↔ DOC-MAP 行」是同一类
 # 漂移面，且已复发三次（2026-09-07 七日审计发现 5 残面 / v1.4 note 收口存量
@@ -556,9 +583,10 @@ GATE_TO_CI_ANCHOR = {
     "pr-migrate": ("ci.yml", "Migrate empty PostgreSQL database"),
     # public 仓库内网主机地址扫描（#538 收尾）——锚点即 ci.yml 中该 step 的 name
     "ip-leak": ("ci.yml", "内网主机地址检查"),
-    # Prometheus 告警规则契约（#1257/R14-F11）——锚点即 ci.yml pr-agent-tests
-    # job 中该 step 的 name（与 lock 卫生测试同理由前移：纯离线、随 lock 可跑）
-    "prom-alerts": ("ci.yml", "Prometheus 告警规则契约"),
+    # Prometheus 告警规则契约（#1257/R14-F11）——自 #1569 起并入 pr-agent-tests
+    # job 的「Run repo-level tests」离线子集 step（原独立 step 已删除）；
+    # 锚点即该 step 的 name（前移理由同 lock 卫生测试：纯离线、随 lock 可跑）
+    "prom-alerts": ("ci.yml", "Run repo-level tests"),
     "agent-tests": ("ci.yml", "Run agent tests"),
     # check:full 级——CI 对应物在 backend-test / frontend-check / docker-build job
     "backend-tests": ("ci.yml", "Run backend tests"),
@@ -808,6 +836,7 @@ def run_check() -> int:
                 parse_adr_status_line(status_line) if status_line else (None, None)
             )
             num = fn[4:8]
+            issues += check_adr_status_line_present(num, status_line)
             issues += check_adr_surface_sync(
                 num,
                 header_status,
@@ -1202,6 +1231,18 @@ def run_self_test() -> int:
         ),
         True,
     )
+
+    # S12（#1524）：头部状态行须在场且可解析——键位粗体 / 表格形态此前静默退出校验
+    assert parse_adr_status_line("- **状态**：Accepted") == (None, None)  # 根因：ADR 正则不认键位粗体
+    expect("S12 规范状态行不报",
+           lambda: check_adr_status_line_present(
+               "0035", "- 状态：Accepted v1.2（2026-09-10 修订）"), False)
+    expect("S12 键位粗体状态行取不到行 → 报",
+           lambda: check_adr_status_line_present("0035", None), True)
+    expect("S12 表格形态（无状态行）→ 报",
+           lambda: check_adr_status_line_present("0022", None), True)
+    expect("S12 状态行在场但不可解析 → 报",
+           lambda: check_adr_status_line_present("0099", "- 状态说明：Accepted"), True)
 
     # S13（#1238 增）：执行契约版本一致性——状态行 ↔ 版本记录首项 / 附录 / DOC-MAP
     _c_head = "- **状态**：Living v1.2（唯一权威源。v1.2 变更：分层。v1.1 变更：旧）\n"

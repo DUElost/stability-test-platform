@@ -42,7 +42,12 @@ jobs:
     env:
       TESTING: "1"
       JWT_SECRET_KEY: "ci-test-secret-key"
-      DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
+      # #1547：DATABASE_URL 刻意**不放在 job 级**。它与 TEST_DATABASE_URL 指向同一个
+      # 容器库，会让 backend/tests/conftest.py 在导入期触发 db_url_guard 的「与运行时
+      # 配置同库」拒绝（pytest exit 4；且后端测试一失败，同 job 的 agent / 仓库级
+      # 测试就因 if: success() 全部 skipped）。
+      # 该护栏保护的是开发机与生产上的应用库，CI 的一次性容器库不属此列；确实需要
+      # DATABASE_URL 的两处（alembic migrate、agent 测试）改为步骤级注入，值同下。
       TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -63,6 +68,11 @@ jobs:
         run: python -m compileall backend/ tools/ scripts/ -q
       - name: Migrate empty PostgreSQL database
         working-directory: backend
+        env:
+          # alembic 经 env_source 解析 DATABASE_URL；此处显式指向测试库，
+          # 与 job 级「不设 DATABASE_URL」配合——迁移仍作用于 pytest 将要
+          # 使用的同一个库，测试因此跑在迁移后的 schema 上（#1547）。
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
         run: python -m alembic upgrade head
       # 覆盖率:三段 pytest 用 --cov-append 累加,最后一段统一出报告。
       # **只度量不设阈值** —— 没有 --cov-fail-under。当前水位还没摸清就设底线,
@@ -72,6 +82,10 @@ jobs:
       - name: Run backend tests
         run: python -m pytest backend/tests/ -v --cov=backend
       - name: Run agent tests
+        env:
+          # 部分 agent 测试模块在 import 期解析 DATABASE_URL（不真正连接）；
+          # job 级已刻意不设（见上方 #1547），这里按需注入。
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
         run: python -m pytest backend/agent/tests/ -v --cov=backend --cov-append
       # 根 tests/ 也在 pytest.ini 的 testpaths 里(迁移升级 + 部署脚本契约),
       # 此前从未在 CI 跑过。test_repo_layout.py 现在会守住这条对应关系。
@@ -252,20 +266,28 @@ jobs:
         run: pip install --require-hashes -r backend/requirements-dev.lock
       - name: Run agent tests
         run: python -m pytest backend/agent/tests/ -q
-      # 两份 lock 卫生测试前移到 PR 路径：改 requirements(.dev).txt 而未重生成
-      # lock 的失败此前只在夜间 backend-test 才红（2026-08-30/08-31/09-01 三次
-      # 全量失败中的两次即此形态，main 最长红了 14 小时）。32 例纯离线
-      # （无 DB/网络），实测 <1s，不破合并路径 ~2 分钟预算。只挑这两个文件，
-      # 不整目录搬：tests/ 其余文件与迁移/部署契约耦合，需 PG 的依赖归夜间。
-      - name: Run lock hygiene tests
-        run: python -m pytest tests/test_requirements_lock.py tests/test_requirements_dev_lock.py -q
-
-      # Prometheus 告警规则契约（#1257/R14-F11）：规则选择器与 backend 指标
-      # 注册表逐条比对（未知指标/标签、直方图裸用基础名即红）；promtool 可用时
-      # 追加场景触发测试（runner 无 promtool → 该子项 skip，结构层恒跑）。
-      # 与 lock 卫生测试同理由前移：纯离线 <1s，随 backend 依赖 lock 即可跑。
-      - name: Prometheus 告警规则契约
-        run: python -m pytest tests/test_prometheus_alerts_contract.py -q
+      # 根 tests/ 的**离线子集**前移到 PR 路径（#1569，取代此前的 lock 卫生 +
+      # Prometheus 契约两个逐步挑选的 step）：
+      #
+      # 为什么：此前只挑了 3 个文件（lock 卫生 ×2 + Prometheus 契约），其余全部
+      # 依赖夜间兜底。而夜间兜底自身会红（#1547 收集期 ImportError 全跳过），
+      # 于是 tests/ 实际**没有任何自动防线**——#1541 的两例红测试即由此随 #1482
+      # 静默进 main（同窗口任何 tests/ 回归都是同一形态）。
+      #
+      # 为什么能整目录搬：原注释称「tests/ 其余文件与迁移/部署契约耦合」经实测
+      # **不成立**——`tests/` 除 test_alembic_upgrade.py 外全部纯离线，177 例
+      # 7.6s（无 DATABASE_URL/TEST_DATABASE_URL 亦可跑）。判据仍是既有的
+      # 「纯离线 + 秒级」，只是按实测把范围放大到实际满足判据的全集。
+      #
+      # 为什么排除 test_alembic_upgrade.py：真实起 postgres:16 testcontainer
+      # （~5-6s）且**无 skip 兜底**——runner 无 docker 时会硬失败，归夜间
+      # backend-test（那条路径本就有 PG service）。排除按文件名而非目录，
+      # 新增文件默认进入 PR 路径，避免「新文件默认无人看守」重现本单缺口。
+      - name: Run repo-level tests
+        run: |
+          python -m pytest tests/ -q \
+            --ignore=tests/test_alembic_upgrade.py \
+            -p no:cacheprovider
 
   # #510 教训（P0-2）：空库迁移守卫。独立 required check——上线即炸的空库
   # 迁移回归在 PR 上必拦；成本 ~1 分钟（含依赖安装），不跑整套 backend/tests。
