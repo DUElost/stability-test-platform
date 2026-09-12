@@ -57,6 +57,59 @@ def test_build_argv_uses_scan_root_sprd_and_poll_interval(monkeypatch):
     ]
 
 
+class TestPollSecondsBadConfig:
+    """#754：STP_UNISOC_LOG_SCAN_POLL_SECONDS 误配不得杀死 scan 队列 worker。"""
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["not-a-number", "60s", " ", "", "-5", "0", "1.5"],
+    )
+    def test_bad_value_falls_back_to_default(self, monkeypatch, raw):
+        monkeypatch.setenv("STP_UNISOC_LOG_SCAN_POLL_SECONDS", raw)
+        assert UnisocScanRunner._poll_seconds() == 60
+
+    def test_missing_value_falls_back_to_default(self, monkeypatch):
+        monkeypatch.delenv("STP_UNISOC_LOG_SCAN_POLL_SECONDS", raising=False)
+        assert UnisocScanRunner._poll_seconds() == 60
+
+    def test_valid_value_is_honoured(self, monkeypatch):
+        monkeypatch.setenv("STP_UNISOC_LOG_SCAN_POLL_SECONDS", "45")
+        assert UnisocScanRunner._poll_seconds() == 45
+
+    def test_bad_value_does_not_raise_from_build_argv(self, monkeypatch):
+        monkeypatch.setenv("STP_UNISOC_LOG_SCAN_POLL_SECONDS", "not-a-number")
+        runner = UnisocScanRunner.instance()
+        runner.configure(
+            scan_tool_python="/usr/bin/python3",
+            scan_tool_script="/tools/scan_log_gt.py",
+            result_python="/usr/bin/python3",
+            result_script="/tools/scan_result.py",
+            force=True,
+        )
+        argv = runner._build_argv(scan_root="/tmp/x")
+        assert argv[-1] == "60"
+
+    def test_bad_value_does_not_raise_from_run_log_scan_gt(self, monkeypatch, tmp_path):
+        """回归：#754 原始故障——int() 打穿 _run_log_scan_gt。"""
+        import subprocess as sp
+
+        monkeypatch.setenv("STP_UNISOC_LOG_SCAN_POLL_SECONDS", "not-a-number")
+        runner = UnisocScanRunner.instance()
+        runner.configure(
+            scan_tool_python="/usr/bin/python3",
+            scan_tool_script="/tools/scan_log_gt.py",
+            result_python="/usr/bin/python3",
+            result_script="/tools/scan_result.py",
+            force=True,
+        )
+        monkeypatch.setattr(
+            "backend.agent.unisoc_scan_runner.subprocess.run",
+            lambda *a, **k: sp.CompletedProcess(args=a[0] if a else [], returncode=0),
+        )
+        # 修复前：ValueError 逃逸（进而杀死 worker 线程）；修复后：正常返回
+        assert runner._run_log_scan_gt(str(tmp_path), 1, "host") is True
+
+
 class TestTimeoutArtifactIntegrity:
     """#805-5：超时终止后的半成品不得冒充完整产物上送。"""
 
