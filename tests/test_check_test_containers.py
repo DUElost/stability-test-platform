@@ -86,7 +86,7 @@ class TestMainFlow:
 
     def test_dry_run_reports_and_exits_zero(self, capsys):
         runner, calls = self._runner([_c(300, name="stale1")])
-        rc = _mod.main([], runner=runner)
+        rc = _mod.main([], runner=runner, now=NOW)
         out = capsys.readouterr().out
         assert rc == 0
         assert "疑似残留 1" in out and "docker rm -f" in out
@@ -94,11 +94,11 @@ class TestMainFlow:
 
     def test_strict_exits_one_when_stale(self):
         runner, _ = self._runner([_c(300)])
-        assert _mod.main(["--strict"], runner=runner) == 1
+        assert _mod.main(["--strict"], runner=runner, now=NOW) == 1
 
     def test_recent_only_is_not_stale(self):
         runner, _ = self._runner([_c(10)])
-        assert _mod.main(["--strict"], runner=runner) == 0
+        assert _mod.main(["--strict"], runner=runner, now=NOW) == 0
 
     def test_prune_removes_only_stale(self):
         stale, recent = _c(300, name="stale1"), _c(5, name="recent1")
@@ -112,7 +112,7 @@ class TestMainFlow:
                 return ""
             return runner(args)
 
-        rc = _mod.main(["--prune"], runner=prune_runner)
+        rc = _mod.main(["--prune"], runner=prune_runner, now=NOW)
         assert rc == 0
         assert removed == [stale.cid], "只清残留、不动近期容器"
 
@@ -120,12 +120,12 @@ class TestMainFlow:
         def runner(args):
             return ""
 
-        assert _mod.main([], runner=runner) == 0
+        assert _mod.main([], runner=runner, now=NOW) == 0
         assert "未发现 testcontainer" in capsys.readouterr().out
 
     def test_docker_missing_exits_two(self, capsys):
         def runner(args):
             raise FileNotFoundError("docker")
 
-        assert _mod.main([], runner=runner) == 2
+        assert _mod.main([], runner=runner, now=NOW) == 2
         assert "docker 不可用" in capsys.readouterr().err
