@@ -43,21 +43,52 @@ def normalize_async_database_url(database_url: str) -> str:
     return database_url
 
 
+def _pool_env_int(name: str, default: int) -> int:
+    """连接池容量 env 读取（#1516）。
+
+    非法值/非正值回退默认：连接池容量误配（0、负数、拼写错误）比回退默认更危险
+    ——`pool_size=0` 会让每次借连接都直接抛 `QueuePool limit ... reached`。
+    """
+    raw = (os.getenv(name) or "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _pool_capacity_kwargs() -> Dict[str, object]:
+    """同步/异步引擎共用的池容量参数（同源 env 驱动，默认 30 / 60 / 1800）."""
+    return {
+        "pool_size": _pool_env_int("STP_DB_POOL_SIZE", 30),
+        "max_overflow": _pool_env_int("STP_DB_MAX_OVERFLOW", 60),
+        "pool_recycle": _pool_env_int("STP_DB_POOL_RECYCLE", 1800),
+    }
+
+
 def get_async_engine_kwargs(database_url: str) -> Dict[str, object]:
     if is_sqlite_url(database_url):
         return {}
     return {
         "pool_pre_ping": True,
-        "pool_size": 30,
-        "max_overflow": 60,
-        "pool_recycle": 1800,
+        **_pool_capacity_kwargs(),
     }
 
 
 def get_sync_engine_kwargs(database_url: str) -> Dict[str, object]:
+    """同步引擎 kwargs（#1516）。
+
+    同步池原先只设 ``pool_pre_ping``，容量回退 SQLAlchemy ``QueuePool`` 默认
+    ``5 + 10 = 15``；而共享该池的是 12 个 APScheduler 周期任务、SAQ 默认并发 10
+    与 84 处 ``SessionLocal()`` 调用点。触顶后经
+    ``leader_election`` 的 fail-closed 设计会连锁跳过全部 singleton 调度
+    （Recycler / Reconciler / Watchdog），作业卡在 RUNNING/UNKNOWN 无自愈出口。
+    异步池独立，带宽裕救不了同步侧，故两侧同源 env 驱动、默认同值。
+    """
     kwargs: Dict[str, object] = {"future": True}
     if not is_sqlite_url(database_url):
         kwargs["pool_pre_ping"] = True
+        kwargs.update(_pool_capacity_kwargs())
     return kwargs
 
 

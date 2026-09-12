@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import func, or_, select
 
@@ -221,6 +223,41 @@ async def check_and_fire_schedules() -> None:
 AUTO_ARCHIVE_INTERVAL = int(os.getenv("AUTO_ARCHIVE_POLL_INTERVAL_SECONDS", "120"))
 
 
+def purge_run_storage_dirs(run_ids: list) -> set:
+    """#1521: 删除这些 PlanRun 的 NFS 目录（`devices/{id}/` 与 `dedup/{id}/`）。
+
+    DB 行是「哪些目录属于此 run」的唯一索引——必须在删行**之前**清理，
+    否则行删后目录永不可回溯（R-01 盘满链：DB 轨有 TTL、NFS 轨无 TTL）。
+    返回删除失败的 run_id 集合（调用方应从本批 DB 删除中剔除，下轮重试
+    文件清理——先文件后行的顺序保证失败可自愈）。
+    """
+    from backend.core.storage_root import resolve_shared_storage_root
+
+    root = resolve_shared_storage_root()
+    if not root:
+        logger.warning("nfs_retention_skipped_root_unset")
+        return set()
+
+    base = Path(root)
+    failed: set = set()
+    removed = 0
+    for run_id in run_ids:
+        for sub in ("devices", "dedup"):
+            target = base / sub / str(int(run_id))
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target)
+                    removed += 1
+            except Exception:
+                failed.add(run_id)
+                logger.warning(
+                    "nfs_retention_purge_failed dir=%s", target, exc_info=True,
+                )
+    if removed:
+        logger.info("nfs_retention_purged dirs=%d failed_runs=%d", removed, len(failed))
+    return failed
+
+
 def run_retention_cleanup() -> None:
     """Delete completed PlanRuns older than PLAN_RUN_RETENTION_DAYS (ADR-0020).
 
@@ -303,6 +340,21 @@ def run_retention_cleanup() -> None:
                 return
 
             # Subquery: job IDs belonging to safely-deletable PlanRuns
+            # #1521: NFS 轨回收——DB 行删除前先清 `devices/{id}/` 与
+            # `dedup/{id}/`（行是目录的唯一索引）；文件删除失败的 run 剔除出
+            # 本批 DB 删除，下轮重试（先文件后行，失败可自愈）。
+            purge_failed = purge_run_storage_dirs(safe_run_ids)
+            if purge_failed:
+                safe_run_ids = [
+                    rid for rid in safe_run_ids if rid not in purge_failed
+                ]
+                if not safe_run_ids:
+                    logger.warning(
+                        "retention_cleanup deferred: all %d candidates have "
+                        "unpurged NFS dirs", len(purge_failed),
+                    )
+                    return
+
             stale_job_ids = select(JobInstance.id).where(
                 JobInstance.plan_run_id.in_(safe_run_ids)
             )

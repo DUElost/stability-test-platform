@@ -11,6 +11,7 @@
 | 变量 | 说明 |
 |------|------|
 | `DATABASE_URL` | PostgreSQL（async 驱动用 `postgresql+asyncpg://`；同步去掉 `+asyncpg`） |
+| `STP_DB_POOL_SIZE` / `STP_DB_MAX_OVERFLOW` / `STP_DB_POOL_RECYCLE` | 连接池容量（默认 `30` / `60` / `1800`）；**同步与异步引擎同源驱动**，改一处两侧同步（#1516） |
 | `REDIS_URL` | SAQ broker；开启 `STP_SOCKETIO_REDIS_ADAPTER` 时兼作 SocketIO pub/sub（**不**存业务数据） |
 | `STP_SOCKETIO_REDIS_ADAPTER` | `1`=挂载 `AsyncRedisManager`（多实例 room fan-out）；默认 `0`（ADR-0027 P3-2）。**启用前读 ADR-0027 清单第 6 条**：RunConsole 依赖功能（dedup 串行 / 安装 console / 助手 console / console 房间）仍为单实例语义（#1114） |
 | `STP_SOCKETIO_REDIS_CHANNEL` | Redis pub/sub channel 前缀（默认 `stp-socketio`） |
