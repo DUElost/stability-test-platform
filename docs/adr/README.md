@@ -86,6 +86,8 @@
 | [ADR-0035](./ADR-0035-agent-host-identity.md) | Agent 主机身份与凭据体系（R02-R01/#906） | Accepted | P1 | — | v1.2：**触发条件检测来源**（§6.1 四条触发各自钉到信号来源/检出方/命中后第一步——原四条全依赖外部信号，无来源映射即无人监视）；v1.1：**决策四段化**——§3 当前状态（接受共享 AGENT_SECRET + 威胁模型/冒充面收窄）/ §4 目标形态（A 每主机凭据）/ §5 迁移路径（C 注册质询 + 实施骨架）/ §6 升级触发条件；**ADR Accepted ≠ 实施已启动**，实施单另行拆分；由两份竞争提案 #1147（当前状态）+ #1163/#1170（目标形态）合并为单一权威 |
 | [ADR-0036](./ADR-0036-notification-delivery-semantics.md) | 通知投递语义契约（Notification Delivery Semantics Contract） | **Accepted** | P2 | M7 | v1.0 定稿（2026-09-11，R11 #1117/#1120/#1122，台账 #1125）：定义 How delivery behaves——`ACCEPTED` = 渠道明确接受请求（≠ DELIVERED）/ 三态失败 `REJECTED_PERMANENT`·`REJECTED_TRANSIENT`·`UNKNOWN` / 网络投递必须有 deadline / 重试由 SAQ 唯一负责且**投递级幂等为成对硬约束** / at-least-once + 每通道去重键 / 投递事实必须落 DB / 同步仅限管理员连通性测试；协议状态码与 retry 参数**不入正文**；挂起端到端送达回执与入站契约。与 ADR-0011 分工 What vs How |
 | [ADR-0037](./ADR-0037-agent-host-privilege-boundary.md) | Agent 主机提权边界（Privilege Boundary Wrapper） | **Proposed** | P1 | M7 | v0.1 初版（R14-F04 #1250，台账 #1266，待 R02 联审）：D1 单一提权入口 `/usr/local/sbin/stp-agent-priv`（root:root，不在 Agent 可写目录）+ sudoers 只授 wrapper 与固定 systemctl；D2 子命令白名单 + 路径/属主/内容校验（`chown -h`、`--safe-links`、mtbf exclude+protect）；D3 存量迁移由 install 链与 `update_agent.yml` bootstrap 重写 sudoers，迁移期热更新 legacy fallback + `priv_mode` 哨兵；D4 不动 Ansible 密码 become / 不引 per-host 凭据（ADR-0035 实施面） |
+| [ADR-0038](./ADR-0038-host-retirement-semantics.md) | 主机退役语义（Host Retirement Semantics） | **Proposed** | P2 | M7 | v0.1 初版（#796/#937 Revisit 触发）：D1 `retired_at` 单一生命周期真源（additive nullable，不新增 HostStatus）；D2 retire/unretire 独立入口，`DELETE` 预检原样；D3 退役即终态，不提供带历史硬删；D4 生命周期与存活正交——心跳如实记录 + 保持退役 + 单次告警；D5 派发/认领/统计/列表/控制面五面收口；D6 同 IP 换机 = 同身份 unretire（ADR-0035 落地后重审） |
+
 ## Proposed 里程碑看板（2026 上半年）
 
 | 里程碑 | 目标日期 | 包含 ADR |

@@ -809,6 +809,10 @@ def recycle_once() -> None:
     # 1) PENDING timeout — only jobs whose host has *no* RUNNING work.
     #    Excess PENDING behind Agent parallel capacity must stay queued
     #    (FIFO claim when slots free), not fail as pending_timeout.
+    # #791: per-tick skip set — mark/aggregate failures that leave the row
+    # PENDING (savepoint rollback) must not be re-selected forever in this
+    # while True; otherwise recycle_once never returns and stalls the fleet.
+    pending_skip_ids: set[int] = set()
     while True:
         with SessionLocal() as db:
             running_job = aliased(JobInstance)
@@ -818,7 +822,7 @@ def recycle_once() -> None:
                     running_job.status == JobStatus.RUNNING.value,
                 )
             )
-            batch = (
+            pending_q = (
                 db.query(JobInstance)
                 .filter(
                     JobInstance.status == JobStatus.PENDING.value,
@@ -828,6 +832,13 @@ def recycle_once() -> None:
                         ~host_has_running_job,
                     ),
                 )
+            )
+            if pending_skip_ids:
+                pending_q = pending_q.filter(
+                    ~JobInstance.id.in_(pending_skip_ids),
+                )
+            batch = (
+                pending_q
                 .order_by(JobInstance.id)
                 .limit(RECYCLER_BATCH_SIZE)
                 .all()
@@ -844,6 +855,7 @@ def recycle_once() -> None:
                         )
                     deferred_aggregate = changed
                 except Exception as exc:
+                    pending_skip_ids.add(job.id)
                     record_audit(
                         db,
                         action="job_terminalization_failed",
@@ -868,6 +880,7 @@ def recycle_once() -> None:
                         from backend.services.aggregator_sync import plan_aggregator_sync
                         plan_aggregator_sync(job, db)
                     except Exception as exc:
+                        pending_skip_ids.add(job.id)
                         record_audit(
                             db,
                             action="job_terminalization_failed",

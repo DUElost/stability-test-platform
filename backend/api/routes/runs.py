@@ -15,11 +15,12 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.api.schemas import JiraDraftOut, RunReportOut, RunStepOut
+from backend.api.schemas import JiraDraftListItemOut, JiraDraftOut, RunReportOut, RunStepOut
 from backend.api.routes.auth import get_current_active_user, User
-from backend.api.response import ok
+from backend.api.response import ApiResponse, ok
 from backend.core.artifact_paths import (
     ArtifactPathError,
     ArtifactPathNotFoundError,
@@ -210,6 +211,50 @@ def get_cached_jira_draft(
         report, project_key_override=_resolve_draft_project_key(db, run_id),
     )
     return ok(_model_to_dict(draft))
+
+
+@router.get(
+    "/runs/jira-drafts",
+    response_model=ApiResponse[List[JiraDraftListItemOut]],
+)
+def list_recent_jira_drafts(
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """最近带缓存 JIRA 草稿的 Job 列表（#1532）。
+
+    草稿是按完成 Job 稀疏生成的。若由调用方「取 N 条 PlanRun → 逐 Run 列 jobs
+    → 逐 Job 取草稿」，在无草稿的 Run 上内层短路不触发，会退化成
+    ``1 + N + Σ(每个 Run 的全部 Job)`` 次串行 404（单体 Run 可达设备数量级）。
+    本端点一次查询给出 Job 域草稿及其 PlanRun 归属，调用方无需自算扇出。
+
+    「已落草稿」判据是 ``post_processed_at IS NOT NULL`` + 取值非空，而不是
+    ``jira_draft_json IS NOT NULL``：SQLAlchemy 的 JSONB 默认
+    ``none_as_null=False``，Python ``None`` 落库是 JSON ``null`` 而非 SQL NULL，
+    ``IS NOT NULL`` 对只有时间戳、没有草稿的行同样成立。post_completion 两列
+    同时写，故以 post_processed_at 作缓存标记，取值真值在物化时兜底。
+    """
+    from backend.models.job import JobInstance
+
+    jobs = db.execute(
+        select(JobInstance)
+        .where(JobInstance.post_processed_at.is_not(None))
+        .order_by(JobInstance.post_processed_at.desc())
+        .limit(limit)
+    ).scalars().all()
+
+    return ok([
+        JiraDraftListItemOut(
+            job_id=job.id,
+            plan_run_id=job.plan_run_id,
+            draft=job.jira_draft_json,
+            ended_at=job.ended_at,
+            post_processed_at=job.post_processed_at,
+        )
+        for job in jobs
+        if job.jira_draft_json
+    ])
 
 
 # ── Steps ─────────────────────────────────────────────────────────────────────
