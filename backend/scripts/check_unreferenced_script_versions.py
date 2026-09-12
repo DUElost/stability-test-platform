@@ -21,6 +21,7 @@ import sys
 
 from sqlalchemy import create_engine, text
 
+from backend.core.database import normalize_sync_database_url
 from backend.core.env_source import resolve_database_url
 
 _QUERY = text(
@@ -48,7 +49,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     url, source = resolve_database_url()
-    engine = create_engine(url)
+    # resolve_database_url 给的是异步驱动 URL（生产库即 postgresql+asyncpg://），
+    # 直接交给同步 create_engine 会在首次连接时炸 MissingGreenlet（#735 §1.3）。
+    engine = create_engine(normalize_sync_database_url(url))
     try:
         with engine.connect() as conn:
             rows = compute_reference_counts(conn)
