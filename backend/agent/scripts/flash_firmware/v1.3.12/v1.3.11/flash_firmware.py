@@ -1,9 +1,5 @@
 """Flash firmware via SP Flash Tool (MTK platform).
 
-v1.3.12（#816）：host lock 打开改 os.open(O_NOFOLLOW)——低权限用户预置
-symlink 时明确拒绝，不再静默跟随截断 agent 可写文件（对齐 flash_preflight
-v1.0.1 用法）。
-
 Environment:
     STP_NFS_ROOT         (prepended to relative firmware_dir; firmware 根默认
                           取 {STP_NFS_ROOT}/firmware)
@@ -821,16 +817,7 @@ def _acquire_host_lock(on_wait_tick: "callable | None" = None):
         return None
     import fcntl
 
-    # #816：O_NOFOLLOW——低权限用户可预置 symlink 让 open("w") 截断 agent
-    # 可写文件（对齐 flash_preflight v1.0.1 用法）；symlink 存在时明确拒绝
-    # 而不是静默跟随。
-    try:
-        fd = os.open(_LOCK_PATH, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    except OSError as exc:
-        raise RuntimeError(
-            f"flash lock 文件打开失败（拒绝跟随 symlink）: {_LOCK_PATH}: {exc}"
-        ) from exc
-    lock_fd = os.fdopen(fd, "w")
+    lock_fd = open(_LOCK_PATH, "w")
     # **轮询式等待**（#142 review）：flock(LOCK_EX) 阻塞期间不打任何戳，
     # permit cap=5 下同一 host 多个设备进 flash 时，等待中的设备会被停滞钟
     # 误杀。改 LOCK_NB 轮询 + 每 5s 打一次 stage="lock-wait" 戳——等待本身
@@ -1132,53 +1119,10 @@ def _read_latest_version(pointer: "dict | None", model: str) -> "str | None":
     return str(version).strip() or None if version else None
 
 
-def _attempt_device_recovery(serial: str, adb_path: str) -> dict:
-    """v1.3.12（#1591）：flash 失败后 best-effort 恢复设备到正常态。
-
-    实证（2026-09-12）：失败设备可能停在 BROM/preloader——USB 层完全
-    未枚举（lsusb 不可见），需现场拔插。此处主动尝试 adb reboot 让设备
-    回到正常启动路径（成功时可避免 USB 死态；失败仅记录不阻断）。
-    """
-    try:
-        r = subprocess_run(
-            [adb_path, "-s", serial, "reboot"],
-            capture_output=True, text=True, timeout=30)
-        return {"attempted": "adb_reboot", "rc": r.returncode,
-                "tail": ((r.stderr or "") + (r.stdout or ""))[-200:]}
-    except Exception as exc:  # noqa: BLE001
-        return {"attempted": "adb_reboot", "error": str(exc)[:160]}
-
-
-def _wait_model_ready(
-    serial: str, adb_path: str, timeout_s: int,
-) -> "str | None":
-    """v1.3.12（#1591）：读 ro.product.model 前等设备 Android 就绪。
-
-    实测（2026-09-12 刷机重试）：刷机后 adb 已连但系统未完全起（getprop
-    返回空）——原实现直接判 fingerprint routing failed，把「刷机成功但
-    设备未就绪」误判为失败（7 台实际 ro.debuggable 已 =1）。
-    此处轮询 boot_completed + model 非空，超时才放弃。
-    """
-    deadline = time.time() + max(0, timeout_s)
-    while True:
-        model = _adb_getprop("ro.product.model", adb_path, serial)
-        if model:
-            return model
-        if time.time() >= deadline:
-            return None
-        time.sleep(5)
-
-
 def _resolve_by_fingerprint(
     args: dict, serial: str, adb_path: str,
 ) -> "tuple[dict | None, str | None]":
-    ready_wait = args.get("model_ready_wait_seconds")
-    try:
-        ready_wait = int(ready_wait) if ready_wait is not None else 90
-    except (TypeError, ValueError):
-        ready_wait = 90
-    model = (_adb_getprop("ro.product.model", adb_path, serial)
-             or _wait_model_ready(serial, adb_path, ready_wait))
+    model = _adb_getprop("ro.product.model", adb_path, serial)
     if not model:
         return None, (
             "fingerprint routing failed: cannot read ro.product.model via adb "
@@ -1736,8 +1680,6 @@ def main() -> None:
     if not verdict_ok:
         kind, detail = final_error
         _settle_lock()
-        # v1.3.12（#1591）：失败后尝试恢复设备态（避免停在 BROM → USB 死态）
-        recovery = _attempt_device_recovery(serial, adb_path)
         _output(False,
                 error_message=(
                     f"flash failed after {len(attempts_report)} attempt(s): "
@@ -1750,7 +1692,6 @@ def main() -> None:
                          "target_port": target_port,
                          "attempts": attempts_report,
                          "attempt_count": len(attempts_report),
-                         "recovery": recovery,
                          "pre_reboot": pre_reboot,
                          "stdout_tail": final_output[-1500:],
                          "duration_seconds":
