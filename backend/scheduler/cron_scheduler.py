@@ -264,8 +264,9 @@ def run_retention_cleanup() -> None:
     Runs as an independent APScheduler job (sync, runs in thread-pool).
     """
     from backend.models.plan_run import PlanRun
-    from backend.models.job import JobArtifact, JobInstance, StepTrace
+    from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
     from backend.models.device_lease import DeviceLease
+    from backend.models.device_log_event import DeviceLogEvent
     from backend.models.resource_pool import ResourceAllocation
 
     now = datetime.now(timezone.utc)
@@ -378,7 +379,21 @@ def run_retention_cleanup() -> None:
                 JobArtifact.job_id.in_(stale_job_ids)
             ).delete(synchronize_session=False)
 
-            # job_log_signal has ON DELETE CASCADE; job_artifact must be removed first.
+            # #781: job_log_signal.job_id / device_log_event.{job,plan_run}_id
+            # 均为 ON DELETE SET NULL（非 CASCADE）。删 Job/PlanRun 前必须显式
+            # 删行，否则 signal/event 变孤儿并单调堆积（仅 /log-signals/orphans
+            # 可见，且是 #729 幽灵 /complete 404 的跨保留窗口来源之一）。
+            # 先 signal 再 event：signal.device_log_event_id 亦为 SET NULL。
+            db.query(JobLogSignal).filter(
+                JobLogSignal.job_id.in_(stale_job_ids)
+            ).delete(synchronize_session=False)
+            db.query(DeviceLogEvent).filter(
+                or_(
+                    DeviceLogEvent.plan_run_id.in_(safe_run_ids),
+                    DeviceLogEvent.job_id.in_(stale_job_ids),
+                )
+            ).delete(synchronize_session=False)
+
             db.query(JobInstance).filter(
                 JobInstance.plan_run_id.in_(safe_run_ids)
             ).delete(synchronize_session=False)

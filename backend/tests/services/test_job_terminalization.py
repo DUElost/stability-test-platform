@@ -111,6 +111,51 @@ def test_on_job_terminal_sync_bumps_and_aggregates():
         trigger.assert_called_once()
 
 
+def test_on_job_terminal_sync_dedup_enqueue_after_commit():
+    """#781/#986: enqueue_dedup 必须在 db.commit() 之后（Redis 不可回滚）。"""
+    from backend.services.job_terminalization import on_job_terminal_sync
+
+    run = _run(
+        total_job_count=1, id=10, plan_id=1,
+        status=PlanRunStatus.RUNNING.value,
+    )
+    job = SimpleNamespace(
+        id=1, plan_run_id=10, host_id=None, status=JobStatus.COMPLETED.value,
+    )
+    db = MagicMock()
+    order: list[str] = []
+
+    def _commit():
+        order.append("commit")
+
+    def _enqueue(run_id):
+        order.append("enqueue")
+
+    def _transition(obj, status, reason=None):
+        obj.status = status.value if hasattr(status, "value") else status
+
+    db.commit.side_effect = _commit
+
+    with patch(
+        "backend.services.plan_chain_trigger.trigger_next_plan_sync",
+    ), patch(
+        "backend.services.dedup_scan.should_trigger_dedup", return_value=True,
+    ), patch(
+        "backend.services.dedup_scan.enqueue_dedup_terminal_sync",
+        side_effect=_enqueue,
+    ), patch(
+        "backend.services.plan_run_aggregation.PlanRunStateMachine.transition",
+        side_effect=_transition,
+    ), patch(
+        "backend.services.plan_run_aggregation.record_plan_run_terminal",
+    ), patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ):
+        applied, _ = on_job_terminal_sync(job, db, run=run)
+        assert applied is True
+        assert order == ["commit", "enqueue"]
+
+
 def test_recount_detects_drift():
     from backend.services.job_terminalization import recount_plan_run_counters
 
