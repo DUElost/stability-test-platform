@@ -188,21 +188,32 @@ def trust_host_key(
         # Rewrite the file under an exclusive lock: replace prior entries for
         # this host (or refuse when the key changed without explicit consent).
         port_token = f"[{ip}]:{port}" if port and port != 22 else None
+        scan_token = port_token or ip
 
         def _host_token(line: str) -> str:
             return line.split(" ", 1)[0] if line.strip() else ""
+
+        def _key_material(line: str) -> tuple[str, ...]:
+            """known_hosts 行的密钥材料（key type + key），忽略注释/空白差异。"""
+            parts = line.split()
+            return tuple(parts[1:3]) if len(parts) >= 3 else (line.strip(),)
 
         result_reason = "ok"
         with open(path, "r+", encoding="utf-8") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX)
             try:
                 existing = fh.read().splitlines()
+                # #1655：只取与本次扫描**同一 host token** 的既有条目参与比较。
+                # 此前把裸 ip（22 端口）条目与 [ip]:port 条目混进同一集合，
+                # 而 keyscan 对非默认端口只产出 [ip]:port 形态——集合恒不相等，
+                # 即使密钥材料完全一致也会被误判「host key changed」而拒绝，
+                # 且诊断方向（疑似换钥）也是错的。
                 prior_for_host = [
-                    ln for ln in existing
-                    if _host_token(ln) == ip
-                    or (port_token is not None and _host_token(ln) == port_token)
+                    ln for ln in existing if _host_token(ln) == scan_token
                 ]
-                if prior_for_host and set(prior_for_host) != set(new_keys):
+                if prior_for_host and {
+                    _key_material(ln) for ln in prior_for_host
+                } != {_key_material(ln) for ln in new_keys}:
                     old_fp = ", ".join(host_key_fingerprints(prior_for_host))
                     new_fp = ", ".join(host_key_fingerprints(new_keys))
                     if not allow_replace:
