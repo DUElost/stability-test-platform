@@ -105,6 +105,7 @@ PROTECTED_READ_ENDPOINTS: tuple[ReadEndpointCase, ...] = (
         "GET",
         "/api/v1/runs/1/jira-draft/cached",
     ),
+    ReadEndpointCase("runs_jira_drafts", "GET", "/api/v1/runs/jira-drafts"),
     ReadEndpointCase("runs_steps_list", "GET", "/api/v1/runs/1/steps"),
     ReadEndpointCase("runs_step_get", "GET", "/api/v1/runs/1/steps/1"),
     ReadEndpointCase(

@@ -179,27 +179,42 @@ class ScanRunner:
 
     @classmethod
     def _worker_loop(cls) -> None:
-        while True:
-            job = cls._dequeue_next()
-            if job is None:
-                with cls._worker_lock:
+        # #754：`_worker_started` 的复位必须发生在**任何**退出路径上。原先只在
+        # 队列排空的正常 return 前复位，一旦 `_execute_job` 抛出（例如环境变量
+        # 误配把 int() 打穿），线程死亡而标志仍为 True → `_ensure_worker` 永远
+        # 认为 worker 还活着 → scan 队列永久停摆直到进程重启。
+        # try/finally 让标志复位成为结构性保证；逐单异常在此吞掉并记 ERROR
+        # （单个 job 失败不得带走整个队列），异常不再终止工作线程。
+        try:
+            while True:
+                job = cls._dequeue_next()
+                if job is None:
+                    with cls._worker_lock:
+                        with cls._queue_lock:
+                            if cls._pending:
+                                continue
+                    return
+                if not cls._any_scan_runner_configured():
+                    # P2-2b / #1071：启动窗口内 scan_now 入队等待 configure；
+                    # 仅当 MTK 与 UNISOC 都未配置时才 defer，避免「只配 UNISOC」饿死。
                     with cls._queue_lock:
-                        if cls._pending:
-                            continue
-                        cls._worker_started = False
-                return
-            if not cls._any_scan_runner_configured():
-                # P2-2b / #1071：启动窗口内 scan_now 入队等待 configure；
-                # 仅当 MTK 与 UNISOC 都未配置时才 defer，避免「只配 UNISOC」饿死。
-                with cls._queue_lock:
-                    cls._pending[job.plan_run_id] = job
-                logger.warning(
-                    "scan_queue_defer_not_configured plan_run=%d host=%s",
-                    job.plan_run_id, job.host_id,
-                )
-                time.sleep(2.0)
-                continue
-            cls._execute_job(job)
+                        cls._pending[job.plan_run_id] = job
+                    logger.warning(
+                        "scan_queue_defer_not_configured plan_run=%d host=%s",
+                        job.plan_run_id, job.host_id,
+                    )
+                    time.sleep(2.0)
+                    continue
+                try:
+                    cls._execute_job(job)
+                except Exception:
+                    logger.exception(
+                        "scan_queue_job_failed plan_run=%d host=%s",
+                        job.plan_run_id, job.host_id,
+                    )
+        finally:
+            with cls._worker_lock:
+                cls._worker_started = False
 
     @classmethod
     def _any_scan_runner_configured(cls) -> bool:

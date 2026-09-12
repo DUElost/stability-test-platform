@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
 from typing import Any, Dict, Optional
 
@@ -27,7 +28,14 @@ class HddSpillMonitor:
     _instance: Optional["HddSpillMonitor"] = None
     _instance_lock = threading.Lock()
 
+    # 单批上限：兼作 HDD 写放大节流（每批最多 20 个目录的上传/prune 写放大），
+    # 不是每轮腾退能力上限——未达 target 时按 _SPILL_CATCHUP_INTERVAL 追打
+    # （#1522：原实现 20/300s 的净速率 4 目录/分钟，积压超过该速率时水位
+    # 无回落路径）。
     _MAX_SPILL_PER_CYCLE = 20
+    # 追打间隔（秒）：本轮有腾退产出但水位仍高于 target 时，下一轮不等满
+    # interval。0 或负值回退 interval（禁用追打的逃生阀）。
+    _SPILL_CATCHUP_INTERVAL = float(os.getenv("STP_HDD_SPILL_CATCHUP_INTERVAL", "30"))
 
     def __init__(self) -> None:
         self._hdd_root: str = ""
@@ -47,6 +55,7 @@ class HddSpillMonitor:
         self._agent_secret = ""
         self._host_id = ""
         self._spill_enqueued_ids: set[str] = set()
+        self._catchup_needed: bool = False
 
     @classmethod
     def instance(cls) -> "HddSpillMonitor":
@@ -129,7 +138,16 @@ class HddSpillMonitor:
                 self.check_once()
             except Exception:
                 logger.exception("hdd_spill_monitor_check_unhandled")
-            self._stop_evt.wait(self._interval)
+            self._stop_evt.wait(self._next_wait_seconds())
+
+    def _next_wait_seconds(self) -> float:
+        """#1522: 高水位未回落时按追打间隔等待；否则常规轮询间隔。"""
+        if (
+            self._catchup_needed
+            and self._SPILL_CATCHUP_INTERVAL > 0
+        ):
+            return self._SPILL_CATCHUP_INTERVAL
+        return self._interval
 
     def check_once(self) -> int:
         """检查 HDD 水位；超阈则经 EventUploader enqueue 最旧 LOCAL 事件。返回 enqueue 数。"""
@@ -153,6 +171,9 @@ class HddSpillMonitor:
         )
         self._spill_enqueued_ids.clear()
         spilled = 0
+        # #1522: 用尽单批上限仍未回落到 target → 追打（缩短下一轮等待），
+        # 单批 20 的写放大节流保持不变。
+        need_catchup = False
         for _ in range(self._MAX_SPILL_PER_CYCLE):
             n = self._spill_oldest_event_dir()
             if n == 0:
@@ -166,6 +187,13 @@ class HddSpillMonitor:
             post_usage = self._current_usage_pct()
             if post_usage is None or post_usage <= self._target_pct:
                 break
+        else:
+            need_catchup = True
+            logger.warning(
+                "hdd_spill_batch_cap_reached dirs=%d — catch-up scheduled",
+                spilled,
+            )
+        self._catchup_needed = need_catchup
         if spilled:
             with self._metrics_lock:
                 self._spill_cycles += 1

@@ -108,7 +108,15 @@ def _list_containers(runner) -> list[Container]:
     return containers
 
 
-def main(argv: list[str] | None = None, *, runner=_run_docker) -> int:
+def main(
+    argv: list[str] | None = None, *, runner=_run_docker,
+    now: datetime | None = None,
+) -> int:
+    """``now`` 为判龄基准时钟（缺省=真实当前时间）。
+
+    年龄判定与「当前时间」耦合，调用方（单测/巡检钩子）必须能固定时钟，
+    否则判定结果随真实时间漂移——#1541 即测试冻结 NOW、实现取真实 now 的失配。
+    """
     parser = argparse.ArgumentParser(
         description="巡检/清理残留的 testcontainer（默认 dry-run）",
     )
@@ -129,7 +137,7 @@ def main(argv: list[str] | None = None, *, runner=_run_docker) -> int:
         return 2
 
     stale, recent = plan_targets(
-        containers, min_age_minutes=args.min_age_minutes,
+        containers, min_age_minutes=args.min_age_minutes, now=now,
     )
 
     if not stale and not recent:
@@ -138,9 +146,9 @@ def main(argv: list[str] | None = None, *, runner=_run_docker) -> int:
 
     print(f"目标容器：疑似残留 {len(stale)} 个，近期活跃 {len(recent)} 个")
     for c in sorted(stale, key=lambda x: x.created):
-        print(f"  [残留 {c.age_minutes():.0f}m] {c.cid}  {c.name}  {c.image}")
+        print(f"  [残留 {c.age_minutes(now=now):.0f}m] {c.cid}  {c.name}  {c.image}")
     for c in sorted(recent, key=lambda x: x.created, reverse=True):
-        print(f"  [活跃 {c.age_minutes():.0f}m] {c.cid}  {c.name}  {c.image}")
+        print(f"  [活跃 {c.age_minutes(now=now):.0f}m] {c.cid}  {c.name}  {c.image}")
 
     if stale and not args.prune:
         ids = " ".join(c.cid for c in stale)
@@ -155,6 +163,7 @@ def main(argv: list[str] | None = None, *, runner=_run_docker) -> int:
         try:
             remaining_stale, _ = plan_targets(
                 _list_containers(runner), min_age_minutes=args.min_age_minutes,
+                now=now,
             )
         except Exception:  # noqa: BLE001 - 复核失败不掩盖清理动作
             remaining_stale = []

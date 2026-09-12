@@ -157,6 +157,38 @@ describe('PlanRunListPage', () => {
     });
   });
 
+  it('clamps to the last page when total shrinks below the current page', async () => {
+    const user = userEvent.setup();
+    listPageMock.mockImplementation(async (args: { skip?: number }) => {
+      if ((args.skip ?? 0) >= 50) {
+        return pageOf([], { total: 30, skip: 50, limit: 50, stats: { total: 30, running: 0, failed: 0 } });
+      }
+      return pageOf(sampleRuns, { total: 120, skip: 0, limit: 50, stats: { total: 120, running: 1, failed: 1 } });
+    });
+    renderPage();
+    await screen.findByText('MTBF overnight');
+
+    await user.click(screen.getByLabelText('下一页'));
+    await waitFor(() => {
+      expect(listPageMock).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 50, limit: 50 }),
+      );
+    });
+
+    listPageMock.mockResolvedValue(
+      pageOf(sampleRuns, { total: 30, skip: 0, limit: 50, stats: { total: 30, running: 1, failed: 1 } }),
+    );
+    await user.click(screen.getByTestId('plan-run-status-RUNNING'));
+
+    await waitFor(() => {
+      expect(listPageMock).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, limit: 50 }),
+      );
+    });
+    expect(screen.getByText('MTBF overnight')).toBeInTheDocument();
+    expect(screen.queryByText(/未找到/)).not.toBeInTheDocument();
+  });
+
   it('paginates with skip/limit', async () => {
     const user = userEvent.setup();
     listPageMock.mockResolvedValue(
