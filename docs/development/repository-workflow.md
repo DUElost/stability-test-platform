@@ -133,6 +133,26 @@ PR 合入路径只运行轻量 required checks。完整 backend tests、frontend
 Docker build 由手工 full workflow 或 `main-ci-backstop.yml` 夜间兜底，避免把长任务
 放进约两分钟的同步注意力窗口。
 
+### 夜间红灯的前移触发规则（#1525 决策）
+
+夜间 `main-ci-backstop` 红灯 = 缺陷已合入 main、最迟次日暴露（敞口 ≤24h）。敞口不
+引入 Merge Queue 处理（成本 ≈10× 全量 CI/天；数据不支持），按**类**前移：
+
+- **同类夜间红灯 ≥2 次 → 评估将该类前移为 PR 侧检查**（required 或信息性）；单次
+  偶发不动作；
+- 前移先例：迁移空库类 → `pr-migrate-empty-db`（required）；agent 类 →
+  `pr-agent-tests`；repo-level 根测试类 → #1569（在途）。
+
+当前分层：
+
+- **PR 侧 required**：`lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、
+  `pr-agent-tests`、`pr-migrate-empty-db`；
+- **PR 排除**（main push / 手工 dispatch / 夜间兜底跑）：`backend-test`、
+  `frontend-check`、`docker-build`；
+- 决策量化依据（近 30 次 backstop：9 红夜 ≈ 每 3 天/每 33 PR 一次；`backend-test`
+  类占 5/6、前端/docker 零次）：见
+  [`2026-09-12-pr-gate-promotion-rule-1525.md`](../notes/process/2026-09-12-pr-gate-promotion-rule-1525.md)。
+
 Dependabot 的 frontend patch/minor 可自动合入；frontend major、TypeScript major 和
 GitHub Actions 生态更新需要人工评审。全量 CI 失败由 backstop 使用
 `ci/backstop-failed` issue 去重通知，恢复后自动关闭。
@@ -142,6 +162,7 @@ GitHub Actions 生态更新需要人工评审。全量 CI 失败由 backstop 使
 - [`2026-08-14-merge-path-attention-budget.md`](../notes/process/2026-08-14-merge-path-attention-budget.md)
 - [`2026-08-29-serial-automerge-update-branch.md`](../notes/process/2026-08-29-serial-automerge-update-branch.md)
 - [`2026-08-30-pr-agent-fully-async.md`](../notes/process/2026-08-30-pr-agent-fully-async.md)
+- [`2026-09-12-pr-gate-promotion-rule-1525.md`](../notes/process/2026-09-12-pr-gate-promotion-rule-1525.md)
 
 ## 文档维护
 
