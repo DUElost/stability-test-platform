@@ -2,8 +2,8 @@ import type { HostActiveJob } from '@/utils/api';
 import type { ReadinessDevice } from '@/utils/planExecuteReadiness';
 import type { DeviceTileStatus } from './types';
 
-export const isSchedulable = (device: ReadinessDevice) =>
-  typeof device.schedulable === 'boolean' ? device.schedulable : device.status === 'ONLINE';
+/** #786：后端不产出 `schedulable`（DeviceOut 全仓零产出），准入判据以 status 为准。 */
+export const isSchedulable = (device: ReadinessDevice) => device.status === 'ONLINE';
 
 export function resolveDeviceTileStatus(
   device: ReadinessDevice,

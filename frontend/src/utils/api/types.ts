@@ -73,12 +73,9 @@ export interface Device {
   /** ADR-0029 v2.5：归属来源两态——mapped=型号有活跃成员行；unmapped=未映射 */
   attribution_source?: 'mapped' | 'unmapped' | null;
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
-  /** Authoritative backend admission decision. Legacy servers may omit it. */
-  schedulable?: boolean;
   last_seen: string | null;
   tags: string[];
   extra?: Record<string, unknown>;
-  current_task?: { name?: string } | null;
   adb_state?: string | null;
   adb_connected?: boolean | null;
   battery_level?: number | null;
