@@ -11,6 +11,7 @@ from typing import Any, List, Union
 from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.host_identity import allocate_host_id
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.core.ssh_security import (
     SshSecurityConfigError,
     encrypt_ssh_password,
@@ -48,9 +49,6 @@ from backend.services.run_console import RunConsole
 from backend.tasks.saq_worker import enqueue_sync, EnqueueSyncError, get_saq_job_state_sync
 
 logger = logging.getLogger(__name__)
-
-# Host heartbeat timeout config (default 5 minutes)
-HOST_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "300"))
 
 
 def _ensure_host_status_up_to_date(host: Host) -> bool:

@@ -331,3 +331,94 @@ def test_flash_firmware_lock_source_uses_o_nofollow():
     )
     assert "os.O_NOFOLLOW" in text
     assert 'os.fdopen(fd, "w")' in text  # 不得回退裸 open("w")
+
+
+# ── 4. connect_wifi v1.0.2（#1558：已连接判据由子串改精确匹配） ──────────────
+
+
+def _wifi_mod(monkeypatch, status_text: str):
+    mod = _load("connect_wifi_v102", "connect_wifi/v1.0.2/connect_wifi.py")
+    monkeypatch.setattr(
+        mod, "adb_shell_quiet", lambda cmd, timeout=10: _cp(0, status_text),
+    )
+    return mod
+
+
+def test_connect_wifi_v102_prefix_ssid_is_not_treated_as_connected(monkeypatch):
+    """#1558：设备连在 `Test-5G` 而目标为 `Test` 时**不得**判为已连接。
+
+    原实现 `ssid in stdout` 会命中 → 直接 skipped=True 报成功且不发起连接，
+    用例以为连上了目标网络。谓词此前被 monkeypatch 掉、零覆盖。
+    """
+    status = (
+        "Wifi is enabled\n"
+        "Wifi is connected\n"
+        "SSID: Test-5G\n"
+        "BSSID: aa:bb:cc:dd:ee:ff\n"
+    )
+    mod = _wifi_mod(monkeypatch, status)
+
+    assert mod._is_connected("S", "Test-5G") is True
+    assert mod._is_connected("S", "Test") is False, "前缀 SSID 不得被子串匹配命中"
+    assert mod._is_connected("S", "Test-") is False
+    assert mod._is_connected("S", "") is False
+
+
+def test_connect_wifi_v102_exact_ssid_matches_across_status_shapes(monkeypatch):
+    """精确匹配不依赖具体标签形态（仓库内没有连上后的真实样本，故不猜格式）。"""
+    for status in (
+        "Wifi is enabled\nSSID: Test\n",
+        'Wifi is connected to "Test"\n',
+        "SSID=Test\n",
+        'mWifiInfo SSID: "Test", BSSID: aa:bb\n',
+        '{"ssid":"Test","state":"connected"}\n',
+    ):
+        mod = _wifi_mod(monkeypatch, status)
+        assert mod._is_connected("S", "Test") is True, status
+        assert mod._is_connected("S", "Other") is False, status
+
+
+def test_connect_wifi_v102_quoted_ssid_with_space(monkeypatch):
+    """SSID 含空格时按带引号的全等形态命中（token 切分会把它拆开）。"""
+    mod = _wifi_mod(monkeypatch, 'Wifi is connected to "My Network"\n')
+    assert mod._is_connected("S", "My Network") is True
+    assert mod._is_connected("S", "My") is False
+
+
+def test_connect_wifi_v102_attempts_connect_when_prefix_ssid_connected(monkeypatch):
+    """端到端：设备在 `Test-5G`、目标 `Test` → 必须真的发起连接（不得 skipped）。"""
+    mod = _load("connect_wifi_v102_e2e", "connect_wifi/v1.0.2/connect_wifi.py")
+    capture = _Output()
+    monkeypatch.setattr(mod, "device_serial", lambda: "S")
+    monkeypatch.setattr(mod, "output_result", capture)
+    monkeypatch.setattr(mod, "params", lambda: {"ssid": "Test", "password": "p"})
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(mod, "adb_shell", lambda cmd, timeout=10: "")
+    # 复验循环按 wall clock 等 10s；用递增假时钟让它立刻退出（避免测试变慢）
+    class _Clock:
+        def __init__(self) -> None:
+            self.v = 0.0
+
+        def __call__(self) -> float:
+            self.v += 6.0
+            return self.v
+
+    monkeypatch.setattr(mod.time, "monotonic", _Clock())
+    cmds: list[str] = []
+
+    def fake_quiet(cmd, timeout=10):
+        cmds.append(cmd)
+        if cmd == "cmd -w wifi status":
+            return _cp(0, "SSID: Test-5G\n")
+        return _cp(0, "")
+
+    monkeypatch.setattr(mod, "adb_shell_quiet", fake_quiet)
+
+    mod.main()
+
+    assert any(c.startswith("cmd -w wifi connect-network") for c in cmds), (
+        "连在别的 SSID 上时不得跳过连接"
+    )
+    # 复验仍只读到 Test-5G → 必须以失败收尾，而不是假成功
+    assert capture.last["success"] is False
+    assert "not verified" in capture.last["error_message"]

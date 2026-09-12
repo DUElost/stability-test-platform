@@ -578,14 +578,18 @@ GATE_TO_CI_ANCHOR = {
     "compileall": ("ci.yml", "Compile check"),
     "pollution": ("ci.yml", "空行注入污染检查"),
     "immutability": ("ci.yml", "脚本版本不可变检查"),
+    # 分层门禁（#1519）：services/ 不得反向 import api.routes；与
+    # immutability 同模式接入 ci.yml lint job（含 --self-test 自证）。
+    "layering": ("ci.yml", "分层检查"),
     "gov-surface": ("ci.yml", "治理面结构检查"),
     "ai-work": ("ci.yml", "Execution Registry 自测"),
     "pr-migrate": ("ci.yml", "Migrate empty PostgreSQL database"),
     # public 仓库内网主机地址扫描（#538 收尾）——锚点即 ci.yml 中该 step 的 name
     "ip-leak": ("ci.yml", "内网主机地址检查"),
-    # Prometheus 告警规则契约（#1257/R14-F11）——锚点即 ci.yml pr-agent-tests
-    # job 中该 step 的 name（与 lock 卫生测试同理由前移：纯离线、随 lock 可跑）
-    "prom-alerts": ("ci.yml", "Prometheus 告警规则契约"),
+    # Prometheus 告警规则契约（#1257/R14-F11）——自 #1569 起并入 pr-agent-tests
+    # job 的「Run repo-level tests」离线子集 step（原独立 step 已删除）；
+    # 锚点即该 step 的 name（前移理由同 lock 卫生测试：纯离线、随 lock 可跑）
+    "prom-alerts": ("ci.yml", "Run repo-level tests"),
     "agent-tests": ("ci.yml", "Run agent tests"),
     # check:full 级——CI 对应物在 backend-test / frontend-check / docker-build job
     "backend-tests": ("ci.yml", "Run backend tests"),

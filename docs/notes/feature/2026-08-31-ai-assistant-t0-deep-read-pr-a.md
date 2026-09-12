@@ -5,7 +5,7 @@ Class: feature
 
 ## 决定了什么
 
-按 [ADR-0031 附录 A](../adr/ADR-0031-appendix-phase3-core-write-tools.md) PR-A 新增 6 个 T0 查询工具（总 T0=14）：
+按 [ADR-0031 附录 A](../adr/ADR-0031-A-appendix-phase3-core-write-tools.md) PR-A 新增 6 个 T0 查询工具（总 T0=14）：
 
 - `list_plans` / `get_plan_detail` — 镜像 `GET /plans` 列表与详情（含 legacy AEE Plan 隐藏）
 - `preview_plan_dispatch` — 镜像 `POST /plans/{id}/run/preview`，只读预检

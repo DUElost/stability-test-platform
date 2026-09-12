@@ -21,7 +21,6 @@ import {
   Activity,
   Wifi,
   WifiOff,
-  Clock,
   AlertTriangle,
   CheckCircle2,
   Zap,
@@ -674,16 +673,10 @@ export function ExpandableDeviceTable({
                             </div>
                           </div>
 
-                          {/* Current Task & Actions */}
+                          {/* #786：删去「当前任务」展示——后端 DeviceOut 全仓零产出
+                              `current_task`，该行恒显「无任务」，对 BUSY 设备同样误导。 */}
                           <div className="bg-card rounded-lg border border-border p-3">
-                            <div className="flex items-center gap-2 mb-2">
-                              <Clock className="w-4 h-4 text-muted-foreground" />
-                              <span className="text-sm font-medium text-foreground">当前任务</span>
-                            </div>
                             <div className="text-xs text-muted-foreground">
-                              {device.current_task || '无任务'}
-                            </div>
-                            <div className="mt-1 text-[11px] text-muted-foreground">
                               最后活跃：{device.last_seen ? formatDateTimeFull(device.last_seen) : '—'}
                             </div>
                             {onViewMetrics && (

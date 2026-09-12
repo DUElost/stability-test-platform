@@ -106,10 +106,10 @@ def describe_abort_preview(db: Session, params: dict) -> str:
 
 
 def describe_manual_job_preview(db: Session, params: dict, *, action: str) -> str:
-    from backend.api.routes.plan_runs import _load_job_in_run
+    from backend.services.plan_run_queries import load_job_in_run
 
     try:
-        job = _load_job_in_run(db, params["run_id"], params["job_id"])
+        job = load_job_in_run(db, params["run_id"], params["job_id"])
     except HTTPException:
         return (
             f"PlanRun #{params['run_id']} job #{params['job_id']}（未找到或不属于该 run）"
@@ -211,11 +211,11 @@ def run_manual_retry_job(
     triggered_by: str,
     requester_user_id: int | None = None,
 ) -> str:
-    from backend.api.routes.plan_runs import (
-        _MANUAL_ACTION_JOB_STATUSES,
-        _device_currently_disconnected,
-        _emit_job_status_invalidation,
-        _load_job_in_run,
+    from backend.services.plan_run_events import emit_job_status_invalidation
+    from backend.services.plan_run_queries import (
+        MANUAL_ACTION_JOB_STATUSES,
+        device_currently_disconnected,
+        load_job_in_run,
     )
     from backend.core.audit import record_audit
     from backend.core.metrics import record_patrol_manual_action
@@ -224,11 +224,11 @@ def run_manual_retry_job(
     run_id = params["run_id"]
     job_id = params["job_id"]
     try:
-        job = _load_job_in_run(db, run_id, job_id)
+        job = load_job_in_run(db, run_id, job_id)
     except HTTPException as exc:
         raise _http_exception_to_runtime(exc) from exc
 
-    if job.status not in _MANUAL_ACTION_JOB_STATUSES:
+    if job.status not in MANUAL_ACTION_JOB_STATUSES:
         raise RuntimeError(
             f"job must be RUNNING for manual retry; current status is {job.status}"
         )
@@ -238,7 +238,7 @@ def run_manual_retry_job(
     if job.host_id:
         host_row = db.get(Host, job.host_id)
         host_status = host_row.status if host_row else None
-    if _device_currently_disconnected(device, host_status):
+    if device_currently_disconnected(device, host_status):
         raise RuntimeError(
             "device ADB is not reachable; manual retry cannot restore connection"
         )
@@ -273,7 +273,7 @@ def run_manual_retry_job(
     db.commit()
     db.refresh(job)
     record_patrol_manual_action("manual_retry")
-    _emit_job_status_invalidation(run_id, job_id, job.status, "manual_retry")
+    emit_job_status_invalidation(run_id, job_id, job.status, "manual_retry")
     return (
         f"job #{job_id} 已请求立即重试（manual_action=RETRY_NOW，"
         f"failure_streak={job.current_failure_streak or 0}）"
@@ -287,10 +287,10 @@ def run_manual_exit_job(
     triggered_by: str,
     requester_user_id: int | None = None,
 ) -> str:
-    from backend.api.routes.plan_runs import (
-        _MANUAL_ACTION_JOB_STATUSES,
-        _emit_job_status_invalidation,
-        _load_job_in_run,
+    from backend.services.plan_run_events import emit_job_status_invalidation
+    from backend.services.plan_run_queries import (
+        MANUAL_ACTION_JOB_STATUSES,
+        load_job_in_run,
     )
     from backend.core.audit import record_audit
     from backend.core.metrics import record_patrol_manual_action
@@ -298,11 +298,11 @@ def run_manual_exit_job(
     run_id = params["run_id"]
     job_id = params["job_id"]
     try:
-        job = _load_job_in_run(db, run_id, job_id)
+        job = load_job_in_run(db, run_id, job_id)
     except HTTPException as exc:
         raise _http_exception_to_runtime(exc) from exc
 
-    if job.status not in _MANUAL_ACTION_JOB_STATUSES:
+    if job.status not in MANUAL_ACTION_JOB_STATUSES:
         raise RuntimeError(
             f"job must be RUNNING for manual exit; current status is {job.status}"
         )
@@ -338,7 +338,7 @@ def run_manual_exit_job(
     db.commit()
     db.refresh(job)
     record_patrol_manual_action("manual_exit")
-    _emit_job_status_invalidation(run_id, job_id, job.status, "manual_exit_pending")
+    emit_job_status_invalidation(run_id, job_id, job.status, "manual_exit_pending")
     return f"job #{job_id} 已请求退出 patrol（manual_action=EXIT_REQUESTED）"
 
 

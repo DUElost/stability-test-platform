@@ -16,7 +16,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import redis.asyncio as aioredis
 from saq import Job, Queue, Worker
@@ -264,6 +264,7 @@ def enqueue_sync(
     timeout: int = 60,
     retries: int = 3,
     required: bool = False,
+    on_async_failure: Optional[Callable[[BaseException], None]] = None,
     **kwargs,
 ) -> bool:
     """Enqueue a SAQ job from a synchronous context.
@@ -279,6 +280,14 @@ def enqueue_sync(
     ``SAQ_ENQUEUE_WAIT_TIMEOUT`` via ``run_coroutine_threadsafe`` so callers
     can fail fast on Redis errors.  Calling ``required=True`` from the main
     event loop raises :class:`EnqueueSyncError` (would deadlock).
+
+    ``on_async_failure``（#1555）：仅在 ``required=False`` 的 fire-and-forget 路径
+    生效——``call_soon_threadsafe`` 成功即返回 True，Redis 故障发生在**之后**，
+    调用方无从得知。传入回调可在真正入队失败时收到通知（典型用途：通知投递
+    降级到本地线程池）。回调在事件循环上执行，必须自身不抛。
+
+    Returns:
+        bool: True when the enqueue was **scheduled**（不代表已写入 Redis）.
     """
     if _queue is None or _loop is None:
         msg = f"SAQ not running — cannot enqueue {task_name}"
@@ -338,8 +347,17 @@ def enqueue_sync(
     async def _do_enqueue_best_effort():
         try:
             await _do_enqueue()
-        except Exception:
+        except Exception as exc:
             logger.exception("enqueue_async_failed task=%s", task_name)
+            # #1555：fire-and-forget 路径的唯一失败出口。没有这个回调，调用方
+            # 拿到的 True 只是「已排上事件循环」，Redis 故障被静默吞掉。
+            if on_async_failure is not None:
+                try:
+                    on_async_failure(exc)
+                except Exception:
+                    logger.exception(
+                        "enqueue_async_failure_callback_failed task=%s", task_name,
+                    )
 
     try:
         _loop.call_soon_threadsafe(_loop.create_task, _do_enqueue_best_effort())
@@ -382,9 +400,16 @@ def _read_from_loop(coro: Coroutine[Any, Any, Any], timeout: float = 3.0) -> Any
     coroutines on ``_loop`` itself — doing so would deadlock.
 
     The short *timeout* is a safety net for Redis hangs; it should never
-    fire in normal operation.  When it does fire the caller gets ``None``
-    and a task may be left orphaned on the loop (acceptable for reaper
-    correctness — orphan detection degrades gracefully to "skip").
+    fire in normal operation.  **When it fires the caller does NOT get
+    ``None`` — ``concurrent.futures.TimeoutError`` propagates** (the body is a
+    bare ``future.result(timeout=...)``), and so does any exception raised by
+    *coro* itself (e.g. ``redis`` connection errors). A task may be left
+    orphaned on the loop; that part degrades gracefully to "skip" on the
+    reaper side, but the exception does not.
+
+    #1559：本 docstring 原先声称「超时后调用者拿到 None」，与实现不符，已把
+    precheck_reaper 的候选循环误当成不需要 try/except（Redis 抖动会中断整轮
+    stale PRECHECK 恢复）。调用方必须自行处理异常。
 
     Callers must ensure *coro* is only constructed when ``_loop`` is known
     to be non-None, to avoid "coroutine was never awaited" warnings.

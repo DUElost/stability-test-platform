@@ -4,7 +4,6 @@ export interface ReadinessDevice {
   model?: string | null;
   host_id?: string | number | null;
   status: string;
-  schedulable?: boolean;
   adb_connected?: boolean | null;
   adb_state?: string | null;
   build_display_id?: string | null;
@@ -170,7 +169,9 @@ export function buildDeviceReadinessRows(
   return devices.map(device => {
     const reasons: string[] = [];
     const host = device.host_id != null ? hostMap.get(String(device.host_id)) : undefined;
-    if (device.schedulable === false || (typeof device.schedulable !== 'boolean' && device.status !== 'ONLINE')) reasons.push('设备不可调度');
+    // #786：后端 DeviceOut 全仓零产出 `schedulable`，原「后端权威准入」分支恒走 status
+    // 兜底；改为直接以 status 判定，不再假装存在后端准入决策。
+    if (device.status !== 'ONLINE') reasons.push('设备不可调度');
     if (device.adb_connected === false || ['offline', 'unknown', 'unauthorized'].includes(device.adb_state ?? '')) reasons.push(`ADB ${device.adb_state || '离线'}`);
     if (host && host.status !== 'ONLINE') reasons.push('节点离线');
     return { device, host, reasons, ready: reasons.length === 0 };

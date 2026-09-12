@@ -185,3 +185,26 @@ def test_processed_state_uses_get_set_state(tmp_path):
     r2 = _make_reconciler(tmp_path, emitter=_RecordingEmitter(), store=store)
     r2._load_processed_state()
     assert "e1" in r2._processed
+
+
+def test_emit_aee_ts_is_device_timestamp_not_subtype(tmp_path):
+    """#785: aee_ts 必须是设备时间戳原文，不得塞 event_subtype。"""
+    emitter = _RecordingEmitter()
+    r = _make_reconciler(tmp_path, emitter=emitter)
+    root = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
+    ev = root / "evt_ts"
+    ev.mkdir(parents=True)
+    (ev / "unievent_info.json").write_text(
+        json.dumps({
+            "event_name": "KE",
+            "package_name": "sys",
+            "timestamp": "2026-09-01 12:34:56",
+        }),
+        encoding="utf-8",
+    )
+    assert r.tick_once() == 1
+    extra = emitter.calls[0]["extra"]
+    assert extra["event_subtype"] == "KE"
+    assert extra["aee_ts"] == "2026-09-01 12:34:56"
+    assert extra["aee_ts"] != extra["event_subtype"]
+    # 无时区原文时 to_utc 可为 None（与 MTK 口径一致）

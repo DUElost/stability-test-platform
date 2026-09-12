@@ -8,6 +8,7 @@ apply when ``ENV`` is set and not ``production`` (and ``TESTING!=1``).
 | ``DISPATCHED_TIMEOUT_SECONDS`` / ``RUN_DISPATCHED_TIMEOUT_SECONDS`` | 120 | 120 |
 | ``RUNNING_HEARTBEAT_TIMEOUT_SECONDS`` / ``RUN_HEARTBEAT_TIMEOUT_SECONDS`` | 900 | 900 |
 | ``PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS`` | 300 | 180 |
+| ``HOST_HEARTBEAT_TIMEOUT_SECONDS`` | 300 | 300 |
 | ``UNKNOWN_GRACE_SECONDS`` | 300 | 300 |
 """
 
@@ -76,6 +77,15 @@ PRECHECK_ACTIVE_STALE_SECONDS = _int_env(
 ABORT_ACK_GRACE_SECONDS = _int_env(
     "ABORT_REAPER_GRACE_SECONDS",
     production_default=60,
+)
+
+# Host HTTP heartbeat freshness / OFFLINE threshold (#1518).
+# Single source for session_watchdog + hosts/devices/reachability/settings.
+# Default 300 aligns with ADR-0025 / .env.example (not the legacy 120 in
+# session_watchdog alone).
+HOST_HEARTBEAT_TIMEOUT_SECONDS = _int_env(
+    "HOST_HEARTBEAT_TIMEOUT_SECONDS",
+    production_default=300,
 )
 
 # UNKNOWN job grace before lease release + FAILED

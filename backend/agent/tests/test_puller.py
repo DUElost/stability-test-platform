@@ -364,6 +364,81 @@ def test_directory_pull_skips_file_enrichment(tmp_path):
     assert p.stats.pulls_ok == 1
 
 
+def test_directory_pull_retries_until_aee_dbg_present(tmp_path, monkeypatch):
+    class _RetryAdb:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def pull(self, serial, remote, local, timeout=None):
+            self.calls += 1
+            target = Path(local)
+            target.mkdir(parents=True, exist_ok=True)
+            if self.calls >= 2:
+                (target / "crash.dbg").write_bytes(b"dir-crash")
+            (target / "ZZ_INTERNAL").write_text("meta", encoding="utf-8")
+            return subprocess.CompletedProcess(args=["adb"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setenv("STP_WATCHER_AEE_PULL_VERIFY_ATTEMPTS", "3")
+    monkeypatch.setenv("STP_WATCHER_AEE_PULL_VERIFY_DELAY_SECONDS", "0")
+
+    coll = _Collector()
+    p = LogPuller(
+        adb=_RetryAdb(),
+        nfs_base_dir=str(tmp_path / "nfs"),
+        job_id=1,
+        host_id="H",
+        serial="S",
+        on_pull_done=coll,
+        bugreport_enabled=False,
+    )
+    p.start()
+    try:
+        p.submit(_evt(filename="db.22.JE"))
+        assert coll.wait_for(1, timeout=2.0)
+    finally:
+        p.stop(drain=True, timeout=1.0)
+
+    _, enr = coll.calls[0]
+    assert enr["artifact_uri"] is not None
+    assert Path(enr["artifact_uri"]).is_dir()
+    assert p.stats.pulls_ok == 1
+    assert p.stats.pulls_failed == 0
+
+
+def test_directory_pull_fails_when_aee_dir_stays_incomplete(tmp_path, monkeypatch):
+    class _EmptyDirAdb:
+        def pull(self, serial, remote, local, timeout=None):
+            target = Path(local)
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "ZZ_INTERNAL").write_text("meta", encoding="utf-8")
+            return subprocess.CompletedProcess(args=["adb"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setenv("STP_WATCHER_AEE_PULL_VERIFY_ATTEMPTS", "2")
+    monkeypatch.setenv("STP_WATCHER_AEE_PULL_VERIFY_DELAY_SECONDS", "0")
+
+    coll = _Collector()
+    p = LogPuller(
+        adb=_EmptyDirAdb(),
+        nfs_base_dir=str(tmp_path / "nfs"),
+        job_id=1,
+        host_id="H",
+        serial="S",
+        on_pull_done=coll,
+        bugreport_enabled=False,
+    )
+    p.start()
+    try:
+        p.submit(_evt(filename="db.22.JE"))
+        assert coll.wait_for(1, timeout=2.0)
+    finally:
+        p.stop(drain=True, timeout=1.0)
+
+    _, enr = coll.calls[0]
+    assert enr == {}
+    assert p.stats.pulls_failed == 1
+    assert p.stats.pulls_ok == 0
+
+
 # ----------------------------------------------------------------------
 # 队列与生命周期
 # ----------------------------------------------------------------------
@@ -756,10 +831,12 @@ class TestNfsQuota:
         assert p.stats.pulls_quota_exceeded >= 1
 
     def test_directory_over_quota_removed(self, tmp_path):
-        adb = _DirAdb(files={
+        dir_files = {
+            "crash.dbg": b"x",
             "f1": b"q" * (1024 * 1024),
             "f2": b"q" * (512 * 1024),
-        })  # 1.5 MiB > 1 MiB
+        }  # > 1 MiB quota
+        adb = _DirAdb(files=dir_files)
         coll = _Collector()
         p = self._puller(adb, tmp_path, coll, nfs_quota_mb=1)
         p.start()
@@ -771,7 +848,7 @@ class TestNfsQuota:
 
         enrichment = coll.calls[0][1]
         assert enrichment["artifact_uri"] is None
-        assert enrichment["size_bytes"] == 1024 * 1024 + 512 * 1024
+        assert enrichment["size_bytes"] == sum(len(v) for v in dir_files.values())
         nfs_root = tmp_path / "nfs"
         remaining = [p for p in nfs_root.rglob("f1")] if nfs_root.exists() else []
         assert remaining == [], "超配额目录必须删除，不驻留"

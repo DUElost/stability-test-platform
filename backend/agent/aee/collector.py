@@ -25,6 +25,8 @@ class EventMetadata:
     event_subtype: Optional[str] = None
     package_name: Optional[str] = None
     device_timestamp: Optional[datetime] = None
+    # #785: 设备侧时间戳原文（与 MTK extra.aee_ts 对齐）；UTC 换算见 device_timestamp
+    device_timestamp_raw: Optional[str] = None
 
 
 @runtime_checkable

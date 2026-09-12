@@ -91,9 +91,9 @@ def execute_dispatch_plan_run(
     *,
     triggered_by: str,
 ) -> tuple[int, str]:
-    from backend.api.routes.plans import (
-        _require_active_wifi_pool,
-        _require_wifi_pool_matches_plan,
+    from backend.services.plan_wifi import (
+        require_active_wifi_pool,
+        require_wifi_pool_matches_plan,
     )
 
     plan_id = params["plan_id"]
@@ -104,8 +104,8 @@ def execute_dispatch_plan_run(
     wifi_pool_id = params.get("wifi_pool_id")
     if wifi_pool_id is not None:
         try:
-            _require_active_wifi_pool(db, wifi_pool_id)
-            _require_wifi_pool_matches_plan(db, plan_id, wifi_pool_id)
+            require_active_wifi_pool(db, wifi_pool_id)
+            require_wifi_pool_matches_plan(db, plan_id, wifi_pool_id)
         except HTTPException as exc:
             detail = exc.detail
             if isinstance(detail, dict):

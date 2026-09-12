@@ -46,6 +46,25 @@ fi
 grep -q 'NOPASSWD: /usr/local/sbin/stp-agent-priv' /etc/sudoers.d/stability-test-agent
 echo "SUDOERS_OK"
 
+echo "== 1b) 锚点护栏（#1553）=="
+# 把 INSTALL_DIR 移向系统目录必须被拒：否则 fix-ownership 的 `chown -R` 与
+# apply-code 的 rsync 会以 root 作用在 /etc、/usr/local 这类目录上。
+for bad_dir in /etc / /usr/local /usr/local/sbin; do
+  if /usr/local/sbin/stp-agent-priv bootstrap --install-dir "$bad_dir" \
+      --user agentuser --group agentuser --service stability-test-agent 2>/dev/null; then
+    echo "BAD: bootstrap accepted --install-dir $bad_dir"; exit 1
+  fi
+done
+echo "INSTALL_DIR_GUARD_OK"
+# 已存在 conf 时不得重新指向（即使目标目录本身合法）
+mkdir -p /srv/other
+if /usr/local/sbin/stp-agent-priv bootstrap --install-dir /srv/other \
+    --user agentuser --group agentuser --service stability-test-agent 2>/dev/null; then
+  echo "BAD: bootstrap re-pointed an existing install"; exit 1
+fi
+grep -q '^INSTALL_DIR=/srv/stp$' /etc/stp-agent-priv.conf
+echo "ANCHOR_DRIFT_GUARD_OK"
+
 echo "== 2) selftest =="
 /usr/local/sbin/stp-agent-priv selftest
 

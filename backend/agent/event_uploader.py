@@ -52,7 +52,51 @@ _RECOVER_POLL_LIMIT = 200
 _RETRY_FAILED_LIMIT = 200
 
 
+_ATTEMPTS_STATE_PREFIX = "event_upload_attempts:"
+
+
+def _attempts_state_key(event_id: str) -> str:
+    return f"{_ATTEMPTS_STATE_PREFIX}{event_id}"
+
+
+def _durable_get_attempts(event_id: str) -> Optional[int]:
+    """Read persisted attempt count from agent_state (#785).
+
+    Missing STP_AGENT_STATE_DB / LocalDB → None（调用方回退内存）。
+    """
+    try:
+        try:
+            from backend.agent.aee.state_store import ScriptStateStore
+        except ImportError:
+            from agent.aee.state_store import ScriptStateStore
+        raw = ScriptStateStore().get_state(_attempts_state_key(event_id), "")
+        if raw.strip() == "":
+            return None
+        return max(0, int(raw))
+    except Exception:
+        return None
+
+
+def _durable_set_attempts(event_id: str, attempts: int) -> None:
+    try:
+        try:
+            from backend.agent.aee.state_store import ScriptStateStore
+        except ImportError:
+            from agent.aee.state_store import ScriptStateStore
+        ScriptStateStore().set_state(_attempts_state_key(event_id), str(int(attempts)))
+    except Exception:
+        logger.debug(
+            "event_uploader_attempts_persist_failed event_id=%s", event_id, exc_info=True,
+        )
+
+
+def _durable_clear_attempts(event_id: str) -> None:
+    """Best-effort clear；ScriptStateStore 无 delete —— 写 0 即可。"""
+    _durable_set_attempts(event_id, 0)
+
+
 def _event_uploader_enabled() -> bool:
+
     """#287：单一开关（与 DLE 注册共用），默认开。
 
     ``STP_DEVICE_LOG_EVENT_ENABLED=0`` 显式关闭；未配置时组件因缺
@@ -122,6 +166,8 @@ class EventUploader:
         # （队列中、在传、或退避重试等待中），轮询/重试/溢出三源重入队在此收敛。
         self._active_lock = threading.Lock()
         self._active_ids: set[str] = set()
+        # #785: attempt 跨 600s 重入队 / 进程重启保持；内存 + agent_state 双写
+        self._attempt_counts: Dict[str, int] = {}
 
     @classmethod
     def instance(cls) -> "EventUploader":
@@ -200,6 +246,28 @@ class EventUploader:
         if self._dispatcher is not None:
             self._dispatcher.join(timeout=timeout)
 
+    def _load_attempts(self, event_id: str) -> int:
+        with self._active_lock:
+            if event_id in self._attempt_counts:
+                return int(self._attempt_counts[event_id])
+        durable = _durable_get_attempts(event_id)
+        if durable is not None:
+            with self._active_lock:
+                self._attempt_counts[event_id] = durable
+            return durable
+        return 0
+
+    def _store_attempts(self, event_id: str, attempts: int) -> None:
+        n = max(0, int(attempts))
+        with self._active_lock:
+            self._attempt_counts[event_id] = n
+        _durable_set_attempts(event_id, n)
+
+    def _clear_attempts(self, event_id: str) -> None:
+        with self._active_lock:
+            self._attempt_counts.pop(event_id, None)
+        _durable_clear_attempts(event_id)
+
     def enqueue_local_event(
         self,
         *,
@@ -223,6 +291,10 @@ class EventUploader:
             # Plan A: LOCAL 不自动上送；upload_task 标记后经 _recover_pending 入队
             return False
         event_id = str(event["id"])
+        if "upload_attempts" in event and event.get("upload_attempts") is not None:
+            start_attempt = max(0, int(event["upload_attempts"]))
+        else:
+            start_attempt = self._load_attempts(event_id)
         job = _UploadJob(
             event_id=event_id,
             local_path=str(event["local_path"]),
@@ -233,6 +305,7 @@ class EventUploader:
             detected_at=str(event.get("detected_at", "")),
             host_id=str(event.get("host_id", self._host_id)),
             job_id=event.get("job_id"),
+            attempt=start_attempt,
             prune_after_upload=prune_after_upload,
         )
         with self._active_lock:
@@ -387,10 +460,13 @@ class EventUploader:
             logger.exception("event_uploader_failed event_id=%s attempt=%d", job.event_id, job.attempt)
             if job.attempt + 1 < _MAX_RETRIES:
                 job.attempt += 1
+                self._store_attempts(job.event_id, job.attempt)
                 job.rescheduled = True
                 delay = min(300.0, 2.0 ** job.attempt)
                 threading.Timer(delay, lambda: self._queue.put(job)).start()
             else:
+                # #785: 耗尽后持久化上限，600s 重入队不得 attempt=0 再烧一轮
+                self._store_attempts(job.event_id, _MAX_RETRIES)
                 self._patch_state(job, state="UPLOAD_FAILED")
 
     def _patch_state(
@@ -433,6 +509,8 @@ class EventUploader:
                     job.event_id, resp.status_code, resp.text[:200],
                 )
                 return False
+            if state == "REMOTE":
+                self._clear_attempts(job.event_id)
             return True
         except Exception:
             logger.exception("event_uploader_patch_error event_id=%s", job.event_id)
@@ -576,6 +654,10 @@ class EventUploader:
 
         in-flight 去重（`_active_ids`）保证正在传/退避中的事件不会被本循环
         重复入队；只有终态失败或中断（Agent 重启）的行才会真正回到队列。
+
+        #785: attempt 持久化后，已耗尽 ``_MAX_RETRIES`` 的 UPLOAD_FAILED
+        不再以 attempt=0 重入队（避免每 10 分钟再烧一轮）。UPLOADING
+        （中断恢复）仍按已记录 attempt 继续，不因上限永久跳过。
         """
         while not self._stop_evt.wait(_RETRY_FAILED_INTERVAL):
             if not self._configured:
@@ -594,8 +676,19 @@ class EventUploader:
                 if resp.status_code >= 400:
                     continue
                 for item in resp.json().get("data", {}).get("events", []):
+                    eid = str(item["id"])
+                    attempts = self._load_attempts(eid)
+                    if (
+                        str(item.get("state") or "") == "UPLOAD_FAILED"
+                        and attempts >= _MAX_RETRIES
+                    ):
+                        logger.info(
+                            "event_uploader_retry_exhausted_skip event_id=%s attempts=%d",
+                            eid, attempts,
+                        )
+                        continue
                     self.enqueue_local_event(event={
-                        "id": item["id"],
+                        "id": eid,
                         "local_path": item["local_path"],
                         "host_id": item.get("host_id", self._host_id),
                         "serial": item.get("serial", ""),
@@ -604,6 +697,7 @@ class EventUploader:
                         "detected_at": item.get("detected_at", ""),
                         "plan_run_id": item.get("plan_run_id"),
                         "job_id": item.get("job_id"),
+                        "upload_attempts": attempts,
                     }, force=True)
             except Exception:
                 logger.exception("event_uploader_retry_scan_error")
