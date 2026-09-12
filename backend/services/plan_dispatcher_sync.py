@@ -448,6 +448,14 @@ def preview_plan_dispatch_sync(
         )
     defaults = _script_defaults(metadata)
     lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
+    # #782：预览必须与真实派发共用同一校验，否则会把「派发时必被拒」的生命周期
+    # 展示成可执行（例：仅 patrol 无 init）。派发路径在下方同款校验（见
+    # ``validate_pipeline_def({"lifecycle": lifecycle})``）。
+    is_valid, errors = validate_pipeline_def({"lifecycle": lifecycle})
+    if not is_valid:
+        raise PlanDispatchError(
+            f"Plan {plan_id} generated invalid lifecycle: {'; '.join(errors)}"
+        )
     return _build_preview(plan, lifecycle, device_ids)
 
 
