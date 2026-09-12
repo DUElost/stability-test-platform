@@ -17,12 +17,12 @@ IntervalTrigger (see ``app_scheduler.py``).
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
 from backend.core.database import AsyncSessionLocal
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.core.metrics import host_heartbeat_missed
 from backend.models.enums import HostStatus, JobStatus
 from backend.models.host import Host
@@ -31,15 +31,15 @@ from backend.services.state_machine import InvalidTransitionError, JobStateMachi
 
 logger = logging.getLogger(__name__)
 
-_HOST_HEARTBEAT_TIMEOUT = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "120"))
-
 
 async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
     """Mark hosts OFFLINE if heartbeat exceeded, transition RUNNING jobs → UNKNOWN.
 
     Returns (hosts_marked_offline, jobs_transitioned).
     """
-    threshold = datetime.now(timezone.utc) - timedelta(seconds=_HOST_HEARTBEAT_TIMEOUT)
+    threshold = datetime.now(timezone.utc) - timedelta(
+        seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS,
+    )
     dead_hosts = (await db.execute(
         select(Host).where(
             Host.last_heartbeat < threshold,

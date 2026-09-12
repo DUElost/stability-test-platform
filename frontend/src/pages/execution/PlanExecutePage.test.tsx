@@ -211,18 +211,20 @@ describe('PlanExecutePage', () => {
     expect(screen.getByText(/已选 1 \/ 1 台可用/)).toBeInTheDocument();
   });
 
-  it('prefers backend schedulable over raw device status', async () => {
+  // #786：后端不产出 `schedulable`（DeviceOut 全仓零产出），原用例断言的是生产
+  // 不可能发生的行为（「后端准入覆盖 status」）。改为锁定真实准入规则：只有 ONLINE 可选。
+  it('admits devices by status: only ONLINE is selectable（#786）', async () => {
     renderPage({
       devices: [
-        { id: 1, serial: 'ONLINE-BLOCKED', host_id: 'h1', status: 'ONLINE', schedulable: false },
-        { id: 2, serial: 'BUSY-ADMITTED', host_id: 'h1', status: 'BUSY', schedulable: true },
+        { id: 1, serial: 'ONLINE-OK', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'BUSY-BLOCKED', host_id: 'h1', status: 'BUSY' },
       ],
     });
 
     await goToDeviceStep();
 
-    expect(await screen.findByLabelText(/ONLINE-BLOCKED/)).toBeDisabled();
-    expect(screen.getByLabelText(/BUSY-ADMITTED/)).not.toBeDisabled();
+    expect(await screen.findByLabelText(/ONLINE-OK/)).not.toBeDisabled();
+    expect(screen.getByLabelText(/BUSY-BLOCKED/)).toBeDisabled();
     expect(screen.getByText(/已选 0 \/ 1 台可用/)).toBeInTheDocument();
   });
 

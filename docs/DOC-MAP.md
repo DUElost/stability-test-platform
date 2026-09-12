@@ -54,6 +54,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **共享启动契约** | [`../AGENTS.md`](../AGENTS.md) | 总原则、跨模块硬不变量、安全红线与按需入口 |
 | **Claude 入口** | [`../CLAUDE.md`](../CLAUDE.md) | 导入共享契约并路由状态机与领域细节 |
 | **全面审查指引** | [`reviews/PROJECT_REVIEW_PLAN.md`](./reviews/PROJECT_REVIEW_PLAN.md) | 全面只读审查总纲（R01–R15 范围与入口、逐轮基线与报告模板、跨区收口）；**指引而非审查结果**，总纲建立不代表任何区域已审查完成 |
+| **跨区收口** | [`reviews/REVIEW_CROSS_REGION_CHAIN_A_2026-09-12.md`](./reviews/REVIEW_CROSS_REGION_CHAIN_A_2026-09-12.md) | §6 链 A（执行链）六跳逐跳对证（五要素 + file:line + 既有测试盘点）、场景覆盖矩阵、缺口 G-1～G-9；**静态对证而非动态验证通过**，链 B 未启动 |
 | **Living 审查** | [`reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md`](./reviews/DEVICE_LOG_FLOW_REVIEW_2026-08-09.md) | 设备日志流转框架 + 缺陷/DoD/落地顺序（v3.0，阶段 0 ✅）；前一版快照 [`reviews/PROJECT_REVIEW_2026-08-09_previous.md`](./reviews/PROJECT_REVIEW_2026-08-09_previous.md) |
 | **Living 审查** | [`reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md`](./reviews/PROJECT_TAXONOMY_REVIEW_2026-08-18.md) | 多项目并存需求 + 生产数据基准 + 缺口核对 G1–G14 + 落地顺序（ADR-0029 背景分析） |
 | **Living 审查** | [`reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md`](./reviews/MTBF_MULTI_CASE_RESEARCH_2026-08-19.md) | MTBF 多用例平台化研究（runtask.xml 实测 + 平台缺口 G1–G5 + 候选形态 A/B/C + 设计草图；[ADR-0030](./adr/ADR-0030-multi-case-suite-management.md) 背景分析，Accepted v1.9） |
