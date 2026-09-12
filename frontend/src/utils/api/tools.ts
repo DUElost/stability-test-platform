@@ -1,24 +1,8 @@
 import apiClient from './client';
 import { unwrapApiResponse } from './client';
 import type {
-  ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
   ScriptEntry, ScriptUsage,
 } from './types';
-
-export const actionTemplates = {
-  list: (isActive?: boolean) =>
-    unwrapApiResponse<ActionTemplateEntry[]>(
-      apiClient.get('/action-templates', { params: isActive != null ? { is_active: isActive } : {} })
-    ),
-  get: (id: number) =>
-    unwrapApiResponse<ActionTemplateEntry>(apiClient.get(`/action-templates/${id}`)),
-  create: (data: ActionTemplateCreatePayload) =>
-    unwrapApiResponse<ActionTemplateEntry>(apiClient.post('/action-templates', data)),
-  update: (id: number, data: ActionTemplateUpdatePayload) =>
-    unwrapApiResponse<ActionTemplateEntry>(apiClient.put(`/action-templates/${id}`, data)),
-  remove: (id: number) =>
-    unwrapApiResponse<void>(apiClient.delete(`/action-templates/${id}`)),
-};
 
 export const scripts = {
   listCategories: () =>
