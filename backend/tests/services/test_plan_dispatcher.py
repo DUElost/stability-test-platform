@@ -773,3 +773,69 @@ class TestDispatcherCoreSharing:
             sync_dispatcher._build_plan_snapshot
             is plan_dispatcher_core.build_plan_snapshot
         )
+
+
+# ── #782：预览必须与派发共用同一 lifecycle 校验 ────────────────────────────────
+
+@pytest.fixture
+def _patrol_only_fixture(db_session):
+    """仅 patrol、无 init 的 Plan —— 生成的 lifecycle 语义非法（init 至少一步）。"""
+    host = Host(id="h-p782", hostname="hp782", status=HostStatus.ONLINE.value)
+    device = Device(serial="S-p782", host_id="h-p782", status="ONLINE")
+    script = Script(
+        name="patrol_probe_782", script_type="python", version="1.0.0",
+        nfs_path="/nfs/scripts/patrol_probe_782/v1.0.0/patrol_probe_782.py",
+        content_sha256="78" * 32,
+        default_params={}, is_active=True,
+    )
+    plan = Plan(name="patrol-only-782", patrol_interval_seconds=30)
+    db_session.add_all([host, device, script, plan])
+    db_session.commit()
+
+    db_session.add(PlanStep(
+        plan_id=plan.id, step_key="patrol_probe_782",
+        script_name="patrol_probe_782", script_version="1.0.0",
+        stage="patrol", sort_order=0, timeout_seconds=30, retry=0,
+    ))
+    db_session.commit()
+    return plan, device
+
+
+class TestPreviewRunsPipelineValidation:
+    """#782：预览不得把「派发时必被拒」的生命周期展示成可执行。"""
+
+    def test_preview_rejects_lifecycle_that_dispatch_would_reject(
+        self, db_session, _patrol_only_fixture,
+    ):
+        plan, device = _patrol_only_fixture
+
+        with pytest.raises(PlanDispatchError) as excinfo:
+            preview_plan_dispatch_sync(
+                plan_id=plan.id, device_ids=[device.id], db=db_session,
+            )
+
+        message = str(excinfo.value)
+        assert "generated invalid lifecycle" in message
+        # 失败项即派发路径会给出的同一条错误（init 至少一步）。
+        assert "lifecycle.init" in message
+
+    def test_rejection_reason_comes_from_the_shared_validator(
+        self, db_session, _patrol_only_fixture,
+    ):
+        """预览报错与派发路径同源：都来自 ``validate_pipeline_def`` 的同一批错误。"""
+        from backend.core.pipeline_validator import validate_pipeline_def
+
+        plan, device = _patrol_only_fixture
+        steps = (
+            db_session.query(PlanStep)
+            .filter(PlanStep.plan_id == plan.id)
+            .all()
+        )
+        lifecycle = _build_lifecycle_from_steps(
+            plan, steps, {("patrol_probe_782", "1.0.0"): {}},
+        )
+
+        is_valid, errors = validate_pipeline_def({"lifecycle": lifecycle})
+
+        assert is_valid is False
+        assert any("lifecycle.init" in err for err in errors)
