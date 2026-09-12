@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
@@ -375,7 +376,15 @@ def create_case(
         TestCase.suite_id == suite_id, TestCase.name == payload.name
     ).first():
         raise HTTPException(status_code=409, detail="case name already exists in suite")
-    case = TestCase(suite_id=suite.id, **payload.model_dump())
+    data = payload.model_dump()
+    if data.get("ordinal") is None:
+        max_ord = (
+            db.query(func.max(TestCase.ordinal))
+            .filter(TestCase.suite_id == suite_id)
+            .scalar()
+        )
+        data["ordinal"] = (max_ord or 0) + 1
+    case = TestCase(suite_id=suite.id, **data)
     db.add(case)
     db.flush()
     record_audit(
