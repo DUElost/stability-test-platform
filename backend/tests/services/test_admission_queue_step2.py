@@ -268,6 +268,54 @@ class TestAdmissionReaper:
         assert pr.status == "FAILED"
         assert pr.result_summary["reason"] == "admission_requeue_exhausted"
 
+    def test_candidate_failure_does_not_abort_the_sweep(
+        self, db_session, failed_dispatch_run, monkeypatch,
+    ):
+        """#1559：单个候选抛异常（Redis 抖动致 SAQ 读超时）不得中断整轮扫描。
+
+        `_recover_stale_precheck_run` 里 `get_saq_job_state_sync` 是裸
+        `future.result(timeout=3.0)`，Redis 抖动会抛 TimeoutError/RedisError。
+        该异常若穿透 for 循环，本 tick **其余** stale PRECHECK 全部得不到恢复
+        ——而 reaper 是它们唯一的恢复通道，一次短暂 Redis 故障就被放大成
+        「整批不动」。
+
+        构造三条同样 stale 的候选，让**扫描顺序上的第一条**抛异常，断言后两条
+        仍被正常重排。
+        """
+        from backend.scheduler import precheck_reaper
+        from backend.scheduler.precheck_reaper import reconcile_stale_precheck_v2
+
+        first = self._make_precheck(db_session, failed_dispatch_run, stale_seconds=10_000)
+        others = []
+        for _ in range(2):
+            pr = PlanRun(
+                plan_id=failed_dispatch_run.plan_id, status="PRECHECK",
+                failure_threshold=0.05, plan_snapshot={}, run_type="MANUAL",
+                run_context={"dispatch_device_ids": [1]},
+                precheck_started_at=datetime.now(timezone.utc) - timedelta(seconds=10_000),
+                enqueued_at=datetime.now(timezone.utc) - timedelta(seconds=10_060),
+            )
+            db_session.add(pr)
+            others.append(pr)
+        db_session.commit()
+
+        poisoned_id = min(pr.id for pr in [first, *others])  # 扫描按 id 升序
+        real_read = precheck_reaper.get_saq_job_state_sync
+
+        def _flaky_read(key):
+            if str(poisoned_id) in key:
+                raise TimeoutError("simulated Redis flap")
+            return real_read(key)
+
+        monkeypatch.setattr(precheck_reaper, "get_saq_job_state_sync", _flaky_read)
+
+        summary = reconcile_stale_precheck_v2(db=db_session)
+
+        assert summary["checked"] == 3, summary
+        assert summary["requeued"] == 2, (
+            f"一条候选抛异常后其余候选必须仍被恢复，实际 {summary}"
+        )
+
     def test_fresh_precheck_untouched(self, db_session, failed_dispatch_run):
         from backend.scheduler.precheck_reaper import reconcile_stale_precheck_v2
 

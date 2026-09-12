@@ -102,6 +102,18 @@ def _patch_run_context(db: Session, plan_run_id: int, path: list, value) -> None
     )
 
 
+def _reload_run_context(db: Session, pr: PlanRun) -> None:
+    """#1552：分段写之后同步本 session 的 ORM 视图。
+
+    ``_patch_run_context`` 走原生 ``text()`` UPDATE，SQLAlchemy 不会同步 identity
+    map；而调用方手里的 ``run_ctx`` 只是 ``dict(pr.run_context or {})`` 的**副本**，
+    写回它并不会改到 ORM 属性。因此**任何读 ``pr.run_context`` 的后续逻辑之前**
+    必须 expire，否则读到的是写入前的陈旧 dict——聚合的 ``_abort_requested`` 正是
+    这样的读者，漏掉它会让 abort 覆盖不生效（卡在 RUNNING 且 job 已全终态的 run
+    会被判成 SUCCESS）。"""
+    db.expire(pr, ["run_context"])
+
+
 def abort_plan_run(
     plan_run_id: int,
     *,
@@ -269,6 +281,10 @@ def abort_plan_run(
         _patch_run_context(
             db, plan_run_id, ["abort_requested"], run_ctx["abort_requested"],
         )
+        # #1552：在**任何**读 pr.run_context 的后续逻辑之前同步 ORM 视图。
+        # 下方 apply_plan_run_aggregation[_from_counters] 会读它判定 abort 覆盖，
+        # 晚了这一步就会读到写入前的 dict（abort 被判成 SUCCESS）。
+        _reload_run_context(db, pr)
 
         # #492: PENDING 批量终态化——单条 UPDATE 完成状态迁移 + 计数器
         # 一次聚合 + 聚合审计。旧实现逐条 transition+on_job_terminal_sync：
@@ -371,6 +387,8 @@ def abort_plan_run(
             ["abort_requested", "requested_job_ids"],
             list(abort_requested_jobs),
         )
+        # 同 #1552：第二次分段写之后再次同步（下方兜底聚合同样读 pr.run_context）
+        _reload_run_context(db, pr)
 
         has_active_jobs = any(
             job.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)
@@ -412,8 +430,9 @@ def abort_plan_run(
     if in_precheck:
         # #793：precheck 亦分段写（同一行可能被归档等并发写者更新）
         _patch_run_context(db, plan_run_id, ["precheck"], precheck)
-    # 不再整段写回；让同 session 后续读者（如聚合的 _abort_requested）读到库端值
-    db.expire(pr, ["run_context"])
+    # 不再整段写回；precheck 分支的写同样要同步 ORM 视图（#1552）。
+    # 注意：读取方必须在此之前——abort 主路径的聚合读取已在上方各自就位。
+    _reload_run_context(db, pr)
     db.flush()
 
     record_audit(

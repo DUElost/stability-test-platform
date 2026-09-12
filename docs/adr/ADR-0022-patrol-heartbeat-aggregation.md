@@ -1,7 +1,6 @@
 # ADR-0022 — Patrol 心跳化 + 失败退避 + 手动干预
+- 状态：Accepted
 
-| Status     | Accepted                                |
-| ---------- | --------------------------------------- |
 | Date       | 2026-05-08                              |
 | Authors    | dai.lv                                  |
 | Reviewers  | 平台研发组                              |
