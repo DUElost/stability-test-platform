@@ -33,6 +33,15 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+# #1659：以 `python tools/dev/queue_head_telemetry.py` 直接运行时 sys.path[0]
+# 是 tools/dev，仓库根不在 path——collect() 里的 `from tools.dev.ai_work import`
+# 会 ModuleNotFoundError。与 backfill-test-project.py 同款 bootstrap（用
+# __file__ 推导，与 cwd 无关）。
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 # required checks 的权威来源是分支保护（GitHub）。此列表仅作 API 不可用时的
 # 回退，并会在输出里标注 required_source=fallback——不回退成静默猜测。
