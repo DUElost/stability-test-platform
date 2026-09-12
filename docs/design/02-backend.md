@@ -68,7 +68,6 @@ backend/
 | `resource_pools.py` | `/api/v1/resource-pools` | WiFi 等资源池 |
 | `audit.py` | `/api/v1/audit-logs` | 审计日志 |
 | `notifications.py` | `/api/v1/notifications` | 通知规则 |
-| `action_templates.py` | `/api/v1/action-templates` | Action 模板 |
 | `results.py` | `/api/v1/results` | 结果查询 |
 | `stats.py` | `/api/v1/stats` | 统计 |
 | `metrics.py` | `/metrics` | Prometheus |
