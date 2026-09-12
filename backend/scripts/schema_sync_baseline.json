@@ -3,5 +3,7 @@
   "modify_type|alert_rules|event_type",
   "modify_type|jira_run|issue_keys",
   "modify_type|notification_channels|type",
-  "remove_index|plan_run|idx_plan_run_admission_queue"
+  "remove_index|action_template|ix_action_template_active",
+  "remove_index|plan_run|idx_plan_run_admission_queue",
+  "remove_table|action_template"
 ]

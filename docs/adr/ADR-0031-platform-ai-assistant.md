@@ -131,7 +131,7 @@
 
 ## 落地与后续动作
 
-分两阶段：阶段一 = 本 ADR + 实施计划文档人工评审；阶段二 = 实现 PR（后端 + 前端 + 测试 + 文档）。**阶段三（Accepted）**：Plan 执行链路工具面见 [附录 A](./ADR-0031-appendix-phase3-core-write-tools.md)（#658 合入 `main`）。
+分两阶段：阶段一 = 本 ADR + 实施计划文档人工评审；阶段二 = 实现 PR（后端 + 前端 + 测试 + 文档）。**阶段三（Accepted）**：Plan 执行链路工具面见 [附录 A](./ADR-0031-A-appendix-phase3-core-write-tools.md)（#658 合入 `main`）。
 
 **触发复议条件**（未触发前不得重提）：
 
@@ -145,7 +145,7 @@
 ## 关联实现/文档
 
 - 实施计划：[`docs/reviews/AI_ASSISTANT_PLAN_2026-08-27.md`](../reviews/AI_ASSISTANT_PLAN_2026-08-27.md)（数据模型 / 工具清单 / 路由 / 测试矩阵 / 部署步骤）
-- 阶段三附录（Accepted）：[`ADR-0031-appendix-phase3-core-write-tools.md`](./ADR-0031-appendix-phase3-core-write-tools.md)
+- 阶段三附录（Accepted）：[`ADR-0031-A-appendix-phase3-core-write-tools.md`](./ADR-0031-A-appendix-phase3-core-write-tools.md)
 - D8 权限对齐：[`docs/notes/architecture/2026-08-31-ai-assistant-permission-parity-d8.md`](../notes/architecture/2026-08-31-ai-assistant-permission-parity-d8.md)
 - 域划界参照：[`docs/reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md`](../reviews/AI_NATIVE_SDLC_PLAYBOOK_COMPARISON_2026-08-26_synthesis.md)
 - [ADR-0006](./ADR-0006-realtime-communication-rest-plus-websocket.md)（REST + WebSocket 分工，D5 依据）
