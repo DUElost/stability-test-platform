@@ -24,7 +24,16 @@ def _parse_cpu_line(line: str) -> Dict[str, int]:
         raise ValueError("Invalid /proc/stat format")
     values = [int(v) for v in fields[1:1 + len(_CPU_FIELDS)]]
     values += [0] * (len(_CPU_FIELDS) - len(values))
-    return dict(zip(_CPU_FIELDS, values, strict=True))
+    # #1558：不用 ``zip(..., strict=)``——它要 Python 3.10+，而
+    # backend/agent/DEPLOY.md 声明「Python 3.8+」、heartbeat_thread.py 也明确
+    # 注释「不用 zip(strict=)：Agent 运行环境兼容旧 python3」。在 3.8/3.9 上它抛
+    # TypeError，被 get_cpu_usage 的 except 吞掉 → CPU 恒 0.0 →
+    # capacity_reporter 的 cpu>90 限流判据永不触发（主机可持续超领 slot），
+    # 且只剩一条 warning 日志。
+    # 也不能写成 ``zip(..., strict=False)``：``strict`` 形参本身就是 3.10 才有的。
+    # 故直接按索引建字典——既不带该形参，也满足 ruff B905（不能用 noqa 掩盖，
+    # 那会把「本文件刻意避开 zip」这条约束藏起来）。
+    return {field: values[index] for index, field in enumerate(_CPU_FIELDS)}
 
 
 def get_cpu_usage() -> float:
