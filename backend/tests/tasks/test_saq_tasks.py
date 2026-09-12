@@ -715,3 +715,23 @@ async def test_send_notification_task_real_path_idempotent_retry(
     delivery = (log.context or {}).get("channel_delivery") or {}
     assert delivery[str(ok_ch.id)]["outcome"] == DeliveryOutcome.ACCEPTED.value
     assert delivery[str(bad_ch.id)]["outcome"] == DeliveryOutcome.ACCEPTED.value
+
+
+async def test_merge_task_all_platforms_failed_raises_and_skips_extract(monkeypatch):
+    """#1527: merge 全失败（result="" 非 "ok"）必须 raise（SAQ 可见失败并
+    重试）且不得入队 extract——旧实现静默 return：SAQ 视成功、PlanRun 永久
+    RUNNING、监控无感。"""
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setattr(
+        saq_tasks, "_run_sync_exclusive", AsyncMock(return_value=""),
+    )
+    enq = AsyncMock()
+    monkeypatch.setattr(saq_tasks, "_enqueue_extract_task", enq)
+
+    with pytest.raises(RuntimeError, match="merge all platforms failed"):
+        await saq_tasks.merge_task(
+            {}, plan_run_id=42, scan_round_id="round-X", round_started_at=None,
+        )
+
+    enq.assert_not_awaited()
