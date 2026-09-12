@@ -81,8 +81,11 @@ conftest）。
 
 - **解析器的结构耦合**：`_backend_test_job_env_keys()` 依赖 `ci.yml` 的缩进与
   job 名（`^  backend-test:`）。已加 `test_ci_yml_is_parseable_and_job_found`
-  兜底（解析为空即红），但若将来 job 改名或引入 YAML 锚点/复用，应改为按
-  YAML 解析（本单刻意用行解析以避免在 PR 路径引入 `pyyaml` 之外的解析依赖——
+  兜底（解析为空即红），另对三种形态做过边界验证（合成 YAML 直接喂解析逻辑，
+  不改文件）：①步骤级 `DATABASE_URL` 紧随 job 级 env 之后 → 正确排除；
+  ②job 级自带 `DATABASE_URL` → 正确捕获；③job 级 env 之后直接接下一个 job
+  （无 `steps:`）→ 正确取键。若将来 job 改名或引入 YAML 锚点/复用，应改为按
+  YAML 解析（本单刻意用行解析以避免在 PR 路径引入额外解析依赖——
   `pyyaml` 已在 dev lock 中，届时可直接换）。
 - **同类「接线 × 护栏」模式**：本单只锁了 `backend-test` 这一处。若后续
   `frontend-check` / `docker-build` 或新增 job 也出现「环境变量接线错误只在夜间
