@@ -735,3 +735,73 @@ async def test_merge_task_all_platforms_failed_raises_and_skips_extract(monkeypa
         )
 
     enq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_sync_reports_async_failure_to_callback():
+    """#1555：fire-and-forget 路径真正入队失败时必须回调，而不是静默吞掉。
+
+    ``required=False`` 走 ``call_soon_threadsafe``，在**触碰 Redis 之前**就返回
+    True；Redis 故障只发生在之后，并被 ``_do_enqueue_best_effort`` 的 except
+    吞掉。没有本回调，调用方拿到的 True 只是「已排上事件循环」——通知投递的
+    线程池降级因此永远收不到失败信号。
+    """
+    import backend.tasks.saq_worker as mod
+
+    mock_queue = MagicMock()
+    mock_queue.enqueue = AsyncMock(side_effect=RuntimeError("redis down"))
+
+    original_queue = mod._queue
+    original_loop = mod._loop
+    seen: list = []
+    try:
+        mod._queue = mock_queue
+        mod._loop = asyncio.get_running_loop()
+
+        scheduled = await asyncio.to_thread(
+            mod.enqueue_sync,
+            "send_notification_task",
+            key="notif:probe",
+            on_async_failure=seen.append,
+        )
+        assert scheduled is True, "fire-and-forget 路径先返回 True（这正是缺口所在）"
+
+        for _ in range(20):
+            if seen:
+                break
+            await asyncio.sleep(0)
+        assert seen, "异步入队失败必须回调 on_async_failure"
+        assert isinstance(seen[0], RuntimeError)
+    finally:
+        mod._queue = original_queue
+        mod._loop = original_loop
+
+
+@pytest.mark.asyncio
+async def test_enqueue_sync_callback_failure_does_not_escape():
+    """回调自身抛异常不得外溢（它在事件循环上执行，会污染无关任务）。"""
+    import backend.tasks.saq_worker as mod
+
+    mock_queue = MagicMock()
+    mock_queue.enqueue = AsyncMock(side_effect=RuntimeError("redis down"))
+
+    original_queue = mod._queue
+    original_loop = mod._loop
+    called: list = []
+
+    def _boom(_exc):
+        called.append(True)
+        raise ValueError("callback bug")
+
+    try:
+        mod._queue = mock_queue
+        mod._loop = asyncio.get_running_loop()
+        assert mod.enqueue_sync(
+            "send_notification_task", key="notif:probe2", on_async_failure=_boom,
+        ) is True
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert called, "回调未被调用"
+    finally:
+        mod._queue = original_queue
+        mod._loop = original_loop
