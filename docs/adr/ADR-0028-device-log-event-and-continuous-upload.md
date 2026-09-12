@@ -92,18 +92,18 @@ DETECTED ──(adb pull 完成)──→ LOCAL
 
 **改为**：
 
-| PlanRun 终态 | scan | upload | merge | extract → jira/ |
-|-------------|------|--------|-------|-----------------|
+| PlanRun 终态 | scan | upload | merge（自动） | merge/extract（手动） |
+|-------------|------|--------|-------------|----------------------|
 | SUCCESS | ✅ | ✅ | ✅ | ✅ |
 | PARTIAL_SUCCESS | ✅ | ✅ | ✅ | ✅ |
-| **FAILED** | ✅ | ✅ | ❌ | ❌ |
+| **FAILED** | ✅ | ✅ | ❌ | ✅（#697；需已有 scan 产物） |
 
 - `_DEDUP_AUTO_STATUSES`（`backend/services/dedup_scan.py` 的 `should_trigger_dedup`）含 `"FAILED"`
-- FAILED 走 scan→upload（事件到达 CIFS），但不走 merge/extract（运行失败，产 jira/ 无意义）
-- 门禁为显式实现（并非依赖 scan xls 不足自然跳过）：
-  - 路由层（`backend/api/routes/dedup.py` `trigger_merge` / `trigger_extract`）：FAILED PlanRun 直接 `409`（`PlanRun FAILED：按 ADR-0028 D2 不执行 merge/extract`），且先于 merge precheck
-  - SAQ 层：`run_merge_sync` 对 FAILED 显式跳过（log `merge_skip_failed_plan_run`，返回空串）
-  - extract 在 SAQ 链无独立门禁：merge 无产物 → extract 以 `-1`（no merge artifact）短路；显式拒绝仅在路由层 409
+- FAILED 自动链走 scan→upload；`run_merge_sync` 默认返回 ``skipped_failed``（不产 jira/）
+- 手动门禁（#697）：
+  - 路由层：`trigger_merge` / `trigger_extract` **不再**因 FAILED 返回 409；merge 传 `allow_failed=True`
+  - SAQ 层：自动 `run_merge_sync` 仍对 FAILED 返回 ``skipped_failed``（与工具失败空串区分，避免 #1527 raise 误伤）；`merge_task` 对 skip 写 `upload_summary` 后正常结束
+  - extract：无 merge 产物时仍 409（`run merge first`）
 
 **upload_task 恢复**（方案 A 已恢复其 enqueue 链）：
 
@@ -170,7 +170,7 @@ extract 双根遍历：
 
 ### 负面
 
-- PlanRun FAILED 时 scan 可能产不出足够的 xls（取决于失败发生在哪个阶段）——merge/extract 由 D2 显式门禁拒绝，但事件可能因无 xls 引用而不被上传
+- PlanRun FAILED 时 scan 可能产不出足够的 xls（取决于失败发生在哪个阶段）——自动 merge/extract 仍 skip；手动可放行（#697）。事件可能因无 xls 引用而不被上传
 - EventUploader 的 copytree 逻辑保留（执行者定位，不回退）；`CONTINUOUS=1` 仅作为逃生阀模式
 - `JobLogSignal.job_id` 已由 `CASCADE` 改为 `SET NULL`（migration g5b6c7d8e9f0）
 

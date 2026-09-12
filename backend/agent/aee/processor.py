@@ -101,8 +101,9 @@ def process_device_logs(
     log_signal with extra={event_type, package_name, aee_ts, nfs_path, pull_source}.
 
     on_pull_failed (#1044): optional callback invoked **once per pending line** when
-    adb pull / strict verify first fails (or retry budget is exhausted). Does **not**
-    mark the line processed — pending retry continues. Payload::
+    adb pull / strict verify first fails (or retry budget is exhausted). Non-exhausted
+    failures keep the line in pending for retry; exhausted (#829) marks processed.
+    Payload::
         {
             "line":        str
             "parsed":      Dict[str, Any]
@@ -293,6 +294,10 @@ def process_device_logs(
                     exhausted=True,
                 )
                 pending_tasks.pop(line, None)
+                # #829: 达到上限后记入 processed，避免下一轮 db_history tick 把同一行
+                # 以 retry_count=0 复活并再次吃满 pull_retry_limit 重试墙。
+                processed_lines.add(line)
+                save_processed_lines(state_store, processed_key, processed_lines)
                 result.errors.append(f"pull_retry_exceeded:{parsed['db_path']}")
                 continue
 
