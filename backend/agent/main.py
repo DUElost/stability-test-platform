@@ -1311,6 +1311,37 @@ def main() -> None:
         boot_id=boot_id,
         execute_actions=_execute_recovery_actions_impl_closure,
     )
+    # #784: recovery sync 周期兜底——启动一次 + 设备重连不够；控制面短暂
+    # 不可达时 active_job_registry 悬空行需周期性再 reconcile（对齐终态
+    # outbox 15s 兜底）。
+    _recovery_sync_stop = threading.Event()
+    _recovery_sync_interval = float(
+        os.getenv("STP_RECOVERY_SYNC_INTERVAL_SECONDS", "60") or "60"
+    )
+    if _recovery_sync_interval < 5:
+        _recovery_sync_interval = 5.0
+
+    def _recovery_sync_loop() -> None:
+        while not _recovery_sync_stop.wait(_recovery_sync_interval):
+            try:
+                run_recovery_sync_if_needed(
+                    local_db=local_db,
+                    api_url=api_url,
+                    host_id=host_id,
+                    agent_instance_id=agent_instance_id,
+                    boot_id=boot_id,
+                    execute_actions=_execute_recovery_actions_impl_closure,
+                )
+            except Exception:
+                logger.exception("recovery_sync_periodic_failed")
+
+    _recovery_sync_thread = threading.Thread(
+        target=_recovery_sync_loop, name="recovery-sync", daemon=True,
+    )
+    _recovery_sync_thread.start()
+    logger.info(
+        "recovery_sync_periodic_started interval=%.1fs", _recovery_sync_interval,
+    )
     # SIGTERM / SIGINT graceful shutdown
     _shutdown_event = threading.Event()
 
@@ -1486,7 +1517,22 @@ def main() -> None:
         except Exception:
             logger.exception("shutdown_outbox_flush_failed")
         outbox_drain.stop()
-        # log_signal_outbox drainer（watcher 子系统启用时）
+        # #784: LogArchiver / LocalDiskMonitor / EventUploader 在 watcher 门控
+        # 之外启动——停机必须同作用域，不能包进 log_signal_drainer 分支，否则
+        # watcher 禁用时 local_db.close() 后 daemon 仍 tick → LocalDB is closed。
+        try:
+            LocalDiskMonitor.instance().stop(timeout=5.0)
+        except Exception:
+            logger.exception("shutdown_local_disk_monitor_stop_failed")
+        try:
+            LogArchiver.instance().stop(timeout=5.0)
+        except Exception:
+            logger.exception("shutdown_log_archiver_stop_failed")
+        try:
+            EventUploader.instance().stop(timeout=5.0)
+        except Exception:
+            logger.exception("shutdown_event_uploader_stop_failed")
+        # log_signal_outbox drainer + ArtifactUploader（仅 watcher 子系统启用时）
         if log_signal_drainer is not None:
             try:
                 flushed = log_signal_drainer.tick_once()
@@ -1495,17 +1541,15 @@ def main() -> None:
             except Exception:
                 logger.exception("shutdown_log_signal_flush_failed")
             log_signal_drainer.stop(timeout=5.0)
-            # 5B2：artifact uploader 收尾
             try:
                 ArtifactUploader.instance().stop(drain=True, timeout=5.0)
             except Exception:
                 logger.exception("shutdown_artifact_uploader_stop_failed")
-            # ADR-0025 Sprint 2: 停归档调度器 + 磁盘监控（未启动时为安全 no-op）
-            try:
-                LocalDiskMonitor.instance().stop(timeout=5.0)
-                LogArchiver.instance().stop(timeout=5.0)
-            except Exception:
-                logger.exception("shutdown_log_archiver_stop_failed")
+        _recovery_sync_stop.set()
+        try:
+            _recovery_sync_thread.join(timeout=5.0)
+        except Exception:
+            logger.exception("shutdown_recovery_sync_join_failed")
         heartbeat_thread.stop()
         lease_renewer.stop()
         mq_producer.close()
