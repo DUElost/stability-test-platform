@@ -201,3 +201,58 @@ def test_job_log_signal_and_dle_deleted_with_run(
     assert db.query(JobInstance).filter_by(id=job.id).first() is None
     assert db.query(JobLogSignal).count() == 0
     assert db.query(DeviceLogEvent).filter_by(id=event_id).first() is None
+
+
+def _make_nfs_dirs(root, run_id):
+    (root / "devices" / str(run_id) / "172-21-1-1").mkdir(parents=True)
+    (root / "devices" / str(run_id) / "172-21-1-1" / "evt.log").write_text("x")
+    (root / "dedup" / str(run_id) / "mtk").mkdir(parents=True)
+    (root / "dedup" / str(run_id) / "mtk" / "result.xls").write_text("y")
+
+
+def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
+    """#1521: DB 行删除前清理 devices/{id}/ 与 dedup/{id}/（NFS 轨 TTL）。"""
+    db, plan = cleanup_env
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    run = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    _make_nfs_dirs(tmp_path, run.id)
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert not (tmp_path / "devices" / str(run.id)).exists()
+    assert not (tmp_path / "dedup" / str(run.id)).exists()
+    assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is None
+
+
+def test_active_run_nfs_dirs_kept(cleanup_env, tmp_path, monkeypatch):
+    """未到期 Run 的 NFS 目录不被清理（避免删在跑/未归档的 run）。"""
+    db, plan = cleanup_env
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    run = _mk_run(db, plan, status="RUNNING", age_days=0)
+    _make_nfs_dirs(tmp_path, run.id)
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert (tmp_path / "devices" / str(run.id)).exists()
+    assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
+
+
+def test_purge_failure_defers_db_row_for_retry(cleanup_env, tmp_path, monkeypatch):
+    """文件清理失败 → DB 行保留（先文件后行，下轮重试可自愈）。"""
+    import shutil as _shutil
+
+    db, plan = cleanup_env
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    run = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    _make_nfs_dirs(tmp_path, run.id)
+
+    def _boom(path, *_a, **_k):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(_shutil, "rmtree", _boom)
+
+    cron_scheduler.run_retention_cleanup()
+
+    # DB 行仍在（下轮重试文件清理），目录仍在
+    assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
+    assert (tmp_path / "devices" / str(run.id)).exists()
