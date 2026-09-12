@@ -118,13 +118,13 @@ FORMS = [
     {
         "id": "codebuddy-ide",
         "manual": True,
-        "desc": "CodeBuddy IDE（GUI——不可自动化，人工执行）",
+        "desc": "CodeBuddy IDE 4.11.3（GUI——不可自动化，人工执行）",
         "command": None,
         "cwd": "backend/agent",
         "expected": {"q1": False, "q2": True},
         "note": "人工：子目录打开 CodeBuddy IDE 窗口，AI 面板新对话粘贴 PROBE_PROMPT；"
                 "workspace-only 注入形态（根不注入，与上方 CLI 相反），"
-                "2026-09-11 实测 Q1=否/Q2=是/Q3=一次，结果人工核对 EXPECTED",
+                "2026-09-11 实测 Q1=否/Q2=是/Q3=一次（4.11.3），结果人工核对 EXPECTED",
     },
     {
         "id": "zcode",

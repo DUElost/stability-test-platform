@@ -42,7 +42,7 @@ CodeBuddy CLI 与 CodeBuddy IDE 混为一谈**：`harness-adapters.md` 只有一
 | 实体 | 版本 | Q1 根契约 | Q2 scoped | Q3 | 通道 |
 |---|---|---|---|---|---|
 | CodeBuddy **CLI** | 2.149.0（文档记 2.143.1，已滞后） | 是 | 是 | 一次 | `codebuddy -p`，可自动化 |
-| CodeBuddy **IDE** | 未记录（未从磁盘可靠读出） | **否** | 是 | 一次 | GUI 人工探针 |
+| CodeBuddy **IDE** | 4.11.3（人工读取 Help→About） | **否** | 是 | 一次 | GUI 人工探针 |
 
 - CLI 复测证据：`python3 tools/dev/harness_probe.py --only codebuddy` → **PASS**
   （Q1=是 Q2=是）；另以 `cwd=backend/agent` 手工复跑一致。独立机制证据：
@@ -70,9 +70,9 @@ CodeBuddy CLI 与 CodeBuddy IDE 混为一谈**：`harness-adapters.md` 只有一
 
 ## 边界
 
-- IDE 版本号未取得：`product.json`/`package.json` 不在预期路径，日志无版本行；
-  IDE 内 Help→About 可读但需人工，本次未取。故 IDE 行**不写版本号**，按
-  「新增专用适配前必须用对应版本实测」纪律，下次探针时补。
+- IDE 版本号=**4.11.3**：经用户人工读取（Help→About）补入。磁盘侧无法取——`product.json`/
+  `package.json` 不在预期路径，`logs/` 仅有 8 月会话残留的 4.11.2（早于当前版本，
+  与版本已升级一致）。故版本号来源为人工读取，非自动取证，已如实标注。
 - 未验证 IDE 是否存在独立规则通道（VS Code fork 的 workspace 信任 / 扩展注入 /
   `settings.json` 路径）。本次只做附录 A 黑盒行为观测，不白盒推断加载机制
   （探针第一性设计：检测加载结果，不推断机制）。
@@ -103,13 +103,15 @@ CodeBuddy CLI 与 CodeBuddy IDE 混为一谈**：`harness-adapters.md` 只有一
 - 文档同步：`harness-adapters.md` CodeBuddy 行拆为 CLI / IDE 两行（压回 S6 100 行预算内），
   `tools/dev/harness_probe.py` 拆出 `codebuddy`（CLI，自动）与 `codebuddy-ide`（人工）两形态，
   ADR-0034 v1.12 + `adr/README.md`（主表 + M7）+ `DOC-MAP.md` 索引同步；
+- IDE 版本 **4.11.3** 经人工读取（Help→About）补入——ADR 附录 A / 适配表 / 探针形态 /
+  本 note 四处一致；
 - **未完成项（如实标注）**：`check:quick` 的 `eslint` 在本 worktree 因无 `frontend/node_modules`
   而 not found（worktree 不共享依赖，属环境缺口、与本改动无关）；已在主检出 `npm --prefix
   frontend run lint` 验证通过。
 
 ## Revisit
 
-- IDE 版本号与「是否存在独立规则通道」：下次 IDE 会话时补测（Help→About 读版本）；
+- IDE 是否存在独立规则通道：下次 IDE 会话时补测（**版本号已补：4.11.3**）；
 - IDE 根契约缺口：形态与 Zcode 同（根不注入），是否复用 Zcode 的「scoped 真身
   根指针」缓解即可，或需 IDE 专用供给，按实际影响评估；
 - IDE 转正为可承接 Requirement 的 Harness：需 Registry CLI 全周期 dogfood
