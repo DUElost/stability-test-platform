@@ -402,6 +402,39 @@ def test_pending_timeout_rolls_back_when_aggregation_fails(engine, monkeypatch):
         _cleanup_seed(seed)
 
 
+def test_pending_timeout_skips_mark_failure_same_tick(engine, monkeypatch):
+    """#791: mark 失败回滚后不得在同一 recycle_once while True 内热旋同一 PENDING。"""
+    now = datetime.now(timezone.utc)
+    seed = _seed_pending_job(
+        created_at=now - timedelta(
+            seconds=recycler.DISPATCHED_TIMEOUT_SECONDS + 60,
+        ),
+    )
+    calls = {"n": 0}
+
+    def boom(_db, job, *_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] > 5:
+            raise AssertionError(
+                f"pending timeout dead-loop on job={job.id} calls={calls['n']}"
+            )
+        raise RuntimeError("mark failed")
+
+    monkeypatch.setattr(recycler, "_mark_pending_timeout", boom)
+    _patch_recycler_neutrals(monkeypatch)
+    try:
+        recycler.recycle_once()
+        assert calls["n"] == 1, f"expected one mark attempt, got {calls['n']}"
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.PENDING.value
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
 def test_postgresql_heartbeat_wins_against_stale_timeout_candidate(engine):
     now = datetime.now(timezone.utc)
     stale_at = now - timedelta(
