@@ -115,21 +115,51 @@ class UnisocScanRunner:
                 plan_run_id, host_id, str(dedup_xls), platform_subdir="unisoc",
             )
 
+    _DEFAULT_POLL_SECONDS = 60
+
+    @classmethod
+    def _poll_seconds(cls) -> int:
+        """Parse STP_UNISOC_LOG_SCAN_POLL_SECONDS, falling back on bad config (#754).
+
+        A non-numeric value used to raise out of ``_run_log_scan_gt`` → the scan
+        worker thread died and ``_worker_started`` was never reset, stalling the
+        whole scan queue until process restart.  Misconfiguration must degrade to
+        the default, not kill the worker.
+        """
+        raw = (os.getenv("STP_UNISOC_LOG_SCAN_POLL_SECONDS") or "").strip()
+        if not raw:
+            return cls._DEFAULT_POLL_SECONDS
+        try:
+            value = int(raw)
+        except ValueError:
+            logger.warning(
+                "unisoc_scan_poll_seconds_invalid value=%r falling back to %ds",
+                raw, cls._DEFAULT_POLL_SECONDS,
+            )
+            return cls._DEFAULT_POLL_SECONDS
+        if value <= 0:
+            logger.warning(
+                "unisoc_scan_poll_seconds_non_positive value=%r falling back to %ds",
+                raw, cls._DEFAULT_POLL_SECONDS,
+            )
+            return cls._DEFAULT_POLL_SECONDS
+        return value
+
     def _build_argv(self, *, scan_root: str) -> List[str]:
-        poll_s = os.getenv("STP_UNISOC_LOG_SCAN_POLL_SECONDS", "60").strip() or "60"
+        poll_s = self._poll_seconds()
         return [
             self._scan_python,
             self._scan_script,
             "-p", scan_root,
             "-m", "sprd",
-            "-i", poll_s,
+            "-i", str(poll_s),
         ]
 
     def _run_log_scan_gt(self, scan_root: str, plan_run_id: int, host_id: str) -> bool:
         self._last_scan_timed_out = False
         argv = self._build_argv(scan_root=scan_root)
         cwd = str(Path(self._scan_script).parent)
-        poll_s = int(os.getenv("STP_UNISOC_LOG_SCAN_POLL_SECONDS", "60") or "60")
+        poll_s = self._poll_seconds()
         timeout = max(poll_s + 90, 120)
         logger.info(
             "unisoc_scan_gt_start plan_run=%d host=%s timeout=%ds argv=%s",
