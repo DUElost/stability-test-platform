@@ -118,6 +118,28 @@ def _make_local_worker_token(
     return f"{prefix}-{int(job_id)}-{digest}"
 
 
+def _parse_abort_job_ids(payload: Dict[str, Any]) -> List[int]:
+    """Parse abort command payload into job ids (#805-2).
+
+    A malformed id must not abort the whole control handler — otherwise other
+    jobs in the same batch never get their abort signal. Skip invalid entries
+    and keep the valid ones.
+    """
+    raw_job_ids = payload.get("job_ids")
+    candidates: List[Any] = []
+    if isinstance(raw_job_ids, list):
+        candidates = list(raw_job_ids)
+    elif payload.get("job_id") is not None:
+        candidates = [payload["job_id"]]
+    job_ids: List[int] = []
+    for raw in candidates:
+        try:
+            job_ids.append(int(raw))
+        except (TypeError, ValueError):
+            logger.warning("control_abort_invalid_job_id raw=%r", raw)
+    return job_ids
+
+
 def _migrate_legacy_aee_state_on_startup(db_path: str) -> Dict[str, Any]:
     """Promote legacy scan_aee state into watcher:aee namespace during agent startup."""
     summary = migrate_legacy_aee_state_keys(db_path)
@@ -890,13 +912,8 @@ def main() -> None:
                     pass
             mq_producer.set_log_rate_limit(limit)
         elif command == "abort":
-            raw_job_ids = payload.get("job_ids")
-            if isinstance(raw_job_ids, list):
-                job_ids = [int(jid) for jid in raw_job_ids]
-            elif payload.get("job_id"):
-                job_ids = [int(payload["job_id"])]
-            else:
-                job_ids = []
+            # #805-2：坏 id 不得中断整个 handler（否则同批其它 job 的 abort 丢失）。
+            job_ids = _parse_abort_job_ids(payload)
             for job_id in job_ids:
                 # ADR-0026 Step 5b: signal abort FIRST so _is_aborted()
                 # returns True, THEN cancel the permit waiter. If cancel
@@ -1417,6 +1434,15 @@ def main() -> None:
                             )
                         except Exception:
                             logger.exception("submit_failed job=%d device=%s", job["id"], device_id)
+                            # #801: submit 失败的作业不会进引擎——补记 barrier
+                            # 到达，避免同 wave peer 空等 barrier_timeout。
+                            from backend.agent.job_runner import (
+                                _arrive_patrol_barrier_preengine,
+                            )
+
+                            _arrive_patrol_barrier_preengine(
+                                job, coordinator, job["id"],
+                            )
                             _deregister_active_job(
                                 job["id"],
                                 job.get("fencing_token", ""),

@@ -1346,3 +1346,40 @@ def test_self_stop_callback_failure_does_not_block_shutdown(monkeypatch, tmp_pat
         time.sleep(0.01)
 
     assert not rec._thread.is_alive(), "回调异常也不得阻断自关闭"
+
+
+def test_baseline_pending_drops_runtime_processed_lines():
+    """#802: 共享 processed 已含的 baseline pending 行被摘除——否则后续
+    baseline 分片轮重放会再次 emit（新 seq_no 绕过控制面幂等）。"""
+    import json
+
+    from backend.agent.aee.db_history import state_key
+    from backend.agent.aee.processor import _save_pending_tasks
+
+    store = _MemStore()
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=_FakeEmitter(),
+        state_store=store,
+        serial="SX",
+        job_id=802,
+        host_id="HOST",
+    )
+    # runtime 已处理 lineA（写入共享 processed）
+    store.set_state(
+        state_key("SX", "aee_exp", prefix="watcher:aee"),
+        json.dumps(["lineA"]),
+    )
+    # baseline 分片 pending 仍留 lineA（未重放）+ lineB（未处理）
+    pending_key = "watcher_baseline:802:SX:aee_exp:pending_pull"
+    _save_pending_tasks(
+        store, pending_key,
+        {"lineA": {"db_path": "x"}, "lineB": {"db_path": "y"}},
+    )
+
+    dropped = rec._drop_runtime_processed_from_baseline_pending(
+        "watcher_baseline:802", "SX",
+    )
+
+    assert dropped == 1
+    remaining = json.loads(store.get_state(pending_key, "{}"))
+    assert set(remaining.keys()) == {"lineB"}, "仅摘除已处理行，未处理行必须保留"

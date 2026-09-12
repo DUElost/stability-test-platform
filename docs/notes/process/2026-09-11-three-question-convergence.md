@@ -8,7 +8,7 @@ Class: process
 同题已有 ≥5 份独立稿（`CA-*` fb87d5f1、`IV-*` 4a955874、`CF-*` d00273d0、4e188e、e16d6d）
 **全部标注「待综合」**，而 ADR-0034 规定的「先独立、后汇聚」中**汇聚阶段零执行**。
 故本轮不新增第 6 份平行意见，改为补齐缺失的收敛步骤，产出
-[`docs/reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_pf8rII-convergence.md`](../../reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_pf8rII-convergence.md)。
+[`docs/reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_7d4f85-convergence.md`](../../reviews/REVIEW_COVERAGE_AND_FIX_EFFECTIVENESS_2026-09-11_7d4f85-convergence.md)。
 
 **两处分歧裁定**（均有本稿独立证据，不采信源稿结论）：
 

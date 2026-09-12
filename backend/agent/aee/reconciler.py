@@ -660,6 +660,12 @@ class AeeDbHistoryReconciler:
           - baseline backlog 需要分片,避免单轮一次性扫完整个设备历史问题
         """
         baseline_prefix = f"watcher_baseline:{self._job_id}"
+        # #802: runtime pass 可能已处理 baseline 尚未重放的行（写入共享
+        # processed）——先从 baseline pending 摘除这些行，否则后续 baseline
+        # 分片轮会对同一行再次 emit（新 seq_no 绕过控制面 (job,seq) 幂等，
+        # watcher-summary / 异常率双倍计）。只摘 pending 重放路径，不改
+        # baseline 首次发现的可见性判定（下方注释约束不变）。
+        self._drop_runtime_processed_from_baseline_pending(baseline_prefix, self._serial)
         baseline_cfg = replace(
             self._cfg,
             state_key_prefix=baseline_prefix,
@@ -720,6 +726,43 @@ class AeeDbHistoryReconciler:
             processed = load_processed_lines(self._state_store, shared_key)
             processed.update(lines)
             save_processed_lines(self._state_store, shared_key, processed)
+
+    def _drop_runtime_processed_from_baseline_pending(
+        self,
+        baseline_prefix: str,
+        serial: str,
+    ) -> int:
+        """#802: 从 baseline pending 摘除共享 processed 已含的行。
+
+        runtime pass 无分片上限：首轮会把 baseline 分片未覆盖的积压行一并
+        处理并写入共享 ``watcher:aee`` processed；这些行仍留在 baseline 的
+        pending 里，后续 baseline 分片轮重放时再次 emit（新 seq_no）。
+        返回摘除行数（观测用）。
+        """
+        from .processor import _load_pending_tasks, _save_pending_tasks
+
+        dropped = 0
+        for aee_type in ("aee_exp", "vendor_aee_exp"):
+            shared_key = state_key(serial, aee_type, prefix=self._state_prefix)
+            shared = load_processed_lines(self._state_store, shared_key)
+            if not shared:
+                continue
+            pending_key = (
+                f"{baseline_prefix}:{serial}:{aee_type}:pending_pull"
+            )
+            pending = _load_pending_tasks(self._state_store, pending_key)
+            if not pending:
+                continue
+            remaining = {k: v for k, v in pending.items() if k not in shared}
+            if len(remaining) != len(pending):
+                _save_pending_tasks(self._state_store, pending_key, remaining)
+                dropped += len(pending) - len(remaining)
+        if dropped:
+            logger.info(
+                "aee_baseline_pending_dedup serial=%s job=%d dropped=%d",
+                serial, self._job_id, dropped,
+            )
+        return dropped
 
     def _runtime_aee_types(self) -> Set[str]:
         result: Set[str] = set()
