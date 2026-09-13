@@ -25,6 +25,9 @@ def _apply_audit_filters(
     resource_type: Optional[str],
     action: Optional[str],
     user_id: Optional[int],
+    username: Optional[str],
+    ip_address: Optional[str],
+    resource_id: Optional[str],
     start_time: Optional[datetime],
     end_time: Optional[datetime],
 ):
@@ -34,6 +37,14 @@ def _apply_audit_filters(
         stmt = stmt.where(AuditLog.action == action)
     if user_id is not None:
         stmt = stmt.where(AuditLog.user_id == user_id)
+    # #628：审计行自带 username/ip_address 快照（不 join users），按原值精确匹配；
+    # resource_id 是 varchar（#832：与业务主键类型无关），同样按字符串精确匹配。
+    if username:
+        stmt = stmt.where(AuditLog.username == username)
+    if ip_address:
+        stmt = stmt.where(AuditLog.ip_address == ip_address)
+    if resource_id:
+        stmt = stmt.where(AuditLog.resource_id == resource_id)
     if start_time:
         stmt = stmt.where(AuditLog.timestamp >= start_time)
     if end_time:
@@ -46,6 +57,9 @@ async def list_audit_logs(
     resource_type: Optional[str] = Query(None),
     action: Optional[str] = Query(None),
     user_id: Optional[int] = Query(None),
+    username: Optional[str] = Query(None),
+    ip_address: Optional[str] = Query(None),
+    resource_id: Optional[str] = Query(None),
     start_time: Optional[datetime] = Query(None),
     end_time: Optional[datetime] = Query(None),
     skip: int = Query(0, ge=0),
@@ -59,6 +73,9 @@ async def list_audit_logs(
         resource_type=resource_type,
         action=action,
         user_id=user_id,
+        username=username,
+        ip_address=ip_address,
+        resource_id=resource_id,
         start_time=start_time,
         end_time=end_time,
     )

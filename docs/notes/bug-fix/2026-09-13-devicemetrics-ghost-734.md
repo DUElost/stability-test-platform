@@ -53,3 +53,18 @@ Issue: #734
 - 本单只覆盖 DeviceMetrics 与 ActionTemplate 两处。同类的「表已删、端点留空桩、前端仍消费」形态
   是否还有别处，值得在下次全面评审时用同一判据扫一遍：
   *端点返回恒定空值 + 前端有完整消费链路*。
+
+## 补遗（2026-09-13，生产部署时扫出的一处残留）
+
+Part 1 遗漏了一处**非组件形态**的消费链路：`frontend/src/components/QueryProvider.tsx` 的
+`LIVE_QUERY_KEYS` 仍列着 `['device-metrics']`。
+
+- **为何漏**：该处不是「使用查询键」，而是**给查询键设 staleness 默认值**
+  （`setQueryDefaults`）。没有组件发 `device-metrics` 查询时它不报错、不产生请求，
+  tsc / knip / eslint 也看不见——门禁只覆盖「引用完整性」，覆盖不到「配置指向不存在的东西」。
+- **处置**：从 `LIVE_QUERY_KEYS` 移除该键（本 PR）。`design-system/colors.ts` 的 palette 注释
+  Part 1 已同步更新，无需再动。
+- **Verification**：`tsc --noEmit` / `eslint` / `knip --include files --dependencies` 全 rc=0；
+  `QueryProvider.test.ts` 与 `LoginPage.test.tsx` 通过（后者是 `clearAppQueryCache` 的消费方）。
+- **Revisit**：判据可扩展为「配置面（staleness / 预取 / 失效列表）指向已删资源」——
+  与上面的「空桩端点」判据同源，都是**引用方已消失但被指向方仍留名**。

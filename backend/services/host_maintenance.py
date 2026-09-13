@@ -75,7 +75,7 @@ def acquire_maintenance_window(
     等于没有互斥。
     """
     row = db.execute(
-        select(Host).where(Host.id == host_id).with_for_update()
+        select(Host).where(Host.id == host_id).with_for_update().execution_options(populate_existing=True)
     ).scalars().first()
     if row is None:
         return False
@@ -96,11 +96,11 @@ def acquire_maintenance_window(
 def release_maintenance_window(db: Session, host_id: str, holder: str) -> None:
     """只在持有者匹配时清窗口 —— 避免迟到的释放擦掉别人新开的窗口。"""
     row = db.execute(
-        select(Host).where(Host.id == host_id).with_for_update()
+        select(Host).where(Host.id == host_id).with_for_update().execution_options(populate_existing=True)
     ).scalars().first()
     if row is None:
         return
-    if row.maintenance_holder and row.maintenance_holder != holder:
+    if row.maintenance_holder != holder:
         logger.warning(
             "host_maintenance_release_skipped host=%s holder=%s actual=%s",
             host_id, holder, row.maintenance_holder,

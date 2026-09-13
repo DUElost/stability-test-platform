@@ -8,7 +8,7 @@ import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from ..watcher.contracts import ContractViolation
 from .mobilelog import make_adb_pull_fn
@@ -86,6 +86,21 @@ class UnisocUniviewReconciler:
         )
         self._pull_fn = pull_fn or make_adb_pull_fn(self._serial, self._adb_path)
         self._processed: Set[str] = set()
+        # #767：_processed 只增不减 + 整集重写会让状态存储按设备历史事件总量
+        # 线性膨胀。去重语义要求保留的名字只有两类——仍在设备列表上（会被
+        # 重拉）、仍在当前 stamp 本地树（会被重扫）；两者皆非的名字不可能再
+        # 触发处理，可安全裁剪。裁剪按「连续 N 拍未见」滞回执行，设备列表
+        # 失败（adb 抖动）当拍不裁剪且清零计数；体积硬上限仅作最后防线
+        # （优先驱逐最久未见的）。state key 与 JSON 格式不变，存量全量集随
+        # 列表恢复后自然收敛，无需迁移。
+        self._absent_streak: Dict[str, int] = {}
+        self._last_listed: Optional[Set[str]] = None
+        self._prune_after_ticks = max(
+            1, _env_int("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", 3),
+        )
+        self._max_processed_entries = _env_int(
+            "STP_WATCHER_UNISOC_PROCESSED_MAX_ENTRIES", 20000,
+        )
         self._state_lock = threading.Lock()
         self._max_consecutive_tick_errors = _env_int(
             "STP_WATCHER_UNISOC_RECONCILE_MAX_TICK_ERRORS", 5,
@@ -186,9 +201,11 @@ class UnisocUniviewReconciler:
         # #1043: produce local tree from device before emit loop.
         self._sync_device_events_to_local(root)
         emitted = 0
+        local_names: Set[str] = set()
         for event_dir in sorted(root.iterdir()):
             if not event_dir.is_dir():
                 continue
+            local_names.add(event_dir.name)
             if event_dir.name.startswith("."):
                 continue
             key = event_dir.name
@@ -204,22 +221,91 @@ class UnisocUniviewReconciler:
         if emitted:
             self.stats.ticks_with_new += 1
             self.stats.new_entries_total += emitted
+        pruned = self._prune_processed(local_names)
+        if emitted or pruned:
             self._save_processed_state()
         return emitted
 
+    def _prune_processed(self, local_names: Set[str]) -> int:
+        """#767：裁剪不可能再触发处理的名字，返回本拍移除数。
+
+        判据：名字不在本拍设备列表（``_last_listed``，任一 root 列表失败
+        则为 None）且不在当前 stamp 本地树，连续 ``_prune_after_ticks`` 拍
+        如此才移除——设备仍存留的事件不会被重拉重发，本地树内的事件仍被
+        重扫去重。列表失败当拍清零滞回计数（防 adb 抖动误删）。
+        """
+        listed = self._last_listed
+        with self._state_lock:
+            if listed is None:
+                if self._absent_streak:
+                    self._absent_streak.clear()
+                return 0
+            pruned = 0
+            for name in sorted(self._processed):
+                if name in listed or name in local_names:
+                    self._absent_streak.pop(name, None)
+                    continue
+                streak = self._absent_streak.get(name, 0) + 1
+                if streak >= self._prune_after_ticks:
+                    self._processed.discard(name)
+                    self._absent_streak.pop(name, None)
+                    pruned += 1
+                else:
+                    self._absent_streak[name] = streak
+            if (
+                self._max_processed_entries > 0
+                and len(self._processed) > self._max_processed_entries
+            ):
+                overflow = len(self._processed) - self._max_processed_entries
+                # 最后防线：优先驱逐滞回计数最大（最久未见）的名字
+                victims = sorted(
+                    self._processed,
+                    key=lambda n: self._absent_streak.get(n, 0),
+                    reverse=True,
+                )[:overflow]
+                for name in victims:
+                    self._processed.discard(name)
+                    self._absent_streak.pop(name, None)
+                pruned += len(victims)
+                logger.warning(
+                    "unisoc_reconciler_processed_cap_evicted serial=%s job=%d "
+                    "evicted=%d kept=%d",
+                    self._serial, self._job_id, len(victims), len(self._processed),
+                )
+        if pruned:
+            logger.info(
+                "unisoc_reconciler_pruned serial=%s job=%d removed=%d kept=%d",
+                self._serial, self._job_id, pruned, len(self._processed),
+            )
+        return pruned
+
     def _sync_device_events_to_local(self, root: Path) -> int:
-        """adb-list + pull new uniview event dirs into ``uniview_watcher`` (#1043)."""
+        """adb-list + pull new uniview event dirs into ``uniview_watcher`` (#1043).
+
+        #767：顺带记录本拍设备列表（``_last_listed``）供裁剪判据使用——
+        任一 root 列表失败（返回 None）即整体记为「未知」（None），当拍
+        不做裁剪决策；成功但为空（目录无事件）是权威的「无名字」。
+        """
         pulled = 0
+        listed: Set[str] = set()
+        listing_complete = True
+        self._last_listed = None
         for remote_root in _DEVICE_UNIVIEW_ROOTS:
             if self._stop_evt.is_set():
+                listing_complete = False
                 break
             listing = self._shell_fn(f"ls -1 {remote_root} 2>/dev/null", 30)
-            if not listing:
+            if listing is None:
+                listing_complete = False
                 continue
-            for name in listing.splitlines():
-                name = name.strip()
+            root_names: List[str] = []
+            for raw in listing.splitlines():
+                name = raw.strip()
                 if not name or name in {".", ".."} or "/" in name:
                     continue
+                root_names.append(name)
+            listed.update(root_names)
+            for name in root_names:
                 with self._state_lock:
                     if name in self._processed:
                         continue
@@ -239,6 +325,7 @@ class UnisocUniviewReconciler:
                 "unisoc_reconciler_pulled serial=%s job=%d count=%d",
                 self._serial, self._job_id, pulled,
             )
+        self._last_listed = listed if listing_complete else None
         return pulled
 
     def _pull_event_dir(self, remote_dir: str, local_dir: Path) -> bool:

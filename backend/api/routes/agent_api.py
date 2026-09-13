@@ -48,6 +48,10 @@ from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.host_maintenance import HostMaintenanceConflict, in_maintenance_window
+from backend.services.host_retirement import (
+    retired_heartbeat_context,
+    should_alert_retired_heartbeat,
+)
 from backend.services.host_upgrade_gate import (
     HostAbortDrainTimeoutError,
     HostAbortPendingError,
@@ -826,7 +830,18 @@ async def agent_heartbeat(
     host.last_heartbeat = datetime.now(timezone.utc)
     if payload.script_catalog_version:
         host.script_catalog_version = payload.script_catalog_version
+    # ADR-0038 §1.2 归属声明：轻量心跳与权威 `/api/v1/heartbeat` **共用**
+    # `should_alert_retired_heartbeat` 同一判据（“共用检测”选项，非双通道
+    # 收敛）——退役心跳的「如实记录 + 保持退役 + 单次告警」两条路径同源。
+    prev_status = host.status
     host.status = HostStatus.ONLINE.value
+
+    if should_alert_retired_heartbeat(host, prev_status=prev_status):
+        from backend.services.notification_service import dispatch_notification_async
+
+        dispatch_notification_async(
+            "HOST_RETIRED_HEARTBEAT", retired_heartbeat_context(host),
+        )
 
     # ADR-0019 Phase 1: count online healthy devices
     online_rows = await db.execute(

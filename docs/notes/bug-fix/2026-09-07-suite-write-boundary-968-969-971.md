@@ -29,7 +29,18 @@ Class: bug-fix
    导出守卫一并复用，三个入口不再各自维护重复报文。PUT 修改其他元数据
    不受在途 Run 阻塞（守卫只覆盖「停用」语义）。
 
+**#1825（审计 F04）目录边界补全**：使用 `PurePosixPath.is_absolute()`
+识别所有 POSIX 根形态，不能仅比较首组件 `/`（`//` 会被保留成独立根）。
+导出前还校验解析后的 MTBF 根位于共享存储内、目标位于 MTBF 根内，阻断
+外指目录链接与指向存储兄弟目录的链接。按 SHA 归档的子目录也须留在本次
+导出目录内；渲染与上述校验先完成，再创建目录/写两份消费文件和归档。
+合法多级相对路径及默认目录保持兼容；存量非法路径统一 422
+`EXPORT_DIR_INVALID`，不触碰目标文件。
+
 ## Alternatives
+
+- **只拦单斜杠绝对路径**——#1825 否决：POSIX 双斜杠根同样会覆盖 join 的
+  前缀；仅做词法校验也不能防止既存目录链接越出受控根。
 
 - **Pydantic 嵌套模型（`ExecDescIn`）替代手写校验**——放弃：UI 是
   `Record<string, unknown>[]` 的 JSON 编辑器，闭模型要么 `forbid` 额外键
@@ -47,7 +58,15 @@ Class: bug-fix
 
 ## Verification
 
-实际运行（worktree `/tmp/stp-r05`，2026-09-11）：
+#1825 本次验证（隔离 PostgreSQL + `tmp_path`，不访问真实 NFS）：
+
+- `python -m pytest backend/tests/api/test_mtbf_suite_routes.py -q` → **60 passed**。
+- `python scripts/run_gates.py check:quick` → **7 gates 通过**；变更文件 Ruff
+  与 diff check 通过。
+- 新回归包含 create/update 双斜杠拒绝、存量双斜杠写盘前拒绝、MTBF 根/导出
+  子目录/共享存储兄弟目录/归档链接越界，以及多级相对目录成功导出。
+
+此前历史证据（worktree `/tmp/stp-r05`，2026-09-11，不代表本次重跑）：
 
 - `pytest backend/tests/api/test_mtbf_suite_routes.py -q` → **74 passed**
   （新增 14 例：export_dir 五类非法写入 422、更新 422、相对目录归一化与导出

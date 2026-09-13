@@ -35,6 +35,20 @@ Class: bug-fix
 `sh/apt-get/usermod`——该修复分支现状已不可用，本次收窄不构成回归；恢复
 能力需新版本脚本改调 wrapper 子命令（Revisit）。
 
+2026-09-13 目标路径闭环（#1821，最近 7 天审计 F01）：固定字符串与 rsync
+`--safe-links` 不能约束 Agent 可替换的接收目录。所有安装树目标改为逐组件
+`O_NOFOLLOW` 打开并保持目录描述符；原子写入使用相对描述符的创建与 rename，
+仅在尚未发布的文件描述符上设置 mode/owner。schema 只读取并校验一次，复制
+已验证的字节；`.env` 不跟随链接且沿用同一次读取取得的属主/权限。
+`fix-ownership` 使用不跟随链接的 `fwalk`、描述符相对 `chown` 与 `fchown`，
+保持原 `chown -R -h` 的非解引用语义，不再重新解析安装根。
+
+代码传输的源/接收根通过继承的描述符交给 rsync；子进程先切换到配置的
+非 root Agent uid/gid/附加组，关闭 owner/group 保留，因此可变后代路径也不能
+借 rsync 进行提权写。合法安装链已把安装树交给 Agent；异常 root-only 树
+失败关闭，不回退 root rsync。wrapper 自身仍需 Ansible/root 通道更新，
+本修复没有在生产主机部署。
+
 ## Alternatives
 
 - **缩短 sudoers 命令名单（参数白名单）**——否决：`rsync/cp` 参数可组合出
@@ -45,10 +59,23 @@ Class: bug-fix
 - **wrapper 放安装目录**——否决：Agent 可写 = root 执行权交回 Agent 用户；
 - **独立 ops token / per-host 凭据**——ADR-0035 实施面，不引入并行凭据体系；
 - **保留宽规则 + 告警**——不满足验收「无法对安装目录外提权写」。
+- **只在写前检查 realpath**——#1821 否决：检查后仍可替换目录；必须让实际
+  系统调用消费已打开的目录，并移除 rsync 的 root 权限。
 
 ## Verification
 
-实际运行：
+#1821 本次实际运行：
+
+- `python -m pytest tests/test_agent_priv_boundary.py tests/test_agent_priv_target_paths.py -q`
+  → **46 passed**；包括目标/祖先链接、固定目录后替换、临时文件替换、schema
+  验证后换源、环境元数据、非解引用递归属主及 Python 3.6 语法。
+- `bash tools/dev/stp_agent_priv_smoke.sh /home/debian13/stp-fix-1821` → **ALL_OK**；
+  一次性容器内真实 root wrapper + 降权 rsync，验证正常更新和外指接收根拒绝。
+- `python -m ruff check backend/agent/stp_agent_priv.py tests/test_agent_priv_boundary.py tests/test_agent_priv_target_paths.py`
+  与 `bash -n tools/dev/stp_agent_priv_smoke.sh` → 通过。
+- `python scripts/run_gates.py check:quick` → **7 gates 通过**。
+
+此前 #1250 实际运行（历史证据，不代表本次重跑）：
 
 - `pytest tests/ backend/tests/services/test_host_updater.py -q` → **146 passed**
   （合并 #1249 基线后重跑；wrapper/legacy 接线、sudoers 规则面、安装/迁移链、

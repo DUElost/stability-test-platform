@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -42,14 +41,19 @@ from backend.core.database import get_db
 from backend.models.host import Device
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.models.project import SEED_PROJECT_KEYS, Customer, TestProject
+from backend.models.project import Customer, TestProject
 from backend.models.project_model import ProjectModel
 from backend.realtime.socketio_server import emit_project_changed
-
-_UPDATABLE_FIELDS = (
-    "display_name",
-    "customer",
-    "jira_project_key",
+from backend.services.project_registry import (
+    UPDATABLE_FIELDS,
+    archive_project_entry,
+    create_project_entry,
+    get_project_or_404,
+    rename_project_entry,
+    require_active_project,
+    require_user_project,
+    unarchive_project_entry,
+    update_project_facets,
 )
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
@@ -259,38 +263,6 @@ def _inventory_summary(db: Session, items: list[InventoryModelOut]) -> Inventory
     )
 
 
-def _get_project_or_404(db: Session, project_key: str) -> TestProject:
-    project = (
-        db.query(TestProject)
-        .filter(TestProject.project_key == project_key)
-        .first()
-    )
-    if project is None:
-        raise HTTPException(status_code=404, detail="project not found")
-    return project
-
-
-def _require_user_project(project: TestProject) -> None:
-    if project.source != _USER_SOURCE:
-        raise HTTPException(
-            status_code=422,
-            detail="seed backfill labels cannot be mapped; create a user project",
-        )
-
-
-def _require_active_project(project: TestProject) -> None:
-    """归档守卫：ARCHIVED 项目只读（#644 P1-4 补齐）。
-
-    rename / map preview / map apply / remove-rule 均须显式拒绝——归档后
-    仍可改名会破坏「归档 = 冻结」的语义，仍可映射型号则归档形同虚设。
-    """
-    if project.status == "ARCHIVED":
-        raise HTTPException(
-            status_code=409,
-            detail="archived project is read-only; unarchive to modify",
-        )
-
-
 def _fill_summary(db: Session, project: TestProject) -> ProjectSummaryOut:
     device_count, running_run_count = _summary_rows_for(
         db, [project.id]
@@ -429,43 +401,17 @@ def create_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    key = payload.project_key
-    if key.upper() in SEED_PROJECT_KEYS:
-        raise HTTPException(status_code=422, detail="reserved seed project_key")
-    existing = (
-        db.query(TestProject)
-        .filter(func.lower(TestProject.project_key) == key.lower())
-        .first()
-    )
-    if existing is not None:
-        raise HTTPException(status_code=409, detail="project_key already exists")
-    project = TestProject(
-        project_key=key,
-        display_name=payload.display_name.strip(),
+    """ADR-0029 D2 / #406 — 新建 USER 项目（校验/审计/事件在 project_registry）。"""
+    project = create_project_entry(
+        db,
+        project_key=payload.project_key,
+        display_name=payload.display_name,
         customer=payload.customer,
         jira_project_key=payload.jira_project_key,
-        source=_USER_SOURCE,
-        status="ACTIVE",
-    )
-    db.add(project)
-    try:
-        db.flush()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="project_key already exists") from None
-    record_audit(
-        db,
-        action="create_project",
-        resource_type="test_project",
-        resource_id=project.id,
-        details={"project_key": key},
-        user_id=current_user.id,
-        username=current_user.username,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
         request=request,
     )
-    db.commit()
-    db.refresh(project)
-    emit_project_changed(project.id, "created")
     return ok(_fill_summary(db, project))
 
 
@@ -591,50 +537,23 @@ def update_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """ADR-0029 D2 / #406 — facet 修改；逐字段 ``record_audit``。"""
-    project = _get_project_or_404(db, project_key)
-    _require_user_project(project)
-    if project.status == "ARCHIVED":
-        raise HTTPException(status_code=409, detail="archived project cannot be updated")
-
+    """ADR-0029 D2 / #406 — facet 修改；逐字段 ``record_audit``（服务层）。"""
     fields_set = getattr(payload, "model_fields_set", set())
     if not fields_set:
         raise HTTPException(status_code=422, detail="no fields to update")
-
-    changed: list[tuple[str, object, object]] = []
-    for field in _UPDATABLE_FIELDS:
-        if field not in fields_set:
-            continue
-        new_value = getattr(payload, field)
-        old_value = getattr(project, field)
-        if old_value == new_value:
-            continue
-        setattr(project, field, new_value)
-        changed.append((field, old_value, new_value))
-
-    if not changed:
-        return ok(_fill_summary(db, project))
-
-    project.updated_at = datetime.now(timezone.utc)
-    for field, old_value, new_value in changed:
-        record_audit(
-            db,
-            action="update_project",
-            resource_type="test_project",
-            resource_id=project.id,
-            details={
-                "project_key": project.project_key,
-                "field": field,
-                "old": old_value,
-                "new": new_value,
-            },
-            user_id=current_user.id,
-            username=current_user.username,
-            request=request,
-        )
-    db.commit()
-    db.refresh(project)
-    emit_project_changed(project.id, "updated")
+    provided = {
+        field: getattr(payload, field)
+        for field in UPDATABLE_FIELDS
+        if field in fields_set
+    }
+    project = update_project_facets(
+        db,
+        project_key=project_key,
+        provided=provided,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        request=request,
+    )
     return ok(_fill_summary(db, project))
 
 
@@ -649,29 +568,13 @@ def archive_project(
     current_user: User = Depends(require_admin),
 ):
     """ADR-0029 D2 / #406 — 归档（SEED 回填标签也可归档 = 显式放弃）。"""
-    project = _get_project_or_404(db, project_key)
-    if project.status == "ARCHIVED":
-        raise HTTPException(status_code=409, detail="project already archived")
-
-    project.status = "ARCHIVED"
-    project.updated_at = datetime.now(timezone.utc)
-    record_audit(
+    project = archive_project_entry(
         db,
-        action="archive_project",
-        resource_type="test_project",
-        resource_id=project.id,
-        details={
-            "project_key": project.project_key,
-            "from_status": "ACTIVE",
-            "to_status": "ARCHIVED",
-        },
-        user_id=current_user.id,
-        username=current_user.username,
+        project_key=project_key,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
         request=request,
     )
-    db.commit()
-    db.refresh(project)
-    emit_project_changed(project.id, "archived")
     return ok(_fill_summary(db, project))
 
 
@@ -691,29 +594,13 @@ def unarchive_project(
     误归档无法撤销。SEED 行从未被归档（v2.5 前不可归档；本版起允许），
     对 ACTIVE 行调用幂等地 409（与 archive 对称）。
     """
-    project = _get_project_or_404(db, project_key)
-    if project.status != "ARCHIVED":
-        raise HTTPException(status_code=409, detail="project is not archived")
-
-    project.status = "ACTIVE"
-    project.updated_at = datetime.now(timezone.utc)
-    record_audit(
+    project = unarchive_project_entry(
         db,
-        action="unarchive_project",
-        resource_type="test_project",
-        resource_id=project.id,
-        details={
-            "project_key": project.project_key,
-            "from_status": "ARCHIVED",
-            "to_status": "ACTIVE",
-        },
-        user_id=current_user.id,
-        username=current_user.username,
+        project_key=project_key,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
         request=request,
     )
-    db.commit()
-    db.refresh(project)
-    emit_project_changed(project.id, "unarchived")
     return ok(_fill_summary(db, project))
 
 
@@ -734,39 +621,14 @@ def rename_project(
     不影响 device/plan/plan_run 归属。影响面：旧 URL 404（新 URL 生效）、
     历史审计显示旧 key（留痕）。SEED 保留名仍不可作新 key。
     """
-    project = _get_project_or_404(db, project_key)
-    _require_user_project(project)
-    _require_active_project(project)
-    new_key = payload.new_key
-    if new_key.upper() in SEED_PROJECT_KEYS:
-        raise HTTPException(status_code=422, detail="reserved seed project_key")
-    existing = (
-        db.query(TestProject)
-        .filter(func.lower(TestProject.project_key) == new_key.lower())
-        .first()
-    )
-    if existing is not None:
-        raise HTTPException(status_code=409, detail="project_key already exists")
-
-    old_key = project.project_key
-    project.project_key = new_key
-    project.updated_at = datetime.now(timezone.utc)
-    record_audit(
+    project = rename_project_entry(
         db,
-        action="rename_project",
-        resource_type="test_project",
-        resource_id=project.id,
-        details={
-            "from_project_key": old_key,
-            "to_project_key": new_key,
-        },
-        user_id=current_user.id,
-        username=current_user.username,
+        project_key=project_key,
+        new_key=payload.new_key,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
         request=request,
     )
-    db.commit()
-    db.refresh(project)
-    emit_project_changed(project.id, "renamed")
     return ok(_fill_summary(db, project))
 
 
@@ -780,9 +642,9 @@ def preview_project_map(
     db: Session = Depends(get_db),
     _current_user: User = Depends(require_admin),
 ):
-    project = _get_project_or_404(db, project_key)
-    _require_user_project(project)
-    _require_active_project(project)
+    project = get_project_or_404(db, project_key)
+    require_user_project(project)
+    require_active_project(project)
     preview, _devices, _facts = _map_preview(
         db, project, payload.models, payload.reassign_conflicts
     )
@@ -800,9 +662,9 @@ def apply_project_map(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    project = _get_project_or_404(db, project_key)
-    _require_user_project(project)
-    _require_active_project(project)
+    project = get_project_or_404(db, project_key)
+    require_user_project(project)
+    require_active_project(project)
     preview, to_assign, model_facts = _map_preview(
         db, project, payload.models, payload.reassign_conflicts
     )
@@ -899,9 +761,9 @@ def remove_project_rule(
     路由顺序：/{project_key}/rules/{model} 三段静态，与 /{project_key}
     单段、/inventory/* 静态段互不冲突。
     """
-    project = _get_project_or_404(db, project_key)
-    _require_user_project(project)
-    _require_active_project(project)
+    project = get_project_or_404(db, project_key)
+    require_user_project(project)
+    require_active_project(project)
     rule = db.execute(
         select(ProjectModel)
         .where(
@@ -944,7 +806,7 @@ def list_project_models(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    project = _get_project_or_404(db, project_key)
+    project = get_project_or_404(db, project_key)
     # v2.5：详情页型号覆盖 = 该型号成员行下的设备（派生口径）——直接按
     # 成员行 + 设备型号过滤，不读 device.project_id 列
     rows = (
@@ -974,7 +836,7 @@ def get_project(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    project = _get_project_or_404(db, project_key)
+    project = get_project_or_404(db, project_key)
     device_count, running_run_count = _summary_rows(db).get(project.id, (0, 0))
     detail = ProjectDetailOut.model_validate(project)
     detail.match_models = _rule_values_for_project(db, project.id)

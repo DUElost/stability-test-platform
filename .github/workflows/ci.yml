@@ -196,8 +196,11 @@ jobs:
       # 2026-07-31 生产事故就是 ef8808e 的 `ruff --fix` 原地改写了这些目录,
       # 导致 18/27 行 script 的 DB sha 与磁盘永久对不上、全平台派发中断。
       # ruff.toml 已把该目录加进 extend-exclude,这条是兜底(手改同样拦)。
+      # 检查器自身由 --self-test 红绿双向守护（PLATFORM_AUDIT_2026-09-11 §七 #10）；
+      # 与治理面/分层门禁同模式：自证与真实检查同 step，防分类规则回归。
       - name: 脚本版本不可变检查(ADR-0020)
         run: |
+          python tools/dev/check-script-version-immutability.py --self-test
           python tools/dev/check-script-version-immutability.py \
             --base "origin/${{ github.base_ref || github.ref_name }}"
 
@@ -271,6 +274,12 @@ jobs:
           cache-dependency-path: backend/requirements-dev.lock
       - name: Install dependencies
         run: pip install --require-hashes -r backend/requirements-dev.lock
+      # #739：agent 单测自闭环守卫——`env -i` 剥离 job 级 env（JWT_SECRET_KEY /
+      # DATABASE_URL）后只做收集（秒级）。agent 测试若重新 import 控制面
+      # （routes → auth → core.security 的模块级 JWT 硬检查），收集期即红，
+      # 不必等到运行；对应本地门禁 run_gates.py check:pr 的 agent-tests-collect。
+      - name: Collect agent tests in clean env
+        run: env -i PATH="$PATH" PYTHONPATH=. python -m pytest backend/agent/tests/ --collect-only -q
       - name: Run agent tests
         run: python -m pytest backend/agent/tests/ -q
       # 根 tests/ 的**离线子集**前移到 PR 路径（#1569，取代此前的 lock 卫生 +

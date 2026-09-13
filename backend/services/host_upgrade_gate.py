@@ -230,74 +230,83 @@ def begin_host_upgrade(
     if host is None:
         raise HostNotFoundError(f"host {host_id} not found")
 
-    rows = active_jobs_for_host(db, host_id)
-    pending_ids = _abort_pending_ids(db, rows)
-    active_summary = [
-        {
-            "id": j.id,
-            "plan_run_id": j.plan_run_id,
-            "plan_id": j.plan_id,
-            "device_id": j.device_id,
-            "status": j.status,
-            "abort_pending": j.id in pending_ids,
-        }
-        for j in rows
-    ]
-    aborted_summary: Optional[dict] = None
-
-    if active_summary:
-        if not abort_running_jobs:
-            if len(pending_ids) == len(active_summary):
-                raise HostAbortPendingError(
-                    active_summary,
-                    _abort_pending_retry_after(db, rows, pending_ids),
-                )
-            raise HostHasActiveJobsError(active_summary)
-
-        aborted_summary = abort_jobs_for_host(
-            host_id,
-            db=db,
-            reason=abort_reason,
-            triggered_by=triggered_by,
-            audit_user_id=audit_user_id,
-            audit_username=audit_username,
-        )
-        logger.info(
-            "upgrade_gate_abort_initiated host=%s holder=%s plan_runs=%s jobs=%s",
-            host_id,
-            holder,
-            aborted_summary["plan_runs"],
-            aborted_summary["aborted_jobs"],
-        )
-        ok_drained, lingering = wait_until_no_active_jobs(
-            db, host_id, timeout_seconds=drain_timeout_seconds
-        )
-        if not ok_drained:
-            raise HostAbortDrainTimeoutError(lingering, aborted_summary)
-
     if not acquire_maintenance_window(db, host_id, holder):
+        db.rollback()
         raise HostMaintenanceConflict(
             f"host {host_id} already in maintenance window"
         )
 
-    expires_at = host.maintenance_until
-    logger.info(
-        "upgrade_gate_acquired host=%s holder=%s abort_running_jobs=%s "
-        "active_before=%d aborted_jobs=%s expires_at=%s",
-        host_id,
-        holder,
-        abort_running_jobs,
-        len(active_summary),
-        aborted_summary["aborted_jobs"] if aborted_summary else [],
-        expires_at.isoformat() if expires_at else None,
-    )
-    return {
-        "host_id": host_id,
-        "holder": holder,
-        "expires_at": expires_at.isoformat() if expires_at else None,
-        "active_jobs": active_summary,
-        "aborted_summary": aborted_summary,
-    }
+    try:
+        rows = active_jobs_for_host(db, host_id)
+        pending_ids = _abort_pending_ids(db, rows)
+        active_summary = [
+            {
+                "id": job.id,
+                "plan_run_id": job.plan_run_id,
+                "plan_id": job.plan_id,
+                "device_id": job.device_id,
+                "status": job.status,
+                "abort_pending": job.id in pending_ids,
+            }
+            for job in rows
+        ]
+        aborted_summary: Optional[dict] = None
+
+        if active_summary:
+            if not abort_running_jobs:
+                if len(pending_ids) == len(active_summary):
+                    raise HostAbortPendingError(
+                        active_summary,
+                        _abort_pending_retry_after(db, rows, pending_ids),
+                    )
+                raise HostHasActiveJobsError(active_summary)
+
+            aborted_summary = abort_jobs_for_host(
+                host_id,
+                db=db,
+                reason=abort_reason,
+                triggered_by=triggered_by,
+                audit_user_id=audit_user_id,
+                audit_username=audit_username,
+            )
+            logger.info(
+                "upgrade_gate_abort_initiated host=%s holder=%s plan_runs=%s jobs=%s",
+                host_id,
+                holder,
+                aborted_summary["plan_runs"],
+                aborted_summary["aborted_jobs"],
+            )
+            ok_drained, lingering = wait_until_no_active_jobs(
+                db, host_id, timeout_seconds=drain_timeout_seconds
+            )
+            if not ok_drained:
+                raise HostAbortDrainTimeoutError(lingering, aborted_summary)
+
+        expires_at = host.maintenance_until
+        logger.info(
+            "upgrade_gate_acquired host=%s holder=%s abort_running_jobs=%s "
+            "active_before=%d aborted_jobs=%s expires_at=%s",
+            host_id,
+            holder,
+            abort_running_jobs,
+            len(active_summary),
+            aborted_summary["aborted_jobs"] if aborted_summary else [],
+            expires_at.isoformat() if expires_at else None,
+        )
+        return {
+            "host_id": host_id,
+            "holder": holder,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+            "active_jobs": active_summary,
+            "aborted_summary": aborted_summary,
+        }
+    except BaseException:
+        try:
+            db.rollback()
+            release_maintenance_window(db, host_id, holder)
+        except Exception:
+            logger.exception("upgrade_gate_rejection_release_failed host=%s holder=%s", host_id, holder)
+        raise
 
 
 def end_host_upgrade(db: Session, host_id: str, holder: str) -> None:

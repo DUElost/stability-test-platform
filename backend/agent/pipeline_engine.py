@@ -17,6 +17,8 @@ import json
 
 import logging
 
+import math
+
 import os
 
 import select
@@ -183,9 +185,38 @@ _GROUP_EXIT_POLL_INTERVAL_SECONDS = 0.05
 # （超时日志的 peer 快照），不再作为 barrier 续期的唯一判据：脚本打戳覆盖率
 # 不齐（20+ 长步骤脚本 0 处打戳），旧的「戳陈旧 = 停滞」会误杀合法长步骤。
 # 与 STP_STEP_STALL_SECONDS 的建议值一致。
-_PEER_PROGRESS_STALE_SECONDS = float(
-    os.getenv("STP_BARRIER_PROGRESS_STALE_SECONDS", "120")
-)
+# #1863：模块级 float(env) 必须 import-safe（同 #1710 口径）。
+def _parse_peer_progress_stale_seconds(default: float = 120.0) -> float:
+    raw = (os.getenv("STP_BARRIER_PROGRESS_STALE_SECONDS") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "invalid STP_BARRIER_PROGRESS_STALE_SECONDS=%r; using default %.1f",
+            raw,
+            default,
+        )
+        return default
+    if not math.isfinite(value):
+        logger.warning(
+            "non-finite STP_BARRIER_PROGRESS_STALE_SECONDS=%r; using default %.1f",
+            raw,
+            default,
+        )
+        return default
+    if value <= 0:
+        logger.warning(
+            "non-positive STP_BARRIER_PROGRESS_STALE_SECONDS=%r; using default %.1f",
+            raw,
+            default,
+        )
+        return default
+    return value
+
+
+_PEER_PROGRESS_STALE_SECONDS = _parse_peer_progress_stale_seconds()
 
 
 # #872: 「信任执行态」后的兜底绝对硬顶——Plan 未配 barrier_max_wait_seconds
@@ -443,6 +474,7 @@ def _pump_process(
     stall_seconds: Optional[float],
     on_progress: Optional[Callable[[], None]] = None,
     log_paths: Optional[Tuple[str, str]] = None,
+    terminate_grace_seconds: float = 2.0,
 ) -> _PumpOutcome:
     """Drain both pipes on reader threads while the main thread watches two clocks.
 
@@ -601,7 +633,7 @@ def _pump_process(
         time.sleep(_POLL_INTERVAL_SECONDS)
 
     if reason is not None:
-        _terminate_process_tree(proc)
+        _terminate_process_tree(proc, grace_seconds=terminate_grace_seconds)
     try:
         proc.wait(timeout=_READER_JOIN_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
@@ -715,6 +747,14 @@ def _await_tree_exit(
         if time.monotonic() >= deadline:
             return False
         time.sleep(_GROUP_EXIT_POLL_INTERVAL_SECONDS)
+
+
+def _script_terminate_grace_seconds(nfs_path: str | None) -> float:
+    """#1591：flash_firmware 门控 settle 常需数秒；默认 2s 宽限会被 SIGKILL 打断。"""
+    path = (nfs_path or "").replace("\\", "/")
+    if "/flash_firmware/" in path:
+        return 8.0
+    return 2.0
 
 
 def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.0) -> None:
@@ -953,22 +993,29 @@ class PipelineEngine:
         self._canceled = True
         with self._process_lock:
             proc = self._active_process
+            script_path = getattr(self, "_active_script_path", None)
         if proc is not None:
-            _terminate_process_tree(proc)
+            _terminate_process_tree(
+                proc, grace_seconds=_script_terminate_grace_seconds(script_path),
+            )
 
     def _set_active_process(
-        self, proc: subprocess.Popen, *, allow_after_cancel: bool = False
+        self, proc: subprocess.Popen, *, allow_after_cancel: bool = False,
+        script_path: str | None = None,
     ) -> None:
         if not hasattr(self, "_process_lock"):
             self._process_lock = threading.Lock()
             self._active_process = None
         with self._process_lock:
             self._active_process = proc
+            self._active_script_path = script_path
             should_terminate = (
                 getattr(self, "_canceled", False) and not allow_after_cancel
             )
         if should_terminate:
-            _terminate_process_tree(proc)
+            _terminate_process_tree(
+                proc, grace_seconds=_script_terminate_grace_seconds(script_path),
+            )
 
     def _clear_active_process(self, proc: subprocess.Popen) -> None:
         if not hasattr(self, "_process_lock"):
@@ -976,6 +1023,7 @@ class PipelineEngine:
         with self._process_lock:
             if self._active_process is proc:
                 self._active_process = None
+                self._active_script_path = None
 
     def execute(self, pipeline_def: dict) -> StepResult:
         """Execute the full lifecycle pipeline."""
@@ -1682,6 +1730,7 @@ class PipelineEngine:
             self._set_active_process(
                 proc,
                 allow_after_cancel=(ctx.phase == "teardown"),
+                script_path=entry.nfs_path,
             )
             try:
                 outcome = _pump_process(
@@ -1692,6 +1741,9 @@ class PipelineEngine:
                     # progress-aware barrier 判断同 host 的 peer 是否还在推进。
                     on_progress=lambda: self._update_execution_state("EXECUTING_STEP"),
                     log_paths=log_paths,
+                    terminate_grace_seconds=_script_terminate_grace_seconds(
+                        entry.nfs_path,
+                    ),
                 )
                 if outcome.reason is not None:
                     combined_output = "\n".join(

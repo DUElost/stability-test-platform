@@ -203,3 +203,128 @@ def test_log_deliveries_404_for_missing_log(client, auth_headers):
         "/api/v1/notifications/logs/999999/deliveries", headers=auth_headers,
     )
     assert resp.status_code == 404
+
+
+# ── #626：已读 → 未读反向切换 ────────────────────────────────────────────
+
+
+def test_mark_read_accepts_explicit_unread_and_defaults_read(client, auth_headers, db_session):
+    """#626：body {read:false} 恢复未读；缺省 body 仍是「标已读」（向后兼容）。"""
+    from backend.models.notification import (
+        NotificationLog, NotificationSeverity, NotificationSource,
+    )
+
+    log = NotificationLog(
+        source=NotificationSource.PLATFORM, event_type="RUN_FAILED",
+        severity=NotificationSeverity.WARNING, title="t", message="m", context={},
+    )
+    db_session.add(log)
+    db_session.commit()
+    assert log.read is False
+
+    def read_flag() -> bool:
+        db_session.expire_all()
+        return db_session.get(NotificationLog, log.id).read
+
+    # 显式标已读
+    resp = client.patch(
+        f"/api/v1/notifications/logs/{log.id}/read",
+        json={"read": True}, headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert read_flag() is True
+
+    # 显式恢复未读（误点回退）
+    resp = client.patch(
+        f"/api/v1/notifications/logs/{log.id}/read",
+        json={"read": False}, headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert read_flag() is False
+
+    # 无 body：保持既有语义（老调用方不带 body 仍标已读）
+    resp = client.patch(
+        f"/api/v1/notifications/logs/{log.id}/read", headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert read_flag() is True
+
+
+class TestAlertmanagerLinkContext:
+    """#625：告警 context.link 推导——annotations.link 显式优先，其次 labels
+    主机标识（host/hostname/instance，instance 剥 :port）对 host 表
+    hostname/ip 归一查找；都没有则不带 link（context 形状向后兼容）。
+    """
+
+    def _post_alert(self, client, monkeypatch, alert):
+        monkeypatch.setenv("AGENT_SECRET", "wh-test-secret")
+        return client.post(
+            "/api/v1/notifications/webhook",
+            json={"alerts": [alert]},
+            headers={"X-Agent-Secret": "wh-test-secret"},
+        )
+
+    def _latest_context(self, event_type: str) -> dict:
+        from backend.core.database import SessionLocal
+        from backend.models.notification import NotificationLog
+
+        with SessionLocal() as db:
+            row = (
+                db.query(NotificationLog)
+                .filter(NotificationLog.event_type == event_type)
+                .order_by(NotificationLog.id.desc())
+                .first()
+            )
+            assert row is not None, f"notification log {event_type} not found"
+            return row.context or {}
+
+    def test_annotations_link_passthrough(self, client, monkeypatch):
+        resp = self._post_alert(client, monkeypatch, {
+            "status": "firing",
+            "labels": {"alertname": "LinkExplicit", "severity": "warning"},
+            "annotations": {"summary": "s", "link": "/execution/plan-runs/7"},
+        })
+        assert resp.status_code == 200
+        ctx = self._latest_context("LinkExplicit")
+        assert ctx["link"] == "/execution/plan-runs/7"
+
+    def test_non_path_link_ignored(self, client, monkeypatch):
+        resp = self._post_alert(client, monkeypatch, {
+            "status": "firing",
+            "labels": {"alertname": "LinkExternal", "severity": "warning"},
+            "annotations": {"link": "https://evil.example/x"},
+        })
+        assert resp.status_code == 200
+        ctx = self._latest_context("LinkExternal")
+        assert "link" not in ctx
+
+    def test_host_label_resolves_to_hosts(self, client, monkeypatch, db_session):
+        from backend.models.enums import HostStatus
+        from backend.models.host import Host
+
+        db_session.add(Host(
+            id="h-link", hostname="agentLink",
+            status=HostStatus.ONLINE.value, ip="10.255.0.1",
+        ))
+        db_session.commit()
+        resp = self._post_alert(client, monkeypatch, {
+            "status": "firing",
+            "labels": {
+                "alertname": "DiskUsageHigh", "severity": "warning",
+                "instance": "agentLink:9100",
+            },
+            "annotations": {"summary": "disk 96%"},
+        })
+        assert resp.status_code == 200
+        ctx = self._latest_context("DiskUsageHigh")
+        assert ctx["link"] == "/hosts"
+
+    def test_unknown_identity_has_no_link(self, client, monkeypatch):
+        resp = self._post_alert(client, monkeypatch, {
+            "status": "firing",
+            "labels": {"alertname": "NoIdentity", "severity": "info"},
+            "annotations": {},
+        })
+        assert resp.status_code == 200
+        ctx = self._latest_context("NoIdentity")
+        assert "link" not in ctx
