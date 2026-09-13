@@ -51,6 +51,14 @@ Class: feature | bug-fix | simplification | architecture | process | testing
 ## Revisit          何时应重议（可选）
 ```
 
+## 复核「迁移已删除 X」时
+
+验证「表/列已删除」必须确认语句位于 **`upgrade()`**，而非 `downgrade()`。
+`grep drop_table` / `drop_column` 会同时命中回滚路径（#1890：曾把
+`f4a5b6c7d8e9.downgrade` 的 `drop_table("action_template")` 误判为 forward
+已完成）。判据：打开 revision，确认调用在 `def upgrade` 函数体内；或空库
+`alembic upgrade head` 后 `\d` / `inspect` 确认对象不存在。
+
 ## 归档与废弃
 
 - 已完成且不再需要指引后续工作的 note → 移入 `archived/`，修复所有入链，冻结；
