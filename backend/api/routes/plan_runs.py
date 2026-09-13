@@ -249,8 +249,12 @@ def _plan_run_out(
         project_key=pr.project.project_key if pr.project else None,
         capabilities=_plan_run_capabilities(pr),
         jobs=jobs or [],
+        # Distinct devices, not JobInstance row count (#747). List and detail
+        # share this fallback so multi-job-per-device runs do not inflate.
         device_count=(
-            device_count if device_count is not None else len(jobs or [])
+            device_count
+            if device_count is not None
+            else len({j.device_id for j in (jobs or [])})
         ),
         queue_reason=pr.queue_reason,
         enqueued_at=_iso(pr.enqueued_at),
@@ -396,8 +400,12 @@ def list_plan_runs(
     run_ids = [r.id for r in runs]
     device_counts: dict[int, int] = {}
     if run_ids:
+        # Align with watcher-summary / UI「设备」列: distinct device_id (#747).
         count_rows = db.execute(
-            select(JobInstance.plan_run_id, func.count())
+            select(
+                JobInstance.plan_run_id,
+                func.count(func.distinct(JobInstance.device_id)),
+            )
             .where(JobInstance.plan_run_id.in_(run_ids))
             .group_by(JobInstance.plan_run_id)
         ).all()
