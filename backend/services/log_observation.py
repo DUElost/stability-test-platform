@@ -58,6 +58,16 @@ _SIGNAL_ONLY_CATEGORIES = ("MOBILELOG",)
 
 
 def _rows_from_device_log_events(db: Session, job_ids: list[int]) -> list[tuple[str, int]]:
+    """DLE-backed subtype counts (authority per ADR-0028).
+
+    Ruled semantics (#783, 2026-09-12): the count is **distinct event artifact
+    paths** per subtype (``COUNT(DISTINCT COALESCE(remote_path, local_path))``),
+    not raw event rows. This matches the DLE model where a path identifies one
+    uploaded event artifact; multiple signals referencing the same artifact are
+    the same event and must not inflate the risk bucket. ``_classify_subtype``
+    thresholds therefore read "distinct event artifacts", not "event
+    occurrences". Changing this needs a product ruling (see Revisit).
+    """
     sql = text("""
         SELECT
             COALESCE(NULLIF(event_subtype, ''), event_type) AS subtype,
