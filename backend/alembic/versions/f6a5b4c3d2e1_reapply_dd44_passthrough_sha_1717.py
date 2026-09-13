@@ -1,7 +1,7 @@
 """rechain 后重放 dd44 passthrough entry-script sha 回填（#1717）
 
 Revision ID: f6a5b4c3d2e1
-Revises: x9y8z7a6b5c4
+Revises: z7a6b5c4d3e2
 Create Date: 2026-09-13
 
 ``8c4d5f47`` 为解双 head 把 seed 迁移 p9q8r7s6t5u4 的 ``down_revision`` 从
@@ -23,7 +23,7 @@ from alembic import op
 from sqlalchemy import text
 
 revision = "f6a5b4c3d2e1"
-down_revision = "x9y8z7a6b5c4"
+down_revision = "z7a6b5c4d3e2"
 branch_labels = None
 depends_on = None
 

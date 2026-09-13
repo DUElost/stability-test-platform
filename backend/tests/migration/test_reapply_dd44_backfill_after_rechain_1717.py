@@ -3,7 +3,7 @@
 ``8c4d5f47`` 把 p9q8r7s6t5u4 rechain 到 dd44ee55ff66 之后，rechain 前把 p9q8
 当 head 应用过的库不会再执行 dd44。本测试在一次性 PG 上模拟该受损态：
 
-  a. upgrade 到 f6a5b4c3d2e1 的 down_revision（x9y8z7a6b5c4）——新链库三行
+  a. upgrade 到 f6a5b4c3d2e1 的 down_revision（z7a6b5c4d3e2）——新链库三行
      sha 本应正确（先断言基线）；
   b. 把三行改回旧 _lib sha（模拟「dd44 从未执行」的受损库）；另把无关行
      fill_storage v1.0.2 改成哨兵值作对照；
@@ -29,7 +29,7 @@ PGDB = "stp_1717_sha_replay"
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), "..", "..")
 PY = sys.executable
 
-DOWN_REVISION = "x9y8z7a6b5c4"
+DOWN_REVISION = "z7a6b5c4d3e2"
 BACKFILL = [
     (
         "gpu_setup", "1.0.2",

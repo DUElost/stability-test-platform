@@ -23,6 +23,9 @@ Class: bug-fix
    `content_sha256` 永久保留 _lib 误写值。新 head 迁移以 `(name, version)` 键、
    `WHERE content_sha256 = :old` 重放同一回填：新链库 0 行更新、受损库自愈，
    免除逐库人工核对。迁移自包含，回填表与 dd44ee55ff66 逐字一致。
+   **PR #1743 CI 修复（2026-09-13）**：merge `main` 后把 `down_revision` 从
+   `x9y8z7a6b5c4` 重链到当时单 head `z7a6b5c4d3e2`（#1693 seed 链 tip），
+   消除 `Multiple head revisions`；回填逻辑未改。
 
 ## Alternatives
 
@@ -40,13 +43,15 @@ Class: bug-fix
 - `pytest backend/tests/migration/test_reapply_dd44_backfill_after_rechain_1717.py -q`：
   **1 passed**（真 alembic 链 + 一次性 PG16：新链基线正确 → 模拟受损 → upgrade
   head 自愈 → 对照行（fill_storage v1.0.2 哨兵 sha）不被改写 → downgrade no-op →
-  重复 upgrade 幂等）；
+  重复 upgrade 幂等；`DOWN_REVISION` 随 tip 同步为 `z7a6b5c4d3e2`）；
+- 空库：`alembic heads` → 单 head `f6a5b4c3d2e1`；`alembic upgrade head` 成功
+  （含 `z7a6b5c4d3e2 → f6a5b4c3d2e1`）；
 - `python scripts/run_gates.py check:quick`：见 PR 记录。
 
 ## Revisit
 
 - 受损库是否真实存在无法从仓库判定（依赖 09-12 当日部署时序）；本迁移落地后
   该问题失去意义（下次 `upgrade head` 自愈），无需运维核对。
-- 并行 Execution `fix-1693-dead-streak-offline-keyerror` 的 v1.0.9/v1.0.4 seed
-  也在 alembic 链上排队（`y8z7a…`/`z7a6…`），合入时序在后者需 rebase 重放本迁移
-  的 down_revision（届时单 head 保持）。
+- #1693 的 `y8z7…`/`z7a6…` 已合入 main；本 PR 已 merge-from-main 并把
+  `f6a5…` 的 `down_revision` 重链到 `z7a6b5c4d3e2`。后续若 tip 再动，新迁移
+  继续挂在当时单 head 之后，勿再硬编码旧 tip。
