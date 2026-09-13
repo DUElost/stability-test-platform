@@ -200,7 +200,7 @@ export default function AuditLogPage() {
           <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>IP 地址</span>
           <Input
             className="w-40"
-            placeholder="如 172.21.8.143"
+            placeholder="如 192.0.2.1"
             value={textDraft.ip_address}
             onChange={(e) => setTextDraft((d) => ({ ...d, ip_address: e.target.value }))}
             onBlur={(e) => commitTextFilter('ip_address', e.target.value)}
