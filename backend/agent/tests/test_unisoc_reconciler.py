@@ -114,7 +114,8 @@ def test_tick_once_pulls_device_events_then_emits(tmp_path):
 
     def shell_fn(cmd: str, _timeout: int) -> Optional[str]:
         if cmd.startswith("ls -1 /data/uniview"):
-            return "remote_evt\n"
+            # #1820：远端命令带 rc 回显
+            return "remote_evt\n__STP_LS_RC__=0\n"
         if "unievent_info.json" in cmd and "remote_evt" in cmd:
             return "unievent_info.json\n"
         return None
@@ -225,10 +226,11 @@ class TestProcessedPrune:
         return store
 
     def _device_shell(self, names):
-        """返回 shell_fn：两个 root 都列出 names（或 None=失败）。"""
-        listing = "\n".join(names) + ("\n" if names else "")
+        """返回 shell_fn：两个 root 都列出 names（或 None=传输失败）。"""
+        # #1820：远端命令带 rc 回显（权威列表判据）
+        payload = "\n".join(list(names) + ["__STP_LS_RC__=0"])
         return lambda cmd, _t: (
-            listing if cmd.startswith("ls -1 /data/") else None
+            payload if cmd.startswith("ls -1 /data/") else None
         )
 
     def test_stale_name_pruned_after_streak_live_kept(self, tmp_path, monkeypatch):
@@ -270,6 +272,36 @@ class TestProcessedPrune:
         assert r._processed == {"stale1"}  # 列表失败：不裁剪
         assert r._absent_streak == {}     # 滞回清零
 
+    def test_missing_root_is_authoritative_empty(self, tmp_path, monkeypatch):
+        """#1820：root 不存在（rc!=0）是权威空列表——裁剪照常收敛，不再永久挂起。"""
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
+        store = self._seed_store(["stale1"])
+        r = _make_reconciler(
+            tmp_path, store=store,
+            shell_fn=lambda cmd, _t: (
+                "__STP_LS_RC__=2\n" if cmd.startswith("ls -1 /data/") else None
+            ),
+        )
+        r._load_processed_state()
+        r.tick_once()
+        assert r._last_listed == set()      # 权威空（不再是 None=未知）
+        assert r._processed == set()        # stale1 已收敛裁剪
+
+    def test_missing_marker_treated_as_incomplete(self, tmp_path, monkeypatch):
+        """#1820：rc 标记缺失（异常输出/旧桩）保守视为不完整——不裁剪。"""
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
+        store = self._seed_store(["stale1"])
+        r = _make_reconciler(
+            tmp_path, store=store,
+            shell_fn=lambda cmd, _t: (
+                "some_name\n" if cmd.startswith("ls -1 /data/") else None
+            ),
+        )
+        r._load_processed_state()
+        r.tick_once()
+        assert r._last_listed is None
+        assert r._processed == {"stale1"}
+
     def test_legacy_huge_set_converges_to_device_listing(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "2")
         legacy = {f"evt_{i:05d}" for i in range(1000)} | {"live_a", "live_b"}
@@ -294,7 +326,7 @@ class TestProcessedPrune:
 
         def shell_fn(cmd: str, _t: int):
             if cmd.startswith("ls -1 /data/"):
-                return "fresh1\n"
+                return "fresh1\n__STP_LS_RC__=0\n"
             if "unievent_info.json" in cmd:
                 return "unievent_info.json\n"
             return None

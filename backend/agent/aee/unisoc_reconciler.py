@@ -294,16 +294,33 @@ class UnisocUniviewReconciler:
             if self._stop_evt.is_set():
                 listing_complete = False
                 break
-            listing = self._shell_fn(f"ls -1 {remote_root} 2>/dev/null", 30)
+            # #1820：远端回显退出码，区分「root 不存在（rc!=0，权威空列表）」
+            # 与「传输层失败（shell_fn 返回 None）」。此前 `ls ... 2>/dev/null`
+            # 对持久缺失的 root 恒 rc!=0 → shell_fn 返回 None → 整拍视为未知
+            # → _last_listed 恒 None → 裁剪永不执行，#767 对这类设备不收敛。
+            # echo 在远端求值 `$?`，对不回传退出码的旧 Android 形态同样有效。
+            listing = self._shell_fn(
+                f"ls -1 {remote_root} 2>/dev/null; echo __STP_LS_RC__=$?", 30,
+            )
             if listing is None:
                 listing_complete = False
                 continue
+            ls_out, _, rc_raw = listing.rstrip().rpartition("__STP_LS_RC__=")
+            try:
+                ls_rc = int(rc_raw.strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                # rc 标记缺失（异常输出）：保守视为不完整，当拍不裁剪
+                listing_complete = False
+                continue
             root_names: List[str] = []
-            for raw in listing.splitlines():
-                name = raw.strip()
-                if not name or name in {".", ".."} or "/" in name:
-                    continue
-                root_names.append(name)
+            if ls_rc == 0:
+                for raw in ls_out.splitlines():
+                    name = raw.strip()
+                    if not name or name in {".", ".."} or "/" in name:
+                        continue
+                    root_names.append(name)
+            # rc != 0（root 不存在等）：该 root 权威空列表——计入 listed（空）
+            # 且不把整拍标为未知（#1820）。
             listed.update(root_names)
             for name in root_names:
                 with self._state_lock:
