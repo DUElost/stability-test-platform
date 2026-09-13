@@ -110,14 +110,26 @@ def _parse_ts(value: str | None) -> datetime | None:
 
 
 def blocking_checks(checks: list[dict], required: list[str]) -> list[dict]:
-    """required 中未 SUCCESS 的 check（与两个 CI 脚本的判据一致：conclusion != SUCCESS）。"""
+    """required 中**未满足**分支保护要求的 check。
+
+    满足态 = `SUCCESS` 或 `NEUTRAL`（#1792）。NEUTRAL 必须计为满足：
+
+    - `CodeQL` 是 GitHub 默认 setup 的聚合 check，子分析未全完成时父 check 为
+      `COMPLETED`+`NEUTRAL`（#1775 实测：1 SUCCESS + 2 IN_PROGRESS → NEUTRAL，
+      随后转 SUCCESS）；
+    - 终态 NEUTRAL 亦存在且**被分支保护放行**：#1772 三个子分析全 SUCCESS、
+      父 check 为 `COMPLETED/NEUTRAL`，在 strict=true（要求 CodeQL）下**已合入**。
+
+    即 GitHub 自身视 NEUTRAL 为满足；本工具若判它未满足，就会产出
+    `REQUIRED_CHECK_FAILED` + `actionable: true` 的**错误人工动作指引**。
+    """
     req = set(required)
     out = []
     for c in checks:
         name = c.get("name")
         if name not in req:
             continue
-        if c.get("conclusion") == "SUCCESS":
+        if c.get("conclusion") in ("SUCCESS", "NEUTRAL"):
             continue
         out.append(
             {

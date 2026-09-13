@@ -1186,6 +1186,11 @@ def get_plan_run_timeline(
             )
         stages_out.append(stage_obj)
 
+    # 刻意读时重数而非读 plan_run.aborted_job_count 计数列（跨区收口链 A F-A4 裁决：
+    # 保留重数并成文）——timeline 需要读取时刻的准确值，而计数列在 abort 竞态下
+    # 可能滞后（#1552：expire 时序与聚合读取的竞态窗口）；本端点已加载 jobs，
+    # 重数无额外查询。聚合权威仍是计数列（O(1)），两源瞬态分叉可接受，勿在未
+    # 复核 #1552 竞态语义前把此处改成读计数列。
     aborted_job_count = sum(1 for j in jobs if j.status == JobStatus.ABORTED.value)
 
     return ok(PlanRunTimelineOut(
