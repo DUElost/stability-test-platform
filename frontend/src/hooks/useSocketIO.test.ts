@@ -49,7 +49,7 @@ describe('useSocketIO — token auth', () => {
   });
 
   it('uses cookie credentials for the Socket.IO handshake', async () => {
-    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const refreshAccessToken = vi.fn().mockResolvedValue('recovered');
     const socket = createFakeSocket();
 
     const ioMock = vi.fn((_url: string, _opts: any) => {
@@ -76,7 +76,7 @@ describe('useSocketIO — token auth', () => {
   });
 
   it('recovers from Invalid token by refreshing cookie session and reconnecting', async () => {
-    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const refreshAccessToken = vi.fn().mockResolvedValue('recovered');
 
     const socket = createFakeSocket();
     const ioMock = vi.fn(() => socket);
@@ -109,7 +109,7 @@ describe('useSocketIO — token auth', () => {
   });
 
   it('resubscribes with room names (not refcounts) on reconnect (#1112)', async () => {
-    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const refreshAccessToken = vi.fn().mockResolvedValue('recovered');
     const socket = createFakeSocket();
     const ioMock = vi.fn(() => socket);
 
@@ -144,7 +144,7 @@ describe('useSocketIO — token auth', () => {
   });
 
   it('recovers from Authentication required when access cookie is missing (#1119)', async () => {
-    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const refreshAccessToken = vi.fn().mockResolvedValue('recovered');
     const socket = createFakeSocket();
     const ioMock = vi.fn(() => socket);
 
@@ -171,7 +171,7 @@ describe('useSocketIO — token auth', () => {
   });
 
   it('does not infinite-refresh when refresh fails for Authentication required (#1119)', async () => {
-    const refreshAccessToken = vi.fn().mockResolvedValue(false);
+    const refreshAccessToken = vi.fn().mockResolvedValue('rejected');
     const socket = createFakeSocket();
     const ioMock = vi.fn(() => socket);
 
@@ -207,7 +207,7 @@ describe('useSocketIO — token auth', () => {
   });
 
   it('does not refresh on non-recoverable handshake errors (#1119)', async () => {
-    const refreshAccessToken = vi.fn().mockResolvedValue(true);
+    const refreshAccessToken = vi.fn().mockResolvedValue('recovered');
     const socket = createFakeSocket();
     const ioMock = vi.fn(() => socket);
 
@@ -235,7 +235,7 @@ describe('useSocketIO — token auth', () => {
   it('schedules a bounded reconnect when the refresh fails (#1279)', async () => {
     vi.useFakeTimers();
     try {
-      const refreshAccessToken = vi.fn().mockResolvedValue(false);
+      const refreshAccessToken = vi.fn().mockResolvedValue('rejected');
       const socket = createFakeSocket();
       const ioMock = vi.fn(() => socket);
 
@@ -275,7 +275,7 @@ describe('useSocketIO — token auth', () => {
   it('reconnects immediately when the browser goes back online (#1279)', async () => {
     vi.useFakeTimers();
     try {
-      const refreshAccessToken = vi.fn().mockResolvedValue(false);
+      const refreshAccessToken = vi.fn().mockResolvedValue('rejected');
       const socket = createFakeSocket();
       const ioMock = vi.fn(() => socket);
 
