@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def _main_source() -> str:
     return (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
@@ -31,3 +33,25 @@ def test_recovery_sync_periodic_loop_present():
     assert "recovery_sync_periodic_started" in src
     assert "STP_RECOVERY_SYNC_INTERVAL_SECONDS" in src
     assert "_recovery_sync_stop" in src
+    assert "_coerce_recovery_interval" in src
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, 60.0),
+        ("", 60.0),
+        ("90", 90.0),
+        ("3", 5.0),
+        ("-1", 5.0),
+        ("abc", 60.0),
+        ("nan", 60.0),
+        ("inf", 60.0),
+        ("-inf", 60.0),
+    ],
+)
+def test_coerce_recovery_interval_guards(raw, expected):
+    """#1710：非法/nan/inf 回落默认；负/过小夹到 5。"""
+    from backend.agent.main import _coerce_recovery_interval
+
+    assert _coerce_recovery_interval(raw) == expected
