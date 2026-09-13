@@ -37,6 +37,17 @@ const JIRA_KEY_RE = /^[A-Z][A-Z0-9-]*$/;
 import { coverageSummary } from './inventoryDisplay';
 import { FACET_FIELD_ENTRIES } from './facetFields';
 
+/** #1708：rename 已生效、字段 update 失败——携带新 key 供 onError 跳转，页面不停留在失效 URL。 */
+class PartialSaveError extends Error {
+  constructor(
+    readonly renamedTo: string,
+    readonly cause: unknown,
+  ) {
+    super('字段保存失败');
+    this.name = 'PartialSaveError';
+  }
+}
+
 export default function ProjectDetailPage() {
   const { projectKey = '' } = useParams<{ projectKey: string }>();
   const navigate = useNavigate();
@@ -74,16 +85,55 @@ export default function ProjectDetailPage() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [editOpen, setEditOpen] = useState(false);
-  const updateMutation = useMutation({
-    mutationFn: (payload: ProjectUpdateInput) => api.projects.update(projectKey, payload),
-    onSuccess: () => {
-      toast.success('项目信息已更新');
+  // #1708：字段更新与 key 重命名必须**串行**提交。此前 onSubmit/onRename 在同一
+  // tick 发两个独立请求，无顺序保证——rename 先落地则 update 按旧 key 查 404，
+  // 而 rename 的 onSuccess 已关窗跳转，用户刚编辑的字段静默丢失。
+  // 顺序取 rename → 用新 key update（与 issue 建议一致）：重命名是最易失败的半步
+  // （key 冲突），失败时尚未写入字段；rename 已生效而 update 失败时用 PartialSaveError
+  // 带上新 key，仍跳转，避免把页面留在已失效的旧 URL。
+  const saveMutation = useMutation({
+    mutationFn: async ({
+      payload,
+      newKey,
+    }: {
+      payload: ProjectUpdateInput;
+      newKey?: string;
+    }): Promise<{ renamedTo: string | null }> => {
+      if (!newKey) {
+        await api.projects.update(projectKey, payload);
+        return { renamedTo: null };
+      }
+      const renamed = await api.projects.rename(projectKey, newKey);
+      try {
+        await api.projects.update(renamed.project_key, payload);
+      } catch (error) {
+        throw new PartialSaveError(renamed.project_key, error);
+      }
+      return { renamedTo: renamed.project_key };
+    },
+    onSuccess: ({ renamedTo }) => {
       setEditOpen(false);
+      if (renamedTo) {
+        toast.success(`已重命名为 ${renamedTo}`);
+        void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
+        navigate(`/projects/${renamedTo}`);
+        return;
+      }
+      toast.success('项目信息已更新');
       void queryClient.invalidateQueries({ queryKey: projectKeys.detail(projectKey) });
       void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
     },
     onError: (error) => {
-      toast.error(`更新失败: ${toApiError(error).message || '请稍后重试'}`);
+      const message = toApiError(error instanceof PartialSaveError ? error.cause : error)
+        .message;
+      if (error instanceof PartialSaveError) {
+        setEditOpen(false);
+        void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
+        toast.error(`已重命名为 ${error.renamedTo}，但字段保存失败: ${message || '请稍后重试'}`);
+        navigate(`/projects/${error.renamedTo}`);
+        return;
+      }
+      toast.error(`更新失败: ${message || '请稍后重试'}`);
     },
   });
 
@@ -101,20 +151,6 @@ export default function ProjectDetailPage() {
     },
     onError: (error) => {
       toast.error(`移除失败: ${toApiError(error).message || '请稍后重试'}`);
-    },
-  });
-
-  // D2 复核：项目重命名——改 key 后跳新 URL（外键不受影响）
-  const renameMutation = useMutation({
-    mutationFn: (newKey: string) => api.projects.rename(projectKey, newKey),
-    onSuccess: (renamed) => {
-      toast.success(`已重命名为 ${renamed.project_key}`);
-      setEditOpen(false);
-      void queryClient.invalidateQueries({ queryKey: projectKeys.list() });
-      navigate(`/projects/${renamed.project_key}`);
-    },
-    onError: (error) => {
-      toast.error(`重命名失败: ${toApiError(error).message || '请稍后重试'}`);
     },
   });
 
@@ -524,11 +560,11 @@ export default function ProjectDetailPage() {
       {isAdmin && project ? (
         <EditProjectDialog
           isOpen={editOpen}
-          isSubmitting={updateMutation.isPending}
+          isSubmitting={saveMutation.isPending}
           project={project}
           onClose={() => setEditOpen(false)}
-          onSubmit={(payload) => updateMutation.mutate(payload)}
-          onRename={(newKey) => renameMutation.mutate(newKey)}
+          canRename={isAdmin}
+          onSubmit={(payload, newKey) => saveMutation.mutate({ payload, newKey })}
         />
       ) : null}
     </PageContainer>
