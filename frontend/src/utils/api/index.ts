@@ -31,7 +31,7 @@ export type {
   JiraRunRecord,
   PipelineTemplate, AgentLogOut, User,
   RunsByStatus, TestTypeStat, RiskDistribution, RecentRun, ResultsSummary,
-  ActivityPoint, ActivityResponse, DeviceMetricPoint, DeviceMetricsResponse,
+  ActivityPoint, ActivityResponse,
   CompletionTrendPoint, CompletionTrendResponse, FileServerOverview, FileServerMetricPoint,
   NotificationChannel, AlertRule, NotificationLog, NotificationLogsResponse, UnreadCountResponse,
   TaskSchedule, TaskScheduleCreatePayload, TaskScheduleUpdatePayload, ScheduleRunNowResult,
