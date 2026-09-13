@@ -1,7 +1,7 @@
 # #1819 reconciler pull-failed DLE 漏改调用点
 
-Status: implemented  
-Class: bug-fix  
+Status: implemented
+Class: bug-fix
 Issue: https://github.com/DUElost/stability-test-platform/issues/1819
 
 ## Decision
