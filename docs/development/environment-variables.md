@@ -50,6 +50,7 @@
 | `STP_BACKEND_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：后端 merge/scan 工具路径（#518 起不再回落旧无前缀键） |
 | `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅 Agent**：Agent 侧 scan 工具路径（hot-update 经 `STP_AGENT_*` 源键写入） |
 | `STP_AGENT_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：Agent 侧 scan 工具路径的源键，hot-update 写成 Agent 的无前缀键 |
+| `STP_JIRA_BASE_URL` / `STP_JIRA_TOKEN` | **可选**：JIRA REST 基址与 Bearer token（#710）。配置后 dedup 提单前对 `jira_project_key` 做一次存在性探测（`GET /rest/api/2/project/{key}`），404 记 WARNING 不阻断；未配置则跳过探测（保持 best-effort） |
 | `STP_AGENT_UNISOC_LOG_SCAN_PYTHON` / `_SCRIPT` | **仅控制面**：展锐采集工具（`Monkey-Log-Scan-GT-SPRD`）路径的源键，hot-update 写成 `STP_UNISOC_LOG_SCAN_*`（ADR-0032） |
 | `STP_AGENT_UNISOC_SCAN_RESULT_PYTHON` / `_SCRIPT` | **仅控制面**：展锐汇总去重工具（`Scan-Result-GT`）路径的源键，hot-update 写成 `STP_UNISOC_SCAN_RESULT_*`（ADR-0032） |
 | `STP_UNISOC_LOG_SCAN_PYTHON` / `_SCRIPT` | **仅 Agent**：展锐采集工具路径；属 `AGENT_PATH_ENV_KEYS`（推送后校验路径存在）。与下两行四键齐备才启用，缺任一 = 静默 no-op |

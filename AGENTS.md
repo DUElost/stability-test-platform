@@ -16,7 +16,9 @@
   新版本。
 - Python 工具和测试使用当前解释器的 `python -m ...` 形式，避免命中另一套环境。
 - 非平凡变更必须附 Agent Note；方向级决策使用 ADR。
-- `main` 只通过 PR 合入；不要直推或手动 Merge，现有 FIFO auto-merge 负责串行集成。
+- `main` 只通过 PR 合入；不要直推或手动 Merge，现有 FIFO auto-merge 负责串行集成；
+  也不得自行启用/维持 auto-merge（`gh pr merge --auto`、GraphQL 同义调用，含
+  `--squash`）或替他人的 PR 做 update-branch / nudge——只允许队首持有 auto-merge。
 
 ## 硬不变量
 

@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     JSON,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -56,6 +57,15 @@ class Host(Base):
     # 自然过期，无需对账清扫；持有者用于并发热更新互相识别（非本机持有即拒绝）。
     maintenance_until  = Column(DateTime(timezone=True), nullable=True)
     maintenance_holder = Column(String(128), nullable=True, default="")
+
+    # ADR-0038 D1/D4：主机退役 —— 生命周期真源，与 status（心跳所有）正交。
+    # retired_at IS NOT NULL 即退役，NULL = 在用；退役不改写 status/job/device
+    # 历史（不变量 2）。retire_alerted_at 承载「已退役但仍在心跳」的单次告警
+    # 去重（D4：只响一次，除非状态震荡）。
+    retired_at        = Column(DateTime(timezone=True), nullable=True)
+    retired_by        = Column(String(128), nullable=True)
+    retire_reason     = Column(Text, nullable=True)
+    retire_alerted_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("hostname", name="host_hostname_key"),
