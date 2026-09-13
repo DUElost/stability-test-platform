@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _UNISOC_STATE_PREFIX = "watcher:unisoc"
 _PROCESSED_SUFFIX = "processed_event_dirs"
 _DEVICE_UNIVIEW_ROOTS = ("/data/uniview", "/data/vendor/uniview")
+_STP_RC_MARKER = "__STP_RC__:"
 
 
 def _unisoc_watcher_root(local_root: Path, run_date_stamp: Optional[str], serial: str) -> Path:
@@ -229,10 +230,11 @@ class UnisocUniviewReconciler:
     def _prune_processed(self, local_names: Set[str]) -> int:
         """#767：裁剪不可能再触发处理的名字，返回本拍移除数。
 
-        判据：名字不在本拍设备列表（``_last_listed``，任一 root 列表失败
+        判据：名字不在本拍设备列表（``_last_listed``，任一 root 传输失败
         则为 None）且不在当前 stamp 本地树，连续 ``_prune_after_ticks`` 拍
         如此才移除——设备仍存留的事件不会被重拉重发，本地树内的事件仍被
-        重扫去重。列表失败当拍清零滞回计数（防 adb 抖动误删）。
+        重扫去重。传输失败当拍清零滞回计数（防 adb 抖动误删）；root 缺失
+        （``ls`` rc≠0）视为该 root 权威空集，不阻塞整拍裁剪（#1820）。
         """
         listed = self._last_listed
         with self._state_lock:
@@ -279,12 +281,47 @@ class UnisocUniviewReconciler:
             )
         return pruned
 
+    def _list_remote_uniview_root(self, remote_root: str) -> Optional[Set[str]]:
+        """List event dir names under one device uniview root (#1820).
+
+        Returns ``None`` on transport failure (``shell_fn`` returned None).
+        Returns an empty set when the root is missing or unreadable (``ls`` rc≠0).
+        Returns the parsed name set when ``ls`` rc==0.
+        """
+        listing = self._shell_fn(
+            f"ls -1 {remote_root} 2>/dev/null; echo {_STP_RC_MARKER}$?",
+            30,
+        )
+        if listing is None:
+            return None
+        root_names: Set[str] = set()
+        rc: Optional[int] = None
+        for raw in listing.splitlines():
+            name = raw.strip()
+            if not name:
+                continue
+            if name.startswith(_STP_RC_MARKER):
+                try:
+                    rc = int(name[len(_STP_RC_MARKER):])
+                except ValueError:
+                    rc = None
+                continue
+            if name in {".", ".."} or "/" in name:
+                continue
+            root_names.add(name)
+        if rc is None:
+            return None
+        if rc != 0:
+            return set()
+        return root_names
+
     def _sync_device_events_to_local(self, root: Path) -> int:
         """adb-list + pull new uniview event dirs into ``uniview_watcher`` (#1043).
 
-        #767：顺带记录本拍设备列表（``_last_listed``）供裁剪判据使用——
-        任一 root 列表失败（返回 None）即整体记为「未知」（None），当拍
-        不做裁剪决策；成功但为空（目录无事件）是权威的「无名字」。
+        #767：顺带记录本拍设备列表（``_last_listed``）供裁剪判据使用。
+        #1820：区分传输失败与 root 缺失——``shell_fn`` 返回 None 时整拍
+        记为「未知」（None），当拍不做裁剪；``ls`` rc≠0 视为该 root 权威
+        空集，其余 root 仍参与列表与裁剪；rc==0 按行解析名字。
         """
         pulled = 0
         listed: Set[str] = set()
@@ -294,16 +331,10 @@ class UnisocUniviewReconciler:
             if self._stop_evt.is_set():
                 listing_complete = False
                 break
-            listing = self._shell_fn(f"ls -1 {remote_root} 2>/dev/null", 30)
-            if listing is None:
+            root_names = self._list_remote_uniview_root(remote_root)
+            if root_names is None:
                 listing_complete = False
                 continue
-            root_names: List[str] = []
-            for raw in listing.splitlines():
-                name = raw.strip()
-                if not name or name in {".", ".."} or "/" in name:
-                    continue
-                root_names.append(name)
             listed.update(root_names)
             for name in root_names:
                 with self._state_lock:
