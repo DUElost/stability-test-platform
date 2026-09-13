@@ -5,8 +5,9 @@
   TTL **120s**；`cancel` 等待窗 **3s + 可配**；验收=**进程内双实例模拟**（真双进程归 rollout）。
   **P1 已落地**（`stp:console:key/owner` + fail-closed 获取 + 止损取消，ADR-0027 v1.4）；
   **P2 已落地**（状态快照 `stp:console:status`：跨实例 `status()`/订阅校验生效，ADR-0027 v1.5）；
-  **P3 已落地**（cancel 转发：请求位 + owner control tick 消费 + 有界等待 ack，
-  超时 fail-closed；ADR-0027 v1.6）；P4（read_log）在途。
+  **P3 已落地**（cancel 转发：请求位 + owner control tick 消费 + 有界等待 ack，超时 fail-closed；ADR-0027 v1.6）；
+  **P4 已落地**（跨实例 replay：文件源 + 共享 `STP_RUN_CONSOLE_LOG_ROOT` 前提 +
+  `replay_unavailable` 显式化；ADR-0027 v1.7）——**四阶段全部落地**。
 - **日期**：2026-09-13
 - **来源**：#1737（承接 #1114 / #1517 的 Revisit）；ADR-0027 v1.2 清单第 6 条；#720 Epic。
 - **关联 note**：[`2026-09-11-runconsole-multi-instance-boundary-1114.md`](../notes/bug-fix/2026-09-11-runconsole-multi-instance-boundary-1114.md)。
@@ -90,7 +91,7 @@ run 状态与日志片段全部外置（Redis/共享存储），owner 仅执行�
    `backend/tests/services/test_run_console_registry.py`（7）；
 2. **P2（✅ 已落地）**：`status()` / 订阅校验走共享状态——快照键 `stp:console:status:<run_id>`（start/终态/tick 发布；终态 TTL=本地保留期；tick 续期、丢失重发；本地优先，跨实例回退读快照）；
 3. **P3（✅ 已落地）**：`cancel` 请求位 + owner 消费——`stp:console:cancelreq/ack`（指纹匹配），owner control tick（默认 1s）消费，请求方有界等待（默认 3s，`STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS`）超时 fail-closed；事件循环内调用方 to_thread；
-4. **P4**：`read_log` 跨实例（评估是否值得引入方向 B 的 RPC）。
+4. **P4（✅ 已落地）**：`read_log` 跨实例——**评估结论：不引入 RPC/日志外置**。理由：`read_log` 的既有文件回退即 replay 源（写入路径每行落盘、文件行号 = seq），RPC 只在「日志目录不共享」的部署里才有增量，而该场景用挂载同一存储即可覆盖，无需新增控制面间通道与超时语义；Redis 日志镜像则与本地文件模型重复。落地内容：status 由 P2 快照补全 + `replay_unavailable` 显式标记 + 部署前提文档化。
 
 ## 7. 对 ADR-0027 的影响（已执行：v1.4）
 

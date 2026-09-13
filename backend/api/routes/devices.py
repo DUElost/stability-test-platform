@@ -295,6 +295,9 @@ def list_devices(
     status: Optional[str] = Query(None, description="Filter by device status (ONLINE, OFFLINE, BUSY)"),
     project_key: Optional[str] = Query(None, description="ADR-0029: filter by project key"),
     unassigned: bool = Query(False, description="ADR-0029 P0: only devices with no project (project_id IS NULL)"),
+    include_retired: bool = Query(
+        False, description="ADR-0038 D5：默认隐藏退役主机上的设备，显式置 true 才显示",
+    ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=1200),
     db: Session = Depends(get_db),
@@ -306,6 +309,22 @@ def list_devices(
         db.query(Device)
         .order_by(Device.last_seen.desc().nullslast(), Device.id.asc())
     )
+
+    # ADR-0038 D5 不变量 1「退役不再是容量」落到**设备派生库存**（#1805 验收矩阵
+    # 「统计、容量与设备库存」行）：设备库存是经 `Device.host_id` 派生的活跃容量，
+    # 退役主机不再是容量，其设备默认不出现在活跃库存里。
+    #
+    # 口径与 ③ 切片（#1804）在 hosts/stats/metrics 上完全一致：默认隐藏 +
+    # `include_retired=true` 显式查看；`total` 与列表同口径——`query.count()` 在
+    # 过滤之后执行且共用同一 query，故自动同步，不会出现「列表 8 条、total 10」。
+    #
+    # 为什么用 outerjoin 而不是 `host_id.in_(...)` 子查询：`Device.host_id` 可为
+    # NULL（未归属主机的设备），outerjoin 后 `Host.retired_at IS NULL` 对无主设备
+    # 恒真、得以保留；子查询形式会因 NULL 不在集合中而把它们误删。
+    if not include_retired:
+        query = query.outerjoin(Host, Device.host_id == Host.id).filter(
+            Host.retired_at.is_(None),
+        )
 
     # ADR-0029 P0：未归属筛选——与 project_key 互斥（「某项目里未归属」无意义）；
     # 参数组合错误优先于 key 存在性校验

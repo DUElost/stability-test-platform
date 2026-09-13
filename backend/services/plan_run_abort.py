@@ -33,7 +33,10 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
-from backend.realtime.socketio_server import schedule_emit
+from backend.realtime.socketio_server import (
+    schedule_agent_control_fanout,
+    schedule_emit,
+)
 from typing import Optional
 
 from sqlalchemy import select, update
@@ -633,23 +636,27 @@ def abort_plan_run(
     # Non-blocking control delivery.  The lease remains ACTIVE until the Agent
     # acknowledges termination, so a lost command cannot make the device
     # schedulable while the old process is still running.
+    # #703：host 扇出合并为单次 schedule_agent_control_fanout，避免上百次
+    # run_coroutine_threadsafe 同步灌满主事件循环。
+    control_items: list[tuple[str, dict]] = []
     for emit_host_id in abort_hosts:
         host_job_ids = abort_jobs_by_host.get(emit_host_id, [])
         if not host_job_ids:
             continue
-        schedule_emit(
-            "control",
-            {
-                "command": "abort",
-                "payload": {
-                    "plan_run_id": plan_run_id,
-                    "job_ids": host_job_ids,
-                    "reason": reason,
+        control_items.append(
+            (
+                emit_host_id,
+                {
+                    "command": "abort",
+                    "payload": {
+                        "plan_run_id": plan_run_id,
+                        "job_ids": host_job_ids,
+                        "reason": reason,
+                    },
                 },
-            },
-            namespace="/agent",
-            room=f"agent:{emit_host_id}",
+            )
         )
+    schedule_agent_control_fanout(control_items)
 
     # ADR-0025 Sprint 4: abort 导致 PlanRun 终态时触发归档-2 scan + merge
     if should_trigger_dedup(pr.status):
