@@ -296,3 +296,33 @@ def test_drops_below_target_uses_regular_interval(tmp_path):
     assert n == 2
     assert mon._catchup_needed is False
     assert mon._next_wait_seconds() == mon._interval
+
+
+# ── #741: 临界水位放大单批预算 ───────────────────────────────────────────
+
+
+def test_spill_budget_normal_vs_critical():
+    mon = HddSpillMonitor.instance()
+    assert mon._spill_budget(95.0) == mon._MAX_SPILL_PER_CYCLE
+    assert mon._spill_budget(97.9) == mon._MAX_SPILL_PER_CYCLE
+    assert mon._spill_budget(98.0) == mon._MAX_SPILL_CRITICAL
+    assert mon._spill_budget(99.5) == mon._MAX_SPILL_CRITICAL
+
+
+def test_critical_usage_uses_elevated_batch(tmp_path):
+    """#741: ≥98% 时单批用 critical budget，而非常态 20。"""
+    cifs = tmp_path / "cifs"
+    cifs.mkdir()
+    mon = HddSpillMonitor.instance().configure(
+        hdd_root=str(tmp_path),
+        cifs_root=str(cifs),
+        spill_threshold_pct=80.0,
+        target_pct=70.0,
+        disk_usage_fn=MagicMock(return_value={"usage_percent": 99.0}),
+    )
+    with patch.object(mon, "_spill_oldest_event_dir", return_value=1) as spill:
+        n = mon.check_once()
+
+    assert n == mon._MAX_SPILL_CRITICAL
+    assert spill.call_count == mon._MAX_SPILL_CRITICAL
+    assert mon._catchup_needed is True
