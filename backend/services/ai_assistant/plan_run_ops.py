@@ -190,12 +190,14 @@ def run_retry_plan_run_dispatch(
     params: dict,
     *,
     triggered_by: str,
+    requester_user_id: int | None = None,
 ) -> str:
     try:
         summary = retry_plan_run_dispatch(
             params["run_id"],
             db=db,
             triggered_by=triggered_by,
+            audit_user_id=requester_user_id,
         )
     except PlanRunDispatchRetryError as exc:
         raise RuntimeError(str(exc)) from exc
@@ -347,19 +349,28 @@ def _schedule_emit_agent_control(
     command: str,
     *,
     payload: dict | None = None,
-) -> None:
-    """线程安全：从 SAQ worker 向主循环桥接 emit_agent_control。"""
+) -> bool:
+    """线程安全：从 SAQ worker 向主循环桥接 emit_agent_control。
+
+    返回是否**实际入队**（#759）：主循环不可用时不再只记 WARNING 静默——
+    调用方（如 archive）据此判定是否假成功。
+    """
     from backend.realtime import socketio_server
     from backend.realtime.socketio_server import emit_agent_control
 
     loop = socketio_server._main_loop
     if loop is None or loop.is_closed():
         logger.warning("main_loop_not_available_for_agent_control host=%s", host_id)
-        return
-    asyncio.run_coroutine_threadsafe(
-        emit_agent_control(host_id, command, payload=payload or {}),
-        loop,
-    )
+        return False
+    try:
+        asyncio.run_coroutine_threadsafe(
+            emit_agent_control(host_id, command, payload=payload or {}),
+            loop,
+        )
+    except RuntimeError:
+        logger.exception("agent_control_schedule_failed host=%s command=%s", host_id, command)
+        return False
+    return True
 
 
 def run_trigger_plan_run_archive(
@@ -394,19 +405,24 @@ def run_trigger_plan_run_archive(
 
     triggered: list[str] = []
     skipped: list[str] = []
+    dispatch_failed: list[str] = []
     for host_id, host_status in host_rows:
         if host_status == "ONLINE":
-            _schedule_emit_agent_control(
+            ok_archive = _schedule_emit_agent_control(
                 host_id,
                 "archive_now",
                 payload={"plan_run_id": run_id},
             )
-            _schedule_emit_agent_control(
+            ok_scan = _schedule_emit_agent_control(
                 host_id,
                 "scan_now",
                 payload=build_scan_now_payload(db, run_id, host_id, is_final=False),
             )
-            triggered.append(host_id)
+            if ok_archive and ok_scan:
+                triggered.append(host_id)
+            else:
+                # #759：主循环不可用/入队失败不得报「已触发」——记为下发失败。
+                dispatch_failed.append(host_id)
         else:
             skipped.append(host_id)
 
@@ -418,12 +434,18 @@ def run_trigger_plan_run_archive(
         details={
             "triggered_hosts": triggered,
             "skipped_offline": skipped,
+            "dispatch_failed": dispatch_failed,
             "triggered_by": triggered_by,
         },
         user_id=requester_user_id,
         username=triggered_by,
     )
     db.commit()
+    if dispatch_failed:
+        raise RuntimeError(
+            f"PlanRun #{run_id} 归档/扫描下发失败：{len(dispatch_failed)} 台 ONLINE "
+            f"主机未入队（事件循环不可用？）——{dispatch_failed}"
+        )
     return (
         f"PlanRun #{run_id} 归档/扫描已触发：ONLINE {len(triggered)} 台"
         f"{('，跳过 ' + str(len(skipped)) + ' 台离线') if skipped else ''}"
