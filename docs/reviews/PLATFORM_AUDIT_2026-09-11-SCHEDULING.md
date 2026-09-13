@@ -20,6 +20,11 @@
 
 > 注：总数按 issue 单计：13 单中 H-07 与 H-07b 为同一主题拆分，H-06/H-09 各有独立单。
 
+> **续查补充（2026-09-14）**：13 单中 **#1526（H-09）的验收项并未真正闭环** —— 其
+> 「`action_template` 表级删除」从未落地，却被同期的 #734/#1754 以 `downgrade()` 里的
+> `op.drop_table` 判为「已完成」。已另立 **[#1890](https://github.com/DUElost/stability-test-platform/issues/1890)**。
+> 原「12/13 已关闭」的**关单数**不变，但**完成度**须按此修正。
+
 **排期结论**：本批次**已无排期议程**。原「轨道 A 推进在途 PR」4 个 PR（#1589 / #1593 / #1596 / #1616）已于 2026-09-12 全部合入；原「轨道 B 需裁定」的 #1525 已由 owner 裁决落地（PR #1619）；原「轨道 C 暂缓」的 #1520 已启动分期交付（首切片 PR #1663）。
 
 ---
@@ -39,7 +44,7 @@
 | **#1523** | H-07 ADR-0031 编号冲突 | 09-12 13:00 | **PR #1589 已合入**（附录改子编号 ADR-0031-A + README 补登） |
 | **#1524** | H-07b ADR 状态行格式 | 09-12 10:14 | `completed` |
 | **#1525** | H-08 PR 门禁不覆盖重测试 | 09-12 16:55 | **PR #1619 已合入** — owner 裁决「维持现状 + **前移触发规则制度化**」（同类夜间红灯 ≥2 次 → 评估前移）；驳回 Merge Queue（≈10× 全量 CI/天）与全量前移，正式文档见 `repository-workflow.md`「CI 分层」节 + Agent Note |
-| **#1526** | H-09 `action_templates` 死代码 | 09-12 10:09 | **PR #1568 已合入**（16 文件，-552 行）；保留 `action_template` 表待独立确认 |
+| **#1526** | H-09 `action_templates` 死代码 | 09-12 10:09 | **PR #1568 已合入**（16 文件，-552 行）；**`action_template` 表级删除未落地 → 另立 [#1890](https://github.com/DUElost/stability-test-platform/issues/1890)**（见 §四·3） |
 | **#1527** | H-06 `merge_task` 静默 return | 09-12 09:14 | `completed` |
 
 ### 🏗️ 持续工程台账 1 条（open，非「待办」）
@@ -80,18 +85,45 @@
 
 盘点过程中发现两条**不属于原批次、但值得记录**的问题：
 
-1. **`update-branch` 撞 workflow scope 即整 job 红** → **已立单 [#1783](https://github.com/DUElost/stability-test-platform/issues/1783)**（P2）
+1. **`update-branch` 撞 workflow scope 即整 job 红** → **已立单 [#1783](https://github.com/DUElost/stability-test-platform/issues/1783)（P2）→ 已修复闭环**
    - **现象**：`update_branch_tolerant()` 在队首 PR 改动了 `.github/workflows/*` 时，`gh pr update-branch` 被 GitHub 拒绝，落到 `return "$rc"` → 整 job 红：
      `GraphQL: refusing to allow a Personal Access Token to create or update workflow ... without 'workflow' scope (updatePullRequestBranch)`
    - **缺口**：该函数已对 head-sha 竞态 / 真冲突 / PR 已非 open 态三类失败绿退，**唯独漏了 scope 拒绝**（脚本 19-47 行）。
    - **影响**：队列 rebase 全线停摆（一度积压 28 个 PR 呈 `behind`）；且**每个 PR 都带此红叉**，信号失去信息量。
    - **实查**：与 PR 内容无关；队首 #1578 合入后队列恢复 → **条件触发**，非持续故障（近 40 次 run 零 failure），故标 P2 而非 P1。
-   - **修复方向**：#1783 给出两条路径 —— A 容错分支补齐（止血，零安全影响）、B PAT 补 scope（需 owner 裁定，属安全面扩张）。
+   - **落地**：采用路径 A（容错分支补齐，止血、零安全影响）→ **PR #1793 已合入**（`scripts/ci/pr-automerge-queue.sh`
+     + `tests/test_automerge_queue_alerts.py`）；`#1783` 已于 2026-09-13 09:51 关闭。
+     （同题 PR #1803 为重复提交，已关未合。）
 
-2. **`ci/queue-blocked` 告警单高频生成** → **已有单，不重复开**
+2. **`ci/queue-blocked` 告警单高频生成** → **已有单，不重复开 → 已三级闭环**
    - 根因单 **[#1761](https://github.com/DUElost/stability-test-platform/issues/1761)**（告警把「检查进行中」误判为 missing，83 分钟 20 条误报）；
      修复 PR **[#1764](https://github.com/DUElost/stability-test-platform/pull/1764)**（三分类 + 6 例回归测试）。
    - 实查发现时本项**已被认领**，故只登记不另立单。
+   - **追加（2026-09-13 晚间实查）**：误报实际有**三类**，逐类闭环：
+
+     | 类别 | 根因 | 修复 |
+     |------|------|------|
+     | 一类 | `IN_PROGRESS` 被判 missing（只读 `.conclusion`，进行中为空串） | PR #1764 |
+     | 二类 | `COMPLETED/NEUTRAL` 被判 failed（CodeQL 聚合 check 子分析未完成时父项为 NEUTRAL） | PR #1796 |
+     | 三类 | `MISSING` 的启动窗口误报（CodeQL 作为独立 workflow 晚注册 20–33s） | **PR #1869** |
+
+     根因单 **[#1792](https://github.com/DUElost/stability-test-platform/issues/1792)** 记录了全过程；
+     修复确认以「连续观测 20 次（每 90s，约 30 分钟）零新告警」为证（合入前约 4 分钟一条）。
+     `#1792` / `#1761` 均已关闭。
+
+3. **`action_template` 表级删除从未落地，却被判为「已完成」** → **已立单 [#1890](https://github.com/DUElost/stability-test-platform/issues/1890)**（P2）
+   - **现象**：`#734`（已关）验收项明写「`[ ] 编写 Alembic 迁移 drop 掉无用的 action_template 表`」；
+     PR #1754 以「已先行完成——迁移链含 `op.drop_table("action_template")`」复核模式跳过实施并 `Closes #734`。
+     同一判据亦出现在 `#1526` 的 Agent Note 中。
+   - **实查**：该 `op.drop_table` 位于创建迁移 `f4a5b6c7d8e9` 的 **`downgrade()`**（仅回滚路径）。
+     全链 136 个 revision 扫描，**forward 链 0 处删除该表**；最近的 `g7h8i9j0k1l2_align_schema_baseline.py`
+     反而**重建**其索引（`CREATE INDEX ... ON action_template`）——若表已 drop，该句在空库 upgrade 时会报错。
+   - **影响**：生产库 `action_template` 仍在（仅 ORM 模型被删）；`#1526` 的 `Revisit` 写「需生产只读核对后**另单**」，
+     该单**从未建立**（全库 600 单查重确认）。
+   - **并行的防线缺口**：`#734` 评论要求修复后**必须**新建 2 项 CI 门禁
+     （`tools/dev/check_deprecated_endpoints_usage.py` + 孤立 ORM 模型挂载门禁），实查**均不存在**，关闭时未记录处置。
+   - **修复方向**：A 生产只读核对后补 drop 迁移 + 收敛 schema-sync 白名单；B 落地或裁定 descope 该 2 项门禁；
+     C 在 `docs/notes/README.md` 复核指引补一条判据——*验证「迁移已删除 X」须确认语句位于 `upgrade()` 而非 `downgrade()`*。
 
 ---
 
@@ -101,9 +133,11 @@
 - [x] #1525（H-08）owner 决策记录 —— **已裁决并落地 PR #1619 + Agent Note**
 - [x] #1589 / #1593 / #1596 / #1616 四个 PR 合入后关闭对应 issue —— **全部完成**
 - [x] #1516 / #1517 / #1522 / #1524 / #1526 / #1527 等已关闭项 —— **全部关闭**
-- [ ] #1526 遗留的 `action_template` **表级删除**是否作为独立后续动作跟踪
-- [ ] 总表 #1515 在全部子项收口后关闭（当前保留，因 #1520 分期进行中 + #1737 衍生项 open）
-- [x] 邻域问题立单 —— **#1783**（PAT scope）已立；`ci/queue-blocked` 误报已被 #1761/#1764 认领，不重复开
+- [x] #1526 遗留的 `action_template` **表级删除**是否作为独立后续动作跟踪 —— **已立 [#1890](https://github.com/DUElost/stability-test-platform/issues/1890)**
+      （原判「未跟踪」经续查坐实：`#734` 验收项未被满足却被关闭，`downgrade` 语句被误读为 forward 迁移）
+- [ ] 总表 #1515 在全部子项收口后关闭（当前保留，因 #1520 分期进行中 + #1737 衍生项 open + #1890 新立）
+- [x] 邻域问题立单 —— **#1783**（PAT scope，已修复闭环）、**#1890**（表级删除缺口）已立；
+      `ci/queue-blocked` 误报已被 #1761/#1792 认领并三级闭环，不重复开
 
 ---
 
@@ -113,4 +147,7 @@
 - **不臆断**：凡未见 PR 者一律标「尚未认领」，不假设「有人在做」。
 - **排期依据**：严重度 × 影响面 × 修复风险 × 依赖关系；**决策类项单列**，不与开发项混排。
 - **失败归因**：CI 红灯先查是否与自身改动相关（比对 `check-runs` 的 job 清单与 PR 文件集），避免误判自因。
+- **复核判据方向**（2026-09-13 续查新增）：验证「迁移已删除 X」时，**必须确认该语句位于 `upgrade()` 而非
+  `downgrade()`** —— `grep drop_table` 会同时命中回滚路径，仅凭命中即判「已完成」会产生假证据（见 #1890）。
 - **终态时点**：2026-09-13 16:10 GMT+8（此时 open PR = 0，批次 12/13 关闭）。
+- **续查时点**：2026-09-14 06:33 GMT+8（同步至 `d6fe86ed` 后复核：邻域项全部闭环，新增 #1890 一条）。
