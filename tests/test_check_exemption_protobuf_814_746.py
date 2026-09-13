@@ -69,6 +69,7 @@ class TestOfflineExemption:
 
     def test_new_versions_exist_and_old_retained(self):
         assert (_SD / "sleep_check/v1.0.4/sleep_check.py").is_file()
+        assert (_SD / "gpu_check/v1.0.10/gpu_check.py").is_file()
         assert (_SD / "gpu_check/v1.0.9/gpu_check.py").is_file()
         assert (_SD / "sleep_check/v1.0.3/sleep_check.py").is_file()
         assert (_SD / "gpu_check/v1.0.8/gpu_check.py").is_file()
@@ -213,3 +214,54 @@ class TestOfflineExemptionNoKeyError:
         result = gpu_v109._run({})
         assert result["success"] is False
         assert "连续 2 个周期未存活" in result["error_message"]
+
+
+# 2026-09-01 真机实证形态（test_gpu_power_sleep_resources.py 同源）：
+# length=5，第 5 字节是下一字段的 tag 字节 \x0f（非空白，bytes.strip() 不去除）
+REAL_MONITOR_SAMPLE = (
+    b"GPU_RUN_START test_id=002 rounds=10\n"
+    b"\x00\x01\x18\x02\"\x01\x01\x0a\x00\x00\x01\x00\x01\x00\x01\x01"
+    b"test_result\x12\x05true\x0ftestcase_name\x12\x1etest_StressSpecial_GPUTest_002"
+    b"GPU_ROUND 1 rc=0\nGPU_RUN_END rc=0\n"
+)
+
+
+class TestProtobufPrefixVerdictV1010:
+    """#1695：v1.0.8/v1.0.9 的字段值**全等**判定对真机样本（length 多含一个
+    tag 字节）恒返回 None → verdict ``no-tests`` → 正常完成被判空跑失败
+    （PASS→FAIL 回归）。v1.0.10 改前缀判定；长度前缀仍在，#746 的「最后一条
+    为准 + 不被后文 true 子串干扰」语义保持。"""
+
+    @pytest.fixture(scope="class")
+    def gpu_v1010(self):
+        return _load(_SD / "gpu_check/v1.0.10/gpu_check.py", "gpu_check_v1010")
+
+    @pytest.fixture(scope="class")
+    def gpu_v109(self):
+        return _load(_SD / "gpu_check/v1.0.9/gpu_check.py", "gpu_check_v109_reg")
+
+    def test_v109_regression_documented(self, gpu_v109):
+        """修复前行为存证：v1.0.9 对真机样本解析为 None。"""
+        assert gpu_v109._last_protobuf_test_result(REAL_MONITOR_SAMPLE) is None
+        assert gpu_v109._run_finished(REAL_MONITOR_SAMPLE) == (True, "no-tests")
+
+    def test_v1010_real_sample_is_ok(self, gpu_v1010):
+        assert gpu_v1010._last_protobuf_test_result(REAL_MONITOR_SAMPLE) is True
+        assert gpu_v1010._run_finished(REAL_MONITOR_SAMPLE) == (True, "ok")
+
+    def test_v1010_synthetic_len4_still_ok(self, gpu_v1010):
+        log = b"test_result\x12\x04true\nGPU_RUN_END rc=0\n"
+        assert gpu_v1010._run_finished(log) == (True, "ok")
+
+    def test_v1010_last_false_wins_over_later_true(self, gpu_v1010):
+        # #746 回归保持：长度定界 false 不被紧随的 true 字节干扰
+        log = b"test_result\x12\x05false" + b"\x12\x04true"
+        assert gpu_v1010._last_protobuf_test_result(log) is False
+
+    def test_v1010_false_sample_not_flipped(self, gpu_v1010):
+        log = (
+            b"GPU_RUN_START test_id=002 rounds=10\n"
+            b"test_result\x12\x05false\x0ftestcase_name\x12\x1etest_X"
+            b"GPU_ROUND 1 rc=0\nGPU_RUN_END rc=0\n"
+        )
+        assert gpu_v1010._run_finished(log) == (True, "no-tests")

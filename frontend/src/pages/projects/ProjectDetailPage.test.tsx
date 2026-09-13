@@ -137,8 +137,9 @@ describe('ProjectDetailPage', () => {
     expect(screen.queryByTestId('jira-not-configured')).not.toBeInTheDocument();
   });
 
-  it('renames project via edit dialog key input', async () => {
+  it('renames then updates with the new key, serially (#1708)', async () => {
     mocks.renameProject.mockResolvedValue(makeDetail({ project_key: 'HONOR-ELA2' }));
+    mocks.updateProject.mockResolvedValue(makeDetail({ project_key: 'HONOR-ELA2' }));
     renderPage();
     await screen.findByText('Project A');
 
@@ -149,6 +150,50 @@ describe('ProjectDetailPage', () => {
 
     await waitFor(() => {
       expect(mocks.renameProject).toHaveBeenCalledWith('proj-a', 'HONOR-ELA2');
+      expect(mocks.navigate).toHaveBeenCalledWith('/projects/HONOR-ELA2');
+    });
+    // 串行：rename 先落地，update 必须用**新 key**；并发/旧 key 会让字段静默丢失
+    expect(mocks.updateProject).toHaveBeenCalledWith(
+      'HONOR-ELA2',
+      expect.objectContaining({ display_name: 'Project A' }),
+    );
+    expect(mocks.updateProject).not.toHaveBeenCalledWith('proj-a', expect.anything());
+    expect(mocks.renameProject.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.updateProject.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does not update fields when rename fails (#1708)', async () => {
+    mocks.renameProject.mockRejectedValue(new Error('项目标识已存在'));
+    renderPage();
+    await screen.findByText('Project A');
+
+    fireEvent.click(screen.getByTestId('edit-project-open'));
+    const keyInput = (await screen.findByTestId('edit-project-key')) as HTMLInputElement;
+    fireEvent.change(keyInput, { target: { value: 'TAKEN' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(mocks.renameProject).toHaveBeenCalled());
+    expect(mocks.updateProject).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    // 失败不关窗：用户输入保留，可修正 key 后重试
+    expect(screen.getByTestId('edit-project-key')).toBeInTheDocument();
+  });
+
+  it('navigates to the new key when update fails after rename (#1708)', async () => {
+    mocks.renameProject.mockResolvedValue(makeDetail({ project_key: 'HONOR-ELA2' }));
+    mocks.updateProject.mockRejectedValue(new Error('server boom'));
+    renderPage();
+    await screen.findByText('Project A');
+
+    fireEvent.click(screen.getByTestId('edit-project-open'));
+    const keyInput = (await screen.findByTestId('edit-project-key')) as HTMLInputElement;
+    fireEvent.change(keyInput, { target: { value: 'HONOR-ELA2' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    // rename 已生效：即便字段保存失败也必须跳新 key，不能停在失效的旧 URL
+    await waitFor(() => {
+      expect(mocks.updateProject).toHaveBeenCalledWith('HONOR-ELA2', expect.anything());
       expect(mocks.navigate).toHaveBeenCalledWith('/projects/HONOR-ELA2');
     });
   });
@@ -300,6 +345,8 @@ describe('ProjectDetailPage', () => {
         }),
       );
     });
+    // key 未改：不得再单独发 rename 请求（#1708 单回调语义）
+    expect(mocks.renameProject).not.toHaveBeenCalled();
     // 成功后关窗并失效详情缓存 → getProject 至少重新拉取一次
     await waitFor(() => {
       expect(mocks.getProject.mock.calls.length).toBeGreaterThanOrEqual(2);
