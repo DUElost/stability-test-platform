@@ -907,6 +907,31 @@ class AeeDbHistoryReconciler:
         """baseline 分片的 processed 键命名空间（job 级隔离）。"""
         return f"watcher_baseline:{self._job_id}"
 
+    def _lookup_cross_prefix_intent(
+        self, aee_type: str, line: str, *, exclude_prefix: str,
+    ) -> "dict | None":
+        """#1862：跨前缀 done 墓碑回查——返回另一前缀簿中同 line 的 done 记录副本。
+
+        baseline→runtime 迁移丢失窗口（baseline 落 processed→emit done→崩溃于
+        merge 前）后，runtime 重拉同 line 会在本前缀簿新建记录并分配**新
+        seq_no** 重复 emit；反方向（runtime 已 emit done、baseline 分片重扫）
+        同理。复用墓碑使本前缀幂等返回——emit 至多一次、幂等键稳定。
+        未 done 的跨前缀占位不在此复用（keys 尚未分配，复用无法稳定幂等键，
+        留 Revisit）。
+        """
+        other = (
+            self._baseline_prefix()
+            if exclude_prefix == self._state_prefix
+            else self._state_prefix
+        )
+        other_intents = load_intents(
+            self._state_store, state_key(self._serial, aee_type, prefix=other),
+        )
+        record = other_intents.get(line)
+        if isinstance(record, dict) and record.get("done"):
+            return dict(record)
+        return None
+
     def _state_prefix_for(self, payload: Dict[str, Any]) -> str:
         """解析 payload 所属 processed 键命名空间（processor 透传优先）。"""
         return str(payload.get("state_key_prefix") or self._state_prefix)
@@ -1165,11 +1190,20 @@ class AeeDbHistoryReconciler:
                 return
 
             line = str(payload.get("line") or "")
-            processed_key = state_key(
-                self._serial, aee_type, prefix=self._state_prefix_for(payload),
-            )
+            processed_prefix = self._state_prefix_for(payload)
+            processed_key = state_key(self._serial, aee_type, prefix=processed_prefix)
             intents = load_intents(self._state_store, processed_key)
             record = intents.get(line)
+            if record is None:
+                # #1862：本前缀簿未命中——回查另一前缀簿的 done 墓碑（迁移
+                # 丢失窗口），复用原 keys/seq_no 而非新建（防新 seq_no 重复
+                # emit）。墓碑写入本前缀簿后走下方 done 幂等返回。
+                record = self._lookup_cross_prefix_intent(
+                    aee_type, line, exclude_prefix=processed_prefix,
+                )
+                if record is not None:
+                    intents[line] = record
+                    save_intents(self._state_store, processed_key, intents)
             if record is None:
                 override = payload.get("detected_at_override")
                 override_iso = (
