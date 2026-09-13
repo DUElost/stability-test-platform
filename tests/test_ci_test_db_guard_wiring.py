@@ -115,6 +115,61 @@ def _backend_test_job_env_keys() -> set[str]:
     return keys
 
 
+def _backend_test_step_env_keys(step_name: str) -> set[str]:
+    """取出 `backend-test` job 中指定 step 的**步骤级** env 键名（#1716）。
+
+    为什么要补这一层：真正的失败条件是「import `backend/tests/conftest.py` 的进程里
+    `DATABASE_URL` 与 `TEST_DATABASE_URL` 同库」——而 YAML 允许把 `DATABASE_URL`
+    写在**步骤级** `env:`，job 级解析器完全看不到，守卫会静默放行、#1547 原样复发
+    （实测：注入到 `Run backend tests` 步骤后守卫仍 7 passed，而
+    `pytest backend/tests/` 立刻 exit 4）。
+
+    解析按 `- name: <step_name>` 定位步骤块（6 空格缩进的 `- name:`），取其下
+    8 空格 `env:` 直属的 10 空格键。
+    """
+    lines = CI_YML.read_text(encoding="utf-8").splitlines()
+    try:
+        job_start = next(i for i, ln in enumerate(lines) if re.match(r"^  backend-test:\s*$", ln))
+    except StopIteration:  # pragma: no cover
+        raise AssertionError("ci.yml 中未找到 backend-test job（结构被改名？）") from None
+
+    job_end = len(lines)
+    for i in range(job_start + 1, len(lines)):
+        if re.match(r"^  \S", lines[i]):
+            job_end = i
+            break
+
+    step_start = None
+    for i in range(job_start, job_end):
+        m = re.match(r"^      - name: (.*)$", lines[i])
+        if m and m.group(1).strip() == step_name:
+            step_start = i
+            break
+    if step_start is None:
+        raise AssertionError(f"backend-test job 中未找到 step {step_name!r}（改名或删除？）")
+
+    step_end = job_end
+    for i in range(step_start + 1, job_end):
+        if re.match(r"^      - name: ", lines[i]):
+            step_end = i
+            break
+
+    keys: set[str] = set()
+    in_env = False
+    for ln in lines[step_start:step_end]:
+        if re.match(r"^        env:\s*$", ln):
+            in_env = True
+            continue
+        if in_env:
+            if re.match(r"^        \S", ln) and not ln.startswith("          "):
+                in_env = False
+                continue
+            m = re.match(r"^          ([A-Z][A-Z0-9_]*):", ln)
+            if m:
+                keys.add(m.group(1))
+    return keys
+
+
 class TestCiWiring:
     """ci.yml 接线契约——#1547 的防复发主守卫。"""
 
@@ -127,6 +182,28 @@ class TestCiWiring:
             "（#1547，pytest exit 4，同 job 后续测试全部 skipped）。确需 DATABASE_URL "
             "的步骤（alembic migrate / agent tests）请用步骤级 env 注入。"
         )
+
+    def test_run_backend_tests_step_has_no_step_level_database_url(self):
+        """#1716：步骤级注入同样会复发 #1547，必须一并断言。
+
+        真正的失败条件是「import `backend/tests/conftest.py` 的进程里两库相同」，
+        与该变量写在 job 级还是步骤级无关——只看 job 级会留下静默绕过的口子。
+        """
+        keys = _backend_test_step_env_keys("Run backend tests")
+        assert "DATABASE_URL" not in keys, (
+            "`Run backend tests` 步骤不得注入 DATABASE_URL——该步骤正是 import "
+            "backend/tests/conftest.py 的进程，注入同库 URL 会触发 db_url_guard 拒载"
+            "（#1547 原样复发，pytest exit 4）。job 级已不设该变量，此步骤无需它："
+            "conftest.py 会在解析后把 os.environ['DATABASE_URL'] 覆盖为测试库。"
+        )
+
+    def test_run_backend_tests_step_is_locatable(self):
+        """防止步骤解析静默失效（step 改名/删除后应明确报错，而非静默返回空集）。"""
+        assert "DATABASE_URL" not in _backend_test_step_env_keys("Run backend tests"), (
+            "Run backend tests 步骤解析异常"
+        )
+        # 该步骤当前无步骤级 env；解析器必须能定位到它本身（找不到会 raise）
+        _backend_test_step_env_keys("Run backend tests")
 
     def test_ci_yml_is_parseable_and_job_found(self):
         """防止上面的结构解析静默失效（改名/重排后仍应找得到 job）。"""
