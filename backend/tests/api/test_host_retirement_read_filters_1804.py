@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from backend.models.enums import JobStatus
-from backend.models.host import Host
+from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
@@ -204,3 +204,57 @@ class TestAiReadFaces:
 
         assert "ail-active" in output
         assert "ail-retired" not in output
+
+
+class TestDeviceInventory:
+    """#1805 验收矩阵「统计、容量与设备库存」行：设备派生库存排除退役主机。
+
+    ③ 切片（#1804）覆盖了 hosts/stats/metrics/AI 四个读面，但**未覆盖
+    `GET /devices`**——而矩阵明确要求「活跃库存通过 Host 生命周期过滤，
+    **包含设备派生统计**」。设备库存是经 `Device.host_id` 派生的容量，退役主机
+    不再是容量，其设备不应出现在活跃库存里。
+    """
+
+    def _seed_devices(self, db_session):
+        _host(db_session, "di-active")
+        _host(db_session, "di-retired", retired=True)
+        db_session.add_all([
+            Device(serial="SN-DI-ACTIVE", host_id="di-active", status="ONLINE"),
+            Device(serial="SN-DI-RETIRED", host_id="di-retired", status="ONLINE"),
+        ])
+        db_session.commit()
+
+    def test_device_list_excludes_retired_host_devices(self, client, db_session, admin_headers):
+        """默认：退役主机上的设备不出现在活跃库存。"""
+        self._seed_devices(db_session)
+
+        resp = client.get("/api/v1/devices", headers=admin_headers)
+
+        assert resp.status_code == 200, resp.text
+        serials = {d["serial"] for d in resp.json()}
+        assert "SN-DI-ACTIVE" in serials
+        assert "SN-DI-RETIRED" not in serials, "退役主机的设备泄漏进活跃库存"
+
+    def test_device_list_include_retired_shows_both(self, client, db_session, admin_headers):
+        """显式 `include_retired=true` 仍可定位（与 hosts 的 include_retired 同形）。"""
+        self._seed_devices(db_session)
+
+        resp = client.get("/api/v1/devices?include_retired=true", headers=admin_headers)
+
+        assert resp.status_code == 200, resp.text
+        serials = {d["serial"] for d in resp.json()}
+        assert {"SN-DI-ACTIVE", "SN-DI-RETIRED"} <= serials
+
+    def test_device_without_host_is_retained(self, client, db_session, admin_headers):
+        """`host_id IS NULL` 的无主设备必须保留（outerjoin 而非子查询的理由）。
+
+        子查询形式 `host_id.in_(非退役集合)` 会因 NULL 不在集合中而把无主设备误删。
+        """
+        db_session.add(Device(serial="SN-DI-ORPHAN", host_id=None, status="ONLINE"))
+        db_session.commit()
+
+        resp = client.get("/api/v1/devices", headers=admin_headers)
+
+        assert resp.status_code == 200, resp.text
+        serials = {d["serial"] for d in resp.json()}
+        assert "SN-DI-ORPHAN" in serials, "无主设备被误过滤"
