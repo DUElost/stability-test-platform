@@ -184,11 +184,15 @@ GATES = {
         None,
     ),
     # 根 tests/ 离线子集（#1569）：与 ci.yml pr-agent-tests 的「Run repo-level
-    # tests」step 同口径——排除真实起 testcontainer 的 test_alembic_upgrade.py
-    # （无 docker 会硬失败，归夜间 backend-test）。本地与 CI 取同一集合，
-    # 避免两边口径漂移造成的「本地绿、CI 红」。
+    # tests」step 同口径——排除真实起 testcontainer 的两个文件
+    # （test_alembic_upgrade.py / test_script_seed_governance.py，无 docker 会硬
+    # 失败，归夜间 backend-test）。本地与 CI 取同一集合，避免口径漂移造成的
+    # 「本地绿、CI 红」。名单与 ci.yml 的对应关系由
+    # tests/test_offline_subset_guard.py 守（#1707）。
     "repo-tests": (
-        f"{PY} -m pytest tests/ -q --ignore=tests/test_alembic_upgrade.py",
+        f"{PY} -m pytest tests/ -q "
+        "--ignore=tests/test_alembic_upgrade.py "
+        "--ignore=tests/test_script_seed_governance.py",
         ROOT,
         None,
     ),
