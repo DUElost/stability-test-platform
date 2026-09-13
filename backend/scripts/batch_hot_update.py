@@ -58,6 +58,7 @@ def _hot_update_direct(
     *,
     include_active: bool,
     abort_running_jobs: bool,
+    force: bool = False,
 ) -> int:
     from backend.core.database import SessionLocal
     from backend.core.ssh_security import SshSecurityConfigError, resolve_host_ssh_credentials
@@ -70,7 +71,8 @@ def _hot_update_direct(
         execute_hot_update,
         get_agent_code_version,
     )
-    from backend.services.agent_version_info import record_agent_code_deployed
+    from backend.services.agent_version_info import finalize_hot_update_outcome
+    from backend.services.artifact_digest import evaluate_convergence
     from backend.services.host_maintenance import HostMaintenanceConflict
     from backend.services.host_upgrade_gate import (
         HostUpgradeGateError,
@@ -100,15 +102,9 @@ def _hot_update_direct(
         print(f"online_hosts={len(hosts)}")
         # #1903 / ADR-0040 §5.1（P0）：整批只构建一次 tarball —— 此前每台在
         # execute_hot_update 内重复构建（实测 ~16.6s/台、48 台 ≈13 分钟纯 CPU）。
-        # 终态出口 = P1 的 digest 缓存键（内容未变即整批 no-op）。
+        # #1907 / ADR-0040 D3（P1）：构建惰性化到首个全量部署主机——整批
+        # digest-matched 时零构建零传输（no-op 稳态）。
         tarball: bytes | None = None
-        if hosts:
-            build_t0 = time.monotonic()
-            tarball = _build_tarball()
-            print(
-                f"batch_tarball_size_bytes={len(tarball)} "
-                f"build_seconds={time.monotonic() - build_t0:.1f}"
-            )
         for host in hosts:
             active = (
                 db.query(JobInstance)
@@ -127,6 +123,19 @@ def _hot_update_direct(
             if active and not include_active:
                 row["skipped"] = "active_jobs"
                 print(f"  SKIP {host.hostname} active_jobs={active}")
+                results.append(row)
+                continue
+            # ADR-0040 D3：no-op gate —— desired == current 时不动作、不取凭据、
+            # 不占维护窗口；结果走统一 finalize 通道留痕（converged），
+            # deployed_at 不刷新（D2 语义修订）。
+            desired_digest, converged_result = evaluate_convergence(host, force=force)
+            if converged_result is not None:
+                finalize_hot_update_outcome(
+                    db, host, converged_result, entry="batch_direct",
+                )
+                row["converged"] = True
+                row["ok"] = True
+                print(f"  CONVERGED {host.hostname} digest-matched")
                 results.append(row)
                 continue
             try:
@@ -172,6 +181,13 @@ def _hot_update_direct(
                 continue
 
             try:
+                if tarball is None:
+                    build_t0 = time.monotonic()
+                    tarball = _build_tarball()
+                    print(
+                        f"batch_tarball_size_bytes={len(tarball)} "
+                        f"build_seconds={time.monotonic() - build_t0:.1f}"
+                    )
                 result = execute_hot_update(
                     host_ip=host.ip or "",
                     ssh_port=host.ssh_port or 22,
@@ -181,6 +197,7 @@ def _hot_update_direct(
                     known_hosts_path=creds.known_hosts_path,
                     code_version=expected,
                     tarball=tarball,
+                    artifact_digest=desired_digest,
                 )
             finally:
                 end_host_upgrade(db, host.id, holder)
@@ -188,9 +205,10 @@ def _hot_update_direct(
                 (gate["aborted_summary"] or {}).get("aborted_jobs", [])
             )
             row.update(result)
-            if result.get("ok"):
-                record_agent_code_deployed(host, expected)
-                db.commit()
+            # ADR-0040 D5：审计 + deployed_at 语义 + 指标统一走 finalize 通道
+            finalize_hot_update_outcome(
+                db, host, result, entry="batch_direct", code_version=expected,
+            )
             print(
                 f"  {'OK' if result.get('ok') else 'FAIL'} "
                 f"deps_refreshed={result.get('deps_refreshed')} "
@@ -199,9 +217,10 @@ def _hot_update_direct(
             results.append(row)
 
     ok = sum(1 for r in results if r.get("ok") is True)
+    converged = sum(1 for r in results if r.get("converged") is True)
     fail = sum(1 for r in results if r.get("ok") is False)
     skipped = sum(1 for r in results if r.get("skipped"))
-    print(f"\nSUMMARY ok={ok} fail={fail} skipped={skipped}")
+    print(f"\nSUMMARY ok={ok} converged={converged} fail={fail} skipped={skipped}")
     print(json.dumps(results, ensure_ascii=False, indent=2))
     return 0 if fail == 0 else 1
 
@@ -235,12 +254,21 @@ def main() -> int:
         default=True,
         help="retry HOST_ABORT_PENDING hosts once after grace (default: on)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "ADR-0040 D3: skip the digest no-op gate and force a full deploy "
+            "(audit trail via hot_update_result outcome)"
+        ),
+    )
     args = parser.parse_args()
 
     if args.direct:
         return _hot_update_direct(
             include_active=args.include_active,
             abort_running_jobs=args.abort_running_jobs,
+            force=args.force,
         )
 
     load_repo_dotenv()

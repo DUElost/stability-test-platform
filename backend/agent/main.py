@@ -733,15 +733,19 @@ def main() -> None:
     boot_id = read_boot_id()
     # ADR-0020: agent version for preflight consistency check
     from . import __version__ as _agent_pkg_version
-    from .version_info import read_agent_code_revision
+    from .version_info import read_agent_code_revision, read_artifact_digest
 
     _agent_code_revision = read_agent_code_revision()
+    # ADR-0040 D2：current digest 由部署流程写入，Agent 只读上报——digest 值
+    # 仅随内容变化，而内容变化必然伴随重启（D4），启动时读取一次即足够新鲜。
+    _agent_artifact_digest = read_artifact_digest()
     logger.info(
-        "agent_identity instance=%s boot=%s version=%s code_revision=%s",
+        "agent_identity instance=%s boot=%s version=%s code_revision=%s artifact_digest=%s",
         agent_instance_id,
         boot_id,
         _agent_pkg_version,
         _agent_code_revision or "(none)",
+        _agent_artifact_digest or "(none)",
     )
 
     # 加载 HOST_ID，支持自动注册
@@ -1102,6 +1106,7 @@ def main() -> None:
         boot_id=boot_id,
         agent_version=_agent_pkg_version,
         agent_code_revision=_agent_code_revision,
+        agent_artifact_digest=_agent_artifact_digest,
         get_outbox_counts=lambda: {
             "terminal_outbox_pending": local_db.count_pending_terminals(),
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),

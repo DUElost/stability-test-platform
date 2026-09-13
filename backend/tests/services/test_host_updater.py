@@ -413,9 +413,158 @@ def test_hot_update_direct_builds_tarball_once_for_all_hosts(monkeypatch):
         lambda db, host_id, **kwargs: {"aborted_summary": None},
     )
     monkeypatch.setattr(gate_mod, "end_host_upgrade", lambda db, host_id, holder: None)
-    monkeypatch.setattr(avi, "record_agent_code_deployed", lambda host, rev: None)
+
+    import backend.services.artifact_digest as ad_mod
+
+    desired = "sha256:" + "a" * 64
+    monkeypatch.setattr(ad_mod, "evaluate_convergence", lambda host, force=False: (desired, None))
+    finalized = {"n": 0}
+    monkeypatch.setattr(
+        avi, "finalize_hot_update_outcome",
+        lambda db, host, result, **kw: finalized.__setitem__("n", finalized["n"] + 1),
+    )
 
     assert bhu._hot_update_direct(include_active=False, abort_running_jobs=False) == 0
     assert calls["build"] == 1
     assert len(calls["exec"]) == 1
     assert calls["exec"][0]["tarball"] == b"T"
+    assert calls["exec"][0]["artifact_digest"] == desired
+    assert finalized["n"] == 1
+
+
+# ── #1907 / ADR-0040 D2/D3/D6：ARTIFACT_DIGEST 写入、分段计时、批量 no-op ──
+
+
+def test_remote_script_writes_artifact_digest_wrapper_and_legacy():
+    """探活通过后写 ARTIFACT_DIGEST：wrapper 走 write-digest，legacy 走 tee。"""
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        tar_path="/tmp/stp-agent-update.tar.gz",
+        user="android",
+        group="android",
+        artifact_digest="sha256:" + "a" * 64,
+    )
+    assert 'sudo "$PRIV" write-digest --digest "$ARTIFACT_DIGEST"' in script
+    assert 'printf \'%s\\n\' "$ARTIFACT_DIGEST" | sudo tee' in script
+    assert 'STP_ARTIFACT_DIGEST=$ARTIFACT_DIGEST' in script
+    # 探活之后才写（失败不写 digest，保持旧值 → 下次按 drift 重做）
+    assert script.index('STP_RESTART_PROBE_MS=') < script.index('write-digest')
+
+
+def test_remote_script_phase_timing_sentinels_present():
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        tar_path="/tmp/t.tar.gz",
+        user="android",
+        group="android",
+    )
+    assert "STP_REMOTE_APPLY_MS=" in script
+    assert "STP_RESTART_PROBE_MS=" in script
+
+
+def test_parse_phase_ms_sentinel():
+    from backend.services.host_updater import _parse_phase_ms
+
+    out = "STP_REMOTE_APPLY_MS=1200\nSTP_RESTART_PROBE_MS=3000\n"
+    assert _parse_phase_ms(out, "STP_REMOTE_APPLY_MS") == 1200
+    assert _parse_phase_ms(out, "STP_RESTART_PROBE_MS") == 3000
+    assert _parse_phase_ms("nothing", "STP_REMOTE_APPLY_MS") == 0
+    assert _parse_phase_ms("STP_REMOTE_APPLY_MS=abc", "STP_REMOTE_APPLY_MS") == 0
+
+
+def test_execute_hot_update_result_carries_converged_fields(monkeypatch):
+    """结果结构扩展：converged/reason/artifact_digest/phases 全路径存在。"""
+    import backend.services.host_updater as hu
+
+    def fake_connect(**kwargs):
+        raise ConnectionError("stop before upload")
+
+    monkeypatch.setattr(hu, "_ssh_connect", fake_connect)
+    result = hu.execute_hot_update(host_ip="10.0.0.1", artifact_digest="sha256:" + "a" * 64)
+    assert result["ok"] is False
+    assert result["converged"] is False
+    assert result["reason"] == "ssh_connect_failed"
+    assert result["artifact_digest"] == "sha256:" + "a" * 64
+    assert "phases" in result
+
+
+def test_batch_direct_converged_no_op_skips_gate_and_ssh(monkeypatch):
+    """整批 digest-matched：零构建、零 SSH、零门禁，仅统一留痕 converged。"""
+    import backend.core.database as core_db
+    import backend.models.host as host_mod
+    import backend.scripts.batch_hot_update as bhu
+    import backend.services.agent_version_info as avi
+    import backend.services.artifact_digest as ad_mod
+    import backend.services.host_upgrade_gate as gate_mod
+    import backend.services.host_updater as hu_mod
+
+    desired = "sha256:" + "c" * 64
+
+    class _FakeHost:
+        id = "h-1"
+        hostname = "h-1"
+        ip = "10.0.0.1"
+        ssh_port = 22
+        status = "ONLINE"
+        agent_artifact_digest = desired
+
+    class _Query:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def count(self):
+            return 0
+
+    class _FakeDB:
+        def query(self, model):
+            return _Query([_FakeHost()] if model is host_mod.Host else [])
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    calls = {"build": 0, "exec": 0, "gate": 0, "finalize": 0}
+
+    monkeypatch.setattr(core_db, "SessionLocal", lambda: _FakeDB())
+    monkeypatch.setattr(hu_mod, "_resolve_ssh_creds", lambda ip: None)
+    monkeypatch.setattr(hu_mod, "get_agent_code_version", lambda: "deadbeef")
+    monkeypatch.setattr(hu_mod, "_build_tarball", lambda *a, **k: calls.__setitem__("build", calls["build"] + 1) or b"T")
+    monkeypatch.setattr(hu_mod, "execute_hot_update", lambda **k: calls.__setitem__("exec", calls["exec"] + 1) or {"ok": True})
+    monkeypatch.setattr(gate_mod, "begin_host_upgrade", lambda *a, **k: calls.__setitem__("gate", calls["gate"] + 1) or {})
+    monkeypatch.setattr(gate_mod, "end_host_upgrade", lambda *a, **k: None)
+    monkeypatch.setattr(
+        ad_mod, "evaluate_convergence",
+        lambda host, force=False: (desired, {
+            "ok": True, "converged": True, "reason": "digest-matched",
+            "message": "converged", "duration_ms": 0, "deps_refreshed": False,
+            "env_keys_synced": [], "env_paths_missing": {}, "code_version": "",
+            "priv_mode": "unknown", "artifact_digest": desired, "phases": {},
+        }),
+    )
+    monkeypatch.setattr(
+        avi, "finalize_hot_update_outcome",
+        lambda db, host, result, **kw: calls.__setitem__("finalize", calls["finalize"] + 1),
+    )
+
+    rc = bhu._hot_update_direct(include_active=False, abort_running_jobs=False)
+    assert rc == 0
+    assert calls["build"] == 0
+    assert calls["exec"] == 0
+    assert calls["gate"] == 0
+    assert calls["finalize"] == 1

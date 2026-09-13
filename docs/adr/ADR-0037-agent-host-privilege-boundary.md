@@ -45,8 +45,9 @@
   sudoers 只授两类命令：该 wrapper 单命令 + 固定服务名的 `systemctl`
   子命令。任意 `rsync/cp/chmod/chown/ln/stat` 免密规则全部删除。
 - **D2 子命令白名单 + 内部校验**：wrapper 仅接受固定子命令
-  （`bootstrap/selftest/apply-code/install-schema/write-version/sync-env/
-  deps-marker/fix-ownership/restart`），且内部强制：
+  （`bootstrap/selftest/apply-code/install-schema/write-version/write-digest/
+  sync-env/deps-marker/fix-ownership/restart`；`write-digest` 为 ADR-0040 D2
+  落地时的同族扩展，#1907 按 §7-5 同 PR 回填），且内部强制：
   所有目标路径固定（`$INSTALL_DIR` 及固定子路径，组件级前缀校验）、
   源文件/暂存目录必须为调用者属主、schema 必须通过 JSON 结构校验、
   版本/SHA 走字符集正则、`chown -R -h`（symlink 不 deref）、rsync 使用

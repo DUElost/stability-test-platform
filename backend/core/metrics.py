@@ -80,6 +80,16 @@ task_dispatch_errors = Counter(
     ['error_type']  # device_unavailable, host_capacity, lock_failed, etc.
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# ADR-0040 D6（#1907）：热更新收敛结果计数——outcome ∈ deployed / converged /
+# failed；entry 标注入口（ui_api / batch_direct / precheck_sync）。no-op 判定
+# 与全量部署在同一 finalize 通道计数，drift = deployed 同义（desired != current
+# 才部署），pending 经 host 视图 sync 状态表达，不另设。
+hot_update_outcome_total = Counter(
+    'stability_hot_update_outcome_total',
+    'Total hot-update outcomes by entry and convergence result (ADR-0040 D6)',
+    ['entry', 'outcome']
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Device Lease Metrics
 # ============================================================================
