@@ -29,6 +29,9 @@ class Host(Base):
     hostname             = Column(String(256), nullable=False)
     ip_address           = Column(String(64))
     script_catalog_version = Column(String(64))
+    # ADR-0040 D2：远端 current artifact digest（部署流程写入、心跳上报）。
+    # 显式列（禁 Host.extra 裸键，ADR-0038 D4 先例）；sha256:<hex> ≤ 71 字符。
+    agent_artifact_digest = Column(String(80))
     last_heartbeat       = Column(DateTime(timezone=True))
     cpu_quota            = Column(Integer, nullable=False, default=2)
     status               = Column(String(32), nullable=False, default="OFFLINE")

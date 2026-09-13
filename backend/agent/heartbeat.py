@@ -35,6 +35,8 @@ def send_heartbeat(
     # ADR-0020: agent version for preflight consistency check
     agent_version: str = "",
     agent_code_revision: str = "",
+    # ADR-0040 D2: 部署 artifact digest（与 script_catalog_version 同通道同信任模型）
+    agent_artifact_digest: str = "",
     # Phase 3c: 预收集统计信息（避免 HeartbeatThread 双采）
     system_stats: Optional[Dict[str, Any]] = None,
     mount_status: Optional[Dict[str, Any]] = None,
@@ -73,6 +75,8 @@ def send_heartbeat(
         # ADR-0020 preflight data source
         "agent_version": agent_version,
         "agent_code_revision": agent_code_revision,
+        # ADR-0040 D2
+        "agent_artifact_digest": agent_artifact_digest,
     }
 
     agent_secret = os.getenv("AGENT_SECRET", "")

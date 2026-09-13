@@ -13,6 +13,7 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
     apply-code       把 Agent 暂存代码树同步进 $INSTALL_DIR/agent/
     install-schema   安装 Pipeline schema（校验 JSON 与调用者属主）
     write-version    写 agent/VERSION（校验短 SHA）
+    write-digest     写 agent/ARTIFACT_DIGEST（ADR-0040，校验 sha256:<hex>）
     sync-env         改 .env：AGENT_SECRET 或受控 overrides（保持原哨兵输出）
     deps-marker      写依赖刷新标记
     fix-ownership    安装目录属主回收（symlink 安全：chown -h）
@@ -527,6 +528,22 @@ def cmd_write_version(args, conf):
     return 0
 
 
+def cmd_write_digest(args, conf):
+    """ADR-0040 D2：部署收敛成功后受控写入 ARTIFACT_DIGEST（write-version 同族）。"""
+    _require_root()
+    digest = args.digest.strip()
+    if not digest:
+        print("STP_WRITE_DIGEST_SKIPPED")
+        return 0
+    prefix, _, hexpart = digest.partition(":")
+    if prefix != "sha256" or not _SHA256_RE.match(hexpart):
+        _fail("--digest must be 'sha256:<64 hex chars>' (ADR-0040 D1)")
+    with _target_directory(conf, "agent") as target_fd:
+        _atomic_write_at(target_fd, "ARTIFACT_DIGEST", digest + "\n", 0o644, _agent_identity(conf))
+    print("STP_WRITE_DIGEST_OK digest=%s" % digest)
+    return 0
+
+
 def _write_env_preserving_owner(directory_fd, lines, metadata):
     """原子替换 .env，但保留原 uid/gid 与 mode——与旧写法（原地截断）等价。"""
     body = "\n".join(lines) + ("\n" if lines else "")
@@ -673,6 +690,9 @@ def _build_parser():
     p = sub.add_parser("write-version", help="write agent/VERSION")
     p.add_argument("--version", default="")
 
+    p = sub.add_parser("write-digest", help="write agent/ARTIFACT_DIGEST (ADR-0040)")
+    p.add_argument("--digest", default="")
+
     p = sub.add_parser("sync-env", help="update .env secret/overrides")
     p.add_argument("--secret-b64", default="")
     p.add_argument("--overrides-b64", default="")
@@ -710,6 +730,7 @@ def main(argv=None):
         "apply-code": cmd_apply_code,
         "install-schema": cmd_install_schema,
         "write-version": cmd_write_version,
+        "write-digest": cmd_write_digest,
         "sync-env": cmd_sync_env,
         "deps-marker": cmd_deps_marker,
         "fix-ownership": cmd_fix_ownership,

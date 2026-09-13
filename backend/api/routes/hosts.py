@@ -47,8 +47,10 @@ from backend.services.host_upgrade_gate import (
     begin_host_upgrade,
     end_host_upgrade,
 )
+from backend.services.artifact_digest import evaluate_convergence
+from backend.services.agent_version_info import finalize_hot_update_outcome
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
-from backend.services.agent_version_info import build_host_version_view, record_agent_code_deployed
+from backend.services.agent_version_info import build_host_version_view
 from backend.services.run_console import RunConsole
 from backend.tasks.saq_worker import enqueue_sync, EnqueueSyncError, get_saq_job_state_sync
 
@@ -671,6 +673,13 @@ def host_hot_update(
         False,
         description="可选: 同步本机后端 AGENT_SECRET 到远端 Agent .env。",
     ),
+    force: bool = Query(
+        False,
+        description=(
+            "ADR-0040 D3: 跳过 digest no-op 判定强制全量部署（运维逃生阀，"
+            "审计留痕 outcome=deployed）。"
+        ),
+    ),
 ):
     """热更新：同步 Agent 代码到目标主机并重启服务。
 
@@ -694,6 +703,31 @@ def host_hot_update(
             status_code=400,
             detail="Host has no IP address configured",
         )
+
+    # ── ADR-0040 D3 no-op gate：desired == current → 不动作不留痕不占窗口 ──
+    # no-op 不触碰主机，无需维护窗口与活跃 Job 门禁；结果走统一 finalize
+    # 通道留痕（converged），deployed_at 不刷新（D2 语义修订）。
+    desired_digest, converged_result = evaluate_convergence(host, force=force)
+    if converged_result is not None:
+        finalize_hot_update_outcome(
+            db,
+            host,
+            converged_result,
+            entry="ui_api",
+            user_id=current_user.id if current_user else None,
+            username=current_user.username if current_user else None,
+        )
+        return {
+            "ok": True,
+            "host_id": host_id,
+            "converged": True,
+            "reason": converged_result["reason"],
+            "message": converged_result["message"],
+            "duration_ms": converged_result["duration_ms"],
+            "artifact_digest": desired_digest,
+            "code_version": get_agent_code_version(),
+            "abort_summary": None,
+        }
 
     # ── ADR-0021 D7/D8 门禁 + #960 维护窗口（统一实现：host_upgrade_gate）────
     holder = f"ui:{current_user.username if current_user else 'api'}:{uuid.uuid4().hex[:8]}"
@@ -805,6 +839,7 @@ def host_hot_update(
                 "ip": host.ip,
                 "abort_running_jobs": abort_running_jobs,
                 "sync_agent_secret": sync_agent_secret,
+                "force": force,
                 "aborted_jobs": (
                     aborted_summary["aborted_jobs"] if aborted_summary else []
                 ),
@@ -828,43 +863,33 @@ def host_hot_update(
             sync_agent_secret=sync_agent_secret,
             agent_secret=agent_secret,
             code_version=code_version,
+            artifact_digest=desired_digest,
         )
 
-        record_audit(
+        # ADR-0040 D5：结果审计 + deployed_at 语义 + 指标统一走 finalize 通道
+        finalize_hot_update_outcome(
             db,
-            action="hot_update_result",
-            resource_type="host",
-            resource_id=None,
-            details={
-                "host_id": host_id,
-                "ip": host.ip,
-                "ok": bool(result.get("ok")),
-                "deps_refreshed": bool(result.get("deps_refreshed")),
-                "env_keys_synced": result.get("env_keys_synced", []),
-                "env_paths_missing": result.get("env_paths_missing", {}),
-                "code_version": result.get("code_version", ""),
-                "priv_mode": result.get("priv_mode", ""),
-                "duration_ms": result.get("duration_ms"),
-                "message": result.get("message", ""),
-            },
+            host,
+            result,
+            entry="ui_api",
+            code_version=code_version,
             user_id=current_user.id if current_user else None,
             username=current_user.username if current_user else None,
         )
-        db.commit()
     finally:
         end_host_upgrade(db, host_id, holder)
 
     if not result["ok"]:
         raise HTTPException(status_code=502, detail=result["message"])
 
-    record_agent_code_deployed(host, code_version)
-    db.commit()
-
     return {
         "ok": True,
         "host_id": host_id,
+        "converged": bool(result.get("converged")),
+        "reason": result.get("reason", ""),
         "message": result["message"],
         "duration_ms": result.get("duration_ms"),
+        "artifact_digest": result.get("artifact_digest", ""),
         "deps_refreshed": result.get("deps_refreshed", False),
         "env_keys_synced": result.get("env_keys_synced", []),
         "env_paths_missing": result.get("env_paths_missing", {}),

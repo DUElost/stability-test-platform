@@ -419,6 +419,10 @@ _FATAL_PUSH_ERROR_SUBSTRINGS = (
     "ssh_security_config_error",
     "cannot map nfs_path",
     "local file not found",
+    # #1920：切片二的退役早退码——退役主机 agent 仍 ONLINE（ADR-0038 ⑤ 保活），
+    # push 重试永远不可能成功；漏判会把 sync 拒绝归入 transient → 无界
+    # requeue 循环，Phase B 的 HOST_RETIRED fatal 永远走不到。
+    "host_retired",
 )
 
 

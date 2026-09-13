@@ -67,6 +67,11 @@ export interface HotUpdateResult {
   duration_ms?: number;
   deps_refreshed?: boolean;
   code_version?: string;
+  // ADR-0040 D3/D5 (#1907): digest no-op gate — converged means nothing was
+  // deployed (desired == current); reason explains the outcome.
+  converged?: boolean;
+  reason?: string;
+  artifact_digest?: string;
   // Present when the request was issued with abort_running_jobs=true.
   aborted?: {
     plan_runs?: number[];

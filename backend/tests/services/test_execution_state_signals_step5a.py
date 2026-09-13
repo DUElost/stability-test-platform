@@ -504,6 +504,9 @@ class TestPushFatalClassification:
         # partial_fail wrapper — the fatal substrings are embedded
         ("partial_fail: pushed=0, failed=check_device:v2: cannot map nfs_path", True),
         ("partial_fail: pushed=0, failed=app:v3: local file not found: /x/app.py", True),
+        # #1920：切片二退役早退码——退役主机 agent 仍 ONLINE，重试永不成功
+        ("host_retired", True),
+        ("partial_fail: pushed=0, failed=check:v2: host_retired", True),
         # transient
         ("ssh_exception: connection timed out", False),
         ("partial_fail: pushed=1, failed=check:v2: SFTP failed: Permission denied", False),
