@@ -19,7 +19,7 @@ Class: bug-fix
    `hosts.py` 热更新路由改为调用它（语义不变：409/504/维护冲突）。
 2. 新增 agent-auth 端点（Ansible 接入面，`agent_api.py`）：
    - `POST /api/v1/agent/hosts/{id}/upgrade-gate`：默认有活跃 Job 即 409；
-     显式 `abort_running_jobs=true` 时 abort 排空后占窗口；
+     先占维护窗口再检查活跃任务，显式 `abort_running_jobs=true` 时在窗口内 abort 排空；
    - `POST .../upgrade-gate/release`：按 holder 释放（幂等、不误清他人窗口）；
    - 审计 `upgrade_gate_acquire/release`，细节在控制面审计日志。
 3. `update_agent.yml`：解析目标机 `.env` 的 `HOST_ID`/`API_URL`（可用 `-e`
@@ -31,7 +31,20 @@ Class: bug-fix
    不再存在「带活跃 Job 直接重启」的路径。
 5. ADR-0021 D8 增一条适用面扩展注记（未改变任何语义）。
 
+**#1824（审计 F03）互斥顺序修正**：先提交维护窗口，再查询活跃 Job 或启动
+abort/drain。窗口与 claim 共用 Host 行锁，已先行 claim 的 Job 会被后续检查
+看到；稍后的 claim 被已提交窗口阻止。并发维护冲突在检查/abort 之前返回，
+避免第二个升级请求干扰已有窗口中的任务。拒绝、超时及异常均先 rollback
+失败事务，再释放自己持有的窗口；释放失败保留原异常并记录日志，TTL 兜底。
+
+维护窗口获取与释放的 `FOR UPDATE` 查询强制 `populate_existing`，不能把
+锁前缓存的 Host ORM 对象当作锁后事实。释放要求 holder 严格匹配，不会清除
+继任者或无 holder 的窗口。仅修复现有互斥实现，不改变 TTL 与升级入口契约。
+
 ## Alternatives
+
+- **检查/排空之后才占窗**——#1824 否决：最后一次活跃检查与占窗之间仍可
+  派发并 claim；锁必须覆盖检查与排空，而不只是文件传输。
 
 - **B：主机本地只拒绝**（读 agent 本地活跃任务后失败）——否决：不能 abort、
   不持窗口，派发/claim 在升级期间照旧，验收「与 API 热更新互斥语义对齐」不成立；
@@ -46,7 +59,20 @@ Class: bug-fix
 
 ## Verification
 
-实际运行：
+#1824 本次验证：
+
+- 隔离 testcontainers PostgreSQL 测试覆盖提交窗口早于首次检查、冲突不触发
+  abort、检查/abort/drain 异常清理、失败事务 rollback、两会话旧 Host 缓存
+  不覆盖窗口、迟到清理不误删新 holder、既有 API 成功/拒绝/超时路径。
+- `python -m pytest backend/tests/services/test_host_upgrade_gate.py backend/tests/services/test_host_maintenance.py backend/tests/api/test_upgrade_gate_api.py -q`
+  → **38 passed**。
+- `python -m pytest backend/tests/api/test_agent_api_watcher.py backend/tests/services/test_plan_dispatcher_device_validation.py -q`
+  → **53 passed**（真实 claim 与 dispatcher 维护态拒绝回归）。
+- `python scripts/run_gates.py check:quick` → **7 gates 通过**；变更文件 Ruff
+  与 diff check 通过。既有 Starlette 弃用警告不影响结果。
+- 未读取生产配置、未运行生产 DB 诊断、未对 Agent 主机升级或重启。
+
+此前 #1249 的历史证据（不代表本次重跑）：
 
 - `pytest backend/tests/services/test_host_upgrade_gate.py
   backend/tests/api/test_upgrade_gate_api.py -q` → **16 passed**（隔离
