@@ -15,6 +15,8 @@ export interface ReadinessHost {
   name?: string | null;
   ip?: string | null;
   status: string;
+  /** ADR-0038 D5：退役主机的设备不可派发（派发面 fail-closed 的 UI 侧同口径） */
+  retired_at?: string | null;
 }
 
 export interface CapacityOverflowHost {
@@ -173,7 +175,8 @@ export function buildDeviceReadinessRows(
     // 兜底；改为直接以 status 判定，不再假装存在后端准入决策。
     if (device.status !== 'ONLINE') reasons.push('设备不可调度');
     if (device.adb_connected === false || ['offline', 'unknown', 'unauthorized'].includes(device.adb_state ?? '')) reasons.push(`ADB ${device.adb_state || '离线'}`);
-    if (host && host.status !== 'ONLINE') reasons.push('节点离线');
+    if (host?.retired_at) reasons.push('节点已退役');
+    else if (host && host.status !== 'ONLINE') reasons.push('节点离线');
     return { device, host, reasons, ready: reasons.length === 0 };
   });
 }

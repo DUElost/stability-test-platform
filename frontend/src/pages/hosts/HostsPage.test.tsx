@@ -13,13 +13,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const mockHostsList = vi.fn().mockResolvedValue({ items: [], total: 0 });
+const mockFetchHostList = vi.fn((..._args: unknown[]) =>
+  mockHostsList().then((res: { items: unknown[] }) => res.items),
+);
 
 // Mock api
 vi.mock('../../utils/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../utils/api')>();
   return {
     ...actual,
-    fetchHostList: vi.fn(() => mockHostsList().then((res: { items: unknown[] }) => res.items)),
+    fetchHostList: (...args: unknown[]) => mockFetchHostList(...args),
     api: {
     hosts: {
       list: (...args: unknown[]) => mockHostsList(...args),
@@ -27,6 +30,8 @@ vi.mock('../../utils/api', async (importOriginal) => {
       create: vi.fn().mockResolvedValue({}),
       update: vi.fn().mockResolvedValue({}),
       delete: vi.fn().mockResolvedValue({}),
+      retire: vi.fn().mockResolvedValue({ id: 'h1' }),
+      unretire: vi.fn().mockResolvedValue({ id: 'h1' }),
       updateWatcherAdminState: vi.fn().mockResolvedValue({}),
     },
     devices: {
@@ -86,11 +91,15 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
     selectedIds,
     onSelectionChange,
     onWatcherAdminStateChange,
+    onRetire,
+    onUnretire,
   }: {
     hosts: any[];
     selectedIds?: Set<string | number>;
     onSelectionChange?: (ids: Set<string | number>) => void;
     onWatcherAdminStateChange?: (hostId: string | number, nextActive: boolean) => void;
+    onRetire?: (host: any) => void;
+    onUnretire?: (host: any) => void;
   }) => (
     <div data-testid="host-table">
       {onSelectionChange && (
@@ -112,6 +121,16 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
             {selectedIds?.has(h.id) ? 'yes' : 'no'}
           </span>
           <span>{h.watcher_admin_active !== false ? '已激活' : '未激活'}</span>
+          {onRetire && (
+            <button data-testid={`retire-${h.id}`} onClick={() => onRetire(h)}>
+              retire
+            </button>
+          )}
+          {onUnretire && (
+            <button data-testid={`unretire-${h.id}`} onClick={() => onUnretire(h)}>
+              unretire
+            </button>
+          )}
           {onWatcherAdminStateChange && (
             <button
               data-testid={`watcher-toggle-${h.id}`}
@@ -552,3 +571,155 @@ describe('HostsPage', () => {
     expect(screen.getByTestId('host-selected-h1')).toHaveTextContent('yes');
   });
 });
+
+describe('ADR-0038 退役前端（#1807）', () => {
+  // 本 describe 不在外层 beforeEach 作用域内：自行清调用并复位实现
+  // （clearAllMocks 不还原 mockRejectedValue 这类实现改动）。
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { api } = await import('../../utils/api');
+    (api.hosts.delete as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (api.hosts.retire as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'h1' });
+    (api.hosts.unretire as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'h1' });
+  });
+
+  const retiredHost = {
+    id: 9,
+    name: 'Retired-09',
+    ip: '192.0.2.99',
+    status: 'ONLINE',
+    extra: {},
+    mount_status: {},
+    retired_at: '2026-09-13T00:00:00Z',
+    retired_by: 'admin',
+    retire_reason: '样机报废',
+  };
+
+  it('「显示已退役」开关把 include_retired 穿透到 fetchHostList', async () => {
+    mockHostsList.mockResolvedValue({
+      items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
+      total: 1,
+    });
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByText('Worker-01');
+    await waitFor(() => expect(mockFetchHostList).toHaveBeenCalled());
+    const calls = mockFetchHostList.mock.calls;
+    expect(calls[calls.length - 1]?.slice(0, 3)).toEqual([0, 200, false]);
+
+    fireEvent.click(screen.getByTestId('hosts-show-retired'));
+
+    await waitFor(() => {
+      const latest = mockFetchHostList.mock.calls[mockFetchHostList.mock.calls.length - 1];
+      expect(latest?.slice(0, 3)).toEqual([0, 200, true]);
+    });
+  });
+
+  it('退役入口调用 API 并携带原因（写审计）', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({
+      items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
+      total: 1,
+    });
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('  样机报废  ');
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    fireEvent.click(await screen.findByTestId('retire-1'));
+
+    await waitFor(() =>
+      expect(api.hosts.retire).toHaveBeenCalledWith(1, '样机报废'),
+    );
+    promptSpy.mockRestore();
+  });
+
+  it('解除退役入口调用 API 并携带原因', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({ items: [retiredHost], total: 1 });
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('恢复使用');
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    fireEvent.click(await screen.findByTestId('unretire-9'));
+
+    await waitFor(() =>
+      expect(api.hosts.unretire).toHaveBeenCalledWith(9, '恢复使用'),
+    );
+    promptSpy.mockRestore();
+  });
+
+  it('取消原因输入不发起请求', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({
+      items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'ONLINE', extra: {}, mount_status: {} }],
+      total: 1,
+    });
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue(null);
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    fireEvent.click(await screen.findByTestId('retire-1'));
+
+    await waitFor(() => expect(screen.getByTestId('retire-1')).toBeInTheDocument());
+    expect(api.hosts.retire).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it('批量删除失败时透出 409 文案（不吞原因）', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({
+      items: [{ id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'OFFLINE', extra: {}, mount_status: {} }],
+      total: 1,
+    });
+    (api.hosts.delete as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('主机有 2 条历史 Job 记录，删除会清空执行历史；请先归档/清理后再删除'),
+    );
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    fireEvent.click(await screen.findByTestId('select-all-hosts'));
+    fireEvent.click(await screen.findByRole('button', { name: '删除' }));
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('历史 Job 记录'),
+      ),
+    );
+  });
+});
+
+  it('批量安装跳过退役主机并显式提示（#1807 / D5 批量 skip）', async () => {
+    const { api } = await import('../../utils/api');
+    mockHostsList.mockResolvedValue({
+      items: [
+        { id: 1, name: 'Worker-01', ip: '192.0.2.10', status: 'OFFLINE', extra: {}, mount_status: {}, agent_installed: true },
+        {
+          id: 9, name: 'Retired-09', ip: '192.0.2.99', status: 'OFFLINE', extra: {}, mount_status: {},
+          agent_installed: true, retired_at: '2026-09-13T00:00:00Z',
+        },
+      ],
+      total: 2,
+    });
+    // 确认框返回 false：本用例只验「退役主机被排除出目标集」，不真正启动批量安装
+    // （批量安装会拉起操作面板渲染，与本用例无关）。
+    mocks.confirm.mockResolvedValue(false);
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    fireEvent.click(await screen.findByTestId('select-all-hosts'));
+    fireEvent.click(await screen.findByRole('button', { name: /安装/ }));
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('已退役主机'),
+      ),
+    );
+    // 退役主机不得进入安装目标集：确认文案只应包含 1 台
+    await waitFor(() =>
+      expect(mocks.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({ description: expect.stringContaining('将对 1 台主机安装') }),
+      ),
+    );
+    expect(api.agentInstall.trigger).not.toHaveBeenCalledWith(9);
+  });

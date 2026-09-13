@@ -25,6 +25,11 @@ export const planKeys = {
 export const hostKeys = {
   /** Always use fetchHostList() as queryFn — cache must store Host[], not PaginatedResponse. */
   list: () => ['hosts'] as const,
+  /**
+   * ADR-0038 D5：含退役主机的列表（与 `list()` 同前缀，`invalidateQueries({queryKey:
+   * ['hosts']})` 的前缀匹配同时覆盖两者；分键避免「显示退役」开关污染三页共享缓存）。
+   */
+  retiredList: () => ['hosts', { includeRetired: true }] as const,
   /** Host 详情（含 active_jobs 占用明细，仅 GET /hosts/{id} 返回）。 */
   detail: (id: string | number) => ['host', String(id)] as const,
 } as const;
