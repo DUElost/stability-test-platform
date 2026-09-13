@@ -251,6 +251,29 @@ def test_batch_cap_schedules_catchup(tmp_path):
     assert mon._next_wait_seconds() == mon._SPILL_CATCHUP_INTERVAL
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, 30.0),
+        ("", 30.0),
+        ("45", 45.0),
+        ("30s", 30.0),
+        ("nan", 30.0),
+        ("inf", 30.0),
+        ("-inf", 30.0),
+    ],
+)
+def test_parse_spill_catchup_interval_guards(monkeypatch, raw, expected):
+    """#1710：非法/非有限 env 回落默认，不得在 import 期抛 ValueError。"""
+    from backend.agent.local_disk_monitor import _parse_spill_catchup_interval
+
+    if raw is None:
+        monkeypatch.delenv("STP_HDD_SPILL_CATCHUP_INTERVAL", raising=False)
+    else:
+        monkeypatch.setenv("STP_HDD_SPILL_CATCHUP_INTERVAL", raw)
+    assert _parse_spill_catchup_interval() == expected
+
+
 def test_drops_below_target_uses_regular_interval(tmp_path):
     """水位回落到 target 以内 → 不追打，恢复常规轮询间隔。"""
     cifs = tmp_path / "cifs"
