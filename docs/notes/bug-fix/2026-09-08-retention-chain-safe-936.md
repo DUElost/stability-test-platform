@@ -22,8 +22,21 @@ Class: bug-fix
    `safe_run_ids`（否则会误删保留 Run 的 job 数据）；全部保留时显式
    `skipped` 日志返回；`deleted/kept_chain_referenced` 计数入日志。
 
-与 #781（retention 后 job_log_signal 孤儿）根因不同，未在本单处理；
+与 #781（retention 后 job_log_signal 孤儿）根因不同；该删除顺序后续已由
+[终态生命周期修复](2026-09-12-terminal-lifecycle-781.md) 覆盖。
 CASCADE 被否——会误删仍需保留的后续 Run。
+
+**#1827（最近 7 天审计 F06）有界推进**：旧实现先 LIMIT 100 再算保留集，
+101 节点的到期链或前 100 个均被活跃子节点引用时，可能永远重选同一批。
+现在每层候选在 SQL 中先排除仍被批外节点引用的 Run，再 LIMIT 剩余预算；
+已入批的叶子视作待删除，继续收集因此解锁的父/root 节点，直到无可选叶子
+或总数达到 100。全到期短链仍一轮清完，101 节点链两轮清完，不全量载入
+链族，也不把批大小变成无界。按 started_at/id 稳定排序；自引用 root 不算
+外部阻碍；`FOR UPDATE SKIP LOCKED` 固定候选并跳过其他清理者持有的行。
+
+保留集算法抽为共享 helper：NFS 清理失败剔除节点后再计算一次祖先保留集，
+否则删其祖先会触发 FK 回滚，连可安全删除的兄弟节点也无法推进。先文件
+后 DB、失败下轮重试、活跃/未到期引用保护及已有子表清理顺序保持不变。
 
 ## Alternatives
 
@@ -32,8 +45,28 @@ CASCADE 被否——会误删仍需保留的后续 Run。
   卡整族，保留集方案让可删部分继续推进；
 - 删除前逐 Run 单删 + 跳过失败者：N 次往返性能差，且失败后重试语义模糊；
   闭包集一次计算等价且确定。
+- 只把 LIMIT 改大或反转 id 排序：#1827 否决，仍可能反复撞到受保护前缀。
+  叶子筛选在 LIMIT 前进行，每轮最多 100 个候选、至多 100 次非空层查询，
+  最终仍一次事务批量删除，而非逐 Run 提交。
 
 ## Verification
+
+#1827 本次验证：
+
+- `python -m pytest backend/tests/scheduler/test_retention_cleanup.py -q` → **16 passed**。
+  首轮新分叉夹具违反 `(parent_plan_run_id, plan_id)` 唯一约束，改为合法的不同
+  Plan 分叉后通过，并补强为多级祖先保留场景。
+- `python -m pytest backend/tests/scheduler/test_retention_cleanup.py backend/tests/models/test_plan_run_snapshot_tables.py backend/tests/scheduler/test_cron_overlap_policy.py -q`
+  → **27 passed**，覆盖关联快照表与 Cron 防重叠契约。
+- `python scripts/run_gates.py check:quick` → **7 gates 通过**；变更文件 Ruff
+  与 diff check 通过。
+- 新回归覆盖 101 节点链两轮推进、101 个受保护前缀后连续三轮回收、105 个
+  无引用 Run 的 100 上限、自 root 引用、已锁行让路、NFS 失败保留多级祖先
+  但仍删除安全兄弟并在下一轮重试成功。
+- 测试固定使用 testcontainers Postgres，fixture 将共享存储与 console 根
+  显式指向 `tmp_path`，不依赖宿主环境中的真实路径。
+
+此前 #936 历史证据（不代表本次重跑）：
 
 - `pytest backend/tests/scheduler/test_retention_cleanup.py`：5 passed（新
   文件——父到期子运行中父保留 / 全链到期全删 / 孙运行中祖先链传播保留 /
@@ -47,7 +80,6 @@ CASCADE 被否——会误删仍需保留的后续 Run。
 
 ## Revisit
 
-- #781（job_log_signal 孤儿）仍开放，若清理顺序需统一设计时与本保留集
-  一并考虑；
-- 批量 100 上限下保留集偏大时每轮推进量下降——观测 `kept_chain_referenced`
-  日志，若长期占比高再评估按链整族选取。
+- 若长链批次的最多 100 次有界选层查询成为可观测瓶颈，再评估递归 CTE；
+  不以扩大无界批次或级联删除换取吞吐。
+- 保留期仍沿用 started_at 与原终态集合，本修复不改变 TTL 业务语义。
