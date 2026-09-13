@@ -64,7 +64,9 @@ class TestRetryBudget:
             err = engine._verify_device_lease()
 
         assert post.call_count == len(_LEASE_VERIFY_RETRY_DELAYS)
-        assert sleeps == list(_LEASE_VERIFY_RETRY_DELAYS[:-1])
+        # #1921：每次失败尝试都消费预算（含末次）——原先 `attempt < len` 守卫
+        # 使末位 delay 死值，实际睡眠总和 ≈30s 与 ~60s 声明不符
+        assert sleeps == list(_LEASE_VERIFY_RETRY_DELAYS)
         assert err is not None and err.error_message == "lock_verification_http_502"
 
     def test_connection_error_also_uses_full_budget(self):
@@ -78,7 +80,38 @@ class TestRetryBudget:
             err = engine._verify_device_lease()
 
         assert post.call_count == len(_LEASE_VERIFY_RETRY_DELAYS)
+        # #1921：末次失败同样消费预算
+        assert sleeps == list(_LEASE_VERIFY_RETRY_DELAYS)
         assert err is not None and err.error_message == "lock_verification_unreachable"
+
+
+class TestContractErrorGrading:
+    """#1922：非 409/401 的契约类 4xx 立即终止，不进中断 streak。"""
+
+    def test_verify_returns_contract_prefix_for_4xx(self):
+        engine = _engine()
+        resp = MagicMock(status_code=404)
+        resp.raise_for_status.side_effect = requests_exceptions.HTTPError(
+            "404", response=resp,
+        )
+        with patch("requests.post", return_value=resp) as post, patch(
+            "backend.agent.pipeline_engine.time.sleep", return_value=None,
+        ):
+            err = engine._verify_device_lease()
+        assert post.call_count == 1  # 契约错误不重试
+        assert err is not None
+        assert err.error_message == "lock_verify_contract_http_404"
+        assert err.error_message.startswith("lock_verify_contract_")
+
+    def test_contract_4xx_aborts_immediately(self):
+        abort, streak = _lease_verify_outage_decision(
+            "lock_verify_contract_http_404", 2,
+        )
+        assert abort is True and streak == 0  # 不累计、立即判死
+
+    def test_contract_prefix_not_swallowed_by_outage_streak(self):
+        # 前缀不同：`lock_verification*` streak 不被契约错误串命中
+        assert not "lock_verify_contract_http_404".startswith("lock_verification")
 
 
 class TestOutageDecision:

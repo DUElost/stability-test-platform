@@ -886,9 +886,13 @@ def _lease_verify_outage_decision(error_message: str, streak: int) -> tuple[bool
 
     - ``lock_verification_*``（我方不可达 / 5xx）：控制面中断，累计到
       ``_LEASE_VERIFY_OUTAGE_ABORT_STREAK`` 才判死；
+    - ``lock_verify_contract_*``（非 409/401 的其它 4xx，#1922）：服务端
+      明确拒绝——确定性契约错误，立即终止，不进中断 streak；
     - 其余（``device_lease_not_held`` 409 / ``lock_verify_auth_failed`` 401）：
       服务端明确拒绝——真丢锁/凭据失效，立即终止（非目标：不改该语义）。
     """
+    if error_message.startswith("lock_verify_contract_"):
+        return True, 0
     if error_message.startswith("lock_verification"):
         streak += 1
         return streak >= _LEASE_VERIFY_OUTAGE_ABORT_STREAK, streak
@@ -1125,8 +1129,10 @@ class PipelineEngine:
                         "lock_verify_attempt_%d_failed_5xx run=%d status=%s",
                         attempt, self._run_id, status_code,
                     )
+                    # #1921：每次失败尝试都消费预算——原先 `attempt < len` 守卫
+                    # 使末位 delay 成死值，实际睡眠总和 ≈30s，与注释 ~60s 不符。
+                    time.sleep(delay)
                     if attempt < len(retry_delays):
-                        time.sleep(delay)
                         continue
                     return StepResult(
                         success=False,
@@ -1137,12 +1143,14 @@ class PipelineEngine:
                 return StepResult(
                     success=False,
                     exit_code=1,
-                    error_message=f"lock_verification_http_{status_code}",
+                    # #1922：契约类 4xx 用独立前缀——不进中断 streak，立即终止
+                    #（与函数注释「其它 4xx 视为契约错误立即 fail」对齐）。
+                    error_message=f"lock_verify_contract_http_{status_code}",
                 )
             except requests.RequestException as e:
                 logger.warning("lock_verify_attempt_%d_failed run=%d: %s", attempt, self._run_id, e)
-                if attempt < len(retry_delays):
-                    time.sleep(delay)
+                # #1921：末次失败同样消费预算（原末位 delay 死值）
+                time.sleep(delay)
 
         logger.error("lock_verification_unreachable run=%d", self._run_id)
         return StepResult(
