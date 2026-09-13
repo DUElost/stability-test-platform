@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
@@ -20,9 +22,13 @@ from backend.scheduler import cron_scheduler
 
 
 @pytest.fixture
-def cleanup_env(db_session, monkeypatch):
+def cleanup_env(db_session, monkeypatch, tmp_path):
+    from backend.realtime import log_writer
+
     monkeypatch.setattr(cron_scheduler, "PLAN_RUN_RETENTION_DAYS", 0)
     monkeypatch.setattr(cron_scheduler, "SessionLocal", lambda: db_session)
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path / "retention-storage"))
+    monkeypatch.setattr(log_writer, "LOG_BASE_DIR", tmp_path / "console")
     plan = Plan(name="retention-chain")
     db_session.add(plan)
     db_session.flush()
@@ -107,6 +113,101 @@ def test_unreferenced_runs_deleted_normally(cleanup_env):
 
     assert db.query(PlanRun).count() == 0
     assert a.id != b.id
+
+
+def test_chain_larger_than_batch_makes_bounded_progress(cleanup_env, monkeypatch):
+    db, plan = cleanup_env
+    root = _mk_run(db, plan)
+    parent = root
+    for _ in range(100):
+        parent = _mk_run(db, plan, parent=parent, root=root)
+    purged_batches = []
+    monkeypatch.setattr(
+        cron_scheduler, "purge_run_storage_dirs",
+        lambda run_ids: purged_batches.append(list(run_ids)) or set(),
+    )
+
+    cron_scheduler.run_retention_cleanup()
+    assert db.query(PlanRun).count() == 1
+    assert db.query(PlanRun.id).scalar() == root.id
+    assert len(purged_batches[0]) == 100
+    cron_scheduler.run_retention_cleanup()
+    assert db.query(PlanRun).count() == 0
+    assert purged_batches[1] == [root.id]
+
+
+def test_protected_prefix_cannot_starve_later_unreferenced_runs(cleanup_env):
+    db, plan = cleanup_env
+    protected_ids = set()
+    for _ in range(101):
+        parent = _mk_run(db, plan)
+        active = _mk_run(db, plan, status="RUNNING", age_days=0, parent=parent, root=parent)
+        protected_ids.update((parent.id, active.id))
+    for _ in range(3):
+        eligible = _mk_run(db, plan, age_days=1)
+        eligible_id = eligible.id
+        cron_scheduler.run_retention_cleanup()
+        remaining = {run_id for (run_id,) in db.query(PlanRun.id).all()}
+        assert eligible_id not in remaining
+        assert remaining == protected_ids
+
+
+def test_unreferenced_batch_is_capped_at_one_hundred(cleanup_env, monkeypatch):
+    db, plan = cleanup_env
+    for _ in range(105):
+        _mk_run(db, plan)
+    purged_batches = []
+    monkeypatch.setattr(
+        cron_scheduler, "purge_run_storage_dirs",
+        lambda run_ids: purged_batches.append(list(run_ids)) or set(),
+    )
+    cron_scheduler.run_retention_cleanup()
+    assert db.query(PlanRun).count() == 5
+    assert len(purged_batches) == 1
+    assert len(purged_batches[0]) == 100
+
+
+def test_self_root_reference_does_not_block_expired_run(cleanup_env):
+    db, plan = cleanup_env
+    root = _mk_run(db, plan)
+    root.root_plan_run_id = root.id
+    db.commit()
+    cron_scheduler.run_retention_cleanup()
+    assert db.query(PlanRun).count() == 0
+
+
+def test_locked_candidate_is_skipped_without_blocking_other_runs(cleanup_env):
+    db, plan = cleanup_env
+    locked = _mk_run(db, plan)
+    _mk_run(db, plan)
+    locked_id = locked.id
+    with Session(db.get_bind()) as other:
+        other.execute(select(PlanRun).where(PlanRun.id == locked_id).with_for_update())
+        cron_scheduler.run_retention_cleanup()
+        assert [run_id for (run_id,) in db.query(PlanRun.id).all()] == [locked_id]
+    cron_scheduler.run_retention_cleanup()
+    assert db.query(PlanRun).count() == 0
+
+
+def test_failed_child_purge_preserves_ancestors_but_not_safe_siblings(cleanup_env, monkeypatch):
+    db, plan = cleanup_env
+    root = _mk_run(db, plan)
+    parent = _mk_run(db, plan, parent=root)
+    failed = _mk_run(db, plan, parent=parent)
+    sibling_plan = Plan(name="retention-sibling")
+    db.add(sibling_plan)
+    db.flush()
+    sibling = _mk_run(db, sibling_plan, parent=root, root=root)
+    root_id, parent_id, failed_id, sibling_id = root.id, parent.id, failed.id, sibling.id
+    monkeypatch.setattr(cron_scheduler, "purge_run_storage_dirs", lambda run_ids: {failed_id})
+    cron_scheduler.run_retention_cleanup()
+    remaining = {run_id for (run_id,) in db.query(PlanRun.id).all()}
+    assert remaining == {root_id, parent_id, failed_id}
+    assert sibling_id not in remaining
+
+    monkeypatch.setattr(cron_scheduler, "purge_run_storage_dirs", lambda run_ids: set())
+    cron_scheduler.run_retention_cleanup()
+    assert db.query(PlanRun).count() == 0
 
 
 def test_console_log_files_purged_with_run(

@@ -603,6 +603,7 @@ def retry_plan_run_dispatch_endpoint(
             run_id,
             db=db,
             triggered_by=current_user.username if current_user else "api",
+            audit_user_id=current_user.id if current_user else None,
         )
     except PlanRunDispatchRetryError as exc:
         msg = str(exc)

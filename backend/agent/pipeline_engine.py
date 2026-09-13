@@ -17,6 +17,8 @@ import json
 
 import logging
 
+import math
+
 import os
 
 import select
@@ -183,9 +185,38 @@ _GROUP_EXIT_POLL_INTERVAL_SECONDS = 0.05
 # （超时日志的 peer 快照），不再作为 barrier 续期的唯一判据：脚本打戳覆盖率
 # 不齐（20+ 长步骤脚本 0 处打戳），旧的「戳陈旧 = 停滞」会误杀合法长步骤。
 # 与 STP_STEP_STALL_SECONDS 的建议值一致。
-_PEER_PROGRESS_STALE_SECONDS = float(
-    os.getenv("STP_BARRIER_PROGRESS_STALE_SECONDS", "120")
-)
+# #1863：模块级 float(env) 必须 import-safe（同 #1710 口径）。
+def _parse_peer_progress_stale_seconds(default: float = 120.0) -> float:
+    raw = (os.getenv("STP_BARRIER_PROGRESS_STALE_SECONDS") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "invalid STP_BARRIER_PROGRESS_STALE_SECONDS=%r; using default %.1f",
+            raw,
+            default,
+        )
+        return default
+    if not math.isfinite(value):
+        logger.warning(
+            "non-finite STP_BARRIER_PROGRESS_STALE_SECONDS=%r; using default %.1f",
+            raw,
+            default,
+        )
+        return default
+    if value <= 0:
+        logger.warning(
+            "non-positive STP_BARRIER_PROGRESS_STALE_SECONDS=%r; using default %.1f",
+            raw,
+            default,
+        )
+        return default
+    return value
+
+
+_PEER_PROGRESS_STALE_SECONDS = _parse_peer_progress_stale_seconds()
 
 
 # #872: 「信任执行态」后的兜底绝对硬顶——Plan 未配 barrier_max_wait_seconds
