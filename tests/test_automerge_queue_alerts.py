@@ -90,6 +90,11 @@ if args[:2] == ["pr", "view"]:
 if args[:2] == ["pr", "merge"]:
     out()
 if args[:2] == ["pr", "update-branch"]:
+    # #1783：可注入失败（如 PAT 缺 workflow scope 的 GraphQL 拒绝）以验容错分支
+    err = scenario.get("update_branch_error")
+    if err:
+        print(err, file=sys.stderr)
+        sys.exit(1)
     out()
 if args[0] == "api":
     path = args[1] if len(args) > 1 else ""
@@ -277,6 +282,32 @@ def test_empty_queue_closes_alert(tmp_path):
     assert result.returncode == 0, result.stderr
     _assert_called(calls, "issue close")
     assert "No eligible PRs" in result.stdout
+
+
+def test_workflow_scope_rejection_keeps_reconcile_green(tmp_path):
+    """#1783：队首 PR 改过 .github/workflows/* 而 PAT 无 workflow scope 时，
+    update-branch 被 GitHub 拒绝——必须绿退并给人工指引，不得整 job 红（否则
+    队首 rebase 停摆、后续 PR 全部积压）。"""
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _head_detail(_ALL_GREEN),
+            "open_issue": "999",
+            "behind_by": 2,
+            "update_branch_error": (
+                "GraphQL: refusing to allow a Personal Access Token to create or "
+                "update workflow `.github/workflows/ci.yml` without `workflow` "
+                "scope (updatePullRequestBranch)"
+            ),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "pr update-branch")
+    assert "workflow" in result.stdout and "scope" in result.stdout, result.stdout
+    # 指引要能落地：提示手工 rebase
+    assert "rebase" in result.stdout.lower(), result.stdout
 
 
 def test_alert_creation_failure_does_not_fail_reconcile(tmp_path):

@@ -142,6 +142,9 @@ class HddSpillMonitor:
         hdd_root: str,
         cifs_root: str,
         interval_seconds: float = 300.0,
+        # 签名默认 95/70 仅在未 configure 时生效；生产 wiring 由 main.py 以 env
+        # 缺省注入 STP_LOCAL_DISK_SPILL_THRESHOLD=80 —— 有效默认以 main.py 注入
+        # 为准（勿把两处 95/80 混当同一口径）。
         spill_threshold_pct: float = 95.0,
         target_pct: float = 70.0,
         disk_usage_fn=None,
