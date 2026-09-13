@@ -96,3 +96,43 @@ class TestAuditLogs:
 
         logs = client.get("/api/v1/audit-logs", headers=admin_headers).json()
         assert any(item["action"] == "refresh_rejected" for item in logs["items"])
+
+
+def test_audit_log_filters_username_ip_resource_id(client, admin_headers, db_session):
+    """#628：username / ip_address / resource_id 精确过滤，且可组合。
+
+    三类筛选都直接打在审计行自带的快照列上（不 join users / 不转主键类型），
+    resource_id 按 varchar 精确匹配（#832）。
+    """
+    from backend.models.audit import AuditLog
+
+    db_session.add_all([
+        AuditLog(
+            username="audit628_alice", action="update", resource_type="plan",
+            resource_id="62842", ip_address="10.62.8.1", details={},
+        ),
+        AuditLog(
+            username="audit628_bob", action="update", resource_type="plan",
+            resource_id="62843", ip_address="10.62.8.2", details={},
+        ),
+        AuditLog(
+            username="audit628_alice", action="create", resource_type="task",
+            resource_id="62899", ip_address="10.62.8.2", details={},
+        ),
+    ])
+    db_session.commit()
+
+    def fetch(**params) -> dict:
+        resp = client.get("/api/v1/audit-logs", params=params, headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    assert fetch(username="audit628_alice")["total"] == 2
+    assert fetch(ip_address="10.62.8.2")["total"] == 2
+    assert fetch(resource_id="62842")["total"] == 1
+    # 组合收窄：alice 在 10.62.8.2 上的操作
+    combined = fetch(username="audit628_alice", ip_address="10.62.8.2")
+    assert combined["total"] == 1
+    assert combined["items"][0]["action"] == "create"
+    # 部分匹配不成立（精确匹配语义）
+    assert fetch(username="audit628_alice", resource_id="6284")["total"] == 0
