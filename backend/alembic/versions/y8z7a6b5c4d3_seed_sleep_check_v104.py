@@ -1,7 +1,7 @@
 """seed sleep_check v1.0.4 — 离线豁免分支 dead_streak 键归一（#1693）
 
 Revision ID: y8z7a6b5c4d3
-Revises: x9y8z7a6b5c4
+Revises: y0z1a2b3c4d5
 Create Date: 2026-09-13
 
 Data migration (#1693 回归修复):
@@ -29,7 +29,7 @@ from alembic import op
 from sqlalchemy import text
 
 revision = "y8z7a6b5c4d3"
-down_revision = "x9y8z7a6b5c4"
+down_revision = "y0z1a2b3c4d5"
 branch_labels = None
 depends_on = None
 
