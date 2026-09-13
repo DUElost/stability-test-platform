@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import math
 import os
 import queue
 import signal
@@ -605,6 +606,36 @@ def _version_lt(a: str, b: str) -> bool:
     parts_a += [0] * (max_len - len(parts_a))
     parts_b += [0] * (max_len - len(parts_b))
     return parts_a < parts_b
+
+
+def _coerce_recovery_interval(raw: str | None, default: float = 60.0) -> float:
+    """#1710：recovery sync 周期间隔——非法/非有限值回落默认，再夹下限 5s。
+
+    ``float("nan")`` 不抛且 ``nan < 5`` 为 False，若直接落入 ``Event.wait(nan)``
+    会立即返回 → 周期线程满速空转打控制面。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return default
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        logger.warning(
+            "invalid STP_RECOVERY_SYNC_INTERVAL_SECONDS=%r; using default %.1f",
+            raw,
+            default,
+        )
+        return default
+    if not math.isfinite(value):
+        logger.warning(
+            "non-finite STP_RECOVERY_SYNC_INTERVAL_SECONDS=%r; using default %.1f",
+            raw,
+            default,
+        )
+        return default
+    if value < 5:
+        return 5.0
+    return value
 
 
 def _reload_runtime_env(env_file: Path | None = None) -> bool:
@@ -1315,11 +1346,9 @@ def main() -> None:
     # 不可达时 active_job_registry 悬空行需周期性再 reconcile（对齐终态
     # outbox 15s 兜底）。
     _recovery_sync_stop = threading.Event()
-    _recovery_sync_interval = float(
-        os.getenv("STP_RECOVERY_SYNC_INTERVAL_SECONDS", "60") or "60"
+    _recovery_sync_interval = _coerce_recovery_interval(
+        os.getenv("STP_RECOVERY_SYNC_INTERVAL_SECONDS", "60")
     )
-    if _recovery_sync_interval < 5:
-        _recovery_sync_interval = 5.0
 
     def _recovery_sync_loop() -> None:
         while not _recovery_sync_stop.wait(_recovery_sync_interval):
