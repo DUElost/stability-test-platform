@@ -585,6 +585,7 @@ def _run_service_tool(
                 db,
                 params,
                 triggered_by=triggered_by,
+                requester_user_id=requester_user_id,
             )
         finally:
             db.close()

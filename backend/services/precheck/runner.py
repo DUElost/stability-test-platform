@@ -373,6 +373,7 @@ def retry_plan_run_dispatch(
     db: Session,
     *,
     triggered_by: str,
+    audit_user_id: int | None = None,
 ) -> dict:
     """Reset a failed dispatch and return it to the admission queue."""
     from backend.models.job import JobInstance
@@ -477,6 +478,7 @@ def retry_plan_run_dispatch(
             "previous_result": summary,
             "mode": "admission_queue",
         },
+        user_id=audit_user_id,
         username=triggered_by,
     )
     db.commit()
