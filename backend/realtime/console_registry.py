@@ -36,13 +36,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 _FALSEY = frozenset({"0", "false", "False", "no", "NO", "off", "OFF"})
 _RUN_KEY_PREFIX = "stp:console:key:"
 _OWNER_KEY_PREFIX = "stp:console:owner:"
+_STATUS_KEY_PREFIX = "stp:console:status:"
 _DEFAULT_TTL_SECONDS = 120
 #: 单条命令的 socket 超时（秒）——有界，避免 Redis 故障拖死调用方线程。
 _SOCKET_TIMEOUT_SECONDS = 2.0
@@ -152,6 +153,10 @@ def run_key_key(run_key: str) -> str:
 
 def owner_key(run_id: str) -> str:
     return f"{_OWNER_KEY_PREFIX}{run_id}"
+
+
+def status_key(run_id: str) -> str:
+    return f"{_STATUS_KEY_PREFIX}{run_id}"
 
 
 def _run_key_payload(run_key: str, run_id: str) -> str:
@@ -323,3 +328,83 @@ def release_owner(run_id: str, *, run_key: str) -> None:
         )
     except Exception:
         logger.warning("console_registry_owner_release_failed run_id=%s", run_id, exc_info=True)
+
+
+# ── 状态快照（P2：跨实例 status / 订阅校验走共享状态）──────────────────────
+#
+# 与 owner 身份键的关键差别：``run_id`` 全局唯一，不存在「外部合法持有者」，
+# 因此快照用普通 ``SET ... EX``（后写覆盖即最新）+ ``EXPIRE`` 续期，无需
+# CAS 指纹比对（P1 的互斥键才需要）。快照失败**不得影响 run 本身**——调用方
+# （RunConsole）按 best-effort 处理，仅告警。
+
+
+def publish_status_snapshot(
+    run_id: str, snapshot: dict[str, Any], *, ttl_seconds: int
+) -> None:
+    """发布/覆盖状态快照（``SET ... EX``）。
+
+    Raises:
+        ConsoleRegistryUnavailable: 注册表不可用（调用方 best-effort 处理）。
+    """
+    client = _require_client()
+    payload = dict(snapshot)
+    payload.setdefault("instance_id", control_plane_instance_id())
+    try:
+        client.set(
+            status_key(run_id),
+            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            ex=max(30, int(ttl_seconds)),
+        )
+    except Exception as exc:
+        raise ConsoleRegistryUnavailable(f"console registry unavailable: {exc}") from exc
+
+
+def refresh_status_ttl(run_id: str, *, ttl_seconds: int) -> bool:
+    """刷新快照 TTL；键不在（被淘汰/丢失）→ ``False``，调用方应重发全文。"""
+    try:
+        client = _require_client()
+    except ConsoleRegistryUnavailable:
+        return False
+    try:
+        return bool(client.expire(status_key(run_id), max(30, int(ttl_seconds))))
+    except Exception:
+        logger.warning(
+            "console_registry_status_refresh_failed run_id=%s", run_id, exc_info=True
+        )
+        return False
+
+
+def read_status_snapshot(run_id: str) -> Optional[dict[str, Any]]:
+    """读取快照；不可用 / 不存在 / 损坏 → ``None``（调用方按未知处理）。"""
+    try:
+        client = _require_client()
+    except ConsoleRegistryUnavailable:
+        return None
+    try:
+        raw = client.get(status_key(run_id))
+    except Exception:
+        logger.warning(
+            "console_registry_status_read_failed run_id=%s", run_id, exc_info=True
+        )
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def delete_status_snapshot(run_id: str) -> None:
+    """删除快照（本地淘汰终态 run 时清理；失败仅告警，TTL 兜底）。"""
+    try:
+        client = _require_client()
+    except ConsoleRegistryUnavailable:
+        return
+    try:
+        client.delete(status_key(run_id))
+    except Exception:
+        logger.warning(
+            "console_registry_status_delete_failed run_id=%s", run_id, exc_info=True
+        )
