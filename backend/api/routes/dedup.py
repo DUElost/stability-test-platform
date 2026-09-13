@@ -30,6 +30,7 @@ from backend.api.routes.auth import get_current_active_user
 from backend.api.schemas.jira_run import JiraRunOut
 from backend.core.audit import record_audit
 from backend.core.database import SessionLocal, get_db
+from backend.models.host import Host
 from backend.models.jira_run import JiraRun
 from backend.models.user import User
 from backend.services.jira_issue_parser import parse_issue_keys
@@ -519,6 +520,23 @@ async def reload_agent_config(
     UploadManager 和 host-global OperationScheduler。
     """
     from backend.realtime.socketio_server import emit_agent_control
+
+    # ADR-0038 D5：reload-config 属执行/配置类下行，退役主机拒绝；同时补齐
+    # 原实现缺失的 host 存在性检查（矩阵行 4「零校验点」）。
+    host = db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    if host.retired_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HOST_RETIRED",
+                "message": (
+                    f"Host {host_id} is retired; unretire it before reload-config "
+                    "(ADR-0038 D5)."
+                ),
+            },
+        )
 
     try:
         await emit_agent_control(

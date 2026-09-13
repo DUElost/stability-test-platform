@@ -17,7 +17,7 @@
 | `STP_SOCKETIO_REDIS_CHANNEL` | Redis pub/sub channel 前缀（默认 `stp-socketio`） |
 | `STP_AGENT_SID_REGISTRY` | Agent `host_id` owner 登记；默认跟随 Redis adapter；`0`/`1` 可显式覆盖（ADR-0027 P3-3） |
 | `STP_AGENT_SID_REGISTRY_TTL_SECONDS` | owner key TTL（默认 120） |
-| `STP_CONSOLE_REGISTRY` | RunConsole 归属注册表：跨实例 `run_key` 互斥（fail-closed）+ owner 登记；默认跟随 Redis adapter；`0`/`1` 可显式覆盖（ADR-0027 P3-4，P1；`TESTING=1` 恒关） |
+| `STP_CONSOLE_REGISTRY` | RunConsole 归属注册表：跨实例 `run_key` 互斥（fail-closed）+ owner 登记；默认跟随 Redis adapter；`0`/`1` 可显式覆盖（ADR-0027 P3-4，P1+P2；`TESTING=1` 恒关） |
 | `STP_CONSOLE_REGISTRY_TTL_SECONDS` | console 互斥/owner key TTL（默认 120，下限 30；续期间隔 = TTL/3） |
 | `JWT_SECRET_KEY` | JWT 签名；生产必改 |
 | `AGENT_SECRET` | Agent HTTP/SocketIO 共用密钥；与 Agent 侧一致 |

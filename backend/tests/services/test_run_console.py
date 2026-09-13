@@ -450,9 +450,14 @@ def test_child_env_is_allowlisted_not_inherited(tmp_path, emit_capture, monkeypa
 
 
 def test_console_miss_hint_and_startup_warning_follow_multi_instance_flag(monkeypatch):
-    """#1114（R11-F06）：多实例开关驱动 console 诊断提示与启动告警文案。"""
+    """#1114（R11-F06）：多实例开关驱动 console 诊断提示与启动告警文案。
+
+    本用例覆盖**注册表未启用**分支（TESTING=1 钉住，与单测环境一致）；
+    注册表启用后的 P2 口径见 test_console_hint_and_warning_p2_branch。
+    """
     from backend.services import run_console as rc
 
+    monkeypatch.setenv("TESTING", "1")
     monkeypatch.setattr(
         "backend.realtime.socketio_redis.socketio_redis_adapter_enabled", lambda: False
     )
@@ -467,3 +472,24 @@ def test_console_miss_hint_and_startup_warning_follow_multi_instance_flag(monkey
     assert warning is not None
     assert "ref=#1114" in warning
     assert "dedup_jira_serialization" in warning
+
+
+def test_console_hint_and_warning_p2_branch(monkeypatch):
+    """#1737 P2：注册表启用 → 文案声明 status 已跨实例 + 剩余限制（cancel/read_log）。"""
+    from backend.services import run_console as rc
+
+    monkeypatch.setattr(
+        "backend.realtime.socketio_redis.socketio_redis_adapter_enabled", lambda: True
+    )
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("STP_CONSOLE_REGISTRY", "1")
+
+    hint = rc.console_run_miss_hint()
+    assert "跨实例 status" in hint
+    assert "#1114" in hint
+
+    warning = rc.multi_instance_console_warning()
+    assert warning is not None
+    assert "console_status_cross_instance=true" in warning
+    assert "remaining_limits=read_log_replay,cancel_forwarding" in warning
+    assert "ref=#1737/#1114" in warning
