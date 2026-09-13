@@ -1,11 +1,11 @@
 # ADR-0040：部署摘要协议（Deployment Artifact Digest Protocol）
 
-- 状态：**Proposed**
-- 版本记录：v0.1（2026-09-13 初版，由 [#1900](https://github.com/DUElost/stability-test-platform/issues/1900) 触发，[#1901](https://github.com/DUElost/stability-test-platform/issues/1901) 跟踪）
+- 状态：**Accepted**
+- 版本记录：v1.0 定稿（2026-09-13；v0.1 初版由 [#1900](https://github.com/DUElost/stability-test-platform/issues/1900) 触发、[#1901](https://github.com/DUElost/stability-test-platform/issues/1901) 跟踪 → owner 裁决采纳 D1–D7，裁决记录见 §9）
 - 优先级：P2
 - 目标里程碑：M7
 - 日期：2026-09-13
-- 决策者：平台研发组
+- 决策者：平台研发组（owner 裁决，2026-09-13）
 - 标签：热更新, 内容寻址, 收敛, 幂等, 升级, 可观测, #1900
 - 关联：[#1900](https://github.com/DUElost/stability-test-platform/issues/1900)（问题界定与实测基线）、[#1901](https://github.com/DUElost/stability-test-platform/issues/1901)（本 ADR 跟踪）、[ADR-0021](./ADR-0021-script-content-alignment-gate.md)（升级门禁/维护窗口，本 ADR 复用）、[ADR-0037](./ADR-0037-agent-host-privilege-boundary.md)（提权边界，资源动作扩展须与其联审）、[ADR-0038](./ADR-0038-host-retirement-semantics.md)（D4「禁 `Host.extra` 裸键」先例）、[ADR-0033](./ADR-0033-tool-kit-ecosystem-integration.md)（包存储轨道，未来 artifact 存储复用本协议身份）、`docs/operations/agent-version-and-hot-update.md`（现行热更新契约）
 
@@ -230,3 +230,17 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
 - Issue：[#1900](https://github.com/DUElost/stability-test-platform/issues/1900)（触发与基线）、
   [#1901](https://github.com/DUElost/stability-test-platform/issues/1901)（跟踪）；
 - 相邻：#960（维护窗口）、#948（pip 重试）、#1253（重启后 active 校验）、#959（文档漂移）。
+
+## 9. 裁决记录（2026-09-13，owner）
+
+- **结论**：D1–D7 按 v0.1 全部采纳，状态转 **Accepted**（v1.0）。优先级维持 P2、目标里程碑 M7。
+- **明确接受的四项取舍**（各带 §7 复访触发器，未触发前不得重提）：
+  1. D2 信任模型：远端 digest 由部署流程受控写入，不做每次心跳全树重算（§7-3）；
+  2. D3：**不做** code artifact 差量协议（§7-2）；
+  3. D2 `agent_code_deployed_at` 语义修订：仅内容实际变更时刷新，no-op 不刷新（前端/测试需同步）；
+  4. D4 `host-resources` 变更默认不重启（发现进程内缓存即按 §7 复议）。
+- **落地顺序与边界**：
+  - **P0 过渡项已落地**（[#1904](https://github.com/DUElost/stability-test-platform/pull/1904)：批量整批一次构建 + 压缩级 6）；
+  - P1 最小闭环（D1/D2/D3/D6 + 四入口记录统一）与 P2 分层扩展（含 ADR-0037 子命令白名单回填）**另开实施 issue**；
+  - 升级互斥沿用 `host_upgrade_gate`（ADR-0021）；host 侧状态一律显式列，不新增 `Host.extra` 裸键（ADR-0038 D4 先例）。
+- **采纳跟踪**：#1900（父项）保持开启至协议落地；本 ADR 的修订另起 PR 并回填 `docs/adr/README.md` 索引。
