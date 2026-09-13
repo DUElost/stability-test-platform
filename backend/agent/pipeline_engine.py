@@ -179,12 +179,29 @@ _READER_JOIN_TIMEOUT_SECONDS = 5.0
 # 散」两个条件，只能轮询；50ms 让取消路径的体感延迟可忽略，又不至于忙等。
 _GROUP_EXIT_POLL_INTERVAL_SECONDS = 0.05
 
-# #117:barrier 判定 peer 是否还在推进的新鲜度阈值。EXECUTING_STEP 且
-# last_progress_at 距今小于此值 = 活(打戳步骤的戳在刷新);超过 = 视为停滞。
+# #117/#872:EXECUTING_STEP 的 last_progress_at 新鲜度阈值——**现在只作诊断**
+# （超时日志的 peer 快照），不再作为 barrier 续期的唯一判据：脚本打戳覆盖率
+# 不齐（20+ 长步骤脚本 0 处打戳），旧的「戳陈旧 = 停滞」会误杀合法长步骤。
 # 与 STP_STEP_STALL_SECONDS 的建议值一致。
 _PEER_PROGRESS_STALE_SECONDS = float(
     os.getenv("STP_BARRIER_PROGRESS_STALE_SECONDS", "120")
 )
+
+
+# #872: 「信任执行态」后的兜底绝对硬顶——Plan 未配 barrier_max_wait_seconds
+# 时生效，防止真卡死的 EXECUTING_STEP peer 被无限续期。0/负值 = 显式不设上限
+# （保留 #174 的无硬顶语义，调试用）；Plan 级配置始终优先。
+def _default_barrier_max_wait_seconds() -> Optional[float]:
+    raw = os.getenv("STP_BARRIER_MAX_WAIT_SECONDS", "1800")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("invalid_default_barrier_max_wait raw=%r default=1800", raw)
+        return 1800.0
+    return value if value > 0 else None
+
+
+_DEFAULT_BARRIER_MAX_WAIT_SECONDS = _default_barrier_max_wait_seconds()
 
 # 单流捕获上限：超过后丢弃后续输出（仍继续读取避免管道阻塞），防止异常/
 # 失控输出把进程内存打爆（#123：MagicMock 流导致 reader 无限 append）。
@@ -1146,17 +1163,33 @@ class PipelineEngine:
             return 600.0
         return value if value > 0 else 600.0
 
+    def _peer_stamp_is_fresh(self, peer) -> bool:
+        """last_progress_at 是否新鲜（诊断信号，不再作为唯一活性判据）。"""
+        raw = peer.last_progress_at
+        if not raw:
+            return False
+        try:
+            ts = datetime.fromisoformat(raw)
+        except ValueError:
+            return False
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - ts).total_seconds() < (
+            _PEER_PROGRESS_STALE_SECONDS
+        )
+
     def _peers_are_progressing(self, coord) -> bool:
         """同 PRH 是否有 peer 还在推进（#117 progress-aware barrier）。
 
-        判定表（review 约定）：
+        判定表（#872 修订）：
           - WAITING_EXECUTION_SLOT → 活：在排队等槽位，是被 cap 限流，不是卡住
-          - EXECUTING_STEP 且 last_progress_at 新鲜 → 活：在干活，戳在刷新
+          - EXECUTING_STEP → 活：**执行态本身即活性证据**。脚本打戳覆盖率不齐
+            （长步骤如装包/刷机未必刷新 last_progress_at），旧的「戳新鲜才
+            算活」判据会把合法长步骤当停滞，误杀早完成者（run 338 实证）。
+            戳新鲜度降级为诊断信号（超时日志的 peer 快照）——真卡死由
+            ``_DEFAULT_BARRIER_MAX_WAIT_SECONDS`` 兜底硬顶终止。
           - WAITING_BARRIER → 不算：它自己也在等，否则互相续期成死锁
-          - 其它 / 无 last_progress_at → 不算
-
-        失败倒向「不续期」——保守：宁可走 barrier_timeout_seconds 兜底，
-        不能无限等。
+          - 其它 / 无状态 → 不算
         """
         try:
             for peer in coord.peers_of(self._run_id):
@@ -1164,18 +1197,14 @@ class PipelineEngine:
                 if state == "WAITING_EXECUTION_SLOT":
                     return True
                 if state == "EXECUTING_STEP":
-                    raw = peer.last_progress_at
-                    if raw:
-                        try:
-                            ts = datetime.fromisoformat(raw)
-                            if ts.tzinfo is None:
-                                ts = ts.replace(tzinfo=timezone.utc)
-                            if (datetime.now(timezone.utc) - ts).total_seconds() < (
-                                _PEER_PROGRESS_STALE_SECONDS
-                            ):
-                                return True
-                        except ValueError:
-                            pass
+                    if not self._peer_stamp_is_fresh(peer):
+                        logger.debug(
+                            "peer_executing_stamp_stale job=%s stamp=%s "
+                            "(#872: 执行态仍计入续期)",
+                            getattr(peer, "job_id", "?"),
+                            getattr(peer, "last_progress_at", None),
+                        )
+                    return True
         except Exception:
             logger.debug("peers_progress_check_error", exc_info=True)
         return False
@@ -1216,6 +1245,11 @@ class PipelineEngine:
         deadline = time.monotonic() + timeout
         entered_at = time.monotonic()
         max_wait = self._barrier_max_wait_seconds
+        if max_wait is None:
+            # #872：信任执行态后，必须有兜底硬顶——否则真卡死的 peer 会被
+            # 无限续期。Plan 显式配置或 STP_BARRIER_MAX_WAIT_SECONDS 仍优先，
+            # 0/负值显式表示不设上限（保留 #174 调试语义）。
+            max_wait = _DEFAULT_BARRIER_MAX_WAIT_SECONDS
         renewal_count = 0
         coord = self._coordinator
         prh_id = self._plan_run_host_id
