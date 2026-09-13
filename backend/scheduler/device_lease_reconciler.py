@@ -508,6 +508,10 @@ async def _reconcile_checks() -> None:
         broadcast_run_job_update,
     )
 
+    # has_broadcast=False 的三条路径终态化 PlanRun 时不广播 plan_run_status：
+    # 有意取舍——权威（plan_run.status）不失真，页面靠前端 10s/30s 轮询兜底收敛
+    # （成文见 docs/design/06-realtime-and-background.md §3「回收路径的页面收敛」）。
+    # 补广播属行为变更，需单独评审，勿顺手改 True。
     checks: list[tuple[str, callable, bool]] = [
         ("aborted_running_jobs", _reconcile_aborted_running_jobs, True),  # P1: 优先级最高
         ("expired_leases", _reconcile_expired_leases, False),
