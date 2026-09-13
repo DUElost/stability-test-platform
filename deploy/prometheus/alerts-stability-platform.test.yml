@@ -28,6 +28,9 @@ tests:
       # StabilityAgentTerminalOutboxBacklog（#743）：心跳上报的积压保持 >0 超过 30m
       - series: 'stability_agent_outbox_pending{host_id="host-1",type="terminal"}'
         values: '1x40'
+      # StabilityPlanRunCounterDrift（#77）：counter_reconciler 修复到一列漂移
+      - series: 'stability_plan_run_counter_drift_total{plan_run_id="42",mode="terminal"}'
+        values: '0+1x20'
     alert_rule_test:
       - eval_time: 20m
         alertname: StabilityDispatchGateFailed
@@ -76,3 +79,18 @@ tests:
                 centre answers 404/misroute for POST .../jobs/*/complete (the #729
                 ghost 404 storm): check centre routing first.  Before clearing any
                 centre-side job rows, read docs/operations/control-plane-db-maintenance.md.
+      - eval_time: 20m
+        alertname: StabilityPlanRunCounterDrift
+        exp_alerts:
+          - exp_labels:
+              plan_run_id: "42"
+              mode: terminal
+              severity: warning
+            exp_annotations:
+              summary: PlanRun terminalization counter drift repaired
+              description: >-
+                counter_reconciler repaired drift in PlanRun job counters. All
+                terminal paths must go through the central terminalization service
+                (ADR-0026 §6) — investigate which entry bypassed it or which
+                concurrent race lost an update. SLO: drift ratio P99 < 0.1%;
+                escalate when > 1%.

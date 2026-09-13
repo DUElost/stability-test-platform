@@ -326,6 +326,12 @@ class TestReloadAgentConfig:
     def test_reload_success_audited(self, client, auth_headers, db_session, monkeypatch):
         from unittest.mock import AsyncMock, patch
 
+        from backend.models.host import Host
+
+        # ADR-0038 D5：reload-config 新增 host 存在性校验（矩阵行 4 零校验点）
+        db_session.add(Host(id="h1", hostname="h1", status="ONLINE", ip="10.0.0.1"))
+        db_session.commit()
+
         with patch(
             "backend.realtime.socketio_server.emit_agent_control",
             new=AsyncMock(return_value=None),
@@ -355,6 +361,11 @@ class TestReloadAgentConfig:
         import pytest as _pytest
         from unittest.mock import AsyncMock, patch
 
+        from backend.models.host import Host
+
+        db_session.add(Host(id="h1", hostname="h1", status="ONLINE", ip="10.0.0.1"))
+        db_session.commit()
+
         # TestClient 默认 raise_server_exceptions：服务端异常直接穿透到测试，
         # 断言异常传播 + 审计已在重抛前落库（生产侧即 500）。
         with patch(
@@ -376,6 +387,36 @@ class TestReloadAgentConfig:
         )
         assert latest is not None, "emit 失败路径审计行缺失"
         assert latest.details["reason"] == "emit_failed:RuntimeError"
+
+    def test_reload_unknown_host_is_404(self, client, auth_headers, db_session):
+        """ADR-0038 D5 矩阵行 4：补齐原实现缺失的 host 存在性校验。"""
+        resp = client.post(
+            "/api/v1/plan-runs/hosts/no-such-host/reload-config",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404, resp.text
+
+    def test_reload_retired_host_is_409(self, client, auth_headers, db_session):
+        from datetime import datetime, timezone
+        from unittest.mock import AsyncMock, patch
+
+        from backend.models.host import Host
+
+        db_session.add(Host(
+            id="ret-reload", hostname="ret-reload", status="ONLINE",
+            ip="10.0.0.2", retired_at=datetime.now(timezone.utc),
+        ))
+        db_session.commit()
+
+        emit = AsyncMock(return_value=None)
+        with patch("backend.realtime.socketio_server.emit_agent_control", new=emit):
+            resp = client.post(
+                "/api/v1/plan-runs/hosts/ret-reload/reload-config",
+                headers=auth_headers,
+            )
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["code"] == "HOST_RETIRED"
+        emit.assert_not_awaited()
 
 
 class TestJiraProjectKeyWiring:

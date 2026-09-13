@@ -871,6 +871,30 @@ class StepResult:
     skip_reason: str = ""
 
 
+#: 租约校验的退避预算（#1881）：[1,2,4]≈7s 只挡得住秒级抖动，控制面重启/
+#: nginx 502 级别的分钟级中断会与大量长跑 job 的 300s 校验窗口重叠，成批判死
+#: （生产实证：24h/45h soak 被 1 分钟中断打穿）。改为覆盖 ~60s 的退避。
+_LEASE_VERIFY_RETRY_DELAYS = (1, 2, 4, 8, 15, 30)
+
+#: patrol 期内「控制面不可达」连续 N 次才判死（间隔 300s ⇒ ≈15 分钟），
+#: 与「租约真丢失」（409 device_lease_not_held）的立即终止分级（#1881）。
+_LEASE_VERIFY_OUTAGE_ABORT_STREAK = 3
+
+
+def _lease_verify_outage_decision(error_message: str, streak: int) -> tuple[bool, int]:
+    """租约校验失败分级（#1881）：返回 (是否判死, 新的连续中断计数)。
+
+    - ``lock_verification_*``（我方不可达 / 5xx）：控制面中断，累计到
+      ``_LEASE_VERIFY_OUTAGE_ABORT_STREAK`` 才判死；
+    - 其余（``device_lease_not_held`` 409 / ``lock_verify_auth_failed`` 401）：
+      服务端明确拒绝——真丢锁/凭据失效，立即终止（非目标：不改该语义）。
+    """
+    if error_message.startswith("lock_verification"):
+        streak += 1
+        return streak >= _LEASE_VERIFY_OUTAGE_ABORT_STREAK, streak
+    return True, 0
+
+
 class PipelineEngine:
     """Executes a pipeline definition: phase-serial, intra-phase parallel."""
 
@@ -1066,7 +1090,8 @@ class PipelineEngine:
         headers = {}
         if self._agent_secret:
             headers["X-Agent-Secret"] = self._agent_secret
-        retry_delays = [1, 2, 4]  # exponential backoff
+        # #1881：预算覆盖分钟级控制面中断（见模块常量注释）
+        retry_delays = _LEASE_VERIFY_RETRY_DELAYS
 
         for attempt, delay in enumerate(retry_delays, 1):
             try:
@@ -2145,6 +2170,8 @@ class PipelineEngine:
         iteration = 0
         failure_streak = 0
         last_lease_verify = 0.0
+        # #1881：连续「控制面不可达」计数（真丢锁 409 不走此计数，立即终止）
+        lease_verify_outage_streak = 0
         last_observed_action: Optional[str] = None
         pending_manual_action_ack: Optional[str] = None
         _LEASE_REVERIFY_INTERVAL = 300
@@ -2234,8 +2261,26 @@ class PipelineEngine:
             if time.time() - last_lease_verify > _LEASE_REVERIFY_INTERVAL:
                 lock_err = self._verify_device_lease()
                 if lock_err:
-                    logger.error("[Lifecycle] run=%d — lease lost during patrol", self._run_id)
-                    return _end_patrol("abort", f"lease re-verification failed: {lock_err.error_message}")
+                    # #1881：分级——控制面中断（lock_verification_*）累计到阈值才
+                    # 判死；真丢锁（409）/ 鉴权失效（401）仍立即终止。
+                    should_abort, lease_verify_outage_streak = _lease_verify_outage_decision(
+                        lock_err.error_message, lease_verify_outage_streak,
+                    )
+                    if should_abort:
+                        logger.error(
+                            "[Lifecycle] run=%d — lease lost during patrol (streak=%d)",
+                            self._run_id, lease_verify_outage_streak,
+                        )
+                        return _end_patrol(
+                            "abort", f"lease re-verification failed: {lock_err.error_message}",
+                        )
+                    logger.warning(
+                        "[Lifecycle] run=%d — lease verify outage %d/%d: %s（继续跑，不失锁）",
+                        self._run_id, lease_verify_outage_streak,
+                        _LEASE_VERIFY_OUTAGE_ABORT_STREAK, lock_err.error_message,
+                    )
+                else:
+                    lease_verify_outage_streak = 0
                 last_lease_verify = time.time()
 
             iteration += 1
