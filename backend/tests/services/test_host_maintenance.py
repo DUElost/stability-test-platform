@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy.orm import Session
 
 from backend.models.enums import HostStatus
 from backend.models.host import Host
@@ -56,6 +57,36 @@ class TestInMaintenanceWindow:
 
 
 class TestAcquireRelease:
+    def test_cached_host_cannot_overwrite_another_session_window(self, db_session, host_row):
+        with Session(db_session.get_bind(), expire_on_commit=False) as contender:
+            cached = contender.get(Host, host_row.id)
+            assert cached.maintenance_until is None
+            assert acquire_maintenance_window(db_session, host_row.id, "ui:owner")
+            assert not acquire_maintenance_window(contender, host_row.id, "ui:contender")
+            assert cached.maintenance_holder == "ui:owner"
+        db_session.refresh(host_row)
+        assert host_row.maintenance_holder == "ui:owner"
+
+    def test_cached_holder_cannot_release_successor_window(self, db_session, host_row):
+        acquire_maintenance_window(db_session, host_row.id, "ui:first")
+        with Session(db_session.get_bind(), expire_on_commit=False) as stale_session:
+            cached = stale_session.get(Host, host_row.id)
+            assert cached.maintenance_holder == "ui:first"
+            release_maintenance_window(db_session, host_row.id, "ui:first")
+            acquire_maintenance_window(db_session, host_row.id, "ui:second")
+            release_maintenance_window(stale_session, host_row.id, "ui:first")
+        db_session.refresh(host_row)
+        assert host_row.maintenance_holder == "ui:second"
+        assert in_maintenance_window(host_row.maintenance_until)
+
+    def test_holderless_window_is_not_owned_by_arbitrary_caller(self, db_session, host_row):
+        host_row.maintenance_until = datetime.now(timezone.utc) + timedelta(seconds=60)
+        host_row.maintenance_holder = ""
+        db_session.commit()
+        release_maintenance_window(db_session, host_row.id, "ui:other")
+        db_session.refresh(host_row)
+        assert in_maintenance_window(host_row.maintenance_until)
+
     def test_acquire_sets_window_and_release_clears(self, db_session, host_row):
         assert acquire_maintenance_window(db_session, host_row.id, "ui:tester") is True
         db_session.refresh(host_row)
