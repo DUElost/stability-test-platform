@@ -62,6 +62,33 @@ def test_backend_systemd_service_runs_migrations_before_start():
 
     assert "ExecStartPre=" in service
     assert "python -m alembic upgrade head" in service
+    # #1882：schema 对齐硬门禁（无 ExecStartPre=- 减号）
+    assert "check_alembic_at_head.py" in service
+    soft_lines = [
+        line for line in service.splitlines()
+        if "check-deploy-source.sh" in line
+    ]
+    hard_lines = [
+        line for line in service.splitlines()
+        if "check_alembic_at_head.py" in line
+    ]
+    assert soft_lines and soft_lines[0].startswith("ExecStartPre=-")
+    assert hard_lines and hard_lines[0].startswith("ExecStartPre=")
+    assert not hard_lines[0].startswith("ExecStartPre=-")
+
+
+def test_backend_nomigrate_service_hard_checks_schema_align():
+    """nomigrate 跳过 upgrade，必须硬拦 schema 落后（#1882 事故路径）。"""
+    service = (
+        ROOT / "deploy" / "control-plane" / "systemd"
+        / "stability-backend-nomigrate.service"
+    ).read_text(encoding="utf-8")
+    hard = [
+        line for line in service.splitlines()
+        if "check_alembic_at_head.py" in line
+    ]
+    assert hard and hard[0].startswith("ExecStartPre=")
+    assert not hard[0].startswith("ExecStartPre=-")
 
 
 def test_https_nginx_template_exists_for_production_tls():
@@ -140,6 +167,15 @@ def test_frontend_build_scripts_match_nginx_roots():
             f"Nginx root frontend/{out_dir} 没有对应构建脚本——"
             "干净 checkout 会构建出 Nginx 不托管的目录（#1256）"
         )
+
+
+def test_check_deploy_source_invokes_alembic_head_checker():
+    script = (ROOT / "tools" / "dev" / "check-deploy-source.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "check_alembic_at_head.py" in script
+    assert "venv/bin/python" in script or "python3" in script
 
 
 def test_deploy_docs_render_templates_instead_of_copying_them():

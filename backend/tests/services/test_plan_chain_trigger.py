@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -354,13 +354,10 @@ def _scalar_result(value):
     return result
 
 
-def _device_result(*device_ids, status="ONLINE"):
-    """#1686：链触发改为 JOIN Device.status 查询（.all() 返回 (id, status) 元组）。
-
-    兼容保留 scalars 路径（旧 mock 断言）。
-    """
+def _device_result(*device_ids, status="ONLINE", last_seen=None):
+    """#1686/#1822：JOIN 返回 (id, status, last_seen) 元组。"""
     result = MagicMock()
-    result.all.return_value = [(d, status) for d in device_ids]
+    result.all.return_value = [(d, status, last_seen) for d in device_ids]
     result.scalars.return_value.unique.return_value = list(device_ids)
     return result
 
@@ -508,3 +505,43 @@ class TestPlanChainLegacySnapshotFallback:
         assert child.plan_id == child_plan.id
         assert child.parent_plan_run_id == pr.id
         assert child.status == "QUEUED"
+
+
+def test_select_chain_devices_includes_fresh_offline_excludes_stale_and_busy():
+    """#1822：心跳窗口内 OFFLINE 入列；过期 OFFLINE / BUSY 排除。"""
+    from backend.services.plan_chain_trigger import _select_chain_devices
+
+    now = datetime(2026, 9, 13, 12, 0, 0, tzinfo=timezone.utc)
+    fresh = now - timedelta(seconds=60)
+    stale = now - timedelta(seconds=900)
+    rows = [
+        (1, "ONLINE", None),
+        (2, "OFFLINE", fresh),
+        (3, "OFFLINE", stale),
+        (4, "BUSY", fresh),
+        (5, "OFFLINE", None),
+        (6, "ERROR", fresh),
+    ]
+    device_ids, excluded = _select_chain_devices(
+        rows, now=now, grace_seconds=300,
+    )
+    assert device_ids == [1, 2]
+    excluded_ids = {e["device_id"] for e in excluded}
+    assert excluded_ids == {3, 4, 5, 6}
+    by_id = {e["device_id"]: e for e in excluded}
+    assert by_id[3]["reason"] == "offline_stale"
+    assert by_id[5]["reason"] == "offline_no_last_seen"
+    assert by_id[4]["status"] == "BUSY"
+
+
+def test_select_chain_devices_naive_last_seen_treated_as_utc():
+    """无 tzinfo 的 last_seen 按 UTC 解释，不误判为过期。"""
+    from backend.services.plan_chain_trigger import _select_chain_devices
+
+    now = datetime(2026, 9, 13, 12, 0, 0, tzinfo=timezone.utc)
+    naive_fresh = datetime(2026, 9, 13, 11, 59, 0)  # 60s ago if UTC
+    ids, excluded = _select_chain_devices(
+        [(9, "OFFLINE", naive_fresh)], now=now, grace_seconds=300,
+    )
+    assert ids == [9]
+    assert excluded == []

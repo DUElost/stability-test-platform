@@ -70,6 +70,16 @@ class HostNotFoundError(HostUpgradeGateError):
     code = "HOST_NOT_FOUND"
 
 
+class HostRetiredError(HostUpgradeGateError):
+    """ADR-0038 D5：退役主机拒绝执行/配置类动作（热更新/升级门禁/安装/批量）。
+
+    UI 热更新、批量脚本 --direct、Agent 升级门禁三条入口共用本门禁，
+    因此在这里收口即三处同时生效；拒绝不占用维护窗口（在拿窗口之前抛出）。
+    """
+
+    code = "HOST_RETIRED"
+
+
 class HostHasActiveJobsError(HostUpgradeGateError):
     code = "HOST_HAS_ACTIVE_JOBS"
 
@@ -229,6 +239,11 @@ def begin_host_upgrade(
     host = db.get(Host, host_id)
     if host is None:
         raise HostNotFoundError(f"host {host_id} not found")
+
+    # ADR-0038 D5：退役主机拒绝执行/配置类动作（含热更新/安装/升级门禁/批量）。
+    # 放在持有维护窗口之前——拒绝路径不得占用窗口（与活跃 Job 拒绝同一约定）。
+    if host.retired_at is not None:
+        raise HostRetiredError(f"host {host_id} is retired")
 
     if not acquire_maintenance_window(db, host_id, holder):
         db.rollback()
