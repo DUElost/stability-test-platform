@@ -361,21 +361,6 @@ export interface ActivityResponse {
   hours: number;
 }
 
-export interface DeviceMetricPoint {
-  timestamp: string;
-  battery_level: number | null;
-  temperature: number | null;
-  network_latency: number | null;
-  cpu_usage: number | null;
-  mem_used: number | null;
-}
-
-export interface DeviceMetricsResponse {
-  device_id: number;
-  points: DeviceMetricPoint[];
-  hours: number;
-}
-
 export interface CompletionTrendPoint {
   date: string;
   passed: number;

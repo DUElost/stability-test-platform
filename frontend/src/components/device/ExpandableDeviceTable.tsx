@@ -18,7 +18,6 @@ import {
   Smartphone,
   Battery,
   Thermometer,
-  Activity,
   Wifi,
   WifiOff,
   AlertTriangle,
@@ -70,7 +69,6 @@ export interface DeviceTableData {
 
 interface ExpandableDeviceTableProps {
   devices: DeviceTableData[];
-  onViewMetrics?: (device: DeviceTableData) => void;
   selectedIds?: Set<number>;
   onSelectionChange?: (ids: Set<number>) => void;
   onFilteredDevicesChange?: (devices: DeviceTableData[]) => void;
@@ -82,7 +80,6 @@ function hostFilterKey(device: DeviceTableData): string {
 
 export function ExpandableDeviceTable({
   devices,
-  onViewMetrics,
   selectedIds,
   onSelectionChange,
   onFilteredDevicesChange,
@@ -679,15 +676,6 @@ export function ExpandableDeviceTable({
                             <div className="text-xs text-muted-foreground">
                               最后活跃：{device.last_seen ? formatDateTimeFull(device.last_seen) : '—'}
                             </div>
-                            {onViewMetrics && (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); onViewMetrics(device); }}
-                                className="mt-2 text-xs text-primary hover:text-primary/80 flex items-center gap-1"
-                              >
-                                <Activity className="w-3 h-3" />
-                                查看指标历史
-                              </button>
-                            )}
                           </div>
                         </div>
                       </TableCell>
