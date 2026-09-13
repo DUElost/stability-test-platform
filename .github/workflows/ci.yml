@@ -274,6 +274,12 @@ jobs:
           cache-dependency-path: backend/requirements-dev.lock
       - name: Install dependencies
         run: pip install --require-hashes -r backend/requirements-dev.lock
+      # #739：agent 单测自闭环守卫——`env -i` 剥离 job 级 env（JWT_SECRET_KEY /
+      # DATABASE_URL）后只做收集（秒级）。agent 测试若重新 import 控制面
+      # （routes → auth → core.security 的模块级 JWT 硬检查），收集期即红，
+      # 不必等到运行；对应本地门禁 run_gates.py check:pr 的 agent-tests-collect。
+      - name: Collect agent tests in clean env
+        run: env -i PATH="$PATH" PYTHONPATH=. python -m pytest backend/agent/tests/ --collect-only -q
       - name: Run agent tests
         run: python -m pytest backend/agent/tests/ -q
       # 根 tests/ 的**离线子集**前移到 PR 路径（#1569，取代此前的 lock 卫生 +

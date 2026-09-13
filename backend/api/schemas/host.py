@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.api.schemas.base import ORMBaseModel
 
@@ -55,6 +55,11 @@ class HostActiveJob(BaseModel):
 
 
 class HostOut(ORMBaseModel):
+    # ADR-0038 D6-(a)：交付面字段名 `agent_instance_id`，ORM 属性名为
+    # `last_agent_instance_id`——用 validation_alias 桥接（populate_by_name
+    # 让两种写法都能构造，先例见 schemas/schedule.py）。
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str
     name: Optional[str] = None
     ip: Optional[str] = None
@@ -85,11 +90,35 @@ class HostOut(ORMBaseModel):
     agent_code_deployed: Optional[str] = None
     agent_code_deployed_at: Optional[str] = None
     agent_code_sync_status: Literal["unknown", "matched", "drift", "pending"] = "unknown"
+    # ADR-0038 D6-(a)：身份当前值交付面（换机 = 同 IP 同 id → unretire，
+    # boot_id / agent_instance_id 变化在详情与审计可见）。
+    boot_id: Optional[str] = None
+    agent_instance_id: Optional[str] = Field(
+        default=None, validation_alias="last_agent_instance_id",
+    )
+    # ADR-0038 D1/D4：退役生命周期（retired_at 非空即退役，与 status 正交）
+    # 与「已退役但仍在心跳」单次告警的去重时间戳。
+    retired_at: Optional[datetime] = None
+    retired_by: Optional[str] = None
+    retire_reason: Optional[str] = None
+    retire_alerted_at: Optional[datetime] = None
 
     @field_validator('extra', 'mount_status', mode='before')
     @classmethod
     def _coerce_none_to_dict(cls, v):
         return v or {}
+
+
+class HostRetireIn(BaseModel):
+    """ADR-0038 D2：退役请求体——原因必填（审计 who/when/reason 的 reason）。"""
+
+    retire_reason: str = Field(min_length=1)
+
+
+class HostUnretireIn(BaseModel):
+    """ADR-0038 D2：解除退役请求体——原因同样必填（与 retire 审计对称）。"""
+
+    retire_reason: str = Field(min_length=1)
 
 
 class HostLiteOut(ORMBaseModel):

@@ -59,6 +59,15 @@ export interface Host {
   agent_code_deployed?: string | null;
   agent_code_deployed_at?: string | null;
   agent_code_sync_status?: 'unknown' | 'matched' | 'drift' | 'pending';
+  /** ADR-0038 D6-(a)：身份当前值（换机 = 同 IP 同 id，unretire 恢复） */
+  boot_id?: string | null;
+  agent_instance_id?: string | null;
+  /** ADR-0038 D1/D4：退役生命周期（retired_at 非空即退役，与 status 正交） */
+  retired_at?: string | null;
+  retired_by?: string | null;
+  retire_reason?: string | null;
+  /** 「已退役但仍在心跳」单次告警的去重时间戳 */
+  retire_alerted_at?: string | null;
 }
 
 export interface Device {

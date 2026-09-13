@@ -135,7 +135,14 @@ def _format_plan_summary(plan: Plan, steps: list) -> str:
 
 def _q_platform_health(db: Session, args: dict) -> str:
     db.execute(text("SELECT 1"))
-    hosts = dict(db.query(Host.status, func.count(Host.id)).group_by(Host.status).all())
+    # ADR-0038 D5：AI 读面的主机计数同样排除退役（否则助手会把已退役主机
+    # 报成「在库容量」，运维据此判断会出错）。
+    hosts = dict(
+        db.query(Host.status, func.count(Host.id))
+        .filter(Host.retired_at.is_(None))
+        .group_by(Host.status)
+        .all()
+    )
     devices = dict(db.query(Device.status, func.count(Device.id)).group_by(Device.status).all())
     # 状态分布全量 group_by——不枚举具体状态值（plan_run_status 枚举与
     # job_status 枚举值集不同，猜测会 InvalidTextRepresentation，线上实测）
@@ -377,6 +384,9 @@ def _q_hosts(db: Session, args: dict) -> str:
         db.query(Host), Host.status,
         _opt_str(args.get("status"), "status", 32), HostStatus, "status",
     )
+    # ADR-0038 D5：与 GET /hosts 同口径——默认不列退役主机（助手无
+    # include_retired 开关；退役痕迹走详情页/审计，不在遍历读面）。
+    q = q.filter(Host.retired_at.is_(None))
     keyword = _opt_str(args.get("keyword"), "keyword", 64)
     if keyword:
         like = f"%{keyword}%"
