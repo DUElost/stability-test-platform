@@ -1,7 +1,7 @@
 # 短操作脚本 PROGRESS 打戳评估（#1748）
 
 Status: implemented
-Class: tech-debt / ledger-closeout
+Class: bug-fix
 
 ## Decision
 
