@@ -84,12 +84,6 @@ task_dispatch_errors = Counter(
 # Device Lease Metrics
 # ============================================================================
 
-device_lease_acquired = Counter(
-    'stability_device_lease_acquired_total',
-    'Total number of device leases acquired',
-    ['host_id']
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
 device_lease_released = Counter(
     'stability_device_lease_released_total',
     'Total number of device leases released',
@@ -558,39 +552,6 @@ def timed(metric: Histogram):
     return decorator
 
 
-def count_exceptions(metric: Counter, exception_type: type = Exception):
-    """Decorator to count exceptions"""
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except exception_type:
-                if PROMETHEUS_AVAILABLE:
-                    metric.inc()
-                raise
-        return wrapper
-    return decorator
-
-
-def record_task_run_status(status: str, task_type: str):
-    """Record a task run status change"""
-    if PROMETHEUS_AVAILABLE:
-        task_run_total.labels(status=status, task_type=task_type).inc()
-
-
-def record_device_lease_acquired(host_id: int):
-    """Record a device lease acquisition"""
-    if PROMETHEUS_AVAILABLE:
-        device_lease_acquired.labels(host_id=str(host_id)).inc()
-
-
-def record_device_lease_released(reason: str):
-    """Record a device lease release"""
-    if PROMETHEUS_AVAILABLE:
-        device_lease_released.labels(reason=reason).inc()
-
-
 def record_socketio_connection(namespace: str, connected: bool):
     """Record SocketIO connection change (new framework metric)."""
     if not PROMETHEUS_AVAILABLE:
@@ -618,7 +579,13 @@ def record_apscheduler_job(job_name: str, outcome: str, duration: float):
 
 
 def record_api_request(method: str, endpoint: str, status_code: int, duration: float):
-    """Record an API request"""
+    """Record an API request.
+
+    #1258 deferred：生产者（路径模板化的请求中间件）尚未落地，仪表板对应面板已撤；
+    本函数与 ``api_requests`` / ``api_request_duration`` 定义**按裁决保留**，
+    接入中间件时恢复面板并更新 ``tests/test_grafana_dashboard_contract.py``
+    的 UNPRODUCED_METRICS 清单（#737 复核确认仍属 deferred，未删）。
+    """
     if not PROMETHEUS_AVAILABLE:
         return
 
