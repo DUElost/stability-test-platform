@@ -179,12 +179,29 @@ _READER_JOIN_TIMEOUT_SECONDS = 5.0
 # 散」两个条件，只能轮询；50ms 让取消路径的体感延迟可忽略，又不至于忙等。
 _GROUP_EXIT_POLL_INTERVAL_SECONDS = 0.05
 
-# #117:barrier 判定 peer 是否还在推进的新鲜度阈值。EXECUTING_STEP 且
-# last_progress_at 距今小于此值 = 活(打戳步骤的戳在刷新);超过 = 视为停滞。
+# #117/#872:EXECUTING_STEP 的 last_progress_at 新鲜度阈值——**现在只作诊断**
+# （超时日志的 peer 快照），不再作为 barrier 续期的唯一判据：脚本打戳覆盖率
+# 不齐（20+ 长步骤脚本 0 处打戳），旧的「戳陈旧 = 停滞」会误杀合法长步骤。
 # 与 STP_STEP_STALL_SECONDS 的建议值一致。
 _PEER_PROGRESS_STALE_SECONDS = float(
     os.getenv("STP_BARRIER_PROGRESS_STALE_SECONDS", "120")
 )
+
+
+# #872: 「信任执行态」后的兜底绝对硬顶——Plan 未配 barrier_max_wait_seconds
+# 时生效，防止真卡死的 EXECUTING_STEP peer 被无限续期。0/负值 = 显式不设上限
+# （保留 #174 的无硬顶语义，调试用）；Plan 级配置始终优先。
+def _default_barrier_max_wait_seconds() -> Optional[float]:
+    raw = os.getenv("STP_BARRIER_MAX_WAIT_SECONDS", "1800")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("invalid_default_barrier_max_wait raw=%r default=1800", raw)
+        return 1800.0
+    return value if value > 0 else None
+
+
+_DEFAULT_BARRIER_MAX_WAIT_SECONDS = _default_barrier_max_wait_seconds()
 
 # 单流捕获上限：超过后丢弃后续输出（仍继续读取避免管道阻塞），防止异常/
 # 失控输出把进程内存打爆（#123：MagicMock 流导致 reader 无限 append）。
@@ -256,17 +273,71 @@ class _PumpOutcome:
         self.elapsed = elapsed
 
 
+class _StepLogSink:
+    """Per-step append sink for drained stdout/stderr lines (#731).
+
+    ``_append_log_line`` reopened the file for *every* line — an ``openat`` +
+    ``close`` pair per line. A host driving 10–14 devices through 72 h MTBF /
+    Monkey runs emits millions of lines per day, so the cost lands in CPU sys
+    time and SSD metadata churn (micro-benchmark in #731: a persistent buffered
+    handle is 71.8× faster over 20 000 lines, removing 40 000 syscalls).
+
+    One sink per stream: stdout and stderr are drained by two threads into two
+    different files, so no handle is shared across threads and no lock is
+    needed. The owning reader closes it in its ``finally``; CPython flushes
+    buffered text there, so normal completion, abort and timeout all land the
+    same content on disk.
+    """
+
+    __slots__ = ("_path", "_fh", "_failed", "_closed")
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._fh: Optional[Any] = None
+        self._failed = False
+        self._closed = False
+
+    def write(self, line: str) -> None:
+        """Append one line, normalized to exactly one trailing newline (#805-3)."""
+        if self._closed or self._failed:
+            return
+        try:
+            if self._fh is None:
+                self._fh = open(self._path, "a", encoding="utf-8")
+            self._fh.write(line if line.endswith("\n") else line + "\n")
+        except OSError:
+            # 与旧实现同语义：写失败只记 debug，不打断上报路径；此后不再重试
+            # （否则每行一次失败的 open 会把 syscall 开销放大回去）。
+            self._failed = True
+            self._discard()
+            logger.debug("step_log_file_write_failed path=%s", self._path)
+
+    def close(self) -> None:
+        """Flush + close. Idempotent, never raises, and blocks later writes."""
+        self._closed = True
+        self._discard()
+
+    def _discard(self) -> None:
+        handle, self._fh = self._fh, None
+        if handle is None:
+            return
+        try:
+            handle.flush()
+            handle.close()
+        except OSError:
+            logger.debug("step_log_file_close_failed path=%s", self._path)
+
+
 def _append_log_line(log_path: str, line: str) -> None:
     """Append one drained line to the step log, avoiding a doubled newline (#805-3).
 
-    ``_drain_polling`` already appends ``\\n`` to each line; ``_drain_blocking``
-    may or may not. Normalize to exactly one trailing newline.
+    One-shot helper kept for callers/tests that want a single append; the step
+    drain path instead holds a :class:`_StepLogSink` for the step's lifetime
+    (#731).
     """
-    try:
-        with open(log_path, "a", encoding="utf-8") as log_f:
-            log_f.write(line if line.endswith("\n") else line + "\n")
-    except OSError:
-        logger.debug("step_log_file_write_failed path=%s", log_path)
+    sink = _StepLogSink(log_path)
+    sink.write(line)
+    sink.close()
 
 
 def _drain_stream(
@@ -414,13 +485,14 @@ def _pump_process(
         sink_index: int,
         stream_name: str,
         progress_stream: bool,
-        log_path: Optional[str] = None,
+        log_sink: Optional[_StepLogSink] = None,
     ) -> None:
         # 2026-08-31：运行日志唯一副本（SSD logs/runs/{job_id}/）——全量落盘
         # （含 PROGRESS 行——排障需要完整输出；缓冲只留非 PROGRESS 尾部）。
-        # stdout/stderr 分开文件避免 reader 线程并发写同一句柄。
-        if log_path:
-            _append_log_line(log_path, line)
+        # stdout/stderr 分开文件避免 reader 线程并发写同一句柄；句柄本身由该流的
+        # reader 独占，并在其 finally 关闭（#731：不再逐行 open/close）。
+        if log_sink is not None:
+            log_sink.write(line)
         # #147: PROGRESS 允许前导空白（缩进/日志前缀场景）。用 lstrip 后匹配，
         # 避免脚本因一个前导空格而错过刷新停滞钟、在长静默段被误杀。
         stripped = line.lstrip()
@@ -462,7 +534,7 @@ def _pump_process(
         stream_name: str,
         *,
         progress_stream: bool,
-        log_path: Optional[str] = None,
+        log_sink: Optional[_StepLogSink] = None,
     ) -> None:
         try:
             _drain_stream(
@@ -474,7 +546,7 @@ def _pump_process(
                     sink_index=sink_index,
                     stream_name=stream_name,
                     progress_stream=progress_stream,
-                    log_path=log_path,
+                    log_sink=log_sink,
                 ),
             )
         except (ValueError, OSError):
@@ -484,15 +556,23 @@ def _pump_process(
                 stream.close()
             except Exception:
                 pass
+            # #731：本读者独占该 sink —— 在此 flush+close；正常完成 / abort /
+            # timeout 三条路径共用同一个收尾点，缓冲内容不会丢。
+            if log_sink is not None:
+                log_sink.close()
 
     # stdout 完全不识别 PROGRESS：stdout 整份要过 json.loads 是既有结果契约，
     # 任何出现在 stdout 的内容(哪怕是 PROGRESS 开头)都必须原样保留。
+    # #731：每流一个持久句柄（stdout/stderr 各写各的文件，句柄不跨线程共享）。
+    log_sinks = (
+        (_StepLogSink(log_paths[0]), _StepLogSink(log_paths[1])) if log_paths else None
+    )
     threads = [
         threading.Thread(
             target=_reader,
             args=(proc.stdout, stdout_lines, 0, "step-stdout"),
             kwargs={"progress_stream": False,
-                    "log_path": log_paths[0] if log_paths else None},
+                    "log_sink": log_sinks[0] if log_sinks else None},
             daemon=True,
             name="step-stdout",
         ),
@@ -500,7 +580,7 @@ def _pump_process(
             target=_reader,
             args=(proc.stderr, stderr_lines, 1, "step-stderr"),
             kwargs={"progress_stream": True,
-                    "log_path": log_paths[1] if log_paths else None},
+                    "log_sink": log_sinks[1] if log_sinks else None},
             daemon=True,
             name="step-stderr",
         ),
@@ -1146,17 +1226,33 @@ class PipelineEngine:
             return 600.0
         return value if value > 0 else 600.0
 
+    def _peer_stamp_is_fresh(self, peer) -> bool:
+        """last_progress_at 是否新鲜（诊断信号，不再作为唯一活性判据）。"""
+        raw = peer.last_progress_at
+        if not raw:
+            return False
+        try:
+            ts = datetime.fromisoformat(raw)
+        except ValueError:
+            return False
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - ts).total_seconds() < (
+            _PEER_PROGRESS_STALE_SECONDS
+        )
+
     def _peers_are_progressing(self, coord) -> bool:
         """同 PRH 是否有 peer 还在推进（#117 progress-aware barrier）。
 
-        判定表（review 约定）：
+        判定表（#872 修订）：
           - WAITING_EXECUTION_SLOT → 活：在排队等槽位，是被 cap 限流，不是卡住
-          - EXECUTING_STEP 且 last_progress_at 新鲜 → 活：在干活，戳在刷新
+          - EXECUTING_STEP → 活：**执行态本身即活性证据**。脚本打戳覆盖率不齐
+            （长步骤如装包/刷机未必刷新 last_progress_at），旧的「戳新鲜才
+            算活」判据会把合法长步骤当停滞，误杀早完成者（run 338 实证）。
+            戳新鲜度降级为诊断信号（超时日志的 peer 快照）——真卡死由
+            ``_DEFAULT_BARRIER_MAX_WAIT_SECONDS`` 兜底硬顶终止。
           - WAITING_BARRIER → 不算：它自己也在等，否则互相续期成死锁
-          - 其它 / 无 last_progress_at → 不算
-
-        失败倒向「不续期」——保守：宁可走 barrier_timeout_seconds 兜底，
-        不能无限等。
+          - 其它 / 无状态 → 不算
         """
         try:
             for peer in coord.peers_of(self._run_id):
@@ -1164,18 +1260,14 @@ class PipelineEngine:
                 if state == "WAITING_EXECUTION_SLOT":
                     return True
                 if state == "EXECUTING_STEP":
-                    raw = peer.last_progress_at
-                    if raw:
-                        try:
-                            ts = datetime.fromisoformat(raw)
-                            if ts.tzinfo is None:
-                                ts = ts.replace(tzinfo=timezone.utc)
-                            if (datetime.now(timezone.utc) - ts).total_seconds() < (
-                                _PEER_PROGRESS_STALE_SECONDS
-                            ):
-                                return True
-                        except ValueError:
-                            pass
+                    if not self._peer_stamp_is_fresh(peer):
+                        logger.debug(
+                            "peer_executing_stamp_stale job=%s stamp=%s "
+                            "(#872: 执行态仍计入续期)",
+                            getattr(peer, "job_id", "?"),
+                            getattr(peer, "last_progress_at", None),
+                        )
+                    return True
         except Exception:
             logger.debug("peers_progress_check_error", exc_info=True)
         return False
@@ -1216,6 +1308,11 @@ class PipelineEngine:
         deadline = time.monotonic() + timeout
         entered_at = time.monotonic()
         max_wait = self._barrier_max_wait_seconds
+        if max_wait is None:
+            # #872：信任执行态后，必须有兜底硬顶——否则真卡死的 peer 会被
+            # 无限续期。Plan 显式配置或 STP_BARRIER_MAX_WAIT_SECONDS 仍优先，
+            # 0/负值显式表示不设上限（保留 #174 调试语义）。
+            max_wait = _DEFAULT_BARRIER_MAX_WAIT_SECONDS
         renewal_count = 0
         coord = self._coordinator
         prh_id = self._plan_run_host_id

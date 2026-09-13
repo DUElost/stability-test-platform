@@ -3,11 +3,12 @@
 映射：同一 PRH 的 job 是 barrier 的 peer；同 host 多 PlanRun 时等待方必须只
 把同 PRH 的 job 当同伴——否则会把别的 PlanRun 的活跃 job 当成 peer 而无限续期。
 
-判定表（review 约定）：
+判定表（#872 修订）：
   - WAITING_EXECUTION_SLOT → 活（排队等槽位，被 cap 限流，不是卡住）
-  - EXECUTING_STEP 且 last_progress_at 新鲜 → 活（打戳步骤的戳在刷新）
+  - EXECUTING_STEP → 活（**执行态本身即活性证据**；戳新鲜度只作诊断——
+    脚本打戳覆盖率不齐，旧判据会误杀合法长步骤，run 338 实证）
   - WAITING_BARRIER → 不算（它自己也在等，否则互相续期成死锁）
-  - 其它 / 无 last_progress_at → 不算
+  - 其它 / 无状态 → 不算
 """
 
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,7 @@ class _Engine:
         self._run_id = run_id
 
     _peers_are_progressing = PipelineEngine._peers_are_progressing
+    _peer_stamp_is_fresh = PipelineEngine._peer_stamp_is_fresh
 
 
 class TestJobPrhMapping:
@@ -73,8 +75,13 @@ class TestPeersAreProgressing:
         peer.update(state="EXECUTING_STEP", progress_ts=_NOW.isoformat())
         assert _Engine(1)._peers_are_progressing(coord)
 
-    def test_executing_with_stale_progress_not_alive(self):
-        """EXECUTING_STEP 但 last_progress_at 陈旧（300s 前）= 停滞。"""
+    def test_executing_with_stale_progress_still_alive(self):
+        """#872：EXECUTING_STEP 但戳陈旧（300s 前）**仍算活**。
+
+        脚本打戳覆盖率不齐（长步骤装包/刷机不刷新 last_progress_at），
+        旧判据把合法长步骤当停滞 → 早完成者被 barrier_timeout 误杀
+        （run 338 实证）。执行态本身即活性证据；戳只作诊断。
+        """
         coord = _coord()
         coord.register_job(1, prh_id=10)
         peer = coord.register_job(2, prh_id=10)
@@ -82,7 +89,15 @@ class TestPeersAreProgressing:
             state="EXECUTING_STEP",
             progress_ts=(_NOW - timedelta(seconds=300)).isoformat(),
         )
-        assert not _Engine(1)._peers_are_progressing(coord)
+        assert _Engine(1)._peers_are_progressing(coord)
+
+    def test_executing_without_stamp_still_alive(self):
+        """#872：EXECUTING_STEP 且**无戳**（脚本从未打戳）同样算活。"""
+        coord = _coord()
+        coord.register_job(1, prh_id=10)
+        peer = coord.register_job(2, prh_id=10)
+        peer.update(state="EXECUTING_STEP")
+        assert _Engine(1)._peers_are_progressing(coord)
 
     def test_waiting_barrier_not_alive(self):
         """WAITING_BARRIER 不算活——否则两个等待方互相续期成死锁。"""
@@ -152,6 +167,7 @@ class _BarrierEngine(_Engine):
         return self._released
 
     _peers_are_progressing = PipelineEngine._peers_are_progressing
+    _peer_stamp_is_fresh = PipelineEngine._peer_stamp_is_fresh
     _resolve_barrier_timeout = PipelineEngine._resolve_barrier_timeout
     _await_phase_barrier = PipelineEngine._await_phase_barrier
     _peer_state_snapshot = PipelineEngine._peer_state_snapshot
@@ -202,6 +218,40 @@ class TestBarrierRenewal:
         finally:
             _time.sleep = real_sleep
 
+    def test_stale_executing_peer_renews_past_original_timeout(self):
+        """#872 回归：戳陈旧的 EXECUTING_STEP peer 也续期（run 338 场景）。
+
+        修复前：戳 300s 陈旧 → 不续期 → 0.2s 滑窗耗尽返回 False（误杀）；
+        修复后：执行态即活 → 0.5s 后线程仍在等待。
+        """
+        import threading
+        import time as _time
+
+        coord = _coord()
+        eng = _BarrierEngine(run_id=1, prh_id=10, timeout=0.2)
+        peer_view = _peer(coord, 2, 10, "EXECUTING_STEP",
+                          progress_ts=(_NOW - timedelta(seconds=300)).isoformat())
+        eng._peers = [peer_view]
+
+        result: list = []
+
+        def _run():
+            result.append(eng._await_phase_barrier("PATROL"))
+
+        real_sleep = _time.sleep
+        _time.sleep = lambda s: real_sleep(0.001)
+        try:
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+            for _ in range(50):  # 0.5s > 原 timeout 0.2s
+                _time.sleep(0.01)
+            assert thread.is_alive(), "戳陈旧的执行态 peer 不应让 barrier 超时"
+            eng._released = True
+            thread.join(timeout=2)
+            assert result == [True]
+        finally:
+            _time.sleep = real_sleep
+
     def test_all_peers_stalled_times_out_with_original_timeout(self):
         """所有 peer 停滞 → 按原 barrier_timeout 超时失败。"""
         import threading
@@ -209,8 +259,9 @@ class TestBarrierRenewal:
 
         coord = _coord()
         eng = _BarrierEngine(run_id=1, prh_id=10, timeout=0.2)
-        _peer(coord, 2, 10, "EXECUTING_STEP",
-              progress_ts=(_NOW - timedelta(seconds=300)).isoformat())
+        # #872 后「停滞」= 无执行态（EXECUTING_STEP 已视为活），这里模拟
+        # peer 未进入执行（如控面回传缺失/未上报）。
+        _peer(coord, 2, 10, None)
 
         result: list = []
 
@@ -227,6 +278,43 @@ class TestBarrierRenewal:
             assert result == [False]
             assert eng._wait_calls >= 1
             assert eng._barrier_failure_reason == "barrier_timeout"
+        finally:
+            _time.sleep = real_sleep
+
+    def test_default_max_wait_fires_when_plan_does_not_configure(
+        self, monkeypatch,
+    ):
+        """#872：Plan 未配硬顶时，Agent 侧默认硬顶兜底（防执行态无限续期）。
+
+        monkeypatch 模块默认值为 0.3s（小于真实 1800s），陈旧执行态 peer
+        持续续期滑窗（0.2s），0.3s 时必须按 barrier_max_wait 终止。
+        """
+        import threading
+        import time as _time
+
+        import backend.agent.pipeline_engine as pe
+
+        monkeypatch.setattr(pe, "_DEFAULT_BARRIER_MAX_WAIT_SECONDS", 0.3)
+        coord = _coord()
+        eng = _BarrierEngine(run_id=1, prh_id=10, timeout=0.2, max_wait=None)
+        peer_view = _peer(coord, 2, 10, "EXECUTING_STEP",
+                          progress_ts=(_NOW - timedelta(seconds=300)).isoformat())
+        eng._peers = [peer_view]
+
+        result: list = []
+
+        def _run():
+            result.append(eng._await_phase_barrier("PATROL"))
+
+        real_sleep = _time.sleep
+        _time.sleep = lambda s: real_sleep(0.001)
+        try:
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+            thread.join(timeout=3)
+            assert not thread.is_alive(), "默认硬顶必须终止等待"
+            assert result == [False]
+            assert eng._barrier_failure_reason == "barrier_max_wait"
         finally:
             _time.sleep = real_sleep
 
