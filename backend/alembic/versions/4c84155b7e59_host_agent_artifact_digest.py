@@ -1,7 +1,7 @@
 """add host.agent_artifact_digest — 部署摘要协议状态载体（ADR-0040 D2，#1907）
 
 Revision ID: 4c84155b7e59
-Revises: f3a4b5c6d7e8
+Revises: h4i5j6k7l8m9
 Create Date: 2026-09-13
 
 ADR-0040 把「部署单元」升级为内容寻址 artifact：远端 current digest 由部署
@@ -24,7 +24,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "4c84155b7e59"
-down_revision = "f3a4b5c6d7e8"
+down_revision = "h4i5j6k7l8m9"
 branch_labels = None
 depends_on = None
 

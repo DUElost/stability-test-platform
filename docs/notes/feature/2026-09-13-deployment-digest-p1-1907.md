@@ -1,4 +1,4 @@
-"""#1907 部署摘要协议 P1 切片：digest 双侧实现 + no-op gate（ADR-0040 D1/D2/D3/D6）
+# #1907 部署摘要协议 P1 切片：digest 双侧实现 + no-op gate（ADR-0040 D1/D2/D3/D6）
 
 Status: implemented
 Class: feature
