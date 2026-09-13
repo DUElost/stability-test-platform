@@ -65,6 +65,10 @@ CASCADE 被否——会误删仍需保留的后续 Run。
   但仍删除安全兄弟并在下一轮重试成功。
 - 测试固定使用 testcontainers Postgres，fixture 将共享存储与 console 根
   显式指向 `tmp_path`，不依赖宿主环境中的真实路径。
+- PR #1860 follow-up：`FakeQuery` 补 `.exists()` / `.order_by()` /
+  `.with_for_update()`，并映射 `PlanRun.id` 行元组；
+  `TestRunRetentionCleanup` **4 passed**，`test_cron_scheduler.py` **13 passed**
+  （修复 `pr-agent-tests` 因 mock 缺 `.exists()` 早退的失败）。
 
 此前 #936 历史证据（不代表本次重跑）：
 
