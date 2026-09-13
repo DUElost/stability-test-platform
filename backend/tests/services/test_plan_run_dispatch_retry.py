@@ -80,6 +80,34 @@ def test_retry_dispatch_requires_auth(client, failed_precheck_run):
     assert resp.status_code == 401
 
 
+def test_retry_dispatch_audit_records_user_id(
+    client, auth_headers, test_user, db_session, failed_precheck_run, sample_device,
+):
+    """#1829：REST 路径的 retry-dispatch 审计必须带 user_id（与 AI 路径同口径）。"""
+    from backend.models.audit import AuditLog
+
+    failed_precheck_run.run_context["dispatch_device_ids"] = [sample_device.id]
+    flag_modified(failed_precheck_run, "run_context")
+    db_session.commit()
+
+    resp = client.post(
+        f"/api/v1/plan-runs/{failed_precheck_run.id}/retry-dispatch",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+
+    row = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.action == "plan_dispatch_retry_requested",
+            AuditLog.resource_id == str(failed_precheck_run.id),
+        )
+        .first()
+    )
+    assert row is not None
+    assert row.user_id == test_user.id
+
+
 def test_retry_dispatch_refreshes_watcher_admin_snapshot_for_new_dispatch(
     client, auth_headers, db_session, failed_precheck_run, sample_host, sample_device,
 ):

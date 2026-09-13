@@ -186,6 +186,33 @@ class TestRunRetryDispatchAudit:
         assert captured["audit_user_id"] == test_user.id
 
 
+class TestScheduleEmitAgentControl:
+    def test_delegates_to_ack_call_and_returns_result(self, monkeypatch):
+        """#1864：改用 ack 版 call_agent_control_sync，送达才为 True。"""
+        import backend.services.ai_assistant.plan_run_ops as ops
+
+        calls: list[tuple] = []
+
+        def _fake(host_id, command, *, payload=None, timeout=3.0):
+            calls.append((host_id, command, payload))
+            return True
+
+        monkeypatch.setattr(
+            "backend.realtime.socketio_server.call_agent_control_sync", _fake,
+        )
+        assert ops._schedule_emit_agent_control("h1", "archive_now", payload={"x": 1}) is True
+        assert calls == [("h1", "archive_now", {"x": 1})]
+
+    def test_returns_false_when_ack_not_delivered(self, monkeypatch):
+        monkeypatch.setattr(
+            "backend.realtime.socketio_server.call_agent_control_sync",
+            lambda *a, **k: False,
+        )
+        from backend.services.ai_assistant.plan_run_ops import _schedule_emit_agent_control
+
+        assert _schedule_emit_agent_control("h1", "scan_now") is False
+
+
 class TestDescribeAbortPreview:
     def test_includes_status_and_job_counts(self, db_session, sample_plan_run):
         text = describe_abort_preview(

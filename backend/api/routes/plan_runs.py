@@ -603,6 +603,8 @@ def retry_plan_run_dispatch_endpoint(
             run_id,
             db=db,
             triggered_by=current_user.username if current_user else "api",
+            # #1829：与 AI 路径对齐——审计归因带 user_id（#628 精确筛选依赖）。
+            audit_user_id=getattr(current_user, "id", None),
         )
     except PlanRunDispatchRetryError as exc:
         msg = str(exc)
