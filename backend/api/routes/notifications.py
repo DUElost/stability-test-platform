@@ -5,7 +5,8 @@ Notifications API — CRUD for channels and alert rules.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.api.schemas import (
@@ -430,16 +431,24 @@ def unread_count(
     return {"unread": count}
 
 
+class MarkReadIn(BaseModel):
+    """#626：body 可选；缺省 read=True 保持既有「标已读」语义（老调用方不带 body）。"""
+
+    read: bool = True
+
+
 @router.patch("/logs/{log_id}/read")
 def mark_read(
     log_id: int,
+    payload: MarkReadIn | None = Body(default=None),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
+    """#626：read=true 标已读，read=false 恢复未读（误点回退；不做批量反向）。"""
     log = db.get(NotificationLog, log_id)
     if not log:
         raise HTTPException(status_code=404, detail="Notification log not found")
-    log.read = True
+    log.read = payload.read if payload is not None else True
     db.commit()
     return {"ok": True}
 

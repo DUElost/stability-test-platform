@@ -1,11 +1,10 @@
 import axios from 'axios';
 import { API_TIMEOUT_MS, SESSION_PROBE_TIMEOUT_MS } from './timeouts';
-import { refreshAccessToken } from '@/utils/auth';
+import { classifyAuthFailure, refreshAccessToken } from '@/utils/auth';
 import type {
   ApiResponseEnvelope,
   StructuredApiError,
 } from './types';
-
 export class ApiError extends Error {
   code: string;
   status?: number;
@@ -144,17 +143,17 @@ function isLoginRequest(url: unknown): boolean {
   return typeof url === 'string' && url.includes('/auth/login');
 }
 
-// 裸 axios 调用，不经过本拦截器（防递归）。
-async function isSessionAlive(): Promise<boolean> {
+/** #703 / #1039：探活三分——alive / dead（真 401）/ unknown（过载超时等）。 */
+async function probeSession(): Promise<'alive' | 'dead' | 'unknown'> {
   try {
     await axios.get('/api/v1/auth/me', {
       withCredentials: true,
       // #1199：探活位于 401 恢复路径内，挂起会拖住拦截器，收紧超时
       timeout: SESSION_PROBE_TIMEOUT_MS,
     });
-    return true;
-  } catch {
-    return false;
+    return 'alive';
+  } catch (error) {
+    return classifyAuthFailure(error) === 'rejected' ? 'dead' : 'unknown';
   }
 }
 
@@ -183,8 +182,12 @@ apiClient.interceptors.response.use(
         // 审计 Frontend #5: 走唯一的防抖 refreshAccessToken,避免并发 401 同时多次 refresh。
         // 当前浏览器端已切到 HttpOnly cookie，会话恢复成功后直接重放原请求即可。
         const refreshed = await refreshAccessToken();
-        if (refreshed) {
+        if (refreshed === 'recovered') {
           return apiClient(error.config);
+        }
+        // #703：超时/5xx/断网 ≠ 未授权——保留会话，把原 401 以业务错误抛回，勿踢登录
+        if (refreshed === 'transient') {
+          return Promise.reject(toApiError(error));
         }
       }
 
@@ -199,9 +202,10 @@ apiClient.interceptors.response.use(
         return Promise.reject(toApiError(error));
       }
 
-      // #1039：refresh 失败 ≠ 会话已死——多标签 rotation 竞态下本标签的旧
+      // #1039：refresh 明确拒绝 ≠ 会话已死——多标签 rotation 竞态下本标签的旧
       // jti 可能刚被另一标签的消费输掉，而赢家的新 cookie 已在 jar 里。探活
-      // 成功则直接重放原请求而不是全局登出；探活也失败才认定会话终态。
+      // 成功则直接重放原请求而不是全局登出；探活也明确拒绝才认定会话终态。
+      // #703：探活超时/5xx 同属 transient，不得登出。
       // __probeRetry 防重放后的 401 再次进入本分支造成循环。
       if (
         error.config
@@ -209,8 +213,12 @@ apiClient.interceptors.response.use(
         && !shouldSkipRefresh(error.config.url)
       ) {
         error.config.__probeRetry = true;
-        if (await isSessionAlive()) {
+        const probe = await probeSession();
+        if (probe === 'alive') {
           return apiClient(error.config);
+        }
+        if (probe === 'unknown') {
+          return Promise.reject(toApiError(error));
         }
       }
 
