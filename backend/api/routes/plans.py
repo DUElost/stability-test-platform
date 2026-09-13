@@ -19,8 +19,10 @@ from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
 from backend.core.audit import record_audit
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from backend.core.device_serial import is_placeholder_serial
 from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
+from backend.models.host import Device
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.project import Specialty, TestProject
@@ -1141,6 +1143,41 @@ def delete_plan(
 # ── Dispatch ─────────────────────────────────────────────────────────────
 
 
+def _dispatch_warnings(db: Session, device_ids: list[int]) -> list[dict]:
+    """#1356 增强：派发前提示可疑设备（不阻断，由调用方决定）。
+
+    覆盖两类"会拖垮整批派发"的设备：
+    - placeholder_serial：serial 为占位值（多 host 可同时识别 → host 归属漂移
+      → dispatch 阶段被 device_host_drift 拦截，整批派发失败）
+    - device_not_online：非 ONLINE（准入 pump 会因 device_offline blocker 等待）
+    """
+    if not device_ids:
+        return []
+    rows = (
+        db.query(Device.id, Device.serial, Device.host_id, Device.status)
+        .filter(Device.id.in_(device_ids))
+        .all()
+    )
+    warnings: list[dict] = []
+    for dev_id, serial, host_id, status in rows:
+        if is_placeholder_serial(serial):
+            warnings.append({
+                "device_id": dev_id, "serial": serial, "host_id": host_id,
+                "code": "placeholder_serial",
+                "message": (
+                    "serial 为占位值——多台 host 的 adb 可同时识别，host 归属"
+                    "可能漂移，派发会被 device_host_drift 拦截（#1356）"
+                ),
+            })
+        if status != "ONLINE":
+            warnings.append({
+                "device_id": dev_id, "serial": serial, "host_id": host_id,
+                "code": "device_not_online", "status": status,
+                "message": "设备非 ONLINE——准入阶段会等待该设备（建议排除）",
+            })
+    return warnings
+
+
 @router.post("/plans/{plan_id}/run/preview", response_model=ApiResponse[dict])
 def preview_plan_run(
     plan_id: int,
@@ -1159,6 +1196,10 @@ def preview_plan_run(
         )
     except PlanDispatchError as e:
         raise HTTPException(status_code=400, detail=e.detail()) from e
+    # #1356 增强：可疑设备提示（不阻断）
+    warnings = _dispatch_warnings(db, list(payload.device_ids))
+    if warnings:
+        preview["warnings"] = warnings
     return ok(preview)
 
 
@@ -1177,6 +1218,15 @@ def run_plan(
     run_context: dict = {"dispatch_state": initial_dispatch_state()}
     if payload.note:
         run_context["note"] = payload.note
+    # #1356 增强：可疑设备提示（不阻断；记录在 run_context 供前端/运维可见）
+    dispatch_warnings = _dispatch_warnings(db, list(payload.device_ids))
+    if dispatch_warnings:
+        run_context["dispatch_warnings"] = dispatch_warnings
+        logger.warning(
+            "dispatch_warnings plan=%d devices=%d suspicious=%d first=%s",
+            plan_id, len(payload.device_ids), len(dispatch_warnings),
+            dispatch_warnings[0].get("code"),
+        )
     if payload.wifi_pool_id is not None:
         require_active_wifi_pool(db, payload.wifi_pool_id)
         require_wifi_pool_matches_plan(db, plan_id, payload.wifi_pool_id)
