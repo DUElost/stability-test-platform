@@ -142,6 +142,7 @@ class HeartbeatIn(BaseModel):
     boot_id: str = ""             # ADR-0019 Phase 3a
     agent_version: Optional[str] = None  # ADR-0020 preflight data source
     agent_code_revision: Optional[str] = None  # git short SHA from agent VERSION file
+    agent_artifact_digest: str = ""  # ADR-0040 D2: deployed artifact digest from agent ARTIFACT_DIGEST file
 
     @field_validator('host_id', mode='before')
     @classmethod

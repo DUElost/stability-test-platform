@@ -56,6 +56,25 @@ Host UI（`ExpandableHostTable`）展示协议版本、code sync 徽章与相对
 实现：`backend/services/agent_env_sync.py`（allowlist + 行级 merge）。  
 响应字段 `env_keys_synced` 列出本次已对齐的键。
 
+**部署摘要协议（ADR-0040，P1 #1907）**：部署单元身份 = 内容摘要
+`sha256:<hex>`（输入集 = 载荷文件集的 `(relpath, 可执行位, content sha256)`
+规范化序列，与 tarball 共享同一枚举）。收敛流程：
+
+1. 控制面现算 desired digest（进程缓存，键 = 输入集指纹）；
+2. 与 host.agent_artifact_digest（心跳上报的远端 current）比对——相等即
+   **no-op**：不构建、不传输、不重启，审计 outcome=`converged`，
+   `agent_code_deployed_at` 不刷新；
+3. 不等则全量部署；远端探活通过后经提权 wrapper `write-digest`（legacy 主机
+   走等价 sudo tee）受控写入 `agent/ARTIFACT_DIGEST`，Agent 启动时读取并经
+   心跳上报。
+
+三入口（UI/API、`batch_hot_update.py --direct`、precheck 回退）共用同一判定
+与同一记录通道（`finalize_hot_update_outcome`：审计 + deployed_at 语义 +
+`stability_hot_update_outcome_total{entry,outcome}` 指标）。差异：precheck
+回退**不做 no-op**（仅在轻量脚本推送失败后触发，治愈证据优先，§7-3）；Ansible
+通道本切片不变（P2 归位）。`--force`（API `?force=true` / CLI `--force`）跳过
+判定强制全量。`resources/mtbf/` 永属主机本地，不进载荷与身份。
+
 **顺序（#218，避免 Wave 3 竞态）**：
 
 1. 远端脚本**先**行级合并 `$INSTALL_DIR/.env`，**再** `systemctl restart` —— 一次成功的 hot-update 重启后进程已读到新 flag，无需再 `reload_config`。  
@@ -83,6 +102,7 @@ CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_ag
 | 心跳正常无任务 | `HOST_ID`、host ONLINE、容量/lease、Agent 是否被门禁 |
 | 升级被拒（409 / 门禁不可达） | 该 host 是否有活跃 Job（需 `abort_running_jobs=true` 排空）；控制面是否可达（不可达 fail-closed）；维护窗口 `host.maintenance_until/holder` 是否被他人持有 |
 | UI 显示 drift | Agent 未上报新 revision；热更新是否写 VERSION；控制面 `get_agent_code_version()` 期望是否刷新 |
+| 每次热更新都全量（不 no-op） | 远端 `agent/ARTIFACT_DIGEST` 是否存在且被心跳上报（`host.agent_artifact_digest` 非空）；digest 判定见 ADR-0040；带外改文件属信任模型例外（§7-3） |
 | 校验 / schema 不一致 | 热更新是否带上 `pipeline_schema.json`（见 2026-07 host-update 修复） |
 
 环境变量细节：[../development/environment-variables.md](../development/environment-variables.md)。

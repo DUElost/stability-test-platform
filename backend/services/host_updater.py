@@ -63,6 +63,55 @@ _TAR_EXCLUDE_SUFFIXES = (".pyc",)
 # 不留双轨。
 _TARBALL_COMPRESSLEVEL = 6
 
+# ADR-0040 D1：部署载荷不含「主机态/部署态」文件——远端布局里 agent/ 下可能
+# 存在的元数据（VERSION/ARTIFACT_DIGEST/.env）不进身份；resources/mtbf/ 永远
+# 属主机本地（#214/#216 APK 保护语义），tarball 也不应携带（远端 rsync --delete
+# 本就排除，不进包让「载荷 == 安装树」更真）。
+_PAYLOAD_METADATA_EXCLUDES = {"VERSION", "ARTIFACT_DIGEST", ".env"}
+
+
+def _iter_payload_files():
+    """Yield ``(abs_path, arcname)`` over the deploy payload file set.
+
+    tarball（``_build_tarball``）与 artifact digest（``artifact_digest.collect_artifact_entries``）
+    共享同一枚举——digest 输入集 = 部署输入集由同一份代码保证（ADR-0040 D1）。
+    symlink 一律跳过：tar 存链接本身而内容读取会穿透，两侧身份会分叉。
+    """
+    for root, dirs, files in os.walk(_AGENT_SOURCE_DIR):
+        # Filter directories in-place
+        dirs[:] = [d for d in dirs if d not in _TAR_EXCLUDES]
+
+        for name in files:
+            if name in _TAR_EXCLUDES:
+                continue
+            if name.endswith(_TAR_EXCLUDE_SUFFIXES):
+                continue
+            if name.startswith("test_") and name.endswith(".py"):
+                continue
+
+            full_path = os.path.join(root, name)
+            if os.path.islink(full_path):
+                continue
+            arcname = os.path.relpath(full_path, _AGENT_SOURCE_DIR).replace(os.sep, "/")
+            if arcname in _PAYLOAD_METADATA_EXCLUDES:
+                continue
+            if arcname == "resources/mtbf" or arcname.startswith("resources/mtbf/"):
+                continue
+            yield full_path, arcname
+
+    if _PIPELINE_SCHEMA_FILE.is_file():
+        yield _PIPELINE_SCHEMA_FILE, "stp_schemas/pipeline_schema.json"
+
+
+def _build_tarball(compresslevel: int = _TARBALL_COMPRESSLEVEL) -> bytes:
+    """Package the agent source tree into an in-memory gzipped tarball."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=compresslevel) as tar:
+        for full_path, arcname in _iter_payload_files():
+            tar.add(full_path, arcname=arcname)
+
+    return buf.getvalue()
+
 
 def _resolve_ssh_creds(host_ip: str) -> dict | None:
     """Look up SSH credentials from Ansible inventory by IP.
@@ -103,27 +152,8 @@ def _build_tarball(compresslevel: int = _TARBALL_COMPRESSLEVEL) -> bytes:
     """Package the agent source tree into an in-memory gzipped tarball."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=compresslevel) as tar:
-        for root, dirs, files in os.walk(_AGENT_SOURCE_DIR):
-            # Filter directories in-place
-            dirs[:] = [d for d in dirs if d not in _TAR_EXCLUDES]
-
-            for name in files:
-                if name in _TAR_EXCLUDES:
-                    continue
-                if name.endswith(_TAR_EXCLUDE_SUFFIXES):
-                    continue
-                if name.startswith("test_") and name.endswith(".py"):
-                    continue
-
-                full_path = os.path.join(root, name)
-                arcname = os.path.relpath(full_path, _AGENT_SOURCE_DIR)
-                tar.add(full_path, arcname=arcname)
-
-        if _PIPELINE_SCHEMA_FILE.is_file():
-            tar.add(
-                _PIPELINE_SCHEMA_FILE,
-                arcname="stp_schemas/pipeline_schema.json",
-            )
+        for full_path, arcname in _iter_payload_files():
+            tar.add(full_path, arcname=arcname)
 
     return buf.getvalue()
 
@@ -137,6 +167,7 @@ SYNC_AGENT_SECRET="{sync_agent_secret}"
 AGENT_SECRET_B64="{agent_secret_b64}"
 ENV_OVERRIDES_B64="{env_overrides_b64}"
 ENV_PATH_KEYS_B64="{env_path_keys_b64}"
+ARTIFACT_DIGEST="{artifact_digest}"
 export PIP_INDEX_URL="{pip_index_url}"
 
 if [ ! -d "$INSTALL_DIR" ]; then
@@ -167,6 +198,8 @@ fi
 
 # Capture pre-sync requirements.txt sha to detect dependency changes
 OLD_REQ_SHA=$(sha256sum "$INSTALL_DIR/agent/requirements.txt" 2>/dev/null | cut -d' ' -f1 || echo "none")
+# ADR-0040 D6：per-phase 计时（远端应用 / 重启探活），落控制面审计 details
+APPLY_T0=$(date +%s%3N)
 
 # Rsync into install dir
 # NOTE: `--delete` 会删除远端 tarball 中不存在的目录——agent/resources/ 里
@@ -345,8 +378,11 @@ if [ "$NEED_PIP" -eq 1 ]; then
     DEPS_REFRESHED=1
 fi
 echo "STP_DEPS_REFRESHED=$DEPS_REFRESHED"
+APPLY_T1=$(date +%s%3N)
+echo "STP_REMOTE_APPLY_MS=$((APPLY_T1 - APPLY_T0))"
 
 # Restart service
+RESTART_T0=$(date +%s%3N)
 if [ "$USE_PRIV_WRAPPER" = "1" ]; then
     sudo "$PRIV" restart
 else
@@ -368,6 +404,19 @@ if [ "$SERVICE_ACTIVE" -ne 1 ]; then
     echo "ERROR: service $SERVICE_NAME not active 5s after restart; check: systemctl status $SERVICE_NAME"
     exit 1
 fi
+RESTART_T1=$(date +%s%3N)
+echo "STP_RESTART_PROBE_MS=$((RESTART_T1 - RESTART_T0))"
+
+# ADR-0040 D2：收敛成功后受控写入 ARTIFACT_DIGEST（探活通过才写——中途失败
+# 保持旧 digest，下一次收敛按 drift 重做）。与 VERSION 同通道、同信任模型。
+if [ -n "$ARTIFACT_DIGEST" ]; then
+    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+        sudo "$PRIV" write-digest --digest "$ARTIFACT_DIGEST"
+    else
+        printf '%s\n' "$ARTIFACT_DIGEST" | sudo tee "$INSTALL_DIR/agent/ARTIFACT_DIGEST" > /dev/null
+    fi
+    echo "STP_ARTIFACT_DIGEST=$ARTIFACT_DIGEST"
+fi
 echo "OK: service restarted successfully"
 """
 
@@ -383,6 +432,7 @@ def _build_remote_script(
     agent_secret: str = "",
     pip_index_url: str = "",
     code_version: str = "",
+    artifact_digest: str = "",
 ) -> str:
     agent_secret_b64 = ""
     if sync_agent_secret:
@@ -410,6 +460,7 @@ def _build_remote_script(
         group=group,
         pip_index_url=pip_index_url,
         code_version=code_version,
+        artifact_digest=artifact_digest,
     )
 
 
@@ -462,6 +513,19 @@ def _parse_priv_mode(stdout_text: str) -> str:
         if line == "STP_PRIV_FALLBACK=legacy":
             return "legacy"
     return "unknown"
+
+
+def _parse_phase_ms(stdout_text: str, sentinel: str) -> int:
+    """ADR-0040 D6：远端分段计时哨兵（毫秒）；缺省/不可解析回退 0。"""
+    for line in reversed(stdout_text.splitlines()):
+        line = line.strip()
+        if line.startswith(sentinel + "="):
+            raw = line.split("=", 1)[1].strip()
+            try:
+                return max(0, int(raw))
+            except ValueError:
+                return 0
+    return 0
 
 
 def _parse_env_synced(stdout_text: str) -> list[str]:
@@ -532,13 +596,19 @@ def execute_hot_update(
     code_version: str = "",
     pip_index_url: str = "",
     tarball: bytes | None = None,
+    artifact_digest: str = "",
 ) -> dict:
     """Execute a hot-update on a remote Linux host.
 
     ``tarball``：可选预构建载荷（#1903）。批量入口整批只构建一次并复用；缺省
     为 None 时按需构建（UI/API 单台路径行为不变）。
 
-    Returns a dict with keys: ok, host_id (str), message, duration_ms,
+    ``artifact_digest``：本次部署载荷的内容摘要（ADR-0040 D2）。非空时远端
+    脚本在探活通过后受控写入 ``ARTIFACT_DIGEST``；no-op 判定在调用方
+    （``artifact_digest.evaluate_convergence``），本函数总是全量动作。
+
+    Returns a dict with keys: ok, converged (bool), reason (str),
+    artifact_digest (str), phases (dict), host_id (str), message, duration_ms,
     deps_refreshed (bool), env_keys_synced (list[str]),
     env_paths_missing (dict[str, str]), code_version (str).
     Raises no exceptions — failures are captured in the returned dict.
@@ -549,17 +619,24 @@ def execute_hot_update(
         pip_index_url = os.getenv("STP_AGENT_PIP_INDEX_URL", "")
 
     t0 = time.monotonic()
+    phases: dict[str, int] = {"digest": 0}
+
+    def _phase_ms(since: float) -> int:
+        return int((time.monotonic() - since) * 1000)
 
     try:
         # 1. Build tarball（#1903：批量入口传入预构建载荷，整批只构建一次）
         if tarball is None:
             logger.info("hot_update_building_tarball source=%s", _AGENT_SOURCE_DIR)
+            t_build = time.monotonic()
             tarball = _build_tarball()
+            phases["build"] = _phase_ms(t_build)
             logger.info("hot_update_tarball_size_bytes=%d", len(tarball))
         else:
             logger.info("hot_update_using_prebuilt_tarball size_bytes=%d", len(tarball))
 
         # 2. Connect
+        t_connect = time.monotonic()
         client, sftp = _ssh_connect(
             host_ip=host_ip,
             port=ssh_port,
@@ -568,13 +645,16 @@ def execute_hot_update(
             key_path=ssh_key_path,
             known_hosts_path=known_hosts_path,
         )
+        phases["connect"] = _phase_ms(t_connect)
 
         tar_path = _remote_tar_path()
         try:
             # 3. Upload tarball
             logger.info("hot_update_uploading host=%s:%d", host_ip, ssh_port)
+            t_upload = time.monotonic()
             sftp.putfo(io.BytesIO(tarball), tar_path)
             sftp.chmod(tar_path, 0o644)
+            phases["upload"] = _phase_ms(t_upload)
 
             # 4. Execute remote script
             script = _build_remote_script(
@@ -587,13 +667,18 @@ def execute_hot_update(
                 agent_secret=agent_secret,
                 pip_index_url=pip_index_url,
                 code_version=code_version,
+                artifact_digest=artifact_digest,
             )
 
             logger.info("hot_update_executing host=%s", host_ip)
+            t_remote = time.monotonic()
             stdin, stdout, stderr = client.exec_command(script)
             exit_code = stdout.channel.recv_exit_status()
             out_text = stdout.read().decode("utf-8", errors="replace")
             err_text = stderr.read().decode("utf-8", errors="replace")
+            phases["remote_total"] = _phase_ms(t_remote)
+            phases["remote_apply"] = _parse_phase_ms(out_text, "STP_REMOTE_APPLY_MS")
+            phases["restart_probe"] = _parse_phase_ms(out_text, "STP_RESTART_PROBE_MS")
 
             deps_refreshed = _parse_deps_refreshed(out_text)
             env_keys_synced = _parse_env_synced(out_text)
@@ -604,6 +689,8 @@ def execute_hot_update(
                 logger.error("hot_update_remote_failed exit=%d stderr=%s", exit_code, err_text[:500])
                 return {
                     "ok": False,
+                    "converged": False,
+                    "reason": "remote_script_failed",
                     "message": _remote_failure_message(out_text, exit_code),
                     "duration_ms": int((time.monotonic() - t0) * 1000),
                     "deps_refreshed": deps_refreshed,
@@ -611,6 +698,8 @@ def execute_hot_update(
                     "env_paths_missing": env_paths_missing,
                     "code_version": code_version,
                     "priv_mode": priv_mode,
+                    "artifact_digest": artifact_digest,
+                    "phases": phases,
                 }
 
             if env_paths_missing:
@@ -626,6 +715,8 @@ def execute_hot_update(
             )
             return {
                 "ok": True,
+                "converged": False,
+                "reason": "deployed",
                 "message": msg,
                 "duration_ms": int((time.monotonic() - t0) * 1000),
                 "deps_refreshed": deps_refreshed,
@@ -633,6 +724,8 @@ def execute_hot_update(
                 "env_paths_missing": env_paths_missing,
                 "code_version": code_version,
                 "priv_mode": priv_mode,
+                "artifact_digest": artifact_digest,
+                "phases": phases,
             }
 
         finally:
@@ -649,6 +742,8 @@ def execute_hot_update(
         logger.warning("hot_update_auth_failed host=%s", host_ip)
         return {
             "ok": False,
+            "converged": False,
+            "reason": "ssh_auth_failed",
             "message": msg,
             "duration_ms": int((time.monotonic() - t0) * 1000),
             "deps_refreshed": False,
@@ -656,6 +751,8 @@ def execute_hot_update(
             "env_paths_missing": {},
             "code_version": code_version,
             "priv_mode": "unknown",
+            "artifact_digest": artifact_digest,
+            "phases": phases,
         }
 
     except (OSError, IOError) as e:
@@ -663,6 +760,8 @@ def execute_hot_update(
         logger.warning("hot_update_connection_failed host=%s:%d err=%s", host_ip, ssh_port, e)
         return {
             "ok": False,
+            "converged": False,
+            "reason": "ssh_connect_failed",
             "message": msg,
             "duration_ms": int((time.monotonic() - t0) * 1000),
             "deps_refreshed": False,
@@ -670,12 +769,16 @@ def execute_hot_update(
             "env_paths_missing": {},
             "code_version": code_version,
             "priv_mode": "unknown",
+            "artifact_digest": artifact_digest,
+            "phases": phases,
         }
 
     except Exception:
         logger.exception("hot_update_unexpected_error host=%s", host_ip)
         return {
             "ok": False,
+            "converged": False,
+            "reason": "unexpected_error",
             "message": "Unexpected error during hot-update, check server logs.",
             "duration_ms": int((time.monotonic() - t0) * 1000),
             "deps_refreshed": False,
@@ -683,4 +786,6 @@ def execute_hot_update(
             "env_paths_missing": {},
             "code_version": code_version,
             "priv_mode": "unknown",
+            "artifact_digest": artifact_digest,
+            "phases": phases,
         }
