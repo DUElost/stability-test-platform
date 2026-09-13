@@ -644,3 +644,104 @@ def test_create_pull_failed_event_reuses_preallocated_id(local_db):
     assert got == event_id
     sent = post.call_args.kwargs["json"]["events"][0]
     assert sent["id"] == event_id and sent["state"] == "PULL_FAILED"
+
+
+# ----------------------------------------------------------------------
+# #1862：跨前缀 done 墓碑回查（迁移丢失窗口不产生新 seq_no）
+# ----------------------------------------------------------------------
+
+_BASELINE_PREFIX = f"watcher_baseline:{_JOB_ID}"
+
+
+def _done_record(seq_no: int) -> Dict[str, Any]:
+    return {
+        "job_id": _JOB_ID,
+        "aee_type": "aee_exp",
+        "parsed": {},
+        "output_subdir": "",
+        "entry_origin": "baseline",
+        "detected_at": "2026-05-28T10:00:00+00:00",
+        "detected_at_override": None,
+        "seq_no": seq_no,
+        "signal_envelope": {"seq_no": seq_no},
+        "dle_payload": {"id": f"dle-{seq_no}"},
+        "done": True,
+        "attempts": 0,
+    }
+
+
+def _seed_done(store: _MemStore, prefix: str, seq_no: int) -> None:
+    """在指定前缀簿预置同 line 的 done 记录（模拟另一侧已 emit 完成）。"""
+    store.set_state(
+        ei.intent_state_key(_processed_key(prefix=prefix)),
+        json.dumps({_LINE: _done_record(seq_no)}),
+    )
+
+
+def test_baseline_done_tombstone_blocks_new_seq_on_runtime_repull(tmp_path):
+    """baseline emit done → 崩溃于 merge 前 → runtime 重拉同 line：
+    复用墓碑（seq_no=7）幂等返回，不新建记录、不重复 emit。"""
+    store = _MemStore()
+    emitter = _FakeEmitter(store=store)
+    emitter.processed_key = _processed_key()
+    client = _FakeDeviceLogClient()
+    rec = _make_reconciler(tmp_path, emitter=emitter, store=store, client=client)
+    _seed_done(store, _BASELINE_PREFIX, seq_no=7)
+
+    subdir = tmp_path / "aee_exp" / "db.01"
+    subdir.mkdir(parents=True)
+    rec._handle_new_entry(_payload(subdir))
+
+    assert emitter.enqueued == [] and client.posts == []
+    runtime_book = _intents(store)
+    assert runtime_book[_LINE]["done"] is True
+    assert runtime_book[_LINE]["seq_no"] == 7  # 原 keys，非新分配
+
+
+def test_runtime_done_tombstone_blocks_new_seq_on_baseline_rescan(tmp_path):
+    """反方向：runtime 已 emit done、baseline 分片重扫同 line——同样幂等。"""
+    store = _MemStore()
+    emitter = _FakeEmitter(store=store)
+    emitter.processed_key = _processed_key()
+    client = _FakeDeviceLogClient()
+    rec = _make_reconciler(tmp_path, emitter=emitter, store=store, client=client)
+    _seed_done(store, "watcher:aee", seq_no=3)
+
+    subdir = tmp_path / "aee_exp" / "db.01"
+    subdir.mkdir(parents=True)
+    payload = _payload(subdir)
+    payload["state_key_prefix"] = _BASELINE_PREFIX
+    rec._handle_new_entry(payload)
+
+    assert emitter.enqueued == [] and client.posts == []
+    baseline_book = _intents(store, prefix=_BASELINE_PREFIX)
+    assert baseline_book[_LINE]["done"] is True
+    assert baseline_book[_LINE]["seq_no"] == 3
+
+
+def test_cross_prefix_lookup_ignores_undone_records(tmp_path):
+    """未 done 的跨前缀占位不墓碑化——不影响正常 emit 路径（Revisit 范围）。"""
+    store = _MemStore()
+    emitter = _FakeEmitter(store=store)
+    emitter.processed_key = _processed_key()
+    client = _FakeDeviceLogClient()
+    rec = _make_reconciler(tmp_path, emitter=emitter, store=store, client=client)
+    pending = _done_record(9)
+    pending["done"] = False
+    pending["seq_no"] = None
+    pending["signal_envelope"] = None
+    pending["dle_payload"] = None
+    store.set_state(
+        ei.intent_state_key(_processed_key(prefix=_BASELINE_PREFIX)),
+        json.dumps({_LINE: pending}),
+    )
+
+    subdir = tmp_path / "aee_exp" / "db.01"
+    subdir.mkdir(parents=True)
+    rec._handle_new_entry(_payload(subdir))
+
+    # 未复用：runtime 走正常新建 + emit 路径
+    assert len(emitter.enqueued) == 1
+    runtime_book = _intents(store)
+    assert runtime_book[_LINE]["seq_no"] != 9
+    assert runtime_book[_LINE]["done"] is True
