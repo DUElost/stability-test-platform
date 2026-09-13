@@ -35,7 +35,7 @@ def test_discover_devices_success(adb_path: str, completed_process_factory):
         devices = device_module.discover_devices(adb_path)
 
     assert devices == [
-        {"serial": "SERIAL-1", "adb_state": "device", "model": "Pixel_7"},
+        {"serial": "SERIAL-1", "adb_state": "device", "model": "PIXEL_7"},
         {"serial": "SERIAL-2", "adb_state": "unauthorized", "model": None},
         {"serial": "SERIAL-3", "adb_state": "device", "model": None},
     ]
@@ -45,6 +45,26 @@ def test_discover_devices_success(adb_path: str, completed_process_factory):
         text=True,
         timeout=10,
     )
+
+
+def test_discover_devices_normalizes_model_case(adb_path: str, completed_process_factory):
+    """#704：同型号两种大小写并存时，采集端归一为大写。
+
+    #644 契约（读端归一匹配 + 成员行写设备事实原值）以「同型号原值唯一」
+    为前提；归一后原值=归一值，Device.model == match_value 全等 join 不会
+    因大小写并存 miss。
+    """
+    stdout = (
+        "List of devices attached\n"
+        "SERIAL-A device product:foo model:Infinix_X1102D transport_id:1\n"
+        "SERIAL-B device product:foo model:infinix_x1102d transport_id:2\n"
+    )
+    cp = completed_process_factory(stdout=stdout)
+
+    with patch.object(device_module.subprocess, "run", return_value=cp):
+        devices = device_module.discover_devices(adb_path)
+
+    assert [d["model"] for d in devices] == ["INFINIX_X1102D", "INFINIX_X1102D"]
 
 
 def test_discover_devices_returns_empty_on_exception(adb_path: str):

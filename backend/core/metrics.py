@@ -340,6 +340,15 @@ plan_run_aggregation_failed_total = Counter(
     'PlanRun aggregation failures swallowed by recycler',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #77：counter_reconciler 对账发现并修复的计数器漂移（每漂移列一条）。
+# 理论漂移率 = 0（所有终态入口都经 terminalization 集中服务）；> 0 即说明
+# 有入口绕开集中服务或出现并发 race，SLO 守卫见 ADR-0026 §6。
+plan_run_counter_drift_total = Counter(
+    'stability_plan_run_counter_drift_total',
+    'PlanRun terminalization counter drift repaired per drifted column',
+    ['plan_run_id', 'mode'],  # mode: total | terminal | completed | failed | aborted
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # #703：abort 持锁时长 + DB 连接池占用（QueuePool 耗尽观测）
 plan_run_abort_lock_seconds = Histogram(
     'stability_plan_run_abort_lock_seconds',
@@ -786,6 +795,30 @@ def record_plan_run_abort_lock_seconds(seconds: float, phase: str):
     if value < 0:
         return
     plan_run_abort_lock_seconds.labels(phase=(phase or "unknown")[:32]).observe(value)
+
+
+# 漂移列白名单（ADR-0026 §6 五计数器；未知列名不得进入 label 值域）
+_PLAN_RUN_COUNTER_MODES = ("total", "terminal", "completed", "failed", "aborted")
+
+
+def record_plan_run_counter_drift(plan_run_id: int, modes: "list[str] | tuple[str, ...]"):
+    """#77：记录 counter_reconciler 修复的计数器漂移（每漂移列一条）。
+
+    ``modes`` 为漂移列短名（total/terminal/completed/failed/aborted）；
+    非白名单值过滤掉——防未来新增列悄然扩 label 值域。
+    """
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        run_label = str(int(plan_run_id))
+    except (TypeError, ValueError):
+        return
+    for mode in modes or ():
+        if mode not in _PLAN_RUN_COUNTER_MODES:
+            continue
+        plan_run_counter_drift_total.labels(
+            plan_run_id=run_label, mode=mode,
+        ).inc()
 
 
 def record_db_pool_status(engine_label: str, *, checked_out: int, overflow: int):

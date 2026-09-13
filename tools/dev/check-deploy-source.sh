@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 部署源守卫：生产部署动作（migration / restart / hot-update）前执行，校验
-# 生产工作树确实在 main 且无未提交改动——防止把分支代码推上生产。
+# 生产工作树确实在 main、tracked 工作区干净，且 alembic_version 与代码 head
+# 一致——防止把分支代码或超前 schema 推上生产。
 #
 # 背景：systemd WorkingDirectory 即共享 git 工作树（本机=仓库根），谁切了分支、
 # 谁重启，谁就把那个分支推上生产（曾实测生产跑在 ci/serial-automerge-update-branch）。
@@ -45,4 +46,16 @@ if [ -n "$untracked" ]; then
     echo "$untracked" | sed 's/^?? /  /' >&2
 fi
 
-echo "check-deploy-source: OK —— 工作树在 main，tracked 工作区干净"
+PYTHON="${REPO_ROOT}/venv/bin/python"
+if [ ! -x "$PYTHON" ]; then
+    PYTHON="${REPO_ROOT}/.venv/bin/python"
+fi
+if [ ! -x "$PYTHON" ]; then
+    PYTHON="python3"
+fi
+if ! "$PYTHON" "$REPO_ROOT/tools/dev/check_alembic_at_head.py"; then
+    echo "check-deploy-source: FAIL —— alembic schema 未对齐代码 head（见上方输出）" >&2
+    exit 1
+fi
+
+echo "check-deploy-source: OK —— 工作树在 main，tracked 工作区干净，schema 已对齐 head"

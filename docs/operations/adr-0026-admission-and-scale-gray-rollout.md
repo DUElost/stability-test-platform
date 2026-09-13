@@ -233,3 +233,23 @@ STP_AGENT_SID_REGISTRY=0
 - B1 单独通过时，结论必须同时写明 B2 未通过；**不得**简写为「host 阶梯已通过」
 - 只有 B1 与 B2 同时成立才可宣称 host-scale 整体验收通过
 - B1 观测窗内**禁止 Agent 热更新**：`AGENT_DIR` 不随 `AGENT_INSTALL_DIR` 变，多实例共享同一份代码，热更新会互相踩
+
+---
+
+## 6.2 计数器漂移监控（#77，2026-09-13 接入）
+
+ADR-0026 §6 规定「所有 Job 终态入口必须经集中 terminalization 服务」——理论漂移率 = 0；
+`counter_reconciler` 的对账 sweep 是预防性修正，不是堵现存漏洞。为守住该契约，
+漂移事件已接入可观测面：
+
+| 面 | 内容 |
+|----|------|
+| 指标 | `stability_plan_run_counter_drift_total{plan_run_id, mode}`——`counter_reconciler` 修复漂移时经 `recount_plan_run_counters` 按**漂移列**打点（mode = `total`/`terminal`/`completed`/`failed`/`aborted`） |
+| 告警 | `StabilityPlanRunCounterDrift`（severity=warning）：`increase(stability_plan_run_counter_drift_total[1h]) > 0`，`for: 5m` |
+| 面板 | Grafana `PlanRun Terminalization → Counter Drift (rate/5m) by mode` |
+| SLO | 漂移率 P99 < 0.1%；> 1% 需升级为 pager 级。**当前无 pager 规则**——需要 per-job 终态量作为分母指标，待补（见 #77 评论留痕） |
+
+**处置口径**：告警触发即说明存在绕开集中 terminalization 的终态入口，或并发 race
+丢失了一次计数更新；先查最近新增/改动的终态路径（`agent_api /complete`、reaper、
+watchdog、lease reconciler），再核对 `counter_reconciler` 日志中的
+`plan_run_counter_drift plan_run=N before=… after=…` 定位漂移列。
