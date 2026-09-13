@@ -90,6 +90,62 @@ def test_worker_started_reset_on_normal_drain():
     assert ScanRunner._worker_started is False
 
 
+def test_enqueue_during_drain_exit_does_not_orphan_job(monkeypatch):
+    """#1706：排空路径 unlock→return 窗口内 enqueue 不得孤立 pending job。"""
+    monkeypatch.setattr(ScanRunner, "_any_scan_runner_configured", classmethod(lambda cls: True))
+    processed: list[int] = []
+    monkeypatch.setattr(
+        ScanRunner,
+        "_execute_job",
+        classmethod(lambda cls, job: processed.append(job.plan_run_id)),
+    )
+
+    before_return = threading.Event()
+    allow_return = threading.Event()
+
+    @classmethod
+    def worker_loop_hook(cls):
+        try:
+            while True:
+                job = cls._dequeue_next()
+                if job is None:
+                    with cls._worker_lock:
+                        with cls._queue_lock:
+                            if cls._pending:
+                                continue
+                            cls._worker_started = False
+                    before_return.set()
+                    allow_return.wait(timeout=2)
+                    return
+                try:
+                    cls._execute_job(job)
+                except Exception:
+                    pass
+        finally:
+            with cls._worker_lock:
+                cls._worker_started = False
+
+    monkeypatch.setattr(ScanRunner, "_worker_loop", worker_loop_hook)
+
+    ScanRunner._worker_started = True
+    t = threading.Thread(target=ScanRunner._worker_loop, daemon=True)
+    t.start()
+    before_return.wait(timeout=2)
+
+    ScanRunner._pending[42] = _job(42)
+    ScanRunner._ensure_worker()
+    allow_return.set()
+    t.join(timeout=5)
+
+    for _ in range(100):
+        if 42 in processed:
+            break
+        threading.Event().wait(0.05)
+
+    assert 42 in processed, "enqueue 在排空复位后必须启动 worker 并处理 job（#1706）"
+    assert ScanRunner.pending_count() == 0
+
+
 def test_ensure_worker_restarts_after_guard_reset(monkeypatch):
     """复位后可重新拉起 worker——证明「永久停摆」被解除。"""
     monkeypatch.setattr(ScanRunner, "_any_scan_runner_configured", classmethod(lambda cls: True))

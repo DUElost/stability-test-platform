@@ -193,6 +193,10 @@ class ScanRunner:
                         with cls._queue_lock:
                             if cls._pending:
                                 continue
+                            # #1706：排空路径在释放锁前复位 _worker_started，避免
+                            # unlock→return→finally 窗口内 enqueue 时 _ensure_worker
+                            # 误判 worker 仍存活而跳过启动，pending job 被孤立。
+                            cls._worker_started = False
                     return
                 if not cls._any_scan_runner_configured():
                     # P2-2b / #1071：启动窗口内 scan_now 入队等待 configure；
