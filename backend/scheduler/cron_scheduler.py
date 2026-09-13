@@ -259,6 +259,77 @@ def purge_run_storage_dirs(run_ids: list) -> set:
     return failed
 
 
+def _retention_candidate_ids(db, cutoff: datetime, limit: int = 100) -> list[int]:
+    """Bounded leaf-first batch; references are filtered before each LIMIT."""
+    from sqlalchemy.orm import aliased
+
+    from backend.models.plan_run import PlanRun
+
+    dependent = aliased(PlanRun)
+    selected_ids: list[int] = []
+    while len(selected_ids) < limit:
+        referenced = db.query(dependent.id).filter(
+            dependent.id != PlanRun.id,
+            dependent.id.notin_(selected_ids),
+            or_(
+                dependent.parent_plan_run_id == PlanRun.id,
+                dependent.root_plan_run_id == PlanRun.id,
+            ),
+        ).exists()
+        frontier = (
+            db.query(PlanRun.id)
+            .filter(
+                PlanRun.status.in_(["SUCCESS", "FAILED", "PARTIAL_SUCCESS"]),
+                PlanRun.started_at < cutoff,
+                PlanRun.id.notin_(selected_ids),
+                ~referenced,
+            )
+            .order_by(PlanRun.started_at, PlanRun.id)
+            .limit(limit - len(selected_ids))
+            .with_for_update(skip_locked=True)
+            .all()
+        )
+        if not frontier:
+            break
+        selected_ids.extend(run_id for (run_id,) in frontier)
+    return selected_ids
+
+
+def _retention_safe_ids(db, run_ids: list[int]) -> tuple[list[int], set[int]]:
+    """Preserve outside references and their ancestors, including deferred purges."""
+    from backend.models.plan_run import PlanRun
+
+    run_id_set = set(run_ids)
+    if not run_id_set:
+        return [], set()
+    ref_rows = (
+        db.query(PlanRun.parent_plan_run_id, PlanRun.root_plan_run_id)
+        .filter(
+            or_(
+                PlanRun.parent_plan_run_id.in_(run_id_set),
+                PlanRun.root_plan_run_id.in_(run_id_set),
+            ),
+            ~PlanRun.id.in_(run_id_set),
+        )
+        .all()
+    )
+    keep = {reference for refs in ref_rows for reference in refs if reference in run_id_set}
+    if keep:
+        chain = (
+            db.query(PlanRun.id, PlanRun.parent_plan_run_id, PlanRun.root_plan_run_id)
+            .filter(PlanRun.id.in_(run_id_set))
+            .all()
+        )
+        ancestors = {run_id: (parent_id, root_id) for run_id, parent_id, root_id in chain}
+        pending = list(keep)
+        while pending:
+            for ancestor in ancestors.get(pending.pop(), (None, None)):
+                if ancestor in run_id_set and ancestor not in keep:
+                    keep.add(ancestor)
+                    pending.append(ancestor)
+    return sorted(run_id_set - keep), keep
+
+
 def run_retention_cleanup() -> None:
     """Delete completed PlanRuns older than PLAN_RUN_RETENTION_DAYS (ADR-0020).
 
@@ -275,65 +346,11 @@ def run_retention_cleanup() -> None:
 
     with SessionLocal() as db:
         try:
-            stale_runs = (
-                db.query(PlanRun)
-                .filter(
-                    PlanRun.status.in_(["SUCCESS", "FAILED", "PARTIAL_SUCCESS"]),
-                    PlanRun.started_at < cutoff,
-                )
-                .limit(100)
-                .all()
-            )
-            if not stale_runs:
+            run_ids = _retention_candidate_ids(db, cutoff)
+            if not run_ids:
                 return
 
-            run_ids = [r.id for r in stale_runs]
-            run_id_set = set(run_ids)
-
-            # #936: parent/root 自引用 FK 无删除级联——本批内 Run 若仍被「不在
-            # 本批」的 Run（未到期 / 仍在运行）经 parent/root 引用，直接批删
-            # 违反 FK、整批回滚（且每轮必然重选同批，僵尸积压）。计算保留集：
-            # 外部引用者指向的批内 id 入集，再沿祖先链传播（保留 R 则其
-            # parent/root 若在批内同样保留），只删无引用叶子。
-            keep: set = set()
-            ref_rows = (
-                db.query(
-                    PlanRun.parent_plan_run_id, PlanRun.root_plan_run_id
-                )
-                .filter(
-                    or_(
-                        PlanRun.parent_plan_run_id.in_(run_id_set),
-                        PlanRun.root_plan_run_id.in_(run_id_set),
-                    ),
-                    ~PlanRun.id.in_(run_id_set),
-                )
-                .all()
-            )
-            for parent_ref, root_ref in ref_rows:
-                if parent_ref in run_id_set:
-                    keep.add(parent_ref)
-                if root_ref in run_id_set:
-                    keep.add(root_ref)
-            if keep:
-                chain = (
-                    db.query(
-                        PlanRun.id,
-                        PlanRun.parent_plan_run_id,
-                        PlanRun.root_plan_run_id,
-                    )
-                    .filter(PlanRun.id.in_(run_id_set))
-                    .all()
-                )
-                ancestors = {rid: (p, q) for rid, p, q in chain}
-                changed = True
-                while changed:
-                    changed = False
-                    for rid in list(keep):
-                        for anc in ancestors.get(rid, (None, None)):
-                            if anc in run_id_set and anc not in keep:
-                                keep.add(anc)
-                                changed = True
-            safe_run_ids = sorted(run_id_set - keep)
+            safe_run_ids, keep = _retention_safe_ids(db, run_ids)
             if not safe_run_ids:
                 logger.info(
                     "retention_cleanup skipped: all %d candidates chain-referenced",
@@ -347,13 +364,14 @@ def run_retention_cleanup() -> None:
             # 下轮重试（先文件后行，失败可自愈）。
             purge_failed = purge_run_storage_dirs(safe_run_ids)
             if purge_failed:
-                safe_run_ids = [
-                    rid for rid in safe_run_ids if rid not in purge_failed
-                ]
+                safe_run_ids, deferred_ancestors = _retention_safe_ids(
+                    db, [run_id for run_id in safe_run_ids if run_id not in purge_failed],
+                )
+                keep.update(deferred_ancestors)
                 if not safe_run_ids:
                     logger.warning(
-                        "retention_cleanup deferred: all %d candidates have "
-                        "unpurged NFS dirs", len(purge_failed),
+                        "retention_cleanup deferred: NFS failures=%d kept_ancestors=%d",
+                        len(purge_failed), len(deferred_ancestors),
                     )
                     return
 

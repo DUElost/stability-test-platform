@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.models.audit import AuditLog
 from backend.models.plan_run import PlanRun
 
 
@@ -75,37 +76,38 @@ def test_retry_dispatch_returns_run_to_admission_queue(
     assert failed_precheck_run.result_summary is None
 
 
-def test_retry_dispatch_requires_auth(client, failed_precheck_run):
-    resp = client.post(f"/api/v1/plan-runs/{failed_precheck_run.id}/retry-dispatch")
-    assert resp.status_code == 401
-
-
-def test_retry_dispatch_audit_records_user_id(
-    client, auth_headers, test_user, db_session, failed_precheck_run, sample_device,
+def test_retry_dispatch_records_audit_user_id(
+    client, auth_headers, db_session, failed_precheck_run, sample_device, test_user,
 ):
-    """#1829：REST 路径的 retry-dispatch 审计必须带 user_id（与 AI 路径同口径）。"""
-    from backend.models.audit import AuditLog
-
+    """Retry-dispatch audit row records the authenticated user id."""
+    run_id = failed_precheck_run.id
     failed_precheck_run.run_context["dispatch_device_ids"] = [sample_device.id]
     flag_modified(failed_precheck_run, "run_context")
     db_session.commit()
 
-    resp = client.post(
-        f"/api/v1/plan-runs/{failed_precheck_run.id}/retry-dispatch",
-        headers=auth_headers,
-    )
+    with patch("backend.tasks.saq_worker.enqueue_sync"):
+        resp = client.post(
+            f"/api/v1/plan-runs/{run_id}/retry-dispatch",
+            headers=auth_headers,
+        )
+
     assert resp.status_code == 200
 
-    row = (
+    audit = (
         db_session.query(AuditLog)
         .filter(
             AuditLog.action == "plan_dispatch_retry_requested",
-            AuditLog.resource_id == str(failed_precheck_run.id),
+            AuditLog.resource_id == str(run_id),
         )
         .first()
     )
-    assert row is not None
-    assert row.user_id == test_user.id
+    assert audit is not None
+    assert audit.user_id == test_user.id
+
+
+def test_retry_dispatch_requires_auth(client, failed_precheck_run):
+    resp = client.post(f"/api/v1/plan-runs/{failed_precheck_run.id}/retry-dispatch")
+    assert resp.status_code == 401
 
 
 def test_retry_dispatch_refreshes_watcher_admin_snapshot_for_new_dispatch(
