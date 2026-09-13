@@ -59,6 +59,8 @@ export default function ProjectsPage() {
   const sessionQ = useAuthSession();
   const isAdmin = sessionQ.data?.role === 'admin';
   const [facetFilters, setFacetFilters] = useState<Partial<Record<FacetField, string>>>({});
+  // #709：默认只列 ACTIVE 项目；ARCHIVED/全部 作为复查入口显式切换。
+  const [statusFilter, setStatusFilter] = useState<'ACTIVE' | 'ARCHIVED' | 'ALL'>('ACTIVE');
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
@@ -169,10 +171,12 @@ export default function ProjectsPage() {
 
   const filtered = useMemo(() => {
     if (!projects) return [];
-    return projects.filter((p) =>
-      FACET_FIELDS.every((f) => !facetFilters[f] || facetMatches(p, f, facetFilters[f])),
+    return projects.filter(
+      (p) =>
+        (statusFilter === 'ALL' || p.status === statusFilter) &&
+        FACET_FIELDS.every((f) => !facetFilters[f] || facetMatches(p, f, facetFilters[f])),
     );
-  }, [projects, facetFilters]);
+  }, [projects, facetFilters, statusFilter]);
 
   const activeFacetCount = Object.values(facetFilters).filter(Boolean).length;
 
@@ -249,6 +253,31 @@ export default function ProjectsPage() {
               新建项目
             </Button>
           ) : null}
+        </div>
+
+        {/* #709：生命周期筛选，默认 ACTIVE；归档项目经此复查/解档 */}
+        <div
+          role="group"
+          aria-label="生命周期筛选"
+          className="flex flex-wrap items-center gap-1.5"
+        >
+          <span className={cn('mr-0.5 text-xs', TEXT.subtitle)}>生命周期</span>
+          {([
+            ['ACTIVE', '在用'],
+            ['ARCHIVED', '已归档'],
+            ['ALL', '全部'],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              data-testid={`status-${value}`}
+              aria-pressed={statusFilter === value}
+              onClick={() => setStatusFilter(value)}
+              className={facetChipClass(statusFilter === value)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
         {/* facet 筛选：chip 单选（点选中值过滤，选「全部」恢复） */}

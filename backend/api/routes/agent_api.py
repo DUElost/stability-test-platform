@@ -57,6 +57,7 @@ from backend.services.host_upgrade_gate import (
     HostAbortPendingError,
     HostHasActiveJobsError,
     HostNotFoundError,
+    HostRetiredError,
     begin_host_upgrade,
     end_host_upgrade,
 )
@@ -403,6 +404,20 @@ async def _claim_jobs_for_host(
     if not host_row:
         return [], {}  # host not found, no lock acquired — safe early return
     if host_row.status != HostStatus.ONLINE.value:
+        await db.rollback()
+        return [], {}
+    # #1805 ④（claim 切片）：退役主机（`retired_at IS NOT NULL`）不认领——与派发侧
+    # `_FATAL_DISPATCH_REASONS` 的 `host_retired` 同一判据（ADR-0038 D2/D5bis）。
+    #
+    # 为什么**显式**判 `retired_at` 而不依赖上面的 status 检查：退役**不改写 status**
+    # （D1，status 归心跳所有），故退役主机仍可能是 ONLINE——只靠 status 会漏判。
+    # 而若退役主机恰好离线，status 分支又会先短路，使「因退役而跳过」这一可区分信号
+    # 落不下来（对照 `claim_skipped_host_maintenance` 的先例）。
+    #
+    # 活读 `retired_at`（不缓存）：退役可发生在准入与认领之间，认领侧必须看到最新值，
+    # 否则「检查完 → 退役 → 认领」窗口内仍会派作业给退役机。
+    if host_row.retired_at is not None:
+        logger.info("claim_skipped_host_retired host=%s", host_id)
         await db.rollback()
         return [], {}
     # #960：主机在维护窗口内（热更新上传/重启中）不认领 —— 与派发侧同一判据，
@@ -3269,6 +3284,18 @@ def _raise_upgrade_gate_http(host_id: str, exc: Exception) -> None:
                     "Retry with abort_running_jobs=true to abort then upgrade."
                 ),
                 "active_jobs": exc.active_jobs,
+            },
+        ) from None
+    if isinstance(exc, HostRetiredError):
+        # ADR-0038 D5：退役主机拒绝执行/配置类动作（升级门禁同族）
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HOST_RETIRED",
+                "message": (
+                    f"Host {host_id} is retired; unretire it before upgrade "
+                    "(ADR-0038 D5)."
+                ),
             },
         ) from None
     if isinstance(exc, HostAbortDrainTimeoutError):
