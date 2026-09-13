@@ -89,7 +89,14 @@ export default function AuditLogPage() {
   const total = data?.total ?? 0;
 
   return (
-    <PageContainer width="content" scrollable={false} className={cn(LAYOUT.pageGap, 'min-h-0')}>
+    // #750：scrollable={false} 只是不让页面充当主滚动容器（筛选/分页固定、表格内滚）；
+    // 但外层必须保留溢出兜底——窄屏（如 1024×600）下页头+筛选行折行后可能高于视口，
+    // 此时表格区会被 flex 压到 0 高，且 AppShell main 为 overflow-hidden，无兜底则整页不可达。
+    <PageContainer
+      width="content"
+      scrollable={false}
+      className={cn(LAYOUT.pageGap, 'min-h-0 overflow-auto')}
+    >
       <PageHeader title="操作日志" subtitle="查看系统操作审计记录（仅管理员）" />
 
       {/* Filters */}
@@ -165,7 +172,9 @@ export default function AuditLogPage() {
         />
       ) : (
         <>
-          <div className={cn(PANEL.root, 'min-h-0 flex-1 overflow-auto')}>
+          {/* #750：min-h-[240px] 兜住塌缩（原先 min-h-0 允许被压到 0 高），
+              与 PageContainer 的 overflow-auto 配合保证表格与分页始终可达。 */}
+          <div className={cn(PANEL.root, 'min-h-[240px] flex-1 overflow-auto')}>
             <Table className="min-w-[640px]">
               <TableHeader>
                 <TableRow className="border-b border-border bg-muted/50">
