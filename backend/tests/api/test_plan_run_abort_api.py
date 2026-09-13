@@ -614,13 +614,16 @@ def test_abort_control_emit_scoped_per_host(db_session, abort_chain):
 
     emitted: dict[str, list[int]] = {}
 
-    def _capture_emit(_event, payload, *, namespace, room):
-        if payload.get("command") == "abort":
-            emitted[room] = list(payload["payload"]["job_ids"])
+    def _capture_fanout(items, *, yield_every=8):
+        for host_id, payload in items:
+            if payload.get("command") == "abort":
+                emitted[f"agent:{host_id}"] = list(payload["payload"]["job_ids"])
 
     with patch(
+        "backend.services.plan_run_abort.schedule_agent_control_fanout",
+        side_effect=_capture_fanout,
+    ), patch(
         "backend.services.plan_run_abort.schedule_emit",
-        side_effect=_capture_emit,
     ), patch(
         "backend.services.plan_run_abort.should_trigger_dedup",
         return_value=False,
