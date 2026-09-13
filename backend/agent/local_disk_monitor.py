@@ -46,6 +46,37 @@ def _parse_spill_catchup_interval(default: float = 30.0) -> float:
     return value
 
 
+def _parse_positive_int_env(name: str, default: int) -> int:
+    """Import-safe positive int env (#741 critical batch / #1710 pattern)."""
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("invalid %s=%r; using default %d", name, raw, default)
+        return default
+    if value <= 0:
+        logger.warning("non-positive %s=%r; using default %d", name, raw, default)
+        return default
+    return value
+
+
+def _parse_pct_env(name: str, default: float) -> float:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("invalid %s=%r; using default %.1f", name, raw, default)
+        return default
+    if not math.isfinite(value) or not 0.0 <= value <= 100.0:
+        logger.warning("out-of-range %s=%r; using default %.1f", name, raw, default)
+        return default
+    return value
+
+
 class HddSpillMonitor:
     """进程级单例；由 Agent main.py configure + start。"""
 
@@ -57,6 +88,12 @@ class HddSpillMonitor:
     # （#1522：原实现 20/300s 的净速率 4 目录/分钟，积压超过该速率时水位
     # 无回落路径）。
     _MAX_SPILL_PER_CYCLE = 20
+    # #741：临界水位放大单批预算——追打已覆盖常态积压；≥98% 时单轮 20
+    # 仍可能来不及在下一 catch-up 前把水位拉离「进程被 OOM/写失败」边缘。
+    _CRITICAL_USAGE_PCT = _parse_pct_env("STP_HDD_SPILL_CRITICAL_PCT", 98.0)
+    _MAX_SPILL_CRITICAL = _parse_positive_int_env(
+        "STP_HDD_SPILL_CRITICAL_BATCH", 100,
+    )
     # 追打间隔（秒）：本轮有腾退产出但水位仍高于 target 时，下一轮不等满
     # interval。0 或负值回退 interval（禁用追打的逃生阀）。
     _SPILL_CATCHUP_INTERVAL = _parse_spill_catchup_interval()
@@ -173,6 +210,12 @@ class HddSpillMonitor:
             return self._SPILL_CATCHUP_INTERVAL
         return self._interval
 
+    def _spill_budget(self, usage_pct: float) -> int:
+        """#741: 临界水位放大单批；常态仍用写放大节流上限。"""
+        if usage_pct >= self._CRITICAL_USAGE_PCT:
+            return max(self._MAX_SPILL_PER_CYCLE, self._MAX_SPILL_CRITICAL)
+        return self._MAX_SPILL_PER_CYCLE
+
     def check_once(self) -> int:
         """检查 HDD 水位；超阈则经 EventUploader enqueue 最旧 LOCAL 事件。返回 enqueue 数。"""
         if not self._configured or not self._cifs_root:
@@ -189,16 +232,17 @@ class HddSpillMonitor:
             return 0
         if usage_pct < self._threshold_pct:
             return 0
+        budget = self._spill_budget(usage_pct)
         logger.warning(
-            "hdd_high_usage usage=%.1f%% threshold=%.1f%% → 触发溢出上送",
-            usage_pct, self._threshold_pct,
+            "hdd_high_usage usage=%.1f%% threshold=%.1f%% budget=%d → 触发溢出上送",
+            usage_pct, self._threshold_pct, budget,
         )
         self._spill_enqueued_ids.clear()
         spilled = 0
-        # #1522: 用尽单批上限仍未回落到 target → 追打（缩短下一轮等待），
-        # 单批 20 的写放大节流保持不变。
+        # #1522: 用尽单批上限仍未回落到 target → 追打（缩短下一轮等待）。
+        # #741: 临界水位用更大 budget，常态仍 20。
         need_catchup = False
-        for _ in range(self._MAX_SPILL_PER_CYCLE):
+        for _ in range(budget):
             n = self._spill_oldest_event_dir()
             if n == 0:
                 post_usage = self._current_usage_pct()
@@ -214,8 +258,8 @@ class HddSpillMonitor:
         else:
             need_catchup = True
             logger.warning(
-                "hdd_spill_batch_cap_reached dirs=%d — catch-up scheduled",
-                spilled,
+                "hdd_spill_batch_cap_reached dirs=%d budget=%d — catch-up scheduled",
+                spilled, budget,
             )
         self._catchup_needed = need_catchup
         if spilled:
