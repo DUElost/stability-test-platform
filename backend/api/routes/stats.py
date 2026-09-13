@@ -244,12 +244,15 @@ def get_file_server_overview(
     """
     fresh_seconds = max(30, int(os.getenv("STP_FILE_SERVER_AGENT_FRESH_SECONDS", "180")))
     active_since = datetime.now(timezone.utc) - timedelta(seconds=fresh_seconds)
+    # ADR-0038 D5：file-server 的「活跃 Agent」口径 = 在线且未退役——
+    # 退役主机即使 Agent 仍在心跳也不计入挂载合规统计。
     active_hosts = (
         db.query(Host)
         .filter(
             Host.status == "ONLINE",
             Host.last_heartbeat.isnot(None),
             Host.last_heartbeat >= active_since,
+            Host.retired_at.is_(None),
         )
         .all()
     )
@@ -266,9 +269,12 @@ def get_dashboard_summary(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
+    # ADR-0038 D5：仪表板「在线容量」口径排除退役主机（退役 = 不再是容量）。
+    # 原始 SQL 直接过滤，避免把退役主机的 status/资源点算进分布与均值。
     hosts = db.execute(text("""
         SELECT status, extra, ip
         FROM host
+        WHERE retired_at IS NULL
     """)).fetchall()
     devices = db.execute(text("""
         SELECT status, battery_level, temperature
@@ -430,6 +436,10 @@ def get_host_failure_rate(
     since = datetime.now(timezone.utc) - timedelta(days=days)
     params = {"since": since}
 
+    # ADR-0038 D5（裁决 D-5）：本口径**刻意不排除退役主机**——它是「历史
+    # 失败率」KPI，退役前的执行历史仍然属于该主机的运维事实；退役只是
+    # 「不再派发」，不是「抹掉历史」。与上面 file-server / dashboard 的
+    # 「当前容量」口径差异是有意为之（列表/容量排除，历史统计保留）。
     stmt = text("""
         SELECT h.id, h.hostname, h.ip_address,
                COUNT(*) AS total_jobs,
