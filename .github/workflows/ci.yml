@@ -196,8 +196,11 @@ jobs:
       # 2026-07-31 生产事故就是 ef8808e 的 `ruff --fix` 原地改写了这些目录,
       # 导致 18/27 行 script 的 DB sha 与磁盘永久对不上、全平台派发中断。
       # ruff.toml 已把该目录加进 extend-exclude,这条是兜底(手改同样拦)。
+      # 检查器自身由 --self-test 红绿双向守护（PLATFORM_AUDIT_2026-09-11 §七 #10）；
+      # 与治理面/分层门禁同模式：自证与真实检查同 step，防分类规则回归。
       - name: 脚本版本不可变检查(ADR-0020)
         run: |
+          python tools/dev/check-script-version-immutability.py --self-test
           python tools/dev/check-script-version-immutability.py \
             --base "origin/${{ github.base_ref || github.ref_name }}"
 

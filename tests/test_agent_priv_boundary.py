@@ -43,8 +43,8 @@ def test_wrapper_is_standalone_system_python_script():
     # 只能是 stdlib：部署环境不保证 venv/三方包，root 执行面越小越好
     imports = re.findall(r"^(?:import|from)\s+([a-zA-Z_][\w.]*)", text, re.MULTILINE)
     allowed_roots = {
-        "argparse", "base64", "json", "os", "re", "shutil", "stat",
-        "subprocess", "sys", "tempfile",
+        "argparse", "base64", "contextlib", "grp", "json", "os", "pwd", "re", "shutil", "stat",
+        "subprocess", "sys", "uuid",
     }
     assert {name.split(".")[0] for name in imports} <= allowed_roots
 
@@ -67,8 +67,9 @@ def test_wrapper_fixed_policy_flags():
     assert '"--delete-excluded"' in text
     assert "--filter=protect %s" in text
     assert "resources/mtbf/" in text
-    # 属主回收必须 -h，防止代码树内 symlink 把 root chown 引到目录外
-    assert '"chown", "-R", "-h"' in text
+    assert "os.fwalk(" in text
+    assert "follow_symlinks=False" in text
+    assert "os.O_NOFOLLOW" in text
     # 不提供任意目标路径参数（固定 INSTALL_DIR）
     assert "--dest" not in text
 
@@ -177,7 +178,7 @@ def test_install_dir_guard_rejects_system_directories():
 
     for bad in (
         "/etc", "/", "/usr", "/usr/local", "/usr/local/sbin", "/var",
-        "/boot", "/home", "/root", "/etc/sudoers.d",
+        "/boot", "/home", "/root", "/etc/sudoers.d", "/opt/../etc", "//etc",
     ):
         try:
             module._validate_install_dir(bad)

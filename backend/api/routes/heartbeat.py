@@ -233,12 +233,28 @@ def _process_heartbeat_with_db(
         payload.script_catalog_version != compute_script_catalog_version(db)
     )
 
+    prev_status = host.status
     host.status = payload.status
     now = datetime.now(timezone.utc)
     host.last_heartbeat = now
     host.mount_status = payload.mount_status
     if payload.script_catalog_version:
         host.script_catalog_version = payload.script_catalog_version
+
+    # ADR-0038 D4：退役主机心跳——**如实记录**（上面的 status / last_heartbeat /
+    # 版本 / 身份照常更新，本函数从不触碰 retired_at = 不自动解除退役），
+    # 但只发**一次**「已退役但仍在心跳」告警（去重判据与轻量心跳共用）。
+    from backend.services.host_retirement import (
+        retired_heartbeat_context,
+        should_alert_retired_heartbeat,
+    )
+
+    if should_alert_retired_heartbeat(host, prev_status=prev_status, now=now):
+        from backend.services.notification_service import dispatch_notification_async
+
+        dispatch_notification_async(
+            "HOST_RETIRED_HEARTBEAT", retired_heartbeat_context(host),
+        )
 
     # ADR-0019 Phase 3a: store agent identity on host
     if payload.boot_id:
