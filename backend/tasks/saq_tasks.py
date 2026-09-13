@@ -330,38 +330,47 @@ async def plan_admission_task(ctx: dict, *, plan_run_id: int, attempt_id: str) -
 
 
 def _query_hosts_for_scan(
-    plan_run_id: int, is_final: bool = False,
-) -> tuple[list[tuple[str, dict]], list[str]]:
+    plan_run_id: int, is_final: bool = False, allow_retired: bool = False,
+) -> tuple[list[tuple[str, dict]], list[str], list[str]]:
     """同步查询 scan_task 所需的 host + scan_now payload，由 asyncio.to_thread 调用。
 
     下发对象是本 PlanRun 涉及的全部 host；每台收到同一份跨主机设备名单。
+    ADR-0038 D5：退役主机仅在显式 admin 触发（``allow_retired=True``，由手动路由
+    透传）时进入目标；否则计入 ``skipped_retired`` 如实返回，不静默丢弃。
     """
     from backend.core.database import SessionLocal
     from backend.services.plan_run_scan_scope import (
         build_scan_now_payload,
+        classify_recycle_targets,
         iter_plan_run_scan_hosts,
     )
 
     db = SessionLocal()
     try:
-        triggered: list[tuple[str, dict]] = []
-        skipped: list[str] = []
-        for host_id, host_status in iter_plan_run_scan_hosts(db, plan_run_id):
-            if host_status == "ONLINE":
-                triggered.append((
-                    host_id,
-                    build_scan_now_payload(
-                        db, plan_run_id, host_id, is_final=is_final,
-                    ),
-                ))
-            else:
-                skipped.append(host_id)
-        return triggered, skipped
+        host_rows = iter_plan_run_scan_hosts(db, plan_run_id)
+        targets, skipped_offline_rows, skipped_retired_rows = classify_recycle_targets(
+            host_rows, allow_retired=allow_retired,
+        )
+        triggered = [
+            (
+                host_id,
+                build_scan_now_payload(db, plan_run_id, host_id, is_final=is_final),
+            )
+            for host_id in targets
+        ]
+        return (
+            triggered,
+            [row["host_id"] for row in skipped_offline_rows],
+            [row["host_id"] for row in skipped_retired_rows],
+        )
     finally:
         db.close()
 
 
-async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> None:
+async def scan_task(
+    ctx: dict, *, plan_run_id: int, is_final: bool = False,
+    allow_retired: bool = False,
+) -> None:
     """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 scan_now → 轮询 NFS → 注册 DB → enqueue upload_task → enqueue merge_task。
 
     1. emit scan_now to each ONLINE agent
@@ -380,8 +389,8 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
     scan_round_id = round_started_at.isoformat()
 
     try:
-        triggered_rows, skipped = await asyncio.to_thread(
-            _query_hosts_for_scan, plan_run_id, is_final,
+        triggered_rows, skipped, skipped_retired = await asyncio.to_thread(
+            _query_hosts_for_scan, plan_run_id, is_final, allow_retired,
         )
         triggered = [host_id for host_id, _payload in triggered_rows]
         not_acked: list[str] = []
@@ -391,8 +400,10 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
                 not_acked.append(host_id)
 
         logger.info(
-            "saq_scan_dispatched plan_run=%d triggered=%d skipped=%d not_acked=%d",
-            plan_run_id, len(triggered), len(skipped), len(not_acked),
+            "saq_scan_dispatched plan_run=%d triggered=%d skipped=%d "
+            "skipped_retired=%d not_acked=%d",
+            plan_run_id, len(triggered), len(skipped),
+            len(skipped_retired), len(not_acked),
         )
         if not_acked:
             logger.warning(
