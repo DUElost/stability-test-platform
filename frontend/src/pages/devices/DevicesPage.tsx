@@ -7,7 +7,6 @@ import { ExpandableDeviceTable, type DeviceTableData, type DeviceStatus } from '
 import DeviceBulkActionBar from '@/components/device/DeviceBulkActionBar';
 import { AddDeviceModal } from './components/AddDeviceModal';
 import { BatchEditDeviceTagsDialog, type DeviceTagOperation } from './components/BatchEditDeviceTagsDialog';
-import { DeviceMetricsModal } from './components/DeviceMetricsModal';
 import { AssignProjectDialog } from './components/AssignProjectDialog';
 import { ProjectFilterSelect, UNASSIGNED_FILTER_VALUE } from '@/components/project/ProjectFilterSelect';
 import { api, assignDevicesToProject, fetchHostList, toApiError } from '@/utils/api';
@@ -30,7 +29,6 @@ const deviceStatusMap: Record<string, DeviceStatus> = {
 
 export default function DevicesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [metricsDevice, setMetricsDevice] = useState<{ id: number; serial: string } | null>(null);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set());
   const [filteredDevices, setFilteredDevices] = useState<DeviceTableData[]>([]);
   const [isTagDialogOpen, setIsTagDialogOpen] = useState(false);
@@ -262,11 +260,6 @@ export default function DevicesPage() {
     toast.success(`已导出 ${selectedDevices.length} 台设备`);
   };
 
-  const handleViewSelectedMetrics = () => {
-    if (selectedDevices.length !== 1) return;
-    const [device] = selectedDevices;
-    setMetricsDevice({ id: device.id, serial: device.serial });
-  };
 
   const assignProjectMutation = useMutation({
     mutationFn: ({ targetProjectKey }: { targetProjectKey: string }) =>
@@ -380,7 +373,6 @@ export default function DevicesPage() {
       <div>
         <ExpandableDeviceTable
           devices={formattedDevices}
-          onViewMetrics={(device) => setMetricsDevice({ id: device.id, serial: device.serial })}
           selectedIds={selectedDeviceIds}
           onSelectionChange={setSelectedDeviceIds}
           onFilteredDevicesChange={handleFilteredDevicesChange}
@@ -400,7 +392,6 @@ export default function DevicesPage() {
         onAssignProject={() => setIsAssignDialogOpen(true)}
         onCopySerials={handleCopySerials}
         onExport={handleExportSelected}
-        onViewMetrics={handleViewSelectedMetrics}
         onClear={() => setSelectedDeviceIds(new Set())}
       />
 
@@ -433,14 +424,6 @@ export default function DevicesPage() {
         }
       />
 
-      {metricsDevice && (
-        <DeviceMetricsModal
-          isOpen={!!metricsDevice}
-          onClose={() => setMetricsDevice(null)}
-          deviceId={metricsDevice.id}
-          deviceSerial={metricsDevice.serial}
-        />
-      )}
     </PageContainer>
   );
 }

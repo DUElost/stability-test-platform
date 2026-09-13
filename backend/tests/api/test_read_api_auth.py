@@ -116,11 +116,6 @@ PROTECTED_READ_ENDPOINTS: tuple[ReadEndpointCase, ...] = (
     # stats
     ReadEndpointCase("stats_activity", "GET", "/api/v1/stats/activity"),
     ReadEndpointCase(
-        "stats_device_metrics",
-        "GET",
-        "/api/v1/stats/device/1/metrics",
-    ),
-    ReadEndpointCase(
         "stats_dashboard_summary",
         "GET",
         "/api/v1/stats/dashboard-summary",
