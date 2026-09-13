@@ -1,7 +1,11 @@
 # RunConsole 多实例归属语义裁决草案（#1737）
 
-- **状态**：**Proposed（待裁决）**——推荐**方向 A（共享状态 + owner 句柄）**；裁决后回填本行、
-  增补 [ADR-0027](../adr/ADR-0027-control-plane-horizontal-scaling.md)（v1.4）并实施。
+- **状态**：**Accepted（2026-09-13 裁决）**——方向 **A（共享状态 + owner 句柄）**；
+  续期失败策略 **③ 窄化自杀**（仅「确认外部持有/键丢失」止损取消，瞬态错误不误杀）；
+  TTL **120s**；`cancel` 等待窗 **3s + 可配**；验收=**进程内双实例模拟**（真双进程归 rollout）。
+  **P1 已落地**（`stp:console:key/owner` + fail-closed 获取 + 止损取消，ADR-0027 v1.4）；
+  **P2 已落地**（状态快照 `stp:console:status`：跨实例 `status()`/订阅校验生效，
+  终态快照按本地保留期保留；ADR-0027 v1.5）；P3–P4 在途。
 - **日期**：2026-09-13
 - **来源**：#1737（承接 #1114 / #1517 的 Revisit）；ADR-0027 v1.2 清单第 6 条；#720 Epic。
 - **关联 note**：[`2026-09-11-runconsole-multi-instance-boundary-1114.md`](../notes/bug-fix/2026-09-11-runconsole-multi-instance-boundary-1114.md)。
@@ -76,25 +80,28 @@ run 状态与日志片段全部外置（Redis/共享存储），owner 仅执行�
   Redis 不可达 → fail-closed；
 - **真双进程验收**：按本单触发条件归入多实例 rollout 清单（不在触发前强做）。
 
-## 6. 分阶段落地（按推荐方向 A）
+## 6. 分阶段落地（已裁决方向 A）
 
-1. **P1（裁决后即做）**：全局互斥 + owner 登记 + 续期/释放 + fail-closed（本节即实施级设计：
-   键名、Lua 形态、函数签名、验收如 §5）；
-2. **P2**：`status()` / 订阅校验走共享状态（快照字段与过期语义按 §4）；
-3. **P3**：`cancel` 请求位 + owner 消费（有界等待）；
+1. **P1（✅ 已落地）**：全局互斥 + owner 登记 + 续期/释放 + fail-closed——
+   实现：`backend/realtime/console_registry.py`（`stp:console:key/owner`，Lua CAS）
+   + `RunConsole` 接线（获取/续期/释放/止损取消/`shutdown` 兜底）+ 生命周期装配；
+   测试：`backend/tests/realtime/test_console_registry.py`（15）+ 
+   `backend/tests/services/test_run_console_registry.py`（7）；
+2. **P2（✅ 已落地）**：`status()` / 订阅校验走共享状态——快照键 `stp:console:status:<run_id>`（start/终态/tick 发布；终态 TTL=本地保留期；tick 续期、丢失重发；本地优先，跨实例回退读快照）；
+3. **P3**：`cancel` 请求位 + owner 消费（有界等待 3s + 可配）；
 4. **P4**：`read_log` 跨实例（评估是否值得引入方向 B 的 RPC）。
 
-## 7. 对 ADR-0027 的影响（裁决后执行）
+## 7. 对 ADR-0027 的影响（已执行：v1.4）
 
 - 清单第 6 条改写为：**启用 console 注册表（env 门控）时**，RunConsole 依赖功能不再强制单实例；
   `read_log` 跨实例为显式剩余限制（返回可诊断错误）；
 - 新增 P3-4 节：console 归属注册表机制 + fail-closed 语义 + owner 失联窗口（≤TTL）；
 - 版本记 v1.4（头部版本记录 / 修订记录 / `adr/README` 主表 / DOC-MAP 行同步，S12 门禁）。
 
-## 8. 待裁决（请在 #1737 勾选或批注）
+## 8. 裁决（2026-09-13，已回填）
 
-- [ ] 方向：**A（推荐）** / B / C
-- [ ] 续期失败策略：**③ 窄化自杀（推荐）** / ① 仅告警 / ② 一律自杀
-- [ ] `run_key`/owner TTL：**120s（推荐）** / 其它（____）
-- [ ] `cancel` 等待窗：**3s + 可配（推荐）** / 其它（____）
-- [ ] 验收口径：**进程内双实例模拟足够（推荐，真双进程归 rollout）** / 必须真双进程
+- [x] 方向：**A（共享状态 + owner 句柄）**
+- [x] 续期失败策略：**③ 窄化自杀**（仅「确认外部持有/键丢失」止损取消；瞬态错误仅告警）
+- [x] `run_key`/owner TTL：**120s**（`STP_CONSOLE_REGISTRY_TTL_SECONDS`，下限 30）
+- [x] `cancel` 等待窗：**3s + 可配**（P3 实施时生效）
+- [x] 验收口径：**进程内双实例模拟足够**（真双进程归 rollout 清单）

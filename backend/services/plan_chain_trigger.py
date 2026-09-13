@@ -19,14 +19,15 @@ issues ``session.rollback()``; that must not undo Job/PlanRun terminal writes.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.core.job_timeout_config import HOST_HEARTBEAT_TIMEOUT_SECONDS
 from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
@@ -39,6 +40,56 @@ from backend.services.plan_dispatcher_sync import (
 logger = logging.getLogger(__name__)
 
 TRIGGERABLE_TERMINAL_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS"}
+
+
+def _aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _select_chain_devices(
+    rows: Sequence[tuple[Any, Any, Any]],
+    *,
+    now: datetime | None = None,
+    grace_seconds: int | None = None,
+) -> tuple[list[int], list[dict[str, Any]]]:
+    """#1822 / #1686：链下一段设备筛选。
+
+    - ``ONLINE``：入列
+    - ``OFFLINE`` 且 ``last_seen`` 在主机心跳超时窗口内：视为瞬时离线，**仍入列**
+      （避免父段结束瞬间重启/探活抖动导致整段链静默缺席且不可回补）
+    - ``BUSY`` / ``ERROR`` / 过期 ``OFFLINE``：排除并记入 ``chain_excluded_devices``
+
+    ``#1686`` 根因是准入泵对真离线设备长时间阻塞；宽限只覆盖心跳窗口内的
+    瞬时 OFFLINE，不把 BUSY/ERROR 放回以免再阻塞整链。
+    """
+    grace = (
+        HOST_HEARTBEAT_TIMEOUT_SECONDS
+        if grace_seconds is None
+        else max(0, int(grace_seconds))
+    )
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(seconds=grace)
+    device_ids: list[int] = []
+    excluded: list[dict[str, Any]] = []
+    for device_id, status, last_seen in rows:
+        st = str(status or "")
+        if st == "ONLINE":
+            device_ids.append(int(device_id))
+            continue
+        seen = _aware_utc(last_seen if isinstance(last_seen, datetime) else None)
+        if st == "OFFLINE" and seen is not None and seen >= cutoff:
+            device_ids.append(int(device_id))
+            continue
+        entry: dict[str, Any] = {"device_id": int(device_id), "status": st}
+        if seen is not None:
+            entry["last_seen"] = seen.isoformat()
+        if st == "OFFLINE":
+            entry["reason"] = "offline_stale" if seen is not None else "offline_no_last_seen"
+        excluded.append(entry)
+    return device_ids, excluded
 
 
 def _next_plan_id_from_snapshot(plan_run: PlanRun) -> int | None | object:
@@ -205,19 +256,14 @@ async def trigger_next_plan(
     if parent.next_plan_triggered:
         return None
 
-    # #1686：链下一段只带**当前 ONLINE** 的设备——原实现原样继承父段全量
-    # device_ids（含失败/离线），准入泵 device_offline blocker 会等待这些
-    # 设备导致整链阻塞数小时（run 334/343/370/376 四次复发的根因）。
+    # #1686/#1822：链下一段带 ONLINE + 心跳窗口内瞬时 OFFLINE；BUSY/ERROR/过期
+    # OFFLINE 排除。#1686 原只认 ONLINE，父段结束瞬间抖动会永久静默缺席。
     rows = (await db.execute(
-        select(JobInstance.device_id, Device.status)
+        select(JobInstance.device_id, Device.status, Device.last_seen)
         .join(Device, Device.id == JobInstance.device_id)
         .where(JobInstance.plan_run_id == parent.id)
     )).all()
-    device_ids = [dev_id for dev_id, status in rows if status == "ONLINE"]
-    excluded = [
-        {"device_id": dev_id, "status": status}
-        for dev_id, status in rows if status != "ONLINE"
-    ]
+    device_ids, excluded = _select_chain_devices(rows)
     if excluded:
         logger.warning(
             "plan_chain_trigger_excluded_offline plan_run=%d excluded=%d %s",
@@ -297,17 +343,13 @@ def trigger_next_plan_sync(
     if parent.next_plan_triggered:
         return None
 
-    # #1686：同 async 路径——链下一段只带当前 ONLINE 设备
+    # #1686/#1822：同 async 路径——ONLINE + 心跳窗口内瞬时 OFFLINE
     rows = db.execute(
-        select(JobInstance.device_id, Device.status)
+        select(JobInstance.device_id, Device.status, Device.last_seen)
         .join(Device, Device.id == JobInstance.device_id)
         .where(JobInstance.plan_run_id == parent.id)
     ).all()
-    device_ids = [dev_id for dev_id, status in rows if status == "ONLINE"]
-    excluded_sync = [
-        {"device_id": dev_id, "status": status}
-        for dev_id, status in rows if status != "ONLINE"
-    ]
+    device_ids, excluded_sync = _select_chain_devices(rows)
     if excluded_sync:
         logger.warning(
             "plan_chain_trigger_excluded_offline plan_run=%d excluded=%d %s",

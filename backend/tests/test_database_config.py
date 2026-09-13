@@ -92,3 +92,26 @@ def test_pool_env_invalid_or_non_positive_falls_back_to_default(monkeypatch):
         monkeypatch.setenv("STP_DB_POOL_SIZE", raw)
         kwargs = get_sync_engine_kwargs("postgresql+psycopg://user:pass@localhost:5432/stp")
         assert kwargs["pool_size"] == 30, f"raw={raw!r} 未回退默认"
+
+
+def test_attach_pool_metrics_skips_sqlite_and_is_idempotent_safe():
+    """#703：SQLite 不挂池 Gauge；Postgres 引擎可安全挂 checkout/checkin 监听。"""
+    from sqlalchemy import create_engine
+
+    from backend.core.database import _attach_pool_metrics
+
+    sqlite = create_engine("sqlite:///:memory:")
+    _attach_pool_metrics(sqlite, "sync")  # 不得抛
+
+    # 无真实 PG 时用 NullPool 语义的内存引擎验证监听可注册
+    pgish = create_engine(
+        "postgresql+psycopg://user:pass@127.0.0.1:1/stp",
+        pool_pre_ping=False,
+        pool_size=1,
+        max_overflow=0,
+    )
+    try:
+        _attach_pool_metrics(pgish, "sync")
+    finally:
+        pgish.dispose()
+

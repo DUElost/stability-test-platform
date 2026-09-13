@@ -38,6 +38,8 @@ from backend.services.admission_pump import (
 )
 from backend.services.plan_dispatcher_core import PlanDispatchError
 from backend.services.plan_dispatcher_sync import (
+    _FATAL_DISPATCH_REASONS,
+    _classify_dispatch_devices_sync,
     AllocationError,
     _sync_allocate_devices,
     _sync_create_allocations,
@@ -980,3 +982,61 @@ class TestRunPlanEndpointStructured400:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["data"]["device_count"] == 1
+
+
+class TestHostRetiredDispatchGate:
+    """ADR-0038 D-1（#1805 切片）：退役主机 fatal，且不被设备级暂态判据遮蔽。
+
+    判据遮蔽修正 = 182d4e-R01 的实现易错点：分类器原先把 device_offline 排在
+    host 判定之前，离线设备会短路成「可重试」并进 QUEUED；退役是永久判据，
+    必须先行。
+    """
+
+    def test_classify_retired_beats_device_offline(self, db_session, dispatch_fixture):
+        dispatch_fixture["host"].retired_at = datetime.now(timezone.utc)
+        dispatch_fixture["device"].status = DeviceStatus.OFFLINE.value
+        db_session.commit()
+
+        unavailable, _ = _classify_dispatch_devices_sync(
+            db_session, [dispatch_fixture["device"].id]
+        )
+
+        assert unavailable[0]["reason"] == "host_retired", (
+            "退役判据不得被较早的暂态 device_offline 遮住（182d4e-R01）"
+        )
+
+    def test_classify_retired_for_online_device(self, db_session, dispatch_fixture):
+        dispatch_fixture["host"].retired_at = datetime.now(timezone.utc)
+        db_session.commit()
+
+        unavailable, _ = _classify_dispatch_devices_sync(
+            db_session, [dispatch_fixture["device"].id]
+        )
+
+        assert unavailable[0]["reason"] == "host_retired"
+        assert unavailable[0]["host_id"] == dispatch_fixture["host"].id
+
+    def test_prepare_rejects_retired_host_without_queueing(
+        self, db_session, dispatch_fixture,
+    ):
+        """fatal：prepare 结构化拒绝（400 语义），不产生 QUEUED 行。"""
+        from backend.models.plan_run import PlanRun
+
+        dispatch_fixture["host"].retired_at = datetime.now(timezone.utc)
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as exc:
+            prepare_plan_run(
+                plan_id=dispatch_fixture["plan"].id,
+                device_ids=[dispatch_fixture["device"].id],
+                triggered_by="pytest",
+                db=db_session,
+                run_type="MANUAL",
+            )
+
+        entries = exc.value.detail()["unavailable_devices"]
+        assert entries[0]["reason"] == "host_retired"
+        assert db_session.query(PlanRun).count() == 0
+
+    def test_host_retired_is_registered_fatal(self):
+        assert "host_retired" in _FATAL_DISPATCH_REASONS

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ExpandableHostTable, type HostTableData } from './ExpandableHostTable';
 
@@ -257,4 +258,62 @@ describe('ExpandableHostTable', () => {
     });
   });
 
+});
+
+describe('ADR-0038 退役显示与入口（#1807）', () => {
+  const retired: HostTableData = {
+    ...host,
+    status: 'OFFLINE',
+    retired_at: '2026-09-13T00:00:00Z',
+    retired_by: 'admin',
+    retire_reason: '样机报废',
+  };
+
+  it('离线退役主机显示「已退役」徽标', () => {
+    render(<ExpandableHostTable hosts={[retired]} />);
+
+    const badge = screen.getByTestId(`host-retired-badge-${retired.id}`);
+    expect(badge).toHaveTextContent('已退役');
+    expect(badge).toHaveAttribute('title', expect.stringContaining('样机报废'));
+  });
+
+  it('退役但仍在心跳（ONLINE）显示异常徽标', () => {
+    render(<ExpandableHostTable hosts={[{ ...retired, status: 'ONLINE' }]} />);
+
+    expect(screen.getByTestId(`host-retired-badge-${retired.id}`)).toHaveTextContent(
+      '已退役但仍在心跳',
+    );
+  });
+
+  it('在用主机的 admin 下拉提供「退役」入口', async () => {
+    const onRetire = vi.fn();
+    const user = userEvent.setup();
+    render(<ExpandableHostTable hosts={[host]} isAdmin onRetire={onRetire} />);
+
+    await user.click(screen.getByRole('button', { name: `${host.name} 更多操作` }));
+    await user.click(screen.getByText('退役'));
+
+    expect(onRetire).toHaveBeenCalledWith(expect.objectContaining({ id: host.id }));
+  });
+
+  it('退役主机不提供热更新，下拉给出「解除退役」', async () => {
+    const onUnretire = vi.fn();
+    const onHotUpdate = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ExpandableHostTable
+        hosts={[{ ...retired, status: 'ONLINE' }]}
+        isAdmin
+        onHotUpdate={onHotUpdate}
+        onUnretire={onUnretire}
+      />,
+    );
+
+    expect(screen.queryByText('热更新')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: `${retired.name} 更多操作` }));
+    await user.click(screen.getByText('解除退役'));
+
+    expect(onUnretire).toHaveBeenCalledWith(expect.objectContaining({ id: retired.id }));
+  });
 });

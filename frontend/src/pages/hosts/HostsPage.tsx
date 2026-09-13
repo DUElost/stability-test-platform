@@ -51,9 +51,13 @@ export default function HostsPage() {
   const isAdmin = sessionQ.data?.role === 'admin';
   const canManageWatcherAdminState = isAdmin;
 
+  // ADR-0038 D5：「显示已退役」开关——默认走共享缓存键（三页同口径：不含退役），
+  // 打开时走独立键（避免把含退役的列表写进三页共享缓存），前缀同为 ['hosts']，
+  // 既有 invalidateQueries({queryKey: ['hosts']}) 仍同时覆盖两者。
+  const [showRetired, setShowRetired] = useState(false);
   const { data: hostsData, isLoading, error } = useQuery({
-    queryKey: hostKeys.list(),
-    queryFn: () => fetchHostList(0, 200),
+    queryKey: showRetired ? hostKeys.retiredList() : hostKeys.list(),
+    queryFn: () => fetchHostList(0, 200, showRetired),
     refetchInterval: 10000,
   });
   const hosts = useMemo(() => coerceHostList(hostsData), [hostsData]);
@@ -113,6 +117,54 @@ export default function HostsPage() {
       toast.error(`删除主机失败: ${toApiError(error).message}`);
     },
   });
+
+  // ADR-0038 D2：退役 / 解除退役（admin；原因必填，写入审计 who/when/reason）
+  const retireMutation = useMutation({
+    mutationFn: ({ hostId, reason }: { hostId: string | number; reason: string }) =>
+      api.hosts.retire(hostId, reason),
+    onSuccess: (host) => {
+      void queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+      void queryClient.invalidateQueries({ queryKey: hostKeys.retiredList() });
+      toast.success(`主机 ${host.id} 已退役`);
+    },
+    onError: (error: unknown) => {
+      toast.error(`退役失败: ${toApiError(error).message}`);
+    },
+  });
+
+  const unretireMutation = useMutation({
+    mutationFn: ({ hostId, reason }: { hostId: string | number; reason: string }) =>
+      api.hosts.unretire(hostId, reason),
+    onSuccess: (host) => {
+      void queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+      void queryClient.invalidateQueries({ queryKey: hostKeys.retiredList() });
+      toast.success(`主机 ${host.id} 已解除退役`);
+    },
+    onError: (error: unknown) => {
+      toast.error(`解除退役失败: ${toApiError(error).message}`);
+    },
+  });
+
+  const askRetireReason = (action: '退役' | '解除退役', label: string): string | null => {
+    const raw = window.prompt(`${action} ${label} 的原因（必填，写入审计）`);
+    if (raw === null) return null;
+    const reason = raw.trim();
+    if (!reason) {
+      toast.error(`${action}原因不能为空`);
+      return null;
+    }
+    return reason;
+  };
+
+  const handleRetire = (host: HostTableData) => {
+    const reason = askRetireReason('退役', host.name || String(host.id));
+    if (reason) retireMutation.mutate({ hostId: host.id, reason });
+  };
+
+  const handleUnretire = (host: HostTableData) => {
+    const reason = askRetireReason('解除退役', host.name || String(host.id));
+    if (reason) unretireMutation.mutate({ hostId: host.id, reason });
+  };
 
   const [watcherAdminUpdatingHostId, setWatcherAdminUpdatingHostId] = useState<
     string | number | null
@@ -245,6 +297,8 @@ export default function HostsPage() {
       .map((id) => {
         const full = hosts?.find((h: Host) => h.id === id);
         if (!full) return null;
+        // ADR-0038 D5：退役主机不接受控制面动作（仅 unretire 除外）
+        if (full.retired_at) return null;
         if (full.status === 'ONLINE') return null;
         return {
           hostId: full.id,
@@ -273,7 +327,14 @@ export default function HostsPage() {
   };
 
   const handleBulkInstall = async () => {
-    const targets = resolveInstallTargets(Array.from(visibleSelectedHostIds));
+    const selectedIds = Array.from(visibleSelectedHostIds);
+    const retiredCount = selectedIds.filter((id) =>
+      hosts?.some((h: Host) => h.id === id && h.retired_at),
+    ).length;
+    if (retiredCount > 0) {
+      toast.error(`已跳过 ${retiredCount} 台已退役主机（不接受安装/热更新）`);
+    }
+    const targets = resolveInstallTargets(selectedIds);
     if (!targets.length) {
       toast.info('选中主机中没有可安装目标（ONLINE 请用热更新）');
       return;
@@ -307,8 +368,10 @@ export default function HostsPage() {
         try {
           await api.hosts.delete(id);
           succeeded += 1;
-        } catch {
-          failed.push(String(id));
+        } catch (err: unknown) {
+          // #1807：不得吞 409 文案（退役/有历史依赖等阻断原因要透出给操作者）
+          const message = toApiError(err).message;
+          failed.push(message ? `${id}（${message}）` : String(id));
         }
       }
     });
@@ -398,6 +461,9 @@ export default function HostsPage() {
       return {
         id: host.id,
         name: host.name ?? '',
+        retired_at: host.retired_at ?? null,
+        retired_by: host.retired_by ?? null,
+        retire_reason: host.retire_reason ?? null,
         ip: host.ip ?? '',
         status: host.status,
         watcher_admin_active: host.watcher_admin_active !== false,
@@ -664,6 +730,16 @@ export default function HostsPage() {
               : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
           </Button>
         )}
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={showRetired}
+            onChange={(e) => setShowRetired(e.target.checked)}
+            data-testid="hosts-show-retired"
+            className="rounded"
+          />
+          显示已退役
+        </label>
         {isAdmin && (
           <Button onClick={() => setIsModalOpen(true)}>
             <Plus className="w-4 h-4" />
@@ -686,6 +762,8 @@ export default function HostsPage() {
         }
         onEdit={isAdmin ? handleEdit : undefined}
         onDelete={isAdmin ? handleDelete : undefined}
+        onRetire={isAdmin ? handleRetire : undefined}
+        onUnretire={isAdmin ? handleUnretire : undefined}
         isDeleting={(hostId: string | number) => deleteMutation.isPending && deleteMutation.variables === hostId}
         onWatcherAdminStateChange={handleWatcherAdminStateChange}
         isWatcherAdminStateUpdating={(hostId: string | number) =>

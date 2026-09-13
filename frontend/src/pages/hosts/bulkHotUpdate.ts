@@ -10,7 +10,8 @@ export type BulkHotUpdateSkipReason =
   | 'not_installed'
   | 'active_jobs'
   | 'precheck_failed'
-  | 'state_changed';
+  | 'state_changed'
+  | 'retired';
 
 export interface BulkHotUpdateSkipped extends BulkHotUpdateTarget {
   reason: BulkHotUpdateSkipReason;
@@ -22,6 +23,8 @@ export const BULK_HOT_UPDATE_SKIP_LABEL: Record<BulkHotUpdateSkipReason, string>
   active_jobs: '存在活跃 Job',
   precheck_failed: '预检失败',
   state_changed: '执行期间状态已变化',
+  // ADR-0038 D5：退役主机不接受控制面动作（仅 unretire 除外）
+  retired: '主机已退役',
 };
 
 async function mapConcurrent<T>(
@@ -52,7 +55,11 @@ export async function precheckBulkHotUpdate(
     try {
       const detail = await getDetail(target.id);
       const activeCount = detail.active_job_count ?? detail.active_jobs?.length ?? 0;
-      if (detail.status !== 'ONLINE') {
+      if (detail.retired_at) {
+        // 退役判据先于离线/安装/活跃 Job：退役是「不再使用」的运维决定，
+        // 对退役主机执行热更新没有意义（ADR-0038 D5 控制面动作拒绝）
+        skipped.push({ ...target, reason: 'retired' });
+      } else if (detail.status !== 'ONLINE') {
         skipped.push({ ...target, reason: 'offline' });
       } else if (!detail.agent_installed) {
         skipped.push({ ...target, reason: 'not_installed' });
