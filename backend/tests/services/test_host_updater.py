@@ -272,3 +272,150 @@ def test_remote_failure_message_falls_back_when_no_error_line():
     from backend.services.host_updater import _remote_failure_message
 
     assert _remote_failure_message("some log\nanother", 2) == "Remote script failed (exit=2)"
+
+
+# ── #1903 / ADR-0040 §5.1（P0）：压缩级 9→6 + 整批一次构建 ──────────────
+
+
+def test_build_tarball_uses_p0_compresslevel(monkeypatch):
+    """压缩级默认 6（可显式覆盖），批量与单台路径共用同一默认。"""
+    import backend.services.host_updater as hu
+
+    captured: dict = {}
+
+    class _FakeTar:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def add(self, *args, **kwargs):
+            pass
+
+    def fake_open(*args, **kwargs):
+        captured.update(kwargs)
+        return _FakeTar()
+
+    monkeypatch.setattr(hu.tarfile, "open", fake_open)
+
+    assert isinstance(hu._build_tarball(), bytes)
+    assert captured["mode"] == "w:gz"
+    assert captured["compresslevel"] == hu._TARBALL_COMPRESSLEVEL == 6
+
+    captured.clear()
+    hu._build_tarball(compresslevel=1)
+    assert captured["compresslevel"] == 1
+
+
+def test_execute_hot_update_reuses_prebuilt_tarball(monkeypatch):
+    """传入预构建载荷时不得重复构建；缺省仍按需构建（单台路径行为不变）。"""
+    import backend.services.host_updater as hu
+
+    build_calls = {"n": 0}
+
+    def fake_build(*args, **kwargs):
+        build_calls["n"] += 1
+        return b"built-tarball"
+
+    def fake_connect(**kwargs):
+        raise RuntimeError("stop before upload")
+
+    monkeypatch.setattr(hu, "_build_tarball", fake_build)
+    monkeypatch.setattr(hu, "_ssh_connect", fake_connect)
+
+    result = hu.execute_hot_update(host_ip="10.0.0.1", tarball=b"prebuilt-tarball")
+    assert result["ok"] is False
+    assert build_calls["n"] == 0
+
+    result = hu.execute_hot_update(host_ip="10.0.0.1")
+    assert result["ok"] is False
+    assert build_calls["n"] == 1
+
+
+def test_hot_update_direct_builds_tarball_once_for_all_hosts(monkeypatch):
+    """--direct 整批只构建一次 tarball，并传给每台调用的 execute_hot_update。"""
+    import types
+
+    import backend.core.database as core_db
+    import backend.core.ssh_security as ssh_sec
+    import backend.models.host as host_mod
+    import backend.scripts.batch_hot_update as bhu
+    import backend.services.agent_version_info as avi
+    import backend.services.host_upgrade_gate as gate_mod
+    import backend.services.host_updater as hu_mod
+
+    class _FakeHost:
+        id = "h-1"
+        hostname = "h-1"
+        ip = "10.0.0.1"
+        ssh_port = 22
+        status = "ONLINE"
+
+    class _Query:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def count(self):
+            return 0
+
+    class _FakeDB:
+        def query(self, model):
+            return _Query([_FakeHost()] if model is host_mod.Host else [])
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    calls = {"build": 0, "exec": []}
+
+    monkeypatch.setattr(core_db, "SessionLocal", lambda: _FakeDB())
+    monkeypatch.setattr(
+        ssh_sec,
+        "resolve_host_ssh_credentials",
+        lambda host, inventory_lookup=None: (
+            types.SimpleNamespace(
+                user="u", password="p", key_path="", known_hosts_path=""
+            ),
+            False,
+        ),
+    )
+    monkeypatch.setattr(hu_mod, "_resolve_ssh_creds", lambda ip: None)
+    monkeypatch.setattr(hu_mod, "get_agent_code_version", lambda: "deadbeef")
+
+    def _fake_build(*args, **kwargs):
+        calls["build"] += 1
+        return b"T"
+
+    def _fake_exec(**kwargs):
+        calls["exec"].append(kwargs)
+        return {"ok": True, "message": "OK"}
+
+    monkeypatch.setattr(hu_mod, "_build_tarball", _fake_build)
+    monkeypatch.setattr(hu_mod, "execute_hot_update", _fake_exec)
+    monkeypatch.setattr(
+        gate_mod,
+        "begin_host_upgrade",
+        lambda db, host_id, **kwargs: {"aborted_summary": None},
+    )
+    monkeypatch.setattr(gate_mod, "end_host_upgrade", lambda db, host_id, holder: None)
+    monkeypatch.setattr(avi, "record_agent_code_deployed", lambda host, rev: None)
+
+    assert bhu._hot_update_direct(include_active=False, abort_running_jobs=False) == 0
+    assert calls["build"] == 1
+    assert len(calls["exec"]) == 1
+    assert calls["exec"][0]["tarball"] == b"T"

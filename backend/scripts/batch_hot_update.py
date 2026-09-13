@@ -65,6 +65,7 @@ def _hot_update_direct(
     from backend.models.host import Host
     from backend.models.job import JobInstance
     from backend.services.host_updater import (
+        _build_tarball,
         _resolve_ssh_creds,
         execute_hot_update,
         get_agent_code_version,
@@ -97,6 +98,17 @@ def _hot_update_direct(
             .all()
         )
         print(f"online_hosts={len(hosts)}")
+        # #1903 / ADR-0040 §5.1（P0）：整批只构建一次 tarball —— 此前每台在
+        # execute_hot_update 内重复构建（实测 ~16.6s/台、48 台 ≈13 分钟纯 CPU）。
+        # 终态出口 = P1 的 digest 缓存键（内容未变即整批 no-op）。
+        tarball: bytes | None = None
+        if hosts:
+            build_t0 = time.monotonic()
+            tarball = _build_tarball()
+            print(
+                f"batch_tarball_size_bytes={len(tarball)} "
+                f"build_seconds={time.monotonic() - build_t0:.1f}"
+            )
         for host in hosts:
             active = (
                 db.query(JobInstance)
@@ -168,6 +180,7 @@ def _hot_update_direct(
                     ssh_key_path=creds.key_path,
                     known_hosts_path=creds.known_hosts_path,
                     code_version=expected,
+                    tarball=tarball,
                 )
             finally:
                 end_host_upgrade(db, host.id, holder)
