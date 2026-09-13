@@ -43,11 +43,18 @@ Frontend ◄──SocketIO /dashboard──┘
 
 | Job | 模块 | 间隔/触发 |
 |-----|------|-----------|
-| Recycler | `recycler.py` | ~15s 过期租约/僵死 Job |
+| Recycler | `recycler.py` | 30s 过期租约/僵死 Job（`RUN_RECYCLE_INTERVAL_SECONDS=30`，`app_scheduler.py:31`） |
 | Cron 调度 | `cron_scheduler.py` | Plan 定时 |
 | Precheck reaper | `precheck_reaper.py` | 卡住门禁清理 |
 | Device lease reconciler | `device_lease_reconciler.py` | 租约一致性 |
 | Revoked token cleanup | `revoked_token_cleanup.py` | 24h refresh 黑名单 |
+
+**回收路径的页面收敛（显式设计决定）**：device lease reconciler 的
+`expired_leases` / `stale_unknown` / `terminal_job_active_lease` 三条路径会终态化
+PlanRun 但**不发** `plan_run_status` 广播（`device_lease_reconciler.py` `checks`
+表 `has_broadcast=False`，仅 abort 对账路径广播）——权威（`plan_run.status`）不失真，
+页面靠前端既有 10s/30s 轮询兜底收敛（`planRunDetailUtils.ts`），属有意取舍而非遗漏；
+如需推送级实时性，应作为行为变更单独评审，勿顺手补发。
 
 **约束**：默认单进程后端。ADR-0027 P3-3：除 `saq_queue_depth_poll` 外，全部 singleton job 经 leader election（`admission_pump` / `counter_reconcile` 为函数内 leadership，其余经 `_instrumented(..., singleton=True)`）。
 
