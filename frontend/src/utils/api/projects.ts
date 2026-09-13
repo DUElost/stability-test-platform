@@ -15,9 +15,19 @@ import type {
 
 /** ADR-0029 P2.5 — 人工项目登记簿 + Fleet 事实 + 型号映射。 */
 export const projects = {
-  list: () =>
+  /** 列出人工项目；可选 `status` 过滤（#709：筛选/选择场景默认只看 ACTIVE）。 */
+  list: (status?: 'ACTIVE' | 'ARCHIVED') =>
     unwrapApiResponse(
-      apiClient.get<ApiResponseEnvelope<ProjectSummary[]>>('/projects'),
+      apiClient.get<ApiResponseEnvelope<ProjectSummary[]>>('/projects', {
+        params: status ? { status } : undefined,
+      }),
+    ),
+  /** #709：仅 ACTIVE 项目（筛选下拉与选择器排除归档）。 */
+  listActive: () =>
+    unwrapApiResponse(
+      apiClient.get<ApiResponseEnvelope<ProjectSummary[]>>('/projects', {
+        params: { status: 'ACTIVE' },
+      }),
     ),
   /** ADR-0029 P0：SEED 回填标签（待转正队列） */
   listSeed: () =>

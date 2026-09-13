@@ -69,6 +69,10 @@ def sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional[
     host = db.get(Host, host_id)
     if host is None:
         return False, "host_not_found"
+    # ADR-0038 D5：脚本同步可 SSH 触碰主机——退役主机在执行/配置类动作上拒绝
+    # （准入 Phase A 的校验先于分类器终检，本守卫即其过滤点前移）。
+    if host.retired_at is not None:
+        return False, "host_retired"
     if not host.ip:
         return False, "host_missing_ip"
 
@@ -110,6 +114,9 @@ def push_mismatched_scripts(
     host = db.get(Host, host_id)
     if host is None:
         return False, "host_not_found"
+    # ADR-0038 D5：SFTP 推脚本同属执行/配置类动作，退役主机拒绝。
+    if host.retired_at is not None:
+        return False, "host_retired"
     if not host.ip:
         return False, "host_missing_ip"
 
