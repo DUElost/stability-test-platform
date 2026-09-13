@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from sqlalchemy import String, and_, case, cast, func, or_, select, text
 from sqlalchemy.orm import Session, joinedload
@@ -530,8 +530,9 @@ def abort_plan_run_endpoint(
 )
 async def archive_plan_run_logs_endpoint(
     run_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """ADR-0025 S2: 手动触发该 PlanRun 涉及 host 的运行日志立即归档 + scan。
 
@@ -541,10 +542,15 @@ async def archive_plan_run_logs_endpoint(
       - scan_now: 向本 PlanRun 涉及的全部 host 下发同一份设备 serial 列表
         （可跨主机），Agent 只扫本地 HDD 上命中的 `{folder}/{serial}/`。
     归档和 scan 均为异步——返回「已触发」，前端应轮询/refetch。
+
+    ADR-0038 D5：回收类允许触达退役主机，但**仅显式 admin 触发**（admin 会话
+    allow_retired=True）+ 审计 + `skipped_retired` 如实报告（不虚报完整）。
     """
+    from backend.core.audit import record_audit
     from backend.realtime.socketio_server import emit_agent_control
     from backend.services.plan_run_scan_scope import (
         build_scan_now_payload,
+        classify_recycle_targets,
         iter_plan_run_scan_hosts,
     )
 
@@ -560,31 +566,50 @@ async def archive_plan_run_logs_endpoint(
     if not has_jobs:
         raise HTTPException(status_code=400, detail="no jobs found for this plan run")
 
+    allow_retired = current_user.role == "admin"
     host_rows = iter_plan_run_scan_hosts(db, run_id)
     if not host_rows:
         raise HTTPException(status_code=400, detail="no jobs found for this plan run")
 
+    targets, skipped_offline, skipped_retired = classify_recycle_targets(
+        host_rows, allow_retired=allow_retired,
+    )
+
     triggered: list[str] = []
-    skipped: list[dict] = []
-    for host_id, host_status in host_rows:
-        if host_status == "ONLINE":
-            await emit_agent_control(
-                host_id, "archive_now",
-                payload={"plan_run_id": run_id},
-            )
-            await emit_agent_control(
-                host_id, "scan_now",
-                payload=build_scan_now_payload(db, run_id, host_id, is_final=False),
-            )
-            triggered.append(host_id)
-        else:
-            skipped.append({"host_id": host_id, "status": host_status})
+    for host_id in targets:
+        await emit_agent_control(
+            host_id, "archive_now",
+            payload={"plan_run_id": run_id},
+        )
+        await emit_agent_control(
+            host_id, "scan_now",
+            payload=build_scan_now_payload(db, run_id, host_id, is_final=False),
+        )
+        triggered.append(host_id)
+
+    record_audit(
+        db,
+        action="plan_run_archive_scan_trigger",
+        resource_type="plan_run",
+        resource_id=str(run_id),
+        details={
+            "triggered_hosts": triggered,
+            "skipped_offline": skipped_offline,
+            "skipped_retired": skipped_retired,
+            "allow_retired": allow_retired,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
 
     return ok({
         "plan_run_id": run_id,
         "archived_now": True,
         "triggered_hosts": triggered,
-        "skipped_offline": skipped,
+        "skipped_offline": skipped_offline,
+        "skipped_retired": skipped_retired,
     })
 
 

@@ -66,6 +66,21 @@ class _FakeRedis:
     def close(self):  # noqa: ANN201
         self.closed = True
 
+    def expire(self, key, seconds):  # noqa: ANN001
+        if self.fail:
+            raise RuntimeError("redis down")
+        if key not in self.store:
+            return False
+        self.expires.append((key, int(seconds)))
+        return True
+
+    def delete(self, key):  # noqa: ANN001
+        if self.fail:
+            raise RuntimeError("redis down")
+        existed = key in self.store
+        self.store.pop(key, None)
+        return 1 if existed else 0
+
 
 @pytest.fixture()
 def fake_client(monkeypatch):
@@ -209,3 +224,87 @@ def test_shutdown_closes_client(fake_client):
     registry.shutdown_console_registry()
     assert fake_client.closed is True
     assert registry._client is None
+
+
+# ── 状态快照（P2）────────────────────────────────────────────────────────────
+
+
+def test_publish_and_read_snapshot(fake_client):
+    registry.publish_status_snapshot(
+        "run-A", {"run_id": "run-A", "status": "RUNNING"}, ttl_seconds=45,
+    )
+    snap = registry.read_status_snapshot("run-A")
+    assert snap is not None
+    assert snap["status"] == "RUNNING"
+    assert snap["instance_id"] == registry.control_plane_instance_id()
+    assert (registry.status_key("run-A"), 45) in fake_client.expires
+
+
+def test_read_snapshot_missing_or_corrupt(fake_client):
+    assert registry.read_status_snapshot("nope") is None
+    fake_client.store[registry.status_key("bad")] = "{not json"
+    assert registry.read_status_snapshot("bad") is None
+    fake_client.store[registry.status_key("list")] = "[1,2]"
+    assert registry.read_status_snapshot("list") is None
+
+
+def test_refresh_snapshot_ttl_true_then_false_when_missing(fake_client):
+    registry.publish_status_snapshot("run-A", {"run_id": "run-A"}, ttl_seconds=45)
+    assert registry.refresh_status_ttl("run-A", ttl_seconds=45) is True
+    del fake_client.store[registry.status_key("run-A")]
+    assert registry.refresh_status_ttl("run-A", ttl_seconds=45) is False
+
+
+def test_delete_snapshot(fake_client):
+    registry.publish_status_snapshot("run-A", {"run_id": "run-A"}, ttl_seconds=45)
+    registry.delete_status_snapshot("run-A")
+    assert registry.status_key("run-A") not in fake_client.store
+
+
+def test_publish_snapshot_fails_closed_on_redis_error(fake_client):
+    fake_client.fail = True
+    with pytest.raises(registry.ConsoleRegistryUnavailable):
+        registry.publish_status_snapshot("run-A", {"run_id": "run-A"}, ttl_seconds=45)
+
+
+def test_snapshot_ops_tolerate_unavailable(fake_client):
+    """读取/续期/删除在注册表不可用时不抛（best-effort 路径）。"""
+    fake_client.fail = True
+    assert registry.read_status_snapshot("run-A") is None
+    assert registry.refresh_status_ttl("run-A", ttl_seconds=45) is False
+    registry.delete_status_snapshot("run-A")  # 不抛
+
+
+# ── 取消转发（P3）────────────────────────────────────────────────────────────
+
+
+def test_cancel_request_roundtrip(fake_client):
+    registry.request_cancel("run-A", requested_at="t1")
+    req = registry.read_cancel_request("run-A")
+    assert req is not None
+    assert req["requested_at"] == "t1"
+    assert req["instance_id"] == registry.control_plane_instance_id()
+    assert (
+        registry.cancel_request_key("run-A"), registry.cancel_ttl_seconds(),
+    ) in fake_client.expires
+    registry.clear_cancel_request("run-A")
+    assert registry.read_cancel_request("run-A") is None
+
+
+def test_cancel_ack_requires_matching_fingerprint(fake_client):
+    registry.publish_cancel_ack("run-A", requested_at="t1", canceled=True)
+    assert registry.read_cancel_ack("run-A", requested_at="t2") is None  # 指纹不匹配
+    ack = registry.read_cancel_ack("run-A", requested_at="t1")
+    assert ack is not None
+    assert ack["canceled"] is True
+    assert ack["by"] == registry.control_plane_instance_id()
+
+
+def test_cancel_ops_tolerate_unavailable(fake_client):
+    """请求投递 fail-closed（抛）；读取/清理/ack 为 best-effort（不抛）。"""
+    fake_client.fail = True
+    with pytest.raises(registry.ConsoleRegistryUnavailable):
+        registry.request_cancel("run-A", requested_at="t1")
+    assert registry.read_cancel_request("run-A") is None
+    registry.clear_cancel_request("run-A")
+    registry.publish_cancel_ack("run-A", requested_at="t1", canceled=True)

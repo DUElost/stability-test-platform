@@ -270,11 +270,14 @@ def discover_devices(adb_path: str = "adb") -> List[Dict[str, Any]]:
         serial = parts[0]
         adb_state = parts[1] if len(parts) > 1 else "unknown"
 
-        # 解析 model
+        # 解析 model；统一大写（#704）：#644 的读端归一匹配 + 成员行写设备
+        # 事实原值以「同型号原值唯一」为前提，采集源头不归一时，同型号两种
+        # 大小写并存会让 model_facts 取首个原值、第二台全等 join 全线 miss
+        # （派发/suite_binding/列表过滤共用 Device.model == match_value）。
         model = None
         for part in parts:
             if part.startswith("model:"):
-                model = part.split(":", 1)[1]
+                model = part.split(":", 1)[1].upper()
 
         devices.append({
             "serial": serial,

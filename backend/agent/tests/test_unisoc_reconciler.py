@@ -273,6 +273,37 @@ class TestProcessedPrune:
         assert r._processed == {"stale1"}  # 列表失败：不裁剪
         assert r._absent_streak == {}     # 滞回清零
 
+    def test_missing_root_is_authoritative_empty(self, tmp_path, monkeypatch):
+        """#1820：两 root 均 rc!=0 是权威空列表——裁剪照常收敛，不再永久挂起。"""
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
+        store = self._seed_store(["stale1", "stale2"])
+
+        def shell_fn(cmd: str, _t: int):
+            return (
+                "__STP_RC__:2\n" if cmd.startswith("ls -1 /data/") else None
+            )
+
+        r = _make_reconciler(tmp_path, store=store, shell_fn=shell_fn)
+        r._load_processed_state()
+        r.tick_once()
+        assert r._processed == set()
+
+    def test_missing_marker_treated_as_incomplete(self, tmp_path, monkeypatch):
+        """#1820：rc 标记缺失（异常输出/旧桩）保守视为不完整——不裁剪。"""
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
+        store = self._seed_store(["stale1", "live1"])
+
+        def shell_fn(cmd: str, _t: int):
+            # 无 __STP_RC__: 标记——模拟异常输出/旧桩
+            if cmd.startswith("ls -1 /data/"):
+                return "live1\n"
+            return None
+
+        r = _make_reconciler(tmp_path, store=store, shell_fn=shell_fn)
+        r._load_processed_state()
+        r.tick_once()
+        assert r._processed == {"stale1", "live1"}
+
     def test_legacy_huge_set_converges_to_device_listing(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "2")
         legacy = {f"evt_{i:05d}" for i in range(1000)} | {"live_a", "live_b"}

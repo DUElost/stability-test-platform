@@ -115,7 +115,11 @@ def test_scan_scope_is_plan_run_wide_across_hosts(
     assert load_plan_run_device_serials(db_session, sample_plan_run.id) == list(
         payload_a["device_serials"]
     )
-    host_ids = {hid for hid, _status in iter_plan_run_scan_hosts(db_session, sample_plan_run.id)}
+    host_ids = {
+        hid for hid, _status, _retired in iter_plan_run_scan_hosts(
+            db_session, sample_plan_run.id,
+        )
+    }
     assert host_ids == {sample_host.id, host_b.id}
 
 
@@ -155,3 +159,69 @@ def test_scan_scope_falls_back_to_today_when_started_at_missing(
     serials, stamps = load_plan_run_scan_scope(db_session, sample_plan_run.id)
     assert serials == [sample_device.serial]
     assert stamps == [datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%m%d")]
+
+
+def test_iter_scan_hosts_carries_retired_flag(
+    db_session, sample_plan_run, sample_plan, sample_host, sample_device,
+):
+    """ADR-0038 D5：历史证据集合必须可见退役标记（182d4e-R02）。"""
+    from datetime import datetime, timezone
+
+    from backend.models.host import Device, Host
+    from backend.models.job import JobInstance
+    from backend.models.enums import JobStatus
+
+    retired_host = Host(
+        id="h-retired-scan", hostname="h-retired-scan", status="ONLINE",
+        retired_at=datetime.now(timezone.utc),
+    )
+    db_session.add(retired_host)
+    db_session.flush()
+    # uq_job_instance_plan_run_device：同一 Run 同一设备只允许一个 Job
+    retired_device = Device(
+        serial="dev-retired-scan", host_id=retired_host.id, status="OFFLINE",
+    )
+    db_session.add(retired_device)
+    db_session.flush()
+    for host_id, device_id in (
+        (sample_host.id, sample_device.id),
+        (retired_host.id, retired_device.id),
+    ):
+        db_session.add(JobInstance(
+            plan_run_id=sample_plan_run.id,
+            plan_id=sample_plan.id,
+            device_id=device_id,
+            host_id=host_id,
+            status=JobStatus.COMPLETED.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        ))
+    db_session.commit()
+
+    rows = {
+        hid: (status, retired)
+        for hid, status, retired in iter_plan_run_scan_hosts(db_session, sample_plan_run.id)
+    }
+    assert rows[retired_host.id] == ("ONLINE", True)
+    assert rows[sample_host.id] == ("ONLINE", False)
+
+
+def test_classify_recycle_targets_policy_matrix():
+    """ADR-0038 D5：退役仅显式 admin 触发可触达；skipped_retired 不虚报完整。"""
+    from backend.services.plan_run_scan_scope import classify_recycle_targets
+
+    rows = [
+        ("h-on", "ONLINE", False),
+        ("h-off", "OFFLINE", False),
+        ("h-ret-on", "ONLINE", True),
+        ("h-ret-off", "OFFLINE", True),
+    ]
+
+    targets, off, ret = classify_recycle_targets(rows, allow_retired=False)
+    assert targets == ["h-on"]
+    assert [r["host_id"] for r in off] == ["h-off"]
+    assert [r["host_id"] for r in ret] == ["h-ret-on", "h-ret-off"]
+
+    targets, off, ret = classify_recycle_targets(rows, allow_retired=True)
+    assert targets == ["h-on", "h-ret-on"]
+    assert [r["host_id"] for r in off] == ["h-off"]
+    assert [r["host_id"] for r in ret] == ["h-ret-off"]
