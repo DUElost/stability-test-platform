@@ -41,20 +41,38 @@ def _multi_instance_enabled() -> bool:
 
 
 def console_run_miss_hint() -> str:
-    """#1114（R11-F06）：console run 本地缺失时的诊断附加说明。
+    """#1114（R11-F06）/ #1737 P2：console run 本地缺失时的诊断附加说明。
 
-    多实例模式下 RunConsole 无 owner 路由（进程内态），本地缺失可能是
-    「由其他实例持有」而非「不存在」——把这一可能写进错误详情，避免困惑性 404。
+    多实例模式下本地缺失可能是「由其他实例持有」而非「不存在」。注册表启用
+    （P2）后：跨实例 status（含 `console:` 房间订阅校验）读 owner 快照；cancel
+    与日志 replay 仍为实例本地语义——提示按**当前剩余限制**措辞。
     """
     if not _multi_instance_enabled():
         return ""
+    if _console_registry.console_registry_enabled():
+        return (
+            "；多实例模式下该运行可能由其他控制面实例持有——跨实例 status（含订阅校验）"
+            "读 owner 快照；cancel / 日志 replay 仍为实例本地语义（#1737 P2，P3/P4 在途，ref=#1114）"
+        )
     return "；多实例模式（STP_SOCKETIO_REDIS_ADAPTER=1）下 RunConsole 无 owner 路由，该运行可能由其他控制面实例持有（#1114）"
 
 
 def multi_instance_console_warning() -> Optional[str]:
-    """#1114：多实例模式下受影响功能的启动告警文案（None = 单实例，无告警）。"""
+    """#1114 / #1737 P2：多实例模式下功能边界的启动告警（None = 单实例，无告警）。
+
+    注册表启用后跨实例能力已部分归位（run_key 互斥 + owner 登记 + status 快照），
+    剩余限制单独列出；未启用时保持 v1.2 的「单实例语义」告警不变。
+    """
     if not _multi_instance_enabled():
         return None
+    if _console_registry.console_registry_enabled():
+        return (
+            "multi_instance_mode_enabled console_run_key_mutex=true "
+            "console_status_cross_instance=true "
+            "remaining_limits=read_log_replay,cancel_forwarding "
+            "affected=dedup_jira_run_cancel,agent_install_console_cancel,"
+            "ai_assistant_console_cancel ref=#1737/#1114"
+        )
     return (
         "multi_instance_mode_enabled console_features_single_instance_only=true "
         "affected=dedup_jira_serialization,agent_install_console,"
@@ -396,6 +414,10 @@ class RunConsole:
                     self._runs.pop(run_id, None)
                 raise RunConsoleError(f"console registry unavailable: {exc}") from exc
             self._ensure_registry_ticker()
+            # P2：发布 RUNNING 快照（跨实例 status / 订阅校验读它）
+            self._publish_snapshot(
+                run, ttl_seconds=_console_registry.console_registry_ttl_seconds(),
+            )
 
         # 子进程环境：#1228 白名单（不继承控制面环境/凭据）+ 调用方注入 +
         # 强制无缓冲/UTF-8 输出。
@@ -527,6 +549,10 @@ class RunConsole:
             status_snapshot = run.to_status()
         self._release_key(run.run_key, run_id=run.run_id)
         self._do_emit("console_status", status_snapshot, f"console:{run.run_id}")
+        # P2：终态快照保留（TTL=本地终态保留期）——跨实例 status 在 run 结束后
+        # 仍可读（与本地 `_sweep_terminal_runs` 的保留语义对齐）。
+        if _console_registry.console_registry_enabled():
+            self._publish_snapshot(run, ttl_seconds=self._terminal_retention_seconds)
         logger.info(
             "run_console_finished run_id=%s status=%s exit=%s seq=%d",
             run.run_id, status_snapshot["status"], returncode, status_snapshot["seq"],
@@ -615,7 +641,15 @@ class RunConsole:
     def status(self, run_id: str) -> Optional[Dict[str, Any]]:
         self._sweep_terminal_runs()
         run = self._runs.get(run_id)
-        return run.to_status() if run else None
+        if run is not None:
+            return run.to_status()
+        # #1737 P2：本地无此 run——多实例形态下读 owner 快照（跨实例 status；
+        # `console:` 房间订阅校验共用本方法，见 socketio_server）。
+        if _console_registry.console_registry_enabled():
+            snapshot = _console_registry.read_status_snapshot(run_id)
+            if snapshot is not None:
+                return snapshot
+        return None
 
     def _sweep_terminal_runs(self) -> None:
         """#1124：淘汰终态超保留期的运行记录，`_runs` 不随进程生命周期无界增长。
@@ -642,6 +676,10 @@ class RunConsole:
                 "run_console_sweep_evicted count=%d retention=%.0fs",
                 len(evicted), self._terminal_retention_seconds,
             )
+            # P2：同步清理跨实例快照（best-effort；TTL 兜底）
+            if _console_registry.console_registry_enabled():
+                for rid in evicted:
+                    _console_registry.delete_status_snapshot(rid)
 
     def read_log(self, run_id: str, *, from_seq: int = 0) -> Dict[str, Any]:
         """文件 replay：返回从 from_seq（1-based，含）起的行 + 当前 seq/status。
@@ -699,6 +737,24 @@ class RunConsole:
         """续期间隔 = TTL/3（下限 10s）——保证每个 TTL 窗口至少两次续期机会。"""
         return max(10.0, _console_registry.console_registry_ttl_seconds() / 3.0)
 
+    def _snapshot_payload(self, run: ConsoleRun) -> Dict[str, Any]:
+        """状态快照 = ``to_status()`` + ``updated_at``（跨实例读取的时点提示）。"""
+        with run._lock:
+            snapshot = run.to_status()
+        snapshot["updated_at"] = datetime.now(timezone.utc).isoformat()
+        return snapshot
+
+    def _publish_snapshot(self, run: ConsoleRun, *, ttl_seconds: float) -> None:
+        """best-effort 发布状态快照（P2）——失败仅告警，绝不影响 run 本身。"""
+        try:
+            _console_registry.publish_status_snapshot(
+                run.run_id, self._snapshot_payload(run), ttl_seconds=int(ttl_seconds),
+            )
+        except _console_registry.ConsoleRegistryUnavailable as exc:
+            logger.warning(
+                "run_console_snapshot_publish_failed run_id=%s error=%s", run.run_id, exc,
+            )
+
     def _ensure_registry_ticker(self) -> None:
         if not _console_registry.console_registry_enabled():
             return
@@ -745,6 +801,12 @@ class RunConsole:
                     run.run_id,
                     _console_registry.control_plane_instance_id(),
                 )
+            # P2：刷新状态快照 TTL；键被淘汰/丢失 → 重发全文
+            snapshot_ttl = _console_registry.console_registry_ttl_seconds()
+            if not _console_registry.refresh_status_ttl(
+                run.run_id, ttl_seconds=snapshot_ttl,
+            ):
+                self._publish_snapshot(run, ttl_seconds=snapshot_ttl)
 
     def _abort_run_key_lost(self, run: ConsoleRun) -> None:
         """确认失去全局互斥 → 止损取消（保「同 key 全局至多一个 RUNNING」不变量）。"""
