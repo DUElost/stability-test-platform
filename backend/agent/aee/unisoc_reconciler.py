@@ -8,7 +8,7 @@ import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 from ..watcher.contracts import ContractViolation
 from .mobilelog import make_adb_pull_fn
