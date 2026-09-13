@@ -178,3 +178,16 @@ describe('compareNodeEntries', () => {
     expect(nodes.sort(compareNodeEntries).map(n => n.label)).toEqual(['node-2', 'node-10']);
   });
 });
+
+describe('ADR-0038 退役节点判据（#1807）', () => {
+  it('退役主机上的设备不可就绪（节点已退役优先于离线原因）', () => {
+    const result = buildDeviceReadinessRows(
+      [{ id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE' }],
+      [{ id: 'h1', status: 'ONLINE', retired_at: '2026-09-13T00:00:00Z' }],
+    );
+
+    expect(result[0].reasons).toContain('节点已退役');
+    expect(result[0].reasons).not.toContain('节点离线');
+    expect(result[0].ready).toBe(false);
+  });
+});
