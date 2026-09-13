@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -9,6 +10,7 @@ from backend.models.notification import (
     ChannelType,
     EventType,
     NotificationChannel,
+    NotificationDelivery,
     NotificationLog,
 )
 from backend.services import notification_service as mod
@@ -39,6 +41,9 @@ class _FakeQuery:
 
     def all(self):
         return self._rules
+
+    def first(self):
+        return self._rules[0] if self._rules else None
 
 
 class _FakeSession:
@@ -225,10 +230,121 @@ def test_dispatch_skips_already_ok_channels_on_retry(db_session, monkeypatch):
     assert delivery[str(bad_ch.id)]["outcome"] == DeliveryOutcome.REJECTED_TRANSIENT.value
 
     sent.clear()
+    db_session.add_all([
+        NotificationLog(
+            event_type=EventType.RUN_FAILED.value, title="unrelated", message="",
+            context={"run_id": 1000 + index, "device_serial": "D1"},
+        )
+        for index in range(35)
+    ])
+    db_session.commit()
     with pytest.raises(mod.NotificationDeliveryError):
         mod.dispatch_notification(EventType.RUN_FAILED.value, ctx)
     # Only the previously failed channel is retried.
     assert sent == [bad_ch.id]
+
+
+@pytest.mark.asyncio
+async def test_offline_saq_retry_keeps_event_identity_and_successful_channels(db_session, monkeypatch):
+    from backend.tasks import saq_worker
+    from backend.tasks.saq_tasks import send_notification_task
+
+    channels = [
+        NotificationChannel(name=name, type=ChannelType.WEBHOOK, config={}, enabled=True)
+        for name in ("accepted-first", "retry-once")
+    ]
+    db_session.add_all(channels)
+    db_session.flush()
+    db_session.add_all([
+        AlertRule(name=channel.name, event_type=EventType.DEVICE_OFFLINE, channel_id=channel.id, enabled=True)
+        for channel in channels
+    ])
+    db_session.commit()
+    channel_ids = [channel.id for channel in channels]
+    queued = []
+    sent = []
+    monkeypatch.setattr(mod, "_emit_notification_socketio", lambda *args, **kwargs: None)
+
+    def enqueue(task_name, **kwargs):
+        queued.append(kwargs)
+        return True
+
+    def send(channel, message):
+        sent.append(channel.id)
+        if channel.id == channel_ids[1] and sent.count(channel.id) == 1:
+            return rejected_transient("temporary failure")
+        return accepted("WEBHOOK")
+
+    monkeypatch.setattr(saq_worker, "enqueue_sync", enqueue)
+    monkeypatch.setattr(mod, "send_to_channel", send)
+    source_context = {"device_serial": "OFFLINE-TEST", "device_id": 12, "host_id": "test-host"}
+    mod.dispatch_notification_async(EventType.DEVICE_OFFLINE.value, source_context)
+    context = json.loads(json.dumps(queued[0]["context"]))
+    assert "notification_event_id" in context
+    assert "notification_event_id" not in source_context
+    with pytest.raises(mod.NotificationDeliveryError):
+        await send_notification_task({}, event_type=EventType.DEVICE_OFFLINE.value, context=context)
+
+    db_session.add_all([
+        NotificationLog(
+            event_type=EventType.DEVICE_OFFLINE.value, title="unrelated", message="",
+            context={"notification_event_id": f"unrelated-{index}", "device_serial": "OFFLINE-TEST"},
+        )
+        for index in range(35)
+    ])
+    db_session.commit()
+    await send_notification_task(
+        {}, event_type=EventType.DEVICE_OFFLINE.value, context=json.loads(json.dumps(context)),
+    )
+    assert sent.count(channel_ids[0]) == 1
+    assert sent.count(channel_ids[1]) == 2
+    log = db_session.query(NotificationLog).filter(
+        NotificationLog.context["notification_event_id"].as_string() == context["notification_event_id"],
+    ).one()
+    facts = db_session.query(NotificationDelivery).filter_by(notification_log_id=log.id).all()
+    assert {fact.channel_id: fact.attempt_count for fact in facts} == {channel_ids[0]: 1, channel_ids[1]: 2}
+    assert all(fact.state == "accepted" for fact in facts)
+
+    mod.dispatch_notification_async(EventType.DEVICE_OFFLINE.value, source_context)
+    assert queued[1]["key"] != queued[0]["key"]
+    assert queued[1]["context"]["notification_event_id"] != context["notification_event_id"]
+    await send_notification_task({}, event_type=EventType.DEVICE_OFFLINE.value, context=queued[1]["context"])
+    assert sent.count(channel_ids[0]) == 2
+    assert sent.count(channel_ids[1]) == 3
+
+
+@pytest.mark.parametrize("failure_mode", ["unavailable", "exception", "async"])
+def test_offline_fallback_preserves_enqueued_event_identity(monkeypatch, failure_mode):
+    from backend.tasks import saq_worker
+
+    queued = {}
+    fallbacks = []
+
+    def enqueue(task_name, **kwargs):
+        queued.update(kwargs)
+        if failure_mode == "exception":
+            raise RuntimeError("queue down")
+        return failure_mode == "async"
+
+    monkeypatch.setattr(saq_worker, "enqueue_sync", enqueue)
+    monkeypatch.setattr(mod, "_dispatch_notification_via_pool", lambda event, context: fallbacks.append(context))
+    mod.dispatch_notification_async(EventType.DEVICE_OFFLINE.value, {"device_serial": "OFFLINE-TEST"})
+    if failure_mode == "async":
+        queued["on_async_failure"](RuntimeError("queue down"))
+    assert len(fallbacks) == 1
+    assert fallbacks[0]["notification_event_id"] == queued["context"]["notification_event_id"]
+    assert queued["key"] == mod._notification_job_key(EventType.DEVICE_OFFLINE.value, fallbacks[0])
+
+
+def test_explicit_offline_event_identity_is_reused(monkeypatch):
+    from backend.tasks import saq_worker
+
+    queued = []
+    monkeypatch.setattr(saq_worker, "enqueue_sync", lambda task, **kwargs: queued.append(kwargs) or True)
+    context = {"device_serial": "OFFLINE-TEST", "notification_event_id": "stable-event"}
+    mod.dispatch_notification_async(EventType.DEVICE_OFFLINE.value, context)
+    mod.dispatch_notification_async(EventType.DEVICE_OFFLINE.value, dict(context))
+    assert queued[0]["key"] == queued[1]["key"]
 
 
 def test_send_dingtalk_business_errcode_is_permanent(monkeypatch):

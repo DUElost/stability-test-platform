@@ -8,11 +8,52 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+def probe_jira_project_key(key: str, *, timeout: float = 5.0) -> Optional[bool]:
+    """Best-effort existence probe for a JIRA project key (#710 / ADR-0029 D12).
+
+    Returns:
+      - ``True`` if the project exists (HTTP 200),
+      - ``False`` if it is definitively absent (HTTP 404),
+      - ``None`` if the probe is unavailable (no ``STP_JIRA_BASE_URL`` /
+        ``STP_JIRA_TOKEN`` configured) or the result is inconclusive
+        (network error / non-200-404 status).
+
+    Non-blocking by contract: filing must proceed regardless — a wrong key
+    still silently falls back to the vendor tool's own mapping, but this probe
+    lets us record a WARNING so the operator can fix the registry.
+    """
+    key = (key or "").strip()
+    if not key:
+        return None
+    base = (os.getenv("STP_JIRA_BASE_URL") or "").strip().rstrip("/")
+    if not base:
+        return None
+    token = (os.getenv("STP_JIRA_TOKEN") or "").strip()
+    url = f"{base}/rest/api/2/project/{key}"
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        import requests
+
+        resp = requests.get(url, headers=headers, timeout=timeout)
+    except Exception:
+        logger.warning("jira_project_probe_unreachable key=%s", key, exc_info=True)
+        return None
+    if resp.status_code == 200:
+        return True
+    if resp.status_code == 404:
+        return False
+    logger.warning("jira_project_probe_http_%s key=%s", resp.status_code, key)
+    return None
 
 
 def resolve_jira_project_key(db: Session, plan_run_id: Optional[int]) -> Optional[str]:

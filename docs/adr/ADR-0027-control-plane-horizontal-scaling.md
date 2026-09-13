@@ -1,7 +1,7 @@
 # ADR-0027: 控制面水平扩展（Leader Election + 多实例）
 
 - 状态：Accepted（P3-1 / P3-2 / P3-3 代码已落地；生产多实例仍为 **opt-in**，见 ADR-0025 D1）
-- 版本记录：v1.1（2026-09-08）leadership 失败策略 fail-open → 按 deployment 形态分级（R01-F10/#890）/ v1.2（2026-09-11）多实例清单增补 RunConsole 单实例约束（#1114，R11-F06）/ v1.3（2026-09-11）「可不 sticky」加 transport 前提：Agent websocket-only（#1121，R11-F13）
+- 版本记录：v1.1（2026-09-08）leadership 失败策略 fail-open → 按 deployment 形态分级（R01-F10/#890）/ v1.2（2026-09-11）多实例清单增补 RunConsole 单实例约束（#1114，R11-F06）/ v1.3（2026-09-11）「可不 sticky」加 transport 前提：Agent websocket-only（#1121，R11-F13）/ v1.4（2026-09-13）新增 RunConsole 归属注册表 P3-4（P1：全局 run_key 互斥 + owner 登记，#1737）
 - 优先级：P2
 - 目标里程碑：M6
 - 日期：2026-07-20
@@ -73,23 +73,46 @@ ADR-0026 将 P3 标为远期方向：
 - **默认**：仍推荐单进程；未开 adapter / 未开 leader election 时行为与历史一致。
 - SAQ in-process worker 仍可每实例各跑一个（共享 Redis 队列，由 SAQ 本身去重消费）；`STP_ENABLE_INPROCESS_SAQ=0` + 外部 worker 仍是可选拓扑。
 
+### P3-4（P1 已落地 / P2–P4 在途）：RunConsole 归属注册表（#1737）
+
+- 模块：`backend/realtime/console_registry.py`——**同步** Redis 客户端（`RunConsole` 是
+  同步线程模型，且会被事件循环线程直接调用；`run_coroutine_threadsafe` 桥接会在循环
+  线程内死锁），形态与 P3-3 `agent_sid_registry` 同族（TTL + 指纹 CAS Lua）。
+- 开关：`STP_CONSOLE_REGISTRY`（默认跟随 Redis adapter；`0`/`1` 显式覆盖；`TESTING=1` 恒关）；
+  TTL `STP_CONSOLE_REGISTRY_TTL_SECONDS`（默认 120s；续期间隔 = TTL/3）。
+- 键：`stp:console:key:<run_key>`（互斥；`SET NX PX` 获取 + Lua CAS 续期/释放）/
+  `stp:console:owner:<run_id>`（owner 登记；renew-or-rebuild 同 #1113）。
+- 语义（裁决草案：[`docs/design/2026-09-13-run-console-multi-instance-ownership.md`](../design/2026-09-13-run-console-multi-instance-ownership.md)，方向 A）：
+  - **获取 fail-closed**：注册表不可用 → 拒绝启动（不静默降级为本地互斥）；
+  - **续期 `lost`**（确认外部持有/键丢失）→ **止损取消**本 run，保「同 key 全局至多一个
+    RUNNING」不变量；纯瞬态错误（`unavailable`）仅告警、等下个 tick，不误杀；
+  - **owner 失联**：TTL 过期后 `run_key` 自动可再获取（失联窗口 ≤ TTL）。
+- 分阶段：**P1 全局互斥 + owner 登记（本次）** → P2 `status()` / 订阅校验走共享状态 →
+  P3 `cancel` 请求位 + owner 消费 → P4 `read_log` 跨实例评估（是否引入控制面间 RPC 另议）。
+
 ## 生产多实例检查清单（opt-in）
 
 1. `STP_SCHEDULER_LEADER_ELECTION=1`（默认）
 2. `STP_SOCKETIO_REDIS_ADAPTER=1`
-3. `STP_AGENT_SID_REGISTRY` 保持默认（跟随 adapter）或显式 `1`
+3. `STP_AGENT_SID_REGISTRY` 保持默认（跟随 adapter）或显式 `1`；`STP_CONSOLE_REGISTRY`
+   同款（v1.4 / P3-4，P1：互斥 + owner 登记）
 4. Postgres + Redis 可达；LB 可不 sticky **的条件**（v1.3 / #1121）：Agent 强制
    `transports=["websocket"]`（单条长连接=会话天然亲和）+ LB/nginx 支持 WS upgrade；
    浏览器端 WS-first，**polling 回退路径需会话 sticky**。无 sticky 的端到端 RPC
    验收仍按 [adr-0026 rollout 清单](../operations/adr-0026-admission-and-scale-gray-rollout.md)
    的未勾选项执行
 5. 仍以 ADR-0025 D1 重启条件为准，勿过早扩容
-6. **RunConsole 依赖功能为单实例语义**（v1.2 / #1114 / R11-F06）：dedup Jira `run_key`
-   串行、Agent 安装 console、AI 助手 console 动作与日志、`console:` 房间订阅均依赖
-   RunConsole 的进程内态（无 owner 路由）——**使用这些功能的部署禁止启用多实例**，
-   或先在 LB 层把相关会话 sticky 到单实例。跨实例 console 操作返回可诊断错误
-   （错误详情含 `#1114` 提示），启用多实例时后端启动输出
-   `multi_instance_mode_enabled ... ref=#1114` WARN。
+6. **RunConsole 跨实例边界**（v1.2 / #1114 → v1.4 / #1737 P3-4）：按
+   `STP_CONSOLE_REGISTRY` 状态区分——
+   - **未启用**（默认跟随 adapter；显式 `0` 时）：与本条 v1.2 语义一致——dedup Jira
+     `run_key` 串行、Agent 安装 console、AI 助手 console 动作与日志、`console:` 房间
+     订阅均为**单实例语义**，使用这些功能的部署禁止启用多实例（或先把相关会话 sticky
+     到单实例）；跨实例 console 操作返回可诊断错误（详情含 `#1114`），启动输出
+     `multi_instance_mode_enabled ... ref=#1114` WARN。
+   - **启用后**（P3-4 P1）：`run_key` **全局互斥**（fail-closed；确认失锁止损取消）与
+     owner 登记跨实例生效；**剩余限制（P2/P3 在途）**：跨实例 `status()` / `cancel()` /
+     `read_log()` 与 `console:` 房间订阅校验仍查本地态——需要这些能力的部署仍应保持
+     单实例或 sticky。
 
 ## 与 ADR-0025 D1 的关系
 
@@ -100,7 +123,7 @@ ADR-0026 将 P3 标为远期方向：
 
 - 正向：P3 三段可合并；单实例默认零行为变化；正式多实例路径可文档化。
 - 负向：advisory lock 依赖 Postgres；Redis adapter / registry 增加 pub/sub 与 key 流量；跨实例 RPC 依赖 python-socketio Redis manager 的 room ack 路径。
-- 回滚：`STP_SCHEDULER_LEADER_ELECTION=0` / `STP_SOCKETIO_REDIS_ADAPTER=0` / `STP_AGENT_SID_REGISTRY=0` 或 revert 对应接线。
+- 回滚：`STP_SCHEDULER_LEADER_ELECTION=0` / `STP_SOCKETIO_REDIS_ADAPTER=0` / `STP_AGENT_SID_REGISTRY=0` / `STP_CONSOLE_REGISTRY=0` 或 revert 对应接线。
 
 ## 关联
 
@@ -119,3 +142,4 @@ ADR-0026 将 P3 标为远期方向：
 | 2026-09-08 | v1.1（R01-F10/#890）：Postgres 形态下 leadership 获取失败 fail-open → **fail-closed**（跳过 tick）；fail-open 仅保留于显式禁用（遗留单进程）与非 PG 形态两条文档化豁免路径；故障注入测试 `tests/test_leader_election.py` |
 | 2026-09-11 | v1.2（#1114/R11-F06）：多实例检查清单增补第 6 条——RunConsole 依赖功能（dedup 串行 / 安装 console / 助手 console / console 房间）为单实例语义；跨实例 console 操作改可诊断错误 + 启动 WARN（未做 owner 路由，属显式限制而非默认行为） |
 | 2026-09-11 | v1.3（#1121/R11-F13）：清单第 4 条「LB 可不 sticky」加前提——Agent websocket-only（实现同步改 `transports=["websocket"]`；此前默认 polling 优先，会话亲和与无 sticky 冲突）+ 浏览器 polling 回退需 sticky；无 sticky 端到端验收仍归 rollout 清单 |
+| 2026-09-13 | v1.4（#1737/P3-4）：新增 RunConsole 归属注册表（`STP_CONSOLE_REGISTRY`）——**P1 已落地**：全局 `run_key` 互斥（`SET NX PX` + Lua CAS 续期/释放；获取 fail-closed；确认失锁止损取消）+ owner 登记（renew-or-rebuild）；清单第 6 条按注册表状态区分（未启用=单实例语义；启用=互斥/登记跨实例，status/cancel/read_log 为 P2/P3 剩余限制）；裁决草案 `docs/design/2026-09-13-run-console-multi-instance-ownership.md`（方向 A / 窄化自杀 / TTL 120s） |

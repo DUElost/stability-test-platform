@@ -13,6 +13,7 @@ import smtplib
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from typing import Any, Dict
+from uuid import uuid4
 
 import requests
 from sqlalchemy.orm import joinedload
@@ -326,40 +327,33 @@ def _send_email(to: str, subject_prefix: str, message: str) -> DeliveryResult:
     return accepted("EMAIL", "smtp accepted")
 
 
-def _delivery_identity(event_type: str, context: Dict[str, Any]) -> tuple[Any, ...]:
-    """Stable identity for idempotent channel delivery across SAQ retries."""
-    return (
-        event_type,
-        context.get("run_id"),
-        context.get("task_id"),
-        context.get("device_serial"),
-    )
-
-
 def _load_prior_channel_delivery(
     db, event_type: str, context: Dict[str, Any],
 ) -> tuple[int | None, dict[str, Any]]:
     """Return (log_id, channel_delivery) from the latest matching log, if any."""
-    run_id = context.get("run_id")
-    if run_id is None:
-        return None, {}
-    rows = (
+    query = (
         db.query(NotificationLog)
-        .filter(NotificationLog.event_type == event_type)
-        .order_by(NotificationLog.id.desc())
-        .limit(30)
-        .all()
+        .filter(
+            NotificationLog.event_type == event_type,
+            NotificationLog.source == NotificationSource.PLATFORM,
+        )
     )
-    identity = _delivery_identity(event_type, context)
-    for log in rows:
-        ctx = log.context if isinstance(log.context, dict) else {}
-        if _delivery_identity(event_type, ctx) != identity:
-            continue
-        delivery = ctx.get("channel_delivery")
-        if isinstance(delivery, dict):
-            return log.id, dict(delivery)
-        return log.id, {}
-    return None, {}
+    if context.get("run_id") is None:
+        event_id = context.get("notification_event_id")
+        if not event_id:
+            return None, {}
+        query = query.filter(NotificationLog.context["notification_event_id"].as_string() == event_id)
+    else:
+        for field in ("run_id", "task_id", "device_serial"):
+            value = context.get(field)
+            stored = NotificationLog.context[field].as_string()
+            query = query.filter(stored.is_(None) if value is None else stored == str(value))
+    log = query.order_by(NotificationLog.id.desc()).first()
+    if log is None:
+        return None, {}
+    ctx = log.context if isinstance(log.context, dict) else {}
+    delivery = ctx.get("channel_delivery")
+    return log.id, dict(delivery) if isinstance(delivery, dict) else {}
 
 
 def _delivery_state_for(result: DeliveryResult) -> str:
@@ -648,6 +642,8 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
 
 def _notification_job_key(event_type: str, context: Dict[str, Any]) -> str:
     """SAQ 去重键：同一事件的重复终态/心跳不重复入队（D7 去重键形态之一）。"""
+    if context.get("run_id") is None and context.get("notification_event_id"):
+        return f"notif:{event_type}:event:{context['notification_event_id']}"
     return (
         f"notif:{event_type}:"
         f"{context.get('run_id')}:{context.get('device_serial') or ''}"
@@ -677,6 +673,9 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
     （不能简单改用 ``required=True``：它在**主事件循环线程**上调用会直接抛
     EnqueueSyncError 防死锁，而本函数存在从循环内调用的路径。）
     """
+    context = dict(context or {})
+    if context.get("run_id") is None and not context.get("notification_event_id"):
+        context["notification_event_id"] = uuid4().hex
     enqueued = False
     try:
         from backend.tasks.saq_worker import enqueue_sync
@@ -773,6 +772,51 @@ def _emit_notification_socketio(
         logger.debug("emit_notification_socketio_failed", exc_info=True)
 
 
+def _resolve_alert_link(labels: Dict[str, Any], annotations: Dict[str, Any]) -> Any:
+    """#625：为 Alertmanager 告警推导站内跳转目标（context.link）。
+
+    优先级：
+    1. ``annotations.link``——告警规则显式标注的站内路径（以 ``/`` 开头），
+       给运维在规则层钉任意目标的出口；
+    2. labels 里的主机标识（``host`` / ``hostname`` / ``instance``，剥
+       ``:port``）对 host 表做 hostname/ip 归一查找，命中 → ``/hosts``；
+    3. 都没有 → None（context 不带 link，前端维持原判）。
+
+    best-effort：解析失败只记 debug 不阻断告警落库（与 resolve_
+    jira_project_key 的旁路语义同风格）。
+    """
+    try:
+        explicit = annotations.get("link")
+        if isinstance(explicit, str) and explicit.startswith("/"):
+            return explicit
+
+        from backend.models.host import Host
+
+        candidates = [
+            labels.get("host"),
+            labels.get("hostname"),
+            labels.get("instance"),
+        ]
+        for raw in candidates:
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            ident = raw.strip().rsplit(":", 1)[0] if raw.count(":") == 1 else raw.strip()
+            if not ident:
+                continue
+            with SessionLocal() as db:
+                host = (
+                    db.query(Host)
+                    .filter((Host.hostname == ident) | (Host.ip == ident))
+                    .first()
+                )
+            if host is not None:
+                return "/hosts"
+        return None
+    except Exception:
+        logger.debug("alert_link_resolve_failed", exc_info=True)
+        return None
+
+
 def receive_alertmanager_alert(alert_data: Dict[str, Any]) -> None:
     """Process an alertmanager webhook payload and log it."""
     try:
@@ -791,6 +835,15 @@ def receive_alertmanager_alert(alert_data: Dict[str, Any]) -> None:
             title = f"[{alertname}] {status}"
             message = annotations.get("description", annotations.get("summary", ""))
 
+            # #625：可跳转上下文——解析得到 link 才写入（前端盲拼，无 link
+            # 维持原 context 形状，消费方兼容）
+            link = _resolve_alert_link(labels, annotations)
+            context: Dict[str, Any] = {
+                "labels": labels, "annotations": annotations, "status": status,
+            }
+            if link:
+                context["link"] = link
+
             with SessionLocal() as db:
                 log = NotificationLog(
                     source=NotificationSource.ALERTMANAGER,
@@ -798,7 +851,7 @@ def receive_alertmanager_alert(alert_data: Dict[str, Any]) -> None:
                     severity=sev,
                     title=title,
                     message=message,
-                    context={"labels": labels, "annotations": annotations, "status": status},
+                    context=context,
                 )
                 db.add(log)
                 db.commit()

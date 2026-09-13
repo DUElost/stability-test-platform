@@ -90,6 +90,11 @@ if args[:2] == ["pr", "view"]:
 if args[:2] == ["pr", "merge"]:
     out()
 if args[:2] == ["pr", "update-branch"]:
+    # #1783：可注入失败（如 PAT 缺 workflow scope 的 GraphQL 拒绝）以验容错分支
+    err = scenario.get("update_branch_error")
+    if err:
+        print(err, file=sys.stderr)
+        sys.exit(1)
     out()
 if args[0] == "api":
     path = args[1] if len(args) > 1 else ""
@@ -279,6 +284,32 @@ def test_empty_queue_closes_alert(tmp_path):
     assert "No eligible PRs" in result.stdout
 
 
+def test_workflow_scope_rejection_keeps_reconcile_green(tmp_path):
+    """#1783：队首 PR 改过 .github/workflows/* 而 PAT 无 workflow scope 时，
+    update-branch 被 GitHub 拒绝——必须绿退并给人工指引，不得整 job 红（否则
+    队首 rebase 停摆、后续 PR 全部积压）。"""
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _head_detail(_ALL_GREEN),
+            "open_issue": "999",
+            "behind_by": 2,
+            "update_branch_error": (
+                "GraphQL: refusing to allow a Personal Access Token to create or "
+                "update workflow `.github/workflows/ci.yml` without `workflow` "
+                "scope (updatePullRequestBranch)"
+            ),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "pr update-branch")
+    assert "workflow" in result.stdout and "scope" in result.stdout, result.stdout
+    # 指引要能落地：提示手工 rebase
+    assert "rebase" in result.stdout.lower(), result.stdout
+
+
 def test_alert_creation_failure_does_not_fail_reconcile(tmp_path):
     result, calls = _run_queue(
         tmp_path,
@@ -298,15 +329,32 @@ def test_alert_creation_failure_does_not_fail_reconcile(tmp_path):
 # ── #1761：pending（进行中）不得被当作失败告警 ──────────────────────────────
 
 
-def _head_detail_with_status(checks: dict[str, tuple[str, str]]) -> dict:
+def _now_iso() -> str:
+    """当前 UTC 的 ISO8601（供「仍在启动窗口」用例）。"""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _head_detail_with_status(
+    checks: dict[str, tuple[str, str]], *, started_at: str | None = None,
+) -> dict:
     """带 status 的 statusCheckRollup（#1761 之前 harness 只造 name+conclusion，
-    正是这个缺口让「进行中 conclusion 为空」被误判为 missing 而长期未被发现）。"""
+    正是这个缺口让「进行中 conclusion 为空」被误判为 missing 而长期未被发现）。
+
+    ``started_at``（#1792 第三类）：模拟已注册 check 的启动时刻——脚本据「最早
+    startedAt 距今是否超过宽限」区分「启动窗口内尚未注册」与「真 missing」。
+    """
+    entries = []
+    for k, (s, c) in checks.items():
+        entry = {"name": k, "status": s, "conclusion": c}
+        if started_at is not None:
+            entry["startedAt"] = started_at
+        entries.append(entry)
     return {
         "autoMergeRequest": {"mergeMethod": "MERGE"},
         "headRefName": _HEAD_ROW["headRefName"],
-        "statusCheckRollup": [
-            {"name": k, "status": s, "conclusion": c} for k, (s, c) in checks.items()
-        ],
+        "statusCheckRollup": entries,
     }
 
 
@@ -370,7 +418,51 @@ def test_completed_failure_still_opens_alert(tmp_path):
 
 
 def test_missing_check_entry_still_opens_alert(tmp_path):
-    """注册表里根本没有该 check（无条目）才是真正的 missing，仍应告警。"""
+    """**超出启动窗口**仍缺条目才是真 missing，应告警（#1792 第三类）。"""
+    checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN if k != "CodeQL"}
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            # 关键：给已注册 check 一个**久远**的 startedAt，表示早已超出启动窗口
+            "head_detail": _head_detail_with_status(checks, started_at="2020-01-01T00:00:00Z"),
+            "open_issue": "",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "issue create")
+    # 真正的 missing 走 failed 分支（与「进行中」区分）——日志措辞为 "not reported"
+    assert "CodeQL not reported (missing)" in result.stdout
+
+
+# ── #1792 第三类：启动窗口内的「尚未注册」不得告警 ──────────────────────────
+
+
+def test_check_not_yet_registered_within_startup_window_does_not_alert(tmp_path):
+    """#1855 形态：CodeQL 作为独立 workflow 晚注册，告警时条目尚不存在。
+
+    实测时序：lint 启动 11:14:42、CodeQL 启动 11:15:15（+33s），而告警发生在
+    11:14:49（早于 CodeQL 注册 26s）。该窗口内条目确实不存在，但属正常启动时序。
+    """
+    checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN if k != "CodeQL"}
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            # 刚启动（相对测试运行时刻）→ 仍在启动窗口
+            "head_detail": _head_detail_with_status(checks, started_at=_now_iso()),
+            "open_issue": "",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_not_called(calls, "issue create")
+    assert "not yet registered (startup window)" in result.stdout
+
+
+def test_no_checks_registered_at_all_is_startup_window(tmp_path):
+    """极早期（rollup 无任何 startedAt）视为启动窗口，不告警。"""
     checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN if k != "CodeQL"}
     result, calls = _run_queue(
         tmp_path,
@@ -378,6 +470,78 @@ def test_missing_check_entry_still_opens_alert(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
+    _assert_not_called(calls, "issue create")
+    assert "startup window" in result.stdout
+
+
+def test_startup_window_does_not_close_existing_alert(tmp_path):
+    """启动窗口中不得 resolve 存量告警（CI 未跑完，真实失败可能紧随其后）。"""
+    checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN if k != "CodeQL"}
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _head_detail_with_status(checks, started_at=_now_iso()),
+            "open_issue": "999",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_not_called(calls, "issue close")
+    _assert_not_called(calls, "issue create")
+
+
+# ── #1792：CodeQL 聚合 check 的 COMPLETED/NEUTRAL 不得判为失败 ──────────────
+
+
+def _neutral_detail() -> dict:
+    """#1792 真实形态：CodeQL=COMPLETED/NEUTRAL（子分析未全完成），其余全绿。
+
+    实证来源：#1775 告警时 1 个 Analyze SUCCESS + 2 个 IN_PROGRESS → 父 check NEUTRAL；
+    以及 #1772 终态 NEUTRAL 在 strict=true 分支保护下**被 GitHub 允许合入**。
+    故 NEUTRAL 是「满足」而非「失败」——我们的 FIFO 不得比分支保护更严。
+    """
+    checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN}
+    checks["CodeQL"] = ("COMPLETED", "NEUTRAL")
+    return _head_detail_with_status(checks)
+
+
+def test_codeql_neutral_does_not_open_alert(tmp_path):
+    """#1792：NEUTRAL 不得告警（#1764 合入后仍在误报的残余源，20 分钟 6 条）。"""
+    result, calls = _run_queue(
+        tmp_path,
+        {"pr_rows": [_HEAD_ROW], "head_detail": _neutral_detail(), "open_issue": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_not_called(calls, "issue create")
+
+
+def test_codeql_neutral_does_not_block_branch_update(tmp_path):
+    """NEUTRAL 应放行 update-branch——若判失败会造成「GitHub 可合入、FIFO 却拒更」的伪停摆。"""
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _neutral_detail(),
+            "open_issue": "",
+            "behind_by": 3,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "pr update-branch")
+
+
+def test_codeql_failure_still_opens_alert(tmp_path):
+    """FAILURE 必须继续告警——NEUTRAL 的放行不得把真实失败一起放过。"""
+    checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN}
+    checks["CodeQL"] = ("COMPLETED", "FAILURE")
+    result, calls = _run_queue(
+        tmp_path,
+        {"pr_rows": [_HEAD_ROW], "head_detail": _head_detail_with_status(checks), "open_issue": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
     _assert_called(calls, "issue create")
-    # 真正的 missing 走 failed 分支（与「进行中」区分）——日志措辞为 "not reported"
-    assert "CodeQL not reported (missing)" in result.stdout
+    assert "CodeQL" in result.stdout and "FAILURE" in result.stdout

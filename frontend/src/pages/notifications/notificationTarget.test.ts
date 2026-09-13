@@ -1,0 +1,36 @@
+import { describe, expect, it } from 'vitest';
+import { notificationTarget } from './notificationTarget';
+import type { NotificationLog } from '@/utils/api/types';
+
+const log = (over: Partial<NotificationLog>): NotificationLog =>
+  ({ id: 1, event_type: 'UNKNOWN', context: {}, read: false, ...over } as NotificationLog);
+
+describe('notificationTarget #625 context.link', () => {
+  it('站内路径 link 优先盲拼', () => {
+    expect(notificationTarget(log({ context: { link: '/hosts' } }))).toEqual({
+      to: '/hosts',
+      label: '查看详情',
+    });
+  });
+
+  it('非 / 开头的 link 忽略（防外链）', () => {
+    expect(notificationTarget(log({ context: { link: 'https://evil.example/x' } }))).toBeNull();
+  });
+
+  it('link 优先于 event_type 映射', () => {
+    const t = notificationTarget(
+      log({ event_type: 'RUN_FAILED', context: { run_id: 7, link: '/hosts' } }),
+    );
+    expect(t?.to).toBe('/hosts');
+  });
+
+  it('无 link 时回退既有映射', () => {
+    expect(
+      notificationTarget(log({ event_type: 'RUN_FAILED', context: { run_id: 7 } }))?.to,
+    ).toBe('/execution/plan-runs/7');
+  });
+
+  it('未知类型且无 link → null', () => {
+    expect(notificationTarget(log({}))).toBeNull();
+  });
+});

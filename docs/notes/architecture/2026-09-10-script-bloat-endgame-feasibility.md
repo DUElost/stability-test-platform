@@ -5,7 +5,7 @@ Class: architecture
 
 ## Decision
 
-产出 1 页可行性 [`docs/reviews/SCRIPT_VERSION_BLOAT_ENDGAME_FEASIBILITY_2026-09-10.md`](../reviews/SCRIPT_VERSION_BLOAT_ENDGAME_FEASIBILITY_2026-09-10.md)，回答 #735 §2「长效机制（差量分发 / 共享基础库）」是否值得立项，并给出四条路径的裁决：
+产出 1 页可行性 [`docs/reviews/SCRIPT_VERSION_BLOAT_ENDGAME_FEASIBILITY_2026-09-10.md`](../../reviews/SCRIPT_VERSION_BLOAT_ENDGAME_FEASIBILITY_2026-09-10.md)，回答 #735 §2「长效机制（差量分发 / 共享基础库）」是否值得立项，并给出四条路径的裁决：
 
 - **量化基线**：`backend/agent/scripts/` 110 个版本目录 / 67,288 行，其中仅 14,475 行属各工具族最新版本，**复制冗余 52,813 行 = 78%**（`flash_firmware` 一族 16 版本 / 20,987 行，最新版 1,802 行）；
 - **本质判据**：任何削减方案先要回答"历史版本还需不需要被**重新执行**"。当前**两侧都无证据**——仓内既无"重跑历史版本"的流程/需求记录，也无"保留全量副本直接导致故障"的记录；膨胀代价目前只体现为行数、评审噪音与 Agent 上下文成本；

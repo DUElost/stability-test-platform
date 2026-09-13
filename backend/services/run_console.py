@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from backend.realtime import console_registry as _console_registry
+
 
 def _multi_instance_enabled() -> bool:
     """Redis adapter（ADR-0027 P3-2）开启 = 多实例形态标志。"""
@@ -255,6 +257,10 @@ class RunConsole:
             os.getenv("STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS"),
             _TERMINAL_RETENTION_SECONDS_DEFAULT,
         )
+        # #1737 P1：多实例归属注册表（默认关闭；门控/语义见 console_registry）。
+        # 互斥键与 owner 键由本进程续期 + CAS 释放；确认失去互斥时止损取消。
+        self._registry_ticker: Optional[threading.Thread] = None
+        self._registry_ticker_stop = threading.Event()
 
     # ------------------------------------------------------------------
     # 单例
@@ -278,6 +284,7 @@ class RunConsole:
                     inst.cancel(run.run_id)
                 except Exception:
                     pass
+            inst._registry_ticker_stop.set()
 
     # ------------------------------------------------------------------
     # 配置
@@ -353,6 +360,19 @@ class RunConsole:
             if run_key in self._inflight_keys:
                 raise RunKeyBusyError(f"run_key busy: {run_key}")
             self._inflight_keys.add(run_key)
+        # #1737 P1：多实例形态下 run_key 需全局互斥（本进程 `_inflight_keys` 只
+        # 覆盖本实例）。fail-closed：注册表不可用 → 拒绝启动，不静默降级为本地互斥。
+        if _console_registry.console_registry_enabled():
+            try:
+                _console_registry.acquire_run_key(run_key, run_id=run_id)
+            except _console_registry.ConsoleRunKeyBusy as exc:
+                with self._lock:
+                    self._inflight_keys.discard(run_key)
+                raise RunKeyBusyError(str(exc)) from None
+            except _console_registry.ConsoleRegistryUnavailable as exc:
+                with self._lock:
+                    self._inflight_keys.discard(run_key)
+                raise RunConsoleError(f"console registry unavailable: {exc}") from exc
         log_path = self._log_root / f"{run_id}.log"
         run = ConsoleRun(
             run_id=run_id,
@@ -364,6 +384,18 @@ class RunConsole:
         )
         with self._lock:
             self._runs[run_id] = run
+
+        if _console_registry.console_registry_enabled():
+            try:
+                _console_registry.register_owner(run_id, run_key=run_key)
+            except _console_registry.ConsoleRegistryUnavailable as exc:
+                # owner 登记失败与「互斥不可用」同口径：fail-closed 清理后拒绝启动
+                _console_registry.release_run_key(run_key, run_id=run_id)
+                with self._lock:
+                    self._inflight_keys.discard(run_key)
+                    self._runs.pop(run_id, None)
+                raise RunConsoleError(f"console registry unavailable: {exc}") from exc
+            self._ensure_registry_ticker()
 
         # 子进程环境：#1228 白名单（不继承控制面环境/凭据）+ 调用方注入 +
         # 强制无缓冲/UTF-8 输出。
@@ -391,7 +423,7 @@ class RunConsole:
             run.status = "FAILED"
             run.error = f"spawn_failed: {exc}"[:500]
             run.ended_at = datetime.now(timezone.utc).isoformat()
-            self._release_key(run_key)
+            self._release_key(run_key, run_id=run_id)
             logger.exception("run_console_spawn_failed run_id=%s", run_id)
             raise RunConsoleError(f"spawn failed: {exc}") from exc
 
@@ -493,7 +525,7 @@ class RunConsole:
             run.exit_code = returncode
             run.ended_at = datetime.now(timezone.utc).isoformat()
             status_snapshot = run.to_status()
-        self._release_key(run.run_key)
+        self._release_key(run.run_key, run_id=run.run_id)
         self._do_emit("console_status", status_snapshot, f"console:{run.run_id}")
         logger.info(
             "run_console_finished run_id=%s status=%s exit=%s seq=%d",
@@ -505,9 +537,13 @@ class RunConsole:
             except Exception:
                 logger.exception("run_console_on_complete_failed run_id=%s", run.run_id)
 
-    def _release_key(self, run_key: str) -> None:
+    def _release_key(self, run_key: str, run_id: Optional[str] = None) -> None:
         with self._lock:
             self._inflight_keys.discard(run_key)
+        # #1737 P1：同步释放全局互斥与 owner 登记（CAS；幂等；失败仅告警、TTL 兜底）
+        if run_id is not None and _console_registry.console_registry_enabled():
+            _console_registry.release_run_key(run_key, run_id=run_id)
+            _console_registry.release_owner(run_id, run_key=run_key)
 
     # ------------------------------------------------------------------
     # 操作
@@ -655,6 +691,78 @@ class RunConsole:
         with self._lock:
             return run_key in self._inflight_keys
 
+    # ------------------------------------------------------------------
+    # 多实例归属注册表（#1737 P1 / ADR-0027 P3-4）
+    # ------------------------------------------------------------------
+
+    def _registry_interval_seconds(self) -> float:
+        """续期间隔 = TTL/3（下限 10s）——保证每个 TTL 窗口至少两次续期机会。"""
+        return max(10.0, _console_registry.console_registry_ttl_seconds() / 3.0)
+
+    def _ensure_registry_ticker(self) -> None:
+        if not _console_registry.console_registry_enabled():
+            return
+        with self._lock:
+            if self._registry_ticker is not None and self._registry_ticker.is_alive():
+                return
+            self._registry_ticker_stop.clear()
+            ticker = threading.Thread(
+                target=self._registry_ticker_loop,
+                name="run-console-registry",
+                daemon=True,
+            )
+            self._registry_ticker = ticker
+        ticker.start()
+
+    def _registry_ticker_loop(self) -> None:
+        while not self._registry_ticker_stop.wait(self._registry_interval_seconds()):
+            try:
+                self._renew_registrations_once()
+            except Exception:
+                logger.exception("run_console_registry_tick_failed")
+
+    def _renew_registrations_once(self) -> None:
+        """续期本实例全部非终态 run 的互斥键与 owner 键。
+
+        互斥键 ``lost``（确认外部持有/键丢失）→ 止损取消（裁决 ③ 窄化自杀）；
+        Redis 瞬态错误（``unavailable``）→ 仅告警，等下个 tick（不误杀）。
+        """
+        with self._lock:
+            runs = [
+                r for r in self._runs.values() if r.status not in _TERMINAL_STATUSES
+            ]
+        for run in runs:
+            key_status = _console_registry.renew_run_key(run.run_key, run_id=run.run_id)
+            if key_status == _console_registry.RENEW_LOST:
+                self._abort_run_key_lost(run)
+                continue
+            if key_status == _console_registry.RENEW_UNAVAILABLE:
+                continue
+            owner_status = _console_registry.renew_owner(run.run_id, run_key=run.run_key)
+            if owner_status == "foreign":
+                logger.error(
+                    "run_console_owner_foreign run_id=%s instance_id=%s",
+                    run.run_id,
+                    _console_registry.control_plane_instance_id(),
+                )
+
+    def _abort_run_key_lost(self, run: ConsoleRun) -> None:
+        """确认失去全局互斥 → 止损取消（保「同 key 全局至多一个 RUNNING」不变量）。"""
+        logger.error(
+            "console_run_key_lost run_id=%s run_key=%s instance_id=%s action=abort",
+            run.run_id,
+            run.run_key,
+            _console_registry.control_plane_instance_id(),
+        )
+        with run._lock:
+            if run.status in _TERMINAL_STATUSES:
+                return
+            run.error = (
+                "run_key_lost: 全局互斥已确认失效（键被外部持有或丢失），"
+                "本 run 止损取消（#1737）"
+            )[:500]
+        self.cancel(run.run_id)
+
     def shutdown(self) -> None:
         """进程退出收尾：cancel 所有 inflight run 并 join reader 线程。
 
@@ -664,6 +772,7 @@ class RunConsole:
         """
         if not self._configured:
             return
+        self._registry_ticker_stop.set()
         with self._lock:
             runs = list(self._runs.values())
         if not runs:
@@ -675,6 +784,10 @@ class RunConsole:
                     self.cancel(run.run_id)
             except Exception:
                 logger.exception("run_console_shutdown_cancel_failed run_id=%s", run.run_id)
+        # #1737 P1：cancel→reader→_finalize 之外再显式兜底释放（CAS 幂等）
+        if _console_registry.console_registry_enabled():
+            for run in runs:
+                self._release_key(run.run_key, run_id=run.run_id)
         logger.info("run_console_shutdown_complete")
 
 
