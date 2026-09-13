@@ -231,6 +231,13 @@ def process_device_logs(
             result.pulled += 1
             result.new_timestamps.append(parsed["timestamp"])
 
+            # #803: 先落 processed/pending，再 on_new_entry（emit + DLE）。
+            # 回调成功、状态未落盘就崩溃会跨重启重拉重 emit；先落盘把窗口换成
+            # 「已 processed 但 emit 未发生」的丢失风险（回调失败本就吞异常）。
+            processed_lines.add(line)
+            save_processed_lines(state_store, processed_key, processed_lines)
+            _save_pending_tasks(state_store, pending_key, pending_tasks)
+
             if on_new_entry is not None:
                 try:
                     on_new_entry({
@@ -244,13 +251,6 @@ def process_device_logs(
                         "aee_on_new_entry_callback_failed serial=%s db=%s",
                         serial, parsed.get("db_path"),
                     )
-
-            # Persist processed/pending state before best-effort side effects so
-            # slow or failing exports do not keep the whole tick in a half-finished
-            # state and block later db_history increments from being observed.
-            processed_lines.add(line)
-            save_processed_lines(state_store, processed_key, processed_lines)
-            _save_pending_tasks(state_store, pending_key, pending_tasks)
 
             if stop_requested:
                 return
