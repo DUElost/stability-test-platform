@@ -602,12 +602,28 @@ def export_to_tool_dir(
     try:
         # #968：写盘前复核目录契约（存量数据可能绕过 schema 校验）
         export_dir = normalize_export_dir(_resolve_export_dir(suite))
+        export_root = Path(root) / "mtbf"
+        resolved_export_root = export_root.resolve()
+        target = export_root / export_dir
+        if not resolved_export_root.is_relative_to(Path(root).resolve()):
+            raise ValueError("mtbf root must stay inside shared storage")
+        if not target.resolve().is_relative_to(resolved_export_root):
+            raise ValueError("export_dir must stay inside the mtbf root")
     except ValueError as exc:
         raise HTTPException(
             status_code=422,
             detail={"code": "EXPORT_DIR_INVALID", "message": str(exc)},
         ) from exc
-    target = Path(root) / "mtbf" / export_dir
+    built = _built_suite_or_422(db, suite)
+    runtask_bytes = render_runtask(built)
+    global_bytes = render_global(suite.global_params)
+    runtask_sha256 = hashlib.sha256(runtask_bytes).hexdigest()
+    archive_dir = target / runtask_sha256
+    if not archive_dir.resolve().is_relative_to(target.resolve()):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "EXPORT_DIR_INVALID", "message": "archive must stay inside export_dir"},
+        )
     try:
         target.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -616,10 +632,6 @@ def export_to_tool_dir(
             detail={"code": "EXPORT_DIR_UNWRITABLE", "message": str(exc)},
         ) from exc
 
-    built = _built_suite_or_422(db, suite)
-    runtask_bytes = render_runtask(built)
-    global_bytes = render_global(suite.global_params)
-
     runtask_path = target / _RUNTASK_NAME
     global_path = target / _GLOBAL_NAME
     _atomic_write(runtask_path, runtask_bytes)
@@ -627,10 +639,9 @@ def export_to_tool_dir(
 
     # #406：按 sha 归档副本——消费路径仍是 target/runtask.xml；
     # 同 sha 再导出天然去重（覆盖同路径），覆盖消费文件时旧版可恢复。
-    suite.exported_sha256 = hashlib.sha256(runtask_bytes).hexdigest()
+    suite.exported_sha256 = runtask_sha256
     # R05-F10 (#973): Global 与 runtask 同等归档 + 基线，磁盘丢失/被改可检测。
     suite.exported_global_sha256 = hashlib.sha256(global_bytes).hexdigest()
-    archive_dir = target / suite.exported_sha256
     try:
         archive_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write(archive_dir / _RUNTASK_NAME, runtask_bytes)

@@ -27,10 +27,11 @@ def normalize_export_dir(value: str) -> str:
         raise ValueError("export_dir must be a non-empty string")
     if "\x00" in candidate:
         raise ValueError("export_dir must not contain NUL")
-    parts = PurePosixPath(candidate).parts
-    if not parts or parts[0] == "/" or ".." in parts:
+    path = PurePosixPath(candidate)
+    parts = path.parts
+    if not parts or path.is_absolute() or ".." in parts:
         raise ValueError("export_dir must be a relative path without '..'")
-    return str(PurePosixPath(candidate))
+    return str(path)
 
 
 def _validate_exec_descs(descs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
