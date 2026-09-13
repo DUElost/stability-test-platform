@@ -243,16 +243,36 @@ class TestTaskScheduleTimestamps:
 # ===========================================================================
 
 class FakeQuery:
+    """Minimal Query double for retention unit tests (#1827 leaf-first path).
+
+    ``.all()`` returns ``_items`` once then ``[]`` so the candidate while-loop
+    terminates (production re-queries after accumulating selected_ids).
+    """
+
     def __init__(self, items=None):
-        self._items = items or []
+        self._items = list(items or [])
+        self._all_consumed = False
 
     def filter(self, *args, **kwargs):
+        return self
+
+    def order_by(self, *args, **kwargs):
         return self
 
     def limit(self, n):
         return self
 
+    def with_for_update(self, *args, **kwargs):
+        return self
+
+    def exists(self):
+        # Empty FakeQuery ⇒ no outbound chain refs (same as #936 mock semantics).
+        return bool(self._items)
+
     def all(self):
+        if self._all_consumed:
+            return []
+        self._all_consumed = True
         return self._items
 
     def delete(self, synchronize_session=False):
@@ -269,15 +289,22 @@ class TestRunRetentionCleanup:
 
     def _mock_db_with_runs(self, runs):
         """db.query 按首参分发到模型预置结果；列对象查询（#936 引用扫描 /
-        祖先链）返回空 FakeQuery——语义 = 无外部链引用，走原删除路径。"""
+        祖先链）返回空 FakeQuery——语义 = 无外部链引用，走原删除路径。
+
+        #1827: candidate selection queries ``PlanRun.id`` (not the entity) and
+        calls ``.exists()`` / ``.order_by()`` / ``.with_for_update()`` before
+        LIMIT — map id rows explicitly so the sync cleanup path still runs.
+        """
         from backend.models.device_lease import DeviceLease
         from backend.models.job import JobArtifact, JobInstance, StepTrace
         from backend.models.plan_run import PlanRun
         from backend.models.resource_pool import ResourceAllocation
 
         db = MagicMock()
+        id_rows = [(run.id,) for run in runs]
         queries = {
             PlanRun: FakeQuery(items=runs),
+            PlanRun.id: FakeQuery(items=id_rows),
             StepTrace: FakeQuery(),
             DeviceLease: FakeQuery(),
             ResourceAllocation: FakeQuery(),
@@ -285,6 +312,8 @@ class TestRunRetentionCleanup:
             JobInstance: FakeQuery(),
         }
         db.query.side_effect = lambda *a, **k: queries.get(a[0], FakeQuery())
+        # select(JobInstance.id)...; no jobs in these unit fixtures.
+        db.execute.return_value.all.return_value = []
         return db
 
     def test_deletes_stale_runs(self):
