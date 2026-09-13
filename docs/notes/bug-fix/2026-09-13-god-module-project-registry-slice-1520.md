@@ -1,7 +1,7 @@
 # God-module 垂直切片：项目登记簿写路径下沉 service（#1520）
 
 Status: implemented
-Class: refactor
+Class: bug-fix
 
 ## Decision
 
