@@ -36,6 +36,20 @@ update_branch_tolerant() {
     echo "PR #${num} has merge conflicts with main; queue head blocked until resolved manually."
     return 0
   fi
+  # workflow scope 缺口（#1783，run 34689776040 实测）：队首 PR 改过
+  # .github/workflows/* 时，gh pr update-branch 被 GitHub 拒绝——
+  # "refusing to allow a Personal Access Token to create or update workflow
+  #  `.github/workflows/x.yml` without `workflow` scope"。这是**凭据配置**的
+  # 可处置状态（AUTO_MERGE_PAT 缺 workflow scope），不是本 job 故障：原先落到
+  # return rc，整 job 红 + 队首 rebase 停摆（实测 28 个 PR 全部 behind）。
+  # 绿退并给人工动作指引；根因（补 PAT scope = 允许改 CI 定义）属安全面扩张，
+  # 由 owner 单列决策（issue #1783 路径 B），本分支只做无害化。
+  if printf '%s' "$out" | grep -qiE "without .?workflow.? scope"; then
+    echo "PR #${num} touches .github/workflows/* and the queue token lacks 'workflow' scope;"
+    echo "  GitHub refused update-branch. Rebase it manually with a workflow-scoped"
+    echo "  credential (or merge main into the PR branch) to unblock the queue."
+    return 0
+  fi
   # 按 PR 状态判定而非再堆一条报错文案匹配：合入与 update-branch 的竞态
   # 不只有一种报错形态，而「PR 已不在 open 态」是唯一稳定的判据。
   state="$(gh pr view "$num" --repo "$REPO" --json state --jq .state 2>/dev/null || echo UNKNOWN)"
@@ -256,16 +270,26 @@ if [ -z "$auto_method" ]; then
   exit 0
 fi
 
-# 分类 required checks：#1761——「进行中」与「失败」必须分开。
+# 分类 required checks：#1761 + #1792——「进行中」「失败」「中性」必须分开。
 #
-# 原实现只读 .conclusion，而检查进行中时该字段为空串 → 被渲染成 "missing" 并**触发
-# 告警**。后果：每个 PR 在正常 CI 期间都开一条 ci/queue-blocked（实测 83 分钟 20 条、
-# 历史 100 条中 99 条自动关闭），真实停摆被淹没、告警通道失效。
+# #1761：原实现只读 .conclusion，检查进行中时该字段为空串 → 被渲染成 "missing" 并
+# **触发告警**。后果：每个 PR 在正常 CI 期间都开一条 ci/queue-blocked（实测 83 分钟
+# 20 条、历史 100 条中 99 条自动关闭），真实停摆被淹没、告警通道失效。
 #
-# 口径与 tools/dev/queue_head_telemetry.py 的 classify() 对齐：
-#   - status != COMPLETED  → pending：仅日志，不告警（机器在跑，人无需动作）
-#   - status == COMPLETED 且 conclusion != SUCCESS → failed：告警（#1246 要覆盖的真实停摆）
-#   - 注册表里根本没有该 check（无条目）→ missing：告警（这才是真正的 missing）
+# #1792：`CodeQL` 是 GitHub 默认 setup 的**聚合 check**，其子分析
+# （Analyze (actions)/(javascript-typescript)/(python)）未全部完成时，父 check 为
+# `COMPLETED` + **`NEUTRAL`**。原判据「COMPLETED 且 != SUCCESS → failed」把它当成
+# 失败，导致 #1764 合入后仍继续误报（08:20:58–08:41:12 六条）。
+#
+# 判据（与分支保护的实际裁决对齐——**不自作更严**）：
+#   - conclusion == SUCCESS        → 通过
+#   - conclusion == NEUTRAL        → 通过（#1792）。实证：strict=true 的分支保护要求
+#     CodeQL，而 #1772 在 CodeQL=COMPLETED/NEUTRAL 下**被 GitHub 允许合入**，
+#     即对方视 NEUTRAL 为满足态。若我们判它失败，就会出现「GitHub 认为可合入、
+#     我们的 FIFO 却拒绝 update-branch」的队首伪停摆。
+#   - status != COMPLETED          → pending：仅日志，不告警（机器在跑，人无需动作）
+#   - 注册表里根本没有该 check     → missing：告警（真正的 missing）
+#   - status == COMPLETED 且 conclusion 为 FAILURE/CANCELLED/TIMED_OUT/… → failed：告警
 failed_checks=""
 pending_checks=""
 for check in "${REQUIRED[@]}"; do
@@ -286,7 +310,8 @@ for check in "${REQUIRED[@]}"; do
     ' <<<"$head_json"
   )"
 
-  if [ "$status" = "COMPLETED" ] && [ "$conclusion" = "SUCCESS" ]; then
+  # 通过态：SUCCESS 或 NEUTRAL（#1792，与分支保护裁决一致）
+  if [ "$status" = "COMPLETED" ] && { [ "$conclusion" = "SUCCESS" ] || [ "$conclusion" = "NEUTRAL" ]; }; then
     continue
   fi
 

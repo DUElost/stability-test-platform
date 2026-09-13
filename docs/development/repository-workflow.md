@@ -70,6 +70,11 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
 - `main` 启用分支保护，PR 是唯一合入路径；不要直推或手动点击 Merge；
 - `.github/workflows/enable-auto-merge.yml` 维护 FIFO auto-merge，同仓库非 draft eligible
   PR 只有队首启用 auto-merge；
+- **禁止 Execution 自持 auto-merge**：PR 跑到「就绪 + Registry 登记」为止，合入交给
+  队列——不得自行 `gh pr merge --auto` / GraphQL `enablePullRequestAutoMerge`
+  （含 `--squash`），也不得替其他 PR 做 update-branch / nudge。多持有者会破坏 FIFO
+  串行集成；仓库已关闭 squash 合并（`allow_squash_merge=false`），squash 合入还会让
+  Registry 的 merge 主题通道静默失效；
 - `.github/workflows/pr-update-branch.yml` 与队列 reconcile 在队首通过 required checks
   且落后 `main` 时更新分支；
 - fork、`frontend-major` 和 `github_actions` 更新不进入自动合入；
