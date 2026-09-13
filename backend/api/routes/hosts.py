@@ -23,6 +23,8 @@ from backend.models.job import JobInstance
 from backend.api.schemas import (
     HostActiveJob,
     HostCreate,
+    HostRetireIn,
+    HostUnretireIn,
     HostUpdate,
     HostOut,
     HostWatcherAdminStatePatch,
@@ -34,6 +36,7 @@ from backend.services.agent_installer import (
     start_install_agent_runconsole,
 )
 from backend.services.host_maintenance import HostMaintenanceConflict
+from backend.services.host_retirement import retire_host, unretire_host
 from backend.services.host_upgrade_gate import (
     ABORT_POLL_TIMEOUT_SECONDS,
     ACTIVE_JOB_STATUSES as _ACTIVE_JOB_STATUSES,
@@ -550,6 +553,55 @@ def delete_host(
             detail="主机仍被其它记录引用，不可硬删除（请先清理关联数据）",
         ) from exc
     return {"ok": True, "host_id": host_id, "message": "host deleted"}
+
+
+@router.post("/{host_id}/retire", response_model=HostOut)
+def retire_host_endpoint(
+    host_id: str,
+    payload: HostRetireIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0038 D2：主机退役（admin + 审计）。
+
+    前置 Cordon：无活跃 Job、无在途 PlanRun 引用（含 QUEUED）；`status` 不进
+    前置（离线主机同样可退役）。幂等：重复调用返回当前退役态。退役不改写
+    历史行、不删设备/租约（不变量 2），默认列表/派发的过滤在 ③/④ 落地。
+    """
+    host = retire_host(
+        db,
+        host_id=host_id,
+        reason=payload.retire_reason,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        request=request,
+    )
+    return _host_to_out(host, db=db)
+
+
+@router.post("/{host_id}/unretire", response_model=HostOut)
+def unretire_host_endpoint(
+    host_id: str,
+    payload: HostUnretireIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """ADR-0038 D2：解除退役（admin + 审计；无前置）。
+
+    写回语义：清 `retired_at`；`retired_by`/`retire_reason` 保留为最近一次
+    退役痕迹。幂等：对在用主机调用返回原状态。
+    """
+    host = unretire_host(
+        db,
+        host_id=host_id,
+        reason=payload.retire_reason,
+        actor_id=current_user.id,
+        actor_username=current_user.username,
+        request=request,
+    )
+    return _host_to_out(host, db=db)
 
 
 @router.patch("/{host_id}/watcher-admin-state", response_model=HostOut)
