@@ -17,6 +17,7 @@ from backend.api.schemas import AgentLogOut, AgentLogQuery
 from backend.api.schemas.agent import OrphanLogSignalListOut, OrphanLogSignalOut
 from backend.api.routes.auth import get_current_active_user, require_admin, User, verify_agent_secret
 from backend.api.response import ApiResponse, ok
+from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.ssh_security import (
     LOG_FILE_NOT_FOUND_MARKER,
@@ -241,12 +242,52 @@ async def query_runtime_logs(
 # ── Agent SSH Log Query ───────────────────────────────────────────────────────
 
 
+def _audit_retired_log_tail(db: Session, host: Host, query: AgentLogQuery) -> None:
+    """记录「对退役主机发起日志尾读」的审计事实（ADR-0038 D-5 回收类）。
+
+    审计**非 fail-closed**（`strict=False`，与退役/解除退役的 D2 写入不同）：
+    回收类动作是**只读**的——审计写不进去时拒绝一次取证读取，收益小于代价
+    （与「审计写不进去就不许改状态」的写路径语义不同）。缺表时既有容错语义
+    仅告警，不阻断尾读。
+
+    端点由 agent secret 认证、无用户身份，故只记调用事实与目标主机；不加
+    `user_id`/`username`（避免伪造一个并不存在的身份）。
+    """
+    try:
+        record_audit(
+            db,
+            action="host_retired_log_tail",
+            resource_type="host",
+            resource_id=host.id,
+            details={
+                "host_id": host.id,
+                "log_path": query.log_path,
+                "lines": query.lines,
+                "retired_at": host.retired_at.isoformat() if host.retired_at else None,
+            },
+            strict=False,
+        )
+    except Exception as exc:  # noqa: BLE001 — 审计不阻断只读取证（见 docstring）
+        logger.warning("audit_retired_log_tail_failed host=%s: %s", host.id, exc)
+
+
 @router.post("/agent/logs", response_model=AgentLogOut)
 def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db), _: bool = Depends(verify_agent_secret)):
-    """Query agent logs from a Linux host via SSH."""
+    """Query agent logs from a Linux host via SSH.
+
+    ADR-0038 D-5 分类：日志尾读属**数据回收类**——对退役主机**允许**（与
+    热更新/安装等执行/配置类不同，后者拒绝），但必须**审计**，使「谁在何时
+    读了退役机的日志」成为可追溯事实。本端点由 agent secret 认证（非用户会话），
+    故审计记调用事实而不记 user_id/username（见 `_audit_retired_log_tail`）。
+    """
     host = db.get(Host, query.host_id)
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
+
+    # ADR-0038 矩阵 row 12（`logs.py:244-262`）：退役机的日志尾读**允许但需审计**。
+    # 放在 SSH 之前记录，使「已尝试读取」也留痕（与「读取成功」区分）。
+    if host.retired_at is not None:
+        _audit_retired_log_tail(db, host, query)
 
     try:
         cmd = build_remote_log_tail_command(query.log_path, query.lines)

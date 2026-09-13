@@ -51,3 +51,69 @@ def test_existing_host_string_id_roundtrips(client, sample_host, monkeypatch):
     data = resp.json()
     assert data["host_id"] == sample_host.id
     assert data["error"] == "SSH credentials are not configured for this host."
+
+
+# ── #1805 矩阵 row 12：退役机的日志尾读**允许但需审计**（ADR-0038 D-5 回收类）──
+
+
+def _ssh_creds(monkeypatch):
+    monkeypatch.setattr(
+        "backend.api.routes.logs.resolve_host_ssh_credentials",
+        lambda host, inventory_lookup=None: (
+            SimpleNamespace(password=None, key_path=None, user="root", known_hosts_path=None),
+            False,
+        ),
+    )
+
+
+def _audits(db, host_id):
+    from backend.models.audit import AuditLog
+
+    return (
+        db.query(AuditLog)
+        .filter(AuditLog.action == "host_retired_log_tail")
+        .filter(AuditLog.resource_id == host_id)
+        .all()
+    )
+
+
+def test_retired_host_log_tail_is_allowed_and_audited(client, sample_host, db_session, monkeypatch):
+    """退役机的尾读**允许**（回收类，不拒绝）+ **落审计**（ADR-0038 D-5）。"""
+    from datetime import datetime, timezone
+
+    _ssh_creds(monkeypatch)
+    sample_host.retired_at = datetime.now(timezone.utc)
+    db_session.commit()
+
+    resp = client.post(
+        "/api/v1/agent/logs",
+        json={
+            "host_id": sample_host.id,
+            "log_path": "/opt/stability-test-agent/logs/agent.log",
+            "lines": 10,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text  # 允许，不是 403/409
+    rows = _audits(db_session, sample_host.id)
+    assert len(rows) == 1, "退役机尾读必须落审计"
+    details = rows[0].details if isinstance(rows[0].details, dict) else {}
+    assert details.get("log_path") == "/opt/stability-test-agent/logs/agent.log"
+
+
+def test_active_host_log_tail_is_not_audited(client, sample_host, db_session, monkeypatch):
+    """活跃主机不落该审计——避免把「正常取证」也计入退役审计面。"""
+    _ssh_creds(monkeypatch)
+    assert sample_host.retired_at is None
+
+    resp = client.post(
+        "/api/v1/agent/logs",
+        json={
+            "host_id": sample_host.id,
+            "log_path": "/opt/stability-test-agent/logs/agent.log",
+            "lines": 10,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert _audits(db_session, sample_host.id) == []
