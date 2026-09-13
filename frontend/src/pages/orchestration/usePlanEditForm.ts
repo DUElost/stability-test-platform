@@ -98,7 +98,7 @@ export function usePlanEditForm(planId: number | null) {
   // ADR-0029（#405）：归属选择的数据源。字典失败不阻塞编辑（非依赖项）。
   const { data: projects } = useQuery({
     queryKey: ['projects-for-plan-editor'],
-    queryFn: () => api.projects.list(),
+    queryFn: () => api.projects.listActive(),
     staleTime: 60_000,
   });
   const { data: specialties } = useQuery({
