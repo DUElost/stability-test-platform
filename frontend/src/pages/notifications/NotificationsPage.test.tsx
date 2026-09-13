@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     updateRule: vi.fn(),
     deleteRule: vi.fn(),
     markAllRead: vi.fn(),
+    markRead: vi.fn(),
   },
 }));
 
@@ -482,6 +483,32 @@ describe('NotificationsPage', () => {
           mocks.notifications.listLogs.mock.calls.filter((c) => c[1] === 20).length,
         ).toBeGreaterThan(1),
       );
+    });
+
+    it('已读卡片可标回未读（#626）', async () => {
+      setData({ logs: [makeLog({ id: 7, read: true })] });
+      renderPage('/notifications?tab=logs');
+      await screen.findByText('PlanRun #1 失败');
+
+      fireEvent.click(screen.getByText('标为未读'));
+
+      await waitFor(() => expect(mocks.notifications.markRead).toHaveBeenCalledWith(7, false));
+      // 与标记已读同语义：invalidate 触发重取，不是本地改状态
+      await waitFor(() =>
+        expect(
+          mocks.notifications.listLogs.mock.calls.filter((c) => c[1] === 20).length,
+        ).toBeGreaterThan(1),
+      );
+    });
+
+    it('未读卡片「标为已读」仍传 read=true（#626 默认语义不回退）', async () => {
+      setData({ logs: [makeLog({ id: 8, read: false })] });
+      renderPage('/notifications?tab=logs');
+      await screen.findByText('PlanRun #1 失败');
+
+      fireEvent.click(screen.getByText('标为已读'));
+
+      await waitFor(() => expect(mocks.notifications.markRead).toHaveBeenCalledWith(8, true));
     });
 
     it('总数不足一页时不渲染翻页控件', async () => {

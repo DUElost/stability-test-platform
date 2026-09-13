@@ -40,8 +40,9 @@ export const notifications = {
     apiClient.get<NotificationLogsResponse>('/notifications/logs', { params: { skip, limit, unread_only: unreadOnly } }).then(r => r.data),
   unreadCount: () =>
     apiClient.get<UnreadCountResponse>('/notifications/logs/unread-count').then(r => r.data),
-  markRead: (id: number) =>
-    apiClient.patch<{ ok: boolean }>(`/notifications/logs/${id}/read`).then(r => r.data),
+  /** #626：read=false 恢复未读（后端 PATCH body 语义，老调用方缺省仍然是标已读）。 */
+  markRead: (id: number, read = true) =>
+    apiClient.patch<{ ok: boolean }>(`/notifications/logs/${id}/read`, { read }).then(r => r.data),
   markAllRead: () =>
     apiClient.post<{ ok: boolean }>('/notifications/logs/read-all').then(r => r.data),
 };
