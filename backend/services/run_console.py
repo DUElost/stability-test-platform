@@ -22,6 +22,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -52,7 +53,8 @@ def console_run_miss_hint() -> str:
     if _console_registry.console_registry_enabled():
         return (
             "；多实例模式下该运行可能由其他控制面实例持有——跨实例 status（含订阅校验）"
-            "读 owner 快照；cancel / 日志 replay 仍为实例本地语义（#1737 P2，P3/P4 在途，ref=#1114）"
+            "读 owner 快照、cancel 经请求位转发（有界等待）；日志 replay 仍为实例本地语义"
+            "（#1737 P3，P4 在途，ref=#1114）"
         )
     return "；多实例模式（STP_SOCKETIO_REDIS_ADAPTER=1）下 RunConsole 无 owner 路由，该运行可能由其他控制面实例持有（#1114）"
 
@@ -68,10 +70,10 @@ def multi_instance_console_warning() -> Optional[str]:
     if _console_registry.console_registry_enabled():
         return (
             "multi_instance_mode_enabled console_run_key_mutex=true "
-            "console_status_cross_instance=true "
-            "remaining_limits=read_log_replay,cancel_forwarding "
-            "affected=dedup_jira_run_cancel,agent_install_console_cancel,"
-            "ai_assistant_console_cancel ref=#1737/#1114"
+            "console_status_cross_instance=true console_cancel_forwarding=true "
+            "remaining_limits=read_log_replay "
+            "affected=console_log_replay_after_reconnect,dedup_jira_log_replay,"
+            "ai_assistant_console_log ref=#1737/#1114"
         )
     return (
         "multi_instance_mode_enabled console_features_single_instance_only=true "
@@ -113,6 +115,11 @@ def _parse_positive_float(raw: Optional[str], default: float) -> float:
 _REPLAY_MAX_LINES_DEFAULT = 2000
 _REPLAY_MAX_LINE_CHARS = 100_000
 _TERMINAL_RETENTION_SECONDS_DEFAULT = 3600.0
+
+# #1737 P3：跨实例取消——控制 tick（消费取消请求的检查节奏）与取消等待窗。
+# 控制 tick 必须显著小于等待窗，否则请求方必然超时（默认 1s vs 3s）。
+_CONTROL_TICK_SECONDS_DEFAULT = 1.0
+_CANCEL_WAIT_SECONDS_DEFAULT = 3.0
 
 # #1115：组级收敛判据与 #1003（pipeline_engine）同型 —— 「父进程已退出」不代表
 # 「进程组已散」，组里忽略 SIGTERM 的子孙必须升级到 SIGKILL，否则界面已 CANCELED
@@ -279,6 +286,11 @@ class RunConsole:
         # 互斥键与 owner 键由本进程续期 + CAS 释放；确认失去互斥时止损取消。
         self._registry_ticker: Optional[threading.Thread] = None
         self._registry_ticker_stop = threading.Event()
+        # #1737 P3：跨实例取消——等待 owner ack 的上界（控制 tick 见 P3 常量）
+        self._cancel_wait_seconds = _parse_positive_float(
+            os.getenv("STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS"),
+            _CANCEL_WAIT_SECONDS_DEFAULT,
+        )
 
     # ------------------------------------------------------------------
     # 单例
@@ -575,10 +587,53 @@ class RunConsole:
     # 操作
     # ------------------------------------------------------------------
 
+    def _request_remote_cancel(self, run_id: str) -> bool:
+        """P3：跨实例取消——投递请求位 + 有界等待 owner ack；超时 fail-closed。
+
+        仅可在**非事件循环线程**调用（API 同步路由由线程池执行；事件循环内的
+        调用方须经 ``asyncio.to_thread``，见 ``ai_assistant.cancel_action``），
+        否则等待窗会阻塞整个事件循环。
+        """
+        snapshot = _console_registry.read_status_snapshot(run_id)
+        if snapshot is not None and snapshot.get("status") in _TERMINAL_STATUSES:
+            return False  # 已终态：无可取消
+        requested_at = datetime.now(timezone.utc).isoformat()
+        try:
+            _console_registry.request_cancel(run_id, requested_at=requested_at)
+        except _console_registry.ConsoleRegistryUnavailable as exc:
+            logger.warning(
+                "run_console_cancel_request_failed run_id=%s error=%s", run_id, exc,
+            )
+            return False
+        deadline = _monotonic() + self._cancel_wait_seconds
+        while _monotonic() < deadline:
+            ack = _console_registry.read_cancel_ack(run_id, requested_at=requested_at)
+            if ack is not None:
+                canceled = bool(ack.get("canceled"))
+                logger.info(
+                    "run_console_cancel_forwarded run_id=%s canceled=%s by=%s",
+                    run_id, canceled, ack.get("by"),
+                )
+                return canceled
+            time.sleep(0.1)
+        logger.warning(
+            "run_console_cancel_timeout run_id=%s wait=%.1fs",
+            run_id, self._cancel_wait_seconds,
+        )
+        return False
+
     def cancel(self, run_id: str) -> bool:
-        """取消运行中的 run（进程组 kill）。返回是否发起取消。"""
+        """取消运行中的 run（进程组 kill）。返回是否发起取消。
+
+        #1737 P3：本地无此 run 且注册表启用 → 跨实例转发（请求位 + 有界等待 ack；
+        超时/注册表不可用 fail-closed 返回 False，绝不假装成功）。
+        """
         run = self._runs.get(run_id)
-        if run is None or run._proc is None:
+        if run is None:
+            if _console_registry.console_registry_enabled():
+                return self._request_remote_cancel(run_id)
+            return False
+        if run._proc is None:
             return False
         with run._lock:
             if run.status in _TERMINAL_STATUSES:
@@ -770,12 +825,58 @@ class RunConsole:
             self._registry_ticker = ticker
         ticker.start()
 
+    def _control_tick_seconds(self) -> float:
+        """控制 tick：消费取消请求的检查节奏（默认 1s，须小于取消等待窗）。"""
+        return max(
+            0.2,
+            _parse_positive_float(
+                os.getenv("STP_CONSOLE_CONTROL_TICK_SECONDS"),
+                _CONTROL_TICK_SECONDS_DEFAULT,
+            ),
+        )
+
     def _registry_ticker_loop(self) -> None:
-        while not self._registry_ticker_stop.wait(self._registry_interval_seconds()):
+        """控制 tick（1s 级）消费取消请求；注册表续期按 TTL/3 到期才做。"""
+        refresh_interval = self._registry_interval_seconds()
+        last_refresh = 0.0
+        while not self._registry_ticker_stop.wait(self._control_tick_seconds()):
             try:
-                self._renew_registrations_once()
+                self._process_cancel_requests_once()
             except Exception:
-                logger.exception("run_console_registry_tick_failed")
+                logger.exception("run_console_cancel_tick_failed")
+            now = time.monotonic()
+            if now - last_refresh >= refresh_interval:
+                try:
+                    self._renew_registrations_once()
+                except Exception:
+                    logger.exception("run_console_registry_tick_failed")
+                last_refresh = now
+
+    def _process_cancel_requests_once(self) -> None:
+        """P3 owner 侧：消费本实例非终态 run 的取消请求，执行后回写 ack。
+
+        请求位由请求方投递（``stp:console:cancelreq:<run_id>``）；本 tick 发现即
+        执行本地取消语义（进程组 kill），随后清请求位 + 回写带**同一指纹**的 ack。
+        """
+        with self._lock:
+            runs = [
+                r for r in self._runs.values() if r.status not in _TERMINAL_STATUSES
+            ]
+        for run in runs:
+            request = _console_registry.read_cancel_request(run.run_id)
+            if request is None:
+                continue
+            requested_at = str(request.get("requested_at") or "")
+            logger.info(
+                "run_console_cancel_request_received run_id=%s from=%s",
+                run.run_id,
+                request.get("instance_id"),
+            )
+            canceled = self.cancel(run.run_id)
+            _console_registry.clear_cancel_request(run.run_id)
+            _console_registry.publish_cancel_ack(
+                run.run_id, requested_at=requested_at, canceled=bool(canceled),
+            )
 
     def _renew_registrations_once(self) -> None:
         """续期本实例全部非终态 run 的互斥键与 owner 键。

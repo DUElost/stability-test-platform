@@ -4,8 +4,9 @@
   续期失败策略 **③ 窄化自杀**（仅「确认外部持有/键丢失」止损取消，瞬态错误不误杀）；
   TTL **120s**；`cancel` 等待窗 **3s + 可配**；验收=**进程内双实例模拟**（真双进程归 rollout）。
   **P1 已落地**（`stp:console:key/owner` + fail-closed 获取 + 止损取消，ADR-0027 v1.4）；
-  **P2 已落地**（状态快照 `stp:console:status`：跨实例 `status()`/订阅校验生效，
-  终态快照按本地保留期保留；ADR-0027 v1.5）；P3–P4 在途。
+  **P2 已落地**（状态快照 `stp:console:status`：跨实例 `status()`/订阅校验生效，ADR-0027 v1.5）；
+  **P3 已落地**（cancel 转发：请求位 + owner control tick 消费 + 有界等待 ack，
+  超时 fail-closed；ADR-0027 v1.6）；P4（read_log）在途。
 - **日期**：2026-09-13
 - **来源**：#1737（承接 #1114 / #1517 的 Revisit）；ADR-0027 v1.2 清单第 6 条；#720 Epic。
 - **关联 note**：[`2026-09-11-runconsole-multi-instance-boundary-1114.md`](../notes/bug-fix/2026-09-11-runconsole-multi-instance-boundary-1114.md)。
@@ -88,7 +89,7 @@ run 状态与日志片段全部外置（Redis/共享存储），owner 仅执行�
    测试：`backend/tests/realtime/test_console_registry.py`（15）+ 
    `backend/tests/services/test_run_console_registry.py`（7）；
 2. **P2（✅ 已落地）**：`status()` / 订阅校验走共享状态——快照键 `stp:console:status:<run_id>`（start/终态/tick 发布；终态 TTL=本地保留期；tick 续期、丢失重发；本地优先，跨实例回退读快照）；
-3. **P3**：`cancel` 请求位 + owner 消费（有界等待 3s + 可配）；
+3. **P3（✅ 已落地）**：`cancel` 请求位 + owner 消费——`stp:console:cancelreq/ack`（指纹匹配），owner control tick（默认 1s）消费，请求方有界等待（默认 3s，`STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS`）超时 fail-closed；事件循环内调用方 to_thread；
 4. **P4**：`read_log` 跨实例（评估是否值得引入方向 B 的 RPC）。
 
 ## 7. 对 ADR-0027 的影响（已执行：v1.4）
