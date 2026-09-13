@@ -354,8 +354,13 @@ def _scalar_result(value):
     return result
 
 
-def _device_result(*device_ids):
+def _device_result(*device_ids, status="ONLINE"):
+    """#1686：链触发改为 JOIN Device.status 查询（.all() 返回 (id, status) 元组）。
+
+    兼容保留 scalars 路径（旧 mock 断言）。
+    """
     result = MagicMock()
+    result.all.return_value = [(d, status) for d in device_ids]
     result.scalars.return_value.unique.return_value = list(device_ids)
     return result
 

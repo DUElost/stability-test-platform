@@ -745,6 +745,36 @@ def test_process_device_logs_enriches_from_local_exp_main(tmp_path, monkeypatch)
     assert captured[0]["parsed"]["pkg_name"] == "com.android.settings"
 
 
+def test_process_device_logs_persists_processed_before_on_new_entry(tmp_path, monkeypatch):
+    """#803: on_new_entry 回调前 processed/pending 应已落盘，避免 emit 后崩溃重发。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.89,CRASH,pkg,_,_,_,_,_,com.emit.app,2026-05-28 10:15:22.123"
+    _setup_pdl_stubs(monkeypatch, line)
+
+    observed: dict[str, object] = {}
+
+    def on_new(payload: dict) -> None:
+        observed["saved"] = json.loads(
+            store.get_state(state_key("dev_emit", "aee_exp"), "[]")
+        )
+        observed["pending"] = json.loads(
+            store.get_state("watcher:aee:dev_emit:aee_exp:pending_pull", "{}")
+        )
+
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r = process_device_logs(
+        serial="dev_emit",
+        job_id=89,
+        state_store=store,
+        config=cfg,
+        on_new_entry=on_new,
+    )
+    assert r.pulled == 1
+    assert line in observed["saved"]
+    assert observed["pending"] == {}
+
+
 def test_process_device_logs_persists_processed_before_side_effects(tmp_path, monkeypatch):
     """执行 mobilelog 副作用前,processed/pending 状态应已落盘。"""
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))

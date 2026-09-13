@@ -33,7 +33,10 @@ GROUP BY job_id)`——注释与 SQL 对齐，保留口径统一为 MAX(seq_no)�
 
 ## Revisit
 
-- **同单第 1 处（processor emit/落盘崩溃窗口）未修、建议拆独立单**：
+- **同单第 1 处（processor emit/落盘崩溃窗口）**：见
+  `docs/notes/bug-fix/2026-09-13-processor-emit-order-803.md`（先落 processed 再
+  on_new_entry 折衷）；
+- ~~**同单第 1 处（processor emit/落盘崩溃窗口）未修、建议拆独立单**~~（已由上项收口）：
   `_finalize_processed_entry` 顺序 = 回调（emit log_signal + 注册 DLE）→
   写 processed/pending。两步不同原子单元（回调链各自写 local_db 事务、
   processed 另写），崩溃窗口产生「同一次崩溃两条 log_signal（不同
