@@ -36,6 +36,20 @@ update_branch_tolerant() {
     echo "PR #${num} has merge conflicts with main; queue head blocked until resolved manually."
     return 0
   fi
+  # workflow scope 缺口（#1783，run 34689776040 实测）：队首 PR 改过
+  # .github/workflows/* 时，gh pr update-branch 被 GitHub 拒绝——
+  # "refusing to allow a Personal Access Token to create or update workflow
+  #  `.github/workflows/x.yml` without `workflow` scope"。这是**凭据配置**的
+  # 可处置状态（AUTO_MERGE_PAT 缺 workflow scope），不是本 job 故障：原先落到
+  # return rc，整 job 红 + 队首 rebase 停摆（实测 28 个 PR 全部 behind）。
+  # 绿退并给人工动作指引；根因（补 PAT scope = 允许改 CI 定义）属安全面扩张，
+  # 由 owner 单列决策（issue #1783 路径 B），本分支只做无害化。
+  if printf '%s' "$out" | grep -qiE "without .?workflow.? scope"; then
+    echo "PR #${num} touches .github/workflows/* and the queue token lacks 'workflow' scope;"
+    echo "  GitHub refused update-branch. Rebase it manually with a workflow-scoped"
+    echo "  credential (or merge main into the PR branch) to unblock the queue."
+    return 0
+  fi
   # 按 PR 状态判定而非再堆一条报错文案匹配：合入与 update-branch 的竞态
   # 不只有一种报错形态，而「PR 已不在 open 态」是唯一稳定的判据。
   state="$(gh pr view "$num" --repo "$REPO" --json state --jq .state 2>/dev/null || echo UNKNOWN)"
