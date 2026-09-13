@@ -2146,3 +2146,86 @@ class TestAeeReconciliationEndpoint:
             "/api/v1/plan-runs/999999/aee-reconciliation", headers=auth_headers,
         )
         assert resp.status_code == 404
+
+
+class TestWatcherSummaryPlatformBucketQueryCount:
+    """#749：平台分桶的查询数不随平台数增长。
+
+    原实现：信号聚合 1 次 + RUNNING 1 次 + 全量参与 1 次 = 3 次全量聚合，**外加平台循环内
+    每个平台一次 affected 查询**（N 平台 = N 次）。本用例锁住「平台数增加时 job_log_signal
+    相关查询数不变」——把 issue 的性能声明变成可回归断言，而不是只留在审查结论里。
+    """
+
+    @staticmethod
+    def _count_signal_queries(engine, func):
+        from sqlalchemy import event
+
+        counter = {"n": 0}
+
+        def _before(conn, cursor, statement, parameters, context, executemany):
+            if "job_log_signal" in statement:
+                counter["n"] += 1
+
+        event.listen(engine, "before_cursor_execute", _before)
+        try:
+            func()
+        finally:
+            event.remove(engine, "before_cursor_execute", _before)
+        return counter["n"]
+
+    @staticmethod
+    def _add_running_device(db_session, cur_run, plan_cur, platform, serial, host_id):
+        dev = Device(
+            serial=serial, host_id=host_id, status="BUSY", platform=platform,
+            adb_connected=True, adb_state="device",
+        )
+        db_session.add(dev)
+        db_session.commit()
+        db_session.add(
+            JobInstance(
+                plan_run_id=cur_run.id, plan_id=plan_cur.id, device_id=dev.id,
+                host_id=host_id, status=JobStatus.RUNNING.value,
+                pipeline_def={"lifecycle": {}},
+                started_at=_now() - timedelta(minutes=2),
+                patrol_cycle_count=1, patrol_success_cycle_count=1,
+            )
+        )
+        db_session.commit()
+        return dev
+
+    def test_signal_query_count_constant_in_platform_count(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        from backend.core.database import engine
+
+        cur_run = chain_setup["current_run"]
+        plan_cur = chain_setup["plan_current"]
+        dev_running = chain_setup["device_running"]
+        dev_running.platform = "MTK"
+        db_session.commit()
+        # 复用夹具已有 host（device.host_id 有外键约束，不能自造）
+        host_id = dev_running.host_id
+
+        url = f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60"
+        n_one_platform = self._count_signal_queries(
+            engine, lambda: client.get(url, headers=auth_headers),
+        )
+
+        for idx, platform in enumerate(("UNISOC", "QCOM")):
+            self._add_running_device(
+                db_session, cur_run, plan_cur, platform, f"dev-749-{idx}", host_id,
+            )
+
+        n_three_platforms = self._count_signal_queries(
+            engine, lambda: client.get(url, headers=auth_headers),
+        )
+
+        # 顺带确认平台确实变多了（否则本断言会因为「没数据」而假通过）
+        resp = client.get(url, headers=auth_headers)
+        platforms = {b["platform"] for b in resp.json()["data"]["platform_buckets"]}
+        assert {"MTK", "UNISOC", "QCOM"} <= platforms, platforms
+
+        assert n_three_platforms == n_one_platform, (
+            "平台数 1→3 时 job_log_signal 相关查询数应保持不变，"
+            f"实际 {n_one_platform}→{n_three_platforms}"
+        )

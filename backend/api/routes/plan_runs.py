@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
-from sqlalchemy import String, and_, cast, func, or_, select, text
+from sqlalchemy import String, and_, case, cast, func, or_, select, text
 from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
@@ -2009,27 +2009,21 @@ def _aggregate_watcher_platform_buckets(
         by_platform[str(platform or "UNKNOWN")].append(
             (str(category), int(count or 0), int(affected or 0)),
         )
-    running_rows = db.execute(
+    # #749：原「RUNNING 一次 + 全量一次」两次全量聚合合并为一次条件聚合——
+    # ``count(distinct case ...)`` 只计非 NULL，等价于原来带 status 过滤的那次查询。
+    participation_rows = db.execute(
         select(
             func.coalesce(Device.platform, "UNKNOWN").label("platform"),
-            func.count(func.distinct(JobInstance.device_id)),
-        )
-        .select_from(JobInstance)
-        .join(Device, JobInstance.device_id == Device.id)
-        .where(
-            JobInstance.id.in_(job_ids),
-            JobInstance.status == JobStatus.RUNNING.value,
-        )
-        .group_by(Device.platform)
-    ).all()
-    running_by_platform = {
-        str(platform or "UNKNOWN"): int(count or 0)
-        for platform, count in running_rows
-    }
-    participating_rows = db.execute(
-        select(
-            func.coalesce(Device.platform, "UNKNOWN").label("platform"),
-            func.count(func.distinct(JobInstance.device_id)),
+            func.count(func.distinct(JobInstance.device_id)).label("participating"),
+            func.count(
+                func.distinct(
+                    case(
+                        (JobInstance.status == JobStatus.RUNNING.value,
+                         JobInstance.device_id),
+                        else_=None,
+                    )
+                )
+            ).label("running"),
         )
         .select_from(JobInstance)
         .join(Device, JobInstance.device_id == Device.id)
@@ -2037,8 +2031,34 @@ def _aggregate_watcher_platform_buckets(
         .group_by(Device.platform)
     ).all()
     participating_by_platform = {
+        str(platform or "UNKNOWN"): int(participating or 0)
+        for platform, participating, _running in participation_rows
+    }
+    running_by_platform = {
+        str(platform or "UNKNOWN"): int(running or 0)
+        for platform, _participating, running in participation_rows
+    }
+    # #749：受影响设备数（每平台去重 device_serial）由「平台循环内 N 次查询」改为
+    # 一次分组查询。分组键用原始 Device.platform（与 by_platform 同源，故平台集合一致），
+    # Python 侧再归一成 "UNKNOWN"。
+    affected_rows = db.execute(
+        select(
+            func.coalesce(Device.platform, "UNKNOWN").label("platform"),
+            func.count(func.distinct(JobLogSignal.device_serial)),
+        )
+        .select_from(JobLogSignal)
+        .join(JobInstance, JobLogSignal.job_id == JobInstance.id)
+        .join(Device, JobInstance.device_id == Device.id)
+        .where(
+            JobLogSignal.job_id.in_(job_ids),
+            JobLogSignal.detected_at >= cur_start,
+            JobLogSignal.detected_at <= window_end,
+        )
+        .group_by(Device.platform)
+    ).all()
+    affected_by_platform = {
         str(platform or "UNKNOWN"): int(count or 0)
-        for platform, count in participating_rows
+        for platform, count in affected_rows
     }
     all_platforms = (
         set(by_platform) | set(running_by_platform) | set(participating_by_platform)
@@ -2053,21 +2073,8 @@ def _aggregate_watcher_platform_buckets(
             )
             for cat, count, affected in sorted(platform_rows, key=lambda r: -r[1])
         ]
-        if platform_rows:
-            affected_total = db.execute(
-                select(func.count(func.distinct(JobLogSignal.device_serial)))
-                .select_from(JobLogSignal)
-                .join(JobInstance, JobLogSignal.job_id == JobInstance.id)
-                .join(Device, JobInstance.device_id == Device.id)
-                .where(
-                    JobLogSignal.job_id.in_(job_ids),
-                    JobLogSignal.detected_at >= cur_start,
-                    JobLogSignal.detected_at <= window_end,
-                    func.coalesce(Device.platform, "UNKNOWN") == platform,
-                )
-            ).scalar() or 0
-        else:
-            affected_total = 0
+        # 该平台无信号行时字典无键 → 取 0（等价于原 `else: affected_total = 0`）
+        affected_total = affected_by_platform.get(platform, 0)
         buckets.append(
             WatcherPlatformBucketOut(
                 platform=platform,
