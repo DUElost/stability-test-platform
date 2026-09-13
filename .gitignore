@@ -94,3 +94,8 @@ backups/
 # 多工具 worktree 容器目录：防止 git add -A 把 worktree 扫成 gitlink(mode 160000)
 .wt/
 frontend/node_modules
+
+# 本地工作目录与修复备份（非仓库内容）
+.workbuddy/
+deliverables/
+.git.broken-backup-*/
