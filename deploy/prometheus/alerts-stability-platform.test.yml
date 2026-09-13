@@ -25,6 +25,9 @@ tests:
       # StabilityHostHeartbeatTimeout：修复前用了不存在的 job/status 标签
       - series: 'stability_apscheduler_job_runs_total{job_name="session_watchdog",outcome="error"}'
         values: '0+1x20'
+      # StabilityAgentTerminalOutboxBacklog（#743）：心跳上报的积压保持 >0 超过 30m
+      - series: 'stability_agent_outbox_pending{host_id="host-1",type="terminal"}'
+        values: '1x40'
     alert_rule_test:
       - eval_time: 20m
         alertname: StabilityDispatchGateFailed
@@ -59,3 +62,17 @@ tests:
               description: >-
                 The session_watchdog APScheduler job reported errors.  Hosts may
                 not be timed out correctly.  Check watchdog logs.
+      - eval_time: 35m
+        alertname: StabilityAgentTerminalOutboxBacklog
+        exp_alerts:
+          - exp_labels:
+              host_id: host-1
+              type: terminal
+              severity: warning
+            exp_annotations:
+              summary: Agent terminal outbox backlog not draining (30m)
+              description: >-
+                An Agent has held un-acked terminal outbox rows for 30m.  Usually the
+                centre answers 404/misroute for POST .../jobs/*/complete (the #729
+                ghost 404 storm): check centre routing first.  Before clearing any
+                centre-side job rows, read docs/operations/control-plane-db-maintenance.md.
