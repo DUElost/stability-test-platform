@@ -111,6 +111,16 @@ _PROGRESS_THRESHOLDS = {
     # 才修复，因此从 v2.3.1 起强制声明；flash_firmware v1.1.0 起声明。
     "monkey_setup": (2, 3, 1),
     "flash_firmware": (1, 1, 0),
+    # #1690 打戳收敛：首批三脚本 + 第二批五脚本，从各自引入打戳的版本起
+    # 必须声明 progress_stamps（新版本漏放 capabilities.json 时此测试红掉）。
+    "gpu_setup": (1, 1, 0),
+    "powercycle_setup": (1, 1, 0),
+    "fill_storage": (1, 1, 0),
+    "push_resources": (1, 1, 0),
+    "monkey_resource_push": (1, 1, 0),
+    "install_apk": (1, 1, 0),
+    "monkey_launch": (5, 1, 0),
+    "clean_env": (1, 1, 0),
 }
 
 
