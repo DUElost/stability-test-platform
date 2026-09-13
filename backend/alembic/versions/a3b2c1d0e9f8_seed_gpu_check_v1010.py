@@ -1,7 +1,7 @@
 """seed gpu_check v1.0.10 — protobuf 字段值前缀判定（#1695）
 
 Revision ID: a3b2c1d0e9f8
-Revises: f6a5b4c3d2e1
+Revises: z1a2b3c4d5e6
 Create Date: 2026-09-13
 
 Data migration (#1695 回归修复):
@@ -29,7 +29,7 @@ from alembic import op
 from sqlalchemy import text
 
 revision = "a3b2c1d0e9f8"
-down_revision = "f6a5b4c3d2e1"
+down_revision = "z1a2b3c4d5e6"
 branch_labels = None
 depends_on = None
 
