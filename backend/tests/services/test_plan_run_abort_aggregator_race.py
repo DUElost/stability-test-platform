@@ -294,6 +294,63 @@ def test_abort_batch_pending_updates_counters_and_audit_once(
     assert len(result.get("aborted_jobs") or []) == 15
 
 
+def test_abort_bulk_emits_collapsed_job_status(
+    db_session, sample_plan_run, sample_plan, sample_host,
+):
+    """#703：abort 推送 O(1)——一条汇总 JOB_STATUS + 一条 PLAN_RUN_STATUS，非逐 job。"""
+    from unittest.mock import patch
+
+    from backend.models.plan_run import PlanRun
+    from backend.models.job import JobInstance
+    from backend.models.enums import JobStatus
+    from backend.models.host import Device
+    from backend.services.plan_run_abort import abort_plan_run
+
+    run = db_session.get(PlanRun, sample_plan_run.id)
+    db_session.add_all([
+        Device(serial=f"emit-{i}", host_id=sample_host.id, status="ONLINE")
+        for i in range(12)
+    ])
+    db_session.flush()
+    devs = db_session.query(Device).filter(Device.serial.like("emit-%")).all()
+    for dev in devs:
+        db_session.add(
+            JobInstance(
+                plan_run_id=run.id,
+                plan_id=sample_plan.id,
+                device_id=dev.id,
+                host_id=sample_host.id,
+                status=JobStatus.PENDING.value,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            )
+        )
+    run.total_job_count = len(devs)
+    db_session.commit()
+
+    with patch(
+        "backend.services.plan_run_abort.should_trigger_dedup", return_value=False,
+    ), patch(
+        "backend.services.plan_run_abort.enqueue_dedup_terminal_sync",
+    ), patch("backend.services.plan_run_abort.schedule_emit") as emit:
+        abort_plan_run(run.id, db=db_session, reason="emit_collapse")
+
+    job_status_emits = []
+    plan_status_emits = []
+    for c in emit.call_args_list:
+        event = c.args[0] if c.args else None
+        if event == "job_status":
+            job_status_emits.append(c.args[1])
+        elif event == "plan_run_status":
+            plan_status_emits.append(c.args[1])
+
+    assert len(job_status_emits) == 1, f"expected 1 bulk job_status, got {len(job_status_emits)}"
+    assert len(plan_status_emits) == 1
+    payload = job_status_emits[0]["payload"]
+    assert payload.get("abort_bulk") is True
+    assert payload.get("aborted_count") == 12
+    assert "job_id" not in payload
+
+
 def test_abort_pending_count_uses_returning_after_concurrent_claim(
     db_session, sample_plan_run, sample_plan, sample_device, sample_host,
 ):
