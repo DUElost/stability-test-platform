@@ -226,6 +226,87 @@ class TestPlanRunDetailOutCarriesRunContext:
         match = next(i for i in items if i["id"] == pr_id)
         assert match["device_count"] >= 1
 
+    def test_plan_run_out_device_count_dedupes_job_device_ids(self):
+        """#747: _plan_run_out fallback uses distinct device_id (not job rows)."""
+        from backend.api.routes.plan_runs import _plan_run_out
+        from backend.api.schemas.plan_run import JobInstanceOut
+        from backend.models.enums import PlanRunStatus
+
+        pr = PlanRun(
+            id=42,
+            plan_id=7,
+            status=PlanRunStatus.RUNNING.value,
+            failure_threshold=0.05,
+            plan_snapshot={"plan_id": 7, "steps": []},
+            run_type="MANUAL",
+            triggered_by="test",
+            chain_index=0,
+            started_at=datetime.now(timezone.utc),
+        )
+        jobs = [
+            JobInstanceOut(
+                id=1, plan_run_id=42, plan_id=7, device_id=11, status="RUNNING",
+            ),
+            JobInstanceOut(
+                id=2, plan_run_id=42, plan_id=7, device_id=11, status="PENDING",
+            ),
+            JobInstanceOut(
+                id=3, plan_run_id=42, plan_id=7, device_id=22, status="RUNNING",
+            ),
+        ]
+        out = _plan_run_out(pr, jobs=jobs)
+        assert len(out.jobs) == 3
+        assert out.device_count == 2
+
+    def test_list_and_detail_device_count_match_for_two_devices(
+        self, client, auth_headers, db_session, sample_running_job, sample_host
+    ):
+        """#747: list distinct count agrees with detail for multi-device runs."""
+        from backend.models.enums import DeviceStatus, JobStatus
+        from backend.models.host import Device
+        from backend.models.job import JobInstance
+
+        other = Device(
+            serial=f"dev-747-{datetime.now(timezone.utc).timestamp()}",
+            model="TEST",
+            status=DeviceStatus.ONLINE.value,
+            host_id=sample_host.id,
+        )
+        db_session.add(other)
+        db_session.flush()
+        db_session.add(
+            JobInstance(
+                plan_run_id=sample_running_job.plan_run_id,
+                plan_id=sample_running_job.plan_id,
+                device_id=other.id,
+                host_id=sample_host.id,
+                status=JobStatus.PENDING.value,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            )
+        )
+        db_session.commit()
+
+        list_resp = client.get(
+            f"/api/v1/plan-runs?plan_id={sample_running_job.plan_id}",
+            headers=auth_headers,
+        )
+        assert list_resp.status_code == 200, list_resp.text
+        match = next(
+            i
+            for i in list_resp.json()["data"]["items"]
+            if i["id"] == sample_running_job.plan_run_id
+        )
+        assert match["device_count"] == 2
+
+        detail_resp = client.get(
+            f"/api/v1/plan-runs/{sample_running_job.plan_run_id}",
+            headers=auth_headers,
+        )
+        assert detail_resp.status_code == 200, detail_resp.text
+        detail = detail_resp.json()["data"]
+        assert len(detail["jobs"]) == 2
+        assert detail["device_count"] == 2
+
     def test_plan_run_without_run_context_serialises_to_null(
         self, client, auth_headers, db_session
     ):
