@@ -35,6 +35,15 @@ def _resolve_plan_run_status(
     failure_threshold: float,
     abort_requested: bool,
 ) -> PlanRunStatus:
+    """Resolve the terminal PlanRun status.
+
+    Ruled semantics (#783, 2026-09-12): ``aborted > 0`` intentionally forces
+    ``FAILED`` regardless of the ``failed_only/total`` threshold. An abort is
+    operator-attributable and means the run did not complete its intended
+    coverage, so a partially-aborted run must not surface as SUCCESS/
+    PARTIAL_SUCCESS. ``abort_requested`` additionally taints any otherwise
+    successful/partial run. Changing this needs a product ruling (see Revisit).
+    """
     if failed_only + aborted == 0:
         new_status = PlanRunStatus.SUCCESS
     elif aborted > 0:
