@@ -22,6 +22,30 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 
+def _parse_spill_catchup_interval(default: float = 30.0) -> float:
+    """#1710：类体 float(env) 在 import 期求值——非法值不得拖垮 Agent 启动。"""
+    raw = (os.getenv("STP_HDD_SPILL_CATCHUP_INTERVAL") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "invalid STP_HDD_SPILL_CATCHUP_INTERVAL=%r; using default %.1f",
+            raw,
+            default,
+        )
+        return default
+    if not math.isfinite(value):
+        logger.warning(
+            "non-finite STP_HDD_SPILL_CATCHUP_INTERVAL=%r; using default %.1f",
+            raw,
+            default,
+        )
+        return default
+    return value
+
+
 class HddSpillMonitor:
     """进程级单例；由 Agent main.py configure + start。"""
 
@@ -35,7 +59,7 @@ class HddSpillMonitor:
     _MAX_SPILL_PER_CYCLE = 20
     # 追打间隔（秒）：本轮有腾退产出但水位仍高于 target 时，下一轮不等满
     # interval。0 或负值回退 interval（禁用追打的逃生阀）。
-    _SPILL_CATCHUP_INTERVAL = float(os.getenv("STP_HDD_SPILL_CATCHUP_INTERVAL", "30"))
+    _SPILL_CATCHUP_INTERVAL = _parse_spill_catchup_interval()
 
     def __init__(self) -> None:
         self._hdd_root: str = ""
