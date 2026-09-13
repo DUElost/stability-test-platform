@@ -36,6 +36,13 @@ update_branch_tolerant() {
     echo "PR #${num} has merge conflicts with main; queue head blocked until resolved manually."
     return 0
   fi
+  # #1783：队首 PR 改过 .github/workflows/* 时，缺 workflow scope 的 PAT 会被
+  # updatePullRequestBranch 拒掉——可处置状态，绿退并指引人工 rebase，避免整 job 红。
+  if printf '%s' "$out" | grep -qiE "without .workflow. scope|updatePullRequestBranch"; then
+    echo "PR #${num} update-branch blocked: AUTO_MERGE_PAT lacks workflow scope for workflow file changes."
+    echo "Rebase the queue head manually with a token that has workflow scope, or merge it first."
+    return 0
+  fi
   # 按 PR 状态判定而非再堆一条报错文案匹配：合入与 update-branch 的竞态
   # 不只有一种报错形态，而「PR 已不在 open 态」是唯一稳定的判据。
   state="$(gh pr view "$num" --repo "$REPO" --json state --jq .state 2>/dev/null || echo UNKNOWN)"

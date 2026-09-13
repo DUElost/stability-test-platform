@@ -90,7 +90,11 @@ if args[:2] == ["pr", "view"]:
 if args[:2] == ["pr", "merge"]:
     out()
 if args[:2] == ["pr", "update-branch"]:
-    out()
+    rc = int(scenario.get("update_branch_rc", 0))
+    msg = scenario.get("update_branch_out", "")
+    if msg:
+        print(msg, file=sys.stderr)
+    sys.exit(rc)
 if args[0] == "api":
     path = args[1] if len(args) > 1 else ""
     if path == "graphql":
@@ -367,6 +371,28 @@ def test_completed_failure_still_opens_alert(tmp_path):
     assert result.returncode == 0, result.stderr
     _assert_called(calls, "issue create")
     assert "FAILURE" in result.stdout
+
+
+def test_update_branch_workflow_scope_denial_exits_zero(tmp_path):
+    """#1783：缺 workflow scope 的 update-branch 失败不得把整个 reconcile job 染红。"""
+    scope_err = (
+        "GraphQL: refusing to allow a Personal Access Token to create or update workflow "
+        "`.github/workflows/ci.yml` without `workflow` scope (updatePullRequestBranch)"
+    )
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _head_detail(_ALL_GREEN),
+            "behind_by": 3,
+            "update_branch_rc": 1,
+            "update_branch_out": scope_err,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "pr update-branch")
+    assert "workflow scope" in result.stdout.lower()
 
 
 def test_missing_check_entry_still_opens_alert(tmp_path):
