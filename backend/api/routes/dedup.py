@@ -448,19 +448,26 @@ scan_router = APIRouter(prefix="/api/v1/plan-runs", tags=["dedup-scan"])
 @scan_router.post("/{run_id}/dedup/scan", response_model=ApiResponse[dict])
 async def trigger_scan(
     run_id: int,
+    request: Request,
     is_final: bool = Query(False),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """手动触发/重跑 scan：enqueue 统一 ``scan_task`` 轮次编排（#1077）。
 
     不再仅 emit ``scan_now``（那不会登记产物/后继链）。SAQ ``scan_task`` 负责
     下发、轮询登记、upload/merge。本端点仍返回目标 host 预览供 UI。
+
+    ADR-0038 D5：回收类允许触达退役主机，但**仅显式 admin 触发**（admin 会话
+    allow_retired=True 并透传入 scan_task）；其余按 `skipped_retired` 如实报告。
     """
     from backend.models.job import JobInstance
     from backend.models.plan_run import PlanRun
     from backend.services.dedup_scan import enqueue_dedup_terminal_async
-    from backend.services.plan_run_scan_scope import iter_plan_run_scan_hosts
+    from backend.services.plan_run_scan_scope import (
+        classify_recycle_targets,
+        iter_plan_run_scan_hosts,
+    )
 
     pr = db.get(PlanRun, run_id)
     if pr is None:
@@ -474,34 +481,51 @@ async def trigger_scan(
     if not has_jobs:
         raise HTTPException(status_code=400, detail="no jobs found for this plan run")
 
+    allow_retired = current_user.role == "admin"
     host_rows = iter_plan_run_scan_hosts(db, run_id)
     if not host_rows:
         raise HTTPException(status_code=400, detail="no jobs found for this plan run")
 
-    triggered: list[str] = []
-    skipped: list[dict] = []
-    for host_id, host_status in host_rows:
-        if host_status == "ONLINE":
-            triggered.append(host_id)
-        else:
-            skipped.append({"host_id": host_id, "status": host_status})
+    triggered, skipped_offline, skipped_retired = classify_recycle_targets(
+        host_rows, allow_retired=allow_retired,
+    )
 
     if not triggered:
         raise HTTPException(status_code=409, detail="no ONLINE hosts to scan")
 
-    if not await enqueue_dedup_terminal_async(run_id, is_final=is_final):
+    if not await enqueue_dedup_terminal_async(
+        run_id, is_final=is_final, allow_retired=allow_retired,
+    ):
         # #1274: 入队失败必须显式暴露——否则 UI 收到 200 "enqueued" 但没有任何
         # scan 轮次在跑（SAQ 未运行 / Redis 故障）。
         raise HTTPException(
             status_code=503,
             detail="scan enqueue failed (SAQ/Redis unavailable); no scan round scheduled",
         )
+    record_audit(
+        db,
+        action="plan_run_scan_trigger",
+        resource_type="plan_run",
+        resource_id=str(run_id),
+        details={
+            "is_final": is_final,
+            "triggered_hosts": triggered,
+            "skipped_offline": skipped_offline,
+            "skipped_retired": skipped_retired,
+            "allow_retired": allow_retired,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
     return ok({
         "plan_run_id": run_id,
         "enqueued": "scan_task",
         "is_final": is_final,
         "triggered_hosts": triggered,
-        "skipped_offline": skipped,
+        "skipped_offline": skipped_offline,
+        "skipped_retired": skipped_retired,
     })
 
 

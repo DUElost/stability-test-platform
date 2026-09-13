@@ -75,7 +75,7 @@ class TestScanEndpoint:
         assert body["is_final"] is False
         assert str(sample_host.id) in body["triggered_hosts"]
         assert body["skipped_offline"] == []
-        mock_enqueue.assert_awaited_once_with(sample_plan_run.id, is_final=False)
+        mock_enqueue.assert_awaited_once_with(sample_plan_run.id, is_final=False, allow_retired=False)
 
     def test_scan_lists_all_online_hosts_then_enqueues_once(
         self, client, auth_headers, db_session,
@@ -130,7 +130,7 @@ class TestScanEndpoint:
         body = resp.json()["data"]
         assert set(body["triggered_hosts"]) == {str(sample_host.id), str(host_b.id)}
         assert body["enqueued"] == "scan_task"
-        mock_enqueue.assert_awaited_once_with(sample_plan_run.id, is_final=False)
+        mock_enqueue.assert_awaited_once_with(sample_plan_run.id, is_final=False, allow_retired=False)
 
     def test_scan_rejects_when_all_hosts_offline(
         self, client, auth_headers, db_session,
@@ -465,3 +465,86 @@ class TestDedupTriggerHelpers:
         with caplog.at_level("INFO"):
             assert await enqueue_dedup_terminal_async(42) is True
         assert "enqueue_dedup_terminal_async deduped" in caplog.text
+
+
+class TestScanTriggerRetiredPolicy:
+    """ADR-0038 D5：手动 scan 的退役语义（admin 显式透传 / 非 admin skipped_retired）。"""
+
+    @staticmethod
+    def _seed_retired_host_with_job(
+        db_session, sample_plan_run, sample_plan, sample_device, active_host,
+    ):
+        from datetime import datetime, timezone
+
+        from backend.models.enums import JobStatus
+        from backend.models.host import Device, Host
+        from backend.models.job import JobInstance
+
+        retired = Host(
+            id="h-scan-retired", hostname="h-scan-retired", status="ONLINE",
+            retired_at=datetime.now(timezone.utc),
+        )
+        db_session.add(retired)
+        db_session.flush()
+        # uq_job_instance_plan_run_device：同一 Run 同一设备只允许一个 Job
+        retired_device = Device(
+            serial="dev-scan-retired", host_id=retired.id, status="OFFLINE",
+        )
+        db_session.add(retired_device)
+        db_session.flush()
+        for host_id, device_id in (
+            (active_host.id, sample_device.id),
+            (retired.id, retired_device.id),
+        ):
+            db_session.add(JobInstance(
+                plan_run_id=sample_plan_run.id,
+                plan_id=sample_plan.id,
+                device_id=device_id,
+                host_id=host_id,
+                status=JobStatus.COMPLETED.value,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            ))
+        db_session.commit()
+        return retired
+
+    def test_non_admin_retired_reported_and_not_passed_through(
+        self, client, auth_headers, db_session,
+        sample_plan_run, sample_plan, sample_device, sample_host,
+    ):
+        retired = self._seed_retired_host_with_job(
+            db_session, sample_plan_run, sample_plan, sample_device, sample_host,
+        )
+        with patch(
+            "backend.services.dedup_scan.enqueue_dedup_terminal_async",
+            new=AsyncMock(),
+        ) as mock_enqueue:
+            resp = client.post(
+                f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/scan",
+                headers=auth_headers,
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert str(sample_host.id) in data["triggered_hosts"]
+        assert [r["host_id"] for r in data["skipped_retired"]] == [retired.id]
+        assert mock_enqueue.await_args.kwargs["allow_retired"] is False
+
+    def test_admin_retired_allowed_and_flag_passed_through(
+        self, client, admin_headers, db_session,
+        sample_plan_run, sample_plan, sample_device, sample_host,
+    ):
+        retired = self._seed_retired_host_with_job(
+            db_session, sample_plan_run, sample_plan, sample_device, sample_host,
+        )
+        with patch(
+            "backend.services.dedup_scan.enqueue_dedup_terminal_async",
+            new=AsyncMock(),
+        ) as mock_enqueue:
+            resp = client.post(
+                f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/scan",
+                headers=admin_headers,
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert retired.id in data["triggered_hosts"]
+        assert data["skipped_retired"] == []
+        assert mock_enqueue.await_args.kwargs["allow_retired"] is True
