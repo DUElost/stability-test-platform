@@ -75,7 +75,7 @@ class SignalEmitter:
             self._job_id, self._device_serial, self._next_seq,
         )
 
-    def emit(
+    def prepare(
         self,
         *,
         category: str,
@@ -87,8 +87,12 @@ class SignalEmitter:
         size_bytes: Optional[int] = None,
         first_lines: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
-    ) -> int:
-        """同步写 outbox，返回分配的 seq_no。
+    ) -> tuple[int, Dict[str, Any]]:
+        """分配 seq_no 并组装 envelope，但**不落库**（#1719）。
+
+        与 enqueue() 配对，供补偿通道先把 keys 持久化（emit 意图）再产生
+        效果：崩溃后重放复用同一 (job_id, seq_no)，outbox `INSERT OR IGNORE`
+        与后端 `ON CONFLICT DO NOTHING` 双重幂等。
 
         契约违规（非法 category / source / 缺字段）会抛 ContractViolation，
         由调用方捕获并记日志；不应进入 outbox 污染后续批次。
@@ -126,14 +130,53 @@ class SignalEmitter:
 
         # Fail-fast：非法 envelope 不入库（避免脏数据被 drainer 反复重试失败）
         validate_log_signal(envelope)
+        return seq_no, envelope
 
-        row_id = self._db.enqueue_log_signal(self._job_id, seq_no, envelope)
+    def enqueue(self, seq_no: int, envelope: Dict[str, Any]) -> Optional[int]:
+        """按（可预先分配/重放的）seq_no 落 outbox；重复 (job_id, seq_no) 幂等。
+
+        返回新插入行的 row_id；冲突（已存在）返回 None。
+
+        #1719：幂等键的 job_id 以 envelope 内为准——崩溃重放可能发生在后续
+        Job 的进程里（AEE processed 状态按 serial 共享），此时要落回**原
+        Job** 的 outbox 行，而不是当前 emitter 的 job_id。
+        """
+        envelope_job_id = int(envelope.get("job_id") or self._job_id)
+        row_id = self._db.enqueue_log_signal(envelope_job_id, int(seq_no), envelope)
         if row_id is None:
-            # UNIQUE 冲突（极端并发下的重复分配）— 仅日志警告，seq_no 已递增
-            logger.warning(
-                "signal_emitter_seq_conflict job_id=%d seq_no=%d (duplicate ignored)",
+            # UNIQUE 冲突（重复分配/崩溃重放）— 幂等命中，无需告警
+            logger.debug(
+                "signal_emitter_enqueue_conflict job_id=%d seq_no=%d (duplicate ignored)",
                 self._job_id, seq_no,
             )
+        return row_id
+
+    def emit(
+        self,
+        *,
+        category: str,
+        source: str,
+        path_on_device: str,
+        detected_at: Optional[datetime] = None,
+        artifact_uri: Optional[str] = None,
+        sha256: Optional[str] = None,
+        size_bytes: Optional[int] = None,
+        first_lines: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """同步写 outbox，返回分配的 seq_no（prepare + enqueue 的便捷组合）。"""
+        seq_no, envelope = self.prepare(
+            category=category,
+            source=source,
+            path_on_device=path_on_device,
+            detected_at=detected_at,
+            artifact_uri=artifact_uri,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            first_lines=first_lines,
+            extra=extra,
+        )
+        self.enqueue(seq_no, envelope)
         return seq_no
 
     @property

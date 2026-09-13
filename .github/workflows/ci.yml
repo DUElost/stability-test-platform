@@ -281,19 +281,23 @@ jobs:
       # 于是 tests/ 实际**没有任何自动防线**——#1541 的两例红测试即由此随 #1482
       # 静默进 main（同窗口任何 tests/ 回归都是同一形态）。
       #
-      # 为什么能整目录搬：原注释称「tests/ 其余文件与迁移/部署契约耦合」经实测
-      # **不成立**——`tests/` 除 test_alembic_upgrade.py 外全部纯离线，177 例
-      # 7.6s（无 DATABASE_URL/TEST_DATABASE_URL 亦可跑）。判据仍是既有的
-      # 「纯离线 + 秒级」，只是按实测把范围放大到实际满足判据的全集。
+      # 为什么能大范围搬：原注释称「tests/ 其余文件与迁移/部署契约耦合」经实测
+      # **不成立**——`tests/` 绝大多数纯离线，判据仍是既有的「纯离线 + 秒级」，
+      # 只是按实测把范围放大到实际满足判据的全集。
       #
-      # 为什么排除 test_alembic_upgrade.py：真实起 postgres:16 testcontainer
-      # （~5-6s）且**无 skip 兜底**——runner 无 docker 时会硬失败，归夜间
-      # backend-test（那条路径本就有 PG service）。排除按文件名而非目录，
-      # 新增文件默认进入 PR 路径，避免「新文件默认无人看守」重现本单缺口。
+      # 为什么排除这两个文件：二者真实起 postgres:16 testcontainer 且**无 skip
+      # 兜底**——runner 无 docker 时会硬失败并阻塞全部合入，归夜间 backend-test
+      # （那条路径本就有 PG service）。
+      # ⚠️ #1716/#1707 更正：原注释断言「除 test_alembic_upgrade.py 外全部纯离线」
+      # 与事实不符——test_script_seed_governance.py 同样 module 级起容器（当时只
+      # 看镜像名而漏判）。现由 tests/test_offline_subset_guard.py 扫源码守这条
+      # 对应关系：凡 import testcontainers 的文件必须在下方 --ignore 名单里，
+      # 新增容器测试不再可能静默混入 PR 路径。
       - name: Run repo-level tests
         run: |
           python -m pytest tests/ -q \
             --ignore=tests/test_alembic_upgrade.py \
+            --ignore=tests/test_script_seed_governance.py \
             -p no:cacheprovider
 
   # #510 教训（P0-2）：空库迁移守卫。独立 required check——上线即炸的空库
