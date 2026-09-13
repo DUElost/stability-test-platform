@@ -343,10 +343,18 @@ def list_hosts(
     request: Request,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    include_retired: bool = Query(
+        False, description="ADR-0038 D5：默认隐藏退役主机，显式置 true 才显示",
+    ),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    query = db.query(Host).order_by(Host.id)
+    # ADR-0038 D5（不变量 1）：退役主机默认不出现在列表；详情页仍可见
+    # （GET /hosts/{id} 不过滤——退役是历史终态，详情要能查退役痕迹）。
+    query = db.query(Host)
+    if not include_retired:
+        query = query.filter(Host.retired_at.is_(None))
+    query = query.order_by(Host.id)
     total = query.count()
     hosts = query.offset(skip).limit(limit).all()
     # Update status for hosts with expired heartbeat
