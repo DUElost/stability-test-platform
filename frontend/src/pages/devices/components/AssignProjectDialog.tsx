@@ -44,7 +44,7 @@ export function AssignProjectDialog({
 
   const { data: projects } = useQuery({
     queryKey: projectKeys.list(),
-    queryFn: () => api.projects.list(),
+    queryFn: () => api.projects.listActive(),
   });
 
   const [prevOpen, setPrevOpen] = useState(isOpen);
