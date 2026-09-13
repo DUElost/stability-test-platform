@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -350,27 +349,22 @@ def _schedule_emit_agent_control(
     *,
     payload: dict | None = None,
 ) -> bool:
-    """线程安全：从 SAQ worker 向主循环桥接 emit_agent_control。
+    """线程安全：从 SAQ worker 向主循环桥接 Agent 控制下发。
 
-    返回是否**实际入队**（#759）：主循环不可用时不再只记 WARNING 静默——
-    调用方（如 archive）据此判定是否假成功。
+    返回是否**已送达**（#759/#1864）：改用 ack 版 ``call_agent_control_sync``，
+    而非 fire-and-forget 的 ``emit_agent_control``——后者丢弃 Future，协程体内
+    异常（sio 未初始化/关闭竞态）会静默沉淀为「假成功」。ack 版等待 Agent
+    control handler 确认，主循环不可用/超时/异常一律返回 False。
+
+    只能从非主循环线程调用（本函数调用点均为 SAQ worker 线程）。
     """
-    from backend.realtime import socketio_server
-    from backend.realtime.socketio_server import emit_agent_control
+    from backend.realtime.socketio_server import call_agent_control_sync
 
-    loop = socketio_server._main_loop
-    if loop is None or loop.is_closed():
-        logger.warning("main_loop_not_available_for_agent_control host=%s", host_id)
-        return False
     try:
-        asyncio.run_coroutine_threadsafe(
-            emit_agent_control(host_id, command, payload=payload or {}),
-            loop,
-        )
-    except RuntimeError:
+        return call_agent_control_sync(host_id, command, payload=payload or {})
+    except Exception:
         logger.exception("agent_control_schedule_failed host=%s command=%s", host_id, command)
         return False
-    return True
 
 
 def run_trigger_plan_run_archive(
