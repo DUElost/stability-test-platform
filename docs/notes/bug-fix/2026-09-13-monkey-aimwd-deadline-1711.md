@@ -20,6 +20,10 @@ sh 轮询耗满窗口后 aimwd 二次 poll 无预算 → 假失败 exit 1。
 
 - `python -m pytest backend/agent/tests/test_monkey_watchdog_chain_809.py -k launch -q`
 - `python scripts/run_gates.py check:quick`
+- `#1744` 解双 head：`z1a2` `down_revision` 从 `z7a6` 重链到 `f6a5`
+  （#1743 合入后 main tip）；`cd backend && python -m alembic heads`
+  → 唯一 head `z1a2b3c4d5e6`；链 `z7a6 → f6a5 → z1a2`。空库 upgrade
+  本环境无 docker，以 CI `pr-migrate-empty-db` 为准。
 
 ## Revisit
 
