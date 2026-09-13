@@ -260,6 +260,63 @@ def test_trust_host_key_nondefault_port_same_token_key_change_still_refused(
     assert "explicit replace required" in reason
 
 
+def test_trust_host_key_nondefault_port_preserves_22_port_entry(monkeypatch, tmp_path):
+    """#1709：非 22 端口信任不得删除裸 ip（22 端口）条目。
+
+    #1655 把比较集收窄到同 token，但删除集仍同时剔除裸 ip 与 [ip]:port——
+    密钥不同的 22 端口条目**从未参与比较**就被静默删除，绕过 #908 换钥守卫。
+    """
+    from backend.core import ssh_security
+
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "10.0.0.99 ssh-ed25519 T0xES0VZ\n", encoding="utf-8",
+    )
+
+    fake_completed = SimpleNamespace(
+        returncode=0, stdout="[10.0.0.99]:2222 ssh-ed25519 TkVXS0VZ\n", stderr="",
+    )
+    monkeypatch.setattr(
+        ssh_security.subprocess, "run", lambda *a, **k: fake_completed,
+    )
+
+    ok, reason = ssh_security.trust_host_key("10.0.0.99", 2222, str(known_hosts))
+
+    assert ok is True
+    assert reason == "ok"
+    content = known_hosts.read_text(encoding="utf-8")
+    assert "10.0.0.99 ssh-ed25519 T0xES0VZ" in content, (
+        "22 端口既有条目不得被非 22 端口信任删除（删除集须与比较集同域）"
+    )
+    assert "[10.0.0.99]:2222 ssh-ed25519 TkVXS0VZ" in content
+
+
+def test_trust_host_key_22_port_does_not_touch_other_port_entry(monkeypatch, tmp_path):
+    """#1709 反向：22 端口信任不比较、也不删除 [ip]:port 条目。"""
+    from backend.core import ssh_security
+
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text(
+        "10.0.0.99 ssh-ed25519 T0xES0VZ\n"
+        "[10.0.0.99]:2222 ssh-ed25519 TkVXS0VZ\n",
+        encoding="utf-8",
+    )
+
+    fake_completed = SimpleNamespace(
+        returncode=0, stdout="10.0.0.99 ssh-ed25519 T0xES0VZ\n", stderr="",
+    )
+    monkeypatch.setattr(
+        ssh_security.subprocess, "run", lambda *a, **k: fake_completed,
+    )
+
+    ok, reason = ssh_security.trust_host_key("10.0.0.99", 22, str(known_hosts))
+
+    assert ok is True
+    assert reason == "ok"
+    content = known_hosts.read_text(encoding="utf-8")
+    assert content.count("[10.0.0.99]:2222 ssh-ed25519 TkVXS0VZ") == 1
+
+
 def test_trust_host_key_same_key_rescan_is_ok(monkeypatch, tmp_path):
     """同键重扫不触发换钥路径（幂等，不需要确认）。"""
     from backend.core import ssh_security
