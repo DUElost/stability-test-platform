@@ -12,6 +12,9 @@
       `process_device_logs`(计入 reconciler_skip_unchanged_total);
       内容变化视为有新行候选 → 触发 burst;#1044:仍有 pending_pull 时即使
       hash 未变也必须跑 process（失败补采与「发现新历史」解耦）
+    - #1719 emit 补偿通道:processor 在 processed 落盘前落 emit 意图占位；
+      本类在效果前补幂等 keys（seq_no / 事件 UUID）并每轮 sweep 重放未完成
+      占位（见 emit_intent.py），保证崩溃后"不重复、不丢失"。
     - 状态键(M3):reconciler 使用 `state_key_prefix="watcher:aee"`,
       经同一 `db_history.state_key` helper 生成
       `watcher:aee:{serial}:{aee_type}:processed_entries` / `:pending_pull` 键。
@@ -54,9 +57,16 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
+from uuid import uuid4
 
 from ..watcher.contracts import ContractViolation
 from .db_history import load_processed_lines, save_processed_lines, state_key
+from .emit_intent import (
+    MAX_REPLAY_ATTEMPTS,
+    load_intents,
+    new_intent_record,
+    save_intents,
+)
 from .paths import PathOutsideRootError, get_aee_local_root, resolve_path_under_aee_local
 from .metadata import resolve_device_log_event_type
 from .processor import ProcessConfig, process_device_logs
@@ -120,6 +130,20 @@ _AEE_TYPE_TO_CATEGORY = {
     "aee_exp":        "AEE",
     "vendor_aee_exp": "VENDOR_AEE",
 }
+
+
+def _parse_iso_dt(value: Any) -> Optional[datetime]:
+    """解析意图簿里的 ISO 时间戳；坏值返回 None（不猜）。"""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
 
 def _env_truthy(name: str, default: bool = False) -> bool:
     raw = (os.environ.get(name, "") or "").strip().lower()
@@ -581,6 +605,18 @@ class AeeDbHistoryReconciler:
         (已被 patrol 抢先 pull)仍触发 burst。
         """
         self.stats.ticks_total += 1
+
+        # #1719：先 sweep emit 意图簿（补偿重启前「已 processed 但 emit 未发生」
+        # 的条目），再做本轮 diff/pull/emit。
+        try:
+            self._sweep_emit_intents()
+        except Exception:
+            self.stats.tick_errors += 1
+            logger.exception(
+                "aee_emit_intent_sweep_failed serial=%s job=%d",
+                self._serial, self._job_id,
+            )
+
         baseline_new = 0
         if not self._baseline_snapshot_done:
             baseline_new, baseline_has_more = self._run_baseline_snapshot()
@@ -595,6 +631,11 @@ class AeeDbHistoryReconciler:
                 "aee_reconciler_skip_unchanged serial=%s job=%d", self._serial, self._job_id,
             )
             return baseline_new
+
+        def _on_runtime_intent(payload: Dict[str, Any]) -> None:
+            scoped_payload = dict(payload)
+            scoped_payload["entry_origin"] = "runtime"
+            self._record_intent_placeholder(scoped_payload)
 
         def _on_runtime_entry(payload: Dict[str, Any]) -> None:
             scoped_payload = dict(payload)
@@ -616,6 +657,7 @@ class AeeDbHistoryReconciler:
             run_date_stamp=self._run_date_stamp,
             on_new_entry=_on_runtime_entry,
             on_pull_failed=_on_runtime_pull_failed,
+            on_entry_intent=_on_runtime_intent,
             shell_fn=self._shell_fn,
             pull_fn=self._pull_fn,
             stop_event=self._stop_evt,
@@ -659,7 +701,7 @@ class AeeDbHistoryReconciler:
             首轮 runtime diff 再次重复 pull/emit
           - baseline backlog 需要分片,避免单轮一次性扫完整个设备历史问题
         """
-        baseline_prefix = f"watcher_baseline:{self._job_id}"
+        baseline_prefix = self._baseline_prefix()
         # #802: runtime pass 可能已处理 baseline 尚未重放的行（写入共享
         # processed）——先从 baseline pending 摘除这些行，否则后续 baseline
         # 分片轮会对同一行再次 emit（新 seq_no 绕过控制面 (job,seq) 幂等，
@@ -675,6 +717,12 @@ class AeeDbHistoryReconciler:
             "aee_exp": set(),
             "vendor_aee_exp": set(),
         }
+
+        def _on_baseline_intent(payload: Dict[str, Any]) -> None:
+            scoped_payload = dict(payload)
+            scoped_payload["detected_at_override"] = datetime.now(timezone.utc)
+            scoped_payload["entry_origin"] = "baseline"
+            self._record_intent_placeholder(scoped_payload)
 
         def _on_baseline_entry(payload: Dict[str, Any]) -> None:
             scoped_payload = dict(payload)
@@ -695,6 +743,7 @@ class AeeDbHistoryReconciler:
             local_root=self._local_root,
             run_date_stamp=self._run_date_stamp,
             on_new_entry=_on_baseline_entry,
+            on_entry_intent=_on_baseline_intent,
             shell_fn=self._shell_fn,
             pull_fn=self._pull_fn,
             stop_event=self._stop_evt,
@@ -851,10 +900,256 @@ class AeeDbHistoryReconciler:
                 self._serial, self._job_id, payload,
             )
 
+    def _baseline_prefix(self) -> str:
+        """baseline 分片的 processed 键命名空间（job 级隔离）。"""
+        return f"watcher_baseline:{self._job_id}"
+
+    def _state_prefix_for(self, payload: Dict[str, Any]) -> str:
+        """解析 payload 所属 processed 键命名空间（processor 透传优先）。"""
+        return str(payload.get("state_key_prefix") or self._state_prefix)
+
+    def _record_intent_placeholder(self, payload: Dict[str, Any]) -> None:
+        """processor.on_entry_intent 钩子：processed 落盘前先落 emit 意图占位。
+
+        #1719：占位语义 = 「该条目已在本地 finalize，emit 必须发生」。已有
+        记录（重拉/重放路径）不覆盖——保留既有 keys / 首次观测时间戳。
+        """
+        try:
+            aee_type = str(payload.get("aee_type") or "")
+            line = str(payload.get("line") or "")
+            if not aee_type or not line:
+                return
+            processed_key = state_key(
+                self._serial, aee_type, prefix=self._state_prefix_for(payload),
+            )
+            intents = load_intents(self._state_store, processed_key)
+            if line in intents:
+                return
+            override = payload.get("detected_at_override")
+            override_iso = (
+                override.isoformat() if isinstance(override, datetime) else ""
+            )
+            record = new_intent_record(
+                payload=payload,
+                job_id=self._job_id,
+                detected_at_iso=override_iso or datetime.now(timezone.utc).isoformat(),
+                entry_origin=str(payload.get("entry_origin") or "runtime"),
+                detected_at_override_iso=override_iso,
+            )
+            intents[line] = record
+            save_intents(self._state_store, processed_key, intents)
+        except Exception:
+            logger.exception(
+                "aee_emit_intent_placeholder_failed serial=%s job=%d",
+                self._serial, self._job_id,
+            )
+
+    def _intent_payload(
+        self, aee_type: str, line: str, record: Dict[str, Any], prefix: str,
+    ) -> Dict[str, Any]:
+        """由意图记录重建 on_new_entry 形状 payload（sweep 重放用）。"""
+        payload: Dict[str, Any] = {
+            "line":             line,
+            "parsed":           dict(record.get("parsed") or {}),
+            "aee_type":         aee_type,
+            "output_subdir":    str(record.get("output_subdir") or ""),
+            "entry_origin":     str(record.get("entry_origin") or "runtime"),
+            "state_key_prefix": prefix,
+        }
+        override = _parse_iso_dt(record.get("detected_at_override"))
+        if override is not None:
+            payload["detected_at_override"] = override
+        return payload
+
+    def _ensure_emit_for_intent(
+        self,
+        payload: Dict[str, Any],
+        record: Dict[str, Any],
+        intents: Dict[str, dict],
+        processed_key: str,
+    ) -> None:
+        """确保该条目的 emit+DLE 已发起（幂等）：先持久化 keys，再效果，再标 done。
+
+        keys 已存在（崩溃重放）→ 复用 seq_no/envelope/DLE payload，不重新
+        分配、不重建 payload——重放与首发在控制面收敛为同一行/同一 id。
+        """
+        aee_type = str(payload.get("aee_type") or record.get("aee_type") or "")
+        category = _AEE_TYPE_TO_CATEGORY.get(aee_type)
+        if not category:
+            raise ContractViolation(f"unknown aee_type {aee_type!r}")
+
+        parsed: Dict[str, Any] = dict(payload.get("parsed") or record.get("parsed") or {})
+        db_path: str = str(parsed.get("db_path") or "")
+        aee_ts: str = str(parsed.get("timestamp") or "")
+        pkg_name: str = str(parsed.get("pkg_name") or "") or "unknown"
+        event_type: str = str(parsed.get("event_type") or "") or "UNKNOWN"
+        raw_event_type: str = str(parsed.get("raw_event_type") or "")
+        event_subtype: str = str(parsed.get("event_subtype") or "") or "其他"
+        entry_origin: str = (
+            str(payload.get("entry_origin") or record.get("entry_origin") or "runtime")
+        )
+        output_subdir = payload.get("output_subdir") or record.get("output_subdir") or ""
+
+        # #88:detected_at 是「控制面观测到该信号的时刻」,必须来自服务端时钟
+        # ——设备时钟不可信。首次观测（占位/回调）时固化进意图记录，重放复用，
+        # 避免同一条目跨重启得到两个不同的 detected_at。
+        detected_at = _parse_iso_dt(record.get("detected_at"))
+        if detected_at is None:
+            override = payload.get("detected_at_override")
+            detected_at = (
+                override if isinstance(override, datetime) else datetime.now(timezone.utc)
+            )
+        if detected_at.tzinfo is None:
+            detected_at = detected_at.replace(tzinfo=timezone.utc)
+        record["detected_at"] = detected_at.isoformat()
+
+        # 设备自报时间换算成真实 UTC 后另存,便于排查设备时钟漂移。
+        aee_ts_utc = to_utc(parse_timestamp(aee_ts))
+
+        seq_no = record.get("seq_no")
+        if seq_no is None:
+            extra: Dict[str, Any] = {
+                # §2.2 schema_version 2:演进兼容标记。mobilelog_pulled /
+                # bugreport_exported 不在此填 — emit 早于 mobilelog/bugreport
+                # 副作用，此刻两者尚未发生，故按 §2.2「可选」留空。
+                "schema_version": 2,
+                "event_type": event_type,
+                "event_subtype": event_subtype,
+                "raw_event_type": raw_event_type,
+                "package_name": pkg_name,
+                "aee_ts": aee_ts,
+                # #88:设备自报时间换算出的**真实** UTC;设备没给时区时为 None。
+                "aee_ts_utc": aee_ts_utc.isoformat() if aee_ts_utc else None,
+                "nfs_path": str(output_subdir) if output_subdir else None,
+                "pull_source": "reconciler",
+                "entry_origin": entry_origin,
+            }
+            seq_no, envelope = self._emitter.prepare(
+                category=category,
+                source="reconciler",
+                path_on_device=db_path,
+                detected_at=detected_at,
+                artifact_uri=str(output_subdir) if output_subdir else None,
+                extra=extra,
+            )
+            dle_payload = self._build_device_log_event_payload(
+                payload,
+                seq_no=seq_no,
+                detected_at=detected_at,
+                event_type=event_type,
+                event_subtype=event_subtype,
+                aee_ts_utc=aee_ts_utc,
+                event_id=str(uuid4()),
+            )
+            record["seq_no"] = int(seq_no)
+            record["signal_envelope"] = envelope
+            record["dle_payload"] = dle_payload
+            record["job_id"] = self._job_id
+            intents[str(payload.get("line") or "")] = record
+            # 先持久化 keys，再产生效果——崩溃落在两者之间时重放复用同一幂等键
+            save_intents(self._state_store, processed_key, intents)
+            logger.debug(
+                "aee_emit_intent_keys_persisted serial=%s job=%d seq=%d",
+                self._serial, self._job_id, seq_no,
+            )
+        else:
+            seq_no = int(seq_no)
+            envelope = record.get("signal_envelope") or {}
+            dle_payload = record.get("dle_payload")
+
+        # 效果（幂等）：outbox `INSERT OR IGNORE`；DLE 按预分配 id upsert
+        if envelope:
+            self._emitter.enqueue(seq_no, envelope)
+        if dle_payload and self._device_log_client is not None:
+            event_id = self._device_log_client.post_event_payload(dle_payload)
+            if not event_id:
+                logger.info(
+                    "aee_reconciler_device_log_event_fallback_signal_only "
+                    "serial=%s job=%d seq=%d",
+                    self._serial, self._job_id, seq_no,
+                )
+
+        record["done"] = True
+        intents[str(payload.get("line") or "")] = record
+        save_intents(self._state_store, processed_key, intents)
+        self.stats.signals_emitted += 1
+        logger.debug(
+            "aee_reconciler_emit serial=%s job=%d cat=%s pkg=%s subtype=%s",
+            self._serial, self._job_id, category, pkg_name, event_subtype,
+        )
+
+    def _sweep_emit_intents(self) -> int:
+        """#1719：完成/清理 emit 意图簿（每轮 tick 开头调用）。
+
+        - ``!done`` → 重放（keys 缺失则新分配；同幂等键），成功标 done；
+          失败计 attempts，达上限丢弃并计 signals_dropped（防无限重放）。
+        - ``done`` 且 line 已 processed → 清理；
+        - line 未 processed → 保留（重拉路径会复用 keys，避免重复 emit）。
+        返回本轮重放条数。
+        """
+        replayed = 0
+        for prefix in (self._state_prefix, self._baseline_prefix()):
+            for aee_type in ("aee_exp", "vendor_aee_exp"):
+                processed_key = state_key(self._serial, aee_type, prefix=prefix)
+                intents = load_intents(self._state_store, processed_key)
+                if not intents:
+                    continue
+                processed = load_processed_lines(self._state_store, processed_key)
+                changed = False
+                for line, record in list(intents.items()):
+                    if record.get("done"):
+                        if line in processed:
+                            del intents[line]
+                            changed = True
+                        continue
+                    payload = self._intent_payload(aee_type, line, record, prefix)
+                    try:
+                        self._ensure_emit_for_intent(
+                            payload, record, intents, processed_key,
+                        )
+                        replayed += 1
+                    except Exception:
+                        record["attempts"] = int(record.get("attempts", 0)) + 1
+                        intents[line] = record
+                        changed = True
+                        if record["attempts"] >= MAX_REPLAY_ATTEMPTS:
+                            del intents[line]
+                            self.stats.signals_dropped += 1
+                            logger.error(
+                                "aee_emit_intent_replay_dropped serial=%s job=%d "
+                                "attempts=%d line=%.120s",
+                                self._serial, self._job_id,
+                                record["attempts"], line,
+                            )
+                        else:
+                            logger.warning(
+                                "aee_emit_intent_replay_failed serial=%s job=%d "
+                                "attempts=%d line=%.120s",
+                                self._serial, self._job_id,
+                                record["attempts"], line,
+                                exc_info=True,
+                            )
+                        continue
+                    if line in processed:
+                        del intents[line]
+                        changed = True
+                if changed:
+                    save_intents(self._state_store, processed_key, intents)
+        if replayed:
+            logger.info(
+                "aee_emit_intent_replayed serial=%s job=%d n=%d",
+                self._serial, self._job_id, replayed,
+            )
+        return replayed
+
     def _handle_new_entry(self, payload: Dict[str, Any]) -> None:
         """processor.on_new_entry 回调:把新落盘的 AEE 条目 emit 成 log_signal。
 
         payload shape 见 processor.process_device_logs docstring。
+
+        #1719：效果经 emit 意图簿执行——命中占位（processor 先落）则补 keys
+        后重放；无占位（历史数据/直接调用）则就地补记录。done 记录直接返回
+        （幂等重入）。
         """
         try:
             aee_type = str(payload.get("aee_type") or "")
@@ -866,79 +1161,30 @@ class AeeDbHistoryReconciler:
                 )
                 return
 
-            parsed: Dict[str, Any] = dict(payload.get("parsed") or {})
-            db_path: str = str(parsed.get("db_path") or "")
-            aee_ts: str = str(parsed.get("timestamp") or "")
-            pkg_name: str = str(parsed.get("pkg_name") or "") or "unknown"
-            event_type: str = str(parsed.get("event_type") or "") or "UNKNOWN"
-            raw_event_type: str = str(parsed.get("raw_event_type") or "")
-            event_subtype: str = str(parsed.get("event_subtype") or "") or "其他"
-            entry_origin: str = str(payload.get("entry_origin") or "") or "runtime"
-            output_subdir = payload.get("output_subdir")
-
-            # #88:detected_at 是「控制面观测到该信号的时刻」,必须来自服务端
-            # 时钟 —— 设备时钟不可信(实测生产机漂移 3~9 天),且 db_history 的
-            # 时区缩写解析后仍可能与真实 UTC 有出入。
-            #
-            # 原实现只有 baseline 路径传 detected_at_override,runtime 路径退回
-            # 设备时钟,导致 runtime 信号的 detected_at 落到 PlanRun 时间窗口
-            # 之外,被 watcher-summary 的 `detected_at BETWEEN ...` 静默过滤 →
-            # 运行期间新产生的崩溃在仪表盘上完全不可见。
-            #
-            # 设备侧原始时间仍完整保留在 extra.aee_ts / aee_ts_utc,不丢信息。
-            detected_at = payload.get("detected_at_override")
-            if not isinstance(detected_at, datetime):
-                detected_at = datetime.now(timezone.utc)
-            if detected_at.tzinfo is None:
-                detected_at = detected_at.replace(tzinfo=timezone.utc)
-
-            # 设备自报时间换算成真实 UTC 后另存,便于排查设备时钟漂移。
-            # 无时区信息时 to_utc 返回 None(不猜),见 timestamp.to_utc 文档。
-            aee_ts_utc = to_utc(parse_timestamp(aee_ts))
-
-            extra: Dict[str, Any] = {
-                # §2.2 schema_version 2:演进兼容标记。mobilelog_pulled /
-                # bugreport_exported 不在此填 — emit 在 processor.on_new_entry
-                # 回调触发,早于 mobilelog/bugreport 副作用(processor.py:231),
-                # 此刻两者尚未发生,故按 §2.2「可选」留空。
-                "schema_version": 2,
-                "event_type": event_type,
-                "event_subtype": event_subtype,
-                "raw_event_type": raw_event_type,
-                "package_name": pkg_name,
-                "aee_ts": aee_ts,
-                # #88:设备自报时间换算出的**真实** UTC;设备没给时区(或时区
-                # 缩写不认识)时为 None —— 此时无从换算,不做 UTC 假设。
-                # 非 None 时,与 detected_at 的差值即设备时钟漂移,可用于排查。
-                "aee_ts_utc": aee_ts_utc.isoformat() if aee_ts_utc else None,
-                "nfs_path": str(output_subdir) if output_subdir else None,
-                "pull_source": "reconciler",
-                "entry_origin": entry_origin,
-            }
-
-            seq_no = self._emitter.emit(
-                category=category,
-                source="reconciler",
-                path_on_device=db_path,
-                detected_at=detected_at,
-                artifact_uri=str(output_subdir) if output_subdir else None,
-                extra=extra,
+            line = str(payload.get("line") or "")
+            processed_key = state_key(
+                self._serial, aee_type, prefix=self._state_prefix_for(payload),
             )
-            self.stats.signals_emitted += 1
-            self._register_device_log_event(
-                payload,
-                seq_no=seq_no,
-                detected_at=detected_at,
-                event_type=event_type,
-                event_subtype=event_subtype,
-                aee_ts_utc=aee_ts_utc,
-            )
-            logger.debug(
-                "aee_reconciler_emit serial=%s job=%d cat=%s pkg=%s subtype=%s",
-                self._serial, self._job_id, category,
-                extra.get("package_name", "-"),
-                extra.get("event_subtype", "-"),
-            )
+            intents = load_intents(self._state_store, processed_key)
+            record = intents.get(line)
+            if record is None:
+                override = payload.get("detected_at_override")
+                override_iso = (
+                    override.isoformat() if isinstance(override, datetime) else ""
+                )
+                record = new_intent_record(
+                    payload=payload,
+                    job_id=self._job_id,
+                    detected_at_iso=override_iso or datetime.now(timezone.utc).isoformat(),
+                    entry_origin=str(payload.get("entry_origin") or "runtime"),
+                    detected_at_override_iso=override_iso,
+                )
+                intents[line] = record
+            elif record.get("done"):
+                # 已完成（重拉幂等重入/竞态）：不再产生效果
+                return
+
+            self._ensure_emit_for_intent(payload, record, intents, processed_key)
         except ContractViolation as exc:
             self.stats.signals_dropped += 1
             logger.warning(
@@ -952,7 +1198,7 @@ class AeeDbHistoryReconciler:
                 self._serial, self._job_id, payload,
             )
 
-    def _register_device_log_event(
+    def _build_device_log_event_payload(
         self,
         payload: Dict[str, Any],
         *,
@@ -961,21 +1207,28 @@ class AeeDbHistoryReconciler:
         event_type: str,
         event_subtype: str,
         aee_ts_utc: Optional[datetime],
-    ) -> None:
-        """写入 DeviceLogEvent（LOCAL；upload_task 标记后由 EventUploader 轮询上送）。"""
+        event_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """组装 DeviceLogEvent payload（LOCAL / PULL_FAILED），**不发送**。
+
+        #1719：拆出组装步骤，让调用方先把 payload 连同幂等 keys 写进意图簿、
+        再产生效果；崩溃重放复用同一 payload（``id`` = 预分配 UUID）。
+        #287：过滤模型下 LOCAL 不直接入队——upload_task 按 scan xls 引用标记
+        UPLOAD_PENDING 后由 EventUploader 轮询上送。
+        """
         if self._device_log_client is None:
-            return
+            return None
         event_type = resolve_device_log_event_type(event_type, event_subtype)
         output_subdir = payload.get("output_subdir")
         if not output_subdir:
-            self._register_pull_failed_device_log_event(
+            return self._build_pull_failed_payload(
                 detected_at=detected_at,
                 event_type=event_type,
                 event_subtype=event_subtype,
                 aee_ts_utc=aee_ts_utc,
                 seq_no=seq_no,
+                event_id=event_id,
             )
-            return
         try:
             if self._local_root is not None:
                 local_path = resolve_path_under_aee_local(
@@ -988,23 +1241,23 @@ class AeeDbHistoryReconciler:
                 "aee_reconciler_local_path_outside_root serial=%s job=%d path=%s",
                 self._serial, self._job_id, output_subdir,
             )
-            self._register_pull_failed_device_log_event(
+            return self._build_pull_failed_payload(
                 detected_at=detected_at,
                 event_type=event_type,
                 event_subtype=event_subtype,
                 aee_ts_utc=aee_ts_utc,
                 seq_no=seq_no,
+                event_id=event_id,
             )
-            return
         if not local_path.is_dir():
-            self._register_pull_failed_device_log_event(
+            return self._build_pull_failed_payload(
                 detected_at=detected_at,
                 event_type=event_type,
                 event_subtype=event_subtype,
                 aee_ts_utc=aee_ts_utc,
                 seq_no=seq_no,
+                event_id=event_id,
             )
-            return
 
         subtype = event_subtype
         parsed_type = None
@@ -1025,8 +1278,7 @@ class AeeDbHistoryReconciler:
             event_type,
             paths=(str(local_path),),
         )
-
-        event_id = self._device_log_client.create_local_event(
+        return self._device_log_client.build_local_event_payload(
             serial=self._serial,
             platform=self._platform,
             event_type=meta_event_type,
@@ -1038,16 +1290,10 @@ class AeeDbHistoryReconciler:
             job_id=self._job_id,
             link_signal_seq_no=seq_no,
             size_bytes=self._device_log_client.dir_size_bytes(local_path),
+            event_id=event_id,
         )
-        if not event_id:
-            logger.info(
-                "aee_reconciler_device_log_event_fallback_signal_only serial=%s job=%d seq=%d",
-                self._serial, self._job_id, seq_no,
-            )
-        # #287：过滤模型下 LOCAL 不直接入队——upload_task 按 scan xls 引用
-        # 标记 UPLOAD_PENDING 后由 EventUploader 轮询上送。
 
-    def _register_pull_failed_device_log_event(
+    def _build_pull_failed_payload(
         self,
         *,
         seq_no: int,
@@ -1055,10 +1301,12 @@ class AeeDbHistoryReconciler:
         event_type: str,
         event_subtype: str,
         aee_ts_utc: Optional[datetime],
-    ) -> None:
+        event_id: str,
+        local_path: str = "",
+    ) -> Optional[Dict[str, Any]]:
         if self._device_log_client is None:
-            return
-        event_id = self._device_log_client.create_pull_failed_event(
+            return None
+        return self._device_log_client.build_pull_failed_payload(
             serial=self._serial,
             platform=self._platform,
             event_type=event_type,
@@ -1068,12 +1316,9 @@ class AeeDbHistoryReconciler:
             plan_run_id=self._plan_run_id,
             job_id=self._job_id,
             link_signal_seq_no=seq_no,
+            local_path=local_path,
+            event_id=event_id,
         )
-        if not event_id:
-            logger.info(
-                "aee_reconciler_pull_failed_fallback_signal_only serial=%s job=%d seq=%d",
-                self._serial, self._job_id, seq_no,
-            )
 
     def _notify_self_shutdown(self) -> None:
         """#806：自关闭后通知外部（JobSession → watcher 复位 emit 抑制位）。

@@ -170,3 +170,53 @@ class TestMainFlow:
         assert _mod.main([], runner=runner, now=NOW) == 2
         assert "docker 巡检失败" in capsys.readouterr().err
         assert _mod.main(["--strict"], runner=runner, now=NOW) == 2
+
+
+class TestPruneStrictSemantics:
+    """#1714：--prune --yes --strict 的退出码与复核报告语义。"""
+
+    def _stateful_runner(self, *, rm_rc: int = 0, recheck_rc: int = 0):
+        """容器集合随 rm 变化的 runner（区别于 _runner 的静态列表）。"""
+        stale = _c(300, name="stale1")
+        alive = {"v": True}
+        ps_calls = {"n": 0}
+        listing = (
+            f"{stale.cid}\t{stale.name}\t{stale.image}\t"
+            f"{stale.created.isoformat()}\t{json.dumps(stale.labels)}"
+        )
+
+        def runner(args):
+            if args[0] == "rm":
+                if rm_rc == 0:
+                    alive["v"] = False
+                return rm_rc, ""
+            if args[0] == "ps":
+                ps_calls["n"] += 1
+                if recheck_rc != 0 and ps_calls["n"] > 1:
+                    return recheck_rc, "daemon down"
+                return 0, (stale.cid if alive["v"] else "")
+            return 0, listing
+
+        return runner, stale
+
+    def test_clean_prune_with_strict_exits_zero(self, capsys):
+        """清干净后 --strict 必须 0（此前用清理前的 stale 判定，恒返回 1）。"""
+        runner, _ = self._stateful_runner()
+        assert _mod.main(["--prune", "--yes", "--strict"], runner=runner, now=NOW) == 0
+        out = capsys.readouterr().out
+        assert "仍有 0 个未清理" in out
+
+    def test_recheck_failure_is_reported_as_unknown_not_clean(self, capsys):
+        """复核失败必须报「不可知」，不得谎报「仍有 0 个未清理」。"""
+        runner, _ = self._stateful_runner(recheck_rc=1)
+        rc = _mod.main(["--prune", "--yes", "--strict"], runner=runner, now=NOW)
+        out = capsys.readouterr().out
+        assert "复核失败" in out and "不可知" in out
+        assert "仍有 0 个未清理" not in out, "不可知不得伪装成已清干净"
+        assert rc == 1, "复核失败结果不可知，strict 保守返回 1"
+
+    def test_prune_failure_keeps_strict_one(self, capsys):
+        """rm 失败、容器仍在 → strict 仍 1。"""
+        runner, _ = self._stateful_runner(rm_rc=1)
+        assert _mod.main(["--prune", "--yes", "--strict"], runner=runner, now=NOW) == 1
+        assert "仍有 1 个未清理" in capsys.readouterr().out

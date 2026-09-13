@@ -84,11 +84,18 @@ def process_device_logs(
     run_date_stamp: Optional[str] = None,
     on_new_entry: Optional[Callable[[Dict[str, Any]], None]] = None,
     on_pull_failed: Optional[Callable[[Dict[str, Any]], None]] = None,
+    on_entry_intent: Optional[Callable[[Dict[str, Any]], None]] = None,
     shell_fn: Optional[ShellFn] = None,
     pull_fn: Optional[PullFn] = None,
     stop_event: Optional[threading.Event] = None,
 ) -> ProcessResult:
     """Diff db_history, pull new AEE dirs, correlate mobilelog + bugreport.
+
+    on_entry_intent (#1719): optional callback invoked once per successfully
+    finalized entry, **before** processed/pending 落盘。调用方据此先落一条
+    emit 意图占位（payload 同 on_new_entry，另带 ``state_key_prefix``），
+    让崩溃后能判断"该行本应 emit"并幂等重放。缺省 None（patrol 路径）→
+    行为不变。
 
     on_new_entry (M0/PR #2): optional callback invoked once per successfully pulled
     new entry. Payload dict shape::
@@ -231,9 +238,27 @@ def process_device_logs(
             result.pulled += 1
             result.new_timestamps.append(parsed["timestamp"])
 
+            # #1719: 先落 emit 意图占位（仍在 processed 之前）——占位语义 =
+            # 「已在本地 finalize，emit 必须发生」；崩溃后 sweep 据此重放，
+            # 堵住 #803 折衷版（先 processed 再回调）的 emit 丢失窗口。
+            if on_entry_intent is not None:
+                try:
+                    on_entry_intent({
+                        "line":             line,
+                        "parsed":           dict(parsed),
+                        "aee_type":         aee_type,
+                        "output_subdir":    local_target_dir,
+                        "state_key_prefix": cfg.state_key_prefix,
+                    })
+                except Exception:
+                    logger.exception(
+                        "aee_on_entry_intent_callback_failed serial=%s db=%s",
+                        serial, parsed.get("db_path"),
+                    )
+
             # #803: 先落 processed/pending，再 on_new_entry（emit + DLE）。
             # 回调成功、状态未落盘就崩溃会跨重启重拉重 emit；先落盘把窗口换成
-            # 「已 processed 但 emit 未发生」的丢失风险（回调失败本就吞异常）。
+            # 「已 processed 但 emit 未发生」的丢失风险（由 #1719 意图簿兜底）。
             processed_lines.add(line)
             save_processed_lines(state_store, processed_key, processed_lines)
             _save_pending_tasks(state_store, pending_key, pending_tasks)
@@ -241,10 +266,11 @@ def process_device_logs(
             if on_new_entry is not None:
                 try:
                     on_new_entry({
-                        "line":          line,
-                        "parsed":        dict(parsed),
-                        "aee_type":      aee_type,
-                        "output_subdir": local_target_dir,
+                        "line":             line,
+                        "parsed":           dict(parsed),
+                        "aee_type":         aee_type,
+                        "output_subdir":    local_target_dir,
+                        "state_key_prefix": cfg.state_key_prefix,
                     })
                 except Exception:
                     logger.exception(

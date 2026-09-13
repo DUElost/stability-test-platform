@@ -224,7 +224,7 @@ AUTO_ARCHIVE_INTERVAL = int(os.getenv("AUTO_ARCHIVE_POLL_INTERVAL_SECONDS", "120
 
 
 def purge_run_storage_dirs(run_ids: list) -> set:
-    """#1521: 删除这些 PlanRun 的 NFS 目录（`devices/{id}/` 与 `dedup/{id}/`）。
+    """#1521/#1698: 删除 PlanRun 的 NFS 目录（devices/dedup/jira）。
 
     DB 行是「哪些目录属于此 run」的唯一索引——必须在删行**之前**清理，
     否则行删后目录永不可回溯（R-01 盘满链：DB 轨有 TTL、NFS 轨无 TTL）。
@@ -242,7 +242,8 @@ def purge_run_storage_dirs(run_ids: list) -> set:
     failed: set = set()
     removed = 0
     for run_id in run_ids:
-        for sub in ("devices", "dedup"):
+        # jira/{run_id}/ holds extract bundles (#1698); omit → orphan after row delete.
+        for sub in ("devices", "dedup", "jira"):
             target = base / sub / str(int(run_id))
             try:
                 if target.is_dir():
@@ -341,9 +342,9 @@ def run_retention_cleanup() -> None:
                 return
 
             # Subquery: job IDs belonging to safely-deletable PlanRuns
-            # #1521: NFS 轨回收——DB 行删除前先清 `devices/{id}/` 与
-            # `dedup/{id}/`（行是目录的唯一索引）；文件删除失败的 run 剔除出
-            # 本批 DB 删除，下轮重试（先文件后行，失败可自愈）。
+            # #1521/#1698: NFS 轨回收——DB 行删除前先清 devices/dedup/jira
+            # （行是目录的唯一索引）；文件删除失败的 run 剔除出本批 DB 删除，
+            # 下轮重试（先文件后行，失败可自愈）。
             purge_failed = purge_run_storage_dirs(safe_run_ids)
             if purge_failed:
                 safe_run_ids = [
