@@ -12,7 +12,7 @@
    仍未见即失败。
 
 版本目录不可变：本文件只加载新版本（monkey_test v1.2.2 / monkey_check
-v2.0.3 / monkey_launch v5.0.1 / monkey_resource_push v1.0.1）。
+v2.0.3 / monkey_launch v5.0.2 / monkey_resource_push v1.0.1）。
 """
 
 from __future__ import annotations
@@ -471,6 +471,79 @@ def test_launch_already_running_is_idempotent(monkeypatch):
     assert exited is False
     assert out["success"] is True
     assert out["metrics"]["already_running"] is True
+
+
+# ─────────────────────────── monkey_launch v5.0.2 ───────────────────────────
+
+def _load_launch_v502():
+    return _load("monkey_launch_v502", "monkey_launch/v5.0.2/monkey_launch.py")
+
+
+def _run_launch_timed(monkeypatch, mod, *, max_wait=15):
+    """Simulate wall clock: sh 在窗口末段才出现，aimwd 需二次 poll（各 +2s）。"""
+    captured: dict = {}
+    clock = {"t": 1000.0}
+    aimwd_calls = 0
+    t0 = clock["t"]
+
+    monkeypatch.setattr(mod, "device_serial", lambda: "S")
+    monkeypatch.setattr(
+        mod, "params", lambda: {"max_wait_seconds": max_wait},
+    )
+    monkeypatch.setattr(mod, "_shell", lambda serial, cmd, timeout=30: (0, ""))
+    monkeypatch.setattr(mod.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(
+        mod.time,
+        "sleep",
+        lambda secs: clock.__setitem__("t", clock["t"] + secs),
+    )
+
+    def fake_ps(serial, pattern, timeout=10):
+        if pattern == "MonkeyTest.sh":
+            # 第 14s 才可见（max_wait=15 的窗口末段）
+            return clock["t"] >= t0 + max_wait - 1
+        if pattern == "MonkeyWatchdog":
+            nonlocal aimwd_calls
+            aimwd_calls += 1
+            return aimwd_calls >= 2
+        return False
+
+    monkeypatch.setattr(mod, "_ps_grep", fake_ps)
+
+    def fake_output_result(success, error_message=None, metrics=None):
+        captured.update(
+            {"success": success, "error_message": error_message, "metrics": metrics or {}}
+        )
+
+    monkeypatch.setattr(mod, "output_result", fake_output_result)
+
+    exited = False
+    try:
+        mod.main()
+    except SystemExit:
+        exited = True
+    return captured, exited
+
+
+def test_launch_v501_shared_deadline_fails_when_sh_late(monkeypatch):
+    """#1711 回归：v5.0.1 共用 deadline，sh 迟到后 aimwd 二次 poll 无预算。"""
+    mod = _load_launch()
+    out, exited = _run_launch_timed(monkeypatch, mod)
+
+    assert exited is True
+    assert out["success"] is False
+    assert "MonkeyWatchdog" in (out.get("error_message") or "")
+
+
+def test_launch_v502_independent_aimwd_window_succeeds_when_sh_late(monkeypatch):
+    """#1711：v5.0.2 aimwd 独立窗口，sh 迟到 + aimwd 需二次 poll 仍成功。"""
+    mod = _load_launch_v502()
+    out, exited = _run_launch_timed(monkeypatch, mod)
+
+    assert exited is False
+    assert out["success"] is True
+    assert out["metrics"]["aimwd_started"] is True
+    assert out["metrics"]["watchdog_started"] is True
 
 
 # ─────────────────────── monkey_resource_push v1.0.1 ───────────────────────
