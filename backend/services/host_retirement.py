@@ -97,6 +97,56 @@ def _assert_no_inflight_work(db: Session, host_id: str) -> None:
         )
 
 
+def should_alert_retired_heartbeat(
+    host: Host,
+    *,
+    prev_status: Optional[str],
+    now: Optional[datetime] = None,
+) -> bool:
+    """ADR-0038 D4：退役主机又心跳 → **单次告警**（去重载体 `retire_alerted_at`）。
+
+    两条心跳端点（权威 `/api/v1/heartbeat`、轻量 `/api/v1/agent/heartbeat`）
+    **共用本判据**（ADR §1.2 的「共用检测」选项），不各自复制规则。
+
+    计轮规则：
+    - 非退役主机 → False；
+    - 退役 + `retire_alerted_at` 为空（本周期首拍）→ True 并打戳；
+    - 退役 + 已有戳：仅当本次是「离线/降级 → ONLINE」的**恢复拍**时视为新
+      episode（清零重打戳 → True）；持续 ONLINE 的后续拍 → False（持续 N 拍
+      也只响一次）；
+    - `unretire → retire` 重新计轮（② 的 unretire 负责清零，见该函数）。
+
+    纯属性函数（不触 Session API），供 sync / async 两条路径复用；
+    调用方负责随本拍心跳一起提交（戳落在退役周期内，重启/重试不重复响）。
+    """
+    if host.retired_at is None:
+        return False
+    if prev_status not in (None, "ONLINE"):
+        # 离线/降级 → ONLINE = 新一轮「已退役但仍在心跳」episode
+        host.retire_alerted_at = None
+    if host.retire_alerted_at is not None:
+        return False
+    host.retire_alerted_at = now or datetime.now(timezone.utc)
+    return True
+
+
+def retired_heartbeat_context(host: Host) -> dict:
+    """告警上下文：携带逻辑事件键 `(host.id, retired_at, event_type)`。
+
+    该键供下游（通知去重 / 审计复盘）做跨重试、跨进程的幂等判据；
+    `retire_alerted_at` 是行内的去重载体，两者互补。
+    """
+    retired_iso = host.retired_at.isoformat() if host.retired_at else ""
+    return {
+        "host_id": host.id,
+        "hostname": host.hostname,
+        "retired_at": retired_iso or None,
+        "retired_by": host.retired_by,
+        "retire_reason": host.retire_reason,
+        "event_key": f"{host.id}|{retired_iso}|HOST_RETIRED_HEARTBEAT",
+    }
+
+
 def _snapshot(host: Host) -> dict:
     """审计 before/after 快照（D6：含身份当前值，换机/心跳漂移可复盘）。"""
     return {
