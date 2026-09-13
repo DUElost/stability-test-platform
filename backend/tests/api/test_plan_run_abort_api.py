@@ -10,13 +10,19 @@ import pytest
 from backend.api.routes.agent_api import _RunCompleteIn, complete_job
 from backend.core.database import AsyncSessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
+from backend.models.enums import (
+    HostStatus,
+    JobStatus,
+    LeaseStatus,
+    LeaseType,
+    PlanRunStatus,
+)
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
-from backend.services.plan_run_abort import abort_plan_run
+from backend.services.plan_run_abort import abort_jobs_for_host, abort_plan_run
 
 
 # ---------------------------------------------------------------------------
@@ -625,3 +631,56 @@ def test_abort_control_emit_scoped_per_host(db_session, abort_chain):
     assert emitted["agent:h-abort-b"] == [job_b.id]
     assert job_a.id not in emitted["agent:h-abort-b"]
     assert job_b.id not in emitted["agent:h-abort"]
+
+
+def test_abort_jobs_for_host_scoped_to_host_only(db_session, abort_chain):
+    """Host hot-update abort must not abort other hosts' jobs on the same PlanRun."""
+    plan = abort_chain["plan"]
+    host_b = Host(
+        id="h-abort-b",
+        hostname="hostB",
+        status=HostStatus.ONLINE.value,
+        ip="10.0.0.51",
+        ssh_user="root",
+        ssh_port=22,
+        extra={"ssh_password": "x"},
+        last_heartbeat=datetime.now(timezone.utc),
+    )
+    dev_b = Device(serial="dev-b", host_id="h-abort-b", status="BUSY")
+    db_session.add_all([host_b, dev_b])
+    db_session.commit()
+
+    pr = _make_plan_run(db_session, plan.id)
+    job_a = _make_job(
+        db_session, pr.id, plan.id,
+        abort_chain["dev1"].id, "h-abort",
+        status=JobStatus.RUNNING.value,
+    )
+    job_b = _make_job(
+        db_session, pr.id, plan.id,
+        dev_b.id, "h-abort-b",
+        status=JobStatus.RUNNING.value,
+    )
+
+    with patch(
+        "backend.services.plan_run_abort.schedule_emit",
+    ), patch(
+        "backend.services.plan_run_abort.should_trigger_dedup",
+        return_value=False,
+    ):
+        abort_jobs_for_host("h-abort", db=db_session, reason="host-update")
+
+    db_session.expire_all()
+    job_a_after = db_session.get(JobInstance, job_a.id)
+    job_b_after = db_session.get(JobInstance, job_b.id)
+    pr_after = db_session.get(PlanRun, pr.id)
+
+    assert job_a_after.status == JobStatus.RUNNING.value
+    assert job_a_after.id in (
+        pr_after.run_context.get("abort_requested", {}).get("requested_job_ids") or []
+    )
+    assert job_b_after.status == JobStatus.RUNNING.value
+    assert job_b_after.id not in (
+        pr_after.run_context.get("abort_requested", {}).get("requested_job_ids") or []
+    )
+    assert pr_after.status == PlanRunStatus.RUNNING.value
