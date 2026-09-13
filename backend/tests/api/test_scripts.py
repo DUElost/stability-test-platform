@@ -879,3 +879,70 @@ class TestScriptVersionCreateValidation:
         data = resp.json()["data"]
         assert data["version"] == "2.0.0"
         assert data["is_active"] is True
+
+
+def test_script_usage_versions_drilldown(client, auth_headers, db_session):
+    """#706：版本级执行事实——每个版本被哪些项目跑过、各自 run 数与成功率。"""
+    from backend.models.plan import Plan
+    from backend.models.plan_run import PlanRun
+    from backend.models.project import TestProject
+    from backend.models.script import Script
+
+    script = Script(
+        name="usage_versions", script_type="python", version="1.0.0",
+        nfs_path="/s/usage_versions.py", content_sha256="v" * 64,
+        default_params={}, param_schema={}, is_active=True,
+    )
+    db_session.add(script)
+    db_session.commit()
+
+    proj_a = TestProject(project_key="USV-A", display_name="a", source="USER")
+    proj_b = TestProject(project_key="USV-B", display_name="b", source="USER")
+    db_session.add_all([proj_a, proj_b])
+    db_session.commit()
+
+    plan_a = Plan(name="usv-plan-a", project_id=proj_a.id)
+    plan_b = Plan(name="usv-plan-b", project_id=proj_b.id)
+    db_session.add_all([plan_a, plan_b])
+    db_session.commit()
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        (proj_a, plan_a, "1.0.0", "SUCCESS"),
+        (proj_a, plan_a, "1.0.0", "FAILED"),
+        (proj_b, plan_b, "1.0.0", "SUCCESS"),
+        (proj_b, plan_b, "1.0.1", "FAILED"),
+    ]
+    db_session.add_all([
+        PlanRun(
+            plan_id=plan.id, project_id=proj.id, status=status,
+            plan_snapshot=_usage_snapshot_steps("usage_versions", version),
+            run_type="MANUAL", triggered_by="t", started_at=now - timedelta(days=1),
+        )
+        for proj, plan, version, status in rows
+    ])
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/scripts/{script.id}/usage", headers=auth_headers)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    by_version = {v["script_version"]: v for v in data["versions"]}
+    assert set(by_version) == {"1.0.0", "1.0.1"}
+
+    v100 = by_version["1.0.0"]
+    assert v100["run_count"] == 3
+    assert v100["success_count"] == 2
+    assert v100["success_rate"] == 0.67
+    assert v100["project_count"] == 2
+    # 版本内按 run_count 降序
+    assert [p["project_key"] for p in v100["projects"]] == ["USV-A", "USV-B"]
+
+    v101 = by_version["1.0.1"]
+    assert v101["run_count"] == 1
+    assert v101["success_count"] == 0
+    assert v101["projects"] == [{
+        "project_key": "USV-B", "run_count": 1, "success_count": 0, "success_rate": 0.0,
+    }]
+
+    # 版本间按总 run_count 降序
+    assert data["versions"][0]["script_version"] == "1.0.0"
