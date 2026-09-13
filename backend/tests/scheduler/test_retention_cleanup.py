@@ -208,10 +208,12 @@ def _make_nfs_dirs(root, run_id):
     (root / "devices" / str(run_id) / "172-21-1-1" / "evt.log").write_text("x")
     (root / "dedup" / str(run_id) / "mtk").mkdir(parents=True)
     (root / "dedup" / str(run_id) / "mtk" / "result.xls").write_text("y")
+    (root / "jira" / str(run_id) / "extract").mkdir(parents=True)
+    (root / "jira" / str(run_id) / "extract" / "bundle.zip").write_text("z")
 
 
 def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
-    """#1521: DB 行删除前清理 devices/{id}/ 与 dedup/{id}/（NFS 轨 TTL）。"""
+    """#1521/#1698: DB 行删除前清理 devices/dedup/jira/{id}/（NFS 轨 TTL）。"""
     db, plan = cleanup_env
     monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
     run = _mk_run(db, plan, status="SUCCESS", age_days=10)
@@ -221,6 +223,7 @@ def test_nfs_run_dirs_purged_with_db_row(cleanup_env, tmp_path, monkeypatch):
 
     assert not (tmp_path / "devices" / str(run.id)).exists()
     assert not (tmp_path / "dedup" / str(run.id)).exists()
+    assert not (tmp_path / "jira" / str(run.id)).exists()
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is None
 
 
@@ -234,6 +237,7 @@ def test_active_run_nfs_dirs_kept(cleanup_env, tmp_path, monkeypatch):
     cron_scheduler.run_retention_cleanup()
 
     assert (tmp_path / "devices" / str(run.id)).exists()
+    assert (tmp_path / "jira" / str(run.id)).exists()
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
 
 
@@ -256,3 +260,4 @@ def test_purge_failure_defers_db_row_for_retry(cleanup_env, tmp_path, monkeypatc
     # DB 行仍在（下轮重试文件清理），目录仍在
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
     assert (tmp_path / "devices" / str(run.id)).exists()
+    assert (tmp_path / "jira" / str(run.id)).exists()
