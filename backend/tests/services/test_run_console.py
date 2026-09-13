@@ -474,8 +474,8 @@ def test_console_miss_hint_and_startup_warning_follow_multi_instance_flag(monkey
     assert "dedup_jira_serialization" in warning
 
 
-def test_console_hint_and_warning_p2_branch(monkeypatch):
-    """#1737 P2：注册表启用 → 文案声明 status 已跨实例 + 剩余限制（cancel/read_log）。"""
+def test_console_hint_and_warning_p3_branch(monkeypatch):
+    """#1737 P3：注册表启用 → 声明 status/cancel 已跨实例 + 剩余限制（read_log）。"""
     from backend.services import run_console as rc
 
     monkeypatch.setattr(
@@ -486,10 +486,12 @@ def test_console_hint_and_warning_p2_branch(monkeypatch):
 
     hint = rc.console_run_miss_hint()
     assert "跨实例 status" in hint
+    assert "cancel 经请求位转发" in hint
     assert "#1114" in hint
 
     warning = rc.multi_instance_console_warning()
     assert warning is not None
     assert "console_status_cross_instance=true" in warning
-    assert "remaining_limits=read_log_replay,cancel_forwarding" in warning
+    assert "console_cancel_forwarding=true" in warning
+    assert "remaining_limits=read_log_replay" in warning
     assert "ref=#1737/#1114" in warning

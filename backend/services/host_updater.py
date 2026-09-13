@@ -58,6 +58,11 @@ _TAR_EXCLUDES = {
 # File suffixes to exclude
 _TAR_EXCLUDE_SUFFIXES = (".pyc",)
 
+# ADR-0040 §5.1（P0 过渡，#1903）：压缩级 9 → 6。实测 252MB 源树打包 16.6s → 6.4s，
+# 体积 125.7MB → 126.0MB（+0.3MB，内网传输代价可忽略）。终态出口 = P1 的 digest 缓存键，
+# 不留双轨。
+_TARBALL_COMPRESSLEVEL = 6
+
 
 def _resolve_ssh_creds(host_ip: str) -> dict | None:
     """Look up SSH credentials from Ansible inventory by IP.
@@ -94,10 +99,10 @@ def _resolve_ssh_creds(host_ip: str) -> dict | None:
     return None
 
 
-def _build_tarball() -> bytes:
+def _build_tarball(compresslevel: int = _TARBALL_COMPRESSLEVEL) -> bytes:
     """Package the agent source tree into an in-memory gzipped tarball."""
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+    with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=compresslevel) as tar:
         for root, dirs, files in os.walk(_AGENT_SOURCE_DIR):
             # Filter directories in-place
             dirs[:] = [d for d in dirs if d not in _TAR_EXCLUDES]
@@ -526,8 +531,12 @@ def execute_hot_update(
     agent_secret: str = "",
     code_version: str = "",
     pip_index_url: str = "",
+    tarball: bytes | None = None,
 ) -> dict:
     """Execute a hot-update on a remote Linux host.
+
+    ``tarball``：可选预构建载荷（#1903）。批量入口整批只构建一次并复用；缺省
+    为 None 时按需构建（UI/API 单台路径行为不变）。
 
     Returns a dict with keys: ok, host_id (str), message, duration_ms,
     deps_refreshed (bool), env_keys_synced (list[str]),
@@ -542,10 +551,13 @@ def execute_hot_update(
     t0 = time.monotonic()
 
     try:
-        # 1. Build tarball
-        logger.info("hot_update_building_tarball source=%s", _AGENT_SOURCE_DIR)
-        tarball = _build_tarball()
-        logger.info("hot_update_tarball_size_bytes=%d", len(tarball))
+        # 1. Build tarball（#1903：批量入口传入预构建载荷，整批只构建一次）
+        if tarball is None:
+            logger.info("hot_update_building_tarball source=%s", _AGENT_SOURCE_DIR)
+            tarball = _build_tarball()
+            logger.info("hot_update_tarball_size_bytes=%d", len(tarball))
+        else:
+            logger.info("hot_update_using_prebuilt_tarball size_bytes=%d", len(tarball))
 
         # 2. Connect
         client, sftp = _ssh_connect(

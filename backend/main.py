@@ -73,6 +73,7 @@ from backend.core.database import async_engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
 from backend.core.redis import redact_redis_url
+from backend.core.request_metrics import ApiRequestMetricsMiddleware
 from backend.core.security import is_production_like_env, validate_production_auth_cookie_settings
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.state_machine import InvalidTransitionError
@@ -366,6 +367,12 @@ _fastapi_app.add_middleware(
     **get_cors_config(),
 )
 
+# #743 期望 2：请求级指标接线（stability_api_requests_total）。
+# 放在**最后** add = 请求链**最外层**，因此 CORS 预检、CSRF 403、限流 429
+# 与路由 404 都会被统计（幽灵 `/complete` 404 正是路由未命中形态）。
+# 只统计、不参与判定，见 backend/core/request_metrics.py 的基数纪律。
+_fastapi_app.add_middleware(ApiRequestMetricsMiddleware)
+
 _fastapi_app.include_router(auth_router)
 _fastapi_app.include_router(heartbeat_router)
 _fastapi_app.include_router(hosts_router)
@@ -418,6 +425,8 @@ async def health_check():
     此前 SAQ worker 退出 / Redis 断连时仍 200（saq_ready 只进 payload 不影响
     状态），Docker HEALTHCHECK 据此误报健康。现语义：
     - DB 断开 → 503 DB_UNAVAILABLE（既有）；
+    - 生产类环境 schema 落后于代码 head → 503 SCHEMA_NOT_AT_HEAD（#1882；
+      ``TESTING=1`` 或非 production/internal 跳过）；
     - Redis 不可达 → 503 REDIS_UNREACHABLE（lifespan 已建 redis_client 时
       ping 验证；TESTING=1 下 redis_client 为 None，跳过）；
     - SAQ 未就绪 → 503 SAQ_NOT_READY（inprocess 与 producer 模式同判——
@@ -436,8 +445,37 @@ async def health_check():
         )
     )
     try:
+        from backend.core.schema_revision import (
+            code_head_revision,
+            database_revision,
+            is_schema_at_head,
+        )
+
         async with async_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+            db_revision = await database_revision(conn)
+            code_head = code_head_revision()
+
+        skip_schema_check = (
+            os.getenv("TESTING") == "1"
+            or not is_production_like_env()
+        )
+        if not skip_schema_check and not is_schema_at_head(db_revision, code_head):
+            logger.warning(
+                "health_schema_not_at_head db=%s head=%s",
+                db_revision,
+                code_head,
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "data": None,
+                    "error": {
+                        "code": "SCHEMA_NOT_AT_HEAD",
+                        "message": "database schema revision does not match code head",
+                    },
+                },
+            )
 
         if not skip_infra:
             if redis_client is not None:
@@ -489,6 +527,9 @@ async def health_check():
             "admission_queue_pump_ready": is_queue_pump_ready(),
             "admission_queue_enabled": admission_queue_enabled(),
         }
+        if is_schema_at_head(db_revision, code_head):
+            payload["alembic_revision"] = db_revision
+            payload["alembic_head"] = code_head
         return {"data": payload, "error": None}
     except Exception:
         return JSONResponse(status_code=503, content={"data": None, "error": {"code": "DB_UNAVAILABLE", "message": "database disconnected"}})

@@ -36,7 +36,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from backend.core.metrics import record_plan_run_aggregation_duration
+from backend.core.metrics import (
+    record_plan_run_aggregation_duration,
+    record_plan_run_counter_drift,
+)
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun, PlanRunHost
@@ -270,4 +273,19 @@ def recount_plan_run_counters(run: PlanRun, jobs: list[Any]) -> dict[str, int]:
     run.completed_job_count = completed
     run.failed_job_count = failed
     run.aborted_job_count = aborted
-    return {"before": before, "after": after, "drifted": before != after}
+    drifted = before != after
+    if drifted:
+        # #77：漂移即埋点（每漂移列一条）。理论漂移率 = 0——所有终态入口都
+        # 经集中 terminalization；> 0 说明有入口绕开集中服务或并发 race，
+        # counter_reconciler 修复的同时暴露给 Prometheus（SLO 守卫 ADR-0026 §6）。
+        # getattr 防御：指标是 best-effort，任何异常对象（单测 SimpleNamespace）
+        # 都不得让业务逻辑失败。
+        record_plan_run_counter_drift(
+            getattr(run, "id", None),
+            [
+                col.removesuffix("_job_count")
+                for col in before
+                if before[col] != after[col]
+            ],
+        )
+    return {"before": before, "after": after, "drifted": drifted}

@@ -37,6 +37,22 @@ groups:
             Agents are failing to acquire leases (device already leased).
             May indicate stale leases or dispatch overlap.
 
+      # #77：理论漂移率 = 0——任何漂移都说明有入口绕开集中 terminalization
+      # 或出现并发 race。P3 warning（需排查但非即时）。
+      - alert: StabilityPlanRunCounterDrift
+        expr: increase(stability_plan_run_counter_drift_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: PlanRun terminalization counter drift repaired
+          description: >-
+            counter_reconciler repaired drift in PlanRun job counters. All
+            terminal paths must go through the central terminalization service
+            (ADR-0026 §6) — investigate which entry bypassed it or which
+            concurrent race lost an update. SLO: drift ratio P99 < 0.1%;
+            escalate when > 1%.
+
   - name: stability-platform-security
     rules:
       - alert: StabilityCsrfOriginRejected
@@ -167,3 +183,24 @@ groups:
             Watcher-summary computed unlinked_fixable > 0 (#528 threshold).
             A matching DLE exists yet the signal link is missing — check
             signal_link_reconcile_done logs and backend/scheduler/signal_link_reconciler.py.
+
+      # #743 期望 2（follow-up #729）：控制面幽灵 `POST .../jobs/*/complete` 的 404 速率。
+      # #729 的 404 风暴持续约一个月才靠翻日志发现——本组正是「只记日志无人盯」的收敛处。
+      #
+      # 端点标签来源见 backend/core/request_metrics.py：命中路由用**模板**，未命中
+      # （正是本告警要抓的幽灵端点形态）用**归一化路径**，故
+      # `/api/v1/jobs/12345/complete` 计为 `/api/v1/jobs/{id}/complete`，基数有界。
+      #
+      # 阈值：稳态为 0；0.02 req/s ≈ 1.2 次/分，出现即说明有客户端在打不存在的端点。
+      - alert: StabilityGhostJobCompleteEndpoint
+        expr: rate(stability_api_requests_total{status_code="404", endpoint=~".*/complete"}[5m]) > 0.02
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Ghost POST .../jobs/*/complete 404 storm (control plane)
+          description: >-
+            The control plane has answered 404 for POST .../jobs/*/complete at a
+            sustained rate.  This is the #729 形态：旧 Agent/客户端在打已不存在的
+            `/complete` 端点。核对 Agent 版本与中心路由表；处置前先读
+            docs/operations/control-plane-db-maintenance.md（不要手动删 job 行）。

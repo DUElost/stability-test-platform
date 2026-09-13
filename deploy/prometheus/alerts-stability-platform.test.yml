@@ -1,4 +1,4 @@
-# promtool 场景测试（#1257 / R14-F11）：三条修复过的规则必须在真实标签
+# promtool 场景测试（#1257 / R14-F11）：各条修复过的规则必须在真实标签
 # 形状的样本上可触发。运行：
 #   promtool test rules deploy/prometheus/alerts-stability-platform.test.yml
 # CI 由 tests/test_prometheus_alerts_contract.py 调度（runner 无 promtool 时
@@ -28,6 +28,15 @@ tests:
       # StabilityAgentTerminalOutboxBacklog（#743）：心跳上报的积压保持 >0 超过 30m
       - series: 'stability_agent_outbox_pending{host_id="host-1",type="terminal"}'
         values: '1x40'
+      # StabilityPlanRunCounterDrift（#77）：counter_reconciler 修复到一列漂移
+      - series: 'stability_plan_run_counter_drift_total{plan_run_id="42",mode="terminal"}'
+        values: '0+1x20'
+      # StabilityGhostJobCompleteEndpoint（#743 期望 2）：幽灵端点 404 持续。
+      # 标签形状取自 backend/core/request_metrics.py 的接线：endpoint 是**路由模板化**
+      # 之后的形态（`{id}` 而非具体 job id），因此基数有界。
+      # 10/min = 0.167 req/s > 阈值 0.02，保持 15m 以上以满足 for。
+      - series: 'stability_api_requests_total{method="POST",endpoint="/api/v1/jobs/{id}/complete",status_code="404"}'
+        values: '0+10x30'
     alert_rule_test:
       - eval_time: 20m
         alertname: StabilityDispatchGateFailed
@@ -76,3 +85,33 @@ tests:
                 centre answers 404/misroute for POST .../jobs/*/complete (the #729
                 ghost 404 storm): check centre routing first.  Before clearing any
                 centre-side job rows, read docs/operations/control-plane-db-maintenance.md.
+      - eval_time: 20m
+        alertname: StabilityPlanRunCounterDrift
+        exp_alerts:
+          - exp_labels:
+              plan_run_id: "42"
+              mode: terminal
+              severity: warning
+            exp_annotations:
+              summary: PlanRun terminalization counter drift repaired
+              description: >-
+                counter_reconciler repaired drift in PlanRun job counters. All
+                terminal paths must go through the central terminalization service
+                (ADR-0026 §6) — investigate which entry bypassed it or which
+                concurrent race lost an update. SLO: drift ratio P99 < 0.1%;
+                escalate when > 1%.
+      - eval_time: 20m
+        alertname: StabilityGhostJobCompleteEndpoint
+        exp_alerts:
+          - exp_labels:
+              method: POST
+              endpoint: /api/v1/jobs/{id}/complete
+              status_code: "404"
+              severity: warning
+            exp_annotations:
+              summary: Ghost POST .../jobs/*/complete 404 storm (control plane)
+              description: >-
+                The control plane has answered 404 for POST .../jobs/*/complete at a
+                sustained rate.  This is the #729 形态：旧 Agent/客户端在打已不存在的
+                `/complete` 端点。核对 Agent 版本与中心路由表；处置前先读
+                docs/operations/control-plane-db-maintenance.md（不要手动删 job 行）。

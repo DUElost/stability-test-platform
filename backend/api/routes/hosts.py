@@ -43,6 +43,7 @@ from backend.services.host_upgrade_gate import (
     HostAbortDrainTimeoutError,
     HostAbortPendingError,
     HostHasActiveJobsError,
+    HostRetiredError,
     begin_host_upgrade,
     end_host_upgrade,
 )
@@ -624,6 +625,19 @@ def update_host_watcher_admin_state(
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
 
+    # ADR-0038 D5：watcher 切换属执行/配置类动作，退役主机拒绝（先解除退役）
+    if host.retired_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HOST_RETIRED",
+                "message": (
+                    f"Host {host_id} is retired; unretire it before toggling "
+                    "watcher admin state (ADR-0038 D5)."
+                ),
+            },
+        )
+
     host.watcher_admin_active = payload.watcher_admin_active
     record_audit(
         db,
@@ -717,6 +731,18 @@ def host_hot_update(
                     "Pass ?abort_running_jobs=true to abort them then hot-update."
                 ),
                 "active_jobs": exc.active_jobs,
+            },
+        ) from None
+    except HostRetiredError:
+        # ADR-0038 D5：执行/配置类动作对退役主机拒绝（先解除退役再操作）
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HOST_RETIRED",
+                "message": (
+                    f"Host {host_id} is retired; unretire it before hot-update "
+                    "(ADR-0038 D5)."
+                ),
             },
         ) from None
     except HostAbortDrainTimeoutError as exc:
@@ -881,6 +907,18 @@ def host_install_agent(
         raise HTTPException(status_code=404, detail="host not found")
     if not host.ip:
         raise HTTPException(status_code=400, detail="Host has no IP address configured")
+    # ADR-0038 D5：安装属执行/配置类动作，退役主机拒绝（先解除退役）
+    if host.retired_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HOST_RETIRED",
+                "message": (
+                    f"Host {host_id} is retired; unretire it before agent install "
+                    "(ADR-0038 D5)."
+                ),
+            },
+        )
 
     initiated_by = current_user.username if current_user else None
     started = start_install_agent_runconsole(host_id, initiated_by=initiated_by)

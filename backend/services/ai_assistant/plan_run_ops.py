@@ -141,14 +141,20 @@ def describe_archive_preview(db: Session, params: dict) -> str:
     if pr is None:
         return f"PlanRun #{params['run_id']}（未找到）"
     host_rows = iter_plan_run_scan_hosts(db, params["run_id"])
-    online = [h for h, st in host_rows if st == "ONLINE"]
-    offline = [h for h, st in host_rows if st != "ONLINE"]
+    online = [h for h, st, retired in host_rows if st == "ONLINE" and not retired]
+    offline = [h for h, st, retired in host_rows if st != "ONLINE" and not retired]
+    retired = [h for h, _st, is_retired in host_rows if is_retired]
     lines = [
         f"PlanRun #{pr.id} status={pr.status}",
         f"将 archive_now + scan_now 下发至 ONLINE host（{len(online)}）：{', '.join(online) or '—'}",
     ]
     if offline:
         lines.append(f"跳过 OFFLINE host（{len(offline)}）：{', '.join(offline)}")
+    if retired:
+        lines.append(
+            f"跳过退役 host（{len(retired)}，ADR-0038 D5：仅显式 admin 触发可触达）："
+            f"{', '.join(retired)}"
+        )
     return "\n".join(lines)
 
 
@@ -377,6 +383,7 @@ def run_trigger_plan_run_archive(
     from backend.core.audit import record_audit
     from backend.services.plan_run_scan_scope import (
         build_scan_now_payload,
+        classify_recycle_targets,
         iter_plan_run_scan_hosts,
     )
 
@@ -397,28 +404,32 @@ def run_trigger_plan_run_archive(
     if not host_rows:
         raise RuntimeError("no jobs found for this plan run")
 
+    # ADR-0038 D5：AI 工具路径不是「显式 admin 触发」，退役主机一律跳过并
+    # 如实记入 skipped_retired（不虚报完整）。
+    targets, skipped_offline_rows, skipped_retired_rows = classify_recycle_targets(
+        host_rows, allow_retired=False,
+    )
+    skipped = [row["host_id"] for row in skipped_offline_rows]
+    skipped_retired = [row["host_id"] for row in skipped_retired_rows]
+
     triggered: list[str] = []
-    skipped: list[str] = []
     dispatch_failed: list[str] = []
-    for host_id, host_status in host_rows:
-        if host_status == "ONLINE":
-            ok_archive = _schedule_emit_agent_control(
-                host_id,
-                "archive_now",
-                payload={"plan_run_id": run_id},
-            )
-            ok_scan = _schedule_emit_agent_control(
-                host_id,
-                "scan_now",
-                payload=build_scan_now_payload(db, run_id, host_id, is_final=False),
-            )
-            if ok_archive and ok_scan:
-                triggered.append(host_id)
-            else:
-                # #759：主循环不可用/入队失败不得报「已触发」——记为下发失败。
-                dispatch_failed.append(host_id)
+    for host_id in targets:
+        ok_archive = _schedule_emit_agent_control(
+            host_id,
+            "archive_now",
+            payload={"plan_run_id": run_id},
+        )
+        ok_scan = _schedule_emit_agent_control(
+            host_id,
+            "scan_now",
+            payload=build_scan_now_payload(db, run_id, host_id, is_final=False),
+        )
+        if ok_archive and ok_scan:
+            triggered.append(host_id)
         else:
-            skipped.append(host_id)
+            # #759：主循环不可用/入队失败不得报「已触发」——记为下发失败。
+            dispatch_failed.append(host_id)
 
     record_audit(
         db,
@@ -428,6 +439,7 @@ def run_trigger_plan_run_archive(
         details={
             "triggered_hosts": triggered,
             "skipped_offline": skipped,
+            "skipped_retired": skipped_retired,
             "dispatch_failed": dispatch_failed,
             "triggered_by": triggered_by,
         },
@@ -443,4 +455,5 @@ def run_trigger_plan_run_archive(
     return (
         f"PlanRun #{run_id} 归档/扫描已触发：ONLINE {len(triggered)} 台"
         f"{('，跳过 ' + str(len(skipped)) + ' 台离线') if skipped else ''}"
+        f"{('，跳过 ' + str(len(skipped_retired)) + ' 台退役（ADR-0038 D5：需显式 admin 触发）') if skipped_retired else ''}"
     )
