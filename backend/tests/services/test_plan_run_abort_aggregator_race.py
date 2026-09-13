@@ -595,3 +595,136 @@ def test_abort_all_terminal_running_run_is_not_finalized_as_success(
         f"abort 后应落 FAILED，实际 {fresh.status}——abort_requested 覆盖未生效"
     )
     assert (fresh.result_summary or {}).get("abort_requested") is True
+
+
+def test_abort_running_heavy_does_not_load_full_job_orm_rows(
+    db_session, sample_plan_run, sample_plan, sample_host,
+):
+    """#703：RUNNING 为主时只 SELECT id/host/status，不 ``query(JobInstance).all()``。"""
+    from unittest.mock import patch
+
+    from backend.models.host import Device
+    from backend.models.plan_run import PlanRun
+    from backend.services.plan_run_abort import abort_plan_run
+
+    run = db_session.get(PlanRun, sample_plan_run.id)
+    db_session.add_all([
+        Device(serial=f"run-heavy-{i}", host_id=sample_host.id, status="ONLINE")
+        for i in range(20)
+    ])
+    db_session.flush()
+    # 既有终态 job + 活跃 RUNNING：若误装全表会把 COMPLETED 也拉进 session。
+    for i, serial in enumerate([f"run-heavy-{i}" for i in range(20)]):
+        dev = db_session.query(Device).filter(Device.serial == serial).one()
+        status = JobStatus.COMPLETED.value if i < 5 else JobStatus.RUNNING.value
+        db_session.add(
+            JobInstance(
+                plan_run_id=run.id,
+                plan_id=sample_plan.id,
+                device_id=dev.id,
+                host_id=sample_host.id,
+                status=status,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            )
+        )
+    run.total_job_count = 20
+    run.completed_job_count = 5
+    run.terminal_job_count = 5
+    db_session.commit()
+
+    loaded_full = {"count": 0}
+    real_query = db_session.query
+
+    def _spy_query(*entities, **kwargs):
+        q = real_query(*entities, **kwargs)
+        if entities == (JobInstance,) or (
+            len(entities) == 1 and entities[0] is JobInstance
+        ):
+            real_all = q.all
+
+            def _all():
+                rows = real_all()
+                loaded_full["count"] += 1
+                return rows
+
+            q.all = _all  # type: ignore[method-assign]
+        return q
+
+    with patch.object(db_session, "query", side_effect=_spy_query), patch(
+        "backend.services.plan_run_abort.should_trigger_dedup", return_value=False,
+    ), patch(
+        "backend.services.plan_run_abort.enqueue_dedup_terminal_sync",
+    ), patch("backend.services.plan_run_abort.schedule_emit") as emit:
+        result = abort_plan_run(run.id, db=db_session, reason="narrow_select")
+
+    assert loaded_full["count"] == 0, "RUNNING 路径不得全量 JobInstance.all()"
+    assert len(result.get("abort_requested_jobs") or []) == 15
+    assert result.get("aborted_jobs") == []
+    control = [
+        c for c in emit.call_args_list
+        if (c.args[0] if c.args else None) == "control"
+    ]
+    assert len(control) == 1
+    assert len(control[0].args[1]["payload"]["job_ids"]) == 15
+
+
+def test_abort_pending_commits_abort_requested_before_batch(
+    db_session, sample_plan_run, sample_plan, sample_host,
+):
+    """#703：有 PENDING 时 abort_requested 先 commit，再开第二段事务做批量终态。"""
+    from unittest.mock import patch
+
+    from backend.models.host import Device
+    from backend.models.plan_run import PlanRun
+    from backend.services.plan_run_abort import abort_plan_run
+
+    run = db_session.get(PlanRun, sample_plan_run.id)
+    db_session.add_all([
+        Device(serial=f"early-c-{i}", host_id=sample_host.id, status="ONLINE")
+        for i in range(8)
+    ])
+    db_session.flush()
+    for serial in [f"early-c-{i}" for i in range(8)]:
+        dev = db_session.query(Device).filter(Device.serial == serial).one()
+        db_session.add(
+            JobInstance(
+                plan_run_id=run.id,
+                plan_id=sample_plan.id,
+                device_id=dev.id,
+                host_id=sample_host.id,
+                status=JobStatus.PENDING.value,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            )
+        )
+    run.total_job_count = 8
+    db_session.commit()
+
+    commits: list[str] = []
+    real_commit = db_session.commit
+
+    def _commit():
+        # 第一次 abort 内 commit：abort_requested 已落库、PENDING 尚未终态
+        ctx = (db_session.get(PlanRun, run.id).run_context or {})
+        ar = ctx.get("abort_requested")
+        pending_left = db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == run.id,
+            JobInstance.status == JobStatus.PENDING.value,
+        ).count()
+        if ar and pending_left == 8:
+            commits.append("early")
+        elif pending_left == 0:
+            commits.append("final")
+        else:
+            commits.append(f"other:pending={pending_left}")
+        return real_commit()
+
+    with patch.object(db_session, "commit", side_effect=_commit), patch(
+        "backend.services.plan_run_abort.should_trigger_dedup", return_value=False,
+    ), patch(
+        "backend.services.plan_run_abort.enqueue_dedup_terminal_sync",
+    ), patch("backend.services.plan_run_abort.schedule_emit"):
+        result = abort_plan_run(run.id, db=db_session, reason="early_commit")
+
+    assert "early" in commits, f"expected early commit releasing lock, got {commits}"
+    assert "final" in commits
+    assert len(result.get("aborted_jobs") or []) == 8

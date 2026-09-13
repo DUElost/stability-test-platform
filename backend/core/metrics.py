@@ -340,6 +340,26 @@ plan_run_aggregation_failed_total = Counter(
     'PlanRun aggregation failures swallowed by recycler',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #703：abort 持锁时长 + DB 连接池占用（QueuePool 耗尽观测）
+plan_run_abort_lock_seconds = Histogram(
+    'stability_plan_run_abort_lock_seconds',
+    'Wall time abort_plan_run holds PlanRun FOR NO KEY UPDATE before commit',
+    ['phase'],  # abort_requested | finalize | admission
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+db_pool_checked_out = Gauge(
+    'stability_db_pool_checked_out',
+    'SQLAlchemy QueuePool connections currently checked out',
+    ['engine'],  # sync | async
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+db_pool_overflow = Gauge(
+    'stability_db_pool_overflow',
+    'SQLAlchemy QueuePool current overflow (checked out beyond pool_size)',
+    ['engine'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ADR-0021 dispatch gate
 dispatch_gate_runs_total = Counter(
     'stability_dispatch_gate_runs_total',
@@ -753,6 +773,31 @@ def record_plan_run_aggregation_duration(seconds: float, path: str):
     plan_run_aggregation_duration_seconds.labels(
         path=(path or "unknown")[:32],
     ).observe(value)
+
+
+def record_plan_run_abort_lock_seconds(seconds: float, phase: str):
+    """#703：abort 持 PlanRun 行锁的墙钟时间（按阶段）。"""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return
+    if value < 0:
+        return
+    plan_run_abort_lock_seconds.labels(phase=(phase or "unknown")[:32]).observe(value)
+
+
+def record_db_pool_status(engine_label: str, *, checked_out: int, overflow: int):
+    """#703：刷新 QueuePool 占用 Gauge（checkout/checkin 事件驱动）。"""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    label = (engine_label or "unknown")[:16]
+    try:
+        db_pool_checked_out.labels(engine=label).set(max(0, int(checked_out)))
+        db_pool_overflow.labels(engine=label).set(max(0, int(overflow)))
+    except (TypeError, ValueError):
+        return
 
 
 def record_plan_run_devices_query_duration(seconds: float):

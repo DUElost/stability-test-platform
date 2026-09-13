@@ -114,7 +114,9 @@ def test_tick_once_pulls_device_events_then_emits(tmp_path):
 
     def shell_fn(cmd: str, _timeout: int) -> Optional[str]:
         if cmd.startswith("ls -1 /data/uniview"):
-            return "remote_evt\n"
+            return "remote_evt\n__STP_RC__:0\n"
+        if cmd.startswith("ls -1 /data/vendor/uniview"):
+            return "__STP_RC__:2\n"
         if "unievent_info.json" in cmd and "remote_evt" in cmd:
             return "unievent_info.json\n"
         return None
@@ -226,7 +228,8 @@ class TestProcessedPrune:
 
     def _device_shell(self, names):
         """返回 shell_fn：两个 root 都列出 names（或 None=失败）。"""
-        listing = "\n".join(names) + ("\n" if names else "")
+        lines = list(names) + ["__STP_RC__:0"]
+        listing = "\n".join(lines) + "\n"
         return lambda cmd, _t: (
             listing if cmd.startswith("ls -1 /data/") else None
         )
@@ -294,7 +297,7 @@ class TestProcessedPrune:
 
         def shell_fn(cmd: str, _t: int):
             if cmd.startswith("ls -1 /data/"):
-                return "fresh1\n"
+                return "fresh1\n__STP_RC__:0\n"
             if "unievent_info.json" in cmd:
                 return "unievent_info.json\n"
             return None
@@ -330,3 +333,22 @@ class TestProcessedPrune:
         assert r.tick_once() == 0  # 无新发射，仅裁剪
         # 裁剪必须落盘（否则重启后旧集回归）
         assert json.loads(store._data[r._state_key()]) == ["live1"]
+
+    def test_missing_uniview_root_treated_as_empty_allows_prune(
+        self, tmp_path, monkeypatch,
+    ):
+        """#1820：单 root 持久缺失（ls rc≠0）不阻塞裁剪。"""
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
+        store = self._seed_store(["stale1", "live1"])
+
+        def shell_fn(cmd: str, _t: int):
+            if cmd.startswith("ls -1 /data/uniview"):
+                return "live1\n__STP_RC__:0\n"
+            if cmd.startswith("ls -1 /data/vendor/uniview"):
+                return "__STP_RC__:2\n"
+            return None
+
+        r = _make_reconciler(tmp_path, store=store, shell_fn=shell_fn)
+        r._load_processed_state()
+        r.tick_once()
+        assert r._processed == {"live1"}
