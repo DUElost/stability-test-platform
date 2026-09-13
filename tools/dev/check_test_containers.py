@@ -198,6 +198,8 @@ def main(
         else:
             print("或：python tools/dev/check_test_containers.py --prune --yes")
 
+    # 清理后仍有残留 = 复核结果；None = 复核失败、结果不可知（#1714）
+    remaining_stale: list[Container] | None = None
     if args.prune and args.yes and stale:
         rm_failed: list[str] = []
         for c in stale:
@@ -215,17 +217,30 @@ def main(
                 now=now,
             )
         except Exception:  # noqa: BLE001 - 复核失败不掩盖清理动作
-            remaining_stale = []
-            print("（复核失败：无法再次列举容器）")
-        print(
-            f"\n已清理 {len(stale) - len(remaining_stale)} 个疑似残留容器"
-            f"；仍有 {len(remaining_stale)} 个未清理。"
-        )
+            # 不把「不可知」伪装成「已清干净」（#1714）：置 None 并在下方显式报告
+            remaining_stale = None
+
+        if remaining_stale is None:
+            print(
+                f"\n已执行 {len(stale)} 个删除；"
+                "复核失败：清理结果不可知（无法再次列举容器）。"
+            )
+        else:
+            print(
+                f"\n已清理 {len(stale) - len(remaining_stale)} 个疑似残留容器"
+                f"；仍有 {len(remaining_stale)} 个未清理。"
+            )
         if rm_failed:
             print(f"（rm 调用失败 {len(rm_failed)} 个：{', '.join(rm_failed)}）")
 
-    if args.strict and stale:
-        return 1
+    if args.strict:
+        # strict 判定必须基于**复核后**的状态（#1714）：清理前有残留、清理后已空
+        # 属成功，不应返回 1；复核失败（None）结果不可知，保守返回 1。
+        if remaining_stale is None:
+            return 1 if stale else 0
+        if remaining_stale:
+            return 1
+        return 0
     return 0
 
 
