@@ -81,6 +81,74 @@ class DeviceLogEventClient:
             )
             return False
 
+    def build_local_event_payload(
+        self,
+        *,
+        serial: str,
+        platform: str,
+        event_type: str,
+        event_subtype: Optional[str],
+        detected_at: datetime,
+        device_timestamp: Optional[datetime],
+        local_path: Path,
+        plan_run_id: Optional[int],
+        job_id: Optional[int],
+        link_signal_seq_no: Optional[int] = None,
+        size_bytes: Optional[int] = None,
+        event_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """组装 state=LOCAL 事件 payload（含预分配 id，不发送）。#1719 供意图重放。"""
+        return {
+            "id": event_id or str(uuid4()),
+            "serial": serial,
+            "platform": platform,
+            "event_type": event_type,
+            "event_subtype": event_subtype,
+            "detected_at": detected_at.isoformat(),
+            "device_timestamp": device_timestamp.isoformat() if device_timestamp else None,
+            "state": "LOCAL",
+            "local_path": str(local_path),
+            "host_id": self.host_id,
+            "job_id": job_id,
+            "plan_run_id": plan_run_id,
+            "size_bytes": size_bytes,
+            "link_signal_seq_no": link_signal_seq_no,
+        }
+
+    def post_event_payload(self, payload: Dict[str, Any]) -> Optional[str]:
+        """POST 已组装好的事件 payload；返回 event id。
+
+        #1719: 拆分出来供补偿通道重放**同一 payload**——``id`` 是幂等键
+        （后端按 id upsert，#1051/R09-R01 保证同 key 可安全重放）。
+        HTTP/网络失败时写 LocalDB ``dle_register_outbox``，由
+        :meth:`drain_register_outbox` 重试补建（同 payload 同 id）。
+        """
+        chosen_id = str(payload.get("id") or "")
+        try:
+            resp = requests.post(
+                f"{self.api_url}/api/v1/agent/device-log-events",
+                json={"events": [payload]},
+                headers=self._headers(),
+                timeout=self.timeout,
+            )
+            if resp.status_code >= 400:
+                logger.warning(
+                    "device_log_event_create_failed status=%s body=%s",
+                    resp.status_code, resp.text[:200],
+                )
+                if chosen_id:
+                    self._enqueue_register_intent(chosen_id, payload)
+                return None
+            ids = resp.json().get("data", {}).get("event_ids") or []
+            return str(ids[0]) if ids else (chosen_id or None)
+        except Exception:
+            logger.exception(
+                "device_log_event_create_error path=%s", payload.get("local_path"),
+            )
+            if chosen_id:
+                self._enqueue_register_intent(chosen_id, payload)
+            return None
+
     def create_local_event(
         self,
         *,
@@ -102,43 +170,21 @@ class DeviceLogEventClient:
         #1042 / #1051: 预分配 UUID 作为幂等键；HTTP 失败时写入 LocalDB
         ``dle_register_outbox``，由 :meth:`drain_register_outbox` 重试补建。
         """
-        chosen_id = event_id or str(uuid4())
-        payload: Dict[str, Any] = {
-            "id": chosen_id,
-            "serial": serial,
-            "platform": platform,
-            "event_type": event_type,
-            "event_subtype": event_subtype,
-            "detected_at": detected_at.isoformat(),
-            "device_timestamp": device_timestamp.isoformat() if device_timestamp else None,
-            "state": "LOCAL",
-            "local_path": str(local_path),
-            "host_id": self.host_id,
-            "job_id": job_id,
-            "plan_run_id": plan_run_id,
-            "size_bytes": size_bytes,
-            "link_signal_seq_no": link_signal_seq_no,
-        }
-        try:
-            resp = requests.post(
-                f"{self.api_url}/api/v1/agent/device-log-events",
-                json={"events": [payload]},
-                headers=self._headers(),
-                timeout=self.timeout,
-            )
-            if resp.status_code >= 400:
-                logger.warning(
-                    "device_log_event_create_failed status=%s body=%s",
-                    resp.status_code, resp.text[:200],
-                )
-                self._enqueue_register_intent(chosen_id, payload)
-                return None
-            ids = resp.json().get("data", {}).get("event_ids") or []
-            return str(ids[0]) if ids else chosen_id
-        except Exception:
-            logger.exception("device_log_event_create_error path=%s", local_path)
-            self._enqueue_register_intent(chosen_id, payload)
-            return None
+        payload = self.build_local_event_payload(
+            serial=serial,
+            platform=platform,
+            event_type=event_type,
+            event_subtype=event_subtype,
+            detected_at=detected_at,
+            device_timestamp=device_timestamp,
+            local_path=local_path,
+            plan_run_id=plan_run_id,
+            job_id=job_id,
+            link_signal_seq_no=link_signal_seq_no,
+            size_bytes=size_bytes,
+            event_id=event_id,
+        )
+        return self.post_event_payload(payload)
 
     def drain_register_outbox(self, *, limit: int = 20) -> int:
         """Replay pending create intents; returns number newly ACKed (#1042)."""
@@ -198,7 +244,7 @@ class DeviceLogEventClient:
                 event_id, new_attempts, error[:200],
             )
 
-    def create_pull_failed_event(
+    def build_pull_failed_payload(
         self,
         *,
         serial: str,
@@ -211,9 +257,11 @@ class DeviceLogEventClient:
         job_id: Optional[int],
         link_signal_seq_no: Optional[int] = None,
         local_path: str = "",
-    ) -> Optional[str]:
-        """POST state=PULL_FAILED（检测成功但本地落盘失败）。"""
-        payload: Dict[str, Any] = {
+        event_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """组装 state=PULL_FAILED payload（含预分配 id，不发送）。#1719 供意图重放。"""
+        return {
+            "id": event_id or str(uuid4()),
             "serial": serial,
             "platform": platform,
             "event_type": event_type,
@@ -227,24 +275,40 @@ class DeviceLogEventClient:
             "plan_run_id": plan_run_id,
             "link_signal_seq_no": link_signal_seq_no,
         }
-        try:
-            resp = requests.post(
-                f"{self.api_url}/api/v1/agent/device-log-events",
-                json={"events": [payload]},
-                headers=self._headers(),
-                timeout=self.timeout,
-            )
-            if resp.status_code >= 400:
-                logger.warning(
-                    "device_log_event_pull_failed_create status=%s body=%s",
-                    resp.status_code, resp.text[:200],
-                )
-                return None
-            ids = resp.json().get("data", {}).get("event_ids") or []
-            return str(ids[0]) if ids else None
-        except Exception:
-            logger.exception("device_log_event_pull_failed_create_error serial=%s", serial)
-            return None
+
+    def create_pull_failed_event(
+        self,
+        *,
+        serial: str,
+        platform: str,
+        event_type: str,
+        event_subtype: Optional[str],
+        detected_at: datetime,
+        device_timestamp: Optional[datetime],
+        plan_run_id: Optional[int],
+        job_id: Optional[int],
+        link_signal_seq_no: Optional[int] = None,
+        local_path: str = "",
+        event_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """POST state=PULL_FAILED（检测成功但本地落盘失败）。
+
+        #1719: 支持调用方预分配 ``event_id``（幂等重放）与失败入 outbox 重试。
+        """
+        payload = self.build_pull_failed_payload(
+            serial=serial,
+            platform=platform,
+            event_type=event_type,
+            event_subtype=event_subtype,
+            detected_at=detected_at,
+            device_timestamp=device_timestamp,
+            plan_run_id=plan_run_id,
+            job_id=job_id,
+            link_signal_seq_no=link_signal_seq_no,
+            local_path=local_path,
+            event_id=event_id,
+        )
+        return self.post_event_payload(payload)
 
     def patch_event_state(
         self,
