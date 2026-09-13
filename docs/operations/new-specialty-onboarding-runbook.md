@@ -150,6 +150,15 @@ curl -s -X POST '<base>/api/v1/plans' ... -d '{
 
 - `steps[].stage` 只接受 `init|patrol|teardown`；`retry` 上限 5。
 - `stall_seconds=None/0` 表示关闭停滞钟；配了但脚本无能力会在预览/派发期报错。
+- **「文件停滞判死」的脚本要先看写入节奏（#761）**：`powercycle_check` 这类以「结果文件
+  mtime 停滞」判死的脚本，`patrol_interval_seconds` **必须小于**该脚本写结果文件的间隔。
+  默认 `dead_grace_cycles=2`，故真误判需要写入间隙 > 2×patrol；间隔逼近写入节奏时，
+  健康服务会出现 `dead_streak` 抖动（稳态不触发，属设计脆性而非现行 bug）。
+- **挂死 ≠ 文件停滞（#761）**：`powercycle_check` 在**服务进程存活时无条件清零**
+  `dead_streak`（`v1.0.8` 的 `if alive or cycles_done == 0 or result_bytes == 0 or
+  not was_online:` 分支），因此「服务活着但挂死、不再写文件」**不会**被它判死。
+  该场景的兜底层是 **PlanStep `stall_seconds`**（要求脚本具备 `progress_stamps`）——
+  二者互补，不可互相替代。
 - 引用脚本用 `script_name + script_version` 精确到版本；plan 不跟「latest」。
 - 多用例专项（suite 绑定）：先建套件 `POST /api/v1/test-suites`（或走
   `.../{id}/import` 导入设备端 XML），Plan 里传 `suite_name`；MTBF 类执行包可先用
