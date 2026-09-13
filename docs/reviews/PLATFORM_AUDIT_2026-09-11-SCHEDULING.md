@@ -83,7 +83,7 @@
 
 ## 四、本批次暴露的邻域问题（超出原 13 单）
 
-盘点过程中发现两条**不属于原批次、但值得记录**的问题：
+盘点过程中发现三条**不属于原批次、但值得记录**的问题（第 3 条为 2026-09-14 续查新增）：
 
 1. **`update-branch` 撞 workflow scope 即整 job 红** → **已立单 [#1783](https://github.com/DUElost/stability-test-platform/issues/1783)（P2）→ 已修复闭环**
    - **现象**：`update_branch_tolerant()` 在队首 PR 改动了 `.github/workflows/*` 时，`gh pr update-branch` 被 GitHub 拒绝，落到 `return "$rc"` → 整 job 红：
