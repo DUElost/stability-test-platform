@@ -62,9 +62,38 @@ export default function AuditLogPage() {
   const [filters, setFilters] = useState({
     resource_type: 'all',
     action: 'all',
+    // #628：文本类筛选（用户名 / IP / 资源 ID）
+    username: '',
+    ip_address: '',
+    resource_id: '',
     start_time: '',
     end_time: '',
   });
+
+  // #628：文本输入不逐键发请求——本地草稿在 blur / Enter 时提交（select 仍即时生效）
+  const [textDraft, setTextDraft] = useState({
+    username: '',
+    ip_address: '',
+    resource_id: '',
+  });
+
+  const commitTextFilter = (
+    key: 'username' | 'ip_address' | 'resource_id',
+    value: string,
+  ) => {
+    const next = value.trim();
+    setTextDraft((draft) => ({ ...draft, [key]: next }));
+    setFilters((prev) => (prev[key] === next ? prev : { ...prev, [key]: next }));
+    setPage(0);
+  };
+
+  // 用户名下拉候选（admin 页面；失败静默降级为自由输入）
+  const usersQ = useQuery({
+    queryKey: ['users', 'audit-filter-options'],
+    queryFn: () => api.users.list(0, 200),
+    staleTime: 60_000,
+  });
+  const usernames = usersQ.data?.items ?? [];
 
   // C1：数据获取迁移 react-query（缓存/重试/去重与全站一致）；
   // 非法时间区间通过 enabled 禁发请求，UI 层显示静态错误（M3 语义保留）
@@ -78,6 +107,9 @@ export default function AuditLogPage() {
       const params: Record<string, string> = {};
       if (filters.resource_type !== 'all') params.resource_type = filters.resource_type;
       if (filters.action !== 'all') params.action = filters.action;
+      if (filters.username) params.username = filters.username;
+      if (filters.ip_address) params.ip_address = filters.ip_address;
+      if (filters.resource_id) params.resource_id = filters.resource_id;
       if (filters.start_time) params.start_time = datetimeLocalInputToIso(filters.start_time);
       if (filters.end_time) params.end_time = datetimeLocalInputToIso(filters.end_time);
       return api.audit.list(page * pageSize, pageSize, params);
@@ -148,6 +180,55 @@ export default function AuditLogPage() {
             className="w-52"
             value={filters.end_time}
             onChange={(e) => { setFilters({ ...filters, end_time: e.target.value }); setPage(0); }}
+          />
+        </label>
+        {/* #628：文本类筛选，blur / Enter 提交，避免逐键请求 */}
+        <label className="flex items-center gap-2">
+          <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>用户</span>
+          <Input
+            list="audit-username-options"
+            className="w-40"
+            placeholder="用户名"
+            value={textDraft.username}
+            onChange={(e) => setTextDraft((d) => ({ ...d, username: e.target.value }))}
+            onBlur={(e) => commitTextFilter('username', e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitTextFilter('username', e.currentTarget.value);
+            }}
+            data-testid="audit-username-filter"
+          />
+          <datalist id="audit-username-options">
+            {usernames.map((u) => (
+              <option key={u.id} value={u.username} />
+            ))}
+          </datalist>
+        </label>
+        <label className="flex items-center gap-2">
+          <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>IP 地址</span>
+          <Input
+            className="w-40"
+            placeholder="如 192.0.2.1"
+            value={textDraft.ip_address}
+            onChange={(e) => setTextDraft((d) => ({ ...d, ip_address: e.target.value }))}
+            onBlur={(e) => commitTextFilter('ip_address', e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitTextFilter('ip_address', e.currentTarget.value);
+            }}
+            data-testid="audit-ip-filter"
+          />
+        </label>
+        <label className="flex items-center gap-2">
+          <span className={cn('whitespace-nowrap text-sm', TEXT.subtitle)}>资源 ID</span>
+          <Input
+            className="w-32"
+            placeholder="精确匹配"
+            value={textDraft.resource_id}
+            onChange={(e) => setTextDraft((d) => ({ ...d, resource_id: e.target.value }))}
+            onBlur={(e) => commitTextFilter('resource_id', e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitTextFilter('resource_id', e.currentTarget.value);
+            }}
+            data-testid="audit-resource-id-filter"
           />
         </label>
       </div>

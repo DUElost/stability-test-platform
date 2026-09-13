@@ -66,6 +66,11 @@ export const audit = {
       resource_type?: string;
       action?: string;
       user_id?: number;
+      /** #628：审计行的 username/ip_address 快照精确匹配 */
+      username?: string;
+      ip_address?: string;
+      /** 字符串精确匹配（resource_id 列为 varchar） */
+      resource_id?: string;
       start_time?: string;
       end_time?: string;
     }
