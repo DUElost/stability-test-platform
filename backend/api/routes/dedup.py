@@ -276,6 +276,19 @@ async def start_jira_run(
                 "to its own config mapping",
                 resolved_plan_run_id,
             )
+        else:
+            # #710 / ADR-0029 D12：提单前做一次存在性探测（best-effort，不阻断）。
+            # 配置了 STP_JIRA_BASE_URL 才探测；404 明确不存在 → WARNING 提示登记簿
+            # 填错；探测不可达/无配置 → 静默跳过，保持既有 best-effort 语义。
+            from backend.services.jira_project_key import probe_jira_project_key
+
+            exists = probe_jira_project_key(jira_project_key)
+            if exists is False:
+                logger.warning(
+                    "jira_project_key_not_found key=%s plan_run_id=%s — JIRA 报告不存在；"
+                    "vendor 将回落到其默认映射，请在项目登记簿更正",
+                    jira_project_key, resolved_plan_run_id,
+                )
 
     argv = build_jira_argv(vendor, stage, tool["dir"], tool["python"],
                            input_xls=input_xls, dry_run=dry_run, reporter=reporter,
