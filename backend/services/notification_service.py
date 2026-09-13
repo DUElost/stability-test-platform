@@ -773,6 +773,51 @@ def _emit_notification_socketio(
         logger.debug("emit_notification_socketio_failed", exc_info=True)
 
 
+def _resolve_alert_link(labels: Dict[str, Any], annotations: Dict[str, Any]) -> Any:
+    """#625：为 Alertmanager 告警推导站内跳转目标（context.link）。
+
+    优先级：
+    1. ``annotations.link``——告警规则显式标注的站内路径（以 ``/`` 开头），
+       给运维在规则层钉任意目标的出口；
+    2. labels 里的主机标识（``host`` / ``hostname`` / ``instance``，剥
+       ``:port``）对 host 表做 hostname/ip 归一查找，命中 → ``/hosts``；
+    3. 都没有 → None（context 不带 link，前端维持原判）。
+
+    best-effort：解析失败只记 debug 不阻断告警落库（与 resolve_
+    jira_project_key 的旁路语义同风格）。
+    """
+    try:
+        explicit = annotations.get("link")
+        if isinstance(explicit, str) and explicit.startswith("/"):
+            return explicit
+
+        from backend.models.host import Host
+
+        candidates = [
+            labels.get("host"),
+            labels.get("hostname"),
+            labels.get("instance"),
+        ]
+        for raw in candidates:
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            ident = raw.strip().rsplit(":", 1)[0] if raw.count(":") == 1 else raw.strip()
+            if not ident:
+                continue
+            with SessionLocal() as db:
+                host = (
+                    db.query(Host)
+                    .filter((Host.hostname == ident) | (Host.ip == ident))
+                    .first()
+                )
+            if host is not None:
+                return "/hosts"
+        return None
+    except Exception:
+        logger.debug("alert_link_resolve_failed", exc_info=True)
+        return None
+
+
 def receive_alertmanager_alert(alert_data: Dict[str, Any]) -> None:
     """Process an alertmanager webhook payload and log it."""
     try:
@@ -791,6 +836,15 @@ def receive_alertmanager_alert(alert_data: Dict[str, Any]) -> None:
             title = f"[{alertname}] {status}"
             message = annotations.get("description", annotations.get("summary", ""))
 
+            # #625：可跳转上下文——解析得到 link 才写入（前端盲拼，无 link
+            # 维持原 context 形状，消费方兼容）
+            link = _resolve_alert_link(labels, annotations)
+            context: Dict[str, Any] = {
+                "labels": labels, "annotations": annotations, "status": status,
+            }
+            if link:
+                context["link"] = link
+
             with SessionLocal() as db:
                 log = NotificationLog(
                     source=NotificationSource.ALERTMANAGER,
@@ -798,7 +852,7 @@ def receive_alertmanager_alert(alert_data: Dict[str, Any]) -> None:
                     severity=sev,
                     title=title,
                     message=message,
-                    context={"labels": labels, "annotations": annotations, "status": status},
+                    context=context,
                 )
                 db.add(log)
                 db.commit()

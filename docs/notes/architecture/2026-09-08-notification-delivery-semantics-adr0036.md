@@ -5,7 +5,7 @@ Class: architecture
 
 ## Decision
 
-R11 台账（#1125）的三项——#1117 通知失败不触发 SAQ 重试、#1120 钉钉业务失败报成功、#1122 SMTP 无 timeout + 通知线程池无界——定性为**同一件未定义的东西**：通知投递语义。据此起草 [ADR-0036](../adr/ADR-0036-notification-delivery-semantics.md)（Proposed），并修订 [ADR-0011](../adr/ADR-0011-observability-and-alerting-evolution.md) 的范围边界。
+R11 台账（#1125）的三项——#1117 通知失败不触发 SAQ 重试、#1120 钉钉业务失败报成功、#1122 SMTP 无 timeout + 通知线程池无界——定性为**同一件未定义的东西**：通知投递语义。据此起草 [ADR-0036](../../adr/ADR-0036-notification-delivery-semantics.md)（Proposed），并修订 [ADR-0011](../../adr/ADR-0011-observability-and-alerting-evolution.md) 的范围边界。
 
 **分工（不构成平行权威源）**：ADR-0011 = What to notify（通知什么/何时触发/如何路由）；ADR-0036 = How delivery behaves（成功/失败定义、retry owner、超时、幂等、同步异步边界、投递事实落库）。ADR-0011 前提未被推翻（其"仅锁定第一层指标基线"仍成立），但其范围从来不含投递语义，故不修订其决策内容、只补边界与指针。
 

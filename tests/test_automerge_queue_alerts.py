@@ -412,3 +412,59 @@ def test_missing_check_entry_still_opens_alert(tmp_path):
     _assert_called(calls, "issue create")
     # 真正的 missing 走 failed 分支（与「进行中」区分）——日志措辞为 "not reported"
     assert "CodeQL not reported (missing)" in result.stdout
+
+
+# ── #1792：CodeQL 聚合 check 的 COMPLETED/NEUTRAL 不得判为失败 ──────────────
+
+
+def _neutral_detail() -> dict:
+    """#1792 真实形态：CodeQL=COMPLETED/NEUTRAL（子分析未全完成），其余全绿。
+
+    实证来源：#1775 告警时 1 个 Analyze SUCCESS + 2 个 IN_PROGRESS → 父 check NEUTRAL；
+    以及 #1772 终态 NEUTRAL 在 strict=true 分支保护下**被 GitHub 允许合入**。
+    故 NEUTRAL 是「满足」而非「失败」——我们的 FIFO 不得比分支保护更严。
+    """
+    checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN}
+    checks["CodeQL"] = ("COMPLETED", "NEUTRAL")
+    return _head_detail_with_status(checks)
+
+
+def test_codeql_neutral_does_not_open_alert(tmp_path):
+    """#1792：NEUTRAL 不得告警（#1764 合入后仍在误报的残余源，20 分钟 6 条）。"""
+    result, calls = _run_queue(
+        tmp_path,
+        {"pr_rows": [_HEAD_ROW], "head_detail": _neutral_detail(), "open_issue": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_not_called(calls, "issue create")
+
+
+def test_codeql_neutral_does_not_block_branch_update(tmp_path):
+    """NEUTRAL 应放行 update-branch——若判失败会造成「GitHub 可合入、FIFO 却拒更」的伪停摆。"""
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _neutral_detail(),
+            "open_issue": "",
+            "behind_by": 3,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "pr update-branch")
+
+
+def test_codeql_failure_still_opens_alert(tmp_path):
+    """FAILURE 必须继续告警——NEUTRAL 的放行不得把真实失败一起放过。"""
+    checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN}
+    checks["CodeQL"] = ("COMPLETED", "FAILURE")
+    result, calls = _run_queue(
+        tmp_path,
+        {"pr_rows": [_HEAD_ROW], "head_detail": _head_detail_with_status(checks), "open_issue": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "issue create")
+    assert "CodeQL" in result.stdout and "FAILURE" in result.stdout
