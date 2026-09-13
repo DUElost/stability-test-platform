@@ -1,12 +1,45 @@
 import importlib.util
+import logging
 import os
 from typing import Dict
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from backend.core.env_source import resolve_database_url
+
+logger = logging.getLogger(__name__)
+
+
+def _attach_pool_metrics(engine, engine_label: str) -> None:
+    """#703：QueuePool checkout/checkin → Prometheus Gauge。
+
+    SQLite / NullPool 无 ``checkedout``/``overflow`` 语义，直接跳过。
+    """
+    if is_sqlite_url(str(getattr(engine, "url", "") or "")):
+        return
+    pool = getattr(engine, "pool", None)
+    if pool is None or not hasattr(pool, "checkedout"):
+        return
+
+    def _refresh(_conn=None, _rec=None) -> None:
+        try:
+            from backend.core.metrics import record_db_pool_status
+
+            overflow = int(pool.overflow()) if hasattr(pool, "overflow") else 0
+            record_db_pool_status(
+                engine_label,
+                checked_out=int(pool.checkedout()),
+                overflow=max(0, overflow),
+            )
+        except Exception:  # noqa: BLE001 — 观测不得拖垮借还连接
+            logger.debug("db_pool_metrics_refresh_failed label=%s", engine_label, exc_info=True)
+
+    event.listen(pool, "checkout", lambda *a, **k: _refresh())
+    event.listen(pool, "checkin", lambda *a, **k: _refresh())
+    event.listen(pool, "close", lambda *a, **k: _refresh())
+    event.listen(pool, "invalidate", lambda *a, **k: _refresh())
 
 # 唯一解析入口是 env_source：ambient env → 仓库根 .env.backend，**绝无兜底默认**。
 # 解析不到直接 RuntimeError——曾经这里的默认值是
@@ -147,10 +180,12 @@ else:
     AsyncSessionLocal = async_sessionmaker(
         async_engine, class_=AsyncSession, expire_on_commit=False
     )
+    _attach_pool_metrics(async_engine.sync_engine, "async")
 
 # ── Sync engine (Alembic migrations + legacy API routes) ──
 engine = create_engine(_sync_url, **get_sync_engine_kwargs(_sync_url))
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
+_attach_pool_metrics(engine, "sync")
 
 Base = declarative_base()
 

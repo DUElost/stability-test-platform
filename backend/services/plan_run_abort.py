@@ -29,6 +29,7 @@ Frontend re-renders via SocketIO room ``plan_run:{id}``.
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -40,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.audit import record_audit
 from backend.core.job_timeout_config import ABORT_ACK_GRACE_SECONDS
+from backend.core.metrics import record_plan_run_abort_lock_seconds
 from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun, PlanRunHost
@@ -65,6 +67,11 @@ _TERMINAL_JOB_STATUSES = {
     JobStatus.FAILED.value,
     JobStatus.ABORTED.value,
 }
+
+_ACTIVE_JOB_STATUSES = (
+    JobStatus.PENDING.value,
+    JobStatus.RUNNING.value,
+)
 
 
 class PlanRunAbortError(Exception):
@@ -144,6 +151,7 @@ def abort_plan_run(
     #      aggregation guard,把状态改回 FAILED" 的覆盖。锁与 aggregator 同列。
     #      FOR NO KEY UPDATE 与 FK 触发的 FOR KEY SHARE 兼容,避免与 complete_job 的
     #      job UPDATE autoflush 死锁(见 aggregator.py 详细注释)。
+    lock_t0 = time.perf_counter()
     pr = db.execute(
         select(PlanRun)
         .where(PlanRun.id == plan_run_id)
@@ -207,6 +215,9 @@ def abort_plan_run(
                 username=audit_username or triggered_by,
             )
             db.commit()
+            record_plan_run_abort_lock_seconds(
+                time.perf_counter() - lock_t0, "admission",
+            )
             logger.info(
                 "plan_run_abort_admission_queue plan_run=%d phase=%s", plan_run_id, phase,
             )
@@ -241,31 +252,31 @@ def abort_plan_run(
     direct_failed_notify = False
 
     if not in_precheck:
-        all_jobs = (
-            db.query(JobInstance)
-            .filter(
+        # #703：只取 PENDING/RUNNING 的 id+host+status，勿 ``.all()`` 整行 ORM。
+        # #327（~497 RUNNING）全量加载会拉长 FOR NO KEY UPDATE 持锁窗口，
+        # 期间并发 complete_job 排队占满 QueuePool。
+        active_rows = db.execute(
+            select(JobInstance.id, JobInstance.host_id, JobInstance.status).where(
                 JobInstance.plan_run_id == plan_run_id,
+                JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
             )
-            .all()
-        )
-        active_jobs = [
-            job for job in all_jobs
-            if job.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)
-        ]
+        ).all()
         now = datetime.now(timezone.utc)
-        # Mark abort_requested BEFORE terminalizing PENDING jobs so O(1)
-        # aggregation (when the last job lands) sees the abort override.
-        pending_to_abort = [
-            job for job in active_jobs if job.status == JobStatus.PENDING.value
+        pending_ids = [
+            row.id for row in active_rows if row.status == JobStatus.PENDING.value
         ]
-        running_to_signal = [
-            job for job in active_jobs if job.status != JobStatus.PENDING.value
-        ]
-        for job in running_to_signal:
-            abort_requested_jobs.append(job.id)
-            if job.host_id:
-                abort_hosts.add(job.host_id)
-                abort_jobs_by_host[job.host_id].append(job.id)
+        pending_host_by_id = {
+            row.id: row.host_id
+            for row in active_rows
+            if row.status == JobStatus.PENDING.value
+        }
+        for row in active_rows:
+            if row.status != JobStatus.RUNNING.value:
+                continue
+            abort_requested_jobs.append(row.id)
+            if row.host_id:
+                abort_hosts.add(row.host_id)
+                abort_jobs_by_host[row.host_id].append(row.id)
 
         run_ctx["abort_requested"] = {
             "at": now.isoformat(),
@@ -282,9 +293,27 @@ def abort_plan_run(
             db, plan_run_id, ["abort_requested"], run_ctx["abort_requested"],
         )
         # #1552：在**任何**读 pr.run_context 的后续逻辑之前同步 ORM 视图。
-        # 下方 apply_plan_run_aggregation[_from_counters] 会读它判定 abort 覆盖，
-        # 晚了这一步就会读到写入前的 dict（abort 被判成 SUCCESS）。
         _reload_run_context(db, pr)
+
+        # #703：PENDING 批量终态化前先 commit，释放 PlanRun 行锁。
+        # PENDING 风暴（#492/#246 ~359）若与 abort_requested 同事务，
+        # complete_job 会在锁上排队并各占一条池连接 → QueuePool 耗尽。
+        if pending_ids:
+            db.commit()
+            record_plan_run_abort_lock_seconds(
+                time.perf_counter() - lock_t0, "abort_requested",
+            )
+            lock_t0 = time.perf_counter()
+            pr = db.execute(
+                select(PlanRun)
+                .where(PlanRun.id == plan_run_id)
+                .with_for_update(key_share=True)
+            ).scalar_one()
+            if pr.status in _TERMINAL_PLAN_RUN_STATUSES:
+                # 并发路径已终态化；仍下发已记录的 abort control。
+                pending_ids = []
+            else:
+                run_ctx = dict(pr.run_context or {})
 
         # #492: PENDING 批量终态化——单条 UPDATE 完成状态迁移 + 计数器
         # 一次聚合 + 聚合审计。旧实现逐条 transition+on_job_terminal_sync：
@@ -296,11 +325,8 @@ def abort_plan_run(
         #   - 批量块末尾调用一次计数器聚合（等价逐条路径的每次尝试）
         # #988: 预读 PENDING 后 Agent 可能 claim→RUNNING；UPDATE 的 WHERE 会跳过，
         # 但不得用预读 len 记账，也不得漏掉对这些 Job 的 abort 控制下发。
-        if pending_to_abort:
+        if pending_ids:
             from collections import Counter
-
-            pending_by_id = {job.id: job for job in pending_to_abort}
-            pending_ids = list(pending_by_id)
 
             result = db.execute(
                 update(JobInstance)
@@ -316,14 +342,6 @@ def abort_plan_run(
                     updated_at=now,
                 )
                 .returning(JobInstance.id),
-                # 必须同步回 session 中的 ORM 对象：下方 has_active_jobs 直接读
-                # all_jobs 的内存状态来判定是否走到兜底聚合
-                # （apply_plan_run_aggregation(pr, all_jobs)）。一旦这里改为
-                # synchronize_session=False，内存里的 job 仍是 PENDING →
-                # has_active_jobs 恒为 True → total_job_count==0 的 legacy run
-                # 既走不到计数器聚合也走不到兜底，PlanRun 会卡在 RUNNING。
-                # 默认值（auto）本就同步，此处显式写出以免被性能优化误改。
-                execution_options={"synchronize_session": "fetch"},
             )
             aborted_ids = [row[0] for row in result.all()]
             n = len(aborted_ids)
@@ -332,9 +350,9 @@ def abort_plan_run(
                 pr.aborted_job_count = int(pr.aborted_job_count or 0) + n
                 pr.terminal_job_count = int(pr.terminal_job_count or 0) + n
                 host_counts = Counter(
-                    pending_by_id[jid].host_id
+                    pending_host_by_id[jid]
                     for jid in aborted_ids
-                    if pending_by_id[jid].host_id
+                    if pending_host_by_id.get(jid)
                 )
                 for hid, cnt in host_counts.items():
                     db.execute(
@@ -370,7 +388,9 @@ def abort_plan_run(
             # 竞态 claim：预读为 PENDING、UPDATE 未命中 → 刷新后按 RUNNING 走停止协议
             raced_ids = set(pending_ids) - set(aborted_ids)
             for jid in raced_ids:
-                job = pending_by_id[jid]
+                job = db.get(JobInstance, jid)
+                if job is None:
+                    continue
                 db.refresh(job)
                 if job.status != JobStatus.RUNNING.value:
                     continue
@@ -379,37 +399,52 @@ def abort_plan_run(
                     abort_hosts.add(job.host_id)
                     abort_jobs_by_host[job.host_id].append(job.id)
 
-        # Refresh requested_job_ids only (pending jobs are already terminal).
-        run_ctx["abort_requested"]["requested_job_ids"] = list(abort_requested_jobs)
-        _patch_run_context(
-            db,
-            plan_run_id,
-            ["abort_requested", "requested_job_ids"],
-            list(abort_requested_jobs),
-        )
-        # 同 #1552：第二次分段写之后再次同步（下方兜底聚合同样读 pr.run_context）
-        _reload_run_context(db, pr)
+            # Refresh requested_job_ids only (pending jobs are already terminal).
+            run_ctx.setdefault("abort_requested", {})
+            if isinstance(run_ctx.get("abort_requested"), dict):
+                run_ctx["abort_requested"]["requested_job_ids"] = list(
+                    abort_requested_jobs
+                )
+            _patch_run_context(
+                db,
+                plan_run_id,
+                ["abort_requested", "requested_job_ids"],
+                list(abort_requested_jobs),
+            )
+            # 同 #1552：第二次分段写之后再次同步（下方兜底聚合同样读 pr.run_context）
+            _reload_run_context(db, pr)
 
-        has_active_jobs = any(
-            job.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)
-            for job in all_jobs
-        )
-        if not has_active_jobs:
-            if all_jobs:
-                # Counters already bumped for inline ABORTs; if the run did not
-                # yet converge (e.g. total_job_count==0 legacy), fall back.
-                # Aggregation notifies when it terminalizes.
-                if pr.status not in _TERMINAL_PLAN_RUN_STATUSES:
-                    apply_plan_run_aggregation(pr, all_jobs)
+        # 是否还有活跃 job：EXISTS，避免再装载全表 ORM。
+        has_active = db.execute(
+            select(JobInstance.id).where(
+                JobInstance.plan_run_id == plan_run_id,
+                JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
+            ).limit(1)
+        ).first()
+        if has_active is None and pr.status not in _TERMINAL_PLAN_RUN_STATUSES:
+            total = int(pr.total_job_count or 0)
+            if total > 0:
+                apply_plan_run_aggregation_from_counters(pr)
             else:
-                PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason=reason)
-                pr.ended_at = now
-                pr.result_summary = {
-                    "aborted": True,
-                    "reason": reason,
-                    "empty_run": True,
-                }
-                direct_failed_notify = True
+                # legacy total_job_count==0：才回退全量扫描。
+                all_jobs = (
+                    db.query(JobInstance)
+                    .filter(JobInstance.plan_run_id == plan_run_id)
+                    .all()
+                )
+                if all_jobs:
+                    apply_plan_run_aggregation(pr, all_jobs)
+                else:
+                    PlanRunStateMachine.transition(
+                        pr, PlanRunStatus.FAILED, reason=reason,
+                    )
+                    pr.ended_at = now
+                    pr.result_summary = {
+                        "aborted": True,
+                        "reason": reason,
+                        "empty_run": True,
+                    }
+                    direct_failed_notify = True
     # In-precheck path: no jobs to release; we close the PlanRun directly.
     now_iso = datetime.now(timezone.utc).isoformat()
     if in_precheck:
@@ -452,6 +487,9 @@ def abort_plan_run(
         username=audit_username,
     )
     db.commit()
+    record_plan_run_abort_lock_seconds(
+        time.perf_counter() - lock_t0, "finalize",
+    )
 
     if direct_failed_notify:
         notify_plan_run_terminal(
