@@ -20,9 +20,14 @@ type Props = {
   /** 打开时用于预填；提交只回传后端 _UPDATABLE_FIELDS 覆盖的六个字段 */
   project: ProjectDetail;
   onClose: () => void;
-  onSubmit: (payload: ProjectUpdateInput) => void;
-  /** ADR-0029 D2 复核：项目重命名（admin 传入时显示 key 输入框）。 */
-  onRename?: (newKey: string) => void;
+  /**
+   * 一次性回传本次编辑的全部意图：字段 payload + key 变更（未改 key 时 undefined）。
+   * #1708：父级必须**串行**提交两者（rename 成功后再用新 key update）——拆成两个
+   * 回调会在同一 tick 发两个独立请求，rename 先落地则 update 打到旧 key 上 404。
+   */
+  onSubmit: (payload: ProjectUpdateInput, newKey?: string) => void;
+  /** ADR-0029 D2 复核：项目重命名（true 时显示 key 输入框，仅 admin）。 */
+  canRename?: boolean;
 };
 
 const EDITABLE_TEXT_FIELDS = [
@@ -35,7 +40,7 @@ export default function EditProjectDialog({
   project,
   onClose,
   onSubmit,
-  onRename,
+  canRename = false,
 }: Props) {
   const [form, setForm] = useState<ProjectUpdateInput>({});
   const [projectKey, setProjectKey] = useState('');
@@ -95,10 +100,12 @@ export default function EditProjectDialog({
       customer: blankToNull(form.customer),
       jira_project_key: blankToNull(form.jira_project_key),
     };
-    onSubmit(payload);
-    if (onRename && projectKey.trim() !== project.project_key) {
-      onRename(projectKey.trim());
-    }
+    // #1708：字段与 key 一次回传，由父级串行提交；未改 key 时传 undefined。
+    const trimmedKey = projectKey.trim();
+    onSubmit(
+      payload,
+      canRename && trimmedKey && trimmedKey !== project.project_key ? trimmedKey : undefined,
+    );
   };
 
   return (
@@ -115,7 +122,7 @@ export default function EditProjectDialog({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
-          {onRename ? (
+          {canRename ? (
             <div>
               <label className={FORM.label} htmlFor="edit-project-key">
                 项目标识（key）
