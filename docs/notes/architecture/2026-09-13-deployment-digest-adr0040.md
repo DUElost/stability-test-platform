@@ -32,6 +32,11 @@ D4 restart 三类判据显式化；D5 四入口统一收敛语义与记录；D6 
 `agent_code_deployed_at` 只有 UI/API 与 `--direct` 写；Ansible 不写该字段；precheck 连远端 VERSION
 都不刷。D5 把四入口记录语义统一，no-op 结果同样留痕。
 
+**5）裁决（2026-09-13，owner）**：D1–D7 全部采纳，ADR-0040 转 **Accepted**（v1.0），
+优先级维持 P2 / M7；四项取舍（D2 信任模型、D3 不做差量、`deployed_at` 语义修订、
+资源变更默认不重启）显式接受并保留 §7 复访触发器；P1/P2 实施切片另开 issue。
+裁决记录见 ADR §9；P0 过渡项已由 [#1904](https://github.com/DUElost/stability-test-platform/pull/1904) 落地。
+
 ## Alternatives
 
 - **P0 只做过渡项**（一批一次打包 + 压缩级 9→6）：省 ~16s/台，但不解决传输/重启/入口分叉 →
@@ -45,10 +50,11 @@ D4 restart 三类判据显式化；D5 四入口统一收敛语义与记录；D6 
 
 - 只读基线已复现：生产库 `audit_logs.hot_update_result.duration_ms` 542 条；48 台
   `host.extra.agent_code_deployed_at`；控制面 `_build_tarball()` 与 gzip 分级基准实测；
-- 本 ADR 为 Proposed，**未改任何代码**；实施切片的验证口径（digest 双侧等价、五象限集成、
-  灰度、per-phase 计时复核）已在 ADR §6 列明，Accepted 后另开 issue；
-- 文档影响：`docs/operations/agent-version-and-hot-update.md` 待 ADR Accepted 后同步修订
-  （本 PR 不改现行契约文档，避免先行描述未裁决语义）。
+- 本 ADR 初版为 Proposed（**未改任何代码**）；2026-09-13 owner 裁决转 **Accepted**（v1.0），
+  本单仅改 ADR 状态与裁决记录 + README 索引，无代码/契约语义变更；
+  实施切片的验证口径（digest 双侧等价、五象限集成、灰度、per-phase 计时复核）已在 ADR §6 列明；
+- 文档影响：`docs/operations/agent-version-and-hot-update.md` 待 **P1 实施落地**时同步修订
+  （避免先行描述未实现的语义）。
 
 ## Revisit
 

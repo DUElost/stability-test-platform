@@ -73,6 +73,7 @@ from backend.core.database import async_engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
 from backend.core.redis import redact_redis_url
+from backend.core.request_metrics import ApiRequestMetricsMiddleware
 from backend.core.security import is_production_like_env, validate_production_auth_cookie_settings
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.state_machine import InvalidTransitionError
@@ -365,6 +366,12 @@ _fastapi_app.add_middleware(
     CORSMiddleware,
     **get_cors_config(),
 )
+
+# #743 期望 2：请求级指标接线（stability_api_requests_total）。
+# 放在**最后** add = 请求链**最外层**，因此 CORS 预检、CSRF 403、限流 429
+# 与路由 404 都会被统计（幽灵 `/complete` 404 正是路由未命中形态）。
+# 只统计、不参与判定，见 backend/core/request_metrics.py 的基数纪律。
+_fastapi_app.add_middleware(ApiRequestMetricsMiddleware)
 
 _fastapi_app.include_router(auth_router)
 _fastapi_app.include_router(heartbeat_router)
