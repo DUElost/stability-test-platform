@@ -26,12 +26,8 @@ def _load_checker_module():
 
 
 def test_code_head_revision_returns_single_head():
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
-
-    from backend.core.schema_revision import code_head_revision
-
-    head = code_head_revision()
+    mod = _load_checker_module()
+    head = mod.code_head_revision()
     assert isinstance(head, str)
     assert head
 
