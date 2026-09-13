@@ -35,6 +35,7 @@ chmod 0755 /usr/local/sbin/stp-agent-priv
 echo "stale" > /srv/stp/agent/old.py
 echo "host-apk" > /srv/stp/agent/resources/mtbf/apk.bin
 printf 'HOST_ID=x\nAPI_URL=http://cp\n' > /srv/stp/.env
+chown -R agentuser:agentuser /srv/stp
 
 echo "== 1) bootstrap =="
 /usr/local/sbin/stp-agent-priv bootstrap --install-dir /srv/stp \
@@ -78,6 +79,22 @@ SUDO_UID="$(id -u agentuser)" SUDO_GID="$(id -g agentuser)" \
 test -f /srv/stp/agent/main.py && echo "CODE_SYNCED"
 test ! -e /srv/stp/agent/old.py && echo "DELETE_SYNCED"
 test -f /srv/stp/agent/resources/mtbf/apk.bin && echo "MTBF_KEPT"
+mkdir -p /outside
+printf 'untouched\n' > /outside/sentinel
+mv /srv/stp/agent /srv/stp/agent-original
+ln -s /outside /srv/stp/agent
+if SUDO_UID="$(id -u agentuser)" /usr/local/sbin/stp-agent-priv apply-code --staged /tmp/stage; then
+  echo "BAD: destination symlink accepted"; exit 1
+fi
+if /usr/local/sbin/stp-agent-priv write-version --version abc1234; then
+  echo "BAD: version followed destination symlink"; exit 1
+fi
+test "$(cat /outside/sentinel)" = "untouched"
+test ! -e /outside/main.py
+test ! -e /outside/VERSION
+rm /srv/stp/agent
+mv /srv/stp/agent-original /srv/stp/agent
+echo "TARGET_SYMLINK_GUARD_OK"
 if SUDO_UID="$(id -u agentuser)" /usr/local/sbin/stp-agent-priv apply-code --staged /etc 2>/dev/null; then
   echo "BAD: /etc staged accepted"; exit 1
 else
