@@ -256,21 +256,71 @@ if [ -z "$auto_method" ]; then
   exit 0
 fi
 
+# 分类 required checks：#1761——「进行中」与「失败」必须分开。
+#
+# 原实现只读 .conclusion，而检查进行中时该字段为空串 → 被渲染成 "missing" 并**触发
+# 告警**。后果：每个 PR 在正常 CI 期间都开一条 ci/queue-blocked（实测 83 分钟 20 条、
+# 历史 100 条中 99 条自动关闭），真实停摆被淹没、告警通道失效。
+#
+# 口径与 tools/dev/queue_head_telemetry.py 的 classify() 对齐：
+#   - status != COMPLETED  → pending：仅日志，不告警（机器在跑，人无需动作）
+#   - status == COMPLETED 且 conclusion != SUCCESS → failed：告警（#1246 要覆盖的真实停摆）
+#   - 注册表里根本没有该 check（无条目）→ missing：告警（这才是真正的 missing）
 failed_checks=""
+pending_checks=""
 for check in "${REQUIRED[@]}"; do
-  conclusion="$(
+  # 同时取 status 与 conclusion：前者区分「在跑」与「已定论」。
+  #
+  # status 缺失时的兜底（`has("status")` 判定）：GitHub 的 statusCheckRollup 条目
+  # 一般带 status，但**无 status 而有 conclusion** 意味着「已有定论」——按 COMPLETED
+  # 处理，否则会把失败误判成 pending 而静默（把 #1761 的修复变成反向缺陷）。
+  # 两者皆无 → 该 check 在注册表中不存在 → MISSING（真正的 missing，应告警）。
+  read -r status conclusion <<<"$(
     jq -r --arg name "$check" '
-      [.statusCheckRollup[]? | select(.name == $name)] | first | .conclusion // ""
+      [.statusCheckRollup[]? | select(.name == $name)] | first
+      | if . == null then "MISSING "
+        elif has("status") then "\(.status) \(.conclusion // "")"
+        elif (.conclusion // "") != "" then "COMPLETED \(.conclusion)"
+        else "MISSING "
+        end
     ' <<<"$head_json"
   )"
-  if [ "$conclusion" != "SUCCESS" ]; then
-    echo "Queue head #${head_number}: ${check} not SUCCESS (${conclusion:-missing}); skip head update."
-    failed_checks="${failed_checks:+${failed_checks}, }${check}:${conclusion:-missing}"
+
+  if [ "$status" = "COMPLETED" ] && [ "$conclusion" = "SUCCESS" ]; then
+    continue
   fi
+
+  # 注册表里没有该 check（无条目）→ 真正的 missing：既不是在跑，也不是「跑完了失败」，
+  # 而是**该 check 根本没被注册/上报**。这属于需人工排查的形态，与原实现的告警口径
+  # 一致（#1761 只从告警集中移除「进行中」，不移除 missing）。
+  if [ "$status" = "MISSING" ]; then
+    echo "Queue head #${head_number}: ${check} not reported (missing); skip head update."
+    failed_checks="${failed_checks:+${failed_checks}, }${check}:missing"
+    continue
+  fi
+
+  if [ "$status" != "COMPLETED" ]; then
+    # 进行中/排队中（IN_PROGRESS/QUEUED/…）：机器所有，不告警（#1761）
+    pending_checks="${pending_checks:+${pending_checks}, }${check}:${status}"
+    echo "Queue head #${head_number}: ${check} still ${status}; skip head update."
+    continue
+  fi
+
+  # status == COMPLETED 但非 SUCCESS（FAILURE/CANCELLED/TIMED_OUT/…）
+  label="${conclusion:-failure}"
+  echo "Queue head #${head_number}: ${check} not SUCCESS (${label}); skip head update."
+  failed_checks="${failed_checks:+${failed_checks}, }${check}:${label}"
 done
 if [ -n "$failed_checks" ]; then
   # #1246：停摆不再只是日志一行——去重告警（可见性通道，失败不阻断 reconcile）
   alert_queue_blocked "$head_number" "$head_ref" "$failed_checks"
+  exit 0
+fi
+if [ -n "$pending_checks" ]; then
+  # 仅有 pending：不告警（#1761），也**不** resolve 存量告警——CI 还没跑完，
+  # 此刻既不该新增噪音，也不该宣布「已恢复」（真实失败可能紧随其后）。
+  # 下一轮 reconcile 会重新判定；失败则走上面的告警分支。
+  echo "Queue head #${head_number}: awaiting pending checks: ${pending_checks}"
   exit 0
 fi
 

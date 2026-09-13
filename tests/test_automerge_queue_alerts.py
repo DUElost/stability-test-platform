@@ -293,3 +293,91 @@ def test_alert_creation_failure_does_not_fail_reconcile(tmp_path):
     assert result.returncode == 0, result.stderr
     _assert_called(calls, "issue create")
     _assert_not_called(calls, "pr update-branch")
+
+
+# ── #1761：pending（进行中）不得被当作失败告警 ──────────────────────────────
+
+
+def _head_detail_with_status(checks: dict[str, tuple[str, str]]) -> dict:
+    """带 status 的 statusCheckRollup（#1761 之前 harness 只造 name+conclusion，
+    正是这个缺口让「进行中 conclusion 为空」被误判为 missing 而长期未被发现）。"""
+    return {
+        "autoMergeRequest": {"mergeMethod": "MERGE"},
+        "headRefName": _HEAD_ROW["headRefName"],
+        "statusCheckRollup": [
+            {"name": k, "status": s, "conclusion": c} for k, (s, c) in checks.items()
+        ],
+    }
+
+
+def _pending_detail(*pending: str) -> dict:
+    """指定 check 为 IN_PROGRESS，其余全绿。"""
+    checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN}
+    for name in pending:
+        checks[name] = ("IN_PROGRESS", "")
+    return _head_detail_with_status(checks)
+
+
+def test_pending_check_does_not_open_alert(tmp_path):
+    """#1761：CI 进行中不得开告警——此前被渲染成 missing 并开 issue。"""
+    result, calls = _run_queue(
+        tmp_path,
+        {"pr_rows": [_HEAD_ROW], "head_detail": _pending_detail("pr-agent-tests"), "open_issue": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_not_called(calls, "issue create")
+    assert "IN_PROGRESS" in result.stdout
+    _assert_not_called(calls, "pr update-branch")
+
+
+def test_queued_check_does_not_open_alert(tmp_path):
+    """QUEUED（尚未开始）同属 pending，同样不得告警。"""
+    checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN}
+    checks["lint"] = ("QUEUED", "")
+    result, calls = _run_queue(
+        tmp_path,
+        {"pr_rows": [_HEAD_ROW], "head_detail": _head_detail_with_status(checks), "open_issue": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_not_called(calls, "issue create")
+    assert "QUEUED" in result.stdout
+
+
+def test_pending_does_not_close_existing_alert(tmp_path):
+    """仅有 pending 时不得 resolve 存量告警——CI 没跑完，真实失败可能紧随其后。"""
+    result, calls = _run_queue(
+        tmp_path,
+        {"pr_rows": [_HEAD_ROW], "head_detail": _pending_detail("lint"), "open_issue": "999"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_not_called(calls, "issue close")
+    _assert_not_called(calls, "issue create")
+
+
+def test_completed_failure_still_opens_alert(tmp_path):
+    """#1246 的真实停摆必须继续告警——修复不得把 failed 一起静音。"""
+    result, calls = _run_queue(
+        tmp_path,
+        {"pr_rows": [_HEAD_ROW], "head_detail": _head_detail(_RED), "open_issue": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "issue create")
+    assert "FAILURE" in result.stdout
+
+
+def test_missing_check_entry_still_opens_alert(tmp_path):
+    """注册表里根本没有该 check（无条目）才是真正的 missing，仍应告警。"""
+    checks = {k: ("COMPLETED", "SUCCESS") for k in _ALL_GREEN if k != "CodeQL"}
+    result, calls = _run_queue(
+        tmp_path,
+        {"pr_rows": [_HEAD_ROW], "head_detail": _head_detail_with_status(checks), "open_issue": ""},
+    )
+
+    assert result.returncode == 0, result.stderr
+    _assert_called(calls, "issue create")
+    # 真正的 missing 走 failed 分支（与「进行中」区分）——日志措辞为 "not reported"
+    assert "CodeQL not reported (missing)" in result.stdout

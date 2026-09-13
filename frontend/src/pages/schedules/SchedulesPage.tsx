@@ -6,6 +6,7 @@ import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { CronExpressionInput } from '@/components/schedule/CronExpressionInput';
 import { DeviceMultiSelect } from '@/components/schedule/DeviceMultiSelect';
+import { PlanSelect } from '@/components/schedule/PlanSelect';
 import { Plus, Trash2, Edit2, Play, Power, Clock, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -253,7 +254,14 @@ export default function SchedulesPage() {
   }
 
   return (
-    <PageContainer width="content" scrollable={false} className={cn(LAYOUT.pageGap, 'min-h-0')}>
+    // #750：scrollable={false} 只是不让页面充当主滚动容器（分页/表单固定、表格内滚）；
+    // 但外层必须保留溢出兜底——窄屏（如 1024×600）下页头+新建表单折行后可能高于视口，
+    // 此时表格区会被 flex 压到 0 高，且 AppShell main 为 overflow-hidden，无兜底则整页不可达。
+    <PageContainer
+      width="content"
+      scrollable={false}
+      className={cn(LAYOUT.pageGap, 'min-h-0 overflow-auto')}
+    >
       <PageHeader
         title="定时任务"
         subtitle="管理 Cron 定时执行的 Plan"
@@ -296,17 +304,14 @@ export default function SchedulesPage() {
             </div>
             <div>
               <label htmlFor="schedule-plan" className={cn('block text-sm font-medium mb-1', TEXT.body)}>Plan 蓝图</label>
-              <select
+              {/* #627：原生 select 在 Plan 数量上升后难定位，改为可搜索单选 */}
+              <PlanSelect
                 id="schedule-plan"
-                value={form.plan_id}
-                onChange={(e) => setForm({ ...form, plan_id: e.target.value })}
-                className={FORM.select}
-              >
-                <option value="">请选择 Plan</option>
-                {plans.map(p => (
-                  <option key={p.id} value={String(p.id)}>{p.name} (#{p.id})</option>
-                ))}
-              </select>
+                plans={plans}
+                selectedId={form.plan_id}
+                onChange={(planId) => setForm({ ...form, plan_id: planId })}
+                loading={plansQ.isLoading}
+              />
             </div>
             <div>
               <span className={cn('block text-sm font-medium mb-1', TEXT.body)}>设备（可多选）</span>
@@ -342,7 +347,9 @@ export default function SchedulesPage() {
           icon={<Clock className="w-16 h-16" />}
         />
       ) : (
-        <div className={cn(PANEL.root, 'min-h-0 flex-1 overflow-auto')}>
+        // #750：min-h-[240px] 兜住塌缩（原先 min-h-0 允许被压到 0 高），
+        // 与 PageContainer 的 overflow-auto 配合保证表格与分页始终可达。
+        <div className={cn(PANEL.root, 'min-h-[240px] flex-1 overflow-auto')}>
           <Table className="min-w-[720px]">
             <TableHeader>
               <TableRow className="border-b bg-muted/50">
