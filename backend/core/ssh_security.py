@@ -225,10 +225,12 @@ def trust_host_key(
                         )
                     result_reason = f"replaced old={old_fp} new={new_fp}"
 
+                # #1709：删除集必须与比较集（prior_for_host）**同域**——只剔除
+                # 本次扫描同 token 的条目。此前非 22 端口路径同时剔除裸 ip
+                # （22 端口）条目：该条目从未参与换钥比较却被静默删除，
+                # 绕过了 #908 的 host-key-changed 守卫（#1655 引入的删集错域）。
                 kept = [
-                    ln for ln in existing
-                    if _host_token(ln) != ip
-                    and (port_token is None or _host_token(ln) != port_token)
+                    ln for ln in existing if _host_token(ln) != scan_token
                 ]
                 merged = kept + new_keys
                 fh.seek(0)

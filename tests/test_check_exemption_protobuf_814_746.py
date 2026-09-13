@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -67,7 +68,148 @@ class TestOfflineExemption:
         assert "device_online()" in src
 
     def test_new_versions_exist_and_old_retained(self):
+        assert (_SD / "sleep_check/v1.0.4/sleep_check.py").is_file()
+        assert (_SD / "gpu_check/v1.0.9/gpu_check.py").is_file()
         assert (_SD / "sleep_check/v1.0.3/sleep_check.py").is_file()
         assert (_SD / "gpu_check/v1.0.8/gpu_check.py").is_file()
         assert (_SD / "sleep_check/v1.0.2/sleep_check.py").is_file()
         assert (_SD / "gpu_check/v1.0.7/gpu_check.py").is_file()
+
+
+class TestOfflineExemptionNoKeyError:
+    """#1693：#814 离线豁免分支不写键——新 Job 首拍（job_id 重置后 state
+    仅含 job_id）遇设备离线走 ``pass``，判死比较对 ``state["dead_streak"]``
+    的无条件读取抛 KeyError，被 main() 捕获报 failure——离线反而必判失败。
+
+    v1.0.4 / v1.0.9 起离线分支把 dead_streak 归一入 state（保持现值、
+    不累计）。测试以文件加载形态打桩 adb 依赖，驱动真实 ``_run``。
+    """
+
+    @pytest.fixture(scope="module")
+    def sleep_v104(self):
+        return _load(_SD / "sleep_check/v1.0.4/sleep_check.py", "sleep_check_v104")
+
+    @pytest.fixture(scope="module")
+    def gpu_v109(self):
+        return _load(_SD / "gpu_check/v1.0.9/gpu_check.py", "gpu_check_v109")
+
+    @staticmethod
+    def _stub_sleep(monkeypatch, mod, tmp_path, *, online, alive, state=None):
+        state_file = tmp_path / "sleep_state.json"
+        if state is not None:
+            state_file.write_text(json.dumps(state))
+        monkeypatch.setattr(mod, "_state_file", lambda: state_file)
+        monkeypatch.setattr(mod, "device_online", lambda: online)
+        monkeypatch.setattr(mod, "service_alive", lambda: alive)
+        monkeypatch.setattr(mod, "_run_finished", lambda: False)
+        monkeypatch.setattr(mod, "_read_prefs_progress", lambda: None)
+        monkeypatch.setattr(mod, "_grep_cycle_count", lambda: 0)
+        monkeypatch.setattr(mod, "_result_bytes", lambda: 0)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+        return state_file
+
+    @staticmethod
+    def _stub_gpu(monkeypatch, mod, tmp_path, *, online, alive, state=None):
+        state_file = tmp_path / "gpu_state.json"
+        if state is not None:
+            state_file.write_text(json.dumps(state))
+        monkeypatch.setattr(mod, "_state_file", lambda: state_file)
+        monkeypatch.setattr(mod, "device_online", lambda: online)
+        monkeypatch.setattr(mod, "instrument_alive", lambda: alive)
+        monkeypatch.setattr(mod, "_run_finished", lambda log: (False, ""))
+        monkeypatch.setattr(mod, "_early_crash_verdict", lambda log, rc_streak: None)
+        monkeypatch.setattr(mod, "_read_log_cat", lambda: b"")
+        monkeypatch.setattr(mod, "_grep_rounds_done", lambda: 0)
+        monkeypatch.setattr(mod, "result_log_bytes", lambda: 0)
+        monkeypatch.setattr(mod, "progress_stamp", lambda payload: None)
+        return state_file
+
+    def test_sleep_fresh_state_offline_first_poll_no_crash(
+        self, sleep_v104, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("STP_JOB_ID", "job-1693")
+        state_file = self._stub_sleep(
+            monkeypatch, sleep_v104, tmp_path, online=False, alive=False
+        )
+        result = sleep_v104._run({})
+        assert result["success"] is True
+        saved = json.loads(state_file.read_text())
+        assert saved["dead_streak"] == 0  # 归一入 state，不累计
+
+    def test_sleep_offline_keeps_existing_streak(
+        self, sleep_v104, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("STP_JOB_ID", "job-1693")
+        state_file = self._stub_sleep(
+            monkeypatch, sleep_v104, tmp_path, online=False, alive=False,
+            state={"job_id": "job-1693", "dead_streak": 1, "seq": 3},
+        )
+        result = sleep_v104._run({})
+        assert result["success"] is True
+        saved = json.loads(state_file.read_text())
+        assert saved["dead_streak"] == 1  # 离线不累计
+
+    def test_sleep_online_recovery_accumulates_to_grace(
+        self, sleep_v104, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("STP_JOB_ID", "job-1693")
+        state_file = self._stub_sleep(
+            monkeypatch, sleep_v104, tmp_path, online=False, alive=False
+        )
+        assert sleep_v104._run({})["success"] is True
+        # 设备恢复在线但服务未起：恢复正常累计，grace=2 用尽即判死
+        self._stub_sleep(monkeypatch, sleep_v104, tmp_path, online=True, alive=False)
+        assert sleep_v104._run({})["success"] is True
+        result = sleep_v104._run({})
+        assert result["success"] is False
+        assert "连续 2 个周期未存活" in result["error_message"]
+
+    def test_sleep_alive_resets_streak(self, sleep_v104, monkeypatch, tmp_path):
+        monkeypatch.setenv("STP_JOB_ID", "job-1693")
+        state_file = self._stub_sleep(
+            monkeypatch, sleep_v104, tmp_path, online=True, alive=True,
+            state={"job_id": "job-1693", "dead_streak": 2, "seq": 1},
+        )
+        result = sleep_v104._run({})
+        assert result["success"] is True
+        saved = json.loads(state_file.read_text())
+        assert saved["dead_streak"] == 0
+
+    def test_gpu_fresh_state_offline_first_poll_no_crash(
+        self, gpu_v109, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("STP_JOB_ID", "job-1693")
+        state_file = self._stub_gpu(
+            monkeypatch, gpu_v109, tmp_path, online=False, alive=False
+        )
+        result = gpu_v109._run({})
+        assert result["success"] is True
+        saved = json.loads(state_file.read_text())
+        assert saved["dead_streak"] == 0
+
+    def test_gpu_offline_keeps_existing_streak(
+        self, gpu_v109, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("STP_JOB_ID", "job-1693")
+        state_file = self._stub_gpu(
+            monkeypatch, gpu_v109, tmp_path, online=False, alive=False,
+            state={"job_id": "job-1693", "dead_streak": 1, "seq": 3},
+        )
+        result = gpu_v109._run({})
+        assert result["success"] is True
+        saved = json.loads(state_file.read_text())
+        assert saved["dead_streak"] == 1
+
+    def test_gpu_online_recovery_accumulates_to_grace(
+        self, gpu_v109, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("STP_JOB_ID", "job-1693")
+        state_file = self._stub_gpu(
+            monkeypatch, gpu_v109, tmp_path, online=False, alive=False
+        )
+        assert gpu_v109._run({})["success"] is True
+        self._stub_gpu(monkeypatch, gpu_v109, tmp_path, online=True, alive=False)
+        assert gpu_v109._run({})["success"] is True
+        result = gpu_v109._run({})
+        assert result["success"] is False
+        assert "连续 2 个周期未存活" in result["error_message"]

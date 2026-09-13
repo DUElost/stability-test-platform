@@ -37,21 +37,36 @@ from backend.agent.watcher.contracts import ContractViolation
 # ----------------------------------------------------------------------
 
 class _FakeEmitter:
-    """SignalEmitter 替身:把 emit 调用累计到 self.calls。"""
+    """SignalEmitter 替身:把 emit/prepare 调用累计到 self.calls（#1719）。"""
 
     def __init__(self, *, raise_on_emit: Optional[Exception] = None):
         self.calls: List[Dict[str, Any]] = []
+        self.enqueued: List[tuple] = []
         self._lock = threading.Lock()
         self._raise = raise_on_emit
         self._seq = 0
 
-    def emit(self, **kwargs) -> int:
+    def prepare(self, **kwargs):
         with self._lock:
             if self._raise is not None:
                 raise self._raise
             self._seq += 1
             self.calls.append(dict(kwargs))
-            return self._seq
+            # 真实 emitter 的 envelope 是 JSON 安全的（detected_at 为 iso 串）
+            envelope = {"seq_no": self._seq, **kwargs}
+            if isinstance(envelope.get("detected_at"), datetime):
+                envelope["detected_at"] = envelope["detected_at"].isoformat()
+            return self._seq, envelope
+
+    def enqueue(self, seq_no, envelope):
+        with self._lock:
+            self.enqueued.append((int(seq_no), envelope))
+        return 1
+
+    def emit(self, **kwargs) -> int:
+        seq_no, envelope = self.prepare(**kwargs)
+        self.enqueue(seq_no, envelope)
+        return seq_no
 
 
 class _MemStore:
