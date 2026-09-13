@@ -581,6 +581,8 @@ GATE_TO_CI_ANCHOR = {
     # 分层门禁（#1519）：services/ 不得反向 import api.routes；与
     # immutability 同模式接入 ci.yml lint job（含 --self-test 自证）。
     "layering": ("ci.yml", "分层检查"),
+    # 孤立 ORM 模型挂载门禁（#1890-B）——锚点即 lint job 该 step 的 name
+    "orphan-models": ("ci.yml", "孤立 ORM 模型检查"),
     "gov-surface": ("ci.yml", "治理面结构检查"),
     "ai-work": ("ci.yml", "Execution Registry 自测"),
     "pr-migrate": ("ci.yml", "Migrate empty PostgreSQL database"),
