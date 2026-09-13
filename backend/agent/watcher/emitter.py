@@ -44,8 +44,8 @@ class SignalEmitter:
     """per-Job log_signal 发射器。同步写 LocalDB outbox；不做网络 I/O。
 
     seq_no 策略（用户决策，per-job 单调）：
-        - 构造时从 LocalDB 读取 MAX(seq_no)+1 作为起点（Agent 重启后恢复）
-        - emit() 持锁自增并写库
+        - prepare() 在 LocalDB 原子持久化预留序号（不写 outbox）
+        - enqueue() 复用预留键并推进原 Job 的持久化高水位
         - 幂等键 (job_id, seq_no) 与后端一致，冲突由 LocalDB UNIQUE 兜底
 
     线程安全：emit() 可被多线程并发调用（inotifyd/polling 多路来源场景）。
@@ -67,12 +67,9 @@ class SignalEmitter:
         self._device_serial = str(device_serial)
         self._fencing_token = str(fencing_token)
         self._agent_instance_id = str(agent_instance_id)
-        self._lock = threading.Lock()
-        # 恢复 seq_no 起点：Agent 重启后继续单调递增，避免与已持久化条目冲突
-        self._next_seq = self._db.next_log_signal_seq_no(self._job_id)
         logger.debug(
             "signal_emitter_init job_id=%d serial=%s next_seq=%d",
-            self._job_id, self._device_serial, self._next_seq,
+            self._job_id, self._device_serial, self._db.next_log_signal_seq_no(self._job_id),
         )
 
     def prepare(
@@ -88,7 +85,7 @@ class SignalEmitter:
         first_lines: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> tuple[int, Dict[str, Any]]:
-        """分配 seq_no 并组装 envelope，但**不落库**（#1719）。
+        """持久化预留 seq_no 并组装 envelope，但**不入 outbox**（#1719/#1823）。
 
         与 enqueue() 配对，供补偿通道先把 keys 持久化（emit 意图）再产生
         效果：崩溃后重放复用同一 (job_id, seq_no)，outbox `INSERT OR IGNORE`
@@ -97,9 +94,7 @@ class SignalEmitter:
         契约违规（非法 category / source / 缺字段）会抛 ContractViolation，
         由调用方捕获并记日志；不应进入 outbox 污染后续批次。
         """
-        with self._lock:
-            seq_no = self._next_seq
-            self._next_seq += 1
+        seq_no = self._db.reserve_log_signal_seq_no(self._job_id)
 
         ts = detected_at or datetime.now(timezone.utc)
         if ts.tzinfo is None:
@@ -186,8 +181,7 @@ class SignalEmitter:
     @property
     def next_seq_preview(self) -> int:
         """仅供调试/测试观察：当前将要分配的 seq_no。"""
-        with self._lock:
-            return self._next_seq
+        return self._db.next_log_signal_seq_no(self._job_id)
 
 
 # ----------------------------------------------------------------------

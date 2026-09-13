@@ -25,6 +25,9 @@
     # CI 里显式指定 PR base
     python tools/dev/check-script-version-immutability.py --base origin/main
 
+    # 离线红绿自证（不触 git；分类规则纯函数）
+    python tools/dev/check-script-version-immutability.py --self-test
+
 违约后的正确做法**不是**加豁免,而是新建版本目录:
     cp -r backend/agent/scripts/foo/v1.0.0 backend/agent/scripts/foo/v1.1.0
     # 改 v1.1.0,保持 v1.0.0 原样
@@ -37,6 +40,7 @@ import argparse
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 
 SCRIPT_ROOT = "backend/agent/scripts"
 
@@ -49,6 +53,8 @@ _VERSIONED = re.compile(rf"^{re.escape(SCRIPT_ROOT)}/(?P<name>[^/]+)/(?P<version
 _MUTATING_STATUS = {"M": "修改", "D": "删除", "R": "改名", "T": "类型变更"}
 ADDED_STATUS = "A"
 ADDED_INTO_PUBLISHED = "新增入已发布版本"
+
+Violation = tuple[str, str, str, str]  # path, action, name, version
 
 
 def _version_dir_exists_in_base(base: str, version_dir: str) -> bool:
@@ -80,33 +86,109 @@ def _changed_paths(base: str) -> list[tuple[str, str]]:
     return out
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--base",
-        default="origin/main",
-        help="比较基线 ref(默认 origin/main);CI 里传 PR 的 base",
+def classify_change(
+    status: str,
+    path: str,
+    version_dir_exists: Callable[[str], bool],
+) -> Violation | None:
+    """单条 name-status 变更 → 违规或 None（纯函数，供 --self-test）。"""
+    m = _VERSIONED.match(path)
+    if not m:
+        return None
+    if status in _MUTATING_STATUS:
+        return (path, _MUTATING_STATUS[status], m["name"], m["version"])
+    if status == ADDED_STATUS:
+        version_dir = f"{SCRIPT_ROOT}/{m['name']}/{m['version']}"
+        if version_dir_exists(version_dir):
+            return (path, ADDED_INTO_PUBLISHED, m["name"], m["version"])
+    return None
+
+
+def collect_violations(
+    changed: list[tuple[str, str]],
+    version_dir_exists: Callable[[str], bool],
+) -> list[Violation]:
+    """批量分类（纯函数）。"""
+    out: list[Violation] = []
+    for status, path in changed:
+        hit = classify_change(status, path, version_dir_exists)
+        if hit is not None:
+            out.append(hit)
+    return out
+
+
+def run_self_test() -> int:
+    """离线红绿自证：不触 git，只验证分类规则（审计 PLATFORM_AUDIT §七 #10）。"""
+    failures: list[str] = []
+    published = {f"{SCRIPT_ROOT}/check_device/v1.0.0"}
+
+    def exists(version_dir: str) -> bool:
+        return version_dir in published
+
+    def expect(
+        name: str,
+        status: str,
+        path: str,
+        *,
+        should_flag: bool,
+        action: str = "",
+    ) -> None:
+        hit = classify_change(status, path, exists)
+        flagged = hit is not None
+        if flagged != should_flag:
+            failures.append(f"{name}: 预期{'红' if should_flag else '绿'}，实际 {hit!r}")
+            return
+        if should_flag and action and hit is not None and hit[1] != action:
+            failures.append(f"{name}: 预期 action={action!r}，实际 {hit[1]!r}")
+
+    entry = f"{SCRIPT_ROOT}/check_device/v1.0.0/check_device.py"
+    helper = f"{SCRIPT_ROOT}/check_device/v1.0.0/_adb.py"
+    fresh = f"{SCRIPT_ROOT}/check_device/v1.1.0/check_device.py"
+    readme = f"{SCRIPT_ROOT}/README.md"
+
+    # 红向：已发布目录原地改 / 删 / 改名 / 类型变更
+    expect("修改入口红向", "M", entry, should_flag=True, action="修改")
+    expect("修改 helper 红向", "M", helper, should_flag=True, action="修改")
+    expect("删除红向", "D", entry, should_flag=True, action="删除")
+    expect("改名红向", "R", entry, should_flag=True, action="改名")
+    expect("类型变更红向", "T", entry, should_flag=True, action="类型变更")
+    # 红向：往已发布版本塞文件（#888）
+    expect(
+        "新增入已发布红向",
+        "A",
+        f"{SCRIPT_ROOT}/check_device/v1.0.0/_extra.py",
+        should_flag=True,
+        action=ADDED_INTO_PUBLISHED,
     )
-    parser.add_argument("-q", "--quiet", action="store_true", help="通过时不输出")
-    args = parser.parse_args()
+    # 绿向：全新版本整树新增
+    expect("全新版本新增绿向", "A", fresh, should_flag=False)
+    # 绿向：非版本路径
+    expect("脚本根 README 绿向", "M", readme, should_flag=False)
+    expect("脚本根外路径绿向", "M", "docs/README.md", should_flag=False)
 
-    violations: list[tuple[str, str, str, str]] = []
-    for status, path in _changed_paths(args.base):
-        m = _VERSIONED.match(path)
-        if not m:
-            continue
-        if status in _MUTATING_STATUS:
-            violations.append((path, _MUTATING_STATUS[status], m["name"], m["version"]))
-        elif status == ADDED_STATUS:
-            # #888：A 不再一刀切放行——基线中该 v* 目录已存在 = 往已发布
-            # 版本塞文件，违约；全新 v* 目录整树新增 = ADR-0020 指定做法。
-            version_dir = f"{SCRIPT_ROOT}/{m['name']}/{m['version']}"
-            if _version_dir_exists_in_base(args.base, version_dir):
-                violations.append((path, ADDED_INTO_PUBLISHED, m["name"], m["version"]))
+    # collect_violations 聚合
+    got = collect_violations(
+        [("M", entry), ("A", fresh), ("A", f"{SCRIPT_ROOT}/check_device/v1.0.0/x.py")],
+        exists,
+    )
+    if len(got) != 2:
+        failures.append(f"collect_violations 预期 2 条，实际 {got!r}")
 
+    if failures:
+        for f in failures:
+            print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
+        return 1
+    print(
+        "[OK] script-version-immutability self-test 通过"
+        "（修改/删除/改名/塞文件红向 + 新版本/非版本绿向）"
+    )
+    return 0
+
+
+def _report(violations: list[Violation], base: str, quiet: bool) -> int:
     if not violations:
-        if not args.quiet:
-            print(f"OK:{SCRIPT_ROOT} 下没有已发布版本目录被原地改动(基线 {args.base})")
+        if not quiet:
+            print(f"OK:{SCRIPT_ROOT} 下没有已发布版本目录被原地改动(基线 {base})")
         return 0
 
     print(f"违反 ADR-0020「版本内容不可变」:{len(violations)} 个文件", file=sys.stderr)
@@ -135,6 +217,30 @@ def main() -> int:
         file=sys.stderr,
     )
     return 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--base",
+        default="origin/main",
+        help="比较基线 ref(默认 origin/main);CI 里传 PR 的 base",
+    )
+    parser.add_argument("-q", "--quiet", action="store_true", help="通过时不输出")
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="离线红绿自证分类规则后退出（不触 git）",
+    )
+    args = parser.parse_args()
+    if args.self_test:
+        return run_self_test()
+
+    def exists(version_dir: str) -> bool:
+        return _version_dir_exists_in_base(args.base, version_dir)
+
+    violations = collect_violations(_changed_paths(args.base), exists)
+    return _report(violations, args.base, args.quiet)
 
 
 if __name__ == "__main__":

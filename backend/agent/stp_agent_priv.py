@@ -20,8 +20,8 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
 
 不变量：
 - 所有写路径固定或经前缀校验，永不接受任意目标路径；
-- chown 一律 ``-h``，避免代码树内 symlink 把 root 的改属主操作引到目录外；
-- apply-code 使用 ``--safe-links`` 且只接受调用者自有的暂存目录；
+- 目录逐级以 O_NOFOLLOW 打开，写入与属主变更不重新解析可变父路径；
+- apply-code 使用 ``--safe-links``，且 rsync 以配置中的非 root Agent 身份运行；
 - 运行需要 root（sudo）；``bootstrap`` 校验用户名/服务名的字符集后写
   sudoers，避免注入。
 
@@ -31,14 +31,17 @@ Python 3.6+（主机系统 python3，不使用第三方依赖）。exit code：0
 
 import argparse
 import base64
+from contextlib import contextmanager
+import grp
 import json
 import os
+import pwd
 import re
 import shutil
 import stat
 import subprocess
 import sys
-import tempfile
+import uuid
 
 WRAPPER_PATH = "/usr/local/sbin/stp-agent-priv"
 DEFAULT_CONF_PATH = "/etc/stp-agent-priv.conf"
@@ -86,10 +89,11 @@ def _fail(message):
 # 基础校验与进程工具
 # ---------------------------------------------------------------------------
 
-def _run(argv):
+def _run(argv, pass_fds=(), preexec_fn=None):
     """返回 (rc, stdout, stderr)，全部为 str。"""
     proc = subprocess.Popen(
         argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        pass_fds=pass_fds, preexec_fn=preexec_fn,
     )
     out, err = proc.communicate()
     return (
@@ -158,6 +162,8 @@ def _validate_install_dir(install_dir):
     if not install_dir.startswith("/") or install_dir == "/":
         _fail("INSTALL_DIR must be an absolute non-root path")
     normalized = install_dir.rstrip("/")
+    if normalized != os.path.normpath(normalized) or normalized.startswith("//"):
+        _fail("INSTALL_DIR must be a normalized absolute path")
     for critical in _INSTALL_DIR_FORBIDDEN_ROOTS:
         if (
             normalized == critical
@@ -249,44 +255,93 @@ def _conf_path():
     return os.environ.get("STP_AGENT_PRIV_CONF", DEFAULT_CONF_PATH)
 
 
-def _atomic_write(path, body, mode):
-    directory = os.path.dirname(path) or "."
-    fd, tmp_path = tempfile.mkstemp(prefix=".stp-priv-", dir=directory)
+def _open_directory(path, dir_fd=None, create=False):
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    descriptor = os.open("/" if os.path.isabs(path) else ".", flags, dir_fd=dir_fd)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        for component in path.split(os.sep):
+            if not component or component == ".":
+                continue
+            if component == "..":
+                _fail("parent traversal is not allowed")
+            if create:
+                try:
+                    os.mkdir(component, mode=0o755, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+@contextmanager
+def _target_directory(conf, child=None, create=False):
+    descriptor = _open_directory(conf["INSTALL_DIR"])
+    try:
+        if child:
+            child_descriptor = _open_directory(child, dir_fd=descriptor, create=create)
+            os.close(descriptor)
+            descriptor = child_descriptor
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def _agent_identity(conf):
+    account = pwd.getpwnam(conf["AGENT_USER"])
+    return account.pw_uid, grp.getgrnam(conf["AGENT_GROUP"]).gr_gid
+
+
+def _atomic_write_at(directory_fd, name, body, mode, owner=None):
+    temporary = ".stp-priv-" + uuid.uuid4().hex
+    descriptor = os.open(
+        temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600, dir_fd=directory_fd,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(body)
-        os.chmod(tmp_path, mode)
-        os.replace(tmp_path, path)
+            handle.flush()
+            if owner is not None:
+                os.fchown(handle.fileno(), *owner)
+            os.fchmod(handle.fileno(), mode)
+        os.replace(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
     except Exception:
         try:
-            os.unlink(tmp_path)
+            os.unlink(temporary, dir_fd=directory_fd)
         except OSError:
             pass
         raise
 
 
-def _atomic_copy(source, target, mode):
-    directory = os.path.dirname(target) or "."
-    fd, tmp_path = tempfile.mkstemp(prefix=".stp-priv-", dir=directory)
+def _atomic_write(path, body, mode):
+    descriptor = _open_directory(os.path.dirname(path) or ".")
     try:
-        os.close(fd)
-        shutil.copyfile(source, tmp_path)
-        os.chmod(tmp_path, mode)
-        os.replace(tmp_path, target)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+        _atomic_write_at(descriptor, os.path.basename(path), body, mode)
+    finally:
+        os.close(descriptor)
 
 
-def _chown_path(path, user, group):
-    if user is None:
-        return
-    rc, _, err = _run(["chown", "-h", "%s:%s" % (user, group), path])
-    if rc != 0:
-        _fail("chown failed rc=%s: %s" % (rc, err.strip()[:200]))
+def _read_regular_at(directory_fd, name, limit, owner=None):
+    descriptor = os.open(
+        name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd,
+    )
+    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        metadata = os.fstat(handle.fileno())
+        if not stat.S_ISREG(metadata.st_mode):
+            _fail("input must be a regular file")
+        if owner is not None and metadata.st_uid != owner:
+            _fail("input must be owned by the calling user")
+        if metadata.st_size > limit:
+            _fail("input too large")
+        body = handle.read(limit + 1)
+        if len(body.encode("utf-8")) > limit:
+            _fail("input too large")
+        return body, metadata
 
 
 def _visudo_check(path):
@@ -390,27 +445,41 @@ def cmd_bootstrap(args, _conf):
 def cmd_apply_code(args, conf):
     _require_root()
     caller_uid, _ = _caller_uid()
-    if os.path.islink(args.staged):
-        _fail("--staged must not be a symlink")
-    staged = os.path.realpath(args.staged)
-    if not os.path.isdir(staged):
-        _fail("--staged is not a directory: %s" % staged)
+    staged = os.path.abspath(args.staged)
     if is_within(staged, conf["INSTALL_DIR"]):
         _fail("--staged must be outside INSTALL_DIR")
-    if caller_uid is not None and os.stat(staged).st_uid != caller_uid:
-        _fail("--staged must be owned by the calling user")
     if not os.path.isfile(RSYNC_BIN):
         _fail("rsync not found: %s" % RSYNC_BIN)
+    agent_uid, agent_gid = _agent_identity(conf)
+    if agent_uid == 0:
+        _fail("apply-code requires a non-root AGENT_USER")
 
-    dest = os.path.join(conf["INSTALL_DIR"], "agent") + os.sep
-    argv = [RSYNC_BIN, "-a", "--delete", "--delete-excluded", "--safe-links"]
+    def drop_privileges():
+        os.initgroups(conf["AGENT_USER"], agent_gid)
+        os.setgid(agent_gid)
+        os.setuid(agent_uid)
+
+    argv = [
+        RSYNC_BIN, "-a", "--no-owner", "--no-group", "--delete",
+        "--delete-excluded", "--safe-links",
+    ]
     for item in FIXED_EXCLUDES:
         argv.append("--exclude=%s" % item)
     for item in HOST_LOCAL_PATHS:
         argv.append("--exclude=%s" % item)
         argv.append("--filter=protect %s" % item)
-    argv += [staged + os.sep, dest]
-    rc, _, err = _run(argv)
+    staged_fd = _open_directory(staged)
+    try:
+        if caller_uid is not None and os.fstat(staged_fd).st_uid != caller_uid:
+            _fail("--staged must be owned by the calling user")
+        with _target_directory(conf, "agent", create=True) as target_fd:
+            os.fchown(target_fd, agent_uid, agent_gid)
+            argv += ["/proc/self/fd/%d/" % staged_fd, "/proc/self/fd/%d/" % target_fd]
+            rc, _, err = _run(
+                argv, pass_fds=(staged_fd, target_fd), preexec_fn=drop_privileges,
+            )
+    finally:
+        os.close(staged_fd)
     if rc != 0:
         _fail("rsync failed rc=%s: %s" % (rc, err.strip()[:300]))
     print("STP_APPLY_CODE_OK")
@@ -420,31 +489,26 @@ def cmd_apply_code(args, conf):
 def cmd_install_schema(args, conf):
     _require_root()
     caller_uid, _ = _caller_uid()
-    source = args.file
-    if os.path.islink(source):
-        _fail("--file must not be a symlink")
-    if not os.path.isfile(source):
-        _fail("--file is not a file: %s" % source)
-    st = os.stat(source)
-    if caller_uid is not None and st.st_uid != caller_uid:
-        _fail("--file must be owned by the calling user")
-    if st.st_size > MAX_SCHEMA_BYTES:
-        _fail("--file too large (%d bytes)" % st.st_size)
+    source = os.path.abspath(args.file)
+    source_fd = _open_directory(os.path.dirname(source))
     try:
-        with open(source, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
+        body, _ = _read_regular_at(
+            source_fd, os.path.basename(source), MAX_SCHEMA_BYTES, owner=caller_uid,
+        )
+        payload = json.loads(body)
     except (OSError, ValueError) as exc:
         _fail("--file is not valid JSON: %s" % exc)
+    finally:
+        os.close(source_fd)
     properties = payload.get("properties") if isinstance(payload, dict) else None
-    if "$schema" not in payload or not isinstance(properties, dict) \
+    if not isinstance(payload, dict) or "$schema" not in payload or not isinstance(properties, dict) \
             or "lifecycle" not in properties:
         _fail("--file is not a Pipeline schema ($schema/lifecycle mismatch)")
 
-    target_dir = os.path.join(conf["INSTALL_DIR"], "schemas")
-    os.makedirs(target_dir, exist_ok=True)
-    target = os.path.join(target_dir, "pipeline_schema.json")
-    _atomic_copy(source, target, 0o644)
-    _chown_path(target, conf["AGENT_USER"], conf["AGENT_GROUP"])
+    with _target_directory(conf, "schemas", create=True) as target_fd:
+        _atomic_write_at(
+            target_fd, "pipeline_schema.json", body, 0o644, _agent_identity(conf),
+        )
     print("STP_INSTALL_SCHEMA_OK")
     return 0
 
@@ -457,41 +521,33 @@ def cmd_write_version(args, conf):
         return 0
     if not _VERSION_RE.match(version):
         _fail("--version must be a short git SHA (7-40 hex chars)")
-    target = os.path.join(conf["INSTALL_DIR"], "agent", "VERSION")
-    _atomic_write(target, version + "\n", 0o644)
-    _chown_path(target, conf["AGENT_USER"], conf["AGENT_GROUP"])
+    with _target_directory(conf, "agent") as target_fd:
+        _atomic_write_at(target_fd, "VERSION", version + "\n", 0o644, _agent_identity(conf))
     print("STP_WRITE_VERSION_OK version=%s" % version)
     return 0
 
 
-def _read_env(path):
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            return handle.read().splitlines()
-    except OSError as exc:
-        _fail(".env not readable: %s (%s)" % (path, exc))
-
-
-def _write_env_preserving_owner(path, lines):
+def _write_env_preserving_owner(directory_fd, lines, metadata):
     """原子替换 .env，但保留原 uid/gid 与 mode——与旧写法（原地截断）等价。"""
-    try:
-        st = os.stat(path)
-    except OSError as exc:
-        _fail(".env stat failed: %s (%s)" % (path, exc))
     body = "\n".join(lines) + ("\n" if lines else "")
-    _atomic_write(path, body, st.st_mode & 0o777)
-    os.chown(path, st.st_uid, st.st_gid)
+    _atomic_write_at(
+        directory_fd, ".env", body, metadata.st_mode & 0o777,
+        (metadata.st_uid, metadata.st_gid),
+    )
 
 
 def cmd_sync_env(args, conf):
     _require_root()
-    env_path = os.path.join(conf["INSTALL_DIR"], ".env")
-    if not os.path.exists(env_path):
-        _fail(".env missing at %s" % env_path)
+    with _target_directory(conf) as target_fd:
+        return _sync_env(args, target_fd)
+
+
+def _sync_env(args, target_fd):
+    body, metadata = _read_regular_at(target_fd, ".env", MAX_ENV_PAYLOAD_BYTES)
+    lines = body.splitlines()
 
     if args.secret_b64:
         secret = _decode_b64(args.secret_b64, "secret")
-        lines = _read_env(env_path)
         replaced = False
         updated = []
         for line in lines:
@@ -502,7 +558,7 @@ def cmd_sync_env(args, conf):
                 updated.append(line)
         if not replaced:
             updated.append("AGENT_SECRET=" + secret)
-        _write_env_preserving_owner(env_path, updated)
+        _write_env_preserving_owner(target_fd, updated, metadata)
         print("STP_ENV_SECRET_SYNCED=1")
         return 0
 
@@ -514,7 +570,6 @@ def cmd_sync_env(args, conf):
         if not _NAME_RE.match(str(key)) or not isinstance(value, str):
             _fail("override entry invalid: %r" % key)
 
-    lines = _read_env(env_path)
     if not overrides:
         print("STP_ENV_SYNCED=")
         print("STP_ENV_PATH_MISSING=")
@@ -539,7 +594,7 @@ def cmd_sync_env(args, conf):
         if key not in seen:
             new_lines.append("%s=%s" % (key, value))
             updated_keys.append(key)
-    _write_env_preserving_owner(env_path, new_lines)
+    _write_env_preserving_owner(target_fd, new_lines, metadata)
     print("STP_ENV_SYNCED=" + ",".join(sorted(updated_keys)))
 
     missing = {
@@ -559,22 +614,24 @@ def cmd_deps_marker(args, conf):
     sha = args.sha.strip()
     if not _SHA256_RE.match(sha):
         _fail("--sha must be a sha256 hex digest")
-    target = os.path.join(conf["INSTALL_DIR"], ".deps_installed_sha")
-    _atomic_write(target, sha + "\n", 0o644)
-    _chown_path(target, conf["AGENT_USER"], conf["AGENT_GROUP"])
+    with _target_directory(conf) as target_fd:
+        _atomic_write_at(
+            target_fd, ".deps_installed_sha", sha + "\n", 0o644, _agent_identity(conf),
+        )
     print("STP_DEPS_MARKER_OK")
     return 0
 
 
 def cmd_fix_ownership(args, conf):
     _require_root()
-    rc, _, err = _run([
-        "chown", "-R", "-h",
-        "%s:%s" % (conf["AGENT_USER"], conf["AGENT_GROUP"]),
-        conf["INSTALL_DIR"],
-    ])
-    if rc != 0:
-        _fail("chown failed rc=%s: %s" % (rc, err.strip()[:300]))
+    owner = _agent_identity(conf)
+    with _target_directory(conf) as target_fd:
+        for _, directories, files, directory_fd in os.fwalk(
+            ".", topdown=False, onerror=_fail, follow_symlinks=False, dir_fd=target_fd,
+        ):
+            for name in directories + files:
+                os.chown(name, *owner, dir_fd=directory_fd, follow_symlinks=False)
+            os.fchown(directory_fd, *owner)
     print("STP_FIX_OWNERSHIP_OK")
     return 0
 
