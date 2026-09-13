@@ -148,10 +148,10 @@ def stub(monkeypatch):
     RunConsole._reset_for_tests()
 
 
-def _new_console(tmp_path, name: str) -> RunConsole:
+def _new_console(tmp_path, name: str, log_root: str | None = None) -> RunConsole:
     inst = RunConsole()
     inst.configure(
-        log_root=str(tmp_path / name),
+        log_root=log_root or str(tmp_path / name),
         cancel_grace_seconds=0.5,
         emit=lambda *a, **k: None,
     )
@@ -405,3 +405,60 @@ def test_cross_instance_cancel_terminal_short_circuit(stub, tmp_path, monkeypatc
     _wait_snapshot(stub, run_id, "SUCCESS")
     assert b.cancel(run_id) is False
     assert run_id not in stub.cancel_requests
+
+
+# ── P4：跨实例 replay（共享 log_root 前提）────────────────────────────────────
+
+
+def test_cross_instance_read_log_from_shared_log_root(stub, tmp_path):
+    """共享 log_root：B 读 A 写入的文件行，status/seq 由 P2 快照补全。"""
+    shared = str(tmp_path / "shared-console")
+    a = _new_console(tmp_path, "a", log_root=shared)
+    b = _new_console(tmp_path, "b", log_root=shared)
+    run_id = a.start(
+        run_key="jira:transsion",
+        cmd=[sys.executable, "-c", "print('hello'); print('world')"],
+        label="k",
+    )
+    _wait_terminal(a, run_id)
+    out = b.read_log(run_id)
+    assert out["lines"] == ["hello", "world"]
+    assert out["status"] == "SUCCESS"          # 非 UNKNOWN：快照补全
+    assert out["seq"] == 2
+    assert out.get("replay_unavailable") is None
+
+
+def test_cross_instance_read_log_flags_missing_file(stub, tmp_path):
+    """未共享 log_root：本实例无文件但 owner 有输出 → 显式 replay_unavailable。"""
+    a = _new_console(tmp_path, "a")            # log_root = tmp/a
+    b = _new_console(tmp_path, "b")            # log_root = tmp/b（未共享）
+    run_id = a.start(
+        run_key="jira:nokia",
+        cmd=[sys.executable, "-c", "print('only-on-a')"],
+        label="k",
+    )
+    _wait_terminal(a, run_id)
+    out = b.read_log(run_id)
+    assert out["lines"] == []
+    assert out.get("replay_unavailable") is True
+    assert out["status"] == "SUCCESS"           # 快照补全（不假装 UNKNOWN）
+    assert out["seq"] == 1                      # owner 报告的 seq（提示仍有内容）
+
+
+def test_cross_instance_read_log_flags_file_behind(stub, tmp_path):
+    """文件落后于 owner 快照（部分共享/陈旧）→ 标记 replay_unavailable。"""
+    a = _new_console(tmp_path, "a")
+    b = _new_console(tmp_path, "b")
+    run_id = a.start(
+        run_key="jira:vivo",
+        cmd=[sys.executable, "-c", "print('one'); print('two')"],
+        label="k",
+    )
+    _wait_terminal(a, run_id)
+    stale = tmp_path / "b" / f"{run_id}.log"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("stale\n", encoding="utf-8")
+    out = b.read_log(run_id)
+    assert out["lines"] == ["stale"]
+    assert out.get("replay_unavailable") is True
+    assert out["seq"] == 2                      # max(file=1, owner=2)

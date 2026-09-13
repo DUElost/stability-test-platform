@@ -52,9 +52,10 @@ def console_run_miss_hint() -> str:
         return ""
     if _console_registry.console_registry_enabled():
         return (
-            "；多实例模式下该运行可能由其他控制面实例持有——跨实例 status（含订阅校验）"
-            "读 owner 快照、cancel 经请求位转发（有界等待）；日志 replay 仍为实例本地语义"
-            "（#1737 P3，P4 在途，ref=#1114）"
+            "；多实例模式下该运行可能由其他控制面实例持有——跨实例 status（含订阅校验）、"
+            "cancel 与日志 replay 均可用（replay 要求各实例共享 "
+            "`STP_RUN_CONSOLE_LOG_ROOT`；不共享时 replay 显式标记 unavailable，"
+            "见 #1737 P4，ref=#1114）"
         )
     return "；多实例模式（STP_SOCKETIO_REDIS_ADAPTER=1）下 RunConsole 无 owner 路由，该运行可能由其他控制面实例持有（#1114）"
 
@@ -71,9 +72,9 @@ def multi_instance_console_warning() -> Optional[str]:
         return (
             "multi_instance_mode_enabled console_run_key_mutex=true "
             "console_status_cross_instance=true console_cancel_forwarding=true "
-            "remaining_limits=read_log_replay "
-            "affected=console_log_replay_after_reconnect,dedup_jira_log_replay,"
-            "ai_assistant_console_log ref=#1737/#1114"
+            "console_replay_cross_instance=shared_log_root_only "
+            "notes=log_replay_requires_shared_STP_RUN_CONSOLE_LOG_ROOT "
+            "ref=#1737/#1114"
         )
     return (
         "multi_instance_mode_enabled console_features_single_instance_only=true "
@@ -736,24 +737,66 @@ class RunConsole:
                 for rid in evicted:
                     _console_registry.delete_status_snapshot(rid)
 
+    @staticmethod
+    def _mark_replay_unavailable(
+        result: Dict[str, Any], snapshot: Optional[Dict[str, Any]], *, reason: str,
+    ) -> None:
+        """#1737 P4：文件侧证据少于 owner 报告时显式标记 + 告警。
+
+        典型形态：`STP_RUN_CONSOLE_LOG_ROOT` 未在各实例间共享——本实例读到的
+        文件缺失/落后于 owner 快照的 `seq`。**不把「读不到」伪装成「没有输出」**。
+        """
+        owner_seq = int(snapshot.get("seq") or 0) if snapshot else 0
+        logger.warning(
+            "run_console_replay_unavailable run_id=%s owner_instance=%s owner_seq=%d reason=%s "
+            "hint=检查 STP_RUN_CONSOLE_LOG_ROOT 是否各实例共享",
+            result.get("run_id"),
+            snapshot.get("instance_id") if snapshot else None,
+            owner_seq,
+            reason,
+        )
+        result["replay_unavailable"] = True
+
     def read_log(self, run_id: str, *, from_seq: int = 0) -> Dict[str, Any]:
         """文件 replay：返回从 from_seq（1-based，含）起的行 + 当前 seq/status。
 
-        run 不在内存（进程重启后的历史 run）时，仍尝试从 log_root/{run_id}.log
-        读文件——status 回退为 UNKNOWN，由调用方按需从持久化层补全（如 jira_run 表）。
+        run 不在内存（进程重启后的历史 run / 其他实例持有的 run）时，仍从
+        log_root/{run_id}.log 读文件——**#1737 P4：跨实例 replay 的部署前提是
+        `STP_RUN_CONSOLE_LOG_ROOT` 对全部实例可见**（同机多进程天然共享；多机需挂
+        同一存储）。status 由 P2 快照补全；文件缺失/落后于 owner 报告的 seq 时
+        显式标记 `replay_unavailable` 并告警。
 
         #1124：流式读取 —— 内存占用与响应体均有界（`_replay_max_lines` 上限 +
         单行截断），不再 `readlines()` 全量装进内存；`seq` 仍精确统计到文件末尾。
         """
         run = self._runs.get(run_id)
+        snapshot: Optional[Dict[str, Any]] = None
         if run is not None and run._log_path is not None:
             log_path = run._log_path
         else:
-            # 历史记录 replay：run 不在内存，按约定路径找日志文件
+            # 历史/跨实例 replay：按约定路径找日志文件（共享 log_root 前提）
             log_path = self._log_root / f"{run_id}.log"
+            if _console_registry.console_registry_enabled():
+                snapshot = _console_registry.read_status_snapshot(run_id)
+        if run is not None:
+            status = run.status
+        elif snapshot and snapshot.get("status"):
+            # P2 快照补全（跨实例 / 历史 run 的真实状态）
+            status = str(snapshot["status"])
+        else:
+            status = "UNKNOWN"
         if not log_path or not log_path.exists():
-            return {"run_id": run_id, "from_seq": from_seq, "lines": [],
-                    "seq": run.seq if run else 0, "status": run.status if run else "UNKNOWN"}
+            owner_seq = int(snapshot.get("seq") or 0) if snapshot else 0
+            result: Dict[str, Any] = {
+                "run_id": run_id,
+                "from_seq": from_seq,
+                "lines": [],
+                "seq": owner_seq,
+                "status": status,
+            }
+            if owner_seq > 0:
+                self._mark_replay_unavailable(result, snapshot, reason="log_file_missing")
+            return result
         start = max(0, int(from_seq) - 1) if from_seq > 0 else 0
         lines: List[str] = []
         total = 0
@@ -765,13 +808,17 @@ class RunConsole:
                         lines.append(ln.rstrip("\n")[: self._replay_max_line_chars])
         except Exception:
             logger.exception("run_console_read_log_failed run_id=%s", run_id)
-        return {
+        owner_seq = int(snapshot.get("seq") or 0) if snapshot else 0
+        result = {
             "run_id": run_id,
             "from_seq": start + 1,
             "lines": lines,
-            "seq": total,
-            "status": run.status if run else "UNKNOWN",
+            "seq": max(total, owner_seq),
+            "status": status,
         }
+        if owner_seq > total:
+            self._mark_replay_unavailable(result, snapshot, reason="log_file_behind")
+        return result
 
     def log_file_path(self, run_id: str) -> Path:
         """返回 run 的日志文件路径（不依赖 run 是否在内存）。"""
