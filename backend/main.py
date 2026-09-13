@@ -165,6 +165,12 @@ async def lifespan(app: FastAPI):
 
             configure_agent_sid_registry(redis_client)
 
+            # #1737 P1（ADR-0027 P3-4）：console 归属注册表——全局 run_key 互斥 +
+            # owner 登记；门控默认跟随 adapter（未启用时不建连接）。
+            from backend.realtime.console_registry import configure_console_registry
+
+            configure_console_registry(redis_url)
+
             capture_main_loop()
             init_build_info(version="2.0.0", commit="unknown")
 
@@ -263,6 +269,13 @@ async def _lifespan_cleanup(scheduler) -> None:
         RunConsole.instance().shutdown()
     except Exception:
         logger.exception("run_console_shutdown_failed")
+    # #1737 P1：关闭 console 注册表自有同步连接（装配于 lifespan startup）
+    try:
+        from backend.realtime.console_registry import shutdown_console_registry
+
+        shutdown_console_registry()
+    except Exception:
+        logger.exception("console_registry_close_failed")
     # ADR-0026: pump 随进程退出 — 立即撤销就绪标记,防止 shutdown 窗口内
     # 新的 V2 QUEUED 产生却无人准入。
     from backend.core.admission_queue import mark_queue_pump_ready
