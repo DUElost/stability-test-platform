@@ -35,9 +35,13 @@ router = APIRouter()
 
 # #1258：host/device 在线计数在 /metrics 拉取时现算（表小、低基数，无周期
 # 任务的 staleness；label 用小写枚举值与仪表板 PromQL 对齐）。
+# ADR-0038 D5：host 侧排除退役（退役 = 不再是容量）——`stability_host_online`
+# 的 PromQL 语义变化：退役主机的 online/offline/... 计数归 0，range 查询会在
+# 退役时刻出现台阶（历史序列保留旧值）；若有告警按 fleet 规模阈值判断，退役
+# 会正常触发「规模下降」而非误报。
 _FLEET_GAUGES = (
-    (Host, host_online, HostStatus),
-    (Device, device_online, DeviceStatus),
+    (Host, host_online, HostStatus, Host.retired_at.is_(None)),
+    (Device, device_online, DeviceStatus, None),
 )
 
 
@@ -45,10 +49,11 @@ def _refresh_fleet_gauges(db: Session) -> None:
     if not is_prometheus_available():
         return
     try:
-        for model, gauge, status_enum in _FLEET_GAUGES:
-            counts = dict(
-                db.query(model.status, func.count()).group_by(model.status).all()
-            )
+        for model, gauge, status_enum, extra_filter in _FLEET_GAUGES:
+            query = db.query(model.status, func.count()).group_by(model.status)
+            if extra_filter is not None:
+                query = query.filter(extra_filter)
+            counts = dict(query.all())
             for member in status_enum:
                 gauge.labels(status=member.value.lower()).set(counts.get(member.value, 0))
     except SQLAlchemyError:

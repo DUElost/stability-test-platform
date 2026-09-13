@@ -591,6 +591,8 @@ GATE_TO_CI_ANCHOR = {
     # 锚点即该 step 的 name（前移理由同 lock 卫生测试：纯离线、随 lock 可跑）
     "prom-alerts": ("ci.yml", "Run repo-level tests"),
     "agent-tests": ("ci.yml", "Run agent tests"),
+    # #739：agent 测试纯净环境收集守卫——锚点即 pr-agent-tests job 中该 step 的 name
+    "agent-tests-collect": ("ci.yml", "Collect agent tests in clean env"),
     # check:full 级——CI 对应物在 backend-test / frontend-check / docker-build job
     "backend-tests": ("ci.yml", "Run backend tests"),
     "integration": ("ci.yml", "Run backend tests"),
