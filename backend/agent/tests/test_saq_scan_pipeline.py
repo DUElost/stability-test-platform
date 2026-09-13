@@ -18,13 +18,16 @@ import pytest
 
 
 def _query_hosts_from_rows(rows):
-    """Stand-in for ``_query_hosts_for_scan`` → ``(triggered, skipped)``."""
+    """Stand-in for ``_query_hosts_for_scan`` → ``(triggered, skipped, skipped_retired)``."""
 
-    def _query(plan_run_id: int, is_final: bool = False):
+    def _query(
+        plan_run_id: int, is_final: bool = False, allow_retired: bool = False,
+    ):
         triggered = []
         skipped = []
+        skipped_retired = []
         for host_id, status in rows:
-            if status == "ONLINE":
+            if status == "ONLINE" or (status == "RETIRED" and allow_retired):
                 triggered.append((
                     host_id,
                     {
@@ -34,9 +37,11 @@ def _query_hosts_from_rows(rows):
                         "run_date_stamps": [],
                     },
                 ))
+            elif status == "RETIRED":
+                skipped_retired.append(host_id)
             else:
                 skipped.append(host_id)
-        return triggered, skipped
+        return triggered, skipped, skipped_retired
 
     return _query
 
@@ -335,7 +340,9 @@ async def test_scan_task_no_hosts_triggered_skips_poll(monkeypatch):
     monkeypatch.setattr(saq_tasks, "asyncio_to_thread", to_thread)
     monkeypatch.setattr(
         saq_tasks, "_query_hosts_for_scan",
-        lambda _plan_run_id, is_final=False: ([], ["host-1"]),
+        lambda _plan_run_id, is_final=False, allow_retired=False: (
+            [], ["host-1"], [],
+        ),
     )
 
     with patch("backend.realtime.socketio_server.call_agent_control", new=AsyncMock(return_value=True)):
