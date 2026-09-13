@@ -1,7 +1,7 @@
 """seed monkey_launch v5.0.2 — aimwd post-check 独立窗口（#1711）
 
 Revision ID: z1a2b3c4d5e6
-Revises: y0z1a2b3c4d5
+Revises: z7a6b5c4d3e2
 Create Date: 2026-09-13
 
 Data migration:
