@@ -74,6 +74,7 @@
 | `STP_NOTIFY_SAQ_TIMEOUT_S` | 通知 SAQ 单次 job 上限秒（默认 `120`）；须覆盖「一次投递串行经过全部通道」的最坏耗时（#1167 P5） |
 | `BACKGROUND_POOL_SIZE` | 后台线程池 worker 数（默认 `8`；#1122） |
 | `BACKGROUND_POOL_MAX_QUEUE` | 后台线程池待提交队列上限（默认 `200`）；满即拒绝，不再无界堆积（#1122） |
+| `STP_RUN_CONSOLE_LOG_ROOT` | RunConsole 日志根目录（默认 `logs/console`）。**多实例部署须对全部实例可见**（同机多进程天然共享；多机需挂同一存储），否则跨实例日志 replay 返回 `replay_unavailable`（#1737 P4） |
 | `STP_RUN_CONSOLE_REPLAY_MAX_LINES` | RunConsole replay 单次回放行数上限（默认 `2000`；#1124） |
 | `STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS` | RunConsole 终态运行记录保留秒数（默认 `3600`；#1124） |
 | `STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS` | 跨实例 cancel 等待 owner ack 的上界秒数（默认 `3`；超时 fail-closed；#1737 P3） |
