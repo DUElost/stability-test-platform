@@ -90,6 +90,9 @@ def _hot_update_direct(
         hosts = (
             db.query(Host)
             .filter(Host.status == "ONLINE")
+            # ADR-0038 D5：执行/配置类动作不触达退役主机（活体退役也会出现在
+            # ONLINE 集合里，必须显式排除；--direct 路径另有门禁兜底）。
+            .filter(Host.retired_at.is_(None))
             .order_by(Host.hostname)
             .all()
         )

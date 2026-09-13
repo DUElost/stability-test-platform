@@ -218,3 +218,34 @@ def test_push_without_manifest_keeps_entry_only_shape(db_session, tmp_path):
     assert (ok, err) == (True, None)
     remotes = sorted(r.rsplit("/", 1)[-1] for _l, r in client.sftp.puts)
     assert remotes == ["_adb.py", "check_device.py"]
+
+
+def test_sync_host_via_hot_update_rejects_retired_host(db_session):
+    """ADR-0038 D5：脚本同步可 SSH 触碰主机——退役主机必须被守卫拦下。"""
+    from datetime import datetime, timezone
+
+    host = Host(
+        id="h-ret-sync", hostname="agent-ret", ip="10.0.0.11", ssh_port=22,
+        retired_at=datetime.now(timezone.utc),
+    )
+    db_session.add(host)
+    db_session.commit()
+
+    ok, err = sync_host_via_hot_update("h-ret-sync", db_session)
+    assert ok is False
+    assert err == "host_retired"
+
+
+def test_push_mismatched_scripts_rejects_retired_host(db_session):
+    from datetime import datetime, timezone
+
+    host = Host(
+        id="h-ret-push", hostname="agent-ret2", ip="10.0.0.12", ssh_port=22,
+        retired_at=datetime.now(timezone.utc),
+    )
+    db_session.add(host)
+    db_session.commit()
+
+    ok, err = push_mismatched_scripts("h-ret-push", [{"name": "x"}], db_session)
+    assert ok is False
+    assert err == "host_retired"

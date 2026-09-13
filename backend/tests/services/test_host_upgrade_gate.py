@@ -22,6 +22,7 @@ from backend.services.host_upgrade_gate import (
     HostAbortDrainTimeoutError,
     HostHasActiveJobsError,
     HostNotFoundError,
+    HostRetiredError,
     begin_host_upgrade,
     end_host_upgrade,
 )
@@ -182,3 +183,19 @@ def test_failure_cleanup_does_not_release_new_holder(db_session, sample_host, mo
     assert sample_host.maintenance_holder == "test:new"
     assert in_maintenance_window(sample_host.maintenance_until)
     end_host_upgrade(db_session, sample_host.id, "test:new")
+
+
+def test_gate_rejects_retired_host_without_taking_window(db_session, sample_host):
+    """ADR-0038 D5：退役主机拒绝执行/配置类动作（热更新/升级门禁/批量），
+    且拒绝路径不得占用维护窗口（与活跃 Job 拒绝同一约定）。"""
+    from datetime import datetime, timezone
+
+    sample_host.retired_at = datetime.now(timezone.utc)
+    db_session.commit()
+
+    with pytest.raises(HostRetiredError) as excinfo:
+        begin_host_upgrade(db_session, sample_host.id, holder="test:retired")
+
+    assert excinfo.value.code == "HOST_RETIRED"
+    db_session.refresh(sample_host)
+    assert not in_maintenance_window(sample_host.maintenance_until)
