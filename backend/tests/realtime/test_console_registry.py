@@ -66,6 +66,21 @@ class _FakeRedis:
     def close(self):  # noqa: ANN201
         self.closed = True
 
+    def expire(self, key, seconds):  # noqa: ANN001
+        if self.fail:
+            raise RuntimeError("redis down")
+        if key not in self.store:
+            return False
+        self.expires.append((key, int(seconds)))
+        return True
+
+    def delete(self, key):  # noqa: ANN001
+        if self.fail:
+            raise RuntimeError("redis down")
+        existed = key in self.store
+        self.store.pop(key, None)
+        return 1 if existed else 0
+
 
 @pytest.fixture()
 def fake_client(monkeypatch):
@@ -209,3 +224,52 @@ def test_shutdown_closes_client(fake_client):
     registry.shutdown_console_registry()
     assert fake_client.closed is True
     assert registry._client is None
+
+
+# ── 状态快照（P2）────────────────────────────────────────────────────────────
+
+
+def test_publish_and_read_snapshot(fake_client):
+    registry.publish_status_snapshot(
+        "run-A", {"run_id": "run-A", "status": "RUNNING"}, ttl_seconds=45,
+    )
+    snap = registry.read_status_snapshot("run-A")
+    assert snap is not None
+    assert snap["status"] == "RUNNING"
+    assert snap["instance_id"] == registry.control_plane_instance_id()
+    assert (registry.status_key("run-A"), 45) in fake_client.expires
+
+
+def test_read_snapshot_missing_or_corrupt(fake_client):
+    assert registry.read_status_snapshot("nope") is None
+    fake_client.store[registry.status_key("bad")] = "{not json"
+    assert registry.read_status_snapshot("bad") is None
+    fake_client.store[registry.status_key("list")] = "[1,2]"
+    assert registry.read_status_snapshot("list") is None
+
+
+def test_refresh_snapshot_ttl_true_then_false_when_missing(fake_client):
+    registry.publish_status_snapshot("run-A", {"run_id": "run-A"}, ttl_seconds=45)
+    assert registry.refresh_status_ttl("run-A", ttl_seconds=45) is True
+    del fake_client.store[registry.status_key("run-A")]
+    assert registry.refresh_status_ttl("run-A", ttl_seconds=45) is False
+
+
+def test_delete_snapshot(fake_client):
+    registry.publish_status_snapshot("run-A", {"run_id": "run-A"}, ttl_seconds=45)
+    registry.delete_status_snapshot("run-A")
+    assert registry.status_key("run-A") not in fake_client.store
+
+
+def test_publish_snapshot_fails_closed_on_redis_error(fake_client):
+    fake_client.fail = True
+    with pytest.raises(registry.ConsoleRegistryUnavailable):
+        registry.publish_status_snapshot("run-A", {"run_id": "run-A"}, ttl_seconds=45)
+
+
+def test_snapshot_ops_tolerate_unavailable(fake_client):
+    """读取/续期/删除在注册表不可用时不抛（best-effort 路径）。"""
+    fake_client.fail = True
+    assert registry.read_status_snapshot("run-A") is None
+    assert registry.refresh_status_ttl("run-A", ttl_seconds=45) is False
+    registry.delete_status_snapshot("run-A")  # 不抛
