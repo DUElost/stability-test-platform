@@ -1,7 +1,7 @@
 # ADR-0027: 控制面水平扩展（Leader Election + 多实例）
 
 - 状态：Accepted（P3-1 / P3-2 / P3-3 代码已落地；生产多实例仍为 **opt-in**，见 ADR-0025 D1）
-- 版本记录：v1.1（2026-09-08）leadership 失败策略 fail-open → 按 deployment 形态分级（R01-F10/#890）/ v1.2（2026-09-11）多实例清单增补 RunConsole 单实例约束（#1114，R11-F06）/ v1.3（2026-09-11）「可不 sticky」加 transport 前提：Agent websocket-only（#1121，R11-F13）/ v1.4（2026-09-13）新增 RunConsole 归属注册表 P3-4（P1：全局 run_key 互斥 + owner 登记，#1737） / v1.5（2026-09-13）P3-4 **P2**：状态快照落地——跨实例 status/订阅校验生效，剩余限制收窄为 cancel/read_log（#1737） / v1.6（2026-09-13）P3-4 **P3**：跨实例 cancel 转发（请求位 + 有界等待 ack），剩余限制收窄为 read_log（#1737）
+- 版本记录：v1.1（2026-09-08）leadership 失败策略 fail-open → 按 deployment 形态分级（R01-F10/#890）/ v1.2（2026-09-11）多实例清单增补 RunConsole 单实例约束（#1114，R11-F06）/ v1.3（2026-09-11）「可不 sticky」加 transport 前提：Agent websocket-only（#1121，R11-F13）/ v1.4（2026-09-13）新增 RunConsole 归属注册表 P3-4（P1：全局 run_key 互斥 + owner 登记，#1737） / v1.5（2026-09-13）P3-4 **P2**：状态快照落地——跨实例 status/订阅校验生效，剩余限制收窄为 cancel/read_log（#1737） / v1.6（2026-09-13）P3-4 **P3**：跨实例 cancel 转发（请求位 + 有界等待 ack），剩余限制收窄为 read_log（#1737） / v1.7（2026-09-13）P3-4 **P4**：跨实例日志 replay（文件源 + 共享 log_root 前提 + `replay_unavailable` 显式化），#1737 分阶段全部落地
 - 优先级：P2
 - 目标里程碑：M6
 - 日期：2026-07-20
@@ -73,7 +73,7 @@ ADR-0026 将 P3 标为远期方向：
 - **默认**：仍推荐单进程；未开 adapter / 未开 leader election 时行为与历史一致。
 - SAQ in-process worker 仍可每实例各跑一个（共享 Redis 队列，由 SAQ 本身去重消费）；`STP_ENABLE_INPROCESS_SAQ=0` + 外部 worker 仍是可选拓扑。
 
-### P3-4（P1+P2+P3 已落地 / P4 在途）：RunConsole 归属注册表（#1737）
+### P3-4（P1–P4 已落地）：RunConsole 归属注册表（#1737）
 
 - 模块：`backend/realtime/console_registry.py`——**同步** Redis 客户端（`RunConsole` 是
   同步线程模型，且会被事件循环线程直接调用；`run_coroutine_threadsafe` 桥接会在循环
@@ -88,15 +88,15 @@ ADR-0026 将 P3 标为远期方向：
     RUNNING」不变量；纯瞬态错误（`unavailable`）仅告警、等下个 tick，不误杀；
   - **owner 失联**：TTL 过期后 `run_key` 自动可再获取（失联窗口 ≤ TTL）。
 - **P3（cancel 转发，v1.6）**：请求方 `SET stp:console:cancelreq:<run_id>`（带 `requested_at` 指纹）→ owner 的 **control tick（默认 1s）** 消费并执行本地取消语义 → 回写 `stp:console:cancelack:<run_id>`（同指纹）；请求方有界等待（默认 3s，`STP_RUN_CONSOLE_CANCEL_WAIT_SECONDS`），超时/注册表不可用 **fail-closed**（绝不假装成功）。等待发生在**线程池/定时器线程**（同步路由）；事件循环内的调用方（`ai_assistant.cancel_action`）经 `asyncio.to_thread`，不阻塞循环。
-- 分阶段：**P1 全局互斥 + owner 登记** → **P2 `status()` / 订阅校验走共享状态** →
-  **P3 `cancel` 请求位 + owner 消费（本次）** → P4 `read_log` 跨实例评估（是否引入控制面间 RPC 另议）。
+- **P4（跨实例 replay，v1.7）**：**不引入 RPC 与日志外置**（评估结论见 design 草案 §6）——`read_log` 的既有文件回退即 replay 源（每行落盘、文件行号=seq），跨实例读取的**部署前提是 `STP_RUN_CONSOLE_LOG_ROOT` 对各实例可见**；status 由 P2 快照补全；文件缺失/落后于 owner 快照 seq 时返回 `replay_unavailable: true` + 告警。
+- 分阶段：**P1 全局互斥 + owner 登记** → **P2 状态快照** → **P3 cancel 转发** → **P4 跨实例 replay（本次）**——#1737 分阶段全部落地。
 
 ## 生产多实例检查清单（opt-in）
 
 1. `STP_SCHEDULER_LEADER_ELECTION=1`（默认）
 2. `STP_SOCKETIO_REDIS_ADAPTER=1`
 3. `STP_AGENT_SID_REGISTRY` 保持默认（跟随 adapter）或显式 `1`；`STP_CONSOLE_REGISTRY`
-   同款（v1.4–v1.6 / P3-4，P1：互斥 + owner 登记；P2：状态快照；P3：cancel 转发）
+   同款（v1.4–v1.7 / P3-4，P1：互斥 + owner 登记；P2：状态快照；P3：cancel 转发；P4：replay）
 4. Postgres + Redis 可达；LB 可不 sticky **的条件**（v1.3 / #1121）：Agent 强制
    `transports=["websocket"]`（单条长连接=会话天然亲和）+ LB/nginx 支持 WS upgrade；
    浏览器端 WS-first，**polling 回退路径需会话 sticky**。无 sticky 的端到端 RPC
@@ -110,11 +110,11 @@ ADR-0026 将 P3 标为远期方向：
      订阅均为**单实例语义**，使用这些功能的部署禁止启用多实例（或先把相关会话 sticky
      到单实例）；跨实例 console 操作返回可诊断错误（详情含 `#1114`），启动输出
      `multi_instance_mode_enabled ... ref=#1114` WARN。
-   - **启用后**（P3-4 P1+P2+P3）：`run_key` **全局互斥**（fail-closed；确认失锁止损取消）、
-     owner 登记、**状态快照**与**cancel 转发**跨实例生效——跨实例 `status()`、`console:`
-     房间订阅校验与 `cancel()`（请求位 + 有界等待 ack，超时 fail-closed）均可用；
-     **剩余限制（P4 在途）**：跨实例 `read_log()`（日志 replay）仍查本地态——需要
-     日志跨实例回放的部署仍应保持单实例或 sticky。
+   - **启用后**（P3-4 P1–P4，**不再要求单实例**）：`run_key` **全局互斥**（fail-closed；
+     确认失锁止损取消）、owner 登记、**状态快照**、**cancel 转发**与**日志 replay**
+     跨实例生效——`status()` / `console:` 房间订阅校验 / `cancel()`（有界等待 ack，
+     超时 fail-closed）/ `read_log()`（文件源，需共享 `STP_RUN_CONSOLE_LOG_ROOT`）均可用；
+     日志目录未共享时 replay 显式返回 `replay_unavailable` + 告警（不伪装成「没有输出」）。
 
 ## 与 ADR-0025 D1 的关系
 
@@ -147,3 +147,4 @@ ADR-0026 将 P3 标为远期方向：
 | 2026-09-13 | v1.4（#1737/P3-4）：新增 RunConsole 归属注册表（`STP_CONSOLE_REGISTRY`）——**P1 已落地**：全局 `run_key` 互斥（`SET NX PX` + Lua CAS 续期/释放；获取 fail-closed；确认失锁止损取消）+ owner 登记（renew-or-rebuild）；清单第 6 条按注册表状态区分（未启用=单实例语义；启用=互斥/登记跨实例，status/cancel/read_log 为 P2/P3 剩余限制）；裁决草案 `docs/design/2026-09-13-run-console-multi-instance-ownership.md`（方向 A / 窄化自杀 / TTL 120s） |
 | 2026-09-13 | v1.5（#1737/P3-4 P2）：状态快照落地——owner 端在 start/终态/tick 发布 `stp:console:status:<run_id>`（SET EX；终态 TTL=本地终态保留期；tick 续期，丢失即重发），跨实例 `status()` 与 `console:` 房间订阅校验读快照生效；剩余限制收窄为 `cancel()` / `read_log()`；告警/404 提示按「注册表启用」分支切换口径 |
 | 2026-09-13 | v1.6（#1737/P3-4 P3）：跨实例 cancel 转发——`stp:console:cancelreq/ack` 请求位 + `requested_at` 指纹；owner 端新增 **control tick（默认 1s）** 消费请求并执行本地取消；请求方有界等待（默认 3s）超时 fail-closed；事件循环内调用方改 `asyncio.to_thread`；剩余限制收窄为 `read_log` |
+| 2026-09-13 | v1.7（#1737/P3-4 P4）：跨实例日志 replay——`read_log` 文件回退在 `STP_RUN_CONSOLE_LOG_ROOT` 共享前提下跨实例可用；status 由 P2 快照补全；文件缺失/落后显式标记 `replay_unavailable`（不伪装成「没有输出」）；评估驳回控制面间 RPC 与 Redis 日志镜像（文件即 replay 源）；清单第 6 条收口为「启用注册表后不再要求单实例」 |
