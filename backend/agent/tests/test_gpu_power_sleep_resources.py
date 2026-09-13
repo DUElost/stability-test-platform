@@ -416,3 +416,59 @@ def test_gpu_setup_v109_loop_dismisses_dialogs():
     assert "sed -E" in loop
     loop_body = loop[loop.index("i=1"):]
     assert loop_body.index("    dismiss_dialogs") < loop_body.index("am instrument")
+
+
+def _load_gpu_lib_v110():
+    import importlib.util
+    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.10")
+    sys.path.insert(0, d)
+    spec = importlib.util.spec_from_file_location("gpu_lib_v110", d + "/_lib.py")
+    lib = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(lib)
+    return lib
+
+
+def test_gpu_setup_v110_retry_uninstall_only_failed_apk(monkeypatch, tmp_path):
+    """#755：pm install 失败重试前只卸当前 APK 对应包，勿清同批其它包。"""
+    lib = _load_gpu_lib_v110()
+    apk = tmp_path / "Antutu_3D_Lite_10.2.9.apk"
+    apk.write_bytes(b"apk")
+    calls = []
+    install_attempts = {"n": 0}
+
+    def fake_adb(*args, timeout=30):
+        calls.append(args)
+        if args[0] == "push":
+            return 0, "1 file pushed", ""
+        if args[0] == "shell" and args[1].startswith("pm install"):
+            install_attempts["n"] += 1
+            if install_attempts["n"] == 1:
+                return 1, "Failure [INSTALL_FAILED]", ""
+            return 0, "Success", ""
+        if args[0] == "shell" and args[1].startswith("pm uninstall"):
+            return 0, "Success", ""
+        if args[0] == "shell" and args[1].startswith("rm "):
+            return 0, "", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(lib, "adb", fake_adb)
+    rc, out = lib._install_apk_stable(apk)
+    assert rc == 0 and "Success" in out
+    uninstalls = [c[1] for c in calls if c[0] == "shell" and c[1].startswith("pm uninstall")]
+    assert uninstalls == [f"pm uninstall {lib._ANTUTU_LITE_PKG}"]
+    # FULL 是 LITE 包名的前缀，不能用 substring；断言未单独卸 FULL
+    assert f"pm uninstall {lib._ANTUTU_FULL_PKG}" not in uninstalls
+
+
+def test_gpu_setup_v110_retry_uninstall_map():
+    """#755：APK 文件名 → 重试卸载包映射。"""
+    lib = _load_gpu_lib_v110()
+    assert lib._retry_uninstall_pkgs_for_apk(Path("antutu_benchmark_v10_3d.apk")) == (
+        lib._ANTUTU_FULL_PKG,
+    )
+    assert lib._retry_uninstall_pkgs_for_apk(Path("scripts-debug.apk")) == (lib._HOST_PKG,)
+    assert lib._retry_uninstall_pkgs_for_apk(Path("scripts-debug-androidTest.apk")) == (
+        lib._HOST_TEST_PKG,
+    )
+    assert lib._retry_uninstall_pkgs_for_apk(Path("unknown.apk")) == ()
