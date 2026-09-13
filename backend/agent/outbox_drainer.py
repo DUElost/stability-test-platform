@@ -213,8 +213,21 @@ class OutboxDrainThread:
                             job_id, current,
                         )
                 elif status_code == 404:
-                    self._local_db.ack_terminal(job_id)
-                    logger.warning("outbox_drain_job_gone job=%d", job_id)
+                    # #764：404 有两种语义，必须分开——中心明确 `job not found`
+                    # （`/complete` 给出 detail 字符串，agent_api.py）说明 job
+                    # 已不存在，终态无需再送；未知路由（部署错位/代理打错路径，
+                    # FastAPI 默认 {"detail":"Not Found"}）若也 ack，会**静默
+                    # 丢弃终态事实**，此处复用 409 unstructured 分支的策略。
+                    if self._is_job_not_found(e.response):
+                        self._local_db.ack_terminal(job_id)
+                        logger.warning("outbox_drain_job_gone job=%d", job_id)
+                    else:
+                        self._retain_or_dead_letter(
+                            job_id, str(e), reason="unstructured_404",
+                        )
+                        logger.warning(
+                            "outbox_drain_unstructured_404_retained job=%d", job_id,
+                        )
                 elif status_code in self._TRANSIENT_HTTP_STATUSES:
                     # #1551：408/429 按 HTTP 语义可重试 → 与 5xx 同口径，不判永久、
                     # 不进死信。429 额外按 Retry-After 退避（缺失/非法则沿用
@@ -271,6 +284,41 @@ class OutboxDrainThread:
         except ValueError:
             return 0.0
         return seconds if seconds > 0 else 0.0
+
+    @staticmethod
+    def _is_job_not_found(response) -> bool:
+        """404 body 是否为「job 不存在」语义（#764）。
+
+        FastAPI 对未知路由同样返回 404（``{"detail": "Not Found"}``）——不区分
+        就会把「部署错位」当成「job 已消失」静默 ack 掉终态事实。只认明确形态：
+        字符串 detail == ``job not found``（``/complete`` 的实际形态），或结构化
+        ``code`` ∈ {JOB_NOT_FOUND, JOB_GONE}（含 detail/error 两处承载位置）。
+        """
+        if response is None:
+            return False
+        try:
+            body = response.json()
+        except Exception:
+            return False
+        if not isinstance(body, dict):
+            return False
+
+        def _code_matches(code) -> bool:
+            return str(code or "").strip().upper() in {"JOB_NOT_FOUND", "JOB_GONE"}
+
+        detail = body.get("detail")
+        if isinstance(detail, str) and detail.strip().lower() == "job not found":
+            return True
+        if isinstance(detail, dict):
+            if _code_matches(detail.get("code")):
+                return True
+            message = detail.get("message")
+            if isinstance(message, str) and message.strip().lower() == "job not found":
+                return True
+        error = body.get("error")
+        if isinstance(error, dict) and _code_matches(error.get("code")):
+            return True
+        return False
 
     @staticmethod
     def _parse_current_status(response) -> Optional[str]:

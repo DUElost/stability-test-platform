@@ -229,3 +229,97 @@ def test_parse_retry_after(raw, expected):
     if raw is not None:
         response.headers["Retry-After"] = raw
     assert OutboxDrainThread._parse_retry_after(response) == expected
+
+
+# ── #764：404 的两种语义必须区分（job not found vs 未知路由/部署错位）──────────
+
+
+def _not_found_response(*, body: bytes | None = None) -> Response:
+    response = Response()
+    response.status_code = 404
+    response._content = body if body is not None else json.dumps(
+        {"detail": "job not found"}
+    ).encode("utf-8")
+    response.url = "http://127.0.0.1:8000/api/v1/agent/jobs/1/complete"
+    return response
+
+
+def test_404_job_not_found_still_acks(db):
+    """中心明确 job not found（/complete 的 detail 字符串）→ ack，语义不变。"""
+    db.enqueue_terminal(1, {"update": {"status": "FAILED"}})
+    drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
+
+    with patch(
+        "backend.agent.outbox_drainer.requests.post",
+        return_value=_not_found_response(),
+    ):
+        # sent 只计真实上送成功；job-gone 的 ack 走既有语义（不计 sent）
+        assert drainer._drain_once() == 0
+
+    assert db.get_pending_terminals(limit=20) == []
+    assert db.count_terminal_dead_letters() == 0
+
+
+def test_404_unknown_route_is_retained_not_acked(db):
+    """#764：未知路由 404（部署错位）不得 ack——终态事实留在 outbox。
+
+    旧行为对任何 404 无条件 ack_terminal → 静默丢弃终态事实（仅一条 WARNING）。
+    """
+    db.enqueue_terminal(1, {"update": {"status": "FAILED"}})
+    drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
+    body = json.dumps({"detail": "Not Found"}).encode("utf-8")
+
+    with patch(
+        "backend.agent.outbox_drainer.requests.post",
+        return_value=_not_found_response(body=body),
+    ):
+        assert drainer._drain_once() == 0
+
+    assert [row["job_id"] for row in db.get_pending_terminals(limit=20)] == [1]
+    assert drainer.snapshot_metrics()["conflicts_retained_total"] == 1
+
+
+def test_404_unstructured_follows_dead_letter_cap(db, monkeypatch):
+    """未知路由 404 持续存在 → 与 409 unstructured 同策略：达上限转死信（不静默丢失）。"""
+    monkeypatch.setattr(OutboxDrainThread, "_MAX_TERMINAL_ATTEMPTS", 3)
+    db.enqueue_terminal(1, {"update": {"status": "FAILED"}})
+    drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
+    body = json.dumps({"detail": "Not Found"}).encode("utf-8")
+
+    for _ in range(3):
+        with patch(
+            "backend.agent.outbox_drainer.requests.post",
+            return_value=_not_found_response(body=body),
+        ):
+            drainer._drain_once()
+
+    assert db.count_terminal_dead_letters() == 1
+    assert db.get_pending_terminals(limit=20) == []
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (b'{"detail": "job not found"}', True),
+        (b'{"detail": "Job Not Found"}', True),      # 大小写/空白容忍
+        (b'{"detail": {"code": "JOB_NOT_FOUND"}}', True),
+        (b'{"detail": {"code": "JOB_GONE", "message": "x"}}', True),
+        (b'{"detail": {"message": "job not found"}}', True),
+        (b'{"error": {"code": "JOB_NOT_FOUND"}}', True),
+        (b'{"detail": "Not Found"}', False),         # FastAPI 未知路由
+        (b'{"detail": {"code": "TERMINAL_PAYLOAD_CONFLICT"}}', False),
+        (b'{"detail": "something else"}', False),
+        (b'{"unexpected": 1}', False),
+        (b"<html>proxy error</html>", False),        # 非 JSON body
+        (b'["not", "a", "dict"]', False),
+    ],
+)
+def test_is_job_not_found_body_matrix(raw, expected):
+    response = Response()
+    response.status_code = 404
+    response._content = raw
+    assert OutboxDrainThread._is_job_not_found(response) is expected
+
+
+def test_is_job_not_found_none_response():
+    assert OutboxDrainThread._is_job_not_found(None) is False
