@@ -7,7 +7,6 @@ const handlers = {
   onEditTags: vi.fn(),
   onCopySerials: vi.fn(),
   onExport: vi.fn(),
-  onViewMetrics: vi.fn(),
   onClear: vi.fn(),
 };
 
@@ -41,26 +40,8 @@ describe('DeviceBulkActionBar', () => {
     expect(screen.getByTestId('device-bulk-action-bar')).toHaveClass('fixed', 'bottom-4');
     expect(screen.getByText('空闲 1 · 离线 1')).toBeInTheDocument();
     expect(screen.getByTestId('device-bulk-tags')).toBeInTheDocument();
-    expect(screen.getByTestId('device-bulk-metrics')).toBeDisabled();
     fireEvent.click(screen.getByTestId('device-select-all-filtered'));
     expect(onSelectAllFiltered).toHaveBeenCalledOnce();
   });
 
-  it('enables metrics for a single selected device', () => {
-    const onViewMetrics = vi.fn();
-    render(
-      <DeviceBulkActionBar
-        selectedCount={1}
-        filteredCount={1}
-        selectedFilteredCount={1}
-        {...handlers}
-        onViewMetrics={onViewMetrics}
-      />,
-    );
-
-    const metrics = screen.getByTestId('device-bulk-metrics');
-    expect(metrics).not.toBeDisabled();
-    fireEvent.click(metrics);
-    expect(onViewMetrics).toHaveBeenCalledOnce();
-  });
 });

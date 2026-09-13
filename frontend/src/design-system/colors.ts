@@ -68,7 +68,8 @@ export const CHART_COLORS = {
   info: 'hsl(199, 89%, 48%)',              // --info
   muted: 'hsl(215.4, 16.3%, 46.9%)',       // --muted-foreground
 
-  // 渐变色板（用于多系列图表）；第 6 色保留 —— DeviceMetricsChart 直取 palette[5]
+  // 渐变色板（用于多系列图表）；第 6 色保留 —— 原由 DeviceMetricsChart 直取 palette[5]，
+  // 该幽灵图表已随 #734 删除，色位暂不回收以免既有图表配色漂移
   palette: [
     'hsl(217, 91%, 60%)',   // 蓝
     'hsl(142, 71%, 45%)',   // 绿
