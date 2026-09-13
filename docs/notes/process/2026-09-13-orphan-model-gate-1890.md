@@ -24,7 +24,7 @@ Class: process
   → **8 gates**；`ci.yml` lint job 新增「孤立 ORM 模型检查」step；
   `GATE_TO_CI_ANCHOR` 登记（S5x 治理面校验通过）；`--self-test` 红绿双向自证。
 
-**C｜复核指引**（`docs/notes/README.md` 新增「复核指引」节）：验证「迁移已删除 X」
+**C｜复核指引**（已由并行 PR 落地于 `main`，本 PR 不再重复）：验证「迁移已删除 X」
 时必须确认语句位于 `upgrade()` 而非 `downgrade()`——#1754 的「已先行完成」误判
 即把 `f4a5b6c7d8e9.downgrade()` 里的 `op.drop_table("action_template")` 当成了
 forward 迁移；给出判据（看所在函数段，必要时 `alembic current` + `\d <table>`
