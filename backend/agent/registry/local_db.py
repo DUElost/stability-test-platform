@@ -146,6 +146,7 @@ class LocalDB:
         """)
         self._ensure_step_trace_schema()
         self._ensure_log_signal_outbox_schema()
+        self._restore_intent_signal_sequences()
         self._ensure_dle_register_outbox_schema()
         self._ensure_terminal_outbox_schema()
         self._ensure_active_job_registry_schema()
@@ -782,16 +783,66 @@ class LocalDB:
     # ------------------------------------------------------------------
 
     def next_log_signal_seq_no(self, job_id: int) -> int:
-        """返回该 job 下一个可用 seq_no（即 MAX(seq_no)+1；空则返回 1）。
-
-        Agent 崩溃/重启后，SignalEmitter 用此方法恢复单调 seq_no，避免冲突。
-        """
+        """只读预览下一序号；实际分配必须调用 reserve_log_signal_seq_no。"""
         with self._lock:
             row = self._conn.execute(
-                "SELECT COALESCE(MAX(seq_no), 0) AS m FROM log_signal_outbox WHERE job_id = ?",
-                (job_id,),
+                "SELECT COALESCE(MAX(seq_no), 0) AS high_water FROM ("
+                "SELECT seq_no FROM log_signal_outbox WHERE job_id = ? UNION ALL "
+                "SELECT CAST(value AS INTEGER) FROM agent_state WHERE key = ?)",
+                (job_id, f"log_signal_seq:{job_id}"),
             ).fetchone()
-        return int(row["m"]) + 1 if row else 1
+        return int(row["high_water"]) + 1
+
+    def reserve_log_signal_seq_no(self, job_id: int) -> int:
+        """原子持久化预留序号；覆盖重启、多个 emitter 与独立 SQLite 连接。"""
+        key = f"log_signal_seq:{job_id}"
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO agent_state (key, value) "
+                    "SELECT ?, CAST(COALESCE(MAX(seq_no), 0) + 1 AS TEXT) "
+                    "FROM log_signal_outbox WHERE job_id = ? "
+                    "ON CONFLICT(key) DO UPDATE SET value = CAST(MAX("
+                    "CAST(agent_state.value AS INTEGER) + 1, CAST(excluded.value AS INTEGER)) AS TEXT)",
+                    (key, job_id),
+                )
+                row = self._conn.execute("SELECT value FROM agent_state WHERE key = ?", (key,)).fetchone()
+                return int(row["value"])
+
+    def _advance_log_signal_sequence(self, job_id: int, seq_no: int) -> None:
+        self._conn.execute(
+            "INSERT INTO agent_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = CAST(MAX("
+            "CAST(agent_state.value AS INTEGER), CAST(excluded.value AS INTEGER)) AS TEXT)",
+            (f"log_signal_seq:{job_id}", str(seq_no)),
+        )
+
+    def _restore_intent_signal_sequences(self) -> None:
+        """升级兼容：旧意图已预分配但尚未入 outbox 的序号也必须保留。"""
+        rows = self._conn.execute(
+            "SELECT value FROM agent_state WHERE key LIKE '%:emit_intents'",
+        ).fetchall()
+        with self._conn:
+            for row in rows:
+                try:
+                    intents = json.loads(row["value"])
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(intents, dict):
+                    continue
+                for record in intents.values():
+                    if not isinstance(record, dict):
+                        continue
+                    envelope = record.get("signal_envelope")
+                    if not isinstance(envelope, dict):
+                        continue
+                    try:
+                        job_id = int(envelope["job_id"])
+                        seq_no = int(record["seq_no"])
+                    except (KeyError, ValueError, TypeError):
+                        continue
+                    if job_id > 0 and seq_no > 0:
+                        self._advance_log_signal_sequence(job_id, seq_no)
 
     def enqueue_log_signal(
         self,
@@ -808,6 +859,7 @@ class LocalDB:
         raw = json.dumps(envelope, ensure_ascii=False)
         with self._lock:
             with self._conn:
+                self._advance_log_signal_sequence(job_id, seq_no)
                 cur = self._conn.execute(
                     """
                     INSERT OR IGNORE INTO log_signal_outbox

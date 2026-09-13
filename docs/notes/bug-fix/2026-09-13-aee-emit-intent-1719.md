@@ -41,7 +41,22 @@ Class: bug-fix
 + 后端 `ON CONFLICT DO NOTHING`）；DLE = 预分配 UUID（后端按 id upsert，
 #1051/R09-R01 保证同 key 可安全重放）。
 
+**#1823 序号分配闭环（最近 7 天审计 F02）**：只从 outbox 恢复内存计数器
+不能覆盖「keys 已持久化、尚未 enqueue」的崩溃窗口。`prepare` 改为在
+LocalDB `agent_state` 的 `log_signal_seq:{job_id}` 原子预留高水位，再返回
+envelope；仍不创建 outbox 行、不产生网络效果。SQLite 单条 upsert 与事务
+保证多个 emitter/连接的预留互斥；允许未使用序号形成空洞，不允许复用。
+`enqueue` 在同一事务推进 envelope 原 Job 的高水位，重放不影响当前 Job。
+
+LocalDB 初始化扫描旧 `:emit_intents`，保留尚未进入 outbox 的已分配 keys
+（包括仍未清理的 done 记录），避免升级后先到的新信号抢占旧键。新分配取
+持久预留与 outbox 最大值，outbox 裁剪或重启不会回退。无需控制面迁移，
+不改变 signal / DLE 的既有幂等键与跨 Job 归属。
+
 ## Alternatives
+
+- **只在 replay enqueue 后抬升内存计数器**——#1823 否决：重启后新事件可先于
+  sweep 到达；必须在 prepare 返回前持久化预留，并恢复旧版本留下的 keys。
 
 - **回退 #1687 的顺序（emit 先、processed 后）**——重复窗口回归，否；
 - **把 outbox 写入与 processed 状态收敛进同一 SQLite 事务**——回调链里
@@ -56,6 +71,19 @@ Class: bug-fix
   `_handle_new_entry`，其窗口一致，必须同覆盖。
 
 ## Verification
+
+#1823 本次实际运行：
+
+- `python -m pytest backend/agent/tests/test_emitter.py backend/agent/tests/test_local_db_watcher.py backend/agent/tests/test_aee_emit_intent_1719.py -q`
+  → **53 passed**；覆盖关闭/重开 SQLite 后先重放或先发新事件、并发独立连接、
+  旧意图迁移、跨 Job 高水位隔离与无 outbox 时的预留保留。
+- 变更 Python 文件 Ruff → 通过。
+- `python -m pytest backend/agent/tests/ -q` → **1873 passed**；全量首轮发现
+  `next_seq_preview` 仍引用旧计数器，修正为持久高水位后重跑通过。
+- `python scripts/run_gates.py check:quick` → **7 gates 通过**；测试进程清除
+  生产 DB 变量，使用 Agent fixture 的隔离占位配置。
+
+以下为 #1719 历史证据（不代表本次重跑）：
 
 （worktree `/tmp/stp-1719`，基于 `origin/main`）
 
