@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.api.schemas import JiraDraftListItemOut, JiraDraftOut, RunReportOut, RunStepOut
@@ -229,17 +229,20 @@ def list_recent_jira_drafts(
     ``1 + N + Σ(每个 Run 的全部 Job)`` 次串行 404（单体 Run 可达设备数量级）。
     本端点一次查询给出 Job 域草稿及其 PlanRun 归属，调用方无需自算扇出。
 
-    「已落草稿」判据是 ``post_processed_at IS NOT NULL`` + 取值非空，而不是
-    ``jira_draft_json IS NOT NULL``：SQLAlchemy 的 JSONB 默认
-    ``none_as_null=False``，Python ``None`` 落库是 JSON ``null`` 而非 SQL NULL，
-    ``IS NOT NULL`` 对只有时间戳、没有草稿的行同样成立。post_completion 两列
-    同时写，故以 post_processed_at 作缓存标记，取值真值在物化时兜底。
+    「已落草稿」判据在 SQL 侧下推为 ``jsonb_typeof(jira_draft_json) == 'object'``
+    （#1696）：SQL NULL 与 JSON ``null``（``none_as_null=False`` 下显式 None 的
+    落库形态）的 typeof 都不是 ``object``，一个判据同时排除两者。此前以
+    ``post_processed_at IS NOT NULL`` 作判据、Python 侧再过滤取值，但草稿
+    生成在 post_completion 中是 try/except、时间戳无条件写（报告缓存刷新也
+    只动时间戳）——「有时间戳无草稿」的行真实存在，先 LIMIT 后过滤会让它们
+    吃掉名额、静默少返回。
     """
     from backend.models.job import JobInstance
 
     jobs = db.execute(
         select(JobInstance)
         .where(JobInstance.post_processed_at.is_not(None))
+        .where(func.jsonb_typeof(JobInstance.jira_draft_json) == "object")
         .order_by(JobInstance.post_processed_at.desc())
         .limit(limit)
     ).scalars().all()
@@ -253,7 +256,6 @@ def list_recent_jira_drafts(
             post_processed_at=job.post_processed_at,
         )
         for job in jobs
-        if job.jira_draft_json
     ])
 
 

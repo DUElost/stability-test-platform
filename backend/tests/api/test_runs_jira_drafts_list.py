@@ -130,6 +130,53 @@ class TestRecentJiraDraftsList:
         assert limited.status_code == 200, limited.text
         assert [item["job_id"] for item in limited.json()["data"]] == [newer.id]
 
+    def test_draft_less_rows_do_not_consume_limit(
+        self, client, auth_headers, db_session, sample_plan_run, sample_device, sample_host,
+    ):
+        """#1696：「有时间戳无草稿」的行不吃 limit 名额。
+
+        post_completion 里草稿生成 try/except、post_processed_at 无条件写，
+        报告缓存刷新也只动时间戳——SQL NULL（草稿从未赋值）与 JSON null
+        （显式 None）两种无草稿行都真实存在。判据未下推 SQL 时，这类行按
+        post_processed_at 排序挤进 limit、再被 Python 过滤丢弃，返回条数
+        静默少于 limit 甚至为空。
+        """
+        now = datetime.now(timezone.utc)
+        second_device = _extra_device(db_session, sample_host, "test-device-1696")
+        third_device = _extra_device(db_session, sample_host, "test-device-1696-b")
+        # SQL NULL 形态：草稿生成失败 → 列从未赋值
+        sql_null_draft = JobInstance(
+            plan_run_id=sample_plan_run.id,
+            plan_id=sample_plan_run.plan_id,
+            device_id=second_device.id,
+            host_id=second_device.host_id,
+            status="COMPLETED",
+            pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},
+            started_at=now,
+            ended_at=now,
+            created_at=now,
+            updated_at=now,
+            post_processed_at=now,
+        )
+        db_session.add(sql_null_draft)
+        # JSON null 形态：显式 None（none_as_null=False）
+        _seed_job(
+            db_session, plan_run=sample_plan_run, device=third_device, when=now,
+            draft=None,
+        )
+        older_cached = _seed_job(
+            db_session, plan_run=sample_plan_run, device=sample_device,
+            when=now - timedelta(hours=1),
+        )
+        db_session.commit()
+
+        resp = client.get("/api/v1/runs/jira-drafts?limit=1", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        items = resp.json()["data"]
+
+        assert [item["job_id"] for item in items] == [older_cached.id]
+        assert all(item["draft"] for item in items)
+
     def test_limit_is_bounded(self, client, auth_headers):
         """越界 limit 被 FastAPI 校验挡下，不会退化成无界查询。"""
         resp = client.get("/api/v1/runs/jira-drafts?limit=0", headers=auth_headers)
