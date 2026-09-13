@@ -85,9 +85,9 @@ describe('refreshAccessToken — 单飞行防抖 (审计 Frontend #5)', () => {
       undefined,
       expect.objectContaining({ withCredentials: true }),
     );
-    expect(r1).toBe(true);
-    expect(r2).toBe(true);
-    expect(r3).toBe(true);
+    expect(r1).toBe('recovered');
+    expect(r2).toBe('recovered');
+    expect(r3).toBe('recovered');
   });
 
   it('subsequent call after in-flight resolves issues a fresh POST', async () => {
@@ -128,13 +128,13 @@ describe('refreshAccessToken — 单飞行防抖 (审计 Frontend #5)', () => {
     vi.doMock('axios', () => ({ default: { post: postSpy } }));
 
     const { refreshAccessToken } = await import('@/utils/auth');
-    expect(await refreshAccessToken()).toBe(false); // 超时 → 失败
-    expect(await refreshAccessToken()).toBe(true); // 已释放 → 可立即重试
+    expect(await refreshAccessToken()).toBe('transient'); // 超时 → 瞬时失败
+    expect(await refreshAccessToken()).toBe('recovered'); // 已释放 → 可立即重试
     expect(postSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('returns false when cookie refresh fails', async () => {
-    const postSpy = vi.fn().mockRejectedValue(new Error('401'));
+  it('returns rejected when cookie refresh gets HTTP 401', async () => {
+    const postSpy = vi.fn().mockRejectedValue({ response: { status: 401 } });
     vi.doMock('axios', () => ({ default: { post: postSpy } }));
     Object.defineProperty(window, 'location', {
       writable: true,
@@ -144,8 +144,16 @@ describe('refreshAccessToken — 单飞行防抖 (审计 Frontend #5)', () => {
     const { refreshAccessToken } = await import('@/utils/auth');
     const result = await refreshAccessToken();
 
-    expect(result).toBe(false);
+    expect(result).toBe('rejected');
     expect(postSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns transient on 5xx refresh failure (#703 overload)', async () => {
+    const postSpy = vi.fn().mockRejectedValue({ response: { status: 503 } });
+    vi.doMock('axios', () => ({ default: { post: postSpy } }));
+
+    const { refreshAccessToken } = await import('@/utils/auth');
+    expect(await refreshAccessToken()).toBe('transient');
   });
 });
 
@@ -185,7 +193,7 @@ describe('refreshAccessToken — 跨标签锁 (#1039)', () => {
       expect(postSpy).not.toHaveBeenCalled();
 
       release();
-      await expect(pending).resolves.toBe(true);
+      await expect(pending).resolves.toBe('recovered');
       expect(postSpy).toHaveBeenCalledTimes(1);
       expect(request).toHaveBeenCalledWith('stp:auth:refresh', expect.any(Function));
     } finally {
@@ -207,8 +215,8 @@ describe('refreshAccessToken — 跨标签锁 (#1039)', () => {
       const { refreshAccessToken } = await import('@/utils/auth');
       const [r1, r2] = await Promise.all([refreshAccessToken(), refreshAccessToken()]);
 
-      expect(r1).toBe(true);
-      expect(r2).toBe(true);
+      expect(r1).toBe('recovered');
+      expect(r2).toBe('recovered');
       expect(postSpy).toHaveBeenCalledTimes(1);
       expect(request).toHaveBeenCalledTimes(1);
     } finally {

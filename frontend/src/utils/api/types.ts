@@ -361,21 +361,6 @@ export interface ActivityResponse {
   hours: number;
 }
 
-export interface DeviceMetricPoint {
-  timestamp: string;
-  battery_level: number | null;
-  temperature: number | null;
-  network_latency: number | null;
-  cpu_usage: number | null;
-  mem_used: number | null;
-}
-
-export interface DeviceMetricsResponse {
-  device_id: number;
-  points: DeviceMetricPoint[];
-  hours: number;
-}
-
 export interface CompletionTrendPoint {
   date: string;
   passed: number;
@@ -869,10 +854,28 @@ export interface ScriptUsageProject {
   versions_used: ScriptUsageVersionUsed[];
 }
 
+export interface ScriptUsageVersionProject {
+  project_key: string;
+  run_count: number;
+  success_count: number;
+  success_rate: number;
+}
+
+/** #706：版本级执行事实（退役判据的运行侧；只含窗口内有执行的版本）。 */
+export interface ScriptUsageVersion {
+  script_version: string;
+  run_count: number;
+  success_count: number;
+  success_rate: number;
+  project_count: number;
+  projects: ScriptUsageVersionProject[];
+}
+
 export interface ScriptUsage {
   script_id: number;
   days: number;
   projects: ScriptUsageProject[];
+  versions: ScriptUsageVersion[];
 }
 
 export interface PipelineStep {

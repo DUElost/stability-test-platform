@@ -20,6 +20,7 @@ import {
   Loader2,
   Check,
   CheckCheck,
+  MailOpen,
   AlertCircle,
   AlertTriangle,
   Info,
@@ -588,14 +589,14 @@ function NotificationLogsTab() {
     qc.invalidateQueries({ queryKey: ['notification-unread-count'] });
   };
 
-  const handleMarkRead = async (id: number) => {
+  const handleSetRead = async (id: number, read: boolean) => {
     setMarkingId(id);
     try {
-      await api.notifications.markRead(id);
+      await api.notifications.markRead(id, read);
       qc.invalidateQueries({ queryKey: ['notification-logs'] });
       qc.invalidateQueries({ queryKey: ['notification-unread-count'] });
     } catch (error) {
-      toast.error(`标记已读失败: ${toApiError(error).message}`);
+      toast.error(`标记${read ? '已读' : '未读'}失败: ${toApiError(error).message}`);
     } finally {
       setMarkingId(null);
     }
@@ -657,11 +658,22 @@ function NotificationLogsTab() {
                             <button
                               type="button"
                               disabled={markingId === log.id}
-                              onClick={() => void handleMarkRead(log.id)}
+                              onClick={() => void handleSetRead(log.id, true)}
                               className={cn('inline-flex items-center gap-1 text-xs', INTERACTIVE.iconButton)}
                               aria-label={`标记已读：${log.title}`}
                             >
                               <Check size={12} /> 标为已读
+                            </button>
+                          )}
+                          {log.read && (
+                            <button
+                              type="button"
+                              disabled={markingId === log.id}
+                              onClick={() => void handleSetRead(log.id, false)}
+                              className={cn('inline-flex items-center gap-1 text-xs', INTERACTIVE.iconButton)}
+                              aria-label={`标记未读：${log.title}`}
+                            >
+                              <MailOpen size={12} /> 标为未读
                             </button>
                           )}
                           {target && (

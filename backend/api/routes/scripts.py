@@ -688,10 +688,80 @@ class ScriptUsageProjectOut(BaseModel):
     versions_used: List[ScriptVersionUsedOut] = []
 
 
+class ScriptUsageVersionProjectOut(BaseModel):
+    project_key: str
+    run_count: int = 0
+    success_count: int = 0
+    success_rate: float = 0.0
+
+
+class ScriptUsageVersionOut(BaseModel):
+    """#706：版本级执行事实（退役判据的「运行使用」侧）。"""
+
+    script_version: str
+    run_count: int = 0
+    success_count: int = 0
+    success_rate: float = 0.0
+    project_count: int = 0
+    projects: List[ScriptUsageVersionProjectOut] = []
+
+
 class ScriptUsageOut(BaseModel):
     script_id: int
     days: int
     projects: List[ScriptUsageProjectOut] = []
+    versions: List[ScriptUsageVersionOut] = []
+
+
+def _merge_script_usage_versions(exec_rows: list) -> List[ScriptUsageVersionOut]:
+    """#706：把执行事实按「版本 → 项目」再聚合一遍（与项目视角同源数据）。
+
+    只含窗口内有执行记录的版本——配置引用（plan_step）锚定的是被查询版本自身，
+    零执行版本不进本列表，恰好是退役判据需要的「近期无人跑」信号。
+    """
+    versions_map: dict[str, dict[str, dict]] = {}
+    for key, version_used, run_count, success_count in exec_rows:
+        if not key or not version_used:
+            continue
+        projects = versions_map.setdefault(version_used, {})
+        stats = projects.setdefault(key, {"run_count": 0, "success_count": 0})
+        stats["run_count"] += int(run_count or 0)
+        stats["success_count"] += int(success_count or 0)
+
+    versions: List[ScriptUsageVersionOut] = []
+    for version_used, projects in sorted(
+        versions_map.items(),
+        key=lambda item: (
+            -sum(p["run_count"] for p in item[1].values()),
+            item[0],
+        ),
+    ):
+        run_count = sum(p["run_count"] for p in projects.values())
+        success_count = sum(p["success_count"] for p in projects.values())
+        versions.append(ScriptUsageVersionOut(
+            script_version=version_used,
+            run_count=run_count,
+            success_count=success_count,
+            success_rate=round(success_count / run_count, 2) if run_count else 0.0,
+            project_count=len(projects),
+            projects=[
+                ScriptUsageVersionProjectOut(
+                    project_key=key,
+                    run_count=stats["run_count"],
+                    success_count=stats["success_count"],
+                    success_rate=(
+                        round(stats["success_count"] / stats["run_count"], 2)
+                        if stats["run_count"]
+                        else 0.0
+                    ),
+                )
+                for key, stats in sorted(
+                    projects.items(),
+                    key=lambda item: (-item[1]["run_count"], item[0]),
+                )
+            ],
+        ))
+    return versions
 
 
 def _merge_script_usage_projects(
@@ -826,4 +896,7 @@ def get_script_usage(
         config_rows=config_rows,
         exec_rows=exec_rows,
     )
-    return ok(ScriptUsageOut(script_id=script.id, days=days, projects=projects))
+    versions = _merge_script_usage_versions(exec_rows)
+    return ok(ScriptUsageOut(
+        script_id=script.id, days=days, projects=projects, versions=versions,
+    ))
