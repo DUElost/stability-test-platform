@@ -51,6 +51,15 @@ Class: feature | bug-fix | simplification | architecture | process | testing
 ## Revisit          何时应重议（可选）
 ```
 
+## 复核指引
+
+- **验证「迁移已删除 X」时，必须确认语句位于 `upgrade()` 而非 `downgrade()`**：
+  `grep drop_table`/`drop_column` 会同时命中回滚段；#1890 复盘了 `#734` 的
+  「已先行完成」误判——把 `f4a5b6c7d8e9.downgrade()` 里的
+  `op.drop_table("action_template")` 当成了 forward 迁移，导致「表级删除」存在
+  却从未落地、验收项未满足却关单。判据：看该语句所在函数段（upgrade/downgrade），
+  必要时用只读的 `alembic current` 与 `\d <table>` 交叉验证。
+
 ## 归档与废弃
 
 - 已完成且不再需要指引后续工作的 note → 移入 `archived/`，修复所有入链，冻结；
