@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -932,5 +933,82 @@ async def test_log_signals_mixed_batch_partial_accept():
             ).count() == 2
         finally:
             db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_claim_skipped_when_host_retired_and_online(caplog):
+    """#1805 ④：退役主机不认领——**且退役不改写 status，故仍可能是 ONLINE**。
+
+    这是本判据的关键分支：只靠 `status != ONLINE` 的既有检查**会漏判**（退役主机
+    状态仍是 ONLINE），必须显式读 `retired_at`（ADR-0038 D1：退役不改写 status）。
+    同时断言落下 `claim_skipped_host_retired` 可区分信号（与
+    `claim_skipped_host_maintenance` 同形），而非静默返回空。
+    """
+    seed = _seed_job_with_policy(watcher_policy=DEFAULT_WATCHER_POLICY)
+    try:
+        db = SessionLocal()
+        try:
+            host = db.get(Host, seed["host_id"])
+            assert host is not None
+            # 关键：保持 ONLINE，只置 retired_at
+            assert host.status == HostStatus.ONLINE.value
+            host.retired_at = datetime.now(timezone.utc)
+            host.retired_by = "tester"
+            host.retire_reason = "test"
+            db.commit()
+        finally:
+            db.close()
+
+        with caplog.at_level(logging.INFO):
+            async with AsyncSessionLocal() as async_db:
+                result = await claim_jobs(
+                    payload=ClaimRequest(
+                        host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+        assert result.error is None
+        assert result.data == [], "退役主机不得认领到作业"
+        assert any(
+            "claim_skipped_host_retired" in r.getMessage() for r in caplog.records
+        ), "必须落下可区分信号，而非静默返回空"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_claim_skipped_when_host_retired_and_offline(caplog):
+    """退役 + 离线：也应记为「因退役跳过」，而非被 status 分支抢先短路。
+
+    `retired_at` 检查排在 status 检查之后，故离线退役机会被 status 分支先拦；
+    本用例锁定：**只要 retired_at 非空，信号必须归因到 retired**（顺序上把
+    retired 判定前移，或至少在 status 分支内先判退役）。
+    """
+    seed = _seed_job_with_policy(watcher_policy=DEFAULT_WATCHER_POLICY)
+    try:
+        db = SessionLocal()
+        try:
+            host = db.get(Host, seed["host_id"])
+            assert host is not None
+            host.status = HostStatus.OFFLINE.value
+            host.retired_at = datetime.now(timezone.utc)
+            db.commit()
+        finally:
+            db.close()
+
+        with caplog.at_level(logging.INFO):
+            async with AsyncSessionLocal() as async_db:
+                result = await claim_jobs(
+                    payload=ClaimRequest(
+                        host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+        assert result.error is None
+        assert result.data == []
     finally:
         _cleanup_seed(seed)
