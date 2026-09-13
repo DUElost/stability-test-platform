@@ -36,7 +36,6 @@ const LIVE_QUERY_KEYS = [
   ['plan-run-jobs'],
   ['dedup-status'],
   ['host-detail'],
-  ['device-metrics'],
 ] as const;
 
 function applyStaleTimeDefaults(

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import pytest
+import json
 from datetime import datetime, timezone
 
 from backend.agent.registry.local_db import LocalDB
@@ -68,6 +69,39 @@ def test_next_seq_after_enqueue_returns_max_plus_one(db):
     assert db.next_log_signal_seq_no(1) == 6
     # 跨 job 独立计数
     assert db.next_log_signal_seq_no(2) == 1
+
+
+def test_legacy_intent_reserves_sequence_before_replay(db, tmp_path):
+    db.set_state("aee_processed:device:aee_exp:emit_intents", json.dumps({
+        "pending": {"job_id": 99, "seq_no": 12, "signal_envelope": _make_envelope(7, 12)},
+        "done": {"job_id": 7, "seq_no": 14, "signal_envelope": _make_envelope(7, 14), "done": True},
+        "unkeyed": {"job_id": 7, "seq_no": None},
+        "malformed": None,
+    }))
+    db.set_state("bad:emit_intents", "invalid-json")
+    db.close()
+    db.initialize(str(tmp_path / "agent.db"))
+
+    assert db.count_pending_log_signals() == 0
+    assert db.reserve_log_signal_seq_no(7) == 15
+    assert db.reserve_log_signal_seq_no(99) == 1
+    assert db.enqueue_log_signal(7, 12, _make_envelope(7, 12)) is not None
+    assert db.reserve_log_signal_seq_no(7) == 16
+
+
+def test_enqueued_sequence_advances_only_original_job(db):
+    assert db.reserve_log_signal_seq_no(99) == 1
+    db.enqueue_log_signal(7, 20, _make_envelope(7, 20))
+    assert db.reserve_log_signal_seq_no(7) == 21
+    assert db.reserve_log_signal_seq_no(99) == 2
+
+
+def test_reserved_sequence_survives_outbox_pruning(db):
+    assert db.reserve_log_signal_seq_no(7) == 1
+    assert db.reserve_log_signal_seq_no(7) == 2
+    db.prune_acked_log_signals(keep_recent=0)
+    assert db.next_log_signal_seq_no(7) == 3
+    assert db.reserve_log_signal_seq_no(7) == 3
 
 
 def test_get_pending_returns_all_unacked_in_order(db):
