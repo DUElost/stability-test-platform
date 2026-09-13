@@ -207,10 +207,11 @@ function _getDashSocket(): Socket {
       _authRecoveryAttempts += 1;
       socket.disconnect();
       void refreshAccessToken().then((fresh) => {
-        if (fresh) {
+        if (fresh === 'recovered') {
           socket.connect();
         } else {
           // #1279: 刷新失败（含瞬时网络故障）不再停在断开态——安排有界退避重连。
+          // #703: rejected/transient 都不在此强制登出（页面跳转由 REST 拦截器判定）。
           _notifyDashStatus('error');
           _scheduleAuthRetry(socket);
         }

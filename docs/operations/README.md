@@ -109,6 +109,12 @@ python -m backend.scripts.migration.preflight_execution_protocol
 
 契约说明：[`../design/07-execution-protocol.md`](../design/07-execution-protocol.md)。
 
+清 / 截断 `job_instance` 或整库回滚时，Agent 侧善后见：
+
+| 文档 | 用途 |
+|------|------|
+| [`control-plane-db-maintenance.md`](./control-plane-db-maintenance.md) | 清库/回滚后 Agent `job_terminal_outbox` 未 ack 与死信的判读与清理（先看中心指标，必要时才上主机） |
+
 ---
 
 ## 9. 事故复盘

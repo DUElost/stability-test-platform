@@ -36,6 +36,9 @@ describe('api module', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    // 防止上例 mockRejectedValue/mockResolvedValue 持久实现泄漏到后续用例（#703）
+    (axios.post as any).mockReset();
+    (axios.get as any).mockReset();
     // Re-import to trigger interceptor registration, then wire the auth-failure
     // handler that client.ts dispatches to on terminal 401.
     const mod = await import('./api');
@@ -153,10 +156,8 @@ describe('api module', () => {
     });
 
     it('does not invoke auth-failure handler on /register after terminal 401（#1191 冷启动公开页）', async () => {
-      // 真实冷启动：refresh 失败 → 探活失败 → 不应触发全局登出（旧实现会重定向 /login）。
-      // 用持久默认 mock：Once 队列在「公开页跳过探活」的修复路径下不会被消费，会污染后续用例。
-      (axios.post as any).mockRejectedValue(new Error('401'));
-      (axios.get as any).mockRejectedValue(new Error('401'));
+      // 真实冷启动：refresh 失败 → 公开页短路，不应触发全局登出。
+      (axios.post as any).mockRejectedValueOnce({ response: { status: 401 } });
       const error = {
         response: { status: 401 },
         config: { headers: {}, url: '/auth/me' },
@@ -178,9 +179,9 @@ describe('api module', () => {
     });
 
     it('invokes auth-failure handler after terminal 401 on a protected route', async () => {
-      // refresh 与会话探活（#1039）都失败，才落到全局登出 handler。
-      (axios.post as any).mockRejectedValueOnce(new Error('401'));
-      (axios.get as any).mockRejectedValueOnce(new Error('401'));
+      // refresh 与会话探活（#1039）都明确 401，才落到全局登出 handler。
+      (axios.post as any).mockRejectedValueOnce({ response: { status: 401 } });
+      (axios.get as any).mockRejectedValueOnce({ response: { status: 401 } });
       const error = {
         response: { status: 401 },
         config: { headers: {}, __retry: true, url: '/hosts' },
@@ -198,6 +199,25 @@ describe('api module', () => {
       }
 
       expect(mocks.authFailureHandler).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not logout when refresh fails with timeout/5xx (#703 overload)', async () => {
+      (axios.post as any).mockRejectedValueOnce(
+        Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ECONNABORTED' }),
+      );
+      const error = {
+        response: { status: 401 },
+        config: { headers: {}, url: '/hosts' },
+      };
+
+      Object.defineProperty(window, 'location', {
+        writable: true,
+        value: { pathname: '/dashboard', href: '/dashboard' },
+      });
+
+      await expect(responseRejected(error)).rejects.toBeTruthy();
+      expect(mocks.authFailureHandler).not.toHaveBeenCalled();
+      expect(axios.get).not.toHaveBeenCalled(); // transient refresh → 直接返回，不探活
     });
   });
 
@@ -244,6 +264,22 @@ describe('api module', () => {
 
       expect(instance).not.toHaveBeenCalled();
       expect(mocks.authFailureHandler).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not logout when refresh is rejected but probe times out (#703)', async () => {
+      const instance = ctx();
+      (axios.post as any).mockRejectedValueOnce({ response: { status: 401 } });
+      (axios.get as any).mockRejectedValueOnce(
+        Object.assign(new Error('timeout of 8000ms exceeded'), { code: 'ECONNABORTED' }),
+      );
+
+      await responseRejected({
+        response: { status: 401 },
+        config: { headers: {} as any, url: '/hosts' },
+      }).catch(() => {});
+
+      expect(instance).not.toHaveBeenCalled();
+      expect(mocks.authFailureHandler).not.toHaveBeenCalled();
     });
 
     it('does not loop: a second 401 on the probe replay logs out without probing again', async () => {

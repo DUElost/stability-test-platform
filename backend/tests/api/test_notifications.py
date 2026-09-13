@@ -203,3 +203,48 @@ def test_log_deliveries_404_for_missing_log(client, auth_headers):
         "/api/v1/notifications/logs/999999/deliveries", headers=auth_headers,
     )
     assert resp.status_code == 404
+
+
+# ── #626：已读 → 未读反向切换 ────────────────────────────────────────────
+
+
+def test_mark_read_accepts_explicit_unread_and_defaults_read(client, auth_headers, db_session):
+    """#626：body {read:false} 恢复未读；缺省 body 仍是「标已读」（向后兼容）。"""
+    from backend.models.notification import (
+        NotificationLog, NotificationSeverity, NotificationSource,
+    )
+
+    log = NotificationLog(
+        source=NotificationSource.PLATFORM, event_type="RUN_FAILED",
+        severity=NotificationSeverity.WARNING, title="t", message="m", context={},
+    )
+    db_session.add(log)
+    db_session.commit()
+    assert log.read is False
+
+    def read_flag() -> bool:
+        db_session.expire_all()
+        return db_session.get(NotificationLog, log.id).read
+
+    # 显式标已读
+    resp = client.patch(
+        f"/api/v1/notifications/logs/{log.id}/read",
+        json={"read": True}, headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert read_flag() is True
+
+    # 显式恢复未读（误点回退）
+    resp = client.patch(
+        f"/api/v1/notifications/logs/{log.id}/read",
+        json={"read": False}, headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert read_flag() is False
+
+    # 无 body：保持既有语义（老调用方不带 body 仍标已读）
+    resp = client.patch(
+        f"/api/v1/notifications/logs/{log.id}/read", headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert read_flag() is True
