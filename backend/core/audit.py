@@ -42,8 +42,14 @@ def record_audit(
     user_id: Optional[int] = None,
     username: Optional[str] = None,
     request: Optional[Request] = None,
+    strict: bool = False,
 ) -> Optional[AuditLog]:
-    """Record an audit log entry for a mutation operation."""
+    """Record an audit log entry for a mutation operation.
+
+    ``strict=True``：审计表缺失时**不再降级跳过**，直接抛出——供「审计是事件
+    真源、写不进去就不许改状态」的 fail-closed 路径使用（ADR-0038 D2 退役，
+    #1801）。默认 False 保持既有容错语义（缺表仅告警）。
+    """
     ip_address = _audit_client_ip(request)
 
     # AuditLog.resource_id 是 String(64),需把整型主键(job_id / plan_run_id / ...)
@@ -73,7 +79,7 @@ def record_audit(
                 or "不存在" in message
             )
         )
-        if not is_missing_audit_table:
+        if not is_missing_audit_table or strict:
             raise
 
         # 缺少 audit_logs 表时降级：仅记录告警，不阻塞主流程

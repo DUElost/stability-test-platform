@@ -248,3 +248,83 @@ def test_mark_read_accepts_explicit_unread_and_defaults_read(client, auth_header
     )
     assert resp.status_code == 200, resp.text
     assert read_flag() is True
+
+
+class TestAlertmanagerLinkContext:
+    """#625：告警 context.link 推导——annotations.link 显式优先，其次 labels
+    主机标识（host/hostname/instance，instance 剥 :port）对 host 表
+    hostname/ip 归一查找；都没有则不带 link（context 形状向后兼容）。
+    """
+
+    def _post_alert(self, client, monkeypatch, alert):
+        monkeypatch.setenv("AGENT_SECRET", "wh-test-secret")
+        return client.post(
+            "/api/v1/notifications/webhook",
+            json={"alerts": [alert]},
+            headers={"X-Agent-Secret": "wh-test-secret"},
+        )
+
+    def _latest_context(self, event_type: str) -> dict:
+        from backend.core.database import SessionLocal
+        from backend.models.notification import NotificationLog
+
+        with SessionLocal() as db:
+            row = (
+                db.query(NotificationLog)
+                .filter(NotificationLog.event_type == event_type)
+                .order_by(NotificationLog.id.desc())
+                .first()
+            )
+            assert row is not None, f"notification log {event_type} not found"
+            return row.context or {}
+
+    def test_annotations_link_passthrough(self, client, monkeypatch):
+        resp = self._post_alert(client, monkeypatch, {
+            "status": "firing",
+            "labels": {"alertname": "LinkExplicit", "severity": "warning"},
+            "annotations": {"summary": "s", "link": "/execution/plan-runs/7"},
+        })
+        assert resp.status_code == 200
+        ctx = self._latest_context("LinkExplicit")
+        assert ctx["link"] == "/execution/plan-runs/7"
+
+    def test_non_path_link_ignored(self, client, monkeypatch):
+        resp = self._post_alert(client, monkeypatch, {
+            "status": "firing",
+            "labels": {"alertname": "LinkExternal", "severity": "warning"},
+            "annotations": {"link": "https://evil.example/x"},
+        })
+        assert resp.status_code == 200
+        ctx = self._latest_context("LinkExternal")
+        assert "link" not in ctx
+
+    def test_host_label_resolves_to_hosts(self, client, monkeypatch, db_session):
+        from backend.models.enums import HostStatus
+        from backend.models.host import Host
+
+        db_session.add(Host(
+            id="h-link", hostname="agentLink",
+            status=HostStatus.ONLINE.value, ip="10.255.0.1",
+        ))
+        db_session.commit()
+        resp = self._post_alert(client, monkeypatch, {
+            "status": "firing",
+            "labels": {
+                "alertname": "DiskUsageHigh", "severity": "warning",
+                "instance": "agentLink:9100",
+            },
+            "annotations": {"summary": "disk 96%"},
+        })
+        assert resp.status_code == 200
+        ctx = self._latest_context("DiskUsageHigh")
+        assert ctx["link"] == "/hosts"
+
+    def test_unknown_identity_has_no_link(self, client, monkeypatch):
+        resp = self._post_alert(client, monkeypatch, {
+            "status": "firing",
+            "labels": {"alertname": "NoIdentity", "severity": "info"},
+            "annotations": {},
+        })
+        assert resp.status_code == 200
+        ctx = self._latest_context("NoIdentity")
+        assert "link" not in ctx

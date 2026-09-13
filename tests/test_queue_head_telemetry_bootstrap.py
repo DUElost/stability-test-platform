@@ -41,3 +41,58 @@ def test_script_bootstrap_is_cwd_independent():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "Path(__file__).resolve().parents[2]" in text
     assert "sys.path.insert" in text
+
+
+# ── #1792：NEUTRAL 必须计为「满足」，否则产出错误的人工动作指引 ──────────────
+
+REQUIRED = [
+    "lint", "CodeQL", "pr-typecheck", "pr-compileall",
+    "pr-agent-tests", "pr-migrate-empty-db",
+]
+
+
+def _load_telemetry():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("qht_under_test", SCRIPT)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["qht_under_test"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _ck(name: str, status: str, conclusion: str) -> dict:
+    return {"name": name, "status": status, "conclusion": conclusion}
+
+
+def test_neutral_conclusion_is_not_blocking():
+    """#1792：CodeQL 的 COMPLETED/NEUTRAL 不得计入 blocking。
+
+    实证：#1772 三子分析全 SUCCESS、父 check COMPLETED/NEUTRAL，在 strict=true
+    分支保护下**被 GitHub 允许合入**——即 NEUTRAL 是满足态。若本工具判它未满足，
+    会产出 REQUIRED_CHECK_FAILED + actionable:true 的错误人工指引。
+    """
+    mod = _load_telemetry()
+    checks = [_ck(n, "COMPLETED", "SUCCESS") for n in REQUIRED]
+    checks[1] = _ck("CodeQL", "COMPLETED", "NEUTRAL")
+    assert mod.blocking_checks(checks, REQUIRED) == []
+
+
+def test_transient_neutral_does_not_block():
+    """子分析在跑时的瞬态 NEUTRAL（#1775 形态）同样不得计入 blocking。"""
+    mod = _load_telemetry()
+    checks = [_ck(n, "COMPLETED", "SUCCESS") for n in REQUIRED]
+    checks[1] = _ck("CodeQL", "COMPLETED", "NEUTRAL")
+    checks[4] = _ck("pr-agent-tests", "IN_PROGRESS", "")
+    names = [b["name"] for b in mod.blocking_checks(checks, REQUIRED)]
+    assert names == ["pr-agent-tests"], names
+
+
+def test_failure_conclusion_is_still_blocking():
+    """NEUTRAL 的放行不得把真实 FAILURE 一起放过。"""
+    mod = _load_telemetry()
+    checks = [_ck(n, "COMPLETED", "SUCCESS") for n in REQUIRED]
+    checks[1] = _ck("CodeQL", "COMPLETED", "FAILURE")
+    names = [b["name"] for b in mod.blocking_checks(checks, REQUIRED)]
+    assert names == ["CodeQL"], names

@@ -876,13 +876,16 @@ class AeeDbHistoryReconciler:
                 extra=extra,
             )
             self.stats.signals_emitted += 1
-            self._register_pull_failed_device_log_event(
+            dle_payload = self._build_pull_failed_payload(
                 detected_at=detected_at,
                 event_type=resolve_device_log_event_type(event_type, event_subtype),
                 event_subtype=event_subtype,
                 aee_ts_utc=aee_ts_utc,
                 seq_no=seq_no,
+                event_id=str(uuid4()),
             )
+            if dle_payload and self._device_log_client is not None:
+                self._device_log_client.post_event_payload(dle_payload)
             logger.info(
                 "aee_reconciler_pull_failed serial=%s job=%d cat=%s pkg=%s err=%s exhausted=%s",
                 self._serial, self._job_id, category, pkg_name, error, exhausted,
