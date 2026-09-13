@@ -328,7 +328,7 @@ def test_run_script_action_timeout_uses_terminate_process_tree(monkeypatch, tmp_
         assert popen_kwargs.get(k) == v, f"Popen 缺 isolation kwarg {k}={v}"
 
     # 超时分支走 _terminate_process_tree 而不是 proc.kill
-    term.assert_called_once_with(proc)
+    term.assert_called_once_with(proc, grace_seconds=2.0)
     proc.kill.assert_not_called()
 
     assert result.success is False
