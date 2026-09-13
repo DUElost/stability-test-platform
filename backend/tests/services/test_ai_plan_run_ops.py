@@ -106,7 +106,7 @@ class TestRunTriggerArchive:
         emitted: list[tuple] = []
         monkeypatch.setattr(
             "backend.services.ai_assistant.plan_run_ops._schedule_emit_agent_control",
-            lambda host_id, command, *, payload=None: emitted.append((host_id, command)),
+            lambda host_id, command, *, payload=None: emitted.append((host_id, command)) or True,
         )
 
         summary = run_trigger_plan_run_archive(
@@ -128,6 +128,62 @@ class TestRunTriggerArchive:
         )
         assert row is not None
         assert int(row.resource_id) == pr_id
+        assert row.user_id == test_user.id  # #759：审计带 user_id
+
+    def test_dispatch_failure_is_not_reported_as_triggered(
+        self, db_session, sample_job_instance, monkeypatch, test_user,
+    ):
+        """#759：主循环不可用/入队失败不得假成功。"""
+        job = sample_job_instance
+        job.status = "COMPLETED"
+        db_session.commit()
+
+        monkeypatch.setattr(
+            "backend.services.ai_assistant.plan_run_ops._schedule_emit_agent_control",
+            lambda host_id, command, *, payload=None: False,
+        )
+        with pytest.raises(RuntimeError, match="下发失败"):
+            run_trigger_plan_run_archive(
+                db_session,
+                {"run_id": job.plan_run_id},
+                triggered_by=test_user.username,
+                requester_user_id=test_user.id,
+            )
+        # 审计仍记录失败明细
+        from backend.models.audit import AuditLog
+
+        row = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "ai_assistant_trigger_plan_run_archive")
+            .first()
+        )
+        assert row is not None
+        assert row.details.get("dispatch_failed")
+
+
+class TestRunRetryDispatchAudit:
+    def test_retry_dispatch_passes_requester_user_id(self, db_session, monkeypatch, test_user):
+        """#759：retry-dispatch 也应把发起人 user_id 透传到下游审计。"""
+        captured: dict = {}
+
+        def _fake_retry(run_id, *, db, triggered_by, audit_user_id):
+            captured.update({"run_id": run_id, "audit_user_id": audit_user_id})
+            return {"plan_run_id": run_id, "status": "QUEUED"}
+
+        monkeypatch.setattr(
+            "backend.services.ai_assistant.plan_run_ops.retry_plan_run_dispatch",
+            _fake_retry,
+        )
+        from backend.services.ai_assistant.plan_run_ops import run_retry_plan_run_dispatch
+
+        summary = run_retry_plan_run_dispatch(
+            db_session,
+            {"run_id": 77},
+            triggered_by=test_user.username,
+            requester_user_id=test_user.id,
+        )
+        assert "PlanRun #77" in summary
+        assert captured["audit_user_id"] == test_user.id
 
 
 class TestDescribeAbortPreview:
