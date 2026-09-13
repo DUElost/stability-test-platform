@@ -10,7 +10,11 @@ WorkingDirectory=<deploy-root>
 EnvironmentFile=<deploy-root>/.env.backend
 # Keep schema in sync with the running code path before the single backend instance starts.
 ExecStartPre=/bin/bash -lc 'cd <deploy-root>/backend && ../venv/bin/python -m alembic upgrade head'
-# 部署源守卫（失败仅记日志不中断——硬失败 + Restart=always 会进 start-limit 循环致生产中断）
+# #1882：schema 对齐硬门禁（无减号）——代码超前于库时拒绝启动，避免带病 500 对外服务。
+# DATABASE_URL 来自 EnvironmentFile；不对齐则本步失败（优先于带着错误 schema 启动）。
+ExecStartPre=<deploy-root>/venv/bin/python <deploy-root>/tools/dev/check_alembic_at_head.py
+# 部署源守卫（分支/脏工作树：失败仅记日志不中断——硬失败 + Restart=always
+# 会进 start-limit 循环致生产中断；schema 已由上一行硬拦）
 ExecStartPre=-<deploy-root>/tools/dev/check-deploy-source.sh
 ExecStart=<deploy-root>/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 Restart=always

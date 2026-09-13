@@ -110,16 +110,53 @@ def load_plan_run_scan_host_ids(db: Session, plan_run_id: int) -> list[str]:
     return _dedupe([*job_hosts, *prh_hosts, *target_hosts])
 
 
-def iter_plan_run_scan_hosts(db: Session, plan_run_id: int) -> list[tuple[str, str]]:
-    """``(host_id, status)`` for each scan target host. Missing host → OFFLINE."""
+def iter_plan_run_scan_hosts(db: Session, plan_run_id: int) -> list[tuple[str, str, bool]]:
+    """``(host_id, status, is_retired)`` for each scan target host.
+
+    Missing host → OFFLINE。退役标记来自 ADR-0038 的 ``Host.retired_at``：
+    历史证据集合必须可见（182d4e-R02：控制拒绝与历史收口不得共用一个
+    「隐藏主机」过滤器），是否下发由调用方按 D5 策略裁决。
+    """
     host_ids = load_plan_run_scan_host_ids(db, plan_run_id)
     if not host_ids:
         return []
     rows = db.execute(
-        select(Host.id, Host.status).where(Host.id.in_(host_ids))
+        select(Host.id, Host.status, Host.retired_at).where(Host.id.in_(host_ids))
     ).all()
-    status_by_id = {row[0]: row[1] for row in rows}
-    return [(hid, status_by_id.get(hid, "OFFLINE")) for hid in host_ids]
+    by_id = {row[0]: (row[1], row[2] is not None) for row in rows}
+    return [
+        (hid, *(by_id.get(hid, ("OFFLINE", False))))
+        for hid in host_ids
+    ]
+
+
+def classify_recycle_targets(
+    host_rows: Iterable[tuple[str, str, bool]],
+    *,
+    allow_retired: bool,
+) -> tuple[list[str], list[dict], list[dict]]:
+    """ADR-0038 D5：数据回收类（scan/archive）目标分类。
+
+    - 退役主机**允许**成为回收目标，但仅显式 admin 触发（``allow_retired=True``）；
+    - 未获准的退役主机计入 ``skipped_retired``（不虚报完整）；
+    - 其余非 ONLINE 主机计入 ``skipped_offline``。
+
+    返回 ``(targets, skipped_offline, skipped_retired)``；skipped 条目为
+    ``{"host_id", "status"}``。
+    """
+    targets: list[str] = []
+    skipped_offline: list[dict] = []
+    skipped_retired: list[dict] = []
+    for host_id, status, is_retired in host_rows:
+        if is_retired and not (allow_retired and status == "ONLINE"):
+            # 含「获准但非 ONLINE」：退役主机死机同样不可达，如实计 retired
+            skipped_retired.append({"host_id": host_id, "status": status})
+            continue
+        if status == "ONLINE":
+            targets.append(host_id)
+        else:
+            skipped_offline.append({"host_id": host_id, "status": status})
+    return targets, skipped_offline, skipped_retired
 
 
 def build_scan_now_payload(

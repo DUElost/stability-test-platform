@@ -671,9 +671,12 @@ async def cancel_action(
         from backend.services.run_console import RunConsole
 
         # #1222（R13-F10）：检查实际取消结果，不再忽略 cancel False。
-        # False = 本进程找不到该 run —— 已结束（finalize 竞速）或由其他 worker
-        # 执行（RunConsole 是进程内单例，跨进程取消需路由层，见 Agent Note）。
-        if not RunConsole.instance().cancel(action.console_run_id):
+        # False = 已结束（finalize 竞速）/ 跨实例转发未获 ack（#1737 P3：注册表
+        # 请求位 + 有界等待，超时 fail-closed）。
+        # 本路由在事件循环内，须 to_thread——cancel 的跨实例等待窗不得阻塞循环。
+        if not await asyncio.to_thread(
+            RunConsole.instance().cancel, action.console_run_id
+        ):
             db.refresh(action)
             if action.status == "running":
                 raise HTTPException(

@@ -221,3 +221,63 @@ class TestDescribeAbortPreview:
         )
         assert "RUNNING" in text
         assert "test-plan" in text
+
+
+class TestRunTriggerArchiveRetiredPolicy:
+    """ADR-0038 D5：AI 工具路径非「显式 admin 触发」——退役主机跳过并如实报告。"""
+
+    def test_ai_path_skips_retired_and_reports(
+        self, db_session, sample_plan_run, sample_plan, sample_device, sample_host, monkeypatch,
+    ):
+        from datetime import datetime, timezone
+
+        from backend.models.audit import AuditLog
+        from backend.models.enums import JobStatus
+        from backend.models.host import Device, Host
+        from backend.models.job import JobInstance
+        from backend.services.ai_assistant.plan_run_ops import run_trigger_plan_run_archive
+
+        retired = Host(
+            id="h-ai-retired", hostname="h-ai-retired", status="ONLINE",
+            retired_at=datetime.now(timezone.utc),
+        )
+        db_session.add(retired)
+        db_session.flush()
+        # uq_job_instance_plan_run_device：同一 Run 同一设备只允许一个 Job
+        retired_device = Device(
+            serial="dev-ai-retired", host_id=retired.id, status="OFFLINE",
+        )
+        db_session.add(retired_device)
+        db_session.flush()
+        for host_id, device_id in (
+            (sample_host.id, sample_device.id),
+            (retired.id, retired_device.id),
+        ):
+            db_session.add(JobInstance(
+                plan_run_id=sample_plan_run.id,
+                plan_id=sample_plan.id,
+                device_id=device_id,
+                host_id=host_id,
+                status=JobStatus.COMPLETED.value,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            ))
+        db_session.commit()
+
+        monkeypatch.setattr(
+            "backend.services.ai_assistant.plan_run_ops._schedule_emit_agent_control",
+            lambda *a, **k: True,
+        )
+        summary = run_trigger_plan_run_archive(
+            db_session, {"run_id": sample_plan_run.id}, triggered_by="tester",
+        )
+        assert "跳过 1 台退役" in summary
+
+        latest = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "ai_assistant_trigger_plan_run_archive")
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        assert latest is not None
+        assert latest.details["skipped_retired"] == [retired.id]
+        assert latest.details["triggered_hosts"] == [sample_host.id]

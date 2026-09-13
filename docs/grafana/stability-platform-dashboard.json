@@ -437,6 +437,35 @@
           "refId": "B"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 76 },
+      "id": 108,
+      "title": "PlanRun Terminalization",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "fillOpacity": 10 },
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 77 },
+      "id": 109,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "title": "Counter Drift (rate/5m) by mode",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (mode) (rate(stability_plan_run_counter_drift_total[5m]))",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "schemaVersion": 39,

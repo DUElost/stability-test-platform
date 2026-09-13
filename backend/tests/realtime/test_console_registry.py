@@ -273,3 +273,38 @@ def test_snapshot_ops_tolerate_unavailable(fake_client):
     assert registry.read_status_snapshot("run-A") is None
     assert registry.refresh_status_ttl("run-A", ttl_seconds=45) is False
     registry.delete_status_snapshot("run-A")  # 不抛
+
+
+# ── 取消转发（P3）────────────────────────────────────────────────────────────
+
+
+def test_cancel_request_roundtrip(fake_client):
+    registry.request_cancel("run-A", requested_at="t1")
+    req = registry.read_cancel_request("run-A")
+    assert req is not None
+    assert req["requested_at"] == "t1"
+    assert req["instance_id"] == registry.control_plane_instance_id()
+    assert (
+        registry.cancel_request_key("run-A"), registry.cancel_ttl_seconds(),
+    ) in fake_client.expires
+    registry.clear_cancel_request("run-A")
+    assert registry.read_cancel_request("run-A") is None
+
+
+def test_cancel_ack_requires_matching_fingerprint(fake_client):
+    registry.publish_cancel_ack("run-A", requested_at="t1", canceled=True)
+    assert registry.read_cancel_ack("run-A", requested_at="t2") is None  # 指纹不匹配
+    ack = registry.read_cancel_ack("run-A", requested_at="t1")
+    assert ack is not None
+    assert ack["canceled"] is True
+    assert ack["by"] == registry.control_plane_instance_id()
+
+
+def test_cancel_ops_tolerate_unavailable(fake_client):
+    """请求投递 fail-closed（抛）；读取/清理/ack 为 best-effort（不抛）。"""
+    fake_client.fail = True
+    with pytest.raises(registry.ConsoleRegistryUnavailable):
+        registry.request_cancel("run-A", requested_at="t1")
+    assert registry.read_cancel_request("run-A") is None
+    registry.clear_cancel_request("run-A")
+    registry.publish_cancel_ack("run-A", requested_at="t1", canceled=True)
