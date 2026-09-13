@@ -163,6 +163,17 @@ GATES = {
         ROOT,
         None,
     ),
+    # #739：agent 测试必须自闭环（约定见 backend/agent/AGENTS.md：无 DB/Redis、
+    # 不 import 控制面）。剥离全部环境变量（含 JWT_SECRET_KEY / DATABASE_URL）
+    # 后只做 --collect-only——控制面 import 链（backend/api/routes → auth →
+    # core.security 的模块级 JWT 硬检查）一旦被 agent 测试重新引入，这里秒级变红。
+    # CI 对应物=ci.yml pr-agent-tests job「Collect agent tests in clean env」step。
+    "agent-tests-collect": (
+        f'env -i PATH="$PATH" PYTHONPATH=. {PY} -m pytest '
+        "backend/agent/tests/ --collect-only -q",
+        ROOT,
+        None,
+    ),
     "agent-tests": (
         f"{PY} -m pytest backend/agent/tests/ -q",
         ROOT,
@@ -219,7 +230,7 @@ PROFILES = {
     "check:pr": [
         "ruff", "eslint", "tsc", "knip", "compileall", "layering",
         "pollution", "immutability", "invariant-diff",
-        "gov-surface", "ip-leak", "prom-alerts", "agent-tests",
+        "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
         "pr-migrate",
     ],
     # 治理面专项：结构门禁 + skill 用量探针 + Harness 摄取矩阵（手跑，分钟级）
