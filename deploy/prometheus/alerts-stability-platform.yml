@@ -124,6 +124,22 @@ groups:
             The session_watchdog APScheduler job reported errors.  Hosts may
             not be timed out correctly.  Check watchdog logs.
 
+      # #743（follow-up #729）：幽灵 `/complete` 404 风暴持续约一个月才被日志审查发现
+      # ——此前心跳已上报积压但**无告警**。标签名以注册表为准 = `type`（#743 正文写的是
+      # `outbox_type`；契约测试 tests/test_prometheus_alerts_contract.py 会拦未知标签）。
+      - alert: StabilityAgentTerminalOutboxBacklog
+        expr: stability_agent_outbox_pending{type="terminal"} > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent terminal outbox backlog not draining (30m)
+          description: >-
+            An Agent has held un-acked terminal outbox rows for 30m.  Usually the
+            centre answers 404/misroute for POST .../jobs/*/complete (the #729
+            ghost 404 storm): check centre routing first.  Before clearing any
+            centre-side job rows, read docs/operations/control-plane-db-maintenance.md.
+
   - name: stability-platform-silent-skips
     rules:
       # 稳态不该出现的桶（#518 教训：静默跳过只记日志无人盯 → 指标化）。
