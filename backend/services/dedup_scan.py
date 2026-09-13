@@ -895,14 +895,19 @@ def resolve_manual_merge_round(
         db.close()
 
 
-async def enqueue_dedup_terminal_async(plan_run_id: int, *, is_final: bool = True) -> bool:
+async def enqueue_dedup_terminal_async(
+    plan_run_id: int, *, is_final: bool = True, allow_retired: bool = False,
+) -> bool:
     """异步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。
 
     返回 True=本轮 scan_task 已在队列（新入队，或 SAQ 键去重返回 ``None`` 表示同轮
     任务已在跑——幂等成功）；False=入队失败（SAQ/Redis 不可用）。后台最佳努力调用方
     可忽略返回值；用户触发路径（#1274）必须据此区分真假成功。
+
+    ADR-0038 D5：``allow_retired=True`` 仅由显式 admin 回收触发传入；目标集不同
+    ⇒ SAQ 键追加 ``:ar`` 后缀，避免与自动轮次互相去重（策略不串台）。
     """
-    suffix = "" if is_final else ":inc"
+    suffix = ("" if is_final else ":inc") + (":ar" if allow_retired else "")
     key = f"scan:{plan_run_id}{suffix}"
     try:
         from backend.tasks.saq_worker import get_queue
@@ -912,7 +917,11 @@ async def enqueue_dedup_terminal_async(plan_run_id: int, *, is_final: bool = Tru
         result = await queue.enqueue(
             SaqJob(
                 function="scan_task",
-                kwargs={"plan_run_id": plan_run_id, "is_final": is_final},
+                kwargs={
+                    "plan_run_id": plan_run_id,
+                    "is_final": is_final,
+                    "allow_retired": allow_retired,
+                },
                 key=key,
                 timeout=900,
                 retries=2,
@@ -932,12 +941,17 @@ async def enqueue_dedup_terminal_async(plan_run_id: int, *, is_final: bool = Tru
         return False
 
 
-def enqueue_dedup_terminal_sync(plan_run_id: int, *, is_final: bool = True) -> None:
-    """同步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。"""
+def enqueue_dedup_terminal_sync(
+    plan_run_id: int, *, is_final: bool = True, allow_retired: bool = False,
+) -> None:
+    """同步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。
+
+    自动/后台路径保持 ``allow_retired=False``（退役主机留给显式 admin 触发）。
+    """
     try:
         from backend.tasks.saq_worker import enqueue_sync
 
-        suffix = "" if is_final else ":inc"
+        suffix = ("" if is_final else ":inc") + (":ar" if allow_retired else "")
         enqueue_sync(
             "scan_task",
             key=f"scan:{plan_run_id}{suffix}",
@@ -945,6 +959,7 @@ def enqueue_dedup_terminal_sync(plan_run_id: int, *, is_final: bool = True) -> N
             retries=2,
             plan_run_id=plan_run_id,
             is_final=is_final,
+            allow_retired=allow_retired,
         )
     except Exception as e:
         logger.error("enqueue_dedup_terminal_sync failed plan_run=%d: %s", plan_run_id, e)

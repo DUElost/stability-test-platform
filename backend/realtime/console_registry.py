@@ -36,13 +36,16 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 _FALSEY = frozenset({"0", "false", "False", "no", "NO", "off", "OFF"})
 _RUN_KEY_PREFIX = "stp:console:key:"
 _OWNER_KEY_PREFIX = "stp:console:owner:"
+_STATUS_KEY_PREFIX = "stp:console:status:"
+_CANCEL_REQ_PREFIX = "stp:console:cancelreq:"
+_CANCEL_ACK_PREFIX = "stp:console:cancelack:"
 _DEFAULT_TTL_SECONDS = 120
 #: 单条命令的 socket 超时（秒）——有界，避免 Redis 故障拖死调用方线程。
 _SOCKET_TIMEOUT_SECONDS = 2.0
@@ -152,6 +155,18 @@ def run_key_key(run_key: str) -> str:
 
 def owner_key(run_id: str) -> str:
     return f"{_OWNER_KEY_PREFIX}{run_id}"
+
+
+def status_key(run_id: str) -> str:
+    return f"{_STATUS_KEY_PREFIX}{run_id}"
+
+
+def cancel_request_key(run_id: str) -> str:
+    return f"{_CANCEL_REQ_PREFIX}{run_id}"
+
+
+def cancel_ack_key(run_id: str) -> str:
+    return f"{_CANCEL_ACK_PREFIX}{run_id}"
 
 
 def _run_key_payload(run_key: str, run_id: str) -> str:
@@ -323,3 +338,189 @@ def release_owner(run_id: str, *, run_key: str) -> None:
         )
     except Exception:
         logger.warning("console_registry_owner_release_failed run_id=%s", run_id, exc_info=True)
+
+
+# ── 状态快照（P2：跨实例 status / 订阅校验走共享状态）──────────────────────
+#
+# 与 owner 身份键的关键差别：``run_id`` 全局唯一，不存在「外部合法持有者」，
+# 因此快照用普通 ``SET ... EX``（后写覆盖即最新）+ ``EXPIRE`` 续期，无需
+# CAS 指纹比对（P1 的互斥键才需要）。快照失败**不得影响 run 本身**——调用方
+# （RunConsole）按 best-effort 处理，仅告警。
+
+
+def publish_status_snapshot(
+    run_id: str, snapshot: dict[str, Any], *, ttl_seconds: int
+) -> None:
+    """发布/覆盖状态快照（``SET ... EX``）。
+
+    Raises:
+        ConsoleRegistryUnavailable: 注册表不可用（调用方 best-effort 处理）。
+    """
+    client = _require_client()
+    payload = dict(snapshot)
+    payload.setdefault("instance_id", control_plane_instance_id())
+    try:
+        client.set(
+            status_key(run_id),
+            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            ex=max(30, int(ttl_seconds)),
+        )
+    except Exception as exc:
+        raise ConsoleRegistryUnavailable(f"console registry unavailable: {exc}") from exc
+
+
+def refresh_status_ttl(run_id: str, *, ttl_seconds: int) -> bool:
+    """刷新快照 TTL；键不在（被淘汰/丢失）→ ``False``，调用方应重发全文。"""
+    try:
+        client = _require_client()
+    except ConsoleRegistryUnavailable:
+        return False
+    try:
+        return bool(client.expire(status_key(run_id), max(30, int(ttl_seconds))))
+    except Exception:
+        logger.warning(
+            "console_registry_status_refresh_failed run_id=%s", run_id, exc_info=True
+        )
+        return False
+
+
+def read_status_snapshot(run_id: str) -> Optional[dict[str, Any]]:
+    """读取快照；不可用 / 不存在 / 损坏 → ``None``（调用方按未知处理）。"""
+    try:
+        client = _require_client()
+    except ConsoleRegistryUnavailable:
+        return None
+    try:
+        raw = client.get(status_key(run_id))
+    except Exception:
+        logger.warning(
+            "console_registry_status_read_failed run_id=%s", run_id, exc_info=True
+        )
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def delete_status_snapshot(run_id: str) -> None:
+    """删除快照（本地淘汰终态 run 时清理；失败仅告警，TTL 兜底）。"""
+    try:
+        client = _require_client()
+    except ConsoleRegistryUnavailable:
+        return
+    try:
+        client.delete(status_key(run_id))
+    except Exception:
+        logger.warning(
+            "console_registry_status_delete_failed run_id=%s", run_id, exc_info=True
+        )
+
+
+# ── 取消转发（P3：跨实例 cancel 请求位 + ack）──────────────────────────────
+#
+# 请求与 ack 都是 run_id 维度、无外部写者 → 普通 ``SET ... EX``（同快照语义）。
+# 请求带 ``requested_at`` 指纹：owner 的 ack 回带同一指纹，请求方**只接受自己
+# 那次请求**的结果（重试/并发不串线）。
+
+_DEFAULT_CANCEL_TTL_SECONDS = 60
+
+
+def cancel_ttl_seconds() -> int:
+    raw = os.getenv("STP_CONSOLE_CANCEL_TTL_SECONDS", str(_DEFAULT_CANCEL_TTL_SECONDS))
+    try:
+        return max(10, int(raw))
+    except ValueError:
+        return _DEFAULT_CANCEL_TTL_SECONDS
+
+
+def _read_json_key(key: str, *, what: str) -> Optional[dict[str, Any]]:
+    try:
+        client = _require_client()
+    except ConsoleRegistryUnavailable:
+        return None
+    try:
+        raw = client.get(key)
+    except Exception:
+        logger.warning("console_registry_%s_read_failed key=%s", what, key, exc_info=True)
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def request_cancel(run_id: str, *, requested_at: str) -> None:
+    """投递跨实例取消请求（owner 在下个 control tick 消费）。
+
+    Raises:
+        ConsoleRegistryUnavailable: 注册表不可用（调用方 fail-closed：不假装已取消）。
+    """
+    client = _require_client()
+    payload = json.dumps(
+        {"instance_id": control_plane_instance_id(), "requested_at": requested_at},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    try:
+        client.set(cancel_request_key(run_id), payload, ex=cancel_ttl_seconds())
+    except Exception as exc:
+        raise ConsoleRegistryUnavailable(f"console registry unavailable: {exc}") from exc
+
+
+def read_cancel_request(run_id: str) -> Optional[dict[str, Any]]:
+    """owner 侧读取取消请求（无 → None）。"""
+    return _read_json_key(cancel_request_key(run_id), what="cancel_request")
+
+
+def clear_cancel_request(run_id: str) -> None:
+    """owner 消费后清请求位（失败仅告警，TTL 兜底）。"""
+    try:
+        client = _require_client()
+    except ConsoleRegistryUnavailable:
+        return
+    try:
+        client.delete(cancel_request_key(run_id))
+    except Exception:
+        logger.warning(
+            "console_registry_cancel_req_clear_failed run_id=%s", run_id, exc_info=True
+        )
+
+
+def publish_cancel_ack(run_id: str, *, requested_at: str, canceled: bool) -> None:
+    """owner 侧回写取消结果（best-effort：失败仅告警，请求方超时 fail-closed）。"""
+    try:
+        client = _require_client()
+    except ConsoleRegistryUnavailable:
+        return
+    payload = json.dumps(
+        {
+            "requested_at": requested_at,
+            "canceled": bool(canceled),
+            "by": control_plane_instance_id(),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    try:
+        client.set(cancel_ack_key(run_id), payload, ex=cancel_ttl_seconds())
+    except Exception:
+        logger.warning(
+            "console_registry_cancel_ack_failed run_id=%s", run_id, exc_info=True
+        )
+
+
+def read_cancel_ack(run_id: str, *, requested_at: str) -> Optional[dict[str, Any]]:
+    """读取 ack；**指纹不匹配视为未到**（只接受自己那次请求的结果）。"""
+    data = _read_json_key(cancel_ack_key(run_id), what="cancel_ack")
+    if data is None:
+        return None
+    if str(data.get("requested_at") or "") != requested_at:
+        return None
+    return data

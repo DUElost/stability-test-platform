@@ -132,3 +132,78 @@ class TestArchivePlanRunLogsEndpoint:
         assert str(online_host.id) in data["triggered_hosts"]
         assert len(data["skipped_offline"]) == 1
         assert mock_emit.await_count == 2
+
+
+class TestArchiveRetiredPolicy:
+    """ADR-0038 D5：回收类退役语义（admin 显式触发 / 非 admin skipped_retired）。"""
+
+    @staticmethod
+    def _seed_run_with_retired_host(
+        db_session, sample_plan_run, sample_plan, sample_device, host,
+    ):
+        from datetime import datetime, timezone
+
+        from backend.models.enums import JobStatus
+        from backend.models.job import JobInstance
+
+        host.retired_at = datetime.now(timezone.utc)
+        db_session.add(JobInstance(
+            plan_run_id=sample_plan_run.id,
+            plan_id=sample_plan.id,
+            device_id=sample_device.id,
+            host_id=host.id,
+            status=JobStatus.COMPLETED.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        ))
+        db_session.commit()
+
+    def test_admin_triggers_retired_host(
+        self, client, admin_headers, db_session,
+        sample_plan_run, sample_plan, sample_device, sample_host,
+    ):
+        self._seed_run_with_retired_host(
+            db_session, sample_plan_run, sample_plan, sample_device, sample_host,
+        )
+        with patch(
+            "backend.realtime.socketio_server.emit_agent_control",
+            new=AsyncMock(),
+        ):
+            resp = client.post(
+                f"/api/v1/plan-runs/{sample_plan_run.id}/archive",
+                headers=admin_headers,
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert str(sample_host.id) in data["triggered_hosts"]
+        assert data["skipped_retired"] == []
+
+        from backend.models.audit import AuditLog
+
+        latest = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "plan_run_archive_scan_trigger")
+            .order_by(AuditLog.id.desc())
+            .first()
+        )
+        assert latest is not None, "回收触发必须审计"
+        assert latest.details["allow_retired"] is True
+
+    def test_non_admin_retired_host_reported_as_skipped(
+        self, client, auth_headers, db_session,
+        sample_plan_run, sample_plan, sample_device, sample_host,
+    ):
+        self._seed_run_with_retired_host(
+            db_session, sample_plan_run, sample_plan, sample_device, sample_host,
+        )
+        with patch(
+            "backend.realtime.socketio_server.emit_agent_control",
+            new=AsyncMock(),
+        ):
+            resp = client.post(
+                f"/api/v1/plan-runs/{sample_plan_run.id}/archive",
+                headers=auth_headers,
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["triggered_hosts"] == []
+        assert [r["host_id"] for r in data["skipped_retired"]] == [str(sample_host.id)]
