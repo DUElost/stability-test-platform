@@ -21,7 +21,7 @@ Class: bug-fix
 
 ## Verification
 
-**全部为真机实测**：`Z2581` / `ro.board.platform=ums9230` / Android 16 / `root_uid=0`；设备 `id=382`、host `172-21-15-77`；只读探测 + App 崩溃诱发，**未写设备任何持久配置**。
+**全部为真机实测**：`Z2581` / `ro.board.platform=ums9230` / Android 16 / `root_uid=0`；设备 `id=382`、host `172-21-x-x`；只读探测 + App 崩溃诱发，**未写设备任何持久配置**。
 
 | 项 | 结果 |
 |---|---|
