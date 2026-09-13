@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 
 import pytest
 
@@ -490,33 +491,36 @@ class TestSuiteWriteBoundary:
 
     # ── #968 export_dir：绝对路径 / .. / 空串拒绝，相对目录规范化后可导出 ──
 
-    @pytest.mark.parametrize("bad_dir", ["/etc/evil", "a/../b", "..", "", "  "])
+    @pytest.mark.parametrize("bad_dir", ["/etc/evil", "//tmp/outside", "///tmp/outside", "a/../b", "..", "", "  "])
     def test_create_rejects_unsafe_export_dir(self, client, admin_headers, bad_dir):
         resp = client.post("/api/v1/test-suites", headers=admin_headers,
                            json={"name": "S-unsafe", "export_dir": bad_dir})
         assert resp.status_code == 422, resp.text
 
-    def test_update_rejects_unsafe_export_dir(self, client, admin_headers, suite):
+    @pytest.mark.parametrize("bad_dir", ["../escape", "//tmp/outside"])
+    def test_update_rejects_unsafe_export_dir(self, client, admin_headers, suite, bad_dir):
         resp = client.put(f"/api/v1/test-suites/{suite.id}", headers=admin_headers,
-                          json={"export_dir": "../escape"})
+                          json={"export_dir": bad_dir})
         assert resp.status_code == 422
 
+    @pytest.mark.parametrize("relative_dir", ["team-a", "team-a/nested"])
     def test_relative_export_dir_normalized_and_exportable(
-        self, client, admin_headers, auth_headers, real_runtask,
+        self, client, admin_headers, auth_headers, real_runtask, relative_dir, tmp_path,
     ):
         """合法相对目录：尾斜杠归一化，导出落在 storage/mtbf/<dir> 下。"""
         sid = client.post("/api/v1/test-suites", headers=admin_headers,
-                          json={"name": "S-rel", "export_dir": "team-a/"}).json()["data"]["id"]
+                          json={"name": "S-rel", "export_dir": relative_dir + "/"}).json()["data"]["id"]
         detail = client.get(f"/api/v1/test-suites/{sid}",
                             headers=auth_headers).json()["data"]
-        assert detail["export_dir"] == "team-a"
+        assert detail["export_dir"] == relative_dir
 
         client.post(f"/api/v1/test-suites/{sid}/import", headers=admin_headers,
                     files={"file": ("runtask.xml", real_runtask, "application/xml")})
         resp = client.post(f"/api/v1/test-suites/{sid}/export-to-tool-dir",
                            headers=admin_headers)
         assert resp.status_code == 200
-        assert resp.json()["data"]["export_dir"] == "team-a"
+        assert resp.json()["data"]["export_dir"] == relative_dir
+        assert (tmp_path / "mtbf" / relative_dir / "runtask.xml").is_file()
 
     def test_legacy_absolute_export_dir_refused_before_write(
         self, client, admin_headers, suite, db_session, tmp_path,
@@ -531,6 +535,61 @@ class TestSuiteWriteBoundary:
         assert resp.status_code == 422
         assert resp.json()["detail"]["code"] == "EXPORT_DIR_INVALID"
         assert not (tmp_path / "mtbf").exists()
+
+    def test_legacy_double_root_refused_before_write(self, client, admin_headers, suite, db_session, tmp_path):
+        _add_case(db_session, suite, "c1")
+        outside = tmp_path / "outside"
+        suite.export_dir = "//" + str(outside).lstrip("/")
+        db_session.commit()
+        response = client.post(f"/api/v1/test-suites/{suite.id}/export-to-tool-dir", headers=admin_headers)
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "EXPORT_DIR_INVALID"
+        assert not outside.exists()
+        assert not (tmp_path / "mtbf").exists()
+
+    @pytest.mark.parametrize("link_scope", ["mtbf_root", "export_dir", "shared_sibling"])
+    def test_export_rejects_outward_directory_links(
+        self, client, admin_headers, suite, db_session, tmp_path, link_scope, monkeypatch,
+    ):
+        storage = tmp_path / "storage"
+        storage.mkdir()
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(storage))
+        outside = storage / "devices" if link_scope == "shared_sibling" else tmp_path / "outside"
+        outside.mkdir()
+        (outside / "sentinel").write_text("unchanged")
+        _add_case(db_session, suite, "c1")
+        suite.export_dir = "escaped/new"
+        db_session.commit()
+        if link_scope == "mtbf_root":
+            (storage / "mtbf").symlink_to(outside, target_is_directory=True)
+        else:
+            (storage / "mtbf").mkdir()
+            (storage / "mtbf/escaped").symlink_to(outside, target_is_directory=True)
+        response = client.post(f"/api/v1/test-suites/{suite.id}/export-to-tool-dir", headers=admin_headers)
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "EXPORT_DIR_INVALID"
+        assert sorted(entry.name for entry in outside.iterdir()) == ["sentinel"]
+        assert (outside / "sentinel").read_text() == "unchanged"
+
+    def test_archive_link_rejected_before_consumption_files_are_written(
+        self, client, admin_headers, suite, db_session, tmp_path,
+    ):
+        _add_case(db_session, suite, "c1")
+        suite.export_dir = "archive-test"
+        db_session.commit()
+        exported = client.get(f"/api/v1/test-suites/{suite.id}/export", headers=admin_headers)
+        assert exported.status_code == 200
+        digest = hashlib.sha256(exported.content).hexdigest()
+        target = tmp_path / "mtbf/archive-test"
+        target.mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (target / digest).symlink_to(outside, target_is_directory=True)
+        response = client.post(f"/api/v1/test-suites/{suite.id}/export-to-tool-dir", headers=admin_headers)
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "EXPORT_DIR_INVALID"
+        assert not (target / "runtask.xml").exists()
+        assert not list(outside.iterdir())
 
     # ── #969 exec_descs：写边界拒绝不可消费形状，存量坏数据 4xx ──
 

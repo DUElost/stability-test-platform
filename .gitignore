@@ -4,6 +4,10 @@ opencode.json
 .cursor/*
 !.cursor/rules/
 !.cursor/rules/**
+# Cursor CLI 的临时命令输出落在仓库根（.cursor_cmd_output.txt /
+# .cursor_pr<PR>_<n>.{txt,err,json}），与 .cursor/ 编辑器配置目录无关；
+# 主 checkout 被当工作区时会持续产生，防止 git add -A 误入库
+.cursor_*
 __pycache__/
 *.pyc
 *.pyo

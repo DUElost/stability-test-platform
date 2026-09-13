@@ -789,6 +789,65 @@ def test_hash_unchanged_still_processes_when_pending_remaining(monkeypatch):
     )
 
 
+class _FakePullFailedDleClient:
+    """#1819: 记录 pull_failed DLE POST，不触网。"""
+
+    def build_pull_failed_payload(self, **kwargs) -> Dict[str, Any]:
+        return {
+            "id": kwargs["event_id"],
+            "state": "PULL_FAILED",
+            "serial": kwargs["serial"],
+            "event_type": kwargs["event_type"],
+            "link_signal_seq_no": kwargs["link_signal_seq_no"],
+            "job_id": kwargs["job_id"],
+        }
+
+    def post_event_payload(self, payload) -> Optional[str]:
+        self.posts.append(dict(payload))
+        return str(payload.get("id"))
+
+    def __init__(self) -> None:
+        self.posts: List[Dict[str, Any]] = []
+
+
+def test_handle_pull_failed_posts_device_log_event_when_client_present():
+    """#1819: pull 失败路径须 POST PULL_FAILED DLE（非 None client 时）。"""
+    emitter = _FakeEmitter()
+    store = _MemStore()
+    client = _FakePullFailedDleClient()
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter,
+        state_store=store,
+        serial="SX",
+        job_id=1819,
+        host_id="HOST",
+        baseline_snapshot_enabled=False,
+        device_log_client=client,
+    )
+    rec._handle_pull_failed({
+        "line": "/data/aee_exp/db.1,NE,...",
+        "parsed": {
+            "db_path": "/data/aee_exp/db.1",
+            "pkg_name": "com.fail",
+            "timestamp": "2026-05-28 10:00:00.000",
+            "event_type": "NE",
+            "raw_event_type": "Native (NE)",
+            "event_subtype": "NE",
+        },
+        "aee_type": "aee_exp",
+        "error": "adb_pull_failed",
+        "exhausted": False,
+    })
+
+    assert len(emitter.calls) == 1
+    assert emitter.calls[0]["extra"]["pull_failed"] is True
+    assert len(client.posts) == 1
+    assert client.posts[0]["state"] == "PULL_FAILED"
+    assert client.posts[0]["link_signal_seq_no"] == 1
+    assert rec.stats.signals_emitted == 1
+    assert rec.stats.signals_dropped == 0
+
+
 def test_hash_unchanged_skip_does_not_reset_burst(monkeypatch):
     """D2: hash 未变跳过的轮次只递减 burst,不重置(模拟 _run 状态机)。"""
     emitter = _FakeEmitter()

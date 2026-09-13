@@ -487,35 +487,25 @@ def abort_plan_run(
     if should_trigger_dedup(pr.status):
         enqueue_dedup_terminal_sync(plan_run_id)
 
-    # ── SocketIO push — align with _emit_job_status_invalidation pattern ──
+    # ── SocketIO push ──
+    # #703：大批量 abort 不再逐 job 推 JOB_STATUS。#327（~497 job / 30 host）
+    # 实测每个 schedule_emit → run_coroutine_threadsafe，数百次同步投递打满
+    # 事件循环 → ASGI/DB 拿不到调度 → refresh 失败被前端误踢登录。
+    # PLAN_RUN_STATUS 已覆盖详情页 devices/timeline/logs 全量 invalidate；
+    # 另发一条汇总 JOB_STATUS 触发 dashboard results 节流刷新（与逐条等价语义）。
     ts = datetime.now(timezone.utc).isoformat()
     room = f"plan_run:{plan_run_id}"
-    for jid in aborted_jobs:
+    if aborted_jobs or abort_requested_jobs:
         schedule_emit(
             "job_status",
             {
                 "type": "JOB_STATUS",
                 "payload": {
-                    "job_id": jid,
                     "plan_run_id": plan_run_id,
-                    "status": "ABORTED",
-                    "reason": reason,
-                },
-                "timestamp": ts,
-            },
-            namespace="/dashboard",
-            room=room,
-        )
-    for jid in abort_requested_jobs:
-        schedule_emit(
-            "job_status",
-            {
-                "type": "JOB_STATUS",
-                "payload": {
-                    "job_id": jid,
-                    "plan_run_id": plan_run_id,
-                    "status": "RUNNING",
-                    "abort_requested": True,
+                    "status": "ABORTED" if aborted_jobs else "RUNNING",
+                    "abort_bulk": True,
+                    "aborted_count": len(aborted_jobs),
+                    "abort_requested_count": len(abort_requested_jobs),
                     "reason": reason,
                 },
                 "timestamp": ts,

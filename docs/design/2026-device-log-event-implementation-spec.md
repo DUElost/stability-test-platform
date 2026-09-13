@@ -92,6 +92,7 @@ class EventState(str, Enum):
     DETECTED = "DETECTED"
     PULL_FAILED = "PULL_FAILED"
     LOCAL = "LOCAL"
+    UPLOAD_PENDING = "UPLOAD_PENDING"
     UPLOADING = "UPLOADING"
     UPLOAD_FAILED = "UPLOAD_FAILED"
     REMOTE = "REMOTE"
@@ -108,7 +109,10 @@ class EventState(str, Enum):
 
 ## 专题 2：EventUploader 执行者与模式开关
 
-**结论**：EventUploader 是 Agent 侧唯一 copytree 执行者（单队列 + 2 slot + 重试/checksum/PRUNE）。默认 `CONTINUOUS=0`：只拉取 `upload_task` 标记的 `UPLOAD_PENDING`（过滤模型）；`CONTINUOUS=1` 是逃生阀：`LOCAL` 入队后立即全量上送，不等待 PlanRun 终态。
+**结论**：EventUploader 是 Agent 侧唯一 copytree 执行者（单队列 + 2 slot + 重试/checksum/PRUNE）。
+**过滤模型是唯一路径**：只拉取 `upload_task` 标记的 `UPLOAD_PENDING`（初版 `CONTINUOUS=1`
+逃生阀已随 #287 整体删除，全仓无 `STP_EVENT_UPLOADER_CONTINUOUS`；非 force 入队一律拒绝，
+无 PlanRun 的纯采集场景由 `devices/unassigned/` 兜底承接）。
 
 ### 2.1 线程模型
 
@@ -119,30 +123,36 @@ class EventState(str, Enum):
 ### 2.2 上传流程
 
 ```
-enqueue(event_id)
+enqueue(event_id, force?)
+  → 预检：本地目录缺失且远端无副本 → PULL_FAILED；远端已有同 event_id 副本且
+    checksum 一致 → 直接补 REMOTE
+  → acquire slot（#389：先拿 slot 再起 worker 线程，线程数被 2 封顶）
   → UPDATE state=UPLOADING (via control-plane API)
-  → acquire slot
-  → copytree(local_path → remote_path)
-  → sha256 校验
+  → UploadManager._copytree_safe(local_path → remote_path)
+  → 自读回 sha256 比对；不一致删坏副本并按重试计（#1083）
   → UPDATE state=REMOTE, remote_path=..., checksum=...
-  → release slot
+  → release slot；REMOTE ack 成功后才允许 PRUNE（#1083）
 ```
 
-`remote_path` 布局：`{nfs_root}/devices/{plan_run_id}/{basename(local_path)}/`（与现有 UploadManager 一致）；`plan_run_id` 为空时用 `devices/unassigned/{event_id}/`。
+`remote_path` 布局：`{nfs_root}/devices/{plan_run_id}/{event_id}/{src.name}/`
+（#1073 加 event_id 层，防同名事件互相覆盖）；`plan_run_id` 为空时用
+`devices/unassigned/{event_id}/`。
 
 ### 2.3 失败与重试
 
-- 最多 5 次重试；退避 `min(300, 2^attempt)` 秒
-- 耗尽 → `UPLOAD_FAILED`；每 10 分钟扫描 `UPLOAD_FAILED` 且 `updated_at < now()-600s` 重新入队
+- 最多 5 次重试；退避 `min(300, 2^attempt)` 秒（daemon `threading.Timer` 重入队）
+- attempt 持久化到 agent_state `event_upload_attempts:{event_id}`（#785），重启不归零
+- 耗尽 → `UPLOAD_FAILED`；由 600s 慢循环重扫 `UPLOAD_FAILED`/`UPLOADING`
+  并按持久化 attempt 跳过已耗尽者（不按 `updated_at` 过滤——Agent 侧 GET 无该参数）
 
 ### 2.4 Agent 重启恢复
 
 启动即周期轮询由 `_recover_pending` 执行（`_RECOVER_POLL_INTERVAL` 30s）：
 
-- `CONTINUOUS=0`（默认）：只恢复 `UPLOAD_PENDING`（upload_task 已筛选的子集），外加 `UPLOADING` / `UPLOAD_FAILED` 的中断残留；
-- `CONTINUOUS=1`：恢复 `LOCAL`（立即全量上送）以及 `UPLOADING` / `UPLOAD_FAILED`。
-
-`UPLOAD_FAILED` 按 2.3 的退避与 10 分钟重扫规则处理。
+- 只恢复 `UPLOAD_PENDING`（upload_task 已筛选的子集，#380）；
+- `UPLOADING` / `UPLOAD_FAILED` 的中断残留交 600s 慢循环（`_retry_failed_loop`）——
+  快速轮询若也拉这两个状态，会把在途/已达重试上限的事件反复以 attempt=0 重入队
+  （重试上限失效、CIFS 上 rmtree-vs-copy 抖动）。
 
 ### 2.5 Feature flag
 
@@ -154,8 +164,7 @@ enqueue(event_id)
 
 | 问题 | 策略 |
 |------|------|
-| 默认模式 | `CONTINUOUS=0`：EventUploader 只拉 `upload_task` 标记的 `UPLOAD_PENDING` |
-| 逃生阀 | `CONTINUOUS=1`：`LOCAL` 全量入队（无 PlanRun 纯采集等场景） |
+| 默认模式 | EventUploader 只拉 `upload_task` 标记的 `UPLOAD_PENDING`（过滤模型唯一路径，#287） |
 | 回滚 | 改 env + `reload_config`，无需重启 |
 
 ---
@@ -183,7 +192,15 @@ enqueue(event_id)
 
 ### 3.4 SSD 禁用条件
 
-`paths.is_ssd_fallback_root(local_root)` 为真，或 env `STP_AEE_SSD_FALLBACK_ROOT` 与实际 root 相同 → `HddSpillMonitor.start()` 跳过。
+`paths.is_ssd_fallback_root(local_root)` 为真，或 env `STP_AEE_SSD_FALLBACK_ROOT` 与实际 root
+相同 → 线程照常启动，但每次 `check_once()` 开头早退（`local_disk_monitor.py` `_ssd_spill_disabled`
+分支），行为等效于禁用 spill。
+
+### 3.5 阈值默认的双口径（注记）
+
+类体默认（interval 300s / threshold 95% / target 70%）仅在未 configure 时生效；生产 wiring 由
+`main.py` 以 env 缺省注入 `STP_LOCAL_DISK_SPILL_THRESHOLD=80` / `STP_LOCAL_DISK_SPILL_TARGET=70` /
+`STP_LOCAL_DISK_MONITOR_INTERVAL_SECONDS=300`——**有效默认以 main.py 注入为准**，两处数值勿混用。
 
 ---
 
@@ -250,14 +267,17 @@ class PlatformCollector(Protocol):
     def parse_metadata(self, event_dir: Path) -> EventMetadata: ...
 ```
 
-`TriggerInfo` 由 reconciler 从 `db_history` 解析产生（不是 collector 协议方法）；
-`parse_metadata` 失败 raise `CollectorError`。设备侧事件拉取由 reconciler 在
-`detect` 通过后驱动，成功后 `POST device-log-events` `state=LOCAL`。
+`TriggerInfo` 定义后**全仓无使用点**（实际拉取判定走 processor 的 pending/processed
+dict，见 `backend/agent/aee/processor.py`），属预留接口；`parse_metadata` 失败
+raise `CollectorError`。设备侧事件拉取由 reconciler 直接驱动（平台归属在
+JobSession 组装时经 `get_collector_for_platform` 一次性确定），成功后
+`POST device-log-events` `state=LOCAL`。
 
 ### 5.2 Reconciler 错误约定
 
 - `CollectorError`：记日志 + `tick_errors++`，不 crash 线程
-- `detect=False`：跳过该设备本轮
+- 协议中的 `detect()` **当前零调用点**（平台判定实际走 `detect_device_platform` +
+  `get_collector_for_platform`，`job_session.py`）；保留接口但勿据本文推演运行时行为
 
 ### 5.3 平台路由（ADR-0032）
 

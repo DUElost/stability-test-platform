@@ -9,7 +9,6 @@ import pytest
 
 from backend.agent.socketio_client import AgentSocketIOClient
 from backend.agent.mq.producer import StepTraceWriter
-from backend.api.routes.heartbeat import _suggested_log_rate_limit
 
 
 def _make_client(**kwargs) -> AgentSocketIOClient:
@@ -93,14 +92,6 @@ def test_step_trace_writer_noop_when_stream_disabled(monkeypatch):
     writer.bind_sio_client(sio)
     assert writer.send_log(7, 0, "INFO", "step-a", "hello") is None
     sio.send_log.assert_not_called()
-
-
-def test_suggested_log_rate_limit_scales(monkeypatch):
-    monkeypatch.setattr("backend.api.routes.heartbeat.LOG_RATE_LIMIT_BASE", 200)
-    monkeypatch.setattr("backend.api.routes.heartbeat.LOG_RATE_LIMIT_MIN", 20)
-    assert _suggested_log_rate_limit(0) == 200
-    assert _suggested_log_rate_limit(10) == 190
-    assert _suggested_log_rate_limit(500) == 20
 
 
 @pytest.mark.asyncio

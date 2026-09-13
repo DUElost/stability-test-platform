@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from unittest.mock import MagicMock
 
@@ -96,6 +97,54 @@ def test_emit_resumes_seq_after_restart(db):
     )
     seq = e2.emit(category="ANR", source="inotifyd", path_on_device="/c")
     assert seq == 3, "恢复后应从 3 继续（不是 1，避免冲突）"
+
+
+@pytest.mark.parametrize("replay_first", [True, False])
+def test_prepare_restart_replay_never_loses_next_signal(db, tmp_path, replay_first):
+    def make_emitter():
+        return SignalEmitter(
+            local_db=db, job_id=101, host_id="h", device_serial="S",
+            fencing_token="101:1", agent_instance_id="agent-test",
+        )
+
+    original = make_emitter()
+    seq_no, envelope = original.prepare(category="AEE", source="reconciler", path_on_device="/old")
+    assert db.count_pending_log_signals() == 0
+    db.close()
+    db.initialize(str(tmp_path / "agent.db"))
+    restarted = make_emitter()
+    if replay_first:
+        assert restarted.enqueue(seq_no, envelope) is not None
+    assert restarted.emit(category="AEE", source="reconciler", path_on_device="/new") == seq_no + 1
+    if not replay_first:
+        assert restarted.enqueue(seq_no, envelope) is not None
+    assert restarted.enqueue(seq_no, envelope) is None
+    rows = db.get_pending_log_signals()
+    assert {row["envelope"]["path_on_device"] for row in rows} == {"/old", "/new"}
+    assert {row["seq_no"] for row in rows} == {seq_no, seq_no + 1}
+
+
+def test_independent_emitters_and_connections_reserve_unique_sequences(db, tmp_path):
+    second_db = LocalDB()
+    second_db.initialize(str(tmp_path / "agent.db"))
+    ready = threading.Barrier(2)
+
+    def prepare_batch(local_db):
+        emitter = SignalEmitter(
+            local_db=local_db, job_id=101, host_id="h", device_serial="S",
+            fencing_token="101:1", agent_instance_id="agent-test",
+        )
+        ready.wait(timeout=5)
+        return [emitter.prepare(category="AEE", source="reconciler", path_on_device="/new")[0]
+                for _ in range(25)]
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            batches = list(executor.map(prepare_batch, (db, second_db)))
+        assert sorted(batches[0] + batches[1]) == list(range(1, 51))
+        assert db.count_pending_log_signals() == 0
+    finally:
+        second_db.close()
 
 
 def test_emit_rejects_bad_category(emitter):
