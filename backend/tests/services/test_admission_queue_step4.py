@@ -358,6 +358,47 @@ class TestAdmissionTransaction:
         assert db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == pr.id).count() == 0
 
+    def test_retired_host_fails_fatal_with_host_retired(
+        self, db_session, step4_fixture,
+    ):
+        """ADR-0038 D-2/D5bis：排队后主机退役 → 终检 fatal，以 **HOST_RETIRED**
+        显式收敛：快照/PlanRunHost 不删、不静默缩目标集合，run FAILED + 审计。"""
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+        attempt = self._claim(db_session, pr)
+
+        db_session.query(Host).filter(Host.id == "aq4-h1").update(
+            {"retired_at": datetime.now(timezone.utc)}
+        )
+        db_session.commit()
+
+        with pytest.raises(_FatalAdmission) as exc:
+            admission_transaction(db_session, pr.id, attempt)
+        assert exc.value.reason == "HOST_RETIRED"
+        assert exc.value.detail["unavailable_devices"][0]["reason"] == "host_retired"
+
+        fail_plan_run_admission(
+            db_session, pr.id, attempt,
+            reason=exc.value.reason, detail=exc.value.detail,
+        )
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "FAILED"
+        assert pr.result_summary["reason"] == "HOST_RETIRED"
+        # D2：不删快照、不缩目标集合（证据保留）
+        assert db_session.query(PlanRunHost).filter(
+            PlanRunHost.plan_run_id == pr.id).count() == 1
+        # 审计留痕（who/when/reason）
+        from backend.models.audit import AuditLog
+
+        actions = [
+            row.action
+            for row in db_session.query(AuditLog).filter(
+                AuditLog.resource_id == str(pr.id)
+            ).all()
+        ]
+        assert "plan_admission_failed" in actions
+
     def test_stale_attempt_noops(self, db_session, step4_fixture):
         """Ownership CAS: if the reaper already recovered the run (attempt
         rotated), an old admission attempt must not touch it."""

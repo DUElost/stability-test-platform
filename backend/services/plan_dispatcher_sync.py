@@ -65,7 +65,10 @@ ACTIVE_JOB_STATUSES = (
 # 配置错误,prepare 直接 400。其余(offline/error/host_offline/active_lease/
 # active_job)是**可重试的调度状态**——V2 准入队列下不拒绝,只作为 queue_reason
 # 让 PlanRun 以 QUEUED 等待(不变量④);legacy 路径仍全量拒绝。
-_FATAL_DISPATCH_REASONS = ("not_found", "no_host")
+# ADR-0038 D-1（fatal）：主机退役是**永久**判据——新目标中任一退役 host
+# 即结构化拒绝（prepare 400），既不重试也不排队；已准入的在飞 Run 由
+# D-2/D5bis 的收敛路径处理（另单）。
+_FATAL_DISPATCH_REASONS = ("not_found", "no_host", "host_retired")
 
 
 def _classify_dispatch_devices_sync(
@@ -93,6 +96,8 @@ def _classify_dispatch_devices_sync(
             Host.status.label("host_status"),
             # #960：热更新维护窗口（NULL = 无窗口）
             Host.maintenance_until.label("host_maintenance_until"),
+            # ADR-0038 D1：退役事实（NULL = 在用）
+            Host.retired_at.label("host_retired_at"),
         )
         .select_from(Device)
         .outerjoin(Host, Device.host_id == Host.id)
@@ -139,6 +144,15 @@ def _classify_dispatch_devices_sync(
             continue
         if snap.host_id is None:
             unavailable.append({"id": did, "reason": "no_host"})
+            continue
+        # ADR-0038 D-1：退役判据**先于**设备级暂态（offline/error）判定——
+        # 否则「设备离线 + 主机已退役」会短路成可重试的 device_offline 并进
+        # QUEUED 等待，永久退役事实被暂态遮住（评审 182d4e-R01）。
+        if snap.host_retired_at is not None:
+            unavailable.append({
+                "id": did, "reason": "host_retired",
+                "host_id": snap.host_id, "host_status": snap.host_status,
+            })
             continue
         if snap.device_status == DeviceStatus.OFFLINE.value:
             unavailable.append({

@@ -667,6 +667,11 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
     fatal = [e for e in unavailable if e["reason"] in _FATAL_DISPATCH_REASONS]
     if fatal:
         db.rollback()
+        # ADR-0038 D-2/D5bis：退役导致的终检失败以显式 HOST_RETIRED 收敛——
+        # 快照与 PlanRunHost 不删、不静默缩目标集合，run 转 FAILED 并由
+        # fail_plan_run_admission 写审计（原因串里带 reason=host_retired 明细）。
+        if any(e["reason"] == "host_retired" for e in fatal):
+            raise _FatalAdmission("HOST_RETIRED", {"unavailable_devices": fatal})
         raise _FatalAdmission(
             "devices_unavailable_at_admission", {"unavailable_devices": fatal},
         )
