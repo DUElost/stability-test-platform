@@ -1,4 +1,4 @@
-import { Activity, CheckCheck, Copy, Download, FolderKanban, Tags, X } from 'lucide-react';
+import { CheckCheck, Copy, Download, FolderKanban, Tags, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface DeviceBulkActionBarProps {
@@ -15,7 +15,6 @@ interface DeviceBulkActionBarProps {
   onAssignProject?: () => void;
   onCopySerials: () => void;
   onExport: () => void;
-  onViewMetrics: () => void;
   onClear: () => void;
 }
 
@@ -32,7 +31,6 @@ export default function DeviceBulkActionBar({
   onAssignProject = () => {},
   onCopySerials,
   onExport,
-  onViewMetrics,
   onClear,
 }: DeviceBulkActionBarProps) {
   if (selectedCount === 0) return null;
@@ -101,19 +99,6 @@ export default function DeviceBulkActionBar({
               归入项目
             </Button>
           )}
-
-          <Button
-            size="sm"
-            variant="outline"
-            data-testid="device-bulk-metrics"
-            disabled={selectedCount !== 1}
-            title={selectedCount === 1 ? '查看所选设备指标' : '仅选择一台设备时可查看指标'}
-            onClick={onViewMetrics}
-            className="gap-1"
-          >
-            <Activity className="h-3.5 w-3.5" />
-            查看指标
-          </Button>
 
           <Button size="sm" variant="outline" onClick={onCopySerials} className="gap-1">
             <Copy className="h-3.5 w-3.5" />
