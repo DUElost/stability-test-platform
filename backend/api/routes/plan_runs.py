@@ -73,10 +73,8 @@ from backend.core.aee_metadata import (
     normalize_package_name,
     parse_exp_main_summary,
 )
-from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.metrics import (
-    record_patrol_manual_action,
     record_plan_run_devices_query_duration,
 )
 from backend.models.audit import AuditLog
@@ -95,12 +93,13 @@ from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun, PlanRunHost
 from backend.models.project import TestProject
-from backend.services.plan_run_events import emit_job_status_invalidation
+from backend.services.plan_run_manual import (
+    manual_exit_job_sync,
+    manual_retry_job_sync,
+)
 from backend.services.plan_run_queries import (
-    MANUAL_ACTION_JOB_STATUSES,
     derive_device_link_status,
     device_currently_disconnected,
-    load_job_in_run,
 )
 from backend.services.plan_run_abort import (
     PlanRunAbortError,
@@ -623,77 +622,15 @@ def manual_retry_job(
 ):
     """ADR-0022 D7: clear backoff and force the next patrol cycle to run now.
 
-    Sets ``next_retry_at = now()`` and ``manual_action = 'RETRY_NOW'`` so the
-    Agent picks it up on the next heartbeat.  **Does not reset**
-    ``current_failure_streak`` — diagnostic information is preserved.
+    #1520 切片：业务逻辑（校验/迁移/审计/emit/提交）在
+    ``services/plan_run_manual.py``；本端点只做解析 → 调服务 → 序列化。
     """
-    job = load_job_in_run(db, run_id, job_id)
-    if job.status not in MANUAL_ACTION_JOB_STATUSES:
-        raise HTTPException(
-            status_code=409,
-            detail=f"job must be RUNNING for manual retry; current status is {job.status}",
-        )
-
-    device = db.get(Device, job.device_id) if job.device_id else None
-    host_status: str | None = None
-    if job.host_id:
-        host_row = db.get(Host, job.host_id)
-        host_status = host_row.status if host_row else None
-    if device_currently_disconnected(device, host_status):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "device ADB is not reachable; manual retry cannot restore "
-                "connection — check USB or reboot the device"
-            ),
-        )
-
-    # Why: 同向 manual_action 已等待 Agent 消费时,重复点击不再二次写 audit / emit / counter。
-    #      合法语义:用户连点 N 次 retry,后端只该留 1 条审计 + 1 次 emit;EXIT_REQUESTED 切到
-    #      RETRY_NOW 是真正的意图变更,不在此处短路。
-    if job.manual_action == "RETRY_NOW":
-        return ok(JobManualActionOut(
-            job_id=job_id,
-            plan_run_id=run_id,
-            action="manual_retry",
-            status=job.status,
-            manual_action=job.manual_action,
-            next_retry_at=_iso(job.next_retry_at),
-            current_failure_streak=job.current_failure_streak or 0,
-        ))
-
-    reason = (payload.reason if payload else None) or "manual_retry"
-    now = datetime.now(timezone.utc)
-
-    job.next_retry_at = now
-    job.manual_action = "RETRY_NOW"
-    job.updated_at = now
-    db.flush()
-
-    record_audit(
-        db,
-        action="patrol_manual_retry",
-        resource_type="job_instance",
-        resource_id=job_id,
-        details={
-            "plan_run_id": run_id,
-            "reason": reason,
-            "current_failure_streak": job.current_failure_streak or 0,
-            "triggered_by": current_user.username if current_user else None,
-        },
-        user_id=current_user.id if current_user else None,
-        username=current_user.username if current_user else None,
+    job = manual_retry_job_sync(
+        db, run_id, job_id,
+        reason=(payload.reason if payload else None),
+        actor_id=current_user.id if current_user else None,
+        actor_username=current_user.username if current_user else None,
     )
-    db.commit()
-    db.refresh(job)
-
-    logger.info(
-        "patrol_manual_retry plan_run=%d job=%d streak=%d",
-        run_id, job_id, job.current_failure_streak or 0,
-    )
-    record_patrol_manual_action("manual_retry")
-    emit_job_status_invalidation(run_id, job_id, job.status, "manual_retry")
-
     return ok(JobManualActionOut(
         job_id=job_id,
         plan_run_id=run_id,
@@ -703,6 +640,8 @@ def manual_retry_job(
         next_retry_at=_iso(job.next_retry_at),
         current_failure_streak=job.current_failure_streak or 0,
     ))
+
+
 
 
 @router.post(
@@ -718,67 +657,15 @@ def manual_exit_job(
 ):
     """ADR-0022 D7: request that the Agent skip the rest of patrol and abort.
 
-    Sets ``manual_action = 'EXIT_REQUESTED'``.  The Agent observes this on the
-    next heartbeat and exits the patrol loop **without running teardown** (BO4).
-    Recycler / device lease release ensures the device returns to the pool.
-
-    The job's status remains RUNNING here; it
-    transitions to ABORTED once the Agent reports the terminal state via
-    /jobs/{id}/complete (or via Recycler's stall detection).
+    #1520 切片：业务逻辑在 ``services/plan_run_manual.py``；本端点只做
+    解析 → 调服务 → 序列化。
     """
-    job = load_job_in_run(db, run_id, job_id)
-    if job.status not in MANUAL_ACTION_JOB_STATUSES:
-        raise HTTPException(
-            status_code=409,
-            detail=f"job must be RUNNING for manual exit; current status is {job.status}",
-        )
-
-    # Why: 与 manual_retry 对称 — 同向 EXIT_REQUESTED 已等待 Agent 消费时短路,避免连点
-    #      产生多条审计 + 多次 emit。RETRY_NOW 切 EXIT_REQUESTED 是真正的意图变更不短路。
-    if job.manual_action == "EXIT_REQUESTED":
-        return ok(JobManualActionOut(
-            job_id=job_id,
-            plan_run_id=run_id,
-            action="manual_exit",
-            status=job.status,
-            manual_action=job.manual_action,
-            next_retry_at=_iso(job.next_retry_at),
-            current_failure_streak=job.current_failure_streak or 0,
-        ))
-
-    reason = (payload.reason if payload else None) or "manual_exit"
-    now = datetime.now(timezone.utc)
-
-    job.manual_action = "EXIT_REQUESTED"
-    if not job.status_reason:
-        job.status_reason = f"patrol_manual_exit_pending: {reason}"
-    job.updated_at = now
-    db.flush()
-
-    record_audit(
-        db,
-        action="patrol_manual_exit",
-        resource_type="job_instance",
-        resource_id=job_id,
-        details={
-            "plan_run_id": run_id,
-            "reason": reason,
-            "current_failure_streak": job.current_failure_streak or 0,
-            "triggered_by": current_user.username if current_user else None,
-        },
-        user_id=current_user.id if current_user else None,
-        username=current_user.username if current_user else None,
+    job = manual_exit_job_sync(
+        db, run_id, job_id,
+        reason=(payload.reason if payload else None),
+        actor_id=current_user.id if current_user else None,
+        actor_username=current_user.username if current_user else None,
     )
-    db.commit()
-    db.refresh(job)
-
-    logger.info(
-        "patrol_manual_exit plan_run=%d job=%d streak=%d",
-        run_id, job_id, job.current_failure_streak or 0,
-    )
-    record_patrol_manual_action("manual_exit")
-    emit_job_status_invalidation(run_id, job_id, job.status, "manual_exit_pending")
-
     return ok(JobManualActionOut(
         job_id=job_id,
         plan_run_id=run_id,
@@ -788,6 +675,8 @@ def manual_exit_job(
         next_retry_at=_iso(job.next_retry_at),
         current_failure_streak=job.current_failure_streak or 0,
     ))
+
+
 
 
 # ── ADR-0021/ADR-0022 C5a₂: PlanRunDetailPage 聚合端点 ──────────────────

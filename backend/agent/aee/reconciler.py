@@ -777,7 +777,7 @@ class AeeDbHistoryReconciler:
     def _handle_pull_failed(self, payload: Dict[str, Any]) -> None:
         """#1044: pull/verify 失败时仍落可观测 signal + PULL_FAILED DLE。
 
-        不标记 processed；processor 侧 pending 继续重试。
+        非 exhausted 不标记 processed（pending 继续重试）；exhausted 由 processor 记入 processed（#829）。
         """
         try:
             aee_type = str(payload.get("aee_type") or "")

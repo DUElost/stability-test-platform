@@ -48,6 +48,15 @@ describe('长请求超时豁免（#1199）', () => {
     }
   });
 
+  it('套件 import 上传豁免应用层超时（#1655）', async () => {
+    const { suites } = await import('./suites');
+
+    await suites.import(1, new File(['x'], 'runtask.xml'));
+
+    expect(mocks.post.mock.calls[0][1]).toBeInstanceOf(FormData);
+    expect(mocks.post.mock.calls[0][2]).toEqual({ timeout: NO_TIMEOUT });
+  });
+
   it('JIRA xls 上传豁免应用层超时', async () => {
     const { dedup } = await import('./dedup');
 

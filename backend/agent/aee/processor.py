@@ -25,6 +25,7 @@ from .db_history import (
 )
 from .folder_name import get_aee_log_folder_name, make_getprop_from_shell
 from .mobilelog import export_correlated_mobilelogs, make_adb_pull_fn, make_adb_shell_fn
+from .extraction_slot import host_extraction_slot
 from .paths import (
     get_aee_local_root,
     get_or_create_run_date_stamp,
@@ -101,8 +102,9 @@ def process_device_logs(
     log_signal with extra={event_type, package_name, aee_ts, nfs_path, pull_source}.
 
     on_pull_failed (#1044): optional callback invoked **once per pending line** when
-    adb pull / strict verify first fails (or retry budget is exhausted). Does **not**
-    mark the line processed — pending retry continues. Payload::
+    adb pull / strict verify first fails (or retry budget is exhausted). Non-exhausted
+    failures keep the line in pending for retry; exhausted (#829) marks processed.
+    Payload::
         {
             "line":        str
             "parsed":      Dict[str, Any]
@@ -229,6 +231,13 @@ def process_device_logs(
             result.pulled += 1
             result.new_timestamps.append(parsed["timestamp"])
 
+            # #803: 先落 processed/pending，再 on_new_entry（emit + DLE）。
+            # 回调成功、状态未落盘就崩溃会跨重启重拉重 emit；先落盘把窗口换成
+            # 「已 processed 但 emit 未发生」的丢失风险（回调失败本就吞异常）。
+            processed_lines.add(line)
+            save_processed_lines(state_store, processed_key, processed_lines)
+            _save_pending_tasks(state_store, pending_key, pending_tasks)
+
             if on_new_entry is not None:
                 try:
                     on_new_entry({
@@ -242,13 +251,6 @@ def process_device_logs(
                         "aee_on_new_entry_callback_failed serial=%s db=%s",
                         serial, parsed.get("db_path"),
                     )
-
-            # Persist processed/pending state before best-effort side effects so
-            # slow or failing exports do not keep the whole tick in a half-finished
-            # state and block later db_history increments from being observed.
-            processed_lines.add(line)
-            save_processed_lines(state_store, processed_key, processed_lines)
-            _save_pending_tasks(state_store, pending_key, pending_tasks)
 
             if stop_requested:
                 return
@@ -293,6 +295,10 @@ def process_device_logs(
                     exhausted=True,
                 )
                 pending_tasks.pop(line, None)
+                # #829: 达到上限后记入 processed，避免下一轮 db_history tick 把同一行
+                # 以 retry_count=0 复活并再次吃满 pull_retry_limit 重试墙。
+                processed_lines.add(line)
+                save_processed_lines(state_store, processed_key, processed_lines)
                 result.errors.append(f"pull_retry_exceeded:{parsed['db_path']}")
                 continue
 
@@ -307,67 +313,75 @@ def process_device_logs(
             )
             local_target_dir = output_subdir / dirname
 
-            if local_target_dir.exists():
+            # #740: host-level slot — pull + side exports share one HDD writer budget
+            with host_extraction_slot(purpose=f"aee:{serial}"):
+                if local_target_dir.exists():
+                    verify_ok, verify_msg, _ = _verify_pulled_aee_log_strict(
+                        local_target_dir,
+                        remote_path=parsed["db_path"],
+                        shell_fn=shell_fn,
+                    )
+                    if verify_ok:
+                        parsed = _enrich_parsed_with_local_aee_metadata(
+                            parsed, local_target_dir,
+                        )
+                        _finalize_processed_entry(
+                            line=line,
+                            parsed=parsed,
+                            local_target_dir=local_target_dir,
+                        )
+                        continue
+                    logger.info(
+                        "aee_pull_existing_dir_invalid serial=%s db=%s reason=%s",
+                        serial, parsed["db_path"], verify_msg,
+                    )
+                    _cleanup_dir(local_target_dir)
+
+                if not pull_fn(
+                    parsed["db_path"], str(local_target_dir), cfg.pull_timeout_seconds,
+                ):
+                    task["retry_count"] = int(task.get("retry_count", 0)) + 1
+                    task["last_error"] = "adb_pull_failed"
+                    _cleanup_dir(local_target_dir)
+                    result.errors.append(f"pull_failed:{parsed['db_path']}")
+                    _notify_pull_failed(
+                        on_pull_failed,
+                        line=line,
+                        parsed=parsed,
+                        aee_type=aee_type,
+                        task=task,
+                        error="adb_pull_failed",
+                    )
+                    continue
+
                 verify_ok, verify_msg, _ = _verify_pulled_aee_log_strict(
                     local_target_dir,
                     remote_path=parsed["db_path"],
                     shell_fn=shell_fn,
                 )
-                if verify_ok:
-                    parsed = _enrich_parsed_with_local_aee_metadata(parsed, local_target_dir)
-                    _finalize_processed_entry(
+                if not verify_ok:
+                    task["retry_count"] = int(task.get("retry_count", 0)) + 1
+                    task["last_error"] = f"verify_failed: {verify_msg}"
+                    _cleanup_dir(local_target_dir)
+                    result.errors.append(
+                        f"pull_verify_failed:{parsed['db_path']}:{verify_msg}"
+                    )
+                    _notify_pull_failed(
+                        on_pull_failed,
                         line=line,
                         parsed=parsed,
-                        local_target_dir=local_target_dir,
+                        aee_type=aee_type,
+                        task=task,
+                        error=f"verify_failed: {verify_msg}",
                     )
                     continue
-                logger.info(
-                    "aee_pull_existing_dir_invalid serial=%s db=%s reason=%s",
-                    serial, parsed["db_path"], verify_msg,
-                )
-                _cleanup_dir(local_target_dir)
 
-            if not pull_fn(parsed["db_path"], str(local_target_dir), cfg.pull_timeout_seconds):
-                task["retry_count"] = int(task.get("retry_count", 0)) + 1
-                task["last_error"] = "adb_pull_failed"
-                _cleanup_dir(local_target_dir)
-                result.errors.append(f"pull_failed:{parsed['db_path']}")
-                _notify_pull_failed(
-                    on_pull_failed,
+                parsed = _enrich_parsed_with_local_aee_metadata(parsed, local_target_dir)
+                _finalize_processed_entry(
                     line=line,
                     parsed=parsed,
-                    aee_type=aee_type,
-                    task=task,
-                    error="adb_pull_failed",
+                    local_target_dir=local_target_dir,
                 )
-                continue
-
-            verify_ok, verify_msg, _ = _verify_pulled_aee_log_strict(
-                local_target_dir,
-                remote_path=parsed["db_path"],
-                shell_fn=shell_fn,
-            )
-            if not verify_ok:
-                task["retry_count"] = int(task.get("retry_count", 0)) + 1
-                task["last_error"] = f"verify_failed: {verify_msg}"
-                _cleanup_dir(local_target_dir)
-                result.errors.append(f"pull_verify_failed:{parsed['db_path']}:{verify_msg}")
-                _notify_pull_failed(
-                    on_pull_failed,
-                    line=line,
-                    parsed=parsed,
-                    aee_type=aee_type,
-                    task=task,
-                    error=f"verify_failed: {verify_msg}",
-                )
-                continue
-
-            parsed = _enrich_parsed_with_local_aee_metadata(parsed, local_target_dir)
-            _finalize_processed_entry(
-                line=line,
-                parsed=parsed,
-                local_target_dir=local_target_dir,
-            )
 
         _save_pending_tasks(state_store, pending_key, pending_tasks)
         result.pending_remaining += len(pending_tasks)

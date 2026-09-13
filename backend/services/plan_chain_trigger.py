@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
@@ -204,11 +205,24 @@ async def trigger_next_plan(
     if parent.next_plan_triggered:
         return None
 
-    device_ids = list((await db.execute(
-        select(JobInstance.device_id).where(
-            JobInstance.plan_run_id == parent.id
+    # #1686：链下一段只带**当前 ONLINE** 的设备——原实现原样继承父段全量
+    # device_ids（含失败/离线），准入泵 device_offline blocker 会等待这些
+    # 设备导致整链阻塞数小时（run 334/343/370/376 四次复发的根因）。
+    rows = (await db.execute(
+        select(JobInstance.device_id, Device.status)
+        .join(Device, Device.id == JobInstance.device_id)
+        .where(JobInstance.plan_run_id == parent.id)
+    )).all()
+    device_ids = [dev_id for dev_id, status in rows if status == "ONLINE"]
+    excluded = [
+        {"device_id": dev_id, "status": status}
+        for dev_id, status in rows if status != "ONLINE"
+    ]
+    if excluded:
+        logger.warning(
+            "plan_chain_trigger_excluded_offline plan_run=%d excluded=%d %s",
+            parent.id, len(excluded), excluded[:10],
         )
-    )).scalars().unique())
     if not device_ids:
         logger.warning("plan_chain_trigger_no_devices plan_run=%d", parent.id)
         return None
@@ -225,6 +239,8 @@ async def trigger_next_plan(
                 run_context={
                     "triggered_from_plan_run_id": parent.id,
                     "dispatch_state": initial_dispatch_state(),
+                # #1686：链衔接排除清单（离线/ERROR 设备不进入下一段）
+                "chain_excluded_devices": excluded,
                 },
                 parent_plan_run_id=parent.id,
                 root_plan_run_id=parent.root_plan_run_id or parent.id,
@@ -281,11 +297,22 @@ def trigger_next_plan_sync(
     if parent.next_plan_triggered:
         return None
 
-    device_ids = list(db.execute(
-        select(JobInstance.device_id).where(
-            JobInstance.plan_run_id == parent.id
+    # #1686：同 async 路径——链下一段只带当前 ONLINE 设备
+    rows = db.execute(
+        select(JobInstance.device_id, Device.status)
+        .join(Device, Device.id == JobInstance.device_id)
+        .where(JobInstance.plan_run_id == parent.id)
+    ).all()
+    device_ids = [dev_id for dev_id, status in rows if status == "ONLINE"]
+    excluded_sync = [
+        {"device_id": dev_id, "status": status}
+        for dev_id, status in rows if status != "ONLINE"
+    ]
+    if excluded_sync:
+        logger.warning(
+            "plan_chain_trigger_excluded_offline plan_run=%d excluded=%d %s",
+            parent.id, len(excluded_sync), excluded_sync[:10],
         )
-    ).scalars().unique())
     if not device_ids:
         logger.warning(
             "plan_chain_trigger_sync_no_devices plan_run=%d", parent.id,
@@ -303,6 +330,8 @@ def trigger_next_plan_sync(
             run_context={
                 "triggered_from_plan_run_id": parent.id,
                 "dispatch_state": initial_dispatch_state(),
+            # #1686：链衔接排除清单
+            "chain_excluded_devices": excluded_sync,
             },
             parent_plan_run_id=parent.id,
             root_plan_run_id=parent.root_plan_run_id or parent.id,

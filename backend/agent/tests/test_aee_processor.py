@@ -335,6 +335,106 @@ def test_process_logs_on_pull_failed_called_once_keeps_pending(tmp_path, monkeyp
     assert "db.44" not in processed_raw
 
 
+def test_process_logs_pull_retry_exhausted_marks_processed_no_cross_tick_revival(
+    tmp_path, monkeypatch,
+):
+    """#829: pull_retry_limit 耗尽后记入 processed，下一轮不把同一行以 retry_count=0 复活。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    store = _MemStore()
+    stale_line = (
+        "/data/aee_exp/db.44,NE,pkg,_,_,_,_,_,com.stale,2026-05-27 11:00:00.001"
+    )
+    new_line = (
+        "/data/aee_exp/db.55,NE,pkg,_,_,_,_,_,com.new,2026-05-27 12:00:00.001"
+    )
+    history = stale_line + "\n"
+    pull_calls: list[str] = []
+    failed: list[dict] = []
+
+    def shell_fn(cmd: str, timeout: int):
+        if "getprop" in cmd:
+            props = {
+                "ro.product.name": "X6851-OP",
+                "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+                "ro.build.version.incremental": "0401",
+                "ro.build.version.release": "16",
+            }
+            for key, val in props.items():
+                if key in cmd:
+                    return val
+        if "cat /data/aee_exp/db_history" in cmd:
+            return history
+        if "cat /data/vendor/aee_exp/db_history" in cmd:
+            return ""
+        return ""
+
+    def pull_fn(remote: str, local: str, timeout: int) -> bool:
+        pull_calls.append(remote)
+        return False
+
+    from backend.agent.aee import processor as proc_mod
+
+    monkeypatch.setattr(proc_mod, "make_adb_shell_fn", lambda serial, adb_path: lambda cmd, t: shell_fn(cmd, t))
+    monkeypatch.setattr(proc_mod, "make_adb_pull_fn", lambda serial, adb_path: pull_fn)
+    monkeypatch.setattr(proc_mod, "export_correlated_mobilelogs", lambda **kw: {"matched": 0, "pulled": 0})
+    monkeypatch.setattr(proc_mod, "export_bugreport_for_timestamp", lambda **kw: True)
+
+    cfg = ProcessConfig(
+        export_mobilelog=False,
+        export_bugreport=False,
+        pull_retry_limit=2,
+    )
+    # retry_count 按 tick 递增（每 tick 每行最多 pull 一次），limit=2 → 两失败后第三 tick 耗尽
+    for _ in range(2):
+        process_device_logs(
+            serial="dev_exhaust",
+            job_id=829,
+            state_store=store,
+            config=cfg,
+            on_pull_failed=failed.append,
+        )
+    assert len(pull_calls) == 2
+
+    r_exhaust = process_device_logs(
+        serial="dev_exhaust",
+        job_id=829,
+        state_store=store,
+        config=cfg,
+        on_pull_failed=failed.append,
+    )
+    assert r_exhaust.pulled == 0
+    assert r_exhaust.pending_remaining == 0
+    assert any(e.startswith("pull_retry_exceeded:") for e in r_exhaust.errors)
+    assert failed[-1]["exhausted"] is True
+    pulls_after_exhaust = len(pull_calls)
+
+    processed_key = state_key("dev_exhaust", "aee_exp")
+    processed_raw = json.loads(store.get_state(processed_key))
+    assert stale_line in processed_raw
+
+    process_device_logs(
+        serial="dev_exhaust",
+        job_id=829,
+        state_store=store,
+        config=cfg,
+        on_pull_failed=failed.append,
+    )
+    assert len(pull_calls) == pulls_after_exhaust, "exhausted 行不得跨 tick 复活重拉"
+
+    history = stale_line + "\n" + new_line + "\n"
+    process_device_logs(
+        serial="dev_exhaust",
+        job_id=829,
+        state_store=store,
+        config=cfg,
+        on_pull_failed=failed.append,
+    )
+    assert len(pull_calls) == pulls_after_exhaust + 1, "仅新行应进入 pending 并 pull 一次"
+    pending_raw = store.get_state("watcher:aee:dev_exhaust:aee_exp:pending_pull", "{}")
+    assert "db.44" not in pending_raw
+    assert "db.55" in pending_raw
+
+
 def test_process_logs_mobilelog_uses_stp_subdir_default(tmp_path, monkeypatch):
     """ADR-0025 D3: mobilelog 落在事件目录(local_target_dir)内的 mobilelog/ 子目录。"""
     monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
@@ -643,6 +743,36 @@ def test_process_device_logs_enriches_from_local_exp_main(tmp_path, monkeypatch)
     assert captured
     assert captured[0]["parsed"]["event_subtype"] == "JE"
     assert captured[0]["parsed"]["pkg_name"] == "com.android.settings"
+
+
+def test_process_device_logs_persists_processed_before_on_new_entry(tmp_path, monkeypatch):
+    """#803: on_new_entry 回调前 processed/pending 应已落盘，避免 emit 后崩溃重发。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.89,CRASH,pkg,_,_,_,_,_,com.emit.app,2026-05-28 10:15:22.123"
+    _setup_pdl_stubs(monkeypatch, line)
+
+    observed: dict[str, object] = {}
+
+    def on_new(payload: dict) -> None:
+        observed["saved"] = json.loads(
+            store.get_state(state_key("dev_emit", "aee_exp"), "[]")
+        )
+        observed["pending"] = json.loads(
+            store.get_state("watcher:aee:dev_emit:aee_exp:pending_pull", "{}")
+        )
+
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r = process_device_logs(
+        serial="dev_emit",
+        job_id=89,
+        state_store=store,
+        config=cfg,
+        on_new_entry=on_new,
+    )
+    assert r.pulled == 1
+    assert line in observed["saved"]
+    assert observed["pending"] == {}
 
 
 def test_process_device_logs_persists_processed_before_side_effects(tmp_path, monkeypatch):
