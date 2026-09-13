@@ -640,3 +640,57 @@ class TestHostHardDeleteGuards:
         resp = client.delete("/api/v1/hosts/del-h-prh", headers=admin_headers)
         assert resp.status_code == 409, resp.text
         assert "投影" in resp.json()["detail"]
+
+
+class TestRetiredHostControlPlaneRejects:
+    """#1805 切片二 / ADR-0038 D5：退役主机拒绝执行/配置类动作。
+
+    覆盖：hot-update / install / watcher-admin-state 三处路由级拒绝；
+    reload-config 在 dedup 路由测试文件覆盖。活体退役（ONLINE + retired_at）
+    是 D4 明许形态，因此这里用 ONLINE 主机验证「status 不构成豁免」。
+    """
+
+    @staticmethod
+    def _retired_online_host(db_session, host_id: str):
+        from datetime import datetime, timezone
+
+        from backend.models.host import Host
+
+        host = Host(
+            id=host_id, hostname=host_id, status="ONLINE",
+            ip="192.0.2.55", ssh_port=22,
+            retired_at=datetime.now(timezone.utc),
+        )
+        db_session.add(host)
+        db_session.commit()
+        return host
+
+    def test_hot_update_retired_is_409(self, client, db_session, admin_headers):
+        self._retired_online_host(db_session, "ret-hot")
+        resp = client.post(
+            "/api/v1/hosts/ret-hot/hot-update", headers=admin_headers,
+        )
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["code"] == "HOST_RETIRED"
+
+    def test_install_retired_is_409(self, client, db_session, admin_headers, monkeypatch):
+        import shutil
+
+        # 依赖探测在退役判据之前——探测通过后才会走到 409（否则 501 抢先）
+        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+        self._retired_online_host(db_session, "ret-install")
+        resp = client.post(
+            "/api/v1/hosts/ret-install/install", headers=admin_headers,
+        )
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["code"] == "HOST_RETIRED"
+
+    def test_watcher_admin_state_retired_is_409(self, client, db_session, admin_headers):
+        self._retired_online_host(db_session, "ret-watcher")
+        resp = client.patch(
+            "/api/v1/hosts/ret-watcher/watcher-admin-state",
+            json={"watcher_admin_active": False},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["code"] == "HOST_RETIRED"

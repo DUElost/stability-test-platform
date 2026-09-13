@@ -57,6 +57,7 @@ from backend.services.host_upgrade_gate import (
     HostAbortPendingError,
     HostHasActiveJobsError,
     HostNotFoundError,
+    HostRetiredError,
     begin_host_upgrade,
     end_host_upgrade,
 )
@@ -3269,6 +3270,18 @@ def _raise_upgrade_gate_http(host_id: str, exc: Exception) -> None:
                     "Retry with abort_running_jobs=true to abort then upgrade."
                 ),
                 "active_jobs": exc.active_jobs,
+            },
+        ) from None
+    if isinstance(exc, HostRetiredError):
+        # ADR-0038 D5：退役主机拒绝执行/配置类动作（升级门禁同族）
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "HOST_RETIRED",
+                "message": (
+                    f"Host {host_id} is retired; unretire it before upgrade "
+                    "(ADR-0038 D5)."
+                ),
             },
         ) from None
     if isinstance(exc, HostAbortDrainTimeoutError):
