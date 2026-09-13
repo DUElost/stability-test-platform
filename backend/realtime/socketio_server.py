@@ -723,6 +723,47 @@ def schedule_emit(event: str, data: Dict[str, Any], namespace: str = "/dashboard
     asyncio.run_coroutine_threadsafe(coro, _main_loop)
 
 
+# #703：大批量 abort 时若对每个 host 各调一次 schedule_emit，会向主循环同步
+# 提交 N 个 run_coroutine_threadsafe；上百 host 时事件循环被瞬时灌满。
+# 合并为单协程扇出，并在批次间 sleep(0) 让出调度。
+_ABORT_CONTROL_FANOUT_YIELD_EVERY = 8
+
+
+def schedule_agent_control_fanout(
+    items: list[tuple[str, Dict[str, Any]]],
+    *,
+    yield_every: int = _ABORT_CONTROL_FANOUT_YIELD_EVERY,
+) -> None:
+    """Thread-safe：一次提交，向多个 agent room 发 control。
+
+    ``items`` 为 ``(host_id, data)``，``data`` 即 sio.emit 的事件体
+    （含 ``command`` / ``payload``）。空列表为 no-op。
+    """
+    if not items:
+        return
+    if _main_loop is None or _main_loop.is_closed():
+        logger.warning("main_loop_not_available_for_sio_emit")
+        return
+    try:
+        sio = get_sio()
+    except RuntimeError:
+        logger.warning("sio_not_initialized_for_emit")
+        return
+
+    async def _fanout() -> None:
+        for i, (host_id, data) in enumerate(items):
+            await sio.emit(
+                "control",
+                data,
+                namespace="/agent",
+                room=f"agent:{host_id}",
+            )
+            if yield_every > 0 and (i + 1) % yield_every == 0:
+                await asyncio.sleep(0)
+
+    asyncio.run_coroutine_threadsafe(_fanout(), _main_loop)
+
+
 def emit_plan_changed(plan_id: int, action: str) -> None:
     """Sync-safe:任一浏览器创建/更新/删除 Plan 后广播 plan_changed,
     其余端据此失效计划缓存(#268 多Worker B2——此前 Plan 编辑跨端陈旧最长 60s+)。"""

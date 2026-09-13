@@ -433,7 +433,9 @@ def test_abort_pending_count_uses_returning_after_concurrent_claim(
         return_value=False,
     ), patch(
         "backend.services.plan_run_abort.enqueue_dedup_terminal_sync",
-    ), patch("backend.services.plan_run_abort.schedule_emit") as emit:
+    ), patch("backend.services.plan_run_abort.schedule_emit"), patch(
+        "backend.services.plan_run_abort.schedule_agent_control_fanout",
+    ) as fanout:
         result = abort_plan_run(run.id, db=db_session, reason="race_claim")
 
     assert claim_injected["done"] is True
@@ -458,14 +460,11 @@ def test_abort_pending_count_uses_returning_after_concurrent_claim(
     assert run.status == PlanRunStatus.RUNNING.value
     assert run.run_context["abort_requested"]["requested_job_ids"] == [claimed_id]
 
-    control_emits = [
-        call
-        for call in emit.call_args_list
-        if call.args and call.args[0] == "control"
-    ]
-    assert control_emits, "claimed RUNNING job must receive abort control"
-    payload = control_emits[0].args[1]["payload"]
-    assert payload["job_ids"] == [claimed_id]
+    assert fanout.called, "claimed RUNNING job must receive abort control"
+    items = fanout.call_args.args[0]
+    assert len(items) == 1
+    assert items[0][0] == sample_host.id
+    assert items[0][1]["payload"]["job_ids"] == [claimed_id]
 
 
 def test_abort_run_context_patch_preserves_concurrent_writer_keys(
@@ -654,18 +653,18 @@ def test_abort_running_heavy_does_not_load_full_job_orm_rows(
         "backend.services.plan_run_abort.should_trigger_dedup", return_value=False,
     ), patch(
         "backend.services.plan_run_abort.enqueue_dedup_terminal_sync",
-    ), patch("backend.services.plan_run_abort.schedule_emit") as emit:
+    ), patch("backend.services.plan_run_abort.schedule_emit"), patch(
+        "backend.services.plan_run_abort.schedule_agent_control_fanout",
+    ) as fanout:
         result = abort_plan_run(run.id, db=db_session, reason="narrow_select")
 
     assert loaded_full["count"] == 0, "RUNNING 路径不得全量 JobInstance.all()"
     assert len(result.get("abort_requested_jobs") or []) == 15
     assert result.get("aborted_jobs") == []
-    control = [
-        c for c in emit.call_args_list
-        if (c.args[0] if c.args else None) == "control"
-    ]
-    assert len(control) == 1
-    assert len(control[0].args[1]["payload"]["job_ids"]) == 15
+    assert fanout.call_count == 1
+    items = fanout.call_args.args[0]
+    assert len(items) == 1
+    assert len(items[0][1]["payload"]["job_ids"]) == 15
 
 
 def test_abort_pending_commits_abort_requested_before_batch(
@@ -728,3 +727,67 @@ def test_abort_pending_commits_abort_requested_before_batch(
     assert "early" in commits, f"expected early commit releasing lock, got {commits}"
     assert "final" in commits
     assert len(result.get("aborted_jobs") or []) == 8
+
+
+def test_abort_multi_host_control_uses_single_fanout(
+    db_session, sample_plan_run, sample_plan, sample_host,
+):
+    """#703：多 host RUNNING abort 只调用一次 schedule_agent_control_fanout。"""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    from backend.models.enums import JobStatus
+    from backend.models.host import Device, Host
+    from backend.models.job import JobInstance
+    from backend.models.plan_run import PlanRun
+    from backend.services.plan_run_abort import abort_plan_run
+
+    run = db_session.get(PlanRun, sample_plan_run.id)
+    hosts = [sample_host]
+    for i in range(1, 12):
+        h = Host(
+            id=f"fanout-h-{i}",
+            hostname=f"fanout-host-{i}",
+            name=f"fanout-host-{i}",
+            ip=f"10.9.0.{i}",
+            ip_address=f"10.9.0.{i}",
+            status="ONLINE",
+            last_heartbeat=datetime.now(timezone.utc),
+        )
+        db_session.add(h)
+        hosts.append(h)
+    db_session.flush()
+    for i, h in enumerate(hosts):
+        dev = Device(serial=f"fanout-d-{i}", host_id=h.id, status="BUSY")
+        db_session.add(dev)
+        db_session.flush()
+        db_session.add(
+            JobInstance(
+                plan_run_id=run.id,
+                plan_id=sample_plan.id,
+                device_id=dev.id,
+                host_id=h.id,
+                status=JobStatus.RUNNING.value,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            )
+        )
+    run.total_job_count = len(hosts)
+    db_session.commit()
+
+    with patch(
+        "backend.services.plan_run_abort.should_trigger_dedup", return_value=False,
+    ), patch(
+        "backend.services.plan_run_abort.enqueue_dedup_terminal_sync",
+    ), patch("backend.services.plan_run_abort.schedule_emit"), patch(
+        "backend.services.plan_run_abort.schedule_agent_control_fanout",
+    ) as fanout:
+        abort_plan_run(run.id, db=db_session, reason="multi_host_fanout")
+
+    assert fanout.call_count == 1
+    items = fanout.call_args.args[0]
+    assert len(items) == 12
+    host_ids = {item[0] for item in items}
+    assert host_ids == {h.id for h in hosts}
+    for _hid, data in items:
+        assert data["command"] == "abort"
+        assert len(data["payload"]["job_ids"]) == 1
