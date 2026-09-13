@@ -60,10 +60,6 @@ vi.mock('./components/BatchEditDeviceTagsDialog', () => ({
   BatchEditDeviceTagsDialog: () => null,
 }));
 
-vi.mock('./components/DeviceMetricsModal', () => ({
-  DeviceMetricsModal: () => null,
-}));
-
 // DeviceBulkActionBar 与 AssignProjectDialog 保持真实渲染（归入流程端到端测试）
 
 function createWrapper() {

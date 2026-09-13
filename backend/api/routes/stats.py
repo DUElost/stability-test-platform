@@ -67,12 +67,6 @@ class MetricPoint(BaseModel):
     mem_used: Optional[int] = None
 
 
-class DeviceMetricsResponse(BaseModel):
-    device_id: int
-    points: List[MetricPoint]
-    hours: int
-
-
 class DailyCompletionPoint(BaseModel):
     date: str
     passed: int = 0
@@ -193,17 +187,6 @@ def get_activity(
         cursor += timedelta(hours=1)
 
     return ActivityResponse(points=points, hours=hours)
-
-
-@router.get("/device/{device_id}/metrics", response_model=DeviceMetricsResponse)
-def get_device_metrics(
-    device_id: int,
-    hours: int = Query(24, ge=1, le=168),
-    db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_active_user),
-):
-    """Device metric history — DeviceMetricSnapshot table deprecated; returns empty."""
-    return DeviceMetricsResponse(device_id=device_id, points=[], hours=hours)
 
 
 class DashboardHostSummary(BaseModel):
