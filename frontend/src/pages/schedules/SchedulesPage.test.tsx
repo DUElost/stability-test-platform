@@ -81,6 +81,31 @@ describe('SchedulesPage', () => {
     expect(screen.getByText('0 2 * * *')).toBeInTheDocument();
   });
 
+  it('narrow-viewport 下保留表格高度下限与外层兜底滚动（#750）', async () => {
+    mocks.schedulesList.mockResolvedValue({
+      items: [{
+        id: 1,
+        name: '夜跑',
+        cron_expr: '0 2 * * *',
+        plan_id: 7,
+        device_ids: [1, 2],
+        enabled: true,
+        created_at: '2026-08-14T00:00:00Z',
+      }],
+      total: 1,
+    });
+
+    const { container } = renderPage();
+    await screen.findByText('夜跑');
+
+    const page = container.firstElementChild as HTMLElement;
+    // 外层兜底：AppShell main 为 overflow-hidden，页头+表单高于视口时只有这里能滚
+    expect(page.className).toContain('overflow-auto');
+    const tableArea = page.querySelector('[class*="min-h-[240px]"]') as HTMLElement | null;
+    expect(tableArea).not.toBeNull();
+    expect(tableArea?.className).toContain('overflow-auto');
+  });
+
   it('prefills the edit form from cron_expr without crashing', async () => {
     mocks.schedulesList.mockResolvedValue({
       items: [{
