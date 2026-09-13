@@ -20,6 +20,8 @@ from backend.services.host_maintenance import (
     HostMaintenanceConflict,
     maintenance_window,
 )
+from backend.services.agent_version_info import finalize_hot_update_outcome
+from backend.services.artifact_digest import compute_desired_artifact_digest
 from backend.services.host_updater import (
     _AGENT_SOURCE_DIR,
     _resolve_ssh_creds,
@@ -85,6 +87,12 @@ def sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional[
     if not creds.password and not creds.key_path:
         return False, "no_ssh_credentials"
 
+    # ADR-0040 D5：precheck 通道按「治愈证据优先」不做 no-op 判定——本函数只在
+    # 轻量脚本推送失败后触发（runner.py 唯一调用点），存在内容漂移的正证据；
+    # digest 相等也可能恰是 §7-3 带外漂移形态，跳过治愈会让 host 持续阻断派发。
+    # 但 digest 仍随部署写入远端，使 UI/API 与 --direct 通道进入 no-op 稳态。
+    desired_digest = compute_desired_artifact_digest()
+
     # #960：上传/rsync/重启期间占住主机维护窗口，期间不再向该主机派发或 claim。
     # 拿不到窗口（已有热更新在跑）视为本次同步失败，由调用方按既有兜底处理。
     holder = f"precheck-sync:{uuid.uuid4().hex[:8]}"
@@ -97,11 +105,18 @@ def sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional[
                 ssh_password=creds.password,
                 ssh_key_path=creds.key_path,
                 known_hosts_path=creds.known_hosts_path,
+                artifact_digest=desired_digest,
             )
     except HostMaintenanceConflict:
         return False, "host_in_maintenance"
     except Exception as exc:
         return False, f"hot_update_exception: {exc}"
+
+    # ADR-0040 D5：结果审计 + deployed_at 语义 + 指标与 UI/API、--direct 统一
+    #（此前 precheck 路径「跑了但什么都没记」，§1.2 事实 4 的分叉在此闭合）。
+    finalize_hot_update_outcome(
+        db, host, result, entry="precheck_sync",
+    )
 
     if not result.get("ok"):
         return False, f"hot_update_failed: {result.get('message', 'unknown')}"

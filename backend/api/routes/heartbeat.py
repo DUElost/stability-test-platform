@@ -240,6 +240,10 @@ def _process_heartbeat_with_db(
     host.mount_status = payload.mount_status
     if payload.script_catalog_version:
         host.script_catalog_version = payload.script_catalog_version
+    # ADR-0040 D2：远端 current artifact digest 落显式列（no-op gate 的比对源）。
+    # 空值不覆盖——digest 缺失（未部署新协议/文件损坏）不应抹掉已知状态。
+    if payload.agent_artifact_digest:
+        host.agent_artifact_digest = payload.agent_artifact_digest
 
     # ADR-0038 D4：退役主机心跳——**如实记录**（上面的 status / last_heartbeat /
     # 版本 / 身份照常更新，本函数从不触碰 retired_at = 不自动解除退役），
