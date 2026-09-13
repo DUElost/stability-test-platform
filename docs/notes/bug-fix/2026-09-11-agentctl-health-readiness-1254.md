@@ -38,10 +38,37 @@ Class: bug-fix
 - `check:quick` → **7 gates 全绿**（ruff / eslint / tsc / knip / compileall /
   gov-surface / ai-work）。
 
+**补充验收（2026-09-13，隔离容器 + 真实 Nginx 反代）**——原 pending 第 1 条：
+
+拓扑（docker 自定义网络隔离，127.0.0.1 高位端口，全程不触生产）：
+`nginx 反代 → stub-home（恒 200）+ stub-health（503）`，另起一组全 200 作对照。
+nginx 用本地 `stability-frontend` 镜像内的真实 nginx（1.31.5），conf 要点：
+
+```nginx
+location = /health { proxy_pass http://stub-health:8002; }  # 依赖故障 → 503
+location /        { proxy_pass http://stub-home:8001; }     # 首页仍 200
+```
+
+调用真实函数（与契约测试同款 source 方式，剥离入口 `main`）：
+
+```bash
+bash -c '. "$1"; check_server_connection "$2"; echo "rc=$?"' -- agentctl.sh "$URL"
+```
+
+结果矩阵（经真实 Nginx 反代）：
+
+| 场景 | 新版（修复） | 旧版（pre-fix，`4f05c9c7^`） |
+|---|---|---|
+| `/health`=503 + `/`=200 | `check_server_connection` **rc=22（失败）**；`health_check` 输出「服务器连接: 无法连接」 | **rc=0**；`health_check` 输出「服务器连接: 正常」（被首页 200 骗过，复现原缺陷） |
+| 两者皆 200 | rc=0；「正常」 | rc=0；「正常」 |
+
+结论：修复在真实反代拓扑下端到端成立——旧版在依赖故障时误判为正常、新版正确
+失败；Ansible 升级链消费的 `agentctl health` 返回码在依赖故障时非零，拦得住。
+容器与网络已全部拆除（无残留）。
+
 未完成（pending）：
 
-- 真实 Nginx 反代下"`/health` 503 + 首页 200"的端到端复现：本机为生产控制面
-  宿主，不在生产环境构造依赖故障；
+- 无（原「真实 Nginx 反代端到端复现」已由上述隔离容器实测补齐）；
 - 隔离 VM 安装链验证不涉及本单（F08 验收无该要求）。
 
 ## Revisit

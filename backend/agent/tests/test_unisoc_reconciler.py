@@ -208,3 +208,125 @@ def test_emit_aee_ts_is_device_timestamp_not_subtype(tmp_path):
     assert extra["aee_ts"] == "2026-09-01 12:34:56"
     assert extra["aee_ts"] != extra["event_subtype"]
     # 无时区原文时 to_utc 可为 None（与 MTK 口径一致）
+
+
+class TestProcessedPrune:
+    """#767：_processed 只增不减 → 状态存储线性膨胀。
+
+    裁剪语义：名字「连续 N 拍不在设备列表且不在当前本地树」才移除——
+    设备仍存留的事件不会被重拉重发，本地树内事件仍被重扫去重；设备列表
+    失败（None）当拍不裁剪且清零滞回。state key/JSON 格式不变，存量全量
+    集随列表恢复自然收敛。
+    """
+
+    def _seed_store(self, names, serial_key: str = "watcher:unisoc:UNI-1:processed_event_dirs"):
+        store = _MemStore()
+        store.set_state(serial_key, json.dumps(sorted(names)))
+        return store
+
+    def _device_shell(self, names):
+        """返回 shell_fn：两个 root 都列出 names（或 None=失败）。"""
+        listing = "\n".join(names) + ("\n" if names else "")
+        return lambda cmd, _t: (
+            listing if cmd.startswith("ls -1 /data/") else None
+        )
+
+    def test_stale_name_pruned_after_streak_live_kept(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "2")
+        store = self._seed_store(["live1", "stale1", "stale2"])
+        r = _make_reconciler(
+            tmp_path, store=store, shell_fn=self._device_shell(["live1"]),
+        )
+        r._load_processed_state()
+        assert r.tick_once() == 0  # 滞回第 1 拍：不裁剪
+        assert r._processed == {"live1", "stale1", "stale2"}
+        assert r.tick_once() == 0  # 滞回第 2 拍：stale 裁剪
+        assert r._processed == {"live1"}
+        assert json.loads(store._data[r._state_key()]) == ["live1"]
+
+    def test_local_tree_name_kept_even_if_absent_from_device(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
+        store = self._seed_store(["loc1", "gone1"])
+        r = _make_reconciler(
+            tmp_path, store=store, shell_fn=self._device_shell([]),
+        )
+        r._load_processed_state()
+        # loc1 在当前 stamp 本地树（设备已清理但本地未滚动）：仍须去重
+        root = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
+        ev = root / "loc1"
+        ev.mkdir(parents=True)
+        (ev / "unievent_info.json").write_text("{}", encoding="utf-8")
+        r.tick_once()
+        assert r._processed == {"loc1"}
+
+    def test_listing_failure_suspends_prune_and_resets_streak(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
+        store = self._seed_store(["stale1"])
+        r = _make_reconciler(
+            tmp_path, store=store, shell_fn=lambda *_a, **_k: None,
+        )
+        r._load_processed_state()
+        r.tick_once()
+        assert r._processed == {"stale1"}  # 列表失败：不裁剪
+        assert r._absent_streak == {}     # 滞回清零
+
+    def test_legacy_huge_set_converges_to_device_listing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "2")
+        legacy = {f"evt_{i:05d}" for i in range(1000)} | {"live_a", "live_b"}
+        store = self._seed_store(legacy)
+        r = _make_reconciler(
+            tmp_path, store=store, shell_fn=self._device_shell(["live_a", "live_b"]),
+        )
+        r._load_processed_state()
+        r.tick_once()
+        r.tick_once()
+        assert r._processed == {"live_a", "live_b"}
+        assert len(json.loads(store._data[r._state_key()])) == 2
+
+    def test_pruned_name_not_repulled(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
+        store = self._seed_store(["stale1", "fresh1"])
+        pulls: List[str] = []
+
+        def pull_fn(remote: str, _local: str, _t: int) -> bool:
+            pulls.append(remote)
+            return False
+
+        def shell_fn(cmd: str, _t: int):
+            if cmd.startswith("ls -1 /data/"):
+                return "fresh1\n"
+            if "unievent_info.json" in cmd:
+                return "unievent_info.json\n"
+            return None
+
+        r = _make_reconciler(
+            tmp_path, store=store, shell_fn=shell_fn, pull_fn=pull_fn,
+        )
+        r._load_processed_state()
+        r.tick_once()  # stale1 裁剪（设备已无）；fresh1 在 processed → 不重拉
+        assert not any("stale1" in p for p in pulls)
+        assert not any("fresh1" in p for p in pulls)
+
+    def test_hard_cap_evicts_longest_absent_first(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1000")
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_MAX_ENTRIES", "5")
+        names = {f"evt_{i:02d}" for i in range(10)} | {"live1"}
+        store = self._seed_store(names)
+        r = _make_reconciler(
+            tmp_path, store=store, shell_fn=self._device_shell(["live1"]),
+        )
+        r._load_processed_state()
+        r.tick_once()  # 滞回未到 → 靠硬上限驱逐；live1 滞回 0 最不易被驱逐
+        assert len(r._processed) <= 5
+        assert "live1" in r._processed
+
+    def test_prune_alone_triggers_state_save(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
+        store = self._seed_store(["stale1", "live1"])
+        r = _make_reconciler(
+            tmp_path, store=store, shell_fn=self._device_shell(["live1"]),
+        )
+        r._load_processed_state()
+        assert r.tick_once() == 0  # 无新发射，仅裁剪
+        # 裁剪必须落盘（否则重启后旧集回归）
+        assert json.loads(store._data[r._state_key()]) == ["live1"]
