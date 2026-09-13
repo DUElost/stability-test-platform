@@ -12,8 +12,17 @@ export interface HostMutationInput {
 }
 
 export const hosts = {
-  list: (skip = 0, limit = 50) =>
-    apiClient.get<PaginatedResponse<Host>>('/hosts', { params: { skip, limit } }).then(r => r.data),
+  list: (skip = 0, limit = 50, includeRetired = false) =>
+    apiClient.get<PaginatedResponse<Host>>('/hosts', {
+      // ADR-0038 D5：默认排除退役主机（后端同口径）；显式置 true 才显示
+      params: { skip, limit, include_retired: includeRetired },
+    }).then(r => r.data),
+  /** ADR-0038 D2：退役（admin；reason 必填，审计 who/when/reason）。 */
+  retire: (id: number | string, reason: string) =>
+    apiClient.post<Host>(`/hosts/${id}/retire`, { retire_reason: reason }).then(r => r.data),
+  /** ADR-0038 D2：解除退役（admin；reason 必填）。 */
+  unretire: (id: number | string, reason: string) =>
+    apiClient.post<Host>(`/hosts/${id}/unretire`, { retire_reason: reason }).then(r => r.data),
   get: (id: number | string) => apiClient.get<Host>(`/hosts/${id}`).then(r => r.data),
   getDetail: (id: number | string) =>
     apiClient.get<Host>(`/hosts/${id}`).then(r => r.data),
@@ -30,8 +39,8 @@ export const hosts = {
 };
 
 /** Shared react-query fetcher — always returns Host[], never the paginated envelope. */
-export const fetchHostList = (skip = 0, limit = 200) =>
-  hosts.list(skip, limit).then((res) => res.items);
+export const fetchHostList = (skip = 0, limit = 200, includeRetired = false) =>
+  hosts.list(skip, limit, includeRetired).then((res) => res.items);
 
 /** Normalize react-query cache to Host[] (tolerates legacy PaginatedResponse pollution). */
 export function coerceHostList(data: unknown): Host[] {

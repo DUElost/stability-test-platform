@@ -288,17 +288,47 @@ fi
 #     即对方视 NEUTRAL 为满足态。若我们判它失败，就会出现「GitHub 认为可合入、
 #     我们的 FIFO 却拒绝 update-branch」的队首伪停摆。
 #   - status != COMPLETED          → pending：仅日志，不告警（机器在跑，人无需动作）
-#   - 注册表里根本没有该 check     → missing：告警（真正的 missing）
+#   - 注册表里根本没有该 check     → missing：**仅在启动窗口之外**才告警（见下）
 #   - status == COMPLETED 且 conclusion 为 FAILURE/CANCELLED/TIMED_OUT/… → failed：告警
+#
+# #1792（第三类）：`MISSING` 不能无条件告警。`CodeQL` 是**独立 workflow**，其 check 条目
+# 晚于 CI job 注册进 rollup——实测 #1855 lint 启动 11:14:42、CodeQL 启动 11:15:15
+# （+33s），而告警发生在 11:14:49（比 CodeQL 注册早 26s）。该窗口内条目**确实不存在**，
+# 但那是**每次 PR 都会出现的正常启动时序**，不是「check 未注册/未上报」的异常。
+#
+# 判据：用 rollup **自身已有的时间戳**判断是否仍在启动窗口——无需跨轮持久化
+# （reconcile 是无状态 job），也无需 check→workflow 映射的额外 API 调用。规则：
+#   - 该 PR 尚无任何带 startedAt 的 check → 极早期，视为启动窗口，不告警；
+#   - 最早 check 启动至今 < MISSING_GRACE_SECONDS → 启动窗口，不告警；
+#   - 超过宽限仍缺条目 → 真 missing，告警（workflow 被禁用/改名/审批卡住等）。
+MISSING_GRACE_SECONDS=600  # 10 分钟：远大于实测 20-38s 注册延迟，又不至于长期静默
+
 failed_checks=""
 pending_checks=""
+missing_checks=""
+
+# 启动窗口基准：本 PR rollup 中最早的 startedAt（无则视为极早期）
+earliest_started="$(
+  jq -r '[.statusCheckRollup[]? | .startedAt? // empty] | map(select(. != null)) | sort | first // ""' <<<"$head_json"
+)"
+in_startup_window="false"
+if [ -z "$earliest_started" ]; then
+  in_startup_window="true"
+else
+  started_epoch="$(date -u -d "$earliest_started" +%s 2>/dev/null || echo "")"
+  now_epoch="$(date -u +%s)"
+  if [ -n "$started_epoch" ] && [ "$((now_epoch - started_epoch))" -lt "$MISSING_GRACE_SECONDS" ]; then
+    in_startup_window="true"
+  fi
+fi
+
 for check in "${REQUIRED[@]}"; do
   # 同时取 status 与 conclusion：前者区分「在跑」与「已定论」。
   #
   # status 缺失时的兜底（`has("status")` 判定）：GitHub 的 statusCheckRollup 条目
   # 一般带 status，但**无 status 而有 conclusion** 意味着「已有定论」——按 COMPLETED
   # 处理，否则会把失败误判成 pending 而静默（把 #1761 的修复变成反向缺陷）。
-  # 两者皆无 → 该 check 在注册表中不存在 → MISSING（真正的 missing，应告警）。
+  # 两者皆无 → 该 check 在注册表中不存在 → MISSING。
   read -r status conclusion <<<"$(
     jq -r --arg name "$check" '
       [.statusCheckRollup[]? | select(.name == $name)] | first
@@ -315,12 +345,16 @@ for check in "${REQUIRED[@]}"; do
     continue
   fi
 
-  # 注册表里没有该 check（无条目）→ 真正的 missing：既不是在跑，也不是「跑完了失败」，
-  # 而是**该 check 根本没被注册/上报**。这属于需人工排查的形态，与原实现的告警口径
-  # 一致（#1761 只从告警集中移除「进行中」，不移除 missing）。
+  # 注册表里没有该 check（无条目）——区分「启动窗口内尚未注册」与「真 missing」：
+  # 前者是正常时序（不告警），后者需人工排查（告警）。
   if [ "$status" = "MISSING" ]; then
-    echo "Queue head #${head_number}: ${check} not reported (missing); skip head update."
-    failed_checks="${failed_checks:+${failed_checks}, }${check}:missing"
+    if [ "$in_startup_window" = "true" ]; then
+      missing_checks="${missing_checks:+${missing_checks}, }${check}:not-yet-registered"
+      echo "Queue head #${head_number}: ${check} not yet registered (startup window); skip head update."
+    else
+      echo "Queue head #${head_number}: ${check} not reported (missing); skip head update."
+      failed_checks="${failed_checks:+${failed_checks}, }${check}:missing"
+    fi
     continue
   fi
 
@@ -341,11 +375,12 @@ if [ -n "$failed_checks" ]; then
   alert_queue_blocked "$head_number" "$head_ref" "$failed_checks"
   exit 0
 fi
-if [ -n "$pending_checks" ]; then
-  # 仅有 pending：不告警（#1761），也**不** resolve 存量告警——CI 还没跑完，
-  # 此刻既不该新增噪音，也不该宣布「已恢复」（真实失败可能紧随其后）。
-  # 下一轮 reconcile 会重新判定；失败则走上面的告警分支。
-  echo "Queue head #${head_number}: awaiting pending checks: ${pending_checks}"
+if [ -n "$pending_checks" ] || [ -n "$missing_checks" ]; then
+  # 仅有 pending（#1761）或启动窗口内尚未注册的 check（#1792 第三类）：不告警，
+  # 也**不** resolve 存量告警——CI 还没跑完，此刻既不该新增噪音，也不该宣布
+  # 「已恢复」（真实失败可能紧随其后）。下一轮 reconcile 会重新判定；一旦
+  # pending 转 failed、或 missing 超出启动窗口，则走上面的告警分支。
+  echo "Queue head #${head_number}: awaiting pending/unregistered checks: ${pending_checks}${pending_checks:+ }${missing_checks}"
   exit 0
 fi
 

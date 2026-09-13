@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2, CircleSlash, RotateCcw } from 'lucide-react';
 import { resourceUsageBgClass, resourceUsageTextClass, STAT } from '@/design-system/tokens';
 import { formatBytesFromGb, formatDateTimeFull, formatDurationSeconds, formatLocalTime, parseIsoToDate } from '@/utils/format';
 
@@ -49,6 +49,10 @@ export interface HostTableData {
   status: 'ONLINE' | 'OFFLINE' | 'DEGRADED';
   watcher_admin_active?: boolean;
   last_heartbeat?: string;
+  /** ADR-0038 D1/D4：退役生命周期（retired_at 非空即退役；与 status 正交） */
+  retired_at?: string | null;
+  retired_by?: string | null;
+  retire_reason?: string | null;
   /** 与 status 正交：曾安装成功 / 有过心跳 */
   agent_installed?: boolean;
   agent_protocol_version?: string | null;
@@ -80,6 +84,9 @@ interface ExpandableHostTableProps {
   isInstalling?: (hostId: string | number) => boolean;
   onEdit?: (host: HostTableData) => void;
   onDelete?: (host: HostTableData) => void;
+  /** ADR-0038 D2：退役 / 解除退役（admin；原因由调用方收集）。 */
+  onRetire?: (host: HostTableData) => void;
+  onUnretire?: (host: HostTableData) => void;
   isDeleting?: (hostId: string | number) => boolean;
   isAdmin?: boolean;
   onWatcherAdminStateChange?: (hostId: string | number, nextActive: boolean) => void;
@@ -160,6 +167,8 @@ export function ExpandableHostTable({
   isInstalling,
   onEdit,
   onDelete,
+  onRetire,
+  onUnretire,
   isDeleting,
   isAdmin,
   onWatcherAdminStateChange,
@@ -402,6 +411,22 @@ export function ExpandableHostTable({
                         <div className="space-y-1">
                           <div className="flex items-center gap-1.5">
                             <StatusBadge kind="host" status={host.status} size="sm" />
+                            {host.retired_at && (
+                              <span
+                                className={cn(
+                                  'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium cursor-help',
+                                  host.status === 'ONLINE'
+                                    ? 'bg-warning/10 text-warning'
+                                    : 'bg-muted text-muted-foreground',
+                                )}
+                                title={`已退役${host.retired_by ? `（${host.retired_by}）` : ''}${
+                                  host.retire_reason ? `：${host.retire_reason}` : ''
+                                }`}
+                                data-testid={`host-retired-badge-${host.id}`}
+                              >
+                                {host.status === 'ONLINE' ? '已退役但仍在心跳' : '已退役'}
+                              </span>
+                            )}
                             {host.health_status && host.health_status !== 'HEALTHY' && (
                               <span
                                 className={cn(
@@ -595,7 +620,9 @@ export function ExpandableHostTable({
                       </TableCell>
                       <TableCell className="px-3 py-1.5 text-right">
                         <div className="inline-flex items-center gap-1.5">
-                          {host.status === 'ONLINE' && onHotUpdate ? (
+                          {host.retired_at ? (
+                            <span className="text-muted-foreground/40 text-xs">已退役</span>
+                          ) : host.status === 'ONLINE' && onHotUpdate ? (
                             <button
                               type="button"
                               onClick={(e) => {
@@ -637,7 +664,7 @@ export function ExpandableHostTable({
                           ) : (
                             <span className="text-muted-foreground/40 text-xs">-</span>
                           )}
-                          {isAdmin && (onEdit || onDelete) && (
+                          {isAdmin && (onEdit || onDelete || onRetire || onUnretire) && (
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <button
@@ -654,6 +681,18 @@ export function ExpandableHostTable({
                                   <DropdownMenuItem onClick={() => onEdit(host)}>
                                     <Pencil className="mr-2 h-3.5 w-3.5" />
                                     编辑
+                                  </DropdownMenuItem>
+                                )}
+                                {onRetire && !host.retired_at && (
+                                  <DropdownMenuItem onClick={() => onRetire(host)}>
+                                    <CircleSlash className="mr-2 h-3.5 w-3.5" />
+                                    退役
+                                  </DropdownMenuItem>
+                                )}
+                                {onUnretire && host.retired_at && (
+                                  <DropdownMenuItem onClick={() => onUnretire(host)}>
+                                    <RotateCcw className="mr-2 h-3.5 w-3.5" />
+                                    解除退役
                                   </DropdownMenuItem>
                                 )}
                                 {onDelete && (

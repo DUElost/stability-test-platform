@@ -42,3 +42,18 @@ describe('bulk hot update helpers', () => {
   });
 
 });
+
+describe('ADR-0038 退役判据（#1807）', () => {
+  it('退役主机单独跳过（reason=retired，不与其他原因混报）', async () => {
+    const getDetail = vi.fn(async (id: string | number) => {
+      if (id === 2) return detail({ retired_at: '2026-09-13T00:00:00Z', active_job_count: 3 });
+      return detail();
+    });
+
+    const result = await precheckBulkHotUpdate([target(1), target(2)], getDetail);
+
+    expect(result.eligible.map((item) => item.id)).toEqual([1]);
+    expect(result.skipped.map((item) => item.reason)).toEqual(['retired']);
+    expect(BULK_HOT_UPDATE_SKIP_LABEL.retired).toBe('主机已退役');
+  });
+});

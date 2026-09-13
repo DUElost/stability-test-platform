@@ -18,6 +18,17 @@ describe('fetchHostList', () => {
     vi.mocked(apiClient.get).mockReset();
   });
 
+  it('穿透 include_retired（ADR-0038 D5：显示已退役）', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({ data: { items: [], total: 0 } });
+
+    await fetchHostList(0, 200, true);
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      '/hosts',
+      { params: { skip: 0, limit: 200, include_retired: true } },
+    );
+  });
+
   it('returns the items array for react-query consumers', async () => {
     const host = { id: 'h1', name: 'node-1', ip: '10.0.0.1', status: 'ONLINE' };
     vi.mocked(apiClient.get).mockResolvedValue({
@@ -25,7 +36,10 @@ describe('fetchHostList', () => {
     });
 
     await expect(fetchHostList(0, 200)).resolves.toEqual([host]);
-    expect(apiClient.get).toHaveBeenCalledWith('/hosts', { params: { skip: 0, limit: 200 } });
+    expect(apiClient.get).toHaveBeenCalledWith(
+      '/hosts',
+      { params: { skip: 0, limit: 200, include_retired: false } },
+    );
   });
 
   it('coerceHostList unwraps paginated cache pollution', () => {
