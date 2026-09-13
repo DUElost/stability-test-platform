@@ -80,16 +80,18 @@
 
 盘点过程中发现两条**不属于原批次、但值得记录**的问题：
 
-1. **`reconcile-queue` PAT 缺 `workflow` scope**（基础设施缺陷）
-   - **现象**：FIFO 队列维护 job 在 rebase 队首 PR 时若该 PR 改动了 `.github/workflows/*`，报
-     `GraphQL: refusing to allow a Personal Access Token to create or update workflow ... without 'workflow' scope (updatePullRequestBranch)` 并整 job 失败。
-   - **影响**：**每个 PR 都带这个红叉**，且队列 rebase 全线停摆（一度积压 28 个 PR 呈 `behind`）。
-   - **实查**：该 failure 与 PR 内容无关；队首 #1578 合入后队列即恢复。
-   - **建议**：队列 PAT 补 `workflow` scope，或将 workflow 文件变更的 PR 走豁免路径。
+1. **`update-branch` 撞 workflow scope 即整 job 红** → **已立单 [#1783](https://github.com/DUElost/stability-test-platform/issues/1783)**（P2）
+   - **现象**：`update_branch_tolerant()` 在队首 PR 改动了 `.github/workflows/*` 时，`gh pr update-branch` 被 GitHub 拒绝，落到 `return "$rc"` → 整 job 红：
+     `GraphQL: refusing to allow a Personal Access Token to create or update workflow ... without 'workflow' scope (updatePullRequestBranch)`
+   - **缺口**：该函数已对 head-sha 竞态 / 真冲突 / PR 已非 open 态三类失败绿退，**唯独漏了 scope 拒绝**（脚本 19-47 行）。
+   - **影响**：队列 rebase 全线停摆（一度积压 28 个 PR 呈 `behind`）；且**每个 PR 都带此红叉**，信号失去信息量。
+   - **实查**：与 PR 内容无关；队首 #1578 合入后队列恢复 → **条件触发**，非持续故障（近 40 次 run 零 failure），故标 P2 而非 P1。
+   - **修复方向**：#1783 给出两条路径 —— A 容错分支补齐（止血，零安全影响）、B PAT 补 scope（需 owner 裁定，属安全面扩张）。
 
-2. **`ci/queue-blocked` 告警单高频生成**
-   - 每遇队首 PR required check 不过即自动开单（如 #1627、#1652、#1685），数量可观且多为自愈。
-   - **建议**：评估是否需要收敛生成频率或在自愈后自动降噪。
+2. **`ci/queue-blocked` 告警单高频生成** → **已有单，不重复开**
+   - 根因单 **[#1761](https://github.com/DUElost/stability-test-platform/issues/1761)**（告警把「检查进行中」误判为 missing，83 分钟 20 条误报）；
+     修复 PR **[#1764](https://github.com/DUElost/stability-test-platform/pull/1764)**（三分类 + 6 例回归测试）。
+   - 实查发现时本项**已被认领**，故只登记不另立单。
 
 ---
 
@@ -101,7 +103,7 @@
 - [x] #1516 / #1517 / #1522 / #1524 / #1526 / #1527 等已关闭项 —— **全部关闭**
 - [ ] #1526 遗留的 `action_template` **表级删除**是否作为独立后续动作跟踪
 - [ ] 总表 #1515 在全部子项收口后关闭（当前保留，因 #1520 分期进行中 + #1737 衍生项 open）
-- [ ] 上述「邻域问题」两条是否需立独立单跟踪
+- [x] 邻域问题立单 —— **#1783**（PAT scope）已立；`ci/queue-blocked` 误报已被 #1761/#1764 认领，不重复开
 
 ---
 
