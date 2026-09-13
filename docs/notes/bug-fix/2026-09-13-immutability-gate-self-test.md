@@ -1,7 +1,7 @@
 # 脚本版本不可变门禁补 `--self-test` + notes 断链（审计 §七）
 
 Status: implemented
-Class: tech-debt / ci-gate
+Class: bug-fix
 
 ## Decision
 
