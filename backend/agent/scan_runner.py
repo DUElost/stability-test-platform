@@ -185,6 +185,16 @@ class ScanRunner:
         # 认为 worker 还活着 → scan 队列永久停摆直到进程重启。
         # try/finally 让标志复位成为结构性保证；逐单异常在此吞掉并记 ERROR
         # （单个 job 失败不得带走整个队列），异常不再终止工作线程。
+        #
+        # #1706：排空判定与复位必须在**同一临界区**内完成。旧实现先释放两把锁再
+        # return、由 finally 复位；入队线程可恰好落在「判定空 → 复位」之间：
+        # 它写入 `_pending` 后 `_ensure_worker` 见到仍为 True 的标志直接返回，
+        # worker 随即复位退出——job 有入无出，直到下一次 scan_now 才被拾起。
+        # 复位移入临界区后，入队侧要么被本次 `_pending` 检查看到（continue），
+        # 要么见到 False 并拉起新 worker，不存在中间态。
+        # `stopped` 标记正常排空已在锁内复位：此时可能已有新 worker 被拉起，
+        # finally 不得再写，否则会覆盖新 worker 的标志（下一次入队重复拉起线程）。
+        stopped = False
         try:
             while True:
                 job = cls._dequeue_next()
@@ -193,7 +203,9 @@ class ScanRunner:
                         with cls._queue_lock:
                             if cls._pending:
                                 continue
-                    return
+                            cls._worker_started = False
+                            stopped = True
+                            return
                 if not cls._any_scan_runner_configured():
                     # P2-2b / #1071：启动窗口内 scan_now 入队等待 configure；
                     # 仅当 MTK 与 UNISOC 都未配置时才 defer，避免「只配 UNISOC」饿死。
@@ -213,8 +225,9 @@ class ScanRunner:
                         job.plan_run_id, job.host_id,
                     )
         finally:
-            with cls._worker_lock:
-                cls._worker_started = False
+            if not stopped:
+                with cls._worker_lock:
+                    cls._worker_started = False
 
     @classmethod
     def _any_scan_runner_configured(cls) -> bool:
