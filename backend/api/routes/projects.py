@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, or_, select
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
@@ -42,6 +42,15 @@ from backend.models.plan_run import PlanRun
 from backend.models.project import Customer, TestProject
 from backend.models.project_model import ProjectModel
 from backend.realtime.socketio_server import emit_project_changed
+from backend.services.project_inventory import (
+    aggregate_inventory,
+    inventory_summary,
+    load_inventory,
+    platforms_map,
+    rule_values_for_project,
+    summary_rows,
+    summary_rows_for,
+)
 from backend.services.project_mapping import (
     apply_project_mapping,
     blank_to_none,
@@ -65,184 +74,13 @@ _USER_SOURCE = "USER"
 _SEED_SOURCE = "SEED"
 
 
-def _platforms_map(db: Session, project_ids: list[int]) -> dict[int, list[str]]:
-    """ADR-0029 P1-B：项目平台从设备派生（distinct(device.platform)）。
-
-    事实层在 device；UNKNOWN（探测失败哨兵）不展示。列表场景一次聚合，
-    避免逐项目 N+1。
-    """
-    if not project_ids:
-        return {}
-    # v2.5 D10：平台按成员型号派生（device.model ⋈ project_model）
-    rows = db.execute(
-        select(ProjectModel.project_id, Device.platform)
-        .join(Device, Device.model == ProjectModel.match_value)
-        .where(
-            ProjectModel.project_id.in_(project_ids),
-            ProjectModel.is_active.is_(True),
-            Device.platform.is_not(None),
-        )
-        .distinct()
-    ).all()
-    buckets: dict[int, set[str]] = {}
-    for pid, platform in rows:
-        if platform and platform != "UNKNOWN":
-            buckets.setdefault(pid, set()).add(platform)
-    return {pid: sorted(values) for pid, values in buckets.items()}
-
-
-def _summary_rows_for(db: Session, pids: list[int]) -> dict[int, tuple[int, int]]:
-    """项目设备数 + 在途 run 数聚合（#644 P2：单项目路径不再跑全表）。"""
-    if not pids:
-        return {}
-    # v2.5 D10：设备数按成员型号派生（device.model ⋈ project_model）
-    device_counts = dict(
-        db.query(ProjectModel.project_id, func.count(Device.id))
-        .join(Device, Device.model == ProjectModel.match_value)
-        .filter(
-            ProjectModel.project_id.in_(pids),
-            ProjectModel.is_active.is_(True),
-        )
-        .group_by(ProjectModel.project_id)
-        .all()
-    )
-    run_counts = dict(
-        db.query(PlanRun.project_id, func.count(PlanRun.id))
-        .filter(PlanRun.project_id.in_(pids), PlanRun.status.in_(_ACTIVE_RUN_STATUSES))
-        .group_by(PlanRun.project_id)
-        .all()
-    )
-    return {
-        pid: (device_counts.get(pid, 0), run_counts.get(pid, 0))
-        for pid in pids
-    }
-
-
-def _summary_rows(db: Session) -> dict[int, tuple[int, int]]:
-    """全量项目聚合（列表页用）；单项目详情走 _fill_summary 的过滤版。"""
-    pids = [pid for (pid,) in db.query(TestProject.id).all()]
-    return _summary_rows_for(db, pids)
-
-
-def _aggregate_inventory(
-    rows: list[tuple[str | None, str | None]],
-    *,
-    model_to_projects: dict[str | None, set[str]],
-) -> list[InventoryModelOut]:
-    """型号级聚合（ADR-0029 v2.5 D10 派生）。
-
-    归属是型号级函数（device.model ⋈ project_model 活跃成员行）：
-    mapped 型号全部设备归属、unmapped 全部未归属——unassigned_device_count
-    不再逐设备累计（无例外，pinned 已废）。
-    """
-    buckets: dict[str | None, dict] = {}
-    for raw_model, raw_platform in rows:
-        model = blank_to_none(raw_model)
-        bucket = buckets.get(model)
-        if bucket is None:
-            bucket = {"device_count": 0, "platforms": set()}
-            buckets[model] = bucket
-        bucket["device_count"] += 1
-        platform = blank_to_none(raw_platform)
-        if platform:
-            bucket["platforms"].add(platform)
-    items = [
-        InventoryModelOut(
-            model=model,
-            device_count=bucket["device_count"],
-            platforms=sorted(bucket["platforms"]),
-            mapped_project_keys=sorted(model_to_projects.get(model, set())),
-            unassigned_device_count=(
-                bucket["device_count"]
-                if not model_to_projects.get(model)
-                else 0
-            ),
-        )
-        for model, bucket in buckets.items()
-    ]
-    items.sort(key=lambda item: (-item.device_count, item.model or ""))
-    return items
-
-
-def _rule_values_for_project(db: Session, project_id: int) -> list[str]:
-    """项目活跃成员型号 → match_models 兼容列表（对外 API 契约）。
-
-    唯一读侧派生来源（ProjectModel 活跃行）。
-    """
-    rows = db.execute(
-        select(ProjectModel.match_value)
-        .where(
-            ProjectModel.project_id == project_id,
-            ProjectModel.is_active.is_(True),
-        )
-        .order_by(ProjectModel.match_value)
-    ).scalars().all()
-    return list(rows)
-
-
-def _model_to_projects(db: Session) -> dict[str | None, set[str]]:
-    """活跃成员行全量：model → {project_key}（v2.5 派生读预取）。"""
-    mapping: dict[str | None, set[str]] = {}
-    rows = db.execute(
-        select(ProjectModel.match_value, TestProject.project_key)
-        .join(TestProject, TestProject.id == ProjectModel.project_id)
-        .where(
-            ProjectModel.is_active.is_(True),
-            TestProject.source == _USER_SOURCE,
-        )
-    ).all()
-    for raw, key in rows:
-        model = blank_to_none(raw)
-        if model is not None:
-            mapping.setdefault(model, set()).add(key)
-    return mapping
-
-
-def _load_inventory(db: Session) -> list[InventoryModelOut]:
-    rows = (
-        db.query(Device.model, Device.platform).all()
-    )
-    return _aggregate_inventory(
-        list(rows), model_to_projects=_model_to_projects(db),
-    )
-
-
-def _inventory_summary(db: Session, items: list[InventoryModelOut]) -> InventorySummaryOut:
-    total = sum(item.device_count for item in items)
-    user_mapped = sum(item.device_count - item.unassigned_device_count for item in items)
-    unmapped_models = [
-        item.model for item in items if not item.mapped_project_keys
-    ]
-    # ADR-0029 v2.5：严格未映射口径——型号无 **USER** 成员行的设备数
-    # （SEED 成员不算映射，与 _model_to_projects 同口径；设备页
-    # ?unassigned=true 一致；型号级归属函数，无逐设备例外）。
-    mapped_models = (
-        select(ProjectModel.match_value)
-        .join(TestProject, TestProject.id == ProjectModel.project_id)
-        .where(
-            ProjectModel.is_active.is_(True),
-            TestProject.source == _USER_SOURCE,
-        )
-    )
-    unassigned_devices = db.query(func.count(Device.id)).filter(
-        or_(Device.model.is_(None), ~Device.model.in_(mapped_models))
-    ).scalar() or 0
-    return InventorySummaryOut(
-        total_devices=total,
-        user_mapped_devices=user_mapped,
-        distinct_models=len(items),
-        unmapped_models=unmapped_models,
-        unassigned_devices=unassigned_devices,
-    )
-
-
 def _fill_summary(db: Session, project: TestProject) -> ProjectSummaryOut:
-    device_count, running_run_count = _summary_rows_for(
+    device_count, running_run_count = summary_rows_for(
         db, [project.id]
     ).get(project.id, (0, 0))
     out = ProjectSummaryOut.model_validate(project)
-    out.match_models = _rule_values_for_project(db, project.id)
-    out.platforms = _platforms_map(db, [project.id]).get(project.id, [])
+    out.match_models = rule_values_for_project(db, project.id)
+    out.platforms = platforms_map(db, [project.id]).get(project.id, [])
     out.device_count = device_count
     out.running_run_count = running_run_count
     return out
@@ -270,14 +108,14 @@ def list_projects(
     if status:
         query = query.filter(TestProject.status == status)
     projects = query.all()
-    aggregates = _summary_rows(db)
-    platforms_map = _platforms_map(db, [p.id for p in projects])
+    aggregates = summary_rows(db)
+    platforms_by_project = platforms_map(db, [p.id for p in projects])
     items = []
     for project in projects:
         device_count, running_run_count = aggregates.get(project.id, (0, 0))
         out = ProjectSummaryOut.model_validate(project)
-        out.match_models = _rule_values_for_project(db, project.id)
-        out.platforms = platforms_map.get(project.id, [])
+        out.match_models = rule_values_for_project(db, project.id)
+        out.platforms = platforms_by_project.get(project.id, [])
         out.device_count = device_count
         out.running_run_count = running_run_count
         items.append(out)
@@ -329,18 +167,18 @@ def list_inventory_models(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    return ok(_load_inventory(db))
+    return ok(load_inventory(db))
 
 
 @router.get(
     "/inventory/summary",
     response_model=ApiResponse[InventorySummaryOut],
 )
-def get_inventory_summary(
+def getinventory_summary(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    return ok(_inventory_summary(db, _load_inventory(db)))
+    return ok(inventory_summary(db, load_inventory(db)))
 
 
 @router.post(
@@ -426,9 +264,9 @@ def promote_seed_project(
 
     emit_project_changed(seed.id, "promoted")
 
-    device_count, running_run_count = _summary_rows(db).get(seed.id, (0, 0))
+    device_count, running_run_count = summary_rows(db).get(seed.id, (0, 0))
     out = ProjectSummaryOut.model_validate(seed)
-    out.match_models = _rule_values_for_project(db, seed.id)
+    out.match_models = rule_values_for_project(db, seed.id)
     out.device_count = device_count
     out.running_run_count = running_run_count
     return ok(out)
@@ -640,7 +478,7 @@ def list_project_models(
                 device_count=item.device_count,
                 platforms=item.platforms,
             )
-            for item in _aggregate_inventory(list(rows), model_to_projects={})
+            for item in aggregate_inventory(list(rows), model_to_projects={})
         ]
     )
 
@@ -652,11 +490,11 @@ def get_project(
     _current_user: User = Depends(get_current_active_user),
 ):
     project = get_project_or_404(db, project_key)
-    device_count, running_run_count = _summary_rows(db).get(project.id, (0, 0))
+    device_count, running_run_count = summary_rows(db).get(project.id, (0, 0))
     detail = ProjectDetailOut.model_validate(project)
-    detail.match_models = _rule_values_for_project(db, project.id)
+    detail.match_models = rule_values_for_project(db, project.id)
     # #957: 派生 platforms 与列表 _fill_summary 同一构造——详情不再落回 []。
-    detail.platforms = _platforms_map(db, [project.id]).get(project.id, [])
+    detail.platforms = platforms_map(db, [project.id]).get(project.id, [])
     detail.device_count = device_count
     detail.running_run_count = running_run_count
     detail.plan_count = (

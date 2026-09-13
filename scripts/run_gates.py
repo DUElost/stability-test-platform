@@ -69,6 +69,13 @@ GATES = {
         ROOT,
         None,
     ),
+    # 孤立 ORM 模型挂载门禁（#1890-B / #734）：模型类零消费方即红（幽灵模型的
+    # 镜像形态）。纯 AST/文本扫描、毫秒级；--self-test 红绿双向自证。
+    "orphan-models": (
+        f"{PY} tools/dev/check_orphan_models.py",
+        ROOT,
+        None,
+    ),
     "compileall": (
         f"{PY} -m compileall -q backend/ tools/ scripts/",
         ROOT,
@@ -226,9 +233,12 @@ GATES = {
 }
 
 PROFILES = {
-    "check:quick": ["ruff", "eslint", "tsc", "knip", "compileall", "gov-surface", "ai-work"],
+    "check:quick": [
+        "ruff", "eslint", "tsc", "knip", "compileall", "orphan-models",
+        "gov-surface", "ai-work",
+    ],
     "check:pr": [
-        "ruff", "eslint", "tsc", "knip", "compileall", "layering",
+        "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "pollution", "immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
         "pr-migrate",
