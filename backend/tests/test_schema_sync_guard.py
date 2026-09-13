@@ -72,3 +72,10 @@ def test_real_baseline_admission_pair_semantics():
     assert css._filter_new_keys([remove_key, add_key], baseline) == []
     # 索引丢失形态 → 拦截
     assert css._filter_new_keys([add_key], baseline) == [add_key]
+
+
+def test_baseline_no_longer_whitelists_action_template_ghost():
+    """#1890：表真删后基线不得继续兜住 remove_table|action_template。"""
+    baseline = set(json.loads(css._BASELINE_FILE.read_text(encoding="utf-8")))
+    assert "remove_table|action_template" not in baseline
+    assert "remove_index|action_template|ix_action_template_active" not in baseline
