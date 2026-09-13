@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 
 import pytest
@@ -28,6 +29,8 @@ class _StubRegistry:
         self.snapshots: dict[str, dict] = {}
         self.snapshot_ttls: dict[str, int] = {}
         self.refreshed: list[str] = []
+        self.cancel_requests: dict[str, dict] = {}
+        self.cancel_acks: dict[str, dict] = {}
         self.fail = False
         self.renew_result = registry.RENEW_OK
         self.renew_owner_result = registry.RENEW_OK
@@ -88,6 +91,37 @@ class _StubRegistry:
     def delete_snapshot(self, run_id: str) -> None:
         self.snapshots.pop(run_id, None)
 
+    # ── P3：取消转发 ────────────────────────────────────────────────────────
+
+    def request_cancel(self, run_id: str, *, requested_at: str) -> None:
+        if self.fail:
+            raise registry.ConsoleRegistryUnavailable("stub down")
+        self.cancel_requests[run_id] = {
+            "requested_at": requested_at, "instance_id": "cp-test",
+        }
+
+    def read_cancel_request(self, run_id: str):
+        return (
+            dict(self.cancel_requests[run_id])
+            if run_id in self.cancel_requests else None
+        )
+
+    def clear_cancel_request(self, run_id: str) -> None:
+        self.cancel_requests.pop(run_id, None)
+
+    def publish_cancel_ack(
+        self, run_id: str, *, requested_at: str, canceled: bool,
+    ) -> None:
+        self.cancel_acks[run_id] = {
+            "requested_at": requested_at, "canceled": canceled, "by": "cp-test",
+        }
+
+    def read_cancel_ack(self, run_id: str, *, requested_at: str):
+        ack = self.cancel_acks.get(run_id)
+        if ack is None or ack.get("requested_at") != requested_at:
+            return None
+        return dict(ack)
+
 
 @pytest.fixture()
 def stub(monkeypatch):
@@ -105,6 +139,11 @@ def stub(monkeypatch):
     monkeypatch.setattr(registry, "refresh_status_ttl", s.refresh_snapshot)
     monkeypatch.setattr(registry, "read_status_snapshot", s.read_snapshot)
     monkeypatch.setattr(registry, "delete_status_snapshot", s.delete_snapshot)
+    monkeypatch.setattr(registry, "request_cancel", s.request_cancel)
+    monkeypatch.setattr(registry, "read_cancel_request", s.read_cancel_request)
+    monkeypatch.setattr(registry, "clear_cancel_request", s.clear_cancel_request)
+    monkeypatch.setattr(registry, "publish_cancel_ack", s.publish_cancel_ack)
+    monkeypatch.setattr(registry, "read_cancel_ack", s.read_cancel_ack)
     yield s
     RunConsole._reset_for_tests()
 
@@ -312,3 +351,57 @@ def test_sweep_deletes_snapshot_for_evicted_terminal_runs(stub, tmp_path, monkey
     monkeypatch.setattr(a, "_terminal_retention_seconds", 0.0)
     a._sweep_terminal_runs()           # ended_at 距今 > 保留期(0) → 淘汰 + 删快照
     assert run_id not in stub.snapshots
+
+
+# ── P3：跨实例 cancel（请求位 + 有界等待 ack）────────────────────────────────
+
+
+def test_cross_instance_cancel_forwards_and_waits_ack(stub, tmp_path, monkeypatch):
+    """B 发起 cancel → 请求位投递 → A（owner）消费并 ack → B 返回 True，run 被取消。"""
+    a = _new_console(tmp_path, "a")
+    b = _new_console(tmp_path, "b")
+    # 停掉 A 的自动 tick（60s），由测试手动驱动消费——避免与断言竞态
+    monkeypatch.setattr(a, "_control_tick_seconds", lambda: 60.0)
+    run_id = a.start(run_key="jira:transsion", cmd=_SLOW_CMD, label="k")
+    results: list[bool] = []
+    worker = threading.Thread(
+        target=lambda: results.append(b.cancel(run_id)), daemon=True,
+    )
+    worker.start()
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and run_id not in stub.cancel_requests:
+            time.sleep(0.02)
+        assert run_id in stub.cancel_requests, "取消请求应已投递"
+        a._process_cancel_requests_once()
+        worker.join(timeout=5)
+        assert results == [True]
+        assert a.status(run_id)["status"] == "CANCELED"
+    finally:
+        a.cancel(run_id)
+
+
+def test_cross_instance_cancel_timeout_fail_closed(stub, tmp_path, monkeypatch):
+    """无 owner 消费 → 有界等待超时 fail-closed（False），请求位仍留待 owner。"""
+    a = _new_console(tmp_path, "a")
+    b = _new_console(tmp_path, "b")
+    monkeypatch.setattr(a, "_control_tick_seconds", lambda: 60.0)
+    monkeypatch.setattr(b, "_cancel_wait_seconds", 0.3)
+    run_id = a.start(run_key="jira:nokia", cmd=_SLOW_CMD, label="k")
+    try:
+        assert b.cancel(run_id) is False
+        assert run_id in stub.cancel_requests   # 请求已投递（等 owner 下次 tick）
+    finally:
+        a.cancel(run_id)
+        _wait_terminal(a, run_id)
+
+
+def test_cross_instance_cancel_terminal_short_circuit(stub, tmp_path, monkeypatch):
+    """终态短路：快照已终态 → 不投递请求，直接 False。"""
+    a = _new_console(tmp_path, "a")
+    b = _new_console(tmp_path, "b")
+    monkeypatch.setattr(a, "_control_tick_seconds", lambda: 60.0)
+    run_id = a.start(run_key="jira:honor", cmd=_FAST_CMD, label="k")
+    _wait_snapshot(stub, run_id, "SUCCESS")
+    assert b.cancel(run_id) is False
+    assert run_id not in stub.cancel_requests
