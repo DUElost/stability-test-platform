@@ -273,17 +273,71 @@ class _PumpOutcome:
         self.elapsed = elapsed
 
 
+class _StepLogSink:
+    """Per-step append sink for drained stdout/stderr lines (#731).
+
+    ``_append_log_line`` reopened the file for *every* line — an ``openat`` +
+    ``close`` pair per line. A host driving 10–14 devices through 72 h MTBF /
+    Monkey runs emits millions of lines per day, so the cost lands in CPU sys
+    time and SSD metadata churn (micro-benchmark in #731: a persistent buffered
+    handle is 71.8× faster over 20 000 lines, removing 40 000 syscalls).
+
+    One sink per stream: stdout and stderr are drained by two threads into two
+    different files, so no handle is shared across threads and no lock is
+    needed. The owning reader closes it in its ``finally``; CPython flushes
+    buffered text there, so normal completion, abort and timeout all land the
+    same content on disk.
+    """
+
+    __slots__ = ("_path", "_fh", "_failed", "_closed")
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._fh: Optional[Any] = None
+        self._failed = False
+        self._closed = False
+
+    def write(self, line: str) -> None:
+        """Append one line, normalized to exactly one trailing newline (#805-3)."""
+        if self._closed or self._failed:
+            return
+        try:
+            if self._fh is None:
+                self._fh = open(self._path, "a", encoding="utf-8")
+            self._fh.write(line if line.endswith("\n") else line + "\n")
+        except OSError:
+            # 与旧实现同语义：写失败只记 debug，不打断上报路径；此后不再重试
+            # （否则每行一次失败的 open 会把 syscall 开销放大回去）。
+            self._failed = True
+            self._discard()
+            logger.debug("step_log_file_write_failed path=%s", self._path)
+
+    def close(self) -> None:
+        """Flush + close. Idempotent, never raises, and blocks later writes."""
+        self._closed = True
+        self._discard()
+
+    def _discard(self) -> None:
+        handle, self._fh = self._fh, None
+        if handle is None:
+            return
+        try:
+            handle.flush()
+            handle.close()
+        except OSError:
+            logger.debug("step_log_file_close_failed path=%s", self._path)
+
+
 def _append_log_line(log_path: str, line: str) -> None:
     """Append one drained line to the step log, avoiding a doubled newline (#805-3).
 
-    ``_drain_polling`` already appends ``\\n`` to each line; ``_drain_blocking``
-    may or may not. Normalize to exactly one trailing newline.
+    One-shot helper kept for callers/tests that want a single append; the step
+    drain path instead holds a :class:`_StepLogSink` for the step's lifetime
+    (#731).
     """
-    try:
-        with open(log_path, "a", encoding="utf-8") as log_f:
-            log_f.write(line if line.endswith("\n") else line + "\n")
-    except OSError:
-        logger.debug("step_log_file_write_failed path=%s", log_path)
+    sink = _StepLogSink(log_path)
+    sink.write(line)
+    sink.close()
 
 
 def _drain_stream(
@@ -431,13 +485,14 @@ def _pump_process(
         sink_index: int,
         stream_name: str,
         progress_stream: bool,
-        log_path: Optional[str] = None,
+        log_sink: Optional[_StepLogSink] = None,
     ) -> None:
         # 2026-08-31：运行日志唯一副本（SSD logs/runs/{job_id}/）——全量落盘
         # （含 PROGRESS 行——排障需要完整输出；缓冲只留非 PROGRESS 尾部）。
-        # stdout/stderr 分开文件避免 reader 线程并发写同一句柄。
-        if log_path:
-            _append_log_line(log_path, line)
+        # stdout/stderr 分开文件避免 reader 线程并发写同一句柄；句柄本身由该流的
+        # reader 独占，并在其 finally 关闭（#731：不再逐行 open/close）。
+        if log_sink is not None:
+            log_sink.write(line)
         # #147: PROGRESS 允许前导空白（缩进/日志前缀场景）。用 lstrip 后匹配，
         # 避免脚本因一个前导空格而错过刷新停滞钟、在长静默段被误杀。
         stripped = line.lstrip()
@@ -479,7 +534,7 @@ def _pump_process(
         stream_name: str,
         *,
         progress_stream: bool,
-        log_path: Optional[str] = None,
+        log_sink: Optional[_StepLogSink] = None,
     ) -> None:
         try:
             _drain_stream(
@@ -491,7 +546,7 @@ def _pump_process(
                     sink_index=sink_index,
                     stream_name=stream_name,
                     progress_stream=progress_stream,
-                    log_path=log_path,
+                    log_sink=log_sink,
                 ),
             )
         except (ValueError, OSError):
@@ -501,15 +556,23 @@ def _pump_process(
                 stream.close()
             except Exception:
                 pass
+            # #731：本读者独占该 sink —— 在此 flush+close；正常完成 / abort /
+            # timeout 三条路径共用同一个收尾点，缓冲内容不会丢。
+            if log_sink is not None:
+                log_sink.close()
 
     # stdout 完全不识别 PROGRESS：stdout 整份要过 json.loads 是既有结果契约，
     # 任何出现在 stdout 的内容(哪怕是 PROGRESS 开头)都必须原样保留。
+    # #731：每流一个持久句柄（stdout/stderr 各写各的文件，句柄不跨线程共享）。
+    log_sinks = (
+        (_StepLogSink(log_paths[0]), _StepLogSink(log_paths[1])) if log_paths else None
+    )
     threads = [
         threading.Thread(
             target=_reader,
             args=(proc.stdout, stdout_lines, 0, "step-stdout"),
             kwargs={"progress_stream": False,
-                    "log_path": log_paths[0] if log_paths else None},
+                    "log_sink": log_sinks[0] if log_sinks else None},
             daemon=True,
             name="step-stdout",
         ),
@@ -517,7 +580,7 @@ def _pump_process(
             target=_reader,
             args=(proc.stderr, stderr_lines, 1, "step-stderr"),
             kwargs={"progress_stream": True,
-                    "log_path": log_paths[1] if log_paths else None},
+                    "log_sink": log_sinks[1] if log_sinks else None},
             daemon=True,
             name="step-stderr",
         ),
