@@ -256,16 +256,26 @@ if [ -z "$auto_method" ]; then
   exit 0
 fi
 
-# 分类 required checks：#1761——「进行中」与「失败」必须分开。
+# 分类 required checks：#1761 + #1792——「进行中」「失败」「中性」必须分开。
 #
-# 原实现只读 .conclusion，而检查进行中时该字段为空串 → 被渲染成 "missing" 并**触发
-# 告警**。后果：每个 PR 在正常 CI 期间都开一条 ci/queue-blocked（实测 83 分钟 20 条、
-# 历史 100 条中 99 条自动关闭），真实停摆被淹没、告警通道失效。
+# #1761：原实现只读 .conclusion，检查进行中时该字段为空串 → 被渲染成 "missing" 并
+# **触发告警**。后果：每个 PR 在正常 CI 期间都开一条 ci/queue-blocked（实测 83 分钟
+# 20 条、历史 100 条中 99 条自动关闭），真实停摆被淹没、告警通道失效。
 #
-# 口径与 tools/dev/queue_head_telemetry.py 的 classify() 对齐：
-#   - status != COMPLETED  → pending：仅日志，不告警（机器在跑，人无需动作）
-#   - status == COMPLETED 且 conclusion != SUCCESS → failed：告警（#1246 要覆盖的真实停摆）
-#   - 注册表里根本没有该 check（无条目）→ missing：告警（这才是真正的 missing）
+# #1792：`CodeQL` 是 GitHub 默认 setup 的**聚合 check**，其子分析
+# （Analyze (actions)/(javascript-typescript)/(python)）未全部完成时，父 check 为
+# `COMPLETED` + **`NEUTRAL`**。原判据「COMPLETED 且 != SUCCESS → failed」把它当成
+# 失败，导致 #1764 合入后仍继续误报（08:20:58–08:41:12 六条）。
+#
+# 判据（与分支保护的实际裁决对齐——**不自作更严**）：
+#   - conclusion == SUCCESS        → 通过
+#   - conclusion == NEUTRAL        → 通过（#1792）。实证：strict=true 的分支保护要求
+#     CodeQL，而 #1772 在 CodeQL=COMPLETED/NEUTRAL 下**被 GitHub 允许合入**，
+#     即对方视 NEUTRAL 为满足态。若我们判它失败，就会出现「GitHub 认为可合入、
+#     我们的 FIFO 却拒绝 update-branch」的队首伪停摆。
+#   - status != COMPLETED          → pending：仅日志，不告警（机器在跑，人无需动作）
+#   - 注册表里根本没有该 check     → missing：告警（真正的 missing）
+#   - status == COMPLETED 且 conclusion 为 FAILURE/CANCELLED/TIMED_OUT/… → failed：告警
 failed_checks=""
 pending_checks=""
 for check in "${REQUIRED[@]}"; do
@@ -286,7 +296,8 @@ for check in "${REQUIRED[@]}"; do
     ' <<<"$head_json"
   )"
 
-  if [ "$status" = "COMPLETED" ] && [ "$conclusion" = "SUCCESS" ]; then
+  # 通过态：SUCCESS 或 NEUTRAL（#1792，与分支保护裁决一致）
+  if [ "$status" = "COMPLETED" ] && { [ "$conclusion" = "SUCCESS" ] || [ "$conclusion" = "NEUTRAL" ]; }; then
     continue
   fi
 
