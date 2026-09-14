@@ -38,6 +38,10 @@ _STORAGE_PANEL_KEYS = frozenset({
 _GIB = 1024 ** 3
 _DEVICE_LOG_DISK_WARNING_PCT = 90.0
 _DEVICE_LOG_DISK_CRITICAL_PCT = 95.0
+# 宿主机进程内存采样器（deploy/control-plane/node-exporter/stp-mem-top.sh）指标。
+_TOP_PROCESS_LIMIT = 10
+_HOSTPROC_ANON_METRIC = "stp_hostproc_anon_bytes"
+_HOSTPROC_TOTAL_METRIC = "stp_hostproc_anon_total_bytes"
 
 
 def _unescape_mountinfo(value: str) -> str:
@@ -165,6 +169,24 @@ class _PrometheusClient:
             return None
         value = result[0].get("metric", {}).get(label)
         return value if isinstance(value, str) else None
+
+    def vector(self, query: str) -> list[dict[str, Any]]:
+        """Return all instant-vector samples as ``{"metric": ..., "value": ...}``.
+
+        Used for multi-series queries (``topk``) where :meth:`scalar` would
+        silently keep only the first sample. Non-finite values are dropped.
+        """
+        data = self._get("/api/v1/query", {"query": query})
+        samples: list[dict[str, Any]] = []
+        for sample in data.get("result") or []:
+            try:
+                value = _finite_float(sample["value"][1])
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            if value is None:
+                continue
+            samples.append({"metric": sample.get("metric") or {}, "value": value})
+        return samples
 
 
 def _block_device(source: str | None) -> str | None:
@@ -335,6 +357,27 @@ def _node_current_queries(job: str, device_selector: str | None) -> dict[str, st
     }
 
 
+def _top_process_items(prom: _PrometheusClient, job: str) -> list[dict[str, Any]]:
+    """Top-N process groups by anonymous memory from the host sampler.
+
+    Sorted descending so the UI table and any future chart share one order.
+    """
+    selector = f'job="{job}"'
+    samples = prom.vector(
+        f"topk({_TOP_PROCESS_LIMIT}, {_HOSTPROC_ANON_METRIC}{{{selector}}})"
+    )
+    items: list[dict[str, Any]] = []
+    for sample in samples:
+        metric = sample["metric"]
+        items.append({
+            "comm": str(metric.get("comm") or "unknown"),
+            "unit": str(metric.get("unit") or "-"),
+            "anon_bytes": int(sample["value"]),
+        })
+    items.sort(key=lambda item: item["anon_bytes"], reverse=True)
+    return items
+
+
 def _run_queries(
     prom: _PrometheusClient,
     queries: dict[str, str],
@@ -433,6 +476,7 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
         "cpu_usage_pct": [],
         "memory_usage_pct": [],
         "nfs_requests_per_second": [],
+        "hostproc_total_anon_bytes": [],
     }
 
     prom = _PrometheusClient()
@@ -443,6 +487,17 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
             if key in _CONTROL_PANEL_KEYS
         }
         control_current, control_error = _run_queries(prom, control_queries)
+
+        # 进程级内存（宿主机采样器，见 deploy/control-plane/node-exporter）：
+        # 采集器未部署时 topk 为空 → 面板降级为 available=False，不算查询错误。
+        top_processes: list[dict[str, Any]] = []
+        processes_error: str | None = control_error
+        if control_error is None:
+            try:
+                top_processes = _top_process_items(prom, control_job)
+            except (httpx.HTTPError, KeyError, RuntimeError, ValueError) as exc:
+                processes_error = type(exc).__name__
+                logger.warning("file_server_process_query_failed error=%s", processes_error)
 
         storage_current: dict[str, float | None] = {}
         storage_error: str | None = None
@@ -497,6 +552,20 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
                 history[key] = prom.range(query, start=start, end=end, step=step)
         except (httpx.HTTPError, KeyError, RuntimeError, ValueError) as exc:
             logger.warning("file_server_history_query_failed error=%s", type(exc).__name__)
+        # 进程匿名内存合计趋势固定取控制面 job：采样器装在控制面，
+        # 与存储面板是否分源无关（history_job 分源时仍应能看控制面内存走势）。
+        try:
+            if control_error is None:
+                history["hostproc_total_anon_bytes"] = prom.range(
+                    f'{_HOSTPROC_TOTAL_METRIC}{{job="{control_job}"}}',
+                    start=start,
+                    end=end,
+                    step=step,
+                )
+        except (httpx.HTTPError, KeyError, RuntimeError, ValueError) as exc:
+            logger.warning(
+                "file_server_process_history_query_failed error=%s", type(exc).__name__
+            )
     finally:
         prom.close()
 
@@ -555,6 +624,11 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
             "filesystem": mount["filesystem"],
             "mounted": mount["mounted"],
             "backend_write_access": backend_write_access,
+        },
+        "processes": {
+            "available": bool(top_processes),
+            "error": processes_error,
+            "items": top_processes,
         },
         "monitoring": {
             "prometheus_available": control_current.get("up") == 1,

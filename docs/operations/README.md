@@ -76,6 +76,13 @@ deploy/
   规则选择器与 `backend/core/metrics.py` 注册表的一致性由
   `tests/test_prometheus_alerts_contract.py` 在 PR 路径门禁（结构层恒跑；
   本机有 promtool 时追加场景触发测试，场景文件同目录 `.test.yml`）
+- 宿主机进程内存采样：`deploy/control-plane/node-exporter/stp-mem-top.sh` +
+  `deploy/control-plane/systemd/stp-mem-top.{service,timer}`——每 2 分钟写
+  node_exporter textfile（`stp_hostproc_anon_bytes` 按 comm + cgroup unit 聚合
+  Top-10，`stp_hostproc_anon_total_bytes` 为全机进程匿名内存合计），供控制面
+  健康页 `/storage` 的「进程内存 Top 10」面板经后端代理读取
+  （`backend/services/file_server_monitor.py`）。采样器落地背景见
+  [`notes/feature/2026-09-14-hostproc-memory-metrics.md`](../notes/feature/2026-09-14-hostproc-memory-metrics.md)
 
 ---
 

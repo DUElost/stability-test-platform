@@ -7,6 +7,7 @@ import {
   Cpu,
   Database,
   HardDrive,
+  MemoryStick,
   Network,
   RefreshCw,
   Server,
@@ -43,6 +44,7 @@ import { api } from '@/utils/api';
 import { formatUnixSeconds } from '@/utils/format';
 import type {
   FileServerClientMount,
+  FileServerHostProcessPanel,
   FileServerMetricPoint,
   FileServerNodeIdentity,
   FileServerNodeMonitoring,
@@ -356,6 +358,87 @@ function ClientMountSection({
         <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>挂载状态</dt><dd>{mount.mounted ? <Badge variant="success">已挂载</Badge> : <Badge variant="destructive">未挂载</Badge>}</dd></div>
         <div className="flex items-center justify-between py-2"><dt className={TEXT.subtitle}>写权限</dt><dd>{mount.backend_write_access ? <Badge variant="success">可写</Badge> : <Badge variant="destructive">不可写</Badge>}</dd></div>
       </dl>
+    </section>
+  );
+}
+
+function ProcessMemorySection({
+  processes,
+  totalSeries,
+}: {
+  processes: FileServerHostProcessPanel;
+  totalSeries: FileServerMetricPoint[];
+}) {
+  const titleId = 'control-plane-process-memory-title';
+  const items = processes.items;
+  const totalBytes = items.reduce((acc, item) => acc + item.anon_bytes, 0);
+  const unavailableMessage = processes.error
+    ? `进程内存指标查询失败（${processes.error}）`
+    : '未检测到进程内存采集器（stp-mem-top.timer 未部署或未运行）';
+  return (
+    <section className="border-t py-4" aria-labelledby={titleId}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <MemoryStick className={cn('h-4 w-4', TEXT.subtitle)} />
+          <h2 id={titleId} className={cn('text-sm font-semibold', TEXT.heading)}>进程内存 Top {items.length || 10}</h2>
+        </div>
+        {items.length > 0 && (
+          <span className={cn('text-xs', TEXT.caption)}>
+            匿名内存合计 {formatBytes(totalBytes)}（按 comm+cgroup 单元聚合）
+          </span>
+        )}
+      </div>
+      {processes.available ? (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>进程</TableHead>
+              <TableHead>单元（systemd cgroup）</TableHead>
+              <TableHead className="w-40">匿名内存</TableHead>
+              <TableHead className="w-36 text-right">占比</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((item) => {
+              const share = totalBytes > 0 ? (item.anon_bytes / totalBytes) * 100 : 0;
+              return (
+                <TableRow key={`${item.comm}-${item.unit}`}>
+                  <TableCell className="font-mono text-xs">{item.comm}</TableCell>
+                  <TableCell className="max-w-0 truncate font-mono text-xs" title={item.unit}>
+                    {item.unit}
+                  </TableCell>
+                  <TableCell className={cn('font-mono text-xs', metricTone(share, 30, 50))}>
+                    {formatBytes(item.anon_bytes)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">{share.toFixed(1)}%</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      ) : (
+        <InlineEmpty>{unavailableMessage}</InlineEmpty>
+      )}
+      {totalSeries.length > 1 && (
+        <div className="mt-3 h-40 w-full" data-testid="hostproc-total-chart">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={totalSeries} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+              <XAxis
+                dataKey="timestamp"
+                tickFormatter={(value) => formatTime(new Date(value * 1000).toISOString()).slice(0, 5)}
+                minTickGap={32}
+                tick={{ fontSize: 11 }}
+              />
+              <YAxis tickFormatter={(value) => formatBytes(Number(value))} tick={{ fontSize: 11 }} width={72} />
+              <Tooltip
+                labelFormatter={(value) => formatUnixSeconds(Number(value))}
+                formatter={(value) => [formatBytes(Number(value)), '进程匿名内存']}
+              />
+              <Line type="monotone" dataKey="value" stroke={CHART_COLORS.primary} dot={false} strokeWidth={1.5} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </section>
   );
 }
@@ -688,6 +771,10 @@ export default function FileServerPage() {
               />
               <div className="space-y-4 px-4 pb-4">
                 <SystemLoadSection system={data.control_plane.system} node={data.control_plane.node} idPrefix="control-plane" />
+                <ProcessMemorySection
+                  processes={data.control_plane.processes}
+                  totalSeries={data.history.hostproc_total_anon_bytes}
+                />
                 <ClientMountSection mount={data.control_plane.client_mount} idPrefix="control-plane" />
               </div>
             </div>
