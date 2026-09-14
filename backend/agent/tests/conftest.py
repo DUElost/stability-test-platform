@@ -74,3 +74,25 @@ def lease_env(monkeypatch):
     yield _set
     reset_agent_settings_caches()
 
+
+@pytest.fixture
+def disk_env(monkeypatch):
+    """磁盘/归档域 env 覆盖助手（ADR-0042 P2）：写/删 env 后清 Agent Settings 缓存。"""
+
+    from backend.agent.settings import reset_agent_settings_caches
+
+    class _Env:
+        @staticmethod
+        def set(name: str, value: str) -> None:
+            monkeypatch.setenv(name, value)
+            reset_agent_settings_caches()
+
+        @staticmethod
+        def unset(name: str) -> None:
+            monkeypatch.delenv(name, raising=False)
+            reset_agent_settings_caches()
+
+    reset_agent_settings_caches()
+    yield _Env
+    reset_agent_settings_caches()
+

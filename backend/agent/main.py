@@ -39,7 +39,10 @@ if __name__ == "__main__" and __package__ is None:
     from agent.local_disk_monitor import LocalDiskMonitor
     from agent.heartbeat_thread import HeartbeatThread
     from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
-    from agent.settings import reset_agent_settings_caches
+    from agent.settings import (
+        get_disk_archive_settings,
+        reset_agent_settings_caches,
+    )
     from agent.job_runner import JobRunnerState, run_task_wrapper
     from agent.lease_renewer import LeaseRenewer
     from agent.mq.producer import StepTraceWriter
@@ -67,7 +70,7 @@ else:
     from .local_disk_monitor import LocalDiskMonitor
     from .heartbeat_thread import HeartbeatThread
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
-    from .settings import reset_agent_settings_caches
+    from .settings import get_disk_archive_settings, reset_agent_settings_caches
     from .job_runner import JobRunnerState, run_task_wrapper
     from .lease_renewer import LeaseRenewer
     from .operation_scheduler import OperationScheduler
@@ -837,11 +840,12 @@ def main() -> None:
     #（EventUploader.start / LocalDiskMonitor 内部都有 enabled 判断）。
     hdd_root = str(get_aee_local_root())
     cifs_root = resolve_shared_storage_root()
+    _disk_settings = get_disk_archive_settings()
     LogArchiver.instance().configure(
         local_db=local_db,
         run_log_dir=str(BASE_DIR / "logs" / "runs"),
-        interval_seconds=float(os.getenv("STP_LOG_ARCHIVE_INTERVAL_SECONDS", "3600")),
-        grace_seconds=float(os.getenv("STP_LOG_ARCHIVE_GRACE_SECONDS", "1800")),
+        interval_seconds=_disk_settings.stp_log_archive_interval_seconds,
+        grace_seconds=_disk_settings.stp_log_archive_grace_seconds,
     ).start()
     logger.info("log_archiver=started")
     ScanRunner.instance().configure()
@@ -857,9 +861,9 @@ def main() -> None:
         LocalDiskMonitor.instance().configure(
             hdd_root=hdd_root,
             cifs_root=cifs_root,
-            interval_seconds=float(os.getenv("STP_LOCAL_DISK_MONITOR_INTERVAL_SECONDS", "300")),
-            spill_threshold_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_THRESHOLD", "80")),
-            target_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_TARGET", "70")),
+            interval_seconds=_disk_settings.stp_local_disk_monitor_interval_seconds,
+            spill_threshold_pct=_disk_settings.stp_local_disk_spill_threshold,
+            target_pct=_disk_settings.stp_local_disk_spill_target,
             api_url=api_url,
             agent_secret=agent_secret,
             host_id=str(host_id),

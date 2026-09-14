@@ -17,9 +17,108 @@ Agent 进程不一定携带/安装 `backend.core`（见 `backend/agent/aee/recon
 
 from __future__ import annotations
 
+import logging
+import math
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+
+def _tolerant_pct(raw: object, default: float, name: str) -> float:
+    """宽容百分比解析（#1710 语义）：缺失/非法/非有限/越界 → 默认值 + WARNING。"""
+    text = str(raw).strip() if raw is not None else ""
+    if not text:
+        return default
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        logger.warning("invalid %s=%r; using default %.1f", name, text, default)
+        return default
+    if not math.isfinite(value) or not 0.0 <= value <= 100.0:
+        logger.warning("out-of-range %s=%r; using default %.1f", name, text, default)
+        return default
+    return value
+
+
+def _tolerant_positive_int(raw: object, default: int, name: str) -> int:
+    """宽容正整数解析：缺失/非法/非正 → 默认值 + WARNING。"""
+    text = str(raw).strip() if raw is not None else ""
+    if not text:
+        return default
+    try:
+        value = int(text)
+    except (TypeError, ValueError):
+        logger.warning("invalid %s=%r; using default %d", name, text, default)
+        return default
+    if value <= 0:
+        logger.warning("non-positive %s=%r; using default %d", name, text, default)
+        return default
+    return value
+
+
+def _tolerant_seconds(raw: object, default: float, name: str) -> float:
+    """宽容秒数解析（只要求有限；0/负值由调用点语义决定，不在此拦截）。"""
+    text = str(raw).strip() if raw is not None else ""
+    if not text:
+        return default
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        logger.warning("invalid %s=%r; using default %.1f", name, text, default)
+        return default
+    if not math.isfinite(value):
+        logger.warning("non-finite %s=%r; using default %.1f", name, text, default)
+        return default
+    return value
+
+
+class DiskArchiveSettings(BaseSettings):
+    """磁盘监控与日志归档域（ADR-0042 P2 #2）。
+
+    **失败形态与迁移前逐旋钮对齐**（等价性优先）：
+
+    - `STP_HDD_SPILL_CRITICAL_PCT` / `_CRITICAL_BATCH` / `_CATCHUP_INTERVAL`：
+      迁移前是**宽容解析**（#1710：非法值只告警并回落默认，不得拖垮 Agent 启动）
+      → `mode="before"` validator 保留同一语义与告警文案；
+    - 其余五个：迁移前 `float(os.getenv(..., "…"))` 直转（非法值启动即失败）
+      → 保持严格类型（pydantic `ValidationError` 即等价的失败面）。
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=None,       # 硬约束：不引入第二个 dotenv 来源
+        extra="ignore",      # 非本域变量不参与校验
+        case_sensitive=False,
+    )
+
+    # ── 宽容组（#1710 / #741 / #1522）──
+    stp_hdd_spill_critical_pct: float = 98.0
+    stp_hdd_spill_critical_batch: int = 100
+    stp_hdd_spill_catchup_interval: float = 30.0
+
+    # ── 严格组（main.py 直转）──
+    stp_local_disk_monitor_interval_seconds: float = 300.0
+    stp_local_disk_spill_threshold: float = 80.0
+    stp_local_disk_spill_target: float = 70.0
+    stp_log_archive_interval_seconds: float = 3600.0
+    stp_log_archive_grace_seconds: float = 1800.0
+
+    @field_validator("stp_hdd_spill_critical_pct", mode="before")
+    @classmethod
+    def _v_critical_pct(cls, value: object) -> float:
+        return _tolerant_pct(value, 98.0, "STP_HDD_SPILL_CRITICAL_PCT")
+
+    @field_validator("stp_hdd_spill_critical_batch", mode="before")
+    @classmethod
+    def _v_critical_batch(cls, value: object) -> int:
+        return _tolerant_positive_int(value, 100, "STP_HDD_SPILL_CRITICAL_BATCH")
+
+    @field_validator("stp_hdd_spill_catchup_interval", mode="before")
+    @classmethod
+    def _v_catchup(cls, value: object) -> float:
+        return _tolerant_seconds(value, 30.0, "STP_HDD_SPILL_CATCHUP_INTERVAL")
 
 
 class LeaseSettings(BaseSettings):
@@ -48,10 +147,17 @@ def get_lease_settings() -> LeaseSettings:
     return LeaseSettings()
 
 
+@lru_cache(maxsize=1)
+def get_disk_archive_settings() -> DiskArchiveSettings:
+    """取磁盘监控与日志归档域 Settings（惰性 + 缓存；不读 `.env` 文件）。"""
+    return DiskArchiveSettings()
+
+
 def reset_agent_settings_caches() -> None:
-    """清 Agent 侧 Settings 缓存。
+    """清 Agent 侧**全部** Settings 缓存（ADR-0042 P1 Note 预告的多域扩展）。
 
     调用点：`main.py` 的 `reload_config` 分支在 `_reload_runtime_env()` 之后
-    （hot-update 改写 `.env` → 重读 → 清缓存 → 新值对续租器生效）。
+    （hot-update 改写 `.env` → 重读 → 清缓存 → 各域新值生效）。
     """
     get_lease_settings.cache_clear()
+    get_disk_archive_settings.cache_clear()
