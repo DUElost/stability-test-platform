@@ -287,11 +287,9 @@ def test_reaper_skips_run_without_dispatch_state(db_session):
     assert summary["checked"] == 0
 
 
-def test_reaper_does_not_re_enqueue_beyond_cap(db_session, monkeypatch):
+def test_reaper_does_not_re_enqueue_beyond_cap(db_session, scheduler_env):
     """When requeue_attempts already == MAX, skip instead of re-enqueuing."""
-    monkeypatch.setattr(
-        "backend.scheduler.precheck_reaper.MAX_PRECHECK_REENQUEUE_ATTEMPTS", 1
-    )
+    scheduler_env("MAX_PRECHECK_REENQUEUE_ATTEMPTS", "1")
     run_ctx = {
         "dispatch_device_ids": [2429],
         "dispatch_state": {

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import aliased
@@ -16,10 +15,9 @@ from backend.services.plan_chain_trigger import (
 )
 
 
+from backend.core.settings.scheduler import get_scheduler_settings
+
 logger = logging.getLogger(__name__)
-CHAIN_RECONCILE_BATCH_SIZE = int(
-    os.getenv("CHAIN_RECONCILE_BATCH_SIZE", "100")
-)
 
 
 def reconcile_plan_chains() -> int:
@@ -48,7 +46,7 @@ def reconcile_plan_chains() -> int:
                     )
                 )
                 .order_by(PlanRun.id)
-                .limit(CHAIN_RECONCILE_BATCH_SIZE)
+                .limit(get_scheduler_settings().chain_reconcile_batch_size)
             ).scalars()
         )
         for parent_id in parent_ids:

@@ -252,14 +252,15 @@ class TestAdmissionReaper:
         assert pr.run_context["admission_requeue_attempts"] == 1
 
     def test_exhausted_attempts_fail(self, db_session, failed_dispatch_run):
+        from backend.core.settings.scheduler import get_scheduler_settings
         from backend.scheduler.precheck_reaper import (
-            MAX_ADMISSION_REQUEUE_ATTEMPTS,
             reconcile_stale_precheck_v2,
         )
 
         pr = self._make_precheck(
             db_session, failed_dispatch_run,
-            stale_seconds=10_000, attempts=MAX_ADMISSION_REQUEUE_ATTEMPTS,
+            stale_seconds=10_000,
+            attempts=get_scheduler_settings().max_admission_requeue_attempts,
         )
         summary = reconcile_stale_precheck_v2(db=db_session)
         assert summary["failed"] == 1 and summary["requeued"] == 0

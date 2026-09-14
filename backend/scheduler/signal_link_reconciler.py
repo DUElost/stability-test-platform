@@ -13,7 +13,6 @@ back on every request while still taking row locks on a page that polls every
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from sqlalchemy import text
@@ -21,11 +20,10 @@ from sqlalchemy import text
 from backend.core.database import SessionLocal
 from backend.services.device_log_event import link_signals_to_device_log_events_sync
 
+from backend.core.settings.scheduler import get_scheduler_settings
+
 logger = logging.getLogger(__name__)
 
-SIGNAL_LINK_RECONCILE_BATCH = int(
-    os.getenv("STP_SIGNAL_LINK_RECONCILE_BATCH", "200")
-)
 
 # Distinct job_ids that still hold an unlinked signal with a matchable DLE.
 # Newest-first + LIMIT keeps each tick bounded; the backlog drains over
@@ -62,7 +60,7 @@ def _reconcile_signal_links_body(
     *,
     batch_size: int | None = None,
 ) -> dict[str, Any]:
-    limit = SIGNAL_LINK_RECONCILE_BATCH if batch_size is None else batch_size
+    limit = get_scheduler_settings().stp_signal_link_reconcile_batch if batch_size is None else batch_size
     summary: dict[str, Any] = {"scanned": 0, "linked": 0}
 
     with SessionLocal() as db:

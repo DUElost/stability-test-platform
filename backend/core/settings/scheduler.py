@@ -49,6 +49,15 @@ class SchedulerSettings(DomainSettings):
     post_completion_grace_seconds: int = 120
     post_completion_max_defer_seconds: int = 6 * 3600
 
+    # ── 对账/重试批处理（P2 迁移：counter / signal_link / plan_chain / precheck）──
+    stp_counter_reconcile_lookback_hours: int = 48
+    stp_counter_reconcile_batch: int = 200
+    stp_signal_link_reconcile_batch: int = 200
+    chain_reconcile_batch_size: int = 100
+    max_precheck_reenqueue_attempts: int = 1
+    max_admission_requeue_attempts: int = 3
+    admission_requeue_backoff_seconds: int = 60
+
     # ── cron_scheduler：计划保留与触发去重 ──
     plan_run_retention_days: int = 3
     schedule_dedup_window_seconds: float = 60

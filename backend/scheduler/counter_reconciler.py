@@ -8,7 +8,6 @@ old code path skipped the terminalization service.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -20,13 +19,11 @@ from backend.models.plan_run import PlanRun
 from backend.services.job_terminalization import recount_plan_run_counters
 from backend.services.plan_run_aggregation import apply_plan_run_aggregation_from_counters
 
+from backend.core.settings.scheduler import get_scheduler_settings
+
 logger = logging.getLogger(__name__)
 
 # Only scan recently-active / still-open runs by default to keep the sweep cheap.
-COUNTER_RECONCILE_LOOKBACK_HOURS = int(
-    os.getenv("STP_COUNTER_RECONCILE_LOOKBACK_HOURS", "48")
-)
-COUNTER_RECONCILE_BATCH = int(os.getenv("STP_COUNTER_RECONCILE_BATCH", "200"))
 
 _OPEN_STATUSES = {
     PlanRunStatus.RUNNING.value,
@@ -61,9 +58,9 @@ def _reconcile_plan_run_counters_body(
     batch_size: int | None = None,
 ) -> dict:
     lookback = (
-        COUNTER_RECONCILE_LOOKBACK_HOURS if lookback_hours is None else lookback_hours
+        get_scheduler_settings().stp_counter_reconcile_lookback_hours if lookback_hours is None else lookback_hours
     )
-    limit = COUNTER_RECONCILE_BATCH if batch_size is None else batch_size
+    limit = get_scheduler_settings().stp_counter_reconcile_batch if batch_size is None else batch_size
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback)
 
     scanned = 0
