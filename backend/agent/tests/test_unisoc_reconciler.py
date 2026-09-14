@@ -85,7 +85,7 @@ def test_tick_once_emits_uniview_and_creates_dle(tmp_path):
     root = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
     ev = root / "evt_ke_1"
     ev.mkdir(parents=True)
-    (ev / "unievent_info.json").write_text(
+    (ev / "unievent_info").write_text(
         json.dumps({"event_name": "KE", "package_name": "sys"}),
         encoding="utf-8",
     )
@@ -107,18 +107,18 @@ def test_tick_once_pulls_device_events_then_emits(tmp_path):
     device_root = tmp_path / "device" / "uniview"
     remote_ev = device_root / "remote_evt"
     remote_ev.mkdir(parents=True)
-    (remote_ev / "unievent_info.json").write_text(
+    (remote_ev / "unievent_info").write_text(
         json.dumps({"event_name": "NE", "package": "app"}),
         encoding="utf-8",
     )
 
     def shell_fn(cmd: str, _timeout: int) -> Optional[str]:
-        if cmd.startswith("ls -1 /data/uniview"):
+        if cmd.startswith("ls -1 /data/ylog/uniview_exception"):
             return "remote_evt\n__STP_RC__:0\n"
         if cmd.startswith("ls -1 /data/vendor/uniview"):
             return "__STP_RC__:2\n"
-        if "unievent_info.json" in cmd and "remote_evt" in cmd:
-            return "unievent_info.json\n"
+        if "unievent_info" in cmd and "remote_evt" in cmd:
+            return "unievent_info\n"
         return None
 
     def pull_fn(remote: str, local: str, _timeout: int) -> bool:
@@ -135,7 +135,7 @@ def test_tick_once_pulls_device_events_then_emits(tmp_path):
     assert r.tick_once() == 1
     local = (
         tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1" / "remote_evt"
-        / "unievent_info.json"
+        / "unievent_info"
     )
     assert local.is_file()
     assert emitter.calls[0]["category"] == "UNIVIEW"
@@ -176,7 +176,7 @@ def test_processed_state_uses_get_set_state(tmp_path):
     root = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
     ev = root / "e1"
     ev.mkdir(parents=True)
-    (ev / "unievent_info.json").write_text(
+    (ev / "unievent_info").write_text(
         json.dumps({"event_name": "ANR"}), encoding="utf-8",
     )
     assert r.tick_once() == 1
@@ -196,7 +196,7 @@ def test_emit_aee_ts_is_device_timestamp_not_subtype(tmp_path):
     root = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
     ev = root / "evt_ts"
     ev.mkdir(parents=True)
-    (ev / "unievent_info.json").write_text(
+    (ev / "unievent_info").write_text(
         json.dumps({
             "event_name": "KE",
             "package_name": "sys",
@@ -258,7 +258,7 @@ class TestProcessedPrune:
         root = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
         ev = root / "loc1"
         ev.mkdir(parents=True)
-        (ev / "unievent_info.json").write_text("{}", encoding="utf-8")
+        (ev / "unievent_info").write_text("{}", encoding="utf-8")
         r.tick_once()
         assert r._processed == {"loc1"}
 
@@ -329,8 +329,8 @@ class TestProcessedPrune:
         def shell_fn(cmd: str, _t: int):
             if cmd.startswith("ls -1 /data/"):
                 return "fresh1\n__STP_RC__:0\n"
-            if "unievent_info.json" in cmd:
-                return "unievent_info.json\n"
+            if "unievent_info" in cmd:
+                return "unievent_info\n"
             return None
 
         r = _make_reconciler(
@@ -373,7 +373,7 @@ class TestProcessedPrune:
         store = self._seed_store(["stale1", "live1"])
 
         def shell_fn(cmd: str, _t: int):
-            if cmd.startswith("ls -1 /data/uniview"):
+            if cmd.startswith("ls -1 /data/ylog/uniview_exception"):
                 return "live1\n__STP_RC__:0\n"
             if cmd.startswith("ls -1 /data/vendor/uniview"):
                 return "__STP_RC__:2\n"

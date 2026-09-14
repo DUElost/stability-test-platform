@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Set
 
 from ..watcher.contracts import ContractViolation
+from .collectors.unisoc import UNIVIEW_INFO_FILENAME, UNIVIEW_ROOT
 from .mobilelog import make_adb_pull_fn
 from .extraction_slot import host_extraction_slot
 from .paths import get_aee_local_root
@@ -26,7 +27,10 @@ logger = logging.getLogger(__name__)
 
 _UNISOC_STATE_PREFIX = "watcher:unisoc"
 _PROCESSED_SUFFIX = "processed_event_dirs"
-_DEVICE_UNIVIEW_ROOTS = ("/data/uniview", "/data/vendor/uniview")
+# 事件根以 collector 常量为单一真源（真机 Z2581/Z2582 确认：/data/ylog/uniview_exception）。
+# 旧值 ("/data/uniview", "/data/vendor/uniview") 是**框架侧**目录，真机从未在其下出现
+# 事件目录 → 采集恒空（#73）。
+_DEVICE_UNIVIEW_ROOTS = (UNIVIEW_ROOT,)
 _STP_RC_MARKER = "__STP_RC__:"
 
 
@@ -213,7 +217,7 @@ class UnisocUniviewReconciler:
             with self._state_lock:
                 if key in self._processed:
                     continue
-            if not (event_dir / "unievent_info.json").is_file():
+            if not (event_dir / UNIVIEW_INFO_FILENAME).is_file():
                 continue
             if self._emit_event(event_dir):
                 with self._state_lock:
@@ -341,11 +345,11 @@ class UnisocUniviewReconciler:
                     if name in self._processed:
                         continue
                 local_dir = root / name
-                if (local_dir / "unievent_info.json").is_file():
+                if (local_dir / UNIVIEW_INFO_FILENAME).is_file():
                     continue
                 remote_dir = f"{remote_root}/{name}"
                 info = self._shell_fn(
-                    f"ls {remote_dir}/unievent_info.json 2>/dev/null", 10,
+                    f"ls {remote_dir}/{UNIVIEW_INFO_FILENAME} 2>/dev/null", 10,
                 )
                 if not info:
                     continue
@@ -377,10 +381,10 @@ class UnisocUniviewReconciler:
             # adb pull dir → staging/<basename>/… or staging files
             nested = staging / local_dir.name
             source = nested if nested.is_dir() else staging
-            if not (source / "unievent_info.json").is_file():
+            if not (source / UNIVIEW_INFO_FILENAME).is_file():
                 # one more nesting level sometimes
                 candidates = [
-                    p for p in staging.rglob("unievent_info.json") if p.is_file()
+                    p for p in staging.rglob(UNIVIEW_INFO_FILENAME) if p.is_file()
                 ]
                 if not candidates:
                     return False
@@ -388,7 +392,7 @@ class UnisocUniviewReconciler:
             if local_dir.exists():
                 shutil.rmtree(local_dir, ignore_errors=True)
             shutil.copytree(source, local_dir)
-            return (local_dir / "unievent_info.json").is_file()
+            return (local_dir / UNIVIEW_INFO_FILENAME).is_file()
         except Exception:
             logger.debug(
                 "unisoc_reconciler_pull_failed remote=%s", remote_dir, exc_info=True,
