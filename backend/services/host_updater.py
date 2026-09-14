@@ -67,7 +67,9 @@ _TARBALL_COMPRESSLEVEL = 6
 # 存在的元数据（VERSION/ARTIFACT_DIGEST/.env）不进身份；resources/mtbf/ 永远
 # 属主机本地（#214/#216 APK 保护语义），tarball 也不应携带（远端 rsync --delete
 # 本就排除，不进包让「载荷 == 安装树」更真）。
-_PAYLOAD_METADATA_EXCLUDES = {"VERSION", "ARTIFACT_DIGEST", ".env"}
+_PAYLOAD_METADATA_EXCLUDES = {
+    "VERSION", "ARTIFACT_DIGEST", "ARTIFACT_DIGEST_RESOURCES", ".env",
+}
 
 
 def _iter_payload_files(kind: str = "full"):
