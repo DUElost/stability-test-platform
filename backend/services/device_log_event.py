@@ -29,6 +29,11 @@ _REMOTE_STATES = (
 
 # Clock skew / late upload grace around PlanRun window for unassigned attach (#213 B3).
 _ASSOCIATE_GRACE = timedelta(minutes=30)
+# #1962：同一宽限也用于「异常仪表盘」的时间窗口。终态 run 的事件可能在 run
+# **结束之后**才落库（reconciler 首 tick 的 ls+pull 可能慢于 job 生命周期），
+# 原窗口 [started_at, ended_at] 会把本轮自己的事件整片丢弃 —— 表现为
+# 「DLE 有行、仪表盘 0」。这里公开同一常量，避免两处又各写一个宽限值。
+LATE_EVENT_GRACE = _ASSOCIATE_GRACE
 
 # #1956：无 scan 门禁的平台事件类型。
 #
