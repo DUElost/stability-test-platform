@@ -583,6 +583,11 @@ GATE_TO_CI_ANCHOR = {
     "layering": ("ci.yml", "分层检查"),
     # 孤立 ORM 模型挂载门禁（#1890-B）——锚点即 lint job 该 step 的 name
     "orphan-models": ("ci.yml", "孤立 ORM 模型检查"),
+    # 环境变量清单漂移门禁（#737 文档切片）：run_gates 侧跑
+    # `env_inventory.py --self-test && --check`；CI 侧由根测试套件承担——
+    # tests/test_env_inventory.py::test_repo_doc_inventory_is_in_sync 直接执行
+    # `--check`，随 pr-agent-tests job 的该 step 一起跑。
+    "env-inventory": ("ci.yml", "Run repo-level tests"),
     "gov-surface": ("ci.yml", "治理面结构检查"),
     "ai-work": ("ci.yml", "Execution Registry 自测"),
     "pr-migrate": ("ci.yml", "Migrate empty PostgreSQL database"),

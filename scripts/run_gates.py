@@ -90,6 +90,15 @@ GATES = {
         ROOT,
         None,
     ),
+    # 环境变量清单漂移门禁（#737 文档切片）：代码新增 `os.getenv` 读取名而
+    # docs/development/environment-variables.md 的生成附录未刷新即红；命令内
+    # 串 self-test（红绿自证）后跑 --check。
+    "env-inventory": (
+        f"{PY} tools/dev/env_inventory.py --self-test && "
+        f"{PY} tools/dev/env_inventory.py --check",
+        ROOT,
+        None,
+    ),
     "compileall": (
         f"{PY} -m compileall -q backend/ tools/ scripts/",
         ROOT,
@@ -248,12 +257,12 @@ GATES = {
 
 PROFILES = {
     "check:quick": [
-        "schema-at-head",
+        "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "orphan-models",
         "gov-surface", "ai-work",
     ],
     "check:pr": [
-        "schema-at-head",
+        "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "pollution", "immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
