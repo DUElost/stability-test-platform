@@ -166,7 +166,7 @@
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **210** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**191** 个已在 `.env*.example` 登记，**19** 个声明为内部（理由见下节）。
+共 **211** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**192** 个已在 `.env*.example` 登记，**19** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -185,19 +185,19 @@
 | `AGENT_SECRET_B64` | `-` | — | 运行时 | `backend/services/host_updater.py:276` |
 | `AIMONKEY_RESOURCE_DIR` | `` | ✅ | 运行时 | `backend/agent/aimonkey_paths.py:23` |
 | `API_URL` | `http://127.0.0.1:8000` | ✅ | 运行时 | `backend/agent/main.py:721` |
-| `ARTIFACT_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/scheduler/recycler.py:54` |
+| `ARTIFACT_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:46` |
 | `AUTH_ACCESS_COOKIE_NAME` | `stp_access_token` | ✅ | 运行时 | `backend/core/security.py:28` |
 | `AUTH_COOKIE_PATH` | `/` | ✅ | 运行时 | `backend/core/security.py:30` |
 | `AUTH_COOKIE_SAMESITE` | `lax` | ✅ | 运行时 | `backend/core/security.py:51` |
 | `AUTH_COOKIE_SECURE` | `0` | ✅ | 运行时 | `backend/core/security.py:47` |
 | `AUTH_REFRESH_COOKIE_NAME` | `stp_refresh_token` | ✅ | 运行时 | `backend/core/security.py:29` |
-| `AUTO_ARCHIVE_POLL_INTERVAL_SECONDS` | `120` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:48` |
+| `AUTO_ARCHIVE_POLL_INTERVAL_SECONDS` | `120` | ✅ | 运行时 | `backend/core/settings/scheduler.py:39` |
 | `AUTO_REGISTER_HOST` | `false` | ✅ | 运行时 | `backend/agent/main.py:757` |
 | `AUTO_REGISTER_MAX_RETRIES` | `0` | ✅ | 运行时 | `backend/agent/main.py:774` |
 | `AUTO_REGISTER_RETRY_DELAY` | `10` | ✅ | 运行时 | `backend/agent/main.py:775` |
 | `BACKGROUND_POOL_MAX_QUEUE` | `200` | ✅ | 运行时 | `backend/core/thread_pool.py:21` |
 | `BACKGROUND_POOL_SIZE` | `8` | ✅ | 运行时 | `backend/core/thread_pool.py:19` |
-| `CHAIN_RECONCILER_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:39` |
+| `CHAIN_RECONCILER_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:36` |
 | `CHAIN_RECONCILE_BATCH_SIZE` | `100` | ✅ | 运行时 | `backend/scheduler/plan_chain_reconciler.py:21` |
 | `COORDINATOR_HEARTBEAT_INTERVAL` | `30` | ✅ | 运行时 | `backend/agent/coordinator.py:171` |
 | `COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS` | `300` | ✅ | 运行时 | `backend/api/routes/plan_runs.py:1757` |
@@ -205,7 +205,7 @@
 | `CORS_ALLOW_HEADERS` | `-` | ✅ | 运行时 | `backend/core/cors.py:17` |
 | `CORS_ALLOW_METHODS` | `-` | ✅ | 运行时 | `backend/core/cors.py:16` |
 | `CORS_ORIGINS` | `-` | ✅ | 运行时 | `backend/core/cors.py:15` |
-| `CRON_POLL_INTERVAL` | `30` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:34` |
+| `CRON_POLL_INTERVAL` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:32` |
 | `DATABASE_URL` | `` | ✅ | 运行时 | `backend/agent/tests/test_env_isolation.py:34` |
 | `DEVICE_LOCK_LEASE_SECONDS` | `600` | ✅ | 运行时 | `backend/api/routes/agent_api.py:77` |
 | `DEVICE_OFFLINE_TIMEOUT` | `60` | ✅ | 运行时 | `backend/api/routes/heartbeat.py:123` |
@@ -226,20 +226,21 @@
 | `MAX_ADMISSION_REQUEUE_ATTEMPTS` | `3` | ✅ | 运行时 | `backend/scheduler/precheck_reaper.py:287` |
 | `MAX_PRECHECK_REENQUEUE_ATTEMPTS` | `1` | ✅ | 运行时 | `backend/scheduler/precheck_reaper.py:52` |
 | `MOUNT_POINTS` | `` | ✅ | 运行时 | `backend/agent/main.py:792` |
-| `PATROL_STALL_BATCH_LIMIT` | `100` | ✅ | 运行时 | `backend/scheduler/recycler.py:57` |
-| `PLAN_RUN_RETENTION_DAYS` | `3` | ✅ | 运行时 | `backend/scheduler/cron_scheduler.py:29` |
+| `PATROL_STALL_BATCH_LIMIT` | `100` | ✅ | 运行时 | `backend/core/settings/scheduler.py:47` |
+| `PLAN_RUN_RETENTION_DAYS` | `3` | ✅ | 运行时 | `backend/core/settings/scheduler.py:53` |
 | `POLL_INTERVAL` | `5` | ✅ | 运行时 | `backend/agent/main.py:791` |
-| `POST_COMPLETION_GRACE_SECONDS` | `120` | ✅ | 运行时 | `backend/scheduler/recycler.py:718` |
+| `POST_COMPLETION_GRACE_SECONDS` | `120` | ✅ | 运行时 | `backend/core/settings/scheduler.py:49` |
+| `POST_COMPLETION_MAX_DEFER_SECONDS` | `-` | ✅ | 运行时 | `backend/core/settings/scheduler.py:50` |
 | `PRECHECK_NOTIFY_DEBOUNCE_SECONDS` | `0.5` | — | 运行时 | `backend/services/precheck/notify.py:14` |
-| `PRECHECK_REAPER_INTERVAL_SECONDS` | `45` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:37` |
-| `QUEUE_DEPTH_POLL_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:36` |
-| `RECONCILER_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:33` |
-| `RECYCLER_BATCH_SIZE` | `200` | ✅ | 运行时 | `backend/scheduler/recycler.py:53` |
+| `PRECHECK_REAPER_INTERVAL_SECONDS` | `45` | ✅ | 运行时 | `backend/core/settings/scheduler.py:35` |
+| `QUEUE_DEPTH_POLL_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:34` |
+| `RECONCILER_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:31` |
+| `RECYCLER_BATCH_SIZE` | `200` | ✅ | 运行时 | `backend/core/settings/scheduler.py:45` |
 | `REDIS_PING_TIMEOUT` | `3.0` | ✅ | 运行时 | `backend/main.py:122` |
 | `REDIS_URL` | `redis://localhost:6379/0` | ✅ | 运行时 | `backend/main.py:157` |
-| `RETENTION_CLEANUP_INTERVAL_SECONDS` | `3600` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:35` |
-| `REVOKED_TOKEN_CLEANUP_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:44` |
-| `RUN_RECYCLE_INTERVAL_SECONDS` | `30` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:31` |
+| `RETENTION_CLEANUP_INTERVAL_SECONDS` | `3600` | ✅ | 运行时 | `backend/core/settings/scheduler.py:33` |
+| `REVOKED_TOKEN_CLEANUP_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/core/settings/scheduler.py:38` |
+| `RUN_RECYCLE_INTERVAL_SECONDS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:29` |
 | `RUN_REPORT_ALERT_ANR_THRESHOLD` | `1` | ✅ | 运行时 | `backend/services/report_service.py:53` |
 | `RUN_REPORT_ALERT_CRASH_THRESHOLD` | `1` | ✅ | 运行时 | `backend/services/report_service.py:54` |
 | `RUN_REPORT_ALERT_RESTART_THRESHOLD` | `2` | ✅ | 运行时 | `backend/services/report_service.py:55` |
@@ -248,8 +249,8 @@
 | `SAQ_CONCURRENCY` | `10` | ✅ | 运行时 | `backend/tasks/saq_worker.py:52` |
 | `SAQ_ENQUEUE_WAIT_TIMEOUT` | `5.0` | ✅ | 运行时 | `backend/tasks/saq_worker.py:54` |
 | `SAQ_QUEUE_NAME` | `stp` | ✅ | 运行时 | `backend/main.py:219` |
-| `SCHEDULE_DEDUP_WINDOW_SECONDS` | `60` | ✅ | 运行时 | `backend/scheduler/cron_scheduler.py:31` |
-| `SESSION_WATCHDOG_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:32` |
+| `SCHEDULE_DEDUP_WINDOW_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:54` |
+| `SESSION_WATCHDOG_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/core/settings/scheduler.py:30` |
 | `SMTP_FROM` | `` | ✅ | 运行时 | `backend/services/notification_service.py:49` |
 | `SMTP_HOST` | `` | ✅ | 运行时 | `backend/services/notification_service.py:45` |
 | `SMTP_PASSWORD` | `` | ✅ | 运行时 | `backend/services/notification_service.py:48` |
@@ -263,7 +264,7 @@
 | `STP_ADMISSION_AGING_MAX_BOOST` | `5` | ✅ | 运行时 | `backend/services/admission_pump.py:69` |
 | `STP_ADMISSION_AGING_STEP_SECONDS` | `1800` | ✅ | 运行时 | `backend/services/admission_pump.py:68` |
 | `STP_ADMISSION_PUMP_BATCH` | `5` | ✅ | 运行时 | `backend/services/admission_pump.py:64` |
-| `STP_ADMISSION_PUMP_INTERVAL_SECONDS` | `5` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:51` |
+| `STP_ADMISSION_PUMP_INTERVAL_SECONDS` | `5` | ✅ | 运行时 | `backend/core/settings/scheduler.py:40` |
 | `STP_ADMISSION_RETRY_BACKOFF_SECONDS` | `30` | ✅ | 运行时 | `backend/services/admission_pump.py:65` |
 | `STP_AEE_LOCAL_ROOT` | `-` | ✅ | 运行时 | `backend/agent/aee/paths.py:101` |
 | `STP_AEE_MAX_CONCURRENT_PULLS` | `-` | ✅ | 运行时 | `backend/agent/aee/extraction_slot.py:27` |
@@ -292,7 +293,7 @@
 | `STP_CONSOLE_REGISTRY_TTL_SECONDS` | `-` | ✅ | 运行时 | `backend/realtime/console_registry.py:81` |
 | `STP_CONTROL_PLANE_NODE_JOB` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:321` |
 | `STP_COUNTER_RECONCILE_BATCH` | `200` | ✅ | 运行时 | `backend/scheduler/counter_reconciler.py:29` |
-| `STP_COUNTER_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:55` |
+| `STP_COUNTER_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/core/settings/scheduler.py:41` |
 | `STP_COUNTER_RECONCILE_LOOKBACK_HOURS` | `48` | ✅ | 运行时 | `backend/scheduler/counter_reconciler.py:27` |
 | `STP_CSRF_ENABLED` | `1` | ✅ | 运行时 | `backend/core/csrf.py:37` |
 | `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:182` |
@@ -343,7 +344,7 @@
 | `STP_SCRIPT_ROOT` | `` | ✅ | 运行时 | `backend/api/routes/scripts.py:150` |
 | `STP_SCRIPT_RUNTIME_ROOT` | `-` | ✅ | 运行时 | `backend/api/routes/scripts.py:165` |
 | `STP_SIGNAL_LINK_RECONCILE_BATCH` | `200` | ✅ | 运行时 | `backend/scheduler/signal_link_reconciler.py:27` |
-| `STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:60` |
+| `STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/core/settings/scheduler.py:42` |
 | `STP_SKIP_INFRA_CHECK` | `0` | ✅ | 运行时 | `backend/main.py:190` |
 | `STP_SMOKE_ORIGIN` | `-` | — | 测试 | `backend/tests/test_seed_and_smoke.py:63` |
 | `STP_SMTP_TIMEOUT_SECONDS` | `15` | ✅ | 运行时 | `backend/services/notification_service.py:54` |
@@ -408,6 +409,8 @@
 | `SUDO_UID` | sudo 调用时由系统注入（stp_agent_priv） |
 
 <!-- env-inventory:end -->
+
+
 
 
 
