@@ -248,11 +248,11 @@
 | `SAQ_QUEUE_NAME` | `stp` | ✅ | 运行时 | `backend/main.py:219` |
 | `SCHEDULE_DEDUP_WINDOW_SECONDS` | `60` | ✅ | 运行时 | `backend/scheduler/cron_scheduler.py:31` |
 | `SESSION_WATCHDOG_INTERVAL_SECONDS` | `15` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:32` |
-| `SMTP_FROM` | `` | ✅ | 运行时 | `backend/services/notification_service.py:48` |
-| `SMTP_HOST` | `` | ✅ | 运行时 | `backend/services/notification_service.py:44` |
-| `SMTP_PASSWORD` | `` | ✅ | 运行时 | `backend/services/notification_service.py:47` |
-| `SMTP_PORT` | `587` | ✅ | 运行时 | `backend/services/notification_service.py:45` |
-| `SMTP_USER` | `` | ✅ | 运行时 | `backend/services/notification_service.py:46` |
+| `SMTP_FROM` | `` | ✅ | 运行时 | `backend/services/notification_service.py:49` |
+| `SMTP_HOST` | `` | ✅ | 运行时 | `backend/services/notification_service.py:45` |
+| `SMTP_PASSWORD` | `` | ✅ | 运行时 | `backend/services/notification_service.py:48` |
+| `SMTP_PORT` | `587` | ✅ | 运行时 | `backend/services/notification_service.py:46` |
+| `SMTP_USER` | `` | ✅ | 运行时 | `backend/services/notification_service.py:47` |
 | `SSH_CREDENTIALS_FERNET_KEY` | `` | ✅ | 运行时 | `backend/core/ssh_security.py:345` |
 | `STP_ADB_AUTO_REPAIR` | `0` | ✅ | 运行时 | `backend/agent/heartbeat_thread.py:295` |
 | `STP_ADB_REPAIR_COOLDOWN_SECONDS` | `300` | ✅ | 运行时 | `backend/agent/heartbeat_thread.py:94` |
@@ -326,8 +326,8 @@
 | `STP_MAX_CLAIM_SLOTS` | `-` | ✅ | 运行时 | `backend/agent/capacity_reporter.py:93` |
 | `STP_MAX_CONCURRENT_OPERATIONS` | `-` | ✅ | 运行时 | `backend/agent/operation_scheduler.py:38` |
 | `STP_METRICS_AUTH_REQUIRED` | `1` | ✅ | 运行时 | `backend/api/routes/metrics.py:65` |
-| `STP_NOTIFY_SAQ_RETRIES` | `-` | — | 测试 | `backend/tests/services/test_notification_service.py:497` |
-| `STP_NOTIFY_SAQ_TIMEOUT_S` | `-` | ✅ | 运行时 | `backend/services/notification_service.py:99` |
+| `STP_NOTIFY_SAQ_RETRIES` | `-` | — | 测试 | `backend/tests/services/test_notification_service.py:503` |
+| `STP_NOTIFY_SAQ_TIMEOUT_S` | `-` | ✅ | 运行时 | `backend/services/notification_service.py:100` |
 | `STP_PHASE_BARRIER_ENABLED` | `1` | ✅ | 运行时 | `backend/agent/job_runner.py:220` |
 | `STP_PLATFORM_NAME` | `Stability Test Platform` | ✅ | 运行时 | `backend/api/routes/settings.py:19` |
 | `STP_PROMETHEUS_URL` | `-` | ✅ | 运行时 | `backend/services/file_server_monitor.py:120` |
@@ -344,7 +344,7 @@
 | `STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/scheduler/app_scheduler.py:60` |
 | `STP_SKIP_INFRA_CHECK` | `0` | ✅ | 运行时 | `backend/main.py:190` |
 | `STP_SMOKE_ORIGIN` | `-` | — | 测试 | `backend/tests/test_seed_and_smoke.py:63` |
-| `STP_SMTP_TIMEOUT_SECONDS` | `15` | ✅ | 运行时 | `backend/services/notification_service.py:53` |
+| `STP_SMTP_TIMEOUT_SECONDS` | `15` | ✅ | 运行时 | `backend/services/notification_service.py:54` |
 | `STP_SOCKETIO_REDIS_ADAPTER` | `0` | ✅ | 运行时 | `backend/realtime/socketio_redis.py:35` |
 | `STP_SOCKETIO_REDIS_CHANNEL` | `-` | ✅ | 运行时 | `backend/realtime/socketio_redis.py:39` |
 | `STP_SSH_KNOWN_HOSTS` | `` | ✅ | 运行时 | `backend/core/ssh_security.py:93` |
@@ -406,6 +406,7 @@
 | `SUDO_UID` | sudo 调用时由系统注入（stp_agent_priv） |
 
 <!-- env-inventory:end -->
+
 
 
 
