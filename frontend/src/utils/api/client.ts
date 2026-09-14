@@ -225,7 +225,10 @@ apiClient.interceptors.response.use(
       if (_authFailureHandler) {
         _authFailureHandler();
       } else {
-        window.location.href = '/login';
+        // 硬跳转无法携带 router state，深链经 ?next= 传给 LoginPage 回跳
+        // （GUI 评测 2026-09-14：此前恒丢深链，登录后只能落首页）
+        const next = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.href = `/login?next=${next}`;
       }
     }
 

@@ -968,6 +968,24 @@ describe('PlanRunDetailPage', () => {
     ).toBeInTheDocument();
   });
 
+  // GUI 评测 2026-09-14：曾被报「暂不归档点击无效」——线上复现为自动化点击
+  // 被 DOM 重渲染打断的伪象，代码路径无缺陷；此回归测试钉住取消行为。
+  it('#780 回归: 点击「暂不归档」关闭弹窗且不触发 extract', async () => {
+    mocks.getRun.mockResolvedValueOnce(finalArchiveRun('SUCCESS'));
+    mocks.getWatcherSummary.mockResolvedValueOnce(finalArchiveSummary('merged'));
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: '暂不归档' }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText('PlanRun 已结束 — 是否最终归档？'),
+      ).not.toBeInTheDocument();
+    });
+    expect(mocks.triggerExtract).not.toHaveBeenCalled();
+  });
+
   it('#780: FAILED 终态不弹提示（后端 extract 对 FAILED 无条件 409）', async () => {
     mocks.getRun.mockResolvedValueOnce(finalArchiveRun('FAILED'));
     mocks.getWatcherSummary.mockResolvedValueOnce(finalArchiveSummary('merged'));

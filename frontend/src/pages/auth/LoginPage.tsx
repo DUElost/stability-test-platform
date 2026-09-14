@@ -1,17 +1,20 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertCircle } from 'lucide-react';
 import { clearAppQueryCache } from '@/components/QueryProvider';
 import { api, toApiError } from '@/utils/api';
+import { resolvePostLoginTarget } from '@/utils/authRedirect';
 import { ALERT_BOX, SURFACE, TEXT } from '@/design-system/tokens';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
 import { BrandLogo } from '@/components/brand/BrandLogo';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -25,7 +28,8 @@ export default function LoginPage() {
     try {
       await api.auth.login(username, password);
       clearAppQueryCache();
-      navigate('/');
+      const target = resolvePostLoginTarget(location.state, searchParams.get('next'));
+      navigate(target, { replace: true });
     } catch (err: unknown) {
       setError(toApiError(err).message);
     } finally {
@@ -70,6 +74,7 @@ export default function LoginPage() {
               <Input
                 id="username"
                 type="text"
+                autoComplete="username"
                 placeholder="请输入用户名"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -84,6 +89,7 @@ export default function LoginPage() {
               <Input
                 id="password"
                 type="password"
+                autoComplete="current-password"
                 placeholder="请输入密码"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

@@ -1,5 +1,5 @@
 import { lazy } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import AppShell from '../layouts/AppShell';
 import { useAuthSession } from '@/hooks/useAuthSession';
@@ -52,18 +52,30 @@ function AuthGateLoading() {
   );
 }
 
+// 未登录访问受保护路由 → /login 并携带来源（登录成功后回跳深链，GUI 评测 2026-09-14）
+function loginRedirectState(location: { pathname: string; search: string; hash: string }) {
+  return { from: location.pathname + location.search + location.hash };
+}
+
 // 受保护的路由组件
 function ProtectedRoute() {
   const sessionQ = useAuthSession();
+  const location = useLocation();
   if (sessionQ.isLoading) return <AuthGateLoading />;
-  return sessionQ.isSuccess ? <Outlet /> : <Navigate to="/login" replace />;
+  return sessionQ.isSuccess ? (
+    <Outlet />
+  ) : (
+    <Navigate to="/login" replace state={loginRedirectState(location)} />
+  );
 }
 
 // Admin-only route guard: admin 角色放行,非 admin 重定向首页
 function AdminRoute() {
   const sessionQ = useAuthSession();
+  const location = useLocation();
   if (sessionQ.isLoading) return <AuthGateLoading />;
-  if (!sessionQ.isSuccess) return <Navigate to="/login" replace />;
+  if (!sessionQ.isSuccess)
+    return <Navigate to="/login" replace state={loginRedirectState(location)} />;
   return sessionQ.data?.role === 'admin' ? <Outlet /> : <Navigate to="/" replace />;
 }
 

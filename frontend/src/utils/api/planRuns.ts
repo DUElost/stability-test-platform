@@ -29,6 +29,8 @@ import type {
 export interface ListPlanRunEventsParams {
   stage?: EventStage | 'all';
   severity?: EventSeverity | 'all';
+  /** 关键字（大小写不敏感），匹配 title / description / device_serial。 */
+  search?: string;
   limit?: number;
   offset?: number;
 }
