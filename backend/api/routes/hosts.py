@@ -47,7 +47,7 @@ from backend.services.host_upgrade_gate import (
     begin_host_upgrade,
     end_host_upgrade,
 )
-from backend.services.artifact_digest import evaluate_convergence
+from backend.services.artifact_digest import plan_convergence
 from backend.services.agent_version_info import finalize_hot_update_outcome
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
 from backend.services.agent_version_info import build_host_version_view
@@ -707,12 +707,12 @@ def host_hot_update(
     # ── ADR-0040 D3 no-op gate：desired == current → 不动作不留痕不占窗口 ──
     # no-op 不触碰主机，无需维护窗口与活跃 Job 门禁；结果走统一 finalize
     # 通道留痕（converged），deployed_at 不刷新（D2 语义修订）。
-    desired_digest, converged_result = evaluate_convergence(host, force=force)
-    if converged_result is not None:
+    plan = plan_convergence(host, force=force)
+    if plan.converged and plan.no_op_result is not None:
         finalize_hot_update_outcome(
             db,
             host,
-            converged_result,
+            plan.no_op_result,
             entry="ui_api",
             user_id=current_user.id if current_user else None,
             username=current_user.username if current_user else None,
@@ -721,10 +721,11 @@ def host_hot_update(
             "ok": True,
             "host_id": host_id,
             "converged": True,
-            "reason": converged_result["reason"],
-            "message": converged_result["message"],
-            "duration_ms": converged_result["duration_ms"],
-            "artifact_digest": desired_digest,
+            "reason": plan.no_op_result["reason"],
+            "message": plan.no_op_result["message"],
+            "duration_ms": plan.no_op_result["duration_ms"],
+            "artifact_digest": plan.code_digest,
+            "resources_digest": plan.resources_digest,
             "code_version": get_agent_code_version(),
             "abort_summary": None,
         }
@@ -863,7 +864,10 @@ def host_hot_update(
             sync_agent_secret=sync_agent_secret,
             agent_secret=agent_secret,
             code_version=code_version,
-            artifact_digest=desired_digest,
+            artifact_digest=plan.code_digest,
+            resources_digest=plan.resources_digest,
+            code_drift=plan.code_drift,
+            resources_drift=plan.resources_drift and not plan.resources_skipped_empty,
         )
 
         # ADR-0040 D5：结果审计 + deployed_at 语义 + 指标统一走 finalize 通道
