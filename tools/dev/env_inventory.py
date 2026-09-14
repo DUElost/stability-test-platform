@@ -100,6 +100,33 @@ def _file_patterns(text: str) -> list[re.Pattern[str]]:
 _LITERAL_RE = re.compile(r"""^\s*(?:["']([^"']*)["']|(-?\d+(?:\.\d+)?))\s*$""")
 _KWARG_RE = re.compile(r"""(?:production_default|default)\s*=\s*([^,\n)]+)""")
 
+#: 内部声明（#737 收口）：**既未进运维模板、也不打算登记**的读取名，每条必须写明
+#: 理由。门禁规则：「代码读取名 ∈ 示例登记 ∪ 内部声明」，二者之外即红——强制每个
+#: 读取名二选一，防止「新加一个环境变量、谁也不知道」重新堆积。
+#: 验收口径：需运维按环境/规模/机型调整的 → 登记进示例；控制面注入的派生键、
+#: 测试/开发专用、纯内部实现细节 → 在此声明并写明理由。
+_INTERNAL_ONLY: dict[str, str] = {
+    "AGENT_SECRET_B64": "控制面 hot-update 经环境变量下发的 base64 密钥载荷（传输通道，非运维配置）",
+    "ENV_OVERRIDES_B64": "同上：控制面下发的 .env 覆盖载荷（base64 JSON）",
+    "ENV_PATH_KEYS_B64": "同上：路径类键清单载荷（base64 JSON）",
+    "FAKE_TAR_SLEEP": "测试夹具（模拟 tar 耗时），无常驻配置语义",
+    "HOST_IP": "测试注入的 host 身份；生产由 Agent 自行解析",
+    "INSTALL_DIR": "hot-update 在目标机执行时由部署环境注入的安装目录",
+    "PRECHECK_NOTIFY_DEBOUNCE_SECONDS": "precheck 通知去抖：实现细节（防重复推送），不属运维旋钮",
+    "STP_AGENT_VERSION": "hot-update 写入的版本标记（派生值，不自设）",
+    "STP_ALLOW_UNSAFE_TEST_DATABASE_URL": "测试守卫逃生门：仅本地测试库用，生产禁止设置",
+    "STP_ARTIFACT_DIGEST_CACHE": "制品摘要缓存的紧急关闭开关（内部实现细节）",
+    "STP_DEDUP_LOG_ENCODING": "去重日志文件编码（locale 细节，跟随机型）",
+    "STP_DEDUP_PLACE": "去重扫描写入的站点标签（元数据；由采集侧脚本语境决定）",
+    "STP_DEVICE_SERIAL": "脚本运行时注入：Agent 为脚本进程注入设备序列号",
+    "STP_NOTIFY_SAQ_RETRIES": "读取点仅存在于测试（断言 _int_env 行为）",
+    "STP_SMOKE_ORIGIN": "测试用：smoke 夹具断言 origin",
+    "STP_STEP_PARAMS": "脚本运行时注入：步骤参数 JSON（Agent→脚本协议）",
+    "STP_WATCHER_AEE_RECONCILE_HOSTS": "目标机本地选择性对账清单（现场排障临时用，默认空=全量）",
+    "SUDO_UID": "sudo 调用时由系统注入（stp_agent_priv）",
+    "SUDO_GID": "sudo 调用时由系统注入（stp_agent_priv）",
+}
+
 
 def _normalize_default(raw: str | None) -> str:
     """把默认值表达式归一为展示值：字面量取值，其余记 `-`（表达式/未设默认）。"""
@@ -169,15 +196,30 @@ def example_keys() -> set[str]:
     return keys
 
 
+def audit(reads: dict[str, dict], registered: set[str]) -> list[str]:
+    """清单一致性违规（#737 收口）：强制「示例登记 ∪ 内部声明」二选一。"""
+    issues: list[str] = []
+    for name in sorted(reads):
+        if name in registered and name in _INTERNAL_ONLY:
+            issues.append(f"{name}：已登记进示例却仍在内部声明清单（删声明或撤登记）")
+        elif name not in registered and name not in _INTERNAL_ONLY:
+            issues.append(f"{name}：未登记进示例、也未声明内部（二选一后刷新文档）")
+    for name in sorted(set(_INTERNAL_ONLY) - set(reads)):
+        issues.append(f"{name}：内部声明已陈旧——代码中不再有读取点（删除声明）")
+    return issues
+
+
 def render_block(reads: dict[str, dict], registered: set[str]) -> str:
     total = len(reads)
-    missing = sorted(name for name in reads if name not in registered)
+    unregistered = sorted(name for name in reads if name not in registered)
     lines = [
         BEGIN_MARK,
         "",
         f"共 **{total}** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`）："
-        f"其中 **{len(missing)}** 个未在 `.env*.example` 登记（下表 `示例` 列 = `—`）。",
-        "示例文件是**运维模板**（只承载需要运维改动的子集）；本表是**代码侧完整清单**。",
+        f"**{len(registered & set(reads))}** 个已在 `.env*.example` 登记，"
+        f"**{len(unregistered)}** 个声明为内部（理由见下节）。",
+        "示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。",
+        "门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。",
         "",
         "| 变量 | 默认 | 示例 | 类别 | 首个读取点 |",
         "|---|---|---|---|---|",
@@ -190,6 +232,15 @@ def render_block(reads: dict[str, dict], registered: set[str]) -> str:
         lines.append(
             f"| `{name}` | `{entry['default']}` | {flag} | {category} | `{first[0]}:{first[1]}` |"
         )
+    lines += [
+        "",
+        "### 内部声明（未进运维模板，含理由）",
+        "",
+        "| 变量 | 理由 |",
+        "|---|---|",
+    ]
+    for name in unregistered:
+        lines.append(f"| `{name}` | {_INTERNAL_ONLY.get(name, '（未声明——门禁会红）')} |")
     lines += ["", END_MARK]
     return "\n".join(lines)
 
@@ -250,6 +301,12 @@ def main() -> int:
         doc_text = DOC.read_text(encoding="utf-8")
         if BEGIN_MARK not in doc_text or END_MARK not in doc_text:
             print("[FAIL] 文档缺少 env-inventory 生成块 marker", file=sys.stderr)
+            return 1
+        issues = audit(reads, example_keys())
+        if issues:
+            print("[FAIL] 环境变量清单裁决缺失：", file=sys.stderr)
+            for item in issues:
+                print(f"        - {item}", file=sys.stderr)
             return 1
         current = doc_text.partition(BEGIN_MARK)[2].partition(END_MARK)[0]
         expected = block.partition(BEGIN_MARK)[2].partition(END_MARK)[0]
