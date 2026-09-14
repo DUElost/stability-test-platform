@@ -88,6 +88,7 @@ docs/
 | 文档 | 内容 |
 |------|------|
 | [`00-system-overview.md`](./design/00-system-overview.md) | 部署拓扑、分层、领域模型摘要 |
+| [`2026-09-multi-site-installation.md`](./design/2026-09-multi-site-installation.md) | 多站点 P1：I1 配置模型与离线校验已实现，Linux 同架构/逐角色发行版建模；发布计划、远端安装与城市 B 闭环仍待实施 |
 | [`01-execution-pipeline.md`](./design/01-execution-pipeline.md) | Plan→PlanRun→Job 主链路 |
 | [`07-execution-protocol.md`](./design/07-execution-protocol.md) | 状态机、abort ACK、snapshot、claim、schema |
 | [`02-backend.md`](./design/02-backend.md) | 后端路由、服务、启动 |

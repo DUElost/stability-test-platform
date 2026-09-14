@@ -1,0 +1,58 @@
+schema_version: 1
+site:
+  id: site-b
+  display_name: 城市 B 测试站点
+  timezone: Asia/Shanghai
+platform:
+  os_family: linux
+  cpu_arch: null
+  service_manager: systemd
+network:
+  dependency_mode: null
+control_plane:
+  target: control-b.example.invalid
+  os:
+    distribution: debian
+    version: "13"
+  ssh_user: null
+  ssh_credential_ref: control_plane_ssh
+  deploy_root: /opt/stability-test-platform
+  deploy_user: stp
+  public_url: null
+  security_profile: null
+  tls_ref: null
+storage:
+  provisioning: null
+  protocol: null
+  target: storage-b.example.invalid
+  os: null
+  ssh_user: null
+  ssh_credential_ref: null
+  share: null
+  credential_ref: null
+  mount_path: /mnt/stp/aee_events
+agents:
+  - key: agent-b-01
+    target: agent-b-01.example.invalid
+    os:
+      distribution: ubuntu
+      version: null
+    ssh_user: null
+    ssh_credential_ref: agent_b_01_ssh
+    install_root: /opt/stability-test-agent
+    local_aee_root: null
+dependencies:
+  database_ref: site_database
+  redis_ref: site_redis
+  tools_profile: null
+security:
+  jwt_key_ref: site_jwt
+  agent_secret_ref: site_agent_secret
+  ssh_encryption_key_ref: site_ssh_encryption
+  initial_admin_ref: initial_admin
+release:
+  bundle: null
+  expected_release: null
+navigation:
+  contact: null
+  documentation_url: null
