@@ -54,3 +54,23 @@ def completed_process_factory():
         )
 
     return _factory
+
+
+@pytest.fixture
+def lease_env(monkeypatch):
+    """租约域 env 覆盖助手（ADR-0042 P1）：写 env 后清 Settings 缓存，测试末再清。
+
+    迁移后不再依赖「构造续租器时现读 env」——Settings 是惰性缓存视图，改 env
+    必须伴随 `reset_agent_settings_caches()`，否则读到旧缓存。
+    """
+
+    from backend.agent.settings import reset_agent_settings_caches
+
+    def _set(name: str, value: str) -> None:
+        monkeypatch.setenv(name, value)
+        reset_agent_settings_caches()
+
+    reset_agent_settings_caches()
+    yield _set
+    reset_agent_settings_caches()
+
