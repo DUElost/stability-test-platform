@@ -27,15 +27,18 @@ def read_agent_code_revision() -> str:
     return ""
 
 
-def read_artifact_digest() -> str:
+def read_artifact_digest(kind: str = "code") -> str:
     """Return the deployed artifact digest (ADR-0040), or '' if unavailable/invalid.
 
     与 read_agent_code_revision 同候选路径、同信任模型（部署流程是唯一合法
     写入者）；格式不合法按缺失处理（心跳上报空值，控制面按 drift 收敛）。
+    ``kind``（#1963，P2 身份分层）：code → ARTIFACT_DIGEST；
+    resources → ARTIFACT_DIGEST_RESOURCES。
     """
+    filename = "ARTIFACT_DIGEST" if kind == "code" else "ARTIFACT_DIGEST_RESOURCES"
     candidates = [
-        Path(__file__).resolve().parent / "ARTIFACT_DIGEST",
-        Path("/opt/stability-test-agent/agent/ARTIFACT_DIGEST"),
+        Path(__file__).resolve().parent / filename,
+        Path("/opt/stability-test-agent/agent/") / filename,
     ]
     for path in candidates:
         try:

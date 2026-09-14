@@ -153,6 +153,9 @@ export const AEE_SUBTYPE_CHART_COLORS: Record<string, string> = {
   'HW Reboot': '#a3cf5b',
   'Modem EE': '#4d87da',
   'OCP Reboot': '#b082ef',
+  // #1956：展锐（UNIVIEW）事件的 subtype（取自真机 unievent_info 的 event_name）
+  'Java Crash': '#d98cb3',
+  'Boot Category': '#9db7a5',
   'Vendor 其他': '#b7c1d4',
   其他: '#d8dee8',
 } as const;

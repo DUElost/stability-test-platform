@@ -1745,6 +1745,8 @@ export type WatcherTimeScope = 'all' | '15m' | '1h' | '6h' | '24h';
 
 export interface PackageSubtypeCount {
   subtype: string;
+  /** #1956：同 subtype 可能来自不同分组（如 AEE 与 UNIVIEW 都有 ANR），故带 group。 */
+  group?: 'AEE' | 'VENDOR_AEE' | 'UNIVIEW' | string;
   count: number;
 }
 

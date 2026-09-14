@@ -35,11 +35,23 @@ PAYLOAD_EXCLUDE_SUFFIXES = (".pyc",)
 PAYLOAD_METADATA_EXCLUDES = {"VERSION", "ARTIFACT_DIGEST", ".env"}
 
 
-def collect_artifact_entries(source_dir: str, extra_files: dict[str, str] | None = None) -> list[tuple[str, bool, str]]:
+ARTIFACT_KIND_FULL = "full"
+ARTIFACT_KIND_CODE = "code"
+ARTIFACT_KIND_RESOURCES = "resources"
+_RESOURCES_PREFIX = "resources/"
+
+
+def collect_artifact_entries(
+    source_dir: str,
+    extra_files: dict[str, str] | None = None,
+    kind: str = ARTIFACT_KIND_FULL,
+) -> list[tuple[str, bool, str]]:
     """规范化序列 ``(relpath, 可执行位, content sha256)``，按 relpath 排序。
 
     ``extra_files``：``arcname -> 绝对路径``（如 pipeline schema →
     ``stp_schemas/pipeline_schema.json``），镜像控制面载荷枚举的收尾附加。
+    ``kind`` 分区（#1963，镜像控制面同款）：``full`` / ``code``（全集 −
+    ``resources/**``）/ ``resources``（全集 ∩ ``resources/**``）。
     """
     entries: list[tuple[str, bool, str]] = []
     for root, dirs, files in os.walk(source_dir):
@@ -75,7 +87,13 @@ def collect_artifact_entries(source_dir: str, extra_files: dict[str, str] | None
         entries.append((arcname, bool(st.st_mode & 0o111), h.hexdigest()))
 
     entries.sort()
-    return entries
+    if kind == ARTIFACT_KIND_FULL:
+        return entries
+    if kind == ARTIFACT_KIND_CODE:
+        return [e for e in entries if not e[0].startswith(_RESOURCES_PREFIX)]
+    if kind == ARTIFACT_KIND_RESOURCES:
+        return [e for e in entries if e[0].startswith(_RESOURCES_PREFIX)]
+    raise ValueError(f"unknown artifact kind: {kind!r}")
 
 
 def digest_entries(entries: list[tuple[str, bool, str]]) -> str:
