@@ -5,7 +5,7 @@ Class: bug-fix
 
 ## Decision
 
-2026-09-14 对 `http://172.21.8.202/execution/plan-runs/375/logs` 做黑盒 GUI 评测（截图与
+2026-09-14 对 `http://172.21.x.x/execution/plan-runs/375/logs` 做黑盒 GUI 评测（截图与
 像素取证存 `gui-test-screenshots/`，主工作树未跟踪），据评测结论逐项修复：
 
 1. **归档弹窗「暂不归档」无法取消（评测 P1-1）→ 降级为回归测试**。线上复现实验证明：
