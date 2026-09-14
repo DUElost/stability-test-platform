@@ -48,6 +48,14 @@ _PRE_MIGRATION_DEFAULTS = {
     "post_completion_max_defer_seconds": 6 * 3600,
     "plan_run_retention_days": 3,
     "schedule_dedup_window_seconds": 60.0,
+    # P2：对账/重试批处理（counter / signal_link / plan_chain / precheck）
+    "stp_counter_reconcile_lookback_hours": 48,
+    "stp_counter_reconcile_batch": 200,
+    "stp_signal_link_reconcile_batch": 200,
+    "chain_reconcile_batch_size": 100,
+    "max_precheck_reenqueue_attempts": 1,
+    "max_admission_requeue_attempts": 3,
+    "admission_requeue_backoff_seconds": 60,
 }
 
 
