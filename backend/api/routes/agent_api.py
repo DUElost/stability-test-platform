@@ -1319,7 +1319,15 @@ async def extend_job_lock(
     _=Depends(_verify_agent),
 ):
     """Extend device lock lease for a running job."""
-    job = await db.get(JobInstance, job_id)
+    # #1980：先锁 Job 行，再碰 Lease —— 与 complete_job / extend_leases_batch /
+    # _reconcile_expired_leases 保持同一全序（Job → Lease）。原先用 db.get 无锁读 Job，
+    # 随后 extend_lease 先 UPDATE device_leases、直到 job.updated_at 才 UPDATE
+    # job_instance，即 Lease → Job；与上述路径交错会形成环路等待。
+    job = (await db.execute(
+        select(JobInstance)
+        .where(JobInstance.id == job_id)
+        .with_for_update()
+    )).scalars().first()
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
@@ -1763,36 +1771,14 @@ async def coordinator_heartbeat(
                 current_coordinator_epochs=current_epochs,
             ))
 
-    for entry in payload.plan_run_hosts:
-        prh_id = entry.get("id")
-        pr_id = entry.get("plan_run_id")
-        hid = entry.get("host_id")
-        reported_epoch = entry.get("coordinator_epoch", 0)
-        if not prh_id or not pr_id or not hid:
-            continue
-        row = await db.get(_PRH, prh_id)
-        if row is None:
-            continue
-        # Ownership validation: the PlanRunHost row must belong to THIS host
-        # AND the requesting agent_instance (Step 5b收口).
-        if row.host_id != payload.host_id:
-            logger.warning(
-                "coord_hb_host_mismatch prh=%d claimed=%s actual=%s",
-                prh_id, payload.host_id, row.host_id,
-            )
-            stale_host_ids.append(prh_id)
-            current_epochs[int(prh_id)] = int(row.coordinator_epoch or 0)
-            continue
-        if row.coordinator_epoch > reported_epoch:
-            stale_host_ids.append(prh_id)
-            current_epochs[int(prh_id)] = int(row.coordinator_epoch or 0)
-            continue
-        row.coordinator_epoch = max(row.coordinator_epoch, reported_epoch)
-        row.coordinator_heartbeat_at = now
-        reported_phase = entry.get("phase")
-        if reported_phase in _VALID_COORDINATOR_PHASES:
-            row.phase = reported_phase
-
+    # #1980：先写 job_instance，再写 plan_run_host —— 与终态化路径保持同一全序。
+    # complete_job / 回收器先持 job 行锁，再由 on_job_terminal → _bump_host_counters
+    # 更新 plan_run_host（job_instance → plan_run_host）。本端点原先相反：先改
+    # PlanRunHost（ORM 变更在后续语句的 autoflush 里落库），再 UPDATE job_instance，
+    # 于是与终态化形成环路等待（`coordinator_heartbeat` 持 prh 行等 job 行，终态化
+    # 持 job 行等 prh 行）。两个循环互相独立，交换顺序即可；下面的
+    # `db.execute(update(JobInstance))` 会先执行并锁住 job 行，plan_run_host 的变更
+    # 随后才 flush。
     for j in payload.jobs:
         reported = j.execution_state
         state_val = reported if reported in _VALID_EXECUTION_STATES else None
@@ -1824,6 +1810,36 @@ async def coordinator_heartbeat(
             .values(**values)
             .execution_options(synchronize_session=False)
         )
+
+    for entry in payload.plan_run_hosts:
+        prh_id = entry.get("id")
+        pr_id = entry.get("plan_run_id")
+        hid = entry.get("host_id")
+        reported_epoch = entry.get("coordinator_epoch", 0)
+        if not prh_id or not pr_id or not hid:
+            continue
+        row = await db.get(_PRH, prh_id)
+        if row is None:
+            continue
+        # Ownership validation: the PlanRunHost row must belong to THIS host
+        # AND the requesting agent_instance (Step 5b收口).
+        if row.host_id != payload.host_id:
+            logger.warning(
+                "coord_hb_host_mismatch prh=%d claimed=%s actual=%s",
+                prh_id, payload.host_id, row.host_id,
+            )
+            stale_host_ids.append(prh_id)
+            current_epochs[int(prh_id)] = int(row.coordinator_epoch or 0)
+            continue
+        if row.coordinator_epoch > reported_epoch:
+            stale_host_ids.append(prh_id)
+            current_epochs[int(prh_id)] = int(row.coordinator_epoch or 0)
+            continue
+        row.coordinator_epoch = max(row.coordinator_epoch, reported_epoch)
+        row.coordinator_heartbeat_at = now
+        reported_phase = entry.get("phase")
+        if reported_phase in _VALID_COORDINATOR_PHASES:
+            row.phase = reported_phase
 
     await db.commit()
     return ok(_CoordinatorHeartbeatOut(
