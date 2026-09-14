@@ -4,6 +4,10 @@
 [`production-minimum-deployment-checklist.md`](../production-minimum-deployment-checklist.md)；
 测试隔离要求见 [`../development/testing.md`](../development/testing.md)。
 
+按症状排查（设备从 `adb devices` 消失、页面上「在线 vs USB」不一致）见
+[`host-device-visibility-triage.md`](./host-device-visibility-triage.md)——四层判别
+（内核/USB · 主机 adb server · 设备 adbd · 设备 USB 功能集）与各层的只读命令。
+
 ## 安全边界
 
 - 优先只读查询；写操作必须通过代码、迁移和 PR 流程；
