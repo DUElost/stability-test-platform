@@ -1,10 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle } from 'lucide-react';
 import { api } from '@/utils/api';
 import { planRunKeys } from '@/utils/api/queryKeys';
-import type { EventSeverity, EventStage, PlanRunStatus } from '@/utils/api/types';
+import type { EventSeverity, EventStage, PlanRunEvent, PlanRunStatus } from '@/utils/api/types';
 import PlanRunEventStream from '@/components/plan-run/PlanRunEventStream';
 import { PageContainer } from '@/components/layout';
 import { TEXT } from '@/design-system';
@@ -14,13 +14,23 @@ import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
 
 const PAGE_SIZE = 50;
 const SLOW_REFETCH_MS = 30_000;
+const SEARCH_DEBOUNCE_MS = 300;
+/** 后端单页上限（_MAX_EVENTS_LIMIT），导出按此分块拉取 */
+const EXPORT_CHUNK = 500;
+/** 导出行数硬上限——防误触全量拉取拖垮浏览器 */
+const EXPORT_MAX_ROWS = 20_000;
 const TERMINAL: ReadonlyArray<PlanRunStatus> = [
   'SUCCESS',
   'PARTIAL_SUCCESS',
   'FAILED',
 ];
 
-/** 巡检日志页面 — 阶段/严重度过滤 + 分页事件流(多源融合)。 */
+function csvCell(value: string | number | null | undefined): string {
+  const s = value == null ? '' : String(value);
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+/** 巡检日志页面 — 阶段/严重度过滤 + 关键字搜索 + 分页事件流(多源融合) + CSV 导出。 */
 export default function PlanRunLogsPage() {
   const { runId } = useParams<{ runId: string }>();
   const id = Number(runId);
@@ -28,7 +38,23 @@ export default function PlanRunLogsPage() {
 
   const [stageFilter, setStageFilter] = useState<EventStage | 'all'>('all');
   const [severityFilter, setSeverityFilter] = useState<EventSeverity | 'all'>('all');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState(''); // 防抖后的实际查询关键字
   const [page, setPage] = useState(0); // 0-based,与 PlanRunEventStream 对齐
+  const [isExporting, setIsExporting] = useState(false);
+
+  // 300ms 防抖：输入即时回显，查询按稳定值发起
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      setSearch(searchInput);
+      setPage(0);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, [searchInput]);
 
   const runQ = useQuery({
     queryKey: planRunKeys.detail(id),
@@ -44,11 +70,12 @@ export default function PlanRunLogsPage() {
   const isTerminal = !!runQ.data && TERMINAL.includes(runQ.data.status);
 
   const eventsQ = useQuery({
-    queryKey: planRunKeys.logs(id, stageFilter, severityFilter, page),
+    queryKey: planRunKeys.logs(id, stageFilter, severityFilter, page, search),
     queryFn: () =>
       api.planRuns.getEvents(id, {
         stage: stageFilter,
         severity: severityFilter,
+        search: search.trim() || undefined,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
       }),
@@ -90,6 +117,51 @@ export default function PlanRunLogsPage() {
     setPage(0);
   }, []);
 
+  const handleExportCsv = useCallback(async () => {
+    if (!id || isExporting) return;
+    setIsExporting(true);
+    try {
+      const kw = search.trim();
+      const rows: PlanRunEvent[] = [];
+      for (let offset = 0; offset < EXPORT_MAX_ROWS; offset += EXPORT_CHUNK) {
+        const payload = await api.planRuns.getEvents(id, {
+          stage: stageFilter,
+          severity: severityFilter,
+          search: kw || undefined,
+          limit: EXPORT_CHUNK,
+          offset,
+        });
+        rows.push(...payload.events);
+        if (payload.events.length < EXPORT_CHUNK || offset + EXPORT_CHUNK >= payload.total) break;
+      }
+      const header = ['时间', '阶段', '严重度', '类别', '标题', '描述', '设备序列号', 'Job ID'];
+      const lines = [header.map(csvCell).join(',')];
+      for (const e of rows) {
+        lines.push([
+          e.ts,
+          e.stage,
+          e.severity,
+          e.category,
+          e.title,
+          e.description ?? '',
+          e.device_serial ?? '',
+          e.job_id ?? '',
+        ].map(csvCell).join(','));
+      }
+      // BOM 让 Excel 正确识别 UTF-8 中文
+      const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `planrun-${id}-events-${stamp}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [id, search, stageFilter, severityFilter, isExporting]);
+
   if (!id || Number.isNaN(id)) {
     return (
       <div className={cn('flex h-64 items-center justify-center text-sm', TEXT.subtitle)}>
@@ -106,6 +178,10 @@ export default function PlanRunLogsPage() {
         severityFilter={severityFilter}
         onStageFilterChange={handleStageChange}
         onSeverityFilterChange={handleSeverityChange}
+        search={searchInput}
+        onSearchChange={setSearchInput}
+        onExportCsv={handleExportCsv}
+        isExporting={isExporting}
         isLoading={eventsQ.isLoading}
         isError={eventsQ.isError}
         page={page}

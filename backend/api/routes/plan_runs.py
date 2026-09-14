@@ -1400,6 +1400,7 @@ def get_plan_run_events(
     run_id: int,
     stage: Optional[str] = Query(None, description="init / patrol / teardown / system / trigger / all"),
     severity: Optional[str] = Query(None, description="ok / info / warn / err / all"),
+    search: Optional[str] = Query(None, description="关键字,大小写不敏感,匹配 title / description / device_serial"),
     limit: int = Query(_DEFAULT_EVENTS_LIMIT, ge=1, le=_MAX_EVENTS_LIMIT),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -1408,7 +1409,7 @@ def get_plan_run_events(
     """ADR-0021/ADR-0022 C5a₂: 业务流事件流 — 融合 trigger / 合成阶段进展 /
     step_trace 失败 / log_signal / audit_logs,统一封装为 EventOut。
 
-    支持 stage / severity 维度过滤;facets 始终基于"未过滤"的全集计算
+    支持 stage / severity 维度过滤与 search 关键字匹配;facets 始终基于"未过滤"的全集计算
     (前端过滤标签上的总数显示原本的总量,而 events 列表是当前过滤后的页)。
     """
     pr = _require_plan_run(db, run_id)
@@ -1616,6 +1617,14 @@ def get_plan_run_events(
         filtered = [e for e in filtered if e.stage == stage.lower()]
     if severity and severity.lower() != "all":
         filtered = [e for e in filtered if e.severity == severity.lower()]
+    if search and search.strip():
+        kw = search.strip().lower()
+        filtered = [
+            e for e in filtered
+            if kw in e.title.lower()
+            or kw in (e.description or "").lower()
+            or kw in (e.device_serial or "").lower()
+        ]
 
     # 8) 按 ts 倒序 + 分页
     filtered.sort(key=lambda e: e.ts, reverse=True)

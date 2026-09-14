@@ -359,7 +359,8 @@ export const LOG_LEVEL = {
 export const FILTER_CHIP = {
   active: 'bg-primary/10 font-semibold text-primary',
   idle: 'text-muted-foreground hover:bg-accent',
-  count: 'text-[11px] text-muted-foreground/70',
+  // 计数徽标不降透明度——/70 叠白底仅 ~2.7:1，低于 WCAG AA
+  count: 'text-[11px] text-muted-foreground',
   divider: 'mx-2 h-3 w-px bg-border',
 } as const;
 

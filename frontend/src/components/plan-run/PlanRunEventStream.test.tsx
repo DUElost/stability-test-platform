@@ -133,4 +133,97 @@ describe('PlanRunEventStream', () => {
     expect(screen.getByTestId('event-page-next')).toBeDisabled();
     expect(screen.getByTestId('event-page-prev')).not.toBeDisabled();
   });
+
+  it('marks the active filter chips with aria-pressed (GUI 评测 a11y)', () => {
+    render(
+      <PlanRunEventStream
+        events={events}
+        stageFilter="patrol"
+        severityFilter="err"
+      />,
+    );
+    expect(screen.getByTestId('event-filter-stage-patrol')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('event-filter-stage-all')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('event-filter-sev-err')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('event-filter-sev-ok')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('reports search input changes and offers inline clear', () => {
+    const onSearch = vi.fn();
+    render(<PlanRunEventStream events={events} search="monkey" onSearchChange={onSearch} />);
+    const input = screen.getByTestId('event-search-input');
+    fireEvent.change(input, { target: { value: 'AEE' } });
+    expect(onSearch).toHaveBeenLastCalledWith('AEE');
+    // 防抖前的受控值仍在输入框（回显即时）
+    expect(input).toHaveValue('monkey');
+    fireEvent.click(screen.getByTestId('event-search-clear'));
+    expect(onSearch).toHaveBeenLastCalledWith('');
+  });
+
+  it('keeps the list scroll gutter stable (scrollbar-gutter)', () => {
+    render(<PlanRunEventStream events={events} />);
+    expect(screen.getByTestId('event-list').className).toMatch(/scrollbar-gutter/);
+  });
+
+  it('description toggle is a real button with aria-expanded (原生语义自带键盘激活)', () => {
+    render(<PlanRunEventStream events={events} />);
+    const desc = screen.getByTestId('event-desc-2026-05-08T12:30:00Z-step');
+    expect(desc.tagName).toBe('BUTTON');
+    expect(desc).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(desc);
+    expect(desc).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(desc);
+    expect(desc).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('empty state offers a clear-all-filters action only when filters are active', () => {
+    const onStage = vi.fn();
+    const onSev = vi.fn();
+    const onSearch = vi.fn();
+    const emptyPayload = {
+      plan_run_id: 12,
+      total: 0,
+      events: [],
+      facets: { by_stage: { all: 0 }, by_severity: { all: 0 } },
+    };
+
+    const { rerender } = render(
+      <PlanRunEventStream events={emptyPayload} />,
+    );
+    expect(screen.queryByTestId('event-clear-filters')).not.toBeInTheDocument();
+
+    rerender(
+      <PlanRunEventStream
+        events={emptyPayload}
+        stageFilter="system"
+        severityFilter="all"
+        search=""
+        onStageFilterChange={onStage}
+        onSeverityFilterChange={onSev}
+        onSearchChange={onSearch}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('event-clear-filters'));
+    expect(onStage).toHaveBeenCalledWith('all');
+    expect(onSev).toHaveBeenCalledWith('all');
+    expect(onSearch).toHaveBeenCalledWith('');
+  });
+
+  it('renders CSV export button only when handler provided and honors pending state', () => {
+    const onExport = vi.fn();
+    const { rerender } = render(
+      <PlanRunEventStream events={events} onExportCsv={onExport} />,
+    );
+    const btn = screen.getByTestId('event-export-csv');
+    expect(btn).toHaveTextContent('导出 CSV');
+    fireEvent.click(btn);
+    expect(onExport).toHaveBeenCalledTimes(1);
+
+    rerender(<PlanRunEventStream events={events} onExportCsv={onExport} isExporting />);
+    expect(screen.getByTestId('event-export-csv')).toBeDisabled();
+    expect(screen.getByTestId('event-export-csv')).toHaveTextContent('导出中');
+
+    rerender(<PlanRunEventStream events={events} />);
+    expect(screen.queryByTestId('event-export-csv')).not.toBeInTheDocument();
+  });
 });

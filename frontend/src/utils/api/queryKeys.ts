@@ -70,8 +70,8 @@ export const planRunKeys = {
   testCaseResults: (id: number, opts?: { limit?: number }) =>
     ['plan-run-test-case-results', id, { limit: opts?.limit ?? 500 }] as const,
   chain: (id: number) => ['plan-run-chain', id] as const,
-  logs: (id: number, stage: string, severity: string, page: number) =>
-    ['plan-run-logs', id, stage, severity, page] as const,
+  logs: (id: number, stage: string, severity: string, page: number, search = '') =>
+    ['plan-run-logs', id, stage, severity, page, search] as const,
   /** Partial key — invalidates all log queries for a PlanRun. */
   logsByRun: (id: number) => ['plan-run-logs', id] as const,
   /** ADR-0029：projectKey + 分页/筛选项（页面级）。前缀仍为 ['plan-runs-list']。 */

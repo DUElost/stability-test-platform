@@ -542,6 +542,69 @@ class TestEventsEndpoint:
         assert all(e["stage"] == "trigger" for e in events)
         assert len(events) >= 1
 
+    def test_events_search_matches_title_description_serial(
+        self, client, auth_headers, chain_setup,
+    ):
+        cur_run = chain_setup["current_run"]
+        baseline = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/events?limit=100",
+            headers=auth_headers,
+        ).json()["data"]
+
+        # title 命中：step 失败标题含 step_id（patrol.monkey_launch）+ error_message
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/events?search=monkey&limit=100",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert 0 < data["total"] < baseline["total"]
+        assert all(
+            "monkey" in e["title"].lower()
+            or "monkey" in (e["description"] or "").lower()
+            or "monkey" in (e["device_serial"] or "").lower()
+            for e in data["events"]
+        )
+        # facets 始终基于未过滤全集（与 stage/severity 过滤同口径）
+        assert data["facets"]["by_stage"]["all"] == baseline["facets"]["by_stage"]["all"]
+
+        # device_serial 命中（大小写不敏感）
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/events?search=DEV-BB-01&limit=100",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        events = resp.json()["data"]["events"]
+        assert len(events) >= 1
+        assert all((e["device_serial"] or "").lower() == "dev-bb-01" for e in events)
+
+        # 无命中 → 空页但 total=0 而非报错
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/events?search=no-such-keyword-xyz",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["total"] == 0
+        assert resp.json()["data"]["events"] == []
+
+    def test_events_search_combines_with_stage_severity(
+        self, client, auth_headers, chain_setup,
+    ):
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/events?search=aee&severity=err&limit=100",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert all(e["severity"] == "err" for e in data["events"])
+        assert all(
+            "aee" in e["title"].lower()
+            or "aee" in (e["description"] or "").lower()
+            or "aee" in (e["device_serial"] or "").lower()
+            for e in data["events"]
+        )
+
     def test_events_include_patrol_progress_when_patrol_is_active(
         self, client, auth_headers, chain_setup,
     ):

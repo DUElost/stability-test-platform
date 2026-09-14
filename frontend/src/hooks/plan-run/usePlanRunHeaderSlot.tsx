@@ -6,7 +6,6 @@ import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
-import { formatTimeFromMs } from '@/utils/format';
 
 interface Options {
   runId: number;
@@ -55,9 +54,13 @@ export function usePlanRunHeaderSlot({
         </Button>
         <PlanRunTabs runId={runId} active={active} />
         <div className="ml-auto flex items-center gap-2">
+          {/* 「数据更新于」+ 完整日期时间：区别于 run 内事件时间——终态 run 停在昨天时
+              只显示时刻会被误读成「仍在更新」（GUI 评测 2026-09-14） */}
           <span className={cn('hidden text-[11px] sm:inline', TEXT.caption)}>
-            最后更新{' '}
-            {dataUpdatedAt ? formatTimeFromMs(dataUpdatedAt) : '—'}
+            数据更新于{' '}
+            {dataUpdatedAt
+              ? new Date(dataUpdatedAt).toLocaleString('zh-CN', { hour12: false })
+              : '—'}
           </span>
           <Button
             variant="ghost"

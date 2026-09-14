@@ -1,5 +1,13 @@
 import { useState } from 'react';
-import { AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import {
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Inbox,
+  Search,
+  X,
+} from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   EVENT_SEVERITY_DOT,
@@ -66,7 +74,8 @@ function EventRow({ event }: { event: PlanRunEvent }) {
       data-testid={`event-row-${event.ts}-${event.category}`}
       className="grid grid-cols-[140px_16px_1fr_auto] items-start gap-2 border-b border-border/40 px-3 py-1.5 text-xs last:border-b-0 hover:bg-muted/30"
     >
-      <span className="pt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground/70">
+      {/* 时间戳/设备号保持全量 muted-foreground——透明度变体在白底上低于 WCAG AA */}
+      <span className="pt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
         {fmtTs(event.ts)}
       </span>
       <div className="relative flex justify-center pt-1.5">
@@ -75,21 +84,23 @@ function EventRow({ event }: { event: PlanRunEvent }) {
       <div className="min-w-0">
         <div className={cn('truncate font-semibold', TEXT.heading)}>{event.title}</div>
         {event.description && (
-          <div
+          <button
+            type="button"
             data-testid={`event-desc-${event.ts}-${event.category}`}
             onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
             title={expanded ? '点击收起' : '点击展开'}
             className={cn(
-              'mt-0.5 cursor-pointer text-xs leading-snug hover:text-foreground',
+              'mt-0.5 block w-full cursor-pointer text-left text-xs leading-snug hover:text-foreground',
               TEXT.subtitle,
               expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-2',
             )}
           >
             {event.description}
-          </div>
+          </button>
         )}
         {(event.device_serial || event.job_id) && (
-          <div className="mt-0.5 text-[11px] text-muted-foreground/70">
+          <div className="mt-0.5 text-[11px] text-muted-foreground">
             {event.device_serial && <span className="font-mono">{event.device_serial}</span>}
             {event.job_id && <span className="ml-1">· Job #{event.job_id}</span>}
           </div>
@@ -108,6 +119,12 @@ interface Props {
   severityFilter?: EventSeverity | 'all';
   onStageFilterChange?: (s: EventStage | 'all') => void;
   onSeverityFilterChange?: (s: EventSeverity | 'all') => void;
+  /** 搜索关键字（受控值由页面防抖，输入即时上报） */
+  search?: string;
+  onSearchChange?: (s: string) => void;
+  /** 导出当前筛选+搜索结果为 CSV；未提供则不渲染导出按钮 */
+  onExportCsv?: () => void;
+  isExporting?: boolean;
   isLoading?: boolean;
   isError?: boolean;
   page?: number;
@@ -121,6 +138,10 @@ export default function PlanRunEventStream({
   severityFilter = 'all',
   onStageFilterChange,
   onSeverityFilterChange,
+  search = '',
+  onSearchChange,
+  onExportCsv,
+  isExporting = false,
   isLoading = false,
   isError = false,
   page = 0,
@@ -136,6 +157,15 @@ export default function PlanRunEventStream({
   const from = total === 0 ? 0 : page * pageSize + 1;
   const to = Math.min(total, (page + 1) * pageSize);
 
+  const hasActiveFilters =
+    stageFilter !== 'all' || severityFilter !== 'all' || search.trim() !== '';
+
+  const clearAllFilters = () => {
+    onStageFilterChange?.('all');
+    onSeverityFilterChange?.('all');
+    onSearchChange?.('');
+  };
+
   return (
     <div
       data-testid="plan-run-event-stream"
@@ -148,6 +178,7 @@ export default function PlanRunEventStream({
             key={f.key}
             type="button"
             data-testid={`event-filter-stage-${f.key}`}
+            aria-pressed={stageFilter === f.key}
             onClick={() => onStageFilterChange?.(f.key)}
             className={cn(
               'rounded-md px-2 py-0.5 text-xs transition',
@@ -165,6 +196,7 @@ export default function PlanRunEventStream({
             key={f.key}
             type="button"
             data-testid={`event-filter-sev-${f.key}`}
+            aria-pressed={severityFilter === f.key}
             onClick={() => onSeverityFilterChange?.(f.key)}
             className={cn(
               'inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs transition',
@@ -178,12 +210,39 @@ export default function PlanRunEventStream({
             <span className={FILTER_CHIP.count}>{facetSev[f.key] ?? 0}</span>
           </button>
         ))}
+        <div className="relative ml-auto">
+          <Search aria-hidden className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="search"
+            data-testid="event-search-input"
+            value={search}
+            onChange={(e) => onSearchChange?.(e.target.value)}
+            placeholder="搜索标题/描述/设备号"
+            aria-label="搜索日志事件"
+            className="h-7 w-44 rounded-md border border-border bg-background pl-7 pr-6 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          {search !== '' && (
+            <button
+              type="button"
+              data-testid="event-search-clear"
+              aria-label="清除搜索"
+              onClick={() => onSearchChange?.('')}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
-      <div data-testid="event-list" className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        data-testid="event-list"
+        // scrollbar-gutter 稳定占位：滚动条出现/消失不再引起右列横移
+        className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+      >
         {isError ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
-            <AlertCircle className="mb-1 h-5 w-5 text-destructive/60" />
+            <AlertCircle aria-hidden className="mb-1 h-5 w-5 text-destructive/60" />
             <span className="text-xs font-semibold text-destructive">加载失败</span>
             <span className="mt-0.5 text-[11px] text-destructive/70">请检查网络连接或稍后重试</span>
           </div>
@@ -194,9 +253,26 @@ export default function PlanRunEventStream({
             <Skeleton className="h-8 w-full" />
           </div>
         ) : eventList.length === 0 ? (
-          <div className={cn('flex flex-col items-center justify-center py-10 text-xs', TEXT.subtitle)}>
-            该过滤条件下暂无事件
-            <span className="mt-1 text-[11px] text-muted-foreground/60">尝试切换阶段或严重度</span>
+          <div className="flex h-full flex-col items-center justify-center px-6 py-10 text-center">
+            <Inbox aria-hidden className="mb-2 h-8 w-8 text-muted-foreground/40" />
+            <span className={cn('text-xs font-medium', TEXT.subtitle)}>该过滤条件下暂无事件</span>
+            <span className="mt-1 text-[11px] text-muted-foreground">
+              尝试切换阶段、严重度或修改搜索关键字
+            </span>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                data-testid="event-clear-filters"
+                onClick={clearAllFilters}
+                className={cn(
+                  'mt-3 rounded-md border border-border bg-card px-2.5 py-1 text-xs transition',
+                  TEXT.subtitle,
+                  INTERACTIVE.hover,
+                )}
+              >
+                清除全部筛选
+              </button>
+            )}
           </div>
         ) : (
           <div className="flex flex-col">
@@ -217,6 +293,22 @@ export default function PlanRunEventStream({
             <b className={cn('font-mono', TEXT.body)}>{total}</b> 条
           </span>
           <div className="flex items-center gap-1">
+            {onExportCsv && (
+              <button
+                type="button"
+                data-testid="event-export-csv"
+                onClick={onExportCsv}
+                disabled={isExporting}
+                title="导出当前筛选与搜索命中的全部事件（CSV）"
+                className={cn(
+                  'mr-1 inline-flex items-center gap-0.5 rounded border px-2 py-0.5 transition disabled:opacity-40',
+                  INTERACTIVE.hover,
+                )}
+              >
+                <Download aria-hidden className="h-3 w-3" />
+                {isExporting ? '导出中…' : '导出 CSV'}
+              </button>
+            )}
             <button
               type="button"
               data-testid="event-page-prev"
