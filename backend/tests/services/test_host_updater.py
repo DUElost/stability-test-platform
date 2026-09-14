@@ -262,16 +262,45 @@ def test_remote_failure_message_prefers_error_line():
     from backend.services.host_updater import _remote_failure_message
 
     out = "STP_DEPS_REFRESHED=0\nERROR: service stability-test-agent not active 5s after restart"
-    assert _remote_failure_message(out, 1) == (
+    assert _remote_failure_message(out, "", 1) == (
         "Remote script failed (exit=1): "
         "ERROR: service stability-test-agent not active 5s after restart"
+    )
+
+
+def test_remote_failure_message_reads_wrapper_stderr_sentinel():
+    """#1942：wrapper 拒绝只打 stderr 哨兵，message 必须带上原因。"""
+    from backend.services.host_updater import _remote_failure_message
+
+    err = "STP_AGENT_PRIV_ERROR: INSTALL_DIR must not overlap a system directory: /etc vs /etc"
+    assert _remote_failure_message("", err, 2) == (
+        "Remote script failed (exit=2): STP_AGENT_PRIV_ERROR: "
+        "INSTALL_DIR must not overlap a system directory: /etc vs /etc"
+    )
+
+
+def test_remote_failure_message_falls_back_to_stderr_tail():
+    """#1942：argparse 用法错误（旧 wrapper 缺子命令）在 stderr 末行，须可诊断。"""
+    from backend.services.host_updater import _remote_failure_message
+
+    err = (
+        "usage: stp-agent-priv [-h] {selftest,bootstrap,...,restart} ...\n"
+        "stp-agent-priv: error: argument command: invalid choice: 'write-digest' "
+        "(choose from selftest, bootstrap, apply-code, install-schema, "
+        "write-version, sync-env, deps-marker, fix-ownership, restart)"
+    )
+    assert _remote_failure_message("", err, 2) == (
+        "Remote script failed (exit=2): stp-agent-priv: error: argument command: "
+        "invalid choice: 'write-digest' (choose from selftest, bootstrap, "
+        "apply-code, install-schema, write-version, sync-env, deps-marker, "
+        "fix-ownership, restart)"
     )
 
 
 def test_remote_failure_message_falls_back_when_no_error_line():
     from backend.services.host_updater import _remote_failure_message
 
-    assert _remote_failure_message("some log\nanother", 2) == "Remote script failed (exit=2)"
+    assert _remote_failure_message("some log\nanother", "", 2) == "Remote script failed (exit=2)"
 
 
 # ── #1903 / ADR-0040 §5.1（P0）：压缩级 9→6 + 整批一次构建 ──────────────
@@ -449,7 +478,37 @@ def test_remote_script_writes_artifact_digest_wrapper_and_legacy():
     assert 'printf \'%s\\n\' "$ARTIFACT_DIGEST" | sudo tee' in script
     assert 'STP_ARTIFACT_DIGEST=$ARTIFACT_DIGEST' in script
     # 探活之后才写（失败不写 digest，保持旧值 → 下次按 drift 重做）
-    assert script.index('STP_RESTART_PROBE_MS=') < script.index('write-digest')
+    assert script.index('STP_RESTART_PROBE_MS=') < script.index(
+        'sudo "$PRIV" write-digest --digest "$ARTIFACT_DIGEST"'
+    )
+
+
+# ── #1942：wrapper 能力协商（旧 wrapper 缺 write-digest 的尾部 exit 2）──────
+
+
+def test_remote_script_probes_wrapper_write_digest_capability():
+    """#1942：动作前探测 wrapper 能力；缺失则带 ERROR 指引提前失败。"""
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        tar_path="/tmp/stp-agent-update.tar.gz",
+        user="android",
+        group="android",
+        artifact_digest="sha256:" + "a" * 64,
+    )
+    probe = 'sudo -n "$PRIV" write-digest --digest ""'
+    assert probe in script
+    assert (
+        "ERROR: stp-agent-priv lacks write-digest (outdated wrapper); "
+        "run tools/ansible/playbooks/update_agent.yml on this host, then retry"
+    ) in script
+    # 探针只在本块被 digest 非空的 wrapper 分支保护时执行（legacy 走 tee，无需能力）
+    guard = '[ "$USE_PRIV_WRAPPER" = "1" ] && [ -n "$ARTIFACT_DIGEST" ]; then'
+    assert guard in script
+    assert script.index(guard) < script.index(probe)
+    # 提前拦截：在 apply-code / restart 之前，不产生「已部署却记失败」的半态
+    assert script.index(probe) < script.index('sudo "$PRIV" apply-code --staged "$TMPDIR"')
+    assert script.index(probe) < script.index('sudo "$PRIV" restart')
 
 
 def test_remote_script_phase_timing_sentinels_present():
