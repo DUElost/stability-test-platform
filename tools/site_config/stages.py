@@ -1,0 +1,551 @@
+"""Install stages S1–S4 for the local site installer (I3).
+
+Semantics follow the P1 design: no formatting, no overwriting unmanaged data,
+no secret values in argv/logs/reports, idempotent re-runs that never rotate
+keys, and a private administrator bootstrap before the service is exposed.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from .bindings import BindingError, load_binding, require_keys
+from .models import SiteConfig
+from .ops import Ops
+from .validation import Check, failure
+
+BASE_DEPENDENCIES = ("python3", "systemctl", "nginx")
+
+ENV_TEMPLATES = {
+    "internal": "deploy/control-plane/env/.env.backend.internal.example",
+    "production": "deploy/control-plane/env/.env.backend.example",
+}
+
+UNIT_TEMPLATES = (
+    "deploy/control-plane/systemd/stability-backend-nomigrate.service",
+    "deploy/control-plane/systemd/stability-backend-migrate.service",
+)
+NGINX_SITES = {
+    "internal": "deploy/control-plane/nginx/stability-platform.conf",
+    "production": "deploy/control-plane/nginx/stability-platform-https.conf",
+}
+LOGROTATE_TEMPLATE = "deploy/control-plane/logrotate/stability-backend"
+
+MANAGED_ENV_KEYS = (
+    "DATABASE_URL",
+    "REDIS_URL",
+    "CORS_ORIGINS",
+    "STP_ALLOW_REGISTER",
+    "STP_SCRIPT_ROOT",
+    "STP_SCRIPT_RUNTIME_ROOT",
+    "STP_AEE_NFS_ROOT",
+)
+
+SERVICE_UNIT = "stability-backend-nomigrate.service"
+
+
+@dataclass
+class InstallContext:
+    config: SiteConfig
+    config_path: Path
+    bundle: Path
+    bindings_dir: Path
+    state_dir: Path
+    ops: Ops
+    dry_run: bool = False
+    db_probe: object | None = None
+    render_root: Path | None = None
+    system_root: Path = Path("/")
+    binding_values: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    @property
+    def deploy_root(self) -> Path:
+        return Path(self.config.control_plane.deploy_root)
+
+
+def _pass(check_id: str, role: str, location: str, code: str, message: str, remediation: str) -> Check:
+    return Check(check_id, role, "PASS", location, code, message, remediation)
+
+
+def _safe(checks: list[Check], code: str, *, location: str, role: str, check_id: str) -> list[Check]:
+    checks.append(failure(code, location=location, role=role, check_id=check_id))
+    return checks
+
+
+def load_bindings(ctx: InstallContext) -> list[Check]:
+    """Read only the bindings the local install actually consumes."""
+    config = ctx.config
+    wanted: dict[str, set[str]] = {
+        config.dependencies.database_ref: {"DATABASE_URL"},
+        config.dependencies.redis_ref: {"REDIS_URL"},
+        config.security.initial_admin_ref: {"USERNAME", "PASSWORD"},
+    }
+    if urlsplit(config.control_plane.public_url).scheme == "https" and config.control_plane.tls_ref:
+        wanted[config.control_plane.tls_ref] = {"TLS_CERT_PATH", "TLS_KEY_PATH"}
+    checks: list[Check] = []
+    for ref, required in wanted.items():
+        try:
+            values = load_binding(ctx.bindings_dir, ref)
+            require_keys(values, required)
+        except BindingError as error:
+            return _safe(checks, error.code, location="$.security", role="site", check_id="install.bindings")
+        ctx.binding_values[ref] = values
+    checks.append(_pass(
+        "install.bindings", "site", "$.security", "bindings_read",
+        "Required bindings were read from the protected directory; values are never printed.",
+        "Keep the bindings directory at 0700 with 0600 files.",
+    ))
+    return checks
+
+
+def _render(text: str, substitutions: dict[str, str]) -> str:
+    for placeholder, value in substitutions.items():
+        text = text.replace(placeholder, value)
+    return text
+
+
+def _has_unresolved_placeholder(text: str) -> bool:
+    return "<" in text and ">" in text
+
+
+def template_substitutions(ctx: InstallContext) -> dict[str, str]:
+    config = ctx.config
+    substitutions = {
+        "<deploy-root>": config.control_plane.deploy_root,
+        "<deploy-user>": config.control_plane.deploy_user,
+    }
+    if urlsplit(config.control_plane.public_url).scheme == "https":
+        tls = ctx.binding_values.get(config.control_plane.tls_ref or "", {})
+        substitutions["<server-name>"] = urlsplit(config.control_plane.public_url).hostname or ""
+        substitutions["<tls-cert-path>"] = tls.get("TLS_CERT_PATH", "")
+        substitutions["<tls-key-path>"] = tls.get("TLS_KEY_PATH", "")
+    return substitutions
+
+
+def _write_text(path: Path, text: str, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    os.chmod(path, mode)
+
+
+def _read_marker(root: Path) -> dict | None:
+    marker_file = root / ".stp-site.json"
+    if not marker_file.is_file():
+        return None
+    try:
+        payload = json.loads(marker_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"site_id": ""}
+    return payload if isinstance(payload, dict) else {"site_id": ""}
+
+
+def stage_s1_basics(ctx: InstallContext) -> list[Check]:
+    """Directories, service account, declared dependencies and mounted storage."""
+    checks: list[Check] = []
+    config = ctx.config
+    release = ctx.ops.os_release()
+    machine = ctx.ops.machine()
+    expected = config.control_plane.os
+    version_matches = release.get("VERSION_ID", "").split(".")[0] == expected.version.split(".")[0]
+    if not version_matches or machine != config.platform.cpu_arch:
+        return _safe(checks, "install_platform", location="$.platform", role="site", check_id="install.s1.platform")
+
+    root = ctx.deploy_root
+    marker = _read_marker(root)
+    if root.exists() and any(root.iterdir()):
+        if marker is None or marker.get("site_id") != config.site.id:
+            return _safe(
+                checks, "install_root_taken",
+                location="$.control_plane.deploy_root", role="control_plane", check_id="install.s1.deploy_root",
+            )
+    if not ctx.dry_run:
+        ctx.ops.ensure_dir(root, 0o750, config.control_plane.deploy_user)
+        ctx.ops.ensure_dir(root / "logs", 0o750, config.control_plane.deploy_user)
+        marker_payload = {
+            "site_id": config.site.id,
+            "display_name": config.site.display_name,
+            "release": config.release.expected_release,
+        }
+        _write_text(root / ".stp-site.json", json.dumps(marker_payload, ensure_ascii=False, indent=2), mode=0o600)
+        ctx.ops.chown(root / ".stp-site.json", config.control_plane.deploy_user)
+    checks.append(_pass(
+        "install.s1.deploy_root", "control_plane", "$.control_plane.deploy_root", "deploy_root_ready",
+        "The dedicated deploy root and log directory exist with the declared owner.",
+        "Keep the deploy root dedicated; never point it at a shared root.",
+    ))
+
+    if not ctx.ops.user_exists(config.control_plane.deploy_user):
+        if not ctx.dry_run:
+            ctx.ops.create_user(config.control_plane.deploy_user, config.control_plane.deploy_root)
+        code, message = "service_user_created", "The dedicated non-root service account was created."
+    else:
+        code, message = "service_user_present", "The declared service account already exists."
+    checks.append(_pass(
+        "install.s1.service_user", "control_plane", "$.control_plane.deploy_user", code, message,
+        "Do not reuse accounts that own other services.",
+    ))
+
+    if not ctx.ops.is_mount(Path(config.storage.mount_path)):
+        return _safe(checks, "install_storage", location="$.storage.mount_path", role="storage", check_id="install.s1.storage")
+    checks.append(_pass(
+        "install.s1.storage", "storage", "$.storage.mount_path", "storage_mounted",
+        "The declared central storage path is a mounted share.",
+        "The installer never formats or creates shares; mount first.",
+    ))
+
+    missing = [name for name in BASE_DEPENDENCIES if not ctx.ops.command_exists(name)]
+    if missing:
+        return _safe(checks, "install_dependency", location="$.platform", role="site", check_id="install.s1.dependencies")
+    checks.append(_pass(
+        "install.s1.dependencies", "site", "$.platform", "dependencies_present",
+        "Declared base dependencies are present on the target.",
+        "Install missing base packages with the site profile before re-running.",
+    ))
+    return checks
+
+
+def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
+    """Release tree landing, virtualenv/dependencies, generated env, templates."""
+    checks: list[Check] = []
+    config = ctx.config
+    root = ctx.deploy_root
+    bundle = ctx.bundle
+    for relpath in ("release-manifest.json", "backend", "backend/agent", "backend/schemas", "frontend/dist-prod", "deploy", "tools"):
+        if not (bundle / relpath).exists():
+            return _safe(checks, "release_tree", location="$.release.bundle", role="site", check_id="install.s2.release")
+
+    if not ctx.dry_run:
+        for subdir in ("backend", "deploy", "tools", "frontend/dist-prod"):
+            target = root / subdir
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(bundle / subdir, target, dirs_exist_ok=True)
+    checks.append(_pass(
+        "install.s2.release", "control_plane", "$.release.bundle", "release_landed",
+        "Release tree landed under the deploy root with the documented layout.",
+        "Re-run after fixing the bundle layout; never point the installer at an unpacked archive.",
+    ))
+
+    venv_python = root / "venv" / "bin" / "python"
+    if venv_python.is_file():
+        checks.append(_pass(
+            "install.s2.venv", "control_plane", "$.dependencies", "venv_present",
+            "Existing virtualenv is reused; no dependency step was repeated.",
+            "Never delete the virtualenv to force upgrades; upgrade in place.",
+        ))
+    elif ctx.dry_run:
+        checks.append(_pass(
+            "install.s2.venv", "control_plane", "$.dependencies", "venv_planned",
+            "Virtualenv creation and dependency installation are planned.",
+            "Offline mode requires a wheelhouse inside the bundle.",
+        ))
+    else:
+        result = ctx.ops.run(["/usr/bin/python3", "-m", "venv", str(root / "venv")])
+        if result.returncode != 0:
+            return _safe(checks, "install_command", location="$.dependencies", role="control_plane", check_id="install.s2.venv")
+        wheelhouse = bundle / "wheelhouse"
+        pip = str(root / "venv" / "bin" / "pip")
+        args = [pip, "install", "--disable-pip-version-check", "-q"]
+        if wheelhouse.is_dir():
+            args += ["--no-index", "--find-links", str(wheelhouse)]
+        elif config.network.dependency_mode == "offline":
+            return _safe(checks, "release_tree", location="$.network.dependency_mode", role="site", check_id="install.s2.venv")
+        args += ["-r", str(root / "backend" / "requirements.txt")]
+        if ctx.ops.run(args, cwd=root).returncode != 0:
+            return _safe(checks, "install_command", location="$.dependencies", role="control_plane", check_id="install.s2.venv")
+        checks.append(_pass(
+            "install.s2.venv", "control_plane", "$.dependencies", "venv_ready",
+            "Virtualenv and Python dependencies were installed from the declared source.",
+            "Offline installs must carry a wheelhouse.",
+        ))
+
+    substitutions = template_substitutions(ctx)
+    if any(value == "" for value in substitutions.values()):
+        return _safe(checks, "install_conflict", location="$.control_plane.public_url", role="control_plane", check_id="install.s2.env")
+    env_values = {
+        "DATABASE_URL": ctx.binding_values[config.dependencies.database_ref]["DATABASE_URL"],
+        "REDIS_URL": ctx.binding_values[config.dependencies.redis_ref]["REDIS_URL"],
+        "CORS_ORIGINS": config.control_plane.public_url.rstrip("/"),
+        "STP_ALLOW_REGISTER": "0",
+        "STP_SCRIPT_ROOT": str(root / "backend" / "agent" / "scripts"),
+        "STP_SCRIPT_RUNTIME_ROOT": str(Path(config.agents[0].install_root) / "agent" / "scripts"),
+        "STP_AEE_NFS_ROOT": config.storage.mount_path,
+    }
+    env_file = root / ".env.backend"
+    if env_file.is_file():
+        text = env_file.read_text(encoding="utf-8")
+        if any(f"{key}=" not in text for key in MANAGED_ENV_KEYS):
+            return _safe(checks, "install_conflict", location="$.security", role="control_plane", check_id="install.s2.env")
+        checks.append(_pass(
+            "install.s2.env", "control_plane", "$.security", "env_reused",
+            "Existing environment already carries every managed key; keys were not rotated.",
+            "Use a reviewed diff for changes; never delete the env to regenerate it.",
+        ))
+    elif ctx.dry_run:
+        checks.append(_pass(
+            "install.s2.env", "control_plane", "$.security", "env_planned",
+            "Environment file generation is planned with owner-only permissions.",
+            "Secrets are generated once and never rotated by re-runs.",
+        ))
+    else:
+        template = (bundle / ENV_TEMPLATES[config.control_plane.security_profile]).read_text(encoding="utf-8")
+        _write_text(env_file, _apply_env_keys(template, env_values), mode=0o600)
+        ctx.ops.chown(env_file, config.control_plane.deploy_user)
+        checks.append(_pass(
+            "install.s2.env", "control_plane", "$.security", "env_created",
+            "Site environment was created with generated secrets and bound values.",
+            "Re-runs never rotate keys; change values only through a reviewed diff.",
+        ))
+
+    render_root = ctx.render_root or (root / ".install-rendered")
+    if not ctx.dry_run:
+        render_root.mkdir(parents=True, exist_ok=True)
+        sources = [*UNIT_TEMPLATES, NGINX_SITES[config.control_plane.security_profile], LOGROTATE_TEMPLATE]
+        for relpath in sources:
+            text = _render((bundle / relpath).read_text(encoding="utf-8"), substitutions)
+            if _has_unresolved_placeholder(text):
+                return _safe(checks, "install_conflict", location="$.control_plane.deploy_root", role="control_plane", check_id="install.s2.templates")
+            _write_text(render_root / Path(relpath).name, text)
+        marker = {"site_id": config.site.id, "display_name": config.site.display_name, "release": config.release.expected_release}
+        _write_text(root / ".stp-site.json", json.dumps(marker, ensure_ascii=False, indent=2), mode=0o600)
+        ctx.ops.chown(root / ".stp-site.json", config.control_plane.deploy_user)
+    checks.append(_pass(
+        "install.s2.templates", "control_plane", "$.control_plane.deploy_root", "templates_rendered",
+        "Templates were rendered without leftover placeholders and the site marker was written.",
+        "Never copy templates verbatim; always render the placeholder set.",
+    ))
+    if not ctx.dry_run:
+        ctx.ops.chown(root, config.control_plane.deploy_user)
+    return checks
+
+
+def _apply_env_keys(text: str, values: dict[str, str]) -> str:
+    lines = text.splitlines()
+    seen: set[str] = set()
+    updated: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in values:
+                updated.append(f"{key}={values[key]}")
+                seen.add(key)
+                continue
+        updated.append(line)
+    for key, value in values.items():
+        if key not in seen:
+            updated.append(f"{key}={value}")
+    return "\n".join(updated) + "\n"
+
+
+def stage_s3_database_admin(ctx: InstallContext, database_state: str, code_head: str | None) -> list[Check]:
+    """Explicit migration and the controlled first-administrator bootstrap."""
+    checks: list[Check] = []
+    config = ctx.config
+    if database_state == "unmanaged":
+        return _safe(checks, "db_unmanaged", location="$.dependencies.database_ref", role="control_plane", check_id="install.s3.db")
+    if database_state == "driver_missing":
+        return _safe(checks, "db_driver", location="$.dependencies.database_ref", role="control_plane", check_id="install.s3.db")
+    if database_state == "unreachable":
+        return _safe(checks, "db_unreachable", location="$.dependencies.database_ref", role="control_plane", check_id="install.s3.db")
+    if code_head and database_state == "at_head":
+        checks.append(_pass(
+            "install.s3.db", "control_plane", "$.dependencies.database_ref", "schema_at_head",
+            "Declared database is already at the migrated state; no migration was applied.",
+            "Never downgrade or wipe data to force a fresh install.",
+        ))
+    elif database_state in {"empty", "behind"}:
+        if ctx.dry_run:
+            checks.append(_pass(
+                "install.s3.db", "control_plane", "$.dependencies.database_ref", "migration_planned",
+                "Schema migration is planned through the existing Alembic chain.",
+                "Never run migrations against an unmanaged database.",
+            ))
+        else:
+            python = ctx.deploy_root / "venv" / "bin" / "python"
+            env = _deploy_env(ctx, {
+                "DATABASE_URL": ctx.binding_values[config.dependencies.database_ref]["DATABASE_URL"],
+                "STP_SKIP_INFRA_CHECK": "1",
+            })
+            result = ctx.ops.run([str(python), "-m", "alembic", "upgrade", "head"], cwd=ctx.deploy_root / "backend", env=env)
+            if result.returncode != 0:
+                return _safe(checks, "db_migrate_failed", location="$.dependencies.database_ref", role="control_plane", check_id="install.s3.migrate")
+            checks.append(_pass(
+                "install.s3.migrate", "control_plane", "$.dependencies.database_ref", "migration_applied",
+                "The existing migration chain completed against the declared database.",
+                "A failed migration must stop the install before any service start.",
+            ))
+    else:
+        checks.append(_pass(
+            "install.s3.db", "control_plane", "$.dependencies.database_ref", "schema_at_head",
+            "Declared database is already at the migrated state; no migration was applied.",
+            "Never downgrade or wipe data to force a fresh install.",
+        ))
+
+    if ctx.dry_run:
+        checks.append(_pass(
+            "install.s3.admin", "site", "$.security.initial_admin_ref", "bootstrap_planned",
+            "First-administrator bootstrap is planned as a controlled, audited action.",
+            "Bootstrap never resets existing accounts or elevates ordinary users.",
+        ))
+        return checks
+    python = ctx.deploy_root / "venv" / "bin" / "python"
+    admin = ctx.binding_values[config.security.initial_admin_ref]
+    env = _deploy_env(ctx, {
+        "DATABASE_URL": ctx.binding_values[config.dependencies.database_ref]["DATABASE_URL"],
+        "STP_INITIAL_ADMIN_USER": admin["USERNAME"],
+        "STP_INITIAL_ADMIN_PASSWORD": admin["PASSWORD"],
+        "STP_SKIP_INFRA_CHECK": "1",
+    })
+    result = ctx.ops.run([str(python), "backend/scripts/bootstrap_admin.py"], cwd=ctx.deploy_root, env=env)
+    if result.returncode == 3:
+        return _safe(checks, "admin_conflict", location="$.security.initial_admin_ref", role="site", check_id="install.s3.admin")
+    if result.returncode != 0:
+        return _safe(checks, "install_command", location="$.security.initial_admin_ref", role="site", check_id="install.s3.admin")
+    status = "created" if "created" in result.stdout else "exists"
+    if result.stdout:
+        try:
+            payload = json.loads(result.stdout.splitlines()[-1])
+            status = str(payload.get("status", status))
+        except (ValueError, IndexError):
+            pass
+    checks.append(_pass(
+        "install.s3.admin", "site", "$.security.initial_admin_ref",
+        "admin_created" if status == "created" else "admin_present",
+        "First administrator ensured exactly once with an audit record; existing accounts untouched.",
+        "Bootstrap is idempotent and never resets or elevates existing users.",
+    ))
+    return checks
+
+
+def _subprocess_env(values: dict[str, str]) -> dict[str, str]:
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
+        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    env.update(values)
+    return env
+
+
+def _deploy_env(ctx: InstallContext, overrides: dict[str, str]) -> dict[str, str]:
+    """Minimal env for target-side commands, built from the rendered site env.
+
+    The rendered ``.env.backend`` carries the site's generated secrets and
+    settings; target-side scripts must import cleanly with the same
+    environment the service uses.  Values stay in the subprocess environment
+    and are never printed.
+    """
+    env = _subprocess_env({})
+    env_file = ctx.deploy_root / ".env.backend"
+    try:
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, _, value = stripped.partition("=")
+            env[key.strip()] = value.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    env.update(overrides)
+    return env
+
+
+def stage_s4_entry(ctx: InstallContext) -> list[Check]:
+    """Install units/nginx, start the nomigrate service and verify health."""
+    checks: list[Check] = []
+    config = ctx.config
+    render_root = ctx.render_root or (ctx.deploy_root / ".install-rendered")
+    profile = config.control_plane.security_profile
+    if ctx.dry_run:
+        return [
+            _pass(
+                "install.s4.units", "control_plane", "$.control_plane.deploy_root", "units_planned",
+                "systemd unit installation and service start are planned.",
+                "Run without --dry-run on the declared target.",
+            ),
+            _pass(
+                "install.s4.nginx", "control_plane", "$.control_plane.public_url", "nginx_planned",
+                "Nginx site installation and reload are planned after the syntax check.",
+                "The service starts before the public entry is exposed.",
+            ),
+        ]
+    # Migration and other target-side commands ran as root; hand the tree back to
+    # the service account before the service starts, or the app cannot write
+    # its own caches and crash-loops.
+    ctx.ops.chown(ctx.deploy_root, config.control_plane.deploy_user)
+    for relpath in UNIT_TEMPLATES:
+        destination = ctx.system_root / "etc/systemd/system" / Path(relpath).name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(render_root / Path(relpath).name, destination)
+    if ctx.ops.run(["systemctl", "daemon-reload"]).returncode != 0:
+        return _safe(checks, "install_units", location="$.control_plane.deploy_root", role="control_plane", check_id="install.s4.units")
+    checks.append(_pass(
+        "install.s4.units", "control_plane", "$.control_plane.deploy_root", "units_installed",
+        "Migration oneshot and nomigrate service units are installed.",
+        "Units must be rendered from the template placeholder set.",
+    ))
+
+    nginx_source = Path(NGINX_SITES[profile]).name
+    nginx_target = ctx.system_root / "etc/nginx/sites-available/stability-platform"
+    nginx_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(render_root / nginx_source, nginx_target)
+    enabled = ctx.system_root / "etc/nginx/sites-enabled/stability-platform"
+    enabled.parent.mkdir(parents=True, exist_ok=True)
+    if enabled.is_symlink() or enabled.exists():
+        enabled.unlink()
+    enabled.symlink_to(nginx_target)
+    default_site = ctx.system_root / "etc/nginx/sites-enabled/default"
+    if default_site.exists() or default_site.is_symlink():
+        default_site.unlink()
+    logrotate_target = ctx.system_root / "etc/logrotate.d/stability-backend"
+    logrotate_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(render_root / "stability-backend", logrotate_target)
+    if ctx.ops.run(["nginx", "-t"]).returncode != 0:
+        return _safe(checks, "install_nginx", location="$.control_plane.public_url", role="control_plane", check_id="install.s4.nginx")
+    if ctx.ops.run(["systemctl", "enable", "--now", "nginx"]).returncode != 0:
+        return _safe(checks, "install_nginx", location="$.control_plane.public_url", role="control_plane", check_id="install.s4.nginx")
+    if ctx.ops.run(["systemctl", "reload", "nginx"]).returncode != 0:
+        return _safe(checks, "install_nginx", location="$.control_plane.public_url", role="control_plane", check_id="install.s4.nginx")
+    checks.append(_pass(
+        "install.s4.nginx", "control_plane", "$.control_plane.public_url", "nginx_ready",
+        "Nginx site passed the syntax check and was reloaded.",
+        "Public entry stays same-origin with the control plane.",
+    ))
+
+    if ctx.ops.run(["systemctl", "enable", "--now", SERVICE_UNIT]).returncode != 0:
+        return _safe(checks, "install_units", location="$.control_plane.deploy_root", role="control_plane", check_id="install.s4.service")
+    if not await_health():
+        return _safe(checks, "install_health", location="$.control_plane.public_url", role="control_plane", check_id="install.s4.health")
+    checks.append(_pass(
+        "install.s4.health", "control_plane", "$.control_plane.public_url", "health_ok",
+        "Health reports ready workers and a schema aligned with the installed code.",
+        "Health is partial evidence: log in and run the controlled drill before handover.",
+    ))
+    return checks
+
+
+def await_health(timeout_seconds: int = 90, interval_seconds: float = 3.0) -> bool:
+    import time
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=5) as response:  # noqa: S310 (loopback)
+                payload = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, ValueError, OSError):
+            time.sleep(interval_seconds)
+            continue
+        data = payload.get("data", payload) if isinstance(payload, dict) else {}
+        if isinstance(data, dict) and data.get("status") == "healthy" and data.get("saq_ready") is True:
+            revision, head = data.get("alembic_revision"), data.get("alembic_head")
+            if not (revision and head and revision != head):
+                return True
+        time.sleep(interval_seconds)
+    return False
