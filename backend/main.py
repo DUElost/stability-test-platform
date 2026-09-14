@@ -451,31 +451,54 @@ async def health_check():
             is_schema_at_head,
         )
 
-        async with async_engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-            db_revision = await database_revision(conn)
-            code_head = code_head_revision()
-
         skip_schema_check = (
             os.getenv("TESTING") == "1"
             or not is_production_like_env()
         )
-        if not skip_schema_check and not is_schema_at_head(db_revision, code_head):
-            logger.warning(
-                "health_schema_not_at_head db=%s head=%s",
-                db_revision,
-                code_head,
-            )
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "data": None,
-                    "error": {
-                        "code": "SCHEMA_NOT_AT_HEAD",
-                        "message": "database schema revision does not match code head",
+        db_revision = None
+        code_head = None
+        # #1930：schema 探测只在需要判定的环境执行——原实现无条件查询，
+        # 未迁移的 dev/测试库（无 alembic_version 表）或异常 layout 会让
+        # /health 变 503 且落入宽泛 except 误报 DB_UNAVAILABLE。
+        schema_probe_ok = True
+        async with async_engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+            if not skip_schema_check:
+                try:
+                    db_revision = await database_revision(conn)
+                    code_head = code_head_revision()
+                except Exception:
+                    schema_probe_ok = False
+                    logger.exception("health_schema_probe_failed")
+
+        if not skip_schema_check:
+            if not schema_probe_ok:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "data": None,
+                        "error": {
+                            "code": "SCHEMA_PROBE_FAILED",
+                            "message": "database reachable but schema revision probe failed",
+                        },
                     },
-                },
-            )
+                )
+            if not is_schema_at_head(db_revision, code_head):
+                logger.warning(
+                    "health_schema_not_at_head db=%s head=%s",
+                    db_revision,
+                    code_head,
+                )
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "data": None,
+                        "error": {
+                            "code": "SCHEMA_NOT_AT_HEAD",
+                            "message": "database schema revision does not match code head",
+                        },
+                    },
+                )
 
         if not skip_infra:
             if redis_client is not None:
@@ -527,7 +550,9 @@ async def health_check():
             "admission_queue_pump_ready": is_queue_pump_ready(),
             "admission_queue_enabled": admission_queue_enabled(),
         }
-        if is_schema_at_head(db_revision, code_head):
+        # #1930：仅真实探测成功时报告 revisions——skip 路径两值为 None，
+        # `None == None` 会误判 at-head 并把 null 写进健康面。
+        if code_head is not None and is_schema_at_head(db_revision, code_head):
             payload["alembic_revision"] = db_revision
             payload["alembic_head"] = code_head
         return {"data": payload, "error": None}

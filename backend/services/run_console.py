@@ -459,6 +459,17 @@ class RunConsole:
             run.error = f"spawn_failed: {exc}"[:500]
             run.ended_at = datetime.now(timezone.utc).isoformat()
             self._release_key(run_key, run_id=run_id)
+            # #1931：RUNNING 快照发布在 Popen 之前（:431）——spawn 失败路径无
+            # reader 线程、`_finalize` 永不执行，快照只能等 TTL 自然过期，
+            # 其他实例的 status() 在此期间读到 RUNNING 假状态。显式删除。
+            if _console_registry.console_registry_enabled():
+                try:
+                    _console_registry.delete_status_snapshot(run_id)
+                except Exception:  # noqa: BLE001 - 清理失败不影响主错误路径
+                    logger.warning(
+                        "run_console_spawn_fail_snapshot_cleanup_failed run_id=%s",
+                        run_id,
+                    )
             logger.exception("run_console_spawn_failed run_id=%s", run_id)
             raise RunConsoleError(f"spawn failed: {exc}") from exc
 
