@@ -1,20 +1,20 @@
-"""Shared CORS configuration and validation."""
+"""Shared CORS configuration and validation.
+
+ADR-0042 P2（安全与会话域）：白名单三个键收敛到
+:class:`backend.core.settings.security.AuthSessionSettings`（单一来源 + 默认值随迁）；
+本模块只保留**解析与护栏**（CSV 拆分、通配符拒绝、凭据模式约束）。
+"""
 
 from __future__ import annotations
 
-import os
-
-DEFAULT_CORS_ORIGINS = (
-    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000"
-)
-DEFAULT_CORS_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
-DEFAULT_CORS_HEADERS = ("Authorization", "Content-Type", "X-Agent-Secret")
+from backend.core.settings.security import get_auth_session_settings
 
 
 def get_cors_config() -> dict[str, object]:
-    origins = _parse_csv_env("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
-    methods = _parse_csv_env("CORS_ALLOW_METHODS", ",".join(DEFAULT_CORS_METHODS))
-    headers = _parse_csv_env("CORS_ALLOW_HEADERS", ",".join(DEFAULT_CORS_HEADERS))
+    settings = get_auth_session_settings()
+    origins = _parse_csv(settings.cors_origins)
+    methods = _parse_csv(settings.cors_allow_methods)
+    headers = _parse_csv(settings.cors_allow_headers)
 
     if not origins:
         raise RuntimeError("CORS_ORIGINS must contain at least one explicit origin")
@@ -39,6 +39,6 @@ def get_cors_allowed_origins() -> list[str]:
     return list(get_cors_config()["allow_origins"])
 
 
-def _parse_csv_env(name: str, default: str) -> list[str]:
-    raw = os.getenv(name, default)
+def _parse_csv(raw: str) -> list[str]:
+    """CSV → 去空白、丢空项（迁移前 ``_parse_csv_env`` 的逐字语义）。"""
     return [item.strip() for item in raw.split(",") if item.strip()]
