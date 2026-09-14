@@ -4,8 +4,8 @@ from __future__ import annotations
 
 
 
-def test_register_allowed_by_default_in_non_production(client, monkeypatch):
-    monkeypatch.delenv("STP_ALLOW_REGISTER", raising=False)
+def test_register_allowed_by_default_in_non_production(client, monkeypatch, auth_env):
+    auth_env.unset("STP_ALLOW_REGISTER")
     monkeypatch.setenv("ENV", "development")
     resp = client.post(
         "/api/v1/auth/register",
@@ -15,8 +15,8 @@ def test_register_allowed_by_default_in_non_production(client, monkeypatch):
     assert resp.json()["username"] == "newdev"
 
 
-def test_register_blocked_in_production(client, monkeypatch):
-    monkeypatch.delenv("STP_ALLOW_REGISTER", raising=False)
+def test_register_blocked_in_production(client, monkeypatch, auth_env):
+    auth_env.unset("STP_ALLOW_REGISTER")
     monkeypatch.setenv("ENV", "production")
     resp = client.post(
         "/api/v1/auth/register",
@@ -26,9 +26,9 @@ def test_register_blocked_in_production(client, monkeypatch):
     assert "disabled" in resp.json()["detail"].lower()
 
 
-def test_register_explicitly_allowed_in_production(client, monkeypatch):
+def test_register_explicitly_allowed_in_production(client, monkeypatch, auth_env):
     monkeypatch.setenv("ENV", "production")
-    monkeypatch.setenv("STP_ALLOW_REGISTER", "1")
+    auth_env.set("STP_ALLOW_REGISTER", "1")
     resp = client.post(
         "/api/v1/auth/register",
         json={"username": "prodallowed", "password": "secret123"},
@@ -36,9 +36,9 @@ def test_register_explicitly_allowed_in_production(client, monkeypatch):
     assert resp.status_code == 200
 
 
-def test_register_blocked_when_env_flag_zero(client, monkeypatch):
+def test_register_blocked_when_env_flag_zero(client, monkeypatch, auth_env):
     monkeypatch.setenv("ENV", "development")
-    monkeypatch.setenv("STP_ALLOW_REGISTER", "0")
+    auth_env.set("STP_ALLOW_REGISTER", "0")
     resp = client.post(
         "/api/v1/auth/register",
         json={"username": "blocked", "password": "secret123"},
@@ -46,10 +46,10 @@ def test_register_blocked_when_env_flag_zero(client, monkeypatch):
     assert resp.status_code == 403
 
 
-def test_register_blocked_in_internal_env(client, monkeypatch):
+def test_register_blocked_in_internal_env(client, monkeypatch, auth_env):
     """#281 P0:internal 与 production 同等视为生产类环境,默认拒绝公开注册
     (生产部署 .env.backend 即 ENV=internal)。"""
-    monkeypatch.delenv("STP_ALLOW_REGISTER", raising=False)
+    auth_env.unset("STP_ALLOW_REGISTER")
     monkeypatch.setenv("ENV", "internal")
     resp = client.post(
         "/api/v1/auth/register",

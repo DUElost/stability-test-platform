@@ -681,3 +681,29 @@ def scheduler_env(monkeypatch):
     yield _set
     reset_scheduler_settings_cache()
 
+
+@pytest.fixture
+def auth_env(monkeypatch):
+    """安全与会话域 env 覆盖助手（ADR-0042 P2）：写/删 env 后同步清 Settings 缓存。
+
+    `auth_env.set(name, value)` / `auth_env.unset(name)`；测试末再清一次缓存，
+    防止缓存值泄漏到后续用例。
+    """
+
+    from backend.core.settings.security import reset_auth_session_settings_cache
+
+    class _Env:
+        @staticmethod
+        def set(name: str, value: str) -> None:
+            monkeypatch.setenv(name, value)
+            reset_auth_session_settings_cache()
+
+        @staticmethod
+        def unset(name: str) -> None:
+            monkeypatch.delenv(name, raising=False)
+            reset_auth_session_settings_cache()
+
+    reset_auth_session_settings_cache()
+    yield _Env
+    reset_auth_session_settings_cache()
+
