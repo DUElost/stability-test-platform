@@ -15,3 +15,7 @@ python-socketio[client]>=5.16.4,<6.0
 
 # pipeline_def validation (pipeline_validator.py)
 jsonschema>=4.26.0,<5.0
+
+# 分域 Settings（ADR-0042 P1 试点：租约续期域；仅读 os.environ，env_file=None）
+pydantic-settings>=2.10,<3.0
+

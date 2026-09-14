@@ -21,7 +21,10 @@ from backend.services.host_maintenance import (
     maintenance_window,
 )
 from backend.services.agent_version_info import finalize_hot_update_outcome
-from backend.services.artifact_digest import compute_desired_artifact_digest
+from backend.services.artifact_digest import (
+    ConvergencePlan,
+    plan_convergence,
+)
 from backend.services.host_updater import (
     _AGENT_SOURCE_DIR,
     _resolve_ssh_creds,
@@ -91,7 +94,19 @@ def sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional[
     # 轻量脚本推送失败后触发（runner.py 唯一调用点），存在内容漂移的正证据；
     # digest 相等也可能恰是 §7-3 带外漂移形态，跳过治愈会让 host 持续阻断派发。
     # 但 digest 仍随部署写入远端，使 UI/API 与 --direct 通道进入 no-op 稳态。
-    desired_digest = compute_desired_artifact_digest()
+    # ADR-0040 P2-B（#1975）：治愈证据优先——code 层恒全量（不做 no-op 判定，
+    # digest 相等也可能是 §7-3 带外漂移形态）；resources 层按真实 drift 收敛
+    # （空集守卫内建于 plan）。
+    base = plan_convergence(host)
+    plan = ConvergencePlan(
+        code_digest=base.code_digest,
+        code_drift=True,
+        resources_digest=base.resources_digest,
+        resources_drift=base.resources_drift and not base.resources_skipped_empty,
+        resources_skipped_empty=base.resources_skipped_empty,
+        converged=False,
+        no_op_result=None,
+    )
 
     # #960：上传/rsync/重启期间占住主机维护窗口，期间不再向该主机派发或 claim。
     # 拿不到窗口（已有热更新在跑）视为本次同步失败，由调用方按既有兜底处理。
@@ -105,7 +120,10 @@ def sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional[
                 ssh_password=creds.password,
                 ssh_key_path=creds.key_path,
                 known_hosts_path=creds.known_hosts_path,
-                artifact_digest=desired_digest,
+                artifact_digest=plan.code_digest,
+                resources_digest=plan.resources_digest,
+                code_drift=True,
+                resources_drift=plan.resources_drift,
             )
     except HostMaintenanceConflict:
         return False, "host_in_maintenance"

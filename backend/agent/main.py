@@ -39,6 +39,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.local_disk_monitor import LocalDiskMonitor
     from agent.heartbeat_thread import HeartbeatThread
     from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
+    from agent.settings import reset_agent_settings_caches
     from agent.job_runner import JobRunnerState, run_task_wrapper
     from agent.lease_renewer import LeaseRenewer
     from agent.mq.producer import StepTraceWriter
@@ -66,6 +67,7 @@ else:
     from .local_disk_monitor import LocalDiskMonitor
     from .heartbeat_thread import HeartbeatThread
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
+    from .settings import reset_agent_settings_caches
     from .job_runner import JobRunnerState, run_task_wrapper
     from .lease_renewer import LeaseRenewer
     from .operation_scheduler import OperationScheduler
@@ -998,6 +1000,8 @@ def main() -> None:
             )
         elif command == "reload_config":
             env_reloaded = _reload_runtime_env()
+            # ADR-0042 P1：`.env` 重读后必须清 Settings 缓存，否则新值被旧缓存吞掉。
+            reset_agent_settings_caches()
             with _active_jobs_lock:
                 active_count = len(_active_job_ids)
             if active_count == 0:

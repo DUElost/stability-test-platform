@@ -13,10 +13,9 @@ from typing import Any, Callable, Dict, Optional, Set
 
 import requests
 
-logger = logging.getLogger(__name__)
+from .settings import get_lease_settings
 
-# Backend lease_manager.py:_DEFAULT_LEASE_SECONDS = 600
-_BACKEND_LEASE_TTL = 600
+logger = logging.getLogger(__name__)
 
 
 class LeaseRenewer:
@@ -38,10 +37,12 @@ class LeaseRenewer:
         self._job_ids = active_job_ids
         self._stop_event = lock_renewal_stop_event
         self._thread: Optional[threading.Thread] = None
-        self._agent_secret = os.getenv("AGENT_SECRET", "")
-        self._post_retries = max(int(os.getenv("AGENT_POST_RETRIES", "3")), 1)
-        self._post_retry_base_delay = float(os.getenv("AGENT_POST_RETRY_BASE_DELAY", "1"))
-        self._renewal_interval = int(os.getenv("AGENT_LOCK_RENEWAL_INTERVAL", "60"))
+        self._agent_secret = os.getenv("AGENT_SECRET", "")  # 凭据保持裸读（ADR-0042 D5 边界）
+        # 续约旋钮来自分域 Settings（ADR-0042 P1 试点）；钳制语义保持在调用点。
+        _lease_settings = get_lease_settings()
+        self._post_retries = max(int(_lease_settings.agent_post_retries), 1)
+        self._post_retry_base_delay = float(_lease_settings.agent_post_retry_base_delay)
+        self._renewal_interval = int(_lease_settings.agent_lock_renewal_interval)
         self._fencing_tokens: Dict[int, str] = {}  # ADR-0019 Phase 2b
         self._local_worker_tokens: Dict[int, str] = {}
         self._device_ids: Dict[int, int] = {}      # Phase 3b: job_id → device_id
@@ -51,10 +52,10 @@ class LeaseRenewer:
         self._coordinator = coordinator  # ADR-0026 Step 5b
         # One batch request renews the whole host per tick (P0 scale reduction).
         # Chunked so a large host stays under the backend's per-request cap.
-        self._batch_chunk = max(int(os.getenv("AGENT_LEASE_EXTEND_BATCH_CHUNK", "100")), 1)
+        self._batch_chunk = max(int(_lease_settings.agent_lease_extend_batch_chunk), 1)
 
         # Phase 3b: validate renew_interval < lease_ttl / 2
-        lease_ttl_env = int(os.getenv("AGENT_LEASE_TTL", str(_BACKEND_LEASE_TTL)))
+        lease_ttl_env = int(_lease_settings.agent_lease_ttl)
         if self._renewal_interval >= lease_ttl_env / 2:
             logger.warning("lease_renewal_interval_too_long", extra={
                 "agent_instance_id": self._agent_instance_id,

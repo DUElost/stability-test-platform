@@ -8,7 +8,7 @@
 - 边界：exec 位、元数据排除（VERSION/ARTIFACT_DIGEST/.env）、
   ``resources/mtbf/`` 主机本地保护、``__pycache__``/``tests``/``test_*.py``、
   空集、增删文件；
-- no-op gate：``evaluate_convergence`` 的 converged / drift / 空列 / force 四态。
+- no-op gate：``plan_convergence`` 的双层 drift / 空集守卫 / force / no-op 同构。
 """
 
 from __future__ import annotations
@@ -131,23 +131,38 @@ def test_metadata_and_host_local_files_not_in_identity(agent_tree, schema_file, 
 
 
 def test_digest_matches_tarball_payload(agent_tree, schema_file, monkeypatch):
-    """契约守护：digest 输入集 == tarball 载荷集（ADR-0040 D1 / §4.2 缓解）。"""
+    """契约守护（P2-B）：各层 digest 输入集 == 对应层 tarball 载荷集。
+
+    code tarball（默认层）↔ code 身份；resources tarball ↔ resources 身份；
+    两层并集 == full 身份（枚举同源，ADR-0040 D1 / §4.2 缓解）。
+    """
     monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
     monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
-    tarball = hu._build_tarball()
 
-    entries = []
-    with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as tar:
-        for member in tar.getmembers():
-            if not member.isfile():
-                raise AssertionError(f"unexpected non-file member: {member.name}")
-            content = tar.extractfile(member).read()
-            entries.append(
-                (member.name, bool(member.mode & 0o111), hashlib.sha256(content).hexdigest())
-            )
-    entries.sort()
+    def _members(buf):
+        entries = []
+        with tarfile.open(fileobj=io.BytesIO(buf), mode="r:gz") as tar:
+            for member in tar.getmembers():
+                if not member.isfile():
+                    raise AssertionError(f"unexpected non-file member: {member.name}")
+                content = tar.extractfile(member).read()
+                entries.append(
+                    (member.name, bool(member.mode & 0o111), hashlib.sha256(content).hexdigest())
+                )
+        entries.sort()
+        return entries
 
-    assert ad.digest_entries(entries) == ad.digest_entries(ad.collect_artifact_entries())
+    assert ad.digest_entries(_members(hu._build_tarball())) == ad.digest_entries(
+        ad.collect_artifact_entries(kind="code")
+    )
+    assert ad.digest_entries(_members(hu._build_resources_tarball())) == ad.digest_entries(
+        ad.collect_artifact_entries(kind="resources")
+    )
+    full = ad.collect_artifact_entries(kind="full")
+    rel = lambda es: {e[0] for e in es}
+    assert rel(ad.collect_artifact_entries(kind="code")) | rel(
+        ad.collect_artifact_entries(kind="resources")
+    ) == rel(full)
 
 
 def test_desired_digest_cache_keyed_by_fingerprint(agent_tree, schema_file, monkeypatch):
@@ -187,28 +202,59 @@ class _FakeHost:
         self.agent_artifact_digest = digest
 
 
-def test_evaluate_convergence_states(monkeypatch):
+def test_plan_convergence_states(monkeypatch):
+    """两层判定：code / resources 独立 drift；空集守卫；force；no-op 同构。"""
+    from backend.services.artifact_digest import ConvergencePlan
+
     desired = "sha256:" + "a" * 64
-    monkeypatch.setattr(ad, "compute_desired_artifact_digest", lambda: desired)
+    res_desired = "sha256:" + "c" * 64
+    empty_digest = ad.digest_entries([])
 
-    # 空列（新协议下从未部署）→ 全量部署
-    d, converged = ad.evaluate_convergence(_FakeHost(None))
-    assert d == desired and converged is None
+    class _FakeHost:
+        def __init__(self, code=None, resources=None):
+            self.id = "h-1"
+            self.agent_artifact_digest = code
+            self.agent_resources_digest = resources
 
-    # drift
-    d, converged = ad.evaluate_convergence(_FakeHost("sha256:" + "b" * 64))
-    assert converged is None
+    def _patch(kind_to_digest):
+        def _fake(kind="full"):
+            return kind_to_digest[kind]
+        monkeypatch.setattr(ad, "compute_desired_artifact_digest", _fake)
 
-    # digest-matched → no-op 结果（与 execute_hot_update 返回同构）
-    d, converged = ad.evaluate_convergence(_FakeHost(desired))
-    assert converged is not None
-    assert converged["ok"] is True
-    assert converged["converged"] is True
-    assert converged["reason"] == "digest-matched"
+    digests = {"code": desired, "resources": res_desired, "full": "sha256:" + "d" * 64}
+    _patch(digests)
 
-    # force 跳过判定
-    d, converged = ad.evaluate_convergence(_FakeHost(desired), force=True)
-    assert converged is None and d == desired
+    # 双层 drift → converged=False
+    plan = ad.plan_convergence(_FakeHost())
+    assert plan.code_drift and plan.resources_drift and not plan.converged
+
+    # 双层匹配 → no-op 结果（与 execute 返回同构）
+    plan = ad.plan_convergence(_FakeHost(desired, res_desired))
+    assert plan.converged and plan.no_op_result is not None
+    assert plan.no_op_result["reason"] == "digest-matched"
+
+    # code 匹配、resources drift → 只 resources 层动
+    plan = ad.plan_convergence(_FakeHost(desired, None))
+    assert not plan.code_drift and plan.resources_drift
+
+    # force：双层皆动
+    plan = ad.plan_convergence(_FakeHost(desired, res_desired), force=True)
+    assert plan.code_drift and plan.resources_drift and plan.no_op_result is None
+
+    # 空集守卫：resources 期望态为空 → 恒 skip（即使 current 也为空/不匹配）
+    empty_d = empty_digest
+    def _fake_empty(kind="full"):
+        return {"code": desired, "resources": empty_d, "full": "sha256:" + "e" * 64}[kind]
+    monkeypatch.setattr(ad, "compute_desired_artifact_digest", _fake_empty)
+    plan = ad.plan_convergence(_FakeHost())
+    assert not plan.resources_drift and plan.resources_skipped_empty
+    assert plan.code_drift  # code 层不受守卫影响
+
+    # no-op 结果构造入口一致性（ConvergencePlan 形状）
+    assert set(ConvergencePlan.__dataclass_fields__) == {
+        "code_digest", "code_drift", "resources_digest", "resources_drift",
+        "resources_skipped_empty", "converged", "no_op_result",
+    }
 
 
 def test_iter_payload_files_skip_rules(agent_tree, schema_file, monkeypatch):

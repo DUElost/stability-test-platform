@@ -11,6 +11,7 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
     selftest         探活与自检（host_updater 用它决定 wrapper/legacy 分支）
     bootstrap        写 /etc/stp-agent-priv.conf 与 sudoers（仅 root 安装期）
     apply-code       把 Agent 暂存代码树同步进 $INSTALL_DIR/agent/
+    apply-resources  把暂存 resources/ 同步进 agent/resources/（P2 独立通道）
     install-schema   安装 Pipeline schema（校验 JSON 与调用者属主）
     write-version    写 agent/VERSION（校验短 SHA）
     write-digest     写 agent/ARTIFACT_DIGEST（ADR-0040，校验 sha256:<hex>）
@@ -495,6 +496,53 @@ def cmd_apply_code(args, conf):
     return 0
 
 
+def cmd_apply_resources(args, conf):
+    """ADR-0040 §5-3 P2-B（#1975）：resources 载荷独立收敛通道。
+
+    rsync 范围限定 ``$INSTALL_DIR/agent/resources/`` 子树（--delete 不出界）；
+    ``resources/mtbf/`` 永远主机本地——exclude+protect（#214/#216/#1248 语义）。
+    其余边界与 apply-code 同模式：staged 属主校验、--safe-links、降权执行。
+    """
+    _require_root()
+    caller_uid, _ = _caller_uid()
+    staged = os.path.abspath(args.staged)
+    if is_within(staged, conf["INSTALL_DIR"]):
+        _fail("--staged must be outside INSTALL_DIR")
+    if not os.path.isfile(RSYNC_BIN):
+        _fail("rsync not found: %s" % RSYNC_BIN)
+    agent_uid, agent_gid = _agent_identity(conf)
+    if agent_uid == 0:
+        _fail("apply-resources requires a non-root AGENT_USER")
+
+    def drop_privileges():
+        os.initgroups(conf["AGENT_USER"], agent_gid)
+        os.setgid(agent_gid)
+        os.setuid(agent_uid)
+
+    staged_fd = _open_directory(staged)
+    try:
+        if caller_uid is not None and os.fstat(staged_fd).st_uid != caller_uid:
+            _fail("--staged must be owned by the calling user")
+        with _target_directory(conf, "agent", create=True) as target_fd:
+            argv = [
+                RSYNC_BIN, "-a", "--no-owner", "--no-group", "--delete",
+                "--delete-excluded", "--safe-links",
+                "--exclude=mtbf/",
+                "--filter=protect mtbf/",
+                "/proc/self/fd/%d/resources/" % staged_fd,
+                "/proc/self/fd/%d/resources/" % target_fd,
+            ]
+            rc, _, err = _run(
+                argv, pass_fds=(staged_fd, target_fd), preexec_fn=drop_privileges,
+            )
+    finally:
+        os.close(staged_fd)
+    if rc != 0:
+        _fail("rsync failed rc=%s: %s" % (rc, err.strip()[:300]))
+    print("STP_APPLY_RESOURCES_OK")
+    return 0
+
+
 def cmd_install_schema(args, conf):
     _require_root()
     caller_uid, _ = _caller_uid()
@@ -712,6 +760,10 @@ def _build_parser():
 
     p = sub.add_parser("write-digest", help="write agent/ARTIFACT_DIGEST (ADR-0040)")
     p.add_argument("--kind", default="code", choices=["code", "resources"])
+
+    sub.add_parser(
+        "apply-resources", help="sync staged resources/ into agent/resources/ (ADR-0040 P2)",
+    )
     p.add_argument("--digest", default="")
 
     p = sub.add_parser("sync-env", help="update .env secret/overrides")
@@ -752,6 +804,7 @@ def main(argv=None):
         "install-schema": cmd_install_schema,
         "write-version": cmd_write_version,
         "write-digest": cmd_write_digest,
+        "apply-resources": cmd_apply_resources,
         "sync-env": cmd_sync_env,
         "deps-marker": cmd_deps_marker,
         "fix-ownership": cmd_fix_ownership,

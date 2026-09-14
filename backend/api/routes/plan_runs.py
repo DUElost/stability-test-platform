@@ -2631,10 +2631,16 @@ def _resolve_watcher_summary_window(
     if run_start.tzinfo is None:
         run_start = run_start.replace(tzinfo=timezone.utc)
 
+    # #1962：只有「窗口本身就是 run 窗口」的场景才加末端宽限。相对范围
+    # （15m/1h/… 与 legacy window_minutes）是**相对切片**，其末端不随 run 结束
+    # 延展——否则「15m」会静默变成 45m，标签说谎。
+    covers_run_window = False
+
     if time_scope:
         if time_scope == "all":
             cur_start = run_start
             resolved_minutes = None
+            covers_run_window = True
         else:
             resolved_minutes = _WATCHER_TIME_SCOPE_TO_MINUTES[time_scope]
             cur_start = max(run_start, window_end - timedelta(minutes=resolved_minutes))
@@ -2649,18 +2655,19 @@ def _resolve_watcher_summary_window(
         cur_start = run_start
         resolved_minutes = None
         resolved_scope = "all"
+        covers_run_window = True
 
     delta = max(window_end - cur_start, timedelta(minutes=1))
     # 趋势基线按**未加宽限**的窗口推算，避免放宽末端后基线漂移。
     prev_start = cur_start - delta
 
-    # #1962：终态 run 的窗口末端加宽限。reconciler 的首个 tick 需要 ls + pull
+    # #1962：窗口即 run 窗口时，末端加宽限。reconciler 的首个 tick 需要 ls + pull
     # 若干事件目录，可能**慢于 job 本身的生命周期**（实测 run 393 的 job 只跑了
     # 11s，事件在其后 70s 才落库），而 DLE 视图按 plan_run_id 取数不受窗口限制
     # ——于是出现「DLE 有行、仪表盘 0」。宽限值与 device_log_event 的
     # 「PlanRun 窗口附近的迟到落库」语义同一来源（LATE_EVENT_GRACE）。
-    # RUNNING run（无 ended_at）不受影响。
-    if pr.ended_at is not None:
+    # 相对范围不加宽限（见上）；RUNNING run（无 ended_at）亦不受影响。
+    if covers_run_window and pr.ended_at is not None:
         window_end = window_end + LATE_EVENT_GRACE
 
     return resolved_scope, resolved_minutes, cur_start, window_end, prev_start

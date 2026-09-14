@@ -98,6 +98,17 @@ def main() -> int:
                         "部署根只能由 <deploy-root> 占位符确定（#1256）"
                     )
 
+        # 站点参数化（I2）：HTTPS 模板不得写死域名或证书路径，只能使用占位符。
+        https_text = nginx_https.read_text(encoding="utf-8")
+        for placeholder in ("<server-name>", "<tls-cert-path>", "<tls-key-path>"):
+            _require_contains(https_text, placeholder, str(nginx_https))
+        for literal in ("stp.example.com", "/etc/letsencrypt/live/"):
+            if literal in https_text:
+                raise AssertionError(
+                    f"{nginx_https} 含写死的站点值 {literal!r}——"
+                    "域名与证书路径只能由占位符确定（I2）"
+                )
+
     except Exception as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
         return 1

@@ -67,12 +67,13 @@ def _hot_update_direct(
     from backend.models.job import JobInstance
     from backend.services.host_updater import (
         _build_tarball,
+        _build_resources_tarball,
         _resolve_ssh_creds,
         execute_hot_update,
         get_agent_code_version,
     )
     from backend.services.agent_version_info import finalize_hot_update_outcome
-    from backend.services.artifact_digest import evaluate_convergence
+    from backend.services.artifact_digest import plan_convergence
     from backend.services.host_maintenance import HostMaintenanceConflict
     from backend.services.host_upgrade_gate import (
         HostUpgradeGateError,
@@ -104,7 +105,8 @@ def _hot_update_direct(
         # execute_hot_update 内重复构建（实测 ~16.6s/台、48 台 ≈13 分钟纯 CPU）。
         # #1907 / ADR-0040 D3（P1）：构建惰性化到首个全量部署主机——整批
         # digest-matched 时零构建零传输（no-op 稳态）。
-        tarball: bytes | None = None
+        code_tarball: bytes | None = None
+        resources_tarball: bytes | None = None
         for host in hosts:
             active = (
                 db.query(JobInstance)
@@ -128,10 +130,10 @@ def _hot_update_direct(
             # ADR-0040 D3：no-op gate —— desired == current 时不动作、不取凭据、
             # 不占维护窗口；结果走统一 finalize 通道留痕（converged），
             # deployed_at 不刷新（D2 语义修订）。
-            desired_digest, converged_result = evaluate_convergence(host, force=force)
-            if converged_result is not None:
+            plan = plan_convergence(host, force=force)
+            if plan.converged and plan.no_op_result is not None:
                 finalize_hot_update_outcome(
-                    db, host, converged_result, entry="batch_direct",
+                    db, host, plan.no_op_result, entry="batch_direct",
                 )
                 row["converged"] = True
                 row["ok"] = True
@@ -181,11 +183,22 @@ def _hot_update_direct(
                 continue
 
             try:
-                if tarball is None:
+                if plan.code_drift and code_tarball is None:
                     build_t0 = time.monotonic()
-                    tarball = _build_tarball()
+                    code_tarball = _build_tarball(kind="code")
                     print(
-                        f"batch_tarball_size_bytes={len(tarball)} "
+                        f"batch_code_tarball_size_bytes={len(code_tarball)} "
+                        f"build_seconds={time.monotonic() - build_t0:.1f}"
+                    )
+                if (
+                    plan.resources_drift
+                    and not plan.resources_skipped_empty
+                    and resources_tarball is None
+                ):
+                    build_t0 = time.monotonic()
+                    resources_tarball = _build_resources_tarball()
+                    print(
+                        f"batch_resources_tarball_size_bytes={len(resources_tarball)} "
                         f"build_seconds={time.monotonic() - build_t0:.1f}"
                     )
                 result = execute_hot_update(
@@ -196,8 +209,16 @@ def _hot_update_direct(
                     ssh_key_path=creds.key_path,
                     known_hosts_path=creds.known_hosts_path,
                     code_version=expected,
-                    tarball=tarball,
-                    artifact_digest=desired_digest,
+                    artifact_digest=plan.code_digest,
+                    resources_digest=plan.resources_digest,
+                    code_drift=plan.code_drift,
+                    resources_drift=plan.resources_drift and not plan.resources_skipped_empty,
+                    code_tarball=code_tarball if plan.code_drift else None,
+                    resources_tarball=(
+                        resources_tarball
+                        if plan.resources_drift and not plan.resources_skipped_empty
+                        else None
+                    ),
                 )
             finally:
                 end_host_upgrade(db, host.id, holder)
