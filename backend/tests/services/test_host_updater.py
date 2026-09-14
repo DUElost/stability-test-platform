@@ -18,7 +18,7 @@ def test_remote_tar_path_is_unique_per_operation():
 
     first, second = _remote_tar_path(), _remote_tar_path()
     assert first != second
-    assert first.startswith("/tmp/stp-agent-update-")
+    assert first.startswith("/tmp/stp-agent-")
     assert first.endswith(".tar.gz")
 
 
@@ -26,7 +26,8 @@ def test_build_remote_script_disables_agent_secret_sync_by_default():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
         sync_agent_secret=False,
@@ -46,7 +47,8 @@ def test_build_remote_script_includes_allowlisted_env_overrides():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -70,7 +72,8 @@ def test_build_remote_script_preserves_host_local_mtbf_resources():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -88,7 +91,8 @@ def test_build_remote_script_includes_agent_secret_update_when_enabled():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
         sync_agent_secret=True,
@@ -105,7 +109,8 @@ def test_build_remote_script_injects_pip_index_url():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
         sync_agent_secret=False,
@@ -126,7 +131,8 @@ def test_build_remote_script_retries_pip_when_deps_marker_stale():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -169,7 +175,8 @@ def test_build_remote_script_verifies_agent_path_keys(monkeypatch):
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -195,7 +202,8 @@ def _build_script_with_wrapper(**overrides):
     kwargs = {
         "install_dir": "/opt/stability-test-agent",
         "service_name": "stability-test-agent",
-        "tar_path": "/tmp/stp-agent-update-abc.tar.gz",
+        "code_tar_path": "/tmp/stp-agent-update-abc.tar.gz",
+        "resources_tar_path": "",
         "user": "android",
         "group": "android",
     }
@@ -214,8 +222,8 @@ def test_remote_script_prefers_privilege_wrapper_with_legacy_fallback():
     assert "STP_PRIV_MODE=wrapper" in script
     assert "STP_PRIV_FALLBACK=legacy" in script
     for expected in (
-        'sudo "$PRIV" apply-code --staged "$TMPDIR"',
-        'sudo "$PRIV" install-schema --file "$TMPDIR/stp_schemas/pipeline_schema.json"',
+        'sudo "$PRIV" apply-code --staged "$CODE_TMP"',
+        'sudo "$PRIV" install-schema --file "$CODE_TMP/stp_schemas/pipeline_schema.json"',
         'sudo "$PRIV" write-version --version "$CODE_VERSION"',
         'sudo "$PRIV" sync-env --secret-b64 "$AGENT_SECRET_B64"',
         'sudo "$PRIV" sync-env --overrides-b64 "$ENV_OVERRIDES_B64" --path-keys-b64 "$ENV_PATH_KEYS_B64"',
@@ -243,7 +251,8 @@ def test_build_remote_script_exits_nonzero_when_service_not_active():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
         sync_agent_secret=False,
@@ -353,11 +362,13 @@ def test_execute_hot_update_reuses_prebuilt_tarball(monkeypatch):
     monkeypatch.setattr(hu, "_build_tarball", fake_build)
     monkeypatch.setattr(hu, "_ssh_connect", fake_connect)
 
-    result = hu.execute_hot_update(host_ip="10.0.0.1", tarball=b"prebuilt-tarball")
+    result = hu.execute_hot_update(
+        host_ip="10.0.0.1", code_drift=True, code_tarball=b"prebuilt-tarball",
+    )
     assert result["ok"] is False
     assert build_calls["n"] == 0
 
-    result = hu.execute_hot_update(host_ip="10.0.0.1")
+    result = hu.execute_hot_update(host_ip="10.0.0.1", code_drift=True)
     assert result["ok"] is False
     assert build_calls["n"] == 1
 
@@ -445,8 +456,19 @@ def test_hot_update_direct_builds_tarball_once_for_all_hosts(monkeypatch):
 
     import backend.services.artifact_digest as ad_mod
 
+    from backend.services.artifact_digest import ConvergencePlan
+
     desired = "sha256:" + "a" * 64
-    monkeypatch.setattr(ad_mod, "evaluate_convergence", lambda host, force=False: (desired, None))
+
+    def _fake_plan(host, force=False):
+        return ConvergencePlan(
+            code_digest=desired, code_drift=True,
+            resources_digest="sha256:" + "b" * 64,
+            resources_drift=False, resources_skipped_empty=True,
+            converged=False, no_op_result=None,
+        )
+
+    monkeypatch.setattr(ad_mod, "plan_convergence", _fake_plan)
     finalized = {"n": 0}
     monkeypatch.setattr(
         avi, "finalize_hot_update_outcome",
@@ -456,7 +478,7 @@ def test_hot_update_direct_builds_tarball_once_for_all_hosts(monkeypatch):
     assert bhu._hot_update_direct(include_active=False, abort_running_jobs=False) == 0
     assert calls["build"] == 1
     assert len(calls["exec"]) == 1
-    assert calls["exec"][0]["tarball"] == b"T"
+    assert calls["exec"][0]["code_tarball"] == b"T"
     assert calls["exec"][0]["artifact_digest"] == desired
     assert finalized["n"] == 1
 
@@ -469,7 +491,8 @@ def test_remote_script_writes_artifact_digest_wrapper_and_legacy():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
         artifact_digest="sha256:" + "a" * 64,
@@ -491,7 +514,8 @@ def test_remote_script_probes_wrapper_write_digest_capability():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
         artifact_digest="sha256:" + "a" * 64,
@@ -507,7 +531,7 @@ def test_remote_script_probes_wrapper_write_digest_capability():
     assert guard in script
     assert script.index(guard) < script.index(probe)
     # 提前拦截：在 apply-code / restart 之前，不产生「已部署却记失败」的半态
-    assert script.index(probe) < script.index('sudo "$PRIV" apply-code --staged "$TMPDIR"')
+    assert script.index(probe) < script.index('sudo "$PRIV" apply-code --staged "$CODE_TMP"')
     assert script.index(probe) < script.index('sudo "$PRIV" restart')
 
 
@@ -515,7 +539,8 @@ def test_remote_script_phase_timing_sentinels_present():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/t.tar.gz",
+        code_tar_path="/tmp/t.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -568,6 +593,7 @@ def test_batch_direct_converged_no_op_skips_gate_and_ssh(monkeypatch):
         ssh_port = 22
         status = "ONLINE"
         agent_artifact_digest = desired
+        agent_resources_digest = ""
 
     class _Query:
         def __init__(self, rows):
@@ -607,14 +633,22 @@ def test_batch_direct_converged_no_op_skips_gate_and_ssh(monkeypatch):
     monkeypatch.setattr(hu_mod, "execute_hot_update", lambda **k: calls.__setitem__("exec", calls["exec"] + 1) or {"ok": True})
     monkeypatch.setattr(gate_mod, "begin_host_upgrade", lambda *a, **k: calls.__setitem__("gate", calls["gate"] + 1) or {})
     monkeypatch.setattr(gate_mod, "end_host_upgrade", lambda *a, **k: None)
+    from backend.services.artifact_digest import ConvergencePlan
+
     monkeypatch.setattr(
-        ad_mod, "evaluate_convergence",
-        lambda host, force=False: (desired, {
-            "ok": True, "converged": True, "reason": "digest-matched",
-            "message": "converged", "duration_ms": 0, "deps_refreshed": False,
-            "env_keys_synced": [], "env_paths_missing": {}, "code_version": "",
-            "priv_mode": "unknown", "artifact_digest": desired, "phases": {},
-        }),
+        ad_mod, "plan_convergence",
+        lambda host, force=False: ConvergencePlan(
+            code_digest=desired, code_drift=False,
+            resources_digest=desired, resources_drift=False,
+            resources_skipped_empty=False,
+            converged=True,
+            no_op_result={
+                "ok": True, "converged": True, "reason": "digest-matched",
+                "message": "converged", "duration_ms": 0, "deps_refreshed": False,
+                "env_keys_synced": [], "env_paths_missing": {}, "code_version": "",
+                "priv_mode": "unknown", "artifact_digest": desired, "phases": {},
+            },
+        ),
     )
     monkeypatch.setattr(
         avi, "finalize_hot_update_outcome",
@@ -639,7 +673,8 @@ def test_build_remote_script_protects_resources_tree():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
     )
@@ -656,7 +691,8 @@ def test_build_remote_script_writes_resources_digest():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
         artifact_digest="sha256:" + "a" * 64,
@@ -666,7 +702,7 @@ def test_build_remote_script_writes_resources_digest():
     # wrapper 路径：--kind resources（能力探测失败仅 WARN，不阻塞部署）
     assert 'write-digest --digest "" --kind resources' in script
     assert 'write-digest --kind resources --digest "$RESOURCES_DIGEST"' in script
-    assert "WARN: stp-agent-priv lacks write-digest --kind" in script
+    assert "WARN: resources digest not written (outdated wrapper)" in script
     # legacy 路径：tee 到第二文件
     assert 'tee "$INSTALL_DIR/agent/ARTIFACT_DIGEST_RESOURCES"' in script
 
@@ -675,13 +711,16 @@ def test_build_remote_script_omits_resources_block_when_empty():
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
-        tar_path="/tmp/stp-agent-update.tar.gz",
+        code_tar_path="/tmp/stp-agent-update.tar.gz",
+        resources_tar_path="",
         user="android",
         group="android",
         artifact_digest="sha256:" + "a" * 64,
         resources_digest="",
     )
-    # 空值时块仍在模板内但被 [ -n "$RESOURCES_DIGEST" ] 守护（运行时惰性）
-    guard = script.index('if [ -n "$RESOURCES_DIGEST" ]; then')
+    # 空值时整层被 [ -n "$RESOURCES_TARB_PATH" ] 守护（运行时惰性）：
+    # digest 写入段位于层 guard 之内，不会执行
+    assert 'RESOURCES_DIGEST=""' in script
+    guard = script.index('if [ -n "$RESOURCES_TARB_PATH" ]; then')
     write_at = script.index('write-digest --kind resources --digest "$RESOURCES_DIGEST"')
     assert guard < write_at

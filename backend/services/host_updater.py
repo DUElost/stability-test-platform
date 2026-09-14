@@ -37,8 +37,8 @@ _REMOTE_SERVICE_NAME = "stability-test-agent"
 
 # #960：远端 tar 路径每次操作独立。固定路径下并发热更新（UI 触发 + precheck
 # 回退 + 批量脚本）会互相覆盖同一个 tar —— 后传的包被前者解压，或反之。
-def _remote_tar_path() -> str:
-    return f"/tmp/stp-agent-update-{uuid.uuid4().hex}.tar.gz"
+def _remote_tar_path(prefix: str = "stp") -> str:
+    return f"/tmp/stp-agent-{prefix}-{uuid.uuid4().hex}.tar.gz"
 
 # Ansible inventory fallback for SSH credentials
 _INVENTORY_PATH = Path(__file__).resolve().parent.parent.parent / "tools" / "ansible" / "inventory.ini"
@@ -70,12 +70,17 @@ _TARBALL_COMPRESSLEVEL = 6
 _PAYLOAD_METADATA_EXCLUDES = {"VERSION", "ARTIFACT_DIGEST", ".env"}
 
 
-def _iter_payload_files():
+def _iter_payload_files(kind: str = "full"):
     """Yield ``(abs_path, arcname)`` over the deploy payload file set.
 
     tarball（``_build_tarball``）与 artifact digest（``artifact_digest.collect_artifact_entries``）
     共享同一枚举——digest 输入集 = 部署输入集由同一份代码保证（ADR-0040 D1）。
     symlink 一律跳过：tar 存链接本身而内容读取会穿透，两侧身份会分叉。
+
+    kind 分层（ADR-0040 §5-3 P2-B，#1975）：``full`` = P1 全集（兼容语义保留）；
+    ``code`` = 代码树 + schema（**不含 resources/**，分层后 ~1MB）；``resources``
+    = ``resources/**``（除 ``resources/mtbf/``——永远属主机本地）。code 与
+    resources 互斥、并集 == full − mtbf（契约测试守护）。
     """
     for root, dirs, files in os.walk(_AGENT_SOURCE_DIR):
         # Filter directories in-place
@@ -97,20 +102,35 @@ def _iter_payload_files():
                 continue
             if arcname == "resources/mtbf" or arcname.startswith("resources/mtbf/"):
                 continue
+            if kind == "code" and (
+                arcname == "resources" or arcname.startswith("resources/")
+            ):
+                continue
+            if kind == "resources" and not (
+                arcname == "resources" or arcname.startswith("resources/")
+            ):
+                continue
             yield full_path, arcname
 
-    if _PIPELINE_SCHEMA_FILE.is_file():
+    if kind != "resources" and _PIPELINE_SCHEMA_FILE.is_file():
         yield _PIPELINE_SCHEMA_FILE, "stp_schemas/pipeline_schema.json"
 
 
-def _build_tarball(compresslevel: int = _TARBALL_COMPRESSLEVEL) -> bytes:
-    """Package the agent source tree into an in-memory gzipped tarball."""
+def _build_tarball(
+    compresslevel: int = _TARBALL_COMPRESSLEVEL, kind: str = "code"
+) -> bytes:
+    """Package the deploy payload (``kind``: code / resources / full) into a tarball."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=compresslevel) as tar:
-        for full_path, arcname in _iter_payload_files():
+        for full_path, arcname in _iter_payload_files(kind):
             tar.add(full_path, arcname=arcname)
 
     return buf.getvalue()
+
+
+def _build_resources_tarball(compresslevel: int = _TARBALL_COMPRESSLEVEL) -> bytes:
+    """ADR-0040 §5-3 P2-B：host-resources 载荷（resources/** 除 mtbf/）。"""
+    return _build_tarball(compresslevel=compresslevel, kind="resources")
 
 
 def _resolve_ssh_creds(host_ip: str) -> dict | None:
@@ -148,21 +168,12 @@ def _resolve_ssh_creds(host_ip: str) -> dict | None:
     return None
 
 
-def _build_tarball(compresslevel: int = _TARBALL_COMPRESSLEVEL) -> bytes:
-    """Package the agent source tree into an in-memory gzipped tarball."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=compresslevel) as tar:
-        for full_path, arcname in _iter_payload_files():
-            tar.add(full_path, arcname=arcname)
-
-    return buf.getvalue()
-
-
 _REMOTE_SCRIPT = r"""#!/bin/bash
 set -e
 INSTALL_DIR="{install_dir}"
 SERVICE_NAME="{service_name}"
-TAR_PATH="{tar_path}"
+CODE_TARB_PATH="{code_tar_path}"
+RESOURCES_TARB_PATH="{resources_tar_path}"
 SYNC_AGENT_SECRET="{sync_agent_secret}"
 AGENT_SECRET_B64="{agent_secret_b64}"
 ENV_OVERRIDES_B64="{env_overrides_b64}"
@@ -173,17 +184,24 @@ export PIP_INDEX_URL="{pip_index_url}"
 
 if [ ! -d "$INSTALL_DIR" ]; then
     echo "ERROR: Agent not installed at $INSTALL_DIR"
-    rm -f "$TAR_PATH"
+    rm -f "$CODE_TARB_PATH" "$RESOURCES_TARB_PATH"
     exit 1
 fi
 
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR" "$TAR_PATH"' EXIT
+CODE_TMP=$(mktemp -d)
+RES_TMP=$(mktemp -d)
+trap 'rm -rf "$CODE_TMP" "$RES_TMP" "$CODE_TARB_PATH" "$RESOURCES_TARB_PATH"' EXIT
 
-tar xzf "$TAR_PATH" -C "$TMPDIR"
+# P2-B 分层（#1975）：双 tar 各自解包；空路径的层整段跳过。
+if [ -n "$CODE_TARB_PATH" ]; then
+    tar xzf "$CODE_TARB_PATH" -C "$CODE_TMP"
+fi
+if [ -n "$RESOURCES_TARB_PATH" ]; then
+    tar xzf "$RESOURCES_TARB_PATH" -C "$RES_TMP"
+fi
 
 # Fix CRLF from Windows sources
-find "$TMPDIR" -type f \( -name "*.py" -o -name "*.sh" \) \
+find "$CODE_TMP" "$RES_TMP" -type f \( -name "*.py" -o -name "*.sh" \) \
     -exec sed -i 's/\r$//' {{}} + 2>/dev/null || true
 
 # 提权边界（#1250/ADR-0037）：优先走 stp-agent-priv wrapper；未迁移主机
@@ -203,6 +221,7 @@ fi
 # exit 2），既留「已部署却记失败」的半态，又让下一次批量重复全量部署。
 # `write-digest --digest ""` 是空操作探针（支持时打 STP_WRITE_DIGEST_SKIPPED 并
 # exit 0；旧 wrapper 走 argparse 拒绝 exit 2），探针本身不落任何文件。
+if [ -n "$CODE_TARB_PATH" ]; then
 if [ "$USE_PRIV_WRAPPER" = "1" ] && [ -n "$ARTIFACT_DIGEST" ]; then
     if ! sudo -n "$PRIV" write-digest --digest "" >/dev/null 2>&1; then
         echo "ERROR: stp-agent-priv lacks write-digest (outdated wrapper); run tools/ansible/playbooks/update_agent.yml on this host, then retry"
@@ -224,7 +243,7 @@ APPLY_T0=$(date +%s%3N)
 # 传播到 host 清掉大件），不 exclude——分发照旧（wrapper 路径同语义）。
 if [ "$USE_PRIV_WRAPPER" = "1" ]; then
     # wrapper：固定目标 + 固定 excludes（含 mtbf protect）+ --safe-links
-    sudo "$PRIV" apply-code --staged "$TMPDIR"
+    sudo "$PRIV" apply-code --staged "$CODE_TMP"
 else
     sudo rsync -av --delete \
         --exclude='__pycache__/' \
@@ -237,7 +256,7 @@ else
         --exclude='stability-test-agent.service' \
         --exclude='hosts.txt' \
         --filter='protect resources/' \
-        "$TMPDIR/" "$INSTALL_DIR/agent/"
+        "$CODE_TMP/" "$INSTALL_DIR/agent/"
 fi
 
 CODE_VERSION="{code_version}"
@@ -249,12 +268,12 @@ if [ -n "$CODE_VERSION" ]; then
     fi
 fi
 
-if [ -f "$TMPDIR/stp_schemas/pipeline_schema.json" ]; then
+if [ -f "$CODE_TMP/stp_schemas/pipeline_schema.json" ]; then
     if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-        sudo "$PRIV" install-schema --file "$TMPDIR/stp_schemas/pipeline_schema.json"
+        sudo "$PRIV" install-schema --file "$CODE_TMP/stp_schemas/pipeline_schema.json"
     else
         sudo mkdir -p "$INSTALL_DIR/schemas"
-        sudo install -m 0644 "$TMPDIR/stp_schemas/pipeline_schema.json" "$INSTALL_DIR/schemas/pipeline_schema.json"
+        sudo install -m 0644 "$CODE_TMP/stp_schemas/pipeline_schema.json" "$INSTALL_DIR/schemas/pipeline_schema.json"
     fi
 fi
 
@@ -423,6 +442,7 @@ if [ "$SERVICE_ACTIVE" -ne 1 ]; then
 fi
 RESTART_T1=$(date +%s%3N)
 echo "STP_RESTART_PROBE_MS=$((RESTART_T1 - RESTART_T0))"
+echo "OK: service restarted successfully"
 
 # ADR-0040 D2：收敛成功后受控写入 ARTIFACT_DIGEST（探活通过才写——中途失败
 # 保持旧 digest，下一次收敛按 drift 重做）。与 VERSION 同通道、同信任模型。
@@ -435,24 +455,47 @@ if [ -n "$ARTIFACT_DIGEST" ]; then
     echo "STP_ARTIFACT_DIGEST=$ARTIFACT_DIGEST"
 fi
 
-# ADR-0040 P2（#1963）：host-resources 身份落第二文件。--kind 为本片新增
-# 参数：旧 wrapper（探针拒绝）跳过即可——代码收敛照旧，resources 身份缺失
-# 仅使 P2-B 分层流对该主机多做一次全量 resources 部署（安全方向）。
-if [ -n "$RESOURCES_DIGEST" ]; then
-    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-        if sudo -n "$PRIV" write-digest --digest "" --kind resources >/dev/null 2>&1; then
-            sudo "$PRIV" write-digest --kind resources --digest "$RESOURCES_DIGEST"
-            echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
-        else
-            echo "WARN: stp-agent-priv lacks write-digest --kind (outdated wrapper); resources digest not written"
-        fi
-    else
-        printf '%s\n' "$RESOURCES_DIGEST" | sudo tee "$INSTALL_DIR/agent/ARTIFACT_DIGEST_RESOURCES" > /dev/null
-        echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
+fi
+
+# ── ADR-0040 P2-B（#1975）：resources 层独立收敛——D4：不重启、不触碰 deps/env。
+# 空集守卫在控制面（plan_convergence：控制面 resources 分区为空永不下发本层）。
+if [ -n "$RESOURCES_TARB_PATH" ]; then
+RES_APPLY_T0=$(date +%s%3N)
+USE_RES_WRAPPER=$USE_PRIV_WRAPPER
+if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+    # apply-resources 能力协商（#1942 同模式）：旧 wrapper 缺子命令 → legacy
+    # rsync 回退（degrade 安全方向：resources 不更新、digest 不写，下轮再收敛）。
+    if ! sudo -n "$PRIV" apply-resources --help >/dev/null 2>&1; then
+        USE_RES_WRAPPER=0
+        echo "STP_RESOURCES_PRIV_FALLBACK=legacy"
     fi
 fi
+if [ "$USE_RES_WRAPPER" = "1" ]; then
+    sudo "$PRIV" apply-resources --staged "$RES_TMP"
+else
+    sudo rsync -a --no-owner --no-group --delete --safe-links \
+        --exclude='mtbf/' \
+        --filter='protect mtbf/' \
+        "$RES_TMP/resources/" "$INSTALL_DIR/agent/resources/"
 fi
-echo "OK: service restarted successfully"
+# resources 身份在收敛成功后写入（write-digest --kind resources；旧 wrapper
+# 缺 --kind → WARN 跳过，P2-B 对该主机多一次全量 resources 部署，安全方向）。
+if [ "$USE_RES_WRAPPER" = "1" ]; then
+    if sudo -n "$PRIV" write-digest --digest "" --kind resources >/dev/null 2>&1; then
+        sudo "$PRIV" write-digest --kind resources --digest "$RESOURCES_DIGEST"
+        echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
+    else
+        # 旧 wrapper 缺 --kind：WARN 跳过（不走绕过提权边界的裸写）
+        echo "WARN: resources digest not written (outdated wrapper)"
+    fi
+else
+    printf '%s\n' "$RESOURCES_DIGEST" | sudo tee "$INSTALL_DIR/agent/ARTIFACT_DIGEST_RESOURCES" > /dev/null
+    echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
+fi
+echo "STP_RESOURCES_APPLY_MS=$(( $(date +%s%3N) - RES_APPLY_T0 ))"
+echo "STP_RESOURCES_APPLIED=1"
+fi
+
 """
 
 
@@ -460,7 +503,8 @@ def _build_remote_script(
     *,
     install_dir: str,
     service_name: str,
-    tar_path: str,
+    code_tar_path: str,
+    resources_tar_path: str,
     user: str,
     group: str,
     sync_agent_secret: bool = False,
@@ -487,7 +531,8 @@ def _build_remote_script(
     return _REMOTE_SCRIPT.format(
         install_dir=install_dir,
         service_name=service_name,
-        tar_path=tar_path,
+        code_tar_path=code_tar_path,
+        resources_tar_path=resources_tar_path,
         sync_agent_secret="1" if sync_agent_secret else "0",
         agent_secret_b64=agent_secret_b64,
         env_overrides_b64=env_overrides_b64,
@@ -644,23 +689,30 @@ def execute_hot_update(
     agent_secret: str = "",
     code_version: str = "",
     pip_index_url: str = "",
-    tarball: bytes | None = None,
+    code_drift: bool = True,
+    resources_drift: bool = False,
+    code_tarball: bytes | None = None,
+    resources_tarball: bytes | None = None,
     artifact_digest: str = "",
     resources_digest: str = "",
 ) -> dict:
-    """Execute a hot-update on a remote Linux host.
+    """Execute a layered hot-update on a remote Linux host（ADR-0040 §5-3 P2-B）。
 
-    ``tarball``：可选预构建载荷（#1903）。批量入口整批只构建一次并复用；缺省
-    为 None 时按需构建（UI/API 单台路径行为不变）。
-
-    ``artifact_digest``：本次部署载荷的内容摘要（ADR-0040 D2）。非空时远端
-    脚本在探活通过后受控写入 ``ARTIFACT_DIGEST``；no-op 判定在调用方
-    （``artifact_digest.evaluate_convergence``），本函数总是全量动作。
+    ``code_drift`` / ``resources_drift``：两层是否需要收敛（调用方
+    ``plan_convergence`` 判定；force 时两层皆 True）。``code_tarball`` /
+    ``resources_tarball``：可选预构建载荷（批量惰性构建复用）；None 且该层
+    drift 时按需内建（UI/API 单台路径行为不变）。
+    ``resources_tarball``：资源层载荷（resources/** 除 mtbf/）。None = 资源
+    层无变更或空集守卫跳过；非 None 时远端独立收敛 resources/（**不重启**，
+    D4），成功后写 ``ARTIFACT_DIGEST_RESOURCES``。
+    ``artifact_digest`` / ``resources_digest``：两层 desired 身份，各层收敛
+    成功后由远端受控写入（与 #1943 逐拍上报衔接）。
 
     Returns a dict with keys: ok, converged (bool), reason (str),
-    artifact_digest (str), phases (dict), host_id (str), message, duration_ms,
-    deps_refreshed (bool), env_keys_synced (list[str]),
-    env_paths_missing (dict[str, str]), code_version (str).
+    artifact_digest (str), resources_digest (str), phases (dict), host_id
+    (str), message, duration_ms, deps_refreshed (bool), env_keys_synced
+    (list[str]), env_paths_missing (dict[str, str]), code_version (str),
+    resources_applied (bool).
     Raises no exceptions — failures are captured in the returned dict.
     """
     import paramiko
@@ -674,16 +726,40 @@ def execute_hot_update(
     def _phase_ms(since: float) -> int:
         return int((time.monotonic() - since) * 1000)
 
+    if not code_drift and not resources_drift:
+        return {
+            "ok": False,
+            "converged": True,
+            "reason": "nothing-to-converge",
+            "message": "no code or resources layer requested",
+            "duration_ms": 0,
+            "deps_refreshed": False,
+            "env_keys_synced": [],
+            "env_paths_missing": {},
+            "code_version": code_version,
+            "priv_mode": "unknown",
+            "artifact_digest": artifact_digest,
+            "resources_digest": resources_digest,
+            "resources_applied": False,
+            "phases": {"digest": 0},
+        }
+
     try:
-        # 1. Build tarball（#1903：批量入口传入预构建载荷，整批只构建一次）
-        if tarball is None:
-            logger.info("hot_update_building_tarball source=%s", _AGENT_SOURCE_DIR)
+        # 1. Build payloads（#1903：批量入口传预构建载荷整批复用；P2-B 分层
+        #    惰性构建——每层首次需要时才构建，UI/API 单台按需内建）
+        if code_drift and code_tarball is None:
+            logger.info("hot_update_building_code_tarball source=%s", _AGENT_SOURCE_DIR)
             t_build = time.monotonic()
-            tarball = _build_tarball()
-            phases["build"] = _phase_ms(t_build)
-            logger.info("hot_update_tarball_size_bytes=%d", len(tarball))
-        else:
-            logger.info("hot_update_using_prebuilt_tarball size_bytes=%d", len(tarball))
+            code_tarball = _build_tarball(kind="code")
+            phases["build_code"] = _phase_ms(t_build)
+            logger.info("hot_update_code_tarball_size_bytes=%d", len(code_tarball))
+        if resources_drift and resources_tarball is None:
+            t_build = time.monotonic()
+            resources_tarball = _build_resources_tarball()
+            phases["build_resources"] = _phase_ms(t_build)
+            logger.info(
+                "hot_update_resources_tarball_size_bytes=%d", len(resources_tarball),
+            )
 
         # 2. Connect
         t_connect = time.monotonic()
@@ -697,20 +773,29 @@ def execute_hot_update(
         )
         phases["connect"] = _phase_ms(t_connect)
 
-        tar_path = _remote_tar_path()
+        code_tar_path = _remote_tar_path() if code_drift else ""
+        resources_tar_path = _remote_tar_path(prefix="res") if resources_drift else ""
         try:
-            # 3. Upload tarball
-            logger.info("hot_update_uploading host=%s:%d", host_ip, ssh_port)
+            # 3. Upload payloads（按层上传）
             t_upload = time.monotonic()
-            sftp.putfo(io.BytesIO(tarball), tar_path)
-            sftp.chmod(tar_path, 0o644)
+            if code_tarball is not None:
+                logger.info("hot_update_uploading_code host=%s:%d", host_ip, ssh_port)
+                sftp.putfo(io.BytesIO(code_tarball), code_tar_path)
+                sftp.chmod(code_tar_path, 0o644)
+            if resources_tarball is not None:
+                logger.info(
+                    "hot_update_uploading_resources host=%s:%d", host_ip, ssh_port,
+                )
+                sftp.putfo(io.BytesIO(resources_tarball), resources_tar_path)
+                sftp.chmod(resources_tar_path, 0o644)
             phases["upload"] = _phase_ms(t_upload)
 
-            # 4. Execute remote script
+            # 4. Execute remote script（分层条件段：各层无 tar 即整段跳过）
             script = _build_remote_script(
                 install_dir=_REMOTE_INSTALL_DIR,
                 service_name=_REMOTE_SERVICE_NAME,
-                tar_path=tar_path,
+                code_tar_path=code_tar_path,
+                resources_tar_path=resources_tar_path,
                 user=install_user,
                 group=install_group,
                 sync_agent_secret=sync_agent_secret,
@@ -781,10 +866,12 @@ def execute_hot_update(
 
         finally:
             # #960：用完即删 —— 每个包都是独立路径，留着只会堆积在 /tmp
-            try:
-                sftp.remove(tar_path)
-            except Exception:
-                pass
+            for stale in (code_tar_path, resources_tar_path):
+                if stale:
+                    try:
+                        sftp.remove(stale)
+                    except Exception:
+                        pass
             sftp.close()
             client.close()
 

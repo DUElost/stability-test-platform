@@ -18,15 +18,28 @@ def _converged():
         "artifact_digest": DIGEST, "phases": {"digest": 0},
     }
 
+from backend.services.artifact_digest import ConvergencePlan
+
+_EMPTY_OP = None
+
+
+def _plan(code_digest=DIGEST, code_drift=False, resources_drift=False,
+          resources_skipped_empty=True, converged=True):
+    return ConvergencePlan(
+        code_digest=code_digest, code_drift=code_drift,
+        resources_digest="sha256:" + "f" * 64,
+        resources_drift=resources_drift,
+        resources_skipped_empty=resources_skipped_empty,
+        converged=converged,
+        no_op_result=_converged() if converged else None,
+    )
+
 
 def test_hot_update_noop_returns_converged_without_ssh(
     client, sample_host, db_session, monkeypatch, admin_headers,
 ):
     """desired == current → 200 converged；不取凭据、不占维护窗口、不 SSH。"""
-    monkeypatch.setattr(
-        hosts_mod, "evaluate_convergence",
-        lambda host, force=False: (DIGEST, _converged()),
-    )
+    monkeypatch.setattr(hosts_mod, "plan_convergence", lambda host, force=False: _plan())
     finalized = {"n": 0}
     monkeypatch.setattr(
         hosts_mod, "finalize_hot_update_outcome",
@@ -51,11 +64,11 @@ def test_hot_update_force_bypasses_gate_and_deploys(
     """force=True → gate 不收敛（返回 None），进入全量分支；结果统一留痕。"""
     gate_calls = {"force": None}
 
-    def fake_evaluate(host, force=False):
+    def fake_plan(host, force=False):
         gate_calls["force"] = force
-        return DIGEST, None
+        return _plan(converged=False)
 
-    monkeypatch.setattr(hosts_mod, "evaluate_convergence", fake_evaluate)
+    monkeypatch.setattr(hosts_mod, "plan_convergence", fake_plan)
     monkeypatch.setattr(
         hosts_mod, "resolve_host_ssh_credentials",
         lambda host, inventory_lookup=None: (

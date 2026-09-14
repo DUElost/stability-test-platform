@@ -16,6 +16,8 @@ digest 共享同一枚举，契约漂移在共享点消除），条目为规范�
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import hashlib
 import json
 import logging
@@ -62,7 +64,7 @@ def collect_artifact_entries(kind: str = ARTIFACT_KIND_FULL) -> list[tuple[str, 
     resources == full且互斥，契约测试守护。
     """
     entries: list[tuple[str, bool, str]] = []
-    for full_path, arcname in _iter_payload_files():
+    for full_path, arcname in _iter_payload_files(kind):
         st = os.stat(full_path)
         h = hashlib.sha256()
         with open(full_path, "rb") as f:
@@ -70,13 +72,7 @@ def collect_artifact_entries(kind: str = ARTIFACT_KIND_FULL) -> list[tuple[str, 
                 h.update(chunk)
         entries.append((arcname.replace(os.sep, "/"), bool(st.st_mode & 0o111), h.hexdigest()))
     entries.sort()
-    if kind == ARTIFACT_KIND_FULL:
-        return entries
-    if kind == ARTIFACT_KIND_CODE:
-        return [e for e in entries if not e[0].startswith(_RESOURCES_PREFIX)]
-    if kind == ARTIFACT_KIND_RESOURCES:
-        return [e for e in entries if e[0].startswith(_RESOURCES_PREFIX)]
-    raise ValueError(f"unknown artifact kind: {kind!r}")
+    return entries
 
 
 def digest_entries(entries: list[tuple[str, bool, str]]) -> str:
@@ -95,16 +91,10 @@ def digest_entries(entries: list[tuple[str, bool, str]]) -> str:
 def _input_fingerprint(kind: str = ARTIFACT_KIND_FULL) -> str:
     """输入集状态指纹（stat-only，不读内容）——进程缓存的缓存键。"""
     parts = []
-    for full_path, arcname in _iter_payload_files():
+    for full_path, arcname in _iter_payload_files(kind):
         st = os.stat(full_path)
         parts.append((arcname.replace(os.sep, "/"), st.st_size, st.st_mtime_ns, st.st_mode & 0o111))
     parts.sort()
-    if kind == ARTIFACT_KIND_CODE:
-        parts = [p for p in parts if not p[0].startswith(_RESOURCES_PREFIX)]
-    elif kind == ARTIFACT_KIND_RESOURCES:
-        parts = [p for p in parts if p[0].startswith(_RESOURCES_PREFIX)]
-    elif kind != ARTIFACT_KIND_FULL:
-        raise ValueError(f"unknown artifact kind: {kind!r}")
     return hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
 
 
@@ -128,37 +118,82 @@ def compute_desired_resources_digest() -> str:
     return compute_desired_artifact_digest(ARTIFACT_KIND_RESOURCES)
 
 
-def evaluate_convergence(host, *, force: bool = False) -> tuple[str, dict | None]:
-    """D3 no-op gate：desired == current → 返回 no-op 结果；否则返回 None。
+@dataclass(frozen=True)
+class ConvergencePlan:
+    """D3 两层收敛判定结果（P2-B，#1975）。
 
-    返回 ``(desired_digest, converged_result_or_None)``。``converged_result``
-    与 ``execute_hot_update`` 的返回同构（``ok=True, converged=True,
-    reason="digest-matched"``），调用方按同一记录语义留痕（D5）。
-    ``current`` 来自心跳上报的 ``host.agent_artifact_digest``——该列非空才参与
-    判定（新协议下从未部署过的主机 current 为空 → 全量部署并由远端脚本写入
-    digest，一次迁移后进入 no-op 稳态）。``force=True`` 显式跳过判定（审计
-    留痕由调用方走同一 finalize 通道，outcome=forced）。
+    ``code_drift``：code 身份 desired != 心跳上报的 current（含 current 缺失）。
+    ``resources_drift``：同判定于 host-resources 身份；**空集守卫**——控制面
+    resources 分区为空（大件不入 git，CI/新树恒空）时恒 False 且
+    ``resources_skipped_empty=True``：绝不下发空载荷把主机收敛到空。
+    ``converged``：两层均无事可做；``no_op_result`` 与 execute_hot_update
+    返回同构，调用方按同一记录语义留痕（D5）。
     """
-    desired = compute_desired_artifact_digest()
-    if force:
-        return desired, None
-    current = (getattr(host, "agent_artifact_digest", None) or "").strip()
-    if current and current == desired:
-        logger.info(
-            "hot_update_no_op host=%s digest=%s", getattr(host, "id", "?"), desired,
-        )
-        return desired, {
+
+    code_digest: str
+    code_drift: bool
+    resources_digest: str
+    resources_drift: bool
+    resources_skipped_empty: bool
+    converged: bool
+    no_op_result: dict | None
+
+
+def plan_convergence(host, *, force: bool = False) -> ConvergencePlan:
+    """D3 no-op gate（两层）：desired == current 的层跳过，否则标 drift。
+
+    ``current`` 来自心跳上报的显式列——非空才参与判定（新协议下从未部署过
+    的主机 current 为空 → 全量部署并由远端脚本写入 digest，一次迁移后进入
+    no-op 稳态；#1943 修复后 current 随心跳及时刷新）。``force=True`` 显式
+    跳过判定（审计留痕由调用方走同一 finalize 通道，outcome=forced）。
+    """
+    code_desired = compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)
+    resources_desired = compute_desired_artifact_digest(kind=ARTIFACT_KIND_RESOURCES)
+    # 空集守卫：空输入集的 digest 恒定，但「期望态为空」不代表主机应被清空
+    # ——resources 大件带外布放（gitignore），控制面不可见即不下发。
+    resources_skipped_empty = resources_desired == digest_entries([])
+
+    code_current = (getattr(host, "agent_artifact_digest", None) or "").strip()
+    code_drift = force or (not code_current) or code_current != code_desired
+
+    resources_current = (getattr(host, "agent_resources_digest", None) or "").strip()
+    resources_drift = (
+        force
+        or (not resources_skipped_empty)
+        and ((not resources_current) or resources_current != resources_desired)
+    )
+
+    converged = not code_drift and not resources_drift
+    no_op_result: dict | None = None
+    if converged:
+        no_op_result = {
             "ok": True,
             "converged": True,
             "reason": "digest-matched",
-            "message": f"converged: artifact digest matched ({desired})",
+            "message": (
+                f"converged: artifact digests matched ({code_desired} / "
+                f"{resources_desired})"
+            ),
             "duration_ms": 0,
             "deps_refreshed": False,
             "env_keys_synced": [],
             "env_paths_missing": {},
             "code_version": "",
             "priv_mode": "unknown",
-            "artifact_digest": desired,
+            "artifact_digest": code_desired,
+            "resources_digest": resources_desired,
             "phases": {"digest": 0},
         }
-    return desired, None
+        logger.info(
+            "hot_update_no_op host=%s code=%s resources=%s",
+            getattr(host, "id", "?"), code_desired, resources_desired,
+        )
+    return ConvergencePlan(
+        code_digest=code_desired,
+        code_drift=code_drift,
+        resources_digest=resources_desired,
+        resources_drift=resources_drift,
+        resources_skipped_empty=resources_skipped_empty,
+        converged=converged,
+        no_op_result=no_op_result,
+    )

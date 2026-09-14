@@ -71,6 +71,14 @@ def collect_artifact_entries(
                 continue
             if relpath == "resources/mtbf" or relpath.startswith("resources/mtbf/"):
                 continue
+            if kind == ARTIFACT_KIND_CODE and (
+                relpath == "resources" or relpath.startswith("resources/")
+            ):
+                continue
+            if kind == ARTIFACT_KIND_RESOURCES and not (
+                relpath == "resources" or relpath.startswith("resources/")
+            ):
+                continue
             st = os.stat(full_path)
             h = hashlib.sha256()
             with open(full_path, "rb") as f:
@@ -78,22 +86,17 @@ def collect_artifact_entries(
                     h.update(chunk)
             entries.append((relpath, bool(st.st_mode & 0o111), h.hexdigest()))
 
-    for arcname, path in sorted((extra_files or {}).items()):
-        st = os.stat(path)
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        entries.append((arcname, bool(st.st_mode & 0o111), h.hexdigest()))
+    if kind != ARTIFACT_KIND_RESOURCES:
+        for arcname, path in sorted((extra_files or {}).items()):
+            st = os.stat(path)
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            entries.append((arcname, bool(st.st_mode & 0o111), h.hexdigest()))
 
     entries.sort()
-    if kind == ARTIFACT_KIND_FULL:
-        return entries
-    if kind == ARTIFACT_KIND_CODE:
-        return [e for e in entries if not e[0].startswith(_RESOURCES_PREFIX)]
-    if kind == ARTIFACT_KIND_RESOURCES:
-        return [e for e in entries if e[0].startswith(_RESOURCES_PREFIX)]
-    raise ValueError(f"unknown artifact kind: {kind!r}")
+    return entries
 
 
 def digest_entries(entries: list[tuple[str, bool, str]]) -> str:
