@@ -114,6 +114,7 @@ from backend.services.plan_run_export import (
     plan_run_export_to_markdown,
 )
 from backend.services.device_log_event import (
+    LATE_EVENT_GRACE,
     list_plan_run_device_log_events,
 )
 from backend.services.log_observation import (
@@ -2641,7 +2642,18 @@ def _resolve_watcher_summary_window(
         resolved_scope = "all"
 
     delta = max(window_end - cur_start, timedelta(minutes=1))
+    # 趋势基线按**未加宽限**的窗口推算，避免放宽末端后基线漂移。
     prev_start = cur_start - delta
+
+    # #1962：终态 run 的窗口末端加宽限。reconciler 的首个 tick 需要 ls + pull
+    # 若干事件目录，可能**慢于 job 本身的生命周期**（实测 run 393 的 job 只跑了
+    # 11s，事件在其后 70s 才落库），而 DLE 视图按 plan_run_id 取数不受窗口限制
+    # ——于是出现「DLE 有行、仪表盘 0」。宽限值与 device_log_event 的
+    # 「PlanRun 窗口附近的迟到落库」语义同一来源（LATE_EVENT_GRACE）。
+    # RUNNING run（无 ended_at）不受影响。
+    if pr.ended_at is not None:
+        window_end = window_end + LATE_EVENT_GRACE
+
     return resolved_scope, resolved_minutes, cur_start, window_end, prev_start
 
 
