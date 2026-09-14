@@ -24,8 +24,8 @@ from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun, PlanRunHost
+from backend.core.settings.scheduler import get_scheduler_settings
 from backend.scheduler.recycler import (
-    COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS,
     _running_liveness_anchor,
     recycle_once,
 )
@@ -239,7 +239,7 @@ class TestRunningLivenessAnchor:
         job = self._job(execution_state="WAITING_EXECUTION_SLOT", updated_at=stale)
         anchor, timeout = _running_liveness_anchor(job, {(1, "h"): coord_hb})
         assert anchor == coord_hb
-        assert timeout == COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
+        assert timeout == get_scheduler_settings().coordinator_heartbeat_timeout_seconds
 
     def test_waiting_without_coordinator_is_not_reported(self):
         """Missing coordinator signal → anchored at dispatch time, judged by
@@ -252,7 +252,7 @@ class TestRunningLivenessAnchor:
         )
         anchor, timeout = _running_liveness_anchor(job, {})
         assert anchor == started
-        assert timeout == COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
+        assert timeout == get_scheduler_settings().coordinator_heartbeat_timeout_seconds
 
     def test_null_execution_state_is_not_reported(self):
         """NULL execution_state → dispatch-time anchor; a fresh updated_at
@@ -308,7 +308,7 @@ class TestRecyclerSubStateClocks:
         db_session.add(PlanRunHost(
             plan_run_id=f["run"].id, host_id=f["host"].id,
             coordinator_heartbeat_at=self._stale(
-                COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS + 60
+                get_scheduler_settings().coordinator_heartbeat_timeout_seconds + 60
             ),
         ))
         db_session.commit()

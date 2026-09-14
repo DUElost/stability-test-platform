@@ -5,14 +5,13 @@ Cron Schedule Checker — polls task_schedules and dispatches PlanRuns.
 Refactored for APScheduler 4.x: the CronScheduler daemon thread has been
 replaced by two standalone functions invoked via APScheduler IntervalTrigger:
 
-- ``check_and_fire_schedules()``  — async, called every CRON_POLL_INTERVAL
+- ``check_and_fire_schedules()``  — async, called every _sched().cron_poll_interval
 - ``run_retention_cleanup()``     — sync, called every hour
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,12 +22,16 @@ from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.enums import PlanRunStatus
 from backend.models.schedule import TaskSchedule, schedule_timestamp
 
+from backend.core.settings.scheduler import get_scheduler_settings
+
+
+def _sched():
+    """调度域 Settings 惰性取值（ADR-0042 P1 试点）。"""
+    return get_scheduler_settings()
+
+
 logger = logging.getLogger(__name__)
 
-CRON_POLL_INTERVAL = float(os.getenv("CRON_POLL_INTERVAL", "30"))
-PLAN_RUN_RETENTION_DAYS = int(os.getenv("PLAN_RUN_RETENTION_DAYS", "3"))
-# ADR-0020 §"落地与后续动作 9"：同一 schedule 在该窗口内不重复触发 root PlanRun
-SCHEDULE_DEDUP_WINDOW_SECONDS = float(os.getenv("SCHEDULE_DEDUP_WINDOW_SECONDS", "60"))
 
 
 def _compute_next_run(cron_expression: str, after: datetime) -> datetime:
@@ -115,12 +118,12 @@ async def _fire_schedule(db, sched: "TaskSchedule", now: datetime) -> None:
         from backend.models.plan_run import PlanRun
 
         # ── 1. schedule 抖动去重（ADR-0020 §"落地 9"）──
-        dedup_since = now - timedelta(seconds=SCHEDULE_DEDUP_WINDOW_SECONDS)
+        dedup_since = now - timedelta(seconds=_sched().schedule_dedup_window_seconds)
         try:
             if await _recently_triggered_by_schedule(db, schedule_id, dedup_since):
                 logger.info(
                     "cron_skip_dedup schedule_id=%s plan_id=%s window=%.1fs",
-                    schedule_id, plan_id, SCHEDULE_DEDUP_WINDOW_SECONDS,
+                    schedule_id, plan_id, _sched().schedule_dedup_window_seconds,
                 )
                 sched.next_run_at = _next_schedule_run(cron_expression, now)
                 return
@@ -220,7 +223,6 @@ async def check_and_fire_schedules() -> None:
             logger.info("cron_scheduler_fired count=%d", len(schedules))
 
 
-AUTO_ARCHIVE_INTERVAL = int(os.getenv("AUTO_ARCHIVE_POLL_INTERVAL_SECONDS", "120"))
 
 
 def purge_run_storage_dirs(run_ids: list) -> set:
@@ -331,7 +333,7 @@ def _retention_safe_ids(db, run_ids: list[int]) -> tuple[list[int], set[int]]:
 
 
 def run_retention_cleanup() -> None:
-    """Delete completed PlanRuns older than PLAN_RUN_RETENTION_DAYS (ADR-0020).
+    """Delete completed PlanRuns older than _sched().plan_run_retention_days (ADR-0020).
 
     Runs as an independent APScheduler job (sync, runs in thread-pool).
     """
@@ -342,7 +344,7 @@ def run_retention_cleanup() -> None:
     from backend.models.resource_pool import ResourceAllocation
 
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(days=PLAN_RUN_RETENTION_DAYS)
+    cutoff = now - timedelta(days=_sched().plan_run_retention_days)
 
     with SessionLocal() as db:
         try:

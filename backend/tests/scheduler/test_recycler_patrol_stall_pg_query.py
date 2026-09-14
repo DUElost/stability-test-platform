@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy.dialects import postgresql
 
 from backend.scheduler import recycler
+from backend.core.settings.scheduler import get_scheduler_settings
 
 
 def test_patrol_stall_pg_query_limits_and_orders_in_sql():
@@ -29,6 +30,6 @@ def test_patrol_stall_pg_query_limits_and_orders_in_sql():
     assert "ORDER BY" in sql and "DESC" in sql, (
         f"Expected overdue ordering to stay in SQL.\nGot: {sql}"
     )
-    assert f"LIMIT {recycler.PATROL_STALL_BATCH_LIMIT}" in sql, (
+    assert f"LIMIT {get_scheduler_settings().patrol_stall_batch_limit}" in sql, (
         f"Expected top-N limiting in SQL instead of Python-side full scan.\nGot: {sql}"
     )

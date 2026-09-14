@@ -114,6 +114,27 @@ def test_late_event_within_grace_is_counted(client, auth_headers, late_event_set
     assert window_end > late_event_setup["ended_at"], (window_end, late_event_setup["ended_at"])
 
 
+def test_relative_scope_stays_strict(client, auth_headers, late_event_setup):
+    """防线：相对范围（1h/15m…）是「run 内的相对切片」，不因宽限而变大。
+
+    否则「15m」会静默变成 45m（标签说谎）。这些范围本就被 clamp 在 run 内
+    （``cur_start = max(run_start, window_end - N)``），因此迟到事件不在其中。
+    """
+    run = late_event_setup["run"]
+    resp = client.get(
+        f"/api/v1/plan-runs/{run.id}/watcher-summary",
+        params={"time_scope": "1h"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+
+    window_end = datetime.fromisoformat(data["window_end_at"])
+    assert window_end == late_event_setup["ended_at"], (window_end, late_event_setup["ended_at"])
+    # 两条信号都晚于 run 结束（+70s 与 +45min），故都不在相对切片内
+    assert data["current_run"]["total_events"] == 0, data["current_run"]
+
+
 def test_running_run_window_not_extended(client, auth_headers, db_session):
     """防线：RUNNING run（无 ended_at）不适用宽限，窗口末端仍是 now。"""
     host = Host(
