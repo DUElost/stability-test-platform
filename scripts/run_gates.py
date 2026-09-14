@@ -2,7 +2,7 @@
 """STP 质量门禁单一入口：本地矩阵先行，CI 侧后续逐 job 接入对应 profile。
 
 用法:
-    python scripts/run_gates.py check:quick    # 最快一轮（纯静态，含 knip）
+    python scripts/run_gates.py check:quick    # 最快一轮（静态 + 库对齐探针，含 knip）
     python scripts/run_gates.py check:pr       # 推送前默认：与 PR CI 现有检查逐项重叠
     python scripts/run_gates.py check:gov      # 治理面专项（结构 + skill 用量探针 + Harness 摄取矩阵）
     python scripts/run_gates.py check:full     # 夜间全量：main 全量 CI 的本地可跑部分
@@ -14,6 +14,11 @@
   白天全量 CI 只在夜间出现（注意力优先）。pr-migrate 例外地进 check:pr：
   docker 可用则真跑、不可用显式 SKIP（#825——迁移回归是 PR 阶段唯一拦截点）。
 - 每个 gate 顺序执行，失败即停（单人场景默认合理）。
+- `schema-at-head`（#1938）是**部署态探针**而非 PG 套件：有 `DATABASE_URL`
+  （ambient / `.env.backend` / `.env`）时比对代码 head 与库 `alembic_version`，
+  未配置则 WARN 跳过——他机/工作树/CI 恒绿，本机（=生产控制面）不对齐即红。
+  一次只读 SELECT、秒级，故进 quick/pr；与 #1882 的
+  systemd 硬门禁、`check-deploy-source.sh` 构成同族三守卫。
 - 用 `python -m` 形式调用（ruff/pytest），保证落到当前解释器的工具链，
   规避「裸 pytest 落到另一套解释器」的历史坑。
 - CI 侧尚未调用本脚本（接入见 docs/notes/process/2026-08-14-repo-gate-runner.md）；
@@ -73,6 +78,15 @@ GATES = {
     # 镜像形态）。纯 AST/文本扫描、毫秒级；--self-test 红绿双向自证。
     "orphan-models": (
         f"{PY} tools/dev/check_orphan_models.py",
+        ROOT,
+        None,
+    ),
+    # 代码↔库对齐探针（#1938，承接 #1882）：pull 到含新迁移的 main 后漏跑迁移
+    # 即半部署态——本机 routine 门禁此前全绿放行（2026-09-14 心跳 500 事故）。
+    # 有 DATABASE_URL 才比对（ambient / .env.backend / .env），未配置 WARN
+    # 跳过；profile 列表置首位做 fail-fast。
+    "schema-at-head": (
+        f"{PY} tools/dev/check_alembic_at_head.py",
         ROOT,
         None,
     ),
@@ -234,10 +248,12 @@ GATES = {
 
 PROFILES = {
     "check:quick": [
+        "schema-at-head",
         "ruff", "eslint", "tsc", "knip", "compileall", "orphan-models",
         "gov-surface", "ai-work",
     ],
     "check:pr": [
+        "schema-at-head",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
         "pollution", "immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",

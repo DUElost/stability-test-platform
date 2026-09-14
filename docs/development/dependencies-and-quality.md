@@ -41,6 +41,10 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
 - Ruff 规则取向见 `ruff.toml`，实际 CI 参数见 workflow；
 - 前端脚本以 `frontend/package.json` 为准；
 - 本地门禁入口：`python scripts/run_gates.py check:quick|pr|full`；
+- `check:quick` / `check:pr` 首项是 `schema-at-head`（#1938）：比对代码 head
+  与本地配置库的 `alembic_version`（`DATABASE_URL` 取自 ambient 环境 /
+  `.env.backend` / `.env`）；未配置即跳过，未对齐即红——生产工作树 pull 到
+  含新迁移的 main 后漏跑迁移会被这一项拦住；
 - 验证顺序：Agent tests → TypeScript check → frontend build → 必要时 backend tests。
 
 ## 空行污染
