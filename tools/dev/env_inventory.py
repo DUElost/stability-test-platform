@@ -11,6 +11,8 @@
   环境契约见 ADR-0020）的读取形态：`os.getenv("X")`、`os.environ.get("X")`、
   `os.environ["X"]`、以及项目 helper（`_int_env("X", …)` 等 `_*_env("X"` 形态，
   默认值取 `production_default=` / 位置第二参数字面量）；
+- 以及 ADR-0042 的 Settings 类字段（AST 解析）：`validation_alias`/`alias`
+  （含 `AliasChoices` 多别名）或 `env_prefix + 字段名.upper()`；
 - 渲染确定性表格（变量 | 默认 | 示例登记 | 类别 | 首个读取点）写入
   `docs/development/environment-variables.md` 的生成块（marker 之间，勿手改）；
 - `--check` 与文档生成块逐字节比对：代码新增读取名而文档未刷新即红。
@@ -21,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 import tempfile
@@ -151,6 +154,114 @@ def _iter_py_files(scan_root: Path):
         yield path
 
 
+def _literal_default(node: ast.AST | None) -> str:
+    """AST 字面量 → 展示值；非字面量记 `-`（与行扫描口径一致）。"""
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            return node.value
+        if isinstance(node.value, (int, float)):
+            return str(node.value)
+        if isinstance(node.value, bool):
+            return str(node.value).lower()
+    return "-"
+
+
+def _alias_names(node: ast.AST | None) -> list[str]:
+    """validation_alias / alias 的取值 → env 名列表（支持 AliasChoices 多别名）。"""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "AliasChoices":
+        names: list[str] = []
+        for arg in node.args:
+            names.extend(_alias_names(arg))
+        return names
+    return []
+
+
+def _settings_field_entries(text: str) -> list[tuple[str, int, str]]:
+    """解析 Settings 类字段 → [(env 名, 行号, 默认值)]（ADR-0042 的 D6）。
+
+    识别判据：类基名以 ``Settings`` 结尾（含 BaseSettings 及其子类命名惯例），
+    或类体含 ``model_config = SettingsConfigDict(...)``。
+    名字来源：``validation_alias`` / ``alias``（字符串或 ``AliasChoices`` 的字符串
+    参数）；缺省回落到 ``env_prefix + 字段名.upper()``（env_prefix 取
+    ``SettingsConfigDict(env_prefix=...)``，默认空）。
+    默认值：``Field(...)`` 的位置默认或 ``default=`` 字面量；无则 `-`。
+    """
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            # 源文件里的非法转义（\d 等）会经 ast.parse 冒 SyntaxWarning；
+            # 与清单无关，压掉以免污染门禁输出。
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    entries: list[tuple[str, int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        base_names = [
+            base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
+            for base in node.bases
+        ]
+        prefix = ""
+        is_settings = any(name.endswith("Settings") for name in base_names if name)
+        for stmt in node.body:
+            target_names = []
+            value = None
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+                target_names = [stmt.targets[0].id]
+                value = stmt.value
+            elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                target_names = [stmt.target.id]
+                value = stmt.value
+            if value is None:
+                continue
+            if (
+                isinstance(value, ast.Call)
+                and getattr(value.func, "id", "") == "SettingsConfigDict"
+            ):
+                is_settings = True
+                for kw in value.keywords:
+                    if kw.arg == "env_prefix":
+                        prefix = _literal_default(kw.value)
+                        if prefix == "-":
+                            prefix = ""
+            elif (
+                "model_config" in target_names
+                and isinstance(value, ast.Call)
+                and getattr(value.func, "id", "") == "SettingsConfigDict"
+            ):
+                # 只认 SettingsConfigDict：普通 BaseModel 的 `model_config = ConfigDict(...)`
+                # 不是 Settings（2026-09-14 首版误把 130+ 个 pydantic 模型字段/env 名混入）。
+                is_settings = True
+        if not is_settings:
+            continue
+        for stmt in node.body:
+            if not isinstance(stmt, ast.AnnAssign) or not isinstance(stmt.target, ast.Name):
+                continue
+            field = stmt.target.id
+            alias: list[str] = []
+            default = "-"
+            value = stmt.value
+            if isinstance(value, ast.Call) and getattr(value.func, "id", "") == "Field":
+                for kw in value.keywords:
+                    if kw.arg in ("validation_alias", "alias"):
+                        alias = _alias_names(kw.value) or alias
+                    elif kw.arg == "default":
+                        default = _literal_default(kw.value)
+                if default == "-" and value.args:
+                    default = _literal_default(value.args[0])
+            else:
+                default = _literal_default(value)
+            names = alias or [f"{prefix}{field.upper()}"]
+            for name in names:
+                entries.append((name, stmt.lineno, default))
+    return entries
+
+
 def scan_reads(scan_root: Path = SCAN_ROOT) -> dict[str, dict]:
     """{变量名: {default, locations: [(relpath, line)], test_only}}（确定性排序）。"""
     reads: dict[str, dict] = {}
@@ -160,6 +271,14 @@ def scan_reads(scan_root: Path = SCAN_ROOT) -> dict[str, dict]:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
+        settings_entries = _settings_field_entries(text)
+        for name, lineno, default in settings_entries:
+            entry = reads.setdefault(
+                name, {"default": "-", "locations": [], "test_only": True},
+            )
+            entry["locations"].append((str(relpath), lineno))
+            if entry["default"] == "-" and default != "-":
+                entry["default"] = default
         patterns = _file_patterns(text)
         for lineno, line in enumerate(text.splitlines(), 1):
             for pattern in patterns:
@@ -215,7 +334,8 @@ def render_block(reads: dict[str, dict], registered: set[str]) -> str:
     lines = [
         BEGIN_MARK,
         "",
-        f"共 **{total}** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`）："
+        f"共 **{total}** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；"
+        f"含 ADR-0042 Settings 字段）："
         f"**{len(registered & set(reads))}** 个已在 `.env*.example` 登记，"
         f"**{len(unregistered)}** 个声明为内部（理由见下节）。",
         "示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。",
