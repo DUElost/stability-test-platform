@@ -48,11 +48,11 @@ async def test_dashboard_rejects_refresh_token_via_cookie(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dashboard_rejects_foreign_origin_with_valid_token(
-    monkeypatch, db_session, test_user
+    monkeypatch, db_session, test_user, auth_env,
 ):
     """#904：外来 Origin + 有效凭据仍拒——来源不可信与凭据有效性正交。"""
     monkeypatch.setenv("TESTING", "0")
-    monkeypatch.delenv("CORS_ORIGINS", raising=False)  # 用默认白名单
+    auth_env.unset("CORS_ORIGINS")  # 用默认白名单
     access = create_access_token(
         data={
             "sub": str(test_user.id),
@@ -73,11 +73,11 @@ async def test_dashboard_rejects_foreign_origin_with_valid_token(
 
 @pytest.mark.asyncio
 async def test_dashboard_allows_allowlisted_origin_with_cookie(
-    monkeypatch, db_session, test_user
+    monkeypatch, db_session, test_user, auth_env,
 ):
     """#904：白名单 Origin + Cookie 认证握手放行（默认白名单含 localhost:5173）。"""
     monkeypatch.setenv("TESTING", "0")
-    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    auth_env.unset("CORS_ORIGINS")
     access = create_access_token(
         data={
             "sub": str(test_user.id),
@@ -99,10 +99,10 @@ async def test_dashboard_allows_allowlisted_origin_with_cookie(
 
 
 @pytest.mark.asyncio
-async def test_dashboard_origin_absent_keeps_token_path(monkeypatch, db_session, test_user):
+async def test_dashboard_origin_absent_keeps_token_path(monkeypatch, db_session, test_user, auth_env):
     """#904：无 Origin（脚本/测试携 token）不触发 Origin 拦截，走既有认证。"""
     monkeypatch.setenv("TESTING", "0")
-    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    auth_env.unset("CORS_ORIGINS")
     access = create_access_token(
         data={
             "sub": str(test_user.id),
@@ -137,7 +137,7 @@ async def test_dashboard_accepts_access_token(monkeypatch, db_session, test_user
 
 @pytest.mark.asyncio
 async def test_dashboard_rejects_token_of_disabled_user(
-    monkeypatch, db_session, test_user
+    monkeypatch, db_session, test_user,
 ):
     """#903 核心场景：签名有效但用户已停用——此前签名级 decode 全通。"""
     monkeypatch.setenv("TESTING", "0")
@@ -159,7 +159,7 @@ async def test_dashboard_rejects_token_of_disabled_user(
 
 @pytest.mark.asyncio
 async def test_dashboard_rejects_stale_epoch_token(
-    monkeypatch, db_session, test_user
+    monkeypatch, db_session, test_user,
 ):
     """R02-D2：ver 纪元不匹配（bump 后旧 token）必须被拒。"""
     monkeypatch.setenv("TESTING", "0")

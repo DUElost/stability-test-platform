@@ -186,11 +186,11 @@
 | `AIMONKEY_RESOURCE_DIR` | `` | ✅ | 运行时 | `backend/agent/aimonkey_paths.py:23` |
 | `API_URL` | `http://127.0.0.1:8000` | ✅ | 运行时 | `backend/agent/main.py:726` |
 | `ARTIFACT_RETENTION_DAYS` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:46` |
-| `AUTH_ACCESS_COOKIE_NAME` | `stp_access_token` | ✅ | 运行时 | `backend/core/security.py:28` |
-| `AUTH_COOKIE_PATH` | `/` | ✅ | 运行时 | `backend/core/security.py:30` |
-| `AUTH_COOKIE_SAMESITE` | `lax` | ✅ | 运行时 | `backend/core/security.py:51` |
-| `AUTH_COOKIE_SECURE` | `0` | ✅ | 运行时 | `backend/core/security.py:47` |
-| `AUTH_REFRESH_COOKIE_NAME` | `stp_refresh_token` | ✅ | 运行时 | `backend/core/security.py:29` |
+| `AUTH_ACCESS_COOKIE_NAME` | `stp_access_token` | ✅ | 运行时 | `backend/core/settings/security.py:44` |
+| `AUTH_COOKIE_PATH` | `/` | ✅ | 运行时 | `backend/core/settings/security.py:46` |
+| `AUTH_COOKIE_SAMESITE` | `lax` | ✅ | 运行时 | `backend/core/settings/security.py:48` |
+| `AUTH_COOKIE_SECURE` | `0` | ✅ | 运行时 | `backend/core/settings/security.py:47` |
+| `AUTH_REFRESH_COOKIE_NAME` | `stp_refresh_token` | ✅ | 运行时 | `backend/core/settings/security.py:45` |
 | `AUTO_ARCHIVE_POLL_INTERVAL_SECONDS` | `120` | ✅ | 运行时 | `backend/core/settings/scheduler.py:39` |
 | `AUTO_REGISTER_HOST` | `false` | ✅ | 运行时 | `backend/agent/main.py:762` |
 | `AUTO_REGISTER_MAX_RETRIES` | `0` | ✅ | 运行时 | `backend/agent/main.py:779` |
@@ -202,9 +202,9 @@
 | `COORDINATOR_HEARTBEAT_INTERVAL` | `30` | ✅ | 运行时 | `backend/agent/coordinator.py:171` |
 | `COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS` | `300` | ✅ | 运行时 | `backend/api/routes/plan_runs.py:1766` |
 | `COORDINATOR_MAX_PLAN_RUN_HOSTS` | `200` | ✅ | 运行时 | `backend/agent/coordinator.py:175` |
-| `CORS_ALLOW_HEADERS` | `-` | ✅ | 运行时 | `backend/core/cors.py:17` |
-| `CORS_ALLOW_METHODS` | `-` | ✅ | 运行时 | `backend/core/cors.py:16` |
-| `CORS_ORIGINS` | `-` | ✅ | 运行时 | `backend/core/cors.py:15` |
+| `CORS_ALLOW_HEADERS` | `-` | ✅ | 运行时 | `backend/core/settings/security.py:57` |
+| `CORS_ALLOW_METHODS` | `-` | ✅ | 运行时 | `backend/core/settings/security.py:56` |
+| `CORS_ORIGINS` | `-` | ✅ | 运行时 | `backend/core/settings/security.py:55` |
 | `CRON_POLL_INTERVAL` | `30` | ✅ | 运行时 | `backend/core/settings/scheduler.py:32` |
 | `DATABASE_URL` | `` | ✅ | 运行时 | `backend/agent/tests/test_env_isolation.py:34` |
 | `DEVICE_LOCK_LEASE_SECONDS` | `600` | ✅ | 运行时 | `backend/api/routes/agent_api.py:77` |
@@ -220,7 +220,7 @@
 | `HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS` | `1.0` | ✅ | 运行时 | `backend/services/host_upgrade_gate.py:55` |
 | `HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS` | `45` | ✅ | 运行时 | `backend/services/host_upgrade_gate.py:52` |
 | `INSTALL_DIR` | `-` | — | 运行时 | `backend/services/host_updater.py:292` |
-| `JWT_SECRET_KEY` | `` | ✅ | 运行时 | `backend/core/security.py:16` |
+| `JWT_SECRET_KEY` | `` | ✅ | 运行时 | `backend/core/security.py:18` |
 | `LOG_BASE_DIR` | `data/logs` | ✅ | 运行时 | `backend/realtime/log_writer.py:19` |
 | `LOG_LEVEL` | `INFO` | ✅ | 运行时 | `backend/agent/main.py:89` |
 | `MAX_ADMISSION_REQUEUE_ATTEMPTS` | `3` | ✅ | 运行时 | `backend/core/settings/scheduler.py:58` |
@@ -278,7 +278,7 @@
 | `STP_AGENT_SID_REGISTRY_TTL_SECONDS` | `-` | ✅ | 运行时 | `backend/realtime/agent_sid_registry.py:94` |
 | `STP_AGENT_STATE_DB` | `` | ✅ | 运行时 | `backend/agent/aee/state_store.py:15` |
 | `STP_AGENT_VERSION` | `unknown` | — | 运行时 | `backend/agent/script_verifier.py:115` |
-| `STP_ALLOW_REGISTER` | `` | ✅ | 运行时 | `backend/core/security.py:64` |
+| `STP_ALLOW_REGISTER` | `` | ✅ | 运行时 | `backend/core/settings/security.py:51` |
 | `STP_ALLOW_UNSAFE_TEST_DATABASE_URL` | `` | — | 运行时 | `backend/core/db_url_guard.py:30` |
 | `STP_API_DOCS_ENABLED` | `-` | ✅ | 运行时 | `backend/main.py:320` |
 | `STP_ARTIFACT_DIGEST_CACHE` | `` | — | 运行时 | `backend/services/artifact_digest.py:49` |

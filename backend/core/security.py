@@ -11,6 +11,8 @@ from jwt import InvalidTokenError
 from pydantic import AfterValidator, StringConstraints
 from starlette.responses import Response
 
+from backend.core.settings.security import get_auth_session_settings
+
 # Security configuration
 _PLACEHOLDER = "your-secret-key-here-change-in-production"
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
@@ -25,9 +27,21 @@ if not SECRET_KEY or SECRET_KEY == _PLACEHOLDER:
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 480
 REFRESH_TOKEN_EXPIRE_DAYS = 30
-ACCESS_COOKIE_NAME = os.getenv("AUTH_ACCESS_COOKIE_NAME", "stp_access_token")
-REFRESH_COOKIE_NAME = os.getenv("AUTH_REFRESH_COOKIE_NAME", "stp_refresh_token")
-AUTH_COOKIE_PATH = os.getenv("AUTH_COOKIE_PATH", "/")
+# ADR-0042 P2（安全与会话域）：cookie 名/路径收敛到 AuthSessionSettings（单一来源）。
+# 为保持既有 `from backend.core.security import ACCESS_COOKIE_NAME` 的导入语义不变，
+# 这里用模块级 __getattr__（PEP 562）**惰性**解析——不在 import 时读 env（D4）。
+_LAZY_COOKIE_ATTRS = {
+    "ACCESS_COOKIE_NAME": "auth_access_cookie_name",
+    "REFRESH_COOKIE_NAME": "auth_refresh_cookie_name",
+    "AUTH_COOKIE_PATH": "auth_cookie_path",
+}
+
+
+def __getattr__(name: str):
+    field = _LAZY_COOKIE_ATTRS.get(name)
+    if field is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(get_auth_session_settings(), field)
 
 # 生产类环境判定:production 与 internal 都视为生产(#281 P0)。
 # internal 是既有生产部署使用的环境标识(仓库根 .env.backend 为 ENV=internal);
@@ -44,14 +58,11 @@ def is_production_like_env() -> bool:
 
 
 def is_auth_cookie_secure() -> bool:
-    return os.getenv("AUTH_COOKIE_SECURE", "0") == "1"
+    return get_auth_session_settings().cookie_secure_enabled
 
 
 def _get_cookie_samesite() -> str:
-    cookie_samesite = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()
-    if cookie_samesite not in {"lax", "strict", "none"}:
-        return "lax"
-    return cookie_samesite
+    return get_auth_session_settings().cookie_samesite_normalized
 
 
 def is_public_register_allowed() -> bool:
@@ -61,7 +72,7 @@ def is_public_register_allowed() -> bool:
     unless ``STP_ALLOW_REGISTER=1``) or when ``STP_ALLOW_REGISTER=0`` in any
     environment.
     """
-    allow_raw = os.getenv("STP_ALLOW_REGISTER", "").strip().lower()
+    allow_raw = get_auth_session_settings().allow_register_raw
     if allow_raw in {"0", "false", "no", "off"}:
         return False
     if allow_raw in {"1", "true", "yes", "on"}:
@@ -83,7 +94,7 @@ def validate_production_auth_cookie_settings() -> None:
         raise RuntimeError("AUTH_COOKIE_SECURE=1 required when ENV=production")
     # 校验原始环境变量(#281 CR Minor):无效显式值不得被 _get_cookie_samesite
     # 静默回落为 lax 而通过启动校验。
-    samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()
+    samesite_raw = get_auth_session_settings().cookie_samesite_raw
     if samesite_raw not in {"lax", "strict", "none"}:
         raise RuntimeError(
             f"AUTH_COOKIE_SAMESITE={samesite_raw!r} is invalid; use lax or strict"
@@ -92,7 +103,7 @@ def validate_production_auth_cookie_settings() -> None:
         raise RuntimeError(
             "AUTH_COOKIE_SAMESITE=none is not supported in production without CSRF protection"
         )
-    csrf_raw = os.getenv("STP_CSRF_ENABLED", "1").strip().lower()
+    csrf_raw = get_auth_session_settings().csrf_raw
     if csrf_raw in {"0", "false", "no", "off"}:
         raise RuntimeError(
             "STP_CSRF_ENABLED must remain enabled in production-like environments"
@@ -214,36 +225,36 @@ def decode_token(
 
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
     response.set_cookie(
-        ACCESS_COOKIE_NAME,
+        get_auth_session_settings().auth_access_cookie_name,
         access_token,
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         httponly=True,
         secure=is_auth_cookie_secure(),
         samesite=_get_cookie_samesite(),
-        path=AUTH_COOKIE_PATH,
+        path=get_auth_session_settings().auth_cookie_path,
     )
     response.set_cookie(
-        REFRESH_COOKIE_NAME,
+        get_auth_session_settings().auth_refresh_cookie_name,
         refresh_token,
         max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
         httponly=True,
         secure=is_auth_cookie_secure(),
         samesite=_get_cookie_samesite(),
-        path=AUTH_COOKIE_PATH,
+        path=get_auth_session_settings().auth_cookie_path,
     )
 
 
 def clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(
-        ACCESS_COOKIE_NAME,
-        path=AUTH_COOKIE_PATH,
+        get_auth_session_settings().auth_access_cookie_name,
+        path=get_auth_session_settings().auth_cookie_path,
         secure=is_auth_cookie_secure(),
         samesite=_get_cookie_samesite(),
         httponly=True,
     )
     response.delete_cookie(
-        REFRESH_COOKIE_NAME,
-        path=AUTH_COOKIE_PATH,
+        get_auth_session_settings().auth_refresh_cookie_name,
+        path=get_auth_session_settings().auth_cookie_path,
         secure=is_auth_cookie_secure(),
         samesite=_get_cookie_samesite(),
         httponly=True,
