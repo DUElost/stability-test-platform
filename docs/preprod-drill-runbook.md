@@ -17,10 +17,20 @@ export CONTROL_BASE_URL="http://$CONTROL_IP"
 export CONTROL_DIR="/opt/stability-test-platform"
 export DEPLOY_USER="$USER"
 
+# HTTPS 站点参数（仅 stability-platform-https.conf 使用；HTTP 模板不引用）：
+# 使用 HTTPS 模板前必须按站点填写。
+export STP_SITE_DOMAIN=""
+export STP_TLS_CERT_PATH=""
+export STP_TLS_KEY_PATH=""
+
 # 模板渲染：deploy/control-plane/{systemd,nginx,logrotate} 里的 <deploy-root> / <deploy-user>
-# 占位符由上面两个变量唯一确定（源模板不含硬编码部署根）。
+# 与 HTTPS 站点占位符由上面的变量确定（源模板不含硬编码部署根或站点值）。
 render_template() {
-  sed -e "s|<deploy-root>|$CONTROL_DIR|g" -e "s|<deploy-user>|$DEPLOY_USER|g" "$1"
+  sed -e "s|<deploy-root>|$CONTROL_DIR|g" \
+      -e "s|<deploy-user>|$DEPLOY_USER|g" \
+      -e "s|<server-name>|$STP_SITE_DOMAIN|g" \
+      -e "s|<tls-cert-path>|$STP_TLS_CERT_PATH|g" \
+      -e "s|<tls-key-path>|$STP_TLS_KEY_PATH|g" "$1"
 }
 ```
 
@@ -97,6 +107,8 @@ VITE_API_BASE_URL= npm run build:prod   # 产物 → frontend/dist-prod（= Ngin
 render_template "$CONTROL_DIR/deploy/control-plane/nginx/stability-platform.conf" \
   | sudo tee /etc/nginx/sites-available/stability-platform >/dev/null
 # 如已具备证书，优先改用 stability-platform-https.conf
+# HTTPS 模板使用 <server-name> / <tls-cert-path> / <tls-key-path> 占位符（I2）：
+# 先在 §0 填好三个站点变量，渲染后执行 grep -qE '<[a-z][a-z-]*>' 残留自检。
 sudo ln -sf /etc/nginx/sites-available/stability-platform /etc/nginx/sites-enabled/stability-platform
 sudo nginx -t
 sudo systemctl restart nginx

@@ -279,6 +279,7 @@ class Security(ConfigModel):
 
 class Release(ConfigModel):
     bundle: AbsolutePath
+    manifest: AbsolutePath | None = None
     expected_release: Annotated[
         str, Field(min_length=1, max_length=96, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$"),
     ]

@@ -52,6 +52,17 @@ MESSAGES = {
     "role_target_collision": "Use distinct targets for the initial control-plane, storage and Agent roles.",
     "secret_reference_collision": "Use distinct binding names for database, Redis, JWT, Agent, SSH encryption and initial administrator.",
     "invalid_value": "Use the field type, literal or identifier format defined by schema version 1; null is not a confirmed value.",
+    "manifest_missing": "Declare the local release manifest path in release.manifest before planning.",
+    "manifest_input": "Provide an explicitly selected, readable regular UTF-8 JSON manifest, not a symlink or device.",
+    "manifest_size": "Keep the release manifest below the one MiB input limit.",
+    "manifest_syntax": "Use one JSON object without duplicate keys.",
+    "manifest_digest": "Use lowercase sha256 content digests; a digest proves integrity only, never release origin.",
+    "manifest_component_duplicate": "Declare each release component name only once.",
+    "release_version_mismatch": "Make expected_release match the manifest product version exactly.",
+    "release_components_missing": "Include at least the agent-code and host-resources component digests.",
+    "release_platform_unsupported": "Extend the release support matrix or correct the declared role OS/CPU; equal CPU architecture alone is not support evidence.",
+    "output_dir": "Choose an existing directory you own that is not a symlink; the report is written with owner-only permissions.",
+    "output_dir_exists": "Remove or rename the existing plan report; this command never overwrites a previous report.",
 }
 
 
@@ -117,7 +128,13 @@ class SiteLoader(yaml.SafeLoader):
         return mapping
 
 
-def schema_checks(error: ValidationError) -> list[Check]:
+def schema_checks(
+    error: ValidationError,
+    *,
+    check_id: str = "config.schema",
+    safe_names: frozenset[str] = SAFE_FIELD_NAMES,
+    default_role: str = "site",
+) -> list[Check]:
     checks = []
     for detail in error.errors(include_url=False, include_context=False, include_input=False):
         location = "$"
@@ -125,10 +142,10 @@ def schema_checks(error: ValidationError) -> list[Check]:
             if isinstance(part, int):
                 location += f"[{part}]"
             else:
-                location += "." + (part if part in SAFE_FIELD_NAMES else "<unknown>")
-        root = detail["loc"][0] if detail["loc"] else "site"
-        role = "agent" if root == "agents" else root if root in {"control_plane", "storage"} else "site"
-        checks.append(failure(detail["type"], location=location, role=role))
+                location += "." + (part if part in safe_names else "<unknown>")
+        root = detail["loc"][0] if detail["loc"] else default_role
+        role = "agent" if root == "agents" else root if root in {"control_plane", "storage"} else default_role
+        checks.append(failure(detail["type"], location=location, role=role, check_id=check_id))
     return checks
 
 
