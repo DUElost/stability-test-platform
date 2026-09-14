@@ -23,7 +23,10 @@ vi.mock('@/utils/api', async (importOriginal) => {
       ...actual.api,
       projects: {
         ...actual.api.projects,
+        // #709 起选择器/批量归入弹窗走 listActive（归档默认过滤）；#1935：
+        // 原 mock 只覆盖 list，弹窗实际查 listActive → 选项为空误红。
         list: (...args: unknown[]) => mockProjectsList(...args),
+        listActive: (...args: unknown[]) => mockProjectsList(...args),
       },
       devices: {
         ...actual.api.devices,

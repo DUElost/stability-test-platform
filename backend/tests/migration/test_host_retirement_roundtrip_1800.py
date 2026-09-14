@@ -1,8 +1,12 @@
 """#1800 / ADR-0038 ①：host 退役四列的迁移往返与结构契约。
 
-覆盖验收：additive nullable、无回填、单 head（离线读）、upgrade → downgrade -1
-→ 再 upgrade 往返；并断言 ORM 与迁移两侧列名/类型一致（check_schema_sync 的
-运行时对偶）。
+覆盖验收：additive nullable、无回填、单 head（离线读）、upgrade head →
+downgrade 至本迁移的父 revision → 再 upgrade 往返；并断言 ORM 与迁移两侧
+列名/类型一致（check_schema_sync 的运行时对偶）。
+
+#1935 修正：原断言假设本迁移 == head、用 `downgrade -1` 撤列；#1890/#1907
+在其上续接迁移后 head 前移，两处都误红。现改为「本迁移仍在 head 祖先链上」
++ 显式 downgrade 到本迁移的父 revision（revision 不可变，父版本稳定）。
 
 测试基建对齐 tools/dev/check_pr_migrate.py 与 #935 先例：docker 可用 →
 postgres:16 一次性容器真跑 alembic；不可用 → SKIP（不假绿）。
@@ -13,6 +17,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -23,8 +28,11 @@ PGDB = "stp_1800_retire"
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), "..", "..")
 PY = sys.executable
 
-#: 本次迁移的 revision（新列挂在它上面；downgrade -1 即撤掉本迁移）
+#: 本次迁移的 revision（新列挂在它上面）
 RETIRE_REV = "f3a4b5c6d7e8"
+#: 本迁移的父 revision——撤列目标（已发布 revision 不可变，此值稳定；
+#: 不用相对 `-1`：#1890/#1907 之后 head 前移，`-1` 撤的是别的迁移）。
+RETIRE_DOWN_REV = "a3b2c1d0e9f8"
 RETIRE_COLUMNS = ("retired_at", "retired_by", "retire_reason", "retire_alerted_at")
 
 docker_ready = pytest.mark.skipif(
@@ -82,20 +90,37 @@ def _host_columns(url: str) -> dict[str, tuple[str, str]]:
 
 
 def test_single_head_offline():
-    """单 head 且本迁移在 head 之列（离线读脚本目录，不需要 DB）。"""
-    heads = subprocess.run(
-        [PY, "-m", "alembic", "heads"],
-        cwd=BACKEND_DIR, capture_output=True, text=True,
-    )
-    assert heads.returncode == 0, heads.stderr
-    lines = [ln for ln in heads.stdout.splitlines() if ln.strip()]
-    assert len(lines) == 1, f"alembic heads 必须单头，实际：{lines}"
-    assert lines[0].split()[0] == RETIRE_REV
+    """单 head，且本迁移仍在 head 的祖先链上（离线读脚本目录，不需要 DB）。
+
+    不断言 ``RETIRE_REV == head``——#1890/#1907 在链上续接迁移后 head 前移，
+    「本迁移仍在链上」才是本测试的本意（原断言在 head 前移后误红，#1935）。
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(Path(BACKEND_DIR) / "alembic.ini"))
+    cfg.set_main_option("script_location", str(Path(BACKEND_DIR) / "alembic"))
+    script = ScriptDirectory.from_config(cfg)
+
+    heads = script.get_heads()
+    assert len(heads) == 1, f"alembic heads 必须单头，实际：{heads}"
+
+    lineage: set[str] = set()
+    pending = [heads[0]]
+    while pending:
+        rev = script.get_revision(pending.pop())
+        lineage.add(rev.revision)
+        down = rev.down_revision
+        if isinstance(down, tuple):
+            pending.extend(down)
+        elif down:
+            pending.append(down)
+    assert RETIRE_REV in lineage, f"{RETIRE_REV} 不在 head {heads[0]} 的祖先链上"
 
 
 @docker_ready
 def test_retirement_columns_roundtrip():
-    """upgrade head → 四列存在且可空 → downgrade -1 撤列 → 再 upgrade 恢复。"""
+    """upgrade head → 四列存在且可空 → downgrade 到父 revision 撤列 → 再 upgrade 恢复。"""
     container, url = _start_pg()
     try:
         up = _alembic(url, "upgrade", "head")
@@ -119,7 +144,7 @@ def test_retirement_columns_roundtrip():
             cur.execute("SELECT retired_at FROM host WHERE id = 'h-1800'")
             assert cur.fetchone() == (None,)
 
-        down = _alembic(url, "downgrade", "-1")
+        down = _alembic(url, "downgrade", RETIRE_DOWN_REV)
         assert down.returncode == 0, down.stderr
         columns_after = _host_columns(url)
         for name in RETIRE_COLUMNS:
