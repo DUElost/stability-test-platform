@@ -3441,3 +3441,96 @@ async def test_recovery_sync_abort_requested_blocks_unknown_resume():
     finally:
         _cleanup_seed(seed)
         _cleanup_recovery_host(host_id)
+
+
+# ── #1805 矩阵 row 12：退役主机的 recovery/sync 不得复活在飞作业（ADR-0038 D5bis）──
+
+
+def _recovery_retired_setup(host_id: str, boot_id: str, instance_id: str) -> dict:
+    """建 host（可随后置退役）+ job/device/ACTIVE lease，供 recovery 用例复用。"""
+    _seed_recovery_host(host_id, boot_id=boot_id, instance_id=instance_id)
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    db_sync = SessionLocal()
+    try:
+        job = db_sync.get(JobInstance, seed["job_id"])
+        device = db_sync.get(Device, seed["device_id"])
+        device.host_id = host_id
+        device.status = "BUSY"
+        job.host_id = host_id
+        db_sync.commit()
+        db_sync.add(DeviceLease(
+            device_id=seed["device_id"], job_id=seed["job_id"], host_id=host_id,
+            lease_type=LeaseType.JOB.value, status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{seed['device_id']}:1",
+            agent_instance_id="legacy-adopt", lease_generation=1,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+        ))
+        db_sync.commit()
+    finally:
+        db_sync.close()
+    return seed
+
+
+def _retire_host(host_id: str) -> None:
+    db_sync = SessionLocal()
+    try:
+        h = db_sync.get(Host, host_id)
+        h.retired_at = datetime.now(timezone.utc)
+        db_sync.commit()
+    finally:
+        db_sync.close()
+
+
+def _recovery_payload(host_id: str, boot_id: str, instance_id: str, seed: dict) -> "_RecoverySyncIn":
+    return _RecoverySyncIn(
+        host_id=host_id, agent_instance_id=instance_id, boot_id=boot_id,
+        active_jobs=[_ActiveJobEntry(
+            job_id=seed["job_id"], device_id=seed["device_id"],
+            fencing_token=f"{seed['device_id']}:1",
+        )],
+    )
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_recovery_sync_retired_host_aborts_instead_of_resuming():
+    """退役主机的在飞作业**不得**被 recovery RESUME（否则绕过 D5bis 的收敛）。
+
+    实测修复前为 ``RESUME/same_boot_instance_takeover``——即退役机的作业被
+    recovery 复活，与 D5bis「活读 retired_at + 显式 HOST_RETIRED 收敛」冲突。
+    """
+    host_id = f"rec-retired-{uuid4().hex[:8]}"
+    boot_id, instance_id = uuid4().hex, uuid4().hex
+    seed = _recovery_retired_setup(host_id, boot_id, instance_id)
+    try:
+        _retire_host(host_id)
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(
+                _recovery_payload(host_id, boot_id, instance_id, seed),
+                db=async_db, _=None,
+            )
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "ABORT_LOCAL"
+        assert actions[0]["reason"] == "host_retired"
+        assert actions[0]["action"] != "RESUME", "退役主机被 recovery 复活"
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_recovery_sync_active_host_still_resumes():
+    """负向对照：活跃主机仍照常 RESUME——修复不得把正常恢复一并禁掉。"""
+    host_id = f"rec-active-{uuid4().hex[:8]}"
+    boot_id, instance_id = uuid4().hex, uuid4().hex
+    seed = _recovery_retired_setup(host_id, boot_id, instance_id)
+    try:
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(
+                _recovery_payload(host_id, boot_id, instance_id, seed),
+                db=async_db, _=None,
+            )
+        assert result.data["actions"][0]["action"] == "RESUME"
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
