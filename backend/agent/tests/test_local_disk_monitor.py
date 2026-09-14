@@ -263,15 +263,19 @@ def test_batch_cap_schedules_catchup(tmp_path):
         ("-inf", 30.0),
     ],
 )
-def test_parse_spill_catchup_interval_guards(monkeypatch, raw, expected):
-    """#1710：非法/非有限 env 回落默认，不得在 import 期抛 ValueError。"""
-    from backend.agent.local_disk_monitor import _parse_spill_catchup_interval
+def test_spill_catchup_interval_tolerance_lives_in_settings(disk_env, raw, expected):
+    """#1710 语义随迁（ADR-0042 P2）：非法/非有限 env 回落默认，不得拖垮启动。
+
+    迁移前测的是 local_disk_monitor._parse_spill_catchup_interval；解析与默认值
+    已收敛到 DiskArchiveSettings 的宽容 validator。
+    """
+    from backend.agent.settings import get_disk_archive_settings
 
     if raw is None:
-        monkeypatch.delenv("STP_HDD_SPILL_CATCHUP_INTERVAL", raising=False)
+        disk_env.unset("STP_HDD_SPILL_CATCHUP_INTERVAL")
     else:
-        monkeypatch.setenv("STP_HDD_SPILL_CATCHUP_INTERVAL", raw)
-    assert _parse_spill_catchup_interval() == expected
+        disk_env.set("STP_HDD_SPILL_CATCHUP_INTERVAL", raw)
+    assert get_disk_archive_settings().stp_hdd_spill_catchup_interval == expected
 
 
 def test_drops_below_target_uses_regular_interval(tmp_path):

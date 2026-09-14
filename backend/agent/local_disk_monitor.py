@@ -14,67 +14,13 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import threading
 from typing import Any, Dict, Optional
 
 
 logger = logging.getLogger(__name__)
 
-
-def _parse_spill_catchup_interval(default: float = 30.0) -> float:
-    """#1710：类体 float(env) 在 import 期求值——非法值不得拖垮 Agent 启动。"""
-    raw = (os.getenv("STP_HDD_SPILL_CATCHUP_INTERVAL") or "").strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        logger.warning(
-            "invalid STP_HDD_SPILL_CATCHUP_INTERVAL=%r; using default %.1f",
-            raw,
-            default,
-        )
-        return default
-    if not math.isfinite(value):
-        logger.warning(
-            "non-finite STP_HDD_SPILL_CATCHUP_INTERVAL=%r; using default %.1f",
-            raw,
-            default,
-        )
-        return default
-    return value
-
-
-def _parse_positive_int_env(name: str, default: int) -> int:
-    """Import-safe positive int env (#741 critical batch / #1710 pattern)."""
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        logger.warning("invalid %s=%r; using default %d", name, raw, default)
-        return default
-    if value <= 0:
-        logger.warning("non-positive %s=%r; using default %d", name, raw, default)
-        return default
-    return value
-
-
-def _parse_pct_env(name: str, default: float) -> float:
-    raw = (os.getenv(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        logger.warning("invalid %s=%r; using default %.1f", name, raw, default)
-        return default
-    if not math.isfinite(value) or not 0.0 <= value <= 100.0:
-        logger.warning("out-of-range %s=%r; using default %.1f", name, raw, default)
-        return default
-    return value
+from .settings import get_disk_archive_settings
 
 
 class HddSpillMonitor:
@@ -88,15 +34,23 @@ class HddSpillMonitor:
     # （#1522：原实现 20/300s 的净速率 4 目录/分钟，积压超过该速率时水位
     # 无回落路径）。
     _MAX_SPILL_PER_CYCLE = 20
-    # #741：临界水位放大单批预算——追打已覆盖常态积压；≥98% 时单轮 20
-    # 仍可能来不及在下一 catch-up 前把水位拉离「进程被 OOM/写失败」边缘。
-    _CRITICAL_USAGE_PCT = _parse_pct_env("STP_HDD_SPILL_CRITICAL_PCT", 98.0)
-    _MAX_SPILL_CRITICAL = _parse_positive_int_env(
-        "STP_HDD_SPILL_CRITICAL_BATCH", 100,
-    )
-    # 追打间隔（秒）：本轮有腾退产出但水位仍高于 target 时，下一轮不等满
-    # interval。0 或负值回退 interval（禁用追打的逃生阀）。
-    _SPILL_CATCHUP_INTERVAL = _parse_spill_catchup_interval()
+    # ADR-0042 P2：三个旋钮收敛到 DiskArchiveSettings（宽容解析随迁），
+    # 以惰性 property 暴露——保持既有 `mon._CRITICAL_USAGE_PCT` 等读取点不变，
+    # 且不在 import 期读 env（D4）。
+    @property
+    def _CRITICAL_USAGE_PCT(self) -> float:
+        """#741：临界水位（≥此值放大单批预算）。"""
+        return get_disk_archive_settings().stp_hdd_spill_critical_pct
+
+    @property
+    def _MAX_SPILL_CRITICAL(self) -> int:
+        """#741：临界水位下的单批上限。"""
+        return get_disk_archive_settings().stp_hdd_spill_critical_batch
+
+    @property
+    def _SPILL_CATCHUP_INTERVAL(self) -> float:
+        """#1522：高水位未回落时的追打间隔（0/负值 = 禁用追打）。"""
+        return get_disk_archive_settings().stp_hdd_spill_catchup_interval
 
     def __init__(self) -> None:
         self._hdd_root: str = ""
