@@ -39,8 +39,10 @@ groups:
 
       # #77：理论漂移率 = 0——任何漂移都说明有入口绕开集中 terminalization
       # 或出现并发 race。P3 warning（需排查但非即时）。
+      # #1927：先 sum by (mode) 归并——逐 series 阈值会在系统性漂移时按
+      # run 实例化告警风暴（label 已收敛为 mode，此处防御性聚合）。
       - alert: StabilityPlanRunCounterDrift
-        expr: increase(stability_plan_run_counter_drift_total[1h]) > 0
+        expr: sum by (mode) (increase(stability_plan_run_counter_drift_total[1h])) > 0
         for: 5m
         labels:
           severity: warning

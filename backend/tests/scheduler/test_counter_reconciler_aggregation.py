@@ -82,8 +82,9 @@ def test_reconcile_emits_counter_drift_metric():
     mock_db.query.return_value.filter.return_value.all.return_value = jobs
 
     def _value(mode: str) -> float:
+        # #1927：label 只剩 mode（plan_run_id 已收敛为日志维度）
         return plan_run_counter_drift_total.labels(
-            plan_run_id="4242", mode=mode,
+            mode=mode,
         )._value.get()
 
     before = {m: _value(m) for m in ("terminal", "completed", "failed", "aborted")}
