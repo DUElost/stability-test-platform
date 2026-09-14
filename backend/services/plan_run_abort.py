@@ -529,12 +529,18 @@ def abort_plan_run(
                     abort_jobs_by_host[job.host_id].append(job.id)
 
             # Refresh requested_job_ids only (pending jobs are already terminal).
-            if host_id is not None:
-                refreshed_requested = list(
-                    dict.fromkeys(existing_requested + abort_requested_jobs)
-                )
-            else:
-                refreshed_requested = list(abort_requested_jobs)
+            # #1924：与**锁内现值** merge——#703 的放锁窗口里并发 host 级 abort
+            # 可能已按 "merged, not replaced" 契约并入条目（本函数 docstring），
+            # 任一分支整写快照都会把它覆盖掉。re-lock 后 run_ctx 是新鲜读，
+            # merge 只增不删，语义安全；host 分支此前用的 existing_requested
+            # 是放锁前的旧读，同样有窗口，一并改为现值。
+            current_requested = list(
+                (run_ctx.get("abort_requested") or {}).get("requested_job_ids")
+                or []
+            )
+            refreshed_requested = list(
+                dict.fromkeys(current_requested + abort_requested_jobs)
+            )
             run_ctx.setdefault("abort_requested", {})
             if isinstance(run_ctx.get("abort_requested"), dict):
                 run_ctx["abort_requested"]["requested_job_ids"] = refreshed_requested
