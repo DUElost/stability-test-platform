@@ -68,13 +68,18 @@ const VENDOR_SUBTYPES = new Set([
   'OCP Reboot',
 ]);
 
+/** #1956：展锐（UNIVIEW）与 AEE 家族会出现同名 subtype（如 ANR），标签带来源前缀以区分。 */
 function subtypeLabel(item: Pick<SubtypeDistribution, 'subtype' | 'group'>): string {
+  if (item.group === 'UNIVIEW') return `UNIVIEW · ${item.subtype}`;
   if (item.subtype === '其他' && item.group === 'VENDOR_AEE') return 'Vendor 其他';
   return item.subtype;
 }
 
 function subtypeColor(item: Pick<SubtypeDistribution, 'subtype' | 'group'>): string {
-  return aeeSubtypeChartColor(subtypeLabel(item));
+  // 色板键必须用原始 subtype：标签可能带 UNIVIEW 前缀，拿去查色板会落回「其他」灰。
+  const paletteKey =
+    item.subtype === '其他' && item.group === 'VENDOR_AEE' ? 'Vendor 其他' : item.subtype;
+  return aeeSubtypeChartColor(paletteKey);
 }
 
 function formatCompactValue(value: string | null | undefined): string {
@@ -88,7 +93,12 @@ function formatSharePercent(share: number): string {
   return fixed.replace(/\.?0+$/, '');
 }
 
-function inferSubtypeGroup(subtype: string): 'AEE' | 'VENDOR_AEE' {
+/** #1956：优先采用后端给出的 group；仅在缺失时按 subtype 兜底推断。 */
+function inferSubtypeGroup(
+  subtype: string,
+  group?: string,
+): 'AEE' | 'VENDOR_AEE' | 'UNIVIEW' {
+  if (group === 'UNIVIEW' || group === 'VENDOR_AEE' || group === 'AEE') return group;
   return VENDOR_SUBTYPES.has(subtype) ? 'VENDOR_AEE' : 'AEE';
 }
 
@@ -115,7 +125,7 @@ function buildPackageDistribution(breakdown: PackageSubtypeCount[]): SubtypeDist
     .filter((item) => item.count > 0)
     .map((item) => ({
       subtype: item.subtype,
-      group: inferSubtypeGroup(item.subtype),
+      group: inferSubtypeGroup(item.subtype, item.group),
       count: item.count,
       share: total > 0 ? item.count / total : 0,
     }))
@@ -140,13 +150,16 @@ function PackageSubtypeDots({ row, active }: { row: PackageRanking; active: bool
   return (
     <div className="flex items-center gap-2 flex-wrap">
       {items.map((item) => (
-        <span key={item.subtype} className="inline-flex items-center gap-1">
+        <span
+          key={`${item.group ?? 'AEE'}-${item.subtype}`}
+          className="inline-flex items-center gap-1"
+        >
           <span
             className="h-2 w-2 shrink-0 rounded-full"
             style={{ backgroundColor: aeeSubtypeChartColor(item.subtype) }}
           />
           <span className={cn('text-xs', active ? 'text-muted-foreground/70' : TEXT.subtitle)}>
-            {item.subtype} {item.count}
+            {item.group === 'UNIVIEW' ? `UNIVIEW · ${item.subtype}` : item.subtype} {item.count}
           </span>
         </span>
       ))}
@@ -570,7 +583,7 @@ export default function AnomalyDashboard({
               异常仪表盘
             </h2>
             <p className={cn('mt-1 text-sm', TEXT.subtitle)}>
-              聚焦 AEE / Vendor AEE 细分异常与高风险包名
+              聚焦 AEE / Vendor AEE / UNIVIEW 细分异常与高风险包名
             </p>
           </div>
           <div
@@ -707,8 +720,8 @@ export default function AnomalyDashboard({
                   ) : (
                     <InlineEmpty chart>
                       {supportsOriginSplit
-                        ? '当前范围内未发现新增 AEE / Vendor AEE 异常'
-                        : '当前范围内未发现 AEE / Vendor AEE 异常'}
+                        ? '当前范围内未发现新增 AEE / Vendor AEE / UNIVIEW 异常'
+                        : '当前范围内未发现 AEE / Vendor AEE / UNIVIEW 异常'}
                     </InlineEmpty>
                   )}
                 </div>

@@ -1509,8 +1509,10 @@ class TestWatcherSummaryEndpoint:
         assert current_run["top_subtype"] == "JE"
         assert current_run["package_ranking"][0]["package_name"] == "com.runtime.camera"
         assert current_run["package_ranking"][0]["total_count"] == 2
+        # #1956：细分组新增 group（同名 subtype 可能来自不同平台分组，需可区分）
         assert current_run["package_ranking"][0]["subtype_breakdown"][0] == {
             "subtype": "JE",
+            "group": "AEE",
             "count": 2,
         }
         subtype_dist = {

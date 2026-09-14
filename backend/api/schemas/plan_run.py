@@ -298,6 +298,9 @@ class AeeBreakdownOut(BaseModel):
 
 class PackageSubtypeCountOut(BaseModel):
     subtype: str
+    # #1956：同一 subtype 可能同时来自不同平台分组（例如 AEE 的 ANR 与 UNIVIEW 的 ANR），
+    # 因此带上 group，前端据此上色/合并，避免把展锐 ANR 混进 MTK 的 ANR 桶。
+    group: str = "AEE"
     count: int
 
 
