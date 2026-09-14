@@ -245,6 +245,58 @@ def render_block(reads: dict[str, dict], registered: set[str]) -> str:
     return "\n".join(lines)
 
 
+def semantic_signature(reads: dict[str, dict], registered: set[str]) -> dict[str, tuple]:
+    """语义签名：名称 → (默认, 是否登记, 类别)。**不含行号**。
+
+    为什么：读取点行号会随无关 PR 加行而平移，把「加了一行注释」判成清单漂移
+    会造成无关 PR 的 required check 误红（2026-09-14 #1952 实证）。门禁只对
+    语义变化负责；行号列是 `--write` 时刷新的导航快照。
+    """
+    signature: dict[str, tuple] = {}
+    for name, entry in reads.items():
+        signature[name] = (
+            entry["default"],
+            name in registered,
+            "测试" if entry["test_only"] else "运行时",
+        )
+    return signature
+
+
+def doc_signature(doc_text: str) -> dict[str, tuple]:
+    """从文档生成块解析语义签名（表列：变量 | 默认 | 示例 | 类别 | 读取点）。"""
+    inner = doc_text.partition(BEGIN_MARK)[2].partition(END_MARK)[0]
+    row = re.compile(
+        r"^\| `([A-Z][A-Z0-9_]+)` \| `([^`]*)` \| (✅|—) \| (运行时|测试) \|"
+    )
+    signature: dict[str, tuple] = {}
+    for line in inner.splitlines():
+        match = row.match(line)
+        if match:
+            name, default, flag, category = match.groups()
+            signature[name] = (default, flag == "✅", category)
+    return signature
+
+
+def signature_diff(
+    expected: dict[str, tuple], actual: dict[str, tuple], limit: int = 20,
+) -> list[str]:
+    """人类可读的语义差异（expected=代码计算，actual=文档现状）。"""
+    issues: list[str] = []
+    for name in sorted(set(actual) - set(expected)):
+        issues.append(f"{name}：文档有、代码已无读取点（删行或刷新文档）")
+    for name in sorted(set(expected) - set(actual)):
+        issues.append(f"{name}：代码新增读取名、文档未登记（登记或内部声明后 --write）")
+    for name in sorted(set(expected) & set(actual)):
+        exp, act = expected[name], actual[name]
+        if exp[0] != act[0]:
+            issues.append(f"{name}：默认值变化 {act[0]!r} → {exp[0]!r}")
+        if exp[1] != act[1]:
+            issues.append(f"{name}：登记状态变化（文档示例列={act[1]}，代码侧={exp[1]}）")
+        if exp[2] != act[2]:
+            issues.append(f"{name}：类别变化 {act[2]} → {exp[2]}")
+    return issues[:limit]
+
+
 def _replace_block(doc_text: str, block: str) -> str:
     if BEGIN_MARK not in doc_text or END_MARK not in doc_text:
         raise SystemExit(f"文档缺少生成块 marker：{BEGIN_MARK} / {END_MARK}")
@@ -308,12 +360,16 @@ def main() -> int:
             for item in issues:
                 print(f"        - {item}", file=sys.stderr)
             return 1
-        current = doc_text.partition(BEGIN_MARK)[2].partition(END_MARK)[0]
-        expected = block.partition(BEGIN_MARK)[2].partition(END_MARK)[0]
-        if current != expected:
+        expected = semantic_signature(reads, example_keys())
+        actual = doc_signature(doc_text)
+        issues = signature_diff(expected, actual) if expected != actual else []
+        if issues:
+            print("[FAIL] 环境变量清单语义漂移：", file=sys.stderr)
+            for item in issues:
+                print(f"        - {item}", file=sys.stderr)
             print(
-                "[FAIL] 环境变量清单漂移：代码读取名与文档生成块不一致。\n"
-                "        处置：python tools/dev/env_inventory.py --write 后提交文档。",
+                "        处置：登记/声明后 `python tools/dev/env_inventory.py --write` 提交文档；"
+                "纯行号平移不触发本门禁。",
                 file=sys.stderr,
             )
             return 1
