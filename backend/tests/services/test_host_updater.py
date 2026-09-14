@@ -627,3 +627,24 @@ def test_batch_direct_converged_no_op_skips_gate_and_ssh(monkeypatch):
     assert calls["exec"] == 0
     assert calls["gate"] == 0
     assert calls["finalize"] == 1
+
+
+def test_build_remote_script_protects_resources_tree():
+    """#1950 / ADR-0040 §4.3 P2 前置：legacy 路径 resources/ 只防删除不拦同步。
+
+    exclude+protect 会立即停掉 resources 分发（P2 独立通道尚不存在），故
+    legacy rsync 只加 protect 过滤；wrapper 路径语义见
+    tests/test_agent_priv_boundary.py::test_wrapper_protect_only_paths。
+    """
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        tar_path="/tmp/stp-agent-update.tar.gz",
+        user="android",
+        group="android",
+    )
+
+    assert "--filter='protect resources/'" in script
+    # mtbf 语义不变：exclude（不同步）；非 mtbf resources 不被 exclude（继续同步）
+    assert "--exclude='resources/mtbf/'" in script
+    assert "--exclude='resources/'" not in script

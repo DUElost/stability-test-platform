@@ -76,6 +76,11 @@ FIXED_EXCLUDES = [
 ]
 # 主机本地资源：不传输 + 不被 --delete-excluded 删除（#1248 语义）
 HOST_LOCAL_PATHS = ["resources/mtbf/"]
+# ADR-0040 §4.3 P2 前置（#1950）：resources/ 仅加 protect（防 --delete 清掉
+# 229MB 大件），**不 exclude**——载荷仍携带 resources/ 期间分发照旧；P2 载荷
+# 收缩（agent-code 剔除 resources/）后分发自然停止、保护已在位。mtbf/ 的
+# protect 语义被 resources/ 传递覆盖，其 exclude 仍必需。
+PROTECT_ONLY_PATHS = ["resources/"]
 
 
 class PrivError(RuntimeError):
@@ -468,6 +473,9 @@ def cmd_apply_code(args, conf):
         argv.append("--exclude=%s" % item)
     for item in HOST_LOCAL_PATHS:
         argv.append("--exclude=%s" % item)
+        argv.append("--filter=protect %s" % item)
+    for item in PROTECT_ONLY_PATHS:
+        # 只防删除不拦同步（#1950：载荷仍携带 resources/ 期间分发照旧）
         argv.append("--filter=protect %s" % item)
     staged_fd = _open_directory(staged)
     try:

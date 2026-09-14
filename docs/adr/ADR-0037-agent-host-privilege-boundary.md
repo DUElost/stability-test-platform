@@ -52,7 +52,11 @@
   源文件/暂存目录必须为调用者属主、schema 必须通过 JSON 结构校验、
   版本/SHA 走字符集正则、`chown -R -h`（symlink 不 deref）、rsync 使用
   `--safe-links` 与固定 excludes（含 `resources/mtbf/` 的
-  exclude+protect，#1248 语义）。
+  exclude+protect，#1248 语义）；`PROTECT_ONLY_PATHS`（当前
+  `resources/`，ADR-0040 §4.3 P2 前置，#1950 按 §7-5 同 PR 回填）仅追加
+  `--filter=protect` 不 exclude——防 `--delete` 清掉大件的同时保持分发
+  照旧，P2 载荷收缩后自然停发（legacy 路径以
+  `--filter='protect resources/'` 对称）。
 - **D3 存量迁移**：install 链（`install_agent.sh` 内 bootstrap）与
   `update_agent.yml`（Ansible `become`）都部署 wrapper 并生成/重写
   conf 与 sudoers（visudo 校验后原子替换，失败即中止）。迁移期热更新检测
