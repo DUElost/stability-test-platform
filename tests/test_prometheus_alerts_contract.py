@@ -34,6 +34,13 @@ _TOKEN_RE = re.compile(
 )
 _LABEL_RE = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*=")
 
+# #1927：聚合前缀（`sum by (mode) (...)` 等）——先剥掉再扫 token，
+# 否则 sum/by/mode 会被误当成指标名/标签选择器。
+_AGG_PREFIX_RE = re.compile(
+    r"\b(sum|avg|min|max|count|stddev|stdvar|topk|bottomk|quantile)\s+"
+    r"(?:by|without)\s*\([^)]*\)\s*",
+)
+
 
 def _alert_exprs() -> list[tuple[str, str]]:
     data = yaml.safe_load(ALERTS.read_text(encoding="utf-8"))
@@ -50,17 +57,18 @@ def _alert_exprs() -> list[tuple[str, str]]:
 def _selectors(expr: str) -> list[tuple[str, list[str]]]:
     """从本仓库用到的 PromQL 形态中提取 (指标名, 标签名列表)。
 
-    跳过函数名（后随 ``(``），忽略标签块内部文本。
+    跳过函数名（后随 ``(``）与聚合前缀（``sum by (mode)``），忽略标签块内部文本。
     """
     selectors: list[tuple[str, list[str]]] = []
     covered_until = -1
-    for match in _TOKEN_RE.finditer(expr):
+    stripped = _AGG_PREFIX_RE.sub("( ) ", expr)
+    for match in _TOKEN_RE.finditer(stripped):
         if match.start() < covered_until:
             continue
         if match.group("labels") is not None:
             covered_until = match.end()
         name = match.group("name")
-        if expr[match.end():].lstrip().startswith("("):
+        if stripped[match.end():].lstrip().startswith("("):
             continue
         labels = [m.group(1) for m in _LABEL_RE.finditer(match.group("labels") or "")]
         selectors.append((name, labels))
