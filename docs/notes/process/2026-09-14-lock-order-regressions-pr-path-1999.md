@@ -92,10 +92,14 @@ runtime_database_url=os.getenv("DATABASE_URL"))`——同库直接拒载（pytes
 - **仓库面**：`pytest tests/ -q` → **566 passed**；`ruff check` 通过；
   `check_governance_surface.py --check` → `[OK]`；`check_invariant_diff.py --base origin/main`
   → 新增行无不变量违规；`yaml.safe_load(ci.yml)` 可解析且 job 集合完整。
-- **尚未验证（事实边界）**：本机无 docker（未起 PG service 模拟 CI），因此**该步骤在
-  GitHub Actions 上的实跑结果未在本轮取得**——它由本 PR 的 `pull_request` 事件真实执行
-  （`workflow_dispatch` 不会触发 PR job，故不能用来验证）。这正是本单要补的盲区，其结论
-  以该 PR 的 `pr-migrate-empty-db` check 为准。
+- **GitHub Actions 实跑**（本 PR 的 `pull_request` 事件，job `pr-migrate-empty-db`
+  104022241707）：新步骤输出 **`5 passed, 1 warning in 4.81s`** —— 用例**确实执行**，
+  不是 sqlite skip 的假绿；`env -u DATABASE_URL` 有效绕开了 conftest 导入期的同库拒载。
+  该 job 总耗时 52s；同 PR 的 `pr-agent-tests`（含新增根契约测试）3m33s、`lint` 38s、
+  `pr-typecheck` 33s、`pr-compileall` 10s，全绿。
+- **本机为何不做这一步**：本机无 docker，起不了 PG service 模拟该 job；而
+  `workflow_dispatch` 不会触发 `if: github.event_name == 'pull_request'` 的 job，也无法
+  用它验证。也就是说这次 PR 事件本身就是本单的验证手段，而不是事后补充。
 
 ## Revisit
 
