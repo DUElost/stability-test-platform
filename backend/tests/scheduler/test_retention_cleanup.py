@@ -22,10 +22,10 @@ from backend.scheduler import cron_scheduler
 
 
 @pytest.fixture
-def cleanup_env(db_session, monkeypatch, tmp_path):
+def cleanup_env(db_session, monkeypatch, scheduler_env, tmp_path):
     from backend.realtime import log_writer
 
-    monkeypatch.setattr(cron_scheduler, "PLAN_RUN_RETENTION_DAYS", 0)
+    scheduler_env("PLAN_RUN_RETENTION_DAYS", "0")
     monkeypatch.setattr(cron_scheduler, "SessionLocal", lambda: db_session)
     monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path / "retention-storage"))
     monkeypatch.setattr(log_writer, "LOG_BASE_DIR", tmp_path / "console")
