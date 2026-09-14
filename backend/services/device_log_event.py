@@ -29,6 +29,42 @@ _REMOTE_STATES = (
 
 # Clock skew / late upload grace around PlanRun window for unassigned attach (#213 B3).
 _ASSOCIATE_GRACE = timedelta(minutes=30)
+# #1962：同一宽限也用于「异常仪表盘」的时间窗口。终态 run 的事件可能在 run
+# **结束之后**才落库（reconciler 首 tick 的 ls+pull 可能慢于 job 生命周期），
+# 原窗口 [started_at, ended_at] 会把本轮自己的事件整片丢弃 —— 表现为
+# 「DLE 有行、仪表盘 0」。这里公开同一常量，避免两处又各写一个宽限值。
+LATE_EVENT_GRACE = _ASSOCIATE_GRACE
+
+# #1956：无 scan 门禁的平台事件类型。
+#
+# MTK（AEE 家族）的上送由控制面 ``upload_task`` 依 **scan xls 引用**标记 UPLOAD_PENDING
+# 触发；展锐（UNIVIEW）**没有 scan 产物**，于是其事件永远停在 LOCAL——
+# 而 LOCAL 在本模型的语义是「有 scan 但未被引用 → 有意不传」（见上方
+# ``count_pending_upload_events`` 注释），属语义误用。
+#
+# 展锐事件的「有效性」由 Agent 侧解析期判定（#1946：normalboot-only 目录直接丢弃），
+# 因此入库即可上送；这与 ``saq_tasks`` 里「barrier 需等 UNISOC uploads land」的
+# 既有预期一致。
+_NO_SCAN_GATE_EVENT_TYPES = frozenset({"UNIVIEW"})
+# 尚未进入上送流程的「等待」态：只有它们才允许被提升为 UPLOAD_PENDING。
+_AWAITING_UPLOAD_STATES = frozenset({"DETECTED", "LOCAL"})
+
+
+def resolve_initial_upload_state(event_type: str, requested_state: str) -> str:
+    """决定事件入库时的初始状态（#1956）。
+
+    无 scan 门禁的平台（UNIVIEW）在不处于上送流程的等待态时，直接提升为
+    ``UPLOAD_PENDING``，由 Agent 的 EventUploader 上送；其余情况原样返回，
+    保持 MTK 的「scan 引用后才传」语义不变。
+    """
+    normalized_type = str(event_type or "").strip().upper()
+    normalized_state = str(requested_state or "").strip().upper()
+    if (
+        normalized_type in _NO_SCAN_GATE_EVENT_TYPES
+        and normalized_state in _AWAITING_UPLOAD_STATES
+    ):
+        return "UPLOAD_PENDING"
+    return requested_state
 
 
 def count_pending_upload_events(db: Session, plan_run_id: int) -> int:

@@ -206,3 +206,26 @@ groups:
             sustained rate.  This is the #729 形态：旧 Agent/客户端在打已不存在的
             `/complete` 端点。核对 Agent 版本与中心路由表；处置前先读
             docs/operations/control-plane-db-maintenance.md（不要手动删 job 行）。
+
+  - name: stability-platform-database
+    rules:
+      # #1958：Job/Lease 锁序死锁曾持续复发约四周，而平台侧零指标零告警——
+      # 它只在 PostgreSQL 服务端日志里可见，受害事务还可能被上层通用 except
+      # 吞掉（回收器的逐候选失败分支即如此），业务侧只剩零散 500。
+      # 稳态为 0：出现即说明两条并发路径对同一批行以相反顺序加锁（环路等待），
+      # PG 已回滚其中一方。
+      - alert: StabilityDbDeadlockDetected
+        expr: increase(stability_db_deadlock_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Backend observed a PostgreSQL deadlock (SQLSTATE 40P01)
+          description: >-
+            Backend 观察到数据库死锁增量。先核对同一批行上两条并发路径的加锁
+            顺序是否相反（必须全局同一全序）：租约/作业类是
+            POST /agent/leases/extend-batch（Job→Lease）与
+            backend/scheduler/device_lease_reconciler.py 的过期回收；
+            终态化类是 plan_run / plan_run_host / job_instance。
+            注意被回滚的一方可能把异常吞进通用 except（日志会记成别的 error
+            名），不要只按业务返回码判断。

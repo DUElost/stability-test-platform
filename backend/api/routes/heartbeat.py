@@ -244,6 +244,9 @@ def _process_heartbeat_with_db(
     # 空值不覆盖——digest 缺失（未部署新协议/文件损坏）不应抹掉已知状态。
     if payload.agent_artifact_digest:
         host.agent_artifact_digest = payload.agent_artifact_digest
+    # ADR-0040 P2 (#1963)：host-resources 身份落显式列（空值不覆盖，同上语义）。
+    if payload.agent_resources_digest:
+        host.agent_resources_digest = payload.agent_resources_digest
 
     # ADR-0038 D4：退役主机心跳——**如实记录**（上面的 status / last_heartbeat /
     # 版本 / 身份照常更新，本函数从不触碰 retired_at = 不自动解除退役），
