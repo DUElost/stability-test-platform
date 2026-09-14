@@ -11,7 +11,7 @@ sqlalchemy[asyncio]>=2.0.52,<3.0
 pydantic>=2.13.4,<3.0
 # ADR-0042：配置读取收敛的分域 Settings 载体（v1.0 裁决引入；仅读 os.environ，
 # env_file=None，不启用自带 dotenv 加载——来源与优先级仍由 backend/core/env_source.py 唯一决定）
-pydantic-settings>=2.10,<3.0
+pydantic-settings>=2.15.0,<3.0
 python-multipart>=0.0.32
 python-dotenv>=1.2.2
 requests>=2.34.2,<3.0
