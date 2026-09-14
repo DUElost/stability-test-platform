@@ -74,6 +74,26 @@ def test_wrapper_fixed_policy_flags():
     assert "--dest" not in text
 
 
+def test_wrapper_protect_only_paths():
+    """#1950 / ADR-0040 §4.3 P2 前置：resources/ 只防删除、不拦同步。
+
+    HOST_LOCAL_PATHS 的 exclude+protect 对会让 rsync 停止分发 resources/
+    （P2 独立通道尚不存在 = 分发断档）；PROTECT_ONLY_PATHS 只追加
+    protect 过滤。载荷收缩（P2 剔除 resources/）后分发自然停止。
+    """
+    module = _load_wrapper()
+
+    assert module.PROTECT_ONLY_PATHS == ["resources/"]
+    # mtbf 语义不变：exclude+protect（不同步 + 不删）
+    assert module.HOST_LOCAL_PATHS == ["resources/mtbf/"]
+
+    text = WRAPPER.read_text(encoding="utf-8")
+    # protect-only 追加环存在，且不产生 --exclude=resources/
+    assert "for item in PROTECT_ONLY_PATHS:" in text
+    assert '"--exclude=resources/"' not in text
+    assert '"--exclude=%s" % item' in text  # mtbf 的 exclude 仍在
+
+
 def test_sudoers_rules_are_wrapper_plus_fixed_systemctl_only():
     module = _load_wrapper()
     lines = module.build_sudoers_lines("android", "stability-test-agent")
