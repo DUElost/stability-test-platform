@@ -156,18 +156,20 @@ def test_ttl_validation_warns_when_interval_too_long(caplog):
 
 def test_ttl_interval_logic():
     """Verify the comparison is correct: 60 < 300 → OK, 350 ≥ 300 → too long."""
-    from backend.agent.lease_renewer import _BACKEND_LEASE_TTL
+    from backend.agent.settings import get_lease_settings
 
-    assert 60 < _BACKEND_LEASE_TTL / 2, "default 60s should be valid"
-    assert 350 >= _BACKEND_LEASE_TTL / 2, "350s should trigger warning"
+    default_ttl = get_lease_settings().agent_lease_ttl
+    assert default_ttl == 600, "默认 TTL 应与迁移前 _BACKEND_LEASE_TTL 一致"
+    assert 60 < default_ttl / 2, "default 60s should be valid"
+    assert 350 >= default_ttl / 2, "350s should trigger warning"
 
 
-def test_ttl_validation_warns_with_large_interval(monkeypatch, caplog):
+def test_ttl_validation_warns_with_large_interval(lease_env, caplog):
     """AGENT_LOCK_RENEWAL_INTERVAL=350 → WARNING logged."""
     import logging
     caplog.set_level(logging.WARNING)
 
-    monkeypatch.setenv("AGENT_LOCK_RENEWAL_INTERVAL", "350")
+    lease_env("AGENT_LOCK_RENEWAL_INTERVAL", "350")
 
     _make_renewer()
     # The warning is logged during __init__ — check caplog
@@ -383,9 +385,9 @@ def test_batch_404_is_config_error_no_fallback(caplog):
     assert not hasattr(r, "_batch_supported")
 
 
-def test_batch_chunks_large_host(monkeypatch):
+def test_batch_chunks_large_host(lease_env):
     """Batch splits into chunks bounded by AGENT_LEASE_EXTEND_BATCH_CHUNK."""
-    monkeypatch.setenv("AGENT_LEASE_EXTEND_BATCH_CHUNK", "2")
+    lease_env("AGENT_LEASE_EXTEND_BATCH_CHUNK", "2")
     r = _make_renewer(host_id="h-1")
     for jid in (1, 2, 3, 4, 5):
         r._job_ids.add(jid)
