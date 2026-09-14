@@ -283,9 +283,9 @@
 | `STP_BACKEND_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:43` |
 | `STP_BARRIER_MAX_WAIT_SECONDS` | `1800` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:226` |
 | `STP_BARRIER_PROGRESS_STALE_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:190` |
-| `STP_BARRIER_TIMEOUT_SECONDS` | `600` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:1302` |
+| `STP_BARRIER_TIMEOUT_SECONDS` | `600` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:1308` |
 | `STP_CONSOLE_CANCEL_TTL_SECONDS` | `-` | ✅ | 运行时 | `backend/realtime/console_registry.py:433` |
-| `STP_CONSOLE_CONTROL_TICK_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:880` |
+| `STP_CONSOLE_CONTROL_TICK_SECONDS` | `-` | ✅ | 运行时 | `backend/services/run_console.py:891` |
 | `STP_CONSOLE_REGISTRY` | `` | ✅ | 运行时 | `backend/realtime/console_registry.py:72` |
 | `STP_CONSOLE_REGISTRY_TTL_SECONDS` | `-` | ✅ | 运行时 | `backend/realtime/console_registry.py:81` |
 | `STP_CONTROL_PLANE_NODE_JOB` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:321` |
@@ -406,6 +406,7 @@
 | `SUDO_UID` | sudo 调用时由系统注入（stp_agent_priv） |
 
 <!-- env-inventory:end -->
+
 
 
 
