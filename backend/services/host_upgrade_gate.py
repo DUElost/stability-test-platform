@@ -159,7 +159,7 @@ def _abort_pending_retry_after(
     db: Session, rows: list[JobInstance], pending_ids: set[int]
 ) -> int:
     """按最晚 abort 的 Job 剩余 grace 估算重试秒数（与 UI 热更新一致）。"""
-    from backend.scheduler.app_scheduler import RECONCILER_INTERVAL
+    from backend.core.settings.scheduler import get_scheduler_settings
     from backend.scheduler.device_lease_reconciler import _ABORT_REAPER_GRACE_SECONDS
 
     pr_ids = {j.plan_run_id for j in rows if j.id in pending_ids and j.plan_run_id}
@@ -187,7 +187,7 @@ def _abort_pending_retry_after(
         max_remaining = max(
             max_remaining, max(0.0, _ABORT_REAPER_GRACE_SECONDS - elapsed)
         )
-    return int(max_remaining + RECONCILER_INTERVAL)
+    return int(max_remaining + get_scheduler_settings().reconciler_interval_seconds)
 
 
 def wait_until_no_active_jobs(

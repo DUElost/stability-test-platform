@@ -661,3 +661,23 @@ def admin_headers(admin_user):
         }
     )
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def scheduler_env(monkeypatch):
+    """调度域 env 覆盖助手（ADR-0042）：写入后清 Settings 缓存，测试末再清一次。
+
+    迁移后不再 `monkeypatch.setattr(模块, "常量", …)`——Settings 是惰性缓存视图，
+    改 env 必须伴随 `reset_scheduler_settings_cache()`，否则读到的是旧缓存。
+    """
+
+    from backend.core.settings.scheduler import reset_scheduler_settings_cache
+
+    def _set(name: str, value: str) -> None:
+        monkeypatch.setenv(name, value)
+        reset_scheduler_settings_cache()
+
+    reset_scheduler_settings_cache()
+    yield _set
+    reset_scheduler_settings_cache()
+

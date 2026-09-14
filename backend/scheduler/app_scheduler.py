@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-import os
 import time
 from datetime import timedelta
 from typing import Callable
@@ -26,39 +25,20 @@ from backend.core.metrics import (
     PROMETHEUS_AVAILABLE,
 )
 
+from backend.core.settings.scheduler import (
+    SchedulerSettings,
+    get_scheduler_settings,
+)
+
 logger = logging.getLogger(__name__)
 
-RECYCLER_INTERVAL = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
-WATCHDOG_INTERVAL = int(os.getenv("SESSION_WATCHDOG_INTERVAL_SECONDS", "15"))
-RECONCILER_INTERVAL = int(os.getenv("RECONCILER_INTERVAL_SECONDS", "15"))
-CRON_POLL_INTERVAL = float(os.getenv("CRON_POLL_INTERVAL", "30"))
-RETENTION_CLEANUP_INTERVAL = int(os.getenv("RETENTION_CLEANUP_INTERVAL_SECONDS", "3600"))
-QUEUE_DEPTH_INTERVAL = int(os.getenv("QUEUE_DEPTH_POLL_INTERVAL_SECONDS", "15"))
-PRECHECK_REAPER_INTERVAL = int(os.getenv("PRECHECK_REAPER_INTERVAL_SECONDS", "45"))
-CHAIN_RECONCILER_INTERVAL = int(
-    os.getenv("CHAIN_RECONCILER_INTERVAL_SECONDS", "60")
-)
-# 一天扫一次 expired jti 即可:refresh 黑名单只在 user 主动 logout 时增长,
-# 量级低;同时 expires_at 是 30 天后,过期窗口很宽,扫太频反而浪费 IO。
-REVOKED_TOKEN_CLEANUP_INTERVAL = int(
-    os.getenv("REVOKED_TOKEN_CLEANUP_INTERVAL_SECONDS", str(24 * 3600))
-)
+# 调度节奏与回收旋钮已收敛到分域 Settings（ADR-0042 P1 试点）：
+#   backend/core/settings/scheduler.py（字段名 = 原 env 名小写，默认值不变）
+# 取值保持惰性（`_sched()` 逐次读缓存），不在 import 时固化（ADR-0042 D4）。
 
-# ADR-0025 Sprint 4: auto_archive_interval  poll interval
-AUTO_ARCHIVE_INTERVAL = int(os.getenv("AUTO_ARCHIVE_POLL_INTERVAL_SECONDS", "120"))
 
-# ADR-0026 Step 4: admission queue pump interval
-ADMISSION_PUMP_INTERVAL = int(os.getenv("STP_ADMISSION_PUMP_INTERVAL_SECONDS", "5"))
-
-# ADR-0026 §6: O(1) counter drift self-heal
-COUNTER_RECONCILE_INTERVAL = int(
-    os.getenv("STP_COUNTER_RECONCILE_INTERVAL_SECONDS", "300")
-)
-
-# #556: signal↔DLE link backlog drain (moved off the watcher-summary read path)
-SIGNAL_LINK_RECONCILE_INTERVAL = int(
-    os.getenv("STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS", "300")
-)
+def _sched() -> SchedulerSettings:
+    return get_scheduler_settings()
 
 MISFIRE_GRACE = timedelta(seconds=60)
 
@@ -212,74 +192,74 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
 
     await _add(
         _instrumented("recycler", recycle_once, singleton=True),
-        IntervalTrigger(seconds=RECYCLER_INTERVAL),
+        IntervalTrigger(seconds=_sched().run_recycle_interval_seconds),
         id="recycler",
     )
-    logger.info("schedule_registered id=recycler interval=%ds", RECYCLER_INTERVAL)
+    logger.info("schedule_registered id=recycler interval=%ds", _sched().run_recycle_interval_seconds)
 
     await _add(
         _instrumented("session_watchdog", session_watchdog_once, singleton=True),
-        IntervalTrigger(seconds=WATCHDOG_INTERVAL),
+        IntervalTrigger(seconds=_sched().session_watchdog_interval_seconds),
         id="session_watchdog",
     )
-    logger.info("schedule_registered id=session_watchdog interval=%ds", WATCHDOG_INTERVAL)
+    logger.info("schedule_registered id=session_watchdog interval=%ds", _sched().session_watchdog_interval_seconds)
 
     await _add(
         _instrumented(
             "device_lease_reconciler", device_lease_reconcile_once, singleton=True
         ),
-        IntervalTrigger(seconds=RECONCILER_INTERVAL),
+        IntervalTrigger(seconds=_sched().reconciler_interval_seconds),
         id="device_lease_reconciler",
     )
-    logger.info("schedule_registered id=device_lease_reconciler interval=%ds", RECONCILER_INTERVAL)
+    logger.info("schedule_registered id=device_lease_reconciler interval=%ds", _sched().reconciler_interval_seconds)
 
     await _add(
         _instrumented("cron_check", check_and_fire_schedules, singleton=True),
-        IntervalTrigger(seconds=int(CRON_POLL_INTERVAL)),
+        IntervalTrigger(seconds=int(_sched().cron_poll_interval)),
         id="cron_check",
     )
-    logger.info("schedule_registered id=cron_check interval=%ds", int(CRON_POLL_INTERVAL))
+    logger.info("schedule_registered id=cron_check interval=%ds", int(_sched().cron_poll_interval))
 
     await _add(
         _instrumented("retention_cleanup", run_retention_cleanup, singleton=True),
-        IntervalTrigger(seconds=RETENTION_CLEANUP_INTERVAL),
+        IntervalTrigger(seconds=_sched().retention_cleanup_interval_seconds),
         id="retention_cleanup",
         misfire_grace_time=timedelta(minutes=10),
     )
     logger.info(
         "schedule_registered id=retention_cleanup interval=%ds",
-        RETENTION_CLEANUP_INTERVAL,
+        _sched().retention_cleanup_interval_seconds,
     )
 
     await _add(
         _poll_saq_queue_depth,
-        IntervalTrigger(seconds=QUEUE_DEPTH_INTERVAL),
+        IntervalTrigger(seconds=_sched().queue_depth_poll_interval_seconds),
         id="saq_queue_depth_poll",
     )
-    logger.info("schedule_registered id=saq_queue_depth_poll interval=%ds", QUEUE_DEPTH_INTERVAL)
+    logger.info("schedule_registered id=saq_queue_depth_poll interval=%ds", _sched().queue_depth_poll_interval_seconds)
 
     from backend.scheduler.precheck_reaper import precheck_reaper_job
 
     await _add(
         _instrumented("precheck_reaper", precheck_reaper_job, singleton=True),
-        IntervalTrigger(seconds=PRECHECK_REAPER_INTERVAL),
+        IntervalTrigger(seconds=_sched().precheck_reaper_interval_seconds),
         id="precheck_reaper",
     )
     logger.info(
         "schedule_registered id=precheck_reaper interval=%ds",
-        PRECHECK_REAPER_INTERVAL,
+        _sched().precheck_reaper_interval_seconds,
     )
 
     from backend.scheduler.plan_chain_reconciler import reconcile_plan_chains
 
     await _add(
         _instrumented("plan_chain_reconciler", reconcile_plan_chains, singleton=True),
-        IntervalTrigger(seconds=CHAIN_RECONCILER_INTERVAL),
+        IntervalTrigger(seconds=_sched().chain_reconciler_interval_seconds),
         id="plan_chain_reconciler",
     )
     logger.info(
         "schedule_registered id=plan_chain_reconciler interval=%ds",
-        CHAIN_RECONCILER_INTERVAL,
+        _sched().chain_reconciler_interval_seconds,
     )
 
     from backend.scheduler.revoked_token_cleanup import cleanup_revoked_refresh_tokens_job
@@ -290,23 +270,23 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
             cleanup_revoked_refresh_tokens_job,
             singleton=True,
         ),
-        IntervalTrigger(seconds=REVOKED_TOKEN_CLEANUP_INTERVAL),
+        IntervalTrigger(seconds=_sched().revoked_token_cleanup_interval_seconds),
         id="revoked_token_cleanup",
         misfire_grace_time=timedelta(minutes=30),
     )
     logger.info(
         "schedule_registered id=revoked_token_cleanup interval=%ds",
-        REVOKED_TOKEN_CLEANUP_INTERVAL,
+        _sched().revoked_token_cleanup_interval_seconds,
     )
 
     from backend.scheduler.cron_scheduler import auto_archive_sweep
 
     await _add(
         _instrumented("auto_archive_sweep", auto_archive_sweep, singleton=True),
-        IntervalTrigger(seconds=AUTO_ARCHIVE_INTERVAL),
+        IntervalTrigger(seconds=_sched().auto_archive_poll_interval_seconds),
         id="auto_archive_sweep",
     )
-    logger.info("schedule_registered id=auto_archive_sweep interval=%ds", AUTO_ARCHIVE_INTERVAL)
+    logger.info("schedule_registered id=auto_archive_sweep interval=%ds", _sched().auto_archive_poll_interval_seconds)
 
     # ── ADR-0026 Step 4: admission queue pump ──
     # Registered unconditionally: with the env flag off the pump runs in
@@ -320,22 +300,22 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
 
     await _add(
         _instrumented("admission_pump", pump_admission_tick),
-        IntervalTrigger(seconds=ADMISSION_PUMP_INTERVAL),
+        IntervalTrigger(seconds=_sched().stp_admission_pump_interval_seconds),
         id="admission_pump",
     )
-    logger.info("schedule_registered id=admission_pump interval=%ds", ADMISSION_PUMP_INTERVAL)
+    logger.info("schedule_registered id=admission_pump interval=%ds", _sched().stp_admission_pump_interval_seconds)
 
     # ADR-0026 §6: low-frequency counter reconciliation (self-heal drift)
     from backend.scheduler.counter_reconciler import reconcile_plan_run_counters_once
 
     await _add(
         _instrumented("counter_reconcile", reconcile_plan_run_counters_once),
-        IntervalTrigger(seconds=COUNTER_RECONCILE_INTERVAL),
+        IntervalTrigger(seconds=_sched().stp_counter_reconcile_interval_seconds),
         id="counter_reconcile",
     )
     logger.info(
         "schedule_registered id=counter_reconcile interval=%ds",
-        COUNTER_RECONCILE_INTERVAL,
+        _sched().stp_counter_reconcile_interval_seconds,
     )
 
     # #556: drain signal↔DLE link backlog outside the request path
@@ -343,10 +323,10 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
 
     await _add(
         _instrumented("signal_link_reconcile", reconcile_signal_links_once),
-        IntervalTrigger(seconds=SIGNAL_LINK_RECONCILE_INTERVAL),
+        IntervalTrigger(seconds=_sched().stp_signal_link_reconcile_interval_seconds),
         id="signal_link_reconcile",
     )
     logger.info(
         "schedule_registered id=signal_link_reconcile interval=%ds",
-        SIGNAL_LINK_RECONCILE_INTERVAL,
+        _sched().stp_signal_link_reconcile_interval_seconds,
     )

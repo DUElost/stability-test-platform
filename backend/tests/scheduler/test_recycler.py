@@ -1324,7 +1324,7 @@ def test_patrol_stall_after_running_timeout_no_double_transition(engine, monkeyp
         _cleanup_seed(seed)
 
 
-def test_patrol_stall_picks_most_overdue_when_mixed_intervals(engine, monkeypatch):
+def test_patrol_stall_picks_most_overdue_when_mixed_intervals(engine, monkeypatch, scheduler_env):
     """3 个 RUNNING 候选,interval 各不同:
       A: interval=600, age=400 → overdue=-1400 (健康)
       B: interval=60,  age=200 → overdue=+20  (stalled,小)
@@ -1348,7 +1348,7 @@ def test_patrol_stall_picks_most_overdue_when_mixed_intervals(engine, monkeypatc
     seed_b = _stale_running_seed(now, age_seconds=200, pipeline_def=_pipe(60))
     seed_c = _stale_running_seed(now, age_seconds=200, pipeline_def=_pipe(30))
 
-    monkeypatch.setattr(recycler, "PATROL_STALL_BATCH_LIMIT", 1)
+    scheduler_env("PATROL_STALL_BATCH_LIMIT", "1")
     _patch_recycler_neutrals(monkeypatch)
     try:
         recycler.recycle_once()
