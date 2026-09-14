@@ -2,6 +2,7 @@
 
 - 状态：**Accepted**（2026-09-14 裁决：引入 pydantic-settings；按 D2 判据分域迁移，不满足判据者保持裸读）
 - 版本记录：
+  - v1.1（2026-09-14）：**P1 试点完成并回填**——依赖（#1970）+ D6 门禁（#1971）+ 控制面调度域（#1977，21 旋钮）+ agent 租约域（#1984，5 旋钮 + hot-update reload 钩子）。结论：D1–D4/D6 按裁决落地、等价性测试全绿；新增两条实作约束（见 §P1 试点结论）。P2 待启动。
   - v1.0（2026-09-14）：用户委托本会话裁决——**引入**；载体取 D1 分域 Settings（否决方案 A 薄封装、方案 C 维持现状）；**附加硬约束**：Settings 仅读 `os.environ`（`env_file=None`），不得引入第二个 dotenv 加载器（`env_source.py` 仍是来源与优先级的唯一契约）；D6 门禁扩展为 P1 试点的**前置条件**。**转 Accepted**。
   - v0.1（2026-09-14 初版，由 #737 收口后的 deferred 项触发；现状盘点与分域判据见正文）
 - 优先级：P1
@@ -105,6 +106,44 @@ pydantic-settings 自带的 dotenv 加载）——`.env` 来源与优先级仍�
 - **运维面**：env 名与 `.env` 语义不变，运维零感知；hot-update 路径需在 P1 用真机/仿真
   验证 reload 生效（与 `ENV_PATH_KEYS_B64` 选定键的改写路径对齐）。
 - **回退**：单域可回退（Settings 使用点还原为裸读；门禁与清单不变），不产生跨域耦合。
+
+## P1 试点结论（v1.1 回填，2026-09-14）
+
+### 落地清单
+
+| 步骤 | PR | 覆盖 |
+|---|---|---|
+| 依赖（源 + 两份 lock） | #1970 | `pydantic-settings==2.15.0`；净新增 1 包、无既有 pin 漂移；agent 侧 `backend/agent/requirements.txt` 同补 |
+| D6 门禁（Settings 可见性） | #1971 | AST 解析 Settings 字段/别名，清单与二选一裁决自动适用；首版「任意 model_config 即 Settings」误收 130+ 模型字段，被门禁当场暴露并收紧 |
+| 控制面：调度域 | #1977 | `backend/core/settings/scheduler.py`（21 字段）；迁移 `app_scheduler`/`recycler`/`cron_scheduler`，并去重两处重复旋钮；测试语义由常量打桩改为 `scheduler_env` fixture |
+| agent：租约域 | #1984 | `backend/agent/settings.py`（5 字段，自包含）；迁移 `lease_renewer`；`reload_config` 路径补清缓存钩子 |
+
+### 结论（验证到的机制点）
+
+1. **惰性 + 缓存语义可用**：`get_*_settings()` + `reset_*_settings_cache()` 覆盖
+   「运行期改 env / hot-update 重读」两类场景；控制面不热更（现状不变），agent 侧
+   `reload_config` 闭环已用 `_reload_runtime_env(tmp)` 实测；
+2. **等价性可证**：两域均以「字段默认值/类型逐一对照迁移前字面量」的测试锁定（21 + 5 项），
+   钳制语义（`max(...,1)`）保留在调用点，未引入行为变化；
+3. **来源契约未被旁路**：两域各含「只写 `.env` 文件、不设进程 env → 不生效」的负向用例；
+4. **门禁联动有效（D6 的价值实证）**：Settings 化让一度被行级扫描漏掉的
+   `POST_COMPLETION_MAX_DEFER_SECONDS`（跨行 `os.getenv`）暴露并补登记（清单 210 → 211 名）——
+   收敛没有制造新的不可见面，反而补了一个死角。
+
+### 两条实作约束（v1.1 新增，后续域必须遵守）
+
+- **C1（agent 侧）双包布局**：agent 以 `agent.*`（部署，无 `backend.core`）与
+  `backend.agent.*`（开发）两种包名运行。agent 侧 Settings **必须自包含**
+  （不 import 后端包、跨模块用相对导入；`main.py` barrel 按其既有 try/except 双导入块登记）。
+  违反例：首版绝对导入被既有守卫测试 `test_agent_runtime_imports_without_backend_package` 当场抓住；
+- **C2 凭据不入 Settings 表**：`AGENT_SECRET` 等凭据保持裸读；Settings 只承载可调旋钮
+  （D5 边界的细化口径）。
+
+### P2 范围（按 D2 判据执行，不扩不缩）
+
+- 控制面：`counter/signal_link/plan_chain/precheck` 四个 reconciler 的 7 个批处理旋钮；
+- agent：其余域（watcher/磁盘/注册等）逐个按 D2 判据评估——满足才迁，不满足保持裸读
+  （仍受 env_inventory 门禁约束）。
 
 ## 落地与后续动作
 

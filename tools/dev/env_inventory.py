@@ -35,6 +35,23 @@ SCAN_ROOT = ROOT / "backend"
 SCAN_SKIP_PARTS = {"__pycache__", "scripts"}
 SKIP_PARTS = {"__pycache__", ".git", ".wt", "node_modules", ".venv", "venv"}
 
+
+def _rel_parts(path: Path) -> tuple[str, ...]:
+    """相对仓库根（``ROOT``）的路径组件。
+
+    **必须按相对组件比较**，不能用 ``path.parts``（绝对路径）：本仓推荐的并行执行
+    方式是专属 worktree，位置就在 ``<repo>/.wt/<name>``，其绝对路径里必然含 ``.wt``
+    ——按绝对路径判会把**该 worktree 下的每个文件**都跳过，``scan_reads`` 返回 0，
+    于是 `_INTERNAL_ONLY` 里每一条都被误判成「已陈旧」（#1978 实测，19 条假红，
+    并诱导人去删真实读点）。跳过规则的本意是排除仓库**内部**的 ``.wt/``（嵌套
+    worktree），不是排除 worktree 根。
+    """
+    try:
+        return path.relative_to(ROOT).parts
+    except ValueError:  # 不在 ROOT 下（调用方指向外部路径）→ 退回绝对组件
+        return path.parts
+
+
 BEGIN_MARK = "<!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->"
 END_MARK = "<!-- env-inventory:end -->"
 
@@ -149,7 +166,7 @@ def _iter_py_files(scan_root: Path):
         parts = set(path.relative_to(scan_root).parts)
         if parts & SCAN_SKIP_PARTS:
             continue
-        if any(part in SKIP_PARTS for part in path.parts):
+        if any(part in SKIP_PARTS for part in _rel_parts(path)):
             continue
         yield path
 
@@ -306,7 +323,7 @@ def example_keys() -> set[str]:
     keys: set[str] = set()
     pattern = re.compile(r"^#?\s*([A-Z][A-Z0-9_]+)=")
     for path in sorted(ROOT.glob("**/.env*.example")):
-        if any(part in SKIP_PARTS for part in path.parts):
+        if any(part in SKIP_PARTS for part in _rel_parts(path)):
             continue
         for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
             match = pattern.match(line.strip())

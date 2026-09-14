@@ -18,7 +18,6 @@ queue state without deadlocking the main event loop.
 from __future__ import annotations
 
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -47,9 +46,10 @@ from backend.tasks.saq_worker import (
     enqueue_sync,
 )
 
+from backend.core.settings.scheduler import get_scheduler_settings
+
 logger = logging.getLogger(__name__)
 
-MAX_PRECHECK_REENQUEUE_ATTEMPTS = int(os.getenv("MAX_PRECHECK_REENQUEUE_ATTEMPTS", "1"))
 
 
 def _utc_iso() -> str:
@@ -208,7 +208,7 @@ def reconcile_stale_precheck_runs(db: Session | None = None) -> dict[str, int]:
                 not job
                 and state.get("started_at") is None
                 and int(state.get("requeue_attempts") or 0)
-                < MAX_PRECHECK_REENQUEUE_ATTEMPTS
+                < get_scheduler_settings().max_precheck_reenqueue_attempts
                 and _is_stale_iso(
                     state.get("enqueued_at"), PRECHECK_QUEUE_STALE_SECONDS
                 )
@@ -249,7 +249,7 @@ def reconcile_stale_precheck_runs(db: Session | None = None) -> dict[str, int]:
                 not job
                 and state.get("started_at") is None
                 and int(state.get("requeue_attempts") or 0)
-                >= MAX_PRECHECK_REENQUEUE_ATTEMPTS
+                >= get_scheduler_settings().max_precheck_reenqueue_attempts
                 and _is_stale_iso(
                     state.get("enqueued_at"), PRECHECK_QUEUE_STALE_SECONDS,
                 )
@@ -284,8 +284,6 @@ def precheck_reaper_job() -> None:
 
 # ── ADR-0026 V2: stale PRECHECK recovery (admission queue) ────────────────────
 
-MAX_ADMISSION_REQUEUE_ATTEMPTS = int(os.getenv("MAX_ADMISSION_REQUEUE_ATTEMPTS", "3"))
-ADMISSION_REQUEUE_BACKOFF_SECONDS = int(os.getenv("ADMISSION_REQUEUE_BACKOFF_SECONDS", "60"))
 
 
 def _recover_stale_precheck_run(
@@ -364,7 +362,7 @@ def _recover_stale_precheck_run(
             )
             return "skipped"
 
-    if attempts >= MAX_ADMISSION_REQUEUE_ATTEMPTS:
+    if attempts >= get_scheduler_settings().max_admission_requeue_attempts:
         PlanRunStateMachine.transition(
             pr, PlanRunStatus.FAILED, reason="admission_requeue_exhausted",
         )
@@ -401,7 +399,7 @@ def _recover_stale_precheck_run(
     )
     pr.queue_reason = "PRECHECK_STALE"
     pr.next_admission_at = now + timedelta(
-        seconds=ADMISSION_REQUEUE_BACKOFF_SECONDS * (attempts + 1)
+        seconds=get_scheduler_settings().admission_requeue_backoff_seconds * (attempts + 1)
     )
     pr.admission_attempt_id = None
     pr.precheck_started_at = None
@@ -434,7 +432,8 @@ def reconcile_stale_precheck_v2(db: Session | None = None) -> dict[str, int]:
 
     Priority is QUEUED recovery (invariant ④ — admission competition and
     infrastructure loss are retryable scheduling outcomes); only after
-    MAX_ADMISSION_REQUEUE_ATTEMPTS consecutive stale PRECHECKs does the run
+    ``MAX_ADMISSION_REQUEUE_ATTEMPTS``（Settings `max_admission_requeue_attempts`）
+    consecutive stale PRECHECKs does the run
     fail. With the feature flag off no PRECHECK rows exist, so this scan is a
     single indexed no-op query per tick.
 

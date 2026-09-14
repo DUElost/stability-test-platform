@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,11 +31,24 @@ _SKIP_DIRS = {".git", ".wt", "node_modules", "__pycache__", ".venv", "venv", "di
 _SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".pdf", ".zip", ".gz", ".db", ".sqlite", ".pyc"}
 
 
+def _rel_parts(path: Path) -> tuple[str, ...]:
+    """相对仓库根（``ROOT``）的路径组件（#1978）。
+
+    不能用绝对 ``path.parts``：专属 worktree 位于 ``<repo>/.wt/<name>``，绝对路径
+    必然含 ``.wt``，会把**整个 worktree** 跳过 → 本测试的示例语料变成空集而假红。
+    跳过规则的本意只是排除仓库**内部**的 ``.wt/``。
+    """
+    try:
+        return path.relative_to(ROOT).parts
+    except ValueError:  # 不在 ROOT 下 → 退回绝对组件
+        return path.parts
+
+
 def _example_files() -> list[Path]:
     files: set[Path] = set()
     for pattern in _EXAMPLE_GLOBS:
         for path in ROOT.glob(pattern):
-            if path.is_file() and not any(part in _SKIP_DIRS for part in path.parts):
+            if path.is_file() and not any(part in _SKIP_DIRS for part in _rel_parts(path)):
                 files.add(path)
     return sorted(files)
 
@@ -53,7 +67,7 @@ def _repo_tokens(exclude: set[Path]) -> set[str]:
     for path in ROOT.rglob("*"):
         if not path.is_file() or path in exclude:
             continue
-        if any(part in _SKIP_DIRS for part in path.parts):
+        if any(part in _SKIP_DIRS for part in _rel_parts(path)):
             continue
         if path.suffix.lower() in _SKIP_SUFFIXES:
             continue
@@ -83,3 +97,23 @@ def test_env_example_keys_have_a_reader():
         + "\n  ".join(sorted(ghosts))
         + "\n处置二选一：为键补真实读取点，或从示例删除（#737 门禁）。"
     )
+
+
+def test_example_corpus_survives_dot_wt_worktree_root(tmp_path, monkeypatch):
+    """#1978：仓根本身就是 ``<repo>/.wt/<name>`` 时，语料不得变成空集。
+
+    旧实现按绝对 ``path.parts`` 判跳过，会把 worktree 下所有文件滤掉 →
+    ``_example_files()`` 返回空 → 本文件的主用例报「门禁语料失效」假红。
+    """
+    root = tmp_path / ".wt" / "stp-x"
+    (root / "backend").mkdir(parents=True)
+    (root / "backend" / ".env.example").write_text(
+        "ZZ_WT_KEY=1\nZZ_WT_COMMENTED=2  # 注释态仍计入键名\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", root)
+
+    files = _example_files()
+    assert [p.name for p in files] == [".env.example"], (
+        "worktree 根位于 .wt/ 下时不得把示例语料滤空"
+    )
+    assert "ZZ_WT_KEY" in _example_keys(files[0])

@@ -41,6 +41,14 @@ from backend.models.job import JobInstance, StepTrace
 from backend.models.plan_run import PlanRun
 from backend.services.lease_manager import release_lease_sync
 
+from backend.core.settings.scheduler import get_scheduler_settings
+
+
+def _sched():
+    """调度域 Settings 惰性取值（ADR-0042 P1 试点；不读 .env 文件）。"""
+    return get_scheduler_settings()
+
+
 logger = logging.getLogger(__name__)
 
 from backend.core.job_timeout_config import (
@@ -50,11 +58,8 @@ from backend.core.job_timeout_config import (
     RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
     running_heartbeat_timeout_seconds,
 )
-RECYCLER_BATCH_SIZE = int(os.getenv("RECYCLER_BATCH_SIZE", "200"))
-ARTIFACT_RETENTION_DAYS = int(os.getenv("ARTIFACT_RETENTION_DAYS", "30"))
 
 # ADR-0022 D10: patrol-heartbeat stall detection
-PATROL_STALL_BATCH_LIMIT = int(os.getenv("PATROL_STALL_BATCH_LIMIT", "100"))
 
 # ── ADR-0026 §3 (Step 5a): per-execution_state timeout clocks ────────────────
 # WAITING_* / PATROL_SLEEP jobs are legally idle (invariant ②) — their
@@ -62,9 +67,6 @@ PATROL_STALL_BATCH_LIMIT = int(os.getenv("PATROL_STALL_BATCH_LIMIT", "100"))
 # per-job execution heartbeat. Window is provisional (ADR 待定清单) until
 # stress tests calibrate it; must stay comfortably above the Agent
 # coordinator heartbeat cadence (lands in Step 5b).
-COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS = int(
-    os.getenv("COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS", "300")
-)
 
 _WAITING_EXECUTION_STATES = {
     "WAITING_EXECUTION_SLOT",
@@ -135,8 +137,8 @@ def _running_liveness_anchor(job, coord_hb: dict) -> tuple["datetime | None", in
     if job.execution_state in _WAITING_EXECUTION_STATES:
         hb = coord_hb.get((job.plan_run_id, job.host_id))
         if hb is not None:
-            return hb, COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
-        return _not_reported_anchor(job), COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
+            return hb, _sched().coordinator_heartbeat_timeout_seconds
+        return _not_reported_anchor(job), _sched().coordinator_heartbeat_timeout_seconds
 
     # NULL / unknown execution_state — nothing ever reported.
     return _not_reported_anchor(job), graded_timeout
@@ -278,7 +280,7 @@ def _collect_patrol_stall_candidates_py(db, now: datetime) -> list[tuple[JobInst
             stall_list.append((overdue, job, interval, age))
 
     stall_list.sort(key=lambda item: item[0], reverse=True)
-    return [(job, interval, age) for _overdue, job, interval, age in stall_list[:PATROL_STALL_BATCH_LIMIT]]
+    return [(job, interval, age) for _overdue, job, interval, age in stall_list[:_sched().patrol_stall_batch_limit]]
 
 
 def _build_patrol_stall_candidates_stmt(now: datetime):
@@ -351,7 +353,7 @@ def _build_patrol_stall_candidates_stmt(now: datetime):
             ),
         )
         .order_by(overdue_expr.desc(), JobInstance.id.asc())
-        .limit(PATROL_STALL_BATCH_LIMIT)
+        .limit(_sched().patrol_stall_batch_limit)
     )
 
 
@@ -715,14 +717,10 @@ def _mark_patrol_stall(
 # Main recycler pass
 # ---------------------------------------------------------------------------
 
-_POST_COMPLETION_GRACE_SECONDS = int(os.getenv("POST_COMPLETION_GRACE_SECONDS", "120"))
 
 # #1175: detail 文件长期不到（缺失/损坏）的终态 job 若无限重入队，报告每次被
 # 回滚且每轮重算。超过该窗口（grace 之后）即停止重试并告警留痕；进程重启会
 # 重置内存去重集，重新各告警一次（可接受）。
-_POST_COMPLETION_MAX_DEFER_SECONDS = int(os.getenv(
-    "POST_COMPLETION_MAX_DEFER_SECONDS", str(6 * 3600),
-))
 _defer_cutoff_alerted: set[int] = set()
 
 
@@ -734,7 +732,7 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
     """
     from backend.tasks.saq_worker import enqueue_sync
 
-    grace_deadline = now - timedelta(seconds=_POST_COMPLETION_GRACE_SECONDS)
+    grace_deadline = now - timedelta(seconds=_sched().post_completion_grace_seconds)
     terminal_statuses = [
         JobStatus.COMPLETED.value, JobStatus.FAILED.value,
         JobStatus.ABORTED.value,
@@ -752,7 +750,7 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
     )
 
     defer_cutoff = now - timedelta(
-        seconds=_POST_COMPLETION_GRACE_SECONDS + _POST_COMPLETION_MAX_DEFER_SECONDS,
+        seconds=_sched().post_completion_grace_seconds + _sched().post_completion_max_defer_seconds,
     )
     for job in orphan_jobs:
         if job.ended_at is not None and job.ended_at < defer_cutoff:
@@ -840,7 +838,7 @@ def recycle_once() -> None:
             batch = (
                 pending_q
                 .order_by(JobInstance.id)
-                .limit(RECYCLER_BATCH_SIZE)
+                .limit(_sched().recycler_batch_size)
                 .all()
             )
             if not batch:
@@ -913,7 +911,7 @@ def recycle_once() -> None:
     )
     running_prefetch_deadline = now - timedelta(seconds=min_running_timeout)
     coordinator_prefetch_deadline = now - timedelta(
-        seconds=COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
+        seconds=_sched().coordinator_heartbeat_timeout_seconds
     )
     # ── Step 5a.1: candidate SELECTION uses the same per-state clock as the
     # verdict. Clock per branch (Python-side _running_liveness_anchor re-derives
@@ -976,7 +974,7 @@ def recycle_once() -> None:
                     JobInstance.id > last_running_id,
                 )
                 .order_by(JobInstance.id)
-                .limit(RECYCLER_BATCH_SIZE)
+                .limit(_sched().recycler_batch_size)
                 .all()
             )
             if not batch:
@@ -1066,7 +1064,7 @@ def _prune_steptrace_artifacts(db, now: datetime) -> None:
 
     Only deletes file:// URIs. StepTrace rows are preserved (audit records).
     """
-    cutoff = now - timedelta(days=ARTIFACT_RETENTION_DAYS)
+    cutoff = now - timedelta(days=_sched().artifact_retention_days)
 
     old_traces = (
         db.query(StepTrace)

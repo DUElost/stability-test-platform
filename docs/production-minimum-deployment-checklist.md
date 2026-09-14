@@ -69,6 +69,13 @@ npm --version
 export STP_DEPLOY_ROOT=/opt/stability-test-platform
 export STP_DEPLOY_USER="$USER"
 
+# 站点参数（仅 stability-platform-https.conf 使用；HTTP 模板不引用）：
+# 域名取站点对外 origin 的主机名，证书路径来自站点 TLS 绑定（模板自 I2 起参数化）。
+# 使用 HTTPS 模板前必须按站点填写；空值会被 §3.6 的前置检查拦截。
+export STP_SITE_DOMAIN=""
+export STP_TLS_CERT_PATH=""
+export STP_TLS_KEY_PATH=""
+
 sudo mkdir -p "$STP_DEPLOY_ROOT"
 sudo chown -R "$STP_DEPLOY_USER":"$STP_DEPLOY_USER" "$STP_DEPLOY_ROOT"
 
@@ -77,10 +84,14 @@ git clone https://github.com/DUElost/stability-test-platform.git "$STP_DEPLOY_RO
 cd "$STP_DEPLOY_ROOT"
 ./tools/dev/check-deploy-source.sh   # 部署源守卫：HEAD 必须在 main 且 tracked 工作区干净
 
-# 模板渲染：deploy/control-plane/{systemd,nginx,logrotate} 中的占位符由上面两个变量确定；
-# 源模板本身不含硬编码部署根，渲染后不留占位符。
+# 模板渲染：deploy/control-plane/{systemd,nginx,logrotate} 中的占位符由上面的变量确定；
+# 源模板本身不含硬编码部署根或站点值，渲染后不留占位符。
 render_template() {
-  sed -e "s|<deploy-root>|$STP_DEPLOY_ROOT|g" -e "s|<deploy-user>|$STP_DEPLOY_USER|g" "$1"
+  sed -e "s|<deploy-root>|$STP_DEPLOY_ROOT|g" \
+      -e "s|<deploy-user>|$STP_DEPLOY_USER|g" \
+      -e "s|<server-name>|$STP_SITE_DOMAIN|g" \
+      -e "s|<tls-cert-path>|$STP_TLS_CERT_PATH|g" \
+      -e "s|<tls-key-path>|$STP_TLS_KEY_PATH|g" "$1"
 }
 ```
 
@@ -137,7 +148,7 @@ VITE_API_BASE_URL= npm run build:prod   # 产物 → frontend/dist-prod（= Ngin
 render_template deploy/control-plane/systemd/stability-backend.service \
   | sudo tee /etc/systemd/system/stability-backend.service >/dev/null
 # 渲染自检：占位符必须已全部替换
-render_template deploy/control-plane/systemd/stability-backend.service | grep -q '<deploy-root>' \
+render_template deploy/control-plane/systemd/stability-backend.service | grep -qE '<[a-z][a-z-]*>' \
   && echo "FAIL: 占位符残留" || echo "OK: 无占位符残留"
 ```
 
@@ -184,6 +195,16 @@ render_template deploy/control-plane/nginx/stability-platform.conf \
 ```
 
 若预发布 / 生产已经具备证书，优先改用 `deploy/control-plane/nginx/stability-platform-https.conf` 作为模板。
+该模板使用 `<server-name>`、`<tls-cert-path>`、`<tls-key-path>` 三个站点占位符（I2 起不再写死域名与证书路径）；渲染前先确认 §3.2 的三个站点变量已按站点填写：
+
+```bash
+test -n "$STP_SITE_DOMAIN" && test -n "$STP_TLS_CERT_PATH" && test -n "$STP_TLS_KEY_PATH" \
+  || echo "FAIL: 使用 HTTPS 模板前必须填写站点域名与证书路径"
+render_template deploy/control-plane/nginx/stability-platform-https.conf \
+  | sudo tee /etc/nginx/sites-available/stability-platform >/dev/null
+render_template deploy/control-plane/nginx/stability-platform-https.conf | grep -qE '<[a-z][a-z-]*>' \
+  && echo "FAIL: 占位符残留" || echo "OK: 无占位符残留"
+```
 
 模板已包含 `/api/`、`/health`、`/socket.io/`（WebSocket 升级）与 legacy `/ws/`。
 

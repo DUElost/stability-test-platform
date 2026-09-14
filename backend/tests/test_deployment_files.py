@@ -145,6 +145,31 @@ def test_control_plane_template_verifier_passes():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_https_template_parameterizes_domain_and_certificate_paths():
+    """站点域名与证书路径只能用占位符（I2）：模板不得再出现写死的域名或证书目录。"""
+    conf = (ROOT / "deploy" / "control-plane" / "nginx" / "stability-platform-https.conf").read_text(
+        encoding="utf-8"
+    )
+
+    for placeholder in ("<server-name>", "<tls-cert-path>", "<tls-key-path>"):
+        assert placeholder in conf
+    assert "stp.example.com" not in conf
+    assert "/etc/letsencrypt/live/" not in conf
+
+
+def test_deploy_docs_render_the_site_placeholders():
+    """清单/演练 runbook 的渲染步骤必须覆盖站点占位符（I2），不能只渲染部署根。"""
+    docs = (
+        ROOT / "docs" / "production-minimum-deployment-checklist.md",
+        ROOT / "docs" / "preprod-drill-runbook.md",
+    )
+
+    for doc_path in docs:
+        doc = doc_path.read_text(encoding="utf-8")
+        for placeholder in ("<server-name>", "<tls-cert-path>", "<tls-key-path>"):
+            assert placeholder in doc, f"{doc_path.name} 缺少站点占位符 {placeholder} 的渲染说明"
+
+
 def test_frontend_build_scripts_match_nginx_roots():
     """Nginx root 指向的 frontend/dist-* 必须由某个构建脚本产出（#1256）。"""
     scripts = json.loads(
