@@ -121,6 +121,43 @@ describe('AnomalyDashboard', () => {
     expect(screen.queryByText(/超阈值/)).toBeNull();
   });
 
+  it('renders UNIVIEW group with source prefix, kept separate from AEE (#1956)', () => {
+    render_(
+      <AnomalyDashboard
+        {...({
+          data: makeData({
+            current_run: makeSection({
+              total_events: 2,
+              affected_device_count: 1,
+              top_package_name: 'com.android.camera2',
+              top_subtype: 'Java Crash',
+              subtype_distribution: [
+                { subtype: 'ANR', group: 'UNIVIEW', count: 1, share: 0.5 },
+                { subtype: 'Java Crash', group: 'UNIVIEW', count: 1, share: 0.5 },
+              ],
+              package_ranking: [
+                {
+                  package_name: 'com.android.camera2',
+                  total_count: 1,
+                  affected_device_count: 1,
+                  latest_detected_at: '2026-09-14T08:59:00Z',
+                  subtype_breakdown: [
+                    { subtype: 'Java Crash', group: 'UNIVIEW', count: 1 },
+                  ],
+                },
+              ],
+            }),
+          }),
+          timeScope: 'all',
+        } as any)}
+      />,
+    );
+    // 展锐 subtype 带来源前缀（同名 subtype 可能与 AEE 家族并存）
+    expect(screen.getAllByText(/UNIVIEW · Java Crash/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/UNIVIEW · ANR/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('com.android.camera2').length).toBeGreaterThan(0);
+  });
+
   it('renders preexisting package ranking rows and toggles selection', () => {
     render_(
       <AnomalyDashboard
