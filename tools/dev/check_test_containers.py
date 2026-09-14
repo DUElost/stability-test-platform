@@ -3,8 +3,14 @@
 """残留 testcontainer 巡检与安全清理（#1482；#1655 收紧判定与误删面）。
 
 背景：``backend/tests`` 未设 ``TEST_DATABASE_URL`` 时由 conftest 起
-per-process ``postgres:16`` 容器（隔离正确）；被 kill/超时的 pytest 进程会
-遗留容器——本机实测累积 13 个（最老 2 天）。本工具只做**巡检与安全清理**：
+per-process ``postgres:16`` 容器（隔离正确）。残留有**两种形态**，都必须覆盖：
+
+- 形态①（#1482）：被 kill/超时的 pytest 进程遗留的**仍在运行**的容器；
+- 形态②（#1936）：**已停未删**的容器——宿主/daemon 重启会把运行中的容器
+  批量优雅停掉（exit 0），``autoRemove=false`` 且 ryuk 不在这条路径上，
+  于是无人回收（本机实测 9 个躺了 3 周）。
+
+本工具只做**巡检与安全清理**：
 
 - 默认 dry-run：列出相关容器与年龄，给出建议命令；
 - 目标判定（#1655）：以 testcontainers 注入的 label（``org.testcontainers``）
@@ -103,7 +109,9 @@ def _run_docker(args: list[str]) -> tuple[int, str]:
 
 
 def _list_containers(runner) -> list[Container]:
-    rc, raw = runner(["ps", "-q"])
+    # -a 必须带（#1936）：残留形态②是已停（Exited）容器，只列 running 会把
+    # 整类漏掉并报「未发现」假绿——与 #1714 同族，缺口在列举面而非 rc 面。
+    rc, raw = runner(["ps", "-a", "-q"])
     if rc != 0:
         raise RuntimeError(f"docker ps failed rc={rc}: {raw.strip()[:200]}")
     ids = [line.strip() for line in raw.splitlines() if line.strip()]
