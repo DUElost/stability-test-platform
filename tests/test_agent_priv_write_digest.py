@@ -57,3 +57,31 @@ def test_write_digest_rejects_bad_format(wrapper, conf):
     for bad in ("deadbeef", "sha256:xyz", "md5:" + "a" * 64, "sha256:" + "A" * 64):
         with pytest.raises(wrapper.PrivError):
             wrapper.cmd_write_digest(_args(bad), conf)
+
+
+# ── #1963 P2 切片①：write-digest --kind（resources → 第二文件） ─────────────
+
+
+def _args2(digest, kind):
+    return SimpleNamespace(digest=digest, kind=kind)
+
+
+def test_write_digest_kind_resources_writes_second_file(wrapper, conf, tmp_path):
+    rc = wrapper.cmd_write_digest(_args2(DIGEST, "resources"), conf)
+    assert rc == 0
+    written = tmp_path / "agent" / "ARTIFACT_DIGEST_RESOURCES"
+    assert written.read_text() == DIGEST + "\n"
+    # code 文件不受影响
+    assert not (tmp_path / "agent" / "ARTIFACT_DIGEST").exists()
+
+
+def test_write_digest_default_kind_is_code(wrapper, conf):
+    wrapper.cmd_write_digest(_args2(DIGEST, None), conf)
+    assert (conf["INSTALL_DIR"] + "/agent/ARTIFACT_DIGEST").replace("/", "/") and (
+        Path(conf["INSTALL_DIR"]) / "agent" / "ARTIFACT_DIGEST"
+    ).read_text() == DIGEST + "\n"
+
+
+def test_write_digest_rejects_unknown_kind(wrapper, conf):
+    with pytest.raises(wrapper.PrivError):
+        wrapper.cmd_write_digest(_args2(DIGEST, "whole-tree"), conf)

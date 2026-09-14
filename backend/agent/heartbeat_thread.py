@@ -56,6 +56,8 @@ class HeartbeatThread:
         # 重读 ARTIFACT_DIGEST 文件——write-digest 在重启探活后才落盘，启动
         # 单读永远落后一轮；str 保留为向后兼容形态）
         agent_artifact_digest: "str | Callable[[], str]" = "",
+        # ADR-0040 P2（#1963）：host-resources 身份（同 #1943 callable 语义）
+        agent_resources_digest: "str | Callable[[], str]" = "",
         get_outbox_counts: Optional[Callable[[], Dict[str, int]]] = None,
         # ADR-0025 Sprint 2: 运行日志归档可观测指标（→ extra['archive']）
         get_archive_metrics: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
@@ -81,6 +83,7 @@ class HeartbeatThread:
         self._agent_version = agent_version
         self._agent_code_revision = agent_code_revision
         self._agent_artifact_digest = agent_artifact_digest
+        self._agent_resources_digest = agent_resources_digest
         self._get_outbox_counts = get_outbox_counts
         self._get_archive_metrics = get_archive_metrics
         self._on_devices_reconnected = on_devices_reconnected
@@ -118,6 +121,17 @@ class HeartbeatThread:
         """#1943：callable 提供方逐拍解析（读 ARTIFACT_DIGEST 文件，72B）；
         提供方异常按空值处理——心跳路径不得因 digest 读取失败判 Agent 死亡。"""
         provider = self._agent_artifact_digest
+        if callable(provider):
+            try:
+                return provider()
+            except Exception:
+                return ""
+        return provider
+
+    def _resolve_agent_resources_digest(self) -> str:
+        """#1943：callable 提供方逐拍解析（读 ARTIFACT_DIGEST 文件，72B）；
+        提供方异常按空值处理——心跳路径不得因 digest 读取失败判 Agent 死亡。"""
+        provider = self._agent_resources_digest
         if callable(provider):
             try:
                 return provider()
@@ -372,6 +386,7 @@ class HeartbeatThread:
             agent_version=self._agent_version,
             agent_code_revision=self._agent_code_revision,
             agent_artifact_digest=self._resolve_artifact_digest(),
+            agent_resources_digest=self._resolve_agent_resources_digest(),
             system_stats=system_stats,
             mount_status=mount_status,
         )

@@ -1113,6 +1113,7 @@ def main() -> None:
         agent_version=_agent_pkg_version,
         agent_code_revision=_agent_code_revision,
         agent_artifact_digest=lambda: read_artifact_digest(),
+        agent_resources_digest=lambda: read_artifact_digest("resources"),
         get_outbox_counts=lambda: {
             "terminal_outbox_pending": local_db.count_pending_terminals(),
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),

@@ -160,7 +160,7 @@ def test_desired_digest_cache_keyed_by_fingerprint(agent_tree, schema_file, monk
     calls = {"n": 0}
     real_collect = ad.collect_artifact_entries
 
-    def counting_collect():
+    def counting_collect(kind="full"):
         calls["n"] += 1
         return real_collect()
 
@@ -221,3 +221,54 @@ def test_iter_payload_files_skip_rules(agent_tree, schema_file, monkeypatch):
     assert not any(a.startswith("resources/mtbf") for a in arcnames)
     assert "stp_schemas/pipeline_schema.json" in arcnames
     assert "VERSION" not in arcnames and "ARTIFACT_DIGEST" not in arcnames
+
+
+# ── #1963 P2 切片①：身份分层（code / resources 分区） ──────────────────────
+
+
+class TestKindPartition:
+    """code ∪ resources == full 且互斥；两侧镜像等价覆盖两 kind。"""
+
+    def test_partition_union_equals_full(self, agent_tree, schema_file, monkeypatch):
+        # resources/ 大件不入 git（gitignore + 带外布放）——分区测试必须在
+        # fixture 树上走（与 parity 同款 monkeypatch），真实树 resources 恒空
+        monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
+        monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
+        full = ad.collect_artifact_entries()
+        code = ad.collect_artifact_entries(kind="code")
+        resources = ad.collect_artifact_entries(kind="resources")
+        rel = lambda es: {e[0] for e in es}
+        assert rel(code) | rel(resources) == rel(full)
+        assert not rel(code) & rel(resources)
+        # 分层语义：resources 身份只含 resources/**（且不含 mtbf/）
+        assert rel(resources) and all(r.startswith("resources/") for r in rel(resources))
+        assert all(not r.startswith("resources/mtbf/") for r in rel(resources))
+
+    def test_partition_digests_differ_and_stable(self, agent_tree, schema_file, monkeypatch):
+        full = _cp_digest(agent_tree, schema_file, monkeypatch)
+        code = ad.compute_desired_artifact_digest(kind="code")
+        resources = ad.compute_desired_artifact_digest(kind="resources")
+        assert len({full, code, resources}) == 3
+        assert ad.compute_desired_artifact_digest(kind="code") == code
+
+    def test_mirror_parity_both_kinds(self, agent_tree, schema_file, monkeypatch):
+        monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
+        monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
+        code_cp = ad.collect_artifact_entries(kind="code")
+        res_cp = ad.collect_artifact_entries(kind="resources")
+        extra = {"stp_schemas/pipeline_schema.json": str(schema_file)}
+        code_ag = agent_ad.collect_artifact_entries(str(agent_tree), kind="code", extra_files=extra)
+        res_ag = agent_ad.collect_artifact_entries(str(agent_tree), kind="resources")
+        # code 身份含 schema arcname（extra），镜像侧对齐 extra 后比较
+        assert ad.digest_entries(code_cp) == agent_ad.digest_entries(code_ag)
+        assert ad.digest_entries(res_cp) == agent_ad.digest_entries(res_ag)
+
+    def test_resources_digest_sensitivity_and_code_isolation(self, agent_tree, schema_file, monkeypatch):
+        monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
+        monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
+        d1 = ad.compute_desired_artifact_digest(kind="resources")
+        code_d1 = ad.compute_desired_artifact_digest(kind="code")
+        _write(agent_tree / "resources" / "aimonkey" / "monkey.bin", b"CHANGED")
+        assert ad.compute_desired_artifact_digest(kind="resources") != d1
+        # 分层隔离的语义本体：resources 内容变化不影响 code 身份
+        assert ad.compute_desired_artifact_digest(kind="code") == code_d1

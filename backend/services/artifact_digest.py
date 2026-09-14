@@ -28,9 +28,16 @@ logger = logging.getLogger(__name__)
 
 DIGEST_PREFIX = "sha256:"
 
+ARTIFACT_KIND_FULL = "full"        # P1 全集身份（evaluate_convergence 判定用）
+ARTIFACT_KIND_CODE = "code"        # P2：全集 − resources/**
+ARTIFACT_KIND_RESOURCES = "resources"  # P2：全集 ∩ resources/**（除 mtbf/）
+
+# kind 分区（#1963）：code ∪ resources == full、互斥——契约测试守护。
+_RESOURCES_PREFIX = "resources/"
+
 _cache_lock = threading.Lock()
-_cached_fingerprint: str | None = None
-_cached_digest: str | None = None
+# 缓存按 kind 分桶（full / code / resources 各自独立指纹）
+_cache: dict[str, tuple[str | None, str | None]] = {}
 
 
 def _cache_disabled() -> bool:
@@ -41,15 +48,19 @@ def _cache_disabled() -> bool:
 
 
 def invalidate_artifact_digest_cache() -> None:
-    """Drop the in-process desired-digest cache."""
-    global _cached_fingerprint, _cached_digest
+    """Drop the in-process desired-digest cache（全部 kind）。"""
     with _cache_lock:
-        _cached_fingerprint = None
-        _cached_digest = None
+        _cache.clear()
 
 
-def collect_artifact_entries() -> list[tuple[str, bool, str]]:
-    """规范化序列 ``(relpath, 可执行位, content sha256)``，按 relpath 排序。"""
+def collect_artifact_entries(kind: str = ARTIFACT_KIND_FULL) -> list[tuple[str, bool, str]]:
+    """规范化序列 ``(relpath, 可执行位, content sha256)``，按 relpath 排序。
+
+    kind 分区（#1963，ADR-0040 §5-3 P2）：``full`` = 共享载荷枚举全集（P1
+    语义不变）；``code`` = 全集 − ``resources/**``；``resources`` = 全集 ∩
+    ``resources/**``（除 ``resources/mtbf/``，枚举层已排除）。code ∪
+    resources == full且互斥，契约测试守护。
+    """
     entries: list[tuple[str, bool, str]] = []
     for full_path, arcname in _iter_payload_files():
         st = os.stat(full_path)
@@ -59,7 +70,13 @@ def collect_artifact_entries() -> list[tuple[str, bool, str]]:
                 h.update(chunk)
         entries.append((arcname.replace(os.sep, "/"), bool(st.st_mode & 0o111), h.hexdigest()))
     entries.sort()
-    return entries
+    if kind == ARTIFACT_KIND_FULL:
+        return entries
+    if kind == ARTIFACT_KIND_CODE:
+        return [e for e in entries if not e[0].startswith(_RESOURCES_PREFIX)]
+    if kind == ARTIFACT_KIND_RESOURCES:
+        return [e for e in entries if e[0].startswith(_RESOURCES_PREFIX)]
+    raise ValueError(f"unknown artifact kind: {kind!r}")
 
 
 def digest_entries(entries: list[tuple[str, bool, str]]) -> str:
@@ -75,30 +92,40 @@ def digest_entries(entries: list[tuple[str, bool, str]]) -> str:
     return DIGEST_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _input_fingerprint() -> str:
+def _input_fingerprint(kind: str = ARTIFACT_KIND_FULL) -> str:
     """输入集状态指纹（stat-only，不读内容）——进程缓存的缓存键。"""
     parts = []
     for full_path, arcname in _iter_payload_files():
         st = os.stat(full_path)
         parts.append((arcname.replace(os.sep, "/"), st.st_size, st.st_mtime_ns, st.st_mode & 0o111))
     parts.sort()
+    if kind == ARTIFACT_KIND_CODE:
+        parts = [p for p in parts if not p[0].startswith(_RESOURCES_PREFIX)]
+    elif kind == ARTIFACT_KIND_RESOURCES:
+        parts = [p for p in parts if p[0].startswith(_RESOURCES_PREFIX)]
+    elif kind != ARTIFACT_KIND_FULL:
+        raise ValueError(f"unknown artifact kind: {kind!r}")
     return hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
 
 
-def compute_desired_artifact_digest() -> str:
-    """Desired digest：现算 + 进程缓存（缓存键 = 输入集状态指纹）。"""
-    global _cached_fingerprint, _cached_digest
+def compute_desired_artifact_digest(kind: str = ARTIFACT_KIND_FULL) -> str:
+    """Desired digest：现算 + 进程缓存（缓存键 = 输入集状态指纹，按 kind 分桶）。"""
     if _cache_disabled():
-        return digest_entries(collect_artifact_entries())
-    fingerprint = _input_fingerprint()
+        return digest_entries(collect_artifact_entries(kind))
+    fingerprint = _input_fingerprint(kind)
     with _cache_lock:
-        if _cached_digest is not None and _cached_fingerprint == fingerprint:
-            return _cached_digest
-    digest = digest_entries(collect_artifact_entries())
+        hit = _cache.get(kind)
+        if hit is not None and hit[0] == fingerprint:
+            return hit[1]
+    digest = digest_entries(collect_artifact_entries(kind))
     with _cache_lock:
-        _cached_fingerprint = fingerprint
-        _cached_digest = digest
+        _cache[kind] = (fingerprint, digest)
     return digest
+
+
+def compute_desired_resources_digest() -> str:
+    """P2（#1963）：host-resources 身份（resources/ 除 mtbf/）——分层流载体。"""
+    return compute_desired_artifact_digest(ARTIFACT_KIND_RESOURCES)
 
 
 def evaluate_convergence(host, *, force: bool = False) -> tuple[str, dict | None]:

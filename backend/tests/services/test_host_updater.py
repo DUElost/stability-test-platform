@@ -648,3 +648,40 @@ def test_build_remote_script_protects_resources_tree():
     # mtbf 语义不变：exclude（不同步）；非 mtbf resources 不被 exclude（继续同步）
     assert "--exclude='resources/mtbf/'" in script
     assert "--exclude='resources/'" not in script
+
+
+def test_build_remote_script_writes_resources_digest():
+    """#1963 P2 切片①：resources 身份落第二文件（wrapper --kind / legacy tee）。"""
+    res_digest = "sha256:" + "b" * 64
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        tar_path="/tmp/stp-agent-update.tar.gz",
+        user="android",
+        group="android",
+        artifact_digest="sha256:" + "a" * 64,
+        resources_digest=res_digest,
+    )
+    assert f'RESOURCES_DIGEST="{res_digest}"' in script
+    # wrapper 路径：--kind resources（能力探测失败仅 WARN，不阻塞部署）
+    assert 'write-digest --digest "" --kind resources' in script
+    assert 'write-digest --kind resources --digest "$RESOURCES_DIGEST"' in script
+    assert "WARN: stp-agent-priv lacks write-digest --kind" in script
+    # legacy 路径：tee 到第二文件
+    assert 'tee "$INSTALL_DIR/agent/ARTIFACT_DIGEST_RESOURCES"' in script
+
+
+def test_build_remote_script_omits_resources_block_when_empty():
+    script = _build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        tar_path="/tmp/stp-agent-update.tar.gz",
+        user="android",
+        group="android",
+        artifact_digest="sha256:" + "a" * 64,
+        resources_digest="",
+    )
+    # 空值时块仍在模板内但被 [ -n "$RESOURCES_DIGEST" ] 守护（运行时惰性）
+    guard = script.index('if [ -n "$RESOURCES_DIGEST" ]; then')
+    write_at = script.index('write-digest --kind resources --digest "$RESOURCES_DIGEST"')
+    assert guard < write_at

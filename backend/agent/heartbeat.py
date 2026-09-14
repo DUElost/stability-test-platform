@@ -37,6 +37,8 @@ def send_heartbeat(
     agent_code_revision: str = "",
     # ADR-0040 D2: 部署 artifact digest（与 script_catalog_version 同通道同信任模型）
     agent_artifact_digest: str = "",
+    # ADR-0040 P2（#1963）：host-resources 身份（ARTIFACT_DIGEST_RESOURCES 只读上报）
+    agent_resources_digest: str = "",
     # Phase 3c: 预收集统计信息（避免 HeartbeatThread 双采）
     system_stats: Optional[Dict[str, Any]] = None,
     mount_status: Optional[Dict[str, Any]] = None,
@@ -77,6 +79,7 @@ def send_heartbeat(
         "agent_code_revision": agent_code_revision,
         # ADR-0040 D2
         "agent_artifact_digest": agent_artifact_digest,
+        "agent_resources_digest": agent_resources_digest,
     }
 
     agent_secret = os.getenv("AGENT_SECRET", "")
