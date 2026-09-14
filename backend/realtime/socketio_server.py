@@ -751,17 +751,41 @@ def schedule_agent_control_fanout(
         return
 
     async def _fanout() -> None:
+        failures = 0
         for i, (host_id, data) in enumerate(items):
-            await sio.emit(
-                "control",
-                data,
-                namespace="/agent",
-                room=f"agent:{host_id}",
-            )
+            # #1926：per-item 容错——单 emit 失败（如 Redis adapter publish
+            # 异常）不得终止整个扇出协程，否则剩余 host 永远收不到 abort
+            # control（job 滞留 RUNNING 只能等 reaper 兜底）。
+            try:
+                await sio.emit(
+                    "control",
+                    data,
+                    namespace="/agent",
+                    room=f"agent:{host_id}",
+                )
+            except Exception:  # noqa: BLE001 - 扇出隔离：逐项记录继续
+                failures += 1
+                logger.exception("agent_control_fanout_emit_failed host=%s", host_id)
             if yield_every > 0 and (i + 1) % yield_every == 0:
                 await asyncio.sleep(0)
+        if failures:
+            logger.error(
+                "agent_control_fanout_partial_failures total=%d failed=%d",
+                len(items), failures,
+            )
 
-    asyncio.run_coroutine_threadsafe(_fanout(), _main_loop)
+    future = asyncio.run_coroutine_threadsafe(_fanout(), _main_loop)
+
+    # #1926：future 不再静默丢弃——协程级异常（per-item 已隔离，这里是
+    # 框架性失败）留业务日志而非 "never retrieved" 噪音。
+    def _log_future_exception(f: asyncio.Future) -> None:
+        if f.cancelled():
+            return
+        exc = f.exception()
+        if exc is not None:
+            logger.error("agent_control_fanout_coroutine_failed: %s", exc)
+
+    future.add_done_callback(_log_future_exception)
 
 
 def emit_plan_changed(plan_id: int, action: str) -> None:

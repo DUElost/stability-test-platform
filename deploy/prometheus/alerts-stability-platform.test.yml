@@ -29,7 +29,7 @@ tests:
       - series: 'stability_agent_outbox_pending{host_id="host-1",type="terminal"}'
         values: '1x40'
       # StabilityPlanRunCounterDrift（#77）：counter_reconciler 修复到一列漂移
-      - series: 'stability_plan_run_counter_drift_total{plan_run_id="42",mode="terminal"}'
+      - series: 'stability_plan_run_counter_drift_total{mode="terminal"}'
         values: '0+1x20'
       # StabilityGhostJobCompleteEndpoint（#743 期望 2）：幽灵端点 404 持续。
       # 标签形状取自 backend/core/request_metrics.py 的接线：endpoint 是**路由模板化**
@@ -89,7 +89,6 @@ tests:
         alertname: StabilityPlanRunCounterDrift
         exp_alerts:
           - exp_labels:
-              plan_run_id: "42"
               mode: terminal
               severity: warning
             exp_annotations:

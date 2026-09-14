@@ -45,6 +45,12 @@ class _FakeQuery:
     def first(self):
         return self._rules[0] if self._rules else None
 
+    def scalar(self):
+        # #1925：_load_prior_channel_delivery 的窗口上界查询
+        # ``db.query(func.max(NotificationLog.id)).scalar()`` —— 替身无行，
+        # 返回 None 表示空表（不施加窗口过滤）。
+        return None
+
 
 class _FakeSession:
     def __init__(self, rules):

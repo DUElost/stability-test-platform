@@ -219,6 +219,8 @@ APPLY_T0=$(date +%s%3N)
 # aimonkey/、flashtool/ 随 hot-update 同步，但 resources/mtbf/ 是 host 级
 # 手工布放（APK 三件套，不在仓库），必须排除，否则每次 hot-update 都会把
 # MTBF 资源清掉（2026-08-20 冒烟 #214/#216「APK 不存在」根因）。
+# ADR-0040 §4.3 P2 前置（#1950）：resources/ 整树加 protect（防源树删除
+# 传播到 host 清掉大件），不 exclude——分发照旧（wrapper 路径同语义）。
 if [ "$USE_PRIV_WRAPPER" = "1" ]; then
     # wrapper：固定目标 + 固定 excludes（含 mtbf protect）+ --safe-links
     sudo "$PRIV" apply-code --staged "$TMPDIR"
@@ -233,6 +235,7 @@ else
         --exclude='DEPLOY.md' \
         --exclude='stability-test-agent.service' \
         --exclude='hosts.txt' \
+        --filter='protect resources/' \
         "$TMPDIR/" "$INSTALL_DIR/agent/"
 fi
 

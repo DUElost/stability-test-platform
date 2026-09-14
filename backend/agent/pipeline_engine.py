@@ -876,8 +876,14 @@ class StepResult:
 #: （生产实证：24h/45h soak 被 1 分钟中断打穿）。改为覆盖 ~60s 的退避。
 _LEASE_VERIFY_RETRY_DELAYS = (1, 2, 4, 8, 15, 30)
 
-#: patrol 期内「控制面不可达」连续 N 次才判死（间隔 300s ⇒ ≈15 分钟），
+#: patrol 期内「控制面不可达」连续 N 次才判死（间隔 300s ⇒ 名义 ≈15 分钟），
 #: 与「租约真丢失」（409 device_lease_not_held）的立即终止分级（#1881）。
+#: #1923 口径修正：**实际中断容忍上限受租约 TTL 封顶**（后端
+#: `_DEFAULT_LEASE_SECONDS=600`）——中断超过 TTL 后第一次 extend-batch 对
+#: 过期租约返回 ``lease_missing``（extend 不复活过期租约），renewer 归入
+#: 立即终态类杀进程。故有效容忍 ≈ min(streak 窗口, ~10 分钟)；10~15 分钟
+#: 的中断死因是 lease_missing 而非本 streak 判死。调大 TTL 或宽限复活需
+#: ADR 裁决（见 issue #1923）。
 _LEASE_VERIFY_OUTAGE_ABORT_STREAK = 3
 
 

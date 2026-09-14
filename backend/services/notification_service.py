@@ -16,6 +16,7 @@ from typing import Any, Dict
 from uuid import uuid4
 
 import requests
+from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from backend.core.database import SessionLocal
@@ -327,6 +328,14 @@ def _send_email(to: str, subject_prefix: str, message: str) -> DeliveryResult:
     return accepted("EMAIL", "smtp accepted")
 
 
+#: #1925：先例查找的扫描窗口（最近 N 条 id）。表无 event_type/context 索引
+#: 也无保留任务，无界全表倒序扫在每次**首投递**（绝大多数 dispatch，必然
+#: 无匹配）都整表逐行 JSON 提取，代价随表单调恶化。窗口内查不到即视为
+#: 「无先例」——去重合并只对近期日志生效（与 #1826 前的「最近 30 条」
+#: 同族，仅放大窗口）。表达式索引见该单 Revisit。
+_PRIOR_DELIVERY_SCAN_WINDOW = 5000
+
+
 def _load_prior_channel_delivery(
     db, event_type: str, context: Dict[str, Any],
 ) -> tuple[int | None, dict[str, Any]]:
@@ -338,6 +347,11 @@ def _load_prior_channel_delivery(
             NotificationLog.source == NotificationSource.PLATFORM,
         )
     )
+    max_id = db.query(func.max(NotificationLog.id)).scalar()
+    if max_id is not None:
+        query = query.filter(
+            NotificationLog.id > max_id - _PRIOR_DELIVERY_SCAN_WINDOW,
+        )
     if context.get("run_id") is None:
         event_id = context.get("notification_event_id")
         if not event_id:
