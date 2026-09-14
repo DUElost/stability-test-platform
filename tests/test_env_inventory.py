@@ -117,3 +117,17 @@ def test_repo_doc_inventory_is_in_sync():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "env-inventory:begin" in DOC.read_text(encoding="utf-8")
+
+def test_signature_ignores_line_numbers_and_detects_semantics():
+    """#1952 教训：行号平移不算漂移；默认值/登记/类别变化才算。"""
+    mod = _load_module()
+    base = {"ZZ_X": {"default": "5", "locations": [("backend/a.py", 10)], "test_only": False}}
+    shifted = {"ZZ_X": {"default": "5", "locations": [("backend/a.py", 99)], "test_only": False}}
+    assert mod.semantic_signature(base, set()) == mod.semantic_signature(shifted, set())
+
+    changed_default = {"ZZ_X": {"default": "6", "locations": [("backend/a.py", 10)], "test_only": False}}
+    diff = mod.signature_diff(
+        mod.semantic_signature(changed_default, set()),
+        mod.semantic_signature(base, set()),
+    )
+    assert any("默认值变化" in item for item in diff), diff

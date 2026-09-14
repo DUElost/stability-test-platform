@@ -157,7 +157,8 @@
 
 > 生成：`python tools/dev/env_inventory.py --write`；
 > 校验：`python tools/dev/env_inventory.py --check`（已接入 `run_gates.py` 的
-> `check:quick` / `check:pr`，代码新增读取名而本表未刷新即红）。
+> `check:quick` / `check:pr`）：只比较**语义**（名称/默认值/登记状态/类别），
+> 纯行号平移不触发；`读取点` 列是上次 `--write` 的导航快照，可能与当前行号有偏差。
 > 覆盖范围：`backend/**/*.py`（不含 `backend/agent/scripts/**`——版本化脚本目录
 > 自管环境契约，见 ADR-0020）；`示例` 列 ✅ = 该名出现在任一 `.env*.example`
 > （含注释态条目），`—` = 仅内部/开发使用、未进运维模板。
