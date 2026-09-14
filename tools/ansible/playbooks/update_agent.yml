@@ -556,6 +556,51 @@
           until: agent_health_after_update.rc == 0
           when: agent_update_requires_restart | bool
 
+        # ── ADR-0040 P2（#1997）：healthy convergence 后写部署身份 ─────────
+        # 与热更新通道同语义：只有健康收敛过才落 digest（rescue/回滚路径
+        # 天然不写，主机保持旧身份 → 控制面按 drift 重新收敛）。
+        - name: Compute deployment artifact digests (ADR-0040 P2)
+          delegate_to: localhost
+          become: false
+          ansible.builtin.command:
+            cmd: >-
+              python3 {{ stp_repo_root }}/tools/ansible/compute_deploy_digest.py
+              --source-dir {{ agent_source_dir }}
+              --schema-file {{ stp_repo_root }}/backend/schemas/pipeline_schema.json
+          register: agent_deploy_digests
+          changed_when: false
+          when: agent_code_change_lines | length > 0
+
+        - name: Extract deployment digests
+          ansible.builtin.set_fact:
+            agent_code_artifact_digest: "{{ agent_deploy_digests.stdout | regex_search('CODE_DIGEST=(\\S+)', '\\1') }}"
+            agent_resources_artifact_digest: "{{ agent_deploy_digests.stdout | regex_search('RESOURCES_DIGEST=(\\S*)', '\\1') }}"
+          when: agent_deploy_digests.stdout is defined
+
+        - name: Write agent ARTIFACT_DIGEST (ADR-0040 D2)
+          become: true
+          ansible.builtin.copy:
+            content: "{{ agent_code_artifact_digest }}\n"
+            dest: "{{ agent_install_dir }}/agent/ARTIFACT_DIGEST"
+            owner: "{{ agent_user }}"
+            group: "{{ agent_group }}"
+            mode: "0644"
+          when:
+            - agent_code_change_lines | length > 0
+            - agent_code_artifact_digest | length > 0
+
+        - name: Write agent ARTIFACT_DIGEST_RESOURCES (ADR-0040 P2)
+          become: true
+          ansible.builtin.copy:
+            content: "{{ agent_resources_artifact_digest }}\n"
+            dest: "{{ agent_install_dir }}/agent/ARTIFACT_DIGEST_RESOURCES"
+            owner: "{{ agent_user }}"
+            group: "{{ agent_group }}"
+            mode: "0644"
+          when:
+            - agent_code_change_lines | length > 0
+            - agent_resources_artifact_digest | length > 0
+
       rescue:
         - name: Roll back agent code from snapshot
           become: true

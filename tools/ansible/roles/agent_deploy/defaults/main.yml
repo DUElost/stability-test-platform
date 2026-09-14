@@ -6,9 +6,12 @@ agent_allowed_service_actions:
 
 agent_install_excludes:
   - "__pycache__/"
-  - "test_agent*.py"
-  - "test_aimonkey*.py"
-  - "test_main*.py"
+  # ADR-0040 P2（#1997）：与部署 digest 输入集契约对齐——源码测试统一
+  # test_*.py 宽模式（热更新打包同规则）；venv//logs/ 为宿主侧目录，
+  # 源树出现时也不同步。
+  - "test_*.py"
+  - "venv/"
+  - "logs/"
   - "tests/"
   - "install_agent.sh"
   - "agentctl.sh"
@@ -29,3 +32,8 @@ agent_install_excludes:
 # 源目录同名文件覆盖主机本地布放版本。
 agent_host_local_paths:
   - "resources/mtbf/"
+  # ADR-0040 D2（#1997）：部署身份文件——host 级状态，rsync --delete 不得
+  # 清掉（清掉即心跳丢 current → 控制面误判 drift 多做一次全量）。写入由
+  # 本 playbook 在 health 通过后显式完成。
+  - "ARTIFACT_DIGEST"
+  - "ARTIFACT_DIGEST_RESOURCES"
