@@ -536,10 +536,20 @@ def cmd_write_version(args, conf):
     return 0
 
 
+_DIGEST_FILENAMES = {"code": "ARTIFACT_DIGEST", "resources": "ARTIFACT_DIGEST_RESOURCES"}
+
+
 def cmd_write_digest(args, conf):
-    """ADR-0040 D2：部署收敛成功后受控写入 ARTIFACT_DIGEST（write-version 同族）。"""
+    """ADR-0040 D2：部署收敛成功后受控写入 ARTIFACT_DIGEST（write-version 同族）。
+
+    ``--kind``（#1963，P2 身份分层）：code → ARTIFACT_DIGEST（默认，向后
+    兼容）；resources → ARTIFACT_DIGEST_RESOURCES。
+    """
     _require_root()
     digest = args.digest.strip()
+    kind = getattr(args, "kind", "code") or "code"
+    if kind not in _DIGEST_FILENAMES:
+        _fail("--kind must be 'code' or 'resources'")
     if not digest:
         print("STP_WRITE_DIGEST_SKIPPED")
         return 0
@@ -547,8 +557,10 @@ def cmd_write_digest(args, conf):
     if prefix != "sha256" or not _SHA256_RE.match(hexpart):
         _fail("--digest must be 'sha256:<64 hex chars>' (ADR-0040 D1)")
     with _target_directory(conf, "agent") as target_fd:
-        _atomic_write_at(target_fd, "ARTIFACT_DIGEST", digest + "\n", 0o644, _agent_identity(conf))
-    print("STP_WRITE_DIGEST_OK digest=%s" % digest)
+        _atomic_write_at(
+            target_fd, _DIGEST_FILENAMES[kind], digest + "\n", 0o644, _agent_identity(conf),
+        )
+    print("STP_WRITE_DIGEST_OK kind=%s digest=%s" % (kind, digest))
     return 0
 
 
@@ -699,6 +711,7 @@ def _build_parser():
     p.add_argument("--version", default="")
 
     p = sub.add_parser("write-digest", help="write agent/ARTIFACT_DIGEST (ADR-0040)")
+    p.add_argument("--kind", default="code", choices=["code", "resources"])
     p.add_argument("--digest", default="")
 
     p = sub.add_parser("sync-env", help="update .env secret/overrides")
