@@ -5,7 +5,10 @@ Exposes key metrics for monitoring and alerting.
 """
 
 import functools
+import logging
 from typing import Callable, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 # Try to import prometheus_client, fallback to mock if not available
 try:
@@ -347,10 +350,13 @@ plan_run_aggregation_failed_total = Counter(
 # #77：counter_reconciler 对账发现并修复的计数器漂移（每漂移列一条）。
 # 理论漂移率 = 0（所有终态入口都经 terminalization 集中服务）；> 0 即说明
 # 有入口绕开集中服务或出现并发 race，SLO 守卫见 ADR-0026 §6。
+# #1927：label 只保留 mode（白名单有界值域）——plan_run_id 单调无界，
+# Python client 子序列永不回收，系统性漂移（正是本指标最需要工作的时刻）
+# 会让基数爆炸；run 维度走 counter_reconciler 日志/审计。
 plan_run_counter_drift_total = Counter(
     'stability_plan_run_counter_drift_total',
     'PlanRun terminalization counter drift repaired per drifted column',
-    ['plan_run_id', 'mode'],  # mode: total | terminal | completed | failed | aborted
+    ['mode'],  # mode: total | terminal | completed | failed | aborted
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # #703：abort 持锁时长 + DB 连接池占用（QueuePool 耗尽观测）
@@ -783,19 +789,19 @@ def record_plan_run_counter_drift(plan_run_id: int, modes: "list[str] | tuple[st
 
     ``modes`` 为漂移列短名（total/terminal/completed/failed/aborted）；
     非白名单值过滤掉——防未来新增列悄然扩 label 值域。
+    #1927：run 维度不进 label（无界基数），仅记日志。
     """
     if not PROMETHEUS_AVAILABLE:
         return
-    try:
-        run_label = str(int(plan_run_id))
-    except (TypeError, ValueError):
+    valid_modes = [m for m in (modes or ()) if m in _PLAN_RUN_COUNTER_MODES]
+    if not valid_modes:
         return
-    for mode in modes or ():
-        if mode not in _PLAN_RUN_COUNTER_MODES:
-            continue
-        plan_run_counter_drift_total.labels(
-            plan_run_id=run_label, mode=mode,
-        ).inc()
+    for mode in valid_modes:
+        plan_run_counter_drift_total.labels(mode=mode).inc()
+    logger.info(
+        "plan_run_counter_drift_repaired plan_run_id=%s modes=%s",
+        plan_run_id, ",".join(valid_modes),
+    )
 
 
 def record_db_pool_status(engine_label: str, *, checked_out: int, overflow: int):
