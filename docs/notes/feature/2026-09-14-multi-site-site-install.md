@@ -24,7 +24,7 @@ Class: feature
 ## Verification
 
 - **仓库离线**（worktree，base=origin/main 137bbb90）：`pytest tests/test_site_install.py tests/test_site_config.py tests/test_site_config_plan.py -q` → **231 passed**（I3 13 / I1 188 / I2 30）；`ruff check backend/ tools/ scripts/` 通过；`scripts/run_gates.py check:quick` **10 gates OK**；`git diff --check` clean。I3 用例覆盖：幂等重跑（env 哈希不变、不重复迁移）、中断后从 marker 续跑、错误确认/他站 marker/平台不符、未接管库阻断、迁移失败不启动服务、脱敏（`PRIVATE_MARKER` 不入报告/状态）、摘要篡改、绑定目录与 state-dir 权限、`--dry-run` 零副作用。
-- **一次性容器验收**（演练机 172.21.8.238：`systemd-nspawn` + `debootstrap` Debian 13，`--private-network`，宿主同路径 bind 作中心存储替身，bundle 与状态目录经 bind 挂载，Python 依赖走 bundle 内 wheelhouse 离线安装）：
+- **一次性容器验收**（演练机 172.21.x.x：`systemd-nspawn` + `debootstrap` Debian 13，`--private-network`，宿主同路径 bind 作中心存储替身，bundle 与状态目录经 bind 挂载，Python 依赖走 bundle 内 wheelhouse 离线安装）：
   - `--dry-run` PASS（rc=0）；
   - 首装 PASS（rc=0）：`digest_matched`/`bindings_read`/`target_confirmed`/`deploy_root_ready`/`service_user_present`/`storage_mounted`/`dependencies_present`/`release_landed`/`venv_ready`/`env_created`/`templates_rendered`/`schema_at_head`/`admin_present`/`units_installed`/`nginx_ready`/`health_ok`；
   - 幂等重跑 PASS（rc=0）：`venv_present`/`env_reused`/`schema_at_head`/`admin_present`/`units_installed`/`nginx_ready`/`health_ok`，且 `.env.backend` 哈希前后一致（未轮换密钥）；
