@@ -196,6 +196,19 @@ else
     echo "STP_PRIV_FALLBACK=legacy"
 fi
 
+# #1942：wrapper 能力协商。热更新载荷不含 wrapper（ADR-0037——wrapper 在安装目录
+# 外、root 所有，由 install/Ansible 轨道交付），存量主机可能带着缺后加子命令的旧
+# wrapper：若不在动作前探测，失败会发生在「代码已同步、服务已重启」之后（尾部
+# exit 2），既留「已部署却记失败」的半态，又让下一次批量重复全量部署。
+# `write-digest --digest ""` 是空操作探针（支持时打 STP_WRITE_DIGEST_SKIPPED 并
+# exit 0；旧 wrapper 走 argparse 拒绝 exit 2），探针本身不落任何文件。
+if [ "$USE_PRIV_WRAPPER" = "1" ] && [ -n "$ARTIFACT_DIGEST" ]; then
+    if ! sudo -n "$PRIV" write-digest --digest "" >/dev/null 2>&1; then
+        echo "ERROR: stp-agent-priv lacks write-digest (outdated wrapper); run tools/ansible/playbooks/update_agent.yml on this host, then retry"
+        exit 1
+    fi
+fi
+
 # Capture pre-sync requirements.txt sha to detect dependency changes
 OLD_REQ_SHA=$(sha256sum "$INSTALL_DIR/agent/requirements.txt" 2>/dev/null | cut -d' ' -f1 || echo "none")
 # ADR-0040 D6：per-phase 计时（远端应用 / 重启探活），落控制面审计 details
@@ -482,15 +495,27 @@ def _ssh_connect(host_ip: str, port: int, username: str,
     return client, sftp
 
 
-def _remote_failure_message(stdout_text: str, exit_code: int) -> str:
-    """远程脚本失败时的 message：优先取脚本打的 ``ERROR:`` 行。
+def _remote_failure_message(stdout_text: str, stderr_text: str, exit_code: int) -> str:
+    """远程脚本失败时的 message：优先取脚本/wrapper 打的 ``ERROR:`` 行。
 
     #1253：脚本 exit 1（如服务重启后 5s 仍未 active）时，API 的 message 必须
     携带原因，而不是一句无法定位的 "Remote script failed (exit=1)"。
+    #1942：提权 wrapper 的拒绝（``STP_AGENT_PRIV_ERROR:``）与 argparse 用法错误
+    只走 stderr——只扫 stdout 会让「旧 wrapper 缺子命令」退化成无因文案。
+    顺序：stderr 哨兵 → stdout ``ERROR:`` 行 → stderr 末行（argparse 的
+    ``error: argument ...`` 在末行）。
     """
+    for line in stderr_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("STP_AGENT_PRIV_ERROR:"):
+            return f"Remote script failed (exit={exit_code}): {stripped[:300]}"
     for line in stdout_text.splitlines():
         stripped = line.strip()
         if stripped.startswith("ERROR:"):
+            return f"Remote script failed (exit={exit_code}): {stripped[:300]}"
+    for line in reversed(stderr_text.splitlines()):
+        stripped = line.strip()
+        if stripped:
             return f"Remote script failed (exit={exit_code}): {stripped[:300]}"
     return f"Remote script failed (exit={exit_code})"
 
@@ -691,7 +716,7 @@ def execute_hot_update(
                     "ok": False,
                     "converged": False,
                     "reason": "remote_script_failed",
-                    "message": _remote_failure_message(out_text, exit_code),
+                    "message": _remote_failure_message(out_text, err_text, exit_code),
                     "duration_ms": int((time.monotonic() - t0) * 1000),
                     "deps_refreshed": deps_refreshed,
                     "env_keys_synced": env_keys_synced,
