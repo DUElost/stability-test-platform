@@ -1,11 +1,13 @@
 # ADR-0042：配置读取收敛——分域 pydantic-settings 与裸读取边界
 
-- 状态：**Proposed**
-- 版本记录：v0.1（2026-09-14 初版，由 #737 收口后的 deferred 项触发；现状盘点与分域判据见正文）
+- 状态：**Accepted**（2026-09-14 裁决：引入 pydantic-settings；按 D2 判据分域迁移，不满足判据者保持裸读）
+- 版本记录：
+  - v1.0（2026-09-14）：用户委托本会话裁决——**引入**；载体取 D1 分域 Settings（否决方案 A 薄封装、方案 C 维持现状）；**附加硬约束**：Settings 仅读 `os.environ`（`env_file=None`），不得引入第二个 dotenv 加载器（`env_source.py` 仍是来源与优先级的唯一契约）；D6 门禁扩展为 P1 试点的**前置条件**。**转 Accepted**。
+  - v0.1（2026-09-14 初版，由 #737 收口后的 deferred 项触发；现状盘点与分域判据见正文）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-14
-- 决策者：本需求用户（待裁决）
+- 决策者：本需求用户（2026-09-14 委托本会话裁决；裁决依据见「备选方案与权衡」与 v1.0 版本记录）
 - 标签：配置, 环境变量, pydantic-settings, 可维护性, 依赖治理, #737
 - 关联：[#737](https://github.com/DUElost/stability-test-platform/issues/737)（配置黑盒与死打点治理；本 ADR 承接其 deferred「向统一配置管理类收敛」）、[`docs/development/environment-variables.md`](../development/environment-variables.md)（读取清单与裁决口径）、[`backend/core/env_source.py`](../../backend/core/env_source.py)（env 来源与优先级唯一契约）、[`backend/core/job_timeout_config.py`](../../backend/core/job_timeout_config.py)（既有集中默认值先例）、[`docs/development/dependencies-and-quality.md`](../development/dependencies-and-quality.md)（依赖与 lock 流程）
 
@@ -40,6 +42,9 @@
 **D1 引入 `pydantic-settings` 作为分域 Settings 基础设施**，落点 `backend/core/settings/`，
 按域建模（如 `db.py` / `auth.py` / `scheduler.py` / `notify.py` / `console.py` / `storage.py`），
 每域一个 `BaseSettings` 子类。**不建全仓单一巨型模型。**
+**来源约束（v1.0 裁决附加）**：Settings 必须只读 `os.environ`（`env_file=None`，不启用
+pydantic-settings 自带的 dotenv 加载）——`.env` 来源与优先级仍由 `env_source.py` 独家决定，
+禁止出现第二个来源解析器。
 
 **D2 迁移判据（不为迁移而迁移）**：某域满足任一条件才迁移，否则**保持裸读**
 （继续受清单门禁约束）：
@@ -54,6 +59,8 @@
 **D4 惰性访问**：提供 `get_settings()`（`lru_cache` + `cache_clear()`），禁止 import 时固化；
 迁移域的模块级常量改为惰性取值。Agent 侧提供与 hot-update 对齐的 `reload_settings()`
 （清缓存重建），保证 `.env` 行级改写后重读生效；后端进程内不热更（与现状一致）。
+**验收（v1.0 裁决附加）**：P1 试点必须含「Settings 不读 `.env` 文件」的负向用例
+（仅设文件、不设进程 env → 不得生效），防止来源契约被悄悄旁路。
 
 **D5 非目标（明确排除）**：
 

@@ -3,6 +3,12 @@
 Status: implemented
 Class: architecture
 
+> **裁决已落（2026-09-14）**：用户委托本会话裁决——**引入 pydantic-settings**，
+> 载体取 D1 分域 Settings，D2 判据照准，并附加两条硬约束（Settings 仅读
+> `os.environ` / `env_file=None`；D6 门禁扩展为 P1 试点前置）。ADR-0042 已由
+> v0.1 Proposed 升为 **v1.0 Accepted**（同 PR 内完成，含 README 主表与 DOC-MAP
+> 同步）。下述「为什么走 ADR」保留为决策过程记录。
+
 ## Decision
 
 承接 #737 收口的 deferred 项「向统一配置管理类收敛」，产出 **ADR-0042（Proposed）**：
