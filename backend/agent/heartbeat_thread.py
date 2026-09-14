@@ -52,8 +52,12 @@ class HeartbeatThread:
         # ADR-0020: agent version for preflight consistency check
         agent_version: str = "",
         agent_code_revision: str = "",
-        # ADR-0040 D2: 部署 artifact digest（ARTIFACT_DIGEST 文件值，启动时读取）
-        agent_artifact_digest: str = "",
+        # ADR-0040 D2: 部署 artifact digest（#1943：传 callable 则每次心跳
+        # 重读 ARTIFACT_DIGEST 文件——write-digest 在重启探活后才落盘，启动
+        # 单读永远落后一轮；str 保留为向后兼容形态）
+        agent_artifact_digest: "str | Callable[[], str]" = "",
+        # ADR-0040 P2（#1963）：host-resources 身份（同 #1943 callable 语义）
+        agent_resources_digest: "str | Callable[[], str]" = "",
         get_outbox_counts: Optional[Callable[[], Dict[str, int]]] = None,
         # ADR-0025 Sprint 2: 运行日志归档可观测指标（→ extra['archive']）
         get_archive_metrics: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
@@ -79,6 +83,7 @@ class HeartbeatThread:
         self._agent_version = agent_version
         self._agent_code_revision = agent_code_revision
         self._agent_artifact_digest = agent_artifact_digest
+        self._agent_resources_digest = agent_resources_digest
         self._get_outbox_counts = get_outbox_counts
         self._get_archive_metrics = get_archive_metrics
         self._on_devices_reconnected = on_devices_reconnected
@@ -111,6 +116,28 @@ class HeartbeatThread:
         """Return the latest effective_slots from capacity computation (thread-safe)."""
         with self._capacity_lock:
             return self._effective_slots
+
+    def _resolve_artifact_digest(self) -> str:
+        """#1943：callable 提供方逐拍解析（读 ARTIFACT_DIGEST 文件，72B）；
+        提供方异常按空值处理——心跳路径不得因 digest 读取失败判 Agent 死亡。"""
+        provider = self._agent_artifact_digest
+        if callable(provider):
+            try:
+                return provider()
+            except Exception:
+                return ""
+        return provider
+
+    def _resolve_agent_resources_digest(self) -> str:
+        """#1943：callable 提供方逐拍解析（读 ARTIFACT_DIGEST 文件，72B）；
+        提供方异常按空值处理——心跳路径不得因 digest 读取失败判 Agent 死亡。"""
+        provider = self._agent_resources_digest
+        if callable(provider):
+            try:
+                return provider()
+            except Exception:
+                return ""
+        return provider
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -358,7 +385,8 @@ class HeartbeatThread:
             boot_id=self._boot_id,
             agent_version=self._agent_version,
             agent_code_revision=self._agent_code_revision,
-            agent_artifact_digest=self._agent_artifact_digest,
+            agent_artifact_digest=self._resolve_artifact_digest(),
+            agent_resources_digest=self._resolve_agent_resources_digest(),
             system_stats=system_stats,
             mount_status=mount_status,
         )

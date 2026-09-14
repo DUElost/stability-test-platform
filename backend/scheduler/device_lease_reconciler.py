@@ -73,6 +73,19 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
         )
     )).scalars().all()
 
+    # #1959 / #992: 全局一致锁序 —— 先 Job 再 Lease。
+    # complete（``complete_job``）与 ``extend_leases_batch`` 都是 Job → Lease；
+    # 本检查原先相反（先 ``FOR UPDATE`` DeviceLease，再 ``FOR UPDATE`` JobInstance），
+    # 于是「批量续租 × 过期回收」在同一 (job, lease) 两行上形成环路等待，
+    # PostgreSQL 反复检测到死锁（2026-09-13/14 观测 83 次，48 次卡在
+    # ``job_instance`` 元组）。候选按 job_id 升序处理，与 ``extend_leases_batch``
+    # 的 ``WHERE id IN (...) ORDER BY id FOR UPDATE``（``agent_api.py:1562`` 起）
+    # 处于同一全序，避免跨候选再引入逆序；``job_id`` 为 NULL 的孤儿租约没有
+    # Job 可取锁，排在最后。
+    ordered = sorted(expired, key=lambda lease: (
+        lease.job_id is None, lease.job_id or 0, lease.id,
+    ))
+
     unknown_count = 0
     failed_count = 0
     terminal_released_count = 0
@@ -81,9 +94,29 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
     # 函数尾部统一终态化并返回；其余候选留待下轮 tick。
     terminalize: JobInstance | None = None
 
-    for candidate in expired:
+    for candidate in ordered:
         try:
             async with db.begin_nested():
+                # 锁序：Job → Lease（见上方 #1959 说明）。candidate 来自预扫描，
+                # 其 job_id 即该行的真实归属——``acquire_lease`` 只 INSERT 新行
+                # （``lease_manager.py:126`` 起），租约行的 job_id 不会换绑，
+                # 因此可以据此在锁 Lease 之前先锁 Job。
+                job = None
+                if candidate.job_id is not None:
+                    try:
+                        job = (await db.execute(
+                            select(JobInstance)
+                            .where(JobInstance.id == candidate.job_id)
+                            .with_for_update()
+                            .execution_options(populate_existing=True)
+                        )).scalars().first()
+                    except Exception:
+                        logger.warning(
+                            "reconciler_job_load_failed job=%s", candidate.job_id,
+                            exc_info=True,
+                        )
+                        continue
+
                 lease = (await db.execute(
                     select(DeviceLease)
                     .where(DeviceLease.id == candidate.id)
@@ -98,6 +131,17 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                     continue
                 job_id = lease.job_id
                 device_id = lease.device_id
+
+                if candidate.job_id != job_id:
+                    # 理论上不可达：租约行只 INSERT、不换绑 job（acquire_lease）。
+                    # 一旦出现，说明预扫描与锁内行已不同源——保守跳过，交下一轮，
+                    # 以免在未持该 Job 锁时触碰 Lease 而破坏刚建立的锁序。
+                    logger.warning(
+                        "reconciler_lease_job_mismatch lease=%s scanned_job=%s locked_job=%s",
+                        candidate.id, candidate.job_id, job_id,
+                    )
+                    continue
+
                 if job_id is None:
                     # Orphan lease (no associated job) — release it directly
                     lease.status = LeaseStatus.RELEASED.value
@@ -108,19 +152,9 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                     terminal_released_count += 1
                     continue
 
-                try:
-                    job = (await db.execute(
-                        select(JobInstance)
-                        .where(JobInstance.id == job_id)
-                        .with_for_update()
-                        .execution_options(populate_existing=True)
-                    )).scalars().first()
-                except Exception:
-                    logger.warning("reconciler_job_load_failed job=%s", job_id, exc_info=True)
-                    continue
-
                 if job is None:
-                    # Orphan lease (job deleted, but FK should prevent this) — release it
+                    # Orphan lease (job deleted, but FK should prevent this) — release it.
+                    # 没有 Job 行可取锁，故不触及锁序不变量。
                     await release_lease(db, device_id, job_id, LeaseType.JOB)
                     logger.warning(
                         "reconciler_orphan_lease_released device=%s job=%s", device_id, job_id,

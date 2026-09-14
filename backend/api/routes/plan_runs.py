@@ -114,9 +114,13 @@ from backend.services.plan_run_export import (
     plan_run_export_to_markdown,
 )
 from backend.services.device_log_event import (
+    LATE_EVENT_GRACE,
     list_plan_run_device_log_events,
 )
-from backend.services.log_observation import aggregate_signal_link_stats
+from backend.services.log_observation import (
+    ANOMALY_SIGNAL_CATEGORIES,
+    aggregate_signal_link_stats,
+)
 from backend.services.case_result_ingest import list_plan_run_test_case_results
 
 logger = logging.getLogger(__name__)
@@ -2638,7 +2642,18 @@ def _resolve_watcher_summary_window(
         resolved_scope = "all"
 
     delta = max(window_end - cur_start, timedelta(minutes=1))
+    # 趋势基线按**未加宽限**的窗口推算，避免放宽末端后基线漂移。
     prev_start = cur_start - delta
+
+    # #1962：终态 run 的窗口末端加宽限。reconciler 的首个 tick 需要 ls + pull
+    # 若干事件目录，可能**慢于 job 本身的生命周期**（实测 run 393 的 job 只跑了
+    # 11s，事件在其后 70s 才落库），而 DLE 视图按 plan_run_id 取数不受窗口限制
+    # ——于是出现「DLE 有行、仪表盘 0」。宽限值与 device_log_event 的
+    # 「PlanRun 窗口附近的迟到落库」语义同一来源（LATE_EVENT_GRACE）。
+    # RUNNING run（无 ended_at）不受影响。
+    if pr.ended_at is not None:
+        window_end = window_end + LATE_EVENT_GRACE
+
     return resolved_scope, resolved_minutes, cur_start, window_end, prev_start
 
 
@@ -2714,7 +2729,9 @@ def _load_deduped_aee_events(
         .where(JobLogSignal.job_id.in_(job_ids))
         .where(JobLogSignal.detected_at >= cur_start)
         .where(JobLogSignal.detected_at <= window_end)
-        .where(JobLogSignal.category.in_(["AEE", "VENDOR_AEE", "ANR"]))
+        # #1956：类别口径与风险汇总共用真源。此前这里硬编码三元组，
+        # 导致 UNIVIEW（展锐）事件虽已入库却不进仪表盘。
+        .where(JobLogSignal.category.in_(ANOMALY_SIGNAL_CATEGORIES))
     ).all()
 
     deduped: dict[str, dict[str, Any]] = {}
@@ -2769,7 +2786,8 @@ def _aee_event_dedup_key(
     extra: dict[str, Any],
 ) -> str:
     nfs_path = str(extra.get("nfs_path") or "").strip()
-    if category in {"AEE", "VENDOR_AEE"} and nfs_path:
+    # #1956：UNIVIEW 与 AEE 同用 nfs_path 去重——同一物理事件被多次 run 拉取时只算一次。
+    if category in {"AEE", "VENDOR_AEE", "UNIVIEW"} and nfs_path:
         return f"nfs:{nfs_path}"
     path = str(path_on_device or "").strip()
     if path:
@@ -2799,6 +2817,10 @@ def _infer_dashboard_event_group_and_subtype(
             nfs_path=str(extra.get("nfs_path") or "").strip(),
         )
 
+    # #1956：展锐（UNIVIEW）自成一组，且必须**先**于下面的 ANR / VENDOR 判定，
+    # 否则 UNIVIEW 的 ANR 会被并进 MTK 的 AEE/ANR 桶，混平台后分不清来源。
+    if category == "UNIVIEW":
+        return "UNIVIEW", subtype
     if subtype == "ANR":
         return "AEE", "ANR"
     if category == "VENDOR_AEE":
@@ -2892,7 +2914,8 @@ def _build_dashboard_section(events: list[dict[str, Any]]) -> AeeDashboardSectio
         )
         pkg["total_count"] += 1
         pkg["devices"].add(event["device_serial"])
-        pkg["subtype_breakdown"][event["subtype"]] += 1
+        # #1956：按 (group, subtype) 计数——同名 subtype 可能分属不同平台分组（如 ANR）。
+        pkg["subtype_breakdown"][(event["group"], event["subtype"])] += 1
         latest_ts = pkg["latest_detected_at"]
         if latest_ts is None or event["detected_at"] > latest_ts:
             pkg["latest_detected_at"] = event["detected_at"]
@@ -2922,10 +2945,15 @@ def _build_dashboard_section(events: list[dict[str, Any]]) -> AeeDashboardSectio
             affected_device_count=len(stats["devices"]),
             latest_detected_at=_iso(stats["latest_detected_at"]),
             subtype_breakdown=[
-                PackageSubtypeCountOut(subtype=subtype, count=count)
-                for subtype, count in sorted(
+                PackageSubtypeCountOut(subtype=subtype, group=group, count=count)
+                for (group, subtype), count in sorted(
                     stats["subtype_breakdown"].items(),
-                    key=lambda item: (-item[1], _subtype_order_index(item[0]), item[0]),
+                    key=lambda item: (
+                        -item[1],
+                        _subtype_order_index(item[0][1]),
+                        item[0][0],
+                        item[0][1],
+                    ),
                 )
             ],
         )

@@ -168,6 +168,7 @@ AGENT_SECRET_B64="{agent_secret_b64}"
 ENV_OVERRIDES_B64="{env_overrides_b64}"
 ENV_PATH_KEYS_B64="{env_path_keys_b64}"
 ARTIFACT_DIGEST="{artifact_digest}"
+RESOURCES_DIGEST="{resources_digest}"
 export PIP_INDEX_URL="{pip_index_url}"
 
 if [ ! -d "$INSTALL_DIR" ]; then
@@ -433,6 +434,24 @@ if [ -n "$ARTIFACT_DIGEST" ]; then
     fi
     echo "STP_ARTIFACT_DIGEST=$ARTIFACT_DIGEST"
 fi
+
+# ADR-0040 P2（#1963）：host-resources 身份落第二文件。--kind 为本片新增
+# 参数：旧 wrapper（探针拒绝）跳过即可——代码收敛照旧，resources 身份缺失
+# 仅使 P2-B 分层流对该主机多做一次全量 resources 部署（安全方向）。
+if [ -n "$RESOURCES_DIGEST" ]; then
+    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
+        if sudo -n "$PRIV" write-digest --digest "" --kind resources >/dev/null 2>&1; then
+            sudo "$PRIV" write-digest --kind resources --digest "$RESOURCES_DIGEST"
+            echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
+        else
+            echo "WARN: stp-agent-priv lacks write-digest --kind (outdated wrapper); resources digest not written"
+        fi
+    else
+        printf '%s\n' "$RESOURCES_DIGEST" | sudo tee "$INSTALL_DIR/agent/ARTIFACT_DIGEST_RESOURCES" > /dev/null
+        echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
+    fi
+fi
+fi
 echo "OK: service restarted successfully"
 """
 
@@ -449,6 +468,7 @@ def _build_remote_script(
     pip_index_url: str = "",
     code_version: str = "",
     artifact_digest: str = "",
+    resources_digest: str = "",
 ) -> str:
     agent_secret_b64 = ""
     if sync_agent_secret:
@@ -477,6 +497,7 @@ def _build_remote_script(
         pip_index_url=pip_index_url,
         code_version=code_version,
         artifact_digest=artifact_digest,
+        resources_digest=resources_digest,
     )
 
 
@@ -625,6 +646,7 @@ def execute_hot_update(
     pip_index_url: str = "",
     tarball: bytes | None = None,
     artifact_digest: str = "",
+    resources_digest: str = "",
 ) -> dict:
     """Execute a hot-update on a remote Linux host.
 
@@ -696,6 +718,7 @@ def execute_hot_update(
                 pip_index_url=pip_index_url,
                 code_version=code_version,
                 artifact_digest=artifact_digest,
+                resources_digest=resources_digest,
             )
 
             logger.info("hot_update_executing host=%s", host_ip)
