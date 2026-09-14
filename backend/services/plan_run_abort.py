@@ -157,41 +157,12 @@ def _bulk_abort_pending_jobs(
     return aborted_ids
 
 
-def _record_host_abort_request(
-    db: Session,
-    pr: PlanRun,
-    *,
-    plan_run_id: int,
-    host_id: str,
-    job_ids: list[int],
-    reason: str,
-    triggered_by: Optional[str],
-    now: datetime,
-) -> None:
-    """记录 host 级 abort 意图（#1880），与 run 级 ``abort_requested`` 分离。
-
-    run 级键的消费方（聚合 taint / resume 门禁 / 派发门禁 / abort reaper）都是
-    run 作用域，host 级操作写它会把副作用扩散到同 run 的其他 host。因此单独维护
-    ``run_context['abort_requested_hosts'][host_id]``，由 reaper 按 host 消费；
-    首次请求的 ``at``/``deadline_at`` 保持不变（grace 从第一次请求起算）。
-    """
-    run_ctx = dict(pr.run_context or {})
-    hosts = dict(run_ctx.get("abort_requested_hosts") or {})
-    existing = dict(hosts.get(host_id) or {})
-    merged_ids = list(
-        dict.fromkeys(list(existing.get("requested_job_ids") or []) + list(job_ids))
-    )
-    hosts[host_id] = {
-        "at": existing.get("at") or now.isoformat(),
-        "deadline_at": existing.get("deadline_at")
-        or (now + timedelta(seconds=ABORT_ACK_GRACE_SECONDS)).isoformat(),
-        "reason": reason,
-        "triggered_by": triggered_by,
-        "requested_job_ids": merged_ids,
-        "acknowledged_job_ids": list(existing.get("acknowledged_job_ids") or []),
-    }
-    _patch_run_context(db, plan_run_id, ["abort_requested_hosts"], hosts)
-    _reload_run_context(db, pr)
+# #1928：`_record_host_abort_request` 已删除——该函数写
+# `run_context['abort_requested_hosts']` 并声称「由 reaper 按 host 消费」，
+# 但全仓无调用方也无消费者（reaper 只读 run 级 `abort_requested` 的存在性，
+# 不读 requested 集合）；实际 host 隔离完全由下方 run 级 merge 写承担。
+# 「文档宣称 > 实现」的孤儿数据结构按最小面移除；若将来需要按 host 独立
+# grace，先立 ADR 裁决 reaper 消费语义再接线。
 
 
 
@@ -464,6 +435,11 @@ def abort_plan_run(
                 "acknowledged_job_ids": [],
             }
         run_ctx["abort_requested"] = abort_requested_payload
+        # 注意（#1928 复核注记）：本写入**重置** `at`/`deadline_at`——同一 run
+        # 的每次 host 级 abort 都会把 reaper 宽限延长为「本次请求 + GRACE」
+        # （此前已请求 job 的原 deadline 被覆盖）。这是现行为而非疏漏：reaper
+        # 只按 `abort_requested.at` 存在性选候选、最多多等 host 数 × GRACE；
+        # 若需「grace 从第一次请求起算」语义，先立 ADR 裁决再改。
         # #793：分段写（整段写回会覆盖并发写者如 archive/dispatch_state 的键）
         _patch_run_context(
             db, plan_run_id, ["abort_requested"], run_ctx["abort_requested"],
