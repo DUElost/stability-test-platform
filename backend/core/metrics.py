@@ -379,6 +379,19 @@ db_pool_overflow = Gauge(
     ['engine'],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# #1958：数据库侧检测到的死锁（SQLSTATE 40P01）。
+# 动机：Job/Lease 锁序死锁曾持续复发约四周而平台侧**零指标零告警**——它只在
+# PostgreSQL 服务端日志里可见，且受害事务可能被上层的通用 `except Exception`
+# 吞掉（回收器的逐候选失败分支即如此，还被记成与原因不符的
+# `reconciler_job_load_failed`），业务返回码完全看不出来。稳态为 0，任何增量
+# 都意味着存在环路等待。#743/#729 的「只记日志无人盯」教训同样适用于数据库侧
+# 错误类，故按**错误类**计数，而不是按某一条业务路径计数。
+db_deadlock_total = Counter(
+    'stability_db_deadlock_total',
+    'Deadlocks detected by the database (SQLSTATE 40P01)',
+    ['engine'],  # sync | async
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ADR-0021 dispatch gate
 dispatch_gate_runs_total = Counter(
     'stability_dispatch_gate_runs_total',
@@ -812,6 +825,17 @@ def record_db_pool_status(engine_label: str, *, checked_out: int, overflow: int)
     try:
         db_pool_checked_out.labels(engine=label).set(max(0, int(checked_out)))
         db_pool_overflow.labels(engine=label).set(max(0, int(overflow)))
+    except (TypeError, ValueError):
+        return
+
+
+def record_db_deadlock(engine_label: str) -> None:
+    """#1958：按引擎累计数据库检测到的死锁（SQLSTATE 40P01）。"""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    label = (engine_label or "unknown")[:16]
+    try:
+        db_deadlock_total.labels(engine=label).inc()
     except (TypeError, ValueError):
         return
 
