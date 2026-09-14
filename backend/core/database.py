@@ -41,6 +41,59 @@ def _attach_pool_metrics(engine, engine_label: str) -> None:
     event.listen(pool, "close", lambda *a, **k: _refresh())
     event.listen(pool, "invalidate", lambda *a, **k: _refresh())
 
+
+# SQLSTATE 40P01 = deadlock_detected。asyncpg 与 psycopg 都在异常对象上暴露
+# ``sqlstate``；没有该属性时回退到消息匹配（驱动版本差异的兜底）。
+_DEADLOCK_SQLSTATE = "40P01"
+
+
+def _is_deadlock(orig: object) -> bool:
+    if orig is None:
+        return False
+    state = getattr(orig, "sqlstate", None)
+    if state is not None:
+        return state == _DEADLOCK_SQLSTATE
+    return "deadlock detected" in str(orig).lower()
+
+
+# engine_label → 已注册的 handle_error 回调。仅用于「接线是否生效」的可断言性
+# （``event.contains`` 需要函数引用，注册点不保留引用就无法证明线上确实接了）。
+_db_error_handlers: Dict[str, object] = {}
+
+
+def _attach_db_error_metrics(engine, engine_label: str):
+    """#1958：数据库死锁 → Prometheus 计数 + 一条成因明确的 warning。
+
+    ``handle_error`` 在 DBAPI 异常交给调用方**之前**触发，所以即使上层把异常
+    吞进通用 ``except Exception``（回收器的逐候选失败分支就是如此），计数依然
+    生效——这正是「只在服务端日志里可见」那类错误的收敛点。
+
+    观测不得改变错误传播：本回调自身任何异常都只记 debug，且不吞原异常。
+    返回注册的回调，便于测试直接驱动与断言（``event.contains`` 需要函数引用）。
+    """
+    def _on_handle_error(exception_context) -> None:
+        try:
+            if not _is_deadlock(
+                getattr(exception_context, "original_exception", None)
+            ):
+                return
+            from backend.core.metrics import record_db_deadlock
+
+            record_db_deadlock(engine_label)
+            logger.warning(
+                "db_deadlock_detected engine=%s statement=%s",
+                engine_label,
+                str(getattr(exception_context, "statement", "") or "")[:200],
+            )
+        except Exception:  # noqa: BLE001 — 观测不得拖垮主流程或改变异常传播
+            logger.debug(
+                "db_error_metrics_failed label=%s", engine_label, exc_info=True,
+            )
+
+    event.listen(engine, "handle_error", _on_handle_error)
+    _db_error_handlers[engine_label] = _on_handle_error
+    return _on_handle_error
+
 # 唯一解析入口是 env_source：ambient env → 仓库根 .env.backend，**绝无兜底默认**。
 # 解析不到直接 RuntimeError——曾经这里的默认值是
 # `postgresql+asyncpg://stp:password@localhost:5432/stp`（直接点名生产库，
@@ -181,11 +234,13 @@ else:
         async_engine, class_=AsyncSession, expire_on_commit=False
     )
     _attach_pool_metrics(async_engine.sync_engine, "async")
+    _attach_db_error_metrics(async_engine.sync_engine, "async")
 
 # ── Sync engine (Alembic migrations + legacy API routes) ──
 engine = create_engine(_sync_url, **get_sync_engine_kwargs(_sync_url))
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
 _attach_pool_metrics(engine, "sync")
+_attach_db_error_metrics(engine, "sync")
 
 Base = declarative_base()
 
