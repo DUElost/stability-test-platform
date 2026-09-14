@@ -247,6 +247,29 @@ def abort_plan_run(
     Raises :class:`PlanRunAbortError` if the PlanRun is already in a
     terminal status.
     """
+    # #1985：**先锁候选 PENDING job 行，再锁 plan_run** —— 与 complete / recycler
+    # （PENDING 超时路径）/ reconciler / coordinator-heartbeat 的 job → plan_run 同序。
+    # 原先顺序相反：本函数先锁 plan_run（下方 `lock_t0`），再在
+    # `_bulk_abort_pending_jobs` 里 UPDATE 同一批 PENDING 行；而回收器的 PENDING
+    # 超时路径先 `UPDATE job_instance … status='PENDING'` 锁 job，再在
+    # `plan_aggregator_sync` 里锁 plan_run —— 两者争用同一行即成环。
+    # 这里只把 abort 本来就会锁的同一批行**提前**按 id 升序锁住；下方所有逻辑
+    # （终端态复检、`WHERE status='PENDING'`、计数器、聚合、#1552 的 run_context
+    # 同步）一律不变，因此不改变 abort 的判定与语义。
+    _candidate_filters = [
+        JobInstance.plan_run_id == plan_run_id,
+        JobInstance.status == JobStatus.PENDING.value,
+    ]
+    if host_id is not None:
+        # host 级 abort 只需该 host 的候选，避免扩大锁面。
+        _candidate_filters.append(JobInstance.host_id == host_id)
+    db.execute(
+        select(JobInstance.id)
+        .where(*_candidate_filters)
+        .order_by(JobInstance.id)
+        .with_for_update()
+    ).all()
+
     # Why: abort 也会写 pr.status,与 aggregator 并发时若不持锁会出现
     #      "aggregator 先 commit SUCCESS → abort 用 stale RUNNING 视图绕过
     #      aggregation guard,把状态改回 FAILED" 的覆盖。锁与 aggregator 同列。
