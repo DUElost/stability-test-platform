@@ -362,6 +362,32 @@ jobs:
         # backend 包在仓库根。
         run: python -m backend.scripts.check_schema_sync
 
+      # 共享行加锁顺序回归（#1999）。
+      #
+      # 为什么放在这里：#1959 / #1980 / #1985 三处锁序修复各自带了一条 PG 并发回归，
+      # 但它们是 PostgreSQL-only（`DATABASE_URL` 为 sqlite 时整组 skip），而 PR 阶段
+      # 此前**没有任何 job 会跑它们**——`pr-agent-tests` 无 docker/无 PG（testcontainers
+      # 路径会硬失败，见 tests/test_offline_subset_guard.py），本 job 有 PG service 却不跑
+      # pytest。于是「共享行加锁全序」这一不变量在**合入门禁里零覆盖**，只能等夜间
+      # `backend-test`（而那条路径本身经历过 #1547 整段 ImportError 跳过的窗口）。
+      #
+      # 为什么不新建 job：新 job 不在分支保护里、不是 required check，等于不拦合入；
+      # 本 job 是现成的 required check 且已跑过 `alembic upgrade head`（用例需要真实
+      # schema）。代价是失败会显示在本 job 名下（名称仍指向「空库迁移」），改名需与
+      # 分支保护同步，故不改。
+      #
+      # 为什么 `env -u DATABASE_URL`：本 job 级 `DATABASE_URL` 与 `TEST_DATABASE_URL`
+      # 同库（都是 stability_test），而 `backend/tests/conftest.py` 导入期
+      # `db_url_guard` 会拒载「与运行时配置同库」→ pytest exit 4（#1547 的原始成因；
+      # 接线契约见 tests/test_ci_test_db_guard_wiring.py）。这些用例只认
+      # `TEST_DATABASE_URL`，conftest 会自动把它写回 DATABASE_URL。
+      - name: Run lock-order regressions (PostgreSQL)
+        run: |
+          env -u DATABASE_URL python -m pytest -q \
+            backend/tests/services/test_abort_lock_order_1985.py \
+            backend/tests/api/test_shared_row_lock_order_1980.py \
+            backend/tests/scheduler/test_reconciler_renew_lock_order.py
+
   pr-typecheck:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
