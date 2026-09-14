@@ -172,6 +172,51 @@ class TestMainFlow:
         assert _mod.main(["--strict"], runner=runner, now=NOW) == 2
 
 
+class TestExitedContainerVisibility:
+    """#1936：已停未删（Exited）的残留整类必须可见——列举必须带 ``-a``。
+
+    回归语义：runner 模拟真实 docker 的过滤面——不带 ``-a`` 时只返回 running
+    （本用例里为空），带 ``-a`` 才返回那个 Exited 容器。旧实现（``ps -q``）
+    因此报「未发现」假绿，本用例在旧实现下必红。
+    """
+
+    def _exited_runner(self):
+        stopped = _c(300, name="stopped1")
+        listing = (
+            f"{stopped.cid}\t{stopped.name}\t{stopped.image}\t"
+            f"{stopped.created.isoformat()}\t{json.dumps(stopped.labels)}"
+        )
+        alive = {"v": True}
+        calls: list[list[str]] = []
+
+        def runner(args):
+            calls.append(args)
+            if args[0] == "rm":
+                alive["v"] = False
+                return 0, ""
+            if args[0] == "ps":
+                return 0, (stopped.cid if ("-a" in args and alive["v"]) else "")
+            return 0, listing
+
+        return runner, calls, stopped
+
+    def test_exited_container_is_listed_and_flagged(self, capsys):
+        runner, calls, stopped = self._exited_runner()
+        rc = _mod.main(["--strict"], runner=runner, now=NOW)
+        out = capsys.readouterr().out
+        ps_args = next(a for a in calls if a[0] == "ps")
+        assert "-a" in ps_args, "列举必须带 -a，否则 Exited 残留整类不可见"
+        assert stopped.cid in out, "已停残留必须出现在报告里"
+        assert rc == 1, "存在已停残留时 --strict 不得报绿"
+
+    def test_exited_container_is_prunable(self, capsys):
+        runner, calls, stopped = self._exited_runner()
+        rc = _mod.main(["--prune", "--yes"], runner=runner, now=NOW)
+        assert [a for a in calls if a[0] == "rm"] == [["rm", "-f", stopped.cid]]
+        assert "仍有 0 个未清理" in capsys.readouterr().out
+        assert rc == 0
+
+
 class TestPruneStrictSemantics:
     """#1714：--prune --yes --strict 的退出码与复核报告语义。"""
 
