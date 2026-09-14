@@ -2949,11 +2949,36 @@ async def recovery_sync(
 
     Agent reports local active_jobs + pending_outbox. Backend returns actions
     (RESUME/CLEANUP/ABORT_LOCAL/UPLOAD_TERMINAL/NOOP) to align state.
+
+    ADR-0038 D5bis（#1805 矩阵 row 12）：recognition/recovery 是**第三条**能让在飞
+    作业回到退役主机的路径。D5bis 要求派发/认领**活读 `retired_at`**、在飞 Run 以
+    显式 `HOST_RETIRED` 收敛——若本端点仍对退役主机返回 `RESUME`，作业就会绕过
+    那条收敛被复活（实测修复前确为 `RESUME/same_boot_instance_takeover`）。
+    故退役主机**不 RESUME**，改为让 Agent 本地停止（`ABORT_LOCAL`），与「退役即
+    不再使用该机」一致；作业的终态收敛仍由既有 abort/lease 回收链完成。
     """
     # Load host
     host = await db.get(Host, payload.host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="host not found")
+
+    # ADR-0038 D5bis：退役主机不得经 recovery 复活在飞作业（见 docstring）。
+    # 放在身份更新**之前**：退役机即使上报新 boot_id/instance_id 也不该继续
+    # 承接工作，故不写身份、不进入后续 RESUME 判定，直接引导本地停止。
+    if host.retired_at is not None:
+        logger.info("recovery_sync_skipped_host_retired host=%s", payload.host_id)
+        return ok({
+            "actions": [
+                _RecoveryAction(
+                    job_id=entry.job_id,
+                    device_id=entry.device_id,
+                    action="ABORT_LOCAL",
+                    reason="host_retired",
+                ).model_dump()
+                for entry in payload.active_jobs
+            ],
+            "outbox_actions": [],
+        })
 
     # D1: snapshot previous_boot_id before overwriting
     previous_boot_id = host.boot_id
