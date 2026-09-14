@@ -85,6 +85,13 @@ UI：主机管理页单机「热更新」；浮动批量栏支持多选主机的
 
 CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_agent.yml`。
 
+**Ansible 通道身份簿记（ADR-0040 §5-3，#1997）**：`update_agent.yml` 的 rsync
+覆盖两层载荷（代码树 + schema + `resources/**` 除 `mtbf/`），health 验证通过
+后经 `tools/ansible/compute_deploy_digest.py`（stdlib-only，复用 Agent 镜像
+算法）现算双身份并写入远端 `ARTIFACT_DIGEST` / `ARTIFACT_DIGEST_RESOURCES`
+（resources 分区为空时跳过写）。排除集契约与部署 digest 输入集对齐
+（`test_*.py` 宽模式、`venv//logs/`、双身份文件 exclude+protect）。
+
 **升级门禁与维护窗口（#960 / #1249，所有入口统一）**：升级前必须经控制面
 `POST /api/v1/agent/hosts/{id}/upgrade-gate` 申请门禁——该 host 有活跃 Job 时默认 **409**；
 `abort_running_jobs=true` 先排空再进。结束后 `POST .../upgrade-gate/release` 按 holder
@@ -103,6 +110,7 @@ CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_ag
 | 升级被拒（409 / 门禁不可达） | 该 host 是否有活跃 Job（需 `abort_running_jobs=true` 排空）；控制面是否可达（不可达 fail-closed）；维护窗口 `host.maintenance_until/holder` 是否被他人持有 |
 | UI 显示 drift | Agent 未上报新 revision；热更新是否写 VERSION；控制面 `get_agent_code_version()` 期望是否刷新 |
 | 每次热更新都全量（不 no-op） | 远端 `agent/ARTIFACT_DIGEST` 是否存在且被心跳上报（`host.agent_artifact_digest` 非空）；digest 判定见 ADR-0040；带外改文件属信任模型例外（§7-3） |
+| Ansible 更新后仍 drift 一轮 | `update_agent.yml` 是否跑到了「Write agent ARTIFACT_DIGEST(_RESOURCES)」任务（health 通过后才写）；`compute_deploy_digest.py` 是否与控制面同 checkout 现算；旧 playbook（< #1997）不写身份文件 |
 | 校验 / schema 不一致 | 热更新是否带上 `pipeline_schema.json`（见 2026-07 host-update 修复） |
 
 环境变量细节：[../development/environment-variables.md](../development/environment-variables.md)。
