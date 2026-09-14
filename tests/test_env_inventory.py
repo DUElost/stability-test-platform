@@ -90,6 +90,26 @@ def test_scan_skips_agent_scripts_catalog(tmp_path):
     assert "ZZ_SCRIPT_VAR" not in reads, "版本化脚本目录不应进入运行时清单"
 
 
+def test_audit_requires_declaration_or_registration(monkeypatch):
+    """#737 收口：读取名必须「登记进示例 ∪ 内部声明」二选一。"""
+    mod = _load_module()
+    monkeypatch.setattr(mod, "_INTERNAL_ONLY", {})
+    reads = {"ZZ_FREE": {"default": "1", "locations": [("backend/a.py", 1)], "test_only": False}}
+
+    # ① 未登记且未声明 → 违规
+    issues = mod.audit(reads, set())
+    assert any("ZZ_FREE" in i and "未登记" in i for i in issues), issues
+    # ② 已登记且已声明 → 冲突
+    mod._INTERNAL_ONLY["ZZ_FREE"] = "测试声明"
+    issues = mod.audit(reads, {"ZZ_FREE"})
+    assert any("ZZ_FREE" in i and "仍在内部声明" in i for i in issues), issues
+    # ③ 声明但代码已无读取点 → 陈旧
+    issues = mod.audit({}, {"ZZ_FREE"})
+    assert any("ZZ_FREE" in i and "陈旧" in i for i in issues), issues
+    # ④ 声明内部且未登记 → 合规（二选一成立）
+    assert mod.audit(reads, set()) == [], mod.audit(reads, set())
+
+
 def test_repo_doc_inventory_is_in_sync():
     """仓库文档生成块与代码读取名一致（同 run_gates 的 env-inventory 门禁）。"""
     result = subprocess.run(
