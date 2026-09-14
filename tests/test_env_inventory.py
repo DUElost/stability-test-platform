@@ -132,6 +132,47 @@ def test_signature_ignores_line_numbers_and_detects_semantics():
     )
     assert any("默认值变化" in item for item in diff), diff
 
+
+def test_scan_reads_works_when_repo_root_lives_under_dot_wt(tmp_path):
+    """#1978：本仓专属 worktree 就在 ``<repo>/.wt/<name>``，仓根绝对路径含 ``.wt``。
+
+    按绝对组件判跳过会把该 worktree 下**每个文件**都跳过（``reads`` 为空 →
+    `_INTERNAL_ONLY` 全部误判「已陈旧」，19 条假红）。判据必须按相对 ROOT 的组件。
+    """
+    mod = _load_module()
+    root = tmp_path / ".wt" / "stp-x"
+    backend = root / "backend"
+    backend.mkdir(parents=True)
+    (backend / "svc.py").write_text(
+        "import os\n"
+        'A = os.getenv("ZZ_WT_VAR", "7")\n',
+        encoding="utf-8",
+    )
+    mod.ROOT = root
+    reads = mod.scan_reads(backend)
+
+    assert "ZZ_WT_VAR" in reads, "worktree 根位于 .wt/ 下时不得跳过整个仓库"
+    assert reads["ZZ_WT_VAR"]["default"] == "7"
+
+
+def test_nested_dot_wt_inside_repo_is_still_skipped(tmp_path):
+    """原意保留：仓库**内部**的 ``.wt/``（嵌套 worktree）仍然必须跳过。"""
+    mod = _load_module()
+    root = tmp_path / "repo"
+    backend = root / "backend"
+    (backend / ".wt" / "nested").mkdir(parents=True)
+    (backend / "keep.py").write_text(
+        'import os\nK = os.getenv("ZZ_KEEP")\n', encoding="utf-8",
+    )
+    (backend / ".wt" / "nested" / "skip.py").write_text(
+        'import os\nS = os.getenv("ZZ_NESTED_SKIP")\n', encoding="utf-8",
+    )
+    mod.ROOT = root
+    reads = mod.scan_reads(backend)
+
+    assert "ZZ_KEEP" in reads
+    assert "ZZ_NESTED_SKIP" not in reads
+
 _SETTINGS_SRC = '''
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
