@@ -613,6 +613,10 @@ GATE_TO_CI_ANCHOR = {
                              # 非交互 LLM 会话（分钟级+外部依赖），CI 不跑；
                              # check:gov 手跑，行为漂移时人工介入。与
                              # invariant-diff（差异面）互补成两腿。
+    "schema-at-head": None,  # #1938：比对代码 head 与本机配置库的 alembic_version
+                             # （未配 DATABASE_URL 即 WARN 跳过，CI runner 无生产库
+                             # 必然跳过）——CI 侧迁移拦截仍由 pr-migrate-empty-db
+                             # 空库迁移链承担，两者语义不同不互为锚点。
 }
 
 
