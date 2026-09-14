@@ -131,3 +131,48 @@ def test_signature_ignores_line_numbers_and_detects_semantics():
         mod.semantic_signature(base, set()),
     )
     assert any("默认值变化" in item for item in diff), diff
+
+_SETTINGS_SRC = '''
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ZZDomainSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="ZZ_", env_file=None)
+
+    foo: int = 5
+    bar: str = Field(..., validation_alias="ZZ_BAR_EXPLICIT")
+    baz: str = Field("x", alias="ZZ_BAZ_ALIAS")
+    qux: int = Field(1, validation_alias=AliasChoices("ZZ_Q1", "ZZ_Q2"))
+
+
+class NotASettingsModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plain: str = "nope"
+'''
+
+
+def test_settings_fields_are_scanned_with_aliases_and_prefix():
+    """ADR-0042 D6：Settings 字段 → env 名（validation_alias/alias/AliasChoices/env_prefix）。"""
+    mod = _load_module()
+    entries = mod._settings_field_entries(_SETTINGS_SRC)
+    got = {name: default for name, _line, default in entries}
+    assert set(got) == {"ZZ_FOO", "ZZ_BAR_EXPLICIT", "ZZ_BAZ_ALIAS", "ZZ_Q1", "ZZ_Q2"}
+    assert got["ZZ_FOO"] == "5"            # env_prefix + 字段名.upper()
+    assert got["ZZ_BAR_EXPLICIT"] == "-"   # Field(...) 必填
+    assert got["ZZ_BAZ_ALIAS"] == "x"      # 位置默认
+    assert got["ZZ_Q1"] == "1"             # AliasChoices 多别名共享默认
+    assert "PLAIN" not in got              # 负例：普通 BaseModel 不进清单
+
+
+def test_scan_reads_merges_settings_fields(tmp_path):
+    mod = _load_module()
+    backend = tmp_path / "backend"
+    backend.mkdir(parents=True)
+    (backend / "settings_demo.py").write_text(_SETTINGS_SRC, encoding="utf-8")
+    mod.ROOT = tmp_path
+    reads = mod.scan_reads(backend)
+    assert "ZZ_FOO" in reads and reads["ZZ_FOO"]["default"] == "5"
+    assert "ZZ_Q2" in reads
+    assert "PLAIN" not in reads
