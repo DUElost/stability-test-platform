@@ -51,7 +51,11 @@ _DLE_RISK_PLACEHOLDER_EVENT_TYPES = frozenset(
 _DLE_RISK_EVENT_TYPES = tuple(
     sorted(_DLE_RISK_FAMILY_EVENT_TYPES | _DLE_RISK_CONCRETE_EVENT_TYPES),
 )
-_SIGNAL_RISK_CATEGORIES = ("AEE", "VENDOR_AEE", "ANR", "UNIVIEW")
+# #1956：异常类信号的类别**真源**（风险汇总 / 异常仪表盘共用）。
+# 曾经两处各写一份清单，结果仪表盘漏掉 UNIVIEW——事件采到了却不进仪表盘。
+# 现由此单一常量派生，并有防漂移测试守卫（见 tests 里的 sync 用例）。
+ANOMALY_SIGNAL_CATEGORIES = ("AEE", "VENDOR_AEE", "ANR", "UNIVIEW")
+_SIGNAL_RISK_CATEGORIES = ANOMALY_SIGNAL_CATEGORIES
 # Reconciler registers DLE for crash-family signals; MOBILELOG is signal-only (#528).
 _LINK_RATE_CATEGORIES = ("AEE", "VENDOR_AEE", "UNIVIEW")
 _SIGNAL_ONLY_CATEGORIES = ("MOBILELOG",)

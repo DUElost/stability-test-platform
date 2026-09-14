@@ -47,6 +47,7 @@ from backend.api.routes.auth import get_current_active_user
 from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
+from backend.services.device_log_event import resolve_initial_upload_state
 from backend.services.host_maintenance import HostMaintenanceConflict, in_maintenance_window
 from backend.services.host_retirement import (
     retired_heartbeat_context,
@@ -2492,7 +2493,8 @@ async def ingest_device_log_events(
                     event_subtype=ev.event_subtype,
                     detected_at=detected_dt,
                     device_timestamp=device_ts,
-                    state=ev.state,
+                    # #1956：无 scan 门禁的平台（UNIVIEW）入库即可上送，否则永远停在 LOCAL。
+                    state=resolve_initial_upload_state(ev.event_type, ev.state),
                     local_path=ev.local_path,
                     remote_path=_validated_remote_path(
                         ev.remote_path,
@@ -2624,7 +2626,8 @@ async def ingest_device_log_events(
                 event_subtype=ev.event_subtype,
                 detected_at=detected_dt,
                 device_timestamp=device_ts,
-                state=ev.state,
+                # #1956：无 scan 门禁的平台（UNIVIEW）入库即可上送，否则永远停在 LOCAL。
+                state=resolve_initial_upload_state(ev.event_type, ev.state),
                 local_path=ev.local_path,
                 remote_path=_validated_remote_path(
                     ev.remote_path,
