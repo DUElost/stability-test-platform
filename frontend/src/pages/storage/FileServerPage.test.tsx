@@ -49,6 +49,14 @@ const overview: FileServerOverview = {
       backend_write_access: true,
     },
     monitoring: { prometheus_available: true, error: null },
+    processes: {
+      available: true,
+      error: null,
+      items: [
+        { comm: 'node', unit: 'app-ghostty-surface-transient-6337.scope', anon_bytes: 642000000 },
+        { comm: 'uvicorn', unit: 'stability-backend.service', anon_bytes: 240000000 },
+      ],
+    },
   },
   storage_server: {
     node: {
@@ -130,6 +138,10 @@ const overview: FileServerOverview = {
     cpu_usage_pct: [{ timestamp: 1785158998, value: 12.3 }],
     memory_usage_pct: [{ timestamp: 1785158998, value: 42.1 }],
     nfs_requests_per_second: [{ timestamp: 1785158998, value: 1.5 }],
+    hostproc_total_anon_bytes: [
+      { timestamp: 1785158998, value: 3200000000 },
+      { timestamp: 1785159298, value: 3600000000 },
+    ],
   },
   alerts: [],
 };
@@ -175,12 +187,38 @@ describe('FileServerPage', () => {
         cpu_usage_pct: [],
         memory_usage_pct: [],
         nfs_requests_per_second: [],
+        hostproc_total_anon_bytes: [],
       },
     });
     renderPage();
 
     expect(await screen.findByText('分源且未配置存储机 Prometheus job，历史趋势暂不可用')).toBeInTheDocument();
     expect(screen.getByTestId('file-server-history-chart')).toBeInTheDocument();
+  });
+
+  it('renders control-plane process memory top list and total trend', async () => {
+    mocks.fileServer.mockResolvedValueOnce(overview);
+    renderPage();
+
+    expect(await screen.findByText('进程内存 Top 2')).toBeInTheDocument();
+    expect(screen.getByText('app-ghostty-surface-transient-6337.scope')).toBeInTheDocument();
+    expect(screen.getByText('612 MiB')).toBeInTheDocument();
+    expect(screen.getByText('229 MiB')).toBeInTheDocument();
+    expect(screen.getByText(/匿名内存合计/)).toBeInTheDocument();
+    expect(screen.getByTestId('hostproc-total-chart')).toBeInTheDocument();
+  });
+
+  it('shows unavailable message when the process sampler reports no data', async () => {
+    mocks.fileServer.mockResolvedValueOnce({
+      ...overview,
+      control_plane: {
+        ...overview.control_plane,
+        processes: { available: false, error: null, items: [] },
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByText(/未检测到进程内存采集器/)).toBeInTheDocument();
   });
 
   it('formats device log disk usage with two decimal places', async () => {

@@ -1,0 +1,13 @@
+[Unit]
+Description=STP host process memory sampler (node_exporter textfile)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/stp-mem-top
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/var/lib/prometheus/node-exporter /var/log

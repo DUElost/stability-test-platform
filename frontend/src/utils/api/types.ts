@@ -490,11 +490,26 @@ export interface FileServerNfs {
   connections_total: number | null;
 }
 
+export interface FileServerHostProcess {
+  /** argv0 基名（node 进程的 comm 常被线程名占用，故取 argv0）。 */
+  comm: string;
+  /** systemd cgroup unit（AI 会话/终端窗口可直接定位到具体 scope）。 */
+  unit: string;
+  anon_bytes: number;
+}
+
+export interface FileServerHostProcessPanel {
+  available: boolean;
+  error: string | null;
+  items: FileServerHostProcess[];
+}
+
 export interface FileServerControlPlanePanel {
   node: FileServerNodeIdentity;
   system: FileServerNodeSystem;
   client_mount: FileServerClientMount;
   monitoring: FileServerNodeMonitoring;
+  processes: FileServerHostProcessPanel;
 }
 
 export interface FileServerStoragePanel {
@@ -548,6 +563,7 @@ export interface FileServerOverview {
     cpu_usage_pct: FileServerMetricPoint[];
     memory_usage_pct: FileServerMetricPoint[];
     nfs_requests_per_second: FileServerMetricPoint[];
+    hostproc_total_anon_bytes: FileServerMetricPoint[];
   };
   alerts: Array<{
     severity: 'warning' | 'critical';
