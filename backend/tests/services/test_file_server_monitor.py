@@ -38,6 +38,16 @@ class _FakePrometheus:
     def label(self, query: str, label: str) -> str | None:
         return "storage-host" if label == "nodename" else None
 
+    def vector(self, query: str):
+        self.queries.append(query)
+        if "stp_hostproc_anon_bytes" in query:
+            # 故意乱序返回，验证服务端按 anon_bytes 降序排序
+            return [
+                {"metric": {"comm": "uvicorn", "unit": "stability-backend.service"}, "value": 240000000.0},
+                {"metric": {"comm": "node", "unit": "app-ghostty-surface-transient-6337.scope"}, "value": 642000000.0},
+            ]
+        return []
+
 
 def _host(host_id: str, mount_entries: dict | None, extra: dict | None = None):
     """mount_entries: 其中 key 是该 Agent 自己的 MOUNT_POINTS 路径字符串
@@ -123,6 +133,52 @@ def test_split_panels_when_share_address_and_storage_job_configured(tmp_path, mo
     assert any('node_nfsd_requests_total{job="storage-server"}' in q for q in fake.range_queries)
     assert any('node_filesystem_avail_bytes{job="file-server"' in q for q in fake.range_queries)
     assert len(result["history"]["cpu_usage_pct"]) == 2
+
+
+def test_control_plane_process_memory_top_list(tmp_path, monkeypatch):
+    fake = _patch_file_server_deps(monkeypatch, tmp_path)
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    processes = result["control_plane"]["processes"]
+    assert processes["available"] is True
+    assert processes["error"] is None
+    # 服务端按 anon_bytes 降序排序（fake 故意乱序返回）
+    assert [item["comm"] for item in processes["items"]] == ["node", "uvicorn"]
+    assert processes["items"][0]["anon_bytes"] == 642000000
+    assert processes["items"][0]["unit"] == "app-ghostty-surface-transient-6337.scope"
+    assert any("topk(10, stp_hostproc_anon_bytes" in q for q in fake.queries)
+    # 合计趋势固定取控制面 job，与是否分源无关
+    assert any("stp_hostproc_anon_total_bytes" in q for q in fake.range_queries)
+    assert len(result["history"]["hostproc_total_anon_bytes"]) == 2
+
+
+def test_control_plane_process_memory_unavailable_without_sampler(tmp_path, monkeypatch):
+    fake = _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(fake, "vector", lambda _query: [])
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    processes = result["control_plane"]["processes"]
+    assert processes["available"] is False
+    # 采集器未部署是「无数据」而不是「查询失败」
+    assert processes["error"] is None
+    assert processes["items"] == []
+
+
+def test_control_plane_process_memory_query_failure_is_reported(tmp_path, monkeypatch):
+    _patch_file_server_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        monitor,
+        "_top_process_items",
+        lambda _prom, _job: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    result = monitor.collect_file_server_overview([], hours=1)
+
+    processes = result["control_plane"]["processes"]
+    assert processes["available"] is False
+    assert processes["error"] == "RuntimeError"
 
 
 def test_share_address_equal_to_control_plane_stays_co_located(tmp_path, monkeypatch):

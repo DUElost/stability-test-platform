@@ -68,6 +68,24 @@ class FileServerNfs(BaseModel):
     connections_total: Optional[int] = None
 
 
+class HostProcessMemory(BaseModel):
+    """One process group (argv0 basename + systemd cgroup unit) by anonymous memory.
+
+    Reported by the host sampler ``deploy/control-plane/node-exporter/stp-mem-top.sh``;
+    ``unit`` 直接给出 AI 会话/终端窗口所属的 systemd scope，便于定位内存归属。
+    """
+
+    comm: str
+    unit: str
+    anon_bytes: int
+
+
+class HostProcessMemoryPanel(BaseModel):
+    available: bool
+    error: Optional[str] = None
+    items: list[HostProcessMemory]
+
+
 class ControlPlanePanel(BaseModel):
     """Health page left column: the control plane machine (8.202)."""
 
@@ -75,6 +93,7 @@ class ControlPlanePanel(BaseModel):
     system: NodeSystem
     client_mount: ClientMount
     monitoring: NodeMonitoring
+    processes: HostProcessMemoryPanel
 
 
 class StorageServerPanel(BaseModel):
@@ -104,6 +123,7 @@ class FileServerHistory(BaseModel):
     cpu_usage_pct: list[FileServerMetricPoint]
     memory_usage_pct: list[FileServerMetricPoint]
     nfs_requests_per_second: list[FileServerMetricPoint]
+    hostproc_total_anon_bytes: list[FileServerMetricPoint]
 
 
 class FileServerAgentMount(BaseModel):

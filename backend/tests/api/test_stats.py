@@ -436,6 +436,11 @@ class TestFileServerOverview:
                     "mounted": True, "backend_write_access": True,
                 },
                 "monitoring": {"prometheus_available": True, "error": None},
+                "processes": {
+                    "available": True,
+                    "error": None,
+                    "items": [{"comm": "node", "unit": "app-gnome-x-1.scope", "anon_bytes": 123}],
+                },
             },
             "storage_server": {
                 "node": {"hostname": "h", "address": "1.2.3.4", "cpu_count": 4, "uptime_seconds": 100.0},
@@ -479,6 +484,7 @@ class TestFileServerOverview:
             "history": {
                 "hours": 6, "capacity_usage_pct": [], "cpu_usage_pct": [],
                 "memory_usage_pct": [], "nfs_requests_per_second": [],
+                "hostproc_total_anon_bytes": [],
             },
             "alerts": [],
         }
@@ -496,6 +502,8 @@ class TestFileServerOverview:
         assert data["storage_server"]["same_source"] is True
         assert data["agents"]["mounted"] == 1
         assert data["device_log_disks"]["reported"] == 1
+        # 进程内存面板随 control_plane 一起过 schema 校验
+        assert data["control_plane"]["processes"]["items"][0]["comm"] == "node"
         assert received_hours == [6]
 
         # 7 天历史（168h）在合法范围内；169h 超出上限被参数校验拒绝。
