@@ -31,6 +31,9 @@ _PROCESSED_SUFFIX = "processed_event_dirs"
 # 旧值 ("/data/uniview", "/data/vendor/uniview") 是**框架侧**目录，真机从未在其下出现
 # 事件目录 → 采集恒空（#73）。
 _DEVICE_UNIVIEW_ROOTS = (UNIVIEW_ROOT,)
+
+#: #2010：``_processed`` 里"从未处理过"的哨兵（与「签名未知(None)」区分开）。
+_SIGNATURE_UNKNOWN = object()
 _STP_RC_MARKER = "__STP_RC__:"
 
 
@@ -90,7 +93,16 @@ class UnisocUniviewReconciler:
             self._serial, self._adb_path, self._stop_evt,
         )
         self._pull_fn = pull_fn or make_adb_pull_fn(self._serial, self._adb_path)
-        self._processed: Set[str] = set()
+        # #2010：展锐会**复用同一个 event_id 目录**（新异常追加进目录，目录名不变），
+        # 所以去重键必须是 (目录名 → 内容签名) 而不是仅目录名——否则同名目录被更新后
+        # 永不重拉，重复异常在平台侧全部丢失（已用真机证据确认：同一 JE.103000004 里
+        # 追加了 003-…tar.gz，event_count 1→3，平台却毫无记录）。
+        # 签名取远端 `ls -l` 行中「名字之前」的部分（size+mtime），一次列举即可覆盖
+        # 全部目录，不额外增加 shell 调用。旧状态是 list[str]（只有名字），加载时归一
+        # 为 {name: None}，首个 tick 会对这些目录重新确认并补发一次。
+        self._processed: Dict[str, Optional[str]] = {}
+        #: 本拍远端列举到的签名（供发射侧判定；每拍重置）
+        self._pending_signatures: Dict[str, str] = {}
         # #767：_processed 只增不减 + 整集重写会让状态存储按设备历史事件总量
         # 线性膨胀。去重语义要求保留的名字只有两类——仍在设备列表上（会被
         # 重拉）、仍在当前 stamp 本地树（会被重扫）；两者皆非的名字不可能再
@@ -153,7 +165,16 @@ class UnisocUniviewReconciler:
             # LocalDb / StateStore API is get_state/set_state (#806/#1043).
             raw = self._state_store.get_state(self._state_key(), "")
             if raw:
-                self._processed = set(json.loads(raw))
+                loaded = json.loads(raw)
+                if isinstance(loaded, dict):
+                    # #2010 新格式：{name: signature}
+                    self._processed = {
+                        str(name): (None if sig is None else str(sig))
+                        for name, sig in loaded.items()
+                    }
+                else:
+                    # 旧格式 list[str]：签名未知 → 本拍重新确认一次（并补发漏掉的更新）
+                    self._processed = {str(name): None for name in loaded}
         except Exception:
             logger.debug("unisoc_reconciler_state_load_failed", exc_info=True)
 
@@ -162,7 +183,8 @@ class UnisocUniviewReconciler:
             return
         try:
             self._state_store.set_state(
-                self._state_key(), json.dumps(sorted(self._processed)),
+                self._state_key(),
+                json.dumps(self._processed, sort_keys=True),
             )
         except Exception:
             logger.debug("unisoc_reconciler_state_save_failed", exc_info=True)
@@ -215,13 +237,18 @@ class UnisocUniviewReconciler:
                 continue
             key = event_dir.name
             with self._state_lock:
-                if key in self._processed:
-                    continue
+                # #2010：仅「从未处理」或「远端签名变化」才发射；同签名不重复发
+                prev = self._processed.get(key, _SIGNATURE_UNKNOWN)
+                signature = self._pending_signatures.get(key)
+            if prev is not _SIGNATURE_UNKNOWN and (
+                signature is None or prev == signature
+            ):
+                continue
             if not (event_dir / UNIVIEW_INFO_FILENAME).is_file():
                 continue
             if self._emit_event(event_dir):
                 with self._state_lock:
-                    self._processed.add(key)
+                    self._processed[key] = signature or ""
                 emitted += 1
         if emitted:
             self.stats.ticks_with_new += 1
@@ -253,7 +280,7 @@ class UnisocUniviewReconciler:
                     continue
                 streak = self._absent_streak.get(name, 0) + 1
                 if streak >= self._prune_after_ticks:
-                    self._processed.discard(name)
+                    self._processed.pop(name, None)
                     self._absent_streak.pop(name, None)
                     pruned += 1
                 else:
@@ -270,7 +297,7 @@ class UnisocUniviewReconciler:
                     reverse=True,
                 )[:overflow]
                 for name in victims:
-                    self._processed.discard(name)
+                    self._processed.pop(name, None)
                     self._absent_streak.pop(name, None)
                 pruned += len(victims)
                 logger.warning(
@@ -285,39 +312,50 @@ class UnisocUniviewReconciler:
             )
         return pruned
 
-    def _list_remote_uniview_root(self, remote_root: str) -> Optional[Set[str]]:
-        """List event dir names under one device uniview root (#1820).
+    def _list_remote_uniview_root(self, remote_root: str) -> Optional[Dict[str, str]]:
+        """List event dirs under one device uniview root as ``{name: signature}``.
+
+        #2010：签名 = ``ls -l`` 行里「名字之前」的字段（size + mtime），用来识别
+        **同名目录的内容变化**——展锐复用同一 ``event_id`` 目录追加新异常，
+        仅按名字去重会把这些新异常全部丢掉。
 
         Returns ``None`` on transport failure (``shell_fn`` returned None).
-        Returns an empty set when the root is missing or unreadable (``ls`` rc≠0).
-        Returns the parsed name set when ``ls`` rc==0.
+        Returns an empty dict when the root is missing or unreadable (``ls`` rc≠0).
         """
         listing = self._shell_fn(
-            f"ls -1 {remote_root} 2>/dev/null; echo {_STP_RC_MARKER}$?",
+            f"ls -l {remote_root} 2>/dev/null; echo {_STP_RC_MARKER}$?",
             30,
         )
         if listing is None:
             return None
-        root_names: Set[str] = set()
+        entries: Dict[str, str] = {}
         rc: Optional[int] = None
         for raw in listing.splitlines():
-            name = raw.strip()
-            if not name:
+            line = raw.strip()
+            if not line:
                 continue
-            if name.startswith(_STP_RC_MARKER):
+            if line.startswith(_STP_RC_MARKER):
                 try:
-                    rc = int(name[len(_STP_RC_MARKER):])
+                    rc = int(line[len(_STP_RC_MARKER):])
                 except ValueError:
                     rc = None
                 continue
+            if line.startswith("total"):
+                continue
+            if line[0] not in "d-l":          # 只认目录/文件/链接行
+                continue
+            parts = line.split()
+            if len(parts) < 6:
+                continue
+            name = parts[-1]
             if name in {".", ".."} or "/" in name:
                 continue
-            root_names.add(name)
+            entries[name] = " ".join(parts[:-1])
         if rc is None:
             return None
         if rc != 0:
-            return set()
-        return root_names
+            return {}
+        return entries
 
     def _sync_device_events_to_local(self, root: Path) -> int:
         """adb-list + pull new uniview event dirs into ``uniview_watcher`` (#1043).
@@ -331,27 +369,35 @@ class UnisocUniviewReconciler:
         listed: Set[str] = set()
         listing_complete = True
         self._last_listed = None
+        self._pending_signatures = {}
         for remote_root in _DEVICE_UNIVIEW_ROOTS:
             if self._stop_evt.is_set():
                 listing_complete = False
                 break
-            root_names = self._list_remote_uniview_root(remote_root)
-            if root_names is None:
+            root_entries = self._list_remote_uniview_root(remote_root)
+            if root_entries is None:
                 listing_complete = False
                 continue
-            listed.update(root_names)
-            for name in root_names:
-                with self._state_lock:
-                    if name in self._processed:
-                        continue
+            listed.update(root_entries)
+            for name, signature in root_entries.items():
                 local_dir = root / name
-                if (local_dir / UNIVIEW_INFO_FILENAME).is_file():
+                local_ready = (local_dir / UNIVIEW_INFO_FILENAME).is_file()
+                with self._state_lock:
+                    prev = self._processed.get(name, _SIGNATURE_UNKNOWN)
+                # #2010：名字未变但签名变了（同目录被追加了新异常）→ 必须重拉
+                self._pending_signatures[name] = signature
+                if (
+                    local_ready
+                    and prev is not _SIGNATURE_UNKNOWN
+                    and prev == signature
+                ):
                     continue
                 remote_dir = f"{remote_root}/{name}"
                 info = self._shell_fn(
                     f"ls {remote_dir}/{UNIVIEW_INFO_FILENAME} 2>/dev/null", 10,
                 )
                 if not info:
+                    self._pending_signatures.pop(name, None)
                     continue
                 if self._pull_event_dir(remote_dir, local_dir):
                     pulled += 1
