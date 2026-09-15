@@ -19,7 +19,21 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 ```
 
 - 凭据注入（CLI 类脚本）：`set -a && . ./.env.backend && set +a`——`load_repo_dotenv()` 只读仓库根 `.env`（生产不存在）。
-- admin token：`/api/v1/auth/token` 回**扁平** OAuth2 体，取 `.access_token`（不是 `.data.access_token`）；用户名/口令必须是两个独立 `-F`。
+  用户名/口令变量是 `$STP_ADMIN_USER`（= `stp-admin`）与 `$STP_ADMIN_PASSWORD`——**不是 `admin`**。
+- admin token（2026-09-15 实测校准）：`/api/v1/auth/token` 回**扁平** OAuth2 体，取 `.access_token`（不是 `.data.access_token`）；
+  请求体是 `application/x-www-form-urlencoded`（用 `--data-urlencode`，不是 `-F`），且 `/api/v1/*` 非安全方法要过
+  CSRF 中间件（`backend/core/csrf.py`：无 Bearer / `X-Agent-Secret` 时要求 `Origin`/`Referer` 在 `CORS_ORIGINS` 白名单）——
+  取 token 这一步必须带 `-H 'Origin: http://127.0.0.1'`，否则 403 `CSRF check failed`；拿到 token 后其余调用用 `Authorization: Bearer` 即可：
+
+  ```bash
+  set -a && . ./.env.backend && set +a
+  TOK=$(curl -s -X POST http://127.0.0.1:8000/api/v1/auth/token \
+          -H 'Origin: http://127.0.0.1' \
+          --data-urlencode "username=${STP_ADMIN_USER}" \
+          --data-urlencode "password=${STP_ADMIN_PASSWORD}" | jq -r '.access_token')
+  ```
+- 响应形状不统一（脚本断言要 unwrap）：`/api/v1/hosts` 是**裸数组**；`/hosts/{id}/hot-update` 是 `{data: ...}`。
+  可参考已跑通的抽验脚本（token → 目标 host → force 热更新 → 断言 `priv_mode`）：`/tmp/stp-acc/verifyD_sample.sh`（临时产物，机器重建即失）。
 
 ## 1. 控制面后端更新与 DB 迁移（本机即生产控制面）
 
@@ -157,6 +171,7 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 | 2026-08-30 | 四步全链路真机部署（r0s9t8u7v6w5 迁移 + 前端换包 + backend restart + 48 台热更新）后校准：§0 凭据与 token 取值路径（扁平 `.access_token`、双 `-F`）；§1.5 **`/tmp` 是 tmpfs、跨盘 `mv` 非原子**→ 改 `cp -a` 到同盘再双 rename，并记录无需 `VITE_API_BASE_URL`；§2 scan 无 CLI 模块、只有 HTTP 路由 + 「diff 为空则免跑」判据；§3 改为 canary→批量两段式，补 `--direct` 语义、串行 20s/台与 stdout 块缓冲（看 DB 不看日志）。§0/§2/§3 相应 ⚠️待校对 解除 | 本次部署实操 |
 | 2026-08-31 | 坑表补「热更新清带外资源」：rsync --delete 清 resources/ 非 exclude 目录（sleep/powercycle/gpu 带外 APK 实测被抹），带外资源须在最终热更新后放置 | #462 三专项部署实操 |
 | 2026-08-30 | 新增部署源守卫步骤（§1 step 2/4 前各一行 `tools/dev/check-deploy-source.sh`）：共享工作树曾跑在未合入分支上被推上生产，重启前强制校验 HEAD==main 且工作区干净；已装 systemd unit 另加 `ExecStartPre=-` 兜底（失败仅记日志不中断） | 2026-08-30 事故复盘 + PR |
+| 2026-09-15 | **修正 §0 凭据段**（上表 08-30 的「双 `-F`」在实测中不可用）：token 端点请求体是 form-urlencoded（`--data-urlencode`）；取 token 必须带 `Origin: http://127.0.0.1` 过 CSRF（否则 403 `CSRF check failed`）；用户名来源 `$STP_ADMIN_USER`= `stp-admin`（按 `admin` 会 401）；补响应形状差异（`/api/v1/hosts` 裸数组 vs hot-update `{data:}`） | #2180 D 步上线实操（issue #2203） |
 | （下次真实部署） | | |
 
 ## 踩坑守卫（负向约束）
