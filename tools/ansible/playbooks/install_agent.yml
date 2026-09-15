@@ -74,6 +74,8 @@
     # 非交互安装：安装脚本从环境变量读取参数（不再 printf 喂 read）。
     # AGENT_HOST_ID 为空时脚本回退按本机 IP 生成（手工安装路径）；
     # AGENT_NFS_ROOT / AGENT_LOCAL_AEE_ROOT 为空则不写 .env、不覆盖既有值。
+    # AEE 本地根与共享挂载点由安装脚本创建（脚本才知道运行账号，且要在服务启动前
+    # 就绪）——此处只负责挂载，见下方 #2181 段。
     - name: Run install script non-interactively
       become: true
       ansible.builtin.command:
@@ -90,6 +92,52 @@
         AGENT_HOST_ID: "{{ agent_host_id | default('', true) }}"
         AGENT_NFS_ROOT: "{{ agent_nfs_root | default('', true) }}"
         AGENT_LOCAL_AEE_ROOT: "{{ agent_local_aee_root | default('', true) }}"
+
+    # ── 中心存储挂载（#2181）─────────────────────────────────────────────
+    # 安装脚本已建好挂载点，这里把站点导出的子树挂上并持久化。挂载失败只降级为
+    # 提示——Agent 用本地落点仍可运行，S5 的存储断言会如实报 FAIL，不在这里掩盖。
+    - name: Check whether the central share is already mounted
+      become: true
+      when: agent_nfs_root | default('') | length > 0
+      ansible.builtin.command: "findmnt -no SOURCE {{ agent_nfs_root }}"
+      register: stp_nfs_check
+      changed_when: false
+      failed_when: false
+
+    - name: Mount the central share (best effort; the local fallback still works)
+      become: true
+      when:
+        - agent_nfs_root | default('') | length > 0
+        - agent_nfs_server | default('') | length > 0
+        - stp_nfs_check.rc | default(1) != 0
+      ansible.builtin.command: "mount -t nfs -o rw {{ agent_nfs_server }}:{{ agent_nfs_root }} {{ agent_nfs_root }}"
+      register: stp_nfs_mount
+      failed_when: false
+
+    # 只持久化真的挂上的导出：给"从没通"的分享写 fstab 会留下永远失败的开机挂载；
+    # nofail 只保证 boot 不依赖它，不保证这条记录本身是对的。
+    - name: "Persist the central share (nofail: boot must not depend on it)"
+      become: true
+      when:
+        - agent_nfs_server | default('') | length > 0
+        - (stp_nfs_check.rc | default(1) == 0) or (stp_nfs_mount.rc | default(1) == 0)
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: "^{{ agent_nfs_server }}:{{ agent_nfs_root }} "
+        line: "{{ agent_nfs_server }}:{{ agent_nfs_root }} {{ agent_nfs_root }} nfs rw,nofail,_netdev 0 0"
+        state: present
+
+    - name: Report when the central share is unavailable
+      become: true
+      when:
+        - agent_nfs_root | default('') | length > 0
+        - (stp_nfs_check.rc | default(1) != 0)
+        - (stp_nfs_mount.rc | default(1) != 0)
+      ansible.builtin.debug:
+        msg: >-
+          Central share not mounted ({{ agent_nfs_server | default('server not provided') }}:{{ agent_nfs_root }});
+          the Agent keeps running with the local root {{ agent_local_aee_root | default('(undeclared)') }}.
+          S5 reports this as install.s5.storage FAIL until the share is reachable.
 
     - name: Refresh agentctl command from staged source
       become: true

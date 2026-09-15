@@ -12,9 +12,12 @@ so those checks report ``BLOCKED`` with the reason instead of passing quietly.
 from __future__ import annotations
 
 import html
+import os
 import sys
 import time
+import uuid
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -38,6 +41,8 @@ from .validation import (
 
 RUN_TIMEOUT_SECONDS = 900.0
 RUN_POLL_INTERVAL_SECONDS = INSTALL_POLL_INTERVAL_SECONDS
+# 授权探针文件名前缀；探针只删自己创建的这个文件，绝不碰既有数据。
+STORAGE_PROBE_PREFIX = "stp-storage-probe"
 # 单步 noop 计划的受控探针；名称带 site_id 便于现场辨认与清理。
 NOOP_SCRIPT = "noop"
 # 目录名是 v1.0.0，脚本目录登记（/scripts/scan）与 PlanStep 用的版本号是 1.0.0。
@@ -318,6 +323,43 @@ def check_watcher(api: ApiClient, run_id: int) -> Check:
     )
 
 
+def storage_probe(root: Path, subdir: str) -> Check:
+    """Write→read→remove one file under an authorized subdirectory of the share.
+
+    Two ways a naive probe would lie, both refused here: a missing mount would
+    be silently satisfied by a same-named local directory, and a path-shaped
+    operator input could write outside the declared share.
+    """
+    name = subdir.strip()
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        return _fail("verify.s6.storage", "storage_probe_subdir", location="--storage-probe-subdir")
+    if not os.path.ismount(root):
+        return _fail("verify.s6.storage", "shared_storage_not_mounted",
+                     location="$.storage.mount_path", role="site")
+    probe = root / name / f"{STORAGE_PROBE_PREFIX}.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    payload = f"{datetime.now(timezone.utc).isoformat()} {STORAGE_PROBE_PREFIX}\n"
+    try:
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text(payload, encoding="utf-8")
+        read_back = probe.read_text(encoding="utf-8")
+    except OSError:
+        return _fail("verify.s6.storage", "storage_unwritable",
+                     location="$.storage.mount_path", role="site")
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+    if read_back.strip() != payload.strip():
+        return _fail("verify.s6.storage", "storage_probe_failed",
+                     location="$.storage.mount_path", role="site")
+    return passed(
+        "verify.s6.storage", "site", "$.storage.mount_path", "storage_probe_ok",
+        f"Wrote, read back and removed one probe file under {root / name}; nothing else was touched.",
+        "This proves the declared share accepts writes from here; Agent-side mounts are asserted in S5.",
+    )
+
+
 def verify_site(
     config_path: str | Path,
     *,
@@ -329,6 +371,7 @@ def verify_site(
     sleep: Callable[[float], None] = time.sleep,
     progress: Callable[[str], None] | None = None,
     now: float | None = None,
+    storage_probe_subdir: str | None = None,
 ) -> dict:
     """S6 acceptance report for one declared site (read-mostly, fail-closed)."""
     say = progress or (lambda message: print(f"[s6] {message}", file=sys.stderr))
@@ -380,13 +423,17 @@ def verify_site(
             "Attach an authorized test device and re-run verify; the chain must not be simulated.",
         ))
 
-    # 本切片明确未实现的两项：写读探针需要授权的探针目录，scan/upload/merge 需要真实工件。
-    checks.append(blocked(
-        "verify.s6.storage", "site", "$.storage.mount_path", "probe_not_implemented",
-        "No authorized storage write/read probe ran.",
-        "Implement the probe against an explicitly authorized probe subdirectory; only remove "
-        "files created by the probe itself, and never fall back to a same-named local directory.",
-    ))
+    # 写读探针需要显式授权探针子目录（只清自己创建的文件）；未授权如实 BLOCKED，
+    # 绝不退化成"写进本机同名目录"（那会掩盖"根本没挂上共享"）。
+    if storage_probe_subdir:
+        checks.append(storage_probe(Path(config.storage.mount_path), storage_probe_subdir))
+    else:
+        checks.append(blocked(
+            "verify.s6.storage", "site", "$.storage.mount_path", "storage_probe_not_authorized",
+            "No authorized storage write/read probe ran.",
+            "Pass --storage-probe-subdir <name> to authorize writing one probe file under that "
+            "subdirectory; only the probe's own file is removed, and it never writes elsewhere.",
+        ))
     checks.append(blocked(
         "verify.s6.scan_upload_merge", "site", "$.agents", "not_covered",
         "scan/upload/merge was not exercised by this command.",

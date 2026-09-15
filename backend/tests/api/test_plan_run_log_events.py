@@ -76,6 +76,47 @@ def test_plan_run_log_events_lists_dle_rows(client, auth_headers, db_session, sa
     assert data["items"][0]["remote_path"] == "/nfs/devices/1/aee/1"
 
 
+def test_plan_run_log_events_filters_by_platform(client, auth_headers, db_session, sample_device):
+    """#2184：平台筛选在**服务端**。
+
+    客户端过滤只作用于已加载页，会谎报「该平台只有 N 条」（实际是第 1 页有 N 条）。
+    这里同时钉住 ``total`` 随筛选收窄——否则前端「已显示 1 / 2」照样误导。
+    """
+    pr, job, now = _seed_plan_run(db_session, sample_device)
+    for platform in ("MTK", "UNISOC"):
+        db_session.add(DeviceLogEvent(
+            id=uuid4(),
+            serial=sample_device.serial,
+            platform=platform,
+            event_type="AEE",
+            event_subtype="KE",
+            detected_at=now,
+            state="REMOTE",
+            local_path=f"/local/aee/{platform}",
+            host_id=str(sample_device.host_id),
+            job_id=job.id,
+            plan_run_id=pr.id,
+        ))
+    db_session.commit()
+
+    all_resp = client.get(
+        f"/api/v1/plan-runs/{pr.id}/log-events",
+        headers=auth_headers,
+    )
+    assert all_resp.status_code == 200, all_resp.text
+    assert all_resp.json()["data"]["total"] == 2
+
+    uni_resp = client.get(
+        f"/api/v1/plan-runs/{pr.id}/log-events",
+        params={"platform": "UNISOC"},
+        headers=auth_headers,
+    )
+    assert uni_resp.status_code == 200, uni_resp.text
+    data = uni_resp.json()["data"]
+    assert data["total"] == 1
+    assert [item["platform"] for item in data["items"]] == ["UNISOC"]
+
+
 def test_watcher_summary_reports_links_made_by_reconcile_sweep(
     client, auth_headers, db_session, sample_device,
 ):

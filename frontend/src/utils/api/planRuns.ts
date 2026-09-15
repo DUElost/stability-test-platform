@@ -143,7 +143,7 @@ export const planRuns = {
 
   getLogEvents: (
     runId: number,
-    params: { skip?: number; limit?: number; state?: string } = {},
+    params: { skip?: number; limit?: number; state?: string; platform?: string } = {},
   ) =>
     unwrapApiResponse<PlanRunLogEventsPayload>(
       apiClient.get(`/plan-runs/${runId}/log-events`, { params: cleanParams(params) }),

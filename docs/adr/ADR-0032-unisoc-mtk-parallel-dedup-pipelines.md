@@ -1,6 +1,6 @@
 # ADR-0032：展锐与 MTK 并列日志链路（Watcher 实时 + 归档 dedup）（#463 / #73）
 
-- 状态：**Accepted**（v0.7：P1 编码已合入 main 2026-08-31；待 Z258 真机验收）
+- 状态：**Accepted**（v0.8：B3 spike 已执行 2026-09-15，D3 转已验证；P1 编码已合入 main 2026-08-31）
 - 优先级：P1
 - 目标里程碑：M7（方案 C 下补齐展锐 **实时信号 + 终态 dedup** 双覆盖面）
 - 日期：2026-08-31
@@ -16,6 +16,7 @@
 | v0.5 | 2026-08-31 | 范围扩展：Watcher 实时层 + 统一路由；重议 #220 |
 | v0.6 | 2026-08-31 | **Accepted**：B1 路径分区 + 双 merge；D3/D4/D7/D8/B5 终裁 |
 | v0.7 | 2026-09-04 | P1 编码已合入 main（`922049d2`/`2368228f`，2026-08-31）；剩余 Z258 真机验收与 B3 spike 不阻塞落地记录 |
+| v0.8 | 2026-09-15 | **B3 spike 已执行**（§B3）：五项验收实测通过，D3「UNISOC 复用 MTK merge 工具」由断言转为**已验证**；第 1 项精确化为「列数同构、两列命名有差异且被工具归一」；未覆盖平台侧发布路径记入 Revisit |
 
 ## 背景
 
@@ -137,13 +138,28 @@ scan_now（控制面）→ Agent 按 platform 路由
 
 **UI**：`watcher-summary` **按 `platform` 分桶**展示；PlanRun 终态风险/日志 **一张总表**（B1 产品语义）。
 
-### B3：P2 spike 验收（归档）
+### B3：P2 spike 验收（**已执行** 2026-09-15）
 
-- [ ] 15 列 `aeeexp` 同构
-- [ ] `{host_id}_Result_*_org.xls` 在 `dedup/{run}/unisoc/` 可注册
-- [ ] 分平台 merge 试跑（`mtk`/`unisoc` 子目录）
-- [ ] 双 merge 产物均发布至 `merge/mtk/`、`merge/unisoc/`
-- [ ] 无 `_org` 后缀产物不进 merge glob
+**结论：D3「UNISOC 复用 MTK merge 工具」✅ 成立**——五项验收实测通过；但第 1 项
+「15 列 `aeeexp` 同构」应精确表述为「**列数同构、两列命名有差异且被工具归一**」（见下）。
+
+| # | 验收项 | 结论 | 实测证据 |
+|---|---|---|---|
+| 1 | 15 列 `aeeexp` 同构 | ⚠️ **列数同构，命名有差异** | 两平台均 **15 列**，但**两列命名不同**：UNISOC `ExpType` / `DeviceCount` vs MTK `ExpType␠`（**尾随空格**）/ `DeviceId`。抽样 **40 UNISOC + 40 MTK**（盘上计 853/320）**各自表头 100% 一致**——差异稳定，非偶发 |
+| 2 | `{host_id}_Result_*_org.xls` 在 `dedup/{run}/unisoc/` 可注册 | ✅ | 盘上 `dedup/342/unisoc/` 等含 `172-21-15-*.…_SPRD_*_org.xls`，命名形态与 MTK 侧同构 |
+| 3 | 分平台 merge 试跑（`mtk`/`unisoc`） | ✅ | 两平台各自经 `-merge_files_list` 实跑成功（见 #4） |
+| 4 | 双 merge 产物均发布 | ✅ | 工具产出 `Result_MergeFiles_org.xls`（UNISOC **285 行**）+ `Result_MergeFiles.xls`（去重后 **4 行**）；MTK 侧同形（5 行 / 2 行）——**两平台产物结构一致** |
+| 5 | 无 `_org` 后缀产物不进 merge glob | ✅ | 本 spike 以 `*_org.xls` 显式构造 listfile（`build_merge_argv` 的 `-merge_files_list`），非 glob 展开 |
+
+**第 1 项的关键实测**：merge 工具**能消费** 15 列 UNISOC 输入，且**输出表头统一为
+MTK 形态**（`ExpType␠` / `DeviceId`）——即工具内部已做列名归一，**「同一工具」成立**；
+但原文「同构」若被读作「列名逐一相同」，则该表述**不准确**。
+
+**观测口径与边界**：以盘上真实产物执行（输入 `dedup/{342/unisoc, 408/mtk}` 的
+`*_org.xls`；工具经 `.env.backend` 的 `STP_BACKEND_DEDUP_SCAN_{PYTHON,SCRIPT}` 解析，
+控制面同一套键、未引入平台分支）。**未**经控制面 HTTP 全链路——即验证了**工具能力**，
+未验证 `merge/unisoc/` 在**平台侧**的发布路径，该差异记入 Revisit。
+
 
 ## 备选方案（已否决）
 
@@ -166,7 +182,7 @@ scan_now（控制面）→ Agent 按 platform 路由
 
 - [x] B1 + D3 + D4 + D7 + D8 + B5 → **Accepted**（v0.6）
 - [x] P1 编码：Watcher (w1) + 归档 (D4c) + 控制面双 merge（2026-08-31 合入：`922049d2` / `2368228f`；落地记录见 `docs/notes/feature/2026-08-31-adr0032-p1-unisoc-pipelines.md`）
-- [ ] P2 spike（B3）
+- [x] P2 spike（B3）——2026-09-15 执行完毕，五项验收见 §B3
 - [ ] Z258 真机：Watcher 冒烟 + 归档端到端
 - [ ] #73 / #463 关闭路径
 
@@ -176,3 +192,15 @@ scan_now（控制面）→ Agent 按 platform 路由
 - ADR-0025；ADR-0028
 - `job_session.py`；`aee/reconciler.py`；`collectors/unisoc.py`；`scan_runner.py`；`dedup_scan.py`；`agent_env_sync.py`
 - toolkit：`stability_Monkey-Log-Scan-GT&SPRD`、`stability_Scan-Result-GT`
+
+## Revisit
+
+- **平台侧发布路径未验证**：B3 spike 验证的是**工具能力**（`-merge_files_list` 消费 15 列
+  UNISOC 输入并产出归一表头），**未**经控制面 HTTP 全链路——即 `merge/unisoc/` 在
+  **平台侧**（`run_merge_sync` → `PlanRunArtifact` 登记 → 发布）的路径仍待端到端确认。
+  触发条件：首次真实 UNISOC run 走完归档链时按 `run_context.merge_platforms` 核对。
+- **列名差异的长期风险**：工具当前对 `ExpType`/`DeviceCount` → `ExpType␠`/`DeviceId` 做了
+  归一，但该归一**未见于文档**、属工具内部行为。若上游工具改版或引入侧参数差异，
+  可能出现「列数仍 15、语义已错位」的静默失败。触发条件：工具升级或新增平台时，
+  以「输出表头比对」为验收项重跑本 spike。
+- **Z258 真机验收**（B3 之外）：Watcher 冒烟 + 归档端到端仍未执行，保持原状。

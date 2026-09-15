@@ -39,8 +39,12 @@ def test_build_remote_script_disables_agent_secret_sync_by_default():
     assert 'export PIP_INDEX_URL=""' in script
     assert "STP_DEPS_REFRESHED=" in script
     assert "sha256sum" in script
-    assert "STP_ENV_SYNCED=" in script
     assert "ENV_OVERRIDES_B64=" in script
+    # #2180：env 哨兵（STP_ENV_SYNCED=/STP_ENV_PATH_MISSING=）改由 wrapper sync-env
+    # 打在远端 stdout 上——控制面解析面不变，发射面契约见
+    # tests/test_agent_priv_parser_contract.py::test_wrapper_sync_env_emits_control_plane_sentinels
+    assert 'sudo "$PRIV" sync-env --overrides-b64 "$ENV_OVERRIDES_B64" --path-keys-b64 "$ENV_PATH_KEYS_B64"' in script
+    assert "STP_ENV_SYNCED=" not in script
 
 
 def test_build_remote_script_includes_allowlisted_env_overrides():
@@ -65,10 +69,14 @@ def test_build_remote_script_includes_allowlisted_env_overrides():
     assert decoded["AGENT_INSTALL_DIR"] == "/opt/stability-test-agent"
 
 
-def test_build_remote_script_preserves_host_local_mtbf_resources():
-    """resources/mtbf/ 是 host 级手工布放（APK 不在仓库 tarball 内），
-    rsync --delete 必须排除它，否则每次 hot-update 清空 MTBF 资源
-    （冒烟 #214/#216「APK 不存在」根因）。"""
+def test_build_remote_script_delegates_sync_filters_to_wrapper():
+    """#2180：host_updater 不再自持 rsync 过滤面。
+
+    resources/mtbf/ 的 host-local 保护（冒烟 #214/#216「APK 不存在」根因）与
+    resources/ 的 protect-only 语义（#1950）现由 wrapper 内部的固定 filter 承担，
+    语义锁定见 tests/test_agent_priv_apply_code_protection.py 与
+    tests/test_agent_priv_boundary.py::test_wrapper_protect_only_paths。
+    """
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
@@ -78,12 +86,11 @@ def test_build_remote_script_preserves_host_local_mtbf_resources():
         group="android",
     )
 
-    assert "sudo rsync -av --delete" in script
-    assert "--exclude='resources/mtbf/'" in script
-    # 排除项必须在 --delete 生效范围内（同一条 rsync 命令）
-    delete_pos = script.index("sudo rsync -av --delete")
-    exclude_pos = script.index("--exclude='resources/mtbf/'")
-    assert exclude_pos > delete_pos
+    assert 'sudo "$PRIV" apply-code --staged "$CODE_TMP"' in script
+    # 裸 rsync 与自持 filter 必须全部退役（无「脚本内过滤」这条第二通道）
+    assert "sudo rsync" not in script
+    assert "--exclude=" not in script
+    assert "--filter=" not in script
 
 
 def test_build_remote_script_includes_agent_secret_update_when_enabled():
@@ -101,8 +108,9 @@ def test_build_remote_script_includes_agent_secret_update_when_enabled():
 
     assert 'SYNC_AGENT_SECRET="1"' in script
     assert f'AGENT_SECRET_B64="{base64.b64encode(secret.encode()).decode()}"' in script
-    assert 'env_path = pathlib.Path(os.environ["INSTALL_DIR"]) / ".env"' in script
-    assert 'line.startswith("AGENT_SECRET=")' in script
+    # #2180：明文/本地 heredoc 改写退役，密钥只以 b64 交 wrapper 落盘
+    assert secret not in script
+    assert 'sudo "$PRIV" sync-env --secret-b64 "$AGENT_SECRET_B64"' in script
 
 
 def test_build_remote_script_injects_pip_index_url():
@@ -141,11 +149,11 @@ def test_build_remote_script_retries_pip_when_deps_marker_stale():
     assert "INSTALLED_REQ_SHA=" in script
     assert 'NEED_PIP=1' in script
     assert 'INSTALLED_REQ_SHA" != "$NEW_REQ_SHA"' in script
-    assert 'sudo tee "$DEPS_MARKER"' in script
+    mark = 'sudo "$PRIV" deps-marker --sha "$NEW_REQ_SHA"'
+    assert mark in script
     # 成功后才写标记；失败路径仍 exit 1 且不 restart（既有）
-    pip_ok_marker = script.index('sudo tee "$DEPS_MARKER"')
     pip_fail = script.index("pip install failed")
-    assert pip_fail < pip_ok_marker
+    assert pip_fail < script.index(mark)
     assert "service NOT restarted" in script
 
 
@@ -189,7 +197,9 @@ def test_build_remote_script_verifies_agent_path_keys(monkeypatch):
         raise AssertionError("ENV_PATH_KEYS_B64 not injected")
 
     assert "STP_DEDUP_SCAN_SCRIPT" in json.loads(base64.b64decode(payload).decode())
-    assert "STP_ENV_PATH_MISSING=" in script
+    # #2180：路径核验结果哨兵由 wrapper sync-env 发射（--path-keys-b64 入参保留）
+    assert 'sync-env --overrides-b64 "$ENV_OVERRIDES_B64" --path-keys-b64 "$ENV_PATH_KEYS_B64"' in script
+    assert "STP_ENV_PATH_MISSING=" not in script
 
 
 def test_get_agent_code_version_returns_short_hash():
@@ -211,8 +221,12 @@ def _build_script_with_wrapper(**overrides):
     return _build_remote_script(**kwargs)
 
 
-def test_remote_script_prefers_privilege_wrapper_with_legacy_fallback():
-    """#1250：优先 stp-agent-priv；未迁移主机回退旧 sudo 面并留哨兵。"""
+def test_remote_script_requires_wrapper_fail_closed():
+    """#2180 / ADR-0037 §5 Revisit #1：wrapper 是唯一提权面，缺失/旧版即失败。
+
+    宽 sudoers 48/48 已清除（C 步），legacy 裸 sudo 面没有任何可用环境；
+    回退分支不是「兼容」而是「必炸」，因此删分支 + selftest 前置 fail-closed。
+    """
     script = _build_script_with_wrapper(
         sync_agent_secret=True, agent_secret="s3cr3t-value"
     )
@@ -220,7 +234,22 @@ def test_remote_script_prefers_privilege_wrapper_with_legacy_fallback():
     assert 'PRIV="/usr/local/sbin/stp-agent-priv"' in script
     assert 'sudo -n "$PRIV" selftest' in script
     assert "STP_PRIV_MODE=wrapper" in script
-    assert "STP_PRIV_FALLBACK=legacy" in script
+    # legacy 分支与哨兵必须彻底退役
+    assert "STP_PRIV_FALLBACK" not in script
+    assert "USE_PRIV_WRAPPER" not in script
+    assert "sudo rsync" not in script
+    assert "sudo tee" not in script
+    assert "sudo chown" not in script
+    assert "sudo systemctl" not in script
+    # fail-closed：selftest 失败 → 可执行指引 + exit 1，且早于一切动作
+    guidance = (
+        "ERROR: stp-agent-priv selftest failed (missing/outdated wrapper?); "
+        "run tools/ansible/playbooks/update_agent.yml on this host, then retry"
+    )
+    assert guidance in script
+    guard = script.index('if ! sudo -n "$PRIV" selftest')
+    assert guard < script.index('echo "STP_PRIV_MODE=wrapper"')
+    assert guard < script.index('sudo "$PRIV" apply-code --staged "$CODE_TMP"')
     for expected in (
         'sudo "$PRIV" apply-code --staged "$CODE_TMP"',
         'sudo "$PRIV" install-schema --file "$CODE_TMP/stp_schemas/pipeline_schema.json"',
@@ -232,14 +261,14 @@ def test_remote_script_prefers_privilege_wrapper_with_legacy_fallback():
         'sudo "$PRIV" restart',
     ):
         assert expected in script, expected
-    # legacy 分支保留（迁移期回退），但不再用宽规则读文件
-    assert "sudo rsync -av --delete" in script
     assert "sudo sha256sum" not in script
 
 
-def test_parse_priv_mode_reads_sentinels():
+def test_parse_priv_mode_wrapper_only():
+    """#2180：唯一 sentinel 是 STP_PRIV_MODE=wrapper；其余（含旧 legacy 行）为 unknown。"""
     assert _parse_priv_mode("noise\nSTP_PRIV_MODE=wrapper\n") == "wrapper"
-    assert _parse_priv_mode("STP_PRIV_FALLBACK=legacy\n") == "legacy"
+    assert _parse_priv_mode("STP_PRIV_FALLBACK=legacy\n") == "unknown"
+    assert _parse_priv_mode("STP_PRIV_MODE=legacy\n") == "unknown"
     assert _parse_priv_mode("") == "unknown"
 
 
@@ -486,8 +515,8 @@ def test_hot_update_direct_builds_tarball_once_for_all_hosts(monkeypatch):
 # ── #1907 / ADR-0040 D2/D3/D6：ARTIFACT_DIGEST 写入、分段计时、批量 no-op ──
 
 
-def test_remote_script_writes_artifact_digest_wrapper_and_legacy():
-    """探活通过后写 ARTIFACT_DIGEST：wrapper 走 write-digest，legacy 走 tee。"""
+def test_remote_script_writes_artifact_digest_via_wrapper():
+    """探活通过后写 ARTIFACT_DIGEST（#2180 后仅 wrapper write-digest 一条路）。"""
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
@@ -498,7 +527,7 @@ def test_remote_script_writes_artifact_digest_wrapper_and_legacy():
         artifact_digest="sha256:" + "a" * 64,
     )
     assert 'sudo "$PRIV" write-digest --digest "$ARTIFACT_DIGEST"' in script
-    assert 'printf \'%s\\n\' "$ARTIFACT_DIGEST" | sudo tee' in script
+    assert "sudo tee" not in script
     assert 'STP_ARTIFACT_DIGEST=$ARTIFACT_DIGEST' in script
     # 探活之后才写（失败不写 digest，保持旧值 → 下次按 drift 重做）
     assert script.index('STP_RESTART_PROBE_MS=') < script.index(
@@ -506,11 +535,16 @@ def test_remote_script_writes_artifact_digest_wrapper_and_legacy():
     )
 
 
-# ── #1942：wrapper 能力协商（旧 wrapper 缺 write-digest 的尾部 exit 2）──────
+# ── #1942 → #2180：能力协商收敛为「脚本头 selftest」单点 ────────────────────
 
 
-def test_remote_script_probes_wrapper_write_digest_capability():
-    """#1942：动作前探测 wrapper 能力；缺失则带 ERROR 指引提前失败。"""
+def test_remote_script_selftest_is_the_single_capability_probe():
+    """#2180：子命令契约（含 write-digest/apply-resources）由 wrapper selftest
+    前置校验；不再对单个子命令做运行期探测（#1942 的 write-digest 空跑探针退役）。
+
+    语义：旧 wrapper（缺任一契约子命令）在 selftest 即 exit≠0 → fail-closed，
+    早于 apply-code/restart，不产生「已部署却记失败」的半态。
+    """
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
         service_name="stability-test-agent",
@@ -520,17 +554,15 @@ def test_remote_script_probes_wrapper_write_digest_capability():
         group="android",
         artifact_digest="sha256:" + "a" * 64,
     )
-    probe = 'sudo -n "$PRIV" write-digest --digest ""'
+    probe = 'sudo -n "$PRIV" selftest'
     assert probe in script
+    assert 'write-digest --digest ""' not in script, "单子命令空跑探针已退役"
+    assert "lacks write-digest" not in script
     assert (
-        "ERROR: stp-agent-priv lacks write-digest (outdated wrapper); "
+        "ERROR: stp-agent-priv selftest failed (missing/outdated wrapper?); "
         "run tools/ansible/playbooks/update_agent.yml on this host, then retry"
     ) in script
-    # 探针只在本块被 digest 非空的 wrapper 分支保护时执行（legacy 走 tee，无需能力）
-    guard = '[ "$USE_PRIV_WRAPPER" = "1" ] && [ -n "$ARTIFACT_DIGEST" ]; then'
-    assert guard in script
-    assert script.index(guard) < script.index(probe)
-    # 提前拦截：在 apply-code / restart 之前，不产生「已部署却记失败」的半态
+    # 提前拦截：在 apply-code / restart 之前
     assert script.index(probe) < script.index('sudo "$PRIV" apply-code --staged "$CODE_TMP"')
     assert script.index(probe) < script.index('sudo "$PRIV" restart')
 
@@ -667,10 +699,11 @@ def test_batch_direct_converged_no_op_skips_gate_and_ssh(monkeypatch):
 
 
 def test_build_remote_script_protects_resources_tree():
-    """#1950 / ADR-0040 §4.3 P2 前置：legacy 路径 resources/ 只防删除不拦同步。
+    """#1950 / ADR-0040 §4.3 P2 前置 → #2180：resources 保护面收归 wrapper。
 
-    exclude+protect 会立即停掉 resources 分发（P2 独立通道尚不存在），故
-    legacy rsync 只加 protect 过滤；wrapper 路径语义见
+    protect-only（防源树删除传播清掉大件）与 mtbf exclude 均在
+    wrapper apply-code/apply-resources 的固定 filter 内，远端脚本侧不再出现
+    任何 filter 字面量——语义锁定见
     tests/test_agent_priv_boundary.py::test_wrapper_protect_only_paths。
     """
     script = _build_remote_script(
@@ -682,14 +715,13 @@ def test_build_remote_script_protects_resources_tree():
         group="android",
     )
 
-    assert "--filter='protect resources/'" in script
-    # mtbf 语义不变：exclude（不同步）；非 mtbf resources 不被 exclude（继续同步）
-    assert "--exclude='resources/mtbf/'" in script
-    assert "--exclude='resources/'" not in script
+    assert 'sudo "$PRIV" apply-code --staged "$CODE_TMP"' in script
+    assert "--filter=" not in script
+    assert "--exclude=" not in script
 
 
 def test_build_remote_script_writes_resources_digest():
-    """#1963 P2 切片①：resources 身份落第二文件（wrapper --kind / legacy tee）。"""
+    """#1963 P2 切片① → #2180：resources 身份落第二文件（仅 wrapper --kind）。"""
     res_digest = "sha256:" + "b" * 64
     script = _build_remote_script(
         install_dir="/opt/stability-test-agent",
@@ -702,12 +734,11 @@ def test_build_remote_script_writes_resources_digest():
         resources_digest=res_digest,
     )
     assert f'RESOURCES_DIGEST="{res_digest}"' in script
-    # wrapper 路径：--kind resources（能力探测失败仅 WARN，不阻塞部署）
-    assert 'write-digest --digest "" --kind resources' in script
-    assert 'write-digest --kind resources --digest "$RESOURCES_DIGEST"' in script
-    assert "WARN: resources digest not written (outdated wrapper)" in script
-    # legacy 路径：tee 到第二文件
-    assert 'tee "$INSTALL_DIR/agent/ARTIFACT_DIGEST_RESOURCES"' in script
+    # 仅 wrapper 通道；空跑探测/WARN 放行随 #2180 退役（selftest 前置兜底）
+    assert 'sudo "$PRIV" write-digest --kind resources --digest "$RESOURCES_DIGEST"' in script
+    assert 'write-digest --digest "" --kind resources' not in script
+    assert "WARN: resources digest not written (outdated wrapper)" not in script
+    assert "sudo tee" not in script
 
 
 def test_build_remote_script_omits_resources_block_when_empty():

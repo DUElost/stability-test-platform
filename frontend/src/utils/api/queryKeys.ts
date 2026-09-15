@@ -63,9 +63,13 @@ export const planRunKeys = {
   devicesByRun: (id: number) => ['plan-run-devices', id] as const,
   watcher: (id: number, scope?: string) => ['plan-run-watcher', id, scope] as const,
   watcherByRun: (id: number) => ['plan-run-watcher', id] as const,
-  /** #529 终态 DLE 事件视图（log-events 端点）；#1194：分页参数纳入查询键。 */
-  logEvents: (id: number, opts?: { limit?: number }) =>
-    ['plan-run-log-events', id, { limit: opts?.limit ?? 200 }] as const,
+  /** #529 终态 DLE 事件视图（log-events 端点）；#1194：分页参数纳入查询键；
+   *  #2184：平台筛选同样入键（否则切平台会命中上一平台的缓存）。 */
+  logEvents: (id: number, opts?: { limit?: number; platform?: string }) =>
+    ['plan-run-log-events', id, {
+      limit: opts?.limit ?? 200,
+      platform: opts?.platform ?? null,
+    }] as const,
   /** ADR-0030 P2 逐条用例结果；#1194：分页参数纳入查询键。 */
   testCaseResults: (id: number, opts?: { limit?: number }) =>
     ['plan-run-test-case-results', id, { limit: opts?.limit ?? 500 }] as const,

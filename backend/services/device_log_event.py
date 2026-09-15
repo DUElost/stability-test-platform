@@ -302,11 +302,18 @@ def list_plan_run_device_log_events(
     skip: int = 0,
     limit: int = 200,
     state: str | None = None,
+    platform: str | None = None,
 ) -> tuple[list[DeviceLogEvent], int]:
-    """PlanRun-scoped DLE rows for terminal archive views (#529)."""
+    """PlanRun-scoped DLE rows for terminal archive views (#529, #2184).
+
+    ``platform`` 过滤在**服务端**做（与 ``state`` 同构）：客户端过滤只会作用于已加载页，
+    在分页场景下会给出「MTK 只有 3 条」这类错误印象（实际是第 1 页只有 3 条）。
+    """
     filters = [DeviceLogEvent.plan_run_id == plan_run_id]
     if state:
         filters.append(DeviceLogEvent.state == state)
+    if platform:
+        filters.append(DeviceLogEvent.platform == platform)
     total = int(
         db.execute(
             select(func.count(DeviceLogEvent.id)).where(*filters)
