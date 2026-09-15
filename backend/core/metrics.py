@@ -417,6 +417,20 @@ retention_txn_seconds = Histogram(
     buckets=[0.05, 0.25, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0],
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# 「清理是否跟不上」的**可判定**信号（#2144）。候选数与被填满的批大小必须**成对**上报：
+# `candidates >= batch_size` 表示本轮批被填满 = 队列里还有到期 run（持续成立即为积压）。
+# 只报其一，判据就得在告警表达式里硬编码 `plan_run_retention_batch_size` —— 而它是
+# **持锁窗口的杠杆**（#2105）、会被调小，硬编码的值会随调整失真。
+retention_candidate_runs = Gauge(
+    'stability_retention_candidate_runs',
+    'Retention candidates seen by the last cleanup tick (bounded by the batch size)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+retention_batch_size = Gauge(
+    'stability_retention_batch_size',
+    'Configured retention cleanup batch size (plan_run_retention_batch_size)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ADR-0021 dispatch gate
 dispatch_gate_runs_total = Counter(
     'stability_dispatch_gate_runs_total',
@@ -887,6 +901,23 @@ def record_retention_txn(seconds: float) -> None:
     if value < 0:
         return
     retention_txn_seconds.observe(value)
+
+
+def record_retention_candidates(candidates: int, batch_size: int) -> None:
+    """#2144：本轮候选数 + 配置批大小（成对，判据见上面的 gauge 注释）。
+
+    每次 tick 都上报（**含候选为 0 的那次**）：否则 gauge 会停在上一轮的非零值上，把
+    「已清空」显示成「仍在积压」——一条会骗人的观测面比没有更糟。
+    """
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        seen = max(0, int(candidates))
+        limit = max(0, int(batch_size))
+    except (TypeError, ValueError):
+        return
+    retention_candidate_runs.set(seen)
+    retention_batch_size.set(limit)
 
 
 def record_plan_run_devices_query_duration(seconds: float):
