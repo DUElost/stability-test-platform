@@ -124,6 +124,19 @@ def test_scripts_do_not_hardcode_the_site_identity():
             assert literal not in text
 
 
+def test_site_input_options_are_forwarded_to_init():
+    """站点输入项（库名/入口/存储/盘）必须能传给 init——否则真实用例只能改文件。"""
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    assert "INIT_OPTIONS" in text
+    for option in ("--database", "--public-url", "--storage-mount", "--data-disk",
+                   "--display-name", "--redis-index", "--admin-username"):
+        assert option in text, option
+    init_call = text.split("deploy_stp init", 1)[1].split("fi", 1)[0]
+    install_call = text.split("deploy_stp install", 1)[1].split("\n\n", 1)[0]
+    assert "INIT_OPTIONS" in init_call
+    assert "INIT_OPTIONS" not in install_call
+
+
 def test_shell_venv_bootstrap_matches_the_python_one():
     """shell 里只能有一处替身：与 bootstrap.ensure_tool_venv 的目标与依赖必须一致。"""
     text = COMMON_LIB.read_text(encoding="utf-8")

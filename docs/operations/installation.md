@@ -61,7 +61,12 @@ sudo ./deploy/install.sh            # 交互：只问站点标识、公开入口
 sudo ./deploy/install.sh --yes      # 全部取探测默认，非交互
 sudo ./deploy/install.sh --dry-run  # 只报计划，一个字节都不写
 sudo ./deploy/install.sh --no-fix   # 宿主机写操作（venv/建库/挂盘/fstab）只报命令
+sudo ./deploy/install.sh --database stp_b --public-url http://10.0.0.5 --data-disk /dev/sda
 ```
+
+站点输入项直接传给 `init`：`--display-name`、`--public-url`、`--database`、`--redis-index`、
+`--storage-mount`、`--data-disk`、`--admin-username`、`--bundle`（等价环境变量见 §8）；其余
+选项透传给 `install`（如 `--through-agents`、`--agents-inventory`）。
 
 内部顺序（任一步失败即停，产物保留，重跑从缺的那步继续）：
 

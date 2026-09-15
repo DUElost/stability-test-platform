@@ -4,6 +4,10 @@
 #   sudo ./deploy/install.sh              # 缺什么补什么；只回答 ≤4 个问题
 #   sudo ./deploy/install.sh --yes        # 全部取探测默认（非交互，适合脚本/CI）
 #   sudo ./deploy/install.sh --dry-run    # 只报计划，一个字节都不写
+#   sudo ./deploy/install.sh --database stp_b --public-url http://10.0.0.5
+#                                         # 站点输入项：--display-name/--public-url/
+#                                         # --database/--redis-index/--storage-mount/
+#                                         # --data-disk/--admin-username/--bundle
 #   sudo ./deploy/install.sh verify       # 装完之后跑 S6 受控验收
 #   sudo ./deploy/install.sh handover     # 汇总 MS-01/02/04/05/06/10/13 证据
 #
@@ -23,6 +27,7 @@ ASSUME_YES=0
 THROUGH_AGENTS=0
 AGENTS_INVENTORY=""
 PASSTHROUGH=()
+INIT_OPTIONS=()
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -33,7 +38,13 @@ while [ "$#" -gt 0 ]; do
         --through-agents) THROUGH_AGENTS=1; shift ;;
         --agents-inventory) AGENTS_INVENTORY="${2:?--agents-inventory needs a file}"; shift 2 ;;
         --agents-inventory=*) AGENTS_INVENTORY="${1#*=}"; shift ;;
-        --help|-h) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        # 站点输入项转给 init；其余安装期选项透传给 install
+        --display-name|--public-url|--database|--redis-index|--storage-mount|--data-disk|--admin-username|--bundle)
+            if [ -z "${2:-}" ]; then echo "install: $1 needs a value" >&2; exit 2; fi
+            INIT_OPTIONS+=("$1" "$2"); shift 2 ;;
+        --display-name=*|--public-url=*|--database=*|--redis-index=*|--storage-mount=*|--data-disk=*|--admin-username=*|--bundle=*)
+            INIT_OPTIONS+=("${1%%=*}" "${1#*=}"); shift ;;
+        --help|-h) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) PASSTHROUGH+=("$1"); shift ;;
     esac
 done
@@ -107,7 +118,7 @@ if [ ! -f "$STP_SITE_FILE" ]; then
     fi
     echo "install: no site input at $STP_SITE_FILE — probing this host and asking four questions"
     deploy_stp init --output "$STP_SITE_FILE" --bindings-dir "$STP_BINDINGS_DIR" \
-        --site-id "$STP_SITE_ID" --bundle "$STP_BUNDLE" "${init_flags[@]}"
+        --site-id "$STP_SITE_ID" --bundle "$STP_BUNDLE" "${INIT_OPTIONS[@]}" "${init_flags[@]}"
     if [ "$DRY_RUN" -eq 1 ]; then
         echo
         echo "install: dry run finished; neither the site input nor anything else was written."
