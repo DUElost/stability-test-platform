@@ -26,7 +26,7 @@
 | user_id | Integer (FK) | 操作用户 ID |
 | username | String | 用户名（冗余存储） |
 | action | String | 操作类型（create/update/delete/start/cancel 等） |
-| resource_type | String | 资源类型（host / device / script / script_catalog / notification_channel / notification_rule / schedule / resource_pool / action_template / job_instance / plan_run 等） |
+| resource_type | String | 资源类型（host / device / script / script_catalog / notification_channel / notification_rule / schedule / resource_pool / action_template（已于 #1526 删除，仅存历史行） / job_instance / plan_run 等） |
 | resource_id | Integer | 资源 ID |
 | details | JSON | 操作详情 |
 | ip_address | String | 客户端 IP |

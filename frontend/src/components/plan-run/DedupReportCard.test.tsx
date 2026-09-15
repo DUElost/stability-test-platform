@@ -74,6 +74,77 @@ describe('DedupReportCard', () => {
     expect(screen.queryByTestId('dedup-host-completeness')).toBeNull();
   });
 
+  it('I-7: 未等齐时露出 incomplete_reason（此前只说「未等齐」）', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+    });
+
+    render(
+      <DedupReportCard
+        runId={1}
+        uploadSummary={{
+          total: 10,
+          detected: 10,
+          pull_failed: 0,
+          local: 0,
+          upload_pending: 0,
+          pending: 2,
+          uploading: 0,
+          upload_failed: 0,
+          failed: 0,
+          remote: 8,
+          archived: 0,
+          pruned: 0,
+          ready: false,
+          mark_ready: false,
+          events_ready: true,
+          incomplete_reason: 'upload_mark_timeout',
+          compensation: 'best_effort_extract',
+        }}
+      />,
+      { wrapper },
+    );
+
+    const el = await screen.findByTestId('upload-not-ready');
+    expect(el.textContent).toContain('未等齐');
+    expect(el.textContent).toContain('上送标记未确认');
+    expect(el.getAttribute('title')).toBe('upload_mark_timeout');
+  });
+
+  it('I-7: 未知原因代码原样露出（不静默吞掉后端新增原因）', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+    });
+
+    render(
+      <DedupReportCard
+        runId={1}
+        uploadSummary={{
+          total: 1,
+          detected: 1,
+          pull_failed: 0,
+          local: 0,
+          upload_pending: 0,
+          pending: 1,
+          uploading: 0,
+          upload_failed: 0,
+          failed: 0,
+          remote: 0,
+          archived: 0,
+          pruned: 0,
+          ready: false,
+          incomplete_reason: 'brand_new_reason',
+        }}
+      />,
+      { wrapper },
+    );
+
+    const el = await screen.findByTestId('upload-not-ready');
+    expect(el.textContent).toContain('brand_new_reason');
+  });
+
   it('#1195: query failure shows error state, not the scan-empty CTA', async () => {
     (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('boom'),

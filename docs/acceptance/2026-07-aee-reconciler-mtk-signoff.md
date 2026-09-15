@@ -2,7 +2,9 @@
 
 - **跟踪**：[GitHub #72](https://github.com/DUElost/stability-test-platform/issues/72)
 - **关联 ADR**：[ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)（方案 C 存储）；平台门禁见 `backend/agent/aee/AGENTS.md` §平台门禁（#73）
-- **触发工具**：`backend/agent/scripts/aee_signal_trigger/v1.0.0/aee_signal_trigger.py`
+- **触发工具**：`backend/agent/scripts/aee_signal_trigger/v1.0.1/aee_signal_trigger.py`
+  （**≥ v1.0.1**：v1.0.0 无新 `db_history` 行的 `pkg_name` 归属核对，会把并发来源的
+  AEE 事件当成本次 kill 产物——正是本验收要排除的失败模式，#816）
 - **文档状态**：模板（待实跑填入实测值并签字）
 
 > **作用范围**：在一台 MTK 真机上跑完一个完整 PlanRun，证明 AEE Reconciler
@@ -59,13 +61,13 @@ ssh android@<ip> 'grep ^LOG_LEVEL ~/.env 2>/dev/null || echo "未设（=INFO 默
 
 ### 1.4 触发工具就位
 
-`aee_signal_trigger/v1.0.0` 已随 Agent rsync 部署。首次需在控制面注册脚本版本
+`aee_signal_trigger/v1.0.1` 已随 Agent rsync 部署。首次需在控制面注册脚本版本
 （ADR-0020：扫描只在磁盘发现文件，`default_params` 由 `POST /scripts/{name}/versions` 录入）：
 
 ```bash
 # 控制面凭据边界见 docs/operations/production-diagnostics.md
 curl -H "Authorization: Bearer <token>" \
-  -F 'name=aee_signal_trigger' -F 'version=v1.0.0' \
+  -F 'name=aee_signal_trigger' -F 'version=v1.0.1' \
   -F 'default_params={"package_name":"com.android.settings","poll_timeout_seconds":30,"poll_interval_seconds":1.0,"signal":11}' \
   -F 'param_schema={...}' \
   http://127.0.0.1:8000/api/v1/scripts/aee_signal_trigger/versions

@@ -34,7 +34,7 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
 2. **同步代码到生产目录**（本机=仓库根）：`git checkout main && git pull origin main`
    ```bash
    git checkout main && git pull origin main
-   ./tools/dev/check-deploy-source.sh   # 部署源守卫：非 main / 有未提交改动 → 退出 1，先处理再继续
+   ./tools/dev/check-deploy-source.sh   # 部署源守卫：非 main / 有未提交改动 / schema 超前于代码 head → 退出 1，先处理再继续
    ```
    ——部署源就是工作树，务必保持在 main。
 3. **应用 DB 迁移**（禁止直连生产库手动 `alembic upgrade`：
@@ -46,7 +46,7 @@ curl -s http://127.0.0.1:8000/health      # health 路由（非 /api/v1/health�
    部署后回查：`venv/bin/python -m alembic current` 应等于目标 revision。
 4. **重启服务**（迁移若已解耦为 `-migrate` oneshot，则只重启常驻服务）：
    ```bash
-   ./tools/dev/check-deploy-source.sh   # 重启前再核一次（并发会话可能已把工作树切走）
+   ./tools/dev/check-deploy-source.sh   # 重启前再核一次（并发会话可能已把工作树切走；连带查 schema 未超前 head）
    sudo systemctl restart stability-backend
    systemctl is-active stability-backend
    curl -s http://127.0.0.1:8000/health
@@ -161,8 +161,13 @@ PYTHONPATH=. venv/bin/python -m backend.scripts.batch_hot_update --direct
 
 ## 踩坑守卫（负向约束）
 
-- 部署源守卫（`tools/dev/check-deploy-source.sh`）不过就停：非 `main` 或有未提交改动
-  时禁止继续部署（共享工作树曾跑在未合入分支上被推上生产）；
+- 部署源守卫（`tools/dev/check-deploy-source.sh`）不过就停：非 `main`、有未提交改动，
+  或 alembic schema **超前于代码 head / 修订未知**（脚本内调
+  `check_alembic_at_head.py --allow-behind`，库落后只 WARN——「pull → 守卫 →
+  `upgrade head`」的中间态合法；无 `DATABASE_URL` 时 WARN 跳过）时禁止继续部署
+  （共享工作树曾跑在未合入分支上被推上生产）。systemd 侧另有**硬** `ExecStartPre`
+  精确对齐检查（位置在 `upgrade head` 之后，不带 `--allow-behind`；部署源守卫本身
+  在该 unit 里是 `-` 软检查，失败只记日志）；
 - **禁止直连生产库手动 `alembic upgrade`**——迁移走代码与 PR 流程（§1 step 3）；
 - scan `conflicts` 出现时先 `sha256sum` 比对磁盘 vs DB，再决定是否
   `?force_rebaseline=true`（且需无在途 PlanRun）；seed 预建版本 created=0/skipped 是

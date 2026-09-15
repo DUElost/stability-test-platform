@@ -108,7 +108,7 @@
 
 | 表 | 说明 |
 |----|------|
-| `test_suite` | MTBF 用例集（≈ runtask.xml）：`name` 全局唯一、`project_id` 可空=通用套件、`export_dir`、`apk_binding`、`root_config`/`global_params`（JSON 保键序）、双漂移比对键 `source_sha256`/`exported_sha256`/`exported_content_sha256`、`is_active` |
+| `test_suite` | MTBF 用例集（≈ runtask.xml）：`name` 全局唯一、`project_id` 可空=通用套件、`export_dir`、`apk_binding`、`root_config`/`global_params`（JSON 保键序）、漂移比对键 `source_sha256`（导入溯源）/`exported_sha256`（runtask 磁盘）/`exported_content_sha256`（库）/`exported_global_sha256`（Global 磁盘，R05-F10 #973；升级后须重导，见 [`mtbf-api.md`](../operations/mtbf-api.md) §关键语义）、`is_active` |
 | `test_case` | 用例（粒度 = testpoint）：`suite_id` CASCADE、`(suite_id, name)` 唯一、`ordinal`、`times`、`enabled`、`exec_descs` JSON（1..N 执行描述，标识符原样保留不「修正」） |
 
 ---
@@ -128,6 +128,7 @@
 | 表 | 说明 |
 |----|------|
 | `notification_channel` / `alert_rule` | 告警 |
+| `notification_delivery` | **投递事实层**（#1167 P4 / ADR-0036 D6）：每行 = 一次「通知 × 通道」投递，`unique(notification_log_id, channel)`；状态词表 `requested`→`dispatched`→`accepted`/`retrying`→`failed`（向前兼容，未来加 `delivered` 不改契约）。**本表为权威**：P4 起幂等判定读本表，无本表行的历史日志才回落 `notification_logs.context.channel_delivery` JSONB |
 | `plan_run_artifact` | PlanRun 级 dedup xls 等（Sprint 4 扩展） |
 
 ---
