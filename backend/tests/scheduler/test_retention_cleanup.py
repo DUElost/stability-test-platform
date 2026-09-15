@@ -84,6 +84,34 @@ def test_batch_size_setting_bounds_one_tick(cleanup_env, scheduler_env):
     )
 
 
+def test_cleanup_reports_candidates_and_batch_size(cleanup_env, scheduler_env):
+    """#2144：候选数与批大小成对上报——``candidates >= batch_size`` 即可判定积压。
+
+    两个要点：① 批被填满时等于上限（饱和信号）；② 清空后回到 0——gauge 不许停在上一轮的
+    非零值上，否则「已清空」会被显示成「仍在积压」（那会让这条观测面比没有更糟）。
+    """
+    from prometheus_client import REGISTRY
+
+    db, plan = cleanup_env
+    for _ in range(3):
+        _mk_run(db, plan, age_days=10)
+    # 必须在调用前设置：settings 走 lru_cache，scheduler_env 会重置它。
+    scheduler_env("PLAN_RUN_RETENTION_BATCH_SIZE", "2")
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert REGISTRY.get_sample_value("stability_retention_candidate_runs") == 2.0, (
+        "本轮候选 3 个、批大小 2 → 上报值应是 2（= 上限，即饱和）"
+    )
+    assert REGISTRY.get_sample_value("stability_retention_batch_size") == 2.0
+
+    cron_scheduler.run_retention_cleanup()  # 剩 1 个候选 → 不饱和
+    assert REGISTRY.get_sample_value("stability_retention_candidate_runs") == 1.0
+
+    cron_scheduler.run_retention_cleanup()  # 清空 → 必须归 0
+    assert REGISTRY.get_sample_value("stability_retention_candidate_runs") == 0.0
+
+
 def test_chain_all_expired_deleted(cleanup_env):
     """全链到期：祖→父→子全部删除（无引用阻碍）。"""
     db, plan = cleanup_env
