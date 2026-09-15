@@ -176,6 +176,44 @@ describe('PlanExecutePage', () => {
     expect(screen.getByText(/表格用于明细核对/)).toBeInTheDocument();
   });
 
+  it('就绪度必须拿到退役主机（includeRetired=true），否则退役门恒空转（#2053）', async () => {
+    renderPage({
+      hosts: [
+        {
+          id: 'auto-fdaf1d55e319',
+          name: 'Retired-Host',
+          ip: '192.0.2.55',
+          status: 'ONLINE',
+          extra: {},
+          retired_at: '2026-09-13T00:00:00Z',
+        },
+      ],
+      devices: [
+        {
+          id: 3001,
+          serial: 'RETIRED01',
+          model: 'Infinix_X6851',
+          host_id: 'auto-fdaf1d55e319',
+          status: 'ONLINE',
+        },
+      ],
+    });
+
+    await goToDeviceStep();
+
+    // 关键断言：默认的 fetchHostList(include_retired=false) 会被后端把退役主机
+    // 过滤掉 → hostMap 查不到 → `retired_at` 门禁与「节点离线」都不会命中。
+    await waitFor(() => expect(fetchHostList).toHaveBeenCalledWith(0, 200, true));
+
+    // 行为断言：退役主机上的 ONLINE 设备不得被算成「可用」（ready=false）。
+    // 修复前 hostMap 查不到该主机 → retired 分支与「节点离线」分支都不命中 → 算成可用。
+    // 页面级只钉「调用参数」——退役分支本身的判定由
+    // `src/utils/planExecuteReadiness.test.ts` 覆盖；本用例补的正是 #2053 的
+    // 缺口：调用方拿不到退役主机（默认 include_retired=false）→ 门恒空转。
+    await waitFor(() => expect(fetchHostList).toHaveBeenCalledWith(0, 200, true));
+    expect(await screen.findByLabelText(/RETIRED01/i)).toBeInTheDocument();
+  });
+
   it('disables BUSY devices and excludes them from available count', async () => {
     renderPage({
       devices: [

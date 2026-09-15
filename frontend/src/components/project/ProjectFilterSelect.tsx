@@ -30,7 +30,7 @@ export function ProjectFilterSelect({
   showUnassigned = false,
 }: ProjectFilterSelectProps) {
   const { data: projects } = useQuery({
-    queryKey: projectKeys.list(),
+    queryKey: projectKeys.active(),
     queryFn: () => api.projects.listActive(),
   });
 
