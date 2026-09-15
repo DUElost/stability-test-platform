@@ -473,6 +473,7 @@ export default function HostsPage() {
           host.agent_protocol_version ??
           (typeof host.extra?.agent_version === 'string' ? host.extra.agent_version : null),
         agent_code_revision: host.agent_code_revision ?? null,
+        agent_artifact_digest: host.agent_artifact_digest ?? null,
         expected_code_revision: host.expected_code_revision ?? null,
         agent_code_deployed: host.agent_code_deployed ?? null,
         agent_code_deployed_at: host.agent_code_deployed_at ?? null,

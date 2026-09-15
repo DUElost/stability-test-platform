@@ -4,45 +4,86 @@ from backend.services.agent_version_info import (
 )
 
 
-def test_resolve_sync_status_matched():
+DIGEST_OLD = "sha256:" + "a" * 64
+DIGEST_NEW = "sha256:" + "b" * 64
+
+
+# ── ADR-0040 v1.1（#2057）：判据唯一 = code artifact digest ──
+
+
+def test_resolve_sync_status_matched_by_digest():
     assert (
         resolve_agent_code_sync_status(
-            agent_code_revision="abc1234",
-            expected_code_revision="abc1234",
+            agent_artifact_digest=DIGEST_NEW,
+            desired_artifact_digest=DIGEST_NEW,
         )
         == "matched"
     )
 
 
-def test_resolve_sync_status_drift():
+def test_resolve_sync_status_drift_by_digest():
     assert (
         resolve_agent_code_sync_status(
-            agent_code_revision="old1111",
-            expected_code_revision="new2222",
+            agent_artifact_digest=DIGEST_OLD,
+            desired_artifact_digest=DIGEST_NEW,
         )
         == "drift"
     )
 
 
-def test_resolve_sync_status_pending_after_deploy():
+def test_resolve_sync_status_unknown_without_reported_digest():
+    """#1907 前部署 / 新装未心跳 → unknown 而**非** drift（ADR-0040 v1.1）。"""
     assert (
         resolve_agent_code_sync_status(
-            agent_code_revision=None,
-            expected_code_revision="new2222",
-            agent_code_deployed="new2222",
-        )
-        == "pending"
-    )
-
-
-def test_resolve_sync_status_unknown_without_signals():
-    assert (
-        resolve_agent_code_sync_status(
-            agent_code_revision=None,
-            expected_code_revision="new2222",
+            agent_artifact_digest=None,
+            desired_artifact_digest=DIGEST_NEW,
         )
         == "unknown"
     )
+
+
+def test_resolve_sync_status_unknown_without_desired():
+    assert (
+        resolve_agent_code_sync_status(
+            agent_artifact_digest=DIGEST_OLD,
+            desired_artifact_digest="",
+        )
+        == "unknown"
+    )
+
+
+def test_revision_drift_does_not_override_digest_match(monkeypatch):
+    """#2057 核心回归：revision 不等但 digest 相等 → matched（revision 只溯源）。"""
+    monkeypatch.setattr(
+        "backend.services.agent_version_info.get_agent_code_version",
+        lambda: "new2222",
+    )
+    view = build_host_version_view(
+        {
+            "agent_version": "2.0.0",
+            "agent_code_revision": "old1111",
+            "agent_code_deployed": "old1111",
+            "agent_code_deployed_at": "2026-07-14T05:00:00+00:00",
+        },
+        agent_artifact_digest=DIGEST_NEW,
+        desired_artifact_digest=DIGEST_NEW,
+    )
+    assert view["agent_code_revision"] == "old1111"
+    assert view["expected_code_revision"] == "new2222"
+    assert view["agent_code_sync_status"] == "matched"
+
+
+def test_build_host_version_view_computes_desired_when_absent(monkeypatch):
+    monkeypatch.setattr(
+        "backend.services.agent_version_info.get_agent_code_version",
+        lambda: "1e449c4",
+    )
+    monkeypatch.setattr(
+        "backend.services.agent_version_info.compute_desired_artifact_digest",
+        lambda kind=None: DIGEST_NEW,
+    )
+    view = build_host_version_view({}, agent_artifact_digest=DIGEST_OLD)
+    assert view["agent_code_sync_status"] == "drift"
 
 
 def test_build_host_version_view_from_extra(monkeypatch):
@@ -56,7 +97,9 @@ def test_build_host_version_view_from_extra(monkeypatch):
             "agent_code_revision": "1e449c4",
             "agent_code_deployed": "1e449c4",
             "agent_code_deployed_at": "2026-07-14T05:00:00+00:00",
-        }
+        },
+        agent_artifact_digest=DIGEST_NEW,
+        desired_artifact_digest=DIGEST_NEW,
     )
     assert view["agent_protocol_version"] == "2.0.0"
     assert view["agent_code_revision"] == "1e449c4"

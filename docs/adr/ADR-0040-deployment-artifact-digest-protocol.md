@@ -271,6 +271,8 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
 
 - **判据唯一性（写入 D2）**：`agent_code_sync_status` 判等换为 digest；`agent_code_revision` /
   `expected_code_revision` 降为纯文本溯源；`unknown` 语义成文（§4.2、§7-6）。
+  `pending` 在 digest 判据下**不再产生**（无「已部署但身份未上报」的可靠信号：控制面无从
+  区分「刚部署待心跳」与「#1907 前部署」），枚举保留以兼容既有前端与历史数据。
 - **显式放弃** D1 原「revision 可在内容不变时单独刷新」：无实现通道，且判据换 digest 后无必要。
 - **`expected_code_revision` 维持取仓库 HEAD**（不改写入口径）。若将来希望该文本不再指向与
   agent 无关的提交，可**单独**改为「最后触碰 `backend/agent/` 的提交」——纯溯源改进，
