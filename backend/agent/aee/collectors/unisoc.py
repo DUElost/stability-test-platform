@@ -18,8 +18,14 @@ ADR-0032 §119「对齐 toolkit 检测逻辑」+ 真机 Z2581/Z2582 实测，202
     {"kick_datetime":"2026-09-08_06:59:12.031","pid":"23847",
      "proc":"com.android.camera2","tag":"system_app_crash"}                        # C 事件发生
 
+**只有 C 类行（发生键）算「事件发生」**：A/B 类行都不是可上报事件，B 类只用于补齐
+`event_name` 等元数据（toolkit `_handle_uniview` 同口径：只取发生键行）。
+
 `Reboot` 类型的发生行带 `reboot_reason`；**normalboot 必须丢弃**（uniview 每次开机
-都记，真机 `Reboot.103000002` 全部为 normalboot），否则每次正常重启都会被当成异常。
+都记）。真机 `Reboot.103000002` 的形状是「A 设备头 + B 元数据行（`event_name:
+"Boot Category"`）+ 全部 normalboot 的发生行」——目录里**有** B 类行，但没有任何
+非 normalboot 的发生行，因此**不可上报**（#2083：把 B 类行误算成发生行，会让
+normalboot 目录被 emit 成假异常并自动上送）。
 """
 
 from __future__ import annotations
@@ -45,12 +51,10 @@ UNIVIEW_INFO_LEGACY_FILENAME = "unievent_info.json"
 _NORMALBOOT = "normalboot"
 #: B 类行（事件元数据）的判别键
 _EVENT_META_KEYS = ("event_id", "event_name", "event_type", "event_level")
-#: C 类行（事件发生）的判别键；Reboot 类只有 reboot_reason + kick_datetime
+#: C 类行（事件发生）的判别键；Reboot 类只有 reboot_reason + kick_datetime。
+#: 只有含这些键的行才算「事件发生」：设备头行（sn/software_version/soc_model）
+#: 与 B 类元数据行天然被排除（toolkit 过滤同口径，#2083）。
 _OCCURRENCE_KEYS = ("kick_datetime", "event_time", "timestamp", "reboot_reason")
-#: 认定为「事件行」的键集合：含元数据键**或**发生键。
-#: 设备头行（sn / software_version / soc_model）两者皆无 → 天然被排除，
-#: 这正是 toolkit 过滤的**目的**（跳过非事件行）。
-_EVENT_LINE_KEYS = _EVENT_META_KEYS + _OCCURRENCE_KEYS
 
 
 def event_type_prefix(event_dir: Path) -> Optional[str]:
@@ -63,7 +67,8 @@ def event_type_prefix(event_dir: Path) -> Optional[str]:
 def fold_unievent_info(text: str) -> dict[str, Any]:
     """把 ``unievent_info``（JSONL）折叠成**一条事件**。
 
-    返回 ``{}`` 表示"没有可上报的事件"：无有效行，或发生行**全部**是 normalboot。
+    返回 ``{}`` 表示"没有可上报的事件"：没有发生键行（设备头行 / 仅元数据行 /
+    空文件 / 截断），或发生行**全部**是 normalboot。
 
     行分类见模块 docstring；非 JSON 行与非 dict 行静默跳过（设备文件可能被截断，
     半个 JSON 行不应让整条采集失败）。
@@ -75,8 +80,8 @@ def fold_unievent_info(text: str) -> dict[str, Any]:
         for key in _EVENT_META_KEYS:
             if key in obj and obj[key] not in (None, ""):
                 meta[key] = obj[key]
-        if not any(k in obj for k in _EVENT_LINE_KEYS):
-            return  # 设备头行等非事件行（toolkit 同口径：只取事件行）
+        if not any(k in obj for k in _OCCURRENCE_KEYS):
+            return  # 设备头行 / 仅元数据行：都不是事件发生行（toolkit 同口径）
         if obj.get("reboot_reason") == _NORMALBOOT:
             return  # 正常开机：不是异常
         occurrences.append(obj)

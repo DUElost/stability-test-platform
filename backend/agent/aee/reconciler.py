@@ -941,36 +941,34 @@ class AeeDbHistoryReconciler:
 
         #1719：占位语义 = 「该条目已在本地 finalize，emit 必须发生」。已有
         记录（重拉/重放路径）不覆盖——保留既有 keys / 首次观测时间戳。
+        #2044：写失败不吞。占位没落盘时 processor 必须知道——它照常推进 processed
+        后，该行既无意图记录可供 sweep 重放、也不会再被重拉，条目将静默永久丢失。
+        失败原样上抛，由 processor 判「不 finalize」并保留 pending 下一拍重试
+        （异常日志落在 processor 侧，避免双份 traceback）。
         """
-        try:
-            aee_type = str(payload.get("aee_type") or "")
-            line = str(payload.get("line") or "")
-            if not aee_type or not line:
-                return
-            processed_key = state_key(
-                self._serial, aee_type, prefix=self._state_prefix_for(payload),
-            )
-            intents = load_intents(self._state_store, processed_key)
-            if line in intents:
-                return
-            override = payload.get("detected_at_override")
-            override_iso = (
-                override.isoformat() if isinstance(override, datetime) else ""
-            )
-            record = new_intent_record(
-                payload=payload,
-                job_id=self._job_id,
-                detected_at_iso=override_iso or datetime.now(timezone.utc).isoformat(),
-                entry_origin=str(payload.get("entry_origin") or "runtime"),
-                detected_at_override_iso=override_iso,
-            )
-            intents[line] = record
-            save_intents(self._state_store, processed_key, intents)
-        except Exception:
-            logger.exception(
-                "aee_emit_intent_placeholder_failed serial=%s job=%d",
-                self._serial, self._job_id,
-            )
+        aee_type = str(payload.get("aee_type") or "")
+        line = str(payload.get("line") or "")
+        if not aee_type or not line:
+            return
+        processed_key = state_key(
+            self._serial, aee_type, prefix=self._state_prefix_for(payload),
+        )
+        intents = load_intents(self._state_store, processed_key)
+        if line in intents:
+            return
+        override = payload.get("detected_at_override")
+        override_iso = (
+            override.isoformat() if isinstance(override, datetime) else ""
+        )
+        record = new_intent_record(
+            payload=payload,
+            job_id=self._job_id,
+            detected_at_iso=override_iso or datetime.now(timezone.utc).isoformat(),
+            entry_origin=str(payload.get("entry_origin") or "runtime"),
+            detected_at_override_iso=override_iso,
+        )
+        intents[line] = record
+        save_intents(self._state_store, processed_key, intents)
 
     def _intent_payload(
         self, aee_type: str, line: str, record: Dict[str, Any], prefix: str,
@@ -1111,7 +1109,9 @@ class AeeDbHistoryReconciler:
 
         - ``!done`` → 重放（keys 缺失则新分配；同幂等键），成功标 done；
           失败计 attempts，达上限丢弃并计 signals_dropped（防无限重放）。
-        - ``done`` 且 line 已 processed → 清理；
+        - ``done`` 且 line 已 processed → 清理；runtime 簿按自身 processed，
+          baseline 簿按 **runtime** processed（#2034：墓碑是 runtime 重拉时唯一
+          的幂等键来源，不能被本前缀的 finalize 提前抹掉）；
         - line 未 processed → 保留（重拉路径会复用 keys，避免重复 emit）。
         返回本轮重放条数。
         """
@@ -1123,10 +1123,21 @@ class AeeDbHistoryReconciler:
                 if not intents:
                     continue
                 processed = load_processed_lines(self._state_store, processed_key)
+                # #2034 成因 B：tick_once 先 sweep 再拉取，而 baseline 簿的 done
+                # 墓碑正是 runtime 重拉时唯一的幂等键来源。按「本前缀 processed」
+                # 清理会在崩溃后的第 1 个 tick 就删掉它（baseline 早已 finalize），
+                # 早于 runtime pass 的重拉——#1862 的窗口原样留着。baseline 簿因此
+                # 按 merge 的落点（runtime 前缀 processed）判定，墓碑活过丢失窗口。
+                finalized = processed
+                if prefix != self._state_prefix:
+                    finalized = load_processed_lines(
+                        self._state_store,
+                        state_key(self._serial, aee_type, prefix=self._state_prefix),
+                    )
                 changed = False
                 for line, record in list(intents.items()):
                     if record.get("done"):
-                        if line in processed:
+                        if line in finalized:
                             del intents[line]
                             changed = True
                         continue
@@ -1194,14 +1205,18 @@ class AeeDbHistoryReconciler:
             processed_key = state_key(self._serial, aee_type, prefix=processed_prefix)
             intents = load_intents(self._state_store, processed_key)
             record = intents.get(line)
-            if record is None:
-                # #1862：本前缀簿未命中——回查另一前缀簿的 done 墓碑（迁移
-                # 丢失窗口），复用原 keys/seq_no 而非新建（防新 seq_no 重复
-                # emit）。墓碑写入本前缀簿后走下方 done 幂等返回。
-                record = self._lookup_cross_prefix_intent(
+            # #1862：回查另一前缀簿的 done 墓碑（baseline 已 emit、merge 前崩溃
+            # → runtime 重拉同一行），复用原 keys/seq_no 而非新分配。
+            # #2034 成因 A：判据不能是「本前缀簿无记录」——processor 在
+            # on_new_entry 之前总是先落占位，且占位与 emit 用同一个
+            # state_key_prefix，本前缀簿因此必然已有一条未 done 的占位，回查在
+            # 生产路径上永不触发。真正的判据是「本前缀没有可用幂等键」。
+            if record is None or not (record.get("done") or record.get("seq_no") is not None):
+                tombstone = self._lookup_cross_prefix_intent(
                     aee_type, line, exclude_prefix=processed_prefix,
                 )
-                if record is not None:
+                if tombstone is not None:
+                    record = tombstone
                     intents[line] = record
                     save_intents(self._state_store, processed_key, intents)
             if record is None:

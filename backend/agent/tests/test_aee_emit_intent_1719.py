@@ -10,7 +10,11 @@
 - 重放复用同一幂等键（seq_no / DLE id），不重新分配；
 - 重放失败有界重试（attempts 上限退场并计 signals_dropped）；
 - emitter prepare/enqueue 拆分与 LocalDB 幂等；DLE client payload 组装 +
-  失败入 outbox 幂等重放。
+  失败入 outbox 幂等重放；
+- #2044：占位写失败**不 finalize**（不推进 processed / 不 emit / 留 pending 重试，
+  用尽后带真因显式告警）；
+- #2034：跨前缀 done 墓碑回查在**生产路径**上可达（占位先落同前缀簿），且 sweep
+  不会在 runtime finalize 前抹掉 baseline 墓碑。
 """
 
 from __future__ import annotations
@@ -745,3 +749,203 @@ def test_cross_prefix_lookup_ignores_undone_records(tmp_path):
     runtime_book = _intents(store)
     assert runtime_book[_LINE]["seq_no"] != 9
     assert runtime_book[_LINE]["done"] is True
+
+
+# ----------------------------------------------------------------------
+# #2044：占位写失败不得 finalize（processed 前进 + 无意图 = 静默永久丢失）
+# ----------------------------------------------------------------------
+
+class _FlakyIntentStore(_MemStore):
+    """只对意图簿键注入写失败（模拟 SQLITE_BUSY / 磁盘满的一瞬）。"""
+
+    def __init__(self, *, fail_times: int = 1, order: Optional[List[tuple]] = None) -> None:
+        super().__init__(order=order)
+        self.remaining = fail_times
+        self.failed_keys: List[str] = []
+
+    def set_state(self, key: str, value: str) -> None:
+        if key.endswith(ei.INTENT_KEY_SUFFIX) and self.remaining > 0:
+            self.remaining -= 1
+            self.failed_keys.append(key)
+            raise OSError("database is locked")
+        super().set_state(key, value)
+
+
+def _runtime_hooks(rec: AeeDbHistoryReconciler):
+    """复刻 reconciler.tick_once 的 runtime 接线（占位与 emit 同前缀簿）。"""
+
+    def on_intent(payload: Dict[str, Any]) -> None:
+        scoped = dict(payload)
+        scoped["entry_origin"] = "runtime"
+        rec._record_intent_placeholder(scoped)
+
+    def on_entry(payload: Dict[str, Any]) -> None:
+        scoped = dict(payload)
+        scoped["entry_origin"] = "runtime"
+        rec._handle_new_entry(scoped)
+
+    return on_intent, on_entry
+
+
+def _processed(store: _MemStore, prefix: str = "watcher:aee") -> set:
+    from backend.agent.aee.db_history import load_processed_lines
+
+    return load_processed_lines(store, _processed_key(prefix=prefix))
+
+
+def _pending(store: _MemStore, prefix: str = "watcher:aee") -> Dict[str, Any]:
+    return json.loads(
+        store.get_state(f"{prefix}:{_SERIAL}:aee_exp:pending_pull", "{}")
+    )
+
+
+def _intent_failure_config():
+    from backend.agent.aee.processor import ProcessConfig
+
+    return ProcessConfig(export_mobilelog=False, export_bugreport=False)
+
+
+def test_intent_placeholder_failure_does_not_finalize_entry(tmp_path, monkeypatch):
+    """占位没落盘 ⇒ 该条目不算 finalize：processed 不前进、不 emit、留 pending。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    line = "/data/aee_exp/db.90,Java (JE),pkg,_,_,_,_,_,com.example.app,2026-05-28 10:15:22.123"
+    _setup_pdl_stubs(monkeypatch, line)
+    store = _FlakyIntentStore(fail_times=1)
+    emitter = _FakeEmitter(store=store)
+    emitter.processed_key = _processed_key()
+    client = _FakeDeviceLogClient()
+    rec = _make_reconciler(tmp_path, emitter=emitter, store=store, client=client)
+    on_intent, on_entry = _runtime_hooks(rec)
+
+    from backend.agent.aee.processor import process_device_logs
+
+    r = process_device_logs(
+        serial=_SERIAL, job_id=_JOB_ID, state_store=store, config=_intent_failure_config(),
+        on_entry_intent=on_intent, on_new_entry=on_entry,
+    )
+
+    assert line not in _processed(store), "占位失败仍推进 processed 即永久丢失"
+    assert r.pulled == 0
+    assert emitter.prepared == [] and client.posts == [], "意图未落盘就不得产生效果"
+    assert store.failed_keys == [ei.intent_state_key(_processed_key())]
+    task = _pending(store).get(line) or {}
+    assert task.get("retry_count") == 1
+    assert str(task.get("last_error")).startswith("emit_intent_placeholder_failed")
+    assert any(e.startswith("emit_intent_placeholder_failed") for e in r.errors)
+    assert rec.stats.signals_dropped == 0  # 尚未丢弃：仍有重试
+
+
+def test_intent_placeholder_failure_retries_then_emits_exactly_once(tmp_path, monkeypatch):
+    """下一拍廉价重试（本地目录已就位）→ 恰好一次 emit，既不缺也不重。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    line = "/data/aee_exp/db.91,Java (JE),pkg,_,_,_,_,_,com.example.app,2026-05-28 10:15:22.123"
+    _setup_pdl_stubs(monkeypatch, line)
+    store = _FlakyIntentStore(fail_times=1)
+    emitter = _FakeEmitter(store=store)
+    emitter.processed_key = _processed_key()
+    client = _FakeDeviceLogClient()
+    rec = _make_reconciler(tmp_path, emitter=emitter, store=store, client=client)
+    on_intent, on_entry = _runtime_hooks(rec)
+
+    from backend.agent.aee.processor import process_device_logs
+
+    first = process_device_logs(
+        serial=_SERIAL, job_id=_JOB_ID, state_store=store, config=_intent_failure_config(),
+        on_entry_intent=on_intent, on_new_entry=on_entry,
+    )
+    assert line not in _processed(store) and first.pulled == 0
+
+    second = process_device_logs(
+        serial=_SERIAL, job_id=_JOB_ID, state_store=store, config=_intent_failure_config(),
+        on_entry_intent=on_intent, on_new_entry=on_entry,
+    )
+    assert line in _processed(store)
+    assert second.pulled == 1
+    assert [seq for seq, _ in emitter.enqueued] == [1]      # 一个、且只一个 seq
+    assert len(client.posts) == 1
+    assert _intents(store)[line]["done"] is True
+    assert line not in _pending(store)
+
+
+def test_intent_placeholder_retries_are_bounded_and_report_true_reason(tmp_path, monkeypatch):
+    """重试用尽走 on_pull_failed：exhausted + 真因（不是误报的 pull 失败）。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    line = "/data/aee_exp/db.92,Java (JE),pkg,_,_,_,_,_,com.example.app,2026-05-28 10:15:22.123"
+    _setup_pdl_stubs(monkeypatch, line)
+    store = _FlakyIntentStore(fail_times=99)
+    store.set_state(
+        f"watcher:aee:{_SERIAL}:aee_exp:pending_pull",
+        json.dumps({line: {
+            "db_path": "/data/aee_exp/db.92",
+            "pkg_name": "com.example.app",
+            "timestamp": "2026-05-28 10:15:22.123",
+            "event_type": "CRASH", "raw_event_type": "Java (JE)",
+            "event_subtype": "JE", "retry_count": 10,
+            "last_error": "emit_intent_placeholder_failed: OSError",
+        }}),
+    )
+    emitter = _FakeEmitter(store=store)
+    emitter.processed_key = _processed_key()
+    rec = _make_reconciler(tmp_path, emitter=emitter, store=store)
+    on_intent, on_entry = _runtime_hooks(rec)
+    captured: Dict[str, Any] = {}
+
+    from backend.agent.aee.processor import process_device_logs
+
+    process_device_logs(
+        serial=_SERIAL, job_id=_JOB_ID, state_store=store, config=_intent_failure_config(),
+        on_entry_intent=on_intent, on_new_entry=on_entry,
+        on_pull_failed=lambda payload: captured.update(payload),
+    )
+
+    assert captured.get("exhausted") is True
+    assert "emit_intent_placeholder_failed" in str(captured.get("error"))
+    assert line in _processed(store) and line not in _pending(store)
+    assert emitter.prepared == []
+
+
+# ----------------------------------------------------------------------
+# #2034：跨前缀 done 墓碑回查在生产路径可达 + 墓碑活过 merge 丢失窗口
+# ----------------------------------------------------------------------
+
+def test_cross_prefix_tombstone_survives_the_runtime_placeholder(tmp_path, monkeypatch):
+    """成因 A：runtime 簿先落占位，回查仍须命中 baseline 墓碑（不新分配 seq）。"""
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    _setup_pdl_stubs(monkeypatch, _LINE)
+    store = _MemStore()
+    # baseline 已 emit done 且已 finalize，但 merge 进 runtime processed 前崩溃
+    _seed_done(store, _BASELINE_PREFIX, seq_no=7)
+    save_processed_lines(store, _processed_key(prefix=_BASELINE_PREFIX), {_LINE})
+
+    emitter = _FakeEmitter(store=store)
+    emitter.processed_key = _processed_key()
+    client = _FakeDeviceLogClient()
+    rec = _make_reconciler(tmp_path, emitter=emitter, store=store, client=client)
+    on_intent, on_entry = _runtime_hooks(rec)
+
+    from backend.agent.aee.processor import process_device_logs
+
+    process_device_logs(
+        serial=_SERIAL, job_id=_JOB_ID, state_store=store, config=_intent_failure_config(),
+        on_entry_intent=on_intent, on_new_entry=on_entry,
+    )
+
+    assert emitter.prepared == [] and client.posts == [], "重复 emit 即双计"
+    record = _intents(store)[_LINE]
+    assert record["seq_no"] == 7 and record["done"] is True
+    assert _LINE in _processed(store)
+
+
+def test_sweep_keeps_baseline_tombstone_until_runtime_finalizes(tmp_path):
+    """成因 B：tick 先 sweep 后拉取——baseline 墓碑不能被本前缀 processed 抹掉。"""
+    store = _MemStore()
+    _seed_done(store, _BASELINE_PREFIX, seq_no=7)
+    save_processed_lines(store, _processed_key(prefix=_BASELINE_PREFIX), {_LINE})
+    rec = _make_reconciler(tmp_path, store=store)
+
+    rec._sweep_emit_intents()
+    assert _LINE in _intents(store, prefix=_BASELINE_PREFIX), "墓碑须活过 merge 丢失窗口"
+
+    save_processed_lines(store, _processed_key(), {_LINE})   # runtime 已 finalize
+    rec._sweep_emit_intents()
+    assert _LINE not in _intents(store, prefix=_BASELINE_PREFIX)
