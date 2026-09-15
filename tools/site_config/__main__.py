@@ -45,6 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--bundle", default=None, help="Release bundle path for this site (default /srv/stp-bundle).")
     init.add_argument("--admin-username", default="admin", help="Initial administrator name (default admin).")
     init.add_argument("--non-interactive", action="store_true", help="Take every default instead of prompting.")
+    init.add_argument(
+        "--reset-db-password",
+        action="store_true",
+        help="Allow ALTER ROLE when the role already exists with a different password (off by default).",
+    )
     init.add_argument("--no-fix", dest="fix", action="store_false", help="Report the exact host commands instead of running them.")
     init.add_argument("--dry-run", action="store_true", help="Write nothing at all; report only.")
     init.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
@@ -141,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
             data_disk=arguments.data_disk,
             bundle=arguments.bundle,
             admin_username=arguments.admin_username,
+            reset_db_password=arguments.reset_db_password,
             interactive=False if arguments.non_interactive else None,
             fix=arguments.fix,
             dry_run=arguments.dry_run,

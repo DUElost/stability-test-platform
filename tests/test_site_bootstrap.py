@@ -356,3 +356,65 @@ def test_init_without_data_disk_says_why_the_mount_must_exist(tmp_path):
         interactive=False, fix=False, answers=_answers(),
     )
     assert any("no separate data disk" in line for line in report["actions"])
+
+
+def _role_ops(role_present: bool = True):
+    responses = {"pg_roles": (0, "1\n" if role_present else ""), "pg_database": (0, "1\n")}
+    return probe_ops(responses=responses)
+
+
+def test_existing_role_with_another_password_fails_closed():
+    """既有角色密码与本次生成不一致：绝不静默改既有角色，也不写坏绑定。"""
+    from tools.site_config import bootstrap
+
+    with pytest.raises(BootstrapError) as caught:
+        bootstrap.prepare_database(
+            _role_ops(), database="stp_b", role="stp", password="generated-1",
+            dry_run=False, fix=True, role_probe=lambda ops, dsn, password: False,
+        )
+    assert caught.value.code == "bootstrap_database_role"
+    assert "different password" in caught.value.detail
+
+
+def test_existing_role_is_reset_only_when_explicitly_allowed():
+    from tools.site_config import bootstrap
+
+    ops = _role_ops()
+    actions, _ = bootstrap.prepare_database(
+        ops, database="stp_b", role="stp", password="generated-1",
+        dry_run=False, fix=True, reset_password=True,
+    )
+    assert any("reset password for existing role: stp" in line for line in actions)
+    joined = " | ".join(" ".join(call) for call in ops.calls if call)
+    assert "ALTER ROLE stp LOGIN PASSWORD" in joined
+
+
+def test_existing_role_matching_the_binding_needs_no_change():
+    from tools.site_config import bootstrap
+
+    ops = _role_ops()
+    actions, _ = bootstrap.prepare_database(
+        ops, database="stp_b", role="stp", password="generated-1",
+        dry_run=False, fix=True, role_probe=lambda ops, dsn, password: True,
+    )
+    assert any("role already exists: stp" in line for line in actions)
+    assert not any("ALTER ROLE" in " ".join(call) for call in ops.calls if call)
+
+
+def test_rerun_keeps_existing_bindings_instead_of_rotating_them(tmp_path):
+    """重跑 init 不得轮换站点口令/Fernet/DSN——S2 已把首次值渲染进站点 env。"""
+    output = tmp_path / "site.yaml"
+    bindings = tmp_path / "bindings"
+    first = init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(),
+    )
+    before = {name: (bindings / name).read_text(encoding="utf-8") for name in sorted(os.listdir(bindings))}
+    fresh = init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(),
+    )
+    after = {name: (bindings / name).read_text(encoding="utf-8") for name in sorted(os.listdir(bindings))}
+    assert before == after
+    assert any("kept existing bindings (not rotated)" in line for line in fresh["actions"])
+    assert any("kept existing bindings (not rotated)" in line for line in first["actions"]) is False

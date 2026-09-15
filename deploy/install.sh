@@ -4,7 +4,7 @@
 #   sudo ./deploy/install.sh              # 缺什么补什么；只回答 ≤4 个问题
 #   sudo ./deploy/install.sh --yes        # 全部取探测默认（非交互，适合脚本/CI）
 #   sudo ./deploy/install.sh --dry-run    # 只报计划，一个字节都不写
-#   sudo ./deploy/install.sh --database stp_b --public-url http://10.0.0.5
+#   sudo ./deploy/install.sh --database stp_b --public-url http://192.0.2.5
 #                                         # 站点输入项：--display-name/--public-url/
 #                                         # --database/--redis-index/--storage-mount/
 #                                         # --data-disk/--admin-username/--bundle
@@ -39,6 +39,7 @@ while [ "$#" -gt 0 ]; do
         --agents-inventory) AGENTS_INVENTORY="${2:?--agents-inventory needs a file}"; shift 2 ;;
         --agents-inventory=*) AGENTS_INVENTORY="${1#*=}"; shift ;;
         # 站点输入项转给 init；其余安装期选项透传给 install
+        --reset-db-password) INIT_OPTIONS+=(--reset-db-password); shift ;;
         --display-name|--public-url|--database|--redis-index|--storage-mount|--data-disk|--admin-username|--bundle)
             if [ -z "${2:-}" ]; then echo "install: $1 needs a value" >&2; exit 2; fi
             INIT_OPTIONS+=("$1" "$2"); shift 2 ;;
