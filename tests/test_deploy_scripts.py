@@ -67,6 +67,14 @@ def test_scripts_are_executable_and_parse(script: Path):
     assert result.returncode == 0, result.stderr
 
 
+def test_scripts_do_not_leave_root_owned_bytecode():
+    """部署工具以 root 跑，必须在仓库树里禁用字节码写入。"""
+    text = COMMON_LIB.read_text(encoding="utf-8")
+    assert "PYTHONDONTWRITEBYTECODE=1" in text
+    for script in ENTRY_SCRIPTS:
+        assert "lib/deploy-common.sh" in script.read_text(encoding="utf-8")
+
+
 def test_entry_scripts_source_the_shared_defaults():
     for script in ENTRY_SCRIPTS:
         text = script.read_text(encoding="utf-8")

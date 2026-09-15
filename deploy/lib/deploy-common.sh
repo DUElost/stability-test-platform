@@ -12,6 +12,9 @@
 #   "$DEPLOY_PYTHON" -m tools.site_config ...
 
 set -euo pipefail
+# 部署工具以 root 运行：不要在仓库树里留下 root 拥有的 __pycache__（否则下次
+# 以普通用户身份同步/清理该树时会 Permission denied）
+export PYTHONDONTWRITEBYTECODE=1
 
 deploy_repo_root() {
     local here
