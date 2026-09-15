@@ -8,10 +8,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.services.agent_installer import (
+    INSTALL_API_URL_ENV,
     get_active_install_console_id,
     prepare_install_agent,
     start_install_agent_runconsole,
 )
+
+
+@pytest.fixture(autouse=True)
+def install_api_url(monkeypatch):
+    """I4：安装脚本非交互，回连地址必须由控制面环境注入。"""
+    monkeypatch.setenv(INSTALL_API_URL_ENV, "https://stp.example.com")
 
 
 @pytest.fixture
@@ -54,8 +61,76 @@ def test_prepare_install_agent_ok(mock_host):
     assert out["ok"] is True
     assert out["host_id"] == "host-abc"
     assert "ansible-playbook" in out["cmd"][0]
-    assert "agent_host_id=host-abc" in out["cmd"][-1]
+    assert "agent_host_id=host-abc" in out["cmd"]
+    # I4：非交互安装链必须把控制面 origin 传给 playbook（否则 API_URL 为空）
+    assert "agent_api_url=https://stp.example.com" in out["cmd"]
+    assert out["api_url"] == "https://stp.example.com"
     out["cleanup"]()
+
+
+def test_prepare_install_agent_requires_api_url(mock_host, monkeypatch):
+    """缺 STP_AGENT_INSTALL_API_URL → fail-closed，不构造 ansible 命令。"""
+    monkeypatch.delenv(INSTALL_API_URL_ENV, raising=False)
+    out = prepare_install_agent("host-abc")
+    assert out["ok"] is False
+    assert INSTALL_API_URL_ENV in out["message"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "stp.example.com",
+        "ftp://stp.example.com",
+        "https://user:pw@stp.example.com",
+        "https://stp.example.com/prefix",
+        "https://stp.example.com:notaport",
+        "{{ stp_public_url }}",
+    ],
+)
+def test_prepare_install_agent_rejects_non_origin(mock_host, monkeypatch, value):
+    monkeypatch.setenv(INSTALL_API_URL_ENV, value)
+    out = prepare_install_agent("host-abc")
+    assert out["ok"] is False
+    assert "cmd" not in out
+
+
+def test_prepare_install_agent_passes_install_options(mock_host):
+    """install_options → -e（agent_install_root → ansible agent_install_dir）。"""
+    creds = MagicMock()
+    creds.user = "android"
+    creds.password = "secret"
+    creds.key_path = None
+
+    with (
+        patch("backend.services.agent_installer.SessionLocal") as sl,
+        patch(
+            "backend.services.agent_installer.resolve_host_ssh_credentials",
+            return_value=(creds, False),
+        ),
+    ):
+        db = MagicMock()
+        sl.return_value = db
+        db.get.return_value = mock_host
+        out = prepare_install_agent(
+            "host-abc",
+            install_options={
+                "agent_install_root": "/srv/stability-test-agent",
+                "agent_local_aee_root": "/mnt/hdd/aee_events",
+            },
+        )
+
+    assert out["ok"] is True
+    assert "agent_install_dir=/srv/stability-test-agent" in out["cmd"]
+    assert "agent_local_aee_root=/mnt/hdd/aee_events" in out["cmd"]
+    out["cleanup"]()
+
+
+def test_prepare_install_agent_rejects_relative_install_root(mock_host):
+    out = prepare_install_agent(
+        "host-abc", install_options={"agent_install_root": "opt/agent"},
+    )
+    assert out["ok"] is False
+    assert "agent_install_root" in out["message"]
 
 
 def test_start_install_runconsole_registers_active():
@@ -86,6 +161,41 @@ def test_start_install_runconsole_registers_active():
     assert out["console_run_id"] == "con-test-1"
     assert get_active_install_console_id("host-abc") == "con-test-1"
     prep["cleanup"].assert_not_called()
+
+
+def test_start_install_runconsole_busy_does_not_double_start():
+    """I4：同 host 重复触发不得再起第二个 ansible（RunKeyBusy 原样回传现有 run）。"""
+    from backend.services.run_console import RunKeyBusyError
+
+    prep = {
+        "ok": True,
+        "host_id": "host-abc",
+        "ip": "10.0.0.5",
+        "cmd": ["ansible-playbook", "pb.yml"],
+        "env": {},
+        "cwd": "/tmp/ansible",
+        "cleanup": MagicMock(),
+        "cmd_line": "ansible-playbook pb.yml",
+    }
+    rc = MagicMock()
+    rc.start.side_effect = RunKeyBusyError("run_key busy")
+
+    with (
+        patch("backend.services.agent_installer.prepare_install_agent", return_value=prep),
+        patch("backend.services.agent_installer.RunConsole") as rc_cls,
+        patch(
+            "backend.services.agent_installer.get_active_install_console_id",
+            return_value="con-existing",
+        ),
+    ):
+        rc_cls.instance.return_value = rc
+        out = start_install_agent_runconsole("host-abc", initiated_by="admin")
+
+    assert out["ok"] is False
+    assert out["console_run_id"] == "con-existing"
+    assert "in progress" in out["message"]
+    # 未启动成功必须清理临时 inventory（失败路径不留 .stp-install-*.ini）
+    prep["cleanup"].assert_called_once()
 
 
 def test_prepare_install_agent_key_only_passes_private_key_to_inventory(mock_host):

@@ -14,14 +14,31 @@
           AGENT_SECRET（至少 16 字符），或通过环境变量 AGENT_SECRET /
           vault_agent_secret 覆盖后重试。
 
+    # install_agent.sh 自本切片起为非交互模式：API_URL 只能由调用方注入。
+    # 控制面驱动安装（POST /hosts/{id}/install）注入 STP_AGENT_INSTALL_API_URL，
+    # 手工安装请显式 -e agent_api_url=https://<控制面>。assert 是控制器侧
+    # 动作，不建连接即失败（fail-closed），避免连上目标机后再因空地址中止。
+    - name: Validate agent_api_url is injected
+      ansible.builtin.assert:
+        that:
+          - agent_api_url is defined
+          - agent_api_url | length > 0
+          - agent_api_url.startswith('http://') or agent_api_url.startswith('https://')
+        fail_msg: >-
+          agent_api_url 未注入或不是 http(s) 地址，安装中止：非交互安装无法
+          再从终端读取 API 地址。控制面请配置 STP_AGENT_INSTALL_API_URL；
+          手工执行请加 -e agent_api_url=https://<控制面公开入口>。
+
   tasks:
+    # 注意：**不要**在此设置 owner/group——Agent 服务账号由 install_agent.sh
+    # 第 1 步创建，全新主机上此时还不存在（chown 会以
+    # "failed to look up user android" 直接中断安装）。暂存树以 root 落地，
+    # 脚本随后以 root 复制到 INSTALL_DIR 并统一改属主。
     - name: Ensure remote temp directory exists
       become: true
       ansible.builtin.file:
         path: "{{ agent_remote_tmp_dir }}"
         state: directory
-        owner: "{{ agent_user }}"
-        group: "{{ agent_group }}"
         mode: "0755"
 
     - name: Copy agent source tree to remote temp directory
@@ -48,13 +65,14 @@
         find "{{ agent_remote_tmp_dir }}" -type f \( -name "*.sh" -o -name "*.py" \) -exec sed -i 's/\r$//' {} +
       changed_when: false
 
+    # 非交互安装：安装脚本从环境变量读取参数（不再 printf 喂 read）。
+    # AGENT_HOST_ID 为空时脚本回退按本机 IP 生成（手工安装路径）；
+    # AGENT_NFS_ROOT / AGENT_LOCAL_AEE_ROOT 为空则不写 .env、不覆盖既有值。
     - name: Run install script non-interactively
       become: true
-      ansible.builtin.shell: |
-        printf '%s\n%s\n' '{{ agent_api_url }}' '{{ agent_host_id }}' | bash install_agent.sh
-      args:
+      ansible.builtin.command:
+        cmd: bash install_agent.sh
         chdir: "{{ agent_remote_tmp_dir }}"
-        executable: /bin/bash
       environment:
         AGENT_INSTALL_DIR: "{{ agent_install_dir }}"
         AGENT_USER: "{{ agent_user }}"
@@ -62,6 +80,10 @@
         AGENT_SECRET: "{{ agent_secret }}"
         AGENT_CODE_VERSION: "{{ agent_code_version | default('', true) }}"
         PIP_INDEX_URL: "{{ agent_pip_index_url | default('') }}"
+        AGENT_API_URL: "{{ agent_api_url }}"
+        AGENT_HOST_ID: "{{ agent_host_id | default('', true) }}"
+        AGENT_NFS_ROOT: "{{ agent_nfs_root | default('', true) }}"
+        AGENT_LOCAL_AEE_ROOT: "{{ agent_local_aee_root | default('', true) }}"
 
     - name: Refresh agentctl command from staged source
       become: true
@@ -119,6 +141,47 @@
       retries: 6
       delay: 5
       until: agent_health_after_install.rc == 0
+
+    # ── ADR-0040 D2/P2：全新安装也要落部署身份 ────────────────────────────
+    # 热更新通道在健康收敛后写 ARTIFACT_DIGEST(_RESOURCES)；安装通道此前不写，
+    # 于是站点侧只能看到空摘要——内容一致性无法断言（S5 会如实报
+    # agent_digest_missing，而不是静默通过）。摘要按与热更新相同基准在控制机
+    # 计算（源码树 + schema arcname），保证两种通道身份可直接比较。
+    - name: Compute deployment artifact digests (ADR-0040 P2)
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        cmd: >-
+          python3 {{ stp_repo_root }}/tools/ansible/compute_deploy_digest.py
+          --source-dir {{ agent_source_dir }}
+          --schema-file {{ stp_repo_root }}/backend/schemas/pipeline_schema.json
+      register: agent_deploy_digests
+      changed_when: false
+
+    - name: Extract deployment digests
+      ansible.builtin.set_fact:
+        agent_code_artifact_digest: "{{ agent_deploy_digests.stdout | regex_search('CODE_DIGEST=(\\S+)', '\\1') | first }}"
+        agent_resources_artifact_digest: "{{ agent_deploy_digests.stdout | regex_search('RESOURCES_DIGEST=(\\S*)', '\\1') | first }}"
+
+    - name: Write agent ARTIFACT_DIGEST (ADR-0040 D2)
+      become: true
+      ansible.builtin.copy:
+        content: "{{ agent_code_artifact_digest }}\n"
+        dest: "{{ agent_install_dir }}/agent/ARTIFACT_DIGEST"
+        owner: "{{ agent_user }}"
+        group: "{{ agent_group }}"
+        mode: "0644"
+      when: agent_code_artifact_digest | length > 0
+
+    - name: Write agent ARTIFACT_DIGEST_RESOURCES (ADR-0040 P2)
+      become: true
+      ansible.builtin.copy:
+        content: "{{ agent_resources_artifact_digest }}\n"
+        dest: "{{ agent_install_dir }}/agent/ARTIFACT_DIGEST_RESOURCES"
+        owner: "{{ agent_user }}"
+        group: "{{ agent_group }}"
+        mode: "0644"
+      when: agent_resources_artifact_digest | length > 0
 
     - name: Print install summary
       ansible.builtin.debug:

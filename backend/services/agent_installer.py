@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from backend.core.database import SessionLocal
 from backend.core.ssh_security import resolve_host_ssh_credentials
@@ -18,8 +19,98 @@ from backend.services.run_console import RunConsole, RunConsoleError, RunKeyBusy
 
 logger = logging.getLogger(__name__)
 
+# 控制面公开入口（agent 回连地址）。安装脚本自本切片起非交互：该值必须由
+# 调用方注入，且必须是 origin（Agent 自行拼接 /api/v1/... 与 WS 路径）。
+INSTALL_API_URL_ENV = "STP_AGENT_INSTALL_API_URL"
+
+# install_options 允许的键 → ansible 变量名。
+_INSTALL_OPTION_VARS: dict[str, str] = {
+    "agent_install_root": "agent_install_dir",
+    "agent_local_aee_root": "agent_local_aee_root",
+    # 中心存储挂载点：热更新（agent_env_sync）只在 CP 有非空值时下发，
+    # 首次安装不写就会让 Agent 因缺 STP_AEE_NFS_ROOT 启动即崩。
+    "agent_nfs_root": "agent_nfs_root",
+}
+
 _ACTIVE_LOCK = threading.Lock()
 _ACTIVE_CONSOLE_BY_HOST: dict[str, str] = {}
+
+
+class InstallConfigError(ValueError):
+    """服务端配置或调用参数不可用：不启动安装（fail-closed）。"""
+
+
+def normalize_install_api_url(raw: str | None = None) -> str:
+    """校验并归一化 STP_AGENT_INSTALL_API_URL。非法即抛 InstallConfigError。"""
+    value = (raw if raw is not None else os.environ.get("STP_AGENT_INSTALL_API_URL", "")).strip()
+    if not value:
+        raise InstallConfigError(
+            f"{INSTALL_API_URL_ENV} 未配置：控制面驱动安装需要站点公开入口地址"
+            f"（示例：https://stp.example.com）。"
+        )
+    if any(ch in value for ch in "<>{}$`\t\n "):
+        raise InstallConfigError(
+            f"{INSTALL_API_URL_ENV} 含空白或未展开的模板占位符：{value!r}"
+        )
+    parts = urlsplit(value)
+    if parts.scheme not in ("http", "https"):
+        raise InstallConfigError(
+            f"{INSTALL_API_URL_ENV} 必须是 http:// 或 https:// 地址：{value!r}"
+        )
+    if not parts.hostname:
+        raise InstallConfigError(f"{INSTALL_API_URL_ENV} 缺少主机名：{value!r}")
+    if parts.username or parts.password:
+        raise InstallConfigError(
+            f"{INSTALL_API_URL_ENV} 不得内嵌凭据：{value!r}"
+        )
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        raise InstallConfigError(
+            f"{INSTALL_API_URL_ENV} 必须是纯 origin（不含路径/查询/片段）：{value!r}"
+        )
+    try:
+        _port = parts.port  # 触发端口校验（非数字/越界时抛 ValueError）
+    except ValueError as exc:  # 端口非数字或越界
+        raise InstallConfigError(
+            f"{INSTALL_API_URL_ENV} 端口非法：{value!r}（{exc}）"
+        ) from exc
+    # netloc 原样保留（含 IPv6 方括号与大小写），此时已排除 userinfo。
+    return f"{parts.scheme}://{parts.netloc.rsplit('@', 1)[-1]}"
+
+
+def normalize_install_options(options: dict[str, Any] | None) -> dict[str, str]:
+    """校验 install_options → ansible -e 变量。非法即抛 InstallConfigError。"""
+    normalized: dict[str, str] = {}
+    for key, raw in (options or {}).items():
+        if raw is None:
+            continue
+        if key not in _INSTALL_OPTION_VARS:
+            raise InstallConfigError(f"install_options 不支持的键：{key}")
+        text = str(raw).strip()
+        if not text:
+            continue
+        if not text.startswith("/"):
+            raise InstallConfigError(f"install_options.{key} 必须是绝对路径：{text!r}")
+        if text == "/":
+            raise InstallConfigError(f"install_options.{key} 不得是文件系统根：{text!r}")
+        if any(ch in text for ch in "<>{}$`\t\n "):
+            raise InstallConfigError(
+                f"install_options.{key} 含空白或未展开的模板占位符：{text!r}"
+            )
+        normalized[_INSTALL_OPTION_VARS[key]] = text.rstrip("/") or "/"
+    return normalized
+
+
+def install_request_problem(options: dict[str, Any] | None = None) -> str | None:
+    """返回「本次安装无法启动」的原因；可用则返回 None。
+
+    路由层在启动 RunConsole 之前调用，避免用 400 掩盖真实原因后留下半个运行。
+    """
+    try:
+        normalize_install_api_url()
+        normalize_install_options(options)
+    except InstallConfigError as exc:
+        return str(exc)
+    return None
 
 
 def get_active_install_console_id(host_id: str) -> str | None:
@@ -41,8 +132,18 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
-def prepare_install_agent(host_id: str) -> dict[str, Any]:
+def prepare_install_agent(
+    host_id: str,
+    *,
+    install_options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """解析 host SSH 凭据并构造 ansible-playbook argv。失败返回 {ok: False, message}."""
+    try:
+        api_url = normalize_install_api_url()
+        extra_vars = normalize_install_options(install_options)
+    except InstallConfigError as exc:
+        return {"ok": False, "message": str(exc)}
+
     db = SessionLocal()
     try:
         from backend.models.host import Host
@@ -101,7 +202,12 @@ def prepare_install_agent(host_id: str) -> dict[str, Any]:
         ip,
         "-e",
         f"agent_host_id={host_id}",
+        # 安装脚本非交互：API_URL 由控制面注入，不得依赖目标机终端输入。
+        "-e",
+        f"agent_api_url={api_url}",
     ]
+    for var, value in sorted(extra_vars.items()):
+        cmd += ["-e", f"{var}={value}"]
 
     def cleanup() -> None:
         try:
@@ -113,6 +219,8 @@ def prepare_install_agent(host_id: str) -> dict[str, Any]:
         "ok": True,
         "host_id": host_id,
         "ip": ip,
+        "api_url": api_url,
+        "install_options": extra_vars,
         "cmd": cmd,
         "env": env,
         "cwd": str(ansible_dir),
@@ -125,9 +233,10 @@ def start_install_agent_runconsole(
     host_id: str,
     *,
     initiated_by: str | None = None,
+    install_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """启动 ansible 安装（RunConsole 实时日志）。返回 console_run_id。"""
-    prep = prepare_install_agent(host_id)
+    prep = prepare_install_agent(host_id, install_options=install_options)
     if not prep.get("ok"):
         return {"ok": False, "message": prep.get("message", "prepare failed")}
 
@@ -151,6 +260,9 @@ def start_install_agent_runconsole(
             on_complete=on_complete,
         )
     except RunKeyBusyError:
+        # 未真正启动：临时 inventory（含 SSH 凭据）必须立刻删除，
+        # 否则每次重复触发都会在 tools/ansible/ 残留一个 .stp-install-*.ini。
+        cleanup()
         existing = get_active_install_console_id(host_id)
         return {
             "ok": False,
@@ -229,11 +341,14 @@ def run_install_agent_sync(
     initiated_by: str | None = None,
     *,
     console_run_id: str | None = None,
+    install_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """同步执行安装：可传入已启动的 console_run_id，或在此函数内启动并等待。"""
     if console_run_id:
         return wait_install_agent_runconsole(console_run_id)
-    started = start_install_agent_runconsole(host_id, initiated_by=initiated_by)
+    started = start_install_agent_runconsole(
+        host_id, initiated_by=initiated_by, install_options=install_options
+    )
     if not started.get("ok"):
         return {
             "ok": False,

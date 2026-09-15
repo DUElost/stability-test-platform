@@ -87,6 +87,38 @@ MESSAGES = {
     "install_units": "systemd unit installation, reload, or service start failed.",
     "install_nginx": "Nginx configuration failed the syntax check or reload.",
     "install_health": "The control plane did not reach a healthy, schema-aligned state in time.",
+    # ── S5 Agent 接入（I4）───────────────────────────────────────────────
+    "agent_key_permissions": "Own the declared private key with mode 0600 as the control-plane service account so Ansible can read it.",
+    "agent_install_unconfigured": "Set STP_AGENT_INSTALL_API_URL on the control plane (S2 renders it) and retry the install.",
+    "host_conflict": "A different Host already owns this name or address; resolve the ownership manually; never re-create or steal a Host row.",
+    "host_retired": "The Host is retired; unretire it explicitly before installing an Agent.",
+    "host_not_found": "The Host row disappeared between reconciliation and install; re-run after checking concurrent changes.",
+    "host_create_failed": "Host creation was rejected; inspect the API response and the audit trail.",
+    "agent_install_failed": "The Agent installation run failed; inspect the RunConsole log, fix the cause, and re-run.",
+    "install_timeout": "The Agent installation did not reach a terminal state before the deadline; inspect the RunConsole log before retrying.",
+    "install_trigger_failed": "The install request was rejected; inspect the RunConsole log and the audit trail.",
+    "agent_offline": "The Agent is not heartbeating to this control plane; check the service, its API_URL and AGENT_SECRET.",
+    "agent_identity": "The Agent did not report an instance identity and boot ID; verify the deployed Agent version.",
+    "agent_endpoint": "No audited install points this Host at the site's public entry; re-install the Agent from this site.",
+    "agent_digest_mismatch": "The content deployed on the Agent does not match the declared release digests; re-install from the declared bundle.",
+    "agent_digest_missing": "The Agent reported no deployment digest; install a release that publishes content identity (ADR-0040).",
+    "api_auth": "The initial administrator was rejected by this site's API; verify the binding and the administrator state.",
+    "api_response": "The site API answered with an unusable payload; inspect the control-plane log for the failing route.",
+    "api_unreachable": "The site's public entry is unreachable from the control plane; verify DNS, TLS trust and Nginx before retrying.",
+    # ── S6 受控验收（I4 verify）─────────────────────────────────────────
+    "csrf_not_enforced": "The public entry accepted a cookie-less cross-origin write; keep STP_CSRF_ENABLED=1 for production and internal profiles.",
+    "device_not_found": "The declared test device is not discovered on this site; connect it and confirm the Agent reports it.",
+    "device_unavailable": "The declared test device is not ONLINE; clear the offline/busy state before running the controlled chain.",
+    "specialty_missing": "No plan specialty exists on this site; complete migrations before running the controlled chain.",
+    "script_scan_failed": "Registering the control plane's script root failed; inspect the API response before retrying.",
+    "plan_create_failed": "The controlled noop plan was rejected; inspect the API response and the script catalog.",
+    "run_trigger_failed": "The controlled run was not admitted; inspect the response and the device state.",
+    "run_failed": "The controlled run did not finish successfully; inspect the run timeline and the Agent log.",
+    "run_evidence_missing": "The run reached a successful terminal state but no job/step evidence appeared; inspect the timeline before claiming success.",
+    "run_timeout": "The controlled run did not reach a terminal state before the deadline; inspect the run timeline before retrying.",
+    "watcher_not_observed": "No watcher lifecycle event was recorded for this run.",
+    "probe_not_implemented": "Storage write/read probes are not implemented in this slice; they require an authorized probe directory.",
+    "not_covered": "This command cannot cover the requested path; complete it separately with real artifacts.",
 }
 
 
@@ -104,6 +136,15 @@ class Check:
 def failure(code: str, *, location: str = "$", role: str = "site", check_id: str = "config.schema") -> Check:
     safe_code = code if code in MESSAGES else "invalid_value"
     return Check(check_id, role, "FAIL", location, safe_code, "Configuration rejected.", MESSAGES[safe_code])
+
+
+def passed(check_id: str, role: str, location: str, code: str, message: str, remediation: str) -> Check:
+    return Check(check_id, role, "PASS", location, code, message, remediation)
+
+
+def blocked(check_id: str, role: str, location: str, code: str, message: str, remediation: str) -> Check:
+    """Verified as *not verifiable* here; it never certifies the step either."""
+    return Check(check_id, role, "BLOCKED", location, code, message, remediation)
 
 
 class ConfigValidationError(ValueError):

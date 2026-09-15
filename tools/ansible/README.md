@@ -138,13 +138,27 @@ ansible-playbook -i <inventory> playbooks/set_timezone.yml -e tz_hosts=<group> -
 ### 单机首次部署
 
 ```bash
-ansible-playbook playbooks/install_agent.yml --limit <HOST_IP>
+ansible-playbook playbooks/install_agent.yml --limit <HOST_IP> -e agent_api_url=https://<控制面公开入口>
+```
+
+`agent_api_url` 是**必填**：`install_agent.sh` 自本版本起非交互，不再从终端读取
+`API_URL`/`HOST_ID`，playbook 会在连接目标机前用断言拦下空值。UI/控制面驱动安装
+（`POST /api/v1/hosts/{id}/install`）由控制面 `STP_AGENT_INSTALL_API_URL` 自动注入。
+
+可选路径下传（缺省用 group_vars 默认值，空值不覆盖目标 `.env` 既有值）：
+
+```bash
+ansible-playbook playbooks/install_agent.yml --limit <HOST_IP> \
+  -e agent_api_url=https://<控制面公开入口> \
+  -e agent_install_dir=/opt/stability-test-agent \
+  -e agent_nfs_root=/mnt/nfs/aee_events \
+  -e agent_local_aee_root=/mnt/hdd/aee_events
 ```
 
 Windows / WSL 兼容执行：
 
 ```bash
-wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit <HOST_IP>"
+wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit <HOST_IP> -e agent_api_url=https://<控制面公开入口>"
 ```
 
 部署完成后，playbook 会自动验证：

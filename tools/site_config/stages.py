@@ -7,8 +7,10 @@ keys, and a private administrator bootstrap before the service is exposed.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import secrets
 import shutil
 import urllib.error
 import urllib.request
@@ -46,9 +48,34 @@ MANAGED_ENV_KEYS = (
     "STP_SCRIPT_ROOT",
     "STP_SCRIPT_RUNTIME_ROOT",
     "STP_AEE_NFS_ROOT",
+    # I4：Agent 首次安装的回连地址（控制面驱动 install 的注入源）。
+    # 缺失时 POST /hosts/{id}/install 返回 400，不会静默装出连错站点的 Agent。
+    "STP_AGENT_INSTALL_API_URL",
+    # 站点级秘密：首次生成（见 GENERATED_SECRET_KEYS）且从不轮换
+    "JWT_SECRET_KEY",
+    "AGENT_SECRET",
+    "WS_TOKEN",
+    # SSH 口令加密键来自受保护绑定，留空会让密码型 Host 创建 503
+    "SSH_CREDENTIALS_FERNET_KEY",
 )
 
+# 首次生成配置时由安装器生成一次的站点级秘密（重跑不轮换）。
+# 与 plan 输出的 generated_secret_keys 同源；占位值不得留到可用站点里。
+GENERATED_SECRET_KEYS = ("JWT_SECRET_KEY", "AGENT_SECRET", "WS_TOKEN")
+
 SERVICE_UNIT = "stability-backend-nomigrate.service"
+
+
+def _is_fernet_key(value: str) -> bool:
+    """Fernet 键形状校验（32 字节 urlsafe-base64）——不引入 cryptography 依赖。"""
+    try:
+        return len(base64.urlsafe_b64decode(value.encode("ascii"))) == 32
+    except (UnicodeError, ValueError, TypeError):
+        return False
+
+
+def generate_site_secret() -> str:
+    return secrets.token_urlsafe(48)
 
 
 @dataclass
@@ -86,6 +113,9 @@ def load_bindings(ctx: InstallContext) -> list[Check]:
         config.dependencies.database_ref: {"DATABASE_URL"},
         config.dependencies.redis_ref: {"REDIS_URL"},
         config.security.initial_admin_ref: {"USERNAME", "PASSWORD"},
+        # SSH 口令以 Fernet 落库；键留空会让首次 POST /hosts（密码型）以 503 失败，
+        # 即站点装好但无法用密码添加主机——所以绑定在 S0 就必须存在且形状合法。
+        config.security.ssh_encryption_key_ref: {"SSH_CREDENTIALS_FERNET_KEY"},
     }
     if urlsplit(config.control_plane.public_url).scheme == "https" and config.control_plane.tls_ref:
         wanted[config.control_plane.tls_ref] = {"TLS_CERT_PATH", "TLS_KEY_PATH"}
@@ -96,6 +126,11 @@ def load_bindings(ctx: InstallContext) -> list[Check]:
             require_keys(values, required)
         except BindingError as error:
             return _safe(checks, error.code, location="$.security", role="site", check_id="install.bindings")
+        if "SSH_CREDENTIALS_FERNET_KEY" in values and not _is_fernet_key(values["SSH_CREDENTIALS_FERNET_KEY"]):
+            return _safe(
+                checks, "binding_content", location="$.security.ssh_encryption_key_ref",
+                role="site", check_id="install.bindings",
+            )
         ctx.binding_values[ref] = values
     checks.append(_pass(
         "install.bindings", "site", "$.security", "bindings_read",
@@ -211,6 +246,26 @@ def stage_s1_basics(ctx: InstallContext) -> list[Check]:
     return checks
 
 
+def _land_tree(source: Path, target: Path) -> None:
+    """把发布子树原样落地（符号链接保持为链接）。
+
+    ``shutil.copytree`` 默认解引用符号链接：落地树会多出源树里以链接存在的
+    文件，ADR-0040 内容摘要随即与清单基准不一致（I4 实验室实测：
+    backend/agent/CLAUDE.md 被实体化后部署摘要 ≠ 清单声明）。重跑时先清掉与
+    源链接冲突的旧实体，否则 copytree 建链接会因目标已存在而失败。
+    """
+    for root, _dirs, files in os.walk(source):
+        for name in files:
+            candidate = Path(root) / name
+            if not candidate.is_symlink():
+                continue
+            destination = target / candidate.relative_to(source)
+            # copytree 建链接不做覆盖（同向链接也会 File exists），先删再建。
+            if destination.is_symlink() or destination.exists():
+                destination.unlink()
+    shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
+
+
 def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
     """Release tree landing, virtualenv/dependencies, generated env, templates."""
     checks: list[Check] = []
@@ -225,7 +280,7 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
         for subdir in ("backend", "deploy", "tools", "frontend/dist-prod"):
             target = root / subdir
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(bundle / subdir, target, dirs_exist_ok=True)
+            _land_tree(bundle / subdir, target)
     checks.append(_pass(
         "install.s2.release", "control_plane", "$.release.bundle", "release_landed",
         "Release tree landed under the deploy root with the documented layout.",
@@ -276,6 +331,13 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
         "STP_SCRIPT_ROOT": str(root / "backend" / "agent" / "scripts"),
         "STP_SCRIPT_RUNTIME_ROOT": str(Path(config.agents[0].install_root) / "agent" / "scripts"),
         "STP_AEE_NFS_ROOT": config.storage.mount_path,
+        # 站点级秘密：仅在首次生成时写一次，重跑走 env_reused 不轮换
+        **{key: generate_site_secret() for key in GENERATED_SECRET_KEYS},
+        "SSH_CREDENTIALS_FERNET_KEY": ctx.binding_values[
+            config.security.ssh_encryption_key_ref
+        ]["SSH_CREDENTIALS_FERNET_KEY"],
+        # Agent 回连站点入口走公开地址（同 CORS_ORIGINS），不是 loopback。
+        "STP_AGENT_INSTALL_API_URL": config.control_plane.public_url.rstrip("/"),
     }
     env_file = root / ".env.backend"
     if env_file.is_file():

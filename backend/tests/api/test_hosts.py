@@ -3,7 +3,10 @@ Tests for hosts API routes
 """
 from cryptography.fernet import Fernet
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 from uuid import uuid4
+
+import pytest
 
 
 class TestCreateHost:
@@ -694,3 +697,153 @@ class TestRetiredHostControlPlaneRejects:
         )
         assert resp.status_code == 409, resp.text
         assert resp.json()["detail"]["code"] == "HOST_RETIRED"
+
+
+class TestHostArtifactDigestExposure:
+    """ADR-0040 身份必须经 HostOut 暴露：站点侧内容一致性断言读的就是它。
+
+    此前只在 heartbeat 入参/DB 列里存在，API 读不到 → 站点工具只能报
+    agent_digest_missing（I4 容器实验室实测）。
+    """
+
+    def test_heartbeat_digests_are_visible_on_host(self, client, db_session, admin_headers):
+        from backend.models.host import Host
+
+        db_session.add(Host(
+            id="digest-host", hostname="digest-host", name="digest-host",
+            ip="192.0.2.44", ssh_port=22, status="ONLINE",
+        ))
+        db_session.commit()
+        code = "sha256:" + "a" * 64
+        resources = "sha256:" + "b" * 64
+
+        beat = client.post("/api/v1/heartbeat", json={
+            "host_id": "digest-host", "status": "ONLINE",
+            "agent_artifact_digest": code, "agent_resources_digest": resources,
+            "agent_instance_id": "inst-1", "boot_id": "boot-1",
+        })
+        assert beat.status_code == 200, beat.text
+
+        resp = client.get("/api/v1/hosts/digest-host", headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["agent_artifact_digest"] == code
+        assert body["agent_resources_digest"] == resources
+
+
+class TestHostInstallEndpoint:
+    """I4：控制面驱动 Agent 安装——启动前校验配置/参数，并把选项下传执行链。"""
+
+    @staticmethod
+    def _online_host(db_session, host_id: str, ip: str = "192.0.2.77"):
+        from backend.models.host import Host
+
+        host = Host(id=host_id, hostname=host_id, status="ONLINE", ip=ip, ssh_port=22)
+        db_session.add(host)
+        db_session.commit()
+        return host
+
+    @pytest.fixture(autouse=True)
+    def ansible_available(self, monkeypatch):
+        """依赖探测在配置校验之前，测试里假定控制面已装 ansible-core/sshpass。"""
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def test_install_without_api_url_is_400(
+        self, client, db_session, admin_headers, monkeypatch,
+    ):
+        """STP_AGENT_INSTALL_API_URL 缺失 → 400，且不启动 ansible（无半个运行）。"""
+        monkeypatch.delenv("STP_AGENT_INSTALL_API_URL", raising=False)
+        self._online_host(db_session, "inst-no-url")
+        resp = client.post("/api/v1/hosts/inst-no-url/install", headers=admin_headers)
+        assert resp.status_code == 400, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "AGENT_INSTALL_NOT_CONFIGURED"
+        assert "STP_AGENT_INSTALL_API_URL" in detail["message"]
+
+    def test_install_with_non_origin_api_url_is_400(
+        self, client, db_session, admin_headers, monkeypatch,
+    ):
+        monkeypatch.setenv("STP_AGENT_INSTALL_API_URL", "https://stp.example.com/prefix")
+        self._online_host(db_session, "inst-bad-url")
+        resp = client.post("/api/v1/hosts/inst-bad-url/install", headers=admin_headers)
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"]["code"] == "AGENT_INSTALL_NOT_CONFIGURED"
+
+    def test_install_passes_options_and_audits(
+        self, client, db_session, admin_headers, monkeypatch,
+    ):
+        """install_options 下传执行链 + 审计记录回连地址与选项。"""
+        import backend.api.routes.hosts as hosts_route
+
+        monkeypatch.setenv("STP_AGENT_INSTALL_API_URL", "https://stp.example.com")
+        started = {"ok": True, "console_run_id": "con-inst-1", "room": "console:con-inst-1"}
+        start_mock = MagicMock(return_value=started)
+        monkeypatch.setattr(hosts_route, "start_install_agent_runconsole", start_mock)
+        monkeypatch.setattr(hosts_route, "enqueue_sync", MagicMock())
+        self._online_host(db_session, "inst-opts")
+
+        resp = client.post(
+            "/api/v1/hosts/inst-opts/install",
+            headers=admin_headers,
+            json={
+                "install_options": {
+                    "agent_install_root": "/srv/stability-test-agent",
+                    "agent_local_aee_root": "/mnt/hdd/aee_events",
+                }
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert start_mock.call_args.kwargs["install_options"] == {
+            "agent_install_root": "/srv/stability-test-agent",
+            "agent_local_aee_root": "/mnt/hdd/aee_events",
+        }
+
+        from backend.models.audit import AuditLog
+
+        row = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "install_agent_request", AuditLog.resource_id == "inst-opts")
+            .one()
+        )
+        assert row.details["agent_api_url"] == "https://stp.example.com"
+        assert row.details["install_options"]["agent_install_root"] == "/srv/stability-test-agent"
+        assert row.details["console_run_id"] == "con-inst-1"
+
+    def test_install_without_body_still_works(
+        self, client, db_session, admin_headers, monkeypatch,
+    ):
+        """无请求体（旧调用方式）与空 install_options 等价，不因缺字段 422。"""
+        import backend.api.routes.hosts as hosts_route
+
+        monkeypatch.setenv("STP_AGENT_INSTALL_API_URL", "https://stp.example.com")
+        start_mock = MagicMock(
+            return_value={"ok": True, "console_run_id": "con-inst-2", "room": "console:con-inst-2"}
+        )
+        monkeypatch.setattr(hosts_route, "start_install_agent_runconsole", start_mock)
+        monkeypatch.setattr(hosts_route, "enqueue_sync", MagicMock())
+        self._online_host(db_session, "inst-nobody")
+
+        resp = client.post("/api/v1/hosts/inst-nobody/install", headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+        assert start_mock.call_args.kwargs["install_options"] is None
+
+    def test_install_duplicate_trigger_is_409(
+        self, client, db_session, admin_headers, monkeypatch,
+    ):
+        """已在安装中的主机重复触发 → 409 且带 console_run_id（供前端接回日志）。"""
+        import backend.api.routes.hosts as hosts_route
+
+        monkeypatch.setenv("STP_AGENT_INSTALL_API_URL", "https://stp.example.com")
+        monkeypatch.setattr(
+            hosts_route,
+            "start_install_agent_runconsole",
+            MagicMock(return_value={"ok": False, "message": "install already in progress",
+                                    "console_run_id": "con-running"}),
+        )
+        self._online_host(db_session, "inst-busy")
+
+        resp = client.post("/api/v1/hosts/inst-busy/install", headers=admin_headers)
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["console_run_id"] == "con-running"

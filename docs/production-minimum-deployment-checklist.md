@@ -303,8 +303,16 @@ mkdir -p /tmp/agent-install/agent /tmp/agent-install/schemas
 # 另拷 backend/schemas/pipeline_schema.json 到 schemas/（运行时工件，#1247）
 cd /tmp/agent-install/agent
 chmod +x install_agent.sh
+# 交互式：脚本会提示 API_URL 与 HOST_ID
 sudo ./install_agent.sh
+# 非交互（CI/批量/无 TTY）：参数必须经环境变量注入，缺失即退出 1
+sudo AGENT_API_URL=https://<控制面公开入口> AGENT_HOST_ID=<本站 Host ID> \
+  AGENT_NFS_ROOT=/mnt/nfs/aee_events AGENT_LOCAL_AEE_ROOT=/mnt/hdd/aee_events \
+  ./install_agent.sh
 ```
+
+`AGENT_NFS_ROOT`/`AGENT_LOCAL_AEE_ROOT` 为空时写入空键（不覆盖 `.env` 既有非空值）；
+两者分别是中心存储挂载点与 AEE 本机第一落点，缺 `STP_AEE_NFS_ROOT` 时 Agent 启动即失败。
 
 ### 4.2 配置 Agent（重点）
 

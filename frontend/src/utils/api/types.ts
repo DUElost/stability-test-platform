@@ -55,6 +55,9 @@ export interface Host {
   agent_installed_at?: string | null;
   agent_protocol_version?: string | null;
   agent_code_revision?: string | null;
+  /** ADR-0040 D2/P2：Agent 上报的部署身份（内容一致性比对源） */
+  agent_artifact_digest?: string | null;
+  agent_resources_digest?: string | null;
   expected_code_revision?: string | null;
   agent_code_deployed?: string | null;
   agent_code_deployed_at?: string | null;

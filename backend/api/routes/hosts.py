@@ -23,6 +23,7 @@ from backend.models.job import JobInstance
 from backend.api.schemas import (
     HostActiveJob,
     HostCreate,
+    HostInstallIn,
     HostRetireIn,
     HostUnretireIn,
     HostUpdate,
@@ -33,6 +34,8 @@ from backend.api.schemas import (
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.services.agent_installer import (
     get_active_install_console_id,
+    install_request_problem,
+    normalize_install_api_url,
     start_install_agent_runconsole,
 )
 from backend.services.host_maintenance import HostMaintenanceConflict
@@ -923,12 +926,15 @@ def host_hot_update(
 @router.post("/{host_id}/install")
 def host_install_agent(
     host_id: str,
+    payload: HostInstallIn | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
     """触发 Agent 首次安装（ansible-playbook install_agent.yml，SAQ 异步执行）。
 
     自动检测控制平面 ansible-playbook + sshpass 是否可用；缺失则 501。
+    安装脚本为非交互模式，回连地址取自控制面 STP_AGENT_INSTALL_API_URL；
+    未配置或非法时返回 400（不启动 ansible，避免半个运行）。
     装完 install_agent.sh 自动落 sudoers.d：NOPASSWD 只授提权 wrapper
     /usr/local/sbin/stp-agent-priv + 固定服务 systemctl（ADR-0037/#1250）。
     """
@@ -966,8 +972,23 @@ def host_install_agent(
             },
         )
 
+    install_options = (
+        payload.install_options.model_dump(exclude_none=True)
+        if payload and payload.install_options
+        else None
+    )
+    # 配置/参数类失败在启动前拦下：RunConsole 已开始时才报错会留下半程安装。
+    problem = install_request_problem(install_options)
+    if problem:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "AGENT_INSTALL_NOT_CONFIGURED", "message": problem},
+        )
+
     initiated_by = current_user.username if current_user else None
-    started = start_install_agent_runconsole(host_id, initiated_by=initiated_by)
+    started = start_install_agent_runconsole(
+        host_id, initiated_by=initiated_by, install_options=install_options
+    )
     if not started.get("ok"):
         msg = started.get("message", "start failed")
         if msg == "install already in progress":
@@ -993,6 +1014,9 @@ def host_install_agent(
         details={
             "host_id": host_id,
             "ip": host.ip,
+            # 哪个控制面入口写进 Agent .env（站点归属证据，非秘密）
+            "agent_api_url": normalize_install_api_url(),
+            "install_options": install_options or {},
             "console_run_id": console_run_id,
         },
         user_id=current_user.id if current_user else None,
