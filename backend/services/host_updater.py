@@ -10,6 +10,7 @@ Uses paramiko (already a project dependency) to:
 from __future__ import annotations
 
 import base64
+import fnmatch
 import io
 import json
 import logging
@@ -44,6 +45,12 @@ def _remote_tar_path(prefix: str = "stp") -> str:
 _INVENTORY_PATH = Path(__file__).resolve().parent.parent.parent / "tools" / "ansible" / "inventory.ini"
 
 # Files and dirs excluded from the tarball
+# #2030：本集合 = 「部署流程实际拥有并覆盖的文件集」的排除面（ADR-0040 D1）——
+# 与两条部署通道（`stp_agent_priv.py::FIXED_EXCLUDES`、Ansible
+# `agent_install_excludes`）**同源**，由 `tests/test_ansible_digest_contract.py`
+# 逐项锁定。venv/logs 为宿主侧目录（ADR-0040 D1 明文排除）；stp_agent_priv.py
+# 由 install/update playbook 装到 /usr/local/sbin、不进安装目录；stp_schemas/
+# 的 schema 经 extra_files 独立附加（walk 排除不影响 arcname 附加）。
 _TAR_EXCLUDES = {
     "__pycache__",
     "tests",
@@ -53,10 +60,19 @@ _TAR_EXCLUDES = {
     "DEPLOY.md",
     "stability-test-agent.service",
     "hosts.txt",
+    "venv",
+    "logs",
+    "stp_agent_priv.py",
+    "stp_schemas",
+    ".deps_installed_sha",
 }
 
 # File suffixes to exclude
 _TAR_EXCLUDE_SUFFIXES = (".pyc",)
+
+# Glob 类排除（#2030）：与 rsync 通道同名的通配模式——显式常量使
+# 「三处排除集同源」可被 tests/test_ansible_digest_contract.py 逐项比较。
+_TAR_EXCLUDE_GLOBS = ("test_*.py",)
 
 # ADR-0040 §5.1（P0 过渡，#1903）：压缩级 9 → 6。实测 252MB 源树打包 16.6s → 6.4s，
 # 体积 125.7MB → 126.0MB（+0.3MB，内网传输代价可忽略）。终态出口 = P1 的 digest 缓存键，
@@ -72,7 +88,7 @@ _PAYLOAD_METADATA_EXCLUDES = {
 }
 
 
-def _iter_payload_files(kind: str = "full"):
+def _iter_payload_files(kind: str):
     """Yield ``(abs_path, arcname)`` over the deploy payload file set.
 
     tarball（``_build_tarball``）与 artifact digest（``artifact_digest.collect_artifact_entries``）
@@ -83,6 +99,9 @@ def _iter_payload_files(kind: str = "full"):
     ``code`` = 代码树 + schema（**不含 resources/**，分层后 ~1MB）；``resources``
     = ``resources/**``（除 ``resources/mtbf/``——永远属主机本地）。code 与
     resources 互斥、并集 == full − mtbf（契约测试守护）。
+
+    #2030：``kind`` 必填——原默认值在 tarball（``code``）与枚举（``full``）
+    两侧不对称，漏传会让「打包范围」与「身份范围」静默错配（#2019 同源风险）。
     """
     for root, dirs, files in os.walk(_AGENT_SOURCE_DIR):
         # Filter directories in-place
@@ -93,7 +112,7 @@ def _iter_payload_files(kind: str = "full"):
                 continue
             if name.endswith(_TAR_EXCLUDE_SUFFIXES):
                 continue
-            if name.startswith("test_") and name.endswith(".py"):
+            if any(fnmatch.fnmatch(name, pattern) for pattern in _TAR_EXCLUDE_GLOBS):
                 continue
 
             full_path = os.path.join(root, name)
@@ -119,9 +138,13 @@ def _iter_payload_files(kind: str = "full"):
 
 
 def _build_tarball(
-    compresslevel: int = _TARBALL_COMPRESSLEVEL, kind: str = "code"
+    kind: str, compresslevel: int = _TARBALL_COMPRESSLEVEL
 ) -> bytes:
-    """Package the deploy payload (``kind``: code / resources / full) into a tarball."""
+    """Package the deploy payload (``kind``: code / resources / full) into a tarball.
+
+    ``kind`` 必填（#2030）：与 ``_iter_payload_files`` 取齐，杜绝漏传时
+    「打包 code、身份按 full 算」一类静默错配。
+    """
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=compresslevel) as tar:
         for full_path, arcname in _iter_payload_files(kind):
@@ -247,9 +270,18 @@ if [ "$USE_PRIV_WRAPPER" = "1" ]; then
     # wrapper：固定目标 + 固定 excludes（含 mtbf protect）+ --safe-links
     sudo "$PRIV" apply-code --staged "$CODE_TMP"
 else
+    # #2030：exclude 面与 digest 输入集 / wrapper FIXED_EXCLUDES / Ansible
+    # agent_install_excludes 同源——`--delete`（非 --delete-excluded）下
+    # excluded 项不参与删除，宿主侧已有文件不受影响。
     sudo rsync -av --delete \
         --exclude='__pycache__/' \
         --exclude='tests/' \
+        --exclude='test_*.py' \
+        --exclude='venv/' \
+        --exclude='logs/' \
+        --exclude='stp_agent_priv.py' \
+        --exclude='stp_schemas/' \
+        --exclude='.deps_installed_sha' \
         --exclude='resources/mtbf/' \
         --exclude='.env.example' \
         --exclude='install_agent.sh' \

@@ -53,6 +53,12 @@ def agent_tree(tmp_path):
     _write(root / "DEPLOY.md", b"junk")
     _write(root / "stability-test-agent.service", b"junk")
     _write(root / "hosts.txt", b"junk")
+    # #2030：部署通道不传输的文件（wrapper / Ansible / 热更新 rsync 三处同源）
+    _write(root / "stp_agent_priv.py", b"junk")
+    _write(root / "venv" / "lib.py", b"junk")
+    _write(root / "logs" / "a.log", b"junk")
+    _write(root / "stp_schemas" / "stale.json", b"junk")
+    _write(root / ".deps_installed_sha", b"junk")
     # 元数据 / 主机本地
     _write(root / "VERSION", b"deadbeef\n")
     _write(root / "ARTIFACT_DIGEST", b"sha256:" + b"0" * 64 + b"\n")
@@ -152,7 +158,7 @@ def test_digest_matches_tarball_payload(agent_tree, schema_file, monkeypatch):
         entries.sort()
         return entries
 
-    assert ad.digest_entries(_members(hu._build_tarball())) == ad.digest_entries(
+    assert ad.digest_entries(_members(hu._build_tarball(kind="code"))) == ad.digest_entries(
         ad.collect_artifact_entries(kind="code")
     )
     assert ad.digest_entries(_members(hu._build_resources_tarball())) == ad.digest_entries(
@@ -260,13 +266,21 @@ def test_plan_convergence_states(monkeypatch):
 def test_iter_payload_files_skip_rules(agent_tree, schema_file, monkeypatch):
     monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", agent_tree)
     monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema_file)
-    arcnames = [arc for _, arc in hu._iter_payload_files()]
+    arcnames = [arc for _, arc in hu._iter_payload_files(kind="full")]
     assert "main_link.py" not in arcnames  # symlink 不进载荷
     assert "main.py" in arcnames
     assert "resources/aimonkey/monkey.bin" in arcnames
     assert not any(a.startswith("resources/mtbf") for a in arcnames)
     assert "stp_schemas/pipeline_schema.json" in arcnames
     assert "VERSION" not in arcnames and "ARTIFACT_DIGEST" not in arcnames
+    # #2030：部署通道不传输的文件不得进载荷/身份（三处排除集同源）
+    for excluded in (
+        "stp_agent_priv.py", "venv/lib.py", "logs/a.log",
+        "stp_schemas/stale.json", ".deps_installed_sha",
+    ):
+        assert excluded not in arcnames, f"{excluded} 不应进载荷（#2030）"
+    # stp_schemas/ 目录排除不影响 extra_files 的 schema 附加（独立通道）
+    assert "stp_schemas/pipeline_schema.json" in arcnames
 
 
 # ── #1963 P2 切片①：身份分层（code / resources 分区） ──────────────────────

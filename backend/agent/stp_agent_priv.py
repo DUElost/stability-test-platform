@@ -59,14 +59,16 @@ _VERSION_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # 与 tools/ansible/roles/agent_deploy/defaults/main.yml 的 agent_install_excludes
-# 保持同源；stp_schemas/ 与 wrapper 自身不进安装目录。
+# 及控制面 `host_updater._TAR_EXCLUDES` / digest 输入集同源（#2030：三处逐项
+# 一致由 tests/test_ansible_digest_contract.py 锁定）；stp_schemas/ 与 wrapper
+# 自身不进安装目录，venv//logs/ 为宿主侧目录（ADR-0040 D1 明文排除）。
 FIXED_EXCLUDES = [
     "__pycache__/",
     "*.pyc",
-    "test_agent*.py",
-    "test_aimonkey*.py",
-    "test_main*.py",
+    "test_*.py",
     "tests/",
+    "venv/",
+    "logs/",
     "install_agent.sh",
     "agentctl.sh",
     "DEPLOY.md",
@@ -75,6 +77,7 @@ FIXED_EXCLUDES = [
     "hosts.txt",
     "stp_schemas/",
     "stp_agent_priv.py",
+    ".deps_installed_sha",
 ]
 # 主机本地资源：不传输 + 不被 --delete-excluded 删除（#1248 语义）
 HOST_LOCAL_PATHS = ["resources/mtbf/"]
