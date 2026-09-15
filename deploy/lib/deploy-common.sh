@@ -12,6 +12,9 @@
 #   "$DEPLOY_PYTHON" -m tools.site_config ...
 
 set -euo pipefail
+# 部署工具以 root 运行：不要在仓库树里留下 root 拥有的 __pycache__（否则下次
+# 以普通用户身份同步/清理该树时会 Permission denied）
+export PYTHONDONTWRITEBYTECODE=1
 
 deploy_repo_root() {
     local here
@@ -115,7 +118,8 @@ deploy_ensure_bindings_dir() {
 }
 
 deploy_next_steps() {
-    cat <<EOF
+    # 提示走 stderr：stdout 留给 --json 的机器可读输出
+    cat >&2 <<EOF
 
 Next steps
   1. Add Agent hosts to the inventory (one line each):

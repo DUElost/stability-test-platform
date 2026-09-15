@@ -49,7 +49,7 @@ if [ ! -f "$INVENTORY" ]; then
     ( cd "$DEPLOY_REPO_ROOT" && "$DEPLOY_PYTHON" -c \
         'from tools.site_config.inventory import TEMPLATE; print(TEMPLATE, end="")' ) >"$temporary"
     mv -f "$temporary" "$INVENTORY"
-    cat <<EOF
+    cat >&2 <<EOF
 agent install: wrote an inventory template to $INVENTORY (0600).
 
 The file documents the accepted keys and the shared-credential default: fill in
@@ -93,7 +93,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     exit 0
 fi
 
-cat <<EOF
+cat >&2 <<EOF
 
 agent install: finished. Confirm each host reports ONLINE with a matched digest:
   sudo ./deploy/install.sh verify

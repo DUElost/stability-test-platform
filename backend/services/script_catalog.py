@@ -278,6 +278,14 @@ def scan_script_root(
             existing.updated_at = now
             continue
 
+        # 路径锚点跟随站点配置：内容身份（content_sha256）没变，但 runtime_root
+        # 变了（典型：首台 Agent 接入后补齐 STP_SCRIPT_RUNTIME_ROOT）时，nfs_path
+        # 必须跟着更新——它是 Agent 侧路径，控制面推送靠它做映射；停在旧值会让
+        # 每次派发都 `cannot map nfs_path`（238 实测：先装控制面、后接 Agent）。
+        expected_path = _runtime_path(root_path, entry, runtime_root)
+        if runtime_root and existing.nfs_path != expected_path:
+            existing.nfs_path = expected_path
+            existing.updated_at = now
         # A row deactivated while its directory is still on disk stays
         # deactivated — that state only ever comes from the admin deactivate
         # endpoint or a seed migration, and silently resurrecting it defeats
