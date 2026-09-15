@@ -677,6 +677,20 @@ class LocalDB:
             ).fetchone()
         return int(row["c"]) if row else 0
 
+    def list_pending_terminal_job_ids(self) -> List[int]:
+        """未 ack、非死信的 outbox job_id 全量（#2036：退避表差集裁剪用）。
+
+        与 :meth:`get_pending_terminals` 的差别是**不分页**——裁剪判据是「该行
+        是否还在待办集合里」，用被 ``limit`` 截断的一页做差集会把仍在退避的
+        行误判为已消失。
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT job_id FROM job_terminal_outbox "
+                "WHERE acked = 0 AND dead_letter = 0"
+            ).fetchall()
+        return [int(row["job_id"]) for row in rows]
+
     def has_terminal_fact(self, job_id: int) -> bool:
         """True when a terminal fact for *job_id* reached a durable sink.
 

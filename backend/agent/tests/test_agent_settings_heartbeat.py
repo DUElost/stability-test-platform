@@ -213,6 +213,91 @@ def test_coordinator_reads_settings(heartbeat_env):
     assert coordinator._MAX_PLAN_RUN_HOST_PROJECTIONS == 50
 
 
+_PACING_KNOBS = (
+    "COORDINATOR_HEARTBEAT_INTERVAL",
+    "STP_HEARTBEAT_INTERVAL_MIN",
+    "STP_HEARTBEAT_INTERVAL_MAX",
+    "STP_ADB_REPAIR_COOLDOWN_SECONDS",
+)
+
+
+@pytest.mark.parametrize("env_name", _PACING_KNOBS)
+@pytest.mark.parametrize("raw", ["0", "-5"])
+def test_non_positive_pacing_clamped(monkeypatch, caplog, env_name, raw):
+    """#2086：0/负值直接喂 Event.wait → 忙循环 → 钳到下限 + WARNING。"""
+    monkeypatch.setenv(env_name, raw)
+    reset_agent_settings_caches()
+    with caplog.at_level(logging.WARNING):
+        settings = get_heartbeat_settings()
+    assert getattr(settings, env_name.lower()) == 1.0
+    assert any(env_name in record.message for record in caplog.records)
+
+
+def test_min_max_both_clamped_stays_ordered(monkeypatch):
+    """守卫：MIN/MAX 同时为 0 时钳成相等的下限，不触发 min>max 告警路径。"""
+    monkeypatch.setenv("STP_HEARTBEAT_INTERVAL_MIN", "0")
+    monkeypatch.setenv("STP_HEARTBEAT_INTERVAL_MAX", "0")
+    reset_agent_settings_caches()
+    settings = get_heartbeat_settings()
+    assert settings.stp_heartbeat_interval_min == settings.stp_heartbeat_interval_max == 1.0
+
+
+def test_heartbeat_pacing_reload_takes_effect(heartbeat_env):
+    """#2086：构造后改 env + reload → 实例级 re-apply 生效（原先只有重建实例才生效）。"""
+    from backend.agent.heartbeat_thread import HeartbeatThread
+
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=[],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    last_repair_at = thread._last_adb_repair_at
+
+    heartbeat_env.set("STP_HEARTBEAT_INTERVAL_MIN", "25.5")
+    heartbeat_env.set("STP_HEARTBEAT_INTERVAL_MAX", "45")
+    heartbeat_env.set("STP_ADB_REPAIR_COOLDOWN_SECONDS", "90")
+    assert thread._min_poll_interval == 10.0, "未 reload 前不得自行变化"
+
+    thread.reload_from_settings()
+
+    assert thread._min_poll_interval == 25.5
+    assert thread._max_poll_interval == 45.0
+    assert thread._adb_repair_cooldown == 90.0
+    assert thread._last_adb_repair_at == last_repair_at, "冷却窗口不因重载作废"
+
+
+def test_coordinator_pacing_reload_takes_effect(heartbeat_env):
+    from backend.agent.coordinator import HostRunCoordinator
+
+    coordinator = HostRunCoordinator(
+        api_url="http://server",
+        host_id="host-1",
+        agent_instance_id="inst-1",
+    )
+    heartbeat_env.set("COORDINATOR_HEARTBEAT_INTERVAL", "12.5")
+    heartbeat_env.set("COORDINATOR_MAX_PLAN_RUN_HOSTS", "50")
+    assert coordinator._interval == 30.0
+
+    coordinator.reload_from_settings()
+
+    assert coordinator._interval == 12.5
+    assert coordinator._MAX_PLAN_RUN_HOST_PROJECTIONS == 50
+
+
+def test_main_reload_config_reapplies_pacing():
+    """静态契约：#2086 的实例级 re-apply 必须留在 reload_config 分支内（防回退）。"""
+    src = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    branch = src.split('elif command == "reload_config":', 1)[1]
+    branch = branch.split("elif command ==", 1)[0]  # 截到下一个分支为止
+    assert "reset_agent_settings_caches()" in branch, "重读 .env 后必须清缓存（否则 re-apply 读旧值）"
+    assert "heartbeat_thread.reload_from_settings()" in branch
+    assert "coordinator.reload_from_settings()" in branch
+
+
 def test_registration_settings_read_stays_deferred():
     """静态契约：注册域取值点须保持迁移前的惰性时机。
 

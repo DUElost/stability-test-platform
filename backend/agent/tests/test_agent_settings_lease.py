@@ -64,6 +64,30 @@ def test_invalid_value_raises_validation_error(monkeypatch):
         get_lease_settings()
 
 
+@pytest.mark.parametrize("raw", ["0", "-5"])
+def test_non_positive_renewal_interval_clamped(monkeypatch, caplog, raw):
+    """#2086：续租节奏 0/负值 = 空转 → 钳到下限 + WARNING（非数值仍严格失败）。"""
+    import logging
+
+    monkeypatch.setenv("AGENT_LOCK_RENEWAL_INTERVAL", raw)
+    reset_agent_settings_caches()
+    with caplog.at_level(logging.WARNING):
+        settings = get_lease_settings()
+    assert settings.agent_lock_renewal_interval == 1
+    assert type(settings.agent_lock_renewal_interval) is int
+    assert any(
+        "AGENT_LOCK_RENEWAL_INTERVAL" in record.message for record in caplog.records
+    )
+
+
+def test_non_numeric_renewal_interval_still_strict(monkeypatch):
+    """守卫：#2086 只收 0/负值，**不放宽**类型严格性（非法值仍是 ValidationError）。"""
+    monkeypatch.setenv("AGENT_LOCK_RENEWAL_INTERVAL", "1m")
+    reset_agent_settings_caches()
+    with pytest.raises(ValidationError):
+        get_lease_settings()
+
+
 def test_dotenv_file_alone_must_not_take_effect(tmp_path, monkeypatch):
     """负向用例（ADR-0042 v1.0）：只写 .env、不设进程 env → 不生效。"""
     (tmp_path / ".env").write_text("AGENT_LEASE_TTL=999\n", encoding="utf-8")

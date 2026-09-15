@@ -194,6 +194,53 @@ def test_retry_after_window_suppresses_retry_then_resumes(db):
         assert post.call_count == 2, "窗口过后必须恢复重试"
 
 
+def test_deferral_pruned_when_row_consumed_elsewhere(db):
+    """#2036：延期中的行被其它路径 ack 后，条目必须在下一轮 drain 出表。
+
+    反例（旧行为）：条目只在「延期到期且再次被扫到」时才 pop，被其它路径消费
+    的行其条目永久残留 → 随被限流过的 job_id 单调增长。
+    """
+    db.enqueue_terminal(1, {"update": {"status": "FAILED"}})
+    db.enqueue_terminal(2, {"update": {"status": "FAILED"}})
+    drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
+    response = _status_response(429, retry_after="120")
+
+    with patch("backend.agent.outbox_drainer.requests.post", return_value=response):
+        drainer._drain_once()
+    assert set(drainer._defer_until) == {1, 2}
+
+    db.ack_terminal(1)  # 其它路径消费了 job 1（recovery/sync 等）
+
+    with patch("backend.agent.outbox_drainer.requests.post", return_value=response):
+        drainer._drain_once()
+
+    assert 1 not in drainer._defer_until, "行已不在待办集合 → 条目必须出表"
+    assert 2 in drainer._defer_until, "仍在待办集合的行不得被误裁"
+
+
+def test_deferral_not_pruned_when_page_is_truncated(db):
+    """守卫：裁剪必须用**不分页**的全量 id 集合。
+
+    `get_pending_terminals` 只取前 20 行——若拿这一页做差集，落在第 20 行之后
+    的延期条目会被误判为「已消失」而删除，退避失效（Retry-After 被自己的 15s
+    节奏续上）。本用例把 job_id=25 的条目放在 20 行窗口之外。
+    """
+    import time
+
+    for job_id in range(1, 26):
+        db.enqueue_terminal(job_id, {"update": {"status": "FAILED"}})
+    drainer = OutboxDrainThread("http://127.0.0.1:8000", db, interval=15.0)
+    drainer._defer_until[25] = time.monotonic() + 120
+
+    with patch(
+        "backend.agent.outbox_drainer.requests.post",
+        return_value=_status_response(429, retry_after="1"),
+    ):
+        drainer._drain_once()
+
+    assert 25 in drainer._defer_until, "窗口外的仍待办行不得被分页差集误裁"
+
+
 def test_retry_after_capped(db):
     """异常巨大的 Retry-After 不得把某行钉死（退避有上限）。"""
     import time

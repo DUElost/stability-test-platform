@@ -730,3 +730,58 @@ def test_retry_timer_is_daemon_and_cancelled_on_stop(monkeypatch, tmp_path):
     up.stop(timeout=0.2)
     assert created[0].cancelled is True
     assert up._retry_timers == []
+
+
+def test_retry_timer_deregisters_itself_once_fired(monkeypatch, tmp_path):
+    """#2036：Timer 触发后自出表——表长不得随累计失败次数单调增长。
+
+    原先只有 stop() 清空 `_retry_timers`：已触发/已 cancel 的 Timer（闭包持有
+    job 与事件载荷）永久留存。守卫断言「触发 → 出表」，反例即旧行为（长度仍为 1）。
+    """
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(tmp_path))
+    monkeypatch.setattr("backend.agent.aee.paths._mount_fstype_for_path", lambda _p: "ext4")
+    src = tmp_path / "evt_dir"
+    src.mkdir()
+    (src / "a.txt").write_text("x", encoding="utf-8")
+    up = EventUploader.instance()
+    up.configure(
+        api_url="http://x", agent_secret="s", host_id="h1",
+        nfs_root=str(tmp_path / "nfs"),
+    )
+    job = _UploadJob(
+        event_id="evt-timer-fire", local_path=str(src), plan_run_id=3, serial="d",
+        platform="MTK", event_type="KE", detected_at="2026-08-09T10:00:00+00:00",
+        host_id="h1",
+    )
+    created = []
+
+    class _FakeTimer:
+        def __init__(self, delay, fn):
+            self.delay = delay
+            self.fn = fn
+            self.daemon = False
+            self.cancelled = False
+            created.append(self)
+
+        def start(self):
+            return None
+
+        def cancel(self):
+            self.cancelled = True
+
+    def boom(*_a, **_k):
+        raise OSError("cifs down")
+
+    with patch("backend.agent.event_uploader.threading.Timer", _FakeTimer), patch(
+        "backend.agent.event_uploader.requests.post",
+        return_value=MagicMock(status_code=200),
+    ), patch(
+        "backend.agent.event_uploader.UploadManager._copytree_safe", side_effect=boom,
+    ):
+        up._run_upload_holding_slot(job)
+
+    assert len(up._retry_timers) == 1, "未决退避 Timer 必须在表内（stop 才能 cancel）"
+
+    created[0].fn()  # 模拟 Timer 到期触发
+
+    assert up._retry_timers == [], "触发后必须自出表（#2036）"
