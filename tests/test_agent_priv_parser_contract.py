@@ -63,6 +63,36 @@ def test_write_digest_wires_kind_and_digest(wrapper):
     assert (ns.command, ns.kind, ns.digest) == ("write-digest", "resources", DIGEST)
 
 
+def test_usb_authorized_wires_port_and_value(wrapper):
+    parser = wrapper._build_parser()
+    ns = parser.parse_args(["usb-authorized", "--port", "1-5.3.1", "--value", "0"])
+    assert (ns.command, ns.port, ns.value) == ("usb-authorized", "1-5.3.1", "0")
+
+
+def test_usb_authorized_without_port_is_rejected_with_reason(wrapper, capsys):
+    """缺 --port 必须报「required」——同 #2011 形态：真实调用的失败面。"""
+    parser = wrapper._build_parser()
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["usb-authorized", "--value", "0"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "--port" in err and "required" in err
+
+
+def test_usb_authorized_rejects_unknown_value_at_parse_time(wrapper, capsys):
+    parser = wrapper._build_parser()
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["usb-authorized", "--port", "1-1", "--value", "2"])
+    assert exc.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_ensure_udev_rule_accepts_no_args(wrapper):
+    parser = wrapper._build_parser()
+    ns = parser.parse_args(["ensure-udev-rule"])
+    assert ns.command == "ensure-udev-rule"
+
+
 def test_full_contract_passes_on_current_wiring(wrapper):
     assert wrapper._validate_parser_contract(wrapper._build_parser()) == []
 
