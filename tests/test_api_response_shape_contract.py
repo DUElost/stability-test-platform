@@ -64,12 +64,26 @@ docstring ↔ 实现（#2141）：同样双向，**逐函数**比对 docstring �
 两次漂移都在这一对）；轴线 B 4 个 docstring 键块函数中的 2 个可比对者；轴线 C 8 对——
 watcher-summary 3（``WatcherSummaryOut`` / ``WatcherPlatformBucketOut`` / ``WatcherCategoryOut``）、
 log-events 2（``PlanRunLogEventOut`` / ``PlanRunLogEventsOut``）、scan/merge 状态 3
-（``DedupStatusOut`` / ``DedupArtifactOut`` / ``DedupScanArchiveOut``）。
+（``DedupStatusOut`` / ``DedupArtifactOut`` / ``DedupScanArchiveOut``），以及 #2187 逐条
+正规化进来的 dedup 触发类 7 对——6 个端点（``DedupScanTriggerOut`` /
+``DedupMergeTriggerOut`` / ``DedupExtractOut`` / ``DedupAgentConfigReloadOut`` /
+``JiraRunStartOut`` / ``JiraRunCancelOut``）+ 1 个嵌套项（``DedupSkippedHostOut``）——共 15 对。
 
 轴线 C 的第 3 组来自一次**正规化**：``GET /plan-runs/{id}/dedup/status`` 原为
 ``response_model=ApiResponse[dict]`` + ``ok({...})`` 手搓 dict（轴线 A 的 AST 判据识别不到
 包在 ``ok(...)`` 调用里的字典字面量，故它此前**任何**轴线都覆盖不到），改为
 ``ApiResponse[DedupStatusOut]`` 后由本门禁自动覆盖——"两处声明"变成"一处声明 + 机器对拍"。
+
+``POST /plan-runs/hosts/{host_id}/reload-config``（``DedupAgentConfigReloadOut``）这一对
+**没有 SPA 消费方**：该端点由运维 runbook 直接 curl，AI 助手的同名动作走
+``emit_agent_control`` 的另一条路径、不经这个 HTTP 端点。仍登记的理由是"没有消费者的
+TS 接口"才是幽灵，**被本用例双向对拍的** TS 接口不是——它给这个形状一个单一声明面。
+代价是该配对不绑定任何调用点：端点退役时须同 PR 删模型 + 删 TS + 删登记项。
+
+同一目录还堵了反向的洞：**正规化成** ``ApiResponse[具体模型]`` **却不登记**——diff 读起来
+像已收口，实际把该模型留在了对拍之外。已收口的路由文件里，每个具体响应模型要么在
+``_MODEL_PAIRS``，要么在 ``_MODEL_UNREGISTERED`` 写明原因（当前一例：``JiraRunOut``，其
+跨文件基类 ``ORMBaseModel`` 需先扩展解析器）。两个方向都失效即红。
 """
 
 from __future__ import annotations
@@ -386,7 +400,78 @@ _MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
         "frontend/src/utils/api/types.ts",
         "DedupScanArchive",
     ),
+    # #2187：dedup.py 其余 `ok({...})` 端点逐条正规化后进入对拍
+    (
+        "backend/api/schemas/dedup.py",
+        "DedupScanTriggerOut",
+        "frontend/src/utils/api/types.ts",
+        "DedupScanTriggerPayload",
+    ),
+    (
+        "backend/api/schemas/dedup.py",
+        "DedupSkippedHostOut",
+        "frontend/src/utils/api/types.ts",
+        "DedupSkippedHost",
+    ),
+    (
+        "backend/api/schemas/dedup.py",
+        "DedupMergeTriggerOut",
+        "frontend/src/utils/api/types.ts",
+        "DedupMergeTriggerPayload",
+    ),
+    (
+        "backend/api/schemas/dedup.py",
+        "DedupExtractOut",
+        "frontend/src/utils/api/types.ts",
+        "DedupExtractPayload",
+    ),
+    (
+        "backend/api/schemas/dedup.py",
+        "JiraRunStartOut",
+        "frontend/src/utils/api/types.ts",
+        "JiraRunStartPayload",
+    ),
+    (
+        "backend/api/schemas/dedup.py",
+        "JiraRunCancelOut",
+        "frontend/src/utils/api/types.ts",
+        "JiraRunCancelPayload",
+    ),
+    (
+        # 无 SPA 消费方，见模块 docstring：登记是为了单一声明面，不是为了覆盖调用点
+        "backend/api/schemas/dedup.py",
+        "DedupAgentConfigReloadOut",
+        "frontend/src/utils/api/types.ts",
+        "AgentConfigReloadPayload",
+    ),
 )
+
+#: 轴线 A/C 的**登记盲区**（按文件 opt-in，判据见
+#: ``test_dict_response_blindspot_is_listed_and_not_stale``）：``ok(payload)`` 里的 payload
+#: 若是运行期拼装（局部变量、其它模块的返回值），既不是可 AST 识别的 dict 字面量，也没有
+#: 可建模的固定形状。台账内的文件必须**实际 == 登记**：条目失效（已正规化或已删除）即红，
+#: 防僵尸豁免——同 ``_DOC_UNCHECKABLE`` 的口径。
+_MODEL_BLINDSPOT: dict[str, set[str]] = {
+    "backend/api/routes/dedup.py": {
+        # `ok(st)`：status 由 RunConsole 运行期组装
+        "get_jira_run_status",
+        # `ok(console.read_log(...))`：日志回放形状在 console 侧
+        "get_jira_run_log",
+    },
+}
+
+#: ``ApiResponse[具体模型]`` 但**未登记**轴线 C 的模型 → 原因。
+#: 与盲区台账同一个作用域（只对已收口的路由文件生效），且必须不失效：
+#: 模型不再被引用即红，防止"当初的理由"沉淀成永久豁免。
+_MODEL_UNREGISTERED: dict[str, str] = {
+    # 基类 ``ORMBaseModel`` 在另一文件，``_pydantic_model_fields`` 按口径**显式报错**
+    # 而不是静默少收字段。要登记得先扩展跨文件基类解析——独立议题，见台账 I-9。
+    "JiraRunOut": "跨文件基类 ORMBaseModel，解析器不静默少收字段",
+}
+
+#: 允许 `extra="allow"` 的已登记模型（自由 JSONB 段——键集合由写入方决定）。
+#: 其余模型若声明 extra="allow"，说明有人在**有固定形状**的响应上开了静默透传口。
+_EXTRA_ALLOW_ALLOWED: set[str] = {"DedupScanArchiveOut"}
 
 #: 允许作为基类、但其字段不在本解析范围内的类型（框架基类，无业务字段）。
 _PYDANTIC_BASE_ALLOWED = frozenset({"BaseModel"})
@@ -462,6 +547,137 @@ def test_ts_fields_are_all_declared_in_model():
                 "（幽灵字段，tsc 因可选而放行）"
             )
     assert not problems, "\n".join(problems)
+
+
+def _route_functions_with_dict_response(py_path: Path) -> set[str]:
+    """``response_model=ApiResponse[dict]`` 的路由函数名（轴线 A/C 都覆盖不到它们）。"""
+    tree = ast.parse(py_path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+            for keyword in decorator.keywords:
+                if keyword.arg == "response_model" and "ApiResponse[dict]" in ast.unparse(keyword.value):
+                    names.add(node.name)
+    return names
+
+
+def _route_response_model_names(py_path: Path) -> set[str]:
+    """routes 文件里 ``response_model=ApiResponse[...]`` 引用的**具名**模型（``dict`` 除外）。
+
+    ``list[X]`` / ``ApiResponse[X]`` 的下标里逐个取 ``Name``——容器与 ``ApiResponse``
+    本身不是模型名，故排除。
+    """
+    tree = ast.parse(py_path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    skip = {"ApiResponse", "dict", "list", "List", "Optional"}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+            for keyword in decorator.keywords:
+                if keyword.arg != "response_model":
+                    continue
+                for inner in ast.walk(keyword.value):
+                    if isinstance(inner, ast.Name) and inner.id not in skip:
+                        names.add(inner.id)
+    return names
+
+
+def _model_declares_extra_allow(py_path: Path, model: str) -> bool:
+    """模型体内是否把 ``model_config`` 的 ``extra`` 设成 ``allow``。
+
+    按 AST 取值而不是比对 ``ast.unparse`` 文本：unparse 会把引号规范成单引号，
+    文本判据会恒假——那等于开一个永远绿的守卫。
+    """
+    tree = ast.parse(py_path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ClassDef) and node.name == model):
+            continue
+        for stmt in node.body:
+            if not isinstance(stmt, ast.Assign):
+                continue
+            if not any(isinstance(x, ast.Name) and x.id == "model_config" for x in stmt.targets):
+                continue
+            value = stmt.value
+            if isinstance(value, ast.Call):
+                for keyword in value.keywords:
+                    if keyword.arg == "extra" and isinstance(keyword.value, ast.Constant):
+                        if keyword.value.value == "allow":
+                            return True
+            elif isinstance(value, ast.Dict):
+                for key, item in zip(value.keys, value.values, strict=True):
+                    if (
+                        isinstance(key, ast.Constant)
+                        and key.value == "extra"
+                        and isinstance(item, ast.Constant)
+                        and item.value == "allow"
+                    ):
+                        return True
+    return False
+
+
+def test_dict_response_blindspot_is_listed_and_not_stale():
+    """仍走 ``ApiResponse[dict]`` 的端点必须逐条豁免在案，且豁免不得失效。
+
+    本契约只对拍**有声明面**的形状；``ok(运行期拼装)`` 两侧都看不见。把这些函数列成
+    台账而不是放宽解析器，是为了让盲区**有人认领**（#2187 收口的正是无人认领的那 6 处）。
+
+    判据**按文件 opt-in**：只对台账里出现的文件要求"实际 == 登记"。不做全仓扫描是有意
+    的——``backend/api/routes`` 另有 23 处 ``ApiResponse[dict]``（8 个文件）正散落在他人
+    在改的路由上，全仓强制只会让并行 Execution 的正常改动撞红、逼出一堆豁免。未纳入的
+    文件留在台账 I-9 的"仍未覆盖"里逐文件推进。
+    """
+    for rel, expected in _MODEL_BLINDSPOT.items():
+        actual = _route_functions_with_dict_response(ROOT / rel)
+        assert actual == expected, (
+            f"{rel} 的 dict 响应端点与豁免台账不一致：台账 {sorted(expected)} / 实际 {sorted(actual)}"
+            "（新端点请先正规化为 response_model=ApiResponse[具体模型]，否则须在此登记原因）"
+        )
+
+
+def test_typed_endpoints_are_registered_or_reasoned():
+    """已收口路由文件里**有具体模型**的端点：要么登记配对，要么写明未登记原因。
+
+    这条堵的是"正规化到 ``ApiResponse[X]`` 却忘了登记"——那一步看起来已经完成了本单
+    的工作（端点不再是手搓 dict），实际却让 ``X`` 悄悄留在对拍之外：比不正规化更危险，
+    因为它在 diff 里读起来像已收口。判据与盲区台账共用 opt-in 文件集，未收口的文件
+    不受本用例约束（理由见 ``test_dict_response_blindspot_is_listed_and_not_stale``）。
+    """
+    registered = {model for _py, model, _ts, _interface in _MODEL_PAIRS}
+    for rel in _MODEL_BLINDSPOT:
+        used = _route_response_model_names(ROOT / rel)
+        unaccounted = used - registered - set(_MODEL_UNREGISTERED)
+        assert not unaccounted, (
+            f"{rel} 的响应模型 {sorted(unaccounted)} 既未登记 `_MODEL_PAIRS`、"
+            "也未在 `_MODEL_UNREGISTERED` 写明原因（登记=纳入双向对拍；不登记=继续盲区）"
+        )
+        stale = {m for m in _MODEL_UNREGISTERED if m not in used}
+        assert not stale, (
+            f"{rel} 的 `_MODEL_UNREGISTERED` 项 {sorted(stale)} 已不被任何端点引用——"
+            "豁免理由失效，请登记或删除该条"
+        )
+
+
+def test_registered_models_do_not_open_extra_allow():
+    """固定形状的响应模型不得 ``extra="allow"``——那会把"多返回键"变成静默透传。
+
+    只有自由 JSONB 段（写入方先于响应模型演进）才允许，且必须登记
+    （``_EXTRA_ALLOW_ALLOWED``）。反之该白名单里的模型若去掉了 extra="allow"，
+    本用例同样报红——透传被取消时，"未知键必须透传"的用例也得跟着退场。
+    """
+    opened: set[str] = set()
+    for py_file, model, _ts_file, _interface in _MODEL_PAIRS:
+        if _model_declares_extra_allow(ROOT / py_file, model):
+            opened.add(model)
+    assert opened == _EXTRA_ALLOW_ALLOWED, (
+        f"extra=\"allow\" 登记与实际不符：登记 {sorted(_EXTRA_ALLOW_ALLOWED)} / 实际 {sorted(opened)}"
+    )
 
 
 def test_model_axis_canary_sees_platform_support_flag():

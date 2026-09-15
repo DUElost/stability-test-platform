@@ -163,9 +163,9 @@ Class: process
 
 ## D. 门禁（复利杠杆，优先）
 
-### I-9 `types.ts` ↔ 后端 schema 无强制力 —— **部分实施（2026-09-15，新增轴线 C）**
+### I-9 `types.ts` ↔ 后端 schema 无强制力 —— **部分实施（2026-09-15：轴线 C + dedup.py 全部收口）**
 
-- **类型 / 严重度**：契约强制力缺失 / P2 —— **Pydantic 侧已收口，手搓 dict 侧仍开**
+- **类型 / 严重度**：契约强制力缺失 / P2 —— **dedup.py 侧已收口；全仓仍有 25 处 `ApiResponse[dict]`（见下）**
 - **证据**：`docs/design/2026-08-governance-surface-protection.md:136` 记为 **residual（review 兜底）**；`AGENTS.md` 硬不变量「前端 API 类型以 `types.ts` 为入口，并与后端 schema 同步」此前无人强制
 - **实施**：在既有契约测试 `tests/test_api_response_shape_contract.py`（#2129）中新增**轴线 C**：
   `Pydantic 响应模型 ↔ TS 接口` 双向对拍（`_MODEL_PAIRS` + `_pydantic_model_fields`），登记 5 对：
@@ -181,10 +181,22 @@ Class: process
   `getDedupStatus` 也由匿名内联类型改为具名 `DedupStatusPayload`。
   取证要点：`DedupScanArchiveOut` 必须 `extra="allow"`——该段是自由 JSONB，Pydantic 默认会
   **静默丢弃**未声明键（比不建模更糟），已加"未知键必须透传"用例并做红绿双向验证。
+- **跟进（同日第三段，#2187）**：`dedup.py` 内那 6 处 `ok({...})` 已**逐条正规化收口**——
+  `DedupScanTriggerOut` / `DedupMergeTriggerOut` / `DedupExtractOut` /
+  `DedupAgentConfigReloadOut` / `JiraRunStartOut` / `JiraRunCancelOut`（+ 嵌套
+  `DedupSkippedHostOut`），前端 7 个具名类型同步进 `types.ts`，轴线 C 登记 8 对 → **15 对**。
+  两处新守卫：`_MODEL_BLINDSPOT`（盲区按文件 opt-in 台账，条目失效即红）、
+  `_EXTRA_ALLOW_ALLOWED`（固定形状模型不得 `extra="allow"`，双向比对）。
+  正规化才暴露的前端漂移：scan 少 `enqueued`/`is_final`/`skipped_retired`，merge 少
+  `scan_round_id`/`round_started_at`，`dedup.ts` 的 `JiraRunStart` 少 `source`/`jira_project_key`
+  且声明在 `types.ts` 之外。详见 [dedup `ok({...})` 正规化](../testing/2026-09-15-dedup-ok-normalize-2187.md)。
 - **仍未覆盖（诚实边界）**：
-  - 其余 `response_model=ApiResponse[dict]` + `ok({...})` 端点：`dedup.py` 内另有 6 处
-    （scan / merge / extract / reload-config / jira-run 等）。AST 判据只认 ``return <Dict>``，
-    识别不到包在 `ok(...)` 里的字典字面量——**逐条正规化**比扩展正则更可靠（本端点即为样板）；
+  - **全仓仍有 25 处 `response_model=ApiResponse[dict]`**（`grep -rn` 实测）：dedup 之外
+    `agent_api.py` 10 / `plan_runs.py` 4 / `plans.py` 2 / `scripts.py` 2 / `suites.py` 2 /
+    `mtbf.py` 1 / `projects.py` 1 / `ai_assistant.py` 1 = 23 处未正规化，加 `dedup.py` 内
+    2 处运行期拼装（`ok(st)` / `ok(console.read_log(...))`，形状在 console 侧，已登记盲区）。
+    **建议按文件逐条另立单**（`agent_api.py` 优先：面最大且已有 `#787`/`#2089` 漂移前科）；
+    本单不越界改他人在途文件，盲区台账因此**按文件 opt-in**；
   - `Field(alias=…)` 未处理（登记前提是"无别名"）；
   - 跨文件基类会让解析器**显式报错**而非静默少收字段。
 - **原始验收对照**：`GET /plan-runs/{id}/log-events` ✅；`GET /plan-runs/{id}/dedup`（`archive`/`scan_failed`）✅。

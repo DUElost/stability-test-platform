@@ -55,8 +55,91 @@ class DedupStatusOut(BaseModel):
     scan_failed: bool = False
 
 
+class DedupSkippedHostOut(BaseModel):
+    """本轮 scan 未纳入的主机（``classify_recycle_targets`` 的 skipped 条目）。
+
+    退役未获准计入 ``skipped_retired``，其余非 ONLINE 计入 ``skipped_offline``——
+    两侧都不虚报完整。
+    """
+
+    host_id: str
+    status: str
+
+
+class DedupScanTriggerOut(BaseModel):
+    """``POST /plan-runs/{id}/dedup/scan`` 响应（触发结果 + 如实报告的跳过位）。"""
+
+    plan_run_id: int
+    enqueued: str
+    is_final: bool
+    triggered_hosts: list[str]
+    skipped_offline: list[DedupSkippedHostOut]
+    skipped_retired: list[DedupSkippedHostOut]
+
+
+class DedupMergeTriggerOut(BaseModel):
+    """``POST /plan-runs/{id}/dedup/merge`` 响应。
+
+    ``scan_round_id`` / ``round_started_at`` 来自 ``resolve_manual_merge_round``
+    （不给无约束的历史）；两者可同时为 None。
+    """
+
+    status: str
+    plan_run_id: int
+    scan_round_id: Optional[str] = None
+    round_started_at: Optional[str] = None
+
+
+class DedupExtractOut(BaseModel):
+    """``POST /plan-runs/{id}/dedup/extract`` 响应（归档-3 提单目录）。"""
+
+    plan_run_id: int
+    jira_dir: str
+    extracted_count: int
+
+
+class DedupAgentConfigReloadOut(BaseModel):
+    """``POST /plan-runs/hosts/{host_id}/reload-config`` 响应（下发即返回，不等 ack）。"""
+
+    host_id: str
+    command: str
+    status: str
+
+
+class JiraRunStartOut(BaseModel):
+    """``POST /jira/runs`` 响应（控制台 run 句柄 + 本次实际输入）。
+
+    ``jira_project_key`` 仅在 ``source=plan_run`` 且该 PlanRun 能解析出项目键时有值。
+    """
+
+    console_run_id: str
+    room: str
+    vendor: str
+    stage: str
+    source: str
+    jira_project_key: Optional[str] = None
+
+
+class JiraRunCancelOut(BaseModel):
+    """``POST /jira/runs/{console_run_id}/cancel`` 响应。
+
+    ``canceled`` 表示是否**发起**了取消：跨实例转发失败时 fail-closed 为 False，
+    不假装成功。
+    """
+
+    console_run_id: str
+    canceled: bool
+
+
 __all__ = [
+    "DedupAgentConfigReloadOut",
     "DedupArtifactOut",
+    "DedupExtractOut",
+    "DedupMergeTriggerOut",
     "DedupScanArchiveOut",
+    "DedupScanTriggerOut",
+    "DedupSkippedHostOut",
     "DedupStatusOut",
+    "JiraRunCancelOut",
+    "JiraRunStartOut",
 ]
