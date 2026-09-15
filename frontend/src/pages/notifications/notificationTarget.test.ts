@@ -13,6 +13,11 @@ describe('notificationTarget #625 context.link', () => {
     });
   });
 
+  it('协议相对 URL 一并拒绝（#2054：//host 与 /\\host 也以 / 开头）', () => {
+    expect(notificationTarget(log({ context: { link: '//evil.example/x' } }))).toBeNull();
+    expect(notificationTarget(log({ context: { link: '/\\evil.example/x' } }))).toBeNull();
+  });
+
   it('非 / 开头的 link 忽略（防外链）', () => {
     expect(notificationTarget(log({ context: { link: 'https://evil.example/x' } }))).toBeNull();
   });
