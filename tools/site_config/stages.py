@@ -69,6 +69,32 @@ LOGROTATE_TEMPLATE_NAME = Path(LOGROTATE_TEMPLATE).name
 # 重跑覆盖共享路径前，旧内容留一份可回放的副本（state 目录 0700，不新增系统路径资产）。
 PREVIOUS_ASSETS_DIR = "shared-path-prev"
 
+def _effective_env_keys(text: str) -> set[str]:
+    """systemd EnvironmentFile 真正会读取的键（注释与空行不算）。
+
+    模板里的 `# STP_SCRIPT_RUNTIME_ROOT=…` 是合法注释、后端读不到；
+    用子串比较会把这种注释当成"键已存在"（238 实测：假 PASS → 脚本同步
+    admission 失败 `script_sync_config_error`）。
+    """
+    keys: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key and not key[0].isdigit() and all(char.isalnum() or char == "_" for char in key):
+            keys.add(key)
+    return keys
+
+
+def _append_env_keys(path: Path, values: dict[str, str]) -> None:
+    """Append missing keys; existing values (secrets) stay untouched."""
+    with path.open("a", encoding="utf-8") as handle:
+        for key, value in values.items():
+            handle.write(f"{key}={value}\n")
+    os.chmod(path, 0o600)
+
+
 MANAGED_ENV_KEYS = (
     "DATABASE_URL",
     "REDIS_URL",
@@ -405,13 +431,27 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
         managed = MANAGED_ENV_KEYS if config.agents else tuple(
             key for key in MANAGED_ENV_KEYS if key != "STP_SCRIPT_RUNTIME_ROOT"
         )
-        if any(f"{key}=" not in text for key in managed):
+        present = _effective_env_keys(text)
+        missing = [key for key in managed if key not in present]
+        if not missing:
+            checks.append(_pass(
+                "install.s2.env", "control_plane", "$.security", "env_reused",
+                "Existing environment already carries every managed key; keys were not rotated.",
+                "Use a reviewed diff for changes; never delete the env to regenerate it.",
+            ))
+        elif missing == ["STP_SCRIPT_RUNTIME_ROOT"] and "STP_SCRIPT_RUNTIME_ROOT" in env_values:
+            # 首装无 Agent 时该键保持模板注释形态；首台 Agent 接入后必须补成有效行，
+            # 否则后端读不到 → 脚本同步 admission 失败（script_sync_config_error，
+            # 238 实测）。只追加缺失键，既有秘密与值一个都不动。
+            if not ctx.dry_run:
+                _append_env_keys(env_file, {"STP_SCRIPT_RUNTIME_ROOT": env_values["STP_SCRIPT_RUNTIME_ROOT"]})
+            checks.append(_pass(
+                "install.s2.env", "control_plane", "$.security", "env_extended",
+                "The script runtime root was appended now that an Agent is declared; S4 restarts the service.",
+                "Existing values were preserved; only the missing key was added.",
+            ))
+        else:
             return _safe(checks, "install_conflict", location="$.security", role="control_plane", check_id="install.s2.env")
-        checks.append(_pass(
-            "install.s2.env", "control_plane", "$.security", "env_reused",
-            "Existing environment already carries every managed key; keys were not rotated.",
-            "Use a reviewed diff for changes; never delete the env to regenerate it.",
-        ))
     elif ctx.dry_run:
         checks.append(_pass(
             "install.s2.env", "control_plane", "$.security", "env_planned",
@@ -719,7 +759,11 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
         "Public entry stays same-origin with the control plane.",
     ))
 
-    if ctx.ops.run(["systemctl", "enable", "--now", SERVICE_UNIT]).returncode != 0:
+    if ctx.ops.run(["systemctl", "enable", SERVICE_UNIT]).returncode != 0:
+        return _safe(checks, "install_units", location="$.control_plane.deploy_root", role="control_plane", check_id="install.s4.service")
+    # restart 而非 enable --now：EnvironmentFile 只在启动时读取，S2 可能刚补齐了
+    # 脚本同步键（env_extended）——不重启就会带着旧 env 跑，S6 受控链必挂。
+    if ctx.ops.run(["systemctl", "restart", SERVICE_UNIT]).returncode != 0:
         return _safe(checks, "install_units", location="$.control_plane.deploy_root", role="control_plane", check_id="install.s4.service")
     if not await_health():
         return _safe(checks, "install_health", location="$.control_plane.public_url", role="control_plane", check_id="install.s4.health")

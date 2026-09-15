@@ -389,10 +389,17 @@ def _seed_two_hosts(
     *,
     abort_age_seconds: int,
     requested_job_ids: list[int] | None = None,
+    host_clock_ages: dict[str, int] | None = None,
+    omit_run_abort_at: bool = False,
 ) -> tuple[int, list[int], list[tuple[str, int]]]:
     """一个 PlanRun、每台主机一个 RUNNING job（各自设备）。
 
     ``requested_job_ids`` 为 ``None`` 时不写该键（模拟历史 run_context 形态）。
+
+    ADR-0043（#2154）：``host_clock_ages`` 写 host 主体的时钟
+    ``abort_requested_hosts[host_id].at``（值为「多少秒前」）；
+    ``omit_run_abort_at=True`` 时不写 run 级 ``at``（模拟**只有** host 级 abort 的
+    run —— 该键只保留存在性）。
     返回 (plan_run_id, device_ids, [(host_id, job_id)])。
     """
     now = datetime.now(timezone.utc)
@@ -416,16 +423,28 @@ def _seed_two_hosts(
         db.add(step)
         db.flush()
 
-        abort_payload: dict = {"at": abort_at.isoformat(), "reason": "host_update"}
+        abort_payload: dict = {"reason": "host_update"}
+        if not omit_run_abort_at:
+            abort_payload["at"] = abort_at.isoformat()
         if requested_job_ids is not None:
             abort_payload["requested_job_ids"] = list(requested_job_ids)
+
+        run_context: dict = {"abort_requested": abort_payload}
+        if host_clock_ages:
+            run_context["abort_requested_hosts"] = {
+                host_id: {
+                    "at": (now - timedelta(seconds=age)).isoformat(),
+                    "reason": "host_update",
+                }
+                for host_id, age in host_clock_ages.items()
+            }
 
         run = PlanRun(
             plan_id=plan.id, status="RUNNING",
             failure_threshold=0.1, triggered_by="pytest",
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL", started_at=now,
-            run_context={"abort_requested": abort_payload},
+            run_context=run_context,
         )
         db.add(run)
         db.flush()
@@ -476,6 +495,37 @@ def _set_requested_job_ids(plan_run_id: int, job_ids: list[int] | None) -> None:
         }
         run.run_context = ctx
         db.commit()
+    finally:
+        db.close()
+
+
+def _add_late_claimed_job(host_id: str, device_id: int, plan_run_id: int) -> int:
+    """在 host 级 abort **之后**才被 claim 成 RUNNING 的该 host job。
+
+    它不在 ``requested_job_ids`` 名单快照内（该 run 的 host 级请求没有刷新名单的
+    通道），ADR-0043 D3 要求由该 host 的时钟兜底回收。
+    """
+    now = datetime.now(timezone.utc)
+    db = SessionLocal()
+    try:
+        run = db.get(PlanRun, plan_run_id)
+        device = Device(
+            id=device_id, serial=f"LATE-{uuid4().hex[:8]}", host_id=host_id,
+            status="BUSY", tags=[], created_at=now,
+            adb_connected=True, adb_state="device",
+        )
+        db.add(device)
+        db.flush()
+        job = JobInstance(
+            plan_run_id=run.id, plan_id=run.plan_id,
+            device_id=device.id, host_id=host_id,
+            status=JobStatus.RUNNING.value,
+            pipeline_def=PIPELINE_DEF, created_at=now, updated_at=now,
+            started_at=now,
+        )
+        db.add(job)
+        db.commit()
+        return job.id
     finally:
         db.close()
 
@@ -568,5 +618,124 @@ async def test_legacy_abort_without_requested_ids_still_reaps():
 
             assert count == 2, "键缺失时不得改变既有回收行为（否则老数据无人回收）"
             assert len(items) == 2
+    finally:
+        _cleanup_two_hosts(pairs, [d1, d2])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADR-0043（#2154）：宽限的计时主体 ≡ 请求主体
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_host_clock_is_per_host_not_shared():
+    """ADR-0043 D1/D2：只有 host 级 abort 时，每个 host 按**自己的**时钟计时。
+
+    h1 的时钟已过期（90s）、h2 未过期（10s）→ 只回收 h1。旧语义（共享 run 级
+    `at`）下两者会被同一个时钟判等；「h2 的后续请求把整轮宽限重置」的 N×GRACE
+    形态在这里被钉死。
+    """
+    h1, d1, h2, d2 = _two_new_ids()
+    pairs: list[tuple[str, int]] = []
+    try:
+        _, _, pairs = _seed_two_hosts(
+            [(h1, d1), (h2, d2)],
+            abort_age_seconds=90,
+            omit_run_abort_at=True,          # 该 run 只有 host 级请求
+            host_clock_ages={h1: 90, h2: 10},
+        )
+        (_, job_h1), (_, job_h2) = pairs
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as db:
+            count, items = await _reconcile_aborted_running_jobs(db)
+            await db.commit()
+
+            assert count == 1, f"只应回收时钟已到期的 h1，实际 {count}：{items}"
+            assert [i["job_id"] for i in items] == [job_h1]
+            reaped = await db.get(JobInstance, job_h1)
+            assert reaped.status == JobStatus.UNKNOWN.value
+            # D6：回收主体需在状态原因上可区分
+            assert reaped.status_reason == "abort_ack_timeout_host"
+            other = await db.get(JobInstance, job_h2)
+            assert other.status == JobStatus.RUNNING.value, (
+                "h2 的宽限自**自己**的首次请求起算（10s），"
+                "不得被 h1 的 90s 时钟连带回收"
+            )
+    finally:
+        _cleanup_two_hosts(pairs, [d1, d2])
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_late_claimed_job_on_aborted_host_is_reaped():
+    """ADR-0043 D3：host 级 abort 之后才被 claim 的该 host job 仍被回收。
+
+    名单快照（`requested_job_ids`）对该 run 的 host 级请求**没有刷新通道**，
+    late-claim 的 job 永远不会进名单——若只按名单过滤，它会无人回收（§1.2-2）。
+    """
+    h1, d1, h2, d2 = _two_new_ids()
+    d_late = d2 + 1
+    pairs: list[tuple[str, int]] = []
+    try:
+        run_id, _, pairs = _seed_two_hosts(
+            [(h1, d1), (h2, d2)],
+            abort_age_seconds=90,
+            omit_run_abort_at=True,
+            host_clock_ages={h1: 90},
+        )
+        (_, job_h1), (_, job_h2) = pairs
+        _set_requested_job_ids(run_id, [job_h1])   # 名单只含 abort 当时的 job
+        late_job_id = _add_late_claimed_job(h1, d_late, run_id)
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as db:
+            count, items = await _reconcile_aborted_running_jobs(db)
+            await db.commit()
+
+            assert count == 2, (
+                "late-claim 的 h1 job 不在名单内，但该 host 时钟已到期 → 应一并"
+                f"回收；实际 {count}：{items}"
+            )
+            assert sorted(i["job_id"] for i in items) == sorted(
+                [job_h1, late_job_id]
+            )
+            late = await db.get(JobInstance, late_job_id)
+            assert late.status == JobStatus.UNKNOWN.value
+            assert late.status_reason == "abort_ack_timeout_host"
+            assert (await db.get(JobInstance, job_h2)).status == (
+                JobStatus.RUNNING.value
+            ), "未发生 host 级 abort 的 h2 不得受影响"
+    finally:
+        _cleanup_two_hosts(pairs, [d1, d2, d_late])
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_run_and_host_clocks_take_the_earlier():
+    """ADR-0043 D1：两个主体的时钟并存时取**更早**的 deadline（互不覆盖）。"""
+    h1, d1, h2, d2 = _two_new_ids()
+    pairs: list[tuple[str, int]] = []
+    try:
+        # run 级 at = 10s 前（宽限**未**到）；h1 的 host 时钟 = 90s 前（已到）
+        run_id, _, pairs = _seed_two_hosts(
+            [(h1, d1), (h2, d2)],
+            abort_age_seconds=10,
+            host_clock_ages={h1: 90},
+        )
+        (_, job_h1), (_, job_h2) = pairs
+        _set_requested_job_ids(run_id, [job_h1, job_h2])
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as db:
+            count, items = await _reconcile_aborted_running_jobs(db)
+            await db.commit()
+
+            assert count == 1, f"取更早者：只有 h1 的 90s 时钟已到期，实际 {items}"
+            assert [i["job_id"] for i in items] == [job_h1]
+            reaped = await db.get(JobInstance, job_h1)
+            assert reaped.status_reason == "abort_ack_timeout_host"
+            # h2 无 host 时钟 → 只有 run 级 10s（未到期）→ 不动
+            assert (await db.get(JobInstance, job_h2)).status == (
+                JobStatus.RUNNING.value
+            )
     finally:
         _cleanup_two_hosts(pairs, [d1, d2])

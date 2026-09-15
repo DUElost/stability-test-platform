@@ -5,13 +5,9 @@ import json
 import sys
 from pathlib import Path
 
-from .bootstrap import init_site
-from .handover import run_handover
-from .install import run_install
-from .plan import plan_site_report
+# `preflight` 必须在裸机（还没装安装器依赖）上也能跑：只有它是模块级导入，
+# 其余子命令在各自分支里延迟导入，避免把 pydantic/PyYAML 拉进 preflight 路径。
 from .preflight import run_preflight
-from .validation import validate_config_file
-from .verify import verify_site
 
 
 class RedactedParser(argparse.ArgumentParser):
@@ -49,6 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument("--bundle", default=None, help="Release bundle path for this site (default /srv/stp-bundle).")
     init.add_argument("--admin-username", default="admin", help="Initial administrator name (default admin).")
     init.add_argument("--non-interactive", action="store_true", help="Take every default instead of prompting.")
+    init.add_argument(
+        "--reset-db-password",
+        action="store_true",
+        help="Allow ALTER ROLE when the role already exists with a different password (off by default).",
+    )
     init.add_argument("--no-fix", dest="fix", action="store_false", help="Report the exact host commands instead of running them.")
     init.add_argument("--dry-run", action="store_true", help="Write nothing at all; report only.")
     init.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
@@ -131,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
             deploy_root=arguments.deploy_root,
         )
     elif arguments.command == "init":
+        from .bootstrap import init_site
+
         report = init_site(
             output=arguments.output,
             bindings_dir=arguments.bindings_dir,
@@ -143,15 +146,22 @@ def main(argv: list[str] | None = None) -> int:
             data_disk=arguments.data_disk,
             bundle=arguments.bundle,
             admin_username=arguments.admin_username,
+            reset_db_password=arguments.reset_db_password,
             interactive=False if arguments.non_interactive else None,
             fix=arguments.fix,
             dry_run=arguments.dry_run,
         )
     elif arguments.command == "validate":
+        from .validation import validate_config_file
+
         report = validate_config_file(arguments.config)
     elif arguments.command == "plan":
+        from .plan import plan_site_report
+
         report = plan_site_report(arguments.config, save_dir=arguments.save_dir)
     elif arguments.command == "handover":
+        from .handover import run_handover
+
         report = run_handover(
             arguments.config,
             state_dir=arguments.state_dir,
@@ -159,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=arguments.dry_run,
         )
     elif arguments.command == "verify":
+        from .verify import verify_site
+
         report = verify_site(
             arguments.config,
             bindings_dir=arguments.bindings_dir,
@@ -166,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
             run_timeout=arguments.run_timeout,
         )
     else:
+        from .install import run_install
+
         report = run_install(
             arguments.config,
             bindings_dir=arguments.bindings_dir,

@@ -115,6 +115,24 @@ def ensure_tool_venv(ops: Ops, *, python: str = "/usr/bin/python3", target: Path
     return actions
 
 
+def _role_password_works(ops: Ops, dsn: str, password: str) -> bool | None:
+    """Try one login with the generated credentials; None when it cannot be judged."""
+    try:
+        import psycopg
+    except ImportError:
+        if not ops.command_exists("psql"):
+            return None
+        url = dsn.replace("postgresql+psycopg://", "postgresql://")
+        path = os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+        result = ops.run(["psql", url, "-tAc", "SELECT 1"], env={"PGPASSWORD": password, "PATH": path})
+        return result.returncode == 0 and "1" in result.stdout
+    try:
+        with psycopg.connect(dsn.replace("postgresql+psycopg://", "postgresql://"), connect_timeout=5):
+            return True
+    except Exception:
+        return False
+
+
 def prepare_database(
     ops: Ops,
     *,
@@ -123,10 +141,19 @@ def prepare_database(
     password: str,
     dry_run: bool,
     fix: bool,
-    admin: str = "sudo -u postgres psql",
+    reset_password: bool = False,
+    role_probe=None,
+    dsn: str | None = None,
 ) -> tuple[list[str], str]:
-    """Create an empty database + role; returns (actions, dsn)."""
-    dsn = f"postgresql+psycopg://{role}:{password}@127.0.0.1:5432/{database}"
+    """Create an empty database + role; returns (actions, dsn).
+
+    ``dsn`` carries an existing binding's URL verbatim (an existing site must
+    keep the exact connection string the site already runs with).  An existing
+    role is never silently re-passworded: the binding in hand must work, so
+    either it already matches (nothing to do), the operator explicitly allowed
+    a reset (``reset_password``), or init fails closed.
+    """
+    dsn = dsn or f"postgresql+psycopg://{role}:{password}@127.0.0.1:5432/{database}"
     commands = [
         f"CREATE ROLE {role} LOGIN PASSWORD '<generated>'",
         f"CREATE DATABASE {database} OWNER {role}",
@@ -147,8 +174,25 @@ def prepare_database(
         if created.returncode != 0:
             raise BootstrapError("bootstrap_database", f"CREATE ROLE {role}")
         actions.append(f"created role: {role}")
+    elif reset_password:
+        altered = ops.run([
+            "sudo", "-u", "postgres", "psql", "-c",
+            f"ALTER ROLE {role} LOGIN PASSWORD '{password}'",
+        ])
+        if altered.returncode != 0:
+            raise BootstrapError("bootstrap_database", f"ALTER ROLE {role}")
+        actions.append(f"reset password for existing role: {role}")
     else:
         actions.append(f"role already exists: {role}")
+        probe = role_probe or _role_password_works
+        works = probe(ops, dsn, password)
+        if works is False:
+            raise BootstrapError("bootstrap_database_role", f"{role} already exists with a different password")
+        if works is None:
+            actions.append(
+                "cannot verify the existing role password (no psycopg/psql);"
+                " re-run with --reset-db-password if S3 reports db_unreachable"
+            )
     exists = ops.run(
         ["sudo", "-u", "postgres", "psql", "-tAc", f"SELECT 1 FROM pg_database WHERE datname='{database}'"],
     )
@@ -182,16 +226,17 @@ def prepare_storage(
     if dry_run or not fix:
         return [f"would run: {step}" for step in steps], mount_path
     actions: list[str] = []
-    # 建目录一律走 ops：测试与 --no-fix 路径不得直接写宿主机
-    ops.ensure_dir(Path(host_mount), 0o755, "root")
+    # 建目录走 ops.ensure_plain_dir：绝不递归 chown——/srv/hdd 在重跑时已是挂载点，
+    # 递归改属主会静默改写整盘既有数据的属主（城市 B 演练前发现）。
+    ops.ensure_plain_dir(Path(host_mount))
     if not _mounted(host_mount):
         mount = ops.run(["mount", disk, host_mount])
         if mount.returncode != 0:
             raise BootstrapError("bootstrap_storage", f"mount {disk} {host_mount}")
         actions.append(f"mounted {disk} at {host_mount}")
     subtree = Path(host_mount) / subdir
-    ops.ensure_dir(subtree, 0o755, "root")
-    ops.ensure_dir(Path(mount_path), 0o755, "root")
+    ops.ensure_plain_dir(subtree)
+    ops.ensure_plain_dir(Path(mount_path))
     if not _mounted(mount_path):
         bind = ops.run(["mount", "--bind", str(subtree), mount_path])
         if bind.returncode != 0:
@@ -242,6 +287,7 @@ def init_site(
     *,
     output: str | Path,
     bindings_dir: str | Path,
+    reset_db_password: bool = False,
     site_id: str | None = None,
     display_name: str | None = None,
     public_url: str | None = None,
@@ -287,14 +333,21 @@ def init_site(
         disk_note = f"detected data disk {disk} ({disk_gib} GiB)" if disk else "no extra data disk detected"
 
     role = DEFAULT_DB_ROLE
-    db_password = secrets.token_urlsafe(24)
-    admin_password = secrets.token_urlsafe(ADMIN_PASSWORD_BYTES)
-    fernet_key = _fernet_key()
+    # 既有绑定就是站点的现状：重跑必须沿用它，否则站点（.env.backend 里已是首次
+    # 渲染的值）与绑定会静默分叉。
+    existing = {name: _read_binding(Path(bindings_dir), name) for name in BINDING_NAMES}
+    existing_dsn = existing["site_database"].get("DATABASE_URL", "")
+    admin_username = existing["site_admin"].get("USERNAME") or admin_username
+    db_password = _dsn_password(existing_dsn) or secrets.token_urlsafe(24)
+    admin_password = existing["site_admin"].get("PASSWORD") or secrets.token_urlsafe(ADMIN_PASSWORD_BYTES)
+    fernet_key = existing["site_ssh_encryption"].get("SSH_CREDENTIALS_FERNET_KEY") or _fernet_key()
+    redis_index = _redis_index(existing["site_redis"].get("REDIS_URL", "")) or redis_index
     actions: list[str] = []
     if fix and not dry_run:
         actions.extend(ensure_tool_venv(ops))
     db_actions, dsn = prepare_database(
         ops, database=database, role=role, password=db_password, dry_run=dry_run, fix=fix,
+        reset_password=reset_db_password, dsn=existing_dsn or None,
     )
     actions.extend(db_actions)
     storage_actions: list[str] = []
@@ -367,10 +420,17 @@ def init_site(
         Path(output).write_text(
             header + yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8",
         )
-        _write_bindings(
+        written, reused, drifted = _write_bindings(
             bindings_dir, dsn=dsn, redis_index=redis_index, admin=(admin_username, admin_password),
             fernet_key=fernet_key,
         )
+        if reused:
+            # 重跑不轮换：既有绑定（站点口令/Fernet/DSN）必须原样保留
+            actions.append(f"kept existing bindings (not rotated): {', '.join(reused)}")
+        if drifted:
+            actions.append(
+                f"note: kept bindings differ from this run's values (not overwritten): {', '.join(drifted)}"
+            )
     checks = [
         passed(
             "init.site", "site", "$.site.id", "site_inputs_ready",
@@ -395,6 +455,40 @@ def init_site(
         },
         "dry_run": dry_run,
     }
+
+
+BINDING_NAMES = ("site_database", "site_redis", "site_admin", "site_ssh_encryption")
+
+
+def _read_binding(directory: Path, name: str) -> dict[str, str]:
+    """Parse one KEY=VALUE binding file; {} when it does not exist yet."""
+    path = directory / name
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key.strip()] = value.strip()
+    return values
+
+
+def _dsn_password(dsn: str) -> str:
+    """Password component of an existing DSN; "" when unusable."""
+    from urllib.parse import urlsplit
+
+    try:
+        return urlsplit(dsn).password or ""
+    except ValueError:
+        return ""
+
+
+def _redis_index(url: str) -> int | None:
+    """db index from an existing REDIS_URL; None when it carries none."""
+    tail = url.rstrip("/").rsplit("/", 1)[-1]
+    return int(tail) if tail.isdigit() else None
 
 
 def _fernet_key() -> str:
@@ -422,7 +516,13 @@ def _write_bindings(
     redis_index: int,
     admin: tuple[str, str],
     fernet_key: str,
-) -> None:
+) -> tuple[list[str], list[str], list[str]]:
+    """Write the binding files once; an existing file is never overwritten.
+
+    Rotation would silently desync the site from its own bindings: S2 already
+    rendered the first secrets into `.env.backend`, and the initial
+    administrator was already created with the first password.
+    """
     directory = Path(bindings_dir)
     directory.mkdir(parents=True, exist_ok=True)
     os.chmod(directory, 0o700)
@@ -432,12 +532,26 @@ def _write_bindings(
         "site_admin": f"USERNAME={admin[0]}\nPASSWORD={admin[1]}\n",
         "site_ssh_encryption": f"SSH_CREDENTIALS_FERNET_KEY={fernet_key}\n",
     }
+    written: list[str] = []
+    reused: list[str] = []
+    drifted: list[str] = []
     for name, text in payloads.items():
         path = directory / name
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        if path.exists():
+            os.chmod(path, 0o600)
+            reused.append(name)
+            try:
+                if path.read_text(encoding="utf-8") != text:
+                    drifted.append(name)
+            except OSError:
+                drifted.append(name)
+            continue
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(text)
         os.chmod(path, 0o600)
+        written.append(name)
+    return written, reused, drifted
 
 
 def _header(provenance: dict[str, str], facts: dict, disk_note: str) -> str:
