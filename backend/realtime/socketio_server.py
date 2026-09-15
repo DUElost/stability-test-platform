@@ -351,7 +351,10 @@ async def _dashboard_room_exists(kind: str, ident: str) -> bool:
     订阅被拒只影响推流（重连会重试），不阻塞 REST 主路径。
     """
     if kind == "console":
-        exists = RunConsole.instance().status(ident) is not None
+        # #2056：注册表读的是**同步** redis（SOCKET_TIMEOUT_SECONDS=2）——直接在
+        # 事件循环里调会把整个 ASGI 冻住最多 2s/次，而重连客户端会密集打这条路径。
+        # 挪到线程里执行（同步客户端保持原样，供 ticker/线程路径复用）。
+        exists = await asyncio.to_thread(RunConsole.instance().status, ident) is not None
         if not exists:
             # #1114：多实例下「非本实例持有」与「不存在」同路径——留可诊断日志
             try:

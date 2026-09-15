@@ -118,6 +118,13 @@ export const jobReportKeys = {
 /** ADR-0029 项目登记簿 — 页面级独立筛选（无全局选择器，D8 挂起）。 */
 export const projectKeys = {
   list: () => ['projects'] as const,
+  /**
+   * #2052：仅 ACTIVE 的项目集（选择器/指派弹窗用）。必须与 `list()`（全状态，
+   * 项目页用）**分开缓存**：两者曾共用 `list()` 键却用不同 queryFn，React Query
+   * 按 key 建条目 → 先访问设备/计划页会把 ACTIVE-only 数据写进 `['projects']`，
+   * 项目页的「已归档」tab 因此渲染 0 张卡；反向则会把归档项目灌回选择器。
+   */
+  active: () => ['projects', 'active'] as const,
   /** ADR-0029 P0：SEED 回填标签（待转正队列），与 list 分开缓存 */
   seed: () => ['projects', 'seed'] as const,
   detail: (key: string) => ['project', key] as const,

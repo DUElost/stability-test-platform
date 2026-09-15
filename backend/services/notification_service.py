@@ -9,6 +9,7 @@ Runs in a background thread (fire-and-forget) to avoid blocking callers.
 import json
 import logging
 import os
+import re
 import smtplib
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
@@ -786,12 +787,17 @@ def _emit_notification_socketio(
         logger.debug("emit_notification_socketio_failed", exc_info=True)
 
 
+# #2054：站内路径 = 单个前导斜杠；`//`（协议相对）与 `/\` 一律不算站内。
+_INTERNAL_LINK_RE = re.compile(r"^/(?![/\\])")
+
+
 def _resolve_alert_link(labels: Dict[str, Any], annotations: Dict[str, Any]) -> Any:
     """#625：为 Alertmanager 告警推导站内跳转目标（context.link）。
 
     优先级：
-    1. ``annotations.link``——告警规则显式标注的站内路径（以 ``/`` 开头），
-       给运维在规则层钉任意目标的出口；
+    1. ``annotations.link``——告警规则显式标注的站内路径（以**单个** ``/`` 开头），
+       给运维在规则层钉任意目标的出口；``//host`` 与 ``/\\host`` 属协议相对 URL，
+       会被浏览器按 cross-origin 解析（#2054），一律拒绝；
     2. labels 里的主机标识（``host`` / ``hostname`` / ``instance``，剥
        ``:port``）对 host 表做 hostname/ip 归一查找，命中 → ``/hosts``；
     3. 都没有 → None（context 不带 link，前端维持原判）。
@@ -801,7 +807,9 @@ def _resolve_alert_link(labels: Dict[str, Any], annotations: Dict[str, Any]) -> 
     """
     try:
         explicit = annotations.get("link")
-        if isinstance(explicit, str) and explicit.startswith("/"):
+        # #2054：`startswith("/")` 会放行 `//evil.example/x`（协议相对 URL）——
+        # 与前端 notificationTarget 的同名判定一起收紧为「单个前导斜杠」。
+        if isinstance(explicit, str) and _INTERNAL_LINK_RE.match(explicit):
             return explicit
 
         from backend.models.host import Host

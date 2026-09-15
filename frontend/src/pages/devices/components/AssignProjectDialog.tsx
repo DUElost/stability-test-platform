@@ -43,7 +43,7 @@ export function AssignProjectDialog({
   const [error, setError] = useState('');
 
   const { data: projects } = useQuery({
-    queryKey: projectKeys.list(),
+    queryKey: projectKeys.active(),
     queryFn: () => api.projects.listActive(),
   });
 

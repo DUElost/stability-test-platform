@@ -91,6 +91,30 @@ def test_backend_nomigrate_service_hard_checks_schema_align():
     assert not hard[0].startswith("ExecStartPre=-")
 
 
+def test_hard_execstartpre_units_have_start_limit():
+    """#2058：硬 ExecStartPre + Restart=always 必须配 start-limit。
+
+    没有 ``StartLimitIntervalSec``/``StartLimitBurst`` 时，schema 守卫一红就会每
+    ``RestartSec`` 重跑「alembic upgrade + 守卫」无限循环，把真实原因埋在
+    activating/auto-restart 里——2026-08-30 决策明确「无 StartLimit* 不得硬失败」。
+    """
+    for name in ("stability-backend.service", "stability-backend-nomigrate.service"):
+        unit = (
+            ROOT / "deploy" / "control-plane" / "systemd" / name
+        ).read_text(encoding="utf-8")
+        hard = [
+            line for line in unit.splitlines()
+            if "check_alembic_at_head.py" in line
+        ]
+        assert hard and hard[0].startswith("ExecStartPre="), name
+        assert "Restart=always" in unit, name
+        assert "StartLimitIntervalSec=" in unit, f"{name}: 硬失败守卫必须配 start-limit"
+        assert "StartLimitBurst=" in unit, f"{name}: 硬失败守卫必须配 start-limit"
+        # start-limit 属 [Unit] 段：放在 [Service] 里 systemd 会忽略（并要求顺序正确）
+        unit_section = unit.split("[Service]", 1)[0]
+        assert "StartLimitIntervalSec=" in unit_section, f"{name}: start-limit 必须写在 [Unit]"
+
+
 def test_https_nginx_template_exists_for_production_tls():
     https_conf = ROOT / "deploy" / "control-plane" / "nginx" / "stability-platform-https.conf"
 
