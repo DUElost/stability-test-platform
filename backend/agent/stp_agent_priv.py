@@ -33,8 +33,9 @@ Python 3.6+（主机系统 python3，不使用第三方依赖）。exit code：0
 
 import argparse
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr
 import grp
+import io
 import json
 import os
 import pwd
@@ -385,6 +386,8 @@ def cmd_selftest(args, conf):
             problems.append("wrapper must be root-owned and not writable by others")
     except OSError as exc:
         problems.append("wrapper stat failed: %s" % exc)
+    # #2011：子命令接线契约（真实 argv parse 断言）——能力探针的失败面由此闭合。
+    problems.extend(_validate_parser_contract(_build_parser()))
     if problems:
         print("STP_AGENT_PRIV_SELFTEST_FAIL: " + "; ".join(problems))
         return 1
@@ -734,6 +737,75 @@ def cmd_restart(args, conf):
 # CLI
 # ---------------------------------------------------------------------------
 
+# 子命令接线契约（#2011）。教训：`--help` 形态的能力探针**抓不到**「探针过、真调用
+# 失败」——argparse 接线错误（add_parser 返回值被丢弃 / 参数挂到别的子解析器）时
+# `--help` 照常 exit 0，而真实参数 exit 2（unrecognized arguments），远端脚本在
+# `set -e` 下整段中止。因此把每个子命令的**代表性真实 argv**列成契约，由 selftest
+# 逐个 parse 断言；控制面远端脚本开头即跑 selftest（失败 → 回落 legacy），本类缺陷
+# 由此 fail-safe 而非带病上阵。
+_SUBCOMMAND_CONTRACT = {
+    "selftest": [],
+    "bootstrap": [
+        "--install-dir", "/opt/stability-test-agent",
+        "--user", "android", "--group", "android",
+        "--service", "stability-test-agent",
+    ],
+    "apply-code": ["--staged", "/tmp/staged"],
+    "apply-resources": ["--staged", "/tmp/staged"],
+    "install-schema": ["--file", "/tmp/staged/pipeline_schema.json"],
+    "write-version": ["--version", "deadbeef"],
+    "write-digest": ["--digest", "sha256:" + "0" * 64, "--kind", "resources"],
+    "sync-env": [
+        "--secret-b64", "AA==", "--overrides-b64", "AA==", "--path-keys-b64", "AA==",
+    ],
+    "deps-marker": ["--sha", "0" * 64],
+    "fix-ownership": [],
+    "restart": [],
+}
+
+
+def _registered_subcommands(parser) -> list:
+    """枚举 parser 实际注册的子命令（契约完备性检查用）。"""
+    for action in getattr(parser, "_actions", []):
+        choices = getattr(action, "choices", None)
+        if isinstance(choices, dict) and choices:
+            return sorted(choices)
+    return []
+
+
+def _validate_parser_contract(parser) -> list:
+    """用真实 argv 逐个 parse 断言接线；返回问题清单（空 = 通过）。"""
+    problems = []
+    registered = _registered_subcommands(parser)
+    for command in registered:
+        if command not in _SUBCOMMAND_CONTRACT:
+            problems.append("subcommand %s not covered by contract table" % command)
+    for command, argv in sorted(_SUBCOMMAND_CONTRACT.items()):
+        if command not in registered:
+            problems.append("contract entry %s missing from parser" % command)
+            continue
+        sink = io.StringIO()
+        try:
+            with redirect_stderr(sink):
+                ns = parser.parse_args([command] + list(argv))
+        except SystemExit as exc:
+            problems.append(
+                "subcommand %s rejected contract argv (exit=%s): %s"
+                % (command, exc.code, sink.getvalue().strip()[:200])
+            )
+            continue
+        if getattr(ns, "command", None) != command:
+            problems.append("subcommand %s parsed to command=%r" % (command, ns.command))
+            continue
+        for opt in argv:
+            if not opt.startswith("--"):
+                continue
+            dest = opt.lstrip("-").replace("-", "_")
+            if not hasattr(ns, dest):
+                problems.append("subcommand %s does not wire %s" % (command, opt))
+    return problems
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         prog="stp-agent-priv",
@@ -760,11 +832,14 @@ def _build_parser():
 
     p = sub.add_parser("write-digest", help="write agent/ARTIFACT_DIGEST (ADR-0040)")
     p.add_argument("--kind", default="code", choices=["code", "resources"])
+    # #2011：--digest 属 write-digest（cmd_write_digest 读 args.digest）；此前它被
+    # 误挂到下一段，且 apply-resources 的 add_parser 返回值被丢弃。
+    p.add_argument("--digest", default="")
 
-    sub.add_parser(
+    p = sub.add_parser(
         "apply-resources", help="sync staged resources/ into agent/resources/ (ADR-0040 P2)",
     )
-    p.add_argument("--digest", default="")
+    p.add_argument("--staged", required=True)
 
     p = sub.add_parser("sync-env", help="update .env secret/overrides")
     p.add_argument("--secret-b64", default="")
