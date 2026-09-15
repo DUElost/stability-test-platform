@@ -37,6 +37,10 @@ tests:
       # 10/min = 0.167 req/s > 阈值 0.02，保持 15m 以上以满足 for。
       - series: 'stability_api_requests_total{method="POST",endpoint="/api/v1/jobs/{id}/complete",status_code="404"}'
         values: '0+10x30'
+      # StabilityDbLockWaitSustained（#2104）：最长锁等待持续 40s——锁序修好后
+      # 「死锁改等待」，这条是唯一能看见该代价的面
+      - series: 'stability_db_lock_wait_max_seconds'
+        values: '40x40'
     alert_rule_test:
       - eval_time: 20m
         alertname: StabilityDispatchGateFailed
@@ -114,3 +118,16 @@ tests:
                 sustained rate.  This is the #729 形态：旧 Agent/客户端在打已不存在的
                 `/complete` 端点。核对 Agent 版本与中心路由表；处置前先读
                 docs/operations/control-plane-db-maintenance.md（不要手动删 job 行）。
+      - eval_time: 20m
+        alertname: StabilityDbLockWaitSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: PostgreSQL lock wait sustained over 30s
+              description: >-
+                有会话在行锁上排队超过 30 秒。锁序修复后死锁应归零，代价会表现为等待：
+                先看 stability_retention_txn_seconds（保留清理的持锁窗口，NFS 目录回收仍在
+                同一事务内）与 stability_db_lock_waiters（等待会话数）；再按
+                docs/notes/architecture/2026-09-14-shared-row-lock-table.md 的 I1–I4 核对
+                是否出现新的加锁顺序反向。

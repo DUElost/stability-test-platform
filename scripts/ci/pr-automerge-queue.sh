@@ -129,7 +129,14 @@ alert_queue_blocked() {
   fi
 
   existing_body="$(issue_gh issue view "$existing" --repo "$REPO" --json body --jq .body 2>/dev/null || true)"
-  if printf '%s' "$existing_body" | grep -qF "queue-blocked-fingerprint: ${fingerprint}"; then
+  # #2075：比较必须带行尾终止符 ` -->`。grep -qF 是**子串**匹配，而指纹是
+  # `head=#N failed=<按 REQUIRED 顺序逗号连接>`——失败集**收敛**到旧值前缀
+  # （前几项仍红、后面某项转绿）时，计算值正好是存量值的子串，会被误判为
+  # unchanged 而**不刷新正文**，正文继续列着已经通过的 check。
+  # 不加终止符时实测：存量 `failed=lint:FAILURE, pr-agent-tests:FAILURE` 对计算值
+  # `failed=lint:FAILURE` 命中（漏刷新）。
+  # 也不用 grep -qxF：正文行含 `<!-- ` 前缀，整行比较得把前缀一并写进匹配串，更脆。
+  if printf '%s' "$existing_body" | grep -qF "queue-blocked-fingerprint: ${fingerprint} -->"; then
     echo "ci/queue-blocked alert #${existing} unchanged (fingerprint match)."
     return 0
   fi

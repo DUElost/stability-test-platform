@@ -49,6 +49,26 @@ def _touch_repo(tmp_path: Path, *rel: str) -> None:
         p.write_text("x", encoding="utf-8")
 
 
+def _both_harness_dirs(repo_root: Path) -> tuple[Path, Path]:
+    """造出 CodeBuddy + ZCode 两份**在用**记忆目录（#2065 的多命中场景）。
+
+    调用前必须先 monkeypatch ``Path.home``——候选表是按当时的 home 现算的。
+    """
+    codebuddy = next(
+        (path for name, path in _mod.memory_dir_candidates(repo_root)
+         if name == "codebuddy"),
+        None,
+    )
+    assert codebuddy is not None
+    codebuddy.mkdir(parents=True, exist_ok=True)
+    zcode = (
+        Path.home() / ".zcode" / "cli" / "memories" / "projects"
+        / f"{repo_root.name}-abc123" / "memory"
+    )
+    zcode.mkdir(parents=True, exist_ok=True)
+    return codebuddy, zcode
+
+
 class TestStructure:
     def test_valid_set_passes(self, tmp_path):
         r = _lint(_build(tmp_path), tmp_path)
@@ -94,6 +114,64 @@ class TestIndexConsistency:
         assert any("行宽" in e for e in r.errors)
 
 
+class TestMemoryDirResolution:
+    """#2065：默认目标必须命中**在用**的 harness 记忆目录，找不到即报错。"""
+
+    def test_candidates_cover_codebuddy_and_zcode(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        (home / ".zcode" / "cli" / "memories" / "projects" / f"{tmp_path.name}-abc123" / "memory").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+        harnesses = [name for name, _ in _mod.memory_dir_candidates(tmp_path)]
+        assert "codebuddy" in harnesses and "zcode" in harnesses
+
+    def test_resolve_prefers_existing_zcode_dir(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        zcode_mem = (
+            home / ".zcode" / "cli" / "memories" / "projects"
+            / f"{tmp_path.name}-deadbeef" / "memory"
+        )
+        zcode_mem.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+        resolved = _mod.resolve_memory_dir(tmp_path)
+        assert resolved is not None
+        harness, path = resolved
+        assert harness == "zcode" and path == zcode_mem
+
+    def test_resolve_returns_none_when_no_candidate_exists(self, tmp_path, monkeypatch):
+        """不静默回落：一个候选都不存在时返回 None，由 CLI 显式报错并退出 2。"""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "empty-home"))
+        assert _mod.resolve_memory_dir(tmp_path) is None
+
+
+    def test_resolve_returns_none_when_multiple_harnesses_in_use(self, tmp_path, monkeypatch):
+        """#2065：多个 harness 同时在用是常态——多命中同样不静默选第一个。"""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+        codebuddy, zcode = _both_harness_dirs(tmp_path)
+        assert codebuddy.is_dir() and zcode.is_dir()
+        assert _mod.resolve_memory_dir(tmp_path) is None
+
+    def test_resolve_with_explicit_harness_picks_that_one(self, tmp_path, monkeypatch):
+        """指定 harness 后各自解析到自己的目录（不再依赖候选表顺序）。"""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+        codebuddy, zcode = _both_harness_dirs(tmp_path)
+        assert _mod.resolve_memory_dir(tmp_path, harness="codebuddy") == (
+            "codebuddy", codebuddy,
+        )
+        assert _mod.resolve_memory_dir(tmp_path, harness="zcode") == ("zcode", zcode)
+
+    def test_main_multi_match_exits_2_and_lists_harnesses(self, tmp_path, monkeypatch, capsys):
+        """多命中时 CLI 退出 2 并列出在用目录；指定 --harness 后不再因此拒绝。"""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+        _both_harness_dirs(tmp_path)
+        assert _mod.main(["--repo-root", str(tmp_path)]) == 2
+        out = capsys.readouterr().out
+        assert "codebuddy" in out and "zcode" in out and "--harness" in out
+        # 目录为空 → 缺索引文件，退出 1；关键是不再因多命中而退出 2
+        assert _mod.main(["--repo-root", str(tmp_path), "--harness", "zcode"]) == 1
+
+
 class TestPathReferences:
     def test_missing_repo_path_is_error(self, tmp_path):
         mem = _build(tmp_path, extra_files={
@@ -111,6 +189,66 @@ class TestPathReferences:
         })
         r = _lint(mem, tmp_path)
         assert not any("断链" in e for e in r.errors)
+
+    def test_path_with_line_suffix_is_not_broken(self, tmp_path):
+        """#2065：`path:123` / `path:123-456` / `path#L12` 是 AGENTS.md 推荐的引用形式。
+
+        剥离位置后缀前，仓库里**每一条** `path:line` 都被报成断链——实测当时 288 个
+        error 中 181 个属此类，真正可执行的信号被淹没（工具因此被闲置）。
+        """
+        _touch_repo(tmp_path, "backend/agent/main.py", "backend/core/x.py")
+        mem = _build(tmp_path, extra_files={
+            "feedback_a.md": FM.format(name="A", type="feedback")
+            + "见 `backend/agent/main.py:741`、`backend/agent/main.py:741-760`、"
+              "`backend/core/x.py#L12`。\n",
+        })
+        r = _lint(mem, tmp_path)
+        assert not any("断链" in e for e in r.errors), r.errors
+
+    def test_path_with_line_suffix_still_reports_missing_file(self, tmp_path):
+        """剥离后仍要判存在性——真缺失的 `path:line` 必须继续报。"""
+        mem = _build(tmp_path, extra_files={
+            "feedback_a.md": FM.format(name="A", type="feedback")
+            + "见 `docs/nope/missing.py:42`。\n",
+        })
+        r = _lint(mem, tmp_path)
+        assert any("断链" in e and "docs/nope/missing.py" in e for e in r.errors)
+
+    def test_brace_glob_reference_is_skipped(self, tmp_path):
+        """#2065：`{a,b}` brace glob 无法做存在性判定——跳过而非报断链。"""
+        mem = _build(tmp_path, extra_files={
+            "feedback_a.md": FM.format(name="A", type="feedback")
+            + "两处 `backend/agent/{,aee/}CLAUDE.md`。\n",
+        })
+        r = _lint(mem, tmp_path)
+        assert not any("断链" in e for e in r.errors), r.errors
+
+    def test_multi_location_suffix_is_not_broken(self, tmp_path):
+        """#2065：位置后缀可以有**多个**位置（`, `/` `/:` 分隔），同样不是路径的一部分。
+
+        `path:303,331` / `path:75/134/159` / `path:14,117,122-126` / `path:20/:31/:53`
+        这类写法在变更审计笔记里最常见；只剥单个 `:N` 时它们仍被报成断链
+        （实测该 store 的 22 条残留误报全属此类）。
+        """
+        _touch_repo(tmp_path, "backend/tasks/saq_worker.py", "docs/design/x.md",
+                    "docs/adr/ADR-0007-x.md", "docs/adr/ADR-0015-y.md")
+        mem = _build(tmp_path, extra_files={
+            "feedback_a.md": FM.format(name="A", type="feedback")
+            + "见 `backend/tasks/saq_worker.py:303,331`、`docs/design/x.md:75/134/159`、"
+              "`backend/tasks/saq_worker.py:14,117,122-126`、"
+              "`docs/adr/ADR-0007-x.md:20/:31/:53`、`docs/adr/ADR-0015-y.md:29/:75`。\n",
+        })
+        r = _lint(mem, tmp_path)
+        assert not any("断链" in e for e in r.errors), r.errors
+
+    def test_multi_location_suffix_still_reports_missing_file(self, tmp_path):
+        """多位置后缀剥离后仍判存在性——真缺失的 `path:12,16` 必须继续报。"""
+        mem = _build(tmp_path, extra_files={
+            "feedback_a.md": FM.format(name="A", type="feedback")
+            + "见 `docs/nope/missing.py:12,16`。\n",
+        })
+        r = _lint(mem, tmp_path)
+        assert any("断链" in e and "docs/nope/missing.py" in e for e in r.errors)
 
     def test_missing_absolute_path_is_warn_only(self, tmp_path):
         mem = _build(tmp_path, extra_files={

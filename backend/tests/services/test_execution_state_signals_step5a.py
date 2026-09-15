@@ -516,6 +516,37 @@ class TestPushFatalClassification:
         from backend.services.admission_pump import _is_fatal_push_error
         assert _is_fatal_push_error(err) == expect_fatal
 
+    def test_host_retired_push_failure_maps_to_host_retired_fatal(self):
+        """#2059：push 阶段的退役失败必须以 HOST_RETIRED 终态化（与 Phase B 同口径）。
+
+        原先 Phase A 恒抛 script_sync_config_error → result_summary.reason /
+        dispatch_state.last_error / 审计都记成「脚本配置错误」，同 PR 新增的
+        HOST_RETIRED 分支在这条路径上不可达。
+        """
+        from backend.services.admission_pump import (
+            _fatal_admission_for_push_failures,
+        )
+
+        reason, detail = _fatal_admission_for_push_failures([
+            {"host_id": "h1", "reason": "script_sync_config_error", "error": "host_retired"},
+            {"host_id": "h2", "reason": "script_sync_config_error", "error": "ssh_security_config_error"},
+        ])
+        assert reason == "HOST_RETIRED"
+        # 命中退役的条目 reason 就地归一，便于 detail/审计读
+        assert [e["reason"] for e in detail["hosts"]] == ["host_retired", "script_sync_config_error"]
+
+    def test_non_retired_push_failure_keeps_config_error_reason(self):
+        """非退役 fatal 仍归 script_sync_config_error（行为不变）。"""
+        from backend.services.admission_pump import (
+            _fatal_admission_for_push_failures,
+        )
+
+        reason, detail = _fatal_admission_for_push_failures([
+            {"host_id": "h1", "reason": "script_sync_config_error", "error": "no_ssh_credentials"},
+        ])
+        assert reason == "script_sync_config_error"
+        assert [e["reason"] for e in detail["hosts"]] == ["script_sync_config_error"]
+
 
 # ── 5a.1: start_saq_worker re-marks pump ready ────────────────────────────────
 

@@ -796,3 +796,27 @@ def test_dispatch_async_falls_back_to_pool_when_async_enqueue_fails(monkeypatch)
 
     captured["on_async_failure"](RuntimeError("redis down"))
     assert "fn" in submitted, "异步入队失败后必须降级到线程池"
+
+
+# ── #2054：context.link 的产出端只接受「单个前导斜杠」的站内路径 ──
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("/hosts", "/hosts"),
+        ("/execution/plan-runs/3", "/execution/plan-runs/3"),
+        ("//evil.example/x", None),      # 协议相对 URL：浏览器按 cross-origin 解析
+        ("/\\evil.example/x", None),     # 同上（反斜杠变体）
+        ("https://evil.example/x", None),
+        ("hosts", None),
+    ],
+)
+def test_resolve_alert_link_only_accepts_single_leading_slash(raw, expected):
+    """#2054：`startswith("/")` 会放行 `//host`，前端盲拼即可把管理员带出站。"""
+    assert mod._resolve_alert_link({}, {"link": raw}) == expected
+
+
+def test_resolve_alert_link_falls_back_to_host_lookup_without_link():
+    """无 link（或被拒）时不凭空造路径：labels 无主机标识 → None。"""
+    assert mod._resolve_alert_link({"severity": "critical"}, {}) is None

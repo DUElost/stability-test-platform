@@ -1,6 +1,12 @@
 [Unit]
 Description=Stability Test Platform Backend (no migrations)
 After=network.target
+# #2058：schema 对齐守卫是**硬** ExecStartPre（无减号），而服务是 Restart=always +
+# RestartSec=5；没有 start-limit 时守卫一红就会每 5s 重跑「alembic upgrade + 守卫」
+# 无限循环，把真实原因埋在 activating/auto-restart 里（2026-08-30 决策明确：
+# 「无 StartLimit* 不得硬失败」）。给一个有界重试窗口后停在稳定 failed。
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple

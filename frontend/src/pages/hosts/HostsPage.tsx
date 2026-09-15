@@ -661,6 +661,22 @@ export default function HostsPage() {
     </>
   );
 
+  // #2051：开关必须在**两个**分支都可见——`tableData` 由 `include_retired`
+  // 过滤而来，最后一台在用主机被退役后页面只剩空态；开关若只在有数据分支渲染，
+  // 用户就再也没有 UI 路径勾选它看到退役主机、进而解除退役（ADR-0038 回收路径断头）。
+  const retiredToggle = (
+    <label className="flex items-center gap-2 text-sm text-muted-foreground">
+      <input
+        type="checkbox"
+        checked={showRetired}
+        onChange={(e) => setShowRetired(e.target.checked)}
+        data-testid="hosts-show-retired"
+        className="rounded"
+      />
+      显示已退役
+    </label>
+  );
+
   if (isLoading) {
     return (
       <PageContainer width="wide">
@@ -695,9 +711,15 @@ export default function HostsPage() {
     return (
       <PageContainer width="wide">
         <PageHeader title="主机集群" subtitle="管理和监控测试执行节点" />
+        {/* #2051：空态也要给「显示已退役」开关，否则全退役后无法解除退役 */}
+        <div className="flex items-center justify-end gap-2 py-2">{retiredToggle}</div>
         <EmptyState
-          title="还没有主机"
-          description="添加您的第一台测试执行节点"
+          title={showRetired ? '还没有主机' : '没有在用主机'}
+          description={
+            showRetired
+              ? '当前没有任何主机记录。'
+              : '所有主机都已退役。勾选「显示已退役」可查看并解除退役。'
+          }
           icon={<Server className="w-16 h-16" />}
           action={
             isAdmin ? (
@@ -730,16 +752,7 @@ export default function HostsPage() {
               : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
           </Button>
         )}
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={showRetired}
-            onChange={(e) => setShowRetired(e.target.checked)}
-            data-testid="hosts-show-retired"
-            className="rounded"
-          />
-          显示已退役
-        </label>
+        {retiredToggle}
         {isAdmin && (
           <Button onClick={() => setIsModalOpen(true)}>
             <Plus className="w-4 h-4" />

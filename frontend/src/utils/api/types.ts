@@ -1926,7 +1926,6 @@ export interface PlanRunAbortResult {
   phase?: 'precheck' | 'running';
   aborted_jobs?: number[];
   abort_requested_jobs?: number[];
-  released_leases?: number;
 }
 
 export interface PlanRunDispatchRetryResult {

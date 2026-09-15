@@ -106,6 +106,33 @@ ansible-playbook playbooks/service_agent.yml --limit <HOST_IP> -e agent_service_
 ansible-playbook playbooks/service_agent.yml --limit <HOST_IP> -e agent_service_action=status
 ```
 
+### 时区对齐（与控制面一致，全机群）
+
+装机镜像默认时区为 `America/Los_Angeles`（PDT），与控制面约定的 `Asia/Shanghai`（+0800）
+相差 15 小时，会让主机侧日志时间戳无法与平台时间线直接对照（见 #2095）。
+
+```bash
+# 预演（只读，不改变任何主机状态）
+ansible-playbook -i <inventory> playbooks/set_timezone.yml -e tz_hosts=<group> --check
+
+# 金丝雀先行
+ansible-playbook -i <inventory> playbooks/set_timezone.yml -e tz_hosts=<group> --limit <CANARY_IP>
+
+# 全机群
+ansible-playbook -i <inventory> playbooks/set_timezone.yml -e tz_hosts=<group>
+
+# 让长驻进程（Agent 自身日志）采纳新时区：确认该机**无活跃作业**后**再加此开关
+ansible-playbook -i <inventory> playbooks/set_timezone.yml -e tz_hosts=<group> -e tz_restart_agent=true
+```
+
+要点：
+
+- 改时区**之前**断言本机 UTC 与控制面偏差 ≤ 5s；超差视为**时钟问题**直接失败，不把
+  「时钟真的走偏」用改时区掩盖；
+- 只改时区，不触碰 NTP / 系统时钟 / 硬件时钟；已是目标时区时为 no-op（幂等）；
+- 长驻进程不会因 `/etc/localtime` 变化而重读时区（2026-09-15 实测），故需
+  `-e tz_restart_agent=true` 重启 Agent，其自身日志与后续子进程才会使用新时区。
+
 ## 首次部署
 
 ### 单机首次部署

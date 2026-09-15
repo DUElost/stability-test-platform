@@ -12,6 +12,13 @@ from backend.agent.aee.unisoc_reconciler import UnisocUniviewReconciler
 from backend.agent.registry.local_db import LocalDB
 from backend.agent.watcher.emitter import SignalEmitter
 
+def _ls_l(names, *, sig="drwxrwxrwx 2 root root 3452 2026-09-14 22:49"):
+    """#2010：把名字列表渲染成 `ls -l` 形状（size+mtime 即签名），供 shell_fn 桩使用。"""
+    listing = "".join(f"{sig} {n}\n" for n in names)
+    return listing + "__STP_RC__:0\n"
+
+
+
 
 class _RecordingEmitter:
     def __init__(self) -> None:
@@ -102,6 +109,48 @@ def test_tick_once_emits_uniview_and_creates_dle(tmp_path):
     assert r.tick_once() == 0
 
 
+def test_same_dir_with_new_content_is_repulled_and_reemitted(tmp_path):
+    """#2010：展锐复用同一 event_id 目录追加新异常（真机已确认）。
+
+    目录名不变、内容签名（size+mtime）变化 → 必须重拉并**再次发射**；
+    签名不变 → 不得重发（本用例第 2 拍即反例）。
+    """
+    emitter = _RecordingEmitter()
+    root = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
+    ev = root / "JE.103000004"
+    ev.mkdir(parents=True)
+    (ev / "unievent_info").write_text(
+        json.dumps({"event_name": "Java Crash", "package_name": "com.android.camera2"}),
+        encoding="utf-8",
+    )
+    sig = {"v": "drwxrwxrwx 2 root root 3452 2026-09-08 06:59"}
+
+    def shell_fn(cmd: str, _t: int):
+        if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+            return f"{sig['v']} JE.103000004\n__STP_RC__:0\n"
+        if cmd.startswith("ls -l /data/"):
+            return "__STP_RC__:2\n"
+        if "unievent_info" in cmd:
+            return "unievent_info\n"
+        return None
+
+    pulls: List[str] = []
+
+    def pull_fn(remote: str, _local: str, _t: int) -> bool:
+        pulls.append(remote)
+        return True
+
+    r = _make_reconciler(tmp_path, emitter=emitter, shell_fn=shell_fn, pull_fn=pull_fn)
+    assert r.tick_once() == 1   # 首拍：从未处理 → 发射
+    first_pulls = len(pulls)
+    assert r.tick_once() == 0   # 签名未变 → 不重拉、不重发（反例）
+    assert len(pulls) == first_pulls, "签名未变却重拉"
+    sig["v"] = "drwxrwxrwx 2 root root 3452 2026-09-14 22:49"   # 目录被追加新异常
+    assert r.tick_once() == 1   # 签名变化 → 重拉 + 重发
+    assert len(pulls) == first_pulls + 1, "签名变化却没有重拉"
+    assert len(emitter.calls) == 2
+
+
 def test_tick_once_pulls_device_events_then_emits(tmp_path):
     """Fake adb listing + pull populates local tree then emits (#1043 producer)."""
     device_root = tmp_path / "device" / "uniview"
@@ -113,9 +162,9 @@ def test_tick_once_pulls_device_events_then_emits(tmp_path):
     )
 
     def shell_fn(cmd: str, _timeout: int) -> Optional[str]:
-        if cmd.startswith("ls -1 /data/ylog/uniview_exception"):
-            return "remote_evt\n__STP_RC__:0\n"
-        if cmd.startswith("ls -1 /data/vendor/uniview"):
+        if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+            return _ls_l(["remote_evt"])
+        if cmd.startswith("ls -l /data/vendor/uniview"):
             return "__STP_RC__:2\n"
         if "unievent_info" in cmd and "remote_evt" in cmd:
             return "unievent_info\n"
@@ -228,10 +277,9 @@ class TestProcessedPrune:
 
     def _device_shell(self, names):
         """返回 shell_fn：两个 root 都列出 names（或 None=失败）。"""
-        lines = list(names) + ["__STP_RC__:0"]
-        listing = "\n".join(lines) + "\n"
+        listing = _ls_l(names)
         return lambda cmd, _t: (
-            listing if cmd.startswith("ls -1 /data/") else None
+            listing if cmd.startswith("ls -l /data/") else None
         )
 
     def test_stale_name_pruned_after_streak_live_kept(self, tmp_path, monkeypatch):
@@ -242,10 +290,10 @@ class TestProcessedPrune:
         )
         r._load_processed_state()
         assert r.tick_once() == 0  # 滞回第 1 拍：不裁剪
-        assert r._processed == {"live1", "stale1", "stale2"}
+        assert set(r._processed) == {"live1", "stale1", "stale2"}
         assert r.tick_once() == 0  # 滞回第 2 拍：stale 裁剪
-        assert r._processed == {"live1"}
-        assert json.loads(store._data[r._state_key()]) == ["live1"]
+        assert set(r._processed) == {"live1"}
+        assert list(json.loads(store._data[r._state_key()])) == ["live1"]
 
     def test_local_tree_name_kept_even_if_absent_from_device(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
@@ -260,7 +308,43 @@ class TestProcessedPrune:
         ev.mkdir(parents=True)
         (ev / "unievent_info").write_text("{}", encoding="utf-8")
         r.tick_once()
-        assert r._processed == {"loc1"}
+        assert set(r._processed) == {"loc1"}
+
+    def test_cap_eviction_never_drops_names_still_present(self, tmp_path, monkeypatch):
+        """#2060：上限驱逐不得把仍在场（设备列表/本地树）的条目踢出去。
+
+        原实现只按滞回计数排序取前 overflow 个，未排除在场名字 → 设备事件目录数
+        超过上限时，在场条目被驱逐，而 emit 循环唯一的去重就是本集合成员判定
+        （`_sync_device_events_to_local` 对已同步目录不再重拉、也不把名字加回来）
+        → 稳态下每拍以新 seq_no 重复 emit。
+        """
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "99")
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_MAX_ENTRIES", "2")
+        store = self._seed_store(["live1", "live2", "live3"])
+        r = _make_reconciler(
+            tmp_path, store=store,
+            shell_fn=self._device_shell(["live1", "live2", "live3"]),
+        )
+        r._load_processed_state()
+        r.tick_once()
+        assert set(r._processed) == {"live1", "live2", "live3"}, (
+            "在场条目被上限驱逐 → 下一拍会以新 seq_no 重发（稳态重复 emit）"
+        )
+
+    def test_cap_eviction_still_drops_absent_entries(self, tmp_path, monkeypatch):
+        """上限仍是防膨胀的最后防线：不在场的条目照常驱逐（行为不变）。"""
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "99")
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_MAX_ENTRIES", "2")
+        store = self._seed_store(["live1", "gone1", "gone2"])
+        r = _make_reconciler(
+            tmp_path, store=store, shell_fn=self._device_shell(["live1"]),
+        )
+        r._load_processed_state()
+        r.tick_once()
+        # 上限只要求「不超过」：本次 overflow=1，故驱逐 1 条不在场的、保留在场的那条
+        assert "live1" in r._processed, "在场条目必须保留"
+        assert len(r._processed) == 2
+        assert len({"gone1", "gone2"} & set(r._processed)) == 1
 
     def test_listing_failure_suspends_prune_and_resets_streak(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
@@ -270,7 +354,7 @@ class TestProcessedPrune:
         )
         r._load_processed_state()
         r.tick_once()
-        assert r._processed == {"stale1"}  # 列表失败：不裁剪
+        assert set(r._processed) == {"stale1"}  # 列表失败：不裁剪
         assert r._absent_streak == {}     # 滞回清零
 
     def test_missing_root_is_authoritative_empty(self, tmp_path, monkeypatch):
@@ -280,13 +364,13 @@ class TestProcessedPrune:
 
         def shell_fn(cmd: str, _t: int):
             return (
-                "__STP_RC__:2\n" if cmd.startswith("ls -1 /data/") else None
+                "__STP_RC__:2\n" if cmd.startswith("ls -l /data/") else None
             )
 
         r = _make_reconciler(tmp_path, store=store, shell_fn=shell_fn)
         r._load_processed_state()
         r.tick_once()
-        assert r._processed == set()
+        assert set(r._processed) == set()
 
     def test_missing_marker_treated_as_incomplete(self, tmp_path, monkeypatch):
         """#1820：rc 标记缺失（异常输出/旧桩）保守视为不完整——不裁剪。"""
@@ -295,14 +379,14 @@ class TestProcessedPrune:
 
         def shell_fn(cmd: str, _t: int):
             # 无 __STP_RC__: 标记——模拟异常输出/旧桩
-            if cmd.startswith("ls -1 /data/"):
+            if cmd.startswith("ls -l /data/"):
                 return "live1\n"
             return None
 
         r = _make_reconciler(tmp_path, store=store, shell_fn=shell_fn)
         r._load_processed_state()
         r.tick_once()
-        assert r._processed == {"stale1", "live1"}
+        assert set(r._processed) == {"stale1", "live1"}
 
     def test_legacy_huge_set_converges_to_device_listing(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "2")
@@ -314,8 +398,8 @@ class TestProcessedPrune:
         r._load_processed_state()
         r.tick_once()
         r.tick_once()
-        assert r._processed == {"live_a", "live_b"}
-        assert len(json.loads(store._data[r._state_key()])) == 2
+        assert set(r._processed) == {"live_a", "live_b"}
+        assert len(list(json.loads(store._data[r._state_key()]))) == 2
 
     def test_pruned_name_not_repulled(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
@@ -327,8 +411,8 @@ class TestProcessedPrune:
             return False
 
         def shell_fn(cmd: str, _t: int):
-            if cmd.startswith("ls -1 /data/"):
-                return "fresh1\n__STP_RC__:0\n"
+            if cmd.startswith("ls -l /data/"):
+                return _ls_l(["fresh1"])
             if "unievent_info" in cmd:
                 return "unievent_info\n"
             return None
@@ -337,9 +421,12 @@ class TestProcessedPrune:
             tmp_path, store=store, shell_fn=shell_fn, pull_fn=pull_fn,
         )
         r._load_processed_state()
-        r.tick_once()  # stale1 裁剪（设备已无）；fresh1 在 processed → 不重拉
+        r.tick_once()
         assert not any("stale1" in p for p in pulls)
-        assert not any("fresh1" in p for p in pulls)
+        # #2010 行为变化：旧格式状态（签名未知）下本拍会为 fresh1 重新确认一次内容，
+        # 以发现「同名目录被追加新异常」。签名落定后不再无谓重拉——
+        # 见 test_same_dir_with_new_content_is_repulled_and_reemitted 的第 2 拍。
+        assert any("fresh1" in p for p in pulls)
 
     def test_hard_cap_evicts_longest_absent_first(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1000")
@@ -363,7 +450,7 @@ class TestProcessedPrune:
         r._load_processed_state()
         assert r.tick_once() == 0  # 无新发射，仅裁剪
         # 裁剪必须落盘（否则重启后旧集回归）
-        assert json.loads(store._data[r._state_key()]) == ["live1"]
+        assert list(json.loads(store._data[r._state_key()])) == ["live1"]
 
     def test_missing_uniview_root_treated_as_empty_allows_prune(
         self, tmp_path, monkeypatch,
@@ -373,13 +460,13 @@ class TestProcessedPrune:
         store = self._seed_store(["stale1", "live1"])
 
         def shell_fn(cmd: str, _t: int):
-            if cmd.startswith("ls -1 /data/ylog/uniview_exception"):
-                return "live1\n__STP_RC__:0\n"
-            if cmd.startswith("ls -1 /data/vendor/uniview"):
+            if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+                return _ls_l(["live1"])
+            if cmd.startswith("ls -l /data/vendor/uniview"):
                 return "__STP_RC__:2\n"
             return None
 
         r = _make_reconciler(tmp_path, store=store, shell_fn=shell_fn)
         r._load_processed_state()
         r.tick_once()
-        assert r._processed == {"live1"}
+        assert set(r._processed) == {"live1"}

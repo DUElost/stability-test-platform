@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 
 def _load(name: str, rel: str):
     script_dir = Path(__file__).resolve().parents[2] / rel
@@ -418,20 +420,32 @@ def test_gpu_setup_v109_loop_dismisses_dialogs():
     assert loop_body.index("    dismiss_dialogs") < loop_body.index("am instrument")
 
 
-def _load_gpu_lib_v110():
+def _load_gpu_lib(version: str):
+    """按版本目录加载 gpu_setup 的 `_lib.py`（#2048：名字必须与实际目录一致）。
+
+    旧名 `_load_gpu_lib_v110` 实际加载 v1.0.10，导致「v110」用例覆盖的是另一
+    版本——正是 #755 修复在 v1.1.0 丢失却没人发现的原因之一。
+    """
     import importlib.util
-    d = str(Path(__file__).resolve().parents[2] / "agent/scripts/gpu_setup/v1.0.10")
+    d = str(Path(__file__).resolve().parents[2] / f"agent/scripts/gpu_setup/v{version}")
     sys.path.insert(0, d)
-    spec = importlib.util.spec_from_file_location("gpu_lib_v110", d + "/_lib.py")
+    spec = importlib.util.spec_from_file_location(
+        f"gpu_lib_{version.replace('.', '_')}", d + "/_lib.py"
+    )
     lib = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(lib)
     return lib
 
 
-def test_gpu_setup_v110_retry_uninstall_only_failed_apk(monkeypatch, tmp_path):
+# 历史修复版本 + 当前最新版本都要断言：新版本若从旧基线拷贝，这里会红（#2048）。
+_GPU_SETUP_RETRY_VERSIONS = ("1.0.10", "1.2.0")
+
+
+@pytest.mark.parametrize("version", _GPU_SETUP_RETRY_VERSIONS)
+def test_gpu_setup_retry_uninstall_only_failed_apk(version, monkeypatch, tmp_path):
     """#755：pm install 失败重试前只卸当前 APK 对应包，勿清同批其它包。"""
-    lib = _load_gpu_lib_v110()
+    lib = _load_gpu_lib(version)
     apk = tmp_path / "Antutu_3D_Lite_10.2.9.apk"
     apk.write_bytes(b"apk")
     calls = []
@@ -461,9 +475,10 @@ def test_gpu_setup_v110_retry_uninstall_only_failed_apk(monkeypatch, tmp_path):
     assert f"pm uninstall {lib._ANTUTU_FULL_PKG}" not in uninstalls
 
 
-def test_gpu_setup_v110_retry_uninstall_map():
+@pytest.mark.parametrize("version", _GPU_SETUP_RETRY_VERSIONS)
+def test_gpu_setup_retry_uninstall_map(version):
     """#755：APK 文件名 → 重试卸载包映射。"""
-    lib = _load_gpu_lib_v110()
+    lib = _load_gpu_lib(version)
     assert lib._retry_uninstall_pkgs_for_apk(Path("antutu_benchmark_v10_3d.apk")) == (
         lib._ANTUTU_FULL_PKG,
     )

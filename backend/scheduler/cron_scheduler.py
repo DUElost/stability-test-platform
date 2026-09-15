@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import func, or_, select
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
+from backend.core.metrics import record_retention_txn
 from backend.models.enums import PlanRunStatus
 from backend.models.schedule import TaskSchedule, schedule_timestamp
 
@@ -262,7 +264,14 @@ def purge_run_storage_dirs(run_ids: list) -> set:
 
 
 def _retention_candidate_ids(db, cutoff: datetime, limit: int = 100) -> list[int]:
-    """Bounded leaf-first batch; references are filtered before each LIMIT."""
+    """Bounded leaf-first batch; references are filtered before each LIMIT.
+
+    #2022：本函数**只读**，不再 `FOR UPDATE`。加锁顺序由
+    :func:`_retention_prelock_subtree`（job → lease）与 :func:`_retention_lock_runs`
+    （plan_run）承担——原先在此处先锁 plan_run，与热路径的
+    `job → lease → plan_run` 相反，见 `_retention_prelock_subtree` 的说明。
+    #2105：``limit`` 由 ``plan_run_retention_batch_size`` 提供（持锁窗口的杠杆）。
+    """
     from sqlalchemy.orm import aliased
 
     from backend.models.plan_run import PlanRun
@@ -288,13 +297,80 @@ def _retention_candidate_ids(db, cutoff: datetime, limit: int = 100) -> list[int
             )
             .order_by(PlanRun.started_at, PlanRun.id)
             .limit(limit - len(selected_ids))
-            .with_for_update(skip_locked=True)
             .all()
         )
         if not frontier:
             break
         selected_ids.extend(run_id for (run_id,) in frontier)
     return selected_ids
+
+
+def _retention_prelock_subtree(db, run_ids: list[int]) -> None:
+    """#2022：按共享行加锁全序**预锁**候选 run 的 job / lease 行（job → lease）。
+
+    必须在锁 `plan_run` 之前调用。本函数（保留清理）原先在
+    :func:`_retention_candidate_ids` 里先 `FOR UPDATE` `plan_run`，随后才 DELETE
+    `device_leases` / `job_instance` —— 与 complete / recycler / reconciler /
+    coordinator-heartbeat 的 `job → lease → plan_run` **相反**，争用同一行即成环
+    （与 `#1959` / `#1980` / `#1985` 同源的死锁家族；全序表见
+    `docs/notes/architecture/2026-09-14-shared-row-lock-table.md`）。
+
+    这里只把本函数稍后**本来就会删**的同一批行提前按 id 升序锁住——下方删除内容、
+    删除顺序、候选过滤与判定一律不变，因此不改变 retention 的语义。
+
+    候选 run 全部是「已终态且超过保留期」，其 job/lease 行基本无并发争用；预锁的
+    代价是锁面提前放大（命中率低），换来的是与热路径同序、不成环。
+    """
+    from backend.models.device_lease import DeviceLease
+    from backend.models.job import JobInstance
+
+    if not run_ids:
+        return
+    job_ids = [
+        row[0]
+        for row in db.execute(
+            select(JobInstance.id)
+            .where(JobInstance.plan_run_id.in_(run_ids))
+            .order_by(JobInstance.id)
+            .with_for_update()
+        ).all()
+    ]
+    if not job_ids:
+        return
+    # I1（job → device_leases）：lease 行同样要在 plan_run 之前锁住。
+    db.execute(
+        select(DeviceLease.id)
+        .where(DeviceLease.job_id.in_(job_ids))
+        .order_by(DeviceLease.id)
+        .with_for_update()
+    ).all()
+
+
+def _retention_lock_runs(db, run_ids: list[int], cutoff: datetime) -> list[int]:
+    """#2022：锁内**复核**候选仍满足「终态 + 超过保留期」，并按 id 升序锁住。
+
+    候选来自无锁预读，可能已被并发改动（状态变化、被其它 worker 锁住），故必须
+    在锁内重验；`SKIP LOCKED` 保留原先由候选查询承担的互斥语义（两个 worker 不会
+    重复删除同一 run）。未通过复核的不进入本批（下轮重试），安全。
+
+    链式引用（parent/root）不在本函数复核：那由随后的 `_retention_safe_ids` 在
+    **锁内**用当前库状态计算闭包，本函数只负责「锁 + 终态/年龄复核」。
+    """
+    from backend.models.plan_run import PlanRun
+
+    if not run_ids:
+        return []
+    rows = db.execute(
+        select(PlanRun.id)
+        .where(
+            PlanRun.id.in_(run_ids),
+            PlanRun.status.in_(["SUCCESS", "FAILED", "PARTIAL_SUCCESS"]),
+            PlanRun.started_at < cutoff,
+        )
+        .order_by(PlanRun.id)
+        .with_for_update(skip_locked=True)
+    ).all()
+    return [run_id for (run_id,) in rows]
 
 
 def _retention_safe_ids(db, run_ids: list[int]) -> tuple[list[int], set[int]]:
@@ -346,9 +422,28 @@ def run_retention_cleanup() -> None:
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=_sched().plan_run_retention_days)
 
+    # 持锁窗口（#2104）：候选读之前为 None——失败路径可能在取锁前就抛，
+    # 上报点须先判非 None，否则 except 分支自己会 NameError。
+    lock_t0: float | None = None
     with SessionLocal() as db:
         try:
-            run_ids = _retention_candidate_ids(db, cutoff)
+            # 批大小是**持锁窗口的杠杆**（#2105）：窗口 ∝ 本 tick 处理的 run 数。
+            run_ids = _retention_candidate_ids(
+                db, cutoff, limit=_sched().plan_run_retention_batch_size,
+            )
+            if not run_ids:
+                return
+
+            # #2104：从这里起持有行锁，直到事务结束/会话关闭——窗口长度会上报到
+            # stability_retention_txn_seconds。锁序统一（#2022）之后，「等待」取代
+            # 「死锁」成为这一批行的代价，而窗口长度就是这个代价的上界。
+            lock_t0 = time.perf_counter()
+
+            # #2022：按共享行加锁全序取锁——job → lease（预锁子树）→ plan_run。
+            # 顺序不可调换：反过来（先 plan_run）会与 complete / recycler /
+            # reconciler 的 job → plan_run 成环（详见 _retention_prelock_subtree）。
+            _retention_prelock_subtree(db, run_ids)
+            run_ids = _retention_lock_runs(db, run_ids, cutoff)
             if not run_ids:
                 return
 
@@ -375,6 +470,8 @@ def run_retention_cleanup() -> None:
                         "retention_cleanup deferred: NFS failures=%d kept_ancestors=%d",
                         len(purge_failed), len(deferred_ancestors),
                     )
+                    # 整批被 NFS 失败推迟：锁要到会话关闭才释放，窗口记在返回前。
+                    record_retention_txn(time.perf_counter() - lock_t0)
                     return
 
             stale_job_ids = select(JobInstance.id).where(
@@ -422,6 +519,9 @@ def run_retention_cleanup() -> None:
                 PlanRun.id.in_(safe_run_ids)
             ).delete(synchronize_session=False)
             db.commit()
+            # 窗口到此为止（提交即释放行锁）；**不要**把它挪到下面的 console log
+            # 清理之后——那是提交后的文件操作，不属于持锁窗口。
+            record_retention_txn(time.perf_counter() - lock_t0)
             logger.info(
                 "retention_cleanup deleted runs=%d kept_chain_referenced=%d",
                 len(safe_run_ids),
@@ -441,6 +541,9 @@ def run_retention_cleanup() -> None:
         except Exception:
             logger.warning("retention_cleanup failed", exc_info=True)
             db.rollback()
+            # 失败路径同样占着行锁（回滚前），一并计入窗口；取锁前就失败则不上报。
+            if lock_t0 is not None:
+                record_retention_txn(time.perf_counter() - lock_t0)
 
 
 def _terminal_archive_complete(db, plan_run_id: int) -> bool:

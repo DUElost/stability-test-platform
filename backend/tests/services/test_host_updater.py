@@ -337,12 +337,12 @@ def test_build_tarball_uses_p0_compresslevel(monkeypatch):
 
     monkeypatch.setattr(hu.tarfile, "open", fake_open)
 
-    assert isinstance(hu._build_tarball(), bytes)
+    assert isinstance(hu._build_tarball(kind="code"), bytes)
     assert captured["mode"] == "w:gz"
     assert captured["compresslevel"] == hu._TARBALL_COMPRESSLEVEL == 6
 
     captured.clear()
-    hu._build_tarball(compresslevel=1)
+    hu._build_tarball(kind="code", compresslevel=1)
     assert captured["compresslevel"] == 1
 
 

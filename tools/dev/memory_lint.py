@@ -14,6 +14,14 @@
   索引 ↔ 文件**双向**一致（死链 / 未索引文件都算）；
 - **断链**：正文反引号引用的路径存在性——仓库相对路径缺失 = ERROR；
   `~` / 绝对路径缺失 = WARN（工具升级/环境迁移可能合法）；
+- **记忆目录**：不在仓库内，但各 harness 约定必须单点权威——`memory_dir_candidates()`
+  逐个探测，找不到即显式报错（不静默指向另一个 store）：
+  CodeBuddy `~/.codebuddy/projects/<path-slug>/memory`（slug = 仓库绝对路径去前导 `/`
+  后把 `/` 换成 `-`）；ZCode `~/.zcode/cli/memories/projects/<project-id>/memory`
+  （`<project-id>` = `<仓库目录名>-<id>`，**不是** path-slug）。**多个 harness 同时在用
+  是常态**（本机 CodeBuddy 与 ZCode 两份都在写）——命中多个时同样不静默选第一个：
+  报错、列出在用目录并要求 `--harness` 指定（#2065）。新增/变更约定时同步本函数与
+  `docs/development/ai/harness-adapters.md` 的指针。
 - **可疑绝对断言（WARN）**：`不会跑 / 不会重跑 / 完全不跑 / 零容忍 / 永远`、
   裸计数 `存量 **N 个**` 等未限定表述——提示改为「条件自证 / 现查为准」。
 
@@ -22,6 +30,7 @@
 用法::
 
     python tools/dev/memory_lint.py                  # 本项目默认 memory 目录
+    python tools/dev/memory_lint.py --harness zcode  # 多命中时报错，指定其一
     python tools/dev/memory_lint.py --path <dir>     # 指定目录
     python tools/dev/memory_lint.py --strict         # 有 WARN 也退出 1
 """
@@ -63,7 +72,26 @@ _INDEX_LINK_RE = re.compile(r"\]\(([^)\s]+\.md)\)")
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
 # 反引号内含占位符/通配的引用跳过（无法做存在性判定）
-_PLACEHOLDER_MARKERS = ("...", "<", ">", "*", "…", "$")
+# #2065：`{a,b}` brace glob（如 `backend/agent/{,aee/}CLAUDE.md`）同样无法判定。
+_PLACEHOLDER_MARKERS = ("...", "<", ">", "*", "…", "$", "{", "}")
+
+#: 代码位置后缀（#2065）：`path:123` / `path:123-456` / `path#L12`，以及**多位置列表**
+#: `path:303,331` / `path:75/134/159` / `path:14,117,122-126`（变更审计类笔记里最常见）。
+#: 这些是 AGENTS.md 推荐的引用形式（`file_path:line_number`），判存在性前必须剥离——
+#: 否则每条 `path:line` 都会被报成断链（实测占当时全部断链告警的 181/213）。
+_LOCATION_NUM = r"\d+(?:-\d+)?"  # `12` / `12-14`
+_LOCATION_ANCHOR = r"\d+(?:-L?\d+)?"  # `#L` 后允许 `12` / `12-14` / `12-L14`
+_LOCATION_SEP = r"[,\/]:?"  # `,` / `/` / `/:`（审计笔记里的混写）
+_LOCATION_SUFFIX_RE = re.compile(
+    r"(?::" + _LOCATION_NUM + rf"(?:{_LOCATION_SEP}{_LOCATION_NUM})*"
+    + r"|#L" + _LOCATION_ANCHOR + rf"(?:{_LOCATION_SEP}{_LOCATION_NUM})*)$"
+)
+
+
+def _strip_location_suffix(candidate: str) -> str:
+    """剥掉位置后缀（`:行号`/`:行号-行号`/`#L行号` 及其 `,`/`/` 列表），
+    返回仍可用于存在性判定的路径（#2065）。"""
+    return _LOCATION_SUFFIX_RE.sub("", candidate)
 
 # 候选路径：含 "/" 且形似路径，或带已知仓库前缀
 _REPO_PREFIXES = (
@@ -91,6 +119,52 @@ def default_memory_dir(repo_root: Path) -> Path:
     """本项目在 Codebuddy 下的记忆目录约定：~/.codebuddy/projects/<slug>/memory。"""
     slug = str(repo_root.resolve()).lstrip("/").replace("/", "-")
     return Path.home() / ".codebuddy" / "projects" / slug / "memory"
+
+
+def _zcode_memory_dirs(repo_root: Path) -> list[Path]:
+    """ZCode 的记忆目录（#2065）：~/.zcode/cli/memories/projects/<project-id>/memory。
+
+    ZCode 的目录名是 ``<仓库目录名>-<id>``（不是 path-slug）——与 CodeBuddy **不同根、
+    不同命名规则**，故不能靠改 slug 单点覆盖（#1585 的 Revisit 只预设了改名/迁移）。
+    """
+    base = Path.home() / ".zcode" / "cli" / "memories" / "projects"
+    if not base.is_dir():
+        return []
+    name = repo_root.resolve().name
+    return sorted(
+        p / "memory"
+        for p in base.iterdir()
+        if p.is_dir() and (p.name == name or p.name.startswith(f"{name}-"))
+    )
+
+
+def memory_dir_candidates(repo_root: Path) -> list[tuple[str, Path]]:
+    """(harness, 记忆目录) 候选表——按 harness 约定逐个试（#2065）。"""
+    candidates: list[tuple[str, Path]] = [("codebuddy", default_memory_dir(repo_root))]
+    candidates += [("zcode", p) for p in _zcode_memory_dirs(repo_root)]
+    return candidates
+
+
+def existing_memory_dirs(repo_root: Path) -> list[tuple[str, Path]]:
+    """**实际存在**的记忆目录（顺序同候选表；可能多个 harness 同时在用）。"""
+    return [(h, p) for h, p in memory_dir_candidates(repo_root) if p.is_dir()]
+
+
+def resolve_memory_dir(
+    repo_root: Path, harness: str | None = None,
+) -> tuple[str, Path] | None:
+    """定位**唯一**在用的记忆目录；0 个或 ≥2 个命中都返回 None（调用方须显式报错）。
+
+    ``harness`` 给定时只在同名候选里找。两个理由不静默回落（#2065）：① 默认目标指向
+    CodeBuddy，而当前会话可能跑在 ZCode 上；② 多个 harness 同时在写是常态（本机
+    CodeBuddy 与 ZCode 两份都在）——静默取第一个，得出的结论与「到底几个 store 在用」
+    无关，比报错更难发现。
+    """
+    matches = [
+        (name, path) for name, path in existing_memory_dirs(repo_root)
+        if harness is None or name == harness
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def parse_frontmatter(text: str) -> dict[str, str] | None:
@@ -178,7 +252,10 @@ def lint_memory_dir(memory_dir: Path, *, repo_root: Path) -> Report:
     for path in files:
         text = path.read_text(encoding="utf-8")
         for token in _BACKTICK_RE.findall(text):
-            for candidate in _candidate_paths(token):
+            for raw_candidate in _candidate_paths(token):
+                candidate = _strip_location_suffix(raw_candidate)
+                if not candidate:
+                    continue
                 if candidate.startswith(("~", "/")):
                     resolved = Path(candidate).expanduser()
                     if not resolved.exists():
@@ -203,9 +280,35 @@ def lint_memory_dir(memory_dir: Path, *, repo_root: Path) -> Report:
     return report
 
 
+def _report_no_unique_dir(repo_root: Path, *, harness: str | None) -> int:
+    """没有**唯一**在用目录时显式报错（#2065）——不静默拿一个 store 的结论当全局。"""
+    in_use = existing_memory_dirs(repo_root)
+    if not in_use:
+        print("memory-lint: 找不到本项目的记忆目录（下列候选都不存在）：")
+        for name, candidate in memory_dir_candidates(repo_root):
+            print(f"  - {name}: {candidate}")
+        print("请用 --path 显式指定（不静默指向另一个 harness 的 store）——见 #2065")
+        return 2
+    if harness is None:
+        print(
+            f"memory-lint: 有 {len(in_use)} 个 harness 的记忆目录在用，"
+            "须用 --harness 指定其一（不静默选第一个）："
+        )
+    else:
+        print(f"memory-lint: --harness={harness} 没有对应的在用目录，在用：")
+    for name, candidate in in_use:
+        print(f"  - {name}: {candidate}")
+    print("——见 #2065（多个 store 同时在写时不静默选第一个）")
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="memory 目录机械化体检（只读）")
     parser.add_argument("--path", default=None, help="memory 目录（默认本项目约定路径）")
+    parser.add_argument(
+        "--harness", default=None,
+        help="多个 harness 在用时的选择（候选见 memory_dir_candidates）",
+    )
     parser.add_argument(
         "--repo-root", default=None, help="仓库根（校验断链用，默认当前目录）",
     )
@@ -213,15 +316,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo_root).resolve() if args.repo_root else Path.cwd()
-    memory_dir = (
-        Path(args.path).expanduser().resolve()
-        if args.path
-        else default_memory_dir(repo_root)
-    )
+    if args.path:
+        harness = "explicit --path"
+        memory_dir = Path(args.path).expanduser().resolve()
+    else:
+        resolved = resolve_memory_dir(repo_root, harness=args.harness)
+        if resolved is None:
+            return _report_no_unique_dir(repo_root, harness=args.harness)
+        harness, memory_dir = resolved
 
     report = lint_memory_dir(memory_dir, repo_root=repo_root)
 
-    print(f"memory-lint: {memory_dir}")
+    print(f"memory-lint: {memory_dir}（harness={harness}）")
     for msg in report.errors:
         print(f"  [ERROR] {msg}")
     for msg in report.warnings:

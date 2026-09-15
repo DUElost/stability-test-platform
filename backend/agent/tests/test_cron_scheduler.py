@@ -294,6 +294,12 @@ class TestRunRetentionCleanup:
         #1827: candidate selection queries ``PlanRun.id`` (not the entity) and
         calls ``.exists()`` / ``.order_by()`` / ``.with_for_update()`` before
         LIMIT — map id rows explicitly so the sync cleanup path still runs.
+
+        #2022: lock path moved off ``db.query(...).with_for_update()`` onto
+        ``db.execute(select(...).with_for_update())`` for job → lease →
+        plan_run. Unit fixtures have no jobs/leases, so those selects return
+        ``[]``; only ``plan_run`` id rows must come back so
+        ``_retention_lock_runs`` does not empty the batch before deletes.
         """
         from backend.models.device_lease import DeviceLease
         from backend.models.job import JobArtifact, JobInstance, StepTrace
@@ -312,8 +318,25 @@ class TestRunRetentionCleanup:
             JobInstance: FakeQuery(),
         }
         db.query.side_effect = lambda *a, **k: queries.get(a[0], FakeQuery())
-        # select(JobInstance.id)...; no jobs in these unit fixtures.
-        db.execute.return_value.all.return_value = []
+
+        def _execute(stmt, *args, **kwargs):
+            result = MagicMock()
+            tables = set()
+            try:
+                tables = {
+                    getattr(getattr(col, "table", None), "name", None)
+                    for col in stmt.selected_columns
+                }
+            except Exception:
+                tables = set()
+            # plan_run lock / re-check; job_instance / device_lease prelock &
+            # stale-job listing stay empty in these fixtures.
+            result.all.return_value = (
+                id_rows if PlanRun.__tablename__ in tables else []
+            )
+            return result
+
+        db.execute.side_effect = _execute
         return db
 
     def test_deletes_stale_runs(self):

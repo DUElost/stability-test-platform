@@ -426,6 +426,38 @@ _FATAL_PUSH_ERROR_SUBSTRINGS = (
 )
 
 
+#: 退役早退码（#1920）——单独识别以便给 fatal 归因到 HOST_RETIRED（#2059）。
+_HOST_RETIRED_PUSH_MARKER = "host_retired"
+
+
+def _fatal_admission_for_push_failures(
+    push_fatal: list[dict],
+) -> tuple[str, dict]:
+    """push 阶段 fatal 的终态归因（#2059）。
+
+    退役主机（``#1920`` 收入 fatal 子串的 ``host_retired``）必须走 ``HOST_RETIRED``，
+    与 Phase B 终检同口径（ADR-0038 D-2/D5bis）；否则 ``result_summary.reason`` /
+    ``dispatch_state.last_error`` / 审计都记成通用 ``script_sync_config_error``，
+    运维看到的是「脚本配置错误」，而同 PR 新增的 ``HOST_RETIRED`` 分支永远走不到。
+
+    副作用：把命中退役的条目 ``reason`` 就地改写为 ``host_retired``，使
+    ``detail.hosts[].reason`` 与 fatal reason 一致（原先恒为 ``script_sync_config_error``）。
+    """
+    retired = [
+        entry for entry in push_fatal
+        if _is_host_retired_push_error(entry.get("error"))
+    ]
+    if retired:
+        for entry in retired:
+            entry["reason"] = "host_retired"
+        return "HOST_RETIRED", {"hosts": push_fatal}
+    return "script_sync_config_error", {"hosts": push_fatal}
+
+
+def _is_host_retired_push_error(err: Optional[str]) -> bool:
+    return bool(err) and _HOST_RETIRED_PUSH_MARKER in err
+
+
 def _is_fatal_push_error(err: Optional[str]) -> bool:
     return bool(err) and any(
         substr in err for substr in _FATAL_PUSH_ERROR_SUBSTRINGS
@@ -595,7 +627,9 @@ async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:
 
         # Deterministic config error fails fast — requeueing cannot fix it.
         if push_fatal:
-            raise _FatalAdmission("script_sync_config_error", {"hosts": push_fatal})
+            # #2059：归因（含退役主机 → HOST_RETIRED）抽成纯函数，见其 docstring。
+            fatal_reason, fatal_detail = _fatal_admission_for_push_failures(push_fatal)
+            raise _FatalAdmission(fatal_reason, fatal_detail)
 
         if push_transient:
             # Retryable infra faults take priority over a fatal mismatch
