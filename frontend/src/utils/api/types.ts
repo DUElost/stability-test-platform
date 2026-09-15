@@ -1740,7 +1740,7 @@ export interface WatcherPlatformBucket {
   /** 本 PlanRun 内该平台去重参与设备数（终态无 RUNNING 时兜底展示） */
   participating_device_count?: number;
   /**
-   * R4-b b1（ADR-0032 v0.8 裁决 2026-09-15）：该平台是否有采集实现。
+   * R4-b b1（ADR-0032，2026-09-15 裁决；ADR 版本待落地回填）：该平台是否有采集实现。
    * false → 展示「平台未支持」，区分「没有异常」与「平台未支持」。
    * 缺省（旧后端）视作 true。
    */
