@@ -54,3 +54,10 @@ code 层已同步/已重启/已写 digest 却记 ok=False、无任何指引、�
   的 legacy 路径（宽 sudoers）不受影响；
 - 若后续 wrapper 覆盖扩到全部主机，本单的指引文案与 ADR-0037「wrapper 只由 Ansible 更新」
   需保持同步。
+
+2026-09-15 后续（#2180，D 步）：30 台存量主机全部迁移完成、宽 sudoers 48/48 清除后，
+本单遗留的 legacy 面已整体退役——`USE_PRIV_WRAPPER` 分支、`sudo rsync/tee` 命令体与
+`STP_RESOURCES_PRIV_FALLBACK`/`resources_priv_fallback` 审计字段全部删除，资源层
+digest 写成单一 wrapper 调用；wrapper 旧版场景由脚本头 `selftest`（子命令契约校验）
+在**任何动作之前** fail-closed 拦截，指引文案收敛为一条。本单的「不静默降级」语义
+由 fail-closed 完整继承，见 `2026-09-15-retire-legacy-priv-face-2180.md`。

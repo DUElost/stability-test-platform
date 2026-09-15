@@ -229,30 +229,20 @@ fi
 find "$CODE_TMP" "$RES_TMP" -type f \( -name "*.py" -o -name "*.sh" \) \
     -exec sed -i 's/\r$//' {{}} + 2>/dev/null || true
 
-# 提权边界（#1250/ADR-0037）：优先走 stp-agent-priv wrapper；未迁移主机
-# （wrapper 或 conf 缺失）回退旧 sudo 面并留哨兵，便于控制面观测迁移进度。
+# 提权边界（#1250/ADR-0037；D 步 #2180）：wrapper 是**唯一**提权面——legacy 裸
+# sudo 面（rsync/tee/mkdir/install/chown/systemctl/任意 sh）已随 fleet 迁移退役
+# （宽 sudoers 48/48 已清除；ADR-0037 §5 Revisit #1 执行完毕）。wrapper 缺失或
+# selftest 失败（含子命令契约校验）即 fail-closed：带可执行指引退出、不执行任何
+# 后续动作，也不回退裸 sudo。载荷不含 wrapper 本体（ADR-0037——wrapper 在安装
+# 目录外、root 所有，由 install/Ansible 轨道交付）。
 PRIV="/usr/local/sbin/stp-agent-priv"
-USE_PRIV_WRAPPER=0
-if sudo -n "$PRIV" selftest >/dev/null 2>&1; then
-    USE_PRIV_WRAPPER=1
-    echo "STP_PRIV_MODE=wrapper"
-else
-    echo "STP_PRIV_FALLBACK=legacy"
+if ! sudo -n "$PRIV" selftest >/dev/null 2>&1; then
+    echo "ERROR: stp-agent-priv selftest failed (missing/outdated wrapper?); run tools/ansible/playbooks/update_agent.yml on this host, then retry"
+    exit 1
 fi
+echo "STP_PRIV_MODE=wrapper"
 
-# #1942：wrapper 能力协商。热更新载荷不含 wrapper（ADR-0037——wrapper 在安装目录
-# 外、root 所有，由 install/Ansible 轨道交付），存量主机可能带着缺后加子命令的旧
-# wrapper：若不在动作前探测，失败会发生在「代码已同步、服务已重启」之后（尾部
-# exit 2），既留「已部署却记失败」的半态，又让下一次批量重复全量部署。
-# `write-digest --digest ""` 是空操作探针（支持时打 STP_WRITE_DIGEST_SKIPPED 并
-# exit 0；旧 wrapper 走 argparse 拒绝 exit 2），探针本身不落任何文件。
 if [ -n "$CODE_TARB_PATH" ]; then
-if [ "$USE_PRIV_WRAPPER" = "1" ] && [ -n "$ARTIFACT_DIGEST" ]; then
-    if ! sudo -n "$PRIV" write-digest --digest "" >/dev/null 2>&1; then
-        echo "ERROR: stp-agent-priv lacks write-digest (outdated wrapper); run tools/ansible/playbooks/update_agent.yml on this host, then retry"
-        exit 1
-    fi
-fi
 
 # Capture pre-sync requirements.txt sha to detect dependency changes
 OLD_REQ_SHA=$(sha256sum "$INSTALL_DIR/agent/requirements.txt" 2>/dev/null | cut -d' ' -f1 || echo "none")
@@ -266,155 +256,27 @@ APPLY_T0=$(date +%s%3N)
 # MTBF 资源清掉（2026-08-20 冒烟 #214/#216「APK 不存在」根因）。
 # ADR-0040 §4.3 P2 前置（#1950）：resources/ 整树加 protect（防源树删除
 # 传播到 host 清掉大件），不 exclude——分发照旧（wrapper 路径同语义）。
-if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-    # wrapper：固定目标 + 固定 excludes（含 mtbf protect）+ --safe-links
-    sudo "$PRIV" apply-code --staged "$CODE_TMP"
-else
-    # #2030：exclude 面与 digest 输入集 / wrapper FIXED_EXCLUDES / Ansible
-    # agent_install_excludes 同源——`--delete`（非 --delete-excluded）下
-    # excluded 项不参与删除，宿主侧已有文件不受影响。
-    sudo rsync -av --delete \
-        --exclude='__pycache__/' \
-        --exclude='tests/' \
-        --exclude='test_*.py' \
-        --exclude='venv/' \
-        --exclude='logs/' \
-        --exclude='stp_agent_priv.py' \
-        --exclude='stp_schemas/' \
-        --exclude='.deps_installed_sha' \
-        --exclude='resources/mtbf/' \
-        --exclude='.env.example' \
-        --exclude='install_agent.sh' \
-        --exclude='agentctl.sh' \
-        --exclude='DEPLOY.md' \
-        --exclude='stability-test-agent.service' \
-        --exclude='hosts.txt' \
-        --exclude='VERSION' \
-        --exclude='ARTIFACT_DIGEST' \
-        --exclude='ARTIFACT_DIGEST_RESOURCES' \
-        --filter='protect resources/' \
-        "$CODE_TMP/" "$INSTALL_DIR/agent/"
-fi
+# wrapper：固定目标 + 固定 excludes（含 mtbf protect）+ --safe-links
+sudo "$PRIV" apply-code --staged "$CODE_TMP"
 
 CODE_VERSION="{code_version}"
 if [ -n "$CODE_VERSION" ]; then
-    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-        sudo "$PRIV" write-version --version "$CODE_VERSION"
-    else
-        echo "$CODE_VERSION" | sudo tee "$INSTALL_DIR/agent/VERSION" > /dev/null
-    fi
+    sudo "$PRIV" write-version --version "$CODE_VERSION"
 fi
 
 if [ -f "$CODE_TMP/stp_schemas/pipeline_schema.json" ]; then
-    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-        sudo "$PRIV" install-schema --file "$CODE_TMP/stp_schemas/pipeline_schema.json"
-    else
-        sudo mkdir -p "$INSTALL_DIR/schemas"
-        sudo install -m 0644 "$CODE_TMP/stp_schemas/pipeline_schema.json" "$INSTALL_DIR/schemas/pipeline_schema.json"
-    fi
+    sudo "$PRIV" install-schema --file "$CODE_TMP/stp_schemas/pipeline_schema.json"
 fi
 
 if [ "$SYNC_AGENT_SECRET" = "1" ]; then
-    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-        sudo "$PRIV" sync-env --secret-b64 "$AGENT_SECRET_B64"
-    else
-    sudo INSTALL_DIR="$INSTALL_DIR" AGENT_SECRET_B64="$AGENT_SECRET_B64" python3 - <<'PY'
-import base64
-import os
-import pathlib
-import sys
-
-env_path = pathlib.Path(os.environ["INSTALL_DIR"]) / ".env"
-if not env_path.exists():
-    print("ERROR: Agent env file missing at " + str(env_path), file=sys.stderr)
-    raise SystemExit(1)
-
-secret = base64.b64decode(os.environ["AGENT_SECRET_B64"]).decode("utf-8")
-lines = env_path.read_text(encoding="utf-8").splitlines()
-updated_lines = []
-replaced = False
-
-for line in lines:
-    if line.startswith("AGENT_SECRET="):
-        updated_lines.append("AGENT_SECRET=" + secret)
-        replaced = True
-    else:
-        updated_lines.append(line)
-
-if not replaced:
-    updated_lines.append("AGENT_SECRET=" + secret)
-
-env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
-PY
-    fi
+    sudo "$PRIV" sync-env --secret-b64 "$AGENT_SECRET_B64"
 fi
 
-if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-    sudo "$PRIV" sync-env --overrides-b64 "$ENV_OVERRIDES_B64" --path-keys-b64 "$ENV_PATH_KEYS_B64"
-else
-sudo INSTALL_DIR="$INSTALL_DIR" ENV_OVERRIDES_B64="$ENV_OVERRIDES_B64" ENV_PATH_KEYS_B64="$ENV_PATH_KEYS_B64" python3 - <<'PY'
-import base64
-import json
-import os
-import pathlib
-import sys
-
-env_path = pathlib.Path(os.environ["INSTALL_DIR"]) / ".env"
-overrides = json.loads(base64.b64decode(os.environ["ENV_OVERRIDES_B64"]).decode("utf-8"))
-path_keys = json.loads(base64.b64decode(os.environ["ENV_PATH_KEYS_B64"]).decode("utf-8"))
-if not overrides:
-    print("STP_ENV_SYNCED=")
-    print("STP_ENV_PATH_MISSING=")
-    raise SystemExit(0)
-
-if not env_path.exists():
-    print("ERROR: Agent env file missing at " + str(env_path), file=sys.stderr)
-    raise SystemExit(1)
-
-lines = env_path.read_text(encoding="utf-8").splitlines()
-seen = set()
-updated_keys = []
-new_lines = []
-
-for line in lines:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or "=" not in line:
-        new_lines.append(line)
-        continue
-    key, _, _ = line.partition("=")
-    key = key.strip()
-    if key in overrides:
-        new_lines.append(f"{{key}}={{overrides[key]}}")
-        seen.add(key)
-        updated_keys.append(key)
-    else:
-        new_lines.append(line)
-
-for key, val in overrides.items():
-    if key not in seen:
-        new_lines.append(f"{{key}}={{val}}")
-        updated_keys.append(key)
-
-env_path.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")
-print("STP_ENV_SYNCED=" + ",".join(sorted(updated_keys)))
-
-missing = {{
-    key: overrides[key]
-    for key in sorted(path_keys)
-    if key in overrides and not os.path.exists(overrides[key])
-}}
-print("STP_ENV_PATH_MISSING=" + base64.b64encode(
-    json.dumps(missing, sort_keys=True).encode("utf-8")
-).decode("ascii"))
-PY
-fi
+# .env 受控键覆盖（wrapper 内部校验键名与值）
+sudo "$PRIV" sync-env --overrides-b64 "$ENV_OVERRIDES_B64" --path-keys-b64 "$ENV_PATH_KEYS_B64"
 
 # Fix ownership
-if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-    sudo "$PRIV" fix-ownership
-else
-    sudo chown -R {user}:{group} "$INSTALL_DIR"
-fi
+sudo "$PRIV" fix-ownership
 
 # Refresh Python dependencies when requirements.txt content changed, OR when a
 # previous pip for the current requirements SHA never completed successfully
@@ -442,12 +304,7 @@ if [ "$NEED_PIP" -eq 1 ]; then
         echo "STP_DEPS_REFRESHED=0"
         exit 1
     fi
-    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-        sudo "$PRIV" deps-marker --sha "$NEW_REQ_SHA"
-    else
-        echo "$NEW_REQ_SHA" | sudo tee "$DEPS_MARKER" > /dev/null
-        sudo chown {user}:{group} "$DEPS_MARKER"
-    fi
+    sudo "$PRIV" deps-marker --sha "$NEW_REQ_SHA"
     DEPS_REFRESHED=1
 fi
 echo "STP_DEPS_REFRESHED=$DEPS_REFRESHED"
@@ -456,11 +313,7 @@ echo "STP_REMOTE_APPLY_MS=$((APPLY_T1 - APPLY_T0))"
 
 # Restart service
 RESTART_T0=$(date +%s%3N)
-if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-    sudo "$PRIV" restart
-else
-    sudo systemctl restart "$SERVICE_NAME"
-fi
+sudo "$PRIV" restart
 
 # Verify service came back up（#1253 / R14-F07：WARN 不算成功——systemd 接受
 # 重启但新进程立即崩溃时，必须让 API 得到 ok=False 而不是记录部署修订）。
@@ -484,11 +337,7 @@ echo "OK: service restarted successfully"
 # ADR-0040 D2：收敛成功后受控写入 ARTIFACT_DIGEST（探活通过才写——中途失败
 # 保持旧 digest，下一次收敛按 drift 重做）。与 VERSION 同通道、同信任模型。
 if [ -n "$ARTIFACT_DIGEST" ]; then
-    if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-        sudo "$PRIV" write-digest --digest "$ARTIFACT_DIGEST"
-    else
-        printf '%s\n' "$ARTIFACT_DIGEST" | sudo tee "$INSTALL_DIR/agent/ARTIFACT_DIGEST" > /dev/null
-    fi
+    sudo "$PRIV" write-digest --digest "$ARTIFACT_DIGEST"
     echo "STP_ARTIFACT_DIGEST=$ARTIFACT_DIGEST"
 fi
 
@@ -498,42 +347,11 @@ fi
 # 空集守卫在控制面（plan_convergence：控制面 resources 分区为空永不下发本层）。
 if [ -n "$RESOURCES_TARB_PATH" ]; then
 RES_APPLY_T0=$(date +%s%3N)
-USE_RES_WRAPPER=$USE_PRIV_WRAPPER
-if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-    # apply-resources 能力协商（#1942 同模式）。#2024：wrapper 模式下 sudoers 已按
-    # ADR-0037 收窄为「wrapper + 固定 systemctl」，旧 wrapper 主机上裸 sudo rsync/tee
-    # 会被拒 —— 原实现把「wrapper 旧版本」与「#1250 前宽 sudoers 存量机」混进同一个
-    # legacy 臂，导致前者在 set -e 下静默中止整段脚本（code 层已成功却记失败、无指引、
-    # 每轮重发 130MB resources 载荷）。与 code 层 write-digest 同语义：显式失败 +
-    # 可执行指引；legacy sudo 面只在 USE_PRIV_WRAPPER=0（宽 sudoers 存量机）可达。
-    if ! sudo -n "$PRIV" apply-resources --help >/dev/null 2>&1; then
-        echo "STP_RESOURCES_PRIV_FALLBACK=legacy"
-        echo "ERROR: stp-agent-priv lacks apply-resources (outdated wrapper); run tools/ansible/playbooks/update_agent.yml on this host, then retry"
-        exit 1
-    fi
-fi
-if [ "$USE_RES_WRAPPER" = "1" ]; then
-    sudo "$PRIV" apply-resources --staged "$RES_TMP"
-else
-    sudo rsync -a --no-owner --no-group --delete --safe-links \
-        --exclude='mtbf/' \
-        --filter='protect mtbf/' \
-        "$RES_TMP/resources/" "$INSTALL_DIR/agent/resources/"
-fi
-# resources 身份在收敛成功后写入（write-digest --kind resources；旧 wrapper
-# 缺 --kind → WARN 跳过，P2-B 对该主机多一次全量 resources 部署，安全方向）。
-if [ "$USE_RES_WRAPPER" = "1" ]; then
-    if sudo -n "$PRIV" write-digest --digest "" --kind resources >/dev/null 2>&1; then
-        sudo "$PRIV" write-digest --kind resources --digest "$RESOURCES_DIGEST"
-        echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
-    else
-        # 旧 wrapper 缺 --kind：WARN 跳过（不走绕过提权边界的裸写）
-        echo "WARN: resources digest not written (outdated wrapper); run tools/ansible/playbooks/update_agent.yml on this host"
-    fi
-else
-    printf '%s\n' "$RESOURCES_DIGEST" | sudo tee "$INSTALL_DIR/agent/ARTIFACT_DIGEST_RESOURCES" > /dev/null
-    echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
-fi
+# wrapper 子命令契约由脚本开头 selftest 保证（apply-resources/write-digest --kind
+# 均在契约表内，旧 wrapper 会在 selftest 阶段 fail-closed）。
+sudo "$PRIV" apply-resources --staged "$RES_TMP"
+sudo "$PRIV" write-digest --kind resources --digest "$RESOURCES_DIGEST"
+echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
 echo "STP_RESOURCES_APPLY_MS=$(( $(date +%s%3N) - RES_APPLY_T0 ))"
 echo "STP_RESOURCES_APPLIED=1"
 fi
@@ -570,6 +388,9 @@ def _build_remote_script(
         json.dumps(agent_path_keys_to_verify(env_overrides)).encode("utf-8")
     ).decode("ascii")
 
+    # #2180：user/group 已不被远端脚本使用（属主由 wrapper 内部固定），但保留在
+    # 签名与调用方（安装器/测试契约稳定）；脚本模板里对应的占位符已删除，多余
+    # 关键字参数对 str.format 无害。
     return _REMOTE_SCRIPT.format(
         install_dir=install_dir,
         service_name=service_name,
@@ -641,13 +462,11 @@ def _parse_deps_refreshed(stdout_text: str) -> bool:
 
 
 def _parse_priv_mode(stdout_text: str) -> str:
-    """提权通道：#1250 迁移期 wrapper 与 legacy 并存，远端留模式哨兵。"""
+    """提权通道（#2180 后仅一态）：远端在 wrapper selftest 通过后打
+    ``STP_PRIV_MODE=wrapper``；脚本更早失败（wrapper 缺失/旧版）时为 unknown。"""
     for line in stdout_text.splitlines():
-        line = line.strip()
-        if line == "STP_PRIV_MODE=wrapper":
+        if line.strip() == "STP_PRIV_MODE=wrapper":
             return "wrapper"
-        if line == "STP_PRIV_FALLBACK=legacy":
-            return "legacy"
     return "unknown"
 
 
@@ -862,10 +681,6 @@ def execute_hot_update(
             env_keys_synced = _parse_env_synced(out_text)
             env_paths_missing = _parse_env_paths_missing(out_text)
             priv_mode = _parse_priv_mode(out_text)
-            # #2024：资源层「wrapper 缺 apply-resources → 显式失败」哨兵入 result/审计
-            resources_priv_fallback = (
-                "STP_RESOURCES_PRIV_FALLBACK=legacy" in out_text
-            )
 
             if exit_code != 0:
                 logger.error("hot_update_remote_failed exit=%d stderr=%s", exit_code, err_text[:500])
@@ -880,7 +695,6 @@ def execute_hot_update(
                     "env_paths_missing": env_paths_missing,
                     "code_version": code_version,
                     "priv_mode": priv_mode,
-                    "resources_priv_fallback": resources_priv_fallback,
                     "artifact_digest": artifact_digest,
                     "phases": phases,
                 }
@@ -907,7 +721,6 @@ def execute_hot_update(
                 "env_paths_missing": env_paths_missing,
                 "code_version": code_version,
                 "priv_mode": priv_mode,
-                "resources_priv_fallback": resources_priv_fallback,
                 "artifact_digest": artifact_digest,
                 "phases": phases,
             }

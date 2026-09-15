@@ -98,12 +98,16 @@ Class: bug-fix
 - **R02 安全联审**（#1250 验收第 3 条）——独立于实现，需评审一稿；
 - **真实主机迁移验证**：隔离主机跑 `update_agent.yml`（wrapper 安装 + sudoers
   重写 + `priv_mode` 观测）——本机为生产控制面宿主，未做跨机破坏性验证；
-- 存量主机全部迁移前，`priv_mode=legacy` 仍会出现（预期，见 Revisit ①）。
+  （2026-09-15 已补：B/C 步全 fleet 迁移与窄 sudoers 收口完成，见 #2134；
+  `priv_mode=legacy` 自 #2180 起不再可能——哨兵与分支已删。）
 
 ## Revisit
 
 - fleet 全部 `priv_mode=wrapper` 后，删除 host_updater 的 legacy 分支与哨兵
-  解析（ADR-0037 §5 Revisit ①）；
+  解析（ADR-0037 §5 Revisit ①）。
+  **（2026-09-15 已执行：fleet 48/48 wrapper + 宽文件清除 + flash 链无宽文件
+  主机验收通过 → legacy 分支/哨兵删除、fail-closed；见
+  `2026-09-15-retire-legacy-priv-face-2180.md`）**；
 - ADR-0035 per-host 凭据落地后重审 wrapper 授权主体（共享 agent secret →
   主机身份）；
 - `flash_preflight` 恢复修复能力需**新版本**脚本改调 wrapper 子命令；
