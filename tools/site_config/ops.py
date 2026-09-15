@@ -49,6 +49,8 @@ class Ops(Protocol):
 
     def ensure_dir(self, path: Path, mode: int, owner: str) -> None: ...
 
+    def ensure_plain_dir(self, path: Path) -> None: ...
+
     def chown(self, path: Path, owner: str) -> None: ...
 
     def path_uid(self, path: Path) -> int | None: ...
@@ -124,12 +126,26 @@ class LocalOps:
         self.run(["useradd", "--system", "--create-home", "--home-dir", home, name])
 
     def ensure_dir(self, path: Path, mode: int, owner: str) -> None:
+        """Ensure a directory exists and hand it *recursively* to ``owner``.
+
+        Only for directories the site itself owns and fills (deploy root, logs).
+        Never use it on a mount point or a shared-storage path: the recursive
+        chown would rewrite the ownership of everything already on that disk.
+        """
         directory = Path(path)
         if not directory.exists():
             directory.mkdir(parents=True, mode=mode)
         else:
             os.chmod(directory, mode)
         self.chown(directory, owner)
+
+    def ensure_plain_dir(self, path: Path) -> None:
+        """Create the directory when missing; never touch mode or ownership.
+
+        For mount points and data-disk subtrees: an existing directory (or the
+        root of a freshly mounted disk) must keep whatever it already has.
+        """
+        Path(path).mkdir(parents=True, exist_ok=True)
 
     def chown(self, path: Path, owner: str) -> None:
         self.run(["chown", "-R", f"{owner}:{owner}", str(path)])

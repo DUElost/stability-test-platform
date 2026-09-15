@@ -59,7 +59,9 @@ class FakeOps:
     def machine(self) -> str:
         return "x86_64"
 
-    def ensure_dir(self, path, mode: int, owner: str) -> None:
+    def ensure_plain_dir(self, path) -> None:
+        # 记录调用：测试要证明存储准备**不**使用会递归 chown 的 ensure_dir
+        self.calls.append(("ensure_plain_dir", str(path)))
         Path(path).mkdir(parents=True, exist_ok=True)
 
 
@@ -269,6 +271,57 @@ def test_prepare_storage_mounts_and_binds_with_fstab_entries(tmp_path, monkeypat
     text = fstab.read_text(encoding="utf-8")
     assert f"UUID=1234-abcd {host_mount} ext4 defaults,nofail 0 2" in text
     assert f"{host_mount}/city-b/aee_events {mount_path} none bind,nofail 0 0" in text
+
+
+def test_prepare_storage_never_chowns_or_remounts_an_existing_mount(tmp_path, monkeypatch):
+    """重跑时 /srv/hdd 已是挂载点：既不重复 mount，也绝不递归改属主。
+
+    `ensure_dir` 末尾是 `chown -R root:root`——用在挂载点上会把整盘既有数据
+    （238 上是 71.5G 的 aee_events，属主 uid 1000）静默改成 root。
+    """
+    from tools.site_config import bootstrap
+
+    fstab = tmp_path / "fstab"
+    fstab.write_text("", encoding="utf-8")
+    host_mount = tmp_path / "srv/hdd"
+    host_mount.mkdir(parents=True)
+    (host_mount / "existing-data").mkdir()
+    monkeypatch.setattr(bootstrap, "HOST_MOUNT", str(host_mount))
+    monkeypatch.setattr(bootstrap, "FSTAB", fstab)
+    monkeypatch.setattr(bootstrap, "_mounted", lambda target: True)
+
+    ops = probe_ops(responses={"blkid -s UUID": (0, "1234-abcd\n")})
+    actions, _ = bootstrap.prepare_storage(
+        ops, disk="/dev/sdb", mount_path=str(tmp_path / "srv/stp-aee"),
+        subdir="city-b/aee_events", dry_run=False, fix=True,
+    )
+
+    invoked = [call[0] for call in ops.calls if call]
+    assert "chown" not in invoked
+    assert "mount" not in invoked, "已是挂载点：不该重复挂载"
+    assert ("ensure_plain_dir", str(host_mount)) in ops.calls
+    # 既有数据目录原样保留（没有被复制、移动或删除）
+    assert (host_mount / "existing-data").is_dir()
+    assert any("bound" in line or "already" in line or "fstab" in line for line in actions) or actions == []
+
+
+def test_local_ops_plain_dir_keeps_ownership_and_mode(tmp_path):
+    """真实实现：只创建目录，不 chmod/chown（属主保持调用者）。"""
+    from tools.site_config.ops import LocalOps
+
+    target = tmp_path / "nested/keep-me"
+    LocalOps().ensure_plain_dir(target)
+    assert target.is_dir()
+    assert os.stat(target).st_uid == os.getuid()
+    # 既存目录不被改动
+    existing = tmp_path / "existing"
+    existing.mkdir(mode=0o750)
+    before = os.stat(existing)
+    LocalOps().ensure_plain_dir(existing)
+    after = os.stat(existing)
+    assert (before.st_uid, before.st_gid, stat.S_IMODE(before.st_mode)) == (
+        after.st_uid, after.st_gid, stat.S_IMODE(after.st_mode),
+    )
 
 
 def test_prepare_storage_never_touches_the_host_in_report_mode(tmp_path, monkeypatch):

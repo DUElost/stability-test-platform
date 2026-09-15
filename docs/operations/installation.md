@@ -82,9 +82,9 @@ sudo ./deploy/install.sh --no-fix   # 宿主机写操作（venv/建库/挂盘/fs
 
 - 建工具环境 `/opt/stp-tool`（pydantic/pyyaml/psycopg）；
 - 建空库与角色（`sudo -u postgres`），只**建**空库，绝不迁移或清空既有库；
-- 挂数据盘到 `/srv/hdd` + `bind` 站点子树到 `storage.mount_path` + 追加 fstab（`nofail`）。
+- 挂数据盘到 `/srv/hdd` + `bind` 站点子树到 `storage.mount_path` + 追加 fstab（`nofail`）；建目录只创建缺失项，**不改既有文件/目录的属主与权限**（重跑时挂载点上的既有数据保持原样）。
 
-**绝不会做**：格式化磁盘、删除既有数据目录、覆盖未接管的数据库、`--force` 绕过保护。
+**绝不会做**：格式化磁盘、删除既有数据目录、递归改既有数据的属主、覆盖未接管的数据库、`--force` 绕过保护。
 
 ## 4. `agent/install.sh`：按 inventory 接 Agent
 

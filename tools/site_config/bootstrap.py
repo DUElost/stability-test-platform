@@ -182,16 +182,17 @@ def prepare_storage(
     if dry_run or not fix:
         return [f"would run: {step}" for step in steps], mount_path
     actions: list[str] = []
-    # 建目录一律走 ops：测试与 --no-fix 路径不得直接写宿主机
-    ops.ensure_dir(Path(host_mount), 0o755, "root")
+    # 建目录走 ops.ensure_plain_dir：绝不递归 chown——/srv/hdd 在重跑时已是挂载点，
+    # 递归改属主会静默改写整盘既有数据的属主（城市 B 演练前发现）。
+    ops.ensure_plain_dir(Path(host_mount))
     if not _mounted(host_mount):
         mount = ops.run(["mount", disk, host_mount])
         if mount.returncode != 0:
             raise BootstrapError("bootstrap_storage", f"mount {disk} {host_mount}")
         actions.append(f"mounted {disk} at {host_mount}")
     subtree = Path(host_mount) / subdir
-    ops.ensure_dir(subtree, 0o755, "root")
-    ops.ensure_dir(Path(mount_path), 0o755, "root")
+    ops.ensure_plain_dir(subtree)
+    ops.ensure_plain_dir(Path(mount_path))
     if not _mounted(mount_path):
         bind = ops.run(["mount", "--bind", str(subtree), mount_path])
         if bind.returncode != 0:
