@@ -6,20 +6,22 @@
 即「新增了 ORM 模型，却没有任何消费方（查询/写入/服务引用）」——#734 的
 `ActionTemplate` 幽灵（模型删了、表还在）的镜像形态：模型在、无人用。
 
-引用计数只认**类名出现**（`import backend.models.plan_migration_audit` 这类
-仅用于 metadata 注册的模块路径导入不算消费方）；定义文件自身不计。
+引用计数只认**使用点**（#2062：AST 的 `Name`/`Attribute`/import 别名，
+外加「整串即标识符」的字符串常量——覆盖 `relationship("Foo")` 这类惯用法）；
+注释、文档字符串等散文不再算引用——原实现的整文件正则让「被提及」等于「被使用」，
+正是 #734 那类幽灵模型可以存活的口子。仅用于 metadata 注册的模块路径导入仍不算消费方。
 
 豁免：`_LEGACY_ALLOWLIST` 列出存量、经确认属「有意保留的历史表模型」；
 新增条目必须在 PR 里写明理由（门禁只保证可见性，不代替裁决）。
 
-退出码：有违规 → 1 并列出模型与定义位置；否则 0。`--self-test` 离线红绿自证。
+退出码：有违规 → 1 并列出模型与定义位置；**解析不到任何模型 → 2**（#2062：
+「什么都没检查」不能长得像「全绿」）；否则 0。`--self-test` 离线红绿自证。
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
-import re
 import sys
 from pathlib import Path
 
@@ -59,6 +61,49 @@ def model_classes(models_dir: Path = MODELS_DIR) -> dict[str, Path]:
     return found
 
 
+def referenced_names(path: Path) -> set[str]:
+    """文件里的**使用点**标识符（AST）——注释/散文不算引用（#2062）。"""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, SyntaxError):
+        return set()
+    names: set[str] = set()
+    # 文档字符串节点：即使整串恰好是标识符也不算引用（#2062）
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            body = getattr(node, "body", [])
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                docstrings.add(id(body[0].value))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[-1])
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+        ):
+            # `relationship("Foo")` / `backref("Foo")` 这类字符串引用：仅当整串
+            # 就是标识符才算（散文/路径/句子都排除）。
+            value = node.value.strip()
+            if value.isidentifier():
+                names.add(value)
+    return names
+
+
 def scan(
     scan_dirs: tuple[Path, ...] = SCAN_DIRS,
     models_dir: Path = MODELS_DIR,
@@ -74,9 +119,8 @@ def scan(
         for path in root.rglob("*.py"):
             if _SKIP_PARTS & set(path.parts):
                 continue
-            text = path.read_text(encoding="utf-8", errors="ignore")
-            for name in classes:
-                if name not in referenced and re.search(rf"\b{name}\b", text):
+            for name in referenced_names(path):
+                if name in classes:
                     referenced.add(name)
     return [
         f"{name}: {_display(classes[name])}"
@@ -132,8 +176,32 @@ def _self_test() -> int:
             for f in scan((base / "backend",), base / "backend" / "models")
         )
 
+        # #2062：散文提及（注释 + 恰好是标识符的文档字符串）不算引用
+        (consumer / "prose.py").write_text(
+            "# GhostModel 只是被提到，不是消费方\n"
+            '"""GhostModel"""\n',
+            encoding="utf-8",
+        )
+        prose_findings = scan((base / "backend",), base / "backend" / "models")
+        ok = ok and any("GhostModel" in f for f in prose_findings)
+
+        # #2062：字符串常量里作为标识符出现仍算引用（relationship("WiredModel") 惯用法）
+        (consumer / "stringref.py").write_text(
+            "class R:\n"
+            "    target = 'WiredModel'\n",
+            encoding="utf-8",
+        )
+        ok = ok and not any(
+            "WiredModel" in f
+            for f in scan((base / "backend",), base / "backend" / "models")
+        )
+
         if not ok:
-            print("[FAIL] self-test：预期 GhostModel 红、WiredModel 绿、豁免绿", file=sys.stderr)
+            print(
+                "[FAIL] self-test：预期 GhostModel 红（含仅散文提及）、"
+                "WiredModel 绿（含字符串引用）、豁免绿",
+                file=sys.stderr,
+            )
             return 1
     print("[OK] check_orphan_models self-test 红绿双向")
     return 0
@@ -146,6 +214,17 @@ def main() -> int:
 
     if args.self_test:
         return _self_test()
+
+    classes = model_classes()
+    if not classes:
+        # #2062：空跑不能长得像全绿——models 目录被改名/清空或全部语法错误时，
+        # 原先打印「无零消费方模型」，与「检查通过」不可区分。
+        print(
+            "[FAIL] backend/models 下没有解析到任何 ORM 模型——门禁无法给出结论"
+            "（不是「全绿」）：检查目录是否被改名/清空，或模型文件是否有语法错误。",
+            file=sys.stderr,
+        )
+        return 2
 
     findings = scan()
     if findings:

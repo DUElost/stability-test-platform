@@ -616,6 +616,28 @@ describe('ADR-0038 退役前端（#1807）', () => {
     });
   });
 
+  it('全部主机退役（列表为空）时开关仍可见可点——否则无法解除退役（#2051）', async () => {
+    // 后端默认过滤退役主机：只剩退役机时列表为空 → 页面落空态。开关若只在
+    // 「有数据」分支渲染，用户就再也没有 UI 路径勾选它（ADR-0038 回收路径断头）。
+    mockHostsList.mockResolvedValue({ items: [], total: 0 });
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    const toggle = await screen.findByTestId('hosts-show-retired');
+    expect(toggle).toBeInTheDocument();
+    // 空态文案点明「勾选可查看并解除退役」
+    expect(screen.getByText(/勾选「显示已退役」/)).toBeInTheDocument();
+
+    mockHostsList.mockResolvedValue({ items: [retiredHost], total: 1 });
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      const latest = mockFetchHostList.mock.calls[mockFetchHostList.mock.calls.length - 1];
+      expect(latest?.slice(0, 3)).toEqual([0, 200, true]);
+    });
+    expect(await screen.findByText('Retired-09')).toBeInTheDocument();
+  });
+
   it('退役入口调用 API 并携带原因（写审计）', async () => {
     const { api } = await import('../../utils/api');
     mockHostsList.mockResolvedValue({
@@ -687,8 +709,9 @@ describe('ADR-0038 退役前端（#1807）', () => {
       ),
     );
   });
-});
 
+  // #2062：本用例原先写在 describe **之外**——describe 的 beforeEach
+  // （clearAllMocks + mock 复位）不生效，断言可能落在共享 mock 的历史调用上。
   it('批量安装跳过退役主机并显式提示（#1807 / D5 批量 skip）', async () => {
     const { api } = await import('../../utils/api');
     mockHostsList.mockResolvedValue({
@@ -723,3 +746,4 @@ describe('ADR-0038 退役前端（#1807）', () => {
     );
     expect(api.agentInstall.trigger).not.toHaveBeenCalledWith(9);
   });
+});

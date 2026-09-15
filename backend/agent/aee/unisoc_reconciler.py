@@ -290,9 +290,17 @@ class UnisocUniviewReconciler:
                 and len(self._processed) > self._max_processed_entries
             ):
                 overflow = len(self._processed) - self._max_processed_entries
-                # 最后防线：优先驱逐滞回计数最大（最久未见）的名字
+                # #2060：victims 必须排除**仍在场**的名字（本拍设备列表或本地树）。
+                # 驱逐在场条目会让下一拍以新 seq_no 重发——emit 循环唯一的去重就是
+                # 本集合成员判定，而 _sync_device_events_to_local 对已同步目录不再重拉、
+                # 也不会把名字加回来 → 稳态下每拍重复 emit 约 overflow 条 log_signal/DLE。
+                absent_pool = [
+                    name for name in self._processed
+                    if name not in listed and name not in local_names
+                ]
+                # 最后防线：在**不在场**的名字里优先驱逐滞回计数最大（最久未见）的
                 victims = sorted(
-                    self._processed,
+                    absent_pool,
                     key=lambda n: self._absent_streak.get(n, 0),
                     reverse=True,
                 )[:overflow]
@@ -300,11 +308,21 @@ class UnisocUniviewReconciler:
                     self._processed.pop(name, None)
                     self._absent_streak.pop(name, None)
                 pruned += len(victims)
-                logger.warning(
-                    "unisoc_reconciler_processed_cap_evicted serial=%s job=%d "
-                    "evicted=%d kept=%d",
-                    self._serial, self._job_id, len(victims), len(self._processed),
-                )
+                if len(victims) < overflow:
+                    # 上限是防膨胀的最后防线，不是必须精确命中：不足时宁可少驱逐，
+                    # 也不能把在场条目踢出去（否则重复 emit）。
+                    logger.warning(
+                        "unisoc_reconciler_processed_cap_partial serial=%s job=%d "
+                        "wanted=%d evicted=%d kept=%d present=%d",
+                        self._serial, self._job_id, overflow, len(victims),
+                        len(self._processed), len(absent_pool),
+                    )
+                else:
+                    logger.warning(
+                        "unisoc_reconciler_processed_cap_evicted serial=%s job=%d "
+                        "evicted=%d kept=%d",
+                        self._serial, self._job_id, len(victims), len(self._processed),
+                    )
         if pruned:
             logger.info(
                 "unisoc_reconciler_pruned serial=%s job=%d removed=%d kept=%d",

@@ -257,6 +257,9 @@ else
         --exclude='DEPLOY.md' \
         --exclude='stability-test-agent.service' \
         --exclude='hosts.txt' \
+        --exclude='VERSION' \
+        --exclude='ARTIFACT_DIGEST' \
+        --exclude='ARTIFACT_DIGEST_RESOURCES' \
         --filter='protect resources/' \
         "$CODE_TMP/" "$INSTALL_DIR/agent/"
 fi
