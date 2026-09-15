@@ -83,7 +83,7 @@ sudo chown -R "$STP_DEPLOY_USER":"$STP_DEPLOY_USER" "$STP_DEPLOY_ROOT"
 # 干净 checkout：直接克隆到部署根（生产只部署已合入 main 的 revision）
 git clone https://github.com/DUElost/stability-test-platform.git "$STP_DEPLOY_ROOT"
 cd "$STP_DEPLOY_ROOT"
-./tools/dev/check-deploy-source.sh   # 部署源守卫：HEAD 必须在 main 且 tracked 工作区干净
+./tools/dev/check-deploy-source.sh   # 部署源守卫：HEAD 必须在 main、tracked 工作区干净、schema 未超前代码 head
 
 # 模板渲染：deploy/control-plane/{systemd,nginx,logrotate} 中的占位符由上面的变量确定；
 # 源模板本身不含硬编码部署根或站点值，渲染后不留占位符。

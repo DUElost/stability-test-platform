@@ -140,7 +140,6 @@
 |------|------|
 | `TESTING=1` | conftest 自动设置；跳过 Redis/SAQ/Scheduler lifespan |
 | `TEST_DATABASE_URL` | **仅**隔离测试库；生产机禁止指向业务库 |
-| `ALLOW_SQLITE_TESTS=1` | 本地无 PG 时子集用例 |
 | `JWT_SECRET_KEY` | 测试必备（例见 `.env.test.example`） |
 
 ---

@@ -188,7 +188,13 @@ enqueue(event_id, force?)
 
 ### 3.3 `_MAX_SPILL_PER_CYCLE`
 
-保持 20：每轮 spill 周期最多 enqueue 20 个 `LOCAL` 事件，防止一次打满 CIFS。
+常态保持 20：每轮 spill 周期最多 enqueue 20 个 `LOCAL` 事件，防止一次打满 CIFS。
+
+**临界水位分支（#741，单轮上限不再恒为 20）**：`usage_pct ≥ STP_HDD_SPILL_CRITICAL_PCT`
+（默认 98.0）时，`_spill_budget()` 返回 `max(_MAX_SPILL_PER_CYCLE, STP_HDD_SPILL_CRITICAL_BATCH)`
+= **100**（默认）——磁盘濒满时优先腾退，代价是单轮 CIFS 压力放大。预算每次 spill 时按
+**当时的** usage 重算，回落到临界水位以下即回到 20。高水位未回落时另有
+`STP_HDD_SPILL_CATCHUP_INTERVAL`（默认 30s）控制追打间隔（#1522）。
 
 ### 3.4 SSD 禁用条件
 

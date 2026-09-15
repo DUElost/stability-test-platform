@@ -17,7 +17,7 @@
 | 层级 | 数据实体 | 路由 | 说明 |
 |------|---------|------|------|
 | **脚本** | `Script`（name + version + nfs_path + default_params） | `/api/v1/scripts/*` | 唯一执行能力来源；action 类型统一为 `script:<name>` |
-| **模板** | `ActionTemplate`（action 格式强制 `script:<name>`） | `/api/v1/action-templates` | 预定义参数集 + 脚本绑定 |
+| **模板** | `ActionTemplate`（action 格式强制 `script:<name>`）→ **已删除（#1526）** | ~~`/api/v1/action-templates`~~ | 预定义参数集 + 脚本绑定；ADR-0020 Phase 6 概念退场，路由/模型/测试全删 |
 | **编排** | `Plan` + `PlanStep` → `PlanRun` → `JobInstance` | `/api/v1/plans/*`, `/api/v1/plan-runs/*` | 替代旧 Workflow（见 [ADR-0020](./ADR-0020-plan-step-one-shot-migration.md)） |
 | **调度** | `TaskSchedule`（plan_id FK） | `/api/v1/schedules` | Cron 触发 Plan 执行 |
 
@@ -28,7 +28,7 @@
 ### 2026-05-04 收敛决策（supersedes 原三层模型）
 
 1. Tool/ToolCategory ORM + `tool_catalog` 路由 + `/api/v1/tools` 端点 + `host.tool_catalog_version` 列全部删除（Alembic `5790a8de0a87` DROP）
-2. `task_templates.py` 内置模板机制删除，由 `ActionTemplate` ORM + `/api/v1/action-templates` 替代
+2. `task_templates.py` 内置模板机制删除，由 `ActionTemplate` ORM + `/api/v1/action-templates` 替代（**该替代物自身亦已于 #1526 删除**，见「落地与后续动作」）
 3. `services/dispatcher.py`（`dispatch_workflow`）删除，由 `plan_dispatcher*.py` 替代
 4. 引擎唯一合法 action 类型 = `script:<name>`，唯一合法格式 = `lifecycle`（见 [ADR-0014](./ADR-0014-pipeline-execution-engine.md)）
 5. Legacy 路由 `tools.py`、`workflows.py`、`orchestration.py`、`tool_catalog.py` 均已删除
@@ -50,7 +50,7 @@
 ## 落地与后续动作
 
 - ✅ 已落地：脚本目录扫描 + Script CRUD + Plan 编排 + Cron 调度
-- ✅ ActionTemplate 端点（action 格式强制 `script:<name>`）
+- ~~✅ ActionTemplate 端点（action 格式强制 `script:<name>`）~~ → 已删除（#1526：ADR-0020 Phase 6 概念退场，路由/模型/测试全删；表由 Alembic `h4i5j6k7l8m9` DROP，#1890）
 - ~~✅ 已落地：工具 CRUD、扫描同步~~ → 已删除，由 Script 目录替代
 - ~~✅ Phase 3 路由替代~~ → `orchestration.py`、`tool_catalog.py` 亦已删除
 - ~~✅ Workflow 执行器重构~~ → `services/dispatcher.py` 亦已删除，由 Plan 体系替代
