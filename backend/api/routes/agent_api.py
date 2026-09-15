@@ -2589,7 +2589,14 @@ async def ingest_device_log_events(
                 else:
                     # #1052：状态迁移显式化（同态幂等；表外 409）。extractable
                     # 降级已在上方 #1174 分支按幂等成功忽略。
-                    if ev.state != row.state and ev.state not in _ALLOWED_TRANSITIONS.get(
+                    # #2025：目标态先与两条创建路同口径归一（UNIVIEW 的 LOCAL/
+                    # DETECTED 提升为 UPLOAD_PENDING）再做迁移校验与赋值。否则
+                    # dle_register_outbox 的同 id state=LOCAL 意图重放会把
+                    # UPLOAD_PENDING 打回 LOCAL：该行自此既不进上送队列
+                    # （LOCAL = 有意不传），也不计入 count_pending_upload_events
+                    # ——事件永久停在 LOCAL，且 merge 门禁看不到它。
+                    target_state = resolve_initial_upload_state(ev.event_type, ev.state)
+                    if target_state != row.state and target_state not in _ALLOWED_TRANSITIONS.get(
                         row.state, frozenset()
                     ):
                         raise HTTPException(
@@ -2598,11 +2605,11 @@ async def ingest_device_log_events(
                                 "code": "DLE_INVALID_TRANSITION",
                                 "message": (
                                     "device_log_event state transition not allowed: "
-                                    f"{row.state} -> {ev.state}"
+                                    f"{row.state} -> {target_state}"
                                 ),
                             },
                         )
-                    row.state = ev.state
+                    row.state = target_state
                     effective_plan_run = (
                         ev.plan_run_id if ev.plan_run_id is not None else row.plan_run_id
                     )
