@@ -4,12 +4,9 @@ agent_allowed_service_actions:
   - restart
   - status
 
-# #2205：agent 进程日志轮转（systemd `StandardError=append:` 无轮转——2026-09-15
-# 全队实测 48/48 台合计 94.5GB、最大单台 4.89GB）。size 达到即轮转（比纯 daily
-# 更贴合日志量随设备数波动的主机）；rotate 保留份数。机制项（copytruncate/
-# compress/missingok/notifempty）固定在 update_agent.yml 的配置模板里，见该 task 注释。
-agent_logrotate_size: "200M"
-agent_logrotate_rotate: 7
+# 注：logrotate 变量（#2205）不在本文件——`--tags logrotate` 局部执行会跳过
+# pre_tasks 的 include_vars 加载（2026-09-15 铺开实测 undefined），故放
+# group_vars/linux_hosts.yml（恒加载，不受 tags 影响），见该文件同名注释。
 
 agent_install_excludes:
   - "__pycache__/"

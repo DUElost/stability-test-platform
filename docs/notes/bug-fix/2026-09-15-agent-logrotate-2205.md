@@ -60,9 +60,23 @@ logrotate 默认 `create` 模式（rename + 新建）不会让 systemd 重新打
   ```
   同批已在 canary 安装 `logrotate 3.22.0`（装包步骤的真机实证）。
 
+## 补丁（2026-09-15 晚，合入后铺开实测两处）
+
+1. **变量位置**（铺开首跑 `undefined` 失败）：`agent_logrotate_size/rotate` 原放
+   role defaults，而 `--tags logrotate` 局部执行**跳过 pre_tasks 的 include_vars
+   加载**（`Load agent rsync policy from role defaults` 无 tag）→ 变量未定义、
+   整 play fail-fast。修复：变量移 `group_vars/linux_hosts.yml`（恒加载，不受
+   tags 影响）+ task 内 `| default('200M')`/`| default(7)` 兜底；契约测试同步
+   改锚（group_vars 读取 + default 存在性断言）。铺开验证：`--check --tags
+   logrotate` dry-run `ok=2 failed=0`（原失败场景转绿）。
+2. **去掉 `delaycompress`**：首轮后 `.1` 保持未压缩（GB 级常驻），「控总量」要等
+   下一轮才兑现；本场景（agent 日志、压缩比高）首轮即压缩更优。契约测试加反向钉
+   （`delaycompress not in content`）。
+
 ## Revisit
 
-- 铺开后复扫（同 #2205 issue 的 `stat` 命令）：总量应 <10GB 且受 200M×7 约束；
+- 铺开后复扫（同 #2205 issue 的 `stat` 命令）：总量受 200M×7 压缩约束（稳态估算
+  每台 ≈ 当前 200M + 7×压缩份）；
 - 若 journal 化（`StandardError=journal`）另行裁决——本单不动观测面；
-- 首轮轮转后抽查 1-2 台的产物链（`.1` 未压缩 → 次轮 `.1.gz`、`.7.gz` 上限）与
-  systemd fd 语义（agent 重启后继续写入新文件）。
+- 首轮轮转后抽查 1-2 台的产物链（`.1.gz` 直压、`.7.gz` 上限）与 systemd fd
+  语义（agent 重启后继续写入新文件）。
