@@ -38,6 +38,9 @@ INSTALL_POLL_TIMEOUT_SECONDS = 900.0
 INSTALL_POLL_INTERVAL_SECONDS = 5.0
 # 部署摘要在安装脚本之后由 playbook 写入，Agent 于**下一次心跳**才上报；
 # 断言必须给一个有界等待窗，否则会把「还没上报」误判成「没有身份」。
+# 首次接入的第一条心跳可能还没带上实例/启动标识（238 现场：真机 B），与摘要同理
+# 需要有界等待；一个心跳周期 + 一次重试余量。
+IDENTITY_WAIT_SECONDS = 30.0
 # 一个心跳周期（20s）足够让重装后的 Agent 上报新摘要，再留一次重试余量；
 # 更长的等待只会拖慢「Agent 不支持某项摘要」的旧机场景（那里永远等不到）。
 DIGEST_WAIT_SECONDS = 30.0
@@ -555,6 +558,7 @@ def assert_agent(
     declared_digests: dict[str, str],
     now: float,
     digest_timeout: float = DIGEST_WAIT_SECONDS,
+    identity_timeout: float = IDENTITY_WAIT_SECONDS,
     poll_interval: float = INSTALL_POLL_INTERVAL_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
     say: Callable[[str], None] | None = None,
@@ -578,8 +582,21 @@ def assert_agent(
         "Heartbeat proves the Agent reached this control plane, not that jobs can run.",
     ))
 
-    instance_id = host_field(host, "agent_instance_id", "last_agent_instance_id")
-    boot_id = host_field(host, "boot_id")
+    # 首次安装后第一条心跳可能只带部分字段：给实例/启动标识一个有界等待，避免
+    # "装好了但断言太早"（238 现场：真机 B 的字段在下一拍才落库，随后即为 ONLINE）。
+    identity_deadline = time.monotonic() + max(0.0, identity_timeout)
+    while True:
+        instance_id = host_field(host, "agent_instance_id", "last_agent_instance_id")
+        boot_id = host_field(host, "boot_id")
+        if (instance_id and boot_id) or time.monotonic() >= identity_deadline:
+            break
+        say(f"waiting for {host_id} identity report")
+        sleep(poll_interval)
+        try:
+            host = api.get_host(host_id)
+        except ApiError as error:
+            return checks + [_fail("install.s5.identity", error.code,
+                                   location="$.control_plane.public_url", role="control_plane")]
     if not instance_id or not boot_id:
         checks.append(_fail("install.s5.identity", "agent_identity", location="$.agents"))
         return checks
@@ -688,6 +705,7 @@ def stage_s5_agents(
     poll_timeout: float = INSTALL_POLL_TIMEOUT_SECONDS,
     poll_interval: float = INSTALL_POLL_INTERVAL_SECONDS,
     digest_timeout: float = DIGEST_WAIT_SECONDS,
+    identity_timeout: float = IDENTITY_WAIT_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
     progress: Callable[[str], None] | None = None,
     now: float | None = None,
@@ -793,7 +811,8 @@ def stage_s5_agents(
         result = _onboard_one(
             ctx, api, agent=agent, binding=binding, declared=declared,
             location=location, poll_timeout=poll_timeout, poll_interval=poll_interval,
-            digest_timeout=digest_timeout, sleep=sleep, say=say, now=now,
+            digest_timeout=digest_timeout, identity_timeout=identity_timeout,
+            sleep=sleep, say=say, now=now,
         )
         checks.extend(result)
         if any(check.status == "FAIL" for check in result):
@@ -829,6 +848,7 @@ def _onboard_one(
     poll_timeout: float,
     poll_interval: float,
     digest_timeout: float,
+    identity_timeout: float,
     sleep: Callable[[float], None],
     say: Callable[[str], None],
     now: float | None,
@@ -880,6 +900,7 @@ def _onboard_one(
         declared_digests=declared,
         now=now if now is not None else time.time(),
         digest_timeout=digest_timeout,
+        identity_timeout=identity_timeout,
         poll_interval=poll_interval,
         sleep=sleep,
         say=say,

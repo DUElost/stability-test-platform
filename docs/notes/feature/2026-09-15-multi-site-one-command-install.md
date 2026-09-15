@@ -17,6 +17,7 @@ sudo ./deploy/agent/install.sh      # 读仓库外 ~/hosts.ini → S5（Host 仍
 ```
 
 - **三个薄封装**（`deploy/preflight.sh`、`deploy/install.sh`、`deploy/agent/install.sh`）只做定位仓库根、准备解释器/目录、按顺序调 `python -m tools.site_config` 与 `tools/release/build_bundle.py`；路径与默认值统一在 `deploy/lib/deploy-common.sh`（避免两个入口指向不同站点）。`tests/test_deploy_scripts.py` 守「`bash -n` 通过、不自己实现宿主机命令、不用第二语言解析报告、python 只调那两个入口、默认值只在公共库、每个入口自带 `--help`、参数级守卫排在任何宿主机写入之前」。
+- **S5 目标机 sudo 预检**（采纳用户建议，借鉴本机既有的 `~/sudo-setup.yml`）：在 binding 检查之后、auth/host/install 之前逐台跑 `sudo -n true`——同一套 SSH 凭据、`NumberOfPasswordPrompts=1`、口令走 `SSHPASS` 环境变量（绝不进 argv），远端用 `&& echo STP_SUDO_OK || echo STP_SUDO_FAIL` 把结论落到 stdout。免密 sudo 不可用即 FAIL（`target_sudo_unavailable`），remediation 直接给那份 playbook 的 su 配方（`su -c` + **绝对路径** `/usr/sbin/usermod`，并补 `chmod 0440` 与 `visudo -cf` 校验，比原文件更稳）；SSH 层失败记 `ssh_probe_failed` 并提示 `ssh-keyscan` + 核对指纹（安装链保持 `host_key_checking=True`）；本地缺 ssh/sshpass 记 BLOCKED `probe_not_run`，绝不当作已验证。失败即停、不创建 Host、不触发安装。
 - **参数级守卫前移**：`verify --dry-run` 被拒绝（退出码 2，`verify` 没有 dry-run 语义，静默照跑等于违背 `--dry-run`）、`handover --dry-run` 转成 `handover --dry-run`、`verify`/`handover` 缺 `site.yaml` 直接报错——三者都发生在建 venv/目录之前，错误调用不留半成品。
 - **`preflight`**（`tools/site_config/preflight.py`）本机零写入探测：平台/资源下限/命令（含 Agent 路径的 `ansible-core`、`sshpass`）/入口端口（读 `/proc/net/tcp` 的 LISTEN）/NTP/工具环境/声明的库与 Redis/绑定目录权限/发布物完整性/既有站点 marker。**每条 FAIL 带实测事实**（如「Entry ports already in use: 80, 8000.」），无输入的两项记 `BLOCKED`（不通过也不失败）。
 - **`init`**（`bootstrap.py`）：探测可派生项（OS/架构/时区/主路由地址/数据盘），只问 ≤4 项（站点标识、公开入口、库名、存储路径），生成 `site.yaml`（头部注释标注每项来源：探测/默认/确认）+ 绑定目录（0700/0600：DB DSN、Redis index、首管理员口令、Fernet）。秘密只生成、只落文件；`--no-fix` 退化为只报 `sudo` 命令，`--dry-run` 零写入。
@@ -73,4 +74,5 @@ sudo ./deploy/agent/install.sh      # 读仓库外 ~/hosts.ini → S5（Host 仍
 - **`probe_data_disk` 仍不格式化**：只建议「已带文件系统的裸盘」；已有分区的盘必须显式 `--data-disk <分区>`。若要支持自动分区/格式化，必须另做授权流程（当前明确不做）。
 - **`preflight` 的端口检查只读 `/proc/net/tcp`**：容器网络下可能与宿主视角不同（238 实验为 nspawn 容器 + 桥）；现场若在容器里跑 preflight，应改看宿主视图。
 - **离线 wheelhouse**：`build_bundle --wheelhouse` 已实现但未在本次沙箱验证（需要可用的包索引）；离线现场首次使用前应先跑一次并核对。
+- **pip 镜像**：本机 `~/sudo-setup.yml` 还会给目标机配 `/etc/pip.conf` 与 `~/.pip/pip.conf`（清华源）。站点安装的 venv 目前走默认源（238 上够快）；现场 PyPI 慢的站点可借鉴这一步——未纳入 `install.sh`（需要现场证据后再决定）。
 - **`.claude/skills/agent-host-onboard`** 仍描述城市 A 的 Ansible 批量路径（fleet 对齐）；多站点新站点接入应走 `deploy/agent/install.sh`。等这条路径在现场跑通后，把该 skill 的入口指向新脚本（本切片未改 skill：不在本次 scope 内）。

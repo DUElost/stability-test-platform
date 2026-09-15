@@ -144,6 +144,7 @@ class FakeApi:
         run_events: list[dict] | None = None,
         digest_sequence: list[str] | None = None,
         resources_sequence: list[str] | None = None,
+        identity_sequence: list[tuple[str, str]] | None = None,
         scan_status: int = 200,
         navigation: tuple[int, str] | None = None,
     ):
@@ -174,6 +175,7 @@ class FakeApi:
         self._run_events = run_events if run_events is not None else []
         self._digest_sequence = list(digest_sequence or [])
         self._resources_sequence = list(resources_sequence or [])
+        self._identity_sequence = list(identity_sequence or [])
         self.host_reads = 0
         self._scan_status = scan_status
         self.scans = 0
@@ -235,14 +237,19 @@ class FakeApi:
             resources_digest = self._resources_sequence[
                 min(self.host_reads - 1, len(self._resources_sequence) - 1)
             ]
+        identity = None
+        if self._identity_sequence:
+            identity = self._identity_sequence[
+                min(self.host_reads - 1, len(self._identity_sequence) - 1)
+            ]
         for host in self.hosts:
             if host["id"] == host_id:
                 return {
                     **host,
                     "status": "ONLINE",
                     "last_heartbeat": _heartbeat(),
-                    "agent_instance_id": "inst-1",
-                    "boot_id": "boot-1",
+                    "agent_instance_id": identity[0] if identity else "inst-1",
+                    "boot_id": identity[1] if identity else "boot-1",
                     **                    (
                         {
                             "agent_artifact_digest": digest if digest is not None else DIGEST_CODE,
@@ -389,6 +396,7 @@ def _run(ctx, api, **kwargs):
     kwargs.setdefault("sleep", lambda _: None)
     kwargs.setdefault("poll_timeout", 30.0)
     kwargs.setdefault("digest_timeout", 0.0)
+    kwargs.setdefault("identity_timeout", 0.0)
     # 默认不让真探针跑 ssh：用例里显式覆盖
     kwargs.setdefault("sudo_probe", lambda ops, agent, binding: (True, ""))
     return stage_s5_agents(ctx, api=api, **kwargs)
@@ -439,6 +447,28 @@ class TestTargetSudoProbe:
         checks = _run(site(), FakeApi())
         assert _status(checks, "install.s5.sudo") == "PASS"
         assert "target_sudo_ready" in _codes(checks)
+
+
+class TestIdentityWait:
+    def test_first_heartbeat_may_lack_identity_and_is_awaited(self, site):
+        """首次接入的第一条心跳可能只带部分字段：要有界等待，不能立刻判失败。"""
+        slept: list[float] = []
+        api = FakeApi(identity_sequence=[("", ""), ("inst-9", "boot-9")])
+
+        checks = _run(
+            site(), api,
+            identity_timeout=30.0, poll_interval=5.0,
+            sleep=lambda seconds: slept.append(seconds),
+        )
+
+        assert api.host_reads >= 2, "identity 还没刷新就下了结论"
+        assert slept == [5.0]
+        assert _status(checks, "install.s5.identity") == "PASS"
+
+    def test_identity_missing_beyond_the_window_fails(self, site):
+        api = FakeApi(identity_sequence=[("", "")])
+        checks = _run(site(), api, identity_timeout=0.0, poll_interval=5.0, sleep=lambda _: None)
+        assert "agent_identity" in _codes(checks)
 
 
 class TestProbeTargetSudo:
