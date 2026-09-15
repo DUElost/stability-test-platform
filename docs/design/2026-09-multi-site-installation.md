@@ -206,7 +206,7 @@ SSH 严格核对已有/获准指纹，不能用关闭主机密钥校验解决首
 | 项 | 契约 |
 |----|------|
 | 角色与执行位置 | 控制面安装器**必须在 `control_plane.target` 本机执行**（本地模式，`--confirm-target` 守卫）；中心存储默认是本机磁盘子树（`local_mount`），可换远端 NFS/CIFS；Agent 由控制面经 SSH + 本站 API 编排，不在 Agent 机器上直接改配置 |
-| 支持面 | Debian 13 / Ubuntu 24.04、x86_64、systemd、Nginx、PostgreSQL、Redis；资源下限 2 核 / 4 GiB RAM / 根 ≥20 GiB。不支持 Kubernetes、开发 Compose 作生产入口、公网 `curl \| bash` |
+| 支持面 | Debian 13 / Ubuntu 22.04（2026-09-15 实测纳入）/ 24.04、x86_64、systemd、Nginx、PostgreSQL、Redis；资源下限 2 核 / 4 GiB RAM / 根 ≥20 GiB。不支持 Kubernetes、开发 Compose 作生产入口、公网 `curl \| bash` |
 | 发布物 | 由 `git clone` 的工作树经 `tools/release/build_bundle.py` 生成 `release-manifest.json`（ADR-0040 摘要 + alembic head + 支持矩阵 + `provenance=controlled_channel`）；R2 发布渠道就绪后只需把 `STP_BUNDLE` 指向产物（该步骤已隔离） |
 | 秘密 | 站点级秘密（JWT/Agent secret/WS token/`SSH_CREDENTIALS_FERNET_KEY`/DB DSN/Redis index）由 `init` 生成并写入绑定目录（0700/0600），重跑不轮换；首管理员口令一次性生成、只在绑定文件里；任何值不进 argv、报告、日志或 `site.yaml` |
 | 迁移 | 空库或「本装落后」由 S3 执行既有 alembic 链；非空且非本平台即阻断（`db_unmanaged`）；迁移失败不启动不匹配应用；清空数据库不在本工具职责内 |

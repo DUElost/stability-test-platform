@@ -59,7 +59,9 @@ class FakeOps:
     def machine(self) -> str:
         return "x86_64"
 
-    def ensure_dir(self, path, mode: int, owner: str) -> None:
+    def ensure_plain_dir(self, path) -> None:
+        # 记录调用：测试要证明存储准备**不**使用会递归 chown 的 ensure_dir
+        self.calls.append(("ensure_plain_dir", str(path)))
         Path(path).mkdir(parents=True, exist_ok=True)
 
 
@@ -271,6 +273,57 @@ def test_prepare_storage_mounts_and_binds_with_fstab_entries(tmp_path, monkeypat
     assert f"{host_mount}/city-b/aee_events {mount_path} none bind,nofail 0 0" in text
 
 
+def test_prepare_storage_never_chowns_or_remounts_an_existing_mount(tmp_path, monkeypatch):
+    """重跑时 /srv/hdd 已是挂载点：既不重复 mount，也绝不递归改属主。
+
+    `ensure_dir` 末尾是 `chown -R root:root`——用在挂载点上会把整盘既有数据
+    （238 上是 71.5G 的 aee_events，属主 uid 1000）静默改成 root。
+    """
+    from tools.site_config import bootstrap
+
+    fstab = tmp_path / "fstab"
+    fstab.write_text("", encoding="utf-8")
+    host_mount = tmp_path / "srv/hdd"
+    host_mount.mkdir(parents=True)
+    (host_mount / "existing-data").mkdir()
+    monkeypatch.setattr(bootstrap, "HOST_MOUNT", str(host_mount))
+    monkeypatch.setattr(bootstrap, "FSTAB", fstab)
+    monkeypatch.setattr(bootstrap, "_mounted", lambda target: True)
+
+    ops = probe_ops(responses={"blkid -s UUID": (0, "1234-abcd\n")})
+    actions, _ = bootstrap.prepare_storage(
+        ops, disk="/dev/sdb", mount_path=str(tmp_path / "srv/stp-aee"),
+        subdir="city-b/aee_events", dry_run=False, fix=True,
+    )
+
+    invoked = [call[0] for call in ops.calls if call]
+    assert "chown" not in invoked
+    assert "mount" not in invoked, "已是挂载点：不该重复挂载"
+    assert ("ensure_plain_dir", str(host_mount)) in ops.calls
+    # 既有数据目录原样保留（没有被复制、移动或删除）
+    assert (host_mount / "existing-data").is_dir()
+    assert any("bound" in line or "already" in line or "fstab" in line for line in actions) or actions == []
+
+
+def test_local_ops_plain_dir_keeps_ownership_and_mode(tmp_path):
+    """真实实现：只创建目录，不 chmod/chown（属主保持调用者）。"""
+    from tools.site_config.ops import LocalOps
+
+    target = tmp_path / "nested/keep-me"
+    LocalOps().ensure_plain_dir(target)
+    assert target.is_dir()
+    assert os.stat(target).st_uid == os.getuid()
+    # 既存目录不被改动
+    existing = tmp_path / "existing"
+    existing.mkdir(mode=0o750)
+    before = os.stat(existing)
+    LocalOps().ensure_plain_dir(existing)
+    after = os.stat(existing)
+    assert (before.st_uid, before.st_gid, stat.S_IMODE(before.st_mode)) == (
+        after.st_uid, after.st_gid, stat.S_IMODE(after.st_mode),
+    )
+
+
 def test_prepare_storage_never_touches_the_host_in_report_mode(tmp_path, monkeypatch):
     from tools.site_config import bootstrap
 
@@ -303,3 +356,116 @@ def test_init_without_data_disk_says_why_the_mount_must_exist(tmp_path):
         interactive=False, fix=False, answers=_answers(),
     )
     assert any("no separate data disk" in line for line in report["actions"])
+
+
+def _role_ops(role_present: bool = True):
+    responses = {"pg_roles": (0, "1\n" if role_present else ""), "pg_database": (0, "1\n")}
+    return probe_ops(responses=responses)
+
+
+def test_existing_role_with_another_password_fails_closed():
+    """既有角色密码与本次生成不一致：绝不静默改既有角色，也不写坏绑定。"""
+    from tools.site_config import bootstrap
+
+    with pytest.raises(BootstrapError) as caught:
+        bootstrap.prepare_database(
+            _role_ops(), database="stp_b", role="stp", password="generated-1",
+            dry_run=False, fix=True, role_probe=lambda ops, dsn, password: False,
+        )
+    assert caught.value.code == "bootstrap_database_role"
+    assert "different password" in caught.value.detail
+
+
+def test_existing_role_is_reset_only_when_explicitly_allowed():
+    from tools.site_config import bootstrap
+
+    ops = _role_ops()
+    actions, _ = bootstrap.prepare_database(
+        ops, database="stp_b", role="stp", password="generated-1",
+        dry_run=False, fix=True, reset_password=True,
+    )
+    assert any("reset password for existing role: stp" in line for line in actions)
+    joined = " | ".join(" ".join(call) for call in ops.calls if call)
+    assert "ALTER ROLE stp LOGIN PASSWORD" in joined
+
+
+def test_existing_role_matching_the_binding_needs_no_change():
+    from tools.site_config import bootstrap
+
+    ops = _role_ops()
+    actions, _ = bootstrap.prepare_database(
+        ops, database="stp_b", role="stp", password="generated-1",
+        dry_run=False, fix=True, role_probe=lambda ops, dsn, password: True,
+    )
+    assert any("role already exists: stp" in line for line in actions)
+    assert not any("ALTER ROLE" in " ".join(call) for call in ops.calls if call)
+
+
+def test_rerun_keeps_existing_bindings_instead_of_rotating_them(tmp_path):
+    """重跑 init 不得轮换站点口令/Fernet/DSN——S2 已把首次值渲染进站点 env。"""
+    output = tmp_path / "site.yaml"
+    bindings = tmp_path / "bindings"
+    first = init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(),
+    )
+    before = {name: (bindings / name).read_text(encoding="utf-8") for name in sorted(os.listdir(bindings))}
+    fresh = init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(),
+    )
+    after = {name: (bindings / name).read_text(encoding="utf-8") for name in sorted(os.listdir(bindings))}
+    assert before == after
+    assert any("kept existing bindings (not rotated)" in line for line in fresh["actions"])
+    assert any("kept existing bindings (not rotated)" in line for line in first["actions"]) is False
+
+
+def test_rerun_keeps_the_existing_values_even_when_parameters_differ(tmp_path):
+    """站点已在运行：既有绑定（口令/索引/DSN）优先于本次命令行参数。"""
+    output = tmp_path / "site.yaml"
+    bindings = tmp_path / "bindings"
+    init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(), redis_index=2, admin_username="ops",
+    )
+    before = {name: (bindings / name).read_text(encoding="utf-8") for name in sorted(os.listdir(bindings))}
+
+    fresh = init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(), redis_index=1, admin_username="admin",
+    )
+
+    after = {name: (bindings / name).read_text(encoding="utf-8") for name in sorted(os.listdir(bindings))}
+    assert before == after
+    assert before["site_redis"].strip().endswith("/2")
+    assert "USERNAME=ops" in before["site_admin"]
+    assert any("kept existing bindings (not rotated)" in line for line in fresh["actions"])
+
+
+def test_rerun_probes_the_database_with_the_existing_password(tmp_path, monkeypatch):
+    """重跑必须拿既有绑定的密码去核对，而不是新生成的——否则会白白 ALTER 角色。"""
+    from tools.site_config import bootstrap
+
+    output = tmp_path / "site.yaml"
+    bindings = tmp_path / "bindings"
+    init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(),
+    )
+    existing_dsn = bootstrap._read_binding(bindings, "site_database")["DATABASE_URL"]
+    existing_password = bootstrap._dsn_password(existing_dsn)
+
+    captured: dict = {}
+    real = bootstrap.prepare_database
+
+    def spy(ops, **kwargs):
+        captured.update(kwargs)
+        return real(ops, **kwargs)
+
+    monkeypatch.setattr(bootstrap, "prepare_database", spy)
+    init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(),
+    )
+    assert captured["password"] == existing_password
+    assert captured["dsn"].endswith("/stp_b")

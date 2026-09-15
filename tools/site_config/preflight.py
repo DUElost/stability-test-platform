@@ -12,9 +12,8 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from .install import probe_database
+from .checks import Check, blocked, failure, passed
 from .ops import LocalOps, Ops
-from .validation import Check, blocked, failure, passed
 
 REQUIRED_COMMANDS = ("python3", "systemctl", "nginx")
 AGENT_PATH_COMMANDS = ("ansible-playbook", "sshpass", "ssh-keyscan")
@@ -80,7 +79,7 @@ def run_preflight(
     bundle: str | Path | None = None,
     deploy_root: str | Path | None = None,
     ops: Ops | None = None,
-    probe=probe_database,
+    probe=None,
 ) -> dict:
     """Collect host readiness facts; no configuration file is required."""
     ops = ops or LocalOps()
@@ -92,7 +91,20 @@ def run_preflight(
     checks.append(_time_check(ops))
     checks.append(_tool_env_check())
     if db_url:
-        checks.append(_database_check(db_url, probe))
+        if probe is None:
+            # 延迟导入 + 缺依赖时降级成一条 FAIL：preflight 必须在还没有
+            # pydantic/yaml/psycopg 的机器上也能给出逐项报告。
+            try:
+                from .install import probe_database
+            except ImportError:
+                checks.append(_fail(
+                    "preflight.database", "control_plane", "$.dependencies.database_ref", "preflight_toolenv",
+                    "The installer environment is missing, so the declared database could not be probed.",
+                ))
+            else:
+                checks.append(_database_check(db_url, probe_database))
+        else:
+            checks.append(_database_check(db_url, probe))
     else:
         checks.append(blocked(
             "preflight.database", "control_plane", "$.dependencies.database_ref", "input_required",
@@ -316,8 +328,14 @@ def _bindings_check(directory: Path) -> Check:
     )
 
 
+BUNDLE_REQUIRED = (
+    "release-manifest.json", "backend", "backend/agent", "backend/agent/resources",
+    "backend/schemas", "frontend/dist-prod", "deploy", "tools",
+)
+
+
 def _bundle_check(bundle: Path) -> Check:
-    required = ("release-manifest.json", "backend", "backend/agent", "backend/schemas", "frontend/dist-prod", "deploy", "tools")
+    required = BUNDLE_REQUIRED
     missing = [name for name in required if not (bundle / name).exists()]
     if missing:
         return _fail(
