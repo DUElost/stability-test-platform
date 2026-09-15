@@ -1,3 +1,9 @@
+# #2095：装机即对齐主机时区（与控制面一致的 Asia/Shanghai）。
+# 刻意放在安装 play **之前**：装机脚本最后会重启 Agent 服务，届时新进程直接采用新时区，
+# 无需再单独重启（长驻进程不会因 /etc/localtime 变化而重读时区，见 set_timezone.yml 注释）。
+# 注意：本 play 的 host 组默认 linux_hosts；用其它 inventory 时以 -e tz_hosts=<group> 指定。
+- import_playbook: set_timezone.yml
+
 - name: Install linux agent host via phase-a bridge
   hosts: linux_hosts
   gather_facts: false

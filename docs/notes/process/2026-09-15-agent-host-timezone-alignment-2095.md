@@ -29,6 +29,9 @@ playbook 的关键设计：
 3. 长驻进程（Agent 自身）不会因 `/etc/localtime` 变化而重读时区，故提供默认关闭的
    `-e tz_restart_agent=true`（前提：该机无活跃作业，与平台侧 ADR-0021 软锁同理）。
 
+**已接入装机流程**：`install_agent.yml` 顶部 `import_playbook: set_timezone.yml`，刻意置于安装 play
+**之前** —— 装机脚本末尾会重启 Agent 服务，新进程届时直接采用新时区，无需额外重启。
+
 ## Alternatives
 
 - **不改，仅改善日志格式**：只让 Agent 日志输出 UTC/带偏移即可消除"对照困难"。未选：主机侧
@@ -55,8 +58,8 @@ playbook 的关键设计：
 
 ## Revisit
 
-- **新建主机尚未纳入**：本 playbook 需人工执行；若要根治，应接入 `install_agent.yml`
-  的装机流程（届时注意该 playbook 顶部有 vault/secret 断言）。
+- **新建主机已纳入**：`install_agent.yml` 已 `import_playbook: set_timezone.yml`（置于安装 play 之前，
+  见上）。若改用非 `linux_hosts` 的 inventory，需 `-e tz_hosts=<group>` 指定目标组。
 - **脚本类本地时间**：`powercycle_*` 的 `run_id`、vendored `aimonkey` 日志文件名仍取本机时间；
   如需修正应发新脚本版本。
 - **口径再议**：若后续决定"全机群 UTC + 平台渲染"，本 playbook 的 `tz_target` 与断言偏移需同步调整。
