@@ -3,6 +3,20 @@
 # Stability Test Platform Agent 安装脚本
 # 用法: sudo ./install_agent.sh
 #
+# 支持交互与非交互两种模式：
+#   交互（stdin 是终端）：仅 API_URL / HOST_ID 会提示输入。
+#   非交互（Ansible / 控制面驱动安装）：全部参数经环境变量注入，缺关键参数即退出 1。
+#
+# 环境变量：
+#   AGENT_API_URL          必需。控制面公开入口（http(s)://host[:port]）
+#   AGENT_HOST_ID          可选。控制面注入时锁定心跳身份；空则按本机 IP 生成
+#   AGENT_INSTALL_DIR      可选。安装目录（默认 /opt/stability-test-agent）
+#   AGENT_USER / AGENT_GROUP  可选。运行账号（默认 android）
+#   AGENT_SECRET           可选。Agent-Backend 双向认证密钥
+#   AGENT_NFS_ROOT         可选。写入 STP_AEE_NFS_ROOT；空值不写、不覆盖
+#   AGENT_LOCAL_AEE_ROOT   可选。写入 STP_AEE_LOCAL_ROOT；空值不写、不覆盖
+#   AGENT_CODE_VERSION     可选。写入 agent/VERSION 的版本标识
+#
 # 此脚本将：
 # 1. 创建专用用户和目录
 # 2. 设置 Python 虚拟环境
@@ -311,7 +325,8 @@ else:
     echo "$candidate"
 }
 
-# 提示用户输入 API_URL
+# API_URL 解析（#I4 非交互化）：优先取环境变量 AGENT_API_URL（Ansible /
+# 控制面驱动安装注入），仅当 stdin 是终端时才交互提示。
 # WSL 环境检测：WSL 中 Agent 访问同机开发后端应使用 127.0.0.1
 DEFAULT_API_URL=""
 if grep -qi microsoft /proc/version 2>/dev/null; then
@@ -319,11 +334,18 @@ if grep -qi microsoft /proc/version 2>/dev/null; then
     echo_warn "检测到 WSL 环境，默认使用 127.0.0.1 访问同机 Windows 后端"
 fi
 
-echo_info "请输入中心服务器的 API 地址${DEFAULT_API_URL:+ (默认: $DEFAULT_API_URL)}"
-read -r -p "API_URL: " api_url_input
-API_URL="${api_url_input:-$DEFAULT_API_URL}"
+API_URL="$(printf '%s' "${AGENT_API_URL:-}" | tr -d '[:space:]')"
+if [ -n "$API_URL" ]; then
+    echo_info "API_URL 取自 AGENT_API_URL: $API_URL"
+elif [ -t 0 ]; then
+    echo_info "请输入中心服务器的 API 地址${DEFAULT_API_URL:+ (默认: $DEFAULT_API_URL)}"
+    read -r -p "API_URL: " api_url_input
+    API_URL="${api_url_input:-$DEFAULT_API_URL}"
+fi
 if [ -z "$API_URL" ]; then
     echo_error "API_URL 不能为空：部署必须提供真实控制面地址（脚本不再内置默认值）"
+    echo_error "  非交互安装：设置 AGENT_API_URL=https://<控制面公开入口> 后重试"
+    echo_error "  Ansible 安装：-e agent_api_url=https://<控制面公开入口>"
     exit 1
 fi
 
@@ -331,17 +353,46 @@ fi
 HOSTNAME=$(hostname)
 IP_ADDR=$(hostname -I | awk '{print $1}')
 
-# 生成唯一的 HOST_ID
-DEFAULT_HOST_ID=$(generate_unique_host_id "$API_URL" "$IP_ADDR")
+# HOST_ID 解析：优先取环境变量 AGENT_HOST_ID（控制面按 DB host 记录注入，
+# 保证心跳身份与 Host 行一致）；未注入时按本机 IP 生成，仅 TTY 才提示确认。
+HOST_ID="$(printf '%s' "${AGENT_HOST_ID:-}" | tr -d '[:space:]')"
+DEFAULT_HOST_ID=""
+if [ -z "$HOST_ID" ]; then
+    DEFAULT_HOST_ID=$(generate_unique_host_id "$API_URL" "$IP_ADDR")
+fi
 
 echo_info "检测到以下主机信息:"
 echo_info "  主机名: $HOSTNAME"
 echo_info "  IP地址: $IP_ADDR"
-echo_info "  建议的 HOST_ID: $DEFAULT_HOST_ID"
+if [ -n "$HOST_ID" ]; then
+    echo_info "  HOST_ID: $HOST_ID (来自 AGENT_HOST_ID)"
+elif [ -n "$DEFAULT_HOST_ID" ]; then
+    echo_info "  建议的 HOST_ID: $DEFAULT_HOST_ID"
+fi
 
-# 提示用户确认或修改 HOST_ID
-read -r -p "请输入 HOST_ID (默认: $DEFAULT_HOST_ID): " host_id_input
-HOST_ID="${host_id_input:-$DEFAULT_HOST_ID}"
+if [ -z "$HOST_ID" ]; then
+    if [ -t 0 ]; then
+        read -r -p "请输入 HOST_ID (默认: $DEFAULT_HOST_ID): " host_id_input
+        HOST_ID="${host_id_input:-$DEFAULT_HOST_ID}"
+    else
+        HOST_ID="$DEFAULT_HOST_ID"
+    fi
+fi
+if [ -z "$HOST_ID" ]; then
+    echo_error "HOST_ID 不能为空且无法自动生成：请设置 AGENT_HOST_ID 或检查本机网络配置"
+    exit 1
+fi
+
+# upsert_env_key KEY VALUE：.env 中存在该键则整行替换，不存在则追加。
+# 调用方负责判空——本函数不做空值写入（空值会清掉既有非空配置）。
+upsert_env_key() {
+    local key="$1" value="$2" file="$INSTALL_DIR/.env"
+    if grep -q "^${key}=" "$file"; then
+        sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$file"
+    fi
+}
 
 if [ ! -f "$INSTALL_DIR/.env" ]; then
     cat > "$INSTALL_DIR/.env" << EOF
@@ -360,6 +411,14 @@ ADB_PATH=adb
 LOG_LEVEL=INFO
 AGENT_SECRET=${AGENT_SECRET:-}
 
+# AEE 存储路径（ADR-0025）。两键语义不同，勿混用：
+#   STP_AEE_NFS_ROOT   中心存储（CIFS）挂载点主键（upload / spill / dedup）
+#   STP_AEE_LOCAL_ROOT 本机 HDD 第一落点（AEE Reconciler 主路径）
+# 控制面 fleet 键热更新会下发 STP_AEE_NFS_ROOT；STP_AEE_LOCAL_ROOT 属机器本地，
+# 热更新不覆盖。此处空值表示未指定，需由站点安装显式注入或后续手工补齐。
+STP_AEE_NFS_ROOT=${AGENT_NFS_ROOT:-}
+STP_AEE_LOCAL_ROOT=${AGENT_LOCAL_AEE_ROOT:-}
+
 # AIMONKEY 资源目录（热更新路径，与 agent/resources/aimonkey 一致）
 # AIMONKEY_RESOURCE_DIR=$INSTALL_DIR/agent/resources/aimonkey
 EOF
@@ -373,6 +432,15 @@ else
         echo "AGENT_SECRET=${AGENT_SECRET:-}" >> "$INSTALL_DIR/.env"
     else
         sed -i "s|^AGENT_SECRET=.*|AGENT_SECRET=${AGENT_SECRET:-}|" "$INSTALL_DIR/.env"
+    fi
+    # AEE 两键：仅在调用方给出非空值时才写（空值不得覆盖既有非空值）
+    if [ -n "${AGENT_NFS_ROOT:-}" ]; then
+        upsert_env_key "STP_AEE_NFS_ROOT" "$AGENT_NFS_ROOT"
+        echo_info "STP_AEE_NFS_ROOT 已更新: $AGENT_NFS_ROOT"
+    fi
+    if [ -n "${AGENT_LOCAL_AEE_ROOT:-}" ]; then
+        upsert_env_key "STP_AEE_LOCAL_ROOT" "$AGENT_LOCAL_AEE_ROOT"
+        echo_info "STP_AEE_LOCAL_ROOT 已更新: $AGENT_LOCAL_AEE_ROOT"
     fi
     echo_info "配置文件已更新: $INSTALL_DIR/.env"
 fi

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import fcntl
 import json
 import os
@@ -20,6 +21,8 @@ from tools.site_config.ops import CommandResult
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRIVATE_MARKER = "DO_NOT_ECHO_PRIVATE_INPUT_9374"
 CODE_HEAD = "cafe1234"
+# 合法 Fernet 键（32 字节 urlsafe-base64）——S0 只校验形状，不做加密运算
+FERNET_KEY = base64.urlsafe_b64encode(b"0" * 32).decode()
 
 
 class FakeOps:
@@ -105,6 +108,10 @@ def _bundle(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     bundle = tmp_path / "bundle"
     (bundle / "backend/agent").mkdir(parents=True)
     (bundle / "backend/agent/sample.py").write_text("VALUE = 1\n", encoding="utf-8")
+    # 与仓库同形：payload 目录里存在指向同目录文档的符号链接（harness 约定）。
+    # 落地不得把它实体化，否则部署摘要与清单基准不一致（I4 实验室实测）。
+    (bundle / "backend/agent/AGENTS.md").write_text("# agent contract\n", encoding="utf-8")
+    os.symlink("AGENTS.md", bundle / "backend/agent/CLAUDE.md")
     (bundle / "backend/schemas").mkdir(parents=True)
     (bundle / "backend/schemas/pipeline_schema.json").write_text("{}\n", encoding="utf-8")
     (bundle / "backend/scripts").mkdir(parents=True)
@@ -211,7 +218,10 @@ def prepare(tmp_path: Path, *, version: str = "synthetic-2026.09.0", tamper: boo
     (bindings / "site_database").write_text("DATABASE_URL=postgresql+asyncpg://stp:x@localhost:5432/stp\n", encoding="utf-8")
     (bindings / "site_redis").write_text("REDIS_URL=redis://localhost:6379/0\n", encoding="utf-8")
     (bindings / "site_admin").write_text(f"USERNAME=admin\nPASSWORD={PRIVATE_MARKER}\n", encoding="utf-8")
-    for name in ("site_database", "site_redis", "site_admin"):
+    (bindings / "site_ssh_encryption").write_text(
+        f"SSH_CREDENTIALS_FERNET_KEY={FERNET_KEY}\n", encoding="utf-8",
+    )
+    for name in ("site_database", "site_redis", "site_admin", "site_ssh_encryption"):
         os.chmod(bindings / name, 0o600)
     state_dir = tmp_path / "state"
     state_dir.mkdir(mode=0o700)
@@ -242,6 +252,13 @@ def invoke(tmp_path, *, dry_run=False, ops=None, probe=None, confirm_target="con
         db_probe=probe or (lambda dsn: ("empty", None)),
         system_root=tmp_path / "system",
     )
+
+
+def env_line(text: str, key: str) -> str:
+    for line in text.splitlines():
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1].strip()
+    raise AssertionError(f"{key} not in env")
 
 
 def codes(report: dict) -> set[str]:
@@ -300,6 +317,15 @@ def test_full_install_is_idempotent_and_keeps_keys(tmp_path, monkeypatch):
     env_file = tmp_path / "opt/stp-control/.env.backend"
     env_bytes = env_file.read_bytes()
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+    env_text = env_bytes.decode(encoding="utf-8")
+    # I4：S2 按 public_url 渲染 Agent 安装回连地址（Agent 端 .env 的 API_URL 来源）
+    assert "STP_AGENT_INSTALL_API_URL=http://control-i3.synthetic.invalid" in env_text
+    # I4 修复：站点级秘密必须首次生成（不得把模板占位值带上线），
+    # 且 SSH 口令加密键来自受保护绑定（留空会让密码型 Host 创建 503）。
+    for key in ("JWT_SECRET_KEY", "AGENT_SECRET", "WS_TOKEN"):
+        value = env_line(env_text, key)
+        assert "change-me" not in value and len(value) >= 32, (key, value)
+    assert env_line(env_text, "SSH_CREDENTIALS_FERNET_KEY") == FERNET_KEY
     bootstrap_env = next(env for argv, env in first_ops.envs if "bootstrap_admin.py" in " ".join(argv))
     assert bootstrap_env and "JWT_SECRET_KEY" in bootstrap_env
     assert "STP_INITIAL_ADMIN_USER" in bootstrap_env
@@ -311,6 +337,41 @@ def test_full_install_is_idempotent_and_keeps_keys(tmp_path, monkeypatch):
     assert env_file.read_bytes() == env_bytes
     joined = " ".join(" ".join(call) for call in second_ops.calls)
     assert "upgrade head" not in joined
+
+
+def test_landed_tree_keeps_symlinks(tmp_path, monkeypatch):
+    """S2 落地必须原样保留符号链接（copytree 默认解引用会改变内容摘要）。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    report = invoke(tmp_path, probe=lambda dsn: ("empty", None))
+    assert report["status"] == "PASS", report["checks"]
+    landed = tmp_path / "opt/stp-control/backend/agent/CLAUDE.md"
+    assert landed.is_symlink(), "落地树把符号链接实体化了"
+    assert os.readlink(landed) == "AGENTS.md"
+    # 重跑：源链接与已存在的链接共存，落地不得失败
+    second = invoke(tmp_path, ops=ops_for(tmp_path), probe=lambda dsn: ("empty", None))
+    assert second["status"] == "PASS", second["checks"]
+    assert landed.is_symlink()
+
+
+def test_missing_ssh_encryption_binding_blocks_install(tmp_path):
+    """SSH 口令加密键缺失即 S0 FAIL——否则站点装好后密码型 Host 创建 503。"""
+    prepare(tmp_path)
+    (tmp_path / "bindings/site_ssh_encryption").unlink()
+    report = invoke(tmp_path)
+    assert "binding_file" in codes(report)
+    assert report["stages"] == []
+
+
+def test_invalid_ssh_encryption_key_blocks_install(tmp_path):
+    """Fernet 键形状不合法即阻断（不做加密运算也能在 S0 判形状）。"""
+    prepare(tmp_path)
+    path = tmp_path / "bindings/site_ssh_encryption"
+    path.write_text("SSH_CREDENTIALS_FERNET_KEY=not-a-fernet-key\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    report = invoke(tmp_path)
+    assert "binding_content" in codes(report)
+    assert report["stages"] == []
 
 
 def test_unmanaged_database_blocks_before_migration(tmp_path):

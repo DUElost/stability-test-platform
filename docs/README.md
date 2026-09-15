@@ -88,7 +88,7 @@ docs/
 | 文档 | 内容 |
 |------|------|
 | [`00-system-overview.md`](./design/00-system-overview.md) | 部署拓扑、分层、领域模型摘要 |
-| [`2026-09-multi-site-installation.md`](./design/2026-09-multi-site-installation.md) | 多站点 P1：I1 配置模型与离线校验、I2 发布清单检查与脱敏 `plan`、I3 本地安装（S0–S4 + 受控管理员引导）已实现；HTTPS 模板域名/证书占位符化；远端编排与城市 B 闭环仍待实施 |
+| [`2026-09-multi-site-installation.md`](./design/2026-09-multi-site-installation.md) | 多站点 P1：I1 配置模型与离线校验、I2 发布清单检查与脱敏 `plan`、I3 本地安装（S0–S4 + 受控管理员引导）、I4 站点侧 Agent 接入（S5 + `verify` 降级 S6）已实现；HTTPS 模板域名/证书占位符化；I5 导航与现场验收仍待实施 |
 | [`01-execution-pipeline.md`](./design/01-execution-pipeline.md) | Plan→PlanRun→Job 主链路 |
 | [`07-execution-protocol.md`](./design/07-execution-protocol.md) | 状态机、abort ACK、snapshot、claim、schema |
 | [`02-backend.md`](./design/02-backend.md) | 后端路由、服务、启动 |

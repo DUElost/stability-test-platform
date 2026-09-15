@@ -8,6 +8,7 @@ from pathlib import Path
 from .install import run_install
 from .plan import plan_site_report
 from .validation import validate_config_file
+from .verify import verify_site
 
 
 class RedactedParser(argparse.ArgumentParser):
@@ -45,11 +46,41 @@ def main(argv: list[str] | None = None) -> int:
     install.add_argument("--confirm-target", required=True, help="Must equal control_plane.target; guards against the wrong host.")
     install.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
     install.add_argument("--dry-run", action="store_true", help="Verify and plan only; no writes and no service changes.")
+    install.add_argument(
+        "--through-agents",
+        action="store_true",
+        help="After S4, onboard the declared Agents through this site's own API (S5); off by default.",
+    )
+    verify = commands.add_parser(
+        "verify",
+        help="S6 acceptance probes against the installed site (login/CSRF, hosts, devices, controlled noop chain).",
+    )
+    verify.add_argument("--config", type=Path, required=True, help="Explicit regular UTF-8 YAML input; no environment fallback.")
+    verify.add_argument("--bindings-dir", type=Path, required=True, help="Owner-only directory (0700) holding 0600 binding files.")
+    verify.add_argument(
+        "--device-serial",
+        default=None,
+        help="Pin the authorized acceptance device; without it the first ONLINE device is used.",
+    )
+    verify.add_argument(
+        "--run-timeout",
+        type=float,
+        default=900.0,
+        help="Seconds to wait for the controlled run to reach a terminal state (default 900).",
+    )
+    verify.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
     arguments = parser.parse_args(argv)
     if arguments.command == "validate":
         report = validate_config_file(arguments.config)
     elif arguments.command == "plan":
         report = plan_site_report(arguments.config, save_dir=arguments.save_dir)
+    elif arguments.command == "verify":
+        report = verify_site(
+            arguments.config,
+            bindings_dir=arguments.bindings_dir,
+            device_serial=arguments.device_serial,
+            run_timeout=arguments.run_timeout,
+        )
     else:
         report = run_install(
             arguments.config,
@@ -58,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             confirm_site=arguments.confirm_site,
             confirm_target=arguments.confirm_target,
             dry_run=arguments.dry_run,
+            through_agents=arguments.through_agents,
         )
     if arguments.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))

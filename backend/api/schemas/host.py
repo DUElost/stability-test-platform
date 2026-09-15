@@ -43,6 +43,28 @@ class HostWatcherAdminStatePatch(BaseModel):
     watcher_admin_active: bool
 
 
+class HostInstallOptions(BaseModel):
+    """Agent 首次安装的目标路径下传（可选，全部缺省时用 ansible group_vars 默认值）。
+
+    站点安装（tools/site_config/agents.py）用这两个键把 site.yaml 声明的路径
+    传给既有 ansible 执行链，避免安装出与站点配置不一致的目录布局。
+    值由服务端校验（绝对路径、无空白/占位符）并随安装审计留痕。
+    """
+
+    # 安装目录 → ansible agent_install_dir（默认 /opt/stability-test-agent）
+    agent_install_root: Optional[str] = None
+    # 机器本地 AEE 第一落点 → ansible agent_local_aee_root（写入 STP_AEE_LOCAL_ROOT）
+    agent_local_aee_root: Optional[str] = None
+    # 中心存储挂载点 → ansible agent_nfs_root（写入 STP_AEE_NFS_ROOT）
+    agent_nfs_root: Optional[str] = None
+
+
+class HostInstallIn(BaseModel):
+    """POST /hosts/{id}/install 请求体：无字段时与旧的无请求体调用等价。"""
+
+    install_options: Optional[HostInstallOptions] = None
+
+
 class HostActiveJob(BaseModel):
     """ADR-0021: per-host snapshot of an active Job for the hot-update gate."""
     id: int
@@ -86,6 +108,9 @@ class HostOut(ORMBaseModel):
     # Agent version display (protocol semver + git revision traceability)
     agent_protocol_version: Optional[str] = None
     agent_code_revision: Optional[str] = None
+    # ADR-0040 D2/P2：Agent 上报的部署身份（内容一致性比对源；站点验收读它）
+    agent_artifact_digest: Optional[str] = None
+    agent_resources_digest: Optional[str] = None
     expected_code_revision: Optional[str] = None
     agent_code_deployed: Optional[str] = None
     agent_code_deployed_at: Optional[str] = None

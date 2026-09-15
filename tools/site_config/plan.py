@@ -17,11 +17,11 @@ from pathlib import Path
 
 from .manifest import ReleaseManifest, load_release_manifest
 from .models import LinuxDistribution, SiteConfig
+from .stages import GENERATED_SECRET_KEYS
 from .validation import DEFERRED_CHECKS, Check, ConfigValidationError, failure, load_site_config
 
 PLAN_REPORT_NAME = "plan-report.json"
 
-GENERATED_SECRET_KEYS = ("JWT_SECRET_KEY", "AGENT_SECRET", "WS_TOKEN")
 BINDING_FIELD_PATHS = (
     "dependencies.database_ref",
     "dependencies.redis_ref",

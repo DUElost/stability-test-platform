@@ -1,10 +1,10 @@
 # 多站点 P1：站点配置、部署预检与城市 B 安装闭环
 
-- **状态**：部分实现；I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan` 与 I3 本地安装（S0–S4、受控管理员引导）已实现，I4/I5 的远端编排、导航与端到端验收仍是待实施设计，不是完整安装 runbook
-- **版本**：0.5
-- **版本记录**：v0.5（2026-09-14）I3 落地——本地模式 `install`（S0–S4、绑定存储、安装记录/幂等/断点、`--dry-run`）与 `backend/scripts/bootstrap_admin.py` 受控首管理员引导；v0.4（2026-09-14）I2 落地——发布清单消费契约（`release.manifest`）、脱敏 `plan`（兼容/来源检查 fail-closed、`--save-dir` 保护）与 HTTPS 域名/证书占位符；v0.3（2026-09-14）§8 并入隔离演练输入基线（3 行演练观测 + 7 项新增输入，12 项人工干预清单见 Agent Note；演练范围与来源证明表述经复核校正）；v0.2（2026-09-14）I1 配置模型与离线 `validate` 落地；v0.1（2026-09-14）初稿
+- **状态**：部分实现；I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan`、I3 本地安装（S0–S4、受控管理员引导）与 I4 站点侧 Agent 接入（S5、`verify` 的降级 S6）已实现，I5 的导航与端到端现场验收仍是待实施设计，不是完整安装 runbook
+- **版本**：0.6
+- **版本记录**：v0.6（2026-09-15）I4 落地——控制面驱动安装链修复（`STP_AGENT_INSTALL_API_URL` 注入、安装脚本非交互、AEE 两键落盘）、站点侧 S5 编排（`agents.py`，`install --through-agents`）与 `verify` 降级 S6（登录/CSRF、Host/设备断言、noop 受控链；存储写读与 scan/upload/merge 显式 BLOCKED）；v0.5（2026-09-14）I3 落地——本地模式 `install`（S0–S4、绑定存储、安装记录/幂等/断点、`--dry-run`）与 `backend/scripts/bootstrap_admin.py` 受控首管理员引导；v0.4（2026-09-14）I2 落地——发布清单消费契约（`release.manifest`）、脱敏 `plan`（兼容/来源检查 fail-closed、`--save-dir` 保护）与 HTTPS 域名/证书占位符；v0.3（2026-09-14）§8 并入隔离演练输入基线（3 行演练观测 + 7 项新增输入，12 项人工干预清单见 Agent Note；演练范围与来源证明表述经复核校正）；v0.2（2026-09-14）I1 配置模型与离线 `validate` 落地；v0.1（2026-09-14）初稿
 - **日期**：2026-09-14
-- **需求**：[`多站点交付 PRD`](../prd/2026-multi-site-delivery.md) v0.7
+- **需求**：[`多站点交付 PRD`](../prd/2026-multi-site-delivery.md) v0.8
 - **架构边界**：[`ADR-0041`](../adr/ADR-0041-independent-site-delivery-and-management.md) v1.1（Accepted）
 
 ## 1. 本次细化的边界
@@ -23,17 +23,20 @@ P1 的交付对象是：在城市 B 的受支持空白 OS 上，配置独立控�
 
 | 已有入口 | 已核对行为 | 本设计中的使用边界 |
 |----------|------------|--------------------|
-| [`tools.site_config`](../../tools/site_config/) | I1：Pydantic v2 模型、安全 YAML 读取、脱敏阶段报告；I2：发布清单消费（`release.manifest`）与脱敏 `plan`；I3：本地模式 `install`（S0–S4、绑定存储、安装记录）与 `bootstrap_admin.py` 受控管理员引导；[根级测试](../../tests/test_site_config.py)不依赖业务数据库 | 只验证显式配置与本地清单声明；`plan` 只写入显式选择的自有目录；`install` 只在声明的目标机上按阶段写入，不接收远端凭据、不建库、不格式化存储、无 `--force` |
+| [`tools.site_config`](../../tools/site_config/) | I1：Pydantic v2 模型、安全 YAML 读取、脱敏阶段报告；I2：发布清单消费（`release.manifest`）与脱敏 `plan`；I3：本地模式 `install`（S0–S4、绑定存储、安装记录）与 `bootstrap_admin.py` 受控管理员引导；I4：`agents.py` 站点侧 S5 编排（Host 查/建 → 驱动既有安装 → 心跳/身份/摘要/端点断言）与 `verify` 降级 S6（登录/CSRF、Host/设备断言、noop 受控链、未覆盖路径 BLOCKED）；[根级测试](../../tests/test_site_config.py)不依赖业务数据库 | 只验证显式配置与本地清单声明；`plan` 只写入显式选择的自有目录；`install` 只在声明的目标机上按阶段写入，不接收远端凭据、不建库、不格式化存储、无 `--force`；`--through-agents`/`verify` 只经本站公开 API 驱动既有执行链，不直接改 Agent `.env`、不二次实现安装器 |
 | [`verify_control_plane_templates.py`](../../tools/verify_control_plane_templates.py) | 只检查仓库模板、部署根/站点占位符、Nginx/API/SocketIO 等静态不变量 | 复用为离线检查，不复制同一套断言 |
 | [`prepare_env.py`](../../tools/prepare_env.py) | 首次创建 env，已有文件保持原样；新文件 0600、独占创建 | 复用创建语义；已有配置变更另做差异确认，不能假定重复调用会更新 env；秘密不得拼进 `--set KEY=VALUE` 的进程参数 |
 | [控制面模板](../../deploy/control-plane/) | 已有默认服务、独立迁移 oneshot、nomigrate 常驻服务、Nginx 与 logrotate；HTTPS 模板的域名/证书路径自 I2 起为占位符 | 新安装建议组合既有迁移 oneshot + nomigrate 服务，使迁移成为显式安装步骤；不改变 A 当前服务 |
 | [`preflight_control_plane.py`](../../backend/scripts/preflight_control_plane.py) | 先检查模板，再调用环境/服务探测；存在默认后端地址和 env 路径 | 不是纯离线工具；新入口必须显式传目标与环境文件，不能直接继承默认值 |
 | [`audit_stage_a_env.py`](../../backend/scripts/audit_stage_a_env.py) | 访问 `/health`；有 `STP_ADMIN_PASSWORD` 时还会 POST 登录及 logout/CSRF 探测 | 认证探测可能写会话/审计等状态，只在明确授权的安装验收阶段使用；不能纳入“只读预检” |
 | [`check-deploy-readiness.py`](../../tools/dev/check-deploy-readiness.py) | 解析环境并连接数据库，检查迁移和业务配置 | 保留既有用途，不作为新站点默认预检命令，也不借它试探本机生产库 |
-| [Host 创建 API](../../backend/api/routes/hosts.py)与[Agent 安装服务](../../backend/services/agent_installer.py) | 控制面分配 Host ID，安装服务需要已存在的 Host | 先创建/核对本站 Host，再将响应 ID 交给安装器；不从 YAML 编造或复制 `HOST_ID` |
+| [Host 创建 API](../../backend/api/routes/hosts.py)与[Agent 安装服务](../../backend/services/agent_installer.py) | 控制面分配 Host ID，安装服务需要已存在的 Host；安装脚本自 I4 起非交互，回连地址由控制面 `STP_AGENT_INSTALL_API_URL` 注入（缺失/非法时 `POST /hosts/{id}/install` 返回 400 而非装出错站 Agent）；`install_options` 只下传安装目录与本地 AEE 根 | 先创建/核对本站 Host，再将响应 ID 交给安装器；不从 YAML 编造或复制 `HOST_ID`；站点侧不接收远端凭据之外的输入，也不改写 protected keys |
 | [Agent 环境同步](../../backend/services/agent_env_sync.py) | 有 allowlist/protected keys；共享挂载根可统一下发，本地 AEE 根受保护 | 站内共享挂载点先采用一致约定，保留各 Host 本地磁盘差异，不直接覆盖完整 Agent env |
 
 I3 已交付**受控首管理员引导**（`backend/scripts/bootstrap_admin.py`，由 `install` 的 S3 以目标 venv 调用）：仅首次创建（已有任何 admin 即跳过并留计数证据）、同名普通用户冲突交人工处理、不重置或提权既有账号、密码只经环境/标准输入、成功写 `initial_admin_created` 审计；公开注册与开发初始化脚本仍不得作为生产入口。
+
+I4 已交付**站点侧 Agent 接入**（`tools/site_config/agents.py`，`install --through-agents`）与**降级 S6 验收**（`verify.py`），并修复了控制面驱动安装链的三处硬缺陷：`agent_api_url` 未下传（安装必然失败）、安装脚本只能交互读取参数（Ansible 调用会挂死）、Agent `.env` 缺少 AEE 两键（进程启动即崩）。
+站点侧新增键 `STP_AGENT_INSTALL_API_URL` 由 S2 按 `public_url` 渲染并进入受管键集合：**既有站点重跑安装前必须补该键**（否则 S2 会以 `install_conflict` 阻断，而不是静默装出连错地址的 Agent）；控制面驱动安装在该键缺失/非法时返回 400，不再启动 ansible。
 
 发布物的来源证明、数据库兼容信息及各组件版本是安装输入。Agent 内容摘要应对齐已接受的 ADR-0040，不另定义一套竞争摘要算法；具体接口以其合入实现为准，不绑定在途分支。
 I2 已定义**消费端**清单契约：`release.manifest` 声明本地清单路径，`plan` 核对产品版本、组件摘要格式、来源可信声明与支持矩阵（详见 §4）；生产端（构建/打包/签名/受控渠道留痕）仍由发布侧交付，验签与真实文件哈希不在离线 `plan` 内完成。
@@ -86,14 +89,14 @@ agents:
 | `platform` 与各角色的 `os` | `os_family=linux`、`service_manager=systemd`；架构显式统一声明，发行版仅接受 `debian` / `ubuntu` 与明确版本字符串 | I1 仅校验声明；实际 OS/CPU 核验及发布物支持矩阵留给后续阶段，不把“语法合法”报告成“已受支持” |
 | `network.dependency_mode` | 仅接受 `offline` / `controlled_mirror`，无自动默认；I1 不检查或访问镜像来源 | 依赖获取计划；代理/镜像来源另行显式配置，离线模式不得回退公网 |
 | `control_plane.deploy_root/deploy_user` | 专属绝对路径与服务账号；拒绝根目录、路径穿越、模板/命令注入；远端另查 symlink 和已有数据 | `<deploy-root>`、`<deploy-user>`、`STP_DEPLOY_ROOT`、systemd/logrotate 布局 |
-| `control_plane.public_url` | 浏览器实际入口 origin，路径为空或 `/`，不含 userinfo/query/fragment；与安全 profile 一致 | Nginx `server_name`、`CORS_ORIGINS`、Agent `API_URL`；前端保持同源构建 `VITE_API_BASE_URL=` |
+| `control_plane.public_url` | 浏览器实际入口 origin，路径为空或 `/`，不含 userinfo/query/fragment；与安全 profile 一致 | Nginx `server_name`、`CORS_ORIGINS`、Agent `API_URL`、`STP_AGENT_INSTALL_API_URL`（I4：S2 按此渲染，是控制面驱动安装注入 Agent 的回连地址）；前端保持同源构建 `VITE_API_BASE_URL=` |
 | `control_plane.tls_ref` | I1 要求 HTTPS 必须带绑定名、HTTP 不得带 TLS 绑定；证书身份/有效期与私钥权限留给后续阶段 | HTTPS 模板使用 `<server-name>`、`<tls-cert-path>`、`<tls-key-path>` 占位符（I2）；plan 只输出“待绑定”映射，不解析绑定值，绑定名不进入报告 |
 | `release.bundle` / `release.manifest` | `bundle` 在 I3 按**本地目录树**消费（须含 `release-manifest.json`、`backend/`、`backend/agent/`、`backend/schemas/`、`frontend/dist-prod/`、`deploy/`、`tools/`，离线时含 `wheelhouse/`）；`manifest`（I2 新增）为本地绝对清单路径，`validate` 允许为空、`plan`/`install` 必填。清单为 ≤1 MiB 的 JSON，拒绝未知字段/重复键；要求 `product.version`（须等于 `expected_release`）、`source.revision`、至少 `agent-code` 与 `host-resources` 的 `sha256:<64hex>` 摘要、`database.schema_target`、`compatibility`（协议范围 + 逐发行版版本/架构支持矩阵）与 `provenance.attestation`（`signature` 或 `controlled_channel` 声明） | 控制面、前端 `dist-prod`、Agent、脚本/schema 及迁移的固定版本；I3 的 S0 用 ADR-0040 既有实现重算 code/resources 摘要并与清单比对（不另造算法）；签名验签与来源渠道核验仍留给发布端与后续阶段 |
 | 脚本根 | 从选定发布物的既有布局派生，不另用共享盘猜测 | `STP_SCRIPT_ROOT`；不使用 `STP_NFS_ROOT/scripts` |
 | `storage` | `existing_share` 只接入分享，不接受服务器 OS/SSH 管理字段；`managed_linux` 必须声明 `os`、`ssh_user`、`ssh_credential_ref`。NFS 使用专用绝对分享路径且不带 CIFS 凭据；CIFS 使用分享名及必需的 `credential_ref` | 分享身份用于挂载；挂载点对应 `STP_AEE_NFS_ROOT`，不是控制面部署根；I1 不挂载、不格式化、不验证可达性 |
 | `storage.mount_path` | P1 候选标准为控制面/Agent 同一字符串、同一分享；路径变体另测，不假设当前热更新可保持任意差异 | 避免现有共享根统一下发覆盖单机定制；Agent `STP_NFS_ROOT` 仅沿既有脚本别名映射 |
-| `agents[].key/target` | key 仅是引导时的逻辑名；同站点避免重复名称/目标；Host ID 必须来自本站 API | Host 创建参数、Ansible 目标及安装器 `agent_host_id`，Device 由 Agent 发现 |
-| `agents[].install_root/local_aee_root` | 区分安装/SSD 日志与本地 AEE 第一落点；本地 AEE 根不能误指共享挂载 | `AGENT_INSTALL_DIR` 及安装器派生路径、受保护的 `STP_AEE_LOCAL_ROOT` |
+| `agents[].key/target` | key 仅是引导时的逻辑名；同站点避免重复名称/目标；Host ID 必须来自本站 API。I4：Host 名取 `<site.id>-<key>`，按 `target`（IP/主机名）查/建并对名称核对，占用同 IP/同名即 fail-closed（不换名、不抢占） | Host 创建参数、Ansible 目标及安装器 `agent_host_id`，Device 由 Agent 发现 |
+| `agents[].install_root/local_aee_root` | 区分安装/SSD 日志与本地 AEE 第一落点；本地 AEE 根不能误指共享挂载 | `AGENT_INSTALL_DIR` 及安装器派生路径、受保护的 `STP_AEE_LOCAL_ROOT`；I4 经 `install_options` 下传给既有安装链，空值不覆盖目标 `.env` 既有值 |
 | 秘密绑定 | 按站点生成/提供，格式与权限验证，不复制 A 的值，不用占位值启动 | `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET_KEY`、`AGENT_SECRET`、`SSH_CREDENTIALS_FERNET_KEY` 等既有键 |
 | `navigation` | 只发布获准信息；URL 只允许受控站点/文档目标，不带凭据 | 既有内网页或最小静态导航；不引入统一登录 |
 
@@ -106,9 +109,12 @@ I1 的标准拓扑要求控制面、中心存储和每个 Agent 使用不同目�
 
 首次生成配置复用 `prepare_env.py` 的受限权限及不覆盖语义；后续变更必须做脱敏差异预览和确认，不能通过删除 env 重新生成来“更新”。
 
+I4 实验室复核后明确三条 S0/S2 语义（均已落地并测试）：
+`JWT_SECRET_KEY` / `AGENT_SECRET` / `WS_TOKEN` 由安装器**首次生成**（与 `plan.generated_secret_keys` 同源），不得把模板占位值带上线；`security.ssh_encryption_key_ref` 在 S0 即被消费并校验 Fernet 键形状（留空会让密码型 Host 创建以 503 失败，站点装好却无法加主机），S2 写入 `SSH_CREDENTIALS_FERNET_KEY`；发布树落地**保持符号链接原样**（`copytree` 默认解引用会让落地树多出实体文件，ADR-0040 部署摘要随即与清单基准不一致）。
+
 ## 4. 统一入口与预检分层
 
-`validate`/`plan` 与**本地模式** `install` 已可执行；`preflight`、`verify` 及远端编排仍是拟新增契约。实现先做无副作用的校验，再接安装编排；不直接包装现有 live audit 为默认动作。
+`validate`/`plan` 与**本地模式** `install`（S0–S4）已可执行；`install --through-agents`（S5）与 `verify`（降级 S6）自 I4 起可用；`preflight` 仍是拟新增契约。实现先做无副作用的校验，再接安装编排；不直接包装现有 live audit 为默认动作。
 
 在仓库根目录、已有 Python 3.11+ 环境中运行（依赖现有锁定环境内的 Pydantic v2 和 PyYAML）：
 
@@ -121,6 +127,11 @@ python -B -m tools.site_config plan --config /absolute/path/site.yaml --save-dir
 python -B -m tools.site_config install --config /absolute/path/site.yaml \
   --bindings-dir /protected/bindings --state-dir /protected/state \
   --confirm-site <site.id> --confirm-target <control_plane.target> [--dry-run] [--json]
+# 连 Agent 一起接入（S5；默认不执行，需显式开启）
+python -B -m tools.site_config install … --through-agents
+# 受控验收（降级 S6；同样在控制面机内执行）
+python -B -m tools.site_config verify --config /absolute/path/site.yaml \
+  --bindings-dir /protected/bindings [--device-serial <serial>] [--run-timeout 900] [--json]
 ```
 
 `--config` 必填，不自动发现 env/inventory。输入必须为普通 UTF-8 文件（拒绝最终路径为 symlink、目录或 FIFO），上限 1 MiB、YAML 嵌套上限 32；拒绝重复键、未知字段、非字符串映射键、多文档、危险标签和 anchors/aliases。时区使用本地公开时区库验证，不访问远端。
@@ -131,13 +142,16 @@ python -B -m tools.site_config install --config /absolute/path/site.yaml \
 
 `install` 为**本地模式**：必须在 `control_plane.target` 声明的目标机内执行（工具环境依赖 Pydantic v2、PyYAML 与 psycopg；离线安装另需 bundle 内的 wheelhouse），S0 先核对 `--confirm-site/--confirm-target` 与配置一致、本机主机名/地址与目标相符、部署根未被其他站点占用、平台与声明一致、清单与 bundle 的 code/resources 摘要相符、以及在 `--bindings-dir`（0700，0600 `KEY=VALUE` 文件）中读取实际消费的绑定——任一不通过即 `FAIL` 且不写入。随后按 S1（目录/服务账号/依赖/挂载核对）→ S2（发布树落地、venv 与离线 wheelhouse、env 首次 0600 生成且重跑不轮换、模板渲染与站点 marker）→ S3（数据库状态分类；仅空库/本装落后执行既有迁移链，非空未接管阻断；`bootstrap_admin.py` 受控首管理员引导）→ S4（安装 nomigrate/migrate 单元与 Nginx、`nginx -t` 后 reload、`enable --now` 并轮询 `/health`）执行；迁移失败或不匹配的 schema 目标不会启动服务。安装记录写入 `--state-dir/install-state.json`（0700 目录、flock 互斥、原子写 0600），重跑逐项重核实际状态而非信任记录；`--dry-run` 只验证与规划、零写入。
 
+`--through-agents` 追加 **S5**：按 `agents[].ssh_credential_ref` 读取 SSH 绑定（`USERNAME` + `PASSWORD` 或 `PRIVATE_KEY_PATH`；后者要求 0600 且属主为部署账号，否则 Ansible 只会以 `Permission denied (publickey)` 收场），用初始管理员对本站公开入口取 Bearer token，再按 `target` 查/建 Host（Host ID 由本站 API 分配，名称固定为 `<site.id>-<key>`）、按 `install_options` 下传安装目录与本地 AEE 根、触发既有 `POST /hosts/{id}/install` 并轮询到终态，最后断言心跳新鲜、`agent_instance_id`/`boot_id` 已记录、`agent_artifact_digest`（及非空的 `agent_resources_digest`）等于清单声明摘要、安装审计中的 `agent_api_url` 就是本站入口。响应丢失或并发重试不会重复注册：先按实际 API 状态判定，409 时重新查询并复用同一 Host/安装 run。任一 Agent 失败即停，后续 Agent 不再创建或安装。
+`verify` 是**降级 S6**：登录与 CSRF 探针（无凭据、无 Origin 的写请求必须被 403 拒绝）、声明 Agent 的 Host 在线与身份断言、设备可用性、脚本目录幂等扫描（`POST /scripts/scan`，全新站点尚无目录登记），然后在授权测试设备上创建并驱动一条 `noop`（目录 `v1.0.0`、版本号 `1.0.0`）单步 Plan（Plan → 准入 → claim/租约 → 终态），要求运行终态成功、作业落在那台设备且留有 step trace（证据读 `/plan-runs/{id}/jobs`）；Watcher 需要 patrol 阶段的事件，无设备或无事件时如实 `BLOCKED`。存储写读探针与 scan/upload/merge 在本切片显式 `BLOCKED`（前者需要授权的探针子目录，后者需要真实设备日志工件），不得当作已验收。
+
 | 操作 | 允许行为 | 禁止行为 |
 |------|----------|----------|
 | `validate` | 读取显式站点输入，验证结构/交叉字段，输出脱敏问题 | 解析秘密、读取实际 inventory/env、连接网络、写系统配置 |
 | `plan` | 读取已声明的本地发布清单，核对版本/组件/来源声明/支持矩阵，生成脱敏步骤与模板差异；可一次性写入显式选择的自有目录 | 取远端凭据、自动下载、连接 DB/SSH、将秘密或输入值渲染到报告、覆盖既存报告 |
 | `preflight` | 用户明确目标及授权后，执行有超时的远端只读检查 | 自动挂载/写分享、安装软件、迁移、创建用户、登录/退出探测、测试现有生产库 |
-| `install` | 在已声明的目标机内按 S0–S4 写入已授权的新站点（本地模式）；可 `--dry-run` 只验证；安装记录与幂等/断点语义见上 | 未经确认写入、接收远端凭据、建库、格式化存储、覆盖未接管数据、`--force` 绕过保护、把安装成功宣告为站点可上线 |
-| `verify` | 对明确的新站点执行获授权的认证、存储小写入和受控专项验收 | 将其称为纯只读；把真实设备/业务写操作隐含在普通预检里 |
+| `install`（含 `--through-agents`） | 在已声明的目标机内按 S0–S4 写入已授权的新站点（本地模式）；可 `--dry-run` 只验证；S5 只经本站公开 API 创建/核对 Host 并驱动既有安装链；安装记录与幂等/断点语义见上 | 未经确认写入、接收远端凭据、建库、格式化存储、覆盖未接管数据、`--force` 绕过保护、把安装成功宣告为站点可上线、直接改写 Agent `.env` 或 protected keys |
+| `verify` | 对明确的新站点执行获授权的认证、受控专项与小写入探针 | 将其称为纯只读；把真实设备/业务写操作隐含在普通预检里；把 `BLOCKED`（未实现的探针/无设备）报成通过 |
 
 所有检查须有稳定 `check_id`、目标角色、状态、脱敏说明与修复建议；结果区分 `PASS`、`FAIL`、`BLOCKED`、`NOT_APPLICABLE`。
 未提供目标、缺依赖、检查没执行或证据不足均不能写为 PASS；不适用必须带理由。
@@ -153,7 +167,7 @@ python -B -m tools.site_config install --config /absolute/path/site.yaml \
 | 存储 | 协议/分享/挂载点配置关系 | mountinfo、分享身份、容量、权限元数据 | 挂载动作、真实写入/读回及清理；只读检查不能宣称已验证写入 |
 | 数据库/Redis | 目标绑定存在、版本要求明确 | 对显式新站点目标核验身份/连接/已有 schema；禁止不明确目标时连接 | 创建/迁移数据库、写入业务事实；Redis 不承担站点业务状态 |
 | 账号/安全 | profile、受限 SameSite、CSRF、秘密引用完整 | 公共证书/入口、秘密文件权限等必要元数据 | 首管理员创建、登录/会话/CSRF 验收，不调用公开注册提权 |
-| Agent/设备 | 安装布局、版本/schema 包齐全 | Host OS、ADB 可用性、安装是否存在；不抢占或操纵设备 | Host 创建、Agent 安装/重启、心跳/claim 与受控设备专项 |
+| Agent/设备 | 安装布局、版本/schema 包齐全 | Host OS、ADB 可用性、安装是否存在；不抢占或操纵设备 | Host 创建、Agent 安装/重启、心跳/claim 与受控设备专项；I4 已把这些写入动作放到显式的 `--through-agents`/`verify` 里，不再隐含在预检中 |
 
 远端读取必须限定为必要的安全探测，不收集完整主机清单、凭据或无关日志。
 SSH 严格核对已有/获准指纹，不能用关闭主机密钥校验解决首次连接；自动重试需有次数和 deadline。
@@ -171,8 +185,8 @@ SSH 严格核对已有/获准指纹，不能用关闭主机密钥校验解决首
 | S2 发布与环境 | 固定发布物落地，复用模板，生成独立站点秘密/配置 | 无遗留占位符、权限正确，前端路径与 Nginx root 一致 | 保留已成功创建的秘密；重复执行不轮换密钥或复制其他站点身份 |
 | S3 数据库与管理员 | 对显式新站点数据库执行既有迁移 oneshot；完成受控首管理员引导 | schema 达到发布目标；管理员可用且审计留痕 | 非空/未接管数据库阻断 fresh-install；迁移失败不启动不匹配应用；已有管理员不重置、不重复创建，同名普通用户冲突需人工处理 |
 | S4 控制面入口 | 启动 nomigrate 服务及 Nginx，核对 DB/Redis/SAQ、同源入口和 SocketIO | 服务健康、必要后台组件就绪，登录/CSRF 经授权验收 | 不用跳过基础设施检查伪造成功；先完成私有引导再暴露正式入口 |
-| S5 Host 与 Agent | 经本站管理员权限创建/核对 Host，消费 API 返回 ID，复用 Ansible/安装服务 | Agent 指向本站、身份唯一、代码/schema/脚本一致，心跳与设备发现正常 | 已安装且归属其他站点则拒绝；不能重复注册 Host、重写 protected keys 或静默转走现有设备 |
-| S6 受控主链与存储 | 选择专用测试设备，验证 Plan/claim/租约、Watcher、scan/upload/merge 及授权写读探针 | 结果、日志位置、文件引用及终态清理有证据 | 失败保留证据，不盲目重跑刷机/硬件动作；探针只清理本次创建的文件 |
+| S5 Host 与 Agent | 经本站管理员权限创建/核对 Host，消费 API 返回 ID，复用 Ansible/安装服务（I4：`install --through-agents`，`tools/site_config/agents.py`） | Agent 指向本站、身份唯一、代码/schema/脚本一致，心跳与设备发现正常；I4 逐项断言：心跳新鲜、实例/启动标识、摘要=清单、审计入口=本站 | 已安装且归属其他站点则拒绝；不能重复注册 Host、重写 protected keys 或静默转走现有设备；失败即停，不继续下一个 Agent |
+| S6 受控主链与存储 | 选择专用测试设备，验证 Plan/claim/租约、Watcher、scan/upload/merge 及授权写读探针（I4：`verify` 的降级路径） | 结果、日志位置、文件引用及终态清理有证据；I4 具备：noop 单步 Plan 到终态 + step trace 落在指定设备 | 失败保留证据，不盲目重跑刷机/硬件动作；探针只清理本次创建的文件；无设备、存储探针与 scan/upload/merge 记 `BLOCKED`，不得报成通过 |
 | S7 导航与交接 | 提供站点入口、负责人、运维文档、安装摘要和后续维护/备份计划 | 独立入口可用，导航无凭据，P1 对应验收签字 | P1 完成不代表 P2 升级恢复或 P4 总览已交付 |
 
 首管理员引导仅用于已确认的新站点初始化：复用现有密码校验/哈希与审计，禁止默认弱密码、秘密入 argv、覆盖现有密码或为已有普通用户静默提权。
@@ -190,10 +204,10 @@ SSH 严格核对已有/获准指纹，不能用关闭主机密钥校验解决首
 | I1（已实现） | 配置模型与离线校验 | `tools/site_config/`、`deploy/sites/site.example.yaml` 与 `tests/test_site_config.py`；Pydantic v2 | 合成输入覆盖缺失/未知字段、重复键、明文凭据字段/错误脱敏、URL/路径注入、混合发行版和无运行时副作用；不代表安装通过 |
 | I2（已实现） | 发布输入与模板计划 | `tools/site_config/` 新增发布清单消费与 `plan`（`manifest.py`、`plan.py`）、HTTPS 模板域名/证书占位符、`tools/verify_control_plane_templates.py` 与两份部署文档同步、新增 `tests/test_site_config_plan.py` | 一份模板适配两组合成站点；发布兼容与来源检查失败阻断；秘密不经 argv 或报告；`--save-dir` 一次性 `0600` 落盘且不覆盖 |
 | I3（已实现） | 新站点基础安装（本地模式） | `tools/site_config/` 新增 `install.py`/`bindings.py`/`ops.py`/`stages.py`、`backend/scripts/bootstrap_admin.py`、`tests/test_site_install.py`；平台/存储适配限定为 Debian 13 + x86_64 + existing_share/NFS（挂载由运维预先完成） | 在一次性容器中完成 S0–S4；重复执行、断点、错误目标、迁移失败与未接管库行为有测试；`--dry-run` 零副作用 |
-| I4 | Agent 接入与闭环 | 复用 Host API、现有 Agent 安装、protected env 与升级门禁 | 双 Host 接入不串站，响应丢失后重试不重复注册；指定测试设备完成 S5–S6 |
+| I4（已实现） | Agent 接入与闭环 | 复用 Host API、现有 Agent 安装、protected env 与升级门禁；`tools/site_config/agents.py`+`verify.py`、控制面驱动安装链修复（`STP_AGENT_INSTALL_API_URL`/非交互脚本/AEE 两键） | 双 Host 接入不串站，响应丢失后重试不重复注册；指定测试设备完成 S5–S6（无真机时用 `noop`+静态设备序列号的降级路径并标 pending，不得当已验收） |
 | I5 | 导航、文档与验收 | 最小静态/既有内网页接入，安装/诊断报告与运维文档 | S7、PRD MS-01/MS-02/MS-04/MS-05/MS-06/MS-10/MS-13 的 P1 部分有证据 |
 
-I1/I2 已在合成配置与合成清单中验证（临时目录，无网络、无子进程审计）；I3 已在合成夹具与一次性容器中验证本地安装链（含幂等重跑、断点、错误目标与迁移失败负例）。验证记录见 [I1 Agent Note](../notes/feature/2026-09-14-multi-site-config-validation.md)、[I2 Agent Note](../notes/feature/2026-09-14-multi-site-release-plan.md) 与 [I3 Agent Note](../notes/feature/2026-09-14-multi-site-site-install.md)。远端编排与真实 B 现场适配（含 Ubuntu/HTTPS/CIFS）仍须先完成第 8 节输入确认。
+I1/I2 已在合成配置与合成清单中验证（临时目录，无网络、无子进程审计）；I3 已在合成夹具与一次性容器中验证本地安装链（含幂等重跑、断点、错误目标与迁移失败负例）；I4 已在合成夹具（Fake API/无网络）与 238 隔离容器实验室验证站点侧编排（双 Host 接入、重复触发、错目标负例、noop 受控链）——容器实验室的 Agent 运行时依赖等价替身，真机 S6 与 scan/upload/merge 仍标 pending。验证记录见 [I1 Agent Note](../notes/feature/2026-09-14-multi-site-config-validation.md)、[I2 Agent Note](../notes/feature/2026-09-14-multi-site-release-plan.md)、[I3 Agent Note](../notes/feature/2026-09-14-multi-site-site-install.md) 与 [I4 Agent Note](../notes/feature/2026-09-14-multi-site-agent-onboarding.md)。远端编排与真实 B 现场适配（含 Ubuntu/HTTPS/CIFS）仍须先完成第 8 节输入确认。
 所有新增运行时 env/API 若确有必要，分别同步环境变量权威文档及前端 API 类型入口；本次设计不预先添加这些字段。
 
 ## 7. 验证策略与完成判据
@@ -202,14 +216,16 @@ I1/I2 已在合成配置与合成清单中验证（临时目录，无网络、�
 - 模板回归：现有 `verify_control_plane_templates.py` 与环境生成/SSH 校验测试继续成立；不能以新的安装器绕过旧模板不变量。
 - 安装集成：一次性 VM/隔离数据库/独立端口和路径；覆盖空库、已存在但未授权接管、部分安装、重跑、掉线、错误挂载及依赖不可用。
 - 双站点隔离：两份合成输入可复用同一发布物，站点密钥与业务事实独立；入口/路径/身份混用时 fail-closed。
+- 站点侧编排：I4 的 S5/S6 用 Fake API 覆盖请求序列与状态机（不联网、不起 ansible），再在隔离容器实验室里以真实控制面 + 2 个 Agent 容器复核端到端链路；重复触发、错误目标、他站占用与摘要不符均为 fail-closed 负例。
 - 真机验收：仅经授权的 B 试点设备，完成当前声明支持的专项链路；不把模拟测试等同于真机成功。
 - P1 安装成功必须附逐阶段结果及未覆盖项；P2 的升级/恢复演练和 P4 的只读总览仍单独验收。
 
-当前交付 I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan` 与 I3 本地安装（S0–S4 + 受控管理员引导），验证记录见 [I1 Agent Note](../notes/feature/2026-09-14-multi-site-config-validation.md)、[I2 Agent Note](../notes/feature/2026-09-14-multi-site-release-plan.md) 与 [I3 Agent Note](../notes/feature/2026-09-14-multi-site-site-install.md)。I4/I5、远端编排、导航和 MS 的端到端验收仍未实现/执行；现有局部测试与单容器验收不能代替 B/C 现场验收。
+当前交付 I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan`、I3 本地安装（S0–S4 + 受控管理员引导）与 I4 站点侧 Agent 接入（S5 + 降级 S6），验证记录见 [I1 Agent Note](../notes/feature/2026-09-14-multi-site-config-validation.md)、[I2 Agent Note](../notes/feature/2026-09-14-multi-site-release-plan.md)、[I3 Agent Note](../notes/feature/2026-09-14-multi-site-site-install.md) 与 [I4 Agent Note](../notes/feature/2026-09-14-multi-site-agent-onboarding.md)。I5、导航、真实设备 S6 与 MS 的端到端验收仍未实现/执行；现有局部测试与单容器验收不能代替 B/C 现场验收。
 
 ## 8. 实施适配前仍需确认的输入
 
 2026-09-14 在隔离环境完成了一次局部手工安装基线演练：单机内完成控制面部署与 1 台 Agent 心跳上线。真实分享写入、受控管理员引导、版本身份一致性、设备发现与受控主链（S6）均未验收，不据此宣称任一安装阶段完成。下表的“演练观测”仅为该次观测，不构成对 B/C 的承诺；演练暴露的失败点与人工干预清单作为 §6 实施切片的验收样例，记录在 [Agent Note](../notes/architecture/2026-09-13-multi-site-delivery-requirements.md)。
+I4 随后在同类的隔离容器实验室复核了站点侧编排链（双 Host 接入不串站、重复触发不双启动、错目标 fail-closed、noop 受控主链），容器 Agent 使用资源/存储替身，真机、真实分享与 scan/upload/merge 仍未验收。
 
 | 输入 | 需要确认的最小信息 | 缺失时的处理 |
 |------|--------------------|--------------|
@@ -218,9 +234,9 @@ I1/I2 已在合成配置与合成清单中验证（临时目录，无网络、�
 | 内网制品通道与信任根 | 代码与资源的分发方式（内网镜像/受控介质/受控传输）与来源可信方案（签名及信任根，或受控渠道的授权与留痕；摘要只证明完整性、不能单独证明来源）、能否携带百 MB 级 Agent 资源与离线依赖。I2 已交付消费端清单契约、I3 已交付 bundle 目录布局与 code/resources 真实摘要比对（§3.3/§4）；构建、打包与签名/渠道留痕的生产端仍待确认 | 阻断写入阶段，不生成发布物；不得以“源码压缩包”替代 |
 | 中心存储（日志服务器） | 新建 Linux 分享或已有 NAS，NFS/CIFS、容量/权限与本地盘布局。演练观测：Agent 启动硬依赖 `STP_AEE_NFS_ROOT`，缺失即崩溃；本地目录替身只能用于隔离演练 | 不格式化、不创建未知分享、不假设所有挂载字符串都可原样覆盖；真实写入/读回单独授权 |
 | Agent 资源与外部工具分类 | 逐项声明“随包分发/现场预置/不可离线”：Agent resources（aimonkey、flashtool）、扫描工具、adb 与 udev 规则、固件与许可 | 不承诺对应链路（刷机、扫描等）在目标站点可用 |
-| 运行账户与权限模型 | 安装器以何身份运行、提权凭据如何传入（不得进入 argv、日志与报告）；部署用户与 Agent 用户命名；sudo 最小授权范围 | 阻断写入阶段；不得沿用既有站点的账号名假设 |
+| 运行账户与权限模型 | 安装器以何身份运行、提权凭据如何传入（不得进入 argv、日志与报告）；部署用户与 Agent 用户命名；sudo 最小授权范围。I4 新增：若 Agent 使用私钥认证，私钥须为本部署账号所有且 0600（Ansible 以该账号读取），站点需确认密钥下发/所有权归属 | 阻断写入阶段；不得沿用既有站点的账号名假设 |
 | 时间与区域 | 站点时区、NTP 源与验收阈值。演练观测：源站与目标机时区不同且初始未同步 | 预检不通过即阻断 |
-| 设备接入计划 | 首站 ADB/USB 与 udev 策略、S6 验收载体（真机或明确替代方案）、设备数量级 | S6 记“未覆盖”，不得以模拟测试替代真机结论 |
+| 设备接入计划 | 首站 ADB/USB 与 udev 策略、S6 验收载体（真机或明确替代方案）、设备数量级；I4 已提供降级路径（`verify` + `noop/v1.0.0` + 静态设备序列号），真机仍须单独确认 | S6 记“未覆盖”，不得以模拟测试替代真机结论；降级路径的无设备/存储/scan 检查以 `BLOCKED` 呈现 |
 | 版本身份注入 | 无 git checkout 安装时，控制面与 Agent 两侧如何提供产品版本与来源 revision。演练观测：按现有手工流从暂存目录安装时 Agent 版本标识为空 | 视为未完成安装，不得报成功 |
 | 首站规模与维护 | Host/Device 数量级、长跑作业避让、维护窗口、恢复目标及首站验收负责人 | 不承诺固定安装分钟数或零停机；先记录基线与可测目标 |
 | 业务定义导入范围 | 哪些 Plan/Tool/Project 需随站点复用及承载方式（当前仅套件具备 XML 工件级导入导出） | 默认空站点；不复制源站业务库 |

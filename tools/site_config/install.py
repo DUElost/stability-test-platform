@@ -18,6 +18,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
+from .agents import stage_s5_agents
 from .manifest import load_release_manifest
 from .ops import LocalOps, Ops
 from .stages import (
@@ -62,13 +63,25 @@ def _deferred_checks() -> list[Check]:
     return [check for check in DEFERRED_CHECKS if check.check_id != "release.compatibility"]
 
 
-def _report(checks: list[Check], stages: list[dict], *, state_path: str | None = None) -> dict:
+def _report(
+    checks: list[Check],
+    stages: list[dict],
+    *,
+    state_path: str | None = None,
+    agent_stage: bool = False,
+) -> dict:
+    summary = (
+        "Local install stage results only; release origin, remote targets and business acceptance remain unverified."
+    )
+    if agent_stage:
+        summary += (
+            " Agent onboarding ran against this site's own API; controlled device and storage"
+            " acceptance (S6) remains unverified."
+        )
     report = {
         "stage": "install",
         "status": "FAIL" if any(check.status == "FAIL" for check in checks) else "PASS",
-        "summary": (
-            "Local install stage results only; release origin, remote targets and business acceptance remain unverified."
-        ),
+        "summary": summary,
         "checks": [asdict(check) for check in checks],
         "deferred_checks": [asdict(check) for check in _deferred_checks()],
         "stages": stages,
@@ -190,6 +203,7 @@ def run_install(
     confirm_site: str,
     confirm_target: str,
     dry_run: bool = False,
+    through_agents: bool = False,
     ops: Ops | None = None,
     db_probe: DatabaseProbe | None = None,
     system_root: Path | None = None,
@@ -211,7 +225,8 @@ def run_install(
 
     try:
         return _run_locked(
-            config_path, bindings_dir, state_dir, confirm_site, confirm_target, dry_run, ops, probe, checks, system_root,
+            config_path, bindings_dir, state_dir, confirm_site, confirm_target, dry_run, ops, probe, checks,
+            system_root, through_agents,
         )
     finally:
         os.close(lock_fd)
@@ -219,6 +234,7 @@ def run_install(
 
 def _run_locked(
     config_path, bindings_dir, state_dir, confirm_site, confirm_target, dry_run, ops, probe, checks, system_root,
+    through_agents=False,
 ) -> dict:
     config_path = Path(config_path)
     try:
@@ -333,7 +349,16 @@ def _run_locked(
     checks.extend(result)
     stages.append(_stage_entry("S4", result))
     state_name = _persist_state(ctx, stages)
-    return _report(checks, stages, state_path=state_name)
+    if any(check.status == "FAIL" for check in result) or not through_agents:
+        return _report(checks, stages, state_path=state_name)
+
+    # S5 — Agent onboarding over this site's own API (I4).  Opt-in: a site that
+    # installs the control plane before its Agents must stay a supported flow.
+    result = stage_s5_agents(ctx)
+    checks.extend(result)
+    stages.append(_stage_entry("S5", result))
+    state_name = _persist_state(ctx, stages) or state_name
+    return _report(checks, stages, state_path=state_name, agent_stage=True)
 
 
 def _state_payload(ctx: InstallContext, stages: list[dict]) -> dict:

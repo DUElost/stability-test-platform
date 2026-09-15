@@ -100,9 +100,10 @@ sed -i 's/\r$//' install_agent.sh
 sudo bash install_agent.sh
 ```
 
-安装脚本交互提示：
-- **API_URL**：WSL 环境直接回车（自动检测使用 `127.0.0.1`）；远程主机输入中心服务器 IP
-- **HOST_ID**：直接回车使用建议值（默认按本机 IPv4 生成，如 `198.51.100.6` → `198-51-100-6`），或输入 `auto` 自动注册
+安装脚本参数来源（**非交互优先**）：
+- `AGENT_API_URL`：控制面公开入口。这是非交互安装的必填项；无 TTY 且未设置时脚本直接退出 1（不再阻塞在提示上）
+- `AGENT_HOST_ID`：可选。控制面 `POST /hosts/{id}/install` 会按 DB 记录注入；未注入时按本机 IPv4 生成（如 `198.51.100.6` → `198-51-100-6`）
+- 交互式运行（stdin 是终端）时，脚本才会提示 `API_URL`/`HOST_ID`：WSL 直接回车用 `127.0.0.1`，远程主机输入中心服务器地址
 
 安装脚本将自动完成：
 - 创建安装目录 `/opt/stability-test-agent`
@@ -447,7 +448,7 @@ for HOST in "${HOSTS[@]}"; do
     # 远程安装（修复 CRLF + 非交互执行）
     ssh root@$HOST << EOF
         sed -i 's/\r$//' /tmp/agent-install/agent/install_agent.sh
-        cd /tmp/agent-install/agent && bash install_agent.sh <<< "$API_URL"
+        cd /tmp/agent-install/agent && AGENT_API_URL="$API_URL" bash install_agent.sh
         systemctl daemon-reload
         systemctl start stability-test-agent
         systemctl status stability-test-agent --no-pager

@@ -22,6 +22,14 @@ agent_auto_register_host: false
 agent_poll_interval: 10
 agent_adb_path: "adb"
 agent_log_level: "INFO"
+# Agent 端 AEE 存储路径（安装时写入 .env）。
+# 空值 = 不写、且不覆盖目标 .env 中既有非空值——两项语义不同：
+#   STP_AEE_NFS_ROOT   中心存储挂载点，通常由控制面 fleet 键热更新下发，
+#                      此处仅作首次安装兜底（值须与站点 storage.mount_path 一致）。
+#   STP_AEE_LOCAL_ROOT 机器本地 HDD 第一落点，布局随机型而异，热更新不覆盖，
+#                      站点安装由 install_options.agent_local_aee_root 显式指定。
+agent_nfs_root: ""
+agent_local_aee_root: ""
 agent_health_log_tail_lines: 40
 agent_agentctl_path: "{{ agent_install_dir }}/agentctl"
 agent_source_dir: "{{ playbook_dir }}/../../../backend/agent"
