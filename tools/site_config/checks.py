@@ -110,6 +110,7 @@ MESSAGES = {
     "bundle_wheelhouse": "Downloading wheels failed; retry with a reachable index or ship wheels out of band.",
     "install_frontend": "The public entry did not serve the front-end bundle; check the deploy-root traversal bits and the Nginx root.",
     "install_health": "The control plane did not reach a healthy, schema-aligned state in time.",
+    "install_monitoring": "The site monitoring stack did not come up; check the package install, that the distribution unit reads ARGS from /etc/default, and `systemctl status prometheus prometheus-node-exporter`.",
     # ── S5 Agent 接入（I4）───────────────────────────────────────────────
     "agent_key_permissions": "Own the declared private key with mode 0600 as the control-plane service account so Ansible can read it.",
     "agent_install_unconfigured": "Set STP_AGENT_INSTALL_API_URL on the control plane (S2 renders it) and retry the install.",

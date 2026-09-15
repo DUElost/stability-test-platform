@@ -413,6 +413,12 @@ def init_site(
             "contact": decide("站点负责人 (contact)", f"{role}-ops", "contact"),
             "documentation_url": decide("运维文档 URL", "https://docs.example.invalid/site-ops", "documentation_url"),
         },
+        "monitoring": {
+            # 站点本地监控栈：/storage 页的数据源（本地 Prometheus + node-exporter）。
+            # 默认装——装了存储却没装监控栈的站点，页面永远是空的。
+            "enabled": True,
+            "prometheus_port": 9091,
+        },
     }
     header = _header(provenance, facts, disk_note)
     if not dry_run:

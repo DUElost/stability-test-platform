@@ -1,0 +1,19 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+#
+# 站点本地抓取配置（#2197）：admin 存储页（/storage）的数据源就是这里的 job。
+# 后端默认按 http://127.0.0.1:9091 查询（STP_PROMETHEUS_URL 未设时），
+# job 名 file-server 对应 STP_CONTROL_PLANE_NODE_JOB 的默认值，两者都不要再改：
+# 改了要同步站点后端环境，否则页面会静默空掉。
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+  # 中心化时用于区分站点来源；本站点自用不影响查询。
+  external_labels:
+    site: "<site-id>"
+
+scrape_configs:
+  # 控制面与中心存储同机（方案 A 的 local_mount）：node-exporter 只听回环，
+  # 不对外暴露指标端口。NFS 服务端指标（node_nfsd_*）也由这个 job 提供。
+  - job_name: file-server
+    static_configs:
+      - targets: ["127.0.0.1:9100"]

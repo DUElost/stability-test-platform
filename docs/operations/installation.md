@@ -96,6 +96,30 @@ sudo ./deploy/install.sh --database stp_b --public-url http://192.0.2.5 --data-d
 
 **绝不会做**：格式化磁盘、删除既有数据目录、递归改既有数据的属主、覆盖未接管的数据库、`--force` 绕过保护。
 
+### 监控栈：`/storage` 页的数据源（`monitoring`）
+
+`init` 写 `monitoring.enabled: true`（默认装）：站点自带 Prometheus + node-exporter，
+`/storage` 页才有数据。连接面全部在回环，站点入口不暴露任何指标端口：
+
+- **S1**：装发行版包 `prometheus` 与 `prometheus-node-exporter`；
+- **S2**：渲染抓取配置 `/etc/stp/prometheus/prometheus.yml`（job `file-server` → `127.0.0.1:9100`）、
+  监听参数 `/etc/default/prometheus`（`--web.listen-address=127.0.0.1:<prometheus_port>`，默认 9091）
+  与 `/etc/default/prometheus-node-exporter`（回环 + `--collector.nfsd` + textfile 采集器）；
+- **S4**：落地宿主进程内存采样器（`/usr/local/sbin/stp-mem-top` + `stp-mem-top.timer`）、
+  `enable --now` 三个单元，并实测 `http://127.0.0.1:<端口>/-/ready` 才报 PASS。
+
+两个不变量：
+
+- **端口与 job 名就是后端默认值**——`STP_PROMETHEUS_URL` 未设时后端查 `127.0.0.1:9091`，
+  `STP_CONTROL_PLANE_NODE_JOB` 未设时用 `file-server`。改这两处要同步站点后端环境，
+  否则页面会静默空掉（装监控栈本就是为了它）。
+- **发行版 unit 必须以 `$ARGS` 读 `/etc/default`**：读不到时安装器在写任何配置之前 FAIL
+  （`install_monitoring`）。否则我们写的启动参数会被静默忽略，Prometheus 退回发行版默认
+  端口与自带配置，页面空着而安装报告是绿的。
+
+不想装监控栈的站点：把 `monitoring.enabled` 置 `false` 后重跑（安装面最小化），
+代价是 `/storage` 页没有数据源。
+
 ## 4. `agent/install.sh`：按 inventory 接 Agent
 
 ```bash
@@ -209,6 +233,7 @@ sudo ./deploy/install.sh handover
 | `inventory_shape` | 清单键名/键值形状不对 | 只用文档列出的键；值不含空格 |
 | `agent_install_root_mismatch` | 清单与站点声明的安装根不一致 | 统一 `install_root`（站点级单值） |
 | `install_storage` | 声明路径不是挂载点 | 先挂盘/bind，或 `--data-disk` 让 `init` 处理 |
+| `install_monitoring` | 监控栈没起来：包装不上 / 发行版 unit 不读 `$ARGS` / `/-/ready` 未就绪 | `dpkg -l prometheus prometheus-node-exporter`、`grep -n ARGS /usr/lib/systemd/system/prometheus.service`、`systemctl status prometheus prometheus-node-exporter stp-mem-top.timer`、`journalctl -u prometheus -n 50` |
 | `install_confirm` / `install_hostname` | 确认值或主机名对不上 | 确认在目标机上执行，`--confirm-site/--confirm-target` 取自 `site.yaml` |
 | `state_locked` | 同站点已有安装在进行 | 等它结束，或确认无残留进程后重跑 |
 
