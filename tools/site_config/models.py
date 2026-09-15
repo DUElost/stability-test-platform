@@ -235,10 +235,15 @@ class Storage(ConfigModel):
     share: str | None = None
     credential_ref: Name | None = None
     mount_path: DedicatedPath
+    # 把本机子树以 NFS 导出给本站 Agent（Agent 的 STP_AEE_NFS_ROOT 才有意义）。
+    # 仅 local_mount 可开：远端分享/受管存储由对方导出，站点再导出会形成两套来源。
+    export_to_agents: bool = False
 
     @model_validator(mode="after")
     def storage_consistency(self) -> Self:
         management_fields = (self.os, self.ssh_user, self.ssh_credential_ref)
+        if self.export_to_agents and self.provisioning != "local_mount":
+            raise invalid("storage_export_conflict")
         if self.provisioning == "local_mount":
             # 本机路径不是「分享」：写进 target/protocol/share 只会让 site.yaml 说谎
             if any(value is not None for value in (

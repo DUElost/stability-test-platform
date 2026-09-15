@@ -213,6 +213,15 @@ def test_verify_dry_run_is_refused_before_any_write():
     assert text.index("verify has no --dry-run") < text.index("deploy_ensure_python")
 
 
+def test_verify_forwards_extra_flags_like_the_storage_probe():
+    """verify 的受控写读探针是透传参数：脚本不得把它当未知选项吞掉。"""
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    verify_call = text.split("deploy_stp verify", 1)[1].split("\n", 1)[0]
+    assert "PASSTHROUGH" in verify_call
+    # 提示里也要有：否则操作者不会知道要显式授权探针子目录
+    assert "--storage-probe-subdir" in text
+
+
 def test_preflight_script_never_prepares_anything():
     text = (DEPLOY / "preflight.sh").read_text(encoding="utf-8")
     assert "deploy_find_python" in text

@@ -78,7 +78,7 @@ if [ "$SUBCOMMAND" = "verify" ]; then
 
 verify: to let handover consume this run, save the same report as JSON:
   sudo $DEPLOY_PYTHON -m tools.site_config verify --config $STP_SITE_FILE \\
-      --bindings-dir $STP_BINDINGS_DIR --json > $STP_STATE_DIR/verify-report.json
+      --bindings-dir $STP_BINDINGS_DIR [--storage-probe-subdir <name>] --json > $STP_STATE_DIR/verify-report.json
 EOF
     exit 0
 fi

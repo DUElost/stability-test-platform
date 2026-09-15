@@ -107,6 +107,11 @@ def main(argv: list[str] | None = None) -> int:
         default=900.0,
         help="Seconds to wait for the controlled run to reach a terminal state (default 900).",
     )
+    verify.add_argument(
+        "--storage-probe-subdir",
+        default=None,
+        help="Authorize one write/read probe file under this subdirectory of the central storage.",
+    )
     verify.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
     handover = commands.add_parser(
         "handover",
@@ -176,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             bindings_dir=arguments.bindings_dir,
             device_serial=arguments.device_serial,
             run_timeout=arguments.run_timeout,
+            storage_probe_subdir=arguments.storage_probe_subdir,
         )
     else:
         from .install import run_install
