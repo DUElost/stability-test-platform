@@ -24,6 +24,9 @@ from pathlib import Path
 
 MANIFEST_NAME = "release-manifest.json"
 TREE_LAYOUT = ("backend", "deploy", "tools", "frontend/dist-prod")
+# Agent 载荷的资源目录不在 git（230MB 工具集）：缺了它 bundle 照样能构建，
+# 但 Agent 的 host-resources 摘要会与清单不符（或功能缺失），要到 S5 才暴露。
+AGENT_RESOURCES = "backend/agent/resources"
 DEFAULT_VERSION_PREFIX = "local"
 SUPPORTED_PLATFORMS = (
     {"distribution": "debian", "versions": ["13"], "cpu_arch": ["x86_64"]},
@@ -130,6 +133,11 @@ def build_bundle(
     repo_root, out = Path(repo_root).resolve(), Path(out).resolve()
     python = python or sys.executable
     missing = [name for name in TREE_LAYOUT if not (repo_root / name).exists()]
+    if not missing and not (repo_root / AGENT_RESOURCES).is_dir():
+        raise BundleError(
+            "bundle_resources",
+            f"{AGENT_RESOURCES} is not in git; copy it from the build host before packaging",
+        )
     if "frontend/dist-prod" in missing:
         raise BundleError(
             "bundle_frontend", "run `cd frontend && npm ci && npm run build:prod` first",

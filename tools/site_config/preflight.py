@@ -328,8 +328,14 @@ def _bindings_check(directory: Path) -> Check:
     )
 
 
+BUNDLE_REQUIRED = (
+    "release-manifest.json", "backend", "backend/agent", "backend/agent/resources",
+    "backend/schemas", "frontend/dist-prod", "deploy", "tools",
+)
+
+
 def _bundle_check(bundle: Path) -> Check:
-    required = ("release-manifest.json", "backend", "backend/agent", "backend/schemas", "frontend/dist-prod", "deploy", "tools")
+    required = BUNDLE_REQUIRED
     missing = [name for name in required if not (bundle / name).exists()]
     if missing:
         return _fail(

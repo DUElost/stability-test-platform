@@ -181,12 +181,18 @@ def test_bundle_layout_is_checked_with_the_missing_paths(tmp_path):
     check = checks_by_id(run_preflight(bundle=bundle, ops=healthy_ops()))["preflight.bundle"]
     assert check["status"] == "FAIL"
     assert "frontend/dist-prod" in check["message"]
+    assert "backend/agent/resources" in check["message"]
     assert "release-manifest.json" in check["message"]
 
-    for name in ("release-manifest.json", "backend/agent", "backend/schemas", "frontend/dist-prod", "deploy", "tools"):
+    from tools.site_config.preflight import BUNDLE_REQUIRED
+
+    for name in BUNDLE_REQUIRED:
         target = bundle / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("", encoding="utf-8")
+        if "." in Path(name).name:      # 文件（release-manifest.json 等）
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("", encoding="utf-8")
+        else:                            # 目录（backend、backend/agent/resources 等）
+            target.mkdir(parents=True, exist_ok=True)
     assert checks_by_id(run_preflight(bundle=bundle, ops=healthy_ops()))["preflight.bundle"]["status"] == "PASS"
 
 

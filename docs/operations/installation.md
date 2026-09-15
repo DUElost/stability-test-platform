@@ -201,6 +201,7 @@ sudo ./deploy/install.sh handover
 | `db_unreachable` / `db_unmanaged` | 数据库拒绝绑定 / 非空且非本平台 | 先看是不是上面那条（既有角色）；其余用空库，非空库需人工裁决，不得清空 |
 | `preflight_redis` | Redis 未回 PONG | 修通 Redis 或换 db index |
 | `bundle_frontend` | 前端产物缺失 | `cd frontend && npm ci && npm run build:prod` |
+| `bundle_resources` | `backend/agent/resources` 缺失（不在 git） | 从构建机/发布渠道带上该目录（230MB 工具集），再打包 |
 | `bundle_revision` | 不是 git 工作树 | 显式 `--revision` 或改用预置 bundle |
 | `inventory_user_missing` | 清单缺 `ansible_user` | 补该行或写进 `[stp_agents:vars]` |
 | `inventory_credential_missing` | 清单缺凭据 | 补 `ansible_password` 或 `ansible_ssh_private_key_file` |

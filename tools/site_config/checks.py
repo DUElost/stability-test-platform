@@ -101,6 +101,7 @@ MESSAGES = {
     "bootstrap_database": "Preparing the empty database failed; create the role/database manually and re-run init.",
     "bootstrap_storage": "Preparing the storage mount failed; mount the declared share first and re-run init.",
     "bundle_layout": "The working tree is missing required directories; build the front-end first.",
+    "bundle_resources": "The bundle must carry backend/agent/resources (not in git); copy it from the build host or the release channel.",
     "bundle_frontend": "Build the front-end (cd frontend && npm ci && npm run build:prod) before building a bundle.",
     "bundle_revision": "Not a git checkout; pass an explicit --revision for the release manifest.",
     "bundle_schema_target": "Derive the alembic head or pass --schema-target explicitly.",
