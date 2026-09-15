@@ -57,6 +57,8 @@ export interface HostTableData {
   agent_installed?: boolean;
   agent_protocol_version?: string | null;
   agent_code_revision?: string | null;
+  /** ADR-0040 v1.1：drift/matched 的唯一判据源（远端上报的 code digest） */
+  agent_artifact_digest?: string | null;
   expected_code_revision?: string | null;
   agent_code_deployed?: string | null;
   agent_code_deployed_at?: string | null;
@@ -122,7 +124,7 @@ const REASON_LABELS: Record<string, string> = {
 const AGENT_SYNC_LABELS: Record<AgentCodeSyncStatus, string> = {
   matched: '已对齐',
   pending: '待上报',
-  drift: '版本漂移',
+  drift: '内容漂移',
   unknown: '未知',
 };
 
@@ -598,9 +600,11 @@ export function ExpandableHostTable({
                                 agentSyncBadgeClass(host.agent_code_sync_status),
                               )}
                               title={
-                                host.expected_code_revision
-                                  ? `期望修订 ${host.expected_code_revision}`
-                                  : undefined
+                                host.agent_artifact_digest
+                                  ? `当前摘要 ${host.agent_artifact_digest.replace(/^sha256:/, '').slice(0, 12)}${host.expected_code_revision ? ` · 期望 HEAD @${host.expected_code_revision}` : ''}`
+                                  : host.expected_code_revision
+                                    ? `未上报摘要 · 期望 HEAD @${host.expected_code_revision}`
+                                    : undefined
                               }
                             >
                               {AGENT_SYNC_LABELS[host.agent_code_sync_status ?? 'unknown']}
@@ -812,6 +816,17 @@ export function ExpandableHostTable({
                                     <span className="text-muted-foreground shrink-0">协议</span>
                                     <span className="font-mono text-foreground truncate">
                                       {host.agent_protocol_version ?? '—'}
+                                    </span>
+                                  </div>
+                                  <div className="flex justify-between text-xs gap-2">
+                                    <span className="text-muted-foreground shrink-0">部署摘要</span>
+                                    <span
+                                      className="font-mono text-foreground truncate"
+                                      title={host.agent_artifact_digest ?? undefined}
+                                    >
+                                      {host.agent_artifact_digest
+                                        ? host.agent_artifact_digest.replace(/^sha256:/, '').slice(0, 12)
+                                        : '未上报'}
                                     </span>
                                   </div>
                                   <div className="flex justify-between text-xs gap-2">

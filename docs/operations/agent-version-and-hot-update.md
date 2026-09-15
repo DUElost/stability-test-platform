@@ -10,16 +10,22 @@
 | 字段 | 来源 | 用途 |
 |------|------|------|
 | **协议版本** `agent_version` / `agent_protocol_version` | Agent 包 `__version__`，经 heartbeat / claim 上报 | 可选 claim 门禁（`STP_AGENT_MIN_VERSION`） |
-| **代码修订** `agent_code_revision` | 热更新写入的 `agent/VERSION`（git short SHA 等） | 与控制面期望对比，展示 drift / matched / pending |
+| **代码修订** `agent_code_revision` | 热更新写入的 `agent/VERSION`（git short SHA 等） | **纯溯源展示**（ADR-0040 v1.1）——**不参与 drift 判定** |
+| **部署摘要** `agent_artifact_digest` | 远端 `agent/ARTIFACT_DIGEST` 经心跳上报（ADR-0040 D1） | 与控制面现算 desired digest 对比——**drift / matched 的唯一判据** |
 
-Host UI（`ExpandableHostTable`）展示协议版本、code sync 徽章与相对心跳时间。
+> **判据唯一性（ADR-0040 v1.1，#2057）**：`agent_code_sync_status` 只由 digest 产生。
+> `expected_code_revision` 取的是**仓库 HEAD**，任何不动 `backend/agent/**` 的提交都会让
+> revision 前进而 digest 不变；按 revision 判等会让全 fleet 假 drift，且热更新回
+> `converged(digest-matched)` 也不会消掉徽章（唯一出口只有 `--force`）。
+
+Host UI（`ExpandableHostTable`）展示协议版本、部署摘要、code sync 徽章与相对心跳时间。
 
 ---
 
 ## 2. 滚动升级顺序（强制建议）
 
 1. **先**热更新 / Ansible 推 Agent（含 `pipeline_schema.json`、`VERSION`）。  
-2. 主机页确认 `agent_code_sync_status` 多为 `matched`（或至少已上报 revision）。  
+2. 主机页确认 `agent_code_sync_status` 多为 `matched`；`unknown` = 未上报 digest（#1907 前部署 / 新装未心跳），需一次 `--force` 迁移写入身份文件。  
 3. **再**在控制面设置 `STP_AGENT_MIN_VERSION`（未设置时门控关闭，旧 Agent 仍可 claim）。  
 
 错误顺序：先升控制面并写死较高 `STP_AGENT_MIN_VERSION` → 旧 Agent claim **426**，PENDING 积压。
@@ -108,7 +114,8 @@ CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_ag
 | claim 426 `AGENT_UPGRADE_REQUIRED` | Agent 协议版本 vs `STP_AGENT_MIN_VERSION`；临时可清空该 env 恢复放行 |
 | 心跳正常无任务 | `HOST_ID`、host ONLINE、容量/lease、Agent 是否被门禁 |
 | 升级被拒（409 / 门禁不可达） | 该 host 是否有活跃 Job（需 `abort_running_jobs=true` 排空）；控制面是否可达（不可达 fail-closed）；维护窗口 `host.maintenance_until/holder` 是否被他人持有 |
-| UI 显示 drift | Agent 未上报新 revision；热更新是否写 VERSION；控制面 `get_agent_code_version()` 期望是否刷新 |
+| UI 显示「内容漂移」 | 判据是 digest：`host.agent_artifact_digest` ≠ 控制面现算 desired（ADR-0040 v1.1）。检查远端 `agent/ARTIFACT_DIGEST` 是否写入并随心跳上报；**revision 不等不再构成 drift**（期望修订取仓库 HEAD，见 §1） |
+| UI 显示「未知」 | 主机从未上报 digest（#1907 前部署 / 新装未心跳）→ 等一次心跳，或首次 `--force` 迁移一次写入身份文件；**不是**待更新 |
 | 每次热更新都全量（不 no-op） | 远端 `agent/ARTIFACT_DIGEST` 是否存在且被心跳上报（`host.agent_artifact_digest` 非空）；digest 判定见 ADR-0040；带外改文件属信任模型例外（§7-3） |
 | Ansible 更新后仍 drift 一轮 | `update_agent.yml` 是否跑到了「Write agent ARTIFACT_DIGEST(_RESOURCES)」任务（health 通过后才写）；`compute_deploy_digest.py` 是否与控制面同 checkout 现算；旧 playbook（< #1997）不写身份文件 |
 | 校验 / schema 不一致 | 热更新是否带上 `pipeline_schema.json`（见 2026-07 host-update 修复） |
