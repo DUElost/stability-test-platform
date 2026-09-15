@@ -1,13 +1,13 @@
 # ADR-0037：Agent 主机提权边界（Privilege Boundary Wrapper）
 
-- 状态：**Proposed**
-- 版本记录：v0.1（2026-09-11 初版，R14-F04 #1250 触发）
+- 状态：**Proposed**（待 R02 安全联审）
+- 版本记录：v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）
 - 优先级：P1
 - 目标里程碑：M7
-- 日期：2026-09-11
+- 日期：2026-09-11（v0.2 修订 2026-09-15）
 - 决策者：平台研发组（R02 安全联审）
 - 标签：安全, 提权, sudoers, 热更新, Agent 主机
-- 关联：R14 台账 [#1266](https://github.com/DUElost/stability-test-platform/issues/1266)（R14-F04 [#1250](https://github.com/DUElost/stability-test-platform/issues/1250)）；R02 安全审查（联审项）；ADR-0035（主机身份与凭据方向，wrapper 鉴权面待其落地后重审）；#960（维护窗口）；#1247/#1248（热更新工件与主机本地资源保护）
+- 关联：R14 台账 [#1266](https://github.com/DUElost/stability-test-platform/issues/1266)（R14-F04 [#1250](https://github.com/DUElost/stability-test-platform/issues/1250)）；R02 安全审查（联审项）；ADR-0035（主机身份与凭据方向，wrapper 鉴权面待其落地后重审）；#960（维护窗口）；#1247/#1248（热更新工件与主机本地资源保护）；[#2133](https://github.com/DUElost/stability-test-platform/issues/2133)（flash 链运行时提权收口，v0.2 新增）；[#2134](https://github.com/DUElost/stability-test-platform/issues/2134)（宽文件清除与 legacy 退役）
 
 ## 1. 背景
 
@@ -18,7 +18,7 @@
 执行能力即可通过 `sudo rsync` 等对任意 root 文件提权写，非 root Agent 的
 权限边界不成立（R14 二次核验属实）。
 
-### 1.2 事实核验（2026-09-11，静态盘点 + 容器实证）
+### 1.2 事实核验（2026-09-11 静态盘点 + 容器实证；2026-09-15 勘误与补验，见 v0.2）
 
 旧规则的**真实消费方只有 UI 热更新远端脚本**（`host_updater.py`）：代码同步
 （rsync）、schema 安装（mkdir/install）、VERSION 与依赖标记（tee）、`.env`
@@ -29,9 +29,17 @@
   密码 sudo）；
 - Ansible 安装/更新链用 `become`（inventory 密码作 sudo 密码）完成 root
   操作，**不依赖** NOPASSWD 规则；
-- `flash_preflight v1.0.x`（已发布不可变）期望 `sudo -n sh -c <任意命令>` 做
-  apt/usermod/udev 修复，而现行规则本就不含 `sh`/`apt-get`/`usermod`——该
-  修复分支现状已不可用，本次收窄不构成回归（恢复能力需新版本脚本，见 §5）。
+- **〔v0.2 勘误〕** 初版盘点漏记一个存量文件：`/etc/sudoers.d/android`
+  （内容 `android ALL=(ALL) NOPASSWD: ALL`），install/update 链均不清理它。
+  因此 `flash_preflight`/`flash_firmware` 的 `sudo -n sh -c` 修复与 sysfs
+  `authorized` 门控分支**并非不可用，而是在用**——2026-09-15 实测：36 次
+  preflight 的 `usermod` 修复 rc=0（2026-09-12，刷机主机）、487 次 flash 中
+  280 次门控经 sudo 回落成功（agent 以 `android` 运行、目标 sysfs 文件 644
+  root:root，直写不可能）；反例实验（仅收窄 sudoers、无宽文件的 I4 容器）
+  则 `sudo -n true` rc=1、preflight 直接 `success:false`。故「本次收窄不构成
+  回归」在**收窄动作**上仍成立（收窄只重写
+  `/etc/sudoers.d/stability-test-agent`，flash 链仍走宽文件），但宽文件是
+  既定退役对象，其删除必须以 flash 链收敛为前提（§2 D5、§5）。
 
 ### 1.3 约束
 
@@ -47,7 +55,8 @@
 - **D2 子命令白名单 + 内部校验**：wrapper 仅接受固定子命令
   （`bootstrap/selftest/apply-code/install-schema/write-version/write-digest/
   sync-env/deps-marker/fix-ownership/restart`；`write-digest` 为 ADR-0040 D2
-  落地时的同族扩展，#1907 按 §7-5 同 PR 回填），且内部强制：
+  落地时的同族扩展，#1907 按 §7-5 同 PR 回填；`ensure-udev-rule` /
+  `usb-authorized` 为 D5（flash 链）扩展，#2133），且内部强制：
   所有目标路径固定（`$INSTALL_DIR` 及固定子路径，组件级前缀校验）、
   源文件/暂存目录必须为调用者属主、schema 必须通过 JSON 结构校验、
   版本/SHA 走字符集正则、`chown -R -h`（symlink 不 deref）、rsync 使用
@@ -62,10 +71,19 @@
   conf 与 sudoers（visudo 校验后原子替换，失败即中止）。迁移期热更新检测
   wrapper：缺失则回退 legacy 旧 sudo 面并输出 `STP_PRIV_FALLBACK=legacy`
   哨兵（控制面 `priv_mode` 审计可见）；sudoers 重写完成的主机自动走
-  wrapper。legacy 分支在 fleet 迁移完成后删除（见 §5 Revisit）。
+  wrapper。legacy 分支与存量宽文件在 fleet 迁移完成**且 flash 链验收通过**
+  后删除/清除（判据见 §5 Revisit #1，v0.2 收严）。
 - **D4 显式不做**：不动 Ansible 自身的密码 become 通道（与 NOPASSWD 面
   无关）；不引入 per-host 凭据（ADR-0035 实施面）；wrapper 不放进安装
   目录，也不提供任何「任意目标路径」参数。
+- **D5 flash 链运行时提权收敛**（v0.2 新增，#2133）：`flash_preflight` /
+  `flash_firmware` 的运行时 root 需求按「provisioning 归位 + 固定面兜底」
+  收敛——apt 包集合、dialout 成员、udev 规则由 install/update 链在 root 期
+  保证（运行期不装包）；wrapper 扩展两个窄子命令：`ensure-udev-rule`
+  （固定路径与内容，无参数面）与 `usb-authorized`（`--port` 走字符集校验、
+  `--value ∈ {0,1}`，写 sysfs `authorized`）。脚本以**新版本**落地（已发布
+  版本不可原地改）。在本项验收（无宽文件主机上 flash 链通过）完成前，
+  `/etc/sudoers.d/android` 不得删除。
 
 ## 3. 备选与否决
 
@@ -80,9 +98,12 @@
 
 ## 4. 影响与不变量
 
-- **不变量**：Agent 用户的 NOPASSWD 面 ⊆ {固定 systemctl, wrapper}；
+- **不变量（目标态）**：Agent 用户的 NOPASSWD 面 ⊆ {固定 systemctl, wrapper}；
   wrapper 的所有写目标固定在安装目录内；wrapper 文件与 conf 必须
   root 属主且非 group/other 可写（`selftest` 校验）。
+- **迁移期实测偏差（2026-09-15）**：`/etc/sudoers.d/android` 宽规则仍存于
+  48/48 台（含全部 wrapper 主机）——目标态不变量在清除动作完成前不成立；
+  清除的前置与验收见 §5（D5 / #2133）与执行单 #2134。
 - **失败模式**：wrapper/conf 缺失 → 热更新走 legacy + 哨兵（可观测，
   sudoers 重写后自动消失）；bootstrap 失败 → 安装/更新中止，不产出半迁移
   状态；控制面不可达与维护窗口语义见 #960/#1249，不受本 ADR 影响。
@@ -96,10 +117,14 @@
   单测覆盖拒绝面）；② 热更新仍可用（wrapper 路径 + legacy 回退）；③ R02
   安全联审（独立于实现，需评审一稿）。
 - **Revisit**：
-  1. fleet 全部出现 `priv_mode=wrapper` 后，删除 legacy 分支与哨兵解析；
+  1. fleet 全部出现 `priv_mode=wrapper` **且 flash 链在无宽文件主机验收通过
+     （D5 / #2133）**后：删除 legacy 分支与哨兵解析，并清除存量宽文件
+     `/etc/sudoers.d/android`（visudo 校验、canary 先行；执行单 #2134）；
   2. ADR-0035 的 per-host 凭据落地后，重审 wrapper 的授权主体（从共享
      agent secret 切到主机身份）；
-  3. `flash_preflight` 若需恢复修复能力，出**新版本**脚本改调 wrapper
-     子命令（不可原地改已发布版本）；
+  3. flash 链运行时提权收敛（#2133）：`flash_preflight` / `flash_firmware`
+     出**新版本**脚本改调 D5 窄子命令（不可原地改已发布版本）。本条 v0.1
+     时为条件项（「若需恢复修复能力」）；v0.2 起因实证该能力在用而改为
+     **下线前置**——宽文件删除前必须先完成收敛；
   4. 若出现「wrapper 缺陷导致热更新不可用」的事故，优先修 wrapper 并发新
      版本，不回退到宽 sudoers。
