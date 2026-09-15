@@ -1,0 +1,110 @@
+---
+# #2095 — 统一 Agent 主机时区为与控制面一致（Asia/Shanghai）
+#
+# 背景：主机装机镜像默认 America/Los_Angeles(PDT, -0700)，而平台约定 Asia/Shanghai(+0800)，
+# 两者挂钟相差 15 小时。实测双方 UTC 仅差 1 秒（NTP 正常、RTC=UTC），因此这是**时区配置**
+# 问题而非时钟走偏——但它让主机侧日志时间戳无法与平台时间线直接对照（排查时极易误判）。
+#
+# 安全设计：
+#   1) 改时区**之前**先断言本机 UTC 与控制面 UTC 偏差 ≤ 阈值：不把"时钟真的走偏"
+#      用改时区掩盖掉（宁可失败，也不制造"看起来对了"的假象）；
+#   2) 幂等：已是目标时区则不做任何动作（changed=false）；
+#   3) 只改时区，不触碰 NTP / 系统时钟 / 硬件时钟；
+#   4) 每次输出 old -> new 偏移，便于回滚与留证。
+#
+# 用法：
+#   金丝雀：  ansible-playbook -i <inventory> playbooks/set_timezone.yml \
+#               -e tz_hosts=<group> --limit 172.21.15.56
+#   全机群：  ansible-playbook -i <inventory> playbooks/set_timezone.yml -e tz_hosts=<group>
+#   预演：    追加 --check --diff
+- name: Align agent host timezone with control plane
+  hosts: "{{ tz_hosts | default('linux_hosts') }}"
+  gather_facts: false
+
+  vars:
+    tz_target: "Asia/Shanghai"
+    tz_expected_offset: "+0800"
+    tz_utc_skew_tolerance_seconds: 5
+
+  tasks:
+    - name: Read control-plane UTC epoch (controller side)
+      ansible.builtin.set_fact:
+        tz_control_utc_epoch: "{{ lookup('pipe', 'date -u +%s') }}"
+
+    - name: Probe host timezone, local offset and UTC epoch
+      become: true
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s|%s|%s' \
+          "$(readlink -f /etc/localtime | sed 's#.*/zoneinfo/##')" \
+          "$(date +%z)" \
+          "$(date -u +%s)"
+      args:
+        executable: /bin/bash
+      register: tz_probe
+      changed_when: false
+      # 只读探针：check 模式也需真实执行，否则 assert/输出拿不到值。
+      check_mode: false
+
+    - name: Show current state (pre-change visibility)
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: tz={{ tz_probe.stdout.split('|')[0] | trim }}
+          offset={{ tz_probe.stdout.split('|')[1] | trim }}
+          utc_delta={{ (tz_control_utc_epoch | int) - (tz_probe.stdout.split('|')[2] | int) }}s
+          target={{ tz_target }} ({{ tz_expected_offset }})
+
+    - name: Fail when the host clock itself disagrees with the control plane
+      ansible.builtin.assert:
+        that:
+          - ((tz_control_utc_epoch | int) - (tz_probe.stdout.split('|')[2] | int)) | abs
+            <= (tz_utc_skew_tolerance_seconds | int)
+        fail_msg: >-
+          {{ inventory_hostname }} 的 UTC 与控制面相差
+          {{ (tz_control_utc_epoch | int) - (tz_probe.stdout.split('|')[2] | int) }} 秒
+          （阈值 {{ tz_utc_skew_tolerance_seconds }} 秒）。这属**时钟问题**，不应以修改时区掩盖；
+          请先修复 NTP/时钟，再重跑本 playbook。
+
+    - name: Set timezone to {{ tz_target }}
+      become: true
+      ansible.builtin.command:
+        cmd: timedatectl set-timezone {{ tz_target }}
+      when: (tz_probe.stdout.split('|')[0] | trim) != tz_target
+      register: tz_set
+
+    - name: Re-read timezone and offset
+      become: true
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s|%s' \
+          "$(readlink -f /etc/localtime | sed 's#.*/zoneinfo/##')" \
+          "$(date +%z)"
+      args:
+        executable: /bin/bash
+      register: tz_after
+      changed_when: false
+      check_mode: false
+
+    - name: Assert the host now matches the control plane
+      ansible.builtin.assert:
+        that:
+          - (tz_after.stdout.split('|')[0] | trim) == tz_target
+          - (tz_after.stdout.split('|')[1] | trim) == tz_expected_offset
+        success_msg: >-
+          {{ inventory_hostname }}: {{ tz_probe.stdout.split('|')[0] | trim }}
+          ({{ tz_probe.stdout.split('|')[1] | trim }}) ->
+          {{ tz_target }} ({{ tz_after.stdout.split('|')[1] | trim }})
+          {{ '[changed]' if (tz_set is changed) else '[already aligned]' }}
+      when: not ansible_check_mode
+
+    # 长驻进程不会因 /etc/localtime 变化而重读时区（2026-09-15 在金丝雀 172.21.x.56
+    # 实证：主机已是 +0800，而 Agent 进程日志仍按 PDT 渲染），因此需要重启 Agent 服务，
+    # 其自身日志与后续子进程才会使用新时区。
+    # 运行前提：该主机**无活跃作业**（平台侧 ADR-0021 软锁同理）——故默认关闭，
+    # 由调用方在确认空闲后显式 -e tz_restart_agent=true 开启。
+    - name: Restart agent service so long-lived processes adopt the new timezone
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ tz_agent_service | default('stability-test-agent') }}"
+        state: restarted
+      when: tz_restart_agent | default(false) | bool
