@@ -270,6 +270,7 @@ def _retention_candidate_ids(db, cutoff: datetime, limit: int = 100) -> list[int
     :func:`_retention_prelock_subtree`（job → lease）与 :func:`_retention_lock_runs`
     （plan_run）承担——原先在此处先锁 plan_run，与热路径的
     `job → lease → plan_run` 相反，见 `_retention_prelock_subtree` 的说明。
+    #2105：``limit`` 由 ``plan_run_retention_batch_size`` 提供（持锁窗口的杠杆）。
     """
     from sqlalchemy.orm import aliased
 
@@ -426,7 +427,10 @@ def run_retention_cleanup() -> None:
     lock_t0: float | None = None
     with SessionLocal() as db:
         try:
-            run_ids = _retention_candidate_ids(db, cutoff)
+            # 批大小是**持锁窗口的杠杆**（#2105）：窗口 ∝ 本 tick 处理的 run 数。
+            run_ids = _retention_candidate_ids(
+                db, cutoff, limit=_sched().plan_run_retention_batch_size,
+            )
             if not run_ids:
                 return
 
