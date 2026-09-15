@@ -73,17 +73,19 @@ Class: testing
 
 ## Verification
 
-全部在合并 `origin/main@566f4f3d` 之后的 HEAD 上复跑（testcontainers PG 可用）：
+数字全部取自最终 HEAD——本单两次 `merge origin/main`（第一次带进 #2191，第二次带进
+#2195/#2196 等；#2195 同样改了 `planRuns.ts`，无冲突），合并后在最终 HEAD 上复跑
+（testcontainers PG 可用）：
 
 - `python -m pytest tests/test_api_response_shape_contract.py -q` → **15 passed**
   （轴线 C 登记 8 对 → 15 对；用例数 14 → 15）；
-- `python -m pytest tests/ -q` → **995 passed**（原 994，+1 为本单新增守卫用例）；
-- `python -m pytest backend/tests/api -q` → **1160 passed**——`response_model` 由 `dict`
+- `python -m pytest tests/ -q` → **1025 passed**（合入前 995；差值为 main 新增用例，
+  本单自身净增 1 个用例）；
+- `python -m pytest backend/tests/api -q` → **1161 passed**——`response_model` 由 `dict`
   改具体模型**会裁键**，这一项是"没裁任何端"的主证据；
 - `python -m pytest backend/agent/tests -q` → **2055 passed**（本单不触碰 agent 面，作基线）；
-- `ruff check` / `eslint src --max-warnings 0` / `tsc --noEmit` / `knip` 通过；
-  `scripts/run_gates.py check:quick` 其余 gate（`schema-at-head`、`env-inventory`、
-  `compileall`、`orphan-models`）通过。
+- `python scripts/run_gates.py check:quick` → **[OK] check:quick (10 gates)**，含 `ruff`、
+  `eslint`、`tsc`、`knip`、`compileall`、`orphan-models`、`gov-surface`（S1–S14）、`ai-work`。
 
 **红绿双向自证**（逐条注入后还原，8 例全红；未注入时全绿）：
 
