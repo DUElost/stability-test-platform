@@ -4,10 +4,10 @@
 的接收端文件会被删除——`VERSION` / `ARTIFACT_DIGEST` / `ARTIFACT_DIGEST_RESOURCES`
 此前既不在暂存树、也不在保护清单，于是 **code-only 收敛**会把 resources 记号删掉，
 而本轮资源层未运行（无人重写）→ 文件与主机列记录分叉（列因心跳空值不覆盖而保留
-旧值）。本文件锁定两条通道的保护面：
+旧值）。本文件锁定唯一通道的保护面：
 
 1. wrapper（`apply-code`）——`protect` filter，防 `--delete-excluded`；
-2. legacy 分支（远端脚本里的 `sudo rsync --delete`）——`--exclude`，防 `--delete`。
+2. （#2180 起）远端脚本不再自持 rsync 面——legacy 分支已退役，脚本侧零 filter。
 """
 
 from __future__ import annotations
@@ -77,10 +77,11 @@ def test_metadata_survives_apply_code_rsync(wrapper, tmp_path):
     assert (dest / "agent" / "resources" / "keep.bin").is_file()
 
 
-# ── ② legacy 分支：远端脚本的 rsync exclude ────────────────────────────────
+# ── ② 远端脚本：legacy rsync 面退役（#2180）→ 保护面单点在 ① ───────────────
 
 
-def test_remote_script_legacy_apply_code_excludes_metadata():
+def test_remote_script_has_no_self_owned_rsync_face():
+    """#2180：脚本不再自持 rsync/filter；元数据保护只剩 wrapper 一条通道（①）。"""
     try:
         from backend.services.host_updater import _build_remote_script
     except Exception as exc:  # pragma: no cover - 取决于本机/CI 的 env 解析
@@ -96,7 +97,8 @@ def test_remote_script_legacy_apply_code_excludes_metadata():
         artifact_digest="sha256:" + "0" * 64,
         resources_digest="sha256:" + "0" * 64,
     )
-    legacy = script[script.index("sudo rsync -av --delete"):]
-    legacy = legacy[: legacy.index("$INSTALL_DIR/agent/")]
-    for name in METADATA:
-        assert "--exclude='%s'" % name in legacy, legacy
+    assert "sudo rsync" not in script
+    assert "--exclude=" not in script
+    assert "--filter=" not in script
+    # code-only 收敛仍走 wrapper（保护语义在 ① 锁定）
+    assert 'sudo "$PRIV" apply-code --staged "$CODE_TMP"' in script

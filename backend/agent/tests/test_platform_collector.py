@@ -1,5 +1,6 @@
 """PlatformCollector unit tests."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -20,18 +21,84 @@ def test_get_collector_unknown_falls_back_to_mtk():
     assert isinstance(collector, MtkPlatformCollector)
 
 
+def _write_unievent_info(event_dir: Path, *lines: dict) -> None:
+    """真机形状夹具：JSONL（A 设备头 / B 元数据 / C 发生行由调用方给出）。"""
+    event_dir.mkdir()
+    (event_dir / "unievent_info").write_text(
+        "\n".join(json.dumps(line, ensure_ascii=False) for line in lines),
+        encoding="utf-8",
+    )
+
+
 def test_get_collector_unisoc_parses_unievent_info(tmp_path):
+    """真机形状（#2083）：A 设备头 + B 元数据 + C 发生行 → 解析出事件。"""
     collector = get_collector_for_platform("UNISOC")
     assert isinstance(collector, UnisocPlatformCollector)
-    event_dir = tmp_path / "evt-001"
-    event_dir.mkdir()
-    (event_dir / "unievent_info.json").write_text(
-        '{"event_name": "system_server_crash", "package_name": "com.example.app"}',
-        encoding="utf-8",
+    event_dir = tmp_path / "JE.103000004"
+    _write_unievent_info(
+        event_dir,
+        {"sn": "UNI-1", "software_version": "MyOS16.0.1_Z2581_GEN_AF",
+         "soc_model": "UMS9230E", "event_count": "1"},
+        {"event_id": "103000004", "event_type": "FAULT", "event_level": "GENERAL",
+         "event_name": "system_server_crash"},
+        {"kick_datetime": "2026-09-08_06:59:12.031", "pid": "23847",
+         "proc": "com.example.app", "tag": "system_app_crash"},
     )
     meta = collector.parse_metadata(event_dir)
     assert meta.event_type == "UNIVIEW"
     assert meta.event_subtype == "system_server_crash"
+    assert meta.package_name == "com.example.app"
+
+
+def test_unisoc_reboot_normalboot_only_is_not_reportable(tmp_path):
+    """#2083：Reboot 目录有 meta 行、发生行全部 normalboot → 不可上报。
+
+    反例：把 B 类元数据行也算「事件行」时，该目录会被 emit 成假异常
+    （真机 signal 'Boot Category'，aee_ts=None）并自动上送。
+    """
+    event_dir = tmp_path / "Reboot.103000002"
+    _write_unievent_info(
+        event_dir,
+        {"sn": "UNI-1", "soc_model": "UMS9230E", "event_count": "NA"},
+        {"event_id": "103000002", "event_type": "FAULT", "event_level": "GENERAL",
+         "event_name": "Boot Category"},
+        {"kick_datetime": "2026-08-11_19:50:25.382", "event_time": 1786470625382,
+         "reboot_reason": "normalboot"},
+        {"kick_datetime": "2026-08-24_17:15:35.391", "event_time": 1787562935391,
+         "reboot_reason": "normalboot"},
+    )
+    with pytest.raises(CollectorError, match="normalboot-only"):
+        UnisocPlatformCollector().parse_metadata(event_dir)
+
+
+def test_unisoc_reboot_abnormal_reason_still_reports(tmp_path):
+    """#2083 反例保护：异常 reboot_reason（kernel_crash）仍须上报。"""
+    event_dir = tmp_path / "Reboot.103000002"
+    _write_unievent_info(
+        event_dir,
+        {"sn": "UNI-1", "soc_model": "UMS9230E", "event_count": "1"},
+        {"event_id": "103000002", "event_type": "FAULT", "event_level": "GENERAL",
+         "event_name": "Boot Category"},
+        {"kick_datetime": "2026-09-08_06:00:00.000", "event_time": 1786470625382,
+         "reboot_reason": "kernel_crash"},
+    )
+    meta = UnisocPlatformCollector().parse_metadata(event_dir)
+    assert meta.event_type == "UNIVIEW"
+    assert meta.event_subtype == "Boot Category"
+    assert meta.device_timestamp_raw == "2026-09-08_06:00:00.000"
+
+
+def test_unisoc_legacy_filename_still_parses(tmp_path):
+    """兼容读取旧文件名 `unievent_info.json`（真机从未观测到，仅为不静默失败保留）。"""
+    event_dir = tmp_path / "evt-legacy"
+    event_dir.mkdir()
+    (event_dir / "unievent_info.json").write_text(
+        '{"kick_datetime": "2026-09-08_06:59:12.031", "proc": "com.example.app"}',
+        encoding="utf-8",
+    )
+    meta = UnisocPlatformCollector().parse_metadata(event_dir)
+    assert meta.event_type == "UNIVIEW"
+    assert meta.package_name == "com.example.app"
 
 
 def test_get_collector_qcom_is_stub_only():
