@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import stat
 from pathlib import Path
 from types import SimpleNamespace
@@ -188,6 +189,71 @@ def test_usb_authorized_rejects_symlinked_authorized_file(wrapper, monkeypatch, 
         wrapper.cmd_usb_authorized(SimpleNamespace(port="1-7", value="0"), None)
     assert "cannot open authorized" in str(exc.value)
     assert sentinel.read_text(encoding="utf-8") == "SENTINEL\n"
+
+
+# ── sysfs 属性读取语义（#2160：st_size 恒 4096，不得据此判大小）────────────
+
+
+def test_usb_authorized_reads_vendor_despite_sysfs_st_size(wrapper, monkeypatch, tmp_path, capsys):
+    """sysfs 语义回归：属性 st_size=4096 而内容 5 字节——仍须可读。
+
+    复刻内核语义：patch fstat 让 st_size 恒 4096（真实文件仍是 5 字节）。
+    旧实现用 `st_size > limit` 判「input too large」，真机门控全线失败
+    （#2160）；本用例在旧实现下必红。
+    """
+    bus_base, devices_root, real_dir = _fake_sysfs(tmp_path, "1-2")
+    _patch_sysfs(wrapper, monkeypatch, bus_base, devices_root)
+
+    real_fstat = os.fstat
+
+    def sysfs_like_fstat(fd):
+        st = real_fstat(fd)
+        return SimpleNamespace(st_mode=st.st_mode, st_size=4096)
+
+    monkeypatch.setattr(wrapper.os, "fstat", sysfs_like_fstat)
+
+    assert wrapper.cmd_usb_authorized(
+        SimpleNamespace(port="1-2", value="0"), None) == 0
+    assert (real_dir / "authorized").read_text(encoding="utf-8") == "0\n"
+    assert "STP_USB_AUTHORIZED_OK port=1-2 value=0" in capsys.readouterr().out
+
+
+def test_read_sysfs_attr_on_real_sysfs(wrapper):
+    """真实 sysfs 属性读取冒烟（st_size=4096 / 内容短）。"""
+    base, name = "/sys/devices/system/cpu", "online"
+    if not os.path.exists(f"{base}/{name}"):
+        pytest.skip("no sysfs cpu/online in this environment")
+    descriptor = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        body = wrapper._read_sysfs_attr(descriptor, name, 64)
+    finally:
+        os.close(descriptor)
+    assert body.strip()
+
+
+def test_read_sysfs_attr_rejects_empty_and_oversize(wrapper, tmp_path):
+    (tmp_path / "empty").write_text("", encoding="utf-8")
+    (tmp_path / "big").write_text("x" * 100, encoding="utf-8")
+    descriptor = os.open(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(wrapper.PrivError):
+            wrapper._read_sysfs_attr(descriptor, "empty", 64)
+        with pytest.raises(wrapper.PrivError):
+            wrapper._read_sysfs_attr(descriptor, "big", 8)
+    finally:
+        os.close(descriptor)
+
+
+def test_read_sysfs_attr_rejects_symlink(wrapper, tmp_path):
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("0e8d\n", encoding="utf-8")
+    (tmp_path / "attr").symlink_to(sentinel)
+    descriptor = os.open(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises((wrapper.PrivError, OSError)):
+            wrapper._read_sysfs_attr(descriptor, "attr", 64)
+    finally:
+        os.close(descriptor)
 
 
 # ── ensure-udev-rule：固定面 / 幂等 / symlink 安全 / reload ────────────────
