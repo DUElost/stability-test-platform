@@ -7,6 +7,7 @@
 - `backend/agent/`：Linux Host Agent 安装文件（`install_agent.sh`）
 
 推荐联动文档：
+- **独立站点（多城市）安装**：`docs/operations/installation.md`（`deploy/preflight.sh` → `install.sh` → `agent/install.sh` → verify → handover）。本清单保留为**既有单站点生产控制面的手工基线与演练版**：独立站点安装不要按本节手敲，走那三个入口。
 - 目标愿景：`docs/project-vision.md`
 - 预发布逐条执行版：`docs/preprod-drill-runbook.md`
 

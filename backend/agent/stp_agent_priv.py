@@ -19,6 +19,8 @@ root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
     deps-marker      写依赖刷新标记
     fix-ownership    安装目录属主回收（symlink 安全：chown -h）
     restart          重启 Agent systemd 服务
+    ensure-udev-rule 写固定 udev 规则（MTK ttyACM → 0666）并 reload（#2133/D5）
+    usb-authorized   切换 MTK 设备 sysfs authorized（port 正则 + vendor 校验）
 
 不变量：
 - 所有写路径固定或经前缀校验，永不接受任意目标路径；
@@ -51,12 +53,31 @@ DEFAULT_CONF_PATH = "/etc/stp-agent-priv.conf"
 SUDOERS_DIR = "/etc/sudoers.d"
 RSYNC_BIN = "/usr/bin/rsync"
 SYSTEMCTL_BIN = "/usr/bin/systemctl"
+UDEVADM_BIN = "/usr/bin/udevadm"
 MAX_SCHEMA_BYTES = 2 * 1024 * 1024
 MAX_ENV_PAYLOAD_BYTES = 64 * 1024
+
+# ── flash 链窄面（ADR-0037 D5 / #2133）──────────────────────────────────────
+# udev 规则：固定路径 + 固定内容（与已发布 flash_preflight v1.0.x 的
+# `_UDEV_RULE_PATH` / `_UDEV_RULE_LINE` 同源；0e8d = MediaTek ttyACM 0666）。
+UDEV_RULE_PATH = "/etc/udev/rules.d/98-ttyacm-mtk.rules"
+UDEV_RULE_LINE = 'KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", MODE="0666"\n'
+# sysfs USB 设备根：authorized 门控的运行期写目标（flash_firmware 同源常量）。
+# 注意：`/sys/bus/usb/devices/<port>` 在内核 sysfs 里是**符号链接**，指向
+# `/sys/devices/.../<port>`；因此设备目录这一跳必须允许解析（校验解析结果），
+# 只有属性文件（idVendor / authorized）用 O_NOFOLLOW 打开。
+USB_SYSFS_BASE = "/sys/bus/usb/devices"
+_SYSFS_DEVICES_ROOT = "/sys/devices"
+_MTK_VENDOR_ID = "0e8d"
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _VERSION_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+# USB 端口名（sysfs 形态：总线-端口，可带 .端口 级联），例 "1-1" / "1-5.3.1"。
+# 刻意严于 ADR 草稿的字符集口径：只接受该结构，`..`/`/`/空白等任何可移动
+# 路径语义的形态在进入路径拼接前即被拒绝（#2133）。用 `\Z` 而非 `$`——`$`
+# 会放行尾随换行（"1-1\n"），端口名将带着换行进路径。
+_USB_PORT_RE = re.compile(r"^[0-9]+-[0-9]+(?:\.[0-9]+)*\Z")
 
 # 与 tools/ansible/roles/agent_deploy/defaults/main.yml 的 agent_install_excludes
 # 及控制面 `host_updater._TAR_EXCLUDES` / digest 输入集同源（#2030：三处逐项
@@ -147,6 +168,30 @@ def is_within(path, parent):
     if path_real == parent_real:
         return True
     return path_real.startswith(parent_real.rstrip(os.sep) + os.sep)
+
+
+def validate_usb_port(port):
+    """USB 端口名校验（纯函数）：合法返回原名，非法即拒绝（#2133/D5）。"""
+    if not isinstance(port, str) or not _USB_PORT_RE.match(port):
+        _fail(
+            "--port must be a sysfs USB port name like '1-1' or '1-5.3.1', "
+            "got %r" % (port,)
+        )
+    return port
+
+
+def is_kernel_usb_device_path(resolved, port):
+    """解析后的设备目录是否是内核 sysfs 设备树中与端口名对应的真实目录。
+
+    （纯函数；``resolved`` 应为 ``realpath`` 结果）判据两条：位于
+    ``/sys/devices`` 之下 + basename 与端口名一致——这样「经符号链接落到
+    别处」的目录（非内核设备树）会被拒，而内核标准布局
+    ``/sys/devices/.../usb1/1-5.3.1`` 正常放行。
+    """
+    root = os.path.realpath(_SYSFS_DEVICES_ROOT)
+    if not resolved.startswith(root.rstrip(os.sep) + os.sep):
+        return False
+    return os.path.basename(resolved) == port
 
 
 # #1553：`fix-ownership` 对 conf 的 INSTALL_DIR 做 `chown -R -h`，`apply-code` 往
@@ -756,6 +801,95 @@ def cmd_restart(args, conf):
     return 0
 
 
+def cmd_ensure_udev_rule(args, conf):
+    """写固定 udev 规则（MTK ttyACM → MODE 0666）并 reload（#2133 / D5）。
+
+    面约束：路径与内容都是常量（无参数面）；目录逐级 O_NOFOLLOW 打开、写入
+    走临时文件 + os.replace（不跟随目标位置的 symlink）；幂等——内容一致时
+    不重写，仅执行 reload。``udevadm control --reload`` 失败即拒绝；``trigger``
+    为尽力而为（与旧版 flash_preflight 修复分支同语义）。
+    """
+    _require_root()
+    if not os.path.isfile(UDEVADM_BIN):
+        _fail("udevadm not found: %s" % UDEVADM_BIN)
+    rules_dir = os.path.dirname(UDEV_RULE_PATH)
+    name = os.path.basename(UDEV_RULE_PATH)
+    changed = 0
+    descriptor = _open_directory(rules_dir, create=True)
+    try:
+        try:
+            body, _ = _read_regular_at(descriptor, name, 4096)
+        except (PrivError, OSError):
+            body = None
+        if body != UDEV_RULE_LINE:
+            _atomic_write_at(descriptor, name, UDEV_RULE_LINE, 0o644)
+            changed = 1
+    finally:
+        os.close(descriptor)
+    rc, _, err = _run([UDEVADM_BIN, "control", "--reload"])
+    if rc != 0:
+        _fail("udevadm control --reload failed rc=%s: %s" % (rc, err.strip()[:300]))
+    _run([UDEVADM_BIN, "trigger"])
+    print("STP_ENSURE_UDEV_RULE_OK path=%s changed=%d" % (UDEV_RULE_PATH, changed))
+    return 0
+
+
+def cmd_usb_authorized(args, conf):
+    """切换 MTK 设备 sysfs ``authorized``（#2133 / D5）。
+
+    flash_firmware 的门控面：多设备台架刷机时隐藏非目标 MTK 口（authorized=0）
+    并在结束后恢复（authorized=1）。面约束：端口名走 ``_USB_PORT_RE``（路径
+    语义在拼接前被拒）；设备目录允许解析内核 sysfs 符号链接，但解析结果必须
+    是 ``/sys/devices`` 下与端口名同名的真实目录（``is_kernel_usb_device_path``）；
+    目标必须是 ``idVendor=0e8d`` 的 MediaTek 设备；值仅 {0,1}。属性文件
+    （idVendor / authorized）以 O_NOFOLLOW 打开，sysfs 属性**原地写**（不可
+    rename），单次 write。
+    """
+    _require_root()
+    port = validate_usb_port(args.port)
+    value = args.value
+    if value not in ("0", "1"):
+        _fail("--value must be 0 or 1")
+    device_dir = os.path.join(USB_SYSFS_BASE, port)
+    resolved = os.path.realpath(device_dir)
+    if not is_kernel_usb_device_path(resolved, port):
+        _fail(
+            "--port %s does not resolve to a kernel sysfs USB device (got %s)"
+            % (port, resolved)
+        )
+    try:
+        descriptor = os.open(
+            device_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+        )
+    except OSError as exc:
+        _fail("cannot open USB device dir for %s: %s" % (port, exc))
+    try:
+        try:
+            vendor, _ = _read_regular_at(descriptor, "idVendor", 64)
+        except (PrivError, OSError) as exc:
+            _fail("cannot read idVendor for %s: %s" % (port, exc))
+        if vendor.strip().lower() != _MTK_VENDOR_ID:
+            _fail(
+                "--port %s is not a MediaTek device (idVendor=%r)"
+                % (port, vendor.strip()[:16])
+            )
+        try:
+            target = os.open(
+                "authorized", os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=descriptor,
+            )
+        except OSError as exc:
+            _fail("cannot open authorized for %s: %s" % (port, exc))
+        try:
+            os.write(target, (value + "\n").encode("ascii"))
+        finally:
+            os.close(target)
+    finally:
+        os.close(descriptor)
+    print("STP_USB_AUTHORIZED_OK port=%s value=%s" % (port, value))
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -784,6 +918,8 @@ _SUBCOMMAND_CONTRACT = {
     "deps-marker": ["--sha", "0" * 64],
     "fix-ownership": [],
     "restart": [],
+    "ensure-udev-rule": [],
+    "usb-authorized": ["--port", "1-5.3.1", "--value", "0"],
 }
 
 
@@ -874,6 +1010,18 @@ def _build_parser():
 
     sub.add_parser("fix-ownership", help="restore install dir ownership")
     sub.add_parser("restart", help="restart the agent service")
+
+    # ADR-0037 D5（#2133）：flash 链运行时提权窄面。
+    sub.add_parser(
+        "ensure-udev-rule",
+        help="ensure the fixed MTK ttyACM udev rule and reload (ADR-0037 D5)",
+    )
+    p = sub.add_parser(
+        "usb-authorized",
+        help="toggle sysfs authorized for an MTK USB port (ADR-0037 D5)",
+    )
+    p.add_argument("--port", required=True)
+    p.add_argument("--value", required=True, choices=["0", "1"])
     return parser
 
 
@@ -907,6 +1055,8 @@ def main(argv=None):
         "deps-marker": cmd_deps_marker,
         "fix-ownership": cmd_fix_ownership,
         "restart": cmd_restart,
+        "ensure-udev-rule": cmd_ensure_udev_rule,
+        "usb-authorized": cmd_usb_authorized,
     }
     try:
         return handlers[args.command](args, conf)
