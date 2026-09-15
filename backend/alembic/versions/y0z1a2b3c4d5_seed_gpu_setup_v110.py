@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from typing import Any
 
 from alembic import op
 from sqlalchemy import text
@@ -34,6 +35,32 @@ VERSIONS = [
         "deactivate": ["1.0.9"],
     },
 ]
+
+
+def _raise_if_any_version_referenced(
+    conn: Any, script_name: str, versions: list[str]
+) -> None:
+    """内嵌自 backend/services/script_seed_governance.py（#942 裁决：迁移
+    自包含、不 import 服务层）。停用仍被 plan_step 引用的版本即失败。"""
+    blocked: list[str] = []
+    for ver in versions:
+        n = int(
+            conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM plan_step "
+                    "WHERE script_name = :name AND script_version = :ver"
+                ),
+                {"name": script_name, "ver": ver},
+            ).scalar_one()
+        )
+        if n > 0:
+            blocked.append(f"{ver} ×{n}")
+    if blocked:
+        raise RuntimeError(
+            "seed migration aborted: 待停用版本仍被 plan_step 引用："
+            f"{script_name} {', '.join(blocked)}。"
+            "请把引用的 plan_step 重指到新版本后重跑迁移。"
+        )
 
 
 def upgrade() -> None:
@@ -73,6 +100,11 @@ def upgrade() -> None:
                 ),
                 {"name": v["name"], "ver": v["ver"], "now": now},
             )
+        # #2055：停用既有版本前必须确认没有 plan_step 引用它（#942 裁决 A 的
+        # 「禁止无引用检查的 is_active=false」）——否则被引用的版本被静默下线，
+        # 相关 plan 到 precheck 才失败。与兄弟 seed 同实现（自包含内嵌）。
+        if v["deactivate"]:
+            _raise_if_any_version_referenced(conn, v["name"], v["deactivate"])
         for old in v["deactivate"]:
             conn.execute(
                 text(

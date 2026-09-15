@@ -64,6 +64,26 @@ def test_parent_kept_when_child_still_running(cleanup_env):
     assert db.query(PlanRun).filter_by(id=parent.id).one() is not None
 
 
+def test_batch_size_setting_bounds_one_tick(cleanup_env, scheduler_env):
+    """#2105：单 tick 处理上限 = ``plan_run_retention_batch_size``。
+
+    这条设置不是「性能选项」而是**持锁窗口的杠杆**：purge（NFS）与行删除同事务，
+    窗口长度 ∝ 本 tick 的 run 数；窗口过长时的正确动作是调小它，而不是把 purge
+    移出事务（那会造成「文件已删、行仍在」的不可自愈不一致）。
+    """
+    db, plan = cleanup_env
+    for _ in range(3):
+        _mk_run(db, plan, age_days=10)
+    # 必须在调用前设置：settings 走 lru_cache，scheduler_env 会重置它。
+    scheduler_env("PLAN_RUN_RETENTION_BATCH_SIZE", "2")
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert db.query(PlanRun).count() == 1, (
+        "批大小=2 时单 tick 只应删 2 个 run，其余留下轮处理"
+    )
+
+
 def test_chain_all_expired_deleted(cleanup_env):
     """全链到期：祖→父→子全部删除（无引用阻碍）。"""
     db, plan = cleanup_env

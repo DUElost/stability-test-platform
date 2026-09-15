@@ -47,6 +47,8 @@ _PRE_MIGRATION_DEFAULTS = {
     "post_completion_grace_seconds": 120,
     "post_completion_max_defer_seconds": 6 * 3600,
     "plan_run_retention_days": 3,
+    # #2105：新增项（非迁移项，但仍在此处锁定默认值与类型）
+    "plan_run_retention_batch_size": 100,
     "schedule_dedup_window_seconds": 60.0,
     # P2：对账/重试批处理（counter / signal_link / plan_chain / precheck）
     "stp_counter_reconcile_lookback_hours": 48,

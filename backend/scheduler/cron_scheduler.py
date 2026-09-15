@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import func, or_, select
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
+from backend.core.metrics import record_retention_txn
 from backend.models.enums import PlanRunStatus
 from backend.models.schedule import TaskSchedule, schedule_timestamp
 
@@ -268,6 +270,7 @@ def _retention_candidate_ids(db, cutoff: datetime, limit: int = 100) -> list[int
     :func:`_retention_prelock_subtree`（job → lease）与 :func:`_retention_lock_runs`
     （plan_run）承担——原先在此处先锁 plan_run，与热路径的
     `job → lease → plan_run` 相反，见 `_retention_prelock_subtree` 的说明。
+    #2105：``limit`` 由 ``plan_run_retention_batch_size`` 提供（持锁窗口的杠杆）。
     """
     from sqlalchemy.orm import aliased
 
@@ -419,11 +422,22 @@ def run_retention_cleanup() -> None:
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=_sched().plan_run_retention_days)
 
+    # 持锁窗口（#2104）：候选读之前为 None——失败路径可能在取锁前就抛，
+    # 上报点须先判非 None，否则 except 分支自己会 NameError。
+    lock_t0: float | None = None
     with SessionLocal() as db:
         try:
-            run_ids = _retention_candidate_ids(db, cutoff)
+            # 批大小是**持锁窗口的杠杆**（#2105）：窗口 ∝ 本 tick 处理的 run 数。
+            run_ids = _retention_candidate_ids(
+                db, cutoff, limit=_sched().plan_run_retention_batch_size,
+            )
             if not run_ids:
                 return
+
+            # #2104：从这里起持有行锁，直到事务结束/会话关闭——窗口长度会上报到
+            # stability_retention_txn_seconds。锁序统一（#2022）之后，「等待」取代
+            # 「死锁」成为这一批行的代价，而窗口长度就是这个代价的上界。
+            lock_t0 = time.perf_counter()
 
             # #2022：按共享行加锁全序取锁——job → lease（预锁子树）→ plan_run。
             # 顺序不可调换：反过来（先 plan_run）会与 complete / recycler /
@@ -456,6 +470,8 @@ def run_retention_cleanup() -> None:
                         "retention_cleanup deferred: NFS failures=%d kept_ancestors=%d",
                         len(purge_failed), len(deferred_ancestors),
                     )
+                    # 整批被 NFS 失败推迟：锁要到会话关闭才释放，窗口记在返回前。
+                    record_retention_txn(time.perf_counter() - lock_t0)
                     return
 
             stale_job_ids = select(JobInstance.id).where(
@@ -503,6 +519,9 @@ def run_retention_cleanup() -> None:
                 PlanRun.id.in_(safe_run_ids)
             ).delete(synchronize_session=False)
             db.commit()
+            # 窗口到此为止（提交即释放行锁）；**不要**把它挪到下面的 console log
+            # 清理之后——那是提交后的文件操作，不属于持锁窗口。
+            record_retention_txn(time.perf_counter() - lock_t0)
             logger.info(
                 "retention_cleanup deleted runs=%d kept_chain_referenced=%d",
                 len(safe_run_ids),
@@ -522,6 +541,9 @@ def run_retention_cleanup() -> None:
         except Exception:
             logger.warning("retention_cleanup failed", exc_info=True)
             db.rollback()
+            # 失败路径同样占着行锁（回滚前），一并计入窗口；取锁前就失败则不上报。
+            if lock_t0 is not None:
+                record_retention_txn(time.perf_counter() - lock_t0)
 
 
 def _terminal_archive_complete(db, plan_run_id: int) -> bool:
