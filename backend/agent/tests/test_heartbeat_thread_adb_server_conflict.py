@@ -75,8 +75,9 @@ def test_tick_no_conflict_passes_false(monkeypatch):
     assert sent_payloads["kwargs"]["health"]["status"] == "HEALTHY"
 
 
-def test_auto_repair_runs_when_enabled_idle_and_cooldown(monkeypatch):
-    monkeypatch.setenv("STP_ADB_AUTO_REPAIR", "1")
+def test_auto_repair_runs_when_enabled_idle_and_cooldown(monkeypatch, heartbeat_env):
+    # ADR-0042 P2 #3：旋钮经 Settings —— 写 env 必须伴随 reset（fixture 已做）
+    heartbeat_env.set("STP_ADB_AUTO_REPAIR", "1")
     repairs = []
 
     def fake_repair(adb_path):
@@ -96,8 +97,8 @@ def test_auto_repair_runs_when_enabled_idle_and_cooldown(monkeypatch):
     assert repairs == ["adb"]
 
 
-def test_auto_repair_skips_when_jobs_active(monkeypatch):
-    monkeypatch.setenv("STP_ADB_AUTO_REPAIR", "1")
+def test_auto_repair_skips_when_jobs_active(monkeypatch, heartbeat_env):
+    heartbeat_env.set("STP_ADB_AUTO_REPAIR", "1")
     monkeypatch.setattr(
         "backend.agent.heartbeat_thread.device_discovery.ensure_single_adb_server",
         lambda adb_path: {"port": 5037, "killed": [], "started": True},
@@ -108,3 +109,18 @@ def test_auto_repair_skips_when_jobs_active(monkeypatch):
 
     # 有活动 Job 时只告警，不杀 server
     assert _cap["adb_server_conflict"] is True
+
+
+def test_auto_repair_not_enabled_for_non_exact_one(monkeypatch, heartbeat_env):
+    """迁移前语义是精确 `== "1"`：`true` 不触发修复（防止 Settings 化顺手放宽）。"""
+    heartbeat_env.set("STP_ADB_AUTO_REPAIR", "true")
+    repairs = []
+    monkeypatch.setattr(
+        "backend.agent.heartbeat_thread.device_discovery.ensure_single_adb_server",
+        lambda adb_path: repairs.append(adb_path) or {"port": 5037, "started": True},
+    )
+    thread, _sent, _cap = _make_thread(monkeypatch, conflict=True, active_job_count=0)
+
+    thread._tick()
+
+    assert repairs == []
