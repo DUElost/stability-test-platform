@@ -95,3 +95,11 @@ def test_logrotate_package_installed_before_config():
     apt = _find_task(play["tasks"], install_name)["ansible.builtin.apt"]
     assert apt["name"] == "logrotate"
     assert apt["state"] == "present"
+
+
+def test_tasks_tagged_for_scoped_rollout():
+    """两 task 带 `logrotate` tag——支持 `--tags logrotate` 只铺配置（免全量更新）。"""
+    play = yaml.safe_load(PLAYBOOK.read_text(encoding="utf-8"))[0]
+    for name in ("Ensure logrotate is installed (#2205)", _TASK_NAME):
+        task = _find_task(play["tasks"], name)
+        assert "logrotate" in (task.get("tags") or []), f"{name} 缺 logrotate tag"
