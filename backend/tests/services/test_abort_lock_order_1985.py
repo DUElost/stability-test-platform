@@ -18,20 +18,17 @@
 
 from __future__ import annotations
 
-import os
 import threading
 from datetime import datetime, timezone
 from unittest.mock import patch
 from uuid import uuid4
 
-import pytest
 import sqlalchemy.exc
 from sqlalchemy import select, text
 
-pytestmark = pytest.mark.skipif(
-    os.getenv("DATABASE_URL", "").startswith("sqlite"),
-    reason="锁序回归需要 PostgreSQL 行锁（FOR UPDATE / NOWAIT）",
-)
+# #2116：需要 PostgreSQL 行锁（FOR UPDATE / NOWAIT）。本仓 harness 总是提供 PG（conftest 的
+# testcontainers / CI 的 PG service），无 PG 时在 conftest 阶段就报错——**刻意不写**「非 PG
+# 就 skip」的分支：它在 conftest 覆盖 DATABASE_URL 之后不可达，只会把环境问题变成静默跳过。
 
 from backend.core.database import SessionLocal
 from backend.models.device_lease import DeviceLease
