@@ -196,8 +196,115 @@ def test_run_extract_sync_writes_run_context_extract(
     assert summary["targets"] == 2
     assert summary["copied"] == 1
     assert summary["missing"] == 1
+    # #2186：缺口清单与总数（与 missing 同源，不互相矛盾）
+    assert summary["missing_items"] == [str(devices / "missing_dir")]
+    assert summary["missing_total"] == 1
     assert summary["merge_xls_copied"] == 1
     assert summary["archived"] == 1
+
+
+def test_run_extract_sync_missing_items_are_bounded(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#2186：缺口清单必须有界——每一条都是完整 NFS 路径，无界清单会随 fleet 线性增长。
+
+    只留存前 ``_MISSING_ITEMS_MAX`` 条 + 总数，前端据此显示"还有 N 条未列出"。
+    """
+    from backend.services.dedup_extract import _MISSING_ITEMS_MAX
+
+    from backend.models.plan_run import PlanRun
+
+    nfs = tmp_path / "nfs"
+    devices = nfs / "devices" / str(sample_plan_run.id)
+    devices.mkdir(parents=True)
+    merge_xls = tmp_path / "Result_MergeFiles.xls"
+    merge_xls.write_bytes(b"fake-merge-xls")
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(merge_xls),
+        artifact_type="merge_result_xls",
+        size_bytes=200,
+    ))
+
+    total_missing = _MISSING_ITEMS_MAX + 5
+    expected = set()
+    for i in range(total_missing):
+        path = str(devices / f"missing_dir_{i:02d}")
+        expected.add(path)
+        db_session.add(DeviceLogEvent(
+            id=uuid4(),
+            serial=sample_device.serial,
+            platform="MTK",
+            event_type="NE",
+            detected_at=datetime.now(timezone.utc),
+            state=EventState.REMOTE.value,
+            local_path="/tmp/local",
+            remote_path=path,
+            plan_run_id=sample_plan_run.id,
+            host_id=sample_host.id,
+        ))
+    db_session.commit()
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    run_extract_sync(sample_plan_run.id)
+
+    db_session.expire_all()
+    summary = db_session.get(PlanRun, sample_plan_run.id).run_context["extract"]
+    assert summary["missing"] == total_missing
+    assert summary["missing_total"] == total_missing
+    items = summary["missing_items"]
+    assert len(items) == _MISSING_ITEMS_MAX
+    assert len(set(items)) == len(items)          # 去重
+    assert set(items) <= expected                 # 只来自真实缺口路径
+    assert len(items) < summary["missing_total"]  # 截断确实发生（前端据此显示"还有 N 条"）
+
+
+def test_run_extract_sync_missing_items_dedupe_same_path(
+    db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """同一 remote_path 挂多条 DLE 行：缺口**计数**如实为 2，清单只记一条。
+
+    计数口径不能因去重而变小（那会与既有 "missing" 语义冲突），清单去重只为可读。
+    """
+    from backend.models.plan_run import PlanRun
+
+    nfs = tmp_path / "nfs"
+    devices = nfs / "devices" / str(sample_plan_run.id)
+    devices.mkdir(parents=True)
+    merge_xls = tmp_path / "Result_MergeFiles.xls"
+    merge_xls.write_bytes(b"fake-merge-xls")
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(merge_xls),
+        artifact_type="merge_result_xls",
+        size_bytes=200,
+    ))
+    dup = str(devices / "dup_dir")
+    for _ in range(2):
+        db_session.add(DeviceLogEvent(
+            id=uuid4(),
+            serial=sample_device.serial,
+            platform="MTK",
+            event_type="NE",
+            detected_at=datetime.now(timezone.utc),
+            state=EventState.REMOTE.value,
+            local_path="/tmp/local",
+            remote_path=dup,
+            plan_run_id=sample_plan_run.id,
+            host_id=sample_host.id,
+        ))
+    db_session.commit()
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    run_extract_sync(sample_plan_run.id)
+
+    db_session.expire_all()
+    summary = db_session.get(PlanRun, sample_plan_run.id).run_context["extract"]
+    assert summary["missing"] == 2
+    assert summary["missing_total"] == 2
+    assert summary["missing_items"] == [dup]
 
 
 def test_summarize_upload_states_groups_by_state(

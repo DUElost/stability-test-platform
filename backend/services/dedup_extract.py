@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 # #1070: jira 事件目录内完成凭据；缺此文件视为半成品，不得跳过重拷。
 _EXTRACT_COMPLETE_MARKER = ".stp_extract_complete"
 
+#: ``run_context.extract.missing_items`` 的留存上限（#2186）：缺口要能下钻，但不能把**无界**
+#: 列表写进 run_context（行数随 fleet 规模线性增长）。超出只记总数，前端显示"还有 N 条"。
+_MISSING_ITEMS_MAX = 20
+
+
+def _remember_missing(items: list[str], raw: str) -> None:
+    """有界记录缺失条目：保持首次出现顺序，重复路径不重复记（#2186）。"""
+    if len(items) >= _MISSING_ITEMS_MAX or raw in items:
+        return
+    items.append(raw)
+
 
 def _merge_uri_is_platform_partitioned(uri: str) -> bool:
     norm = uri.replace("\\", "/").lower()
@@ -231,6 +242,8 @@ def run_extract_sync(plan_run_id: int) -> int:
 
         remote_path_rows: list[tuple[str, Path, Path]] = []
         missing_remote_paths = 0
+        # #2186：缺口不能只留计数——"缺失 3"说不出缺的是哪 3 个，现场只能回中心存储手工比对。
+        missing_items: list[str] = []
         for raw in list_remote_paths_for_extract(db, plan_run_id):
             try:
                 located = resolve_extract_event_src(
@@ -244,6 +257,7 @@ def run_extract_sync(plan_run_id: int) -> int:
                     plan_run_id, raw,
                 )
                 missing_remote_paths += 1
+                _remember_missing(missing_items, raw)
                 continue
             if located is None:
                 logger.debug(
@@ -251,6 +265,7 @@ def run_extract_sync(plan_run_id: int) -> int:
                     plan_run_id, raw,
                 )
                 missing_remote_paths += 1
+                _remember_missing(missing_items, raw)
                 continue
             src, devices_root = located
             remote_path_rows.append((raw, src, devices_root))
@@ -373,6 +388,10 @@ def run_extract_sync(plan_run_id: int) -> int:
             "targets": len(remote_path_rows) + missing_remote_paths,
             "copied": event_dirs_copied,
             "missing": missing_remote_paths,
+            # #2186: 缺口清单（有界，前 _MISSING_ITEMS_MAX 条）+ 总数。
+            #   两者与 "missing" 同源（同一处累加），不会互相矛盾。
+            "missing_items": missing_items,
+            "missing_total": missing_remote_paths,
             "existing": existing_dirs,
             "merge_xls_copied": merge_xls_copied,
             "merge_xls_skipped_same_name": merge_xls_skipped_same_name,

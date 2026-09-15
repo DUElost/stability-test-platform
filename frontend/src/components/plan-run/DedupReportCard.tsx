@@ -51,6 +51,29 @@ function formatReason(reason?: string): string {
 }
 
 /**
+ * `run_context.extract` 的缺口清单两键（#2186）**尚未登记进 `types.ts`**——该目录正被在窗
+ * Execution（`fix-2051-2054`）声明，本 PR 不越界改它。故此处**就地收窄**，并在相关
+ * Agent Note 的 Revisit 里记了"声明释放后正式登记"的收尾项。
+ */
+type ExtractSummaryWithMissing = RunContextExtractSummary & {
+  missing_items?: unknown;
+  missing_total?: unknown;
+};
+
+/** 只收字符串、只认数组——**不盲信** `run_context` 里的 JSON。 */
+function readMissingItems(extract?: RunContextExtractSummary | null): {
+  items: string[];
+  total: number | null;
+} {
+  const raw = (extract ?? undefined) as ExtractSummaryWithMissing | undefined;
+  const items = Array.isArray(raw?.missing_items)
+    ? raw.missing_items.filter((x): x is string => typeof x === 'string')
+    : [];
+  const total = typeof raw?.missing_total === 'number' ? raw.missing_total : null;
+  return { items, total };
+}
+
+/**
  * 流水线阶段状态（#2185）：ok=已过 / warn=进行中或有缺口 / fail=失败 /
  * unknown=**无记录**（明说缺什么，而不是显示成 0——0 与"不知道"是两件事，
  * 前者会让人以为该阶段已空跑完）。
@@ -239,6 +262,9 @@ export default function DedupReportCard({ runId, uploadSummary, extractSummary }
   });
 
   const artifacts: DedupArtifact[] = statusQ.data?.artifacts ?? [];
+  // #2186：缺口清单（有界，后端已截断）+ 总数；总数缺失时回落既有 `missing` 计数。
+  const { items: missingItems, total: missingTotal } = readMissingItems(extractSummary);
+  const missingCount = missingTotal ?? extractSummary?.missing ?? missingItems.length;
   const stages = buildStages({
     archive: statusQ.data?.archive,
     scanFailed: statusQ.data?.scan_failed,
@@ -342,6 +368,41 @@ export default function DedupReportCard({ runId, uploadSummary, extractSummary }
                 </div>
               ))}
             </div>
+
+            {/* #2186：缺口要能下钻——「缺失 3」说不出缺的是哪 3 个，现场只能回中心存储手工比对。 */}
+            {missingCount > 0 && (
+              <div
+                className="space-y-0.5 rounded border border-destructive/30 px-2 py-1"
+                data-testid="extract-missing-items"
+              >
+                <div className="text-[11px] text-destructive">提取缺失 {missingCount} 项</div>
+                {missingItems.length === 0 ? (
+                  <div className="text-[11px] text-muted-foreground/70">
+                    该次运行未记录清单（旧数据）
+                  </div>
+                ) : (
+                  <>
+                    {missingItems.map((p) => (
+                      <div
+                        key={p}
+                        className="truncate font-mono text-[11px] text-muted-foreground/70"
+                        title={p}
+                      >
+                        {p}
+                      </div>
+                    ))}
+                    {missingCount > missingItems.length && (
+                      <div
+                        className="text-[11px] text-muted-foreground/70"
+                        data-testid="extract-missing-more"
+                      >
+                        还有 {missingCount - missingItems.length} 条未列出（仅列前 {missingItems.length} 条）
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
 
             {statusError ? (
               // #1195: 查询失败不得展示「暂无产物」空态 CTA——那是成功空结果

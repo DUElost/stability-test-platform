@@ -4,6 +4,13 @@ agent_allowed_service_actions:
   - restart
   - status
 
+# #2205：agent 进程日志轮转（systemd `StandardError=append:` 无轮转——2026-09-15
+# 全队实测 48/48 台合计 94.5GB、最大单台 4.89GB）。size 达到即轮转（比纯 daily
+# 更贴合日志量随设备数波动的主机）；rotate 保留份数。机制项（copytruncate/
+# compress/missingok/notifempty）固定在 update_agent.yml 的配置模板里，见该 task 注释。
+agent_logrotate_size: "200M"
+agent_logrotate_rotate: 7
+
 agent_install_excludes:
   - "__pycache__/"
   # ADR-0040 P2（#1997）：与部署 digest 输入集契约对齐——源码测试统一

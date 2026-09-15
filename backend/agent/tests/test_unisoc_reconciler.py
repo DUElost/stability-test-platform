@@ -6,6 +6,7 @@ import json
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from unittest.mock import patch
 
 from backend.agent.aee.collectors.unisoc import UnisocPlatformCollector
 from backend.agent.aee.unisoc_reconciler import UnisocUniviewReconciler
@@ -34,14 +35,56 @@ def _real_unievent_info(*, event_id: str, event_name: str, proc: str, kick: str,
 
 
 class _RecordingEmitter:
+    """#2040：按真实 SignalEmitter 形状实现 prepare/enqueue（unisoc 路已改为
+    「先持久化 keys、后做效果」——emit() 只是两者的便捷组合）。"""
+
     def __init__(self) -> None:
         self.calls: List[Dict[str, Any]] = []
+        self.enqueued: List[Dict[str, Any]] = []
         self._seq = 0
 
-    def emit(self, **kwargs) -> int:
+    def prepare(
+        self,
+        *,
+        category: str,
+        source: str,
+        path_on_device: str,
+        detected_at=None,
+        artifact_uri=None,
+        extra=None,
+        **_ignored: Any,
+    ):
         self._seq += 1
-        self.calls.append(dict(kwargs))
-        return self._seq
+        self.calls.append({
+            "category": category,
+            "source": source,
+            "path_on_device": path_on_device,
+            "detected_at": detected_at,
+            "artifact_uri": artifact_uri,
+            "extra": extra,
+        })
+        envelope: Dict[str, Any] = {
+            "job_id": 42,
+            "seq_no": self._seq,
+            "category": category,
+            "source": source,
+            "path_on_device": path_on_device,
+            "detected_at": detected_at.isoformat() if detected_at else None,
+        }
+        if artifact_uri is not None:
+            envelope["artifact_uri"] = artifact_uri
+        if extra is not None:
+            envelope["extra"] = extra
+        return self._seq, envelope
+
+    def enqueue(self, seq_no: int, envelope: Dict[str, Any]) -> int:
+        self.enqueued.append({"seq_no": int(seq_no), "envelope": dict(envelope)})
+        return int(seq_no)
+
+    def emit(self, **kwargs) -> int:
+        seq_no, envelope = self.prepare(**kwargs)
+        self.enqueue(seq_no, envelope)
+        return seq_no
 
 
 class _MemStore:
@@ -129,13 +172,13 @@ def test_same_dir_with_new_content_is_repulled_and_reemitted(tmp_path):
     """#2010：展锐复用同一 event_id 目录追加新异常（真机已确认）。
 
     目录名不变、内容签名（size+mtime）变化 → 必须重拉并**再次发射**；
-    签名不变 → 不得重发（本用例第 2 拍即反例）。
+    签名不变 → 不得重拉重发（本用例第 2 拍即反例）。
     """
     emitter = _RecordingEmitter()
-    root = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
-    ev = root / "JE.103000004"
-    ev.mkdir(parents=True)
-    (ev / "unievent_info").write_text(
+    device_root = tmp_path / "device" / "uniview_exception"
+    remote_ev = device_root / "JE.103000004"
+    remote_ev.mkdir(parents=True)
+    (remote_ev / "unievent_info").write_text(
         _real_unievent_info(event_id="103000004", event_name="Java Crash",
                             proc="com.android.camera2",
                             kick="2026-09-08_06:59:12.031",
@@ -155,16 +198,27 @@ def test_same_dir_with_new_content_is_repulled_and_reemitted(tmp_path):
 
     pulls: List[str] = []
 
-    def pull_fn(remote: str, _local: str, _t: int) -> bool:
+    def pull_fn(remote: str, local: str, _t: int) -> bool:
         pulls.append(remote)
+        dest = Path(local) / Path(remote).name
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(remote_ev, dest, dirs_exist_ok=True)
         return True
 
     r = _make_reconciler(tmp_path, emitter=emitter, shell_fn=shell_fn, pull_fn=pull_fn)
-    assert r.tick_once() == 1   # 首拍：从未处理 → 发射
+    assert r.tick_once() == 1   # 首拍：从未处理 → 拉取 + 发射
     first_pulls = len(pulls)
     assert r.tick_once() == 0   # 签名未变 → 不重拉、不重发（反例）
     assert len(pulls) == first_pulls, "签名未变却重拉"
-    sig["v"] = "drwxrwxrwx 2 root root 3452 2026-09-14 22:49"   # 目录被追加新异常
+    # 设备侧同目录被追加新异常（签名随之变化）
+    (remote_ev / "unievent_info").write_text(
+        _real_unievent_info(event_id="103000004", event_name="Java Crash",
+                            proc="com.android.camera2",
+                            kick="2026-09-14_22:49:03.117",
+                            tag="system_app_crash"),
+        encoding="utf-8",
+    )
+    sig["v"] = "drwxrwxrwx 2 root root 4180 2026-09-14 22:49"
     assert r.tick_once() == 1   # 签名变化 → 重拉 + 重发
     assert len(pulls) == first_pulls + 1, "签名变化却没有重拉"
     assert len(emitter.calls) == 2
@@ -591,3 +645,213 @@ def test_transient_metadata_error_not_recorded_retries(tmp_path):
     assert r.tick_once() == 1, "下一拍必须重试并恢复发射"
     assert len(pulls) == 2
     assert emitter.calls[0]["extra"]["event_subtype"] == "Java Crash"
+
+
+# ── #2079：拉取失败不得推进签名（否则陈旧内容重发 + 新内容永久丢失） ──────
+
+
+def _device_event_dir(tmp_path: Path, name: str = "JE.103000004", *, kick: str) -> Path:
+    """设备侧事件目录（pull_fn 桩的真源——必须真拷贝，才构成「拉取成功」）。"""
+    remote = tmp_path / "device" / "uniview_exception" / name
+    remote.mkdir(parents=True, exist_ok=True)
+    (remote / "unievent_info").write_text(
+        _real_unievent_info(event_id=name.split(".")[-1], event_name="Java Crash",
+                            proc="com.android.camera2", kick=kick, tag="system_app_crash"),
+        encoding="utf-8",
+    )
+    return remote
+
+
+def _uniview_shell(signature: str, name: str = "JE.103000004"):
+    def shell_fn(cmd: str, _t: int):
+        if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+            return f"{signature} {name}\n__STP_RC__:0\n"
+        if cmd.startswith("ls -l /data/"):
+            return "__STP_RC__:2\n"
+        if "unievent_info" in cmd:
+            return "unievent_info\n"
+        return None
+    return shell_fn
+
+
+def _copying_pull_fn(device_dir: Path, state: Dict[str, Any]):
+    """真拷贝语义的 pull 桩（state["ok"]=False 时模拟传输失败）。"""
+    def pull_fn(remote: str, local: str, _t: int) -> bool:
+        if not state.get("ok", True):
+            return False
+        dest = Path(local) / Path(remote).name
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(device_dir, dest, dirs_exist_ok=True)
+        return True
+    return pull_fn
+
+
+def test_pull_failure_keeps_signature_and_retries(tmp_path):
+    """#2079：远端签名已变、但本拍拉取失败 → 不发射、不推进签名，下拍补上。
+
+    反例（修复前）：pending 被推进到新签名 → 发射循环拿**陈旧**本地内容上报，
+    并记下新签名；真实新内容此后既不重拉也不再发射。
+    """
+    emitter = _RecordingEmitter()
+    old_sig = "drwxrwxrwx 2 root root 3452 2026-09-08 06:59"
+    new_sig = "drwxrwxrwx 2 root root 4180 2026-09-14 22:49"
+    device_ev = _device_event_dir(tmp_path, kick="2026-09-14_22:49:03.117")
+    state = {"ok": False}                       # 本拍拉取失败
+    r = _make_reconciler(
+        tmp_path, emitter=emitter, shell_fn=_uniview_shell(new_sig),
+        pull_fn=_copying_pull_fn(device_ev, state),
+    )
+    # 本地只有**陈旧**内容（旧 kick），processed 记录的是旧签名
+    local_ev = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1" / "JE.103000004"
+    local_ev.mkdir(parents=True)
+    (local_ev / "unievent_info").write_text(
+        _real_unievent_info(event_id="103000004", event_name="Java Crash",
+                            proc="com.android.camera2",
+                            kick="2026-09-08_06:59:12.031", tag="system_app_crash"),
+        encoding="utf-8",
+    )
+    with r._state_lock:
+        r._processed["JE.103000004"] = old_sig
+
+    assert r.tick_once() == 0, "拉取失败却发射了陈旧内容"
+    assert emitter.calls == []
+    assert r._processed["JE.103000004"] == old_sig, "拉取失败却推进了签名（新内容将被吞掉）"
+
+    state["ok"] = True                          # 下一拍拉取成功
+    assert r.tick_once() == 1, "拉取恢复后新内容没有补发"
+    assert len(emitter.calls) == 1
+    assert emitter.calls[0]["extra"]["aee_ts"] == "2026-09-14_22:49:03.117", "上报的不是新内容"
+    assert r._processed["JE.103000004"] == new_sig
+
+
+def test_pull_failure_skips_emit_even_for_unprocessed_dir(tmp_path):
+    """守卫：从未处理过的目录碰上拉取失败，也不得拿本地陈旧内容发射。"""
+    emitter = _RecordingEmitter()
+    device_ev = _device_event_dir(tmp_path, kick="2026-09-14_22:49:03.117")
+    r = _make_reconciler(
+        tmp_path, emitter=emitter,
+        shell_fn=_uniview_shell("drwxrwxrwx 2 root root 4180 2026-09-14 22:49"),
+        pull_fn=_copying_pull_fn(device_ev, {"ok": False}),
+    )
+    local_ev = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1" / "JE.103000004"
+    local_ev.mkdir(parents=True)
+    (local_ev / "unievent_info").write_text(
+        _real_unievent_info(event_id="103000004", event_name="Java Crash",
+                            proc="com.android.camera2",
+                            kick="2026-09-08_06:59:12.031", tag="system_app_crash"),
+        encoding="utf-8",
+    )
+
+    assert r.tick_once() == 0
+    assert emitter.calls == []
+
+
+# ── #2040：先落 keys 后做效果（崩溃窗重放复用同一组幂等键） ──────────────
+
+
+def _real_emitter(db: LocalDB) -> SignalEmitter:
+    return SignalEmitter(
+        local_db=db, job_id=42, host_id="host-u", device_serial="UNI-1",
+        fencing_token="42:1", agent_instance_id="agent-test",
+    )
+
+
+def _local_event_dir(tmp_path: Path, name: str = "JE.103000004",
+                     *, kick: str = "2026-09-08_06:59:12.031") -> Path:
+    ev = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1" / name
+    ev.mkdir(parents=True, exist_ok=True)
+    (ev / "unievent_info").write_text(
+        _real_unievent_info(event_id="103000004", event_name="Java Crash",
+                            proc="com.android.camera2", kick=kick,
+                            tag="system_app_crash"),
+        encoding="utf-8",
+    )
+    return ev
+
+
+def test_crash_window_replay_reuses_keys_no_duplicate_signal(tmp_path):
+    """#2040：emit 已发生、processed 未落盘即崩溃 → 重启重扫复用同一组 keys。
+
+    真实 LocalDB + SignalEmitter：重放走 outbox ``(job_id, seq_no)`` UNIQUE，
+    平台侧不会出现第二条信号；DLE 侧复用同一预分配 event_id（按 id upsert）。
+    """
+    db = LocalDB()
+    db.initialize(str(tmp_path / "agent.db"))
+    try:
+        ev = tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1" / "JE.103000004"
+        ev.mkdir(parents=True)
+        (ev / "unievent_info").write_text(
+            _real_unievent_info(event_id="103000004", event_name="Java Crash",
+                                proc="com.android.camera2",
+                                kick="2026-09-08_06:59:12.031", tag="system_app_crash"),
+            encoding="utf-8",
+        )
+        dle1 = _FakeDleClient()
+        r1 = _make_reconciler(tmp_path, emitter=_real_emitter(db), store=db,
+                              device_log_client=dle1)
+        # 模拟「已 emit、未落 processed 就崩溃」：屏蔽 processed 落盘
+        with patch.object(r1, "_save_processed_state", return_value=False):
+            assert r1.tick_once() == 1
+        rows = db.get_pending_log_signals()
+        assert len(rows) == 1 and rows[0]["seq_no"] == 1
+
+        # 重启：新实例、同一 state store（processed 未落盘、意图簿已落盘）
+        dle2 = _FakeDleClient()
+        r2 = _make_reconciler(tmp_path, emitter=_real_emitter(db), store=db,
+                              device_log_client=dle2)
+        assert r2.tick_once() == 1
+
+        rows2 = db.get_pending_log_signals()
+        assert len(rows2) == 1, "重放产生了第二条 log_signal（#2040 未修复）"
+        assert rows2[0]["seq_no"] == 1, "重放没有复用原 seq_no"
+        assert dle2.created[0]["event_id"] == dle1.created[0]["event_id"], "DLE 未复用 event_id"
+        assert dle2.created[0]["link_signal_seq_no"] == 1
+    finally:
+        db.close()
+
+
+def test_intent_removed_after_processed_persisted(tmp_path):
+    """#2040：processed 落盘后意图记录回收——否则同名目录的下一次新内容
+    会被误判成重放、复用旧 keys，在平台侧当作重复丢掉。"""
+    from backend.agent.aee.emit_intent import load_intents
+
+    store = _MemStore()
+    emitter = _RecordingEmitter()
+    r = _make_reconciler(tmp_path, emitter=emitter, store=store)
+    _local_event_dir(tmp_path)
+    assert r.tick_once() == 1
+    assert load_intents(store, r._state_key()) == {}, "processed 已落盘，意图记录应回收"
+
+    # 同名目录被追加新内容（签名变化）→ 必须拿新 seq_no，不得复用旧 keys
+    device_ev = _device_event_dir(tmp_path, kick="2026-09-14_22:49:03.117")
+    r2 = _make_reconciler(
+        tmp_path, emitter=emitter, store=store,
+        shell_fn=_uniview_shell("drwxrwxrwx 2 root root 4180 2026-09-14 22:49"),
+        pull_fn=_copying_pull_fn(device_ev, {}),
+    )
+    assert r2.tick_once() == 1
+    assert [call["seq_no"] for call in emitter.enqueued] == [1, 2], "新内容必须拿新 seq_no"
+
+
+def test_intent_removed_when_name_pruned(tmp_path):
+    """#2040：名字被 #767 裁剪时，其意图记录必须一并回收。"""
+    from backend.agent.aee.emit_intent import load_intents
+
+    store = _MemStore()
+    emitter = _RecordingEmitter()
+    r = _make_reconciler(tmp_path, emitter=emitter, store=store)
+    key = r._state_key()
+    _local_event_dir(tmp_path)
+    # 模拟「已 emit、processed 未落盘」→ 意图记录留存
+    with patch.object(r, "_save_processed_state", return_value=False):
+        assert r.tick_once() == 1
+    assert "JE.103000004" in load_intents(store, key)
+
+    # 设备列表权威空集 + 本地目录消失 → 连续 N 拍后裁剪
+    shutil.rmtree(tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1" / "JE.103000004")
+    r._shell_fn = _uniview_shell("", name="")   # 只有 rc=0 行 → 空集
+    r._prune_after_ticks = 1
+    r.tick_once()
+
+    assert "JE.103000004" not in r._processed
+    assert "JE.103000004" not in load_intents(store, key), "裁剪未回收意图记录"
