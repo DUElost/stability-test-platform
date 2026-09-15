@@ -1067,7 +1067,15 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
         textfile_dir = ctx.system_root / TEXTFILE_DIR
         textfile_dir.mkdir(parents=True, exist_ok=True)
         for unit in (NODE_EXPORTER_UNIT, PROMETHEUS_UNIT, SAMPLER_UNIT):
-            if ctx.ops.run(["systemctl", "enable", "--now", unit]).returncode != 0:
+            if ctx.ops.run(["systemctl", "enable", unit]).returncode != 0:
+                return _safe(
+                    checks, "install_monitoring", location="$.monitoring.enabled",
+                    role="control_plane", check_id="install.s4.monitoring",
+                )
+            # restart 而非 enable --now：发行版包在 apt 阶段就把服务按默认参数拉起来了
+            # （238 现场：Prometheus 带着 /etc/prometheus/prometheus.yml 跑在 :9090），
+            # 已经 active 的单元不会被 --now 重启，我们写的 $ARGS 就永远不生效。
+            if ctx.ops.run(["systemctl", "restart", unit]).returncode != 0:
                 return _safe(
                     checks, "install_monitoring", location="$.monitoring.enabled",
                     role="control_plane", check_id="install.s4.monitoring",

@@ -781,7 +781,9 @@ def test_monitoring_stack_is_installed_and_enabled(tmp_path, monkeypatch):
     joined = [" ".join(call) for call in ops.calls]
     assert any("apt-get install -y prometheus prometheus-node-exporter" in call for call in joined)
     for unit in ("prometheus-node-exporter", "prometheus", "stp-mem-top.timer"):
-        assert f"systemctl enable --now {unit}" in joined, unit
+        assert f"systemctl enable {unit}" in joined, unit
+        # 发行版包在 apt 阶段已把服务按默认参数拉起：不 restart 的话 $ARGS 永远不生效
+        assert f"systemctl restart {unit}" in joined, unit
     # 页面读的两个采集面：NFS 服务端指标与宿主进程内存采样器
     assert _system_file(tmp_path, "etc/default/prometheus-node-exporter").read_text(
         encoding="utf-8"

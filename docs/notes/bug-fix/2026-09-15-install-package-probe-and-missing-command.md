@@ -52,6 +52,18 @@ FileNotFoundError: [Errno 2] No such file or directory: 'exportfs'
   改掉第一站点的监听端口与配置）；裸发行版默认值或运维手改 → 先备份到 `state/shared-path-prev/`
   再覆盖（`install_shared_asset` 既有行为），重跑幂等。
 
+## Decision（续二）：enable --now 不重启已 active 的单元
+
+第三次复跑：S4 的 `install.s4.monitoring` FAIL。三个单元都是 active、配置文件也都写好了，
+但 Prometheus 日志里加载的是 **`/etc/prometheus/prometheus.yml`**（发行版自带配置）——
+apt 装包时发行版就把 `prometheus.service` 按默认参数拉起来了（:9090），`systemctl enable --now`
+对已经 active 的单元不会重启，我们写进 `/etc/default/prometheus` 的 `$ARGS` 从未生效，
+`/-/ready` 自然打不到 9091。
+
+修法：`enable` + `restart` 两个动作（与 backend 单元「restart 而非 enable --now」同一教训：
+EnvironmentFile/启动参数只在启动时读取）。回归用例改为同时断言 `systemctl enable <unit>` 与
+`systemctl restart <unit>`。
+
 ## Alternatives
 
 - **改成 `dpkg -l <pkg> | grep -q '^ii'`**：能判对，但仍是「问包管理器」而不是「问能力」；
