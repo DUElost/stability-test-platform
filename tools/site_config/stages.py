@@ -60,9 +60,13 @@ _UNRESOLVED_TEMPLATE_PLACEHOLDER = re.compile(r"<[a-z][a-z0-9]*(?:-[a-z0-9]+)+>"
 # STP_PROMETHEUS_URL）+ node-exporter。复用发行版包与其 unit，只通过
 # /etc/default 的 $ARGS 收窄监听面、打开页面需要的采集器——装完即出数据。
 MONITORING_PACKAGES = ("prometheus", "prometheus-node-exporter")
+# 判据用可执行文件名（发行版包同名）；只看包管理器状态会漏掉「已知但未安装」。
+MONITORING_BINARIES = ("prometheus", "prometheus-node-exporter")
 PROMETHEUS_UNIT = "prometheus"
 NODE_EXPORTER_UNIT = "prometheus-node-exporter"
 SAMPLER_UNIT = "stp-mem-top.timer"
+# nfs-kernel-server 提供的导出命令：S1 靠它判断 NFS 服务端是否可用。
+EXPORT_COMMAND = "exportfs"
 PROMETHEUS_RETENTION = "30d"
 NODE_EXPORTER_PORT = 9100
 # 采样器落点，与 stp-mem-top.service 的 ReadWritePaths 保持一致。
@@ -445,46 +449,51 @@ def stage_s1_basics(ctx: InstallContext) -> list[Check]:
                 "The stack listens on loopback only; unpublish it from the site entry if not needed.",
             ))
         else:
-            present = all(
-                ctx.ops.run(["dpkg", "-l", package]).returncode == 0
-                for package in MONITORING_PACKAGES
-            )
-            if not present and ctx.ops.run(
+            missing = [name for name in MONITORING_BINARIES if not ctx.ops.command_exists(name)]
+            if missing and ctx.ops.run(
                 ["apt-get", "install", "-y", *MONITORING_PACKAGES]
             ).returncode != 0:
                 return _safe(
                     checks, "install_monitoring", location="$.monitoring.enabled",
                     role="control_plane", check_id="install.s1.monitoring",
                 )
+            if not all(ctx.ops.command_exists(name) for name in MONITORING_BINARIES):
+                # 装完仍然找不到可执行文件：如实 FAIL，绝不让 S4 拿着不存在的服务往下走
+                return _safe(
+                    checks, "install_monitoring", location="$.monitoring.enabled",
+                    role="control_plane", check_id="install.s1.monitoring",
+                )
             checks.append(_pass(
                 "install.s1.monitoring", "control_plane", "$.monitoring", "monitoring_installed",
-                "Prometheus and node-exporter are present as distribution packages.",
+                "Prometheus and node-exporter are installed and callable on the control plane.",
                 "Keep them on loopback; the storage page reads them locally.",
             ))
 
     if config.storage.export_to_agents:
-        # 自建中心存储：装上 NFS 服务端，并把导出根交给约定的写入身份（只此一层）
+        # 自建中心存储：装上 NFS 服务端，并把导出根交给约定的写入身份（只此一层）。
+        # 判据是「可执行文件在不在」而不是包管理器的状态：dpkg -l <pkg> 对「已知但
+        # 未安装」的包同样返回 0，238 现场因此跳过安装、S2 调 exportfs 直接崩掉。
         if ctx.dry_run:
             checks.append(_pass(
                 "install.s1.export", "storage", "$.storage.export_to_agents", "export_planned",
                 "Installing the NFS server and handing the export root to the agreed identity are planned.",
                 "Do not broaden the export beyond the declared Agents; keep it inside the site LAN.",
             ))
-            return checks
-        if ctx.ops.run(["dpkg", "-l", NFS_SERVER_PACKAGE]).returncode != 0:
-            installed = ctx.ops.run(["apt-get", "install", "-y", NFS_SERVER_PACKAGE])
-            if installed.returncode != 0:
-                return _safe(
-                    checks, "install_export", location="$.storage.export_to_agents",
-                    role="storage", check_id="install.s1.export",
-                )
-        ctx.ops.run(["chown", f"root:{EXPORT_ANON_UID}", config.storage.mount_path])
-        ctx.ops.run(["chmod", "0775", config.storage.mount_path])
-        checks.append(_pass(
-            "install.s1.export", "storage", "$.storage.export_to_agents", "export_prepared",
-            "The NFS server package is present and the export root is writable by the agreed identity.",
-            "Do not broaden the export beyond the declared Agents; keep it inside the site LAN.",
-        ))
+        else:
+            if not ctx.ops.command_exists(EXPORT_COMMAND):
+                installed = ctx.ops.run(["apt-get", "install", "-y", NFS_SERVER_PACKAGE])
+                if installed.returncode != 0 or not ctx.ops.command_exists(EXPORT_COMMAND):
+                    return _safe(
+                        checks, "install_export", location="$.storage.export_to_agents",
+                        role="storage", check_id="install.s1.export",
+                    )
+            ctx.ops.run(["chown", f"root:{EXPORT_ANON_UID}", config.storage.mount_path])
+            ctx.ops.run(["chmod", "0775", config.storage.mount_path])
+            checks.append(_pass(
+                "install.s1.export", "storage", "$.storage.export_to_agents", "export_prepared",
+                "The NFS server is callable and the export root is writable by the agreed identity.",
+                "Do not broaden the export beyond the declared Agents; keep it inside the site LAN.",
+            ))
     return checks
 
 
