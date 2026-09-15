@@ -418,3 +418,54 @@ def test_rerun_keeps_existing_bindings_instead_of_rotating_them(tmp_path):
     assert before == after
     assert any("kept existing bindings (not rotated)" in line for line in fresh["actions"])
     assert any("kept existing bindings (not rotated)" in line for line in first["actions"]) is False
+
+
+def test_rerun_keeps_the_existing_values_even_when_parameters_differ(tmp_path):
+    """站点已在运行：既有绑定（口令/索引/DSN）优先于本次命令行参数。"""
+    output = tmp_path / "site.yaml"
+    bindings = tmp_path / "bindings"
+    init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(), redis_index=2, admin_username="ops",
+    )
+    before = {name: (bindings / name).read_text(encoding="utf-8") for name in sorted(os.listdir(bindings))}
+
+    fresh = init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(), redis_index=1, admin_username="admin",
+    )
+
+    after = {name: (bindings / name).read_text(encoding="utf-8") for name in sorted(os.listdir(bindings))}
+    assert before == after
+    assert before["site_redis"].strip().endswith("/2")
+    assert "USERNAME=ops" in before["site_admin"]
+    assert any("kept existing bindings (not rotated)" in line for line in fresh["actions"])
+
+
+def test_rerun_probes_the_database_with_the_existing_password(tmp_path, monkeypatch):
+    """重跑必须拿既有绑定的密码去核对，而不是新生成的——否则会白白 ALTER 角色。"""
+    from tools.site_config import bootstrap
+
+    output = tmp_path / "site.yaml"
+    bindings = tmp_path / "bindings"
+    init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(),
+    )
+    existing_dsn = bootstrap._read_binding(bindings, "site_database")["DATABASE_URL"]
+    existing_password = bootstrap._dsn_password(existing_dsn)
+
+    captured: dict = {}
+    real = bootstrap.prepare_database
+
+    def spy(ops, **kwargs):
+        captured.update(kwargs)
+        return real(ops, **kwargs)
+
+    monkeypatch.setattr(bootstrap, "prepare_database", spy)
+    init_site(
+        output=output, bindings_dir=bindings, ops=probe_ops(), interactive=False,
+        fix=False, answers=_answers(),
+    )
+    assert captured["password"] == existing_password
+    assert captured["dsn"].endswith("/stp_b")
