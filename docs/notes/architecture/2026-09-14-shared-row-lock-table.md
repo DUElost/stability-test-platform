@@ -185,11 +185,14 @@ Class: architecture
   `stability_db_lock_wait_max_seconds`（等最久多久）、
   告警 `StabilityDbLockWaitSustained`（>30s 且持续 5m）；
   保留清理的持锁窗口用 `stability_retention_txn_seconds` 度量。
-- **保留清理（`#2022` 已修顺序，**持锁时长未改**）**：顺序已对齐 I1/I2。要把持锁窗口压到
-  毫秒级还需把 `purge_run_storage_dirs` 移出事务——那会动 `#1521`/`#1698`「先文件后行」的
-  自愈语义，属独立裁决。届时**不要**只把 deletes 挪到锁之前：候选选择依赖「锁内复核」
-  与热路径互斥。**该窗口现在可度量**：`stability_retention_txn_seconds`（`#2104`）
-  ——先看它的分布再决定要不要动，不要凭印象判断「NFS 回收有多慢」。
+- **保留清理的持锁窗口（`#2113` 定调：压窗口，不挪 phase）**：顺序已对齐 I1/I2（`#2022`）。
+  窗口 = 同一事务内的 NFS 目录回收 + 行删除，因此**不要**把 `purge_run_storage_dirs` 移出
+  事务：purge 的失败结果要参与安全集复算、并剔除该 run 的 DB 删除（`#1521`/`#1698`「先文件
+  后行」的自愈语义），提前到取锁之前会出现**「文件已删、行仍在」——不可自愈**（文件删了回不
+  来），比长窗口更糟。正确杠杆是**批大小** `PLAN_RUN_RETENTION_BATCH_SIZE`（默认 100；窗口 ∝
+  每 tick 的 run 数，`#2113`）；判断依据用 `stability_retention_txn_seconds` 与
+  `stability_db_lock_wait_max_seconds`（`#2104`）——先看分布再调，别凭印象判断「NFS 回收
+  有多慢」。
 - **`released_leases`（`#2089` 已完成）**：该字段已从后端与前端类型两侧删除，不再作为
   契约的一部分；「租约是否释放」请以 reconciler / recycler 的路径与
   `stability_db_deadlock_total` 等观测为准，不要从 abort 的返回体推断。
@@ -207,5 +210,6 @@ Class: architecture
 | #2022 | 保留清理改为 job→lease→plan_run；并更正本表「保留期数十天」的前提错误 |
 | #2089 | 删除 `released_leases` 死字段（后端返回体/审计/日志 + 前端 `types.ts` 两侧） |
 | #2104 | 补锁等待观测面（等待 gauge + 持锁窗口 histogram + 告警），使「死锁改等待」可见 |
+| #2113 | 保留清理批大小设为可调旋钮（压窗口的杠杆）；否决「把 purge 移出事务」 |
 | #1960 | 把「以共享行为单位枚举」写进审查总纲 §3 第 7 条 |
 | #1958 | 死锁指标与告警（本表的观测入口） |

@@ -60,6 +60,12 @@ class SchedulerSettings(DomainSettings):
 
     # ── cron_scheduler：计划保留与触发去重 ──
     plan_run_retention_days: int = 3
+    # #2105：单 tick 处理的 PlanRun 上限（`_retention_candidate_ids(limit=…)`）。
+    # 保留清理事务的**持锁窗口 ∝ 批大小**——NFS 目录回收与行删除都在同一事务内
+    # （#1521/#1698「先文件后行」），窗口用 `stability_retention_txn_seconds` 观测
+    # （#2104）。窗口过长的杠杆是调小它；**不要**改成把 purge 挪出事务——那会造成
+    # 「文件已删、行仍在」的不可自愈不一致（详见共享行加锁表 Revisit）。
+    plan_run_retention_batch_size: int = 100
     schedule_dedup_window_seconds: float = 60
 
 
