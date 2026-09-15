@@ -14,7 +14,7 @@
 #
 # 用法：
 #   金丝雀：  ansible-playbook -i <inventory> playbooks/set_timezone.yml \
-#               -e tz_hosts=<group> --limit 172.21.15.56
+#               -e tz_hosts=<group> --limit <CANARY_IP>
 #   全机群：  ansible-playbook -i <inventory> playbooks/set_timezone.yml -e tz_hosts=<group>
 #   预演：    追加 --check --diff
 - name: Align agent host timezone with control plane
