@@ -1,7 +1,7 @@
 # ADR-0043：中止宽限的请求主体同构（Abort Grace Subject Alignment）
 
-- 状态：**Accepted** v1.0
-- 版本记录：v1.0 定稿（2026-09-15，owner 裁决三项全采纳，裁决记录 §9；由 [#2050](https://github.com/DUElost/stability-test-platform/issues/2050) 触发，[#1928](https://github.com/DUElost/stability-test-platform/issues/1928) 删除孤儿结构时指路要求「按 host 独立 grace 须先立 ADR」）
+- 状态：**Accepted** v1.0（实施已落地：2026-09-15，[PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)）
+- 版本记录：v1.0 定稿（2026-09-15，owner 裁决三项全采纳，裁决记录 §9；由 [#2050](https://github.com/DUElost/stability-test-platform/issues/2050) 触发，[#1928](https://github.com/DUElost/stability-test-platform/issues/1928) 删除孤儿结构时指路要求「按 host 独立 grace 须先立 ADR」）；**v1.0 实施落地**（2026-09-15，[#2154](https://github.com/DUElost/stability-test-platform/issues/2154) / [PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)）：§5 切片 ①–④ 全部落地、D1/D2/D3/D4/D6 均有测试钉子（映射见 §8）；D3 的实现口径与正文文字存在**一处偏差，已记录在 §10 待 owner 追加裁决**（未裁决前不得据此再改实现）
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-15
@@ -142,14 +142,18 @@ host 级 abort 之后才被 claim 成 RUNNING 的**该 host** job，只要该 ho
 
 ## 5. 落地与后续动作
 
-1. 实施由 [#2154](https://github.com/DUElost/stability-test-platform/issues/2154) 跟踪（本 ADR 只作裁决，不含实现）；
-2. 实施切片：① `abort_plan_run` 写 host 级时钟（不重置）→ ② reaper 按主体取时钟 + 取更
-   早者 → ③ late-claim 覆盖（D3）→ ④ 兼容分支与用例；
-3. #2050 的 `_abort_request_covers_job` 保留为**名单语义**，与本 ADR 的**计时语义**正交，
-   两者并存；
-4. 落地后回填：删除 `plan_run_abort.py:160-165` 的「按 host 独立 grace 须先立 ADR」指路
-   注释、改为指向本 ADR；同步 `abort_plan_run` docstring 中「每次 host 级 abort 重置宽限」
-   的注记（#1928 注记）为失效。
+1. ✅ 实施已由 [#2154](https://github.com/DUElost/stability-test-platform/issues/2154) 完成，
+   落地 PR [PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)
+   （2026-09-15 合入 `main`）；
+2. ✅ 实施切片 ①–④ 全部落地：① 写入侧 `plan_run_abort.py`（host 级 abort 写
+   `abort_requested_hosts[host_id]`，首次写入、后续只刷新 `reason`/`triggered_by`）→ ②
+   reaper `_abort_reap_clock` 按主体取时钟、并存取更早者 → ③ late-claim 覆盖（**实现口径
+   与 D3 正文有一处偏差，见 §10**）→ ④ 兼容分支与用例（测试映射见 §8）；
+3. ✅ #2050 的 `_abort_request_covers_job` 保留为**名单语义**（run 主体的覆盖判据），与本
+   ADR 的**计时语义**正交，两者并存；
+4. ✅ 落地后回填已完成：`plan_run_abort.py` 的「按 host 独立 grace 须先立 ADR」指路注释改
+   为指向本 ADR；`abort_plan_run` docstring 中 #1928「每次 host 级 abort 重置宽限」的注记
+   已标注失效并写明替代语义。
 
 ## 6. Verification
 
@@ -178,7 +182,22 @@ host 级 abort 之后才被 claim 成 RUNNING 的**该 host** job，只要该 ho
   [`docs/notes/bug-fix/2026-09-14-audit3-misc-1928-1930-1931-1923.md`](../notes/bug-fix/2026-09-14-audit3-misc-1928-1930-1931-1923.md)（#1928 删除与 ADR 指路）；
 - Issue：[#2050](https://github.com/DUElost/stability-test-platform/issues/2050)、
   [#1928](https://github.com/DUElost/stability-test-platform/issues/1928)、
-  [#1880](https://github.com/DUElost/stability-test-platform/issues/1880)。
+  [#1880](https://github.com/DUElost/stability-test-platform/issues/1880)；
+- 落地 PR：[#2165](https://github.com/DUElost/stability-test-platform/pull/2165)
+  （2026-09-15 合入 `main`）。
+
+### 8.1 测试映射（§2-D6 验收 ↔ 用例）
+
+| 决策 / 验收项 | 用例 |
+|---|---|
+| D1 主体不串台（host 级只写 host 时钟、run 级不写 host 时钟） | `backend/tests/api/test_plan_run_abort_api.py`：`test_host_abort_writes_host_clock_not_run_level_at`、`test_run_level_abort_does_not_write_host_clock` |
+| D1 host 时钟互不共享 | `backend/tests/scheduler/test_abort_reaper.py`：`test_host_clock_is_per_host_not_shared` |
+| D1 并存取更早者 | 同上：`test_run_and_host_clocks_take_the_earlier` |
+| D2 反 N×GRACE（后续请求不重置） | `backend/tests/api/test_plan_run_abort_api.py`：`test_host_abort_clock_not_reset_by_later_request` |
+| D3 late-claim 覆盖 | `backend/tests/scheduler/test_abort_reaper.py`：`test_late_claimed_job_on_aborted_host_is_reaped` |
+| D4 历史无键退化（不变成无人回收） | 同上：`test_legacy_abort_without_requested_ids_still_reaps`（既有，仍通过） |
+| D6 主体可区分（审计不混为一类） | 同上：`status_reason` 断言 `abort_ack_timeout_host` vs `abort_ack_timeout`（3 处） |
+| #2050 回归（其他主机 RUNNING job 不被回收） | 同上：`test_host_scoped_abort_spares_other_hosts_running_jobs` 等既有三例 |
 
 ## 9. 裁决记录（owner，2026-09-15）
 
@@ -192,4 +211,20 @@ host 级 abort 之后才被 claim 成 RUNNING 的**该 host** job，只要该 ho
 
 **未采纳的路径**：A（维持 run 级 + 只收窄候选集，#2050 现状）与 D（只做「不重置」、不引入 host 级时钟）均在 §3 否决——两者都保留主体错位，后者更让 D3 无从表达。
 
-**后续**：实施由 [#2154](https://github.com/DUElost/stability-test-platform/issues/2154) 跟踪（本 ADR 只作裁决，不含实现），切片与验收见 §5 / §2-D6。
+**后续**：实施由 [#2154](https://github.com/DUElost/stability-test-platform/issues/2154) 跟踪（本 ADR 只作裁决，不含实现），切片与验收见 §5 / §2-D6 → **已于 2026-09-15 由 [PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165) 完成**（状态回填见 §5 / §8.1）。
+
+## 10. 实施注记（#2154 / PR #2165，2026-09-15；**待 owner 追加裁决**）
+
+PR #2165 落地时，D3 的覆盖判据按如下口径实现，**与 D3 正文「只要该 host 的时钟仍在窗口内」
+存在一处偏差**：
+
+- **实现口径**：host 主体的覆盖判据 = 该 host **存在** host 级时钟
+  （`abort_requested_hosts[host_id].at` 有值），而**非**「时钟仍在窗口内」；
+- **理由**：若严格要求「仍在窗口内」，late-claim 的 job 在 host 时钟过期后**永远**不会被
+  覆盖——名单快照对 late-claim job 没有刷新通道（§1.2-2），判据会随之永久失效，等于把本
+  ADR 要消掉的残留窗口固化成永久残留，与 D3 意图相反；
+- **行为差异**：host 时钟过期后，该 host 上 late-claim 的 job 仍会被判为「时钟已过 grace」
+  并回收（按正文文字它会被漏掉）；
+- **取舍**：宁可多回收（转 UNKNOWN、保留 lease，属既有兜底语义），不可漏回收（残留窗口）；
+- **待裁决**：请 owner 在 §9 追加一项裁决确认本口径；确认后升 v1.1 并把 D3 正文改为
+  「host 主体的覆盖判据 = 该 host 存在 host 级时钟」。**未裁决前不得反向改实现**。
