@@ -70,9 +70,12 @@ crash-details）。
 
 ## Revisit
 
-- **`aee_ts` 缺失的存量信号**：退化路径（纯目录键）意味着**存量**若缺 `aee_ts` 且同目录多异常，
-  仍会被并成一条。当前 Agent 侧始终写 `aee_ts`（`unisoc_reconciler.py:508-512`），
-  故仅影响历史数据；若需回溯修正，应独立评估（本单不做数据迁移）。
+- **退化路径的精确条件**：仅在 `event_subtype` **与** `aee_ts` **两者皆空**时退化为纯目录键。
+  实测 `unisoc_reconciler.py:508-512`：`aee_ts = meta.device_timestamp_raw or (…isoformat() if … else None)`
+  ——**可能为 `None`**；但 `event_subtype`（`:506`）来自 `parse_metadata`，缺失时事件本身
+  不可上报（`_EMIT_RESULT_NOT_REPORTABLE`）。故**正常路径下至少 `event_subtype` 非空**、
+  复合键生效；退化仅覆盖「历史/异常数据两者皆空」的窄面。若需回溯修正存量，
+  应独立评估（本单不做数据迁移）。
 - **键语义的文档化**：`nfs:{dir}#{subtype}#{ts}` 是**去重键**而非对外契约，未写入文档；
   若后续有第三方消费该键（如导出），需先固化格式。
 - **同目录同 subtype 同 `aee_ts` 的不同异常**：理论上仍会被并（键相同）。当前 Agent 侧
