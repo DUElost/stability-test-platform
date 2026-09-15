@@ -28,7 +28,16 @@ from sqlalchemy.orm import Session
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user
 from backend.api.schemas.jira_run import JiraRunOut
-from backend.api.schemas.dedup import DedupArtifactOut, DedupStatusOut
+from backend.api.schemas.dedup import (
+    DedupAgentConfigReloadOut,
+    DedupArtifactOut,
+    DedupExtractOut,
+    DedupMergeTriggerOut,
+    DedupScanTriggerOut,
+    DedupStatusOut,
+    JiraRunCancelOut,
+    JiraRunStartOut,
+)
 from backend.core.audit import record_audit
 from backend.core.database import SessionLocal, get_db
 from backend.models.host import Host
@@ -190,7 +199,7 @@ def _on_jira_run_complete(run: "ConsoleRun") -> None:
         logger.exception("jira_run_complete_callback_failed run_id=%s", console_run_id)
 
 
-@router.post("/runs", response_model=ApiResponse[dict])
+@router.post("/runs", response_model=ApiResponse[JiraRunStartOut])
 async def start_jira_run(
     vendor: str = Form(...),
     stage: str = Form("upload_list"),
@@ -338,9 +347,14 @@ async def start_jira_run(
         raise HTTPException(status_code=500, detail=f"failed to start: {exc}") from exc
 
     logger.info("dedup_jira_run_started vendor=%s stage=%s source=%s run_id=%s", vendor, stage, source, console_run_id)
-    return ok({"console_run_id": console_run_id, "room": f"console:{console_run_id}",
-               "vendor": vendor, "stage": stage, "source": source,
-               "jira_project_key": jira_project_key})
+    return ok(JiraRunStartOut(
+        console_run_id=console_run_id,
+        room=f"console:{console_run_id}",
+        vendor=vendor,
+        stage=stage,
+        source=source,
+        jira_project_key=jira_project_key,
+    ))
 
 
 @router.get("/runs", response_model=ApiResponse[list[JiraRunOut]])
@@ -406,7 +420,7 @@ def get_jira_run_log(
     return ok(console.read_log(console_run_id, from_seq=from_seq))
 
 
-@router.post("/runs/{console_run_id}/cancel", response_model=ApiResponse[dict])
+@router.post("/runs/{console_run_id}/cancel", response_model=ApiResponse[JiraRunCancelOut])
 def cancel_jira_run(
     console_run_id: str,
     request: Request,
@@ -439,7 +453,7 @@ def cancel_jira_run(
         request=request,
     )
     db.commit()
-    return ok({"console_run_id": console_run_id, "canceled": canceled})
+    return ok(JiraRunCancelOut(console_run_id=console_run_id, canceled=canceled))
 
 
 # ── ADR-0025 Sprint 4: 归档-2 scan/merge 端点（绑 PlanRun）──────────────────
@@ -447,7 +461,7 @@ def cancel_jira_run(
 scan_router = APIRouter(prefix="/api/v1/plan-runs", tags=["dedup-scan"])
 
 
-@scan_router.post("/{run_id}/dedup/scan", response_model=ApiResponse[dict])
+@scan_router.post("/{run_id}/dedup/scan", response_model=ApiResponse[DedupScanTriggerOut])
 async def trigger_scan(
     run_id: int,
     request: Request,
@@ -521,17 +535,18 @@ async def trigger_scan(
         request=request,
     )
     db.commit()
-    return ok({
-        "plan_run_id": run_id,
-        "enqueued": "scan_task",
-        "is_final": is_final,
-        "triggered_hosts": triggered,
-        "skipped_offline": skipped_offline,
-        "skipped_retired": skipped_retired,
-    })
+    return ok(DedupScanTriggerOut(
+        plan_run_id=run_id,
+        enqueued="scan_task",
+        is_final=is_final,
+        triggered_hosts=triggered,
+        skipped_offline=skipped_offline,
+        skipped_retired=skipped_retired,
+    ))
 
 
-@scan_router.post("/hosts/{host_id}/reload-config", response_model=ApiResponse[dict])
+@scan_router.post("/hosts/{host_id}/reload-config",
+               response_model=ApiResponse[DedupAgentConfigReloadOut])
 async def reload_agent_config(
     host_id: str,
     request: Request,
@@ -593,7 +608,11 @@ async def reload_agent_config(
         request=request,
     )
     db.commit()
-    return ok({"host_id": host_id, "command": "reload_config", "status": "sent"})
+    return ok(DedupAgentConfigReloadOut(
+        host_id=host_id,
+        command="reload_config",
+        status="sent",
+    ))
 
 
 @scan_router.get("/{run_id}/dedup/status", response_model=ApiResponse[DedupStatusOut])
@@ -643,7 +662,7 @@ def get_scan_status(
     ))
 
 
-@scan_router.post("/{run_id}/dedup/merge", response_model=ApiResponse[dict])
+@scan_router.post("/{run_id}/dedup/merge", response_model=ApiResponse[DedupMergeTriggerOut])
 async def trigger_merge(
     run_id: int,
     db: Session = Depends(get_db),
@@ -692,17 +711,17 @@ async def trigger_merge(
     )
     if result != "ok":
         raise HTTPException(status_code=500, detail="merge failed (no _org.xls?)")
-    return ok({
-        "status": "ok",
-        "plan_run_id": run_id,
-        "scan_round_id": scan_round_id,
-        "round_started_at": (
+    return ok(DedupMergeTriggerOut(
+        status="ok",
+        plan_run_id=run_id,
+        scan_round_id=scan_round_id,
+        round_started_at=(
             round_started_at.isoformat() if round_started_at is not None else None
         ),
-    })
+    ))
 
 
-@scan_router.post("/{run_id}/dedup/extract", response_model=ApiResponse[dict])
+@scan_router.post("/{run_id}/dedup/extract", response_model=ApiResponse[DedupExtractOut])
 def trigger_extract(
     run_id: int,
     _user: User = Depends(get_current_active_user),
@@ -727,8 +746,8 @@ def trigger_extract(
         raise HTTPException(status_code=503, detail="NFS root not configured (STP_AEE_NFS_ROOT)")
 
     jira_dir = Path(nfs_root) / "jira" / str(run_id)
-    return ok({
-        "plan_run_id": run_id,
-        "jira_dir": str(jira_dir),
-        "extracted_count": extracted,
-    })
+    return ok(DedupExtractOut(
+        plan_run_id=run_id,
+        jira_dir=str(jira_dir),
+        extracted_count=extracted,
+    ))

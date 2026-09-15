@@ -1,17 +1,10 @@
 /** ADR-0025 §10: dedup → Jira 提单 API（独立「问题管理」活动，与 PlanRun 解耦）。 */
 import apiClient, { unwrapApiResponse } from './client';
 import { NO_TIMEOUT } from './timeouts';
-import type { JiraRunRecord } from './types';
+import type { JiraRunRecord, JiraRunStartPayload, JiraRunCancelPayload } from './types';
 
 export type JiraVendor = 'transsion' | 'tinno';
 export type JiraStage = 'upload_list' | 'create';
-
-export interface JiraRunStart {
-  console_run_id: string;
-  room: string;
-  vendor: string;
-  stage: string;
-}
 
 export interface ConsoleRunStatus {
   run_id: string;
@@ -61,7 +54,7 @@ export const dedup = {
       if (!p.file) throw new Error('file is required for source=upload');
       fd.append('file', p.file);
     }
-    return unwrapApiResponse<JiraRunStart>(
+    return unwrapApiResponse<JiraRunStartPayload>(
       apiClient.post(`/jira/runs`, fd, { timeout: NO_TIMEOUT }), // #1199：xls 上传耗时不定，豁免
     );
   },
@@ -75,7 +68,7 @@ export const dedup = {
     ),
 
   cancelRun: (consoleRunId: string) =>
-    unwrapApiResponse<{ console_run_id: string; canceled: boolean }>(
+    unwrapApiResponse<JiraRunCancelPayload>(
       apiClient.post(`/jira/runs/${consoleRunId}/cancel`, {}),
     ),
 

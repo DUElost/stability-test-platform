@@ -1930,6 +1930,60 @@ export interface DedupStatusPayload {
   scan_failed?: boolean;
 }
 
+/** 本轮 scan 未纳入的主机。对应后端 `DedupSkippedHostOut`（#2187 轴线 C）。 */
+export interface DedupSkippedHost {
+  host_id: string;
+  status: string;
+}
+
+/** `POST /plan-runs/{id}/dedup/scan`。对应后端 `DedupScanTriggerOut`（#2187 轴线 C）。 */
+export interface DedupScanTriggerPayload {
+  plan_run_id: number;
+  enqueued: string;
+  is_final: boolean;
+  triggered_hosts: string[];
+  skipped_offline: DedupSkippedHost[];
+  skipped_retired: DedupSkippedHost[];
+}
+
+/** `POST /plan-runs/{id}/dedup/merge`。对应后端 `DedupMergeTriggerOut`（#2187 轴线 C）。 */
+export interface DedupMergeTriggerPayload {
+  status: string;
+  plan_run_id: number;
+  scan_round_id: string | null;
+  round_started_at: string | null;
+}
+
+/** `POST /plan-runs/{id}/dedup/extract`。对应后端 `DedupExtractOut`（#2187 轴线 C）。 */
+export interface DedupExtractPayload {
+  plan_run_id: number;
+  jira_dir: string;
+  extracted_count: number;
+}
+
+/** `POST /jira/runs`。对应后端 `JiraRunStartOut`（#2187 轴线 C）。 */
+export interface JiraRunStartPayload {
+  console_run_id: string;
+  room: string;
+  vendor: string;
+  stage: string;
+  source: string;
+  jira_project_key: string | null;
+}
+
+/** `POST /jira/runs/{id}/cancel`。对应后端 `JiraRunCancelOut`（#2187 轴线 C）。 */
+export interface JiraRunCancelPayload {
+  console_run_id: string;
+  canceled: boolean;
+}
+
+/** `POST /plan-runs/hosts/{id}/reload-config`。对应后端 `DedupAgentConfigReloadOut`（#2187 轴线 C）。 */
+export interface AgentConfigReloadPayload {
+  host_id: string;
+  command: string;
+  status: string;
+}
+
 /** ADR-0030 P2 — PlanRun 逐条用例结果。 */
 export interface TestCaseResultRow {
   id: number;

@@ -25,6 +25,9 @@ import type {
   DeviceLinkStatus,
   CrashDetailEntry,
   DedupStatusPayload,
+  DedupScanTriggerPayload,
+  DedupMergeTriggerPayload,
+  DedupExtractPayload,
 } from './types';
 
 export interface ListPlanRunEventsParams {
@@ -204,17 +207,17 @@ export const planRuns = {
     ),
 
   triggerScan: (runId: number, isFinal: boolean = false) =>
-    unwrapApiResponse<{ plan_run_id: number; triggered_hosts: string[]; skipped_offline: unknown[] }>(
+    unwrapApiResponse<DedupScanTriggerPayload>(
       apiClient.post(`/plan-runs/${runId}/dedup/scan`, null, { params: { is_final: isFinal } }),
     ),
 
   triggerMerge: (runId: number) =>
-    unwrapApiResponse<{ status: string; plan_run_id: number }>(
+    unwrapApiResponse<DedupMergeTriggerPayload>(
       apiClient.post(`/plan-runs/${runId}/dedup/merge`, {}),
     ),
 
   triggerExtract: (runId: number) =>
-    unwrapApiResponse<{ plan_run_id: number; jira_dir: string; extracted_count: number }>(
+    unwrapApiResponse<DedupExtractPayload>(
       apiClient.post(`/plan-runs/${runId}/dedup/extract`, {}),
     ),
 };
