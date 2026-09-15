@@ -16,14 +16,18 @@ Class: bug-fix
 1. `processor._finalize_processed_entry` 在写 processed **之前**调用新增可选
    钩子 `on_entry_intent`（payload 同 on_new_entry + `state_key_prefix`）；
    patrol 路径不传 → 行为不变。reconciler 据此落一条**意图占位**（记录
-   payload、entry_origin、首次观测 detected_at）。
+   payload、entry_origin、首次观测 detected_at）。**占位写失败本身**由 #2044
+   改判为「该条目不 finalize」（不推进 processed、留 pending 下一拍重试）——
+   旧形态是钩子与 processor 各吞一次后照常前进 processed，等于静默永久丢失。见 [`2026-09-15-aee-intent-finalize-and-tombstone-2034-2044`](2026-09-15-aee-intent-finalize-and-tombstone-2034-2044.md)。
 2. `reconciler._handle_new_entry` 命中占位 → 分配/复用 keys → **先持久化**
    （`seq_no` + envelope + DLE 的预分配 UUID + 完整 DLE payload）→ 再产生
    效果（outbox enqueue + DLE POST）→ 标 `done`。keys 已存在（崩溃重放）时
    直接复用，不重新分配、不重建 payload。
 3. `tick_once` 开头 `_sweep_emit_intents()`：`!done` → 重放（keys 缺失则新
    分配）；`done` 且 line 已 processed → 清理；`done` 且未 processed →
-   保留（重拉路径复用 keys，避免重复 emit）。重放失败按
+   保留（重拉路径复用 keys，避免重复 emit）。#2034 收紧了「已 processed」的口径：
+   baseline 簿按 **runtime** 前缀 processed 判定，否则 `tick_once` 的先 sweep 后
+   拉取顺序会在 runtime 重拉引用它之前一个 tick 就把墓碑抹掉。重放失败按
    `MAX_REPLAY_ATTEMPTS=5` 退场并计 `signals_dropped`（防坏数据无限重放）。
 4. 支撑改动：
    - `SignalEmitter` 拆 `prepare`/`enqueue`（`emit` 保持为二者组合，向后
