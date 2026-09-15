@@ -75,10 +75,19 @@ TEXTFILE_DIR = "var/lib/prometheus/node-exporter"
 # Prometheus 退回发行版默认（:9090 + 自带 prometheus.yml），页面空而报告是绿的。
 UNIT_ARGS_MARKERS = ("$ARGS", "${ARGS}")
 UNIT_DIRS = ("usr/lib/systemd/system", "lib/systemd/system")
-MONITORING_CONFIGS = (
-    ("deploy/prometheus/prometheus.yml", "etc/stp/prometheus/prometheus.yml", 0o644),
+# /etc/default 下的这两个文件是**发行版资产**：管理员本来就该改它们，因此不适用
+# 「必须带本站渲染标记才可覆盖」的共享路径守卫——发行版出厂内容（ARGS=""）永远不带标记，
+# 用它当判据会让监控栈在任何一台机器上都装不上（238 现场：S4 install_conflict）。
+# 换成「渲染标记属于谁」的判据：带别站标记即 fail-closed（同机第二站点会静默改掉
+# 第一站点的监听端口与配置），裸发行版默认值或运维手改则先备份再覆盖。
+DISTRO_DEFAULT_MARKER = "Rendered by the site installer for"
+MONITORING_DISTRO_DEFAULTS = (
     ("deploy/prometheus/prometheus.default", "etc/default/prometheus", 0o644),
     ("deploy/prometheus/node-exporter.default", "etc/default/prometheus-node-exporter", 0o644),
+)
+# 本站资产：prometheus.yml 与采样器（脚本/单元）都带 <deploy-root> 标记，走共享路径守卫。
+MONITORING_CONFIGS = (
+    ("deploy/prometheus/prometheus.yml", "etc/stp/prometheus/prometheus.yml", 0o644),
 )
 # 宿主进程内存采样器：与上面同一批安装（textfile collector 的写入端）。
 MONITORING_SAMPLER = (
@@ -340,7 +349,21 @@ def _unit_reads_args(ctx: InstallContext, unit: str) -> bool:
 
 def monitoring_artifacts() -> tuple[tuple[str, str, int], ...]:
     """监控栈要落地的 (发布物相对路径, system_root 相对路径, mode) 列表。"""
+    return (*MONITORING_DISTRO_DEFAULTS, *MONITORING_CONFIGS, *MONITORING_SAMPLER)
+
+
+def monitoring_site_assets() -> tuple[tuple[str, str, int], ...]:
+    """其中属于本站资产的子集（走共享路径归属守卫）。"""
     return (*MONITORING_CONFIGS, *MONITORING_SAMPLER)
+
+
+def _distro_default_conflict(ctx: InstallContext, destination: Path) -> bool:
+    """发行版默认值文件是否属于**别的站点**（本站渲染过的可以覆盖）。"""
+    try:
+        text = destination.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return DISTRO_DEFAULT_MARKER in text and ctx.deploy_root.as_posix() not in text
 
 
 def await_monitoring(port: int, timeout_seconds: int = 30, interval_seconds: float = 3.0) -> bool:
@@ -935,7 +958,7 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
         *(
             (render_root / Path(source).name, ctx.system_root / destination)
             for source, destination, _mode in (
-                monitoring_artifacts() if config.monitoring.enabled else ()
+                monitoring_site_assets() if config.monitoring.enabled else ()
             )
         ),
     ]
@@ -945,6 +968,16 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
         return _safe(
             checks, "install_conflict", location="$.control_plane.deploy_root",
             role="control_plane", check_id="install.s4.shared_paths",
+        )
+    # 发行版默认值文件（/etc/default/*）出厂就不带本站标记，不能套上面的守卫；
+    # 但带**别站**标记说明这台机器的监控栈归别的站点，必须 fail-closed。
+    if config.monitoring.enabled and any(
+        _distro_default_conflict(ctx, ctx.system_root / destination)
+        for _source, destination, _mode in MONITORING_DISTRO_DEFAULTS
+    ):
+        return _safe(
+            checks, "install_conflict", location="$.monitoring.enabled",
+            role="control_plane", check_id="install.s4.monitoring",
         )
     if ctx.dry_run:
         return [

@@ -37,6 +37,21 @@ FileNotFoundError: [Errno 2] No such file or directory: 'exportfs'
 - **导出块的 dry-run 早返回改 if/else**：S1 声明段不再互相短路（同一次改动里顺手收口，
   否则后加的声明段在 `--dry-run` 下会被前一段的 `return` 跳过）。
 
+## Decision（续）：/etc/default/* 不能套本站标记守卫
+
+修掉上面两条后现场复跑到 S4 又 FAIL `install.s4.shared_paths`：`/etc/default/prometheus` 与
+`/etc/default/prometheus-node-exporter` 是**包自带的资产**（内容 `ARGS=""`），出厂就不带本站渲染
+标记，而共享路径守卫的判据正是「文件里有没有本站部署根」——用它当判据，监控栈在任何一台
+装了发行版包的机器上都装不上。
+
+分类修法：
+
+- **本站资产**（prometheus.yml、采样器脚本与单元、backend 单元、nginx、logrotate）继续走
+  共享路径守卫（带 `<deploy-root>` 标记即本站）；
+- **发行版默认值**改用「渲染标记属于谁」：带**别站**标记 → fail-closed（同机第二站点会静默
+  改掉第一站点的监听端口与配置）；裸发行版默认值或运维手改 → 先备份到 `state/shared-path-prev/`
+  再覆盖（`install_shared_asset` 既有行为），重跑幂等。
+
 ## Alternatives
 
 - **改成 `dpkg -l <pkg> | grep -q '^ii'`**：能判对，但仍是「问包管理器」而不是「问能力」；
@@ -68,3 +83,6 @@ FileNotFoundError: [Errno 2] No such file or directory: 'exportfs'
   若将来支持非 root 安装，需要改成绝对路径探测。
 - 监控栈的 `apt-get install prometheus prometheus-node-exporter` 会拉进 smartmontools 等依赖
   （实测下载+配置约十分钟），默认装的站点要有这个心理预期；离线站点需要自带介质。
+- **一台机器只能有一个站点装监控栈**：`/etc/default/*` 与 9091/9100 端口都是主机级单例，
+  第二站点会被上面的别站标记判据挡住。若将来真要多站点共用一台机器，应改为每站点独立端口 +
+  独立 unit（届时把 `/etc/default` 换成站点自己的单元文件）。

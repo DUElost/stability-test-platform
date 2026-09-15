@@ -1088,3 +1088,62 @@ def test_local_ops_reports_a_missing_command_instead_of_raising():
 
     assert result.returncode == 127
     assert "command not found" in result.stderr
+
+
+# ── 238 现场缺陷二：/etc/default/* 是发行版资产，不适用本站标记守卫 ──────────
+
+
+DISTRO_ARGS_FILE = 'ARGS=""  # distribution default\n'
+
+
+def _seed_distro_default(tmp_path: Path, relative: str, text: str = DISTRO_ARGS_FILE) -> Path:
+    path = tmp_path / "system" / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_shipped_distro_defaults_do_not_block_the_monitoring_stack(tmp_path, monkeypatch):
+    """发行版出厂的 /etc/default/prometheus 不带本站标记——用共享路径守卫会永远装不上。
+
+    现场实景：238 的这两个文件是包自带的 `ARGS=""`，S4 直接 install_conflict FAIL；
+    正确行为是「先备份再覆盖」，重跑幂等。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    prometheus_default = _seed_distro_default(tmp_path, "etc/default/prometheus")
+    _seed_distro_default(tmp_path, "etc/default/prometheus-node-exporter")
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid", mounts={str(tmp_path / "mnt/share")})
+    config_path = _monitoring_site(tmp_path)
+
+    report = invoke(tmp_path, config_path=config_path, ops=ops)
+
+    assert report["status"] == "PASS", report
+    rendered = prometheus_default.read_text(encoding="utf-8")
+    assert "--web.listen-address=127.0.0.1:9091" in rendered
+    assert "Rendered by the site installer for" in rendered
+    backups = sorted((tmp_path / "state/shared-path-prev").glob("prometheus*"))
+    assert [b.name for b in backups] == ["prometheus", "prometheus-node-exporter"]
+    # 副本是原件（发行版默认值），不是我们刚渲染的内容
+    assert backups[0].read_text(encoding="utf-8").startswith('ARGS=""')
+
+    # 重跑：现在文件带本站标记，仍然通过（幂等）
+    second = invoke(tmp_path, config_path=config_path, ops=ops)
+    assert second["status"] == "PASS", second
+
+
+def test_another_sites_distro_default_blocks_fail_closed(tmp_path, monkeypatch):
+    """带别站标记说明这台机器的监控栈归别的站点：fail-closed，且不写一个字节。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    foreign = "# Rendered by the site installer for /opt/other-site — do not edit by hand.\nARGS=\"--web.listen-address=127.0.0.1:9191\"\n"
+    path = _seed_distro_default(tmp_path, "etc/default/prometheus", foreign)
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid", mounts={str(tmp_path / "mnt/share")})
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), ops=ops)
+
+    assert report["status"] == "FAIL"
+    assert "install_conflict" in codes(report)
+    assert path.read_text(encoding="utf-8") == foreign
