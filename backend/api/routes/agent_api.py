@@ -2975,11 +2975,39 @@ async def recovery_sync(
     那条收敛被复活（实测修复前确为 `RESUME/same_boot_instance_takeover`）。
     故退役主机**不 RESUME**，改为让 Agent 本地停止（`ABORT_LOCAL`），与「退役即
     不再使用该机」一致；作业的终态收敛仍由既有 abort/lease 回收链完成。
+
+    退役机的 `pending_outbox` 照常推导（#2030）：终态证据必须被 ack/上传，
+    否则 Agent 每轮重发且永不被 ack——回收类数据在 D5 下允许触达退役机。
     """
     # Load host
     host = await db.get(Host, payload.host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="host not found")
+
+    # ── Outbox actions ──
+    # （#2030）必须在退役判据**之前**推导并与早返回分支共用：Agent 对空
+    # `outbox_actions` 不 ack 本地 outbox（backend/agent/main.py），退役早返回
+    # 若丢掉本块，终态证据会每轮重发且永不被 ack、退役前产生的 UPLOAD_TERMINAL
+    # 结果也不再投递。本块只读（不改身份、不锁 lease），不构成「承接工作」。
+    outbox_actions: list[_RecoveryAction] = []
+    for entry in payload.pending_outbox:
+        job = await db.get(JobInstance, entry.job_id)
+        if job is None:
+            outbox_actions.append(_RecoveryAction(
+                job_id=entry.job_id,
+                action="NOOP", reason="job_not_found",
+            ))
+        elif job.status in _TERMINAL:
+            outbox_actions.append(_RecoveryAction(
+                job_id=entry.job_id,
+                action="NOOP", reason="already_terminal",
+            ))
+        else:
+            outbox_actions.append(_RecoveryAction(
+                job_id=entry.job_id,
+                action="UPLOAD_TERMINAL", event_type=entry.event_type,
+                reason="not_terminal_on_backend",
+            ))
 
     # ADR-0038 D5bis：退役主机不得经 recovery 复活在飞作业（见 docstring）。
     # 放在身份更新**之前**：退役机即使上报新 boot_id/instance_id 也不该继续
@@ -2996,7 +3024,7 @@ async def recovery_sync(
                 ).model_dump()
                 for entry in payload.active_jobs
             ],
-            "outbox_actions": [],
+            "outbox_actions": [a.model_dump() for a in outbox_actions],
         })
 
     # D1: snapshot previous_boot_id before overwriting
@@ -3218,27 +3246,6 @@ async def recovery_sync(
             job_payload=job_payload,
             reason=reason,
         ))
-
-    # ── Outbox actions ──
-    outbox_actions: list[_RecoveryAction] = []
-    for entry in payload.pending_outbox:
-        job = await db.get(JobInstance, entry.job_id)
-        if job is None:
-            outbox_actions.append(_RecoveryAction(
-                job_id=entry.job_id,
-                action="NOOP", reason="job_not_found",
-            ))
-        elif job.status in _TERMINAL:
-            outbox_actions.append(_RecoveryAction(
-                job_id=entry.job_id,
-                action="NOOP", reason="already_terminal",
-            ))
-        else:
-            outbox_actions.append(_RecoveryAction(
-                job_id=entry.job_id,
-                action="UPLOAD_TERMINAL", event_type=entry.event_type,
-                reason="not_terminal_on_backend",
-            ))
 
     await db.commit()
 

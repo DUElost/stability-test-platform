@@ -3534,3 +3534,67 @@ async def test_recovery_sync_active_host_still_resumes():
     finally:
         _cleanup_seed(seed)
         _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_recovery_sync_retired_host_still_returns_outbox_actions():
+    """退役机的 pending_outbox 必须照常推导出 actions（#2030）。
+
+    退役早返回若给出空 ``outbox_actions``，Agent 侧「无 action 不 ack」
+    （``backend/agent/main.py``）会让终态 outbox 每轮重发且永不被 ack、退役前
+    产生的 UPLOAD_TERMINAL 结果也不再投递。本用例逐条钉住三类推导：非终态
+    → UPLOAD_TERMINAL、已终态 → NOOP、不存在 → NOOP。
+    """
+    host_id = f"rec-retired-ob-{uuid4().hex[:8]}"
+    boot_id, instance_id = uuid4().hex, uuid4().hex
+    seed = _recovery_retired_setup(host_id, boot_id, instance_id)
+    terminal_seed = _seed_job(status=JobStatus.COMPLETED.value)
+    try:
+        db_sync = SessionLocal()
+        try:
+            job = db_sync.get(JobInstance, terminal_seed["job_id"])
+            job.host_id = host_id
+            db_sync.commit()
+        finally:
+            db_sync.close()
+
+        _retire_host(host_id)
+        payload = _RecoverySyncIn(
+            host_id=host_id, agent_instance_id=instance_id, boot_id=boot_id,
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"], device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
+            )],
+            pending_outbox=[
+                _OutboxEntry(job_id=seed["job_id"], event_type="RUN_COMPLETED"),
+                _OutboxEntry(job_id=terminal_seed["job_id"]),
+                _OutboxEntry(job_id=99999),
+            ],
+        )
+
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        # 切片七语义不回归：在飞作业仍是 ABORT_LOCAL，不 RESUME
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "ABORT_LOCAL"
+        assert actions[0]["reason"] == "host_retired"
+
+        # #2030：outbox 逐条照常推导，不得为空
+        outbox_actions = result.data["outbox_actions"]
+        assert len(outbox_actions) == 3, (
+            f"退役分支丢 outbox_actions（#2030）：{outbox_actions!r}"
+        )
+        by_job = {a["job_id"]: a for a in outbox_actions}
+        assert by_job[seed["job_id"]]["action"] == "UPLOAD_TERMINAL"
+        assert by_job[seed["job_id"]]["reason"] == "not_terminal_on_backend"
+        assert by_job[seed["job_id"]]["event_type"] == "RUN_COMPLETED"
+        assert by_job[terminal_seed["job_id"]]["action"] == "NOOP"
+        assert by_job[terminal_seed["job_id"]]["reason"] == "already_terminal"
+        assert by_job[99999]["action"] == "NOOP"
+        assert by_job[99999]["reason"] == "job_not_found"
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_seed(terminal_seed)
+        _cleanup_recovery_host(host_id)
