@@ -500,11 +500,16 @@ if [ -n "$RESOURCES_TARB_PATH" ]; then
 RES_APPLY_T0=$(date +%s%3N)
 USE_RES_WRAPPER=$USE_PRIV_WRAPPER
 if [ "$USE_PRIV_WRAPPER" = "1" ]; then
-    # apply-resources 能力协商（#1942 同模式）：旧 wrapper 缺子命令 → legacy
-    # rsync 回退（degrade 安全方向：resources 不更新、digest 不写，下轮再收敛）。
+    # apply-resources 能力协商（#1942 同模式）。#2024：wrapper 模式下 sudoers 已按
+    # ADR-0037 收窄为「wrapper + 固定 systemctl」，旧 wrapper 主机上裸 sudo rsync/tee
+    # 会被拒 —— 原实现把「wrapper 旧版本」与「#1250 前宽 sudoers 存量机」混进同一个
+    # legacy 臂，导致前者在 set -e 下静默中止整段脚本（code 层已成功却记失败、无指引、
+    # 每轮重发 130MB resources 载荷）。与 code 层 write-digest 同语义：显式失败 +
+    # 可执行指引；legacy sudo 面只在 USE_PRIV_WRAPPER=0（宽 sudoers 存量机）可达。
     if ! sudo -n "$PRIV" apply-resources --help >/dev/null 2>&1; then
-        USE_RES_WRAPPER=0
         echo "STP_RESOURCES_PRIV_FALLBACK=legacy"
+        echo "ERROR: stp-agent-priv lacks apply-resources (outdated wrapper); run tools/ansible/playbooks/update_agent.yml on this host, then retry"
+        exit 1
     fi
 fi
 if [ "$USE_RES_WRAPPER" = "1" ]; then
@@ -523,7 +528,7 @@ if [ "$USE_RES_WRAPPER" = "1" ]; then
         echo "STP_RESOURCES_DIGEST=$RESOURCES_DIGEST"
     else
         # 旧 wrapper 缺 --kind：WARN 跳过（不走绕过提权边界的裸写）
-        echo "WARN: resources digest not written (outdated wrapper)"
+        echo "WARN: resources digest not written (outdated wrapper); run tools/ansible/playbooks/update_agent.yml on this host"
     fi
 else
     printf '%s\n' "$RESOURCES_DIGEST" | sudo tee "$INSTALL_DIR/agent/ARTIFACT_DIGEST_RESOURCES" > /dev/null
@@ -857,6 +862,10 @@ def execute_hot_update(
             env_keys_synced = _parse_env_synced(out_text)
             env_paths_missing = _parse_env_paths_missing(out_text)
             priv_mode = _parse_priv_mode(out_text)
+            # #2024：资源层「wrapper 缺 apply-resources → 显式失败」哨兵入 result/审计
+            resources_priv_fallback = (
+                "STP_RESOURCES_PRIV_FALLBACK=legacy" in out_text
+            )
 
             if exit_code != 0:
                 logger.error("hot_update_remote_failed exit=%d stderr=%s", exit_code, err_text[:500])
@@ -871,6 +880,7 @@ def execute_hot_update(
                     "env_paths_missing": env_paths_missing,
                     "code_version": code_version,
                     "priv_mode": priv_mode,
+                    "resources_priv_fallback": resources_priv_fallback,
                     "artifact_digest": artifact_digest,
                     "phases": phases,
                 }
@@ -897,6 +907,7 @@ def execute_hot_update(
                 "env_paths_missing": env_paths_missing,
                 "code_version": code_version,
                 "priv_mode": priv_mode,
+                "resources_priv_fallback": resources_priv_fallback,
                 "artifact_digest": artifact_digest,
                 "phases": phases,
             }
