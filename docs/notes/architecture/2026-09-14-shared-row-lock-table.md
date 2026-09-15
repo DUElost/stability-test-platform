@@ -112,9 +112,10 @@ Class: architecture
 
 ### 顺带登记（未改）
 
-- **`released_leases` 恒为 0**：`plan_run_abort.py:379` 置 0 后从未自增，却被返回体与
-  `abort_jobs_for_host` 的 docstring 承诺（现有 API 测试也断言 `== 0`）。租约释放实际由
-  reconciler / recycler 承担。属「文档宣称 > 实现」残留。
+- **`released_leases` 恒为 0（已由 `#2089` 删除）**：原先 `plan_run_abort.py` 置 0 后从未
+  自增，却被返回体、审计 details、日志与 `abort_jobs_for_host` 的 docstring 承诺，前端类型
+  也照抄了这个键。租约释放实际由 reconciler / recycler 承担。确认全仓无消费者后，两侧一起
+  删除（后端 + `types.ts`）。
 - **保留清理的持锁时长（#2022 未改）**：同一事务内还做 NFS 目录删除
   （`purge_run_storage_dirs`），plan_run 行锁被持有到文件操作之后。#2022 只统一了**顺序**，
   没有缩短持锁时长——见 Revisit。
@@ -129,8 +130,10 @@ Class: architecture
 - ~~**顺带修保留清理的加锁顺序**：放弃（本版），理由是「可达性 ≈ 0」。~~
   **已被 `#2022` 推翻**：该理由的前提「保留期数十天」不成立（见 Decision），故按本表原
   Revisit 给的形状（预锁子树 → 再锁 plan_run）修复，并补了 PostgreSQL 回归。
-- **把 `released_leases` 一并删掉**：放弃。是行为/接口面变更，与「只登记事实」的本单不同类，
-  应单独评估是否有外部消费者。
+- ~~**把 `released_leases` 一并删掉**：放弃。是行为/接口面变更，与「只登记事实」的本单不同类，
+  应单独评估是否有外部消费者。~~ **已由 `#2089` 执行**：确认「无消费者读取」后两侧一起删
+  （后端返回体 / 审计 details / 日志 + 前端 `types.ts`），并按 `#787` 的「后端为权威、
+  前端类型跟随」纪律保持两侧一致。
 - ~~**为保留清理补一条 PostgreSQL 回归**：放弃，理由是「要构造存活数十天的非终态 job」。~~
   **已被 `#2022` 推翻**：不需要那种场景——把**同一 run 的 job/lease 行**用另一会话按住即可
   构造稳定的阻塞点（`blob/...` 见 `backend/tests/scheduler/test_retention_lock_order_2010.py`）。
@@ -180,8 +183,9 @@ Class: architecture
   毫秒级还需把 `purge_run_storage_dirs` 移出事务——那会动 `#1521`/`#1698`「先文件后行」的
   自愈语义，属独立裁决。届时**不要**只把 deletes 挪到锁之前：候选选择依赖「锁内复核」
   与热路径互斥。
-- **`released_leases`**：若确认无外部消费者（前端/脚本/Agent），按「文档宣称 > 实现」清理
-  该字段与其 docstring；在此之前不要把它当作租约已释放的信号。
+- **`released_leases`（`#2089` 已完成）**：该字段已从后端与前端类型两侧删除，不再作为
+  契约的一部分；「租约是否释放」请以 reconciler / recycler 的路径与
+  `stability_db_deadlock_total` 等观测为准，不要从 abort 的返回体推断。
 - **表的位置**：若下一轮出现第二份同类表（或本表被别的文档大量引用），评估移入
   `docs/design/` 并同步 `docs/DOC-MAP.md`。
 
@@ -194,5 +198,6 @@ Class: architecture
 | #1980 | `coordinator_heartbeat`、`extend_job_lock` 两处反向 |
 | #1985 | `abort_plan_run`（plan_run→job）改为 job→plan_run |
 | #2022 | 保留清理改为 job→lease→plan_run；并更正本表「保留期数十天」的前提错误 |
+| #2089 | 删除 `released_leases` 死字段（后端返回体/审计/日志 + 前端 `types.ts` 两侧） |
 | #1960 | 把「以共享行为单位枚举」写进审查总纲 §3 第 7 条 |
 | #1958 | 死锁指标与告警（本表的观测入口） |
