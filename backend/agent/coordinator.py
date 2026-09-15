@@ -187,6 +187,24 @@ class HostRunCoordinator:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
+    def reload_from_settings(self) -> None:
+        """#2086：`reload_config` 的实例级 re-apply（协调域）。
+
+        `_interval` 原先只在构造时取一次 → 热重载 `COORDINATOR_HEARTBEAT_INTERVAL`
+        不生效（运行中的 `_loop` 仍按旧节奏 wait）。调用方须先
+        `reset_agent_settings_caches()`（`.env` 重读后），再调本方法。
+        `_MAX_PLAN_RUN_HOST_PROJECTIONS` 一并 re-apply，避免同域出现
+        「部分旋钮 reload 生效、部分不生效」的隐性分层（超限裁剪本就是
+        防御兜底语义，调小后在下一次 tick 生效）。
+        """
+        _hb = get_heartbeat_settings()
+        self._interval = _hb.coordinator_heartbeat_interval
+        self._MAX_PLAN_RUN_HOST_PROJECTIONS = _hb.coordinator_max_plan_run_hosts
+        logger.info(
+            "coordinator_pacing_reloaded interval=%s max_plan_run_host_projections=%s",
+            self._interval, self._MAX_PLAN_RUN_HOST_PROJECTIONS,
+        )
+
     # ── lifecycle ──────────────────────────────────────────────────────────
 
     def start(self) -> None:

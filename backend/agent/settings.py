@@ -75,6 +75,33 @@ def _tolerant_seconds(raw: object, default: float, name: str) -> float:
     return value
 
 
+# #2086：节奏类旋钮的下限（秒）。这些值直接喂 `Event.wait(...)`，0/负值 = 空转。
+_MIN_PACING_SECONDS = 1.0
+
+
+def _clamp_positive_seconds(
+    raw: object, name: str, floor: float = _MIN_PACING_SECONDS,
+) -> object:
+    """#2086：节奏旋钮的非正值钳到 ``floor`` + WARNING（0/负值 = 忙循环）。
+
+    与宽容组（``_tolerant_*``）的分工：宽容组是「非法即回落默认」；本函数**保持
+    类型严格性**——非数值原样返回、仍由 pydantic 抛 ``ValidationError``（与迁移前
+    ``float(os.getenv(...))`` 的失败面等价，ADR-0042 等价性原则），只收掉
+    「数值合法但语义非法」的 0/负值。
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return raw
+    if value < floor:
+        logger.warning(
+            "non-positive %s=%r; clamped to %.1fs (#2086: 0 = busy loop)",
+            name, raw, floor,
+        )
+        return floor
+    return value
+
+
 class DiskArchiveSettings(BaseSettings):
     """磁盘监控与日志归档域（ADR-0042 P2 #2）。
 
@@ -122,7 +149,11 @@ class DiskArchiveSettings(BaseSettings):
 
 
 class LeaseSettings(BaseSettings):
-    """租约续期域旋钮（env 名 = 字段名大写）。"""
+    """租约续期域旋钮（env 名 = 字段名大写）。
+
+    ``agent_lock_renewal_interval`` 是节奏旋钮（0 = 忙循环）→ #2086 在
+    Settings 层统一做正数下界钳制（非数值仍严格失败，见 :func:`_clamp_positive_seconds`）。
+    """
 
     model_config = SettingsConfigDict(
         env_file=None,       # 硬约束：不引入第二个 dotenv 来源
@@ -140,6 +171,11 @@ class LeaseSettings(BaseSettings):
     # 租约 TTL（秒）：默认对齐后端 lease_manager.py:_DEFAULT_LEASE_SECONDS = 600
     agent_lease_ttl: int = 600
 
+    @field_validator("agent_lock_renewal_interval", mode="before")
+    @classmethod
+    def _v_positive_pacing(cls, value: object, info) -> object:
+        return _clamp_positive_seconds(value, info.field_name.upper())
+
 
 class HeartbeatSettings(BaseSettings):
     """心跳与协调域（ADR-0042 P2 #3）：`heartbeat_thread` + `coordinator`。
@@ -147,6 +183,11 @@ class HeartbeatSettings(BaseSettings):
     **失败形态与迁移前逐旋钮对齐**（等价性优先）：全部旋钮迁移前都是
     `float(...)`/`int(...)` 直转（非法值启动即失败）→ 保持严格类型
     （pydantic `ValidationError` 即等价的失败面）。
+
+    #2086 例外：四个**节奏**旋钮（`COORDINATOR_HEARTBEAT_INTERVAL` /
+    `STP_HEARTBEAT_INTERVAL_MIN` / `_MAX` / `STP_ADB_REPAIR_COOLDOWN_SECONDS`）
+    的非正值钳到下限 + WARNING——它们直接喂 `Event.wait(...)`，0/负值是忙循环；
+    非数值仍严格失败（见 :func:`_clamp_positive_seconds`）。
 
     字符串旋钮 `STP_ADB_AUTO_REPAIR` 迁移前是字符串比较，走**派生值**保留
     精确语义（见 :meth:`adb_auto_repair_enabled`）。
@@ -169,6 +210,18 @@ class HeartbeatSettings(BaseSettings):
     # ── heartbeat_thread：多 ADB server 冲突自动修复（#160）──
     stp_adb_auto_repair: str = "0"
     stp_adb_repair_cooldown_seconds: float = 300
+
+    @field_validator(
+        "coordinator_heartbeat_interval",
+        "stp_heartbeat_interval_min",
+        "stp_heartbeat_interval_max",
+        "stp_adb_repair_cooldown_seconds",
+        mode="before",
+    )
+    @classmethod
+    def _v_positive_pacing(cls, value: object, info) -> object:
+        """#2086：节奏旋钮正数下界（0/负值 → 下限 + WARNING）。"""
+        return _clamp_positive_seconds(value, info.field_name.upper())
 
     @property
     def adb_auto_repair_enabled(self) -> bool:

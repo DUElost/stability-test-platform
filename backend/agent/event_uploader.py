@@ -259,6 +259,28 @@ class EventUploader:
         if self._retry_thread is not None:
             self._retry_thread.join(timeout=timeout)
 
+    def _schedule_retry(self, job: _UploadJob, delay: float) -> None:
+        """#784/#2036：登记退避 Timer 并在触发时**自出表**。
+
+        #784 只保证 stop() 能 cancel 未决 Timer；已触发/已 cancel 的对象原先
+        永久留在 `_retry_timers` 里，其闭包持有 `job`（含事件载荷）→ 列表随
+        累计失败次数单调增长。触发即出表后，列表长度上界 = 未决退避数。
+        """
+        timer: threading.Timer
+
+        def _fire() -> None:
+            with self._active_lock:
+                self._retry_timers = [
+                    pending for pending in self._retry_timers if pending is not timer
+                ]
+            self._queue.put(job)
+
+        timer = threading.Timer(delay, _fire)
+        timer.daemon = True  # #784: 关停不因退避 Timer 阻塞解释器
+        with self._active_lock:
+            self._retry_timers.append(timer)
+        timer.start()
+
     def _load_attempts(self, event_id: str) -> int:
         with self._active_lock:
             if event_id in self._attempt_counts:
@@ -476,11 +498,7 @@ class EventUploader:
                 self._store_attempts(job.event_id, job.attempt)
                 job.rescheduled = True
                 delay = min(300.0, 2.0 ** job.attempt)
-                timer = threading.Timer(delay, lambda: self._queue.put(job))
-                timer.daemon = True  # #784: 关停不因退避 Timer 阻塞解释器
-                with self._active_lock:
-                    self._retry_timers.append(timer)
-                timer.start()
+                self._schedule_retry(job, delay)
             else:
                 # #785: 耗尽后持久化上限，600s 重入队不得 attempt=0 再烧一轮
                 self._store_attempts(job.event_id, _MAX_RETRIES)

@@ -135,9 +135,34 @@ class OutboxDrainThread:
         """Blocking drain for shutdown — returns number of successfully sent items."""
         return self._drain_once()
 
+    def _prune_deferrals(self) -> None:
+        """#2036：把已不在待办集合里的退避条目移出 `_defer_until`。
+
+        `_defer_until` 原先只在「延期到期且该行再次被扫到」时才 pop：若该 job
+        在延期窗口内被其它路径消费（ack / 死信 / 本地清理），条目就永久残留
+        ——每个被限流过的 job_id 一条，随运行时长单调增长。差集裁剪不依赖
+        「记住所有消费路径」（#2036 评论口径），且**保留退避语义本身**：
+        `_MAX_RETRY_AFTER_SECONDS` 上限与「进程内、重启即忘」不变。
+        """
+        if not self._defer_until:
+            return
+        lister = getattr(self._local_db, "list_pending_terminal_job_ids", None)
+        if lister is None:  # 旧 DB / MagicMock 兜底：无全量查询则跳过裁剪
+            return
+        try:
+            live = {int(job_id) for job_id in lister()}
+        except (TypeError, ValueError):
+            return  # 返回值形态不符（测试替身）→ 不做裁剪，不改变行为
+        except Exception:
+            logger.exception("outbox_drain_deferral_prune_failed")
+            return
+        for job_id in [jid for jid in self._defer_until if jid not in live]:
+            self._defer_until.pop(job_id, None)
+
     def _drain_once(self) -> int:
         if hasattr(self._local_db, "count_pending_terminals"):
             self._set_pending_backlog(self._local_db.count_pending_terminals())
+        self._prune_deferrals()
         pending = self._local_db.get_pending_terminals(limit=20)
         if not pending:
             self._local_db.prune_acked_terminals()

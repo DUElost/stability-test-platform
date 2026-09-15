@@ -1,7 +1,14 @@
 # 多站点 P1：站点配置、部署预检与城市 B 安装闭环
 
 - **状态**：实现完成、现场验收待执行；I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan`、I3 本地安装（S0–S4、受控管理员引导）、I4 站点侧 Agent 接入（S5、`verify` 的降级 S6）、I5 站点导航/交接证据（`/site/`、`handover`）与 I5.5 一站式部署（`deploy/*.sh`、`preflight`、`init`、inventory）均已实现；城市 B/C 现场验收（真机、存储、scan/upload/merge、签字）仍待执行，安装操作步骤见 [`installation.md`](../operations/installation.md)
-- **版本**：0.10
+- **版本**：0.11
+- **v0.11 增量（2026-09-15）**：#2197 站点本地监控栈——`monitoring.enabled`（默认装）+
+  `monitoring.prometheus_port`（默认 9091，与后端默认 `STP_PROMETHEUS_URL` 对齐）；S1 装
+  `prometheus`/`prometheus-node-exporter`，S2 渲染抓取配置（job `file-server` → 回环
+  node-exporter）与监听参数（只听回环、开 `--collector.nfsd` 与 textfile 采集器，宿主进程
+  内存采样器随栈落地），S4 启用三个单元并实测 `/-/ready`。发行版 unit 不以 `$ARGS` 读
+  `/etc/default` 即 fail-closed（否则启动参数被静默忽略、页面空而报告是绿的）。
+  决策与放弃的备选见 [`feature/2026-09-15-site-monitoring-stack-2197`](../notes/feature/2026-09-15-site-monitoring-stack-2197.md)
 - **v0.10 增量（2026-09-15）**：#2181 中心存储闭环——`storage.export_to_agents`（仅
   `local_mount`）把控制面本机子树以 NFS 导出给本站 Agent（S1 装服务端 + 交出导出根属主，
   S2 写 `etc/exports.d/stp-<site>.exports` 并 `exportfs -ra`）；Agent 安装链建好 AEE 本地根
@@ -14,7 +21,7 @@
   [`bug-fix/2026-09-15-site-install-fail-open-batch`](../notes/bug-fix/2026-09-15-site-install-fail-open-batch.md)
 - **版本记录**：v0.8（2026-09-15）I5.5 落地——三个薄封装入口（`deploy/preflight.sh` / `install.sh` / `agent/install.sh`）、只读 `preflight`、探测驱动 `init`（≤4 问）、本地 `build_bundle`（R2 之前的发布物来源）、Ansible 式 inventory → `agents`（共享凭据 + 逐台覆盖）与「先控制面后 Agent」（`agents` 可空、`install --agents-inventory`）；`storage.provisioning` 新增 `local_mount`（本机磁盘子树，无远端身份），角色 target 隔离改为只约束「有远端管理面的角色」；本文新增 §4.2 部署契约。v0.7（2026-09-15）I5 落地——站点导航（nginx `/site/` 只读静态段 + S2 渲染，只发布获准信息）、`handover` 子命令（把 MS-01/02/04/05/06/10/13 映射到本站安装/verify 证据并落盘 `handover.json`）、安装记录新增 `runs` 计数（重跑证据）、`verify` 新增 `verify.s6.navigation`；v0.6（2026-09-15）I4 落地——控制面驱动安装链修复（`STP_AGENT_INSTALL_API_URL` 注入、安装脚本非交互、AEE 两键落盘）、站点侧 S5 编排（`agents.py`，`install --through-agents`）与 `verify` 降级 S6（登录/CSRF、Host/设备断言、noop 受控链；存储写读与 scan/upload/merge 显式 BLOCKED）；v0.5（2026-09-14）I3 落地——本地模式 `install`（S0–S4、绑定存储、安装记录/幂等/断点、`--dry-run`）与 `backend/scripts/bootstrap_admin.py` 受控首管理员引导；v0.4（2026-09-14）I2 落地——发布清单消费契约（`release.manifest`）、脱敏 `plan`（兼容/来源检查 fail-closed、`--save-dir` 保护）与 HTTPS 域名/证书占位符；v0.3（2026-09-14）§8 并入隔离演练输入基线（3 行演练观测 + 7 项新增输入，12 项人工干预清单见 Agent Note；演练范围与来源证明表述经复核校正）；v0.2（2026-09-14）I1 配置模型与离线 `validate` 落地；v0.1（2026-09-14）初稿
 - **日期**：2026-09-14
-- **需求**：[`多站点交付 PRD`](../prd/2026-multi-site-delivery.md) v0.11
+- **需求**：[`多站点交付 PRD`](../prd/2026-multi-site-delivery.md) v0.12
 - **架构边界**：[`ADR-0041`](../adr/ADR-0041-independent-site-delivery-and-management.md) v1.1（Accepted）
 
 ## 1. 本次细化的边界
@@ -111,6 +118,7 @@ agents:
 | `agents[].install_root/local_aee_root` | 区分安装/SSD 日志与本地 AEE 第一落点；本地 AEE 根不能误指共享挂载 | `AGENT_INSTALL_DIR` 及安装器派生路径、受保护的 `STP_AEE_LOCAL_ROOT`；I4 经 `install_options` 下传给既有安装链，空值不覆盖目标 `.env` 既有值 |
 | 秘密绑定 | 按站点生成/提供，格式与权限验证，不复制 A 的值，不用占位值启动 | `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET_KEY`、`AGENT_SECRET`、`SSH_CREDENTIALS_FERNET_KEY` 等既有键 |
 | `navigation` | 只发布获准信息；URL 只允许受控站点/文档目标，不带凭据。I5：`contact`/`documentation_url` 由 S2 渲染进站点导航页（HTML 转义，显示名与负责人是自由文本） | `/var/www/stability-site/index.html`（0644，nginx `/site/` 只读提供）+ `handover.json`；不引入统一登录、不污染前端发布物 |
+| `monitoring` | 站点本地监控栈（#2197）：`enabled`（默认装）+ `prometheus_port`（默认 9091）。用发行版 `prometheus` / `prometheus-node-exporter` 包与其 unit，只通过 `/etc/default` 的 `$ARGS` 收窄监听面；抓取配置渲染到 `/etc/stp/prometheus/prometheus.yml`（job `file-server` → 回环 node-exporter），宿主进程内存采样器（`stp-mem-top.timer`）随栈落地 | `/storage` 页的数据源：后端默认查 `127.0.0.1:9091`（`STP_PROMETHEUS_URL` 未设时）；端口与 job 名改动必须同步后端环境，否则页面静默空掉；整栈只听回环 |
 
 I1 的标准拓扑要求控制面、中心存储和每个 Agent 使用不同目标；不支持将多个安装角色合并到同一台机器。目标只做主机名大小写/末尾点、IP 表示法规范化；不同 DNS 别名是否指向同一机器必须在远端预检核验。
 部署/Agent 安装/本地 AEE 目录不得与共享挂载根相同或互为父子，Agent 安装目录也不得包含本地 AEE 根。路径使用无转义的字母、数字、下划线、点和短横线分段；拒绝穿越、模板/命令表达式、共享根和系统目录。远端 symlink 与真实磁盘身份仍未检查。
@@ -232,10 +240,10 @@ SSH 严格核对已有/获准指纹，不能用关闭主机密钥校验解决首
 | 阶段 | 动作与入口 | 完成条件 | 失败/重试原则 |
 |------|------------|----------|----------------|
 | S0 输入与目标确认 | 校验配置、发布、网络/安全 profile；明确新装模式及允许的角色目标 | 没有未填写必需项，发布可信、目标不是误指 A/本机生产 | 未通过不得进行目标写入；不能仅按 IP 不同就认定安全 |
-| S1 基础与存储 | 创建专用目录/服务账号，安装声明依赖，接入或配置已授权分享（I5.5：`local_mount` 由 `init` 挂盘 + bind + fstab；S1 只核对挂载点；v0.10：`export_to_agents` 时装 `nfs-kernel-server` 并只放开导出根这一层的属组与组写位） | 角色目录归属、分享身份、必要依赖和容量满足要求 | 不格式化数据盘；已存在状态需核对，不能覆盖或全目录清理；导出根不递归 chown/chmod |
+| S1 基础与存储 | 创建专用目录/服务账号，安装声明依赖（含声明时的监控栈包 `prometheus`/`prometheus-node-exporter`，#2197），接入或配置已授权分享（I5.5：`local_mount` 由 `init` 挂盘 + bind + fstab；S1 只核对挂载点；v0.10：`export_to_agents` 时装 `nfs-kernel-server` 并只放开导出根这一层的属组与组写位） | 角色目录归属、分享身份、必要依赖和容量满足要求 | 不格式化数据盘；已存在状态需核对，不能覆盖或全目录清理；导出根不递归 chown/chmod |
 | S2 发布与环境 | 固定发布物落地，复用模板，生成独立站点秘密/配置 | 无遗留占位符、权限正确，前端路径与 Nginx root 一致 | 保留已成功创建的秘密；重复执行不轮换密钥或复制其他站点身份 |
 | S3 数据库与管理员 | 对显式新站点数据库执行既有迁移 oneshot；完成受控首管理员引导 | schema 达到发布目标；管理员可用且审计留痕 | 非空/未接管数据库阻断 fresh-install；迁移失败不启动不匹配应用；已有管理员不重置、不重复创建，同名普通用户冲突需人工处理 |
-| S4 控制面入口 | 启动 nomigrate 服务及 Nginx，核对 DB/Redis/SAQ、同源入口和 SocketIO | 服务健康、必要后台组件就绪，登录/CSRF 经授权验收 | 不用跳过基础设施检查伪造成功；先完成私有引导再暴露正式入口 |
+| S4 控制面入口 | 启动 nomigrate 服务及 Nginx，核对 DB/Redis/SAQ、同源入口和 SocketIO；声明监控栈时同时启用 node-exporter / Prometheus / 内存采样器并实测 `/-/ready`（#2197） | 服务健康、必要后台组件就绪，登录/CSRF 经授权验收；监控栈就绪（否则 `/storage` 页无数据源） | 不用跳过基础设施检查伪造成功；先完成私有引导再暴露正式入口；只 enable 不算装上 |
 | S5 Host 与 Agent | 经本站管理员权限创建/核对 Host，消费 API 返回 ID，复用 Ansible/安装服务（I4：`install --through-agents`，`tools/site_config/agents.py`；I5.5：**先装控制面再按 inventory 接 Agent**，`agents` 可空、S5 显式跳过并提示 `deploy/agent/install.sh`；v0.10：Agent 侧建 AEE 本地根/挂载点、挂载站点导出并让 `MOUNT_POINTS` 跟随中心存储） | Agent 指向本站、身份唯一、代码/schema/脚本一致，心跳与设备发现正常；I4 逐项断言：心跳新鲜、实例/启动标识、摘要=清单、审计入口=本站；v0.10 增 `install.s5.storage`：声明导出的站点，Agent 心跳 `mount_status` 必须报该路径已挂（未开导出如实 BLOCKED `export_not_enabled`） | 已安装且归属其他站点则拒绝；不能重复注册 Host、重写 protected keys 或静默转走现有设备；失败即停，不继续下一个 Agent；挂载失败不掩盖为通过 |
 | S6 受控主链与存储 | 选择专用测试设备，验证 Plan/claim/租约、Watcher、scan/upload/merge 及授权写读探针（I4：`verify` 的降级路径；v0.10：`verify --storage-probe-subdir <name>` 实检写读） | 结果、日志位置、文件引用及终态清理有证据；I4 具备：noop 单步 Plan 到终态 + step trace 落在指定设备 | 失败保留证据，不盲目重跑刷机/硬件动作；探针只清理本次创建的文件；未授权探针、无设备与 scan/upload/merge 记 `BLOCKED`，不得报成通过 |
 | S7 导航与交接 | 提供站点入口、负责人、运维文档、安装摘要和后续维护/备份计划（I5：`/site/` + `handover` + [运维文档](../operations/site-handover-and-navigation.md)） | 独立入口可用，导航无凭据，P1 对应验收签字；I5 逐项映射 MS-01/02/04/05/06/10/13 并把缺证据条目保持 BLOCKED | P1 完成不代表 P2 升级恢复或 P4 总览已交付；`handover.json` 是证据快照，不是签字 |

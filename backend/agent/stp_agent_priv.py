@@ -705,12 +705,31 @@ def cmd_write_digest(args, conf):
 
 
 def _write_env_preserving_owner(directory_fd, lines, metadata):
-    """原子替换 .env，但保留原 uid/gid 与 mode——与旧写法（原地截断）等价。"""
+    """原子替换 .env，但保留原 uid/gid 与 mode——与旧写法（原地截断）等价。
+
+    #2069 第二层：逐行底线校验——键名侧的白名单在 `_sync_env`，但**任何**写入
+    路径都不得让值里夹带的换行顶出额外行（未来的新写路径同样被这层拦住）。
+    """
+    for line in lines:
+        _reject_unsafe_env_line(line)
     body = "\n".join(lines) + ("\n" if lines else "")
     _atomic_write_at(
         directory_fd, ".env", body, metadata.st_mode & 0o777,
         (metadata.st_uid, metadata.st_gid),
     )
+
+
+_ENV_LINE_FORBIDDEN = (("CR", "\r"), ("LF", "\n"), ("NUL", "\x00"))
+
+
+def _reject_unsafe_env_line(text, label="env line"):
+    """#2069：含 CR/LF/NUL 的 `.env` 行一律拒绝（换行 = 向配置文件注入新行）。
+
+    错误信息只回显**位置标签**，不回显值内容（override 可能承载凭据类配置）。
+    """
+    for name, char in _ENV_LINE_FORBIDDEN:
+        if char in text:
+            _fail("%s contains a forbidden control character (%s)" % (label, name))
 
 
 def cmd_sync_env(args, conf):
@@ -746,6 +765,8 @@ def _sync_env(args, target_fd):
     for key, value in overrides.items():
         if not _NAME_RE.match(str(key)) or not isinstance(value, str):
             _fail("override entry invalid: %r" % key)
+        # #2069：值侧与键侧同档校验——值内换行会顶出额外行（如注入 LD_PRELOAD）。
+        _reject_unsafe_env_line(value, "override value for %r" % key)
 
     if not overrides:
         print("STP_ENV_SYNCED=")

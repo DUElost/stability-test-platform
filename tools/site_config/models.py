@@ -318,6 +318,17 @@ class Navigation(ConfigModel):
     documentation_url: DocumentationURL
 
 
+class Monitoring(ConfigModel):
+    """站点本地监控栈（#2197）：/storage 页的数据源。
+
+    Prometheus 只听本机回环，端口与后端默认 ``STP_PROMETHEUS_URL``
+    （``http://127.0.0.1:9091``）对齐——装完即出数据，后端零改环境。
+    """
+
+    enabled: bool = False
+    prometheus_port: Annotated[int, Field(ge=1024, le=65535)] = 9091
+
+
 class SiteConfig(ConfigModel):
     schema_version: Annotated[int, Field(ge=1, le=1)]
     site: SiteIdentity
@@ -331,6 +342,8 @@ class SiteConfig(ConfigModel):
     security: Security
     release: Release
     navigation: Navigation
+    # 可选段：旧站点输入（无该段）仍然合法，缺省不装监控栈。
+    monitoring: Monitoring = Field(default_factory=Monitoring)
 
     @model_validator(mode="after")
     def site_consistency(self) -> Self:
