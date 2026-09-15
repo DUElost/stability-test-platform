@@ -1,7 +1,7 @@
 # ADR-0043：中止宽限的请求主体同构（Abort Grace Subject Alignment）
 
-- 状态：**Accepted** v1.0（实施已落地：2026-09-15，[PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)）
-- 版本记录：v1.0 定稿（2026-09-15，owner 裁决三项全采纳，裁决记录 §9；由 [#2050](https://github.com/DUElost/stability-test-platform/issues/2050) 触发，[#1928](https://github.com/DUElost/stability-test-platform/issues/1928) 删除孤儿结构时指路要求「按 host 独立 grace 须先立 ADR」）；**v1.0 实施落地**（2026-09-15，[#2154](https://github.com/DUElost/stability-test-platform/issues/2154) / [PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)）：§5 切片 ①–④ 全部落地、D1/D2/D3/D4/D6 均有测试钉子（映射见 §8）；D3 的实现口径与正文文字存在**一处偏差，已记录在 §10 待 owner 追加裁决**（未裁决前不得据此再改实现）
+- 状态：**Accepted** v1.1（实施已落地：2026-09-15，[PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)）
+- 版本记录：v1.0 定稿（2026-09-15，owner 裁决三项全采纳，裁决记录 §9；由 [#2050](https://github.com/DUElost/stability-test-platform/issues/2050) 触发，[#1928](https://github.com/DUElost/stability-test-platform/issues/1928) 删除孤儿结构时指路要求「按 host 独立 grace 须先立 ADR」）；**v1.0 实施落地**（2026-09-15，[#2154](https://github.com/DUElost/stability-test-platform/issues/2154) / [PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165)）：§5 切片 ①–④ 全部落地、D1/D2/D3/D4/D6 均有测试钉子（映射见 §8.1）；**v1.1（2026-09-15，owner 追加裁决 §9-4）**：D3 的覆盖判据由初版文字「该 host 时钟仍在窗口内」裁决为「该 host **存在** host 级时钟」（存在即覆盖），追认 PR #2165 的实现口径，D3 正文据此改写；沿革与理由见 §10
 - 优先级：P1
 - 目标里程碑：M7
 - 日期：2026-09-15
@@ -75,9 +75,16 @@ job（`requested_job_ids` 只含该主机的 job），却写 **run 级** `abort_
 
 ### D3：主体内的 late-claim job 自动纳入
 
-host 级 abort 之后才被 claim 成 RUNNING 的**该 host** job，只要该 host 的时钟仍在窗口内，
-即视为被覆盖——不再依赖 `requested_job_ids` 快照刷新。这是「主体同构」而非「名单快照」
-的必然推论，同时消掉 1.2-2 的残留窗口。
+host 级 abort 之后才被 claim 成 RUNNING 的**该 host** job 自动纳入覆盖——判据是**该 host 存在
+host 级时钟**（`abort_requested_hosts[host_id].at` 有值）：既不依赖 `requested_job_ids` 快照
+刷新，也**不**要求该时钟仍在窗口内。这是「主体同构」而非「名单快照」的必然推论，同时消掉
+1.2-2 的残留窗口。
+
+> **v1.1（2026-09-15，owner 追加裁决 §9-4）**：v1.0 此处写的是「只要该 host 的时钟**仍在
+> 窗口内**」；实施（#2154 / PR #2165）按上述「存在即覆盖」落地，裁决予以追认，本段文字据
+> 此改写。理由：「仍在窗口内」会让 late-claim job 在 host 时钟过期后**永久**不被覆盖（名单
+> 快照对其无刷新通道），等于把本 ADR 要消掉的残留窗口固化成永久残留；取舍是**宁可多回收**
+> （转 UNKNOWN、保留 lease，属既有兜底语义）**不可漏回收**。
 
 > run 级主体的同构实现（claim 路径刷新 `requested_job_ids`，`plan_run_abort.py:539-551`）
 > 保留不变。
@@ -148,7 +155,7 @@ host 级 abort 之后才被 claim 成 RUNNING 的**该 host** job，只要该 ho
 2. ✅ 实施切片 ①–④ 全部落地：① 写入侧 `plan_run_abort.py`（host 级 abort 写
    `abort_requested_hosts[host_id]`，首次写入、后续只刷新 `reason`/`triggered_by`）→ ②
    reaper `_abort_reap_clock` 按主体取时钟、并存取更早者 → ③ late-claim 覆盖（**实现口径
-   与 D3 正文有一处偏差，见 §10**）→ ④ 兼容分支与用例（测试映射见 §8）；
+   D3 判据 v1.1：存在即覆盖，见 §9-4 / §10）→ ④ 兼容分支与用例（测试映射见 §8）；
 3. ✅ #2050 的 `_abort_request_covers_job` 保留为**名单语义**（run 主体的覆盖判据），与本
    ADR 的**计时语义**正交，两者并存；
 4. ✅ 落地后回填已完成：`plan_run_abort.py` 的「按 host 独立 grace 须先立 ADR」指路注释改
@@ -208,15 +215,17 @@ host 级 abort 之后才被 claim 成 RUNNING 的**该 host** job，只要该 ho
 | 1 | D2「自首次请求起算、后续请求不重置」的反直觉代价 | **接受** | 换 §1.2-1（N×GRACE 消失）与 §1.2-3（不再「最后写入者赢」）；不重置是「宽限是给被请求者的时间」的必然推论，反直觉性由本 ADR 明确接受 + §7 复议触发器保护 |
 | 2 | D3 的 late-claim 覆盖是否纳入本 ADR | **纳入** | 它是「主体同构」而非「名单快照」的推论，与 D1 同属一条语义；若下沉为实施细节，会在实施期被当作可选优化砍掉，从而留下 §1.2-2 的残留窗口 |
 | 3 | 过渡期两套时钟并存（D4 不回填历史数据） | **接受** | 兼容分支由 D4 界定且**有界**：键缺失退化 run 级 = 现行为，绝不变成「无人回收」；不回填的代价仅为过渡期新旧行为并存 |
+| 4 | **v1.1 追加裁决（2026-09-15，#2154 实施期提出）**：D3 的覆盖判据取「该 host 时钟**仍在窗口内**」还是「该 host **存在** host 级时钟」 | **后者（存在即覆盖）** | 「仍在窗口内」在 host 时钟过期后使 late-claim job **永久**不被覆盖（名单快照对其无刷新通道），等于把 §1.2-2 的残留窗口固化，与 D3 意图相反；实施已按「存在即覆盖」落地（PR #2165），裁决予以追认并升 v1.1；代价是窗口外的 late-claim job 也会被回收——**多回收优于漏回收** |
 
 **未采纳的路径**：A（维持 run 级 + 只收窄候选集，#2050 现状）与 D（只做「不重置」、不引入 host 级时钟）均在 §3 否决——两者都保留主体错位，后者更让 D3 无从表达。
 
 **后续**：实施由 [#2154](https://github.com/DUElost/stability-test-platform/issues/2154) 跟踪（本 ADR 只作裁决，不含实现），切片与验收见 §5 / §2-D6 → **已于 2026-09-15 由 [PR #2165](https://github.com/DUElost/stability-test-platform/pull/2165) 完成**（状态回填见 §5 / §8.1）。
 
-## 10. 实施注记（#2154 / PR #2165，2026-09-15；**待 owner 追加裁决**）
+## 10. 实施注记（#2154 / PR #2165，2026-09-15；**已由 owner 追加裁决确认，见 §9-4；本 ADR 升 v1.1**）
 
-PR #2165 落地时，D3 的覆盖判据按如下口径实现，**与 D3 正文「只要该 host 的时钟仍在窗口内」
-存在一处偏差**：
+PR #2165 落地时，D3 的覆盖判据按如下口径实现，与 v1.0 正文「只要该 host 的时钟仍在窗口内」
+**曾有一处偏差**；该偏差已由 owner 于 2026-09-15 追加裁决（§9-4）确认为**正确口径**，v1.1
+据此改写 D3 正文。本节保留为**修订沿革**，正文以 §2-D3 为准：
 
 - **实现口径**：host 主体的覆盖判据 = 该 host **存在** host 级时钟
   （`abort_requested_hosts[host_id].at` 有值），而**非**「时钟仍在窗口内」；
@@ -226,5 +235,7 @@ PR #2165 落地时，D3 的覆盖判据按如下口径实现，**与 D3 正文�
 - **行为差异**：host 时钟过期后，该 host 上 late-claim 的 job 仍会被判为「时钟已过 grace」
   并回收（按正文文字它会被漏掉）；
 - **取舍**：宁可多回收（转 UNKNOWN、保留 lease，属既有兜底语义），不可漏回收（残留窗口）；
-- **待裁决**：请 owner 在 §9 追加一项裁决确认本口径；确认后升 v1.1 并把 D3 正文改为
-  「host 主体的覆盖判据 = 该 host 存在 host 级时钟」。**未裁决前不得反向改实现**。
+- **裁决结果（2026-09-15，§9-4）**：owner 追加裁决确认「存在即覆盖」为正确口径——D3 正文
+  已改写为该口径，本 ADR 升 v1.1；**实现无需改动**（PR #2165 即按此实现）。此后若再有人
+  按 v1.0 文字提「late-claim job 在窗口外被多回收」的缺陷，先指向 §2-D3 与 §9-4，
+  **不得**反向把判据改回「仍在窗口内」。
