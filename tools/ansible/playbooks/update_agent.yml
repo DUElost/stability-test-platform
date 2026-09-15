@@ -573,8 +573,11 @@
 
         - name: Extract deployment digests
           ansible.builtin.set_fact:
-            agent_code_artifact_digest: "{{ agent_deploy_digests.stdout | regex_search('CODE_DIGEST=(\\S+)', '\\1') }}"
-            agent_resources_artifact_digest: "{{ agent_deploy_digests.stdout | regex_search('RESOURCES_DIGEST=(\\S*)', '\\1') }}"
+            # #2112：`regex_search(..., '\1')` 在多行 stdout 下返回 list，content 会写成
+            # `["sha256:…"]` → agent 校验（^sha256:[0-9a-f]{64}$）拒绝、按缺失处理。
+            # 改用语义确定的 regex_findall（捕获组列表）取首元素，空匹配兜底空串。
+            agent_code_artifact_digest: "{{ (agent_deploy_digests.stdout | regex_findall('(?m)^CODE_DIGEST=(\\S+)$') or ['']) | first }}"
+            agent_resources_artifact_digest: "{{ (agent_deploy_digests.stdout | regex_findall('(?m)^RESOURCES_DIGEST=(\\S+)$') or ['']) | first }}"
           when: agent_deploy_digests.stdout is defined
 
         - name: Write agent ARTIFACT_DIGEST (ADR-0040 D2)
@@ -600,6 +603,37 @@
           when:
             - agent_code_change_lines | length > 0
             - agent_resources_artifact_digest | length > 0
+
+        # #2112 ②：写完即验（fail-closed）——回读 marker 并断言「形态 + 取值」。
+        # 本缺陷（列表形态）在修复前会静默通过写入任务，只有回读断言能当场拦住。
+        - name: Read back deployed artifact digests (#2112)
+          become: true
+          ansible.builtin.slurp:
+            src: "{{ agent_install_dir }}/agent/{{ item.file }}"
+          register: agent_digest_readback
+          loop:
+            - { file: "ARTIFACT_DIGEST", want: "{{ agent_code_artifact_digest }}" }
+            - { file: "ARTIFACT_DIGEST_RESOURCES", want: "{{ agent_resources_artifact_digest }}" }
+          loop_control:
+            label: "{{ item.file }}"
+          when:
+            - agent_code_change_lines | length > 0
+            - item.want | length > 0
+
+        - name: Assert deployed digests are well-formed and match computed values (#2112)
+          ansible.builtin.assert:
+            that:
+              - (item.content | b64decode | trim) is match('^sha256:[0-9a-f]{64}$')
+              - (item.content | b64decode | trim) == item.item.want
+            fail_msg: >-
+              marker 形态或取值不符（#2112）：{{ item.item.file }}
+              got={{ (item.content | b64decode | trim) | truncate(80) }}
+              want={{ item.item.want }}
+            quiet: true
+          loop: "{{ agent_digest_readback.results | default([]) }}"
+          loop_control:
+            label: "{{ item.item.file }}"
+          when: item.content is defined
 
       rescue:
         - name: Roll back agent code from snapshot
