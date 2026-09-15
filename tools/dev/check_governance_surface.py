@@ -119,6 +119,13 @@ def check_claude_entry_form(text: str, is_symlink: bool, link_target: str = "") 
 
 
 _MD_LINK = re.compile(r"\]\(([^)\s]+)\)")
+_INLINE_CODE = re.compile(r"`[^`]*`")
+
+
+def _strip_inline_code(line: str) -> str:
+    """去掉行内 code span 后再扫链接（#2042）：`` `[标题](file.md)` `` 是示例，
+    不是渲染出来的链接，不该按断链处理。"""
+    return _INLINE_CODE.sub("", line)
 
 
 def check_links(text: str, basedir: str, label: str) -> list[str]:
@@ -127,7 +134,7 @@ def check_links(text: str, basedir: str, label: str) -> list[str]:
     for lineno, line in enumerate(text.splitlines(), 1):
         if line.strip().startswith("```"):
             continue  # 代码块内的示例路径不校验
-        for m in _MD_LINK.finditer(line):
+        for m in _MD_LINK.finditer(_strip_inline_code(line)):
             raw = m.group(1)
             if raw.startswith(("http://", "https://", "mailto:", "#")):
                 continue
@@ -138,6 +145,11 @@ def check_links(text: str, basedir: str, label: str) -> list[str]:
             if not os.path.exists(target):
                 issues.append(f"S2 {label} line {lineno}: 断链 {raw}")
     return issues
+
+
+# #2042：docs/reviews 与 docs/notes 是事故/决策的按需留档面，此前不在 S2 覆盖内
+# （固定白名单只列常驻索引与契约文档），窗口内 6 处失效相对链接全部落在两树下。
+LINK_TREES = ("docs/reviews", "docs/notes")
 
 
 def check_mdc_frontmatter(filename: str, text: str) -> list[str]:
@@ -751,6 +763,20 @@ def run_check() -> int:
         text = open(os.path.join(ROOT, rel), encoding="utf-8").read()
         issues += check_links(text, basedir, rel)
 
+    # #2042：按需留档面（reviews/notes）全量纳入断链检查——此前无任何门禁覆盖。
+    for tree in LINK_TREES:
+        tree_dir = os.path.join(ROOT, tree)
+        if not os.path.isdir(tree_dir):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(tree_dir):
+            for fn in sorted(filenames):
+                if not fn.endswith(".md"):
+                    continue
+                path = os.path.join(dirpath, fn)
+                rel = os.path.relpath(path, ROOT)
+                text = open(path, encoding="utf-8").read()
+                issues += check_links(text, dirpath, rel)
+
     rules_dir = os.path.join(ROOT, ".cursor", "rules")
     if os.path.isdir(rules_dir):
         for fn in sorted(os.listdir(rules_dir)):
@@ -931,6 +957,8 @@ def run_self_test() -> int:
 
     expect("S2 好 (目指本文件所在目录)", lambda: check_links("见 [本文件](check_governance_surface.py)", os.path.dirname(os.path.abspath(__file__)), "t"), False)
     expect("S2 断链", lambda: check_links("见 [无](no-such-file.md)", os.path.dirname(os.path.abspath(__file__)), "t"), True)
+    expect("S2 行内 code 示例不算断链 (#2042)", lambda: check_links("保留 `- [标题](file.md) — ` 前缀", os.path.dirname(os.path.abspath(__file__)), "t"), False)
+    expect("S2 行内 code 之外的断链仍报 (#2042)", lambda: check_links("保留 `- [标题](file.md) — ` 前缀，见 [无](no-such-file.md)", os.path.dirname(os.path.abspath(__file__)), "t"), True)
 
     good_mdc = "---\ndescription: d\nglobs: a/**\nalwaysApply: false\n---\nbody\n"
     empty_glob_mdc = "---\ndescription: d\nglobs: \"\"\nalwaysApply: false\n---\nb\n"

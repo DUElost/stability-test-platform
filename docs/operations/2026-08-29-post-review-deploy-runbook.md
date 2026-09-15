@@ -50,6 +50,10 @@ git pull --ff-only origin main            # 或已合并的 release 分支
 ./tools/dev/check-deploy-source.sh        # 部署源守卫：HEAD==main 且无未提交改动，退出码须为 0
 ```
 
+> 守卫除上述两项外还调 `tools/dev/check_alembic_at_head.py --allow-behind`：**库超前于
+> 代码 head 或修订未知**同样非 0 退出；库**落后**只 WARN（本步位于 `alembic upgrade head`
+> 之前，「pull → 守卫 → 迁移」的中间态本就合法）；无 `DATABASE_URL` 时该检查 WARN 跳过。
+
 ### 1.2 依赖（requirements 有变时）
 
 ```bash
@@ -213,9 +217,9 @@ cd "$CONTROL_DIR/backend"
 
 | 脚本 | 说明 |
 |------|------|
-| `flash_firmware` | **v1.3.10**（Honor per-model pin，见 honor-flash-runbook） |
+| `flash_firmware` | 最新 active 版本已注册（2026-09-15 复核 = **v1.3.16**）；Honor「per-model」指固件 `latest.json` 映射，见 honor-flash-runbook |
 | `sleep_test` / `gpu_test` / `powercycle_test` | G15 #462 三件套（toolkit 对齐后新版本） |
-| `monkey_test` | v1.2.0（若 Plan 引用） |
+| `monkey_test` | 最新 active 版本（2026-09-15 复核 = v1.2.2）；若 Plan 引用 |
 | `mtbf_*` | 维持已绑定 Plan 的 pin 版本，勿原地改目录 |
 
 ### 7.3 前端重建（P2 套件页 + OpenRouter UI）

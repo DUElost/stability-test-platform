@@ -235,6 +235,33 @@ class TestDedupStatusEndpoint:
         assert body["archive"]["hosts_not_acked"] == 1
         assert body["scan_failed"] is True
 
+    def test_unknown_archive_keys_pass_through(
+        self, client, auth_headers, db_session, sample_plan_run,
+    ):
+        """``archive`` 的未知键必须原样返回（``DedupScanArchiveOut`` 声明 extra="allow"）。
+
+        该段是自由 JSONB，写入方可能先于响应模型演进（正规化前它是裸 dict，未知键天然
+        透传）。若哪天有人去掉 ``extra="allow"``，Pydantic 会**静默丢弃**新键——界面会把
+        "字段消失"读成"没有缺口"，比直接报错更难查。这条用例就是拦这个的。
+        """
+        sample_plan_run.run_context = {
+            "archive": {
+                "hosts_triggered": 2,
+                "hosts_with_artifacts": 2,
+                "scan_artifacts_registered": 4,
+                "hosts_not_acked": 0,
+                "future_key": "must-survive",
+            },
+        }
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/status",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["archive"]["future_key"] == "must-survive"
+
 
 class TestMergeEndpoint:
     """POST /api/v1/plan-runs/{run_id}/dedup/merge"""
