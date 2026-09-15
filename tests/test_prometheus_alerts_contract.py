@@ -41,6 +41,14 @@ _AGG_PREFIX_RE = re.compile(
     r"(?:by|without)\s*\([^)]*\)\s*",
 )
 
+# #2030：聚合子句单独提取（`sum by (mode) (...)` → 标签列表 + 内层指标）——
+# 剥离只能让解析器不误报，聚合标签本身必须另有校验，否则「指标改了标签、
+# 告警没跟」（#1927 收敛 plan_run_id 时暴露的那一类）会静默通过。
+_AGG_CLAUSE_RE = re.compile(
+    r"\b(?P<fn>sum|avg|min|max|count|stddev|stdvar|topk|bottomk|quantile)\s+"
+    r"(?P<mode>by|without)\s*\((?P<labels>[^)]*)\)",
+)
+
 
 def _alert_exprs() -> list[tuple[str, str]]:
     data = yaml.safe_load(ALERTS.read_text(encoding="utf-8"))
@@ -58,6 +66,8 @@ def _selectors(expr: str) -> list[tuple[str, list[str]]]:
     """从本仓库用到的 PromQL 形态中提取 (指标名, 标签名列表)。
 
     跳过函数名（后随 ``(``）与聚合前缀（``sum by (mode)``），忽略标签块内部文本。
+    聚合前缀里的标签不在此处校验，由
+    ``test_alert_aggregation_labels_match_metric_registry`` 单独负责（#2030）。
     """
     selectors: list[tuple[str, list[str]]] = []
     covered_until = -1
@@ -75,6 +85,27 @@ def _selectors(expr: str) -> list[tuple[str, list[str]]]:
     return selectors
 
 
+def _aggregation_clauses(expr: str) -> list[tuple[str, str, list[str], str]]:
+    """提取聚合子句 → ``[(聚合函数, by|without, 标签列表, 内层指标名)]``。
+
+    内层指标名 = 子句之后第一个非函数名 token（跳过 ``increase(...)`` 等
+    函数包装）。仅覆盖本仓库用到的形态（单层聚合 + 函数包裹）；定位不到
+    内层指标的形态由契约用例显式报 problem（提醒更新本解析器），不静默放过。
+    """
+    clauses: list[tuple[str, str, list[str], str]] = []
+    for m in _AGG_CLAUSE_RE.finditer(expr):
+        labels = [x.strip() for x in m.group("labels").split(",") if x.strip()]
+        rest = expr[m.end():]
+        inner = ""
+        for tok in _TOKEN_RE.finditer(rest):
+            if rest[tok.end():].lstrip().startswith("("):
+                continue  # 函数名，继续找其参数里的指标
+            inner = tok.group("name")
+            break
+        clauses.append((m.group("fn"), m.group("mode"), labels, inner))
+    return clauses
+
+
 def test_selector_parser_skips_functions_and_reads_labels():
     """解析器自证：避免结构层因解析退化为空而假绿。"""
     assert _selectors('increase(stability_a_total{outcome="failed"}[15m]) > 0') == [
@@ -83,6 +114,18 @@ def test_selector_parser_skips_functions_and_reads_labels():
     assert _selectors("histogram_quantile(0.95, rate(stability_b_bucket[10m]))") == [
         ("stability_b_bucket", []),
     ]
+
+
+def test_aggregation_parser_reads_labels_and_inner_metric():
+    """聚合解析器自证：防聚合标签校验因解析退化而空跑。"""
+    assert _aggregation_clauses(
+        "sum by (mode) (increase(stability_a_total[1h])) > 0"
+    ) == [("sum", "by", ["mode"], "stability_a_total")]
+    assert _aggregation_clauses("sum by (a, b) (rate(stability_b_total[5m]))") == [
+        ("sum", "by", ["a", "b"], "stability_b_total"),
+    ]
+    # 无 by/without 的聚合不产出子句（没有聚合标签可校验）
+    assert _aggregation_clauses("sum(rate(stability_c_total[5m]))") == []
 
 
 def test_alert_selectors_match_metric_registry():
@@ -104,6 +147,36 @@ def test_alert_selectors_match_metric_registry():
             if unknown:
                 problems.append(f"{alert}: {name} 上未知标签 {unknown}")
     assert not problems, "告警选择器与指标注册表不一致：\n" + "\n".join(problems)
+
+
+def test_alert_aggregation_labels_match_metric_registry():
+    """#2030：`sum by (...)` / `without (...)` 的聚合标签必须来自被聚合指标。
+
+    原实现把聚合前缀整体剥掉（`_AGG_PREFIX_RE`），`by (...)` 里的标签不参与
+    校验——「指标改了标签、告警没跟」会静默通过（#1927 收敛 plan_run_id 时
+    暴露的正是这一类：指标侧已去 label、告警与文档侧滞后）。
+    """
+    index, _non_queryable = metric_registry_index()
+    problems: list[str] = []
+    seen: list[str] = []
+    for alert, expr in _alert_exprs():
+        for fn, mode, labels, inner in _aggregation_clauses(expr):
+            seen.append(f"{alert}:{fn} {mode}")
+            if not labels:
+                continue
+            if not inner or inner not in index:
+                problems.append(
+                    f"{alert}: {fn} {mode} (...) 未定位到内层指标（inner={inner!r}）"
+                )
+                continue
+            unknown = sorted(set(labels) - index[inner])
+            if unknown:
+                problems.append(
+                    f"{alert}: {fn} {mode} {unknown} 不在 {inner} 标签集 "
+                    f"{sorted(index[inner])}"
+                )
+    assert seen, "告警表达式未解析出任何聚合子句（解析器或表达式形态变化）"
+    assert not problems, "告警聚合标签与指标注册表不一致：\n" + "\n".join(problems)
 
 
 @pytest.mark.skipif(

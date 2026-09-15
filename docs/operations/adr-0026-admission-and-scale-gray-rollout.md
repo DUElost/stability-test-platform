@@ -244,8 +244,8 @@ ADR-0026 §6 规定「所有 Job 终态入口必须经集中 terminalization 服
 
 | 面 | 内容 |
 |----|------|
-| 指标 | `stability_plan_run_counter_drift_total{plan_run_id, mode}`——`counter_reconciler` 修复漂移时经 `recount_plan_run_counters` 按**漂移列**打点（mode = `total`/`terminal`/`completed`/`failed`/`aborted`） |
-| 告警 | `StabilityPlanRunCounterDrift`（severity=warning）：`increase(stability_plan_run_counter_drift_total[1h]) > 0`，`for: 5m` |
+| 指标 | `stability_plan_run_counter_drift_total{mode}`——`counter_reconciler` 修复漂移时经 `recount_plan_run_counters` 按**漂移列**打点（mode = `total`/`terminal`/`completed`/`failed`/`aborted`）；#1927 收敛：run 维度不进 label（无界基数，run 归属走日志/审计） |
+| 告警 | `StabilityPlanRunCounterDrift`（severity=warning）：`sum by (mode) (increase(stability_plan_run_counter_drift_total[1h])) > 0`，`for: 5m`（#1927：先按 mode 归并，防逐 series 告警风暴） |
 | 面板 | Grafana `PlanRun Terminalization → Counter Drift (rate/5m) by mode` |
 | SLO | 漂移率 P99 < 0.1%；> 1% 需升级为 pager 级。**当前无 pager 规则**——需要 per-job 终态量作为分母指标，待补（见 #77 评论留痕） |
 
