@@ -75,7 +75,14 @@ run_retention_cleanup（#2022 后）
   即该回归对本缺陷有鉴别力（正反两个方向都验过）。
 - **既有面未回归**：`backend/tests/scheduler/test_retention_cleanup.py` → **16 passed**
   （删除语义不变的直接证据；该文件覆盖链式引用保留集、全链删除等 #936 语义）。
-- **门禁**：`ruff check`、`check_governance_surface.py --check`、`pytest tests/ -q` 结果见 PR。
+- **三段后端面都跑了**：`backend/agent/tests/` → **1952 passed**；`backend/tests/scheduler/` →
+  **97 passed**；`tests/` → **591 passed**；`ruff check` 全绿。
+  首轮 PR 只跑了后两段，CI 的 `pr-agent-tests` 立刻报出 agent 侧两条红——
+  **本仓后端测试面是三段**（`backend/tests/`、`backend/agent/tests/`、`tests/`），
+  改动 `cron_scheduler.py` 这类被 agent 侧单测覆盖的函数时，只跑 `backend/tests/` + `tests/`
+  会漏（详见下方第 3 个坑）。
+- **门禁**：`check_governance_surface.py --check` 全绿；CI 上 `pr-migrate-empty-db`
+  （锁序步骤含本条新回归）、`lint`、`pr-typecheck`、`pr-compileall` 通过。
 
 ### 写这条回归时踩的两个坑（留给后续锁序测试）
 
@@ -90,6 +97,14 @@ run_retention_cleanup（#2022 后）
 
 最终判据取「`pg_locks` 里存在 `granted = false` 且不属于本会话的锁」，够了且稳（0.96s 级）。
 诊断这两次假红时，把活动会话与未获授锁按行写进文件（而不是 `print`）才看得到真相。
+
+3. **别只跑 `backend/tests/` + `tests/`**：本仓后端是**三段**测试面，`backend/agent/tests/`
+   也覆盖了 `run_retention_cleanup`（`TestRunRetentionCleanup`），且它用手写 `FakeQuery`
+   只接管 legacy `db.query`，其 `.all()` **只消费一次**（用于让候选循环终止）。
+   本单首轮漏跑该段，CI 立刻报出两条红（`commit` 0 次 / 删除顺序断言空集）。
+   正确做法：新加的语句若走 Core `db.execute(select(...))`，就要按语句形态给该 mock 放行
+   （本单在 `_mock_db_with_runs` 里按 `"plan_run.id" in str(stmt)` 返回候选行，
+   并注明理由）；这也是该 mock 的历史做法（其注释记录了 #1827 的同型适配）。
 
 ## Revisit
 

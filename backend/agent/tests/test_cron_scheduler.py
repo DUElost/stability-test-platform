@@ -312,8 +312,16 @@ class TestRunRetentionCleanup:
             JobInstance: FakeQuery(),
         }
         db.query.side_effect = lambda *a, **k: queries.get(a[0], FakeQuery())
-        # select(JobInstance.id)...; no jobs in these unit fixtures.
-        db.execute.return_value.all.return_value = []
+
+        # #2022：保留清理改为「先按 I1/I2 预锁 job/lease 子树，再锁 plan_run」后，
+        # 走 Core 的语句有两条，语义必须分开：
+        #   * `select(JobInstance.id) ... FOR UPDATE`（预锁子树）→ 本单测无 job，空集；
+        #   * `select(PlanRun.id) ... FOR UPDATE SKIP LOCKED`（锁内复核）→ 必须返回候选
+        #     行，否则函数提前 return，`commit` 一次都不会发生（本类两条用例会假红）。
+        def _execute(stmt, *_a, **_k):
+            return FakeQuery(items=id_rows) if "plan_run.id" in str(stmt) else FakeQuery()
+
+        db.execute.side_effect = _execute
         return db
 
     def test_deletes_stale_runs(self):

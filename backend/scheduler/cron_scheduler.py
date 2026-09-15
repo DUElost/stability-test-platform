@@ -352,6 +352,12 @@ def _retention_lock_runs(db, run_ids: list[int], cutoff: datetime) -> list[int]:
 
     链式引用（parent/root）不在本函数复核：那由随后的 `_retention_safe_ids` 在
     **锁内**用当前库状态计算闭包，本函数只负责「锁 + 终态/年龄复核」。
+
+    走 Core ``db.execute(select(...))`` 而非 legacy ``db.query``：候选循环本身已经
+    反复消费 ``PlanRun.id`` 的查询对象，再复用同名 query 会让
+    `backend/agent/tests/test_cron_scheduler.py` 的 ``FakeQuery``（`.all()` 只消费
+    一次，用于让候选循环终止）返回空；该单测的 mock 已按本函数的语句形态放行
+    （见其 `_mock_db_with_runs`）。
     """
     from backend.models.plan_run import PlanRun
 
