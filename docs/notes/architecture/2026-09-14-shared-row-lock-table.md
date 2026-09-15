@@ -179,10 +179,17 @@ Class: architecture
   接线由 `tests/test_lock_order_pr_path_contract.py` 做发现式守卫。
 - **观测入口**：`stability_db_deadlock_total{engine}` 与告警 `StabilityDbDeadlockDetected`
   （`#1958`）。该计数器应长期为 0；出现增量即回到本表按行定位，而不是先怀疑语句形状。
+- **必须同时看「等待」（`#2104` 已补）**：顺序统一后，代价会从**死锁**转移到**普通等待**
+  （持锁窗口内热路径排队），而等待对死锁计数**完全不可见**——「计数为 0」不等于「无代价」。
+  观测面：`stability_db_lock_waiters`（此刻等锁会话数）、
+  `stability_db_lock_wait_max_seconds`（等最久多久）、
+  告警 `StabilityDbLockWaitSustained`（>30s 且持续 5m）；
+  保留清理的持锁窗口用 `stability_retention_txn_seconds` 度量。
 - **保留清理（`#2022` 已修顺序，**持锁时长未改**）**：顺序已对齐 I1/I2。要把持锁窗口压到
   毫秒级还需把 `purge_run_storage_dirs` 移出事务——那会动 `#1521`/`#1698`「先文件后行」的
   自愈语义，属独立裁决。届时**不要**只把 deletes 挪到锁之前：候选选择依赖「锁内复核」
-  与热路径互斥。
+  与热路径互斥。**该窗口现在可度量**：`stability_retention_txn_seconds`（`#2104`）
+  ——先看它的分布再决定要不要动，不要凭印象判断「NFS 回收有多慢」。
 - **`released_leases`（`#2089` 已完成）**：该字段已从后端与前端类型两侧删除，不再作为
   契约的一部分；「租约是否释放」请以 reconciler / recycler 的路径与
   `stability_db_deadlock_total` 等观测为准，不要从 abort 的返回体推断。
@@ -199,5 +206,6 @@ Class: architecture
 | #1985 | `abort_plan_run`（plan_run→job）改为 job→plan_run |
 | #2022 | 保留清理改为 job→lease→plan_run；并更正本表「保留期数十天」的前提错误 |
 | #2089 | 删除 `released_leases` 死字段（后端返回体/审计/日志 + 前端 `types.ts` 两侧） |
+| #2104 | 补锁等待观测面（等待 gauge + 持锁窗口 histogram + 告警），使「死锁改等待」可见 |
 | #1960 | 把「以共享行为单位枚举」写进审查总纲 §3 第 7 条 |
 | #1958 | 死锁指标与告警（本表的观测入口） |

@@ -107,6 +107,17 @@ def upgrade() -> None:
                     "now": now,
                 },
             )
+        else:
+            # #2055：目标行已存在但可能是 inactive（先被 scan/管理员停用）——
+            # 缺这一支会让本次升级把旧版本停用、却没有任何 active 版本
+            # （precheck 只取 is_active），与兄弟 seed/模板一致。
+            conn.execute(
+                text(
+                    "UPDATE script SET is_active = true, updated_at = :now "
+                    "WHERE name = :name AND version = :ver"
+                ),
+                {"name": v["name"], "ver": v["ver"], "now": now},
+            )
         _raise_if_any_version_referenced(
             conn, script_name=v["name"], versions=list(v["deactivate"]),
         )
@@ -124,9 +135,14 @@ def downgrade() -> None:
     conn = op.get_bind()
     now = datetime.now(timezone.utc)
     for v in VERSIONS:
+        # #2055：downgrade 必须是 upgrade 的逆操作——原先 DELETE 会把**并非本迁移
+        # 创建**的同名行一起删掉；改为翻转 is_active（与兄弟 seed 一致）。
         conn.execute(
-            text("DELETE FROM script WHERE name = :name AND version = :ver"),
-            {"name": v["name"], "ver": v["ver"]},
+            text(
+                "UPDATE script SET is_active = false, updated_at = :now "
+                "WHERE name = :name AND version = :ver"
+            ),
+            {"name": v["name"], "ver": v["ver"], "now": now},
         )
         for old_ver in v["deactivate"]:
             conn.execute(
