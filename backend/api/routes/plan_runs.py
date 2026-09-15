@@ -2320,6 +2320,7 @@ def get_plan_run_log_events(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     state: Optional[str] = Query(None, description="Filter by DLE state"),
+    platform: Optional[str] = Query(None, description="Filter by device platform"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -2336,6 +2337,7 @@ def get_plan_run_log_events(
         skip=skip,
         limit=limit,
         state=state,
+        platform=platform,
     )
     items = [
         PlanRunLogEventOut(
