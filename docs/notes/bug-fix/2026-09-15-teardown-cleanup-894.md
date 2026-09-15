@@ -31,7 +31,7 @@ Class: bug-fix
 - **seed 迁移 `j7k8l9m0n1o2`** 注册两版本；停用引用为 0 的旧版
   （monkey_teardown v1.0.1、gpu_finish v1.0.0），引用不为 0 的旧版
   （v1.0.0 ×5、gpu_finish v1.0.3 ×1）保持 active，迁移内嵌 `#942` 引用守卫。
-- **异常设备 6R0A57SSAE7000198 现场处置**：机队实测该设备 `adb devices` 为
+- **异常设备 `6R0A57SS****0198` 现场处置**：机队实测该设备 `adb devices` 为
   `offline`（2026-09-15），无法远程清理；已在 issue 留痕待设备恢复后处置。
 
 ## Alternatives
@@ -59,7 +59,7 @@ Class: bug-fix
 | 版本不可变 | `tools/dev/check-script-version-immutability.py --base origin/main` | `OK`（无已发布目录被原地改） |
 | 空库迁移（隔离 `postgres:16` 容器 `127.0.0.1:55432`，**非生产库**） | `alembic upgrade head` → `downgrade -1` → `upgrade head` | 通过且幂等；`python -m backend.scripts.check_schema_sync` **rc=0** |
 | 生产库只读核对 | `plan_step` 引用计数（只读 SELECT） | monkey_teardown v1.0.0 **×5**（保 active）、v1.0.1 ×0；gpu_finish v1.0.0 ×0、v1.0.3 ×1（保 active） |
-| 机队核查 | `ansible -i hosts.ini android -m shell -a 'adb devices -l'` | 6R0A57SSAE7000198 = `offline` |
+| 机队核查 | `ansible -i hosts.ini android -m shell -a 'adb devices -l'` | `6R0A57SS****0198` = `offline` |
 
 ## Revisit
 
@@ -68,7 +68,7 @@ Class: bug-fix
   重指到 v1.0.2 / v1.0.4（或新建 Plan）。
 - **真机验证留待**：本次未在真机执行删除路径（需在跑测试的设备上实跑 teardown）；
   设备台架恢复后按 issue 步骤验证「删除 + 回读 + 失败可见」三态。
-- **异常设备现场处置**：6R0A57SSAE7000198 恢复上线后执行 prefs
+- **异常设备现场处置**：`6R0A57SS****0198` 恢复上线后执行 prefs
   `running=false` + force-stop AutoTestTool，并复核 `expected_cycles` 旧配置残留。
 - **gpu 原始日志归档**：若要求删设备端 `test_log.txt`，需先把 pull 到的原始
   文件纳入产物上传路径（当前只有摘要 JSON 进 NFS）。
