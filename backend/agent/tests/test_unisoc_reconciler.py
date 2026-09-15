@@ -310,6 +310,42 @@ class TestProcessedPrune:
         r.tick_once()
         assert set(r._processed) == {"loc1"}
 
+    def test_cap_eviction_never_drops_names_still_present(self, tmp_path, monkeypatch):
+        """#2060：上限驱逐不得把仍在场（设备列表/本地树）的条目踢出去。
+
+        原实现只按滞回计数排序取前 overflow 个，未排除在场名字 → 设备事件目录数
+        超过上限时，在场条目被驱逐，而 emit 循环唯一的去重就是本集合成员判定
+        （`_sync_device_events_to_local` 对已同步目录不再重拉、也不把名字加回来）
+        → 稳态下每拍以新 seq_no 重复 emit。
+        """
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "99")
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_MAX_ENTRIES", "2")
+        store = self._seed_store(["live1", "live2", "live3"])
+        r = _make_reconciler(
+            tmp_path, store=store,
+            shell_fn=self._device_shell(["live1", "live2", "live3"]),
+        )
+        r._load_processed_state()
+        r.tick_once()
+        assert set(r._processed) == {"live1", "live2", "live3"}, (
+            "在场条目被上限驱逐 → 下一拍会以新 seq_no 重发（稳态重复 emit）"
+        )
+
+    def test_cap_eviction_still_drops_absent_entries(self, tmp_path, monkeypatch):
+        """上限仍是防膨胀的最后防线：不在场的条目照常驱逐（行为不变）。"""
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "99")
+        monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_MAX_ENTRIES", "2")
+        store = self._seed_store(["live1", "gone1", "gone2"])
+        r = _make_reconciler(
+            tmp_path, store=store, shell_fn=self._device_shell(["live1"]),
+        )
+        r._load_processed_state()
+        r.tick_once()
+        # 上限只要求「不超过」：本次 overflow=1，故驱逐 1 条不在场的、保留在场的那条
+        assert "live1" in r._processed, "在场条目必须保留"
+        assert len(r._processed) == 2
+        assert len({"gone1", "gone2"} & set(r._processed)) == 1
+
     def test_listing_failure_suspends_prune_and_resets_streak(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STP_WATCHER_UNISOC_PROCESSED_PRUNE_AFTER_TICKS", "1")
         store = self._seed_store(["stale1"])

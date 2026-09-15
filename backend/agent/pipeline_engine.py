@@ -653,6 +653,9 @@ def _pump_process(
                     "step_reader_stuck thread=%s — 放弃它，已收到的行照常返回",
                     th.name,
                 )
+        # #2061：被放弃的 reader 跑不到自己的 finally → 它的 sink（缓冲尾部日志 =
+        # 该步骤排障的唯一副本）与 fd 会留到进程退出。这里替它收口。
+        _close_sinks_for_abandoned(threads, log_sinks)
         for stream in (proc.stdout, proc.stderr):
             try:
                 stream.close()
@@ -662,6 +665,28 @@ def _pump_process(
     return _PumpOutcome(
         "".join(stdout_lines), "".join(stderr_lines), reason, time.monotonic() - started,
     )
+
+
+def _close_sinks_for_abandoned(
+    threads: List[threading.Thread],
+    log_sinks: Optional[Tuple["_StepLogSink", "_StepLogSink"]],
+) -> None:
+    """关闭仍存活（被放弃）的 reader 所持有的 sink（#2061）。
+
+    正常路径由 reader 自己的 ``finally`` 收口；被放弃的线程永远不会跑到那里，
+    缓冲里的尾部日志与文件描述符都会留到进程退出。幂等：``close()`` 可重入。
+    """
+    if log_sinks is None:
+        return
+    for index, thread in enumerate(threads):
+        if index >= len(log_sinks) or not thread.is_alive():
+            continue
+        try:
+            log_sinks[index].close()
+        except Exception:  # noqa: BLE001 — 收口失败不应影响返回值
+            logger.debug(
+                "step_log_sink_close_failed thread=%s", thread.name, exc_info=True,
+            )
 
 
 def _popen_isolation_kwargs() -> Dict[str, Any]:
@@ -1102,8 +1127,14 @@ class PipelineEngine:
             headers["X-Agent-Secret"] = self._agent_secret
         # #1881：预算覆盖分钟级控制面中断（见模块常量注释）
         retry_delays = _LEASE_VERIFY_RETRY_DELAYS
+        # #2061：退避是「两次尝试之间的间隔」——共 len(delays)+1 次探测，最后一次落在
+        # t≈sum(delays)≈60s。原实现把末位 delay 花在最后一次失败**之后**（t≈60 处不再
+        # 探测）：30s 之后才结束的控制面中断仍判死，只多了约 30s 的失败延迟。
+        total_attempts = len(retry_delays) + 1
 
-        for attempt, delay in enumerate(retry_delays, 1):
+        for attempt in range(1, total_attempts + 1):
+            if attempt > 1:
+                time.sleep(retry_delays[attempt - 2])
             try:
                 resp = requests.post(
                     url, json={"fencing_token": self._fencing_token}, headers=headers, timeout=10,
@@ -1135,10 +1166,8 @@ class PipelineEngine:
                         "lock_verify_attempt_%d_failed_5xx run=%d status=%s",
                         attempt, self._run_id, status_code,
                     )
-                    # #1921：每次失败尝试都消费预算——原先 `attempt < len` 守卫
-                    # 使末位 delay 成死值，实际睡眠总和 ≈30s，与注释 ~60s 不符。
-                    time.sleep(delay)
-                    if attempt < len(retry_delays):
+                    # #1921/#2061：退避已在循环头消费，这里只决定「还试不试」。
+                    if attempt < total_attempts:
                         continue
                     return StepResult(
                         success=False,
@@ -1155,8 +1184,7 @@ class PipelineEngine:
                 )
             except requests.RequestException as e:
                 logger.warning("lock_verify_attempt_%d_failed run=%d: %s", attempt, self._run_id, e)
-                # #1921：末次失败同样消费预算（原末位 delay 死值）
-                time.sleep(delay)
+                # #2061：退避在循环头消费；末次失败不再多睡一觉（无后续探测）
 
         logger.error("lock_verification_unreachable run=%d", self._run_id)
         return StepResult(
