@@ -12,9 +12,16 @@ SCRIPT = Path(__file__).resolve().parents[1] / "install_agent.sh"
 
 
 def _function_source() -> str:
+    """抽取函数体（锚定函数末行语句 + 顶格 `}`），不依赖其后的注释行。
+
+    #I4 把紧随其后的交互提示注释改成了非交互解析说明——以注释为 lookahead
+    会让抽取静默失败（`match is None` → 三个用例一起红）。收敛到「末行
+    `echo "$candidate"` + 顶格 `}`」：函数体内嵌 Python 也有顶格 `}`，
+    只用 `^}` 会截断。
+    """
     source = SCRIPT.read_text(encoding="utf-8")
     match = re.search(
-        r"(?ms)^generate_unique_host_id\(\) \{\n.*?^\}\n(?=\n# 提示用户输入 API_URL)",
+        r'(?ms)^generate_unique_host_id\(\) \{\n.*?\n    echo "\$candidate"\n\}\n',
         source,
     )
     assert match is not None
