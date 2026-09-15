@@ -597,6 +597,8 @@ class TestEventsEndpoint:
         )
         assert resp.status_code == 200
         data = resp.json()["data"]
+        # #2030：先钉非空——交集退化为 0 行时下面的 all(...) 真空真，照样绿。
+        assert data["events"], "search+severity 组合应至少命中一条（AEE/err）"
         assert all(e["severity"] == "err" for e in data["events"])
         assert all(
             "aee" in e["title"].lower()
