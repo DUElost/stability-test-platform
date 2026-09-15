@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 from tools.site_config.ops import CommandResult
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 from tools.site_config.preflight import run_preflight
 from tools.site_config.validation import Check
 
@@ -177,12 +181,18 @@ def test_bundle_layout_is_checked_with_the_missing_paths(tmp_path):
     check = checks_by_id(run_preflight(bundle=bundle, ops=healthy_ops()))["preflight.bundle"]
     assert check["status"] == "FAIL"
     assert "frontend/dist-prod" in check["message"]
+    assert "backend/agent/resources" in check["message"]
     assert "release-manifest.json" in check["message"]
 
-    for name in ("release-manifest.json", "backend/agent", "backend/schemas", "frontend/dist-prod", "deploy", "tools"):
+    from tools.site_config.preflight import BUNDLE_REQUIRED
+
+    for name in BUNDLE_REQUIRED:
         target = bundle / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("", encoding="utf-8")
+        if "." in Path(name).name:      # 文件（release-manifest.json 等）
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("", encoding="utf-8")
+        else:                            # 目录（backend、backend/agent/resources 等）
+            target.mkdir(parents=True, exist_ok=True)
     assert checks_by_id(run_preflight(bundle=bundle, ops=healthy_ops()))["preflight.bundle"]["status"] == "PASS"
 
 
@@ -247,3 +257,49 @@ def test_preflight_module_exposes_no_write_helpers():
         assert forbidden not in source
     assert isinstance(run_preflight(ops=healthy_ops())["checks"][0], dict)
     assert Check  # 校验构造器仍由 validation 提供，preflight 只组装
+
+
+def test_preflight_runs_without_installer_dependencies():
+    """裸机（还没装 pydantic/yaml/psycopg）也必须给出逐项报告，而不是回溯。
+
+    `-S` 不加载 site-packages，等价于「刚 clone 下来的机器」。缺依赖本身就是
+    preflight 要报的一项（preflight.toolenv），所以它自己不能依赖那些库。
+    """
+    result = subprocess.run(
+        [sys.executable, "-S", "-m", "tools.site_config", "preflight"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=90, check=False,
+    )
+    output = result.stdout + result.stderr
+    assert "Traceback" not in output, output
+    assert "preflight.toolenv" in output
+    assert "installer environment is missing" in output
+    assert result.returncode == 1
+
+
+def test_database_probe_degrades_when_dependencies_are_absent():
+    result = subprocess.run(
+        [sys.executable, "-S", "-m", "tools.site_config", "preflight",
+         "--db-url", "postgresql+psycopg://user:pass@127.0.0.1:5432/empty"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=90, check=False,
+    )
+    output = result.stdout + result.stderr
+    assert "Traceback" not in output, output
+    # 探测不了就如实 FAIL（带同一个 toolenv 修复线索），绝不谎报或崩溃
+    assert "preflight.database" in output
+
+
+def test_checks_module_stays_dependency_free():
+    source = (REPO_ROOT / "tools/site_config/checks.py").read_text(encoding="utf-8")
+    for dependency in (
+        "import pydantic", "from pydantic", "import yaml", "from yaml",
+        "import psycopg", "from psycopg",
+    ):
+        assert dependency not in source, dependency
+
+
+def test_main_module_only_imports_preflight_at_module_level():
+    """其余子命令在分支内延迟导入，避免把重依赖拉进 preflight 路径。"""
+    text = (REPO_ROOT / "tools/site_config/__main__.py").read_text(encoding="utf-8")
+    head = text.split("class RedactedParser", 1)[0]
+    imports = [line for line in head.splitlines() if line.startswith("from .")]
+    assert imports == ["from .preflight import run_preflight"]

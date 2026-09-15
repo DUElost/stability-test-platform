@@ -29,7 +29,7 @@ sudo ./deploy/install.sh handover   # 汇总 P1 验收证据
 
 前置条件（`preflight.sh` 会逐条核对）：
 
-- Debian 13 或 Ubuntu 24.04、x86_64、systemd；
+- Debian 13 或 Ubuntu 22.04 / 24.04、x86_64、systemd；
 - ≥2 核 / ≥4 GiB RAM / 根文件系统 ≥20 GiB 可用；
 - `python3`、`nginx`、`systemctl`；接 Agent 另需 `ansible-core` 与 `sshpass`；
 - 入口端口 80（HTTPS 另需 443）空闲；
@@ -61,7 +61,17 @@ sudo ./deploy/install.sh            # 交互：只问站点标识、公开入口
 sudo ./deploy/install.sh --yes      # 全部取探测默认，非交互
 sudo ./deploy/install.sh --dry-run  # 只报计划，一个字节都不写
 sudo ./deploy/install.sh --no-fix   # 宿主机写操作（venv/建库/挂盘/fstab）只报命令
+sudo ./deploy/install.sh --database stp_b --public-url http://192.0.2.5 --data-disk /dev/sda
 ```
+
+站点输入项直接传给 `init`：`--display-name`、`--public-url`、`--database`、`--redis-index`、
+`--storage-mount`、`--data-disk`、`--admin-username`、`--bundle`、`--reset-db-password`（等价环境
+变量见 §8）；其余选项透传给 `install`（如 `--through-agents`、`--agents-inventory`）。
+
+**既有数据库角色**：`init` 发现同名角色时**不会**改它的密码——先用本次生成的凭据试连一次，
+连不上就 fail-closed 并提示：要么给 `--reset-db-password`（显式允许 `ALTER ROLE`，适用于
+「这台机器上是我上次装的残留」），要么换库名/角色。若本机没有 `psycopg`/`psql` 无法试连，
+`init` 会记一条 action 提示后续注意点。
 
 内部顺序（任一步失败即停，产物保留，重跑从缺的那步继续）：
 
@@ -82,9 +92,9 @@ sudo ./deploy/install.sh --no-fix   # 宿主机写操作（venv/建库/挂盘/fs
 
 - 建工具环境 `/opt/stp-tool`（pydantic/pyyaml/psycopg）；
 - 建空库与角色（`sudo -u postgres`），只**建**空库，绝不迁移或清空既有库；
-- 挂数据盘到 `/srv/hdd` + `bind` 站点子树到 `storage.mount_path` + 追加 fstab（`nofail`）。
+- 挂数据盘到 `/srv/hdd` + `bind` 站点子树到 `storage.mount_path` + 追加 fstab（`nofail`）；建目录只创建缺失项，**不改既有文件/目录的属主与权限**（重跑时挂载点上的既有数据保持原样）。
 
-**绝不会做**：格式化磁盘、删除既有数据目录、覆盖未接管的数据库、`--force` 绕过保护。
+**绝不会做**：格式化磁盘、删除既有数据目录、递归改既有数据的属主、覆盖未接管的数据库、`--force` 绕过保护。
 
 ## 4. `agent/install.sh`：按 inventory 接 Agent
 
@@ -148,6 +158,8 @@ sudo ./deploy/install.sh handover
 ## 6. 幂等、重跑与断点
 
 - 重跑逐项**重核实际状态**，不信任记录：已存在的秘密不轮换，已存在的目录/账号不重建；
+- **绑定文件只写一次**：`init` 重跑保留既有 `site_admin` / `site_ssh_encryption` / DSN（输出里
+  标 `kept existing bindings (not rotated)`）——站点 `.env.backend` 里已是首次生成的值；
 - 站点级秘密（JWT/Agent secret/WS token/Fernet）只在首次生成；重跑 `env_reused`；
 - `install-state.json`（0700 目录、0600 文件、flock 互斥）记录阶段与 `runs` 计数；
 - 同站点并发安装被拒绝（`state_locked`）；`--dry-run` 只验证与规划；
@@ -185,9 +197,11 @@ sudo ./deploy/install.sh handover
 | `agent_path_commands_missing`（BLOCKED） | 缺 ansible/sshpass | `apt install -y ansible-core sshpass` |
 | `preflight_time` | 时钟未同步 | `systemctl enable --now systemd-timesyncd` |
 | `preflight_toolenv` | 工具环境缺依赖 | 直接跑 `deploy/install.sh`（它会自建） |
-| `db_unreachable` / `db_unmanaged` | 数据库不可达 / 非空且非本平台 | 用空库；非空库需人工裁决，不得清空 |
+| `bootstrap_database_role` | 同名角色已存在且密码不同 | 加 `--reset-db-password`（允许 `ALTER ROLE`）或换库名/角色 |
+| `db_unreachable` / `db_unmanaged` | 数据库拒绝绑定 / 非空且非本平台 | 先看是不是上面那条（既有角色）；其余用空库，非空库需人工裁决，不得清空 |
 | `preflight_redis` | Redis 未回 PONG | 修通 Redis 或换 db index |
 | `bundle_frontend` | 前端产物缺失 | `cd frontend && npm ci && npm run build:prod` |
+| `bundle_resources` | `backend/agent/resources` 缺失（不在 git） | 从构建机/发布渠道带上该目录（230MB 工具集），再打包 |
 | `bundle_revision` | 不是 git 工作树 | 显式 `--revision` 或改用预置 bundle |
 | `inventory_user_missing` | 清单缺 `ansible_user` | 补该行或写进 `[stp_agents:vars]` |
 | `inventory_credential_missing` | 清单缺凭据 | 补 `ansible_password` 或 `ansible_ssh_private_key_file` |

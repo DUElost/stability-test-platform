@@ -143,6 +143,8 @@ class FakeApi:
         run_jobs: list[dict] | None = None,
         run_events: list[dict] | None = None,
         digest_sequence: list[str] | None = None,
+        resources_sequence: list[str] | None = None,
+        identity_sequence: list[tuple[str, str]] | None = None,
         scan_status: int = 200,
         navigation: tuple[int, str] | None = None,
     ):
@@ -172,6 +174,8 @@ class FakeApi:
         self._run_jobs = run_jobs
         self._run_events = run_events if run_events is not None else []
         self._digest_sequence = list(digest_sequence or [])
+        self._resources_sequence = list(resources_sequence or [])
+        self._identity_sequence = list(identity_sequence or [])
         self.host_reads = 0
         self._scan_status = scan_status
         self.scans = 0
@@ -226,19 +230,34 @@ class FakeApi:
     def get_host(self, host_id: str) -> dict:
         self.host_reads += 1
         digest = None
+        resources_digest = None
         if self._digest_sequence:
             digest = self._digest_sequence[min(self.host_reads - 1, len(self._digest_sequence) - 1)]
+        if self._resources_sequence:
+            resources_digest = self._resources_sequence[
+                min(self.host_reads - 1, len(self._resources_sequence) - 1)
+            ]
+        identity = None
+        if self._identity_sequence:
+            identity = self._identity_sequence[
+                min(self.host_reads - 1, len(self._identity_sequence) - 1)
+            ]
         for host in self.hosts:
             if host["id"] == host_id:
                 return {
                     **host,
                     "status": "ONLINE",
                     "last_heartbeat": _heartbeat(),
-                    "agent_instance_id": "inst-1",
-                    "boot_id": "boot-1",
-                    **(
-                        {"agent_artifact_digest": digest, "agent_resources_digest": ""}
-                        if digest is not None
+                    "agent_instance_id": identity[0] if identity else "inst-1",
+                    "boot_id": identity[1] if identity else "boot-1",
+                    **                    (
+                        {
+                            "agent_artifact_digest": digest if digest is not None else DIGEST_CODE,
+                            "agent_resources_digest": (
+                                resources_digest if resources_digest is not None else ""
+                            ),
+                        }
+                        if (digest is not None or resources_digest is not None)
                         else {
                             "agent_artifact_digest": DIGEST_CODE,
                             "agent_resources_digest": DIGEST_RESOURCES,
@@ -377,7 +396,184 @@ def _run(ctx, api, **kwargs):
     kwargs.setdefault("sleep", lambda _: None)
     kwargs.setdefault("poll_timeout", 30.0)
     kwargs.setdefault("digest_timeout", 0.0)
+    kwargs.setdefault("identity_timeout", 0.0)
+    # 默认不让真探针跑 ssh：用例里显式覆盖
+    kwargs.setdefault("sudo_probe", lambda ops, agent, binding: (True, ""))
     return stage_s5_agents(ctx, api=api, **kwargs)
+
+
+class TestTargetSudoProbe:
+    def test_probe_runs_before_any_install_and_stops_on_failure(self, site):
+        """目标机 sudo 不可用 → 触发安装之前就 FAIL，且不创建任何 Host。"""
+        api = FakeApi()
+        checks = _run(
+            site(), api,
+            sudo_probe=lambda ops, agent, binding: (False, "sudo_unavailable"),
+        )
+
+        assert _status(checks, "install.s5.sudo") == "FAIL"
+        assert "target_sudo_unavailable" in _codes(checks)
+        assert api.created == [], "预检失败后仍在建 Host"
+        assert api.install_calls == [], "预检失败后仍触发了安装"
+
+    def test_probe_failure_carries_the_su_recipe_as_fix(self, site):
+        checks = _run(
+            site(), FakeApi(),
+            sudo_probe=lambda ops, agent, binding: (False, "sudo_unavailable"),
+        )
+        check = next(c for c in checks if c.check_id == "install.s5.sudo")
+        assert "usermod -aG sudo" in check.remediation
+        assert "visudo -cf" in check.remediation
+        assert "NOPASSWD: ALL" in check.remediation
+        # message 要带原因，操作者才知道是哪一类问题
+        assert "sudo_unavailable" in check.message
+
+    def test_ssh_level_failure_points_at_host_key_and_network(self, site):
+        checks = _run(
+            site(), FakeApi(),
+            sudo_probe=lambda ops, agent, binding: (False, "ssh_probe_failed"),
+        )
+        check = next(c for c in checks if c.check_id == "install.s5.sudo")
+        assert check.code == "ssh_probe_failed"
+        assert "ssh-keyscan" in check.remediation
+
+    def test_unrun_probe_is_blocked_and_never_claims_readiness(self, site):
+        checks = _run(
+            site(), FakeApi(),
+            sudo_probe=lambda ops, agent, binding: (None, "probe_not_run"),
+        )
+        assert _status(checks, "install.s5.sudo") == "BLOCKED"
+        assert "probe_not_run" in _codes(checks)
+
+    def test_happy_path_reports_sudo_ready(self, site):
+        checks = _run(site(), FakeApi())
+        assert _status(checks, "install.s5.sudo") == "PASS"
+        assert "target_sudo_ready" in _codes(checks)
+
+
+class TestIdentityWait:
+    def test_first_heartbeat_may_lack_identity_and_is_awaited(self, site):
+        """首次接入的第一条心跳可能只带部分字段：要有界等待，不能立刻判失败。"""
+        slept: list[float] = []
+        api = FakeApi(identity_sequence=[("", ""), ("inst-9", "boot-9")])
+
+        checks = _run(
+            site(), api,
+            identity_timeout=30.0, poll_interval=5.0,
+            sleep=lambda seconds: slept.append(seconds),
+        )
+
+        assert api.host_reads >= 2, "identity 还没刷新就下了结论"
+        assert slept == [5.0]
+        assert _status(checks, "install.s5.identity") == "PASS"
+
+    def test_identity_missing_beyond_the_window_fails(self, site):
+        api = FakeApi(identity_sequence=[("", "")])
+        checks = _run(site(), api, identity_timeout=0.0, poll_interval=5.0, sleep=lambda _: None)
+        assert "agent_identity" in _codes(checks)
+
+
+class TestProbeTargetSudo:
+    class Ops:
+        def __init__(self, stdout: str):
+            self.stdout = stdout
+            self.argv: list[tuple[str, ...]] = []
+            self.env: dict[str, str] = {}
+
+        def command_exists(self, name: str) -> bool:
+            return True
+
+        def run(self, argv, **kwargs):
+            self.argv.append(tuple(str(item) for item in argv))
+            self.env = dict(kwargs.get("env") or {})
+            from tools.site_config.ops import CommandResult
+
+            return CommandResult(tuple(str(item) for item in argv), 0, self.stdout)
+
+    def _agent(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(target="10.99.0.31")
+
+    def test_password_never_reaches_argv(self):
+        from tools.site_config.agents import probe_target_sudo
+
+        ops = self.Ops("STP_SUDO_OK\n")
+        binding = {"USERNAME": "ops", "PASSWORD": "DoNotLeak-9374"}
+        available, reason = probe_target_sudo(ops, self._agent(), binding)
+
+        assert (available, reason) == (True, "")
+        joined = " ".join(" ".join(call) for call in ops.argv)
+        assert "DoNotLeak-9374" not in joined
+        assert ops.env.get("SSHPASS") == "DoNotLeak-9374"
+        assert "sudo -n true" in joined and "-o ConnectTimeout=8" in joined
+
+    def test_key_binding_uses_the_key_file_and_no_sshpass(self):
+        from tools.site_config.agents import probe_target_sudo
+
+        ops = self.Ops("STP_SUDO_FAIL\n")
+        available, reason = probe_target_sudo(
+            ops, self._agent(), {"USERNAME": "ops", "PRIVATE_KEY_PATH": "/root/.ssh/id_ed25519"},
+        )
+
+        assert (available, reason) == (False, "sudo_unavailable")
+        joined = " ".join(" ".join(call) for call in ops.argv)
+        assert "-i /root/.ssh/id_ed25519" in joined
+        assert "sshpass" not in joined
+
+    def test_ssh_failures_are_classified_for_the_right_fix(self):
+        from tools.site_config.agents import probe_target_sudo
+
+        cases = {
+            "Host key verification failed.\n": "ssh_host_key_unverified",
+            "Permission denied (publickey,password).\n": "ssh_credentials_rejected",
+            "ssh: connect to host 10.99.0.31 port 22: Connection timed out\n": "ssh_unreachable",
+            "something else\n": "ssh_probe_failed",
+        }
+        for stdout, expected in cases.items():
+            assert probe_target_sudo(
+                self.Ops(stdout), self._agent(), {"USERNAME": "ops", "PASSWORD": "x"},
+            ) == (False, expected), stdout
+
+    def test_sudo_refusal_carries_the_targets_own_words(self):
+        from tools.site_config.agents import probe_target_sudo
+
+        ops = self.Ops("sudo: a password is required\nSTP_SUDO_FAIL\n")
+        available, reason = probe_target_sudo(
+            ops, self._agent(), {"USERNAME": "ops", "PASSWORD": "x"},
+        )
+        assert available is False
+        assert reason.startswith("sudo_unavailable")
+        assert "a password is required" in reason
+
+    def test_sshpass_unknown_host_key_exit_code_is_classified(self):
+        """sshpass 6 = 主机公钥未知：严格模式下输出可能为空，只能靠退出码。"""
+        from tools.site_config.agents import probe_target_sudo
+
+        class Ops(self.Ops):
+            def run(self, argv, **kwargs):
+                from tools.site_config.ops import CommandResult
+
+                return CommandResult(tuple(str(item) for item in argv), 6, "", "")
+
+        assert probe_target_sudo(
+            Ops(""), self._agent(), {"USERNAME": "ops", "PASSWORD": "x"},
+        ) == (False, "ssh_host_key_unverified")
+
+    def test_stderr_is_used_when_stdout_is_empty(self):
+        """ssh 把错误写 stderr：只看 stdout 会把主机键问题误报成探针失败。"""
+        from tools.site_config.agents import probe_target_sudo
+
+        class Ops(self.Ops):
+            def run(self, argv, **kwargs):
+                from tools.site_config.ops import CommandResult
+
+                argv = tuple(str(item) for item in argv)
+                return CommandResult(argv, 255, "", "Host key verification failed.\n")
+
+        assert probe_target_sudo(
+            Ops(""), self._agent(), {"USERNAME": "ops", "PASSWORD": "x"},
+        ) == (False, "ssh_host_key_unverified")
 
 
 class TestHappyPath:
@@ -558,7 +754,7 @@ class TestFailClosed:
     def test_digest_report_is_awaited(self, site):
         """摘要在安装后才由 Agent 下一次心跳带上：断言必须等待而不是抢先失败。"""
         slept: list[float] = []
-        api = FakeApi(digest_sequence=["", DIGEST_CODE])
+        api = FakeApi(digest_sequence=["", DIGEST_CODE], resources_sequence=["", DIGEST_RESOURCES])
 
         checks = _run(
             site(), api,
@@ -570,6 +766,36 @@ class TestFailClosed:
         assert api.host_reads >= 2, "未重读 Host 就下了结论"
         assert slept == [5.0]
         assert _status(checks, "install.s5.digest") == "PASS"
+
+    def test_digest_wait_covers_a_stale_resources_value(self, site):
+        """重装场景：code 早已有值、resources 还是上一版 → 必须继续等，不能立即比对。
+
+        238 实测：Agent 端逐拍重读摘要（#1943），文件写好要等一个心跳周期生效；
+        原来的「任一非空就收工」会在 resources 仍是旧值时下结论并报 mismatch。
+        """
+        slept: list[float] = []
+        stale = "sha256:" + "0" * 64
+        api = FakeApi(resources_sequence=[stale, DIGEST_RESOURCES])
+
+        checks = _run(
+            site(), api,
+            digest_timeout=30.0,
+            poll_interval=5.0,
+            sleep=lambda seconds: slept.append(seconds),
+        )
+
+        assert api.host_reads >= 2, "resources 还没刷新就下了结论"
+        assert slept == [5.0]
+        assert _status(checks, "install.s5.digest") == "PASS"
+
+    def test_stale_resources_beyond_the_window_is_a_mismatch(self, site):
+        """窗口耗尽仍是旧值：如实报 mismatch（不许掩盖）。"""
+        stale = "sha256:" + "0" * 64
+        api = FakeApi(resources_sequence=[stale])
+
+        checks = _run(site(), api, digest_timeout=0.0, poll_interval=5.0, sleep=lambda _: None)
+
+        assert "agent_digest_mismatch" in _codes(checks)
 
     def test_missing_content_digest_is_not_a_pass(self, site):
         """Agent 未上报摘要 ≠ 内容一致：不能当 S5 已通过。"""
@@ -1006,8 +1232,9 @@ class TestVerifyS6:
             captured.update({"config": config, **kwargs})
             return {"stage": "verify", "status": "PASS", "summary": "", "checks": []}
 
+        # 只打真实来源模块：CLI 在分支内延迟导入 verify_site（preflight 要能在
+        # 没有第三方依赖的机器上跑），所以 `cli.verify_site` 不再是打桩点。
         monkeypatch.setattr(verify_module, "verify_site", fake_verify)
-        monkeypatch.setattr(cli, "verify_site", fake_verify)
         bindings = tmp_path / "b"
         bindings.mkdir(mode=0o700)
         code = cli.main([
@@ -1023,8 +1250,9 @@ class TestVerifyS6:
     def test_cli_text_report_does_not_crash(self, tmp_path, monkeypatch, capsys):
         """文本模式同样消费 verify 报告（校验 deferred_checks 等字段齐备）。"""
         import tools.site_config.__main__ as cli
+        import tools.site_config.verify as verify_module
 
-        monkeypatch.setattr(cli, "verify_site", lambda config, **kwargs: {
+        monkeypatch.setattr(verify_module, "verify_site", lambda config, **kwargs: {
             "stage": "verify",
             "status": "PASS",
             "summary": "synthetic",

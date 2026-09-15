@@ -160,7 +160,10 @@ def _abort_pending_retry_after(
 ) -> int:
     """按最晚 abort 的 Job 剩余 grace 估算重试秒数（与 UI 热更新一致）。"""
     from backend.core.settings.scheduler import get_scheduler_settings
-    from backend.scheduler.device_lease_reconciler import _ABORT_REAPER_GRACE_SECONDS
+    from backend.scheduler.device_lease_reconciler import (
+        _ABORT_REAPER_GRACE_SECONDS,
+        _host_abort_clock_at,
+    )
 
     pr_ids = {j.plan_run_id for j in rows if j.id in pending_ids and j.plan_run_id}
     pr_map = (
@@ -176,7 +179,13 @@ def _abort_pending_retry_after(
         pr = pr_map.get(job.plan_run_id)
         if pr is None or not isinstance(pr.run_context, dict):
             continue
-        at_str = pr.run_context.get("abort_requested", {}).get("at", "")
+        # ADR-0043 D1：host 级 abort 的时钟在 `abort_requested_hosts[host_id]`，
+        # run 级 `at` 只由 run 级 abort 写入——按 host 取才反映**该主机**的剩余
+        # grace；取不到（纯 run 级 abort / 历史数据）再退回 run 级 `at`（D4）。
+        at_str = (
+            _host_abort_clock_at(pr, job.host_id)
+            or pr.run_context.get("abort_requested", {}).get("at", "")
+        )
         if not at_str:
             continue
         try:

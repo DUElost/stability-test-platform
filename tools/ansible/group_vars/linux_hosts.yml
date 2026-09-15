@@ -93,6 +93,13 @@ agent_secret: >-
 # 默认 false：常规更新不触碰系统包面；刷机主机用
 #   ansible-playbook ... update_agent.yml -l <hosts> -e agent_ensure_flash_prereqs=true
 agent_ensure_flash_prereqs: false
+
+# ── 源树 resources 前置断言（#2166）──────────────────────────────────────
+# update_agent.yml 以 rsync --delete 同步 agent 树；resources/（230MB）不在 git，
+# 任何 worktree 都没有它——源树缺失会把主机侧 agent/resources/ 清空（#2133 事故）。
+# 默认 false：源树缺 resources/flashtool 入口即拒绝（fail 在同步之前）。
+# 仅"确要清空主机资源面"时显式 -e agent_allow_empty_resources=true 放行。
+agent_allow_empty_resources: false
 # flash_tool 依赖的 Qt/X 运行库（与 flash_preflight._DEFAULT_PACKAGES 同源，
 # 由 tests/test_flash_provisioning_prereqs_2133.py 锁定一致性）。
 agent_flash_prereq_packages:

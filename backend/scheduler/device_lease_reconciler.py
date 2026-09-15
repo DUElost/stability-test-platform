@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy.exc
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 
 from backend.core.database import AsyncSessionLocal
@@ -352,7 +352,7 @@ _ABORT_REAPER_BROADCASTS: dict[str, list[dict]] = {}
 
 
 async def _abort_reaper_recheck_job(
-    db, job_id: int, now: datetime,
+    db, job_id: int, now: datetime, reason: str = "abort_ack_timeout",
 ) -> tuple[bool, dict | None]:
     """Lock-reread one RUNNING+abort-requested candidate and recover it.
 
@@ -378,7 +378,7 @@ async def _abort_reaper_recheck_job(
         return False, None
     try:
         JobStateMachine.transition(
-            job, JobStatus.UNKNOWN, "abort_ack_timeout",
+            job, JobStatus.UNKNOWN, reason,
         )
     except InvalidTransitionError:
         logger.debug(
@@ -450,6 +450,57 @@ def _abort_request_covers_job(plan_run: PlanRun, job_id: int) -> bool:
         return True
 
 
+def _host_abort_clock_at(plan_run: PlanRun, host_id: str | None) -> object:
+    """ADR-0043 D1：取 host 主体的 abort 时钟 ``abort_requested_hosts[host_id].at``。
+
+    键缺失（历史 run_context）/ 非 dict / 无 ``at`` → ``None``，调用方按 D4 退化
+    为 run 级时钟——**绝不**变成「无人回收」。
+    """
+    if not host_id:
+        return None
+    ctx = plan_run.run_context if isinstance(plan_run.run_context, dict) else {}
+    hosts = ctx.get("abort_requested_hosts")
+    if not isinstance(hosts, dict):
+        return None
+    clock = hosts.get(host_id)
+    if not isinstance(clock, dict):
+        return None
+    return clock.get("at")
+
+
+def _abort_reap_clock(
+    plan_run: PlanRun, job_id: int, host_id: str | None,
+) -> tuple[datetime | None, str | None]:
+    """ADR-0043 D1/D3：按**被请求主体**取该 job 的宽限时钟，并存时取更早者。
+
+    返回 ``(at, subject)``，``subject`` ∈ ``{"run", "host"}``（D6：审计与
+    ``status_reason`` 需能区分回收主体）；无有效时钟 → ``(None, None)``（不回收）。
+
+    覆盖判据（决定哪个主体的时钟对该 job 成立）：
+    - **run 主体**：``requested_job_ids`` 含该 job（名单缺失/空 = 历史形态，视为
+      覆盖 —— 与 #2050 的兼容分支同旨，否则老数据无人回收）；
+    - **host 主体**：该 host 存在 host 级时钟 —— 即 D3 的 late-claim 覆盖：host 级
+      abort **之后**才被 claim 成 RUNNING 的该 host job 不在名单快照内，仍由 host
+      时钟兜底回收（名单快照对本主机没有刷新通道，见 ADR-0043 §1.2-2）。
+
+    取 ``min`` 即 ADR-0043 D1「两者并存时取更早的 deadline」——更早到期者先兜底，
+    互不覆盖。
+    """
+    ctx = plan_run.run_context if isinstance(plan_run.run_context, dict) else {}
+    clocks: list[tuple[datetime, str]] = []
+    if _abort_request_covers_job(plan_run, job_id):
+        run_at = _parse_abort_at((ctx.get("abort_requested") or {}).get("at"))
+        if run_at is not None:
+            clocks.append((run_at, "run"))
+    host_at = _parse_abort_at(_host_abort_clock_at(plan_run, host_id))
+    if host_at is not None:
+        clocks.append((host_at, "host"))
+    if not clocks:
+        return None, None
+    at, subject = min(clocks, key=lambda item: item[0])
+    return at, subject
+
+
 async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     """P1: 扫描 RUNNING job 且 PlanRun.run_context 含 abort_requested 且
     grace 已到 → JobStateMachine.transition UNKNOWN，保留 ACTIVE lease 隔离
@@ -460,6 +511,13 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     host 级 abort 只请求该主机的 job，run 级 `at` 却对整轮成立（#2050）。
     集合缺失（历史数据）时退化为「只看 at」。
 
+    ADR-0043（#2154）：时间判据改为**按请求主体取时钟**——host 级 abort 写
+    ``abort_requested_hosts[host_id].at``（首次写入、后续不重置，D2），reaper 对每个
+    job 取「所属主体的时钟」并在两者并存时取更早者（D1/D3，见
+    :func:`_abort_reap_clock`）；``abort_requested_hosts`` 缺失的历史 run 仍只按 run
+    级 ``at`` 判定（D4，绝不变成无人回收）。回收主体的差异落在
+    ``status_reason``（``abort_ack_timeout`` / ``abort_ack_timeout_host``，D6）。
+
     返回 (aborted_count, broadcast_items) — 每项 dict:
         {type, job_id, plan_run_id, status, plan_run_terminal}
     """
@@ -469,15 +527,32 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     # PG JSONB path extraction with timestamptz cast:
     #   run_context -> 'abort_requested' ->> 'at' → text
     #   ... ::timestamptz → native PG comparison against grace_deadline
+    # ADR-0043 D1：候选面还要覆盖 host 主体的时钟（路径里按 job.host_id 取值）：
+    #   run_context -> 'abort_requested_hosts' -> <job.host_id> ->> 'at'
     abort_at_text = PlanRun.run_context['abort_requested']['at'].astext
+    host_abort_at_text = PlanRun.run_context[
+        'abort_requested_hosts'
+    ][JobInstance.host_id]['at'].astext
     try:
         rows = (await db.execute(
             select(JobInstance, PlanRun)
             .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
             .where(
                 JobInstance.status == JobStatus.RUNNING.value,
-                abort_at_text.isnot(None),
-                abort_at_text.cast(TIMESTAMP(timezone=True)) < grace_deadline,
+                # OR = 必要不充分条件：任一主体的时钟已过 grace 才可能是候选，
+                # 精确判据（按主体取时钟、并存取更早者）在下方 Python 侧统一做。
+                or_(
+                    and_(
+                        abort_at_text.isnot(None),
+                        abort_at_text.cast(TIMESTAMP(timezone=True))
+                        < grace_deadline,
+                    ),
+                    and_(
+                        host_abort_at_text.isnot(None),
+                        host_abort_at_text.cast(TIMESTAMP(timezone=True))
+                        < grace_deadline,
+                    ),
+                ),
             )
         )).all()
     except (sqlalchemy.exc.DataError, sqlalchemy.exc.DBAPIError):
@@ -494,35 +569,49 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
         # 文本比较却判为不早），既可能漏回收也可能误回收。改为取回候选后在
         # Python 侧解析比较；候选面被 RUNNING + abort_requested 双重限定，行数有界。
         candidates = (await db.execute(
-            select(JobInstance, PlanRun, abort_at_text)
+            select(JobInstance, PlanRun, abort_at_text, host_abort_at_text)
             .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
             .where(
                 JobInstance.status == JobStatus.RUNNING.value,
-                abort_at_text.isnot(None),
+                or_(
+                    abort_at_text.isnot(None),
+                    host_abort_at_text.isnot(None),
+                ),
             )
         )).all()
         rows = [
             (job, plan_run)
-            for job, plan_run, raw_abort_at in candidates
-            if _abort_at_expired(raw_abort_at, grace_deadline)
+            for job, plan_run, raw_run_at, raw_host_at in candidates
+            if (
+                _abort_at_expired(raw_run_at, grace_deadline)
+                or _abort_at_expired(raw_host_at, grace_deadline)
+            )
         ]
 
-    # #2050：时间判据之外再要求「该 job 被请求过中止」——host 级 abort 只请求该
-    # 主机的 job，而 run 级 `at` 对整轮成立；不过滤会把同 run 其他主机的正常 job
-    # 一并打成 UNKNOWN。集合缺失（历史 run_context）时本过滤不生效。
-    rows = [
-        (job, plan_run) for job, plan_run in rows
-        if _abort_request_covers_job(plan_run, job.id)
-    ]
+    # ADR-0043 D1/D3：按被回收 job 的**请求主体**取时钟（并存取更早者）后再判过期。
+    # 覆盖语义并入 `_abort_reap_clock`：run 主体看 `requested_job_ids` 名单（#2050），
+    # host 主体看该 host 的时钟（含 abort 之后才被 claim 的 job，D3）。无有效时钟
+    # （历史 run_context / 异常形态）→ 不回收（宁漏勿杀，#782 同旨）。
+    reap_rows: list[tuple[JobInstance, PlanRun, str]] = []
+    for job, plan_run in rows:
+        at, subject = _abort_reap_clock(plan_run, job.id, job.host_id)
+        if at is None or at >= grace_deadline:
+            continue
+        reap_rows.append((job, plan_run, subject or "run"))
 
     unknown_count = 0
     broadcast_items: list[dict] = []
 
-    for candidate, _pr in rows:
+    for candidate, _pr, subject in reap_rows:
         try:
             async with db.begin_nested():
                 changed, item = await _abort_reaper_recheck_job(
                     db, candidate.id, now,
+                    # ADR-0043 D6：状态原因需能区分回收主体，不得混为一类
+                    reason=(
+                        "abort_ack_timeout_host" if subject == "host"
+                        else "abort_ack_timeout"
+                    ),
                 )
                 if not changed:
                     continue
@@ -531,8 +620,8 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
                 broadcast_items.append(item)
 
                 logger.warning(
-                    "abort_reaper job=%d plan_run=%d -> UNKNOWN (lease retained)",
-                    candidate.id, candidate.plan_run_id,
+                    "abort_reaper job=%d plan_run=%d subject=%s -> UNKNOWN (lease retained)",
+                    candidate.id, candidate.plan_run_id, subject,
                 )
         except Exception:
             logger.exception(

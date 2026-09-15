@@ -15,6 +15,7 @@ instead of starting another installation.
 from __future__ import annotations
 
 import json
+import os
 import pwd
 import ssl
 import sys
@@ -28,6 +29,9 @@ from typing import Any, Callable, Protocol
 
 from .bindings import BindingError, load_binding
 from .manifest import load_release_manifest
+from dataclasses import replace
+
+from .ops import Ops
 from .stages import InstallContext
 from .validation import ConfigValidationError, Check, blocked, failure, passed
 
@@ -36,7 +40,12 @@ INSTALL_POLL_TIMEOUT_SECONDS = 900.0
 INSTALL_POLL_INTERVAL_SECONDS = 5.0
 # 部署摘要在安装脚本之后由 playbook 写入，Agent 于**下一次心跳**才上报；
 # 断言必须给一个有界等待窗，否则会把「还没上报」误判成「没有身份」。
-DIGEST_WAIT_SECONDS = 90.0
+# 首次接入的第一条心跳可能还没带上实例/启动标识（238 现场：真机 B），与摘要同理
+# 需要有界等待；一个心跳周期 + 一次重试余量。
+IDENTITY_WAIT_SECONDS = 30.0
+# 一个心跳周期（20s）足够让重装后的 Agent 上报新摘要，再留一次重试余量；
+# 更长的等待只会拖慢「Agent 不支持某项摘要」的旧机场景（那里永远等不到）。
+DIGEST_WAIT_SECONDS = 30.0
 # Heartbeats arrive every POLL_INTERVAL (10s) and the platform marks a Host
 # OFFLINE after HOST_HEARTBEAT_TIMEOUT_SECONDS (300s).  Assert on a window that
 # is comfortably inside the platform's own liveness rule.
@@ -495,6 +504,69 @@ def heartbeat_fresh(host: dict[str, Any], *, now: float) -> bool:
     return (now - stamp.timestamp()) <= AGENT_HEARTBEAT_FRESHNESS_SECONDS
 
 
+SSH_PROBE_CONNECT_TIMEOUT = "8"
+
+
+def probe_target_sudo(
+    ops: Ops, agent, binding: dict[str, str], *, port: int = 22,
+) -> tuple[bool | None, str]:
+    """Run ``sudo -n true`` on the target with the installer's own credentials.
+
+    The install chain's become uses exactly these credentials, so a target that
+    rejects passwordless sudo will fail *mid-install* (238 现场)——probe first and
+    hand the operator a Fix instead.
+
+    Returns ``(True, "")`` when sudo works, ``(False, "sudo_unavailable")`` when
+    the target itself refuses, ``(False, "ssh_probe_failed")`` when the SSH call
+    could not complete (network, host key, credentials), and
+    ``(None, "probe_not_run")`` when the local tools are missing — the last case
+    never counts as verified.  The password travels in the environment
+    (``SSHPASS``), never in argv.
+    """
+    if not ops.command_exists("ssh"):
+        return None, "probe_not_run"
+    if "PASSWORD" in binding and not ops.command_exists("sshpass"):
+        return None, "probe_not_run"
+    argv = [
+        "ssh",
+        "-o", f"ConnectTimeout={SSH_PROBE_CONNECT_TIMEOUT}",
+        "-o", "NumberOfPasswordPrompts=1",
+        "-p", str(port),
+    ]
+    env = dict(os.environ)
+    if "PRIVATE_KEY_PATH" in binding:
+        argv += ["-i", binding["PRIVATE_KEY_PATH"], "-o", "IdentitiesOnly=yes"]
+    else:
+        argv = ["sshpass", "-e", *argv]
+        env["SSHPASS"] = binding["PASSWORD"]
+    argv += [
+        f"{binding['USERNAME']}@{agent.target}",
+        # 远端 2>&1：sudo 的原话要能带回来（那是操作者最需要的诊断）
+        "sudo -n true 2>&1 && echo STP_SUDO_OK || echo STP_SUDO_FAIL",
+    ]
+    result = ops.run(argv, env=env)
+    if "STP_SUDO_OK" in result.stdout:
+        return True, ""
+    if "STP_SUDO_FAIL" in result.stdout:
+        detail = " ".join(result.stdout.replace("STP_SUDO_FAIL", "").split())[:120]
+        return False, f"sudo_unavailable: {detail}" if detail else "sudo_unavailable"
+    # SSH 层失败：先看 sshpass 的退出码（6 = 主机公钥未知：严格模式下不做首次
+    # 确认，输出可能完全为空），再按 ssh 自己的 stderr 归类，Fix 才能对症。
+    if result.returncode == 6:
+        return False, "ssh_host_key_unverified"
+    combined = f"{result.stderr or ''} {result.stdout or ''}"
+    for needle, reason in (
+        ("Host key verification failed", "host_key_unverified"),
+        ("Permission denied", "credentials_rejected"),
+        ("Connection timed out", "unreachable"),
+        ("Connection refused", "unreachable"),
+        ("No route to host", "unreachable"),
+    ):
+        if needle in combined:
+            return False, f"ssh_{reason}"
+    return False, "ssh_probe_failed"
+
+
 def assert_agent(
     api: ApiClient,
     host_id: str,
@@ -504,6 +576,7 @@ def assert_agent(
     declared_digests: dict[str, str],
     now: float,
     digest_timeout: float = DIGEST_WAIT_SECONDS,
+    identity_timeout: float = IDENTITY_WAIT_SECONDS,
     poll_interval: float = INSTALL_POLL_INTERVAL_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
     say: Callable[[str], None] | None = None,
@@ -527,8 +600,21 @@ def assert_agent(
         "Heartbeat proves the Agent reached this control plane, not that jobs can run.",
     ))
 
-    instance_id = host_field(host, "agent_instance_id", "last_agent_instance_id")
-    boot_id = host_field(host, "boot_id")
+    # 首次安装后第一条心跳可能只带部分字段：给实例/启动标识一个有界等待，避免
+    # "装好了但断言太早"（238 现场：真机 B 的字段在下一拍才落库，随后即为 ONLINE）。
+    identity_deadline = time.monotonic() + max(0.0, identity_timeout)
+    while True:
+        instance_id = host_field(host, "agent_instance_id", "last_agent_instance_id")
+        boot_id = host_field(host, "boot_id")
+        if (instance_id and boot_id) or time.monotonic() >= identity_deadline:
+            break
+        say(f"waiting for {host_id} identity report")
+        sleep(poll_interval)
+        try:
+            host = api.get_host(host_id)
+        except ApiError as error:
+            return checks + [_fail("install.s5.identity", error.code,
+                                   location="$.control_plane.public_url", role="control_plane")]
     if not instance_id or not boot_id:
         checks.append(_fail("install.s5.identity", "agent_identity", location="$.agents"))
         return checks
@@ -548,7 +634,12 @@ def assert_agent(
             "agent-code": host_field(host, "agent_artifact_digest"),
             "host-resources": host_field(host, "agent_resources_digest"),
         }
-        if any(reported.values()) or time.monotonic() >= deadline:
+        # 到齐的判据是「清单里声明的每一项都等于上报值」：只看"任一非空"会在重装
+        # 场景提前收工——code 早已有值，resources 还是上一版的值（238 实测）。
+        settled = bool(declared_digests) and all(
+            reported.get(key) == value for key, value in declared_digests.items()
+        )
+        if settled or time.monotonic() >= deadline:
             break
         say(f"waiting for {host_id} deployment digest report")
         sleep(poll_interval)
@@ -632,9 +723,11 @@ def stage_s5_agents(
     poll_timeout: float = INSTALL_POLL_TIMEOUT_SECONDS,
     poll_interval: float = INSTALL_POLL_INTERVAL_SECONDS,
     digest_timeout: float = DIGEST_WAIT_SECONDS,
+    identity_timeout: float = IDENTITY_WAIT_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
     progress: Callable[[str], None] | None = None,
     now: float | None = None,
+    sudo_probe: Callable[..., tuple[bool | None, str]] | None = None,
 ) -> list[Check]:
     """Onboard every declared Agent through the site API (S5)."""
     config = ctx.config
@@ -665,6 +758,34 @@ def stage_s5_agents(
         "Every declared Agent has an SSH binding of the declared shape.",
         "Binding values stay in memory; they are never written to argv, logs or reports.",
     ))
+
+    # 目标机 sudo 预检：become 用同一套凭据，sudo 不可用会在装到一半才炸（238 现场：
+    # Ubuntu 22.04 的 android 不在 sudoers）。触发任何安装之前逐台探一次，失败即停。
+    prober = sudo_probe or probe_target_sudo
+    probe_not_run = False
+    for index, (agent, values) in enumerate(zip(config.agents, bindings, strict=True)):
+        available, reason = prober(ctx.ops, agent, values)
+        if available is False:
+            code = "target_sudo_unavailable" if reason.startswith("sudo_unavailable") else "ssh_probe_failed"
+            checks.append(replace(
+                _fail("install.s5.sudo", code, location=f"$.agents[{index}]"),
+                message=f"Target sudo precheck failed for {agent.target}: {reason}",
+            ))
+            return checks
+        if available is None:
+            probe_not_run = True
+    if probe_not_run:
+        checks.append(blocked(
+            "install.s5.sudo", "agent", "$.agents", "probe_not_run",
+            "The control plane could not probe target sudo (ssh/sshpass missing locally).",
+            "Install the Agent-path commands (preflight reports them) or rerun deploy/agent/install.sh.",
+        ))
+    else:
+        checks.append(passed(
+            "install.s5.sudo", "agent", "$.agents", "target_sudo_ready",
+            "Every declared Agent accepts passwordless sudo with its own SSH credentials.",
+            "Become stays passwordless on purpose: the installer never stores a second secret.",
+        ))
 
     manifest = None
     if config.release.manifest is not None:
@@ -711,7 +832,8 @@ def stage_s5_agents(
         result = _onboard_one(
             ctx, api, agent=agent, binding=binding, declared=declared,
             location=location, poll_timeout=poll_timeout, poll_interval=poll_interval,
-            digest_timeout=digest_timeout, sleep=sleep, say=say, now=now,
+            digest_timeout=digest_timeout, identity_timeout=identity_timeout,
+            sleep=sleep, say=say, now=now,
         )
         checks.extend(result)
         if any(check.status == "FAIL" for check in result):
@@ -747,6 +869,7 @@ def _onboard_one(
     poll_timeout: float,
     poll_interval: float,
     digest_timeout: float,
+    identity_timeout: float,
     sleep: Callable[[float], None],
     say: Callable[[str], None],
     now: float | None,
@@ -798,6 +921,7 @@ def _onboard_one(
         declared_digests=declared,
         now=now if now is not None else time.time(),
         digest_timeout=digest_timeout,
+        identity_timeout=identity_timeout,
         poll_interval=poll_interval,
         sleep=sleep,
         say=say,

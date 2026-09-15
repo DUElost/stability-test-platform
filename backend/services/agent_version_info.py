@@ -9,6 +9,10 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.audit import record_audit
 from backend.core.metrics import hot_update_outcome_total
+from backend.services.artifact_digest import (
+    ARTIFACT_KIND_CODE,
+    compute_desired_artifact_digest,
+)
 from backend.services.host_updater import get_agent_code_version
 
 AgentCodeSyncStatus = Literal["unknown", "matched", "drift", "pending"]
@@ -16,26 +20,45 @@ AgentCodeSyncStatus = Literal["unknown", "matched", "drift", "pending"]
 
 def resolve_agent_code_sync_status(
     *,
-    agent_code_revision: str | None,
-    expected_code_revision: str | None,
-    agent_code_deployed: str | None = None,
+    agent_artifact_digest: str | None,
+    desired_artifact_digest: str | None,
 ) -> AgentCodeSyncStatus:
-    """Compare heartbeat-reported revision against control-plane expectation."""
-    if not expected_code_revision:
+    """ADR-0040 v1.1：面向运维的动作判据**唯一** = code artifact digest。
+
+    revision（`agent_code_revision` / `expected_code_revision`）**不参与判等**，
+    只作溯源文本：`get_agent_code_version()` 取的是仓库 HEAD，任何不动
+    `backend/agent/**` 的提交都会让 revision 前进而 digest 不变（#2057）——
+    按 revision 判等会让全 fleet 永久假 drift，且无自愈通道。
+
+    - 未上报 digest（#1907 前部署 / 新装未心跳）→ `unknown`（**不是 drift**）：
+      运维动作为「等一次心跳」或「首次 `--force` 迁移」，禁止渲染成需更新；
+    - `pending` 在 digest 判据下不再产生（枚举保留以兼容既有前端与历史数据）。
+    """
+    desired = (desired_artifact_digest or "").strip()
+    if not desired:
         return "unknown"
-    if agent_code_revision:
-        if agent_code_revision == expected_code_revision:
-            return "matched"
-        return "drift"
-    if agent_code_deployed and agent_code_deployed == expected_code_revision:
-        return "pending"
-    return "unknown"
+    current = (agent_artifact_digest or "").strip()
+    if not current:
+        return "unknown"
+    return "matched" if current == desired else "drift"
 
 
-def build_host_version_view(extra: dict | None) -> dict:
-    """Derive top-level HostOut version fields from host.extra."""
+def build_host_version_view(
+    extra: dict | None,
+    *,
+    agent_artifact_digest: str | None = None,
+    desired_artifact_digest: str | None = None,
+) -> dict:
+    """Derive top-level HostOut version fields from host.extra.
+
+    `desired_artifact_digest` 由调用方传入以便列表场景只算一次（desired 现算 +
+    进程缓存，但缓存键仍需 stat 输入集）；缺省时本函数自算。
+    """
     data = extra if isinstance(extra, dict) else {}
     expected = get_agent_code_version() or None
+    desired = (desired_artifact_digest or "").strip() or (
+        compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE) or ""
+    )
 
     def _clean(value: object) -> str | None:
         if not isinstance(value, str):
@@ -55,9 +78,8 @@ def build_host_version_view(extra: dict | None) -> dict:
         "agent_code_deployed": deployed,
         "agent_code_deployed_at": deployed_at,
         "agent_code_sync_status": resolve_agent_code_sync_status(
-            agent_code_revision=reported,
-            expected_code_revision=expected,
-            agent_code_deployed=deployed,
+            agent_artifact_digest=agent_artifact_digest,
+            desired_artifact_digest=desired,
         ),
     }
 

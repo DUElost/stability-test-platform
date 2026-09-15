@@ -52,6 +52,9 @@ def tree(tmp_path: Path, *, frontend: bool = True, migrations: dict[str, str] | 
     for name, text in versions.items():
         (root / "backend/alembic/versions" / name).write_text(text, encoding="utf-8")
     (root / "backend/requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    # resources 不在 git：合成树必须带上，否则 build_bundle 会拒绝打包
+    (root / "backend/agent/resources/tools").mkdir(parents=True)
+    (root / "backend/agent/resources/tools/tool.bin").write_bytes(b"binary\n")
     (root / "deploy/control-plane/systemd").mkdir(parents=True)
     (root / "deploy/control-plane/systemd/stability-backend.service").write_text("[Unit]\n", encoding="utf-8")
     (root / "tools/site_config").mkdir(parents=True)
@@ -90,7 +93,11 @@ def test_bundle_carries_the_documented_layout_and_manifest(tmp_path):
     assert manifest["database"]["schema_target"] == "bbbb2222"
     assert manifest["provenance"]["attestation"] == "controlled_channel"
     assert manifest["compatibility"]["agent_protocol"].startswith(">=1.0")
-    assert {platform["distribution"] for platform in manifest["compatibility"]["platforms"]} == {"debian", "ubuntu"}
+    platforms = manifest["compatibility"]["platforms"]
+    assert {platform["distribution"] for platform in platforms} == {"debian", "ubuntu"}
+    ubuntu = next(platform for platform in platforms if platform["distribution"] == "ubuntu")
+    # 22.04 于 2026-09-15 实测纳入；24.04 一并保留（防回归）
+    assert {"22.04", "24.04"} <= set(ubuntu["versions"])
 
 
 def test_manifest_is_accepted_by_the_installer_side_loader(tmp_path):
@@ -113,6 +120,11 @@ def test_digest_is_content_addressed_not_a_tree_hash(tmp_path):
     out, first = built(tmp_path)
     (out / "backend/agent/sample.py").write_text("VALUE = 2\n", encoding="utf-8")
     assert reference_digests(out)["agent-code"] != first["components"]["agent-code"]
+    # resources 是独立分区：改它只影响 host-resources
+    (out / "backend/agent/resources/tools/tool.bin").write_bytes(b"changed\n")
+    moved = reference_digests(out)
+    assert moved["host-resources"] != first["components"]["host-resources"]
+    assert moved["agent-code"] == reference_digests(out)["agent-code"]
 
 
 def test_landed_tree_keeps_the_agent_symlink(tmp_path):
@@ -129,6 +141,18 @@ def test_rebuild_is_idempotent(tmp_path):
     second = build_bundle(tree(tmp_path), out, revision=REVISION)
     assert first["components"] == second["components"]
     assert (out / MANIFEST_NAME).read_text(encoding="utf-8") == first_manifest
+
+
+def test_missing_agent_resources_refuse_to_package(tmp_path):
+    """resources 不在 git：缺了它摘要必然与清单不符（238 实测），必须早暴露。"""
+    import shutil as _shutil
+
+    root = tree(tmp_path)
+    _shutil.rmtree(root / "backend/agent/resources")
+    with pytest.raises(BundleError) as caught:
+        build_bundle(root, tmp_path / "bundle", revision=REVISION)
+    assert caught.value.code == "bundle_resources"
+    assert "not in git" in caught.value.detail
 
 
 def test_missing_frontend_build_says_what_to_run(tmp_path):

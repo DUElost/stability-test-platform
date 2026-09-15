@@ -157,12 +157,14 @@ def _bulk_abort_pending_jobs(
     return aborted_ids
 
 
-# #1928：`_record_host_abort_request` 已删除——该函数写
-# `run_context['abort_requested_hosts']` 并声称「由 reaper 按 host 消费」，
-# 但全仓无调用方也无消费者（reaper 只读 run 级 `abort_requested` 的存在性，
-# 不读 requested 集合）；实际 host 隔离完全由下方 run 级 merge 写承担。
-# 「文档宣称 > 实现」的孤儿数据结构按最小面移除；若将来需要按 host 独立
-# grace，先立 ADR 裁决 reaper 消费语义再接线。
+# #1928：`_record_host_abort_request` 曾写 `run_context['abort_requested_hosts']`
+# 却全仓无调用方也无消费者（reaper 只读 run 级 `abort_requested` 的存在性），
+# 属「文档宣称 > 实现」的孤儿结构，按最小面移除。
+# ADR-0043（Accepted v1.0，#2154）：该键**重新引入**为 host 主体的宽限时钟真源
+# ——写入在下方 host 级 abort 分支，消费在
+# `device_lease_reconciler._reconcile_aborted_running_jobs`（按主体取时钟、并存
+# 时取更早者）。与 #1928 孤儿形态的区别是**有写有读**：写入侧在本文件，消费侧
+# 在 reaper，两侧同 PR 接线，不得再出现单边写入。
 
 
 
@@ -193,6 +195,34 @@ def _patch_run_context(db: Session, plan_run_id: int, path: list, value) -> None
             "path": [str(seg) for seg in path],
             "value": json.dumps(value, ensure_ascii=False, default=str),
         },
+    )
+
+
+def _ensure_abort_hosts_key(db: Session, plan_run_id: int) -> None:
+    """确保 ``abort_requested_hosts`` 已存在且为对象（写 host 级时钟的前置）。
+
+    PG 的 ``jsonb_set`` **只创建 path 的最后一段**：``{abort_requested_hosts,
+    <host_id>}`` 在父键缺失时不会递归创建（实测 ``jsonb_set('{}'::jsonb,
+    '{x,y}', '"v"'::jsonb, true)`` 返回 ``{}``），故两段路径的写入会静默无效
+    （rowcount 仍为 1）。父键用**库端** ``COALESCE`` 取当前值，不覆盖并发写者
+    已写入的其它 host 时钟。
+    """
+    from sqlalchemy import text
+
+    db.execute(
+        text(
+            "UPDATE plan_run SET run_context = jsonb_set("
+            "  COALESCE(NULLIF(run_context, 'null'::jsonb), '{}'::jsonb), "
+            "  CAST(:path AS text[]), "
+            "  COALESCE("
+            "    CASE WHEN jsonb_typeof(run_context -> 'abort_requested_hosts')"
+            "              = 'object' "
+            "         THEN run_context -> 'abort_requested_hosts' END, "
+            "    '{}'::jsonb"
+            "  ), true"
+            ") WHERE id = :run_id"
+        ),
+        {"run_id": plan_run_id, "path": ["abort_requested_hosts"]},
     )
 
 
@@ -236,11 +266,17 @@ def abort_plan_run(
     preserved (merged, not replaced).  The in-precheck whole-plan FAILED path is
     not taken.
 
-    Run-level by design (#1928 注记)：``abort_requested`` 本身是 **run 级** 键，
-    故 ACK grace（``at`` / ``deadline_at``）按整轮计时，且每次 host 级 abort 都会
-    **重置** 该宽限（最多多等 host 数 × GRACE）。收窄的是**候选集**（只看
-    ``requested_job_ids``），不是宽限语义；若将来要「宽限从第一次请求起算」或
-    「按 host 独立宽限」，先立 ADR 裁决 reaper 消费语义再改。
+    ADR-0043（Accepted v1.0，#2154；下方原 #1928 注记**已失效**）：宽限的
+    **计时主体 ≡ 请求主体**——``abort_requested`` 的 ``at`` / ``deadline_at`` 只由
+    **run 级** abort 写入；host 级 abort 只维护该键的**名单语义**
+    （``requested_job_ids`` 合并，#2050 候选收窄）与**存在性**（聚合 SUCCESS 污染 /
+    热更新 ``abort_pending`` / recovery ``ABORT_LOCAL`` / dispatch 材料化保护这四类
+    读者只看键是否存在），并把 host 主体的时钟写进
+    ``abort_requested_hosts[host_id]``：**首次写入、后续不重置**（D2 —— 消除
+    N×GRACE 放大与「最后写入者赢」）。reaper 按被回收 job 所属主体取时钟、两者
+    并存时取更早者（D1）；host 级请求之后才被 claim 的该 host job 由 host 时钟
+    覆盖（D3）；``abort_requested_hosts`` 缺失（历史 run_context）退化为 run 级
+    时钟（D4）。
 
     Returns a summary dict::
 
@@ -440,14 +476,14 @@ def abort_plan_run(
             merged_requested = list(
                 dict.fromkeys(existing_requested + abort_requested_jobs)
             )
+            # ADR-0043 D1：host 级 abort **不写 run 级 `at`**——run 级 `at` 是 run
+            # 主体的时钟，只由下方 run 级分支写入。此处只维护名单语义与键的存在性；
+            # `{**existing_abort}` 会带上既有 run 级 `at`（若此前发生过 run 级
+            # abort），但绝不覆盖/重置它（D2）。
             abort_requested_payload = {
                 **(existing_abort if isinstance(existing_abort, dict) else {}),
-                "at": now.isoformat(),
                 "reason": reason,
                 "triggered_by": triggered_by,
-                "deadline_at": (
-                    now + timedelta(seconds=ABORT_ACK_GRACE_SECONDS)
-                ).isoformat(),
                 "requested_job_ids": merged_requested,
                 "acknowledged_job_ids": existing_ack,
             }
@@ -463,15 +499,52 @@ def abort_plan_run(
                 "acknowledged_job_ids": [],
             }
         run_ctx["abort_requested"] = abort_requested_payload
-        # 注意（#1928 复核注记）：本写入**重置** `at`/`deadline_at`——同一 run
-        # 的每次 host 级 abort 都会把 reaper 宽限延长为「本次请求 + GRACE」
-        # （此前已请求 job 的原 deadline 被覆盖）。这是现行为而非疏漏：reaper
-        # 只按 `abort_requested.at` 存在性选候选、最多多等 host 数 × GRACE；
-        # 若需「grace 从第一次请求起算」语义，先立 ADR 裁决再改。
+        # #1928 注记（**已失效**，ADR-0043 v1.0 / #2154）：本写入**曾**重置 run 级
+        # `at`/`deadline_at`，使每次 host 级 abort 都把整轮宽限延长为「本次请求 +
+        # GRACE」（最多多等 host 数 × GRACE）。现在 host 主体的计时落在下方
+        # `abort_requested_hosts[host_id]`，run 级 `at` 只由 run 级 abort 写入。
         # #793：分段写（整段写回会覆盖并发写者如 archive/dispatch_state 的键）
         _patch_run_context(
             db, plan_run_id, ["abort_requested"], run_ctx["abort_requested"],
         )
+
+        if host_id is not None:
+            # ADR-0043 D1/D2：host 主体的宽限时钟——**首次写入、后续不重置**
+            # （自首次请求起算）。重复请求只刷新 reason/triggered_by 便于审计，
+            # `at` / `deadline_at` 一律沿用首次值。
+            existing_host_clock = None
+            existing_hosts = run_ctx.get("abort_requested_hosts")
+            if isinstance(existing_hosts, dict):
+                candidate = existing_hosts.get(host_id)
+                if isinstance(candidate, dict):
+                    existing_host_clock = candidate
+            if existing_host_clock and existing_host_clock.get("at"):
+                host_clock_payload = {
+                    **existing_host_clock,
+                    "reason": reason,
+                    "triggered_by": triggered_by,
+                }
+            else:
+                host_clock_payload = {
+                    "at": now.isoformat(),
+                    "reason": reason,
+                    "triggered_by": triggered_by,
+                    "deadline_at": (
+                        now + timedelta(seconds=ABORT_ACK_GRACE_SECONDS)
+                    ).isoformat(),
+                }
+            if not isinstance(run_ctx.get("abort_requested_hosts"), dict):
+                run_ctx["abort_requested_hosts"] = {}
+            run_ctx["abort_requested_hosts"][host_id] = host_clock_payload
+            # jsonb_set 不创建父键 → 先确保 `abort_requested_hosts` 存在
+            _ensure_abort_hosts_key(db, plan_run_id)
+            _patch_run_context(
+                db,
+                plan_run_id,
+                ["abort_requested_hosts", host_id],
+                host_clock_payload,
+            )
+
         # #1552：在**任何**读 pr.run_context 的后续逻辑之前同步 ORM 视图。
         _reload_run_context(db, pr)
 
