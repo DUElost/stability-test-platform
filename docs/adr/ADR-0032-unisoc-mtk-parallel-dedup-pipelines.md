@@ -1,6 +1,6 @@
 # ADR-0032：展锐与 MTK 并列日志链路（Watcher 实时 + 归档 dedup）（#463 / #73）
 
-- 状态：**Accepted**（v0.8：B3 spike 已执行 2026-09-15，D3 转已验证；P1 编码已合入 main 2026-08-31）
+- 状态：**Accepted**（v0.9：平台路由收口 R1–R4 已裁决并实施 2026-09-15，R3 条件裁决由 v0.8 的 B3 通过**达成**；v0.8：B3 spike 已执行，D3 转已验证；P1 编码已合入 main 2026-08-31）
 - 优先级：P1
 - 目标里程碑：M7（方案 C 下补齐展锐 **实时信号 + 终态 dedup** 双覆盖面）
 - 日期：2026-08-31
@@ -17,6 +17,7 @@
 | v0.6 | 2026-08-31 | **Accepted**：B1 路径分区 + 双 merge；D3/D4/D7/D8/B5 终裁 |
 | v0.7 | 2026-09-04 | P1 编码已合入 main（`922049d2`/`2368228f`，2026-08-31）；剩余 Z258 真机验收与 B3 spike 不阻塞落地记录 |
 | v0.8 | 2026-09-15 | **B3 spike 已执行**（§B3）：五项验收实测通过，D3「UNISOC 复用 MTK merge 工具」由断言转为**已验证**；第 1 项精确化为「列数同构、两列命名有差异且被工具归一」；未覆盖平台侧发布路径记入 Revisit |
+| v0.9 | 2026-09-15 | **平台路由收口**（§D9 / #2192）：R1 完备性单位由 host 改为 **(host, platform) 期望集**，B1 旧函数名同步为 `scan_completeness`；R2 逐平台 merge 结果落 `run_context.merge_platforms`；R3「同一 merge 工具」的条件裁决由 **v0.8（B3 通过）达成**——D3 维持；R4 未支持态与死接口收口（**a1** 删 `PlatformCollector.detect()` / **b1** 控制面派生 `has_collection_impl` / **b3** Agent 留痕）。**注**：v0.8 已被 B3 占用，平台路由修订故取 v0.9，不挤占已发布版本 |
 
 ## 背景
 
@@ -67,7 +68,8 @@ PlanRun 活跃期间按 **`device.platform`** 路由；两层 **共享路由键�
 
 - `build_merge_argv` / `_load_org_files_for_merge` 按 `mtk`/`unisoc` 子目录分别收集输入。
 - `find_fresh_merge_output_dir` / `_publish_merge_to_center` 扩展为 **每平台各注册/发布一次**，不得只保留 mtime 最大者。
-- `count_hosts_with_scan_artifacts`：按 **host 去重**，MTK/UNISOC **分区各自完备性判定** 后分别触发 merge。
+- `scan_completeness(run_id, expected)`（**v0.9** 取代 `count_hosts_with_scan_artifacts`）：完备性单位为 **(host, platform) 对**，期望集由 `load_expected_scan_platforms` 自 PlanRun 设备表派生，无设备证据的 host 不产生期望；语义仍为 MTK/UNISOC **分区各自判定**后分别触发 merge。旧实现 `require_platforms=DEDUP_PLATFORMS` 等价于「每 host 双平台齐」，与 B1 不符——纯 MTK / 纯 UNISOC host 永不完备。
+- 逐平台 merge 结果（`ok` / `skipped_failed` / `no_input`）落 `run_context.merge_platforms`（**v0.9**，纯增量记录；`run_merge_all_platforms_sync` 返回字符串与控制流不变，记录失败不影响 merge 结论）。
 - 前端：watcher-summary / 终态报表 **一张总表**，数据按 platform 分桶聚合（见 B5）。
 
 ### D3：环境键与 fleet 键（**已裁定**）
@@ -81,6 +83,8 @@ PlanRun 活跃期间按 **`device.platform`** 路由；两层 **共享路由键�
 | fleet `-side` | `STP_DEDUP_SCAN_TAG` | **裁定 A：与 MTK 共用** `STP_DEDUP_SCAN_TAG`（factory/shanghai 逻辑不变） |
 
 hot-update：`STP_AGENT_UNISOC_*` 源键 → Agent 无前缀键；纳入 `AGENT_PATH_ENV_KEYS`；**不得**写入 MTK 键。
+
+**v0.9（R3 条件裁决已达成）**：平台路由修订提案曾将「同一 merge 工具」由断言降级为**待验证假设**并绑定条件裁决——B3 通过则维持，失败则引入 `STP_BACKEND_UNISOC_MERGE_PYTHON` / `_SCRIPT` 由 `run_merge_sync` 按平台解析工具。B3 已于 **v0.8（2026-09-15）执行并通过**（§B3：五项验收实测通过），故**条件达成：D3 维持「同一 merge 工具」**，§B3 验收项作为证据入库，B3 作为下一里程碑门禁的要求同步满足。仍**未**验证的是 `merge/unisoc/` 的**平台侧发布路径**（工具能力已验、控制面 HTTP 全链路未验），见 §Revisit。
 
 ### D4：展锐归档采集 Agent 化（**已裁定：c**）
 
@@ -121,6 +125,25 @@ scan_now（控制面）→ Agent 按 platform 路由
 | 路由 | **`device.platform` 分支**（D6） |
 | env | **内置**，不暴露独立 Watcher 外置脚本键（D3） |
 | 与归档目录 | **串行、分树**：Watcher 运行期落盘至 **Watcher 事件目录**（参照 MTK `STP_AEE_LOCAL_ROOT` 角色）；`scan_now` 归档链 **另起** `scan_log_gt` 工作区，**禁止**两路径并发写同一目录。归档可读 Watcher 已落盘材料，但须在 Reconciler 轮次与 `scan_now` 之间 **串行化**（Job RUNNING 仅 Watcher；终态 scan 仅归档 runner）。 |
+
+### D9：平台未支持态与死接口收口（**已裁定：a1 + b1 + b3**，2026-09-15 实施）
+
+**事实**：协议曾定义 `PlatformCollector.detect()`，MTK / UNISOC / QCOM 三个实现齐备但**全仓零调用点**；平台判定实际由 `detect_device_platform` 唯一承担。同时 QCOM 既无采集实现也无 Reconciler，前端只显示红字「未等齐」，**无法区分「没有异常」与「平台未支持」**。
+
+**裁定**：
+
+| 编号 | 裁定 | 状态 |
+|---|---|---|
+| **a1** | **删除** `detect()`：协议收窄为 `platform` + `parse_metadata`，三个实现的 `detect` 一并删除 | 已实施 |
+| **b1** | 控制面**显式派生**未支持态：新增 `core.dedup_platform.has_collection_impl` → `WatcherPlatformBucketOut.reconciler_supported` | 已实施 |
+| **b3** | Agent 侧留痕 `platform_reconciler_unsupported`（对照 UNISOC 的 degraded 日志） | 已实施 |
+
+- b1 **不复用** `dedup_platform_for_device_platform`，而是新增显式 helper：二者当前的等价性由测试钉住，语义解耦（「平台在词表内」≠「有采集实现」）。
+- **否决 a2（工厂化接线）**：会形成 `detect()` 与 `detect_device_platform` **两套平台判定**，与「同一决策只在一处描述」冲突，且每个 Job 多一次 adb 往返。
+- **否决 a3（保留 + 注释）**：保留死接口等于承认「定义了却从不调用」的第三态。
+- **b2**（Agent 上报平台能力声明）留作升级路径，未采纳：会改变 Agent→控制面的上报契约（新字段 + 迁移），代价高于本修订要解决的问题。
+
+**不变量（不变）**：D0 路由键 `device.platform`、D1 输入集严格按平台分区、D6 与 #220 的 supersede 方向。
 
 ### B5：`job_log_signal` 与 G10（**已裁定**）
 

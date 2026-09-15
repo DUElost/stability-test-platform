@@ -3,8 +3,8 @@ Pytest Configuration and Fixtures
 """
 
 import asyncio
+import logging
 import os
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -22,7 +22,7 @@ def pytest_configure(config):
         "integration: tests that require a live database (TEST_DATABASE_URL)",
     )
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
@@ -107,6 +107,10 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 # 只写 DATABASE_URL 会让它们在实际 PG（容器兜底）上整组 skip。
 os.environ["TEST_DATABASE_URL"] = TEST_DATABASE_URL
 
+# #2074：清库前要排空共享后台池（通知 SAQ 降级直达 / post_completion）。
+# import 必须在 DATABASE_URL 写回之后——backend.core 包级 __init__ 会解析它。
+from backend.core import thread_pool
+
 from backend.core.database import async_engine, engine as app_engine, get_db
 from backend.core.database import Base
 from backend.models import audit as _audit  # noqa: F401
@@ -159,32 +163,66 @@ def engine():
         _TEST_DB_CONTAINER.stop()
 
 
-_TRUNCATE_DEADLOCK_RETRIES = 3
+def _dump_deadlock_scene(engine) -> None:
+    """#2074 取证：DeadlockDetected 时把锁环两侧落到表级（pid/state/relname/query）。
+
+    异常浮出时 TRUNCATE 事务已被 PG 判为牺牲者回滚，对侧会话仍在——此刻的
+    pg_stat_activity/pg_locks 快照就是「谁在持有、谁在等」的现场（#1273 时代
+    DETAIL 只给 relation oid，泄漏者无法定位）。诊断自身的任何异常都只记
+    日志，绝不掩盖原异常。
+    """
+    log = logging.getLogger("backend.tests.truncate_deadlock")
+    try:
+        with engine.connect() as conn:
+            sessions = conn.execute(text(
+                "SELECT pid, state, wait_event_type, wait_event, backend_start, "
+                "       left(query, 160) AS last_query "
+                "FROM pg_stat_activity "
+                "WHERE pid <> pg_backend_pid() AND datname = current_database()"
+            )).all()
+            locks = conn.execute(text(
+                "SELECT l.pid, coalesce(c.relname, '-') AS relname, l.mode, l.granted "
+                "FROM pg_locks l "
+                "LEFT JOIN pg_class c ON c.oid = l.relation "
+                "WHERE l.pid <> pg_backend_pid() "
+                "  AND (l.locktype IN ('tuple','transactionid') OR NOT l.granted) "
+                "ORDER BY l.pid, l.granted DESC, c.relname"
+            )).all()
+        log.warning(
+            "TRUNCATE_DEADLOCK_SCENE sessions=%r locks=%r",
+            [tuple(r) for r in sessions], [tuple(r) for r in locks],
+        )
+    except Exception:
+        log.warning("TRUNCATE_DEADLOCK_SCENE_DUMP_FAILED", exc_info=True)
 
 
 def _truncate_all_tables(engine, table_names: str) -> None:
-    """清库（TRUNCATE ... RESTART IDENTITY CASCADE）并对死锁做有界重试（#1273）。
+    """清库（TRUNCATE ... RESTART IDENTITY CASCADE），先排空共享后台池（#2074）。
 
-    TRUNCATE 取 AccessExclusiveLock；同进程内仍有存活的连接/后台线程持
-    AccessShareLock 时，PG 会把 TRUNCATE 判为循环等待的牺牲者并抛
-    DeadlockDetected（全量套件 7–8 个 setup ERROR 的来源，出错集合随运行漂移）。
-    死锁是瞬态：对方语句结束后重试即成功；超出上限仍失败则原样抛出。
+    TRUNCATE 取 AccessExclusiveLock；fire-and-forget 后台任务（通知 SAQ 降级
+    直达、post_completion 缓存刷新——测试里 SAQ 不运行，通知全部走
+    ``thread_pool`` 降级路径，各自自开 ``SessionLocal`` 多语句事务）若横跨到
+    下一个用例，其 AccessShare 与清库的 AccessExclusive 成环，PG 把 TRUNCATE
+    判为牺牲者抛 DeadlockDetected（#1273 的 7–8 个 setup ERROR 来源，出错
+    集合随运行漂移）。根因收敛 = 清库前 ``thread_pool.drain()`` 让在途短事务
+    落地；残余泄漏由 ``_dump_deadlock_scene`` 以表级粒度直接现形。
+    #1273 的 3 次退避重试已随根因收敛移除——它掩盖的正是这个泄漏（该 Note
+    的 Revisit 即此要求的常驻载体）。
     """
-    for attempt in range(_TRUNCATE_DEADLOCK_RETRIES + 1):
-        try:
-            with engine.begin() as conn:
-                if conn.dialect.name == "postgresql":
-                    conn.exec_driver_sql(
-                        f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
-                    )
-                else:
-                    for table in reversed(Base.metadata.sorted_tables):
-                        conn.execute(table.delete())
-            return
-        except OperationalError as exc:
-            if "DeadlockDetected" not in str(exc) or attempt >= _TRUNCATE_DEADLOCK_RETRIES:
-                raise
-            time.sleep(0.2 * (attempt + 1))
+    thread_pool.drain(timeout=10.0)
+    try:
+        with engine.begin() as conn:
+            if conn.dialect.name == "postgresql":
+                conn.exec_driver_sql(
+                    f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
+                )
+            else:
+                for table in reversed(Base.metadata.sorted_tables):
+                    conn.execute(table.delete())
+    except OperationalError as exc:
+        if "DeadlockDetected" in str(exc):
+            _dump_deadlock_scene(engine)
+        raise
 
 
 @pytest.fixture(scope="function")
