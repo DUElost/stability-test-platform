@@ -5,6 +5,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _spec = importlib.util.spec_from_file_location(
@@ -310,3 +312,168 @@ def test_default_memory_dir_slug():
         Path.home() / ".codebuddy" / "projects"
         / "home-debian13-stability-test-platform" / "memory"
     )
+
+
+# ── #2156：索引预算 + 无损压缩 ───────────────────────────────────────────────
+
+def _long_index_line(width: int = 400) -> str:
+    """造一条明显超宽的索引行（含分句，便于验证在分句边界断开）。"""
+    hook = "；".join(f"第{i}段的内容描述" for i in range(1, width // 8))
+    return f"- [长条目](long_entry.md) — {hook}"
+
+
+def _mem_with_long_line(tmp_path: Path) -> Path:
+    return _build(
+        tmp_path,
+        entries={
+            "long_entry.md": {"name": "长条目", "type": "project"},
+            "other.md": {"name": "其他", "type": "user"},
+        },
+        index=f"# Memory index\n{_long_index_line()}\n- [其他](other.md) — 短行\n",
+    )
+
+
+class TestIndexBudget:
+    def test_default_thresholds_match_store_contract(self):
+        """三级阈值是契约数字（记忆 store 治理）：18.0 / 19.5 / 24.4 KB。"""
+        assert _mod.INDEX_BUDGET_TARGET_KB == 18.0
+        assert _mod.INDEX_BUDGET_SOFT_KB == 19.5
+        assert _mod.INDEX_BUDGET_HARD_KB == 24.4
+
+    def test_counts_entries_and_bytes(self, tmp_path):
+        mem = _build(tmp_path)
+        b = _mod.index_budget(mem)
+        assert b.entries == 2
+        assert b.size_bytes == len((mem / "MEMORY.md").read_bytes())
+        assert b.level == "ok"
+
+    def test_ok_reports_budget_and_exits_0(self, tmp_path, capsys):
+        mem = _build(tmp_path)
+        rc = _mod.main(["--path", str(mem), "--repo-root", str(tmp_path), "--budget"])
+        assert rc == 0
+        assert "索引预算：" in capsys.readouterr().out
+
+    def test_soft_trigger_exits_1(self, tmp_path, capsys):
+        mem = _build(tmp_path)
+        rc = _mod.main([
+            "--path", str(mem), "--repo-root", str(tmp_path),
+            "--budget", "--soft-kb", "0.01", "--hard-kb", "99",
+        ])
+        assert rc == 1
+        assert "超软触发" in capsys.readouterr().out
+
+    def test_hard_wall_message_when_over_hard(self, tmp_path, capsys):
+        mem = _build(tmp_path)
+        rc = _mod.main([
+            "--path", str(mem), "--repo-root", str(tmp_path),
+            "--budget", "--soft-kb", "0.01", "--hard-kb", "0.02",
+        ])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "超硬墙" in out and "静默丢条目" in out
+
+
+class TestIndexFix:
+    def test_dry_run_does_not_write(self, tmp_path, capsys):
+        mem = _mem_with_long_line(tmp_path)
+        index_before = (mem / "MEMORY.md").read_text(encoding="utf-8")
+        entry_before = (mem / "long_entry.md").read_text(encoding="utf-8")
+        rc = _mod.main(["--path", str(mem), "--repo-root", str(tmp_path), "--fix"])
+        # 行宽超限本身就是 lint error，故干跑仍 exit 1；关键是「没写盘」
+        assert rc == 1
+        assert "[FIX ]" in capsys.readouterr().out
+        assert (mem / "MEMORY.md").read_text(encoding="utf-8") == index_before
+        assert (mem / "long_entry.md").read_text(encoding="utf-8") == entry_before
+
+    def test_apply_is_lossless_and_within_width(self, tmp_path):
+        mem = _mem_with_long_line(tmp_path)
+        original = _long_index_line()
+        rc = _mod.main([
+            "--path", str(mem), "--repo-root", str(tmp_path), "--fix", "--apply",
+        ])
+        assert rc == 0  # 压缩后行宽 error 消失，索引自洽
+        index_text = (mem / "MEMORY.md").read_text(encoding="utf-8")
+        fixed = [l for l in index_text.splitlines() if "long_entry.md" in l]
+        assert len(fixed) == 1
+        assert len(fixed[0]) <= _mod.INDEX_LINE_MAX_CHARS
+        assert fixed[0].endswith("…")
+        # 无损：原文逐字落在目标条目文件里，且带 HTML 注释与块标题
+        entry = (mem / "long_entry.md").read_text(encoding="utf-8")
+        assert original in entry
+        assert _mod.APPENDIX_MARKER in entry
+        assert "索引精简（#2156）" in entry
+
+    def test_apply_is_idempotent(self, tmp_path, capsys):
+        mem = _mem_with_long_line(tmp_path)
+        argv = ["--path", str(mem), "--repo-root", str(tmp_path), "--fix", "--apply"]
+        assert _mod.main(argv) == 0
+        assert "改写 1 行" in capsys.readouterr().out
+        entry_once = (mem / "long_entry.md").read_text(encoding="utf-8")
+        assert _mod.main(argv) == 0
+        assert "没有行宽 >" in capsys.readouterr().out
+        assert (mem / "long_entry.md").read_text(encoding="utf-8") == entry_once
+
+    def test_stale_plan_does_not_duplicate_appendix(self, tmp_path):
+        """拿到陈旧方案（索引行已被压缩过）二次执行，也不重复追加附录块。"""
+        mem = _mem_with_long_line(tmp_path)
+        plans = _mod.plan_index_fixes(mem)
+        _mod.apply_index_fixes(mem, plans, today="2026-09-15")
+        entry_once = (mem / "long_entry.md").read_text(encoding="utf-8")
+        _mod.apply_index_fixes(mem, plans, today="2026-09-15")
+        assert (mem / "long_entry.md").read_text(encoding="utf-8") == entry_once
+
+    def test_skips_when_target_file_missing(self, tmp_path, capsys):
+        broken = _long_index_line().replace("long_entry.md", "gone.md")
+        mem = _build(tmp_path, index=(
+            "# Memory index\n"
+            f"{broken}\n"
+            "- [user_role.md](user_role.md) — 短行\n"
+            "- [feedback_a.md](feedback_a.md) — 短行\n"
+        ))
+        plans = _mod.plan_index_fixes(mem)
+        assert len(plans) == 1
+        assert "目标文件不存在" in plans[0].skipped
+        index_before = (mem / "MEMORY.md").read_text(encoding="utf-8")
+        # 行宽 + 死链两个 lint error 仍在 → exit 1；重点是索引一个字节都没动
+        assert _mod.main([
+            "--path", str(mem), "--repo-root", str(tmp_path), "--fix", "--apply",
+        ]) == 1
+        assert "[SKIP] MEMORY.md:2: 目标文件不存在" in capsys.readouterr().out
+        assert (mem / "MEMORY.md").read_text(encoding="utf-8") == index_before
+
+    def test_skips_line_without_link(self, tmp_path):
+        mem = _build(tmp_path, index=(
+            "# Memory index\n"
+            "- [user_role.md](user_role.md) — 短行\n"
+            "- [feedback_a.md](feedback_a.md) — 短行\n"
+            f"- 一条没有链接的散行{'x' * 200}\n"
+        ))
+        plans = _mod.plan_index_fixes(mem)
+        assert len(plans) == 1
+        assert "不是 `- [标题](file.md) — hook` 形态" in plans[0].skipped
+
+    def test_apply_without_fix_is_usage_error(self, tmp_path):
+        mem = _build(tmp_path)
+        with pytest.raises(SystemExit) as exc:
+            _mod.main(["--path", str(mem), "--repo-root", str(tmp_path), "--apply"])
+        assert exc.value.code == 2
+
+
+class TestCompressIndexLine:
+    def test_prefers_clause_boundary(self):
+        out, why = _mod.compress_index_line("- [t](a.md) — 第一句；第二句；第三句", width=30)
+        assert why == ""
+        assert out == "- [t](a.md) — 第一句…"
+        assert len(out) <= 30
+
+    def test_hard_truncates_without_separator(self):
+        out, why = _mod.compress_index_line("- [t](a.md) — " + "字" * 100, width=30)
+        assert why == ""
+        assert len(out) == 30
+        assert out.endswith("…")
+
+    def test_rejects_non_index_line(self):
+        out, why = _mod.compress_index_line("随便一行没有链接的文本", width=30)
+        assert out == ""
+        assert why
+

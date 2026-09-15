@@ -544,6 +544,75 @@ class TestHostKeyReplaceConsent:
         assert "SHA256:" in str(details.get("change", ""))
 
 
+class TestKnownHostsPathValidation:
+    """code-scanning #78：known_hosts 落点在入库前收敛为绝对路径或 ``~/`` 前缀。
+
+    该值最终是控制面的 mkdir/touch/重写目标（换钥）与 SSH 读取目标，因此相对
+    路径、``..`` 段与他人 home（``~user/``）必须在 API 边界就拒绝，而不是等到
+    换钥阶段静默失败。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _keyscan_returns_nothing(self, monkeypatch):
+        """换钥扫描与本契约无关：给一个「扫不到键」的假 ssh-keyscan，避免真外连。"""
+        from types import SimpleNamespace
+
+        from backend.core import ssh_security
+
+        monkeypatch.setattr(
+            ssh_security.subprocess, "run",
+            lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr=""),
+        )
+
+    def test_create_accepts_and_normalizes_absolute_path(
+        self, client, admin_headers, db_session,
+    ):
+        from backend.models.host import Host
+
+        resp = client.post("/api/v1/hosts", json={
+            "name": "kh-ok", "ip": "10.9.9.11", "ssh_port": 22,
+            "ssh_known_hosts_path": "/etc//stp/known_hosts",
+        }, headers=admin_headers)
+        assert resp.status_code == 200, resp.text
+
+        host = db_session.query(Host).filter(Host.name == "kh-ok").one()
+        assert host.ssh_known_hosts_path == "/etc/stp/known_hosts", (
+            "入库值必须是归一化后的实际落点，而非提交原文"
+        )
+
+    def test_create_rejects_relative_path(self, client, admin_headers):
+        resp = client.post("/api/v1/hosts", json={
+            "name": "kh-relative", "ip": "10.9.9.12", "ssh_port": 22,
+            "ssh_known_hosts_path": "etc/stp/known_hosts",
+        }, headers=admin_headers)
+        assert resp.status_code == 422, resp.text
+        assert "known_hosts path must be absolute" in resp.text
+
+    def test_update_rejects_parent_traversal(
+        self, client, admin_headers, db_session,
+    ):
+        from backend.models.host import Host
+
+        created = client.post(
+            "/api/v1/hosts",
+            json={"name": "kh-traverse", "ip": "10.9.9.13", "ssh_port": 22},
+            headers=admin_headers,
+        )
+        assert created.status_code == 200, created.text
+        host_id = created.json()["id"]
+
+        resp = client.put(
+            f"/api/v1/hosts/{host_id}",
+            json={"ssh_known_hosts_path": "/etc/stp/../../tmp/kh"},
+            headers=admin_headers,
+        )
+        assert resp.status_code == 422, resp.text
+        assert "must not contain '..'" in resp.text
+        assert db_session.get(Host, host_id).ssh_known_hosts_path is None, (
+            "被拒的请求不得留下部分写入"
+        )
+
+
 class TestHostHardDeleteGuards:
     """#937/#796: 有历史依赖的主机硬删除返回 409（不裸 500/不静默清空）。"""
 

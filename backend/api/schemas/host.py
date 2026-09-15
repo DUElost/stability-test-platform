@@ -4,6 +4,23 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.api.schemas.base import ORMBaseModel
+from backend.core.ssh_security import (
+    SshSecurityConfigError,
+    normalize_known_hosts_path,
+)
+
+
+def _clean_known_hosts_path(value: Optional[str]) -> Optional[str]:
+    """code-scanning #78：known_hosts 落点在入库前收敛，非法值直接 422。
+
+    DB 中该值最终是控制面的 ``mkdir``/``touch``/重写目标（换钥）与 SSH 读取目标，
+    等到换钥阶段才失败会把配置错误降级成静默告警。规则不复制——复用
+    ``backend.core.ssh_security.normalize_known_hosts_path``。
+    """
+    try:
+        return normalize_known_hosts_path(value or "") or None
+    except SshSecurityConfigError as exc:
+        raise ValueError(str(exc)) from None
 
 
 class HostCreate(BaseModel):
@@ -18,6 +35,11 @@ class HostCreate(BaseModel):
     # #908：known_hosts 已有不同主机密钥时，默认拒绝静默替换；
     # 管理员显式置 true 才换钥（审计记录新旧指纹）
     replace_host_key: bool = False
+
+    @field_validator("ssh_known_hosts_path")
+    @classmethod
+    def _validate_known_hosts_path(cls, value: Optional[str]) -> Optional[str]:
+        return _clean_known_hosts_path(value)
 
 
 class HostUpdate(BaseModel):
@@ -37,6 +59,11 @@ class HostUpdate(BaseModel):
     ssh_known_hosts_path: Optional[str] = None
     # #908：同 HostCreate.replace_host_key
     replace_host_key: bool = False
+
+    @field_validator("ssh_known_hosts_path")
+    @classmethod
+    def _validate_known_hosts_path(cls, value: Optional[str]) -> Optional[str]:
+        return _clean_known_hosts_path(value)
 
 
 class HostWatcherAdminStatePatch(BaseModel):

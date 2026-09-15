@@ -109,12 +109,39 @@ def get_ssh_log_roots() -> tuple[str, ...]:
     return roots
 
 
+def normalize_known_hosts_path(raw: str) -> str:
+    """Validate a configured known_hosts target before it touches the filesystem.
+
+    code-scanning #78：该值可来自管理员提交的 ``ssh_known_hosts_path`` 或
+    ``STP_SSH_KNOWN_HOSTS``，而消费方会对它 ``mkdir``/``touch``/重写
+    （``trust_host_key``）与读取（``create_ssh_client``）——落点必须收敛为绝对路径
+    或 ``~/`` 前缀，且不得含 ``..`` 段（守卫形状同 ``normalize_remote_log_path``）。
+    空串表示「未配置」，由调用方回落默认值。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    if any(ch in text for ch in ("\x00", "\n", "\r")):
+        raise SshSecurityConfigError(
+            f"known_hosts path must not contain control characters: {text!r}"
+        )
+    if not (text.startswith("/") or text.startswith("~/")):
+        raise SshSecurityConfigError(
+            f"known_hosts path must be absolute or start with '~/' : {text}"
+        )
+    if ".." in PurePosixPath(text).parts:
+        raise SshSecurityConfigError(f"known_hosts path must not contain '..': {text}")
+    return posixpath.normpath(text)
+
+
 def _resolve_known_hosts_path(explicit: str = "") -> Path:
     """Resolve the known_hosts file to use for host-key trust writes.
 
     Order: explicit arg > STP_SSH_KNOWN_HOSTS env > ~/.ssh/known_hosts.
     """
-    raw = (explicit or os.getenv("STP_SSH_KNOWN_HOSTS", "") or "").strip()
+    raw = normalize_known_hosts_path(
+        (explicit or os.getenv("STP_SSH_KNOWN_HOSTS", "") or "").strip()
+    )
     if raw:
         return Path(raw).expanduser()
     return Path.home() / ".ssh" / "known_hosts"
@@ -302,7 +329,9 @@ def create_ssh_client(
     client = paramiko.SSHClient()
     client.load_system_host_keys()
     if known_hosts_path:
-        resolved_known_hosts = Path(known_hosts_path).expanduser()
+        resolved_known_hosts = Path(
+            normalize_known_hosts_path(known_hosts_path)
+        ).expanduser()
         if not resolved_known_hosts.is_file():
             raise FileNotFoundError(
                 f"known_hosts file not found: {resolved_known_hosts}"

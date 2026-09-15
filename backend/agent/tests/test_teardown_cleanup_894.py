@@ -276,3 +276,105 @@ def test_gf_cleanup_opt_out(monkeypatch, tmp_path):
 
     assert not [c for c in seen if c.startswith("rm -f")]
     assert "cleanup_verified" not in out["metrics"]
+
+
+# ── gpu_finish v1.0.5（#2146：清理验证「探测不可用」态）───────────────────────
+
+
+def _load_gf_v105():
+    return _load("gpu_finish_v105", "gpu_finish/v1.0.5/gpu_finish.py", "_lib")
+
+
+def _fake_adb(*, rm_rc=0, probe_rc=0, probe_out="CLEAN"):
+    """伪造 `_lib.adb(*args) -> (rc, stdout, stderr)`，按命令分流。"""
+    calls: list[str] = []
+
+    def _adb(*args, timeout=60, **_kw):
+        cmd = args[1] if len(args) > 1 else ""
+        calls.append(cmd)
+        if cmd.startswith("rm -f"):
+            return (rm_rc, "", "" if rm_rc == 0 else "rm: permission denied")
+        return (probe_rc, probe_out, "" if probe_rc == 0 else "adb: device offline")
+
+    return _adb, calls
+
+
+def test_gf_v105_cleanup_ok(monkeypatch):
+    mod = _load_gf_v105()
+    fake, calls = _fake_adb()
+    monkeypatch.setattr(mod, "adb", fake)
+
+    mod._cleanup_device_script()      # 不抛即成功
+
+    assert len(calls) == 2 and calls[0].startswith("rm -f") and "[ -e" in calls[1]
+
+
+def test_gf_v105_rm_rc_failure_raises(monkeypatch):
+    mod = _load_gf_v105()
+    fake, _ = _fake_adb(rm_rc=1)
+    monkeypatch.setattr(mod, "adb", fake)
+
+    with pytest.raises(RuntimeError) as ei:
+        mod._cleanup_device_script()
+
+    assert "清理命令失败" in str(ei.value)
+
+
+def test_gf_v105_probe_rc_failure_raises(monkeypatch):
+    """探测不可用（设备离线/超时）必须转红——v1.0.4 的静默假绿回归点。"""
+    mod = _load_gf_v105()
+    fake, _ = _fake_adb(probe_rc=1)
+    monkeypatch.setattr(mod, "adb", fake)
+
+    with pytest.raises(RuntimeError) as ei:
+        mod._cleanup_device_script()
+
+    assert "清理验证不可用" in str(ei.value)
+
+
+def test_gf_v105_empty_probe_output_raises(monkeypatch):
+    """rc=0 但输出为空（命令未真正执行）同样不得当作「干净」。"""
+    mod = _load_gf_v105()
+    fake, _ = _fake_adb(probe_out="")
+    monkeypatch.setattr(mod, "adb", fake)
+
+    with pytest.raises(RuntimeError) as ei:
+        mod._cleanup_device_script()
+
+    assert "清理验证输出异常" in str(ei.value)
+
+
+def test_gf_v105_residual_raises(monkeypatch):
+    mod = _load_gf_v105()
+    fake, _ = _fake_adb(probe_out="REMAINS")
+    monkeypatch.setattr(mod, "adb", fake)
+
+    with pytest.raises(RuntimeError) as ei:
+        mod._cleanup_device_script()
+
+    assert "仍存在" in str(ei.value)
+
+
+def test_gf_v105_run_marks_verified_and_writes_detail(monkeypatch, tmp_path):
+    """正常路径仍走完整 _run（结果落盘 + cleanup_verified）。"""
+    mod = _load_gf_v105()
+    fake, _ = _fake_adb()
+    monkeypatch.setattr(mod, "adb", fake)
+    monkeypatch.setattr(mod, "device_serial", lambda: "GPU-S9")
+    monkeypatch.setattr(mod, "stop_stress", lambda: None)
+    monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
+
+    def fake_pull():
+        local = tmp_path / "test_log.txt"
+        local.write_text(
+            "GPU_RUN_START test_id=001 rounds=1\nGPU_ROUND 1 rc=0\nGPU_RUN_END rc=0\n",
+            encoding="utf-8",
+        )
+        return local
+
+    monkeypatch.setattr(mod, "_pull_result_log", fake_pull)
+    monkeypatch.setattr(mod, "results_dir", lambda project: tmp_path / "r")
+    out = mod._run({})
+
+    assert out["metrics"]["cleanup_verified"] is True
+    assert out["metrics"]["final_status"] == "COMPLETED"
