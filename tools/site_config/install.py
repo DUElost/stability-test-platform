@@ -14,11 +14,12 @@ import json
 import os
 import stat
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Callable
 
 from .agents import stage_s5_agents
+from .inventory import InventoryError, materialize_bindings, merge_agents
 from .manifest import load_release_manifest
 from .ops import LocalOps, Ops
 from .stages import (
@@ -204,6 +205,7 @@ def run_install(
     confirm_target: str,
     dry_run: bool = False,
     through_agents: bool = False,
+    agents_inventory: str | Path | None = None,
     ops: Ops | None = None,
     db_probe: DatabaseProbe | None = None,
     system_root: Path | None = None,
@@ -223,24 +225,45 @@ def run_install(
         os.close(lock_fd)
         return _report([failure("state_locked", role="site", check_id="install.lock")], [])
 
+    materialized: list[str] = []
     try:
-        return _run_locked(
+        report = _run_locked(
             config_path, bindings_dir, state_dir, confirm_site, confirm_target, dry_run, ops, probe, checks,
-            system_root, through_agents,
+            system_root, through_agents, agents_inventory, materialized,
         )
     finally:
         os.close(lock_fd)
+    if materialized:
+        report["materialized_bindings"] = materialized
+    return report
 
 
 def _run_locked(
     config_path, bindings_dir, state_dir, confirm_site, confirm_target, dry_run, ops, probe, checks, system_root,
-    through_agents=False,
+    through_agents=False, agents_inventory=None, materialized=None,
 ) -> dict:
+    materialized = materialized if materialized is not None else []
     config_path = Path(config_path)
     try:
         config = load_site_config(config_path)
     except ConfigValidationError as error:
         return _report(list(error.checks), [])
+    if agents_inventory is not None:
+        try:
+            config = merge_agents(config, agents_inventory)
+            # inventory 里的共享凭据落到绑定目录，之后 S5 才能解析 ssh_credential_ref
+            materialized.extend(materialize_bindings(agents_inventory, bindings_dir, dry_run=dry_run))
+        except InventoryError as error:
+            checks.append(replace(
+                failure(error.code, location="$.agents", role="agent", check_id="install.inventory"),
+                # detail 只含主机名/键名/ref（inventory.py 保证不含值），逐条给出才能修
+                message=f"Inventory not accepted: {error.detail}" if error.detail else "Inventory not accepted.",
+            ))
+            return _report(checks, [])
+        except ConfigValidationError as error:
+            # inventory 合并后仍受同一套站点约束（如 install_root 必须一致）
+            checks.extend(error.checks)
+            return _report(checks, [])
 
     ctx = InstallContext(
         config=config,

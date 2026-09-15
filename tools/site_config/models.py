@@ -191,8 +191,9 @@ class Network(ConfigModel):
 class ControlPlane(ConfigModel):
     target: Target
     os: LinuxDistribution
-    ssh_user: Username
-    ssh_credential_ref: Name
+    # 本地模式（安装器在控制面本机执行）不需要控制面 SSH；仅远端编排时才要求。
+    ssh_user: Username | None = None
+    ssh_credential_ref: Name | None = None
     deploy_root: DedicatedPath
     deploy_user: Username
     public_url: Origin
@@ -219,19 +220,29 @@ class ControlPlane(ConfigModel):
 
 
 class Storage(ConfigModel):
-    provisioning: Literal["managed_linux", "existing_share"]
-    protocol: Literal["nfs", "cifs"]
-    target: Target
+    # local_mount：本机磁盘的子树（如 bind 到声明路径），没有远端身份与管理面。
+    provisioning: Literal["managed_linux", "existing_share", "local_mount"]
+    protocol: Literal["nfs", "cifs"] | None = None
+    target: Target | None = None
     os: LinuxDistribution | None = None
     ssh_user: Username | None = None
     ssh_credential_ref: Name | None = None
-    share: str
+    share: str | None = None
     credential_ref: Name | None = None
     mount_path: DedicatedPath
 
     @model_validator(mode="after")
     def storage_consistency(self) -> Self:
         management_fields = (self.os, self.ssh_user, self.ssh_credential_ref)
+        if self.provisioning == "local_mount":
+            # 本机路径不是「分享」：写进 target/protocol/share 只会让 site.yaml 说谎
+            if any(value is not None for value in (
+                *management_fields, self.target, self.protocol, self.share, self.credential_ref,
+            )):
+                raise invalid("local_mount_fields_conflict")
+            return self
+        if self.target is None or self.protocol is None or self.share is None:
+            raise invalid("storage_share_required")
         if self.provisioning == "managed_linux" and any(value is None for value in management_fields):
             raise invalid("storage_management_required")
         if self.provisioning == "existing_share" and any(value is not None for value in management_fields):
@@ -304,7 +315,8 @@ class SiteConfig(ConfigModel):
     network: Network
     control_plane: ControlPlane
     storage: Storage
-    agents: Annotated[list[Agent], Field(min_length=1, max_length=1000)]
+    # 允许为空：先把控制面装好、Agent 随后按 inventory 接入（S5 跳过并提示）。
+    agents: Annotated[list[Agent], Field(max_length=1000)]
     dependencies: Dependencies
     security: Security
     release: Release
@@ -316,11 +328,18 @@ class SiteConfig(ConfigModel):
             raise invalid("duplicate_agent_key")
         if len({agent.target for agent in self.agents}) != len(self.agents):
             raise invalid("duplicate_agent_target")
+        # STP_SCRIPT_RUNTIME_ROOT 是站点级单值（S2 渲染），异构安装根会静默取错路径
+        if len({agent.install_root for agent in self.agents}) > 1:
+            raise invalid("agent_install_root_mismatch")
         roots = [self.control_plane.deploy_root]
         roots.extend(root for agent in self.agents for root in (agent.install_root, agent.local_aee_root))
         if any(paths_overlap(root, self.storage.mount_path) for root in roots):
             raise invalid("shared_path_overlap")
-        targets = [self.control_plane.target, self.storage.target, *(agent.target for agent in self.agents)]
+        # 声明的 target 必须互不相同：被远端管理的角色同机=双重管理。
+        # local_mount 没有 target（本机子树），因此天然不占槽位。
+        targets = [self.control_plane.target, *(agent.target for agent in self.agents)]
+        if self.storage.target is not None:
+            targets.append(self.storage.target)
         if len(set(targets)) != len(targets):
             raise invalid("role_target_collision")
         references = [
