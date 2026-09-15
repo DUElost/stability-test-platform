@@ -21,6 +21,8 @@ class CommandResult:
     argv: tuple[str, ...]
     returncode: int
     stdout: str = ""
+    # SSH/命令的错误输出：探针据此区分「主机键未核对」「凭据被拒」「不可达」等
+    stderr: str = ""
 
 
 class Ops(Protocol):
@@ -81,7 +83,7 @@ class LocalOps:
             timeout=1800,
             check=False,
         )
-        return CommandResult(tuple(argv), process.returncode, process.stdout)
+        return CommandResult(tuple(argv), process.returncode, process.stdout, process.stderr)
 
     def hostname(self) -> str:
         return socket.gethostname()

@@ -29,6 +29,8 @@ from typing import Any, Callable, Protocol
 
 from .bindings import BindingError, load_binding
 from .manifest import load_release_manifest
+from dataclasses import replace
+
 from .ops import Ops
 from .stages import InstallContext
 from .validation import ConfigValidationError, Check, blocked, failure, passed
@@ -539,13 +541,26 @@ def probe_target_sudo(
         env["SSHPASS"] = binding["PASSWORD"]
     argv += [
         f"{binding['USERNAME']}@{agent.target}",
-        "sudo -n true && echo STP_SUDO_OK || echo STP_SUDO_FAIL",
+        # 远端 2>&1：sudo 的原话要能带回来（那是操作者最需要的诊断）
+        "sudo -n true 2>&1 && echo STP_SUDO_OK || echo STP_SUDO_FAIL",
     ]
     result = ops.run(argv, env=env)
     if "STP_SUDO_OK" in result.stdout:
         return True, ""
     if "STP_SUDO_FAIL" in result.stdout:
-        return False, "sudo_unavailable"
+        detail = " ".join(result.stdout.replace("STP_SUDO_FAIL", "").split())[:120]
+        return False, f"sudo_unavailable: {detail}" if detail else "sudo_unavailable"
+    # SSH 层失败：用 ssh 自己的 stderr 归类，Fix 才能对症
+    combined = f"{result.stderr or ''} {result.stdout or ''}"
+    for needle, reason in (
+        ("Host key verification failed", "host_key_unverified"),
+        ("Permission denied", "credentials_rejected"),
+        ("Connection timed out", "unreachable"),
+        ("Connection refused", "unreachable"),
+        ("No route to host", "unreachable"),
+    ):
+        if needle in combined:
+            return False, f"ssh_{reason}"
     return False, "ssh_probe_failed"
 
 
@@ -748,8 +763,11 @@ def stage_s5_agents(
     for index, (agent, values) in enumerate(zip(config.agents, bindings, strict=True)):
         available, reason = prober(ctx.ops, agent, values)
         if available is False:
-            code = "target_sudo_unavailable" if reason == "sudo_unavailable" else "ssh_probe_failed"
-            checks.append(_fail("install.s5.sudo", code, location=f"$.agents[{index}]"))
+            code = "target_sudo_unavailable" if reason.startswith("sudo_unavailable") else "ssh_probe_failed"
+            checks.append(replace(
+                _fail("install.s5.sudo", code, location=f"$.agents[{index}]"),
+                message=f"Target sudo precheck failed for {agent.target}: {reason}",
+            ))
             return checks
         if available is None:
             probe_not_run = True

@@ -425,6 +425,8 @@ class TestTargetSudoProbe:
         assert "usermod -aG sudo" in check.remediation
         assert "visudo -cf" in check.remediation
         assert "NOPASSWD: ALL" in check.remediation
+        # message 要带原因，操作者才知道是哪一类问题
+        assert "sudo_unavailable" in check.message
 
     def test_ssh_level_failure_points_at_host_key_and_network(self, site):
         checks = _run(
@@ -519,13 +521,45 @@ class TestProbeTargetSudo:
         assert "-i /root/.ssh/id_ed25519" in joined
         assert "sshpass" not in joined
 
-    def test_unparsable_output_is_treated_as_ssh_failure(self):
+    def test_ssh_failures_are_classified_for_the_right_fix(self):
         from tools.site_config.agents import probe_target_sudo
 
-        ops = self.Ops("Host key verification failed.\n")
-        assert probe_target_sudo(
+        cases = {
+            "Host key verification failed.\n": "ssh_host_key_unverified",
+            "Permission denied (publickey,password).\n": "ssh_credentials_rejected",
+            "ssh: connect to host 10.99.0.31 port 22: Connection timed out\n": "ssh_unreachable",
+            "something else\n": "ssh_probe_failed",
+        }
+        for stdout, expected in cases.items():
+            assert probe_target_sudo(
+                self.Ops(stdout), self._agent(), {"USERNAME": "ops", "PASSWORD": "x"},
+            ) == (False, expected), stdout
+
+    def test_sudo_refusal_carries_the_targets_own_words(self):
+        from tools.site_config.agents import probe_target_sudo
+
+        ops = self.Ops("sudo: a password is required\nSTP_SUDO_FAIL\n")
+        available, reason = probe_target_sudo(
             ops, self._agent(), {"USERNAME": "ops", "PASSWORD": "x"},
-        ) == (False, "ssh_probe_failed")
+        )
+        assert available is False
+        assert reason.startswith("sudo_unavailable")
+        assert "a password is required" in reason
+
+    def test_stderr_is_used_when_stdout_is_empty(self):
+        """ssh 把错误写 stderr：只看 stdout 会把主机键问题误报成探针失败。"""
+        from tools.site_config.agents import probe_target_sudo
+
+        class Ops(self.Ops):
+            def run(self, argv, **kwargs):
+                from tools.site_config.ops import CommandResult
+
+                argv = tuple(str(item) for item in argv)
+                return CommandResult(argv, 255, "", "Host key verification failed.\n")
+
+        assert probe_target_sudo(
+            Ops(""), self._agent(), {"USERNAME": "ops", "PASSWORD": "x"},
+        ) == (False, "ssh_host_key_unverified")
 
 
 class TestHappyPath:
