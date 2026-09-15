@@ -709,6 +709,22 @@ def host_hot_update(
     # 通道留痕（converged），deployed_at 不刷新（D2 语义修订）。
     plan = plan_convergence(host, force=force)
     if plan.converged and plan.no_op_result is not None:
+        # #2057：`VERSION` 不进内容身份（ADR-0040 D1）⇒「digest 相等」**不等于**
+        # 「主机上报的 code revision 与期望一致」。含 backend/agent/** 之外的提交都会
+        # 让 expected revision 前移，于是主机侧长期显示 drift，而本通道判 no-op
+        # ——此前调用方看不到原因。这里把事实显式回传（不改变 no-op 语义：清 drift
+        # 需要真正下发，属 ADR-0040 的追补裁决面，见 Agent Note 的 Revisit）。
+        reported_code = str(
+            (getattr(host, "extra", None) or {}).get("agent_code_revision") or ""
+        ).strip()
+        expected_code = get_agent_code_version()
+        code_revision_stale = bool(expected_code) and reported_code != expected_code
+        if code_revision_stale:
+            logger.warning(
+                "hot_update_noop_code_revision_stale host=%s reported=%r expected=%r "
+                "— digest 已收敛，但 VERSION 与仓库 HEAD 不一致（ADR-0040 D1 排除 VERSION）",
+                host_id, reported_code or None, expected_code,
+            )
         finalize_hot_update_outcome(
             db,
             host,
@@ -727,6 +743,7 @@ def host_hot_update(
             "artifact_digest": plan.code_digest,
             "resources_digest": plan.resources_digest,
             "code_version": get_agent_code_version(),
+            "code_revision_stale": code_revision_stale,
             "abort_summary": None,
         }
 

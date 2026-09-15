@@ -29,6 +29,7 @@ from backend.services.host_updater import (
     _AGENT_SOURCE_DIR,
     _resolve_ssh_creds,
     execute_hot_update,
+    get_agent_code_version,
 )
 
 from . import _REMOTE_AGENT_PREFIX
@@ -114,6 +115,7 @@ def sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional[
     try:
         with maintenance_window(db, host_id, holder):
             result = execute_hot_update(
+                code_version=get_agent_code_version(),
                 host_ip=host.ip,
                 ssh_port=host.ssh_port or 22,
                 ssh_user=creds.user,
@@ -132,8 +134,12 @@ def sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional[
 
     # ADR-0040 D5：结果审计 + deployed_at 语义 + 指标与 UI/API、--direct 统一
     #（此前 precheck 路径「跑了但什么都没记」，§1.2 事实 4 的分叉在此闭合）。
+    # #2057：precheck 是**真正修复主机**的通道——必须与 UI/API、--direct 同口径把
+    # code_version 带进审计与 deployed_at 记账（空串会让 record_agent_code_deployed
+    # 提前返回，主机永远停在上一次部署的 revision 上）。
     finalize_hot_update_outcome(
         db, host, result, entry="precheck_sync",
+        code_version=get_agent_code_version(),
     )
 
     if not result.get("ok"):
