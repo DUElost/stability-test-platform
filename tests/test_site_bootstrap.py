@@ -177,6 +177,8 @@ def test_init_derives_defaults_without_asking(tmp_path):
     assert data["control_plane"]["public_url"].startswith("http://192.0.2.1")
     assert data["storage"]["mount_path"] == "/srv/stp-aee"
     assert data["release"]["bundle"] == "/srv/stp-bundle"
+    # #2197：监控栈默认装——装了存储却没有监控栈的站点，/storage 页永远是空的
+    assert data["monitoring"] == {"enabled": True, "prometheus_port": 9091}
     assert report["provenance"]["site_id"] == "default"
 
 

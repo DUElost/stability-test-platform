@@ -393,6 +393,8 @@ def init_site(
             "share": None,
             "credential_ref": None,
             "mount_path": mount_path,
+            # 站点自建的子树默认导出给本站 Agent：STP_AEE_NFS_ROOT 才有实际落点
+            "export_to_agents": True,
         },
         "agents": [],
         "dependencies": {
@@ -412,6 +414,12 @@ def init_site(
         "navigation": {
             "contact": decide("站点负责人 (contact)", f"{role}-ops", "contact"),
             "documentation_url": decide("运维文档 URL", "https://docs.example.invalid/site-ops", "documentation_url"),
+        },
+        "monitoring": {
+            # 站点本地监控栈：/storage 页的数据源（本地 Prometheus + node-exporter）。
+            # 默认装——装了存储却没装监控栈的站点，页面永远是空的。
+            "enabled": True,
+            "prometheus_port": 9091,
         },
     }
     header = _header(provenance, facts, disk_note)

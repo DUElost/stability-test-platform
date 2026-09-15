@@ -1,0 +1,8 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+#
+# Debian/Ubuntu 的 prometheus.service 通过 EnvironmentFile 读取本文件的 $ARGS
+# （发行版 unit 里是 ExecStart=/usr/bin/prometheus $ARGS）。安装器会在写本文件
+# 之前核对 unit 确实读 $ARGS，读不到即 FAIL——否则启动参数被静默忽略，
+# Prometheus 会退回发行版默认（:9090 + /etc/prometheus/prometheus.yml），
+# 页面拿不到数据而安装报告却是绿的。
+ARGS="--config.file=/etc/stp/prometheus/prometheus.yml --web.listen-address=127.0.0.1:<prometheus-port> --storage.tsdb.path=/var/lib/prometheus --storage.tsdb.retention.time=<prometheus-retention>"

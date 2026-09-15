@@ -120,6 +120,8 @@ def _bundle(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     (bundle / "frontend/dist-prod/index.html").write_text("<html></html>\n", encoding="utf-8")
     (bundle / "tools").mkdir()
     shutil.copytree(REPO_ROOT / "deploy/control-plane", bundle / "deploy/control-plane")
+    # 监控栈模板与告警规则同目录（发布物含整个 deploy/）
+    shutil.copytree(REPO_ROOT / "deploy/prometheus", bundle / "deploy/prometheus")
     extra = {"stp_schemas/pipeline_schema.json": str(bundle / "backend/schemas/pipeline_schema.json")}
     digests = {
         "agent-code": digest_entries(collect_artifact_entries(str(bundle / "backend/agent"), extra, kind="code")),
@@ -704,3 +706,290 @@ def test_missing_secret_bearing_env_key_still_conflicts(tmp_path, monkeypatch):
     second = invoke(tmp_path)
     assert second["status"] == "FAIL"
     assert "install_conflict" in codes(second)
+
+
+# ── #2197 站点本地监控栈（/storage 页的数据源）────────────────────────────
+
+
+DISTRO_UNITS = {
+    "prometheus.service": "[Unit]\nDescription=Prometheus\n\n[Service]\nEnvironmentFile=-/etc/default/prometheus\nExecStart=/usr/bin/prometheus $ARGS\n",
+    "prometheus-node-exporter.service": "[Unit]\nDescription=Node Exporter\n\n[Service]\nEnvironmentFile=-/etc/default/prometheus-node-exporter\nExecStart=/usr/bin/prometheus-node-exporter $ARGS\n",
+}
+
+
+def _monitoring_site(tmp_path: Path, *, enabled: bool = True, port: int = 9091) -> Path:
+    path = tmp_path / "site-monitoring.yaml"
+    data = yaml.safe_load((tmp_path / "site.yaml").read_text(encoding="utf-8"))
+    data["monitoring"] = {"enabled": enabled, "prometheus_port": port}
+    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    return path
+
+
+def _distro_units(tmp_path: Path, units: dict[str, str] | None = None) -> None:
+    directory = tmp_path / "system/usr/lib/systemd/system"
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, text in (DISTRO_UNITS if units is None else units).items():
+        (directory / name).write_text(text, encoding="utf-8")
+
+
+def _system_file(tmp_path: Path, relative: str) -> Path:
+    return tmp_path / "system" / relative
+
+
+@pytest.fixture(autouse=True)
+def _stub_monitoring_probe(monkeypatch):
+    """S4 会探 Prometheus 的 /-/ready；单测不联网，统一 stub 为就绪。"""
+    monkeypatch.setattr(stages, "await_monitoring", lambda *a, **k: True)
+
+
+def test_monitoring_stack_is_installed_and_enabled(tmp_path, monkeypatch):
+    """包装上、配置落地、三个单元启用、/-/ready 通过——页面才有数据源。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    ops = ops_for(tmp_path)
+    ops._responses["dpkg"] = (1, "")
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), ops=ops)
+
+    assert report["status"] == "PASS", report
+    assert "monitoring_installed" in codes(report)
+    assert "monitoring_ready" in codes(report)
+    joined = [" ".join(call) for call in ops.calls]
+    assert any("apt-get install -y prometheus prometheus-node-exporter" in call for call in joined)
+    for unit in ("prometheus-node-exporter", "prometheus", "stp-mem-top.timer"):
+        assert f"systemctl enable --now {unit}" in joined, unit
+    # 页面读的两个采集面：NFS 服务端指标与宿主进程内存采样器
+    assert _system_file(tmp_path, "etc/default/prometheus-node-exporter").read_text(
+        encoding="utf-8"
+    ).find("--collector.nfsd") != -1
+    assert (_system_file(tmp_path, "var/lib/prometheus/node-exporter")).is_dir()
+    assert _system_file(tmp_path, "usr/local/sbin/stp-mem-top").stat().st_mode & 0o777 == 0o755
+
+
+def test_monitoring_config_matches_the_backend_defaults(tmp_path, monkeypatch):
+    """抓取配置必须落在后端默认查询面：job file-server + 回环 9091/9100。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path, port=9091))
+
+    assert report["status"] == "PASS", report
+    scrape = _system_file(tmp_path, "etc/stp/prometheus/prometheus.yml").read_text(encoding="utf-8")
+    assert "job_name: file-server" in scrape
+    assert "127.0.0.1:9100" in scrape
+    assert "<" not in scrape, "渲染后仍有未替换占位符"
+    args = _system_file(tmp_path, "etc/default/prometheus").read_text(encoding="utf-8")
+    assert "--web.listen-address=127.0.0.1:9091" in args
+    assert "--config.file=/etc/stp/prometheus/prometheus.yml" in args
+
+
+def test_custom_port_is_rendered(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path, port=9191))
+
+    assert report["status"] == "PASS", report
+    assert "--web.listen-address=127.0.0.1:9191" in _system_file(
+        tmp_path, "etc/default/prometheus"
+    ).read_text(encoding="utf-8")
+
+
+def test_distro_unit_without_args_support_fails_before_writing(tmp_path, monkeypatch):
+    """发行版 unit 不读 $ARGS 时不得写 /etc/default：启动参数会被静默忽略。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path, {"prometheus.service": "[Service]\nExecStart=/usr/bin/prometheus\n"})
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path))
+
+    assert report["status"] == "FAIL"
+    assert "install_monitoring" in codes(report)
+    assert not _system_file(tmp_path, "etc/default/prometheus").exists()
+
+
+def test_unready_prometheus_fails_instead_of_passing(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    monkeypatch.setattr(stages, "await_monitoring", lambda *a, **k: False)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path))
+
+    assert report["status"] == "FAIL"
+    assert "install_monitoring" in codes(report)
+
+
+def test_monitoring_disabled_touches_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    ops = ops_for(tmp_path)
+
+    report = invoke(tmp_path, ops=ops)
+
+    assert report["status"] == "PASS", report
+    assert not any("prometheus" in " ".join(call) for call in ops.calls)
+    assert not _system_file(tmp_path, "etc/default/prometheus").exists()
+    assert "install.s4.monitoring" not in {check["check_id"] for check in report["checks"]}
+
+
+def test_monitoring_dry_run_plans_without_writing(tmp_path):
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), dry_run=True)
+
+    assert "monitoring_planned" in codes(report)
+    assert not _system_file(tmp_path, "etc/default/prometheus").exists()
+
+
+# ── #2181 自建中心存储：控制面导出 ────────────────────────────────────────
+
+
+def _exporting_site(tmp_path: Path, *, agents: list[dict] | None = None, name: str = "site-export.yaml") -> Path:
+    """把合成站点改成自建导出（local_mount + export_to_agents）。"""
+    path = tmp_path / name
+    data = yaml.safe_load((tmp_path / "site.yaml").read_text(encoding="utf-8"))
+    data["storage"] = {
+        "provisioning": "local_mount",
+        "protocol": None,
+        "target": None,
+        "os": None,
+        "ssh_user": None,
+        "ssh_credential_ref": None,
+        "share": None,
+        "credential_ref": None,
+        "mount_path": data["storage"]["mount_path"],
+        "export_to_agents": True,
+    }
+    if agents is not None:
+        data["agents"] = agents
+    path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    return path
+
+
+def _exports_file(tmp_path: Path, site_id: str = "synthetic-i3") -> Path:
+    return tmp_path / "system" / "etc/exports.d" / f"stp-{site_id}.exports"
+
+
+def _agent_config(tmp_path: Path, *, target: str) -> list[dict]:
+    return [{
+        "key": "agent-i3-01",
+        "target": target,
+        "os": {"distribution": "debian", "version": "13"},
+        "ssh_user": "bootstrap",
+        "ssh_credential_ref": "agent_ssh",
+        "install_root": str(tmp_path / "opt/stp-agent"),
+        "local_aee_root": str(tmp_path / "var/stp-aee"),
+    }]
+
+
+def test_export_client_scope_follows_the_declared_agent_targets(tmp_path):
+    """客户端列表就是声明本身：IPv4 收敛到 /24，主机名只能放宽到所有客户端。"""
+    from tools.site_config.stages import render_exports
+    from tools.site_config.validation import load_site_config
+
+    prepare(tmp_path)
+    ipv4 = _exporting_site(
+        tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"), name="site-ipv4.yaml",
+    )
+    hostname = _exporting_site(
+        tmp_path, agents=_agent_config(tmp_path, target="agent-i3.synthetic.invalid"),
+        name="site-hostname.yaml",
+    )
+    empty = _exporting_site(tmp_path, agents=[], name="site-empty.yaml")
+
+    listed = render_exports(load_site_config(ipv4))
+    widened = render_exports(load_site_config(hostname))
+    deferred = render_exports(load_site_config(empty))
+
+    assert "198.51.100.0/24(rw,sync,no_subtree_check,all_squash,anonuid=1000,anongid=1000)" in listed
+    assert str(tmp_path / "mnt/share") in listed
+    assert "*(" in widened and "/24" not in widened
+    assert deferred == "", "没有 Agent 就没有客户端，不能凭空导出给所有人"
+
+
+def test_install_publishes_the_export_to_the_declared_agents(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    config_path = _exporting_site(tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"))
+    ops = ops_for(tmp_path)
+
+    report = invoke(tmp_path, config_path=config_path, ops=ops)
+
+    assert report["status"] == "PASS", report
+    exports = _exports_file(tmp_path)
+    assert exports.read_text(encoding="utf-8").count("198.51.100.0/24(") == 1
+    assert stat.S_IMODE(exports.stat().st_mode) == 0o644
+    joined = [" ".join(call) for call in ops.calls]
+    assert "exportfs -ra" in joined, "写了 exports 文件却没有重载导出"
+    assert "systemctl enable --now nfs-server" in joined
+    assert "chown root:1000 " + str(tmp_path / "mnt/share") in joined
+    assert "chmod 0775 " + str(tmp_path / "mnt/share") in joined
+
+
+def test_missing_nfs_server_package_is_installed(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    config_path = _exporting_site(tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"))
+    ops = ops_for(tmp_path)
+    ops._responses["dpkg"] = (1, "")
+
+    report = invoke(tmp_path, config_path=config_path, ops=ops)
+
+    assert report["status"] == "PASS", report
+    assert any("apt-get install -y nfs-kernel-server" in " ".join(call) for call in ops.calls)
+
+
+def test_foreign_share_is_never_exported_by_this_site(tmp_path, monkeypatch):
+    """外部分享站点不由本站导出：一个字节都不写，也不碰 NFS 服务端。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    ops = ops_for(tmp_path)
+
+    report = invoke(tmp_path, ops=ops)
+
+    assert report["status"] == "PASS", report
+    assert not _exports_file(tmp_path).exists()
+    assert not any("exportfs" in call for call in (" ".join(c) for c in ops.calls))
+    assert "install.s2.export" not in {check["check_id"] for check in report["checks"]}
+
+
+def test_failed_export_reload_fails_the_stage(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    config_path = _exporting_site(tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"))
+    ops = ops_for(tmp_path)
+    ops._responses["exportfs"] = (1, "boom")
+
+    report = invoke(tmp_path, config_path=config_path, ops=ops)
+
+    assert report["status"] == "FAIL"
+    assert "install_export" in codes(report)
+
+
+def test_first_install_without_agents_defers_the_export(tmp_path, monkeypatch):
+    """先装控制面、Agent 随后接入：如实标 export_deferred，不假装已经导出。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    config_path = _exporting_site(tmp_path, agents=[])
+
+    report = invoke(tmp_path, config_path=config_path)
+
+    assert report["status"] == "PASS", report
+    assert "export_deferred" in codes(report)
+    assert _exports_file(tmp_path).read_text(encoding="utf-8") == ""
+
+
+def test_dry_run_plans_the_export_without_writing(tmp_path):
+    """dry-run 不得声称已发布：报告写的是计划，磁盘上不能有文件。"""
+    prepare(tmp_path)
+    config_path = _exporting_site(tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"))
+
+    report = invoke(tmp_path, config_path=config_path, dry_run=True)
+
+    assert "export_planned" in codes(report)
+    assert not _exports_file(tmp_path).exists()

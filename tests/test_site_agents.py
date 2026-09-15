@@ -861,6 +861,70 @@ class TestFailClosed:
         assert [call for call in api.install_calls] == []
 
 
+class TestStorageAssertion:
+    """#2181：自建中心存储的站点必须断言 Agent 真的挂上了同一个路径。"""
+
+    @staticmethod
+    def _exporting(site):
+        """把合成站点改成自建导出（local_mount + export_to_agents）。"""
+        data = yaml.safe_load(site.config_path.read_text(encoding="utf-8"))
+        data["storage"] = {
+            "provisioning": "local_mount",
+            "protocol": None,
+            "target": None,
+            "os": None,
+            "ssh_user": None,
+            "ssh_credential_ref": None,
+            "share": None,
+            "credential_ref": None,
+            "mount_path": data["storage"]["mount_path"],
+            "export_to_agents": True,
+        }
+        site.config_path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+        return data["storage"]["mount_path"]
+
+    def test_reported_mount_passes(self, site):
+        mount_path = self._exporting(site)
+        api = FakeApi(host_overrides={"detail": {"mount_status": {mount_path: {"ok": True}}}})
+
+        checks = _run(site(), api)
+
+        assert _status(checks, "install.s5.storage") == "PASS"
+        assert "shared_storage_mounted" in _codes(checks)
+        assert _codes(checks).count("FAIL") == 0, [asdict(c) for c in checks]
+
+    def test_unreported_mount_fails_closed_and_stops(self, site):
+        """装了但没挂上：AEE 会静默落本地，中心存储永远是空的——必须 FAIL 且不再继续。"""
+        self._exporting(site)
+        api = FakeApi(devices=[{"host_id": _host_id("agent-01.synthetic.invalid"), "serial": "S1"}])
+
+        checks = _run(site(), api)
+
+        assert _status(checks, "install.s5.storage") == "FAIL"
+        assert "shared_storage_not_mounted" in _codes(checks)
+        # 失败即停：不再断言设备发现
+        assert all(check.check_id != "install.s5.devices" for check in checks)
+
+    def test_reported_mount_at_another_path_is_not_accepted(self, site):
+        """上报了别的路径（例如本机 SSD 落点）不算共享存储已挂。"""
+        self._exporting(site)
+        api = FakeApi(host_overrides={"detail": {"mount_status": {"/mnt/hdd": {"ok": True}}}})
+
+        checks = _run(site(), api)
+
+        assert "shared_storage_not_mounted" in _codes(checks)
+        check = next(c for c in checks if c.check_id == "install.s5.storage")
+        assert "/mnt/hdd" in check.message, "失败消息要列出实际上报的路径"
+
+    def test_site_without_export_is_blocked_not_failed(self, site):
+        """外部分享站点不由本站导出：如实 BLOCKED，不假装验过也不误报失败。"""
+        checks = _run(site(), FakeApi())
+
+        assert _status(checks, "install.s5.storage") == "BLOCKED"
+        assert "export_not_enabled" in _codes(checks)
+        assert _codes(checks).count("FAIL") == 0
+
+
 class TestScopes:
     def test_devices_absent_is_blocked_not_failed(self, site):
         checks = _run(site(), FakeApi())
@@ -1213,6 +1277,64 @@ class TestVerifyS6:
 
         assert "api_unreachable" in _report_codes(report)
 
+    def test_authorized_probe_writes_reads_and_cleans_up(self, site, monkeypatch):
+        """显式授权的探针：写→读回→只删自己那个文件，其余一概不动。"""
+        monkeypatch.setattr(os.path, "ismount", lambda path: True)
+        share = Path(site().config.storage.mount_path)
+        share.mkdir(parents=True)
+        (share / "keep-me.txt").write_text("existing\n", encoding="utf-8")
+
+        report = _run_verify(
+            site, FakeApi(hosts=[_live_host()], devices=[_verified_device()]),
+            storage_probe_subdir="probe",
+        )
+
+        assert _report_status(report, "verify.s6.storage") == "PASS"
+        assert "storage_probe_ok" in _report_codes(report)
+        assert (share / "keep-me.txt").read_text(encoding="utf-8") == "existing\n"
+        assert list((share / "probe").iterdir()) == [], "探针留下了自己的文件"
+
+    def test_probe_is_blocked_without_explicit_authorization(self, site):
+        report = _run_verify(site, FakeApi(hosts=[_live_host()]))
+
+        assert _report_status(report, "verify.s6.storage") == "BLOCKED"
+        assert "storage_probe_not_authorized" in _report_codes(report)
+
+    def test_probe_refuses_a_path_shaped_subdir(self, site):
+        """探针输入不得越出挂载点：带斜杠或回退的取值一律拒绝，且不写任何东西。"""
+        share = Path(site().config.storage.mount_path)
+        report = _run_verify(
+            site, FakeApi(hosts=[_live_host()]), storage_probe_subdir="../escape",
+        )
+
+        assert "storage_probe_subdir" in _report_codes(report)
+        assert not share.exists(), "拒绝的取值仍然创建了目录"
+
+    def test_probe_refuses_a_path_that_is_not_mounted(self, site, monkeypatch):
+        """没挂上时绝不能写进本机同名目录——那正是"掩盖未挂载"的假通过。"""
+        monkeypatch.setattr(os.path, "ismount", lambda path: False)
+        share = Path(site().config.storage.mount_path)
+        share.mkdir(parents=True)
+
+        report = _run_verify(
+            site, FakeApi(hosts=[_live_host()]), storage_probe_subdir="probe",
+        )
+
+        assert "shared_storage_not_mounted" in _report_codes(report)
+        assert not (share / "probe").exists()
+
+    def test_probe_reports_an_unwritable_share(self, site, monkeypatch):
+        monkeypatch.setattr(os.path, "ismount", lambda path: True)
+        share = Path(site().config.storage.mount_path)
+        share.mkdir(parents=True)
+        (share / "probe").write_text("a file where the probe needs a directory\n", encoding="utf-8")
+
+        report = _run_verify(
+            site, FakeApi(hosts=[_live_host()]), storage_probe_subdir="probe",
+        )
+
+        assert "storage_unwritable" in _report_codes(report)
+
     def test_report_never_contains_binding_values(self, site):
         report = _run_verify(site, FakeApi(hosts=[_live_host()], devices=[_verified_device()]))
         rendered = json.dumps(report, ensure_ascii=False)
@@ -1241,11 +1363,13 @@ class TestVerifyS6:
             "verify", "--config", str(tmp_path / "site.yaml"),
             "--bindings-dir", str(bindings), "--device-serial", "SYNTH0001",
             "--run-timeout", "12", "--json",
+            "--storage-probe-subdir", "probe",
         ])
 
         assert code == 0
         assert captured["device_serial"] == "SYNTH0001"
         assert captured["run_timeout"] == 12.0
+        assert captured["storage_probe_subdir"] == "probe"
 
     def test_cli_text_report_does_not_crash(self, tmp_path, monkeypatch, capsys):
         """文本模式同样消费 verify 报告（校验 deferred_checks 等字段齐备）。"""

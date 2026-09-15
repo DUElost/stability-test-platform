@@ -235,10 +235,15 @@ class Storage(ConfigModel):
     share: str | None = None
     credential_ref: Name | None = None
     mount_path: DedicatedPath
+    # 把本机子树以 NFS 导出给本站 Agent（Agent 的 STP_AEE_NFS_ROOT 才有意义）。
+    # 仅 local_mount 可开：远端分享/受管存储由对方导出，站点再导出会形成两套来源。
+    export_to_agents: bool = False
 
     @model_validator(mode="after")
     def storage_consistency(self) -> Self:
         management_fields = (self.os, self.ssh_user, self.ssh_credential_ref)
+        if self.export_to_agents and self.provisioning != "local_mount":
+            raise invalid("storage_export_conflict")
         if self.provisioning == "local_mount":
             # 本机路径不是「分享」：写进 target/protocol/share 只会让 site.yaml 说谎
             if any(value is not None for value in (
@@ -313,6 +318,17 @@ class Navigation(ConfigModel):
     documentation_url: DocumentationURL
 
 
+class Monitoring(ConfigModel):
+    """站点本地监控栈（#2197）：/storage 页的数据源。
+
+    Prometheus 只听本机回环，端口与后端默认 ``STP_PROMETHEUS_URL``
+    （``http://127.0.0.1:9091``）对齐——装完即出数据，后端零改环境。
+    """
+
+    enabled: bool = False
+    prometheus_port: Annotated[int, Field(ge=1024, le=65535)] = 9091
+
+
 class SiteConfig(ConfigModel):
     schema_version: Annotated[int, Field(ge=1, le=1)]
     site: SiteIdentity
@@ -326,6 +342,8 @@ class SiteConfig(ConfigModel):
     security: Security
     release: Release
     navigation: Navigation
+    # 可选段：旧站点输入（无该段）仍然合法，缺省不装监控栈。
+    monitoring: Monitoring = Field(default_factory=Monitoring)
 
     @model_validator(mode="after")
     def site_consistency(self) -> Self:

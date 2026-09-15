@@ -1,0 +1,7 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
+#
+# 同 prometheus.default：发行版 unit 从 EnvironmentFile 读 $ARGS。
+# --collector.nfsd：中心存储的 NFS 服务端指标（node_nfsd_*），存储页要读；
+# --collector.textfile.directory：宿主进程内存采样器（stp-mem-top.timer）的落点；
+# mount-points-exclude：与发行版默认一致的伪文件系统过滤，避免无谓序列。
+ARGS="--web.listen-address=127.0.0.1:9100 --collector.nfsd --collector.textfile.directory=/var/lib/prometheus/node-exporter --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/.+)($|/)"

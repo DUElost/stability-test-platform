@@ -1,3 +1,4 @@
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
 [Unit]
 Description=Run stp-mem-top every 2 minutes
 

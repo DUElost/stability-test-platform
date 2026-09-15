@@ -1,4 +1,5 @@
 #!/bin/bash
+# Rendered by the site installer for <deploy-root> — do not edit by hand.
 # stp-mem-top — 采集宿主机进程"匿名内存"Top-N，供 node_exporter textfile collector 暴露。
 #
 # 背景：2026-09-14 09:14 控制面整机卡死（~43GB 匿名内存压垮 24GB 机器），事后无

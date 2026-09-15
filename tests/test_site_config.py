@@ -611,3 +611,49 @@ def test_managed_storage_still_occupies_a_target_slot(site_data):
     with pytest.raises(ValidationError) as excinfo:
         SiteConfig.model_validate(data)
     assert "role_target_collision" in str(excinfo.value)
+
+
+def test_monitoring_defaults_to_disabled_for_existing_inputs(site_data):
+    """#2197：旧站点输入（无 monitoring 段）仍然合法，缺省不装监控栈。"""
+    config = SiteConfig.model_validate(copy.deepcopy(site_data))
+    assert config.monitoring.enabled is False
+    assert config.monitoring.prometheus_port == 9091
+
+
+def test_monitoring_accepts_an_explicit_port(site_data):
+    data = copy.deepcopy(site_data)
+    data["monitoring"] = {"enabled": True, "prometheus_port": 9191}
+    config = SiteConfig.model_validate(data)
+    assert (config.monitoring.enabled, config.monitoring.prometheus_port) == (True, 9191)
+
+
+@pytest.mark.parametrize("port", [80, 1023, 65536])
+def test_monitoring_rejects_privileged_or_out_of_range_ports(site_data, port):
+    data = copy.deepcopy(site_data)
+    data["monitoring"] = {"enabled": True, "prometheus_port": port}
+    with pytest.raises(ValidationError):
+        SiteConfig.model_validate(data)
+
+
+def test_export_to_agents_only_applies_to_local_mount(site_data):
+    """远端分享/受管存储由对方导出：站点再开导出会形成两套来源，必须拒绝。"""
+    data = copy.deepcopy(site_data)  # fixture 是 managed_linux
+    data["storage"]["export_to_agents"] = True
+    with pytest.raises(ValidationError) as excinfo:
+        SiteConfig.model_validate(data)
+    assert "storage_export_conflict" in str(excinfo.value)
+
+
+def test_local_mount_may_export_to_agents(site_data):
+    data = copy.deepcopy(site_data)
+    data["storage"] = {
+        "provisioning": "local_mount", "protocol": None, "target": None, "os": None,
+        "ssh_user": None, "ssh_credential_ref": None, "share": None, "credential_ref": None,
+        "mount_path": "/mnt/stp-share", "export_to_agents": True,
+    }
+    data["agents"] = []
+    config = SiteConfig.model_validate(data)
+    assert config.storage.export_to_agents is True
+    # 默认不开导出（向后兼容既有站点输入）
+    del data["storage"]["export_to_agents"]
+    assert SiteConfig.model_validate(data).storage.export_to_agents is False

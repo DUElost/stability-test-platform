@@ -26,6 +26,9 @@ _API_URL_BLOCK_START = "# API_URL 解析（#I4 非交互化）"
 _HOST_ID_BLOCK_START = "# 获取本机信息用于生成唯一标识"
 _ENV_BLOCK_START = 'if [ ! -f "$INSTALL_DIR/.env" ]; then'
 _ENV_BLOCK_END = 'chmod 640 "$INSTALL_DIR/.env"'
+# #2181：AEE 落点与共享挂载点准备块（夹在 .env 落盘与 7.5 守门之间）
+_DIRS_BLOCK_START = "# 7.4 AEE 落点与中心共享挂载点（#2181）"
+_DIRS_BLOCK_END = "# 7.5 STP_AEE_LOCAL_ROOT 静态守门"
 
 
 def _block(start: str, end: str | None = None) -> str:
@@ -235,6 +238,108 @@ class TestEnvFileWrites:
         assert values["STP_AEE_NFS_ROOT"] == "/mnt/nfs/new"
         assert values["STP_AEE_LOCAL_ROOT"] == "/mnt/hdd/new"
 
+    def test_fresh_install_reports_the_share_as_a_mount_point(self, tmp_path):
+        """MOUNT_POINTS 跟随中心存储：留空会让 /storage 与 S5 断言都看不到挂载。"""
+        (tmp_path / "agent-install").mkdir()
+        out = _run_block(
+            _env_block(), tmp_path=tmp_path,
+            env=self._env(tmp_path, AGENT_NFS_ROOT="/mnt/nfs/aee_events"),
+        )
+        assert out.returncode == 0, out.stderr
+        assert _read_env(tmp_path / "agent-install/.env")["MOUNT_POINTS"] == "/mnt/nfs/aee_events"
+
+    def test_fresh_install_without_a_share_leaves_mount_points_empty(self, tmp_path):
+        (tmp_path / "agent-install").mkdir()
+        out = _run_block(_env_block(), tmp_path=tmp_path, env=self._env(tmp_path))
+        assert out.returncode == 0, out.stderr
+        assert _read_env(tmp_path / "agent-install/.env")["MOUNT_POINTS"] == ""
+
+    def test_update_fills_an_empty_mount_points_and_keeps_a_custom_one(self, tmp_path):
+        """既有空值跟随中心存储；多挂载点站点自己写的值绝不覆盖。"""
+        install_dir = tmp_path / "agent-install"
+        install_dir.mkdir()
+        (install_dir / ".env").write_text(
+            "API_URL=https://old.example.com\nHOST_ID=old-id\nMOUNT_POINTS=\n", encoding="utf-8",
+        )
+        out = _run_block(
+            _env_block(), tmp_path=tmp_path,
+            env=self._env(tmp_path, AGENT_NFS_ROOT="/mnt/nfs/aee_events"),
+        )
+        assert out.returncode == 0, out.stderr
+        assert _read_env(install_dir / ".env")["MOUNT_POINTS"] == "/mnt/nfs/aee_events"
+
+        (install_dir / ".env").write_text(
+            "API_URL=https://old.example.com\nHOST_ID=old-id\n"
+            "MOUNT_POINTS=/mnt/data,/mnt/nfs/aee_events\n",
+            encoding="utf-8",
+        )
+        out = _run_block(
+            _env_block(), tmp_path=tmp_path,
+            env=self._env(tmp_path, AGENT_NFS_ROOT="/mnt/nfs/aee_events"),
+        )
+        assert out.returncode == 0, out.stderr
+        assert _read_env(install_dir / ".env")["MOUNT_POINTS"] == "/mnt/data,/mnt/nfs/aee_events"
+
+
+class TestAeeDirectories:
+    """#2181：安装链必须建好 AEE 本地根与共享挂载点，否则 Agent 静默回退 SSD。"""
+
+    @staticmethod
+    def _dirs_block() -> str:
+        return _block(_DIRS_BLOCK_START, _DIRS_BLOCK_END)
+
+    def _env(self, tmp_path: Path, **overrides: str) -> dict[str, str]:
+        base = {
+            "INSTALL_DIR": str(tmp_path / "agent-install"),
+            "USER": os.environ.get("USER", "nobody"),
+            "GROUP": os.environ.get("USER", "nobody"),
+        }
+        base.update(overrides)
+        return base
+
+    def _seed_env(self, tmp_path: Path, body: str) -> None:
+        install_dir = tmp_path / "agent-install"
+        install_dir.mkdir(exist_ok=True)
+        (install_dir / ".env").write_text(body, encoding="utf-8")
+
+    def test_prepares_the_local_root_and_the_mount_point(self, tmp_path):
+        self._seed_env(
+            tmp_path,
+            f"STP_AEE_LOCAL_ROOT={tmp_path / 'var/aee_events'}\n"
+            f"STP_AEE_NFS_ROOT={tmp_path / 'mnt/share'}\n",
+        )
+        out = _run_block(self._dirs_block(), tmp_path=tmp_path, env=self._env(tmp_path))
+
+        assert out.returncode == 0, out.stderr
+        assert (tmp_path / "var/aee_events").is_dir()
+        assert (tmp_path / "mnt/share").is_dir()
+
+    def test_unconfigured_paths_create_nothing(self, tmp_path):
+        self._seed_env(tmp_path, "STP_AEE_LOCAL_ROOT=\nSTP_AEE_NFS_ROOT=\n")
+        out = _run_block(self._dirs_block(), tmp_path=tmp_path, env=self._env(tmp_path))
+
+        assert out.returncode == 0, out.stderr
+        assert not (tmp_path / "var").exists() and not (tmp_path / "mnt").exists()
+
+    def test_the_share_is_never_chowned_from_the_agent(self, tmp_path):
+        """挂载点属主是存储端 S1 的约定；从 Agent 侧 chown 会把改动写进分享里。"""
+        mount_point = tmp_path / "mnt/share"
+        self._seed_env(
+            tmp_path,
+            f"STP_AEE_LOCAL_ROOT={tmp_path / 'var/aee_events'}\nSTP_AEE_NFS_ROOT={mount_point}\n",
+        )
+        log = tmp_path / "chown.log"
+
+        out = _run_block(
+            f'chown() {{ echo "$@" >> "{log}"; }}\n' + self._dirs_block(),
+            tmp_path=tmp_path, env=self._env(tmp_path),
+        )
+
+        assert out.returncode == 0, out.stderr
+        recorded = log.read_text(encoding="utf-8")
+        assert str(tmp_path / "var/aee_events") in recorded
+        assert str(mount_point) not in recorded
+
 
 class TestScriptNonInteractiveSource:
     def test_no_prompt_outside_tty_guard(self):
@@ -298,6 +403,34 @@ class TestInstallPlaybookContract:
         assert "--source-dir {{ agent_source_dir }}" in cmd
         assert "--schema-file {{ stp_repo_root }}/backend/schemas/pipeline_schema.json" in cmd
         assert compute["delegate_to"] == "localhost"
+
+    def test_share_is_mounted_after_the_install_script(self):
+        """挂载点由安装脚本创建、运行账号也由它创建：挂载必须在脚本之后。"""
+        names = [
+            task.get("name")
+            for play in self._plays()
+            for task in play.get("tasks", [])
+        ]
+        script = names.index("Run install script non-interactively")
+        assert script < names.index("Check whether the central share is already mounted")
+        assert script < names.index("Mount the central share (best effort; the local fallback still works)")
+        # Agent 服务在挂载后才重启，首次心跳就能上报挂载状态
+        assert names.index("Mount the central share (best effort; the local fallback still works)") < \
+            names.index("Restart agent service to load updated .env")
+
+    def test_fstab_is_only_written_for_a_share_that_actually_mounted(self):
+        """给从未连通的分享写 fstab 会留下永远失败的开机挂载；nofail 不解决记录本身错。"""
+        persist = self._task("Persist the central share (nofail: boot must not depend on it)")
+        conditions = " ".join(str(item) for item in persist["when"])
+        assert "stp_nfs_check.rc" in conditions and "stp_nfs_mount.rc" in conditions
+        assert "agent_nfs_server" in conditions
+        line = persist["ansible.builtin.lineinfile"]["line"]
+        assert "nofail" in line and "_netdev" in line
+
+    def test_mounting_requires_a_declared_server(self):
+        mount = self._task("Mount the central share (best effort; the local fallback still works)")
+        conditions = " ".join(str(item) for item in mount["when"])
+        assert "agent_nfs_server" in conditions and "agent_nfs_root" in conditions
         # regex_search 带分组返回**列表**：不取 first 会把 ["sha256:…"] 写进
         # ARTIFACT_DIGEST，Agent 校验失败即上报空摘要（I4 实验室实测）。
         extract = self._task("Extract deployment digests")
