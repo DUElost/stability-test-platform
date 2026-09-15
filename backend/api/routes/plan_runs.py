@@ -2808,12 +2808,39 @@ def _aee_event_dedup_key(
 ) -> str:
     nfs_path = str(extra.get("nfs_path") or "").strip()
     # #1956：UNIVIEW 与 AEE 同用 nfs_path 去重——同一物理事件被多次 run 拉取时只算一次。
-    if category in {"AEE", "VENDOR_AEE", "UNIVIEW"} and nfs_path:
+    #
+    # #2080：UNIVIEW 的 `nfs_path` 是**事件目录**（一个目录可容纳多个异常），不是单条
+    # 异常的物理路径；对 AEE/MTK 而言目录键等价于事件键，对 UNIVIEW 则不唯一。
+    # Agent 侧 #2010 已改为「签名变化就再发射一条」（同一目录可产出多条信号），若消费侧
+    # 仍按目录去重，会把它们**并回一条**——即 #2010 修好的症状在消费侧残留。
+    # 故 UNIVIEW 键补上事件身份；AEE / VENDOR_AEE 保持目录键不动（其 nfs_path 指向
+    # 单事件产物，目录键本已唯一）。
+    if category == "UNIVIEW" and nfs_path:
+        return _uniview_dedup_key(nfs_path, extra)
+    if category in {"AEE", "VENDOR_AEE"} and nfs_path:
         return f"nfs:{nfs_path}"
     path = str(path_on_device or "").strip()
     if path:
         return f"path:{path}"
     return f"id:{signal_id}"
+
+
+def _uniview_dedup_key(nfs_path: str, extra: dict[str, Any]) -> str:
+    """UNIVIEW 去重键：目录 + **事件身份**（#2080）。
+
+    事件身份取 ``event_subtype`` + ``aee_ts``——二者由 Agent 侧
+    ``unisoc_reconciler._emit_event`` 一并写入 ``extra``（``aee_ts`` 为设备时钟原文，
+    #785）；同目录内不同异常至少有一项不同。同一条异常被多次 run 拉取时二者不变，
+    故仍能正确去重。
+
+    两项皆缺失时退化为纯目录键（与 #1956 行为一致）——避免因字段缺失把同一条事件
+    重复计数；该退化路径已在测试中钉住。
+    """
+    subtype = str(extra.get("event_subtype") or "").strip()
+    aee_ts = str(extra.get("aee_ts") or "").strip()
+    if not subtype and not aee_ts:
+        return f"nfs:{nfs_path}"
+    return f"nfs:{nfs_path}#{subtype}#{aee_ts}"
 
 
 def _infer_dashboard_event_group_and_subtype(

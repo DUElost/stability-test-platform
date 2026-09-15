@@ -121,4 +121,8 @@ LocalDB 初始化扫描旧 `:emit_intents`，保留尚未进入 outbox 的已分
   同 serial 的下一个 Job 才清（体量为每条目一条 dict，影响可忽略）；
 - `post_event_payload` 现在给 PULL_FAILED 路径也加了 outbox 失败兜底（此前
   单发失败即丢）——行为改进，若运维口径要求该路径维持"只发一次"，另单收敛；
-- emit 路径若将来改成批量/流式，`prepare`/`enqueue` 的拆分语义需同步审视。
+- emit 路径若将来改成批量/流式，`prepare`/`enqueue` 的拆分语义需同步审视；
+- **展锐 uniview 采集路未纳入本轮**（本 note 只管 MTK/baseline）：2026-09-15 由
+  [#2079/#2040 批](2026-09-15-unisoc-emit-intent-and-pull-signature-2079-2040.md)
+  按同一语义补齐（`unisoc_reconciler` 的 acquire→deliver 拆分与 (name, signature)
+  复用判据）——两条路的记录形状与键命名尚未归一。

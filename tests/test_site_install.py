@@ -230,6 +230,30 @@ def prepare(tmp_path: Path, *, version: str = "synthetic-2026.09.0", tamper: boo
     return config_path, bindings, state_dir, target, site_id, data
 
 
+_PACKAGE_BINARIES = ("prometheus", "prometheus-node-exporter", "exportfs")
+
+
+class InstallingFakeOps(FakeOps):
+    """apt-get install 之后命令就可用（真实 dpkg 的效果）。
+
+    安装链现在以「可执行文件在不在」为判据，并要求装完仍在才算 FAIL——
+    没有这个模拟，正常用例会在「装完仍缺」那一关被误判。
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.installed: set[str] = set()
+
+    def run(self, argv, *, env=None, input_text=None, cwd=None):
+        result = super().run(argv, env=env, input_text=input_text, cwd=cwd)
+        if " ".join(str(item) for item in argv).startswith("apt-get install"):
+            self.installed.update(_PACKAGE_BINARIES)
+        return result
+
+    def command_exists(self, name: str) -> bool:
+        return name in self.installed or super().command_exists(name)
+
+
 def ops_for(tmp_path: Path, *, responses=None) -> FakeOps:
     return FakeOps(
         hostname="control-i3.synthetic.invalid",
@@ -747,8 +771,7 @@ def test_monitoring_stack_is_installed_and_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
     prepare(tmp_path)
     _distro_units(tmp_path)
-    ops = ops_for(tmp_path)
-    ops._responses["dpkg"] = (1, "")
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid", mounts={str(tmp_path / "mnt/share")})
 
     report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), ops=ops)
 
@@ -758,7 +781,9 @@ def test_monitoring_stack_is_installed_and_enabled(tmp_path, monkeypatch):
     joined = [" ".join(call) for call in ops.calls]
     assert any("apt-get install -y prometheus prometheus-node-exporter" in call for call in joined)
     for unit in ("prometheus-node-exporter", "prometheus", "stp-mem-top.timer"):
-        assert f"systemctl enable --now {unit}" in joined, unit
+        assert f"systemctl enable {unit}" in joined, unit
+        # 发行版包在 apt 阶段已把服务按默认参数拉起：不 restart 的话 $ARGS 永远不生效
+        assert f"systemctl restart {unit}" in joined, unit
     # 页面读的两个采集面：NFS 服务端指标与宿主进程内存采样器
     assert _system_file(tmp_path, "etc/default/prometheus-node-exporter").read_text(
         encoding="utf-8"
@@ -772,8 +797,9 @@ def test_monitoring_config_matches_the_backend_defaults(tmp_path, monkeypatch):
     monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
     prepare(tmp_path)
     _distro_units(tmp_path)
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid", mounts={str(tmp_path / "mnt/share")})
 
-    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path, port=9091))
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path, port=9091), ops=ops)
 
     assert report["status"] == "PASS", report
     scrape = _system_file(tmp_path, "etc/stp/prometheus/prometheus.yml").read_text(encoding="utf-8")
@@ -789,8 +815,9 @@ def test_custom_port_is_rendered(tmp_path, monkeypatch):
     monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
     prepare(tmp_path)
     _distro_units(tmp_path)
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid", mounts={str(tmp_path / "mnt/share")})
 
-    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path, port=9191))
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path, port=9191), ops=ops)
 
     assert report["status"] == "PASS", report
     assert "--web.listen-address=127.0.0.1:9191" in _system_file(
@@ -916,7 +943,11 @@ def test_install_publishes_the_export_to_the_declared_agents(tmp_path, monkeypat
     monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
     prepare(tmp_path)
     config_path = _exporting_site(tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"))
-    ops = ops_for(tmp_path)
+    ops = FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        commands={"python3", "systemctl", "nginx", "exportfs"},
+    )
 
     report = invoke(tmp_path, config_path=config_path, ops=ops)
 
@@ -935,8 +966,7 @@ def test_missing_nfs_server_package_is_installed(tmp_path, monkeypatch):
     monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
     prepare(tmp_path)
     config_path = _exporting_site(tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"))
-    ops = ops_for(tmp_path)
-    ops._responses["dpkg"] = (1, "")
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid", mounts={str(tmp_path / "mnt/share")})
 
     report = invoke(tmp_path, config_path=config_path, ops=ops)
 
@@ -976,8 +1006,13 @@ def test_first_install_without_agents_defers_the_export(tmp_path, monkeypatch):
     monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
     prepare(tmp_path)
     config_path = _exporting_site(tmp_path, agents=[])
+    ops = FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        commands={"python3", "systemctl", "nginx", "exportfs"},
+    )
 
-    report = invoke(tmp_path, config_path=config_path)
+    report = invoke(tmp_path, config_path=config_path, ops=ops)
 
     assert report["status"] == "PASS", report
     assert "export_deferred" in codes(report)
@@ -993,3 +1028,124 @@ def test_dry_run_plans_the_export_without_writing(tmp_path):
 
     assert "export_planned" in codes(report)
     assert not _exports_file(tmp_path).exists()
+
+
+# ── 238 现场缺陷：包/命令判据（#2181 / #2197）─────────────────────────────
+
+
+def test_export_install_that_still_leaves_exportfs_missing_fails_closed(tmp_path, monkeypatch):
+    """apt 报成功但命令还是没有（源里没有该包/被策略拦）→ FAIL，不带病进 S2。
+
+    现场实景：`dpkg -l nfs-kernel-server` 对「已知但未安装」的包返回 0，
+    安装被跳过，S2 调 exportfs 抛 FileNotFoundError 把整次安装崩成 traceback。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    config_path = _exporting_site(tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"))
+    ops = ops_for(tmp_path)  # 不模拟安装成功：exportfs 始终缺失
+    ops._responses["apt-get"] = (0, "")
+
+    report = invoke(tmp_path, config_path=config_path, ops=ops)
+
+    assert report["status"] == "FAIL"
+    assert "install_export" in codes(report)
+    # 缺命令必须在 S1 就报出来，而不是等到 S2 崩
+    assert not any(check["check_id"] == "install.s2.export" for check in report["checks"])
+
+
+def test_export_skips_apt_when_the_command_is_already_there(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    config_path = _exporting_site(tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"))
+    ops = FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        commands={"python3", "systemctl", "nginx", "exportfs"},
+    )
+
+    report = invoke(tmp_path, config_path=config_path, ops=ops)
+
+    assert report["status"] == "PASS", report
+    assert not any("apt-get" in " ".join(call) for call in ops.calls)
+
+
+def test_monitoring_install_that_still_leaves_binaries_missing_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    ops = ops_for(tmp_path)
+    ops._responses["apt-get"] = (0, "")
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), ops=ops)
+
+    assert report["status"] == "FAIL"
+    assert "install_monitoring" in codes(report)
+
+
+def test_local_ops_reports_a_missing_command_instead_of_raising():
+    """命令不存在是一种结果（127），不是异常：否则一个缺失的外部命令能崩掉整次安装。"""
+    from tools.site_config.ops import LocalOps
+
+    result = LocalOps().run(["stp-command-that-does-not-exist"])
+
+    assert result.returncode == 127
+    assert "command not found" in result.stderr
+
+
+# ── 238 现场缺陷二：/etc/default/* 是发行版资产，不适用本站标记守卫 ──────────
+
+
+DISTRO_ARGS_FILE = 'ARGS=""  # distribution default\n'
+
+
+def _seed_distro_default(tmp_path: Path, relative: str, text: str = DISTRO_ARGS_FILE) -> Path:
+    path = tmp_path / "system" / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_shipped_distro_defaults_do_not_block_the_monitoring_stack(tmp_path, monkeypatch):
+    """发行版出厂的 /etc/default/prometheus 不带本站标记——用共享路径守卫会永远装不上。
+
+    现场实景：238 的这两个文件是包自带的 `ARGS=""`，S4 直接 install_conflict FAIL；
+    正确行为是「先备份再覆盖」，重跑幂等。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    prometheus_default = _seed_distro_default(tmp_path, "etc/default/prometheus")
+    _seed_distro_default(tmp_path, "etc/default/prometheus-node-exporter")
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid", mounts={str(tmp_path / "mnt/share")})
+    config_path = _monitoring_site(tmp_path)
+
+    report = invoke(tmp_path, config_path=config_path, ops=ops)
+
+    assert report["status"] == "PASS", report
+    rendered = prometheus_default.read_text(encoding="utf-8")
+    assert "--web.listen-address=127.0.0.1:9091" in rendered
+    assert "Rendered by the site installer for" in rendered
+    backups = sorted((tmp_path / "state/shared-path-prev").glob("prometheus*"))
+    assert [b.name for b in backups] == ["prometheus", "prometheus-node-exporter"]
+    # 副本是原件（发行版默认值），不是我们刚渲染的内容
+    assert backups[0].read_text(encoding="utf-8").startswith('ARGS=""')
+
+    # 重跑：现在文件带本站标记，仍然通过（幂等）
+    second = invoke(tmp_path, config_path=config_path, ops=ops)
+    assert second["status"] == "PASS", second
+
+
+def test_another_sites_distro_default_blocks_fail_closed(tmp_path, monkeypatch):
+    """带别站标记说明这台机器的监控栈归别的站点：fail-closed，且不写一个字节。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    foreign = "# Rendered by the site installer for /opt/other-site — do not edit by hand.\nARGS=\"--web.listen-address=127.0.0.1:9191\"\n"
+    path = _seed_distro_default(tmp_path, "etc/default/prometheus", foreign)
+    ops = InstallingFakeOps(hostname="control-i3.synthetic.invalid", mounts={str(tmp_path / "mnt/share")})
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), ops=ops)
+
+    assert report["status"] == "FAIL"
+    assert "install_conflict" in codes(report)
+    assert path.read_text(encoding="utf-8") == foreign

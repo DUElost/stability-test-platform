@@ -221,6 +221,47 @@
       ansible.builtin.command: /usr/local/sbin/stp-agent-priv selftest
       changed_when: false
 
+    # #2205：agent 进程日志轮转。此前无任何轮转（log_archiver 只管 SSD
+    # run_log_dir、local_disk_monitor 只管 HDD spill），2026-09-15 全队实测
+    # 48/48 台合计 94.5GB、最大单台 4.89GB、≈54MB/天/台。
+    # 主机未预装 logrotate（canary 实测 `logrotate: not found`）——先装包，
+    # 随 Debian cron.daily 的 logrotate 定时器生效。
+    - name: Ensure logrotate is installed (#2205)
+      become: true
+      tags: ["logrotate"]
+      ansible.builtin.apt:
+        name: logrotate
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      register: agent_logrotate_install
+
+    # **必须 copytruncate**：systemd 以 `StandardError=append:` 持有该文件 fd，
+    # 默认 create 模式（rename + 新建）会让 systemd 继续写已改名的旧文件、
+    # 轮转静默失效；copytruncate（copy + 截断原文件）才能保 fd 有效。
+    # 只配置、不主动执行轮转——首轮由 logrotate 定时器按 size/daily 自然触发。
+    - name: Configure agent log rotation (#2205)
+      become: true
+      tags: ["logrotate"]
+      ansible.builtin.copy:
+        dest: /etc/logrotate.d/stp-agent
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # 由 update_agent.yml 下发（#2205）——勿手工编辑，重新部署会覆盖。
+          # copytruncate：systemd append: 持 fd，create 模式会让轮转静默失效。
+          {{ agent_install_dir }}/logs/agent_error.log {{ agent_install_dir }}/logs/agent.log {
+              daily
+              size {{ agent_logrotate_size }}
+              rotate {{ agent_logrotate_rotate }}
+              compress
+              delaycompress
+              copytruncate
+              missingok
+              notifempty
+          }
+
     - name: Capture installed requirements.txt sha before sync
       become: true
       ansible.builtin.command: "sha256sum {{ agent_install_dir }}/agent/requirements.txt"
