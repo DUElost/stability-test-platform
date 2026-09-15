@@ -53,7 +53,16 @@ class TestSchemaAtHeadGateWiring:
             )
 
     def test_gate_included_in_full_profile(self):
-        """check:full = GATES - FULL_EXCLUDE，不得被排除。"""
+        """check:full 的实际解析结果必须含 schema-at-head。
+
+        #2030：原断言 ``GATE in [g for g in GATES if g not in FULL_EXCLUDE]``
+        由上一行 ``GATE not in FULL_EXCLUDE`` 蕴含（GATE in GATES 已由同类
+        用例锚定），永不独立失败；改为调用 run_gates 实际使用的解析函数
+        ``resolve_gate_names``——解析逻辑若被改坏（如 check:full 不再展开成
+        GATES − FULL_EXCLUDE）本用例转红。
+        """
         mod = _load_run_gates()
-        assert GATE not in mod.FULL_EXCLUDE
-        assert GATE in [g for g in mod.GATES if g not in mod.FULL_EXCLUDE]
+        gate_names = mod.resolve_gate_names("check:full")
+        assert GATE in gate_names, (
+            f"{GATE} 不在 check:full 解析结果中（实际 {len(gate_names)} 项）"
+        )

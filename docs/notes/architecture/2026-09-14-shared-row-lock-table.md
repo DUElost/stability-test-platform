@@ -176,7 +176,10 @@ Class: architecture
   testcontainers / CI 的 PG 库，那条 `startswith("sqlite")` 的 skip 分支在本仓 harness 里
   **不可达**；无 docker 时是在 conftest 阶段就报错，也不是 skip）。合入门禁已由 `#1999`
   补上：它们随 `pr-migrate-empty-db`（PR 阶段唯一有 PG service 的 required check）执行，
-  接线由 `tests/test_lock_order_pr_path_contract.py` 做发现式守卫。
+  接线由 `tests/test_lock_order_pr_path_contract.py` 做发现式守卫。**（`#2116`）四处
+  `skipif` 守卫已删除**——留着它会让「将来 harness 真解析出 sqlite」变成**静默跳过**而不是
+  响亮失败，与本表一路在追的「绿而空」同形；改为在文件头写明「需要 PG，且本仓 harness 总是
+  提供 PG，无 PG 时在 conftest 阶段就报错」。
 - **观测入口**：`stability_db_deadlock_total{engine}` 与告警 `StabilityDbDeadlockDetected`
   （`#1958`）。该计数器应长期为 0；出现增量即回到本表按行定位，而不是先怀疑语句形状。
 - **必须同时看「等待」（`#2104` 已补）**：顺序统一后，代价会从**死锁**转移到**普通等待**

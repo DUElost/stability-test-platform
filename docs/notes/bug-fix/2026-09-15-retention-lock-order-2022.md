@@ -102,10 +102,12 @@ run_retention_cleanup（#2022 后）
 - **保留清理的持锁时长（未收口）**：NFS 目录回收仍在事务内、在 plan_run 行锁之后。若要把
   持锁窗口压到毫秒级，需把 `purge_run_storage_dirs` 移出事务——那会动
   `#1521`/`#1698` 的自愈语义，须独立裁决；届时**不要**只调换 deletes 与锁的先后。
-- **skip 分支的措辞**：四条锁序用例仍保留 `startswith("sqlite")` 的 `pytestmark`。经本次实测
-  它在本仓 harness 里不可达（conftest 会覆盖 `DATABASE_URL`）；保留它作为防御性写法可以，
-  但**不要再把它当作「本地会 skip」的依据**。若后续要收口，应一次性改掉四处并同步本表与
-  各 Note 的措辞。
+- ~~**skip 分支的措辞**：四条锁序用例仍保留 `startswith("sqlite")` 的 `pytestmark`。经本次
+  实测它在本仓 harness 里不可达（conftest 会覆盖 `DATABASE_URL`）；保留它作为防御性写法
+  可以，但**不要再把它当作「本地会 skip」的依据**。~~
+  **已收口（`#2116`）**：四处守卫连同随之无用的 `import os` 一并删除——留着它会把
+  「harness 某天真解析出 sqlite」变成**静默跳过**而不是响亮失败；改为在文件头写明
+  「需要 PG，且本仓 harness 总是提供 PG，无 PG 时在 conftest 阶段就报错」。
 - **`released_leases` 恒为 0（已由 `#2089` 删除）**：该「文档宣称 > 实现」残留已清理——
   后端返回体 / 审计 details / 日志与前端 `types.ts` 两侧同步删除，并按 `#787` 的
   「后端为权威、前端类型跟随」保持一致。
