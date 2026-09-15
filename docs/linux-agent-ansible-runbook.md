@@ -474,7 +474,7 @@ cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook p
 3. **依赖刷新**：rsync 前后比对 `requirements.txt` sha256，变化则 `pip install -r`（`PIP_INDEX_URL` 取 `STP_AGENT_PIP_INDEX_URL`）；pip 失败则**不重启**服务以避免崩溃
 4. **版本审计**：响应含 `code_version`（`backend/agent` 的 `git rev-parse --short HEAD`）与 `deps_refreshed`，写入 `audit_log`（`hot_update` + `hot_update_result` 两条）
 5. 前端成功 toast 显示「(依赖已刷新/未变) @<code_version>」
-6. sudo 免密走提权 wrapper（ADR-0037/#1250）：首次安装或 `update_agent.yml` 会部署 wrapper 并重写 sudoers；未迁移主机热更新自动回退 legacy 旧规则并以 `priv_mode=legacy` 记入审计，迁移完成后该回退分支下架（见 ADR-0037 Revisit）
+6. sudo 免密走提权 wrapper（ADR-0037/#1250）：首次安装或 `update_agent.yml` 会部署 wrapper 并重写 sudoers。迁移期曾对未迁移主机回退 legacy 旧规则（`priv_mode=legacy`）；**迁移期已结束（v0.3 / #2180）**——回退分支与哨兵已删除，wrapper `selftest` 失败即 fail-closed（提示重跑 `update_agent.yml`，`priv_mode=unknown`），不再有任何裸 sudo 降级面
 
 ### pip 镜像不可达时的兜底
 
