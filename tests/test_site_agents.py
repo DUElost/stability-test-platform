@@ -389,7 +389,113 @@ def _run(ctx, api, **kwargs):
     kwargs.setdefault("sleep", lambda _: None)
     kwargs.setdefault("poll_timeout", 30.0)
     kwargs.setdefault("digest_timeout", 0.0)
+    # 默认不让真探针跑 ssh：用例里显式覆盖
+    kwargs.setdefault("sudo_probe", lambda ops, agent, binding: (True, ""))
     return stage_s5_agents(ctx, api=api, **kwargs)
+
+
+class TestTargetSudoProbe:
+    def test_probe_runs_before_any_install_and_stops_on_failure(self, site):
+        """目标机 sudo 不可用 → 触发安装之前就 FAIL，且不创建任何 Host。"""
+        api = FakeApi()
+        checks = _run(
+            site(), api,
+            sudo_probe=lambda ops, agent, binding: (False, "sudo_unavailable"),
+        )
+
+        assert _status(checks, "install.s5.sudo") == "FAIL"
+        assert "target_sudo_unavailable" in _codes(checks)
+        assert api.created == [], "预检失败后仍在建 Host"
+        assert api.install_calls == [], "预检失败后仍触发了安装"
+
+    def test_probe_failure_carries_the_su_recipe_as_fix(self, site):
+        checks = _run(
+            site(), FakeApi(),
+            sudo_probe=lambda ops, agent, binding: (False, "sudo_unavailable"),
+        )
+        check = next(c for c in checks if c.check_id == "install.s5.sudo")
+        assert "usermod -aG sudo" in check.remediation
+        assert "visudo -cf" in check.remediation
+        assert "NOPASSWD: ALL" in check.remediation
+
+    def test_ssh_level_failure_points_at_host_key_and_network(self, site):
+        checks = _run(
+            site(), FakeApi(),
+            sudo_probe=lambda ops, agent, binding: (False, "ssh_probe_failed"),
+        )
+        check = next(c for c in checks if c.check_id == "install.s5.sudo")
+        assert check.code == "ssh_probe_failed"
+        assert "ssh-keyscan" in check.remediation
+
+    def test_unrun_probe_is_blocked_and_never_claims_readiness(self, site):
+        checks = _run(
+            site(), FakeApi(),
+            sudo_probe=lambda ops, agent, binding: (None, "probe_not_run"),
+        )
+        assert _status(checks, "install.s5.sudo") == "BLOCKED"
+        assert "probe_not_run" in _codes(checks)
+
+    def test_happy_path_reports_sudo_ready(self, site):
+        checks = _run(site(), FakeApi())
+        assert _status(checks, "install.s5.sudo") == "PASS"
+        assert "target_sudo_ready" in _codes(checks)
+
+
+class TestProbeTargetSudo:
+    class Ops:
+        def __init__(self, stdout: str):
+            self.stdout = stdout
+            self.argv: list[tuple[str, ...]] = []
+            self.env: dict[str, str] = {}
+
+        def command_exists(self, name: str) -> bool:
+            return True
+
+        def run(self, argv, **kwargs):
+            self.argv.append(tuple(str(item) for item in argv))
+            self.env = dict(kwargs.get("env") or {})
+            from tools.site_config.ops import CommandResult
+
+            return CommandResult(tuple(str(item) for item in argv), 0, self.stdout)
+
+    def _agent(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(target="10.99.0.31")
+
+    def test_password_never_reaches_argv(self):
+        from tools.site_config.agents import probe_target_sudo
+
+        ops = self.Ops("STP_SUDO_OK\n")
+        binding = {"USERNAME": "ops", "PASSWORD": "DoNotLeak-9374"}
+        available, reason = probe_target_sudo(ops, self._agent(), binding)
+
+        assert (available, reason) == (True, "")
+        joined = " ".join(" ".join(call) for call in ops.argv)
+        assert "DoNotLeak-9374" not in joined
+        assert ops.env.get("SSHPASS") == "DoNotLeak-9374"
+        assert "sudo -n true" in joined and "-o ConnectTimeout=8" in joined
+
+    def test_key_binding_uses_the_key_file_and_no_sshpass(self):
+        from tools.site_config.agents import probe_target_sudo
+
+        ops = self.Ops("STP_SUDO_FAIL\n")
+        available, reason = probe_target_sudo(
+            ops, self._agent(), {"USERNAME": "ops", "PRIVATE_KEY_PATH": "/root/.ssh/id_ed25519"},
+        )
+
+        assert (available, reason) == (False, "sudo_unavailable")
+        joined = " ".join(" ".join(call) for call in ops.argv)
+        assert "-i /root/.ssh/id_ed25519" in joined
+        assert "sshpass" not in joined
+
+    def test_unparsable_output_is_treated_as_ssh_failure(self):
+        from tools.site_config.agents import probe_target_sudo
+
+        ops = self.Ops("Host key verification failed.\n")
+        assert probe_target_sudo(
+            ops, self._agent(), {"USERNAME": "ops", "PASSWORD": "x"},
+        ) == (False, "ssh_probe_failed")
 
 
 class TestHappyPath:

@@ -15,6 +15,7 @@ instead of starting another installation.
 from __future__ import annotations
 
 import json
+import os
 import pwd
 import ssl
 import sys
@@ -28,6 +29,7 @@ from typing import Any, Callable, Protocol
 
 from .bindings import BindingError, load_binding
 from .manifest import load_release_manifest
+from .ops import Ops
 from .stages import InstallContext
 from .validation import ConfigValidationError, Check, blocked, failure, passed
 
@@ -497,6 +499,53 @@ def heartbeat_fresh(host: dict[str, Any], *, now: float) -> bool:
     return (now - stamp.timestamp()) <= AGENT_HEARTBEAT_FRESHNESS_SECONDS
 
 
+SSH_PROBE_CONNECT_TIMEOUT = "8"
+
+
+def probe_target_sudo(
+    ops: Ops, agent, binding: dict[str, str], *, port: int = 22,
+) -> tuple[bool | None, str]:
+    """Run ``sudo -n true`` on the target with the installer's own credentials.
+
+    The install chain's become uses exactly these credentials, so a target that
+    rejects passwordless sudo will fail *mid-install* (238 现场)——probe first and
+    hand the operator a Fix instead.
+
+    Returns ``(True, "")`` when sudo works, ``(False, "sudo_unavailable")`` when
+    the target itself refuses, ``(False, "ssh_probe_failed")`` when the SSH call
+    could not complete (network, host key, credentials), and
+    ``(None, "probe_not_run")`` when the local tools are missing — the last case
+    never counts as verified.  The password travels in the environment
+    (``SSHPASS``), never in argv.
+    """
+    if not ops.command_exists("ssh"):
+        return None, "probe_not_run"
+    if "PASSWORD" in binding and not ops.command_exists("sshpass"):
+        return None, "probe_not_run"
+    argv = [
+        "ssh",
+        "-o", f"ConnectTimeout={SSH_PROBE_CONNECT_TIMEOUT}",
+        "-o", "NumberOfPasswordPrompts=1",
+        "-p", str(port),
+    ]
+    env = dict(os.environ)
+    if "PRIVATE_KEY_PATH" in binding:
+        argv += ["-i", binding["PRIVATE_KEY_PATH"], "-o", "IdentitiesOnly=yes"]
+    else:
+        argv = ["sshpass", "-e", *argv]
+        env["SSHPASS"] = binding["PASSWORD"]
+    argv += [
+        f"{binding['USERNAME']}@{agent.target}",
+        "sudo -n true && echo STP_SUDO_OK || echo STP_SUDO_FAIL",
+    ]
+    result = ops.run(argv, env=env)
+    if "STP_SUDO_OK" in result.stdout:
+        return True, ""
+    if "STP_SUDO_FAIL" in result.stdout:
+        return False, "sudo_unavailable"
+    return False, "ssh_probe_failed"
+
+
 def assert_agent(
     api: ApiClient,
     host_id: str,
@@ -642,6 +691,7 @@ def stage_s5_agents(
     sleep: Callable[[float], None] = time.sleep,
     progress: Callable[[str], None] | None = None,
     now: float | None = None,
+    sudo_probe: Callable[..., tuple[bool | None, str]] | None = None,
 ) -> list[Check]:
     """Onboard every declared Agent through the site API (S5)."""
     config = ctx.config
@@ -672,6 +722,31 @@ def stage_s5_agents(
         "Every declared Agent has an SSH binding of the declared shape.",
         "Binding values stay in memory; they are never written to argv, logs or reports.",
     ))
+
+    # 目标机 sudo 预检：become 用同一套凭据，sudo 不可用会在装到一半才炸（238 现场：
+    # Ubuntu 22.04 的 android 不在 sudoers）。触发任何安装之前逐台探一次，失败即停。
+    prober = sudo_probe or probe_target_sudo
+    probe_not_run = False
+    for index, (agent, values) in enumerate(zip(config.agents, bindings, strict=True)):
+        available, reason = prober(ctx.ops, agent, values)
+        if available is False:
+            code = "target_sudo_unavailable" if reason == "sudo_unavailable" else "ssh_probe_failed"
+            checks.append(_fail("install.s5.sudo", code, location=f"$.agents[{index}]"))
+            return checks
+        if available is None:
+            probe_not_run = True
+    if probe_not_run:
+        checks.append(blocked(
+            "install.s5.sudo", "agent", "$.agents", "probe_not_run",
+            "The control plane could not probe target sudo (ssh/sshpass missing locally).",
+            "Install the Agent-path commands (preflight reports them) or rerun deploy/agent/install.sh.",
+        ))
+    else:
+        checks.append(passed(
+            "install.s5.sudo", "agent", "$.agents", "target_sudo_ready",
+            "Every declared Agent accepts passwordless sudo with its own SSH credentials.",
+            "Become stays passwordless on purpose: the installer never stores a second secret.",
+        ))
 
     manifest = None
     if config.release.manifest is not None:

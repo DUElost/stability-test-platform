@@ -119,6 +119,21 @@ MESSAGES = {
     "agent_install_failed": "The Agent installation run failed; inspect the RunConsole log, fix the cause, and re-run.",
     "install_timeout": "The Agent installation did not reach a terminal state before the deadline; inspect the RunConsole log before retrying.",
     "install_trigger_failed": "The install request was rejected; inspect the RunConsole log and the audit trail.",
+    "target_sudo_unavailable": (
+        "The SSH user cannot use sudo on the target, so the installer cannot run become. Give it "
+        "passwordless sudo; if sudo is not set up yet, use the root password with su (absolute "
+        "paths: su keeps a narrow PATH): "
+        "echo '<root password>' | su -c \"/usr/sbin/usermod -aG sudo <ssh user>\" ; "
+        "echo '<root password>' | su -c \"printf '%s\\n' '<ssh user> ALL=(ALL) NOPASSWD: ALL' > "
+        "/etc/sudoers.d/<ssh user> && chmod 0440 /etc/sudoers.d/<ssh user> && "
+        "visudo -cf /etc/sudoers.d/<ssh user>\""
+    ),
+    "ssh_probe_failed": (
+        "The control plane could not SSH to that host with its declared credentials. Check network, "
+        "port and credentials; for a first contact add the host key after verifying its fingerprint: "
+        "`ssh-keyscan -p <port> <host> >> ~/.ssh/known_hosts` — the install chain keeps "
+        "host_key_checking on, so an unknown key blocks it too."
+    ),
     "agent_offline": "The Agent is not heartbeating to this control plane; check the service, its API_URL and AGENT_SECRET.",
     "agent_identity": "The Agent did not report an instance identity and boot ID; verify the deployed Agent version.",
     "agent_endpoint": "No audited install points this Host at the site's public entry; re-install the Agent from this site.",
