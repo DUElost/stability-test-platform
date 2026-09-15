@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -20,7 +21,10 @@ import os
 DIGEST_PREFIX = "sha256:"
 
 # 与控制面 _TAR_EXCLUDES / _PAYLOAD_METADATA_EXCLUDES 语义镜像（parity test
-# 以同一 fixture 树锁定两侧一致）。
+# 以同一 fixture 树锁定两侧一致）。#2030：与两条部署通道（wrapper
+# FIXED_EXCLUDES / Ansible agent_install_excludes）同源——venv/logs 为宿主侧
+# 目录（ADR-0040 D1 明文排除）；stp_agent_priv.py 装到 /usr/local/sbin、
+# stp_schemas/ 经 extra_files 独立附加，均不进安装目录的内容身份。
 PAYLOAD_EXCLUDES = {
     "__pycache__",
     "tests",
@@ -30,8 +34,16 @@ PAYLOAD_EXCLUDES = {
     "DEPLOY.md",
     "stability-test-agent.service",
     "hosts.txt",
+    "venv",
+    "logs",
+    "stp_agent_priv.py",
+    "stp_schemas",
+    ".deps_installed_sha",
 }
 PAYLOAD_EXCLUDE_SUFFIXES = (".pyc",)
+# Glob 类排除（#2030）：与控制面 `_TAR_EXCLUDE_GLOBS` 逐项镜像，
+# 三处排除集同源由 tests/test_ansible_digest_contract.py 锁定。
+PAYLOAD_EXCLUDE_GLOBS = ("test_*.py",)
 PAYLOAD_METADATA_EXCLUDES = {
     "VERSION", "ARTIFACT_DIGEST", "ARTIFACT_DIGEST_RESOURCES", ".env",
 }
@@ -63,7 +75,7 @@ def collect_artifact_entries(
                 continue
             if name.endswith(PAYLOAD_EXCLUDE_SUFFIXES):
                 continue
-            if name.startswith("test_") and name.endswith(".py"):
+            if any(fnmatch.fnmatch(name, pattern) for pattern in PAYLOAD_EXCLUDE_GLOBS):
                 continue
             full_path = os.path.join(root, name)
             if os.path.islink(full_path):

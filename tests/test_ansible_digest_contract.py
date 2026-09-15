@@ -45,6 +45,9 @@ def _build_tree(base: Path) -> Path:
     _write(base / "test_top.py", "junk\n")
     _write(base / "venv" / "lib.py", "junk\n")
     _write(base / "logs" / "a.log", "junk\n")
+    # #2030：部署通道不传输的文件（wrapper / Ansible / 热更新 rsync 三处同源）
+    _write(base / "stp_agent_priv.py", "junk\n")
+    _write(base / "stp_schemas" / "stale.json", '{"old": 1}')
     _write(base / "VERSION", "deadbeef\n")
     _write(base / "ARTIFACT_DIGEST", "sha256:" + "0" * 64 + "\n")
     _write(base / "resources" / "aimonkey" / "monkey.bin", b"BIN", exec_bit=True)
@@ -88,6 +91,15 @@ class TestComputeScriptParity:
         assert out["CODE_DIGEST"].startswith("sha256:")
 
 
+def _normalize_excludes(items) -> set[str]:
+    """排除项 → 规范化集合（去尾部 ``/``；``*.pyc`` 由后缀规则单列比较）。"""
+    return {
+        str(item).strip().rstrip("/")
+        for item in items
+        if str(item).strip() and str(item).strip() != "*.pyc"
+    }
+
+
 class TestRsyncPolicyContract:
     """agent_deploy defaults 的 rsync 策略与 digest 输入集契约对齐。"""
 
@@ -109,6 +121,52 @@ class TestRsyncPolicyContract:
         assert "resources/mtbf/" in host_local
         assert "ARTIFACT_DIGEST" in host_local
         assert "ARTIFACT_DIGEST_RESOURCES" in host_local
+
+    def test_excludes_same_source_across_three_channels(self):
+        """#2030：Ansible / wrapper / 控制面 digest 三处排除集逐项同源。
+
+        任一处新增/遗漏排除项（如只改 Ansible 不改 digest）→ 本用例红，
+        防「指标改了标签、告警没跟」同类的跨通道静默分叉。
+        """
+        import backend.agent.stp_agent_priv as priv
+        import backend.services.host_updater as hu
+
+        policy = yaml.safe_load(_DEFAULTS.read_text(encoding="utf-8"))
+        ansible_excludes = policy["agent_install_excludes"]
+        ansible = _normalize_excludes(ansible_excludes)
+        wrapper = _normalize_excludes(priv.FIXED_EXCLUDES)
+        # digest 侧的 glob 规则（test_*.py）以显式常量参与比较（#2030）
+        digest = _normalize_excludes(sorted(hu._TAR_EXCLUDES)) | set(hu._TAR_EXCLUDE_GLOBS)
+
+        assert ansible == wrapper == digest, (
+            "三处排除集不同源（#2030）：\n"
+            f"Ansible-only: {sorted(ansible - wrapper - digest)}\n"
+            f"wrapper-only: {sorted(wrapper - ansible - digest)}\n"
+            f"digest-only: {sorted(digest - ansible - wrapper)}"
+        )
+        # .pyc 后缀规则三处等价（rsync 用模式、digest 用后缀表）
+        assert "*.pyc" in ansible_excludes
+        assert "*.pyc" in priv.FIXED_EXCLUDES
+        assert ".pyc" in hu._TAR_EXCLUDE_SUFFIXES
+
+    def test_host_local_dirs_excluded_from_code_identity(self, tmp_path, monkeypatch):
+        """#2030：部署通道不传输的文件不得进 code 身份（效果级，不只看字符串）。"""
+        import backend.services.host_updater as hu
+
+        tree = _build_tree(tmp_path / "agent")
+        schema = tmp_path / "pipeline_schema.json"
+        schema.write_text('{"version": 1}')
+        monkeypatch.setattr(hu, "_AGENT_SOURCE_DIR", tree)
+        monkeypatch.setattr(hu, "_PIPELINE_SCHEMA_FILE", schema)
+
+        arcnames = [a for _, a in hu._iter_payload_files(kind="code")]
+        for excluded in (
+            "stp_agent_priv.py", "venv/lib.py", "logs/a.log",
+            "stp_schemas/stale.json", "test_top.py", "tests/test_x.py",
+        ):
+            assert excluded not in arcnames, f"{excluded} 泄漏进 code 身份（#2030）"
+        # stp_schemas/ 目录排除不影响 schema 的独立附加通道
+        assert "stp_schemas/pipeline_schema.json" in arcnames
 
 
 class TestPlaybookBookkeeping:
