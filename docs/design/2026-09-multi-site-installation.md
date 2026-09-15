@@ -9,6 +9,13 @@
   内存采样器随栈落地），S4 启用三个单元并实测 `/-/ready`。发行版 unit 不以 `$ARGS` 读
   `/etc/default` 即 fail-closed（否则启动参数被静默忽略、页面空而报告是绿的）。
   决策与放弃的备选见 [`feature/2026-09-15-site-monitoring-stack-2197`](../notes/feature/2026-09-15-site-monitoring-stack-2197.md)
+- **v0.10 增量（2026-09-15）**：#2181 中心存储闭环——`storage.export_to_agents`（仅
+  `local_mount`）把控制面本机子树以 NFS 导出给本站 Agent（S1 装服务端 + 交出导出根属主，
+  S2 写 `etc/exports.d/stp-<site>.exports` 并 `exportfs -ra`）；Agent 安装链建好 AEE 本地根
+  与共享挂载点、挂载导出并只在真的挂上时写 fstab、`MOUNT_POINTS` 跟随中心存储（否则
+  `/storage` 与断言都看不到挂载）；S5 新增 `install.s5.storage`（Agent 心跳 `mount_status`
+  必须报导出路径已挂），`verify` 新增受控写读探针（`--storage-probe-subdir`）。
+  现场缺口与放弃的备选见 [`feature/2026-09-15-central-storage-nfs-export-2181`](../notes/feature/2026-09-15-central-storage-nfs-export-2181.md)
 - **v0.9 增量（2026-09-15）**：安装链 fail-open 判据收口（#2084 / #2088 / #2020 / #2017 残口）——
   新增判据见 §5 末「安装链 fail-closed 判据」，决策与放弃的备选见
   [`bug-fix/2026-09-15-site-install-fail-open-batch`](../notes/bug-fix/2026-09-15-site-install-fail-open-batch.md)
@@ -104,7 +111,7 @@ agents:
 | `control_plane.tls_ref` | I1 要求 HTTPS 必须带绑定名、HTTP 不得带 TLS 绑定；证书身份/有效期与私钥权限留给后续阶段 | HTTPS 模板使用 `<server-name>`、`<tls-cert-path>`、`<tls-key-path>` 占位符（I2）；plan 只输出“待绑定”映射，不解析绑定值，绑定名不进入报告 |
 | `release.bundle` / `release.manifest` | `bundle` 在 I3 按**本地目录树**消费（须含 `release-manifest.json`、`backend/`、`backend/agent/`、`backend/schemas/`、`frontend/dist-prod/`、`deploy/`、`tools/`，离线时含 `wheelhouse/`）；`manifest`（I2 新增）为本地绝对清单路径，`validate` 允许为空、`plan`/`install` 必填。清单为 ≤1 MiB 的 JSON，拒绝未知字段/重复键；要求 `product.version`（须等于 `expected_release`）、`source.revision`、至少 `agent-code` 与 `host-resources` 的 `sha256:<64hex>` 摘要、`database.schema_target`、`compatibility`（协议范围 + 逐发行版版本/架构支持矩阵）与 `provenance.attestation`（`signature` 或 `controlled_channel` 声明） | 控制面、前端 `dist-prod`、Agent、脚本/schema 及迁移的固定版本；I3 的 S0 用 ADR-0040 既有实现重算 code/resources 摘要并与清单比对（不另造算法）；签名验签与来源渠道核验仍留给发布端与后续阶段 |
 | 脚本根 | 从选定发布物的既有布局派生，不另用共享盘猜测 | `STP_SCRIPT_ROOT`；不使用 `STP_NFS_ROOT/scripts` |
-| `storage` | 三种 provisioning：`existing_share` 只接入分享、不接受服务器 OS/SSH 管理字段；`managed_linux` 必须声明 `os`、`ssh_user`、`ssh_credential_ref`；`local_mount`（I5.5）是**本机磁盘子树**，不写 `target/protocol/share`，也不接受任何管理字段——把本机路径写成分享会让 `site.yaml` 说谎。NFS 使用专用绝对分享路径且不带 CIFS 凭据；CIFS 使用分享名及必需的 `credential_ref` | 分享身份用于挂载；挂载点对应 `STP_AEE_NFS_ROOT`，不是控制面部署根；I1 不挂载、不格式化、不验证可达性；`local_mount` 的路径必须已是挂载点（S1 核对），`init` 负责挂盘 + bind + fstab（`nofail`） |
+| `storage` | 三种 provisioning：`existing_share` 只接入分享、不接受服务器 OS/SSH 管理字段；`managed_linux` 必须声明 `os`、`ssh_user`、`ssh_credential_ref`；`local_mount`（I5.5）是**本机磁盘子树**，不写 `target/protocol/share`，也不接受任何管理字段——把本机路径写成分享会让 `site.yaml` 说谎。NFS 使用专用绝对分享路径且不带 CIFS 凭据；CIFS 使用分享名及必需的 `credential_ref`。`export_to_agents`（v0.10，仅 `local_mount` 可开）表示本机子树由本站导出给本站 Agent：S1 装 `nfs-kernel-server` 并把导出根交给约定写入身份（`root:1000` + `0775`），S2 写 `etc/exports.d/stp-<site>.exports`（客户端=声明 Agent 的 /24，主机名目标放宽为 `*`）并 `exportfs -ra` + `enable --now nfs-server` | 分享身份用于挂载；挂载点对应 `STP_AEE_NFS_ROOT`，不是控制面部署根；I1 不挂载、不格式化、不验证可达性；`local_mount` 的路径必须已是挂载点（S1 核对），`init` 负责挂盘 + bind + fstab（`nofail`）；外部分享站点由对方导出，本站绝不代挂 |
 | `storage.mount_path` | P1 候选标准为控制面/Agent 同一字符串、同一分享；路径变体另测，不假设当前热更新可保持任意差异 | 避免现有共享根统一下发覆盖单机定制；Agent `STP_NFS_ROOT` 仅沿既有脚本别名映射 |
 | `agents[].key/target` | key 仅是引导时的逻辑名；同站点避免重复名称/目标；Host ID 必须来自本站 API。I4：Host 名取 `<site.id>-<key>`，按 `target`（IP/主机名）查/建并对名称核对，占用同 IP/同名即 fail-closed（不换名、不抢占） | Host 创建参数、Ansible 目标及安装器 `agent_host_id`，Device 由 Agent 发现 |
 | `agents`（列表本身） | I5.5 起**允许为空**：先把控制面装好、Agent 随后按 inventory 接入（S5 显式跳过并给出后续命令）。非空时所有 `install_root` 必须一致——`STP_SCRIPT_RUNTIME_ROOT` 是站点级单值，异构根会静默取错路径（`agent_install_root_mismatch`） | 站点级 env 渲染；S5 逐台接入 |
@@ -233,12 +240,12 @@ SSH 严格核对已有/获准指纹，不能用关闭主机密钥校验解决首
 | 阶段 | 动作与入口 | 完成条件 | 失败/重试原则 |
 |------|------------|----------|----------------|
 | S0 输入与目标确认 | 校验配置、发布、网络/安全 profile；明确新装模式及允许的角色目标 | 没有未填写必需项，发布可信、目标不是误指 A/本机生产 | 未通过不得进行目标写入；不能仅按 IP 不同就认定安全 |
-| S1 基础与存储 | 创建专用目录/服务账号，安装声明依赖（含声明时的监控栈包 `prometheus`/`prometheus-node-exporter`，#2197），接入或配置已授权分享（I5.5：`local_mount` 由 `init` 挂盘 + bind + fstab；S1 只核对挂载点） | 角色目录归属、分享身份、必要依赖和容量满足要求 | 不格式化数据盘；已存在状态需核对，不能覆盖或全目录清理 |
+| S1 基础与存储 | 创建专用目录/服务账号，安装声明依赖（含声明时的监控栈包 `prometheus`/`prometheus-node-exporter`，#2197），接入或配置已授权分享（I5.5：`local_mount` 由 `init` 挂盘 + bind + fstab；S1 只核对挂载点；v0.10：`export_to_agents` 时装 `nfs-kernel-server` 并只放开导出根这一层的属组与组写位） | 角色目录归属、分享身份、必要依赖和容量满足要求 | 不格式化数据盘；已存在状态需核对，不能覆盖或全目录清理；导出根不递归 chown/chmod |
 | S2 发布与环境 | 固定发布物落地，复用模板，生成独立站点秘密/配置 | 无遗留占位符、权限正确，前端路径与 Nginx root 一致 | 保留已成功创建的秘密；重复执行不轮换密钥或复制其他站点身份 |
 | S3 数据库与管理员 | 对显式新站点数据库执行既有迁移 oneshot；完成受控首管理员引导 | schema 达到发布目标；管理员可用且审计留痕 | 非空/未接管数据库阻断 fresh-install；迁移失败不启动不匹配应用；已有管理员不重置、不重复创建，同名普通用户冲突需人工处理 |
 | S4 控制面入口 | 启动 nomigrate 服务及 Nginx，核对 DB/Redis/SAQ、同源入口和 SocketIO；声明监控栈时同时启用 node-exporter / Prometheus / 内存采样器并实测 `/-/ready`（#2197） | 服务健康、必要后台组件就绪，登录/CSRF 经授权验收；监控栈就绪（否则 `/storage` 页无数据源） | 不用跳过基础设施检查伪造成功；先完成私有引导再暴露正式入口；只 enable 不算装上 |
-| S5 Host 与 Agent | 经本站管理员权限创建/核对 Host，消费 API 返回 ID，复用 Ansible/安装服务（I4：`install --through-agents`，`tools/site_config/agents.py`；I5.5：**先装控制面再按 inventory 接 Agent**，`agents` 可空、S5 显式跳过并提示 `deploy/agent/install.sh`） | Agent 指向本站、身份唯一、代码/schema/脚本一致，心跳与设备发现正常；I4 逐项断言：心跳新鲜、实例/启动标识、摘要=清单、审计入口=本站 | 已安装且归属其他站点则拒绝；不能重复注册 Host、重写 protected keys 或静默转走现有设备；失败即停，不继续下一个 Agent |
-| S6 受控主链与存储 | 选择专用测试设备，验证 Plan/claim/租约、Watcher、scan/upload/merge 及授权写读探针（I4：`verify` 的降级路径） | 结果、日志位置、文件引用及终态清理有证据；I4 具备：noop 单步 Plan 到终态 + step trace 落在指定设备 | 失败保留证据，不盲目重跑刷机/硬件动作；探针只清理本次创建的文件；无设备、存储探针与 scan/upload/merge 记 `BLOCKED`，不得报成通过 |
+| S5 Host 与 Agent | 经本站管理员权限创建/核对 Host，消费 API 返回 ID，复用 Ansible/安装服务（I4：`install --through-agents`，`tools/site_config/agents.py`；I5.5：**先装控制面再按 inventory 接 Agent**，`agents` 可空、S5 显式跳过并提示 `deploy/agent/install.sh`；v0.10：Agent 侧建 AEE 本地根/挂载点、挂载站点导出并让 `MOUNT_POINTS` 跟随中心存储） | Agent 指向本站、身份唯一、代码/schema/脚本一致，心跳与设备发现正常；I4 逐项断言：心跳新鲜、实例/启动标识、摘要=清单、审计入口=本站；v0.10 增 `install.s5.storage`：声明导出的站点，Agent 心跳 `mount_status` 必须报该路径已挂（未开导出如实 BLOCKED `export_not_enabled`） | 已安装且归属其他站点则拒绝；不能重复注册 Host、重写 protected keys 或静默转走现有设备；失败即停，不继续下一个 Agent；挂载失败不掩盖为通过 |
+| S6 受控主链与存储 | 选择专用测试设备，验证 Plan/claim/租约、Watcher、scan/upload/merge 及授权写读探针（I4：`verify` 的降级路径；v0.10：`verify --storage-probe-subdir <name>` 实检写读） | 结果、日志位置、文件引用及终态清理有证据；I4 具备：noop 单步 Plan 到终态 + step trace 落在指定设备 | 失败保留证据，不盲目重跑刷机/硬件动作；探针只清理本次创建的文件；未授权探针、无设备与 scan/upload/merge 记 `BLOCKED`，不得报成通过 |
 | S7 导航与交接 | 提供站点入口、负责人、运维文档、安装摘要和后续维护/备份计划（I5：`/site/` + `handover` + [运维文档](../operations/site-handover-and-navigation.md)） | 独立入口可用，导航无凭据，P1 对应验收签字；I5 逐项映射 MS-01/02/04/05/06/10/13 并把缺证据条目保持 BLOCKED | P1 完成不代表 P2 升级恢复或 P4 总览已交付；`handover.json` 是证据快照，不是签字 |
 
 首管理员引导仅用于已确认的新站点初始化：复用现有密码校验/哈希与审计，禁止默认弱密码、秘密入 argv、覆盖现有密码或为已有普通用户静默提权。
@@ -246,6 +253,8 @@ SSH 严格核对已有/获准指纹，不能用关闭主机密钥校验解决首
 
 存储写读探针必须在确认分享身份后，使用明确的专用探针子目录与唯一文件名，按原样读回并仅删除本次文件。
 挂载未就绪时禁止向本机同名目录落数据；只有元数据检查通过时，结果应写“待授权写入验证”，不能宣称存储端到端已通过。
+v0.10 起该探针由 `verify --storage-probe-subdir` 实现：路径不是挂载点即 FAIL（不允许写进本机同名目录），
+未授权即 `BLOCKED storage_probe_not_authorized`；子目录取值拒绝带斜杠/穿越，探针只删自己那个文件。
 
 **安装链 fail-closed 判据（v0.9：#2084 / #2088 / #2020 / #2017）**
 

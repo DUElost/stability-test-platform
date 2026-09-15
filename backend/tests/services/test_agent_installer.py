@@ -133,6 +133,31 @@ def test_prepare_install_agent_rejects_relative_install_root(mock_host):
     assert "agent_install_root" in out["message"]
 
 
+def test_prepare_install_agent_passes_the_share_server_host(mock_host, monkeypatch):
+    """#2181：站点自建存储时，NFS 服务端就是站点入口主机（不是端口/路径）。"""
+    monkeypatch.setenv(INSTALL_API_URL_ENV, "https://stp.example.com:8443")
+    creds = MagicMock()
+    creds.user = "android"
+    creds.password = "secret"
+    creds.key_path = None
+
+    with (
+        patch("backend.services.agent_installer.SessionLocal") as sl,
+        patch(
+            "backend.services.agent_installer.resolve_host_ssh_credentials",
+            return_value=(creds, False),
+        ),
+    ):
+        db = MagicMock()
+        sl.return_value = db
+        db.get.return_value = mock_host
+        out = prepare_install_agent("host-abc")
+
+    assert out["ok"] is True
+    assert "agent_nfs_server=stp.example.com" in out["cmd"]
+    out["cleanup"]()
+
+
 def test_start_install_runconsole_registers_active():
     rc = MagicMock()
     rc.start.return_value = "con-test-1"

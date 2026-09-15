@@ -96,6 +96,25 @@ sudo ./deploy/install.sh --database stp_b --public-url http://192.0.2.5 --data-d
 
 **绝不会做**：格式化磁盘、删除既有数据目录、递归改既有数据的属主、覆盖未接管的数据库、`--force` 绕过保护。
 
+### 中心存储：站点自建导出（`export_to_agents`）
+
+`init` 为 `local_mount` 站点写 `storage.export_to_agents: true`：控制面把
+`storage.mount_path` 这一棵子树以 NFS 导出给本站 Agent，Agent 的 AEE 落点才有中心存储。
+`install` 的两步（任一步失败即停）：
+
+- **S1**：装 `nfs-kernel-server`；把导出根交给约定写入身份（`chown root:1000` + `chmod 0775`，
+  只动这一层，不递归）；
+- **S2**：写 `etc/exports.d/stp-<site>.exports`（客户端 = 声明 Agent 的 `/24`；目标写主机名
+  时放宽为 `*`，因为推不出网段）→ `exportfs -ra` → `enable --now nfs-server`。
+  首装尚无 Agent 时导出文件为空，报告如实标 `export_deferred`；加 Agent 后重跑即生效。
+
+Agent 侧（`agent/install.sh` 与 Ansible playbook）会建好 AEE 本地根、挂载点，挂载站点导出，
+并把 `MOUNT_POINTS` 跟随中心存储路径——**这是 `/storage` 页与 S5 存储断言的判据**；挂载失败
+只降级为提示，但 `install --through-agents` 会以 `install.s5.storage` 如实报 FAIL。
+
+**边界**：外部分享/受管存储（`existing_share` / `managed_linux`）由对方导出，本站不代挂；
+Agent 侧的挂载在这些站点由运维按分享约定自行完成，S5 对该项记 `BLOCKED export_not_enabled`。
+
 ### 监控栈：`/storage` 页的数据源（`monitoring`）
 
 `init` 写 `monitoring.enabled: true`（默认装）：站点自带 Prometheus + node-exporter，
@@ -168,8 +187,10 @@ sudo /opt/stp-tool/bin/python -m tools.site_config verify --config /etc/stp/site
 sudo ./deploy/install.sh handover
 ```
 
-存储写读探针与 scan/upload/merge 在 `verify` 中显式 `BLOCKED`（需要授权探针目录与真实
-设备日志），不得当作已验收。
+存储写读探针需要**显式授权**：`verify --storage-probe-subdir <name>` 会在
+`<storage.mount_path>/<name>/` 下写一个探针文件、原样读回、只删这一个文件；路径不是挂载点
+（或未授权）时如实 `FAIL`/`BLOCKED`，绝不写进本机同名目录冒充共享存储。scan/upload/merge
+仍是 `BLOCKED`（需要真实设备日志），不得当作已验收。
 
 两个细节：
 
@@ -233,6 +254,10 @@ sudo ./deploy/install.sh handover
 | `inventory_shape` | 清单键名/键值形状不对 | 只用文档列出的键；值不含空格 |
 | `agent_install_root_mismatch` | 清单与站点声明的安装根不一致 | 统一 `install_root`（站点级单值） |
 | `install_storage` | 声明路径不是挂载点 | 先挂盘/bind，或 `--data-disk` 让 `init` 处理 |
+| `install_export` | 装 NFS 服务端或 `exportfs -ra`/`nfs-server` 失败 | 看 `dpkg -l nfs-kernel-server`、`exportfs -s`、`systemctl status nfs-server` 输出 |
+| `shared_storage_not_mounted` | Agent 没挂上中心存储（或 verify 时路径不是挂载点） | Agent 侧 `findmnt <mount_path>`、`mount -t nfs <站点入口>:<mount_path> <mount_path>`；控制面侧 `exportfs -s`、`systemctl status nfs-server`。从没挂上的分享不会被写进 fstab |
+| `storage_unwritable` / `storage_probe_failed` | 分享拒绝写入 / 读回不一致 | 查导出选项（`all_squash` 映射身份与导出根属组）、空间与控制面到存储的链路 |
+| `storage_probe_subdir` | 探针子目录取值含斜杠或穿越 | 传单个目录名（字母/数字/点/下划线/短横线） |
 | `install_monitoring` | 监控栈没起来：包装不上 / 发行版 unit 不读 `$ARGS` / `/-/ready` 未就绪 | `dpkg -l prometheus prometheus-node-exporter`、`grep -n ARGS /usr/lib/systemd/system/prometheus.service`、`systemctl status prometheus prometheus-node-exporter stp-mem-top.timer`、`journalctl -u prometheus -n 50` |
 | `install_confirm` / `install_hostname` | 确认值或主机名对不上 | 确认在目标机上执行，`--confirm-site/--confirm-target` 取自 `site.yaml` |
 | `state_locked` | 同站点已有安装在进行 | 等它结束，或确认无残留进程后重跑 |

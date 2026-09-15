@@ -141,6 +141,9 @@ def prepare_install_agent(
     try:
         api_url = normalize_install_api_url()
         extra_vars = normalize_install_options(install_options)
+        # 中心存储的 NFS 服务端就是控制面本机；host 取自站点公开入口，供 Agent
+        # 侧挂载（agent_nfs_root 是导出路径，两者成对才有意义）。
+        extra_vars["agent_nfs_server"] = urlsplit(api_url).hostname or ""
     except InstallConfigError as exc:
         return {"ok": False, "message": str(exc)}
 

@@ -393,6 +393,8 @@ def init_site(
             "share": None,
             "credential_ref": None,
             "mount_path": mount_path,
+            # 站点自建的子树默认导出给本站 Agent：STP_AEE_NFS_ROOT 才有实际落点
+            "export_to_agents": True,
         },
         "agents": [],
         "dependencies": {

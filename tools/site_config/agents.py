@@ -580,6 +580,7 @@ def assert_agent(
     poll_interval: float = INSTALL_POLL_INTERVAL_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
     say: Callable[[str], None] | None = None,
+    storage_root: str | None = None,
 ) -> list[Check]:
     """Assert the deployed Agent points here, is alive and matches the release."""
     say = say or (lambda message: None)
@@ -687,6 +688,35 @@ def assert_agent(
         "install.s5.endpoint", "agent", "$.control_plane.public_url", "endpoint_recorded",
         "The audited install pushed this site's public entry into the Agent configuration.",
         "A reused Host must be re-installed when the site entry changes.",
+    ))
+
+    # 共享存储：站点自建导出时，Agent 必须真的挂上同一个路径并上报
+    # （mount_status 来自 Agent 心跳的 MOUNT_POINTS）。装了但没挂上，AEE 会静默
+    # 落到本机 SSD，中心存储永远是空的——这正是 238 现场的样子，必须 fail-closed。
+    if storage_root is None:
+        checks.append(blocked(
+            "install.s5.storage", "storage", "$.storage.mount_path", "export_not_enabled",
+            "The site does not serve its own storage export, so no Agent-side mount was asserted.",
+            "Set storage.export_to_agents on a local_mount site to serve Agents from this control plane; "
+            "external shares are mounted out of band and stay unasserted here.",
+        ))
+        return checks
+    raw_status = host.get("mount_status")
+    entry = raw_status.get(storage_root) if isinstance(raw_status, dict) else None
+    if not (isinstance(entry, dict) and entry.get("ok") is True):
+        checks.append(replace(
+            _fail("install.s5.storage", "shared_storage_not_mounted",
+                  location="$.storage.mount_path", role="site"),
+            message=(
+                f"The Agent does not report the central storage {storage_root} as mounted "
+                f"(reported: {sorted(raw_status) if isinstance(raw_status, dict) else raw_status!r})."
+            ),
+        ))
+        return checks
+    checks.append(passed(
+        "install.s5.storage", "storage", "$.storage.mount_path", "shared_storage_mounted",
+        f"The Agent reports {storage_root} as a mounted path in its heartbeat.",
+        "S6 owns the write/read probe; this only proves the mount is present on the Agent.",
     ))
     return checks
 
@@ -834,6 +864,8 @@ def stage_s5_agents(
             location=location, poll_timeout=poll_timeout, poll_interval=poll_interval,
             digest_timeout=digest_timeout, identity_timeout=identity_timeout,
             sleep=sleep, say=say, now=now,
+            # 只有站点自建导出的中心存储才谈得上"Agent 侧应挂上"。
+            storage_root=config.storage.mount_path if config.storage.export_to_agents else None,
         )
         checks.extend(result)
         if any(check.status == "FAIL" for check in result):
@@ -873,6 +905,7 @@ def _onboard_one(
     sleep: Callable[[float], None],
     say: Callable[[str], None],
     now: float | None,
+    storage_root: str | None = None,
 ) -> list[Check]:
     config = ctx.config
     name = f"{config.site.id}-{agent.key}"
@@ -925,6 +958,7 @@ def _onboard_one(
         poll_interval=poll_interval,
         sleep=sleep,
         say=say,
+        storage_root=storage_root,
     ))
     if any(check.status == "FAIL" for check in checks):
         return checks

@@ -37,6 +37,8 @@ MESSAGES = {
     "http_tls_conflict": "Remove the TLS binding for explicit internal HTTP, or use HTTPS.",
     "storage_management_required": "Managed Linux storage requires its OS version, SSH user and SSH binding name.",
     "storage_share_required": "Declare the share target, protocol and share name; local_mount is the only exception.",
+    "install_export": "Preparing or publishing the NFS export failed; check the package install and `exportfs -ra` output.",
+    "storage_export_conflict": "export_to_agents only applies to local_mount; remote shares and managed storage already export on their own.",
     "local_mount_fields_conflict": "Drop target/protocol/share and management fields for local_mount; it is a path on this control-plane host.",
     "existing_share_management_conflict": "Existing-share attachment must not declare server-management inputs.",
     "nfs_credential_conflict": "NFS attachment does not consume a CIFS credential binding.",
@@ -163,7 +165,12 @@ MESSAGES = {
     "run_evidence_missing": "The run reached a successful terminal state but no job/step evidence appeared; inspect the timeline before claiming success.",
     "run_timeout": "The controlled run did not reach a terminal state before the deadline; inspect the run timeline before retrying.",
     "watcher_not_observed": "No watcher lifecycle event was recorded for this run.",
-    "probe_not_implemented": "Storage write/read probes are not implemented in this slice; they require an authorized probe directory.",
+    "storage_probe_not_authorized": "Authorize one probe subdirectory explicitly; without it the control plane must not write into the share.",
+    "storage_probe_subdir": "Pass a single subdirectory name (letters, digits, dot, underscore, hyphen); no slash, no traversal.",
+    "shared_storage_not_mounted": "The declared central storage is not a mount on that host; mount the share before claiming shared storage.",
+    "storage_unwritable": "The share rejected the probe write; check the export options, ownership and free space on the storage host.",
+    "storage_probe_failed": "The probe file did not read back what was written; treat the share as unsafe for artifacts.",
+    "export_not_enabled": "This site does not export its own storage, so Agent-side mounts were not asserted here.",
     "not_covered": "This command cannot cover the requested path; complete it separately with real artifacts.",
 }
 
