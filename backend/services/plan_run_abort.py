@@ -266,7 +266,7 @@ def abort_plan_run(
     preserved (merged, not replaced).  The in-precheck whole-plan FAILED path is
     not taken.
 
-    ADR-0043（Accepted v1.0，#2154；下方原 #1928 注记**已失效**）：宽限的
+    ADR-0043（Accepted v1.1，#2154；下方原 #1928 注记**已失效**）：宽限的
     **计时主体 ≡ 请求主体**——``abort_requested`` 的 ``at`` / ``deadline_at`` 只由
     **run 级** abort 写入；host 级 abort 只维护该键的**名单语义**
     （``requested_job_ids`` 合并，#2050 候选收窄）与**存在性**（聚合 SUCCESS 污染 /
