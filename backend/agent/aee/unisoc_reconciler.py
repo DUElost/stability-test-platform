@@ -8,11 +8,13 @@ import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
+from uuid import uuid4
 
 from ..watcher.contracts import ContractViolation
 from .collector import CollectorError
 from .collectors.unisoc import UNIVIEW_INFO_FILENAME, UNIVIEW_ROOT
+from .emit_intent import load_intents, save_intents
 from .mobilelog import make_adb_pull_fn
 from .extraction_slot import host_extraction_slot
 from .paths import get_aee_local_root
@@ -21,6 +23,7 @@ from .reconciler import (
     _env_float,
     _env_int,
     _make_interruptible_adb_shell_fn,
+    _parse_iso_dt,
     is_reconciler_enabled,
 )
 
@@ -111,6 +114,9 @@ class UnisocUniviewReconciler:
         self._processed: Dict[str, Optional[str]] = {}
         #: 本拍远端列举到的签名（供发射侧判定；每拍重置）
         self._pending_signatures: Dict[str, str] = {}
+        #: #2079：本拍**未能确认**「本地内容 == 远端签名」的名字（拉取失败）——
+        #: 发射循环必须跳过，否则会拿陈旧本地内容当新异常上报。每拍重置。
+        self._unconfirmed_local: Set[str] = set()
         # #767：_processed 只增不减 + 整集重写会让状态存储按设备历史事件总量
         # 线性膨胀。去重语义要求保留的名字只有两类——仍在设备列表上（会被
         # 重拉）、仍在当前 stamp 本地树（会被重扫）；两者皆非的名字不可能再
@@ -186,16 +192,19 @@ class UnisocUniviewReconciler:
         except Exception:
             logger.debug("unisoc_reconciler_state_load_failed", exc_info=True)
 
-    def _save_processed_state(self) -> None:
+    def _save_processed_state(self) -> bool:
+        """写回 processed 集；返回是否**确实落盘**（#2040 据此回收意图记录）。"""
         if self._state_store is None:
-            return
+            return True
         try:
             self._state_store.set_state(
                 self._state_key(),
                 json.dumps(self._processed, sort_keys=True),
             )
+            return True
         except Exception:
             logger.debug("unisoc_reconciler_state_save_failed", exc_info=True)
+            return False
 
     def _run(self) -> None:
         while not self._stop_evt.is_set():
@@ -237,6 +246,7 @@ class UnisocUniviewReconciler:
         self._sync_device_events_to_local(root)
         emitted = 0
         recorded = 0
+        recorded_names: List[str] = []
         local_names: Set[str] = set()
         for event_dir in sorted(root.iterdir()):
             if not event_dir.is_dir():
@@ -249,13 +259,18 @@ class UnisocUniviewReconciler:
                 # #2010：仅「从未处理」或「远端签名变化」才发射；同签名不重复发
                 prev = self._processed.get(key, _SIGNATURE_UNKNOWN)
                 signature = self._pending_signatures.get(key)
+                unconfirmed = key in self._unconfirmed_local
+            if unconfirmed:
+                # #2079：本拍拉取失败 → 本地内容不代表远端签名，本拍不发射
+                # （pending 已回退，下一拍重试；不发陈旧内容，也不吞掉新内容）。
+                continue
             if prev is not _SIGNATURE_UNKNOWN and (
                 signature is None or prev == signature
             ):
                 continue
             if not (event_dir / UNIVIEW_INFO_FILENAME).is_file():
                 continue
-            result = self._emit_event(event_dir)
+            result = self._emit_event(event_dir, signature)
             if result == _EMIT_RESULT_FAILED:
                 # 瞬时失败（其它 parse 异常 / emit 阶段）→ 不落签名，下一拍重试
                 continue
@@ -264,6 +279,7 @@ class UnisocUniviewReconciler:
             with self._state_lock:
                 self._processed[key] = signature or ""
             recorded += 1
+            recorded_names.append(key)
             if result == _EMIT_RESULT_EMITTED:
                 emitted += 1
         if emitted:
@@ -271,7 +287,10 @@ class UnisocUniviewReconciler:
             self.stats.new_entries_total += emitted
         pruned = self._prune_processed(local_names)
         if recorded or pruned:
-            self._save_processed_state()
+            if self._save_processed_state() and recorded_names:
+                # #2040：processed 已持久化 → 这批 keys 不再需要（留着会被同名
+                # 目录的下一次「新内容」误当重放复用，见 _drop_emit_intents）。
+                self._drop_emit_intents(recorded_names)
         return emitted
 
     def _prune_processed(self, local_names: Set[str]) -> int:
@@ -284,6 +303,7 @@ class UnisocUniviewReconciler:
         （``ls`` rc≠0）视为该 root 权威空集，不阻塞整拍裁剪（#1820）。
         """
         listed = self._last_listed
+        pruned_intent_names: List[str] = []
         with self._state_lock:
             if listed is None:
                 if self._absent_streak:
@@ -298,6 +318,7 @@ class UnisocUniviewReconciler:
                 if streak >= self._prune_after_ticks:
                     self._processed.pop(name, None)
                     self._absent_streak.pop(name, None)
+                    pruned_intent_names.append(name)
                     pruned += 1
                 else:
                     self._absent_streak[name] = streak
@@ -323,6 +344,7 @@ class UnisocUniviewReconciler:
                 for name in victims:
                     self._processed.pop(name, None)
                     self._absent_streak.pop(name, None)
+                    pruned_intent_names.append(name)
                 pruned += len(victims)
                 if len(victims) < overflow:
                     # 上限是防膨胀的最后防线，不是必须精确命中：不足时宁可少驱逐，
@@ -344,6 +366,10 @@ class UnisocUniviewReconciler:
                 "unisoc_reconciler_pruned serial=%s job=%d removed=%d kept=%d",
                 self._serial, self._job_id, pruned, len(self._processed),
             )
+        # #2040：名字已被裁剪 → 其意图记录一并回收（留着会被同名目录的下一次
+        # 「新内容」误当重放复用旧 keys）。锁外做 I/O。
+        if pruned_intent_names:
+            self._drop_emit_intents(pruned_intent_names)
         return pruned
 
     def _list_remote_uniview_root(self, remote_root: str) -> Optional[Dict[str, str]]:
@@ -401,6 +427,7 @@ class UnisocUniviewReconciler:
         """
         pulled = 0
         listed: Set[str] = set()
+        unconfirmed: Set[str] = set()
         listing_complete = True
         self._last_listed = None
         self._pending_signatures = {}
@@ -435,6 +462,15 @@ class UnisocUniviewReconciler:
                     continue
                 if self._pull_event_dir(remote_dir, local_dir):
                     pulled += 1
+                    # 本地内容已刷新为该签名 → pending 保持不动（发射循环据此判断）
+                    continue
+                # #2079：拉取失败时本地目录仍是**旧签名**的内容，不得把 pending
+                # 推进到远端新签名——否则发射循环会拿陈旧 unievent_info 上报为
+                # 「新异常」，并在成功后记下新签名：真实新内容此后既不重拉、
+                # 也不再发射（该 key 的签名不再变化）。
+                self._pending_signatures.pop(name, None)
+                unconfirmed.add(name)
+        self._unconfirmed_local = unconfirmed
         if pulled:
             logger.info(
                 "unisoc_reconciler_pulled serial=%s job=%d count=%d",
@@ -481,14 +517,18 @@ class UnisocUniviewReconciler:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
-    def _emit_event(self, event_dir: Path) -> str:
+    def _emit_event(self, event_dir: Path, signature: Optional[str]) -> str:
         """发射一条事件；返回 ``_EMIT_RESULT_*`` 三态（#2083）。
 
         ``NOT_REPORTABLE`` = ``parse_metadata`` 抛 ``CollectorError``（normalboot-only /
         空文件 / 截断）：确定性不可上报，调用方落签名避免每拍重拉；其它 parse 异常
         与 emit 阶段失败属瞬时问题（``FAILED``），不落签名、保留重试。
+
+        #2040：效果之前**先持久化幂等 keys**（意图记录，与 MTK 路 #1719 同语义）。
+        崩溃落在「已 emit、未落 processed」之间时，重启重扫同一目录会复用同一
+        ``(job_id, seq_no)`` 与同一 DLE ``event_id``；否则重发拿到**新 seq_no**，
+        控制面按 ``(job_id, seq_no)`` 去重拦不住 → 重复 log_signal + 重复 DLE。
         """
-        detected_at = datetime.now(timezone.utc)
         if self._platform_collector is None:
             return _EMIT_RESULT_FAILED
         try:
@@ -514,30 +554,20 @@ class UnisocUniviewReconciler:
             "pull_source": "reconciler",
             "entry_origin": "runtime",
         }
+        dle_params: Dict[str, Any] = {
+            "serial": self._serial,
+            "platform": self._platform,
+            "event_type": "UNIVIEW",
+            "event_subtype": meta.event_subtype,
+            "device_timestamp": (
+                meta.device_timestamp.isoformat() if meta.device_timestamp else None
+            ),
+            "plan_run_id": self._plan_run_id,
+            "job_id": self._job_id,
+        }
         try:
-            seq_no = self._emitter.emit(
-                category="UNIVIEW",
-                source="reconciler",
-                path_on_device=str(event_dir.name),
-                detected_at=detected_at,
-                artifact_uri=str(event_dir),
-                extra=extra,
-            )
-            self.stats.signals_emitted += 1
-            if self._device_log_client is not None:
-                self._device_log_client.create_local_event(
-                    serial=self._serial,
-                    platform=self._platform,
-                    event_type="UNIVIEW",
-                    event_subtype=meta.event_subtype,
-                    detected_at=detected_at,
-                    device_timestamp=meta.device_timestamp,
-                    local_path=event_dir,
-                    plan_run_id=self._plan_run_id,
-                    job_id=self._job_id,
-                    link_signal_seq_no=seq_no,
-                    size_bytes=self._device_log_client.dir_size_bytes(event_dir),
-                )
+            record = self._acquire_emit_intent(event_dir, signature, extra, dle_params)
+            self._deliver_emit_intent(event_dir, record)
             return _EMIT_RESULT_EMITTED
         except ContractViolation as exc:
             self.stats.signals_dropped += 1
@@ -550,6 +580,117 @@ class UnisocUniviewReconciler:
             self.stats.signals_dropped += 1
             logger.exception("unisoc_reconciler_emit_failed serial=%s job=%d", self._serial, self._job_id)
             return _EMIT_RESULT_FAILED
+
+    def _acquire_emit_intent(
+        self,
+        event_dir: Path,
+        signature: Optional[str],
+        extra: Dict[str, Any],
+        dle_params: Dict[str, Any],
+    ) -> dict:
+        """取该目录**当前内容签名**对应的幂等 keys；没有则分配并**先持久化**。
+
+        签名不匹配的旧记录一律弃用（同一目录被追加新异常时必须是新 keys，否则
+        新异常会被平台当作重复丢掉）；无 state_store（测试桩）时不落盘、每次新分配。
+        """
+        name = event_dir.name
+        sig_key = signature or ""
+        intents: Optional[Dict[str, dict]] = None
+        if self._state_store is not None:
+            intents = load_intents(self._state_store, self._state_key())
+            existing = intents.get(name)
+            if (
+                isinstance(existing, dict)
+                and existing.get("seq_no") is not None
+                and existing.get("signature") == sig_key
+            ):
+                logger.debug(
+                    "unisoc_reconciler_emit_intent_replay serial=%s job=%d dir=%s seq=%s",
+                    self._serial, self._job_id, name, existing.get("seq_no"),
+                )
+                return existing
+        # 只有确实要产生新效果时才分配 keys（重放路径不得白烧 seq_no）
+        record = self._new_emit_intent(event_dir, sig_key, extra, dle_params)
+        if intents is None:
+            return record
+        intents[name] = record
+        # 先持久化 keys，后做效果——崩溃落在两者之间时重放复用同一幂等键
+        save_intents(self._state_store, self._state_key(), intents)
+        return record
+
+    def _new_emit_intent(
+        self,
+        event_dir: Path,
+        signature: str,
+        extra: Dict[str, Any],
+        dle_params: Dict[str, Any],
+    ) -> dict:
+        detected_at = datetime.now(timezone.utc)
+        seq_no, envelope = self._emitter.prepare(
+            category="UNIVIEW",
+            source="reconciler",
+            path_on_device=event_dir.name,
+            detected_at=detected_at,
+            artifact_uri=str(event_dir),
+            extra=extra,
+        )
+        return {
+            "signature": signature,
+            "seq_no": int(seq_no),
+            "envelope": envelope,
+            # 首次观测时刻固化：重放不得产生第二个 detected_at（设备时钟不可信）
+            "detected_at": detected_at.isoformat(),
+            "dle_event_id": str(uuid4()),
+            "dle_params": dict(dle_params),
+        }
+
+    def _deliver_emit_intent(self, event_dir: Path, record: dict) -> None:
+        """按记录里的 keys 做效果：log_signal 入 outbox + DLE 预分配 UUID。
+
+        两者都由 keys 保证幂等（outbox ``(job_id, seq_no)`` UNIQUE / 后端
+        ``ON CONFLICT DO NOTHING``；DLE 按 ``id`` upsert，#1042/#1051），
+        因此重放同一记录不会在平台侧产生第二条事实。
+        """
+        seq_no = int(record["seq_no"])
+        self._emitter.enqueue(seq_no, dict(record["envelope"]))
+        self.stats.signals_emitted += 1
+        if self._device_log_client is None:
+            return
+        params = dict(record.get("dle_params") or {})
+        device_ts = params.get("device_timestamp")
+        self._device_log_client.create_local_event(
+            serial=str(params.get("serial") or self._serial),
+            platform=str(params.get("platform") or self._platform),
+            event_type=str(params.get("event_type") or "UNIVIEW"),
+            event_subtype=params.get("event_subtype"),
+            detected_at=_parse_iso_dt(record.get("detected_at")) or datetime.now(timezone.utc),
+            device_timestamp=_parse_iso_dt(device_ts),
+            local_path=event_dir,
+            plan_run_id=params.get("plan_run_id"),
+            job_id=params.get("job_id"),
+            link_signal_seq_no=seq_no,
+            size_bytes=self._device_log_client.dir_size_bytes(event_dir),
+            event_id=record.get("dle_event_id"),
+        )
+
+    def _drop_emit_intents(self, names: List[str]) -> None:
+        """#2040：回收已无用的意图记录（processed 已持久化 / 名字已被裁剪）。
+
+        必须与 processed 同步回收：记录留着会被同名目录的下一次「新内容」误认成
+        重放而复用旧 keys，把新异常在平台侧当作重复丢掉。
+        """
+        if self._state_store is None or not names:
+            return
+        try:
+            intents = load_intents(self._state_store, self._state_key())
+            changed = False
+            for name in names:
+                if intents.pop(name, None) is not None:
+                    changed = True
+            if changed:
+                save_intents(self._state_store, self._state_key(), intents)
+        except Exception:
+            logger.debug("unisoc_reconciler_intent_drop_failed", exc_info=True)
 
 
 def resolve_unisoc_reconciler_enabled(host_id: Optional[str]) -> bool:
