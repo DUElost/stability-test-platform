@@ -50,7 +50,7 @@ logrotate 默认 `create` 模式（rename + 新建）不会让 systemd 重新打
 - 同族回归：`tests/test_ansible_digest_contract.py` + `tests/test_ansible_resources_guard_2166.py`
   → 13 passed（合计 18 passed）；
 - `ansible-playbook playbooks/update_agent.yml --syntax-check` → 通过；
-- **canary 真机 dry-run（172.21.15.59，`logrotate -d` 不改文件）**：
+- **canary 真机 dry-run（172.21.x.x，`logrotate -d` 不改文件）**：
   ```
   considering log .../agent_error.log → log needs rotating      （1.68GB > 200M）
   considering log .../agent.log       → log does not need rotating（0 字节，notifempty 语义）
