@@ -684,3 +684,95 @@ def test_abort_jobs_for_host_scoped_to_host_only(db_session, abort_chain):
         pr_after.run_context.get("abort_requested", {}).get("requested_job_ids") or []
     )
     assert pr_after.status == PlanRunStatus.RUNNING.value
+
+
+# ---------------------------------------------------------------------------
+# ADR-0043（#2154）：宽限的计时主体 ≡ 请求主体（写入侧）
+# ---------------------------------------------------------------------------
+
+
+def _host_abort_once(db_session, abort_chain, pr, reason="host-update") -> None:
+    with patch(
+        "backend.services.plan_run_abort.schedule_emit",
+    ), patch(
+        "backend.services.plan_run_abort.should_trigger_dedup",
+        return_value=False,
+    ):
+        abort_jobs_for_host("h-abort", db=db_session, reason=reason)
+
+
+def test_host_abort_writes_host_clock_not_run_level_at(db_session, abort_chain):
+    """ADR-0043 D1：host 级 abort 的时钟写在 `abort_requested_hosts[host_id]`，
+    **不写** run 级 `at`——run 级键只保留名单语义与存在性。"""
+    plan = abort_chain["plan"]
+    pr = _make_plan_run(db_session, plan.id)
+    _make_job(
+        db_session, pr.id, plan.id, abort_chain["dev1"].id, "h-abort",
+        status=JobStatus.RUNNING.value,
+    )
+
+    _host_abort_once(db_session, abort_chain, pr)
+
+    db_session.expire_all()
+    ctx = db_session.get(PlanRun, pr.id).run_context
+    host_clock = (ctx.get("abort_requested_hosts") or {}).get("h-abort") or {}
+    assert host_clock.get("at"), (
+        "host 主体的时钟必须落在 abort_requested_hosts[host_id]"
+    )
+    assert host_clock.get("deadline_at")
+    assert host_clock.get("reason") == "host-update"
+    # run 级键仍存在（聚合 SUCCESS 污染 / 热更新 abort_pending / recovery
+    # ABORT_LOCAL / dispatch 材料化保护四个读者只看键是否存在）
+    assert "abort_requested" in ctx
+    assert "at" not in (ctx.get("abort_requested") or {}), (
+        "run 级 `at` 只由 run 级 abort 写入，host 级请求不得写入或重置它"
+    )
+
+
+def test_host_abort_clock_not_reset_by_later_request(db_session, abort_chain):
+    """ADR-0043 D2（反 N×GRACE）：自首次请求起算，后续请求**不重置**该时钟。"""
+    plan = abort_chain["plan"]
+    past = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    pr = _make_plan_run(db_session, plan.id, run_context={
+        "abort_requested": {"reason": "host_update"},
+        "abort_requested_hosts": {
+            "h-abort": {
+                "at": past, "deadline_at": past, "reason": "host_update",
+            },
+        },
+    })
+    _make_job(
+        db_session, pr.id, plan.id, abort_chain["dev1"].id, "h-abort",
+        status=JobStatus.RUNNING.value,
+    )
+
+    _host_abort_once(db_session, abort_chain, pr, reason="host-update-2")
+
+    db_session.expire_all()
+    host_clock = (
+        db_session.get(PlanRun, pr.id).run_context.get("abort_requested_hosts") or {}
+    ).get("h-abort") or {}
+    assert host_clock.get("at") == past, (
+        "后续 host 级请求不得把宽限重置为「本次请求 + GRACE」"
+    )
+    assert host_clock.get("deadline_at") == past
+    assert host_clock.get("reason") == "host-update-2", "审计信息仍应刷新"
+
+
+def test_run_level_abort_does_not_write_host_clock(db_session, abort_chain):
+    """ADR-0043 D1：run 级 abort 只写 run 级时钟，不得产生 host 主体时钟。"""
+    plan = abort_chain["plan"]
+    pr = _make_plan_run(db_session, plan.id)
+    _make_job(
+        db_session, pr.id, plan.id, abort_chain["dev1"].id, "h-abort",
+        status=JobStatus.RUNNING.value,
+    )
+
+    abort_plan_run(pr.id, db=db_session, reason="run-abort")
+
+    db_session.expire_all()
+    ctx = db_session.get(PlanRun, pr.id).run_context
+    assert (ctx.get("abort_requested") or {}).get("at"), "run 级主体时钟应在 run 级键上"
+    assert not ctx.get("abort_requested_hosts"), (
+        "run 级请求不得生成 host 级时钟（主体不得串台）"
+    )
