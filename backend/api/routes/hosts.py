@@ -50,7 +50,11 @@ from backend.services.host_upgrade_gate import (
     begin_host_upgrade,
     end_host_upgrade,
 )
-from backend.services.artifact_digest import plan_convergence
+from backend.services.artifact_digest import (
+    ARTIFACT_KIND_CODE,
+    compute_desired_artifact_digest,
+    plan_convergence,
+)
 from backend.services.agent_version_info import finalize_hot_update_outcome
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
 from backend.services.agent_version_info import build_host_version_view
@@ -126,7 +130,13 @@ def _derive_agent_installed(h: Host) -> tuple[bool, str | None]:
     return False, None
 
 
-def _host_to_out(h: Host, *, db: Session | None = None, host_key_trust: str | None = None) -> HostOut:
+def _host_to_out(
+    h: Host,
+    *,
+    db: Session | None = None,
+    host_key_trust: str | None = None,
+    desired_artifact_digest: str | None = None,
+) -> HostOut:
     """从 ORM 对象构造 HostOut，从 host.extra 中提取 capacity/health。
 
     不能仅靠 HostOut.model_validate(h) —— Pydantic 不会自动从 JSON 列
@@ -145,7 +155,11 @@ def _host_to_out(h: Host, *, db: Session | None = None, host_key_trust: str | No
     installed, installed_at = _derive_agent_installed(h)
     out.agent_installed = installed
     out.agent_installed_at = installed_at
-    version_view = build_host_version_view(extra)
+    version_view = build_host_version_view(
+        extra,
+        agent_artifact_digest=getattr(h, "agent_artifact_digest", None),
+        desired_artifact_digest=desired_artifact_digest,
+    )
     out.agent_protocol_version = version_view["agent_protocol_version"]
     out.agent_code_revision = version_view["agent_code_revision"]
     out.expected_code_revision = version_view["expected_code_revision"]
@@ -370,7 +384,9 @@ def list_hosts(
             needs_commit = True
     if needs_commit:
         db.commit()
-    items = [_host_to_out(h) for h in hosts]
+    # desired digest 现算一次复用（列表 N 台不重复 stat 输入集）
+    desired = compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)
+    items = [_host_to_out(h, desired_artifact_digest=desired) for h in hosts]
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return items
