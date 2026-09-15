@@ -53,9 +53,12 @@ fi
 if [ ! -x "$PYTHON" ]; then
     PYTHON="python3"
 fi
-if ! "$PYTHON" "$REPO_ROOT/tools/dev/check_alembic_at_head.py"; then
-    echo "check-deploy-source: FAIL —— alembic schema 未对齐代码 head（见上方输出）" >&2
+# #2062：手工部署路径按 runbook 是「pull → 守卫 → alembic upgrade head」——刚 pull 到带
+# 新迁移的代码时，库必然**合法地落后**。故这里用 --allow-behind（只拒「库超前/修订未知」），
+# 精确相等留给 systemd 的 ExecStartPre（那里硬检查位于 upgrade head 之后）。
+if ! "$PYTHON" "$REPO_ROOT/tools/dev/check_alembic_at_head.py" --allow-behind; then
+    echo "check-deploy-source: FAIL —— alembic schema 超前于代码或修订未知（见上方输出）" >&2
     exit 1
 fi
 
-echo "check-deploy-source: OK —— 工作树在 main，tracked 工作区干净，schema 已对齐 head"
+echo "check-deploy-source: OK —— 工作树在 main，tracked 工作区干净，schema 未超前 head"

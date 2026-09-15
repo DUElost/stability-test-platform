@@ -12,7 +12,7 @@ import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from backend.core.metrics import (
     get_metrics_response,
     host_online,
     is_prometheus_available,
+    record_db_lock_waiters,
 )
 from backend.models.enums import DeviceStatus, HostStatus
 from backend.models.host import Device, Host
@@ -59,6 +60,49 @@ def _refresh_fleet_gauges(db: Session) -> None:
     except SQLAlchemyError:
         # 观测面不因 DB 抖动整体 500：保留其余指标输出，仅跳过舰队计数。
         logger.warning("metrics_fleet_gauge_refresh_failed", exc_info=True)
+
+
+_LOCK_WAIT_SQL = text(
+    "SELECT count(*) AS waiters, "
+    # 必须用 clock_timestamp()（真实当前时间）而不是 now()：now() 是**事务起始**
+    # 时间，而抓取事务通常开在等待出现之前 → now() - query_start 会是负数，
+    # 取 max 后被 clamp 成 0，指标恒 0（本单回归测试实测踩到）。
+    "COALESCE(max(EXTRACT(EPOCH FROM (clock_timestamp() - query_start))), 0) "
+    "AS max_wait_seconds "
+    "FROM pg_stat_activity "
+    # 限定本库：pg_stat_activity 是全实例视图，不过滤会把别的库的等待算进来。
+    "WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid() "
+    "AND datname = current_database()"
+)
+
+
+def _refresh_lock_wait_gauges(db: Session) -> None:
+    """#2104：把「此刻有多少会话在等锁 / 等最久多久」同步到 Prometheus。
+
+    为什么需要它：锁序修复（#1959/#1980/#1985/#2022）消掉了环路等待，但代价会转移到
+    **普通等待**（清理事务持行锁期间热路径排队、反向亦然）——这类等待对
+    ``stability_db_deadlock_total`` 不可见，只看死锁计数会得出「计数为 0 = 无代价」
+    的错误结论。与舰队 gauge 同口径：拉取期现算（一条聚合，无周期任务 staleness），
+    失败只跳过本组、不拖垮整次抓取；非 PG 方言（sqlite）直接跳过，因为
+    ``pg_stat_activity`` 是 PG 专有视图。
+    """
+    if not is_prometheus_available():
+        return
+    try:
+        bind = db.get_bind()
+        if bind.dialect.name != "postgresql":
+            return
+        # **必须先清统计快照**：`pg_stat_activity` 属 `pg_stat_*` 视图族，PG 15+ 在
+        # **同一事务内**读的是事务起始时的写时复制快照。本函数前面刚跑过舰队 gauge
+        # 查询（同一个请求 session），若不清快照，本次抓取就看不到「本事务开始之后
+        # 才出现的等待」——表现为采样恒偏低甚至恒 0（#2022 在
+        # `pg_stat_database.deadlocks` 上踩过同一坑；本单的回归测试也正因此先红）。
+        db.execute(text("SELECT pg_stat_clear_snapshot()"))
+        waiters, max_wait_seconds = db.execute(_LOCK_WAIT_SQL).one()
+    except SQLAlchemyError:
+        logger.warning("metrics_lock_wait_gauge_refresh_failed", exc_info=True)
+        return
+    record_db_lock_waiters(int(waiters or 0), float(max_wait_seconds or 0.0))
 
 
 def _metrics_auth_required() -> bool:
@@ -116,6 +160,7 @@ async def metrics(
     Returns metrics in Prometheus exposition format.
     """
     _refresh_fleet_gauges(db)
+    _refresh_lock_wait_gauges(db)
     data, content_type = get_metrics_response()
     return Response(content=data, media_type=content_type)
 
