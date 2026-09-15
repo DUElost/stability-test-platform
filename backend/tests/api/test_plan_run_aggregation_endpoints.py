@@ -2334,3 +2334,109 @@ class TestWatcherSummaryPlatformBucketQueryCount:
             "平台数 1→3 时 job_log_signal 相关查询数应保持不变，"
             f"实际 {n_one_platform}→{n_three_platforms}"
         )
+
+    def test_crash_details_uniview_same_dir_distinct_events_kept(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """#2080：UNIVIEW 同一事件目录内的**不同异常**必须分别保留。
+
+        UNIVIEW 的 `nfs_path` 是**事件目录**（一个目录可容纳多个异常），而 Agent 侧
+        #2010 已改为「签名变化就再发射一条」——若消费侧仍按目录去重，两条会被并回一条。
+        修复前本用例只返回 1 条；修复后按事件身份区分 → 2 条。
+        """
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        j2 = chain_setup["job_running"]
+
+        same_dir = "/mnt/nfs/jobs/shared/UNIVIEW/event_dir_1"
+        db_session.add_all([
+            JobLogSignal(
+                id=22201,
+                job_id=j1.id, host_id="host-101",
+                device_serial=chain_setup["device_completed"].serial,
+                seq_no=330, category="UNIVIEW", source="reconciler",
+                path_on_device=same_dir,
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "event_type": "CRASH",
+                    "event_subtype": "Java Crash",
+                    "aee_ts": "2026-09-15 10:00:00",
+                    "package_name": "com.u1",
+                    "nfs_path": same_dir,
+                },
+            ),
+            JobLogSignal(
+                id=22202,
+                job_id=j2.id, host_id="host-101",
+                device_serial=chain_setup["device_running"].serial,
+                seq_no=331, category="UNIVIEW", source="reconciler",
+                path_on_device=same_dir,
+                detected_at=_now() - timedelta(minutes=1),
+                extra={
+                    "event_type": "CRASH",
+                    "event_subtype": "Native Crash",   # 同目录、不同事件身份
+                    "aee_ts": "2026-09-15 10:05:00",
+                    "package_name": "com.u1",
+                    "nfs_path": same_dir,
+                },
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/crash-details",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        items = resp.json()["data"]
+        # chain_setup 另有 1 条既有 AEE ANR 信号，故只断言 UNIVIEW 面的条数
+        uniview = [i for i in items if i["group"] == "UNIVIEW"]
+        assert len(uniview) == 2, f"同目录不同异常被并成一条（#2080）：{uniview}"
+        assert {i["subtype"] for i in uniview} == {"Java Crash", "Native Crash"}
+
+    def test_crash_details_uniview_same_event_still_deduped(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """#2080 负向对照：**同一条** UNIVIEW 异常被多次 run 拉取 → 仍去重为 1。"""
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        j2 = chain_setup["job_running"]
+
+        same_dir = "/mnt/nfs/jobs/shared/UNIVIEW/event_dir_2"
+        dup_extra = {
+            "event_type": "CRASH",
+            "event_subtype": "Java Crash",
+            "aee_ts": "2026-09-15 11:00:00",
+            "package_name": "com.same",
+            "nfs_path": same_dir,
+        }
+        db_session.add_all([
+            JobLogSignal(
+                id=22211,
+                job_id=j1.id, host_id="host-101",
+                device_serial=chain_setup["device_completed"].serial,
+                seq_no=340, category="UNIVIEW", source="reconciler",
+                path_on_device=same_dir,
+                detected_at=_now() - timedelta(minutes=2),
+                extra=dict(dup_extra),
+            ),
+            JobLogSignal(
+                id=22212,
+                job_id=j2.id, host_id="host-101",
+                device_serial=chain_setup["device_running"].serial,
+                seq_no=341, category="UNIVIEW", source="reconciler",
+                path_on_device=same_dir,
+                detected_at=_now() - timedelta(minutes=1),
+                extra=dict(dup_extra),   # 完全相同的事件身份
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/crash-details",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        items = resp.json()["data"]
+        uniview = [i for i in items if i["group"] == "UNIVIEW"]
+        assert len(uniview) == 1, f"同一事件被重复计数（#1956 去重语义被破坏）：{uniview}"
