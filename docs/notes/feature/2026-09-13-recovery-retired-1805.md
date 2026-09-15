@@ -88,3 +88,7 @@ PROBE ACTION: RESUME / same_boot_instance_takeover
   可继续」的路径（如 `/complete`、upload 终态迟到上传），应逐一按 D-5 分类核查。
 - **`ABORT_LOCAL` 的 Agent 侧行为**：本单只改控制面返回；Agent 收到
   `ABORT_LOCAL` 后的本地清理与终态上报由既有链路保证，未在本单新增断言。
+  **更正（#2030，2026-09-15）**：该断言不成立——退役早返回当时连
+  `pending_outbox` 一起丢掉（`"outbox_actions": []`），Agent 侧「无 action 不
+  ack」使终态 outbox 每轮重发且永不被 ack；修复与验证见
+  [`2026-09-15-recovery-retired-outbox-2030.md`](../bug-fix/2026-09-15-recovery-retired-outbox-2030.md)。
