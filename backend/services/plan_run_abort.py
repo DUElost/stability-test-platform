@@ -160,7 +160,7 @@ def _bulk_abort_pending_jobs(
 # #1928：`_record_host_abort_request` 曾写 `run_context['abort_requested_hosts']`
 # 却全仓无调用方也无消费者（reaper 只读 run 级 `abort_requested` 的存在性），
 # 属「文档宣称 > 实现」的孤儿结构，按最小面移除。
-# ADR-0043（Accepted v1.0，#2154）：该键**重新引入**为 host 主体的宽限时钟真源
+# ADR-0043（Accepted v1.1，#2154）：该键**重新引入**为 host 主体的宽限时钟真源
 # ——写入在下方 host 级 abort 分支，消费在
 # `device_lease_reconciler._reconcile_aborted_running_jobs`（按主体取时钟、并存
 # 时取更早者）。与 #1928 孤儿形态的区别是**有写有读**：写入侧在本文件，消费侧
@@ -499,7 +499,7 @@ def abort_plan_run(
                 "acknowledged_job_ids": [],
             }
         run_ctx["abort_requested"] = abort_requested_payload
-        # #1928 注记（**已失效**，ADR-0043 v1.0 / #2154）：本写入**曾**重置 run 级
+        # #1928 注记（**已失效**，ADR-0043 v1.1 / #2154）：本写入**曾**重置 run 级
         # `at`/`deadline_at`，使每次 host 级 abort 都把整轮宽限延长为「本次请求 +
         # GRACE」（最多多等 host 数 × GRACE）。现在 host 主体的计时落在下方
         # `abort_requested_hosts[host_id]`，run 级 `at` 只由 run 级 abort 写入。
