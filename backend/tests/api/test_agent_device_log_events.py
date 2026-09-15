@@ -493,6 +493,60 @@ async def test_stale_local_register_replay_does_not_demote_remote(monkeypatch, t
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_uniview_local_register_replay_keeps_upload_pending(monkeypatch, tmp_path):
+    """#2025：UNIVIEW 上「同 id、state=LOCAL」的注册意图重放不得把 UPLOAD_PENDING
+    打回 LOCAL——该行会因此既不进上送队列（LOCAL = 有意不传），也不计入
+    ``count_pending_upload_events``，事件永久停在 LOCAL。
+
+    与 #1174（REMOTE 不被降级）是同一场景的**前一跳**：那条守的是已被中心确认的
+    行，这条守的是仍在等待上送的行。
+    """
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    client_id = str(uuid4())
+    try:
+        register_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="UNISOC",
+            event_type="UNIVIEW",
+            event_subtype="KE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.LOCAL.value,
+            local_path="/mnt/hdd/aee_events/dev/je_uniview",
+            host_id=seed["host_id"],
+            job_id=seed["job_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            r1 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[register_ev]), db=db, _=None,
+            )
+        assert r1.data["upserted"] == 1
+        with SessionLocal() as db:
+            created = db.get(DeviceLogEvent, UUID(client_id))
+            assert created.state == EventState.UPLOAD_PENDING.value
+
+        # dle_register_outbox 意图重放（同 id、state=LOCAL、无 remote_path）
+        async with AsyncSessionLocal() as db:
+            r2 = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[register_ev]), db=db, _=None,
+            )
+        assert r2.data["upserted"] == 1
+        assert r2.data["event_ids"] == [client_id]
+
+        with SessionLocal() as db:
+            row = db.get(DeviceLogEvent, UUID(client_id))
+            assert row.state == EventState.UPLOAD_PENDING.value, (
+                f"LOCAL 意图重放把行打回 {row.state}"
+            )
+    finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_device_log_events_create_dedupes_job_signal_seq(monkeypatch, tmp_path):
     """#1051: 无 client id 时同 job+signal_seq 重放返回已有行。"""
     nfs = tmp_path / "nfs"

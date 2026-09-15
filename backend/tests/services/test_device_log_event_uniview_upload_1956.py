@@ -33,8 +33,19 @@ def test_mtk_semantics_unchanged():
     assert resolve_initial_upload_state("UNIVIEW", "UPLOADING") == "UPLOADING"
 
 
-def test_both_ingest_sites_use_the_helper():
-    """防线：两处 DLE 落库点都必须接入，避免只改一处（创建 / 预分配 id 重试）。"""
+def test_all_ingest_sites_use_the_helper():
+    """防线：三处 DLE 落库点都必须接入归一（创建 / 预分配 id 重试 / 更新分支）。
+
+    #2025 的反例：更新分支原先写裸 `row.state = ev.state`，而此前那条
+    `"state=ev.state" not in src` 因多了 `row.` 前缀与空格**抓不到它**——
+    字面断言必须覆盖赋值形态本身，否则守的是「措辞」不是「行为」。
+    """
     src = Path(agent_api.__file__).read_text(encoding="utf-8")
+    # 创建两处：直接以归一值构造模型
     assert src.count("state=resolve_initial_upload_state(ev.event_type, ev.state)") == 2
+    # 更新一处：先归一为 target_state，再做迁移校验与赋值（#2025）
+    assert "target_state = resolve_initial_upload_state(ev.event_type, ev.state)" in src
+    assert "row.state = target_state" in src
+    # 任何形态的裸赋值都不得回潮
     assert "state=ev.state" not in src
+    assert "row.state = ev.state" not in src
