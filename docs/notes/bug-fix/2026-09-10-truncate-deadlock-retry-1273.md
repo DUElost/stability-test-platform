@@ -50,3 +50,9 @@ Process 114 waits for AccessShareLock on relation 16604; blocked by process 111.
 若死锁仍偶发（重试不足以覆盖长事务），按 DETAIL 的 relation oid 反查
 `pg_class` 定位表名，再顺藤找出持锁的后台线程/未关闭会话并收敛其生命周期；
 届时应把重试视为过渡手段并在同一 PR 中移除。
+
+> **2026-09-15 已按此出口执行（#2074）**：泄漏者定位为共享后台池上的
+> fire-and-forget DB 任务（通知 SAQ 降级直达 + post_completion），收敛 =
+> 清库前 `thread_pool.drain()`；本 Note 的重试已随根因收敛**移除**，
+> 并补 `_dump_deadlock_scene` 常驻取证（锁环落到表级）。见
+> `2026-09-15-truncate-deadlock-root-fix-2074.md`。
