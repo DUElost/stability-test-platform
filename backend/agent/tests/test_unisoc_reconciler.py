@@ -18,6 +18,19 @@ def _ls_l(names, *, sig="drwxrwxrwx 2 root root 3452 2026-09-14 22:49"):
     return listing + "__STP_RC__:0\n"
 
 
+def _real_unievent_info(*, event_id: str, event_name: str, proc: str, kick: str, tag: str) -> str:
+    """#2083：真机形状夹具——A 设备头 + B 元数据行 + C 发生行（JSONL）。"""
+    return "\n".join([
+        json.dumps({"sn": "UNI-1", "software_version": "MyOS16.0.1_Z2581_GEN_AF",
+                    "soc_model": "UMS9230E", "event_count": "1"}, ensure_ascii=False),
+        json.dumps({"event_id": event_id, "event_type": "FAULT",
+                    "event_level": "GENERAL", "event_name": event_name},
+                   ensure_ascii=False),
+        json.dumps({"kick_datetime": kick, "pid": "1234", "proc": proc, "tag": tag},
+                   ensure_ascii=False),
+    ])
+
+
 
 
 class _RecordingEmitter:
@@ -66,6 +79,7 @@ def _make_reconciler(
     shell_fn=None,
     pull_fn=None,
     device_log_client=None,
+    collector=None,
 ) -> UnisocUniviewReconciler:
     return UnisocUniviewReconciler(
         signal_emitter=emitter or _RecordingEmitter(),
@@ -76,7 +90,7 @@ def _make_reconciler(
         local_root=tmp_path / "aee_local",
         run_date_stamp="0908",
         baseline_interval_seconds=3600,
-        platform_collector=UnisocPlatformCollector(),
+        platform_collector=collector or UnisocPlatformCollector(),
         device_log_client=device_log_client,
         shell_fn=shell_fn or (lambda *_a, **_k: None),
         pull_fn=pull_fn or (lambda *_a, **_k: False),
@@ -93,7 +107,9 @@ def test_tick_once_emits_uniview_and_creates_dle(tmp_path):
     ev = root / "evt_ke_1"
     ev.mkdir(parents=True)
     (ev / "unievent_info").write_text(
-        json.dumps({"event_name": "KE", "package_name": "sys"}),
+        _real_unievent_info(event_id="103000099", event_name="KE",
+                            proc="sys", kick="2026-09-08_06:59:12.031",
+                            tag="system_app_crash"),
         encoding="utf-8",
     )
 
@@ -120,7 +136,10 @@ def test_same_dir_with_new_content_is_repulled_and_reemitted(tmp_path):
     ev = root / "JE.103000004"
     ev.mkdir(parents=True)
     (ev / "unievent_info").write_text(
-        json.dumps({"event_name": "Java Crash", "package_name": "com.android.camera2"}),
+        _real_unievent_info(event_id="103000004", event_name="Java Crash",
+                            proc="com.android.camera2",
+                            kick="2026-09-08_06:59:12.031",
+                            tag="system_app_crash"),
         encoding="utf-8",
     )
     sig = {"v": "drwxrwxrwx 2 root root 3452 2026-09-08 06:59"}
@@ -157,7 +176,9 @@ def test_tick_once_pulls_device_events_then_emits(tmp_path):
     remote_ev = device_root / "remote_evt"
     remote_ev.mkdir(parents=True)
     (remote_ev / "unievent_info").write_text(
-        json.dumps({"event_name": "NE", "package": "app"}),
+        _real_unievent_info(event_id="103000003", event_name="NE",
+                            proc="app", kick="2026-09-07_01:36:44.329",
+                            tag="native_crash"),
         encoding="utf-8",
     )
 
@@ -226,7 +247,11 @@ def test_processed_state_uses_get_set_state(tmp_path):
     ev = root / "e1"
     ev.mkdir(parents=True)
     (ev / "unievent_info").write_text(
-        json.dumps({"event_name": "ANR"}), encoding="utf-8",
+        _real_unievent_info(event_id="103000005", event_name="ANR",
+                            proc="com.android.nfc",
+                            kick="2026-08-15_09:31:40.477",
+                            tag="system_app_anr"),
+        encoding="utf-8",
     )
     assert r.tick_once() == 1
     key = r._state_key()
@@ -470,3 +495,99 @@ class TestProcessedPrune:
         r._load_processed_state()
         r.tick_once()
         assert set(r._processed) == {"live1"}
+
+
+def _single_dir_device(tmp_path: Path, dirname: str, content: str):
+    """单目录设备桩：shell 列举 + pull 拷贝；返回 (shell_fn, pull_fn, pulls)。"""
+    remote_ev = tmp_path / "device" / "uniview" / dirname
+    remote_ev.mkdir(parents=True)
+    (remote_ev / "unievent_info").write_text(content, encoding="utf-8")
+    sig = "drwxrwxrwx 2 root root 3452 2026-08-12 02:00"
+
+    def shell_fn(cmd: str, _t: int):
+        if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+            return f"{sig} {dirname}\n__STP_RC__:0\n"
+        if cmd.startswith("ls -l /data/"):
+            return "__STP_RC__:2\n"
+        if "unievent_info" in cmd:
+            return "unievent_info\n"
+        return None
+
+    pulls: List[str] = []
+
+    def pull_fn(remote: str, local: str, _t: int) -> bool:
+        pulls.append(remote)
+        dest = Path(local) / dirname
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(remote_ev, dest, dirs_exist_ok=True)
+        return True
+
+    return shell_fn, pull_fn, pulls
+
+
+def test_normalboot_only_dir_records_signature_and_stops_repull(tmp_path):
+    """#2083：确定性不可上报（normalboot-only）也必须落签名，否则每拍重拉。
+
+    真机形状：目录有独立 meta 行（`event_name:"Boot Category"`）、发生行全部
+    normalboot。修复前它被 emit 成假阳性；只改判据不落签名，则同步侧短路
+    （`prev == signature`）永不成立 → 每拍 `adb pull`（本用例第 2 拍即反例）。
+    """
+    emitter = _RecordingEmitter()
+    store = _MemStore()
+    content = "\n".join([
+        json.dumps({"sn": "UNI-1", "soc_model": "UMS9230E"}, ensure_ascii=False),
+        json.dumps({"event_id": "103000002", "event_type": "FAULT",
+                    "event_level": "GENERAL", "event_name": "Boot Category"},
+                   ensure_ascii=False),
+        json.dumps({"kick_datetime": "2026-08-11_19:50:25.382",
+                    "event_time": 1786470625382,
+                    "reboot_reason": "normalboot"}, ensure_ascii=False),
+    ])
+    shell_fn, pull_fn, pulls = _single_dir_device(tmp_path, "Reboot.103000002", content)
+    r = _make_reconciler(tmp_path, emitter=emitter, store=store,
+                         shell_fn=shell_fn, pull_fn=pull_fn)
+
+    assert r.tick_once() == 0, "normalboot-only 不得 emit（#2083 假阳性）"
+    assert emitter.calls == []
+    assert len(pulls) == 1
+    assert "Reboot.103000002" in r._processed, "确定性不可上报必须落签名"
+    assert list(json.loads(store._data[r._state_key()])) == ["Reboot.103000002"]
+
+    assert r.tick_once() == 0
+    assert len(pulls) == 1, "签名未变却重拉（#2083 复发）"
+
+
+class _FlakyCollector:
+    """#2083：第 1 次 parse 抛瞬时异常，之后回落真实 collector（模拟文件竞态）。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self._real = UnisocPlatformCollector()
+
+    def parse_metadata(self, event_dir: Path):
+        self.calls += 1
+        if self.calls == 1:
+            raise OSError("transient read race")
+        return self._real.parse_metadata(event_dir)
+
+
+def test_transient_metadata_error_not_recorded_retries(tmp_path):
+    """#2083：非 ``CollectorError`` 的 parse 异常是瞬时失败——不落签名、下一拍重试。"""
+    emitter = _RecordingEmitter()
+    store = _MemStore()
+    content = _real_unievent_info(event_id="103000004", event_name="Java Crash",
+                                  proc="com.android.camera2",
+                                  kick="2026-09-14_22:48:51.563",
+                                  tag="system_app_crash")
+    shell_fn, pull_fn, pulls = _single_dir_device(tmp_path, "JE.103000004", content)
+    collector = _FlakyCollector()
+    r = _make_reconciler(tmp_path, emitter=emitter, store=store, collector=collector,
+                         shell_fn=shell_fn, pull_fn=pull_fn)
+
+    assert r.tick_once() == 0
+    assert "JE.103000004" not in r._processed, "瞬时失败不得落签名（否则丢事件）"
+    assert store._data.get(r._state_key()) is None, "瞬时失败不得写状态"
+
+    assert r.tick_once() == 1, "下一拍必须重试并恢复发射"
+    assert len(pulls) == 2
+    assert emitter.calls[0]["extra"]["event_subtype"] == "Java Crash"
