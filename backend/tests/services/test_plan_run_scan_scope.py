@@ -225,3 +225,67 @@ def test_classify_recycle_targets_policy_matrix():
     assert targets == ["h-on", "h-ret-on"]
     assert [r["host_id"] for r in off] == ["h-off"]
     assert [r["host_id"] for r in ret] == ["h-ret-off"]
+
+
+def test_load_expected_scan_platforms_derives_from_host_device_mix(
+    db_session, sample_plan_run, sample_plan, sample_device, sample_host,
+):
+    """ADR-0032 B1：完备性期望按 host 的**设备平台构成**派生。
+
+    不是「每个 host 都要所有平台」——那是 #1071 收紧过头的语义，会让纯平台 host
+    每轮都判不齐。
+    """
+    from backend.services.plan_run_scan_scope import load_expected_scan_platforms
+
+    host_b = Host(
+        id="205",
+        hostname="test-host-205",
+        name="test-host-205",
+        ip="192.0.2.205",
+        ip_address="192.0.2.205",
+        status=HostStatus.ONLINE.value,
+    )
+    db_session.add(host_b)
+    db_session.flush()
+    extra_devices = [
+        Device(
+            serial="dev-unisoc-1", host_id=host_b.id,
+            platform="UNISOC", status="ONLINE",
+        ),
+        Device(
+            serial="dev-qcom-1", host_id=host_b.id,
+            platform="QCOM", status="ONLINE",
+        ),
+    ]
+    db_session.add_all(extra_devices)
+    db_session.flush()
+    # sample_device 未设 platform（NULL）→ 与 Agent 路由一致兜底到 mtk。
+    for device in [sample_device, *extra_devices]:
+        db_session.add(JobInstance(
+            plan_run_id=sample_plan_run.id,
+            plan_id=sample_plan.id,
+            device_id=device.id,
+            host_id=device.host_id,
+            status=JobStatus.COMPLETED.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        ))
+    db_session.commit()
+
+    expected = load_expected_scan_platforms(
+        db_session, sample_plan_run.id, [sample_host.id, host_b.id],
+    )
+    assert expected[sample_host.id] == {"mtk"}
+    # UNISOC 设备 → unisoc；QCOM 无采集/扫描实现 → 不计入期望。
+    assert expected[host_b.id] == {"unisoc"}
+
+
+def test_load_expected_scan_platforms_ignores_hosts_without_device_evidence(
+    db_session, sample_plan_run,
+):
+    """无设备证据的 host 不产生期望——它没有可预期产物，不该拖住屏障。"""
+    from backend.services.plan_run_scan_scope import load_expected_scan_platforms
+
+    assert load_expected_scan_platforms(
+        db_session, sample_plan_run.id, ["host-x"],
+    ) == {}
+    assert load_expected_scan_platforms(db_session, sample_plan_run.id, []) == {}

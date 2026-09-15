@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user
 from backend.api.schemas.jira_run import JiraRunOut
+from backend.api.schemas.dedup import DedupArtifactOut, DedupStatusOut
 from backend.core.audit import record_audit
 from backend.core.database import SessionLocal, get_db
 from backend.models.host import Host
@@ -595,13 +596,18 @@ async def reload_agent_config(
     return ok({"host_id": host_id, "command": "reload_config", "status": "sent"})
 
 
-@scan_router.get("/{run_id}/dedup/status", response_model=ApiResponse[dict])
+@scan_router.get("/{run_id}/dedup/status", response_model=ApiResponse[DedupStatusOut])
 def get_scan_status(
     run_id: int,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """查询该 PlanRun 的 scan/merge 产物列表。"""
+    """查询该 PlanRun 的 scan/merge 产物列表 + 本轮完备性 + scan 失败位。
+
+    形状由 ``DedupStatusOut`` **单一声明**（不再是手搓 dict）：前端 ``DedupStatusPayload``
+    与它对拍（``tests/test_api_response_shape_contract.py`` 轴线 C），改字段时两侧
+    任一处漏改都会红。
+    """
     from backend.models.plan_run_artifact import PlanRunArtifact
     from backend.models.plan_run import PlanRun
     from sqlalchemy import select
@@ -619,22 +625,22 @@ def get_scan_status(
         select(PlanRunArtifact).where(PlanRunArtifact.plan_run_id == run_id)
         .order_by(PlanRunArtifact.created_at.desc())
     ).scalars().all()
-    return ok({
-        "plan_run_id": run_id,
-        "artifacts": [
-            {
-                "id": r.id,
-                "host_id": r.host_id,
-                "storage_uri": r.storage_uri,
-                "artifact_type": r.artifact_type,
-                "size_bytes": r.size_bytes,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
+    return ok(DedupStatusOut(
+        plan_run_id=run_id,
+        artifacts=[
+            DedupArtifactOut(
+                id=r.id,
+                host_id=r.host_id,
+                storage_uri=r.storage_uri,
+                artifact_type=r.artifact_type,
+                size_bytes=r.size_bytes,
+                created_at=r.created_at.isoformat() if r.created_at else None,
+            )
             for r in rows
         ],
-        "archive": archive,
-        "scan_failed": scan_failed,
-    })
+        archive=archive,
+        scan_failed=scan_failed,
+    ))
 
 
 @scan_router.post("/{run_id}/dedup/merge", response_model=ApiResponse[dict])

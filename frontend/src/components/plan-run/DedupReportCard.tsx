@@ -9,7 +9,11 @@ import { useToast } from '@/hooks/useToast';
 import { SLOW_REFETCH_MS } from '@/hooks/plan-run/planRunDetailUtils';
 import { PANEL, TEXT, TOOL_BTN } from '@/design-system';
 import { cn } from '@/lib/utils';
-import type { RunContextExtractSummary, RunContextUploadSummary } from '@/utils/api/types';
+import type {
+  DedupArtifact,
+  RunContextExtractSummary,
+  RunContextUploadSummary,
+} from '@/utils/api/types';
 
 interface Props {
   runId: number;
@@ -19,14 +23,12 @@ interface Props {
   extractSummary?: RunContextExtractSummary | null;
 }
 
-interface ScanArtifact {
-  id: number;
-  host_id: string | null;
-  storage_uri: string;
-  artifact_type: string;
-  size_bytes: number | null;
-  created_at: string | null;
-}
+/** merge_task 写入的 `upload_summary.incomplete_reason` → 人话后缀（I-7：原因要可见）。 */
+const REASON_SUFFIX: Record<string, string> = {
+  upload_mark_timeout: '（上送标记未确认）',
+  upload_events_pending: '（事件仍在途）',
+  merge_skipped_failed_plan_run: '（PlanRun 未成功，跳过合并）',
+};
 
 const TYPE_LABELS: Record<string, string> = {
   scan_result_xls: 'Scan',
@@ -38,6 +40,12 @@ function formatSize(bytes?: number | null): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 未就绪原因的可读后缀；**未知代码原样露出**（不静默吞掉后端新加的原因）。 */
+function formatReason(reason?: string): string {
+  if (!reason) return '（原因未记录）';
+  return REASON_SUFFIX[reason] ?? `（${reason}）`;
 }
 
 export default function DedupReportCard({ runId, uploadSummary, extractSummary }: Props) {
@@ -90,7 +98,7 @@ export default function DedupReportCard({ runId, uploadSummary, extractSummary }
     },
   });
 
-  const artifacts: ScanArtifact[] = (statusQ.data?.artifacts || []) as ScanArtifact[];
+  const artifacts: DedupArtifact[] = statusQ.data?.artifacts ?? [];
 
   return (
     <section className={PANEL.root} data-testid="dedup-report-card">
@@ -197,7 +205,13 @@ export default function DedupReportCard({ runId, uploadSummary, extractSummary }
                 <span className="text-muted-foreground/70">失败 {uploadSummary.failed}</span>
                 <span className="text-muted-foreground/70">已完成 {uploadSummary.remote}</span>
                 {uploadSummary.ready === false && (
-                  <span className="text-destructive">未等齐</span>
+                  <span
+                    className="text-destructive"
+                    data-testid="upload-not-ready"
+                    title={uploadSummary.incomplete_reason ?? undefined}
+                  >
+                    未等齐{formatReason(uploadSummary.incomplete_reason)}
+                  </span>
                 )}
               </div>
             )}

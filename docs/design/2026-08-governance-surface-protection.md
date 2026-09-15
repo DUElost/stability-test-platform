@@ -134,7 +134,7 @@ actionable 终点永远是「加确定性 gate 或加结构性防线」——测
 | Pydantic v2 only | 差异面新增行检查（backend 现存 `.dict(` 仅 `patch.dict` 惯用法，负向后顾豁免） | `tools/dev/check_invariant_diff.py` | **已强制**（BLOCK，2026-09-07 升格） |
 | 业务表名单数 | 差异面新增行检查（`pr-migrate-empty-db` 拦迁移失败，不拦复数表名） | 同上 | **已强制**（BLOCK，2026-09-07 升格） |
 | 已发布脚本 `default_params` 不可变 | **gate + 运行时 422** | `tools/dev/check-script-version-immutability.py` | 已强制 |
-| 前端 `types.ts` 与后端 schema 同步 | 无（手维护；typecheck 只查 TS 内部） | `frontend/package.json` 无生成器 | **residual**（review 兜底） |
+| 前端 `types.ts` 与后端 schema 同步 | 部分：**登记的 Pydantic 响应模型 ↔ TS 接口**双向对拍（`tests/test_api_response_shape_contract.py` 轴线 C；2026-09-15 起 5 对：watcher-summary 3 + log-events 2）。`ok({...})` 手搓 dict 端点与未登记模型仍无强制力 | `frontend/package.json` 无生成器 | **部分已强制 / 其余 residual**（review 兜底） |
 | Python 用 `python -m` 形式（总原则） | 无 | — | residual（scripts 内裸调用可入差异面清单） |
 
 **原三缺口的归宿**：①语义传导——消解（测量不产生约束力；违规的终局是

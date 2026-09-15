@@ -278,6 +278,10 @@ class WatcherPlatformBucketOut(BaseModel):
     affected_device_count: int
     running_device_count: int = 0
     participating_device_count: int = 0
+    # R4-b b1（2026-09-15 裁决）：该平台是否有采集实现。False → 前端显示
+    # 「平台未支持」，区分「没有异常」与「平台未支持」。判定见
+    # backend/core/dedup_platform.has_collection_impl。
+    reconciler_supported: bool = True
 
 
 class PackageStatOut(BaseModel):
