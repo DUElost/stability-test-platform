@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -332,6 +333,7 @@ def run_merge_sync(
     ``allow_failed=True``：手动 API（#697）对 FAILED 仍执行 merge。
     """
     from backend.core.database import SessionLocal
+    from backend.core.storage_root import resolve_shared_storage_root
     from backend.models.enums import PlanRunStatus
     from backend.models.plan_run import PlanRun
 
@@ -375,6 +377,12 @@ def run_merge_sync(
     # #1072 / R10-F03：工具固定写共享 merge_result/；snapshot→子进程→收割→
     # 发布→登记全程跨进程串行，避免另一 PlanRun 的更新目录被本轮误登记。
     with _exclusive_merge_tool_lock(script_parent):
+        # I-13 方案 A 兜底：中心已配置时，本机 merge_result/ 只是**中转**（成功路径的那份在
+        # 发布+登记后立即删除），而失败重试会不断产生新的 {ts}/ —— 这里顺手收敛超期残留。
+        # 中心**未**配置时不清理：那时 artifact 就指向本机路径，删了即毁产物。
+        if resolve_shared_storage_root():
+            sweep_stale_local_merge_outputs(merge_root)
+
         before_names = _merge_output_dir_names(merge_root)
         baseline_mtime = latest_merge_output_mtime(merge_root)
 
@@ -453,6 +461,12 @@ def run_merge_sync(
         except Exception:
             logger.exception("merge_register_artifacts_failed plan_run=%d", plan_run_id)
             raise
+
+        # I-13 方案 A：产物已在中心并已登记 → 本机中转副本可以走了（E-3：稳态下本机不累积）。
+        # 只在 `published is not None`（中心已配置）时删——未配置中心时 artifact_dir == latest，
+        # 该目录就是交付物本身。发布失败（#1074）在 raise 之前返回，走不到这里 → 仍可重试。
+        if published is not None:
+            _discard_local_merge_output(latest)
 
     logger.info("merge_done plan_run=%d platform=%s", plan_run_id, platform or "all")
     return "ok"
@@ -701,6 +715,75 @@ def _merge_output_dir_names(merge_root: Path) -> set[str]:
         p.name for p in merge_root.iterdir()
         if p.is_dir() and any(p.glob("Result_MergeFiles*.xls"))
     }
+
+
+#: 本机中转目录（``merge_result/{ts}/``）的保留上限（小时）——**仅兜底**。
+#:
+#: 正常路径：发布到中心 + 登记后**立即删除**该目录（见 :func:`run_merge_sync`），故稳态下
+#: 本机不累积（I-13 方案 A 的 E-3 判据）。失败/发布未完成时**必须保留**（#1074 的失败可重试
+#: 前提），这类残留靠超期清理收敛。
+#:
+#: 为什么是常量而非 env 键：它只影响失败残留的清理节奏，不改变任何交付语义；等真有与
+#: 中心容量挂钩的调参需求再升格为配置项（升格须同步 ``backend/.env.example`` 与
+#: ``docs/development/environment-variables.md``，走 env-inventory 门禁）。
+_MERGE_LOCAL_RETENTION_HOURS = 24.0
+
+
+def _discard_local_merge_output(merge_dir: Path) -> bool:
+    """删除**已发布**的本机中转产物目录；返回是否删成功。
+
+    清理**不是交付前提**：此时产物已在中心且已登记，删除失败只留 warning，
+    超期残留由 :func:`sweep_stale_local_merge_outputs` 兜底——不因为清理失败
+    把一次成功的 merge 变成失败。
+    """
+    try:
+        shutil.rmtree(merge_dir)
+        logger.info("merge_local_intermediate_removed dir=%s", merge_dir)
+        return True
+    except OSError:
+        logger.warning(
+            "merge_local_intermediate_remove_failed dir=%s", merge_dir, exc_info=True,
+        )
+        return False
+
+
+def sweep_stale_local_merge_outputs(
+    merge_root: Path,
+    *,
+    retention_hours: float = _MERGE_LOCAL_RETENTION_HOURS,
+    now: float | None = None,
+) -> int:
+    """清理 ``merge_result/`` 下**超期残留**的中转目录（I-13 方案 A 的兜底）。
+
+    **调用方必须先确认中心已配置**：中心未配置时 artifact 就指向本机路径，删除即毁产物。
+    本函数不做这层判断（它只按 mtime 与"是否像产物目录"筛），判断留在调用点，避免把
+    交付语义藏进一个清理函数里。
+
+    只挑**含 ``Result_MergeFiles*.xls`` 的子目录**（工具产物形态）——锁文件
+    ``.stp_merge.lock`` 与其它非目录内容一律不碰。
+    """
+    if not merge_root.is_dir():
+        return 0
+    cutoff = (now if now is not None else time.time()) - retention_hours * 3600
+    removed = 0
+    for subdir in sorted(merge_root.iterdir()):
+        if not subdir.is_dir():
+            continue
+        try:
+            if not any(subdir.glob("Result_MergeFiles*.xls")):
+                continue
+            if subdir.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        if _discard_local_merge_output(subdir):
+            removed += 1
+    if removed:
+        logger.info(
+            "merge_local_stale_swept root=%s removed=%d retention_h=%s",
+            merge_root, removed, retention_hours,
+        )
+    return removed
 
 
 def find_fresh_merge_output_dir(

@@ -209,6 +209,115 @@ def test_run_merge_sync_raises_on_center_publish_oserror(tmp_path, monkeypatch):
         with pytest.raises(RuntimeError, match="merge center publish failed"):
             ds.run_merge_sync(42)
     register.assert_not_called()
+    # I-13 方案 A：发布失败**不得**删本机中转——它既是重试依据也是现场诊断对象。
+    assert (merge_root / "2026_09_08_20_00_00" / "Result_MergeFiles.xls").is_file()
+
+
+def test_run_merge_sync_removes_local_intermediate_after_publish(tmp_path, monkeypatch):
+    """I-13 方案 A：发布 + 登记完成后，本机 `merge_result/{ts}/` 不再保留。
+
+    判据 E-3：控制面本地 `merge_result/` 稳态为 0——登记指向的必须是**中心**路径，
+    而本机中转副本（工具唯一能写的位置）事后删除。
+    """
+    from pathlib import Path
+
+    (tmp_path / "start_log_scan.py").write_text("# stub", encoding="utf-8")
+    tool = {"python": "python", "script": str(tmp_path / "start_log_scan.py")}
+    merge_root = tmp_path / "merge_result"
+    center = tmp_path / "center"
+    center.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+    out = merge_root / "2026_09_15_10_00_00"
+
+    def fake_run(*_a, **_k):
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "Result_MergeFiles.xls").write_bytes(b"x")
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stderr = ""
+        proc.stdout = ""
+        return proc
+
+    registered: list[Path] = []
+
+    def _register(_db, _run_id, merge_dir):
+        registered.append(Path(merge_dir))
+        return 1
+
+    with patch.object(ds, "resolve_scan_tool", return_value=tool), \
+         patch.object(ds, "_load_org_files_for_merge", return_value=["/fake/a_org.xls"]), \
+         patch.object(ds, "build_merge_argv", return_value=(["python", "scan.py", "-merge_files_list", "x"], None)), \
+         patch.object(ds, "scan_tool_supports_merge_files_list", return_value=True), \
+         patch("backend.services.dedup_scan.subprocess.run", side_effect=fake_run), \
+         patch.object(ds, "_register_merge_artifacts", side_effect=_register):
+        assert ds.run_merge_sync(42) == "ok"
+
+    assert registered and registered[0] == center / "dedup" / "42" / "merge"
+    assert (center / "dedup" / "42" / "merge" / "Result_MergeFiles.xls").is_file()
+    assert not out.exists()
+    assert ds._merge_output_dir_names(merge_root) == set()
+
+
+def test_run_merge_sync_keeps_local_when_center_unconfigured(tmp_path, monkeypatch):
+    """中心未配置时本机目录**就是交付物**（artifact 指向它）——不得删。"""
+    from pathlib import Path
+
+    (tmp_path / "start_log_scan.py").write_text("# stub", encoding="utf-8")
+    tool = {"python": "python", "script": str(tmp_path / "start_log_scan.py")}
+    merge_root = tmp_path / "merge_result"
+    monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
+    out = merge_root / "2026_09_15_10_00_01"
+
+    def fake_run(*_a, **_k):
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "Result_MergeFiles.xls").write_bytes(b"x")
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stderr = ""
+        proc.stdout = ""
+        return proc
+
+    registered: list[Path] = []
+
+    with patch.object(ds, "resolve_scan_tool", return_value=tool), \
+         patch.object(ds, "_load_org_files_for_merge", return_value=["/fake/a_org.xls"]), \
+         patch.object(ds, "build_merge_argv", return_value=(["python", "scan.py", "-merge_files_list", "x"], None)), \
+         patch.object(ds, "scan_tool_supports_merge_files_list", return_value=True), \
+         patch("backend.services.dedup_scan.subprocess.run", side_effect=fake_run), \
+         patch.object(ds, "_register_merge_artifacts",
+                      side_effect=lambda _db, _run_id, merge_dir: registered.append(Path(merge_dir)) or 1):
+        assert ds.run_merge_sync(42) == "ok"
+
+    assert registered and registered[0] == out
+    assert (out / "Result_MergeFiles.xls").is_file()
+
+
+def test_sweep_stale_local_merge_outputs_bounded(tmp_path):
+    """超期残留清理只动"像产物目录"且超期的那些：锁文件、新鲜目录、非产物目录都不碰。"""
+    import os
+    import time
+
+    merge_root = tmp_path / "merge_result"
+    merge_root.mkdir()
+    stale = merge_root / "old"
+    stale.mkdir()
+    (stale / "Result_MergeFiles.xls").write_bytes(b"x")
+    fresh = merge_root / "new"
+    fresh.mkdir()
+    (fresh / "Result_MergeFiles.xls").write_bytes(b"y")
+    not_a_product = merge_root / "notes"
+    not_a_product.mkdir()
+    (not_a_product / "readme.txt").write_text("keep me", encoding="utf-8")
+    (merge_root / ".stp_merge.lock").write_text("", encoding="utf-8")
+
+    old = time.time() - 48 * 3600
+    os.utime(stale, (old, old))
+
+    assert ds.sweep_stale_local_merge_outputs(merge_root) == 1
+    assert not stale.exists()
+    assert (fresh / "Result_MergeFiles.xls").is_file()
+    assert not_a_product.is_dir()
+    assert (merge_root / ".stp_merge.lock").is_file()
 
 
 def test_merge_stderr_indicates_failure():
