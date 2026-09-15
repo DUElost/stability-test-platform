@@ -38,6 +38,26 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+/** #2184：最小 DLE 行（默认 MTK / REMOTE），只覆盖被断言的字段。 */
+function event(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'ev-0',
+    serial: '0000NX2622000514',
+    platform: 'MTK',
+    event_type: 'AEE',
+    event_subtype: 'NE',
+    state: 'REMOTE',
+    local_path: '/mnt/hdd/aee_events/103/ev-0',
+    remote_path: '/mnt/stp-aee/devices/103/ev-0',
+    detected_at: '2026-07-25T17:57:07+08:00',
+    device_timestamp: null,
+    job_id: 1001,
+    host_id: 'h1',
+    signal_seq_no: null,
+    ...overrides,
+  };
+}
+
 describe('LogEventsCard (#529)', () => {
   it('RUNNING 时不触发请求（不变量：RUNNING 仍读 watcher-summary）', () => {
     renderCard(103, false);
@@ -172,5 +192,120 @@ describe('LogEventsCard (#529)', () => {
       expect(screen.getByText(/已达接口单次上限 500 条（共 600 条）/)).toBeInTheDocument(),
     );
     expect(screen.queryByRole('button', { name: /加载更多/ })).not.toBeInTheDocument();
+  });
+
+  it('#2184: 表格含平台列并渲染每行 platform（MTK/UNISOC 不再靠 serial 猜）', async () => {
+    mocks.getLogEvents.mockResolvedValue({
+      plan_run_id: 103,
+      data_authority: 'device_log_event',
+      total: 2,
+      items: [event({ id: 'ev-mtk', platform: 'MTK' }), event({ id: 'ev-uni', platform: 'UNISOC' })],
+    });
+    renderCard(103, true);
+
+    const cells = await screen.findAllByTestId('log-event-platform');
+    expect(cells.map((c) => c.textContent)).toEqual(['MTK', 'UNISOC']);
+  });
+
+  it('#2184: 此前落兜底灰的四态各有语义色（失败态与「已清理」必须可区分）', async () => {
+    mocks.getLogEvents.mockResolvedValue({
+      plan_run_id: 103,
+      data_authority: 'device_log_event',
+      total: 4,
+      items: [
+        event({ id: 'ev-1', state: 'UPLOADING' }),
+        event({ id: 'ev-2', state: 'UPLOAD_FAILED' }),
+        event({ id: 'ev-3', state: 'PULL_FAILED' }),
+        event({ id: 'ev-4', state: 'PRUNED' }),
+      ],
+    });
+    renderCard(103, true);
+
+    expect((await screen.findByText('UPLOAD_FAILED')).className).toContain('text-destructive');
+    expect(screen.getByText('PULL_FAILED').className).toContain('text-destructive');
+
+    // PRUNED = 已按 retention 清理（终态非异常）→ 不得被读成故障
+    const pruned = screen.getByText('PRUNED').className;
+    expect(pruned).toContain('text-muted-foreground');
+    expect(pruned).not.toContain('destructive');
+
+    // UPLOADING = 在途（中性）
+    expect(screen.getByText('UPLOADING').className).not.toContain('destructive');
+  });
+
+  it('#2184: 平台筛选走服务端（带 platform 参数），不是只筛已加载行', async () => {
+    mocks.getLogEvents
+      .mockResolvedValueOnce({
+        plan_run_id: 103,
+        data_authority: 'device_log_event',
+        total: 3,
+        items: [
+          event({ id: 'a', serial: 'S-MTK-1', platform: 'MTK' }),
+          event({ id: 'b', serial: 'S-UNI-1', platform: 'UNISOC' }),
+          event({ id: 'c', serial: 'S-MTK-2', platform: 'MTK' }),
+        ],
+      })
+      .mockResolvedValueOnce({
+        plan_run_id: 103,
+        data_authority: 'device_log_event',
+        total: 1,
+        items: [event({ id: 'b', serial: 'S-UNI-1', platform: 'UNISOC' })],
+      })
+      .mockResolvedValueOnce({
+        plan_run_id: 103,
+        data_authority: 'device_log_event',
+        total: 3,
+        items: [
+          event({ id: 'a', serial: 'S-MTK-1', platform: 'MTK' }),
+          event({ id: 'b', serial: 'S-UNI-1', platform: 'UNISOC' }),
+          event({ id: 'c', serial: 'S-MTK-2', platform: 'MTK' }),
+        ],
+      });
+
+    renderCard(103, true);
+    await screen.findByText('S-MTK-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'UNISOC' }));
+
+    await waitFor(() =>
+      expect(mocks.getLogEvents).toHaveBeenLastCalledWith(103, {
+        skip: 0,
+        limit: 200,
+        platform: 'UNISOC',
+      }),
+    );
+    await screen.findByText('S-UNI-1');
+    expect(screen.queryByText('S-MTK-1')).not.toBeInTheDocument();
+
+    // 选项集随行集收窄（不承诺其它平台 chip 仍在），但「全部」恒在 → 必然能切回
+    fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    await waitFor(() =>
+      expect(mocks.getLogEvents).toHaveBeenLastCalledWith(103, { skip: 0, limit: 200 }),
+    );
+    await screen.findByText('S-MTK-1');
+  });
+
+  it('#2184: 筛到 0 条与「本来就没有」文案可区分', async () => {
+    mocks.getLogEvents
+      .mockResolvedValueOnce({
+        plan_run_id: 103,
+        data_authority: 'device_log_event',
+        total: 2,
+        items: [event({ id: 'a', platform: 'MTK' }), event({ id: 'b', platform: 'UNISOC' })],
+      })
+      .mockResolvedValueOnce({
+        plan_run_id: 103,
+        data_authority: 'device_log_event',
+        total: 0,
+        items: [],
+      });
+
+    renderCard(103, true);
+    await screen.findByTestId('log-events-platform-filter');
+
+    fireEvent.click(screen.getByRole('button', { name: 'UNISOC' }));
+
+    expect(await screen.findByText('平台 UNISOC 无 device_log_event 记录')).toBeInTheDocument();
+    expect(screen.queryByText('无 device_log_event 记录')).not.toBeInTheDocument();
   });
 });
