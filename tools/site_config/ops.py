@@ -73,16 +73,24 @@ class LocalOps:
         input_text: str | None = None,
         cwd: str | Path | None = None,
     ) -> CommandResult:
-        process = subprocess.run(
-            list(argv),
-            env=env,
-            input=input_text,
-            cwd=str(cwd) if cwd is not None else None,
-            capture_output=True,
-            text=True,
-            timeout=1800,
-            check=False,
-        )
+        try:
+            process = subprocess.run(
+                list(argv),
+                env=env,
+                input=input_text,
+                cwd=str(cwd) if cwd is not None else None,
+                capture_output=True,
+                text=True,
+                timeout=1800,
+                check=False,
+            )
+        except FileNotFoundError:
+            # 命令不存在不是异常而是一种结果（shell 里就是 127）：238 现场实测
+            # `exportfs` 缺失时 subprocess 抛 FileNotFoundError，把整次安装崩成
+            # traceback——调用方本来准备好了「外部命令失败」的检查，却永远走不到。
+            return CommandResult(tuple(argv), 127, "", f"{argv[0]}: command not found")
+        except PermissionError:
+            return CommandResult(tuple(argv), 126, "", f"{argv[0]}: permission denied")
         return CommandResult(tuple(argv), process.returncode, process.stdout, process.stderr)
 
     def hostname(self) -> str:
