@@ -311,4 +311,35 @@ describe('AnomalyDashboard', () => {
     fireEvent.click(screen.getByText('15m'));
     expect(fn).toHaveBeenCalledWith('15m');
   });
+
+  it('flags platforms without a collector as unsupported (R4-b b1)', () => {
+    render_(
+      <AnomalyDashboard
+        {...({
+          data: makeData({
+            platform_buckets: [
+              {
+                platform: 'MTK',
+                categories: [],
+                total: 2,
+                affected_device_count: 1,
+                reconciler_supported: true,
+              },
+              {
+                platform: 'QCOM',
+                categories: [],
+                total: 0,
+                affected_device_count: 0,
+                reconciler_supported: false,
+              },
+            ],
+          }),
+          timeScope: 'all',
+        } as any)}
+      />,
+    );
+    // 无采集实现 → 明示「平台未支持」，不得渲染成「信号 0 · 设备 0」
+    expect(screen.getByText('平台未支持')).toBeTruthy();
+    expect(screen.getByText(/信号 2/)).toBeTruthy();
+  });
 });

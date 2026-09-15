@@ -749,13 +749,23 @@ def test_reconciler_not_started_on_mtk_when_capability_unavailable(
     session.__exit__(None, None, None)
 
 
-def test_reconciler_skipped_on_qcom_platform(lock_tracker, patch_manager, monkeypatch):
+def test_reconciler_skipped_on_qcom_platform(
+    lock_tracker, patch_manager, monkeypatch, caplog,
+):
+    """R4-b b3（ADR-0032 v0.8 裁决 2026-09-15）：跳过必须留痕。
+
+    对照 UNISOC 的 ``platform_reconciler_start_degraded``——此前这里是静默 return，
+    现场无法区分「平台未支持」与「采集正常但无异常」。
+    """
     session = _platform_session(
         lock_tracker, patch_manager, monkeypatch, "QCOM", _OkReconciler,
     )
-    session._maybe_start_aee_reconciler()
+    with caplog.at_level("WARNING"):
+        session._maybe_start_aee_reconciler()
 
     assert session._reconciler is None, "高通平台必须跳过 reconciler"
+    assert "platform_reconciler_unsupported" in caplog.text
+    assert "platform=QCOM" in caplog.text
     session.__exit__(None, None, None)
 
 

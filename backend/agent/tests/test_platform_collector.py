@@ -38,9 +38,23 @@ def test_get_collector_qcom_is_stub_only():
     """#220: keep QCOM entry; do not implement collect/parse."""
     collector = get_collector_for_platform("QCOM")
     assert isinstance(collector, QcomPlatformCollector)
-    assert collector.detect(lambda *_a, **_k: "unused", "serial") is False
     with pytest.raises(CollectorError, match="QCOM"):
         collector.parse_metadata(Path("/tmp/no-such-event"))
+
+
+def test_collector_protocol_declares_no_detect():
+    """R4-a a1（2026-09-15 裁决）：协议不得再声明 ``detect()``。
+
+    平台判定的唯一权威是 ``device_platform.detect_device_platform``；``detect()``
+    曾是"定义了却从不调用"的第三种状态，删除后不得以未接线形态复活。
+
+    裁决依据：docs/notes/architecture/2026-09-15-adr0032-v08-platform-routing-revision.md §R4-a。
+    """
+    from backend.agent.aee.collector import PlatformCollector
+
+    assert not hasattr(PlatformCollector, "detect")
+    for cls in (MtkPlatformCollector, UnisocPlatformCollector, QcomPlatformCollector):
+        assert not hasattr(cls, "detect"), f"{cls.__name__} 仍在声明 detect()"
 
 
 def test_mtk_parse_metadata_from_exp_main(tmp_path):
