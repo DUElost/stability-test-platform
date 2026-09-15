@@ -11,6 +11,7 @@ so those checks report ``BLOCKED`` with the reason instead of passing quietly.
 
 from __future__ import annotations
 
+import html
 import sys
 import time
 from dataclasses import asdict
@@ -110,6 +111,31 @@ def check_hosts(api: ApiClient, config: Any, *, now: float) -> list[Check]:
             "Online hosts prove reachability only; the controlled chain below is the binding check.",
         ))
     return checks
+
+
+def check_navigation(api: ApiClient, config: Any) -> Check:
+    """MS-13：站点导航（/site/）可辨识、无凭据；缺了也不影响平台入口。"""
+    try:
+        status, text = api.fetch_navigation()
+    except ApiError as error:
+        return _fail("verify.s6.navigation", error.code,
+                     location="$.control_plane.public_url", role="control_plane")
+    if status != 200:
+        return _fail("verify.s6.navigation", "navigation_missing", location="$.navigation")
+    expected = (
+        html.escape(config.site.id, quote=True),
+        html.escape(config.site.display_name, quote=True),
+        html.escape(config.navigation.contact, quote=True),
+        html.escape(config.navigation.documentation_url, quote=True),
+        "handover.json",
+    )
+    if any(needle not in text for needle in expected):
+        return _fail("verify.s6.navigation", "navigation_missing", location="$.navigation")
+    return passed(
+        "verify.s6.navigation", "site", "$.navigation", "navigation_published",
+        "The site navigation entry is reachable and shows site identity, owner and documentation link only.",
+        "Keep the entry credential-free; platform login stays independent of it.",
+    )
 
 
 def select_device(
@@ -333,6 +359,7 @@ def verify_site(
         return _report(checks)
 
     checks.extend(check_hosts(api, config, now=now if now is not None else time.time()))
+    checks.append(check_navigation(api, config))
 
     device, device_check = select_device(api, serial=device_serial)
     checks.append(device_check)

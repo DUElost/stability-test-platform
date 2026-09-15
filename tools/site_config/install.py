@@ -361,9 +361,22 @@ def _run_locked(
     return _report(checks, stages, state_path=state_name, agent_stage=True)
 
 
+def _state_runs(state_dir: Path) -> int:
+    """安装记录里的运行次数（重跑证据：MS-04 的「不重置、不轮换」需要它）。"""
+    try:
+        payload = json.loads((state_dir / STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    try:
+        return int(payload.get("runs") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _state_payload(ctx: InstallContext, stages: list[dict]) -> dict:
     return {
         "site_id": ctx.config.site.id,
+        "runs": _state_runs(ctx.state_dir) + 1,
         "target": ctx.config.control_plane.target,
         "release": ctx.config.release.expected_release,
         "config_digest": _config_digest(ctx.config_path),

@@ -26,6 +26,7 @@
 | 查 Agent 版本门禁与热更新 | [`operations/agent-version-and-hot-update.md`](./operations/agent-version-and-hot-update.md) |
 | 查生产控制面只读诊断边界 | [`operations/production-diagnostics.md`](./operations/production-diagnostics.md) |
 | 查新建专项 / 适配新项目怎么做 | [`operations/new-specialty-onboarding-runbook.md`](./operations/new-specialty-onboarding-runbook.md) |
+| 做站点交接与 P1 验收证据 | [`operations/site-handover-and-navigation.md`](./operations/site-handover-and-navigation.md) |
 | 查产品范围 | [`prd/00-platform-overview.md`](./prd/00-platform-overview.md) |
 | 查架构决策 | [`adr/README.md`](./adr/README.md) |
 | 查上线清单 | [`operations/README.md`](./operations/README.md) |
@@ -88,7 +89,7 @@ docs/
 | 文档 | 内容 |
 |------|------|
 | [`00-system-overview.md`](./design/00-system-overview.md) | 部署拓扑、分层、领域模型摘要 |
-| [`2026-09-multi-site-installation.md`](./design/2026-09-multi-site-installation.md) | 多站点 P1：I1 配置模型与离线校验、I2 发布清单检查与脱敏 `plan`、I3 本地安装（S0–S4 + 受控管理员引导）、I4 站点侧 Agent 接入（S5 + `verify` 降级 S6）已实现；HTTPS 模板域名/证书占位符化；I5 导航与现场验收仍待实施 |
+| [`2026-09-multi-site-installation.md`](./design/2026-09-multi-site-installation.md) | 多站点 P1：I1 配置模型与离线校验、I2 发布清单检查与脱敏 `plan`、I3 本地安装（S0–S4 + 受控管理员引导）、I4 站点侧 Agent 接入（S5 + `verify` 降级 S6）、I5 站点导航（`/site/`）与 handover 证据清单已实现；HTTPS 模板域名/证书占位符化；**现场（城市 B/C）验收仍待执行** |
 | [`01-execution-pipeline.md`](./design/01-execution-pipeline.md) | Plan→PlanRun→Job 主链路 |
 | [`07-execution-protocol.md`](./design/07-execution-protocol.md) | 状态机、abort ACK、snapshot、claim、schema |
 | [`02-backend.md`](./design/02-backend.md) | 后端路由、服务、启动 |
@@ -122,6 +123,7 @@ docs/
 | [`development/script-versioning.md`](./development/script-versioning.md) | Agent 脚本版本不可变、参数分层与退役 |
 | [`operations/agent-version-and-hot-update.md`](./operations/agent-version-and-hot-update.md) | 滚动升级与 code revision |
 | [`operations/production-diagnostics.md`](./operations/production-diagnostics.md) | 生产控制面只读诊断、凭据来源与安全边界 |
+| [`operations/site-handover-and-navigation.md`](./operations/site-handover-and-navigation.md) | 独立站点导航入口、handover 证据清单与签字清单 |
 | [`operations/device-lease-emergency-release.md`](./operations/device-lease-emergency-release.md) | 设备 ACTIVE 租约紧急释放与回查 |
 | [`operations/adr-0028-prune-local-and-spill-gray.md`](./operations/adr-0028-prune-local-and-spill-gray.md) | #217 PRUNE_LOCAL / HddSpill 单机灰度 |
 | [`operations/mtbf-api.md`](./operations/mtbf-api.md) | MTBF 用例管理接口说明（§1 P0 validate / §1.5 脚本配置通道与 env 退役 / §2 P1 管理面；ADR-0030） |

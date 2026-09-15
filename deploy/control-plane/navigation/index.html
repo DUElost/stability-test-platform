@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>站点导航 · <site-display-name></title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; padding: 2.5rem 1.25rem; font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 { margin: 0 0 .25rem; font-size: 1.6rem; }
+  .lead { margin: 0 0 2rem; opacity: .75; }
+  dl { display: grid; grid-template-columns: 9rem 1fr; gap: .5rem 1rem; margin: 0 0 2rem; }
+  dt { opacity: .65; }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .note { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid rgba(128,128,128,.35); font-size: .9rem; opacity: .8; }
+</style>
+</head>
+<body>
+<main>
+  <h1><site-display-name></h1>
+  <p class="lead">本页由站点安装流程生成，只发布获准的站点导航信息；本页不含任何凭据、密钥或内部地址。</p>
+  <dl>
+    <dt>站点 ID</dt><dd><code><site-id></code></dd>
+    <dt>平台入口</dt><dd><a href="<public-url>/"><public-url></a></dd>
+    <dt>站点负责人</dt><dd><site-contact></dd>
+    <dt>运维文档</dt><dd><a href="<documentation-url>"><documentation-url></a></dd>
+    <dt>发布版本</dt><dd><code><release-version></code></dd>
+    <dt>本页生成时间</dt><dd><rendered-at></dd>
+  </dl>
+  <p>交接与验收证据：<a href="handover.json">handover.json</a>（由 <code>python -m tools.site_config handover</code> 生成，含 P1 验收条目与未覆盖项）。</p>
+  <p class="note">本页不可用不影响平台使用：各站点的原入口（上表「平台入口」）始终可独立登录与运行。</p>
+</main>
+</body>
+</html>

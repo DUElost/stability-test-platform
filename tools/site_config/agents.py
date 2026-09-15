@@ -94,6 +94,8 @@ class ApiClient(Protocol):
 
     def scan_scripts(self) -> tuple[int, Any]: ...
 
+    def fetch_navigation(self) -> tuple[int, str]: ...
+
 
 class HttpApiClient:
     """Minimal JSON client for the site's public entry (standard library only)."""
@@ -266,6 +268,18 @@ class HttpApiClient:
     def scan_scripts(self) -> tuple[int, Any]:
         """Register the control plane's script root into the site catalog (idempotent)."""
         return self._data("/api/v1/scripts/scan", method="POST")
+
+    def fetch_navigation(self) -> tuple[int, str]:
+        """GET the site navigation page (read-only, unauthenticated, no Origin)."""
+        try:
+            with urllib.request.urlopen(
+                f"{self.base_url}/site/", timeout=self.timeout, context=self.context,
+            ) as response:
+                return response.status, response.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as error:
+            return error.code, ""
+        except (urllib.error.URLError, ssl.SSLError, TimeoutError, OSError):
+            raise ApiError("api_unreachable", message="navigation entry") from None
 
 
 def _decode(raw: bytes) -> Any:

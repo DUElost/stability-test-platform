@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -97,6 +98,37 @@ def main() -> int:
                         f"{template_path} 含硬编码部署根 {hardcoded!r}——"
                         "部署根只能由 <deploy-root> 占位符确定（#1256）"
                     )
+
+        # 站点导航（S7/I5）：两模板都必须以只读静态段暴露 /site/，alias 指向
+        # nginx 可读的固定目录（部署根 0750 不可被 www-data 穿越，故不在部署根内）。
+        for conf_path in (nginx_http, nginx_https):
+            conf = conf_path.read_text(encoding="utf-8")
+            _require_contains(conf, "location /site/ {", str(conf_path))
+            _require_contains(conf, "alias /var/www/stability-site/;", str(conf_path))
+
+        # 导航页模板：占位符集合必须与 stages.NAVIGATION_PLACEHOLDERS 一致
+        # （权威在 tools/site_config/stages.py，这里按同一集合守存在性），
+        # 且不得出现部署根占位符或硬编码内部路径——导航页只发布获准信息。
+        nav_template = root / "deploy" / "control-plane" / "navigation" / "index.html"
+        nav_text = nav_template.read_text(encoding="utf-8")
+        expected_placeholders = {
+            "<site-id>", "<site-display-name>", "<public-url>", "<site-contact>",
+            "<documentation-url>", "<release-version>", "<rendered-at>",
+        }
+        found_placeholders = set(re.findall(r"<[a-z][a-z0-9]*(?:-[a-z0-9]+)+>", nav_text))
+        if found_placeholders != expected_placeholders:
+            raise AssertionError(
+                f"{nav_template} 占位符集合与导航契约不一致："
+                f"缺 {sorted(expected_placeholders - found_placeholders)} "
+                f"多 {sorted(found_placeholders - expected_placeholders)}"
+            )
+        _require_contains(nav_text, "handover.json", str(nav_template))
+        for forbidden in ("<deploy-root>", "/opt/", "/home/", "PRIVATE", "password"):
+            if forbidden in nav_text:
+                raise AssertionError(
+                    f"{nav_template} 含不应出现在导航页的内容 {forbidden!r}——"
+                    "导航页只发布获准信息，不含路径/凭据"
+                )
 
         # 站点参数化（I2）：HTTPS 模板不得写死域名或证书路径，只能使用占位符。
         https_text = nginx_https.read_text(encoding="utf-8")

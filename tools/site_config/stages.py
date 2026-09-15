@@ -8,13 +8,17 @@ keys, and a private administrator bootstrap before the service is exposed.
 from __future__ import annotations
 
 import base64
+import html
 import json
 import os
+import re
 import secrets
 import shutil
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -34,6 +38,22 @@ UNIT_TEMPLATES = (
     "deploy/control-plane/systemd/stability-backend-nomigrate.service",
     "deploy/control-plane/systemd/stability-backend-migrate.service",
 )
+# 站点导航页（S7/I5）：模板在发布物里，渲染结果落到 nginx 可读的站点目录。
+NAVIGATION_TEMPLATE = "deploy/control-plane/navigation/index.html"
+# 相对 ``ctx.system_root``；部署根 0750 不可被 nginx(www-data) 穿越，故独立目录。
+NAVIGATION_SITE_DIR = "var/www/stability-site"
+NAVIGATION_PLACEHOLDERS = (
+    "<site-id>",
+    "<site-display-name>",
+    "<public-url>",
+    "<site-contact>",
+    "<documentation-url>",
+    "<release-version>",
+    "<rendered-at>",
+)
+# HTML 标签名不含短横线；残留的 kebab-case 尖括号必然是未替换的导航占位符。
+_UNRESOLVED_NAV_PLACEHOLDER = re.compile(r"<[a-z][a-z0-9]*(?:-[a-z0-9]+)+>")
+
 NGINX_SITES = {
     "internal": "deploy/control-plane/nginx/stability-platform.conf",
     "production": "deploy/control-plane/nginx/stability-platform-https.conf",
@@ -138,6 +158,33 @@ def load_bindings(ctx: InstallContext) -> list[Check]:
         "Keep the bindings directory at 0700 with 0600 files.",
     ))
     return checks
+
+
+def navigation_site_dir(ctx: InstallContext) -> Path:
+    return ctx.system_root / NAVIGATION_SITE_DIR
+
+
+def navigation_substitutions(ctx: InstallContext) -> dict[str, str]:
+    """导航页替换值：只发布获准信息（站点身份/公开入口/负责人/文档/发布/时间）。
+
+    全部 HTML 转义——显示名与负责人是自由文本，未转义会破坏页面结构。
+    """
+    config = ctx.config
+    return {
+        "<site-id>": html.escape(config.site.id, quote=True),
+        "<site-display-name>": html.escape(config.site.display_name, quote=True),
+        "<public-url>": html.escape(config.control_plane.public_url.rstrip("/"), quote=True),
+        "<site-contact>": html.escape(config.navigation.contact, quote=True),
+        "<documentation-url>": html.escape(config.navigation.documentation_url, quote=True),
+        "<release-version>": html.escape(config.release.expected_release, quote=True),
+        "<rendered-at>": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
+    }
+
+
+def render_navigation_page(template: str, ctx: InstallContext) -> str | None:
+    """渲染导航页；仍有未替换占位符时返回 None（fail-closed）。"""
+    text = _render(template, navigation_substitutions(ctx))
+    return None if _UNRESOLVED_NAV_PLACEHOLDER.search(text) else text
 
 
 def _render(text: str, substitutions: dict[str, str]) -> str:
@@ -382,6 +429,32 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
         "Templates were rendered without leftover placeholders and the site marker was written.",
         "Never copy templates verbatim; always render the placeholder set.",
     ))
+
+    # 站点导航页（S7/I5）：只发布获准信息、无凭据；nginx 以 /site/ 提供它。
+    nav_template = bundle / NAVIGATION_TEMPLATE
+    if not nav_template.is_file():
+        return _safe(checks, "release_tree", location="$.release.bundle", role="site", check_id="install.s2.navigation")
+    rendered_nav = render_navigation_page(nav_template.read_text(encoding="utf-8"), ctx)
+    if rendered_nav is None:
+        return _safe(checks, "install_conflict", location="$.navigation", role="site", check_id="install.s2.navigation")
+    if ctx.dry_run:
+        checks.append(_pass(
+            "install.s2.navigation", "site", "$.navigation", "navigation_planned",
+            "Site navigation rendering is planned from the declared contact and documentation URL.",
+            "Run without --dry-run on the confirmed target to publish the site entry.",
+        ))
+    else:
+        site_dir = navigation_site_dir(ctx)
+        site_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(site_dir, 0o755)
+        _write_text(site_dir / "index.html", rendered_nav)
+        os.chmod(site_dir / "index.html", 0o644)
+        checks.append(_pass(
+            "install.s2.navigation", "site", "$.navigation", "navigation_rendered",
+            "The site navigation page was rendered with site identity, owner and documentation link only.",
+            "Serve it read-only; never add credentials or internal addresses to the navigation page.",
+        ))
+
     if not ctx.dry_run:
         ctx.ops.chown(root, config.control_plane.deploy_user)
     return checks
@@ -569,6 +642,7 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
     logrotate_target = ctx.system_root / "etc/logrotate.d/stability-backend"
     logrotate_target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(render_root / "stability-backend", logrotate_target)
+    ensure_frontend_readable(ctx)
     if ctx.ops.run(["nginx", "-t"]).returncode != 0:
         return _safe(checks, "install_nginx", location="$.control_plane.public_url", role="control_plane", check_id="install.s4.nginx")
     if ctx.ops.run(["systemctl", "enable", "--now", "nginx"]).returncode != 0:
@@ -585,12 +659,53 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
         return _safe(checks, "install_units", location="$.control_plane.deploy_root", role="control_plane", check_id="install.s4.service")
     if not await_health():
         return _safe(checks, "install_health", location="$.control_plane.public_url", role="control_plane", check_id="install.s4.health")
+    if not await_frontend(ctx):
+        return _safe(checks, "install_frontend", location="$.control_plane.public_url", role="control_plane", check_id="install.s4.frontend")
+    checks.append(_pass(
+        "install.s4.frontend", "control_plane", "$.control_plane.public_url", "frontend_served",
+        "The site entry serves the front-end bundle with the declared public URL.",
+        "Keep the deploy root traversable for the web server; never widen file permissions.",
+    ))
     checks.append(_pass(
         "install.s4.health", "control_plane", "$.control_plane.public_url", "health_ok",
         "Health reports ready workers and a schema aligned with the installed code.",
         "Health is partial evidence: log in and run the controlled drill before handover.",
     ))
     return checks
+
+
+def ensure_frontend_readable(ctx: InstallContext) -> None:
+    """让 nginx(www-data) 能穿越到前端产物：只放开目录的穿越位，文件权限不动。
+
+    部署根默认 0750、属服务账号；nginx 以非特权用户运行时，`GET /` 会因
+    stat 权限不足返回 404（I5 实验室实测）。`.env.backend` 等 0600 文件仍不可读。
+    """
+    directories = [ctx.deploy_root, ctx.deploy_root / "frontend"]
+    dist = ctx.deploy_root / "frontend" / "dist-prod"
+    if dist.is_dir():
+        directories.append(dist)
+        directories.extend(sorted(path for path in dist.rglob("*") if path.is_dir()))
+    for directory in directories:
+        try:
+            os.chmod(directory, 0o755)
+        except OSError:
+            continue
+
+
+def await_frontend(ctx: InstallContext, timeout_seconds: int = 30, interval_seconds: float = 3.0) -> bool:
+    """站点入口的前端是否真的可服务（S4 收口：`/` 必须 200）。"""
+    target = ctx.config.control_plane.public_url.rstrip("/") + "/"
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            with urllib.request.urlopen(target, timeout=5) as response:  # noqa: S310 (declared site entry)
+                if response.status == 200:
+                    return True
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval_seconds)
 
 
 def await_health(timeout_seconds: int = 90, interval_seconds: float = 3.0) -> bool:

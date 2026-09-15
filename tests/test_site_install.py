@@ -254,6 +254,12 @@ def invoke(tmp_path, *, dry_run=False, ops=None, probe=None, confirm_target="con
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_entry_probe(monkeypatch):
+    """S4 会探测站点入口（`/` 200）；单测不联网，统一 stub 为通过。"""
+    monkeypatch.setattr(stages, "await_frontend", lambda *a, **k: True)
+
+
 def env_line(text: str, key: str) -> str:
     for line in text.splitlines():
         if line.startswith(f"{key}="):
@@ -320,6 +326,14 @@ def test_full_install_is_idempotent_and_keeps_keys(tmp_path, monkeypatch):
     env_text = env_bytes.decode(encoding="utf-8")
     # I4：S2 按 public_url 渲染 Agent 安装回连地址（Agent 端 .env 的 API_URL 来源）
     assert "STP_AGENT_INSTALL_API_URL=http://control-i3.synthetic.invalid" in env_text
+    # I5：S2 渲染站点导航页到 nginx 可读目录（只发布获准信息）
+    nav = tmp_path / "system/var/www/stability-site/index.html"
+    assert nav.is_file()
+    assert stat.S_IMODE(nav.stat().st_mode) == 0o644
+    nav_text = nav.read_text(encoding="utf-8")
+    assert "synthetic-i3" in nav_text and "synthetic-ops" in nav_text
+    assert "handover.json" in nav_text
+    assert "<deploy-root>" not in nav_text
     # I4 修复：站点级秘密必须首次生成（不得把模板占位值带上线），
     # 且 SSH 口令加密键来自受保护绑定（留空会让密码型 Host 创建 503）。
     for key in ("JWT_SECRET_KEY", "AGENT_SECRET", "WS_TOKEN"):
@@ -352,6 +366,16 @@ def test_landed_tree_keeps_symlinks(tmp_path, monkeypatch):
     second = invoke(tmp_path, ops=ops_for(tmp_path), probe=lambda dsn: ("empty", None))
     assert second["status"] == "PASS", second["checks"]
     assert landed.is_symlink()
+
+
+def test_entry_without_frontend_is_reported(tmp_path, monkeypatch):
+    """入口不能服务前端（部署根不可穿越/root 写错）必须 FAIL，而不是只看 /health。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    monkeypatch.setattr(stages, "await_frontend", lambda *a, **k: False)
+    prepare(tmp_path)
+    report = invoke(tmp_path)
+
+    assert "install_frontend" in codes(report)
 
 
 def test_missing_ssh_encryption_binding_blocks_install(tmp_path):
