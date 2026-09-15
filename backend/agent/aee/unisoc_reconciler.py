@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Set
 
 from ..watcher.contracts import ContractViolation
+from .collector import CollectorError
 from .collectors.unisoc import UNIVIEW_INFO_FILENAME, UNIVIEW_ROOT
 from .mobilelog import make_adb_pull_fn
 from .extraction_slot import host_extraction_slot
@@ -35,6 +36,13 @@ _DEVICE_UNIVIEW_ROOTS = (UNIVIEW_ROOT,)
 #: #2010：``_processed`` 里"从未处理过"的哨兵（与「签名未知(None)」区分开）。
 _SIGNATURE_UNKNOWN = object()
 _STP_RC_MARKER = "__STP_RC__:"
+
+#: #2083：``_emit_event`` 三态结果——决定调用方是否落签名。
+#: ``NOT_REPORTABLE`` 是**确定性**结论（``CollectorError``：normalboot-only /
+#: 空文件 / 截断）：不产生信号，但必须落签名，否则该目录每拍重拉。
+_EMIT_RESULT_EMITTED = "emitted"
+_EMIT_RESULT_NOT_REPORTABLE = "not_reportable"
+_EMIT_RESULT_FAILED = "failed"
 
 
 def _unisoc_watcher_root(local_root: Path, run_date_stamp: Optional[str], serial: str) -> Path:
@@ -228,6 +236,7 @@ class UnisocUniviewReconciler:
         # #1043: produce local tree from device before emit loop.
         self._sync_device_events_to_local(root)
         emitted = 0
+        recorded = 0
         local_names: Set[str] = set()
         for event_dir in sorted(root.iterdir()):
             if not event_dir.is_dir():
@@ -246,15 +255,22 @@ class UnisocUniviewReconciler:
                 continue
             if not (event_dir / UNIVIEW_INFO_FILENAME).is_file():
                 continue
-            if self._emit_event(event_dir):
-                with self._state_lock:
-                    self._processed[key] = signature or ""
+            result = self._emit_event(event_dir)
+            if result == _EMIT_RESULT_FAILED:
+                # 瞬时失败（其它 parse 异常 / emit 阶段）→ 不落签名，下一拍重试
+                continue
+            # #2083：确定性不可上报（normalboot-only 等）同样落签名，
+            # 否则同步侧「已是最新」短路永不成立 → 每拍重拉。
+            with self._state_lock:
+                self._processed[key] = signature or ""
+            recorded += 1
+            if result == _EMIT_RESULT_EMITTED:
                 emitted += 1
         if emitted:
             self.stats.ticks_with_new += 1
             self.stats.new_entries_total += emitted
         pruned = self._prune_processed(local_names)
-        if emitted or pruned:
+        if recorded or pruned:
             self._save_processed_state()
         return emitted
 
@@ -465,15 +481,24 @@ class UnisocUniviewReconciler:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
-    def _emit_event(self, event_dir: Path) -> bool:
+    def _emit_event(self, event_dir: Path) -> str:
+        """发射一条事件；返回 ``_EMIT_RESULT_*`` 三态（#2083）。
+
+        ``NOT_REPORTABLE`` = ``parse_metadata`` 抛 ``CollectorError``（normalboot-only /
+        空文件 / 截断）：确定性不可上报，调用方落签名避免每拍重拉；其它 parse 异常
+        与 emit 阶段失败属瞬时问题（``FAILED``），不落签名、保留重试。
+        """
         detected_at = datetime.now(timezone.utc)
         if self._platform_collector is None:
-            return False
+            return _EMIT_RESULT_FAILED
         try:
             meta = self._platform_collector.parse_metadata(event_dir)
+        except CollectorError:
+            logger.debug("unisoc_reconciler_not_reportable dir=%s", event_dir)
+            return _EMIT_RESULT_NOT_REPORTABLE
         except Exception:
             logger.debug("unisoc_reconciler_metadata_failed dir=%s", event_dir, exc_info=True)
-            return False
+            return _EMIT_RESULT_FAILED
 
         extra: Dict[str, Any] = {
             "schema_version": 2,
@@ -513,18 +538,18 @@ class UnisocUniviewReconciler:
                     link_signal_seq_no=seq_no,
                     size_bytes=self._device_log_client.dir_size_bytes(event_dir),
                 )
-            return True
+            return _EMIT_RESULT_EMITTED
         except ContractViolation as exc:
             self.stats.signals_dropped += 1
             logger.warning(
                 "unisoc_reconciler_contract_violation serial=%s job=%d err=%s",
                 self._serial, self._job_id, exc,
             )
-            return False
+            return _EMIT_RESULT_FAILED
         except Exception:
             self.stats.signals_dropped += 1
             logger.exception("unisoc_reconciler_emit_failed serial=%s job=%d", self._serial, self._job_id)
-            return False
+            return _EMIT_RESULT_FAILED
 
 
 def resolve_unisoc_reconciler_enabled(host_id: Optional[str]) -> bool:
