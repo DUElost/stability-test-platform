@@ -67,10 +67,20 @@ sink 行号漂移（#80 由 `hosts.py:863` → `909`）——result fingerprint 
   → 55 passed；`pytest backend/tests/api/test_hosts.py -q` → 49 passed（testcontainers
   临时库）；门禁 `ruff`/`compileall`/`env-inventory`/`layering`/`orphan-models`/
   `ai-work`/`ip-leak`/`immutability`/`invariant-diff`/`gov-surface` 全绿。
-- **pending**：告警是否闭合取决于合入后 main 上的下一次 CodeQL 分析（本地无法复算
-  fingerprint）。若 #78 仍以同一 sink 复现，处置是引用本守卫按 used-for-legitimate-purpose
-  dismiss，而不是再改代码；`check:quick` 的 js 门禁（eslint/tsc/knip）未跑——worktree
-  无 `node_modules` 且本次未触前端。
+- `check:quick` 的 js 门禁（eslint/tsc/knip）未跑——worktree 无 `node_modules`，
+  本次未触前端。
+- **合入后 CodeQL 复算实跑结果**（#2153 于 2026-09-15 08:48 合入 → main 下一次
+  `Analyze (python)` 复算后核取，页面 open 归零）：
+
+  | 告警 | 结果 | 判读 |
+  |---|---|---|
+  | #80 | `fixed` | message 泛化即闭合，未动用 dismiss |
+  | #79 | `dismissed / false positive` | 代码未改，本 Note 即依据 |
+  | #78 | `dismissed / mitigated` | **raise 守卫不被 CodeQL 识别为 barrier**：sink 仍是 `_resolve_known_hosts_path` 的 `Path(raw).expanduser()`，行号仅由 119 漂到 146（本次插入造成的位移）——加校验清掉的是它指出的真实风险，清不掉告警本身 |
+
+  对下一次复核的直接影响：**#78 型复活不必再复核代码**，按 `mitigated` 引用
+  `normalize_known_hosts_path` 即可；要让页面真正静默，唯一路径是改用 CodeQL
+  认得的收敛形状（roots 白名单 + `commonpath`，见 Alternatives——本次已否决）。
 - 现网影响面核对（本机 `stp` 只读 SELECT，2026-09-15）：`host` 48 行、
   `ssh_known_hosts_path` 非空 **0 行**，且 `.env.backend` 未设
   `STP_SSH_KNOWN_HOSTS`（走 `~/.ssh/known_hosts` 回落）——新守卫对现网零影响，
