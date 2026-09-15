@@ -200,12 +200,16 @@ def _scan_poll_max_wait_seconds(n_triggered: int) -> int:
     return base + n * per_host
 
 
-def _scan_poll_grace_seconds(hosts_done: int, n_triggered: int) -> int:
-    """#732: one-shot grace when nearly complete at the primary deadline."""
-    if n_triggered <= 0 or hosts_done >= n_triggered:
+def _scan_poll_grace_seconds(done: int, total: int) -> int:
+    """#732: one-shot grace when nearly complete at the primary deadline.
+
+    ``done`` / ``total`` 传的是本报的完备性单位数（``units_satisfied`` /
+    ``units_expected``，即 (host, platform) 对数），不是 host 数。
+    """
+    if total <= 0 or done >= total:
         return 0
-    missing = n_triggered - hosts_done
-    ratio = hosts_done / n_triggered
+    missing = total - done
+    ratio = done / total
     floor = _env_float("STP_SCAN_POLL_GRACE_RATIO", _SCAN_POLL_GRACE_RATIO_DEFAULT)
     max_missing = max(1, _env_int("STP_SCAN_POLL_GRACE_MAX_MISSING", _SCAN_POLL_GRACE_MAX_MISSING_DEFAULT))
     grace = max(0, _env_int("STP_SCAN_POLL_GRACE_SECONDS", _SCAN_POLL_GRACE_SECONDS_DEFAULT))
@@ -331,18 +335,24 @@ async def plan_admission_task(ctx: dict, *, plan_run_id: int, attempt_id: str) -
 
 def _query_hosts_for_scan(
     plan_run_id: int, is_final: bool = False, allow_retired: bool = False,
-) -> tuple[list[tuple[str, dict]], list[str], list[str]]:
+) -> tuple[list[tuple[str, dict]], list[str], list[str], dict[str, set[str]]]:
     """同步查询 scan_task 所需的 host + scan_now payload，由 asyncio.to_thread 调用。
 
     下发对象是本 PlanRun 涉及的全部 host；每台收到同一份跨主机设备名单。
     ADR-0038 D5：退役主机仅在显式 admin 触发（``allow_retired=True``，由手动路由
     透传）时进入目标；否则计入 ``skipped_retired`` 如实返回，不静默丢弃。
+
+    第四个返回值是完备性期望集 ``{host_id: {平台分区}}``——ADR-0032 B1
+    「MTK/UNISOC **分区各自**完备性判定」：按各目标 host 在本 PlanRun 中持有的设备
+    平台构成派生（见 ``load_expected_scan_platforms``），而不是「每个 host 都要所有
+    平台」。
     """
     from backend.core.database import SessionLocal
     from backend.services.plan_run_scan_scope import (
         build_scan_now_payload,
         classify_recycle_targets,
         iter_plan_run_scan_hosts,
+        load_expected_scan_platforms,
     )
 
     db = SessionLocal()
@@ -358,10 +368,12 @@ def _query_hosts_for_scan(
             )
             for host_id in targets
         ]
+        expected = load_expected_scan_platforms(db, plan_run_id, targets)
         return (
             triggered,
             [row["host_id"] for row in skipped_offline_rows],
             [row["host_id"] for row in skipped_retired_rows],
+            expected,
         )
     finally:
         db.close()
@@ -389,7 +401,7 @@ async def scan_task(
     scan_round_id = round_started_at.isoformat()
 
     try:
-        triggered_rows, skipped, skipped_retired = await asyncio.to_thread(
+        triggered_rows, skipped, skipped_retired, expected = await asyncio.to_thread(
             _query_hosts_for_scan, plan_run_id, is_final, allow_retired,
         )
         triggered = [host_id for host_id, _payload in triggered_rows]
@@ -415,30 +427,44 @@ async def scan_task(
         raise
 
     if triggered:
-        from backend.core.dedup_platform import DEDUP_PLATFORMS
         from backend.services.dedup_scan import (
-            count_hosts_with_scan_artifacts,
             record_scan_archive_state,
             run_scan_sync,
+            scan_completeness,
         )
 
         poll_interval = _scan_poll_interval_seconds()
         poll_budget = _scan_poll_max_wait_seconds(len(triggered))
         elapsed = 0
         registered = 0
-        hosts_done = 0
-        n_triggered = len(triggered)
-        # Completeness is counted per host × platform (#1071): MTK arriving
-        # first must not satisfy the barrier before UNISOC uploads land.
+        completeness = None
+        n_hosts = len(triggered)
+        # Completeness is counted per (host, platform) pair (#1071 语义 + ADR-0032 B1
+        # 「分区各自完备性判定」): MTK arriving first must not satisfy the barrier
+        # before UNISOC uploads land, but a host that only owns MTK devices must not
+        # be required to deliver a UNISOC report it can never produce.
         # Scoped to this round's triggered set and since watermark (reuse of
         # plan_run_id on incremental scans).
+        n_units = sum(len(set(platforms)) for platforms in expected.values())
         logger.info(
-            "saq_scan_poll_budget plan_run=%d hosts=%d budget=%ds interval=%ds",
-            plan_run_id, n_triggered, poll_budget, poll_interval,
+            "saq_scan_poll_budget plan_run=%d hosts=%d budget=%ds interval=%ds units=%d",
+            plan_run_id, n_hosts, poll_budget, poll_interval, n_units,
         )
+        if n_units == 0:
+            # 期望集为空：本 PlanRun 没有任何可产出 scan 产物的平台设备（例如只有
+            # 尚无采集实现的 QCOM）。仍跑一次注册以登记已存在的产物，但不等。
+            logger.info(
+                "saq_scan_no_expected_platforms plan_run=%d hosts=%d",
+                plan_run_id, n_hosts,
+            )
+
+        async def _refresh_completeness():
+            return await asyncio_to_thread(
+                scan_completeness, plan_run_id, expected, since=round_started_at,
+            )
 
         async def _poll_until(deadline: int) -> None:
-            nonlocal elapsed, registered, hosts_done
+            nonlocal elapsed, registered, completeness
             while elapsed < deadline:
                 await asyncio_sleep(poll_interval)
                 elapsed += poll_interval
@@ -447,68 +473,67 @@ async def scan_task(
                 )
                 if n_new:
                     registered += int(n_new)
-                hosts_done = await asyncio_to_thread(
-                    count_hosts_with_scan_artifacts, plan_run_id, triggered,
-                    since=round_started_at,
-                    require_platforms=DEDUP_PLATFORMS,
-                )
-                if hosts_done >= n_triggered:
+                completeness = await _refresh_completeness()
+                if completeness.complete:
                     return
                 logger.info(
-                    "saq_scan_poll plan_run=%d elapsed=%ds hosts=%d/%d artifacts=%d",
-                    plan_run_id, elapsed, hosts_done, n_triggered, registered,
+                    "saq_scan_poll plan_run=%d elapsed=%ds hosts=%d/%d artifacts=%d "
+                    "units=%d/%d",
+                    plan_run_id, elapsed, completeness.hosts_with_artifacts, n_hosts,
+                    registered, completeness.units_satisfied, n_units,
                 )
 
         await _poll_until(poll_budget)
 
         # #732: near-complete fleets get one grace window for stragglers.
-        if hosts_done < n_triggered:
-            grace = _scan_poll_grace_seconds(hosts_done, n_triggered)
+        if completeness is not None and not completeness.complete:
+            grace = _scan_poll_grace_seconds(
+                completeness.units_satisfied, completeness.units_expected,
+            )
             if grace > 0:
                 logger.info(
-                    "saq_scan_poll_grace plan_run=%d hosts=%d/%d grace=%ds",
-                    plan_run_id, hosts_done, n_triggered, grace,
+                    "saq_scan_poll_grace plan_run=%d hosts=%d/%d grace=%ds units=%d/%d",
+                    plan_run_id, completeness.hosts_with_artifacts, n_hosts, grace,
+                    completeness.units_satisfied, completeness.units_expected,
                 )
                 await _poll_until(elapsed + grace)
 
-        # Poll exhausted with some hosts still missing: retry once so an _org.xls
+        # Poll exhausted with some units still missing: retry once so an _org.xls
         # that landed inside the last interval still gets registered and merged.
-        if hosts_done < n_triggered:
+        if completeness is not None and not completeness.complete:
             n_final = await asyncio_to_thread(
                 run_scan_sync, plan_run_id, scan_round_id=scan_round_id,
             )
             if n_final:
                 registered += int(n_final)
-                hosts_done = await asyncio_to_thread(
-                    count_hosts_with_scan_artifacts, plan_run_id, triggered,
-                    since=round_started_at,
-                    require_platforms=DEDUP_PLATFORMS,
-                )
+                completeness = await _refresh_completeness()
 
+        hosts_done = completeness.hosts_with_artifacts if completeness else 0
+        units_done = completeness.units_satisfied if completeness else 0
         logger.info(
-            "saq_scan_registered plan_run=%d hosts=%d/%d artifacts=%d waited=%ds",
-            plan_run_id, hosts_done, n_triggered, registered, elapsed,
+            "saq_scan_registered plan_run=%d hosts=%d/%d artifacts=%d waited=%ds units=%d/%d",
+            plan_run_id, hosts_done, n_hosts, registered, elapsed, units_done, n_units,
         )
 
         # Agent-side scan failures only log locally, so a fleet-wide
         # misconfiguration otherwise ends as a SUCCESS run with no report at all.
-        if hosts_done == 0:
+        if n_units > 0 and units_done == 0:
             logger.error(
                 "saq_scan_no_artifacts plan_run=%d hosts_triggered=%d waited=%ds",
-                plan_run_id, n_triggered, elapsed,
+                plan_run_id, n_hosts, elapsed,
             )
-        elif hosts_done < n_triggered:
+        elif units_done < n_units:
             # Deliberately still chained: a report covering the hosts that did
             # deliver beats no report at all, which is the failure mode this
             # whole path exists to remove. The shortfall has to be loud instead.
             logger.warning(
-                "saq_scan_partial_artifacts plan_run=%d hosts=%d/%d waited=%ds",
-                plan_run_id, hosts_done, n_triggered, elapsed,
+                "saq_scan_partial_artifacts plan_run=%d hosts=%d/%d waited=%ds units=%d/%d",
+                plan_run_id, hosts_done, n_hosts, elapsed, units_done, n_units,
             )
         await asyncio_to_thread(
             record_scan_archive_state,
             plan_run_id,
-            hosts_triggered=n_triggered,
+            hosts_triggered=n_hosts,
             artifacts_registered=registered,
             hosts_with_artifacts=hosts_done,
             hosts_not_acked=len(not_acked),

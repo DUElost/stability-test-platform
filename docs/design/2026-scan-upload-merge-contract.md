@@ -29,13 +29,19 @@ PRUNE 和 HDD spill force。
 `STP_SCAN_POLL_PER_HOST_SECONDS`；近齐时给一次 near-complete grace，`STP_SCAN_POLL_GRACE_*`；
 #732）。等待超时仍会 enqueue 后继，避免单台慢 host 把部分报告变成零报告。
 
-完备性由
-`dedup_scan.count_hosts_with_scan_artifacts(run_id, triggered, since=..., require_platforms=...)` 判断：
+完备性由 `dedup_scan.scan_completeness(run_id, expected, since=...)` 判断，其中
+`expected` 为 `{host_id: {平台分区}}`，由
+`plan_run_scan_scope.load_expected_scan_platforms` 按**各 host 在本 PlanRun 中的设备
+平台构成**派生：
 
-- 按 host 去重，不按产物文件数；
-- 只统计本轮 `triggered` host；
+- 完备性单位是 **(host, platform) 对**：纯 MTK host 只被要求 `mtk`、纯 UNISOC host
+  只被要求 `unisoc`、混平台 host 才要求两者都到（ADR-0032 B1「MTK/UNISOC **分区
+  各自**完备性判定」）；
+- `hosts_with_artifacts` 是 host 级口径（`run_context.archive` 与前端「host 完成度」），
+  按 host 去重、不按产物文件数；`units_*` 只用于轮询屏障；
+- 只统计本轮 `expected` 内的 host（=本轮 triggered）；
 - 只统计 `since` 之后登记的产物；
-- **每个 host 必须对 `DEDUP_PLATFORMS` 的每个平台都有产物才计入**（`require_platforms`，#1071——单平台 host 不再凑数）。
+- 无采集/扫描实现的平台（如 QCOM）不产生期望——它们无法产出 scan 产物，不让 PlanRun 空等。
 
 零产物记录 `saq_scan_no_artifacts`（ERROR），部分产物记录
 `saq_scan_partial_artifacts`（WARNING）。两者都写

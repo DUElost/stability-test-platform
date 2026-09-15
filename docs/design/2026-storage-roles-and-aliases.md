@@ -127,7 +127,8 @@ legacy 例外，见 ADR-0033 v1.2 §5.4）；**终态（条件落地）**为
 | 推荐名 | 合法别称 | 说明 |
 |--------|----------|------|
 | 扫描工具 | `start_log_scan.py`、Start-Log-Scan、AEE_TNE、`-m 0` | Agent 上 **scan**；控制面上 **merge** |
-| `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | 同名、**两角色两套值** | 控制面读自己的；Agent 也读无前缀名 |
+| `STP_BACKEND_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅控制面** | merge/scan 工具解释器与 `start_log_scan.py` 路径（`services/dedup_scan.py`）；#518 起不再回落无前缀键 |
+| `STP_DEDUP_SCAN_PYTHON` / `_SCRIPT` | **仅 Agent** | Agent 侧 scan 工具路径（`agent/scan_runner.py`；hot-update 经 `STP_AGENT_*` 源键写入）。控制面**不读**同名键（角色分离口径见 [`01-execution-pipeline.md`](./01-execution-pipeline.md) §8.3） |
 | `STP_AGENT_DEDUP_SCAN_*` | **仅控制面** | hot-update 写成 Agent 无前缀键 |
 | `dedup/` | 中心存储上的目录 | ≠ 扫描工具 ≠ SAQ 整条链 |
 

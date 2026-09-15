@@ -6,7 +6,7 @@ Class: feature
 ## Decision
 
 按 [#1737](https://github.com/DUElost/stability-test-platform/issues/1737) 的裁决（
-[设计稿 §8](../design/2026-09-13-run-console-multi-instance-ownership.md)，方向 A /
+[设计稿 §8](../../design/2026-09-13-run-console-multi-instance-ownership.md)，方向 A /
 续期失败策略 ③ 窄化自杀 / TTL 120s / 验收=进程内双实例模拟）落地 **P1**：
 
 1. **新模块** `backend/realtime/console_registry.py`——与 P3-3 `agent_sid_registry`

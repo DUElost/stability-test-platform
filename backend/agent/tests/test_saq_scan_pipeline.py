@@ -18,7 +18,12 @@ import pytest
 
 
 def _query_hosts_from_rows(rows):
-    """Stand-in for ``_query_hosts_for_scan`` → ``(triggered, skipped, skipped_retired)``."""
+    """Stand-in for ``_query_hosts_for_scan``.
+
+    → ``(triggered, skipped, skipped_retired, expected)``。每个触发的 host 期望一个
+    ``mtk`` 单位，所以本文件里「完备性单位数 == 触发 host 数」，既有轮询算术保持
+    可读。
+    """
 
     def _query(
         plan_run_id: int, is_final: bool = False, allow_retired: bool = False,
@@ -41,9 +46,21 @@ def _query_hosts_from_rows(rows):
                 skipped_retired.append(host_id)
             else:
                 skipped.append(host_id)
-        return triggered, skipped, skipped_retired
+        expected = {host_id: {"mtk"} for host_id, _payload in triggered}
+        return triggered, skipped, skipped_retired, expected
 
     return _query
+
+
+def _c(units_satisfied: int, units_expected: int):
+    """``scan_completeness`` 返回值替身（units = (host, platform) 对数）。"""
+    from backend.services.dedup_scan import ScanCompleteness
+
+    return ScanCompleteness(
+        hosts_with_artifacts=units_satisfied,
+        units_satisfied=units_satisfied,
+        units_expected=units_expected,
+    )
 
 
 @contextlib.contextmanager
@@ -54,7 +71,7 @@ def _scan_task_env(
     *,
     to_thread,
     scan_sync,
-    hosts_done,
+    completeness,
     record_archive,
     queue,
 ):
@@ -63,15 +80,29 @@ def _scan_task_env(
     ``asyncio_sleep`` / ``asyncio_to_thread`` go through ``monkeypatch`` so the
     module-level attributes are restored after each test instead of leaking a
     fake sleep into every later test in the session.
+
+    ``completeness`` 是 ``dedup_scan.scan_completeness`` 的替身：用例里的
+    ``fake_to_thread`` 可以继续返回**已满足的完备性单位数（int）**，本 harness 按
+    ``scan_task`` 传入的 ``expected`` 补齐 ``units_expected`` —— 与真实实现
+    「期望由 expected 派生」同构，用例读起来仍是「n 个里满足了几分之几」。
     """
     monkeypatch.setattr(saq_tasks, "asyncio_sleep", AsyncMock())
-    monkeypatch.setattr(saq_tasks, "asyncio_to_thread", to_thread)
     monkeypatch.setattr(
         saq_tasks, "_query_hosts_for_scan", _query_hosts_from_rows(host_rows),
     )
+
+    async def _asyncio_to_thread(fn, *args, **kwargs):
+        result = await to_thread(fn, *args, **kwargs)
+        if fn is completeness and isinstance(result, int):
+            expected = args[1] if len(args) > 1 else {}
+            total = sum(len(set(platforms)) for platforms in expected.values())
+            return _c(result, total)
+        return result
+
+    monkeypatch.setattr(saq_tasks, "asyncio_to_thread", _asyncio_to_thread)
     with patch("backend.realtime.socketio_server.call_agent_control", new=AsyncMock(return_value=True)), \
          patch("backend.services.dedup_scan.run_scan_sync", scan_sync), \
-         patch("backend.services.dedup_scan.count_hosts_with_scan_artifacts", hosts_done), \
+         patch("backend.services.dedup_scan.scan_completeness", completeness), \
          patch("backend.services.dedup_scan.record_scan_archive_state", record_archive), \
          patch("backend.tasks.saq_worker.get_queue", return_value=queue), \
          patch("saq.Job") as job_cls:
@@ -83,7 +114,7 @@ async def test_scan_task_polls_until_all_hosts_registered(monkeypatch):
     """scan_task keeps polling until every triggered host has artifacts."""
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
     polls = 0
 
     async def fake_to_thread(fn, *a, **kw):
@@ -91,7 +122,7 @@ async def test_scan_task_polls_until_all_hosts_registered(monkeypatch):
         if fn is scan_sync:
             polls += 1
             return "2"
-        if fn is hosts_done:
+        if fn is completeness:
             # Only host-1 in the first round; host-2 shows up in the second.
             return 1 if polls == 1 else 2
         return fn(*a, **kw)
@@ -101,7 +132,7 @@ async def test_scan_task_polls_until_all_hosts_registered(monkeypatch):
     with _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
@@ -140,7 +171,7 @@ async def test_scan_task_applies_grace_for_near_complete_fleet(monkeypatch, capl
     monkeypatch.setenv("STP_SCAN_POLL_GRACE_RATIO", "0.9")
     monkeypatch.setenv("STP_SCAN_POLL_GRACE_MAX_MISSING", "2")
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
     polls = 0
     # 10 hosts: after each poll return 9 until poll count >= 4, then 10
     host_rows = [(f"host-{i}", "ONLINE") for i in range(10)]
@@ -150,7 +181,7 @@ async def test_scan_task_applies_grace_for_near_complete_fleet(monkeypatch, capl
         if fn is scan_sync:
             polls += 1
             return "1"
-        if fn is hosts_done:
+        if fn is completeness:
             return 10 if polls >= 4 else 9
         return fn(*a, **kw)
 
@@ -159,7 +190,7 @@ async def test_scan_task_applies_grace_for_near_complete_fleet(monkeypatch, capl
     with caplog.at_level("INFO"), _scan_task_env(
         saq_tasks, monkeypatch, host_rows,
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
@@ -178,7 +209,7 @@ async def test_scan_task_does_not_break_on_one_host_worth_of_files(monkeypatch):
     """
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
     polls = 0
 
     async def fake_to_thread(fn, *a, **kw):
@@ -188,7 +219,7 @@ async def test_scan_task_does_not_break_on_one_host_worth_of_files(monkeypatch):
             # host-1's two files land at once — enough to satisfy a file count
             # of 2 against 2 triggered hosts, but only one host is covered.
             return "2" if polls == 1 else "0"
-        if fn is hosts_done:
+        if fn is completeness:
             return 1 if polls < 3 else 2
         return fn(*a, **kw)
 
@@ -197,7 +228,7 @@ async def test_scan_task_does_not_break_on_one_host_worth_of_files(monkeypatch):
     with _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
@@ -216,7 +247,7 @@ async def test_scan_task_ignores_stale_artifacts_of_untriggered_hosts(monkeypatc
     """
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
     polls = 0
     registered_hosts = {"host-a"}  # stale, from an earlier scan of the same run
 
@@ -228,7 +259,7 @@ async def test_scan_task_ignores_stale_artifacts_of_untriggered_hosts(monkeypatc
                 registered_hosts.add("host-b")
                 return "2"
             return ""
-        if fn is hosts_done:
+        if fn is completeness:
             # Mirrors the real query: intersect with the host_ids it was given,
             # so forgetting to pass ``triggered`` fails this test.
             _run_id, host_ids = a
@@ -240,7 +271,7 @@ async def test_scan_task_ignores_stale_artifacts_of_untriggered_hosts(monkeypatc
     with _scan_task_env(
         saq_tasks, monkeypatch, [("host-a", "OFFLINE"), ("host-b", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         await saq_tasks.scan_task({}, plan_run_id=45, is_final=True)
 
@@ -263,7 +294,7 @@ async def test_scan_task_ignores_same_hosts_previous_round_artifacts(monkeypatch
     """
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
     polls = 0
     # (host_id, created_at) rows already in plan_run_artifact for this run.
     stale = datetime(2026, 8, 8, 6, 0, tzinfo=timezone.utc)
@@ -277,7 +308,7 @@ async def test_scan_task_ignores_same_hosts_previous_round_artifacts(monkeypatch
                 rows.append(("host-a", datetime.now(timezone.utc)))
                 return "2"
             return ""
-        if fn is hosts_done:
+        if fn is completeness:
             _run_id, host_ids = a
             since = kw["since"]
             return len({
@@ -290,7 +321,7 @@ async def test_scan_task_ignores_same_hosts_previous_round_artifacts(monkeypatch
     with _scan_task_env(
         saq_tasks, monkeypatch, [("host-a", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         await saq_tasks.scan_task({}, plan_run_id=46, is_final=True)
 
@@ -307,12 +338,12 @@ async def test_scan_task_breaks_on_all_registered_first_poll(monkeypatch):
     """scan_task breaks immediately if all hosts delivered in the first poll."""
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
 
     async def fake_to_thread(fn, *a, **kw):
         if fn is scan_sync:
             return "4"
-        if fn is hosts_done:
+        if fn is completeness:
             return 2
         return fn(*a, **kw)
 
@@ -322,7 +353,7 @@ async def test_scan_task_breaks_on_all_registered_first_poll(monkeypatch):
     with _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=to_thread, scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
@@ -341,7 +372,7 @@ async def test_scan_task_no_hosts_triggered_skips_poll(monkeypatch):
     monkeypatch.setattr(
         saq_tasks, "_query_hosts_for_scan",
         lambda _plan_run_id, is_final=False, allow_retired=False: (
-            [], ["host-1"], [],
+            [], ["host-1"], [], {},
         ),
     )
 
@@ -360,12 +391,12 @@ async def test_scan_task_records_zero_artifacts_after_poll_exhausted(monkeypatch
     """A fleet-wide agent scan failure must not end as a silent SUCCESS."""
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
 
     async def fake_to_thread(fn, *a, **kw):
         if fn is scan_sync:
             return ""
-        if fn is hosts_done:
+        if fn is completeness:
             return 0
         return fn(*a, **kw)
 
@@ -374,7 +405,7 @@ async def test_scan_task_records_zero_artifacts_after_poll_exhausted(monkeypatch
     with caplog.at_level("ERROR"), _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
@@ -391,7 +422,7 @@ async def test_scan_task_records_no_ack_hosts(monkeypatch, caplog):
     from backend.realtime import socketio_server
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
     scan_calls = 0
 
     async def fake_to_thread(fn, *a, **kw):
@@ -399,7 +430,7 @@ async def test_scan_task_records_no_ack_hosts(monkeypatch, caplog):
         if fn is scan_sync:
             scan_calls += 1
             return "1" if scan_calls == 1 else ""
-        if fn is hosts_done:
+        if fn is completeness:
             return 1
         return fn(*a, **kw)
 
@@ -408,7 +439,7 @@ async def test_scan_task_records_no_ack_hosts(monkeypatch, caplog):
     with caplog.at_level("WARNING"), _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         # 覆盖 fixture 的 ack mock：只有 host-2 回执
         socketio_server.call_agent_control.side_effect = (
@@ -428,7 +459,7 @@ async def test_scan_task_counts_final_registration_attempt(monkeypatch):
     """The post-poll retry registers artifacts, so it must update the counts."""
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
     scans = 0
 
     async def fake_to_thread(fn, *a, **kw):
@@ -437,7 +468,7 @@ async def test_scan_task_counts_final_registration_attempt(monkeypatch):
             scans += 1
             # Nothing during the poll window; the artifact lands just after it.
             return "" if scans <= 30 else "1"
-        if fn is hosts_done:
+        if fn is completeness:
             return 0 if scans <= 30 else 1
         return fn(*a, **kw)
 
@@ -446,7 +477,7 @@ async def test_scan_task_counts_final_registration_attempt(monkeypatch):
     with _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
@@ -465,7 +496,7 @@ async def test_scan_task_final_scan_runs_on_partial_coverage(monkeypatch):
     """
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
     scans = 0
 
     async def fake_to_thread(fn, *a, **kw):
@@ -476,7 +507,7 @@ async def test_scan_task_final_scan_runs_on_partial_coverage(monkeypatch):
             if scans == 1:
                 return "1"
             return "" if scans <= 30 else "1"
-        if fn is hosts_done:
+        if fn is completeness:
             return 1 if scans <= 30 else 2
         return fn(*a, **kw)
 
@@ -485,7 +516,7 @@ async def test_scan_task_final_scan_runs_on_partial_coverage(monkeypatch):
     with _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         await saq_tasks.scan_task({}, plan_run_id=43, is_final=True)
 
@@ -506,7 +537,7 @@ async def test_scan_task_chains_on_partial_coverage_with_warning(monkeypatch, ca
     """
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
     scans = 0
 
     async def fake_to_thread(fn, *a, **kw):
@@ -514,7 +545,7 @@ async def test_scan_task_chains_on_partial_coverage_with_warning(monkeypatch, ca
         if fn is scan_sync:
             scans += 1
             return "2" if scans == 1 else ""
-        if fn is hosts_done:
+        if fn is completeness:
             return 1  # host-2 never delivers.
         return fn(*a, **kw)
 
@@ -523,7 +554,7 @@ async def test_scan_task_chains_on_partial_coverage_with_warning(monkeypatch, ca
     with caplog.at_level("WARNING"), _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE"), ("host-2", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ) as job_cls:
         await saq_tasks.scan_task({}, plan_run_id=44, is_final=True)
 
@@ -567,12 +598,12 @@ async def test_scan_task_enqueues_upload_then_merge(monkeypatch):
     """scan_task enqueues upload_task then merge_task (extract chained from merge)."""
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
 
     async def fake_to_thread(fn, *a, **kw):
         if fn is scan_sync:
             return "2"
-        if fn is hosts_done:
+        if fn is completeness:
             return 1
         return fn(*a, **kw)
 
@@ -581,7 +612,7 @@ async def test_scan_task_enqueues_upload_then_merge(monkeypatch):
     with _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ) as mock_job_cls:
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
@@ -601,7 +632,7 @@ async def test_scan_task_enqueues_distinct_keys_per_round(monkeypatch):
     """#1111: incremental vs final must not share upload/merge SAQ keys."""
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
     keys_by_run: list[list[str]] = []
     round_times = iter([
         datetime(2026, 9, 8, 10, 0, 0, tzinfo=timezone.utc),
@@ -618,7 +649,7 @@ async def test_scan_task_enqueues_distinct_keys_per_round(monkeypatch):
     async def fake_to_thread(fn, *a, **kw):
         if fn is scan_sync:
             return "1"
-        if fn is hosts_done:
+        if fn is completeness:
             return 1
         return fn(*a, **kw)
 
@@ -629,7 +660,7 @@ async def test_scan_task_enqueues_distinct_keys_per_round(monkeypatch):
         with _scan_task_env(
             saq_tasks, monkeypatch, [("host-1", "ONLINE")],
             to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-            hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+            completeness=completeness, record_archive=record_archive, queue=queue,
         ) as mock_job_cls:
             await saq_tasks.scan_task({}, plan_run_id=7, is_final=is_final)
             keys_by_run.append([c.kwargs["key"] for c in mock_job_cls.call_args_list])
@@ -660,12 +691,12 @@ async def test_scan_task_enqueues_upload_and_merge_logs(monkeypatch, caplog):
     """#213 Track A: scan_task logs the upload+merge follow-up chain."""
     from backend.tasks import saq_tasks
 
-    scan_sync, hosts_done, record_archive = MagicMock(), MagicMock(), MagicMock()
+    scan_sync, completeness, record_archive = MagicMock(), MagicMock(), MagicMock()
 
     async def fake_to_thread(fn, *a, **kw):
         if fn is scan_sync:
             return "2"
-        if fn is hosts_done:
+        if fn is completeness:
             return 1
         return fn(*a, **kw)
 
@@ -674,7 +705,7 @@ async def test_scan_task_enqueues_upload_and_merge_logs(monkeypatch, caplog):
     with caplog.at_level("INFO"), _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ) as mock_job_cls:
         await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
 
@@ -790,13 +821,13 @@ async def test_scan_task_reraises_when_followup_enqueue_fails(monkeypatch):
     from backend.tasks import saq_tasks
 
     scan_sync = MagicMock(return_value="1")
-    hosts_done = MagicMock(return_value=1)
+    completeness = MagicMock(return_value=1)
     record_archive = MagicMock()
 
     async def fake_to_thread(fn, *a, **kw):
         if fn is scan_sync:
             return "1"
-        if fn is hosts_done:
+        if fn is completeness:
             return 1
         return fn(*a, **kw)
 
@@ -805,7 +836,7 @@ async def test_scan_task_reraises_when_followup_enqueue_fails(monkeypatch):
     with _scan_task_env(
         saq_tasks, monkeypatch, [("host-1", "ONLINE")],
         to_thread=AsyncMock(side_effect=fake_to_thread), scan_sync=scan_sync,
-        hosts_done=hosts_done, record_archive=record_archive, queue=queue,
+        completeness=completeness, record_archive=record_archive, queue=queue,
     ):
         with pytest.raises(RuntimeError, match="redis down"):
             await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
