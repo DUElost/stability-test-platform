@@ -111,8 +111,13 @@ runtime_database_url=os.getenv("DATABASE_URL"))`——同库直接拒载（pytes
   所有 PR 会卡在「等待 required check」，需先加新 check 再删旧 check）。
 - **耗时红线**：本步骤现为十秒级。若锁序用例增长到分钟级，须回到
   `2026-08-14-merge-path-attention-budget.md` 重估，而不是默认「加了就一直加」。
-- **锁序测试自身的完成度**：三条回归在**默认本地配置**下仍会 skip（sqlite），PR 路径靠
-  `env -u DATABASE_URL` + PG service 才真跑。新增锁序用例时不要依赖本地
-  `python -m pytest backend/tests/` 的绿——那是 skip 的绿。
+- ~~**锁序测试自身的完成度**：三条回归在**默认本地配置**下仍会 skip（sqlite），因此不要
+  依赖本地 `python -m pytest backend/tests/` 的绿——那是 skip 的绿。~~
+  **（`#2022` 事实更正）本条断言不成立**：`backend/tests/conftest.py` 在导入测试模块**之前**
+  已把 `DATABASE_URL` 覆盖为 testcontainers / CI 的 PG 库，`pytestmark` 里
+  `startswith("sqlite")` 那条 skip 分支在本仓 harness 里**不可达**（实测：以
+  `DATABASE_URL=sqlite:///…` 运行，用例照常真跑并通过）。无 docker 时是在 conftest 阶段
+  报错，也不是 skip。所以本地 `pytest backend/tests/` 的绿是真跑过的绿；PR 阶段仍需本单的
+  接线，理由只是 `pr-agent-tests` **没有 PG service**，与 skip 无关。
 - **观测入口**：`stability_db_deadlock_total{engine}` 与 `StabilityDbDeadlockDetected`
   （`#1958`）应长期为 0；出现增量即回到共享行加锁表按行定位，先看本步骤是否已红。
