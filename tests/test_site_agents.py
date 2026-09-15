@@ -143,6 +143,7 @@ class FakeApi:
         run_events: list[dict] | None = None,
         digest_sequence: list[str] | None = None,
         scan_status: int = 200,
+        navigation: tuple[int, str] | None = None,
     ):
         self.hosts = hosts if hosts is not None else []
         self.created: list[dict] = []
@@ -173,6 +174,7 @@ class FakeApi:
         self.host_reads = 0
         self._scan_status = scan_status
         self.scans = 0
+        self._navigation = navigation
 
     # ── API surface ──────────────────────────────────────────────────────
     def login(self, username: str, password: str) -> str:
@@ -288,6 +290,14 @@ class FakeApi:
                 "step_traces": [{"step_key": "s6-noop", "exit_code": 0}],
             }]
         return {"id": run_id, "status": self._run_statuses[index], "jobs": jobs}
+
+    def fetch_navigation(self) -> tuple[int, str]:
+        if self._navigation is not None:
+            return self._navigation
+        return 200, (
+            "synthetic-i4（合成站点 I4）synthetic-ops "
+            "https://docs.synthetic.invalid/ops handover.json"
+        )
 
     def plan_run_jobs(self, run_id: int) -> list[dict]:
         if self._run_jobs is not None:
@@ -832,6 +842,19 @@ class TestVerifyS6:
         assert _report_status(report, "verify.s6.storage") == "BLOCKED"
         assert _report_status(report, "verify.s6.scan_upload_merge") == "BLOCKED"
         assert _report_status(report, "verify.s6.watcher") == "BLOCKED"
+
+    def test_missing_navigation_entry_is_reported(self, site):
+        """MS-13：导航不可达属 FAIL；它不影响平台入口，但验收要看见。"""
+        api = FakeApi(hosts=[_live_host()], navigation=(404, ""))
+        report = _run_verify(site, api)
+
+        assert "navigation_missing" in _report_codes(report)
+
+    def test_navigation_without_site_identity_is_rejected(self, site):
+        api = FakeApi(hosts=[_live_host()], navigation=(200, "<html>generic</html>"))
+        report = _run_verify(site, api)
+
+        assert "navigation_missing" in _report_codes(report)
 
     def test_csrf_guard_must_refuse_cross_origin_write(self, site):
         api = FakeApi(csrf_status=401, devices=[_verified_device()])

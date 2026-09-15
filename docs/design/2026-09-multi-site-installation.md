@@ -1,10 +1,10 @@
 # 多站点 P1：站点配置、部署预检与城市 B 安装闭环
 
-- **状态**：部分实现；I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan`、I3 本地安装（S0–S4、受控管理员引导）与 I4 站点侧 Agent 接入（S5、`verify` 的降级 S6）已实现，I5 的导航与端到端现场验收仍是待实施设计，不是完整安装 runbook
-- **版本**：0.6
-- **版本记录**：v0.6（2026-09-15）I4 落地——控制面驱动安装链修复（`STP_AGENT_INSTALL_API_URL` 注入、安装脚本非交互、AEE 两键落盘）、站点侧 S5 编排（`agents.py`，`install --through-agents`）与 `verify` 降级 S6（登录/CSRF、Host/设备断言、noop 受控链；存储写读与 scan/upload/merge 显式 BLOCKED）；v0.5（2026-09-14）I3 落地——本地模式 `install`（S0–S4、绑定存储、安装记录/幂等/断点、`--dry-run`）与 `backend/scripts/bootstrap_admin.py` 受控首管理员引导；v0.4（2026-09-14）I2 落地——发布清单消费契约（`release.manifest`）、脱敏 `plan`（兼容/来源检查 fail-closed、`--save-dir` 保护）与 HTTPS 域名/证书占位符；v0.3（2026-09-14）§8 并入隔离演练输入基线（3 行演练观测 + 7 项新增输入，12 项人工干预清单见 Agent Note；演练范围与来源证明表述经复核校正）；v0.2（2026-09-14）I1 配置模型与离线 `validate` 落地；v0.1（2026-09-14）初稿
+- **状态**：实现完成、现场验收待执行；I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan`、I3 本地安装（S0–S4、受控管理员引导）、I4 站点侧 Agent 接入（S5、`verify` 的降级 S6）与 I5 站点导航/交接证据（`/site/`、`handover`）均已实现；城市 B/C 现场验收（真机、存储、scan/upload/merge、签字）仍待执行，本文不是完整安装 runbook
+- **版本**：0.7
+- **版本记录**：v0.7（2026-09-15）I5 落地——站点导航（nginx `/site/` 只读静态段 + S2 渲染，只发布获准信息）、`handover` 子命令（把 MS-01/02/04/05/06/10/13 映射到本站安装/verify 证据并落盘 `handover.json`）、安装记录新增 `runs` 计数（重跑证据）、`verify` 新增 `verify.s6.navigation`；v0.6（2026-09-15）I4 落地——控制面驱动安装链修复（`STP_AGENT_INSTALL_API_URL` 注入、安装脚本非交互、AEE 两键落盘）、站点侧 S5 编排（`agents.py`，`install --through-agents`）与 `verify` 降级 S6（登录/CSRF、Host/设备断言、noop 受控链；存储写读与 scan/upload/merge 显式 BLOCKED）；v0.5（2026-09-14）I3 落地——本地模式 `install`（S0–S4、绑定存储、安装记录/幂等/断点、`--dry-run`）与 `backend/scripts/bootstrap_admin.py` 受控首管理员引导；v0.4（2026-09-14）I2 落地——发布清单消费契约（`release.manifest`）、脱敏 `plan`（兼容/来源检查 fail-closed、`--save-dir` 保护）与 HTTPS 域名/证书占位符；v0.3（2026-09-14）§8 并入隔离演练输入基线（3 行演练观测 + 7 项新增输入，12 项人工干预清单见 Agent Note；演练范围与来源证明表述经复核校正）；v0.2（2026-09-14）I1 配置模型与离线 `validate` 落地；v0.1（2026-09-14）初稿
 - **日期**：2026-09-14
-- **需求**：[`多站点交付 PRD`](../prd/2026-multi-site-delivery.md) v0.8
+- **需求**：[`多站点交付 PRD`](../prd/2026-multi-site-delivery.md) v0.9
 - **架构边界**：[`ADR-0041`](../adr/ADR-0041-independent-site-delivery-and-management.md) v1.1（Accepted）
 
 ## 1. 本次细化的边界
@@ -98,7 +98,7 @@ agents:
 | `agents[].key/target` | key 仅是引导时的逻辑名；同站点避免重复名称/目标；Host ID 必须来自本站 API。I4：Host 名取 `<site.id>-<key>`，按 `target`（IP/主机名）查/建并对名称核对，占用同 IP/同名即 fail-closed（不换名、不抢占） | Host 创建参数、Ansible 目标及安装器 `agent_host_id`，Device 由 Agent 发现 |
 | `agents[].install_root/local_aee_root` | 区分安装/SSD 日志与本地 AEE 第一落点；本地 AEE 根不能误指共享挂载 | `AGENT_INSTALL_DIR` 及安装器派生路径、受保护的 `STP_AEE_LOCAL_ROOT`；I4 经 `install_options` 下传给既有安装链，空值不覆盖目标 `.env` 既有值 |
 | 秘密绑定 | 按站点生成/提供，格式与权限验证，不复制 A 的值，不用占位值启动 | `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET_KEY`、`AGENT_SECRET`、`SSH_CREDENTIALS_FERNET_KEY` 等既有键 |
-| `navigation` | 只发布获准信息；URL 只允许受控站点/文档目标，不带凭据 | 既有内网页或最小静态导航；不引入统一登录 |
+| `navigation` | 只发布获准信息；URL 只允许受控站点/文档目标，不带凭据。I5：`contact`/`documentation_url` 由 S2 渲染进站点导航页（HTML 转义，显示名与负责人是自由文本） | `/var/www/stability-site/index.html`（0644，nginx `/site/` 只读提供）+ `handover.json`；不引入统一登录、不污染前端发布物 |
 
 I1 的标准拓扑要求控制面、中心存储和每个 Agent 使用不同目标；不支持将多个安装角色合并到同一台机器。目标只做主机名大小写/末尾点、IP 表示法规范化；不同 DNS 别名是否指向同一机器必须在远端预检核验。
 部署/Agent 安装/本地 AEE 目录不得与共享挂载根相同或互为父子，Agent 安装目录也不得包含本地 AEE 根。路径使用无转义的字母、数字、下划线、点和短横线分段；拒绝穿越、模板/命令表达式、共享根和系统目录。远端 symlink 与真实磁盘身份仍未检查。
@@ -132,6 +132,9 @@ python -B -m tools.site_config install … --through-agents
 # 受控验收（降级 S6；同样在控制面机内执行）
 python -B -m tools.site_config verify --config /absolute/path/site.yaml \
   --bindings-dir /protected/bindings [--device-serial <serial>] [--run-timeout 900] [--json]
+# 交接与 P1 证据清单（读安装记录与 verify 报告，写 /site/handover.json）
+python -B -m tools.site_config handover --config /absolute/path/site.yaml \
+  --state-dir /protected/state [--verify-report /protected/verify.json] [--dry-run] [--json]
 ```
 
 `--config` 必填，不自动发现 env/inventory。输入必须为普通 UTF-8 文件（拒绝最终路径为 symlink、目录或 FIFO），上限 1 MiB、YAML 嵌套上限 32；拒绝重复键、未知字段、非字符串映射键、多文档、危险标签和 anchors/aliases。时区使用本地公开时区库验证，不访问远端。
@@ -150,7 +153,8 @@ python -B -m tools.site_config verify --config /absolute/path/site.yaml \
 | `validate` | 读取显式站点输入，验证结构/交叉字段，输出脱敏问题 | 解析秘密、读取实际 inventory/env、连接网络、写系统配置 |
 | `plan` | 读取已声明的本地发布清单，核对版本/组件/来源声明/支持矩阵，生成脱敏步骤与模板差异；可一次性写入显式选择的自有目录 | 取远端凭据、自动下载、连接 DB/SSH、将秘密或输入值渲染到报告、覆盖既存报告 |
 | `preflight` | 用户明确目标及授权后，执行有超时的远端只读检查 | 自动挂载/写分享、安装软件、迁移、创建用户、登录/退出探测、测试现有生产库 |
-| `install`（含 `--through-agents`） | 在已声明的目标机内按 S0–S4 写入已授权的新站点（本地模式）；可 `--dry-run` 只验证；S5 只经本站公开 API 创建/核对 Host 并驱动既有安装链；安装记录与幂等/断点语义见上 | 未经确认写入、接收远端凭据、建库、格式化存储、覆盖未接管数据、`--force` 绕过保护、把安装成功宣告为站点可上线、直接改写 Agent `.env` 或 protected keys |
+| `install`（含 `--through-agents`） | 在已声明的目标机内按 S0–S4 写入已授权的新站点（本地模式）；可 `--dry-run` 只验证；S5 只经本站公开 API 创建/核对 Host 并驱动既有安装链；S2 另行渲染站点导航页到 `/var/www/stability-site/`（只发布获准信息）；安装记录与幂等/断点语义见上 | 未经确认写入、接收远端凭据、建库、格式化存储、覆盖未接管数据、`--force` 绕过保护、把安装成功宣告为站点可上线、直接改写 Agent `.env` 或 protected keys |
+| `handover` | 读本站安装记录与 verify 报告，把 PRD P1 验收条目映射成证据清单并落盘 `/site/handover.json`（0644、脱敏）；`--dry-run` 零写入 | 生成含凭据/秘密名/内部地址的交接物；把缺证据条目写成通过 |
 | `verify` | 对明确的新站点执行获授权的认证、受控专项与小写入探针 | 将其称为纯只读；把真实设备/业务写操作隐含在普通预检里；把 `BLOCKED`（未实现的探针/无设备）报成通过 |
 
 所有检查须有稳定 `check_id`、目标角色、状态、脱敏说明与修复建议；结果区分 `PASS`、`FAIL`、`BLOCKED`、`NOT_APPLICABLE`。
@@ -187,7 +191,7 @@ SSH 严格核对已有/获准指纹，不能用关闭主机密钥校验解决首
 | S4 控制面入口 | 启动 nomigrate 服务及 Nginx，核对 DB/Redis/SAQ、同源入口和 SocketIO | 服务健康、必要后台组件就绪，登录/CSRF 经授权验收 | 不用跳过基础设施检查伪造成功；先完成私有引导再暴露正式入口 |
 | S5 Host 与 Agent | 经本站管理员权限创建/核对 Host，消费 API 返回 ID，复用 Ansible/安装服务（I4：`install --through-agents`，`tools/site_config/agents.py`） | Agent 指向本站、身份唯一、代码/schema/脚本一致，心跳与设备发现正常；I4 逐项断言：心跳新鲜、实例/启动标识、摘要=清单、审计入口=本站 | 已安装且归属其他站点则拒绝；不能重复注册 Host、重写 protected keys 或静默转走现有设备；失败即停，不继续下一个 Agent |
 | S6 受控主链与存储 | 选择专用测试设备，验证 Plan/claim/租约、Watcher、scan/upload/merge 及授权写读探针（I4：`verify` 的降级路径） | 结果、日志位置、文件引用及终态清理有证据；I4 具备：noop 单步 Plan 到终态 + step trace 落在指定设备 | 失败保留证据，不盲目重跑刷机/硬件动作；探针只清理本次创建的文件；无设备、存储探针与 scan/upload/merge 记 `BLOCKED`，不得报成通过 |
-| S7 导航与交接 | 提供站点入口、负责人、运维文档、安装摘要和后续维护/备份计划 | 独立入口可用，导航无凭据，P1 对应验收签字 | P1 完成不代表 P2 升级恢复或 P4 总览已交付 |
+| S7 导航与交接 | 提供站点入口、负责人、运维文档、安装摘要和后续维护/备份计划（I5：`/site/` + `handover` + [运维文档](../operations/site-handover-and-navigation.md)） | 独立入口可用，导航无凭据，P1 对应验收签字；I5 逐项映射 MS-01/02/04/05/06/10/13 并把缺证据条目保持 BLOCKED | P1 完成不代表 P2 升级恢复或 P4 总览已交付；`handover.json` 是证据快照，不是签字 |
 
 首管理员引导仅用于已确认的新站点初始化：复用现有密码校验/哈希与审计，禁止默认弱密码、秘密入 argv、覆盖现有密码或为已有普通用户静默提权。
 实际 API 与数据库初始化顺序需补针对隔离库的测试，不以开发初始化命令能运行作为生产适用证据。
@@ -205,7 +209,7 @@ SSH 严格核对已有/获准指纹，不能用关闭主机密钥校验解决首
 | I2（已实现） | 发布输入与模板计划 | `tools/site_config/` 新增发布清单消费与 `plan`（`manifest.py`、`plan.py`）、HTTPS 模板域名/证书占位符、`tools/verify_control_plane_templates.py` 与两份部署文档同步、新增 `tests/test_site_config_plan.py` | 一份模板适配两组合成站点；发布兼容与来源检查失败阻断；秘密不经 argv 或报告；`--save-dir` 一次性 `0600` 落盘且不覆盖 |
 | I3（已实现） | 新站点基础安装（本地模式） | `tools/site_config/` 新增 `install.py`/`bindings.py`/`ops.py`/`stages.py`、`backend/scripts/bootstrap_admin.py`、`tests/test_site_install.py`；平台/存储适配限定为 Debian 13 + x86_64 + existing_share/NFS（挂载由运维预先完成） | 在一次性容器中完成 S0–S4；重复执行、断点、错误目标、迁移失败与未接管库行为有测试；`--dry-run` 零副作用 |
 | I4（已实现） | Agent 接入与闭环 | 复用 Host API、现有 Agent 安装、protected env 与升级门禁；`tools/site_config/agents.py`+`verify.py`、控制面驱动安装链修复（`STP_AGENT_INSTALL_API_URL`/非交互脚本/AEE 两键） | 双 Host 接入不串站，响应丢失后重试不重复注册；指定测试设备完成 S5–S6（无真机时用 `noop`+静态设备序列号的降级路径并标 pending，不得当已验收） |
-| I5 | 导航、文档与验收 | 最小静态/既有内网页接入，安装/诊断报告与运维文档 | S7、PRD MS-01/MS-02/MS-04/MS-05/MS-06/MS-10/MS-13 的 P1 部分有证据 |
+| I5（已实现） | 导航、文档与验收 | 站点导航页模板 + nginx `/site/` 只读段 + `handover` 子命令（`tools/site_config/handover.py`）+ 运维交接文档与签字位 | S7、PRD MS-01/MS-02/MS-04/MS-05/MS-06/MS-10/MS-13 的 P1 部分有可复跑证据（真机与存储等保持 BLOCKED） |
 
 I1/I2 已在合成配置与合成清单中验证（临时目录，无网络、无子进程审计）；I3 已在合成夹具与一次性容器中验证本地安装链（含幂等重跑、断点、错误目标与迁移失败负例）；I4 已在合成夹具（Fake API/无网络）与 238 隔离容器实验室验证站点侧编排（双 Host 接入、重复触发、错目标负例、noop 受控链）——容器实验室的 Agent 运行时依赖等价替身，真机 S6 与 scan/upload/merge 仍标 pending。验证记录见 [I1 Agent Note](../notes/feature/2026-09-14-multi-site-config-validation.md)、[I2 Agent Note](../notes/feature/2026-09-14-multi-site-release-plan.md)、[I3 Agent Note](../notes/feature/2026-09-14-multi-site-site-install.md) 与 [I4 Agent Note](../notes/feature/2026-09-14-multi-site-agent-onboarding.md)。远端编排与真实 B 现场适配（含 Ubuntu/HTTPS/CIFS）仍须先完成第 8 节输入确认。
 所有新增运行时 env/API 若确有必要，分别同步环境变量权威文档及前端 API 类型入口；本次设计不预先添加这些字段。
@@ -220,7 +224,7 @@ I1/I2 已在合成配置与合成清单中验证（临时目录，无网络、�
 - 真机验收：仅经授权的 B 试点设备，完成当前声明支持的专项链路；不把模拟测试等同于真机成功。
 - P1 安装成功必须附逐阶段结果及未覆盖项；P2 的升级/恢复演练和 P4 的只读总览仍单独验收。
 
-当前交付 I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan`、I3 本地安装（S0–S4 + 受控管理员引导）与 I4 站点侧 Agent 接入（S5 + 降级 S6），验证记录见 [I1 Agent Note](../notes/feature/2026-09-14-multi-site-config-validation.md)、[I2 Agent Note](../notes/feature/2026-09-14-multi-site-release-plan.md)、[I3 Agent Note](../notes/feature/2026-09-14-multi-site-site-install.md) 与 [I4 Agent Note](../notes/feature/2026-09-14-multi-site-agent-onboarding.md)。I5、导航、真实设备 S6 与 MS 的端到端验收仍未实现/执行；现有局部测试与单容器验收不能代替 B/C 现场验收。
+当前交付 I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan`、I3 本地安装（S0–S4 + 受控管理员引导）与 I4 站点侧 Agent 接入（S5 + 降级 S6），验证记录见 [I1 Agent Note](../notes/feature/2026-09-14-multi-site-config-validation.md)、[I2 Agent Note](../notes/feature/2026-09-14-multi-site-release-plan.md)、[I3 Agent Note](../notes/feature/2026-09-14-multi-site-site-install.md) 与 [I4 Agent Note](../notes/feature/2026-09-14-multi-site-agent-onboarding.md)。I5 已实现站点导航（`/site/`）与交接证据（`handover`，含实验室内 `/site/` 可达与证据映射验收）；**城市 B/C 现场执行**（真实设备 S6、真实存储写读、scan/upload/merge、浏览器点击核对与签字）仍未执行；现有局部测试与单容器验收不能代替现场验收。
 
 ## 8. 实施适配前仍需确认的输入
 

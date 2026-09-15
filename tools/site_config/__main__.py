@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from .handover import run_handover
 from .install import run_install
 from .plan import plan_site_report
 from .validation import validate_config_file
@@ -69,11 +70,32 @@ def main(argv: list[str] | None = None) -> int:
         help="Seconds to wait for the controlled run to reach a terminal state (default 900).",
     )
     verify.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
+    handover = commands.add_parser(
+        "handover",
+        help="Map P1 acceptance items (MS-01/02/04/05/06/10/13) to this site's install/verify evidence.",
+    )
+    handover.add_argument("--config", type=Path, required=True, help="Explicit regular UTF-8 YAML input; no environment fallback.")
+    handover.add_argument("--state-dir", type=Path, required=True, help="Owner-only directory (0700) holding the install state file.")
+    handover.add_argument(
+        "--verify-report",
+        type=Path,
+        default=None,
+        help="verify --json output; without it every verify-backed item stays BLOCKED.",
+    )
+    handover.add_argument("--dry-run", action="store_true", help="Report only; write nothing.")
+    handover.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
     arguments = parser.parse_args(argv)
     if arguments.command == "validate":
         report = validate_config_file(arguments.config)
     elif arguments.command == "plan":
         report = plan_site_report(arguments.config, save_dir=arguments.save_dir)
+    elif arguments.command == "handover":
+        report = run_handover(
+            arguments.config,
+            state_dir=arguments.state_dir,
+            verify_report=arguments.verify_report,
+            dry_run=arguments.dry_run,
+        )
     elif arguments.command == "verify":
         report = verify_site(
             arguments.config,
@@ -99,7 +121,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{check['status']} {check['check_id']} role={check['role']} {check['location']} [{check['code']}]")
             print(f"  {check['message']} {check['remediation']}")
         if report.get("saved_file"):
-            print(f"Plan report written: {report['saved_file']}")
+            label = "Handover file" if report.get("stage") == "handover" else "Plan report"
+            print(f"{label} written: {report['saved_file']}")
     return 0 if report["status"] == "PASS" else 1
 
 

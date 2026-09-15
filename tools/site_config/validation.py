@@ -86,6 +86,7 @@ MESSAGES = {
     "admin_conflict": "A non-admin user already uses the initial administrator name; resolve manually and re-run.",
     "install_units": "systemd unit installation, reload, or service start failed.",
     "install_nginx": "Nginx configuration failed the syntax check or reload.",
+    "install_frontend": "The public entry did not serve the front-end bundle; check the deploy-root traversal bits and the Nginx root.",
     "install_health": "The control plane did not reach a healthy, schema-aligned state in time.",
     # ── S5 Agent 接入（I4）───────────────────────────────────────────────
     "agent_key_permissions": "Own the declared private key with mode 0600 as the control-plane service account so Ansible can read it.",
@@ -104,6 +105,13 @@ MESSAGES = {
     "agent_digest_missing": "The Agent reported no deployment digest; install a release that publishes content identity (ADR-0040).",
     "api_auth": "The initial administrator was rejected by this site's API; verify the binding and the administrator state.",
     "api_response": "The site API answered with an unusable payload; inspect the control-plane log for the failing route.",
+    "install_state": "The install state file is missing or unreadable; run the installer before handover.",
+    "verify_report": "The verify report is missing or unreadable; re-run `verify --json` and pass the file.",
+    "evidence_failed": "An acceptance item has a failing mapped check; fix it before handover.",
+    "evidence_missing": "An acceptance item lacks evidence in the provided artifacts; it stays BLOCKED and is listed as pending.",
+    "handover_write": "The site navigation directory is not writable; fix ownership/permissions before handover.",
+    "handover_redaction": "The generated handover content hit the redaction guard and was not written; remove the offending value.",
+    "navigation_missing": "The site navigation entry is missing or incomplete; re-run the install to publish it.",
     "api_unreachable": "The site's public entry is unreachable from the control plane; verify DNS, TLS trust and Nginx before retrying.",
     # ── S6 受控验收（I4 verify）─────────────────────────────────────────
     "csrf_not_enforced": "The public entry accepted a cookie-less cross-origin write; keep STP_CSRF_ENABLED=1 for production and internal profiles.",
