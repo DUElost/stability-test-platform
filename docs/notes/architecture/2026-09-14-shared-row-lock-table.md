@@ -43,6 +43,7 @@ Class: architecture
 | `_reconcile_expired_leases` / `_reconcile_stale_unknown_jobs` | Job → Lease | `#1959` 修正 |
 | `recycler` PENDING/RUNNING 超时 | Job → Lease | 逐 job savepoint → `release_lease` |
 | `acquire_lease` / `claim` | Job → Host → Lease | 不取 plan_run |
+| `run_retention_cleanup`（`#2022` 修正） | Job → Lease → plan_run | 原为 `plan_run → Lease/Job`，见下 |
 
 **`plan_run` × `job_instance`（I2）**
 
@@ -50,6 +51,7 @@ Class: architecture
 |---|---|---|
 | `complete_job` / `recycler` / reconciler / `coordinator_heartbeat` | job → plan_run | 基准 |
 | `abort_plan_run` | job → plan_run | `#1985` 修正（先按 id 预锁候选 PENDING 行，再锁 plan_run） |
+| `run_retention_cleanup`（`#2022` 修正） | job → plan_run | 先预锁子树（job → lease）再锁 plan_run |
 | `admission_transaction` | plan_run → job(INSERT) | 豁免（新行） |
 
 **`plan_run_host` × `job_instance`（I3）**
@@ -79,39 +81,43 @@ Class: architecture
 
 → I4 无非参与方、无反向。
 
-### 唯一的形态反向：夜间保留清理（登记为「接受，不修」）
+### 曾登记为「接受，不修」的形态反向：夜间保留清理（**#2022 已修**）
 
-`cron_scheduler.run_retention_cleanup` 在**一个事务**里：
+`cron_scheduler.run_retention_cleanup` **原先**在**一个事务**里：
 
-1. `_retention_candidate_ids`（`cron_scheduler.py:264-297`）`SELECT PlanRun … FOR UPDATE
-   SKIP LOCKED`（`:291`）——**先锁 plan_run**；
-2. 再按 FK 子表顺序删除：`DeviceLease`（`:393`）→ … → `JobInstance`（`:418`）→
-   `PlanRun`（`:421`）。
+1. `_retention_candidate_ids` 里 `SELECT PlanRun … FOR UPDATE SKIP LOCKED`——**先锁
+   plan_run**；
+2. 再按 FK 子表顺序删除：`DeviceLease` → … → `JobInstance` → `PlanRun`。
 
-即 `plan_run → device_leases → job_instance`，与 I1/I2 形态相反。**决定：本版不修**，理由与
-判据见下（并写进 Revisit，附「将来要修时的正确形状」）。
+即 `plan_run → device_leases → job_instance`，与 I1/I2 形态相反。
 
-候选过滤是「`SUCCESS`/`FAILED`/`PARTIAL_SUCCESS` 且 `started_at < now -
-plan_run_retention_days` 且未被链引用」——必须是**已终态且超过保留期**的 run。要成环还需该
-run 的 job / 租约行同时被热路径持有：
+**本表首版把它判为「接受，不修」，而那个论证的前提是错的**（#2022 事实更正）：
 
-- recycler 的超时路径需要「已终态 run 下的非终态 job」并存活数十天（PENDING 超时是 120s、
-  RUNNING 有 heartbeat 时钟，正常几十分钟内处理掉）；
-- reconciler 对**终态 job** 走「D5 终态租约释放」分支，只释放租约、不调 `on_job_terminal`，
-  整个事务不取 plan_run 锁。
+- 原写「需存活**数十天**」——实际 `plan_run_retention_days` 默认 **3 天**
+  （`backend/core/settings/scheduler.py:62`；ADR-0038 亦载明「终态 Run 默认 3 天」）；
+- 原假定「只可能短暂等待」——而保留清理在**持有 plan_run 行锁期间**还要做 NFS 目录回收
+  （`purge_run_storage_dirs`，#1521/#1698 的「先文件后行」），持锁窗口是**秒级**而非毫秒级；
+- 成环只需「终态 run 里的 job 被迟到 / 重复 `/complete` 命中」，而这类形态在本仓是**已知
+  现象**（`#743` 幽灵 `/complete` 家族）。
 
-故只可能出现短暂等待。**与已修项的分界是重叠窗口**：#1985 修的 `abort_plan_run` 与热路径
-争用同一批行、亚秒级交错；这里的重叠窗口是**天数级共存**。引用本表时不要只看「顺序是否
-相反」——形态相同、窗口不同的两项处置相反，这是刻意的。
+判据更正为：**重叠窗口 = 保留清理事务持锁时长 × 该 run 的 job 被热路径触碰的概率**，
+与「共存多久」无关。结论随之反转 —— `#2022` 已修：取锁顺序改为
+**job → lease（`_retention_prelock_subtree`）→ plan_run（`_retention_lock_runs`）→ 删除**，
+满足 I1/I2；候选选择改为**只读**，锁内复核终态与年龄（`SKIP LOCKED` 保留互斥语义），
+删除内容与业务语义不变。
+
+**本表的自我更正教训**：「顺序是否相反」与「重叠窗口是否够大」是两个独立判据，后者必须取
+代码里的**真实数值**（保留期、事务持锁区间），不能凭印象填「数十天」。引用本表时，
+看到「形态反向但接受」的说法必须能追到具体数值。
 
 ### 顺带登记（未改）
 
 - **`released_leases` 恒为 0**：`plan_run_abort.py:379` 置 0 后从未自增，却被返回体与
   `abort_jobs_for_host` 的 docstring 承诺（现有 API 测试也断言 `== 0`）。租约释放实际由
   reconciler / recycler 承担。属「文档宣称 > 实现」残留。
-- **保留清理的持锁时长**：同一事务内还做 NFS 目录删除（`purge_run_storage_dirs`，
-  #1521/#1698 的「先文件后行」设计），plan_run 行锁被持有到文件操作之后。不是锁序问题，
-  但会放大与热路径的等待时间。
+- **保留清理的持锁时长（#2022 未改）**：同一事务内还做 NFS 目录删除
+  （`purge_run_storage_dirs`），plan_run 行锁被持有到文件操作之后。#2022 只统一了**顺序**，
+  没有缩短持锁时长——见 Revisit。
 
 ## Alternatives
 
@@ -120,13 +126,14 @@ run 的 job / 租约行同时被热路径持有：
   `#1960` §3 第 7 条的引用链更短。若下一轮出现第二份同类表，再评估合并进 `docs/design/`。
 - **只写在 issue 评论里**：放弃。issue 不进仓库检索面，下一轮无法在本地增量核对——这正是
   R01–R15 那轮覆盖记录只留在 GitHub 台账、事后无法查证同一个坑。
-- **顺带修保留清理的加锁顺序**：放弃（本版）。理由见 Decision 的重叠窗口分析；在
-  「可达性 ≈ 0」且候选选择依赖 plan_run 锁与热路径互斥的前提下改锁序，风险大于收益。
-  将来若保留期被调小到小时级，按 Revisit 给的形状改。
+- ~~**顺带修保留清理的加锁顺序**：放弃（本版），理由是「可达性 ≈ 0」。~~
+  **已被 `#2022` 推翻**：该理由的前提「保留期数十天」不成立（见 Decision），故按本表原
+  Revisit 给的形状（预锁子树 → 再锁 plan_run）修复，并补了 PostgreSQL 回归。
 - **把 `released_leases` 一并删掉**：放弃。是行为/接口面变更，与「只登记事实」的本单不同类，
   应单独评估是否有外部消费者。
-- **为保留清理补一条 PostgreSQL 回归**：放弃。要构造「终态 run + 存活数十天的非终态 job」
-  才能命中，测试本身会变成不可信的人为场景；本表已登记可达性论证，够用。
+- ~~**为保留清理补一条 PostgreSQL 回归**：放弃，理由是「要构造存活数十天的非终态 job」。~~
+  **已被 `#2022` 推翻**：不需要那种场景——把**同一 run 的 job/lease 行**用另一会话按住即可
+  构造稳定的阻塞点（`blob/...` 见 `backend/tests/scheduler/test_retention_lock_order_2010.py`）。
 
 ## Verification
 
@@ -148,24 +155,31 @@ run 的 job / 租约行同时被热路径持有：
 
 - **本单门禁**：`check_governance_surface.py --check` 全绿（首版曾因缺四节契约被 S10 拦下，
   已按契约重排）；`pytest tests/ -q` → 532 passed。
-- **可达性论证的性质**：保留清理那一项是**静态可达性分析**（候选过滤 + 热路径时间窗），
-  不是实测；本表据此判定「接受」，并把「若保留期被调小则需重评」写进 Revisit。未做的验证：
-  未构造保留清理与热路径的真实并发交错（理由见 Alternatives）。
+- **保留清理那一项的更正与修复（#2022）**：首版是**静态可达性分析**，且前提写错（保留期
+  「数十天」）；更正后判定反转并已修。修复的验证为实跑：新回归
+  `backend/tests/scheduler/test_retention_lock_order_2010.py` 在修复版下 **2 passed（0.96s）**、
+  换回 `origin/main` 实现后**两条都以预期消息失败**（判据是第三会话 `FOR UPDATE NOWAIT`
+  探测 + 「`pg_locks` 存在未获授锁」的就绪判定）；既有
+  `backend/tests/scheduler/test_retention_cleanup.py` **16 passed**（证明删除语义未变）。
 
 ## Revisit
 
 - **每轮增量核对**：任何**新增 / 修改**对 `job_instance` / `device_leases` / `plan_run` /
   `plan_run_host` 的写语句，先在本表定位该行，再核对该事务内**所有**相关行的加锁顺序是否
   满足 I1–I4；不必重新枚举全表。
-- **回归护栏与其限度**：三条锁序测试都是 PostgreSQL-only（sqlite 下 skip），而 PR 阶段不跑
-  `backend-test` —— 也就是说它们在合入门禁里**不会兜住**。若这类不变量需要真正的护栏，
-  应把「锁序测试」并入 PR 阶段可跑的集合（独立裁决，见 `#1960` 的同类讨论）。
+- **回归护栏（`#1999` 已补合入门禁；措辞更正）**：四条锁序回归都是 PostgreSQL-only，
+  需要真实 PG 行锁；但**「默认配置下会 skip，所以本地全绿是假绿」这个说法是错的**
+  （`#2022` 实测更正：`conftest` 在导入测试模块前已把 `DATABASE_URL` 覆盖为
+  testcontainers / CI 的 PG 库，那条 `startswith("sqlite")` 的 skip 分支在本仓 harness 里
+  **不可达**；无 docker 时是在 conftest 阶段就报错，也不是 skip）。合入门禁已由 `#1999`
+  补上：它们随 `pr-migrate-empty-db`（PR 阶段唯一有 PG service 的 required check）执行，
+  接线由 `tests/test_lock_order_pr_path_contract.py` 做发现式守卫。
 - **观测入口**：`stability_db_deadlock_total{engine}` 与告警 `StabilityDbDeadlockDetected`
   （`#1958`）。该计数器应长期为 0；出现增量即回到本表按行定位，而不是先怀疑语句形状。
-- **保留清理**：若 `plan_run_retention_days` 被调小到小时级，或出现「保留清理 × 热路径」
-  的真实等待/死锁证据，按此形状改：候选**无锁预读** → 按 id 升序锁 job 行 →
-  再 `FOR UPDATE SKIP LOCKED` 复核终态 → 删除。**不要**把 deletes 挪到锁之前——候选选择
-  本身依赖 plan_run 锁与热路径互斥。
+- **保留清理（`#2022` 已修顺序，**持锁时长未改**）**：顺序已对齐 I1/I2。要把持锁窗口压到
+  毫秒级还需把 `purge_run_storage_dirs` 移出事务——那会动 `#1521`/`#1698`「先文件后行」的
+  自愈语义，属独立裁决。届时**不要**只把 deletes 挪到锁之前：候选选择依赖「锁内复核」
+  与热路径互斥。
 - **`released_leases`**：若确认无外部消费者（前端/脚本/Agent），按「文档宣称 > 实现」清理
   该字段与其 docstring；在此之前不要把它当作租约已释放的信号。
 - **表的位置**：若下一轮出现第二份同类表（或本表被别的文档大量引用），评估移入
@@ -179,5 +193,6 @@ run 的 job / 租约行同时被热路径持有：
 | #1959 | 回收器 Lease→Job 改为 Job→Lease + PG 并发回归 |
 | #1980 | `coordinator_heartbeat`、`extend_job_lock` 两处反向 |
 | #1985 | `abort_plan_run`（plan_run→job）改为 job→plan_run |
+| #2022 | 保留清理改为 job→lease→plan_run；并更正本表「保留期数十天」的前提错误 |
 | #1960 | 把「以共享行为单位枚举」写进审查总纲 §3 第 7 条 |
 | #1958 | 死锁指标与告警（本表的观测入口） |
