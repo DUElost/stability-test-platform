@@ -104,20 +104,31 @@ echo_info "========================================="
 echo_info "检查系统依赖..."
 
 # 检测操作系统类型
+# curl 是安装/自检链的显式依赖：#275/#281/#587 的 API 探测与 agentctl health 的
+# 「服务器连接」检查都用它。Ubuntu 22.04 最小安装不带 curl，缺了会把一次正常的
+# 安装判成失败（health rc≠0 → 安装 run FAILED；238 现场实测）。
 if [ -f /etc/debian_version ]; then
     # Debian/Ubuntu
     PKG_MANAGER="apt"
-    if ! dpkg -l | grep -q python3-venv; then
-        echo_warn "需要安装 python3-venv"
+    missing=()
+    dpkg -l 2>/dev/null | grep -q "python3-venv" || missing+=(python3-venv)
+    dpkg -l 2>/dev/null | grep -q "python3-pip" || missing+=(python3-pip)
+    command -v curl >/dev/null 2>&1 || missing+=(curl)
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo_warn "需要安装: ${missing[*]}"
         apt update -qq
-        apt install -y python3-venv python3-pip
+        apt install -y "${missing[@]}"
     fi
 elif [ -f /etc/redhat-release ]; then
     # RHEL/CentOS/Fedora
     PKG_MANAGER="yum"
-    if ! rpm -q python3-venv &>/dev/null; then
-        echo_warn "需要安装 python3-venv"
-        yum install -y python3-venv python3-pip
+    missing=()
+    rpm -q python3-venv &>/dev/null || missing+=(python3-venv)
+    rpm -q python3-pip &>/dev/null || missing+=(python3-pip)
+    command -v curl >/dev/null 2>&1 || missing+=(curl)
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo_warn "需要安装: ${missing[*]}"
+        yum install -y "${missing[@]}"
     fi
 fi
 
