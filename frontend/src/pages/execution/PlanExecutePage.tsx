@@ -228,8 +228,12 @@ export default function PlanExecutePage() {
   });
 
   const { data: hostsList, isError: hostsError, refetch: refetchHosts } = useQuery({
-    queryKey: hostKeys.list(),
-    queryFn: () => fetchHostList(0, 200),
+    // #2053：就绪度里的 `retired_at` 门禁必须**拿得到**退役主机——默认的
+    // fetchHostList(include_retired=false) 会被后端过滤，hostMap 里查不到该设备，
+    // 退役分支与「节点离线」分支都命中不了（门恒空转）。用 ADR-0038 已有的
+    // retiredList 键（含退役）与主机页共享前缀失效。
+    queryKey: hostKeys.retiredList(),
+    queryFn: () => fetchHostList(0, 200, true),
   });
 
   const { data: wifiPoolList, isError: wifiPoolsError, refetch: refetchWifiPools } = useQuery({

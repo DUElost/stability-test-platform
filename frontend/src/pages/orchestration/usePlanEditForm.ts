@@ -11,6 +11,7 @@ import {
   type PipelineDef,
   type PipelineStep,
 } from '@/utils/api';
+import { projectKeys } from '@/utils/api/queryKeys';
 import { planKeys } from '@/utils/api/queryKeys';
 import {
   EMPTY_LIFECYCLE,
@@ -97,7 +98,10 @@ export function usePlanEditForm(planId: number | null) {
 
   // ADR-0029（#405）：归属选择的数据源。字典失败不阻塞编辑（非依赖项）。
   const { data: projects } = useQuery({
-    queryKey: ['projects-for-plan-editor'],
+    // #2052：与选择器/指派弹窗共用同一数据集（仅 ACTIVE），归口到 `active()`；
+    // 原先用私有键 `['projects-for-plan-editor']` 的副作用是项目增删改后的
+    // `invalidateQueries(['projects'])` 覆盖不到它（编辑器会拿到陈旧列表）。
+    queryKey: projectKeys.active(),
     queryFn: () => api.projects.listActive(),
     staleTime: 60_000,
   });
