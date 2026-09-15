@@ -10,9 +10,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 import yaml
 
 from tools.site_config.__main__ import main
+from tools.site_config.models import SiteConfig
 from tools.site_config.validation import (
     MAX_CONFIG_BYTES,
     ConfigValidationError,
@@ -149,7 +151,6 @@ def test_declared_architecture_is_not_a_release_support_claim(site_data, tmp_pat
     (("site", "timezone"), "../../etc/passwd"),
     (("site", "display_name"), "\x1b[31mprivate"),
     (("navigation", "contact"), ""),
-    (("agents",), []),
 ])
 def test_strict_and_explicit_inputs(site_data, field, value):
     set_field(site_data, field, value)
@@ -411,7 +412,8 @@ def test_success_report_does_not_serialize_the_inventory_or_bindings(site_data, 
 
 
 @pytest.mark.parametrize("arguments", [
-    [], ["validate"], ["install"], ["preflight"], ["plan"], [PRIVATE_MARKER],
+    [], ["validate"], ["install"], ["init"], ["plan"], [PRIVATE_MARKER],
+    ["preflight", "--password", PRIVATE_MARKER],
     ["validate", "--config", "site.yaml", "--password", PRIVATE_MARKER],
 ])
 def test_only_explicit_validate_is_exposed_and_argument_errors_are_redacted(arguments, capsys):
@@ -513,3 +515,87 @@ def test_configuration_validation_has_no_runtime_imports_network_or_writes(site_
     assert PRIVATE_MARKER not in result.stdout + result.stderr
     assert json.loads(result.stdout)["status"] == "PASS"
     assert load_site_config(path).site.id == "synthetic-b"
+
+
+def test_empty_agents_is_the_control_plane_first_path(site_data):
+    """允许 agents 为空：先把控制面装好，Agent 随后按 inventory 接入。"""
+    data = copy.deepcopy(site_data)
+    data["agents"] = []
+    config = SiteConfig.model_validate(data)
+    assert config.agents == []
+
+
+def test_mixed_agent_install_roots_are_rejected(site_data):
+    """STP_SCRIPT_RUNTIME_ROOT 是站点级单值：异构安装根必须显式拒绝。"""
+    data = copy.deepcopy(site_data)
+    second = copy.deepcopy(data["agents"][0])
+    second["key"] = "agent-b"
+    second["target"] = "agent-b.synthetic.invalid"
+    second["install_root"] = "/opt/other-agent-root"
+    data["agents"].append(second)
+    with pytest.raises(ValidationError) as excinfo:
+        SiteConfig.model_validate(data)
+    assert "agent_install_root_mismatch" in str(excinfo.value)
+
+
+def test_control_plane_ssh_is_optional_in_local_mode(site_data):
+    """安装器在目标机本机执行：本地模式不需要控制面 SSH 身份。"""
+    data = copy.deepcopy(site_data)
+    data["control_plane"]["ssh_user"] = None
+    data["control_plane"]["ssh_credential_ref"] = None
+    config = SiteConfig.model_validate(data)
+    assert config.control_plane.ssh_user is None
+
+
+def test_local_mount_storage_is_a_path_not_a_share(site_data):
+    """本机磁盘子树：没有远端身份，也不接受任何分享/管理字段。"""
+    data = copy.deepcopy(site_data)
+    data["storage"] = {
+        "provisioning": "local_mount",
+        "protocol": None,
+        "target": None,
+        "os": None,
+        "ssh_user": None,
+        "ssh_credential_ref": None,
+        "share": None,
+        "credential_ref": None,
+        "mount_path": "/mnt/stp-share",
+    }
+    data["agents"] = []
+    config = SiteConfig.model_validate(data)
+    assert config.storage.provisioning == "local_mount"
+    assert config.storage.target is None
+
+
+@pytest.mark.parametrize("field, value", [
+    ("target", "control.synthetic.invalid"),
+    ("protocol", "nfs"),
+    ("share", "/srv/export"),
+    ("ssh_user", "bootstrap"),
+])
+def test_local_mount_rejects_share_shaped_fields(site_data, field, value):
+    data = copy.deepcopy(site_data)
+    data["storage"] = {
+        "provisioning": "local_mount",
+        "protocol": None,
+        "target": None,
+        "os": None,
+        "ssh_user": None,
+        "ssh_credential_ref": None,
+        "share": None,
+        "credential_ref": None,
+        "mount_path": "/mnt/stp-share",
+        field: value,
+    }
+    with pytest.raises(ValidationError) as excinfo:
+        SiteConfig.model_validate(data)
+    assert "local_mount_fields_conflict" in str(excinfo.value)
+
+
+def test_managed_storage_still_occupies_a_target_slot(site_data):
+    """受远端管理的角色同机=双重管理，这条隔离不能被 local_mount 的例外放走。"""
+    data = copy.deepcopy(site_data)
+    data["storage"]["target"] = data["control_plane"]["target"]
+    with pytest.raises(ValidationError) as excinfo:
+        SiteConfig.model_validate(data)
+    assert "role_target_collision" in str(excinfo.value)
