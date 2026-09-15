@@ -50,7 +50,7 @@ from typing import Any, Callable, Sequence
 DEFAULT_SCRIPT_ROOT = "/opt/stability-test-agent/agent/scripts"
 LOOP_PATTERN = "while :; do touc[h]"          # bracket 技巧：pkill/pgrep 不匹配自身命令行
 SAFETY_PATTERNS = ("com.android.commands.monkey", "/data/local/tmp/aimwd", "MonkeyTest.sh")
-BOGUS_SERIAL = "NOSUCHSERIAL0"
+BOGUS_SERIAL = "NOSUCH_SERIAL0"  # 故意含下划线：非真机 serial 形态，过 public 仓泄漏门禁
 
 MONKEY_PATHS = [
     "/data/local/tmp/MonkeyTest.sh", "/data/local/tmp/offlinemonkey.sh",

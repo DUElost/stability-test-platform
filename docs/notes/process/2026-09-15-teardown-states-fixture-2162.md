@@ -14,7 +14,7 @@ Class: process
      `while :; do touch f; sleep 0.05; done` 时探测正好撞上重建空档，产生**假阴性**
      （当时 A2/B2 各失败一次）——夹具现在先做**前置自检**（循环存活 + 删除后确实被重建），
      自检不过报**夹具错误（exit 2）**，绝不记成用例失败。
-  2. **③ 态用真实 adb**：把探测那一跳指向不存在的 serial（`NOSUCHSERIAL0`），得到 adb 的
+  2. **③ 态用真实 adb**：把探测那一跳指向不存在的 serial（`NOSUCH_SERIAL0`），得到 adb 的
      真实 rc≠0；不 stub 探测输出——stub 只能验证测试自己的想象。
 - **两种入口形态统一抽象**：`main` 入口（monkey 走完整脚本、`output_result` 捕获）与
   函数入口（gpu 走 `_cleanup_device_script()`、异常即失败）；探测替换对两种形态分别
@@ -45,7 +45,7 @@ Class: process
 | 真机 · monkey_teardown v1.0.2 | `--serial A2WENX66****0033 --script monkey_teardown` | **3/3 passed**（连跑 2 次稳定） |
 | 真机 · gpu_finish v1.0.5 | `--serial A2WENX66****0033 --script gpu_finish` | **3/3 passed**（连跑 2 次稳定） |
 | 真机结果样例 | ② 残留转红 | `cleanup 后仍存在: /sdcard/blacklist.txt`（`removed=8 / remaining=1`） |
-| 真机结果样例 | ③ 探测不可用转红 | `cleanup verify rc=1（无法确认删除结果）` / `RuntimeError: 清理验证不可用：rc=1…（adb: device 'NOSUCHSERIAL0' not found）` |
+| 真机结果样例 | ③ 探测不可用转红 | `cleanup verify rc=1（无法确认删除结果）` / `RuntimeError: 清理验证不可用：rc=1…（adb: device 'NOSUCH_SERIAL0' not found）` |
 | 仓库离线子集（PR 路径） | `./scripts/run_pytest.sh tests/ -q --ignore=…` | **932 passed** |
 | 门禁 | `.venv/bin/python scripts/run_gates.py check:quick` | `OK (10 gates)` |
 | 现场复位 | 设备 `pgrep -f 'while :; do touc[h]'` | **0** 个残留循环；宿主机 `/tmp` 夹具与日志已清 |
