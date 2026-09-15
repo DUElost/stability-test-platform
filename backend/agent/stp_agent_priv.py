@@ -405,6 +405,27 @@ def _read_regular_at(directory_fd, name, limit, owner=None):
         return body, metadata
 
 
+def _read_sysfs_attr(directory_fd, name, limit):
+    """读 sysfs 属性文件（**不得**用 st_size 判定大小，#2160）。
+
+    sysfs 属性文件的 ``st_size`` 恒为页大小（实测 4096），与内容长度无关
+    （``idVendor`` 内容 5 字节而 st_size=4096）——沿用 `_read_regular_at`
+    的 ``st_size > limit`` 判定会使读取恒拒（"input too large"）。这里只
+    校验「常规文件 + 实际读到的字节数」；读取按 ``limit+1`` 截断，超限即拒。
+    """
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         dir_fd=directory_fd)
+    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            _fail("sysfs attribute must be a regular file: %s" % name)
+        body = handle.read(limit + 1)
+    if not body:
+        _fail("sysfs attribute is empty: %s" % name)
+    if len(body.encode("utf-8")) > limit:
+        _fail("sysfs attribute too large: %s" % name)
+    return body
+
+
 def _visudo_check(path):
     visudo = shutil.which("visudo") or "/usr/sbin/visudo"
     if not os.path.exists(visudo):
@@ -865,7 +886,7 @@ def cmd_usb_authorized(args, conf):
         _fail("cannot open USB device dir for %s: %s" % (port, exc))
     try:
         try:
-            vendor, _ = _read_regular_at(descriptor, "idVendor", 64)
+            vendor = _read_sysfs_attr(descriptor, "idVendor", 64)
         except (PrivError, OSError) as exc:
             _fail("cannot read idVendor for %s: %s" % (port, exc))
         if vendor.strip().lower() != _MTK_VENDOR_ID:
