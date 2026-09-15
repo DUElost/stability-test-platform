@@ -75,6 +75,12 @@ run_retention_cleanup（#2022 后）
   即该回归对本缺陷有鉴别力（正反两个方向都验过）。
 - **既有面未回归**：`backend/tests/scheduler/test_retention_cleanup.py` → **16 passed**
   （删除语义不变的直接证据；该文件覆盖链式引用保留集、全链删除等 #936 语义）。
+- **agent 单测 mock（#2022 锁路径改 `db.execute`）**：
+  `backend/agent/tests/test_cron_scheduler.py::TestRunRetentionCleanup` 原先把
+  `db.execute` 一律 stub 成 `[]`，导致 `_retention_lock_runs` 清空批次、提前 return
+  （`commit` 0 次、`JobArtifact`/`JobInstance` 从未被 `query`）。已改为按
+  `stmt.selected_columns` 的表名分发：`plan_run` 返回候选 id 行，job/lease 仍空。
+  本地：`pytest …::TestRunRetentionCleanup -q` → **4 passed**；整文件 **13 passed**。
 - **门禁**：`ruff check`、`check_governance_surface.py --check`、`pytest tests/ -q` 结果见 PR。
 
 ### 写这条回归时踩的两个坑（留给后续锁序测试）
