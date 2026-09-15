@@ -13,7 +13,8 @@
 #   AGENT_INSTALL_DIR      可选。安装目录（默认 /opt/stability-test-agent）
 #   AGENT_USER / AGENT_GROUP  可选。运行账号（默认 android）
 #   AGENT_SECRET           可选。Agent-Backend 双向认证密钥
-#   AGENT_NFS_ROOT         可选。写入 STP_AEE_NFS_ROOT；空值不写、不覆盖
+#   AGENT_NFS_ROOT         可选。写入 STP_AEE_NFS_ROOT；空值不写、不覆盖。
+#                          既有 MOUNT_POINTS 为空时同时跟随它（心跳上报用）
 #   AGENT_LOCAL_AEE_ROOT   可选。写入 STP_AEE_LOCAL_ROOT；空值不写、不覆盖
 #   AGENT_CODE_VERSION     可选。写入 agent/VERSION 的版本标识
 #
@@ -114,6 +115,11 @@ if [ -f /etc/debian_version ]; then
     dpkg -l 2>/dev/null | grep -q "python3-venv" || missing+=(python3-venv)
     dpkg -l 2>/dev/null | grep -q "python3-pip" || missing+=(python3-pip)
     command -v curl >/dev/null 2>&1 || missing+=(curl)
+    # 站点声明了中心存储就需要 NFS 客户端：mount -t nfs 依赖 mount.nfs 助手，
+    # 最小安装不带它，缺了会把"装完却没挂上"推迟到 S5 才暴露（#2181）。
+    if [ -n "${AGENT_NFS_ROOT:-}" ]; then
+        command -v mount.nfs >/dev/null 2>&1 || missing+=(nfs-common)
+    fi
     if [ ${#missing[@]} -gt 0 ]; then
         echo_warn "需要安装: ${missing[*]}"
         apt update -qq
@@ -474,7 +480,9 @@ API_URL=$API_URL
 HOST_ID=$HOST_ID
 AUTO_REGISTER_HOST=false
 POLL_INTERVAL=10
-MOUNT_POINTS=
+# 心跳上报的挂载点：/storage 页与站点 S5 存储断言据此判定中心存储是否可用。
+# 未独立声明时跟随中心存储挂载点（两键同源，避免"挂了却没上报"）。
+MOUNT_POINTS=${AGENT_NFS_ROOT:-}
 ADB_PATH=adb
 # ADB 服务端口（默认 5037）。WSL 环境若默认端口被占用需切换（如 5039）：
 # ANDROID_ADB_SERVER_PORT=5037
@@ -512,6 +520,13 @@ else
         upsert_env_key "STP_AEE_LOCAL_ROOT" "$AGENT_LOCAL_AEE_ROOT"
         echo_info "STP_AEE_LOCAL_ROOT 已更新: $AGENT_LOCAL_AEE_ROOT"
     fi
+    # MOUNT_POINTS 属机器本地（热更新不覆盖），安装链是唯一能一次对齐的入口。
+    # 只在既有值为空时跟随中心存储挂载点——多挂载点站点自己写的值绝不覆盖。
+    CURRENT_MOUNT_POINTS="$(grep -E '^MOUNT_POINTS=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2- | tr -d '"' || true)"
+    if [ -z "$CURRENT_MOUNT_POINTS" ] && [ -n "${AGENT_NFS_ROOT:-}" ]; then
+        upsert_env_key "MOUNT_POINTS" "$AGENT_NFS_ROOT"
+        echo_info "MOUNT_POINTS 跟随中心存储挂载点: $AGENT_NFS_ROOT"
+    fi
     echo_info "配置文件已更新: $INSTALL_DIR/.env"
 fi
 
@@ -519,6 +534,26 @@ chmod 640 "$INSTALL_DIR/.env"
 # #1251：.env 由 root 创建，显式归属 agent 用户/组——否则 Agent 进程
 # load_dotenv 因权限不足失败（独立安装路径无 Ansible 的后续属主修复）
 chown "$USER:$GROUP" "$INSTALL_DIR/.env"
+
+# 7.4 AEE 落点与中心共享挂载点（#2181）
+# 安装链此前只写 .env 的两键、从不建目录：238 实测 4 台 Agent 上路径全不存在，
+# get_aee_local_root() 因父目录不可写静默回退 SSD（aee_local_root_unusable），
+# mount_status 也无从上报（中心存储页永远"未上报"）。
+# 本地根是机器本地目录，必须归 Agent 账号；挂载点只建空目录——已是挂载点时
+# 不动它（属主是存储端 S1 的约定，从 Agent 侧 chown 会写到分享里）。
+AEE_LOCAL_ROOT_ENV="$(grep -E '^STP_AEE_LOCAL_ROOT=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2- | tr -d '\"' || true)"
+AEE_NFS_ROOT_ENV="$(grep -E '^STP_AEE_NFS_ROOT=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2- | tr -d '\"' || true)"
+if [ -n "$AEE_LOCAL_ROOT_ENV" ]; then
+    if mkdir -p "$AEE_LOCAL_ROOT_ENV" && chown "$USER:$GROUP" "$AEE_LOCAL_ROOT_ENV" \
+            && chmod 0750 "$AEE_LOCAL_ROOT_ENV"; then
+        echo_info "本地 AEE 根已就绪: $AEE_LOCAL_ROOT_ENV ($USER:$GROUP 0750)"
+    else
+        echo_warn "本地 AEE 根准备失败: $AEE_LOCAL_ROOT_ENV（Agent 将回退 SSD 落点）"
+    fi
+fi
+if [ -n "$AEE_NFS_ROOT_ENV" ] && ! mountpoint -q "$AEE_NFS_ROOT_ENV" 2>/dev/null; then
+    mkdir -p "$AEE_NFS_ROOT_ENV" && echo_info "共享挂载点已就绪: $AEE_NFS_ROOT_ENV"
+fi
 
 # 7.5 STP_AEE_LOCAL_ROOT 静态守门（#78 子任务 3）
 # 防止 #72 类 .env 错配（路径指向 android 用户无权写的目录）安装上线；
