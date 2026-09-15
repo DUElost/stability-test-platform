@@ -12,26 +12,90 @@ def _src() -> str:
     )
 
 
-def _func_source(name: str) -> str:
-    """按 AST 取函数源码段（抗缩进/顺序变化，优于整文件字面量计数）。"""
-    src = _src()
-    for node in ast.walk(ast.parse(src)):
+def _func_ast(name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    for node in ast.walk(ast.parse(_src())):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-            return ast.get_source_segment(src, node) or ""
+            return node
     raise AssertionError(f"{name} 不在 plan_chain_trigger.py 中")
 
 
+def _assert_chain_devices_result_feeds_dispatch(fn_name: str) -> None:
+    """#2030：`_select_chain_devices` 的**结果**必须真的被使用并喂给派发。
+
+    仅断言源码含 `_select_chain_devices(` 子串挡不住「调用了但丢弃返回值、
+    继续用未过滤列表派发」——那正是 #1686 要防的「离线设备被触发」。此处做
+    两段 AST 断言：① 调用出现在解包赋值的 RHS；② 解包出的设备 id 变量作为
+    `prepare_plan_run(device_ids=...)` 的实参。
+    """
+    fn = _func_ast(fn_name)
+    unpacked: str | None = None
+    for node in ast.walk(fn):
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "_select_chain_devices"
+        ):
+            assert len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple), (
+                f"{fn_name}: _select_chain_devices 的返回未被解包赋值"
+            )
+            first = node.targets[0].elts[0]
+            assert isinstance(first, ast.Name), (
+                f"{fn_name}: 解包首项不是名字节点：{ast.dump(first)}"
+            )
+            unpacked = first.id
+    assert unpacked is not None, (
+        f"{fn_name} 未把 _select_chain_devices(rows) 的返回解包赋值——"
+        "调用结果被丢弃时未过滤列表会照常派发（#1686 复发）"
+    )
+
+    for node in ast.walk(fn):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "prepare_plan_run"
+        ):
+            continue
+        for kw in node.keywords:
+            if (
+                kw.arg == "device_ids"
+                and isinstance(kw.value, ast.Name)
+                and kw.value.id == unpacked
+            ):
+                return
+    raise AssertionError(
+        f"{fn_name} 未把 {unpacked} 送入 prepare_plan_run(device_ids=...)——"
+        "过滤结果没有喂给派发"
+    )
+
+
+def _has_online_comparison(node: ast.AST) -> bool:
+    """函数体内存在与字符串常量 "ONLINE" 的比较（docstring/注释不算）。"""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Compare):
+            for operand in (n.left, *n.comparators):
+                if isinstance(operand, ast.Constant) and operand.value == "ONLINE":
+                    return True
+    return False
+
+
 def test_chain_filters_offline_async_and_sync():
-    """两处（async / sync）都走同一过滤实现，且实现保留 ONLINE 判据。
+    """两处（async / sync）都走同一过滤实现，且过滤结果必须真的喂给派发。
 
     #1935 修正：原断言 ``src.count('if status == "ONLINE"') == 2`` 绑定字面量
     出现次数——#1822 把过滤抽成共享 helper ``_select_chain_devices``（判据也
-    扩展为 ONLINE + 心跳窗口内瞬时 OFFLINE）后误红。改为结构断言：两个触发
-    路径都必须调用该 helper，helper 内保留 ONLINE 判据（意图不变、抗重构）。
+    扩展为 ONLINE + 心跳窗口内瞬时 OFFLINE）后误红。改为结构断言。
+
+    #2030 加固：原断言（对函数源码段做 ``"_select_chain_devices("`` 子串匹配）
+    对「调用了但丢弃返回值」同样成立；改为 AST 级断言（解包赋值 + 结果送入
+    ``prepare_plan_run``），ONLINE 判据断言同步改为比较节点级（原子串断言会被
+    函数 docstring 里的字样满足）。
     """
-    for fn in ("trigger_next_plan", "trigger_next_plan_sync"):
-        assert "_select_chain_devices(" in _func_source(fn), f"{fn} 未走共享离线过滤"
-    assert '"ONLINE"' in _func_source("_select_chain_devices"), "过滤实现丢失 ONLINE 判据"
+    for fn_name in ("trigger_next_plan", "trigger_next_plan_sync"):
+        _assert_chain_devices_result_feeds_dispatch(fn_name)
+    assert _has_online_comparison(_func_ast("_select_chain_devices")), (
+        "过滤实现丢失 ONLINE 判据"
+    )
 
 
 def test_chain_records_excluded_devices():

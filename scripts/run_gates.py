@@ -282,6 +282,15 @@ PROFILES = {
 FULL_EXCLUDE = {"gov-skills", "harness-ingest"}
 
 
+def resolve_gate_names(profile: str) -> list[str]:
+    """profile → 实际执行的 gate 名列表（check:full 由 GATES − FULL_EXCLUDE 构造）。
+
+    #2030：main() 与接线守卫测试共用本函数——守卫此前自行重算同一表达式，
+    「check:full 会跑 schema-at-head」的断言由上一行蕴含、不能独立失败。
+    """
+    return PROFILES[profile] or [g for g in GATES if g not in FULL_EXCLUDE]
+
+
 def run_gate(name: str, cmd: str, cwd: str, env: dict | None) -> bool:
     full_env = os.environ.copy()
     if env:
@@ -303,7 +312,7 @@ def main() -> int:
     if profile not in PROFILES:
         print(f"unknown profile: {profile}", file=sys.stderr)
         return 2
-    gate_names = PROFILES[profile] or [g for g in GATES if g not in FULL_EXCLUDE]
+    gate_names = resolve_gate_names(profile)
     for name in gate_names:
         cmd, cwd, env = GATES[name]
         if not run_gate(name, cmd, cwd, env):
