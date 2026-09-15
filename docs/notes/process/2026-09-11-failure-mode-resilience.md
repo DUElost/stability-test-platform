@@ -15,7 +15,7 @@ Class: process
 **Retry policies (first-party)**
 - SAQ default `retries: int = 3` — `saq_worker.py:265`; per-task `retries=2, retry_delay=10.0, retry_backoff=True` — `backend/tasks/saq_tasks.py:482-485,502-505,604-607`. Flash loop bounded: `flash_firmware/v1.3.10/flash_firmware.py:1403-1410` (`max_attempts` default 2, `max(1, min(4, ...))`).
 - Agent HTTP exponential `backend/agent/api_client.py:116-175` `delay = retry_base_delay * (2 ** (attempt - 1))`; terminal payloads ride a persistent outbox — `agent/outbox_drainer.py:17` "retries un-acked terminal-state payloads".
-- DB deadlock bounded retry: `backend/tests/test_truncate_deadlock_retry.py` ("#1273 — db_session 清库（全表 TRUNCATE）对 DeadlockDetected 的有界重试").
+- DB deadlock（test 清库）: **重试已随根因收敛移除（#2074）**——`backend/tests/conftest.py` 清库前 `thread_pool.drain()` 排空后台池（泄漏者 = 通知降级/post_completion 的 fire-and-forget 短事务），死锁再现时 `_dump_deadlock_scene` 落表级取证；契约测试 `backend/tests/test_truncate_quiescence.py`（原 `test_truncate_deadlock_retry.py`，已删）。
 
 **Idempotency**
 - Spec `docs/design/07-execution-protocol.md:25-26` — "`terminal_payload_digest`：同 payload 幂等；冲突 → 409 `TERMINAL_PAYLOAD_CONFLICT`。`trace_event_id`：step_trace 幂等键（含 retry/cycle）". Impl `backend/api/routes/agent_api.py:1021,1080,1086,762`; models `backend/models/job.py:33,119`; tests `backend/tests/api/test_agent_dual_write.py:457,858`.
