@@ -28,7 +28,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from ..collector import CollectorError, EventMetadata
 from ..timestamp import parse_timestamp, to_utc
@@ -145,12 +145,6 @@ def _device_timestamp(folded: dict[str, Any]) -> tuple[Optional[datetime], Optio
 
 class UnisocPlatformCollector:
     platform = "UNISOC"
-
-    def detect(self, shell_fn: Callable[[str, int], Optional[str]], serial: str) -> bool:
-        del serial
-        # 只认权威根：`/data/uniview` 在非展锐机上也可能存在（框架侧目录），
-        # 用它做平台判别会误判。
-        return bool(shell_fn(f"ls {UNIVIEW_ROOT} 2>/dev/null", 10))
 
     def parse_metadata(self, event_dir: Path) -> EventMetadata:
         info_path = event_dir / UNIVIEW_INFO_FILENAME

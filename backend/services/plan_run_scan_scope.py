@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
+from backend.core.dedup_platform import dedup_platform_for_device_platform
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRunHost, PlanRunTargetDevice
@@ -128,6 +129,56 @@ def iter_plan_run_scan_hosts(db: Session, plan_run_id: int) -> list[tuple[str, s
         (hid, *(by_id.get(hid, ("OFFLINE", False))))
         for hid in host_ids
     ]
+
+
+def load_expected_scan_platforms(
+    db: Session, plan_run_id: int, host_ids: Iterable[str],
+) -> dict[str, set[str]]:
+    """每个**目标 host** 在本 PlanRun 中预期产出的归档平台分区集合。
+
+    期望按「host 持有的设备平台构成」派生，**不是**「每个 host 都要所有平台」：
+    Agent 侧两个 runner 都会跑、各自按 serial 过滤
+    （``scan_runner._execute_job``），纯 MTK host 的 UNISOC 工具扫不到 uniview
+    目录 → 永远产不出 unisoc 产物。若对每个 host 要求全部平台，纯平台 host 每轮
+    都判不齐、烧满轮询预算——ADR-0032 B1 的「MTK/UNISOC **分区各自**完备性判定」
+    被收紧成「每 host 双平台齐」的回归。
+
+    来源与 :func:`load_plan_run_scan_host_ids` 同源：``JobInstance``（实际执行）
+    + ``PlanRunTargetDevice.host_id_snapshot``（prepare 快照）。两处都取不到设备的
+    host 不出现在返回值中——它没有可预期的产物，不计入完备性。设备平台到分区键的
+    映射见 :func:`backend.core.dedup_platform.dedup_platform_for_device_platform`；
+    无采集实现的平台（如 QCOM）映射为 ``None``，同样不计入。
+    """
+    wanted = {str(h) for h in host_ids if h}
+    if not wanted:
+        return {}
+    host_list = sorted(wanted)
+    rows = db.execute(
+        select(JobInstance.host_id, Device.platform)
+        .join(Device, Device.id == JobInstance.device_id)
+        .where(
+            JobInstance.plan_run_id == plan_run_id,
+            JobInstance.host_id.in_(host_list),
+        )
+    ).all()
+    snapshot_rows = db.execute(
+        select(PlanRunTargetDevice.host_id_snapshot, Device.platform)
+        .join(Device, Device.id == PlanRunTargetDevice.device_id)
+        .where(
+            PlanRunTargetDevice.plan_run_id == plan_run_id,
+            PlanRunTargetDevice.host_id_snapshot.in_(host_list),
+        )
+    ).all()
+
+    expected: dict[str, set[str]] = {}
+    for host_id, platform in (*rows, *snapshot_rows):
+        if not host_id or str(host_id) not in wanted:
+            continue
+        partition = dedup_platform_for_device_platform(platform)
+        if partition is None:
+            continue
+        expected.setdefault(str(host_id), set()).add(partition)
+    return expected
 
 
 def classify_recycle_targets(

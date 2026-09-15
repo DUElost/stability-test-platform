@@ -1468,6 +1468,15 @@ export interface RunContextUploadSummary {
   pruned: number;
   /** merge_task 等齐超时前的最终判定（false = 有缺口仍继续 extract）。 */
   ready?: boolean;
+  /** 本轮 scan 的标记水位线是否已确认（false → 标记超时）。 */
+  mark_ready?: boolean;
+  /** 远端事件是否已无 in-flight（false → 仍有 pending）。 */
+  events_ready?: boolean;
+  /** ready=false 的原因；取值见 merge_task（upload_mark_timeout / upload_events_pending /
+   *  merge_skipped_failed_plan_run）。此前 TS 侧无此字段，界面只能显示「未等齐」而说不出原因。 */
+  incomplete_reason?: string;
+  /** 缺口下的补偿动作（当前只有 best_effort_extract）。 */
+  compensation?: string;
 }
 
 /** #300 P3-4: run_extract_sync 落 run_context.extract 的提取完成度。 */
@@ -1730,6 +1739,12 @@ export interface WatcherPlatformBucket {
   running_device_count?: number;
   /** 本 PlanRun 内该平台去重参与设备数（终态无 RUNNING 时兜底展示） */
   participating_device_count?: number;
+  /**
+   * R4-b b1（ADR-0032 v0.8 裁决 2026-09-15）：该平台是否有采集实现。
+   * false → 展示「平台未支持」，区分「没有异常」与「平台未支持」。
+   * 缺省（旧后端）视作 true。
+   */
+  reconciler_supported?: boolean;
 }
 
 export interface PackageStat {
@@ -1881,6 +1896,38 @@ export interface PlanRunLogEventsPayload {
   data_authority: 'device_log_event';
   total: number;
   items: PlanRunLogEvent[];
+}
+
+/** 去重产物行（`PlanRunArtifact`）。对应后端 `DedupArtifactOut`。 */
+export interface DedupArtifact {
+  id: number;
+  host_id: string | null;
+  storage_uri: string;
+  artifact_type: string;
+  size_bytes: number | null;
+  created_at: string | null;
+}
+
+/**
+ * 本轮 scan 完备性（`run_context.archive`）。
+ *
+ * 写入方 `dedup_scan.record_scan_archive_state`；后端 `DedupScanArchiveOut` 声明为
+ * `extra="allow"`（未知键透传），故这里同样允许索引签名——新增键不该在类型层被否认。
+ */
+export interface DedupScanArchive {
+  hosts_triggered?: number;
+  scan_artifacts_registered?: number;
+  hosts_with_artifacts?: number;
+  hosts_not_acked?: number;
+  [key: string]: unknown;
+}
+
+/** `GET /plan-runs/{id}/dedup/status`。对应后端 `DedupStatusOut`（#2129 契约对拍轴线 C）。 */
+export interface DedupStatusPayload {
+  plan_run_id: number;
+  artifacts: DedupArtifact[];
+  archive?: DedupScanArchive | null;
+  scan_failed?: boolean;
 }
 
 /** ADR-0030 P2 — PlanRun 逐条用例结果。 */

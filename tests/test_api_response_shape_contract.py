@@ -39,8 +39,37 @@ docstring ↔ 实现（#2141）：同样双向，**逐函数**比对 docstring �
   返回**的函数无法比对，必须在 ``_DOC_UNCHECKABLE`` 里显式豁免并写明原因；豁免项失效时
   本检查也会红（防僵尸豁免）。
 
-当前覆盖：``abort_plan_run`` ↔ ``PlanRunAbortResult``（``#787`` 与 ``#2089`` 两次漂移都
-发生在这一对），以及 4 个 docstring 键块函数中的 2 个可比对者。
+同一个形状还有**第三处**声明：**Pydantic 响应模型**（``response_model=ApiResponse[X]``）。
+它比手搓 dict 更容易被误认为"已经单一权威"——``types.ts`` 仍是一份独立声明，``tsc`` 同样
+看不见两侧差异（``WatcherPlatformBucketOut`` 加字段时，TS 不补也不会报错）。
+
+三条轴线判据一致（双向包含），差别只在"后端声明面在哪里"：
+
+| 轴线 | 后端声明面 | 登记方式 |
+|---|---|---|
+| A | 手搓 dict 的 ``return`` 字面量 | ``_PAIRS`` |
+| B | 函数 docstring 的键块 | 自动发现 + ``_DOC_UNCHECKABLE`` |
+| C | Pydantic 模型的注解字段 | ``_MODEL_PAIRS`` |
+
+轴线 C 的覆盖边界（如实写明）：
+
+- 只覆盖 ``_MODEL_PAIRS`` 里**显式登记**的配对（同轴线 A：端点与 TS 类型之间没有机器可读
+  映射，假装能自动发现只会做出恒真的守卫）；
+- **不处理 ``Field(alias=…)`` / ``serialization_alias``**：对拍的是 Python 字段名，若模型
+  有别名则线上键名不同，登记前必须确认无别名（有别名时本检查会给出假绿，故不允许登记）；
+- 基类字段只在**同一文件内**递归解析；遇到文件外、且不是 ``BaseModel`` 的基类会**直接报错**
+  而不是静默少收字段（少收会让"幽灵字段"判据假绿）。
+
+当前覆盖：轴线 A 1 对（``abort_plan_run`` ↔ ``PlanRunAbortResult``，``#787`` 与 ``#2089``
+两次漂移都在这一对）；轴线 B 4 个 docstring 键块函数中的 2 个可比对者；轴线 C 8 对——
+watcher-summary 3（``WatcherSummaryOut`` / ``WatcherPlatformBucketOut`` / ``WatcherCategoryOut``）、
+log-events 2（``PlanRunLogEventOut`` / ``PlanRunLogEventsOut``）、scan/merge 状态 3
+（``DedupStatusOut`` / ``DedupArtifactOut`` / ``DedupScanArchiveOut``）。
+
+轴线 C 的第 3 组来自一次**正规化**：``GET /plan-runs/{id}/dedup/status`` 原为
+``response_model=ApiResponse[dict]`` + ``ok({...})`` 手搓 dict（轴线 A 的 AST 判据识别不到
+包在 ``ok(...)`` 调用里的字典字面量，故它此前**任何**轴线都覆盖不到），改为
+``ApiResponse[DedupStatusOut]`` 后由本门禁自动覆盖——"两处声明"变成"一处声明 + 机器对拍"。
 """
 
 from __future__ import annotations
@@ -301,3 +330,149 @@ class TestDocstringKeyContract:
             elif found.checkable:
                 stale.append(f"{name}（现在有 dict 字面量返回、可比对了，应移出豁免表）")
         assert not stale, f"僵尸豁免：{stale}"
+
+
+# ── 轴线 C：Pydantic 响应模型 ↔ TS 接口 ──────────────────────────────────────
+
+# (后端模型文件, 模型名, TS 文件, 接口名)
+_MODEL_PAIRS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "backend/api/schemas/plan_run.py",
+        "WatcherSummaryOut",
+        "frontend/src/utils/api/types.ts",
+        "WatcherSummary",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "WatcherPlatformBucketOut",
+        "frontend/src/utils/api/types.ts",
+        "WatcherPlatformBucket",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "WatcherCategoryOut",
+        "frontend/src/utils/api/types.ts",
+        "WatcherCategory",
+    ),
+    # 日志链（#529 归档权威）：GET /plan-runs/{id}/log-events
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunLogEventOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunLogEvent",
+    ),
+    (
+        "backend/api/schemas/plan_run.py",
+        "PlanRunLogEventsOut",
+        "frontend/src/utils/api/types.ts",
+        "PlanRunLogEventsPayload",
+    ),
+    # scan/merge 状态（本轮由 response_model=ApiResponse[dict] 正规化为模型）
+    (
+        "backend/api/schemas/dedup.py",
+        "DedupStatusOut",
+        "frontend/src/utils/api/types.ts",
+        "DedupStatusPayload",
+    ),
+    (
+        "backend/api/schemas/dedup.py",
+        "DedupArtifactOut",
+        "frontend/src/utils/api/types.ts",
+        "DedupArtifact",
+    ),
+    (
+        "backend/api/schemas/dedup.py",
+        "DedupScanArchiveOut",
+        "frontend/src/utils/api/types.ts",
+        "DedupScanArchive",
+    ),
+)
+
+#: 允许作为基类、但其字段不在本解析范围内的类型（框架基类，无业务字段）。
+_PYDANTIC_BASE_ALLOWED = frozenset({"BaseModel"})
+
+
+def _pydantic_model_fields(py_path: Path, model: str) -> set[str]:
+    """``class X(BaseModel):`` 的**注解字段名**，含同文件内基类的字段。
+
+    文件外基类（除 ``_PYDANTIC_BASE_ALLOWED``）会让本函数**报错**而不是静默少收字段——
+    少收会让「TS 声明了模型不返回的键」这条判据假绿，那正是本门禁要拦的漂移。
+    """
+    tree = ast.parse(py_path.read_text(encoding="utf-8"))
+    classes = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    }
+    assert model in classes, f"{py_path.name} 里找不到模型 {model}（登记表过期？）"
+
+    fields: set[str] = set()
+    pending = [model]
+    seen: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        node = classes[name]
+        for stmt in node.body:
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                fields.add(stmt.target.id)
+        for base in node.bases:
+            if not isinstance(base, ast.Name):
+                continue  # 泛型/下标基类：本解析器不展开，登记时需确认无业务字段
+            if base.id in classes:
+                pending.append(base.id)
+            elif base.id not in _PYDANTIC_BASE_ALLOWED:
+                raise AssertionError(
+                    f"{name} 的基类 {base.id} 不在本文件内且非 BaseModel——"
+                    "无法解析其字段；登记该模型前需先扩展本解析器"
+                )
+    assert fields, f"{model} 没解析出任何注解字段"
+    return fields
+
+
+def test_model_registry_pairs_resolve():
+    """登记表自证：每对两侧都能解析出字段（改名/删除会让对拍静默变空）。"""
+    for py_file, model, ts_file, interface in _MODEL_PAIRS:
+        assert _pydantic_model_fields(ROOT / py_file, model), f"{model} 解析为空"
+        assert _ts_interface_fields(ROOT / ts_file, interface), f"{interface} 解析为空"
+
+
+def test_model_fields_are_declared_in_ts():
+    """轴线 C 判据 1：模型字段必须在前端声明里（否则消费者看不见新字段）。"""
+    problems: list[str] = []
+    for py_file, model, ts_file, interface in _MODEL_PAIRS:
+        fields = _ts_interface_fields(ROOT / ts_file, interface)
+        undeclared = sorted(_pydantic_model_fields(ROOT / py_file, model) - fields)
+        if undeclared:
+            problems.append(
+                f"{model} 的字段 {undeclared} 未在 {interface} 声明（消费者看不见）"
+            )
+    assert not problems, "\n".join(problems)
+
+
+def test_ts_fields_are_all_declared_in_model():
+    """轴线 C 判据 2：TS 字段必须在模型里有对应声明（幽灵字段即红）。"""
+    problems: list[str] = []
+    for py_file, model, ts_file, interface in _MODEL_PAIRS:
+        fields = _ts_interface_fields(ROOT / ts_file, interface)
+        ghosts = sorted(fields - _pydantic_model_fields(ROOT / py_file, model))
+        if ghosts:
+            problems.append(
+                f"{interface} 声明了 {model} 不含的字段 {ghosts}"
+                "（幽灵字段，tsc 因可选而放行）"
+            )
+    assert not problems, "\n".join(problems)
+
+
+def test_model_axis_canary_sees_platform_support_flag():
+    """canary：``reconciler_supported``（R4-b b1，2026-09-15）必须两轴都可见。
+
+    它正是轴线 C 要拦的那种漂移的最近一次实例（后端模型加字段、TS 不补也不会报错）。
+    解析器若失效，本用例先红，而不是让对拍静默变空。
+    """
+    assert "reconciler_supported" in _pydantic_model_fields(
+        ROOT / "backend/api/schemas/plan_run.py", "WatcherPlatformBucketOut",
+    )
+    assert "reconciler_supported" in _ts_interface_fields(
+        ROOT / "frontend/src/utils/api/types.ts", "WatcherPlatformBucket",
+    )

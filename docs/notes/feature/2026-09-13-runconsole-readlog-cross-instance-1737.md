@@ -6,7 +6,7 @@ Class: feature
 ## Decision
 
 按 [#1737](https://github.com/DUElost/stability-test-platform/issues/1737) 裁决分阶段
-（[设计稿 §6](../design/2026-09-13-run-console-multi-instance-ownership.md)）落地 **P4**
+（[设计稿 §6](../../design/2026-09-13-run-console-multi-instance-ownership.md)）落地 **P4**
 （最后一项）：`read_log` 的跨实例语义。
 
 **评估结论：不引入控制面间 RPC，也不做 Redis 日志镜像。**

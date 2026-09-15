@@ -686,21 +686,29 @@ export default function AnomalyDashboard({
                 <div data-testid="watcher-platform-buckets" className="rounded-lg border border-border/60 bg-card/60 p-3">
                   <div className={cn('mb-2 text-sm font-medium', TEXT.heading)}>按平台分桶</div>
                   <div className="flex flex-wrap gap-2">
-                    {platformBuckets.map((bucket) => (
-                      <div key={bucket.platform} className="rounded-lg border border-border/50 bg-background/80 px-3 py-2 text-sm">
-                        <span className="font-medium">{bucket.platform}</span>
-                        <span className={cn('ml-2', TEXT.subtitle)}>
-                          信号 {bucket.total}
-                          {bucket.affected_device_count > 0
-                            ? ` · 异常设备 ${bucket.affected_device_count}`
-                            : (bucket.running_device_count ?? 0) > 0
-                              ? ` · 运行中 ${bucket.running_device_count}`
-                              : (bucket.participating_device_count ?? 0) > 0
-                                ? ` · 参与 ${bucket.participating_device_count}`
-                                : ' · 设备 0'}
-                        </span>
-                      </div>
-                    ))}
+                    {platformBuckets.map((bucket) => {
+                      // R4-b b1（ADR-0032 v0.8 裁决 2026-09-15）：无采集实现的平台
+                      // 不能显示成「信号 0 · 设备 0」——那是「没有异常」的语义。
+                      const unsupported = bucket.reconciler_supported === false;
+                      return (
+                        <div key={bucket.platform} className="rounded-lg border border-border/50 bg-background/80 px-3 py-2 text-sm">
+                          <span className="font-medium">{bucket.platform}</span>
+                          <span className={cn('ml-2', unsupported ? TEXT.destructive : TEXT.subtitle)}>
+                            {unsupported
+                              ? '平台未支持'
+                              : `信号 ${bucket.total}${
+                                  bucket.affected_device_count > 0
+                                    ? ` · 异常设备 ${bucket.affected_device_count}`
+                                    : (bucket.running_device_count ?? 0) > 0
+                                      ? ` · 运行中 ${bucket.running_device_count}`
+                                      : (bucket.participating_device_count ?? 0) > 0
+                                        ? ` · 参与 ${bucket.participating_device_count}`
+                                        : ' · 设备 0'
+                                }`}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

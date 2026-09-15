@@ -6,7 +6,7 @@ Class: feature
 ## Decision
 
 按 [#1737](https://github.com/DUElost/stability-test-platform/issues/1737) 裁决分阶段
-（[设计稿 §6](../design/2026-09-13-run-console-multi-instance-ownership.md)）落地 **P3**：
+（[设计稿 §6](../../design/2026-09-13-run-console-multi-instance-ownership.md)）落地 **P3**：
 `cancel()` 在本地无此 run 时经**请求位 + 有界等待 ack** 转发给 owner。
 
 **机制**：
