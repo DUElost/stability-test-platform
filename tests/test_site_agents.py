@@ -1006,8 +1006,9 @@ class TestVerifyS6:
             captured.update({"config": config, **kwargs})
             return {"stage": "verify", "status": "PASS", "summary": "", "checks": []}
 
+        # 只打真实来源模块：CLI 在分支内延迟导入 verify_site（preflight 要能在
+        # 没有第三方依赖的机器上跑），所以 `cli.verify_site` 不再是打桩点。
         monkeypatch.setattr(verify_module, "verify_site", fake_verify)
-        monkeypatch.setattr(cli, "verify_site", fake_verify)
         bindings = tmp_path / "b"
         bindings.mkdir(mode=0o700)
         code = cli.main([
@@ -1023,8 +1024,9 @@ class TestVerifyS6:
     def test_cli_text_report_does_not_crash(self, tmp_path, monkeypatch, capsys):
         """文本模式同样消费 verify 报告（校验 deferred_checks 等字段齐备）。"""
         import tools.site_config.__main__ as cli
+        import tools.site_config.verify as verify_module
 
-        monkeypatch.setattr(cli, "verify_site", lambda config, **kwargs: {
+        monkeypatch.setattr(verify_module, "verify_site", lambda config, **kwargs: {
             "stage": "verify",
             "status": "PASS",
             "summary": "synthetic",
