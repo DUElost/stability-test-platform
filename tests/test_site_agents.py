@@ -143,6 +143,7 @@ class FakeApi:
         run_jobs: list[dict] | None = None,
         run_events: list[dict] | None = None,
         digest_sequence: list[str] | None = None,
+        resources_sequence: list[str] | None = None,
         scan_status: int = 200,
         navigation: tuple[int, str] | None = None,
     ):
@@ -172,6 +173,7 @@ class FakeApi:
         self._run_jobs = run_jobs
         self._run_events = run_events if run_events is not None else []
         self._digest_sequence = list(digest_sequence or [])
+        self._resources_sequence = list(resources_sequence or [])
         self.host_reads = 0
         self._scan_status = scan_status
         self.scans = 0
@@ -226,8 +228,13 @@ class FakeApi:
     def get_host(self, host_id: str) -> dict:
         self.host_reads += 1
         digest = None
+        resources_digest = None
         if self._digest_sequence:
             digest = self._digest_sequence[min(self.host_reads - 1, len(self._digest_sequence) - 1)]
+        if self._resources_sequence:
+            resources_digest = self._resources_sequence[
+                min(self.host_reads - 1, len(self._resources_sequence) - 1)
+            ]
         for host in self.hosts:
             if host["id"] == host_id:
                 return {
@@ -236,9 +243,14 @@ class FakeApi:
                     "last_heartbeat": _heartbeat(),
                     "agent_instance_id": "inst-1",
                     "boot_id": "boot-1",
-                    **(
-                        {"agent_artifact_digest": digest, "agent_resources_digest": ""}
-                        if digest is not None
+                    **                    (
+                        {
+                            "agent_artifact_digest": digest if digest is not None else DIGEST_CODE,
+                            "agent_resources_digest": (
+                                resources_digest if resources_digest is not None else ""
+                            ),
+                        }
+                        if (digest is not None or resources_digest is not None)
                         else {
                             "agent_artifact_digest": DIGEST_CODE,
                             "agent_resources_digest": DIGEST_RESOURCES,
@@ -558,7 +570,7 @@ class TestFailClosed:
     def test_digest_report_is_awaited(self, site):
         """摘要在安装后才由 Agent 下一次心跳带上：断言必须等待而不是抢先失败。"""
         slept: list[float] = []
-        api = FakeApi(digest_sequence=["", DIGEST_CODE])
+        api = FakeApi(digest_sequence=["", DIGEST_CODE], resources_sequence=["", DIGEST_RESOURCES])
 
         checks = _run(
             site(), api,
@@ -570,6 +582,36 @@ class TestFailClosed:
         assert api.host_reads >= 2, "未重读 Host 就下了结论"
         assert slept == [5.0]
         assert _status(checks, "install.s5.digest") == "PASS"
+
+    def test_digest_wait_covers_a_stale_resources_value(self, site):
+        """重装场景：code 早已有值、resources 还是上一版 → 必须继续等，不能立即比对。
+
+        238 实测：Agent 端逐拍重读摘要（#1943），文件写好要等一个心跳周期生效；
+        原来的「任一非空就收工」会在 resources 仍是旧值时下结论并报 mismatch。
+        """
+        slept: list[float] = []
+        stale = "sha256:" + "0" * 64
+        api = FakeApi(resources_sequence=[stale, DIGEST_RESOURCES])
+
+        checks = _run(
+            site(), api,
+            digest_timeout=30.0,
+            poll_interval=5.0,
+            sleep=lambda seconds: slept.append(seconds),
+        )
+
+        assert api.host_reads >= 2, "resources 还没刷新就下了结论"
+        assert slept == [5.0]
+        assert _status(checks, "install.s5.digest") == "PASS"
+
+    def test_stale_resources_beyond_the_window_is_a_mismatch(self, site):
+        """窗口耗尽仍是旧值：如实报 mismatch（不许掩盖）。"""
+        stale = "sha256:" + "0" * 64
+        api = FakeApi(resources_sequence=[stale])
+
+        checks = _run(site(), api, digest_timeout=0.0, poll_interval=5.0, sleep=lambda _: None)
+
+        assert "agent_digest_mismatch" in _codes(checks)
 
     def test_missing_content_digest_is_not_a_pass(self, site):
         """Agent 未上报摘要 ≠ 内容一致：不能当 S5 已通过。"""

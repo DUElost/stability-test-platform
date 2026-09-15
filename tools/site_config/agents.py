@@ -36,7 +36,9 @@ INSTALL_POLL_TIMEOUT_SECONDS = 900.0
 INSTALL_POLL_INTERVAL_SECONDS = 5.0
 # 部署摘要在安装脚本之后由 playbook 写入，Agent 于**下一次心跳**才上报；
 # 断言必须给一个有界等待窗，否则会把「还没上报」误判成「没有身份」。
-DIGEST_WAIT_SECONDS = 90.0
+# 一个心跳周期（20s）足够让重装后的 Agent 上报新摘要，再留一次重试余量；
+# 更长的等待只会拖慢「Agent 不支持某项摘要」的旧机场景（那里永远等不到）。
+DIGEST_WAIT_SECONDS = 30.0
 # Heartbeats arrive every POLL_INTERVAL (10s) and the platform marks a Host
 # OFFLINE after HOST_HEARTBEAT_TIMEOUT_SECONDS (300s).  Assert on a window that
 # is comfortably inside the platform's own liveness rule.
@@ -548,7 +550,12 @@ def assert_agent(
             "agent-code": host_field(host, "agent_artifact_digest"),
             "host-resources": host_field(host, "agent_resources_digest"),
         }
-        if any(reported.values()) or time.monotonic() >= deadline:
+        # 到齐的判据是「清单里声明的每一项都等于上报值」：只看"任一非空"会在重装
+        # 场景提前收工——code 早已有值，resources 还是上一版的值（238 实测）。
+        settled = bool(declared_digests) and all(
+            reported.get(key) == value for key, value in declared_digests.items()
+        )
+        if settled or time.monotonic() >= deadline:
             break
         say(f"waiting for {host_id} deployment digest report")
         sleep(poll_interval)
