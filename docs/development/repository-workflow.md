@@ -169,7 +169,8 @@ Docker build 由手工 full workflow 或 `main-ci-backstop.yml` 夜间兜底，�
 - **同类夜间红灯 ≥2 次 → 评估将该类前移为 PR 侧检查**（required 或信息性）；单次
   偶发不动作；
 - 前移先例：迁移空库类 → `pr-migrate-empty-db`（required）；agent 类 →
-  `pr-agent-tests`；repo-level 根测试类 → #1569（在途）。
+  `pr-agent-tests`；repo-level 根测试类 → `pr-agent-tests` 的 `Run repo-level
+  tests` 步骤（#1569，已落地：`tests/` 离线子集，容器类两文件在 job 内 `--ignore`）。
 
 当前分层：
 
