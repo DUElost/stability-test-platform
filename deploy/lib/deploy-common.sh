@@ -118,7 +118,8 @@ deploy_ensure_bindings_dir() {
 }
 
 deploy_next_steps() {
-    cat <<EOF
+    # 提示走 stderr：stdout 留给 --json 的机器可读输出
+    cat >&2 <<EOF
 
 Next steps
   1. Add Agent hosts to the inventory (one line each):

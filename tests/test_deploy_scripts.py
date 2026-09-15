@@ -124,6 +124,20 @@ def test_scripts_do_not_hardcode_the_site_identity():
             assert literal not in text
 
 
+def test_all_shell_hints_go_to_stderr():
+    """stdout 承载 `--json` 的机器可读输出：脚本自己的提示必须写 stderr。
+
+    实测：`verify --json > report.json` 被一行提示污染，报告无法解析。
+    """
+    for script in ALL_SCRIPTS:
+        for line in code_lines(script):
+            if line.strip().startswith("cat <<EOF") or line.strip() == "cat <<'EOF'":
+                raise AssertionError(f"{script}: heredoc hint writes to stdout: {line.strip()}")
+    # 三个入口与公共库的 heredoc 都必须显式重定向到 stderr
+    for script in ALL_SCRIPTS:
+        assert "cat <<EOF" not in script.read_text(encoding="utf-8"), script
+
+
 def test_site_input_options_are_forwarded_to_init():
     """站点输入项（库名/入口/存储/盘）必须能传给 init——否则真实用例只能改文件。"""
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")

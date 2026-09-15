@@ -73,7 +73,8 @@ deploy_ensure_bindings_dir
 # ── 装完之后的两条命令：纯透传，不复制任何检查逻辑 ────────────────────────
 if [ "$SUBCOMMAND" = "verify" ]; then
     deploy_stp verify --config "$STP_SITE_FILE" --bindings-dir "$STP_BINDINGS_DIR" "${PASSTHROUGH[@]}"
-    cat <<EOF
+    # 提示写 stderr：stdout 是留给 --json 的机器可读输出（`--json > file` 不能被文本污染）
+    cat >&2 <<EOF
 
 verify: to let handover consume this run, save the same report as JSON:
   sudo $DEPLOY_PYTHON -m tools.site_config verify --config $STP_SITE_FILE \\
