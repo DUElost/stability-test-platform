@@ -37,6 +37,8 @@ class Ops(Protocol):
 
     def local_addresses(self) -> set[str]: ...
 
+    def route_address(self) -> str: ...
+
     def os_release(self) -> dict[str, str]: ...
 
     def machine(self) -> str: ...
@@ -90,6 +92,16 @@ class LocalOps:
         except OSError:
             pass
         return addresses
+
+    def route_address(self) -> str:
+        """Address this host reaches the network with; "" for a stubbed environment."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect(("192.0.2.1", 9))  # 不发送任何报文
+                address = sock.getsockname()[0]
+        except OSError:
+            return ""
+        return "" if address.startswith("127.") else address
 
     def os_release(self) -> dict[str, str]:
         release: dict[str, str] = {}
