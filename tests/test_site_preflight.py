@@ -134,24 +134,25 @@ def test_database_probe_states_are_distinguished():
         assert check["status"] == expected, state
 
 
-def test_redis_without_cli_or_without_pong_fails():
-    ops = healthy_ops()
-    ops._commands.discard("redis-cli")
-    import shutil
-
-    original = shutil.which
-    shutil.which = lambda name: None if name == "redis-cli" else original(name)
-    try:
-        check = checks_by_id(run_preflight(redis_url="redis://127.0.0.1:6379/1", ops=ops))["preflight.redis"]
-    finally:
-        shutil.which = original
+def test_redis_without_cli_names_the_missing_command(monkeypatch):
+    """不依赖宿主是否装了 redis-cli：显式打桩，否则本地绿、CI 红。"""
+    monkeypatch.setattr(
+        "tools.site_config.preflight.shutil.which",
+        lambda name: None if name == "redis-cli" else f"/usr/bin/{name}",
+    )
+    check = checks_by_id(run_preflight(redis_url="redis://127.0.0.1:6379/1", ops=healthy_ops()))["preflight.redis"]
     assert check["status"] == "FAIL"
     assert "redis-cli" in check["message"]
+    assert check["remediation"]
 
+
+def test_redis_without_pong_shows_the_observed_output(monkeypatch):
+    monkeypatch.setattr("tools.site_config.preflight.shutil.which", lambda name: "/usr/bin/redis-cli")
     ops = healthy_ops(responses={"redis-cli": (0, "")})
     check = checks_by_id(run_preflight(redis_url="redis://127.0.0.1:6379/1", ops=ops))["preflight.redis"]
     assert check["status"] == "FAIL"
     assert "PONG" in check["message"]
+    assert "db 1" in check["message"]
 
 
 def test_bindings_directory_permissions_are_enforced(tmp_path):
