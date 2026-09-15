@@ -150,4 +150,23 @@ printf '#!/bin/sh\necho "STUB systemctl $*"\n' > /usr/bin/systemctl
 chmod 0755 /usr/bin/systemctl
 /usr/local/sbin/stp-agent-priv restart
 
+echo "== 9) flash 链窄面（#2133 / ADR-0037 D5）=="
+# ensure-udev-rule：固定内容 + 幂等（changed=0）+ reload（stub udevadm 记录调用）
+mkdir -p /etc/udev/rules.d
+printf '#!/bin/sh\necho "$@" >> /tmp/udevadm_calls\nexit 0\n' > /usr/bin/udevadm
+chmod 0755 /usr/bin/udevadm
+/usr/local/sbin/stp-agent-priv ensure-udev-rule
+grep -q 'MODE="0666"' /etc/udev/rules.d/98-ttyacm-mtk.rules && echo "UDEV_RULE_OK"
+grep -q 'control --reload' /tmp/udevadm_calls && echo "UDEV_RELOAD_OK"
+/usr/local/sbin/stp-agent-priv ensure-udev-rule | grep -q 'changed=0' && echo "UDEV_IDEMPOTENT_OK"
+# usb-authorized：路径语义与值域在进入 sysfs 前被拒（容器无真实 MTK 设备，正向面由单测假树覆盖）
+if /usr/local/sbin/stp-agent-priv usb-authorized --port '../../etc/passwd' --value 0 2>/tmp/usb_err; then
+  echo "BAD: traversal port accepted"; exit 1
+fi
+grep -q 'STP_AGENT_PRIV_ERROR' /tmp/usb_err && echo "USB_PORT_REFUSED"
+if /usr/local/sbin/stp-agent-priv usb-authorized --port 1-1 --value 2 2>/dev/null; then
+  echo "BAD: bad value accepted"; exit 1
+fi
+echo "USB_VALUE_REFUSED"
+
 echo "ALL_OK"

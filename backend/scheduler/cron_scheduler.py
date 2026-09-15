@@ -20,7 +20,7 @@ from pathlib import Path
 from sqlalchemy import func, or_, select
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
-from backend.core.metrics import record_retention_txn
+from backend.core.metrics import record_retention_candidates, record_retention_txn
 from backend.models.enums import PlanRunStatus
 from backend.models.schedule import TaskSchedule, schedule_timestamp
 
@@ -428,9 +428,12 @@ def run_retention_cleanup() -> None:
     with SessionLocal() as db:
         try:
             # 批大小是**持锁窗口的杠杆**（#2105）：窗口 ∝ 本 tick 处理的 run 数。
-            run_ids = _retention_candidate_ids(
-                db, cutoff, limit=_sched().plan_run_retention_batch_size,
-            )
+            batch_size = _sched().plan_run_retention_batch_size
+            run_ids = _retention_candidate_ids(db, cutoff, limit=batch_size)
+            # #2144：候选数与批大小成对上报，让「清理跟不上」可判定（candidates >=
+            # batch_size 即本轮批被填满 = 队列里还有到期 run）。刻意放在两个早退**之前**：
+            # 清空后 gauge 必须回到 0，而不是停在上一轮的非零值上。
+            record_retention_candidates(len(run_ids), batch_size)
             if not run_ids:
                 return
 

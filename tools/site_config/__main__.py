@@ -5,9 +5,11 @@ import json
 import sys
 from pathlib import Path
 
+from .bootstrap import init_site
 from .handover import run_handover
 from .install import run_install
 from .plan import plan_site_report
+from .preflight import run_preflight
 from .validation import validate_config_file
 from .verify import verify_site
 
@@ -21,6 +23,35 @@ class RedactedParser(argparse.ArgumentParser):
 def main(argv: list[str] | None = None) -> int:
     parser = RedactedParser(prog="python -m tools.site_config", description="Offline site configuration checks only.")
     commands = parser.add_subparsers(dest="command", required=True)
+    preflight = commands.add_parser(
+        "preflight",
+        help="Read-only host readiness probe; nothing is written and no configuration file is needed.",
+    )
+    preflight.add_argument("--bindings-dir", type=Path, default=None, help="Existing bindings directory to inspect (optional).")
+    preflight.add_argument("--db-url", default=None, help="Empty database DSN to probe; without it that item stays BLOCKED.")
+    preflight.add_argument("--redis-url", default=None, help="Redis URL (dedicated db index) to probe.")
+    preflight.add_argument("--bundle", type=Path, default=None, help="Release bundle directory to check (optional).")
+    preflight.add_argument("--deploy-root", type=Path, default=None, help="Declared deploy root; reports whether it is resumable.")
+    preflight.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
+    init = commands.add_parser(
+        "init",
+        help="Probe the host and write site.yaml + bindings from four answers; --fix also prepares venv/db/storage.",
+    )
+    init.add_argument("--output", type=Path, required=True, help="site.yaml to write (created with owner-only permissions).")
+    init.add_argument("--bindings-dir", type=Path, required=True, help="Owner-only directory (0700) to hold the generated 0600 bindings.")
+    init.add_argument("--site-id", default=None, help="Answer: site identifier (default city-b).")
+    init.add_argument("--display-name", default=None, help="Answer: human-readable site name.")
+    init.add_argument("--public-url", default=None, help="Answer: platform entry URL (default http://<primary address>).")
+    init.add_argument("--database", default=None, help="Answer: database name on the local PostgreSQL instance.")
+    init.add_argument("--redis-index", type=int, default=1, help="Redis db index dedicated to this site (default 1).")
+    init.add_argument("--storage-mount", default=None, help="Answer: central storage mount path (default /srv/stp-aee).")
+    init.add_argument("--data-disk", default=None, help="Whole data disk to mount and bind; default is the largest unmounted disk.")
+    init.add_argument("--bundle", default=None, help="Release bundle path for this site (default /srv/stp-bundle).")
+    init.add_argument("--admin-username", default="admin", help="Initial administrator name (default admin).")
+    init.add_argument("--non-interactive", action="store_true", help="Take every default instead of prompting.")
+    init.add_argument("--no-fix", dest="fix", action="store_false", help="Report the exact host commands instead of running them.")
+    init.add_argument("--dry-run", action="store_true", help="Write nothing at all; report only.")
+    init.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
     validate = commands.add_parser("validate", help="Validate one explicit YAML file without resolving bindings or targets.")
     validate.add_argument("--config", type=Path, required=True, help="Explicit regular UTF-8 YAML input; no environment fallback.")
     validate.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
@@ -42,6 +73,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     install.add_argument("--config", type=Path, required=True, help="Explicit regular UTF-8 YAML input; no environment fallback.")
     install.add_argument("--bindings-dir", type=Path, required=True, help="Owner-only directory (0700) holding 0600 binding files.")
+    install.add_argument(
+        "--agents-inventory",
+        type=Path,
+        default=None,
+        help="Ansible-style inventory whose hosts join the declared Agents before S5 (default ~/hosts.ini when --through-agents is used).",
+    )
     install.add_argument("--state-dir", type=Path, required=True, help="Owner-only directory (0700) for the install state file.")
     install.add_argument("--confirm-site", required=True, help="Must equal site.id; guards against running for the wrong site.")
     install.add_argument("--confirm-target", required=True, help="Must equal control_plane.target; guards against the wrong host.")
@@ -85,7 +122,32 @@ def main(argv: list[str] | None = None) -> int:
     handover.add_argument("--dry-run", action="store_true", help="Report only; write nothing.")
     handover.add_argument("--json", action="store_true", help="Emit a redacted, machine-readable stage report.")
     arguments = parser.parse_args(argv)
-    if arguments.command == "validate":
+    if arguments.command == "preflight":
+        report = run_preflight(
+            bindings_dir=arguments.bindings_dir,
+            db_url=arguments.db_url,
+            redis_url=arguments.redis_url,
+            bundle=arguments.bundle,
+            deploy_root=arguments.deploy_root,
+        )
+    elif arguments.command == "init":
+        report = init_site(
+            output=arguments.output,
+            bindings_dir=arguments.bindings_dir,
+            site_id=arguments.site_id,
+            display_name=arguments.display_name,
+            public_url=arguments.public_url,
+            database=arguments.database,
+            redis_index=arguments.redis_index,
+            storage_mount=arguments.storage_mount,
+            data_disk=arguments.data_disk,
+            bundle=arguments.bundle,
+            admin_username=arguments.admin_username,
+            interactive=False if arguments.non_interactive else None,
+            fix=arguments.fix,
+            dry_run=arguments.dry_run,
+        )
+    elif arguments.command == "validate":
         report = validate_config_file(arguments.config)
     elif arguments.command == "plan":
         report = plan_site_report(arguments.config, save_dir=arguments.save_dir)
@@ -112,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
             confirm_target=arguments.confirm_target,
             dry_run=arguments.dry_run,
             through_agents=arguments.through_agents,
+            agents_inventory=arguments.agents_inventory,
         )
     if arguments.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -120,9 +183,20 @@ def main(argv: list[str] | None = None) -> int:
         for check in report["checks"] + report["deferred_checks"]:
             print(f"{check['status']} {check['check_id']} role={check['role']} {check['location']} [{check['code']}]")
             print(f"  {check['message']} {check['remediation']}")
+        for line in report.get("actions", []):
+            print(f"  action: {line}")
+        if report.get("materialized_bindings"):
+            print(f"  bindings written from inventory: {', '.join(report['materialized_bindings'])}")
+        if report.get("stage") == "preflight" and report.get("suggested_public_url"):
+            print(f"  suggested entry: {report['suggested_public_url']} (override with --public-url on init)")
         if report.get("saved_file"):
             label = "Handover file" if report.get("stage") == "handover" else "Plan report"
             print(f"{label} written: {report['saved_file']}")
+        if report.get("stage") == "init" and report.get("status") == "PASS":
+            credentials = report["admin_credentials"]
+            print(f"Site inputs written: {report['output']}")
+            print(f"Bindings written: {report['bindings_dir']}")
+            print(f"Initial administrator '{credentials['username']}' password is in {credentials['password_file']} (0600).")
     return 0 if report["status"] == "PASS" else 1
 
 

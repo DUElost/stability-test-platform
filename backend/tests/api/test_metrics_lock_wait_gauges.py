@@ -121,3 +121,62 @@ def test_metrics_exposes_lock_wait_gauges(client, engine, db_session, monkeypatc
 
     # 释放后回到稳态（观测面不得把历史等待留成常驻非零）
     assert _gauge(client.get("/metrics").text, _WAITERS) == 0.0
+
+
+def test_gauge_scope_is_current_database(client, engine, monkeypatch):
+    """#2144：等待 gauge 只算**本实例的库**（``datname = current_database()`` 是正确性前提）。
+
+    ``pg_stat_activity`` 是全实例视图，所以那条过滤条件删掉就会把**别的库**的等待算进本
+    实例的指标（同一个 PG 集群上跑多个库很常见）。
+
+    护栏做法：在**另一个库**（``postgres``，stock PG 一定有）用 advisory lock 制造一次
+    持续数秒的行/锁等待，断言本实例 ``/metrics`` 的 ``max_wait_seconds`` 仍 < 1s。
+    不去断言 ``== 0``：本库的 admission pump 等会有亚秒级瞬时等待，那会把护栏变成 flaky。
+    用 advisory lock 而不是表行锁，是为了不建表、不锁系统目录（对外零副作用）；它在
+    ``wait_event_type='Lock'`` 上与行锁同类，因此能真实检验上面的过滤条件。
+    """
+    from sqlalchemy import create_engine
+
+    monkeypatch.setenv("STP_METRICS_AUTH_REQUIRED", "0")
+
+    other_db = create_engine(engine.url.set(database="postgres"))
+    holder = other_db.connect()
+    waiter = other_db.connect()
+    waiter_errors: list[Exception] = []
+    waiter_pid: list[int] = []
+    holder.execute(text("SELECT pg_advisory_lock(918273)"))  # 在别的库持锁
+
+    def _waiter() -> None:
+        try:
+            waiter_pid.append(
+                int(waiter.execute(text("SELECT pg_backend_pid()")).scalar_one())
+            )
+            waiter.execute(text("SELECT pg_advisory_lock(918273)"))  # 在此阻塞
+        except Exception as exc:  # pragma: no cover - 仅在锁/连接异常时进入
+            waiter_errors.append(exc)
+
+    thread = threading.Thread(target=_waiter, daemon=True)
+    thread.start()
+
+    observer = engine.connect()
+    try:
+        assert _wait_until_this_session_waits(observer, waiter_pid), (
+            "别库的等待会话未进入锁等待——本用例失去意义"
+        )
+        body = client.get("/metrics").text
+        max_wait = _gauge(body, _MAX_WAIT)
+        waiters = _gauge(body, _WAITERS)
+    finally:
+        holder.execute(text("SELECT pg_advisory_unlock(918273)"))
+        thread.join(timeout=30)
+        holder.close()
+        waiter.close()
+        observer.close()
+
+    assert not thread.is_alive(), "释放阻塞后等待方仍未结束"
+    assert not waiter_errors, waiter_errors
+    assert max_wait < 1.0, (
+        f"别库的等待被算进了本实例指标（{_MAX_WAIT}={max_wait}s）——"
+        "检查 _LOCK_WAIT_SQL 是否还带 `datname = current_database()`"
+    )
+    assert waiters == 0.0, f"别库的等待不该计入 {_WAITERS}（实际 {waiters}）"

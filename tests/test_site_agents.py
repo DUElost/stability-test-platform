@@ -111,7 +111,8 @@ def _agent(tmp_path: Path, key: str, target: str) -> dict:
         "os": {"distribution": "debian", "version": "13"},
         "ssh_user": "bootstrap",
         "ssh_credential_ref": f"{key.replace('-', '_')}_ssh",
-        "install_root": str(tmp_path / f"opt/stp-agent-{key}"),
+        # 同站点共享安装根：STP_SCRIPT_RUNTIME_ROOT 是站点级单值（异构根被模型拒绝）
+        "install_root": str(tmp_path / "opt/stp-agent"),
         "local_aee_root": str(tmp_path / f"var/stp-aee-{key}"),
     }
 
