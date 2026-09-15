@@ -32,6 +32,7 @@ MESSAGES = {
     "invalid_os_version": "Quote an explicit Debian numeric version or Ubuntu YY.04/YY.10 release, not a moving alias.",
     "non_root_service_user_required": "Choose a dedicated non-root control-plane service account.",
     "production_https_required": "Use HTTPS for production; do not silently downgrade the security profile.",
+    "internal_https_profile_conflict": "The internal profile is the no-TLS exemption (ADR-0024 v1.1); serve plain HTTP or declare the production profile for HTTPS.",
     "tls_reference_required": "Provide a TLS binding name for an HTTPS entrance.",
     "http_tls_conflict": "Remove the TLS binding for explicit internal HTTP, or use HTTPS.",
     "storage_management_required": "Managed Linux storage requires its OS version, SSH user and SSH binding name.",
