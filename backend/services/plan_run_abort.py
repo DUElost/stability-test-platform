@@ -226,12 +226,21 @@ def abort_plan_run(
     no jobs remain.
 
     When ``host_id`` is set (host hot-update via :func:`abort_jobs_for_host`):
-    only PENDING/RUNNING jobs bound to that host are aborted or signalled;
-    other hosts' jobs and PlanRun status are left unchanged unless the run
-    later converges through normal aggregation.  Existing
-    ``run_context.abort_requested.requested_job_ids`` from other hosts are
-    preserved (merged, not replaced).  The in-precheck whole-plan FAILED path
-    is not taken.
+    only PENDING/RUNNING jobs bound to that host are aborted or signalled
+    (**host scope**) — the control fan-out, the PENDING terminalization and
+    ``abort_requested.requested_job_ids`` all cover that host only, and the
+    abort reaper
+    (:func:`backend.scheduler.device_lease_reconciler._reconcile_aborted_running_jobs`)
+    reaps **only jobs present in ``requested_job_ids``** (#2050), so other hosts'
+    RUNNING jobs keep running.  ``requested_job_ids`` carried by earlier aborts is
+    preserved (merged, not replaced).  The in-precheck whole-plan FAILED path is
+    not taken.
+
+    Run-level by design (#1928 注记)：``abort_requested`` 本身是 **run 级** 键，
+    故 ACK grace（``at`` / ``deadline_at``）按整轮计时，且每次 host 级 abort 都会
+    **重置** 该宽限（最多多等 host 数 × GRACE）。收窄的是**候选集**（只看
+    ``requested_job_ids``），不是宽限语义；若将来要「宽限从第一次请求起算」或
+    「按 host 独立宽限」，先立 ADR 裁决 reaper 消费语义再改。
 
     Returns a summary dict::
 
@@ -239,8 +248,7 @@ def abort_plan_run(
             "plan_run_id": int,
             "status": str,
             "aborted_jobs": [int, ...],
-            "abort_requested_jobs": [int, ...],
-            "released_leases": int,
+            "abort_requested_jobs": [int, ...],   # host 级 abort 时仅该主机的 job
             "phase": "precheck" | "running" | "queued",
         }
 
@@ -358,7 +366,6 @@ def abort_plan_run(
                 "plan_run_id": plan_run_id,
                 "status": PlanRunStatus.FAILED.value,
                 "aborted_jobs": [],
-                "released_leases": 0,
                 "phase": phase,
             }
 
@@ -376,7 +383,6 @@ def abort_plan_run(
     abort_requested_jobs: list[int] = []
     abort_jobs_by_host: dict[str, list[int]] = defaultdict(list)
     abort_hosts: set[str] = set()
-    released_leases = 0
     # Aggregation / on_job_terminal already notify; only direct FAILED
     # transitions in this function should emit once more.
     direct_failed_notify = False
@@ -403,7 +409,6 @@ def abort_plan_run(
                     "phase": "running",
                     "aborted_jobs": [],
                     "abort_requested_jobs": [],
-                    "released_leases": 0,
                 }
             active_rows = scoped_rows
 
@@ -618,7 +623,6 @@ def abort_plan_run(
             "phase": "precheck" if in_precheck else "running",
             "aborted_jobs": aborted_jobs,
             "abort_requested_jobs": abort_requested_jobs,
-            "released_leases": released_leases,
             "triggered_by": triggered_by,
         },
         user_id=audit_user_id,
@@ -710,11 +714,10 @@ def abort_plan_run(
     db.refresh(pr)
 
     logger.info(
-        "plan_run_aborted plan_run=%d phase=%s aborted_jobs=%d released_leases=%d",
+        "plan_run_aborted plan_run=%d phase=%s aborted_jobs=%d",
         plan_run_id,
         "precheck" if in_precheck else "running",
         len(aborted_jobs),
-        released_leases,
     )
 
     return {
@@ -723,7 +726,6 @@ def abort_plan_run(
         "phase": "precheck" if in_precheck else "running",
         "aborted_jobs": aborted_jobs,
         "abort_requested_jobs": abort_requested_jobs,
-        "released_leases": released_leases,
     }
 
 
@@ -749,7 +751,6 @@ def abort_jobs_for_host(
             "host_id": "...",
             "plan_runs": [int, ...],
             "aborted_jobs": [int, ...],
-            "released_leases": int,
         }
     """
     active_jobs = (
@@ -766,7 +767,6 @@ def abort_jobs_for_host(
     plan_run_ids = sorted({row[0] for row in active_jobs if row[0] is not None})
 
     aggregate_aborted: list[int] = []
-    aggregate_released = 0
     for prid in plan_run_ids:
         try:
             summary = abort_plan_run(
@@ -786,11 +786,9 @@ def abort_jobs_for_host(
             )
             continue
         aggregate_aborted.extend(summary["aborted_jobs"])
-        aggregate_released += summary["released_leases"]
 
     return {
         "host_id": host_id,
         "plan_runs": plan_run_ids,
         "aborted_jobs": aggregate_aborted,
-        "released_leases": aggregate_released,
     }

@@ -195,6 +195,37 @@ def test_same_fingerprint_writes_nothing(tmp_path):
     assert "unchanged" in result.stdout
 
 
+def test_shrunk_failure_set_still_updates_alert(tmp_path):
+    """#2075：失败集**收敛**到旧值前缀时仍须刷新正文。
+
+    指纹是 `head=#N failed=<按 REQUIRED 顺序逗号连接>`，而守卫用 `grep -qF`
+    （子串匹配）。所以「前几项仍红、后面某项转绿」时计算值正好是存量值的**子串**
+    ——比较不带行尾终止符就会命中 → 误判 unchanged → 正文继续列着已经通过的
+    check。这里末项由红转绿，断言脚本必须改写正文。
+    """
+    stale_body = (
+        "<!-- queue-blocked-fingerprint: "
+        "head=#101 failed=lint:FAILURE, pr-agent-tests:FAILURE -->"
+    )
+    # 当前只剩 lint 红（pr-agent-tests 已转绿）→ 计算值 = `...failed=lint:FAILURE`
+    result, calls = _run_queue(
+        tmp_path,
+        {
+            "pr_rows": [_HEAD_ROW],
+            "head_detail": _head_detail({**_ALL_GREEN, "lint": "FAILURE"}),
+            "open_issue": "999",
+            "issue_body": stale_body,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "unchanged" not in result.stdout, (
+        "失败集已从「lint + pr-agent-tests」收敛为「lint」，不得判为 unchanged：\n"
+        f"{result.stdout}"
+    )
+    _assert_called(calls, "issue edit")
+
+
 def test_alert_body_renders_placeholders_and_self_dedups(tmp_path):
     """#1549：断言脚本**实际写出**的告警正文，并做一次指纹回环。
 

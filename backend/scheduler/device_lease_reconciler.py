@@ -423,10 +423,42 @@ def _abort_at_expired(raw_abort_at: object, deadline: datetime) -> bool:
     return parsed is not None and parsed < deadline
 
 
+def _abort_request_covers_job(plan_run: PlanRun, job_id: int) -> bool:
+    """该 job 是否在 ``abort_requested.requested_job_ids`` 之内（#2050）。
+
+    host 级 abort（#1880 `abort_jobs_for_host` → `abort_plan_run(host_id=…)`）只把
+    **该主机**的 RUNNING job 写进集合，但写的是 **run 级** `abort_requested.at`；
+    本函数存在之前，reaper 的候选判据只有「存在 at + grace 已到」，于是同 run 上
+    其他主机**从未被请求中止**的正常 job 也会在 grace 到期后被打成 UNKNOWN
+    （`state_machine` 只允许 `UNKNOWN → {RUNNING, FAILED}`，迟到的 COMPLETED 也落
+    FAILED，且 UNKNOWN 期间保留 ACTIVE lease 占着设备）——与
+    `plan_run_abort.abort_plan_run` 的 docstring 契约相反。
+
+    兼容性：**键缺失或非列表/空**（历史 run_context、异常形态）时不参与过滤，
+    保持既有行为——否则老数据里未写集合的 run 会永远无人回收。
+    """
+    ctx = plan_run.run_context if isinstance(plan_run.run_context, dict) else {}
+    abort = ctx.get("abort_requested")
+    if not isinstance(abort, dict):
+        return True
+    requested = abort.get("requested_job_ids")
+    if not isinstance(requested, list) or not requested:
+        return True
+    try:
+        return job_id in {int(x) for x in requested}
+    except (TypeError, ValueError):
+        return True
+
+
 async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     """P1: 扫描 RUNNING job 且 PlanRun.run_context 含 abort_requested 且
     grace 已到 → JobStateMachine.transition UNKNOWN，保留 ACTIVE lease 隔离
     设备。UNKNOWN grace 到期后再由标准 reconciler FAILED + release。
+
+    候选面在时间判据之外还要求该 job **被请求过中止**
+    （``abort_requested.requested_job_ids``，见 :func:`_abort_request_covers_job`）：
+    host 级 abort 只请求该主机的 job，run 级 `at` 却对整轮成立（#2050）。
+    集合缺失（历史数据）时退化为「只看 at」。
 
     返回 (aborted_count, broadcast_items) — 每项 dict:
         {type, job_id, plan_run_id, status, plan_run_terminal}
@@ -474,6 +506,14 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
             for job, plan_run, raw_abort_at in candidates
             if _abort_at_expired(raw_abort_at, grace_deadline)
         ]
+
+    # #2050：时间判据之外再要求「该 job 被请求过中止」——host 级 abort 只请求该
+    # 主机的 job，而 run 级 `at` 对整轮成立；不过滤会把同 run 其他主机的正常 job
+    # 一并打成 UNKNOWN。集合缺失（历史 run_context）时本过滤不生效。
+    rows = [
+        (job, plan_run) for job, plan_run in rows
+        if _abort_request_covers_job(plan_run, job.id)
+    ]
 
     unknown_count = 0
     broadcast_items: list[dict] = []

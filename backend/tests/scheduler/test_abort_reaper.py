@@ -375,3 +375,198 @@ async def test_recheck_recovers_still_running_job_with_cached_scan_object():
             assert job.status_reason == "abort_ack_timeout"
     finally:
         _cleanup(host_id, device_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# #2050：候选面必须限定在 abort_requested.requested_job_ids 之内
+#   host 级 abort（#1880）只请求该主机的 job，但写的是 run 级 abort_requested.at
+#   —— 不过滤会把同 run 其他主机的正常 RUNNING job 一并打成 UNKNOWN。
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _seed_two_hosts(
+    hosts: list[tuple[str, int]],
+    *,
+    abort_age_seconds: int,
+    requested_job_ids: list[int] | None = None,
+) -> tuple[int, list[int], list[tuple[str, int]]]:
+    """一个 PlanRun、每台主机一个 RUNNING job（各自设备）。
+
+    ``requested_job_ids`` 为 ``None`` 时不写该键（模拟历史 run_context 形态）。
+    返回 (plan_run_id, device_ids, [(host_id, job_id)])。
+    """
+    now = datetime.now(timezone.utc)
+    abort_at = now - timedelta(seconds=abort_age_seconds)
+    db = SessionLocal()
+    try:
+        plan = Plan(
+            name=f"ar2-plan-{uuid4().hex[:8]}",
+            description="abort reaper multi-host test",
+            failure_threshold=0.1,
+            created_by="pytest",
+        )
+        db.add(plan)
+        db.flush()
+
+        step = PlanStep(
+            plan_id=plan.id, step_key="default",
+            script_name="dummy", script_version="v1.0.0",
+            stage="init", sort_order=0,
+        )
+        db.add(step)
+        db.flush()
+
+        abort_payload: dict = {"at": abort_at.isoformat(), "reason": "host_update"}
+        if requested_job_ids is not None:
+            abort_payload["requested_job_ids"] = list(requested_job_ids)
+
+        run = PlanRun(
+            plan_id=plan.id, status="RUNNING",
+            failure_threshold=0.1, triggered_by="pytest",
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL", started_at=now,
+            run_context={"abort_requested": abort_payload},
+        )
+        db.add(run)
+        db.flush()
+
+        device_ids: list[int] = []
+        pairs: list[tuple[str, int]] = []
+        for index, (host_id, device_id) in enumerate(hosts):
+            host = Host(
+                id=host_id, hostname=f"h-{host_id}",
+                status=HostStatus.ONLINE.value, created_at=now,
+            )
+            device = Device(
+                id=device_id, serial=f"AR2-{device_id}-{index}", host_id=host_id,
+                status="BUSY", tags=[], created_at=now,
+                adb_connected=True, adb_state="device",
+            )
+            db.add_all([host, device])
+            db.flush()
+            job = JobInstance(
+                plan_run_id=run.id, plan_id=plan.id,
+                device_id=device.id, host_id=host_id,
+                status=JobStatus.RUNNING.value,
+                pipeline_def=PIPELINE_DEF, created_at=now, updated_at=now,
+                started_at=now,
+            )
+            db.add(job)
+            db.flush()
+            device_ids.append(device_id)
+            pairs.append((host_id, job.id))
+
+        db.commit()
+        return run.id, device_ids, pairs
+    finally:
+        db.close()
+
+
+def _set_requested_job_ids(plan_run_id: int, job_ids: list[int] | None) -> None:
+    """把 requested_job_ids 写进既有 run 的 abort_requested（None = 保持不写）。"""
+    if job_ids is None:
+        return
+    db = SessionLocal()
+    try:
+        run = db.get(PlanRun, plan_run_id)
+        ctx = dict(run.run_context or {})
+        ctx["abort_requested"] = {
+            **(ctx.get("abort_requested") or {}),
+            "requested_job_ids": list(job_ids),
+        }
+        run.run_context = ctx
+        db.commit()
+    finally:
+        db.close()
+
+
+def _cleanup_two_hosts(pairs: list[tuple[str, int]], device_ids: list[int]) -> None:
+    db = SessionLocal()
+    try:
+        db.execute(StepTrace.__table__.delete())
+        db.execute(JobArtifact.__table__.delete())
+        db.execute(DeviceLease.__table__.delete())
+        db.execute(ResourceAllocation.__table__.delete())
+        db.execute(JobInstance.__table__.delete())
+        db.execute(PlanStep.__table__.delete())
+        db.execute(PlanRun.__table__.delete())
+        db.execute(Plan.__table__.delete())
+        db.execute(Device.__table__.delete().where(Device.id.in_(device_ids)))
+        db.execute(Host.__table__.delete().where(Host.id.in_([h for h, _ in pairs])))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _two_new_ids() -> tuple[str, int, str, int]:
+    h1 = f"ar2-host-{uuid4().hex[:6]}"
+    h2 = f"ar2-host-{uuid4().hex[:6]}"
+    d1 = int(uuid4().hex[:8], 16) % 10_000_000
+    return h1, d1, h2, d1 + 1
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_host_scoped_abort_spares_other_hosts_running_jobs():
+    """#2050：host 级 abort 的 requested_job_ids 只含该主机 → 其他主机 job 不动。"""
+    h1, d1, h2, d2 = _two_new_ids()
+    pairs: list[tuple[str, int]] = []
+    try:
+        run_id, _, pairs = _seed_two_hosts([(h1, d1), (h2, d2)], abort_age_seconds=90)
+        (_, job_h1), (_, job_h2) = pairs
+        _set_requested_job_ids(run_id, [job_h1])
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as db:
+            count, items = await _reconcile_aborted_running_jobs(db)
+            await db.commit()
+
+            assert count == 1, f"只应回收被请求的 job，实际 {count}：{items}"
+            assert [i["job_id"] for i in items] == [job_h1]
+
+            assert (await db.get(JobInstance, job_h1)).status == JobStatus.UNKNOWN.value
+            other = await db.get(JobInstance, job_h2)
+            assert other.status == JobStatus.RUNNING.value, (
+                "同 run 其他主机（未被请求中止）的 job 不得被打成 UNKNOWN"
+            )
+            assert other.ended_at is None
+    finally:
+        _cleanup_two_hosts(pairs, [d1, d2])
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_run_level_abort_reaps_every_requested_job():
+    """run 级 abort：requested_job_ids 覆盖全部 RUNNING job → 全部回收（行为不变）。"""
+    h1, d1, h2, d2 = _two_new_ids()
+    pairs: list[tuple[str, int]] = []
+    try:
+        run_id, _, pairs = _seed_two_hosts([(h1, d1), (h2, d2)], abort_age_seconds=90)
+        (_, job_h1), (_, job_h2) = pairs
+        _set_requested_job_ids(run_id, [job_h1, job_h2])
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as db:
+            count, items = await _reconcile_aborted_running_jobs(db)
+            await db.commit()
+
+            assert count == 2
+            assert sorted(i["job_id"] for i in items) == sorted([job_h1, job_h2])
+    finally:
+        _cleanup_two_hosts(pairs, [d1, d2])
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_legacy_abort_without_requested_ids_still_reaps():
+    """兼容：run_context 无 requested_job_ids（历史形态）时退化为「只看 at」。"""
+    h1, d1, h2, d2 = _two_new_ids()
+    pairs: list[tuple[str, int]] = []
+    try:
+        _, _, pairs = _seed_two_hosts([(h1, d1), (h2, d2)], abort_age_seconds=90)
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as db:
+            count, items = await _reconcile_aborted_running_jobs(db)
+            await db.commit()
+
+            assert count == 2, "键缺失时不得改变既有回收行为（否则老数据无人回收）"
+            assert len(items) == 2
+    finally:
+        _cleanup_two_hosts(pairs, [d1, d2])
