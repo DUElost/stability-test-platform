@@ -339,6 +339,15 @@ class JobSession:
             platform = detect_device_platform(adb_path, self._serial)
             reconciler_cls = self._resolve_reconciler_class(platform)
             if reconciler_cls is None:
+                # R4-b b3（2026-09-15 裁决）：无可选 Reconciler 的平台必须留痕。对照
+                # UNISOC 有 platform_reconciler_start_degraded，此处此前是静默 return，
+                # 现场无法区分「平台未支持」与「采集正常但无异常」。
+                # 控制面侧的用户可见性由 watcher-summary 的 platform_buckets
+                # .reconciler_supported 承担（R4-b b1）。
+                logger.warning(
+                    "platform_reconciler_unsupported job_id=%d serial=%s platform=%s",
+                    self._job_id, self._serial, platform,
+                )
                 return
 
             cap = self._handle.capability

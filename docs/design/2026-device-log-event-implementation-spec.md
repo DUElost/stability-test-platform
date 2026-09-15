@@ -261,9 +261,6 @@ class EventMetadata:
 class PlatformCollector(Protocol):
     platform: str
 
-    def detect(
-        self, shell_fn: Callable[[str, int], Optional[str]], serial: str,
-    ) -> bool: ...
     def parse_metadata(self, event_dir: Path) -> EventMetadata: ...
 ```
 
@@ -276,8 +273,9 @@ JobSession 组装时经 `get_collector_for_platform` 一次性确定），成功
 ### 5.2 Reconciler 错误约定
 
 - `CollectorError`：记日志 + `tick_errors++`，不 crash 线程
-- 协议中的 `detect()` **当前零调用点**（平台判定实际走 `detect_device_platform` +
-  `get_collector_for_platform`，`job_session.py`）；保留接口但勿据本文推演运行时行为
+- 协议中的 `detect()` **已于 2026-09-15 删除**（ADR-0032 R4-a a1 裁决）：平台判定的
+  唯一权威是 `detect_device_platform`（`job_session.py`），协议只保留 `platform` +
+  `parse_metadata`；勿据本文旧版推演运行时行为
 
 ### 5.3 平台路由（ADR-0032）
 
@@ -299,7 +297,7 @@ JobSession 组装时经 `get_collector_for_platform` 一次性确定），成功
 |---|---|---|---|
 | MTK | ✓ | ✓ | ✓（主线） |
 | UNISOC | ✓（collector + reconciler，ADR-0032） | 见 R09 台账 #1055 相关项 | 待补 |
-| QCOM | stub（`detect` False、`parse_metadata` raise） | —（#73 延期，不阻塞主线） | — |
+| QCOM | stub（`parse_metadata` raise）；「平台未支持」态由控制面派生标注（R4-b b1） | —（#73 延期，不阻塞主线） | — |
 
 勿以「模块存在」代替「端到端可用」表述——三者按上表分别陈述。
 

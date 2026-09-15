@@ -1357,6 +1357,44 @@ class TestWatcherSummaryEndpoint:
         assert buckets["UNISOC"]["affected_device_count"] == 0
         assert buckets["UNISOC"]["running_device_count"] == 1
 
+    def test_watcher_summary_platform_bucket_flags_unsupported_platform(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """R4-b b1（ADR-0032 v0.8 裁决 2026-09-15）：无采集实现的平台必须被标注。
+
+        否则 UI 会把「平台未支持」渲染成「没有异常」（信号 0 / 设备 0）。
+        """
+        cur_run = chain_setup["current_run"]
+        plan_cur = chain_setup["plan_current"]
+        dev_mtk = chain_setup["device_running"]
+        dev_mtk.platform = "MTK"
+        dev_qcom = Device(
+            serial="dev-qcom-01", host_id="host-101", status="BUSY",
+            platform="QCOM",
+            adb_connected=True, adb_state="device",
+        )
+        db_session.add(dev_qcom)
+        db_session.commit()
+        db_session.add(JobInstance(
+            plan_run_id=cur_run.id, plan_id=plan_cur.id,
+            device_id=dev_qcom.id, host_id="host-101",
+            status=JobStatus.RUNNING.value,
+            pipeline_def={"lifecycle": {}},
+            started_at=_now() - timedelta(minutes=2),
+            patrol_cycle_count=3, patrol_success_cycle_count=3,
+        ))
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        buckets = {b["platform"]: b for b in resp.json()["data"]["platform_buckets"]}
+        assert buckets["MTK"]["reconciler_supported"] is True
+        assert "QCOM" in buckets, buckets
+        assert buckets["QCOM"]["reconciler_supported"] is False
+
     def test_watcher_summary_platform_bucket_includes_terminal_unisoc_without_signals(
         self, client, auth_headers, chain_setup, db_session,
     ):

@@ -293,7 +293,55 @@ def test_run_merge_sync_skips_no_org_files(db_session, sample_plan_run, monkeypa
     no_files_counter.inc.assert_called_once_with()
 
 
-def test_count_hosts_with_scan_artifacts_scopes_to_since_watermark(
+def test_run_merge_all_platforms_records_per_platform_outcomes(
+    db_session, sample_plan_run, monkeypatch,
+):
+    """多平台路由可观测：逐平台结果落 ``run_context.merge_platforms``。
+
+    ADR-0032 B1 的「分区各自产出」此前只能靠查中心目录反推。工具/校验/发布**真失败**
+    走 raise 而不是空串（见 ``test_run_merge_sync_raises_*``），本函数只记录正常返回的
+    三种状态。
+    """
+    from backend.models.plan_run import PlanRun
+
+    by_platform = {"mtk": "ok", "unisoc": ""}
+    monkeypatch.setattr(
+        ds, "run_merge_sync",
+        lambda _run_id, *, platform=None, **_kw: by_platform[str(platform)],
+    )
+
+    assert ds.run_merge_all_platforms_sync(sample_plan_run.id) == "ok"
+
+    db_session.expire_all()
+    run = db_session.get(PlanRun, sample_plan_run.id)
+    assert run.run_context["merge_platforms"]["platforms"] == {
+        "mtk": "ok",
+        "unisoc": "no_input",
+    }
+
+
+def test_run_merge_all_platforms_records_skipped_failed(
+    db_session, sample_plan_run, monkeypatch,
+):
+    """全平台 skipped_failed → 聚合 skipped_failed，逐平台状态原样保留。"""
+    from backend.models.plan_run import PlanRun
+
+    monkeypatch.setattr(
+        ds, "run_merge_sync",
+        lambda _run_id, *, platform=None, **_kw: "skipped_failed",
+    )
+
+    assert ds.run_merge_all_platforms_sync(sample_plan_run.id) == "skipped_failed"
+
+    db_session.expire_all()
+    run = db_session.get(PlanRun, sample_plan_run.id)
+    assert run.run_context["merge_platforms"]["platforms"] == {
+        "mtk": "skipped_failed",
+        "unisoc": "skipped_failed",
+    }
+
+
+def test_scan_completeness_scopes_to_since_watermark(
     db_session, sample_plan_run,
 ):
     """Earlier-round artifacts for the same host must not satisfy this round.
@@ -307,11 +355,12 @@ def test_count_hosts_with_scan_artifacts_scopes_to_since_watermark(
     from backend.models.plan_run_artifact import PlanRunArtifact
 
     run_id = sample_plan_run.id
+    expected = {"host-a": {"mtk"}}
     stale_at = datetime(2026, 8, 8, 6, 0, tzinfo=timezone.utc)
     fresh_at = datetime(2026, 8, 8, 7, 0, tzinfo=timezone.utc)
     watermark = datetime(2026, 8, 8, 6, 30, tzinfo=timezone.utc)
 
-    db_session.add(
+    db_session.add_all([
         PlanRunArtifact(
             plan_run_id=run_id,
             host_id="host-a",
@@ -319,9 +368,7 @@ def test_count_hosts_with_scan_artifacts_scopes_to_since_watermark(
             artifact_type=ds.ARTIFACT_TYPE_SCAN,
             size_bytes=100,
             created_at=stale_at,
-        )
-    )
-    db_session.add(
+        ),
         PlanRunArtifact(
             plan_run_id=run_id,
             host_id="host-a",
@@ -329,71 +376,142 @@ def test_count_hosts_with_scan_artifacts_scopes_to_since_watermark(
             artifact_type=ds.ARTIFACT_TYPE_SCAN,
             size_bytes=100,
             created_at=fresh_at,
-        )
-    )
+        ),
+    ])
     db_session.commit()
 
     # Stale row alone does not count once the watermark is past it.
-    assert ds.count_hosts_with_scan_artifacts(run_id, ["host-a"], since=watermark) == 1
-    assert ds.count_hosts_with_scan_artifacts(run_id, ["host-a"], since=fresh_at) == 1
-    assert ds.count_hosts_with_scan_artifacts(
-        run_id, ["host-a"], since=fresh_at + timedelta(seconds=1)
-    ) == 0
+    got = ds.scan_completeness(run_id, expected, since=watermark)
+    assert (got.units_satisfied, got.units_expected) == (1, 1)
+    assert got.hosts_with_artifacts == 1
+    assert ds.scan_completeness(run_id, expected, since=fresh_at).complete
+    assert not ds.scan_completeness(
+        run_id, expected, since=fresh_at + timedelta(seconds=1)
+    ).complete
 
     # Only the stale row exists before watermark — this is the re-trigger case.
     db_session.query(PlanRunArtifact).filter(
         PlanRunArtifact.storage_uri == "/tmp/fresh_org.xls"
     ).delete()
     db_session.commit()
-    assert ds.count_hosts_with_scan_artifacts(run_id, ["host-a"], since=watermark) == 0
+    assert not ds.scan_completeness(run_id, expected, since=watermark).complete
 
 
-def test_count_hosts_require_platforms_waits_for_unisoc(
-    db_session, sample_plan_run,
-):
-    """#1071: MTK-only delivery must not count as host-complete when both required."""
-    from datetime import datetime, timezone
-
-    from backend.core.dedup_platform import DEDUP_PLATFORMS
+def _scan_artifact(run_id, host_id, uri, *, at):
     from backend.models.plan_run_artifact import PlanRunArtifact
 
-    run_id = sample_plan_run.id
-    since = datetime(2026, 9, 8, 10, 0, tzinfo=timezone.utc)
-    db_session.add(
-        PlanRunArtifact(
-            plan_run_id=run_id,
-            host_id="host-a",
-            storage_uri="/nfs/dedup/1/mtk/host-a_Result_org.xls",
-            artifact_type=ds.ARTIFACT_TYPE_SCAN,
-            size_bytes=100,
-            created_at=since,
-        )
-    )
-    db_session.commit()
-    assert (
-        ds.count_hosts_with_scan_artifacts(
-            run_id, ["host-a"], since=since, require_platforms=DEDUP_PLATFORMS,
-        )
-        == 0
+    return PlanRunArtifact(
+        plan_run_id=run_id,
+        host_id=host_id,
+        storage_uri=uri,
+        artifact_type=ds.ARTIFACT_TYPE_SCAN,
+        size_bytes=100,
+        created_at=at,
     )
 
-    db_session.add(
-        PlanRunArtifact(
-            plan_run_id=run_id,
-            host_id="host-a",
-            storage_uri="/nfs/dedup/1/unisoc/host-a_Result_org.xls",
-            artifact_type=ds.ARTIFACT_TYPE_SCAN,
-            size_bytes=100,
-            created_at=since,
-        )
-    )
+
+def test_scan_completeness_pure_mtk_host_needs_only_mtk(db_session, sample_plan_run):
+    """ADR-0032 B1「分区各自完备性判定」：纯 MTK host 不得被要求产出 UNISOC 报表。
+
+    回归护栏：``require_platforms=DEDUP_PLATFORMS`` 期间要求**每个 host** 双平台齐，
+    纯 MTK host 因此永远判不齐、每轮烧满轮询预算并误报 partial。
+    """
+    from datetime import datetime, timezone
+
+    run_id = sample_plan_run.id
+    expected = {"host-a": {"mtk"}}
+    since = datetime(2026, 9, 15, 10, 0, tzinfo=timezone.utc)
+
+    assert not ds.scan_completeness(run_id, expected, since=since).complete
+
+    db_session.add(_scan_artifact(
+        run_id, "host-a", "/nfs/dedup/1/mtk/host-a_Result_org.xls", at=since,
+    ))
     db_session.commit()
-    assert (
-        ds.count_hosts_with_scan_artifacts(
-            run_id, ["host-a"], since=since, require_platforms=DEDUP_PLATFORMS,
-        )
-        == 1
+    got = ds.scan_completeness(run_id, expected, since=since)
+    assert got.complete
+    assert (got.units_satisfied, got.units_expected) == (1, 1)
+
+
+def test_scan_completeness_pure_unisoc_host_needs_only_unisoc(
+    db_session, sample_plan_run,
+):
+    """对称面：纯 UNISOC host 不得被要求产出 MTK 报表。"""
+    from datetime import datetime, timezone
+
+    run_id = sample_plan_run.id
+    since = datetime(2026, 9, 15, 10, 0, tzinfo=timezone.utc)
+    db_session.add(_scan_artifact(
+        run_id, "host-u", "/nfs/dedup/1/unisoc/host-u_Result_org.xls", at=since,
+    ))
+    db_session.commit()
+    assert ds.scan_completeness(run_id, {"host-u": {"unisoc"}}, since=since).complete
+
+
+def test_scan_completeness_mixed_host_waits_for_both_platforms(
+    db_session, sample_plan_run,
+):
+    """混平台 host 仍必须两平台都到齐——MTK 先到不得提前满足屏障（#1071 原意）。"""
+    from datetime import datetime, timezone
+
+    run_id = sample_plan_run.id
+    expected = {"host-mixed": {"mtk", "unisoc"}}
+    since = datetime(2026, 9, 15, 10, 0, tzinfo=timezone.utc)
+
+    db_session.add(_scan_artifact(
+        run_id, "host-mixed", "/nfs/dedup/1/mtk/host-mixed_Result_org.xls", at=since,
+    ))
+    db_session.commit()
+    got = ds.scan_completeness(run_id, expected, since=since)
+    assert (got.units_satisfied, got.units_expected) == (1, 2)
+    assert not got.complete
+
+    db_session.add(_scan_artifact(
+        run_id, "host-mixed", "/nfs/dedup/1/unisoc/host-mixed_Result_org.xls", at=since,
+    ))
+    db_session.commit()
+    got = ds.scan_completeness(run_id, expected, since=since)
+    assert got.complete
+    assert got.units_satisfied == 2
+
+
+def test_scan_completeness_mixed_fleet_counts_units_per_host_platform(
+    db_session, sample_plan_run,
+):
+    """三型 host 混跑（纯 MTK / 纯 UNISOC / 混平台）→ 4 个完备性单位。"""
+    from datetime import datetime, timezone
+
+    run_id = sample_plan_run.id
+    expected = {
+        "host-mtk": {"mtk"},
+        "host-unisoc": {"unisoc"},
+        "host-mixed": {"mtk", "unisoc"},
+    }
+    since = datetime(2026, 9, 15, 10, 0, tzinfo=timezone.utc)
+    db_session.add_all([
+        _scan_artifact(run_id, "host-mtk", "/nfs/dedup/1/mtk/a.xls", at=since),
+        _scan_artifact(run_id, "host-unisoc", "/nfs/dedup/1/unisoc/b.xls", at=since),
+        _scan_artifact(run_id, "host-mixed", "/nfs/dedup/1/mtk/c.xls", at=since),
+    ])
+    db_session.commit()
+
+    got = ds.scan_completeness(run_id, expected, since=since)
+    assert (got.units_satisfied, got.units_expected) == (3, 4)
+    assert got.hosts_with_artifacts == 3
+    assert not got.complete
+
+
+def test_scan_completeness_empty_expectation_is_trivially_complete(
+    db_session, sample_plan_run,
+):
+    """无采集实现的平台（如 QCOM）不产生期望 → 不为它等待、也不误报缺产物。"""
+    from datetime import datetime, timezone
+
+    got = ds.scan_completeness(
+        sample_plan_run.id, {}, since=datetime(2026, 9, 15, tzinfo=timezone.utc),
     )
+    assert got.complete
+    assert (got.units_satisfied, got.units_expected, got.hosts_with_artifacts) == (0, 0, 0)
 
 
 # ── merge 产物中心化（2026-08-31）────────────────────────────────────
