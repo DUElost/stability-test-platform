@@ -8,8 +8,11 @@
 2. **copytruncate 必须在**（systemd `append:` 持 fd，create 模式会让轮转
    静默失效——systemd 继续写已改名的旧文件）；
 3. 路径经 ``agent_install_dir`` 变量渲染（不硬编码 /opt）；
-4. size/rotate 由 defaults 变量控制且取值合理；
-5. ``become: true``（写 /etc/logrotate.d 需 root）。
+4. size/rotate 变量在 ``group_vars``（**不放 role defaults**——``--tags`` 会跳过
+   pre_tasks 的 include_vars 加载，2026-09-15 铺开实测 undefined）且 task 内
+   有 ``| default()`` 兜底；
+5. ``become: true``（写 /etc/logrotate.d 需 root）；
+6. 不含 ``delaycompress``（补丁：首轮即压缩，控总量优先）。
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLAYBOOK = REPO_ROOT / "tools/ansible/playbooks/update_agent.yml"
-DEFAULTS = REPO_ROOT / "tools/ansible/roles/agent_deploy/defaults/main.yml"
+GROUP_VARS = REPO_ROOT / "tools/ansible/group_vars/linux_hosts.yml"
 
 _TASK_NAME = "Configure agent log rotation (#2205)"
 
@@ -69,19 +72,29 @@ def test_paths_via_variable_and_root_owned():
     assert "/opt/stability-test-agent" not in copy["content"], "路径应经变量渲染"
 
 
-def test_rotation_params_from_defaults():
+def test_rotation_params_from_group_vars():
+    """变量在 group_vars（恒加载）+ task 内 default 兜底（#2205 补丁）。
+
+    原放 role defaults——`--tags logrotate` 局部执行跳过 pre_tasks 的
+    include_vars 加载，2026-09-15 铺开首跑 `undefined` 失败。
+    """
     content = _content()
-    assert "size {{ agent_logrotate_size }}" in content
-    assert "rotate {{ agent_logrotate_rotate }}" in content
-    defaults = yaml.safe_load(DEFAULTS.read_text(encoding="utf-8"))
-    assert defaults["agent_logrotate_size"] == "200M"
-    assert int(defaults["agent_logrotate_rotate"]) >= 3
+    assert "size {{ agent_logrotate_size | default(" in content
+    assert "rotate {{ agent_logrotate_rotate | default(" in content
+    group_vars = yaml.safe_load(GROUP_VARS.read_text(encoding="utf-8"))
+    assert group_vars["agent_logrotate_size"] == "200M"
+    assert int(group_vars["agent_logrotate_rotate"]) >= 3
 
 
 def test_rotation_policy_tokens():
     content = _content()
-    for token in ("daily", "compress", "delaycompress", "missingok", "notifempty"):
+    for token in ("daily", "compress", "missingok", "notifempty"):
         assert token in content, f"轮转策略缺少 {token}"
+    # #2205 补丁：去 delaycompress——首轮 .1 保持未压缩（GB 级常驻）会让
+    # 「控总量」延迟一轮才兑现；本场景首轮即压缩。
+    assert "delaycompress" not in content, (
+        "delaycompress 会让首轮 .1 未压缩——本场景应首轮即压缩"
+    )
 
 
 def test_logrotate_package_installed_before_config():

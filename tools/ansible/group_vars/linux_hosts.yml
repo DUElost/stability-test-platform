@@ -108,3 +108,12 @@ agent_flash_prereq_packages:
   - libxrender1
   - libfontconfig1
   - libglib2.0-0
+
+# ── 进程日志轮转（#2205）────────────────────────────────────────────────
+# agent_error.log 无轮转曾累积全队 94.5GB（systemd append: 无大小控制）；
+# 由 update_agent.yml 的 logrotate 两 task 下发 /etc/logrotate.d/stp-agent。
+# 变量放本文件（而非 role defaults）：`--tags logrotate` 局部执行会跳过
+# pre_tasks 的 include_vars 加载——2026-09-15 铺开实测 `undefined`，
+# group_vars 恒加载不受 tags 影响（task 内另有 default 兜底）。
+agent_logrotate_size: "200M"
+agent_logrotate_rotate: 7

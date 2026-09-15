@@ -253,10 +253,9 @@
           # copytruncate：systemd append: 持 fd，create 模式会让轮转静默失效。
           {{ agent_install_dir }}/logs/agent_error.log {{ agent_install_dir }}/logs/agent.log {
               daily
-              size {{ agent_logrotate_size }}
-              rotate {{ agent_logrotate_rotate }}
+              size {{ agent_logrotate_size | default('200M') }}
+              rotate {{ agent_logrotate_rotate | default(7) }}
               compress
-              delaycompress
               copytruncate
               missingok
               notifempty
