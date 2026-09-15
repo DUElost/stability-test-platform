@@ -234,13 +234,14 @@ def process_device_logs(
             pending_key=pending_key,
             stop_requested=stop_requested,
         ) -> None:
-            pending_tasks.pop(line, None)
-            result.pulled += 1
-            result.new_timestamps.append(parsed["timestamp"])
-
             # #1719: 先落 emit 意图占位（仍在 processed 之前）——占位语义 =
             # 「已在本地 finalize，emit 必须发生」；崩溃后 sweep 据此重放，
             # 堵住 #803 折衷版（先 processed 再回调）的 emit 丢失窗口。
+            # #2044: 占位写失败 ⇒ 该条目**不算 finalize**。推进 processed 会让该行
+            # 此后不再被重拉，而 sweep 只遍历既有意图簿，两者叠加即静默永久丢失
+            # ——正是 #1719 要堵的窗口。改判为「保留 pending + retry_count」，下一拍
+            # 走「本地目录已存在 → verify → finalize」廉价重试；达 pull_retry_limit
+            # 后由既有 on_pull_failed(exhausted) 通道带真因显式告警，不再静默。
             if on_entry_intent is not None:
                 try:
                     on_entry_intent({
@@ -250,11 +251,26 @@ def process_device_logs(
                         "output_subdir":    local_target_dir,
                         "state_key_prefix": cfg.state_key_prefix,
                     })
-                except Exception:
+                except Exception as exc:
                     logger.exception(
                         "aee_on_entry_intent_callback_failed serial=%s db=%s",
                         serial, parsed.get("db_path"),
                     )
+                    task = dict(parsed)
+                    task["retry_count"] = int(task.get("retry_count", 0)) + 1
+                    task["last_error"] = (
+                        f"emit_intent_placeholder_failed: {type(exc).__name__}"
+                    )
+                    pending_tasks[line] = task
+                    _save_pending_tasks(state_store, pending_key, pending_tasks)
+                    result.errors.append(
+                        f"emit_intent_placeholder_failed:{parsed.get('db_path')}"
+                    )
+                    return
+
+            pending_tasks.pop(line, None)
+            result.pulled += 1
+            result.new_timestamps.append(parsed["timestamp"])
 
             # #803: 先落 processed/pending，再 on_new_entry（emit + DLE）。
             # 回调成功、状态未落盘就崩溃会跨重启重拉重 emit；先落盘把窗口换成

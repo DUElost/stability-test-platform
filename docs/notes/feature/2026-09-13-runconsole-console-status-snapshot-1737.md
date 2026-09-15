@@ -6,7 +6,7 @@ Class: feature
 ## Decision
 
 按 [#1737](https://github.com/DUElost/stability-test-platform/issues/1737) 裁决的分阶段
-（[设计稿 §6](../design/2026-09-13-run-console-multi-instance-ownership.md)）落地 **P2**：
+（[设计稿 §6](../../design/2026-09-13-run-console-multi-instance-ownership.md)）落地 **P2**：
 把 `status()`（及其复用者——`console:` 房间订阅校验）从「进程内态」改为「本地优先 +
 跨实例快照回退」。
 

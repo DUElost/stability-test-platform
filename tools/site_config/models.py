@@ -212,6 +212,11 @@ class ControlPlane(ConfigModel):
         https = urlsplit(self.public_url).scheme == "https"
         if self.security_profile == "production" and not https:
             raise invalid("production_https_required")
+        # internal 是 ADR-0024 v1.1 的「无 TLS 内网」豁免位：声明 https 即豁免前提消失，
+        # 必须走 production 模板对（TLS nginx + secure cookie）。模板对只按 profile 选择，
+        # internal + https 会静默装出 listen 80 与 AUTH_COOKIE_SECURE=0。
+        if self.security_profile == "internal" and https:
+            raise invalid("internal_https_profile_conflict")
         if https and self.tls_ref is None:
             raise invalid("tls_reference_required")
         if not https and self.tls_ref is not None:

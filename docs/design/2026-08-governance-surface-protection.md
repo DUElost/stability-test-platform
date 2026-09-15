@@ -61,8 +61,9 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
   专项 `check:gov`（现组成 `[gov-surface, gov-skills, harness-ingest]`；原 `gov-evals`
   于 2026-09-06 移除，`harness-ingest` 于 2026-09-07 并入，`:214` `FULL_EXCLUDE` 除外）。
 - `ci.yml` lint job：脚本不可变检查之后追加「差异面不变量检查」（invariant-diff，BLOCK）、
-  「治理面结构检查(C-G1 L0)」（含 `--self-test`）与「Execution Registry 自测」三步
-  （步骤以 `ci.yml` 为准）。
+  「分层检查」（`check_layering.py`，含 `--self-test`）、「孤立 ORM 模型检查」
+  （`check_orphan_models.py`，含 `--self-test`）、「治理面结构检查(C-G1 L0)」（含
+  `--self-test`）与「Execution Registry 自测」五步（步骤以 `ci.yml` 为准）。
 
 ## 5. 本地护栏
 

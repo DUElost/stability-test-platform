@@ -5,13 +5,18 @@
 
 ## 0. 前置条件
 
-- `flash_firmware v1.3.10` 已注册（`GET /api/v1/scripts?name=flash_firmware` 能看到目标版本且 is_active）。
+- `flash_firmware` **最新 active 版本**已注册（`GET /api/v1/scripts?name=flash_firmware`
+  能看到目标版本且 `is_active`）。**本文不钉死版本**：执行前按 §3 的命令取最新 active；
+  文内出现的版本号是 **2026-09-15 复核值 `v1.3.16`**。
 - 当前目标 Agent fleet 已 hot-update / restart 到含 v1.3.x 的 code revision。
 - 目标固件刷机包已从研发渠道拿到（解压后含 scatter 与 DA 文件）。
-- 串行刷多台**首刷**设备时，v1.3.10 会在每台刷完后多等一段「boot 稳定窗口」
-  （默认 20s，`boot_stabilize_seconds`）；指纹只取 MTK 口，邻机非 MTK USB
-  抖动不会重置窗口
+- 串行刷多台**首刷**设备时，脚本会在每台刷完后多等一段「boot 稳定窗口」
+  （默认 20s，`boot_stabilize_seconds`，v1.3.7 起）；指纹只取 MTK 口（v1.3.10 起收窄），
+  邻机非 MTK USB 抖动不会重置窗口
   （[Agent Note](../notes/feature/2026-08-30-flash-v137-boot-stabilize-lock.md)）。
+- **为何可以取最新**：v1.3.16 起门控回落改经 wrapper 窄面，host 上 wrapper 缺失/版本旧时
+  只降级为 `no-priv-face` 并如实记录（非致命）；此前各版本的刷机时序修复（BROM 窗口、
+  超时 SIGKILL、门控口持久化）都在最新版里。**脚本发布新版本后应复核本节与 §3**。
 
 ## 1. 固件上架（中心存储）
 
@@ -77,6 +82,14 @@ AUTH="Authorization: Bearer $TOKEN"
 init 三步：刷机 → 设备体检 → 重新拿 root（刷机会重置设备，root 必须重做）；
 patrol 用 noop 维持心跳。
 
+刷机步骤的 `script_version` 取最新 active（§0 判据；`$AUTH` 见 §2）：
+
+```bash
+FLASH_VER=$(curl -s -H "$AUTH" "http://127.0.0.1:8000/api/v1/scripts?name=flash_firmware" \
+  | jq -r '[.data[] | select(.is_active) | .version] | sort_by(split(".") | map(tonumber)) | last')
+echo "$FLASH_VER"     # 填进下面的 script_version（2026-09-15 复核值：1.3.16）
+```
+
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/v1/plans -H "$AUTH" \
   -H "Content-Type: application/json" -d '{
@@ -87,7 +100,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans -H "$AUTH" \
   "barrier_max_wait_seconds": 14400,
   "steps": [
     {"step_key": "flash", "script_name": "flash_firmware",
-     "script_version": "1.3.10", "stage": "init", "sort_order": 10,
+     "script_version": "1.3.16", "stage": "init", "sort_order": 10,
      "timeout_seconds": 2400, "stall_seconds": 900, "retry": 1},
     {"step_key": "check", "script_name": "check_device",
      "script_version": "1.0.0", "stage": "init", "sort_order": 20},
@@ -121,7 +134,7 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run/preview -H "$AU
 
 # 3. 正式触发
 curl -s -X POST http://127.0.0.1:8000/api/v1/plans/<PLAN_ID>/run -H "$AUTH" \
-  -H "Content-Type: application/json" -d "{\"device_ids\": [$DEVICES], \"note\": \"v1.3.10 首台验证\"}"
+  -H "Content-Type: application/json" -d "{\"device_ids\": [$DEVICES], \"note\": \"$FLASH_VER 首台验证\"}"
 ```
 
 验证点（PlanRun 详情 / step_trace）：
