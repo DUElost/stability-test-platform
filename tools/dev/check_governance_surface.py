@@ -29,6 +29,12 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
       + 规范位版本），头部行 ↔ 版本记录块末项（#861/#867 五次复发后的确定性收口）；
       **头部状态行自身必须在场且可解析**（#1524：此前键位粗体/表格形态会让取行
       失败 → 该 ADR 静默退出全部索引校验）
+  S14 代码注释里的 ADR 版本引用 ↔ 该 ADR 头部规范位版本（#2154 收口）：ADR-0043
+      v1.1 落地时注释同步漏改一处（同文件另两处已是 v1.1），全靠人肉 grep 才发现
+      ——S12 只管索引面，注释面无人被迫同步。判据与 S12 同：只认头部规范位版本，
+      头部不带版本者不约束；只绑「紧跟 ADR 号的第一个 vX.Y」（沿革叙述里的
+      vX.Y 不误绑）。已发布脚本版本目录（backend/agent/scripts/）内容冻结
+      （ADR-0020），扫进去会产出「红灯但不可修」的死结，故排除。
 
 用法:
     python tools/dev/check_governance_surface.py --check     # 门禁模式
@@ -497,6 +503,69 @@ def check_contract_version_sync(header_version: str | None, change_head: str | N
     return issues
 
 
+# S14: 代码注释里的 ADR 版本引用（#2154 收口）。ADR-0043 升 v1.1 时，注释同步
+# 漏了一处 v1.0（同文件另两处已是 v1.1）——S12 覆盖索引面、覆盖不到注释面，
+# 于是「bump 版本必须同步注释」只剩自觉。取最小可靠面：权威版本沿用 S12 的头部
+# **规范位**版本（解析启发式最少）；只绑 ADR 号后**首个** vX.Y（「v1.0 → v1.1
+# 沿革」这类叙述里的第二个 token 不误绑到该 ADR）；头部无版本者不约束。
+_ADR_CODE_REF = re.compile(r"ADR-(\d{4})(?:[^0-9\n]{0,24}?)v(\d+\.\d+)")
+
+CODE_SCAN_ROOTS = ("backend", "frontend/src")
+CODE_SCAN_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx", ".vue")
+CODE_SCAN_SKIP_DIRS = {"node_modules", "__pycache__", ".venv", "dist", "build"}
+#: 已发布脚本版本目录：内容冻结（ADR-0020 + 硬不变量），改它即触发 immutability
+#: 门禁——本规则若扫进去，一旦红灯便是「必须改、又不许改」的死结，故整枝排除。
+CODE_SCAN_SKIP_PREFIXES = ("backend/agent/scripts/",)
+
+
+def collect_adr_code_refs(root: str = ROOT) -> list[tuple[str, int, str, str]]:
+    """S14: 收集源码注释中对 ADR 的首个版本引用 → [(路径, 行号, ADR 号, 版本)]。
+
+    只做 IO 与行扫描，判定逻辑留给 check_adr_code_refs（纯函数，可离线自测）。
+    """
+    refs: list[tuple[str, int, str, str]] = []
+    for rel_root in CODE_SCAN_ROOTS:
+        base = os.path.join(root, rel_root)
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in dirnames if d not in CODE_SCAN_SKIP_DIRS]
+            rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+            if any(rel_dir.startswith(p) for p in CODE_SCAN_SKIP_PREFIXES):
+                dirnames[:] = []  # 冻结目录不再下钻
+                continue
+            for fn in sorted(filenames):
+                if not fn.endswith(CODE_SCAN_EXTS):
+                    continue
+                path = os.path.join(dirpath, fn)
+                try:
+                    text = open(path, encoding="utf-8").read()
+                except (OSError, UnicodeDecodeError):
+                    continue
+                rel = os.path.relpath(path, root).replace(os.sep, "/")
+                for lineno, line in enumerate(text.splitlines(), 1):
+                    m = _ADR_CODE_REF.search(line)
+                    if m:
+                        refs.append((rel, lineno, m.group(1), m.group(2)))
+    return refs
+
+
+def check_adr_code_refs(
+    refs: list[tuple[str, int, str, str]], adr_versions: dict[str, str]
+) -> list[str]:
+    """S14: 注释引用版本 ≠ ADR 头部规范位版本即报；头部无版本者不约束（同 S12）。"""
+    issues: list[str] = []
+    for path, lineno, num, ver in refs:
+        head = adr_versions.get(num)
+        if not head:
+            continue
+        if head != ver:
+            issues.append(
+                f"S14 {path}:{lineno}: 注释引用 ADR-{num} v{ver} ≠ ADR 头部 v{head}"
+                "——bump ADR 版本必须同步代码注释"
+                "（#2154 实测：同文件一处漏改，只能人肉 grep 发现）"
+            )
+    return issues
+
+
 NOTE_CLASSES = {"feature", "bug-fix", "simplification", "architecture", "process", "testing"}
 NOTE_HEADER_CUTOFF = "2026-09-05"
 #: 四节契约（AGENTS.md）：cutoff 起新增 Note 必须齐备（#1299）
@@ -823,6 +892,7 @@ def run_check() -> int:
     if os.path.isdir(adr_dir) and os.path.exists(adr_readme_path) and os.path.exists(docmap_path):
         adr_readme = open(adr_readme_path, encoding="utf-8").read()
         docmap_text = open(docmap_path, encoding="utf-8").read()
+        adr_versions: dict[str, str] = {}  # S14：ADR 号 → 头部规范位版本
         readme_rows: dict[str, tuple[str | None, str | None]] = {}
         for line in adr_readme.splitlines():
             fn, st, ver = parse_adr_readme_row(line)
@@ -852,6 +922,8 @@ def run_check() -> int:
                 parse_adr_status_line(status_line) if status_line else (None, None)
             )
             num = fn[4:8]
+            if header_version:
+                adr_versions[num] = header_version
             issues += check_adr_status_line_present(num, status_line)
             issues += check_adr_surface_sync(
                 num,
@@ -882,12 +954,15 @@ def run_check() -> int:
             parse_docmap_contract_version(docmap_text),
         )
 
+        # S14: 代码注释里的 ADR 版本引用（#2154 收口）——S12 的注释面对偶
+        issues += check_adr_code_refs(collect_adr_code_refs(), adr_versions)
+
     for issue in issues:
         print(f"[BLOCK] {issue}")
     if issues:
         print(f"\n治理面结构检查失败：{len(issues)} 项", file=sys.stderr)
         return 1
-    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S13、S5x）")
+    print("[OK] 治理面结构检查通过（阻塞项全绿：S1–S14、S5x）")
     return 0
 
 
@@ -1284,12 +1359,37 @@ def run_self_test() -> int:
     expect("S13 DOC-MAP 行取执行契约行（不误取架构 ADR 行）",
            lambda: parse_docmap_contract_version(_dm) != "1.2", False)
 
+    # S14（#2154 收口）：代码注释引用 ADR 的版本 ↔ ADR 头部规范位版本。
+    # 收集侧（collect_adr_code_refs）走真实文件系统，不在离线自测范围；
+    # 这里只自证判定面与绑定语义。
+    expect("S14 注释版本与头部一致",
+           lambda: check_adr_code_refs(
+               [("backend/services/x.py", 163, "0043", "1.1")], {"0043": "1.1"}),
+           False)
+    expect("S14 注释版本落后（#2154 实测：同文件一处漏改）",
+           lambda: check_adr_code_refs(
+               [("backend/services/plan_run_abort.py", 269, "0043", "1.0")],
+               {"0043": "1.1"}),
+           True)
+    expect("S14 头部无规范位版本不约束（同 S12 纪律）",
+           lambda: check_adr_code_refs(
+               [("backend/api/routes/plans.py", 104, "0030", "1.4")], {}),
+           False)
+    expect("S14 只绑 ADR 号后首个版本 token（沿革叙述不误绑）",
+           lambda: _ADR_CODE_REF.search("见 ADR-0043 v1.0 → v1.1 沿革").group(2)
+           != "1.0",
+           False)
+    expect("S14 引用不带版本不产生判定",
+           lambda: _ADR_CODE_REF.search("遵守 ADR-0043（Accepted）的约束")
+           is not None,
+           False)
+
     if failures:
         for f in failures:
             print(f"[SELFTEST-FAIL] {f}", file=sys.stderr)
         print(f"\n自测失败 {len(failures)} 项——检查器自身不可信，禁止用于拦截", file=sys.stderr)
         return 1
-    print("[OK] self-test 通过：14 条规则各含红/绿样例双向验证")
+    print("[OK] self-test 通过：15 条规则各含红/绿样例双向验证")
     return 0
 
 
