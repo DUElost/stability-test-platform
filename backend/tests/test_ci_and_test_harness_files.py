@@ -23,11 +23,19 @@ def test_backend_conftest_uses_postgres_testcontainers_not_sqlite_fallback():
 
 
 def test_testing_doc_does_not_advertise_sqlite_fallback():
-    """#1299: testing.md 必须与 conftest 契约一致——不得宣传 ALLOW_SQLITE_TESTS 退路。"""
-    doc = (ROOT / "docs" / "development" / "testing.md").read_text(encoding="utf-8")
+    """#1299/#2041: 开发文档不得宣传 ALLOW_SQLITE_TESTS 退路——conftest 已无该开关。
 
-    assert "ALLOW_SQLITE_TESTS" not in doc
-    assert "testcontainers" in doc
+    #2041 前只守 `testing.md`（#1299 修了它却漏掉同族的 local-development /
+    environment-variables），故范围扩到整个 `docs/development/`。
+    """
+    docs_dir = ROOT / "docs" / "development"
+    offending = sorted(
+        str(p.relative_to(ROOT))
+        for p in docs_dir.rglob("*.md")
+        if "ALLOW_SQLITE_TESTS" in p.read_text(encoding="utf-8")
+    )
+    assert offending == []
+    assert "testcontainers" in (docs_dir / "testing.md").read_text(encoding="utf-8")
 
 
 def test_pr_template_pr_agent_wording_matches_advisory_semantics():

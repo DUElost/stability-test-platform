@@ -12,7 +12,7 @@
 |------|------|
 | Python | 3.10+（推荐 3.11） |
 | Node.js | 20+ |
-| PostgreSQL | 生产/CI 用；本地可 `ALLOW_SQLITE_TESTS=1` 仅跑部分测试 |
+| PostgreSQL | 生产 / CI / 本地测试均需要；测试库由 `conftest` 拉起 testcontainers（[testing.md](./testing.md)） |
 | Redis | SAQ/派发需要；`TESTING=1` 时 lifespan 跳过 |
 
 ---

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional, Protocol, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
 
 
 class CollectorError(Exception):
@@ -31,9 +31,16 @@ class EventMetadata:
 
 @runtime_checkable
 class PlatformCollector(Protocol):
-    platform: str
+    """平台采集器：只负责**从事件目录解析元数据**（R4-a a1 裁决，2026-09-15）。
 
-    def detect(self, shell_fn: Callable[[str, int], Optional[str]], serial: str) -> bool: ...
+    协议曾声明 ``detect(shell_fn, serial)`` 但**全仓零调用点**——平台判定的唯一权威
+    是 ``backend.agent.device_platform.detect_device_platform``（调用点
+    ``job_session._maybe_start_aee_reconciler``）。删除该方法的理由见
+    ``docs/notes/architecture/2026-09-15-adr0032-v08-platform-routing-revision.md`` §R4-a：
+    不得保留"定义了却从不调用"的第三种状态。
+    """
+
+    platform: str
 
     def parse_metadata(self, event_dir: Path) -> EventMetadata: ...
 

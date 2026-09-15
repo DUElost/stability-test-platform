@@ -44,7 +44,8 @@ frontend/src/
 | `/account/password` | 修改密码 | 登录 |
 | `/assistant` | AI 助手 | 登录 |
 | `/assistant/approvals` | AI 助手待审批队列 | **admin** |
-| `/users`, `/audit`, `/settings`, `/notifications`, `/storage` | 管理 | **admin** |
+| `/notifications` | 通知记录 | 登录可见；页面内**配置页签（渠道/规则）仅 admin**（#1196） |
+| `/users`, `/audit`, `/settings`, `/storage` | 管理 | **admin** |
 
 **守卫**：`ProtectedRoute`（登录）、`AdminRoute`（`role === 'admin'`）。  
 **代码分割**：除 auth 外页面均 `React.lazy()`。
@@ -148,7 +149,8 @@ frontend/src/
 | 命令 | 说明 |
 |------|------|
 | `npm run dev` | Vite 开发 :5173 |
-| `npm run build` | 生产构建 |
+| `npm run build` | 构建到默认 `dist/`（非生产产物） |
+| `npm run build:prod` | 生产构建：`tsc && vite build --outDir dist-prod`（Nginx root 用） |
 | `npx tsc --noEmit` | 类型检查 |
 | `npx vitest run` | 单元测试 |
 

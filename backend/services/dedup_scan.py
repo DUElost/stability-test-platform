@@ -14,9 +14,10 @@ import shutil
 import subprocess
 import tempfile
 from contextlib import contextmanager
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Collection, Dict, Iterator, List, Mapping, Optional, Tuple
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
@@ -138,74 +139,100 @@ def run_scan_sync(
         db.close()
 
 
-def count_hosts_with_scan_artifacts(
-    plan_run_id: int, host_ids: Sequence[str], *, since: datetime,
-    require_platforms: Sequence[str] | None = None,
-) -> int:
-    """``host_ids`` 中**本轮**已登记 scan 产物的去重 host 数。
+@dataclass(frozen=True)
+class ScanCompleteness:
+    """本轮 scan 完备性快照。
 
-    三个维度都必须收窄，否则完备性判定会误报「齐了」，后果都一样：慢的 host 漏出
+    ``hosts_with_artifacts`` 是 host 级口径（``run_context.archive`` 与前端的
+    「host 完成度」）；``units_*`` 是 (host, platform) 对口径，供轮询屏障判定。
+    两个口径回答不同问题，不能互相替代：host 级回答「几台 Agent 交了东西」，
+    对级回答「该交的 (host, 平台) 是否都交齐」。
+    """
+
+    hosts_with_artifacts: int
+    units_satisfied: int
+    units_expected: int
+
+    @property
+    def complete(self) -> bool:
+        return self.units_satisfied >= self.units_expected
+
+
+def scan_completeness(
+    plan_run_id: int,
+    expected: Mapping[str, Collection[str]],
+    *,
+    since: datetime,
+) -> ScanCompleteness:
+    """本轮 scan 完备性：host 级产物覆盖 + (host, platform) 对级覆盖。
+
+    ``expected`` 是 ``{host_id: {平台分区, ...}}``，由
+    :func:`backend.services.plan_run_scan_scope.load_expected_scan_platforms`
+    按 host 的**设备平台构成**派生。
+
+    **为什么判据单位是 (host, platform) 而不是 host**：Agent 侧两个 runner 都跑、
+    各自按 serial 过滤（``scan_runner._execute_job``）；纯 MTK host 的 UNISOC 工具
+    扫不到 uniview 目录 → 永远产不出 unisoc 产物，反之亦然。按 host 要求「每个
+    平台都有产物」会让纯平台 host 永远判不齐、每轮烧满轮询预算——ADR-0032 B1 的
+    「MTK/UNISOC **分区各自**完备性判定」被收紧成「每 host 双平台齐」的回归。
+
+    收窄维度一个都不能少，否则完备性会误报「齐了」，后果都一样：慢的 host 漏出
     合并，或者合并的是过期报告。
 
-    - 按 **host** 而非文件数：``_register_scan_artifacts_from_nfs`` 返回文件数，而
-      每台 host 上送 2 个匹配文件（``_org.xls`` 与 ``_org_dedup_org_*.xls``），拿它
-      跟 host 数比会让「一台上送完毕」冒充「全部齐了」。
-    - 限定在本轮 ``host_ids`` 内：本轮只触发 host-b 时，host-a 的旧产物会顶替
-      host-b 的名额。
+    - 限定在本轮 ``expected`` 的键内（=本轮 triggered host）：本轮只触发 host-b
+      时，host-a 的旧产物会顶替 host-b 的名额。
     - 限定在本轮**水位线** ``since`` 之后：增量扫描复用同一个 ``plan_run_id``，所以
       同一台 host 上一轮留下的产物会在本轮首检就计数，轮询立刻跳出，该 host 这轮的
       新产物赶不上 merge。``since`` 取下发 ``scan_now`` 之前的时刻；``created_at``
       与它同为 backend 进程侧 UTC 时间（模型是 Python default，不是库端 now()），
       不存在时钟偏差。
-    - ``require_platforms``（#1071 / R10-F02）：非空时，host 必须对每个平台都有
-      ≥1 条产物才计数。否则 MTK 先到即可满足「host 数齐了」并进 merge，UNISOC
-      文件漏入本轮。``saq_tasks`` 传入 ``DEDUP_PLATFORMS``；单测/兼容调用可省略。
+    - 按**平台分区**分别判定（``scan_artifact_uri_platform``）：只看 host 有没有
+      产物，会让 MTK 先到即满足「host 齐了」并进 merge，UNISOC 产物漏出本轮。
+
+    host 级计数按 host 去重、不按产物文件数：每台 host 上送 2 个匹配文件
+    （``_org.xls`` 与 ``_org_dedup_org_*.xls``），拿文件数跟 host 数比会让「一台
+    上送完毕」冒充「全部齐了」。
     """
-    if not host_ids:
-        return 0
+    hosts = [str(h) for h in expected if h]
+    if not hosts:
+        return ScanCompleteness(0, 0, 0)
 
     from backend.core.database import SessionLocal
     from backend.core.dedup_platform import scan_artifact_uri_platform
-    from sqlalchemy import distinct, func
 
     db = SessionLocal()
     try:
-        if not require_platforms:
-            return int(
-                db.execute(
-                    select(func.count(distinct(PlanRunArtifact.host_id))).where(
-                        PlanRunArtifact.plan_run_id == plan_run_id,
-                        PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
-                        PlanRunArtifact.host_id.in_(list(host_ids)),
-                        PlanRunArtifact.created_at >= since,
-                    )
-                ).scalar()
-                or 0
-            )
-
         rows = db.execute(
             select(PlanRunArtifact.host_id, PlanRunArtifact.storage_uri).where(
                 PlanRunArtifact.plan_run_id == plan_run_id,
                 PlanRunArtifact.artifact_type == ARTIFACT_TYPE_SCAN,
-                PlanRunArtifact.host_id.in_(list(host_ids)),
+                PlanRunArtifact.host_id.in_(hosts),
                 PlanRunArtifact.created_at >= since,
             )
         ).all()
-        platforms_by_host: dict[str, set[str]] = {}
-        for host_id, uri in rows:
-            if not host_id:
-                continue
-            platforms_by_host.setdefault(host_id, set()).add(
-                scan_artifact_uri_platform(uri or ""),
-            )
-        required = {str(p) for p in require_platforms}
-        return sum(
-            1
-            for hid in host_ids
-            if required.issubset(platforms_by_host.get(hid, set()))
-        )
     finally:
         db.close()
+
+    platforms_by_host: dict[str, set[str]] = {}
+    for host_id, uri in rows:
+        if not host_id:
+            continue
+        platforms_by_host.setdefault(str(host_id), set()).add(
+            scan_artifact_uri_platform(uri or ""),
+        )
+
+    units_expected = sum(len(set(platforms)) for platforms in expected.values())
+    units_satisfied = sum(
+        len(set(platforms) & platforms_by_host.get(str(host_id), set()))
+        for host_id, platforms in expected.items()
+    )
+    return ScanCompleteness(
+        hosts_with_artifacts=sum(
+            1 for host_id in expected if platforms_by_host.get(str(host_id))
+        ),
+        units_satisfied=units_satisfied,
+        units_expected=units_expected,
+    )
 
 
 def record_scan_archive_state(
@@ -431,6 +458,33 @@ def run_merge_sync(
     return "ok"
 
 
+#: 单平台「本轮无产出可归因报表」记录值（无工具 / 无本轮 org 文件，二者在聚合层等价）。
+_MERGE_PLATFORM_NO_INPUT = "no_input"
+
+
+def _record_merge_platforms(plan_run_id: int, outcomes: dict[str, str]) -> None:
+    """逐平台 merge 结果写入 ``run_context.merge_platforms``（可观测，不改控制流）。
+
+    与 ``record_scan_archive_state`` 同款取向：记录失败不得影响 merge 结论。
+    """
+    if not outcomes:
+        return
+    try:
+        from backend.core.database import SessionLocal
+        from backend.services.plan_run_context import write_run_context_section
+
+        db = SessionLocal()
+        try:
+            write_run_context_section(db, plan_run_id, "merge_platforms", {
+                "platforms": dict(outcomes),
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            })
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("merge_platforms_record_failed plan_run=%d", plan_run_id)
+
+
 def run_merge_all_platforms_sync(
     plan_run_id: int,
     *,
@@ -441,11 +495,20 @@ def run_merge_all_platforms_sync(
     """各平台 merge；返回 ``ok`` / ``skipped_failed`` / ``""``。
 
     任一平台 ``ok`` → ``ok``；全部为 ``skipped_failed`` → ``skipped_failed``；
-    否则（含工具失败空串）→ ``""``。
+    否则 → ``""``。
+
+    工具/校验/发布**真失败时 :func:`run_merge_sync` 直接 raise**——异常不在本函数
+    吞掉，向上传播给 SAQ 重试与 ``#1527`` 的失败收敛。本函数只聚合「正常返回」的
+    三种结果：``ok`` / ``skipped_failed`` / 空串（无工具或无本轮 org 文件）。
+
+    逐平台结果写入 ``run_context.merge_platforms``（见
+    :func:`_record_merge_platforms`）：多平台路由「哪个平台这一轮出了报表、哪个
+    没有输入」此前只能靠查中心目录反推，ADR-0032 B1 的分平台语义缺一个可查落点。
     """
     any_ok = False
     saw_skip_failed = False
-    saw_hard_fail = False
+    saw_empty = False
+    outcomes: dict[str, str] = {}
     for platform in DEDUP_PLATFORMS:
         result = run_merge_sync(
             plan_run_id,
@@ -456,13 +519,22 @@ def run_merge_all_platforms_sync(
         )
         if result == "ok":
             any_ok = True
+            outcomes[platform] = "ok"
         elif result == "skipped_failed":
             saw_skip_failed = True
+            outcomes[platform] = "skipped_failed"
         else:
-            saw_hard_fail = True
+            saw_empty = True
+            outcomes[platform] = _MERGE_PLATFORM_NO_INPUT
+    logger.info(
+        "merge_platforms plan_run=%d %s",
+        plan_run_id,
+        " ".join(f"{name}={status}" for name, status in outcomes.items()),
+    )
+    _record_merge_platforms(plan_run_id, outcomes)
     if any_ok:
         return "ok"
-    if saw_skip_failed and not saw_hard_fail:
+    if saw_skip_failed and not saw_empty:
         return "skipped_failed"
     return ""
 

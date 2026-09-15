@@ -188,7 +188,13 @@ enqueue(event_id, force?)
 
 ### 3.3 `_MAX_SPILL_PER_CYCLE`
 
-保持 20：每轮 spill 周期最多 enqueue 20 个 `LOCAL` 事件，防止一次打满 CIFS。
+常态保持 20：每轮 spill 周期最多 enqueue 20 个 `LOCAL` 事件，防止一次打满 CIFS。
+
+**临界水位分支（#741，单轮上限不再恒为 20）**：`usage_pct ≥ STP_HDD_SPILL_CRITICAL_PCT`
+（默认 98.0）时，`_spill_budget()` 返回 `max(_MAX_SPILL_PER_CYCLE, STP_HDD_SPILL_CRITICAL_BATCH)`
+= **100**（默认）——磁盘濒满时优先腾退，代价是单轮 CIFS 压力放大。预算每次 spill 时按
+**当时的** usage 重算，回落到临界水位以下即回到 20。高水位未回落时另有
+`STP_HDD_SPILL_CATCHUP_INTERVAL`（默认 30s）控制追打间隔（#1522）。
 
 ### 3.4 SSD 禁用条件
 
@@ -261,9 +267,6 @@ class EventMetadata:
 class PlatformCollector(Protocol):
     platform: str
 
-    def detect(
-        self, shell_fn: Callable[[str, int], Optional[str]], serial: str,
-    ) -> bool: ...
     def parse_metadata(self, event_dir: Path) -> EventMetadata: ...
 ```
 
@@ -276,8 +279,9 @@ JobSession 组装时经 `get_collector_for_platform` 一次性确定），成功
 ### 5.2 Reconciler 错误约定
 
 - `CollectorError`：记日志 + `tick_errors++`，不 crash 线程
-- 协议中的 `detect()` **当前零调用点**（平台判定实际走 `detect_device_platform` +
-  `get_collector_for_platform`，`job_session.py`）；保留接口但勿据本文推演运行时行为
+- 协议中的 `detect()` **已于 2026-09-15 删除**（ADR-0032 R4-a a1 裁决）：平台判定的
+  唯一权威是 `detect_device_platform`（`job_session.py`），协议只保留 `platform` +
+  `parse_metadata`；勿据本文旧版推演运行时行为
 
 ### 5.3 平台路由（ADR-0032）
 
@@ -299,7 +303,7 @@ JobSession 组装时经 `get_collector_for_platform` 一次性确定），成功
 |---|---|---|---|
 | MTK | ✓ | ✓ | ✓（主线） |
 | UNISOC | ✓（collector + reconciler，ADR-0032） | 见 R09 台账 #1055 相关项 | 待补 |
-| QCOM | stub（`detect` False、`parse_metadata` raise） | —（#73 延期，不阻塞主线） | — |
+| QCOM | stub（`parse_metadata` raise）；「平台未支持」态由控制面派生标注（R4-b b1） | —（#73 延期，不阻塞主线） | — |
 
 勿以「模块存在」代替「端到端可用」表述——三者按上表分别陈述。
 

@@ -2031,6 +2031,7 @@ def _aggregate_watcher_platform_buckets(
 ) -> list[WatcherPlatformBucketOut]:
     if not job_ids:
         return []
+    from backend.core.dedup_platform import has_collection_impl
     rows = db.execute(
         select(
             func.coalesce(Device.platform, "UNKNOWN").label("platform"),
@@ -2127,6 +2128,8 @@ def _aggregate_watcher_platform_buckets(
                 affected_device_count=int(affected_total),
                 running_device_count=running_by_platform.get(platform, 0),
                 participating_device_count=participating_by_platform.get(platform, 0),
+                # R4-b b1：让「平台未支持」在 UI 上可与「没有异常」区分。
+                reconciler_supported=has_collection_impl(platform),
             )
         )
     return buckets
