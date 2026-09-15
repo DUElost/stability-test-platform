@@ -9,6 +9,10 @@
    这一层机械拦截。
 2. **场景层（promtool 可用时跑）**：``promtool test rules`` 用真实标签形状的
    样本证明修复过的规则可触发；runner 无 promtool 时显式 skip，不影响结构层。
+
+场景文件的 ``input_series`` 也走结构层（``test_scenario_input_series_match_metric_registry``，
+#2152 折叠自 #2144）：CI 没有 promtool，那一层恒 skip，样本名字/标签错了就只能靠这里拦住。
+同一事实不留两套标准——#2144 那个文件是本结构层的子集（不看标签），已删除。
 """
 from __future__ import annotations
 
@@ -147,6 +151,104 @@ def test_alert_selectors_match_metric_registry():
             if unknown:
                 problems.append(f"{alert}: {name} 上未知标签 {unknown}")
     assert not problems, "告警选择器与指标注册表不一致：\n" + "\n".join(problems)
+
+
+# promtool 的 ``input_series`` 形状是 ``name{k="v",…}``。**不复用** ``_selectors``：
+# 那里的标签块用 ``[^}]*`` 截断，而本仓库的 endpoint 标签值是**路由模板**
+# （``endpoint="/api/v1/jobs/{id}/complete"``）——值里的 ``{id}`` 会让 `}` 提前闭合，
+# 把 ``complete`` / ``status_code`` 误读成指标名。故按该形状单写一个解析器，
+# 配合下面的自证用例与「解析不出即报错」判据，不允许静默放过。
+_SERIES_RE = re.compile(
+    r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)\s*(?:\{(?P<labels>.*)\})?\s*$"
+)
+_SERIES_LABEL_RE = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"([^"]*)"')
+
+
+def _series_selector(text: str) -> tuple[str, list[str]]:
+    """单条 ``input_series`` → ``(指标名, 标签名列表)``；形态变化时**显式报错**。"""
+    match = _SERIES_RE.match(text.strip())
+    assert match is not None, (
+        f"无法解析场景输入序列 {text!r}——写法变化需同步 _SERIES_RE，"
+        "否则本守卫会静默失去覆盖"
+    )
+    labels = [m.group(1) for m in _SERIES_LABEL_RE.finditer(match.group("labels") or "")]
+    return match.group("name"), labels
+
+
+def _scenario_input_series() -> list[str]:
+    """promtool 场景文件里所有 ``series:`` 输入序列（字符串形态 ``name{a="b"}``）。"""
+    data = yaml.safe_load(SCENARIOS.read_text(encoding="utf-8"))
+    found: list[str] = []
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "series" and isinstance(value, str):
+                    found.append(value)
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    return found
+
+
+def test_series_selector_parser_self_proof():
+    """场景序列解析器自证：含 ``{id}`` 的 endpoint 值不得被截断。
+
+    这条正是本单折叠时踩到的形态：复用 ``_selectors`` 会把
+    ``endpoint="/api/v1/jobs/{id}/complete"`` 之后的 ``complete`` 当成指标名。
+    """
+    assert _series_selector('stability_api_requests_total{method="POST",'
+                            'endpoint="/api/v1/jobs/{id}/complete",status_code="404"}') == (
+        "stability_api_requests_total", ["method", "endpoint", "status_code"])
+    assert _series_selector("stability_patrol_failure_streak_observed_count") == (
+        "stability_patrol_failure_streak_observed_count", [])
+    assert _series_selector('stability_patrol_failure_streak_observed_bucket{le="+Inf"}') == (
+        "stability_patrol_failure_streak_observed_bucket", ["le"])
+
+
+def test_scenario_input_series_match_metric_registry():
+    """场景文件的**输入序列**也要对上注册表（#2152 折叠自 #2144，并校验标签）。
+
+    ``#2144`` 的 ``tests/test_prometheus_alert_metric_names.py`` 与本结构层校验同一条事实
+    （规则 ↔ 注册表），却是它的子集（不看标签），唯一新增点是场景文件的 ``series:``——
+    故折叠到这里，只保留那一条新增点。
+
+    为什么值得单独校验：CI runner 没有 promtool，``test_alert_scenarios_fire_with_promtool``
+    恒 skip，场景文件因此**从不被真正执行**。它的输入序列若指向不存在的指标或标签，
+    规则永远匹配不到样本——"这条告警可触发"的证据其实是空转，与 ``#787`` / ``#2089``
+    同源（同一事实的两处独立声明，且「没有告警」看起来与「一切正常」一样）。
+    """
+    index, non_queryable = metric_registry_index()
+    series_list = _scenario_input_series()
+    assert series_list, "场景文件未解析出任何 input_series——本用例会因解析退化而空跑"
+
+    problems: list[str] = []
+    derived_seen: list[str] = []
+    for series in series_list:
+        name, labels = _series_selector(series)
+        if name.endswith(("_bucket", "_count", "_sum")):
+            derived_seen.append(name)
+        if name in non_queryable:
+            problems.append(f"{series}: {name} 是 Histogram/Summary 基础名，须用派生序列")
+            continue
+        if name not in index:
+            problems.append(f"{series}: 未知指标 {name}")
+            continue
+        unknown = sorted(set(labels) - index[name])
+        if unknown:
+            problems.append(f"{series}: {name} 上未知标签 {unknown}")
+    # 派生序列的 `le` 放行分支必须真的被用到，否则该 allowance 是死代码
+    assert derived_seen, (
+        "场景文件没有任何 _bucket/_count/_sum 输入——直方图告警的样本形状已不受本用例覆盖"
+    )
+    assert not problems, (
+        "promtool 场景输入序列与指标注册表不一致：\n" + "\n".join(problems)
+        + "\n（CI 无 promtool，该文件从不真跑；名字/标签错了只会让场景证据空转）"
+    )
 
 
 def test_alert_aggregation_labels_match_metric_registry():
