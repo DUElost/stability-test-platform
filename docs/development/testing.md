@@ -145,3 +145,30 @@ npx vitest run src/pages/execution/PlanRunDetailPage.test.tsx
 - 控制面全量可能较慢；可按文件跑 `-x`  
 - E2E dedup extract 需共享存储环境  
 - **mock `subprocess.Popen` 必须补全 `stdout`/`stderr`（#123）**：`pipeline_engine._pump_process` 用 reader 线程逐行读流；未配置的 `MagicMock` 流会让 `readline()` 永不返回空串、reader 无限 append，内存以数百 MB/s 增长直至 OOM（曾导致整机冻结）。写法：`proc.stdout = io.StringIO(""); proc.stderr = io.StringIO("")`。整目录验证建议套内存上限：`systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- venv/bin/python -m pytest backend/agent/tests/ -q`
+
+## 9. 真机清理三态回归（夹具，#2162）
+
+teardown 类脚本（`monkey_teardown` / `gpu_finish` / `powercycle_finish` / `sleep_finish`…）的
+「清理 + 回读验证」必须覆盖三态：**① 删除成功 / ② 残留转红 / ③ 探测不可用转红**。真机不在
+默认 CI，用夹具一键回归：
+
+```bash
+# 在 agent 宿主机上（该机有 adb，且脚本已部署到 /opt/stability-test-agent/agent/scripts）
+python3 tools/dev/teardown_cleanup_states.py --serial <SERIAL> --script monkey_teardown
+python3 tools/dev/teardown_cleanup_states.py --serial <SERIAL> --script gpu_finish --json
+
+# 从控制面经 ansible 下发执行
+ansible -i ~/hosts.ini <host> -m copy -a 'src=tools/dev/teardown_cleanup_states.py dest=/tmp/ mode=0644'
+ansible -i ~/hosts.ini <host> -m shell -a 'python3 /tmp/teardown_cleanup_states.py --serial <SERIAL> --script monkey_teardown'
+```
+
+退出码：`0` 全通过；`1` 有用例失败（**实现**行为不符）；`2` 夹具错误（环境/前置自检不满足）。
+
+两条设计规则（都来自真机踩坑）：
+
+- **构造必须消除竞态**：② 用设备端无间隔紧凑循环重建目标；带 `sleep` 的循环会与探测形成
+  时序空档，把「实现正确」误判成失败（2026-09-15 真机验证时 A2/B2 各假阴性一次）。
+- **③ 用真实 adb**：把探测那一跳指向不存在的 serial（真实 rc≠0），不 stub 探测输出——
+  stub 只能验证测试自己的想象。
+- 前置自检（循环存活、目标确实被重建）不过 → 报**夹具错误**而非用例失败；设备上有
+  monkey/aim 相关进程时默认拒跑（`--force` 越过）。
