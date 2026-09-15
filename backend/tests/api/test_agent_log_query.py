@@ -77,9 +77,19 @@ def _audits(db, host_id):
     )
 
 
-def test_retired_host_log_tail_is_allowed_and_audited(client, sample_host, db_session, monkeypatch):
-    """退役机的尾读**允许**（回收类，不拒绝）+ **落审计**（ADR-0038 D-5）。"""
+def test_retired_host_log_tail_is_allowed_and_audited(
+    client, sample_host, db_session, engine, monkeypatch,
+):
+    """退役机的尾读**允许**（回收类，不拒绝）+ **落审计且已提交**（ADR-0038 D-5）。
+
+    #2047：断言必须用**独立连接**读同一张表。本端点走 `get_db()`，请求结束只
+    `close()`——只 flush 未 commit 的行会在请求结束时被回滚，而同一 `db_session`
+    能看到它（conftest 的 client 把 `get_db` 覆盖成同一个 session）。即：同 session
+    的断言无法区分「flush 过」与「已提交」，本用例的独立连接可以。
+    """
     from datetime import datetime, timezone
+
+    from sqlalchemy import text
 
     _ssh_creds(monkeypatch)
     sample_host.retired_at = datetime.now(timezone.utc)
@@ -99,6 +109,19 @@ def test_retired_host_log_tail_is_allowed_and_audited(client, sample_host, db_se
     assert len(rows) == 1, "退役机尾读必须落审计"
     details = rows[0].details if isinstance(rows[0].details, dict) else {}
     assert details.get("log_path") == "/opt/stability-test-agent/logs/agent.log"
+
+    with engine.connect() as conn:  # 另一个连接 ⇒ 只能看到已提交的数据
+        committed = conn.execute(
+            text(
+                "SELECT count(*) FROM audit_logs"
+                " WHERE action = :action AND resource_id = :rid"
+            ),
+            {"action": "host_retired_log_tail", "rid": str(sample_host.id)},
+        ).scalar()
+    assert committed == 1, (
+        "退役机尾读审计必须已提交：请求结束 get_db() 只 close()，"
+        "仅 flush 的行会被回滚（#2047）"
+    )
 
 
 def test_active_host_log_tail_is_not_audited(client, sample_host, db_session, monkeypatch):

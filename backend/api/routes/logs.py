@@ -252,6 +252,10 @@ def _audit_retired_log_tail(db: Session, host: Host, query: AgentLogQuery) -> No
 
     端点由 agent secret 认证、无用户身份，故只记调用事实与目标主机；不加
     `user_id`/`username`（避免伪造一个并不存在的身份）。
+
+    **必须提交**（#2047）：本端点走 `get_db()`，请求结束只有 `close()`，未提交事务
+    随之回滚——`record_audit` 的 `begin_nested()+flush()` 不等于留痕。调用点在任何
+    业务写入之前（见 `query_agent_logs`），故此处 commit 只提交本次审计行。
     """
     try:
         record_audit(
@@ -267,8 +271,14 @@ def _audit_retired_log_tail(db: Session, host: Host, query: AgentLogQuery) -> No
             },
             strict=False,
         )
+        db.commit()
     except Exception as exc:  # noqa: BLE001 — 审计不阻断只读取证（见 docstring）
         logger.warning("audit_retired_log_tail_failed host=%s: %s", host.id, exc)
+        # 提交/写入失败后回滚，避免把会话留在失败事务里影响后续取号路径。
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 — 回滚失败不得影响只读端点主流程
+            logger.warning("audit_retired_log_tail_rollback_failed host=%s", host.id)
 
 
 @router.post("/agent/logs", response_model=AgentLogOut)
