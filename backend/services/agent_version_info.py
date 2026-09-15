@@ -120,6 +120,8 @@ def finalize_hot_update_outcome(
             "env_paths_missing": result.get("env_paths_missing", {}),
             "code_version": result.get("code_version", code_version),
             "priv_mode": result.get("priv_mode", ""),
+            # #2024：资源层「wrapper 缺 apply-resources → 显式失败」哨兵（审计可见）
+            "resources_priv_fallback": bool(result.get("resources_priv_fallback")),
             "duration_ms": result.get("duration_ms"),
             "message": result.get("message", ""),
         },
