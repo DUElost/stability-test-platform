@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DedupReportCard from './DedupReportCard';
 import { api } from '@/utils/api';
+import type { RunContextExtractSummary } from '@/utils/api/types';
 
 vi.mock('@/utils/api', () => ({
   api: {
@@ -32,6 +33,21 @@ const queryClient = new QueryClient({
 const wrapper = ({ children }: { children: ReactNode }) => (
   <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 );
+
+/**
+ * #2186 的两个新键尚未登记进 `types.ts`（该目录在窗被其他 Execution 声明），
+ * 组件侧是就地收窄读取，故测试用断言构造（并保留"未登记"这一事实的可见性）。
+ */
+const extractSummaryWith = (over: Record<string, unknown>) =>
+  ({
+    targets: 3,
+    copied: 1,
+    missing: 2,
+    existing: 0,
+    merge_xls_copied: 1,
+    archived: 0,
+    ...over,
+  }) as RunContextExtractSummary;
 
 describe('DedupReportCard', () => {
   beforeEach(() => {
@@ -207,6 +223,70 @@ describe('DedupReportCard', () => {
 
     const el = await screen.findByTestId('upload-not-ready');
     expect(el.textContent).toContain('brand_new_reason');
+  });
+
+  it('#2186: 缺失清单可下钻（此前只有「缺失 N」）', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+    });
+
+    render(
+      <DedupReportCard
+        runId={1}
+        extractSummary={extractSummaryWith({
+          missing: 2,
+          missing_total: 2,
+          missing_items: ['/nfs/devices/1/2026_0908_a.NE', '/nfs/devices/1/2026_0908_b.JE'],
+        })}
+      />,
+      { wrapper },
+    );
+
+    const block = await screen.findByTestId('extract-missing-items');
+    expect(block.textContent).toContain('提取缺失 2 项');
+    expect(block.textContent).toContain('/nfs/devices/1/2026_0908_a.NE');
+    expect(block.textContent).toContain('/nfs/devices/1/2026_0908_b.JE');
+    expect(screen.queryByTestId('extract-missing-more')).toBeNull();
+  });
+
+  it('#2186: 清单被截断时明说还有多少条', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+    });
+
+    render(
+      <DedupReportCard
+        runId={1}
+        extractSummary={extractSummaryWith({
+          missing: 26,
+          missing_total: 26,
+          missing_items: ['/nfs/devices/1/m00', '/nfs/devices/1/m01'],
+        })}
+      />,
+      { wrapper },
+    );
+
+    expect(await screen.findByTestId('extract-missing-more')).toHaveTextContent(
+      '还有 24 条未列出（仅列前 2 条）',
+    );
+  });
+
+  it('#2186: 有缺口但无清单（旧数据）不得读成「没有缺口」', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+    });
+
+    render(
+      <DedupReportCard runId={1} extractSummary={extractSummaryWith({ missing: 3 })} />,
+      { wrapper },
+    );
+
+    const block = await screen.findByTestId('extract-missing-items');
+    expect(block.textContent).toContain('提取缺失 3 项');
+    expect(block.textContent).toContain('该次运行未记录清单');
   });
 
   it('#1195: query failure shows error state, not the scan-empty CTA', async () => {

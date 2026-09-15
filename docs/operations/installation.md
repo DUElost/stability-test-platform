@@ -209,6 +209,9 @@ sudo ./deploy/install.sh handover
 - `install-state.json`（0700 目录、0600 文件、flock 互斥）记录阶段与 `runs` 计数；
 - 同站点并发安装被拒绝（`state_locked`）；`--dry-run` 只验证与规划；
 - 部分完成后重跑从缺的阶段继续；不要为了「干净重装」删除部署根——先 `mv` 到一边。
+- **升级已装站点时 `--dry-run` 会报 `install.s3.schema` FAIL**：dry-run 不落新树，而该检查
+  比的是部署根里那份 alembic 的 head（仍是旧树）与发布物清单的 `schema_target`。这是
+  dry-run 的已知局限，不是配置错——正式跑（不带 `--dry-run`）会先落新树再比对；
 
 ## 7. 离线与切换发布物
 
