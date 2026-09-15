@@ -136,6 +136,21 @@ fi
 
 # 1.1 sudo 权限在步骤 2.1 由提权 wrapper bootstrap 生成（#1250 / ADR-0037）
 
+# 1.2 刷机前置：Agent 用户加入 dialout（#2133 / ADR-0037 D5）
+# 运行期不再 usermod（提权面收敛为 wrapper 固定子命令，无 dialout 面）；
+# 成员资格在安装期保证。本进程组集合不刷新无妨——服务在步骤 8 才启动。
+if getent group dialout >/dev/null 2>&1; then
+    if id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx dialout; then
+        echo_info "用户 $USER 已在 dialout 组"
+    elif usermod -aG dialout "$USER"; then
+        echo_info "用户 $USER 已加入 dialout 组（服务启动时生效）"
+    else
+        echo_warn "加入 dialout 组失败；刷机将依赖 udev 0666 规则"
+    fi
+else
+    echo_warn "系统无 dialout 组，跳过（刷机依赖 udev 0666 规则）"
+fi
+
 # 2. 创建目录结构
 echo_info "创建目录结构..."
 mkdir -p "$INSTALL_DIR"/{agent,logs,tmp,venv,resources/aimonkey}
@@ -220,6 +235,50 @@ if [ -d "$FLASHTOOL_DIR" ]; then
             udevadm trigger 2>/dev/null && \
             echo_info "udev 规则已部署: 99-ttyacms.rules" || \
             echo_warn "udev 规则部署失败，刷机可能需要 sudo 才能访问 USB"
+    fi
+fi
+
+# 4c. 刷机前置归位（#2133 / ADR-0037 D5）
+# 运行期不再装包/写规则（flash_preflight v1.0.2 只检不修）；由安装链保证：
+#   - MTK ttyACM 0666 固定规则——此前该规则只由旧版 flash_preflight 的
+#     sudo 修复运行期写入（install 链只装 99-ttyacms.rules = ModemManager
+#     ignore）；内容与 wrapper `ensure-udev-rule` 同源；
+#   - Qt/X 运行库五件（flash_tool 依赖；缺包时 preflight 会明确失败并指引）。
+# 离线/精简装机可用 AGENT_SKIP_FLASH_PREREQ_PKGS=1 跳过包安装。
+UDEV_MTK_RULE="/etc/udev/rules.d/98-ttyacm-mtk.rules"
+UDEV_MTK_LINE='KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", MODE="0666"'
+if [ -d /etc/udev/rules.d ]; then
+    printf '%s\n' "$UDEV_MTK_LINE" > "$UDEV_MTK_RULE" 2>/dev/null && \
+        chmod 0644 "$UDEV_MTK_RULE" && \
+        udevadm control --reload-rules 2>/dev/null && \
+        udevadm trigger 2>/dev/null && \
+        echo_info "MTK ttyACM 0666 规则已部署: 98-ttyacm-mtk.rules" || \
+        echo_warn "MTK ttyACM 0666 规则部署失败，刷机将依赖 wrapper ensure-udev-rule"
+fi
+
+pkg_installed() {
+    [ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" = "install ok installed" ]
+}
+if [ "${AGENT_SKIP_FLASH_PREREQ_PKGS:-0}" != "1" ] && command -v dpkg-query >/dev/null 2>&1; then
+    FLASH_MISSING=""
+    for pkg in libice6 libsm6 libxrender1 libfontconfig1 libglib2.0-0; do
+        if ! pkg_installed "$pkg"; then
+            case "$pkg" in
+                *-0) pkg_installed "${pkg}t64" || FLASH_MISSING="$FLASH_MISSING $pkg" ;;
+                *) FLASH_MISSING="$FLASH_MISSING $pkg" ;;
+            esac
+        fi
+    done
+    if [ -n "$FLASH_MISSING" ]; then
+        echo_info "安装刷机依赖包:$FLASH_MISSING"
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $FLASH_MISSING; then
+            echo_info "刷机依赖包就绪"
+        else
+            echo_warn "刷机依赖包安装失败（离线/镜像不可用？）——flash_preflight 将报缺包并按指引补装"
+        fi
+    else
+        echo_info "刷机依赖包已就绪"
     fi
 fi
 

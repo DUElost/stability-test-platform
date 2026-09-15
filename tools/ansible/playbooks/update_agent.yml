@@ -752,3 +752,89 @@
       failed_when: false
       no_log: true
       when: agent_upgrade_gate_response.status | default(0) == 200
+
+    # ── 刷机前置归位（#2133 / ADR-0037 D5，opt-in）────────────────────────
+    # 运行期不再装包/加组/写规则（wrapper 窄面只提供固定 udev 自愈）；本段由
+    # 运维显式开启（-e agent_ensure_flash_prereqs=true）给刷机主机补齐：
+    #   dialout 成员 + MTK ttyACM 0666 固定规则 + Qt/X 运行库五件。
+    # 默认关闭：常规更新不触碰系统包面。刻意放在门禁释放之后——本段失败不得
+    # 让升级门禁悬挂（#1249 教训）；缺失项由 flash_preflight 如实报出。
+    - name: Check dialout group exists (#2133)
+      become: true
+      ansible.builtin.command: getent group dialout
+      register: agent_flash_dialout_group
+      changed_when: false
+      failed_when: false
+      when: agent_ensure_flash_prereqs | default(false) | bool
+
+    - name: Ensure agent user is in dialout group (#2133)
+      become: true
+      ansible.builtin.user:
+        name: "{{ agent_user }}"
+        groups: dialout
+        append: true
+      register: agent_flash_dialout
+      failed_when: false
+      when:
+        - agent_ensure_flash_prereqs | default(false) | bool
+        - agent_flash_dialout_group.rc | default(1) == 0
+
+    - name: Ensure MTK ttyACM 0666 udev rule (#2133)
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/98-ttyacm-mtk.rules
+        content: "KERNEL==\"ttyACM*\", ATTRS{idVendor}==\"0e8d\", MODE=\"0666\"\n"
+        owner: root
+        group: root
+        mode: "0644"
+      register: agent_flash_udev_rule
+      failed_when: false
+      when: agent_ensure_flash_prereqs | default(false) | bool
+
+    - name: Reload udev rules after rule change (#2133)
+      become: true
+      ansible.builtin.command: udevadm control --reload
+      changed_when: false
+      failed_when: false
+      when:
+        - agent_ensure_flash_prereqs | default(false) | bool
+        - agent_flash_udev_rule.changed | default(false)
+
+    - name: Ensure flash prerequisite packages (#2133)
+      become: true
+      ansible.builtin.shell: |
+        set -o pipefail
+        pkg_installed() {
+          [ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" = "install ok installed" ]
+        }
+        if ! command -v dpkg-query >/dev/null 2>&1; then
+          echo "SKIP: non-dpkg host"; exit 0
+        fi
+        missing=""
+        for pkg in {{ agent_flash_prereq_packages | join(' ') }}; do
+          if ! pkg_installed "$pkg"; then
+            case "$pkg" in
+              *-0) pkg_installed "${pkg}t64" || missing="$missing $pkg" ;;
+              *) missing="$missing $pkg" ;;
+            esac
+          fi
+        done
+        if [ -z "$missing" ]; then echo "OK: flash prereq packages present"; exit 0; fi
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $missing
+        echo "INSTALLED:$missing"
+      args:
+        executable: /bin/bash
+      register: agent_flash_prereq_pkgs
+      changed_when: "'INSTALLED:' in agent_flash_prereq_pkgs.stdout"
+      failed_when: false
+      when: agent_ensure_flash_prereqs | default(false) | bool
+
+    - name: Report flash prerequisite provisioning result (#2133)
+      ansible.builtin.debug:
+        msg: >-
+          flash prereqs: dialout_changed={{ agent_flash_dialout.changed | default('skipped') }}
+          udev_rule_changed={{ agent_flash_udev_rule.changed | default('skipped') }}
+          packages_rc={{ agent_flash_prereq_pkgs.rc | default('skipped') }}
+          packages_out={{ agent_flash_prereq_pkgs.stdout_lines | default([]) | join(' | ') }}
+      when: agent_ensure_flash_prereqs | default(false) | bool
