@@ -28,6 +28,69 @@
           AGENT_SECRET（至少 16 字符），或通过环境变量 AGENT_SECRET /
           vault_agent_secret 覆盖后重试。
 
+    # #2166（#2133 实测事故防复发）：playbook 以 rsync --delete 同步 agent 树，
+    # 而 backend/agent/resources/（230MB）**不在 git**——任何 worktree 都没有它；
+    # 源树缺 resources 时会把主机侧 agent/resources/ 当"已删除"清空
+    # （2026-09-15 实测：.82 被削到 9.3M、flashtool 全失，canary 失败）。
+    # 前置断言：源树必须有 resources/ 且含 flashtool 入口；确要清空资源面时
+    # 用 -e agent_allow_empty_resources=true 显式放行（会打警告并在 summary 标注）。
+    - name: Stat source-tree resources dir (#2166)
+      delegate_to: localhost
+      become: false
+      run_once: true
+      ansible.builtin.stat:
+        path: "{{ agent_source_dir }}/resources"
+        follow: true          # 2.19 起 stat.follow 默认 no：软链入树的合规做法需显式 follow
+      register: agent_source_resources_dir
+      failed_when: false
+
+    # 用 find(follow=true) 而非 fileglob：fileglob 不跟随目录软链，
+    # 会把"resources 软链进 worktree"的合规做法误判为缺失（实测）。
+    - name: Locate flashtool entry in source-tree resources (#2166)
+      delegate_to: localhost
+      become: false
+      run_once: true
+      ansible.builtin.find:
+        paths: "{{ agent_source_dir }}/resources"
+        patterns: "flash_tool"
+        recurse: true
+        file_type: file
+        follow: true
+      register: agent_source_flash_tool_find
+      failed_when: false
+
+    - name: Assert source tree carries agent resources (#2166)
+      delegate_to: localhost
+      become: false
+      run_once: true
+      ansible.builtin.assert:
+        that:
+          - agent_allow_empty_resources | default(false) | bool
+            or (agent_source_resources_dir.stat.exists | default(false)
+                and agent_source_resources_dir.stat.isdir | default(false)
+                and agent_source_flash_tool_find.matched | default(0) | int > 0)
+        fail_msg: >-
+          源树缺可分发 resources（{{ agent_source_dir }}）：
+          resources 目录 exists={{ agent_source_resources_dir.stat.exists | default(false) }}、
+          flashtool 入口 {{ agent_source_flash_tool_find.matched | default(0) }} 个。
+          本 playbook 以 rsync --delete 同步，缺 resources 会把主机侧
+          agent/resources/ 清空（#2133 实测事故：flashtool 全失）。
+          规避：① 从主 checkout 跑（该树有 resources）；② 或把 resources
+          拷入/软链入当前树（软链亦可，断言按 find follow 判定）；
+          ③ 确要清空主机资源面才用 -e agent_allow_empty_resources=true。
+        success_msg: >-
+          源树 resources 就绪：flashtool 入口 {{ agent_source_flash_tool_find.matched }} 个。
+
+    - name: Warn when syncing from a source tree without resources (#2166)
+      delegate_to: localhost
+      become: false
+      run_once: true
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: agent_allow_empty_resources=true —— 本次从无 resources 的源树同步，
+          主机侧 agent/resources/ 将被清空（与 #2133 事故同款）；仅应在确要清理资源面时使用。
+      when: agent_allow_empty_resources | default(false) | bool
+
     - name: Load agent rsync policy from role defaults
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../roles/agent_deploy/defaults/main.yml"
@@ -729,6 +792,7 @@
           code_version: "{{ agent_code_version | default('') }}"
           deps_refreshed: "{{ agent_deps_refreshed | default(false) }}"
           restart_required: "{{ agent_update_requires_restart | default(false) }}"
+          allow_empty_resources: "{{ agent_allow_empty_resources | default(false) }}"
           backup_dir: "{{ agent_backup_dir if (agent_code_change_lines | default([]) | length > 0) else 'skipped' }}"
           agentctl_backup: "{{ agent_agentctl_backup_path if (agentctl_change_lines | default([]) | length > 0) else 'skipped' }}"
           service_unit_backup: "{{ agent_service_backup_path if (agent_service_change_lines | default([]) | length > 0) else 'skipped' }}"
