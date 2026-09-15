@@ -1,13 +1,13 @@
 # ADR-0037：Agent 主机提权边界（Privilege Boundary Wrapper）
 
 - 状态：**Proposed**（待 R02 安全联审）
-- 版本记录：v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）
+- 版本记录：v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）
 - 优先级：P1
 - 目标里程碑：M7
-- 日期：2026-09-11（v0.2 修订 2026-09-15）
+- 日期：2026-09-11（v0.2 修订 2026-09-15；v0.3 修订 2026-09-15）
 - 决策者：平台研发组（R02 安全联审）
 - 标签：安全, 提权, sudoers, 热更新, Agent 主机
-- 关联：R14 台账 [#1266](https://github.com/DUElost/stability-test-platform/issues/1266)（R14-F04 [#1250](https://github.com/DUElost/stability-test-platform/issues/1250)）；R02 安全审查（联审项）；ADR-0035（主机身份与凭据方向，wrapper 鉴权面待其落地后重审）；#960（维护窗口）；#1247/#1248（热更新工件与主机本地资源保护）；[#2133](https://github.com/DUElost/stability-test-platform/issues/2133)（flash 链运行时提权收口，v0.2 新增）；[#2134](https://github.com/DUElost/stability-test-platform/issues/2134)（宽文件清除与 legacy 退役）
+- 关联：R14 台账 [#1266](https://github.com/DUElost/stability-test-platform/issues/1266)（R14-F04 [#1250](https://github.com/DUElost/stability-test-platform/issues/1250)）；R02 安全审查（联审项）；ADR-0035（主机身份与凭据方向，wrapper 鉴权面待其落地后重审）；#960（维护窗口）；#1247/#1248（热更新工件与主机本地资源保护）；[#2133](https://github.com/DUElost/stability-test-platform/issues/2133)（flash 链运行时提权收口，v0.2 新增）；[#2134](https://github.com/DUElost/stability-test-platform/issues/2134)（宽文件清除与 legacy 退役）；[#2180](https://github.com/DUElost/stability-test-platform/issues/2180)（legacy 分支与哨兵删除，v0.3）
 
 ## 1. 背景
 
@@ -64,8 +64,8 @@
   exclude+protect，#1248 语义）；`PROTECT_ONLY_PATHS`（当前
   `resources/`，ADR-0040 §4.3 P2 前置，#1950 按 §7-5 同 PR 回填）仅追加
   `--filter=protect` 不 exclude——防 `--delete` 清掉大件的同时保持分发
-  照旧，P2 载荷收缩后自然停发（legacy 路径以
-  `--filter='protect resources/'` 对称）。
+  照旧，P2 载荷收缩后自然停发。（v0.3 / #2180：legacy 路径的对称过滤面已随
+  迁移期结束删除，filter 只此一处。）
 - **D3 存量迁移**：install 链（`install_agent.sh` 内 bootstrap）与
   `update_agent.yml`（Ansible `become`）都部署 wrapper 并生成/重写
   conf 与 sudoers（visudo 校验后原子替换，失败即中止）。迁移期热更新检测
@@ -73,6 +73,13 @@
   哨兵（控制面 `priv_mode` 审计可见）；sudoers 重写完成的主机自动走
   wrapper。legacy 分支与存量宽文件在 fleet 迁移完成**且 flash 链验收通过**
   后删除/清除（判据见 §5 Revisit #1，v0.2 收严）。
+  **（v0.3 / #2180：迁移期结束，已执行。）** 48/48 台 `priv_mode=wrapper`、
+  宽文件 48/48 清除、flash 链在无宽文件主机验收通过后：远端脚本删除
+  `USE_PRIV_WRAPPER` 回退分支与全部裸 sudo 命令面，开头以
+  `sudo -n stp-agent-priv selftest`（含子命令契约校验）**fail-closed**——
+  失败即带 `update_agent.yml` 指引退出、不执行任何动作；`STP_PRIV_FALLBACK` /
+  `STP_RESOURCES_PRIV_FALLBACK` 哨兵与 `resources_priv_fallback` 审计字段
+  一并退役（`priv_mode` 只剩 `wrapper`/`unknown` 两态）。
 - **D4 显式不做**：不动 Ansible 自身的密码 become 通道（与 NOPASSWD 面
   无关）；不引入 per-host 凭据（ADR-0035 实施面）；wrapper 不放进安装
   目录，也不提供任何「任意目标路径」参数。
@@ -104,22 +111,32 @@
 - **迁移期实测偏差（2026-09-15）**：`/etc/sudoers.d/android` 宽规则仍存于
   48/48 台（含全部 wrapper 主机）——目标态不变量在清除动作完成前不成立；
   清除的前置与验收见 §5（D5 / #2133）与执行单 #2134。
-- **失败模式**：wrapper/conf 缺失 → 热更新走 legacy + 哨兵（可观测，
-  sudoers 重写后自动消失）；bootstrap 失败 → 安装/更新中止，不产出半迁移
+- **失败模式**：wrapper/conf 缺失或旧版 → 热更新 **fail-closed**（v0.3 /
+  #2180：selftest 前置失败即带 `update_agent.yml` 指引退出，`priv_mode=unknown`
+  可观测，不再回退裸 sudo）；bootstrap 失败 → 安装/更新中止，不产出半迁移
   状态；控制面不可达与维护窗口语义见 #960/#1249，不受本 ADR 影响。
 - **运维代价**：wrapper 本体更新需要 root（Ansible 更新或手工），不能走
   热更新自身——这是提权边界的设计代价，已写入 runbook。
-- **回滚**：迁移期 legacy 分支即回滚路径；sudoers 由 Ansible 重跑重写。
+- **回滚**（v0.3 / #2180 更新）：迁移期以 legacy 分支为回滚路径；迁移期结束后
+  回滚通道 = ① wrapper 缺陷按 Revisit #4 修 wrapper 发新版本；② Ansible
+  重跑重写 sudoers（`update_agent.yml`，走密码 become）；热更新本身不再有
+  降级面。
 
 ## 5. 验收与 Revisit
 
 - **验收**（#1250）：① 无法对安装目录外任意路径提权写（容器冒烟 + 校验
-  单测覆盖拒绝面）；② 热更新仍可用（wrapper 路径 + legacy 回退）；③ R02
+  单测覆盖拒绝面）；② 热更新仍可用（迁移期 = wrapper 路径 + legacy 回退；
+  v0.3 / #2180 起 = wrapper 单路径 fail-closed，实测 48/48 收敛）；③ R02
   安全联审（独立于实现，需评审一稿）。
 - **Revisit**：
   1. fleet 全部出现 `priv_mode=wrapper` **且 flash 链在无宽文件主机验收通过
      （D5 / #2133）**后：删除 legacy 分支与哨兵解析，并清除存量宽文件
-     `/etc/sudoers.d/android`（visudo 校验、canary 先行；执行单 #2134）；
+     `/etc/sudoers.d/android`（visudo 校验、canary 先行；执行单 #2134）。
+     **（2026-09-15 已执行，v0.3）** 判据达成：B 步 48/48 wrapper
+     selftest 通过、C 步 48/48 宽文件清除 + 终审全绿；legacy 删除见
+     [#2180](https://github.com/DUElost/stability-test-platform/issues/2180)
+     （`docs/notes/bug-fix/2026-09-15-retire-legacy-priv-face-2180.md`）。
+     残留观察项：#2134 的「异常设备 offline 处置」仍待尽（不在本 ADR 判据内）；
   2. ADR-0035 的 per-host 凭据落地后，重审 wrapper 的授权主体（从共享
      agent secret 切到主机身份）；
   3. flash 链运行时提权收敛（#2133）：`flash_preflight` / `flash_firmware`

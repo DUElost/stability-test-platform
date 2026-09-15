@@ -7,16 +7,17 @@
 本文件锁定三件事：
 
 1. 每个子命令能解析其**代表性真实 argv**（探针做不到的断言）；
-2. ``selftest`` 能报出接线缺陷（控制面远端脚本开头即跑它，失配则回落 legacy）；
+2. ``selftest`` 能报出接线缺陷（控制面远端脚本开头即跑它，失配即 fail-closed，#2180）；
 3. 控制面 ``_build_remote_script`` 实际发出的 ``$PRIV`` 调用**全部**被解析器接受
    ——两侧口径漂移在 PR 侧即红（#2011 形态的根因是这条断言缺失）。
+4. 跨边界哨兵：env 同步的 ``STP_ENV_SYNCED=``/``STP_ENV_PATH_MISSING=`` 由 wrapper
+   发射（#2180 起 host_updater 不再自持 env 写入），控制面解析面依赖其拼写。
 """
 
 from __future__ import annotations
 
 import argparse
 import importlib.util
-import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -188,3 +189,37 @@ def test_remote_script_priv_calls_are_accepted_by_wrapper_parser(wrapper):
         }
         for opt in options:
             assert opt in known, f"{command} 不认识 {opt}（#2011 形态：探针过、真调用挂）"
+
+
+# ── ③ 跨边界哨兵：env 同步结果由 wrapper 发射，控制面解析（#2180） ──────────
+
+
+def test_wrapper_sync_env_emits_control_plane_sentinels(wrapper):
+    """#2180：env 写入面收归 wrapper 后，`STP_ENV_SYNCED=`/`STP_ENV_PATH_MISSING=`
+    的**发射方**变成 wrapper——控制面 host_updater._parse_env_synced /
+    _parse_env_paths_missing 仍按这两个拼写解析远端 stdout。
+
+    这是跨模块的静默缝：wrapper 若改名/少打哨兵，API 只会静默退化为
+    「无 env 键同步 / 无缺失路径」，不会报错，故在此锁定。
+    """
+    import backend.services.host_updater as hu
+
+    source = WRAPPER.read_text(encoding="utf-8")
+    assert 'print("STP_ENV_SYNCED=' in source
+    assert 'print("STP_ENV_PATH_MISSING=' in source
+
+    # 控制面解析器接受 wrapper 的两种实际输出（非空与空集分支）
+    assert hu._parse_env_synced("STP_ENV_SYNCED=A,B\nSTP_ENV_PATH_MISSING=\nOK") == ["A", "B"]
+    assert hu._parse_env_paths_missing("STP_ENV_SYNCED=\nSTP_ENV_PATH_MISSING=\nOK") == {}
+
+    # 发射面唯一：远端脚本不再自带哨兵字面量
+    script = hu._build_remote_script(
+        install_dir="/opt/stability-test-agent",
+        service_name="stability-test-agent",
+        code_tar_path="/tmp/code.tar.gz",
+        resources_tar_path="/tmp/resources.tar.gz",
+        user="android",
+        group="android",
+    )
+    assert "STP_ENV_SYNCED=" not in script
+    assert "STP_ENV_PATH_MISSING=" not in script

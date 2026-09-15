@@ -126,12 +126,12 @@ _KWARG_RE = re.compile(r"""(?:production_default|default)\s*=\s*([^,\n)]+)""")
 #: 验收口径：需运维按环境/规模/机型调整的 → 登记进示例；控制面注入的派生键、
 #: 测试/开发专用、纯内部实现细节 → 在此声明并写明理由。
 _INTERNAL_ONLY: dict[str, str] = {
-    "AGENT_SECRET_B64": "控制面 hot-update 经环境变量下发的 base64 密钥载荷（传输通道，非运维配置）",
-    "ENV_OVERRIDES_B64": "同上：控制面下发的 .env 覆盖载荷（base64 JSON）",
-    "ENV_PATH_KEYS_B64": "同上：路径类键清单载荷（base64 JSON）",
+    # #2180（D 步）：AGENT_SECRET_B64 / ENV_OVERRIDES_B64 / ENV_PATH_KEYS_B64 /
+    # INSTALL_DIR 的声明已删——删除的热更新 heredoc 补丁器是它们唯一的
+    # os.environ 读取点；现只作为远端脚本内的 shell 变量经 argv 交 wrapper，
+    # 不再是控制面读取的环境变量。
     "FAKE_TAR_SLEEP": "测试夹具（模拟 tar 耗时），无常驻配置语义",
     "HOST_IP": "测试注入的 host 身份；生产由 Agent 自行解析",
-    "INSTALL_DIR": "hot-update 在目标机执行时由部署环境注入的安装目录",
     "PRECHECK_NOTIFY_DEBOUNCE_SECONDS": "precheck 通知去抖：实现细节（防重复推送），不属运维旋钮",
     "STP_AGENT_VERSION": "hot-update 写入的版本标记（派生值，不自设）",
     "STP_ALLOW_UNSAFE_TEST_DATABASE_URL": "测试守卫逃生门：仅本地测试库用，生产禁止设置",

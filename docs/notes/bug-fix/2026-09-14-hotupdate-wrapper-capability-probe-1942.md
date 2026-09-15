@@ -68,3 +68,9 @@ Class: bug-fix
   与 digest 写盘时机无关；
 - 旧 wrapper 的存量面：本单后仍会以 exit 1 明确拒绝（而非静默降级），若批量命中多台，
   应把「wrapper 版本」纳入控制面 host 视图（当前只在 `priv_mode` 哨兵中间接可见）。
+
+2026-09-15 后续（#2180，D 步）：Revisit ①②合并落地——「按需探针」升级为
+脚本头 `sudo -n stp-agent-priv selftest` **一次性子命令契约校验**（`_SUBCOMMAND_CONTRACT`
+逐条 parse 真实 argv），`write-digest --digest ""` 空跑探针删除；探针失败即
+fail-closed 且指引文案与其它 wrapper 缺失场景统一。旧 wrapper 的存量面已归零
+（48/48 最新 wrapper，`priv_mode=legacy` 不再可能）。
