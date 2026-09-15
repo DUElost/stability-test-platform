@@ -82,6 +82,34 @@ async def test_console_room_exists_process_memory():
         inst._runs.pop(key, None)
 
 
+@pytest.mark.asyncio
+async def test_console_room_check_offloads_sync_redis_off_loop(monkeypatch):
+    """#2056：注册表读的是同步 redis（timeout 2s）——不得在事件循环里调用。
+
+    原先 `await _dashboard_room_exists("console", …)` 会在 ASGI 循环线程里直接
+    执行同步 GET：Redis 慢/挂时每次订阅校验最多冻住整个服务 2s，而重连客户端会
+    密集打这条路径。改为 `asyncio.to_thread` 后，同一断言在 worker 线程完成。
+    """
+    import threading
+
+    seen: dict = {}
+
+    class _FakeConsole:
+        def status(self, ident):  # noqa: ARG002 — 只关心调用线程
+            seen["thread"] = threading.current_thread()
+            return object()  # 非 None ⇒ 房间存在
+
+    monkeypatch.setattr(
+        RunConsole, "instance", classmethod(lambda cls: _FakeConsole()),
+    )
+
+    assert await _dashboard_room_exists("console", "con-abcdef012345") is True
+    assert seen.get("thread") is not None, "status() 必须被调用"
+    assert seen["thread"] is not threading.main_thread(), (
+        "同步 redis 的 status() 必须在 worker 线程执行（否则阻塞事件循环）"
+    )
+
+
 # ── 实体存在性（DB 分支：job:/run: → job_instance，plan_run: → plan_run）──────
 
 
