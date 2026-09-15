@@ -12,7 +12,10 @@ wrapper 以文件方式加载（与部署形态一致：/usr/local/sbin 单文�
 
 from __future__ import annotations
 
+import base64
 import importlib.util
+import json
+import os
 import re
 import subprocess
 import sys
@@ -284,3 +287,111 @@ def test_smoke_script_covers_install_dir_guard():
     assert "INSTALL_DIR_GUARD_OK" in text
     assert "ANCHOR_DRIFT_GUARD_OK" in text
     assert 'for bad_dir in /etc / /usr/local /usr/local/sbin; do' in text
+
+
+# ── #2069: sync-env 值侧与键侧同档校验（换行 = 向 .env 注入新行） ──────────
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+class _SyncEnvArgs:
+    """`_sync_env` 的最小 args 替身（只带它读取的三个 b64 载荷）。"""
+
+    def __init__(self, overrides=None, path_keys=None, secret=""):
+        self.secret_b64 = _b64(secret) if secret else ""
+        self.overrides_b64 = _b64(json.dumps(overrides or {}))
+        self.path_keys_b64 = _b64(json.dumps(path_keys or []))
+
+
+def _env_dir_fd(tmp_path, body: str = "API_URL=http://cp\n"):
+    env = tmp_path / ".env"
+    env.write_text(body, encoding="utf-8")
+    return os.open(str(tmp_path), os.O_RDONLY | os.O_DIRECTORY)
+
+
+def _expect_priv_error(module, callable_, *args):
+    try:
+        callable_(*args)
+    except module.PrivError:
+        return
+    raise AssertionError("应当以 PrivError 拒绝（值内含 CR/LF/NUL）")
+
+
+def test_sync_env_rejects_newline_in_override_value(tmp_path):
+    """#2069：值内换行会顶出额外行（如 LD_PRELOAD）→ 必须拒绝且不改写 .env。"""
+    module = _load_wrapper()
+    fd = _env_dir_fd(tmp_path)
+    try:
+        _expect_priv_error(
+            module,
+            module._sync_env,
+            _SyncEnvArgs({"STP_FOO": "bar\nLD_PRELOAD=/tmp/x.so"}),
+            fd,
+        )
+    finally:
+        os.close(fd)
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "API_URL=http://cp\n"
+
+
+def test_sync_env_rejects_carriage_return_and_nul(tmp_path):
+    module = _load_wrapper()
+    for evil in ("bar\rLD_PRELOAD=/tmp/x.so", "bar\x00baz"):
+        fd = _env_dir_fd(tmp_path)
+        try:
+            _expect_priv_error(module, module._sync_env, _SyncEnvArgs({"STP_FOO": evil}), fd)
+        finally:
+            os.close(fd)
+        assert (tmp_path / ".env").read_text(encoding="utf-8") == "API_URL=http://cp\n"
+
+
+def test_sync_env_writes_normal_value(tmp_path):
+    """正向态：正常值照旧写入（拒绝面不得扩大到普通配置）。"""
+    module = _load_wrapper()
+    fd = _env_dir_fd(tmp_path)
+    try:
+        rc = module._sync_env(
+            _SyncEnvArgs({"STP_FOO": "bar", "STP_PATHS": "/srv/a:/srv/b"}),
+            fd,
+        )
+    finally:
+        os.close(fd)
+    assert rc == 0
+    body = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "API_URL=http://cp" in body
+    assert "STP_FOO=bar" in body
+    assert "STP_PATHS=/srv/a:/srv/b" in body
+
+
+def test_sync_env_rejects_newline_in_secret_payload(tmp_path):
+    """第二层防线同时覆盖 secret 分支（写入路径统一收口在 _write_env_preserving_owner）。"""
+    module = _load_wrapper()
+    fd = _env_dir_fd(tmp_path)
+    try:
+        _expect_priv_error(module, module._sync_env, _SyncEnvArgs(secret="abc\ndef"), fd)
+    finally:
+        os.close(fd)
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "API_URL=http://cp\n"
+
+
+def test_write_env_preserving_owner_is_second_line_of_defense(tmp_path):
+    """#2069：任何写路径都不得让控制字符落盘（未来新增写路径同样被拦）。"""
+    module = _load_wrapper()
+
+    class _Meta:
+        st_mode = 0o644
+        st_uid = os.getuid()
+        st_gid = os.getgid()
+
+    fd = _env_dir_fd(tmp_path)
+    try:
+        for bad in ("A=1\nB=2", "A=1\rB=2", "A=1\x00B=2"):
+            _expect_priv_error(
+                module, module._write_env_preserving_owner, fd, [bad], _Meta(),
+            )
+        # 正常行集仍可写（守卫的负向对照）
+        assert module._write_env_preserving_owner(fd, ["A=1", "B=2"], _Meta()) is None
+    finally:
+        os.close(fd)
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "A=1\nB=2\n"

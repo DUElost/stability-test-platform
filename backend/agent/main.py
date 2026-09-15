@@ -1040,6 +1040,10 @@ def main() -> None:
             )
             EventUploader.instance().start()
             operation_cap = operation_scheduler.reload_from_env()
+            # #2086：心跳/协调域的节奏旋钮原先只在构造时取值——reload 打印 done
+            # 但运行中的值不变。实例级 re-apply 补上（缓存已在上面清过）。
+            heartbeat_thread.reload_from_settings()
+            coordinator.reload_from_settings()
             runner_ok = ScanRunner.instance().is_configured()
             uploader_ok = UploadManager.instance().is_configured()
             logger.info(

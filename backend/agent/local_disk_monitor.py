@@ -159,12 +159,21 @@ class HddSpillMonitor:
             self._stop_evt.wait(self._next_wait_seconds())
 
     def _next_wait_seconds(self) -> float:
-        """#1522: 高水位未回落时按追打间隔等待；否则常规轮询间隔。"""
-        if (
-            self._catchup_needed
-            and self._SPILL_CATCHUP_INTERVAL > 0
-        ):
-            return self._SPILL_CATCHUP_INTERVAL
+        """#1522: 高水位未回落时按追打间隔等待；否则常规轮询间隔。
+
+        #2014: 本方法在守护循环的 try **之外**调用，而三个旋钮是惰性 property
+        （每次读取都会校验整个 ``DiskArchiveSettings``，含严格组）。热重载引入
+        非法严格值时 pydantic ``ValidationError`` 会从这里冒泡 → 守护线程永久
+        死亡且不留 ``hdd_spill_monitor_*`` 日志。故与同族宽容口径一致：回落常规
+        轮询间隔 + ERROR（含栈），不杀死线程（也不退化成忙循环——回落值是常规间隔）。
+        配置修好后下一次 reload 自动恢复。
+        """
+        try:
+            if self._catchup_needed and self._SPILL_CATCHUP_INTERVAL > 0:
+                return self._SPILL_CATCHUP_INTERVAL
+        except Exception:
+            logger.exception("hdd_spill_monitor_catchup_interval_unavailable")
+            return self._interval
         return self._interval
 
     def _spill_budget(self, usage_pct: float) -> int:

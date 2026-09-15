@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from backend.agent.local_disk_monitor import HddSpillMonitor
 
@@ -330,3 +334,66 @@ def test_critical_usage_uses_elevated_batch(tmp_path):
     assert n == mon._MAX_SPILL_CRITICAL
     assert spill.call_count == mon._MAX_SPILL_CRITICAL
     assert mon._catchup_needed is True
+
+
+# ── #2014: 惰性 Settings 读取失败不得杀死溢出守护线程 ─────────────────────
+
+
+def _configure_monitor(tmp_path) -> HddSpillMonitor:
+    cifs = tmp_path / "cifs"
+    cifs.mkdir()
+    return HddSpillMonitor.instance().configure(
+        hdd_root=str(tmp_path),
+        cifs_root=str(cifs),
+        spill_threshold_pct=80.0,
+        target_pct=70.0,
+        disk_usage_fn=MagicMock(return_value={"usage_percent": 10.0}),
+    )
+
+
+def test_next_wait_seconds_falls_back_on_settings_validation_error(tmp_path, disk_env):
+    """严格组被热重载写成非法值 → 回落常规间隔 + WARNING，不向调用方抛错。"""
+    mon = _configure_monitor(tmp_path)
+    mon._catchup_needed = True  # 否则 `and` 短路，压根不读该属性
+    disk_env.set("STP_LOG_ARCHIVE_GRACE_SECONDS", "soon")  # 热重载引入非法严格值
+    with pytest.raises(ValidationError):
+        # 前置：这正是 _SPILL_CATCHUP_INTERVAL 读取会撞上的异常
+        from backend.agent.settings import get_disk_archive_settings
+        get_disk_archive_settings()
+
+    assert mon._next_wait_seconds() == mon._interval
+
+
+def test_settings_validation_error_logs_warning(tmp_path, disk_env, caplog):
+    mon = _configure_monitor(tmp_path)
+    mon._catchup_needed = True
+    disk_env.set("STP_LOG_ARCHIVE_GRACE_SECONDS", "soon")
+    with caplog.at_level(logging.WARNING):
+        mon._next_wait_seconds()
+    assert any(
+        "hdd_spill_monitor_catchup_interval_unavailable" in record.message
+        for record in caplog.records
+    )
+
+
+def test_run_loop_survives_settings_validation_error(tmp_path, disk_env):
+    """回归（#2014 原始症状）：非法严格值下守护循环必须继续存活，不得静默死亡。"""
+    mon = _configure_monitor(tmp_path)
+    mon._interval = 0.02           # configure 会钳到 ≥30s；测试直接收短
+    mon._catchup_needed = True
+    with patch.object(mon, "check_once", return_value=0):
+        disk_env.set("STP_LOG_ARCHIVE_GRACE_SECONDS", "soon")
+        thread = threading.Thread(target=mon._run, daemon=True)
+        thread.start()
+        time.sleep(0.2)
+        assert thread.is_alive(), "Settings 校验异常不得杀死溢出守护线程"
+        mon._stop_evt.set()
+        thread.join(timeout=2.0)
+    assert not thread.is_alive()
+
+
+def test_next_wait_seconds_still_uses_catchup_interval(tmp_path):
+    """守卫：容错分支不得吞掉正常语义（追打间隔照旧生效）。"""
+    mon = _configure_monitor(tmp_path)
+    mon._catchup_needed = True
+    assert mon._next_wait_seconds() == mon._SPILL_CATCHUP_INTERVAL

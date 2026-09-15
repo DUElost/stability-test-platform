@@ -106,6 +106,24 @@ class HeartbeatThread:
         self._effective_slots: int = 0
         self._capacity_lock = threading.Lock()
 
+    def reload_from_settings(self) -> None:
+        """#2086：`reload_config` 的实例级 re-apply（心跳域）。
+
+        三个旋钮原先只在构造时取一次 → 热重载 `STP_HEARTBEAT_INTERVAL_MIN/MAX`、
+        `STP_ADB_REPAIR_COOLDOWN_SECONDS` 打印 done 却不生效。调用方须先
+        `reset_agent_settings_caches()`（`.env` 重读后），再调本方法。
+        `_last_adb_repair_at` 刻意不回退：改冷却值不应作废已消耗的冷却窗口。
+        """
+        _hb = get_heartbeat_settings()
+        self._min_poll_interval = _hb.stp_heartbeat_interval_min
+        self._max_poll_interval = _hb.stp_heartbeat_interval_max
+        self._adb_repair_cooldown = _hb.stp_adb_repair_cooldown_seconds
+        logger.info(
+            "heartbeat_pacing_reloaded min=%s max=%s adb_repair_cooldown=%s",
+            self._min_poll_interval, self._max_poll_interval,
+            self._adb_repair_cooldown,
+        )
+
     @property
     def latest_devices(self) -> List[Dict[str, Any]]:
         """Return the most recent device list (thread-safe)."""
