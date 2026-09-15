@@ -58,20 +58,15 @@ sudo ./deploy/agent/install.sh      # 读仓库外 ~/hosts.ini → S5（Host 仍
   5. **Agent 接入**：`/root/hosts.ini` 两容器共享凭据（0600，口令在机器本地提取、未进会话）→ `agent/install.sh`。首轮 S5 的 binding/auth/host/install/heartbeat/identity/endpoint/devices 全 PASS，仅 `install.s5.digest` FAIL——bundle 缺 `backend/agent/resources`（缺陷⑪：不在 git，清单把 host-resources 算成空集合）；补 resources 重建 bundle 后重跑，第一台 `digest_matched` PASS、第二台仍 FAIL（缺陷⑫：等待判据「任一摘要非空」提前收工，`resources` 还是上一版的值——而两台容器的摘要文件当时都正确，几分钟后 Host 上报也自动 MATCH）。
   6. **S5 修复复验（容器重装场景）**：`agent/install.sh` **RC=0**，17 项 S5 检查全 PASS（含两台 `digest_matched`、`endpoint_recorded`、`devices_discovered`）——缺陷⑫ 的等待判据修复在「重装时 resources 仍是旧值」的真实场景下验证通过。
   7. **真机接入（用户指定，Ubuntu 22.04）**：先按用户要求把 **Ubuntu 22.04 纳入支持矩阵**（纳入前实测：Agent 代码在 Python 3.10 上 `compileall` 全过、5 个依赖在有依赖解析时可下载）。真机 A（Ubuntu 22.04.2、无设备）首轮 install run 失败于 `agentctl health` 的「服务器连接」——**该机没有 curl**（Ubuntu 最小安装），而安装/自检链有 4 处依赖它（缺陷⑭）；把 curl 变成显式依赖后重跑接入。真机 B（**Debian 13**、6 台 ADB 设备）被 sudo 阻塞：`android` 不在 sudoers、`root` SSH 亦不可登录 → 待用户处置后再接。
-  8. **`verify`（238 现场）**：`auth`/`csrf`/`hosts`（3 台）/`navigation`/`devices` **PASS**，`watcher`/`storage`/`scan_upload_merge` 如实 `BLOCKED`；受控链 `verify.s6.chain` 逐层排查后仍 FAIL，过程中又暴露三个真缺陷（⑮⑯⑰）：
-     - 现象 A：run 立即 FAIL、0 个 job → 审计明细 `admission_failed reason=script_sync_config_error`；
-     - 缺陷⑮ 修复（补 env + S4 restart）后准入通过，run 进入 PRECHECK/RUNNING；
-     - 现象 B：仍 FAIL，审计明细 `partial_fail: pushed=0, failed=noop: cannot map nfs_path` → 缺陷⑯（scan 不跟随 runtime_root 重新锚定 nfs_path）；
-     - 缺陷⑯ 修复后**脚本推送成功**（两台容器的 `/opt/stability-test-agent/agent/scripts/noop/v1.0.0/noop.py` 就位且可直接执行），但作业仍 FAIL：`lifecycle init failed: … No such file or directory: '/opt/stp-city-b/backend/agent/scripts/noop/v1.0.0'`（**控制面**脚本根 + 目录名，缺文件名）→ 缺陷⑰；
-     - 关键旁证：容器 Agent 在该时段 `active=0`、心跳正常、从未 claim 该作业 → **执行者是控制面侧的静态设备作业路径**（`job_instance.host_id=0`、`device=SYNTH-I4-02`），它用控制面 `STP_SCRIPT_ROOT` 拼 `<name>/v<ver>` 目录当可执行文件跑 → ENOENT。
+  8. **`verify` 与 `handover`（238 现场，真实设备）**：把受控链换到真机上的**真实设备**（MTK，`--device-serial` 指定）后 —— `verify` **PASS**（`auth`/`csrf`/`hosts`/`navigation`/`devices`/**`chain [chain_completed]`**；`watcher`/`storage`/`scan_upload_merge` 如实 BLOCKED）；`handover` **PASS**（MS-02/04/05/06/10/13 `evidence_ready`，**MS-01 `evidence_missing` → BLOCKED**，落盘 `handover.json`）。
+     - 受控链在真实设备上跑通，坐实了缺陷⑰的边界：那条"执行器用控制面脚本根拼目录"的路径**只影响静态设备（SYNTH-*）**，真实设备走 Agent 侧执行（`nfs_path` 语义正确）不受影响；⑰ 本切片未改，记入 Revisit。
   9. **S5 sudo 预检三连实测（238 真机，全部 `--dry-run`、零写入）**：
      - ① 两台真机（NOPASSWD 已配）→ **PASS** `target_sudo_ready`（stage PASS）；
      - ② 容器目标（agentops 无免密 sudo，且控制面尚未核对容器主机键）→ FAIL `ssh_probe_failed`，message 指明 **`ssh_host_key_unverified`**（Fix 指向 `ssh-keyscan` + 核对指纹）——严格模式（与安装链一致，不做首次确认）下 sshpass 退出码 6 且输出为空，只能靠退出码归类；
      - ③ 不可达主机（文档网段）→ FAIL `ssh_probe_failed`，message 指明 **`ssh_unreachable`**；
      - ④ `sudo 不可用`一路由**第一轮 T1** 的真机证据覆盖（当时真机 A 尚未配 NOPASSWD）→ FAIL `target_sudo_unavailable` + su 配方 Fix；另有 3 条单测覆盖。
      - **实测附带发现（探针价值的最好例证）**：真机 A 此前"sudo 可用"是 **sudo ticket 缓存**造成的假象——首次 `sudo -S` 成功留下了 15 分钟 ticket，随后的 `sudo -n` 复用了它；探针的 `sudo -n true`（干净会话）揭穿了这一点，据此给 A 也补了 NOPASSWD 并用 `sudo -k` 清缓存复核。
-  10. **待补**：真机 B（Debian 13、6 台 ADB 设备）因 `android` 不在 sudoers 待用户处置后接入；随后用**真实设备**跑 `verify`（真实设备走 Agent 侧执行、`nfs_path` 语义正确），再 `handover`；坏 inventory 与 dry-run 负例部分已取（含并发 `state_locked` 拒绝）。
-- **现场暴露的缺陷（除仓库沙箱的 ①–⑦）**：⑧ `preflight` 被导入链拉崩（`__main__` 级导入 install/bootstrap 会带上 pydantic/PyYAML）——抽出 stdlib 的 `checks.py` 并让非 preflight 子命令延迟导入；⑨ 既有 DB 角色密码与生成的绑定不一致时 `init` 静默产出坏绑定——改为一律先用绑定凭据试连，不匹配即 fail-closed（`bootstrap_database_role`）并提示 `--reset-db-password`；⑩ `init` 重跑会用新口令/Fernet/DSN 覆盖既有绑定（站点 `.env.backend` 里已是首次值）——改为**以既有 binding 为准**（密码从既有 DSN 解析、admin/Fernet/Redis index 沿用），绑定只写一次并在报告里回显 `kept existing bindings (not rotated)`；⑪ `build_bundle` 允许打包缺 `backend/agent/resources` 的树（摘要必然不符）——缺即拒绝打包（`bundle_resources`），preflight 同步校验；⑫ S5 摘要等待用 `any(reported.values())` 提前收工（重装时 code 有值、resources 旧值即误判）——改为「声明项全部到齐」并把窗口从 90 s 收到 30 s（覆盖一个心跳周期 + 一次重试）；⑬ `install.sh` 无法指定站点输入项（库名/入口/存储/盘）——把 init 专属参数转发给 `init`、其余仍透传 `install`；⑮ **脚本同步键只补一半**：首装无 Agent 时 S2 省略 `STP_SCRIPT_RUNTIME_ROOT`，而模板里该键本就是注释形态；S2 的 managed 检查用**子串**比对把注释当成"键已存在"（假 PASS），且后端只在启动时读 `EnvironmentFile`、S4 用 `enable --now` 不重启已运行的服务——两处叠加使"首台 Agent 接入后再渲染"永远不会发生 → 改为按 systemd 语义解析有效键、只缺该键时**追加补齐**、S4 改 `enable` + `restart`；⑯ **scan 不跟随 runtime_root 重新锚定 nfs_path**：内容未变时跳过已存在记录，`nfs_path` 停在"首次扫描（缺该键）"写下的**控制面**路径 → 推送侧 `nfs_path_to_local` 要求 Agent 侧前缀，每次派发 `cannot map nfs_path`；改为内容未变分支也比较并重锚（`content_sha256` 不变，不算 rebaseline）；⑰ **静态设备（SYNTH-*）的作业执行路径**用控制面 `STP_SCRIPT_ROOT` 拼 `<name>/v<ver>` 目录（缺文件名）当可执行文件跑 → `No such file or directory`；容器 Agent 全程空闲、脚本已就位且可执行——属 I4 遗留的静态设备执行链，真实设备走 Agent 侧不受影响，待真机 B 接入后复核（本切片未改）；⑭ **curl 是隐式依赖**：`install_agent.sh`（API 探测 3 处）与 `agentctl.sh`（health 的服务器连通检查）都调用 curl，而依赖安装段只装 python3-venv/pip——Ubuntu 22.04 最小安装没有 curl，一次**正常的**安装被判成失败（Agent 服务已 active、health 只因缺 curl 报「无法连接」）→ 依赖段统一收集缺失项（python3-venv/python3-pip/curl）后一次装上，Debian 与 RHEL 两支都改。
+ 10. **两台真机最终接入**：`deploy/agent/install.sh`（inventory = 两台真机）**RC=0**，17 项 S5 全 PASS——含 `target_sudo_ready`、两台 `identity_recorded`、两台 `digest_matched`、`devices_discovered`、`agents_onboarded`；站点现有 **4 台 Host ONLINE**（2 容器 + 2 真机）与 **8 台设备**（6 台真实 MTK + 2 台合成）。
 
 ## Revisit
 
@@ -80,5 +75,7 @@ sudo ./deploy/agent/install.sh      # 读仓库外 ~/hosts.ini → S5（Host 仍
 - **`probe_data_disk` 仍不格式化**：只建议「已带文件系统的裸盘」；已有分区的盘必须显式 `--data-disk <分区>`。若要支持自动分区/格式化，必须另做授权流程（当前明确不做）。
 - **`preflight` 的端口检查只读 `/proc/net/tcp`**：容器网络下可能与宿主视角不同（238 实验为 nspawn 容器 + 桥）；现场若在容器里跑 preflight，应改看宿主视图。
 - **离线 wheelhouse**：`build_bundle --wheelhouse` 已实现但未在本次沙箱验证（需要可用的包索引）；离线现场首次使用前应先跑一次并核对。
+- **静态设备执行链（缺陷⑰）**：真实设备 verify 全 PASS 说明它只影响 `SYNTH-*` 合成设备（I4 实验室装置）：执行器用控制面 `STP_SCRIPT_ROOT + <name>/v<ver>`（目录）当可执行文件。若后续还要用合成设备做验收，需要单独修（本切片未改）。
+- **MS-01 仍 BLOCKED**：`handover` 要求真机主链（真实设备上的完整专项）与非原作者复跑，这两项未做；R2 发布渠道与外场网络也未交付——**城市 B 尚不能宣告可上线**。
 - **pip 镜像**：本机 `~/sudo-setup.yml` 还会给目标机配 `/etc/pip.conf` 与 `~/.pip/pip.conf`（清华源）。站点安装的 venv 目前走默认源（238 上够快）；现场 PyPI 慢的站点可借鉴这一步——未纳入 `install.sh`（需要现场证据后再决定）。
 - **`.claude/skills/agent-host-onboard`** 仍描述城市 A 的 Ansible 批量路径（fleet 对齐）；多站点新站点接入应走 `deploy/agent/install.sh`。等这条路径在现场跑通后，把该 skill 的入口指向新脚本（本切片未改 skill：不在本次 scope 内）。
