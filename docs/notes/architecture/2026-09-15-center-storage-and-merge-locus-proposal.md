@@ -114,6 +114,13 @@ python -m backend.scripts.measure_center_storage --center-root /mnt/center --jso
 
 **建议**：先 A（低风险、去掉本地中间副本，收益可测）；B 作为目标态，且**必须与 ADR-0033 一起推进**（工具宿主模型），不可单独裁。
 
+> **A 段已落地（2026-09-15，见 [`2026-09-15-merge-local-intermediate-cleanup-2189.md`](../feature/2026-09-15-merge-local-intermediate-cleanup-2189.md)）**：
+> 落地方案**不是**上表 A 的"直落中心 staging"，而是本文件 §Revisit 第二条预留的兜底分支——
+> 经代码核实，**工具输出目录不可从调用侧指定**（`run_merge_sync` 靠调用前后快照识别
+> `{工具目录}/merge_result/{ts}/`），staging 拿不到。故落成「本地中转 + 发布后立即删除 +
+> 24h 超期兜底清理」，且**仅在中心已配置时**生效；**锁保留**（工具仍写共享目录，
+> 去锁前提是方案 B / ADR-0033）。E-3（本机 `merge_result/` = 0）在成功路径成立。
+
 ---
 
 ## 4. 迁移路径（I-12 / I-13 共用骨架）

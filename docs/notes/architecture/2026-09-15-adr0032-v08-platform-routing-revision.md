@@ -1,7 +1,9 @@
 # ADR-0032 v0.8 修订提案：平台路由的完备性、聚合语义与未支持态
 
-Status: proposed
+Status: implemented
 Class: architecture
+
+> **落地说明（2026-09-15）**：本提案已裁决并落地为 ADR-0032 **v0.9**——标题与正文中的「v0.8」为提案拟定号，该号已由 B3 spike（`79d9e870` / #2183）占用并发布，故顺延为 v0.9，见 #2192。
 
 ## Decision
 

@@ -14,6 +14,7 @@ stays bounded and predictable.
 
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 MAX_WORKERS = int(os.getenv("BACKGROUND_POOL_SIZE", "8"))
@@ -43,6 +44,24 @@ def queue_depth() -> int:
     """当前占用配额的任务数（在途 + 排队），观测用。"""
     with _slots_lock:
         return _depth
+
+
+def drain(timeout: float = 10.0, interval: float = 0.02) -> bool:
+    """有界等待「在途 + 排队」任务清零（#2074）。
+
+    清库前（backend/tests conftest 的 TRUNCATE）用它保证 fire-and-forget 任务
+    （通知降级直达、post_completion 缓存刷新——都自开 ``SessionLocal`` 短事务）
+    已全部落地，不再横跨到下一个用例的清库事务与之成环；优雅停机前的在飞
+    工作判定是同一条原语。轮询 ``queue_depth()``，timeout 内排空返回 True，
+    超时返回 False（调用方自行决定：测试侧照常继续，残余泄漏由清库的死锁
+    现场取证直接现形）。
+    """
+    deadline = time.monotonic() + timeout
+    while queue_depth() > 0:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+    return True
 
 
 def snapshot() -> dict:

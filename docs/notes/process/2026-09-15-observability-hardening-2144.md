@@ -45,6 +45,14 @@ Class: process
   只有基名仍是 `Histogram`/`Summary` 才合法——只按后缀放行会漏掉「把直方图改成 Gauge」这种
   让告警永不触发的情形。
 
+> **回填（2026-09-15，#2152）**：`tests/test_prometheus_alert_metric_names.py` 已**折叠进**
+> `tests/test_prometheus_alerts_contract.py` 并删除——它与该文件既有的结构层校验同一条事实
+> （规则 ↔ 注册表），且是其**子集**（不看标签）。本条唯一的新增点——promtool 场景文件的
+> `series:` 名字——改由 `test_scenario_input_series_match_metric_registry` 覆盖，并更严
+> （名字 + 标签形状）。派生序列的类型前提也不再需要单独判据：折叠后直接取
+> `metric_registry_index()`（prometheus_client 实测索引），`x_bucket` 只有在 `x` 仍是
+> 直方图/摘要时才存在于索引里。本节其余记录（散文不查的取舍）随该用例的 docstring 保留。
+
 ## Alternatives
 
 - **给 gauge 加 `datname` label**（第 1 项的原设想）：否决，理由见上（按构造只有一个取值，
