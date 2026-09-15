@@ -613,6 +613,28 @@ def test_managed_storage_still_occupies_a_target_slot(site_data):
     assert "role_target_collision" in str(excinfo.value)
 
 
+def test_monitoring_defaults_to_disabled_for_existing_inputs(site_data):
+    """#2197：旧站点输入（无 monitoring 段）仍然合法，缺省不装监控栈。"""
+    config = SiteConfig.model_validate(copy.deepcopy(site_data))
+    assert config.monitoring.enabled is False
+    assert config.monitoring.prometheus_port == 9091
+
+
+def test_monitoring_accepts_an_explicit_port(site_data):
+    data = copy.deepcopy(site_data)
+    data["monitoring"] = {"enabled": True, "prometheus_port": 9191}
+    config = SiteConfig.model_validate(data)
+    assert (config.monitoring.enabled, config.monitoring.prometheus_port) == (True, 9191)
+
+
+@pytest.mark.parametrize("port", [80, 1023, 65536])
+def test_monitoring_rejects_privileged_or_out_of_range_ports(site_data, port):
+    data = copy.deepcopy(site_data)
+    data["monitoring"] = {"enabled": True, "prometheus_port": port}
+    with pytest.raises(ValidationError):
+        SiteConfig.model_validate(data)
+
+
 def test_export_to_agents_only_applies_to_local_mount(site_data):
     """远端分享/受管存储由对方导出：站点再开导出会形成两套来源，必须拒绝。"""
     data = copy.deepcopy(site_data)  # fixture 是 managed_linux
