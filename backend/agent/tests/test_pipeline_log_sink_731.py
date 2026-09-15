@@ -22,6 +22,37 @@ from backend.agent.pipeline_engine import (
 )
 
 
+def test_close_sinks_for_abandoned_closes_only_live_readers(tmp_path):
+    """#2061：被放弃（仍存活）的 reader 持有的 sink 必须收口。
+
+    正常路径由 reader 自己的 `finally` 收口；被放弃的线程永远不会跑到那里，
+    缓冲里的尾部日志（该步骤排障的唯一副本）与 fd 都会留到进程退出。
+    """
+    from backend.agent.pipeline_engine import _close_sinks_for_abandoned
+
+    live_sink = _StepLogSink(str(tmp_path / "stdout.log"))
+    dead_sink = _StepLogSink(str(tmp_path / "stderr.log"))
+    live_sink.write("tail-line\n")
+    dead_sink.write("already-flushed\n")
+    dead_sink.close()  # 正常 reader 已在 finally 收口
+
+    class _Thread:
+        def __init__(self, alive: bool) -> None:
+            self._alive = alive
+            self.name = "step-stdout" if alive else "step-stderr"
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+    _close_sinks_for_abandoned([_Thread(True), _Thread(False)], (live_sink, dead_sink))
+
+    assert (tmp_path / "stdout.log").read_text(encoding="utf-8") == "tail-line\n"
+    assert live_sink._closed is True
+    # 幂等 + None 安全（无 log_paths 时调用方传 None）
+    _close_sinks_for_abandoned([_Thread(True)], (live_sink,))
+    _close_sinks_for_abandoned([_Thread(True)], None)
+
+
 def _spawn(body: str) -> subprocess.Popen:
     """必须带 `_popen_isolation_kwargs()`（与 `_run_script_action` 一致）。
 

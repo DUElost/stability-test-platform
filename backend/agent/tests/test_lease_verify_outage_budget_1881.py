@@ -63,10 +63,11 @@ class TestRetryBudget:
         ):
             err = engine._verify_device_lease()
 
-        assert post.call_count == len(_LEASE_VERIFY_RETRY_DELAYS)
-        # #1921：每次失败尝试都消费预算（含末次）——原先 `attempt < len` 守卫
-        # 使末位 delay 死值，实际睡眠总和 ≈30s 与 ~60s 声明不符
-        assert sleeps == list(_LEASE_VERIFY_RETRY_DELAYS)
+        # #2061：退避是「两次尝试之间的间隔」→ len(delays)+1 次探测，
+        # 最后一次落在 t≈sum(delays)≈60s（原先末位 delay 花在最后一次失败之后，
+        # t≈60 处没有探测，30s 后才结束的中断仍判死）。
+        assert post.call_count == len(_LEASE_VERIFY_RETRY_DELAYS) + 1
+        assert sleeps == list(_LEASE_VERIFY_RETRY_DELAYS), "退避只发生在两次探测之间"
         assert err is not None and err.error_message == "lock_verification_http_502"
 
     def test_connection_error_also_uses_full_budget(self):
@@ -79,10 +80,34 @@ class TestRetryBudget:
         ):
             err = engine._verify_device_lease()
 
-        assert post.call_count == len(_LEASE_VERIFY_RETRY_DELAYS)
-        # #1921：末次失败同样消费预算
+        # #2061：连接中断同样走满 len(delays)+1 次探测
+        assert post.call_count == len(_LEASE_VERIFY_RETRY_DELAYS) + 1
         assert sleeps == list(_LEASE_VERIFY_RETRY_DELAYS)
         assert err is not None and err.error_message == "lock_verification_unreachable"
+
+
+    def test_last_probe_lands_at_full_budget_not_after_it(self):
+        """#2061：末次探测必须落在 t≈sum(delays)，而不是在 60s 处"放弃"。"""
+        engine = _engine()
+        resp = MagicMock(status_code=502)
+        resp.raise_for_status.side_effect = requests_exceptions.HTTPError("502", response=resp)
+        clock = {"t": 0.0}
+        probe_times: list[float] = []
+
+        def _fake_post(*_a, **_k):
+            probe_times.append(round(clock["t"], 1))
+            return resp
+
+        with patch("requests.post", side_effect=_fake_post), patch(
+            "backend.agent.pipeline_engine.time.sleep",
+            side_effect=lambda s: clock.__setitem__("t", clock["t"] + s),
+        ), patch("backend.agent.pipeline_engine.time.monotonic",
+                 side_effect=lambda: clock["t"]):
+            engine._verify_device_lease()
+
+        assert probe_times == [0.0, 1.0, 3.0, 7.0, 15.0, 30.0, 60.0], (
+            "探测时刻应为累计退避（末次 60s）——这是「1 分钟中断不打穿」的判据"
+        )
 
 
 class TestContractErrorGrading:

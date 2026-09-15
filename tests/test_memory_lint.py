@@ -94,6 +94,37 @@ class TestIndexConsistency:
         assert any("行宽" in e for e in r.errors)
 
 
+class TestMemoryDirResolution:
+    """#2065：默认目标必须命中**在用**的 harness 记忆目录，找不到即报错。"""
+
+    def test_candidates_cover_codebuddy_and_zcode(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        (home / ".zcode" / "cli" / "memories" / "projects" / f"{tmp_path.name}-abc123" / "memory").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+        harnesses = [name for name, _ in _mod.memory_dir_candidates(tmp_path)]
+        assert "codebuddy" in harnesses and "zcode" in harnesses
+
+    def test_resolve_prefers_existing_zcode_dir(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        zcode_mem = (
+            home / ".zcode" / "cli" / "memories" / "projects"
+            / f"{tmp_path.name}-deadbeef" / "memory"
+        )
+        zcode_mem.mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+
+        resolved = _mod.resolve_memory_dir(tmp_path)
+        assert resolved is not None
+        harness, path = resolved
+        assert harness == "zcode" and path == zcode_mem
+
+    def test_resolve_returns_none_when_no_candidate_exists(self, tmp_path, monkeypatch):
+        """不静默回落：一个候选都不存在时返回 None，由 CLI 显式报错并退出 2。"""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "empty-home"))
+        assert _mod.resolve_memory_dir(tmp_path) is None
+
+
 class TestPathReferences:
     def test_missing_repo_path_is_error(self, tmp_path):
         mem = _build(tmp_path, extra_files={
@@ -111,6 +142,39 @@ class TestPathReferences:
         })
         r = _lint(mem, tmp_path)
         assert not any("断链" in e for e in r.errors)
+
+    def test_path_with_line_suffix_is_not_broken(self, tmp_path):
+        """#2065：`path:123` / `path:123-456` / `path#L12` 是 AGENTS.md 推荐的引用形式。
+
+        剥离位置后缀前，仓库里**每一条** `path:line` 都被报成断链——实测当时 288 个
+        error 中 181 个属此类，真正可执行的信号被淹没（工具因此被闲置）。
+        """
+        _touch_repo(tmp_path, "backend/agent/main.py", "backend/core/x.py")
+        mem = _build(tmp_path, extra_files={
+            "feedback_a.md": FM.format(name="A", type="feedback")
+            + "见 `backend/agent/main.py:741`、`backend/agent/main.py:741-760`、"
+              "`backend/core/x.py#L12`。\n",
+        })
+        r = _lint(mem, tmp_path)
+        assert not any("断链" in e for e in r.errors), r.errors
+
+    def test_path_with_line_suffix_still_reports_missing_file(self, tmp_path):
+        """剥离后仍要判存在性——真缺失的 `path:line` 必须继续报。"""
+        mem = _build(tmp_path, extra_files={
+            "feedback_a.md": FM.format(name="A", type="feedback")
+            + "见 `docs/nope/missing.py:42`。\n",
+        })
+        r = _lint(mem, tmp_path)
+        assert any("断链" in e and "docs/nope/missing.py" in e for e in r.errors)
+
+    def test_brace_glob_reference_is_skipped(self, tmp_path):
+        """#2065：`{a,b}` brace glob 无法做存在性判定——跳过而非报断链。"""
+        mem = _build(tmp_path, extra_files={
+            "feedback_a.md": FM.format(name="A", type="feedback")
+            + "两处 `backend/agent/{,aee/}CLAUDE.md`。\n",
+        })
+        r = _lint(mem, tmp_path)
+        assert not any("断链" in e for e in r.errors), r.errors
 
     def test_missing_absolute_path_is_warn_only(self, tmp_path):
         mem = _build(tmp_path, extra_files={
