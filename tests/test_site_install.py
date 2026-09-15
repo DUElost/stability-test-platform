@@ -552,3 +552,65 @@ def test_install_without_inventory_does_not_touch_agent_bindings(tmp_path, monke
     assert report["status"] == "PASS"
     assert "materialized_bindings" not in report
     assert not (tmp_path / "bindings/agent_ssh").exists()
+
+
+def test_effective_env_keys_ignores_comments_and_blank_lines():
+    """模板注释不是键：systemd 不读它，检查也不能当它存在。"""
+    text = "# STP_SCRIPT_RUNTIME_ROOT=/x\n\nSTP_SCRIPT_ROOT=/y\n   # indented comment\nnot a key\n"
+    assert stages._effective_env_keys(text) == {"STP_SCRIPT_ROOT"}
+
+
+def test_first_agent_onboarding_renders_the_script_runtime_key(tmp_path, monkeypatch):
+    """首装无 Agent → 该键保持注释；首台 Agent 接入 → 必须补成有效行。
+
+    否则后端读不到脚本同步配置，S6 受控链的准入会以
+    `script_sync_config_error` 失败（238 现场实测）。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    data = yaml.safe_load((tmp_path / "site.yaml").read_text(encoding="utf-8"))
+    data["agents"] = []
+    empty_site = tmp_path / "site-empty.yaml"
+    empty_site.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+
+    first = invoke(tmp_path, config_path=empty_site)
+    assert first["status"] == "PASS"
+    env = tmp_path / "opt/stp-control/.env.backend"
+    lines = env.read_text(encoding="utf-8").splitlines()
+    assert any(line.startswith("# STP_SCRIPT_RUNTIME_ROOT=") for line in lines)
+    assert not any(line.startswith("STP_SCRIPT_RUNTIME_ROOT=") for line in lines)
+    before = env.read_text(encoding="utf-8")
+
+    inventory = tmp_path / "hosts.ini"
+    inventory.write_text(
+        f"[stp_agents]\n10.99.0.31 ansible_user=ops ansible_password=secret"
+        f" install_root={tmp_path / 'opt/stp-agent'}\n",
+        encoding="utf-8",
+    )
+    second = invoke(tmp_path, config_path=empty_site, agents_inventory=inventory)
+    assert second["status"] == "PASS"
+    after = env.read_text(encoding="utf-8")
+    assert after.startswith(before), "既有值必须原样保留（只追加缺失键）"
+    effective = stages._effective_env_keys(after)
+    assert "STP_SCRIPT_RUNTIME_ROOT" in effective
+    assert str(tmp_path / "opt/stp-agent/agent/scripts") in after
+    assert "env_extended" in {check["code"] for check in second["checks"]}
+
+
+def test_missing_secret_bearing_env_key_still_conflicts(tmp_path, monkeypatch):
+    """缺的是别的重要键（例如秘密）→ 仍然 fail-closed，不静默补。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    report = invoke(tmp_path)
+    assert report["status"] == "PASS"
+    env = tmp_path / "opt/stp-control/.env.backend"
+    env.write_text(
+        "\n".join(
+            line for line in env.read_text(encoding="utf-8").splitlines()
+            if not line.startswith("JWT_SECRET_KEY=")
+        ) + "\n",
+        encoding="utf-8",
+    )
+    second = invoke(tmp_path)
+    assert second["status"] == "FAIL"
+    assert "install_conflict" in codes(second)
