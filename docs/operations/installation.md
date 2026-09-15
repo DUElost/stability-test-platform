@@ -29,7 +29,7 @@ sudo ./deploy/install.sh handover   # 汇总 P1 验收证据
 
 前置条件（`preflight.sh` 会逐条核对）：
 
-- Debian 13 或 Ubuntu 24.04、x86_64、systemd；
+- Debian 13 或 Ubuntu 22.04 / 24.04、x86_64、systemd；
 - ≥2 核 / ≥4 GiB RAM / 根文件系统 ≥20 GiB 可用；
 - `python3`、`nginx`、`systemctl`；接 Agent 另需 `ansible-core` 与 `sshpass`；
 - 入口端口 80（HTTPS 另需 443）空闲；

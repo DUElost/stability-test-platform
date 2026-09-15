@@ -93,7 +93,11 @@ def test_bundle_carries_the_documented_layout_and_manifest(tmp_path):
     assert manifest["database"]["schema_target"] == "bbbb2222"
     assert manifest["provenance"]["attestation"] == "controlled_channel"
     assert manifest["compatibility"]["agent_protocol"].startswith(">=1.0")
-    assert {platform["distribution"] for platform in manifest["compatibility"]["platforms"]} == {"debian", "ubuntu"}
+    platforms = manifest["compatibility"]["platforms"]
+    assert {platform["distribution"] for platform in platforms} == {"debian", "ubuntu"}
+    ubuntu = next(platform for platform in platforms if platform["distribution"] == "ubuntu")
+    # 22.04 于 2026-09-15 实测纳入；24.04 一并保留（防回归）
+    assert {"22.04", "24.04"} <= set(ubuntu["versions"])
 
 
 def test_manifest_is_accepted_by_the_installer_side_loader(tmp_path):
