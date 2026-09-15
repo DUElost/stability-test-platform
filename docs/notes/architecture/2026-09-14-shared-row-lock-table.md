@@ -42,6 +42,7 @@ Class: architecture
 | `extend_job_lock` | Job → Lease | `#1980` 修正为 Job `FOR UPDATE` → `extend_lease` |
 | `_reconcile_expired_leases` / `_reconcile_stale_unknown_jobs` | Job → Lease | `#1959` 修正 |
 | `recycler` PENDING/RUNNING 超时 | Job → Lease | 逐 job savepoint → `release_lease` |
+| `recovery_sync`（`#2015` 修正） | Job → Lease → Device | 原为 `Lease → Job → Device`——09-15 生产死锁复现 60 次的环侧（Agent 重启落在续租 tick 内），见下 |
 | `acquire_lease` / `claim` | Job → Host → Lease | 不取 plan_run |
 | `run_retention_cleanup`（`#2022` 修正） | Job → Lease → plan_run | 原为 `plan_run → Lease/Job`，见下 |
 
@@ -50,7 +51,7 @@ Class: architecture
 | 路径 | 顺序 | 位置 |
 |---|---|---|
 | `complete_job` / `recycler` / reconciler / `coordinator_heartbeat` | job → plan_run | 基准 |
-| `abort_plan_run` | job → plan_run | `#1985` 修正（先按 id 预锁候选 PENDING 行，再锁 plan_run） |
+| `abort_plan_run` | job → plan_run | `#1985` 修正（先按 id 预锁候选 PENDING 行，再锁 plan_run）；`#2012` 补齐 **phase 2**：函数中部 `#703` 的 commit 会把预锁一并释放，此后须对同一批 `pending_ids` 重发同序预锁再锁 plan_run，全函数才是 job → plan_run |
 | `run_retention_cleanup`（`#2022` 修正） | job → plan_run | 先预锁子树（job → lease）再锁 plan_run |
 | `admission_transaction` | plan_run → job(INSERT) | 豁免（新行） |
 
@@ -170,6 +171,11 @@ Class: architecture
 - **每轮增量核对**：任何**新增 / 修改**对 `job_instance` / `device_leases` / `plan_run` /
   `plan_run_host` 的写语句，先在本表定位该行，再核对该事务内**所有**相关行的加锁顺序是否
   满足 I1–I4；不必重新枚举全表。
+- **本表由人工枚举维护（`#2015` 教训），新增写者须回填**：`recovery_sync` 的
+  `Lease → Job` 反向自 ADR-0019 Phase 3a 起就存在，首版枚举漏了它——表自称「全量」时，
+  任何遗漏都会让下一个使用者把缺行当成「已核对」。因此：新增任何取共享行锁的路径，
+  **合入前必须在本表回填对应行**（写代码时同步改，不要留到事后审计）；
+  「点表里没有」不等于「顺序已核对」。
 - **回归护栏（`#1999` 已补合入门禁；措辞更正）**：四条锁序回归都是 PostgreSQL-only，
   需要真实 PG 行锁；但**「默认配置下会 skip，所以本地全绿是假绿」这个说法是错的**
   （`#2022` 实测更正：`conftest` 在导入测试模块前已把 `DATABASE_URL` 覆盖为
@@ -210,6 +216,8 @@ Class: architecture
 | #1959 | 回收器 Lease→Job 改为 Job→Lease + PG 并发回归 |
 | #1980 | `coordinator_heartbeat`、`extend_job_lock` 两处反向 |
 | #1985 | `abort_plan_run`（plan_run→job）改为 job→plan_run |
+| #2012 | 补齐 `abort_plan_run` **phase 2**：`#703` commit 释放预锁后重发同序预锁；`abort_jobs_for_host` 跳过分支补 `rollback()`（异常不再把 PENDING 行锁带进热更新 drain 窗口） |
+| #2015 | `recovery_sync`（Lease→Job）改为 Job→Lease 并回填本表——09-15 生产死锁复现 60 次的环侧；暴露「人工枚举漏行」缺口，Revisit 增补回填条款 |
 | #2022 | 保留清理改为 job→lease→plan_run；并更正本表「保留期数十天」的前提错误 |
 | #2089 | 删除 `released_leases` 死字段（后端返回体/审计/日志 + 前端 `types.ts` 两侧） |
 | #2104 | 补锁等待观测面（等待 gauge + 持锁窗口 histogram + 告警），使「死锁改等待」可见 |
