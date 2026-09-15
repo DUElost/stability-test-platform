@@ -17,6 +17,8 @@ export interface Host {
   ip?: string | null;
   ssh_port?: number;
   ssh_user: string | null;
+  /** 认证方式（password | key）；密钥路径/密文不下发 */
+  ssh_auth_type?: string | null;
   status: 'ONLINE' | 'OFFLINE' | 'DEGRADED';
   watcher_admin_active?: boolean;
   last_heartbeat: string | null;
@@ -76,6 +78,8 @@ export interface Host {
 export interface Device {
   id: number;
   serial: string;
+  /** 疑似占位序列号（后端按 is_placeholder_serial 计算，响应恒带；#2032 补齐） */
+  serial_suspect?: boolean;
   model: string | null;
   /** SoC platform (#73). Gates MTK-only subsystems such as the AEE Reconciler. */
   platform?: 'MTK' | 'UNISOC' | 'QCOM' | 'UNKNOWN' | null;
