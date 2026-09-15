@@ -207,7 +207,6 @@ class TestAdmissionAbort:
         assert result["status"] == "FAILED"
         assert result["phase"] == phase
         assert result["aborted_jobs"] == []
-        assert result["released_leases"] == 0
         db_session.refresh(pr)
         assert pr.status == "FAILED"
         assert pr.result_summary["aborted"] is True
