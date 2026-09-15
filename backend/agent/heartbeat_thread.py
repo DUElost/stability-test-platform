@@ -4,7 +4,6 @@
 """
 
 import logging
-import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import device_discovery
 from .heartbeat import send_heartbeat
+from .settings import get_heartbeat_settings
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +71,11 @@ class HeartbeatThread:
         self._host_info = host_info
         self._poll_interval = poll_interval
         self._base_poll_interval = float(poll_interval)
-        self._min_poll_interval = float(os.getenv("STP_HEARTBEAT_INTERVAL_MIN", "10"))
-        self._max_poll_interval = float(os.getenv("STP_HEARTBEAT_INTERVAL_MAX", "120"))
+        # ADR-0042 P2 #3：钳制区间与 ADB 修复冷却由 Settings 承载
+        # （构造时取值，与迁移前 `__init__` 现读 env 的时机一致）。
+        _hb = get_heartbeat_settings()
+        self._min_poll_interval = _hb.stp_heartbeat_interval_min
+        self._max_poll_interval = _hb.stp_heartbeat_interval_max
         self._sio_client = sio_client
         self._catalog_versions = catalog_versions
         self._on_scripts_outdated = on_scripts_outdated
@@ -95,9 +98,7 @@ class HeartbeatThread:
         self._latest_devices: List[Dict[str, Any]] = []
         self._last_adb_connected_by_serial: Dict[str, bool] = {}
         self._pending_reconnected_serials: List[str] = []
-        self._adb_repair_cooldown: float = float(
-            os.getenv("STP_ADB_REPAIR_COOLDOWN_SECONDS", "300")
-        )
+        self._adb_repair_cooldown: float = _hb.stp_adb_repair_cooldown_seconds
         # 初始化为 -cooldown：fresh 进程的 time.monotonic() 可能小于冷却值
         # （新启动的 runner/host 前几分钟），否则首次自动修复会被错误抑制。
         self._last_adb_repair_at: float = -self._adb_repair_cooldown
@@ -319,7 +320,7 @@ class HeartbeatThread:
 
         if (
             adb_server_conflict
-            and os.getenv("STP_ADB_AUTO_REPAIR", "0") == "1"
+            and get_heartbeat_settings().adb_auto_repair_enabled
             and active_count == 0
         ):
             now = time.monotonic()

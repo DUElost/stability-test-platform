@@ -41,6 +41,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
     from agent.settings import (
         get_disk_archive_settings,
+        get_registration_settings,
         reset_agent_settings_caches,
     )
     from agent.job_runner import JobRunnerState, run_task_wrapper
@@ -70,7 +71,11 @@ else:
     from .local_disk_monitor import LocalDiskMonitor
     from .heartbeat_thread import HeartbeatThread
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
-    from .settings import get_disk_archive_settings, reset_agent_settings_caches
+    from .settings import (
+        get_disk_archive_settings,
+        get_registration_settings,
+        reset_agent_settings_caches,
+    )
     from .job_runner import JobRunnerState, run_task_wrapper
     from .lease_renewer import LeaseRenewer
     from .operation_scheduler import OperationScheduler
@@ -754,12 +759,13 @@ def main() -> None:
         _agent_artifact_digest or "(none)",
     )
 
-    # 加载 HOST_ID，支持自动注册
+    # 加载 HOST_ID，支持自动注册（ADR-0042 P2 #3：旋钮由 Settings 承载；
+    # 取值点保持迁移前的惰性时机——HOST_ID 正常时不解析注册旋钮）
     try:
         host_id = load_required_host_id()
     except ValueError as exc:
         # 检查是否启用自动注册
-        if os.getenv("AUTO_REGISTER_HOST", "false").lower() == "true":
+        if get_registration_settings().auto_register_enabled:
             host_id = None  # will be resolved in the retry loop below
         else:
             logger.error(
@@ -776,8 +782,9 @@ def main() -> None:
 
     # 如果 host_id 为 None（自动注册模式），带重试地注册
     if host_id is None:
-        max_retries = int(os.getenv("AUTO_REGISTER_MAX_RETRIES", "0"))  # 0 = infinite
-        retry_delay = float(os.getenv("AUTO_REGISTER_RETRY_DELAY", "10"))
+        _reg_settings = get_registration_settings()
+        max_retries = _reg_settings.auto_register_max_retries  # 0 = infinite
+        retry_delay = _reg_settings.auto_register_retry_delay
         attempt = 0
         while True:
             attempt += 1
