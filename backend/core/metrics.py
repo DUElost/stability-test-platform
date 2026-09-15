@@ -392,6 +392,31 @@ db_deadlock_total = Counter(
     ['engine'],  # sync | async
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# 锁序修复（#1959/#1980/#1985/#2022）消掉了「环路等待」，但**代价会转移到普通等待**：
+# 保留清理事务持有 plan_run 与候选子树行锁期间，热路径（complete / 批量续租）会在同一
+# 批行上排队；反向亦然。这类等待对 `stability_db_deadlock_total` **完全不可见**——
+# 只看死锁计数会得出「计数为 0 = 无代价」的错误结论（共享行加锁表的 Revisit 已登记）。
+# 故单独观测「此刻有多少会话在等锁 / 等最久多久」，由 /metrics 拉取期现算
+# （backend/api/routes/metrics.py 的 _refresh_lock_wait_gauges）。
+db_lock_waiters = Gauge(
+    'stability_db_lock_waiters',
+    'PostgreSQL sessions currently waiting for a lock (wait_event_type=Lock)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+db_lock_wait_max_seconds = Gauge(
+    'stability_db_lock_wait_max_seconds',
+    'Age of the longest currently lock-waiting PostgreSQL query (0 when none)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# 保留清理的**持锁窗口**（从取第一把行锁到事务结束、锁释放）。它同时是
+# 「#2022 只统一了顺序、没缩短窗口」这条 Revisit 的度量：NFS 目录回收仍在同一事务内
+# （#1521/#1698 的「先文件后行」），窗口 ≈ 删除 + NFS 时间；窗口越长，上面的等待越久。
+retention_txn_seconds = Histogram(
+    'stability_retention_txn_seconds',
+    'Wall time run_retention_cleanup holds row locks (plan_run + candidate subtree)',
+    buckets=[0.05, 0.25, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ADR-0021 dispatch gate
 dispatch_gate_runs_total = Counter(
     'stability_dispatch_gate_runs_total',
@@ -838,6 +863,30 @@ def record_db_deadlock(engine_label: str) -> None:
         db_deadlock_total.labels(engine=label).inc()
     except (TypeError, ValueError):
         return
+
+
+def record_db_lock_waiters(waiters: int, max_wait_seconds: float) -> None:
+    """#2104：锁等待快照（/metrics 拉取期采样 pg_stat_activity）。观测面不得抛。"""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        db_lock_waiters.set(max(0, int(waiters)))
+        db_lock_wait_max_seconds.set(max(0.0, float(max_wait_seconds)))
+    except (TypeError, ValueError):
+        return
+
+
+def record_retention_txn(seconds: float) -> None:
+    """#2104：保留清理的持锁窗口（一次 tick 一个观测）。"""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return
+    if value < 0:
+        return
+    retention_txn_seconds.observe(value)
 
 
 def record_plan_run_devices_query_duration(seconds: float):
