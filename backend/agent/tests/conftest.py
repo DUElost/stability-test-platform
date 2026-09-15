@@ -96,3 +96,30 @@ def disk_env(monkeypatch):
     yield _Env
     reset_agent_settings_caches()
 
+
+@pytest.fixture
+def heartbeat_env(monkeypatch):
+    """心跳/协调/注册域 env 覆盖助手（ADR-0042 P2 #3）。
+
+    与 `disk_env` 同形：写/删 env 后清 Agent Settings 缓存——迁移后
+    HeartbeatThread / HostRunCoordinator 的旋钮来自惰性缓存视图，
+    改 env 不同步 reset 会读到旧值。
+    """
+
+    from backend.agent.settings import reset_agent_settings_caches
+
+    class _Env:
+        @staticmethod
+        def set(name: str, value: str) -> None:
+            monkeypatch.setenv(name, value)
+            reset_agent_settings_caches()
+
+        @staticmethod
+        def unset(name: str) -> None:
+            monkeypatch.delenv(name, raising=False)
+            reset_agent_settings_caches()
+
+    reset_agent_settings_caches()
+    yield _Env
+    reset_agent_settings_caches()
+

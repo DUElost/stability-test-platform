@@ -13,11 +13,12 @@ than the stored value — a previous process instance cannot overwrite state.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from typing import Any, Dict, List, Optional
 
 import requests
+
+from .settings import get_heartbeat_settings
 
 logger = logging.getLogger(__name__)
 
@@ -168,12 +169,13 @@ class HostRunCoordinator:
         self._agent_instance_id = agent_instance_id
         self._agent_secret = agent_secret
         self._local_db = local_db
-        self._interval = float(os.getenv("COORDINATOR_HEARTBEAT_INTERVAL", "30"))
+        # ADR-0042 P2 #3：心跳/协调域旋钮由 Settings 承载（构造时取值，
+        # 与迁移前 `__init__` 现读 env 的时机一致；reload 后重建实例生效）。
+        _hb = get_heartbeat_settings()
+        self._interval = _hb.coordinator_heartbeat_interval
         # #1014: 投影防御上限——正常由 deregister_job 回收；超限时兜底清理
         # 无活跃 job 的投影（窗口泄漏），避免心跳载荷/内存无界增长。
-        self._MAX_PLAN_RUN_HOST_PROJECTIONS = int(
-            os.getenv("COORDINATOR_MAX_PLAN_RUN_HOSTS", "200")
-        )
+        self._MAX_PLAN_RUN_HOST_PROJECTIONS = _hb.coordinator_max_plan_run_hosts
         self._lock = threading.Lock()
         self._plan_run_hosts: Dict[int, PlanRunHostView] = {}  # keyed by host_row_id
         self._job_views: Dict[int, JobExecutionView] = {}  # keyed by job_id

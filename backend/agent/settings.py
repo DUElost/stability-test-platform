@@ -1,4 +1,4 @@
-"""Agent 侧分域 Settings（ADR-0042 P1 试点：租约续期域）。
+"""Agent 侧分域 Settings（ADR-0042：租约、磁盘/归档、心跳/协调/注册）。
 
 与后端 `backend/core/settings/` 的分域 Settings **同口径**，但**自包含**：
 Agent 进程不一定携带/安装 `backend.core`（见 `backend/agent/aee/reconciler.py`
@@ -21,7 +21,7 @@ import logging
 import math
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -141,6 +141,75 @@ class LeaseSettings(BaseSettings):
     agent_lease_ttl: int = 600
 
 
+class HeartbeatSettings(BaseSettings):
+    """心跳与协调域（ADR-0042 P2 #3）：`heartbeat_thread` + `coordinator`。
+
+    **失败形态与迁移前逐旋钮对齐**（等价性优先）：全部旋钮迁移前都是
+    `float(...)`/`int(...)` 直转（非法值启动即失败）→ 保持严格类型
+    （pydantic `ValidationError` 即等价的失败面）。
+
+    字符串旋钮 `STP_ADB_AUTO_REPAIR` 迁移前是字符串比较，走**派生值**保留
+    精确语义（见 :meth:`adb_auto_repair_enabled`）。
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=None,       # 硬约束：不引入第二个 dotenv 来源
+        extra="ignore",      # 非本域变量不参与校验
+        case_sensitive=False,
+    )
+
+    # ── coordinator：coordinator-heartbeat 周期与投影防御上限（#1014）──
+    coordinator_heartbeat_interval: float = 30
+    coordinator_max_plan_run_hosts: int = 200
+
+    # ── heartbeat_thread：周期钳制区间（对控制面 hint 生效，ADR-0026 P0）──
+    stp_heartbeat_interval_min: float = 10
+    stp_heartbeat_interval_max: float = 120
+
+    # ── heartbeat_thread：多 ADB server 冲突自动修复（#160）──
+    stp_adb_auto_repair: str = "0"
+    stp_adb_repair_cooldown_seconds: float = 300
+
+    @property
+    def adb_auto_repair_enabled(self) -> bool:
+        """迁移前语义：仅精确 `"1"` 视为启用（同 auth 域 `cookie_secure_enabled`）。"""
+        return self.stp_adb_auto_repair == "1"
+
+    @model_validator(mode="after")
+    def _warn_inverted_interval_clamp(self) -> "HeartbeatSettings":
+        """min > max 时只告警、不改值（迁移前是静默把 hint 全压到 min）。"""
+        if self.stp_heartbeat_interval_min > self.stp_heartbeat_interval_max:
+            logger.warning(
+                "inverted STP_HEARTBEAT_INTERVAL_MIN=%s > MAX=%s; "
+                "server hint 将被恒压到 min",
+                self.stp_heartbeat_interval_min,
+                self.stp_heartbeat_interval_max,
+            )
+        return self
+
+
+class RegistrationSettings(BaseSettings):
+    """自动注册域（ADR-0042 P2 #3）：`main.py` 启动期 `AUTO_REGISTER_HOST`。
+
+    失败形态与迁移前对齐：`int(...)`/`float(...)` 直转保持严格类型。
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=None,       # 硬约束：不引入第二个 dotenv 来源
+        extra="ignore",      # 非本域变量不参与校验
+        case_sensitive=False,
+    )
+
+    auto_register_host: str = "false"
+    auto_register_max_retries: int = 0  # 0 = infinite
+    auto_register_retry_delay: float = 10
+
+    @property
+    def auto_register_enabled(self) -> bool:
+        """迁移前语义：`os.getenv(..., "false").lower() == "true"`。"""
+        return self.auto_register_host.lower() == "true"
+
+
 @lru_cache(maxsize=1)
 def get_lease_settings() -> LeaseSettings:
     """取租约域 Settings（惰性 + 缓存；不读 `.env` 文件）。"""
@@ -153,6 +222,18 @@ def get_disk_archive_settings() -> DiskArchiveSettings:
     return DiskArchiveSettings()
 
 
+@lru_cache(maxsize=1)
+def get_heartbeat_settings() -> HeartbeatSettings:
+    """取心跳与协调域 Settings（惰性 + 缓存；不读 `.env` 文件）。"""
+    return HeartbeatSettings()
+
+
+@lru_cache(maxsize=1)
+def get_registration_settings() -> RegistrationSettings:
+    """取自动注册域 Settings（惰性 + 缓存；不读 `.env` 文件）。"""
+    return RegistrationSettings()
+
+
 def reset_agent_settings_caches() -> None:
     """清 Agent 侧**全部** Settings 缓存（ADR-0042 P1 Note 预告的多域扩展）。
 
@@ -161,3 +242,5 @@ def reset_agent_settings_caches() -> None:
     """
     get_lease_settings.cache_clear()
     get_disk_archive_settings.cache_clear()
+    get_heartbeat_settings.cache_clear()
+    get_registration_settings.cache_clear()
