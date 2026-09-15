@@ -132,6 +132,29 @@ reconcile（enable-auto-merge.yml / pr-update-branch.yml）以 `AUTO_MERGE_PAT`
 - 排查顺序：合入执行者身份（`mergedBy`）→ `closingIssuesReferences` 是否
   建立 → 关键词写法。
 
+## GitHub 交互的幂等与重试（#2131）
+
+本机经代理访问 GitHub API 偶发 EOF/502（`gh` 与 `git fetch` 都会撞上）。重试是必须的，
+但**「失败就重发」与「比较评论条数」都会产出重复评论**：2026-09-15 #735 的一次记录连发
+4 条——`before` 取数失败为空 → `[ after -gt before ]` 恒假 → 每轮都发。
+
+写 issue/PR 评论一律用 `tools/dev/gh_comment_once.py`：
+
+```bash
+python tools/dev/gh_comment_once.py --issue 735 --body-file /tmp/note.md
+python tools/dev/gh_comment_once.py --pr 2097 --body-file note.md --marker 2097-review --update
+cat note.md | python tools/dev/gh_comment_once.py --issue 735 --body - --json
+```
+
+- 幂等键 = 正文尾部的隐藏 marker（`--marker` 可显式钉住，缺省按正文派生）；
+- 发布前查重：命中 → 跳过（`--update` 则 PATCH 原评论，不新增）；
+- 创建失败后**先复读**：已落地（响应丢失）→ 视为成功；确认不存在 → 才允许重试；
+- 查重不可用 → **不发**，退出码 2（可安全重跑）——「未知」不等于「未发布」；
+- `--force` 是危险出口（跳过查重），仅人工确认未发布时使用。
+
+同一纪律适用于其它非幂等写动作（发评论、建 issue、推标签）：**判定落地靠内容/ID，
+不靠计数**；取数失败先按「未知」处理，宁可重跑也不要重复副作用。
+
 ## CI 分层
 
 PR 合入路径只运行轻量 required checks。完整 backend tests、frontend tests/build 和
