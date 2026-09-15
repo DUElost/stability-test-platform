@@ -546,6 +546,20 @@ class TestProbeTargetSudo:
         assert reason.startswith("sudo_unavailable")
         assert "a password is required" in reason
 
+    def test_sshpass_unknown_host_key_exit_code_is_classified(self):
+        """sshpass 6 = 主机公钥未知：严格模式下输出可能为空，只能靠退出码。"""
+        from tools.site_config.agents import probe_target_sudo
+
+        class Ops(self.Ops):
+            def run(self, argv, **kwargs):
+                from tools.site_config.ops import CommandResult
+
+                return CommandResult(tuple(str(item) for item in argv), 6, "", "")
+
+        assert probe_target_sudo(
+            Ops(""), self._agent(), {"USERNAME": "ops", "PASSWORD": "x"},
+        ) == (False, "ssh_host_key_unverified")
+
     def test_stderr_is_used_when_stdout_is_empty(self):
         """ssh 把错误写 stderr：只看 stdout 会把主机键问题误报成探针失败。"""
         from tools.site_config.agents import probe_target_sudo

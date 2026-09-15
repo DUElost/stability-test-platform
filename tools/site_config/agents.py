@@ -550,7 +550,10 @@ def probe_target_sudo(
     if "STP_SUDO_FAIL" in result.stdout:
         detail = " ".join(result.stdout.replace("STP_SUDO_FAIL", "").split())[:120]
         return False, f"sudo_unavailable: {detail}" if detail else "sudo_unavailable"
-    # SSH 层失败：用 ssh 自己的 stderr 归类，Fix 才能对症
+    # SSH 层失败：先看 sshpass 的退出码（6 = 主机公钥未知：严格模式下不做首次
+    # 确认，输出可能完全为空），再按 ssh 自己的 stderr 归类，Fix 才能对症。
+    if result.returncode == 6:
+        return False, "ssh_host_key_unverified"
     combined = f"{result.stderr or ''} {result.stdout or ''}"
     for needle, reason in (
         ("Host key verification failed", "host_key_unverified"),
