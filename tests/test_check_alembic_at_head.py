@@ -32,10 +32,18 @@ def test_code_head_revision_returns_single_head():
     assert head
 
 
-def test_checker_skips_when_database_url_missing():
+def test_checker_skips_when_database_url_missing(tmp_path):
+    """#2062：用显式 `--env-file` 指向空文件，避免默认回落到仓库 `.env.backend`。
+
+    原用例只从 env 里剔掉 `DATABASE_URL`，而 checker 会回落读 `<repo>/.env.backend`
+    ——在有该文件的机器（本仓即生产控制面）上会真的连库，断言失败且违反
+    「测试不得连生产库」的边界。
+    """
     env = {k: v for k, v in os.environ.items() if k != "DATABASE_URL"}
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("", encoding="utf-8")
     result = subprocess.run(
-        [PY, str(CHECKER)],
+        [PY, str(CHECKER), "--env-file", str(empty_env)],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -44,6 +52,27 @@ def test_checker_skips_when_database_url_missing():
     )
     assert result.returncode == 0
     assert "WARN" in result.stderr
+
+
+class TestSchemaStateClassification:
+    """#2062：`--allow-behind` 的判定必须是纯函数（可离线测）。"""
+
+    def test_at_head(self):
+        m = _load_checker_module()
+        assert m.classify_schema_state("h1", "h1", {"h0", "h1"}) == "at_head"
+
+    def test_behind_is_ancestor(self):
+        m = _load_checker_module()
+        assert m.classify_schema_state("h0", "h1", {"h0", "h1"}) == "behind"
+
+    def test_empty_alembic_version_counts_as_behind(self):
+        """未迁移（表空/无行）是「落后」，不是「超前」。"""
+        m = _load_checker_module()
+        assert m.classify_schema_state(None, "h1", {"h0", "h1"}) == "behind"
+
+    def test_unknown_revision_is_ahead(self):
+        m = _load_checker_module()
+        assert m.classify_schema_state("bogus", "h1", {"h0", "h1"}) == "ahead"
 
 
 def test_checker_fails_on_revision_mismatch():
@@ -55,7 +84,7 @@ def test_checker_fails_on_revision_mismatch():
 
             with patch.dict(os.environ, {"DATABASE_URL": "postgresql://u:p@localhost/db"}, clear=False):
                 with pytest.raises(SystemExit) as exc:
-                    mod.main()
+                    mod.main([])
             assert exc.value.code == 1
 
 
@@ -67,4 +96,4 @@ def test_checker_passes_when_revision_matches():
             cursor.fetchone.return_value = ("head123",)
 
             with patch.dict(os.environ, {"DATABASE_URL": "postgresql://u:p@localhost/db"}, clear=False):
-                mod.main()
+                mod.main([])

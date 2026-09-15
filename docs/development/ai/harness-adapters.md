@@ -31,7 +31,7 @@ Harness 适配层不得复制易变化的项目事实。根入口也不得重新
 | dsh web（0.1.5-rc.1，DeepSeek Harness 浏览器 UI） | `AGENTS.md`（根级基线注入 ✅；scoped 触碰后动态注入 ✅——0.1.1-rc.2/0.1.5-rc.1 双版本探针一致，形态详见 ADR-0034 附录 A v1.11） | 共享约定入口；工作区经原生目录选择器注册（GUI 无脚本通道）；**Registry CLI 全周期 dogfood 通过（#1256/PR #1291，已转正）** |
 | 其他 Harness | `AGENTS.md` | 没有专用适配时，从共享约定和文档地图进入 |
 
-Harness 的自动发现规则会随版本变化。新增专用适配前必须用对应版本实测加载行为；
+Harness 的自动发现规则会随版本变化（各 harness 的**记忆目录**约定——不在仓库内——单点权威在 [`tools/dev/memory_lint.py`](../../../tools/dev/memory_lint.py) 的 `memory_dir_candidates()`，变更时必须同步，#2065）。新增专用适配前必须用对应版本实测加载行为；
 不能仅凭文件名推断规则已经生效。
 
 **Antigravity CLI 实测汇总（2026-09-07，`agy 1.1.26 -p`）——当前为「只读顾问」型可用**：

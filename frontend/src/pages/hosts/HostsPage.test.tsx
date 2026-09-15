@@ -709,8 +709,9 @@ describe('ADR-0038 退役前端（#1807）', () => {
       ),
     );
   });
-});
 
+  // #2062：本用例原先写在 describe **之外**——describe 的 beforeEach
+  // （clearAllMocks + mock 复位）不生效，断言可能落在共享 mock 的历史调用上。
   it('批量安装跳过退役主机并显式提示（#1807 / D5 批量 skip）', async () => {
     const { api } = await import('../../utils/api');
     mockHostsList.mockResolvedValue({
@@ -745,3 +746,4 @@ describe('ADR-0038 退役前端（#1807）', () => {
     );
     expect(api.agentInstall.trigger).not.toHaveBeenCalledWith(9);
   });
+});
