@@ -256,11 +256,23 @@ def test_internal_http_requires_explicit_profile_and_no_tls_binding(site_data):
     assert parse_data(site_data).control_plane.security_profile == "internal"
 
 
-@pytest.mark.parametrize("profile", ["production", "internal"])
-def test_https_always_requires_a_tls_reference(site_data, profile):
-    site_data["control_plane"]["security_profile"] = profile
+def test_https_requires_a_tls_reference(site_data):
     site_data["control_plane"].pop("tls_ref")
     rejected(site_data, "tls_reference_required")
+    assert site_data["control_plane"]["security_profile"] == "production"
+
+
+def test_internal_profile_is_the_no_tls_exemption(site_data):
+    """#2084：internal 是 ADR-0024 v1.1 的「无 TLS 内网」豁免位，配 https 即自相矛盾。
+
+    模板对（nginx + env）只按 profile 选择，internal + https 会静默装出 listen 80 与
+    AUTH_COOKIE_SECURE=0——豁免前提（无 TLS）已不成立，必须 fail-closed 而不是猜意图。
+    """
+    site_data["control_plane"]["security_profile"] = "internal"
+    rejected(site_data, "internal_https_profile_conflict")
+    site_data["control_plane"]["public_url"] = "http://site.synthetic.invalid"
+    site_data["control_plane"]["tls_ref"] = None
+    assert parse_data(site_data).control_plane.security_profile == "internal"
 
 
 @pytest.mark.parametrize("target", [
