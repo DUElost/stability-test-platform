@@ -942,7 +942,14 @@ def execute_hot_update(
         }
 
     except (OSError, IOError) as e:
-        msg = f"SSH connection failed: {e}"
+        # code-scanning #80：异常原文只进日志，不外泄给 API 调用方（与下方
+        # unexpected_error 兜底分支同一口径）——分类由稳定的 reason 承载，
+        # 根因由日志锚点 hot_update_connection_failed 承载。
+        msg = (
+            f"SSH connection to {host_ip}:{ssh_port} failed. Check host "
+            "reachability and the SSH port, then retry; the underlying error "
+            "is in the control-plane log (hot_update_connection_failed)."
+        )
         logger.warning("hot_update_connection_failed host=%s:%d err=%s", host_ip, ssh_port, e)
         return {
             "ok": False,

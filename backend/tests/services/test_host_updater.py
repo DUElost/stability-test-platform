@@ -572,6 +572,9 @@ def test_execute_hot_update_result_carries_converged_fields(monkeypatch):
     assert result["reason"] == "ssh_connect_failed"
     assert result["artifact_digest"] == "sha256:" + "a" * 64
     assert "phases" in result
+    # code-scanning #80：异常原文只进日志——message 会被 API 原样回给调用方，
+    # 不得携带 errno/底层文本（分类由稳定的 reason 承载）。
+    assert "stop before upload" not in result["message"]
 
 
 def test_batch_direct_converged_no_op_skips_gate_and_ssh(monkeypatch):
