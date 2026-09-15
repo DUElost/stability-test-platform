@@ -687,7 +687,7 @@ export default function AnomalyDashboard({
                   <div className={cn('mb-2 text-sm font-medium', TEXT.heading)}>按平台分桶</div>
                   <div className="flex flex-wrap gap-2">
                     {platformBuckets.map((bucket) => {
-                      // R4-b b1（ADR-0032 裁决 2026-09-15）：无采集实现的平台
+                      // R4-b b1（ADR-0032 v0.9 裁决 2026-09-15）：无采集实现的平台
                       // 不能显示成「信号 0 · 设备 0」——那是「没有异常」的语义。
                       const unsupported = bucket.reconciler_supported === false;
                       return (
