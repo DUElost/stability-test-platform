@@ -354,10 +354,12 @@ def test_abort_bulk_emits_collapsed_job_status(
 def test_abort_pending_count_uses_returning_after_concurrent_claim(
     db_session, sample_plan_run, sample_plan, sample_device, sample_host,
 ):
-    """#988：预读 PENDING 后并发 claim→RUNNING 时，计数用实际 UPDATE 行，并纳入停止协议。"""
-    from sqlalchemy.orm import Session
-    from sqlalchemy.sql.dml import Update
+    """#988：预读 PENDING 后并发 claim→RUNNING 时，计数用实际 UPDATE 行，并纳入停止协议。
 
+    #2012 起 abort 在 commit 后先重发 phase-2 预锁再碰 plan_run，claim 可赢的窗口
+    收窄为「#703 commit 与 phase-2 预锁之间」——注入点随竞窗迁移（见
+    `inject_claim_in_phase2_window`），断言语义不变。
+    """
     from backend.models.host import Device
     from backend.models.plan_run import PlanRun
 
@@ -400,15 +402,20 @@ def test_abort_pending_count_uses_returning_after_concurrent_claim(
     db_session.commit()
 
     claim_injected = {"done": False}
-    orig_execute = Session.execute
 
-    def execute_with_claim(self, statement, *args, **kwargs):
-        if (
-            self is db_session
-            and not claim_injected["done"]
-            and isinstance(statement, Update)
-            and getattr(statement.table, "name", None) == JobInstance.__tablename__
-        ):
+    def inject_claim_in_phase2_window(seconds, phase):
+        """#2012 后竞窗迁移：claim 注入点从「第一条 UPDATE job_instance」挪到
+        「#703 commit 之后、phase-2 重发预锁之前」。
+
+        旧编排里 abort 发出批量 UPDATE 时已不持 job 行锁（commit 已释放预锁），
+        并发 claim 可以赢。#2012 让 abort 在 commit 后**先重发同序预锁再碰
+        plan_run**——批量 UPDATE 执行时本会话又持有全部 pending 行锁，若仍在
+        UPDATE 的注入点开同进程第二会话做 claim UPDATE，它会与本会话的自持锁
+        互等（测试编排自锁，非生产形态）。新窗口是 claim 唯一还能赢的位置：
+        commit 与 phase-2 预锁之间；此后 claim 的 UPDATE 只能排队并被
+        `WHERE status='PENDING'` 拒绝。
+        """
+        if phase == "abort_requested" and not claim_injected["done"]:
             claim_injected["done"] = True
             other = SessionLocal()
             try:
@@ -426,9 +433,11 @@ def test_abort_pending_count_uses_returning_after_concurrent_claim(
                 other.commit()
             finally:
                 other.close()
-        return orig_execute(self, statement, *args, **kwargs)
 
-    with patch.object(Session, "execute", execute_with_claim), patch(
+    with patch(
+        "backend.services.plan_run_abort.record_plan_run_abort_lock_seconds",
+        inject_claim_in_phase2_window,
+    ), patch(
         "backend.services.plan_run_abort.should_trigger_dedup",
         return_value=False,
     ), patch(

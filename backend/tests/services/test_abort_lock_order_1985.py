@@ -12,6 +12,10 @@
 两者争用同一批 PENDING 行（回收器的超时候选就是 `status='PENDING'`；abort 的
 `pending_ids` 也是），交错即成环。
 
+`#2012`：#1985 的预锁只覆盖了函数中部 `#703` commit **之前**的分段——commit 把预锁
+一并释放后，重锁 plan_run 前须对同一批 `pending_ids` 重发同序预锁。第二条回归
+（`test_abort_relocks_pending_jobs_after_commit_before_plan_run`）专测该 phase-2 窗口。
+
 判据沿用 `#1959`/`#1980`：**不看返回值**，用第三会话 `FOR NO KEY UPDATE NOWAIT`
 直接探测「等待方是否已经持有 `plan_run` 行锁」。需要 PostgreSQL。
 """
@@ -209,6 +213,132 @@ def test_abort_locks_pending_job_before_plan_run():
         assert plan_run_lock_error is None, (
             "abort_plan_run 在等待 PENDING job 行锁时已持有 plan_run 行锁 —— "
             f"锁序仍是 plan_run→job（#1985 回归）：{plan_run_lock_error}"
+        )
+        assert "error" not in outcome, f"abort 不应报错：{outcome.get('error')!r}"
+        assert outcome["result"]["aborted_jobs"] == [seed["job_id"]]
+
+        check = SessionLocal()
+        try:
+            job = check.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.status == JobStatus.ABORTED.value
+        finally:
+            check.close()
+    finally:
+        for session in (blocker, probe, observer):
+            if session is not None:
+                try:
+                    session.rollback()
+                    session.close()
+                except Exception:  # noqa: BLE001 — 清理尽力而为
+                    pass
+        _cleanup(seed)
+
+
+def test_abort_relocks_pending_jobs_after_commit_before_plan_run():
+    """#2012 — phase 2：`#703` 的 commit 释放预锁后，重锁 plan_run 前必须重发 job 预锁。
+
+    上一条回归覆盖 commit 之前的分段（blocker 先占 job 行）；本条反过来：
+    blocker 在 abort 首次 commit **之后**才占住 plan_run 行（用
+    `record_plan_run_abort_lock_seconds` 的 `abort_requested` 阶段作 commit
+    已发生的同步闸门），此时探测 abort 是否已持有 PENDING job 行锁。
+
+    旧实现在该窗口的获取顺序回到 plan_run → job（commit 已把 phase-1 预锁
+    一并释放），探测会成功 → 本测试失败，即 #1985 修复在 commit 后失效的形态。
+    """
+    seed = _seed()
+    blocker = probe = observer = None
+    try:
+        blocker = SessionLocal()
+        probe = SessionLocal()
+        observer = SessionLocal()
+
+        commit_done = threading.Event()   # abort 越过「#703 commit」时置位
+        blocker_may_proceed = threading.Event()  # blocker 占住 plan_run 后放行 abort
+        pid_captured = threading.Event()
+        holder: dict = {}
+
+        def _fake_record(seconds: float, phase: str) -> None:
+            if phase == "abort_requested":
+                commit_done.set()
+                # 挂住 abort 线程，让本线程先拿到 plan_run 行锁（30s 兜底防悬挂）
+                blocker_may_proceed.wait(timeout=30)
+                # SQLAlchemy 2.0 的 Session.commit() 会把连接归还池子，abort 接下来
+                # 的语句可能在**另一个后端**上执行——启动时快照的 pid 已失效。此刻
+                # 重新取本会话的后端 pid：其后的 phase-2 预锁与 plan_run 重锁都跑在
+                # 这条连接上（中间不会再 commit），对它的采样才对应 abort 自己。
+                holder["abort_pid"] = holder["session"].execute(
+                    text("SELECT pg_backend_pid()")
+                ).scalar()
+                pid_captured.set()
+
+        outcome: dict = {}
+        started = threading.Event()
+
+        def _run_abort() -> None:
+            session = SessionLocal()
+            try:
+                holder["session"] = session
+                started.set()
+                with patch(
+                    "backend.services.plan_run_abort.notify_plan_run_terminal",
+                    lambda *a, **k: None,
+                ), patch(
+                    "backend.services.plan_run_abort.record_plan_run_abort_lock_seconds",
+                    _fake_record,
+                ):
+                    outcome["result"] = abort_plan_run(
+                        seed["plan_run_id"], db=session, reason="lock-order-test",
+                        triggered_by="pytest",
+                    )
+            except BaseException as exc:  # noqa: BLE001 — 交由主线程断言
+                outcome["error"] = exc
+            finally:
+                session.close()
+
+        thread = threading.Thread(target=_run_abort, daemon=True)
+        thread.start()
+        assert started.wait(timeout=20), "abort 线程未启动"
+        assert commit_done.wait(timeout=30), (
+            "abort 未在预期窗口内执行 PENDING 批量终态化前的 commit"
+        )
+
+        # abort 已 commit 并被闸门挂住 —— 此刻占住 plan_run 行再放行
+        blocker.execute(
+            select(PlanRun)
+            .where(PlanRun.id == seed["plan_run_id"])
+            .with_for_update(key_share=True)
+        )
+        blocker_may_proceed.set()
+        assert pid_captured.wait(timeout=30), "闸门放行后未取得 abort 当前后端 pid"
+        abort_pid = holder["abort_pid"]
+
+        assert _wait_until_blocked(observer, abort_pid), (
+            "abort_plan_run 应在 plan_run 行锁上排队（该行刚被本会话占住）"
+        )
+
+        # 修复后：abort 重发了同一批 PENDING 行的预锁才去等 plan_run
+        # → NOWAIT 探测 job 行必须失败（55P03）。
+        # 旧实现此窗口内未持 job 行锁 → 探测成功 → 断言失败（回归被抓住）。
+        job_lock_error = None
+        try:
+            probe.execute(
+                select(JobInstance)
+                .where(JobInstance.id == seed["job_id"])
+                .with_for_update(nowait=True)
+            )
+        except sqlalchemy.exc.DBAPIError as exc:  # 55P03 lock_not_available
+            job_lock_error = exc
+        probe.rollback()
+
+        # 放开 plan_run 行锁，让 abort 跑完再断言
+        blocker.rollback()
+        thread.join(timeout=60)
+        assert not thread.is_alive(), "释放 plan_run 行锁后 abort_plan_run 仍未结束"
+
+        assert job_lock_error is not None, (
+            "abort_plan_run 在等待 plan_run 行锁时未持有 PENDING job 行锁 —— "
+            "phase 2（commit 之后）仍是 plan_run→job 反序（#2012 回归）"
         )
         assert "error" not in outcome, f"abort 不应报错：{outcome.get('error')!r}"
         assert outcome["result"]["aborted_jobs"] == [seed["job_id"]]

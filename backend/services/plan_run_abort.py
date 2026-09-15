@@ -556,6 +556,20 @@ def abort_plan_run(
             record_plan_run_abort_lock_seconds(
                 time.perf_counter() - lock_t0, "abort_requested",
             )
+            # #2012：上面的 COMMIT 释放 PlanRun 行锁的同时**也释放了函数开头
+            # 预锁的 PENDING job 行**——若直接重锁 plan_run，本函数在
+            # [commit, bulk UPDATE] 窗口又回到 plan_run → job 反序，与 recycler
+            # PENDING 超时路径（持 job 行 → plan_aggregator_sync 再锁 plan_run）
+            # 依旧成环：#1985 的预锁只覆盖了 commit 之前的分段。按同一 id 升序
+            # 对同一批 `pending_ids` 重发预锁，使**全函数**保持 job → plan_run；
+            # 锁面与开头预锁相同（含已离开 PENDING 的行，`_bulk_abort_pending_jobs`
+            # 的 `WHERE status='PENDING'` 会照常跳过），持锁窗口到 finalize commit。
+            db.execute(
+                select(JobInstance.id)
+                .where(JobInstance.id.in_(pending_ids))
+                .order_by(JobInstance.id)
+                .with_for_update()
+            ).all()
             lock_t0 = time.perf_counter()
             pr = db.execute(
                 select(PlanRun)
@@ -853,6 +867,14 @@ def abort_jobs_for_host(
                 host_id=host_id,
             )
         except PlanRunAbortError as exc:
+            # #2012（连带）：异常路径可能已持有开头预锁的 PENDING job 行与
+            # plan_run 行锁（如并发窗口内撞上已终态的复检 raise）。本函数把该
+            # 异常当「可跳过」继续处理同 host 的其余 run，且同一 session 随后
+            # 会被热更新流程复用（drain 轮询 + SSH 部署，分钟级）——不回滚会把
+            # 这些行锁带满整个窗口，阻塞 complete_job / recycler（claim 的
+            # SKIP LOCKED 会静默让路，等待观测面也看不出）。回滚释放行锁，
+            # 对后续迭代无影响（plan_run_ids 在循环前已物化）。
+            db.rollback()
             logger.warning(
                 "abort_jobs_for_host_skip plan_run=%d host=%s: %s",
                 prid, host_id, exc,

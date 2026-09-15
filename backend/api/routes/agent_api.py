@@ -3045,6 +3045,18 @@ async def recovery_sync(
         # Lock the complete ownership tuple.  Shared AGENT_SECRET authenticates
         # an Agent process, not a host/job relationship; the fencing token and
         # relational checks below establish that relationship.
+        # #2015（I1 共享行加锁全序）：先锁 job 行、再锁 lease 行——与
+        # complete_job / extend_leases_batch / reconciler 的 Job → Lease 同序。
+        # 原先先锁 lease 再锁 job，与续租 tick（Job 锁内 CAS device_leases）在
+        # 同一 (job, lease) 对上反向：Agent 重启的 recovery 恰落在续租窗口内
+        # 即可成环（09-15 生产死锁 60 次的环，PG 服务端日志定位）。本路由只
+        # 交换两条 SELECT 的次序；下方全部校验（ownership/fencing/boot）与
+        # 动作判定不变——job 不存在时 ownership 检查的结论与原先一致。
+        job = (await db.execute(
+            select(JobInstance)
+            .where(JobInstance.id == entry.job_id)
+            .with_for_update()
+        )).scalars().first()
         lease = (await db.execute(
             select(DeviceLease).where(
                 DeviceLease.device_id == entry.device_id,
@@ -3075,11 +3087,6 @@ async def recovery_sync(
                 ))
             continue
 
-        job = (await db.execute(
-            select(JobInstance)
-            .where(JobInstance.id == entry.job_id)
-            .with_for_update()
-        )).scalars().first()
         device = (await db.execute(
             select(Device)
             .where(Device.id == entry.device_id)
