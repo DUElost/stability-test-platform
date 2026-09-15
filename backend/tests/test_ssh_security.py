@@ -346,3 +346,63 @@ def test_host_key_fingerprints_stable_shape():
     ).decode("ascii").rstrip("=")
     assert fps == [expected]
     assert ssh_security.host_key_fingerprints(["not-a-known-hosts-line"]) == []
+
+
+def test_normalize_known_hosts_path_accepts_configured_shapes():
+    """绝对路径与 ``~/`` 前缀是文档承认的两种配置形态（含归一化）。"""
+    from backend.core.ssh_security import normalize_known_hosts_path
+
+    assert normalize_known_hosts_path("/etc/stp/known_hosts") == "/etc/stp/known_hosts"
+    assert normalize_known_hosts_path("/etc//stp/known_hosts") == "/etc/stp/known_hosts"
+    assert normalize_known_hosts_path("~/ssh/known_hosts") == "~/ssh/known_hosts"
+    # 空 = 未配置：由调用方回落 ~/.ssh/known_hosts，不得变成相对路径 ""
+    assert normalize_known_hosts_path("") == ""
+    assert normalize_known_hosts_path("   ") == ""
+
+
+@pytest.mark.parametrize("unsafe", [
+    "etc/stp/known_hosts",              # 相对路径：落点取决于进程 cwd
+    "../etc/known_hosts",
+    "/etc/stp/../../tmp/known_hosts",   # 归一化后会逃出声明位置
+    "~root/.ssh/known_hosts",           # 指名他人 home
+    "/tmp/known_hosts\n../escape",      # 换行把单值变成多行
+    "/tmp/known_hosts\x00",
+])
+def test_normalize_known_hosts_path_rejects(unsafe):
+    """code-scanning #78：落点必须先过守卫，才可能被 mkdir/touch/重写。"""
+    from backend.core.ssh_security import (
+        SshSecurityConfigError,
+        normalize_known_hosts_path,
+    )
+
+    with pytest.raises(SshSecurityConfigError):
+        normalize_known_hosts_path(unsafe)
+
+
+def test_resolve_known_hosts_path_validates_env_supplied_value(monkeypatch):
+    """显式参数为空不等于安全：``STP_SSH_KNOWN_HOSTS`` 同域受守卫。"""
+    from pathlib import Path
+
+    from backend.core import ssh_security
+
+    monkeypatch.setenv("STP_SSH_KNOWN_HOSTS", "/etc/stp/../../tmp/kh")
+    with pytest.raises(ssh_security.SshSecurityConfigError):
+        ssh_security._resolve_known_hosts_path("")
+
+    monkeypatch.setenv("STP_SSH_KNOWN_HOSTS", "")
+    assert ssh_security._resolve_known_hosts_path("") == Path.home() / ".ssh" / "known_hosts"
+
+
+def test_trust_host_key_refuses_unsafe_path_before_touching_fs(monkeypatch):
+    """非法落点：不建目录、不 touch、不执行 ssh-keyscan，且不抛（best-effort 契约）。"""
+    from backend.core import ssh_security
+
+    def _no_keyscan(*_args, **_kwargs):
+        raise AssertionError("被拒的落点不得进入 ssh-keyscan/写入阶段")
+
+    monkeypatch.setattr(ssh_security.subprocess, "run", _no_keyscan)
+
+    ok, reason = ssh_security.trust_host_key("10.0.0.99", 22, "etc/stp/known_hosts")
+
+    assert ok is False
+    assert "known_hosts path must be absolute" in reason

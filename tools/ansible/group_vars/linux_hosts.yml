@@ -86,3 +86,18 @@ agent_secret: >-
       else agent_secret_from_env_backend
     )
   }}
+
+# ── 刷机前置归位（#2133 / ADR-0037 D5）────────────────────────────────────
+# 运行期不再装包/加组（flash_preflight v1.0.2 只检不修）；由 update_agent.yml
+# 的 provisioning 段在显式开启时补齐：dialout + 固定 udev 0666 规则 + 包集合。
+# 默认 false：常规更新不触碰系统包面；刷机主机用
+#   ansible-playbook ... update_agent.yml -l <hosts> -e agent_ensure_flash_prereqs=true
+agent_ensure_flash_prereqs: false
+# flash_tool 依赖的 Qt/X 运行库（与 flash_preflight._DEFAULT_PACKAGES 同源，
+# 由 tests/test_flash_provisioning_prereqs_2133.py 锁定一致性）。
+agent_flash_prereq_packages:
+  - libice6
+  - libsm6
+  - libxrender1
+  - libfontconfig1
+  - libglib2.0-0

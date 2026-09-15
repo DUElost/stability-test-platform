@@ -376,7 +376,11 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
         "CORS_ORIGINS": config.control_plane.public_url.rstrip("/"),
         "STP_ALLOW_REGISTER": "0",
         "STP_SCRIPT_ROOT": str(root / "backend" / "agent" / "scripts"),
-        "STP_SCRIPT_RUNTIME_ROOT": str(Path(config.agents[0].install_root) / "agent" / "scripts"),
+        # Agent 未声明时不写该键（先装控制面的路径）；首台 Agent 接入后再渲染。
+        **(
+            {"STP_SCRIPT_RUNTIME_ROOT": str(Path(config.agents[0].install_root) / "agent" / "scripts")}
+            if config.agents else {}
+        ),
         "STP_AEE_NFS_ROOT": config.storage.mount_path,
         # 站点级秘密：仅在首次生成时写一次，重跑走 env_reused 不轮换
         **{key: generate_site_secret() for key in GENERATED_SECRET_KEYS},
@@ -389,7 +393,10 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
     env_file = root / ".env.backend"
     if env_file.is_file():
         text = env_file.read_text(encoding="utf-8")
-        if any(f"{key}=" not in text for key in MANAGED_ENV_KEYS):
+        managed = MANAGED_ENV_KEYS if config.agents else tuple(
+            key for key in MANAGED_ENV_KEYS if key != "STP_SCRIPT_RUNTIME_ROOT"
+        )
+        if any(f"{key}=" not in text for key in managed):
             return _safe(checks, "install_conflict", location="$.security", role="control_plane", check_id="install.s2.env")
         checks.append(_pass(
             "install.s2.env", "control_plane", "$.security", "env_reused",
