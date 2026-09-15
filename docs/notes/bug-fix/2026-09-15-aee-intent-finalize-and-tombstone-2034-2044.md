@@ -64,7 +64,9 @@ Class: bug-fix
 - 注入方式：`_FlakyIntentStore` 只对意图簿键（`*:emit_intents`）抛 `OSError`，
   其余状态照常落盘——与「占位失败但 processed 写成功」的真实触发条件一致。
 - AEE 子集 `pytest backend/agent/tests/ -q -k "aee or emit or intent or pull or scan"`
-  → 391 passed；全量结果见本 PR。
+  → 391 passed；并入 `origin/main@a50c0d40` 后全量 `pytest backend/agent/tests/ -q`
+  → **2050 passed**、根目录 `pytest tests/ -q` → **992 passed**；
+  `python scripts/run_gates.py check:quick` → **[OK] 10 gates**。
 - **未做真机复现**：触发依赖一次 `set_state` 瞬时失败（SQLITE_BUSY / 磁盘满），
   本机只有逻辑链 + 注入用例证据。
 
