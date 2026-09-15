@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import stat
-import sys
 from dataclasses import asdict, replace
 from pathlib import Path
+from types import ModuleType
 from typing import Callable
 
 from .agents import stage_s5_agents
@@ -35,18 +36,9 @@ from .validation import DEFERRED_CHECKS, Check, ConfigValidationError, failure, 
 STATE_FILE = "install-state.json"
 LOCK_FILE = "install.lock"
 
-_DIGEST_SCRIPT = """
-import json, os
-from backend.agent.artifact_digest import collect_artifact_entries, digest_entries
-
-bundle = os.environ["STP_INSTALL_BUNDLE"]
-agent_dir = os.path.join(bundle, "backend", "agent")
-extra = {"stp_schemas/pipeline_schema.json": os.path.join(bundle, "backend", "schemas", "pipeline_schema.json")}
-print(json.dumps({
-    "agent-code": digest_entries(collect_artifact_entries(agent_dir, extra, kind="code")),
-    "host-resources": digest_entries(collect_artifact_entries(agent_dir, extra, kind="resources")),
-}))
-"""
+# #2020：量具不能来自被测物。digest 算法取安装器自身源码树的副本（stdlib-only），
+# bundle 只作为被测数据传入——旧实现以 PYTHONPATH=ctx.bundle 起子进程 import 被校验树。
+_TRUSTED_DIGEST_SOURCE = Path(__file__).resolve().parents[2] / "backend" / "agent" / "artifact_digest.py"
 
 DatabaseProbe = Callable[[str], tuple[str, str | None]]
 
@@ -131,21 +123,36 @@ def _config_digest(config_path: Path) -> str:
         return ""
 
 
-def _digest_bundle(ctx: InstallContext) -> dict[str, str] | None:
-    env = {
-        "PATH": os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
-        "PYTHONPATH": str(ctx.bundle),
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "STP_INSTALL_BUNDLE": str(ctx.bundle),
-    }
-    result = ctx.ops.run([sys.executable, "-c", _DIGEST_SCRIPT], env=env)
-    if result.returncode != 0 or not result.stdout:
+def _trusted_artifact_digest() -> ModuleType | None:
+    """按文件路径加载受信 digest 实现：不走 PYTHONPATH，不 import 被测 bundle。"""
+    spec = importlib.util.spec_from_file_location("stp_trusted_artifact_digest", _TRUSTED_DIGEST_SOURCE)
+    if spec is None or spec.loader is None:
         return None
+    module = importlib.util.module_from_spec(spec)
     try:
-        payload = json.loads(result.stdout.splitlines()[-1])
-    except (ValueError, IndexError):
+        spec.loader.exec_module(module)
+    except (ImportError, OSError):
         return None
-    return payload if isinstance(payload, dict) else None
+    return module
+
+
+def _digest_bundle(ctx: InstallContext) -> dict[str, str] | None:
+    digest_module = _trusted_artifact_digest()
+    if digest_module is None:
+        return None
+    agent_dir = ctx.bundle / "backend" / "agent"
+    extra = {"stp_schemas/pipeline_schema.json": str(ctx.bundle / "backend" / "schemas" / "pipeline_schema.json")}
+    try:
+        return {
+            "agent-code": digest_module.digest_entries(
+                digest_module.collect_artifact_entries(str(agent_dir), extra, kind="code")
+            ),
+            "host-resources": digest_module.digest_entries(
+                digest_module.collect_artifact_entries(str(agent_dir), extra, kind="resources")
+            ),
+        }
+    except OSError:
+        return None
 
 
 def _code_head(ctx: InstallContext) -> str | None:

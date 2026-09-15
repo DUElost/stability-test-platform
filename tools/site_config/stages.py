@@ -51,14 +51,23 @@ NAVIGATION_PLACEHOLDERS = (
     "<release-version>",
     "<rendered-at>",
 )
-# HTML 标签名不含短横线；残留的 kebab-case 尖括号必然是未替换的导航占位符。
-_UNRESOLVED_NAV_PLACEHOLDER = re.compile(r"<[a-z][a-z0-9]*(?:-[a-z0-9]+)+>")
+# HTML 标签名不含短横线、env 注释含非 ASCII 尖括号：残留的 kebab-case 尖括号
+# 必然是未替换的模板占位符（unit/nginx/navigation/env 同一词汇表）。
+_UNRESOLVED_TEMPLATE_PLACEHOLDER = re.compile(r"<[a-z][a-z0-9]*(?:-[a-z0-9]+)+>")
 
 NGINX_SITES = {
     "internal": "deploy/control-plane/nginx/stability-platform.conf",
     "production": "deploy/control-plane/nginx/stability-platform-https.conf",
 }
 LOGROTATE_TEMPLATE = "deploy/control-plane/logrotate/stability-backend"
+# #2088：本站写进共享系统路径的资产名（全局固定、无站点后缀——同机第二站点必然同名）。
+NGINX_SITE_NAME = "stability-platform"
+DEFAULT_SITE_NAME = "default"
+# 发行版默认站点只停用不删除：移出 sites-enabled 即失效，放回原位即恢复。
+DISABLED_DEFAULT_SITE_NAME = "stp-disabled-default"
+LOGROTATE_TEMPLATE_NAME = Path(LOGROTATE_TEMPLATE).name
+# 重跑覆盖共享路径前，旧内容留一份可回放的副本（state 目录 0700，不新增系统路径资产）。
+PREVIOUS_ASSETS_DIR = "shared-path-prev"
 
 MANAGED_ENV_KEYS = (
     "DATABASE_URL",
@@ -184,7 +193,7 @@ def navigation_substitutions(ctx: InstallContext) -> dict[str, str]:
 def render_navigation_page(template: str, ctx: InstallContext) -> str | None:
     """渲染导航页；仍有未替换占位符时返回 None（fail-closed）。"""
     text = _render(template, navigation_substitutions(ctx))
-    return None if _UNRESOLVED_NAV_PLACEHOLDER.search(text) else text
+    return None if _UNRESOLVED_TEMPLATE_PLACEHOLDER.search(text) else text
 
 
 def _render(text: str, substitutions: dict[str, str]) -> str:
@@ -411,7 +420,15 @@ def stage_s2_release_env(ctx: InstallContext) -> list[Check]:
         ))
     else:
         template = (bundle / ENV_TEMPLATES[config.control_plane.security_profile]).read_text(encoding="utf-8")
-        _write_text(env_file, _apply_env_keys(template, env_values), mode=0o600)
+        rendered_env = _apply_env_keys(template, env_values)
+        # #2017 残口：占位值不得留到可用站点里。managed key 与模板键失配时，未替换的
+        # 占位符会原样落进 .env.backend 且 S2 仍报 PASS——与 unit/nginx 同一守卫。
+        if _UNRESOLVED_TEMPLATE_PLACEHOLDER.search(rendered_env):
+            return _safe(
+                checks, "install_conflict", location="$.security", role="control_plane",
+                check_id="install.s2.env",
+            )
+        _write_text(env_file, rendered_env, mode=0o600)
         ctx.ops.chown(env_file, config.control_plane.deploy_user)
         checks.append(_pass(
             "install.s2.env", "control_plane", "$.security", "env_created",
@@ -599,12 +616,54 @@ def _deploy_env(ctx: InstallContext, overrides: dict[str, str]) -> dict[str, str
     return env
 
 
+def shared_path_is_foreign(ctx: InstallContext, destination: Path) -> bool:
+    """共享系统路径上的既有文件是否属于本站（#2088，fail-closed）。
+
+    unit / nginx / logrotate 三类产物都由 ``<deploy-root>`` 渲染，故「引用本站部署根」
+    既是归属证据也是可重跑判据；读不到或不含本站部署根即不是本站资产。服务名与站点名
+    全局固定，同机第二站点必然同名——无归属判据的覆盖会把别站服务改指本站部署根。
+    """
+    try:
+        text = destination.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return destination.exists()
+    return ctx.deploy_root.as_posix() not in text
+
+
+def install_shared_asset(ctx: InstallContext, source: Path, destination: Path) -> None:
+    """装一个共享系统路径资产：本站既有内容先留副本到 state 目录，再覆盖。"""
+    if destination.exists():
+        backup_dir = ctx.state_dir / PREVIOUS_ASSETS_DIR
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(destination, backup_dir / destination.name)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+
+
 def stage_s4_entry(ctx: InstallContext) -> list[Check]:
     """Install units/nginx, start the nomigrate service and verify health."""
     checks: list[Check] = []
     config = ctx.config
     render_root = ctx.render_root or (ctx.deploy_root / ".install-rendered")
     profile = config.control_plane.security_profile
+    shared_assets = [
+        *(
+            (render_root / Path(relpath).name, ctx.system_root / "etc/systemd/system" / Path(relpath).name)
+            for relpath in UNIT_TEMPLATES
+        ),
+        (
+            render_root / Path(NGINX_SITES[profile]).name,
+            ctx.system_root / "etc/nginx/sites-available" / NGINX_SITE_NAME,
+        ),
+        (render_root / LOGROTATE_TEMPLATE_NAME, ctx.system_root / "etc/logrotate.d" / LOGROTATE_TEMPLATE_NAME),
+    ]
+    # #2088：先全量判归属再写入——服务名与站点名全局固定，同机第二站点必然同名；无归属
+    # 判据的覆盖会把别站服务改指本站部署根，违本模块「no overwriting unmanaged data」。
+    if any(shared_path_is_foreign(ctx, destination) for _, destination in shared_assets):
+        return _safe(
+            checks, "install_conflict", location="$.control_plane.deploy_root",
+            role="control_plane", check_id="install.s4.shared_paths",
+        )
     if ctx.dry_run:
         return [
             _pass(
@@ -624,8 +683,7 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
     ctx.ops.chown(ctx.deploy_root, config.control_plane.deploy_user)
     for relpath in UNIT_TEMPLATES:
         destination = ctx.system_root / "etc/systemd/system" / Path(relpath).name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(render_root / Path(relpath).name, destination)
+        install_shared_asset(ctx, render_root / Path(relpath).name, destination)
     if ctx.ops.run(["systemctl", "daemon-reload"]).returncode != 0:
         return _safe(checks, "install_units", location="$.control_plane.deploy_root", role="control_plane", check_id="install.s4.units")
     checks.append(_pass(
@@ -634,21 +692,20 @@ def stage_s4_entry(ctx: InstallContext) -> list[Check]:
         "Units must be rendered from the template placeholder set.",
     ))
 
-    nginx_source = Path(NGINX_SITES[profile]).name
-    nginx_target = ctx.system_root / "etc/nginx/sites-available/stability-platform"
-    nginx_target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(render_root / nginx_source, nginx_target)
-    enabled = ctx.system_root / "etc/nginx/sites-enabled/stability-platform"
+    nginx_target = ctx.system_root / "etc/nginx/sites-available" / NGINX_SITE_NAME
+    install_shared_asset(ctx, render_root / Path(NGINX_SITES[profile]).name, nginx_target)
+    enabled = ctx.system_root / "etc/nginx/sites-enabled" / NGINX_SITE_NAME
     enabled.parent.mkdir(parents=True, exist_ok=True)
     if enabled.is_symlink() or enabled.exists():
         enabled.unlink()
     enabled.symlink_to(nginx_target)
-    default_site = ctx.system_root / "etc/nginx/sites-enabled/default"
-    if default_site.exists() or default_site.is_symlink():
-        default_site.unlink()
-    logrotate_target = ctx.system_root / "etc/logrotate.d/stability-backend"
-    logrotate_target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(render_root / "stability-backend", logrotate_target)
+    default_site = ctx.system_root / "etc/nginx/sites-enabled" / DEFAULT_SITE_NAME
+    if default_site.is_symlink() or default_site.exists():
+        # 发行版资产不是本站资产：只从 sites-enabled 移出（nginx 只 include 该目录），
+        # 放回原位即恢复，不删除内容。
+        default_site.replace(ctx.system_root / "etc/nginx/sites-available" / DISABLED_DEFAULT_SITE_NAME)
+    logrotate_target = ctx.system_root / "etc/logrotate.d" / LOGROTATE_TEMPLATE_NAME
+    install_shared_asset(ctx, render_root / LOGROTATE_TEMPLATE_NAME, logrotate_target)
     ensure_frontend_readable(ctx)
     if ctx.ops.run(["nginx", "-t"]).returncode != 0:
         return _safe(checks, "install_nginx", location="$.control_plane.public_url", role="control_plane", check_id="install.s4.nginx")

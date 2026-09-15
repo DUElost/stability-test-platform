@@ -1,7 +1,10 @@
 # 多站点 P1：站点配置、部署预检与城市 B 安装闭环
 
 - **状态**：实现完成、现场验收待执行；I1 配置模型/离线 `validate`、I2 发布清单检查/脱敏 `plan`、I3 本地安装（S0–S4、受控管理员引导）、I4 站点侧 Agent 接入（S5、`verify` 的降级 S6）、I5 站点导航/交接证据（`/site/`、`handover`）与 I5.5 一站式部署（`deploy/*.sh`、`preflight`、`init`、inventory）均已实现；城市 B/C 现场验收（真机、存储、scan/upload/merge、签字）仍待执行，安装操作步骤见 [`installation.md`](../operations/installation.md)
-- **版本**：0.8
+- **版本**：0.9
+- **v0.9 增量（2026-09-15）**：安装链 fail-open 判据收口（#2084 / #2088 / #2020 / #2017 残口）——
+  新增判据见 §5 末「安装链 fail-closed 判据」，决策与放弃的备选见
+  [`bug-fix/2026-09-15-site-install-fail-open-batch`](../notes/bug-fix/2026-09-15-site-install-fail-open-batch.md)
 - **版本记录**：v0.8（2026-09-15）I5.5 落地——三个薄封装入口（`deploy/preflight.sh` / `install.sh` / `agent/install.sh`）、只读 `preflight`、探测驱动 `init`（≤4 问）、本地 `build_bundle`（R2 之前的发布物来源）、Ansible 式 inventory → `agents`（共享凭据 + 逐台覆盖）与「先控制面后 Agent」（`agents` 可空、`install --agents-inventory`）；`storage.provisioning` 新增 `local_mount`（本机磁盘子树，无远端身份），角色 target 隔离改为只约束「有远端管理面的角色」；本文新增 §4.2 部署契约。v0.7（2026-09-15）I5 落地——站点导航（nginx `/site/` 只读静态段 + S2 渲染，只发布获准信息）、`handover` 子命令（把 MS-01/02/04/05/06/10/13 映射到本站安装/verify 证据并落盘 `handover.json`）、安装记录新增 `runs` 计数（重跑证据）、`verify` 新增 `verify.s6.navigation`；v0.6（2026-09-15）I4 落地——控制面驱动安装链修复（`STP_AGENT_INSTALL_API_URL` 注入、安装脚本非交互、AEE 两键落盘）、站点侧 S5 编排（`agents.py`，`install --through-agents`）与 `verify` 降级 S6（登录/CSRF、Host/设备断言、noop 受控链；存储写读与 scan/upload/merge 显式 BLOCKED）；v0.5（2026-09-14）I3 落地——本地模式 `install`（S0–S4、绑定存储、安装记录/幂等/断点、`--dry-run`）与 `backend/scripts/bootstrap_admin.py` 受控首管理员引导；v0.4（2026-09-14）I2 落地——发布清单消费契约（`release.manifest`）、脱敏 `plan`（兼容/来源检查 fail-closed、`--save-dir` 保护）与 HTTPS 域名/证书占位符；v0.3（2026-09-14）§8 并入隔离演练输入基线（3 行演练观测 + 7 项新增输入，12 项人工干预清单见 Agent Note；演练范围与来源证明表述经复核校正）；v0.2（2026-09-14）I1 配置模型与离线 `validate` 落地；v0.1（2026-09-14）初稿
 - **日期**：2026-09-14
 - **需求**：[`多站点交付 PRD`](../prd/2026-multi-site-delivery.md) v0.9
@@ -235,6 +238,22 @@ SSH 严格核对已有/获准指纹，不能用关闭主机密钥校验解决首
 
 存储写读探针必须在确认分享身份后，使用明确的专用探针子目录与唯一文件名，按原样读回并仅删除本次文件。
 挂载未就绪时禁止向本机同名目录落数据；只有元数据检查通过时，结果应写“待授权写入验证”，不能宣称存储端到端已通过。
+
+**安装链 fail-closed 判据（v0.9：#2084 / #2088 / #2020 / #2017）**
+
+- `security_profile` 与 scheme 必须一致：`internal` 是 ADR-0024 v1.1 的「无 TLS 内网」豁免位，
+  声明 https 即 `internal_https_profile_conflict` 阻断。nginx/env 模板对只按 profile 选择，
+  放开该组合会静默装出 `listen 80` 与 `AUTH_COOKIE_SECURE=0`，把豁免边界突破成「声明加密、实际明文」；
+- S4 写共享系统路径（systemd unit / nginx site / logrotate）**前先全量判归属**：既有文件不含本站
+  部署根即 `install_conflict` 且零写入。服务名与站点名全局固定，同机第二站点必然同名（PRD：
+  「一个站点是一组角色，不是一台服务器」），无判据的覆盖会把别站服务改指本站部署根。本站重跑
+  先在 `--state-dir/shared-path-prev/` 留旧内容副本（不往系统路径扔 `.bak`，避免被 logrotate 收走）；
+  发行版 `sites-enabled/default` 只移出 `sites-enabled` 停用为 `sites-available/stp-disabled-default`，不删除；
+- S0 重算摘要所用的 digest 实现取**安装器自身源码树**的受信副本，bundle 只作为被测数据传入——
+  量具不得来自被测物（旧实现以 `PYTHONPATH=ctx.bundle` 起子进程 import 被校验树，能同时改写量具
+  与产物即可自洽，且实际取哪一份取决于解释器的 `sys.path` 顺序）；
+- S2 的 `.env.backend` 与 unit/nginx 共用同一占位符守卫：受管键与模板键失配即阻断，占位值不落盘
+  （本仓文档自 v0.5 起就写着「无遗留占位符」，此前只有模板侧兑现了它）。
 
 ## 6. 拆分为可验证实施单
 

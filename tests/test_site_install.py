@@ -552,3 +552,95 @@ def test_install_without_inventory_does_not_touch_agent_bindings(tmp_path, monke
     assert report["status"] == "PASS"
     assert "materialized_bindings" not in report
     assert not (tmp_path / "bindings/agent_ssh").exists()
+
+
+def test_foreign_shared_system_paths_block_s4_without_writes(tmp_path, monkeypatch):
+    """#2088：同名 unit/nginx 属于别的站点时 S4 阻断，且不落任何共享路径写入。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    unit = tmp_path / "system/etc/systemd/system/stability-backend-nomigrate.service"
+    unit.parent.mkdir(parents=True)
+    foreign = "[Unit]\nDescription=other site\n[Service]\nWorkingDirectory=/opt/other-site\n"
+    unit.write_text(foreign, encoding="utf-8")
+    report = invoke(tmp_path)
+    check = next(item for item in report["checks"] if item["check_id"] == "install.s4.shared_paths")
+    assert check["code"] == "install_conflict"
+    assert unit.read_text(encoding="utf-8") == foreign
+    assert not (tmp_path / "system/etc/nginx").exists()
+    assert not (tmp_path / "system/etc/logrotate.d").exists()
+
+
+def test_shared_system_paths_rerun_leaves_rollback_copy(tmp_path, monkeypatch):
+    """本站重跑允许覆盖，但旧内容必须留下可回放的副本（不写进系统路径）。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    assert invoke(tmp_path)["status"] == "PASS"
+    unit = tmp_path / "system/etc/systemd/system/stability-backend-nomigrate.service"
+    assert "WorkingDirectory=" in unit.read_text(encoding="utf-8")
+    second = invoke(tmp_path, probe=lambda dsn: ("managed", CODE_HEAD))
+    assert second["status"] == "PASS", second["checks"]
+    backup = tmp_path / "state/shared-path-prev/stability-backend-nomigrate.service"
+    assert backup.is_file()
+    assert backup.read_text(encoding="utf-8") == unit.read_text(encoding="utf-8")
+
+
+def test_distribution_default_site_is_disabled_not_deleted(tmp_path, monkeypatch):
+    """#2088：发行版默认站点是他人资产——移出 sites-enabled 停用，不静默删除。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    enabled = tmp_path / "system/etc/nginx/sites-enabled"
+    enabled.mkdir(parents=True)
+    (enabled / "default").symlink_to("../sites-available/default")
+    report = invoke(tmp_path)
+    assert report["status"] == "PASS", report["checks"]
+    assert not (enabled / "default").is_symlink()
+    stash = tmp_path / "system/etc/nginx/sites-available/stp-disabled-default"
+    assert stash.is_symlink() and os.readlink(stash) == "../sites-available/default"
+
+
+_LYING_DIGEST_STUB = '''
+import json
+import os
+
+_STATE = {"index": -1}
+
+
+def collect_artifact_entries(*args, **kwargs):
+    return []
+
+
+def digest_entries(entries):
+    root = os.environ.get("STP_INSTALL_BUNDLE") or os.getcwd()
+    with open(os.path.join(root, "release-manifest.json"), encoding="utf-8") as handle:
+        declared = [component["digest"] for component in json.load(handle)["components"]]
+    _STATE["index"] += 1
+    return declared[_STATE["index"]]
+'''
+
+
+def test_bundle_cannot_supply_its_own_digest_implementation(tmp_path, monkeypatch):
+    """#2020：量具不受被测物控制。
+
+    攻击形态——被测树里放一份「回显清单声明值」的 digest 实现，并让该树成为解释器
+    的 ``sys.path[0]``。旧实现以 ``PYTHONPATH=ctx.bundle`` 起子进程 import 它，S0 会对
+    任意内容的 bundle 放行；现在 digest 只取安装器自身源码树的受信副本。
+    """
+    _config, _bindings, _state, _target, _site, data = prepare(tmp_path)
+    bundle = Path(data["release"]["bundle"])
+    (bundle / "backend/agent/artifact_digest.py").write_text(_LYING_DIGEST_STUB, encoding="utf-8")
+    monkeypatch.chdir(bundle)
+    ops = ops_for(tmp_path)
+    report = invoke(tmp_path, ops=ops)
+    assert "release_digest" in codes(report)
+    assert not any(len(argv) > 1 and argv[1] == "-c" for argv in ops.calls)
+
+
+def test_unresolved_placeholder_in_env_template_blocks_s2(tmp_path, monkeypatch):
+    """#2017 残口：模板键与受管键失配时，占位符不得原样落进 .env.backend 且仍报 PASS。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    _config, _bindings, _state, _target, _site, data = prepare(tmp_path)
+    template = Path(data["release"]["bundle"]) / "deploy/control-plane/env/.env.backend.internal.example"
+    template.write_text(template.read_text(encoding="utf-8") + "\nSTP_FUTURE_KEY=<deploy-root>\n", encoding="utf-8")
+    report = invoke(tmp_path)
+    assert "install_conflict" in codes(report)
+    assert not (tmp_path / "opt/stp-control/.env.backend").exists()
