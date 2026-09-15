@@ -1,12 +1,12 @@
 # ADR-0040：部署摘要协议（Deployment Artifact Digest Protocol）
 
-- 状态：**Accepted**
-- 版本记录：v1.0 定稿（2026-09-13；v0.1 初版由 [#1900](https://github.com/DUElost/stability-test-platform/issues/1900) 触发、[#1901](https://github.com/DUElost/stability-test-platform/issues/1901) 跟踪 → owner 裁决采纳 D1–D7，裁决记录见 §9）
+- 状态：**Accepted** v1.1
+- 版本记录：v1.0 定稿（2026-09-13；v0.1 初版由 [#1900](https://github.com/DUElost/stability-test-platform/issues/1900) 触发、[#1901](https://github.com/DUElost/stability-test-platform/issues/1901) 跟踪 → owner 裁决采纳 D1–D7，裁决记录见 §9）；v1.1（2026-09-15，[#2057](https://github.com/DUElost/stability-test-platform/issues/2057)）：**判据唯一性**与展示面收口，修订记录见 §10（D1 的身份定义不变）
 - 优先级：P2
 - 目标里程碑：M7
 - 日期：2026-09-13
 - 决策者：平台研发组（owner 裁决，2026-09-13）
-- 标签：热更新, 内容寻址, 收敛, 幂等, 升级, 可观测, #1900
+- 标签：热更新, 内容寻址, 收敛, 幂等, 升级, 可观测, #1900, #2057
 - 关联：[#1900](https://github.com/DUElost/stability-test-platform/issues/1900)（问题界定与实测基线）、[#1901](https://github.com/DUElost/stability-test-platform/issues/1901)（本 ADR 跟踪）、[ADR-0021](./ADR-0021-script-content-alignment-gate.md)（升级门禁/维护窗口，本 ADR 复用）、[ADR-0037](./ADR-0037-agent-host-privilege-boundary.md)（提权边界，资源动作扩展须与其联审）、[ADR-0038](./ADR-0038-host-retirement-semantics.md)（D4「禁 `Host.extra` 裸键」先例）、[ADR-0033](./ADR-0033-tool-kit-ecosystem-integration.md)（包存储轨道，未来 artifact 存储复用本协议身份）、`docs/operations/agent-version-and-hot-update.md`（现行热更新契约）
 
 ## 1. 背景
@@ -96,7 +96,9 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
 - **digest 输入集 = 部署流程实际拥有并覆盖的文件集**：排除 `VERSION`、`ARTIFACT_DIGEST`、`.env`、
   deps marker、venv、logs、`resources/mtbf/`、`__pycache__`、`tests/`——**「主机态/部署态」不属于内容身份**。
 - **git revision（VERSION）降为溯源展示**，不参与收敛判定（与 `agent_code_revision` 现行语义一致）；
-  revision 可在内容不变时单独刷新（见 D4）。
+  **且不得作为任何面向运维的「是否需要动作」判据**（判据唯一性，见 D2 与 §10）。v1.1 显式**放弃**
+  原「revision 可在内容不变时单独刷新」一条：全链路无该通道（no-op 在 `hosts.py:707-729` 早退、
+  不写 VERSION），且判据换 digest 后 revision 只作溯源，不值得为对齐它增加一次远端写。
 - `resources/mtbf/` 永远属主机本地（APK 三件套等），不进任何 artifact（维持现行保护语义）。
 
 ### D2：状态载体——远端单点上报，控制面现算
@@ -110,6 +112,18 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
   不可接受），带外手工漂移由低频校验任务与 VERSION 漂移兜底（Revisit §7）。
 - **`agent_code_deployed_at` 语义修订**：只在**内容实际变更**并收敛成功时刷新；no-op 不刷新
   （no-op 由 digest 匹配状态表达）。该修订需前端展示与测试同步。
+- **判据唯一性（v1.1，#2057）**：面向运维的「是否需要动作」信号**唯一**由收敛判据（digest）
+  产生；revision、部署时间等溯源信息**不得**被渲染成 drift / 待更新一类动作信号。
+  `agent_code_sync_status` 的判等改为 **desired digest ↔ `host.agent_artifact_digest`**
+  （相等 = `matched`，不等 = `drift`）；`agent_code_revision` / `expected_code_revision`
+  降为纯文本溯源（前端展示「部署于 @x / 期望 HEAD @y」，不再着徽章）。
+  理由：`get_agent_code_version()` 取的是**仓库 HEAD**（`host_updater.py:665-681`），任何不动
+  `backend/agent/**` 的提交都会让 revision 前进而 digest 不变；若不换判据，假 drift 是**永久**
+  的——运维看到 drift 触发热更新，回 `converged(digest-matched)`，徽章不变，唯一出口是
+  `--force` 全量 + 重启，把 D3 省下的传输与重启原样花回去。
+- **`unknown` 语义（v1.1）**：主机从未上报 digest（#1907 前部署 / 新装未心跳）时为 `unknown`
+  **而非 drift**——运维动作为「等一次心跳」或「首次 `--force` 迁移」。禁止把 `unknown` 渲染成
+  需更新，否则只是把「看不懂的 drift」换成「看不懂的 unknown」。
 
 ### D3：收敛语义——相等即空操作；变更走分层载荷
 
@@ -184,6 +198,9 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
   缓解：输入集契约与部署输入集由**同一测试**守护；`--force` 逃生阀；no-op 结果留痕可审计。
 - **信任模型的已知限制**：DIGEST 文件由部署流程写入，带外手工改动不被感知（Revisit §7-3）。
 - **`agent_code_deployed_at` 语义变更**：前端/测试需同步（no-op 不刷新）。
+- **展示口径必须跟随判据（v1.1）**：任何新增状态面（resources 层、env 层、未来的 artifact 存储
+  坐标）都不得用溯源字段当动作判据——溯源与被控量的偏差会随无关提交单调增长，用代理量做反馈
+  必然产生幻象误差（§10）。
 
 ### 4.3 兼容与回滚
 
@@ -217,7 +234,9 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
 3. **带外漂移复议**：出现因手工改动远端而 digest 未感知导致的事故 → 升级为低频全树校验任务（备选 C），
    或将 digest 重算改为可配置；
 4. **入口再分叉**：新增第五条更新入口时，必须复用本协议；若无法复用，先修订本 ADR 再实现；
-5. **ADR-0037 联动**：资源动作子命令扩展落地时，ADR-0037 必须同 PR 回填其子命令白名单与校验模式。
+5. **ADR-0037 联动**：资源动作子命令扩展落地时，ADR-0037 必须同 PR 回填其子命令白名单与校验模式；
+6. **判据再分叉（v1.1）**：新增任何面向运维的「是否需要动作」信号（徽章/告警/门禁提示）时，必须
+   由 digest 产生；若某信号无法由 digest 表达，先修订本 ADR 再实现——不得让第二个判据与 digest 并存。
 
 ## 8. 关联实现 / 文档
 
@@ -244,3 +263,23 @@ docstring 要求与 Agent 侧**字节级等价**并配对照测试）→ 心跳/
   - P1 最小闭环（D1/D2/D3/D6 + 四入口记录统一）与 P2 分层扩展（含 ADR-0037 子命令白名单回填）**另开实施 issue**；
   - 升级互斥沿用 `host_upgrade_gate`（ADR-0021）；host 侧状态一律显式列，不新增 `Host.extra` 裸键（ADR-0038 D4 先例）。
 - **采纳跟踪**：#1900（父项）保持开启至协议落地；本 ADR 的修订另起 PR 并回填 `docs/adr/README.md` 索引。
+
+## 10. 修订记录（v1.1，2026-09-15，#2057）
+
+**性质**：口径澄清与展示面收口，**不改 D1 的身份定义**——artifact 身份 = 内容摘要、revision =
+溯源，两者均不变。改的是 **D2 的判据归属**：面向运维的动作判据唯一 = digest。
+
+- **判据唯一性（写入 D2）**：`agent_code_sync_status` 判等换为 digest；`agent_code_revision` /
+  `expected_code_revision` 降为纯文本溯源；`unknown` 语义成文（§4.2、§7-6）。
+- **显式放弃** D1 原「revision 可在内容不变时单独刷新」：无实现通道，且判据换 digest 后无必要。
+- **`expected_code_revision` 维持取仓库 HEAD**（不改写入口径）。若将来希望该文本不再指向与
+  agent 无关的提交，可**单独**改为「最后触碰 `backend/agent/` 的提交」——纯溯源改进，
+  **不得当作判据**：digest 输入集排除 `tests/` / `__pycache__` / 元数据（D1），只改
+  `backend/agent/tests/**` 的提交与 revert 提交仍会造成 revision 前进而 digest 不变，
+  即假 drift 只被降频、未被消除。
+- **三候选归类（供后续检索）**：C「VERSION 纳入收敛判据」= 真改 D1，已否决（把「无变化也重启」
+  请回，推翻 D3/D4 与 §4.1 全部收益）；B「VERSION 记最后触碰 agent 目录的提交」= 改 D1 的
+  溯源取值口径，可单独采纳但不得当判据；A「维持现状」= 写入语义维持，配 D2 判据换 digest。
+- **同步义务**：前端徽章与 `docs/operations/agent-version-and-hot-update.md`（§4 排障表
+  「UI 显示 drift」一行）须随本修订更新；实施由
+  [#2155](https://github.com/DUElost/stability-test-platform/issues/2155) 跟踪。
