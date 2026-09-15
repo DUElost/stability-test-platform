@@ -83,6 +83,11 @@ HOST_LOCAL_PATHS = ["resources/mtbf/"]
 # 收缩（agent-code 剔除 resources/）后分发自然停止、保护已在位。mtbf/ 的
 # protect 语义被 resources/ 传递覆盖，其 exclude 仍必需。
 PROTECT_ONLY_PATHS = ["resources/"]
+# 部署态元数据（#2091）：由部署流程单独受控写入（VERSION / write-digest 系），
+# 既不在载荷里、也不允许被 apply-code 的 --delete/--delete-excluded 清掉——
+# 否则 code-only 收敛会把 resources 记号删掉，而本轮资源层未运行（无人重写）
+# → 文件与主机列记录分叉。语义同 PROTECT_ONLY_PATHS：只防删除、不做 exclude。
+PROTECT_ONLY_METADATA = ["VERSION", "ARTIFACT_DIGEST", "ARTIFACT_DIGEST_RESOURCES"]
 
 
 class PrivError(RuntimeError):
@@ -452,6 +457,28 @@ def cmd_bootstrap(args, _conf):
     return 0
 
 
+def build_apply_code_filters() -> list:
+    """apply-code 的 rsync filter 参数（纯函数，单测锁定保护面）。
+
+    #2091：``--delete``/``--delete-excluded`` 下，未在 filter 里出现的接收端
+    文件会被删除；``protect`` 是唯一能同时拦住「不在源里」与「被 exclude」
+    两类删除的语义。
+    """
+    args = []
+    for item in FIXED_EXCLUDES:
+        args.append("--exclude=%s" % item)
+    for item in HOST_LOCAL_PATHS:
+        args.append("--exclude=%s" % item)
+        args.append("--filter=protect %s" % item)
+    for item in PROTECT_ONLY_PATHS:
+        # 只防删除不拦同步（#1950：载荷仍携带 resources/ 期间分发照旧）
+        args.append("--filter=protect %s" % item)
+    for item in PROTECT_ONLY_METADATA:
+        # #2091：部署态元数据只保护、不 exclude（源树里本就没有这些文件）
+        args.append("--filter=protect %s" % item)
+    return args
+
+
 def cmd_apply_code(args, conf):
     _require_root()
     caller_uid, _ = _caller_uid()
@@ -473,14 +500,7 @@ def cmd_apply_code(args, conf):
         RSYNC_BIN, "-a", "--no-owner", "--no-group", "--delete",
         "--delete-excluded", "--safe-links",
     ]
-    for item in FIXED_EXCLUDES:
-        argv.append("--exclude=%s" % item)
-    for item in HOST_LOCAL_PATHS:
-        argv.append("--exclude=%s" % item)
-        argv.append("--filter=protect %s" % item)
-    for item in PROTECT_ONLY_PATHS:
-        # 只防删除不拦同步（#1950：载荷仍携带 resources/ 期间分发照旧）
-        argv.append("--filter=protect %s" % item)
+    argv += build_apply_code_filters()
     staged_fd = _open_directory(staged)
     try:
         if caller_uid is not None and os.fstat(staged_fd).st_uid != caller_uid:
