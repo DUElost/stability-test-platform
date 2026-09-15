@@ -66,10 +66,14 @@ fleet run。
 
 ## Revisit
 
-- **残留窗口（明确记录）**：host 级 abort **之后**才被 claim 成 RUNNING 的**该主机** job
-  不在名单内 → 不再被 reaper 回收（改由 upgrade gate / 正常完成处理）。run 级 abort 的
-  claim 竞态由 `plan_run_abort.py:539` 的 `requested_job_ids` 刷新覆盖；host 级是否也要在
-  claim 路径并入名单，属 reaper 消费语义的一部分，与「per-host grace」一并等 ADR。
-- 若 owner 选择「按 host 独立 grace」：改动面是 `abort_requested_hosts[host_id].at` +
-  reaper 按 host 取 `at`，本 PR 的候选面判据可原样复用。
+- **残留窗口（#2154 已消掉，保留记录）**：host 级 abort **之后**才被 claim 成 RUNNING 的
+  **该主机** job 不在名单内 → 曾不再被 reaper 回收。ADR-0043（Accepted v1.0）D3 的
+  late-claim 覆盖已解决：**该 host 的时钟存在即覆盖该 host 的 RUNNING job**，不依赖名单
+  快照（名单对该 run 的 host 级请求没有刷新通道）。run 级 abort 的 claim 竞态仍由
+  `plan_run_abort.py` 的 `requested_job_ids` 刷新覆盖（run 主体），两者正交。
+- **已落地（2026-09-15，#2154）**：owner 已裁决「按 host 独立 grace」（ADR-0043 Accepted
+  v1.0）——改动面即上面所述 `abort_requested_hosts[host_id].at`（首次写入、后续不重置）+
+  reaper 按被回收 job 的请求主体取时钟（并存时取更早者）；本 PR 的候选面判据保留为 run
+  主体的覆盖语义（`requested_job_ids`），回收主体区分落在 `status_reason`
+  （`abort_ack_timeout` / `abort_ack_timeout_host`）。
 - 上游跟踪：#1928（死函数删除与 grace 重置语义）、#1880（host 作用域错位）。
