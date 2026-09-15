@@ -1360,7 +1360,7 @@ class TestWatcherSummaryEndpoint:
     def test_watcher_summary_platform_bucket_flags_unsupported_platform(
         self, client, auth_headers, chain_setup, db_session,
     ):
-        """R4-b b1（ADR-0032，2026-09-15 裁决；ADR 版本待落地回填）：无采集实现的平台必须被标注。
+        """R4-b b1（ADR-0032 裁决 2026-09-15）：无采集实现的平台必须被标注。
 
         否则 UI 会把「平台未支持」渲染成「没有异常」（信号 0 / 设备 0）。
         """
