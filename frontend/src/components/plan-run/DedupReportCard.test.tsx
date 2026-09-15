@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DedupReportCard from './DedupReportCard';
@@ -39,7 +39,7 @@ describe('DedupReportCard', () => {
     queryClient.clear();
   });
 
-  it('shows host completeness, no-ack and scan_failed warning', async () => {
+  it('#2185: 扫描阶段含完成度、未回执与零报表位（失败态走 destructive）', async () => {
     (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
       plan_run_id: 1,
       artifacts: [],
@@ -54,13 +54,14 @@ describe('DedupReportCard', () => {
 
     render(<DedupReportCard runId={1} />, { wrapper });
 
-    expect(await screen.findByTestId('dedup-host-completeness')).toBeTruthy();
-    expect(screen.getByText(/host 完成度 0\/3/)).toBeTruthy();
-    expect(screen.getByText('扫描未产生任何报表')).toBeTruthy();
-    expect(screen.getByText(/未回执 1 台/)).toBeTruthy();
+    const scan = await screen.findByTestId('pipeline-scan');
+    expect(scan.textContent).toContain('host 完成度 0/3');
+    expect(scan.textContent).toContain('未回执 1 台');
+    expect(scan.textContent).toContain('扫描未产生任何报表');
+    expect(scan.querySelector('.text-destructive')).not.toBeNull();
   });
 
-  it('hides completeness when archive is absent', async () => {
+  it('#2185: 状态缺失时明说缺什么，不再静默隐藏', async () => {
     (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
       plan_run_id: 1,
       artifacts: [],
@@ -68,10 +69,73 @@ describe('DedupReportCard', () => {
 
     render(<DedupReportCard runId={1} />, { wrapper });
 
-    expect(
-      await screen.findByText('暂无去重产物。归档完成后点击「扫描」开始。'),
-    ).toBeTruthy();
-    expect(screen.queryByTestId('dedup-host-completeness')).toBeNull();
+    // 此前 archive 缺失＝整块完成度静默消失；现在明说"未开始"而不是显示成 0/0
+    expect(await screen.findByTestId('archive-pipeline')).toBeTruthy();
+    expect(screen.getByTestId('pipeline-scan').textContent).toContain('未开始（无本轮 host 计数）');
+    expect(screen.getByTestId('pipeline-upload').textContent).toContain('upload_summary 缺失');
+    expect(screen.getByTestId('pipeline-extract').textContent).toContain('extract 缺失');
+    // 产物空态 CTA 仍在（与"状态缺失"是两件事）
+    expect(screen.getByText('暂无去重产物。归档完成后点击「扫描」开始。')).toBeTruthy();
+  });
+
+  it('#2185: 勾选「最终轮」后触发扫描带 is_final=true', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+    });
+    (api.planRuns.triggerScan as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      triggered_hosts: [],
+      skipped_offline: [],
+    });
+
+    render(<DedupReportCard runId={1} />, { wrapper });
+    const scanBtn = await screen.findByTestId('dedup-scan-btn');
+
+    fireEvent.click(scanBtn);
+    await waitFor(() => expect(api.planRuns.triggerScan).toHaveBeenCalledWith(1, false));
+
+    fireEvent.click(screen.getByTestId('dedup-scan-final'));
+    fireEvent.click(scanBtn);
+    await waitFor(() => expect(api.planRuns.triggerScan).toHaveBeenLastCalledWith(1, true));
+  });
+
+  it('#2185: 合并阶段按产物判定、提取阶段露出缺失', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [
+        {
+          id: 1,
+          host_id: 'h1',
+          storage_uri: '/nfs/dedup/1/h1_Result_org.xls',
+          artifact_type: 'scan_result_xls',
+          size_bytes: 10,
+          created_at: null,
+        },
+      ],
+    });
+
+    render(
+      <DedupReportCard
+        runId={1}
+        extractSummary={{
+          targets: 5,
+          copied: 4,
+          missing: 1,
+          existing: 0,
+          merge_xls_copied: 1,
+          archived: 0,
+        }}
+      />,
+      { wrapper },
+    );
+
+    const merge = await screen.findByTestId('pipeline-merge');
+    expect(merge.textContent).toContain('未合并（本轮 scan 产物 1 份）');
+    const extract = screen.getByTestId('pipeline-extract');
+    expect(extract.textContent).toContain('已拷贝 4/5');
+    expect(extract.textContent).toContain('缺失 1');
+    expect(extract.querySelector('.text-destructive')).not.toBeNull();
   });
 
   it('I-7: 未等齐时露出 incomplete_reason（此前只说「未等齐」）', async () => {
