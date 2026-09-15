@@ -68,9 +68,10 @@ Class: testing
 
 ## Verification
 
-`python -m pytest tests/ -q` → **1040 passed**。这一项要连着读：本单**删 4 例**（#2144 那个
-文件）+ **加 2 例**（场景序列守卫 + 解析器自证），即基线 1042 → 1040；用例数变少是折叠的
-**预期结果**，判据强度由下面的红自证保证。
+`python -m pytest tests/ -q` → 最终 HEAD 上 **1053 passed**（再并入 22 个 main 提交后；
+上一 HEAD 为 1040）。这一项要连着读：本单**删 4 例**（#2144 那个文件）+ **加 2 例**（场景
+序列守卫 + 解析器自证），即净 **-2**（1042 → 1040，main 新增的另算）；用例数变少是折叠的
+**预期结果**，判据强度由下面的红自证保证——**总数不是这里的信号**。
 
 - `python -m pytest tests/test_prometheus_alerts_contract.py -q` → **7 passed**（原 5 例 + 2）；
 - `npx vitest run src/pages/execution/PlanRunLogsPage.test.tsx` → **10 passed**（原 4 例 + 6 新）；
