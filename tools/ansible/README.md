@@ -1,5 +1,10 @@
 # Linux Agent Host Ansible 运维
 
+> **新站点接入 Agent 请优先用 `deploy/agent/install.sh`**（读仓库外 inventory，默认 `~/hosts.ini`，
+> 自带共享凭据落绑定目录与逐台 `digest_matched` 断言；见 [`docs/operations/installation.md`](../../docs/operations/installation.md)）。
+> 本目录的 playbook 仍用于专项动作与既有站点维护。
+
+
 正式运维记录文档见：
 
 - `docs/linux-agent-ansible-runbook.md`

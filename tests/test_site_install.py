@@ -237,7 +237,7 @@ def ops_for(tmp_path: Path, *, responses=None) -> FakeOps:
 
 
 def invoke(tmp_path, *, dry_run=False, ops=None, probe=None, confirm_target="control-i3.synthetic.invalid",
-           config_path=None, bindings=None, state_dir=None):
+           config_path=None, bindings=None, state_dir=None, agents_inventory=None):
     config_path = config_path or tmp_path / "site.yaml"
     bindings = bindings or tmp_path / "bindings"
     state_dir = state_dir or tmp_path / "state"
@@ -248,6 +248,7 @@ def invoke(tmp_path, *, dry_run=False, ops=None, probe=None, confirm_target="con
         confirm_site="synthetic-i3",
         confirm_target=confirm_target,
         dry_run=dry_run,
+        agents_inventory=agents_inventory,
         ops=ops or ops_for(tmp_path),
         db_probe=probe or (lambda dsn: ("empty", None)),
         system_root=tmp_path / "system",
@@ -480,3 +481,74 @@ def test_bootstrap_admin_rejects_invalid_input_without_runtime():
     assert result.returncode == 2
     assert json.loads(result.stdout)["status"] == "invalid"
     assert PRIVATE_MARKER not in result.stdout + result.stderr
+
+
+def _inventory(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "hosts.ini"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_agents_inventory_is_merged_and_its_bindings_materialized(tmp_path):
+    """inventory 的共享凭据必须落到绑定目录，S5 才能解析 ssh_credential_ref。"""
+    prepare(tmp_path)
+    # 与已声明 Agent 同安装根：站点级单值（异构根会被模型拒绝）
+    inventory = _inventory(tmp_path, (
+        "[stp_agents]\n"
+        f"10.99.0.21 ansible_user=ops ansible_password={PRIVATE_MARKER}"
+        f" install_root={tmp_path / 'opt/stp-agent'}\n"
+    ))
+    report = invoke(tmp_path, agents_inventory=inventory, dry_run=True)
+    assert report["status"] == "PASS"
+    # dry-run 只报名字，不写凭据
+    assert report["materialized_bindings"] == ["agent_ssh"]
+    assert not (tmp_path / "bindings/agent_ssh").exists()
+    assert PRIVATE_MARKER not in json.dumps(report, ensure_ascii=False)
+
+
+def test_agents_inventory_writes_the_shared_credential_owner_only(tmp_path, monkeypatch):
+    prepare(tmp_path)
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    inventory = _inventory(tmp_path, (
+        "[stp_agents]\n"
+        f"10.99.0.21 ansible_user=ops ansible_password={PRIVATE_MARKER}"
+        f" install_root={tmp_path / 'opt/stp-agent'}\n"
+    ))
+    report = invoke(tmp_path, agents_inventory=inventory)
+    assert report["status"] == "PASS"
+    path = tmp_path / "bindings/agent_ssh"
+    assert stat.S_IMODE(os.lstat(path).st_mode) == 0o600
+    assert f"PASSWORD={PRIVATE_MARKER}" in path.read_text(encoding="utf-8")
+    assert PRIVATE_MARKER not in json.dumps(report, ensure_ascii=False)
+
+
+def test_bad_inventory_line_fails_closed_with_the_offending_host(tmp_path):
+    prepare(tmp_path)
+    inventory = _inventory(tmp_path, f"[stp_agents]\n10.99.0.21 ansible_password={PRIVATE_MARKER}\n")
+    report = invoke(tmp_path, agents_inventory=inventory)
+    assert report["status"] == "FAIL"
+    check = next(item for item in report["checks"] if item["check_id"] == "install.inventory")
+    assert check["code"] == "inventory_user_missing"
+    assert "10.99.0.21" in check["message"]
+    assert PRIVATE_MARKER not in json.dumps(report, ensure_ascii=False)
+    assert not (tmp_path / "bindings/agent_ssh").exists()
+
+
+def test_inventory_that_breaks_a_site_invariant_is_a_configuration_failure(tmp_path):
+    """异构安装根：inventory 不能绕过站点约束，且必须是检查项而不是异常。"""
+    prepare(tmp_path)
+    inventory = _inventory(tmp_path, (
+        "[stp_agents]\n10.99.0.21 ansible_user=ops ansible_password=x install_root=/opt/other-root\n"
+    ))
+    report = invoke(tmp_path, agents_inventory=inventory)
+    assert report["status"] == "FAIL"
+    assert "agent_install_root_mismatch" in codes(report)
+
+
+def test_install_without_inventory_does_not_touch_agent_bindings(tmp_path, monkeypatch):
+    prepare(tmp_path)
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    report = invoke(tmp_path)
+    assert report["status"] == "PASS"
+    assert "materialized_bindings" not in report
+    assert not (tmp_path / "bindings/agent_ssh").exists()

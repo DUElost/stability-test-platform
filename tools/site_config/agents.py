@@ -639,6 +639,14 @@ def stage_s5_agents(
     """Onboard every declared Agent through the site API (S5)."""
     config = ctx.config
     checks: list[Check] = []
+    if not config.agents:
+        # 先装控制面、Agent 随后接入：S5 显式跳过并给出后续命令。
+        return [Check(
+            "install.s5", "agent", "PASS", "$.agents", "agents_pending",
+            "No Agent is declared yet; the control plane was installed without Agents.",
+            "Add hosts to the inventory and run `deploy/agent/install.sh` "
+            "(or `install --through-agents --agents-inventory <file>`).",
+        )]
     # 进度走 stderr：stdout 只承载最终脱敏报告，便于操作者按 JSON 消费。
     say = progress or (lambda message: print(f"[s5] {message}", file=sys.stderr))
     bindings: list[dict[str, str]] = []
