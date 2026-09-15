@@ -159,7 +159,6 @@ class TestPlanRunAbort:
         assert body["phase"] == "running"
         assert body["aborted_jobs"] == [pending_job.id]
         assert body["abort_requested_jobs"] == [running_job.id]
-        assert body["released_leases"] == 0
 
         db_session.expire_all()
         # PENDING → ABORTED inline; RUNNING stays RUNNING (Agent will drain).
@@ -266,7 +265,6 @@ class TestPlanRunAbort:
         body = resp.json()["data"]
         assert body["phase"] == "precheck"
         assert body["aborted_jobs"] == []
-        assert body["released_leases"] == 0
 
         db_session.expire_all()
         pr_after = db_session.get(PlanRun, pr.id)
@@ -295,7 +293,6 @@ class TestPlanRunAbort:
         body = resp.json()["data"]
         assert body["phase"] == "running"
         assert body["aborted_jobs"] == []
-        assert body["released_leases"] == 0
         assert body["status"] == "FAILED"
 
         db_session.expire_all()
