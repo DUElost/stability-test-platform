@@ -57,7 +57,8 @@
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
-    --primary: 217 91% 60%;
+    /* 60%→53.3%（blue-500→真 blue-600 #2563eb，用户裁决 2026-09-14）：白字 3.6→5.2:1、蓝字白底同升，达 WCAG AA */
+    --primary: 221.2 83.2% 53.3%;
     --primary-foreground: 210 40% 98%;
     --secondary: 210 40% 96.1%;
     --secondary-foreground: 222.2 47.4% 11.2%;
@@ -76,12 +77,12 @@
     --info-foreground: 210 40% 98%;
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;
-    --ring: 217 91% 60%;
+    --ring: 221.2 83.2% 53.3%;
     --radius: 0.5rem;
     /* 侧栏独立色阶仍服务布局分层（Phase 2），primary 跟蓝主色 */
     --sidebar: #fafafa;
     --sidebar-foreground: #09090b;
-    --sidebar-primary: #3b82f6;
+    --sidebar-primary: #2563eb;
     --sidebar-primary-foreground: #fafafa;
     --sidebar-accent: #f4f4f5;
     --sidebar-accent-foreground: #18181b;
