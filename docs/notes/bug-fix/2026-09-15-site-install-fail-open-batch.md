@@ -8,9 +8,9 @@ Class: bug-fix
 四张单同源：I3 安装链（`39428fe8`）在「声明与实际不一致」时**继续报 PASS**。本批把它们
 收到同一处判据上——冲突即 `install_conflict` 且**零写入**，不做「猜意图后降级安装」。
 
-- **#2084 `security_profile` 与 scheme 必须一致**（`tools/site_config/models.py:215`
-  `ControlPlane.security_consistency` + `validation.py` 新 `internal_https_profile_conflict`
-  文案）：`internal` 配 https 在模型层阻断。`bootstrap.py` 已按 scheme 推导 profile，
+- **#2084 `security_profile` 与 scheme 必须一致**（`tools/site_config/models.py:219`
+  `ControlPlane.security_consistency` + `tools/site_config/checks.py:35` 新
+  `internal_https_profile_conflict` 文案）：`internal` 配 https 在模型层阻断。`bootstrap.py` 已按 scheme 推导 profile，
   放开该组合只会让 nginx/env 模板对（纯按 profile 选择）静默装出 `listen 80` +
   `AUTH_COOKIE_SECURE=0`。测试改写了钉住旧语义的
   `test_https_always_requires_a_tls_reference[production/internal]`，拆为
@@ -61,7 +61,8 @@ Class: bug-fix
 
 - `pytest tests/test_site_install.py tests/test_site_config.py tests/test_site_config_plan.py
   tests/test_site_bootstrap.py tests/test_site_preflight.py tests/test_site_agents.py
-  tests/test_site_inventory.py tests/test_site_handover.py -q` → **378 passed**（新增 6 例全绿）。
+  tests/test_site_inventory.py tests/test_site_handover.py -q` → **378 passed**（新增 6 例全绿）；
+  并入 `origin/main@9439fd5b` 后全量 `pytest tests/ -q` → **988 passed**。
 - red→green：`git stash push -- tools/site_config` 后跑 `test_site_install.py
   test_site_config.py` → **6 failed, 218 passed**，失败集正是新增 6 例；`git stash pop`
   恢复后全绿。新断言不依赖实现内部结构。
@@ -73,11 +74,15 @@ Class: bug-fix
   `_LYING_DIGEST_STUB`：被篡改树里的 digest 实现回显清单声明值，并把 bundle 设为
   `cwd`；修复后 S0 仍报 `release_digest`，且断言不再出现 `-c` 子进程）、
   `test_unresolved_placeholder_in_env_template_blocks_s2`。
-- `ruff check tools/site_config/` → All checks passed。
+- `ruff check backend/ tools/ scripts/` 与 `scripts/run_gates.py check:quick` → 全绿
+  （10 gates；`schema-at-head` 因本机未配 `DATABASE_URL` 记 WARN 跳过）。
 - **未做真机/站点安装验证**：S4 归属判据与 `.bak` 结论只在 `--system-root` 重定向的
   合成树上验证过；发行版 nginx include 语义、logrotate 通配收录按配置约定推理，
   未在本机（非站点宿主）实测。城市 B/C 现场验收仍是独立未决项。
-- 门禁：`scripts/run_gates.py check:quick` 结果见本 PR。
+- 合并适配：`origin/main` 已把 `MESSAGES`/`Check` 从 `validation.py` 拆到
+  `tools/site_config/checks.py`（#2168），本批的新文案落在 `checks.py`；
+  S2 的 env 复用分支同时被 #2168 改为 `_effective_env_keys()` 判定，与本批的首次写盘
+  守卫互不覆盖——合并后重跑全量测试确认。
 
 ## Revisit
 
