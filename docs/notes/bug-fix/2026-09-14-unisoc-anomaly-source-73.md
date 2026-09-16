@@ -72,8 +72,10 @@ Class: bug-fix
 
 定性：**命令在 ROM 层被吞**（rc=0、无 stderr、无任何副作用——不是执行失败）。触发台账三条在
 Z2581/MyOS16.0.1 上有效，在本组合**全部失效**（`ro.debuggable=1` 也拦不住）→
-**Z2582/MyOS16.0.3 不得再作为主动触发构造设备**。具体抑制器（monkey build 开关还是 MyOS
-策略）未深究：属设备侧行为，不在平台边界内，台账只登记组合事实。
+**Z2582/MyOS16.0.3 不得再作为主动触发构造设备**。归因修正（见下节换机实证）：
+`persist.sys.monkey=true` 在 Z2581/MyOS16.0.1 build **同样存在**且触发有效 → monkey 开关假说
+否定，抑制器收窄为 Z2582/MyOS16.0.3 build 特有策略；不再深究（属设备侧行为，不在平台边界内，
+台账只登记组合事实）。
 
 ### 平台侧回归结论（负向成立；正向缺口收窄为「构造手段」）
 
@@ -85,7 +87,30 @@ Z2581/MyOS16.0.1 上有效，在本组合**全部失效**（`ro.debuggable=1` �
   `job_log_signal(source=reconciler)`——那 2 条 Boot Category 即其存量。故本轮缺口性质是
   **构造手段失效**，不是链路有效性存疑。
 - 正向替代路径（不依赖触发器）：观察窗口内被动等自然新事件目录（压测机自然产出
-  JE/ANR/NE 新目录即可走全链），或把主动触发移回 Z2581 执行。
+  JE/ANR/NE 新目录即可走全链），或把主动触发移回 Z2581 执行。**后者已于同日上午执行，
+  正向闭环成立，见下节。**
+
+### 换机正向再实证（同日 11:48–12:05，Z2581 `00004a4f` @ host `172-21-15-59`，
+`MyOS16.0.1_Z2581_GEN_AF`）
+
+**编排**：PlanRun 410 / Job 17940（Plan 51：`unisoc_probe` v1.0.1 四根、patrol 45s 驻留——
+与 gO7uVr 窗口同形态；触发用手工 adb，同台账姿势）。基线：该序列 UNIVIEW 信号 **0 条**，
+uniview 根仅 `Reboot.103000002`（normalboot 被 #2083 拒收 → 基线干净，任何新增都可证新鲜）。
+
+| 触发 | 设备端效果 | 平台端效果 | 判定 |
+|---|---|---|---|
+| `am crash com.android.settings`（11:51:27） | **新目录 `JE.103000004`** + dropbox 新 `system_app_crash`（设备时钟恒慢 ~6.9 天，文件名 epoch 对应真实时刻，#785 形态） | 11:52:02 seq1 emit（**tick 35s 接住**，`subtype=Java Crash`，`package=com.android.settings`）；11:55:03 seq2 因目录追加载荷签名变化重发（#2010 原语义；消费侧 #2080 同键合并）；DLE→`REMOTE` | **有效**——Z2582 上被阻的正向路径在此闭环 |
+| `am hang`（约 11:56） | 该 ROM 的 hang 作用在 **system_server**：dropbox `system_server_pre/post_watchdog` ×3 + **新目录 `SWT.103000006`**（`event_name=watchdog`，头行 `sn=00004a4f`） | 11:58:03 seq3 emit（`subtype=watchdog`，`package=system_server`）；DLE→`REMOTE` | **有效**（Z2582 连 watchdog 痕迹都不产生 → 机型 build 差异坐实） |
+| `kill -STOP <pid>` + `input tap`（两次尝试） | `/data/anr` 40s+ 无 trace、dropbox 无 ANR 行、`ANR.103000005` 无新行；`input tap` **阻塞在挂起的分发队列上**（排队而非被吞，与 Z2582 的「秒回 rc=0 零痕迹」形态学相反） | 无对应信号 | **未复现**——台账第三条即使在 Z2581 也未按该姿势复现（疑 ANR 落盘延迟/路径不同），ANR 类正向以自然事件补 |
+
+**副产物验证**：三条信号 + 三条 DLE 全部 `REMOTE`（上送 `/mnt/stp-aee/devices/410/`）→
+采集→emit→入库→上送全链在合并后代码上一次性走通；`#2010 重发 + #2080 同键合并`在真机上首见
+原始双行样本。
+
+**现场恢复**：hang 后 system_server watchdog 反复触发（load ≈12，force-stop 卡死、
+`kill -9` settings 不解环）→ abort PlanRun 410（Job `ABORTED`、3 信号保留、租约释放）→
+`adb reboot` 恢复（`sys.boot_completed=1`，租约空）。gO7uVr 窗口（PlanRun 409 / 62002360）
+全程未受影响。
 
 ### 实证：NE 大目录整目录 pull 恒超时 → 已立单 #2252
 
@@ -103,6 +128,8 @@ Revisit「载荷策略」项的现实证据 → **已立 [#2252](https://github.
   时间对齐，需先确认设备时区。
 - **附加源尚未纳入**：toolkit `_scan_platform_sources()` 还采 `/data/anr`、`/data/tombstones`
   （该机 100 条）、`/data/ylog`，本单只对齐了 uniview 主路径 → 是否纳入待边界裁决。
+  换机实证补充：Z2581 上 `kill -STOP`+tap 40s 窗口内 `/data/anr` 不产 trace——ANR 类事件的
+  设备侧产生时延/路径与 uniview `ANR.103000005` 的关系需自然事件样本再判，勿以该姿势否定 ANR 链路。
 - **载荷策略**：现为整目录 pull，toolkit 是按 `{seq}-{ts}.tar.gz` 与事件行**按序号对应**增量拉取
   → 目录很大时（如 `NE.103000003` 有上百个 tar）值得收敛。**已立 #2252**（2026-09-16 实证：
   该目录 1.9GB/999 files，整目录 pull 恒 180s 超时 → 永久无信号 + 每拍占用提取预算，
