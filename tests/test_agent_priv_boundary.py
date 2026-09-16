@@ -86,7 +86,10 @@ def test_wrapper_protect_only_paths():
     """
     module = _load_wrapper()
 
-    assert module.PROTECT_ONLY_PATHS == ["resources/"]
+    # #2019：必须是整树形态 `resources/***`——尾斜杠模式在 rsync 里只护**目录
+    # 节点本身**，源树一旦含任一 resources/*，接收端其余内容仍会被 --delete 清掉
+    # （实测见 test_agent_priv_apply_code_protection.py 的 rsync 用例）。
+    assert module.PROTECT_ONLY_PATHS == ["resources/***"]
     # mtbf 语义不变：exclude+protect（不同步 + 不删）
     assert module.HOST_LOCAL_PATHS == ["resources/mtbf/"]
 

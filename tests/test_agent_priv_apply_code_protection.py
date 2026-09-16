@@ -43,7 +43,10 @@ def test_apply_code_filters_protect_deploy_metadata(wrapper):
         # 不能 exclude：--delete-excluded 下 exclude 等于「显式删除」
         assert "--exclude=%s" % name not in filters, filters
     # resources/ 仍是 protect-only（#1950 语义不回退）；mtbf/ 仍需 exclude
-    assert "--filter=protect resources/" in filters
+    # #2019：必须是 `resources/***`（整树）——尾斜杠只护目录节点本身，
+    # 源树含任一 resources/* 时接收端其余内容会被 --delete 清掉。
+    assert "--filter=protect resources/***" in filters
+    assert "--filter=protect resources/" not in filters
     assert "--exclude=resources/mtbf/" in filters
 
 
@@ -102,3 +105,41 @@ def test_remote_script_has_no_self_owned_rsync_face():
     assert "--filter=" not in script
     # code-only 收敛仍走 wrapper（保护语义在 ① 锁定）
     assert 'sudo "$PRIV" apply-code --staged "$CODE_TMP"' in script
+
+
+def test_resources_tree_survives_apply_code_rsync_when_source_has_resources(wrapper, tmp_path):
+    """#2019：源树含 `resources/*` 时，接收端 `resources/**` 仍必须整树存活。
+
+    反例（修复前）：`--filter=protect resources/` 只护目录节点——源树一旦出现
+    `resources/<新文件>`，`--delete` 就把接收端其余内容（mtbf 大件、aimonkey 等）
+    清掉，且 rsync 退出 0（静默数据损失）。
+    """
+    rsync = shutil.which("rsync")
+    if not rsync:
+        pytest.skip("rsync 不可用")
+
+    staged, dest = tmp_path / "staged", tmp_path / "dest"
+    (staged / "agent" / "resources").mkdir(parents=True)
+    (dest / "agent" / "resources" / "mtbf").mkdir(parents=True)
+    (dest / "agent" / "resources" / "aimonkey").mkdir(parents=True)
+    # 源树：新增一个 resources 项（触发 --delete 的删除传播）
+    (staged / "agent" / "resources" / "new.bin").write_text("new", encoding="utf-8")
+    # 接收端：主机本地大件 + 另一 resources 子树
+    (dest / "agent" / "resources" / "mtbf" / "apk.bin").write_text("big", encoding="utf-8")
+    (dest / "agent" / "resources" / "aimonkey" / "am.bin").write_text("big2", encoding="utf-8")
+    # 对照：agent 目录下（非 resources）的陈旧文件仍应被删（--delete 未被削弱）
+    (dest / "agent" / "stale.py").write_text("old", encoding="utf-8")
+    # 暂存树里需要有一个 agent 层文件，否则 rsync 的 --delete 面不易观察
+    (staged / "agent" / "main.py").write_text("new", encoding="utf-8")
+
+    subprocess.run(
+        [rsync, "-a", "--delete", "--delete-excluded", "--safe-links",
+         *wrapper.build_apply_code_filters(),
+         str(staged / "agent") + "/", str(dest / "agent") + "/"],
+        check=True, capture_output=True,
+    )
+
+    assert (dest / "agent" / "resources" / "mtbf" / "apk.bin").exists(), "主机本地大件被清"
+    assert (dest / "agent" / "resources" / "aimonkey" / "am.bin").exists(), "resources 子树被清"
+    assert (dest / "agent" / "resources" / "new.bin").exists(), "源树新增项未同步"
+    assert not (dest / "agent" / "stale.py").exists(), "--delete 被误削弱（对照项未删）"
