@@ -33,10 +33,6 @@ import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
-from backend.realtime.socketio_server import (
-    schedule_agent_control_fanout,
-    schedule_emit,
-)
 from typing import Iterable, Optional
 
 from sqlalchemy import select, update
@@ -790,6 +786,13 @@ def abort_plan_run(
     # schedulable while the old process is still running.
     # #703：host 扇出合并为单次 schedule_agent_control_fanout，避免上百次
     # run_coroutine_threadsafe 同步灌满主事件循环。
+    # Lazy import: keep abort predicates importable without JWT_SECRET_KEY
+    # (agent-tests clean collect / #739; #2270 pulled plan_run_abort into dispatcher).
+    from backend.realtime.socketio_server import (
+        schedule_agent_control_fanout,
+        schedule_emit,
+    )
+
     control_items: list[tuple[str, dict]] = []
     for emit_host_id in abort_hosts:
         host_job_ids = abort_jobs_by_host.get(emit_host_id, [])

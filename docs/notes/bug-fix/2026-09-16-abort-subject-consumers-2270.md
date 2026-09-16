@@ -57,6 +57,14 @@ ADR-0043 把 abort 宽限的**请求主体 ≡ 计时主体**改了写侧与 rea
 - **未做**：前端未改（`abort_pending` 由后端计算并透传，`HostHotUpdateConfirmDialog`
   的展示逻辑无需变动）；`abort_requested_hosts` 的**清理**（host 升级完成后是否删键）
   不在本单，见 Revisit。
+- **CI 补丁（#2350）**：`plan_dispatcher_sync` 顶层 import `run_abort_pending` 后，
+  agent 测例经 `admission_pump → plan_dispatcher_sync → plan_run_abort` 拉到
+  `socketio_server → core.security` 的模块级 `JWT_SECRET_KEY` 硬检查；
+  `pr-agent-tests` 的 `env -i` 收集守卫（#739）因此红。
+  将 `schedule_emit` / `schedule_agent_control_fanout` 改为 `abort_plan_run` 内
+  lazy import（与 `plan_run_events` / `run_console` 等同模式），判据可在无 JWT
+  环境下安全 import。本地复核：`env -i … pytest backend/agent/tests/ --collect-only`
+  与 `test_abort_subject_predicate_2270`。
 
 ## Revisit
 
