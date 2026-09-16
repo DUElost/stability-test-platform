@@ -61,7 +61,9 @@ _LINK_RATE_CATEGORIES = ("AEE", "VENDOR_AEE", "UNIVIEW")
 _SIGNAL_ONLY_CATEGORIES = ("MOBILELOG",)
 
 
-def _rows_from_device_log_events(db: Session, job_ids: list[int]) -> list[tuple[str, int]]:
+def _rows_from_device_log_events(
+    db: Session, job_ids: list[int], *, by_job: bool = False,
+) -> list[tuple]:
     """DLE-backed subtype counts (authority per ADR-0028).
 
     Ruled semantics (#783, 2026-09-12): the count is **distinct event artifact
@@ -71,10 +73,15 @@ def _rows_from_device_log_events(db: Session, job_ids: list[int]) -> list[tuple[
     the same event and must not inflate the risk bucket. ``_classify_subtype``
     thresholds therefore read "distinct event artifacts", not "event
     occurrences". Changing this needs a product ruling (see Revisit).
+
+    ``by_job=True`` 时按 job 分桶（``(job_id, subtype, count)``，供 #2365 的
+    逐 job 判定用）；两种形态共用同一 SELECT/WHERE 字面量，过滤器不会各写一份
+    而漂移。
     """
-    sql = text("""
+    prefix = "job_id, " if by_job else ""
+    sql = text(f"""
         SELECT
-            COALESCE(NULLIF(event_subtype, ''), event_type) AS subtype,
+            {prefix}COALESCE(NULLIF(event_subtype, ''), event_type) AS subtype,
             COUNT(DISTINCT COALESCE(remote_path, local_path)) AS dedup_count
         FROM device_log_event
         WHERE job_id = ANY(:job_ids)
@@ -85,7 +92,7 @@ def _rows_from_device_log_events(db: Session, job_ids: list[int]) -> list[tuple[
               AND upper(COALESCE(NULLIF(event_subtype, ''), '___')) = ANY(:concrete_subtypes)
             )
           )
-        GROUP BY subtype
+        GROUP BY {prefix}subtype
     """)
     rows = db.execute(
         sql,
@@ -96,19 +103,26 @@ def _rows_from_device_log_events(db: Session, job_ids: list[int]) -> list[tuple[
             "concrete_subtypes": [t.upper() for t in _DLE_RISK_CONCRETE_EVENT_TYPES],
         },
     ).all()
-    return [(str(subtype), int(dedup_count)) for subtype, dedup_count in rows]
+    if by_job:
+        return [(int(job_id), str(subtype), int(count)) for job_id, subtype, count in rows]
+    return [(str(subtype), int(count)) for subtype, count in rows]
 
 
-def _rows_from_unlinked_signals(db: Session, job_ids: list[int]) -> list[tuple[str, int]]:
-    sql = text("""
+def _rows_from_unlinked_signals(
+    db: Session, job_ids: list[int], *, by_job: bool = False,
+) -> list[tuple]:
+    """未链接信号（尚未归档成 DLE 的那部分）的子类型计数；``by_job`` 语义同
+    :func:`_rows_from_device_log_events`（#2365）。"""
+    prefix = "job_id, " if by_job else ""
+    sql = text(f"""
         SELECT
-            COALESCE(extra->>'event_subtype', category) AS subtype,
+            {prefix}COALESCE(extra->>'event_subtype', category) AS subtype,
             COUNT(DISTINCT extra->>'nfs_path') AS dedup_count
         FROM job_log_signal
         WHERE job_id = ANY(:job_ids)
           AND device_log_event_id IS NULL
           AND category = ANY(:categories)
-        GROUP BY subtype
+        GROUP BY {prefix}subtype
     """)
     rows = db.execute(
         sql,
@@ -117,7 +131,26 @@ def _rows_from_unlinked_signals(db: Session, job_ids: list[int]) -> list[tuple[s
             "categories": list(_SIGNAL_RISK_CATEGORIES),
         },
     ).all()
-    return [(str(subtype), int(dedup_count)) for subtype, dedup_count in rows]
+    if by_job:
+        return [(int(job_id), str(subtype), int(count)) for job_id, subtype, count in rows]
+    return [(str(subtype), int(count)) for subtype, count in rows]
+
+
+def _subtype_levels(subtype_counts: dict[str, int]) -> Dict[str, str]:
+    """子类型 → S/A/B（判据唯一实现，全局汇总与逐 job 判定共用，#2365）。"""
+    return {
+        subtype: _classify_subtype(subtype, count)
+        for subtype, count in subtype_counts.items()
+    }
+
+
+def _worst_level(levels: Dict[str, str]) -> str:
+    """最严重级别；无输入时返回默认级（调用方负责把「无信号」表达成 UNKNOWN）。"""
+    worst = _DEFAULT_RISK_LEVEL
+    for level in levels.values():
+        if _RISK_SEVERITY_ORDER.get(level, 0) > _RISK_SEVERITY_ORDER.get(worst, 0):
+            worst = level
+    return worst
 
 
 def _build_risk_summary(subtype_counts: dict[str, int]) -> Optional[Dict[str, Any]]:
@@ -128,7 +161,6 @@ def _build_risk_summary(subtype_counts: dict[str, int]) -> Optional[Dict[str, An
     by_severity: Dict[str, int] = {"S": 0, "A": 0, "B": 0}
     events_total = 0
     aee_entries = 0
-    worst_level = _DEFAULT_RISK_LEVEL
 
     for subtype, count in subtype_counts.items():
         by_type[subtype] = count
@@ -136,10 +168,11 @@ def _build_risk_summary(subtype_counts: dict[str, int]) -> Optional[Dict[str, An
         upper = subtype.upper()
         if upper != "ANR":
             aee_entries += count
-        level = _classify_subtype(subtype, count)
+
+    levels = _subtype_levels(subtype_counts)
+    for level in levels.values():
         by_severity[level] = by_severity.get(level, 0) + 1
-        if _RISK_SEVERITY_ORDER.get(level, 0) > _RISK_SEVERITY_ORDER.get(worst_level, 0):
-            worst_level = level
+    worst_level = _worst_level(levels)
 
     return {
         "risk_level": worst_level,
@@ -313,3 +346,28 @@ def aggregate_risk_summary_from_signals(
 ) -> Optional[Dict[str, Any]]:
     """Backward-compatible alias — prefer :func:`aggregate_risk_summary`."""
     return aggregate_risk_summary(db, job_ids)
+
+
+def aggregate_risk_levels_by_job(db: Session, job_ids: list[int]) -> Dict[int, str]:
+    """逐 job 风险级别（S/A/B）——**只含有异常信号的 job**，无信号者不在返回里。
+
+    #2365：与 :func:`aggregate_risk_summary` **同判据同数据源**（DLE 权威 +
+    未链接信号，经 :func:`_subtype_levels` / :func:`_worst_level`），只是按 job
+    分桶且一次查询覆盖全部 job——调用方（`/results/summary` 的风险分布与
+    recent_runs）因此不必逐 job 往返。
+
+    「有信号」与「无信号」必须由调用方区分：`None` 表示**没有可判定的事件**
+    （风险未知），不是「低风险」——这是 #2365 覆盖率观测的口径，别把它压成默认级。
+    """
+    if not job_ids:
+        return {}
+
+    per_job: Dict[int, Dict[str, int]] = {}
+    for job_id, subtype, count in _rows_from_device_log_events(db, job_ids, by_job=True):
+        bucket = per_job.setdefault(job_id, {})
+        bucket[subtype] = bucket.get(subtype, 0) + count
+    for job_id, subtype, count in _rows_from_unlinked_signals(db, job_ids, by_job=True):
+        bucket = per_job.setdefault(job_id, {})
+        bucket[subtype] = bucket.get(subtype, 0) + count
+
+    return {job_id: _worst_level(_subtype_levels(counts)) for job_id, counts in per_job.items()}
