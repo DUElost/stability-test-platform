@@ -117,6 +117,15 @@ GATES = {
         ROOT,
         None,
     ),
+    # alembic revision 不可变门禁（#2258，承接 #2046）：已合入 main 的 revision 被
+    # 改写/删除即红——停在其后的库不会再执行被插入的祖先，而 check_alembic_at_head
+    # 只做等值判定、判不出来。唯一豁免 = 同一 diff 为被改写者附了重放迁移（#1717 形态）。
+    "alembic-immutability": (
+        f"{PY} tools/dev/check_alembic_revision_immutability.py --self-test && "
+        f"{PY} tools/dev/check_alembic_revision_immutability.py --base {BASE_REF}",
+        ROOT,
+        None,
+    ),
     # 差异面不变量检查（#855 收口，覆盖图 §7.1 的差集收缩）：context-only
     # 不变量中可静态判定子集的「新增行」检查——S11 的产物侧对偶。
     # 2026-09-07 升格 BLOCK（违规 exit 1；--advisory 留痕放行）：精度以全库
@@ -264,7 +273,7 @@ PROFILES = {
     "check:pr": [
         "schema-at-head", "env-inventory",
         "ruff", "eslint", "tsc", "knip", "compileall", "layering", "orphan-models",
-        "pollution", "immutability", "invariant-diff",
+        "pollution", "immutability", "alembic-immutability", "invariant-diff",
         "gov-surface", "ip-leak", "prom-alerts", "agent-tests-collect", "agent-tests",
         "pr-migrate",
     ],
