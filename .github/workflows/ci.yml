@@ -87,9 +87,40 @@ jobs:
           # job 级已刻意不设（见上方 #1547），这里按需注入。
           DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
         run: python -m pytest backend/agent/tests/ -v --cov=backend --cov-append
+      # #2151：告警**场景层**（promtool：阈值 / `for:` 时间窗 / 注解逐字匹配）此前在
+      # CI 恒 skip——runner 无 promtool，「改了告警语义而场景文件没跟」只在装了 promtool
+      # 的机器被拦。#2030 为此补了恒跑的结构层，但结构层不覆盖这一类漂移。
+      # 只在全量 job 装：PR 路径受离线纯度约束（tests/test_offline_subset_guard.py），
+      # 且 promtool 是第三方二进制依赖，不进 PR 门禁。版本 + tarball 摘要双 pin：
+      # 摘要取自上游 release 的 sha256sums.txt，升级与回退见
+      # docs/notes/testing/2026-09-16-promtool-nightly-scenario-gate-2151.md。
+      - name: Install pinned promtool
+        env:
+          PROMTOOL_VERSION: "3.13.3"
+          PROMTOOL_TARBALL_SHA256: "b349c732d8a853e657d0e7ae1bbad4d11b586615fb65fdc59d896b9f869c001e"
+        run: |
+          set -euo pipefail
+          dir="prometheus-${PROMTOOL_VERSION}.linux-amd64"
+          curl -fsSL --retry 3 -o /tmp/prometheus.tar.gz \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMTOOL_VERSION}/${dir}.tar.gz"
+          printf '%s  %s\n' "$PROMTOOL_TARBALL_SHA256" /tmp/prometheus.tar.gz \
+            | sha256sum --check --status
+          tar -xzf /tmp/prometheus.tar.gz -C /tmp "${dir}/promtool"
+          # GITHUB_PATH 只对**后续**步骤生效，本步骤内一律用绝对路径自检；
+          # 也不写 /usr/local/bin——runner 普通用户无权直写。
+          echo "/tmp/${dir}" >> "$GITHUB_PATH"
+          # 版本自证——pin 与实际安装不一致即红，否则 pin 退化成一条注释。
+          # 同时满足 #2151 验收判据①：job 日志里可见 promtool 版本。
+          "/tmp/${dir}/promtool" --version
+          "/tmp/${dir}/promtool" --version | grep -q "version ${PROMTOOL_VERSION} "
       # 根 tests/ 也在 pytest.ini 的 testpaths 里(迁移升级 + 部署脚本契约),
       # 此前从未在 CI 跑过。test_repo_layout.py 现在会守住这条对应关系。
       - name: Run repo-level tests
+        env:
+          # #2151：本 job 里场景层是**必备**项——promtool 缺失/安装失败时用例 fail
+          # 而不是静默 skip。PR 路径不注入该变量（保持 skip）。接线契约由
+          # tests/test_ci_promtool_scenario_gate.py 在 PR 路径上守住。
+          PROMTOOL_REQUIRED: "1"
         run: python -m pytest tests/ -v --cov=backend --cov-append --cov-report=term-missing
 
   frontend-check:
