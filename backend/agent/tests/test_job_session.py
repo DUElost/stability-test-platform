@@ -371,8 +371,11 @@ def test_to_complete_payload_shape(lock_tracker, patch_manager):
         # #96：per-source 诊断拆分（log_signal_count = watcher + reconciler），
         # 控制面 watcher_summary 是 Dict[str,Any]，未消费这两个键，仅为运维可观测。
         "watcher_signal_count", "reconciler_signal_count",
+        # #2394-③：reconciler 在位标记（未启动时为空串）
+        "platform_reconciler",
     }
     assert set(payload.keys()) == expected_keys
+    assert payload["platform_reconciler"] == ""
     # M0/Task2: reconciler_stats 默认空 dict(未灰度开启 reconciler 时)
     assert payload["reconciler_stats"] == {}
     # #96: 未启动 reconciler 时 per-source 拆分仍存在且为 0
