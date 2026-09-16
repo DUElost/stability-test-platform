@@ -181,6 +181,9 @@ async def lifespan(app: FastAPI):
             configure_console_registry(redis_url)
 
             capture_main_loop()
+            from backend.services.dashboard_summary_publisher import bind_event_loop
+
+            bind_event_loop(asyncio.get_running_loop())
             init_build_info(version="2.0.0", commit="unknown")
 
             # ADR-0025 §9: RunConsole（控制面命令执行 + web 实时控制台）配置

@@ -54,8 +54,12 @@ export function useRealtimeDashboard(wsUrl: string) {
     setLastUpdateTime(new Date());
 
     switch (lastMessage.type) {
+      case SOCKET_MESSAGE_TYPES.DASHBOARD_SUMMARY: {
+        queryClient.setQueryData(['dashboard-summary'], lastMessage.payload);
+        break;
+      }
       case SOCKET_MESSAGE_TYPES.DEVICE_UPDATE: {
-        queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
+        // Material device rows only — must NOT refetch dashboard-summary (#2324).
         break;
       }
       case SOCKET_MESSAGE_TYPES.RUN_UPDATE:
