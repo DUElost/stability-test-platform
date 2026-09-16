@@ -316,24 +316,31 @@ class AgentNamespace(socketio.AsyncNamespace):
 # /dashboard namespace
 # ---------------------------------------------------------------------------
 
-# ── dashboard room 校验（ADR-0029 v2.3 D）─────────────────────────────────────
+# ── dashboard room 校验（ADR-0029 v2.3 D + #2369）────────────────────────────
 # on_subscribe 收窄：格式白名单 + 实体存在性。合法形态 = 后端 emit 端全集：
 #   job:/run:    → job_instance.id（Agent step_log 的 run_id 与 job_id 同值）
 #   plan_run:    → plan_run.id
 #   console:     → RunConsole run_id（`con-` + uuid4 hex，进程内态，终态后仍可查）
+#   fleet:devices → 静态房间，无实体行（DEVICE_UPDATE 仅扇出给设备页订阅者，#2369）
 # agent: 是 /agent namespace 内部房间（AgentNamespace 自己 enter_room），
 # dashboard 客户端订阅无意义（namespace 隔离），不入白名单。
 # 不做归属过滤：REST 面本就允许任意登录用户读任意 run，实时通道不设更严门槛
 # （G13 定性：P2 前置一致性 / 健壮性，非越权安全洞）。
 _ROOM_PATTERN = re.compile(
-    r"^(job|run|plan_run):[0-9]{1,18}$|^console:con-[0-9a-f]{1,32}$"
+    r"^(job|run|plan_run):[0-9]{1,18}$"
+    r"|^console:con-[0-9a-f]{1,32}$"
+    r"|^fleet:devices$"
 )
+
+FLEET_DEVICES_ROOM = "fleet:devices"
 
 
 async def _dashboard_room_exists(kind: str, ident: str) -> bool:
     """实体存在性校验。查询失败 fail-closed：无法证明房间有效就不放行——
     订阅被拒只影响推流（重连会重试），不阻塞 REST 主路径。
     """
+    if kind == "fleet" and ident == "devices":
+        return True
     if kind == "console":
         # #2056：注册表读的是**同步** redis（SOCKET_TIMEOUT_SECONDS=2）——直接在
         # 事件循环里调会把整个 ASGI 冻住最多 2s/次，而重连客户端会密集打这条路径。
@@ -555,13 +562,17 @@ async def call_agent_rpc(
 # ---------------------------------------------------------------------------
 
 async def broadcast_device_update(device_data: Dict[str, Any]) -> None:
-    """Push a DEVICE_UPDATE to all dashboard subscribers."""
+    """Push a DEVICE_UPDATE to fleet:devices subscribers only (#2369).
+
+    Not namespace-global: AppShell / Dashboard no longer need per-device frames
+    after dashboard_summary (#2324). Devices page opts in via room subscribe.
+    """
     sio = get_sio()
     await sio.emit("device_update", {
         "type": "DEVICE_UPDATE",
         "payload": device_data,
         "timestamp": _now_iso(),
-    }, namespace="/dashboard")
+    }, namespace="/dashboard", room=FLEET_DEVICES_ROOM)
 
 
 async def broadcast_dashboard_summary(summary: Dict[str, Any]) -> None:

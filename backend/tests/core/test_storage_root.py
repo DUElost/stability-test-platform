@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from backend.api.routes.stats import _disk_usage_percent_from_extra
 from backend.core.artifact_paths import (
     ArtifactPathError,
     ArtifactPathOutsideRootError,
@@ -49,22 +48,9 @@ def test_resolvers_read_primary_key_only(monkeypatch, resolver):
     assert resolver() == ""
 
 
-def test_disk_usage_percent_unknown_is_none():
-    assert _disk_usage_percent_from_extra({}) is None
-    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": None}}) is None
-    assert _disk_usage_percent_from_extra({"disk_usage": {}}) is None
-    assert _disk_usage_percent_from_extra({"disk_usage": "n/a"}) is None
-    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": "bad"}}) is None
-    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": float("nan")}}) is None
-    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": float("inf")}}) is None
-    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": -1}}) is None
-    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": 101}}) is None
-
-
-def test_disk_usage_percent_reads_number():
-    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": 12.5}}) == 12.5
-    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": 0}}) == 0.0
-    assert _disk_usage_percent_from_extra({"disk_usage": {"usage_percent": 100}}) == 100.0
+# 退役说明（2026-09-16）：`_disk_usage_percent_from_extra` 的两条用例已删——被测
+# 函数随 #2324（dashboard 观测面与 DEVICE_UPDATE 解耦）删除，用例未跟改会让本模块
+# import 失败、进而让整个 `backend/tests` 收集中断（唯一保留项，非本文件其它用例的问题）。
 
 
 def test_artifact_path_unconfigured_is_explicit(monkeypatch, tmp_path):

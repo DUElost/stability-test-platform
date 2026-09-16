@@ -313,9 +313,30 @@ jobs:
       needs.verify-and-cleanup.outputs.ci_conclusion != 'cancelled'
     needs: [verify-and-cleanup]
     runs-on: ubuntu-latest
+    # actions: write —— #2333：读 job 日志（`gh api .../jobs/{id}/logs`；日志含 ANSI 色码，
+    # 须带 --allow-escape-sequences，否则 gh 拒输出、看起来像「接口无数据」）并对失败 job
+    # 发起一次 `gh run rerun --failed`；issues: write —— 开/评论兜底单。
     permissions:
+      actions: write
       issues: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # 只需要与 workflow 同版本的 scripts/ci/backstop-attribution.sh。
+          fetch-depth: 1
+      # #2333：失败 job 自动 rerun 一次 → 按「重跑是否转绿」机械分类 flake / 确定性缺陷，
+      # 并在重跑前快照红灯 job 与失败用例名（脚本内注释说明了为什么顺序不能反）。
+      # **continue-on-error**：归因是尽力而为的**增量**信息，绝不允许它把兜底单本身一起
+      # 打掉——#1548 就是这个形态（一个步骤报错让红灯彻底静默）。它失败时正文显式标注。
+      - name: Rerun failed jobs once and classify (flake vs deterministic)
+        id: attribution
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          CI_RUN_ID: ${{ needs.verify-and-cleanup.outputs.ci_run_id }}
+          FIRST_CONCLUSION: ${{ needs.verify-and-cleanup.outputs.ci_conclusion }}
+        run: bash scripts/ci/backstop-attribution.sh
       - name: Create or comment failure issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -323,6 +344,9 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CI_RUN_ID: ${{ needs.verify-and-cleanup.outputs.ci_run_id }}
           MAIN_SHA: ${{ needs.verify-and-cleanup.outputs.main_sha }}
+          FAILED_JOBS: ${{ steps.attribution.outputs.failed_jobs_md }}
+          ATTRIBUTION: ${{ steps.attribution.outputs.attribution_md }}
+          ATTRIBUTION_OUTCOME: ${{ steps.attribution.outcome }}
         run: |
           set -euo pipefail
           gh label create "ci/backstop-failed" --repo "$REPO" --color d73a4a \
@@ -338,16 +362,17 @@ jobs:
           # ── 机械摘要三要素（纯 GH API；有意不做 LLM 分诊，见
           # docs/design/2026-08-governance-surface-protection.md §backstop）：
           # ① 红灯 job + 失败步骤名；② CI run 日志链接；③ 疑似变更区间 compare。
-          # 失败 job 上限 20 条在 jq 内截断（.[:20]），勿改回 head 管道：
-          # pipefail 下 head 提前关管道会触发 gh/jq SIGPIPE（同 #389 existing 的处理）。
+          # ① 自 #2333 起由归因步骤在**重跑前**快照并回传——重跑会重置 job 结论，
+          # 在此处重查会拿到重跑后的清单（转绿时直接变空）。
           ci_run_url="${{ github.server_url }}/$REPO/actions/runs/$CI_RUN_ID"
-          failed_jobs="$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID/jobs?per_page=100" \
-            --jq '[.jobs[]
-                   | select(.conclusion == "failure")
-                   | "- **\(.name)** → 失败步骤: "
-                     + ([.steps[]? | select(.conclusion == "failure") | .name] | join(", "))] | .[:20] | join("\n")'
-          )"
+          failed_jobs="${FAILED_JOBS}"
           [ -n "$failed_jobs" ] || failed_jobs="(未取到 job 明细——疑似基础设施错误或运行已被清理)"
+          # #2333 归因（重跑结论 / 缺陷-flake 分类 / 失败用例名）。归因步骤失败时
+          # **显式**说明，不静默降级成"看起来没这一节"。
+          attribution_block="${ATTRIBUTION}"
+          if [ "${ATTRIBUTION_OUTCOME}" != "success" ]; then
+            attribution_block="归因步骤未成功（outcome=${ATTRIBUTION_OUTCOME}）——重跑结论、缺陷/flake 分类与失败用例名均不可用；见兜底工作流对应 run 的该步骤日志。"
+          fi
           suspect_line="无（无法定位区间）"
           parent_sha="$(gh api "repos/$REPO/commits/$MAIN_SHA" --jq '.parents[0].sha' 2>/dev/null || true)"
           if [ -n "${parent_sha:-}" ]; then
@@ -358,6 +383,8 @@ jobs:
           合并分支清理已跳过。修复后下一次全量通过会由本工作流自动关闭此 issue。
           ### 红灯 job
           ${failed_jobs}
+          ### 归因（#2333：失败 job 重跑一次 + 缺陷/flake 分类）
+          ${attribution_block}
           ### 排查入口
           - 疑似变更区间: ${suspect_line}
           - 完整日志: ${ci_run_url}"

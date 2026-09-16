@@ -58,10 +58,6 @@ export function useRealtimeDashboard(wsUrl: string) {
         queryClient.setQueryData(['dashboard-summary'], lastMessage.payload);
         break;
       }
-      case SOCKET_MESSAGE_TYPES.DEVICE_UPDATE: {
-        // Material device rows only — must NOT refetch dashboard-summary (#2324).
-        break;
-      }
       case SOCKET_MESSAGE_TYPES.RUN_UPDATE:
       case SOCKET_MESSAGE_TYPES.JOB_STATUS: {
         const now = Date.now();

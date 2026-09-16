@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import logging
 import os
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -130,6 +131,41 @@ def _derive_agent_installed(h: Host) -> tuple[bool, str | None]:
             )
         return True, installed_at
     return False, None
+
+
+#: #2320：desired digest 现算要对输入集全量 `os.stat` + 逐文件读（`artifact_digest`
+#: 内部无 try）。控制面自身工作树在部署/checkout/清理期间会变动，stat 与 open 之间存在
+#: 竞态窗口，另有权限/IO 错误 —— 那都只是「算不出一个展示用摘要」。
+#: 降级通路本来就有：desired 为空 → `resolve_agent_code_sync_status` 返回 `unknown`，
+#: 前端已按 `unknown` 渲染。所以这里的失败形态是 200 + unknown，而不是 500 + 整页不可用。
+_DESIRED_DIGEST_COOLDOWN_SECONDS = 60.0
+#: 冷却截止点（monotonic）。单写单读的 float 竞态无害：最坏多试一次。
+_desired_digest_failure_until = 0.0
+
+
+def _list_desired_artifact_digest() -> str:
+    """列表页用的 desired code digest：**读失败即返回空串**（判据随之 unknown）。
+
+    只吃 `OSError`——stat/open 的失败形态就是它；编程错误继续冒泡，不在这里新增一处
+    静默吞咽（#739 治理的那类）。失败另记冷却窗口：成功路径的进程缓存在抛异常时不会
+    写入，没有冷却的话每个轮询请求都会重跑一遍注定失败的输入集遍历，把日志与耗时
+    一起放大（UI 轮询热路径）。
+    """
+    global _desired_digest_failure_until
+
+    now = time.monotonic()
+    if now < _desired_digest_failure_until:
+        return ""
+    try:
+        return compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)
+    except OSError as exc:
+        _desired_digest_failure_until = now + _DESIRED_DIGEST_COOLDOWN_SECONDS
+        logger.warning(
+            "hosts_desired_digest_failed cooldown=%.0fs err=%s "
+            "hint=主机列表照常返回，代码同步判据降级 unknown（控制面工作树正在变动？）",
+            _DESIRED_DIGEST_COOLDOWN_SECONDS, exc,
+        )
+        return ""
 
 
 def _host_to_out(
@@ -388,7 +424,8 @@ def list_hosts(
     if needs_commit:
         db.commit()
     # desired digest 现算一次复用（列表 N 台不重复 stat 输入集）
-    desired = compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE)
+    # #2320：它是**展示面**判据，读失败必须降级而不是把整页打成 500。
+    desired = _list_desired_artifact_digest()
     items = [_host_to_out(h, desired_artifact_digest=desired) for h in hosts]
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:

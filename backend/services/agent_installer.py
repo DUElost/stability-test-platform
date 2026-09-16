@@ -145,6 +145,20 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+def nfs_server_from_api_url(api_url: str) -> str:
+    """站点公开入口 → NFS 挂载源的**主机部分**（IPv6 保留方括号，#2321）。
+
+    ``urlsplit(...).hostname`` 会剥掉 IPv6 字面量的方括号（``netloc`` 保留），而 NFS
+    源语法要求写 ``[addr]:/path``：直接用 hostname 拼会得到 ``2001:db8::1:/srv/...``
+    （冒号歧义）→ 挂载必然失败，且现象与「网络真的不通」不可区分（S5 报
+    ``install.s5.storage`` FAIL、Agent 退到本机根）。
+    """
+    host = urlsplit(api_url).hostname or ""
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
 def prepare_install_agent(
     host_id: str,
     *,
@@ -156,7 +170,8 @@ def prepare_install_agent(
         extra_vars = normalize_install_options(install_options)
         # 中心存储的 NFS 服务端就是控制面本机；host 取自站点公开入口，供 Agent
         # 侧挂载（agent_nfs_root 是导出路径，两者成对才有意义）。
-        extra_vars["agent_nfs_server"] = urlsplit(api_url).hostname or ""
+        # #2321：IPv6 入口必须保留方括号（见 nfs_server_from_api_url 的 docstring）。
+        extra_vars["agent_nfs_server"] = nfs_server_from_api_url(api_url)
     except InstallConfigError as exc:
         return {"ok": False, "message": str(exc)}
 
