@@ -61,11 +61,29 @@ agent_legacy          # 34 台
   included tasks——`--tags logrotate` 只跑 include 本身（**`ok=1`、included tasks
   被静默跳过**）；把 tag 显式写在共享 task 的各 task 上后恢复（`ok=3`）。
   测试加 `test_logrotate_tasks_carry_tag_explicitly` 反向钉住（不得依赖传播）。
+- **首验：全队重下发**（2026-09-16，`agent_config` 48 台）——本通道的首个端到端真跑，
+  以 logrotate 配置的全队重下发承接（`serial: 20%` → 5 批；`any_errors_fatal` 未触发）：
+  - 预演 `ansible-playbook playbooks/configure_agents.yml --tags logrotate --check --diff`
+    → 48/48 可达、`failed=0`；
+  - 真跑（同命令去 `--check`）→ **48 台 `ok=3`、`changed=46`、`failed=0`、`unreachable=0`**
+    （`exit=0`）；逐台 diff 只有注释头一行（`# 由部署链下发（#2205）` →
+    `# 由 Ansible 下发（#2205 / #2218）`），其余字节与 ad-hoc 版完全相同——34 台 legacy
+    的 ad-hoc 内容与正式通道内容同源，由此得实证；
+  - **幂等**：紧接着复跑 → 48 台 `changed=0`（copy 内容比对全等）；
+  - `changed=0` 的 2 台（canary 与 legacy 各 1 台，即开发期冒烟真跑覆盖的那两台），
+    其余 46 台由本次首验覆盖；
+  - 只读附带核验：48/48 台 `logrotate` 早已安装（apt task 恒 `ok`，无安装动作）；
+    `/etc/sudoers.d/android` 全队不存在、`/etc/sudoers` + `/etc/sudoers.d/*` 内无
+    `NOPASSWD … ALL` 宽面 → #2218 验收判据第 3 条（ADR-0037 联动）实测已达成
+    （issue 正文「legacy sudo 宽面仍在」为过期描述）；
+  - 原始日志（本机临时、非持久证据）：`/tmp/stp-2218-{check,run,rerun,sudoers}.log`。
 
 ## Revisit
 
-- **首验（建议）**：以 logrotate 配置的**全队重下发**作为新通道首个端到端验证
-  （`configure_agents.yml`，48 台；配置内容与 ad-hoc 版仅注释头差异，幂等）；
+- **首验已执行**（2026-09-16）：全队 48 台经本通道完成 logrotate 重下发，
+  `changed=46` → 复跑 `changed=0`（见 Verification）；「同一正式通道 + 幂等」判据闭环。
+  **失败可见性未在首验中触发**（全程无失败）——仍只由 fail-fast + 非零退出码 +
+  PLAY RECAP 锚定，待首个真实失败案例或故障注入验证；
 - `inventory.ini` 的 `agent_legacy` 段为**本地维护**（凭据敏感、gitignore）——新增/
   退役主机时需同步；若出现维护漂移，考虑把「主机清单真源」上收到控制面（另议）；
 - 34 台 agent 代码更新仍走热更新（本单不改变）；若未来统一为 Ansible 更新，

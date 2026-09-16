@@ -43,6 +43,8 @@ R02「认证、授权与安全边界」审查台账 [#910] 于 2026-09-07 建立
 
 只读复核（未跑测试；本 note 随附 diff 为纯文档）：
 
+> 本小节为**第一轮（静态回源码）**；同日第二轮动态验证证据见下文
+> 「动态验证（第二轮，2026-09-16）」，两轮合计构成 R02 升「已完成」的登记。
 - **F06 #905**（关单 PR #1023）：`backend/services/precheck/sync.py:40-53`
   `nfs_path_to_local` 三道校验俱在——绝对切片拒绝（`rel.is_absolute()`）、
   `..` 组件拒绝、`resolve()` 后 root 包含性（拦 root 内 symlink 外指）；
@@ -64,10 +66,42 @@ R02「认证、授权与安全边界」审查台账 [#910] 于 2026-09-07 建立
 - Registry 前检：declare `--issue 910` 未命中在窗查重（即收口前无人认领）。
 - 收口对照表发布在 #910 收口评论；本仓库文档同步 PR 见评论内链接。
 
+### 动态验证（第二轮，2026-09-16）
+
+§5.1 转态条件「关键结论取得运行证据（隔离环境动态复现）」的执行记录：
+
+- **基线**：`a0e6a4c8`（收口主干 `6b21e3b2` 之后的最新 main）；
+- **隔离方式**：`TEST_DATABASE_URL` 确认未设 → conftest 拉起独立
+  testcontainers `postgres:16`，未触生产库；跑后巡检
+  `check_test_containers.py` 零残留（本进程容器由 sessionfinish 正常回收）；
+- **命令**：`TESTING=1 JWT_SECRET_KEY=test-secret python -m pytest -q` +
+  8 个归属文件（`test_auth_cookie_session.py` 15、`test_metrics_auth.py` 8、
+  `test_dashboard_auth.py` 14、`test_cors_hardening.py` 3、
+  `test_precheck_sync.py` 15、`test_dedup_jira_endpoints.py` 34、
+  `test_log_signal_dead_letter_api.py` 8、`test_ssh_security.py` 24）；
+- **结果**：**121 passed / 0 failed（29.95s）**；
+- **F 项 ↔ 运行断言对应**：F01
+  `test_recreated_same_username_cannot_honor_old_token` 等 3 项；F02
+  `test_refresh_rotation_rejects_replayed_refresh_token`；F03
+  `test_change_password_invalidates_existing_token` /
+  `test_admin_toggle_active_invalidates_existing_token`；F04
+  `test_metrics_rejects_token_of_disabled_user` /
+  `test_dashboard_rejects_token_of_disabled_user`；F05
+  `test_dashboard_rejects_foreign_origin_with_valid_token` + cors 硬化套件；
+  F06 `test_nfs_path_to_local_rejects_{parent_traversal,absolute_remainder,symlink_escape}`
+  （正是 #905 三道逃逸面）；F07 `test_reload_success_audited` /
+  `test_reload_emit_failure_audited_and_reraised` / 死信重放审计断言（直读
+  `AuditLog` 行）；另含 #908 换钥守卫套件（24 项，风险项超额证据）。
+- **边界**：运行证据 = 隔离环境回归断言，不是生产流量复现；§4.1「已完成」
+  语义不变。
+
 ## Revisit
 
-- R02 区域状态从「待验证」升「已完成」仍需 §4.1/§5.1 约定的动态证据
-  （隔离环境复现 / 故障注入），台账关闭不豁免。
+- ~~R02 区域状态从「待验证」升「已完成」仍需 §4.1/§5.1 约定的动态证据~~
+  **已满足（2026-09-16 第二轮，见上）**；后续若认证/会话核心面发生结构性改动，
+  按 §4.1 进入下一轮审查重议，不在本 note 范围内。
+- 未覆盖面如实登记：故障注入 / 多副本 / 真机链路不在本次动态验证范围
+  （R02 关键结论不依赖这些载体）；#91（多副本限额）本就直接以「未验证」立论。
 - #906 实施单拆出、ADR-0035 §6.1 任一触发条件命中，或 #91 多副本部署形态变化时，
   在**各自 issue** 推进，不重开本台账；若需引用 R02 历史，用 #910 收口评论。
 - #46（internal TLS）落地时按 ADR-0024 v1.1 复议触发器收窄 Secure 豁免——该动作

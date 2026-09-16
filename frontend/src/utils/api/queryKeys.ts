@@ -46,8 +46,13 @@ export const deviceKeys = {
   /** 任意筛选态的设备列表（前缀）——写后失效用；用 list() 的无参形态会因对象深比较
    *  与筛选态键不匹配而失效为空（#823）。 */
   allLists: () => ['devices'] as const,
-  /** 全量设备（fetchAllDevices 分页拉全）— PlanExecutePage 等需要完整设备视图的页面用。 */
-  all: () => ['devices-all'] as const,
+  /** 全量设备（fetchAllDevices 分页拉全）— PlanExecutePage 等需要完整设备视图的页面用。
+   *
+   *  #2068：**必须挂在 `['devices']` 前缀下**——React Query 的失效是按元素逐段前缀
+   *  匹配的，`['devices-all']` 与 `['devices']` 互不覆盖，于是写后失效（新增设备/
+   *  改标签/归入项目）永远打不到全量缓存，计划执行设备矩阵与排程选择器长期陈旧。
+   *  放在前缀下之后，`allLists()` 的失效天然覆盖它。 */
+  all: () => ['devices', 'all'] as const,
 } as const;
 
 export const planRunKeys = {

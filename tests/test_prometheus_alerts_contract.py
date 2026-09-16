@@ -387,8 +387,9 @@ def _raise_all_thresholds(alerts_text: str) -> tuple[str, int]:
 #
 # 下面 10 条是本单落地时已存在的存量缺口（各规则加入时场景层在 CI 恒 skip，
 # 漏补无人可见）。清单只准缩短不准变长：补了场景却没删条目 → 红；
-# 加了新告警不补场景 → 红。逐条补齐属后续单，见
-# docs/notes/testing/2026-09-16-promtool-nightly-scenario-gate-2151.md 的 Revisit。
+# 加了新告警不补场景 → 红。逐条补齐 = #2236（背景与判据见
+# docs/notes/testing/2026-09-16-promtool-nightly-scenario-gate-2151.md）；
+# 「指标有定义但无生产者」是另一条轴，另单 #2237 负责。
 _SCENARIO_COVERAGE_DEBT: frozenset[str] = frozenset({
     "StabilityPlanRunAggregationFailed",
     "StabilityPostCompletionEnqueueFailed",

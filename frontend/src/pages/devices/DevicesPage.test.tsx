@@ -204,4 +204,58 @@ describe('DevicesPage', () => {
       expect(queryClient.getQueryState(deviceKeys.list('PROJ-X', true))?.isInvalidated).toBe(true),
     );
   });
+
+  it('#2068：添加设备后全量设备缓存（deviceKeys.all()）一并失效', async () => {
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    mockCreateDevice.mockResolvedValue({ id: 99, serial: 'NEW-SERIAL' });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // 计划执行设备矩阵 / 排程选择器消费的全量键：修复前它挂在 ['devices-all']，
+    // 与写后失效用的 ['devices'] 前缀互不覆盖 → 永远不失效（注释却声称覆盖全量）。
+    queryClient.setQueryData(deviceKeys.all(), { items: [], total: 0 });
+
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <MemoryRouter>
+          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        </MemoryRouter>
+      ),
+    });
+
+    await waitFor(() => expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /添加设备/ }));
+    fireEvent.click(screen.getByRole('button', { name: /mock-添加提交/ }));
+
+    await waitFor(() => expect(mockCreateDevice).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(queryClient.getQueryState(deviceKeys.all())?.isInvalidated).toBe(true),
+    );
+  });
+
+  it('#2068：归入项目后全量设备缓存（deviceKeys.all()）一并失效', async () => {
+    const user = userEvent.setup();
+    mockUseAuthSession.mockReturnValue({ data: { role: 'admin' } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(deviceKeys.all(), { items: [], total: 0 });
+
+    const DevicesPage = (await import('./DevicesPage')).default;
+    render(<DevicesPage />, {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <MemoryRouter>
+          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        </MemoryRouter>
+      ),
+    });
+
+    await waitFor(() => expect(screen.getByText('TEST-SERIAL')).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText('选择设备 TEST-SERIAL'));
+    await user.click(await screen.findByTestId('device-bulk-assign-project'));
+    await user.selectOptions(await screen.findByTestId('assign-project-select'), 'proj-a');
+    await user.click(screen.getByTestId('assign-project-confirm'));
+
+    await waitFor(() => expect(mockAssignDevicesToProject).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(queryClient.getQueryState(deviceKeys.all())?.isInvalidated).toBe(true),
+    );
+  });
 });
