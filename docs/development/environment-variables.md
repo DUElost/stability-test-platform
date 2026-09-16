@@ -166,7 +166,7 @@
 
 <!-- env-inventory:begin（generated：python tools/dev/env_inventory.py --write） -->
 
-共 **210** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**195** 个已在 `.env*.example` 登记，**15** 个声明为内部（理由见下节）。
+共 **218** 个读取名（`backend/**`，不含 `backend/agent/scripts/**`；含 ADR-0042 Settings 字段）：**195** 个已在 `.env*.example` 登记，**23** 个声明为内部（理由见下节）。
 示例文件是**运维模板**（承载需要运维/机型调整的子集）；本表是**代码侧完整清单**。
 门禁：每个读取名必须「登记进示例」或「内部声明」二选一，二者之外即红。
 
@@ -194,8 +194,8 @@
 | `AUTO_REGISTER_HOST` | `false` | ✅ | 运行时 | `backend/agent/settings.py:256` |
 | `AUTO_REGISTER_MAX_RETRIES` | `0` | ✅ | 运行时 | `backend/agent/settings.py:257` |
 | `AUTO_REGISTER_RETRY_DELAY` | `10` | ✅ | 运行时 | `backend/agent/settings.py:258` |
-| `BACKGROUND_POOL_MAX_QUEUE` | `200` | ✅ | 运行时 | `backend/core/thread_pool.py:21` |
-| `BACKGROUND_POOL_SIZE` | `8` | ✅ | 运行时 | `backend/core/thread_pool.py:19` |
+| `BACKGROUND_POOL_MAX_QUEUE` | `200` | ✅ | 运行时 | `backend/core/thread_pool.py:22` |
+| `BACKGROUND_POOL_SIZE` | `8` | ✅ | 运行时 | `backend/core/thread_pool.py:20` |
 | `CHAIN_RECONCILER_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/core/settings/scheduler.py:36` |
 | `CHAIN_RECONCILE_BATCH_SIZE` | `100` | ✅ | 运行时 | `backend/core/settings/scheduler.py:56` |
 | `COORDINATOR_HEARTBEAT_INTERVAL` | `30` | ✅ | 运行时 | `backend/agent/settings.py:203` |
@@ -256,8 +256,8 @@
 | `SSH_CREDENTIALS_FERNET_KEY` | `` | ✅ | 运行时 | `backend/core/ssh_security.py:374` |
 | `STP_ADB_AUTO_REPAIR` | `0` | ✅ | 运行时 | `backend/agent/settings.py:211` |
 | `STP_ADB_REPAIR_COOLDOWN_SECONDS` | `300` | ✅ | 运行时 | `backend/agent/settings.py:212` |
-| `STP_ADMIN_PASSWORD` | `-` | ✅ | 测试 | `backend/tests/test_seed_and_smoke.py:61` |
-| `STP_ADMIN_USER` | `-` | ✅ | 测试 | `backend/tests/test_seed_and_smoke.py:62` |
+| `STP_ADMIN_PASSWORD` | `` | ✅ | 运行时 | `backend/scripts/audit_stage_a_env.py:90` |
+| `STP_ADMIN_USER` | `admin` | ✅ | 运行时 | `backend/scripts/audit_stage_a_env.py:95` |
 | `STP_ADMISSION_AGING_MAX_BOOST` | `5` | ✅ | 运行时 | `backend/services/admission_pump.py:69` |
 | `STP_ADMISSION_AGING_STEP_SECONDS` | `1800` | ✅ | 运行时 | `backend/services/admission_pump.py:68` |
 | `STP_ADMISSION_PUMP_BATCH` | `5` | ✅ | 运行时 | `backend/services/admission_pump.py:64` |
@@ -280,8 +280,11 @@
 | `STP_ALLOW_UNSAFE_TEST_DATABASE_URL` | `` | — | 运行时 | `backend/core/db_url_guard.py:30` |
 | `STP_API_DOCS_ENABLED` | `-` | ✅ | 运行时 | `backend/main.py:320` |
 | `STP_ARTIFACT_DIGEST_CACHE` | `` | — | 运行时 | `backend/services/artifact_digest.py:49` |
-| `STP_BACKEND_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:43` |
-| `STP_BACKEND_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:44` |
+| `STP_AUDIT_BACKEND` | `` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:10` |
+| `STP_AUDIT_ENV_FILE` | `-` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:11` |
+| `STP_BACKEND_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:44` |
+| `STP_BACKEND_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/services/dedup_scan.py:45` |
+| `STP_BACKEND_URL` | `http://127.0.0.1:8000` | — | 运行时 | `backend/scripts/batch_hot_update.py:305` |
 | `STP_BARRIER_MAX_WAIT_SECONDS` | `1800` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:226` |
 | `STP_BARRIER_PROGRESS_STALE_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:190` |
 | `STP_BARRIER_TIMEOUT_SECONDS` | `600` | ✅ | 运行时 | `backend/agent/pipeline_engine.py:1336` |
@@ -295,15 +298,16 @@
 | `STP_COUNTER_RECONCILE_LOOKBACK_HOURS` | `48` | ✅ | 运行时 | `backend/core/settings/scheduler.py:53` |
 | `STP_CSRF_ENABLED` | `1` | ✅ | 运行时 | `backend/core/csrf.py:37` |
 | `STP_DEDUP_LOG_ENCODING` | `utf-8` | — | 运行时 | `backend/main.py:182` |
-| `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:61` |
+| `STP_DEDUP_PLACE` | `SH` | — | 运行时 | `backend/services/dedup_scan.py:62` |
 | `STP_DEDUP_SCAN_PYTHON` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:345` |
 | `STP_DEDUP_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:346` |
 | `STP_DEDUP_SCAN_TAG` | `` | ✅ | 运行时 | `backend/agent/scan_runner.py:351` |
-| `STP_DEDUP_WORK_DIR` | `logs/dedup_uploads` | ✅ | 运行时 | `backend/api/routes/dedup.py:126` |
+| `STP_DEDUP_WORK_DIR` | `logs/dedup_uploads` | ✅ | 运行时 | `backend/api/routes/dedup.py:135` |
 | `STP_DEVICE_LOG_EVENT_ENABLED` | `-` | ✅ | 运行时 | `backend/agent/event_uploader.py:109` |
 | `STP_DEVICE_SERIAL` | `-` | — | 测试 | `backend/agent/tests/test_pipeline_engine_script_action.py:51` |
 | `STP_ENABLE_INPROCESS_SAQ` | `1` | ✅ | 运行时 | `backend/main.py:188` |
 | `STP_EVENT_UPLOADER_PRUNE_LOCAL` | `0` | ✅ | 运行时 | `backend/agent/event_uploader.py:566` |
+| `STP_EXTRACT_BACKEND` | `` | — | 运行时 | `backend/scripts/jira_extract_run52.py:10` |
 | `STP_FILE_SERVER_ADDRESS` | `` | ✅ | 运行时 | `backend/services/file_server_monitor.py:253` |
 | `STP_FILE_SERVER_AGENT_FRESH_SECONDS` | `180` | ✅ | 运行时 | `backend/api/routes/stats.py:245` |
 | `STP_FLASH_FIRMWARE_ROOT` | `-` | ✅ | 测试 | `backend/agent/tests/test_flash_firmware_v131.py:62` |
@@ -314,6 +318,8 @@
 | `STP_HEARTBEAT_INTERVAL_MAX` | `120` | ✅ | 运行时 | `backend/agent/settings.py:208` |
 | `STP_HEARTBEAT_INTERVAL_MIN` | `10` | ✅ | 运行时 | `backend/agent/settings.py:207` |
 | `STP_HOST_MAINTENANCE_TTL_SECONDS` | `` | ✅ | 运行时 | `backend/services/host_maintenance.py:41` |
+| `STP_INITIAL_ADMIN_PASSWORD` | `` | — | 运行时 | `backend/scripts/bootstrap_admin.py:34` |
+| `STP_INITIAL_ADMIN_USER` | `` | — | 运行时 | `backend/scripts/bootstrap_admin.py:33` |
 | `STP_JIRA_BASE_URL` | `-` | ✅ | 运行时 | `backend/services/jira_project_key.py:36` |
 | `STP_JIRA_TOKEN` | `-` | ✅ | 运行时 | `backend/services/jira_project_key.py:39` |
 | `STP_JOB_WORKER_POOL_SIZE` | `50` | ✅ | 运行时 | `backend/agent/main.py:1317` |
@@ -345,7 +351,8 @@
 | `STP_SIGNAL_LINK_RECONCILE_BATCH` | `200` | ✅ | 运行时 | `backend/core/settings/scheduler.py:55` |
 | `STP_SIGNAL_LINK_RECONCILE_INTERVAL_SECONDS` | `300` | ✅ | 运行时 | `backend/core/settings/scheduler.py:42` |
 | `STP_SKIP_INFRA_CHECK` | `0` | ✅ | 运行时 | `backend/main.py:190` |
-| `STP_SMOKE_ORIGIN` | `-` | — | 测试 | `backend/tests/test_seed_and_smoke.py:63` |
+| `STP_SMOKE_HOST_ID` | `` | — | 运行时 | `backend/scripts/sprint4_real_device_verify.py:48` |
+| `STP_SMOKE_ORIGIN` | `http://localhost:5173` | — | 运行时 | `backend/scripts/audit_stage_a_env.py:88` |
 | `STP_SMTP_TIMEOUT_SECONDS` | `15` | ✅ | 运行时 | `backend/services/notification_service.py:55` |
 | `STP_SOCKETIO_REDIS_ADAPTER` | `0` | ✅ | 运行时 | `backend/realtime/socketio_redis.py:35` |
 | `STP_SOCKETIO_REDIS_CHANNEL` | `-` | ✅ | 运行时 | `backend/realtime/socketio_redis.py:39` |
@@ -363,6 +370,7 @@
 | `STP_UNISOC_LOG_SCAN_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:60` |
 | `STP_UNISOC_SCAN_RESULT_PYTHON` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:61` |
 | `STP_UNISOC_SCAN_RESULT_SCRIPT` | `` | ✅ | 运行时 | `backend/agent/unisoc_scan_runner.py:62` |
+| `STP_VERIFY_BACKEND` | `` | — | 运行时 | `backend/scripts/smoke_jira_api.py:11` |
 | `STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS` | `60` | ✅ | 运行时 | `backend/agent/main.py:932` |
 | `STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS` | `5` | ✅ | 运行时 | `backend/agent/main.py:933` |
 | `STP_WATCHER_AEE_RECONCILE_ENABLED` | `true` | ✅ | 运行时 | `backend/agent/main.py:930` |
@@ -374,7 +382,7 @@
 | `SUDO_GID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:152` |
 | `SUDO_UID` | `` | — | 运行时 | `backend/agent/stp_agent_priv.py:145` |
 | `TESTING` | `-` | ✅ | 运行时 | `backend/core/agent_secret.py:15` |
-| `TEST_DATABASE_URL` | `` | ✅ | 测试 | `backend/tests/conftest.py:73` |
+| `TEST_DATABASE_URL` | `` | ✅ | 运行时 | `backend/scripts/check_schema_sync.py:137` |
 | `WATCHER_BATCH_INTERVAL_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/watcher/policy.py:144` |
 | `WATCHER_EXIT_DRAIN_TIMEOUT_SECONDS` | `-` | ✅ | 运行时 | `backend/agent/watcher/policy.py:165` |
 | `WATCHER_LOG_LEVEL` | `-` | ✅ | 运行时 | `backend/agent/watcher/policy.py:162` |
@@ -393,17 +401,26 @@
 | `STP_AGENT_VERSION` | hot-update 写入的版本标记（派生值，不自设） |
 | `STP_ALLOW_UNSAFE_TEST_DATABASE_URL` | 测试守卫逃生门：仅本地测试库用，生产禁止设置 |
 | `STP_ARTIFACT_DIGEST_CACHE` | 制品摘要缓存的紧急关闭开关（内部实现细节） |
+| `STP_AUDIT_BACKEND` | 一次性诊断脚本（audit_stage_a_env / preflight_control_plane）的 `--backend` 等价项；刻意无内置默认地址（不硬编码生产地址） |
+| `STP_AUDIT_ENV_FILE` | 同上脚本的 `--env-file` 等价项（被审计的 .env 路径），非部署环境配置 |
+| `STP_BACKEND_URL` | 一次性运维脚本（batch_hot_update）的控制面地址覆盖，默认本机 `127.0.0.1:8000` |
 | `STP_DEDUP_LOG_ENCODING` | 去重日志文件编码（locale 细节，跟随机型） |
 | `STP_DEDUP_PLACE` | 去重扫描写入的站点标签（元数据；由采集侧脚本语境决定） |
 | `STP_DEVICE_SERIAL` | 脚本运行时注入：Agent 为脚本进程注入设备序列号 |
+| `STP_EXTRACT_BACKEND` | 一次性提取脚本（jira_extract_run52）的 `--backend` 等价项，无内置默认地址 |
+| `STP_INITIAL_ADMIN_PASSWORD` | 站点安装链 S3 受控首管理员引导的一次性入参（tools/site_config 以子进程环境注入，密码只经环境）；刻意不进 .env 模板，避免凭据落盘 |
+| `STP_INITIAL_ADMIN_USER` | 同 STP_INITIAL_ADMIN_PASSWORD（受控首管理员引导的用户名入参） |
 | `STP_NOTIFY_SAQ_RETRIES` | 读取点仅存在于测试（断言 _int_env 行为） |
+| `STP_SMOKE_HOST_ID` | 真机冒烟脚本（sprint4_real_device_verify）的 `--host-id` 等价项，无内置默认 |
 | `STP_SMOKE_ORIGIN` | 测试用：smoke 夹具断言 origin |
 | `STP_STEP_PARAMS` | 脚本运行时注入：步骤参数 JSON（Agent→脚本协议） |
+| `STP_VERIFY_BACKEND` | 冒烟/校验脚本（smoke_jira_api / sprint4_real_device_verify）的 `--backend` 等价项，无内置默认地址 |
 | `STP_WATCHER_AEE_RECONCILE_HOSTS` | 目标机本地选择性对账清单（现场排障临时用，默认空=全量） |
 | `SUDO_GID` | sudo 调用时由系统注入（stp_agent_priv） |
 | `SUDO_UID` | sudo 调用时由系统注入（stp_agent_priv） |
 
 <!-- env-inventory:end -->
+
 
 
 
