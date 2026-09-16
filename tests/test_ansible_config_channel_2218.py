@@ -78,6 +78,19 @@ def test_shared_vars_available_to_both_planes():
     for key in ("agent_install_dir", "agent_logrotate_size", "agent_logrotate_rotate"):
         assert key not in linux, f"linux_hosts.yml 仍重复定义 {key}（应只在 all.yml）"
 
+def test_localhost_never_becomes():
+    """localhost 必须显式 become=false：任务级 `become: false` 拦不住委派任务的 become（#2234 实测）。
+
+    all.yml 让 localhost 也在 become 面内之后，`delegate_to: localhost` 的任务会尝试
+    sudo → `sudo: a password is required`，整个 Agent 安装硬失败。host_vars 优先级高于
+    group_vars，是唯一能治本的一层（238 控制机上以 stp 用户复现并验证）。
+    """
+    host_vars = REPO_ROOT / "tools/ansible/host_vars/localhost.yml"
+    assert host_vars.is_file(), "缺 host_vars/localhost.yml：委派任务会被 all.yml 的 become 带崩"
+    data = yaml.safe_load(host_vars.read_text(encoding="utf-8")) or {}
+    assert data.get("ansible_become") is False
+
+
 def test_become_password_tolerates_hosts_without_ansible_password():
     """all.yml 的作用域含 localhost：委派任务会为它求值 become 口令，必须容错（#2234）。
 

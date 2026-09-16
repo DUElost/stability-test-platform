@@ -7,7 +7,6 @@ import type { WatcherAgentOpsMetrics, WatcherSignalLinkStats } from '@/utils/api
 interface Props {
   opsMetrics: WatcherAgentOpsMetrics | null | undefined;
   linkStats?: WatcherSignalLinkStats | null;
-  scanStatus?: string | null;
   /** 来源 query 的加载/失败态：失败或加载中不再静默消失，显示占位。 */
   isLoading?: boolean;
   isError?: boolean;
@@ -47,7 +46,6 @@ function linkHealthPct(rate: number): number {
 export default function ArchiveStatusCard({
   opsMetrics,
   linkStats,
-  scanStatus,
   isLoading,
   isError,
   onRetry,
@@ -92,11 +90,6 @@ export default function ArchiveStatusCard({
           <Server className={cn('h-4 w-4', TEXT.subtitle)} />
           存储运维概览
         </span>
-        {scanStatus && (
-          <span className={cn('text-xs', TEXT.subtitle)} data-testid="scan-status">
-            Scan: {scanStatus}
-          </span>
-        )}
       </div>
 
       <div className="space-y-2 px-3 py-2.5">
