@@ -8,7 +8,8 @@
 ``/usr/local/sbin``，不在 Agent 可写的安装目录内），把热更新与安装链所需的
 root 操作收敛为**固定子命令 + 路径/属主/内容校验**：
 
-    selftest         探活与自检（host_updater 用它决定 wrapper/legacy 分支）
+    selftest         探活与自检（wrapper **自洽**：属主/权限 + parser↔契约表一致）
+    capabilities     打印支持的子命令（每行一个）——交付链按集合比对，见 #2319
     bootstrap        写 /etc/stp-agent-priv.conf 与 sudoers（仅 root 安装期）
     apply-code       把 Agent 暂存代码树同步进 $INSTALL_DIR/agent/
     apply-resources  把暂存 resources/ 同步进 agent/resources/（P2 独立通道）
@@ -484,6 +485,19 @@ def _decode_b64(raw, label):
 # ---------------------------------------------------------------------------
 # 子命令
 # ---------------------------------------------------------------------------
+
+def cmd_capabilities(args, conf):
+    """打印本 wrapper 支持的子命令（每行一个）——供交付链做**能力**判定（#2319）。
+
+    为什么需要它：``selftest`` 只保证 wrapper **自洽**（属主/权限 + parser↔契约表两两
+    一致），对「本机 wrapper 是否具备调用方将要使用的子命令」没有判别力——缺一个子命令
+    但内部自洽的旧 wrapper 同样打 OK、``exit 0``。控制面远端脚本据此在**任何写动作之前**
+    fail-closed，而不是走到第一次调用处才被 argparse 拒绝（那时代码已同步、服务已重启）。
+    """
+    for command in sorted(_SUBCOMMAND_CONTRACT):
+        print(command)
+    return 0
+
 
 def cmd_selftest(args, conf):
     problems = []
@@ -979,6 +993,7 @@ def cmd_usb_authorized(args, conf):
 # 由此 fail-safe 而非带病上阵。
 _SUBCOMMAND_CONTRACT = {
     "selftest": [],
+    "capabilities": [],
     "bootstrap": [
         "--install-dir", "/opt/stability-test-agent",
         "--user", "android", "--group", "android",
@@ -1050,6 +1065,8 @@ def _build_parser():
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("selftest", help="check wrapper/config integrity")
+    # #2319：能力清单（交付链按集合比对；见 cmd_capabilities 的 docstring）
+    sub.add_parser("capabilities", help="print supported subcommands (one per line)")
 
     p = sub.add_parser("bootstrap", help="write conf + sudoers (install time)")
     p.add_argument("--install-dir", required=True)
@@ -1122,6 +1139,7 @@ def main(argv=None):
 
     handlers = {
         "selftest": cmd_selftest,
+        "capabilities": cmd_capabilities,
         "bootstrap": cmd_bootstrap,
         "apply-code": cmd_apply_code,
         "install-schema": cmd_install_schema,
