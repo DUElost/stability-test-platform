@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError, toApiError, unwrapApiResponse } from './client';
+import { ApiError, classifyApiError, toApiError, unwrapApiResponse } from './client';
 
 describe('unwrapApiResponse', () => {
   it('returns null payloads as-is without falling back to the wrapper body', async () => {
@@ -92,5 +92,33 @@ describe('toApiError', () => {
 
     // 非超时错误不受影响
     expect(toApiError(new Error('boom')).message).toBe('boom');
+  });
+});
+
+describe('classifyApiError（#2359：HTTP 语义 → 可操作分类）', () => {
+  const withStatus = (status: number) =>
+    new ApiError(`HTTP_${status}`, `失败 ${status}`, { status });
+
+  it('401/403 → permission', () => {
+    expect(classifyApiError(withStatus(401))).toBe('permission');
+    expect(classifyApiError(withStatus(403))).toBe('permission');
+  });
+
+  it('404 → not_found', () => {
+    expect(classifyApiError(withStatus(404))).toBe('not_found');
+  });
+
+  it('无 status（网络层/超时）→ network', () => {
+    expect(classifyApiError(new ApiError('NETWORK_ERROR', '网络请求失败'))).toBe('network');
+    expect(classifyApiError(new ApiError('TIMEOUT', '请求超时，请重试'))).toBe('network');
+  });
+
+  it('其余带 status → server', () => {
+    expect(classifyApiError(withStatus(500))).toBe('server');
+    expect(classifyApiError(withStatus(422))).toBe('server');
+  });
+
+  it('非 ApiError 入参经 toApiError 归一后再分类', () => {
+    expect(classifyApiError({ response: { status: 403 } })).toBe('permission');
   });
 });
