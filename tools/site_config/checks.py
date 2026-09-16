@@ -100,6 +100,14 @@ MESSAGES = {
     "preflight_resources": "Bump CPU/RAM/disk before installing: 2 cores, 4 GiB RAM and 20 GiB free are the floor.",
     "preflight_ports": "Free the entry ports (ss -ltnp) before installing; the site entry must own 80/443.",
     "preflight_time": "Enable NTP (systemctl enable --now systemd-timesyncd) so audit and lease times agree.",
+    # #2268：矩阵里的平台 = 该平台自带解释器必须够用；给出可执行 Fix，而不是让
+    # 操作员在 preflight 全绿之后撞上 import 阶段的 traceback。
+    "tool_python_version": (
+        "Install a python3 at or above the release floor (MIN_PYTHON in"
+        " tools/site_config/preflight.py; see docs/operations/installation.md)."
+        " deploy/install.sh builds both the installer and backend venvs from"
+        " /usr/bin/python3, so the host interpreter is what has to satisfy the floor."
+    ),
     "preflight_toolenv": "Install the installer's own dependencies (pydantic, PyYAML, psycopg) or run deploy/install.sh.",
     "preflight_redis": "Make the declared Redis reachable (redis-cli ping) before installing.",
     "inventory_file": "Point --agents-inventory at a readable inventory file (default ~/hosts.ini).",

@@ -31,7 +31,13 @@ sudo ./deploy/install.sh handover   # 汇总 P1 验收证据
 
 - Debian 13 或 Ubuntu 22.04 / 24.04、x86_64、systemd；
 - ≥2 核 / ≥4 GiB RAM / 根文件系统 ≥20 GiB 可用；
-- `python3`、`nginx`、`systemctl`；接 Agent 另需 `ansible-core` 与 `sshpass`；
+- `python3` **≥ 3.10**、`nginx`、`systemctl`；接 Agent 另需 `ansible-core` 与 `sshpass`。
+  下限的唯一声明处是 `tools/site_config.preflight.MIN_PYTHON`：安装器 venv 与后端 venv
+  都由 `deploy/lib/deploy-common.sh` 建在同一个 `/usr/bin/python3` 上，所以「支持矩阵里某平台」
+  实际等价于「该平台自带的解释器能加载 `tools.site_config` 的导入闭包」。矩阵新增
+  Ubuntu 22.04（自带 3.10）时这条关系没被声明，导致 preflight 全绿后 install 直接
+  `ImportError`（#2268）；现在不足下限会在 S1 就 FAIL（`tool_python_version`），
+  CI 也真跑该解释器的导入冒烟（`pr-agent-tests` 的 floor 步骤）；
 - 入口端口 80（HTTPS 另需 443）空闲；
 - 主机时钟已 NTP 同步（审计与租约时间要对得上），**且主机时区与 `site.timezone` 一致**——
   不一致时 S1 直接 FAIL（`install_timezone`），因为 Agent 侧按声明对齐时区，三者不同源会让
@@ -256,6 +262,7 @@ sudo ./deploy/install.sh handover
 | `agent_path_commands_missing`（BLOCKED） | 缺 ansible/sshpass | `apt install -y ansible-core sshpass` |
 | `preflight_time` | 时钟未同步 | `systemctl enable --now systemd-timesyncd` |
 | `preflight_toolenv` | 工具环境缺依赖 | 直接跑 `deploy/install.sh`（它会自建） |
+| `tool_python_version` | 系统 `python3` 低于发布下限（`MIN_PYTHON`） | 装满足下限的解释器（22.04 自带 3.10 即达标）；别让两个 venv 由站点外的更旧解释器创建 |
 | `bootstrap_database_role` | 同名角色已存在且密码不同 | 加 `--reset-db-password`（允许 `ALTER ROLE`）或换库名/角色 |
 | `db_unreachable` / `db_unmanaged` | 数据库拒绝绑定 / 非空且非本平台 | 先看是不是上面那条（既有角色）；其余用空库，非空库需人工裁决，不得清空 |
 | `preflight_redis` | Redis 未回 PONG | 修通 Redis 或换 db index |

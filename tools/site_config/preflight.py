@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,17 @@ MIN_CORES = 2
 MIN_MEMORY_MIB = 3800
 MIN_DISK_GIB = 20
 TOOL_MODULES = ("pydantic", "yaml", "psycopg")
+# 安装器 venv 与后端 venv **都由系统 `/usr/bin/python3` 建**
+# （`deploy/lib/deploy-common.sh:83`、`tools/site_config/stages.py:603`），所以
+# 「矩阵支持某平台」实际等价于「该平台自带的解释器能跑完这条链」。#2268 的形态正是
+# 这层等价关系没人声明：矩阵新增 Ubuntu 22.04（系统 python = 3.10），而
+# `tools/site_config` 用了 3.11+ 才有的 `typing.Self`；preflight 只查命令是否存在，
+# 于是它全绿、紧接着的 install 在 import 阶段 ImportError。
+#
+# 本常量是那条等价关系的**唯一声明处**，三处必须同时成立（由
+# `tests/test_site_installer_python_floor.py` 钉死）：矩阵最低平台的系统解释器
+# >= 本常量 == CI 里跑导入冒烟的版本（`.github/workflows/ci.yml` 的 pr-agent-tests）。
+MIN_PYTHON = (3, 10)
 
 
 def _fail(check_id: str, role: str, location: str, code: str, message: str) -> Check:
@@ -89,6 +101,7 @@ def run_preflight(
     checks.extend(_command_checks(ops))
     checks.append(_ports_check(ops))
     checks.append(_time_check(ops))
+    checks.append(_python_floor_check())
     checks.append(_tool_env_check())
     if db_url:
         if probe is None:
@@ -225,6 +238,27 @@ def _time_check(ops: Ops) -> Check:
         "preflight.time", "site", "$.site.timezone", "time_synchronized",
         f"Host clock is NTP-synchronized (timezone: {timezone}).",
         "Fix: systemctl enable --now systemd-timesyncd; make the host timezone match site.timezone.",
+    )
+
+
+def _python_floor_check(version_info: tuple[int, int] | None = None) -> Check:
+    """解释器下限断言（#2268）：版本不够就在 preflight 里 FAIL，别让它崩在下一阶段。
+
+    `version_info` 可注入，便于用例覆盖「刚好达标 / 差一档」两侧边界。
+    """
+    observed = tuple(version_info or sys.version_info[:2])
+    floor = ".".join(str(part) for part in MIN_PYTHON)
+    shown = ".".join(str(part) for part in observed)
+    if observed < MIN_PYTHON:
+        return _fail(
+            "preflight.python", "site", "$.dependencies", "tool_python_version",
+            f"The interpreter running preflight is Python {shown}; this release needs >= {floor}.",
+        )
+    return passed(
+        "preflight.python", "site", "$.dependencies", "tool_python_version_ok",
+        f"Python {shown} meets the declared installer floor {floor}.",
+        f"Keep this host's python3 at or above the release floor ({floor}); both the installer"
+        " and the backend venv are created from /usr/bin/python3.",
     )
 
 

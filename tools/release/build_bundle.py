@@ -84,8 +84,11 @@ FORBIDDEN_BUNDLE_SUFFIXES = (".pyc", ".pyo")
 FORBIDDEN_BUNDLE_DIRS = ("__pycache__",)
 SUPPORTED_PLATFORMS = (
     {"distribution": "debian", "versions": ["13"], "cpu_arch": ["x86_64"]},
-    # 22.04 实测纳入（2026-09-15）：Agent 代码在 Python 3.10 上 compileall 全过、
-    # 依赖在有依赖解析时可下载；现场首次安装成功即为闭环证据（Agent Note I5.5）。
+    # 22.04 实测纳入（2026-09-15）：当时的证据只有 Agent 侧 compileall，安装器/后端
+    # venv 用的系统解释器是否够用没有判据（#2268：3.10 上 import 即失败）。
+    # 现在每行矩阵都必须有同源解释器下限：唯一声明处是 `tools.site_config.preflight.MIN_PYTHON`，
+    # 一致性由 tests/test_site_installer_python_floor.py 钉死，并在 CI 上用该下限
+    # 解释器真跑导入闭包（pr-agent-tests 的 floor 步骤），不只是 compileall。
     {"distribution": "ubuntu", "versions": ["22.04", "24.04"], "cpu_arch": ["x86_64"]},
 )
 AGENT_PROTOCOL = ">=1.0,<2.0"

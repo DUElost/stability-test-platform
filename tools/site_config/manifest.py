@@ -18,12 +18,15 @@ import os
 import re
 import stat
 from pathlib import Path
-from typing import Annotated, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import Field, ValidationError, field_validator, model_validator
 
 from .models import ConfigModel, Name, invalid
 from .validation import ConfigValidationError, failure, schema_checks
+
+if TYPE_CHECKING:
+    from typing import Self  # #2268：同 `models.py` 的说明（安装器下限 3.10）
 
 MAX_MANIFEST_BYTES = 1024 * 1024
 REQUIRED_COMPONENTS = frozenset({"agent-code", "host-resources"})
