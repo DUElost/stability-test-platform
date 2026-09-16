@@ -255,22 +255,36 @@ if [ -d "$FLASHTOOL_DIR" ]; then
     fi
 fi
 
-# 4c. 刷机前置归位（#2133 / ADR-0037 D5）
-# 运行期不再装包/写规则（flash_preflight v1.0.2 只检不修）；由安装链保证：
-#   - MTK ttyACM 0666 固定规则——此前该规则只由旧版 flash_preflight 的
-#     sudo 修复运行期写入（install 链只装 99-ttyacms.rules = ModemManager
-#     ignore）；内容与 wrapper `ensure-udev-rule` 同源；
+# 4c. 刷机前置归位（#2133 / ADR-0037 D5；#2284 最小权限）
+# 运行期不再装包/写规则（flash_preflight 只检不修）；由安装链保证：
+#   - MTK ttyACM 规则——此前该规则只由旧版 flash_preflight 的 sudo 修复运行期写入
+#     （install 链只装 99-ttyacms.rules = ModemManager ignore）；内容与 wrapper
+#     `ensure-udev-rule` 同源（两个固定形态之一）。
+#     #2284：§1.2 已把 Agent 用户加入 dialout，故默认写 0660 + GROUP="dialout"
+#     （最小权限）；仅当本机没有 dialout 组时才退化为 0666 并记 warning——
+#     0666 等于把 MTK 串口开放给任何本地用户（可干扰刷机流）。
 #   - Qt/X 运行库五件（flash_tool 依赖；缺包时 preflight 会明确失败并指引）。
 # 离线/精简装机可用 AGENT_SKIP_FLASH_PREREQ_PKGS=1 跳过包安装。
 UDEV_MTK_RULE="/etc/udev/rules.d/98-ttyacm-mtk.rules"
-UDEV_MTK_LINE='KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", MODE="0666"'
+UDEV_MTK_LINE_0660='KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", GROUP="dialout", MODE="0660"'
+UDEV_MTK_LINE_0666='KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", MODE="0666"'
+if getent group dialout >/dev/null 2>&1; then
+    UDEV_MTK_LINE="$UDEV_MTK_LINE_0660"
+    UDEV_MTK_REASON="# MTK ttyACM 0660+dialout：Agent 用户属 dialout 可写，其它本地用户不可写（#2284）"
+else
+    UDEV_MTK_LINE="$UDEV_MTK_LINE_0666"
+    UDEV_MTK_REASON="# MTK ttyACM 0666：本机无 dialout 组，退化为 0666（否则刷机不可用）（#2284）"
+fi
 if [ -d /etc/udev/rules.d ]; then
-    printf '%s\n' "$UDEV_MTK_LINE" > "$UDEV_MTK_RULE" 2>/dev/null && \
+    printf '%s\n%s\n' "$UDEV_MTK_REASON" "$UDEV_MTK_LINE" > "$UDEV_MTK_RULE" 2>/dev/null && \
         chmod 0644 "$UDEV_MTK_RULE" && \
         udevadm control --reload-rules 2>/dev/null && \
         udevadm trigger 2>/dev/null && \
-        echo_info "MTK ttyACM 0666 规则已部署: 98-ttyacm-mtk.rules" || \
-        echo_warn "MTK ttyACM 0666 规则部署失败，刷机将依赖 wrapper ensure-udev-rule"
+        echo_info "MTK ttyACM 规则已部署: 98-ttyacm-mtk.rules（$UDEV_MTK_LINE）" || \
+        echo_warn "MTK ttyACM 规则部署失败，刷机将依赖 wrapper ensure-udev-rule"
+    if [ "$UDEV_MTK_LINE" = "$UDEV_MTK_LINE_0666" ]; then
+        echo_warn "本机无 dialout 组 → ttyACM 规则为 0666（任何本地用户可写该串口）；建议 provisioning 补组"
+    fi
 fi
 
 pkg_installed() {

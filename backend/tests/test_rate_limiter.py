@@ -283,3 +283,13 @@ def test_window_rollover_allows_again():
     # 时间戳移出窗口后重新放行
     rl._storage["1.1.1.1"] = [t - 3600 for t in rl._storage["1.1.1.1"]]
     assert rl.is_allowed("1.1.1.1")[0] is True
+
+
+def test_ui_and_agent_limiters_are_separate_instances():
+    """#2324：UI / Agent 必须是独立桶，避免共 IP 互相耗尽配额。"""
+    from backend.core import limiter as lim
+
+    assert lim.rate_limiter is not lim.agent_rate_limiter
+    assert lim.RATE_LIMIT_REQUESTS == lim.UI_RATE_LIMIT_REQUESTS
+    assert lim.rate_limiter.max_requests == lim.UI_RATE_LIMIT_REQUESTS
+    assert lim.agent_rate_limiter.max_requests == lim.AGENT_RATE_LIMIT_REQUESTS

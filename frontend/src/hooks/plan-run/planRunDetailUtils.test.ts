@@ -92,7 +92,20 @@ describe('normalizeDispatchStateForRun', () => {
   it('#1193 刷新键表覆盖去重状态与逐条用例结果（后处理产物不遗漏）', () => {
     const keys = planRunRefreshKeys(7);
     expect(keys).toContainEqual(planRunKeys.detail(7));
-    expect(keys).toContainEqual(planRunKeys.logEvents(7));
+    // #2288：必须是**前缀**键。精确键 `logEvents(7)` 含默认参数对象，React Query 的
+    // 部分匹配只能命中仍处默认值的那条缓存——选过平台 chip 或点过「加载更多」之后
+    // 该卡片就被「刷新」漏掉。这里同时钉住「任意参数组合都被前缀键覆盖」。
+    expect(keys).toContainEqual(planRunKeys.logEventsByRun(7));
+    const prefix = planRunKeys.logEventsByRun(7) as readonly unknown[];
+    for (const variant of [
+      planRunKeys.logEvents(7),
+      planRunKeys.logEvents(7, { limit: 500, platform: 'UNISOC' }),
+      planRunKeys.logEvents(7, { platform: 'MTK' }),
+    ]) {
+      const key = variant as readonly unknown[];
+      expect(prefix.length).toBeLessThanOrEqual(key.length);
+      expect(key.slice(0, prefix.length)).toEqual(prefix);
+    }
     expect(keys).toContainEqual(dedupKeys.status(7));
     expect(keys).toContainEqual(planRunKeys.testCaseResults(7));
   });

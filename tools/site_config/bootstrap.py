@@ -19,6 +19,7 @@ import json
 import os
 import re
 import secrets
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -50,13 +51,19 @@ class BootstrapError(RuntimeError):
 
 
 def _ask(prompt: str, default: str, *, interactive: bool, answers: dict[str, str], key: str) -> tuple[str, str]:
-    """Return (value, provenance)."""
+    """Return (value, provenance).
+
+    #2283：提示走 **stderr**——``init --json`` 的报告也写 stdout，此前 ``input()``
+    的提示写 stdout，`init --json > site.json` 会产出以提示开头的非法 JSON
+    （下游解析失败）。stdin 语义不变（仍是同一行应答）。
+    """
     if key in answers:
         return answers[key], ANSWER
     if not interactive:
         return default, DEFAULT
+    print(f"{prompt} [{default}]: ", end="", file=sys.stderr, flush=True)
     try:
-        reply = input(f"{prompt} [{default}]: ").strip()
+        reply = input().strip()
     except EOFError:
         reply = ""
     return (reply or default, ANSWER if reply else DEFAULT)

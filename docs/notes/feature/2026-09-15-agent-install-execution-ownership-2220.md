@@ -37,6 +37,10 @@ Class: feature
   `agent_install_canceled`。前端：安装操作面板行内「取消」（仅 `pending|running` 的
   install/reinstall 行；热更新不适用），`cancelInstall` 把受理失败原因写回该行 error，
   避免「点了没反应」。
+  **终态在 UI 里是独立状态**（`HostOpStatus.canceled` → 行内「已取消」+ 汇总单独计数 +
+  info 提示；`markTerminal` 与轮询双通道统一按 canceled 收尾、互不覆盖）——238 现场
+  端到端验证抓到过反例：面板与 toast 曾把显式取消报成红色「安装失败: CANCELED」，
+  与「取消 ≠ 失败」自相矛盾，已在同一 PR 修正。
 
 ## Alternatives
 
@@ -65,10 +69,22 @@ Class: feature
   27 passed（`waitInstallTerminal` 按 `console_status` + 摘要收尾，`lost` 按取消）。
 - **取消入口**（#2255）：`backend/tests/api/test_hosts.py::TestHostInstallCancelEndpoint` 3 条
   （受理 / 无在跑 409 + 审计 / 不可发起如实回报）；前端
-  `src/components/host/HostOperationPanel.test.tsx` 8 条（新增 2 条：仅在跑的
-  install/reinstall 行渲染并转发 hostId、无回调时不渲染）+
-  `src/hooks/useHostOperations.test.ts` 9 条（新增 3 条：受理返 null、未受理与 409 detail
-  如实回传）；`npx tsc --noEmit`、`eslint` 通过。
+  `src/components/host/HostOperationPanel.test.tsx` 9 条（新增 3 条：仅在跑的
+  install/reinstall 行渲染并转发 hostId、无回调时不渲染、已取消行的中性样式与汇总计数）+
+  `src/hooks/useHostOperations.test.ts` 11 条（新增 5 条：受理返 null、未受理与 409 detail
+  如实回传、CANCELED 落 `canceled` 终态、`lost` 落 canceled 并保留说明）+
+  `HostsPage.test.tsx` 22 条（新增 1 条：取消走 info 不报失败）；`npx tsc --noEmit`、
+  `eslint`、前端全量 865 条通过。
+- **238 现场端到端（2026-09-16，`local-20260916-a9f5f150`）**：
+  - 无在跑安装时 `POST /install/cancel` → 409 `NO_INSTALL_IN_PROGRESS`，`install_agent_cancel`
+    审计留痕（`reason=no_install_in_progress`）；
+  - 对在线真机触发安装（RUNNING）→ 取消 → 1–2 秒内 `/install/status` 转
+    `canceled`（`console_status=CANCELED`、`exit_code=-15`），审计两条同落：
+    `install_agent_cancel`（操作者 + run id + `canceled=true`）与 `install_agent`
+    （`ok=false`、`rc=-15`、`console_status=CANCELED`）；主机保持 ONLINE、agent 版本不变；
+  - 取消后直接复跑无 409，安装一次通过（SUCCESS/exit 0）；
+  - UI 端到端：面板「取消」点击生效，但**抓到 UI 把取消报成「失败: CANCELED」**——
+    同 PR 修正为独立终态后复验通过（本 PR 的第二轮部署含该修复）。
 - 全量 `tests/` + `ruff` + `check:quick`（含 tsc/eslint/knip）+ 内网地址门禁结果见 PR。
 - **现场复跑（待做）**：238 上再走一次 Agent 接入，确认慢安装不再被任何窗口打断、状态与实时
   日志一致；顺带复查 #2220 里那条「双 ansible 进程」的观察是否随等待者消失。

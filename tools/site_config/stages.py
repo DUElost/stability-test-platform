@@ -86,8 +86,11 @@ MONITORING_DISTRO_DEFAULTS = (
     ("deploy/prometheus/node-exporter.default", "etc/default/prometheus-node-exporter", 0o644),
 )
 # 本站资产：prometheus.yml 与采样器（脚本/单元）都带 <deploy-root> 标记，走共享路径守卫。
+#: 本站渲染的 Prometheus 配置（site-root 相对路径；与 prometheus.default 的
+#: `--config.file` 同源）。#2283：接管判断用它当「本站形态」的基准。
+SITE_PROMETHEUS_CONFIG = "etc/stp/prometheus/prometheus.yml"
 MONITORING_CONFIGS = (
-    ("deploy/prometheus/prometheus.yml", "etc/stp/prometheus/prometheus.yml", 0o644),
+    ("deploy/prometheus/prometheus.yml", SITE_PROMETHEUS_CONFIG, 0o644),
 )
 # 宿主进程内存采样器：与上面同一批安装（textfile collector 的写入端）。
 MONITORING_SAMPLER = (
@@ -347,6 +350,21 @@ def _unit_reads_args(ctx: InstallContext, unit: str) -> bool:
     return False
 
 
+def _prometheus_running_config(ops: Ops) -> str:
+    """运行中 prometheus 的 ``--config.file``（取不到返回 ""）。
+
+    #2283：读发行版 unit 的 ExecStart——systemd 已展开 EnvironmentFile 里的 ``$ARGS``，
+    所以这里拿到的是**实际生效**的配置路径。用于判断「本机原有 Prometheus 是否由本站
+    接管」：接管后它的 rule_files / scrape jobs 不再被引用（本站渲染的配置不含
+    rule_files），而安装仍报 monitoring_ready。
+    """
+    result = ops.run(["systemctl", "show", "-p", "ExecStart", "prometheus"])
+    if result.returncode != 0:
+        return ""
+    match = re.search(r"--config\.file=(\S+)", result.stdout or "")
+    return match.group(1) if match else ""
+
+
 def monitoring_artifacts() -> tuple[tuple[str, str, int], ...]:
     """监控栈要落地的 (发布物相对路径, system_root 相对路径, mode) 列表。"""
     return (*MONITORING_DISTRO_DEFAULTS, *MONITORING_CONFIGS, *MONITORING_SAMPLER)
@@ -519,6 +537,22 @@ def stage_s1_basics(ctx: InstallContext) -> list[Check]:
                 "Prometheus and node-exporter are installed and callable on the control plane.",
                 "Keep them on loopback; the storage page reads them locally.",
             ))
+            # #2283：接管一台**已在跑** Prometheus 的主机时，它的 rule_files /
+            # scrape jobs 不随本站配置迁移（本站渲染的 prometheus.yml 不含
+            # rule_files）——不自动搬（那是运维判断），但必须显式记录，
+            # 否则表现为「规则静默消失、安装仍报绿」。
+            running_config = _prometheus_running_config(ctx.ops)
+            if running_config and not running_config.endswith(SITE_PROMETHEUS_CONFIG):
+                checks.append(blocked(
+                    "install.s1.monitoring_takeover", "control_plane", "$.monitoring",
+                    "takeover_needs_rule_migration",
+                    "This host already runs Prometheus with "
+                    f"{running_config}; the site takes it over with its own config, so any "
+                    "rule_files / scrape jobs declared there are no longer referenced.",
+                    "Move the rules/jobs you still need into deploy/prometheus/ (site assets) "
+                    "and re-run, or keep that Prometheus on a separate host. "
+                    "Re-running install after the site config takes effect clears this item.",
+                ))
 
     if config.storage.export_to_agents:
         # 自建中心存储：装上 NFS 服务端，并把导出根交给约定的写入身份（只此一层）。
@@ -538,8 +572,18 @@ def stage_s1_basics(ctx: InstallContext) -> list[Check]:
                         checks, "install_export", location="$.storage.export_to_agents",
                         role="storage", check_id="install.s1.export",
                     )
-            ctx.ops.run(["chown", f"root:{EXPORT_ANON_UID}", config.storage.mount_path])
-            ctx.ops.run(["chmod", "0775", config.storage.mount_path])
+            # #2283：两条命令的 rc 此前被丢弃——只读文件系统 / root-squash 介质上
+            # 失败时 S1 仍 PASS（检查文本还断言「export 根对约定身份可写」），
+            # 直到 Agent 侧写入才以 storage_unwritable / Errno-13 暴露。
+            for argv in (
+                ["chown", f"root:{EXPORT_ANON_UID}", config.storage.mount_path],
+                ["chmod", "0775", config.storage.mount_path],
+            ):
+                if ctx.ops.run(argv).returncode != 0:
+                    return _safe(
+                        checks, "install_export", location="$.storage.export_to_agents",
+                        role="storage", check_id="install.s1.export",
+                    )
             checks.append(_pass(
                 "install.s1.export", "storage", "$.storage.export_to_agents", "export_prepared",
                 "The NFS server is callable and the export root is writable by the agreed identity.",

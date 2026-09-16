@@ -1295,3 +1295,89 @@ def test_run_stage_reports_unexpected_errors_instead_of_traceback(tmp_path, monk
 
     assert report["status"] == "FAIL"
     assert "stage_crashed" in codes(report), codes(report)
+
+
+def test_export_preparation_failure_is_reported(tmp_path, monkeypatch):
+    """#2283：export 准备的 chown/chmod 失败此前被丢弃 rc——S1 仍报 export_prepared。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    config_path = _exporting_site(tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"))
+    ops = FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        commands={"python3", "systemctl", "nginx", "exportfs"},
+        responses={"chmod": (1, "")},
+    )
+
+    report = invoke(tmp_path, config_path=config_path, ops=ops)
+
+    assert report["status"] == "FAIL"
+    assert "install_export" in codes(report)
+
+
+def test_monitoring_takeover_of_a_running_prometheus_is_recorded(tmp_path, monkeypatch):
+    """#2283：接管已在跑的 Prometheus 时，其 rule_files / scrape jobs 不随本站配置
+    迁移——必须显式记录（BLOCKED），否则表现为「规则静默消失而安装仍绿」。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    ops = InstallingFakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        responses={"systemctl show -p ExecStart prometheus": (
+            0,
+            "ExecStart={ path=/usr/bin/prometheus ; argv[]=/usr/bin/prometheus "
+            "--config.file=/etc/prometheus/prometheus.yml ; }",
+        )},
+    )
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), ops=ops)
+
+    assert "takeover_needs_rule_migration" in codes(report)
+    assert report["status"] == "PASS", "BLOCKED 是记录，不把安装判失败"
+
+
+def test_site_prometheus_config_is_not_flagged_as_takeover(tmp_path, monkeypatch):
+    """本站形态（--config.file 指向本站配置）不得误报接管。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    _distro_units(tmp_path)
+    ops = InstallingFakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        responses={"systemctl show -p ExecStart prometheus": (
+            0,
+            "ExecStart={ path=/usr/bin/prometheus ; argv[]=/usr/bin/prometheus "
+            "--config.file=/etc/stp/prometheus/prometheus.yml ; }",
+        )},
+    )
+
+    report = invoke(tmp_path, config_path=_monitoring_site(tmp_path), ops=ops)
+
+    assert "takeover_needs_rule_migration" not in codes(report)
+
+
+def test_s5_reports_blocked_when_no_agent_is_declared(tmp_path):
+    """#2283：零 Agent 时 S5 是 BLOCKED（未验证），不是 PASS。"""
+    prepare(tmp_path)
+    data = yaml.safe_load((tmp_path / "site.yaml").read_text(encoding="utf-8"))
+    data["agents"] = []
+    empty_site = tmp_path / "site-empty.yaml"
+    empty_site.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+
+    from tools.site_config.agents import stage_s5_agents
+    from tools.site_config.validation import load_site_config
+
+    ctx = stages.InstallContext(
+        config=load_site_config(empty_site),
+        config_path=empty_site,
+        bundle=tmp_path / "bundle",
+        bindings_dir=tmp_path / "bindings",
+        state_dir=tmp_path / "state",
+        ops=FakeOps(hostname="control-i3.synthetic.invalid", mounts=set()),
+    )
+
+    checks = stage_s5_agents(ctx)
+
+    assert len(checks) == 1
+    assert (checks[0].status, checks[0].code) == ("BLOCKED", "agents_pending")

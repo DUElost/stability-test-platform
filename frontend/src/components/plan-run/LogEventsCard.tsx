@@ -77,17 +77,25 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
   const atLimitCap = limit >= MAX_LIMIT;
 
   /**
-   * 平台筛选项 = 当前已加载行里出现的平台 ∪ 当前筛选值（**纯派生**，无记忆态）。
+   * 平台筛选项 = **服务端返回的全集**（#2288）∪ 当前筛选值，无记忆态。
    *
-   * 取舍：筛选生效后行集只剩该平台，选项随之收窄——但「全部」恒在（见下面的渲染条件），
-   * 所以任何时刻都能切回；反过来也不会出现"点了某平台却 0 条"的死选项。
-   * 用 effect 记住"未筛选时的选项"能少点一次，但那要 setState-in-effect（eslint 禁），
-   * 且会引入与行集不一致的陈旧选项。
+   * 旧做法是从「已加载行」派生：某 run 最新 500 条恰好都是同一平台（单平台主导很常见，
+   * 排序 `detected_at DESC`）时只剩一个选项 → 整行筛选**隐藏**，而「加载更多」受
+   * `MAX_LIMIT=500` 所限也翻不到另一平台 → 筛选恰在最需要的时候不可用。全集由
+   * `list_plan_run_device_log_event_platforms` 从库里 DISTINCT 出来，既不会漏平台，
+   * 也不会出现"点了某平台却 0 条"的死选项（集合里每个平台都至少有一行）。
+   * `platforms` 缺失（响应未带该键）时退回按已加载行派生，不塌成空筛选。
+   *
+   * 下面的渲染条件 `platformOptions.length > 1` **保持不变且现在才成立**：真全集只有
+   * 一个平台时确实无事可筛；旧集合派生自己加载窗口时，同一条件会在多平台 run 上
+   * 误判成「只有一个平台」而整行隐藏——那才是缺陷本体（条件不是，集合来源才是）。
    */
   const platformOptions = [
-    ...new Set(
-      [...(q.data?.items ?? []).map((ev) => ev.platform), ...(platform ? [platform] : [])]
-        .filter(Boolean),
+    ...new Set<string>(
+      [
+        ...(q.data?.platforms ?? (q.data?.items ?? []).map((ev) => ev.platform)),
+        ...(platform ? [platform] : []),
+      ].filter(Boolean),
     ),
   ].sort();
 

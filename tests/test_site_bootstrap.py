@@ -587,3 +587,17 @@ def test_fstab_entries_recognise_existing_entries_by_field(tmp_path, monkeypatch
         subtree=Path("/srv/hdd/aee"), mount_path="/srv/stp-aee",
     )
     assert actions == ["fstab already lists /srv/hdd and /srv/stp-aee"]
+
+
+def test_ask_prompt_goes_to_stderr_not_stdout(capsys, monkeypatch):
+    """#2283：交互提示走 stderr——`init --json` 的 stdout 必须是纯 JSON。"""
+    from tools.site_config.bootstrap import _ask
+
+    monkeypatch.setattr("builtins.input", lambda: "city-b")
+    value, provenance = _ask("站点标识", "default", interactive=True, answers={}, key="site_id")
+
+    captured = capsys.readouterr()
+    assert value == "city-b"
+    assert captured.out == "", f"stdout 被交互提示污染：{captured.out!r}"
+    assert "站点标识" in captured.err and "default" in captured.err
+    assert provenance == "answer"
