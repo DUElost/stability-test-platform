@@ -24,14 +24,19 @@ HANDOVER_FILE = "handover.json"
 STATE_FILE = "install-state.json"
 
 
+#: 一个证据槽位：单个 check_id，或「任一命中即可」的候选集（#2404）。
+#: 候选集用于同一语义存在互斥发出的多条路径（见 ``_resolve._match``）。
+CheckSlot = str | tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class AcceptanceItem:
     """One PRD acceptance item and the artifacts that can evidence it."""
 
     key: str
     title: str
-    stage_checks: tuple[str, ...] = ()
-    verify_checks: tuple[str, ...] = ()
+    stage_checks: tuple[CheckSlot, ...] = ()
+    verify_checks: tuple[CheckSlot, ...] = ()
     requires_runs: int = 1
     pending: tuple[str, ...] = ()
 
@@ -42,7 +47,7 @@ ACCEPTANCE_ITEMS: tuple[AcceptanceItem, ...] = (
         title="空白站点装完，且非原作者可按指南接入受控设备",
         stage_checks=(
             "install.s0", "install.s1.deploy_root", "install.s2.release",
-            "install.s2.env", "install.s3.migrate", "install.s3.admin",
+            "install.s2.env", ("install.s3.db", "install.s3.migrate"), "install.s3.admin",
             "install.s4.health", "install.s5",
         ),
         verify_checks=("verify.s6.hosts",),
@@ -165,28 +170,39 @@ def _resolve(
     missing: list[str] = []
     failed: list[str] = []
     blocked_evidence: list[str] = []
-    for check_id in item.stage_checks:
-        status = stages.get(check_id)
+
+    def _match(slot: CheckSlot, index: dict[str, str], source: str) -> None:
+        """一个槽位可给多个候选 ID（#2404）。
+
+        同一语义在不同路径会发出不同 ID，而安装记录只保留**最近一次**运行的集合：
+        例如 S3 在「数据库已在 head」时发 `install.s3.db`、在「本次应用了迁移」时发
+        `install.s3.migrate`（互斥）。固定要求其一会让已装站点的交接证据永远缺失。
+        命中规则：按候选顺序取**第一个存在**的 ID；都不存在才算缺失，缺失文案给出
+        `A or B`，避免只报一半让人以为漏记。
+        """
+        candidates = (slot,) if isinstance(slot, str) else slot
+        status = None
+        hit = candidates[0]
+        for candidate in candidates:
+            if candidate in index:
+                status = index[candidate]
+                hit = candidate
+                break
         if status is None:
-            missing.append(check_id)
+            missing.append(" or ".join(candidates))
         elif status == "PASS":
-            evidence.append(f"{check_id}(install:{status})")
+            evidence.append(f"{hit}({source}:{status})")
         elif status == "BLOCKED":
             # #2283：BLOCKED 是**正常验收结果**（如零 Agent / 无 ONLINE 设备），
             # 不是失败——此前并入 failed 会让 handover 判 FAIL 且不写文件。
-            blocked_evidence.append(f"{check_id}(install:{status})")
+            blocked_evidence.append(f"{hit}({source}:{status})")
         else:
-            failed.append(f"{check_id}(install:{status})")
-    for check_id in item.verify_checks:
-        status = verify.get(check_id)
-        if status is None:
-            missing.append(check_id)
-        elif status == "PASS":
-            evidence.append(f"{check_id}(verify:{status})")
-        elif status == "BLOCKED":
-            blocked_evidence.append(f"{check_id}(verify:{status})")
-        else:
-            failed.append(f"{check_id}(verify:{status})")
+            failed.append(f"{hit}({source}:{status})")
+
+    for slot in item.stage_checks:
+        _match(slot, stages, "install")
+    for slot in item.verify_checks:
+        _match(slot, verify, "verify")
 
     check_id = f"handover.{item.key}"
     if failed:
