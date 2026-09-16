@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# 部署源守卫：生产部署动作（migration / restart / hot-update）前执行，校验
-# 生产工作树确实在 main、tracked 工作区干净，且 alembic_version 与代码 head
-# 一致——防止把分支代码或超前 schema 推上生产。
+# 部署源守卫：生产部署动作前执行，校验生产工作树确实在 main、tracked 工作区干净，
+# 且 alembic_version 与 code head 一致——防止把分支代码或超前 schema 推上生产。
+#
+# 适用动作：migration / restart / hot-update / **scripts/scan**。最后一条是 #2386
+# 补进来的：`POST /scripts/scan` 的输入就是这棵树（STP_SCRIPT_ROOT），而它对
+# 「盘上缺失」的已注册版本做**单向**反激活（目录回来再扫也不复活）。于是「别的会话
+# 把主工作树切到不含该版本的提交」+「窗口内跑了 scan」= 主线活跃版本被静默吃掉，
+# 且事后无法靠再扫恢复。scan 与 restart 之间也有这个窗口，所以 runbook §1.4 在 scan
+# 行前再执行一次本脚本（不是只在 §1.1 跑过一次就算完）。
 #
 # 背景：systemd WorkingDirectory 即共享 git 工作树（本机=仓库根），谁切了分支、
 # 谁重启，谁就把那个分支推上生产（曾实测生产跑在 ci/serial-automerge-update-branch）。

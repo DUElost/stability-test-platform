@@ -828,7 +828,7 @@
     # ── 刷机前置归位（#2133 / ADR-0037 D5，opt-in）────────────────────────
     # 运行期不再装包/加组/写规则（wrapper 窄面只提供固定 udev 自愈）；本段由
     # 运维显式开启（-e agent_ensure_flash_prereqs=true）给刷机主机补齐：
-    #   dialout 成员 + MTK ttyACM 规则（0660+dialout，无组才 0666）+ Qt/X 运行库五件。
+    #   dialout 成员 + MTK ttyACM 规则（0660+dialout，非成员才 0666）+ Qt/X 运行库五件。
     # 默认关闭：常规更新不触碰系统包面。刻意放在门禁释放之后——本段失败不得
     # 让升级门禁悬挂（#1249 教训）；缺失项由 flash_preflight 如实报出。
     - name: Check dialout group exists (#2133)
@@ -851,9 +851,21 @@
         - agent_ensure_flash_prereqs | default(false) | bool
         - agent_flash_dialout_group.rc | default(1) == 0
 
-    # #2284：规则形态随本机是否有 dialout 组二选一（与 install_agent.sh /
-    # wrapper ensure-udev-rule 同源，两个固定形态）。0660 + GROUP=dialout 是
-    # 最小权限形态；无该组才退化为 0666（否则设备节点不可写、刷机不可用）。
+    # #2353：规则形态的判据是「Agent 用户**是否已持久属于** dialout」，不是
+    # 「组是否存在」——组在而用户不在时，0660 对该用户等同于不可写（刷机中途
+    # EACCES/STATUS_ERR）。本任务读加组后的真实成员表（上面的 usermod 若失败，
+    # 这里就是那个状态），并作为两个 copy 的互补门控。
+    - name: Check agent user is a dialout member (#2133/#2353)
+      become: true
+      ansible.builtin.shell: id -nG {{ agent_user }} | tr ' ' '\n' | grep -qx dialout
+      register: agent_flash_dialout_member
+      changed_when: false
+      failed_when: false
+      when: agent_ensure_flash_prereqs | default(false) | bool
+
+    # #2284 / #2353：两个固定形态（与 install_agent.sh / wrapper ensure-udev-rule
+    # 同源）。0660 + GROUP=dialout 是最小权限形态，**只有成员**才写它；非成员
+    # （无该组 / 加组失败）退化为 0666，否则设备节点对该用户不可写、刷机不可用。
     - name: Ensure MTK ttyACM udev rule — 0660 + dialout (#2133/#2284)
       become: true
       ansible.builtin.copy:
@@ -866,9 +878,9 @@
       failed_when: false
       when:
         - agent_ensure_flash_prereqs | default(false) | bool
-        - agent_flash_dialout_group.rc | default(1) == 0
+        - agent_flash_dialout_member.rc | default(1) == 0
 
-    - name: Ensure MTK ttyACM udev rule — 0666 fallback, no dialout (#2133/#2284)
+    - name: Ensure MTK ttyACM udev rule — 0666 fallback, not a dialout member (#2133/#2353)
       become: true
       ansible.builtin.copy:
         dest: /etc/udev/rules.d/98-ttyacm-mtk.rules
@@ -880,7 +892,7 @@
       failed_when: false
       when:
         - agent_ensure_flash_prereqs | default(false) | bool
-        - agent_flash_dialout_group.rc | default(1) != 0
+        - agent_flash_dialout_member.rc | default(1) != 0
 
     - name: Reload udev rules after rule change (#2133)
       become: true
@@ -923,11 +935,14 @@
       failed_when: false
       when: agent_ensure_flash_prereqs | default(false) | bool
 
-    - name: Report flash prerequisite provisioning result (#2133)
+    - name: Report flash prerequisite provisioning result (#2133/#2353)
       ansible.builtin.debug:
         msg: >-
-          flash prereqs: dialout_changed={{ agent_flash_dialout.changed | default('skipped') }}
-          udev_rule_changed={{ agent_flash_udev_rule.changed | default('skipped') }}
+          flash prereqs: dialout_member_rc={{ agent_flash_dialout_member.rc | default('skipped') }}
+          (0=member) dialout_changed={{ agent_flash_dialout.changed | default('skipped') }}
+          dialout_usermod_failed={{ agent_flash_dialout.failed | default(false) }}
+          udev_rule_changed={{ (agent_flash_udev_rule_0660.changed | default(false))
+          or (agent_flash_udev_rule_0666.changed | default(false)) }}
           packages_rc={{ agent_flash_prereq_pkgs.rc | default('skipped') }}
           packages_out={{ agent_flash_prereq_pkgs.stdout_lines | default([]) | join(' | ') }}
       when: agent_ensure_flash_prereqs | default(false) | bool
