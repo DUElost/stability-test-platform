@@ -27,7 +27,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from backend.realtime import console_registry as _console_registry
 
@@ -274,15 +274,6 @@ class RunConsole:
             os.getenv("STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS"),
             _TERMINAL_RETENTION_SECONDS_DEFAULT,
         )
-        # #1124：replay 有界 + 终态运行记录淘汰
-        self._replay_max_lines = _parse_positive_int(
-            os.getenv("STP_RUN_CONSOLE_REPLAY_MAX_LINES"), _REPLAY_MAX_LINES_DEFAULT,
-        )
-        self._replay_max_line_chars = _REPLAY_MAX_LINE_CHARS
-        self._terminal_retention_seconds = _parse_positive_float(
-            os.getenv("STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS"),
-            _TERMINAL_RETENTION_SECONDS_DEFAULT,
-        )
         # #1737 P1：多实例归属注册表（默认关闭；门控/语义见 console_registry）。
         # 互斥键与 owner 键由本进程续期 + CAS 释放；确认失去互斥时止损取消。
         self._registry_ticker: Optional[threading.Thread] = None
@@ -455,21 +446,9 @@ class RunConsole:
         try:
             proc = subprocess.Popen(cmd, **popen_kwargs)
         except Exception as exc:
-            run.status = "FAILED"
-            run.error = f"spawn_failed: {exc}"[:500]
-            run.ended_at = datetime.now(timezone.utc).isoformat()
-            self._release_key(run_key, run_id=run_id)
-            # #1931：RUNNING 快照发布在 Popen 之前（:431）——spawn 失败路径无
-            # reader 线程、`_finalize` 永不执行，快照只能等 TTL 自然过期，
-            # 其他实例的 status() 在此期间读到 RUNNING 假状态。显式删除。
-            if _console_registry.console_registry_enabled():
-                try:
-                    _console_registry.delete_status_snapshot(run_id)
-                except Exception:  # noqa: BLE001 - 清理失败不影响主错误路径
-                    logger.warning(
-                        "run_console_spawn_fail_snapshot_cleanup_failed run_id=%s",
-                        run_id,
-                    )
+            # #1931：RUNNING 快照发布在 Popen 之前——spawn 失败路径无 reader 线程、
+            # `_finalize` 永不执行，快照与 run_key 必须在此显式收口。
+            self._abort_failed_start(run, error=f"spawn_failed: {exc}")
             logger.exception("run_console_spawn_failed run_id=%s", run_id)
             raise RunConsoleError(f"spawn failed: {exc}") from exc
 
@@ -485,9 +464,89 @@ class RunConsole:
             target=self._reader_loop, args=(run,), name=f"run-console-{run_id}", daemon=True,
         )
         run._thread = thread
-        thread.start()
+        try:
+            thread.start()
+        except Exception as exc:
+            # #2045：登记 / RUNNING 快照 / run_key 续租都发生在 thread.start() 之前。
+            # 线程起不来（线程或内存资源耗尽）时若让异常直接冒泡，该 run 停在默认
+            # 状态 RUNNING 且没有执行体：ticker 只按终态过滤 `_runs`，会**永久**续租
+            # 它的 run_key（进程重启前该 run_key 再也起不来），快照停在假 RUNNING，
+            # 且已 spawn 的子进程无人读 stdout——管道写满即悬挂。与 Popen 失败同构收口。
+            self._abort_failed_start(run, error=f"reader_start_failed: {exc}", proc=proc)
+            logger.exception("run_console_reader_start_failed run_id=%s", run_id)
+            raise RunConsoleError(f"reader thread start failed: {exc}") from exc
         logger.info("run_console_started run_id=%s key=%s label=%s", run_id, run_key, run.label)
         return run_id
+
+    # ------------------------------------------------------------------
+    # start() 失败收口（#1931 / #2045）
+    # ------------------------------------------------------------------
+
+    def _abort_failed_start(
+        self, run: ConsoleRun, *, error: str, proc: Optional[subprocess.Popen] = None,
+    ) -> None:
+        """reader 线程尚未建立时 start() 失败的统一收口。
+
+        正常终态由 reader 线程 finally 里的 `_finalize` 落；线程不存在时那三件事
+        （置终态 / 释放 run_key / 删 RUNNING 快照）必须在此显式做完，否则 run_key
+        被永久占用（#2045）、其他实例读到假 RUNNING（#1931）。`proc` 非空说明子
+        进程已经起来，还要额外收敛它的进程组——没有 reader 消费 stdout 管道，
+        写满即永久挂起。
+        """
+        if proc is not None:
+            self._kill_orphan_proc(run, proc)
+        run.status = "FAILED"
+        run.error = error[:500]
+        run.ended_at = datetime.now(timezone.utc).isoformat()
+        self._release_key(run.run_key, run_id=run.run_id)
+        if _console_registry.console_registry_enabled():
+            try:
+                _console_registry.delete_status_snapshot(run.run_id)
+            except Exception:  # noqa: BLE001 - 清理失败不影响主错误路径
+                logger.warning(
+                    "run_console_abort_failed_start_snapshot_cleanup_failed run_id=%s",
+                    run.run_id,
+                )
+
+    def _kill_orphan_proc(self, run: ConsoleRun, proc: subprocess.Popen) -> None:
+        """终止没有 reader 的子进程（#2045）；与 `cancel()` 同构但不改状态。"""
+        try:
+            pgid = run._pgid if isinstance(run._pgid, int) else _resolve_pgid(proc)
+            if os.name == "nt" or pgid is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=self._cancel_grace)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                return
+            import signal as _signal
+
+            try:
+                os.killpg(pgid, _signal.SIGTERM)
+            except ProcessLookupError:
+                pgid = None  # 整组已散
+            except Exception:
+                logger.exception(
+                    "run_console_orphan_killpg_failed run_id=%s pgid=%s", run.run_id, pgid,
+                )
+                proc.terminate()
+            if pgid is not None and not _await_group_exit(proc, pgid, self._cancel_grace):
+                logger.warning(
+                    "run_console_orphan_group_alive_after_sigterm run_id=%s pgid=%s",
+                    run.run_id, pgid,
+                )
+                try:
+                    os.killpg(pgid, _signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except Exception:
+                    logger.exception(
+                        "run_console_orphan_killpg_sigkill_failed run_id=%s pgid=%s",
+                        run.run_id, pgid,
+                    )
+                    proc.kill()
+        except Exception:
+            logger.exception("run_console_orphan_proc_cleanup_failed run_id=%s", run.run_id)
 
     # ------------------------------------------------------------------
     # reader 线程
@@ -778,7 +837,13 @@ class RunConsole:
         显式标记 `replay_unavailable` 并告警。
 
         #1124：流式读取 —— 内存占用与响应体均有界（`_replay_max_lines` 上限 +
-        单行截断），不再 `readlines()` 全量装进内存；`seq` 仍精确统计到文件末尾。
+        单行截断），不再 `readlines()` 全量装进内存。
+
+        #2070 / #2039 语义收口：`seq` 是**交付游标**（本次响应最后一行的行号），
+        # 不再是「文件 / owner 报告的末端」；已知末端另放 `total_seq`，本次未交付完
+        # 另放 `truncated`（调用方应以 `from_seq = seq + 1` 续拉）。旧语义把三者混为
+        # 一谈：上限截断、或跨实例快照领先于本地文件时，前端游标被推到未交付行之后
+        # → 中间段永久缺失（消费侧见 `frontend/src/components/console/LiveConsole.tsx`）。
         """
         run = self._runs.get(run_id)
         snapshot: Optional[Dict[str, Any]] = None
@@ -796,19 +861,23 @@ class RunConsole:
             status = str(snapshot["status"])
         else:
             status = "UNKNOWN"
+        start = max(0, int(from_seq) - 1) if from_seq > 0 else 0
+        owner_seq = int(snapshot.get("seq") or 0) if snapshot else 0
         if not log_path or not log_path.exists():
-            owner_seq = int(snapshot.get("seq") or 0) if snapshot else 0
+            # 一行都没有交付 → 游标原地不动（#2039：旧实现把 owner 的 seq 当作
+            # 已交付末端返回，前端据此跳过 1..owner_seq 的全部行）。
             result: Dict[str, Any] = {
                 "run_id": run_id,
                 "from_seq": from_seq,
                 "lines": [],
-                "seq": owner_seq,
+                "seq": start,
+                "total_seq": owner_seq,
+                "truncated": False,
                 "status": status,
             }
-            if owner_seq > 0:
+            if owner_seq > start:
                 self._mark_replay_unavailable(result, snapshot, reason="log_file_missing")
             return result
-        start = max(0, int(from_seq) - 1) if from_seq > 0 else 0
         lines: List[str] = []
         total = 0
         try:
@@ -819,17 +888,37 @@ class RunConsole:
                         lines.append(ln.rstrip("\n")[: self._replay_max_line_chars])
         except Exception:
             logger.exception("run_console_read_log_failed run_id=%s", run_id)
-        owner_seq = int(snapshot.get("seq") or 0) if snapshot else 0
+        delivered_end = start + len(lines)
         result = {
             "run_id": run_id,
             "from_seq": start + 1,
             "lines": lines,
-            "seq": max(total, owner_seq),
+            "seq": delivered_end,
+            "total_seq": max(total, owner_seq),
+            "truncated": total > delivered_end,
             "status": status,
         }
         if owner_seq > total:
             self._mark_replay_unavailable(result, snapshot, reason="log_file_behind")
         return result
+
+    def iter_log_lines(self, run_id: str) -> Iterator[str]:
+        """服务端内部消费者用：完整遍历日志，**不受 replay 响应上限约束**（#2070）。
+
+        `read_log` 的 `_replay_max_lines` 是给 HTTP 响应体设界的显示层约束；服务端
+        内部消费者（如 Jira `issue_keys` 解析）复用它会让超上限日志的尾部静默丢失，
+        故单开一条无上限的流式读法（逐行 yield，不把整个文件装进内存）。
+        """
+        run = self._runs.get(run_id)
+        if run is not None and run._log_path is not None:
+            log_path: Optional[Path] = run._log_path
+        else:
+            log_path = self._log_root / f"{run_id}.log"
+        if not log_path.exists():
+            return
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                yield ln.rstrip("\n")[: self._replay_max_line_chars]
 
     def log_file_path(self, run_id: str) -> Path:
         """返回 run 的日志文件路径（不依赖 run 是否在内存）。"""

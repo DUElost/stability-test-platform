@@ -215,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
         if report.get("stage") == "init" and report.get("status") == "PASS":
             credentials = report["admin_credentials"]
             print(f"Site inputs written: {report['output']}")
+            if report.get("timezone"):
+                print(f"Site timezone: {report['timezone']} (probed from the host; Agents follow it, S1 re-checks it)")
             print(f"Bindings written: {report['bindings_dir']}")
             print(f"Initial administrator '{credentials['username']}' password is in {credentials['password_file']} (0600).")
     return 0 if report["status"] == "PASS" else 1

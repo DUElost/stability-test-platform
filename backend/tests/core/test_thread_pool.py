@@ -87,3 +87,63 @@ def test_queue_full_rejects_and_counts():
     done = threading.Event()
     thread_pool.submit(done.set)
     assert done.wait(timeout=5)
+
+
+def test_repeated_submit_failures_do_not_erode_capacity(monkeypatch):
+    """#2072：`pool.submit` 抛「非 shutdown」错误时配额必须归还。
+
+    旧实现在 `raise` 前没有任何归还（`_run_and_release` 从未被调度），而
+    `_queue_slots` 是模块级、跨 pool 重建存活 → 每失败一次就少一格容量，
+    到 0 后所有后台提交恒抛 PoolQueueFullError，调用方（通知/后处理）
+    的行为是「记一条 warning 后丢弃」——静默丢后台工作。
+    """
+
+    class _AlwaysBoom:
+        def submit(self, _fn):
+            raise RuntimeError("unrelated boom")
+
+    monkeypatch.setattr(thread_pool, "_pool", _AlwaysBoom())
+    for _ in range(thread_pool.MAX_QUEUE + 10):
+        with pytest.raises(RuntimeError, match="unrelated boom"):
+            thread_pool.submit(lambda: None)
+
+    assert thread_pool.queue_depth() == 0, "失败提交不得留下占用配额的僵尸"
+
+    # 容量完好：换回真池仍可提交并跑完（旧实现此刻恒 PoolQueueFullError）
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(thread_pool, "_pool", ThreadPoolExecutor(max_workers=1))
+    done = threading.Event()
+    thread_pool.submit(done.set)
+    assert done.wait(timeout=5)
+    assert thread_pool.drain(timeout=5)
+
+
+def test_shutdown_cancelled_futures_release_slots(monkeypatch):
+    """#2072：被 `shutdown(cancel_futures=True)` 取消的排队任务也要归还配额。
+
+    任务体不执行 → 旧实现挂在任务体 finally 上的归还永不发生；生产路径目前只在
+    带 timeout 的优雅停机里出现，测试里则表现为同一进程内跨用例累积、偶发
+    PoolQueueFullError 与 `drain()` 等不到零（conftest 清库前的排空守卫，#2074）。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(thread_pool, "_pool", pool)
+
+    gate = threading.Event()
+
+    def _blocker():
+        gate.wait(timeout=10)
+
+    running = thread_pool.submit(_blocker)        # 占住唯一 worker
+    for _ in range(5):
+        thread_pool.submit(lambda: None)          # 排队中的 5 条
+    assert thread_pool.queue_depth() == 6
+
+    pool.shutdown(wait=False, cancel_futures=True)
+    gate.set()
+    running.result(timeout=10)
+
+    assert thread_pool.drain(timeout=10), "被取消的排队任务也必须归还配额"
+    assert thread_pool.queue_depth() == 0

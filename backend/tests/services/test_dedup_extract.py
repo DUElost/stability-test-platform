@@ -86,6 +86,49 @@ def test_parse_event_dir_names_from_xls_reads_path_column(tmp_path):
     }
 
 
+@pytest.mark.parametrize(
+    ("header", "warns"),
+    [
+        ("Path", False),
+        (" path ", False),     # 大小写与首尾空白容忍
+        ("FilePath", True),    # 改名 → 必须留痕
+        ("\ufeffPath", True),  # BOM：str.strip() 不剥，落进按名依赖的盲区
+    ],
+)
+def test_parse_event_dir_names_xls_path_column_drift_is_visible(
+    tmp_path, caplog, header, warns,
+):
+    """#2256：取不到 Path 列时不再静默返回空集——调用方把空集读作「本轮无事件」。
+
+    工具已实证会改写表头（UNISOC 输入输出成 MTK 形态），本仓库按列名消费；
+    「表头漂移」与「本轮确实无事件」必须能从日志里分辨。
+    """
+    import logging
+
+    xlwt = pytest.importorskip("xlwt")
+    xls_path = tmp_path / "merge.xls"
+    book = xlwt.Workbook()
+    sheet = book.add_sheet("Sheet1")
+    sheet.write(0, 0, header)
+    sheet.write(1, 0, "/mnt/hdd/f/s/2026_0629_002306_121_db.71.JE/__exp_main.txt")
+    book.save(str(xls_path))
+
+    with caplog.at_level(logging.WARNING, logger="backend.services.dedup_extract"):
+        names = parse_event_dir_names_from_xls(xls_path)
+
+    drift = [
+        record for record in caplog.records
+        if record.getMessage().startswith("dedup_xls_path_column_missing")
+    ]
+    assert bool(drift) is warns
+    if warns:
+        assert names == set()
+        # 留痕带实际表头（不可见字符在日志里是转义形态，故比参数而非文本）。
+        assert header in drift[0].args[1]
+    else:
+        assert names == {"2026_0629_002306_121_db.71.JE"}
+
+
 def test_run_extract_sync_uses_dle_remote_paths_only(
     db_session, sample_plan_run, sample_host, sample_device, tmp_path, monkeypatch,
 ):
