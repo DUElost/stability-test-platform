@@ -75,6 +75,7 @@ MESSAGES = {
     "install_root_taken": "Choose an empty deploy root or the same declared site for resume; existing data is never overwritten.",
     "install_dependency": "Install the declared base dependencies on the target before re-running the installer.",
     "install_timezone": "Make the control-plane host timezone match site.timezone (`timedatectl set-timezone <timezone>`, then re-run the install); the declared timezone is also what Agents are aligned to, so a mismatch skews every audit and heartbeat window.",
+    "host_timezone_unknown": "The host timezone could not be read; set it first (`sudo timedatectl set-timezone <zone>`) so init can declare it — the site timezone is never guessed.",
     "install_storage": "Mount the declared central storage before installing; the installer never formats or creates shares.",
     "release_tree": "Provide the declared release bundle as a directory with the documented layout and wheelhouse when offline.",
     "release_digest": "The bundle content does not match the declared component digests; re-obtain the release.",

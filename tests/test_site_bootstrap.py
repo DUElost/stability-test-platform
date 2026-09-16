@@ -29,7 +29,9 @@ class FakeOps:
         hostname: str = "city-b.synthetic.invalid",
         addresses: set[str] | None = None,
         responses: dict[str, tuple[int, str]] | None = None,
+        timezone: str = "Asia/Shanghai",
     ):
+        self._timezone = timezone
         self.calls: list[tuple[str, ...]] = []
         self._hostname = hostname
         self._addresses = set(addresses or {"127.0.0.1", "192.0.2.1"})
@@ -58,6 +60,9 @@ class FakeOps:
 
     def machine(self) -> str:
         return "x86_64"
+
+    def timezone(self) -> str:
+        return self._timezone
 
     def ensure_plain_dir(self, path) -> None:
         # 记录调用：测试要证明存储准备**不**使用会递归 chown 的 ensure_dir
@@ -471,3 +476,36 @@ def test_rerun_probes_the_database_with_the_existing_password(tmp_path, monkeypa
     )
     assert captured["password"] == existing_password
     assert captured["dsn"].endswith("/stp_b")
+
+# ── #2265：init 的时区声明必须来自主机真实值，并回显 ─────────────────────
+
+
+def test_init_declares_the_host_timezone_and_echoes_it(tmp_path):
+    """声明 = 主机真实时区；报告回显，供操作者在创建时就看见。"""
+    output = tmp_path / "site.yaml"
+    report = init_site(
+        output=output, bindings_dir=tmp_path / "bindings",
+        ops=probe_ops(timezone="America/Los_Angeles"), interactive=False, fix=False,
+    )
+
+    assert report["status"] == "PASS", report
+    assert report["timezone"] == "America/Los_Angeles"
+    data = yaml.safe_load(output.read_text(encoding="utf-8").split("\n\n", 1)[1])
+    assert data["site"]["timezone"] == "America/Los_Angeles"
+    # 来源写进文件头部的 provenance，便于回查
+    assert "timedatectl" in output.read_text(encoding="utf-8")
+
+
+def test_init_stops_when_the_host_timezone_is_unknown(tmp_path):
+    """读不到主机时区 → FAIL 且不写任何东西（绝不落一个默认值当声明）。"""
+    output = tmp_path / "site.yaml"
+    bindings = tmp_path / "bindings"
+    report = init_site(
+        output=output, bindings_dir=bindings,
+        ops=probe_ops(timezone=""), interactive=False, fix=False,
+    )
+
+    assert report["status"] == "FAIL"
+    assert "host_timezone_unknown" in {check["code"] for check in report["checks"]}
+    assert not output.exists() and not bindings.exists()
+    assert any("timedatectl set-timezone" in line for line in report["actions"])

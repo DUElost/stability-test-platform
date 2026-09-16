@@ -71,6 +71,14 @@ Class: process
 与本仓 venv 双解释器 `compileall` 通过后提交；该陷阱与自查命令已写入
 [`dependencies-and-quality.md`](../../development/dependencies-and-quality.md)。
 
+**勘误（记录本身，不改写历史）**：`9c6fa686` 的 commit 正文里那段示例被 shell 的双引号转义
+污染成了 `f"{item[\"k\"]}"`（带反斜杠）——真实 repro 是 f-string 内层复用**同类型**引号的
+`f"{item["k"]}"`（3.13 正常运行、3.11 `SyntaxError: f-string: unmatched '['`）。该 commit 已是
+`main` 的祖先，按「`main` 只通过 PR 合入、不直推、不事后改写已发布历史」不做事后修正，
+勘误以本节为准。除本 note 外的 7 个交付文件（两份文档、服务、CLI、执行器、两份测试）正文均
+未被污染：逐个跑 `git grep -F` 匹配「反斜杠 + 双引号」皆为空；本 note 内该序列出现 3 处，全是
+上面为复现 commit 原样（1 处）与引用检索命令（2 处）而刻意保留的字面量。
+
 `python scripts/run_gates.py check:quick` → 10 gates 全过（结果见 PR）。
 
 ## Revisit
