@@ -298,6 +298,84 @@ def purge_run_storage_dirs(run_ids: list, jobs_by_run: dict | None = None) -> se
     return failed
 
 
+def _collect_unassigned_dirs(db, safe_run_ids: list, stale_job_ids, job_run_of: dict) -> dict:
+    """#2262：本批将要删除的 DLE 行中，``remote_path`` 落在 ``devices/unassigned/``
+    的目录 → 所属 run（失败归因用）。
+
+    谓词与随后的 DLE 删除**逐字一致**（plan_run 或 job 命中）——只清「行确实要删」
+    的那些目录；行仍在库中的目录不动（``remote_path`` 仍是 extract/回溯的依据）。
+    """
+    from backend.models.device_log_event import DeviceLogEvent
+
+    rows = db.execute(
+        select(
+            DeviceLogEvent.remote_path,
+            DeviceLogEvent.plan_run_id,
+            DeviceLogEvent.job_id,
+        ).where(
+            or_(
+                DeviceLogEvent.plan_run_id.in_(safe_run_ids),
+                DeviceLogEvent.job_id.in_(stale_job_ids),
+            ),
+            DeviceLogEvent.remote_path.like("%/devices/unassigned/%"),
+        )
+    ).all()
+
+    mapping: dict = {}
+    for remote_path, plan_run_id, job_id in rows:
+        if not remote_path:
+            continue
+        owner = plan_run_id if plan_run_id is not None else job_run_of.get(job_id)
+        if owner is not None:
+            mapping[str(remote_path)] = int(owner)
+    return mapping
+
+
+def purge_unassigned_event_dirs(paths_by_run: dict) -> set:
+    """#2262：回收 ``devices/unassigned/{event_id}/`` 目录。
+
+    DLE 行是它的唯一索引，而**关联不搬文件**（``associate_unassigned_events_to_plan_run``
+    只填 ``plan_run_id``）——所以 run 级 purge 永远命中不到它，行删后目录即孤儿。
+    本函数只在本批**行删除之前**清这些目录：增长被限制在保留期内，且不在行还活着时
+    删文件（保住 ``remote_path`` 的可回溯性）。
+
+    ``paths_by_run`` = ``{remote_path: run_id}``；失败按 run 归因（与 NFS 主轨同语义）。
+    只接受 ``{root}/devices/unassigned/{event_id}`` 的**直接子目录**——越界或形态不符
+    一律跳过并告警（fail-safe：宁可留孤儿，也不误删别处）。
+    """
+    from backend.core.storage_root import resolve_shared_storage_root
+
+    if not paths_by_run:
+        return set()
+    root = resolve_shared_storage_root()
+    if not root:
+        logger.warning("nfs_retention_skipped_root_unset")
+        return set()
+
+    resolved_base = Path(root).resolve()
+    unassigned_root = resolved_base / "devices" / "unassigned"
+    failed: set = set()
+    removed = 0
+    for raw_path, run_id in paths_by_run.items():
+        try:
+            target = Path(str(raw_path)).resolve()
+            if target.parent != unassigned_root or not _within_shared_root(target, resolved_base):
+                raise ValueError(f"not a direct child of devices/unassigned: {raw_path}")
+            if target.is_dir():
+                shutil.rmtree(target)
+                removed += 1
+        except Exception:
+            failed.add(run_id)
+            logger.warning(
+                "nfs_retention_unassigned_purge_failed dir=%s", raw_path, exc_info=True,
+            )
+    if removed:
+        logger.info(
+            "nfs_retention_unassigned_purged dirs=%d failed_runs=%d", removed, len(failed),
+        )
+    return failed
+
+
 def _retention_candidate_ids(db, cutoff: datetime, limit: int = 100) -> list[int]:
     """Bounded leaf-first batch; references are filtered before each LIMIT.
 
@@ -505,8 +583,37 @@ def run_retention_cleanup() -> None:
             jobs_by_run: dict = {}
             for job_id, run_id in stale_job_rows:
                 jobs_by_run.setdefault(run_id, []).append(job_id)
+            job_run_of = {
+                job_id: run_id
+                for run_id, job_ids in jobs_by_run.items()
+                for job_id in job_ids
+            }
 
-            # Subquery: job IDs belonging to safely-deletable PlanRuns
+            stale_job_ids = select(JobInstance.id).where(
+                JobInstance.plan_run_id.in_(safe_run_ids)
+            )
+
+            # #2262：devices/unassigned/{event_id}/ 不随 run 分桶（关联只填 plan_run_id、
+            # 不搬文件），run 级 purge 命中不到 → 与行删除同批清理，把增长限制在保留期内。
+            # 单独一轮「先文件后行」：它的失败同样让所属 run 出批，且先于下面的 run/job
+            # 目录回收——出批的 run 随后不会被清掉任何目录。
+            unassigned_failed = purge_unassigned_event_dirs(
+                _collect_unassigned_dirs(db, safe_run_ids, stale_job_ids, job_run_of)
+            )
+            if unassigned_failed:
+                safe_run_ids, deferred_ancestors = _retention_safe_ids(
+                    db, [run_id for run_id in safe_run_ids if run_id not in unassigned_failed],
+                )
+                keep.update(deferred_ancestors)
+                if not safe_run_ids:
+                    logger.warning(
+                        "retention_cleanup deferred: unassigned NFS failures=%d "
+                        "kept_ancestors=%d",
+                        len(unassigned_failed), len(deferred_ancestors),
+                    )
+                    record_retention_txn(time.perf_counter() - lock_t0)
+                    return
+
             # #1521/#1698/#2031: NFS 轨回收——DB 行删除前先清
             # devices|dedup|jira/{run_id} 与 jobs/{job_id}（行是目录的唯一索引）；
             # 文件删除失败的 run 剔除出本批 DB 删除，下轮重试（先文件后行，失败可自愈）。
@@ -524,18 +631,16 @@ def run_retention_cleanup() -> None:
                     # 整批被 NFS 失败推迟：锁要到会话关闭才释放，窗口记在返回前。
                     record_retention_txn(time.perf_counter() - lock_t0)
                     return
-                # 出批的 run 其 job 仍留在库里 → 其 console.log 也不得清理。
-                surviving = set(safe_run_ids)
-                stale_job_id_list = [
-                    job_id
-                    for run_id, job_ids in jobs_by_run.items()
-                    if run_id in surviving
-                    for job_id in job_ids
-                ]
 
-            stale_job_ids = select(JobInstance.id).where(
-                JobInstance.plan_run_id.in_(safe_run_ids)
-            )
+            # 两轮延迟都可能收缩批次：定稿 job 清单（提交后据此清 console.log，
+            # 出批 run 的 job 仍留在库里 → 不得清理）。
+            surviving = set(safe_run_ids)
+            stale_job_id_list = [
+                job_id
+                for run_id, job_ids in jobs_by_run.items()
+                if run_id in surviving
+                for job_id in job_ids
+            ]
 
             # FK order: child tables first
             db.query(StepTrace).filter(
