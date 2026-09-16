@@ -745,3 +745,113 @@ async def test_dle_accepts_pull_failed_from_inflight_states(monkeypatch, tmp_pat
             db.close()
     finally:
         _cleanup(seed)
+
+
+# ── #2316 决定 1：已归属行的权威 remote_path 不被陈旧 unassigned 路径覆盖 ──────
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_stale_unassigned_path_does_not_override_adopted_path(monkeypatch, tmp_path):
+    """行已归属、且已有权威路径时，Agent 带来的 devices/unassigned/ 路径**不覆盖**它。
+
+    Agent 不知道中心侧的搬移（#2316 方案 C），此后每次补丁（REMOTE/ARCHIVED/PRUNED）
+    都会带那条陈旧路径；覆盖会让 remote_path 悬空、extract 取件失败。也不 400——
+    那会把良性陈旧路径变成状态更新失败（Agent outbox 重试/死信，#380/#764 同族）。
+    """
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    client_id = str(uuid4())
+    adopted = str(nfs / "devices" / str(seed["plan_run_id"]) / client_id / "2026_0112_a.ANR")
+    stale = str(nfs / "devices" / "unassigned" / client_id / "2026_0112_a.ANR")
+    try:
+        with SessionLocal() as db:
+            db.add(DeviceLogEvent(
+                id=UUID(client_id),
+                serial=seed["serial"],
+                platform="MTK",
+                event_type="NE",
+                detected_at=datetime.now(timezone.utc),
+                state=EventState.REMOTE.value,
+                local_path="/mnt/hdd/aee_events/2026_0112_a.ANR",
+                remote_path=adopted,
+                host_id=seed["host_id"],
+                job_id=seed["job_id"],
+                plan_run_id=seed["plan_run_id"],
+            ))
+            db.commit()
+
+        patch_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="NE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.ARCHIVED.value,
+            local_path="/mnt/hdd/aee_events/2026_0112_a.ANR",
+            remote_path=stale,
+            host_id=seed["host_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            r = await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[patch_ev]), db=db, _=None,
+            )
+        assert r.data["upserted"] == 1
+
+        with SessionLocal() as db:
+            row = db.get(DeviceLogEvent, UUID(client_id))
+            assert row.state == EventState.ARCHIVED.value, "状态应照常更新"
+            assert row.remote_path == adopted, "权威路径被陈旧 unassigned 路径覆盖"
+    finally:
+        _cleanup(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_unassigned_path_accepted_when_row_has_no_path(monkeypatch, tmp_path):
+    """行内路径为空时仍接受该值（此时它是唯一信息）——忽略规则只针对「已有权威值」。"""
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    seed = _seed_host_job()
+    client_id = str(uuid4())
+    unassigned = str(nfs / "devices" / "unassigned" / client_id / "2026_0112_b.ANR")
+    try:
+        with SessionLocal() as db:
+            db.add(DeviceLogEvent(
+                id=UUID(client_id),
+                serial=seed["serial"],
+                platform="MTK",
+                event_type="NE",
+                detected_at=datetime.now(timezone.utc),
+                state=EventState.LOCAL.value,
+                local_path="/mnt/hdd/aee_events/2026_0112_b.ANR",
+                remote_path=None,
+                host_id=seed["host_id"],
+                job_id=seed["job_id"],
+                plan_run_id=seed["plan_run_id"],
+            ))
+            db.commit()
+
+        patch_ev = DeviceLogEventIn(
+            id=client_id,
+            serial=seed["serial"],
+            platform="MTK",
+            event_type="NE",
+            detected_at=datetime.now(timezone.utc).isoformat(),
+            state=EventState.REMOTE.value,
+            local_path="/mnt/hdd/aee_events/2026_0112_b.ANR",
+            remote_path=unassigned,
+            host_id=seed["host_id"],
+            plan_run_id=seed["plan_run_id"],
+        )
+        async with AsyncSessionLocal() as db:
+            await ingest_device_log_events(
+                DeviceLogEventBatchIn(events=[patch_ev]), db=db, _=None,
+            )
+
+        with SessionLocal() as db:
+            assert db.get(DeviceLogEvent, UUID(client_id)).remote_path == unassigned
+    finally:
+        _cleanup(seed)
