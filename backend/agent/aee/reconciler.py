@@ -107,6 +107,10 @@ class ReconcilerStats:
     signals_emitted: int = 0
     signals_dropped: int = 0       # contract violation / emit 异常
     tick_errors: int = 0
+    # #2394-①「落成未采到」可发现化（UNISOC reconciler 回填；MTK 路恒 0）：
+    dirs_abandoned: int = 0            # 达 #2272 上限被放弃的目录数（按目录名去重）
+    dirs_oversized_skipped: int = 0    # #2252 降级态（超限仅取元数据）目录数（本拍快照）
+    unresolved_dirs: int = 0           # 最近一拍「已列到但未落 processed 且未放弃」集合大小
 
     def to_dict(self) -> Dict[str, int]:
         return {
@@ -119,6 +123,9 @@ class ReconcilerStats:
             "signals_emitted":         self.signals_emitted,
             "signals_dropped":         self.signals_dropped,
             "tick_errors":             self.tick_errors,
+            "dirs_abandoned":          self.dirs_abandoned,
+            "dirs_oversized_skipped":  self.dirs_oversized_skipped,
+            "unresolved_dirs":         self.unresolved_dirs,
         }
 
 

@@ -126,12 +126,18 @@ export function ExecuteCommandBar({
                 <span
                   className={cn(
                     'rounded-md px-2 py-0.5 text-xs font-medium',
-                    summary.versionConsistent
-                      ? 'bg-success/15 text-success'
-                      : 'bg-warning/15 text-warning',
+                    summary.selectedCount === 0
+                      ? 'bg-muted text-muted-foreground'
+                      : summary.versionConsistent
+                        ? 'bg-success/15 text-success'
+                        : 'bg-warning/15 text-warning',
                   )}
                 >
-                  {summary.versionCount} 版本 · {summary.versionConsistent ? '一致 ✓' : '冲突'}
+                  {/* #2385：0 台时「版本一致」恒真——空集不是「已验证一致」，与同条
+                      「预检 —」一样按缺省态渲染，别把「还没选机」画成绿色通过。 */}
+                  {summary.selectedCount === 0
+                    ? '版本 —'
+                    : `${summary.versionCount} 版本 · ${summary.versionConsistent ? '一致 ✓' : '冲突'}`}
                 </span>
                 <span
                   className={cn(

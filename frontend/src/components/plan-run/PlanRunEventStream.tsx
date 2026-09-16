@@ -19,6 +19,7 @@ import {
 } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatDateTimeLocale } from '@/utils/format';
+import { loadErrorCopy } from '@/utils/api';
 import type {
   EventSeverity,
   EventStage,
@@ -113,6 +114,7 @@ function EventRow({ event }: { event: PlanRunEvent }) {
   );
 }
 
+
 interface Props {
   events: PlanRunEventsPayload | undefined;
   stageFilter?: EventStage | 'all';
@@ -127,6 +129,8 @@ interface Props {
   isExporting?: boolean;
   isLoading?: boolean;
   isError?: boolean;
+  /** 承载错误的原始对象（#2361）：404 与网络层要分文案，只有布尔分不出。 */
+  error?: unknown;
   page?: number;
   pageSize?: number;
   onPageChange?: (page: number) => void;
@@ -144,6 +148,7 @@ export default function PlanRunEventStream({
   isExporting = false,
   isLoading = false,
   isError = false,
+  error,
   page = 0,
   pageSize = 50,
   onPageChange,
@@ -244,7 +249,15 @@ export default function PlanRunEventStream({
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <AlertCircle aria-hidden className="mb-1 h-5 w-5 text-destructive/60" />
             <span className="text-xs font-semibold text-destructive">加载失败</span>
-            <span className="mt-0.5 text-[11px] text-destructive/70">请检查网络连接或稍后重试</span>
+            {/* #2361：此前不论哪种失败都写「请检查网络连接」——404（记录不存在）
+                会被读成网络故障。 */}
+            <span className="mt-0.5 text-[11px] text-destructive/70">
+              {
+                loadErrorCopy(error, {
+                  notFound: '执行记录不存在或已被清理，日志无法读取。',
+                }).description
+              }
+            </span>
           </div>
         ) : isLoading && eventList.length === 0 ? (
           <div className="space-y-1.5 p-3">

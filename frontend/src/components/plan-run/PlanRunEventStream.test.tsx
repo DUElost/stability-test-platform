@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import PlanRunEventStream from './PlanRunEventStream';
+import { ApiError } from '@/utils/api';
 import type { PlanRunEventsPayload } from '@/utils/api/types';
 
 const events: PlanRunEventsPayload = {
@@ -225,5 +226,30 @@ describe('PlanRunEventStream', () => {
 
     rerender(<PlanRunEventStream events={events} />);
     expect(screen.queryByTestId('event-export-csv')).not.toBeInTheDocument();
+  });
+
+  // #2361：失败分支此前只有「请检查网络连接或稍后重试」一句——404（记录被回收）
+  // 也被写成了网络故障，把排查方向带偏。
+  it('blames the missing record (not the network) when the error is a 404', () => {
+    render(
+      <PlanRunEventStream
+        events={undefined}
+        isError
+        error={new ApiError('HTTP_404', 'plan run not found', { status: 404 })}
+      />,
+    );
+    expect(screen.getByText('执行记录不存在或已被清理，日志无法读取。')).toBeInTheDocument();
+    expect(screen.queryByText(/网络连接/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the connection hint for layer-level failures without status', () => {
+    render(
+      <PlanRunEventStream
+        events={undefined}
+        isError
+        error={new ApiError('NETWORK_ERROR', '网络请求失败')}
+      />,
+    );
+    expect(screen.getByText('请检查网络连接或稍后重试')).toBeInTheDocument();
   });
 });

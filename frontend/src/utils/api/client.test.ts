@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError, classifyApiError, toApiError, unwrapApiResponse } from './client';
+import { ApiError, classifyApiError, loadErrorCopy, toApiError, unwrapApiResponse } from './client';
 
 describe('unwrapApiResponse', () => {
   it('returns null payloads as-is without falling back to the wrapper body', async () => {
@@ -120,5 +120,40 @@ describe('classifyApiError（#2359：HTTP 语义 → 可操作分类）', () => 
 
   it('非 ApiError 入参经 toApiError 归一后再分类', () => {
     expect(classifyApiError({ response: { status: 403 } })).toBe('permission');
+  });
+});
+
+
+describe('loadErrorCopy（#2361：404 与网络层分文案）', () => {
+  const copy = { notFound: '执行记录不存在或已被清理', fallback: '兜底' };
+  const withStatus = (status: number) =>
+    new ApiError(`HTTP_${status}`, `失败 ${status}`, { status });
+
+  it('404 用调用方的不存在文案，且不给重试', () => {
+    const result = loadErrorCopy(withStatus(404), copy);
+    expect(result.description).toBe('执行记录不存在或已被清理');
+    expect(result.retryable).toBe(false);
+  });
+
+  it('404 不透出服务端英文 detail（本地化）', () => {
+    const error = toApiError({
+      message: 'Request failed with status code 404',
+      response: { status: 404, data: { detail: 'plan run not found' } },
+    });
+    expect(loadErrorCopy(error, copy).description).not.toContain('not found');
+  });
+
+  it('网络层（无 status）提示连接并可重试', () => {
+    const result = loadErrorCopy(new ApiError('NETWORK_ERROR', '网络请求失败'), copy);
+    expect(result.description).toContain('网络');
+    expect(result.retryable).toBe(true);
+  });
+
+  it('带 status 的服务端错误用其 message；缺 message 回落调用方兜底', () => {
+    // ApiError（已归一）用它自己的 message；原始 axios 错误的兜底文案由 toApiError 负责
+    expect(loadErrorCopy(withStatus(500), copy).description).toBe('失败 500');
+    expect(
+      loadErrorCopy(new ApiError('INTERNAL', '', { status: 500 }), copy).description,
+    ).toBe('兜底');
   });
 });

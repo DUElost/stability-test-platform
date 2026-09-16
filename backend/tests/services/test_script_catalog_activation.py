@@ -51,6 +51,25 @@ def test_scan_deactivates_version_missing_from_disk(
     row = db_session.query(Script).filter_by(name="demo", version="1.0.0").one()
     assert row.is_active is False
     assert result.deactivated == 1
+    # #2386：单向反激活必须可归责——明细（含被判定缺失的 nfs_path）进结果与审计，
+    # 而不是留一个事后无从查起的计数。
+    assert [(d["name"], d["version"]) for d in result.deactivated_versions] == [
+        ("demo", "1.0.0"),
+    ]
+    assert result.deactivated_versions[0]["nfs_path"].endswith("demo/v1.0.0/demo.py")
+
+
+def test_deactivation_detail_is_empty_when_nothing_missing(
+        db_session: Session, tmp_path: Path):
+    """反向边界：没有反激活时明细必须是空表，而不是「计数 0 + 键缺失」。"""
+    root = tmp_path / "scripts"
+    _write_script_version(root, "demo", "1.0.0")
+    scan_script_root(db_session, root)
+
+    again = scan_script_root(db_session, root)
+    assert again.deactivated == 0
+    assert again.deactivated_versions == []
+    assert again.to_dict()["deactivated_versions"] == []
 
 
 def test_scan_registers_new_version_active(
