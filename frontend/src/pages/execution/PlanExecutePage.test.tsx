@@ -161,6 +161,21 @@ describe('PlanExecutePage', () => {
     (api.planRuns.get as any).mockReset();
   });
 
+  // #2385：0 台时空态只说「请先添加测试设备」，却没给出口；执行条还把空集画成
+  // 绿色「0 版本 · 一致 ✓」——这一步的真实状态是「还没选机」。
+  it('gives the empty device pool a link to /devices instead of a dead-end copy', async () => {
+    renderPage();
+
+    await screen.findByText(/启用步骤/);
+    fireEvent.click(screen.getByRole('button', { name: /进入选机/ }));
+
+    expect(await screen.findByText('暂无设备')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /添加测试设备/ })).toHaveAttribute('href', '/devices');
+    // 指挥条：空集按缺省态渲染，不再宣称「一致 ✓」
+    expect(screen.getByText('版本 —')).toBeInTheDocument();
+    expect(screen.queryByText(/一致/)).not.toBeInTheDocument();
+  });
+
   it('keeps the page title and view-specific subtitle visible in selection phase', async () => {
     renderPage({
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
