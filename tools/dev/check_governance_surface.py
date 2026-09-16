@@ -26,14 +26,22 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
       Verification/Revisit）齐备（#1299）
   S11 AGENTS.md 硬不变量锚点逐条在场（防整条删除/改写静默丢失——S4 同模式）
   S12 ADR 索引一致性：头部状态行 ↔ adr/README 主表/DOC-MAP/M7 看板（status 词级
-      + 规范位版本），头部行 ↔ 版本记录块末项（#861/#867 五次复发后的确定性收口）；
+      + 规范位版本），头部行 ↔ 版本记录块**最新版本**（按版本号取最大：书写顺序
+      在各形态间不一致，#861/#867 五次复发后的确定性收口）；
       **头部状态行自身必须在场且可解析**（#1524：此前键位粗体/表格形态会让取行
-      失败 → 该 ADR 静默退出全部索引校验）
-  S14 代码注释里的 ADR 版本引用 ↔ 该 ADR 头部规范位版本（#2154 收口）：ADR-0043
-      v1.1 落地时注释同步漏改一处（同文件另两处已是 v1.1），全靠人肉 grep 才发现
-      ——S12 只管索引面，注释面无人被迫同步。判据与 S12 同：只认头部规范位版本，
-      头部不带版本者不约束；只绑「紧跟 ADR 号的第一个 vX.Y」（沿革叙述里的
-      vX.Y 不误绑）。已发布脚本版本目录（backend/agent/scripts/）内容冻结
+      失败 → 该 ADR 静默退出全部索引校验）；**索引行状态 cell 自身也须在场且可
+      解析**（#2035：``**Accepted**`` 这种粗体单元格与裸词不等 → 该行静默退出
+      状态比对，实测 8 行）
+  S14 代码注释里的 ADR 版本引用 ∈ 该 ADR **已发布版本集合**（#2154 收口，
+      #2249 放宽判据）：ADR-0043 v1.1 落地时注释同步漏改一处（同文件另两处已是
+      v1.1），全靠人肉 grep 才发现——S12 只管索引面，注释面无人被迫同步。判据
+      原为「== 头部规范位版本」，头部 bump 后会把**刻意引用历史版本**的合法注释
+      判红（ADR-0032 头部 v0.9、代码引 v0.8 即现实例），也使「给头部补版本」的
+      努力制造大面积红灯（#2250），故改为「∈ 项目符版本记录块 ∪ 修订记录章节 ∪
+      头部规范位版本」——三种写法都在用（单行罗列 / 续行 / 缩进子项），只读其中
+      一种会漏掉整篇 ADR 的已发布版本。
+      头部不带版本者不约束（同 S12）；只绑「紧跟 ADR 号的第一个 vX.Y」（沿革叙述
+      里的 vX.Y 不误绑）。已发布脚本版本目录（backend/agent/scripts/）内容冻结
       （ADR-0020），扫进去会产出「红灯但不可修」的死结，故排除。
 
 用法:
@@ -310,41 +318,117 @@ def parse_adr_status_line(line: str) -> tuple[str, str] | tuple[None, None]:
     return m.group(1), vm.group(1) if vm else None
 
 
+def _ver_key(ver: str) -> tuple[int, int]:
+    """版本号排序键：字典序会把 v1.10 排到 v1.9 前面（S12 取最新 / S14 报错展示共用）。"""
+    major, minor = ver.split(".")
+    return int(major), int(minor)
+
+
 _RECORD_CONTINUATION = re.compile(r"^(?:-\s+)?\*{0,2}v(\d+\.\d+)")
+#: 「修订记录」章节标题——表格形态的版本历史，与 `- 版本记录：` 项目符形态并存
+_REVISION_HEADING = re.compile(r"^#{2,4}\s*修订记录")
+#: 修订记录章节的终止：下一个 H1/H2 标题
+_SECTION_END = re.compile(r"^#{1,2}\s")
 
 
-def parse_adr_record_tip(text: str) -> str | None:
-    """S12 辅助：「版本记录」块的最后一个版本 token（块止于下一个 `- ` 项）。
+def _record_version_tokens(text: str) -> list[str]:
+    """S12/S14 共用：「版本记录」块内的版本 token（按行序，顺序不承载语义）。
 
-    结构口径（#1058）：标题行取「版本记录」标签后全部 token 的末项（兼容
-    ADR-0024 式单行罗列形态）；块内续行只认**行首**版本 token（ADR-0034 式
-    `**vX.Y 本版：…**` 形态）——续行行尾的引用 token（如「本版号 v1.8 已被
-    占用，重编 v1.9」里另一处 vX.Y）不再充当末项。标题行行尾引用污染在单行
-    罗列形态下仍无法机械区分，靠书写纪律。"""
-    tip = None
+    结构口径（#1058；#2249 增补缩进形态）：
+
+    - 标题行取「版本记录」标签后**全部** token（ADR-0024/0034 式单行罗列）；
+    - 块内其他行只认**行首**版本 token（ADR-0034 式 `**vX.Y 本版：…**`、
+      ADR-0035 式缩进续行 `  **vX.Y…**；`、ADR-0038/0042 式缩进子项
+      `  - vX.Y：…`）——行尾的引用 token（「本版号 v1.8 已被占用，重编 v1.9」
+      里另一处 vX.Y）不是该 ADR 发布过的版本，不计入（拿它当已发布版本会让伪造
+      引用通过）；
+    - 块终止看**同级或更外层**的 `- ` 项：缩进子项是块**内容**（ADR-0038/0042
+      式），此前被误当块结束 → 整块零 token。
+
+    调用方按需自行排序：tip 取最大值（书写顺序在各形态下不一致），集合无顺序。
+    标题行行尾引用污染在单行罗列形态下仍无法机械区分，靠书写纪律。
+    """
+    title_tokens: list[str] = []
+    tokens: list[str] = []
     in_record = False
+    block_indent = 0
     for line in text.splitlines():
         s = line.strip()
         if not in_record:
             if s.startswith("- 版本记录") or s.startswith("- **版本记录**"):
                 in_record = True
-                found = _ADR_VERSION_TOKEN.findall(s)
-                if found:
-                    tip = found[-1]
-        else:
-            if s.startswith("- "):
-                break
-            m = _RECORD_CONTINUATION.match(s)
-            if m:
-                tip = m.group(1)
-    return tip
+                block_indent = len(line) - len(line.lstrip())
+                title_tokens = _ADR_VERSION_TOKEN.findall(s)
+            continue
+        indent = len(line) - len(line.lstrip())
+        if s.startswith("- ") and indent <= block_indent:
+            break  # 同级/更外层的新项 = 块结束
+        m = _RECORD_CONTINUATION.match(s)
+        if m:
+            tokens.append(m.group(1))
+    return title_tokens + tokens
+
+
+def parse_adr_record_tip(text: str) -> str | None:
+    """S12 辅助：「版本记录」块的**最新**版本 token（块止于同级/更外层的 `- ` 项）。
+
+    取块内**版本号最大**者，而不是「最后一个 token」：书写顺序在各形态下不一致
+    ——线性形态最新在后（ADR-0034 续行）、缩进子项形态最新在前（ADR-0038/0042
+    `  - vX.Y：…`）、ADR-0035 式缩进续行又是最新在后；按位置取末项会随书写形态
+    摇摆（实测：对 ADR-0035 取末项得 v1.0、头部 v1.2，产生假红）。按版本号取最大
+    与该规则本意（头部行 = 最新版本）一致，且对现有线性形态零行为变化。
+    """
+    tokens = _record_version_tokens(text)
+    return max(tokens, key=_ver_key) if tokens else None
+
+
+def parse_adr_record_versions(text: str) -> set[str]:
+    """S14 辅助（#2249）：该 ADR 已发布版本集合 = 项目符块 token ∪ 修订记录章节 token。
+
+    两种形态都要读，因为实际都在用：12 篇是 ``- 版本记录：…`` 项目符块（单行罗列 /
+    续行 / **缩进子项**三种写法），7 篇是 ``## 修订记录`` 表格（ADR-0026/0027/0029/
+    0030/0031/0032/0033）——表格的列布局还有三种（版本列在第 2/第 1 列、或没有版本列
+    而版本写在变更正文里），故按**章节整体**取 token 而不锚列位。
+
+    与 record_tip 同源的是项目符那一半（``_record_version_tokens``），逐 token 全取
+    而非只取末项。已知不覆盖：表格里 ``v0.1–v0.4.1`` 这类**区间**只取到两端字面
+    token（v0.2/v0.3/v0.4.1 不在集合内，引用它们仍会报）——留待 Revisit。
+    """
+    tokens = set(_record_version_tokens(text))
+    tokens |= set(_ADR_VERSION_TOKEN.findall(_revision_section_text(text)))
+    return tokens
+
+
+def _revision_section_text(text: str) -> str:
+    """截取「修订记录」章节正文（标题行到下一个 H1/H2 标题，不含标题行）。"""
+    lines: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        if not inside:
+            if _REVISION_HEADING.match(line):
+                inside = True
+            continue
+        if _SECTION_END.match(line):
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _norm_status_cell(cell: str) -> str:
+    """状态 cell 归一：剥空白与 markdown 强调标记（#2035）。
+
+    粗体写法 ``**Accepted**`` 与裸词此前不等值 → 索引行静默退出状态比对。
+    只剥首尾标记，不改 cell 内部——摘要 cell 里嵌的状态词仍不误取。
+    """
+    return cell.strip().strip("*").strip()
 
 
 def parse_adr_readme_row(line: str) -> tuple[str, str, str] | tuple[None, None, None]:
     """S12 辅助：adr/README 主表行 → (文件名, status, 摘要版本前缀)。
 
     status 取链接 cell 之后的第一个精确状态 cell（#1058）——不锚列位时，
-    状态 cell 缺席而摘要先出现状态词会被取错比对对象。"""
+    状态 cell 缺席而摘要先出现状态词会被取错比对对象。cell 经 ``_norm_status_cell``
+    归一后比对，粗体/斜体与裸词同判（#2035）。"""
     if "ADR-" not in line:
         return None, None, None
     link = _ADR_README_LINK.search(line)
@@ -353,7 +437,12 @@ def parse_adr_readme_row(line: str) -> tuple[str, str, str] | tuple[None, None, 
     cells = [c.strip() for c in line.split("|") if c.strip()]
     link_idx = next((i for i, c in enumerate(cells) if "ADR-" in c), None)
     tail = cells[link_idx + 1:] if link_idx is not None else cells
-    status = next((c for c in tail if c in _ADR_STATUSES), None)
+    status = None
+    for cell in tail:
+        norm = _norm_status_cell(cell)
+        if norm in _ADR_STATUSES:
+            status = norm
+            break
     summary = cells[-1] if cells else ""
     vm = re.match(r"v(\d+\.\d+)：", summary)
     return link.group(1), status, vm.group(1) if vm else None
@@ -385,7 +474,7 @@ def check_adr_surface_sync(
     where = f"S12 ADR-{num}"
     if record_tip and header_version and record_tip != header_version:
         issues.append(
-            f"{where}: 头部状态行 v{header_version} ≠ 版本记录块末项 v{record_tip}"
+            f"{where}: 头部状态行 v{header_version} ≠ 版本记录块最新版本 v{record_tip}"
             "——bump 版本必须同步头部行（#867 文内漂移形态）"
         )
     if header_status and row_status and header_status != row_status:
@@ -441,6 +530,27 @@ def check_adr_status_line_present(num: str, status_line: str | None) -> list[str
             "——需为 `- 状态：<Proposed|Accepted|Superseded|Deprecated>`"
         ]
     return []
+
+
+def check_adr_readme_status_present(
+    fn: str, row_status: str | None, raw_line: str = ""
+) -> list[str]:
+    """S12: adr/README 主表行的状态 cell 必须在场且可解析（#2035）。
+
+    与头部状态行（#1524）同一纪律——「解析不到」此前退化成「不在场不约束」，
+    该行于是静默退出状态比对、不留信号。2026-09-16 实核：45 行索引里 8 行的状态
+    写作粗体 ``**Accepted**``，全部静默跳过（#2035 开单时点为 5 行，其后新增的
+    ADR-0041..0044 沿用了该风格）。归一只剥标记，判据不变。
+
+    只对**在场**的索引行生效：行整体缺席属 S2 断链面，不在此处重复报。
+    """
+    if row_status is not None:
+        return []
+    return [
+        f"S12 {fn}: adr/README 主表行状态 cell 不可解析（{raw_line.strip()[:90]!r}）"
+        "——该行会静默退出状态一致性校验；状态词须为 "
+        f"{'/'.join(sorted(_ADR_STATUSES))}（可带粗体标记）"
+    ]
 
 
 # S13: 执行契约版本一致性（#1238 增）。执行契约不是 ADR，S12 不覆盖它——
@@ -517,10 +627,12 @@ def check_contract_version_sync(header_version: str | None, change_head: str | N
 
 # S14: 代码注释里的 ADR 版本引用（#2154 收口）。ADR-0043 升 v1.1 时，注释同步
 # 漏了一处 v1.0（同文件另两处已是 v1.1）——S12 覆盖索引面、覆盖不到注释面，
-# 于是「bump 版本必须同步注释」只剩自觉。取最小可靠面：权威版本沿用 S12 的头部
-# **规范位**版本（解析启发式最少）；只绑 ADR 号后**首个** vX.Y（「v1.0 → v1.1
-# 沿革」这类叙述里的第二个 token 不误绑到该 ADR）；头部无版本者不约束。
+# 于是「bump 版本必须同步注释」只剩自觉。取最小可靠面：只绑 ADR 号后**首个**
+# vX.Y（「v1.0 → v1.1 沿革」这类叙述里的第二个 token 不误绑到该 ADR）；头部
+# 无版本者不约束。判据由「== 头部规范位版本」放宽为「∈ 已发布版本集合」
+# （#2249：头部 bump 后刻意引用历史版本是合法的，旧判据反把正确注释判红）。
 _ADR_CODE_REF = re.compile(r"ADR-(\d{4})(?:[^0-9\n]{0,24}?)v(\d+\.\d+)")
+
 
 CODE_SCAN_ROOTS = ("backend", "frontend/src")
 CODE_SCAN_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx", ".vue")
@@ -561,18 +673,26 @@ def collect_adr_code_refs(root: str = ROOT) -> list[tuple[str, int, str, str]]:
 
 
 def check_adr_code_refs(
-    refs: list[tuple[str, int, str, str]], adr_versions: dict[str, str]
+    refs: list[tuple[str, int, str, str]], adr_versions: dict[str, set[str]]
 ) -> list[str]:
-    """S14: 注释引用版本 ≠ ADR 头部规范位版本即报；头部无版本者不约束（同 S12）。"""
+    """S14: 注释引用版本 ∉ 该 ADR **已发布版本集合**即报；头部无版本者不约束（同 S12）。
+
+    集合 = 版本记录块 / 修订记录章节 token ∪ 头部规范位版本（#2249）。旧判据「== 头部
+    规范位版本」在头部 bump 后把**刻意引用历史版本**的合法注释判红——ADR-0032 头部
+    v0.9、代码引 v0.8（B3 spike 的裁决确属 v0.8）即现实例；而「给头部补规范位版本」
+    的努力会因此制造大面积红灯（#2250 的 57 处），反过来让覆盖缺口永久存在。故判定
+    面收在「引用的版本真的发布过吗」：伪造/笔误版本（该 ADR 从未发布）仍拦。
+    """
     issues: list[str] = []
     for path, lineno, num, ver in refs:
-        head = adr_versions.get(num)
-        if not head:
+        published = adr_versions.get(num)
+        if not published:
             continue
-        if head != ver:
+        if ver not in published:
+            allowed = "/".join("v" + v for v in sorted(published, key=_ver_key))
             issues.append(
-                f"S14 {path}:{lineno}: 注释引用 ADR-{num} v{ver} ≠ ADR 头部 v{head}"
-                "——bump ADR 版本必须同步代码注释"
+                f"S14 {path}:{lineno}: 注释引用 ADR-{num} v{ver} 不在已发布版本集合"
+                f"（{allowed}）——引用须指向该 ADR 发布过的版本"
                 "（#2154 实测：同文件一处漏改，只能人肉 grep 发现）"
             )
     return issues
@@ -921,12 +1041,14 @@ def run_check() -> int:
     if os.path.isdir(adr_dir) and os.path.exists(adr_readme_path) and os.path.exists(docmap_path):
         adr_readme = open(adr_readme_path, encoding="utf-8").read()
         docmap_text = open(docmap_path, encoding="utf-8").read()
-        adr_versions: dict[str, str] = {}  # S14：ADR 号 → 头部规范位版本
+        adr_versions: dict[str, set[str]] = {}  # S14：ADR 号 → 已发布版本集合（#2249）
         readme_rows: dict[str, tuple[str | None, str | None]] = {}
+        readme_raw: dict[str, str] = {}
         for line in adr_readme.splitlines():
             fn, st, ver = parse_adr_readme_row(line)
             if fn:
                 readme_rows[fn] = (st, ver)
+                readme_raw[fn] = line
         m7_line = next(
             (l for l in adr_readme.splitlines() if l.startswith("| M7")), ""
         )
@@ -952,8 +1074,14 @@ def run_check() -> int:
             )
             num = fn[4:8]
             if header_version:
-                adr_versions[num] = header_version
+                # #2249：集合 = 版本记录块 token ∪ 头部规范位版本——头部带版本即约束，
+                # 但引用历史已发布版本合法；未记版本记录的 ADR 仍以头部为准。
+                adr_versions[num] = parse_adr_record_versions(text) | {header_version}
             issues += check_adr_status_line_present(num, status_line)
+            if fn in readme_rows:
+                issues += check_adr_readme_status_present(
+                    fn, readme_rows[fn][0], readme_raw.get(fn, "")
+                )
             issues += check_adr_surface_sync(
                 num,
                 header_status,
@@ -1186,6 +1314,77 @@ def run_self_test() -> int:
            lambda: parse_adr_readme_row(
                "| M7 | ADR-0001（**Accepted** v1.9） |") != (None, None, None), False)
 
+    # #2035：索引行状态 cell 的粗体形态此前与裸词不等 → 该行静默退出状态比对
+    bold_row = ("| [ADR-0038](./ADR-0038-x.md) | 描述 | **Accepted** | P2 | M7 "
+                "| v0.2：摘要 |\n")
+    expect("S12 readme 粗体状态 cell 归一同判（#2035）",
+           lambda: parse_adr_readme_row(bold_row)[1] != "Accepted", False)
+    expect("S12 readme 状态 cell 不可解析即报（#2035）",
+           lambda: check_adr_readme_status_present("ADR-0038-x.md", None, bold_row),
+           True)
+    expect("S12 readme 状态 cell 可解析不报（#2035）",
+           lambda: check_adr_readme_status_present("ADR-0038-x.md", "Accepted", bold_row),
+           False)
+    expect("S12 readme 行不在场不在此处报（归 S2）",
+           lambda: check_adr_readme_status_present("ADR-0038-x.md", "Accepted"),
+           False)
+
+    # #2249：已发布版本集合 = 版本记录块 token（续行行尾的引用 token 不算发布过）
+    expect("S14 record_versions 取块内全部版本 token",
+           lambda: parse_adr_record_versions(record_cont)
+           != {"1.0", "1.1", "1.2", "1.3"}, False)
+    record_reused = (
+        "- 版本记录：v1.7（初版）\n"
+        "**v1.9 本版：重编（本版号 v1.8 已被并行 PR 占用）**\n"
+        "- 优先级：P1\n"
+    )
+    expect("S14 record_versions 不含续行行尾的未发布引用 token",
+           lambda: parse_adr_record_versions(record_reused) != {"1.7", "1.9"}, False)
+    expect("S14 record_versions 无版本记录块返回空集",
+           lambda: parse_adr_record_versions("# T\n\n正文\n") != set(), False)
+    # 表格形态（ADR-0026/0027/0029/0030/0031/0032/0033 在用，列布局三种）
+    record_table = (
+        "# T\n\n## 修订记录\n\n"
+        "| 版本 | 日期 | 变更 |\n|------|------|------|\n"
+        "| v0.8 | 2026-09-15 | B3 spike 已执行 |\n"
+        "| v0.9 | 2026-09-15 | 平台路由收口 |\n\n"
+        "## 决策\n\n正文另一处提 v9.9，不属于修订记录\n"
+    )
+    expect("S14 record_versions 读修订记录表格章节",
+           lambda: parse_adr_record_versions(record_table) != {"0.8", "0.9"}, False)
+    expect("S14 record_versions 不越出修订记录章节",
+           lambda: "9.9" in parse_adr_record_versions(record_table), False)
+    # 缩进子项形态（ADR-0038/0042 在用）：子项是块内容，不是块结束；按最新在前书写
+    record_nested = (
+        "- 状态：**Accepted**\n"
+        "- 版本记录：\n"
+        "  - v1.1（2026-09-14）：P1 试点完成并回填\n"
+        "  - v1.0（2026-09-14）：引入\n"
+        "  - v0.1（初版）\n"
+        "- 优先级：P1\n"
+        "  - 已出块：v9.9\n"
+    )
+    expect("S14 record_versions 读缩进子项形态（ADR-0038/0042）",
+           lambda: parse_adr_record_versions(record_nested)
+           != {"0.1", "1.0", "1.1"}, False)
+    expect("S12 record_tip 缩进子项形态取版本号最大者（最新在前）",
+           lambda: parse_adr_record_tip(record_nested) != "1.1", False)
+    expect("S14 record_versions 缩进子项的块仍在同级项处结束",
+           lambda: "9.9" in parse_adr_record_versions(record_nested), False)
+    # 缩进续行形态（ADR-0035 式：最新在后）——按位置取末项会得到 v1.0（假红），取最大才对
+    record_indent_cont = (
+        "- **版本记录**：\n"
+        "  **v1.0（草案）**；\n"
+        "  **v1.1（裁决）**；\n"
+        "  **v1.2（补检测来源）**\n"
+        "- **优先级**：P1\n"
+        "  - 已出块：v9.9\n"
+    )
+    expect("S12 record_tip 缩进续行形态取最新（ADR-0035 式）",
+           lambda: parse_adr_record_tip(record_indent_cont) != "1.2", False)
+    expect("S14 record_versions 缩进续行的块不越界",
+           lambda: "9.9" in parse_adr_record_versions(record_indent_cont), False)
+
     expect("S12 docmap 行在缺版本 token 即拦（#1058）",
            lambda: not any("缺版本 token" in i for i in check_adr_surface_sync(
                "01", "Accepted", "1.2", None, "Accepted", "1.2", [], None, None)),
@@ -1390,17 +1589,23 @@ def run_self_test() -> int:
     expect("S13 DOC-MAP 行取执行契约行（不误取架构 ADR 行）",
            lambda: parse_docmap_contract_version(_dm) != "1.2", False)
 
-    # S14（#2154 收口）：代码注释引用 ADR 的版本 ↔ ADR 头部规范位版本。
+    # S14（#2154 收口，#2249 判据放宽）：注释引用版本 ∈ 该 ADR 已发布版本集合。
     # 收集侧（collect_adr_code_refs）走真实文件系统，不在离线自测范围；
     # 这里只自证判定面与绑定语义。
-    expect("S14 注释版本与头部一致",
+    expect("S14 注释引用当前规范位版本",
            lambda: check_adr_code_refs(
-               [("backend/services/x.py", 163, "0043", "1.1")], {"0043": "1.1"}),
+               [("backend/services/x.py", 163, "0043", "1.1")],
+               {"0043": {"1.0", "1.1"}}),
            False)
-    expect("S14 注释版本落后（#2154 实测：同文件一处漏改）",
+    expect("S14 注释引用历史已发布版本不报（#2249：ADR-0032 v0.8 现实例）",
+           lambda: check_adr_code_refs(
+               [("backend/services/dedup_scan.py", 888, "0032", "0.8")],
+               {"0032": {"0.1", "0.8", "0.9"}}),
+           False)
+    expect("S14 注释引用该 ADR 从未发布的版本仍报（#2154 类漏改）",
            lambda: check_adr_code_refs(
                [("backend/services/plan_run_abort.py", 269, "0043", "1.0")],
-               {"0043": "1.1"}),
+               {"0043": {"1.1"}}),
            True)
     expect("S14 头部无规范位版本不约束（同 S12 纪律）",
            lambda: check_adr_code_refs(
