@@ -509,3 +509,17 @@ def test_init_stops_when_the_host_timezone_is_unknown(tmp_path):
     assert "host_timezone_unknown" in {check["code"] for check in report["checks"]}
     assert not output.exists() and not bindings.exists()
     assert any("timedatectl set-timezone" in line for line in report["actions"])
+
+
+def test_ask_prompt_goes_to_stderr_not_stdout(capsys, monkeypatch):
+    """#2283：交互提示走 stderr——`init --json` 的 stdout 必须是纯 JSON。"""
+    from tools.site_config.bootstrap import _ask
+
+    monkeypatch.setattr("builtins.input", lambda: "city-b")
+    value, provenance = _ask("站点标识", "default", interactive=True, answers={}, key="site_id")
+
+    captured = capsys.readouterr()
+    assert value == "city-b"
+    assert captured.out == "", f"stdout 被交互提示污染：{captured.out!r}"
+    assert "站点标识" in captured.err and "default" in captured.err
+    assert provenance == "answer"

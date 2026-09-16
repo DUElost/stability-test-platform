@@ -277,6 +277,10 @@ class Agent(ConfigModel):
     ssh_credential_ref: Name
     install_root: DedicatedPath
     local_aee_root: DedicatedPath
+    #: SSH 端口（逐主机覆盖，inventory 的 `ansible_port`）。
+    #: #2283：此前 inventory 解析后被丢弃、Host 行恒以 22 建立——sshd 不在 22 的
+    #: 主机会连错服务（通常安装中途失败），且文档一直把它列为受支持的覆盖项。
+    ssh_port: Annotated[int, Field(ge=1, le=65535)] = 22
 
     @model_validator(mode="after")
     def separate_local_data(self) -> Self:
