@@ -15,6 +15,17 @@ Class: feature
 - **verify 新增 `verify.s6.navigation`**（MS-13 证据）：无认证 GET `/site/`，要求 200 且含站点 id/显示名/负责人/文档链接与 `handover.json` 链接。
 - **S4 新增入口收口**：`ensure_frontend_readable()` 只放开目录穿越位（部署根/前端/dist-prod 子目录 0755，文件权限不动），并新增 `install.s4.frontend`（探测 `public_url/` 必得 200）。此前只探测 `/health`，前端不可服务（`GET /` 404）不会被发现。
 - **运维文档**：[`site-handover-and-navigation.md`](../../operations/site-handover-and-navigation.md)（导航说明、handover 用法、交接清单含签字位、维护/备份计划模板）并登记两处索引；设计升 v0.7、PRD 升 v0.9。
+- **#2404 证据 ID 与 emitter 同源**（2026-09-16，238 现场发现 MS-01 恒 BLOCKED）：映射此前把证据写成固定 ID，与实现脱节后条目**永远判缺失**——
+  1. S0 的记录**手写** `[install.s0.digest, install.bindings]`，漏掉同阶段真实发出的
+     `install.s0`(target_confirmed)（S1–S5 均用 `_stage_entry` 派生，只此一处硬编码）；
+  2. MS-01 固定要求 `install.s3.migrate`，而 S3 在「数据库已在 head」时只发
+     `install.s3.db`(schema_at_head)、**只有本次真的应用迁移**才发 migrate——安装记录又只保留
+     最近一次运行 → 幂等重跑（238 `runs=46`）后迁移证据必然消失。
+
+  修法：S0 记录改为 `_stage_entry("S0", checks)`（与其它阶段同源）；`AcceptanceItem` 的证据槽位
+  支持**候选集**（`("install.s3.db", "install.s3.migrate")` = 任一命中；缺失文案给 `A or B`，
+  不再只报一半）；新增守卫测试——映射里的每个 ID 必须是 `tools/site_config/*.py`
+  （**排除 handover.py 自身**，否则自指）中真实出现的字面量，将来改 ID 不会再次悄悄脱节。
 
 ## Alternatives
 
@@ -28,6 +39,7 @@ Class: feature
 ## Verification
 
 - **仓库离线**（worktree，base=origin/main `fd3dcd9e`）：`pytest tests/ -q` → **719 passed**（新增 `tests/test_site_handover.py` 19、`test_site_agents.py` 导航用例 2、`test_site_install.py` 入口负例与导航/`runs` 断言）；`ruff check backend/ tools/ scripts/` 通过；`scripts/run_gates.py check:quick` **10 gates OK**；`tools/verify_control_plane_templates.py` OK（新增 `/site/` 段与导航模板占位符集合不变量）；`tools/dev/check-internal-ip-leak.py --check` 通过；`git diff --check` clean。
+- **#2404 修复的用例与反向验证**（2026-09-16）：`tests/test_site_install.py::test_s0_state_record_matches_emitted_checks`（S0 记录 ⊆ 真实发出的 S0 检查且含 `install.s0`）；`tests/test_site_handover.py` 三条（at_head 证据 PASS、migrate 证据 PASS、两条皆缺 BLOCKED 且缺失文案含 `install.s3.db or install.s3.migrate`）与 `TestAcceptanceMappingGuard`（映射 ID ⊆ emitter 字面量）；站点工具面 `tests/test_site_{handover,install,config,agents,bootstrap,preflight}.py` **425 passed**、ruff 通过。**反向验证**：把两处修复分别退回原写法（清 `__pycache__` 后单跑），`test_s0_state_record_matches_emitted_checks` 与 `test_ms01_passes_on_schema_at_head_evidence` 各自 FAIL → 断言确实咬住缺陷。
 - **238 容器实验室**（复用 I4 的 `br-stp` + 控制面容器 + 2 Agent；bundle 由工作树重组）：
   - 幂等重跑 `install` PASS（S0–S4，含 `install.s2.navigation navigation_rendered`、`install.s4.frontend frontend_served`）；`state.runs` 由 2 → **3**（重跑证据）。
   - `GET /site/` → **200**，页面含站点 ID/负责人 `lab-ops`/文档链接/`handover.json` 链接，且不含 `/opt/stp-control`、`AGENT_SECRET`、`PRIVATE`、`password`（逐项核对 clean）。
