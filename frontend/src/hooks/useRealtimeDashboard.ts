@@ -58,7 +58,8 @@ export function useRealtimeDashboard(wsUrl: string) {
         queryClient.setQueryData(['dashboard-summary'], lastMessage.payload);
         break;
       }
-      case SOCKET_MESSAGE_TYPES.RUN_UPDATE:
+      // #2400：RUN_UPDATE / REPORT_READY 分支随「零生产调用方的 broadcast_*」
+      // 一起删——事件在服务端没有发出点，留着只会让事件目录看起来是通的。
       case SOCKET_MESSAGE_TYPES.JOB_STATUS: {
         const now = Date.now();
         if (now - _lastInvalidateTime > INVALIDATE_THROTTLE_MS) {
@@ -66,11 +67,6 @@ export function useRealtimeDashboard(wsUrl: string) {
           queryClient.invalidateQueries({ queryKey: ['results'] });
           queryClient.invalidateQueries({ queryKey: ['results-summary'] });
         }
-        break;
-      }
-      case SOCKET_MESSAGE_TYPES.REPORT_READY: {
-        queryClient.invalidateQueries({ queryKey: ['results'] });
-        queryClient.invalidateQueries({ queryKey: ['results-summary'] });
         break;
       }
       case SOCKET_MESSAGE_TYPES.PLAN_RUN_STATUS: {

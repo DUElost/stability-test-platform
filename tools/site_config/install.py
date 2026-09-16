@@ -391,7 +391,9 @@ def _run_locked(
         "Explicit confirmations, local target evidence and the declared manifest were verified before any write.",
         "Never bypass confirmation; never run against an unverified target.",
     ))
-    stages.append({"stage": "S0", "status": "PASS", "checks": ["install.s0.digest", "install.bindings"]})
+    # #2404：S0 的记录必须与**真实发出**的检查同源（此前手写两个 ID，漏掉了
+    # `install.s0`(target_confirmed) 本身，handover 按 ID 取证据时会永远判缺失）。
+    stages.append(_stage_entry("S0", checks))
 
     for name, stage in (("S1", stage_s1_basics), ("S2", stage_s2_release_env)):
         result = _run_stage(name, lambda stage=stage: stage(ctx))

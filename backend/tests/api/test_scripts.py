@@ -136,7 +136,15 @@ def test_script_scan_registers_conflicts_and_deactivates_missing(
     entry.unlink()
     inactive_scan = client.post("/api/v1/scripts/scan", headers=admin_headers)
     assert inactive_scan.status_code == 200
-    assert inactive_scan.json()["data"]["deactivated"] == 1
+    inactive_data = inactive_scan.json()["data"]
+    assert inactive_data["deactivated"] == 1
+    # #2386：反激活必须**点名**，不能只给一个数字——它是单向的，事后无法靠再扫恢复。
+    assert [(d["name"], d["version"]) for d in inactive_data["deactivated_versions"]] == [
+        ("connect_wifi", "1.0.0"),
+    ]
+    assert all(d.get("nfs_path") for d in inactive_data["deactivated_versions"]), (
+        "明细要带上被判定为「盘上缺失」的路径，否则排障时还得去库里反查"
+    )
 
     inactive_list = client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers)
     assert inactive_list.status_code == 200

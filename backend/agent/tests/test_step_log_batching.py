@@ -127,10 +127,10 @@ async def test_on_step_log_accepts_batch(monkeypatch):
     assert len(written) == 1
     assert written[0][0] == 42
     assert [x["msg"] for x in written[0][1]] == ["a", "b"]
-    # 2 lines × 2 rooms
-    assert len(emitted) == 4
-    assert all(e[0] == "step_log" for e in emitted)
-    assert all(e[1]["type"] == "STEP_LOG" for e in emitted)
+    # #2400：落盘是唯一去向——原先每行还向 job:/run: 两个无订阅方的房间双投，
+    # 现在不再有任何推送（要恢复推送须同时接上订阅端，见
+    # tests/test_realtime_wiring_contract.py）。
+    assert emitted == []
 
 
 @pytest.mark.asyncio

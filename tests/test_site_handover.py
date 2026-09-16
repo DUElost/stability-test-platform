@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import json
+import re
 import stat
 from pathlib import Path
 
 import yaml
 
 from tools.site_config import stages
+from tools.site_config import handover as handover_module
 from tools.site_config.handover import ACCEPTANCE_ITEMS, run_handover
 from tools.site_config.stages import (
     NAVIGATION_PLACEHOLDERS,
@@ -24,6 +26,8 @@ PRIVATE_MARKER = "DO_NOT_ECHO_PRIVATE_INPUT_9374"
 PUBLIC_URL = "https://site-i5.synthetic.invalid"
 CONTACT = "site-owner <ops@example.invalid>"
 NAV_TEMPLATE = Path(stages.__file__).resolve().parents[2] / stages.NAVIGATION_TEMPLATE
+#: 工具源码里的 check_id 字面量（守卫测试用；见 TestAcceptanceMappingGuard）。
+_CHECK_ID_LITERAL = re.compile(r"""["']((?:install|verify)\.[a-z0-9_.]+)["']""")
 
 
 class StubConfig:
@@ -114,9 +118,30 @@ def _site_yaml(tmp_path: Path) -> Path:
     return path
 
 
-def _state_dir(tmp_path: Path, *, runs: int = 2, site_id: str = "lab-i5") -> Path:
-    """安装记录夹具：把 ACCEPTANCE_ITEMS 需要的 stage check 全部记成 PASS。"""
-    required = sorted({cid for item in ACCEPTANCE_ITEMS for cid in item.stage_checks})
+def _slot_ids(slots: tuple[str | tuple[str, ...], ...]) -> set[str]:
+    """展开证据槽位（#2404 起槽位可为「任一命中」候选集）。"""
+    ids: set[str] = set()
+    for slot in slots:
+        ids.update((slot,) if isinstance(slot, str) else slot)
+    return ids
+
+
+def _stage_ids() -> set[str]:
+    return {cid for item in ACCEPTANCE_ITEMS for cid in _slot_ids(item.stage_checks)}
+
+
+def _verify_ids() -> set[str]:
+    return {cid for item in ACCEPTANCE_ITEMS for cid in _slot_ids(item.verify_checks)}
+
+
+def _state_dir(
+    tmp_path: Path, *, runs: int = 2, site_id: str = "lab-i5", omit: tuple[str, ...] = (),
+) -> Path:
+    """安装记录夹具：把 ACCEPTANCE_ITEMS 需要的 stage check 全部记成 PASS。
+
+    ``omit`` 用于精确用例：例如只留 S3 迁移候选中的一条（#2404 的双路径证据）。
+    """
+    required = sorted(_stage_ids() - set(omit))
     state_dir = tmp_path / "state"
     state_dir.mkdir(mode=0o700, exist_ok=True)
     (state_dir / "install-state.json").write_text(json.dumps({
@@ -130,7 +155,7 @@ def _state_dir(tmp_path: Path, *, runs: int = 2, site_id: str = "lab-i5") -> Pat
 
 
 def _verify_report(tmp_path: Path, *, status: str = "PASS", failing: str | None = None) -> Path:
-    check_ids = sorted({cid for item in ACCEPTANCE_ITEMS for cid in item.verify_checks})
+    check_ids = sorted(_verify_ids())
     checks = [
         {
             "check_id": cid, "role": "site", "status": "FAIL" if cid == failing else status,
@@ -246,6 +271,54 @@ class TestHandover:
         assert _status(report, "handover.MS-06") == "BLOCKED"
         assert _status(report, "handover.MS-13") == "BLOCKED"
         assert _status(report, "handover.MS-01") in {"PASS", "BLOCKED"}
+
+    # ── #2404：MS-01 的 S3 证据在两条互斥路径上发出不同 ID ──────────────────
+
+    def test_ms01_passes_on_schema_at_head_evidence(self, tmp_path):
+        """已装站点幂等重跑：S3 发 `install.s3.db`(schema_at_head)、不发 migrate。
+
+        238 现场即此形态——修前 MS-01 因固定要求 `install.s3.migrate` 而永远 BLOCKED。
+        """
+        report = run_handover(
+            _site_yaml(tmp_path),
+            state_dir=_state_dir(tmp_path, omit=("install.s3.migrate",)),
+            verify_report=_verify_report(tmp_path),
+            system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-01") == "PASS", report["checks"]
+        message = next(
+            str(check.get("message") or "")
+            for check in report["checks"] if check["check_id"] == "handover.MS-01"
+        )
+        assert "install.s3.db(install:PASS)" in message, message
+
+    def test_ms01_passes_on_migration_applied_evidence(self, tmp_path):
+        """首装/带迁移的运行：S3 发 `install.s3.migrate`、不发 db 的 at_head 证据。"""
+        report = run_handover(
+            _site_yaml(tmp_path),
+            state_dir=_state_dir(tmp_path, omit=("install.s3.db",)),
+            verify_report=_verify_report(tmp_path),
+            system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-01") == "PASS", report["checks"]
+
+    def test_ms01_missing_both_migration_evidences_is_blocked(self, tmp_path):
+        """两条都没有 → 如实 BLOCKED，且缺失文案给出 `A or B`（不只报一半）。"""
+        report = run_handover(
+            _site_yaml(tmp_path),
+            state_dir=_state_dir(tmp_path, omit=("install.s3.db", "install.s3.migrate")),
+            verify_report=_verify_report(tmp_path),
+            system_root=tmp_path,
+        )
+
+        assert _status(report, "handover.MS-01") == "BLOCKED"
+        message = next(
+            str(check.get("message") or "")
+            for check in report["checks"] if check["check_id"] == "handover.MS-01"
+        )
+        assert "install.s3.db or install.s3.migrate" in message, message
 
     def test_failing_mapped_check_fails_the_item(self, tmp_path):
         report = run_handover(
@@ -382,3 +455,23 @@ class TestVerifyNavigationCheck:
 
         assert check.status == "FAIL"
         assert check.code == "navigation_missing"
+
+
+class TestAcceptanceMappingGuard:
+    """#2404 防复发：映射里的证据 ID 必须真的会被工具发出。
+
+    提取 `tools/site_config/*.py`（**排除 handover.py 自身**，否则是自指的）里所有
+    `"install.*"` / `"verify.*"` 字面量作为 emitter 集合，逐一核对 ACCEPTANCE_ITEMS
+    的槽位与候选——将来改 ID 时映射不会再悄悄指向不存在的证据。
+    """
+
+    def test_every_mapped_id_is_emitted_somewhere(self):
+        tool_root = Path(handover_module.__file__).resolve().parent
+        emitted: set[str] = set()
+        for path in tool_root.glob("*.py"):
+            if path.name == "handover.py":
+                continue
+            emitted.update(_CHECK_ID_LITERAL.findall(path.read_text(encoding="utf-8")))
+
+        mapped = _stage_ids() | _verify_ids()
+        assert mapped <= emitted, f"映射了不会被发出的 ID：{sorted(mapped - emitted)}"
