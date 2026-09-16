@@ -28,6 +28,60 @@ TREE_LAYOUT = ("backend", "deploy", "tools", "frontend/dist-prod")
 # 但 Agent 的 host-resources 摘要会与清单不符（或功能缺失），要到 S5 才暴露。
 AGENT_RESOURCES = "backend/agent/resources"
 DEFAULT_VERSION_PREFIX = "local"
+# #2269：整树复制会把**构建机本地状态**一并打包。最严重的是 `backend/.env`
+# （gitignored，但 `deploy/install.sh` 以仓库根为源 → 它进 bundle → S2 落到站点
+# `<deploy-root>/backend/.env` → 后端启动时 `env_source.load_dotenv` 会加载它）：
+#   - 构建机的未托管键（如 STP_FILE_SERVER_ADDRESS / STP_AEE_NFS_ROOT）被站点继承；
+#   - 且 `_digests` 只覆盖 backend/agent，该文件**不在任何摘要面内**，
+#     事后无法从产物校验面发现。
+# 同批排除其余构建机产物（缓存/字节码），它们同样不应随交付物分发。
+#
+# ⚠️ **必须保留 `*.example` 模板**：仓库入库的 `.env*` 文件**全部**是模板——
+# `.env.server.example` / `.env.test.example` / `backend/.env.example` /
+# `backend/agent/.env.example` / `deploy/control-plane/env/.env.backend.example` /
+# `…/.env.backend.internal.example` / `deploy/postgres/.env.example` /
+# `frontend/.env.example`（实测 8 个：`git ls-files | grep -E '(^|/)\.env'`）。
+# 部署文档要求 `cp deploy/postgres/.env.example deploy/postgres/.env`（README.md:13），
+# 控制面安装亦以 `deploy/control-plane/env/.env.backend.example` 为模板。
+# 用宽泛的 `.env.*`（或只豁免 `.env.example` 这一种写法）会剥掉它们、破坏部署。
+# 故规则为：**排除 `.env*` 中除 `*.example` 之外的全部**。
+def _is_env_template(name: str) -> bool:
+    """`*.example` 视为入库模板（既不排除、也不判违规）。"""
+    return name.endswith(".example")
+
+
+def _is_forbidden_env_file(name: str) -> bool:
+    """`.env*` 且非模板 → 构建机本地 env，必须排除。"""
+    return (name == ".env" or name.startswith(".env.")) and not _is_env_template(name)
+
+
+_BUNDLE_IGNORE_PATTERNS = (
+    "__pycache__",
+    "*.pyc",
+    "*.pyo",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+)
+# 注：**不能**用 `shutil.ignore_patterns(".env", ".env.*")`——`.env.*` 会把入库模板
+# `.env.example` / `.env.backend.example` 一并吃掉。故 env 一族走自定义判据
+# `_is_forbidden_env_file`（排除 `.env*` 中除 `*.example` 之外者）。
+_BUNDLE_IGNORE_GLOBS = shutil.ignore_patterns(*_BUNDLE_IGNORE_PATTERNS)
+
+
+def bundle_ignore(directory: str, names: list[str]) -> set[str]:
+    """`copytree(ignore=...)` 回调：缓存/字节码按 glob，`.env*` 按模板豁免判据。"""
+    ignored = set(_BUNDLE_IGNORE_GLOBS(directory, names))
+    ignored.update(name for name in names if _is_forbidden_env_file(name))
+    return ignored
+
+
+BUNDLE_IGNORE = bundle_ignore
+# 不得出现在 bundle 内的项（供构建后自检与 S0 硬断言共用）。
+# 同样**豁免 `*.env.example`**（入库模板，见上）。
+FORBIDDEN_BUNDLE_NAMES = (".env", ".env.local", ".env.production", ".env.development", ".env.test", ".env.backend")
+FORBIDDEN_BUNDLE_SUFFIXES = (".pyc", ".pyo")
+FORBIDDEN_BUNDLE_DIRS = ("__pycache__",)
 SUPPORTED_PLATFORMS = (
     {"distribution": "debian", "versions": ["13"], "cpu_arch": ["x86_64"]},
     # 22.04 实测纳入（2026-09-15）：Agent 代码在 Python 3.10 上 compileall 全过、
@@ -45,6 +99,24 @@ class BundleError(RuntimeError):
         super().__init__(f"{code}{': ' + detail if detail else ''}")
 
 
+def find_forbidden_bundle_entries(root: Path) -> list[str]:
+    """返回 bundle 内**不应存在**的条目（相对路径，已排序）。
+
+    #2269：构建机本地状态（`.env` / 字节码 / 缓存）不得随交付物分发。
+    构建后自检与站点侧 S0 断言共用本函数，避免两处判据漂移。
+    """
+    found: list[str] = []
+    for path in sorted(root.rglob("*")):
+        name = path.name
+        if name in FORBIDDEN_BUNDLE_DIRS:
+            found.append(str(path.relative_to(root)))
+        elif path.is_file() and path.suffix in FORBIDDEN_BUNDLE_SUFFIXES:
+            found.append(str(path.relative_to(root)))
+        elif _is_forbidden_env_file(name):
+            found.append(str(path.relative_to(root)))
+    return found
+
+
 def _copy_tree(source: Path, target: Path) -> None:
     # 与 S2 落地同语义：保持符号链接；先清掉与源链接冲突的旧项
     for root, _dirs, files in os.walk(source):
@@ -55,7 +127,9 @@ def _copy_tree(source: Path, target: Path) -> None:
             destination = target / candidate.relative_to(source)
             if destination.is_symlink() or destination.exists():
                 destination.unlink()
-    shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
+    shutil.copytree(
+        source, target, dirs_exist_ok=True, symlinks=True, ignore=BUNDLE_IGNORE,
+    )
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -97,15 +171,26 @@ def _schema_target(repo_root: Path) -> str:
 
 
 def _load_agent_digest_module(bundle: Path):
-    """按路径加载 ADR-0040 实现（stdlib-only，不触发 backend 包链）。"""
+    """按路径加载 ADR-0040 实现（stdlib-only，不触发 backend 包链）。
+
+    #2269：加载会**在 bundle 内**生成 `backend/agent/__pycache__`——即构建机产物
+    被写进交付物（与 `.env` 同源问题，只是危害小）。故加载期间强制关闭字节码写入，
+    使 bundle 保持与源树一致、不含构建副产物。
+    """
     import importlib.util
+    import sys
 
     module_path = bundle / "backend" / "agent" / "artifact_digest.py"
     spec = importlib.util.spec_from_file_location("stp_agent_artifact_digest", module_path)
     if spec is None or spec.loader is None:
         raise BundleError("bundle_digest", f"cannot load {module_path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
@@ -158,6 +243,16 @@ def build_bundle(
     short = revision[:8]
     version = version or f"{DEFAULT_VERSION_PREFIX}-{datetime.now(timezone.utc):%Y%m%d}-{short}"
     digests = _digests(out)
+
+    # #2269 fail-closed 自检：即便 ignore 被误改/新增目录绕过，构建也不得产出含
+    # 构建机凭据或缓存的 bundle。构建期即失败，优于交付后被站点继承。
+    stray = find_forbidden_bundle_entries(out)
+    if stray:
+        raise BundleError(
+            "bundle_forbidden_entries",
+            "bundle must not carry build-host local state: " + ", ".join(stray[:5]),
+        )
+
     manifest = {
         "manifest_version": 1,
         "product": {"version": version},
