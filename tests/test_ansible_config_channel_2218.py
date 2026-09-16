@@ -77,3 +77,14 @@ def test_shared_vars_available_to_both_planes():
     linux = yaml.safe_load(GROUP_VARS_LINUX.read_text(encoding="utf-8"))
     for key in ("agent_install_dir", "agent_logrotate_size", "agent_logrotate_rotate"):
         assert key not in linux, f"linux_hosts.yml 仍重复定义 {key}（应只在 all.yml）"
+
+def test_become_password_tolerates_hosts_without_ansible_password():
+    """all.yml 的作用域含 localhost：委派任务会为它求值 become 口令，必须容错（#2234）。
+
+    现场实证：`delegate_to: localhost` 的摘要任务报 `'ansible_password' is undefined`，
+    整个 Agent（重）安装硬失败——即便任务自己写着 `become: false`。
+    """
+    gv = yaml.safe_load(GROUP_VARS_ALL.read_text(encoding="utf-8"))
+    expr = str(gv["ansible_become_password"])
+    assert "ansible_password" in expr
+    assert "default(" in expr, "未定义 ansible_password 的 host（localhost/密钥主机）会直接失败"
