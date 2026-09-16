@@ -88,6 +88,14 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 `compare/<parent>...<main>` 疑似变更区间。纯 GH API，**有意不含 LLM 分诊**
 （失败事件稀有 + 单人读得懂机械要素；扩展位留在 job 注释）。
 
+**归因（#2333，2026-09-16 增）**：① 改为由归因步骤在 **重跑前**快照回传（重跑会重置
+job 结论，重跑后重查在转绿时直接变空）；并**新增「归因」节**——失败 job 自动 rerun 一次 →
+机械分类 **flake**（重跑转绿 → 进"去 flake"，**不进入**前移评估）/ **确定性缺陷**
+（重跑仍红 → 才进入前移评估），重跑仍红时附失败用例名（机械 grep，取不到则**逐 job 显式**
+写原因）。分类是「相等/不等」的机械判断，故**仍不做 LLM 分诊**。实现、三条硬约束
+（重跑前取证据 / 只重跑一次 / 归因失败不得打掉通知）与验证见
+[`2026-09-16-backstop-attribution-rerun-classification.md`](../notes/process/2026-09-16-backstop-attribution-rerun-classification.md)。
+
 ## 7. L1 行为 evals（已移除，2026-09-06）
 
 > **状态：Removed。** 工具本体（`tools/dev/run_gov_evals.py` +

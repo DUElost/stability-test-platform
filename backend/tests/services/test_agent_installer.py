@@ -158,6 +158,37 @@ def test_prepare_install_agent_passes_the_share_server_host(mock_host, monkeypat
     out["cleanup"]()
 
 
+def test_prepare_install_agent_keeps_ipv6_brackets_for_the_share_source(mock_host, monkeypatch):
+    """#2321：IPv6 站点的 NFS 源必须是 ``[addr]:/path``。
+
+    ``urlsplit(...).hostname`` 会剥掉方括号（``netloc`` 保留），拼出来是
+    ``2001:db8::1:/srv/stp-aee``——冒号歧义 → 挂载必然失败，且现象与「网络真的不通」
+    不可区分（S5 报 ``install.s5.storage`` FAIL、Agent 退到本机根）。
+    """
+    monkeypatch.setenv(INSTALL_API_URL_ENV, "https://[2001:db8::1]:8443")
+    creds = MagicMock()
+    creds.user = "android"
+    creds.password = "secret"
+    creds.key_path = None
+
+    with (
+        patch("backend.services.agent_installer.SessionLocal") as sl,
+        patch(
+            "backend.services.agent_installer.resolve_host_ssh_credentials",
+            return_value=(creds, False),
+        ),
+    ):
+        db = MagicMock()
+        sl.return_value = db
+        db.get.return_value = mock_host
+        out = prepare_install_agent("host-abc")
+
+    assert out["ok"] is True, out
+    assert "agent_nfs_server=[2001:db8::1]" in out["cmd"]
+    assert "agent_nfs_server=2001:db8::1" not in out["cmd"], "方括号被剥掉会拼出非法 NFS 源"
+    out["cleanup"]()
+
+
 def test_start_install_runconsole_registers_active():
     rc = MagicMock()
     rc.start.return_value = "con-test-1"
