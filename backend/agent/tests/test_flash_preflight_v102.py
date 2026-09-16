@@ -121,7 +121,10 @@ def test_udev_constants_match_wrapper():
     if not hasattr(w, "UDEV_RULE_PATH"):
         pytest.skip("wrapper 窄面常量未在当前基线（依赖 #2142 合入）")
     assert pf._UDEV_RULE_PATH == w.UDEV_RULE_PATH
-    assert pf._UDEV_RULE_LINE == w.UDEV_RULE_LINE
+    # 本文件钉的是**历史版本** v1.0.2：它的规则文本是旧形态（0666），也就是 wrapper
+    # 的 legacy 形态（#2284 起 wrapper 按本机 dialout 组在 0660/0666 间二选一）。
+    # 「wrapper ↔ 最新版本」的同源校验在 tests/test_flash_provisioning_prereqs_2133.py。
+    assert pf._UDEV_RULE_LINE == w.UDEV_RULE_LINE_LEGACY
 
 
 # ── udev：只经 wrapper 窄面修复 ─────────────────────────────────────────────

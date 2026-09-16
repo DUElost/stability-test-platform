@@ -100,6 +100,10 @@ Class: testing
   假阳性混在存量清单里**，这条教训比数字本身重要：拿分析器结果做删除决策前，必须先证否。
   补全名单后的复算：12 条无 mutator 证据，减掉 `_FLEET_GAUGES` 间接写入的 2 条
   （#2286 已登记为 `_CONTAINER_WIRED_METRICS`）= **10 条真无生产者**，见 #2287。
+  **[已收口 · #2287]** 那 10 条已逐条判读后**删除定义**（判据：全史无写入调用 +
+  零消费者；逐条判读表见
+  [`2026-09-16-metric-producer-full-surface-2287.md`](./2026-09-16-metric-producer-full-surface-2287.md)），
+  轴已扩到全指标面且存量红为 0。
 - **#1258 的 `UNPRODUCED_METRICS` 已过期**（生产者已落地、面板未恢复）：撤豁免或恢复面板
   属仪表板面收口，与 `record_api_request` 的 docstring 一起改，别只删清单。
 - 若将来有人要给 `_FLEET_GAUGES` 这类间接写入的指标加告警：守卫会先红并给出线索，

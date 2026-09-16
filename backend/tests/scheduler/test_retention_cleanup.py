@@ -520,7 +520,12 @@ def test_purge_refuses_target_outside_shared_root(cleanup_env, tmp_path, monkeyp
 
 
 def _mk_unassigned_event(db, run, device, host, event_id, nfs_root, *, state="ARCHIVED"):
-    """建一条 remote_path 指向 {nfs_root}/devices/unassigned/{event_id}/ 的 DLE 行。"""
+    """建一条 remote_path 指向 ``{nfs}/devices/unassigned/{event_id}/{basename}/`` 的 DLE 行。
+
+    **必须用内层形态**：Agent 记录的 remote_path 是 dst（``{event_id}/{basename}``），
+    生产实测 7 段路径即此形态；测试若直接用事件目录本身（早期写法）会掩盖
+    「事件目录 = remote_path.parent」这一层判定。
+    """
     from datetime import datetime, timezone
     from pathlib import Path
 
@@ -535,7 +540,9 @@ def _mk_unassigned_event(db, run, device, host, event_id, nfs_root, *, state="AR
         detected_at=datetime.now(timezone.utc),
         state=state,
         local_path="/local/uniview/2262",
-        remote_path=str(Path(nfs_root) / "devices" / "unassigned" / str(event_id)),
+        remote_path=str(
+            Path(nfs_root) / "devices" / "unassigned" / str(event_id) / "2026_0812_spill_db.99.ANR"
+        ),
         host_id=str(host.id),
         job_id=None,
         plan_run_id=run.id,
@@ -610,9 +617,11 @@ def test_unassigned_dir_purge_failure_defers_run(
 def test_unassigned_purge_rejects_non_child_path(
     cleanup_env, sample_host, sample_device, tmp_path, monkeypatch,
 ):
-    """remote_path 形态不符（不是 devices/unassigned 的直接子目录）→ 一律不删。
+    """remote_path 形态不符（借 `unassigned/..` 指向别处）→ 不删该目标，**且不阻塞本批**。
 
-    fail-safe：宁可留孤儿，也不让被污染的 remote_path 把 rmtree 引到别处。
+    fail-safe：宁可留孤儿，也不让被污染的 remote_path 把 rmtree 引到别处；
+    但也不得把它算成「删除失败」——那会让整个 run 的 retention 每轮推迟（初版就是
+    把形态不符计入 failed，被真实形态证伪后改判为跳过 + 告警）。
     """
     from uuid import uuid4
 
@@ -647,8 +656,133 @@ def test_unassigned_purge_rejects_non_child_path(
     cron_scheduler.run_retention_cleanup()
 
     assert (outside / "keep.zip").exists(), "越界目标被删除"
+    # 形态不符是数据问题，不是删除失败：不得把 run 拖成每轮推迟
+    from backend.models.plan_run import PlanRun
+
+    assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is None
 
 
+# ── #2316 第 4 项（D1）：未关联事件（双 NULL 行）的 TTL ──────────────────────
+
+
+def _mk_orphan_event(db, device, host, event_id, nfs, *, state="REMOTE", remote=True):
+    """建一条 plan_run_id 与 job_id **皆空**的 DLE 行（未关联事件）。"""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from backend.models.device_log_event import DeviceLogEvent
+
+    event_dir = Path(nfs) / "devices" / "unassigned" / str(event_id)
+    inner = event_dir / "2026_0812_spill_db.99.ANR"
+    inner.mkdir(parents=True, exist_ok=True)
+    (inner / "main.dbg").write_text("ne", encoding="utf-8")
+    db.add(DeviceLogEvent(
+        id=event_id,
+        serial=device.serial,
+        platform="MTK",
+        event_type="NE",
+        detected_at=datetime.now(timezone.utc),
+        state=state,
+        local_path="/local/orphan",
+        remote_path=str(inner) if remote else None,
+        host_id=str(host.id),
+        job_id=None,
+        plan_run_id=None,
+    ))
+    db.commit()
+    return event_dir
+
+
+def test_orphan_unassigned_event_purged_after_artifact_retention(
+    cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#2316 D1：无 run 无 job 的终态事件，超过 artifact_retention_days 即清行清目录。"""
+    from uuid import uuid4
+
+    from backend.models.device_log_event import DeviceLogEvent
+
+    db, _plan = cleanup_env
+    scheduler_env("ARTIFACT_RETENTION_DAYS", "0")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    event_id = uuid4()
+    event_dir = _mk_orphan_event(db, sample_device, sample_host, event_id, tmp_path)
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert not event_dir.exists(), "孤儿事件的 unassigned 目录未清理"
+    assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == event_id).first() is None
+
+
+def test_orphan_cleanup_keeps_inflight_and_recent(
+    cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """在途态不删（仍可能待上送）；未到期（updated_at 新）不删。"""
+    from uuid import uuid4
+
+    from backend.models.device_log_event import DeviceLogEvent
+
+    db, _plan = cleanup_env
+    scheduler_env("ARTIFACT_RETENTION_DAYS", "30")   # 远大于本测试的时间跨度
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    inflight = uuid4()
+    recent = uuid4()
+    d1 = _mk_orphan_event(db, sample_device, sample_host, inflight, tmp_path, state="UPLOADING")
+    d2 = _mk_orphan_event(db, sample_device, sample_host, recent, tmp_path, state="REMOTE")
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert d1.exists() and d2.exists()
+    assert db.query(DeviceLogEvent).count() == 2
+
+
+def test_orphan_cleanup_dry_run_lists_only(
+    cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """dry_run 只盘点、不改动（首次上线前人工复核用）。"""
+    from uuid import uuid4
+
+    from backend.models.device_log_event import DeviceLogEvent
+
+    db, _plan = cleanup_env
+    scheduler_env("ARTIFACT_RETENTION_DAYS", "0")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    event_id = uuid4()
+    event_dir = _mk_orphan_event(db, sample_device, sample_host, event_id, tmp_path)
+
+    n = cron_scheduler.purge_orphan_dle_events(dry_run=True)
+
+    assert n == 1
+    assert event_dir.exists()
+    assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == event_id).first() is not None
+
+
+def test_orphan_cleanup_keeps_row_when_dir_not_removable(
+    cleanup_env, scheduler_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """文件先于行：目录清不掉就不删行（下轮重试）。"""
+    import shutil as _shutil
+    from uuid import uuid4
+
+    from backend.models.device_log_event import DeviceLogEvent
+
+    db, _plan = cleanup_env
+    scheduler_env("ARTIFACT_RETENTION_DAYS", "0")
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    event_id = uuid4()
+    event_dir = _mk_orphan_event(db, sample_device, sample_host, event_id, tmp_path)
+
+    real_rmtree = _shutil.rmtree
+
+    def _boom(path, *args, **kwargs):
+        if "/unassigned/" in str(path):
+            raise OSError("read-only filesystem")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(_shutil, "rmtree", _boom)
+
+    assert cron_scheduler.purge_orphan_dle_events() == 0
+    assert event_dir.exists()
+    assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == event_id).first() is not None
 # ── #2278：取锁之后的早退也必须上报持锁窗口 ─────────────────────────────────
 
 

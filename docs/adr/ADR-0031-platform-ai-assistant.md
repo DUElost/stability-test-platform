@@ -1,6 +1,6 @@
 # ADR-0031: 平台 AI 助手（运维域 LLM 助手与风险分级自治边界）
 
-- 状态：**Accepted**
+- 状态：**Accepted**（v1.7：阶段三落地——附录 A Accepted #658；工具面扩至 T0×14 / T1×3 / T2a×3 / T2b×6 + `t2b_auto_dispatch_allowlist`。v1.6：权限对齐 D8；v1.5：阶段二全栈合 main，状态转 Accepted）
 - 优先级：**P1**
 - 目标里程碑：M8（阶段二全栈已合 main，2026-08-28）
 - 日期：2026-08-27

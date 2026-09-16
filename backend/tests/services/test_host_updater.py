@@ -758,3 +758,70 @@ def test_build_remote_script_omits_resources_block_when_empty():
     guard = script.index('if [ -n "$RESOURCES_TARB_PATH" ]; then')
     write_at = script.index('write-digest --kind resources --digest "$RESOURCES_DIGEST"')
     assert guard < write_at
+
+
+def _ssh_fakes(putfo_error: BaseException | None):
+    """返回 (client, sftp) 假体：putfo 按需抛错，其余方法空实现（含 finally 的收尾）。"""
+    class _Sftp:
+        def putfo(self, *args, **kwargs):
+            if putfo_error is not None:
+                raise putfo_error
+
+        def chmod(self, *args, **kwargs):
+            return None
+
+        def remove(self, *args, **kwargs):
+            return None
+
+        def close(self):
+            return None
+
+    class _Client:
+        def close(self):
+            return None
+
+    return _Client(), _Sftp()
+
+
+def test_hot_update_upload_failure_is_not_reported_as_ssh_connect(monkeypatch):
+    """#2285：上传阶段的 OSError 必须与「连不上」区分。
+
+    此前 except (OSError, IOError) 覆盖建包/连接/上传/exec 全程，一律报
+    ssh_connect_failed —— 操作员被指引去查可达性与 SSH 端口，而真实原因是
+    磁盘/传输。
+    """
+    import errno as _errno
+
+    import backend.services.host_updater as hu
+
+    monkeypatch.setattr(hu, "_build_tarball", lambda kind="code": b"payload")
+    monkeypatch.setattr(
+        hu, "_ssh_connect",
+        lambda **kwargs: _ssh_fakes(OSError(_errno.EIO, "upload exploded")),
+    )
+    result = hu.execute_hot_update(
+        host_ip="10.0.0.1", artifact_digest="sha256:" + "a" * 64,
+    )
+    assert result["reason"] == "remote_upload_failed"
+    assert "hot_update_upload_failed" in result["message"]
+    # 与连接失败分支同一口径：异常原文不外泄
+    assert "upload exploded" not in result["message"]
+
+
+def test_hot_update_disk_full_is_classified_before_phase(monkeypatch):
+    """#2285：ENOSPC/EDQUOT 优先于阶段判定，给出「腾空间」而不是「查 SSH」。"""
+    import errno as _errno
+
+    import backend.services.host_updater as hu
+
+    monkeypatch.setattr(hu, "_build_tarball", lambda kind="code": b"payload")
+    monkeypatch.setattr(
+        hu, "_ssh_connect",
+        lambda **kwargs: _ssh_fakes(OSError(_errno.ENOSPC, "No space left on device")),
+    )
+    result = hu.execute_hot_update(
+        host_ip="10.0.0.1", artifact_digest="sha256:" + "a" * 64,
+    )
+    assert result["reason"] == "remote_disk_full"
+    assert "hot_update_remote_disk_full" in result["message"]
+    assert "No space left" not in result["message"]
