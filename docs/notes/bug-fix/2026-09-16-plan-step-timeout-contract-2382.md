@@ -45,6 +45,11 @@ Class: bug-fix
   `{code: INVALID_LIFECYCLE}` 变形成 pydantic 结构；grep 确认无既有测试依赖负数路径。
 - **让 schema 接受 `null`**：否决。「谁都没配」与「显式配了个非法值」是两件事，合并就把
   契约模糊化重演一遍。
+- **照 issue 建议写 `default: 0`**：否决，且这是本单唯一会**主动拆安全网**的选项——`0` 在本仓
+  语义是「不限墙钟」（`communicate(timeout=None)`，子进程跑到退出为止）。给「未配置」挂 `0`
+  的 schema default，等于所有没配墙钟的步骤从此没有总时长上限，与引擎
+  `None → STP_STEP_WALL_CLOCK_SECONDS → 300s` 的回落链正好相反。issue 给的另一形态
+  （入口收紧必填 `Field(300)`）同样不采：它把宿主级覆盖烤成计划事实。
 - **在 `pipeline_validator` 里加文案分支**：否决。控制面与 Agent 各有一份字节相同的副本，
   `backend/agent/tests/test_pipeline_validator_parity_738.py` 已按「语义一致而非逐字相同」
   裁决过（#738）；在 validator 加分支会让两份立刻分叉，而 Agent 侧本就不需要这句人话。
@@ -60,6 +65,13 @@ Class: bug-fix
   `tests/test_plan_run_abort_import_contract.py`（#2372）同一手法。
 
 ## Verification
+
+**route 层回归（issue 点名的那条：「按 OpenAPI 省略 timeout_seconds 仍能创建」）**
+`backend/tests/api/test_plans_api.py::TestPlanCRUD::test_create_plan_omitting_timeout_seconds`
+真 `POST /api/v1/plans` 断 201、读回 `timeout_seconds is None`（不许被偷偷塞成 0 或 300）；
+`test_zero_timeout_without_stall_explains_the_gate` 断 422 文案含 `stall_seconds >= 1` 且不含
+`is a required property`。落 `backend/tests/` 是**补充**而非替代——它只在夜间全量 job 跑，
+PR 路径必拦的判据仍在根 `tests/`。
 
 新契约文件 `tests/test_plan_step_timeout_contract.py`，23 例分三层：
 
@@ -83,6 +95,9 @@ Class: bug-fix
 | 去掉可行动文案包裹 | 文案场景 1 例 |
 | `types.ts` 的 `PipelineStep` 改回必填 | 前端同步 1 例（tsc 抓不到，故需结构断言） |
 | 快照路径不再共用 helper（行为等价） | 共用判据 1 例 |
+| route 层：schema 改回 `required` | `test_create_plan_omitting_timeout_seconds` 红 |
+| route 层：入口写回硬编码 `None` | 同上红（两条判据各自独立生效） |
+| route 层：去掉文案包裹 | `test_zero_timeout_without_stall_explains_the_gate` 红 |
 
 实跑命令与结果：
 
@@ -90,11 +105,14 @@ Class: bug-fix
 - 同上跑整个 PR 路径子集 `pytest tests/ --ignore=tests/test_alembic_upgrade.py --ignore=tests/test_script_seed_governance.py` → **1228 passed**（clean env，证明探针不污染同进程）
 - `pytest backend/tests/core/test_pipeline_validator.py backend/tests/services/test_plan_barrier_timeout.py -q` → 43 passed
 - `pytest backend/tests/services/test_plan_dispatcher.py backend/tests/services/test_plan_dispatcher_device_validation.py backend/tests/api/test_plans_api.py backend/tests/api/test_plan_runs_api.py -q` → 158 passed
+- `pytest backend/tests/api/test_plans_api.py -q` → **72 passed**（含本单新增 2 条 route 回归）
+- rebase 到 `a789c99d` 后复跑：`pytest tests/`（同前两个 ignore）→ **1228 passed**；
+  `pytest backend/tests/services/test_plan_dispatcher.py backend/tests/api/test_plans_api.py backend/tests/core/test_pipeline_validator.py backend/tests/services/test_plan_barrier_timeout.py -q` → **148 passed**；`check:quick` → **[OK] (10 gates)**
 - `env -i pytest backend/agent/tests/ -q`（剥掉 job env，照 #739 的收集守卫形态）→ 23 failed / 2095 passed；**同一命令、同一剥法在未改动的 main（`c2a6147b`）上 FAILED 名单逐字相同**（`diff` 为空，落在 `test_saq_scan_pipeline` / `test_cron_scheduler` / `test_legacy_tool_cleanup` / `test_p3_3_multi_instance`）。这只说明这些用例有 job env 依赖，不构成本单回归；带 env 的正确跑法见下条
 - `env -u DATABASE_URL -u TEST_DATABASE_URL TESTING=1 JWT_SECRET_KEY=ci python scripts/run_gates.py check:pr` → **[OK] check:pr (19 gates)**（含 layering / invariant-diff / pollution / immutability / alembic-immutability / ip-leak / prom-alerts / agent-tests-collect / agent-tests / pr-migrate 空库迁移）
 - `python -m ruff check` 三个改动文件 + 新测试 → All checks passed
 - `env -u DATABASE_URL TESTING=1 python scripts/run_gates.py check:quick` → **[OK] check:quick (10 gates)**（含 ruff / eslint / tsc / knip；本机可能同时是生产库宿主，故显式剥 `DATABASE_URL`）
-- `cd frontend && npx tsc --noEmit -p tsconfig.json` → exit 0（展示层 `stepTiming.ts` 早已区分 `0→∞` / 缺省→默认 / `n>0`，故类型放宽零涟漪）
+- 前端类型检查由 `check:quick` 的 `tsc` gate 实跑（`npm run type-check` = `tsc --noEmit && tsc --noEmit -p tsconfig.node.json`）→ 绿。展示层 `stepTiming.ts` 早已区分 `0→∞` / 缺省→默认 / `n>0` 三态，故类型放宽零涟漪——也正因 tsc 抓不到，前端判据走 AST/文本断言。
 
 严重度判据（为什么可以只放宽 schema）：`validate_pipeline_def` 在 **Agent 侧只被
 `install_selfcheck.py` 使用**——收到运行时 pipeline 不做 schema 校验；schema 文件虽经
