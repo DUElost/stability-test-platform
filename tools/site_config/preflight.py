@@ -212,15 +212,19 @@ def _ports_check(ops: Ops) -> Check:
 def _time_check(ops: Ops) -> Check:
     result = ops.run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"])
     synchronized = "yes" in result.stdout.strip().lower()
+    # 时区一并回显：NTP 同步只说明「时钟准」，不说明「时区对」——声明与主机不一致要在
+    # S1 之前就看得见（#2265：238 现场声明 UTC / 主机 PDT / Agent CST，差 15 小时）。
+    timezone = ops.timezone() or "unknown"
     if not synchronized:
         return _fail(
             "preflight.time", "site", "$.site.timezone", "preflight_time",
-            f"Host clock is not NTP-synchronized (timedatectl: {result.stdout.strip() or 'no answer'}).",
+            f"Host clock is not NTP-synchronized (timedatectl: {result.stdout.strip() or 'no answer'}; "
+            f"timezone: {timezone}).",
         )
     return passed(
         "preflight.time", "site", "$.site.timezone", "time_synchronized",
-        "Host clock is NTP-synchronized.",
-        "Fix: systemctl enable --now systemd-timesyncd.",
+        f"Host clock is NTP-synchronized (timezone: {timezone}).",
+        "Fix: systemctl enable --now systemd-timesyncd; make the host timezone match site.timezone.",
     )
 
 
