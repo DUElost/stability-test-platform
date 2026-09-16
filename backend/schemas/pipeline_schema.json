@@ -39,14 +39,14 @@
     },
     "step": {
       "type": "object",
-      "required": ["step_id", "action", "version", "timeout_seconds"],
+      "required": ["step_id", "action", "version"],
       "additionalProperties": false,
       "properties": {
         "step_id": { "type": "string", "minLength": 1 },
         "action": { "type": "string", "pattern": "^script:.+$" },
         "version": { "type": "string", "minLength": 1 },
         "params": { "type": "object", "default": {} },
-        "timeout_seconds": { "type": "integer", "minimum": 0 },
+        "timeout_seconds": { "type": "integer", "minimum": 0, "description": "Optional on purpose (#2382): absent = not configured, and the Agent resolves the wall clock via STP_STEP_WALL_CLOCK_SECONDS then 300s (backend/agent/pipeline_engine.py::_resolve_step_wall_clock). No schema default is declared because the effective default is host-env dependent; baking a number there would hide that override. 0 = unlimited, gated on stall_seconds below." },
         "stall_seconds": { "type": "integer", "minimum": 0 },
         "retry": { "type": "integer", "minimum": 0, "maximum": 10, "default": 0 },
         "enabled": { "type": "boolean", "default": true }
