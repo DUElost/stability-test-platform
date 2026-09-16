@@ -1,10 +1,10 @@
 # ADR-0037：Agent 主机提权边界（Privilege Boundary Wrapper）
 
-- 状态：**Accepted（v0.4）**
-- 版本记录：v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）；v0.4（2026-09-15：**转 Accepted**——R02 安全联审一稿已交付（#2206 / PR #2209，结论「建议接受、无阻断项」）；采纳 S1/O1/O2：§2 新增 D6 边界承担声明、D3 补信任边界措辞、§4 不变量补既有强控制与测试清单、§5 ③ 记评审交付与 S2/S3/O4 处置）
+- 状态：**Accepted（v0.5）**
+- 版本记录：v0.5（2026-09-16：§2 D2 事实勘误——`selftest` 只证 wrapper **自洽**，不证它具备热更新脚本将要调用的子命令；脚本头改为「selftest + 能力集合比对」双前置判据，wrapper 新增 `capabilities` 子命令，#2319）；v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）；v0.4（2026-09-15：**转 Accepted**——R02 安全联审一稿已交付（#2206 / PR #2209，结论「建议接受、无阻断项」）；采纳 S1/O1/O2：§2 新增 D6 边界承担声明、D3 补信任边界措辞、§4 不变量补既有强控制与测试清单、§5 ③ 记评审交付与 S2/S3/O4 处置）
 - 优先级：P1
 - 目标里程碑：M7
-- 日期：2026-09-11（v0.2 / v0.3 修订 2026-09-15；v0.4 修订 2026-09-15）
+- 日期：2026-09-11（v0.2 / v0.3 修订 2026-09-15；v0.4 修订 2026-09-15；v0.5 勘误 2026-09-16）
 - 决策者：平台研发组（R02 安全联审；2026-09-15 依据评审一稿裁决转 Accepted）
 - 标签：安全, 提权, sudoers, 热更新, Agent 主机
 - 关联：R14 台账 [#1266](https://github.com/DUElost/stability-test-platform/issues/1266)（R14-F04 [#1250](https://github.com/DUElost/stability-test-platform/issues/1250)）；R02 安全审查（联审项）；ADR-0035（主机身份与凭据方向，wrapper 鉴权面待其落地后重审）；#960（维护窗口）；#1247/#1248（热更新工件与主机本地资源保护）；[#2133](https://github.com/DUElost/stability-test-platform/issues/2133)（flash 链运行时提权收口，v0.2 新增）；[#2134](https://github.com/DUElost/stability-test-platform/issues/2134)（宽文件清除与 legacy 退役）；[#2180](https://github.com/DUElost/stability-test-platform/issues/2180)（legacy 分支与哨兵删除，v0.3）
@@ -76,8 +76,13 @@
   **（v0.3 / #2180：迁移期结束，已执行。）** 48/48 台 `priv_mode=wrapper`、
   宽文件 48/48 清除、flash 链在无宽文件主机验收通过后：远端脚本删除
   `USE_PRIV_WRAPPER` 回退分支与全部裸 sudo 命令面，开头以
-  `sudo -n stp-agent-priv selftest`（含子命令契约校验）**fail-closed**——
-  失败即带 `update_agent.yml` 指引退出、不执行任何动作；`STP_PRIV_FALLBACK` /
+  `sudo -n stp-agent-priv selftest` **fail-closed**——失败即带 `update_agent.yml`
+  指引退出、不执行任何动作。**（v0.5 / #2319 勘误：`selftest` 的「子命令契约校验」是
+  *自指*的**——它断言「parser ↔ 本机契约表」两两一致，对「本机 wrapper 是否具备脚本将要
+  调用的子命令」没有判别力（缺一子命令但自洽的旧 wrapper 同样 exit 0）。脚本头因此改为
+  **双前置判据**：`selftest` + `capabilities`（warpper 打印支持的子命令）与脚本的
+  **期望集合**比对，缺失即 fail-closed；`host_updater._REQUIRED_PRIV_SUBCOMMANDS` 与
+  脚本里的 `$PRIV` 调用由守卫测试钉住。`STP_PRIV_FALLBACK` /
   `STP_RESOURCES_PRIV_FALLBACK` 哨兵与 `resources_priv_fallback` 审计字段
   一并退役（`priv_mode` 只剩 `wrapper`/`unknown` 两态）。
   **（v0.4 / O1：信任边界是 conf 冻结，不是调用者身份校验。）** `bootstrap` 的可调用主体

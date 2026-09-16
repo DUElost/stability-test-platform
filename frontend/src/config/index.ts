@@ -41,6 +41,12 @@ export function planRunSubscription(id: number | string): string {
   return `plan_run:${id}`;
 }
 
+/**
+ * 设备页：room `fleet:devices`（#2369）。
+ * DEVICE_UPDATE 仅扇出到本房间；dashboard 全局订阅不再收该事件。
+ */
+export const FLEET_DEVICES_SUBSCRIPTION = 'fleet:devices';
+
 /** RunConsole 实时日志：room `console:{runId}` */
 export function consoleSubscription(runId: string): string {
   return `console:${runId}`;

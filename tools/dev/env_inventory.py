@@ -142,6 +142,10 @@ _INTERNAL_ONLY: dict[str, str] = {
     "FAKE_TAR_SLEEP": "测试夹具（模拟 tar 耗时），无常驻配置语义",
     "HOST_IP": "测试注入的 host 身份；生产由 Agent 自行解析",
     "PRECHECK_NOTIFY_DEBOUNCE_SECONDS": "precheck 通知去抖：实现细节（防重复推送），不属运维旋钮",
+    # #2341：prometheus_client 的**第三方约定键**（不是本平台的运维旋钮）。本仓是单进程
+    # uvicorn，故不设置它；init_build_info 只在启动期读一次做自检——设了它 Info 指标会
+    # 静默不导出（prometheus_client 明确 Info 不支持多进程），届时必须换成带 label 的 Gauge。
+    "PROMETHEUS_MULTIPROC_DIR": "prometheus_client 多进程约定键（第三方；仅用于启动期自检，非本平台配置）",
     "STP_AGENT_VERSION": "hot-update 写入的版本标记（派生值，不自设）",
     "STP_ALLOW_UNSAFE_TEST_DATABASE_URL": "测试守卫逃生门：仅本地测试库用，生产禁止设置",
     "STP_ARTIFACT_DIGEST_CACHE": "制品摘要缓存的紧急关闭开关（内部实现细节）",

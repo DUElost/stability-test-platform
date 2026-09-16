@@ -169,9 +169,10 @@ Docker build 由手工 full workflow 或 `main-ci-backstop.yml` 夜间兜底，�
 
 - **同类夜间红灯 ≥2 次 → 评估将该类前移为 PR 侧检查**（required 或信息性）；单次
   偶发不动作；
-  - ⚠️ **输入前置待补（#2333）**：当前红灯**不区分**「确定性缺陷」与「非确定性 flake」
-    （兜底单只到 job/步骤级、红灯不重跑）。对 flake 类做前移会把 flakiness 引进合入路径，
-    与两分钟注意力窗口的取舍相反 → 前移评估**应以确定性缺陷为准**，flake 类走"去 flake"。
+  - ✅ **输入已补（#2333，2026-09-16）**：兜底单现在自带「重跑结论 + 缺陷/flake 分类」——
+    红灯时对失败 job **自动 rerun 一次**：**转绿 = flake**（走"去 flake"，**不进入**前移评估），
+    **仍红 = 确定性缺陷**（才进入前移评估）。对 flake 前移会把 flakiness 引进合入路径，与
+    两分钟注意力窗口的取舍相反。重跑仍红时兜底单附失败用例名（机械 grep，取不到则显式写原因）。
     另：`backend-test` 类红灯已占 `#1525` 量化样本的 5/6（近 30 次 backstop 9 红夜）。
 - 前移先例：迁移空库类 → `pr-migrate-empty-db`（required）；agent 类 →
   `pr-agent-tests`；repo-level 根测试类 → `pr-agent-tests` 的 `Run repo-level

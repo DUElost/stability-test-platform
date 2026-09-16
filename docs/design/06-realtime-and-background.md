@@ -18,16 +18,18 @@ Frontend ◄──SocketIO /dashboard──┘
 | Namespace | 客户端 | 典型事件 |
 |-----------|--------|----------|
 | `/agent` | `agent/socketio_client.py` | 日志流、状态、RPC（`heartbeat` 仅续租 SID；**不再**逐设备 fan-out，#2324 deprecated） |
-| `/dashboard` | `useSocketIO` | `dashboard_summary`、`device_update`、`job_status`、`plan_run_status`、`watcher_signal`、`precheck_update` |
+| `/dashboard` | `useSocketIO` | `dashboard_summary`、`job_status`、`plan_run_status`、`watcher_signal`、`precheck_update`；`device_update` 仅 `fleet:devices` room |
 
-**Dashboard 观测面（#2324 / ADR-0026）**：
+**Dashboard 观测面（#2324 / #2369 / ADR-0026）**：
 
 | 事件 | 类型 | 说明 |
 |------|------|------|
 | `dashboard_summary` | `DASHBOARD_SUMMARY` | 合流摘要推送（≤1Hz）；前端 `setQueryData(['dashboard-summary'])` |
-| `device_update` | `DEVICE_UPDATE` | 仅 material 变更（status/adb/告警阈值）；**不得**再触发摘要 REST 全量 refetch |
+| `device_update` | `DEVICE_UPDATE` | 仅 material 变更；**room=`fleet:devices`**（设备页订阅）；**不得**再触发摘要 REST 全量 refetch |
+| PlanRun 详情 socket | `JOB_STATUS` / `PRECHECK_UPDATE` | 前端 2s 合流 invalidate（对齐 `WATCHER_SIGNAL`） |
 
 REST `GET /api/v1/stats/dashboard-summary` 仅冷启动 + 慢兜底（前端默认 60s）。
+`visibilitychange` 仅按域失效跨端同步键，禁止无参全仓 `invalidateQueries()`。
 
 **鉴权**：`AGENT_SECRET`；生产必配。  
 **Legacy**：`/ws/agent/{id}` 等为 deprecated stub。
