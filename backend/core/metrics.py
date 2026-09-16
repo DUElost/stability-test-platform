@@ -649,10 +649,16 @@ def record_apscheduler_job(job_name: str, outcome: str, duration: float):
 def record_api_request(method: str, endpoint: str, status_code: int, duration: float):
     """Record an API request.
 
-    #1258 deferred：生产者（路径模板化的请求中间件）尚未落地，仪表板对应面板已撤；
-    本函数与 ``api_requests`` / ``api_request_duration`` 定义**按裁决保留**，
-    接入中间件时恢复面板并更新 ``tests/test_grafana_dashboard_contract.py``
-    的 UNPRODUCED_METRICS 清单（#737 复核确认仍属 deferred，未删）。
+    生产者**已落地**（#2286 收口 #1258 的过期陈述）：调用方是
+    ``ApiRequestMetricsMiddleware``（``backend/core/request_metrics.py``），中间件由
+    ``backend/main.py`` 的 ``add_middleware(ApiRequestMetricsMiddleware)`` 挂载；
+    ``tests/test_alert_metric_producers.py`` 把这条 AST 追不到的接线钉成在场断言。
+
+    仪表板目前**没有** API 请求/延迟面板——那是 #1258 当年「无生产者故撤面板」留下的
+    缺口，前提已消失但面板未恢复。是否恢复、按什么维度恢复（错误率定义、分位选择、
+    是否引入 ``$endpoint`` 变量）属面板设计判读，结论与再评估条件见
+    ``docs/notes/testing/2026-09-16-grafana-unproduced-exemption-closure-2286.md``。
+    基数纪律（endpoint 取路由模板而非原始路径）见 ``backend/core/request_metrics.py``。
     """
     if not PROMETHEUS_AVAILABLE:
         return

@@ -314,3 +314,124 @@ def test_registration_settings_read_stays_deferred():
     )
     # 两次取值点在两个分支内（except 分支 + host_id is None 分支）
     assert src.count("get_registration_settings()") == 2
+
+
+# ── #2279：坏旋钮不得让心跳静默中断 ─────────────────────────────────────────
+
+
+def _make_thread_for_tick(ht, monkeypatch=None):
+    """构造一个可直接跑 `_safe_tick()` 的 HeartbeatThread（#2279 用）。
+
+    tick 会遍历设备并采集容量/健康；此处不关心这些，统一桩成「零设备」，
+    使断言聚焦在「条件表达式是否抛 → 心跳是否发出」。
+    """
+    from backend.agent.heartbeat_thread import HeartbeatThread
+
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=[],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    # 零设备：discover 返回空列表 → 不进入每设备采集路径
+    thread._adb_path = "adb"
+    return thread
+
+
+
+def test_tick_survives_invalid_pacing_knob_when_adb_conflict(heartbeat_env, monkeypatch):
+    """#2279 主症状：非数值旋钮 + ADB 冲突 → 心跳仍须发出。
+
+    修复前：`_tick` 在条件表达式里构造 `HeartbeatSettings` → pydantic
+    `ValidationError` → `_safe_tick` 吞掉 → **该 tick 完全不发心跳**（进程仍活着，
+    表现为静默掉线）。
+    """
+    from backend.agent import heartbeat_thread as ht
+
+    thread = _make_thread_for_tick(ht)
+
+    # ADB fork server 冲突（短路求值：只有它为真才会读 Settings）
+    monkeypatch.setattr(ht.device_discovery, "get_adb_server_port", lambda: 5037)
+    monkeypatch.setattr(
+        ht.device_discovery, "list_adb_fork_servers",
+        lambda: [{"port": 5038}],
+    )
+    # 非数值节奏旋钮（严格组 → ValidationError）
+    heartbeat_env.set("STP_HEARTBEAT_INTERVAL_MIN", "abc")
+    heartbeat_env.set("STP_ADB_AUTO_REPAIR", "1")
+
+    sent = []
+    monkeypatch.setattr(ht, "send_heartbeat", lambda *a, **k: sent.append(1) or {"ok": True})
+
+    thread._safe_tick()
+
+    assert sent, "坏旋钮 + ADB 冲突时心跳被静默中断（#2279）"
+
+
+def test_tick_still_sends_heartbeat_without_adb_conflict(heartbeat_env, monkeypatch):
+    """#2279 负向对照：无 ADB 冲突时坏旋钮本就不该影响心跳（短路未读 Settings）。"""
+    from backend.agent import heartbeat_thread as ht
+
+    thread = _make_thread_for_tick(ht)
+    monkeypatch.setattr(ht.device_discovery, "get_adb_server_port", lambda: 5037)
+    monkeypatch.setattr(ht.device_discovery, "list_adb_fork_servers", lambda: [])
+    heartbeat_env.set("STP_HEARTBEAT_INTERVAL_MIN", "abc")
+
+    sent = []
+    monkeypatch.setattr(ht, "send_heartbeat", lambda *a, **k: sent.append(1) or {"ok": True})
+
+    thread._safe_tick()
+
+    assert sent, "无 ADB 冲突时心跳不应受坏旋钮影响"
+
+
+def test_heartbeat_reload_survives_invalid_knob(heartbeat_env, caplog):
+    """#2279 验收②：坏旋钮时 `reload_from_settings` 不抛，沿用既有值并记 ERROR。
+
+    该方法在 `reload_config` 处理器里**无外层兜底**——抛出会让整个 reload 失败，
+    连带 coordinator 与后续步骤都不执行。
+    """
+    import logging
+    from backend.agent.heartbeat_thread import HeartbeatThread
+
+    thread = HeartbeatThread(
+        api_url="http://server",
+        host_id="host-1",
+        adb_path="adb",
+        mount_points=[],
+        host_info={},
+        poll_interval=60,
+        get_active_job_count=lambda: 0,
+    )
+    before = (thread._min_poll_interval, thread._max_poll_interval, thread._adb_repair_cooldown)
+
+    heartbeat_env.set("STP_HEARTBEAT_INTERVAL_MIN", "abc")
+    with caplog.at_level(logging.ERROR):
+        thread.reload_from_settings()          # 不得抛
+
+    assert (thread._min_poll_interval, thread._max_poll_interval,
+            thread._adb_repair_cooldown) == before, "坏配置下应沿用既有值"
+    assert any("heartbeat_pacing_reload_skipped" in r.message or
+               "heartbeat_settings_unavailable" in r.message for r in caplog.records), \
+        "失败须留可观测日志（验收②：不再只留 debug）"
+
+
+def test_coordinator_reload_survives_invalid_knob(heartbeat_env, caplog):
+    """#2279：coordinator 侧同源暴露（同一 reload 处理器内、紧随 heartbeat 之后）。"""
+    import logging
+    from backend.agent.coordinator import HostRunCoordinator
+
+    coordinator = HostRunCoordinator(
+        api_url="http://server", host_id="host-1", agent_instance_id="inst-1",
+    )
+    before = (coordinator._interval, coordinator._MAX_PLAN_RUN_HOST_PROJECTIONS)
+
+    heartbeat_env.set("COORDINATOR_HEARTBEAT_INTERVAL", "abc")
+    with caplog.at_level(logging.ERROR):
+        coordinator.reload_from_settings()     # 不得抛
+
+    assert (coordinator._interval, coordinator._MAX_PLAN_RUN_HOST_PROJECTIONS) == before
+    assert any("coordinator_pacing_reload_skipped" in r.message for r in caplog.records)
