@@ -289,6 +289,86 @@ describe('DedupReportCard', () => {
     expect(block.textContent).toContain('该次运行未记录清单');
   });
 
+  it('#2185: 逐平台 merge 结果可见，且 no_input 不显示为失败', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [
+        {
+          id: 1,
+          host_id: 'h1',
+          storage_uri: '/nfs/dedup/1/h1_Result_org.xls',
+          artifact_type: 'scan_result_xls',
+          size_bytes: 10,
+          created_at: null,
+        },
+      ],
+    });
+
+    render(
+      <DedupReportCard
+        runId={1}
+        mergePlatforms={{
+          platforms: { mtk: 'ok', unisoc: 'no_input' },
+          recorded_at: '2026-09-16T00:00:00Z',
+        }}
+      />,
+      { wrapper },
+    );
+
+    const merge = await screen.findByTestId('pipeline-merge');
+    expect(merge.textContent).toContain('mtk=ok');
+    expect(merge.textContent).toContain('unisoc=no_input');
+
+    // no_input = 该平台本轮没有输入（不是失败）→ muted，且悬停说明写清"不是失败"
+    const uni = screen.getByTestId('merge-platform-unisoc');
+    expect(uni.className).toContain('text-muted-foreground');
+    expect(uni.className).not.toContain('destructive');
+    expect(uni.getAttribute('title')).toContain('不是失败');
+    // ok → success
+    expect(screen.getByTestId('merge-platform-mtk').className).toContain('text-success');
+  });
+
+  it('#2185: 平台被 skip 时「合并」整行降为 warn（不被「有产物」盖住）', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [
+        {
+          id: 1,
+          host_id: null,
+          storage_uri: '/nfs/dedup/1/merge/mtk/Result_MergeFiles.xls',
+          artifact_type: 'merge_result_xls',
+          size_bytes: 20,
+          created_at: null,
+        },
+      ],
+    });
+
+    render(
+      <DedupReportCard runId={1} mergePlatforms={{ platforms: { mtk: 'skipped_failed' } }} />,
+      { wrapper },
+    );
+
+    const skipped = await screen.findByTestId('merge-platform-mtk');
+    expect(skipped.className).toContain('text-warning');
+    expect(screen.getByTestId('pipeline-merge').querySelector('.bg-warning')).not.toBeNull();
+  });
+
+  it('#2185: 未知平台结果码原样露出（不静默吞掉后端新加的结果类型）', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+    });
+
+    render(
+      <DedupReportCard runId={1} mergePlatforms={{ platforms: { qcom: 'brand_new_outcome' } }} />,
+      { wrapper },
+    );
+
+    expect(await screen.findByTestId('merge-platform-qcom')).toHaveTextContent(
+      'qcom=brand_new_outcome',
+    );
+  });
+
   it('#1195: query failure shows error state, not the scan-empty CTA', async () => {
     (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('boom'),
