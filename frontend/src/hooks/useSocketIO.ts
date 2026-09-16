@@ -2,7 +2,7 @@
  * SocketIO hook — replaces useWebSocket with socket.io-client.
  *
  * Maintains a shared singleton connection to the /dashboard namespace.
- * Components subscribe to rooms (e.g. "job:123", "plan_run:5") and
+ * Components subscribe to rooms (e.g. "plan_run:5", "console:con-…") and
  * receive typed events.
  *
  * The return interface mirrors useWebSocket for drop-in replacement.
@@ -227,13 +227,9 @@ function _getDashSocket(): Socket {
   const EVENTS = [
     SOCKET_EVENT_NAMES.deviceUpdate,
     SOCKET_EVENT_NAMES.dashboardSummary,
-    SOCKET_EVENT_NAMES.stepLog,
-    SOCKET_EVENT_NAMES.stepUpdate,
     SOCKET_EVENT_NAMES.jobStatus,
     SOCKET_EVENT_NAMES.planRunStatus,
     SOCKET_EVENT_NAMES.precheckUpdate,
-    SOCKET_EVENT_NAMES.runUpdate,
-    SOCKET_EVENT_NAMES.reportReady,
     // ADR-0021 C5c — watcher 异常增量推送 (broadcast room: plan_run:{id})
     SOCKET_EVENT_NAMES.watcherSignal,
     // ADR-0025 §9 RunConsole — 控制面命令实时日志 (room: console:{id})
@@ -320,8 +316,6 @@ interface SubscriptionConfig {
  * - `fleet:devices`                     → DEVICE_UPDATE room（设备页，#2369）
  * - `plan_run:{id}`                     → PlanRun detail room
  * - `console:{runId}`                   → RunConsole live log room
- * - `job:{id}`                          → job step-log room
- * - `run:{id}`                          → run step-log room
  * - `` (empty) / unknown                → no subscription
  */
 export function parseSubscription(url: string): SubscriptionConfig {
@@ -332,8 +326,6 @@ export function parseSubscription(url: string): SubscriptionConfig {
       room: null,
       events: [
         SOCKET_EVENT_NAMES.dashboardSummary,
-        SOCKET_EVENT_NAMES.runUpdate,
-        SOCKET_EVENT_NAMES.reportReady,
         SOCKET_EVENT_NAMES.planRunStatus,
         SOCKET_EVENT_NAMES.notificationNew,
         SOCKET_EVENT_NAMES.planChanged,
@@ -369,22 +361,6 @@ export function parseSubscription(url: string): SubscriptionConfig {
     return {
       room: `console:${consoleMatch[1]}`,
       events: [SOCKET_EVENT_NAMES.consoleLog, SOCKET_EVENT_NAMES.consoleStatus],
-    };
-  }
-
-  const jobMatch = url.match(/^job:(\d+)$/);
-  if (jobMatch) {
-    return {
-      room: `job:${jobMatch[1]}`,
-      events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate],
-    };
-  }
-
-  const runMatch = url.match(/^run:(\d+)$/);
-  if (runMatch) {
-    return {
-      room: `run:${runMatch[1]}`,
-      events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate],
     };
   }
 
