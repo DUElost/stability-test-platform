@@ -136,6 +136,23 @@ def _trusted_artifact_digest() -> ModuleType | None:
     return module
 
 
+def _forbidden_bundle_entries(bundle: Path) -> list[str]:
+    """返回 bundle 内不应存在的条目（#2269）；判据与构建侧**同源**。
+
+    复用 `tools.release.build_bundle.find_forbidden_bundle_entries`，避免构建侧与
+    站点侧两套判据漂移（一侧放宽即静默放行）。构建工具不可导入时退化为保守判据。
+    """
+    try:
+        from tools.release.build_bundle import find_forbidden_bundle_entries
+    except Exception:  # noqa: BLE001 — 交付物内导入失败不得放行
+        return [
+            str(path.relative_to(bundle))
+            for path in bundle.rglob("*")
+            if path.name == ".env" or path.name == "__pycache__"
+        ]
+    return find_forbidden_bundle_entries(bundle)
+
+
 def _digest_bundle(ctx: InstallContext) -> dict[str, str] | None:
     digest_module = _trusted_artifact_digest()
     if digest_module is None:
@@ -323,6 +340,13 @@ def _run_locked(
         _safe(checks, "release_version_mismatch", location="$.release.expected_release", role="site", check_id="install.s0.release")
         return _report(checks, stages)
     declared = {component.name: component.digest for component in manifest.components}
+    # #2269：bundle 不得携带构建机本地状态（`.env` / 字节码 / 缓存）。摘要面只覆盖
+    # backend/agent，故这类文件**不进任何摘要**——必须在 S0 单独拦下，否则站点会
+    # 静默继承构建机凭据（落到 <deploy-root>/backend/.env，被后端启动时加载）。
+    stray = _forbidden_bundle_entries(ctx.bundle)
+    if stray:
+        _safe(checks, "release_bundle_forbidden_entries", location="$.release.bundle", role="site", check_id="install.s0.hygiene")
+        return _report(checks, stages)
     actual = _digest_bundle(ctx)
     if (
         actual is None
