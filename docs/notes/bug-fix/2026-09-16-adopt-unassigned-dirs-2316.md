@@ -112,8 +112,8 @@ python scripts/run_gates.py check:pr      # [OK] 19 gates
 
 - **剩余窗口**：`adopt` 只在 extract 前跑。若某 run 永远不再 extract（例如终态且已归档），
   其未搬的 unassigned 目录仍靠方案 A 在行删时清掉——这是有意的兜底，不是缺陷。
-- **双 NULL 行**（`plan_run_id` 与 `job_id` 皆空）当前为 0：它们既不被删除谓词命中、也不会
-  被 adopt（没有 run 作用域可搬）。若将来出现，需要独立 TTL 口径（#2316 第 4 项）。
+- **双 NULL 行**（`plan_run_id` 与 `job_id` 皆空）：已由本 note 第 3 节（D1）落地 TTL；
+  它们不会被 adopt（没有 run 作用域可搬），故那节是它们**唯一**的回收路径。
 - **A 的退役条件**（#2316 裁决 2 写明）：未关联事件也被纳入某个有主作用域、或双 NULL 行
   TTL 落地后，A 才能退役。
 - 搬移依赖「两种布局同构」：若 `devices/{run_id}/` 下的布局再变（例如再加一层宿主维度），
