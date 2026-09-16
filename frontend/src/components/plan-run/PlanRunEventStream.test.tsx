@@ -95,13 +95,29 @@ describe('PlanRunEventStream', () => {
     expect(screen.getByTestId('event-list')).toHaveTextContent('该过滤条件下暂无事件');
   });
 
+  // #2027：断言不能只停在「class 存在」——回归发生时 `line-clamp-2` 一直挂在那儿，
+  // 失效的是它与同元素 display 工具类（`block`）的争夺。所以这里两头都钉：
+  // 截断类挂在**没有 display 工具类**的元素上（jsdom 不算样式，这条等价判据才可测）。
+  it('keeps the clamp class off any element that also carries a display utility', () => {
+    render(<PlanRunEventStream events={events} />);
+    const btn = screen.getByTestId('event-desc-2026-05-08T12:30:00Z-step');
+    const clampEl = screen.getByTestId('event-desc-text-2026-05-08T12:30:00Z-step');
+
+    expect(clampEl).toHaveClass('line-clamp-2');
+    // 同元素不得同时出现任何 display 工具类（`block` 曾在这里把 -webkit-box 压掉）
+    const DISPLAY_UTILITIES = /\b(block|inline-block|flex|inline-flex|grid|inline-grid|inline|contents|table)\b/;
+    expect(clampEl.className).not.toMatch(DISPLAY_UTILITIES);
+    expect(btn).not.toHaveClass('line-clamp-2');
+  });
+
   it('expands a long event description on click', () => {
     render(<PlanRunEventStream events={events} />);
     const desc = screen.getByTestId('event-desc-2026-05-08T12:30:00Z-step');
-    expect(desc).toHaveClass('line-clamp-2');
+    const clampEl = screen.getByTestId('event-desc-text-2026-05-08T12:30:00Z-step');
+    expect(clampEl).toHaveClass('line-clamp-2');
     fireEvent.click(desc);
-    expect(desc).toHaveClass('whitespace-pre-wrap');
-    expect(desc).not.toHaveClass('line-clamp-2');
+    expect(clampEl).toHaveClass('whitespace-pre-wrap');
+    expect(clampEl).not.toHaveClass('line-clamp-2');
   });
 
   it('paginates: shows range/total and fires onPageChange on next', () => {
@@ -251,5 +267,18 @@ describe('PlanRunEventStream', () => {
       />,
     );
     expect(screen.getByText('请检查网络连接或稍后重试')).toBeInTheDocument();
+  });
+
+  // #2027：错误面整条（图标/标题/正文）走 AA 变体令牌——原来的 `--destructive`
+  // 白底 3.76:1，正文再叠 `/70` 只有 2.62:1。取值本身由
+  // `src/design-system/contrast.test.ts` 按 WCAG 公式守着，这里只钉「用没用对令牌」。
+  it('renders the whole error face with the AA token, never alpha-reduced destructive', () => {
+    const { container } = render(
+      <PlanRunEventStream events={undefined} isError error={new ApiError('TIMEOUT', '请求超时，请重试')} />,
+    );
+    const marked = container.querySelectorAll('.text-destructive-text');
+    // 图标 + 「加载失败」标题 + 说明文字
+    expect(marked.length).toBeGreaterThanOrEqual(3);
+    expect(container.innerHTML).not.toMatch(/text-destructive\/\d/);
   });
 });

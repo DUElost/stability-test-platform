@@ -94,10 +94,18 @@ function EventRow({ event }: { event: PlanRunEvent }) {
             className={cn(
               'mt-0.5 block w-full cursor-pointer text-left text-xs leading-snug hover:text-foreground',
               TEXT.subtitle,
-              expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-2',
             )}
           >
-            {event.description}
+            {/* #2027：`line-clamp-2` 自带 `display:-webkit-box`，与同元素的 `block`
+                等 display 工具类**特异性相同**，胜负由构建产物里规则先后决定——实测
+                `.block` 在后，截断被静默压掉（点「展开」也没有视觉变化）。把截断放在
+                没有 display 工具类的内层 span 上，冲突从构造上消失。 */}
+            <span
+              data-testid={`event-desc-text-${event.ts}-${event.category}`}
+              className={expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'}
+            >
+              {event.description}
+            </span>
           </button>
         )}
         {(event.device_serial || event.job_id) && (
@@ -247,11 +255,13 @@ export default function PlanRunEventStream({
       >
         {isError ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
-            <AlertCircle aria-hidden className="mb-1 h-5 w-5 text-destructive/60" />
-            <span className="text-xs font-semibold text-destructive">加载失败</span>
+            <AlertCircle aria-hidden className="mb-1 h-5 w-5 text-destructive-text" />
+            <span className="text-xs font-semibold text-destructive-text">加载失败</span>
             {/* #2361：此前不论哪种失败都写「请检查网络连接」——404（记录不存在）
-                会被读成网络故障。 */}
-            <span className="mt-0.5 text-[11px] text-destructive/70">
+                会被读成网络故障。
+                #2027：整条错误面改用 `text-destructive-text`（AA 变体）——原来的
+                `--destructive`（#ef4444）白底只有 3.76:1，正文再叠 `/70` 掉到 2.62:1。 */}
+            <span className="mt-0.5 text-[11px] text-destructive-text">
               {
                 loadErrorCopy(error, {
                   notFound: '执行记录不存在或已被清理，日志无法读取。',
