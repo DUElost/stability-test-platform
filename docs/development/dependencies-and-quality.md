@@ -53,6 +53,20 @@ Python 3.11 下重新生成对应 lock。日常重生成沿用已有 pin；只�
   body 用「命中才写」的幂等自愈），门禁据此豁免。先例：#1717 为 `dd44ee55ff66` 补的
   `f6a5b4c3d2e1`；
 - 验证顺序：Agent tests → TypeScript check → frontend build → 必要时 backend tests。
+- **本机解释器比 CI 新，语法子集不对称**：CI 各 job 统一 Python 3.11（`lint` /
+  `pr-compileall` / `pr-agent-tests` / `pr-typecheck` 同版，`ruff.toml` 亦
+  `target-version = "py311"`），而本机 venv 是 3.13。3.12+ 才允许的写法（PEP 701 的
+  同类型引号嵌套，如 `f"{item["k"]}"`）在 3.11 直接是 `SyntaxError`——本机
+  `check:quick` 的 `compileall` 全绿、推上去必红。提交前用 CI 同版自查：
+
+  ```bash
+  docker run --rm -v "$PWD":/w -w /w python:3.11-slim \
+    python -m compileall -q backend tools scripts
+  ```
+
+  反向不对称也存在（个别 f-string 组合在 3.13 报错而 3.11 通过，实测见
+  [2026-09-16 退役判据 note](../notes/process/2026-09-16-script-retirement-guard-and-executor.md)）；
+  结论一样：**别在 f-string 里内嵌引号字典键，先取局部变量**。
 
 ## 空行污染
 

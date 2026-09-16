@@ -162,3 +162,47 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
 - **核验退役结果不能用 `GET /api/v1/scripts?name=<脚本>`**：该端点没有 `name` 过滤参数
   （传入被静默忽略），按版本字符串筛选会命中其他脚本族的同名版本而误判「未生效」。
   正确姿势：取 `GET /api/v1/scripts?is_active=true` 后按 `(name, version)` 二元组对拍。
+
+### 判据与巡检（唯一事实源）
+
+工具口径「active 且 `refs == 0`」只是**候选面**，不等于可退役。判据固化在
+`backend/services/script_retirement.py`，诊断工具与退役执行器都必须经它——不允许各自再写
+一份豁免规则（两份口径不合一，下一批就会漂）。按优先级先命中先决定：
+
+| 优先级 | 条件 | 结论 |
+|---|---|---|
+| 1 | `is_active = false` | 已退役，跳过不重复处理 |
+| 2 | `refs > 0` | 不可退役（与 API 409 `SCRIPT_STILL_REFERENCED` 同构） |
+| 3 | 同族**最新的 active 版本** | 承接面豁免。**退出判据**：同族一旦出现更新的 active 版本，旧最新版立即失去豁免并转入 4/5 判定——豁免不是永久身份 |
+| 4 | 留存窗口内有执行事实 | 末次执行距今 < 60 天 → 保留（追溯期）；≥ 60 天 → 可退役 |
+| 5 | 其余（零引用且窗口内无执行事实） | 可退役 |
+
+- 冷却期常量是 `script_retirement.STALE_COOLDOWN_DAYS = 60`，与本文的「60 天」由
+  `backend/tests/test_script_retirement_guard.py` 互锁，改一侧必致另一侧红。
+- `script.created_at` **不参与判据**：它是入库注册时间，扫描会把早已发布的历史目录补登记
+  （2026-09-13/14 一轮就补了 `monkey_launch@5.0.1`、`gpu_check@1.0.7` 等），按它冷却会把
+  最该退役的行留在场上。
+- 后置不变量：任何脚本族都不得因一批退役失去全部 active 版本；判据自身 fail-loud 抛
+  `InconsistentRetirementPlan`，而不是等运维把某个脚本打成「无版本可选」。
+
+巡检（「超期零引用仍活跃」即违规）：
+
+```bash
+python -m backend.scripts.check_unreferenced_script_versions --guard [--json]
+```
+
+退出码：`0` 无到期项 / `1` 存在应退役而未退役的版本 / `2` 执行事实维度不可得（**不降级**
+为「零使用」——那会让巡检偏向过度退役）。默认模式仍恒 `0`（诊断工具，非门禁）。CI 只锁
+判据函数与上述退出码（CI 不得连生产库），对生产数据的实际巡检由运维或定时任务跑 `--guard`。
+
+批量执行是两段式——先只读出 manifest，人工复核后再写：
+
+```bash
+python tools/dev/retire_script_versions.py plan --out /tmp/retire.json          # 只读
+python tools/dev/retire_script_versions.py execute --manifest /tmp/retire.json --yes
+python tools/dev/retire_script_versions.py reactivate --manifest /tmp/retire.json --yes  # 误退役处置
+```
+
+`execute` 只经控制面 API（服务端引用守卫 + `audit_logs` + 脚本目录版本缓存失效），不直连
+数据库写、不碰版本目录文件；缺 `--yes` 只 dry-run；写前逐条核对 `(name, version)` 未漂移、
+写后读回复核；默认拒绝非本机回环以外的 API 地址（需 `--allow-remote`）。
