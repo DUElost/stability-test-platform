@@ -383,3 +383,27 @@ class TestInstallOutcomeRecording:
             )
             assert row.details["console_status"] == "CANCELED"
             assert row.details["ok"] is False
+
+def test_install_option_accepts_an_iana_timezone():
+    """#2265：agent_timezone 不是路径，走白名单正则；Zone 名与 UTC 都要放行。"""
+    from backend.services.agent_installer import normalize_install_options
+
+    assert normalize_install_options({"agent_timezone": "Asia/Shanghai"}) == {
+        "agent_timezone": "Asia/Shanghai"
+    }
+    assert normalize_install_options({"agent_timezone": "UTC"})["agent_timezone"] == "UTC"
+    assert normalize_install_options({"agent_timezone": "America/Argentina/Buenos_Aires"})[
+        "agent_timezone"
+    ] == "America/Argentina/Buenos_Aires"
+
+
+@pytest.mark.parametrize("value", ["../etc", "Asia/Shanghai; rm -rf /", "Asia Shanghai", "$TZ", ""])
+def test_install_option_rejects_a_bogus_timezone(value):
+    from backend.services.agent_installer import InstallConfigError, normalize_install_options
+
+    if value == "":
+        # 空值按既有语义跳过（不覆盖目标既有配置），不是错误
+        assert "agent_timezone" not in normalize_install_options({"agent_timezone": value})
+        return
+    with pytest.raises(InstallConfigError):
+        normalize_install_options({"agent_timezone": value})

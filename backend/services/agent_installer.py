@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shlex
 import tempfile
 import threading
@@ -30,6 +31,12 @@ _INSTALL_OPTION_VARS: dict[str, str] = {
     # 中心存储挂载点：热更新（agent_env_sync）只在 CP 有非空值时下发，
     # 首次安装不写就会让 Agent 因缺 STP_AEE_NFS_ROOT 启动即崩。
     "agent_nfs_root": "agent_nfs_root",
+}
+
+# 非路径类安装选项（#2265）：值按各自的白名单正则校验，不做绝对路径检查。
+# 目前只有 IANA 时区名——它是「三面同源」的第三面（声明 = 控制面 = Agent）。
+_INSTALL_OPTION_PATTERNS: dict[str, str] = {
+    "agent_timezone": r"[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}",
 }
 
 _ACTIVE_LOCK = threading.Lock()
@@ -83,10 +90,16 @@ def normalize_install_options(options: dict[str, Any] | None) -> dict[str, str]:
     for key, raw in (options or {}).items():
         if raw is None:
             continue
-        if key not in _INSTALL_OPTION_VARS:
+        pattern = _INSTALL_OPTION_PATTERNS.get(key)
+        if pattern is None and key not in _INSTALL_OPTION_VARS:
             raise InstallConfigError(f"install_options 不支持的键：{key}")
         text = str(raw).strip()
         if not text:
+            continue
+        if pattern is not None:
+            if not re.fullmatch(pattern, text):
+                raise InstallConfigError(f"install_options.{key} 不是合法的 IANA 时区名：{text!r}")
+            normalized[_INSTALL_OPTION_VARS.get(key, key)] = text
             continue
         if not text.startswith("/"):
             raise InstallConfigError(f"install_options.{key} 必须是绝对路径：{text!r}")

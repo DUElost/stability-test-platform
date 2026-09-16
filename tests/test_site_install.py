@@ -34,7 +34,9 @@ class FakeOps:
         users: set[str] | None = None,
         commands: set[str] | None = None,
         responses: dict[str, tuple[int, str]] | None = None,
+        timezone: str = "Asia/Shanghai",
     ):
+        self._timezone = timezone
         self.calls: list[tuple[str, ...]] = []
         self.envs: list[tuple[tuple[str, ...], dict | None]] = []
         self._hostname = hostname
@@ -77,6 +79,9 @@ class FakeOps:
 
     def machine(self) -> str:
         return "x86_64"
+
+    def timezone(self) -> str:
+        return self._timezone
 
     def user_exists(self, name: str) -> bool:
         return name in self._users
@@ -1082,6 +1087,25 @@ def test_monitoring_install_that_still_leaves_binaries_missing_fails_closed(tmp_
     assert "install_monitoring" in codes(report)
 
 
+def test_local_ops_timezone_falls_back_to_timedatectl(monkeypatch):
+    """没有 /etc/timezone 的主机（238 现场即如此）必须走 timedatectl，而不是返回空串。
+
+    空串会让 S1 的时区检查退化成 BLOCKED timezone_unknown——本该能判定的机器被判成「读不到」。
+    """
+    from tools.site_config.ops import CommandResult, LocalOps
+
+    def _no_timezone_file(self, *args, **kwargs):
+        raise FileNotFoundError("/etc/timezone")
+
+    monkeypatch.setattr(Path, "read_text", _no_timezone_file)
+    monkeypatch.setattr(
+        LocalOps, "run",
+        lambda self, argv, **kwargs: CommandResult(tuple(argv), 0, "Asia/Shanghai\n"),
+    )
+
+    assert LocalOps().timezone() == "Asia/Shanghai"
+
+
 def test_local_ops_reports_a_missing_command_instead_of_raising():
     """命令不存在是一种结果（127），不是异常：否则一个缺失的外部命令能崩掉整次安装。"""
     from tools.site_config.ops import LocalOps
@@ -1149,3 +1173,81 @@ def test_another_sites_distro_default_blocks_fail_closed(tmp_path, monkeypatch):
     assert report["status"] == "FAIL"
     assert "install_conflict" in codes(report)
     assert path.read_text(encoding="utf-8") == foreign
+
+# ── #2265 时区一致性（声明 = 控制面 = Agent）──────────────────────────────
+
+
+def _tz_ops(tmp_path: Path, timezone: str) -> FakeOps:
+    return FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        timezone=timezone,
+    )
+
+
+def test_timezone_mismatch_fails_closed_before_writes(tmp_path, monkeypatch):
+    """控制面时区与 site.timezone 不一致 → FAIL install_timezone，且不往下走。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    report = invoke(tmp_path, ops=_tz_ops(tmp_path, "America/Los_Angeles"))
+
+    assert report["status"] == "FAIL"
+    assert "install_timezone" in codes(report)
+    check = next(c for c in report["checks"] if c["check_id"] == "install.s1.timezone")
+    # message 同时给出实际值与声明值，操作者不用再猜
+    assert "America/Los_Angeles" in check["message"] and "Asia/Shanghai" in check["message"]
+    # 后续阶段不执行（部署根未落地）
+    assert not (tmp_path / "opt/stp-control/backend").exists()
+
+
+def test_timezone_unknown_is_blocked_not_passed(tmp_path, monkeypatch):
+    """读不到主机时区 → BLOCKED（不猜、也不假装一致）。"""
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    report = invoke(tmp_path, ops=_tz_ops(tmp_path, ""))
+
+    assert "timezone_unknown" in codes(report)
+    assert next(c for c in report["checks"] if c["check_id"] == "install.s1.timezone")["status"] == "BLOCKED"
+
+
+def test_timezone_aligned_passes(tmp_path, monkeypatch):
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    report = invoke(tmp_path, ops=_tz_ops(tmp_path, "Asia/Shanghai"))
+
+    assert report["status"] == "PASS", report
+    assert "timezone_aligned" in codes(report)
+
+
+# ── #2269：bundle 携带构建机本地状态须在 S0 fail-closed ─────────────────────
+
+
+def test_bundle_carrying_dotenv_fails_closed_at_s0(tmp_path, monkeypatch):
+    """bundle 内出现 `backend/.env` → S0 fail-closed，不得放行安装。
+
+    摘要面只覆盖 backend/agent，`.env` 不进任何摘要——若不在此拦下，站点会静默
+    继承构建机凭据（S2 落到 <deploy-root>/backend/.env，被后端启动时加载）。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    config_path, bindings, state_dir, target, site_id, data = prepare(tmp_path)
+    bundle = Path(data["release"]["bundle"])
+    (bundle / "backend" / ".env").write_text(
+        "STP_FILE_SERVER_ADDRESS=build-host.invalid\n", encoding="utf-8",
+    )
+    report = invoke(tmp_path, dry_run=True)
+    assert report["status"] == "FAIL", report
+    assert "install.s0.hygiene" in {c["check_id"] for c in report["checks"]}, report["checks"]
+
+
+def test_bundle_with_only_example_templates_is_not_hygiene_flagged(tmp_path, monkeypatch):
+    """负向对照：入库模板 `*.example` 存在**不**应判违规（否则会破坏部署）。
+
+    `deploy/postgres/.env.example` 等 8 个模板是部署文档要求 `cp` 的对象。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    config_path, bindings, state_dir, target, site_id, data = prepare(tmp_path)
+    bundle = Path(data["release"]["bundle"])
+    for name in (".env.example", ".env.backend.example", ".env.backend.internal.example"):
+        (bundle / "backend" / name).write_text("A=\n", encoding="utf-8")
+    report = invoke(tmp_path, dry_run=True)
+    assert "install.s0.hygiene" not in {c["check_id"] for c in report["checks"]}, report["checks"]
