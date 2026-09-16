@@ -36,6 +36,14 @@ printf '%s\n' "${args[*]}" >> "$STUB_SUDO_LOG"
 if [ "${args[0]}" = "__PRIV__" ]; then
     shift_args="${args[*]:1}"
     case "$shift_args" in
+        *capabilities*)
+            # #2319：能力清单。默认给全量；STUB_WRAPPER_CAPS 可指定子集，用来模拟
+            # 「缺一个子命令但自身自洽」的旧 wrapper（selftest 仍 exit 0）。
+            if [ "${STUB_HAS_WRAPPER:-1}" = "1" ]; then
+                printf '%s\n' ${STUB_WRAPPER_CAPS:-apply-code apply-resources install-schema write-version write-digest sync-env fix-ownership deps-marker restart}
+                exit 0
+            fi
+            exit 1 ;;
         *selftest*)
             # 旧 wrapper：契约子命令缺失 → selftest 非零（tail exit 2 的等价场景）
             if [ "${STUB_WRAPPER_OLD:-0}" = "1" ]; then exit 3; fi
@@ -223,3 +231,44 @@ def test_remote_script_contains_actionable_guidance_and_no_legacy_face():
         "sudo systemctl",
     ):
         assert token not in _REMOTE_SCRIPT, f"legacy 面未退役：{token}"
+
+
+def test_old_but_self_consistent_wrapper_fails_before_any_write(sandbox):
+    """#2319：缺一个子命令、但 `selftest` 仍 OK 的旧 wrapper 必须在**任何写动作之前**收口。
+
+    这正是 #2180 删掉逐能力探针后留下的缺口：selftest 只证 wrapper 自洽，脚本会在第一次
+    调用缺失子命令处被 argparse 拒绝——而此时 apply-code/restart 已经执行（#1942 修掉的
+    半态，且失败文案只有 usage 行）。
+    """
+    result = _run(
+        sandbox,
+        STUB_WRAPPER_CAPS="apply-code write-version sync-env fix-ownership restart",
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "apply-resources" in output, "缺失的子命令要被点名"
+    assert "update_agent.yml" in output, "必须带可执行指引"
+    log = sandbox["log"].read_text(encoding="utf-8")
+    assert "apply-code" not in log and "restart" not in log and "sync-env" not in log, (
+        f"写动作不得执行：{log}"
+    )
+    assert not _broad_sudo_calls(sandbox), "失败路径不得回退裸 sudo"
+
+
+def test_required_priv_subcommands_cover_every_call_in_the_script(sandbox):
+    """守卫（#2319）：脚本里每个 `$PRIV <sub>` 调用都必须在期望集合内。
+
+    否则「新增了一个 wrapper 调用、忘同步集合」会让前置判据放行旧 wrapper——判据就又
+    变成自指的。
+    """
+    from backend.services.host_updater import _REQUIRED_PRIV_SUBCOMMANDS
+
+    script = sandbox["script"].read_text(encoding="utf-8")
+    called = set(re.findall(r'sudo "\$PRIV" ([a-z][a-z-]*)', script))
+    assert called, "未从渲染脚本里解析到任何 $PRIV 调用"
+
+    missing = called - set(_REQUIRED_PRIV_SUBCOMMANDS)
+    assert not missing, (
+        f"脚本调用了未登记的子命令 {sorted(missing)}——同步 host_updater._REQUIRED_PRIV_SUBCOMMANDS"
+    )
