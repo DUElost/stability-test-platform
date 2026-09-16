@@ -239,6 +239,9 @@ export function ExpandableHostTable({
       offline: hosts.filter(h => h.status === 'OFFLINE').length,
       degraded: hosts.filter(h => h.status === 'DEGRADED').length,
       agentAligned: aligned,
+      // #2366：把「落后」单独报出来——只报「已对齐 N/M」时，全队落后一版会读成
+      // 「口径坏了」（现场实测：观测时点的 0/48 是真实状态，不是判据 bug）。
+      agentDrift: onlineHosts.filter((h) => h.agent_code_sync_status === 'drift').length,
       agentTrackable: onlineHosts.length,
     };
   }, [hosts]);
@@ -268,6 +271,7 @@ export function ExpandableHostTable({
             {stats.agentTrackable > 0 && (
               <p className={STAT.suffix}>
                 Agent 已对齐 {stats.agentAligned}/{stats.agentTrackable}
+                {stats.agentDrift > 0 && ` · ${stats.agentDrift} 台待热更新`}
               </p>
             )}
           </button>

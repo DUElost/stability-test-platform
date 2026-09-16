@@ -103,6 +103,22 @@ export function toApiError(error: unknown): ApiError {
   });
 }
 
+/** API 错误 → 可操作分类（#2359 起；#2361 同族：HTTP 语义 → 文案映射）。
+ *
+ * 只认**结构化事实**（status），不猜文案：401/403 → `permission`、404 →
+ * `not_found`、其余带 status → `server`、无 status（网络层/超时）→ `network`。
+ * 具体文案留在调用方——同一个「404」在 Run 日志页与详情页的措辞并不相同。
+ */
+export type ApiErrorKind = "permission" | "not_found" | "network" | "server";
+
+export function classifyApiError(error: unknown): ApiErrorKind {
+  const api = toApiError(error);
+  if (api.status === 401 || api.status === 403) return "permission";
+  if (api.status === 404) return "not_found";
+  if (api.status === undefined) return "network";
+  return "server";
+}
+
 type AuthFailureHandler = () => void;
 let _authFailureHandler: AuthFailureHandler | null = null;
 

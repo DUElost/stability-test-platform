@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import type { User } from '@/utils/api';
 import { INTERACTIVE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
-import { formatDateTimeFull } from '@/utils/format';
+import { formatNaiveLocalDateTime } from '@/utils/time';
 
 interface UserTableProps {
   users: User[];
@@ -55,8 +55,8 @@ export function UserTable({ users, currentUserId, onEdit, onDelete, onToggleActi
                     {user.is_active === 'Y' ? '启用' : '禁用'}
                   </Badge>
                 </TableCell>
-                <TableCell className={TEXT.subtitle}>{formatDateTimeFull(user.created_at)}</TableCell>
-                <TableCell className={TEXT.subtitle}>{formatDateTimeFull(user.last_login)}</TableCell>
+                <TableCell className={TEXT.subtitle}>{formatNaiveLocalDateTime(user.created_at)}</TableCell>
+                <TableCell className={TEXT.subtitle}>{formatNaiveLocalDateTime(user.last_login)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-1">
                     <button
