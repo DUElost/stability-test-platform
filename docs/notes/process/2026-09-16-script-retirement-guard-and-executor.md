@@ -62,11 +62,14 @@ Class: process
 - `plan --today 2026-11-15` → 恰为 C 组 **11 条**，id 与上一轮手算的到期清单一致
   （`days_until_cooldown_expiry` = 末次执行 + 60 天，如 `monkey_setup@2.3.3` 2026-10-04）。
 
-测试期间修掉的两个真实缺陷：① `--json --guard` 恒返回 0（退出码被人类可读分支绑走）；
-② 一条 f-string 在 3.13 报 `unmatched ']'` 而 3.11 与独立文件均正常——CI 用
-**Python 3.11**（`python-version: "3.11"`、ruff `target-version="py311"`），本机是 3.13.5，
-`{{` 转义 + 同类型引号的写法在两者间行为不同。结论：新代码避免在 f-string 里内嵌引号字典键，
-并已在 `python:3.11-slim` 与本仓 venv 双解释器上 `compileall` 通过。
+测试期间修掉的两个真实缺陷：① `--json --guard` 恒返回 0（退出码被人类可读分支绑走，
+`--json` 形态正是自动化要消费的）；② 解释器版本不对称——CI 各 job 统一 **Python 3.11**、
+本机 venv 是 **3.13.5**，两个方向都实测到了：`f"{item["name"]}"`（PEP 701 同类引号嵌套）
+在 3.13 正常运行、在 3.11 是 `SyntaxError`（本机门禁绿、CI 必红）；另一条含 `{{` 转义与
+`{len(items)}` 组合的 f-string 反过来在 3.13 报 `unmatched ']'` 而 3.11 通过。
+处理：新代码一律**先取局部变量、不在 f-string 内嵌引号字典键**，并在 `python:3.11-slim`
+与本仓 venv 双解释器 `compileall` 通过后提交；该陷阱与自查命令已写入
+[`dependencies-and-quality.md`](../../development/dependencies-and-quality.md)。
 
 `python scripts/run_gates.py check:quick` → 10 gates 全过（结果见 PR）。
 
