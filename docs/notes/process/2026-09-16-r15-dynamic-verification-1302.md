@@ -13,8 +13,8 @@ Class: process
 - **结果**：归属套件 **56 passed / 0 failed**；`check_invariant_diff.py --self-test`
   与 `check_governance_surface.py --check` 全绿；容器巡检零残留。
 - 同步把 §5 / §5.1 的 R15 行升「已完成」（**R01–R15 全部完成**）。
-- `check:quick` 本基线因 **main 既有** `plan_run_abort.py` F811（与本区无关）失败，
-  不计入本区升态阻断；归属断言与治理自证已独立通过。
+- 验证当日 `check:quick` 曾因 main 上短暂 F811 红；**同日稍后复跑已全绿**
+  （10 gates），与本区无关的瞬时红灯不计入升态阻断。
 
 ### F 项 ↔ 运行断言
 
@@ -33,8 +33,8 @@ Class: process
 
 - **整目录 `backend/agent/tests/`（千级）**：否决。F03 以 env 隔离护栏精确覆盖；
   全量 Agent 套件非本区升态必需。
-- **顺手修 main 上 F811 以使 check:quick 绿**：否决。超出本 Requirement 文档回写
-  范围；另立修复单。
+- **顺手改无关业务代码**：否决。本 Requirement 仅文档回写；当日 F811 随后自行消失
+  / 被他单收口，复跑 `check:quick` 已绿。
 
 ## Verification
 
@@ -50,10 +50,11 @@ Class: process
 | invariant-diff self-test | OK |
 | gov-surface --check | OK |
 | **合计（pytest）** | **56 passed** |
-| check:quick | FAIL（main 既有 F811；非本区引入） |
+| check:quick | OK（10 gates；验证当日稍后复跑） |
 | 容器巡检 | 零残留 |
 
 ## Revisit
 
 - R15「已完成」完成首轮 15 区动态验证闭环；不含生产 auto-merge 真队列演练。
-- main 上 `schedule_agent_control_fanout` F811 应另开修复单，恢复 `check:quick`。
+- 09-15 台账审计仍开放的跟进项（非本区）：#1520 God-module 分期债、#1035
+  「批次」定义裁决、ADR-0037 联审 S2/S3/O4 排期。

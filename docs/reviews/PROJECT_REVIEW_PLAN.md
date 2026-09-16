@@ -389,7 +389,7 @@
 | R12 前端架构与交互体验 | [#1201](https://github.com/DUElost/stability-test-platform/issues/1201) | **已完成** | 09-10 | `0aab4f6e` | 12 缺陷 + 2 风险；台账已 CLOSED；**09-16 动态验证补齐**：基线 `3a717123` Vitest 归属套件 **342 passed**（#1200 Playwright harness 见既有 Note，本区不重跑），登记见 #1201 动态验证评论与 Agent Note |
 | R13 平台 AI 助手 | [#1230](https://github.com/DUElost/stability-test-platform/issues/1230) | **已完成** | 09-10 | `d11a0d62` | 15 缺陷 + 3 风险；台账已 CLOSED；**09-16 动态验证补齐**：基线 `a26cb688` 隔离 PG + Vitest 归属套件 **177 passed**（去重后），登记见 #1230 动态验证评论与 Agent Note |
 | R14 部署、运维与可观测性 | [#1266](https://github.com/DUElost/stability-test-platform/issues/1266) | **已完成** | 09-10 | `d11a0d62` | 14 缺陷 + 5 风险；台账已 CLOSED；**09-16 动态验证补齐**：基线 `e6ff7e1f` 隔离 PG + 部署/可观测契约归属套件 **301 passed**（F15 文档项无运行断言；未做真机部署/恢复），登记见 #1266 动态验证评论与 Agent Note |
-| R15 测试、CI 与工程治理 | [#1302](https://github.com/DUElost/stability-test-platform/issues/1302) | **已完成** | 09-11 | `0d523265` | 7 缺陷 + 2 风险；台账已 CLOSED；**09-16 动态验证补齐**：基线 `a789c99d` CI/devx/测试护栏归属套件 **56 passed** + invariant/gov-surface 自证 OK（`check:quick` 因 main 既有 F811 红，非本区引入），登记见 #1302 动态验证评论与 Agent Note |
+| R15 测试、CI 与工程治理 | [#1302](https://github.com/DUElost/stability-test-platform/issues/1302) | **已完成** | 09-11 | `0d523265` | 7 缺陷 + 2 风险；台账已 CLOSED；**09-16 动态验证补齐**：基线 `a789c99d` CI/devx/测试护栏归属套件 **56 passed** + invariant/gov-surface 自证 OK；同日复跑 `check:quick` 10 gates 全绿，登记见 #1302 动态验证评论与 Agent Note |
 
 **口径说明（§4.1「已完成」与动态验证）**：
 
