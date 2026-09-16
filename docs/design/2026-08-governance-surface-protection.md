@@ -41,8 +41,8 @@ L1 重议触发条件：治理面写者 >1 人，或 auto mode 成为默认工�
 | S1 | CLAUDE.md `@import` 独占一行（反引号包裹视为文档转义放行；跳过 ``` 围栏）且目标存在 | BLOCK | @import 行内失效事故 |
 | S2 | 根治理文档、文档地图、scoped CLAUDE 与 Harness 按需入口的相对链接目标存在（percent-decode、跳锚点） | BLOCK | DOC-MAP 实测断链（落地首日抓到真断链一条：DOC-MAP→ADR-0030 的 `../adr/` 层级错误） |
 | S3 | `.mdc` frontmatter 三字段齐全语义合法（值剥离包裹引号后判空） | BLOCK | 坏 frontmatter=规则静默不加载，与 S1 同故障类 |
-| S4 | pr-agent.yml 五锚点（digest pin / fallback_models / disable-auto 步骤 / 门禁命令分离 job / security 判定串） | BLOCK | #399 / #421 事故转化物防误删 |
-| S5 | ci.yml/pr-agent.yml 的 PR 门禁 job id 与 AGENTS.md 六项记载互检（CodeQL 无 workflow 文件，只查文档侧） | BLOCK | 五稿评审均人工核对过的事实固化 |
+| S4 | `pr-agent.yml` **不得存在**（advisory review 已下线；回潮须独立裁决） | BLOCK | 2026-09-16 下线：零真拦截 + 合入不等审查；取代原五锚点防误删 |
+| S5 | ci.yml 的 PR 门禁 job id 与 AGENTS.md 六项记载互检（CodeQL 无 workflow 文件，只查文档侧） | BLOCK | 五稿评审均人工核对过的事实固化 |
 | S6 | AGENTS ≤80 行/8KB、CLAUDE ≤60 行/6KB、每个 Cursor rule ≤30 行/3KB；Harness 总索引、执行契约与 scoped CLAUDE 各有独立预算（v1.12 契约分层后：正文 execution-contract.md 210 行/24500、规范附录 200 行/20000——语义面收紧、细则进附录） | BLOCK | Requirement 无关细节曾让常驻链超过 50KB；超预算必须迁往按需文档 |
 | S7 | `.claude/skills/*/SKILL.md` frontmatter 的 name 与目录一致且 description 非空 | BLOCK | 错误 frontmatter 会让技能静默不可见 |
 | S8 | CLAUDE.md 双形态（#857）：指向 `AGENTS.md` 的 symlink（内容直读），或缺省恰含 `@AGENTS.md` 单条 import | BLOCK | 导入 DOC-MAP 会把完整索引无条件带入每次会话 |
@@ -156,7 +156,7 @@ advisory 观察期被**全库枚举**替代——差异面 gate 在 main 上 dif
 | 待决点 | 裁决 |
 |--------|------|
 | skill 建设 | 先建 1 个低风险试点（测试与环境自检）；高价值部署 SOP 缓行 |
-| pr-agent findings 修复闭环 | 降为观察项：收集 1–2 月 findings 与处置数据再议 |
+| pr-agent findings 修复闭环 | **已关闭（2026-09-16）**：观察期无真拦截、唯一 security issue 为误报；workflow 下线，S4 改为禁止回潮 |
 | 回滚演练 | 下次真实回滚时补记录（runbook §5 新增表格）；连续两次不顺才升级排期 |
 | DORA 近似采集 | 暂不建；需要数据时按 synthesis 查询口径现查 |
 | skills 防空洞机制（2026-08-27 补充裁决） | L0 增 **S7**：SKILL.md frontmatter name==目录名 + description 非空（写坏=对 agent 静默不存在）；新增 `tools/dev/skill_usage_report.py` 扫本机会话转录统计真实调用——判洞只看「是否为零」（零值可靠，正数为启发式上界）；**HOLLOW 判据=存在 ≥14 天零调用**，`check:gov` 以 `--strict` 把洞变红灯 | pilot（test-env-self-check）上线次日实测已非空（25 次）|
@@ -175,3 +175,4 @@ advisory 观察期被**全库枚举**替代——差异面 gate 在 main 上 dif
 | 2026-09-10 | 新增 S13 执行契约版本一致性（#1238 契约分层的收口）：状态行 `Living vX.Y` ↔ 版本记录首项 ↔ 规范附录 ↔ DOC-MAP 行——执行契约不是 ADR、S12 不覆盖，同类漂移已第三次复发；同批 S6 值同步（正文 210 行/24500 + 附录 200 行/20000） |
 | 2026-09-12 | S12 增「头部状态行须在场且可解析」（#1524）：键位粗体 `- **状态**：`（执行契约文档形态，归 S13）与表格 `Status` 行都会让取行失败 → 该 ADR 静默退出**全部**索引一致性校验、无任何信号（ADR-0035 / ADR-0022 实测）；同批归一这两篇状态行格式（ADR-0035 键位去粗体、ADR-0022 表格 Status 行改为标准状态行） |
 | 2026-09-16 | S12 表格形态收口（#2304）：① 表格 token **锚「版本」列**（三种列布局；无版本列退回 cell 行首 token，ADR-0027 实测 1.1–1.7）——此前 6 篇表格 ADR 的「头部 ↔ 最新版本」比对**结构性休眠**（ADR-0027 例外：它另有单行 `- 版本记录：`）；② 新增**反向检查**「索引面带版本而头部无版本」；③ 同批收口 ADR-0031（头部补 v1.7 + README 主表 v1.5→v1.7 并补 v1.6/v1.7 摘要）。激活后**全库零漂移**（18 篇有版本记录的 ADR 头部与 tip 全部一致，其中最末三行倒序的 ADR-0031 也正确）；S14 集合同步改锚列位（排除 ADR-0030 正文列里的跨 ADR 引用 `2.3`——它既让 tip 假红，又让伪造引用 `ADR-0030 v2.3` 通过） |
+| 2026-09-16 | S4 改语义：`pr-agent.yml` 不得存在（advisory review 下线）；§8「findings 修复闭环」观察项关闭 |

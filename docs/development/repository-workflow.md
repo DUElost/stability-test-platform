@@ -80,8 +80,9 @@ PR/CI 恒 no-op，故**不接入**，留痕靠下述收窗纪律（论证见 iss
 - fork、`frontend-major` 和 `github_actions` 更新不进入自动合入；
 - required checks：`lint`、`CodeQL`、`pr-typecheck`、`pr-compileall`、
   `pr-agent-tests`、`pr-migrate-empty-db`；
-- PR-Agent review 是异步顾问，不是 required check；security concern 通过独立 issue
-  送达，不阻塞普通代理故障或超时。
+- PR-Agent advisory review 已下线（2026-09-16）：无自动 LLM 审查、无 `/review`
+  命令通道；安全面靠 CodeQL + 确定性门禁。历史决策见
+  [`2026-09-16-retire-pr-agent-advisory.md`](../notes/process/2026-09-16-retire-pr-agent-advisory.md)。
 
 Auto-merge 的队列与分支更新以 workflow 和
 [`scripts/ci/pr-automerge-queue.sh`](../../scripts/ci/pr-automerge-queue.sh) 为事实源。
@@ -194,7 +195,8 @@ GitHub Actions 生态更新需要人工评审。全量 CI 失败由 backstop 使
 
 - [`2026-08-14-merge-path-attention-budget.md`](../notes/process/2026-08-14-merge-path-attention-budget.md)
 - [`2026-08-29-serial-automerge-update-branch.md`](../notes/process/2026-08-29-serial-automerge-update-branch.md)
-- [`2026-08-30-pr-agent-fully-async.md`](../notes/process/2026-08-30-pr-agent-fully-async.md)
+- [`2026-08-30-pr-agent-fully-async.md`](../notes/process/2026-08-30-pr-agent-fully-async.md)（已由下线 note 取代现行语义）
+- [`2026-09-16-retire-pr-agent-advisory.md`](../notes/process/2026-09-16-retire-pr-agent-advisory.md)
 - [`2026-09-12-pr-gate-promotion-rule-1525.md`](../notes/process/2026-09-12-pr-gate-promotion-rule-1525.md)
 
 ## 文档维护

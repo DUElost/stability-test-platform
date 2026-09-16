@@ -11,9 +11,8 @@ AI 门禁 workflow——所有 AI 会话行为的上游事实源。本脚本只�
       （实测发生过 DOC-MAP 断链）
   S3  .cursor/rules/*.mdc frontmatter 三字段齐全，alwaysApply!=true 时 globs 非空
       （坏 frontmatter = 规则静默不加载，与 S1 同故障类）
-  S4  pr-agent.yml 防绕过机制锚点仍在（digest pin / fallback 空 /
-      门禁与命令 job 分离）
-  S5  required checks 文档↔workflow 互检：ci.yml/pr-agent.yml 定义的 job id
+  S4  pr-agent.yml 不得存在（advisory review 已下线；回潮须独立裁决）
+  S5  required checks 文档↔workflow 互检：ci.yml 定义的 job id
       未在 AGENTS.md 记载，或反之缺 job
   S6  常驻入口行数/字节预算，防止按需细节重新膨胀进启动上下文
   S7  .claude/skills/*/SKILL.md frontmatter：name 与目录一致、description 非空
@@ -822,29 +821,25 @@ def check_agent_note_header(label: str, text: str) -> list[str]:
     return issues
 
 
-def check_pr_agent_anchors(text: str) -> list[str]:
-    """S4: 防绕过机制锚点仍在。这些都是真实事故的转化物（#399 等）。"""
-    anchors = {
-        "镜像 digest pin": "docker://pragent/pr-agent@sha256:",
-        "fallback_models 置空": "config.fallback_models",
-        "自动 review/命令 job 分离(防产出被顶掉)": "pr-agent-comment:",
-        "security 判定": "No security concerns",
-        # 顾问模式下 security concerns 的唯一送达路径：check 颜色不再承载
-        # 该信号，issue 步一旦被删就等于「发现静默丢失」。
-        "security concerns 开 issue 兜底": "Open follow-up issue on security concerns",
-    }
-    return [
-        f"S4 pr-agent.yml: 丢失锚点「{name}」——防绕过机制被改动，需人工确认是否有意"
-        for name, needle in anchors.items()
-        if needle not in text
-    ]
+def check_pr_agent_retired(pr_agent_path: str) -> list[str]:
+    """S4: PR Agent advisory review 已下线；workflow 文件不得回潮。
+
+    2026-09-16 裁决：观察期无真拦截、唯一 durable security issue 为误报、合入
+    路径不等审查。恢复须独立裁决后改本规则，不得静默加回文件。
+    """
+    if os.path.exists(pr_agent_path):
+        return [
+            "S4 pr-agent.yml: 文件仍存在——PR Agent advisory review 已下线"
+            "（2026-09-16），不得回潮；恢复须独立裁决"
+        ]
+    return []
 
 
 def check_required_checks_doc(workflows: dict[str, str], agents_md: str) -> list[str]:
     """S5: ci.yml 的 PR 门禁 job 与 AGENTS.md 记载互检。
 
     CodeQL 由 GitHub 默认设置提供（仓库无对应 workflow 文件），只查文档侧。
-    pr-agent.yml 不再贡献 required check（顾问模式），故不在此表。
+    pr-agent.yml 已下线，不在 required check 表中。
     """
     issues: list[str] = []
     for wf, job_ids in (("ci.yml", ["lint", "pr-typecheck", "pr-compileall", "pr-agent-tests", "pr-migrate-empty-db"]),):
@@ -1080,15 +1075,12 @@ def run_check() -> int:
                 issues.append(f"S7 .claude/skills/{d}/: 缺 SKILL.md")
 
     pr_agent_path = os.path.join(ROOT, ".github", "workflows", "pr-agent.yml")
-    if os.path.exists(pr_agent_path):
-        issues += check_pr_agent_anchors(open(pr_agent_path, encoding="utf-8").read())
+    issues += check_pr_agent_retired(pr_agent_path)
 
     ci_path = os.path.join(ROOT, ".github", "workflows", "ci.yml")
     workflows = {}
     if os.path.exists(ci_path):
         workflows["ci.yml"] = open(ci_path, encoding="utf-8").read()
-    if os.path.exists(pr_agent_path):
-        workflows["pr-agent.yml"] = open(pr_agent_path, encoding="utf-8").read()
     issues += check_required_checks_doc(
         workflows, open(os.path.join(ROOT, "AGENTS.md"), encoding="utf-8").read()
     )
@@ -1531,19 +1523,14 @@ def run_self_test() -> int:
                None, None) != [],
            False)
 
-    full_pr_agent = (
-        "jobs:\n  pr-agent-review:\n"
-        "      uses: docker://pragent/pr-agent@sha256:abc\n"
-        "          config.fallback_models: '[]'\n"
-        "      - name: Open follow-up issue on security concerns\n"
-        "  pr-agent-comment:\n"
-        "          - No security concerns\n"
-    )
-    broken = full_pr_agent.replace("No security concerns", "Renamed verdict")
-    no_issue = full_pr_agent.replace("Open follow-up issue on security concerns", "x")
-    expect("S4 锚点齐全", lambda: check_pr_agent_anchors(full_pr_agent), False)
-    expect("S4 security 判定丢失", lambda: check_pr_agent_anchors(broken), True)
-    expect("S4 issue 兜底丢失", lambda: check_pr_agent_anchors(no_issue), True)
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        absent = os.path.join(tmp, "pr-agent.yml")
+        present = os.path.join(tmp, "exists.yml")
+        open(present, "w", encoding="utf-8").write("name: resurrected\n")
+        expect("S4 已下线文件不在", lambda: check_pr_agent_retired(absent), False)
+        expect("S4 回潮文件报红", lambda: check_pr_agent_retired(present), True)
 
     ok_ci = "jobs:\n  lint:\n  pr-typecheck:\n  pr-compileall:\n  pr-agent-tests:\n  pr-migrate-empty-db:\n"
     drop_ci = ok_ci.replace("  pr-typecheck:\n", "")

@@ -38,9 +38,11 @@ def test_testing_doc_does_not_advertise_sqlite_fallback():
     assert "testcontainers" in (docs_dir / "testing.md").read_text(encoding="utf-8")
 
 
-def test_pr_template_pr_agent_wording_matches_advisory_semantics():
-    """#1299: PR 模板必须与 pr-agent.yml 顾问语义一致（非 required check、不阻断合入）。"""
+def test_pr_template_does_not_advertise_retired_pr_agent():
+    """PR Agent advisory review 已下线：模板不得再引导 /review 或承诺 AI 审查。"""
     template = (ROOT / ".github" / "pull_request_template.md").read_text(encoding="utf-8")
 
-    assert "不阻断合入" in template
+    assert "PR-Agent" not in template
+    assert "PR Agent" not in template
+    assert "/review" not in template
     assert "security concerns 会阻断合入" not in template
