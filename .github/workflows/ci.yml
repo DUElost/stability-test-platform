@@ -313,6 +313,46 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      # #2268：**「支持矩阵里有这个平台」必须等价于「这条 import 链在该平台的系统解释器上
+      # 起得来」**。安装器 venv 与后端 venv 都由 `/usr/bin/python3` 建
+      # （`deploy/lib/deploy-common.sh:83`、`tools/site_config/stages.py:603`），而矩阵含
+      # Ubuntu 22.04（自带 3.10）。此前五个 job 全固定 3.11，没有任何门禁看得见这层关系：
+      # `typing.Self` 自 base 就随 main 存在，22.04 进矩阵当天即形成
+      # 「文档承诺支持 + 门禁全绿 + preflight 全绿 + 实际装不了」。
+      #
+      # 依赖刻意与 `deploy_ensure_python` 的 `pip install pydantic pyyaml "psycopg[binary]"`
+      # **同形**（不 pin、不走 lock——3.10 没有对应 lock）：本步复现的是生产安装路径的形状。
+      # 若上游哪天放弃 3.10，这一步会红，那正是矩阵承诺破掉的时刻，不该被假装仍然支持。
+      #
+      # 顺序也承重：3.10 步骤必须排在下面那个 3.11 setup **之前**，后面 `--require-hashes`
+      # 装的 dev lock 才仍落在 3.11 上。版本与 `tools/site_config/preflight.MIN_PYTHON` 的
+      # 一致性由 `tests/test_site_installer_python_floor.py` 钉住（改一处必红另一处）。
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.10"
+      - name: Import installer closure on the floor interpreter
+        run: |
+          python -m pip install --quiet pydantic pyyaml "psycopg[binary]"
+          python - <<'PY'
+          import importlib
+          import pkgutil
+          import sys
+
+          import tools.site_config as pkg
+
+          assert sys.version_info[:2] == (3, 10), f"floor step ran on {sys.version}"
+          failed = []
+          for name in sorted(mod.name for mod in pkgutil.iter_modules(pkg.__path__)):
+              try:
+                  importlib.import_module(f"tools.site_config.{name}")
+              except Exception as exc:  # 冒烟要把任何失败原样报出来
+                  failed.append(f"  tools.site_config.{name}: {type(exc).__name__}: {exc}")
+          if failed:
+              print("::error::installer import closure is not loadable on the declared floor")
+              print("\n".join(failed))
+              raise SystemExit(1)
+          print(f"installer import closure loads on Python {sys.version.split()[0]}")
+          PY
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11"

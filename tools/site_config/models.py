@@ -4,9 +4,18 @@ import ipaddress
 import re
 import unicodedata
 from pathlib import PurePosixPath
-from typing import Annotated, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+if TYPE_CHECKING:
+    # #2268：`typing.Self` 是 3.11+ 才有的名字，而安装器 venv 与后端 venv 都由
+    # `/usr/bin/python3` 建（`deploy/lib/deploy-common.sh:83`、
+    # `tools/site_config/stages.py:603`）——支持矩阵里的 Ubuntu 22.04 自带 3.10，
+    # 顶层 import 它就直接 ImportError，且 preflight 事先全绿。矩阵既然承诺 22.04，
+    # import 链就必须能在 3.10 成立：本文件有 `from __future__ import annotations`，
+    # 校验器的 `-> Self` 只是字符串，收进 TYPE_CHECKING 后运行期一行都不执行。
+    from typing import Self
 
 from pydantic import (
     AfterValidator,
