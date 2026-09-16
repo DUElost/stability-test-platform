@@ -34,6 +34,7 @@ VALID_ROOMS = [
     "plan_run:7",
     "console:con-abcdef012345",
     "console:con-0123456789abcdef0123456789abcdef",  # 32 hex 上限
+    "fleet:devices",  # #2369 静态房间
 ]
 
 INVALID_ROOMS = [
@@ -54,6 +55,8 @@ INVALID_ROOMS = [
     "console:con-" + "0" * 33,  # 33 位超上限
     "agent:5",  # agent: 是 /agent namespace 内部房间，dashboard 订阅无意义
     "job:1\n",  # 尾随空白
+    "fleet:hosts",  # 仅允许 fleet:devices
+    "fleet:",
 ]
 
 
@@ -80,6 +83,13 @@ async def test_console_room_exists_process_memory():
         assert not await _dashboard_room_exists("console", "con-000000000000")
     finally:
         inst._runs.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_fleet_devices_room_always_exists():
+    """#2369：fleet:devices 是静态房间，无 DB 实体行。"""
+    assert await _dashboard_room_exists("fleet", "devices")
+    assert not await _dashboard_room_exists("fleet", "hosts")
 
 
 @pytest.mark.asyncio
@@ -223,3 +233,12 @@ async def test_subscribe_accepts_live_console_run():
         assert ns.server.entered == [f"console:{key}"]
     finally:
         inst._runs.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_subscribe_accepts_fleet_devices_room():
+    ns = DashboardNamespace("/dashboard")
+    ns.server = _FakeSioServer()
+    await ns.on_subscribe("sid-F", {"room": "fleet:devices"})
+    await ns.on_subscribe("sid-F", {"room": "fleet:hosts"})
+    assert ns.server.entered == ["fleet:devices"]

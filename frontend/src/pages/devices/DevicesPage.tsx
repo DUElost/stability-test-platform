@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Smartphone } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { useFleetDeviceUpdates } from '@/hooks/useFleetDeviceUpdates';
 import { ExpandableDeviceTable, type DeviceTableData, type DeviceStatus } from '@/components/device/ExpandableDeviceTable';
 import DeviceBulkActionBar from '@/components/device/DeviceBulkActionBar';
 import { AddDeviceModal } from './components/AddDeviceModal';
@@ -43,6 +44,9 @@ export default function DevicesPage() {
   const isAdmin = sessionQ.data?.role === 'admin';
   const unassignedOnly = projectKey === UNASSIGNED_FILTER_VALUE;
   const effectiveProjectKey = unassignedOnly ? undefined : projectKey;
+
+  // #2369：仅设备页订阅 fleet:devices，material DEVICE_UPDATE 合流失效列表。
+  useFleetDeviceUpdates(true);
 
   const { data: devices, isLoading, error } = useQuery({
     queryKey: deviceKeys.list(projectKey, unassignedOnly),
