@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -99,6 +100,8 @@ def sandbox(tmp_path):
     (install / "agent" / "resources").mkdir()
     (install / ".env").write_text("HOST_ID=x\n", encoding="utf-8")
     (install / "venv" / "bin").mkdir(parents=True)
+    # host_updater 在 pip 前用 venv python 做 >=3.10 闸门；沙箱需真解释器（非 stub）
+    (install / "venv" / "bin" / "python").symlink_to(sys.executable)
     pip = install / "venv" / "bin" / "pip"
     pip.write_text(PIP_SHIM, encoding="utf-8")
     pip.chmod(0o755)

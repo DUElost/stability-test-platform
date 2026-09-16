@@ -192,6 +192,29 @@ def check_suite_binding_required(
     )
 
 
+def apply_step_timing_fields(
+    step_def: dict[str, Any],
+    *,
+    timeout_seconds: int | None,
+    stall_seconds: int | None,
+) -> dict[str, Any]:
+    """步骤的两个时间字段共用一条规则：**未配置就不写这个键**（#2382）。
+
+    「写 `None`」与「不写键」在 schema 上不等价：`timeout_seconds: null` 会被
+    `{"type": "integer"}` 拒掉，而省略键才表达「未配置」——Agent 据此回落
+    `STP_STEP_WALL_CLOCK_SECONDS`，未设再回落 300s
+    （`backend/agent/pipeline_engine.py::_resolve_step_wall_clock`）。
+    `stall_seconds` 从一开始就走这条规则，`timeout_seconds` 漏了，于是严格照
+    OpenAPI 省略该字段的调用方一律 422。两个字段收进同一个函数，是为了不再出现
+    「一处修法被另一个字段遗忘」。
+    """
+    if timeout_seconds is not None:
+        step_def["timeout_seconds"] = timeout_seconds
+    if stall_seconds is not None:
+        step_def["stall_seconds"] = stall_seconds
+    return step_def
+
+
 def build_lifecycle_from_steps(
     plan: Plan, steps: list[PlanStep], script_defaults: dict[tuple[str, str], dict]
 ) -> dict:
@@ -222,11 +245,13 @@ def build_lifecycle_from_steps(
             "action": f"script:{step.script_name}",
             "version": step.script_version,
             "params": merged_params,
-            "timeout_seconds": step.timeout_seconds,
             "retry": step.retry,
         }
-        if step.stall_seconds is not None:
-            step_def["stall_seconds"] = step.stall_seconds
+        apply_step_timing_fields(
+            step_def,
+            timeout_seconds=step.timeout_seconds,
+            stall_seconds=step.stall_seconds,
+        )
 
         if step.stage in ("init", "teardown"):
             lifecycle[step.stage].append(step_def)
@@ -296,12 +321,13 @@ def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
             "action": f"script:{script_name}",
             "version": script_version,
             "params": merged_params,
-            "timeout_seconds": step.get("timeout_seconds"),
             "retry": step.get("retry", 0),
         }
-        stall = step.get("stall_seconds")
-        if stall is not None:
-            step_def["stall_seconds"] = stall
+        apply_step_timing_fields(
+            step_def,
+            timeout_seconds=step.get("timeout_seconds"),
+            stall_seconds=step.get("stall_seconds"),
+        )
         if stage == "patrol":
             patrol_steps.append(step_def)
         else:
