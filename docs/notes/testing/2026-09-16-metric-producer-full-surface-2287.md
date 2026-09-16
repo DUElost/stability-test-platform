@@ -83,12 +83,14 @@ Class: testing
 ## Verification
 
 - `python -m pytest tests/test_alert_metric_producers.py tests/test_grafana_dashboard_contract.py tests/test_prometheus_alerts_contract.py -q`
-  → **15 passed**（分析器取 PR #2313 的版本；本单未合入前，main 上的分析器会把
-  `stability_build` 误判为无生产者——那正是 #2313 修的假阳性，故本单必须在其后落）。
+  → **37 passed**（含 PR #2313 合入后新增的 `.info()` / 容器锚点判别力用例；本单必须排在
+  它之后——main 上未修的分析器会把 `stability_build` 误判为无生产者，那正是 #2313 修的
+  假阳性）。
 - **全指标面棘轮红向反证**：临时在 `backend/core/metrics.py` 追加
   `dead_probe_total = Counter('stability_dead_probe_total', ...)` →
   `test_every_definition_has_a_producer` **红**，报
-  `backend/core/metrics.py:916 有定义、无任何写入点也无跨文件引用`；删除探针即绿。
+  `backend/core/metrics.py:922 有定义、无任何写入点也无跨文件引用`；删除探针即绿
+  （同一反证在合入前也对 #2313 版分析器跑过一遍）。
 - 删除后模块可导入、指标名不再存在：
   `python -c "from backend.core import metrics; assert not hasattr(metrics, 'plan_run_active')"` 等 10 条逐一断言通过。
 - `python -m pytest backend/tests/api/test_metrics_lock_wait_gauges.py -q` → **2 passed**。
