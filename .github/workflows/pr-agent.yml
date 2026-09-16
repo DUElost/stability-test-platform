@@ -58,11 +58,16 @@ jobs:
           config.log_level: INFO
           github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "review_requested"]'
           # 每次 push（含 dependabot 等 bot push）自动复评，保证当前 head 都有
-          # 审查意见；复评更新同一条 persistent comment，不刷屏。单次调用
-          # 成本低，可接受。
+          # 审查意见；复评只改那条 persistent comment——guide 正文与
+          # 「updated until commit」头部都原地写回。单次调用成本低，可接受。
           github_action_config.handle_push_trigger: "true"
           github_action_config.push_commands: '["/review"]'
           github_action_config.push_trigger_ignore_bot_commits: "false"
+          # 关掉复评附带的「**[Persistent review](…)** updated to latest commit …」
+          # 状态评论：它每复评一次单发一条（#2124 一个 PR 3 条；#2242 有实测与
+          # 镜像版本核对），而「当前 head 已复评」的信息 guide 头部已承载。
+          # 只关自动 job；/review 命令 job 保留——人工触发时那条状态行即回执。
+          pr_reviewer.final_update_message: "false"
           github.ignore_bot_pr: "false"
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"

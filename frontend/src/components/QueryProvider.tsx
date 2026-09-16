@@ -15,7 +15,6 @@ const OPERATIONAL_QUERY_KEYS = [
   ['stats-completion-trend'],
   ['hosts'],
   ['devices'],
-  ['devices-all'],
   ['runs'],
   ['results'],
   ['results-summary'],
