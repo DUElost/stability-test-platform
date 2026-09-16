@@ -280,7 +280,7 @@ def test_ensure_udev_rule_writes_fixed_content_and_reloads(wrapper, monkeypatch,
     rule_path, fake_udevadm, calls = _prepare_udev_env(wrapper, monkeypatch, tmp_path)
 
     assert wrapper.cmd_ensure_udev_rule(SimpleNamespace(), None) == 0
-    assert rule_path.read_text(encoding="utf-8") == wrapper.UDEV_RULE_LINE
+    assert rule_path.read_text(encoding="utf-8") == wrapper._udev_rule_line()
     assert stat.S_IMODE(rule_path.stat().st_mode) == 0o644
     assert calls == [
         [str(fake_udevadm), "control", "--reload"],
@@ -308,7 +308,7 @@ def test_ensure_udev_rule_rewrites_stale_content(wrapper, monkeypatch, tmp_path)
     rule_path.write_text("KERNEL==\"ttyACM*\", MODE=\"0600\"\n", encoding="utf-8")
 
     assert wrapper.cmd_ensure_udev_rule(SimpleNamespace(), None) == 0
-    assert rule_path.read_text(encoding="utf-8") == wrapper.UDEV_RULE_LINE
+    assert rule_path.read_text(encoding="utf-8") == wrapper._udev_rule_line()
 
 
 def test_ensure_udev_rule_reload_failure_is_rejected(wrapper, monkeypatch, tmp_path):
@@ -333,15 +333,52 @@ def test_ensure_udev_rule_replaces_symlink_without_following(wrapper, monkeypatc
 
     assert wrapper.cmd_ensure_udev_rule(SimpleNamespace(), None) == 0
     assert not rule_path.is_symlink()
-    assert rule_path.read_text(encoding="utf-8") == wrapper.UDEV_RULE_LINE
+    assert rule_path.read_text(encoding="utf-8") == wrapper._udev_rule_line()
     assert sentinel.read_text(encoding="utf-8") == "SENTINEL\n"
 
 
 def test_flash_primitives_constants_match_published_scripts(wrapper):
-    """与已发布 flash 脚本的同源常量逐字对齐（跨仓漂移即红）。"""
-    preflight = (ROOT / "backend/agent/scripts/flash_preflight/v1.0.1/flash_preflight.py").read_text(
-        encoding="utf-8")
+    """与**最新** flash_preflight 的同源常量逐字对齐（跨仓漂移即红）。
+
+    #2284：改指最新版本目录（原先钉死 v1.0.1）——wrapper 常量随版本演进
+    （v1.0.3 起为 0660 + legacy 0666 双形态），钉死历史版本会在下次改版时假红
+    （与 #2048「用例只钉当时版本」同一教训）。
+    """
+    base = ROOT / "backend/agent/scripts/flash_preflight"
+    latest = max(
+        (p for p in base.iterdir() if p.is_dir() and p.name.startswith("v")),
+        key=lambda p: tuple(int(seg) for seg in p.name[1:].split(".")),
+    )
+    preflight = (latest / "flash_preflight.py").read_text(encoding="utf-8")
     assert wrapper.UDEV_RULE_PATH in preflight
     assert wrapper.UDEV_RULE_LINE.strip() in preflight
+    assert wrapper.UDEV_RULE_LINE_LEGACY.strip() in preflight
     assert wrapper.USB_SYSFS_BASE == "/sys/bus/usb/devices"
     assert wrapper._MTK_VENDOR_ID == "0e8d"
+
+
+def test_ensure_udev_rule_keeps_installer_reason_comment(
+    wrapper, monkeypatch, tmp_path, capsys,
+):
+    """#2284：安装链写的「为什么是这个形态」注释不被 wrapper 重写擦掉。
+
+    幂等判定按**规则行**比对（`_udev_rule_present`），故「注释 + 目标行」的文件
+    算已就位：既不白记一次 changed，也保住 issue 建议 3 要求的理由留痕。
+    """
+    rule_path, _fake_udevadm, _calls = _prepare_udev_env(wrapper, monkeypatch, tmp_path)
+    comment = "# MTK ttyACM 0660+dialout：Agent 用户属 dialout 可写，其它本地用户不可写（#2284）\n"
+    rule_path.parent.mkdir(parents=True, exist_ok=True)
+    rule_path.write_text(comment + wrapper._udev_rule_line(), encoding="utf-8")
+
+    assert wrapper.cmd_ensure_udev_rule(SimpleNamespace(), None) == 0
+
+    assert "changed=0" in capsys.readouterr().out, "已含目标行时不得重写"
+    assert rule_path.read_text(encoding="utf-8") == comment + wrapper._udev_rule_line()
+
+
+def test_udev_rule_present_ignores_comments_and_blank_lines(wrapper):
+    line = wrapper.UDEV_RULE_LINE
+    assert wrapper._udev_rule_present(None, line) is False
+    assert wrapper._udev_rule_present(line, line) is True
+    assert wrapper._udev_rule_present("# 注释\n\n" + line, line) is True
+    assert wrapper._udev_rule_present(line.replace("0660", "0666"), line) is False

@@ -1,17 +1,18 @@
-"""刷机前置归位守卫（#2133 / ADR-0037 D5）：install / update 链保证。
+"""刷机前置归位守卫（#2133 / #2284 / ADR-0037 D5）：install / update 链保证。
 
-运行期不再装包/加组/写规则（`flash_preflight v1.0.2` 只检不修、wrapper 只做
-固定 udev 自愈），因此「provisioning 链确实保证 dialout + 0666 规则 + 依赖包」
-必须由门禁守住：
+运行期不再装包/加组/写规则（`flash_preflight` 只检不修、wrapper 只做固定 udev
+自愈），因此「provisioning 链确实保证 dialout + ttyACM 规则 + 依赖包」必须由门禁
+守住：
 
-1. `install_agent.sh`：dialout 成员、固定 0666 规则、包集合（含 t64 兜底与
-   跳过开关）；
+1. `install_agent.sh`：dialout 成员、ttyACM 规则（#2284 起按本机 dialout 组二选一：
+   0660 + GROUP=dialout / 0666 退化）、包集合（含 t64 兜底与跳过开关）；
 2. `update_agent.yml`：opt-in provisioning 段——每个任务都受
    `agent_ensure_flash_prereqs` 门控，且**位于升级门禁释放之后**（失败不得
    让门禁悬挂，#1249 教训）；
 3. `group_vars/linux_hosts.yml`：包集合与 `flash_preflight._DEFAULT_PACKAGES`
    逐项一致；
-4. 三处 0666 规则文本与 `flash_preflight v1.0.2` 常量逐字一致。
+4. 四个面的规则文本与 `flash_preflight` **最新版本**的两个形态常量逐字一致
+   （#2284：0660+dialout 与 0666 并存，车队升级渐进不破链）。
 """
 
 from __future__ import annotations
@@ -64,11 +65,14 @@ def test_install_script_adds_agent_user_to_dialout():
     assert "getent group dialout" in text, "dialout 组缺失须跳过而非失败"
 
 
-def test_install_script_writes_fixed_0666_rule():
+def test_install_script_writes_dual_form_udev_rule():
+    """#2284：install 链按本机 dialout 组二选一写规则（0660+dialout / 0666 退化）。"""
     pf = _load_preflight()
     text = _install_text()
     assert pf._UDEV_RULE_PATH in text
-    assert "UDEV_MTK_LINE='%s'" % pf._UDEV_RULE_LINE.strip() in text
+    assert "UDEV_MTK_LINE_0660='%s'" % pf._UDEV_RULE_LINE.strip() in text
+    assert "UDEV_MTK_LINE_0666='%s'" % pf._UDEV_RULE_LINE_LEGACY.strip() in text
+    assert "getent group dialout" in text, "形态选择须看本机是否存在 dialout 组"
     assert "udevadm control --reload-rules" in text
 
 
@@ -127,14 +131,40 @@ def test_update_playbook_covers_dialout_rule_packages():
     assert re.search(r"groups: dialout", text)
     assert "agent_flash_prereq_packages | join(' ')" in text
 
-    rule_task = next(
+    rule_tasks = [
         t for t in tasks
-        if t.get("ansible.builtin.copy", {}).get(
-            "dest") == "/etc/udev/rules.d/98-ttyacm-mtk.rules"
+        if t.get("ansible.builtin.copy", {}).get("dest")
+        == "/etc/udev/rules.d/98-ttyacm-mtk.rules"
+    ]
+    contents = {t["ansible.builtin.copy"]["content"].strip() for t in rule_tasks}
+    assert contents == {
+        pf._UDEV_RULE_LINE.strip(), pf._UDEV_RULE_LINE_LEGACY.strip(),
+    }, (
+        "playbook 必须写两种形态（0660+dialout / 0666）且与 flash_preflight 常量"
+        f"逐字一致，实际 {contents}"
     )
-    content = rule_task["ansible.builtin.copy"]["content"]
-    assert content.strip() == pf._UDEV_RULE_LINE.strip(), (
-        "playbook 写的 0666 规则文本必须与 flash_preflight 常量逐字一致"
+    # 两个任务互补门控：有 dialout 组走 0660，无组才 0666（#2284）
+    whens = [str(t.get("when")) for t in rule_tasks]
+    assert any("== 0" in w for w in whens), whens
+    assert any("!= 0" in w for w in whens), whens
+
+
+def test_wrapper_udev_constants_match_preflight():
+    """#2284：wrapper 窄面的两个形态常量与**最新** preflight 版本同源。"""
+    spec = importlib.util.spec_from_file_location(
+        "stp_agent_priv_prereqs", REPO_ROOT / "backend/agent/stp_agent_priv.py",
+    )
+    wrapper = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(wrapper)
+    pf = _load_preflight()
+
+    assert wrapper.UDEV_RULE_PATH == pf._UDEV_RULE_PATH
+    assert wrapper.UDEV_RULE_LINE == pf._UDEV_RULE_LINE
+    assert wrapper.UDEV_RULE_LINE_LEGACY == pf._UDEV_RULE_LINE_LEGACY
+    # 形态选择只依赖本机事实（有无 dialout 组），调用方无参数面
+    assert wrapper._udev_rule_line() in (
+        wrapper.UDEV_RULE_LINE, wrapper.UDEV_RULE_LINE_LEGACY,
     )
 
 

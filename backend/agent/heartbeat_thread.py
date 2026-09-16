@@ -113,8 +113,20 @@ class HeartbeatThread:
         `STP_ADB_REPAIR_COOLDOWN_SECONDS` 打印 done 却不生效。调用方须先
         `reset_agent_settings_caches()`（`.env` 重读后），再调本方法。
         `_last_adb_repair_at` 刻意不回退：改冷却值不应作废已消耗的冷却窗口。
+
+        #2279：读取失败**不抛**——否则 `reload_config` 会因某个坏旋钮整体失败
+        （该方法在命令处理器里无外层兜底），连带 coordinator 等后续步骤不执行。
+        失败时保持既有属性值（= 沿用上一份合法配置），记 ERROR 并返回。
         """
-        _hb = get_heartbeat_settings()
+        _hb = self._read_heartbeat_settings_safe()
+        if _hb is None:
+            logger.error(
+                "heartbeat_pacing_reload_skipped: Settings 不可用，沿用既有节奏值 "
+                "min=%s max=%s adb_repair_cooldown=%s（#2279）",
+                self._min_poll_interval, self._max_poll_interval,
+                self._adb_repair_cooldown,
+            )
+            return
         self._min_poll_interval = _hb.stp_heartbeat_interval_min
         self._max_poll_interval = _hb.stp_heartbeat_interval_max
         self._adb_repair_cooldown = _hb.stp_adb_repair_cooldown_seconds
@@ -224,11 +236,44 @@ class HeartbeatThread:
                     infos.append({"adb_state": "error", "adb_connected": False})
             return infos
 
+    def _read_heartbeat_settings_safe(self):
+        """读 `HeartbeatSettings`；失败返回 `None` 并记 ERROR 栈（**不抛**）——#2279。
+
+        心跳是 Agent 生命线：某个**可选**旋钮（ADB 自动修复冷却、节奏钳制区间）
+        取值非法，不应导致**整个 tick 不发心跳**。
+        与 #2014（`local_disk_monitor._next_wait_seconds`）同法：兜住配置异常、
+        记 ERROR（含栈）而非 debug，退化为「该可选项不启用」后心跳照常上报；
+        配置修好后下次 `reload_config` 自动恢复。
+        """
+        try:
+            return get_heartbeat_settings()
+        except Exception:  # noqa: BLE001 — 配置非法不得中断心跳（#2279）
+            logger.exception(
+                "heartbeat_settings_unavailable: 本拍跳过依赖 Settings 的可选项，"
+                "心跳继续（#2279；修正对应 env 后 reload_config 即恢复）",
+            )
+            return None
+
     def _tick(self) -> None:
         """Single heartbeat cycle: discover → compute capacity/health → HTTP POST (authoritative) → WS push (display-only)."""
         devices_list = []
         reconnected_serials: List[str] = []
         discovered_serials: set[str] = set()
+        # #2279：本拍**一次性**读取 Settings，且**读取失败不得中断心跳**。
+        #
+        # #2086 把「读配置」从构造时改为每 tick 读（`reset_agent_settings_caches()`
+        # 后新值即时生效，这是刻意的）。但 `HeartbeatSettings` 对**非数值**输入保持
+        # 严格（`_clamp_positive_seconds` 只钳「数值合法但语义非法」的 0/负值，
+        # 非数值原样返回 → pydantic 抛 `ValidationError`）。于是重载后只要某个
+        # **数值**旋钮（如 `STP_HEARTBEAT_INTERVAL_MIN`）是非数值，且主机存在 ADB
+        # fork server 冲突，下面的条件表达式就会抛 → `_safe_tick` 吞掉 →
+        # **该 tick 完全不发心跳**（`send_heartbeat` 在本函数更靠后），而进程仍活着
+        # ——表现为静默掉线。
+        #
+        # 处置：把 Settings 读取收敛到**一处**并兜住异常，退化为 `None`；调用点按
+        # 「读不到 = 不启用该可选项」处理。心跳是 Agent 的**生命线**，其可用性
+        # 不得依赖某个**可选**修复旋钮的取值是否合法。
+        heartbeat_settings = self._read_heartbeat_settings_safe()
         try:
             discovered = device_discovery.discover_devices(self._adb_path)
             infos = self._collect_device_infos(discovered)
@@ -338,7 +383,8 @@ class HeartbeatThread:
 
         if (
             adb_server_conflict
-            and get_heartbeat_settings().adb_auto_repair_enabled
+            and heartbeat_settings is not None
+            and heartbeat_settings.adb_auto_repair_enabled
             and active_count == 0
         ):
             now = time.monotonic()
