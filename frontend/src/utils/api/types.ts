@@ -1487,6 +1487,21 @@ export interface RunContextExtractSummary {
   existing: number;
   merge_xls_copied: number;
   archived: number;
+  /** #2186：缺口清单（有界，前 `_MISSING_ITEMS_MAX` 条），与 `missing` 同源累加。 */
+  missing_items?: string[];
+  /** #2186：缺口总数（清单可能被上限截断，总数不会）。 */
+  missing_total?: number;
+  /** #766：同 basename 已存在而跳过的 merge 报表数。 */
+  merge_xls_skipped_same_name?: number;
+  /** #386：同 basename 未进 jira、保持 REMOTE 的行数（内容差异时人工复核）。 */
+  same_basename_left_remote?: number;
+}
+
+/** #2174：逐平台 merge 结果（`run_context.merge_platforms`，可观测不改控制流）。 */
+export interface RunContextMergePlatforms {
+  /** 平台 → 结果码。未知结果码由消费侧**原样露出**，类型层不收成枚举。 */
+  platforms?: Record<string, string>;
+  recorded_at?: string;
 }
 
 export interface PlanRunContext {
@@ -1500,6 +1515,14 @@ export interface PlanRunContext {
   upload_summary?: RunContextUploadSummary;
   /** #300 P3-4: 提取完成度（run_extract_sync 写入）。 */
   extract?: RunContextExtractSummary;
+  /** #2174：逐平台 merge 结果（`dedup_scan._record_merge_platforms` 写入）。 */
+  merge_platforms?: RunContextMergePlatforms;
+  /**
+   * #2288 口径说明：`run_context` 在后端声明为 `Optional[dict]`
+   * （`backend/api/schemas/plan_run.py`），故 `tests/test_api_response_shape_contract.py`
+   * 的模型对拍**结构上覆盖不到本字段的键集合**——这里登记的是写入方当下的形状，
+   * 新增键仍需写入侧自觉同步（前后端类型同步守卫跟踪于 #2032）。
+   */
   [key: string]: unknown;
 }
 
@@ -1896,6 +1919,11 @@ export interface PlanRunLogEventsPayload {
   data_authority: 'device_log_event';
   total: number;
   items: PlanRunLogEvent[];
+  /**
+   * #2288：该 run 的 DLE 里**实际出现过**的平台全集（不随 `limit`/`platform` 收窄）。
+   * 筛选选项一旦派生自「已加载行」，单平台主导 + `MAX_LIMIT=500` 就永远翻不到其它平台。
+   */
+  platforms?: string[];
 }
 
 /** 去重产物行（`PlanRunArtifact`）。对应后端 `DedupArtifactOut`。 */

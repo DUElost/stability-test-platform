@@ -39,6 +39,9 @@ function statusChip(status: HostOpItem['status']): string {
       return STATUS_CHIP.success;
     case 'failed':
       return STATUS_CHIP.destructive;
+    case 'canceled':
+      // 取消 ≠ 失败：中性色，别用红色报警
+      return STATUS_CHIP.muted;
     case 'running':
     case 'pending':
       return STATUS_CHIP.warning;
@@ -57,6 +60,8 @@ function statusLabel(status: HostOpItem['status']): string {
       return '成功';
     case 'failed':
       return '失败';
+    case 'canceled':
+      return '已取消';
     case 'skipped':
       return '跳过';
     default:
@@ -98,14 +103,16 @@ export default function HostOperationPanel({
     let running = 0;
     let success = 0;
     let failed = 0;
+    let canceled = 0;
     let skipped = 0;
     for (const op of ops) {
       if (op.status === 'pending' || op.status === 'running') running += 1;
       else if (op.status === 'success') success += 1;
       else if (op.status === 'failed') failed += 1;
+      else if (op.status === 'canceled') canceled += 1;
       else if (op.status === 'skipped') skipped += 1;
     }
-    return { running, success, failed, skipped };
+    return { running, success, failed, canceled, skipped };
   }, [ops]);
 
   const isHotUpdateBatch = ops.length > 0 && ops.every((op) => op.kind === 'hot_update');
@@ -182,6 +189,11 @@ export default function HostOperationPanel({
               <span>
                 失败 <b className="font-mono text-foreground">{summary.failed}</b>
               </span>
+              {summary.canceled > 0 && (
+                <span data-testid="host-op-summary-canceled">
+                  已取消 <b className="font-mono text-foreground">{summary.canceled}</b>
+                </span>
+              )}
               {summary.skipped > 0 && (
                 <span>
                   跳过 <b className="font-mono text-foreground">{summary.skipped}</b>

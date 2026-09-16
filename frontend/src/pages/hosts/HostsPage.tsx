@@ -193,6 +193,13 @@ export default function HostsPage() {
       if (ev.ok) {
         toast.success(`主机 ${ev.label} Agent 安装完成`);
         queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+      } else if (ev.status === 'CANCELED') {
+        // #2255：取消 ≠ 失败（与 S5 的 agent_install_canceled 同口径）——别报红
+        toast.info(
+          ev.error
+            ? `主机 ${ev.label} 的安装已中止：${ev.error}`
+            : `主机 ${ev.label} 的安装已取消（取消不是失败，可随时复跑）`,
+        );
       } else {
         toast.error(
           `主机 ${ev.label} Agent 安装失败: ${ev.error ?? ev.status}`,
@@ -288,7 +295,10 @@ export default function HostsPage() {
     // LiveConsole 终态回调（仅展开行会触发）；与 hook 轮询双通道，markTerminal 幂等
     if (status === 'SUCCESS') {
       markTerminal(hostId, 'success');
-    } else if (status === 'FAILED' || status === 'CANCELED') {
+    } else if (status === 'CANCELED') {
+      // #2255：显式取消 ≠ 失败（与 S5 的 agent_install_canceled 同口径）
+      markTerminal(hostId, 'canceled');
+    } else if (status === 'FAILED') {
       markTerminal(hostId, 'failed', status);
     }
   };
@@ -751,7 +761,7 @@ export default function HostsPage() {
             {hotUpdatePanelOps ? '热更新进度' : '安装进度'}
             {installPending || hotUpdateOpPending
               ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
-              : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
+              : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败${hostOps.some((o) => o.status === 'canceled') ? ` / ${hostOps.filter((o) => o.status === 'canceled').length} 已取消` : ''}${hostOps.some((o) => o.status === 'skipped') ? ` / ${hostOps.filter((o) => o.status === 'skipped').length} 跳过` : ''})`}
           </Button>
         )}
         {retiredToggle}

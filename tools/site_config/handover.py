@@ -164,12 +164,17 @@ def _resolve(
     evidence: list[str] = []
     missing: list[str] = []
     failed: list[str] = []
+    blocked_evidence: list[str] = []
     for check_id in item.stage_checks:
         status = stages.get(check_id)
         if status is None:
             missing.append(check_id)
         elif status == "PASS":
             evidence.append(f"{check_id}(install:{status})")
+        elif status == "BLOCKED":
+            # #2283：BLOCKED 是**正常验收结果**（如零 Agent / 无 ONLINE 设备），
+            # 不是失败——此前并入 failed 会让 handover 判 FAIL 且不写文件。
+            blocked_evidence.append(f"{check_id}(install:{status})")
         else:
             failed.append(f"{check_id}(install:{status})")
     for check_id in item.verify_checks:
@@ -178,6 +183,8 @@ def _resolve(
             missing.append(check_id)
         elif status == "PASS":
             evidence.append(f"{check_id}(verify:{status})")
+        elif status == "BLOCKED":
+            blocked_evidence.append(f"{check_id}(verify:{status})")
         else:
             failed.append(f"{check_id}(verify:{status})")
 
@@ -185,6 +192,13 @@ def _resolve(
     if failed:
         return failure(
             "evidence_failed", location="$.acceptance", role="site", check_id=check_id,
+        )
+    if blocked_evidence:
+        return blocked(
+            check_id, "site", "$.acceptance", "evidence_blocked",
+            f"{item.title}：证据为 BLOCKED（{', '.join(sorted(blocked_evidence))}）——"
+            "该结果不代表失败，但也不构成通过证据。",
+            "；".join(item.pending),
         )
     if runs < item.requires_runs:
         return blocked(
@@ -316,12 +330,16 @@ def _report(
     saved: str | None = None,
     verify_provided: bool = False,
 ) -> dict:
+    failed = any(check.status == "FAIL" for check in checks)
     return {
         "stage": "handover",
-        "status": "FAIL" if any(check.status == "FAIL" for check in checks) else "PASS",
+        "status": "FAIL" if failed else "PASS",
         "summary": (
             "P1 acceptance evidence mapped from this site's own install and verify artifacts; "
             "entries without evidence stay BLOCKED and the pending list is part of the handover."
+            # #2283：BLOCKED 不再阻断写文件（它是正常验收结果）；只有 FAIL 阻断，
+            # 且此时显式说明「没写文件」——否则 /site/ 的固定链接只会静默 404。
+            + (" No handover file was written because at least one item FAILED." if failed else "")
         ),
         "checks": [asdict(check) for check in checks],
         "deferred_checks": [],

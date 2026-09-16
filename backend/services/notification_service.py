@@ -788,7 +788,10 @@ def _emit_notification_socketio(
 
 
 # #2054：站内路径 = 单个前导斜杠；`//`（协议相对）与 `/\` 一律不算站内。
-_INTERNAL_LINK_RE = re.compile(r"^/(?![/\\])")
+# #2288：再拒绝 TAB/LF/CR —— WHATWG 解析会移除这三个字符，`/\t/evil.com` 移除后即
+# `//evil.com`（协议相对、跨源），却能通过只挡 `/` 与 `\` 的旧判据。与前端
+# `notificationTarget.ts` 的同名判据同步收紧（同一事实不留两套标准）。
+_INTERNAL_LINK_RE = re.compile(r"^/(?![/\\\t\n\r])")
 
 
 def _resolve_alert_link(labels: Dict[str, Any], annotations: Dict[str, Any]) -> Any:

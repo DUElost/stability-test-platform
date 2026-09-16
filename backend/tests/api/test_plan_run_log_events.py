@@ -171,3 +171,45 @@ def test_watcher_summary_reports_links_made_by_reconcile_sweep(
     link_stats = resp.json()["data"]["archive"]["link_stats"]
     assert link_stats["linked_signals"] == 1
     assert link_stats["link_rate"] == 1.0
+
+
+def test_log_events_returns_platform_universe(
+    client, auth_headers, db_session, sample_device
+):
+    """#2288：响应带该 run 的平台**全集**，且不随 `platform`/`limit` 收窄。
+
+    前端筛选选项据此渲染。旧做法是前端从「已加载行」派生：最新一页恰好全是 MTK
+    （单平台主导 + `detected_at DESC` 的常见形态）时只剩一个选项 → 整行筛选隐藏，
+    UNISOC 永远翻不到，`MAX_LIMIT=500` 也救不了。
+    """
+    pr, job, now = _seed_plan_run(db_session, sample_device)
+    for idx, platform in enumerate(["MTK", "MTK", "UNISOC"]):
+        db_session.add(DeviceLogEvent(
+            id=uuid4(),
+            serial=sample_device.serial,
+            platform=platform,
+            event_type="AEE",
+            event_subtype="KE",
+            detected_at=now,
+            state="REMOTE",
+            local_path=f"/local/aee/2288-{idx}",
+            remote_path=f"/nfs/devices/2288/{idx}",
+            host_id=str(sample_device.host_id),
+            job_id=job.id,
+            plan_run_id=pr.id,
+        ))
+    db_session.commit()
+
+    resp = client.get(f"/api/v1/plan-runs/{pr.id}/log-events", headers=auth_headers)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["platforms"] == ["MTK", "UNISOC"], "全集按平台名字典序，供直接渲染 chip"
+
+    # 筛到单一平台 + 极小窗口时全集**不得**跟着收窄（否则选项集自噬、切不回去）
+    narrowed = client.get(
+        f"/api/v1/plan-runs/{pr.id}/log-events?platform=MTK&limit=1",
+        headers=auth_headers,
+    ).json()["data"]
+    assert narrowed["platforms"] == ["MTK", "UNISOC"]
+    assert len(narrowed["items"]) == 1, "items 仍受 limit 约束"
+    assert narrowed["total"] == 2, "total 随 platform 筛选收窄（与全集语义区分）"

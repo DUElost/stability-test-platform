@@ -17,6 +17,7 @@ from backend.core.database import get_db
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
+from backend.services.plan_run_abort import abort_pending_job_ids
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
 
@@ -55,9 +56,11 @@ def list_active_jobs_by_device(
 
     def _abort_pending(j: JobInstance) -> bool:
         pr = pr_map.get(j.plan_run_id) if j.plan_run_id is not None else None
-        if pr is None or pr.run_context is None:
+        if pr is None:
             return False
-        return isinstance(pr.run_context, dict) and "abort_requested" in pr.run_context
+        # #2270：主体感知判据——「键存在」会把同 run 的**旁主机**也算成待中止（host 级
+        # abort 不写 run 级时钟，reaper 永不回收它们 → 热更新门禁永久 409）。
+        return j.id in abort_pending_job_ids(pr.run_context, [(j.id, j.host_id)])
 
     return [
         HostActiveJob(
