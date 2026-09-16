@@ -18,7 +18,9 @@
 
 1. 解析 `backend/**/*.py`（排除 `tests/`、已发布脚本目录、alembic、resources），
    收集 `X = Counter("stability_x", ...)` 形态的定义 → 指标名 ↔ 标识符；
-2. **写入点** = mutator 调用链里出现该标识符，覆盖四种真实形态：
+2. **写入点** = mutator 调用链里出现该标识符（名单见 `_MUTATORS`，它必须与
+   `_CONSTRUCTORS` 的**全部**指标类型对齐——#2286 的假阳性就是名单只写了
+   Counter/Gauge/Histogram/Summary 的方法、漏了 `Info.info()`），覆盖四种真实形态：
    - `foo_total.inc()`（直接导入后调用）
    - `metrics.unlinked_fixable_total.inc()`（模块属性访问）
    - `saq_queue_depth_gauge.labels(...).set(...)`（**别名导入**，
