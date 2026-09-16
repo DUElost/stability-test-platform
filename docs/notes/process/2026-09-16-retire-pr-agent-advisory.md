@@ -36,5 +36,6 @@ Class: process
 
 - 若出现「合入后才发现、且确定性 gate/CodeQL 都漏掉」的高危变更 ≥2 次，再议窄语义
   专用门禁（不要恢复通用 LLM review 默认全开）。
-- 仓库 secret `PR_AGENT_LLM_API_KEY` 可在确认无其他消费者后由管理员删除（本 PR 不碰
-  secrets）。
+- 仓库 secret `PR_AGENT_LLM_API_KEY` 与早期试点遗留的 `DEEPSEEK_API_KEY` 均可在确认
+  无其他消费者后由管理员删除（下线 PR 不碰 secrets；残面清理见
+  [`2026-09-16-pr-agent-residual-cleanup.md`](2026-09-16-pr-agent-residual-cleanup.md)）。

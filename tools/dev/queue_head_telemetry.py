@@ -522,8 +522,8 @@ def run_self_test() -> int:
     check("behind.actionable", r["actionable"], False)
     check("behind.duration", r["blocked_duration"], "2h0m")
 
-    # 6. 非 required 的失败不得计入阻塞
-    other = {**_GREEN, "name": "pr-agent-review", "conclusion": "FAILURE"}
+    # 6. 非 required 的失败不得计入阻塞（假名：任意非门禁 check）
+    other = {**_GREEN, "name": "non-required-advisory", "conclusion": "FAILURE"}
     r = classify(integration="READY", checks=[_GREEN, other], required=["lint"],
                  mergeable="MERGEABLE", merge_state="CLEAN", behind_by=0, now=now)
     check("nonrequired.reason", r["reason_code"], "NO_BLOCKER")
