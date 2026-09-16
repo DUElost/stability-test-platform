@@ -176,6 +176,7 @@ export default function HostsPage() {
     setPanelOpen: setOpPanelOpen,
     startInstallBatch,
     startHotUpdateBatch,
+    cancelInstall,
     markTerminal,
     closePanel,
     isHostOpBusy,
@@ -824,6 +825,7 @@ export default function HostsPage() {
         ops={hostOps}
         onClose={closePanel}
         onTerminalStatus={handleInstallTerminalStatus}
+        onCancelInstall={cancelInstall}
       />
     </PageContainer>
   );
