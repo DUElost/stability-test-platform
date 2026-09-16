@@ -138,9 +138,17 @@ elif [ -f /etc/redhat-release ]; then
     fi
 fi
 
-# 检查 Python 版本
+# 检查 Python 版本（Agent 依赖 python-dotenv>=1.2.3，要求 >=3.10；fail-closed）
 PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
 echo_info "Python 版本: $PYTHON_VERSION"
+# portable major.minor gate（不依赖 python -c，避免异常解释器路径）
+if ! echo "$PYTHON_VERSION" | awk -F. '{
+    maj = $1 + 0; min = $2 + 0;
+    exit !(maj > 3 || (maj == 3 && min >= 10))
+}'; then
+    echo_error "Agent requires Python 3.10+ (python-dotenv>=1.2.3); found ${PYTHON_VERSION:-unknown}"
+    exit 1
+fi
 
 # 1. 创建用户和组
 echo_info "创建专用用户..."
@@ -321,6 +329,11 @@ fi
 
 # 6. 安装依赖
 echo_info "安装 Python 依赖..."
+# 既有 venv 可能仍绑在旧系统 Python（例如主机已升到 3.10+ 但 venv 仍是 3.9）
+if ! "$INSTALL_DIR/venv/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+    echo_error "Agent venv Python < 3.10 (need >=3.10 for python-dotenv>=1.2.3); recreate venv and retry"
+    exit 1
+fi
 if [ -f "$INSTALL_DIR/agent/requirements.txt" ]; then
     "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/agent/requirements.txt" -q
 else

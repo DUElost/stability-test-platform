@@ -335,6 +335,11 @@ if [ "$NEED_PIP" -eq 1 ]; then
     else
         echo "INFO: requirements.txt unchanged but deps marker missing/stale ($INSTALLED_REQ_SHA != $NEW_REQ_SHA), retrying pip install"
     fi
+    if ! "$INSTALL_DIR/venv/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
+        echo "ERROR: Agent venv Python < 3.10 (need >=3.10 for python-dotenv>=1.2.3); upgrade host Python and recreate venv, then retry hot-update"
+        echo "STP_DEPS_REFRESHED=0"
+        exit 1
+    fi
     "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/agent/requirements.txt" -q --disable-pip-version-check
     PIP_RC=$?
     if [ "$PIP_RC" -ne 0 ]; then
