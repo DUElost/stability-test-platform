@@ -92,13 +92,27 @@ issue 的「建议修法 1」本就点名了 `reload_from_settings`、「验收�
   ③ `reload_from_settings` 不抛、沿用既有值（heartbeat 与 coordinator 两侧）；
 - **负向对照** `test_tick_still_sends_heartbeat_without_adb_conflict`：
   无 ADB 冲突时（短路未读 Settings）坏旋钮不影响心跳；
-- **全套 agent 回归**：`pytest backend/agent/tests/ -q` → 23 failed / **2067 passed**；
-  与干净 `origin/main` 基线（23 failed / 2059 passed）**失败集合逐行 diff 完全一致**
-  （23 例为既有失败，本改动净增 4 例通过、**零新增失败**）；
+- **全套 agent 回归**：`./scripts/run_pytest.sh backend/agent/tests/ -q`（**文档指定姿势**，
+  `docs/development/testing.md:23`）→ **2086 passed，0 failed**；
+- **⚠️ 归因更正（留痕）**：我最初直接用 `python -m pytest backend/agent/tests/`，得到
+  23 failed——并在 PR 描述中写成「既有失败」。**该归因是错的**：那 23 例全部因缺
+  `JWT_SECRET_KEY`（`backend/core/security.py:23` 抛 `RuntimeError`），即**我的调用方式
+  未按文档加载 `.env.test`**，非仓库既有缺陷。改用文档指定的 `run_pytest.sh` 后
+  **0 failed**。两处结论：①「零新增失败」依然成立（两种 runners 下失败集合都未变）；
+  ② 措辞应为「**我的环境搭错**」而非「既有失败」——后者会误导读者以为仓库有 23 个已知坏测试；
+- **顺带确认一条安全边界**：我一度试 `source .env.backend` 补 env（23 → 1 failed），
+  剩下的 `test_env_isolation.py::test_agent_tests_never_load_production_database_url`
+  是**刻意护栏**（R15-F03 / #1295）——`.env.backend` 指向生产库，**不该**被 Agent 测试加载；
+  正确来源是 `.env.test`；
 - `ruff check` 三个文件 → All checks passed；
 - `check_governance_surface.py --check` → S1–S14、S5x 全绿。
 
 ## Revisit
+
+- **测试姿势**：本单暴露我未按 `docs/development/testing.md` 指定的 `run_pytest.sh`
+  跑 Agent 测试，导致误判 23 例为「既有失败」。后续**一律用该脚本**（它自动加载
+  `.env.test`）；worktree 内需存在 `.venv`（脚本硬编码 `$ROOT/.venv/bin/python`）
+  ——可软链主检出的 `venv`，但**不要**把该软链提交。
 
 - **`__init__` 路径仍严格**（`heartbeat_thread.py:76`）：构造时若旋钮非法会抛，
   由 `main.py` 的启动路径处理。本单**未**改（启动期失败是「起不来」而非「静默掉线」，
