@@ -149,11 +149,18 @@ def test_build_remote_script_retries_pip_when_deps_marker_stale():
     assert "INSTALLED_REQ_SHA=" in script
     assert 'NEED_PIP=1' in script
     assert 'INSTALLED_REQ_SHA" != "$NEW_REQ_SHA"' in script
+    # pip 前 fail-closed：venv Python >=3.10（python-dotenv>=1.2.3）
+    py_gate = "sys.version_info >= (3, 10)"
+    assert py_gate in script
+    assert "Agent venv Python < 3.10" in script
     mark = 'sudo "$PRIV" deps-marker --sha "$NEW_REQ_SHA"'
     assert mark in script
     # 成功后才写标记；失败路径仍 exit 1 且不 restart（既有）
     pip_fail = script.index("pip install failed")
     assert pip_fail < script.index(mark)
+    assert script.index(py_gate) < script.index(
+        '"$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/agent/requirements.txt"'
+    )
     assert "service NOT restarted" in script
 
 

@@ -22,7 +22,7 @@ sudo apt update && sudo apt upgrade -y
 ### 1.2 安装必要依赖
 
 ```bash
-# 安装 Python 3.8+ 和 pip
+# 安装 Python 3.10+ 和 pip（Agent 依赖 python-dotenv>=1.2.3 要求 >=3.10）
 sudo apt install -y python3 python3-pip python3-venv
 
 # 安装 ADB
