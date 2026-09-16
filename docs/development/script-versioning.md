@@ -136,8 +136,11 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
 ```
 
 它按 `PlanStep.script_name + script_version` 统计配置引用。候选版本通过
-`PUT /api/v1/scripts/{id}` 设置 `is_active=false`；仍被 Plan 引用时接口返回
-409 `SCRIPT_STILL_REFERENCED`。
+`DELETE /api/v1/scripts/{id}`（专用软退役，审计 `action=deactivate`）或
+`PUT /api/v1/scripts/{id}` 设 `is_active=false`（审计 `action=update`）下线；两者
+共用 `_ensure_script_can_be_deactivated` 同一守卫，仍被 Plan 引用时返回
+409 `SCRIPT_STILL_REFERENCED`。重新激活只有 `PUT {"is_active": true}` 一条路，且
+无守卫（不做引用校验）。
 
 退役保留版本目录，只让版本退出活动目录。不要删除历史版本目录：删除会触发不可变
 门禁，也会破坏历史 PlanRun 的重放与追溯。
@@ -145,3 +148,17 @@ python -m backend.scripts.check_unreferenced_script_versions [--json] [--name fl
 `refs == 0` 只代表没有当前 Plan 配置引用，不代表没有历史运行。退役前还应查看
 `GET /api/v1/scripts/{id}/usage` 的 `run_count`、`success_rate` 和 `versions_used`；
 配置与近期运行两个维度都为零时更稳妥。
+
+三条配套事实（#735 A 批 50 条退役实测，论证见
+[2026-09-16-script-retire-channel](../notes/process/2026-09-16-script-retire-channel-735.md)）：
+
+- **`usage` 的执行事实窗口被 `PLAN_RUN_RETENTION_DAYS` 截断**：库内 run 只覆盖保留期，
+  `versions_used` 为空 = 「留存窗口内零执行」，不等于「从未执行」；更早的使用无库内证据。
+- **退役不被扫描复活**：`scan_script_root` 对 `is_active` 只做单向管理（目录缺失即停用），
+  目录仍在的已停用行永不复活——再激活是显式运维动作。反过来的坑是**种子迁移**：
+  已应用的 seed 迁移在 `upgrade()` 分支里显式 `is_active = true`，因此空库重建/灾备会
+  复活退役状态。退役是生产数据事实，不经迁移链表达（迁移丢操作者身份与 `audit_logs`）；
+  漂移收口归 #2055 与 #735 长效机制。
+- **核验退役结果不能用 `GET /api/v1/scripts?name=<脚本>`**：该端点没有 `name` 过滤参数
+  （传入被静默忽略），按版本字符串筛选会命中其他脚本族的同名版本而误判「未生效」。
+  正确姿势：取 `GET /api/v1/scripts?is_active=true` 后按 `(name, version)` 二元组对拍。

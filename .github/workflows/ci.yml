@@ -235,6 +235,15 @@ jobs:
           python tools/dev/check-script-version-immutability.py \
             --base "origin/${{ github.base_ref || github.ref_name }}"
 
+      # alembic revision 不可变检查（#2258 / #2046）：已合入 main 的 revision 被改写
+      # 或删除即红（停在其后的库不会再执行被插入的祖先，check_alembic_at_head 的等值
+      # 判定判不出来）；唯一豁免 = 同一 PR 为被改写者附了重放迁移（#1717 形态）。
+      - name: alembic revision 不可变检查
+        run: |
+          python tools/dev/check_alembic_revision_immutability.py --self-test
+          python tools/dev/check_alembic_revision_immutability.py \
+            --base "origin/${{ github.base_ref || github.ref_name }}"
+
       # 差异面不变量检查（#855 覆盖图 §7.1 差集收缩）：context-only 不变量的
       # 产物侧检查（Pydantic v1 API/复数表名/裸 pytest），BLOCK——2026-09-07
       # 升格（精度以全库枚举验证，观察期对差异面 gate 结构性失效）；
