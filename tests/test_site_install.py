@@ -1024,6 +1024,44 @@ def test_first_install_without_agents_defers_the_export(tmp_path, monkeypatch):
     assert _exports_file(tmp_path).read_text(encoding="utf-8") == ""
 
 
+def test_upgrade_without_agents_keeps_the_existing_export(tmp_path, monkeypatch):
+    """#2315：声明为空 **≠** 拆除导出。
+
+    现场（238 city-b）：升级命令不带 `--agents-inventory` 时报告 `PASS export_deferred`，
+    同时把 exports 文件写成空并 `exportfs -ra` → Agent 侧挂载点还在但写不进
+    （`mount_status.ok=false`），站点共享存储静默失效。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    with_agents = _exporting_site(
+        tmp_path, agents=_agent_config(tmp_path, target="198.51.100.7"), name="site-agents.yaml",
+    )
+    ops = FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        commands={"python3", "systemctl", "nginx", "exportfs"},
+    )
+    first = invoke(tmp_path, config_path=with_agents, ops=ops)
+    assert first["status"] == "PASS", first
+    published = _exports_file(tmp_path).read_text(encoding="utf-8")
+    assert "198.51.100.0/24(" in published
+
+    no_agents = _exporting_site(tmp_path, agents=[], name="site-no-agents.yaml")
+    ops2 = FakeOps(
+        hostname="control-i3.synthetic.invalid",
+        mounts={str(tmp_path / "mnt/share")},
+        commands={"python3", "systemctl", "nginx", "exportfs"},
+    )
+    second = invoke(tmp_path, config_path=no_agents, ops=ops2)
+
+    assert second["status"] == "PASS", second
+    assert "export_kept" in codes(second)
+    assert _exports_file(tmp_path).read_text(encoding="utf-8") == published, "既有导出被改写了"
+    assert not any(tuple(call[:2]) == ("exportfs", "-ra") for call in ops2.calls), (
+        "保留路径不应重载导出表（重载本身无害，但没必要动它）"
+    )
+
+
 def test_dry_run_plans_the_export_without_writing(tmp_path):
     """dry-run 不得声称已发布：报告写的是计划，磁盘上不能有文件。"""
     prepare(tmp_path)

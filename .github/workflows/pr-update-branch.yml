@@ -2,7 +2,7 @@ name: PR update branch if behind
 
 on:
   workflow_run:
-    workflows: ["CI", "PR Agent (advisory review)", "CodeQL"]
+    workflows: ["CI", "CodeQL"]
     types: [completed]
 
 permissions: {}

@@ -6,7 +6,9 @@ Agent CST」三面矛盾（差 15 小时，审计与心跳窗口整体错位）�
 
 1. 目标时区必须引用 `agent_timezone`（站点声明经 install_options 下发）；
 2. 不得回退成硬编码的目标/偏移字面量；
-3. 期望偏移必须由目标时区现算（避免换时区时忘记改偏移）。
+3. 期望偏移必须由目标时区现算（避免换时区时忘记改偏移）；
+4. #2317：`timedatectl` 需要 system D-Bus——无 bus 的目标必须有**文件级回退**
+   （zoneinfo 链接 + /etc/timezone），且回退后仍走同一条断言。
 """
 
 from __future__ import annotations
@@ -44,3 +46,54 @@ def test_controller_timezone_is_the_fallback_not_a_hardcode():
     assert "tz_controller" in expr
     controller = str(_vars()["tz_controller"])
     assert "/etc/timezone" in controller or "timedatectl" in controller
+
+
+def _tasks() -> list:
+    plays = yaml.safe_load(PLAYBOOK.read_text(encoding="utf-8"))
+    return plays[0]["tasks"]
+
+
+def _task(name_prefix: str) -> dict:
+    return next(t for t in _tasks() if t.get("name", "").startswith(name_prefix))
+
+
+def test_set_timezone_has_a_file_level_fallback():
+    """#2317：`timedatectl` 连不上 system bus 时必须退化为文件级对齐。
+
+    容器 / 精简镜像上没有 system D-Bus，`timedatectl set-timezone` 直接非零退出——重装
+    被阻断（I4 实验室 10.99.0.11/12 现场）。文件层面（zoneinfo 链接 + /etc/timezone）
+    同样能对齐，故用 block/rescue 兜住。
+    """
+    task = _task("Set timezone to")
+
+    assert "block" in task and "rescue" in task, "缺 rescue —— 无 bus 目标会直接判失败"
+    rescue_names = [step.get("name", "") for step in task["rescue"]]
+    assert any("file level" in name for name in rescue_names), rescue_names
+
+    fallback = next(step for step in task["rescue"] if "file level" in step.get("name", ""))
+    script = str(fallback["ansible.builtin.shell"])
+    assert "ln -sfn /usr/share/zoneinfo/" in script and "/etc/localtime" in script, script
+    assert "/etc/timezone" in script, "文件级回退必须同时写 /etc/timezone（zoneinfo 链接之外的第二面）"
+
+
+def test_rescue_reports_why_timedatectl_failed():
+    """失败路径要可读（不再只有一句「非零返回」）。"""
+    task = _task("Set timezone to")
+    debug = next(
+        (step for step in task["rescue"] if step.get("ansible.builtin.debug")), None,
+    )
+    assert debug is not None, "rescue 未说明原因"
+    msg = str(debug["ansible.builtin.debug"]["msg"])
+    assert "rc=" in msg and "timedatectl" in msg, msg
+
+
+def test_target_shape_is_asserted_before_any_write():
+    """#2317：文件级回退把 tz_target 拼进路径/写入 /etc/timezone——先用形状断言兜住。"""
+    names = [t.get("name", "") for t in _tasks()]
+    shape_idx = next(i for i, n in enumerate(names) if "zoneinfo name" in n)
+    set_idx = next(i for i, n in enumerate(names) if n.startswith("Set timezone to"))
+    assert shape_idx < set_idx, "形状断言必须在写入动作之前"
+
+    assert_task = _tasks()[shape_idx]
+    that = [str(clause) for clause in assert_task["ansible.builtin.assert"]["that"]]
+    assert any("is match(" in clause and "tz_target" in clause for clause in that), that
