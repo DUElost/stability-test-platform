@@ -34,7 +34,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { normalizeWatcherTimeScope, shouldShowDispatchGate, normalizeDispatchStateForRun } from '@/hooks/plan-run/planRunDetailUtils';
 import { usePlanRunDetailData } from '@/hooks/plan-run/usePlanRunDetailData';
 import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
-import { api, toApiError } from '@/utils/api';
+import { api, loadErrorCopy } from '@/utils/api';
 import type { DeviceLinkStatus, DeviceUiStatus, WatcherTimeScope } from '@/utils/api/types';
 
 export default function PlanRunDetailPage() {
@@ -179,6 +179,9 @@ export default function PlanRunDetailPage() {
   }
 
   if (runQ.isError) {
+    const runErrorCopy = loadErrorCopy(runQ.error, {
+      notFound: '执行记录不存在或已被清理（可能已过期回收）。',
+    });
     return (
       <div className="space-y-3">
         <Button
@@ -189,9 +192,11 @@ export default function PlanRunDetailPage() {
           <ArrowLeft className="mr-1 h-4 w-4" /> 返回列表
         </Button>
         <ErrorState
-          title="加载 PlanRun 失败"
-          description={runQ.error ? toApiError(runQ.error).message : '请检查网络连接或稍后重试'}
-          onRetry={() => runQ.refetch()}
+          // #2361：404 是「资源不存在」，不是网络问题——服务端 detail 是英文
+          // `plan run not found`，直接透出既不本地化也把人引向查网络。
+          title={runErrorCopy.retryable ? '加载 PlanRun 失败' : '执行记录不存在'}
+          description={runErrorCopy.description}
+          onRetry={runErrorCopy.retryable ? () => runQ.refetch() : undefined}
         />
       </div>
     );

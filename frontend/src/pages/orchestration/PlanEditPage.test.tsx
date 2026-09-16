@@ -169,11 +169,14 @@ describe('PlanEditPage', () => {
     expect(api.plans.get).toHaveBeenCalledTimes(2);
   });
 
-  it('renders new-plan workspace with saved badge and disabled save until dirty', async () => {
+  // #2384：新 Plan 服务端还没有这条记录——`!isDirty` 只说明「相对空模板没改过」。
+  // 三态由本用例与下方两条已存在 Plan 的用例共同锁住：待创建 / 未保存 / 已保存。
+  it('shows 待创建 (not 已保存) for a new plan and switches to 未保存 on first edit', async () => {
     renderPage('/orchestration/plans/new');
 
     expect(await screen.findByText('新建 Plan')).toBeInTheDocument();
-    expect(screen.getByText('已保存')).toBeInTheDocument();
+    expect(screen.getByText('待创建')).toBeInTheDocument();
+    expect(screen.queryByText('已保存')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /创建/ })).toBeDisabled();
     expect(screen.getByTestId('plan-chain-panel')).toBeInTheDocument();
     expect(screen.getByTestId('plan-canvas')).toBeInTheDocument();

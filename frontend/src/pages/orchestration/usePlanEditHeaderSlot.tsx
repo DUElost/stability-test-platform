@@ -63,6 +63,14 @@ export function usePlanEditHeaderSlot(form: PlanEditHeaderFormLike, ready: boole
             >
               <AlertCircle className="w-3 h-3" /> 未保存
             </span>
+          ) : form.isNew ? (
+            // #2384：新 Plan 服务端还没有这条记录——`!isDirty` 只说明「相对空模板没改过」，
+            // 把它当成「已保存」是错误事实陈述（同屏的「创建」还是灰的、左侧卡片写着草稿）。
+            <span
+              className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_CHIP.muted} border border-border`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground" /> 待创建
+            </span>
           ) : (
             <span
               className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_CHIP.success} border border-success`}
