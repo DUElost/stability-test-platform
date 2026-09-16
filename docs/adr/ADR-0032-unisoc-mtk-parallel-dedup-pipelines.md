@@ -221,13 +221,16 @@ MTK 形态**（`ExpType␠` / `DeviceId`）——即工具内部已做列名归�
 - **平台侧发布路径未验证**：B3 spike 验证的是**工具能力**（`-merge_files_list` 消费 15 列
   UNISOC 输入并产出归一表头），**未**经控制面 HTTP 全链路——即 `merge/unisoc/` 在
   **平台侧**（`run_merge_sync` → `PlanRunArtifact` 登记 → 发布）的路径仍待端到端确认。
-  **收口进度（2026-09-16）**：控制面**三段一致**已由 #2307 单测覆盖——发布落
+  **收口进度（2026-09-16）**：控制面**三段一致**由 #2307 单测覆盖——发布落
   `merge/{platform}/` → `PlanRunArtifact.storage_uri` 同形 →（含 jira bundle 落点）
   下游 `_merge_uri_is_platform_partitioned()` 判真，并附不传 `platform` 的 flat 反向例；
-  「零覆盖」不再成立。残余仅剩**真实 run** 的核对，触发条件不变。
-  触发条件：首次真实 UNISOC run 走完归档链时按 `run_context.merge_platforms` 核对。
-  跟踪：**#2253**（该项的独立验证单，本项尚未触发故须保持活载体——#2307 正文的
-  `Closes #2253` 曾使其随合入自动关闭，2026-09-16 已重开并收窄至残余范围）。
+  **真实 run 核对亦已完成（2026-09-16）**：触发条件（首次真实 UNISOC run 走完归档链，
+  按 `run_context.merge_platforms` 核对）已发生且核对通过——真实 run **400/399/397** 上
+  三条判据（`storage_uri` 含 `/merge/unisoc/`、中心 `dedup/{run}/merge/unisoc/` 盘上
+  产物、jira bundle 报告同分区；DB + 盘上双重确认）全部成立，证据见 **#2253**
+  2026-09-16 10:28 核对评论。**本项已收口**：验证单 **#2253** 终局关闭、不再作活载体
+  （其间 #2307 正文的 `Closes #2253` 曾使其随合入自动关闭，2026-09-16 重开收窄后
+  随核对完成关闭）。
 - **列名差异的长期风险**：工具当前对 `ExpType`/`DeviceCount` → `ExpType␠`/`DeviceId` 做了
   归一，但该归一**未见于文档**、属工具内部行为。若上游工具改版或引入侧参数差异，
   可能出现「列数仍 15、语义已错位」的静默失败。触发条件：工具升级或新增平台时，

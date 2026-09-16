@@ -385,6 +385,29 @@ def test_full_install_is_idempotent_and_keeps_keys(tmp_path, monkeypatch):
     assert "upgrade head" not in joined
 
 
+def test_s0_state_record_matches_emitted_checks(tmp_path, monkeypatch):
+    """#2404：S0 的记录必须与**真实发出**的检查同源（硬编码会漂）。
+
+    238 现场形态：记录只写 `[install.s0.digest, install.bindings]`，漏掉
+    `install.s0`(target_confirmed) → handover 按 ID 取证据时 MS-01 永远判「缺证据」。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    prepare(tmp_path)
+    report = invoke(tmp_path)
+    assert report["status"] == "PASS", report
+
+    state = json.loads((tmp_path / "state/install-state.json").read_text(encoding="utf-8"))
+    s0 = next(entry for entry in state["stages"] if entry["stage"] == "S0")
+    emitted = {
+        check["check_id"]
+        for check in report["checks"]
+        if check["check_id"] == "install.s0" or check["check_id"].startswith("install.s0.")
+        or check["check_id"] == "install.bindings"
+    }
+    assert emitted <= set(s0["checks"]), (sorted(emitted), s0["checks"])
+    assert "install.s0" in s0["checks"], s0["checks"]
+
+
 def test_landed_tree_keeps_symlinks(tmp_path, monkeypatch):
     """S2 落地必须原样保留符号链接（copytree 默认解引用会改变内容摘要）。"""
     monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)

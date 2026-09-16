@@ -51,13 +51,3 @@ export const FLEET_DEVICES_SUBSCRIPTION = 'fleet:devices';
 export function consoleSubscription(runId: string): string {
   return `console:${runId}`;
 }
-
-/** Job 步骤日志：room `job:{id}` */
-export function jobLogsSubscription(id: number | string): string {
-  return `job:${id}`;
-}
-
-/** 单次 run 步骤日志：room `run:{id}` */
-export function runLogsSubscription(id: number | string): string {
-  return `run:${id}`;
-}
