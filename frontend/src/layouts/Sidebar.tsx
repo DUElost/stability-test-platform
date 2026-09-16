@@ -1,26 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard,
-  Smartphone,
-  ListTodo,
-  Server,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
   X,
-  TestTube2,
-  FileBox,
-  AlertCircle,
-  Rocket,
-  Code2,
-  CalendarClock,
-  HardDrive,
-  Wifi,
-  FolderKanban,
-  Layers,
   Sparkles,
 } from 'lucide-react';
+
 import { cn } from '@/lib/utils';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { BrandLogo } from '@/components/brand/BrandLogo';
@@ -30,60 +17,11 @@ import {
   navLinkClass,
 } from '@/design-system/tokens';
 
-interface NavItem {
-  path: string;
-  label: string;
-  icon: React.ElementType;
-  /** 与 router AdminRoute 对齐，非 admin 不展示 */
-  adminOnly?: boolean;
-}
-
-interface NavGroup {
-  label: string;
-  items: NavItem[];
-}
+import { navGroups, type NavItem } from './navItems';
 
 // FRONTEND_NAV_IA_REDESIGN v1.3（2026-08-28 二次反馈：按使用频率分层，非组内重排）：
 // 一级=高频常驻（工作区/分析报告）；二级=中频折叠组（资源）；三级=低频收角落
 // （「更多功能」折叠组 + admin 管理页移入右上角 UserMenu 下拉）。路由 path 全保持。
-const navGroups: NavGroup[] = [
-  {
-    label: '工作区',
-    items: [
-      { path: '/', label: '仪表盘', icon: LayoutDashboard },
-      { path: '/projects', label: '项目登记簿', icon: FolderKanban },
-      { path: '/orchestration/plans', label: 'Plan 管理', icon: FileBox },
-      { path: '/execution/plan-execute', label: '执行 Plan', icon: Rocket },
-      { path: '/execution/plan-runs', label: '执行记录', icon: ListTodo },
-    ],
-  },
-  {
-    label: '分析报告',
-    items: [
-      { path: '/results', label: '测试结果', icon: TestTube2 },
-      { path: '/issue-tracker', label: '问题追踪', icon: AlertCircle },
-    ],
-  },
-  {
-    // 中频：排查/维护期使用，默认折叠
-    label: '资源',
-    items: [
-      { path: '/hosts', label: '主机集群', icon: Server },
-      { path: '/devices', label: '物理设备', icon: Smartphone },
-      { path: '/script-management', label: '脚本库', icon: Code2 },
-      { path: '/test-suites', label: '用例套件', icon: Layers },
-      { path: '/storage', label: '文件服务器', icon: HardDrive, adminOnly: true },
-    ],
-  },
-  {
-    // 低频长尾：有但不必显眼
-    label: '更多功能',
-    items: [
-      { path: '/wifi', label: 'WiFi 资源池', icon: Wifi },
-      { path: '/schedules', label: '定时调度', icon: CalendarClock },
-    ],
-  },
-];
 
 interface SidebarProps {
   onNavigate?: () => void;

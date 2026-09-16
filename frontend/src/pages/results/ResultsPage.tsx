@@ -30,12 +30,10 @@ import {
 } from '@/components/ui/table';
 import { ClickableRow } from '@/components/ui/clickable-row';
 import { ProjectFilterSelect, ProjectKeyBadge } from '@/components/project/ProjectFilterSelect';
-import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { KPI_TONE, LAYOUT, STAT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 export default function ResultsPage() {
-  useDocumentTitle('测试结果');
   const navigate = useNavigate();
   // ADR-0029：页面级项目筛选（D5 快照语义——后端按 plan_run.project_id 过滤）
   const [projectKey, setProjectKey] = useState<string | undefined>(undefined);

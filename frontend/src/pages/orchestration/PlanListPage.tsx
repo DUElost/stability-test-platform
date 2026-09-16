@@ -14,7 +14,6 @@ import {
 import { planKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
-import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { api, toApiError, type Plan } from '@/utils/api';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
@@ -58,7 +57,6 @@ function SpecialtyFilterSelect({
 }
 
 export default function PlanListPage() {
-  useDocumentTitle('Plan 编排');
   const navigate = useNavigate();
   const toast = useToast();
   const confirmDialog = useConfirm();

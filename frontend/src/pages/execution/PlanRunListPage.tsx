@@ -27,7 +27,6 @@ import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
 import { KPI_TONE, LAYOUT, STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { formatDateTimeFull, formatDurationSeconds, parseIsoToDate } from '@/utils/format';
-import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 /** 列表状态筛选：全部 + 常用终态/运行态；排队合并 QUEUED+PRECHECK */
@@ -63,7 +62,6 @@ function formatPassRate(run: PlanRun): string {
 }
 
 export default function PlanRunListPage() {
-  useDocumentTitle('Plan 执行记录');
   const navigate = useNavigate();
   // ADR-0029：页面级项目筛选（无全局选择器/跨页跟随）
   const [projectKey, setProjectKey] = useState<string | undefined>(undefined);

@@ -19,7 +19,6 @@ import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { PageSkeleton } from '@/components/ui/loading-skeleton';
 import { ProjectFilterSelect } from '@/components/project/ProjectFilterSelect';
-import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { useToast } from '@/hooks/useToast';
 import { LAYOUT, TEXT } from '@/design-system';
@@ -35,7 +34,6 @@ function invalidateSuites(queryClient: ReturnType<typeof useQueryClient>) {
 }
 
 export default function TestSuitesPage() {
-  useDocumentTitle('用例套件');
   const navigate = useNavigate();
   const toast = useToast();
   const queryClient = useQueryClient();
