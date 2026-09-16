@@ -29,7 +29,7 @@ Class: process
 | I-7 剩余（`extract.missing` 无清单） | **#2186** | 主诉已随 PR #2174 实施，本条只承载下钻能力 |
 | I-9 剩余（`ok({...})` 端点未覆盖） | **#2187** | 主诉已随 PR #2174 实施（轴线 C） |
 | I-12 中心存储结构重排落地 | **#2188** | 落地跟踪单；决策权威在 ADR-0025 修订前，不在本单 |
-| I-13 merge 执行位置无状态化落地 | **#2189** | 落地跟踪单；B 段须与 ADR-0033 同推 |
+| I-13 merge 执行位置无状态化落地 | **#2189** | 落地跟踪单；**B 段已裁为 B0（2026-09-16）**——不提前 B，改为把 merge 实例绑定登记进 ADR-0027 v1.8 清单第 7 条（B 仍是目标态，仍须与 ADR-0033 同推） |
 | ~~I-10 `aee/AGENTS.md` UNISOC 路径过期~~ | ~~—~~ | **查重命中 [#2016](https://github.com/DUElost/stability-test-platform/issues/2016)（OPEN）第 4a 项**——它已覆盖 `AGENTS.md:19-20` 与 `:52` 的同一漂移（且比本条多一处）。**不新立**，本条只作收口输入 |
 | I-11 实现规格 9 处漂移 | — | 归 #1050 与 #735，本条不新立（原已如此登记） |
 | I-1 ～ I-4、I-7 主诉 | — | **已随 PR #2174 实施**，不补建 issue（PR 即载体） |
@@ -243,7 +243,7 @@ E-2 / E-4 / E-5 仍需另行采集（脚本内已显式列为 not covered）。
 - **性质**：改变中心存储契约与生命周期，属 ADR-0025（方案 C 存储模型）域。**本台账不预设方案**，只登记为待裁决输入；若裁决立项，按"决策实体唯一性"先做主题查重，作为 ADR-0025 修订推进
 - **参考方向（未裁决）**：`raw/`（短 TTL）· `report/scan|merge/` · `delivery/`（长 TTL）· `_meta/{run}.json`（用 manifest 替代"扫目录推完备性"）
 
-### I-13 merge 执行位置（ADR-0025 / ADR-0033 域）—— **已裁决：先 A**
+### I-13 merge 执行位置（ADR-0025 / ADR-0033 域）—— **已裁决：先 A；B 段裁为 B0（不提前）**
 
 - **类型 / 严重度**：方向级 / P2（2026-09-15 owner 裁决；方案与效果判据见
   [中心存储与 merge 位置方案提案](../architecture/2026-09-15-center-storage-and-merge-locus-proposal.md) §裁决记录）
@@ -251,6 +251,12 @@ E-2 / E-4 / E-5 仍需另行采集（脚本内已显式列为 not covered）。
   依赖顺序上 **R3（D-1）先于本项**
 - **证据**：`backend/services/dedup_scan.py:344-346`（工具固定输出到控制面本机 `{工具目录}/merge_result/{ts}/`）、`:768-807`（再发布到中心）、`:350`（跨进程 flock `#1072`）
 - **性质**：控制面因此成为有状态的处理节点（本地磁盘 + 工具目录 + 锁）。改变此项会触及 ADR-0033 的工具宿主模型，故不并入 ADR-0032 v0.8，单独登记
+- **B 段裁决（2026-09-16，owner 裁 B0）**：依提案 [§3.1](../architecture/2026-09-15-center-storage-and-merge-locus-proposal.md) 的重评输入，
+  **不提前 B**（前置 ADR-0033 未落地、其包存储为条件落地、Phase 2 样板同批、A 残留与 2026-08-09 评审同向、多实例仍 opt-in）；
+  改为把 merge 的实例绑定**登记进 [ADR-0027](../../adr/ADR-0027-control-plane-horizontal-scaling.md) v1.8 清单第 7 条** + 启动告警
+  （`dedup_scan.multi_instance_merge_warning` / `backend/main.py`）。**B1 / B2 的触发条件见提案 §3.1**
+- **同族待取证**：`extract`（`POST /plan-runs/{id}/dedup/extract` × SAQ `extract_task`）与 merge 同为「手动 API × SAQ」双路径，
+  且它直接写**共享**中心目录；**本轮未下结论**，单列评估（避免只修 merge 而漏同形态处）
 
 ---
 
