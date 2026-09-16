@@ -10,6 +10,7 @@ import { PageContainer } from '@/components/layout';
 import { TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useToast } from '@/hooks/useToast';
 import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
 
 const PAGE_SIZE = 50;
@@ -64,12 +65,19 @@ export default function PlanRunLogsPage() {
   const [search, setSearch] = useState(''); // 防抖后的实际查询关键字
   const [page, setPage] = useState(0); // 0-based,与 PlanRunEventStream 对齐
   const [isExporting, setIsExporting] = useState(false);
+  const toast = useToast();
 
   // 300ms 防抖：输入即时回显，查询按稳定值发起
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 已生效的搜索值（#2087：只有它真的变了才复位分页）。 */
+  const appliedSearch = useRef('');
   useEffect(() => {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
+      // #2087：值未变化时不动——否则「输入后又改回原词」会在 300ms 后
+      // 无条件 setPage(0)，把用户刚翻到的页静默回退。
+      if (appliedSearch.current === searchInput) return;
+      appliedSearch.current = searchInput;
       setSearch(searchInput);
       setPage(0);
     }, SEARCH_DEBOUNCE_MS);
@@ -143,7 +151,9 @@ export default function PlanRunLogsPage() {
     if (!id || isExporting) return;
     setIsExporting(true);
     try {
-      const kw = search.trim();
+      // #2087：取**输入框可见值**（与「导出当前筛选与搜索命中的全部事件」的承诺一致）
+      // ——防抖窗口内 `search` 还是上一个关键词，用它导出会与用户看到的不符。
+      const kw = searchInput.trim();
       const rows: PlanRunEvent[] = [];
       const seen = new Set<string>();
       let duplicates = 0;
@@ -208,10 +218,16 @@ export default function PlanRunLogsPage() {
         a.remove();
         URL.revokeObjectURL(url);
       }, 0);
+    } catch (err) {
+      // #2087：分块导出最多 40 次请求，任一块失败此前是 unhandled rejection
+      // ——不下载、不提示、按钮重启。与 PlanRunDetailPage 的导出提示同口径。
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('plan_run_logs_export_failed', err);
+      toast.error(`导出失败: ${msg}`);
     } finally {
       setIsExporting(false);
     }
-  }, [id, search, stageFilter, severityFilter, isExporting, isTerminal]);
+  }, [id, searchInput, stageFilter, severityFilter, isExporting, isTerminal, toast]);
 
   if (!id || Number.isNaN(id)) {
     return (
