@@ -235,6 +235,7 @@ E-2 / E-4 / E-5 仍需另行采集（脚本内已显式列为 not covered）。
 - **类型 / 严重度**：方向级 / P2（2026-09-15 owner 裁决；方案与效果判据见
   [中心存储与 merge 位置方案提案](../architecture/2026-09-15-center-storage-and-merge-locus-proposal.md) §裁决记录）
 - **裁决**：推进序 **D → A**（先 `_meta/{run}.json` 不动目录树，再做 `dedup/` 拆 `report/scan|merge` + `devices`/`jira` 分 TTL）；B/C 暂缓；**E-1 阈值先采数再定**
+- **D 步方案（2026-09-16，裁决输入）**：见提案 [§2.3](../architecture/2026-09-15-center-storage-and-merge-locus-proposal.md)——先定读者再定写者；建议 **W2（写侧登记）+ 每 host 分片清单**，否决 W2 则 D 的收益归零（待评审，见该节 §2.3.4 四项未决）
 - **证据**：
   - 事件目录双份：`backend/agent/event_uploader.py:390-396`（`devices/{run}/{event_id}/{name}/`）vs `backend/services/dedup_extract.py:285-308`（`jira/{run}/{name}/`）——体积最大的一类，直到 retention 才同批清（`backend/scheduler/cron_scheduler.py:246`）
   - merge xls 双份：`backend/services/dedup_scan.py:788-807` vs `backend/services/dedup_extract.py:323-367`
