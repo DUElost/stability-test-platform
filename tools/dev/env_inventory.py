@@ -169,6 +169,7 @@ _INTERNAL_ONLY: dict[str, str] = {
     "STP_WATCHER_AEE_RECONCILE_HOSTS": "目标机本地选择性对账清单（现场排障临时用，默认空=全量）",
     "SUDO_UID": "sudo 调用时由系统注入（stp_agent_priv）",
     "SUDO_GID": "sudo 调用时由系统注入（stp_agent_priv）",
+    "SUDO_USER": "sudo 调用时由系统注入（stp_agent_priv；SUDO_UID 缺失时的兜底）",
 }
 
 
