@@ -132,8 +132,12 @@ def _bcrypt_compatible_password(value: str) -> str:
     哈希」成为可能。校验在哈希之前进行,超限走 Pydantic 422。
     """
     if len(value.encode("utf-8")) > _BCRYPT_MAX_BYTES:
+        # #2406：文案面向**操作者**（建户 / 注册 / 改密三处入口共用本字段类型），
+        # 故给出可执行的边界说明而不是英文技术串——原先那句
+        # "password must not exceed 72 bytes..." 会原样出现在前端提示里，
+        # 用户既看不懂、也不知道该改多短。
         raise ValueError(
-            "password must not exceed 72 bytes when UTF-8 encoded (bcrypt limit)"
+            "密码不能超过 72 字节（bcrypt 限制；中文约 24 字）"
         )
     return value
 
