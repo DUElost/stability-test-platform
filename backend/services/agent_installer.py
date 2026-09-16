@@ -7,7 +7,7 @@ import os
 import shlex
 import tempfile
 import threading
-import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -248,6 +248,9 @@ def start_install_agent_runconsole(
     label = f"install-agent {prep.get('ip') or host_id}"
 
     def on_complete(_run: Any) -> None:
+        # ADR-0044 D3：安装的终态落库由 console 回调负责（不再有等待它的 SAQ 作业）。
+        # 顺序：先落库（best-effort，内部自吞异常），再清理临时 inventory 与活跃登记。
+        _record_install_outcome(host_id, _run, initiated_by)
         try:
             cleanup()
         finally:
@@ -295,72 +298,75 @@ def start_install_agent_runconsole(
     }
 
 
-def wait_install_agent_runconsole(
-    console_run_id: str,
-    *,
-    timeout: float = 900,
-    poll_interval: float = 1.0,
-) -> dict[str, Any]:
-    """阻塞等待 RunConsole 安装结束（SAQ worker 线程内调用）。"""
-    rc = RunConsole.instance()
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        st = rc.status(console_run_id)
-        if st is None:
-            log_path = str(rc.log_file_path(console_run_id))
-            return {
-                "ok": False,
-                "rc": -1,
-                "console_run_id": console_run_id,
-                "log_path": log_path,
-                "message": "console run not found",
-            }
-        status = st.get("status")
-        if status in ("SUCCESS", "FAILED", "CANCELED"):
-            exit_code = st.get("exit_code")
-            ok = status == "SUCCESS"
-            log_path = str(rc.log_file_path(console_run_id))
-            return {
-                "ok": ok,
-                "rc": exit_code if exit_code is not None else (0 if ok else 1),
-                "console_run_id": console_run_id,
-                "log_path": log_path,
-                "message": "ok" if ok else f"ansible exit {exit_code}",
-            }
-        time.sleep(poll_interval)
+def install_outcome_snapshot(console_run_id: str) -> dict[str, Any]:
+    """安装运行的终态快照（状态接口复用；记录已消失时 found=False）。
 
-    log_path = str(rc.log_file_path(console_run_id))
+    ADR-0044 D4：log_path 由 run_id 推导，不依赖内存里是否还留着运行记录——
+    终态记录保留 1h（STP_RUN_CONSOLE_TERMINAL_RETENTION_SECONDS），而日志文件一直在盘上。
+    """
+    console = RunConsole.instance()
+    state = console.status(console_run_id)
+    log_path = str(console.log_file_path(console_run_id))
+    if state is None:
+        return {"found": False, "status": None, "exit_code": None, "log_path": log_path}
     return {
-        "ok": False,
-        "rc": -1,
-        "console_run_id": console_run_id,
+        "found": True,
+        "status": state.get("status"),
+        "exit_code": state.get("exit_code"),
         "log_path": log_path,
-        "message": f"install timeout after {int(timeout)}s",
     }
 
 
-def run_install_agent_sync(
-    host_id: str,
-    initiated_by: str | None = None,
-    *,
-    console_run_id: str | None = None,
-    install_options: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """同步执行安装：可传入已启动的 console_run_id，或在此函数内启动并等待。"""
-    if console_run_id:
-        return wait_install_agent_runconsole(console_run_id)
-    started = start_install_agent_runconsole(
-        host_id, initiated_by=initiated_by, install_options=install_options
-    )
-    if not started.get("ok"):
-        return {
-            "ok": False,
-            "rc": -1,
-            "console_run_id": started.get("console_run_id"),
-            "log_path": None,
-            "message": started.get("message", "start failed"),
-        }
-    cid = started["console_run_id"]
-    result = wait_install_agent_runconsole(cid)
-    result.setdefault("console_run_id", cid)
-    return result
+def _record_install_outcome(host_id: str, run: Any, initiated_by: str | None) -> None:
+    """ADR-0044 D3：安装终态写审计 + 维护 agent_installed 标记（口径与旧 SAQ 作业一致）。
+
+    在 RunConsole 的终态回调里执行，故必须自吞异常：审计失败不得影响清理与状态上报。
+    """
+    try:
+        from backend.core.audit import record_audit
+        from backend.models.host import Host
+
+        status = getattr(run, "status", None)
+        exit_code = getattr(run, "exit_code", None)
+        run_id = getattr(run, "run_id", None)
+        ok = status == "SUCCESS"
+        log_path = str(RunConsole.instance().log_file_path(run_id)) if run_id else None
+        db = SessionLocal()
+        try:
+            host = db.get(Host, host_id)
+            if host is not None:
+                extra = dict(host.extra or {})
+                # ADR-0044 D3：终态结果落 DB——重启后状态查询仍能回放这一次安装。
+                extra["last_install"] = {
+                    "console_run_id": run_id,
+                    "status": status,
+                    "ok": ok,
+                    "ended_at": datetime.now(timezone.utc).isoformat(),
+                }
+                if ok:
+                    extra["agent_installed"] = True
+                    extra["agent_installed_at"] = datetime.now(timezone.utc).isoformat()
+                host.extra = extra
+            record_audit(
+                db,
+                action="install_agent",
+                resource_type="host",
+                resource_id=host_id,
+                details={
+                    "host_id": host_id,
+                    "ip": host.ip if host else None,
+                    "ok": ok,
+                    "rc": exit_code,
+                    "log_path": log_path,
+                    "console_run_id": run_id,
+                    "message": "ok" if ok else f"console {status}",
+                    "initiated_by": initiated_by,
+                },
+                username=initiated_by,
+            )
+            db.commit()
+        finally:
+            db.close()
+        logger.info("install_agent_outcome host=%s status=%s ok=%s", host_id, status, ok)
+    except Exception:
+        logger.warning("install_agent_outcome_audit_failed host=%s", host_id, exc_info=True)

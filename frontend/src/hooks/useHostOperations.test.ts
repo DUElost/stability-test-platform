@@ -32,7 +32,7 @@ describe('useHostOperations', () => {
       .mockResolvedValueOnce({
         ok: true,
         host_id: 'a',
-        saq_key: 'install:a',
+        log_path: '/var/log/stp/con-test.log',
         console_run_id: 'con-a',
         room: 'console:con-a',
         status: 'running',
@@ -41,7 +41,7 @@ describe('useHostOperations', () => {
       .mockResolvedValueOnce({
         ok: true,
         host_id: 'b',
-        saq_key: 'install:b',
+        log_path: '/var/log/stp/con-test.log',
         console_run_id: 'con-b',
         room: 'console:con-b',
         status: 'running',
@@ -52,23 +52,24 @@ describe('useHostOperations', () => {
     vi.mocked(api.agentInstall.status)
       .mockResolvedValueOnce({
         host_id: 'a',
-        saq_key: 'install:a',
-        status: 'active',
+        log_path: '/var/log/stp/con-test.log',
+        status: 'running',
         console_status: 'RUNNING',
+        console_found: true,
       })
       .mockResolvedValueOnce({
         host_id: 'a',
-        saq_key: 'install:a',
-        status: 'complete',
+        log_path: '/var/log/stp/con-test.log',
+        status: 'succeeded',
         console_status: 'SUCCESS',
-        result: { ok: true, rc: 0, message: 'ok' },
+        console_found: true,
       })
       .mockResolvedValueOnce({
         host_id: 'b',
-        saq_key: 'install:b',
-        status: 'complete',
+        log_path: '/var/log/stp/con-test.log',
+        status: 'succeeded',
         console_status: 'SUCCESS',
-        result: { ok: true, rc: 0, message: 'ok' },
+        console_found: true,
       });
 
     const onTerminal = vi.fn();
@@ -127,10 +128,10 @@ describe('useHostOperations', () => {
     });
     vi.mocked(api.agentInstall.status).mockResolvedValueOnce({
       host_id: 'y',
-      saq_key: 'install:y',
-      status: 'complete',
+      log_path: '/var/log/stp/con-test.log',
+      status: 'failed',
       console_status: 'FAILED',
-      result: { ok: false, rc: 1, message: 'ansible exit 1' },
+      console_found: true,
     });
 
     const onTerminal = vi.fn();

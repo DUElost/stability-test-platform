@@ -850,8 +850,7 @@ class TestHostInstallEndpoint:
         started = {"ok": True, "console_run_id": "con-inst-1", "room": "console:con-inst-1"}
         start_mock = MagicMock(return_value=started)
         monkeypatch.setattr(hosts_route, "start_install_agent_runconsole", start_mock)
-        monkeypatch.setattr(hosts_route, "enqueue_sync", MagicMock())
-        self._online_host(db_session, "inst-opts")
+        host = self._online_host(db_session, "inst-opts")
 
         resp = client.post(
             "/api/v1/hosts/inst-opts/install",
@@ -879,6 +878,13 @@ class TestHostInstallEndpoint:
         assert row.details["agent_api_url"] == "https://stp.example.com"
         assert row.details["install_options"]["agent_install_root"] == "/srv/stability-test-agent"
         assert row.details["console_run_id"] == "con-inst-1"
+        # ADR-0044：安装由 RunConsole 自持——响应不再有 saq_key，且 DB 上留下
+        # 「这台主机跑过一次安装」的持久证据（状态接口据此区分 lost 与 idle）。
+        body = resp.json()
+        assert "saq_key" not in body
+        assert body["log_path"]
+        db_session.refresh(host)
+        assert (host.extra or {})["install_console_run_id"] == "con-inst-1"
 
     def test_install_without_body_still_works(
         self, client, db_session, admin_headers, monkeypatch,
@@ -891,12 +897,12 @@ class TestHostInstallEndpoint:
             return_value={"ok": True, "console_run_id": "con-inst-2", "room": "console:con-inst-2"}
         )
         monkeypatch.setattr(hosts_route, "start_install_agent_runconsole", start_mock)
-        monkeypatch.setattr(hosts_route, "enqueue_sync", MagicMock())
         self._online_host(db_session, "inst-nobody")
 
         resp = client.post("/api/v1/hosts/inst-nobody/install", headers=admin_headers)
         assert resp.status_code == 200, resp.text
         assert start_mock.call_args.kwargs["install_options"] is None
+        assert "saq_key" not in resp.json()
 
     def test_install_duplicate_trigger_is_409(
         self, client, db_session, admin_headers, monkeypatch,
@@ -916,3 +922,98 @@ class TestHostInstallEndpoint:
         resp = client.post("/api/v1/hosts/inst-busy/install", headers=admin_headers)
         assert resp.status_code == 409, resp.text
         assert resp.json()["detail"]["console_run_id"] == "con-running"
+
+
+class TestHostInstallStatusEndpoint:
+    """ADR-0044 D4：安装状态以 RunConsole 为唯一来源，且重启后仍可回放。
+
+    四级来源：活动运行 → DB 里最近一次结果 → 「跑过但从未落结果」（lost）→ idle。
+    """
+
+    @staticmethod
+    def _online_host(db_session, host_id: str, ip: str = "192.0.2.78"):
+        from backend.models.host import Host
+
+        host = Host(id=host_id, hostname=host_id, status="ONLINE", ip=ip, ssh_port=22)
+        db_session.add(host)
+        db_session.commit()
+        return host
+
+    def test_live_run_is_reported_from_the_console(self, client, db_session, admin_headers, monkeypatch):
+        import backend.api.routes.hosts as hosts_route
+
+        self._online_host(db_session, "st-live")
+        monkeypatch.setattr(hosts_route, "get_active_install_console_id", lambda host_id: "con-live")
+        monkeypatch.setattr(
+            hosts_route,
+            "install_outcome_snapshot",
+            lambda run_id: {
+                "found": True,
+                "status": "RUNNING",
+                "exit_code": None,
+                "log_path": "/var/log/stp/con-live.log",
+            },
+        )
+
+        resp = client.get("/api/v1/hosts/st-live/install/status", headers=admin_headers)
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "running"
+        assert body["console_status"] == "RUNNING"
+        assert body["console_found"] is True
+        assert body["room"] == "console:con-live"
+        assert body["log_path"] == "/var/log/stp/con-live.log"
+        # ADR-0044：不再有 SAQ 状态面
+        assert "saq_key" not in body
+
+    def test_finished_run_is_replayed_from_the_host_record(self, client, db_session, admin_headers, monkeypatch):
+        """安装结束后活动登记就清了——结果从 Host 记录回放，重启后同样可读。"""
+        import backend.api.routes.hosts as hosts_route
+
+        host = self._online_host(db_session, "st-done")
+        host.extra = {
+            "install_console_run_id": "con-done",
+            "last_install": {"console_run_id": "con-done", "status": "SUCCESS", "ok": True,
+                             "ended_at": "2026-09-15T08:00:00+00:00"},
+        }
+        db_session.commit()
+        monkeypatch.setattr(hosts_route, "get_active_install_console_id", lambda host_id: None)
+
+        resp = client.get("/api/v1/hosts/st-done/install/status", headers=admin_headers)
+
+        body = resp.json()
+        assert body["status"] == "succeeded"
+        assert body["console_status"] == "SUCCESS"
+        assert body["console_found"] is False
+        assert body["console_run_id"] == "con-done"
+        assert body["log_path"].endswith("con-done.log")
+
+    def test_started_run_without_outcome_is_lost_not_idle(self, client, db_session, admin_headers, monkeypatch):
+        """跑过一次却从未落结果 = lost（控制面重启/记录过期），不能报成 idle 让人以为没装过。"""
+        import backend.api.routes.hosts as hosts_route
+
+        host = self._online_host(db_session, "st-lost")
+        host.extra = {"install_console_run_id": "con-lost"}
+        db_session.commit()
+        monkeypatch.setattr(hosts_route, "get_active_install_console_id", lambda host_id: None)
+
+        resp = client.get("/api/v1/hosts/st-lost/install/status", headers=admin_headers)
+
+        body = resp.json()
+        assert body["status"] == "lost"
+        assert body["console_status"] is None
+        assert body["console_found"] is False
+
+    def test_host_without_any_install_is_idle(self, client, db_session, admin_headers, monkeypatch):
+        import backend.api.routes.hosts as hosts_route
+
+        self._online_host(db_session, "st-idle")
+        monkeypatch.setattr(hosts_route, "get_active_install_console_id", lambda host_id: None)
+
+        resp = client.get("/api/v1/hosts/st-idle/install/status", headers=admin_headers)
+
+        body = resp.json()
+        assert body["status"] == "idle"
+        assert body["console_run_id"] is None
+        assert body["log_path"] is None

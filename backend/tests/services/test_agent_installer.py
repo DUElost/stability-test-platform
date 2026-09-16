@@ -282,3 +282,84 @@ def test_prepare_install_agent_password_inventory_unchanged(mock_host):
         assert "ansible_ssh_private_key_file" not in content
     finally:
         out["cleanup"]()
+
+
+class TestInstallOutcomeRecording:
+    """ADR-0044 D3：安装终态由 console 回调落库（审计 + agent_installed + last_install）。
+
+    会话纪律：每个断言用独立短会话并关闭——回调自己会 `close()` 掉注入的会话，
+    测试若再复用它就会留下 idle-in-transaction，卡住下一个用例的 TRUNCATE。
+    """
+
+    @staticmethod
+    def _run(status: str, *, exit_code: int | None, run_id: str = "con-out-1"):
+        run = MagicMock()
+        run.run_id = run_id
+        run.status = status
+        run.exit_code = exit_code
+        return run
+
+    @staticmethod
+    def _seed_host(engine, host_id: str) -> None:
+        from backend.models.host import Host
+        from sqlalchemy.orm import Session
+
+        with Session(bind=engine) as session:
+            session.add(
+                Host(id=host_id, hostname=host_id, status="ONLINE", ip="192.0.2.90", ssh_port=22)
+            )
+            session.commit()
+
+    @staticmethod
+    def _record(engine, monkeypatch, host_id: str, run) -> None:
+        import backend.services.agent_installer as installer
+        from sqlalchemy.orm import Session
+
+        session = Session(bind=engine)
+        monkeypatch.setattr(installer, "SessionLocal", lambda: session)
+        installer._record_install_outcome(host_id, run, "admin")
+
+    @staticmethod
+    def _extra(engine, host_id: str) -> dict:
+        from backend.models.host import Host
+        from sqlalchemy.orm import Session
+
+        with Session(bind=engine) as session:
+            return dict((session.get(Host, host_id).extra or {}))
+
+    def test_success_sets_marker_and_records_outcome(self, engine, monkeypatch):
+        from backend.models.audit import AuditLog
+        from sqlalchemy.orm import Session
+
+        self._seed_host(engine, "out-ok")
+        self._record(engine, monkeypatch, "out-ok", self._run("SUCCESS", exit_code=0))
+
+        extra = self._extra(engine, "out-ok")
+        assert extra["agent_installed"] is True
+        assert extra["last_install"]["status"] == "SUCCESS"
+        assert extra["last_install"]["ok"] is True
+        assert extra["last_install"]["console_run_id"] == "con-out-1"
+
+        with Session(bind=engine) as session:
+            row = (
+                session.query(AuditLog)
+                .filter(AuditLog.action == "install_agent", AuditLog.resource_id == "out-ok")
+                .one()
+            )
+            assert row.details["ok"] is True and row.details["rc"] == 0
+            assert row.details["initiated_by"] == "admin"
+
+    def test_failure_records_outcome_without_marking_installed(self, engine, monkeypatch):
+        self._seed_host(engine, "out-fail")
+        self._record(engine, monkeypatch, "out-fail", self._run("FAILED", exit_code=2))
+
+        extra = self._extra(engine, "out-fail")
+        assert "agent_installed" not in extra
+        assert extra["last_install"]["status"] == "FAILED"
+        assert extra["last_install"]["ok"] is False
+
+    def test_canceled_is_recorded_as_canceled(self, engine, monkeypatch):
+        self._seed_host(engine, "out-cancel")
+        self._record(engine, monkeypatch, "out-cancel", self._run("CANCELED", exit_code=-15))
+
+        assert self._extra(engine, "out-cancel")["last_install"]["status"] == "CANCELED"

@@ -940,80 +940,6 @@ async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
     )
 
 
-async def install_agent_task(
-    ctx: dict,
-    *,
-    host_id: str,
-    initiated_by: str | None = None,
-    console_run_id: str | None = None,
-) -> dict:
-    """UI 触发的 Agent 首次安装：ansible-playbook install_agent.yml（become 喂 sudo 密码）。
-
-    装完 install_agent.sh 自动落 /etc/sudoers.d/stability-test-agent：NOPASSWD 只授提权
-    wrapper /usr/local/sbin/stp-agent-priv + 固定服务 systemctl（ADR-0037/#1250），
-    解锁后续 UI 热更新（execute_hot_update）的受控提权。
-    """
-    from backend.services.agent_installer import run_install_agent_sync
-
-    logger.info(
-        "saq_install_agent_start host=%s by=%s console_run_id=%s",
-        host_id,
-        initiated_by,
-        console_run_id,
-    )
-    try:
-        result = await asyncio.to_thread(
-            run_install_agent_sync,
-            host_id,
-            initiated_by,
-            console_run_id=console_run_id,
-        )
-    except Exception:
-        logger.exception("saq_install_agent_failed host=%s", host_id)
-        raise
-
-    # Record audit outcome (best-effort).
-    try:
-        from backend.core.audit import record_audit
-        from backend.core.database import SessionLocal
-        from backend.models.host import Host
-        db = SessionLocal()
-        try:
-            host = db.get(Host, host_id)
-            if host and result.get("ok"):
-                from datetime import datetime, timezone
-
-                extra = dict(host.extra or {})
-                extra["agent_installed"] = True
-                extra["agent_installed_at"] = datetime.now(timezone.utc).isoformat()
-                host.extra = extra
-            record_audit(
-                db,
-                action="install_agent",
-                resource_type="host",
-                resource_id=host_id,
-                details={
-                    "host_id": host_id,
-                    "ip": host.ip if host else None,
-                    "ok": bool(result.get("ok")),
-                    "rc": result.get("rc"),
-                    "log_path": result.get("log_path"),
-                    "console_run_id": result.get("console_run_id"),
-                    "message": result.get("message"),
-                    "initiated_by": initiated_by,
-                },
-                username=initiated_by,
-            )
-            db.commit()
-        finally:
-            db.close()
-    except Exception:
-        logger.warning("install_agent_audit_failed host=%s", host_id, exc_info=True)
-
-    logger.info("saq_install_agent_done host=%s ok=%s", host_id, result.get("ok"))
-    return result
-
-
 from backend.services.ai_assistant.orchestrator import ai_assistant_turn_task
 
 SAQ_FUNCTIONS = [
@@ -1026,6 +952,5 @@ SAQ_FUNCTIONS = [
     upload_task,
     merge_task,
     extract_task,
-    install_agent_task,
     ai_assistant_turn_task,
 ]
