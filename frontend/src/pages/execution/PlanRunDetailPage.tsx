@@ -341,7 +341,6 @@ export default function PlanRunDetailPage() {
             <ArchiveStatusCard
               opsMetrics={watcherQ.data?.archive?.ops_metrics}
               linkStats={watcherQ.data?.archive?.link_stats}
-              scanStatus={watcherQ.data?.archive?.scan_status}
               isLoading={watcherQ.isLoading}
               isError={watcherQ.isError}
               onRetry={() => void watcherQ.refetch()}
@@ -355,6 +354,7 @@ export default function PlanRunDetailPage() {
               runId={id}
               uploadSummary={runQ.data?.run_context?.upload_summary}
               extractSummary={runQ.data?.run_context?.extract}
+              mergePlatforms={runQ.data?.run_context?.merge_platforms}
             />
 
             <BusinessFlowStepper

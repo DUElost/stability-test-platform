@@ -23,6 +23,9 @@ interface Props {
   uploadSummary?: RunContextUploadSummary | null;
   /** #300 P3-4: PlanRun.run_context.extract（run_extract_sync 落盘）。 */
   extractSummary?: RunContextExtractSummary | null;
+  /** #2185 收尾：`run_context.merge_platforms`（逐平台 merge 结果，#2174 后端落盘）。
+   *  类型未登记（`utils/api` 在窗被其他 Execution 声明），故为 `unknown` 并就地校验。 */
+  mergePlatforms?: unknown;
 }
 
 /** merge_task 写入的 `upload_summary.incomplete_reason` → 人话后缀（I-7：原因要可见）。 */
@@ -74,6 +77,35 @@ function readMissingItems(extract?: RunContextExtractSummary | null): {
 }
 
 /**
+ * `run_context.merge_platforms`（#2174 后端落盘：逐平台 merge 结果）。
+ *
+ * TS 侧**未登记**（与 `missing_items` 同因：`frontend/src/utils/api` 在窗被其他 Execution
+ * 声明），故就地收窄 + 运行时校验；未知结果码**原样露出**，不静默吞掉后端新加的结果类型。
+ */
+type MergePlatformsPayload = { platforms?: Record<string, unknown> };
+
+/** 结果码 → 悬停解释。`no_input` 要明确写"不是失败"——它表示该平台本轮没有输入。 */
+const MERGE_PLATFORM_TITLE: Record<string, string> = {
+  ok: '该平台合并成功',
+  no_input: '该平台本轮无输入（无工具或无 org 文件）——不是失败',
+  skipped_failed: 'PlanRun 未成功，自动链跳过该平台合并',
+};
+
+function readMergePlatforms(raw: unknown): StagePart[] {
+  const platforms = (raw as MergePlatformsPayload | null | undefined)?.platforms;
+  if (!platforms || typeof platforms !== 'object' || Array.isArray(platforms)) return [];
+  return Object.entries(platforms)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([platform, value]) => ({
+      text: `${platform}=${value}`,
+      testid: `merge-platform-${platform}`,
+      title: MERGE_PLATFORM_TITLE[value],
+      tone: value === 'ok' ? 'ok' : value === 'skipped_failed' ? 'warn' : 'muted',
+    }));
+}
+
+/**
  * 流水线阶段状态（#2185）：ok=已过 / warn=进行中或有缺口 / fail=失败 /
  * unknown=**无记录**（明说缺什么，而不是显示成 0——0 与"不知道"是两件事，
  * 前者会让人以为该阶段已空跑完）。
@@ -91,7 +123,16 @@ interface StagePart {
   text: string;
   testid?: string;
   title?: string;
+  /** 独立着色（不随行状态）：逐平台结果里"一个平台 ok、另一个 no_input"不应同色。 */
+  tone?: 'ok' | 'warn' | 'muted';
 }
+
+/** 逐段着色（仅 `tone` 存在时套用；否则继承行状态色）。 */
+const PART_TONE: Record<'ok' | 'warn' | 'muted', string> = {
+  ok: 'text-success',
+  warn: 'text-warning',
+  muted: 'text-muted-foreground/70',
+};
 
 interface Stage {
   key: 'scan' | 'upload' | 'merge' | 'extract';
@@ -116,9 +157,12 @@ function buildStages(args: {
   upload?: RunContextUploadSummary | null;
   extract?: RunContextExtractSummary | null;
   statusError: boolean;
+  /** 逐平台 merge 结果（#2185 收尾）：作为「合并」阶段的附加段渲染。 */
+  mergePlatformParts: StagePart[];
 }): Stage[] {
   const {
     archive, scanFailed, scanArtifactCount, mergeArtifactCount, upload, extract, statusError,
+    mergePlatformParts,
   } = args;
   const stages: Stage[] = [];
 
@@ -172,20 +216,23 @@ function buildStages(args: {
     });
   }
 
+  // 逐平台结果挂在「合并」阶段：有平台被 skip → 整行降为 warn（否则平台级异常会被"有产物"盖住）。
+  const platformSkipped = mergePlatformParts.some((p) => p.tone === 'warn');
   if (mergeArtifactCount > 0) {
     stages.push({
-      key: 'merge', label: '合并', state: 'ok',
-      parts: [{ text: `产物 ${mergeArtifactCount} 份` }],
+      key: 'merge', label: '合并',
+      state: platformSkipped ? 'warn' : 'ok',
+      parts: [{ text: `产物 ${mergeArtifactCount} 份` }, ...mergePlatformParts],
     });
   } else if (scanArtifactCount > 0) {
     stages.push({
       key: 'merge', label: '合并', state: 'warn',
-      parts: [{ text: `未合并（本轮 scan 产物 ${scanArtifactCount} 份）` }],
+      parts: [{ text: `未合并（本轮 scan 产物 ${scanArtifactCount} 份）` }, ...mergePlatformParts],
     });
   } else {
     stages.push({
       key: 'merge', label: '合并', state: 'unknown',
-      parts: [{ text: '无产物可合并' }],
+      parts: [{ text: '本轮无 merge 产物' }, ...mergePlatformParts],
     });
   }
 
@@ -209,7 +256,9 @@ function buildStages(args: {
   return stages;
 }
 
-export default function DedupReportCard({ runId, uploadSummary, extractSummary }: Props) {
+export default function DedupReportCard({
+  runId, uploadSummary, extractSummary, mergePlatforms,
+}: Props) {
   const qc = useQueryClient();
   const toast = useToast();
   /** #2185：手动扫描此前固定 `is_final=false`——操作者想让本轮"收口"时没有入口。 */
@@ -273,6 +322,7 @@ export default function DedupReportCard({ runId, uploadSummary, extractSummary }
     upload: uploadSummary,
     extract: extractSummary,
     statusError,
+    mergePlatformParts: readMergePlatforms(mergePlatforms),
   });
 
   return (
@@ -360,7 +410,12 @@ export default function DedupReportCard({ runId, uploadSummary, extractSummary }
                     )}
                   >
                     {s.parts.map((p) => (
-                      <span key={p.text} data-testid={p.testid} title={p.title}>
+                      <span
+                        key={p.text}
+                        data-testid={p.testid}
+                        title={p.title}
+                        className={p.tone ? PART_TONE[p.tone] : undefined}
+                      >
                         {p.text}
                       </span>
                     ))}
