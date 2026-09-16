@@ -1,6 +1,6 @@
 # ADR-0038：主机退役语义（Host Retirement Semantics）
 
-- 状态：**Accepted**
+- 状态：**Accepted**（v0.2：2026-09-13 定稿，9 稿评审 synthesis + 人工裁决 D-1～D-6）
 - 版本记录：
   - v0.2（2026-09-13）：按 9 份独立评审（[#1557](https://github.com/DUElost/stability-test-platform/issues/1557)，综合稿 PR #1677）与人工裁决 D-1～D-6 修订；**转 Accepted**。修订对照见 §6。
   - v0.1（2026-09-12 初版；#796/#937 Revisit 触发）

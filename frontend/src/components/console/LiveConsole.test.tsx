@@ -262,4 +262,77 @@ describe('LiveConsole reconnect gap fill (#1116)', () => {
     expect(written.flat()).toEqual(['B-1']);
     expect(getByTestId('live-console-status')).toHaveTextContent('RUNNING');
   });
+
+  // ── #2070 / #2039：replay 游标语义（seq = 已交付行号，而非日志总长）
+
+  it('paginates a capped replay to the last line instead of skipping the middle (#2070)', async () => {
+    const TOTAL = 25;
+    getRunLog.mockImplementation(async (_id: string, fromSeq = 0) => {
+      const start = fromSeq > 0 ? fromSeq : 1;
+      const lines: string[] = [];
+      for (let i = start; i <= TOTAL && lines.length < 10; i += 1) lines.push(`L${i}`);
+      const seq = start - 1 + lines.length;
+      return {
+        run_id: 'con-cap',
+        from_seq: start,
+        lines,
+        seq,
+        total_seq: TOTAL,
+        truncated: seq < TOTAL,
+        status: 'RUNNING',
+      };
+    });
+
+    const { default: LiveConsole } = await import('./LiveConsole');
+    render(<LiveConsole consoleRunId="con-cap" />);
+
+    // 三页（10 + 10 + 5）覆盖全量。旧实现只写前 10 行、游标却跳到 25 -> 11..25 永久缺
+    await waitFor(() => {
+      expect(written.flat()).toEqual(
+        Array.from({ length: TOTAL }, (_, i) => `L${i + 1}`),
+      );
+    });
+    expect(getRunLog).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps live lines and flags incompleteness when replay is unavailable (#2039)', async () => {
+    getRunLog.mockImplementation(async (_id: string, fromSeq = 0) => ({
+      run_id: 'con-x',
+      from_seq: fromSeq > 0 ? fromSeq : 1,
+      lines: [],
+      seq: fromSeq > 0 ? fromSeq - 1 : 0,
+      total_seq: 3,
+      truncated: false,
+      replay_unavailable: true,
+      status: 'RUNNING',
+    }));
+
+    const { default: LiveConsole } = await import('./LiveConsole');
+    const { getByTestId } = render(<LiveConsole consoleRunId="con-x" />);
+    await waitFor(() => expect(getRunLog).toHaveBeenCalledWith('con-x', 0));
+    expect(getByTestId('live-console-replay-incomplete')).toBeInTheDocument();
+
+    act(() => setMockConnectionStatus('connected'));
+    // 旧实现把游标推到 owner_seq=3，此处 from_seq=1 会被判「已写过」而整体丢弃
+    act(() => {
+      socketHandler?.({ run_id: 'con-x', from_seq: 1, lines: ['L1', 'L2'] });
+    });
+    await waitFor(() => expect(written.flat()).toEqual(['L1', 'L2']));
+
+    // 跳号触发一次补拉；它回报「不可用且零进展」后进入退避，
+    // 后续跳号不得每个 live 批次都再打一次注定读不到的请求。
+    const before = getRunLog.mock.calls.length;
+    act(() => {
+      socketHandler?.({ run_id: 'con-x', from_seq: 9, lines: ['L9'] });
+    });
+    await waitFor(() => expect(getRunLog).toHaveBeenCalledTimes(before + 1));
+    act(() => {
+      socketHandler?.({ run_id: 'con-x', from_seq: 12, lines: ['L12'] });
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(getRunLog.mock.calls.length).toBe(before + 1);
+    expect(written.flat()).toEqual(['L1', 'L2']);
+    expect(written.flat()).toEqual(['L1', 'L2']);
+    expect(getByTestId('live-console-replay-incomplete')).toBeInTheDocument();
+  });
 });

@@ -6,13 +6,18 @@
  *
  * #1116：断线重连后按 seq 增量补齐；live 批次若跳号则触发 gap fill，
  * 并按行跳过与已写区间的重叠。
+ *
+ * #2070 / #2039：`seqRef` 只代表**已交付**到终端的行号。replay 响应的 `seq` 已是
+ * 游标语义（不等于日志总长），未交付部分由 `truncated` 显式告知 → 按页续拉；
+ * 跨实例读不到时由 `replay_unavailable` 告知 → 标「日志不完整」并退避，
+ * 绝不把游标推过未交付行（那会让中间段与其后的实时行一并被丢弃）。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { XTerminal, type XTerminalHandle } from '@/components/log/XTerminal';
 import { useSocketIO } from '@/hooks/useSocketIO';
 import { consoleSubscription } from '@/config';
 import { dedup } from '@/utils/api/dedup';
-import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { ALERT_BANNER, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -32,6 +37,11 @@ const STATUS_TONE: Record<string, string> = {
 };
 
 const ISSUE_KEY_RE = /\b[A-Z][A-Z0-9_]{1,}-\d+\b/g;
+
+/** #2070：一轮 gap fill 最多续拉多少页（一页 = 一次 replay 响应），防病态自旋。 */
+const GAP_FILL_MAX_PAGES = 50;
+/** #2039：回放不可用时的退避（ms）——不必每个 live 批次都打一次注定读不到的请求。 */
+const REPLAY_UNAVAILABLE_BACKOFF_MS = 5000;
 
 function extractIssueKeys(lines: string[]): string[] {
   const out: string[] = [];
@@ -55,6 +65,8 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   // #1278：in-flight 期间到达的「有缺口」批次只置位，由在途请求结束后再补一轮，
   // 否则该行段要等下一个 live 批次才可能被补——run 转终态/静默时即永久丢。
   const pendingGapRef = useRef(false);
+  // #2039：replay 不可用（跨实例日志根未共享）时的退避截止时间戳
+  const gapFillBlockedUntilRef = useRef(0);
   const consoleRunIdRef = useRef(consoleRunId);
   useLayoutEffect(() => {
     onStatusChangeRef.current = onStatusChange;
@@ -63,6 +75,7 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     consoleRunIdRef.current = consoleRunId;
   }, [consoleRunId]);
   const [status, setStatus] = useState('RUNNING');
+  const [replayIncomplete, setReplayIncomplete] = useState(false);
   const [issueCount, setIssueCount] = useState(0);
   const [termReady, setTermReady] = useState(false);
   const [prevConsoleRunId, setPrevConsoleRunId] = useState(consoleRunId);
@@ -76,6 +89,7 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     everConnectedRef.current = false;
     gapFillInFlightRef.current = false;
     pendingGapRef.current = false;
+    gapFillBlockedUntilRef.current = 0;
   }, [consoleRunId]);
 
   // memo 化是为了能进 replayFromStart 的依赖数组：裸函数每次渲染换引用，
@@ -108,33 +122,10 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     seqRef.current = batchEnd;
   }, [tallyIssues]);
 
-  const replayFromStart = useCallback(() => {
-    let cancelled = false;
-    seqRef.current = 0;
-    issueKeysRef.current = new Set();
-    setIssueCount(0);
-    termRef.current?.clear();
-    dedup
-      .getRunLog(consoleRunId, 0)
-      .then((res) => {
-        if (cancelled) return;
-        if (res.lines.length) {
-          termRef.current?.writeLines(res.lines.map((msg) => ({ msg })));
-          tallyIssues(res.lines);
-        }
-        seqRef.current = res.seq;
-        setStatus(res.status);
-        onStatusChangeRef.current?.(res.status);
-      })
-      .catch(() => {
-        /* 回填失败不阻塞实时流 */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [consoleRunId, tallyIssues]);
-
-  /** Incremental replay from the next missing seq (#1116). */
+  /**
+   * Incremental replay from the next missing seq (#1116)，并按页补齐被上限截断的
+   * 尾部（#2070）；跨实例读不到时标记 + 退避（#2039）。
+   */
   const fillGap = useCallback(() => {
     if (gapFillInFlightRef.current) {
       // #1278：已有请求在途——记下「仍需补」，由在途请求结束后再发起一轮；
@@ -142,25 +133,35 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
       pendingGapRef.current = true;
       return;
     }
+    if (Date.now() < gapFillBlockedUntilRef.current) return;
     const requestRunId = consoleRunId;
     gapFillInFlightRef.current = true;
     void (async () => {
       try {
         // 循环消费：在途期间若又出现新缺口（pendingGap 被再次置位），再补一轮。
-        for (;;) {
+        for (let page = 0; page < GAP_FILL_MAX_PAGES; page += 1) {
           const fromSeq = seqRef.current + 1;
           const res = await dedup.getRunLog(requestRunId, fromSeq);
           if (requestRunId !== consoleRunIdRef.current) return; // 切 run：丢弃迟到结果（#1278）
+          const before = seqRef.current;
           applyLines(res.from_seq || fromSeq, res.lines);
+          if (typeof res.seq === 'number' && res.seq > seqRef.current) {
+            seqRef.current = res.seq;
+          }
           if (typeof res.status === 'string' && res.status) {
             setStatus(res.status);
             onStatusChangeRef.current?.(res.status);
           }
-          // Server seq is authoritative when ahead of local (e.g. empty gap fill
-          // after a terminal run that never delivered the last live batch).
-          if (typeof res.seq === 'number' && res.seq > seqRef.current) {
-            seqRef.current = res.seq;
+          const unavailable = res.replay_unavailable === true;
+          setReplayIncomplete(unavailable);
+          if (unavailable) {
+            gapFillBlockedUntilRef.current = Date.now() + REPLAY_UNAVAILABLE_BACKOFF_MS;
+            break;
           }
+          const progressed = seqRef.current > before;
+          // #2070：本响应未交付完（上限截断）→ 立刻续拉下一页。
+          if (res.truncated === true && progressed) continue;
+          if (!progressed) break;
           if (!pendingGapRef.current) break;
           pendingGapRef.current = false;
         }
@@ -171,6 +172,34 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
       }
     })();
   }, [applyLines, consoleRunId]);
+
+  const replayFromStart = useCallback(() => {
+    let cancelled = false;
+    seqRef.current = 0;
+    issueKeysRef.current = new Set();
+    setIssueCount(0);
+    setReplayIncomplete(false);
+    gapFillBlockedUntilRef.current = 0;
+    termRef.current?.clear();
+    dedup
+      .getRunLog(consoleRunId, 0)
+      .then((res) => {
+        if (cancelled) return;
+        applyLines(res.from_seq || 1, res.lines);
+        setStatus(res.status);
+        onStatusChangeRef.current?.(res.status);
+        setReplayIncomplete(res.replay_unavailable === true);
+        // #2070：首屏只拿到前 max_lines 行时，交给 gap fill 按页续拉；
+        // 不再照旧语义把游标直接推到「全文件行数」。
+        if (res.truncated === true && res.replay_unavailable !== true) fillGap();
+      })
+      .catch(() => {
+        /* 回填失败不阻塞实时流 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [consoleRunId, applyLines, fillGap]);
 
   useEffect(() => {
     if (!termReady) return;
@@ -232,6 +261,14 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
           </span>
         </div>
       </div>
+      {replayIncomplete && (
+        <div
+          className={cn(ALERT_BANNER.warning, 'px-3 py-1 text-[11px]')}
+          data-testid="live-console-replay-incomplete"
+        >
+          日志不完整：跨实例回放不可用（STP_RUN_CONSOLE_LOG_ROOT 未共享或落后），仅显示已交付部分。
+        </div>
+      )}
       <XTerminal
         ref={termRef}
         poolKey={`console-${consoleRunId}`}

@@ -44,6 +44,7 @@ from backend.services.ai_assistant.llm_client import (
 )
 from backend.services.ai_assistant.orchestrator import (
     ensure_pending_placeholder,
+    fail_pending_placeholders,
     execute_action,
     get_or_create_config,
     load_effective_config,
@@ -430,12 +431,37 @@ def send_message(
     # M2：max_turns 次串行 LLM 调用的最坏超时；M3：轮次有副作用，retries=0
     cfg = get_or_create_config(db)
     timeout = cfg.request_timeout_seconds * max(int(cfg.max_turns), 1) + 120
+
+    session_id = session.id
+
+    def _fail_placeholder_async(exc: BaseException) -> None:
+        """#2073：required=False 路径下 Redis 真正入队失败的唯一回执出口。
+
+        `enqueue_sync` 返回 True 只代表「协程排上了事件循环」，Redis 故障发生在
+        **之后**——上面的 503 分支因此对 Redis 故障不可达，占位永久 pending：
+        前端每 2s 无限轮询（`AssistantPage` 的 hasPending）、会话被 #1223 的
+        「有进行中轮次」守卫锁死，用户只能刷新或新开会话。
+        回调用线程池收敛占位：它跑在事件循环上，既不能抛，也不宜做同步 DB 写。
+        """
+        logger.error("ai_turn_enqueue_async_failed session=%s err=%s", session_id, exc)
+        error = f"任务入队失败（SAQ/Redis 异常：{exc}），请重新提问。"
+        try:
+            from backend.core.thread_pool import PoolQueueFullError, submit
+
+            try:
+                submit(fail_pending_placeholders, session_id, error=error)
+            except PoolQueueFullError:
+                fail_pending_placeholders(session_id, error=error)
+        except Exception:  # noqa: BLE001 - 回调必须自身不抛（saq_worker 已兜，双保险）
+            logger.exception("ai_turn_placeholder_converge_failed session=%s", session_id)
+
     enqueued = enqueue_sync(
         "ai_assistant_turn_task",
         key=f"ai-turn:{session.id}",
         timeout=timeout,
         retries=0,
         session_id=session.id,
+        on_async_failure=_fail_placeholder_async,
     )
     if not enqueued:
         placeholder.status = "failed"

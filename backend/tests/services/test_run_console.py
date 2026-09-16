@@ -296,7 +296,11 @@ def test_shutdown_idempotent(tmp_path, emit_capture):
 
 
 def test_read_log_is_bounded_by_max_lines(tmp_path, emit_capture, monkeypatch):
-    """大日志增量 replay：响应行数有上限，seq 仍精确统计到文件末尾。"""
+    """大日志 replay：响应行数有上限，且**如实**告知未交付完（#2070）。
+
+    `seq` 是交付游标（本次响应最后一行的行号），不是文件总长；总长在 `total_seq`。
+    旧语义（seq=全文件行数）会让前端游标跳过 11..2099 的中间段——见 #2070。
+    """
     monkeypatch.setenv("STP_RUN_CONSOLE_REPLAY_MAX_LINES", "10")
     _events, emit = emit_capture
     rc = _configure(tmp_path, emit)
@@ -312,13 +316,116 @@ def test_read_log_is_bounded_by_max_lines(tmp_path, emit_capture, monkeypatch):
     out = rc.read_log(run_id)
     assert len(out["lines"]) == 10
     assert out["lines"][0] == "line 1"
-    assert out["seq"] == 2100, "seq 必须是全文件行数，不被上限截断"
+    assert out["seq"] == 10, "seq 只推进到已交付行，不得等于全文件行数"
+    assert out["total_seq"] == 2100
+    assert out["truncated"] is True
 
     tail = rc.read_log(run_id, from_seq=2096)
     assert tail["from_seq"] == 2096
     assert tail["lines"] == [f"line {i}" for i in range(2096, 2101)]
     assert tail["seq"] == 2100
+    assert tail["total_seq"] == 2100
+    assert tail["truncated"] is False, "交付到文件末尾即未截断"
 
+
+def test_read_log_cap_paginates_to_the_last_line(tmp_path, emit_capture, monkeypatch):
+    """#2070 回归：按 truncated/seq 翻页必须逐行覆盖全文件，中间段一格不丢。"""
+    monkeypatch.setenv("STP_RUN_CONSOLE_REPLAY_MAX_LINES", "10")
+    _events, emit = emit_capture
+    rc = _configure(tmp_path, emit)
+    run_id = "con-paginate"
+    log_path = tmp_path / "console" / f"{run_id}.log"
+    log_path.write_text("".join(f"L{i}\n" for i in range(1, 251)), encoding="utf-8")
+
+    from backend.services.run_console import ConsoleRun
+
+    rc._runs[run_id] = ConsoleRun(
+        run_id=run_id, run_key="kp", label="page", _log_path=log_path,
+    )
+    collected: list = []
+    cursor = 0
+    for _ in range(100):  # 上限兜底：漏退出条件即红，而不是静默少行
+        res = rc.read_log(run_id, from_seq=cursor + 1)
+        collected.extend(res["lines"])
+        assert res["seq"] >= cursor, "游标不得倒退"
+        cursor = res["seq"]
+        if not res["truncated"]:
+            break
+    assert collected == [f"L{i}" for i in range(1, 251)]
+    assert cursor == 250
+
+
+def test_iter_log_lines_is_not_capped(tmp_path, emit_capture, monkeypatch):
+    """#2070：服务端内部消费者（Jira issue_keys）用 iter_log_lines，不受响应上限。"""
+    monkeypatch.setenv("STP_RUN_CONSOLE_REPLAY_MAX_LINES", "10")
+    _events, emit = emit_capture
+    rc = _configure(tmp_path, emit)
+    run_id = "con-iter-full"
+    log_path = tmp_path / "console" / f"{run_id}.log"
+    log_path.write_text("".join(f"L{i}\n" for i in range(1, 101)), encoding="utf-8")
+
+    from backend.services.run_console import ConsoleRun
+
+    rc._runs[run_id] = ConsoleRun(
+        run_id=run_id, run_key="ki", label="iter", _log_path=log_path,
+    )
+    assert len(rc.read_log(run_id)["lines"]) == 10, "read_log 仍有界"
+    assert list(rc.iter_log_lines(run_id)) == [f"L{i}" for i in range(1, 101)]
+    assert list(rc.iter_log_lines("con-not-exist")) == []
+
+
+def test_start_reader_thread_failure_releases_run_key(tmp_path, emit_capture, monkeypatch):
+    """#2045：`thread.start()` 抛错不得留下占用 run_key 的 RUNNING 僵尸。
+
+    旧行为：run 停在默认状态 RUNNING 且无 reader → ticker 永久续租 run_key、
+    快照停在假 RUNNING、子进程无人读 stdout 管道而悬挂。
+    """
+    import subprocess
+    import threading
+
+    _events, emit = emit_capture
+    rc = _configure(tmp_path, emit)
+    code = (
+        "import time\n"
+        "print('hello', flush=True)\n"
+        "while True:\n    time.sleep(0.2)\n"
+    )
+    spawned: dict = {}
+    real_popen = subprocess.Popen
+
+    def _spy_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        spawned["proc"] = proc
+        return proc
+
+    real_start = threading.Thread.start
+
+    def _fail_reader_start(self, *args, **kwargs):
+        if str(self.name).startswith("run-console-"):
+            raise RuntimeError("can not start new thread")
+        return real_start(self, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", _spy_popen)
+    monkeypatch.setattr(threading.Thread, "start", _fail_reader_start)
+    with pytest.raises(RunConsoleError, match="reader thread start failed"):
+        rc.start(run_key="k-zombie", cmd=_py(code), label="zombie")
+    monkeypatch.undo()
+
+    zombie = list(rc._runs.values())[0]
+    assert zombie.status == "FAILED", "不得停在 RUNNING（否则 ticker 会永久续租）"
+    assert zombie.error.startswith("reader_start_failed:")
+    assert rc.is_key_busy("k-zombie") is False, "run_key 必须已释放"
+
+    # 没有 reader 的子进程必须被终止并回收（否则 stdout 管道写满即永久挂起）
+    proc = spawned["proc"]
+    deadline = time.time() + 5.0
+    while proc.poll() is None and time.time() < deadline:
+        time.sleep(0.05)
+    assert proc.poll() is not None, "孤儿子进程未被终止"
+
+    # 同 key 可立即重起（用户可见症状：僵尸持锁期间永远 RunKeyBusyError）
+    ok_id = rc.start(run_key="k-zombie", cmd=_py("print('ok')"), label="retry")
+    assert _wait_terminal(ok_id)["status"] == "SUCCESS"
 
 def test_read_log_truncates_oversized_line(tmp_path, emit_capture):
     """单行超长也不得撑爆响应内存（replay 显示层截断）。"""

@@ -1217,3 +1217,37 @@ def test_timezone_aligned_passes(tmp_path, monkeypatch):
 
     assert report["status"] == "PASS", report
     assert "timezone_aligned" in codes(report)
+
+
+# ── #2269：bundle 携带构建机本地状态须在 S0 fail-closed ─────────────────────
+
+
+def test_bundle_carrying_dotenv_fails_closed_at_s0(tmp_path, monkeypatch):
+    """bundle 内出现 `backend/.env` → S0 fail-closed，不得放行安装。
+
+    摘要面只覆盖 backend/agent，`.env` 不进任何摘要——若不在此拦下，站点会静默
+    继承构建机凭据（S2 落到 <deploy-root>/backend/.env，被后端启动时加载）。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    config_path, bindings, state_dir, target, site_id, data = prepare(tmp_path)
+    bundle = Path(data["release"]["bundle"])
+    (bundle / "backend" / ".env").write_text(
+        "STP_FILE_SERVER_ADDRESS=build-host.invalid\n", encoding="utf-8",
+    )
+    report = invoke(tmp_path, dry_run=True)
+    assert report["status"] == "FAIL", report
+    assert "install.s0.hygiene" in {c["check_id"] for c in report["checks"]}, report["checks"]
+
+
+def test_bundle_with_only_example_templates_is_not_hygiene_flagged(tmp_path, monkeypatch):
+    """负向对照：入库模板 `*.example` 存在**不**应判违规（否则会破坏部署）。
+
+    `deploy/postgres/.env.example` 等 8 个模板是部署文档要求 `cp` 的对象。
+    """
+    monkeypatch.setattr(stages, "await_health", lambda *a, **k: True)
+    config_path, bindings, state_dir, target, site_id, data = prepare(tmp_path)
+    bundle = Path(data["release"]["bundle"])
+    for name in (".env.example", ".env.backend.example", ".env.backend.internal.example"):
+        (bundle / "backend" / name).write_text("A=\n", encoding="utf-8")
+    report = invoke(tmp_path, dry_run=True)
+    assert "install.s0.hygiene" not in {c["check_id"] for c in report["checks"]}, report["checks"]
