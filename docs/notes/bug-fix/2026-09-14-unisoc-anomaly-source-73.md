@@ -57,6 +57,45 @@ Class: bug-fix
 {"kick_datetime":"2026-09-08_06:59:12.031","pid":"23847","proc":"com.android.camera2","tag":"system_app_crash"}
 ```
 
+## 追加现场复核（2026-09-16，#2211/#2212 合并后回归）
+
+**背景**：Job 运行中的观察窗口（6h）对设备 `62002360`（Z2582 / `MyOS16.0.3_Z2582_GEN_AF`，
+`ro.debuggable=1`，`persist.sys.monkey=true`）做合并后回归。全程只读取证。
+
+### Known-issue：Z2582 build 静默吞掉三类 adb 调试触发（不可再作触发构造机）
+
+| 触发 | 实测（均在 Job 运行中） |
+|---|---|
+| `am crash com.android.settings`（package / pid / `--user 0` / 前台 / force-stop 后新进程五种姿势） | rc=0 但进程 pid 不变；无新 `/data/system/dropbox/system_app_crash`（最新仍 09-13）；logcat 无任何痕迹 |
+| `am hang`（前台与后台） | 打印 `Hanging the system...` 但无实际挂起（12s/112s 探活正常）；无 watchdog 日志、无 `SWT.*` 目录 |
+| `kill -STOP` + `input tap`（造输入分发超时 ANR） | 20s 内 `/data/anr` 无新 trace、`ANR.103000005` 无新行、logcat 无 `Input dispatching timed out` |
+
+定性：**命令在 ROM 层被吞**（rc=0、无 stderr、无任何副作用——不是执行失败）。触发台账三条在
+Z2581/MyOS16.0.1 上有效，在本组合**全部失效**（`ro.debuggable=1` 也拦不住）→
+**Z2582/MyOS16.0.3 不得再作为主动触发构造设备**。具体抑制器（monkey build 开关还是 MyOS
+策略）未深究：属设备侧行为，不在平台边界内，台账只登记组合事实。
+
+### 平台侧回归结论（负向成立；正向缺口收窄为「构造手段」）
+
+- 合并后 UNIVIEW 新增 0 条、Boot Category 仍 2 条（均为合并前存量）→ **无假阳性成立**；
+  与 #2083（normalboot-only 不发射）、#2080（键补事件身份不改写存量）的行为自洽。
+- 「合并后再产生一条新鲜信号」的正向路径本轮未构造（被上节触发抑制所阻）。注意正向**端到端**
+  证据并非空白：#1956 note 已记录本机（`serial=62002360`）一次普通 PlanRun 即产出
+  `device_log_event(UNIVIEW, Java Crash/ANR/Boot Category)` 与对应
+  `job_log_signal(source=reconciler)`——那 2 条 Boot Category 即其存量。故本轮缺口性质是
+  **构造手段失效**，不是链路有效性存疑。
+- 正向替代路径（不依赖触发器）：观察窗口内被动等自然新事件目录（压测机自然产出
+  JE/ANR/NE 新目录即可走全链），或把主动触发移回 Z2581 执行。
+
+### 实证：NE 大目录整目录 pull 恒超时 → 已立单 #2252
+
+设备侧 `NE.103000003` 共 **1.9GB / 999 个文件**，agent 本地副本恒空、staging `.pulling_*`
+每拍建删（父目录 mtime 常新）——与代码逐点吻合：`_pull_event_dir_unlocked`
+（`unisoc_reconciler.py:488-521`）整目录 pull `timeout=180`，失败走 #2079
+「不落签名、下一拍重试」→ 对永久性超限目录退化为**每拍 180s 白烧且永不收敛**；且每次 pull
+持 `host_extraction_slot`（#740 与 MTK 路共享提取预算），挤占同 host 其它 pull。这正是下节
+Revisit「载荷策略」项的现实证据 → **已立 [#2252](https://github.com/DUElost/stability-test-platform/issues/2252)**。
+
 ## Revisit
 
 - **`kick_datetime` 是设备本地时区裸串**（`2026-09-08_06:59:12.031`，无 tz）：`device_timestamp`
@@ -65,7 +104,9 @@ Class: bug-fix
 - **附加源尚未纳入**：toolkit `_scan_platform_sources()` 还采 `/data/anr`、`/data/tombstones`
   （该机 100 条）、`/data/ylog`，本单只对齐了 uniview 主路径 → 是否纳入待边界裁决。
 - **载荷策略**：现为整目录 pull，toolkit 是按 `{seq}-{ts}.tar.gz` 与事件行**按序号对应**增量拉取
-  → 目录很大时（如 `NE.103000003` 有上百个 tar）值得收敛。
+  → 目录很大时（如 `NE.103000003` 有上百个 tar）值得收敛。**已立 #2252**（2026-09-16 实证：
+  该目录 1.9GB/999 files，整目录 pull 恒 180s 超时 → 永久无信号 + 每拍占用提取预算，
+  见上节「追加现场复核」）。
 - **`normalboot` 之外的 `reboot_reason`** 取值枚举未知（本次只观测到 `normalboot`）→ 需补样本。
 - 本单正文的过时前提（"代码库 grep 展锐/UNISOC 0 hits"、`/data/unisoc_log` 假设）已在 issue 评论中更正；
   `AGENTS.md` 并无「AEE crash detection chain」章节，展锐说明暂落本 note。
