@@ -317,6 +317,7 @@ interface SubscriptionConfig {
  *
  * Accepted forms (no `/ws/...` legacy paths — #419):
  * - `dashboard`                         → global dashboard events
+ * - `fleet:devices`                     → DEVICE_UPDATE room（设备页，#2369）
  * - `plan_run:{id}`                     → PlanRun detail room
  * - `console:{runId}`                   → RunConsole live log room
  * - `job:{id}`                          → job step-log room
@@ -330,7 +331,6 @@ export function parseSubscription(url: string): SubscriptionConfig {
     return {
       room: null,
       events: [
-        SOCKET_EVENT_NAMES.deviceUpdate,
         SOCKET_EVENT_NAMES.dashboardSummary,
         SOCKET_EVENT_NAMES.runUpdate,
         SOCKET_EVENT_NAMES.reportReady,
@@ -339,6 +339,13 @@ export function parseSubscription(url: string): SubscriptionConfig {
         SOCKET_EVENT_NAMES.planChanged,
         SOCKET_EVENT_NAMES.projectChanged,
       ],
+    };
+  }
+
+  if (url === 'fleet:devices') {
+    return {
+      room: 'fleet:devices',
+      events: [SOCKET_EVENT_NAMES.deviceUpdate],
     };
   }
 

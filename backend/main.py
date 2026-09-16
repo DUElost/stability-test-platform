@@ -72,6 +72,7 @@ from backend.core.csrf import CSRFOriginMiddleware, is_csrf_enabled
 from backend.core.database import async_engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
+from backend.core.release_manifest import resolve_build_info
 from backend.core.redis import redact_redis_url
 from backend.core.request_metrics import ApiRequestMetricsMiddleware
 from backend.core.security import is_production_like_env, validate_production_auth_cookie_settings
@@ -184,7 +185,10 @@ async def lifespan(app: FastAPI):
             from backend.services.dashboard_summary_publisher import bind_event_loop
 
             bind_event_loop(asyncio.get_running_loop())
-            init_build_info(version="2.0.0", commit="unknown")
+            # #2341：版本真值来自部署树里的 release-manifest.json（读不到即显式
+            # unknown）——不再写字面量。面板显示 2.0.0 而实际跑别的 revision 属于
+            # 「有面板、数据是假的」，是 #2276「绿色装旧版本」的唯一通用探测器失效。
+            init_build_info(*resolve_build_info())
 
             # ADR-0025 §9: RunConsole（控制面命令执行 + web 实时控制台）配置
             from backend.services.run_console import RunConsole

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -15,7 +16,28 @@ from backend.services.artifact_digest import (
 )
 from backend.services.host_updater import get_agent_code_version
 
+logger = logging.getLogger(__name__)
+
 AgentCodeSyncStatus = Literal["unknown", "matched", "drift", "pending"]
+
+
+def _self_computed_desired_digest() -> str:
+    """未显式传 desired 时的自算兜底（#2320）：**IO 失败只降级，不抛**。
+
+    调用面是主机详情/列表等**展示**路径，而 desired digest 要对输入集全量 stat + 逐文件
+    读；控制面工作树在部署/checkout 期间会变动（stat 与 open 之间存在竞态窗口）。
+    读不出摘要 → 返回空串 → `resolve_agent_code_sync_status` 判 `unknown`，这正是
+    该函数已有的「无路可退」表达法。只吃 `OSError`（IO 形态），编程错误继续冒泡。
+    """
+    try:
+        return compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE) or ""
+    except OSError as exc:
+        logger.warning(
+            "agent_code_desired_digest_failed err=%s "
+            "hint=代码同步判据降级 unknown（控制面工作树正在变动？）",
+            exc,
+        )
+        return ""
 
 
 def resolve_agent_code_sync_status(
@@ -52,13 +74,20 @@ def build_host_version_view(
     """Derive top-level HostOut version fields from host.extra.
 
     `desired_artifact_digest` 由调用方传入以便列表场景只算一次（desired 现算 +
-    进程缓存，但缓存键仍需 stat 输入集）；缺省时本函数自算。
+    进程缓存，但缓存键仍需 stat 输入集）。#2320 起**三态分明**：
+
+    - ``None``（未传）→ 本函数自算，且自算失败只降级不抛；
+    - ``""``（调用方**显式**说「算不出」，如列表页的降级路径）→ 判据 ``unknown``；
+      旧写法 `(desired or "").strip() or 自算` 会把空串当成「没传」而**回头自算**，
+      于是列表页的降级意图被下游覆盖成 ``drift``/``matched``——一个假判据；
+    - 非空 → 用它比对。
     """
     data = extra if isinstance(extra, dict) else {}
     expected = get_agent_code_version() or None
-    desired = (desired_artifact_digest or "").strip() or (
-        compute_desired_artifact_digest(kind=ARTIFACT_KIND_CODE) or ""
-    )
+    if desired_artifact_digest is None:
+        desired = _self_computed_desired_digest()
+    else:
+        desired = desired_artifact_digest.strip()
 
     def _clean(value: object) -> str | None:
         if not isinstance(value, str):

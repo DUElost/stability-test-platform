@@ -221,6 +221,23 @@ describe('FileServerPage', () => {
     expect(await screen.findByText(/未检测到进程内存采集器/)).toBeInTheDocument();
   });
 
+  it('degrades to empty state when an older backend omits both new fields (#2016)', async () => {
+    // 静态产物比运行中的后端新时的真实形状：字段**根本不存在**（不是 null、不是空数组）。
+    // 修复前这里会在 render 期抛 TypeError，整页被 ErrorBoundary 吞掉。
+    const stale = structuredClone(overview) as unknown as Record<string, unknown>;
+    delete (stale.control_plane as Record<string, unknown>).processes;
+    delete (stale.history as Record<string, unknown>).hostproc_total_anon_bytes;
+    // 这里刻意「对类型撒谎」：运行时形状属于旧后端，静态契约（types.ts 与后端 schema
+    // 同步）描述的是当前后端——#2016 的故障正是两者不同步的那一刻。
+    mocks.fileServer.mockResolvedValueOnce(stale as unknown as typeof overview);
+    renderPage();
+
+    // 面板仍在、走空态，其余区块不受影响
+    expect(await screen.findByText(/未检测到进程内存采集器/)).toBeInTheDocument();
+    expect(screen.getByText('进程内存 Top 10')).toBeInTheDocument();
+    expect(screen.queryByTestId('hostproc-total-chart')).not.toBeInTheDocument();
+  });
+
   it('formats device log disk usage with two decimal places', async () => {
     mocks.fileServer.mockResolvedValueOnce({
       ...overview,

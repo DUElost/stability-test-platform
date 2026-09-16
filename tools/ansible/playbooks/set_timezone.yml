@@ -10,7 +10,9 @@
 #      用改时区掩盖掉（宁可失败，也不制造"看起来对了"的假象）；
 #   2) 幂等：已是目标时区则不做任何动作（changed=false）；
 #   3) 只改时区，不触碰 NTP / 系统时钟 / 硬件时钟；
-#   4) 每次输出 old -> new 偏移，便于回滚与留证。
+#   4) 每次输出 old -> new 偏移，便于回滚与留证；
+#   5) #2317：`timedatectl` 需要 system D-Bus——无 bus 的目标（容器/精简镜像）退化为
+#      文件级对齐（zoneinfo 链接 + /etc/timezone），随后仍走同一条断言。
 #
 # 用法：
 #   金丝雀：  ansible-playbook -i <inventory> playbooks/set_timezone.yml \
@@ -70,12 +72,46 @@
           （阈值 {{ tz_utc_skew_tolerance_seconds }} 秒）。这属**时钟问题**，不应以修改时区掩盖；
           请先修复 NTP/时钟，再重跑本 playbook。
 
+    - name: Assert the target looks like a zoneinfo name
+      # #2317：文件级回退会把 tz_target 直接拼进 path/写入 /etc/timezone，这里先做形状
+      # 断言（两条路径共用；值来自站点声明，属可信来源，但不做形状校验会让拼错的名字
+      # 静默写出一个不存在的时区）。
+      ansible.builtin.assert:
+        that:
+          - tz_target is match('^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z][A-Za-z0-9_+-]*)*$')
+        fail_msg: "tz_target={{ tz_target }} 不是合法的 zoneinfo 名（形如 Area/City）"
+
     - name: Set timezone to {{ tz_target }}
-      become: true
-      ansible.builtin.command:
-        cmd: timedatectl set-timezone {{ tz_target }}
       when: (tz_probe.stdout.split('|')[0] | trim) != tz_target
-      register: tz_set
+      block:
+        - name: Set timezone via timedatectl
+          become: true
+          ansible.builtin.command:
+            cmd: timedatectl set-timezone {{ tz_target }}
+          register: tz_set
+
+      rescue:
+        # #2317：无 system D-Bus 的目标（systemd-nspawn 容器 / 精简镜像）上 timedatectl
+        # 连不上总线（`Failed to connect to system scope bus via local transport`）。
+        # 时区在**文件层面**同样能对齐，故退化为 zoneinfo 链接 + /etc/timezone；之后的
+        # 断言与真机路径完全相同（不以降级换「看起来对了」）。
+        - name: Record why timedatectl was not usable
+          ansible.builtin.debug:
+            msg: >-
+              {{ inventory_hostname }}: timedatectl 不可用
+              （rc={{ tz_set.rc | default('?') }}；
+              {{ (tz_set.stderr | default('') | trim | truncate(160)) or 'no stderr' }}）
+              ——退化为文件级时区对齐（无 system bus 的目标）。
+
+        - name: Set timezone at the file level (no system bus)
+          become: true
+          ansible.builtin.shell: |
+            set -euo pipefail
+            ln -sfn /usr/share/zoneinfo/{{ tz_target }} /etc/localtime
+            printf '%s\n' '{{ tz_target }}' > /etc/timezone
+          args:
+            executable: /bin/bash
+          register: tz_set_fallback
 
     - name: Re-read timezone and offset
       become: true
@@ -99,7 +135,7 @@
           {{ inventory_hostname }}: {{ tz_probe.stdout.split('|')[0] | trim }}
           ({{ tz_probe.stdout.split('|')[1] | trim }}) ->
           {{ tz_target }} ({{ tz_after.stdout.split('|')[1] | trim }})
-          {{ '[changed]' if (tz_set is changed) else '[already aligned]' }}
+          {{ '[changed]' if ((tz_set is changed) or (tz_set_fallback is changed)) else '[already aligned]' }}
       when: not ansible_check_mode
 
     # 长驻进程不会因 /etc/localtime 变化而重读时区（2026-09-15 在金丝雀 172.21.x.56

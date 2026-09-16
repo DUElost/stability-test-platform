@@ -366,13 +366,17 @@ function ProcessMemorySection({
   processes,
   totalSeries,
 }: {
-  processes: FileServerHostProcessPanel;
-  totalSeries: FileServerMetricPoint[];
+  // #2016：静态 dist-prod 可以比运行中的后端新（控制面不自动重载，须重启进程），
+  // 旧响应的 `control_plane.processes` 与 `history.hostproc_total_anon_bytes` 根本不存在。
+  // 一个展示用面板取不到值只能降级为空态，不得让整页在 render 期抛错。
+  processes?: FileServerHostProcessPanel | null;
+  totalSeries?: FileServerMetricPoint[] | null;
 }) {
   const titleId = 'control-plane-process-memory-title';
-  const items = processes.items;
+  const items = processes?.items ?? [];
+  const series = totalSeries ?? [];
   const totalBytes = items.reduce((acc, item) => acc + item.anon_bytes, 0);
-  const unavailableMessage = processes.error
+  const unavailableMessage = processes?.error
     ? `进程内存指标查询失败（${processes.error}）`
     : '未检测到进程内存采集器（stp-mem-top.timer 未部署或未运行）';
   return (
@@ -388,7 +392,7 @@ function ProcessMemorySection({
           </span>
         )}
       </div>
-      {processes.available ? (
+      {processes?.available ? (
         <Table>
           <TableHeader>
             <TableRow>
@@ -419,10 +423,10 @@ function ProcessMemorySection({
       ) : (
         <InlineEmpty>{unavailableMessage}</InlineEmpty>
       )}
-      {totalSeries.length > 1 && (
+      {series.length > 1 && (
         <div className="mt-3 h-40 w-full" data-testid="hostproc-total-chart">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={totalSeries} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+            <LineChart data={series} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
               <XAxis
                 dataKey="timestamp"
                 tickFormatter={(value) => formatTime(new Date(value * 1000).toISOString()).slice(0, 5)}

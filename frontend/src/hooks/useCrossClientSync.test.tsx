@@ -46,6 +46,28 @@ describe('useCrossClientSync', () => {
     expect(keys).toContain('projects-for-plan-editor');
     expect(keys).toContain('project-models');
   });
+
+  it('invalidates scoped sync queries on visibility restore (#2369)', () => {
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    renderHook(() => useCrossClientSync(), { wrapper });
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'visible',
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    const keys = spy.mock.calls.map((call) => call[0]?.queryKey?.[0]);
+    expect(keys).toContain('plans');
+    expect(keys).toContain('projects');
+    // Must NOT nuke the whole cache (no-arg invalidateQueries).
+    expect(
+      spy.mock.calls.some(
+        (call) => call.length === 0 || call[0] === undefined || Object.keys(call[0] ?? {}).length === 0,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('invalidateCrossClientSyncQueries', () => {

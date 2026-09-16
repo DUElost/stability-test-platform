@@ -1117,3 +1117,99 @@ class TestHostInstallCancelEndpoint:
             .one()
         )
         assert row.details["reason"] == "cancel_not_initiated"
+
+
+class TestHostsListDesiredDigestDegradation:
+    """#2320：`GET /hosts` 现算 desired digest 失败时**降级**，不是 500。
+
+    desired digest 是展示面判据（前端已按 `unknown` 渲染），一次 stat/open 失败只
+    该让那一列变 unknown；旧实现里异常直接穿出路由，整张主机运维页不可用。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_cooldown(self):
+        from backend.api.routes import hosts as hosts_mod
+
+        hosts_mod._desired_digest_failure_until = 0.0
+        yield
+        hosts_mod._desired_digest_failure_until = 0.0
+
+    @staticmethod
+    def _rows(payload):
+        return payload if isinstance(payload, list) else payload["items"]
+
+    def test_oserror_degrades_to_unknown_and_returns_200(
+        self, client, auth_headers, db_session, sample_host, monkeypatch, caplog
+    ):
+        from backend.api.routes import hosts as hosts_mod
+
+        sample_host.agent_artifact_digest = "sha256:agent-reported"
+        db_session.commit()
+
+        def _boom(**_kw):
+            raise OSError("[Errno 116] Stale file handle")
+
+        monkeypatch.setattr(hosts_mod, "compute_desired_artifact_digest", _boom)
+        caplog.set_level("WARNING", logger="backend.api.routes.hosts")
+
+        resp = client.get("/api/v1/hosts", headers=auth_headers)
+
+        assert resp.status_code == 200, f"旧行为是 500：{resp.text[:200]}"
+        rows = self._rows(resp.json())
+        assert rows, "用例前提：至少一台主机"
+        assert {r["agent_code_sync_status"] for r in rows} == {"unknown"}
+        warned = [r for r in caplog.records if "hosts_desired_digest_failed" in r.getMessage()]
+        assert len(warned) == 1, "降级必须可观测，且一次请求只报一次"
+
+    def test_cooldown_prevents_per_request_retry(
+        self, client, auth_headers, sample_host, monkeypatch
+    ):
+        """冷却：轮询热路径上不得每请求都重跑一遍注定失败的输入集遍历。"""
+        from backend.api.routes import hosts as hosts_mod
+
+        calls: list[int] = []
+
+        def _boom(**_kw):
+            calls.append(1)
+            raise OSError("input set is moving")
+
+        monkeypatch.setattr(hosts_mod, "compute_desired_artifact_digest", _boom)
+
+        for _ in range(3):
+            assert client.get("/api/v1/hosts", headers=auth_headers).status_code == 200
+
+        assert len(calls) == 1, "第 2、3 次请求应走冷却，直接降级 unknown"
+
+    def test_success_path_still_judges_sync_status(
+        self, client, auth_headers, db_session, sample_host, monkeypatch
+    ):
+        """反向边界：正常路径的 digest 判据不得因加固而回归。"""
+        from backend.api.routes import hosts as hosts_mod
+
+        sample_host.agent_artifact_digest = "sha256:desired-value"
+        db_session.commit()
+        monkeypatch.setattr(
+            hosts_mod,
+            "compute_desired_artifact_digest",
+            lambda **_kw: "sha256:desired-value",
+        )
+
+        resp = client.get("/api/v1/hosts", headers=auth_headers)
+
+        assert resp.status_code == 200, resp.text
+        rows = self._rows(resp.json())
+        assert rows[0]["agent_code_sync_status"] == "matched"
+
+    def test_programming_error_is_not_swallowed(
+        self, client, auth_headers, sample_host, monkeypatch
+    ):
+        """只吃 OSError：`ValueError` 之类的真缺陷继续冒泡（不新增静默吞咽点，#739）。"""
+        from backend.api.routes import hosts as hosts_mod
+
+        def _bug(**_kw):
+            raise ValueError("programming error, not an IO race")
+
+        monkeypatch.setattr(hosts_mod, "compute_desired_artifact_digest", _bug)
+
+        with pytest.raises(ValueError, match="programming error"):
+            client.get("/api/v1/hosts", headers=auth_headers)
