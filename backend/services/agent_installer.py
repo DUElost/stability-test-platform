@@ -334,18 +334,12 @@ def _record_install_outcome(host_id: str, run: Any, initiated_by: str | None) ->
         db = SessionLocal()
         try:
             host = db.get(Host, host_id)
-            if host is not None:
+            if host is not None and ok:
+                # ADR-0044 D3：agent_installed[_at] 在心跳的 keep-list 里，能穿过 extra 重建；
+                # 安装运行/结果本身不走 extra（那会被心跳按 allowlist 抹掉），走审计。
                 extra = dict(host.extra or {})
-                # ADR-0044 D3：终态结果落 DB——重启后状态查询仍能回放这一次安装。
-                extra["last_install"] = {
-                    "console_run_id": run_id,
-                    "status": status,
-                    "ok": ok,
-                    "ended_at": datetime.now(timezone.utc).isoformat(),
-                }
-                if ok:
-                    extra["agent_installed"] = True
-                    extra["agent_installed_at"] = datetime.now(timezone.utc).isoformat()
+                extra["agent_installed"] = True
+                extra["agent_installed_at"] = datetime.now(timezone.utc).isoformat()
                 host.extra = extra
             record_audit(
                 db,
@@ -357,6 +351,7 @@ def _record_install_outcome(host_id: str, run: Any, initiated_by: str | None) ->
                     "ip": host.ip if host else None,
                     "ok": ok,
                     "rc": exit_code,
+                    "console_status": status,
                     "log_path": log_path,
                     "console_run_id": run_id,
                     "message": "ok" if ok else f"console {status}",

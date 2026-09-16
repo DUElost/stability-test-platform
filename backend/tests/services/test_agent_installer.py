@@ -336,9 +336,8 @@ class TestInstallOutcomeRecording:
 
         extra = self._extra(engine, "out-ok")
         assert extra["agent_installed"] is True
-        assert extra["last_install"]["status"] == "SUCCESS"
-        assert extra["last_install"]["ok"] is True
-        assert extra["last_install"]["console_run_id"] == "con-out-1"
+        # 运行/结果不走 extra（心跳会按 allowlist 重建它）——审计才是持久证据
+        assert "last_install" not in extra
 
         with Session(bind=engine) as session:
             row = (
@@ -347,19 +346,40 @@ class TestInstallOutcomeRecording:
                 .one()
             )
             assert row.details["ok"] is True and row.details["rc"] == 0
+            assert row.details["console_status"] == "SUCCESS"
+            assert row.details["console_run_id"] == "con-out-1"
             assert row.details["initiated_by"] == "admin"
 
     def test_failure_records_outcome_without_marking_installed(self, engine, monkeypatch):
+        from sqlalchemy.orm import Session
         self._seed_host(engine, "out-fail")
         self._record(engine, monkeypatch, "out-fail", self._run("FAILED", exit_code=2))
 
         extra = self._extra(engine, "out-fail")
         assert "agent_installed" not in extra
-        assert extra["last_install"]["status"] == "FAILED"
-        assert extra["last_install"]["ok"] is False
+        with Session(bind=engine) as session:
+            from backend.models.audit import AuditLog
+
+            row = (
+                session.query(AuditLog)
+                .filter(AuditLog.action == "install_agent", AuditLog.resource_id == "out-fail")
+                .one()
+            )
+            assert row.details["ok"] is False
+            assert row.details["console_status"] == "FAILED"
 
     def test_canceled_is_recorded_as_canceled(self, engine, monkeypatch):
+        from sqlalchemy.orm import Session
         self._seed_host(engine, "out-cancel")
         self._record(engine, monkeypatch, "out-cancel", self._run("CANCELED", exit_code=-15))
 
-        assert self._extra(engine, "out-cancel")["last_install"]["status"] == "CANCELED"
+        with Session(bind=engine) as session:
+            from backend.models.audit import AuditLog
+
+            row = (
+                session.query(AuditLog)
+                .filter(AuditLog.action == "install_agent", AuditLog.resource_id == "out-cancel")
+                .one()
+            )
+            assert row.details["console_status"] == "CANCELED"
+            assert row.details["ok"] is False
