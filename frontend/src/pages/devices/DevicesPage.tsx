@@ -265,8 +265,9 @@ export default function DevicesPage() {
     mutationFn: ({ targetProjectKey }: { targetProjectKey: string }) =>
       assignDevicesToProject(targetProjectKey, Array.from(selectedDeviceIds)),
     onSuccess: () => {
-      // 全量 + 任意筛选态的设备缓存一并失效（前缀匹配 ['devices']）
-      queryClient.invalidateQueries({ queryKey: ['devices'] });
+      // 全量 + 任意筛选态的设备缓存一并失效（前缀匹配 ['devices']；全量键
+      // deviceKeys.all() 自 #2068 起挂在该前缀下，见 queryKeys.ts 的注释）
+      queryClient.invalidateQueries({ queryKey: deviceKeys.allLists() });
       // 项目卡片上的设备数/在跑数会变
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.invalidateQueries({ queryKey: ['project-devices'] });
