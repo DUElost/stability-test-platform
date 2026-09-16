@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.core import metrics
+from backend.services import dedup_extract as ds_extract
 from backend.services import dedup_scan as ds
 
 
@@ -312,6 +313,117 @@ def test_run_merge_sync_keeps_local_when_center_unconfigured(tmp_path, monkeypat
     assert (out / "Result_MergeFiles.xls").is_file()
 
 
+def test_run_merge_sync_keeps_registered_local_output_after_center_configured(
+    db_session, sample_plan_run, tmp_path, monkeypatch,
+):
+    """#2281：中心**配置之前**登记的本机产物，在中心配置之后仍不被兜底 sweep 回收。
+
+    「先本机登记、后配中心」是被支持的过渡态（``_publish_merge_to_center`` 返回 None 时
+    回退登记本机路径，`#1074` 有意保留）。此后 sweep 若只看「此刻中心是否配置」就会把
+    这些**唯一副本**删掉，而 artifact 行仍指着它们——同批里真正的中转残留必须照常回收，
+    故本用例带一个无引用的负向对照。
+    """
+    import os
+    import time
+
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    (tmp_path / "start_log_scan.py").write_text("# stub", encoding="utf-8")
+    tool = {"python": "python", "script": str(tmp_path / "start_log_scan.py")}
+    merge_root = tmp_path / "merge_result"
+    center = tmp_path / "center"
+    center.mkdir()
+
+    old_ts = time.time() - 48 * 3600
+    # 无中心态登记的产物：artifact 指向本机路径，且已超期。
+    legacy = merge_root / "2026_09_10_10_00_00"
+    legacy.mkdir(parents=True)
+    (legacy / "Result_MergeFiles.xls").write_bytes(b"old")
+    os.utime(legacy, (old_ts, old_ts))
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(legacy / "Result_MergeFiles.xls"),
+        artifact_type=ds.ARTIFACT_TYPE_MERGE,
+        size_bytes=3,
+    ))
+    db_session.commit()
+    # 负向对照：同批里没有 artifact 指着的中转残留 → 必须照常回收。
+    transit = merge_root / "2026_09_10_11_00_00"
+    transit.mkdir()
+    (transit / "Result_MergeFiles.xls").write_bytes(b"tmp")
+    os.utime(transit, (old_ts, old_ts))
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+    out = merge_root / "2026_09_16_10_00_00"
+
+    def fake_run(*_a, **_k):
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "Result_MergeFiles.xls").write_bytes(b"x")
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stderr = ""
+        proc.stdout = ""
+        return proc
+
+    with patch.object(ds, "resolve_scan_tool", return_value=tool), \
+         patch.object(ds, "_load_org_files_for_merge", return_value=["/fake/a_org.xls"]), \
+         patch.object(ds, "build_merge_argv", return_value=(["python", "scan.py", "-merge_files_list", "x"], None)), \
+         patch.object(ds, "scan_tool_supports_merge_files_list", return_value=True), \
+         patch("backend.services.dedup_scan.subprocess.run", side_effect=fake_run), \
+         patch.object(ds, "_register_merge_artifacts", side_effect=lambda *_a, **_k: 1):
+        assert ds.run_merge_sync(sample_plan_run.id) == "ok"
+
+    assert (legacy / "Result_MergeFiles.xls").is_file()
+    assert not transit.exists()
+    assert not out.exists()  # 本轮产物发布到中心后本机中转照常删除
+
+
+def test_run_merge_sync_skips_sweep_when_reference_lookup_fails(
+    db_session, sample_plan_run, tmp_path, monkeypatch, caplog,
+):
+    """#2281：引用查询失败 → 本轮不清理（删错不可逆，留残留优于毁交付物）。"""
+    import logging
+    import os
+    import time
+
+    (tmp_path / "start_log_scan.py").write_text("# stub", encoding="utf-8")
+    tool = {"python": "python", "script": str(tmp_path / "start_log_scan.py")}
+    merge_root = tmp_path / "merge_result"
+    center = tmp_path / "center"
+    center.mkdir()
+    stale = merge_root / "2026_09_10_10_00_00"
+    stale.mkdir(parents=True)
+    (stale / "Result_MergeFiles.xls").write_bytes(b"old")
+    old_ts = time.time() - 48 * 3600
+    os.utime(stale, (old_ts, old_ts))
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+    out = merge_root / "2026_09_16_10_00_00"
+
+    def fake_run(*_a, **_k):
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "Result_MergeFiles.xls").write_bytes(b"x")
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stderr = ""
+        proc.stdout = ""
+        return proc
+
+    with patch.object(ds, "resolve_scan_tool", return_value=tool), \
+         patch.object(ds, "_load_org_files_for_merge", return_value=["/fake/a_org.xls"]), \
+         patch.object(ds, "build_merge_argv", return_value=(["python", "scan.py", "-merge_files_list", "x"], None)), \
+         patch.object(ds, "scan_tool_supports_merge_files_list", return_value=True), \
+         patch.object(ds, "local_merge_artifact_refs", side_effect=RuntimeError("db down")), \
+         patch("backend.services.dedup_scan.subprocess.run", side_effect=fake_run), \
+         patch.object(ds, "_register_merge_artifacts", side_effect=lambda *_a, **_k: 1):
+        with caplog.at_level(logging.WARNING, logger=ds.__name__):
+            assert ds.run_merge_sync(sample_plan_run.id) == "ok"
+
+    assert stale.is_dir()
+    assert "merge_local_sweep_skipped_ref_lookup_failed" in caplog.text
+
+
 def test_sweep_stale_local_merge_outputs_bounded(tmp_path):
     """超期残留清理只动"像产物目录"且超期的那些：锁文件、新鲜目录、非产物目录都不碰。"""
     import os
@@ -338,6 +450,82 @@ def test_sweep_stale_local_merge_outputs_bounded(tmp_path):
     assert (fresh / "Result_MergeFiles.xls").is_file()
     assert not_a_product.is_dir()
     assert (merge_root / ".stp_merge.lock").is_file()
+
+
+def test_sweep_stale_local_merge_outputs_keeps_referenced(tmp_path, caplog):
+    """#2281：仍被 artifact 指着的目录即使超期也不删——它不是中转残留，是交付物本身。"""
+    import logging
+    import os
+    import time
+
+    merge_root = tmp_path / "merge_result"
+    merge_root.mkdir()
+    referenced = merge_root / "2026_09_10_10_00_00"
+    referenced.mkdir()
+    (referenced / "Result_MergeFiles.xls").write_bytes(b"x")
+    orphan = merge_root / "2026_09_10_11_00_00"
+    orphan.mkdir()
+    (orphan / "Result_MergeFiles.xls").write_bytes(b"y")
+    old = time.time() - 48 * 3600
+    os.utime(referenced, (old, old))
+    os.utime(orphan, (old, old))
+
+    protected = {ds._normalized_dir(referenced): {270}}
+
+    with caplog.at_level(logging.INFO, logger=ds.__name__):
+        assert ds.sweep_stale_local_merge_outputs(merge_root, protected=protected) == 1
+
+    assert (referenced / "Result_MergeFiles.xls").is_file()
+    assert not orphan.exists()
+    assert "merge_local_sweep_kept_referenced" in caplog.text
+    assert "plan_runs=270" in caplog.text
+    # 留痕带上被删目录名（run 号对无引用的中转残留不可得，故记名不记号）。
+    assert "dirs=2026_09_10_11_00_00" in caplog.text
+
+
+def test_local_merge_artifact_refs_maps_uri_to_dir(db_session, sample_plan_run, tmp_path):
+    """#2281：引用查询按「目录 → run 号」归并，且值取规范化后的目录身份。"""
+    from pathlib import Path
+
+    from backend.models.plan_run_artifact import PlanRunArtifact
+
+    merge_root = tmp_path / "merge_result"
+    merge_dir = merge_root / "2026_09_10_10_00_00"
+    merge_dir.mkdir(parents=True)
+    xls = merge_dir / "Result_MergeFiles.xls"
+    xls.write_bytes(b"x")
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(xls),
+        artifact_type=ds.ARTIFACT_TYPE_MERGE,
+        size_bytes=1,
+    ))
+    # 同目录的第二个产物文件 → 归并到同一个 run，不产生两个身份。
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(merge_dir / "Result_MergeFiles_2.xls"),
+        artifact_type=ds.ARTIFACT_TYPE_MERGE,
+        size_bytes=1,
+    ))
+    # 中心路径的 merge artifact 不落在本机 merge_root 下 → 不进引用集。
+    db_session.add(PlanRunArtifact(
+        plan_run_id=sample_plan_run.id,
+        host_id=None,
+        storage_uri=str(tmp_path / "center" / "dedup" / "1" / "merge" / "Result_MergeFiles.xls"),
+        artifact_type=ds.ARTIFACT_TYPE_MERGE,
+        size_bytes=1,
+    ))
+    db_session.commit()
+
+    assert ds.local_merge_artifact_refs(merge_root) == {
+        ds._normalized_dir(merge_dir): {sample_plan_run.id},
+    }
+    # 尾随分隔符不产生第二个身份（调用点两边的路径写法不一定一致）。
+    assert ds.local_merge_artifact_refs(Path(f"{merge_root}/")) == {
+        ds._normalized_dir(merge_dir): {sample_plan_run.id},
+    }
 
 
 def test_merge_stderr_indicates_failure():
@@ -468,6 +656,92 @@ def test_run_merge_all_platforms_records_skipped_failed(
         "mtk": "skipped_failed",
         "unisoc": "skipped_failed",
     }
+
+
+def test_run_merge_all_platforms_publishes_and_registers_partitioned_uris(
+    db_session, sample_plan_run, tmp_path, monkeypatch,
+):
+    """#2253：平台侧发布路径打通「发布 → 登记 → 下游判定」三段。
+
+    既有 6 处 ``_publish_merge_to_center`` 调用**全部不传 ``platform``**，多平台聚合
+    用例又把 ``run_merge_sync`` 整个 mock 掉——于是 ``merge/{platform}/`` 这条分支
+    从未被执行，而下游 ``dedup_extract`` 是按 URI **形状**判平台分区的：发布落分区、
+    登记落 flat 时下游会静默合并到错误位置（#766 的形态）。本用例用 stub 工具走真实
+    ``run_merge_sync``，把三段的路径一致性钉住。
+    """
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+
+    import xlwt
+    from backend.core.dedup_platform import scan_artifact_uri_platform
+    from backend.models.plan_run_artifact import PlanRunArtifact
+    from sqlalchemy import select
+
+    run_id = sample_plan_run.id
+    center = tmp_path / "center"
+    center.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+    tool_dir = tmp_path / "tool"
+    tool_dir.mkdir()
+    (tool_dir / "start_log_scan.py").write_text("# stub", encoding="utf-8")
+    tool = {"python": "python", "script": str(tool_dir / "start_log_scan.py")}
+    merge_root = tool_dir / "merge_result"
+
+    watermark = datetime.now(timezone.utc) - timedelta(hours=1)
+    db_session.add_all([
+        PlanRunArtifact(
+            plan_run_id=run_id, host_id="host-a",
+            storage_uri=str(center / "dedup" / str(run_id) / "scan" / "mtk" / "pr-a_org.xls"),
+            artifact_type=ds.ARTIFACT_TYPE_SCAN, size_bytes=1, created_at=watermark,
+        ),
+        PlanRunArtifact(
+            plan_run_id=run_id, host_id="host-b",
+            storage_uri=str(center / "dedup" / str(run_id) / "scan" / "unisoc" / "pr-b_org.xls"),
+            artifact_type=ds.ARTIFACT_TYPE_SCAN, size_bytes=1, created_at=watermark,
+        ),
+    ])
+    db_session.commit()
+
+    def fake_run(argv, **_kwargs):
+        # 工具固定写 cwd/merge_result/{ts}/：按本轮下发的清单区分是哪个平台的产出。
+        listfile = Path(argv[argv.index("-merge_files_list") + 1])
+        platform = "unisoc" if "/unisoc/" in listfile.read_text(encoding="utf-8") else "mtk"
+        out = merge_root / f"2026_09_16_10_00_00_{platform}"
+        out.mkdir(parents=True, exist_ok=True)
+        wb = xlwt.Workbook()
+        ws = wb.add_sheet("S")
+        ws.write(0, 0, "Path")
+        ws.write(1, 0, "/mnt/hdd/aee_events/.stp-scan/pr-x/F/S/aee_exp/"
+                       "2026_0916_000000_000_db.00.NE/main.dbg")
+        wb.save(str(out / "Result_MergeFiles.xls"))
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stderr = ""
+        proc.stdout = ""
+        return proc
+
+    with patch.object(ds, "resolve_scan_tool", return_value=tool), \
+         patch.object(ds, "scan_tool_supports_merge_files_list", return_value=True), \
+         patch("backend.services.dedup_scan.subprocess.run", side_effect=fake_run):
+        assert ds.run_merge_all_platforms_sync(
+            run_id, round_started_at=watermark,
+        ) == "ok"
+
+    db_session.expire_all()
+    uris = db_session.execute(
+        select(PlanRunArtifact.storage_uri).where(
+            PlanRunArtifact.plan_run_id == run_id,
+            PlanRunArtifact.artifact_type == ds.ARTIFACT_TYPE_MERGE,
+        )
+    ).scalars().all()
+    assert len(uris) == 2
+    for platform in ("mtk", "unisoc"):
+        uri = next(u for u in uris if f"/merge/{platform}/" in u)
+        # 登记形状 = 发布形状 = 下游判定形状。
+        assert ds_extract._merge_uri_is_platform_partitioned(uri)
+        assert scan_artifact_uri_platform(uri) == platform
+    # 发布后本机中转照常删除（E-3：稳态下 merge_result/ 为空）。
+    assert ds._merge_output_dir_names(merge_root) == set()
 
 
 def test_scan_completeness_scopes_to_since_watermark(
@@ -692,6 +966,49 @@ class TestPublishMergeToCenter:
         dest = ds._publish_merge_to_center(270, merge_dir)  # 重跑覆盖
         assert (dest / "Result_MergeFiles.xls").read_text(encoding="utf-8") == "new"
 
+    def test_publishes_to_platform_partitioned_dest(self, tmp_path, monkeypatch):
+        """#2253：带 platform 的发布落 ``merge/{platform}/``，且下游按形状判定为分区 URI。
+
+        ADR-0032 B1 的平台分区此前**零覆盖**（既有 6 处调用全部不传 platform）：
+        发布路径与登记路径必须同形，否则 ``dedup_extract`` 会按形状把 jira bundle
+        放到错误位置（#766 的静默丢弃形态）。
+        """
+        center = tmp_path / "center"
+        center.mkdir()
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+
+        dests = {}
+        for platform in ("mtk", "unisoc"):
+            merge_dir = tmp_path / f"merge_result_{platform}" / "d1"
+            merge_dir.mkdir(parents=True)
+            (merge_dir / "Result_MergeFiles.xls").write_text("x", encoding="utf-8")
+            dests[platform] = ds._publish_merge_to_center(270, merge_dir, platform=platform)
+
+        assert dests["mtk"] == center / "dedup" / "270" / "merge" / "mtk"
+        assert dests["unisoc"] == center / "dedup" / "270" / "merge" / "unisoc"
+        for platform, dest in dests.items():
+            assert (dest / "Result_MergeFiles.xls").is_file()
+            uri = str(dest / "Result_MergeFiles.xls")
+            assert ds_extract._merge_uri_is_platform_partitioned(uri)
+            assert ds_extract._resolve_merge_xls_jira_dest(
+                tmp_path / "jira", dest / "Result_MergeFiles.xls",
+            ) == tmp_path / "jira" / "merge" / platform / "Result_MergeFiles.xls"
+
+    def test_flat_publish_is_not_platform_partitioned(self, tmp_path, monkeypatch):
+        """不带 platform 的发布保持 flat 形状（既有行为，回归钉住）。"""
+        merge_dir = tmp_path / "merge_result" / "d3"
+        merge_dir.mkdir(parents=True)
+        (merge_dir / "Result_MergeFiles.xls").write_text("x", encoding="utf-8")
+        center = tmp_path / "center"
+        center.mkdir()
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(center))
+
+        dest = ds._publish_merge_to_center(270, merge_dir)
+
+        assert dest == center / "dedup" / "270" / "merge"
+        assert not ds_extract._merge_uri_is_platform_partitioned(
+            str(dest / "Result_MergeFiles.xls"))
+
 
 # ── merge 报告 Path 对外重写（2026-08-31）────────────────────────────
 
@@ -743,6 +1060,47 @@ class TestRewriteMergeReportPaths:
         assert sheet.cell_value(1, 1) == (
             f"{center}/devices/280/2026_0831_020000_789_db.fatal.04.KE/")
         assert sheet.cell_value(1, 2) == "Kernel (KE)"  # 其余列原样
+
+    @pytest.mark.parametrize(
+        ("header", "warns"),
+        [
+            ("Path", False),
+            ("path", False),      # 大小写容忍
+            (" Path ", False),    # 首尾空白容忍
+            ("FilePath", True),   # 改名 → 必须留痕
+            # BOM（U+FEFF）：str.strip() 不剥，落进按名依赖的盲区
+            ("\ufeffPath", True),
+        ],
+    )
+    def test_path_column_drift_is_visible(self, tmp_path, caplog, header, warns):
+        """#2256：按名依赖取不到 Path 列时不再静默跳过，且容忍面与盲区边界可钉。
+
+        工具已实证会改写表头（UNISOC→MTK 形态归一），本仓库按列名消费——
+        「表头漂移」必须与「本轮确实没有可重写的行」在日志上可分。
+        """
+        import logging
+
+        import xlwt
+
+        xls = tmp_path / "Result_MergeFiles.xls"
+        wb = xlwt.Workbook()
+        ws = wb.add_sheet("Sheet1")
+        ws.write(0, 0, header)
+        ws.write(1, 0, "/mnt/hdd/aee_events/.stp-scan/pr280-x/F/S/aee_exp/"
+                       "2026_0831_020000_789_db.fatal.04.KE/__exp_main.txt")
+        wb.save(str(xls))
+
+        with caplog.at_level(logging.WARNING, logger=ds.__name__):
+            ds._rewrite_merge_report_paths_to_center(tmp_path, 280, str(tmp_path / "center"))
+
+        drift = [
+            record for record in caplog.records
+            if record.getMessage().startswith("merge_report_path_column_missing")
+        ]
+        assert bool(drift) is warns
+        if warns:
+            # 留痕带实际表头（不可见字符在日志里是转义形态，故比参数而非文本）。
+            assert header in drift[0].args[1]
 
     def test_publish_rewrites_center_copy(self, tmp_path, monkeypatch):
         import xlwt

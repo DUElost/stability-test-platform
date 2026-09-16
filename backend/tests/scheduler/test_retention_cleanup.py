@@ -514,3 +514,197 @@ def test_purge_refuses_target_outside_shared_root(cleanup_env, tmp_path, monkeyp
 
     assert (keep / "keep.log").exists(), "越界目标被删除（容器化校验失效）"
     assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
+
+
+# ── #2262：devices/unassigned/{event_id}/（不随 run 分桶，关联不搬文件） ──────
+
+
+def _mk_unassigned_event(db, run, device, host, event_id, nfs_root, *, state="ARCHIVED"):
+    """建一条 remote_path 指向 {nfs_root}/devices/unassigned/{event_id}/ 的 DLE 行。"""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from backend.models.device_log_event import DeviceLogEvent
+
+    db.add(DeviceLogEvent(
+        id=event_id,
+        serial=device.serial,
+        platform="UNISOC",
+        event_type="UNIVIEW",
+        event_subtype="KE",
+        detected_at=datetime.now(timezone.utc),
+        state=state,
+        local_path="/local/uniview/2262",
+        remote_path=str(Path(nfs_root) / "devices" / "unassigned" / str(event_id)),
+        host_id=str(host.id),
+        job_id=None,
+        plan_run_id=run.id,
+        signal_seq_no=None,
+    ))
+    db.commit()
+
+
+def _make_unassigned_dir(root, event_id):
+    d = root / "devices" / "unassigned" / str(event_id) / "artifacts"
+    d.mkdir(parents=True)
+    (d / "evt.bin").write_text("x")
+    return d.parent
+
+
+def test_unassigned_event_dir_purged_with_row(
+    cleanup_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """#2262：行被 retention 删除时，同批清掉它引用的 devices/unassigned/{event_id}/。
+
+    反例（修复前）：该目录不随 run 分桶、关联也不搬文件 → run 级 purge 命中不到，
+    行删后目录成为永不可回溯的孤儿；行还活着时**不得**删（remote_path 仍是回溯依据）。
+    """
+    from uuid import uuid4
+
+    db, plan = cleanup_env
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    run = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    active_run = _mk_run(db, plan, status="RUNNING", age_days=0)
+    expiring_event, live_event = uuid4(), uuid4()
+    _mk_unassigned_event(db, run, sample_device, sample_host, expiring_event, tmp_path)
+    _mk_unassigned_event(db, active_run, sample_device, sample_host, live_event, tmp_path)
+    doomed = _make_unassigned_dir(tmp_path, expiring_event)
+    kept = _make_unassigned_dir(tmp_path, live_event)
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert not doomed.exists(), "到期行的 unassigned 目录未被清理"
+    assert kept.exists(), "未到期 run 的 unassigned 目录不得清理"
+    assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is None
+
+
+def test_unassigned_dir_purge_failure_defers_run(
+    cleanup_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """目录清不掉 → 该 run 的行保留（先文件后行，下轮重试）。"""
+    import shutil as _shutil
+    from uuid import uuid4
+
+    db, plan = cleanup_env
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    run = _mk_run(db, plan, status="SUCCESS", age_days=10)
+    event_id = uuid4()
+    _mk_unassigned_event(db, run, sample_device, sample_host, event_id, tmp_path)
+    target = _make_unassigned_dir(tmp_path, event_id)
+
+    real_rmtree = _shutil.rmtree
+
+    def _boom(path, *args, **kwargs):
+        if "/unassigned/" in str(path):
+            raise OSError("read-only filesystem")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(_shutil, "rmtree", _boom)
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert target.exists()
+    assert db.query(PlanRun).filter(PlanRun.id == run.id).first() is not None
+
+
+def test_unassigned_purge_rejects_non_child_path(
+    cleanup_env, sample_host, sample_device, tmp_path, monkeypatch,
+):
+    """remote_path 形态不符（不是 devices/unassigned 的直接子目录）→ 一律不删。
+
+    fail-safe：宁可留孤儿，也不让被污染的 remote_path 把 rmtree 引到别处。
+    """
+    from uuid import uuid4
+
+    from backend.models.device_log_event import DeviceLogEvent
+
+    db, plan = cleanup_env
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs))
+    run = _mk_run(db, plan, status="SUCCESS", age_days=10)
+
+    # 越界形态：借 unassigned 前缀 + '..' 指到 jira 桶
+    outside = nfs / "jira" / "999" / "bundle"
+    outside.mkdir(parents=True)
+    (outside / "keep.zip").write_text("keep")
+    event_id = uuid4()
+    db.add(DeviceLogEvent(
+        id=event_id,
+        serial=sample_device.serial,
+        platform="UNISOC",
+        event_type="UNIVIEW",
+        event_subtype="KE",
+        detected_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        state="ARCHIVED",
+        local_path="/local/uniview/2262",
+        remote_path=str(nfs / "devices" / "unassigned" / ".." / ".." / "jira" / "999" / "bundle"),
+        host_id=str(sample_host.id),
+        plan_run_id=run.id,
+    ))
+    db.commit()
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert (outside / "keep.zip").exists(), "越界目标被删除"
+
+
+# ── #2278：取锁之后的早退也必须上报持锁窗口 ─────────────────────────────────
+
+
+def _window_recorder(monkeypatch) -> list:
+    windows: list = []
+    monkeypatch.setattr(cron_scheduler, "record_retention_txn", windows.append)
+    return windows
+
+
+def test_window_reported_when_lock_recheck_empties_batch(cleanup_env, monkeypatch):
+    """路径 ①：`_retention_lock_runs` 锁内复核清空 → 早退，但取锁（含等待）已发生。
+
+    #2104 的指标就是为了观测「锁序统一后 死锁→等待」的代价，而这一类 tick 恰恰
+    「什么都没删成」——不在上报点里，代价就永远看不见（三个上报点全在这两个 return
+    之后，等于把最该覆盖的样本丢掉）。
+    """
+    db, plan = cleanup_env
+    windows = _window_recorder(monkeypatch)
+    monkeypatch.setattr(cron_scheduler, "_retention_lock_runs", lambda *_a, **_k: [])
+    _mk_run(db, plan, age_days=10)
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert len(windows) == 1, "锁内复核清空后的早退必须上报一次窗口"
+    assert windows[0] >= 0.0
+
+
+def test_window_reported_when_all_candidates_kept_by_refs(cleanup_env, monkeypatch):
+    """路径 ②：`_retention_safe_ids` 清空安全集 → 该出口同样必须上报窗口。
+
+    该出口在今天的代码里**只能由并发触发**：`_retention_candidate_ids` 已在 SQL 层
+    用 `~referenced` 排掉被引用者，候选非空而安全集为空只剩「读取与加锁之间新插入
+    了引用」这一种形态——也正因为它罕见，漏报才会长期无人发现。链引用计算本身由
+    上面的 #936 用例覆盖，这里钉的是**该出口的窗口接线**。
+    """
+    db, plan = cleanup_env
+    windows = _window_recorder(monkeypatch)
+    kept = _mk_run(db, plan, age_days=10)
+    monkeypatch.setattr(
+        cron_scheduler, "_retention_safe_ids", lambda _db, ids: ([], set(ids)),
+    )
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert len(windows) == 1, "安全集为空的早退必须上报一次窗口"
+    assert windows[0] >= 0.0
+    db.expire_all()
+    assert db.query(PlanRun).filter_by(id=kept.id).one() is not None, "未上报≠已删除"
+
+
+def test_no_window_reported_before_any_lock_is_taken(cleanup_env, monkeypatch):
+    """反向边界：**未取锁**（无候选）时不得上报——否则窗口指标会被空 tick 稀释。"""
+    db, plan = cleanup_env
+    windows = _window_recorder(monkeypatch)
+    _mk_run(db, plan, status="RUNNING", age_days=0)  # 运行中 → 不是候选
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert windows == [], "候选为空（未进入取锁阶段）不应产生窗口观测"

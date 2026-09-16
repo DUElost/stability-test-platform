@@ -380,8 +380,20 @@ def run_merge_sync(
         # I-13 方案 A 兜底：中心已配置时，本机 merge_result/ 只是**中转**（成功路径的那份在
         # 发布+登记后立即删除），而失败重试会不断产生新的 {ts}/ —— 这里顺手收敛超期残留。
         # 中心**未**配置时不清理：那时 artifact 就指向本机路径，删了即毁产物。
+        # #2281：「此刻中心已配置」不等于「这些目录是中转」——中心配置**之前**登记的 run
+        # 的 artifact 仍指向本机路径（#1074 有意保留的回退分支），故还要问一次
+        # 「有没有持久引用指着它」。查询失败时不清理（删错不可逆，宁可留残留）。
         if resolve_shared_storage_root():
-            sweep_stale_local_merge_outputs(merge_root)
+            try:
+                protected = local_merge_artifact_refs(merge_root)
+            except Exception:
+                logger.warning(
+                    "merge_local_sweep_skipped_ref_lookup_failed root=%s",
+                    merge_root,
+                    exc_info=True,
+                )
+            else:
+                sweep_stale_local_merge_outputs(merge_root, protected=protected)
 
         before_names = _merge_output_dir_names(merge_root)
         baseline_mtime = latest_merge_output_mtime(merge_root)
@@ -776,17 +788,60 @@ def _discard_local_merge_output(merge_dir: Path) -> bool:
         return False
 
 
+def _normalized_dir(path: Path) -> Path:
+    """路径规范化后的目录身份（尾随分隔符 / ``.`` / 重复分隔符不产生两个身份）。"""
+    return Path(os.path.normpath(str(path)))
+
+
+def local_merge_artifact_refs(merge_root: Path) -> Dict[Path, set[int]]:
+    """仍被 ``plan_run_artifact`` 指着的**本机** merge 产物目录 → 引用它的 run 号（#2281）。
+
+    为什么需要：「此刻中心已配置」只说明**新**产物会去中心，不说明 ``merge_root`` 下的
+    既有目录是中转。中心配置之前登记的 run，其 artifact 指向的正是这些本机目录
+    （:func:`run_merge_sync` 里 ``published is None`` 的回退分支，`#1074` 有意保留）——
+    对它们做 mtime 清理删的是**唯一副本**，而 ``dedup_extract`` 侧对缺失路径是静默跳过，
+    产物丢失不会被任何计数暴露。
+
+    **查询失败向上抛**：删错不可逆，调用点据此跳过本轮清理（留残留优于毁交付物）。
+    """
+    from backend.core.database import SessionLocal
+
+    prefix = os.path.normpath(str(merge_root)) + os.sep
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(PlanRunArtifact.plan_run_id, PlanRunArtifact.storage_uri).where(
+                PlanRunArtifact.artifact_type == ARTIFACT_TYPE_MERGE,
+                # autoescape：路径里的 `_` / `%` 是字面量，不做 LIKE 通配。
+                PlanRunArtifact.storage_uri.startswith(prefix, autoescape=True),
+            )
+        ).all()
+    finally:
+        db.close()
+
+    refs: Dict[Path, set[int]] = {}
+    for plan_run_id, uri in rows:
+        refs.setdefault(_normalized_dir(Path(uri).parent), set()).add(plan_run_id)
+    return refs
+
+
 def sweep_stale_local_merge_outputs(
     merge_root: Path,
     *,
     retention_hours: float = _MERGE_LOCAL_RETENTION_HOURS,
     now: float | None = None,
+    protected: Mapping[Path, Collection[int]] | None = None,
 ) -> int:
     """清理 ``merge_result/`` 下**超期残留**的中转目录（I-13 方案 A 的兜底）。
 
     **调用方必须先确认中心已配置**：中心未配置时 artifact 就指向本机路径，删除即毁产物。
     本函数不做这层判断（它只按 mtime 与"是否像产物目录"筛），判断留在调用点，避免把
     交付语义藏进一个清理函数里。
+
+    **``protected`` 是第二条判据**（#2281）：中心已配置只排除了「中心未配置」那一种保留
+    理由，排除不了「该目录仍被 artifact 指着」——仍在册的目录是交付物本身，不是中转残留。
+    键取 :func:`_normalized_dir` 规范化后的目录，值为引用它的 run 号（仅用于留痕）；
+    缺省空映射表示无引用，只用于无 DB 的调用场景与单测。
 
     只挑**含 ``Result_MergeFiles*.xls`` 的子目录**（工具产物形态）——锁文件
     ``.stp_merge.lock`` 与其它非目录内容一律不碰。
@@ -795,11 +850,20 @@ def sweep_stale_local_merge_outputs(
         return 0
     cutoff = (now if now is not None else time.time()) - retention_hours * 3600
     removed = 0
+    removed_dirs: list[str] = []
     for subdir in sorted(merge_root.iterdir()):
         if not subdir.is_dir():
             continue
         try:
             if not any(subdir.glob("Result_MergeFiles*.xls")):
+                continue
+            refs = protected.get(_normalized_dir(subdir)) if protected else None
+            if refs:
+                logger.info(
+                    "merge_local_sweep_kept_referenced dir=%s plan_runs=%s",
+                    subdir,
+                    ",".join(str(run_id) for run_id in sorted(refs)),
+                )
                 continue
             if subdir.stat().st_mtime >= cutoff:
                 continue
@@ -807,10 +871,11 @@ def sweep_stale_local_merge_outputs(
             continue
         if _discard_local_merge_output(subdir):
             removed += 1
+            removed_dirs.append(subdir.name)
     if removed:
         logger.info(
-            "merge_local_stale_swept root=%s removed=%d retention_h=%s",
-            merge_root, removed, retention_hours,
+            "merge_local_stale_swept root=%s removed=%d dirs=%s retention_h=%s",
+            merge_root, removed, ",".join(removed_dirs), retention_hours,
         )
     return removed
 
@@ -920,6 +985,13 @@ def _rewrite_merge_report_paths_to_center(
             None,
         )
         if path_col is None:
+            # #2256：按名依赖（表头契约）取不到列时**不再静默跳过**——列被改名/删除与
+            # 本轮确实没有可重写的行必须可分得开；带上实际读到的表头便于定位漂移形态
+            # （如 BOM `U+FEFF` 这类 `strip()` 不剥的不可见字符）。
+            logger.warning(
+                "merge_report_path_column_missing path=%s headers=%s",
+                xls, headers[:32],
+            )
             continue
         wb = xlwt.Workbook()
         ws = wb.add_sheet(sheet.name)

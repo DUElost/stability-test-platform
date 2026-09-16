@@ -86,9 +86,10 @@ Z2581/MyOS16.0.1 上有效，在本组合**全部失效**（`ro.debuggable=1` �
   `device_log_event(UNIVIEW, Java Crash/ANR/Boot Category)` 与对应
   `job_log_signal(source=reconciler)`——那 2 条 Boot Category 即其存量。故本轮缺口性质是
   **构造手段失效**，不是链路有效性存疑。
-- 正向替代路径（不依赖触发器）：观察窗口内被动等自然新事件目录（压测机自然产出
-  JE/ANR/NE 新目录即可走全链），或把主动触发移回 Z2581 执行。**后者已于同日上午执行，
-  正向闭环成立，见下节。**
+- 正向替代路径（不依赖触发器）：原拟「观察窗口内被动等自然新事件目录」**当日证伪**——驻留
+  观察者独占设备且 probe 只读，15h/1170 tick 0 事件（等待 = 占机 = 无压测，自相矛盾，见下节
+  结尾）；改挂真实压测 run 即自然成立（reconciler 任一 UNISOC job 在跑都会接住落盘事件）。
+  主动触发移回 Z2581 执行——**已完成，正向闭环成立，见下节。**
 
 ### 换机正向再实证（同日 11:48–12:05，Z2581 `00004a4f` @ host `172-21-x-x`，
 `MyOS16.0.1_Z2581_GEN_AF`）
@@ -110,7 +111,10 @@ uniview 根仅 `Reboot.103000002`（normalboot 被 #2083 拒收 → 基线干净
 **现场恢复**：hang 后 system_server watchdog 反复触发（load ≈12，force-stop 卡死、
 `kill -9` settings 不解环）→ abort PlanRun 410（Job `ABORTED`、3 信号保留、租约释放）→
 `adb reboot` 恢复（`sys.boot_completed=1`，租约空）。gO7uVr 窗口（PlanRun 409 / 62002360）
-全程未受影响。
+全程未受影响，并于当日 12:26 复核收口：**15h / 1170 patrol 轮 / 0 新信号（全类别）**——
+观察窗对「等自然事件」无效（占机即断供），且每拍仍为 `NE.103000003` 白烧 180s（#2252 形态的
+又一实证）。已 abort（Job `ABORTED`、租约释放），62002360 回压测池——ANR 类正向补样改由
+后续真实压测 run 承接。
 
 ### 实证：NE 大目录整目录 pull 恒超时 → 已立单 #2252
 
@@ -121,6 +125,51 @@ uniview 根仅 `Reboot.103000002`（normalboot 被 #2083 拒收 → 基线干净
 持 `host_extraction_slot`（#740 与 MTK 路共享提取预算），挤占同 host 其它 pull。这正是下节
 Revisit「载荷策略」项的现实证据 → **已立 [#2252](https://github.com/DUElost/stability-test-platform/issues/2252)**。
 
+### 触发自检 SOP（可批产；两台独立复核通过，2026-09-16）
+
+**用途**：派发中的平台任务上确认「设备自造异常 → 平台监测到信号」持续成立。
+**适用面**：仅 Z2581 系（`MyOS16.0.1_Z2581_GEN_AF`）——Z2582/MyOS16.0.3 触发被 ROM 吞（上上节）；
+自检判据只用 crash 类（hang 会挂 system_server 致 watchdog 风暴需重启收尾；ANR 姿势两台均未
+复现，见上节）。
+
+**配方（按序）**：
+1. 选机：host `172-21-x-x`（当前 reconciler 在跑态）上 ONLINE 空闲 Z2581；先看设备端
+   `ls /data/ylog/uniview_exception/`——避免带超大 `NE.*` 的机（#2252 每拍白烧 180s，
+   拖长时延上限）；
+2. 基线：`job_log_signal(category='UNIVIEW', device_serial=…)` 行数（理想为 0，新增即可归因）；
+3. 驻留观察窗：`POST /api/v1/plans/51/run {"device_ids":[<id>]}`（Plan 51 = probe v1.0.1 四根，
+   patrol 45s——reconciler 随 job 启动，驻留保证接住落盘晚于触发的事件）；
+4. 进 patrol 后单发触发：`adb -s <serial> shell am crash com.android.settings`
+   （JE 类）或 `kill -11 <pid>`（NE 类，同日补测坐实，见下矩阵）；
+5. 设备端差分（≤15s）：应现 `JE.103000004` 新目录 + dropbox `system_app_crash`；
+6. 平台端（≤2min）：`job_log_signal` 新 UNIVIEW 行（`subtype=Java Crash`、`package=com.android.settings`、
+   `source=reconciler`），DLE 终态 `REMOTE`；
+7. 释放：`POST /api/v1/plan-runs/<run>/abort`，回查租约空、设备回 ONLINE。
+
+**复核记录（同日双机，均一次通过）**：
+
+| 设备 | 触发（真实钟） | 设备端落盘 | 平台 emit | 备注 |
+|---|---|---|---|---|
+| `00004a4f` | 11:51:27 | ≤25s | 11:52:02（seq1，+35s） | 该机时钟恒慢 ~6.9 天（#785 形态）；seq2 为 #2010 签名变化重发样本 |
+| `0001cb4d` | 14:22:15 | ≤12s | 14:23:52（+97s） | 时钟准：`aee_ts=2026-09-16_14:22:13` 与真实钟秒级吻合——坐实「慢钟」系单机漂移而非链路问题；Run 411/Job 17941，abort 后设备回池 |
+| `0001cb4d`（NE 补测） | 14:36:29（`kill -11` settings） | ≤15s（**新容器 `NE.103000003`** + tombstone） | 14:38:33（+124s，`Native Crash`） | Run 412/Job 17942；`aee_ts` 再对秒；abort 后设备回池 |
+
+**类型覆盖矩阵（监测面 = uniview 守护落盘，解析面对类型无感）**：
+
+| 类别 | 平台解析 | 监测实证 | 状态 |
+|---|---|---|---|
+| Java Crash（JE） | `event_name` | 今日双机触发复现 ×3 | ✅ 触发级 |
+| watchdog（SWT） | `event_name` | 今日 `am hang` 触发复现 | ✅ 触发级 |
+| Native Crash（NE） | `event_name`/前缀 | 今日 `kill -11` 触发复现 | ✅ 触发级 |
+| ANR | 前缀 `ANR`（行常缺 `event_name`） | 62002360 历史自然事件入库 ×2（09-14/15） | ✅ 历史级（构造姿势未复现，勿作自检判据） |
+| 异常 Reboot（Boot Category） | `event_name` | 62002360 历史入库 ×2；normalboot-only **有意拒收**（#2083） | ✅ 历史级 |
+| uniview 之外（`/data/anr` 独立 trace、tombstones-only、ylog 系） | — 不在采集面 | — | ❌ 待边界裁决（#73 Revisit「附加源」） |
+
+**粒度限定**：容器目录内同类别多条发生经 `fold_unievent_info` 折叠，一次签名变化发**一条**
+（#2010/#2080 语义即为此设计）；逐条精确对应 = #2252 按 `{seq}-{ts}.tar.gz` 增量拉取的终态。
+
+两机基线均 0 → 触发后恰 1 条新鲜信号、1:1 对应；采集→emit→入库→上送（`REMOTE`）每次全链走通。
+
 ## Revisit
 
 - **`kick_datetime` 是设备本地时区裸串**（`2026-09-08_06:59:12.031`，无 tz）：`device_timestamp`
@@ -130,6 +179,8 @@ Revisit「载荷策略」项的现实证据 → **已立 [#2252](https://github.
   （该机 100 条）、`/data/ylog`，本单只对齐了 uniview 主路径 → 是否纳入待边界裁决。
   换机实证补充：Z2581 上 `kill -STOP`+tap 40s 窗口内 `/data/anr` 不产 trace——ANR 类事件的
   设备侧产生时延/路径与 uniview `ANR.103000005` 的关系需自然事件样本再判，勿以该姿势否定 ANR 链路。
+  自然样本**勿用观察者驻留等待**（驻留 = 占机 = 无压测，15h/1170 tick/0 事件实证），搭真实
+  压测 run 顺路采集即可。
 - **载荷策略**：现为整目录 pull，toolkit 是按 `{seq}-{ts}.tar.gz` 与事件行**按序号对应**增量拉取
   → 目录很大时（如 `NE.103000003` 有上百个 tar）值得收敛。**已立 #2252**（2026-09-16 实证：
   该目录 1.9GB/999 files，整目录 pull 恒 180s 超时 → 永久无信号 + 每拍占用提取预算，

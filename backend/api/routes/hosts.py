@@ -935,7 +935,7 @@ def host_install_agent(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """触发 Agent 首次安装（ansible-playbook install_agent.yml，SAQ 异步执行）。
+    """触发 Agent 首次安装（ansible-playbook install_agent.yml，RunConsole 承载，ADR-0044）。
 
     自动检测控制平面 ansible-playbook + sshpass 是否可用；缺失则 501。
     安装脚本为非交互模式，回连地址取自控制面 STP_AGENT_INSTALL_API_URL；
@@ -1160,6 +1160,72 @@ def host_install_status(
         "room": None,
         "log_path": (
             str(RunConsole.instance().log_file_path(started_run_id)) if started_run_id else None
+        ),
+    }
+
+
+@router.post("/{host_id}/install/cancel")
+def host_install_cancel(
+    host_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """取消在跑的 Agent 安装（RunConsole 进程组 kill）；取消 ≠ 失败（#2255 / ADR-0044）。
+
+    现场缺口：目标机侧 sshd 会话楔住时，此前只能 `systemctl restart` 控制面来收尾，
+    否则重跑会 409 `install already in progress`。终态仍由 console 的 on_complete 落库
+    （`install_agent` 审计 status=CANCELED），S5 侧报 `agent_install_canceled`。
+    """
+    console_run_id = get_active_install_console_id(host_id)
+    if not console_run_id:
+        # 取消是可归责动作：没有在跑的安装也要留痕（对齐 dedup 的 cancel 口径）
+        record_audit(
+            db,
+            action="install_agent_cancel",
+            resource_type="host",
+            resource_id=host_id,
+            details={"reason": "no_install_in_progress"},
+            request=request,
+            user_id=current_user.id,
+            username=current_user.username,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "NO_INSTALL_IN_PROGRESS",
+                "message": f"Host {host_id} has no Agent installation in progress.",
+            },
+        )
+
+    canceled = RunConsole.instance().cancel(console_run_id)
+    record_audit(
+        db,
+        action="install_agent_cancel",
+        resource_type="host",
+        resource_id=host_id,
+        details={
+            "console_run_id": console_run_id,
+            "canceled": canceled,
+            "reason": None if canceled else "cancel_not_initiated",
+        },
+        request=request,
+        user_id=current_user.id,
+        username=current_user.username,
+    )
+    db.commit()
+    return {
+        "ok": canceled,
+        "host_id": host_id,
+        "console_run_id": console_run_id,
+        "canceled": canceled,
+        "status": "canceling" if canceled else "not_canceled",
+        "message": (
+            "Cancel requested; the terminal state is recorded from the console "
+            "(canceled is not a failure)."
+            if canceled
+            else "The run could not be canceled (already terminal, or its owner instance is unreachable)."
         ),
     }
 

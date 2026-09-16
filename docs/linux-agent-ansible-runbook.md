@@ -464,9 +464,11 @@ cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook p
 2. 点击 → `POST /api/v1/hosts/{id}/install` → 起 **RunConsole**（ADR-0044：安装由它自持，
    不再有等待它的 SAQ 作业）→ 临时 inventory（`ansible_become_password` = SSH 密码），
    调 `install_agent.yml --limit <ip>`
-3. ansible stdout 走 RunConsole（实时日志 room `console:{id}` + 落盘 replay + 取消/串行）
-4. 终态由 console 回调落库：`install_agent` 审计 + `host.extra.agent_installed[_at]` +
-   `host.extra.last_install`（重启后 `/install/status` 仍可回放）
+3. ansible stdout 走 RunConsole（实时日志 room `console:{id}` + 落盘 replay + 取消/串行）；
+   卡住时不必重启控制面：面板行内「取消」（`POST /hosts/{id}/install/cancel`，取消 ≠ 失败，
+   见 ADR-0044/#2255）
+4. 终态由 console 回调落库：`install_agent` 审计（持久证据——`host.extra` 会被心跳按 allowlist
+   重建，不承载历史）+ `host.extra.agent_installed[_at]`
 5. `install_agent.sh` 安装提权 wrapper `/usr/local/sbin/stp-agent-priv` 并由 bootstrap 写 `/etc/sudoers.d/stability-test-agent`：NOPASSWD 只授 wrapper 单命令 + 固定服务 systemctl（ADR-0037/#1250），**装完即解锁后续免密热更新**
 6. `GET /hosts/{id}/install/status` 取 console 快照/ DB 回放（`idle|running|succeeded|failed|canceled|lost`）；
    前端按终态收尾（`lost` 按取消处理，见 ADR-0044 D5）
