@@ -480,7 +480,19 @@ def await_install(
         saq = str(state.get("status") or "")
         if console in {"SUCCESS"}:
             return None
-        if console in {"FAILED", "CANCELED"} or saq in {"failed", "aborted"}:
+        # CANCELED 先于 saq 判定：SAQ 作业窗口到期（900s，现场实测）会同时把作业标成
+        # failed/aborted，而 console 的 CANCELED 才是「怎么结束的」那一条证据；两者合并
+        # 报成 agent_install_failed 会让操作者去目标机找一个不存在的错误。
+        if console in {"CANCELED"}:
+            detail = f"console=CANCELED, saq={saq or 'unknown'}"
+            log_path = state.get("log_path")
+            if log_path:
+                detail += f", log={log_path}"
+            return replace(
+                _fail("install.s5.install", "agent_install_canceled", location="$.agents"),
+                message=f"The Agent installation was canceled before it finished ({detail}).",
+            )
+        if console in {"FAILED"} or saq in {"failed", "aborted"}:
             return _fail("install.s5.install", "agent_install_failed", location="$.agents")
         if time.monotonic() >= deadline:
             return _fail("install.s5.install", "install_timeout", location="$.agents")

@@ -74,7 +74,8 @@ PR 路径保持原样（未装即 skip），不引入第三方二进制依赖。
   - 棘轮三向注入（新告警无场景 / 债条目已补场景 / 债条目指向已删规则）→ 各自 **1 failed**
 - 安装步骤脚本单独执行：`env -i PATH=/usr/bin:/bin`（无 promtool）跑 ci.yml 里那段 run →
   **rc=0**，摘要校验通过、`GITHUB_PATH` 追加成功、版本自证通过（100MB 下载在本机 8.5s）
-- `pytest tests/ -q` → **1075 passed**
+- `pytest tests/ -q` → **1083 passed**（合并 origin/main 后的最终 head；PR 档位（无
+  promtool）复跑为 27 passed + 2 skipped，nightly 档位 29 passed）
 - `python scripts/run_gates.py check:quick` → **10 gates OK**
 
 未验证（pending）：夜间 `backend-test` 的真实一次成功运行——本 PR 合入后由

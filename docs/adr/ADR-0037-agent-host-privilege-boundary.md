@@ -1,11 +1,11 @@
 # ADR-0037：Agent 主机提权边界（Privilege Boundary Wrapper）
 
-- 状态：**Proposed**（待 R02 安全联审）
-- 版本记录：v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）
+- 状态：**Accepted（v0.4）**
+- 版本记录：v0.1（2026-09-11 初版，R14-F04 #1250 触发）；v0.2（2026-09-15：§1.2 事实勘误、§2 新增 D5、§4 偏差记录、§5 退役前置修订，#2133）；v0.3（2026-09-15：§5 Revisit #1 执行完毕——legacy 分支与哨兵删除、失败模式改 fail-closed、§4 回滚路径更新，#2180）；v0.4（2026-09-15：**转 Accepted**——R02 安全联审一稿已交付（#2206 / PR #2209，结论「建议接受、无阻断项」）；采纳 S1/O1/O2：§2 新增 D6 边界承担声明、D3 补信任边界措辞、§4 不变量补既有强控制与测试清单、§5 ③ 记评审交付与 S2/S3/O4 处置）
 - 优先级：P1
 - 目标里程碑：M7
-- 日期：2026-09-11（v0.2 修订 2026-09-15；v0.3 修订 2026-09-15）
-- 决策者：平台研发组（R02 安全联审）
+- 日期：2026-09-11（v0.2 / v0.3 修订 2026-09-15；v0.4 修订 2026-09-15）
+- 决策者：平台研发组（R02 安全联审；2026-09-15 依据评审一稿裁决转 Accepted）
 - 标签：安全, 提权, sudoers, 热更新, Agent 主机
 - 关联：R14 台账 [#1266](https://github.com/DUElost/stability-test-platform/issues/1266)（R14-F04 [#1250](https://github.com/DUElost/stability-test-platform/issues/1250)）；R02 安全审查（联审项）；ADR-0035（主机身份与凭据方向，wrapper 鉴权面待其落地后重审）；#960（维护窗口）；#1247/#1248（热更新工件与主机本地资源保护）；[#2133](https://github.com/DUElost/stability-test-platform/issues/2133)（flash 链运行时提权收口，v0.2 新增）；[#2134](https://github.com/DUElost/stability-test-platform/issues/2134)（宽文件清除与 legacy 退役）；[#2180](https://github.com/DUElost/stability-test-platform/issues/2180)（legacy 分支与哨兵删除，v0.3）
 
@@ -80,6 +80,11 @@
   失败即带 `update_agent.yml` 指引退出、不执行任何动作；`STP_PRIV_FALLBACK` /
   `STP_RESOURCES_PRIV_FALLBACK` 哨兵与 `resources_priv_fallback` 审计字段
   一并退役（`priv_mode` 只剩 `wrapper`/`unknown` 两态）。
+  **（v0.4 / O1：信任边界是 conf 冻结，不是调用者身份校验。）** `bootstrap` 的可调用主体
+  不构成信任边界——锚点漂移守卫（`conf` 一旦存在，`INSTALL_DIR`/`AGENT_USER`/`AGENT_GROUP`/
+  `SERVICE_NAME` 不得再变）才是；守卫**刻意不校验 `SUDO_UID`**（Ansible `become: true`
+  以 `ansible_user=android` 执行时会设置它，加了会打断正常部署）。合法迁移安装点须先由
+  root 删除 `conf` 再 bootstrap。本条由实现 docstring 上升为 ADR 明文（评审 O1）。
 - **D4 显式不做**：不动 Ansible 自身的密码 become 通道（与 NOPASSWD 面
   无关）；不引入 per-host 凭据（ADR-0035 实施面）；wrapper 不放进安装
   目录，也不提供任何「任意目标路径」参数。
@@ -91,6 +96,14 @@
   `--value ∈ {0,1}`，写 sysfs `authorized`）。脚本以**新版本**落地（已发布
   版本不可原地改）。在本项验收（无宽文件主机上 flash 链通过）完成前，
   `/etc/sudoers.d/android` 不得删除。
+- **D6 边界承担声明（v0.4 / 评审 S1）**：sudoers 对 wrapper 的授权行是**不带参数模式的
+  单命令**（`<user> ALL=(root) NOPASSWD: /usr/local/sbin/stp-agent-priv`）。按 sudoers 语义，
+  这等于**允许任意参数**——因此 D1「单一入口」**并没有在 sudoers 层约束参数空间**，
+  全部 containment 由 **wrapper 进程内校验**承担。这一事实是本节其余约束的前提：
+  `bootstrap` 对 Agent 用户可达（`_require_root()` 在经 sudo 调用时必然通过），其安全性
+  依赖 `realpath` + `_validate_install_dir` + `_reject_anchor_drift` 三道守卫；其余子命令同理。
+  因此 §4 把 **parser/边界测试**与强控制清单一起列为不变量（改动即需同步测试），
+  并在 `selftest` 中做子命令契约校验。
 
 ## 3. 备选与否决
 
@@ -105,9 +118,21 @@
 
 ## 4. 影响与不变量
 
-- **不变量（目标态）**：Agent 用户的 NOPASSWD 面 ⊆ {固定 systemctl, wrapper}；
-  wrapper 的所有写目标固定在安装目录内；wrapper 文件与 conf 必须
-  root 属主且非 group/other 可写（`selftest` 校验）。
+- **不变量（目标态，v0.4 / O2 + S1 补全）**：
+  1. Agent 用户的 NOPASSWD 面 ⊆ {固定 systemctl, wrapper}；wrapper 的所有写目标固定在安装目录内；
+     wrapper 文件与 conf 必须 root 属主且非 group/other 可写（`selftest` 校验）；
+  2. **参数面校验在进程内**（D6）：sudoers 不约束 wrapper 参数 ⇒ 以下强控制按「不可回退」对待——
+     `--staged` 必须在 `INSTALL_DIR` 之外**且属主为调用者**（`fstat` 校验）、目标目录以 **fd 基**打开、
+     rsync 以 agent 身份（`setuid`）执行并带 `--safe-links` 与固定 excludes（含 `resources/mtbf/`
+     exclude+protect）、`usb-authorized` 走「`/sys/devices` 下与端口同名的真实目录」判定 +
+     `O_NOFOLLOW` 属性读写、`fix-ownership` 仅遍历 `INSTALL_DIR` 且 `follow_symlinks=False`、
+     `write-digest` 校验 `sha256:<64 hex>`、`bootstrap` 的 `INSTALL_DIR` 在 `realpath` 后
+     与系统关键目录不得互相包含；
+  3. **测试是不变量的一部分**：上述控制由
+     `tests/test_agent_priv_parser_contract.py`、`tests/test_agent_priv_boundary.py`、
+     `tests/test_agent_priv_apply_code_protection.py`、`tests/test_remote_script_privilege_paths.py`
+     锁定；修改这些控制必须同步这些测试（回归时不得无声削弱）；
+  4. **信任边界**（v0.4 / O1）：bootstrap 的可调用主体不构成信任边界——conf 冻结（锚点不可变）才是。
 - **迁移期实测偏差（2026-09-15）**：`/etc/sudoers.d/android` 宽规则仍存于
   48/48 台（含全部 wrapper 主机）——目标态不变量在清除动作完成前不成立；
   清除的前置与验收见 §5（D5 / #2133）与执行单 #2134。
@@ -128,6 +153,13 @@
   单测覆盖拒绝面）；② 热更新仍可用（迁移期 = wrapper 路径 + legacy 回退；
   v0.3 / #2180 起 = wrapper 单路径 fail-closed，实测 48/48 收敛）；③ R02
   安全联审（独立于实现，需评审一稿）。
+  **（v0.4：已交付。）** ③ 的评审稿 =
+  [`docs/reviews/REVIEW_ADR0037_SECURITY_2026-09-15_3e833f.md`](../reviews/REVIEW_ADR0037_SECURITY_2026-09-15_3e833f.md)
+  （issue #2206 / PR #2209），结论「建议接受、无阻断项」。**建议处置（v0.4 状态）**：
+  S1（边界承担显式化 + 测试列为不变量）、O1（信任边界措辞）、O2（强控制入不变量）**本版已采纳**；
+  S2（主机侧特权调用审计）**待排期**——属行为变更，需 ADR 增补 + runbook + 机队部署与观测；
+  S3（宽根 `INSTALL_DIR` 纵深防御，现网 conf 全在 ⇒ 不可达）**待排期**——需守卫收紧 + 测试；
+  O4（wrapper 版本标识，回滚/对账目前靠 sha 人工比对）**待排期**。
 - **Revisit**：
   1. fleet 全部出现 `priv_mode=wrapper` **且 flash 链在无宽文件主机验收通过
      （D5 / #2133）**后：删除 legacy 分支与哨兵解析，并清除存量宽文件
