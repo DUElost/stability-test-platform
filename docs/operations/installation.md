@@ -257,6 +257,7 @@ sudo ./deploy/install.sh handover
 | `inventory_shape` | 清单键名/键值形状不对 | 只用文档列出的键；值不含空格 |
 | `agent_install_root_mismatch` | 清单与站点声明的安装根不一致 | 统一 `install_root`（站点级单值） |
 | `install_storage` | 声明路径不是挂载点 | 先挂盘/bind，或 `--data-disk` 让 `init` 处理 |
+| `agent_install_canceled` | 安装被取消（不是脚本失败）：安装作业跑在有界窗口里（SAQ 900s），目标机首次 `apt update`/装包慢会超窗；显式取消也是同一终态 | 看 RunConsole 日志尾部确认卡在哪一步，复跑安装（主机页按钮或 `deploy/agent/install.sh`）；反复被取消就在目标机**预装大件**（如 `nfs-common`）再触发——这是绕过，终态出口见 #2220（窗口可配 / 作业与 console 解耦） |
 | `install_export` | 装 NFS 服务端或 `exportfs -ra`/`nfs-server` 失败 | 看 `dpkg -l nfs-kernel-server`、`exportfs -s`、`systemctl status nfs-server` 输出 |
 | `shared_storage_not_mounted` | Agent 没挂上中心存储（或 verify 时路径不是挂载点） | Agent 侧 `findmnt <mount_path>`、`mount -t nfs <站点入口>:<mount_path> <mount_path>`；控制面侧 `exportfs -s`、`systemctl status nfs-server`。从没挂上的分享不会被写进 fstab |
 | `storage_unwritable` / `storage_probe_failed` | 分享拒绝写入 / 读回不一致 | 查导出选项（`all_squash` 映射身份与导出根属组）、空间与控制面到存储的链路 |
