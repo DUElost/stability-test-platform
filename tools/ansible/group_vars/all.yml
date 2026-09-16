@@ -7,7 +7,10 @@
 # 提权（sudo/become）：布置与配置类变更均需 root。
 ansible_become: "{{ agent_require_become | default(true) }}"
 ansible_become_method: sudo
-ansible_become_password: "{{ ansible_password }}"
+# `default('')`：本文件作用域含 localhost（all 组），而 delegate_to: localhost 的任务
+# 会为它求值本键——localhost 没有 ansible_password，不加 default 会直接失败（#2234，
+# Agent 安装的摘要任务现场实证）。免密/NOPASSWD 主机取值空口令即可。
+ansible_become_password: "{{ ansible_password | default('') }}"
 
 # agent 安装目录：两面共享的路径锚（配置类 task 需要）。
 agent_install_dir: "/opt/stability-test-agent"
