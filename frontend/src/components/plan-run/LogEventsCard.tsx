@@ -41,6 +41,21 @@ const MAX_LIMIT = 500;
  * - `PRUNED` 已按 retention 清理——终态**不是异常**，故意用 muted 而非 destructive，
  *   否则清理动作会被读成故障。
  */
+/**
+ * 状态口径说明（#2150 裁决 B）：`REMOTE` 是否终态取决于**该 run 有无 merge 产物**。
+ *
+ * 归档（`REMOTE → ARCHIVED`）由 run 级 extract 唯一驱动，而 extract 以本轮存在
+ * `merge_result_xls` 为前置——无 scan 产物的平台（UNIVIEW）因此恒不归档。
+ * 判据与两段式排查口径见 `docs/design/2026-scan-upload-merge-contract.md`
+ * （「DLE 归档的触发与判据」一节）。文案面向运维：说清「不是卡住」。
+ */
+const STATE_HINT: Record<string, string> = {
+  REMOTE:
+    '已上送中心，等待 run 级归档。注意：归档由该 run 的 extract 执行——若该 run 无 merge 产物'
+    + '（如 UNIVIEW 无 scan 产物的轮次）则不会归档，此时 REMOTE 即终态，不是卡住。',
+  ARCHIVED: '已复制进该 run 的归档包（中心存储 jira/{run_id}/）。',
+};
+
 const STATE_CHIP: Record<string, string> = {
   DETECTED: STATUS_CHIP.muted,
   LOCAL: STATUS_CHIP.primary,
@@ -193,7 +208,7 @@ export default function LogEventsCard({ runId, isTerminal }: Props) {
                       {ev.event_type}
                       {ev.event_subtype ? ` · ${ev.event_subtype}` : ''}
                     </td>
-                    <td className="px-2 py-1.5">
+                    <td className="px-2 py-1.5" title={STATE_HINT[ev.state]}>
                       <span className={cn(
                         'inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold',
                         STATE_CHIP[ev.state] ?? STATUS_CHIP.muted,
