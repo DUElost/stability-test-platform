@@ -33,8 +33,8 @@ export function invalidateCrossClientSyncQueries(qc: QueryClient) {
  *    本端失效全部计划缓存（此前另一浏览器可陈旧 60s+）。
  * 2. 项目 facet / 归档 / 设备归属变更后广播 project_changed ——
  *    失效 projects / project / devices（ADR-0029 D8）。
- * 3. 后台 tab 恢复可见时全量失效缓存，让活跃查询立即重取
- *    （此前后台 tab 停更且不回追）。
+ * 3. 后台 tab 恢复可见时按域失效跨端同步键（#2369）——禁止无参
+ *    ``invalidateQueries()`` 全仓重拉，避免切回前台人为放大限流桶。
  * 4. Socket 重连时失效跨端同步相关查询，弥补断线期间漏事件（#1192）。
  *
  * 挂载一次于 AppShell（全局常驻）。
@@ -61,7 +61,7 @@ export function useCrossClientSync() {
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
-        qc.invalidateQueries();
+        invalidateCrossClientSyncQueries(qc);
       }
     };
     document.addEventListener('visibilitychange', onVisible);

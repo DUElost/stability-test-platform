@@ -6,6 +6,26 @@ export const GATE_ACTIVE_REFETCH_MS = 3_000;
 export const FAST_REFETCH_MS = 10_000;
 export const SLOW_REFETCH_MS = 30_000;
 
+/** Socket JOB_STATUS / PRECHECK / WATCHER 合流窗口（#2369，对齐 Watcher）。 */
+export const PLAN_RUN_SOCKET_COALESCE_MS = 2_000;
+
+/** JOB_STATUS 密集推送时合流失效的查询键（devices + timeline + logs）。 */
+export function planRunJobStatusInvalidateKeys(id: number) {
+  return [
+    planRunKeys.devicesByRun(id),
+    planRunKeys.timeline(id),
+    planRunKeys.logsByRun(id),
+  ] as const;
+}
+
+/** PRECHECK_UPDATE 合流失效键（含 detail，再加 JOB_STATUS 三联）。 */
+export function planRunPrecheckInvalidateKeys(id: number) {
+  return [
+    planRunKeys.detail(id),
+    ...planRunJobStatusInvalidateKeys(id),
+  ] as const;
+}
+
 /** Patrol/init stale thresholds removed (#520) — recycler owns stuck policy via API fields. */
 
 const WATCHER_TIME_SCOPE_MAP: Record<string, WatcherTimeScope> = {

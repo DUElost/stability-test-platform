@@ -585,6 +585,13 @@ describe('ADR-0038 退役前端（#1807）', () => {
   // （clearAllMocks 不还原 mockRejectedValue 这类实现改动）。
   beforeEach(async () => {
     vi.clearAllMocks();
+    // #2362：`clearAllMocks` 只清调用记录、**不清实现**——本 describe 里有用例按
+    // `include_retired` 分流（参数敏感实现挂在 mockFetchHostList 上），残留会把
+    // 后续用例的主列表打成空集。逐测复位成模块级默认实现。
+    mockFetchHostList.mockReset();
+    mockFetchHostList.mockImplementation((..._args: unknown[]) =>
+      mockHostsList().then((res: { items: unknown[] }) => res.items),
+    );
     const { api } = await import('../../utils/api');
     (api.hosts.delete as ReturnType<typeof vi.fn>).mockResolvedValue({});
     (api.hosts.retire as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'h1' });
@@ -612,31 +619,32 @@ describe('ADR-0038 退役前端（#1807）', () => {
     render(<HostsPage />, { wrapper: createWrapper() });
 
     await screen.findByText('Worker-01');
-    await waitFor(() => expect(mockFetchHostList).toHaveBeenCalled());
-    const calls = mockFetchHostList.mock.calls;
-    expect(calls[calls.length - 1]?.slice(0, 3)).toEqual([0, 200, false]);
+    // #2362 起空态会额外发一条存在性探针（0,1,true），故按「调用集合」断言，
+    // 不再用「最后一次调用」指代主查询。
+    const args = () => mockFetchHostList.mock.calls.map((c) => c.slice(0, 3));
+    await waitFor(() => expect(args()).toContainEqual([0, 200, false]));
 
     fireEvent.click(screen.getByTestId('hosts-show-retired'));
 
-    await waitFor(() => {
-      const latest = mockFetchHostList.mock.calls[mockFetchHostList.mock.calls.length - 1];
-      expect(latest?.slice(0, 3)).toEqual([0, 200, true]);
-    });
+    await waitFor(() => expect(args()).toContainEqual([0, 200, true]));
   });
 
   it('全部主机退役（列表为空）时开关仍可见可点——否则无法解除退役（#2051）', async () => {
     // 后端默认过滤退役主机：只剩退役机时列表为空 → 页面落空态。开关若只在
     // 「有数据」分支渲染，用户就再也没有 UI 路径勾选它（ADR-0038 回收路径断头）。
-    mockHostsList.mockResolvedValue({ items: [], total: 0 });
+    // #2362：mock 必须按 include_retired 分流——旧写法对两种查询都回空集，
+    // 那是「全新环境」而不是「全退役」，会把空态口径掩盖掉。
+    mockFetchHostList.mockImplementation((_skip: unknown, _limit: unknown, includeRetired: unknown) =>
+      Promise.resolve(includeRetired ? [retiredHost] : []),
+    );
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
     const toggle = await screen.findByTestId('hosts-show-retired');
     expect(toggle).toBeInTheDocument();
     // 空态文案点明「勾选可查看并解除退役」
-    expect(screen.getByText(/勾选「显示已退役」/)).toBeInTheDocument();
+    expect(await screen.findByText(/勾选「显示已退役」/)).toBeInTheDocument();
 
-    mockHostsList.mockResolvedValue({ items: [retiredHost], total: 1 });
     fireEvent.click(toggle);
 
     await waitFor(() => {
@@ -644,6 +652,17 @@ describe('ADR-0038 退役前端（#1807）', () => {
       expect(latest?.slice(0, 3)).toEqual([0, 200, true]);
     });
     expect(await screen.findByText('Retired-09')).toBeInTheDocument();
+  });
+
+  it('全新环境（从未接入）不把空集归因退役（#2362）', async () => {
+    // 两种查询都为空 = 一台主机都没有 → 文案不得指向「退役记录」
+    mockFetchHostList.mockImplementation(() => Promise.resolve([]));
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText('暂无主机')).toBeInTheDocument();
+    expect(screen.getByText(/等待 Agent 接入/)).toBeInTheDocument();
+    expect(screen.queryByText(/所有主机都已退役/)).not.toBeInTheDocument();
   });
 
   it('退役入口调用 API 并携带原因（写审计）', async () => {

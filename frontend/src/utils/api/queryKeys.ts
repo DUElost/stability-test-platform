@@ -30,6 +30,12 @@ export const hostKeys = {
    * ['hosts']})` 的前缀匹配同时覆盖两者；分键避免「显示退役」开关污染三页共享缓存）。
    */
   retiredList: () => ['hosts', { includeRetired: true }] as const,
+  /**
+   * #2362：空态判「有没有主机（含退役）」的存在性探针（`include_retired=true, limit=1`）。
+   * 独立分键是必须的——复用 `retiredList` 会把 limit=1 的结果写进「显示已退役」那份
+   * 列表（打开开关时只剩 1 行）。与 `list()` 同前缀，失效语义不变。
+   */
+  retiredPeek: () => ['hosts', { retiredPeek: true }] as const,
   /** Host 详情（含 active_jobs 占用明细，仅 GET /hosts/{id} 返回）。 */
   detail: (id: string | number) => ['host', String(id)] as const,
 } as const;

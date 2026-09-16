@@ -16,9 +16,12 @@ MTK/UNKNOWN → `AeeDbHistoryReconciler`，UNISOC → `UnisocUniviewReconciler`
 原 `STP_WATCHER_AEE_RECONCILE_PLATFORMS` 单白名单键已随路由删除。
 
 Collector 同样按平台分发（`collector.get_collector_for_platform`）：MTK/UNKNOWN →
-`MtkPlatformCollector`；UNISOC → `UnisocPlatformCollector`（**真实现**：detect 探测
-`/data/uniview` + `/data/vendor/uniview`，`parse_metadata` 读 `unievent_info.json`）；
-QCOM → stub（`detect→False`，`parse_metadata` 抛 `CollectorError`），有对应设备时跳过。
+`MtkPlatformCollector`；UNISOC → `UnisocPlatformCollector`（**真实现**：`parse_metadata`
+读 `/data/ylog/uniview_exception/{Type}.{event_id}/unievent_info`——**JSONL**，无 `.json`
+后缀；旧文件名 `unievent_info.json` 仅作兼容回退，真机从未观测到）；QCOM → stub
+（`parse_metadata` 抛 `CollectorError`），有对应设备时跳过。协议**只有** `parse_metadata`：
+`detect` 已随 R4-a a1 删除（全仓零调用点，平台判定唯一权威是
+`backend.agent.device_platform.detect_device_platform`，见 `collector.py` 的 Protocol docstring）。
 
 - 探测结果按 serial 进程内缓存，并随心跳写入 `device.platform`
 - `UNKNOWN` **恒放行**（按 MTK 处理）— adb 抖动导致的探测失败不该让 MTK 机型漏采崩溃信号
@@ -49,7 +52,9 @@ Reconciler 启动失败时自动回退：
 ## 监测目录
 
 - MTK：`/data/aee_exp` + `/data/vendor/aee_exp`（`/data/aee_exp` 包含 ANR 信息，`/data/anr` 不再监测）
-- UNISOC：`/data/uniview` + `/data/vendor/uniview`（`UnisocPlatformCollector.detect` 探测）
+- UNISOC：`/data/ylog/uniview_exception`（单一真源：`collectors/unisoc.py` 的 `UNIVIEW_ROOT`，
+  `unisoc_reconciler._DEVICE_UNIVIEW_ROOTS` 直接复用它）。旧值 `/data/uniview` +
+  `/data/vendor/uniview` 是**框架侧**目录，真机从未在其下出现事件目录 → 采集恒空（#73）
 
 ## 数据流
 
