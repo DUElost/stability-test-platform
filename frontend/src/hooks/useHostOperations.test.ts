@@ -7,6 +7,7 @@ vi.mock('@/utils/api', () => ({
     agentInstall: {
       trigger: vi.fn(),
       status: vi.fn(),
+      cancel: vi.fn(),
     },
     hotUpdate: {
       trigger: vi.fn(),
@@ -20,6 +21,7 @@ describe('useHostOperations', () => {
   beforeEach(() => {
     vi.mocked(api.agentInstall.trigger).mockReset();
     vi.mocked(api.agentInstall.status).mockReset();
+    vi.mocked(api.agentInstall.cancel).mockReset();
     vi.mocked(api.hotUpdate.trigger).mockReset();
   });
 
@@ -257,5 +259,67 @@ describe('useHostOperations', () => {
     expect(captured.batch?.skipped[0]?.error).toBe(
       'Host is OFFLINE, hot-update requires ONLINE status',
     );
+  });
+
+  it('cancelInstall resolves null when the backend accepted the cancel', async () => {
+    vi.mocked(api.agentInstall.cancel).mockResolvedValueOnce({
+      ok: true,
+      host_id: 'h1',
+      console_run_id: 'con-1',
+      canceled: true,
+      status: 'canceling',
+      message: 'Cancel requested; the terminal state is recorded from the console.',
+    });
+
+    const { result } = renderHook(() => useHostOperations({ concurrency: 1, pollMs: 10 }));
+    let ret: string | null = 'unset';
+    await act(async () => {
+      ret = await result.current.cancelInstall('h1');
+    });
+
+    expect(api.agentInstall.cancel).toHaveBeenCalledWith('h1');
+    expect(ret).toBeNull();
+  });
+
+  it('cancelInstall surfaces the reason when the cancel was not initiated', async () => {
+    vi.mocked(api.agentInstall.cancel).mockResolvedValueOnce({
+      ok: false,
+      host_id: 'h1',
+      console_run_id: 'con-1',
+      canceled: false,
+      status: 'not_canceled',
+      message: 'The run could not be canceled (already terminal).',
+    });
+
+    const { result } = renderHook(() => useHostOperations({ concurrency: 1, pollMs: 10 }));
+    let ret: string | null = 'unset';
+    await act(async () => {
+      ret = await result.current.cancelInstall('h1');
+    });
+
+    expect(ret).toBe('The run could not be canceled (already terminal).');
+  });
+
+  it('cancelInstall extracts backend detail from a 409 (nothing running)', async () => {
+    vi.mocked(api.agentInstall.cancel).mockRejectedValueOnce({
+      message: 'Request failed with status code 409',
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'NO_INSTALL_IN_PROGRESS',
+            message: 'Host h1 has no Agent installation in progress.',
+          },
+        },
+      },
+    });
+
+    const { result } = renderHook(() => useHostOperations({ concurrency: 1, pollMs: 10 }));
+    let ret: string | null = 'unset';
+    await act(async () => {
+      ret = await result.current.cancelInstall('h1');
+    });
+
+    expect(ret).toBe('Host h1 has no Agent installation in progress.');
   });
 });

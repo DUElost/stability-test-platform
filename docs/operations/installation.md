@@ -214,6 +214,11 @@ sudo ./deploy/install.sh handover
 - **升级已装站点时 `--dry-run` 会报 `install.s3.schema` FAIL**：dry-run 不落新树，而该检查
   比的是部署根里那份 alembic 的 head（仍是旧树）与发布物清单的 `schema_target`。这是
   dry-run 的已知局限，不是配置错——正式跑（不带 `--dry-run`）会先落新树再比对；
+- **Agent 安装卡住不必重启控制面**：主机页 →「安装操作」面板 → 对应行的「取消」会终止
+  在跑的安装（`POST /hosts/{id}/install/cancel`，管理员）。取消 ≠ 失败：终态由控制台
+  落库为 `CANCELED`，`install_agent` 审计留 `install_agent_cancel`（谁、哪个 run、
+  是否受理），S5 侧报 `agent_install_canceled`，可直接复跑；没有在跑的安装时返回
+  409 `NO_INSTALL_IN_PROGRESS`（同样落审计）。
 
 ## 7. 离线与切换发布物
 
@@ -260,7 +265,8 @@ sudo ./deploy/install.sh handover
 | `agent_install_root_mismatch` | 清单与站点声明的安装根不一致 | 统一 `install_root`（站点级单值） |
 | `install_storage` | 声明路径不是挂载点 | 先挂盘/bind，或 `--data-disk` 让 `init` 处理 |
 | `install_timezone` | 控制面主机时区 ≠ `site.timezone` | `timedatectl set-timezone <site.timezone>` 后重跑；Agent 侧按声明对齐，三者必须同源 |
-| `agent_install_canceled` | 安装被取消（不是脚本失败）：显式取消，或运行记录随控制面丢失（重启 / 终态保留期到期，ADR-0044） | 看 RunConsole 日志尾部确认卡在哪一步，复跑安装（主机页按钮或 `deploy/agent/install.sh`）；**长时间没动静**说明目标机在装大件（如 `nfs-common`），先预装再触发更省事 |
+| `agent_install_canceled` | 安装被取消（不是脚本失败）：显式取消，或运行记录随控制面丢失（重启 / 终态保留期到期，ADR-0044） | 看 RunConsole 日志尾部确认卡在哪一步，复跑安装（主机页按钮或 `deploy/agent/install.sh`）；**长时间没动静**说明目标机在装大件（如 `nfs-common`），先预装再触发更省事；卡住时不用重启控制面——面板「取消」见 §6 |
+| `install_agent_failed` | 安装脚本确实以非零退出（目标机侧失败） | 看该主机 RunConsole 日志尾部与 `/var/log/stp/` 下的安装日志，按报错修目标机后复跑 |
 | `install_export` | 装 NFS 服务端或 `exportfs -ra`/`nfs-server` 失败 | 看 `dpkg -l nfs-kernel-server`、`exportfs -s`、`systemctl status nfs-server` 输出 |
 | `shared_storage_not_mounted` | Agent 没挂上中心存储（或 verify 时路径不是挂载点） | Agent 侧 `findmnt <mount_path>`、`mount -t nfs <站点入口>:<mount_path> <mount_path>`；控制面侧 `exportfs -s`、`systemctl status nfs-server`。从没挂上的分享不会被写进 fstab |
 | `storage_unwritable` / `storage_probe_failed` | 分享拒绝写入 / 读回不一致 | 查导出选项（`all_squash` 映射身份与导出根属组）、空间与控制面到存储的链路 |
