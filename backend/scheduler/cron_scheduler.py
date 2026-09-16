@@ -227,13 +227,35 @@ async def check_and_fire_schedules() -> None:
 
 
 
-def purge_run_storage_dirs(run_ids: list) -> set:
-    """#1521/#1698: 删除 PlanRun 的 NFS 目录（devices/dedup/jira）。
+def _within_shared_root(target: Path, resolved_base: Path) -> bool:
+    """#2031：容器化校验——解析符号链接后必须仍落在共享根内。
+
+    共享根下若存在指向根外的符号链接目录，``is_dir()`` 会跟随、``rmtree``
+    会删到根外（与 #1825 收口的威胁模型同类，需共享根写权限才可利用）。
+    越界一律不删：计入 failed 并告警（宁可推迟 DB 行删除，也不误删根外数据）。
+    """
+    try:
+        resolved = target.resolve()
+    except OSError:
+        return False
+    return resolved == resolved_base or resolved.is_relative_to(resolved_base)
+
+
+def purge_run_storage_dirs(run_ids: list, jobs_by_run: dict | None = None) -> set:
+    """#1521/#1698/#2031: 删除 PlanRun 在共享存储上的目录。
 
     DB 行是「哪些目录属于此 run」的唯一索引——必须在删行**之前**清理，
     否则行删后目录永不可回溯（R-01 盘满链：DB 轨有 TTL、NFS 轨无 TTL）。
     返回删除失败的 run_id 集合（调用方应从本批 DB 删除中剔除，下轮重试
     文件清理——先文件后行的顺序保证失败可自愈）。
+
+    覆盖两类桶（同根、不同分桶维度）：
+
+    - ``devices|dedup|jira/{run_id}/`` —— 按 **run** 分桶，由 ``run_ids`` 展开；
+    - ``jobs/{job_id}/``（#2031）—— 按 **job** 分桶（``backend/agent/aee/paths.py``
+      的 artifact promote 与 Watcher LogPuller 落点），由 ``jobs_by_run``
+      （``{run_id: [job_id, ...]}``）展开。job 目录失败按**所属 run** 归因，
+      与 run 目录失败同语义（该 run 整批推迟，行与文件都留在原地等下轮）。
     """
     from backend.core.storage_root import resolve_shared_storage_root
 
@@ -243,21 +265,34 @@ def purge_run_storage_dirs(run_ids: list) -> set:
         return set()
 
     base = Path(root)
+    resolved_base = base.resolve()
     failed: set = set()
     removed = 0
+    jobs_by_run = jobs_by_run or {}
+
+    def _purge(target: Path, run_id: int) -> None:
+        nonlocal removed
+        try:
+            if not _within_shared_root(target, resolved_base):
+                raise ValueError(f"path escapes shared storage root: {target}")
+            if target.is_dir():
+                shutil.rmtree(target)
+                removed += 1
+        except Exception:
+            failed.add(run_id)
+            logger.warning(
+                "nfs_retention_purge_failed dir=%s", target, exc_info=True,
+            )
+
     for run_id in run_ids:
         # jira/{run_id}/ holds extract bundles (#1698); omit → orphan after row delete.
         for sub in ("devices", "dedup", "jira"):
-            target = base / sub / str(int(run_id))
-            try:
-                if target.is_dir():
-                    shutil.rmtree(target)
-                    removed += 1
-            except Exception:
-                failed.add(run_id)
-                logger.warning(
-                    "nfs_retention_purge_failed dir=%s", target, exc_info=True,
-                )
+            _purge(base / sub / str(int(run_id)), run_id)
+        # #2031：jobs/{job_id}/ 的唯一索引是 StepTrace/JobArtifact 行，而它们在
+        # 同一批里被删（保留期 3 天 << artifact 清理器 30 天）——不在这里清掉即
+        # 永不可回溯的孤儿目录，随 job 数线性累积。
+        for job_id in jobs_by_run.get(run_id, ()):
+            _purge(base / "jobs" / str(int(job_id)), run_id)
     if removed:
         logger.info("nfs_retention_purged dirs=%d failed_runs=%d", removed, len(failed))
     return failed
@@ -458,11 +493,24 @@ def run_retention_cleanup() -> None:
                 )
                 return
 
+            # #798/#2031: 删行前收集 job 清单（含 run 归属）——既供提交后的
+            # console.log 清理，也供 NFS ``jobs/{job_id}/`` 回收（按 run 归因，
+            # 该 run 的文件清理失败时整批推迟）。
+            stale_job_rows = db.execute(
+                select(JobInstance.id, JobInstance.plan_run_id).where(
+                    JobInstance.plan_run_id.in_(safe_run_ids)
+                )
+            ).all()
+            stale_job_id_list = [job_id for job_id, _run_id in stale_job_rows]
+            jobs_by_run: dict = {}
+            for job_id, run_id in stale_job_rows:
+                jobs_by_run.setdefault(run_id, []).append(job_id)
+
             # Subquery: job IDs belonging to safely-deletable PlanRuns
-            # #1521/#1698: NFS 轨回收——DB 行删除前先清 devices/dedup/jira
-            # （行是目录的唯一索引）；文件删除失败的 run 剔除出本批 DB 删除，
-            # 下轮重试（先文件后行，失败可自愈）。
-            purge_failed = purge_run_storage_dirs(safe_run_ids)
+            # #1521/#1698/#2031: NFS 轨回收——DB 行删除前先清
+            # devices|dedup|jira/{run_id} 与 jobs/{job_id}（行是目录的唯一索引）；
+            # 文件删除失败的 run 剔除出本批 DB 删除，下轮重试（先文件后行，失败可自愈）。
+            purge_failed = purge_run_storage_dirs(safe_run_ids, jobs_by_run)
             if purge_failed:
                 safe_run_ids, deferred_ancestors = _retention_safe_ids(
                     db, [run_id for run_id in safe_run_ids if run_id not in purge_failed],
@@ -476,15 +524,18 @@ def run_retention_cleanup() -> None:
                     # 整批被 NFS 失败推迟：锁要到会话关闭才释放，窗口记在返回前。
                     record_retention_txn(time.perf_counter() - lock_t0)
                     return
+                # 出批的 run 其 job 仍留在库里 → 其 console.log 也不得清理。
+                surviving = set(safe_run_ids)
+                stale_job_id_list = [
+                    job_id
+                    for run_id, job_ids in jobs_by_run.items()
+                    if run_id in surviving
+                    for job_id in job_ids
+                ]
 
             stale_job_ids = select(JobInstance.id).where(
                 JobInstance.plan_run_id.in_(safe_run_ids)
             )
-            # #798: 删行前收集 job 清单——DB 事务提交后据此清理 console.log
-            # 文件与内存锁（否则系统盘与 _locks 随历史运行无界增长）。
-            stale_job_id_list = [
-                row[0] for row in db.execute(stale_job_ids).all()
-            ]
 
             # FK order: child tables first
             db.query(StepTrace).filter(
