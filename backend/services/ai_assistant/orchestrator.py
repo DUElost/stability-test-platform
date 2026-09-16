@@ -11,6 +11,7 @@ enqueue_sync 默认 60s job timeout 约束。
 import asyncio
 import json
 import logging
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import partial
 
@@ -50,6 +51,26 @@ HISTORY_LIMIT = 20
 
 # action 终态：内联执行（服务型工具 / 启动即失败）在轮次内就会落到这些状态
 _ACTION_TERMINAL = {"succeeded", "failed", "cancelled", "rejected", "expired"}
+
+# #2071：本进程**正在执行**的轮次会话集合（按 session_id 比对，不用 bool——
+# bool 在「同一任务上下文里并发跑多个会话的 job」时会串味）。
+# SAQ 对同 key 的入队去重（`queue.enqueue` 返回 None）在轮次内是**设计内正常
+# 现象**：本轮 job 仍持有 ai-turn:<session> 的 key，续轮入队必然被丢弃。旧实现
+# 把它当成投递失败（#1216 的 required 语义），于是每次内联终态都留下一条永久
+# 红色「入队失败」气泡 + 空耗自动执行链预算 + 1s 无谓 sleep。
+_turn_round_sessions: ContextVar[frozenset[int]] = ContextVar(
+    "ai_turn_round_sessions", default=frozenset(),
+)
+
+
+def _in_own_turn_round(session_id: int) -> bool:
+    """当前调用栈是否处于**本会话自己那一轮**的执行中（含 to_thread 派生线程）。
+
+    `asyncio.to_thread` 复制当前上下文，因此轮次内经 `execute_action` →
+    `_finalize_action` 走到这里时能读到标记；而动作异步完成回调（RunConsole
+    reader 线程）、审批执行（路由线程）都不在轮次上下文里，读到 False。
+    """
+    return session_id in _turn_round_sessions.get()
 
 SYSTEM_PROMPT = (
     "你是稳定性测试平台的运维助手。回答使用简体中文，简洁、基于事实。"
@@ -447,6 +468,11 @@ def ensure_pending_placeholder(session_id: int, db: Session | None = None) -> No
 def _enqueue_continuation(session_id: int) -> None:
     """执行完成后续轮（lazy import 防循环依赖：saq_worker → saq_tasks → 本模块）。
 
+    #2071：轮次内联终态**不入队**——本轮 job 仍持 key，SAQ 必然去重，且本轮
+    自己会把结果喂回模型（见轮次内联分支的注释）。这里若继续走 required 语义，
+    「设计内的正常去重」会被判成投递失败：占位标 failed → 该行脱离 pending/running
+    集合 → 本轮末尾的清理不再碰它 → 用户同时看到正确答案与一条永久红色错误气泡。
+
     R13-F04 (#1216)：续轮必须走 ``required=True`` 的真实投递——旧的默认
     best-effort 只把协程排上事件循环即返回 True，Redis 入队异常 / 同 key
     去重都被吞掉，动作结果可能永久不上屏。这里区分三态：
@@ -456,6 +482,14 @@ def _enqueue_continuation(session_id: int) -> None:
     - 入队异常 → 立即把占位收敛为 failed（可重试）。
     """
     import time as _time
+
+    if _in_own_turn_round(session_id):
+        logger.info(
+            "ai_continuation_skip_inside_round session=%s 本轮 job 仍持 key，"
+            "续轮由本轮自身负责（入队必被去重，判成失败即误报）",
+            session_id,
+        )
+        return
 
     try:
         from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
@@ -829,6 +863,15 @@ def _on_action_complete(action_id: int, run) -> None:
 
 # ─────────────────────────── 轮次任务 ───────────────────────────
 
+def fail_pending_placeholders(session_id: int, *, error: str) -> None:
+    """把该会话未收口的 assistant 占位标为 failed（公开入口，#2073）。
+
+    `_converge_pending` 是轮次收口的内部步骤；投递失败回调需要的是同一事实的
+    失败态表达，故显式给一个入口，而不是让路由 import 下划线私有函数。
+    """
+    _converge_pending(session_id, False, error=error)
+
+
 def _converge_pending(
     session_id: int, produced_output: bool, *, error: str | None = None
 ) -> None:
@@ -869,6 +912,9 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
     db = SessionLocal()
     produced_output = False
     awaiting_continuation = False
+    # #2071：登记「本轮正在本进程执行」，供 _enqueue_continuation 区分
+    # 内联去重（正常）与外部投递失败（需收敛）。reset 与 set 同上下文，成对。
+    _round_token = _turn_round_sessions.set(_turn_round_sessions.get() | {session_id})
     try:
         session = db.get(AiChatSession, session_id)
         if session is None:
@@ -1042,6 +1088,7 @@ async def ai_assistant_turn_task(ctx: dict, *, session_id: int) -> None:
             _fail_pending_messages(db, session, str(exc))
             logger.warning("ai_turn_llm_failed session=%s err=%s", session_id, exc)
     finally:
+        _turn_round_sessions.reset(_round_token)
         try:
             if awaiting_continuation:
                 # 止轮等自动执行：占位留给续轮驱动前端轮询，由续轮自己收口。
