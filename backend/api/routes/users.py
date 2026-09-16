@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -20,7 +20,9 @@ router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
 
 class UserCreate(BaseModel):
-    username: str
+    # #2406：与前端 `usernameRules.ts` 同一判据——两端不一致时，前端会把
+    # 合法用户名（如带连字符的 `stp-tester`）挡在表单里，用户看到「填完了建不出来」。
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     # PasswordStr:8–128 字符且 ≤72 UTF-8 字节(bcrypt 硬限制,#281 CR Major)
     password: PasswordStr
     role: str = "user"
