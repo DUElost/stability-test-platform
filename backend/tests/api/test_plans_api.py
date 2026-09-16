@@ -114,6 +114,45 @@ class TestPlanCRUD:
         assert resp.status_code == 201, resp.text
         assert resp.json()["data"]["steps"][0]["params"] is None
 
+    def test_create_plan_omitting_timeout_seconds(self, client, auth_headers, sample_script):
+        """#2382：OpenAPI 里 `timeout_seconds` 可省——省略的调用方必须能建出 Plan。
+
+        过去入口组装时无条件写 `None`，撞上 lifecycle schema 的
+        `required` + `{"type":"integer"}`，于是严格照契约写代码的客户端一律 422
+        （前端因自带默认值而掩盖了这条冲突）。
+        """
+        name = _uniq("plan_no_timeout")
+        resp = client.post("/api/v1/plans", json={
+            "name": name,
+            "steps": [{
+                "step_key": "init_0", "script_name": "check_device",
+                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+            }],
+            "project_key": "GENERIC", "specialty_key": "ops",
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        step = resp.json()["data"]["steps"][0]
+        # 未配置仍然是 NULL（表达「回落宿主 env → 300s」），不许被偷偷塞成 0 或 300
+        assert step["timeout_seconds"] is None
+
+    def test_zero_timeout_without_stall_explains_the_gate(self, client, auth_headers, sample_script):
+        """#2382：`0`（不限墙钟）缺停滞钟仍须被拒，但文案要指向修法而非 jsonschema 结构串。"""
+        resp = client.post("/api/v1/plans", json={
+            "name": _uniq("plan_zero_timeout"),
+            "steps": [{
+                "step_key": "init_0", "script_name": "check_device",
+                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "timeout_seconds": 0,
+            }],
+            "project_key": "GENERIC", "specialty_key": "ops",
+        }, headers=auth_headers)
+        assert resp.status_code == 422, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "INVALID_LIFECYCLE", detail
+        assert len(detail["errors"]) == 1, detail
+        assert "stall_seconds >= 1" in detail["errors"][0], detail
+        assert "is a required property" not in detail["errors"][0], detail
+
     def test_create_plan_step_key_at_length_limit(self, client, auth_headers, sample_script):
         """#938：step_key 上限 128（= step_trace.step_id VARCHAR(128)）——恰 128 可存。"""
         name = _uniq("plan_len128")
