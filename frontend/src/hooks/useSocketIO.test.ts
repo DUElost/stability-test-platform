@@ -119,9 +119,11 @@ describe('useSocketIO — token auth', () => {
     const { useSocketIO } = await import('@/hooks/useSocketIO');
 
     // Two subscribers on the same room → refcount 2; plus a distinct room.
+    // （#2400：job:/run: 描述符已删，这里改用 fleet:devices——本用例只关心
+    // 「重连时按房间名重订阅、而不是按引用计数」这一条语义。）
     renderHook(() => useSocketIO('plan_run:5'));
     renderHook(() => useSocketIO('plan_run:5'));
-    renderHook(() => useSocketIO('job:9'));
+    renderHook(() => useSocketIO('fleet:devices'));
 
     await waitFor(() => {
       expect(ioMock).toHaveBeenCalled();
@@ -139,7 +141,7 @@ describe('useSocketIO — token auth', () => {
       .map((c: any[]) => c[1]?.room);
 
     expect(resubRooms).toHaveLength(2);
-    expect(new Set(resubRooms)).toEqual(new Set(['plan_run:5', 'job:9']));
+    expect(new Set(resubRooms)).toEqual(new Set(['plan_run:5', 'fleet:devices']));
     expect(resubRooms.every((r: unknown) => typeof r === 'string')).toBe(true);
   });
 

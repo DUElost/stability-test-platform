@@ -97,3 +97,49 @@ def test_target_shape_is_asserted_before_any_write():
     assert_task = _tasks()[shape_idx]
     that = [str(clause) for clause in assert_task["ansible.builtin.assert"]["that"]]
     assert any("is match(" in clause and "tz_target" in clause for clause in that), that
+
+
+def _flat_tasks() -> list[dict]:
+    """展开 play 的 tasks（含 block/rescue/always 内的步骤）。"""
+    out: list[dict] = []
+
+    def walk(steps: list | None) -> None:
+        for step in steps or []:
+            if not isinstance(step, dict):
+                continue
+            out.append(step)
+            for key in ("block", "rescue", "always"):
+                walk(step.get(key))
+
+    walk(_tasks())
+    return out
+
+
+def test_rescue_registered_vars_are_preinitialized():
+    """#2410：**rescue 路径才 register** 的变量，必须在 play 内先有定义。
+
+    #2317 把 `tz_set_fallback` 只 register 在 rescue 里，而 success_msg 无条件引用它——
+    健康主机（时区已对齐、不走 rescue）渲染文案即报 `'tz_set_fallback' is undefined`，
+    时区 play（被 `install_agent.yml` import）在所有健康真机上失败（238 现场 S5 实测；
+    容器因走 rescue 反而不受影响）。本用例锁住结构：新增此类变量必须预初始化。
+    """
+    tasks = _flat_tasks()
+
+    rescue_registers: set[str] = set()
+    for task in tasks:
+        for step in task.get("rescue") or []:
+            if isinstance(step, dict) and step.get("register"):
+                rescue_registers.add(str(step["register"]))
+    assert rescue_registers, "用例前提失效：set_timezone.yml 里没有 rescue 内 register 的变量"
+
+    preinitialized: set[str] = set()
+    for task in tasks:
+        fact = task.get("ansible.builtin.set_fact")
+        if isinstance(fact, dict):
+            preinitialized.update(str(key) for key in fact)
+
+    missing = sorted(rescue_registers - preinitialized)
+    assert not missing, (
+        f"rescue 内 register 但未预初始化的变量：{missing}"
+        "（健康路径会引用到未定义变量，安装链在真机上必失败）"
+    )

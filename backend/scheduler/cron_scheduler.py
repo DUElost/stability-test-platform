@@ -645,6 +645,14 @@ def run_retention_cleanup() -> None:
     # 持锁窗口（#2104）：候选读之前为 None——失败路径可能在取锁前就抛，
     # 上报点须先判非 None，否则 except 分支自己会 NameError。
     lock_t0: float | None = None
+    # #2033：本批「NFS 目录已删」的 run 集合。与 `lock_t0` 同样**在 try 之前**
+    # 初始化——`except` 分支要用它报告「行在、目录已删」的窗口，而失败可能发生在
+    # 赋值之前（如候选查询抛错）。届时若该名字在函数体内**只于 try 中被赋值**，
+    # `except` 引用它会抛 `UnboundLocalError`（**不是** NameError——函数内已存在
+    # 对该名的赋值，故 Python 视其为局部变量）→ 把一次本可正常收尾的清理失败
+    # **升级成未捕获异常**。已由 `test_early_failure_before_purge_does_not_raise_nameerror`
+    # 钉住（移除本行初始化即红灯，实测确为 UnboundLocalError）。
+    purged_run_ids: set[int] = set()
     with SessionLocal() as db:
         try:
             # 批大小是**持锁窗口的杠杆**（#2105）：窗口 ∝ 本 tick 处理的 run 数。
@@ -730,7 +738,16 @@ def run_retention_cleanup() -> None:
             # #1521/#1698/#2031: NFS 轨回收——DB 行删除前先清
             # devices|dedup|jira/{run_id} 与 jobs/{job_id}（行是目录的唯一索引）；
             # 文件删除失败的 run 剔除出本批 DB 删除，下轮重试（先文件后行，失败可自愈）。
+            #
+            # #2033：该次序**只**覆盖「文件删除失败」这一方向。反向（文件已删、
+            # 随后 DB 删除抛错/回滚）会留下「行在、目录已物理删除」的窗口。
+            # 已核实其**可自愈**：`purge_run_storage_dirs` 内 `if target.is_dir()`
+            # 使「目录不存在」成为 no-op（不计入 `failed`），故下一轮 retention
+            # 会正常删行——不一致最长约一个保留周期（默认 3 天），非永久。
+            # 但该窗口此前**不可观测**，故记录本批「已成功删文件的 run」，
+            # 供 commit 之后的回滚分支报告（见 `retention_rollback_after_nfs_purge`）。
             purge_failed = purge_run_storage_dirs(safe_run_ids, jobs_by_run)
+            purged_run_ids = set(safe_run_ids) - set(purge_failed)
             if purge_failed:
                 safe_run_ids, deferred_ancestors = _retention_safe_ids(
                     db, [run_id for run_id in safe_run_ids if run_id not in purge_failed],
@@ -813,6 +830,18 @@ def run_retention_cleanup() -> None:
         except Exception:
             logger.warning("retention_cleanup failed", exc_info=True)
             db.rollback()
+            # #2033：回滚把 DB 删除**整体撤销**，但本批的 NFS 目录**已在前面的
+            # `purge_run_storage_dirs` 中物理删除**——留下「行在、目录已删」的窗口
+            # （行是目录的唯一索引，故该窗口内不可回溯）。此处显式报告使其**可观测**：
+            # 修复前只有一句泛化的 `retention_cleanup failed`，从日志看不出目录已删。
+            # 已知自愈路径见该变量初始化处的注释（下一轮 retention 重试删行）。
+            if purged_run_ids:
+                logger.error(
+                    "retention_rollback_after_nfs_purge runs=%d sample=%s: "
+                    "NFS 目录已删但 DB 行经 rollback 保留（#2033 已知窗口；"
+                    "下一轮 retention 将重试删行并自愈）",
+                    len(purged_run_ids), sorted(purged_run_ids)[:5],
+                )
             # 失败路径同样占着行锁（回滚前），一并计入窗口；取锁前就失败则不上报。
             if lock_t0 is not None:
                 record_retention_txn(time.perf_counter() - lock_t0)

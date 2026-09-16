@@ -4,9 +4,7 @@ import {
   DASHBOARD_SUBSCRIPTION,
   FLEET_DEVICES_SUBSCRIPTION,
   consoleSubscription,
-  jobLogsSubscription,
   planRunSubscription,
-  runLogsSubscription,
 } from '@/config';
 import { SOCKET_EVENT_NAMES } from '@/utils/socketEvents';
 
@@ -26,7 +24,7 @@ describe('parseSubscription (#419)', () => {
     });
   });
 
-  it('maps plan_run / console / job / run helpers', () => {
+  it('maps plan_run / console helpers', () => {
     expect(parseSubscription(planRunSubscription(42))).toEqual({
       room: 'plan_run:42',
       events: [
@@ -40,14 +38,13 @@ describe('parseSubscription (#419)', () => {
       room: 'console:run-abc',
       events: [SOCKET_EVENT_NAMES.consoleLog, SOCKET_EVENT_NAMES.consoleStatus],
     });
-    expect(parseSubscription(jobLogsSubscription(7))).toEqual({
-      room: 'job:7',
-      events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate],
-    });
-    expect(parseSubscription(runLogsSubscription(9))).toEqual({
-      room: 'run:9',
-      events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate],
-    });
+  });
+
+  // #2400：job:/run: 房间两侧（emit 与订阅）一起删——描述符解析退化为无订阅，
+  // 与任意未知描述符同路径。
+  it('no longer resolves job:/run: descriptors (#2400)', () => {
+    expect(parseSubscription('job:7')).toEqual({ room: null, events: [] });
+    expect(parseSubscription('run:9')).toEqual({ room: null, events: [] });
   });
 
   it('rejects legacy /ws paths and unknown descriptors', () => {

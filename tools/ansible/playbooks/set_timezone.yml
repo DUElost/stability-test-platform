@@ -81,6 +81,15 @@
           - tz_target is match('^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z][A-Za-z0-9_+-]*)*$')
         fail_msg: "tz_target={{ tz_target }} 不是合法的 zoneinfo 名（形如 Area/City）"
 
+    # #2410：**rescue 路径才 register** 的变量必须在外层引用前先有定义——健康主机不走
+    # rescue，而 success_msg 无条件引用 `tz_set_fallback` → 渲染报
+    # `'tz_set_fallback' is undefined`，时区 play（被 install_agent.yml import）在
+    # 所有健康真机上失败（238 现场 S5 实测；容器因走 rescue 反而不受影响）。
+    # 预初始化成「未发生回退」，rescue 成功时由 register 覆盖。
+    - name: Assume no file-level fallback unless the rescue path runs (#2410)
+      ansible.builtin.set_fact:
+        tz_set_fallback: { changed: false }
+
     - name: Set timezone to {{ tz_target }}
       when: (tz_probe.stdout.split('|')[0] | trim) != tz_target
       block:
@@ -135,7 +144,7 @@
           {{ inventory_hostname }}: {{ tz_probe.stdout.split('|')[0] | trim }}
           ({{ tz_probe.stdout.split('|')[1] | trim }}) ->
           {{ tz_target }} ({{ tz_after.stdout.split('|')[1] | trim }})
-          {{ '[changed]' if ((tz_set is changed) or (tz_set_fallback is changed)) else '[already aligned]' }}
+          {{ '[changed]' if ((tz_set is changed) or (tz_set_fallback is defined and tz_set_fallback is changed)) else '[already aligned]' }}
       when: not ansible_check_mode
 
     # 长驻进程不会因 /etc/localtime 变化而重读时区（2026-09-15 在金丝雀 172.21.x.56

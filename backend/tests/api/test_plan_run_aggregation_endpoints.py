@@ -2423,7 +2423,11 @@ class TestWatcherSummaryPlatformBucketQueryCount:
             JobLogSignal(
                 id=22212,
                 job_id=j2.id, host_id="host-101",
-                device_serial=chain_setup["device_running"].serial,
+                # #2394-②：serial 进入事件身份后，本用例必须用**同一设备**——
+                # 原 fixture 让两台设备共享同一 nfs_path，物理上不可能
+                # （真实 watcher 布局 serial 就在路径里），旧键不含 serial 才恰好通过。
+                # 语义本就是「同一条异常被多次 run 拉取」（#1956）。
+                device_serial=chain_setup["device_completed"].serial,
                 seq_no=341, category="UNIVIEW", source="reconciler",
                 path_on_device=same_dir,
                 detected_at=_now() - timedelta(minutes=1),
@@ -2440,3 +2444,94 @@ class TestWatcherSummaryPlatformBucketQueryCount:
         items = resp.json()["data"]
         uniview = [i for i in items if i["group"] == "UNIVIEW"]
         assert len(uniview) == 1, f"同一事件被重复计数（#1956 去重语义被破坏）：{uniview}"
+
+
+class TestUniviewDedupStableIdentity2394:
+    """#2394-②：UNIVIEW 去重键去日期根（C9 跨天重放双计）+ serial 隔离。"""
+
+    def test_crash_details_uniview_cross_date_root_merged(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """同设备同事件在两个日期根下各入库一次（agent 状态丢失后跨天重放的真实形态）
+        → 修复后必须并为 1 条；旧键含 {MMDD} 会裂成 2 条（C9 双计）。"""
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        j2 = chain_setup["job_running"]
+        serial = chain_setup["device_completed"].serial
+        base_extra = {
+            "event_type": "CRASH",
+            "event_subtype": "Java Crash",
+            "aee_ts": "2026-09-16_14:22:13.390",
+            "package_name": "com.android.settings",
+        }
+        db_session.add_all([
+            JobLogSignal(
+                id=22221, job_id=j1.id, host_id="host-101",
+                device_serial=serial, seq_no=350,
+                category="UNIVIEW", source="reconciler",
+                path_on_device="JE.103000004",
+                detected_at=_now() - timedelta(minutes=3),
+                extra={**base_extra,
+                       "nfs_path": f"/mnt/hdd/aee_events/uniview_watcher/0916/{serial}/JE.103000004"},
+            ),
+            JobLogSignal(
+                id=22222, job_id=j2.id, host_id="host-101",
+                device_serial=serial, seq_no=351,
+                category="UNIVIEW", source="reconciler",
+                path_on_device="JE.103000004",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={**base_extra,
+                       "nfs_path": f"/mnt/hdd/aee_events/uniview_watcher/0917/{serial}/JE.103000004"},
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/crash-details", headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        uniview = [i for i in resp.json()["data"] if i["group"] == "UNIVIEW"
+                   and i.get("subtype") == "Java Crash"]
+        assert len(uniview) == 1, f"跨日期根重放双计（C9）未闭合：{uniview}"
+
+    def test_crash_details_uniview_two_devices_same_dir_not_merged(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """不同设备同名容器目录（两台 Z2581 都有 JE.103000004 是常态）→ 两台两事件，
+        必须保持 2 条：serial 进键是**隔离**能力，不只是合并能力。"""
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        j2 = chain_setup["job_running"]
+        extra_common = {
+            "event_type": "CRASH", "event_subtype": "Java Crash",
+            "aee_ts": "2026-09-16_15:00:00.000", "package_name": "com.x",
+        }
+        db_session.add_all([
+            JobLogSignal(
+                id=22231, job_id=j1.id, host_id="host-101",
+                device_serial=chain_setup["device_completed"].serial, seq_no=360,
+                category="UNIVIEW", source="reconciler",
+                path_on_device="JE.103000004",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={**extra_common,
+                       "nfs_path": "/mnt/hdd/aee_events/uniview_watcher/0916/dev-A/JE.103000004"},
+            ),
+            JobLogSignal(
+                id=22232, job_id=j2.id, host_id="host-101",
+                device_serial=chain_setup["device_running"].serial, seq_no=361,
+                category="UNIVIEW", source="reconciler",
+                path_on_device="JE.103000004",
+                detected_at=_now() - timedelta(minutes=1),
+                extra={**extra_common,
+                       "nfs_path": "/mnt/hdd/aee_events/uniview_watcher/0916/dev-B/JE.103000004"},
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/crash-details", headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        uniview = [i for i in resp.json()["data"] if i["group"] == "UNIVIEW"
+                   and i.get("subtype") == "Java Crash"]
+        assert len(uniview) == 2, f"跨设备同名目录被错误互并：{uniview}"

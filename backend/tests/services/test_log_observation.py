@@ -467,3 +467,65 @@ def test_fixable_link_rate_ignores_not_yet_archived(db_session, sample_device, m
     assert stats["fixable_link_rate"] == 1.0  # 告警口径：没有真故障
     # P1：unlinked_fixable == 0 → 计数器不自增（不该触发告警）
     counter.inc.assert_not_called()
+
+
+# ── #2365：逐 job 判定（仪表盘风险分布/最近运行的风险列走这条）────────────────
+
+
+def _seed_signal(db_session, job, sample_device, subtype: str, nfs: str, seq: int = 0):
+    db_session.add(JobLogSignal(
+        job_id=job.id,
+        host_id=str(sample_device.host_id),
+        device_serial=sample_device.serial,
+        seq_no=seq,
+        category="AEE",
+        source="inotifyd",
+        path_on_device=f"/data/aee/{nfs}",
+        detected_at=datetime.now(timezone.utc),
+        received_at=datetime.now(timezone.utc),
+        extra={"event_subtype": subtype, "nfs_path": f"/nfs/{nfs}"},
+    ))
+    db_session.flush()
+
+
+def test_risk_levels_by_job_buckets_per_job_and_omits_signal_less_jobs(
+    db_session, sample_device,
+):
+    """有信号才在返回里；无信号的 job 缺席（= 无判定依据，不是「低风险」）。"""
+    from backend.services.log_observation import aggregate_risk_levels_by_job
+
+    hit, _ = _seed_job(db_session, sample_device)
+    quiet, _ = _seed_job(db_session, sample_device, status="COMPLETED")
+    _seed_signal(db_session, hit, sample_device, "swt", "swt-1")
+    db_session.commit()
+
+    levels = aggregate_risk_levels_by_job(db_session, [hit.id, quiet.id])
+    assert set(levels) == {hit.id}
+    assert levels[hit.id] == "S"
+    # 空入参短路（调用方可能传空窗口）
+    assert aggregate_risk_levels_by_job(db_session, []) == {}
+
+
+def test_risk_levels_by_job_matches_global_rollup(db_session, sample_device):
+    """与 aggregate_risk_summary **同判据**：单 job 时两边级别必须相等。
+
+    这条是防「两套判据各写一份」的护栏——逐 job 版若哪天换了数据源或漏了
+    DLE/未链接任一侧，此处即红。
+    """
+    from backend.services.log_observation import (
+        aggregate_risk_levels_by_job,
+        aggregate_risk_summary,
+    )
+
+    job_a, _ = _seed_job(db_session, sample_device)
+    job_b, _ = _seed_job(db_session, sample_device, status="COMPLETED")
+    _seed_signal(db_session, job_a, sample_device, "swt", "a-swt")
+    _seed_signal(db_session, job_b, sample_device, "misc", "b-misc")
+    db_session.commit()
+
+    per_job = aggregate_risk_levels_by_job(db_session, [job_a.id, job_b.id])
+    for job_id in (job_a.id, job_b.id):
+        global_level = aggregate_risk_summary(db_session, [job_id])["risk_level"]
+        assert per_job[job_id] == global_level
+    # 两个 job 的严重度确实不同（否则上面的相等判据是恒真的）
+    assert per_job[job_a.id] != per_job[job_b.id]

@@ -251,6 +251,28 @@ def test_missing_credentials_refused_before_any_request(tmp_path, monkeypatch):
     assert calls == []
 
 
+def test_script_runs_when_invoked_by_path(tmp_path):
+    """回归：以 `python tools/dev/retire_script_versions.py plan` 这种**路径形式**调用时，
+    仓库根必须在 sys.path 上——#735 合入后文档给的正是这条命令，缺 bootstrap 就必炸。
+
+    用 sqlite 内存库把 DATABASE_URL 变成可解析但无表的目标：只要求"不再死于
+    ModuleNotFoundError"，不触任何真实数据库（本机可能就是生产库宿主）。
+    """
+    import subprocess
+
+    script = REPO_ROOT / "tools" / "dev" / "retire_script_versions.py"
+    proc = subprocess.run(
+        [sys.executable, str(script), "plan"],
+        cwd=str(tmp_path),
+        env={**__import__("os").environ, "DATABASE_URL": "sqlite:///:memory:",
+             "PYTHONPATH": ""},
+        capture_output=True, text=True, timeout=120,
+    )
+    joined = proc.stdout + proc.stderr
+    assert "No module named 'backend'" not in joined, joined[-400:]
+    assert proc.returncode != 0          # 无表可查，必然失败——但必须是业务失败而非导入失败
+
+
 # --------------------------------------------------------------- 凭据解析
 
 def test_read_env_key_parses_plain_and_quoted(tmp_path):

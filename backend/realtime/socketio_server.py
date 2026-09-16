@@ -197,15 +197,21 @@ class AgentNamespace(socketio.AsyncNamespace):
         logger.info("agent_sio_disconnected sid=%s host_id=%s", sid, host_id or "?")
 
     async def on_step_log(self, sid: str, data: dict):
-        """Agent emits step_log → broadcast to dashboard subscribers + persist to file.
+        """Agent emits step_log → persist to file（#2400 后**只落盘，不再推送**）。
 
         ADR-0026 P2-2 / #523: batched ``lines: [{step_id, seq, level, ts, msg}, ...]`` only.
+
+        #2400：原先每行还向 ``job:{id}`` / ``run:{id}`` 两个房间各 emit 一次，
+        但**前端没有任何订阅方**（订阅工厂 `jobLogsSubscription` / `runLogsSubscription`
+        零生产调用点）——Agent 每行日志换两次纯序列化 + 空扇出。行级实时面本就由
+        落盘路径承担：`log_writer` → `GET /api/v1/logs/query`（REST 轮询），
+        命令式实时输出走 `console:{runId}` 通道（ADR-0025 §9）。要恢复推送需同时
+        接上订阅方与房间白名单，见 `tests/test_realtime_wiring_contract.py` 的守卫。
         """
         job_id = data.get("job_id") or data.get("run_id")
         if not job_id:
             return
 
-        run_id = data.get("run_id", job_id)
         raw_lines = data.get("lines")
         if not isinstance(raw_lines, list) or not raw_lines:
             return
@@ -225,54 +231,18 @@ class AgentNamespace(socketio.AsyncNamespace):
         if not lines:
             return
 
-        sio = get_sio()
-        for line in lines:
-            log_payload = {
-                "type": "STEP_LOG",
-                "payload": {
-                    "step_id": line["step_id"],
-                    "seq": line["seq"],
-                    "level": line["level"],
-                    "ts": line["ts"],
-                    "msg": line["msg"],
-                },
-                "timestamp": _now_iso(),
-            }
-            await sio.emit("step_log", log_payload, namespace="/dashboard", room=f"job:{job_id}")
-            await sio.emit("step_log", log_payload, namespace="/dashboard", room=f"run:{run_id}")
-
         try:
             from backend.realtime.log_writer import append_log_lines
             await append_log_lines(job_id=int(job_id), lines=lines)
         except Exception:
             logger.debug("log_writer_append_failed job_id=%s", job_id, exc_info=True)
 
-    async def on_step_update(self, sid: str, data: dict):
-        """Agent emits step_update → broadcast to dashboard subscribers."""
-        job_id = data.get("job_id") or data.get("run_id")
-        if not job_id:
-            return
-
-        step_payload = {
-            "type": "STEP_UPDATE",
-            "payload": {
-                "step_id": data.get("step_id"),
-                "status": data.get("status"),
-                "progress": data.get("progress"),
-                "started_at": data.get("started_at"),
-                "finished_at": data.get("finished_at"),
-                "exit_code": data.get("exit_code"),
-                "error_message": data.get("error_message"),
-            },
-            "timestamp": _now_iso(),
-        }
-
-        sio = get_sio()
-        await sio.emit("step_update", step_payload, namespace="/dashboard", room=f"job:{job_id}")
-        await sio.emit("step_update", step_payload, namespace="/dashboard", room=f"run:{data.get('run_id', job_id)}")
-
     async def on_job_status(self, sid: str, data: dict):
-        """Agent emits intermediate job status (INIT_RUNNING, etc.) → broadcast only, no DB write."""
+        """Agent emits intermediate job status (INIT_RUNNING, etc.) → broadcast only, no DB write.
+
+        #2400：原先还向 ``job:{id}`` 房间投一份（无订阅方），已删；run 级订阅走
+        ``plan_run:{id}``（前端 `planRunSubscription` 的唯一消费方）。
+        """
         job_id = data.get("job_id") or data.get("run_id")
         if not job_id:
             return
@@ -289,7 +259,6 @@ class AgentNamespace(socketio.AsyncNamespace):
         }
 
         sio = get_sio()
-        await sio.emit("job_status", payload, namespace="/dashboard", room=f"job:{job_id}")
         run_id = data.get("plan_run_id") or data.get("run_id", job_id)
         await sio.emit("job_status", payload, namespace="/dashboard", room=f"plan_run:{run_id}")
 
@@ -316,18 +285,22 @@ class AgentNamespace(socketio.AsyncNamespace):
 # /dashboard namespace
 # ---------------------------------------------------------------------------
 
-# ── dashboard room 校验（ADR-0029 v2.3 D + #2369）────────────────────────────
+# ── dashboard room 校验（ADR-0029 v2.3 D + #2369 + #2400）───────────────────
 # on_subscribe 收窄：格式白名单 + 实体存在性。合法形态 = 后端 emit 端全集：
-#   job:/run:    → job_instance.id（Agent step_log 的 run_id 与 job_id 同值）
-#   plan_run:    → plan_run.id
+#   plan_run:    → plan_run.id（job_status / plan_run_status / precheck_update /
+#                  watcher_signal 的投递目标）
 #   console:     → RunConsole run_id（`con-` + uuid4 hex，进程内态，终态后仍可查）
 #   fleet:devices → 静态房间，无实体行（DEVICE_UPDATE 仅扇出给设备页订阅者，#2369）
+# #2400 起 **不再有 job:/run: 房间**：它们唯一的 emit 端（Agent step_log 逐行双投）
+# 与唯一订阅端（前端 jobLogsSubscription/runLogsSubscription）同时是死角，两边一起删。
+# 本白名单与 emit 位的对应关系由 tests/test_realtime_wiring_contract.py 守着——
+# 只删一侧或新增 emit 不接线都会被它拦下。
 # agent: 是 /agent namespace 内部房间（AgentNamespace 自己 enter_room），
 # dashboard 客户端订阅无意义（namespace 隔离），不入白名单。
 # 不做归属过滤：REST 面本就允许任意登录用户读任意 run，实时通道不设更严门槛
 # （G13 定性：P2 前置一致性 / 健壮性，非越权安全洞）。
 _ROOM_PATTERN = re.compile(
-    r"^(job|run|plan_run):[0-9]{1,18}$"
+    r"^plan_run:[0-9]{1,18}$"
     r"|^console:con-[0-9a-f]{1,32}$"
     r"|^fleet:devices$"
 )
@@ -358,7 +331,7 @@ async def _dashboard_room_exists(kind: str, ident: str) -> bool:
                     ident,
                 )
         return exists
-    table = "job_instance" if kind in ("job", "run") else "plan_run"
+    table = "plan_run"
     try:
         async with AsyncSessionLocal() as session:
             row = await session.execute(
@@ -585,17 +558,6 @@ async def broadcast_dashboard_summary(summary: Dict[str, Any]) -> None:
     }, namespace="/dashboard")
 
 
-async def broadcast_job_log(job_id: int, log_data: Dict[str, Any]) -> None:
-    """Push a STEP_LOG to subscribers of a specific job."""
-    sio = get_sio()
-    payload = {
-        "type": "STEP_LOG",
-        "payload": log_data,
-        "timestamp": _now_iso(),
-    }
-    await sio.emit("step_log", payload, namespace="/dashboard", room=f"job:{job_id}")
-
-
 async def broadcast_run_job_update(run_id: int, job_id: int, status: str) -> None:
     """Notify frontend that a specific job's status changed."""
     sio = get_sio()
@@ -614,34 +576,6 @@ async def broadcast_plan_run_status(run_id: int, status: str) -> None:
         "payload": {"status": status},
         "timestamp": _now_iso(),
     }, namespace="/dashboard", room=f"plan_run:{run_id}")
-
-
-async def broadcast_precheck_update(
-    run_id: int,
-    *,
-    phase: str | None = None,
-    dispatch_status: str | None = None,
-) -> None:
-    """ADR-0021 — notify PlanRun detail subscribers that dispatch gate state changed.
-
-    Frontend treats this as an invalidation hint for ``run_context.precheck``
-    and ``run_context.dispatch_state`` — payload carries only coarse progress
-    markers, not the full precheck matrix.
-    """
-    sio = get_sio()
-    await sio.emit(
-        "precheck_update",
-        {
-            "type": "PRECHECK_UPDATE",
-            "payload": {
-                "phase": phase,
-                "dispatch_status": dispatch_status,
-            },
-            "timestamp": _now_iso(),
-        },
-        namespace="/dashboard",
-        room=f"plan_run:{run_id}",
-    )
 
 
 async def broadcast_watcher_signal(
@@ -675,35 +609,6 @@ async def broadcast_watcher_signal(
         namespace="/dashboard",
         room=f"plan_run:{run_id}",
     )
-
-
-async def broadcast_run_update(
-    run_id: int, task_id: int, status: str,
-    progress: int = 0, message: str = "",
-) -> None:
-    """Broadcast a RUN_UPDATE event to all dashboard subscribers."""
-    sio = get_sio()
-    await sio.emit("run_update", {
-        "type": "RUN_UPDATE",
-        "payload": {
-            "run_id": run_id,
-            "task_id": task_id,
-            "status": status,
-            "progress": progress,
-            "message": message,
-        },
-        "timestamp": _now_iso(),
-    }, namespace="/dashboard")
-
-
-async def broadcast_report_ready(run_id: int, task_id: int) -> None:
-    """Broadcast a REPORT_READY event to all dashboard subscribers."""
-    sio = get_sio()
-    await sio.emit("report_ready", {
-        "type": "REPORT_READY",
-        "payload": {"run_id": run_id, "task_id": task_id},
-        "timestamp": _now_iso(),
-    }, namespace="/dashboard")
 
 
 # Thread-safe synchronous emit bridge (for recycler and other sync callers)

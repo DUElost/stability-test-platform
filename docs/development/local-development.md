@@ -49,6 +49,37 @@ compose 构建把 API/WS 基址烤成 `localhost:18000`，而 `127.0.0.1` 与 `l
 - Compose 开发环境不得复用生产 `STP_NFS_ROOT`、AEE、本地日志或挂载点。
 - 若与生产同机并存，开发流量与生产流量必须使用不同端口和不同目录。
 
+### dev 库的 schema 与字典 seed（#2381）
+
+Compose 起的 PostgreSQL 由 `backend/scripts/init_dev_db.py` 初始化（`ENV=production`
+时该脚本直接拒绝执行）。它按库的现状选路，并在输出里打印实际走的那条：
+
+| 库现状 | 路径 | 输出 | 结果 |
+|---|---|---|---|
+| 空库 | `alembic upgrade head` | `dev_db_schema_ready path=alembic` | schema + **字典 seed** |
+| 已有 `alembic_version` | 同上（正常增量） | 同上 | 同上 |
+| 有表但无 `alembic_version` | `create_all` 兜底 | `path=create_all_legacy WARNING=...dictionary_seeds_not_applied` | 只有表，**没有 seed** |
+
+`specialty`（专项）、`script`（脚本注册）这类静态字典的**唯一事实源是 seed 迁移**，没有
+API 写端点。所以第三行那种库会「schema 看着成功、但新建 Plan 没有专项可选」——这就是
+#2381。收养一个老 dev 库需要显式决策（不该由 dev 脚本顺手做掉）：先确认库内 schema 与
+head 一致，再 stamp 后补链。
+
+```bash
+cd backend
+python -m alembic current          # 核对现状，确认库内 schema 与 head 一致
+python -m alembic stamp <revision>
+python -m alembic upgrade head
+```
+
+嫌麻烦就直接删掉那个 dev 库，让 compose 重新起一个空库。管理员账号由同一脚本按
+`STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` upsert，缺任一则跳过并打印
+`dev_db_admin_skipped`。
+
+判据：`tests/test_dev_bootstrap_seed.py`（PR 路径，含「兜底必须自带标注」）与
+`tests/test_alembic_upgrade.py::test_dev_bootstrap_from_empty_database_produces_seeded_schema`
+（夜间容器，空库→seed 的地面真值）。
+
 ### 兼容入口：宿主机手动启动
 
 仅用于本地排障或历史兼容，不作为当前默认开发路径，也不作为生产部署方式。
@@ -112,6 +143,49 @@ python -m backend.agent.main
 | 代码同步 | 勿在 `/mnt/` 下直接安装；rsync 到 WSL 本地 |
 
 详述：[`wsl-linux-agent-setup.md`](../wsl-linux-agent-setup.md)、[`backend/agent/DEPLOY.md`](../../backend/agent/DEPLOY.md)
+
+### 开发期「假 Agent」夹具（`tools/dev/fake_agent.py`，#2402）
+
+job / step 级实时面在 dev 里是可测的——前提是别再手搓夹具。**它只注册与回报，
+绝不执行脚本**（不 import subprocess/pty、不碰 ADB），并且有三条硬红线：
+
+| 红线 | 判据 | 谁守 |
+|---|---|---|
+| 不执行任何东西 | AST 级守卫：不得 import `subprocess`/`pty`/`shutil`/`asyncio`，不得出现 `os.system` 类调用 | `tests/test_dev_fake_agent.py` |
+| 只打 dev 栈 | 默认 `127.0.0.1:18000`；指向 `:8000`（本机生产控制面）**直接拒绝**，需 `--allow-non-dev-target` 显式越过 | 同上（断言「被拒时一个 HTTP 都不发」） |
+| 凭据不外泄 | `AGENT_SECRET` 只从环境读；`fencing_token` 由 `fencing_token_for()` 一处取用，**永不打印** | 同上（断言输出里不含 token 值，只报「有没有」） |
+
+反向同样成立：**不得把真机 Agent 指向 dev 的 `:18000`** —— 那会把真机的设备/Job
+事实写进 dev 库，两边的事实源都被污染。
+
+```bash
+export AGENT_SECRET=<与 dev server 容器同值>        # 工具不会打印它
+# 1) 造主机与设备（host_id="0" 是按 IP 自动注册的哨兵）
+docker compose exec -T server python /app/tools/dev/fake_agent.py heartbeat --count 3
+# 2) 常驻：注册 /agent + 周期心跳（compose exec -d 起的进程会随会话回收，故用 setsid）
+docker compose exec -d server sh -c \
+  'setsid nohup python /app/tools/dev/fake_agent.py serve --lifetime 900 </dev/null >/tmp/fa.log 2>&1 &'
+# 3) 跑一步 job 生命周期（token 自动从 device_leases 取，不打印）
+docker compose exec -T server python /app/tools/dev/fake_agent.py claim --capacity 4
+docker compose exec -T server python /app/tools/dev/fake_agent.py step --job <ID> \
+  --step step_init_1 --status RUNNING
+docker compose exec -T server python /app/tools/dev/fake_agent.py complete --job <ID>
+# 4) 反向造推送：只允许 agent→server 的白名单事件
+docker compose exec -T server python /app/tools/dev/fake_agent.py inject \
+  --event step_log --data '{"job_id":<ID>,"line":"from fixture"}'
+```
+
+**dev 冒烟要含 job 级 WS 渲染**（这条是 #2402 的验收点）：起假 Agent → 跑 1 台设备
+1 个 step 的 Plan → 在**不刷新** `/execution/plan-runs/<id>` 的前提下断言页面反映了
+RUNNING→终态。只测 REST/UI 面的「冒烟」覆盖不到这条链。
+
+两个已知差异，不要当 bug 查：
+
+- **transport**：生产 Agent 按 #1121 走 websocket-only；dev 镜像里没有
+  `websocket-client`，所以夹具在 `--transport auto` 下会退回 **polling** 并自带
+  自愈重连（polling 会话约 5 分钟掉一次）。多实例拓扑下这**不等价**于生产，
+  涉及会话亲和的改动仍须按 #1121 的口径验。
+- **容器内 `/app` 只读**：夹具日志默认落 `/tmp/stp-fake-agent.log`。
 
 ### 生产式安装
 
