@@ -162,10 +162,10 @@ if getent group dialout >/dev/null 2>&1; then
     elif usermod -aG dialout "$USER"; then
         echo_info "用户 $USER 已加入 dialout 组（服务启动时生效）"
     else
-        echo_warn "加入 dialout 组失败；刷机将依赖 udev 0666 规则"
+        echo_warn "加入 dialout 组失败；§4c 会退化为 udev 0666 规则（任何本地用户可写该串口）"
     fi
 else
-    echo_warn "系统无 dialout 组，跳过（刷机依赖 udev 0666 规则）"
+    echo_warn "系统无 dialout 组，跳过（§4c 会写 udev 0666 规则）"
 fi
 
 # 2. 创建目录结构
@@ -255,25 +255,28 @@ if [ -d "$FLASHTOOL_DIR" ]; then
     fi
 fi
 
-# 4c. 刷机前置归位（#2133 / ADR-0037 D5；#2284 最小权限）
+# 4c. 刷机前置归位（#2133 / ADR-0037 D5；#2284 最小权限；#2353 判据改成员资格）
 # 运行期不再装包/写规则（flash_preflight 只检不修）；由安装链保证：
 #   - MTK ttyACM 规则——此前该规则只由旧版 flash_preflight 的 sudo 修复运行期写入
 #     （install 链只装 99-ttyacms.rules = ModemManager ignore）；内容与 wrapper
 #     `ensure-udev-rule` 同源（两个固定形态之一）。
 #     #2284：§1.2 已把 Agent 用户加入 dialout，故默认写 0660 + GROUP="dialout"
-#     （最小权限）；仅当本机没有 dialout 组时才退化为 0666 并记 warning——
-#     0666 等于把 MTK 串口开放给任何本地用户（可干扰刷机流）。
+#     （最小权限）；退化形态 0666 等于把 MTK 串口开放给任何本地用户（可干扰刷机流）。
+#     #2353：判据由「dialout 组是否存在」改为「Agent 用户**是否已持久属于**该组」——
+#     组存在而用户不是成员时，0660 对该用户等同于不可写（刷机中途
+#     EACCES/STATUS_ERR，且该状态正是 flash_preflight 的 dialout 项要拦的）。
+#     该状态来自 §1.2 的 usermod 失败或本机无该组，一律退化 0666 并记 warning。
 #   - Qt/X 运行库五件（flash_tool 依赖；缺包时 preflight 会明确失败并指引）。
 # 离线/精简装机可用 AGENT_SKIP_FLASH_PREREQ_PKGS=1 跳过包安装。
 UDEV_MTK_RULE="/etc/udev/rules.d/98-ttyacm-mtk.rules"
 UDEV_MTK_LINE_0660='KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", GROUP="dialout", MODE="0660"'
 UDEV_MTK_LINE_0666='KERNEL=="ttyACM*", ATTRS{idVendor}=="0e8d", MODE="0666"'
-if getent group dialout >/dev/null 2>&1; then
+if id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx dialout; then
     UDEV_MTK_LINE="$UDEV_MTK_LINE_0660"
-    UDEV_MTK_REASON="# MTK ttyACM 0660+dialout：Agent 用户属 dialout 可写，其它本地用户不可写（#2284）"
+    UDEV_MTK_REASON="# MTK ttyACM 0660+dialout：Agent 用户 $USER 属该组可写，其它本地用户不可写（#2284）"
 else
     UDEV_MTK_LINE="$UDEV_MTK_LINE_0666"
-    UDEV_MTK_REASON="# MTK ttyACM 0666：本机无 dialout 组，退化为 0666（否则刷机不可用）（#2284）"
+    UDEV_MTK_REASON="# MTK ttyACM 0666：Agent 用户 $USER 不属 dialout（无该组或加组未生效），退化为 0666（否则刷机不可用）（#2353）"
 fi
 if [ -d /etc/udev/rules.d ]; then
     printf '%s\n%s\n' "$UDEV_MTK_REASON" "$UDEV_MTK_LINE" > "$UDEV_MTK_RULE" 2>/dev/null && \
@@ -283,7 +286,7 @@ if [ -d /etc/udev/rules.d ]; then
         echo_info "MTK ttyACM 规则已部署: 98-ttyacm-mtk.rules（$UDEV_MTK_LINE）" || \
         echo_warn "MTK ttyACM 规则部署失败，刷机将依赖 wrapper ensure-udev-rule"
     if [ "$UDEV_MTK_LINE" = "$UDEV_MTK_LINE_0666" ]; then
-        echo_warn "本机无 dialout 组 → ttyACM 规则为 0666（任何本地用户可写该串口）；建议 provisioning 补组"
+        echo_warn "Agent 用户 $USER 不属 dialout（无该组 / 加组失败）→ ttyACM 规则为 0666（任何本地用户可写该串口）；建议 provisioning 补组后重跑安装链"
     fi
 fi
 
