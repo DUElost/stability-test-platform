@@ -86,8 +86,11 @@ MONITORING_DISTRO_DEFAULTS = (
     ("deploy/prometheus/node-exporter.default", "etc/default/prometheus-node-exporter", 0o644),
 )
 # 本站资产：prometheus.yml 与采样器（脚本/单元）都带 <deploy-root> 标记，走共享路径守卫。
+#: 本站渲染的 Prometheus 配置（site-root 相对路径；与 prometheus.default 的
+#: `--config.file` 同源）。#2283：接管判断用它当「本站形态」的基准。
+SITE_PROMETHEUS_CONFIG = "etc/stp/prometheus/prometheus.yml"
 MONITORING_CONFIGS = (
-    ("deploy/prometheus/prometheus.yml", "etc/stp/prometheus/prometheus.yml", 0o644),
+    ("deploy/prometheus/prometheus.yml", SITE_PROMETHEUS_CONFIG, 0o644),
 )
 # 宿主进程内存采样器：与上面同一批安装（textfile collector 的写入端）。
 MONITORING_SAMPLER = (
@@ -347,6 +350,21 @@ def _unit_reads_args(ctx: InstallContext, unit: str) -> bool:
     return False
 
 
+def _prometheus_running_config(ops: Ops) -> str:
+    """运行中 prometheus 的 ``--config.file``（取不到返回 ""）。
+
+    #2283：读发行版 unit 的 ExecStart——systemd 已展开 EnvironmentFile 里的 ``$ARGS``，
+    所以这里拿到的是**实际生效**的配置路径。用于判断「本机原有 Prometheus 是否由本站
+    接管」：接管后它的 rule_files / scrape jobs 不再被引用（本站渲染的配置不含
+    rule_files），而安装仍报 monitoring_ready。
+    """
+    result = ops.run(["systemctl", "show", "-p", "ExecStart", "prometheus"])
+    if result.returncode != 0:
+        return ""
+    match = re.search(r"--config\.file=(\S+)", result.stdout or "")
+    return match.group(1) if match else ""
+
+
 def monitoring_artifacts() -> tuple[tuple[str, str, int], ...]:
     """监控栈要落地的 (发布物相对路径, system_root 相对路径, mode) 列表。"""
     return (*MONITORING_DISTRO_DEFAULTS, *MONITORING_CONFIGS, *MONITORING_SAMPLER)
@@ -363,7 +381,10 @@ def _distro_default_conflict(ctx: InstallContext, destination: Path) -> bool:
         text = destination.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    return DISTRO_DEFAULT_MARKER in text and ctx.deploy_root.as_posix() not in text
+    return (
+        DISTRO_DEFAULT_MARKER in text
+        and not declares_deploy_root(text, ctx.deploy_root)
+    )
 
 
 def await_monitoring(port: int, timeout_seconds: int = 30, interval_seconds: float = 3.0) -> bool:
@@ -516,6 +537,22 @@ def stage_s1_basics(ctx: InstallContext) -> list[Check]:
                 "Prometheus and node-exporter are installed and callable on the control plane.",
                 "Keep them on loopback; the storage page reads them locally.",
             ))
+            # #2283：接管一台**已在跑** Prometheus 的主机时，它的 rule_files /
+            # scrape jobs 不随本站配置迁移（本站渲染的 prometheus.yml 不含
+            # rule_files）——不自动搬（那是运维判断），但必须显式记录，
+            # 否则表现为「规则静默消失、安装仍报绿」。
+            running_config = _prometheus_running_config(ctx.ops)
+            if running_config and not running_config.endswith(SITE_PROMETHEUS_CONFIG):
+                checks.append(blocked(
+                    "install.s1.monitoring_takeover", "control_plane", "$.monitoring",
+                    "takeover_needs_rule_migration",
+                    "This host already runs Prometheus with "
+                    f"{running_config}; the site takes it over with its own config, so any "
+                    "rule_files / scrape jobs declared there are no longer referenced.",
+                    "Move the rules/jobs you still need into deploy/prometheus/ (site assets) "
+                    "and re-run, or keep that Prometheus on a separate host. "
+                    "Re-running install after the site config takes effect clears this item.",
+                ))
 
     if config.storage.export_to_agents:
         # 自建中心存储：装上 NFS 服务端，并把导出根交给约定的写入身份（只此一层）。
@@ -535,8 +572,18 @@ def stage_s1_basics(ctx: InstallContext) -> list[Check]:
                         checks, "install_export", location="$.storage.export_to_agents",
                         role="storage", check_id="install.s1.export",
                     )
-            ctx.ops.run(["chown", f"root:{EXPORT_ANON_UID}", config.storage.mount_path])
-            ctx.ops.run(["chmod", "0775", config.storage.mount_path])
+            # #2283：两条命令的 rc 此前被丢弃——只读文件系统 / root-squash 介质上
+            # 失败时 S1 仍 PASS（检查文本还断言「export 根对约定身份可写」），
+            # 直到 Agent 侧写入才以 storage_unwritable / Errno-13 暴露。
+            for argv in (
+                ["chown", f"root:{EXPORT_ANON_UID}", config.storage.mount_path],
+                ["chmod", "0775", config.storage.mount_path],
+            ):
+                if ctx.ops.run(argv).returncode != 0:
+                    return _safe(
+                        checks, "install_export", location="$.storage.export_to_agents",
+                        role="storage", check_id="install.s1.export",
+                    )
             checks.append(_pass(
                 "install.s1.export", "storage", "$.storage.export_to_agents", "export_prepared",
                 "The NFS server is callable and the export root is writable by the agreed identity.",
@@ -940,18 +987,39 @@ def _deploy_env(ctx: InstallContext, overrides: dict[str, str]) -> dict[str, str
     return env
 
 
+def declares_deploy_root(text: str, deploy_root: Path) -> bool:
+    """文本是否声明了**完整的**部署根路径（组件边界判据，#2274）。
+
+    unit / nginx / logrotate 三类共享资产的归属证据都是「引用本站部署根」。此前用
+    「整文件子串」（``deploy_root.as_posix() not in text``）判定，站点 id **前缀重叠**
+    时被绕过：站点 A 的 ``/opt/stp-a`` 是站点 B 的 ``/opt/stp-ab`` 的真前缀，B 会把
+    A 的 unit/nginx/logrotate 认作本站资产并覆盖，把 A 的服务改指 B 的部署根
+    （守卫注释里描述的后果正是这样发生的）。
+
+    判据：部署根之后不得紧跟路径组件字符（字母数字 / 点 / 连字符）——``/opt/stp-a/venv``
+    这类**子路径**仍然算本站（渲染的模板就是这么用的）。
+    """
+    root = deploy_root.as_posix().rstrip("/")
+    if not root:
+        return False
+    return re.search(re.escape(root) + r"(?![\w.-])", text) is not None
+
+
 def shared_path_is_foreign(ctx: InstallContext, destination: Path) -> bool:
     """共享系统路径上的既有文件是否属于本站（#2088，fail-closed）。
 
     unit / nginx / logrotate 三类产物都由 ``<deploy-root>`` 渲染，故「引用本站部署根」
     既是归属证据也是可重跑判据；读不到或不含本站部署根即不是本站资产。服务名与站点名
     全局固定，同机第二站点必然同名——无归属判据的覆盖会把别站服务改指本站部署根。
+
+    #2274：判据按**路径组件边界**（`declares_deploy_root`），不是整文件子串——否则
+    站点 id 前缀重叠（`/opt/stp-a` vs `/opt/stp-ab`）时第二个站点会覆盖第一个站点的资产。
     """
     try:
         text = destination.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return destination.exists()
-    return ctx.deploy_root.as_posix() not in text
+    return not declares_deploy_root(text, ctx.deploy_root)
 
 
 def install_shared_asset(ctx: InstallContext, source: Path, destination: Path) -> None:

@@ -421,6 +421,9 @@ class PlanRunLogEventsOut(BaseModel):
     data_authority: str = "device_log_event"
     total: int
     items: list[PlanRunLogEventOut]
+    # #2288：该 run 出现过的平台**全集**（不受 `platform`/`limit` 影响）——筛选选项的
+    # 事实源必须是全量集合，而不是「本次已加载窗口」里恰好看到的几个平台。
+    platforms: list[str] = []
 
 
 __all__ = [

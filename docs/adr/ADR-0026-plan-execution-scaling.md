@@ -56,6 +56,7 @@
 - **实时日志（P2-2 已收口）**：`_MQStepLogger` → `StepTraceWriter.send_log` → `AgentSocketIOClient` 按批（`STP_LOG_BATCH_MAX_LINES` / `STP_LOG_BATCH_FLUSH_MS`）emit `step_log`；心跳 `backpressure.log_rate_limit` + control `backpressure` 命令闭环；`STP_STEP_LOG_STREAM=0` 可回退为 no-op。
 - **SAQ producer/worker（P0 已拆）**：`init_saq_producer` 与 `start_saq_worker` 解耦；`STP_ENABLE_INPROCESS_SAQ=0` 时 producer 仍可 enqueue，外部 worker 同队列消费。
 - **索引（P2-3 已收口）**：`idx_plan_run_admission_queue` 对齐 pump `priority DESC, enqueued_at ASC`；`idx_prtd_plan_run_sort`。
+- **观测面 / Dashboard（#2324 已收口）**：摘要热路径改为 WS `dashboard_summary` 合流推送（≤1Hz，`STP_DASHBOARD_SUMMARY_PUSH_INTERVAL_SECONDS`）；`DEVICE_UPDATE` 仅在 status/adb/告警阈值（电量<20 / 温度>45）变化时扇出；Agent WS `on_heartbeat` **不得**再逐设备 fan-out；UI / Agent HTTP 限流分桶。**废弃**「每个 `DEVICE_UPDATE` 触发全量 `dashboard-summary` REST refetch」的观察面假设——REST 仅冷启动 + 慢兜底（默认 60s）。
 
 ### 缺口④：三个独立存活信号被混用于单个 `job.updated_at`
 
@@ -440,6 +441,7 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 1. **O(1) 聚合计数器 + terminalization 服务**（§6）——✅ `job_terminalization` 单一终态入口 + `plan_run`/`plan_run_host` 五计数器自增 + `apply_plan_run_aggregation_from_counters`；`counter_reconcile` 低频对账 sweep。
 2. **实时日志批量化 + 背压**——✅ Agent 批 flush + `log_rate_limit` 背压；控制面 `on_step_log` 兼容单行/批量；`append_log_lines` 批量落盘。
 3. **索引与查询优化**——✅ 出队 partial index 改为 `(priority DESC, enqueued_at ASC)` 对齐 pump ORDER BY；`idx_prtd_plan_run_sort`；设备矩阵单 JOIN（job+device+host+lease）+ `stability_plan_run_devices_query_duration_seconds`（1000-device 压测复核用）。
+4. **Dashboard 观测面减负（#2324）**——✅ 服务端合流推送 `dashboard_summary`（dirty-flag ≤1Hz）；心跳路径变更门控 `DEVICE_UPDATE`；废弃 Agent WS 逐设备 fan-out；`STP_UI_RATE_LIMIT_REQUESTS` / `STP_AGENT_RATE_LIMIT_REQUESTS` 分桶。前端对 `DASHBOARD_SUMMARY` 走 `setQueryData`，**不得**再因 `DEVICE_UPDATE` invalidate `dashboard-summary`。
 
 ### P3：水平扩展（远期，需突破单进程约束）
 
@@ -548,3 +550,4 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 | 2026-07-25 | **单实例承载量代码层自证**（host 阶梯挂为 `capacity:inventory-bound` issue）：87-device 实测 PlanRun99 自然 SUCCESS（`pass_rate=1.0`，无 FAILED/UNKNOWN）；`plan_aggregator` O(N²) 全量 SELECT 已收口为 O(1) 计数器读五列（`aggregator_sync.py:11` → `job_terminalization.on_job_terminal_sync`）；续租风暴收口为 extend-batch chunk=100（`lease_renewer.py:231`）；admission transaction 越窗升级已加 Host→Device 行锁（`admission_pump.py:_lock_admission_resources`）；permit 仿真 5–60 device mean_wait ≪ coordinator_timeout 300s。**潜在结构性瓶颈图**：① 准入 O(1)、续租 batch、聚合 O(1) 均不在 1000-device 单进程瓶颈；② OperationScheduler permit cap 待 100/200 device 仿真（issue `capacity:code-verified`）；③ terminalization 漂移源代码审查理论=0（所有终态入口经 `job_terminalization`：`/complete`、abort reaper `plan_run_abort.py:47`、recycler pending-timeout `recycler.py:374`、session_watchdog grace→FAILED `session_watchdog.py:91`），`counter_reconcile` 用作预防性 sweep。**host 阶梯阻塞不变**：当前 20 ONLINE host / 仅 11 host 有 ONLINE device，挂为 `capacity:inventory-bound` issue 持续跟踪；不替代为 device 数。 |
 | 2026-07-30 | **host-scale 门槛拆分为 B1 / B2**（见「门槛拆分」章节）。动机：单条门槛把可用合成设备验证的 host 调度维度与只能用真机的 device 执行维度捆在一起，库存周期内 host 维度零施压，§缺口③ 的控制面单进程载荷瓶颈无法提前暴露。**拆分不降低任何一档指标要求**，且显式规定「B1 通过不构成 host-scale 整体验收」。B1 依赖仓库已有的 `STP_STATIC_DEVICE_SERIALS`（`device_discovery.py:13-25`，原为无 adb 环境的 smoke 钩子），配合 `AGENT_INSTALL_DIR` 做单机多实例状态隔离——两者均为**代码层复核结论，尚无实机数据**；B1 第一步是单机 5 实例冒烟。已知边界：`AGENT_DIR` 不随 `AGENT_INSTALL_DIR` 变，多实例共享代码时禁止热更新。 |
 | 2026-08-25 | **#288 / #291 文档同步（#420）**：全文去掉「`updated_at` 现行存活判据 / 单点 `extend_lock` 回退保留」表述；缺口④遗留、§5 已知缺口、交互矩阵 recycler/LeaseRenewer、风险回滚列改为现行事实（仅 batch；缺信号锚定下发时刻；`updated_at` 不作判据）。 |
+| 2026-09-16 | **#2324 Dashboard 观测面**：缺口③ / P2 增补 observation-plane 决策——`dashboard_summary` WS ≤1Hz；`DEVICE_UPDATE` 变更门控；废弃 Agent WS 逐设备 fan-out 与「事件即全量 REST refetch」；UI/Agent 限流分桶；REST `dashboard-summary` = 冷启动 + 慢兜底。 |

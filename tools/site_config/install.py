@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import importlib.util
 import json
+import logging
 import os
 import stat
 from dataclasses import asdict, replace
@@ -82,6 +83,27 @@ def _report(
     if state_path is not None:
         report["state_file"] = state_path
     return report
+
+
+logger = logging.getLogger(__name__)
+
+
+def _run_stage(name: str, call: Callable[[], list[Check]]) -> list[Check]:
+    """跑一个阶段并把**未映射异常**变成报告条目（#2277 兜底契约）。
+
+    已映射的外部命令失败（124/126/127）在 ``LocalOps.run`` 里就变成了结果；这里兜的是
+    其余异常（解析错误、第三方库异常、契约外的 KeyError……）：它们此前会穿到
+    ``deploy/install.sh`` 打印 traceback 退出，报告不产出——操作员既拿不到失败码，
+    也拿不到修复指引，而现场已被部分修改。异常仍进日志（不静默）。
+    """
+    try:
+        return call()
+    except Exception:  # noqa: BLE001 — 兜底：任何异常都不得穿成 traceback
+        logger.exception("install_stage_crashed stage=%s", name)
+        return [failure(
+            "stage_crashed", location="$.platform", role="site",
+            check_id=f"install.{name.lower()}",
+        )]
 
 
 def _stage_entry(name: str, checks: list[Check]) -> dict:
@@ -372,7 +394,7 @@ def _run_locked(
     stages.append({"stage": "S0", "status": "PASS", "checks": ["install.s0.digest", "install.bindings"]})
 
     for name, stage in (("S1", stage_s1_basics), ("S2", stage_s2_release_env)):
-        result = stage(ctx)
+        result = _run_stage(name, lambda stage=stage: stage(ctx))
         checks.extend(result)
         stages.append(_stage_entry(name, result))
         if any(check.status == "FAIL" for check in result):
@@ -392,14 +414,14 @@ def _run_locked(
     database_state, database_version = probe(ctx.binding_values[config.dependencies.database_ref]["DATABASE_URL"])
     if database_state == "managed":
         database_state = "at_head" if database_version == code_head else "behind"
-    result = stage_s3_database_admin(ctx, database_state, code_head)
+    result = _run_stage("S3", lambda: stage_s3_database_admin(ctx, database_state, code_head))
     checks.extend(result)
     stages.append(_stage_entry("S3", result))
     if any(check.status == "FAIL" for check in result):
         _persist_state(ctx, stages)
         return _report(checks, stages)
 
-    result = stage_s4_entry(ctx)
+    result = _run_stage("S4", lambda: stage_s4_entry(ctx))
     checks.extend(result)
     stages.append(_stage_entry("S4", result))
     state_name = _persist_state(ctx, stages)
@@ -408,7 +430,7 @@ def _run_locked(
 
     # S5 — Agent onboarding over this site's own API (I4).  Opt-in: a site that
     # installs the control plane before its Agents must stay a supported flow.
-    result = stage_s5_agents(ctx)
+    result = _run_stage("S5", lambda: stage_s5_agents(ctx))
     checks.extend(result)
     stages.append(_stage_entry("S5", result))
     state_name = _persist_state(ctx, stages) or state_name

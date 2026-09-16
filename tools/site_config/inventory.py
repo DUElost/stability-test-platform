@@ -42,7 +42,8 @@ TEMPLATE = """# 站点 Agent 清单（不入仓库；deploy/agent/install.sh 默
 #
 # 每台一行：<host> [ansible_host=..] ansible_user=<ssh 用户> \
 #           (ansible_password=<口令> | ansible_ssh_private_key_file=<私钥路径>)
-# 可选：ansible_port、agent_key、install_root、local_aee_root、ssh_credential_ref
+# 可选：ansible_port（→ Agent.ssh_port）、agent_key、install_root、local_aee_root、
+#       ssh_credential_ref
 # 组级默认写在 [stp_agents:vars]；口令/私钥不放进仓库。
 
 [stp_agents]
@@ -78,6 +79,21 @@ def _pairs(tokens: list[str]) -> dict[str, str]:
         key, _, value = token.partition("=")
         pairs[key.strip()] = value.strip()
     return pairs
+
+
+def _parse_port(raw, target: str) -> int:
+    """``ansible_port`` → int 端口；越界/非数字在**解析期**拒绝（#2283）。
+
+    此前该值解析后被 pop 丢弃，Host 行恒以 22 建立——sshd 不在 22 的主机会连错服务。
+    现在带到 Host payload；非法值不能等到建行时才发现，故在此 fail-closed。
+    """
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        raise InventoryError("inventory_shape", f"{target}: ansible_port") from None
+    if not 1 <= port <= 65535:
+        raise InventoryError("inventory_shape", f"{target}: ansible_port")
+    return port
 
 
 def parse_inventory(path: str | Path) -> tuple[list[dict], dict[str, dict[str, str]]]:
@@ -124,7 +140,7 @@ def parse_inventory(path: str | Path) -> tuple[list[dict], dict[str, dict[str, s
             "ssh_credential_ref": merged.pop("ssh_credential_ref", DEFAULT_CREDENTIAL_REF),
             "install_root": merged.pop("install_root", DEFAULT_INSTALL_ROOT),
             "local_aee_root": merged.pop("local_aee_root", DEFAULT_LOCAL_AEE_ROOT),
-            "_port": merged.pop("ansible_port", "22"),
+            "ssh_port": _parse_port(merged.pop("ansible_port", 22), target),
             "_password": merged.pop("ansible_password", ""),
             "_key_path": merged.pop("ansible_ssh_private_key_file", ""),
         }
@@ -145,7 +161,6 @@ def parse_inventory(path: str | Path) -> tuple[list[dict], dict[str, dict[str, s
             # 同 ref 不同凭据：宁可拒绝，也不要把某台机器的凭据写错
             raise InventoryError("inventory_credential_conflict", f"{target} -> {ref}")
         credentials[ref] = material
-        entry.pop("_port")
         entry.pop("_password")
         entry.pop("_key_path")
         entries.append(entry)

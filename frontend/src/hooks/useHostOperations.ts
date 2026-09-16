@@ -13,6 +13,8 @@ export type HostOpStatus =
   | 'running'
   | 'success'
   | 'failed'
+  /** #2255：显式取消（或运行记录丢失）是独立终态——取消 ≠ 失败 */
+  | 'canceled'
   | 'skipped';
 
 export interface HostOpItem {
@@ -240,9 +242,18 @@ export function useHostOperations(opts?: {
   }, [ops]);
 
   const markTerminal = useCallback(
-    (hostId: string, status: 'success' | 'failed' | 'skipped', error?: string) => {
+    (
+      hostId: string,
+      status: 'success' | 'failed' | 'canceled' | 'skipped',
+      error?: string,
+    ) => {
       const prev = opsRef.current.find((o) => o.hostId === hostId);
       if (prev && (prev.status === 'success' || prev.status === 'failed')) {
+        return;
+      }
+      if (prev && prev.status === 'canceled') {
+        // #2255：取消是终态，但允许另一通道补上说明（如「运行记录已丢失」），不改状态
+        if (error && !prev.error) updateOp(hostId, { error });
         return;
       }
       updateOp(hostId, { status, error });
@@ -255,7 +266,7 @@ export function useHostOperations(opts?: {
       emitTerminal(
         { ...item, status },
         status === 'success',
-        status === 'success' ? 'SUCCESS' : 'FAILED',
+        status === 'success' ? 'SUCCESS' : status === 'canceled' ? 'CANCELED' : 'FAILED',
         error,
       );
     },
@@ -313,6 +324,20 @@ export function useHostOperations(opts?: {
               consoleRunId: consoleRunId,
             });
             emitTerminal(item, true, terminal.status);
+          } else if (terminal.status === 'CANCELED') {
+            // #2255 现场验证：控制台已按「取消 ≠ 失败」报 CANCELED（S5 同口径），
+            // UI 不能又落回「失败」——那会让显式取消的操作者以为脚本坏了。
+            // 仅「运行记录丢失」这类非操作者取消的说明仍带在 error 上。
+            const note =
+              terminal.message && terminal.message !== 'CANCELED'
+                ? terminal.message
+                : undefined;
+            updateOp(item.hostId, {
+              status: 'canceled',
+              consoleRunId: consoleRunId,
+              error: note,
+            });
+            emitTerminal(item, false, 'CANCELED', note);
           } else {
             updateOp(item.hostId, {
               status: 'failed',

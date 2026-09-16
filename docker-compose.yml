@@ -80,6 +80,9 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
       args:
+        # ⚠️ 烤死 localhost → 浏览器必须用 http://localhost:<DEV_FRONTEND_PORT> 打开本服务；
+        # 用 127.0.0.1 打开会因跨站（site 只看 host）丢 host-only SameSite=Lax 会话 cookie，
+        # 表现为「假登录 + Socket.IO 恒已断开」。见 #2330 / docs/development/local-development.md。
         VITE_API_BASE_URL: http://localhost:${DEV_BACKEND_PORT:-18000}
         VITE_WS_BASE_URL: ws://localhost:${DEV_BACKEND_PORT:-18000}
     ports:

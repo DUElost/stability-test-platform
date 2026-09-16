@@ -1,5 +1,6 @@
 export const SOCKET_EVENT_NAMES = {
   deviceUpdate: 'device_update',
+  dashboardSummary: 'dashboard_summary',
   stepLog: 'step_log',
   stepUpdate: 'step_update',
   jobStatus: 'job_status',
@@ -17,6 +18,7 @@ export const SOCKET_EVENT_NAMES = {
 
 export const SOCKET_MESSAGE_TYPES = {
   DEVICE_UPDATE: 'DEVICE_UPDATE',
+  DASHBOARD_SUMMARY: 'DASHBOARD_SUMMARY',
   STEP_LOG: 'STEP_LOG',
   STEP_UPDATE: 'STEP_UPDATE',
   JOB_STATUS: 'JOB_STATUS',

@@ -977,3 +977,149 @@ def test_repeated_probe_failure_abandons_dir_after_limit(tmp_path):
         r.tick_once()
     assert "JE.103000007" in r._abandoned_dirs, "达上限后应放弃该目录"
     assert r.stats.signals_dropped >= 1, "放弃须计入 signals_dropped（可见性）"
+
+
+def _oversized_shell_fn(kib: Optional[int], *, name: str = "NE.103000003"):
+    """#2252：`du -sk` 返回给定占用（None = 探测失败），其余探测按真机形状。"""
+    def shell_fn(cmd: str, _t: int):
+        if cmd.startswith("du -sk "):
+            if kib is None:
+                return None
+            return f"{kib}\t/data/ylog/uniview_exception/{name}\n"
+        if cmd.startswith("ls -l /data/ylog/uniview_exception"):
+            return _ls_l([name])
+        if cmd.startswith("ls -l /data/"):
+            return "__STP_RC__:2\n"
+        if "unievent_info" in cmd:
+            return "unievent_info\n"
+        return None
+
+    return shell_fn
+
+
+def _big_device_event_dir(tmp_path: Path, name: str) -> Path:
+    remote_ev = tmp_path / "device" / "uniview_exception" / name
+    remote_ev.mkdir(parents=True)
+    (remote_ev / "unievent_info").write_text(
+        _real_unievent_info(event_id=name.split(".")[-1], event_name="NE",
+                            proc="system_server", kick="2026-09-16_10:00:00.000",
+                            tag="system_app_crash"),
+        encoding="utf-8",
+    )
+    (remote_ev / "huge.bin").write_bytes(b"x" * 4096)   # 载荷（真机为 GB 级）
+    return remote_ev
+
+
+def _recording_pull_fn(pulls: List[str], fixture: Path):
+    """假 adb pull：远端路径是虚构的，内容一律取自 *fixture*（既有用例同款姿势）。
+
+    单文件形式（``.../unievent_info``）走降级路径，其余走整目录拉取。
+    """
+    def pull_fn(remote: str, local: str, _t: int) -> bool:
+        pulls.append(remote)
+        dest_root = Path(local)
+        if Path(remote).name == "unievent_info":
+            dest_root.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(fixture / "unievent_info", dest_root / "unievent_info")
+            return True
+        dest = dest_root / fixture.name
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(fixture, dest, dirs_exist_ok=True)
+        return True
+
+    return pull_fn
+
+
+def test_oversized_dir_degrades_to_metadata_only_and_still_emits(tmp_path):
+    """#2252：超限目录不整拉——只取 unievent_info，信号照常发射并标记载荷缺失。
+
+    真机形态（Z2582 / NE.103000003）：1.9GB / 999 文件在 180s 超时内传不完 →
+    整目录拉取只会白烧 host 提取预算（#740 与 MTK 路共享），且按 #2079「失败不推进
+    签名」该目录**永久无信号**。
+    """
+    from backend.agent.aee.unisoc_reconciler import (
+        PAYLOAD_STATE_OVERSIZED_SKIPPED,
+    )
+
+    emitter, dle = _RecordingEmitter(), _FakeDleClient()
+    ev = _big_device_event_dir(tmp_path, "NE.103000003")
+    pulls: List[str] = []
+    r = _make_reconciler(
+        tmp_path, emitter=emitter, device_log_client=dle,
+        shell_fn=_oversized_shell_fn(1945600),
+        pull_fn=_recording_pull_fn(pulls, ev),
+    )
+
+    assert r.tick_once() == 1
+
+    assert pulls and all(p.endswith("unievent_info") for p in pulls), pulls
+    local_ev = (tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
+                / "NE.103000003")
+    assert (local_ev / "unievent_info").is_file()
+    assert not (local_ev / "huge.bin").exists(), "载荷不应被拉取"
+
+    extra = emitter.calls[0]["extra"]
+    assert extra["payload_state"] == PAYLOAD_STATE_OVERSIZED_SKIPPED
+    assert extra["payload_remote_kib"] == 1945600, "远端占用要留痕（区分病态目录/阈值过小）"
+    assert len(dle.created) == 1 and dle.created[0]["event_type"] == "UNIVIEW"
+
+    # 签名未变 → 不重拉：降级态不得引入「每拍重烧」
+    assert r.tick_once() == 0
+    assert len(pulls) == 1, "降级路径每拍重拉"
+    assert "NE.103000003" not in r._abandoned_dirs, "降级不是失败，不得进放弃集"
+
+
+def test_dir_below_limit_still_pulls_full_payload(tmp_path):
+    """#2252 反向对照：未超限目录行为不变（整目录拉取、无降级标记）。"""
+    emitter = _RecordingEmitter()
+    ev = _big_device_event_dir(tmp_path, "NE.103000004")
+    pulls: List[str] = []
+    r = _make_reconciler(
+        tmp_path, emitter=emitter,
+        shell_fn=_oversized_shell_fn(1024, name="NE.103000004"),
+        pull_fn=_recording_pull_fn(pulls, ev),
+    )
+
+    assert r.tick_once() == 1
+
+    assert pulls and not pulls[0].endswith("unievent_info"), "未超限却走了降级路径"
+    local_ev = (tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
+                / "NE.103000004")
+    assert (local_ev / "huge.bin").is_file(), "未超限应整目录拉取"
+    assert "payload_state" not in emitter.calls[0]["extra"]
+
+
+def test_du_probe_failure_falls_back_to_full_pull(tmp_path):
+    """#2252：「不知道占用」不得当成超限（会静默丢载荷）也不得当安全——回落整拉。"""
+    emitter = _RecordingEmitter()
+    ev = _big_device_event_dir(tmp_path, "NE.103000005")
+    pulls: List[str] = []
+    r = _make_reconciler(
+        tmp_path, emitter=emitter,
+        shell_fn=_oversized_shell_fn(None, name="NE.103000005"),
+        pull_fn=_recording_pull_fn(pulls, ev),
+    )
+
+    assert r.tick_once() == 1
+
+    assert pulls and not pulls[0].endswith("unievent_info")
+    assert "payload_state" not in emitter.calls[0]["extra"]
+    local_ev = (tmp_path / "aee_local" / "uniview_watcher" / "0908" / "UNI-1"
+                / "NE.103000005")
+    assert (local_ev / "huge.bin").is_file()
+
+
+def test_degraded_pull_failure_counts_as_dir_failure(tmp_path):
+    """#2252：降级路径失败按原失败语义记账（计入失败上限，可被 #2272 放弃）。"""
+    from backend.agent.aee.unisoc_reconciler import MAX_PULL_DIR_KIB
+
+    emitter = _RecordingEmitter()
+    _big_device_event_dir(tmp_path, "NE.103000006")
+    r = _make_reconciler(
+        tmp_path, emitter=emitter,
+        shell_fn=_oversized_shell_fn(MAX_PULL_DIR_KIB + 1, name="NE.103000006"),
+        pull_fn=lambda *_a, **_k: False,
+    )
+
+    assert r.tick_once() == 0
+    assert r._dir_attempts.get("NE.103000006") == 1, "降级失败须照常记失败次数"
