@@ -1,5 +1,9 @@
-# promtool 场景测试（#1257 / R14-F11）：各条修复过的规则必须在真实标签
-# 形状的样本上可触发。运行：
+# promtool 场景测试（#1257 / R14-F11）：规则必须在真实标签形状的样本上可触发。
+# 覆盖面：#2151 建立时只覆盖「修过的规则」，#2236 把存量缺口补齐 → 现在
+# **17 条告警规则 17 条断言全覆盖**（promtool 对未列规则不校验 = 零覆盖，所以
+# 「全覆盖」本身就是判据，由 test_every_alert_rule_has_scenario_case 恒跑守住）。
+# 每条断言是否真有牙由 test_promtool_gate_detects_per_rule_threshold_drift 逐条自证。
+# 运行：
 #   promtool test rules deploy/prometheus/alerts-stability-platform.test.yml
 # CI 由 tests/test_prometheus_alerts_contract.py 调度（runner 无 promtool 时
 # 该子项跳过，结构层比对恒跑）。
@@ -131,3 +135,147 @@ tests:
                 同一事务内）与 stability_db_lock_waiters（等待会话数）；再按
                 docs/notes/architecture/2026-09-14-shared-row-lock-table.md 的 I1–I4 核对
                 是否出现新的加锁顺序反向。
+
+  # ── #2236：存量缺口清零（_SCENARIO_COVERAGE_DEBT 的 10 条）────────────────
+  # 判据：promtool 对**未列进场景文件**的告警规则不校验，故阈值/时间窗漂移只在
+  # 装了 promtool 的机器上偶发可见。这 10 条补齐后清单为空，任何新告警不补场景
+  # 即被 test_every_alert_rule_has_scenario_case 拦红。
+  # 输入序列的标签形状一律取自 `backend/core/metrics.py` 注册表 + 埋点侧常量，
+  # **不照抄告警表达式**（表达式里的标签选择器可能是过期写法，#1927/#787 同型）：
+  #   - engine  取 backend/core/database.py 的接线值（sync / async）
+  #   - reason  逐字取 backend/core/csrf.py 的三个常量
+  #   - outcome 取 backend/services/precheck/runner.py 的 gate_outcome
+  #   - queue_name 取 SAQ_QUEUE_NAME 默认值 "stp"（生产者带标签，规则无匹配器）
+  # 速率型阈值的换算：rate() 是**每秒**增量，故 > 0.1/s ⇒ 每分钟 ≥ 7 次、
+  # > 10/s ⇒ 每分钟 660、> 50/s ⇒ 每分钟 3300（均留 ≥1.5x 余量）。
+  # 直方图那条：全部观测落 (30,60] 桶 ⇒ P95≈58.5s > 30；le 取自指标 buckets 定义。
+  - interval: 1m
+    input_series:
+    - series: stability_plan_run_aggregation_failed_total
+      values: 0+1x20
+    - series: stability_post_completion_enqueue_failed_total
+      values: 0+1x20
+    - series: stability_merge_skip_tool_not_configured_total
+      values: 0+1x20
+    - series: stability_unlinked_fixable_total
+      values: 0+1x20
+    - series: stability_db_deadlock_total{engine="sync"}
+      values: 0+1x20
+    - series: stability_claim_lease_failed_total
+      values: 0+12x20
+    - series: stability_csrf_rejected_total{reason="origin_not_allowed"}
+      values: 0+660x20
+    - series: stability_csrf_rejected_total{reason="missing_origin_and_referer"}
+      values: 0+3300x20
+    - series: stability_dispatch_gate_duration_seconds_bucket{outcome="failed",le="0.5"}
+      values: '0x21'
+    - series: stability_dispatch_gate_duration_seconds_bucket{outcome="failed",le="1.0"}
+      values: '0x21'
+    - series: stability_dispatch_gate_duration_seconds_bucket{outcome="failed",le="2.5"}
+      values: '0x21'
+    - series: stability_dispatch_gate_duration_seconds_bucket{outcome="failed",le="5.0"}
+      values: '0x21'
+    - series: stability_dispatch_gate_duration_seconds_bucket{outcome="failed",le="10.0"}
+      values: '0x21'
+    - series: stability_dispatch_gate_duration_seconds_bucket{outcome="failed",le="30.0"}
+      values: '0x21'
+    - series: stability_dispatch_gate_duration_seconds_bucket{outcome="failed",le="60.0"}
+      values: 0+1x20
+    - series: stability_dispatch_gate_duration_seconds_bucket{outcome="failed",le="120.0"}
+      values: 0+1x20
+    - series: stability_dispatch_gate_duration_seconds_bucket{outcome="failed",le="300.0"}
+      values: 0+1x20
+    - series: stability_dispatch_gate_duration_seconds_bucket{outcome="failed",le="+Inf"}
+      values: 0+1x20
+    - series: stability_dispatch_gate_duration_seconds_count{outcome="failed"}
+      values: 0+1x20
+    - series: stability_dispatch_gate_duration_seconds_sum{outcome="failed"}
+      values: 0+45x20
+    - series: stability_saq_queue_depth{queue_name="stp"}
+      values: 60x20
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: StabilityPlanRunAggregationFailed
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+        exp_annotations:
+          summary: PlanRun terminal aggregation failed
+          description: stability_plan_run_aggregation_failed_total increased in the last 15m. Check backend logs for plan_run_aggregation errors.
+    - eval_time: 20m
+      alertname: StabilityPostCompletionEnqueueFailed
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+        exp_annotations:
+          summary: post_completion SAQ enqueue failures
+          description: Jobs reached terminal state but post_completion_task enqueue failed. Recycler may backfill; investigate Redis/SAQ worker health.
+    - eval_time: 20m
+      alertname: StabilityMergeSkipToolNotConfigured
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+        exp_annotations:
+          summary: Merge skipped because scan tool not configured
+          description: STP_BACKEND_DEDUP_SCAN_* missing → resolve_scan_tool() returned None and merge silently skipped.  Check production .env.backend and run tools/dev/check-deploy-readiness.py (required-env blocking check).
+    - eval_time: 20m
+      alertname: StabilityUnlinkedFixable
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+        exp_annotations:
+          summary: Unlinked fixable signal observed
+          description: Watcher-summary computed unlinked_fixable > 0 (#528 threshold). A matching DLE exists yet the signal link is missing — check signal_link_reconcile_done logs and backend/scheduler/signal_link_reconciler.py.
+    - eval_time: 20m
+      alertname: StabilityDbDeadlockDetected
+      exp_alerts:
+      - exp_labels:
+          engine: sync
+          severity: warning
+        exp_annotations:
+          summary: Backend observed a PostgreSQL deadlock (SQLSTATE 40P01)
+          description: Backend 观察到数据库死锁增量。先核对同一批行上两条并发路径的加锁 顺序是否相反（必须全局同一全序）：租约/作业类是 POST /agent/leases/extend-batch（Job→Lease）与 backend/scheduler/device_lease_reconciler.py 的过期回收； 终态化类是 plan_run / plan_run_host / job_instance。 注意被回滚的一方可能把异常吞进通用 except（日志会记成别的 error 名），不要只按业务返回码判断。
+    - eval_time: 20m
+      alertname: StabilityClaimLeaseFailedSpike
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+        exp_annotations:
+          summary: Elevated device lease claim conflicts
+          description: Agents are failing to acquire leases (device already leased). May indicate stale leases or dispatch overlap.
+    - eval_time: 20m
+      alertname: StabilityCsrfOriginRejected
+      exp_alerts:
+      - exp_labels:
+          reason: origin_not_allowed
+          severity: warning
+        exp_annotations:
+          summary: CSRF origin rejections spike
+          description: Possible cross-origin attack or misconfigured frontend Origin. Verify CORS allowlist matches deployed UI URL.
+    - eval_time: 20m
+      alertname: StabilityCsrfMissingOriginReferer
+      exp_alerts:
+      - exp_labels:
+          reason: missing_origin_and_referer
+          severity: info
+        exp_annotations:
+          summary: CSRF missing Origin/Referer probes
+          description: High rate of script/probe traffic without browser Origin headers.
+    - eval_time: 20m
+      alertname: StabilityDispatchGateSlow
+      exp_alerts:
+      - exp_labels:
+          outcome: failed
+          severity: info
+        exp_annotations:
+          summary: Dispatch gate P95 latency above 30s
+          description: Plan dispatch gate is taking longer than expected.  May indicate slow SSH/ADB verification or NFS latency.
+    - eval_time: 20m
+      alertname: StabilitySaqQueueDepth
+      exp_alerts:
+      - exp_labels:
+          queue_name: stp
+          severity: warning
+        exp_annotations:
+          summary: SAQ queue backlog exceeds 50
+          description: Post-completion / notification tasks are piling up.  Check Redis connectivity and SAQ worker concurrency.

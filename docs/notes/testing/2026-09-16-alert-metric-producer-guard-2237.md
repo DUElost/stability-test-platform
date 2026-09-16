@@ -16,8 +16,9 @@ Class: testing
 1. 扫 `backend/**/*.py`（排除 `tests/`、`backend/agent/scripts/`、alembic、resources），
    把 `ident = Counter("stability_x", ...)`（含 `... if PROMETHEUS_AVAILABLE else _Mock()`
    的三元形态）映射成 指标名 ↔ 标识符；
-2. **写入点** = mutator 调用链（`inc/dec/observe/set/labels/remove/delete`）里出现该
-   标识符，且 `_chain()` 必须穿过中间的 `Call` 节点——`x.labels(...).inc()` 的 AST 是
+2. **写入点** = mutator 调用链（`inc/dec/observe/set/labels/remove/delete`；#2286 核对
+   存量时发现这份名单只覆盖 Counter/Gauge/Histogram/Summary，已补齐 `Info.info()` 等）里
+   出现该标识符，且 `_chain()` 必须穿过中间的 `Call` 节点——`x.labels(...).inc()` 的 AST 是
    `Attribute(value=Call(...))`，只走 Attribute/Name 会整体丢掉最常见的一类埋点
    （写第一版时就是这样漏掉 CSRF 埋点的）；
 3. 三种真实导入形态都要认：直接导入 `claim_lease_failed_total.inc()`
@@ -58,7 +59,8 @@ Class: testing
 
 ## Verification
 
-基线：`pytest tests/test_alert_metric_producers.py -q` → **4 passed**（全仓扫描
+基线：`pytest tests/test_alert_metric_producers.py -q` → **4 passed**（#2286 起为
+6 条：新增 `.info()` 与容器锚点两条判别力用例；全仓扫描
 313 个非测试文件、73 个指标定义，17 个告警引用指标全部拿到证据；单次 1.5s，
 满足 `tests/` 的「纯离线 + 秒级」准入）。逐条证据示例：
 `stability_merge_skip_tool_not_configured_total ← backend/services/dedup_scan.py:357`、
@@ -87,12 +89,17 @@ Class: testing
 
 ## Revisit
 
-- **13 个「有定义、查无写入点」的非告警指标**（`stability_task_dispatch_total`、
+- ~~**13 个「有定义、查无写入点」的非告警指标**（`stability_task_dispatch_total`、
   `stability_device_lease_conflicts_total`、`stability_plan_run_active`、
   `stability_unknown_jobs`、`stability_expired_active_leases` 等）：其中 2 个
   （`stability_device_online` / `stability_host_online`）经 `_FLEET_GAUGES` 间接写入，
   是真生产者；其余需逐个判读后**补埋点或删除定义**，本守卫不覆盖（它们不在告警里）。
-  下一批若要把轴从「告警面」扩到「全指标面」，先把这 13 条清干净，否则守卫一落地就背 11 条红。
+  下一批若要把轴从「告警面」扩到「全指标面」，先把这 13 条清干净，否则守卫一落地就背 11 条红。~~
+  **数字由 #2286 修正**：本文件当时的分析器 mutator 名单漏了 `Info` 的 `.info()`，于是
+  `stability_build`（Build Version 面板正在查询的那条）被误列进 13 条——**判据自己制造的
+  假阳性混在存量清单里**，这条教训比数字本身重要：拿分析器结果做删除决策前，必须先证否。
+  补全名单后的复算：12 条无 mutator 证据，减掉 `_FLEET_GAUGES` 间接写入的 2 条
+  （#2286 已登记为 `_CONTAINER_WIRED_METRICS`）= **10 条真无生产者**，见 #2287。
 - **#1258 的 `UNPRODUCED_METRICS` 已过期**（生产者已落地、面板未恢复）：撤豁免或恢复面板
   属仪表板面收口，与 `record_api_request` 的 docstring 一起改，别只删清单。
 - 若将来有人要给 `_FLEET_GAUGES` 这类间接写入的指标加告警：守卫会先红并给出线索，

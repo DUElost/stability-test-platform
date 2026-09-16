@@ -124,3 +124,9 @@ CANCELED 与 FAILED 分开报，解决了**读数**，没解决**归属**。
   `extra` 会在 ~20 秒内抹掉它——状态接口改读 `audit_logs`；
 - runbook 与相关文档同步（`docs/linux-agent-ansible-runbook.md` 的调用链描述）；
 - 现场复跑：238 上重跑一次 Agent 接入，确认安装不再受窗口影响、报告与实时日志一致。
+- **取消入口**（2026-09-16 补，[#2255](https://github.com/DUElost/stability-test-platform/issues/2255)）：
+  把 D1 里 console 自带的 cancel 暴露到安装链上——`POST /hosts/{id}/install/cancel`（管理员）
+  无在跑安装时 409 `NO_INSTALL_IN_PROGRESS`（仍落 `install_agent_cancel` 审计），有则调
+  `RunConsole.cancel` 并如实返回 `canceling`/`not_canceled`；终态仍由 `on_complete` 落库、
+  端点不推断结果。现场缺口是「目标机侧 sshd 楔住时只能重启控制面收尾」，入口落地后不必再
+  重启（单测：受理 / 无在跑 / 不可发起；前端面板与 hook 同步，热更新行不适用）。

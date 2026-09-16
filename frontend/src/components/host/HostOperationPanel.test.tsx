@@ -143,4 +143,42 @@ describe('HostOperationPanel', () => {
     fireEvent.click(screen.getByText('关闭'));
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('renders cancel only for in-flight install/reinstall ops and forwards hostId', () => {
+    const onCancel = vi.fn();
+    render(
+      <HostOperationPanel
+        open
+        ops={[
+          ...ops,
+          {
+            hostId: 'h5',
+            label: '192.0.2.90',
+            kind: 'hot_update',
+            status: 'running',
+          },
+        ]}
+        onClose={vi.fn()}
+        onTerminalStatus={vi.fn()}
+        onCancelInstall={onCancel}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('host-op-cancel-h1'));
+    expect(onCancel).toHaveBeenCalledWith('h1');
+    // 已终态（success）与热更新不渲染取消
+    expect(screen.queryByTestId('host-op-cancel-h2')).toBeNull();
+    expect(screen.queryByTestId('host-op-cancel-h5')).toBeNull();
+  });
+
+  it('hides every cancel button when onCancelInstall is not provided', () => {
+    render(
+      <HostOperationPanel
+        open
+        ops={ops}
+        onClose={vi.fn()}
+        onTerminalStatus={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('host-op-cancel-h1')).toBeNull();
+  });
 });
