@@ -76,8 +76,11 @@ Class: bug-fix
 
 ## Revisit
 
-- API 中间件落地时：更新 `tests/test_grafana_dashboard_contract.py` 的
-  `UNPRODUCED_METRICS` 清单并从本 Note 移除对应待办；
+- ~~API 中间件落地时：更新 `tests/test_grafana_dashboard_contract.py` 的
+  `UNPRODUCED_METRICS` 清单并从本 Note 移除对应待办~~ **已由 `#2286` 执行**：中间件与写入点
+  均在，清单已清空，且该断言改为从生产者分析器派生（不再靠手维护交集）；API 面板**有意不恢复**，
+  理由与再评估条件见
+  [`2026-09-16-grafana-unproduced-exemption-closure-2286.md`](../testing/2026-09-16-grafana-unproduced-exemption-closure-2286.md)；
 - 设备遥测链路立项时：恢复 `stability_device_temperature_celsius` /
   `stability_device_battery_level_percent` 定义与面板；
 - 若 `/metrics` 拉取现算在更大舰队上出现可观测延迟，改为周期推送或短 TTL 缓存。

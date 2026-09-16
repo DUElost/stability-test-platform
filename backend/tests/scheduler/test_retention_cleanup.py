@@ -783,3 +783,62 @@ def test_orphan_cleanup_keeps_row_when_dir_not_removable(
     assert cron_scheduler.purge_orphan_dle_events() == 0
     assert event_dir.exists()
     assert db.query(DeviceLogEvent).filter(DeviceLogEvent.id == event_id).first() is not None
+# ── #2278：取锁之后的早退也必须上报持锁窗口 ─────────────────────────────────
+
+
+def _window_recorder(monkeypatch) -> list:
+    windows: list = []
+    monkeypatch.setattr(cron_scheduler, "record_retention_txn", windows.append)
+    return windows
+
+
+def test_window_reported_when_lock_recheck_empties_batch(cleanup_env, monkeypatch):
+    """路径 ①：`_retention_lock_runs` 锁内复核清空 → 早退，但取锁（含等待）已发生。
+
+    #2104 的指标就是为了观测「锁序统一后 死锁→等待」的代价，而这一类 tick 恰恰
+    「什么都没删成」——不在上报点里，代价就永远看不见（三个上报点全在这两个 return
+    之后，等于把最该覆盖的样本丢掉）。
+    """
+    db, plan = cleanup_env
+    windows = _window_recorder(monkeypatch)
+    monkeypatch.setattr(cron_scheduler, "_retention_lock_runs", lambda *_a, **_k: [])
+    _mk_run(db, plan, age_days=10)
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert len(windows) == 1, "锁内复核清空后的早退必须上报一次窗口"
+    assert windows[0] >= 0.0
+
+
+def test_window_reported_when_all_candidates_kept_by_refs(cleanup_env, monkeypatch):
+    """路径 ②：`_retention_safe_ids` 清空安全集 → 该出口同样必须上报窗口。
+
+    该出口在今天的代码里**只能由并发触发**：`_retention_candidate_ids` 已在 SQL 层
+    用 `~referenced` 排掉被引用者，候选非空而安全集为空只剩「读取与加锁之间新插入
+    了引用」这一种形态——也正因为它罕见，漏报才会长期无人发现。链引用计算本身由
+    上面的 #936 用例覆盖，这里钉的是**该出口的窗口接线**。
+    """
+    db, plan = cleanup_env
+    windows = _window_recorder(monkeypatch)
+    kept = _mk_run(db, plan, age_days=10)
+    monkeypatch.setattr(
+        cron_scheduler, "_retention_safe_ids", lambda _db, ids: ([], set(ids)),
+    )
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert len(windows) == 1, "安全集为空的早退必须上报一次窗口"
+    assert windows[0] >= 0.0
+    db.expire_all()
+    assert db.query(PlanRun).filter_by(id=kept.id).one() is not None, "未上报≠已删除"
+
+
+def test_no_window_reported_before_any_lock_is_taken(cleanup_env, monkeypatch):
+    """反向边界：**未取锁**（无候选）时不得上报——否则窗口指标会被空 tick 稀释。"""
+    db, plan = cleanup_env
+    windows = _window_recorder(monkeypatch)
+    _mk_run(db, plan, status="RUNNING", age_days=0)  # 运行中 → 不是候选
+
+    cron_scheduler.run_retention_cleanup()
+
+    assert windows == [], "候选为空（未进入取锁阶段）不应产生窗口观测"

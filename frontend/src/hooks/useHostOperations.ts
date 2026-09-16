@@ -463,6 +463,27 @@ export function useHostOperations(opts?: {
     [ops],
   );
 
+  /**
+   * 取消主机上正在跑的安装（#2255）：返回 null 表示已受理，否则返回可展示的原因。
+   * 终态仍由 console 落库（`install_agent` 审计 status=CANCELED），本函数不推断结果。
+   */
+  const cancelInstall = useCallback(async (hostId: string): Promise<string | null> => {
+    try {
+      const res = await api.agentInstall.cancel(hostId);
+      if (res.canceled) return null;
+      setOps((prev) =>
+        prev.map((op) => (op.hostId === hostId ? { ...op, error: res.message } : op)),
+      );
+      return res.message;
+    } catch (error) {
+      const message = extractErrorMessage(error);
+      setOps((prev) =>
+        prev.map((op) => (op.hostId === hostId ? { ...op, error: message } : op)),
+      );
+      return message;
+    }
+  }, []);
+
   return {
     ops,
     panelOpen,
@@ -474,5 +495,6 @@ export function useHostOperations(opts?: {
     clearOps,
     isHostBusy,
     isHostOpBusy,
+    cancelInstall,
   };
 }
