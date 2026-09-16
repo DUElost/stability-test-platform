@@ -60,6 +60,8 @@ def _c(units_satisfied: int, units_expected: int):
         hosts_with_artifacts=units_satisfied,
         units_satisfied=units_satisfied,
         units_expected=units_expected,
+        # 夹具里每个 unit 落在各自 host 上，故期望 host 数 = 期望 unit 数（#2271）。
+        hosts_expected=units_expected,
     )
 
 
@@ -279,7 +281,7 @@ async def test_scan_task_ignores_stale_artifacts_of_untriggered_hosts(monkeypatc
     assert polls == 2
     record_archive.assert_called_once_with(
         45, hosts_triggered=1, artifacts_registered=2, hosts_with_artifacts=1,
-        hosts_not_acked=0,
+        hosts_not_acked=0, units_satisfied=1, units_expected=1, hosts_expected=1,
     )
 
 
@@ -329,7 +331,7 @@ async def test_scan_task_ignores_same_hosts_previous_round_artifacts(monkeypatch
     assert polls == 2
     record_archive.assert_called_once_with(
         46, hosts_triggered=1, artifacts_registered=2, hosts_with_artifacts=1,
-        hosts_not_acked=0,
+        hosts_not_acked=0, units_satisfied=1, units_expected=1, hosts_expected=1,
     )
 
 
@@ -413,6 +415,8 @@ async def test_scan_task_records_zero_artifacts_after_poll_exhausted(monkeypatch
     record_archive.assert_called_once_with(
         42, hosts_triggered=1, artifacts_registered=0, hosts_with_artifacts=0,
         hosts_not_acked=0,
+        # #2271：unit 计数一并落库（下游展示与屏障同一事实源）
+        units_satisfied=0, units_expected=1, hosts_expected=1,
     )
 
 
@@ -450,7 +454,7 @@ async def test_scan_task_records_no_ack_hosts(monkeypatch, caplog):
     assert "saq_scan_emit_no_ack plan_run=49 hosts=host-1" in caplog.text
     record_archive.assert_called_once_with(
         49, hosts_triggered=2, artifacts_registered=1, hosts_with_artifacts=1,
-        hosts_not_acked=1,
+        hosts_not_acked=1, units_satisfied=1, units_expected=2, hosts_expected=2,
     )
 
 
@@ -483,7 +487,7 @@ async def test_scan_task_counts_final_registration_attempt(monkeypatch):
 
     record_archive.assert_called_once_with(
         42, hosts_triggered=1, artifacts_registered=1, hosts_with_artifacts=1,
-        hosts_not_acked=0,
+        hosts_not_acked=0, units_satisfied=1, units_expected=1, hosts_expected=1,
     )
 
 
@@ -522,7 +526,7 @@ async def test_scan_task_final_scan_runs_on_partial_coverage(monkeypatch):
 
     record_archive.assert_called_once_with(
         43, hosts_triggered=2, artifacts_registered=2, hosts_with_artifacts=2,
-        hosts_not_acked=0,
+        hosts_not_acked=0, units_satisfied=2, units_expected=2, hosts_expected=2,
     )
 
 
@@ -562,7 +566,7 @@ async def test_scan_task_chains_on_partial_coverage_with_warning(monkeypatch, ca
     assert "saq_scan_no_artifacts" not in caplog.text
     record_archive.assert_called_once_with(
         44, hosts_triggered=2, artifacts_registered=2, hosts_with_artifacts=1,
-        hosts_not_acked=0,
+        hosts_not_acked=0, units_satisfied=1, units_expected=2, hosts_expected=2,
     )
     functions = [c.kwargs["function"] for c in job_cls.call_args_list]
     assert functions == ["upload_task", "merge_task"]

@@ -75,16 +75,25 @@ PRUNE 和 HDD spill force。
 - 完备性单位是 **(host, platform) 对**：纯 MTK host 只被要求 `mtk`、纯 UNISOC host
   只被要求 `unisoc`、混平台 host 才要求两者都到（ADR-0032 B1「MTK/UNISOC **分区
   各自**完备性判定」）；
-- `hosts_with_artifacts` 是 host 级口径（`run_context.archive` 与前端「host 完成度」），
-  按 host 去重、不按产物文件数；`units_*` 只用于轮询屏障；
+- **对口径同时是下游展示口径**（#2271）：轮询屏障与 `run_context.archive` / 前端
+  阶段判定都看 `units_satisfied / units_expected`——只有屏障用对口径、展示用 host 级
+  数字时，「host 期望 2 平台、只交付 1 平台」会在前端显示 ok（假绿）；
+- `hosts_with_artifacts` 保留为 host 级计数，但语义是「**在期望平台内**有产物的
+  host 数」（交非期望平台产物不算完成），按 host 去重、不按产物文件数；
+- `hosts_expected` 是「有期望平台映射的 host 数」——`hosts_triggered` 是它的**超集**
+  （无平台映射的 host 不进 `expected`），展示面拿 triggered 当分母会永远追不上
+  （#2271 的永久 warn）；
 - 只统计本轮 `expected` 内的 host（=本轮 triggered）；
 - 只统计 `since` 之后登记的产物；
 - 无采集/扫描实现的平台（如 QCOM）不产生期望——它们无法产出 scan 产物，不让 PlanRun 空等。
 
 零产物记录 `saq_scan_no_artifacts`（ERROR），部分产物记录
 `saq_scan_partial_artifacts`（WARNING）。两者都写
-`PlanRun.run_context.archive` 的 `hosts_triggered`、`hosts_with_artifacts` 和
-`scan_artifacts_registered`。
+`PlanRun.run_context.archive` 的 `hosts_triggered`、`hosts_expected`、
+`hosts_with_artifacts`、`units_satisfied`、`units_expected` 与
+`scan_artifacts_registered`；`result_summary.scan_failed` **每轮显式重写**
+（true/false 都写：#2271 之前只写 true，一次零产物轮次后即使补齐也永久显示
+「扫描未产生任何报表」），判据是**对口径**的「该交的 (host, 平台) 一个都没交」。
 
 ## Fleet env 与热刷新
 

@@ -178,10 +178,19 @@ function buildStages(args: {
       parts: [{ text: '未开始（无本轮 host 计数）' }],
     });
   } else {
-    const triggered = archive.hosts_triggered ?? 0;
-    const done = archive.hosts_with_artifacts ?? 0;
+    // #2271：优先 (host, 平台) 对口径——host 级数字在「期望 2 平台只交付 1」时会
+    // 显示 ok（假绿）。老数据没有 unit 字段时回落 host 口径（hosts_expected 是
+    // triggered 的真子集口径，优先用它做分母，避免永远追不上）。
+    const unitsExpected = archive.units_expected ?? 0;
+    const byUnits = unitsExpected > 0;
+    const triggered = byUnits
+      ? unitsExpected
+      : (archive.hosts_expected ?? archive.hosts_triggered ?? 0);
+    const done = byUnits ? (archive.units_satisfied ?? 0) : (archive.hosts_with_artifacts ?? 0);
     const notAcked = archive.hosts_not_acked ?? 0;
-    const parts: StagePart[] = [{ text: `host 完成度 ${done}/${triggered}` }];
+    const parts: StagePart[] = [
+      { text: byUnits ? `平台完成度 ${done}/${triggered}` : `host 完成度 ${done}/${triggered}` },
+    ];
     if (notAcked > 0) parts.push({ text: `未回执 ${notAcked} 台` });
     if (scanFailed) parts.push({ text: '扫描未产生任何报表' });
     stages.push({

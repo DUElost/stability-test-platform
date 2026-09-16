@@ -1919,6 +1919,10 @@ export interface DedupScanArchive {
   scan_artifacts_registered?: number;
   hosts_with_artifacts?: number;
   hosts_not_acked?: number;
+  /** (host, 平台) 对口径（#2271）：阶段判定以它为准；老数据无此键时回落 host 口径。 */
+  units_satisfied?: number;
+  units_expected?: number;
+  hosts_expected?: number;
   [key: string]: unknown;
 }
 

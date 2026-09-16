@@ -77,6 +77,48 @@ describe('DedupReportCard', () => {
     expect(scan.querySelector('.text-destructive')).not.toBeNull();
   });
 
+  it('#2271: 期望 2 平台只交付 1 时扫描阶段为 warn（host 级口径会假绿）', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+      archive: {
+        hosts_triggered: 2,
+        hosts_expected: 1,
+        hosts_with_artifacts: 1,
+        units_expected: 2,
+        units_satisfied: 1,
+      },
+      scan_failed: false,
+    });
+
+    render(<DedupReportCard runId={1} />, { wrapper });
+
+    const scan = await screen.findByTestId('pipeline-scan');
+    expect(scan.textContent).toContain('平台完成度 1/2');
+    expect(scan.querySelector('.bg-warning')).not.toBeNull();
+    expect(scan.querySelector('.bg-success')).toBeNull();
+  });
+
+  it('#2271: 无 unit 字段的老数据回落 host 口径（hosts_expected 做分母）', async () => {
+    (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan_run_id: 1,
+      artifacts: [],
+      archive: {
+        // triggered=5 含无平台映射的 host；期望只有 3 台 —— 拿 triggered 当分母会永久 warn
+        hosts_triggered: 5,
+        hosts_expected: 3,
+        hosts_with_artifacts: 3,
+      },
+      scan_failed: false,
+    });
+
+    render(<DedupReportCard runId={1} />, { wrapper });
+
+    const scan = await screen.findByTestId('pipeline-scan');
+    expect(scan.textContent).toContain('host 完成度 3/3');
+    expect(scan.querySelector('.bg-success')).not.toBeNull();
+  });
+
   it('#2185: 状态缺失时明说缺什么，不再静默隐藏', async () => {
     (api.planRuns.getDedupStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
       plan_run_id: 1,
