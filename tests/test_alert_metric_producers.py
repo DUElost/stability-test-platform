@@ -52,9 +52,16 @@
 
 消费方不止告警面：判据是共享分析器，`tests/test_grafana_dashboard_contract.py` 的
 「面板不得引用无生产者指标」自 #2286 起从 `unproduced_definitions()` **派生**——原来是
-手维护的 `UNPRODUCED_METRICS` 清单，生产者一落地就过期成恒真豁免（同 #1258）。把判据从
-「被引用面」扩到**全指标面**（每个定义的指标都必须有生产者）由 #2287 负责，前置是清掉
-当前 10 条真无生产者的存量。
+手维护的 `UNPRODUCED_METRICS` 清单，生产者一落地就过期成恒真豁免（同 #1258）。#2287 把
+判据扩到**全指标面**（每个定义都必须有生产者证据，见 `test_every_definition_has_a_producer`），
+扩面前先清掉了 10 条真无生产者的存量（逐条判读与证据见
+`docs/notes/testing/2026-09-16-metric-producer-full-surface-2287.md`）。
+
+**新增指标时的人工准入项**（#2287 裁决，刻意不做成自动轴）：定义与消费者同一 PR 交代——
+有人读（告警/面板/runbook）就写明读它的是什么；暂时没有消费者就写明为什么现在埋。
+「已埋点、零消费方」**不设**自动门禁：生产者是代码事实（可 AST 判、可红绿双向自证），
+消费方是产品决策——做成红灯会误伤「先埋点、后建面板」这一正常次序，并逼出为过门禁而建的
+无意义面板（重议条件与形态见上述 Note）。
 
 纯离线：只读源码 + AST，不起容器、不连库、不调网络。
 """
@@ -661,3 +668,44 @@ def test_direct_and_aliased_writes_are_recognized(tmp_path):
         "stability_hist",
     }, f"写入形态识别不全：{sorted(produced)}"
     assert _base_name("stability_hist_bucket") == "stability_hist", "直方图后缀归一失效"
+
+
+def test_every_definition_has_a_producer():
+    """#2287：全指标面棘轮——每个定义都要有生产者证据，**存量红为 0**。
+
+    #2237/#2263 的作用域是「告警引用到的指标」；这里扩到 ``backend/`` 的**全部**定义
+    （入口 `unproduced_definitions()`，与仪表板面共用）。扩面前必须先把存量清干净，
+    否则守卫一落地就背一串红，第一次红灯会被当噪声忽略——本单已逐条判读并删除 10 条
+    从未接线的定义（证据见 docs/notes/testing/2026-09-16-metric-producer-full-surface-2287.md），
+    故这里是空集断言，而不是带解释的允许清单。
+    """
+    files = _iter_source_files(_SCAN_ROOT)
+    defs = collect_definitions(files)
+    # 反向失效守卫：定义面退化（扫描根变了 / 解析整体失效）时「零红」没有意义。
+    assert len(defs) >= 50, f"只解析到 {len(defs)} 个指标定义——扫描根或解析器疑似失效"
+    problems = unproduced_definitions()
+    assert problems == {}, "有定义、无生产者证据：\n" + "\n".join(
+        f"  - {name}: {reason}" for name, reason in sorted(problems.items())
+    )
+
+
+def test_full_surface_ratchet_is_discriminative(tmp_path):
+    """负向对照（#2287 验收 3）：只加定义、没人写入 → 全指标面判据必须红；补写入即绿。"""
+    (tmp_path / "dead.py").write_text(
+        "from prometheus_client import Counter\n"
+        "dead_total = Counter('stability_dead_total', 'x')\n",
+        encoding="utf-8",
+    )
+    files = _synthetic(tmp_path)
+    defs = collect_definitions(files)
+    assert "stability_dead_total" in _unproduced_from(files, defs), "死定义未被判红"
+
+    (tmp_path / "writer.py").write_text(
+        "from dead import dead_total\n"
+        "def bump():\n"
+        "    dead_total.inc()\n",
+        encoding="utf-8",
+    )
+    files = _synthetic(tmp_path)
+    defs = collect_definitions(files)
+    assert "stability_dead_total" not in _unproduced_from(files, defs), "已有写入仍判死"
