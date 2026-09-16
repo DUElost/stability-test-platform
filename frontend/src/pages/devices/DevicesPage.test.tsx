@@ -48,6 +48,10 @@ vi.mock('@/hooks/useAuthSession', () => ({
   useAuthSession: () => mockUseAuthSession(),
 }));
 
+vi.mock('@/hooks/useFleetDeviceUpdates', () => ({
+  useFleetDeviceUpdates: vi.fn(),
+}));
+
 vi.mock('./components/AddDeviceModal', () => ({
   // 打开时提供一个提交按钮，供 page 级用例驱动 create 接线（弹窗自身行为由
   // AddDeviceModal.test.tsx 覆盖）

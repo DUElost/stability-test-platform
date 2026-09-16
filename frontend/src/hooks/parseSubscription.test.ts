@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { parseSubscription } from '@/hooks/useSocketIO';
 import {
   DASHBOARD_SUBSCRIPTION,
+  FLEET_DEVICES_SUBSCRIPTION,
   consoleSubscription,
   jobLogsSubscription,
   planRunSubscription,
@@ -13,8 +14,16 @@ describe('parseSubscription (#419)', () => {
   it('maps dashboard descriptor', () => {
     const cfg = parseSubscription(DASHBOARD_SUBSCRIPTION);
     expect(cfg.room).toBeNull();
-    expect(cfg.events).toContain(SOCKET_EVENT_NAMES.deviceUpdate);
+    expect(cfg.events).not.toContain(SOCKET_EVENT_NAMES.deviceUpdate);
+    expect(cfg.events).toContain(SOCKET_EVENT_NAMES.dashboardSummary);
     expect(cfg.events).toContain(SOCKET_EVENT_NAMES.planChanged);
+  });
+
+  it('maps fleet:devices descriptor (#2369)', () => {
+    expect(parseSubscription(FLEET_DEVICES_SUBSCRIPTION)).toEqual({
+      room: 'fleet:devices',
+      events: [SOCKET_EVENT_NAMES.deviceUpdate],
+    });
   });
 
   it('maps plan_run / console / job / run helpers', () => {

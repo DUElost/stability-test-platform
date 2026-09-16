@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/useToast';
 import { useSocketIO, type SocketIOMessage } from '@/hooks/useSocketIO';
@@ -6,6 +6,9 @@ import { planRunSubscription } from '@/config';
 import {
   isJobStuck,
   isPlanRunTerminal,
+  PLAN_RUN_SOCKET_COALESCE_MS,
+  planRunJobStatusInvalidateKeys,
+  planRunPrecheckInvalidateKeys,
   planRunRefetchInterval,
   planRunRefreshKeys,
   SLOW_REFETCH_MS,
@@ -37,6 +40,16 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
   const qc = useQueryClient();
   const toast = useToast();
   const watcherSignalTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const jobStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const precheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (watcherSignalTimer.current) clearTimeout(watcherSignalTimer.current);
+      if (jobStatusTimer.current) clearTimeout(jobStatusTimer.current);
+      if (precheckTimer.current) clearTimeout(precheckTimer.current);
+    };
+  }, []);
 
   const runQ = useQuery({
     queryKey: planRunKeys.detail(id),
@@ -106,26 +119,35 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     (msg: SocketIOMessage<unknown>) => {
       if (!id) return;
       if (msg.type === SOCKET_MESSAGE_TYPES.JOB_STATUS) {
-        qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
-        qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
-        qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
+        // #2369：密集 JOB_STATUS 合流，避免 devices/timeline/logs 三联 REST 风暴。
+        if (jobStatusTimer.current) clearTimeout(jobStatusTimer.current);
+        jobStatusTimer.current = setTimeout(() => {
+          for (const key of planRunJobStatusInvalidateKeys(id)) {
+            qc.invalidateQueries({ queryKey: key });
+          }
+          jobStatusTimer.current = null;
+        }, PLAN_RUN_SOCKET_COALESCE_MS);
       } else if (msg.type === SOCKET_MESSAGE_TYPES.PLAN_RUN_STATUS) {
+        // Run 级状态变迁低频，保持即时（abort/终态需尽快反映）。
         qc.invalidateQueries({ queryKey: planRunKeys.detail(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.chain(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
       } else if (msg.type === SOCKET_MESSAGE_TYPES.PRECHECK_UPDATE) {
-        qc.invalidateQueries({ queryKey: planRunKeys.detail(id) });
-        qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
-        qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
-        qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
+        if (precheckTimer.current) clearTimeout(precheckTimer.current);
+        precheckTimer.current = setTimeout(() => {
+          for (const key of planRunPrecheckInvalidateKeys(id)) {
+            qc.invalidateQueries({ queryKey: key });
+          }
+          precheckTimer.current = null;
+        }, PLAN_RUN_SOCKET_COALESCE_MS);
       } else if (msg.type === SOCKET_MESSAGE_TYPES.WATCHER_SIGNAL) {
         if (watcherSignalTimer.current) clearTimeout(watcherSignalTimer.current);
         watcherSignalTimer.current = setTimeout(() => {
           qc.invalidateQueries({ queryKey: planRunKeys.watcherByRun(id) });
           watcherSignalTimer.current = null;
-        }, 2000);
+        }, PLAN_RUN_SOCKET_COALESCE_MS);
       }
     },
     [id, qc],
