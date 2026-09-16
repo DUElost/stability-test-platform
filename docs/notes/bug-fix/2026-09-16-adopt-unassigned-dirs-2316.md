@@ -50,6 +50,23 @@ Agent 带来的 `devices/unassigned/…` 路径**不覆盖**它（只留 `dle_un
 **方案 A 保留**（#2316 裁决 2）：C 之后 `unassigned/` 仍会有内容——从未被关联的事件、
 C 的失败/崩溃窗残留、C 之前的历史行；A 是这三类的兜底。
 
+
+### 3. 第 4 项（D1 裁决，2026-09-16）：未关联事件（双 NULL 行）的 TTL
+
+`purge_orphan_dle_events(limit=100, dry_run=False)`：清「`plan_run_id` 与 `job_id` 皆空、
+state ∈ (REMOTE, PRUNED)、`updated_at` 早于 `now − artifact_retention_days`（默认 30 天）」
+的行及其 `devices/unassigned/{event_id}/` 目录。
+
+- **安全性论证**：关联判据是 `detected_at ∈ [run.started_at ± grace]` 且发生在该 run 的
+  extract 时刻——早于 now−30d 的事件只可能被**当时已存在**的 run 认领；那一刻没认领之后
+  也不会有新窗口覆盖它。30 天是远大于任何合理窗口的保守值。
+- **只白名单 REMOTE/PRUNED**：`LOCAL`/`PULL_FAILED` 的副本语义是「有意不传 / 源不可达」；
+  在途态仍可能待上送；`ARCHIVED` 对这类行不可达（extract 需要 run），出现即异常。
+- **文件先于行**：目录清不掉或形态不符 → 本轮不删该行；本清理不关联任何 run，故无
+  deferred 语义、不阻塞别人的 retention（调用点放在持锁窗口之外）。
+- **只读盘点**：`dry_run=True` 列候选不改动，供首次上线前人工复核（生产当前 0 行，预期首跑空集）。
+- 复用：目录定位/容器校验来自上面第 1 点的 `_locate_unassigned_event_dir`（从方案 A 抽出）。
+
 ## Alternatives
 
 - **A 的形态判据保留原样、只把真实形态加成第二个分支**：会继续把「形态不符」计入 failed，
@@ -76,11 +93,13 @@ python scripts/run_gates.py check:quick   # [OK] 10 gates
 python scripts/run_gates.py check:pr      # [OK] 19 gates
 ```
 
-**反例构造**（把 4 个源码文件还原到 main 后重跑同一组）→ **6 failed**：
+**反例构造**（把源码文件还原到 main 后重跑）→ **6 failed**（A 形状修复 + C），
+另有 **3/4 条 D1 用例失败**（第 4 条在无清理时平凡通过）：
 
 - 2 条 retention 用例：真实形态下 A 不清理、且形态不符会推迟 run（即上面第 1 点）；
 - 3 条搬移用例：C 不存在；
-- 1 条 ingest 用例：陈旧路径覆盖了权威路径。
+- 1 条 ingest 用例：陈旧路径覆盖了权威路径；
+- D1：孤儿行/目录不清理、`dry_run` 属性不存在、目录清不掉却删了行。
 
 测试口径的两处自我修正（都留在用例注释里）：
 

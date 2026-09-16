@@ -21,7 +21,7 @@ from sqlalchemy import func, or_, select
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.core.metrics import record_retention_candidates, record_retention_txn
-from backend.models.enums import PlanRunStatus
+from backend.models.enums import EventState, PlanRunStatus
 from backend.models.schedule import TaskSchedule, schedule_timestamp
 
 from backend.core.settings.scheduler import get_scheduler_settings
@@ -331,17 +331,36 @@ def _collect_unassigned_dirs(db, safe_run_ids: list, stale_job_ids, job_run_of: 
     return mapping
 
 
+def _locate_unassigned_event_dir(raw_path, unassigned_root: Path) -> Path | None:
+    """``remote_path`` → 它所属的 ``devices/unassigned/{event_id}/`` 目录。
+
+    真实形态是 ``unassigned/{event_id}/{basename}``（见 ``event_uploader`` 的 dst 拼装，
+    生产实测 7 段路径即此形态）：取父目录；也容忍 ``remote_path`` 直接就是事件目录本身。
+    形态不符返回 None（调用方一律「跳过 + 告警」，不当作失败——那是数据问题，
+    计入 failed 会让整批推迟）。
+    """
+    try:
+        p = Path(str(raw_path)).resolve()
+    except OSError:
+        return None
+    if p.parent.parent == unassigned_root:
+        return p.parent
+    if p.parent == unassigned_root:
+        return p
+    return None
+
+
 def purge_unassigned_event_dirs(paths_by_run: dict) -> set:
     """#2262：回收 ``devices/unassigned/{event_id}/`` 目录。
 
     DLE 行是它的唯一索引，而**关联不搬文件**（``associate_unassigned_events_to_plan_run``
-    只填 ``plan_run_id``）——所以 run 级 purge 永远命中不到它，行删后目录即孤儿。
-    本函数只在本批**行删除之前**清这些目录：增长被限制在保留期内，且不在行还活着时
-    删文件（保住 ``remote_path`` 的可回溯性）。
+    只填 ``plan_run_id``）——所以 run 级 purge 永远命中不到它。本函数只在本批**行删除
+    之前**清这些目录：增长被限制在保留期内，且不在行还活着时删文件（保住 ``remote_path``
+    的可回溯性）。
 
     ``paths_by_run`` = ``{remote_path: run_id}``；失败按 run 归因（与 NFS 主轨同语义）。
-    只接受 ``{root}/devices/unassigned/{event_id}`` 的**直接子目录**——越界或形态不符
-    一律跳过并告警（fail-safe：宁可留孤儿，也不误删别处）。
+    只接受 ``{root}/devices/unassigned/{event_id}`` 这一层——越界或形态不符一律跳过并
+    告警（fail-safe：宁可留孤儿，也不误删别处）。
     """
     from backend.core.storage_root import resolve_shared_storage_root
 
@@ -357,26 +376,9 @@ def purge_unassigned_event_dirs(paths_by_run: dict) -> set:
     failed: set = set()
     removed = 0
     for raw_path, run_id in paths_by_run.items():
-        # remote_path 指向**事件目录内的一层**（``unassigned/{event_id}/{basename}``，
-        # 见 event_uploader 的 dst 拼装，生产实测 7 段路径即此形态）；也容忍它直接
-        # 就是事件目录。取到事件目录才能整桶删除。
-        try:
-            p = Path(str(raw_path)).resolve()
-        except OSError:
-            p = None
-        if p is not None and p.parent.parent == unassigned_root:
-            event_dir: Path | None = p.parent
-        elif p is not None and p.parent == unassigned_root:
-            event_dir = p
-        else:
-            event_dir = None
+        event_dir = _locate_unassigned_event_dir(raw_path, unassigned_root)
         if event_dir is None or not _within_shared_root(event_dir, resolved_base):
-            # 形态不符/越界：**跳过并告警，不计入 failed**——那是数据问题（行留下、
-            # 目录不删即可），而计入 failed 会让整个 run 的 retention 每轮推迟、
-            # 永久停摆（初版就是按「event 目录 = remote_path」判的，被真实形态证伪）。
-            logger.warning(
-                "nfs_retention_unassigned_path_invalid dir=%s", raw_path,
-            )
+            logger.warning("nfs_retention_unassigned_path_invalid dir=%s", raw_path)
             continue
         try:
             if event_dir.is_dir():
@@ -539,6 +541,86 @@ def _retention_safe_ids(db, run_ids: list[int]) -> tuple[list[int], set[int]]:
     return sorted(run_id_set - keep), keep
 
 
+#: #2316 第 4 项（D1 裁决）：未关联事件（``plan_run_id`` 与 ``job_id`` 皆空）的清理口径。
+#: 只白名单终态——``LOCAL``/``PULL_FAILED`` 的本地副本语义是「有意不传 / 源不可达」，
+#: 删了无从判断；``DETECTED``/``UPLOAD_*`` 仍可能待上送。``ARCHIVED`` 对这类行不可达
+#: （extract 需要 run），出现即异常，不纳入。
+_ORPHAN_DLE_STATES = (EventState.REMOTE.value, EventState.PRUNED.value)
+#: 每轮清理上限（沿用 retention 的批量思路：单轮可预期，不把作业拖长）。
+_ORPHAN_DLE_BATCH = 100
+
+
+def purge_orphan_dle_events(limit: int = _ORPHAN_DLE_BATCH, *, dry_run: bool = False) -> int:
+    """清理「未关联事件」：无 run 也无 job、已终态、静默超过 ``artifact_retention_days``
+    的 DLE 行及其 ``devices/unassigned/{event_id}/`` 目录（#2316 D1）。
+
+    **为什么需要**：这类行既不被 run/job 删除谓词命中（现有 retention 覆盖不到），也没有
+    任何 run 会再认领它——关联判据是 ``detected_at ∈ [run.started_at ± grace]``，而认领
+    发生在该 run 的 extract 时刻：早于 ``now − N`` 的事件只可能被**当时已存在**的 run 认领。
+    N 复用 ``artifact_retention_days``（默认 30 天，远大于任何合理窗口）。
+
+    **文件先于行**：目录清不掉（或形态不符）就本轮不删该行，下轮重试——本清理不关联任何
+    run，故没有 deferred 语义，也不会阻塞别人的 retention。``dry_run=True`` 只盘点、不改动
+    （首次上线前人工复核用）。返回清理（或盘点）的事件数。
+    """
+    from backend.core.storage_root import resolve_shared_storage_root
+    from backend.models.device_log_event import DeviceLogEvent
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_sched().artifact_retention_days)
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(DeviceLogEvent.id, DeviceLogEvent.remote_path)
+            .where(
+                DeviceLogEvent.plan_run_id.is_(None),
+                DeviceLogEvent.job_id.is_(None),
+                DeviceLogEvent.state.in_(_ORPHAN_DLE_STATES),
+                DeviceLogEvent.updated_at < cutoff,
+            )
+            .order_by(DeviceLogEvent.updated_at)
+            .limit(limit)
+        ).all()
+        if not rows:
+            return 0
+        if dry_run:
+            for event_id, remote_path in rows:
+                logger.info("dle_orphan_dry_run id=%s path=%s", event_id, remote_path)
+            logger.info("dle_orphan_dry_run_total events=%d", len(rows))
+            return len(rows)
+
+        root = resolve_shared_storage_root()
+        resolved_base = Path(root).resolve() if root else None
+        unassigned_root = (resolved_base / "devices" / "unassigned") if resolved_base else None
+        purged = 0
+        for event_id, remote_path in rows:
+            if remote_path:
+                if resolved_base is None:
+                    logger.warning("dle_orphan_skipped_root_unset id=%s", event_id)
+                    continue
+                event_dir = _locate_unassigned_event_dir(remote_path, unassigned_root)
+                if event_dir is None or not _within_shared_root(event_dir, resolved_base):
+                    logger.warning(
+                        "dle_orphan_path_invalid id=%s path=%s", event_id, remote_path,
+                    )
+                    continue
+                try:
+                    if event_dir.is_dir():
+                        shutil.rmtree(event_dir)
+                except Exception:
+                    logger.warning(
+                        "dle_orphan_purge_failed id=%s dir=%s",
+                        event_id, event_dir, exc_info=True,
+                    )
+                    continue
+            db.query(DeviceLogEvent).filter(
+                DeviceLogEvent.id == event_id
+            ).delete(synchronize_session=False)
+            purged += 1
+        if purged:
+            db.commit()
+            logger.info("dle_orphan_purged events=%d", purged)
+        return purged
+
+
 def run_retention_cleanup() -> None:
     """Delete completed PlanRuns older than _sched().plan_run_retention_days (ADR-0020).
 
@@ -549,6 +631,13 @@ def run_retention_cleanup() -> None:
     from backend.models.device_lease import DeviceLease
     from backend.models.device_log_event import DeviceLogEvent
     from backend.models.resource_pool import ResourceAllocation
+
+    # #2316 D1：先清「未关联事件」——它按自己的判据限量清理、不取任何行锁，
+    # 因此放在持锁窗口之外（不延长 retention 的锁窗口）；失败不影响本批 run 删除。
+    try:
+        purge_orphan_dle_events()
+    except Exception:
+        logger.warning("dle_orphan_cleanup_failed", exc_info=True)
 
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=_sched().plan_run_retention_days)
