@@ -84,9 +84,13 @@ PR 路径保持原样（未装即 skip），不引入第三方二进制依赖。
 
 ## Revisit
 
-- **10 条存量场景缺口**（`_SCENARIO_COVERAGE_DEBT`）需另开单消化：逐条补
+- **10 条存量场景缺口**（`_SCENARIO_COVERAGE_DEBT`）→ **#2236**：逐条补
   `input_series` + `alert_rule_test`，补完即从清单删除（守卫会强制同步）。在此之前，
   判据② 对它们不成立——这是显式标注的过渡态，不是终态。
+- **「指标有定义、无生产者」在告警面零覆盖** → **#2237**（仪表板侧同类守卫早已由
+  #1258 建立）。本单只人工核对过「10 条引用的指标都有真实埋点」——注意那是追了两跳
+  才确认的（`record_dispatch_gate` 在 `backend/core/metrics.py:693`，调用点
+  `backend/services/precheck/runner.py:359`），人工核对不是断言，规则死了没人知道。
 - **promtool 升级**：随上游 patch release 手动 bump（版本 + 摘要两处），不引入自动
   更新——第三方二进制的动升级会把「夜间门禁红」的成因混入上游行为变化。若 3.x 某版
   改变 `test rules` 的输出契约，`test_promtool_gate_detects_threshold_drift` 会先红。
