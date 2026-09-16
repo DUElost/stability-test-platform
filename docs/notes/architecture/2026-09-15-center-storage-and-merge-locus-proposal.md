@@ -72,6 +72,7 @@ python -m backend.scripts.measure_center_storage --center-root /mnt/center --jso
 | D-4 阈值 | **先采数再定** | §5 的 E-1 阈值不得先验拍定，必须基于 `measure_center_storage.py` 在隔离环境 / 生产只读采到的数字定 |
 | D-5 推进序 | **先 A**（无状态化） | merge 产物落中心 staging、控制面本地不保留产物；B 作为目标态，**必须与 ADR-0033 一起推进**，不可单独裁 |
 | 依赖顺序 | **D-1（ADR-0032 R3）先于 D-5** | R3 已裁为「条件裁决」：若 B3 判定需要 per-platform merge 工具，I-13 方案 A 的实现方式随之变化 |
+| D-5 的 **B 段**（2026-09-16） | **B0：不提前 B + 登记实例绑定限制** | 依 **§3.1** 重评输入裁定：B **不提前**（前置 ADR-0033 未落地、其包存储为条件落地、Phase 2 样板同批、A 残留与 2026-08-09 评审同向、多实例仍 opt-in）；同时把 merge 的实例绑定**登记为 [ADR-0027](../../adr/ADR-0027-control-plane-horizontal-scaling.md) v1.8 清单第 7 条**（附启动 WARN）——**不登记的隐性限制是多实例启用时最贵的一类问题**。**B1 / B2 的触发条件见 §3.1**。本行**不推翻**上表 D-5 的「B 与 ADR-0033 同推」，只明确「不提前」；亦**不触发 ADR-0025 修订**（该修订仍绑 I-12/I-13 方案落地） |
 
 **尚未做**（等上表落地）：ADR-0025 修订；§5 各项阈值；E-2 / E-4 / E-5 的采集（脚本已显式列为 not covered）。
 
@@ -128,6 +129,9 @@ python -m backend.scripts.measure_center_storage --center-root /mnt/center --jso
 落地（上文引注），故这里给出**重评结论与依据**——是输入，不是裁决。
 
 > **结论：B 的优先级不提前**（不因 A 打折而升格为近期项）；**但新增一条必须登记的隐性限制**（见下"缺口"）。
+>
+> **已裁决（2026-09-16，owner 裁 B0）并已落地**：ADR-0027 **v1.8** 清单第 7 条 + 启动告警
+> （`dedup_scan.multi_instance_merge_warning`，`backend/main.py`）；见 §裁决记录。
 
 #### 依据（逐条可核）
 
