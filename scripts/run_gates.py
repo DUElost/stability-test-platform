@@ -35,16 +35,10 @@ FRONTEND = os.path.join(ROOT, "frontend")
 PY = sys.executable  # 用当前解释器跑 -m，规避 PATH 落到别的 python
 BASE_REF = os.environ.get("STP_GATE_BASE_REF", "origin/main")
 
-# 仅 agent-tests 使用：部分 agent 测试模块 import 时会解析 DATABASE_URL，
-# 但不会真正连接；与全量 backend-test 保持一致的环境可避免收集期 RuntimeError。
 # PG 门禁（backend-tests / integration）不传 env：本地由 conftest 走
 # testcontainers 隔离库（或本地配置），CI 侧由 job 级 env 自行设置。
-AGENT_TEST_ENV = {
-    "TESTING": "1",
-    "JWT_SECRET_KEY": "ci-test-secret-key",
-    "DATABASE_URL": "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test",
-    "TEST_DATABASE_URL": "postgresql+psycopg://postgres:postgres@localhost:5432/stability_test",
-}
+# 曾经的 AGENT_TEST_ENV（注入 TESTING/JWT_SECRET_KEY/DATABASE_URL 给 agent-tests）
+# 已随 #2428 删除：那层注入正是遮蔽「agent 套件依赖 ambient 凭据」的机制本身。
 
 # 顺序即执行顺序；check:full = 全部按此顺序。
 GATES = {
@@ -213,10 +207,16 @@ GATES = {
         ROOT,
         None,
     ),
+    # #2428：这里**不再注入** AGENT_TEST_ENV。agent 套件的 env 边界归它自己的
+    # `backend/agent/tests/conftest.py` 所有（#1295 的 DATABASE_URL 同形）；由 gate
+    # 代注入等于替套件把缺口遮掉——本地缺 env 时红 23 例、CI 却全绿，两边都读不到真话。
+    # 改成与上面 agent-tests-collect 同口径的 `env -i` 真跑：CI 对应物=ci.yml
+    # pr-agent-tests 的「Run agent tests」step，二者一致性由
+    # tests/test_agent_env_selfsufficiency.py 守。
     "agent-tests": (
-        f"{PY} -m pytest backend/agent/tests/ -q",
+        f'env -i PATH="$PATH" PYTHONPATH=. {PY} -m pytest backend/agent/tests/ -q',
         ROOT,
-        AGENT_TEST_ENV,
+        None,
     ),
     # ── 以下仅 check:full ──
     "backend-tests": (

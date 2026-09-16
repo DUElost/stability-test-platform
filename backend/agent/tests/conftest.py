@@ -13,6 +13,16 @@ AGENT_TEST_DATABASE_URL = (
 )
 os.environ.setdefault("DATABASE_URL", AGENT_TEST_DATABASE_URL)
 
+# 同一条边界也必须覆盖 JWT_SECRET_KEY（#2428）：`backend/core/security.py` 在**导入期**
+# 硬检查它，CI 的 pr-agent-tests job 与 run_gates 的 agent-tests gate 都注入了这个值，
+# 于是「直接 `python -m pytest backend/agent/tests`」这个文档推荐入口本地恒红 23 例
+# （test_saq_scan_pipeline 16 / test_p3_3_multi_instance 4 / test_legacy_tool_cleanup 2 /
+# test_cron_scheduler 1），改动者分不清「我改坏了」还是「环境本红」，只能 stash 复跑自证。
+# 这些用例断言的内容与签名密钥毫无关系——缺的只是一个测试用占位值，正该由本 conftest
+# 给出。用 setdefault：调用方显式注入的值仍然优先（CI 侧 job env 不变）。
+AGENT_TEST_JWT_SECRET_KEY = "agent-test-secret-key-not-for-production-32b"
+os.environ.setdefault("JWT_SECRET_KEY", AGENT_TEST_JWT_SECRET_KEY)
+
 import pytest  # noqa: E402
 
 from backend.agent.operation_scheduler import OperationScheduler  # noqa: E402
