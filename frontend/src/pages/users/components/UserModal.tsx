@@ -11,6 +11,8 @@ import type { User } from '@/utils/api';
 import { STATUS_TEXT_COLORS } from '@/design-system/colors';
 import { FORM } from '@/design-system';
 import { cn } from '@/lib/utils';
+// #2406：密码规则（含 bcrypt 的 72 **字节**上限）与后端 PasswordStr 同判据。
+import { passwordRuleError } from './passwordRules';
 
 interface UserModalProps {
   isOpen: boolean;
@@ -70,18 +72,14 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
     if (!isEditMode) {
       if (!formData.password) {
         newErrors.password = '请输入密码';
-      } else if (formData.password.length < 8) {
-        newErrors.password = '密码至少 8 个字符';
-      } else if (formData.password.length > 128) {
-        newErrors.password = '密码不能超过 128 个字符';
+      } else {
+        const passwordError = passwordRuleError(formData.password);
+        if (passwordError) newErrors.password = passwordError;
       }
     } else if (formData.password) {
-      // 编辑模式改了密码也要过同一长度约束(#281 CR 意见)
-      if (formData.password.length < 8) {
-        newErrors.password = '密码至少 8 个字符';
-      } else if (formData.password.length > 128) {
-        newErrors.password = '密码不能超过 128 个字符';
-      }
+      // 编辑模式改了密码也要过同一约束(#281 CR 意见 / #2406 字节维度)
+      const passwordError = passwordRuleError(formData.password);
+      if (passwordError) newErrors.password = passwordError;
     }
 
     if (formData.password || formData.confirmPassword) {

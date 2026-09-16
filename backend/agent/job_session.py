@@ -70,6 +70,11 @@ class JobSessionSummary:
     watcher_started_at: Optional[datetime] = None
     watcher_stopped_at: Optional[datetime] = None
     watcher_capability: str = "unavailable"
+    # #2394-③ reconciler 在位标记（"<PLATFORM>:<ClassName>"；空 = 未启动）。
+    # 不可混入 watcher_capability——其语义是 MTK inotifyd 探测层，UNISOC job 恒
+    # 'unavailable'（今日实测），reconciler 死活只能从信号反推。控制面
+    # watcher_summary 为 Dict[str,Any] 未消费本键，仅为运维可观测（#96 同构先例）。
+    platform_reconciler: str = ""
     log_signal_count: int = 0
     # #96：per-source 拆分（log_signal_count = watcher + reconciler），
     # 便于诊断哪条路径没干活。控制面不改 schema，只读 log_signal_count；
@@ -88,6 +93,7 @@ class JobSessionSummary:
             "watcher_started_at": _iso(self.watcher_started_at),
             "watcher_stopped_at": _iso(self.watcher_stopped_at),
             "watcher_capability": self.watcher_capability,
+            "platform_reconciler": self.platform_reconciler,
             "log_signal_count":   self.log_signal_count,
             "watcher_signal_count":  self.watcher_signal_count,
             "reconciler_signal_count": self.reconciler_signal_count,
@@ -406,6 +412,8 @@ class JobSession:
                 "platform_reconciler_active job_id=%d serial=%s platform=%s",
                 self._job_id, self._serial, platform,
             )
+            # #2394-③：在位事实随 summary 上报（启动失败/回滚不写此行）
+            self._summary.platform_reconciler = f"{platform}:{reconciler_cls.__name__}"
         except Exception:
             logger.exception("platform_reconciler_start_failed job_id=%d", self._job_id)
             self._reconciler = None

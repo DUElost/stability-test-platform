@@ -842,3 +842,96 @@ def test_no_window_reported_before_any_lock_is_taken(cleanup_env, monkeypatch):
     cron_scheduler.run_retention_cleanup()
 
     assert windows == [], "候选为空（未进入取锁阶段）不应产生窗口观测"
+
+
+# ── #2033：NFS 已删 + DB 回滚 → 「行在、目录已删」窗口须可观测 ──────────────
+
+
+def test_rollback_after_nfs_purge_reports_window(cleanup_env, monkeypatch, caplog, tmp_path):
+    """#2033 验收：DB 删除抛错后，目录已删但行仍在，且**有可观测日志**。
+
+    修复前该窗口只能从一句泛化的 `retention_cleanup failed` 推断，
+    看不出「NFS 目录已物理删除」——本用例钉住新增的 `retention_rollback_after_nfs_purge`。
+    """
+    import logging
+
+    db, plan = cleanup_env
+    run = _mk_run(db, plan, age_days=10)
+
+    # 造出真实的 NFS 目录，使 purge 真的删掉它（而非 no-op）
+    storage = tmp_path / "retention-storage"
+    target = storage / "devices" / str(run.id)
+    target.mkdir(parents=True)
+    (target / "artifact.bin").write_bytes(b"x")
+
+    # 让 DB 侧在 purge 之后抛错 → 走 rollback 分支
+    real_delete = db.query
+
+    class _Boom:
+        def filter(self, *a, **k):
+            return self
+
+        def delete(self, *a, **k):
+            raise RuntimeError("simulated DB delete failure (#2033)")
+
+    def _boom_query(model, *a, **k):
+        # 仅让 StepTrace 的删除失败，其余（含 purge 前的查询）保持真实行为
+        if getattr(model, "__name__", "") == "StepTrace":
+            return _Boom()
+        return real_delete(model, *a, **k)
+
+    monkeypatch.setattr(db, "query", _boom_query)
+
+    with caplog.at_level(logging.ERROR):
+        cron_scheduler.run_retention_cleanup()
+
+    # ① 窗口成立：目录已删、行仍在
+    assert not target.is_dir(), "NFS 目录应已被 purge 删除"
+    assert db.query(PlanRun).filter_by(id=run.id).one() is not None, "回滚应保留 DB 行"
+
+    # ② 窗口可观测（修复前无此日志）
+    assert any(
+        "retention_rollback_after_nfs_purge" in r.getMessage() for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]
+
+
+def test_no_rollback_log_when_cleanup_succeeds(cleanup_env, caplog):
+    """#2033 负向对照：正常成功路径**不得**出现该回滚日志（避免噪声）。"""
+    import logging
+
+    db, plan = cleanup_env
+    _mk_run(db, plan, age_days=10)
+
+    with caplog.at_level(logging.ERROR):
+        cron_scheduler.run_retention_cleanup()
+
+    assert not any(
+        "retention_rollback_after_nfs_purge" in r.getMessage() for r in caplog.records
+    ), "成功路径不应报告回滚窗口"
+
+
+def test_early_failure_before_purge_does_not_raise_nameerror(cleanup_env, monkeypatch, caplog):
+    """#2033：`purged_run_ids` 必须在 try **之前**初始化。
+
+    失败可能发生在赋值之前（如候选查询抛错）——若该变量只在 try 内被赋值，
+    `except` 引用它会抛 `UnboundLocalError`（**实测确认**，非 NameError：
+    函数体内存在对该名的赋值，Python 即视其为局部变量），从而把一次本可正常收尾的
+    清理失败**升级成未捕获异常**。
+    本用例让候选查询阶段就抛错，断言 cleanup 正常返回（不抛）且不误报回滚窗口。
+    """
+    import logging
+
+    db, plan = cleanup_env
+    _mk_run(db, plan, age_days=10)
+
+    def _boom(*a, **k):
+        raise RuntimeError("simulated early failure before purge (#2033)")
+
+    monkeypatch.setattr(cron_scheduler, "_retention_candidate_ids", _boom)
+
+    with caplog.at_level(logging.ERROR):
+        cron_scheduler.run_retention_cleanup()   # 不得抛 NameError
+
+    assert not any(
+        "retention_rollback_after_nfs_purge" in r.getMessage() for r in caplog.records
+    ), "purge 尚未执行，不应报告「目录已删」窗口"
