@@ -7,8 +7,16 @@
    基础名（如 ``stability_x_observed`` 而非 ``_count/_bucket/_sum``）都拦。
    2026-09-10 审计发现的三条漂移（``status``/``job`` 标签、直方图裸名）由
    这一层机械拦截。
-2. **场景层（promtool 可用时跑）**：``promtool test rules`` 用真实标签形状的
-   样本证明修复过的规则可触发；runner 无 promtool 时显式 skip，不影响结构层。
+2. **场景层（promtool）**：``promtool test rules`` 用真实标签形状的样本证明
+   修复过的规则可触发，覆盖阈值 / ``for:`` 时间窗 / 注解逐字匹配。可用性按
+   job 分档（#2151）：夜间全量 ``backend-test`` 装了 pinned promtool 且注入
+   ``PROMTOOL_REQUIRED=1`` → **缺失即红，不再静默 skip**；PR 路径与本机未装时
+   显式 skip（PR 门禁不引入第三方二进制依赖，离线纯度见
+   ``tests/test_offline_subset_guard.py``）。接线契约见
+   ``tests/test_ci_promtool_scenario_gate.py``。
+3. **覆盖棘轮（恒跑）**：promtool **只校验场景文件里出现过的告警**，未列规则改阈值
+   它也不红（#2151 实测）。所以「新增告警必须带场景用例」这条只能在结构层成立——
+   见 ``test_every_alert_rule_has_scenario_case`` 与 ``_SCENARIO_COVERAGE_DEBT``。
 
 场景文件的 ``input_series`` 也走结构层（``test_scenario_input_series_match_metric_registry``，
 #2152 折叠自 #2144）：CI 没有 promtool，那一层恒 skip，样本名字/标签错了就只能靠这里拦住。
@@ -16,6 +24,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -281,19 +290,196 @@ def test_alert_aggregation_labels_match_metric_registry():
     assert not problems, "告警聚合标签与指标注册表不一致：\n" + "\n".join(problems)
 
 
-@pytest.mark.skipif(
-    shutil.which("promtool") is None,
-    reason="promtool 不可用；结构层校验已覆盖指标/标签契约",
+_CMP_THRESHOLD_RE = re.compile(
+    r"(?P<op>[<>]=?|==|=)\s*(?P<num>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
 )
+_HUGE_THRESHOLD = "1e12"
+
+
+def _promtool_required() -> bool:
+    """本 job 是否把 promtool 当必备依赖（由 ci.yml 注入 ``PROMTOOL_REQUIRED``）。
+
+    取值放宽成「非空且不是显式假值」而不是只认 ``"1"``：只认字面量会让
+    ``PROMTOOL_REQUIRED: "true"`` 这类改写**静默退回 skip**——正是本单要修的失效模式。
+    ci.yml 侧的取值形态由 ``tests/test_ci_promtool_scenario_gate.py`` 双向守住。
+    """
+    return os.environ.get("PROMTOOL_REQUIRED", "").strip().lower() not in {"", "0", "false"}
+
+
+def _promtool_path() -> str:
+    """promtool 路径；不可用时按 job 档位分流 **fail / skip**（#2151）。
+
+    档位判据是 ci.yml 注入的 ``PROMTOOL_REQUIRED``（只在全量 ``backend-test`` 的
+    ``Run repo-level tests`` 步骤出现）：
+
+    - 该 job 里 promtool 缺失 = 安装步骤被删/失败/装错版本。此前它**恒 skip**，
+      于是「阈值或时间窗改了、场景文件没跟」这类语义漂移只在装了 promtool 的
+      机器被拦（= 取决于跑测机器）——正是 #2151 要消灭的盲区，这里不放行；
+    - PR 路径与开发机未装 promtool 仍是 skip：结构层恒跑已覆盖指标/标签契约，
+      而 PR 门禁不能引入第三方二进制依赖。
+
+    两条出口都带可诊断文本，不静默。
+    """
+    path = shutil.which("promtool")
+    if path:
+        return path
+    if _promtool_required():
+        pytest.fail(
+            f"PROMTOOL_REQUIRED={os.environ.get('PROMTOOL_REQUIRED')!r} 但 PATH 中没有 "
+            "promtool：ci.yml 的「Install pinned promtool」步骤缺失或失败——场景层静默 "
+            "skip 是 #2151 要修的盲区，全量 job 不放行"
+        )
+    pytest.skip("promtool 不可用；结构层校验已覆盖指标/标签契约")
+    raise AssertionError("unreachable：pytest.fail / pytest.skip 均已抛出")
+
+
+def _promtool_version(promtool: str) -> str:
+    out = subprocess.run(
+        [promtool, "--version"], capture_output=True, text=True, check=False
+    )
+    return (out.stdout or out.stderr).splitlines()[0] if (out.stdout or out.stderr) else "未知"
+
+
 def test_alert_scenarios_fire_with_promtool():
+    promtool = _promtool_path()
     checked = subprocess.run(
-        ["promtool", "check", "rules", ALERTS.name],
+        [promtool, "check", "rules", ALERTS.name],
         cwd=PROM_DIR, capture_output=True, text=True, check=False,
     )
     assert checked.returncode == 0, checked.stdout + checked.stderr
 
     result = subprocess.run(
-        ["promtool", "test", "rules", SCENARIOS.name],
+        [promtool, "test", "rules", SCENARIOS.name],
         cwd=PROM_DIR, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+    # 夜间日志可读性：跑的是哪个版本（#2151 验收判据①的另一半；安装步骤也打印）
+    print(f"[promtool] {_promtool_version(promtool)} 场景层 {SCENARIOS.name} → SUCCESS")
+
+
+def _raise_all_thresholds(alerts_text: str) -> tuple[str, int]:
+    """把每条**告警**规则的比较阈值统一抬到 ``1e12``，返回 (新文本, 命中数)。
+
+    只做单向抬高（永不放宽），因此变异后的规则严格更难触发：场景文件里
+    「某时刻应出现该告警」的断言必然失配。录制规则（无 ``alert`` 键）不动。
+    """
+    data = yaml.safe_load(alerts_text)
+    hits = 0
+    for group in data.get("groups", []):
+        for rule in group.get("rules", []):
+            expr = rule.get("expr")
+            if "alert" not in rule or not isinstance(expr, str):
+                continue
+            mutated, n = _CMP_THRESHOLD_RE.subn(
+                lambda m: f"{m.group('op')} {_HUGE_THRESHOLD}", expr
+            )
+            if n:
+                rule["expr"] = mutated
+                hits += n
+    return yaml.safe_dump(data, allow_unicode=True, width=10000), hits
+
+
+# 场景层只校验场景文件里出现过的告警：**promtool 对未列规则不校验**。
+# #2151 实测——把 StabilityPlanRunAggregationFailed 的 `> 0` 改成 `> 500`、
+# 场景文件不跟，`promtool test rules` 仍 SUCCESS。所以「装了 promtool」只把
+# 已列规则从「取决于跑测机器」变成「常量」，未列规则依然零覆盖。
+# 于是「新增告警必须带场景」必须落在**恒跑结构层**（PR 路径即拦）。
+#
+# 下面 10 条是本单落地时已存在的存量缺口（各规则加入时场景层在 CI 恒 skip，
+# 漏补无人可见）。清单只准缩短不准变长：补了场景却没删条目 → 红；
+# 加了新告警不补场景 → 红。逐条补齐属后续单，见
+# docs/notes/testing/2026-09-16-promtool-nightly-scenario-gate-2151.md 的 Revisit。
+_SCENARIO_COVERAGE_DEBT: frozenset[str] = frozenset({
+    "StabilityPlanRunAggregationFailed",
+    "StabilityPostCompletionEnqueueFailed",
+    "StabilityClaimLeaseFailedSpike",
+    "StabilityCsrfOriginRejected",
+    "StabilityCsrfMissingOriginReferer",
+    "StabilityDispatchGateSlow",
+    "StabilitySaqQueueDepth",
+    "StabilityMergeSkipToolNotConfigured",
+    "StabilityUnlinkedFixable",
+    "StabilityDbDeadlockDetected",
+})
+
+
+def _scenario_alert_names() -> set[str]:
+    data = yaml.safe_load(SCENARIOS.read_text(encoding="utf-8"))
+    return {
+        case.get("alertname")
+        for group in data.get("tests", [])
+        for case in (group.get("alert_rule_test") or [])
+        if case.get("alertname")
+    }
+
+
+def test_every_alert_rule_has_scenario_case():
+    """告警规则 ↔ 场景用例的覆盖棘轮（#2151 验收判据② 的可成立版本）。
+
+    四条断言各自堵一种「清单说谎」：
+
+    - 场景引用了已不存在的告警 → promtool 不报错，但断言的是空气；
+    - 新告警不补场景 → 漂移不可见（本单实测过的真实缺口）；
+    - 存量债条目对应的规则被删 → 清单继续挂着不存在的名字，后来者无法判断可信度；
+    - 存量债条目已补场景 → 清单只准缩短，缩短就必须同步（否则「还有 10 处待补」
+      这个信息本身变成噪声）。
+    """
+    alerts = {name for name, _expr in _alert_exprs()}
+    covered = _scenario_alert_names()
+    assert covered <= alerts, f"场景文件引用了不存在的告警：{sorted(covered - alerts)}"
+    new_gaps = sorted(alerts - covered - _SCENARIO_COVERAGE_DEBT)
+    assert not new_gaps, (
+        "以下告警规则没有 promtool 场景用例（promtool 对未列规则不校验 = 阈值/时间窗"
+        f"漂移不可见）：{new_gaps}。请在 {SCENARIOS.name} 补 input_series + "
+        "alert_rule_test；存量清单见 _SCENARIO_COVERAGE_DEBT"
+    )
+    vanished = sorted(_SCENARIO_COVERAGE_DEBT - alerts)
+    assert not vanished, f"存量债清单里有已不存在的规则，请从清单删除：{vanished}"
+    drained = sorted(_SCENARIO_COVERAGE_DEBT & covered)
+    assert not drained, (
+        f"这些规则已补场景用例，请同步从 _SCENARIO_COVERAGE_DEBT 删除：{drained}"
+    )
+
+
+def test_promtool_gate_detects_threshold_drift(tmp_path):
+    """负向对照（#2151 验收判据②）：阈值漂移必须让场景层变红。
+
+    为什么必须有：`test_alert_scenarios_fire_with_promtool` 只断言 rc == 0。接线一旦
+    退化（子命令语义变化、场景文件不再引用规则文件、规则文件改名而 promtool 只是
+    "没报错"），恒绿与恒红无法区分。本用例证明这对文件**有判别力**。
+
+    先在同形沙箱里跑**未变异**副本作控制组——只有控制组绿，变异组的红才能归因于
+    阈值本身，而不是临时目录/路径拼错导致的假红。
+    """
+    promtool = _promtool_path()
+    original = ALERTS.read_text(encoding="utf-8")
+    mutated, hits = _raise_all_thresholds(original)
+    assert hits, (
+        "未命中任何比较阈值：告警表达式形态已变，本负向对照失去判别力，"
+        "请同步更新 _CMP_THRESHOLD_RE（不要删除本用例）"
+    )
+
+    def _run(alerts_text: str) -> subprocess.CompletedProcess[str]:
+        (tmp_path / ALERTS.name).write_text(alerts_text, encoding="utf-8")
+        (tmp_path / SCENARIOS.name).write_text(
+            SCENARIOS.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        return subprocess.run(
+            [promtool, "test", "rules", SCENARIOS.name],
+            cwd=tmp_path, capture_output=True, text=True, check=False,
+        )
+
+    control = _run(original)
+    assert control.returncode == 0, (
+        f"控制组（未变异副本）应当通过——沙箱接线本身有问题：\n"
+        f"{control.stdout}{control.stderr}"
+    )
+    drift = _run(mutated)
+    assert drift.returncode != 0, (
+        f"全部阈值抬高到 {_HUGE_THRESHOLD} 后场景层仍通过 → promtool 场景层是假绿"
+        f"（{hits} 处阈值未产生任何失配）\n{drift.stdout}{drift.stderr}"
+    )
+    assert "FAILED" in drift.stdout + drift.stderr, (
+        f"变异组红了但输出里没有 FAILED，失败原因可能不是场景失配"
+        f"（例如文件路径错误）：\n{drift.stdout}{drift.stderr}"
+    )

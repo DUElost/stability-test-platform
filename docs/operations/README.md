@@ -77,8 +77,11 @@ deploy/
 - Grafana：`docs/grafana/stability-platform-dashboard.json`  
 - 告警草案：`deploy/prometheus/alerts-stability-platform.yml`（ADR-0011 待挂载）。
   规则选择器与 `backend/core/metrics.py` 注册表的一致性由
-  `tests/test_prometheus_alerts_contract.py` 在 PR 路径门禁（结构层恒跑；
-  本机有 promtool 时追加场景触发测试，场景文件同目录 `.test.yml`）
+  `tests/test_prometheus_alerts_contract.py` 守三层：**结构层**（指标/标签一致性，
+  恒跑）、**场景层**（阈值 / `for:` 时间窗 / 注解逐字匹配，场景文件同目录
+  `.test.yml`；夜间全量 CI 装了 pinned promtool 并使其必备，PR 路径与本机未装时
+  skip——#2151）、**覆盖棘轮**（新增告警必须带场景用例，恒跑；存量缺口见
+  `tests/test_prometheus_alerts_contract.py` 里的 `_SCENARIO_COVERAGE_DEBT`）
 - 宿主机进程内存采样：`deploy/control-plane/node-exporter/stp-mem-top.sh` +
   `deploy/control-plane/systemd/stp-mem-top.{service,timer}`——每 2 分钟写
   node_exporter textfile（`stp_hostproc_anon_bytes` 按 comm + cgroup unit 聚合
