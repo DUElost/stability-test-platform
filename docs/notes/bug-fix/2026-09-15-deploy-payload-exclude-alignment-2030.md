@@ -77,5 +77,6 @@ ADR-0040 D1 的落地对齐）。
   issue 可收口。
 - 排除集「同源」目前靠测试逐项锁定；若未来出现第四条部署通道（如镜像分发），
   需把该用例扩为 N 处比较。
-- #2019（`--filter=protect resources/` 只护目录节点不护内容）是独立缺陷，未在
+- #2019（`--filter=protect resources/` 只护目录节点不护内容）**已于 2026-09-16 修复**（改 `resources/***`，
+  `docs/notes/bug-fix/2026-09-16-protect-resources-tree-2019.md`）。原文：该缺陷是独立项，未在
   本单处理。

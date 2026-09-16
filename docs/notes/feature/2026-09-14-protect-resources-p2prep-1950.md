@@ -20,6 +20,8 @@ host-resources 独立通道尚不存在——分发断档。ADR §4.3 的目标�
   `--filter=protect resources/`，不 exclude——分发照旧、删除被拦；P2 载荷
   收缩（agent-code 剔除 resources/）后分发自然停止，保护已在位；
 - legacy（无 wrapper）远端 rsync 对称加 `--filter='protect resources/'`；
+  > **#2019 后续（2026-09-16）**：该模式在 rsync 里只护**目录节点**，已改为 `resources/***`；
+  > legacy 分支本身已由 #2180 退役（脚本侧零 filter）。见 `docs/notes/bug-fix/2026-09-16-protect-resources-tree-2019.md`。
 - `resources/mtbf/` 维持 exclude+protect 不变（exclude 仍必需：载荷至今
   不携带 mtbf 内容；其 protect 语义被 `resources/` 传递覆盖）。
 
