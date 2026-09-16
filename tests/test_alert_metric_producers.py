@@ -18,8 +18,9 @@
 
 1. 解析 `backend/**/*.py`（排除 `tests/`、已发布脚本目录、alembic、resources），
    收集 `X = Counter("stability_x", ...)` 形态的定义 → 指标名 ↔ 标识符；
-2. **写入点** = mutator 调用链（`inc` / `observe` / `set` / `labels` / `remove` /
-   `delete`）里出现该标识符，覆盖四种真实形态：
+2. **写入点** = mutator 调用链里出现该标识符（名单见 `_MUTATORS`，它必须与
+   `_CONSTRUCTORS` 的**全部**指标类型对齐——#2286 的假阳性就是名单只写了
+   Counter/Gauge/Histogram/Summary 的方法、漏了 `Info.info()`），覆盖四种真实形态：
    - `foo_total.inc()`（直接导入后调用）
    - `metrics.unlinked_fixable_total.inc()`（模块属性访问）
    - `saq_queue_depth_gauge.labels(...).set(...)`（**别名导入**，
@@ -30,11 +31,16 @@
    有调用点——这正是 `record_dispatch_gate` 那一类；
 4. Histogram/Summary 的 `_bucket` / `_count` / `_sum` 后缀序列归一到基础名
    （告警按样本名查询，但代码里 observe 的是基础指标）；
-5. **框架回调这一跳 AST 看不见**，另钉 `_FRAMEWORK_WIRED_METRICS`：写入点位于中间件
+5. **框架回调这一跳 AST 看不见**，另钉 `_MANUAL_WIRED_METRICS`：写入点位于中间件
    `dispatch` 里的指标（`stability_api_requests_total` ← `ApiRequestMetricsMiddleware`），
    必须能在 `backend/main.py` 的 AST 里找到 `add_middleware(ApiRequestMetricsMiddleware)`
    调用。用 AST 而非子串是实测教训：子串匹配会被「把整行注释掉」骗过，D 组对照最初
    就是绿的。
+6. **容器间接写入**另钉 `_CONTAINER_WIRED_METRICS`（#2286）：指标对象进元组、由
+   `for ..., gauge, ... in _FLEET_GAUGES: gauge.labels(...).set(...)` 写入
+   （`stability_host_online` / `stability_device_online`）。AST 里「指标标识符」和
+   「写入调用」不在同一条链上，强判据看不见；锚点要求「容器赋值 + 遍历该容器的循环 +
+   循环变量上的 mutator」三段同时成立，任一段被改写就退回「无生产者」。
 
 判据边界（不是全量可达性证明）：只追**一跳**，且一跳的终点是「代码里存在调用点」。
 「调用点本身是否会在运行时被走到」（分支永假、任务未注册、路由未挂载）不由本文件判定——
@@ -43,6 +49,12 @@
 存量：#2151 已逐条核对 17 条告警引用的指标都有真实生产者，故允许清单为空
 （新门禁落地不背存量，同 S14 口径）。将来确实无生产者却仍挂告警 → 必须进
 `_ALERT_UNPRODUCED_ALLOWLIST` 且带原因与终态出口，不许无解释豁免。
+
+消费方不止告警面：判据是共享分析器，`tests/test_grafana_dashboard_contract.py` 的
+「面板不得引用无生产者指标」自 #2286 起从 `unproduced_definitions()` **派生**——原来是
+手维护的 `UNPRODUCED_METRICS` 清单，生产者一落地就过期成恒真豁免（同 #1258）。把判据从
+「被引用面」扩到**全指标面**（每个定义的指标都必须有生产者）由 #2287 负责，前置是清掉
+当前 10 条真无生产者的存量。
 
 纯离线：只读源码 + AST，不起容器、不连库、不调网络。
 """
@@ -64,9 +76,23 @@ _EXCLUDE_PARTS = {"tests", "resources", "alembic", "__pycache__"}
 _EXCLUDE_PREFIX = "backend/agent/scripts/"
 
 _CONSTRUCTORS = {"Counter", "Gauge", "Histogram", "Summary", "Info", "Enum"}
-# prometheus_client 的写入方法（labels() 返回子序列，视为写入意图）
-_MUTATORS = {"inc", "dec", "observe", "set", "labels", "remove", "delete"}
+# prometheus_client 的写入方法（labels() 返回子序列，视为写入意图）。
+# 名单必须覆盖**全部已声明指标类型**：#2286 核对存量时发现只列了 Counter/Gauge/
+# Histogram/Summary 的方法，漏掉 Info 的 `.info()` —— 于是 `stability_build`
+# 被判成死指标（真写入在 `backend/core/metrics.py:968` 的 `init_build_info`，由
+# `backend/main.py:176` 调用），而 Build Version 面板其实有数据。漏一个方法 = 一类指标全体假红。
+_MUTATORS = {
+    "inc", "dec", "observe", "set", "labels", "remove", "delete",  # Counter/Gauge/Histogram/Summary
+    "info",           # Info（Build Version 面板就靠它）
+    "state",          # Enum
+    "exceptions",     # Counter.exceptions()
+    "time", "set_to_current_time",  # Gauge.time()/set_to_current_time()
+}
 _HISTOGRAM_SUFFIXES = ("_bucket", "_count", "_sum", "_created")
+# `Info` 导出的样本名带 `_info` 后缀（prometheus_client `Info._child_samples`），
+# 代码里声明的是 `stability_build`、面板查询的是 `stability_build_info`。`Enum` 是
+# stateset、用原名，不需要后缀。少这一条，Info 指标在消费侧永远解析不到定义。
+_INFO_SUFFIXES = ("_info",)
 
 # 有定义、暂无生产者的告警指标（同 #1258 的 UNPRODUCED_METRICS 模式）。
 # 每条必须写原因 + 终态出口；空集就是当前期望值。
@@ -198,7 +224,7 @@ def _base_name(metric: str) -> str:
     告警按样本名查询，代码里 observe 的是基础指标；不归一就会把每条直方图告警
     误判成「注册表外定义缺失」。
     """
-    for suffix in _HISTOGRAM_SUFFIXES:
+    for suffix in _HISTOGRAM_SUFFIXES + _INFO_SUFFIXES:
         if metric.endswith(suffix) and len(metric) > len(suffix):
             return metric[: -len(suffix)]
     return metric
@@ -296,31 +322,50 @@ def _resolve(metric: str, defs: dict[str, dict]) -> str | None:
     return _base_name(metric) if _base_name(metric) in defs else None
 
 
+def _unproduced_from(files, defs: dict[str, dict]) -> dict[str, str]:
+    """全指标面「有定义、查无生产者证据」→ {基础指标名: 原因}。
+
+    证据 = 跨文件直写 / 定义文件内 helper 一跳 / `_MANUAL_WIRED_METRICS` /
+    `_CONTAINER_WIRED_METRICS`。四类都不成立才记为无生产者。
+    """
+    produced = produced_map(files, defs)
+    wired = container_wired_map(files, defs)
+    weak = weak_reference_sites(files, defs)
+    problems: dict[str, str] = {}
+    for base, definition in defs.items():
+        if base in produced or base in wired or base in _MANUAL_WIRED_METRICS:
+            continue
+        hints = ", ".join(weak.get(base, [])[:3])
+        where = f"{definition['file']}:{definition['line']}"
+        if hints:
+            problems[base] = (
+                f"{where} 无直接写入点，但被跨文件引用（{hints}）——疑似经容器/变量间接持有；"
+                f"确认接线后进 _CONTAINER_WIRED_METRICS 或 _MANUAL_WIRED_METRICS 登记证据，"
+                f"别放宽本判据"
+            )
+        else:
+            problems[base] = f"{where} 有定义、无任何写入点也无跨文件引用"
+    return problems
+
+
+def unproduced_definitions() -> dict[str, str]:
+    """对全仓非测试源码跑一次判据（仪表板面与 #2287 的全指标面棘轮共用入口）。"""
+    files = _iter_source_files(_SCAN_ROOT)
+    return _unproduced_from(files, collect_definitions(files))
+
+
 def unproduced_alert_metrics() -> dict[str, str]:
     """返回 {告警引用的指标名: 失败原因}，只统计**告警引用到**的指标。"""
     files = _iter_source_files(_SCAN_ROOT)
     defs = collect_definitions(files)
-    produced = produced_map(files, defs)
-    weak = weak_reference_sites(files, defs)
+    unproduced = _unproduced_from(files, defs)
     problems: dict[str, str] = {}
     for metric in alert_metric_names():
         base = _resolve(metric, defs)
         if base is None:
             problems[metric] = "非测试代码里找不到该指标的 Counter/Gauge/... 定义"
-            continue
-        if base in produced or base in _MANUAL_WIRED_METRICS:
-            continue
-        hints = ", ".join(weak.get(base, [])[:3])
-        if hints:
-            problems[metric] = (
-                f"{defs[base]['file']}:{defs[base]['line']} 无直接写入点，但被跨文件引用"
-                f"（{hints}）——疑似经容器/变量间接持有；确认接线后进 "
-                f"_MANUAL_WIRED_METRICS 登记证据，别放宽本判据"
-            )
-        else:
-            problems[metric] = (
-                f"{defs[base]['file']}:{defs[base]['line']} 有定义、无任何写入点也无跨文件引用"
-            )
+        elif base in unproduced:
+            problems[metric] = unproduced[base]
     return problems
 
 
@@ -337,9 +382,11 @@ def _synthetic(tmp_path: Path):
 
 # AST 看不见的接线，需要人工登记证据。不登记就会有两类后果：中间件忘了挂载时
 # 告警静默失效却不红（太松）；或指标经容器间接写入时被误判成死指标（太紧，假红）。
-# 每条 = 指标名 -> (文件, 调用名, 作为实参出现的对象名)。适用两类 AST 追不到的
-# 接线：框架回调（中间件 dispatch 由 ASGI 调）、以及把指标对象塞进容器再遍历写入
-# （`_FLEET_GAUGES` 那种 `for ..., gauge, ... in _FLEET_GAUGES: gauge.set(...)`）。
+# 分两张表，因为「证据长什么样」不同：
+#   `_MANUAL_WIRED_METRICS`  框架回调（中间件 `dispatch` 由 ASGI 调）
+#       每条 = 指标名 -> (文件, 调用名, 作为实参出现的对象名)；
+#   `_CONTAINER_WIRED_METRICS` 指标对象塞进容器再遍历写入（`_FLEET_GAUGES`）
+#       每条 = 指标名 -> (文件, 容器赋值名)。
 # 用 AST 而不是子串：实测子串匹配会被「把整行注释掉」骗过（D 组对照最初就是绿的）。
 _MANUAL_WIRED_METRICS: dict[str, tuple[str, str, str]] = {
     "stability_api_requests_total": (
@@ -348,6 +395,65 @@ _MANUAL_WIRED_METRICS: dict[str, tuple[str, str, str]] = {
         "ApiRequestMetricsMiddleware",
     ),
 }
+
+
+# AST 追不到的第二类接线：指标对象进容器、由遍历写入（#2237 的 Note 把「扩展锚点
+# 形态」列为这类指标转正的唯一出口，#2286 落地）。每条 = 指标名 -> (所在文件, 容器赋值名)。
+_CONTAINER_WIRED_METRICS: dict[str, tuple[str, str]] = {
+    "stability_host_online": ("backend/api/routes/metrics.py", "_FLEET_GAUGES"),
+    "stability_device_online": ("backend/api/routes/metrics.py", "_FLEET_GAUGES"),
+}
+
+
+def _container_wiring(tree: ast.Module, container: str, ident: str) -> list[tuple[int, str]]:
+    """``ident`` 是否真的经模块级容器 ``container`` 被写入；返回证据（空 = 接线不成立）。
+
+    三段缺一即退回「无生产者」，因此放宽到容器不会放行「塞进元组却从不写入」：
+
+    1. 模块级 ``container = (...)`` 的值里出现 ``ident``；
+    2. 存在 ``for <target> in container``；
+    3. ``<target>``（解包元组）里有一个名字，在该循环体内以 ``<name>.<mutator>(...)`` 被调用。
+    """
+    holder: ast.expr | None = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == container for target in node.targets
+        ):
+            holder = node.value
+    if holder is None:
+        return []
+    if not any(isinstance(n, ast.Name) and n.id == ident for n in ast.walk(holder)):
+        return []
+    evidence: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.For, ast.AsyncFor)):
+            continue
+        if not isinstance(node.iter, ast.Name) or node.iter.id != container:
+            continue
+        if not isinstance(node.target, ast.Tuple):
+            continue
+        bound = {el.id for el in node.target.elts if isinstance(el, ast.Name)}
+        lo = node.lineno
+        hi = node.end_lineno or node.lineno
+        for chain, line, parts in _mutator_calls(tree):
+            if lo <= line <= hi and parts[0] in bound:
+                evidence.append((node.lineno, f"for {parts[0]} in {container}: {chain}()"))
+    return evidence
+
+
+def container_wired_map(files, defs: dict[str, dict]) -> dict[str, list[str]]:
+    """`_CONTAINER_WIRED_METRICS` 中**当前仍然成立**的接线 → {基础指标名: 证据}。"""
+    trees = {rel: tree for rel, _path, tree in files}
+    out: dict[str, list[str]] = {}
+    for metric, (rel, container) in _CONTAINER_WIRED_METRICS.items():
+        base = _resolve(metric, defs)
+        tree = trees.get(rel)
+        if base is None or tree is None:
+            continue
+        evidence = _container_wiring(tree, container, defs[base]["ident"])
+        if evidence:
+            out[base] = [f"{rel}:{line} {text}" for line, text in evidence]
+    return out
 
 
 def _call_has_name_arg(tree: ast.Module, call_name: str, arg_name: str) -> bool:
@@ -364,10 +470,38 @@ def _call_has_name_arg(tree: ast.Module, call_name: str, arg_name: str) -> bool:
     return False
 
 
-def test_framework_wired_alert_metrics_stay_wired():
-    """`_MANUAL_WIRED_METRICS` 钉住的接线仍在场（且清单不长成噪声）。"""
+def test_wiring_registries_stay_wired():
+    """两张人工登记表钉住的接线仍在场（且清单不长成噪声）。
+
+    登记表的用途不对称，判据也不同：
+
+    - `_MANUAL_WIRED_METRICS`（框架回调）：`record_api_request` 的调用点虽然能被
+      helper 一跳看到，但那一跳的终点在 `ApiRequestMetricsMiddleware.dispatch` 里，
+      **谁调 dispatch 由 ASGI 决定**。所以「中间件有没有真挂载」只有本锚点能证明，
+      指标已被强判据认出来也不构成删除理由（否则 #2237 的 D 组对照又会变绿）。
+      代价是清单必须仍然被告警引用，否则就是噪声。
+    - `_CONTAINER_WIRED_METRICS`（容器间接写入）：锚点本身是生产者证据，一旦强判据
+      能直接认出写入点，登记表就该删掉，故额外要求「仍是无生产者的那一类」。
+    """
     referenced = set(alert_metric_names()) | {_base_name(m) for m in alert_metric_names()}
     problems: list[str] = []
+    files = _iter_source_files(_SCAN_ROOT)
+    defs = collect_definitions(files)
+    produced = produced_map(files, defs)
+    wired = container_wired_map(files, defs)
+    for metric, (rel, container) in sorted(_CONTAINER_WIRED_METRICS.items()):
+        base = _resolve(metric, defs)
+        if base is None:
+            problems.append(f"{metric}: 注册表里已无该定义，请从 _CONTAINER_WIRED_METRICS 删除")
+            continue
+        if base in produced:
+            problems.append(f"{metric}: 强判据已能直接认出写入点，容器锚点已多余，请删除")
+            continue
+        if base not in wired:
+            problems.append(
+                f"{metric}: {rel} 里已找不到「{container} 赋值 + 遍历该容器 + 循环变量上 "
+                f"mutator」的完整接线（容器被改名/循环被改写 → 指标已无生产者）"
+            )
     for metric, (rel, call_name, arg_name) in sorted(_MANUAL_WIRED_METRICS.items()):
         if metric not in referenced:
             problems.append(f"{metric}: 已不被任何告警引用，请从清单删除")
@@ -429,6 +563,71 @@ def test_producer_analyzer_is_discriminative(tmp_path):
     assert "stability_probe_total" not in produced_map(files, collect_definitions(files)), (
         "删掉唯一调用点后仍判为有生产者 → 判据太松，本守卫会假绿"
     )
+
+
+def test_info_metric_written_by_same_file_helper_is_produced(tmp_path):
+    """`Info` 指标经 `.info()` 写入的形态必须被认出（#2286 实测漏判的回归用例）。
+
+    这就是 `init_build_info` 的形状：写入在定义文件的 helper 里、用的既不是 inc 也不
+    是 set，跨文件只有一个 `init_build_info(...)` 调用。mutator 名单少一个方法，这条
+    链整条断开，面板有数据的指标会被判成死规则。
+    """
+    (tmp_path / "core_m.py").write_text(
+        "from prometheus_client import Info\n"
+        "build_info = Info('stability_probe_build', 'b')\n"
+        "def init_probe_build_info():\n"
+        "    build_info.info({'version': '1'})\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "boot.py").write_text(
+        "from core_m import init_probe_build_info\n"
+        "def lifespan():\n"
+        "    init_probe_build_info()\n",
+        encoding="utf-8",
+    )
+    files = _synthetic(tmp_path)
+    defs = collect_definitions(files)
+    produced = produced_map(files, defs)
+    assert "stability_probe_build" in produced, (
+        "`.info()` 写入未被认出 → mutator 名单又漏了方法，全量核对存量数字也不可信"
+    )
+
+
+def test_container_wiring_anchor_is_discriminative():
+    """容器锚点必须自己站得住：三段证据任缺一段就退回「无生产者」（#2286）。
+
+    复刻 `backend/api/routes/metrics.py` 的 `_FLEET_GAUGES` 形状。它服务的是**仪表板面**
+    ——面板引用 `stability_host_online` / `stability_device_online`，判据看不见生产者时
+    只能退回人工豁免，而手维护豁免正是 #1258 过期的形态。
+    """
+    src = (
+        "host_online = Gauge('stability_probe_host_online', 'h')\n"
+        "device_online = Gauge('stability_probe_device_online', 'd')\n"
+        "_PROBE_GAUGES = ((Host, host_online), (Device, device_online))\n"
+        "def _refresh(db):\n"
+        "    for model, gauge in _PROBE_GAUGES:\n"
+        "        gauge.labels(status='up').set(1)\n"
+    )
+    tree = ast.parse(src)
+    assert _container_wiring(tree, "_PROBE_GAUGES", "host_online"), "容器间接写入未被认出"
+    # 循环体不再写循环变量（改写成别的对象）→ 证据必须消失
+    assert not _container_wiring(
+        ast.parse(src.replace("gauge.labels(status='up').set(1)", "model.foo = 1")),
+        "_PROBE_GAUGES",
+        "host_online",
+    ), "循环里已无写入仍算生产者 → 容器判据过松"
+    # 容器里不再有该指标 → 证据必须消失
+    assert not _container_wiring(
+        ast.parse(src.replace("(Host, host_online)", "(Host, other_gauge)")),
+        "_PROBE_GAUGES",
+        "host_online",
+    ), "指标已不在容器里仍算生产者 → 容器判据过松"
+    # 只有赋值、没有遍历（`_FLEET_GAUGES` 变成死数据）→ 证据必须消失
+    assert not _container_wiring(
+        ast.parse(src.split("def _refresh")[0]),
+        "_PROBE_GAUGES",
+        "host_online",
+    ), "容器无人遍历仍算生产者 → 放行死指标"
 
 
 def test_direct_and_aliased_writes_are_recognized(tmp_path):
