@@ -153,6 +153,14 @@ async def lifespan(app: FastAPI):
         if _console_warning:
             logger.warning(_console_warning)
 
+        # #2189（ADR-0027 v1.8 清单第 7 条）：merge 的串行依赖本机 flock + 本机工具目录，
+        # 多实例形态下「手动 API × SAQ」两条路径没有跨实例互斥（显式限制，非默认行为）。
+        from backend.services.dedup_scan import multi_instance_merge_warning
+
+        _merge_warning = multi_instance_merge_warning()
+        if _merge_warning:
+            logger.warning(_merge_warning)
+
         # Redis — retained for SAQ broker (task queue)
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         redis_client = await aioredis.from_url(
@@ -173,6 +181,9 @@ async def lifespan(app: FastAPI):
             configure_console_registry(redis_url)
 
             capture_main_loop()
+            from backend.services.dashboard_summary_publisher import bind_event_loop
+
+            bind_event_loop(asyncio.get_running_loop())
             init_build_info(version="2.0.0", commit="unknown")
 
             # ADR-0025 §9: RunConsole（控制面命令执行 + web 实时控制台）配置

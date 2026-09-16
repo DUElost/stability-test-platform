@@ -3,9 +3,7 @@
 Stats API — time-series endpoints for Dashboard charts.
 """
 
-import json
 import logging
-import math
 import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -23,23 +21,6 @@ from backend.services.file_server_monitor import collect_file_server_overview
 
 router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
 logger = logging.getLogger(__name__)
-
-
-def _disk_usage_percent_from_extra(extra: dict) -> Optional[float]:
-    """Heartbeat extra.disk_usage.usage_percent；读盘失败 / 非有限 0–100 为 None。"""
-    blob = extra.get("disk_usage")
-    if not isinstance(blob, dict):
-        return None
-    raw = blob.get("usage_percent")
-    if raw is None:
-        return None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(value) or not 0.0 <= value <= 100.0:
-        return None
-    return value
 
 
 # ---------------------------------------------------------------------------
@@ -269,89 +250,10 @@ def get_dashboard_summary(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    # ADR-0038 D5：仪表板「在线容量」口径排除退役主机（退役 = 不再是容量）。
-    # 原始 SQL 直接过滤，避免把退役主机的 status/资源点算进分布与均值。
-    hosts = db.execute(text("""
-        SELECT status, extra, ip
-        FROM host
-        WHERE retired_at IS NULL
-    """)).fetchall()
-    devices = db.execute(text("""
-        SELECT status, battery_level, temperature
-        FROM device
-    """)).fetchall()
+    """Cold-start + slow safety net; live updates via WS dashboard_summary (#2324)."""
+    from backend.services.dashboard_summary import compute_dashboard_summary
 
-    host_total = len(hosts)
-    host_online = sum(1 for row in hosts if row.status == "ONLINE")
-    host_offline = sum(1 for row in hosts if row.status == "OFFLINE")
-    host_degraded = sum(1 for row in hosts if row.status == "DEGRADED")
-
-    cpu_values: list[float] = []
-    ram_values: list[float] = []
-    disk_values: list[float] = []
-    resource_points: list[dict] = []
-    for row in hosts:
-        raw = row.extra or {}
-        # raw SQL on SQLite returns JSON strings; PostgreSQL returns dicts
-        if isinstance(raw, str):
-            try:
-                extra = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                extra = {}
-        else:
-            extra = raw
-        cpu = float(extra.get("cpu_load") or 0)
-        ram = float(extra.get("ram_usage") or 0)
-        disk = _disk_usage_percent_from_extra(extra)
-        cpu_values.append(cpu)
-        ram_values.append(ram)
-        if disk is not None:
-            disk_values.append(disk)
-        if row.ip:
-            resource_points.append({
-                "ip": row.ip,
-                "cpu_load": cpu,
-                "ram_usage": ram,
-                "disk_usage": disk,
-            })
-
-    idle = sum(1 for row in devices if row.status == "ONLINE")
-    testing = sum(1 for row in devices if row.status == "BUSY")
-    offline = sum(1 for row in devices if row.status == "OFFLINE")
-    error = sum(1 for row in devices if row.status == "ERROR")
-    low_battery = sum(1 for row in devices if row.battery_level is not None and row.battery_level < 20)
-    high_temp = sum(1 for row in devices if row.temperature is not None and row.temperature > 45)
-
-    return DashboardSummaryResponse(
-        hosts=DashboardHostSummary(
-            total=host_total,
-            online=host_online,
-            offline=host_offline,
-            degraded=host_degraded,
-            avg_cpu_load=round(sum(cpu_values) / host_total, 2) if host_total else 0.0,
-            avg_ram_usage=round(sum(ram_values) / host_total, 2) if host_total else 0.0,
-            avg_disk_usage=(
-                round(sum(disk_values) / len(disk_values), 2) if disk_values else None
-            ),
-            online_rate=round(host_online / host_total, 4) if host_total else 0.0,
-        ),
-        devices=DashboardDeviceSummary(
-            total=len(devices),
-            idle=idle,
-            testing=testing,
-            offline=offline,
-            error=error,
-            low_battery=low_battery,
-            high_temp=high_temp,
-        ),
-        alerts=DashboardAlertSummary(
-            total=low_battery + high_temp + error,
-            low_battery=low_battery,
-            high_temp=high_temp,
-            error=error,
-        ),
-        host_resources=sorted(resource_points, key=lambda item: item["ip"])[:12],
-    )
+    return DashboardSummaryResponse.model_validate(compute_dashboard_summary(db))
 
 
 @router.get("/completion-trend", response_model=CompletionTrendResponse)

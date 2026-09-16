@@ -2829,20 +2829,23 @@ def _aee_event_dedup_key(
 
 
 def _uniview_dedup_key(nfs_path: str, extra: dict[str, Any]) -> str:
-    """UNIVIEW 去重键：目录 + **事件身份**（#2080）。
+    """UNIVIEW 去重键：目录 + **事件身份**（#2080），形态**恒定三段**（#2285）。
 
     事件身份取 ``event_subtype`` + ``aee_ts``——二者由 Agent 侧
     ``unisoc_reconciler._emit_event`` 一并写入 ``extra``（``aee_ts`` 为设备时钟原文，
     #785）；同目录内不同异常至少有一项不同。同一条异常被多次 run 拉取时二者不变，
     故仍能正确去重。
 
-    两项皆缺失时退化为纯目录键（与 #1956 行为一致）——避免因字段缺失把同一条事件
-    重复计数；该退化路径已在测试中钉住。
+    #2285：两项皆缺时**不再**退化为两段键 ``nfs:{dir}`` —— 那与 AEE / VENDOR_AEE
+    家族的键（``_aee_event_dedup_key`` 的 ``f"nfs:{nfs_path}"``）**同形**，同目录的
+    AEE 行与 UNIVIEW 行会被并成一条（#2010「签名变化就再发射一条」在消费侧的反向
+    残留）。恒带两个占位后，UNIVIEW 键与 AEE 键不可能相等。
+
+    有字段 / 无字段仍是两个身份：字段缺失时无法安全归并——把同目录的未知身份行并成
+    一条会把**不同异常**算成一次（欠计数），与 #2080「宁多勿并」的取向一致。
     """
     subtype = str(extra.get("event_subtype") or "").strip()
     aee_ts = str(extra.get("aee_ts") or "").strip()
-    if not subtype and not aee_ts:
-        return f"nfs:{nfs_path}"
     return f"nfs:{nfs_path}#{subtype}#{aee_ts}"
 
 

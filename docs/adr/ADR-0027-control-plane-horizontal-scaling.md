@@ -1,7 +1,7 @@
 # ADR-0027: 控制面水平扩展（Leader Election + 多实例）
 
 - 状态：Accepted（P3-1 / P3-2 / P3-3 代码已落地；生产多实例仍为 **opt-in**，见 ADR-0025 D1）
-- 版本记录：v1.1（2026-09-08）leadership 失败策略 fail-open → 按 deployment 形态分级（R01-F10/#890）/ v1.2（2026-09-11）多实例清单增补 RunConsole 单实例约束（#1114，R11-F06）/ v1.3（2026-09-11）「可不 sticky」加 transport 前提：Agent websocket-only（#1121，R11-F13）/ v1.4（2026-09-13）新增 RunConsole 归属注册表 P3-4（P1：全局 run_key 互斥 + owner 登记，#1737） / v1.5（2026-09-13）P3-4 **P2**：状态快照落地——跨实例 status/订阅校验生效，剩余限制收窄为 cancel/read_log（#1737） / v1.6（2026-09-13）P3-4 **P3**：跨实例 cancel 转发（请求位 + 有界等待 ack），剩余限制收窄为 read_log（#1737） / v1.7（2026-09-13）P3-4 **P4**：跨实例日志 replay（文件源 + 共享 log_root 前提 + `replay_unavailable` 显式化），#1737 分阶段全部落地
+- 版本记录：v1.1（2026-09-08）leadership 失败策略 fail-open → 按 deployment 形态分级（R01-F10/#890）/ v1.2（2026-09-11）多实例清单增补 RunConsole 单实例约束（#1114，R11-F06）/ v1.3（2026-09-11）「可不 sticky」加 transport 前提：Agent websocket-only（#1121，R11-F13）/ v1.4（2026-09-13）新增 RunConsole 归属注册表 P3-4（P1：全局 run_key 互斥 + owner 登记，#1737） / v1.5（2026-09-13）P3-4 **P2**：状态快照落地——跨实例 status/订阅校验生效，剩余限制收窄为 cancel/read_log（#1737） / v1.6（2026-09-13）P3-4 **P3**：跨实例 cancel 转发（请求位 + 有界等待 ack），剩余限制收窄为 read_log（#1737） / v1.7（2026-09-13）P3-4 **P4**：跨实例日志 replay（文件源 + 共享 log_root 前提 + `replay_unavailable` 显式化），#1737 分阶段全部落地 / v1.8（2026-09-16）多实例清单增补第 7 条：**merge（`run_merge_sync`）为实例绑定操作**——本机 `flock` + 本机工具目录，跨路径（手动 API × SAQ）无跨实例互斥；仅登记限制 + 启动 WARN，不预设解除时机（#2189）
 - 优先级：P2
 - 目标里程碑：M6
 - 日期：2026-07-20
@@ -114,7 +114,24 @@ ADR-0026 将 P3 标为远期方向：
      确认失锁止损取消）、owner 登记、**状态快照**、**cancel 转发**与**日志 replay**
      跨实例生效——`status()` / `console:` 房间订阅校验 / `cancel()`（有界等待 ack，
      超时 fail-closed）/ `read_log()`（文件源，需共享 `STP_RUN_CONSOLE_LOG_ROOT`）均可用；
-     日志目录未共享时 replay 显式返回 `replay_unavailable` + 告警（不伪装成「没有输出」）。
+     日志目录未共享时 replay 显式返回      `replay_unavailable` + 告警（不伪装成「没有输出」）。
+7. **merge（`run_merge_sync`）为实例绑定操作**（v1.8 / #2189）：merge 的串行原语是**本机**
+   `flock`（`{工具目录}/merge_result/.stp_merge.lock`，见 `dedup_scan._exclusive_merge_tool_lock`），
+   工具目录取自控制面本机的 `STP_BACKEND_DEDUP_SCAN_SCRIPT` 父目录——**两者都只在同一实例内生效**。
+   故多实例下同一 run 的**手动 API（`POST /plan-runs/{id}/dedup/merge`）× SAQ `merge_task`**
+   两条路径**没有跨实例互斥**，可各自在本机跑工具、各自向中心同一路径发布。边界与现状：
+   - **SAQ 作业本身不会双跑**（本 ADR：共享 Redis 队列由 SAQ 自身去重消费）→ 缺口只出现在
+     **跨路径并发**；这也是它比第 6 条更难被发现的原因——**两条路径各自看都是"串行"的**；
+   - **artifact 行不会重复**：`_register_merge_artifacts` 带 `storage_uri` 存在性检查，
+     故风险是**中心产物归属不确定**（内容取决于各自输入快照的 round / waterline 过滤），非行重复；
+   - **守卫现状**：启动输出 `multi_instance_mode_enabled merge_instance_bound=true ... ref=#2189`
+     WARN（形态同第 6 条）；**未做跨实例互斥**——属**显式限制而非默认行为**；
+   - **解除路径**（两选一，依据见提案 §3.1）：**B2** = 复用 P3-4 的 `run_key` 全局互斥原语做跨实例互斥；
+     **B1** = 把 merge 迁到 worker/Agent（**归 ADR-0033**，需其 D1/D3 落地，且其 §5.4 禁止新增
+     工具私有路径键）。本条只**登记限制**，不预设解除时机——重启评估触发条件：多实例决定启用 /
+     ADR-0033 Phase 2 启动 / merge 成为吞吐瓶颈；
+   - **同族待取证**：`extract`（`POST /plan-runs/{id}/dedup/extract` × SAQ `extract_task`）为同一
+     双路径形态且写**共享**中心目录；**本条不对其下结论**，单列评估（避免只修 merge 而漏同形态处）。
 
 ## 与 ADR-0025 D1 的关系
 
@@ -148,3 +165,4 @@ ADR-0026 将 P3 标为远期方向：
 | 2026-09-13 | v1.5（#1737/P3-4 P2）：状态快照落地——owner 端在 start/终态/tick 发布 `stp:console:status:<run_id>`（SET EX；终态 TTL=本地终态保留期；tick 续期，丢失即重发），跨实例 `status()` 与 `console:` 房间订阅校验读快照生效；剩余限制收窄为 `cancel()` / `read_log()`；告警/404 提示按「注册表启用」分支切换口径 |
 | 2026-09-13 | v1.6（#1737/P3-4 P3）：跨实例 cancel 转发——`stp:console:cancelreq/ack` 请求位 + `requested_at` 指纹；owner 端新增 **control tick（默认 1s）** 消费请求并执行本地取消；请求方有界等待（默认 3s）超时 fail-closed；事件循环内调用方改 `asyncio.to_thread`；剩余限制收窄为 `read_log` |
 | 2026-09-13 | v1.7（#1737/P3-4 P4）：跨实例日志 replay——`read_log` 文件回退在 `STP_RUN_CONSOLE_LOG_ROOT` 共享前提下跨实例可用；status 由 P2 快照补全；文件缺失/落后显式标记 `replay_unavailable`（不伪装成「没有输出」）；评估驳回控制面间 RPC 与 Redis 日志镜像（文件即 replay 源）；清单第 6 条收口为「启用注册表后不再要求单实例」 |
+| 2026-09-16 | v1.8（#2189）：清单增补**第 7 条——merge（`run_merge_sync`）为实例绑定操作**。来源：I-13 方案 B 的优先级重评（提案 §3.1，owner 裁 **B0**）在取证时发现——merge 的串行靠**本机** `flock`（`{工具目录}/merge_result/.stp_merge.lock`）、工具目录取自本机 `STP_BACKEND_DEDUP_SCAN_SCRIPT` 父目录，而本条清单此前只登记了 RunConsole 依赖功能 → merge 的实例绑定是**未登记的隐性限制**。**边界澄清**：SAQ 作业不会双跑（共享 Redis 队列由 SAQ 去重消费），缺口仅存在于**跨路径并发**（手动 API × SAQ），两条路径各自看都为「串行」故此前未被发现；artifact 行因 `storage_uri` 存在性检查不重复，风险是中心产物归属不确定。**本轮只登记 + 启动 WARN（`merge_instance_bound=true ... ref=#2189`），不做跨实例互斥**——解除路径 B2（复用 P3-4 `run_key` 原语）/ B1（迁 worker，归 ADR-0033）与其触发条件见提案 §3.1。`extract` 为同族形态（写共享中心目录），登记为待取证，不并入本条 |

@@ -30,6 +30,7 @@ from .agents import (
     host_field,
 )
 from .bindings import BindingError, load_binding, require_keys
+from .ops import LocalOps
 from .validation import (
     Check,
     ConfigValidationError,
@@ -84,6 +85,15 @@ def probe_csrf(api: ApiClient) -> Check:
 
 def check_hosts(api: ApiClient, config: Any, *, now: float) -> list[Check]:
     """Every declared Agent must be a live Host on *this* control plane."""
+    if not config.agents:
+        # #2283：零 Agent 时此前落进下面的 `if not checks` 分支，产出
+        # 「All 0 declared Agents are ONLINE」的 PASS——零元素证明不了任何事。
+        return [blocked(
+            "verify.s6.hosts", "agent", "$.agents", "no_agents_declared",
+            "No Agent is declared for this site, so host liveness was not verified.",
+            "Declare at least one Agent in the site config (then re-run); "
+            "an empty set is not evidence of reachability.",
+        )]
     try:
         hosts = api.list_hosts()
     except ApiError as error:
@@ -323,17 +333,23 @@ def check_watcher(api: ApiClient, run_id: int) -> Check:
     )
 
 
-def storage_probe(root: Path, subdir: str) -> Check:
+def storage_probe(root: Path, subdir: str, *, is_mount: Callable[[Path], bool] | None = None) -> Check:
     """Write→read→remove one file under an authorized subdirectory of the share.
 
     Two ways a naive probe would lie, both refused here: a missing mount would
     be silently satisfied by a same-named local directory, and a path-shaped
     operator input could write outside the declared share.
+
+    #2283：挂载判据与**安装器同源**——``LocalOps.is_mount`` 读
+    ``/proc/self/mountinfo``，能认出同文件系统的 bind 挂载；``os.path.ismount``
+    认不出，于是 S1 接受了一个真挂着的共享、这里却报
+    ``shared_storage_not_mounted``，文档还把操作员指向「去挂一个已经挂着的共享」。
     """
     name = subdir.strip()
     if not name or "/" in name or "\\" in name or name in {".", ".."}:
         return _fail("verify.s6.storage", "storage_probe_subdir", location="--storage-probe-subdir")
-    if not os.path.ismount(root):
+    mounted = (is_mount or LocalOps().is_mount)(root)
+    if not mounted:
         return _fail("verify.s6.storage", "shared_storage_not_mounted",
                      location="$.storage.mount_path", role="site")
     probe = root / name / f"{STORAGE_PROBE_PREFIX}.{os.getpid()}.{uuid.uuid4().hex[:8]}"
