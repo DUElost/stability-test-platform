@@ -17,6 +17,12 @@
 3. **覆盖棘轮（恒跑）**：promtool **只校验场景文件里出现过的告警**，未列规则改阈值
    它也不红（#2151 实测）。所以「新增告警必须带场景用例」这条只能在结构层成立——
    见 ``test_every_alert_rule_has_scenario_case`` 与 ``_SCENARIO_COVERAGE_DEBT``。
+   17 条规则现有 17 条场景断言（存量 10 条于 #2236 清零），清单已空但**判据保留**：
+   以后新增告警不补场景即红。
+4. **逐条判别力（promtool 可用时）**：``test_promtool_gate_detects_per_rule_threshold_drift``
+   每次只抬一条规则的阈值，要求场景层红**且失败可归因到该告警**。整批式变异做不到
+   这件事——任何一条失配都能让整批红，于是「某条用例断言了一个永不出现的形状」
+   （假覆盖）在其中完全不可见（#2236 验收判据 2）。
 
 场景文件的 ``input_series`` 也走结构层（``test_scenario_input_series_match_metric_registry``，
 #2152 折叠自 #2144）：CI 没有 promtool，那一层恒 skip，样本名字/标签错了就只能靠这里拦住。
@@ -379,29 +385,39 @@ def _raise_all_thresholds(alerts_text: str) -> tuple[str, int]:
     return yaml.safe_dump(data, allow_unicode=True, width=10000), hits
 
 
+def _raise_rule_threshold(alerts_text: str, alert: str) -> tuple[str, int]:
+    """只抬**指定那一条**告警的比较阈值（#2236 逐条判别力自证用）。
+
+    与 ``_raise_all_thresholds`` 同一单向口径（只收紧不放宽），差别在隔离性：
+    整批式变异无法区分「哪条用例真的有牙」。
+    """
+    data = yaml.safe_load(alerts_text)
+    hits = 0
+    for group in data.get("groups", []):
+        for rule in group.get("rules", []):
+            if rule.get("alert") != alert or not isinstance(rule.get("expr"), str):
+                continue
+            mutated, n = _CMP_THRESHOLD_RE.subn(
+                lambda m: f"{m.group('op')} {_HUGE_THRESHOLD}", rule["expr"]
+            )
+            if n:
+                rule["expr"] = mutated
+                hits += n
+    return yaml.safe_dump(data, allow_unicode=True, width=10000), hits
+
+
 # 场景层只校验场景文件里出现过的告警：**promtool 对未列规则不校验**。
 # #2151 实测——把 StabilityPlanRunAggregationFailed 的 `> 0` 改成 `> 500`、
 # 场景文件不跟，`promtool test rules` 仍 SUCCESS。所以「装了 promtool」只把
 # 已列规则从「取决于跑测机器」变成「常量」，未列规则依然零覆盖。
 # 于是「新增告警必须带场景」必须落在**恒跑结构层**（PR 路径即拦）。
 #
-# 下面 10 条是本单落地时已存在的存量缺口（各规则加入时场景层在 CI 恒 skip，
-# 漏补无人可见）。清单只准缩短不准变长：补了场景却没删条目 → 红；
-# 加了新告警不补场景 → 红。逐条补齐 = #2236（背景与判据见
-# docs/notes/testing/2026-09-16-promtool-nightly-scenario-gate-2151.md）；
-# 「指标有定义但无生产者」是另一条轴，另单 #2237 负责。
-_SCENARIO_COVERAGE_DEBT: frozenset[str] = frozenset({
-    "StabilityPlanRunAggregationFailed",
-    "StabilityPostCompletionEnqueueFailed",
-    "StabilityClaimLeaseFailedSpike",
-    "StabilityCsrfOriginRejected",
-    "StabilityCsrfMissingOriginReferer",
-    "StabilityDispatchGateSlow",
-    "StabilitySaqQueueDepth",
-    "StabilityMergeSkipToolNotConfigured",
-    "StabilityUnlinkedFixable",
-    "StabilityDbDeadlockDetected",
-})
+# 存量缺口清单：#2151 落地时记账的 10 条已在 #2236 全部补齐场景用例 → **清空**。
+# 判据本体保留且仍然双向（新增告警不补场景 → 红；清单里挂了已不存在的名字 → 红），
+# 它不是历史包袱而是防回归棘轮。背景与判据见
+# docs/notes/testing/2026-09-16-promtool-nightly-scenario-gate-2151.md；
+# 「指标有定义但无生产者」是另一条轴，见 #2237 / #2263。
+_SCENARIO_COVERAGE_DEBT: frozenset[str] = frozenset()
 
 
 def _scenario_alert_names() -> set[str]:
@@ -483,4 +499,49 @@ def test_promtool_gate_detects_threshold_drift(tmp_path):
     assert "FAILED" in drift.stdout + drift.stderr, (
         f"变异组红了但输出里没有 FAILED，失败原因可能不是场景失配"
         f"（例如文件路径错误）：\n{drift.stdout}{drift.stderr}"
+    )
+
+
+_ALERT_NAMES: tuple[str, ...] = tuple(name for name, _expr in _alert_exprs())
+# 收集期读规则文件（为参数化提供逐条用例名）。规则文件解析不出任何告警时，
+# parametrize 会拿到空列表并让本用例**消失**——故下方用一条断言守住「不许为空」。
+
+
+def test_alert_names_are_collected_for_per_rule_drift():
+    """参数化数据源自证：逐条判别力用例不得因规则解析退化而静默变成零条。"""
+    assert _ALERT_NAMES, "未能从告警文件解析出任何规则名——逐条判别力用例会静默消失"
+
+
+@pytest.mark.parametrize("alert", _ALERT_NAMES)
+def test_promtool_gate_detects_per_rule_threshold_drift(tmp_path, alert: str) -> None:
+    """**逐条**判别力自证（#2236 验收判据 2）：只抬这一条的阈值 → 场景层必须红。
+
+    为什么整批式的 ``test_promtool_gate_detects_threshold_drift`` 不够：它把全部阈值
+    一起抬到 1e12，任何一条失配都能让整批红——「某条用例其实断言了一个永不出现的
+    形状」（假覆盖）在其中完全不可见。逐条变异并要求失败输出**点名该告警**，才证明
+    每条场景用例各自有牙。
+    """
+    promtool = _promtool_path()
+    original = ALERTS.read_text(encoding="utf-8")
+    mutated, hits = _raise_rule_threshold(original, alert)
+    assert hits, (
+        f"{alert}: 表达式里没有可抬高的比较阈值——本判据对它已失效，"
+        "请更新 _CMP_THRESHOLD_RE（不要删除本用例）"
+    )
+    (tmp_path / ALERTS.name).write_text(mutated, encoding="utf-8")
+    (tmp_path / SCENARIOS.name).write_text(
+        SCENARIOS.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    res = subprocess.run(
+        [promtool, "test", "rules", SCENARIOS.name],
+        cwd=tmp_path, capture_output=True, text=True, check=False,
+    )
+    out = res.stdout + res.stderr
+    assert res.returncode != 0, (
+        f"{alert}: 单独把阈值抬到 {_HUGE_THRESHOLD} 后场景层仍通过 → 该条场景用例"
+        f"没有判别力（假覆盖）\n{out}"
+    )
+    assert alert in out, (
+        f"{alert}: 场景层变红但输出未点名该告警 → 失败不可归因，该条断言可能在"
+        f"断言别的形状\n{out}"
     )

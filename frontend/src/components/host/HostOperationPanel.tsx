@@ -27,6 +27,8 @@ interface Props {
   ops: HostOpItem[];
   onClose: () => void;
   onTerminalStatus: (hostId: string, status: string) => void;
+  /** #2255：在跑的安装可取消（卡住时不必重启控制面）。缺省则不渲染按钮。 */
+  onCancelInstall?: (hostId: string) => void;
 }
 
 const TERMINAL = new Set(['SUCCESS', 'FAILED', 'CANCELED']);
@@ -67,6 +69,7 @@ export default function HostOperationPanel({
   ops,
   onClose,
   onTerminalStatus,
+  onCancelInstall,
 }: Props) {
   /** null = 自动模式；Set（可为空）= 用户手动控制，空集表示全部折叠 */
   const [expanded, setExpanded] = useState<Set<string> | null>(null);
@@ -222,36 +225,50 @@ export default function HostOperationPanel({
                 data-testid={`host-op-row-${op.hostId}`}
                 className="rounded-lg border border-border"
               >
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/40"
-                  onClick={() => toggle(op.hostId)}
-                >
-                  {isOpen ? (
-                    <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                  ) : (
-                    <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-                  )}
-                  <span className="font-medium">{op.label}</span>
-                  <span className={cn('text-[11px]', TEXT.subtle)}>
-                    {op.kind === 'hot_update'
-                      ? '热更新'
-                      : op.kind === 'reinstall'
-                        ? '重新安装'
-                        : '首次安装'}
-                  </span>
-                  {(op.status === 'pending' || op.status === 'running') && (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-                  )}
-                  <span
-                    className={cn(
-                      'ml-auto rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase',
-                      statusChip(op.status),
-                    )}
+                <div className="flex items-center">
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/40"
+                    onClick={() => toggle(op.hostId)}
                   >
-                    {statusLabel(op.status)}
-                  </span>
-                </button>
+                    {isOpen ? (
+                      <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                    )}
+                    <span className="font-medium">{op.label}</span>
+                    <span className={cn('text-[11px]', TEXT.subtle)}>
+                      {op.kind === 'hot_update'
+                        ? '热更新'
+                        : op.kind === 'reinstall'
+                          ? '重新安装'
+                          : '首次安装'}
+                    </span>
+                    {(op.status === 'pending' || op.status === 'running') && (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                    )}
+                    <span
+                      className={cn(
+                        'ml-auto rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase',
+                        statusChip(op.status),
+                      )}
+                    >
+                      {statusLabel(op.status)}
+                    </span>
+                  </button>
+                  {onCancelInstall &&
+                    op.kind !== 'hot_update' &&
+                    (op.status === 'pending' || op.status === 'running') && (
+                      <button
+                        type="button"
+                        data-testid={`host-op-cancel-${op.hostId}`}
+                        className="mr-2 shrink-0 rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted/60"
+                        onClick={() => onCancelInstall(op.hostId)}
+                      >
+                        取消
+                      </button>
+                    )}
+                </div>
 
                 {op.error && (
                   <div className={cn('border-t px-3 py-1.5 text-xs text-destructive')}>

@@ -579,6 +579,10 @@ def run_retention_cleanup() -> None:
             _retention_prelock_subtree(db, run_ids)
             run_ids = _retention_lock_runs(db, run_ids, cutoff)
             if not run_ids:
+                # #2278：取锁（含等待）**已经发生**，窗口必须上报——锁序统一后这类
+                # 「纯等待后一无所获」的 tick 恰是 #2104 要观测的代价形态；早退不报
+                # 等于把指标最该覆盖的那一类样本丢掉（剩下的三个上报点都在此处之后）。
+                record_retention_txn(time.perf_counter() - lock_t0)
                 return
 
             safe_run_ids, keep = _retention_safe_ids(db, run_ids)
@@ -587,6 +591,8 @@ def run_retention_cleanup() -> None:
                     "retention_cleanup skipped: all %d candidates chain-referenced",
                     len(run_ids),
                 )
+                # #2278：同上——链引用全保留也是一次真实的持锁窗口。
+                record_retention_txn(time.perf_counter() - lock_t0)
                 return
 
             # #798/#2031: 删行前收集 job 清单（含 run 归属）——既供提交后的

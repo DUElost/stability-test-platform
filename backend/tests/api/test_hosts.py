@@ -1032,3 +1032,88 @@ class TestHostInstallStatusEndpoint:
         assert body["status"] == "idle"
         assert body["console_run_id"] is None
         assert body["log_path"] is None
+
+
+class TestHostInstallCancelEndpoint:
+    """#2255：安装控制台的取消入口——现场卡住时不必再重启控制面。
+
+    口径与 dedup 的 cancel 一致：没有在跑的 run 也要落审计（取消是可归责动作）；
+    取消 ≠ 失败——终态仍由 console 的 on_complete 写 `install_agent` 审计。
+    """
+
+    @staticmethod
+    def _online_host(db_session, host_id: str, ip: str = "192.0.2.79"):
+        from backend.models.host import Host
+
+        host = Host(id=host_id, hostname=host_id, status="ONLINE", ip=ip, ssh_port=22)
+        db_session.add(host)
+        db_session.commit()
+        return host
+
+    def test_cancel_without_a_run_is_409_and_audited(self, client, db_session, admin_headers, monkeypatch):
+        import backend.api.routes.hosts as hosts_route
+        from backend.models.audit import AuditLog
+
+        self._online_host(db_session, "cx-idle")
+        monkeypatch.setattr(hosts_route, "get_active_install_console_id", lambda host_id: None)
+
+        resp = client.post("/api/v1/hosts/cx-idle/install/cancel", headers=admin_headers)
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"]["code"] == "NO_INSTALL_IN_PROGRESS"
+        row = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "install_agent_cancel", AuditLog.resource_id == "cx-idle")
+            .one()
+        )
+        assert row.details["reason"] == "no_install_in_progress"
+
+    def test_cancel_reaches_the_console_and_is_audited(self, client, db_session, admin_headers, monkeypatch):
+        import backend.api.routes.hosts as hosts_route
+        from backend.models.audit import AuditLog
+        from backend.services.run_console import RunConsole
+
+        self._online_host(db_session, "cx-run")
+        monkeypatch.setattr(hosts_route, "get_active_install_console_id", lambda host_id: "con-cx")
+        cancel_mock = MagicMock(return_value=True)
+        monkeypatch.setattr(RunConsole.instance(), "cancel", cancel_mock)
+
+        resp = client.post("/api/v1/hosts/cx-run/install/cancel", headers=admin_headers)
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["canceled"] is True
+        assert body["status"] == "canceling"
+        assert body["console_run_id"] == "con-cx"
+        cancel_mock.assert_called_once_with("con-cx")
+        row = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "install_agent_cancel", AuditLog.resource_id == "cx-run")
+            .one()
+        )
+        assert row.details["canceled"] is True
+        assert row.details["console_run_id"] == "con-cx"
+
+    def test_cancel_that_cannot_be_initiated_is_not_reported_as_done(self, client, db_session, admin_headers, monkeypatch):
+        """已终态/跨实例不可达（console 返回 False）→ 如实报 not_canceled，不假装取消成功。"""
+        import backend.api.routes.hosts as hosts_route
+        from backend.models.audit import AuditLog
+        from backend.services.run_console import RunConsole
+
+        self._online_host(db_session, "cx-stale")
+        monkeypatch.setattr(hosts_route, "get_active_install_console_id", lambda host_id: "con-stale")
+        monkeypatch.setattr(RunConsole.instance(), "cancel", MagicMock(return_value=False))
+
+        resp = client.post("/api/v1/hosts/cx-stale/install/cancel", headers=admin_headers)
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["canceled"] is False
+        assert body["status"] == "not_canceled"
+        assert "could not be canceled" in body["message"]
+        row = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "install_agent_cancel", AuditLog.resource_id == "cx-stale")
+            .one()
+        )
+        assert row.details["reason"] == "cancel_not_initiated"

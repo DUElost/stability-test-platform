@@ -143,6 +143,15 @@ export interface AgentInstallStatus {
   log_path?: string | null;
 }
 
+export interface AgentInstallCancelResult {
+  ok: boolean;
+  host_id: string;
+  console_run_id: string;
+  canceled: boolean;
+  status: string;
+  message: string;
+}
+
 export const agentInstall = {
   trigger: (hostId: number | string) =>
     apiClient
@@ -150,4 +159,7 @@ export const agentInstall = {
       .then(r => r.data),
   status: (hostId: number | string) =>
     apiClient.get<AgentInstallStatus>(`/hosts/${hostId}/install/status`).then(r => r.data),
+  // #2255：卡住时取消在跑的安装（此前只能重启控制面收尾）
+  cancel: (hostId: number | string) =>
+    apiClient.post<AgentInstallCancelResult>(`/hosts/${hostId}/install/cancel`).then(r => r.data),
 };
